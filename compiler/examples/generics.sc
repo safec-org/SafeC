@@ -6,8 +6,10 @@
 //   - const functions evaluated at compile time when possible
 //   - static_assert for layout validation
 //   - Error handling without exceptions
+//
+// extern signatures use raw C types (see README §9.1).
 
-#include <stdio.h>
+extern int printf(char* fmt, ...);
 
 // ── Compile-time functions ────────────────────────────────────────────────────
 // 'const' fn: can run at compile time when called in a const context

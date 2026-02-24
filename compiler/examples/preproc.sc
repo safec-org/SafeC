@@ -6,8 +6,10 @@
 //   - #undef
 //   - __FILE__ / __LINE__
 //   - #error / #warning
+//
+// extern signatures use raw C types (see README §9.1).
 
-#include <stdio.h>
+extern int printf(char* fmt, ...);
 
 // ── Object-like macros ────────────────────────────────────────────────────────
 // Allowed: expand to constant expressions only

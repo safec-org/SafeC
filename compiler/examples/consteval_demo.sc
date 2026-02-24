@@ -1,13 +1,15 @@
 // consteval_demo.sc — SafeC compile-time evaluation demonstration
 //
-// Shows (CONST_EVAL.md):
+// Shows:
 //   - const functions: may execute at compile time or runtime
 //   - consteval functions: must execute at compile time only
 //   - const global variables: evaluated at compile time
 //   - static_assert: compile-time assertions
-//   - if const (...): compile-time branch selection (CONST_EVAL.md §14)
+//   - if const (...): compile-time branch selection
+//
+// extern signatures use raw C types (see README §9.1).
 
-#include <stdio.h>
+extern int printf(char* fmt, ...);
 
 // ── Compile-time constants ────────────────────────────────────────────────────
 // These are evaluated by ConstEvalEngine before codegen.

@@ -513,7 +513,261 @@ Conversion requires an explicit safety assertion where the programmer accepts re
 
 ---
 
-# 9. Error Handling Philosophy
+## 8.1 Safe vs Unsafe Domains
+
+SafeC defines two semantic domains:
+
+```
+Safe domain   : region + alias rules enforced
+Unsafe domain : raw pointer semantics allowed
+```
+
+Transition is explicit via `unsafe {}`. There are no implicit transitions.
+
+---
+
+## 8.2 Lexical Unsafe Tracking
+
+During semantic analysis, each scope carries an `unsafe_mode` flag:
+
+1. Entering `unsafe {}` sets `unsafe_mode = true`
+2. Leaving restores the previous state
+3. Unsafe does not propagate outside its lexical scope
+4. Nested unsafe blocks do not change behavior
+
+---
+
+## 8.3 Pointer Interpretation by Mode
+
+Outside unsafe:
+
+```
+T &stack     ≠    T*
+T &heap      ≠    T*
+T &arena<R>  ≠    T*
+```
+
+Inside unsafe — *Temporary Raw Interpretation*:
+
+```
+T &region  may decay to  T*
+```
+
+This requires unsafe context, does not change ownership, does not erase the region type outside the block, and introduces no runtime conversion.
+
+---
+
+## 8.4 Unsafe Escape
+
+`unsafe escape` permanently removes region guarantees for the affected reference:
+
+```c
+unsafe escape {
+    global_ptr = x;   // region lifetime no longer tracked
+}
+```
+
+* Region lifetime no longer tracked
+* Alias safety no longer enforced
+* Full responsibility transferred to the programmer
+
+This is the only legal region break.
+
+---
+
+## 8.5 Formal Safety Boundary
+
+```
+S = region-checked domain
+U = raw pointer domain
+
+unsafe {}         → temporary S → U interpretation
+unsafe escape {}  → permanent S → U conversion
+```
+
+No implicit transitions exist.
+
+---
+
+## 8.6 Alias Rules Inside Unsafe
+
+Unsafe does **not** disable alias checking.
+
+Before entering unsafe: alias graph must be valid.
+
+Inside unsafe, multiple raw aliases may exist — the compiler assumes potential aliasing and restricts alias-based optimizations accordingly:
+
+```c
+unsafe {
+    int *p = x;
+    int *q = x;   // allowed; compiler assumes p aliases q
+}
+```
+
+After leaving unsafe: no illegal alias may persist; the borrow graph must remain consistent.
+
+---
+
+# 9. C Interoperability (FFI)
+
+SafeC provides zero-cost, explicit, region-safe interoperability with C-compatible foreign code. FFI preserves all SafeC guarantees by default.
+
+---
+
+## 9.1 FFI Function Declarations
+
+Foreign functions must be declared using **raw C types**. Region-qualified references are not allowed in `extern` signatures:
+
+```c
+// Correct: raw C pointer types
+extern int printf(char* fmt, ...);
+extern void* malloc(long size);
+extern void  free(void* ptr);
+```
+
+Region qualifiers belong to the SafeC caller, not to the extern declaration.
+
+---
+
+## 9.2 Calling FFI Functions
+
+The rule depends on the region of the argument being passed:
+
+**`&static T` — always safe, no `unsafe {}` required:**
+
+```c
+// String literals are &static char — safe to pass to char*
+printf("hello\n");          // OK, no unsafe needed
+printf("value: %d\n", x);  // OK
+```
+
+**`&stack T`, `&heap T`, `&arena<R> T` — require `unsafe {}`:**
+
+```c
+char &stack buffer = ...;
+
+unsafe {
+    fgets(buffer, 256, stdin);  // OK inside unsafe
+}
+
+fgets(buffer, 256, stdin);      // compile error: outside unsafe
+```
+
+---
+
+## 9.3 Lifetime Containment Rule
+
+The compiler verifies that the region of every reference passed to a C function outlives the call:
+
+```
+lifetime(argument) ≥ lifetime(call)
+```
+
+* The region must outlive the entire call
+* Temporary inner-scope regions cannot be passed to escaping C code
+
+---
+
+## 9.4 Escape Analysis in Unsafe
+
+Inside `unsafe`, temporary raw interpretation does **not** allow region escape:
+
+```c
+int &stack x = ...;
+
+unsafe {
+    global_ptr = x;     // compile error: stack ref stored in persistent location
+}
+```
+
+Escape requires explicit acknowledgement:
+
+```c
+unsafe escape {
+    global_ptr = x;     // programmer accepts full responsibility
+}
+```
+
+---
+
+## 9.5 Region-Specific FFI Rules
+
+| Region        | May Pass to C | Escape | Constraint                        |
+| ------------- | ------------- | ------ | --------------------------------- |
+| `&static`     | Yes           | Yes    | Always safe, no `unsafe` required |
+| `&stack`      | Yes           | No     | Must not escape; must outlive call|
+| `&heap`       | Yes           | Yes    | Ownership rules apply             |
+| `&arena<R>`   | Yes           | Cond.  | Arena lifetime must allow         |
+
+---
+
+## 9.6 Receiving Raw Pointers from C
+
+Raw pointers returned from C functions must be handled inside `unsafe {}`. Region assignment is explicit:
+
+```c
+unsafe {
+    void* raw = malloc(128);
+    int &heap p = from_raw(raw);  // explicit region declaration
+}
+```
+
+* Region must be declared explicitly
+* Ownership intent must be clear
+* The compiler does not infer allocation behavior
+
+No automatic wrapping.
+
+---
+
+## 9.7 Optimizer Behavior
+
+Because region references erase to raw pointers at codegen, FFI introduces:
+
+* No fat pointer
+* No runtime checks
+* No ABI difference
+* Full compatibility with C calling conventions
+
+Inside `unsafe`: compiler assumes aliasing; alias-based optimizations are restricted.
+Outside `unsafe`: full region-based alias analysis and optimization apply.
+
+---
+
+## 9.8 Compiler FFI Responsibilities
+
+The compiler must:
+
+* Track unsafe lexically
+* Enforce alias graph validity before unsafe
+* Enforce lifetime containment on FFI calls
+* Detect region escape
+* Prevent implicit region leakage
+* Erase region metadata at codegen
+
+The compiler must not:
+
+* Insert runtime guards
+* Change ABI
+* Infer ownership automatically
+
+---
+
+## 9.9 FFI Summary
+
+| Feature            | Safe Mode | Unsafe Mode              |
+| ------------------ | --------- | ------------------------ |
+| Region enforcement | Yes       | Temporarily relaxed      |
+| Alias checking     | Yes       | Yes                      |
+| Raw pointer usage  | No        | Yes                      |
+| Escape allowed     | No        | Only via `unsafe escape` |
+| Runtime overhead   | None      | None                     |
+
+SafeC is safe by default. Unsafe is visible. Region escape is explicit. FFI is powerful but never silent.
+
+---
+
+# 10. Error Handling Philosophy
 
 SafeC supports multiple styles without mandating one:
 
@@ -535,7 +789,7 @@ No implicit exceptions. No stack unwinding. Error propagation is explicit.
 
 ---
 
-# 10. Comparison with Other Languages
+# 11. Comparison with Other Languages
 
 | Feature                | C      | C++         | Rust          | Zig        | SafeC                  |
 | ---------------------- | ------ | ----------- | ------------- | ---------- | ---------------------- |
@@ -552,9 +806,9 @@ SafeC is not a Rust clone, not a C++ competitor, and not a scripting language. I
 
 ---
 
-# 11. Compiler Architecture
+# 12. Compiler Architecture
 
-## 11.1 Pipeline
+## 12.1 Pipeline
 
 ```
 Source (.sc)
@@ -581,7 +835,7 @@ No implicit transformation inserting hidden allocations.
 
 ---
 
-## 11.2 Key Design Decisions
+## 12.2 Key Design Decisions
 
 * **References lower to `ptr`** with `noalias`, `nonnull`, `dereferenceable` attributes
 * **Regions are compile-time only** — zero runtime region metadata
@@ -592,15 +846,15 @@ No implicit transformation inserting hidden allocations.
 
 ---
 
-# 12. Build & Usage
+# 13. Build & Usage
 
-## 12.1 Prerequisites
+## 13.1 Prerequisites
 
 * CMake ≥ 3.20
 * C++17 compiler (Clang ≥ 14, GCC ≥ 12, or MSVC 2022)
 * LLVM ≥ 17 (with CMake config files)
 
-## 12.2 Building
+## 13.2 Building
 
 ```bash
 # Set LLVM_DIR if LLVM is not on the default search path:
@@ -615,7 +869,7 @@ cmake --build . --parallel
 
 The compiler binary is `build/safec`.
 
-## 12.3 Compiler Flags
+## 13.3 Compiler Flags
 
 ```
 safec <input.sc> [options]
@@ -632,7 +886,7 @@ safec <input.sc> [options]
   -v                       Verbose output
 ```
 
-## 12.4 Example Workflow
+## 13.4 Example Workflow
 
 ```bash
 # Compile to LLVM IR
@@ -647,7 +901,7 @@ clang hello.ll -o hello
 
 ---
 
-# 13. Project Status
+# 14. Project Status
 
 The SafeC compiler is a working prototype implementing:
 
@@ -660,6 +914,7 @@ The SafeC compiler is a working prototype implementing:
 | Preprocessor (safe + compat mode)| ✅ Complete |
 | Const-eval engine                | ✅ Complete |
 | LLVM IR codegen                  | ✅ Complete |
+| C interoperability (FFI)         | ✅ Complete |
 | Generics monomorphization        | 🔲 Planned  |
 | Arena region runtime enforcement | 🔲 Planned  |
 | Full alias/borrow checker        | 🔲 Planned  |
@@ -668,7 +923,7 @@ The SafeC compiler is a working prototype implementing:
 
 ---
 
-# 14. Non-Goals (Initial Version)
+# 15. Non-Goals (Initial Version)
 
 * Async/await
 * Full concurrency model
@@ -677,11 +932,11 @@ The SafeC compiler is a working prototype implementing:
 * Reflection
 * Implicit move semantics
 * Automatic destructors
-* Standard library (use C stdlib via `#include`)
+* Standard library (use C stdlib via `extern` declarations)
 
 ---
 
-# 15. Long-Term Vision
+# 16. Long-Term Vision
 
 After the core compiler is stable:
 
@@ -699,7 +954,7 @@ SafeC is an exploration of what C could have become — if memory safety and com
 
 ---
 
-# 16. Identity
+# 17. Identity
 
 SafeC is:
 

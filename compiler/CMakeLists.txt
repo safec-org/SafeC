@@ -57,17 +57,6 @@ else()
   endif()
 endif()
 
-# ── Sysroot ───────────────────────────────────────────────────────────────────
-# Embed the sysroot directory so the SafeC preprocessor can find SafeC-typed
-# C standard library header stubs (stdio.h, stdlib.h, string.h, …).
-# This path is baked in at build time; override with -DSAFEC_SYSROOT_DIR=…
-if(NOT DEFINED SAFEC_SYSROOT_DIR)
-  set(SAFEC_SYSROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/sysroot")
-endif()
-target_compile_definitions(safec PRIVATE
-  "SAFEC_SYSROOT_DIR=\"${SAFEC_SYSROOT_DIR}\""
-)
-
 # ── LLVM linking ──────────────────────────────────────────────────────────────
 # Prefer the monolithic shared library (libLLVM.so / LLVM.dylib) when
 # available — it avoids linking hundreds of individual static archives.

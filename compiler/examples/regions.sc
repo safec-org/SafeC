@@ -6,8 +6,11 @@
 //   - Struct + field access via safe reference
 //   - Region escape detection (the commented-out bad example)
 //   - Static references to string literals
+//
+// extern signatures use raw C types (see README §9.1).
+// &static is always safe — string literals pass to char* without unsafe{} (see README §9.2).
 
-#include <stdio.h>
+extern int printf(char* fmt, ...);
 
 // User-defined arena region
 region AudioPool {

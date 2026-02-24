@@ -150,8 +150,6 @@ int main(int argc, char **argv) {
     safec::PreprocOptions ppOpts;
     ppOpts.compatMode = CompatPreprocessor;
     for (auto &d : IncludePaths) ppOpts.includePaths.push_back(d);
-    // Built-in sysroot: searched after user -I paths so user paths take priority
-    ppOpts.includePaths.push_back(SAFEC_SYSROOT_DIR);
     for (auto &d : CmdlineDefs) {
         auto eq = d.find('=');
         if (eq == std::string::npos) {

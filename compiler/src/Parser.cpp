@@ -136,6 +136,8 @@ TypePtr Parser::parseBaseType() {
     bool isUnsigned = false;
 
     if (cur().is(TK::KW_const)) { consume(); isConst = true; }
+    // 'restrict' and compiler-specific '__restrict' are ignored qualifiers in SafeC
+    if (cur().is(TK::KW_restrict)) { consume(); }
     if (cur().is(TK::KW_unsigned)) { consume(); isUnsigned = true; hasSign = true; isSigned = false; }
     else if (cur().is(TK::KW_signed)) { consume(); hasSign = true; }
 
@@ -206,11 +208,12 @@ TypePtr Parser::parseType() {
 }
 
 TypePtr Parser::parseTypeDeclarator(TypePtr base) {
-    // C-style pointer: T* or T* const
+    // C-style pointer: T* or T* const / T* restrict
     while (cur().is(TK::Star)) {
         consume();
         bool isConst = false;
-        if (cur().is(TK::KW_const)) { consume(); isConst = true; }
+        if (cur().is(TK::KW_const))    { consume(); isConst = true; }
+        if (cur().is(TK::KW_restrict)) { consume(); } // ignored in SafeC
         base = makePointer(std::move(base), isConst);
     }
     // Array: T[N]

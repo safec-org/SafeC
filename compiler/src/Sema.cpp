@@ -875,6 +875,15 @@ bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
         if (fp.base->isVoid()) return true;
     }
     if (from->kind == TypeKind::Pointer && to->kind == TypeKind::Reference) return false;
+    // README §9.2: &static T is always safe — escape allowed.
+    // Passing a static reference to a raw C pointer parameter does not require unsafe{}.
+    if (from->kind == TypeKind::Reference && to->kind == TypeKind::Pointer) {
+        auto &fr = static_cast<const ReferenceType &>(*from);
+        auto &tp = static_cast<const PointerType &>(*to);
+        if (fr.region == Region::Static && typeEqual(fr.base, tp.base)) return true;
+        // void* target accepts any static reference (e.g. &static char → void*)
+        if (fr.region == Region::Static && tp.base->isVoid()) return true;
+    }
     if (from->kind == TypeKind::Reference && to->kind == TypeKind::Reference) {
         auto &fr = static_cast<const ReferenceType &>(*from);
         auto &tr = static_cast<const ReferenceType &>(*to);
