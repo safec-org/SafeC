@@ -1,34 +1,34 @@
 # SafeC
 
-## “Safe Embeddable Assembly”
+## Safe Embeddable Systems Language
 
-### Warning! Currently an idea project, not implied in any compiler, interpreter, or any such yet!
+### Warning: Currently a concept project, not yet implemented in any compiler, interpreter, or similar tool.
 
 ### Main Features
 
 - C Superset
-- Memory-safety
-- Type-safety
-- Modern features(generic-like, namespace, closure, tuple, method, operator override)
+- Memory safety
+- Type safety
+- Modern features (generics, namespaces, closures, tuples, methods, operator overloading)
 - LLVM Backend
 
 ### Concept
 
-- Safe C superset to replace low-level area of C. (Operating System, Web Browser, and Library programming)
-- No semantic sugar on the language. Make your own!
+- A safe C superset to replace C in low-level areas such as operating system, web browser, and library programming.
+- No built-in syntactic sugar — extend the language yourself!
 
-### How safe pointer works?
+### How do safe pointers work?
 
-- Safe pointer is a concrete of 3 sizeof(void) memory space on stack : address, length, and lifetime.
-- Length prevents segmentation error. If index is greater than length, it breaks and gives error
-- Lifetime prevents memory leak. A single set of brackets counts as a block, which has a lifetime, and safe pointer defined inside a block will be freed when block ends, meaning lifetime of the pointer is over. There’s four ways to avoid it.
-  1. Return the pointer, which moves the ownership of pointer to the outer block.
-  2. Move the pointer to variable of the outer block.
-  3. Copy the pointer to variable of the outer block. (Which is not memcpy(), it just copies data on stack. Meaning, it copies address and length, and reassigns lifetime.)
-  4. Use static syntax when declaring, which will free the pointer when program ends or free() is called.
+- A safe pointer consists of 3 × sizeof(void*) of memory on the stack: an address, a length, and a lifetime.
+- Length prevents out-of-bounds access. If the index is greater than the length, it raises a bounds error.
+- Lifetime prevents memory leaks. A single set of braces defines a block with a lifetime; a safe pointer defined inside a block is freed when the block ends, meaning the pointer's lifetime has expired. There are four ways to extend a pointer's lifetime:
+  1. Return the pointer, which transfers ownership to the outer block.
+  2. Move the pointer to a variable in the outer block.
+  3. Copy the pointer to a variable in the outer block. This is not `memcpy()`; it only copies the stack data — the address and length — and reassigns the lifetime.
+  4. Use the `static` keyword when declaring, which defers deallocation until the program ends or `free()` is called.
 - example
 
-```
+```c
 #include <salloc.h>
 
 void pointer1()
@@ -40,7 +40,7 @@ void pointer1()
 void& pointer2()
 {
     void& safe_pointer = (void&)salloc(sizeof(void) * 4); // safe pointer allocated
-    return safe_pointer; // moves out ownership of safe_pointer
+    return safe_pointer; // moves ownership of safe_pointer to the caller
 }
 
 int main()
@@ -51,17 +51,17 @@ int main()
 } // safe pointer in variable "pointer" freed.
 ```
 
-### What is generic-like?
+### What is the generic-like feature?
 
-- Generic in Java and C# use type-eraser, which is similar to macro in C/C++ but in safer way. But it has a cost.
-- Generic in C++ and Rust generate code for every type used for zero-cost abstraction, but they sacrifice compilation time and binary size.
-- Generic-like in SafeC only generates code for type that is implied in source code when building the library, but third-party user can imply their own types in their libraries and programs by given header.
-- Think you are only giving the API but not the implementation.
-- For C/C++ users, think you are giving a header but not a source or library.
-- Library developers can give users how to imply their generic function by comments or docs.
+- Generics in Java and C# use type erasure, which provides a single generic implementation for all types in a safer way than macros, at the cost of runtime overhead.
+- Generics in C++ and Rust generate specialized code for every type used, achieving zero-cost abstraction at the expense of compilation time and binary size.
+- Generic-like in SafeC only generates code for types instantiated in the library's source code, but third-party users can instantiate their own types in their libraries and programs using the provided header.
+- Think of it as providing only the API, not the implementation.
+- For C/C++ users, think of it as providing a header but not the source or a compiled library.
+- Library developers can tell users how to instantiate their generic functions through comments or documentation.
 - example
 
-```
+```c
 typedef struct
 {
     generic T;
@@ -72,22 +72,22 @@ typedef struct
 generic T foo_implement(Foo& bar)
 {
     return bar.a + bar.b;
-    // If generic of bar doesn't match generic T
-    // or generic T doesn't have operator override add, it fails to compile.
+    // If the generic type of bar doesn't match generic T,
+    // or generic T doesn't have an operator override for add, it fails to compile.
 }
 
 generic T bar(T a, T b)
 {
     return a + b;
-    // If generic T doesn't have operator override add, it fails to compile.
+    // If generic T doesn't have an operator override for add, it fails to compile.
 }
 ```
 
 ### Other Modern Features
 
-- namespace is a named scope to separate on chord block to the other and could be access through name.
+- A namespace is a named scope that separates one code block from another and can be accessed by name.
 
-```
+```c
 int bar();
 
 namespace Foo
@@ -102,9 +102,9 @@ int main()
 }
 ```
 
-- closure is an unnamed function inside the function for certain purpose.
+- A closure is an anonymous function defined inside another function.
 
-```
+```c
 int Foo(int a, int b)
 {
     return a + int (int x, int y)
@@ -114,16 +114,16 @@ int Foo(int a, int b)
 }
 ```
 
-- Tuple is unnamed struct to group a value without names.
+- A tuple is an anonymous struct that groups values without named fields.
 
-```
+```c
 { int, int } foo = { 1, 2 };
 printf("%d, %d", foo.0, foo.1);
 ```
 
-- Method is a default function of function pointer in struct object.
+- A method is a function pointer in a struct with a default implementation.
 
-```
+```c
 typedef struct foo
 {
     double a;
@@ -133,14 +133,14 @@ typedef struct foo
 
 double Foo.bar(foo& self) default
 {
-    return a + b;
+    return self->a + self->b;
 }
 
 ```
 
-- Operator override is a method to use standard operators to certain type, including arthmetic operator, logic operator, type casting, indexing, etc.
+- Operator overloading allows the use of standard operators for a custom type, including arithmetic operators, logical operators, type casting, indexing, and more.
 
-```
+```c
 typedef struct foo
 {
     double a;
@@ -148,7 +148,7 @@ typedef struct foo
     foo (add* override)(foo& x, foo& y);
 } Foo;
 
-double Foo.add(Foo& x, Foo& y) default
+Foo Foo.add(Foo& x, Foo& y) default
 {
     return Foo { .a = x->a + y->a, .b = x->b + y->b };
 }
@@ -156,37 +156,37 @@ double Foo.add(Foo& x, Foo& y) default
 
 ### Other Safety Features
 
-- Unless in unsafe scope, struct must have all the fields before the object is used.
-- Unless in unsafe scope, switch must match out every possible value.
-- Unless in unsafe scope, raw pointer and union are avoided. Instead, use safe pointer and unionum.
-- Unless in unsafe scope, type casting must be avoided unless the type includes override method casting to desired type. (Primitive types can be casted.)
+- Unless in an unsafe scope, all struct fields must be initialized before the object is used.
+- Unless in an unsafe scope, a switch statement must exhaustively cover every possible value.
+- Unless in an unsafe scope, raw pointers and unions are prohibited. Use safe pointers and unionums instead.
+- Unless in an unsafe scope, type casting is forbidden unless the type defines a cast overload to the target type. (Primitive types may be cast freely.)
 
 ### Unsafe Scope
 
-Unsafe scope(or unsafe block) exists to use C codes directly, or to optimize the performance without overhead. In unsafe scope, every features avoided in the language is allowed if it follows C standard.
+An unsafe scope (or unsafe block) exists to use C code directly or to optimize performance without overhead. Within an unsafe scope, all features restricted in safe code are allowed, provided they follow the C standard.
 
 ### Why not Rust?
 
-- To be honest, I use Rust on most of my personal projects which I don't inter-communicate with C/C++. But Rust has a dilemma when using with C/C++. If we’re interfacing with unsafe raw pointers, why do we have to sacrifice time for thinking in different ways than programming in a single language? That’s the first reason came out for designing SafeC project.
-- When we are building the lowest level of the software like firmwares and operating systems. Without C ABI and OS native libraries, we cannot use more than half of Rust std libraries, which you have to imply your own yourself or translate existing sources written in C, which is inefficient.
-- Third, enum is heavy in Rust. Enum in C is just a number, while enum in Rust is similar to union in C with enum in C, which makes enum bigger and slower.
-- We got idea of “Safety” from Rust, but lots of safety in Rust depends on idea your are using an existing OS with multithreaded environment that is defined in Rust ABI. For embedded or operating system programmer, it isn’t necessary, but can struggle your way. So we moved out those limitation and gave programmer more freedom.
-- “Semantic sugar” in Rust is different for that in many modern languages such as Python and JaveScript. It is handled on compilation time, so the cost of it is eliminated, which is great. The side effects are compilation time and unstable ABI. Rust ABI is very unstable, so for library developer, you have to either release in every single version of Rust, or open source code, which is not always desirable for perpetual library designer.
-- But for software developers on established platforms, (i.e. Windows, macOS, Linux) we highly recommend Rust! Rust is even safer than SafeC, especially for multithreaded environments, and has “semantic sugar” that will make your development much easier. You don’t have to think about C ABI, OS API, intrinsics, or etc in the most cases.
+- To be honest, I use Rust for most of my personal projects that do not interface with C/C++. But Rust presents a dilemma when used alongside C/C++. When interfacing through unsafe raw pointers, why should developers have to think in a completely different paradigm than the rest of their codebase? That was the first motivation for designing the SafeC project.
+- When building the lowest levels of software, such as firmware and operating systems, much of the Rust standard library is unavailable without a C ABI or OS native libraries. You have to implement equivalents yourself or translate existing C code, which is inefficient.
+- Enums in Rust are heavyweight. An enum in C is just a number, while an enum in Rust resembles a tagged union — a combination of a C union and a C enum — which makes it larger and slower.
+- We drew inspiration for the concept of safety from Rust, but much of Rust's safety model assumes you are running on an existing OS within a multithreaded environment as defined by the Rust ABI. For embedded or operating system developers, these assumptions are unnecessary and can get in the way. So we removed those limitations and gave developers more freedom.
+- Syntactic sugar in Rust differs from that in many modern languages such as Python and JavaScript. It is handled at compile time, so the runtime cost is eliminated, which is great. The trade-offs are longer compilation times and an unstable ABI. Rust's ABI is very unstable, so as a library developer, you must either release a new build for every version of Rust or open-source your code, which is not always desirable for proprietary library developers.
+- For software developers on established platforms (Windows, macOS, Linux), however, we highly recommend Rust. Rust is even safer than SafeC, especially in multithreaded environments, and has syntactic sugar that will make development much easier. In most cases, you will not need to think about C ABI, OS APIs, intrinsics, or similar low-level concerns.
 
 ### Types
 
 - auto
-- numbers(signed or unsigned) : char, short, int, long, float, double
+- numbers (signed or unsigned): char, short, int, long, float, double
 - bool
 - void
 - enum
 - union
 - struct
-- function(no syntax)
-- raw pointer(\*)
-- safe pointer(&)
-- unionum (enum with union like enum in Rust)
+- function (no dedicated syntax)
+- raw pointer (\*)
+- safe pointer (&)
+- unionum (enum with union, like enum in Rust)
 
 ### Preprocessor syntax
 
@@ -279,8 +279,8 @@ Unsafe scope(or unsafe block) exists to use C codes directly, or to optimize the
 
 ### Hello World
 
-```
-#include<stdio.h>
+```c
+#include <stdio.h>
 
 int main()
 {
