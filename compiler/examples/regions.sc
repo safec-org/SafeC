@@ -7,7 +7,7 @@
 //   - Region escape detection (the commented-out bad example)
 //   - Static references to string literals
 
-extern int printf(&static char fmt, ...);
+#include <stdio.h>
 
 // User-defined arena region
 region AudioPool {

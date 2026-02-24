@@ -299,7 +299,39 @@ void CodeGen::genStmt(Stmt &s, FnEnv &env) {
     case StmtKind::Continue:
         if (env.continueBB()) builder_.CreateBr(env.continueBB());
         break;
-    case StmtKind::StaticAssert: break; // handled at compile-time by sema
+    case StmtKind::StaticAssert: break; // handled at compile-time by ConstEvalEngine
+    case StmtKind::IfConst: {
+        // Compile-time branch: ConstEvalEngine has set constResult.
+        // Emit only the selected branch; the other is dead code.
+        auto &ics = static_cast<IfConstStmt &>(s);
+        if (!ics.constResult.has_value()) {
+            // Fallback: evaluate as a regular if at runtime
+            if (ics.cond && ics.then) {
+                llvm::Value *cond = genExpr(*ics.cond, env);
+                if (cond && cond->getType() != builder_.getInt1Ty())
+                    cond = builder_.CreateICmpNE(cond,
+                        llvm::ConstantInt::get(cond->getType(), 0), "ifconst.cond");
+                auto *thenBB  = llvm::BasicBlock::Create(ctx_, "ifconst.then", env.fn);
+                auto *elseBB  = llvm::BasicBlock::Create(ctx_, "ifconst.else", env.fn);
+                auto *mergeBB = llvm::BasicBlock::Create(ctx_, "ifconst.merge", env.fn);
+                if (cond) builder_.CreateCondBr(cond, thenBB, ics.else_ ? elseBB : mergeBB);
+                builder_.SetInsertPoint(thenBB);
+                genStmt(*ics.then, env);
+                if (!isTerminated(builder_.GetInsertBlock())) builder_.CreateBr(mergeBB);
+                if (ics.else_) {
+                    builder_.SetInsertPoint(elseBB);
+                    genStmt(*ics.else_, env);
+                    if (!isTerminated(builder_.GetInsertBlock())) builder_.CreateBr(mergeBB);
+                }
+                builder_.SetInsertPoint(mergeBB);
+            }
+        } else if (*ics.constResult) {
+            if (ics.then) genStmt(*ics.then, env);
+        } else {
+            if (ics.else_) genStmt(*ics.else_, env);
+        }
+        break;
+    }
     case StmtKind::Label: {
         auto &ls = static_cast<LabelStmt &>(s);
         // Create BB for the label

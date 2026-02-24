@@ -1,7 +1,9 @@
+#include "safec/Preprocessor.h"
 #include "safec/Diagnostic.h"
 #include "safec/Lexer.h"
 #include "safec/Parser.h"
 #include "safec/Sema.h"
+#include "safec/ConstEval.h"
 #include "safec/CodeGen.h"
 
 #include "llvm/IR/LLVMContext.h"
@@ -35,10 +37,31 @@ static llvm::cl::opt<bool>
     DumpAST("dump-ast", llvm::cl::desc("Dump AST only, skip codegen"));
 
 static llvm::cl::opt<bool>
+    DumpPP("dump-pp", llvm::cl::desc("Dump preprocessed source and exit"));
+
+static llvm::cl::opt<bool>
     NoSema("no-sema", llvm::cl::desc("Skip semantic analysis (parse only)"));
 
 static llvm::cl::opt<bool>
+    NoConstEval("no-consteval", llvm::cl::desc("Skip const-eval pass"));
+
+static llvm::cl::opt<bool>
+    CompatPreprocessor("compat-preprocessor",
+        llvm::cl::desc("Enable full C preprocessor (function-like macros, "
+                       "token pasting, stringification)"));
+
+static llvm::cl::opt<bool>
     Verbose("v", llvm::cl::desc("Verbose output"));
+
+// -I <dir> include paths
+static llvm::cl::list<std::string>
+    IncludePaths("I", llvm::cl::desc("Add include search directory"),
+                 llvm::cl::value_desc("dir"), llvm::cl::Prefix);
+
+// -D NAME[=VALUE] command-line defines
+static llvm::cl::list<std::string>
+    CmdlineDefs("D", llvm::cl::desc("Define preprocessor macro"),
+                llvm::cl::value_desc("NAME[=VALUE]"), llvm::cl::Prefix);
 
 // ── Read file ─────────────────────────────────────────────────────────────────
 static std::string readFile(const std::string &path) {
@@ -58,8 +81,11 @@ static void dumpDecl(safec::Decl &d, int indent = 0) {
     switch (d.kind) {
     case safec::DeclKind::Function: {
         auto &fn = static_cast<safec::FunctionDecl &>(d);
-        fprintf(stdout, "%sFunction '%s' -> %s%s\n",
-                pad.c_str(), fn.name.c_str(),
+        fprintf(stdout, "%s%s%sFunction '%s' -> %s%s\n",
+                pad.c_str(),
+                fn.isConsteval ? "consteval " : (fn.isConst ? "const " : ""),
+                fn.isExtern    ? "extern " : "",
+                fn.name.c_str(),
                 fn.returnType ? fn.returnType->str().c_str() : "?",
                 fn.body ? " {...}" : " (decl)");
         break;
@@ -88,9 +114,14 @@ static void dumpDecl(safec::Decl &d, int indent = 0) {
     }
     case safec::DeclKind::GlobalVar: {
         auto &gv = static_cast<safec::GlobalVarDecl &>(d);
-        fprintf(stdout, "%sGlobal '%s': %s\n",
-                pad.c_str(), gv.name.c_str(),
+        fprintf(stdout, "%s%sGlobal '%s': %s\n",
+                pad.c_str(), gv.isConst ? "const " : "",
+                gv.name.c_str(),
                 gv.type ? gv.type->str().c_str() : "?");
+        break;
+    }
+    case safec::DeclKind::StaticAssert: {
+        fprintf(stdout, "%sstatic_assert(...)\n", pad.c_str());
         break;
     }
     default:
@@ -101,8 +132,6 @@ static void dumpDecl(safec::Decl &d, int indent = 0) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 int main(int argc, char **argv) {
     llvm::InitLLVM X(argc, argv);
-    // Only initialize the x86 native target (what this LLVM build ships with).
-    // We only emit LLVM IR / bitcode, so we don't need all targets.
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();
     llvm::InitializeNativeTargetAsmParser();
@@ -110,23 +139,54 @@ int main(int argc, char **argv) {
     llvm::cl::ParseCommandLineOptions(argc, argv, "SafeC compiler\n");
 
     // ── 1. Read source ─────────────────────────────────────────────────────────
-    std::string src    = readFile(InputFile);
-    const char *fname  = InputFile.c_str();
+    std::string src   = readFile(InputFile);
+    const char *fname = InputFile.c_str();
 
     safec::DiagEngine diag(fname);
 
-    if (Verbose) fprintf(stderr, "[safec] Lexing %s ...\n", fname);
+    // ── 2. Preprocess ─────────────────────────────────────────────────────────
+    if (Verbose) fprintf(stderr, "[safec] Preprocessing %s ...\n", fname);
 
-    // ── 2. Lex ────────────────────────────────────────────────────────────────
-    safec::Lexer lexer(src, fname, diag);
+    safec::PreprocOptions ppOpts;
+    ppOpts.compatMode = CompatPreprocessor;
+    for (auto &d : IncludePaths) ppOpts.includePaths.push_back(d);
+    // Built-in sysroot: searched after user -I paths so user paths take priority
+    ppOpts.includePaths.push_back(SAFEC_SYSROOT_DIR);
+    for (auto &d : CmdlineDefs) {
+        auto eq = d.find('=');
+        if (eq == std::string::npos) {
+            ppOpts.cmdlineDefs[d] = "1";
+        } else {
+            ppOpts.cmdlineDefs[d.substr(0, eq)] = d.substr(eq + 1);
+        }
+    }
+
+    safec::Preprocessor preproc(src, fname, diag, ppOpts);
+    std::string ppSrc = preproc.process();
+
+    if (diag.hasErrors()) {
+        fprintf(stderr, "Preprocessor failed with %d error(s)\n", diag.errorCount());
+        return 1;
+    }
+    if (Verbose) fprintf(stderr, "[safec] Preprocessing done (%zu macros defined)\n",
+                         preproc.macros().size());
+
+    if (DumpPP) {
+        fprintf(stdout, "%s", ppSrc.c_str());
+        return 0;
+    }
+
+    // ── 3. Lex ────────────────────────────────────────────────────────────────
+    if (Verbose) fprintf(stderr, "[safec] Lexing ...\n");
+    safec::Lexer lexer(ppSrc, fname, diag);
     auto tokens = lexer.lexAll();
     if (diag.hasErrors()) {
         fprintf(stderr, "Lexer failed with %d error(s)\n", diag.errorCount());
         return 1;
     }
-    if (Verbose) fprintf(stderr, "[safec] Parsed %zu tokens\n", tokens.size());
+    if (Verbose) fprintf(stderr, "[safec] Lexed %zu tokens\n", tokens.size());
 
-    // ── 3. Parse ──────────────────────────────────────────────────────────────
+    // ── 4. Parse ──────────────────────────────────────────────────────────────
     safec::Parser parser(std::move(tokens), diag);
     auto tu = parser.parseTranslationUnit();
     if (!tu) {
@@ -141,14 +201,14 @@ int main(int argc, char **argv) {
     if (Verbose) fprintf(stderr, "[safec] Parsed %zu top-level declarations\n",
                          tu->decls.size());
 
-    // ── 4. AST dump ───────────────────────────────────────────────────────────
+    // ── 5. AST dump ───────────────────────────────────────────────────────────
     if (DumpAST) {
         fprintf(stdout, "=== AST: %s ===\n", fname);
         for (auto &d : tu->decls) dumpDecl(*d);
         return 0;
     }
 
-    // ── 5. Semantic analysis ──────────────────────────────────────────────────
+    // ── 6. Semantic analysis ──────────────────────────────────────────────────
     if (!NoSema) {
         if (Verbose) fprintf(stderr, "[safec] Running semantic analysis ...\n");
         safec::Sema sema(*tu, diag);
@@ -161,7 +221,20 @@ int main(int argc, char **argv) {
         if (Verbose) fprintf(stderr, "[safec] Semantic analysis passed\n");
     }
 
-    // ── 6. Code generation ────────────────────────────────────────────────────
+    // ── 7. Const-eval pass ────────────────────────────────────────────────────
+    if (!NoConstEval && !NoSema) {
+        if (Verbose) fprintf(stderr, "[safec] Running const-eval pass ...\n");
+        safec::ConstEvalEngine ce(*tu, diag);
+        bool ok = ce.run();
+        if (!ok || diag.hasErrors()) {
+            fprintf(stderr, "Const-eval pass failed with %d error(s)\n",
+                    diag.errorCount());
+            return 1;
+        }
+        if (Verbose) fprintf(stderr, "[safec] Const-eval pass passed\n");
+    }
+
+    // ── 8. Code generation ────────────────────────────────────────────────────
     llvm::LLVMContext ctx;
     safec::CodeGen cg(ctx, InputFile, diag);
     auto mod = cg.generate(*tu);
@@ -172,9 +245,8 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // ── 7. Output ─────────────────────────────────────────────────────────────
+    // ── 9. Output ─────────────────────────────────────────────────────────────
     if (OutputFile == "-") {
-        // Default: emit LLVM IR to stdout
         mod->print(llvm::outs(), nullptr);
     } else if (EmitLLVM) {
         std::error_code EC;
@@ -186,9 +258,8 @@ int main(int argc, char **argv) {
         }
         mod->print(out, nullptr);
     } else {
-        // Emit LLVM bitcode
         std::error_code EC;
-        std::string outPath = OutputFile == "-" ? "out.bc" : OutputFile.getValue();
+        std::string outPath = (OutputFile == "-") ? "out.bc" : OutputFile.getValue();
         llvm::raw_fd_ostream out(outPath, EC, llvm::sys::fs::OF_None);
         if (EC) {
             fprintf(stderr, "error: cannot open output file '%s': %s\n",

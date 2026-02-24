@@ -517,7 +517,7 @@ DeclPtr Parser::parseStaticAssertDecl() {
     auto loc = cur().loc;
     consume(); // eat 'static_assert'
     expect(TK::LParen, "expected '(' after static_assert");
-    auto cond = parseExpr();
+    auto cond = parseAssignExpr(); // use parseAssignExpr to avoid consuming the ',' message separator
     std::string msg;
     if (match(TK::Comma)) {
         if (cur().is(TK::StringLit)) { msg = cur().text; consume(); }
@@ -615,6 +615,20 @@ std::unique_ptr<CompoundStmt> Parser::parseCompoundStmt() {
 StmtPtr Parser::parseIfStmt() {
     auto loc = cur().loc;
     consume(); // 'if'
+
+    // 'if const (cond) { ... }' — compile-time conditional (CONST_EVAL.md §14)
+    if (cur().isIdent("const") || cur().is(TK::KW_const)) {
+        consume(); // 'const'
+        expect(TK::LParen, "expected '(' after 'if const'");
+        auto cond = parseExpr();
+        expect(TK::RParen, "expected ')' after if const condition");
+        auto then = parseStmt();
+        StmtPtr else_;
+        if (match(TK::KW_else)) else_ = parseStmt();
+        return std::make_unique<IfConstStmt>(std::move(cond), std::move(then),
+                                             std::move(else_), loc);
+    }
+
     expect(TK::LParen, "expected '(' after 'if'");
     auto cond = parseExpr();
     expect(TK::RParen, "expected ')' after if condition");
@@ -696,7 +710,7 @@ StmtPtr Parser::parseStaticAssertStmt() {
     auto loc = cur().loc;
     consume(); // 'static_assert'
     expect(TK::LParen);
-    auto cond = parseExpr();
+    auto cond = parseAssignExpr(); // avoid consuming ',' message separator
     std::string msg;
     if (match(TK::Comma)) {
         if (cur().is(TK::StringLit)) { msg = cur().text; consume(); }

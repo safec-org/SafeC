@@ -295,6 +295,14 @@ void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
         break;
     case StmtKind::Unsafe:       checkUnsafe(static_cast<UnsafeStmt &>(s), fn);       break;
     case StmtKind::StaticAssert: checkStaticAssertStmt(static_cast<StaticAssertStmt &>(s)); break;
+    case StmtKind::IfConst: {
+        // Treat like a regular if for type-checking; ConstEvalEngine evaluates condition later
+        auto &ics = static_cast<IfConstStmt &>(s);
+        if (ics.cond) checkExpr(*ics.cond);
+        if (ics.then)  checkStmt(*ics.then, fn);
+        if (ics.else_) checkStmt(*ics.else_, fn);
+        break;
+    }
     case StmtKind::Break:
     case StmtKind::Continue:     break; // TODO: check we're inside a loop
     case StmtKind::Goto:         break; // TODO: check label exists

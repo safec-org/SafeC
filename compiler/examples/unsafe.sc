@@ -6,9 +6,8 @@
 //   - Pointer arithmetic only inside unsafe
 //   - C-ABI interop
 
-extern int printf(&static char fmt, ...);
-extern void* malloc(long size);
-extern void  free(void* ptr);
+#include <stdio.h>
+#include <stdlib.h>
 
 struct Header {
     int magic;

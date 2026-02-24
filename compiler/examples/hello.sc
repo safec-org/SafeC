@@ -1,7 +1,7 @@
 // hello.sc — minimal SafeC program
 // Demonstrates: C-ABI compatibility, const functions, basic types
 
-extern int printf(&static char fmt, ...);
+#include <stdio.h>
 
 const int factorial(int n) {
     if (n <= 1) return 1;

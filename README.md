@@ -3,14 +3,12 @@
 > **SafeC is a deterministic, region-aware, compile-time-first systems programming language.**
 > It is designed as an evolution of C — preserving C ABI compatibility — while enforcing memory safety, type safety, and real-time determinism.
 
-SafeC does not seek to displace C from existing codebases.
-It provides a safer path for new systems projects that would otherwise be written in C:
+SafeC targets systems domains where hidden allocations, hidden runtime costs, and silent undefined behavior are unacceptable:
 
-* Operating systems
-* Embedded firmware
-* Real-time audio engines
-* Kernel subsystems
-* Security-critical infrastructure
+* Operating systems and microkernels
+* Embedded firmware and bare-metal RTOS
+* Real-time audio and DSP engines
+* Kernel subsystems and security-critical infrastructure
 * Deterministic simulation systems
 
 ---
@@ -19,11 +17,11 @@ It provides a safer path for new systems projects that would otherwise be writte
 
 SafeC is built on five non-negotiable principles:
 
-1. **Determinism**
-2. **Zero hidden cost**
-3. **Explicit control**
-4. **C ABI compatibility**
-5. **Compile-time-first design**
+1. **Determinism** — same input always produces same output; no hidden runtime variance
+2. **Zero hidden cost** — every operation has a visible, predictable cost
+3. **Explicit control** — no implicit memory, no implicit conversion, no implicit error handling
+4. **C ABI compatibility** — C struct layout, C calling conventions, and C linkage by default
+5. **Compile-time-first design** — anything knowable at compile time must be resolved at compile time
 
 SafeC does not assume a runtime.
 SafeC does not assume an ecosystem.
@@ -39,33 +37,23 @@ SafeC explicitly guarantees:
 
 * **No hidden heap allocation**
 * **No hidden runtime**
-* **No hidden panics (unless opted-in)**
+* **No hidden panics** (unless opted-in via explicit bounds checking)
 * **No implicit exceptions**
 * **No background garbage collection**
+* **No implicit destructor calls**
 
 If memory is allocated, it is explicit.
-If a check exists, it is visible.
+If a check exists, it is visible in the source.
 If a failure occurs, it is predictable.
 
-This makes SafeC suitable for:
-
-* Hard real-time DSP
-* Kernel-space execution
-* Bare-metal firmware
-* Safety-critical systems
+This makes SafeC suitable for hard real-time DSP, kernel-space execution, bare-metal firmware, and safety-critical systems.
 
 ---
 
 # 3. Memory Model: Region-Based Safety
 
 SafeC enforces memory safety through **region-aware references**.
-
-Instead of raw pointers, SafeC references encode:
-
-* Memory region
-* Lifetime constraints
-* Mutability
-* Nullability
+Instead of raw pointers, SafeC references encode the memory region, lifetime constraints, mutability, and nullability.
 
 ---
 
@@ -73,125 +61,91 @@ Instead of raw pointers, SafeC references encode:
 
 SafeC defines four primary memory regions:
 
-| Region       | Lifetime            | Allocation          |
-| ------------ | ------------------- | ------------------- |
-| `stack`      | Lexical scope       | Automatic           |
-| `static`     | Program lifetime    | Static storage      |
-| `heap`       | Dynamic             | Explicit allocation |
-| `arena<R>`   | User-defined region | Region allocator    |
+| Region        | Lifetime              | Allocation            |
+| ------------- | --------------------- | --------------------- |
+| `stack`       | Lexical scope         | Automatic             |
+| `static`      | Program lifetime      | Static storage        |
+| `heap`        | Dynamic               | Explicit allocation   |
+| `arena<R>`    | User-defined region   | Region allocator      |
 
 ---
 
 ## 3.2 Region-Qualified References
 
-Examples:
-
 ```c
-&stack int
-&heap float
-&static Config
-&arena<AudioPool> AudioFrame
+&stack int           // non-null reference into stack memory
+&heap float          // non-null reference into heap memory
+&static Config       // non-null reference into static storage
+&arena<AudioPool> Frame  // non-null reference into an arena region
 ```
 
 These references:
 
 * Cannot outlive their region
-* Cannot escape to longer-lived regions
+* Cannot escape to a longer-lived region
 * Cannot be implicitly converted across regions
+
+Nullable form uses `?&`:
+
+```c
+?&stack Node next;   // nullable stack reference
+```
+
+Null must be explicit; references are non-null by default.
 
 ---
 
-## 3.3 Arena Regions
+## 3.3 Region Lifetime Rules
 
-User-defined regions enable high-performance deterministic memory:
+1. `stack` region lifetime = enclosing lexical scope
+2. `static` region lifetime = entire program lifetime
+3. `heap` region lifetime = until explicit `free`
+4. `arena<R>` lifetime = until the region is destroyed
+
+A reference cannot escape to a region with a longer lifetime. The compiler enforces this statically:
+
+```c
+// COMPILE ERROR: returning a stack reference outlives the stack frame
+&stack int danger() {
+    int x = 42;
+    return &x;  // error: x is destroyed when danger() returns
+}
+```
+
+---
+
+## 3.4 Arena Regions
+
+User-defined regions enable high-performance, deterministic memory:
 
 ```c
 region AudioPool {
-    capacity: 4096  // maximum number of elements
+    capacity: 4096
 }
-```
 
-Then:
-
-```c
 &arena<AudioPool> AudioFrame buffer;
 ```
 
-Deallocating the region invalidates all contained references at once.
-
-This is ideal for:
-
-* Audio block processing
-* Game frame memory
-* Kernel subsystems
-* DSP scratch buffers
+Deallocating the region invalidates all contained references at once, with no per-object bookkeeping. Ideal for audio block processing, game frame memory, and kernel subsystems.
 
 ---
 
-# 4. Formal Safety Model
-
-In safe mode, SafeC guarantees:
-
-## 4.1 Memory Safety
-
-* No use-after-free
-* No double-free
-* No dangling references
-* No invalid region escape
-* No null dereference (unless explicitly nullable)
-
-## 4.2 Bounds Safety
-
-* Arrays are bounds-aware
-* Compile-time bounds checking when possible
-* Runtime bounds checking when necessary
-* Checks removable inside `unsafe {}`
-
-## 4.3 Nullability Model
-
-References are non-null by default:
-
-```c
-&int      // non-null
-?&int     // nullable
-```
-
-Null must be explicit.
+# 4. Type System
 
 ---
 
-## 4.4 Unsafe Blocks
+## 4.1 Core Type Categories
 
-Unsafe operations must be explicitly marked:
-
-```c
-unsafe {
-    raw = (int*)addr;
-}
-```
-
-Inside `unsafe`:
-
-* Bounds checks disabled
-* Lifetime checks disabled
-* Region rules bypassed
-
-Raw pointers and region-unqualified values produced inside `unsafe {}` cannot be directly used in safe code. They must be converted to safe references through an explicit safety assertion — at which point the programmer takes responsibility for correctness, and the compiler enforces safe type rules from that point forward.
+1. Primitive types (`int`, `float`, `bool`, `char`, sized variants)
+2. Struct types (value types, C-layout compatible)
+3. Union types (tagged unions supported)
+4. Function types
+5. Region-qualified reference types
+6. Generic types (monomorphized at compile time)
 
 ---
 
-# 5. Type System Philosophy
-
-SafeC types are:
-
-* Explicit
-* Predictable
-* Zero-cost
-* Region-aware
-
----
-
-## 5.1 No Implicit Conversions
+## 4.2 No Implicit Conversions
 
 SafeC does not allow:
 
@@ -199,40 +153,41 @@ SafeC does not allow:
 * Implicit pointer conversions
 * Hidden heap promotion
 
-All conversions are explicit.
+All conversions are explicit casts.
 
 ---
 
-## 5.2 Value vs Reference Types
+## 4.3 Value vs Reference Semantics
 
-* Structs are value types.
-* References are explicit.
+* Structs are value types — assignment copies the struct.
+* References are explicit and always region-qualified.
 * No hidden move semantics.
 * No implicit destructor behavior.
 
 ---
 
-## 5.3 Generics
+## 4.4 Generics
 
 SafeC generics use the `generic` keyword with optional trait constraints:
 
-* Are monomorphized at compile time
-* Produce zero runtime overhead
-* Do not require dynamic dispatch
-
-Example:
-
 ```c
-generic<T: Numeric> T add(T a, T b)
+generic<T: Numeric> T add(T a, T b) {
+    return a + b;
+}
 ```
 
-Traits are constraint contracts, not runtime objects.
+Generics are:
+
+* Compile-time only
+* Fully monomorphized (one copy per concrete type instantiation)
+* Zero runtime overhead
+* No dynamic dispatch, no vtables
+
+Traits are constraint contracts resolved entirely at compile time.
 
 ---
 
-## 5.4 Tagged Unions
-
-SafeC supports tagged unions for expressive type modeling:
+## 4.5 Tagged Unions
 
 ```c
 generic<T, E> union Result {
@@ -241,161 +196,520 @@ generic<T, E> union Result {
 }
 ```
 
-Pattern matching is optional but supported.
-
-SafeC does not mandate a specific error handling paradigm.
+Representation: a discriminant enum field plus a payload union.
+Pattern matching is supported.
+No implicit destructor logic is injected.
 
 ---
 
-# 6. Error Handling Philosophy
+# 5. Compile-Time-First Design
 
-SafeC supports multiple styles:
+SafeC's compile-time execution engine is a core part of the semantic model — not an optimization hint.
 
-### C-style error codes
+> If something can be known at compile time, it should be known at compile time.
+
+---
+
+## 5.1 Const Functions
+
+A `const` function may execute at compile time or runtime:
+
+```c
+const int factorial(int n) {
+    if (n <= 1) return 1;
+    return n * factorial(n - 1);
+}
+
+const int FACT_10 = factorial(10);  // evaluated at compile time → 3628800
+```
+
+If called in a const context → evaluated at compile time.
+If called at runtime → executed as a normal function.
+
+---
+
+## 5.2 Consteval Functions
+
+A `consteval` function must execute at compile time. Calling it in a runtime context is a compile error:
+
+```c
+consteval int pow2(int x) {
+    return 1 << x;
+}
+
+const int PAGE_SIZE = pow2(12);  // 4096, compile time only
+```
+
+---
+
+## 5.3 Const Contexts
+
+An expression is required to evaluate at compile time when it appears in:
+
+* `const` variable initializer
+* Array length expression
+* `static_assert` condition
+* Enum value
+* Type parameter or generic constraint
+* `consteval` function body
+* Switch case label
+* `if const` branch condition
+
+---
+
+## 5.4 Static Assertions
+
+```c
+static_assert(sizeof(AudioFrame) == 64, "AudioFrame must be 64 bytes");
+static_assert(FACT_10 == 3628800, "10! must be 3628800");
+```
+
+`static_assert` conditions must be compile-time constant expressions.
+A false condition is a compile error, not a runtime check.
+
+---
+
+## 5.5 Compile-Time Conditionals
+
+```c
+if const (WORD_SIZE == 8) {
+    // 64-bit path — selected at compile time
+    printf("64-bit architecture\n");
+} else {
+    // 32-bit path — discarded at compile time
+    printf("32-bit architecture\n");
+}
+```
+
+The unselected branch is eliminated before type-checking and codegen.
+This replaces preprocessor `#if` for architecture-specific code paths.
+
+---
+
+## 5.6 Compile-Time Execution Rules
+
+Compile-time functions must:
+
+* Not mutate global state
+* Not perform I/O
+* Not call non-const functions (unless those are also `const`/`consteval`)
+* Not allocate dynamic memory
+* Not perform unsafe operations
+
+The compiler enforces termination via:
+
+* Recursion depth limit: 256 frames
+* Loop iteration limit: 1,000,000 iterations
+* Total instruction budget: 10,000,000 steps
+
+Exceeding any limit is a compile-time error.
+
+---
+
+## 5.7 ABI Guarantee
+
+Const-evaluated results become literal data in the output object.
+The compiler never injects hidden runtime initialization for `const` globals.
+
+---
+
+# 6. Preprocessor Model
+
+SafeC includes a preprocessor for C interoperability and build configuration.
+It is a compatibility layer, not a metaprogramming system.
+
+---
+
+## 6.1 Design Principles
+
+1. **Deterministic** — same inputs always produce same expansion
+2. **No hidden semantics** — no type-oblivious substitution
+3. **No region bypass** — preprocessing cannot circumvent region safety
+4. **C interoperability** — for existing C headers and build flags
+
+---
+
+## 6.2 Supported Directives
+
+**File inclusion:**
+
+```c
+#include "file.h"
+#include <system.h>
+```
+
+`#pragma once` is supported.
+
+**Object-like macros** (restricted to constant expressions in safe mode):
+
+```c
+#define BUFFER_SIZE   256
+#define VERSION_MAJOR 1
+```
+
+**Conditional compilation:**
+
+```c
+#if VERSION >= 100
+#ifdef SAFEC_PLATFORM_MACOS
+#ifndef DEBUG_LEVEL
+#else
+#elif DEBUG_LEVEL >= 1
+#endif
+```
+
+**Undefinition:**
+
+```c
+#undef TEMP_MACRO
+```
+
+**Built-in identifiers:**
+
+```c
+__FILE__   // current source file name
+__LINE__   // current line number
+```
+
+`__TIME__` and `__DATE__` are disabled (break build reproducibility).
+
+---
+
+## 6.3 Safe Mode vs Compatibility Mode
+
+**Safe mode (default):**
+
+* Function-like macros disabled
+* Token pasting (`##`) disabled
+* Stringification (`#`) disabled
+* Object-like macros limited to constant expressions
+
+**Compatibility mode** (`--compat-preprocessor` flag):
+
+* Full C macro system enabled
+* For interfacing with legacy C headers
+* For transitional migration from C
+
+---
+
+## 6.4 Compile-Time-First Replacements
+
+Instead of preprocessor constants:
+
+```c
+// Old: #define SIZE 128
+const int SIZE = 128;
+```
+
+Instead of function-like macros:
+
+```c
+// Old: #define SQR(x) ((x)*(x))
+generic<T: Numeric> T sqr(T x) { return x * x; }
+```
+
+Instead of preprocessor conditionals where possible:
+
+```c
+// Old: #if ARCH == 64
+if const (WORD_SIZE == 8) { ... }
+```
+
+---
+
+## 6.5 Interaction with Region System
+
+The preprocessor must not:
+
+* Generate region-qualified references implicitly
+* Bypass region typing rules
+* Inject unsafe dereferences
+* Hide lifetime violations
+
+All region semantics are enforced after preprocessing, in the semantic analysis phase.
+
+---
+
+# 7. Safety Analysis
+
+---
+
+## 7.1 Definite Initialization
+
+The compiler rejects use-before-initialization and conditional initialization gaps:
+
+```c
+int x;
+printf("%d", x);  // error: x used before initialization
+```
+
+---
+
+## 7.2 Region Escape Analysis
+
+The compiler detects:
+
+* Stack references escaping their scope
+* Arena references escaping their region
+* Heap references used after free
+
+---
+
+## 7.3 Aliasing Rules
+
+For safe references:
+
+* Two mutable references to the same object in overlapping lifetime → compile error
+* Immutable aliasing is allowed
+* Raw pointer aliasing is only allowed inside `unsafe {}`
+
+---
+
+## 7.4 Nullability Enforcement
+
+For `?&T` (nullable):
+
+* Dereference requires a null check on all paths before the dereference site
+* Flow-sensitive null elimination is applied
+
+For `&T` (non-null):
+
+* Must be provably non-null at construction
+
+---
+
+## 7.5 Bounds Safety
+
+Arrays are bounds-aware:
+
+* Compile-time bounds proofs applied where possible
+* Runtime bounds checks inserted when necessary
+* Checks disabled inside `unsafe {}`
+
+Runtime bounds checks are explicit in the IR — no hidden runtime machinery.
+
+---
+
+# 8. Unsafe Boundary Model
+
+```c
+unsafe {
+    Header* hdr = (Header*)raw_ptr;
+    if (hdr != null) {
+        result = hdr->length;
+    }
+}
+```
+
+Inside `unsafe {}`:
+
+* Raw pointer operations allowed
+* Bounds checks disabled
+* Lifetime checks disabled
+* Region rules bypassed
+
+Raw values produced inside `unsafe {}` cannot flow directly into safe references.
+Conversion requires an explicit safety assertion where the programmer accepts responsibility.
+
+---
+
+# 9. Error Handling Philosophy
+
+SafeC supports multiple styles without mandating one:
+
+**C-style error codes:**
 
 ```c
 int result = do_something();
-if (result != 0) { ... }
+if (result != 0) { /* handle error */ }
 ```
 
-### Tagged union Result-style
+**Tagged union Result-style:**
 
 ```c
-Result<int, Error> value = divide(a, b);
+ResultInt r = safe_div(100, 7);
+if (r.is_ok) printf("result: %d\n", r.value);
 ```
 
-No implicit exceptions.
-No stack unwinding.
-Error propagation is explicit.
+No implicit exceptions. No stack unwinding. Error propagation is explicit.
 
 ---
 
-# 7. Compile-Time-First Design
+# 10. Comparison with Other Languages
 
-SafeC strongly encourages compile-time evaluation.
+| Feature                | C      | C++         | Rust          | Zig        | SafeC                  |
+| ---------------------- | ------ | ----------- | ------------- | ---------- | ---------------------- |
+| Memory Safety          | ❌     | ❌           | ✅            | ❌         | ✅                     |
+| C ABI Compatibility    | Native | Native      | FFI           | Native     | Native                 |
+| Hidden Runtime         | ❌     | ⚠️           | ⚠️            | ❌         | ❌                     |
+| Compile-Time Execution | ❌     | `constexpr` | `const fn`    | `comptime` | Compile-time-first     |
+| GC                     | ❌     | ❌           | ❌            | ❌         | ❌                     |
+| Unsafe Escape          | N/A    | N/A         | `unsafe`      | Manual     | `unsafe {}`            |
+| Region Model           | ❌     | ❌           | Borrow-based  | ❌         | Explicit region-based  |
+| Preprocessor Control   | Full   | Full        | None          | Limited    | Disciplined subset     |
 
-> If something can be known at compile time, it should be.
+SafeC is not a Rust clone, not a C++ competitor, and not a scripting language. It is a systems language.
 
 ---
 
-## 7.1 Compile-Time Functions
+# 11. Compiler Architecture
 
-```c
-const int factorial(int n)
+## 11.1 Pipeline
+
+```
+Source (.sc)
+    ↓
+Preprocessor        — #include, #define, #ifdef, #pragma once
+    ↓
+Lexer               — tokenization with SafeC keyword set
+    ↓
+Parser              — recursive-descent, C grammar + SafeC extensions
+    ↓
+AST
+    ↓
+Semantic Analysis   — name resolution, type checking, region escape analysis
+    ↓
+Const-Eval Engine   — evaluate const/consteval at compile time
+    ↓
+Code Generation     — LLVM IR with region metadata (noalias, nonnull, etc.)
+    ↓
+LLVM Backend        — object code / bitcode
 ```
 
-If invoked in a constant context → evaluated at compile time.
-Otherwise → runtime fallback.
+No runtime injection phase.
+No implicit transformation inserting hidden allocations.
 
 ---
 
-## 7.2 Forced Compile-Time Execution
+## 11.2 Key Design Decisions
 
-```c
-consteval void generate_table()
+* **References lower to `ptr`** with `noalias`, `nonnull`, `dereferenceable` attributes
+* **Regions are compile-time only** — zero runtime region metadata
+* **Const globals are folded** — evaluated initializers become literal IR constants
+* **`if const` branches are dead-code-eliminated** before codegen
+* **`consteval` is enforced** — calling in runtime context is a compile error
+* **Struct layout** follows C ABI rules exactly (no hidden padding reordering)
+
+---
+
+# 12. Build & Usage
+
+## 12.1 Prerequisites
+
+* CMake ≥ 3.20
+* C++17 compiler (Clang ≥ 14, GCC ≥ 12, or MSVC 2022)
+* LLVM ≥ 17 (with CMake config files)
+
+## 12.2 Building
+
+```bash
+# Set LLVM_DIR if LLVM is not on the default search path:
+#   macOS (Homebrew):   export LLVM_DIR=$(brew --prefix llvm)/lib/cmake/llvm
+#   Ubuntu/Debian:      export LLVM_DIR=/usr/lib/llvm-17/lib/cmake/llvm
+#   Windows (vcpkg):    set LLVM_DIR=<vcpkg_root>/installed/x64-windows/share/llvm
+
+mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release [-DLLVM_DIR=$LLVM_DIR]
+cmake --build . --parallel
 ```
 
-Must execute at compile time or compilation fails.
+The compiler binary is `build/safec`.
 
----
+## 12.3 Compiler Flags
 
-## 7.3 Compile-Time Validation
+```
+safec <input.sc> [options]
 
-```c
-static_assert(sizeof(AudioFrame) == 64);
+  -o <file>                Output file (default: stdout for IR)
+  --emit-llvm              Emit LLVM IR text instead of bitcode
+  --dump-ast               Dump AST and exit (no codegen)
+  --dump-pp                Dump preprocessed source and exit
+  --no-sema                Skip semantic analysis
+  --no-consteval           Skip const-eval pass
+  --compat-preprocessor    Enable full C preprocessor (function-like macros, ## , #)
+  -I <dir>                 Add directory to include search path
+  -D NAME[=VALUE]          Define preprocessor macro
+  -v                       Verbose output
 ```
 
-SafeC supports:
+## 12.4 Example Workflow
 
-* Layout validation
-* Alignment checks
-* Compile-time bounds validation
-* Generic specialization checks
+```bash
+# Compile to LLVM IR
+./build/safec examples/hello.sc --emit-llvm -o hello.ll
 
----
+# Compile IR to native binary (using system clang)
+clang hello.ll -o hello
 
-## 7.4 Static Data Generation
-
-Compile-time generated tables are placed in static storage:
-
-```c
-const float lookup[256] = generate_table();
+# Run
+./hello
 ```
 
-No runtime initialization required.
+---
+
+# 13. Project Status
+
+The SafeC compiler is a working prototype implementing:
+
+| Milestone                        | Status      |
+| -------------------------------- | ----------- |
+| Lexer & tokenizer                | ✅ Complete |
+| Recursive-descent parser         | ✅ Complete |
+| Region-aware type system         | ✅ Complete |
+| Semantic analysis & region checks| ✅ Complete |
+| Preprocessor (safe + compat mode)| ✅ Complete |
+| Const-eval engine                | ✅ Complete |
+| LLVM IR codegen                  | ✅ Complete |
+| Generics monomorphization        | 🔲 Planned  |
+| Arena region runtime enforcement | 🔲 Planned  |
+| Full alias/borrow checker        | 🔲 Planned  |
+| Bounds check insertion           | 🔲 Planned  |
+| Concurrency model                | 🔲 Future   |
 
 ---
 
-# 8. Concurrency (Future Direction)
+# 14. Non-Goals (Initial Version)
 
-SafeC's region model enables:
-
-* Region isolation across threads
-* Deterministic ownership boundaries
-
-Concurrency guarantees are future work.
-
----
-
-# 9. Comparison with Other Languages
-
-| Feature                | C      | C++         | Rust         | Zig        | SafeC                 |
-| ---------------------- | ------ | ----------- | ------------ | ---------- | --------------------- |
-| Memory Safety          | ❌     | ❌           | ✅           | ❌         | ✅                     |
-| C ABI Compatibility    | Native | Native      | FFI          | Native     | Native                |
-| Hidden Runtime         | ❌     | ⚠️           | ⚠️           | ❌         | ❌                     |
-| Compile-Time Execution | ❌     | `constexpr` | `const fn`   | `comptime` | Compile-time-first    |
-| GC                     | ❌     | ❌           | ❌           | ❌         | ❌                     |
-| Unsafe Escape          | N/A    | N/A         | `unsafe`     | Manual     | `unsafe {}`           |
-| Region Model           | ❌     | ❌           | Borrow-based | ❌         | Explicit region-based |
-
-SafeC is positioned as:
-
-> A deterministic, ABI-stable evolution of C for modern systems programming.
-
-It is not a Rust clone.
-It is not a C++ competitor.
-It is not a scripting-friendly language.
-
-It is a systems language.
+* Async/await
+* Full concurrency model
+* Dynamic dispatch / vtables
+* Garbage collection
+* Reflection
+* Implicit move semantics
+* Automatic destructors
+* Standard library (use C stdlib via `#include`)
 
 ---
 
-# 10. Intended Use Cases
+# 15. Long-Term Vision
 
-SafeC is designed for:
+After the core compiler is stable:
 
-* Microkernels
-* Embedded RTOS
-* Audio DSP engines
-* Low-latency infrastructure
-* Hardware control systems
-* Security-sensitive components
+* Region isolation for safe concurrency
+* Verified kernel mode compilation target
+* Deterministic lock-free primitives
+* Formal safety proof model
+* Static effect system
 
----
+SafeC aims to demonstrate that determinism and safety are not mutually exclusive,
+that compile-time design can eliminate runtime cost,
+and that C compatibility does not require sacrificing correctness.
 
-# 11. Project Status
-
-SafeC is currently a language design project.
-Compiler implementation is future work.
-
-Planned milestones:
-
-1. Formal grammar specification
-2. Type system formalization
-3. Region safety proof model
-4. LLVM IR lowering design
-5. Prototype compiler
+SafeC is an exploration of what C could have become — if memory safety and compile-time reasoning were first-class citizens from the start.
 
 ---
 
-# 12. Vision
+# 16. Identity
 
-SafeC aims to demonstrate that:
+SafeC is:
 
-* Determinism and safety are not mutually exclusive.
-* Compile-time design can eliminate runtime cost.
-* C compatibility does not require sacrificing correctness.
+* **Not Rust** — no borrow checker, no ownership transfer, explicit region annotation
+* **Not C++** — no hidden constructors/destructors, no exceptions, no virtual dispatch
+* **Not Zig** — different memory model, different compile-time system
+* **Not a scripting language**
 
-SafeC is an exploration of what C could have become —
-if memory safety and compile-time reasoning were first-class citizens.
+It is:
+
+> A deterministic, ABI-stable, region-aware evolution of C for serious systems work.
+
+The compiler must reflect that identity at every design decision.

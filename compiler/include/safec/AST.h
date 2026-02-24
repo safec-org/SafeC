@@ -208,6 +208,7 @@ enum class StmtKind {
     VarDecl,       // local variable declaration
     Unsafe,        // unsafe { ... }
     StaticAssert,  // static_assert(cond[, "msg"])
+    IfConst,       // if const (cond) { ... } — compile-time branch selection
 };
 
 struct Stmt {
@@ -307,6 +308,20 @@ struct StaticAssertStmt : Stmt {
     StaticAssertStmt(ExprPtr c, std::string m, SourceLocation l)
         : Stmt(StmtKind::StaticAssert, l), cond(std::move(c)),
           message(std::move(m)) {}
+};
+
+// ── if const (cond) { ... } — compile-time conditional ───────────────────────
+// The 'cond' must be a compile-time constant expression.
+// Const-eval fills 'constResult'; CodeGen emits only the selected branch.
+struct IfConstStmt : Stmt {
+    ExprPtr  cond;
+    StmtPtr  then;
+    StmtPtr  else_;   // nullable
+    std::optional<bool> constResult;  // filled by ConstEvalEngine
+
+    IfConstStmt(ExprPtr c, StmtPtr t, StmtPtr e, SourceLocation l)
+        : Stmt(StmtKind::IfConst, l), cond(std::move(c)),
+          then(std::move(t)), else_(std::move(e)) {}
 };
 
 // =============================================================================
