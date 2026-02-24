@@ -1,290 +1,401 @@
 # SafeC
 
-## Safe Embeddable Systems Language
+> **SafeC is a deterministic, region-aware, compile-time-first systems programming language.**
+> It is designed as an evolution of C — preserving C ABI compatibility — while enforcing memory safety, type safety, and real-time determinism.
 
-### Warning: Currently a concept project, not yet implemented in any compiler, interpreter, or similar tool.
+SafeC does not seek to displace C from existing codebases.
+It provides a safer path for new systems projects that would otherwise be written in C:
 
-### Main Features
+* Operating systems
+* Embedded firmware
+* Real-time audio engines
+* Kernel subsystems
+* Security-critical infrastructure
+* Deterministic simulation systems
 
-- C Superset
-- Memory safety
-- Type safety
-- Modern features (generics, namespaces, closures, tuples, methods, operator overloading)
-- LLVM Backend
+---
 
-### Concept
+# 1. Design Philosophy
 
-- A safe C superset to replace C in low-level areas such as operating system, web browser, and library programming.
-- No built-in syntactic sugar — extend the language yourself!
+SafeC is built on five non-negotiable principles:
 
-### How do safe pointers work?
+1. **Determinism**
+2. **Zero hidden cost**
+3. **Explicit control**
+4. **C ABI compatibility**
+5. **Compile-time-first design**
 
-- A safe pointer consists of 3 × sizeof(void*) of memory on the stack: an address, a length, and a lifetime.
-- Length prevents out-of-bounds access. If the index is greater than the length, it raises a bounds error.
-- Lifetime prevents memory leaks. A single set of braces defines a block with a lifetime; a safe pointer defined inside a block is freed when the block ends, meaning the pointer's lifetime has expired. There are four ways to extend a pointer's lifetime:
-  1. Return the pointer, which transfers ownership to the outer block.
-  2. Move the pointer to a variable in the outer block.
-  3. Copy the pointer to a variable in the outer block. This is not `memcpy()`; it only copies the stack data — the address and length — and reassigns the lifetime.
-  4. Use the `static` keyword when declaring, which defers deallocation until the program ends or `free()` is called.
-- example
+SafeC does not assume a runtime.
+SafeC does not assume an ecosystem.
+SafeC does not require dynamic memory.
+
+It assumes you are building systems.
+
+---
+
+# 2. Determinism Contract
+
+SafeC explicitly guarantees:
+
+* **No hidden heap allocation**
+* **No hidden runtime**
+* **No hidden panics (unless opted-in)**
+* **No implicit exceptions**
+* **No background garbage collection**
+
+If memory is allocated, it is explicit.
+If a check exists, it is visible.
+If a failure occurs, it is predictable.
+
+This makes SafeC suitable for:
+
+* Hard real-time DSP
+* Kernel-space execution
+* Bare-metal firmware
+* Safety-critical systems
+
+---
+
+# 3. Memory Model: Region-Based Safety
+
+SafeC enforces memory safety through **region-aware references**.
+
+Instead of raw pointers, SafeC references encode:
+
+* Memory region
+* Lifetime constraints
+* Mutability
+* Nullability
+
+---
+
+## 3.1 Memory Regions
+
+SafeC defines four primary memory regions:
+
+| Region       | Lifetime            | Allocation          |
+| ------------ | ------------------- | ------------------- |
+| `stack`      | Lexical scope       | Automatic           |
+| `static`     | Program lifetime    | Static storage      |
+| `heap`       | Dynamic             | Explicit allocation |
+| `arena<R>`   | User-defined region | Region allocator    |
+
+---
+
+## 3.2 Region-Qualified References
+
+Examples:
 
 ```c
-#include <salloc.h>
-
-void pointer1()
-{
-    void& safe_pointer = (void&)salloc(sizeof(void) * 4); // safe pointer allocated
-    return;
-} // safe pointer freed
-
-void& pointer2()
-{
-    void& safe_pointer = (void&)salloc(sizeof(void) * 4); // safe pointer allocated
-    return safe_pointer; // moves ownership of safe_pointer to the caller
-}
-
-int main()
-{
-    pointer1(); // safe pointer allocated and deallocated.
-    void& pointer = pointer2(); // safe pointer allocated and assigned to variable "pointer"
-    return 0;
-} // safe pointer in variable "pointer" freed.
+&stack int
+&heap float
+&static Config
+&arena<AudioPool> AudioFrame
 ```
 
-### What is the generic-like feature?
+These references:
 
-- Generics in Java and C# use type erasure, which provides a single generic implementation for all types in a safer way than macros, at the cost of runtime overhead.
-- Generics in C++ and Rust generate specialized code for every type used, achieving zero-cost abstraction at the expense of compilation time and binary size.
-- Generic-like in SafeC only generates code for types instantiated in the library's source code, but third-party users can instantiate their own types in their libraries and programs using the provided header.
-- Think of it as providing only the API, not the implementation.
-- For C/C++ users, think of it as providing a header but not the source or a compiled library.
-- Library developers can tell users how to instantiate their generic functions through comments or documentation.
-- example
+* Cannot outlive their region
+* Cannot escape to longer-lived regions
+* Cannot be implicitly converted across regions
 
-```c
-typedef struct
-{
-    generic T;
-    T a;
-    T b;
-} Foo;
+---
 
-generic T foo_implement(Foo& bar)
-{
-    return bar.a + bar.b;
-    // If the generic type of bar doesn't match generic T,
-    // or generic T doesn't have an operator override for add, it fails to compile.
-}
+## 3.3 Arena Regions
 
-generic T bar(T a, T b)
-{
-    return a + b;
-    // If generic T doesn't have an operator override for add, it fails to compile.
-}
-```
-
-### Other Modern Features
-
-- A namespace is a named scope that separates one code block from another and can be accessed by name.
+User-defined regions enable high-performance deterministic memory:
 
 ```c
-int bar();
-
-namespace Foo
-{
-    int bar();
-}
-
-int main()
-{
-    bar(); // use bar() outside the namespace.
-    Foo::bar(); // use bar() in the namespace.
-}
-```
-
-- A closure is an anonymous function defined inside another function.
-
-```c
-int Foo(int a, int b)
-{
-    return a + int (int x, int y)
-    {
-        return x * y;
-    };
+region AudioPool {
+    capacity: 4096  // maximum number of elements
 }
 ```
 
-- A tuple is an anonymous struct that groups values without named fields.
+Then:
 
 ```c
-{ int, int } foo = { 1, 2 };
-printf("%d, %d", foo.0, foo.1);
+&arena<AudioPool> AudioFrame buffer;
 ```
 
-- A method is a function pointer in a struct with a default implementation.
+Deallocating the region invalidates all contained references at once.
+
+This is ideal for:
+
+* Audio block processing
+* Game frame memory
+* Kernel subsystems
+* DSP scratch buffers
+
+---
+
+# 4. Formal Safety Model
+
+In safe mode, SafeC guarantees:
+
+## 4.1 Memory Safety
+
+* No use-after-free
+* No double-free
+* No dangling references
+* No invalid region escape
+* No null dereference (unless explicitly nullable)
+
+## 4.2 Bounds Safety
+
+* Arrays are bounds-aware
+* Compile-time bounds checking when possible
+* Runtime bounds checking when necessary
+* Checks removable inside `unsafe {}`
+
+## 4.3 Nullability Model
+
+References are non-null by default:
 
 ```c
-typedef struct foo
-{
-    double a;
-    double b;
-    double (bar*)(foo& self);
-} Foo;
-
-double Foo.bar(foo& self) default
-{
-    return self->a + self->b;
-}
-
+&int      // non-null
+?&int     // nullable
 ```
 
-- Operator overloading allows the use of standard operators for a custom type, including arithmetic operators, logical operators, type casting, indexing, and more.
+Null must be explicit.
+
+---
+
+## 4.4 Unsafe Blocks
+
+Unsafe operations must be explicitly marked:
 
 ```c
-typedef struct foo
-{
-    double a;
-    double b;
-    foo (add* override)(foo& x, foo& y);
-} Foo;
-
-Foo Foo.add(Foo& x, Foo& y) default
-{
-    return Foo { .a = x->a + y->a, .b = x->b + y->b };
-}
-```
-
-### Other Safety Features
-
-- Unless in an unsafe scope, all struct fields must be initialized before the object is used.
-- Unless in an unsafe scope, a switch statement must exhaustively cover every possible value.
-- Unless in an unsafe scope, raw pointers and unions are prohibited. Use safe pointers and unionums instead.
-- Unless in an unsafe scope, type casting is forbidden unless the type defines a cast overload to the target type. (Primitive types may be cast freely.)
-
-### Unsafe Scope
-
-An unsafe scope (or unsafe block) exists to use C code directly or to optimize performance without overhead. Within an unsafe scope, all features restricted in safe code are allowed, provided they follow the C standard.
-
-### Why not Rust?
-
-- To be honest, I use Rust for most of my personal projects that do not interface with C/C++. But Rust presents a dilemma when used alongside C/C++. When interfacing through unsafe raw pointers, why should developers have to think in a completely different paradigm than the rest of their codebase? That was the first motivation for designing the SafeC project.
-- When building the lowest levels of software, such as firmware and operating systems, much of the Rust standard library is unavailable without a C ABI or OS native libraries. You have to implement equivalents yourself or translate existing C code, which is inefficient.
-- Enums in Rust are heavyweight. An enum in C is just a number, while an enum in Rust resembles a tagged union — a combination of a C union and a C enum — which makes it larger and slower.
-- We drew inspiration for the concept of safety from Rust, but much of Rust's safety model assumes you are running on an existing OS within a multithreaded environment as defined by the Rust ABI. For embedded or operating system developers, these assumptions are unnecessary and can get in the way. So we removed those limitations and gave developers more freedom.
-- Syntactic sugar in Rust differs from that in many modern languages such as Python and JavaScript. It is handled at compile time, so the runtime cost is eliminated, which is great. The trade-offs are longer compilation times and an unstable ABI. Rust's ABI is very unstable, so as a library developer, you must either release a new build for every version of Rust or open-source your code, which is not always desirable for proprietary library developers.
-- For software developers on established platforms (Windows, macOS, Linux), however, we highly recommend Rust. Rust is even safer than SafeC, especially in multithreaded environments, and has syntactic sugar that will make development much easier. In most cases, you will not need to think about C ABI, OS APIs, intrinsics, or similar low-level concerns.
-
-### Types
-
-- auto
-- numbers (signed or unsigned): char, short, int, long, float, double
-- bool
-- void
-- enum
-- union
-- struct
-- function (no dedicated syntax)
-- raw pointer (\*)
-- safe pointer (&)
-- unionum (enum with union, like enum in Rust)
-
-### Preprocessor syntax
-
-- if
-- elif
-- else
-- endif
-- ifdef
-- ifndef
-- elifdef
-- elifndef
-- define
-- undef
-- include
-- error
-- warning
-- pragma
-- defined
-
-### Other syntax
-
-- //
-- /\* \*/
-- static
-- const
-- if
-- else
-- switch
-- case
-- for
-- do
-- while
-- goto
-- continue
-- break
-- typedef
-- sizeof
-- move
-- malloc
-- calloc
-- salloc(safe alloc)
-- realloc
-- free
-- return
-- inline
-- namespace
-- extern
-- generic
-- override
-- default
-- unsafe
-
-### Operator
-
-- &
-- \*
-- !=
-- !
-- .
-- ->
-- ::
-- ,
-- ;
-- \+
-- \-
-- \*
-- \/
-- \%
-- &&
-- ||
-- &
-- |
-- ^
-- <<
-- \>\>
-- ==
-- \>=
-- \>
-- <=
-- <
-- =
-- \"
-- \'
-- \`
-- []
-- {}
-- ()
-
-## Examples
-
-### Hello World
-
-```c
-#include <stdio.h>
-
-int main()
-{
-    printf("Hello World!\n");
-    return 0;
+unsafe {
+    raw = (int*)addr;
 }
 ```
+
+Inside `unsafe`:
+
+* Bounds checks disabled
+* Lifetime checks disabled
+* Region rules bypassed
+
+Raw pointers and region-unqualified values produced inside `unsafe {}` cannot be directly used in safe code. They must be converted to safe references through an explicit safety assertion — at which point the programmer takes responsibility for correctness, and the compiler enforces safe type rules from that point forward.
+
+---
+
+# 5. Type System Philosophy
+
+SafeC types are:
+
+* Explicit
+* Predictable
+* Zero-cost
+* Region-aware
+
+---
+
+## 5.1 No Implicit Conversions
+
+SafeC does not allow:
+
+* Silent integer widening
+* Implicit pointer conversions
+* Hidden heap promotion
+
+All conversions are explicit.
+
+---
+
+## 5.2 Value vs Reference Types
+
+* Structs are value types.
+* References are explicit.
+* No hidden move semantics.
+* No implicit destructor behavior.
+
+---
+
+## 5.3 Generics
+
+SafeC generics use the `generic` keyword with optional trait constraints:
+
+* Are monomorphized at compile time
+* Produce zero runtime overhead
+* Do not require dynamic dispatch
+
+Example:
+
+```c
+generic<T: Numeric> T add(T a, T b)
+```
+
+Traits are constraint contracts, not runtime objects.
+
+---
+
+## 5.4 Tagged Unions
+
+SafeC supports tagged unions for expressive type modeling:
+
+```c
+generic<T, E> union Result {
+    T ok;
+    E err;
+}
+```
+
+Pattern matching is optional but supported.
+
+SafeC does not mandate a specific error handling paradigm.
+
+---
+
+# 6. Error Handling Philosophy
+
+SafeC supports multiple styles:
+
+### C-style error codes
+
+```c
+int result = do_something();
+if (result != 0) { ... }
+```
+
+### Tagged union Result-style
+
+```c
+Result<int, Error> value = divide(a, b);
+```
+
+No implicit exceptions.
+No stack unwinding.
+Error propagation is explicit.
+
+---
+
+# 7. Compile-Time-First Design
+
+SafeC strongly encourages compile-time evaluation.
+
+> If something can be known at compile time, it should be.
+
+---
+
+## 7.1 Compile-Time Functions
+
+```c
+const int factorial(int n)
+```
+
+If invoked in a constant context → evaluated at compile time.
+Otherwise → runtime fallback.
+
+---
+
+## 7.2 Forced Compile-Time Execution
+
+```c
+consteval void generate_table()
+```
+
+Must execute at compile time or compilation fails.
+
+---
+
+## 7.3 Compile-Time Validation
+
+```c
+static_assert(sizeof(AudioFrame) == 64);
+```
+
+SafeC supports:
+
+* Layout validation
+* Alignment checks
+* Compile-time bounds validation
+* Generic specialization checks
+
+---
+
+## 7.4 Static Data Generation
+
+Compile-time generated tables are placed in static storage:
+
+```c
+const float lookup[256] = generate_table();
+```
+
+No runtime initialization required.
+
+---
+
+# 8. Concurrency (Future Direction)
+
+SafeC's region model enables:
+
+* Region isolation across threads
+* Deterministic ownership boundaries
+
+Concurrency guarantees are future work.
+
+---
+
+# 9. Comparison with Other Languages
+
+| Feature                | C      | C++         | Rust         | Zig        | SafeC                 |
+| ---------------------- | ------ | ----------- | ------------ | ---------- | --------------------- |
+| Memory Safety          | ❌     | ❌           | ✅           | ❌         | ✅                     |
+| C ABI Compatibility    | Native | Native      | FFI          | Native     | Native                |
+| Hidden Runtime         | ❌     | ⚠️           | ⚠️           | ❌         | ❌                     |
+| Compile-Time Execution | ❌     | `constexpr` | `const fn`   | `comptime` | Compile-time-first    |
+| GC                     | ❌     | ❌           | ❌           | ❌         | ❌                     |
+| Unsafe Escape          | N/A    | N/A         | `unsafe`     | Manual     | `unsafe {}`           |
+| Region Model           | ❌     | ❌           | Borrow-based | ❌         | Explicit region-based |
+
+SafeC is positioned as:
+
+> A deterministic, ABI-stable evolution of C for modern systems programming.
+
+It is not a Rust clone.
+It is not a C++ competitor.
+It is not a scripting-friendly language.
+
+It is a systems language.
+
+---
+
+# 10. Intended Use Cases
+
+SafeC is designed for:
+
+* Microkernels
+* Embedded RTOS
+* Audio DSP engines
+* Low-latency infrastructure
+* Hardware control systems
+* Security-sensitive components
+
+---
+
+# 11. Project Status
+
+SafeC is currently a language design project.
+Compiler implementation is future work.
+
+Planned milestones:
+
+1. Formal grammar specification
+2. Type system formalization
+3. Region safety proof model
+4. LLVM IR lowering design
+5. Prototype compiler
+
+---
+
+# 12. Vision
+
+SafeC aims to demonstrate that:
+
+* Determinism and safety are not mutually exclusive.
+* Compile-time design can eliminate runtime cost.
+* C compatibility does not require sacrificing correctness.
+
+SafeC is an exploration of what C could have become —
+if memory safety and compile-time reasoning were first-class citizens.
