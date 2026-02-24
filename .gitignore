@@ -1,5 +1,7 @@
 .DS_Store
 .vscode/
-safe_c/.DS_Store
-safe_c/target/
-safe_c/Cargo.lock
+build/
+compiler/build/
+*.bc
+*.ll
+*.o
