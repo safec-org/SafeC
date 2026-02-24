@@ -791,16 +791,16 @@ No implicit exceptions. No stack unwinding. Error propagation is explicit.
 
 # 11. Comparison with Other Languages
 
-| Feature                | C      | C++         | Rust          | Zig        | SafeC                  |
-| ---------------------- | ------ | ----------- | ------------- | ---------- | ---------------------- |
+| Feature                | C      | C++         | Rust          | Zig        | SafeC                 |
+| ---------------------- | ------ | ----------- | ------------- | ---------- | ----------------------|
 | Memory Safety          | ❌     | ❌           | ✅            | ❌         | ✅                     |
-| C ABI Compatibility    | Native | Native      | FFI           | Native     | Native                 |
+| C ABI Compatibility    | Native | Native      | FFI           | Native     | Native                |
 | Hidden Runtime         | ❌     | ⚠️           | ⚠️            | ❌         | ❌                     |
 | Compile-Time Execution | ❌     | `constexpr` | `const fn`    | `comptime` | Compile-time-first     |
 | GC                     | ❌     | ❌           | ❌            | ❌         | ❌                     |
-| Unsafe Escape          | N/A    | N/A         | `unsafe`      | Manual     | `unsafe {}`            |
-| Region Model           | ❌     | ❌           | Borrow-based  | ❌         | Explicit region-based  |
-| Preprocessor Control   | Full   | Full        | None          | Limited    | Disciplined subset     |
+| Unsafe Escape          | N/A    | N/A         | `unsafe`      | Manual     | `unsafe {}`           |
+| Region Model           | ❌     | ❌           | Borrow-based  | ❌         | Explicit region-based |
+| Preprocessor Control   | Full   | Full        | None          | Limited    | Disciplined subset    |
 
 SafeC is not a Rust clone, not a C++ competitor, and not a scripting language. It is a systems language.
 
@@ -915,10 +915,11 @@ The SafeC compiler is a working prototype implementing:
 | Const-eval engine                | ✅ Complete |
 | LLVM IR codegen                  | ✅ Complete |
 | C interoperability (FFI)         | ✅ Complete |
-| Generics monomorphization        | 🔲 Planned  |
-| Arena region runtime enforcement | 🔲 Planned  |
-| Full alias/borrow checker        | 🔲 Planned  |
-| Bounds check insertion           | 🔲 Planned  |
+| Bounds check insertion           | ✅ Complete |
+| Arena region escape analysis     | ✅ Complete |
+| Alias / borrow checker           | ✅ Complete |
+| Generics monomorphization        | ✅ Complete |
+| Arena region runtime allocator   | 🔲 Future   |
 | Concurrency model                | 🔲 Future   |
 
 ---

@@ -152,6 +152,7 @@ struct CallExpr : Expr {
 // ── Subscript ─────────────────────────────────────────────────────────────────
 struct SubscriptExpr : Expr {
     ExprPtr base, index;
+    bool    boundsCheckOmit = false; // true inside unsafe{} — skip runtime check
     SubscriptExpr(ExprPtr b, ExprPtr i, SourceLocation l)
         : Expr(ExprKind::Subscript, l), base(std::move(b)), index(std::move(i)) {}
 };
@@ -395,7 +396,8 @@ struct EnumDecl : Decl {
 
 // ── Region declaration ────────────────────────────────────────────────────────
 struct RegionDecl : Decl {
-    int64_t capacity = 0;  // from "capacity: N"
+    int64_t capacity = 0;       // from "capacity: N"
+    int     declScopeDepth = 0; // scope depth at declaration (for arena escape analysis)
 
     RegionDecl(std::string n, SourceLocation l)
         : Decl(DeclKind::Region, std::move(n), l) {}

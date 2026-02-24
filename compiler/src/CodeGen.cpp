@@ -21,7 +21,9 @@ std::unique_ptr<llvm::Module> CodeGen::generate(TranslationUnit &tu) {
     // Pass 1: generate all prototypes and global variables
     for (auto &d : tu.decls) {
         if (d->kind == DeclKind::Function) {
-            genFunctionProto(static_cast<FunctionDecl &>(*d));
+            auto &fn = static_cast<FunctionDecl &>(*d);
+            if (!fn.genericParams.empty()) continue; // skip uninstantiated templates
+            genFunctionProto(fn);
         } else if (d->kind == DeclKind::GlobalVar) {
             genGlobalVar(static_cast<GlobalVarDecl &>(*d));
         } else if (d->kind == DeclKind::Struct) {
@@ -35,6 +37,7 @@ std::unique_ptr<llvm::Module> CodeGen::generate(TranslationUnit &tu) {
     for (auto &d : tu.decls) {
         if (d->kind == DeclKind::Function) {
             auto &fn = static_cast<FunctionDecl &>(*d);
+            if (!fn.genericParams.empty()) continue; // skip uninstantiated templates
             if (fn.body) {
                 auto *llvmFn = mod_->getFunction(fn.name);
                 if (llvmFn) genFunctionBody(fn, llvmFn);
@@ -842,16 +845,44 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
 
 // ── Subscript ─────────────────────────────────────────────────────────────────
 llvm::Value *CodeGen::genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr) {
-    auto *idxVal  = genExpr(*e.index, env);
+    auto *idxVal   = genExpr(*e.index, env);
     auto *baseAddr = genLValue(*e.base, env);
-    auto *baseTy  = e.base->type ? lowerType(e.base->type)
-                                 : llvm::Type::getInt32Ty(ctx_);
+    auto *baseTy   = e.base->type ? lowerType(e.base->type)
+                                  : llvm::Type::getInt32Ty(ctx_);
 
     llvm::Value *gep = nullptr;
     if (baseTy->isArrayTy()) {
         auto *arrTy = static_cast<llvm::ArrayType *>(baseTy);
+
+        // Runtime bounds check for arrays with statically known size
+        if (!e.boundsCheckOmit && e.base->type &&
+            e.base->type->kind == TypeKind::Array) {
+            auto &at = static_cast<const ArrayType &>(*e.base->type);
+            if (at.size > 0) {
+                auto *sizeCst = llvm::ConstantInt::get(
+                    llvm::Type::getInt64Ty(ctx_), at.size);
+                auto *idx64 = builder_.CreateZExtOrTrunc(
+                    idxVal, llvm::Type::getInt64Ty(ctx_));
+                auto *oob = builder_.CreateICmpUGE(idx64, sizeCst, "oob");
+                auto *curFn  = builder_.GetInsertBlock()->getParent();
+                auto *trapBB = llvm::BasicBlock::Create(ctx_, "bounds.trap", curFn);
+                auto *okBB   = llvm::BasicBlock::Create(ctx_, "bounds.ok",   curFn);
+                builder_.CreateCondBr(oob, trapBB, okBB);
+                // Trap path: call abort() and mark unreachable
+                builder_.SetInsertPoint(trapBB);
+                auto abortFn = mod_->getOrInsertFunction(
+                    "abort",
+                    llvm::FunctionType::get(llvm::Type::getVoidTy(ctx_), false));
+                builder_.CreateCall(abortFn);
+                builder_.CreateUnreachable();
+                // Safe path continues here
+                builder_.SetInsertPoint(okBB);
+            }
+        }
+
         gep = builder_.CreateInBoundsGEP(arrTy, baseAddr,
-                {llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx_), 0), idxVal}, "arr.idx");
+                {llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx_), 0), idxVal},
+                "arr.idx");
         if (wantAddr) return gep;
         return builder_.CreateLoad(arrTy->getElementType(), gep, "arr.elem");
     }

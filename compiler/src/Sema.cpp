@@ -1,4 +1,5 @@
 #include "safec/Sema.h"
+#include "safec/Clone.h"
 #include <cassert>
 #include <algorithm>
 
@@ -120,6 +121,12 @@ bool Sema::run() {
     pushScope();
     collectDecls(tu_);
     for (auto &d : tu_.decls) checkDecl(*d);
+
+    // Append monomorphized function instances to the TU so CodeGen sees them
+    for (auto &fn : monoFunctions_)
+        tu_.decls.emplace_back(std::move(fn));
+    monoFunctions_.clear();
+
     popScope();
     return !diag_.hasErrors();
 }
@@ -137,13 +144,45 @@ void Sema::collectDecls(TranslationUnit &tu) {
     }
 }
 
+// Replace StructType{name} with GenericType{name} when 'name' is in the
+// generic parameter list.  Recurses into pointer/reference/array/function types.
+static TypePtr resolveGenericNames(const TypePtr &ty,
+                                    const std::vector<GenericParam> &gps) {
+    if (!ty || gps.empty()) return ty;
+    if (ty->kind == TypeKind::Struct) {
+        auto &st = static_cast<const StructType &>(*ty);
+        if (!st.isDefined) {
+            for (auto &gp : gps)
+                if (gp.name == st.name)
+                    return std::make_shared<GenericType>(gp.name, gp.constraint);
+        }
+    }
+    if (ty->kind == TypeKind::Pointer) {
+        auto &pt = static_cast<const PointerType &>(*ty);
+        auto nb = resolveGenericNames(pt.base, gps);
+        return (nb == pt.base) ? ty : makePointer(nb, pt.isConst);
+    }
+    if (ty->kind == TypeKind::Reference) {
+        auto &rt = static_cast<const ReferenceType &>(*ty);
+        auto nb = resolveGenericNames(rt.base, gps);
+        return (nb == rt.base) ? ty
+             : makeReference(nb, rt.region, rt.nullable, rt.mut, rt.arenaName);
+    }
+    if (ty->kind == TypeKind::Array) {
+        auto &at = static_cast<const ArrayType &>(*ty);
+        auto ne = resolveGenericNames(at.element, gps);
+        return (ne == at.element) ? ty : makeArray(ne, at.size);
+    }
+    return ty;
+}
+
 void Sema::collectFunction(FunctionDecl &fn) {
     std::vector<TypePtr> paramTys;
     for (auto &p : fn.params) {
-        p.type = resolveType(p.type);
+        p.type = resolveGenericNames(resolveType(p.type), fn.genericParams);
         paramTys.push_back(p.type);
     }
-    fn.returnType = resolveType(fn.returnType);
+    fn.returnType = resolveGenericNames(resolveType(fn.returnType), fn.genericParams);
     auto ft = makeFunction(fn.returnType, std::move(paramTys), fn.isVariadic);
     Symbol sym;
     sym.kind   = SymKind::Function;
@@ -204,6 +243,7 @@ void Sema::collectEnum(EnumDecl &ed) {
 }
 
 void Sema::collectRegion(RegionDecl &rd) {
+    rd.declScopeDepth = scopeDepth_;
     regionRegistry_[rd.name] = &rd;
 }
 
@@ -235,6 +275,8 @@ void Sema::checkDecl(Decl &d) {
 
 void Sema::checkFunction(FunctionDecl &fn) {
     if (!fn.body) return; // declaration only
+    // Generic templates: body is only type-checked on concrete instantiations
+    if (!fn.genericParams.empty()) return;
 
     pushScope();
     // Register parameters
@@ -351,13 +393,17 @@ void Sema::checkReturn(ReturnStmt &s, FunctionDecl &fn) {
     if (s.value) {
         TypePtr valTy = checkExpr(*s.value);
 
-        // Region escape check: returned reference must not be &stack T
+        // Region escape check: returned reference must not be &stack or &arena T
         if (valTy && valTy->kind == TypeKind::Reference) {
             auto &rt = static_cast<ReferenceType &>(*valTy);
             if (rt.region == Region::Stack) {
                 diag_.error(s.loc,
                     "cannot return '&stack " + rt.base->str() +
                     "': stack reference escapes function scope");
+            } else if (rt.region == Region::Arena) {
+                diag_.error(s.loc,
+                    "cannot return '&arena<" + rt.arenaName + "> " +
+                    rt.base->str() + "': arena reference escapes function scope");
             }
         }
 
@@ -384,13 +430,20 @@ void Sema::checkVarDecl(VarDeclStmt &s, FunctionDecl &fn) {
     if (s.init) {
         initTy = checkExpr(*s.init);
 
-        // Region escape: if init is a &stack ref, the var must not be promoted
-        if (initTy && initTy->kind == TypeKind::Reference) {
-            auto &rt = static_cast<ReferenceType &>(*initTy);
-            if (rt.region == Region::Stack) {
-                // This is fine as long as it's a local — stack references
-                // can be stored locally, just not returned or stored in globals.
-                // Actual escape to outer scope is detected at assignment time.
+        // Borrow checker: if declaring a reference var from address-of, track the borrow
+        if (!inUnsafeScope() && s.declType && s.declType->kind == TypeKind::Reference) {
+            auto &rt = static_cast<ReferenceType &>(*s.declType);
+            // If init is address-of a named variable, trackRef was already called
+            // in checkAddrOf. For explicit reference bindings (&stack T r = &x),
+            // the trackRef was already done. Nothing extra needed here.
+        }
+        // Also track if initTy is a reference to a named ident (direct ref binding)
+        if (!inUnsafeScope() && initTy && initTy->kind == TypeKind::Reference &&
+            s.init && s.init->kind == ExprKind::Ident) {
+            auto &rt    = static_cast<ReferenceType &>(*initTy);
+            auto *ident = static_cast<IdentExpr *>(s.init.get());
+            if (ident->resolved && rt.region != Region::Static) {
+                trackRef(ident->name, rt.mut, scopeDepth_);
             }
         }
 
@@ -545,6 +598,13 @@ TypePtr Sema::checkAddrOf(UnaryExpr &e) {
     if (!e.operand->isLValue) {
         diag_.error(e.loc, "address-of operator requires lvalue");
     }
+    // Track for borrow checker
+    if (!inUnsafeScope() && e.operand && e.operand->kind == ExprKind::Ident) {
+        auto *ident = static_cast<IdentExpr *>(e.operand.get());
+        if (ident->resolved) {
+            trackRef(ident->name, /*isMut=*/true, scopeDepth_);
+        }
+    }
     // In safe code, & of a stack variable yields &stack T
     return makeReference(std::move(operandTy), Region::Stack, false, true);
 }
@@ -635,11 +695,65 @@ TypePtr Sema::checkTernary(TernaryExpr &e) {
 TypePtr Sema::checkCall(CallExpr &e) {
     TypePtr calleeTy = checkExpr(*e.callee);
 
-    // Resolve function type
-    FunctionType *ft = nullptr;
-    if (calleeTy->kind == TypeKind::Function) {
-        ft = static_cast<FunctionType *>(calleeTy.get());
+    // Find the FunctionDecl (for generic detection)
+    FunctionDecl *fnDecl = nullptr;
+    if (e.callee->kind == ExprKind::Ident)
+        fnDecl = static_cast<IdentExpr &>(*e.callee).resolvedFn;
+
+    // ── Generic function instantiation ────────────────────────────────────────
+    if (fnDecl && !fnDecl->genericParams.empty()) {
+        // Collect argument types for inference
+        std::vector<TypePtr> argTypes;
+        for (auto &a : e.args) argTypes.push_back(checkExpr(*a));
+
+        TypeSubst subs;
+        if (!inferTypeArgs(fnDecl->params, argTypes, fnDecl->genericParams, subs)) {
+            diag_.error(e.loc,
+                "cannot infer type arguments for generic function '" +
+                fnDecl->name + "'");
+            return makeError();
+        }
+
+        MonoKey key = makeMonoKey(fnDecl->name, subs, fnDecl->genericParams);
+        if (!monoCache_.count(key)) {
+            // Create a concrete clone
+            auto clone  = cloneFunctionDecl(*fnDecl, subs);
+            clone->name = mangleName(fnDecl->name, subs, fnDecl->genericParams);
+            clone->genericParams.clear();
+
+            // Register the monomorphized name in the global scope
+            std::vector<TypePtr> paramTys;
+            for (auto &p : clone->params) paramTys.push_back(p.type);
+            auto monoFT = makeFunction(clone->returnType, paramTys, clone->isVariadic);
+            Symbol sym;
+            sym.kind        = SymKind::Function;
+            sym.name        = clone->name;
+            sym.type        = monoFT;
+            sym.fnDecl      = clone.get();
+            sym.initialized = true;
+            if (!scopes_.empty()) scopes_[0].define(std::move(sym));
+
+            // Type-check the instantiation
+            checkFunction(*clone);
+
+            monoCache_[key] = clone.get();
+            monoFunctions_.push_back(std::move(clone));
+        }
+
+        FunctionDecl *monoFn = monoCache_[key];
+        // Redirect the call to the monomorphized version
+        if (e.callee->kind == ExprKind::Ident) {
+            auto &ident    = static_cast<IdentExpr &>(*e.callee);
+            ident.resolvedFn = monoFn;
+            ident.name       = monoFn->name;
+        }
+        return monoFn->returnType;
     }
+
+    // ── Regular (non-generic) call ─────────────────────────────────────────────
+    FunctionType *ft = nullptr;
+    if (calleeTy->kind == TypeKind::Function)
+        ft = static_cast<FunctionType *>(calleeTy.get());
 
     if (!ft) {
         if (!calleeTy->isError())
@@ -679,8 +793,20 @@ TypePtr Sema::checkSubscript(SubscriptExpr &e) {
     }
 
     if (baseTy->kind == TypeKind::Array) {
+        auto &at = static_cast<ArrayType &>(*baseTy);
+        // Static bounds check: constant index + known array size
+        if (!inUnsafeScope() && at.size > 0 &&
+            e.index && e.index->kind == ExprKind::IntLit) {
+            auto *lit = static_cast<IntLitExpr *>(e.index.get());
+            if (lit->value < 0 || lit->value >= at.size) {
+                diag_.error(e.loc,
+                    "array index " + std::to_string(lit->value) +
+                    " out of bounds for array of size " + std::to_string(at.size));
+            }
+        }
+        e.boundsCheckOmit = inUnsafeScope();
         e.isLValue = true;
-        return static_cast<ArrayType &>(*baseTy).element;
+        return at.element;
     }
     if (baseTy->kind == TypeKind::Pointer) {
         if (!inUnsafeScope())
@@ -774,7 +900,7 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
         }
     }
 
-    // Region escape: RHS &stack can't be assigned to variable with wider scope
+    // Region escape: RHS &stack/&arena can't be assigned to variable with wider scope
     if (rhsTy && rhsTy->kind == TypeKind::Reference) {
         auto &rt = static_cast<ReferenceType &>(*rhsTy);
         if (rt.region == Region::Stack && e.lhs->kind == ExprKind::Ident) {
@@ -783,6 +909,18 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
                 diag_.error(e.loc,
                     "cannot assign '&stack " + rt.base->str() +
                     "' to variable in outer scope: reference would escape");
+            }
+        }
+        if (rt.region == Region::Arena && e.lhs->kind == ExprKind::Ident) {
+            auto &ident = static_cast<IdentExpr &>(*e.lhs);
+            if (ident.resolved) {
+                auto it = regionRegistry_.find(rt.arenaName);
+                int minDepth = (it != regionRegistry_.end()) ? it->second->declScopeDepth : 0;
+                if (ident.resolved->scopeDepth < minDepth) {
+                    diag_.error(e.loc,
+                        "cannot assign '&arena<" + rt.arenaName + "> " + rt.base->str() +
+                        "' to variable in outer scope: arena reference would escape");
+                }
             }
         }
     }
@@ -815,6 +953,15 @@ void Sema::checkRegionEscape(const TypePtr &ty, int targetScopeDepth,
         diag_.error(loc, std::string(ctx) + ": '&stack " + rt.base->str() +
                     "' cannot escape its scope");
     }
+    if (rt.region == Region::Arena) {
+        RegionDecl *rd = regionRegistry_.count(rt.arenaName)
+                            ? regionRegistry_[rt.arenaName] : nullptr;
+        int minDepth = rd ? rd->declScopeDepth : 0;
+        if (targetScopeDepth < minDepth) {
+            diag_.error(loc, std::string(ctx) + ": '&arena<" + rt.arenaName +
+                        "> " + rt.base->str() + "' cannot escape its arena scope");
+        }
+    }
 }
 
 void Sema::checkNullabilityDeref(const TypePtr &ty, SourceLocation loc) {
@@ -828,20 +975,20 @@ void Sema::checkNullabilityDeref(const TypePtr &ty, SourceLocation loc) {
 }
 
 // ── Alias tracking ────────────────────────────────────────────────────────────
-void Sema::trackRef(const std::string &targetVar, bool isMut, int depth) {
-    auto &records = aliasMap_[targetVar];
-    if (isMut) {
-        // Check: no other mutable or immutable refs at same depth
-        for (auto &r : records) {
-            if (r.scopeDepth == depth) {
-                diag_.error({},
-                    "cannot create mutable reference to '" + targetVar +
-                    "': already referenced in same scope");
-                return;
-            }
+void Sema::trackRef(const std::string &var, bool isMut, int depth) {
+    auto &recs = aliasMap_[var];
+    for (auto &r : recs) {
+        if (r.scopeDepth < depth) continue; // outer scope — no conflict
+        if (isMut) {
+            diag_.error({},
+                "cannot borrow '" + var + "' as mutable: already borrowed");
+        } else if (r.isMutable) {
+            diag_.error({},
+                "cannot borrow '" + var + "' as immutable: already mutably borrowed");
         }
+        return;
     }
-    records.push_back({targetVar, isMut, depth});
+    recs.push_back({var, isMut, depth});
 }
 
 void Sema::untrackScope(int depth) {
@@ -850,6 +997,68 @@ void Sema::untrackScope(int depth) {
             [depth](const AliasRecord &r){ return r.scopeDepth >= depth; }),
             records.end());
     }
+}
+
+// ── Generics monomorphization helpers ─────────────────────────────────────────
+
+bool Sema::matchType(const TypePtr &paramTy, const TypePtr &argTy, TypeSubst &subs) {
+    if (!paramTy || !argTy) return false;
+    if (paramTy->kind == TypeKind::Generic) {
+        auto &gt = static_cast<const GenericType &>(*paramTy);
+        auto it = subs.find(gt.name);
+        if (it != subs.end()) return typeEqual(it->second, argTy);
+        subs[gt.name] = argTy;
+        return true;
+    }
+    if (paramTy->kind != argTy->kind) return false;
+    switch (paramTy->kind) {
+    case TypeKind::Pointer:
+        return matchType(static_cast<const PointerType &>(*paramTy).base,
+                         static_cast<const PointerType &>(*argTy).base, subs);
+    case TypeKind::Reference:
+        return matchType(static_cast<const ReferenceType &>(*paramTy).base,
+                         static_cast<const ReferenceType &>(*argTy).base, subs);
+    case TypeKind::Array:
+        return matchType(static_cast<const ArrayType &>(*paramTy).element,
+                         static_cast<const ArrayType &>(*argTy).element, subs);
+    default:
+        return typeEqual(paramTy, argTy);
+    }
+}
+
+bool Sema::inferTypeArgs(const std::vector<ParamDecl>   &params,
+                          const std::vector<TypePtr>      &argTypes,
+                          const std::vector<GenericParam> &genericParams,
+                          TypeSubst                       &subs) {
+    for (size_t i = 0; i < params.size() && i < argTypes.size(); ++i) {
+        if (!matchType(params[i].type, argTypes[i], subs))
+            return false;
+    }
+    // Verify all generic params are bound
+    for (auto &gp : genericParams)
+        if (!subs.count(gp.name)) return false;
+    return true;
+}
+
+Sema::MonoKey Sema::makeMonoKey(const std::string &name, const TypeSubst &subs,
+                                  const std::vector<GenericParam> &params) {
+    MonoKey key;
+    key.funcName = name;
+    for (auto &gp : params) {
+        auto it = subs.find(gp.name);
+        key.typeArgStrs.push_back(it != subs.end() ? it->second->str() : "?");
+    }
+    return key;
+}
+
+std::string Sema::mangleName(const std::string &base, const TypeSubst &subs,
+                               const std::vector<GenericParam> &params) {
+    std::string result = "__safec_" + base;
+    for (auto &gp : params) {
+        auto it = subs.find(gp.name);
+        result += "_" + (it != subs.end() ? it->second->str() : "unknown");
+    }
+    return result;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

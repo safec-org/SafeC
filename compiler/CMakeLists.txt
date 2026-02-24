@@ -32,6 +32,7 @@ set(SAFEC_SOURCES
   src/Type.cpp
   src/Parser.cpp
   src/Sema.cpp
+  src/Clone.cpp
   src/ConstEval.cpp
   src/CodeGen.cpp
   src/main.cpp

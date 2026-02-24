@@ -1,7 +1,9 @@
 #pragma once
 #include "safec/AST.h"
+#include "safec/Clone.h"
 #include "safec/Diagnostic.h"
 #include <unordered_map>
+#include <map>
 #include <vector>
 #include <string>
 #include <functional>
@@ -131,6 +133,30 @@ private:
 
     void trackRef(const std::string &targetVar, bool isMut, int depth);
     void untrackScope(int depth);
+
+    // ── Generics monomorphization ─────────────────────────────────────────────
+    struct MonoKey {
+        std::string              funcName;
+        std::vector<std::string> typeArgStrs; // type->str() for each generic param
+        bool operator<(const MonoKey &o) const {
+            if (funcName != o.funcName) return funcName < o.funcName;
+            return typeArgStrs < o.typeArgStrs;
+        }
+    };
+    std::map<MonoKey, FunctionDecl *>              monoCache_;    // non-owning
+    std::vector<std::unique_ptr<FunctionDecl>>     monoFunctions_; // owns clones
+
+    // Return true if inference succeeded, filling subs.
+    bool inferTypeArgs(const std::vector<ParamDecl>      &params,
+                       const std::vector<TypePtr>         &argTypes,
+                       const std::vector<GenericParam>    &genericParams,
+                       TypeSubst                          &subs);
+    bool matchType(const TypePtr &paramTy, const TypePtr &argTy, TypeSubst &subs);
+
+    MonoKey   makeMonoKey(const std::string &name, const TypeSubst &subs,
+                           const std::vector<GenericParam> &params);
+    std::string mangleName(const std::string &base, const TypeSubst &subs,
+                            const std::vector<GenericParam> &params);
 
     // ── Helpers ───────────────────────────────────────────────────────────────
     TypePtr unify(TypePtr a, TypePtr b, SourceLocation loc, const char *ctx);

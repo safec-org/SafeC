@@ -731,6 +731,15 @@ StmtPtr Parser::parseVarDeclStmt(bool isConst, bool isStatic) {
         diag_.error(cur().loc, "expected variable name");
     } else consume();
 
+    // C-style array dimension after name: int arr[N]
+    while (cur().is(TK::LBracket)) {
+        consume();
+        int64_t sz = -1;
+        if (cur().is(TK::IntLit)) { sz = cur().intVal; consume(); }
+        expect(TK::RBracket, "expected ']' in array declaration");
+        ty = makeArray(std::move(ty), sz);
+    }
+
     ExprPtr init;
     if (match(TK::Eq)) init = parseAssignExpr();
 
