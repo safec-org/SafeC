@@ -69,6 +69,7 @@ private:
     StmtPtr parseDeferStmt(bool isErrDefer = false);
     StmtPtr parseMatchStmt();
     MatchPattern parseMatchPattern();
+    StmtPtr parseAsmStmt();
 
     // ── Expressions ───────────────────────────────────────────────────────────
     ExprPtr parseExpr();

@@ -24,6 +24,7 @@ struct MacroDef {
 struct PreprocOptions {
     bool compatMode       = false; // --compat-preprocessor: allow fn-like macros etc.
     bool importCHeaders   = true;  // fall back to clang import for unresolved <headers>
+    bool freestanding     = false; // --freestanding: no hosted headers, define __SAFEC_FREESTANDING__
     int  maxIncludeDepth  = 64;
     std::vector<std::string>                     includePaths;  // -I dirs
     std::unordered_map<std::string, std::string> cmdlineDefs;   // -D NAME[=VAL]

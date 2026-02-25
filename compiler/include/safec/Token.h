@@ -52,6 +52,15 @@ enum class TK {
     KW_typeof,        // typeof(expr) — type position
     KW_fieldcount,    // fieldcount(T) — struct field count
 
+    // ── Bare-metal / effect system keywords ─────────────────────────────────
+    KW_naked,         // naked fn — no prologue/epilogue, body = asm only
+    KW_interrupt,     // interrupt fn — ISR calling convention
+    KW_section,       // section("name") — place in named ELF/Mach-O section
+    KW_noreturn,      // noreturn fn — function never returns
+    KW_asm,           // asm [volatile] ("template" : outs : ins : clobbers)
+    KW_pure,          // pure fn — no side effects (static effect system)
+    KW_atomic,        // atomic qualifier on variables
+
     // ── Operators ─────────────────────────────────────────────────────────────
     Plus, Minus, Star, Slash, Percent,
     Amp, Pipe, Caret, Tilde,

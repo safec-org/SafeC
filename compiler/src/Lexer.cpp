@@ -78,6 +78,14 @@ TK Lexer::keywordKind(const std::string &w) {
         {"alignof",       TK::KW_alignof},
         {"typeof",        TK::KW_typeof},
         {"fieldcount",    TK::KW_fieldcount},
+        // Bare-metal / effect system
+        {"naked",         TK::KW_naked},
+        {"interrupt",     TK::KW_interrupt},
+        {"section",       TK::KW_section},
+        {"noreturn",      TK::KW_noreturn},
+        {"asm",           TK::KW_asm},
+        {"pure",          TK::KW_pure},
+        {"atomic",        TK::KW_atomic},
     };
     auto it = kw.find(w);
     return (it != kw.end()) ? it->second : TK::Ident;

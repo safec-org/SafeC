@@ -297,6 +297,7 @@ enum class StmtKind {
     IfConst,       // if const (cond) { ... } — compile-time branch selection
     Defer,         // defer stmt  / errdefer stmt
     Match,         // match (expr) { arm, ... }
+    Asm,           // asm [volatile] ("template" [: outs [: ins [: clobbers]]]) ;
 };
 
 struct Stmt {
@@ -384,6 +385,8 @@ struct VarDeclStmt : Stmt {
     ExprPtr     init;       // nullable
     bool        isConst    = false;
     bool        isStatic   = false;
+    bool        isVolatile = false;
+    bool        isAtomic   = false;
 
     VarDeclStmt(std::string n, TypePtr t, ExprPtr i, SourceLocation l)
         : Stmt(StmtKind::VarDecl, l), name(std::move(n)),
@@ -456,6 +459,19 @@ struct MatchStmt : Stmt {
         : Stmt(StmtKind::Match, l), subject(std::move(s)), arms(std::move(a)) {}
 };
 
+// ── Inline assembly ────────────────────────────────────────────────────────
+struct AsmStmt : Stmt {
+    std::string asmTemplate;
+    std::vector<std::string> outputs;    // output constraint strings
+    std::vector<std::string> inputs;     // input constraint strings
+    std::vector<std::string> clobbers;   // clobber list
+    std::vector<ExprPtr>     outputExprs;
+    std::vector<ExprPtr>     inputExprs;
+    bool isVolatile = false;
+
+    AsmStmt(SourceLocation l) : Stmt(StmtKind::Asm, l) {}
+};
+
 // =============================================================================
 // TOP-LEVEL DECLARATIONS
 // =============================================================================
@@ -504,6 +520,12 @@ struct FunctionDecl : Decl {
     std::string methodOwner;             // struct name (e.g. "Foo" for Foo::m)
     bool        isConstMethod = false;   // const qualifier after params
     bool        isMustUse     = false;   // [[must_use]] — warn if return discarded
+    // Bare-metal / effect system attributes
+    bool        isNaked       = false;   // naked — no prologue/epilogue
+    bool        isInterrupt   = false;   // interrupt — ISR calling convention
+    bool        isNoReturn    = false;   // noreturn — function never returns
+    bool        isPure        = false;   // pure — no side effects
+    std::string sectionName;             // section("name") — empty = default
 
     FunctionDecl(std::string n, SourceLocation l)
         : Decl(DeclKind::Function, std::move(n), l) {}
@@ -556,9 +578,12 @@ struct RegionDecl : Decl {
 struct GlobalVarDecl : Decl {
     TypePtr type;
     ExprPtr init;
-    bool    isConst  = false;
-    bool    isStatic = false;
-    bool    isExtern = false;
+    bool    isConst    = false;
+    bool    isStatic   = false;
+    bool    isExtern   = false;
+    bool    isVolatile = false;
+    bool    isAtomic   = false;
+    std::string sectionName;
 
     GlobalVarDecl(std::string n, SourceLocation l)
         : Decl(DeclKind::GlobalVar, std::move(n), l) {}

@@ -329,8 +329,22 @@ static StmtPtr cloneStmtImpl(const Stmt *sp, const TypeSubst &subs) {
             substituteType(vs.declType, subs),
             cloneExprImpl(vs.init.get(), subs),
             vs.loc);
-        res->isConst  = vs.isConst;
-        res->isStatic = vs.isStatic;
+        res->isConst    = vs.isConst;
+        res->isStatic   = vs.isStatic;
+        res->isVolatile = vs.isVolatile;
+        res->isAtomic   = vs.isAtomic;
+        return res;
+    }
+    case StmtKind::Asm: {
+        auto &as = static_cast<const AsmStmt &>(s);
+        auto res = std::make_unique<AsmStmt>(as.loc);
+        res->asmTemplate = as.asmTemplate;
+        res->outputs     = as.outputs;
+        res->inputs      = as.inputs;
+        res->clobbers    = as.clobbers;
+        res->isVolatile  = as.isVolatile;
+        for (auto &e : as.outputExprs) res->outputExprs.push_back(cloneExprImpl(e.get(), subs));
+        for (auto &e : as.inputExprs) res->inputExprs.push_back(cloneExprImpl(e.get(), subs));
         return res;
     }
     case StmtKind::Unsafe: {
@@ -371,6 +385,13 @@ std::unique_ptr<FunctionDecl> cloneFunctionDecl(const FunctionDecl &fn,
     clone->isMethod      = fn.isMethod;
     clone->methodOwner   = fn.methodOwner;
     clone->isConstMethod = fn.isConstMethod;
+    clone->isMustUse     = fn.isMustUse;
+    // Bare-metal / effect system attrs
+    clone->isNaked       = fn.isNaked;
+    clone->isInterrupt   = fn.isInterrupt;
+    clone->isNoReturn    = fn.isNoReturn;
+    clone->isPure        = fn.isPure;
+    clone->sectionName   = fn.sectionName;
     // caller clears genericParams and sets mangled name
 
     // Mutable copy of subs for pack expansion metadata

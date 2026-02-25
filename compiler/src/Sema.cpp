@@ -443,6 +443,46 @@ void Sema::checkFunction(FunctionDecl &fn) {
     // Generic templates: body is only type-checked on concrete instantiations
     if (!fn.genericParams.empty()) return;
 
+    // ── Bare-metal attribute validation ─────────────────────────────────────
+    // interrupt: must be void(void)
+    if (fn.isInterrupt) {
+        if (fn.returnType && !fn.returnType->isVoid())
+            diag_.error(fn.loc, "interrupt function must return void");
+        if (!fn.params.empty())
+            diag_.error(fn.loc, "interrupt function must take no parameters");
+    }
+
+    // naked: body must contain only asm statements
+    if (fn.isNaked && fn.body) {
+        for (auto &s : fn.body->body) {
+            if (s->kind != StmtKind::Asm) {
+                diag_.error(s->loc, "naked function body may only contain asm statements");
+                break;
+            }
+        }
+    }
+
+    // noreturn: error on any return statement in body
+    if (fn.isNoReturn && fn.body) {
+        std::function<void(Stmt&)> checkNoRet = [&](Stmt &s) {
+            if (s.kind == StmtKind::Return) {
+                auto &rs = static_cast<ReturnStmt&>(s);
+                if (rs.value)
+                    diag_.error(s.loc, "noreturn function must not return a value");
+            }
+            if (s.kind == StmtKind::Compound) {
+                for (auto &sub : static_cast<CompoundStmt&>(s).body)
+                    checkNoRet(*sub);
+            }
+            if (s.kind == StmtKind::If) {
+                auto &is = static_cast<IfStmt&>(s);
+                if (is.then) checkNoRet(*is.then);
+                if (is.else_) checkNoRet(*is.else_);
+            }
+        };
+        checkNoRet(*fn.body);
+    }
+
     pushScope();
     // Register parameters
     for (auto &p : fn.params) {
@@ -462,7 +502,13 @@ void Sema::checkFunction(FunctionDecl &fn) {
         sym.initialized = true;
         define(std::move(sym));
     }
+    // Set pure checking mode
+    bool prevPure = checkingPure_;
+    if (fn.isPure) checkingPure_ = true;
+
     checkCompound(*fn.body, fn);
+
+    checkingPure_ = prevPure;
     popScope();
 }
 
@@ -579,6 +625,9 @@ void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
     case StmtKind::Goto:         break; // TODO: check label exists
     case StmtKind::Label:
         checkStmt(*static_cast<LabelStmt &>(s).body, fn);
+        break;
+    case StmtKind::Asm:
+        checkAsmStmt(s, fn);
         break;
     default: break;
     }
@@ -723,6 +772,21 @@ void Sema::checkUnsafe(UnsafeStmt &s, FunctionDecl &fn) {
 
 void Sema::checkStaticAssertStmt(StaticAssertStmt &s) {
     if (s.cond) checkExpr(*s.cond);
+}
+
+void Sema::checkAsmStmt(Stmt &s, FunctionDecl &fn) {
+    auto &as = static_cast<AsmStmt&>(s);
+    // asm requires unsafe{} unless inside a naked function
+    if (!fn.isNaked && !inUnsafeScope()) {
+        diag_.error(as.loc, "inline asm requires unsafe{} block (or naked function)");
+    }
+    // pure functions cannot contain asm (side effects)
+    if (checkingPure_) {
+        diag_.error(as.loc, "asm statement not allowed in pure function");
+    }
+    // Type-check output and input expressions
+    for (auto &e : as.outputExprs) if (e) checkExpr(*e);
+    for (auto &e : as.inputExprs) if (e) checkExpr(*e);
 }
 
 // ── Expression type-checking ──────────────────────────────────────────────────
@@ -1048,7 +1112,16 @@ TypePtr Sema::checkSpawn(SpawnExpr &e) {
         }
     }
     // Check the argument expression
-    checkExpr(*e.argExpr);
+    TypePtr argTy = checkExpr(*e.argExpr);
+    // ── Spawn region isolation: reject mutable non-static refs ──────────────
+    if (argTy && argTy->kind == TypeKind::Reference) {
+        auto &ref = static_cast<ReferenceType &>(*argTy);
+        if (ref.mut && ref.region != Region::Static) {
+            diag_.error(e.argExpr->loc,
+                "spawn argument must not pass mutable non-static reference "
+                "(region isolation violation)");
+        }
+    }
     // spawn returns a pthread_t (represented as signed i64)
     return makeInt(64, true);  // pthread_t handle (long long)
 }
@@ -1074,6 +1147,81 @@ TypePtr Sema::checkCall(CallExpr &e) {
             for (auto &a : e.args) checkExpr(*a);
             e.type = makeVoid();
             return makeVoid();
+        }
+        // ── volatile_load / volatile_store built-ins ─────────────────────────
+        if (ident.name == "volatile_load") {
+            if (e.args.size() != 1)
+                diag_.error(e.loc, "volatile_load expects exactly 1 argument (pointer)");
+            for (auto &a : e.args) checkExpr(*a);
+            if (!e.args.empty() && e.args[0]->type &&
+                e.args[0]->type->kind == TypeKind::Pointer) {
+                auto &pt = static_cast<PointerType &>(*e.args[0]->type);
+                e.type = pt.base;
+                return pt.base;
+            }
+            e.type = makeInt(32, true);
+            return makeInt(32, true);
+        }
+        if (ident.name == "volatile_store") {
+            if (e.args.size() != 2)
+                diag_.error(e.loc, "volatile_store expects 2 arguments (pointer, value)");
+            for (auto &a : e.args) checkExpr(*a);
+            e.type = makeVoid();
+            return makeVoid();
+        }
+        // ── Atomic built-ins ─────────────────────────────────────────────────
+        if (ident.name == "atomic_load" || ident.name == "atomic_store" ||
+            ident.name == "atomic_fetch_add" || ident.name == "atomic_fetch_sub" ||
+            ident.name == "atomic_exchange" || ident.name == "atomic_cas") {
+            for (auto &a : e.args) checkExpr(*a);
+            if (ident.name == "atomic_store") {
+                e.type = makeVoid();
+                return makeVoid();
+            }
+            if (ident.name == "atomic_cas") {
+                e.type = makeBool();
+                return makeBool();
+            }
+            // load/fetch_add/fetch_sub/exchange: return the base type of the pointer
+            if (!e.args.empty() && e.args[0]->type &&
+                e.args[0]->type->kind == TypeKind::Pointer) {
+                auto &pt = static_cast<PointerType &>(*e.args[0]->type);
+                e.type = pt.base;
+                return pt.base;
+            }
+            e.type = makeInt(32, true);
+            return makeInt(32, true);
+        }
+        if (ident.name == "atomic_fence") {
+            for (auto &a : e.args) checkExpr(*a);
+            e.type = makeVoid();
+            return makeVoid();
+        }
+        // ── Freestanding mode: warn on common stdlib calls ───────────────────
+        if (freestanding_) {
+            static const char *stdlibFns[] = {
+                "malloc", "free", "calloc", "realloc",
+                "printf", "fprintf", "sprintf", "snprintf",
+                "puts", "putchar", "getchar",
+                "fopen", "fclose", "fread", "fwrite",
+                "exit", "abort", "atexit",
+                nullptr
+            };
+            for (const char **p = stdlibFns; *p; ++p) {
+                if (ident.name == *p) {
+                    diag_.warn(e.loc,
+                        "call to '" + ident.name + "' in freestanding mode "
+                        "(no hosted runtime available)");
+                    break;
+                }
+            }
+        }
+        // ── Pure function check: reject calls to non-pure functions ──────────
+        if (checkingPure_ && ident.resolvedFn && !ident.resolvedFn->isPure &&
+            !ident.resolvedFn->isExtern) {
+            // Allow calls to other pure functions only
+            diag_.warn(e.loc,
+                "pure function calls non-pure function '" + ident.name + "'");
         }
     }
 

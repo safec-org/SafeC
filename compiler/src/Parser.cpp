@@ -385,13 +385,39 @@ DeclPtr Parser::parseTopLevelDecl() {
     bool isInline   = false;
     bool isExtern   = false;
     bool isStatic   = false;
+    // Bare-metal / effect system attributes
+    bool isNaked     = false;
+    bool isInterrupt = false;
+    bool isNoReturn  = false;
+    bool isPure      = false;
+    bool isVolatile  = false;
+    bool isAtomic    = false;
+    std::string sectionName;
 
     while (true) {
-        if (match(TK::KW_const))    { isConst    = true; continue; }
-        if (match(TK::KW_consteval)){ isConsteval= true; continue; }
-        if (match(TK::KW_inline))   { isInline   = true; continue; }
-        if (match(TK::KW_extern))   { isExtern   = true; continue; }
-        if (match(TK::KW_static))   { isStatic   = true; continue; }
+        if (match(TK::KW_const))     { isConst     = true; continue; }
+        if (match(TK::KW_consteval)) { isConsteval = true; continue; }
+        if (match(TK::KW_inline))    { isInline    = true; continue; }
+        if (match(TK::KW_extern))    { isExtern    = true; continue; }
+        if (match(TK::KW_static))    { isStatic    = true; continue; }
+        if (match(TK::KW_naked))     { isNaked     = true; continue; }
+        if (match(TK::KW_interrupt)) { isInterrupt = true; continue; }
+        if (match(TK::KW_noreturn))  { isNoReturn  = true; continue; }
+        if (match(TK::KW_pure))      { isPure      = true; continue; }
+        if (match(TK::KW_volatile))  { isVolatile  = true; continue; }
+        if (match(TK::KW_atomic))    { isAtomic    = true; continue; }
+        if (cur().is(TK::KW_section)) {
+            consume(); // consume 'section'
+            expect(TK::LParen, "expected '(' after section");
+            if (cur().is(TK::StringLit)) {
+                sectionName = cur().text;
+                consume();
+            } else {
+                diag_.error(cur().loc, "expected string literal for section name");
+            }
+            expect(TK::RParen, "expected ')' after section name");
+            continue;
+        }
         break;
     }
 
@@ -405,6 +431,22 @@ DeclPtr Parser::parseTopLevelDecl() {
                                          std::move(genericParams));
     if (isMustUse && decl && decl->kind == DeclKind::Function)
         static_cast<FunctionDecl&>(*decl).isMustUse = true;
+    // Propagate bare-metal attrs to FunctionDecl
+    if (decl && decl->kind == DeclKind::Function) {
+        auto &fn = static_cast<FunctionDecl&>(*decl);
+        fn.isNaked     = isNaked;
+        fn.isInterrupt = isInterrupt;
+        fn.isNoReturn  = isNoReturn;
+        fn.isPure      = isPure;
+        fn.sectionName = sectionName;
+    }
+    // Propagate volatile/atomic/section to GlobalVarDecl
+    if (decl && decl->kind == DeclKind::GlobalVar) {
+        auto &gv = static_cast<GlobalVarDecl&>(*decl);
+        gv.isVolatile  = isVolatile;
+        gv.isAtomic    = isAtomic;
+        gv.sectionName = sectionName;
+    }
     return decl;
 }
 
@@ -793,9 +835,24 @@ StmtPtr Parser::parseStmt() {
     }
     case TK::KW_unsafe:        return parseUnsafeStmt();
     case TK::KW_static_assert: return parseStaticAssertStmt();
+    case TK::KW_asm:           return parseAsmStmt();
     case TK::KW_const: {
         consume();
         return parseVarDeclStmt(true, false);
+    }
+    case TK::KW_volatile: {
+        consume();
+        auto vs = parseVarDeclStmt(false, false);
+        if (vs && vs->kind == StmtKind::VarDecl)
+            static_cast<VarDeclStmt&>(*vs).isVolatile = true;
+        return vs;
+    }
+    case TK::KW_atomic: {
+        consume();
+        auto vs = parseVarDeclStmt(false, false);
+        if (vs && vs->kind == StmtKind::VarDecl)
+            static_cast<VarDeclStmt&>(*vs).isAtomic = true;
+        return vs;
     }
     case TK::KW_static: {
         consume();
@@ -984,6 +1041,68 @@ StmtPtr Parser::parseVarDeclStmt(bool isConst, bool isStatic) {
     vs->isConst  = isConst;
     vs->isStatic = isStatic;
     return vs;
+}
+
+// ── Inline assembly statement ──────────────────────────────────────────────
+// asm [volatile] ( "template" [: outputs [: inputs [: clobbers]]] ) ;
+// Note: ::: (empty outputs+inputs+clobbers) lexes as ColonColon + Colon
+StmtPtr Parser::parseAsmStmt() {
+    auto loc = cur().loc;
+    consume(); // consume 'asm'
+    auto stmt = std::make_unique<AsmStmt>(loc);
+    if (match(TK::KW_volatile)) stmt->isVolatile = true;
+    expect(TK::LParen, "expected '(' after asm");
+    // Template string
+    if (cur().is(TK::StringLit)) {
+        stmt->asmTemplate = cur().text;
+        consume();
+    } else {
+        diag_.error(cur().loc, "expected string literal for asm template");
+    }
+
+    // Helper: consume one colon separator (handles :: → two colons)
+    // Returns how many colons were consumed (0, 1, or 2)
+    int pendingColons = 0;
+    auto consumeColon = [&]() -> bool {
+        if (pendingColons > 0) { --pendingColons; return true; }
+        if (match(TK::ColonColon)) { pendingColons = 1; return true; }
+        return match(TK::Colon);
+    };
+
+    // Optional sections: outputs : inputs : clobbers
+    if (consumeColon()) {
+        // outputs: "constraint"(expr), ...
+        while (!pendingColons && cur().is(TK::StringLit)) {
+            std::string constraint = cur().text; consume();
+            expect(TK::LParen);
+            stmt->outputs.push_back(std::move(constraint));
+            stmt->outputExprs.push_back(parseAssignExpr());
+            expect(TK::RParen);
+            if (!match(TK::Comma)) break;
+        }
+        if (consumeColon()) {
+            // inputs: "constraint"(expr), ...
+            while (!pendingColons && cur().is(TK::StringLit)) {
+                std::string constraint = cur().text; consume();
+                expect(TK::LParen);
+                stmt->inputs.push_back(std::move(constraint));
+                stmt->inputExprs.push_back(parseAssignExpr());
+                expect(TK::RParen);
+                if (!match(TK::Comma)) break;
+            }
+            if (consumeColon()) {
+                // clobbers: "reg", "reg", ...
+                while (cur().is(TK::StringLit)) {
+                    stmt->clobbers.push_back(cur().text);
+                    consume();
+                    if (!match(TK::Comma)) break;
+                }
+            }
+        }
+    }
+    expect(TK::RParen, "expected ')' after asm");
+    expect(TK::Semicolon, "expected ';' after asm statement");
+    return stmt;
 }
 
 StmtPtr Parser::parseExprStmt() {

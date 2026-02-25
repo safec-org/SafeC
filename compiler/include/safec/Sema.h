@@ -54,6 +54,8 @@ class Sema {
 public:
     Sema(TranslationUnit &tu, DiagEngine &diag);
 
+    void setFreestanding(bool v) { freestanding_ = v; }
+
     // Run all analyses; returns false if there were errors
     bool run();
 
@@ -161,6 +163,9 @@ private:
     std::string mangleName(const std::string &base, const TypeSubst &subs,
                             const std::vector<GenericParam> &params);
 
+    // ── Bare-metal / effect system checks ────────────────────────────────────
+    void checkAsmStmt(Stmt &s, FunctionDecl &fn);
+
     // ── Helpers ───────────────────────────────────────────────────────────────
     TypePtr unify(TypePtr a, TypePtr b, SourceLocation loc, const char *ctx);
     TypePtr resolveStruct(StructType &st);
@@ -171,6 +176,8 @@ private:
     bool canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const;
 
     // ── State ─────────────────────────────────────────────────────────────────
+    bool freestanding_ = false;  // --freestanding mode: warn on stdlib calls
+    bool checkingPure_ = false;  // true while checking a 'pure' function body
     TranslationUnit &tu_;
     DiagEngine      &diag_;
 

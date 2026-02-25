@@ -15,6 +15,7 @@
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/DIBuilder.h"
+#include "llvm/IR/InlineAsm.h"
 
 #include <unordered_map>
 #include <string>
@@ -74,6 +75,8 @@ public:
     CodeGen(llvm::LLVMContext &ctx, const std::string &moduleName,
             DiagEngine &diag, DebugLevel dbgLevel = DebugLevel::None);
 
+    void setFreestanding(bool v) { freestanding_ = v; }
+
     // Generate all top-level declarations; returns the Module
     std::unique_ptr<llvm::Module> generate(TranslationUnit &tu);
 
@@ -108,6 +111,7 @@ private:
     void genUnsafe(UnsafeStmt &s, FnEnv &env);
     void genExprStmt(ExprStmt &s, FnEnv &env);
     void genMatch(MatchStmt &s, FnEnv &env);
+    void genAsm(AsmStmt &s, FnEnv &env);
     void emitDefers(FnEnv &env, bool errOnly = false);
 
     // ── Expression codegen ────────────────────────────────────────────────────
@@ -169,6 +173,9 @@ private:
     std::unordered_map<std::string, llvm::Value *>   globals_;
     // String literal cache
     std::unordered_map<std::string, llvm::GlobalVariable *> strLits_;
+
+    // ── Freestanding mode ─────────────────────────────────────────────────────
+    bool freestanding_ = false;
 
     // ── Debug info ────────────────────────────────────────────────────────────
     DebugLevel                           debugLevel_ = DebugLevel::None;

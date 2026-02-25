@@ -324,6 +324,19 @@ llvm::Function *CodeGen::genFunctionProto(FunctionDecl &fn) {
 
     if (fn.isInline) llvmFn->addFnAttr(llvm::Attribute::InlineHint);
 
+    // ── Bare-metal / effect system attributes ────────────────────────────────
+    if (fn.isNaked)    llvmFn->addFnAttr(llvm::Attribute::Naked);
+    if (fn.isNoReturn) llvmFn->addFnAttr(llvm::Attribute::NoReturn);
+    if (fn.isPure) {
+        llvmFn->setMemoryEffects(llvm::MemoryEffects::readOnly());
+        llvmFn->addFnAttr(llvm::Attribute::NoUnwind);
+    }
+    if (fn.isInterrupt) {
+        llvmFn->addFnAttr("interrupt");
+    }
+    if (!fn.sectionName.empty()) llvmFn->setSection(fn.sectionName);
+    if (freestanding_) llvmFn->addFnAttr(llvm::Attribute::NoBuiltin);
+
     // Name parameters and add reference attributes
     unsigned idx = 0;
     for (auto &arg : llvmFn->args()) {
@@ -367,6 +380,23 @@ void CodeGen::genFunctionBody(FunctionDecl &fn, llvm::Function *llvmFn) {
     FnEnv env;
     env.fn     = llvmFn;
     env.fnDecl = &fn;
+
+    // ── Naked functions: skip prologue, emit asm only + unreachable ──────────
+    if (fn.isNaked) {
+        auto *entryBB = llvm::BasicBlock::Create(ctx_, "entry", llvmFn);
+        builder_.SetInsertPoint(entryBB);
+        env.entry = entryBB;
+        // Emit only asm statements (body validated by Sema)
+        if (fn.body) {
+            for (auto &s : fn.body->body) {
+                if (s->kind == StmtKind::Asm)
+                    genAsm(static_cast<AsmStmt &>(*s), env);
+            }
+        }
+        if (!isTerminated(builder_.GetInsertBlock()))
+            builder_.CreateUnreachable();
+        return;
+    }
 
     // Debug: attach DISubprogram
     if (dib_ && diFile_) {
@@ -461,6 +491,9 @@ llvm::GlobalVariable *CodeGen::genGlobalVar(GlobalVarDecl &gv) {
                     : llvm::GlobalValue::InternalLinkage,
         gv.isExtern ? nullptr : init,
         gv.name);
+
+    // Bare-metal attributes: section, volatile
+    if (!gv.sectionName.empty()) gvar->setSection(gv.sectionName);
 
     globals_[gv.name] = gvar;
     return gvar;
@@ -635,6 +668,9 @@ void CodeGen::genStmt(Stmt &s, FnEnv &env) {
         diag_.warn(s.loc, "goto not fully implemented in codegen");
         break;
     }
+    case StmtKind::Asm:
+        genAsm(static_cast<AsmStmt &>(s), env);
+        break;
     default: break;
     }
 }
@@ -766,6 +802,46 @@ void CodeGen::emitDefers(FnEnv &env, bool errOnly) {
         if (!errOnly || ds->isErrDefer)
             genStmt(*ds->body, env);
     }
+}
+
+// ── Inline assembly codegen ──────────────────────────────────────────────────
+void CodeGen::genAsm(AsmStmt &s, FnEnv &env) {
+    // Build constraint string: outputs,inputs,~clobbers
+    std::string constraints;
+    for (size_t i = 0; i < s.outputs.size(); ++i) {
+        if (i > 0) constraints += ",";
+        constraints += s.outputs[i];
+    }
+    for (size_t i = 0; i < s.inputs.size(); ++i) {
+        if (!constraints.empty()) constraints += ",";
+        constraints += s.inputs[i];
+    }
+    for (size_t i = 0; i < s.clobbers.size(); ++i) {
+        if (!constraints.empty()) constraints += ",";
+        constraints += "~{" + s.clobbers[i] + "}";
+    }
+
+    // Collect input values
+    std::vector<llvm::Value *> argVals;
+    for (auto &e : s.outputExprs) {
+        if (e) argVals.push_back(genLValue(*e, env));
+    }
+    for (auto &e : s.inputExprs) {
+        if (e) argVals.push_back(genExpr(*e, env));
+    }
+
+    // Build argument types
+    std::vector<llvm::Type *> argTys;
+    for (auto *v : argVals) argTys.push_back(v->getType());
+
+    // Result type: void if no outputs, otherwise the output type
+    llvm::Type *resTy = llvm::Type::getVoidTy(ctx_);
+
+    auto *asmFnTy = llvm::FunctionType::get(resTy, argTys, false);
+    auto *inlineAsm = llvm::InlineAsm::get(
+        asmFnTy, s.asmTemplate, constraints,
+        s.isVolatile || s.outputs.empty());
+    builder_.CreateCall(asmFnTy, inlineAsm, argVals);
 }
 
 void CodeGen::genMatch(MatchStmt &s, FnEnv &env) {
@@ -1396,6 +1472,76 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
                 builder_.CreateStore(llvm::ConstantInt::get(Int64Ty, 0), usedPtr);
                 return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
             }
+        }
+        // ── volatile_load / volatile_store built-ins ─────────────────────────
+        if (ident.name == "volatile_load" && !e.args.empty()) {
+            auto *ptr = genExpr(*e.args[0], env);
+            auto *loadTy = e.type ? lowerType(e.type) : llvm::Type::getInt32Ty(ctx_);
+            auto *ld = builder_.CreateLoad(loadTy, ptr, "vol.load");
+            ld->setVolatile(true);
+            return ld;
+        }
+        if (ident.name == "volatile_store" && e.args.size() >= 2) {
+            auto *ptr = genExpr(*e.args[0], env);
+            auto *val = genExpr(*e.args[1], env);
+            auto *st = builder_.CreateStore(val, ptr);
+            st->setVolatile(true);
+            return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
+        }
+        // ── Atomic built-ins ─────────────────────────────────────────────────
+        auto parseOrdering = [&](int argIdx) -> llvm::AtomicOrdering {
+            if (argIdx < (int)e.args.size() && e.args[argIdx]->kind == ExprKind::StringLit) {
+                auto &str = static_cast<StringLitExpr &>(*e.args[argIdx]).value;
+                if (str == "relaxed")  return llvm::AtomicOrdering::Monotonic;
+                if (str == "acquire")  return llvm::AtomicOrdering::Acquire;
+                if (str == "release")  return llvm::AtomicOrdering::Release;
+                if (str == "acq_rel")  return llvm::AtomicOrdering::AcquireRelease;
+            }
+            return llvm::AtomicOrdering::SequentiallyConsistent;
+        };
+        if (ident.name == "atomic_load" && !e.args.empty()) {
+            auto *ptr = genExpr(*e.args[0], env);
+            auto *loadTy = e.type ? lowerType(e.type) : llvm::Type::getInt32Ty(ctx_);
+            auto *ld = builder_.CreateLoad(loadTy, ptr, "atomic.load");
+            ld->setAtomic(parseOrdering(1));
+            return ld;
+        }
+        if (ident.name == "atomic_store" && e.args.size() >= 2) {
+            auto *ptr = genExpr(*e.args[0], env);
+            auto *val = genExpr(*e.args[1], env);
+            auto *st = builder_.CreateStore(val, ptr);
+            st->setAtomic(parseOrdering(2));
+            return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
+        }
+        if ((ident.name == "atomic_fetch_add" || ident.name == "atomic_fetch_sub") &&
+            e.args.size() >= 2) {
+            auto *ptr = genExpr(*e.args[0], env);
+            auto *val = genExpr(*e.args[1], env);
+            auto op = (ident.name == "atomic_fetch_add")
+                ? llvm::AtomicRMWInst::Add : llvm::AtomicRMWInst::Sub;
+            return builder_.CreateAtomicRMW(op, ptr, val, llvm::MaybeAlign(),
+                                             parseOrdering(2));
+        }
+        if (ident.name == "atomic_exchange" && e.args.size() >= 2) {
+            auto *ptr = genExpr(*e.args[0], env);
+            auto *val = genExpr(*e.args[1], env);
+            return builder_.CreateAtomicRMW(llvm::AtomicRMWInst::Xchg, ptr, val,
+                                             llvm::MaybeAlign(), parseOrdering(2));
+        }
+        if (ident.name == "atomic_cas" && e.args.size() >= 3) {
+            auto *ptr      = genExpr(*e.args[0], env);
+            auto *expected = genExpr(*e.args[1], env);
+            auto *desired  = genExpr(*e.args[2], env);
+            auto ord = parseOrdering(3);
+            auto *cmpxchg = builder_.CreateAtomicCmpXchg(
+                ptr, expected, desired, llvm::MaybeAlign(), ord, ord);
+            // Extract success flag (element 1 of { T, i1 })
+            return builder_.CreateExtractValue(cmpxchg, 1, "cas.ok");
+        }
+        if (ident.name == "atomic_fence") {
+            auto ord = parseOrdering(0);
+            builder_.CreateFence(ord);
+            return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
         }
         // Handle __safec_join(handle) — pthread_join
         if (ident.name == "__safec_join" && !e.args.empty()) {

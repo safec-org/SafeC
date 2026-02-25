@@ -75,6 +75,10 @@ static llvm::cl::opt<std::string>
         llvm::cl::desc("Debug info level: none (default), lines, full"),
         llvm::cl::init("none"));
 
+static llvm::cl::opt<bool>
+    Freestanding("freestanding",
+        llvm::cl::desc("Freestanding mode (no hosted runtime, no C header import)"));
+
 // -I <dir> include paths
 static llvm::cl::list<std::string>
     IncludePaths("I", llvm::cl::desc("Add include search directory"),
@@ -192,6 +196,11 @@ int main(int argc, char **argv) {
     safec::PreprocOptions ppOpts;
     ppOpts.compatMode     = CompatPreprocessor;
     ppOpts.importCHeaders = !NoImportCHeaders;
+    ppOpts.freestanding   = Freestanding;
+    if (Freestanding) {
+        ppOpts.importCHeaders = false;
+        ppOpts.cmdlineDefs["__SAFEC_FREESTANDING__"] = "1";
+    }
     for (auto &d : IncludePaths) ppOpts.includePaths.push_back(d);
     for (auto &d : CmdlineDefs) {
         auto eq = d.find('=');
@@ -294,6 +303,7 @@ int main(int argc, char **argv) {
     if (!NoSema) {
         if (Verbose) fprintf(stderr, "[safec] Running semantic analysis ...\n");
         safec::Sema sema(*tu, diag);
+        if (Freestanding) sema.setFreestanding(true);
         bool ok = sema.run();
         if (!ok || diag.hasErrors()) {
             fprintf(stderr, "Semantic analysis failed with %d error(s)\n",
@@ -323,6 +333,7 @@ int main(int argc, char **argv) {
     else if (DebugInfoLevel == "full") dbgLevel = safec::DebugLevel::Full;
 
     safec::CodeGen cg(ctx, InputFile, diag, dbgLevel);
+    if (Freestanding) cg.setFreestanding(true);
     auto mod = cg.generate(*tu);
 
     if (diag.hasErrors()) {
