@@ -4,17 +4,36 @@
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Path.h"
+#include "llvm/BinaryFormat/Dwarf.h"
 #include <cassert>
 
 namespace safec {
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 CodeGen::CodeGen(llvm::LLVMContext &ctx, const std::string &moduleName,
-                 DiagEngine &diag)
+                 DiagEngine &diag, DebugLevel dbgLevel)
     : ctx_(ctx),
       mod_(std::make_unique<llvm::Module>(moduleName, ctx)),
       builder_(ctx),
-      diag_(diag) {}
+      diag_(diag),
+      debugLevel_(dbgLevel)
+{
+    if (debugLevel_ != DebugLevel::None) {
+        dib_ = std::make_unique<llvm::DIBuilder>(*mod_);
+        llvm::SmallString<256> absPath(moduleName);
+        llvm::sys::fs::make_absolute(absPath);
+        llvm::StringRef dir  = llvm::sys::path::parent_path(absPath);
+        llvm::StringRef file = llvm::sys::path::filename(absPath);
+        diFile_ = dib_->createFile(file, dir);
+        diCU_   = dib_->createCompileUnit(
+            llvm::dwarf::DW_LANG_C,
+            diFile_,
+            "SafeC",
+            /*isOptimized=*/false, "", 0);
+    }
+}
 
 // ── Top-level entry ───────────────────────────────────────────────────────────
 std::unique_ptr<llvm::Module> CodeGen::generate(TranslationUnit &tu) {
@@ -48,6 +67,9 @@ std::unique_ptr<llvm::Module> CodeGen::generate(TranslationUnit &tu) {
             genStaticAssert(static_cast<StaticAssertDecl &>(*d));
         }
     }
+
+    // Finalize debug info (must be before verifyModule)
+    if (dib_) dib_->finalize();
 
     // Verify
     std::string errStr;
@@ -110,6 +132,17 @@ llvm::Type *CodeGen::lowerType(const TypePtr &ty) {
         for (auto &e : tt.elementTypes) elemTys.push_back(lowerType(e));
         return llvm::StructType::get(ctx_, elemTys);
     }
+    case TypeKind::Optional: {
+        // ?T  →  { T, i1 }   (value, has_value)
+        auto &opt = static_cast<const OptionalType &>(*ty);
+        auto *inner = lowerType(opt.inner);
+        return llvm::StructType::get(ctx_, {inner, llvm::Type::getInt1Ty(ctx_)});
+    }
+    case TypeKind::Slice: {
+        // []T  →  { T*, i64 }  (ptr, length)
+        return llvm::StructType::get(ctx_,
+            {llvm::PointerType::get(ctx_, 0), llvm::Type::getInt64Ty(ctx_)});
+    }
     case TypeKind::Error:
     default:
         return llvm::Type::getInt32Ty(ctx_); // fallback
@@ -128,7 +161,7 @@ llvm::StructType *CodeGen::lowerStructType(const StructType &st) {
     if (st.isDefined) {
         std::vector<llvm::Type *> fieldTys;
         for (auto &f : st.fields) fieldTys.push_back(lowerType(f.type));
-        llvmSt->setBody(fieldTys, /*isPacked=*/false);
+        llvmSt->setBody(fieldTys, st.isPacked);
     }
     return llvmSt;
 }
@@ -227,45 +260,10 @@ llvm::Value *CodeGen::genTupleLit(TupleLitExpr &e, FnEnv &env) {
     return builder_.CreateLoad(tupleTy, alloca, "tuple");
 }
 
-llvm::Value *CodeGen::genClosure(ClosureExpr &e, FnEnv &env) {
-    // Build param types
-    std::vector<llvm::Type *> paramTys;
-    for (auto &p : e.params)
-        paramTys.push_back(p.type ? lowerType(p.type) : llvm::Type::getInt32Ty(ctx_));
-    auto *retTy = e.returnType ? lowerType(e.returnType) : llvm::Type::getVoidTy(ctx_);
-    auto *fnTy  = llvm::FunctionType::get(retTy, paramTys, false);
-    std::string mangledName = e.mangledName.empty() ? "__closure_anon" : e.mangledName;
-    // Reuse if already declared
-    auto *fn = mod_->getFunction(mangledName);
-    if (!fn)
-        fn = llvm::Function::Create(fnTy, llvm::GlobalValue::InternalLinkage,
-                                    mangledName, *mod_);
-    if (e.body && !fn->empty()) return fn; // already generated
-    if (e.body) {
-        FunctionDecl dummy(mangledName, e.loc);
-        dummy.returnType = e.returnType ? e.returnType : makeVoid();
-        for (size_t i = 0; i < e.params.size(); ++i) {
-            ParamDecl pd;
-            pd.name = e.params[i].name;
-            pd.type = e.params[i].type ? e.params[i].type : makeInt(32);
-            pd.loc  = e.params[i].loc;
-            dummy.params.push_back(std::move(pd));
-        }
-        // borrow body (not owned by dummy)
-        dummy.body.reset(e.body.get());
-        // Save builder state before generating nested function
-        auto *savedBB = builder_.GetInsertBlock();
-        genFunctionBody(dummy, fn);
-        // Restore builder state to the enclosing function's insertion point
-        if (savedBB) builder_.SetInsertPoint(savedBB);
-        dummy.body.release();
-    }
-    return fn;
-}
-
 llvm::Value *CodeGen::genSpawn(SpawnExpr &e, FnEnv &env) {
-    // Generate the closure body function
-    llvm::Value *closureFn = genExpr(*e.closure, env);
+    // Evaluate function reference and argument
+    llvm::Value *fnVal  = genExpr(*e.fnExpr, env);
+    llvm::Value *argVal = genExpr(*e.argExpr, env);
 
     auto *PtrTy   = llvm::PointerType::get(ctx_, 0);
     auto *Int64Ty = llvm::Type::getInt64Ty(ctx_);
@@ -274,47 +272,21 @@ llvm::Value *CodeGen::genSpawn(SpawnExpr &e, FnEnv &env) {
     // Allocate a pthread_t (i64) handle on the stack
     auto *handleAlloca = createEntryAlloca(env, Int64Ty, "thread_handle");
 
-    // pthread_create(pthread_t*, attr*, void*(*)(void*), void*) → int
+    // pthread_create(pthread_t*, attr*, void*(*)(void*), void*) -> int
     auto *ptCreateTy = llvm::FunctionType::get(Int32Ty,
         {PtrTy, PtrTy, PtrTy, PtrTy}, false);
     auto ptCreateFn = mod_->getOrInsertFunction("pthread_create", ptCreateTy);
 
-    // Build a pthread-compatible wrapper around the closure.
-    // Wrapper type: void*(void*)
-    llvm::Function *closureFnPtr = llvm::dyn_cast<llvm::Function>(closureFn);
-    llvm::Function *wrapper = nullptr;
-    if (closureFnPtr) {
-        std::string wrapName = closureFnPtr->getName().str() + "_pt";
-        wrapper = mod_->getFunction(wrapName);
-        if (!wrapper) {
-            auto *wrapTy = llvm::FunctionType::get(PtrTy, {PtrTy}, false);
-            wrapper = llvm::Function::Create(wrapTy, llvm::GlobalValue::InternalLinkage,
-                                             wrapName, *mod_);
-            auto *savedBB = builder_.GetInsertBlock();
-            auto *wrapEntry = llvm::BasicBlock::Create(ctx_, "entry", wrapper);
-            builder_.SetInsertPoint(wrapEntry);
-            auto *closureFnTy = closureFnPtr->getFunctionType();
-            if (closureFnTy->getNumParams() == 0) {
-                // No-param closure: just call it
-                builder_.CreateCall(closureFnTy, closureFnPtr, {});
-            } else if (closureFnTy->getNumParams() == 1 &&
-                       closureFnTy->getParamType(0)->isPointerTy()) {
-                // env-ptr closure: pass through the void* arg
-                builder_.CreateCall(closureFnTy, closureFnPtr, {wrapper->getArg(0)});
-            }
-            // Otherwise: typed-param closures aren't called as threads
-            builder_.CreateRet(llvm::ConstantPointerNull::get(PtrTy));
-            if (savedBB) builder_.SetInsertPoint(savedBB);
-        }
+    // Convert integer arg to pointer (e.g., 0 -> null ptr)
+    if (argVal->getType()->isIntegerTy()) {
+        argVal = builder_.CreateIntToPtr(argVal, PtrTy, "arg.ptr");
     }
 
-    // pthread_create(&handle, NULL, wrapper, NULL)
     auto *nullPtr = llvm::ConstantPointerNull::get(PtrTy);
-    llvm::Value *wrapperPtr = wrapper
-        ? static_cast<llvm::Value *>(wrapper)
-        : static_cast<llvm::Value *>(nullPtr);
+
+    // pthread_create(&handle, NULL, fn, arg)
     builder_.CreateCall(ptCreateTy, ptCreateFn.getCallee(),
-        {handleAlloca, nullPtr, wrapperPtr, nullPtr});
+        {handleAlloca, nullPtr, fnVal, argVal});
 
     // Return handle as i64 (pthread_t)
     return builder_.CreateLoad(Int64Ty, handleAlloca, "thread_id");
@@ -386,10 +358,31 @@ void CodeGen::genFunctionBody(FunctionDecl &fn, llvm::Function *llvmFn) {
     env.fn     = llvmFn;
     env.fnDecl = &fn;
 
+    // Debug: attach DISubprogram
+    if (dib_ && diFile_) {
+        auto *spTy = diSubroutineType(fn);
+        unsigned line = fn.loc.line ? fn.loc.line : 1;
+        auto *diSP = dib_->createFunction(
+            diFile_, fn.name, "", diFile_,
+            line, spTy, line,
+            llvm::DINode::FlagPrototyped,
+            llvm::DISubprogram::SPFlagDefinition);
+        llvmFn->setSubprogram(diSP);
+    }
+
     // Create entry basic block
     auto *entryBB = llvm::BasicBlock::Create(ctx_, "entry", llvmFn);
     builder_.SetInsertPoint(entryBB);
     env.entry = entryBB;
+
+    // Set initial debug location to function start
+    if (dib_ && llvmFn->getSubprogram()) {
+        builder_.SetCurrentDebugLocation(
+            llvm::DILocation::get(ctx_,
+                fn.loc.line ? fn.loc.line : 1,
+                fn.loc.col,
+                llvmFn->getSubprogram()));
+    }
 
     // Create return BB (single exit point pattern — cleaner IR)
     env.returnBB = llvm::BasicBlock::Create(ctx_, "return", llvmFn);
@@ -416,8 +409,11 @@ void CodeGen::genFunctionBody(FunctionDecl &fn, llvm::Function *llvmFn) {
     genCompound(*fn.body, env);
 
     // Fallthrough to return block if not already terminated
-    if (!isTerminated(builder_.GetInsertBlock()))
+    // Emit deferred statements before branching (same as genReturn does for explicit return)
+    if (!isTerminated(builder_.GetInsertBlock())) {
+        emitDefers(env, /*errOnly=*/false);
         builder_.CreateBr(env.returnBB);
+    }
 
     // Emit return block
     builder_.SetInsertPoint(env.returnBB);
@@ -477,10 +473,79 @@ void CodeGen::genStaticAssert(StaticAssertDecl &sa) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// DEBUG INFO HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+llvm::DIType *CodeGen::diTypeFor(const TypePtr &ty) {
+    if (!ty || !dib_) return dib_->createUnspecifiedType("void");
+    switch (ty->kind) {
+    case TypeKind::Void:    return dib_->createUnspecifiedType("void");
+    case TypeKind::Bool:
+        return dib_->createBasicType("bool", 1,
+                                     llvm::dwarf::DW_ATE_boolean);
+    case TypeKind::Char:
+        return dib_->createBasicType("char", 8,
+                                     llvm::dwarf::DW_ATE_signed_char);
+    case TypeKind::Int8:
+        return dib_->createBasicType("int8_t", 8,
+                                     llvm::dwarf::DW_ATE_signed);
+    case TypeKind::Int16:
+        return dib_->createBasicType("short", 16,
+                                     llvm::dwarf::DW_ATE_signed);
+    case TypeKind::Int32:
+        return dib_->createBasicType("int", 32,
+                                     llvm::dwarf::DW_ATE_signed);
+    case TypeKind::Int64:
+        return dib_->createBasicType("long long", 64,
+                                     llvm::dwarf::DW_ATE_signed);
+    case TypeKind::UInt8:
+        return dib_->createBasicType("uint8_t", 8,
+                                     llvm::dwarf::DW_ATE_unsigned_char);
+    case TypeKind::UInt16:
+        return dib_->createBasicType("unsigned short", 16,
+                                     llvm::dwarf::DW_ATE_unsigned);
+    case TypeKind::UInt32:
+        return dib_->createBasicType("unsigned int", 32,
+                                     llvm::dwarf::DW_ATE_unsigned);
+    case TypeKind::UInt64:
+        return dib_->createBasicType("unsigned long long", 64,
+                                     llvm::dwarf::DW_ATE_unsigned);
+    case TypeKind::Float32:
+        return dib_->createBasicType("float", 32,
+                                     llvm::dwarf::DW_ATE_float);
+    case TypeKind::Float64:
+        return dib_->createBasicType("double", 64,
+                                     llvm::dwarf::DW_ATE_float);
+    case TypeKind::Pointer:
+    case TypeKind::Reference:
+        return dib_->createPointerType(
+            dib_->createUnspecifiedType("void"), 64);
+    default:
+        return dib_->createUnspecifiedType(ty->str());
+    }
+}
+
+llvm::DISubroutineType *CodeGen::diSubroutineType(FunctionDecl &fn) {
+    llvm::SmallVector<llvm::Metadata *, 8> paramTypes;
+    // First element is return type
+    paramTypes.push_back(diTypeFor(fn.returnType));
+    for (auto &p : fn.params)
+        paramTypes.push_back(diTypeFor(p.type));
+    return dib_->createSubroutineType(
+        dib_->getOrCreateTypeArray(paramTypes));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // STATEMENTS
 // ─────────────────────────────────────────────────────────────────────────────
 
 void CodeGen::genStmt(Stmt &s, FnEnv &env) {
+    // Attach source location for lines/full debug
+    if (dib_ && env.fn->getSubprogram() && s.loc.line) {
+        builder_.SetCurrentDebugLocation(
+            llvm::DILocation::get(ctx_, s.loc.line, s.loc.col,
+                                  env.fn->getSubprogram()));
+    }
     switch (s.kind) {
     case StmtKind::Compound:     genCompound(static_cast<CompoundStmt &>(s), env);   break;
     case StmtKind::Expr:         genExprStmt(static_cast<ExprStmt &>(s), env);       break;
@@ -491,11 +556,26 @@ void CodeGen::genStmt(Stmt &s, FnEnv &env) {
     case StmtKind::Return:       genReturn(static_cast<ReturnStmt &>(s), env);       break;
     case StmtKind::VarDecl:      genVarDecl(static_cast<VarDeclStmt &>(s), env);    break;
     case StmtKind::Unsafe:       genUnsafe(static_cast<UnsafeStmt &>(s), env);      break;
-    case StmtKind::Break:
-        if (env.breakBB()) builder_.CreateBr(env.breakBB());
+    case StmtKind::Break: {
+        auto &bs = static_cast<BreakStmt &>(s);
+        auto *bb = env.breakBB(bs.label);
+        if (bb) builder_.CreateBr(bb);
         break;
-    case StmtKind::Continue:
-        if (env.continueBB()) builder_.CreateBr(env.continueBB());
+    }
+    case StmtKind::Continue: {
+        auto &cs = static_cast<ContinueStmt &>(s);
+        auto *bb = env.continueBB(cs.label);
+        if (bb) builder_.CreateBr(bb);
+        break;
+    }
+    case StmtKind::Defer: {
+        // Register the defer body to be emitted at return/exit
+        auto &ds = static_cast<DeferStmt &>(s);
+        env.deferList.push_back(&ds);
+        break;
+    }
+    case StmtKind::Match:
+        genMatch(static_cast<MatchStmt &>(s), env);
         break;
     case StmtKind::StaticAssert: break; // handled at compile-time by ConstEvalEngine
     case StmtKind::IfConst: {
@@ -587,7 +667,7 @@ void CodeGen::genWhile(WhileStmt &s, FnEnv &env) {
     auto *bodyBB   = llvm::BasicBlock::Create(ctx_, "while.body", env.fn);
     auto *exitBB   = llvm::BasicBlock::Create(ctx_, "while.end",  env.fn);
 
-    env.pushLoop(exitBB, headerBB);
+    env.pushLoop(exitBB, headerBB, s.label);
 
     if (s.isDoWhile) {
         // do { body } while (cond)
@@ -626,7 +706,7 @@ void CodeGen::genFor(ForStmt &s, FnEnv &env) {
     auto *incrBB   = llvm::BasicBlock::Create(ctx_, "for.incr", env.fn);
     auto *exitBB   = llvm::BasicBlock::Create(ctx_, "for.end",  env.fn);
 
-    env.pushLoop(exitBB, incrBB);
+    env.pushLoop(exitBB, incrBB, s.label);
     if (!isTerminated(builder_.GetInsertBlock())) builder_.CreateBr(headerBB);
 
     builder_.SetInsertPoint(headerBB);
@@ -665,20 +745,105 @@ void CodeGen::genReturn(ReturnStmt &s, FnEnv &env) {
         }
         builder_.CreateStore(val, env.returnSlot);
     }
+    // Emit deferred statements in LIFO order before branching to return block
+    emitDefers(env, /*errOnly=*/false);
     builder_.CreateBr(env.returnBB);
 }
 
+void CodeGen::emitDefers(FnEnv &env, bool errOnly) {
+    for (int i = (int)env.deferList.size() - 1; i >= 0; --i) {
+        auto *ds = static_cast<DeferStmt *>(env.deferList[i]);
+        if (!errOnly || ds->isErrDefer)
+            genStmt(*ds->body, env);
+    }
+}
+
+void CodeGen::genMatch(MatchStmt &s, FnEnv &env) {
+    auto *subjectVal = genExpr(*s.subject, env);
+    auto *exitBB = llvm::BasicBlock::Create(ctx_, "match.end", env.fn);
+
+    for (auto &arm : s.arms) {
+        auto *bodyBB = llvm::BasicBlock::Create(ctx_, "match.arm",  env.fn);
+        auto *nextBB = llvm::BasicBlock::Create(ctx_, "match.next", env.fn);
+
+        // Build OR-combined condition for this arm's patterns
+        llvm::Value *cond = nullptr;
+        for (auto &pat : arm.patterns) {
+            llvm::Value *thisCond = nullptr;
+            switch (pat.kind) {
+            case PatternKind::Wildcard:
+                thisCond = builder_.getTrue();
+                break;
+            case PatternKind::IntLit: {
+                auto *lit = llvm::ConstantInt::get(subjectVal->getType(), pat.intVal, true);
+                thisCond  = builder_.CreateICmpEQ(subjectVal, lit, "match.eq");
+                break;
+            }
+            case PatternKind::Range: {
+                auto *lo  = llvm::ConstantInt::get(subjectVal->getType(), pat.intVal,  true);
+                auto *hi  = llvm::ConstantInt::get(subjectVal->getType(), pat.intVal2, true);
+                auto *geq = builder_.CreateICmpSGE(subjectVal, lo, "match.ge");
+                auto *leq = builder_.CreateICmpSLE(subjectVal, hi, "match.le");
+                thisCond  = builder_.CreateAnd(geq, leq, "match.range");
+                break;
+            }
+            case PatternKind::EnumIdent:
+                // Enum ident — treat as integer constant (resolved by Sema)
+                // For now fall through to wildcard as conservative fallback
+                thisCond = builder_.getTrue();
+                break;
+            }
+            cond = cond ? builder_.CreateOr(cond, thisCond, "match.or") : thisCond;
+        }
+        if (!cond) cond = builder_.getTrue();
+
+        builder_.CreateCondBr(cond, bodyBB, nextBB);
+
+        builder_.SetInsertPoint(bodyBB);
+        genStmt(*arm.body, env);
+        if (!isTerminated(builder_.GetInsertBlock())) builder_.CreateBr(exitBB);
+
+        builder_.SetInsertPoint(nextBB);
+    }
+
+    // No arm matched → fall through to exit
+    if (!isTerminated(builder_.GetInsertBlock())) builder_.CreateBr(exitBB);
+    builder_.SetInsertPoint(exitBB);
+}
+
 void CodeGen::genVarDecl(VarDeclStmt &s, FnEnv &env) {
-    auto *ty     = lowerType(s.resolvedType ? s.resolvedType : s.declType);
-    auto *alloca = createEntryAlloca(env, ty, s.name);
+    auto typeToUse = s.resolvedType ? s.resolvedType : s.declType;
+    // Function pointer types (fn RetType(Params)) must be stored as opaque ptr,
+    // since llvm::FunctionType is not a valid alloca type in LLVM IR.
+    llvm::Type *allocaTy = (typeToUse && typeToUse->kind == TypeKind::Function)
+        ? llvm::PointerType::get(ctx_, 0)
+        : lowerType(typeToUse);
+    auto *alloca = createEntryAlloca(env, allocaTy, s.name);
     env.locals[s.name] = alloca;
+
+    // Full debug: emit DILocalVariable + dbg.declare
+    if (debugLevel_ == DebugLevel::Full && dib_ && env.fn->getSubprogram()) {
+        auto *diVar = dib_->createAutoVariable(
+            env.fn->getSubprogram(), s.name, diFile_,
+            s.loc.line ? s.loc.line : 1,
+            diTypeFor(typeToUse),
+            /*alwaysPreserve=*/false);
+        dib_->insertDeclare(
+            alloca, diVar,
+            dib_->createExpression(),
+            llvm::DILocation::get(ctx_,
+                s.loc.line ? s.loc.line : 1,
+                s.loc.col,
+                env.fn->getSubprogram()),
+            builder_.GetInsertBlock());
+    }
 
     if (s.init) {
         auto *val = genExpr(*s.init, env);
         builder_.CreateStore(val, alloca);
     } else {
-        // Zero-initialize (SafeC no-UB policy)
-        builder_.CreateStore(llvm::Constant::getNullValue(ty), alloca);
+        // Zero-initialize (null function pointer)
+        builder_.CreateStore(llvm::Constant::getNullValue(allocaTy), alloca);
     }
 }
 
@@ -743,10 +908,32 @@ llvm::Value *CodeGen::genExpr(Expr &e, FnEnv &env) {
         return genNew(static_cast<NewExpr &>(e), env);
     case ExprKind::TupleLit:
         return genTupleLit(static_cast<TupleLitExpr &>(e), env);
-    case ExprKind::Closure:
-        return genClosure(static_cast<ClosureExpr &>(e), env);
     case ExprKind::Spawn:
         return genSpawn(static_cast<SpawnExpr &>(e), env);
+    case ExprKind::Try: {
+        // try expr — unwrap ?T or early-return null optional
+        auto &te = static_cast<TryExpr &>(e);
+        auto *optVal = genExpr(*te.inner, env);
+        // Extract has_value bit (index 1 in the { T, i1 } struct)
+        auto *hasVal = builder_.CreateExtractValue(optVal, {1}, "try.has");
+        auto *okBB  = llvm::BasicBlock::Create(ctx_, "try.ok",  env.fn);
+        auto *errBB = llvm::BasicBlock::Create(ctx_, "try.err", env.fn);
+        builder_.CreateCondBr(hasVal, okBB, errBB);
+
+        // Error path: return a zero/null optional from this function
+        builder_.SetInsertPoint(errBB);
+        env.hasError = true;
+        emitDefers(env, /*errOnly=*/true);
+        if (env.returnSlot) {
+            auto *slotTy = static_cast<llvm::AllocaInst *>(env.returnSlot)->getAllocatedType();
+            builder_.CreateStore(llvm::Constant::getNullValue(slotTy), env.returnSlot);
+        }
+        builder_.CreateBr(env.returnBB);
+
+        // Success path: extract inner value (index 0)
+        builder_.SetInsertPoint(okBB);
+        return builder_.CreateExtractValue(optVal, {0}, "try.val");
+    }
     default:
         return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
     }
@@ -1187,9 +1374,10 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
         auto *call = builder_.CreateCall(ft, calleeVal, args);
         return call;
     }
-    // Indirect call via function pointer
+    // Indirect call via function pointer (fn type variable or closure)
     if (e.callee->type && e.callee->type->kind == TypeKind::Function) {
         auto *rawFT = static_cast<llvm::FunctionType *>(lowerType(e.callee->type));
+        coerceArgs(rawFT);
         auto *call  = builder_.CreateCall(rawFT, calleeVal, args);
         return call;
     }

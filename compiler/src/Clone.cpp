@@ -196,31 +196,11 @@ static ExprPtr cloneExprImpl(const Expr *ep, const TypeSubst &subs) {
         return fix(std::make_unique<NewExpr>(
             ne.regionName, substituteType(ne.allocType, subs), ne.loc));
     }
-    case ExprKind::Closure: {
-        auto &ce = static_cast<const ClosureExpr &>(e);
-        std::vector<ClosureParam> params;
-        for (auto &p : ce.params) {
-            ClosureParam cp;
-            cp.type = substituteType(p.type, subs);
-            cp.name = p.name;
-            cp.loc  = p.loc;
-            params.push_back(std::move(cp));
-        }
-        std::unique_ptr<CompoundStmt> body;
-        if (ce.body) {
-            auto bodyClone = cloneStmtImpl(ce.body.get(), subs);
-            body.reset(static_cast<CompoundStmt *>(bodyClone.release()));
-        }
-        auto res = std::make_unique<ClosureExpr>(std::move(params), std::move(body), ce.loc);
-        res->returnType  = substituteType(ce.returnType, subs);
-        res->captures    = ce.captures;
-        res->mangledName = ce.mangledName;
-        return fix(std::move(res));
-    }
     case ExprKind::Spawn: {
         auto &se = static_cast<const SpawnExpr &>(e);
         return fix(std::make_unique<SpawnExpr>(
-            se.allowedRegions, cloneExprImpl(se.closure.get(), subs), se.loc));
+            cloneExprImpl(se.fnExpr.get(), subs),
+            cloneExprImpl(se.argExpr.get(), subs), se.loc));
     }
     default:
         return fix(std::make_unique<NullLitExpr>(e.loc));

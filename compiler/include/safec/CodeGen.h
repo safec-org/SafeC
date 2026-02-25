@@ -14,12 +14,15 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/DIBuilder.h"
 
 #include <unordered_map>
 #include <string>
 #include <memory>
 
 namespace safec {
+
+enum class DebugLevel { None, Lines, Full };
 
 // ── Code generation environment ───────────────────────────────────────────────
 // Per-function codegen state
@@ -30,23 +33,46 @@ struct FnEnv {
     llvm::BasicBlock            *returnBB  = nullptr;
     llvm::AllocaInst            *returnSlot= nullptr; // for non-void returns
     std::unordered_map<std::string, llvm::AllocaInst *> locals;  // name → alloca
-    // Loop stack for break/continue
-    std::vector<std::pair<llvm::BasicBlock *, llvm::BasicBlock *>> loopStack;
-        // {breakBB, continueBB}
 
-    void pushLoop(llvm::BasicBlock *brk, llvm::BasicBlock *cont) {
-        loopStack.push_back({brk, cont});
+    // Labeled loop stack for break/continue
+    struct LoopEntry {
+        std::string       label;    // empty = unlabeled
+        llvm::BasicBlock *breakBB;
+        llvm::BasicBlock *continueBB;
+    };
+    std::vector<LoopEntry> loopStack;
+
+    void pushLoop(llvm::BasicBlock *brk, llvm::BasicBlock *cont,
+                  const std::string &lbl = "") {
+        loopStack.push_back({lbl, brk, cont});
     }
     void popLoop() { if (!loopStack.empty()) loopStack.pop_back(); }
-    llvm::BasicBlock *breakBB()    const { return loopStack.empty() ? nullptr : loopStack.back().first; }
-    llvm::BasicBlock *continueBB() const { return loopStack.empty() ? nullptr : loopStack.back().second; }
+
+    llvm::BasicBlock *breakBB(const std::string &lbl = "") const {
+        if (lbl.empty())
+            return loopStack.empty() ? nullptr : loopStack.back().breakBB;
+        for (auto it = loopStack.rbegin(); it != loopStack.rend(); ++it)
+            if (it->label == lbl) return it->breakBB;
+        return nullptr;
+    }
+    llvm::BasicBlock *continueBB(const std::string &lbl = "") const {
+        if (lbl.empty())
+            return loopStack.empty() ? nullptr : loopStack.back().continueBB;
+        for (auto it = loopStack.rbegin(); it != loopStack.rend(); ++it)
+            if (it->label == lbl) return it->continueBB;
+        return nullptr;
+    }
+
+    // Defer tracking — LIFO list of deferred stmts
+    std::vector<Stmt *> deferList;
+    bool                hasError = false; // set by TryExpr on null path
 };
 
 // ── LLVM Code Generator ───────────────────────────────────────────────────────
 class CodeGen {
 public:
     CodeGen(llvm::LLVMContext &ctx, const std::string &moduleName,
-            DiagEngine &diag);
+            DiagEngine &diag, DebugLevel dbgLevel = DebugLevel::None);
 
     // Generate all top-level declarations; returns the Module
     std::unique_ptr<llvm::Module> generate(TranslationUnit &tu);
@@ -81,6 +107,8 @@ private:
     void genVarDecl(VarDeclStmt &s, FnEnv &env);
     void genUnsafe(UnsafeStmt &s, FnEnv &env);
     void genExprStmt(ExprStmt &s, FnEnv &env);
+    void genMatch(MatchStmt &s, FnEnv &env);
+    void emitDefers(FnEnv &env, bool errOnly = false);
 
     // ── Expression codegen ────────────────────────────────────────────────────
     // Returns the LLVM value of the expression (always an rvalue / load result)
@@ -114,9 +142,6 @@ private:
     // ── Tuple ──────────────────────────────────────────────────────────────────
     llvm::Value *genTupleLit(TupleLitExpr &e, FnEnv &env);
 
-    // ── Closure ───────────────────────────────────────────────────────────────
-    llvm::Value *genClosure(ClosureExpr &e, FnEnv &env);
-
     // ── Spawn ─────────────────────────────────────────────────────────────────
     llvm::Value *genSpawn(SpawnExpr &e, FnEnv &env);
 
@@ -144,6 +169,15 @@ private:
     std::unordered_map<std::string, llvm::Value *>   globals_;
     // String literal cache
     std::unordered_map<std::string, llvm::GlobalVariable *> strLits_;
+
+    // ── Debug info ────────────────────────────────────────────────────────────
+    DebugLevel                           debugLevel_ = DebugLevel::None;
+    std::unique_ptr<llvm::DIBuilder>     dib_;
+    llvm::DICompileUnit                 *diCU_   = nullptr;
+    llvm::DIFile                        *diFile_ = nullptr;
+
+    llvm::DIType *diTypeFor(const TypePtr &ty);
+    llvm::DISubroutineType *diSubroutineType(FunctionDecl &fn);
 };
 
 } // namespace safec

@@ -67,7 +67,7 @@ if(LLVM_LINK_LLVM_DYLIB)
   target_link_libraries(safec PRIVATE LLVM)
 else()
   llvm_map_components_to_libnames(LLVM_COMPONENT_LIBS
-    core support irreader bitwriter passes
+    core support irreader bitwriter bitreader passes
     target nativecodegen nativedisassembler
     mc mcparser asmprinter
   )

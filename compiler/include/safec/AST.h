@@ -11,7 +11,7 @@ namespace safec {
 // ── Forward declarations ──────────────────────────────────────────────────────
 struct Stmt;  struct Expr;  struct Decl;
 struct FunctionDecl; struct StructDecl; struct VarDecl;
-struct CompoundStmt;  // forward-declared for ClosureExpr
+struct CompoundStmt;
 using StmtPtr = std::unique_ptr<Stmt>;
 using ExprPtr = std::unique_ptr<Expr>;
 using DeclPtr = std::unique_ptr<Decl>;
@@ -41,8 +41,8 @@ enum class ExprKind {
     Deref,          // dereference: *p
     New,            // new<R> T
     TupleLit,       // (a, b, c)
-    Closure,        // |params| { body }
-    Spawn,          // spawn<R> closure
+    Spawn,          // spawn(fn, arg)
+    Try,            // try expr  — unwrap optional or early-return
 };
 
 enum class UnaryOp {
@@ -226,28 +226,22 @@ struct TupleLitExpr : Expr {
         : Expr(ExprKind::TupleLit, l), elements(std::move(e)) {}
 };
 
-// ── Closure param ─────────────────────────────────────────────────────────────
-struct ClosureParam { TypePtr type; std::string name; SourceLocation loc; };
 
-// ── Closure expression ────────────────────────────────────────────────────────
-struct ClosureExpr : Expr {
-    std::vector<ClosureParam> params;
-    std::unique_ptr<CompoundStmt> body;
-    TypePtr returnType;           // inferred by Sema
-    // Filled by Sema:
-    std::vector<std::string> captures;
-    std::string mangledName;      // "__closure_N"
-    ClosureExpr(std::vector<ClosureParam> p, std::unique_ptr<CompoundStmt> b,
-                SourceLocation l)
-        : Expr(ExprKind::Closure, l), params(std::move(p)), body(std::move(b)) {}
-};
 
 // ── Spawn expression ──────────────────────────────────────────────────────────
 struct SpawnExpr : Expr {
-    std::vector<std::string> allowedRegions;
-    ExprPtr closure;
-    SpawnExpr(std::vector<std::string> r, ExprPtr c, SourceLocation l)
-        : Expr(ExprKind::Spawn, l), allowedRegions(std::move(r)), closure(std::move(c)) {}
+    ExprPtr fnExpr;   // function reference (&static fn)
+    ExprPtr argExpr;  // argument (pointer or integer 0)
+    SpawnExpr(ExprPtr fn, ExprPtr arg, SourceLocation l)
+        : Expr(ExprKind::Spawn, l), fnExpr(std::move(fn)), argExpr(std::move(arg)) {}
+};
+
+// ── Try expression ─────────────────────────────────────────────────────────
+// try expr — unwrap optional value; early-return null optional on empty
+struct TryExpr : Expr {
+    ExprPtr inner;
+    TryExpr(ExprPtr e, SourceLocation l)
+        : Expr(ExprKind::Try, l), inner(std::move(e)) {}
 };
 
 // =============================================================================
@@ -261,6 +255,8 @@ enum class StmtKind {
     Unsafe,        // unsafe { ... }
     StaticAssert,  // static_assert(cond[, "msg"])
     IfConst,       // if const (cond) { ... } — compile-time branch selection
+    Defer,         // defer stmt  / errdefer stmt
+    Match,         // match (expr) { arm, ... }
 };
 
 struct Stmt {
@@ -290,22 +286,25 @@ struct IfStmt : Stmt {
 };
 
 struct WhileStmt : Stmt {
-    ExprPtr cond;
-    StmtPtr body;
-    bool    isDoWhile;
-    WhileStmt(ExprPtr c, StmtPtr b, bool doWhile, SourceLocation l)
+    ExprPtr     cond;
+    StmtPtr     body;
+    bool        isDoWhile;
+    std::string label;  // optional loop label for labeled break/continue
+    WhileStmt(ExprPtr c, StmtPtr b, bool doWhile, SourceLocation l, std::string lbl = "")
         : Stmt(doWhile ? StmtKind::DoWhile : StmtKind::While, l),
-          cond(std::move(c)), body(std::move(b)), isDoWhile(doWhile) {}
+          cond(std::move(c)), body(std::move(b)), isDoWhile(doWhile),
+          label(std::move(lbl)) {}
 };
 
 struct ForStmt : Stmt {
-    StmtPtr init;   // can be VarDeclStmt or ExprStmt
-    ExprPtr cond;   // nullable
-    ExprPtr incr;   // nullable
-    StmtPtr body;
-    ForStmt(StmtPtr i, ExprPtr c, ExprPtr inc, StmtPtr b, SourceLocation l)
+    StmtPtr     init;   // can be VarDeclStmt or ExprStmt
+    ExprPtr     cond;   // nullable
+    ExprPtr     incr;   // nullable
+    StmtPtr     body;
+    std::string label;  // optional loop label for labeled break/continue
+    ForStmt(StmtPtr i, ExprPtr c, ExprPtr inc, StmtPtr b, SourceLocation l, std::string lbl = "")
         : Stmt(StmtKind::For, l), init(std::move(i)), cond(std::move(c)),
-          incr(std::move(inc)), body(std::move(b)) {}
+          incr(std::move(inc)), body(std::move(b)), label(std::move(lbl)) {}
 };
 
 struct ReturnStmt : Stmt {
@@ -314,8 +313,16 @@ struct ReturnStmt : Stmt {
         : Stmt(StmtKind::Return, l), value(std::move(v)) {}
 };
 
-struct BreakStmt    : Stmt { explicit BreakStmt(SourceLocation l)    : Stmt(StmtKind::Break, l) {} };
-struct ContinueStmt : Stmt { explicit ContinueStmt(SourceLocation l) : Stmt(StmtKind::Continue, l) {} };
+struct BreakStmt : Stmt {
+    std::string label;   // empty = unlabeled
+    explicit BreakStmt(SourceLocation l, std::string lbl = "")
+        : Stmt(StmtKind::Break, l), label(std::move(lbl)) {}
+};
+struct ContinueStmt : Stmt {
+    std::string label;
+    explicit ContinueStmt(SourceLocation l, std::string lbl = "")
+        : Stmt(StmtKind::Continue, l), label(std::move(lbl)) {}
+};
 
 struct GotoStmt : Stmt {
     std::string label;
@@ -376,6 +383,37 @@ struct IfConstStmt : Stmt {
           then(std::move(t)), else_(std::move(e)) {}
 };
 
+// ── defer / errdefer ──────────────────────────────────────────────────────────
+struct DeferStmt : Stmt {
+    StmtPtr body;
+    bool    isErrDefer = false;  // errdefer: only runs on error path
+    DeferStmt(StmtPtr b, SourceLocation l, bool errDefer = false)
+        : Stmt(StmtKind::Defer, l), body(std::move(b)), isErrDefer(errDefer) {}
+};
+
+// ── match statement ───────────────────────────────────────────────────────────
+enum class PatternKind { Wildcard, IntLit, EnumIdent, Range };
+
+struct MatchPattern {
+    PatternKind kind     = PatternKind::Wildcard;
+    int64_t     intVal   = 0;   // IntLit value / Range start
+    int64_t     intVal2  = 0;   // Range end (inclusive)
+    std::string ident;          // EnumIdent name
+    std::string bindName;       // optional variable binding
+};
+
+struct MatchArm {
+    std::vector<MatchPattern> patterns;
+    StmtPtr                   body;
+};
+
+struct MatchStmt : Stmt {
+    ExprPtr               subject;
+    std::vector<MatchArm> arms;
+    MatchStmt(ExprPtr s, std::vector<MatchArm> a, SourceLocation l)
+        : Stmt(StmtKind::Match, l), subject(std::move(s)), arms(std::move(a)) {}
+};
+
 // =============================================================================
 // TOP-LEVEL DECLARATIONS
 // =============================================================================
@@ -421,6 +459,7 @@ struct FunctionDecl : Decl {
     bool        isMethod      = false;   // true → T::m(...)
     std::string methodOwner;             // struct name (e.g. "Foo" for Foo::m)
     bool        isConstMethod = false;   // const qualifier after params
+    bool        isMustUse     = false;   // [[must_use]] — warn if return discarded
 
     FunctionDecl(std::string n, SourceLocation l)
         : Decl(DeclKind::Function, std::move(n), l) {}
@@ -441,8 +480,9 @@ struct MethodDecl {
 struct StructDecl : Decl {
     std::vector<FieldDecl>  fields;
     std::vector<MethodDecl> methodDecls;   // forward declarations inside struct body
-    bool isUnion   = false;
+    bool isUnion      = false;
     bool isTaggedUnion = false;
+    bool isPacked     = false;   // packed struct — no alignment padding
     std::vector<GenericParam> genericParams;
     std::shared_ptr<StructType> type;   // filled by sema
 

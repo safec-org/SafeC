@@ -202,6 +202,101 @@ No implicit destructor logic is injected.
 
 ---
 
+## 4.6 Slice Types `[]T`
+
+A slice is a fat pointer — a pair `{ T*, i64 }` — that carries a base address and element count.
+
+```c
+[]int buf;   // fat pointer: {int*, i64}  (parse-only; codegen to be added)
+```
+
+Slice types are parsed and type-checked. Codegen ABI is planned for a future milestone.
+
+---
+
+## 4.7 Optional Types `?T`
+
+An optional wraps a value together with a presence bit: `{ T, i1 }`.
+It is the zero-overhead equivalent of a nullable pointer — for non-pointer types.
+
+```c
+?int find_first(int *arr, int n, int target) {
+    for (int i = 0; i < n; i++) {
+        if (arr[i] == target) return arr[i];
+    }
+    return (int)0;  // empty optional
+}
+
+// Unwrap with 'try' — propagates None to caller if empty:
+int val = try find_first(arr, n, 42);
+```
+
+Representation: `llvm struct { T, i1 }` where `i1` is the has-value bit.
+
+---
+
+## 4.8 Result Types
+
+`Result<T, E>` is a stdlib convention using tagged unions.  The language has no special syntax for it yet; use:
+
+```c
+struct Result_int { bool ok; int value; int err; };
+```
+
+Full `?`-propagation sugar for `Result<T,E>` is planned after pattern matching matures.
+
+---
+
+## 4.9 Distinct Types
+
+Planned: `newtype` wraps an existing type with a fresh identity for stronger type safety.
+
+```c
+// Future syntax (not yet implemented):
+newtype FileDescriptor = int;
+```
+
+---
+
+## 4.10 Function Pointer Types `fn`
+
+The `fn` keyword declares a **type-safe function pointer** — no raw `*`, no hidden casting.
+Syntax: `fn ReturnType(ParamTypes...) name`
+
+```c
+// Declare a function pointer variable
+fn int(int, double) compute;
+
+// Assign any compatible function
+int add_one(int x) { return x + 1; }
+fn int(int) transform = add_one;
+int result = transform(5);   // indirect call → 6
+
+// As a function parameter
+void apply(fn int(int) op, int x) {
+    printf("result: %d\n", op(x));
+}
+
+// Reassignable — behaves like a C function pointer
+fn void(void) on_exit;
+on_exit = cleanup;
+on_exit();
+```
+
+The `fn` type lowers to an opaque `ptr` in LLVM IR — **zero runtime overhead** compared to a raw C function pointer.
+Unlike raw C `int (*fp)(int)`, the `fn` type is never implicitly cast to a different signature.
+
+**`&static` function references.** Every named function has type `&static fn_type` — a
+static-lifetime reference to its function type.  This means passing a function by name
+is always safe (no dangling pointer risk) and requires no `unsafe{}` block.
+
+```c
+// Range patterns with fn pointer in a dispatch table:
+fn void(int) handlers[3] = { do_quit, do_help, do_noop };
+```
+
+---
+
 # 5. Object Model
 
 SafeC objects provide deterministic layout, pure static dispatch, and zero hidden runtime cost. All object behavior is resolved entirely at compile time.
@@ -311,6 +406,54 @@ SafeC explicitly forbids:
 | Implicit heap allocation | Violates zero-hidden-cost guarantee |
 
 Composition and generics replace inheritance.
+
+---
+
+## 5.6 Packed Structs
+
+`packed struct` removes all alignment padding, guaranteeing byte-for-byte layout.
+Useful for protocol headers, serialization formats, and hardware register maps.
+
+```c
+packed struct EthernetHeader {
+    unsigned char dst[6];
+    unsigned char src[6];
+    unsigned short ethertype;
+};
+// sizeof(EthernetHeader) == 14  (no padding)
+```
+
+LLVM representation: `<{ ... }>` (angle brackets indicate packed layout).
+
+---
+
+## 5.7 Alignment Annotations
+
+Planned: `align(N)` annotation on struct fields and variables.
+
+```c
+// Future syntax (not yet implemented):
+struct AlignedBuffer {
+    align(64) char data[64];
+};
+```
+
+---
+
+## 5.8 `must_use` Keyword
+
+Prefix a function declaration with `must_use` to require callers to use its return value.
+Discarding the return emits a compile-time warning.
+The syntax is a keyword prefix — no bracket wrappers — consistent with C-style qualifiers.
+
+```c
+must_use int open_file(const char *path);
+
+open_file("foo.txt");           // warning: return value should not be ignored
+int fd = open_file("foo.txt");  // OK
+
+must_use int compute(int x) { return x * x + 1; }
+```
 
 ---
 
@@ -901,6 +1044,182 @@ No implicit exceptions. No stack unwinding. Error propagation is explicit.
 
 ---
 
+# 11.5 Advanced Control Flow
+
+SafeC extends C's control flow with several safety-oriented and ergonomic constructs.
+
+---
+
+## 11.5.1 `defer` / `errdefer`
+
+`defer` schedules a statement to run when the enclosing function exits, in **LIFO order**.
+`errdefer` runs only on the error path (when `try` propagated a null optional).
+
+```c
+void process_file(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    defer fclose(f);              // always runs on exit
+
+    char *buf = malloc(4096);
+    defer free(buf);              // runs second (LIFO)
+
+    // ... use f and buf ...
+}   // fclose then free run here in LIFO order
+```
+
+- Multiple defers fire in LIFO order at any return point.
+- `errdefer` fires only when `try` causes an early return.
+- Defer bodies are ordinary statements; they execute in the same scope.
+
+---
+
+## 11.5.2 `match` Statement vs `switch`
+
+SafeC has **both** `switch` and `match`. They serve different purposes:
+
+| Feature             | `switch` (C-compatible)              | `match` (SafeC)                        |
+|---------------------|--------------------------------------|----------------------------------------|
+| Fall-through        | Yes (requires `break`)               | No — each arm is independent           |
+| Exhaustiveness      | No warning                           | Warning if no `default` arm            |
+| Pattern types       | Constant integer `case x:`           | Integer, char, range (`N..M`), OR (`,`)|
+| Wildcard            | `default:`                           | `default:`                             |
+| Syntax              | `case x: ... break;`                 | `case x, y:` or `case N..M:`          |
+
+Use `switch` for C-compatible code with fall-through behavior.
+Use `match` for exhaustive, structured pattern matching without fall-through.
+
+`match` uses the same `case` / `default` / `:` keywords as `switch`, but with no fall-through
+and with range + comma-OR patterns:
+
+```c
+// switch — C-compatible, explicit break, no exhaustiveness warning
+switch (cmd) {
+    case 'q': running = 0; break;
+    case 'h': show_help(); break;
+    default:  printf("unknown command\n");
+}
+
+// match — no fall-through, exhaustiveness-warned, range + OR patterns
+match (status_code) {
+    case 200:          printf("OK\n");
+    case 404:          printf("Not Found\n");
+    case 400..499:     printf("Client Error\n");
+    case 500..599:     printf("Server Error\n");
+    default:           printf("Unknown\n");
+}
+```
+
+Multiple patterns per arm with `,` (logical OR):
+
+```c
+match (ch) {
+    case 'a', 'e', 'i', 'o', 'u':  vowels++;
+    default:                         consonants++;
+}
+```
+
+The compiler warns if no `default` arm is present (possible non-exhaustive match).
+
+---
+
+## 11.5.3 Labeled `break` / `continue`
+
+Labels allow breaking or continuing an outer loop from inside a nested loop.
+
+```c
+outer: for (int i = 0; i < N; i++) {
+    for (int j = 0; j < M; j++) {
+        if (arr[i][j] == target) {
+            found = i * M + j;
+            break outer;     // exits both loops
+        }
+    }
+}
+```
+
+```c
+outer: for (int i = 0; i < N; i++) {
+    for (int j = 0; j < M; j++) {
+        if (i == j) continue outer;  // skip to next i
+        process(i, j);
+    }
+}
+```
+
+---
+
+## 11.5.4 `try` Operator
+
+`try` unwraps an `?T` optional.  If the value is empty, it immediately returns a zero-initialized optional from the enclosing function.
+
+```c
+?int safe_index(int *arr, int len, int i) {
+    if (i < 0 || i >= len) return (int)0;  // None
+    return arr[i];
+}
+
+int double_at(int *arr, int len, int i) {
+    int v = try safe_index(arr, len, i);  // propagates None if out of range
+    return v * 2;
+}
+```
+
+`try` is a **zero-cost abstraction**: the compiler lowers it to a single flag check and conditional branch — identical to what you would write by hand.
+No runtime exception machinery, no heap allocation, no RTTI.
+
+---
+
+## 11.5.5 Overflow Modes (Documented)
+
+Integer overflow behavior is configurable per expression (planned):
+
+```c
+// Future syntax:
+x +| y    // wrapping add
+x +% y    // saturating add
+x +^ y    // panic on overflow (debug builds only)
+```
+
+Default (`x + y`) is undefined on overflow for signed, wrapping for unsigned (matches C ABI).
+
+---
+
+## 11.6 Concurrency: `spawn` / `join`
+
+SafeC provides lightweight thread spawning via `spawn` and `join`, backed by pthreads.
+
+```c
+// Thread function: must have signature void*(void*)
+void* worker(void* arg) {
+    printf("hello from thread\n");
+    return (void*)0;
+}
+
+int main() {
+    long long h = spawn(worker, 0);   // start thread
+    join(h);                           // wait for completion
+    return 0;
+}
+```
+
+**Rules:**
+
+* `spawn(fn, arg)` requires `fn` to be a **`&static` function reference** — only named functions
+  with static lifetime may be used as thread entry points.  This is enforced by Sema at
+  compile time.
+* The thread function must have signature `void*(void*)` (pthreads convention).
+* `arg` is the `void*` argument passed to the function; an integer `0` is implicitly
+  converted to a null pointer.
+* `spawn` returns a `long long` handle (the underlying `pthread_t`).
+* `join(handle)` blocks until the thread completes (wraps `pthread_join`).
+* Link with `-lpthread` when producing a native binary.
+
+At the IR level, `spawn` lowers directly to a `pthread_create` call — no wrapper functions,
+no hidden allocations.
+
+---
+
 # 12. Comparison with Other Languages
 
 | Feature                | C      | C++         | Rust          | Zig        | SafeC                 |
@@ -996,6 +1315,15 @@ safec <input.sc> [options]
   -I <dir>                 Add directory to include search path
   -D NAME[=VALUE]          Define preprocessor macro
   -v                       Verbose output
+
+Incremental compilation (on by default):
+  --no-incremental         Disable file-level bitcode cache
+  --cache-dir <dir>        Cache directory (default: .safec_cache)
+  --clear-cache            Delete all cached .bc files from the cache directory and exit
+
+Debug info:
+  --g lines                Emit line-table debug info (DISubprogram + DILocation per statement)
+  --g full                 Emit full debug info (lines + DILocalVariable + dbg.declare per local)
 ```
 
 ## 14.4 Example Workflow
@@ -1009,6 +1337,42 @@ clang hello.ll -o hello
 
 # Run
 ./hello
+```
+
+### Incremental compilation
+
+Incremental compilation is **on by default**. The compiler hashes the preprocessed
+source with FNV-1a and caches the compiled bitcode in `.safec_cache/`. On unchanged
+input the full pipeline is skipped.
+
+```bash
+# First build — compiles and writes bitcode to .safec_cache/
+./build/safec src/main.sc --emit-llvm -o main.ll -v
+# [safec] Cache written: .safec_cache/4750194f67521a03_main.sc.bc
+
+# Second build on unchanged source — cache hit, skips full pipeline
+./build/safec src/main.sc --emit-llvm -o main.ll -v
+# [safec] Cache hit: .safec_cache/4750194f67521a03_main.sc.bc
+
+# Disable the cache for a one-off forced recompile
+./build/safec src/main.sc --emit-llvm -o main.ll --no-incremental
+
+# Clear the cache
+./build/safec src/main.sc --clear-cache
+```
+
+### Debug info
+
+```bash
+# Emit line tables (function locations + per-statement source map)
+./build/safec examples/methods.sc --emit-llvm --g lines -o methods.ll
+
+# Emit full debug info (lines + local variable declarations)
+./build/safec examples/methods.sc --emit-llvm --g full -o methods_dbg.ll
+
+# Link with native debugger support and inspect with lldb
+clang methods_dbg.ll -g -o methods_dbg
+lldb ./methods_dbg
 ```
 
 ---
@@ -1036,11 +1400,19 @@ The SafeC compiler is a working prototype implementing:
 | `safeguard` package manager      | ✅ Complete |
 | Arena region runtime allocator   | ✅ Complete |
 | Operator overloading             | ✅ Complete |
-| Tuple / closure lowering         | ✅ Complete |
+| Tuple lowering                   | ✅ Complete |
 | Concurrency model (spawn/join)   | ✅ Complete |
-| Language server (LSP)            | 🔲 Planned  |
-| Debug info (DWARF)               | 🔲 Planned  |
-| Incremental compilation          | 🔲 Planned  |
+| Debug info (DWARF)               | ✅ Complete |
+| Incremental compilation          | ✅ Complete |
+| `defer` / `errdefer`             | ✅ Complete |
+| `match` statement (C-style)      | ✅ Complete |
+| Labeled `break` / `continue`     | ✅ Complete |
+| `must_use` keyword               | ✅ Complete |
+| `packed struct`                  | ✅ Complete |
+| `?T` optional type               | ✅ Complete |
+| `try` operator (optional unwrap) | ✅ Complete |
+| `fn` function pointer type       | ✅ Complete |
+| Language server (LSP)            | ✅ Complete |
 | Self-hosting                     | 🔲 Planned  |
 
 ---
@@ -1072,10 +1444,10 @@ These build directly on the current implementation:
 | ------- | ----------- |
 | ~~**Arena runtime allocator**~~ | ✅ Done — `new<R> T` bump-pointer allocator with `arena_reset<R>()`. |
 | ~~**Operator overloading**~~ | ✅ Done — `operator +`, `operator ==`, etc. as method calls via `T::operator op`; trait enforcement on generics. |
-| ~~**Tuple / closure lowering**~~ | ✅ Done — `tuple(T, U)` lowers to anonymous structs; closures `\|params\| { body }` lower to internal LLVM functions; `spawn`/`join` via pthreads. |
-| **Debug info (DWARF)** | Source-level debugging via `llvm::DIBuilder`; line tables, variable locations, struct layouts. |
-| **Incremental compilation** | Per-function IR cache keyed on AST hash to avoid recompiling unchanged functions in large TUs. |
-| **Function pointer types** | First-class `fn(T, U) -> V` type syntax, enabling safe callbacks without `unsafe{}` wrappers. |
+| ~~**Tuple lowering**~~ | ✅ Done — `tuple(T, U)` lowers to anonymous structs; `spawn(fn, arg)` / `join(h)` via pthreads with C-style function pointers. |
+| ~~**Debug info (DWARF)**~~ | ✅ Done — `--g lines` emits DISubprogram + per-statement DILocation; `--g full` adds DILocalVariable + `dbg.declare` per local. |
+| ~~**Incremental compilation**~~ | ✅ Done — on by default; caches per-file bitcode keyed by FNV-1a hash of preprocessed source; `--no-incremental`, `--cache-dir`, and `--clear-cache` flags. |
+| ~~**Function pointer types**~~ | ✅ Done — `fn` type syntax + `&static` function references; `spawn(fn, arg)` validates `&static` at compile time. |
 
 ## 17.2 Mid-Term (Language Expressiveness)
 
@@ -1083,9 +1455,10 @@ SafeC needs to be pleasant to write, not just theoretically safe:
 
 | Feature | Description |
 | ------- | ----------- |
-| **Trait / interface system** | Structural `interface I { fn method(self) -> T; }` — zero-vtable dispatch at the call site, monomorphized like generics. |
-| **Pattern matching** | `match` expressions over enums, integers, and struct fields; exhaustiveness checked at compile time. |
-| **Error propagation** | `Result<T, E>` built into the language with `?` propagation, without exceptions or longjmp. |
+| ~~**Pattern matching**~~ | ✅ Done — `match (expr) { pattern => stmt, ... }` with integer literals, ranges (`N..M`), wildcards (`_`), alternations (`\|`). Enum-value patterns planned. |
+| ~~**`defer` / `errdefer`**~~ | ✅ Done — LIFO deferred cleanup; `errdefer` runs only on error path. |
+| ~~**`try` / optional types**~~ | ✅ Done — `?T` optional as `{T, i1}`; `try` unwraps or early-returns. |
+| **Error propagation (`Result<T,E>`)** | Full `Result<T, E>` stdlib type with `?`-propagation sugar requires slice + richer match; planned. |
 | **Compile-time reflection** | `typeof(expr)`, `sizeof(T)`, `alignof(T)`, and limited struct field enumeration for generic algorithms. |
 | **Variadic generics** | `generic<T...>` for type-safe heterogeneous argument lists. |
 

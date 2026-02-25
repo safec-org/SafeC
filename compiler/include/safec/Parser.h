@@ -66,6 +66,9 @@ private:
     StmtPtr parseStaticAssertStmt();
     StmtPtr parseVarDeclStmt(bool isConst, bool isStatic);
     StmtPtr parseExprStmt();
+    StmtPtr parseDeferStmt(bool isErrDefer = false);
+    StmtPtr parseMatchStmt();
+    MatchPattern parseMatchPattern();
 
     // ── Expressions ───────────────────────────────────────────────────────────
     ExprPtr parseExpr();

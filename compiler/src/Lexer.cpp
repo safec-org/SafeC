@@ -67,6 +67,14 @@ TK Lexer::keywordKind(const std::string &w) {
         {"tuple",         TK::KW_tuple},
         {"spawn",         TK::KW_spawn},
         {"join",          TK::KW_join},
+        // New SafeC features
+        {"defer",         TK::KW_defer},
+        {"errdefer",      TK::KW_errdefer},
+        {"match",         TK::KW_match},
+        {"packed",        TK::KW_packed},
+        {"try",           TK::KW_try},
+        {"must_use",      TK::KW_must_use},
+        {"fn",            TK::KW_fn},
     };
     auto it = kw.find(w);
     return (it != kw.end()) ? it->second : TK::Ident;
@@ -315,6 +323,7 @@ Token Lexer::lexPunct() {
         return mk(TK::Bang, "!");
     case '=':
         if (eat('=')) return mk(TK::EqEq, "==");
+        if (eat('>')) return mk(TK::FatArrow, "=>");
         return mk(TK::Eq, "=");
     case '<':
         if (eat('<')) {
@@ -406,6 +415,9 @@ const char *Token::kindName() const {
     case TK::Semicolon:    return "';'";
     case TK::Comma:        return "','";
     case TK::Eq:           return "'='";
+    case TK::FatArrow:     return "'=>'";
+    case TK::KW_must_use:  return "'must_use'";
+    case TK::KW_fn:        return "'fn'";
     case TK::Eof:          return "end of file";
     default:               return "<token>";
     }

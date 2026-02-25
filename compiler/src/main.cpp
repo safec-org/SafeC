@@ -14,6 +14,9 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/Bitcode/BitcodeReader.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Path.h"
 #include "llvm/MC/TargetRegistry.h"
 
 #include <fstream>
@@ -57,6 +60,21 @@ static llvm::cl::opt<bool>
 static llvm::cl::opt<bool>
     Verbose("v", llvm::cl::desc("Verbose output"));
 
+static llvm::cl::opt<bool>
+    NoIncremental("no-incremental", llvm::cl::desc("Disable file-level bitcode cache"));
+
+static llvm::cl::opt<std::string>
+    CacheDir("cache-dir", llvm::cl::desc("Bitcode cache directory"),
+             llvm::cl::init(".safec_cache"));
+
+static llvm::cl::opt<bool>
+    ClearCache("clear-cache", llvm::cl::desc("Delete all cached .bc files and exit"));
+
+static llvm::cl::opt<std::string>
+    DebugInfoLevel("g",
+        llvm::cl::desc("Debug info level: none (default), lines, full"),
+        llvm::cl::init("none"));
+
 // -I <dir> include paths
 static llvm::cl::list<std::string>
     IncludePaths("I", llvm::cl::desc("Add include search directory"),
@@ -66,6 +84,13 @@ static llvm::cl::list<std::string>
 static llvm::cl::list<std::string>
     CmdlineDefs("D", llvm::cl::desc("Define preprocessor macro"),
                 llvm::cl::value_desc("NAME[=VALUE]"), llvm::cl::Prefix);
+
+// ── FNV-1a 64-bit hash ────────────────────────────────────────────────────────
+static uint64_t fnv1a64(const std::string &s) {
+    uint64_t h = 14695981039346656037ULL;
+    for (unsigned char c : s) { h ^= c; h *= 1099511628211ULL; }
+    return h;
+}
 
 // ── Read file ─────────────────────────────────────────────────────────────────
 static std::string readFile(const std::string &path) {
@@ -142,6 +167,19 @@ int main(int argc, char **argv) {
 
     llvm::cl::ParseCommandLineOptions(argc, argv, "SafeC compiler\n");
 
+    // ── --clear-cache early exit ───────────────────────────────────────────────
+    if (ClearCache) {
+        std::error_code EC;
+        llvm::sys::fs::directory_iterator it(CacheDir, EC), end;
+        for (; !EC && it != end; it.increment(EC)) {
+            llvm::StringRef p = it->path();
+            if (p.ends_with(".bc"))
+                llvm::sys::fs::remove(p);
+        }
+        if (Verbose) fprintf(stderr, "[safec] Cache cleared: %s\n", CacheDir.c_str());
+        return 0;
+    }
+
     // ── 1. Read source ─────────────────────────────────────────────────────────
     std::string src   = readFile(InputFile);
     const char *fname = InputFile.c_str();
@@ -177,6 +215,47 @@ int main(int argc, char **argv) {
     if (DumpPP) {
         fprintf(stdout, "%s", ppSrc.c_str());
         return 0;
+    }
+
+    // ── 2b. Incremental cache check ───────────────────────────────────────────
+    if (!NoIncremental) {
+        uint64_t hash = fnv1a64(ppSrc);
+        char hexBuf[17];
+        snprintf(hexBuf, sizeof(hexBuf), "%016llx", (unsigned long long)hash);
+        llvm::SmallString<256> cachePath(CacheDir.getValue());
+        llvm::sys::path::append(cachePath,
+            std::string(hexBuf) + "_" +
+            llvm::sys::path::filename(InputFile.getValue()).str() + ".bc");
+
+        auto mbOrErr = llvm::MemoryBuffer::getFile(cachePath);
+        if (mbOrErr) {
+            if (Verbose)
+                fprintf(stderr, "[safec] Cache hit: %s\n", cachePath.c_str());
+            llvm::LLVMContext ctx2;
+            auto modOrErr = llvm::parseBitcodeFile(**mbOrErr, ctx2);
+            if (modOrErr) {
+                auto &cachedMod = *modOrErr;
+                if (OutputFile == "-") {
+                    cachedMod->print(llvm::outs(), nullptr);
+                } else if (EmitLLVM) {
+                    std::error_code EC2;
+                    llvm::raw_fd_ostream out(OutputFile.getValue(), EC2,
+                                            llvm::sys::fs::OF_Text);
+                    cachedMod->print(out, nullptr);
+                } else {
+                    std::error_code EC2;
+                    std::string outPath = (OutputFile == "-")
+                        ? "out.bc" : OutputFile.getValue();
+                    llvm::raw_fd_ostream out(outPath, EC2,
+                                            llvm::sys::fs::OF_None);
+                    llvm::WriteBitcodeToFile(*cachedMod, out);
+                }
+                return 0;
+            } else {
+                llvm::consumeError(modOrErr.takeError());
+                // Fall through to full compile
+            }
+        }
     }
 
     // ── 3. Lex ────────────────────────────────────────────────────────────────
@@ -239,13 +318,33 @@ int main(int argc, char **argv) {
 
     // ── 8. Code generation ────────────────────────────────────────────────────
     llvm::LLVMContext ctx;
-    safec::CodeGen cg(ctx, InputFile, diag);
+    safec::DebugLevel dbgLevel = safec::DebugLevel::None;
+    if (DebugInfoLevel == "lines") dbgLevel = safec::DebugLevel::Lines;
+    else if (DebugInfoLevel == "full") dbgLevel = safec::DebugLevel::Full;
+
+    safec::CodeGen cg(ctx, InputFile, diag, dbgLevel);
     auto mod = cg.generate(*tu);
 
     if (diag.hasErrors()) {
         fprintf(stderr, "Code generation failed with %d error(s)\n",
                 diag.errorCount());
         return 1;
+    }
+
+    // ── 8b. Write to incremental cache ───────────────────────────────────────
+    if (!NoIncremental) {
+        llvm::sys::fs::create_directories(CacheDir.getValue());
+        uint64_t hash = fnv1a64(ppSrc);
+        char hexBuf[17];
+        snprintf(hexBuf, sizeof(hexBuf), "%016llx", (unsigned long long)hash);
+        llvm::SmallString<256> cachePath(CacheDir.getValue());
+        llvm::sys::path::append(cachePath,
+            std::string(hexBuf) + "_" +
+            llvm::sys::path::filename(InputFile.getValue()).str() + ".bc");
+        std::error_code EC;
+        llvm::raw_fd_ostream cacheOut(cachePath, EC, llvm::sys::fs::OF_None);
+        if (!EC) llvm::WriteBitcodeToFile(*mod, cacheOut);
+        if (Verbose) fprintf(stderr, "[safec] Cache written: %s\n", cachePath.c_str());
     }
 
     // ── 9. Output ─────────────────────────────────────────────────────────────

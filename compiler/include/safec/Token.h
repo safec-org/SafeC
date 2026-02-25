@@ -41,6 +41,13 @@ enum class TK {
     KW_tuple,         // tuple(T1, T2, ...)
     KW_spawn,         // spawn<R> closure
     KW_join,          // join(handle)
+    KW_defer,         // defer stmt
+    KW_errdefer,      // errdefer stmt (deferred only on error path)
+    KW_match,         // match (expr) { pattern => stmt, ... }
+    KW_packed,        // packed struct { ... }
+    KW_try,           // try expr  (propagate null optional)
+    KW_must_use,      // must_use fn — warn on discarded return value
+    KW_fn,            // fn ReturnType(Params) name — function pointer type
 
     // ── Operators ─────────────────────────────────────────────────────────────
     Plus, Minus, Star, Slash, Percent,
@@ -58,6 +65,7 @@ enum class TK {
     QuestionAmp, // ?&  (nullable reference)
     Colon,
     ColonColon,  // ::  (method scope resolution)
+    FatArrow,    // =>  (match arm separator)
 
     // ── Punctuation ───────────────────────────────────────────────────────────
     LParen, RParen,

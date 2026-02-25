@@ -281,10 +281,12 @@ void Sema::collectFunction(FunctionDecl &fn) {
     }
     fn.returnType = resolveGenericNames(resolveType(fn.returnType), fn.genericParams);
     auto ft = makeFunction(fn.returnType, std::move(paramTys), fn.isVariadic);
+    // Function names are &static references to their function type
+    auto refTy = makeReference(ft, Region::Static);
     Symbol sym;
     sym.kind   = SymKind::Function;
     sym.name   = fn.name;
-    sym.type   = ft;
+    sym.type   = refTy;
     sym.fnDecl = &fn;
     sym.initialized = true;
     define(std::move(sym));
@@ -293,6 +295,7 @@ void Sema::collectFunction(FunctionDecl &fn) {
 void Sema::collectStruct(StructDecl &sd) {
     auto st = std::make_shared<StructType>(sd.name, sd.isUnion);
     st->isDefined = true;
+    st->isPacked  = sd.isPacked;
     int idx = 0;
     for (auto &f : sd.fields) {
         FieldDecl fd;
@@ -350,7 +353,7 @@ void Sema::collectRegion(RegionDecl &rd) {
         Symbol sym;
         sym.kind = SymKind::Function;
         sym.name = fn->name;
-        sym.type = fn->funcType();
+        sym.type = makeReference(fn->funcType(), Region::Static);
         sym.fnDecl = fn.get();
         // Store in a stable location (leak intentionally — lives as long as compiler)
         static std::vector<std::unique_ptr<FunctionDecl>> arenaResetFns;
@@ -444,10 +447,42 @@ void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
     case StmtKind::For:          checkFor(static_cast<ForStmt &>(s), fn);              break;
     case StmtKind::Return:       checkReturn(static_cast<ReturnStmt &>(s), fn);        break;
     case StmtKind::VarDecl:      checkVarDecl(static_cast<VarDeclStmt &>(s), fn);     break;
-    case StmtKind::Expr:
-        if (static_cast<ExprStmt &>(s).expr)
-            checkExpr(*static_cast<ExprStmt &>(s).expr);
+    case StmtKind::Defer: {
+        auto &ds = static_cast<DeferStmt &>(s);
+        if (ds.body) checkStmt(*ds.body, fn);
         break;
+    }
+    case StmtKind::Match: {
+        auto &ms = static_cast<MatchStmt &>(s);
+        checkExpr(*ms.subject);
+        bool hasWildcard = false;
+        for (auto &arm : ms.arms) {
+            for (auto &pat : arm.patterns)
+                if (pat.kind == PatternKind::Wildcard) hasWildcard = true;
+            if (arm.body) checkStmt(*arm.body, fn);
+        }
+        if (!hasWildcard)
+            diag_.warn(ms.loc, "match statement may not be exhaustive (no wildcard arm)");
+        break;
+    }
+    case StmtKind::Expr: {
+        auto &es = static_cast<ExprStmt &>(s);
+        if (es.expr) {
+            checkExpr(*es.expr);
+            // must_use warning: discarding return value of a must_use function
+            if (es.expr->kind == ExprKind::Call) {
+                auto &call = static_cast<CallExpr &>(*es.expr);
+                if (call.callee && call.callee->kind == ExprKind::Ident) {
+                    auto &id = static_cast<IdentExpr &>(*call.callee);
+                    if (id.resolvedFn && id.resolvedFn->isMustUse)
+                        diag_.warn(es.expr->loc,
+                            "return value of '" + id.resolvedFn->name +
+                            "' should not be ignored (marked must_use)");
+                }
+            }
+        }
+        break;
+    }
     case StmtKind::Unsafe:       checkUnsafe(static_cast<UnsafeStmt &>(s), fn);       break;
     case StmtKind::StaticAssert: checkStaticAssertStmt(static_cast<StaticAssertStmt &>(s)); break;
     case StmtKind::IfConst: {
@@ -648,12 +683,23 @@ TypePtr Sema::checkExpr(Expr &e) {
     case ExprKind::TupleLit:
         ty = checkTupleLit(static_cast<TupleLitExpr &>(e));
         break;
-    case ExprKind::Closure:
-        ty = checkClosure(static_cast<ClosureExpr &>(e));
-        break;
     case ExprKind::Spawn:
         ty = checkSpawn(static_cast<SpawnExpr &>(e));
         break;
+    case ExprKind::Try: {
+        auto &te = static_cast<TryExpr &>(e);
+        TypePtr innerTy = checkExpr(*te.inner);
+        if (!innerTy || innerTy->kind != TypeKind::Optional) {
+            if (innerTy && !innerTy->isError())
+                diag_.error(e.loc, "try: operand must be an optional type '?T', got '"
+                            + innerTy->str() + "'");
+            ty = makeError();
+        } else {
+            // try ?T → T (unwrapped inner type)
+            ty = static_cast<OptionalType &>(*innerTy).inner;
+        }
+        break;
+    }
     default:
         ty = makeError();
     }
@@ -875,44 +921,25 @@ TypePtr Sema::checkTupleLit(TupleLitExpr &e) {
     return makeTuple(std::move(elemTypes));
 }
 
-TypePtr Sema::checkClosure(ClosureExpr &e) {
-    // Assign mangled name
-    e.mangledName = "__closure_" + std::to_string(closureCounter_++);
-    // Resolve parameter types
-    for (auto &p : e.params) {
-        if (p.type) p.type = resolveType(p.type);
-        else p.type = makeInt(32); // default untyped param to int
-    }
-    // Type-check the body in a new scope
-    pushScope();
-    for (auto &p : e.params) {
-        Symbol sym;
-        sym.kind = SymKind::Variable;
-        sym.name = p.name;
-        sym.type = p.type;
-        sym.initialized = true;
-        VarDecl *vd = new VarDecl{p.name, p.type, true, false, false, false, true};
-        sym.varDecl = vd;
-        define(sym);
-    }
-    if (e.body) {
-        // Create a dummy function for context
-        FunctionDecl dummy("__closure_dummy", e.loc);
-        dummy.returnType = makeVoid();
-        checkCompound(*e.body, dummy);
-        e.returnType = dummy.returnType;
-    }
-    popScope();
-    // Return a function pointer type representing the closure
-    std::vector<TypePtr> paramTypes;
-    for (auto &p : e.params) paramTypes.push_back(p.type);
-    TypePtr retTy = e.returnType ? e.returnType : makeVoid();
-    return makePointer(makeFunction(retTy, std::move(paramTypes)));
-}
-
 TypePtr Sema::checkSpawn(SpawnExpr &e) {
-    // Check the closure
-    TypePtr closureTy = checkExpr(*e.closure);
+    // Check the function expression — must be &static reference to a function
+    TypePtr fnTy = checkExpr(*e.fnExpr);
+    if (fnTy && !fnTy->isError()) {
+        bool valid = false;
+        if (fnTy->kind == TypeKind::Reference) {
+            auto &ref = static_cast<ReferenceType &>(*fnTy);
+            if (ref.region == Region::Static && ref.base &&
+                ref.base->kind == TypeKind::Function)
+                valid = true;
+        }
+        if (!valid) {
+            diag_.error(e.fnExpr->loc,
+                "spawn requires &static function reference, got '" +
+                fnTy->str() + "'");
+        }
+    }
+    // Check the argument expression
+    checkExpr(*e.argExpr);
     // spawn returns a pthread_t (represented as signed i64)
     return makeInt(64, true);  // pthread_t handle (long long)
 }
@@ -1012,7 +1039,7 @@ TypePtr Sema::checkCall(CallExpr &e) {
             Symbol sym;
             sym.kind        = SymKind::Function;
             sym.name        = clone->name;
-            sym.type        = monoFT;
+            sym.type        = makeReference(monoFT, Region::Static);
             sym.fnDecl      = clone.get();
             sym.initialized = true;
             if (!scopes_.empty()) scopes_[0].define(std::move(sym));
@@ -1035,9 +1062,15 @@ TypePtr Sema::checkCall(CallExpr &e) {
     }
 
     // ── Regular (non-generic) call ─────────────────────────────────────────────
+    // Unwrap &static reference to get function type (function names are &static fn refs)
+    TypePtr unwrappedTy = calleeTy;
+    if (unwrappedTy->kind == TypeKind::Reference)
+        unwrappedTy = static_cast<ReferenceType &>(*unwrappedTy).base;
+    if (unwrappedTy->kind == TypeKind::Pointer)
+        unwrappedTy = static_cast<PointerType &>(*unwrappedTy).base;
     FunctionType *ft = nullptr;
-    if (calleeTy->kind == TypeKind::Function)
-        ft = static_cast<FunctionType *>(calleeTy.get());
+    if (unwrappedTy->kind == TypeKind::Function)
+        ft = static_cast<FunctionType *>(unwrappedTy.get());
 
     if (!ft) {
         if (!calleeTy->isError())
@@ -1193,6 +1226,16 @@ TypePtr Sema::checkCast(CastExpr &e) {
 }
 
 TypePtr Sema::checkAssign(AssignExpr &e) {
+    // For simple assignment (=), writing to a previously-uninitialized variable
+    // is valid and should initialize it. Pre-mark the symbol as initialized so
+    // checkIdent doesn't fire a false "uninitialized" error on the LHS.
+    // Compound assignments (+=, etc.) read before writing — no pre-marking.
+    if (e.op == AssignOp::Assign && e.lhs->kind == ExprKind::Ident) {
+        auto &ident = static_cast<IdentExpr &>(*e.lhs);
+        if (auto *sym = lookup(ident.name))
+            if (sym->kind == SymKind::Variable)
+                sym->initialized = true;
+    }
     TypePtr lhsTy = checkExpr(*e.lhs);
     TypePtr rhsTy = checkExpr(*e.rhs);
 

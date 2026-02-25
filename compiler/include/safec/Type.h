@@ -34,6 +34,8 @@ enum class TypeKind {
     Generic,    // instantiated generic parameter
     Error,      // sentinel for error recovery
     Tuple,      // (T1, T2, ...) product type
+    Optional,   // ?T — {T, i1} nullable wrapper
+    Slice,      // []T — fat pointer {T*, i64}  (parsed; codegen future)
 };
 
 // Forward declarations
@@ -138,6 +140,7 @@ struct StructType : Type {
     std::vector<FieldDecl> fields;
     bool                   isUnion   = false;   // tagged union
     bool                   isDefined = false;   // forward-declared?
+    bool                   isPacked  = false;   // packed: no alignment padding
 
     explicit StructType(std::string n, bool isUnion = false)
         : Type(TypeKind::Struct), name(std::move(n)), isUnion(isUnion) {}
@@ -196,6 +199,26 @@ struct TupleType : Type {
 };
 TypePtr makeTuple(std::vector<TypePtr> elems);
 
+// ── Optional type ?T ──────────────────────────────────────────────────────────
+// Lowers to LLVM struct { T, i1 }  (value, has_value)
+struct OptionalType : Type {
+    TypePtr inner;
+    explicit OptionalType(TypePtr t)
+        : Type(TypeKind::Optional), inner(std::move(t)) {}
+    std::string str() const override { return "?" + inner->str(); }
+    bool equals(const Type &o) const override;
+};
+
+// ── Slice type []T ────────────────────────────────────────────────────────────
+// Lowers to { T*, i64 }  (parse-only for now; codegen to be added)
+struct SliceType : Type {
+    TypePtr element;
+    explicit SliceType(TypePtr elem)
+        : Type(TypeKind::Slice), element(std::move(elem)) {}
+    std::string str() const override { return "[]" + element->str(); }
+    bool equals(const Type &o) const override;
+};
+
 // ── Type factory / interning helpers ──────────────────────────────────────────
 TypePtr makeVoid();
 TypePtr makeBool();
@@ -208,6 +231,8 @@ TypePtr makeReference(TypePtr base, Region r, bool nullable = false,
                       bool mut = true, std::string arena = {});
 TypePtr makeArray(TypePtr elem, int64_t sz = -1);
 TypePtr makeFunction(TypePtr ret, std::vector<TypePtr> params, bool va = false);
+TypePtr makeOptional(TypePtr inner);
+TypePtr makeSlice(TypePtr element);
 
 // Is 'src' implicitly convertible to 'dst' under SafeC rules?
 // (Very strict — only same-type or numeric widening in explicit cast context)

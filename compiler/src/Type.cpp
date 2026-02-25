@@ -174,6 +174,16 @@ bool TupleType::equals(const Type &o) const {
     return true;
 }
 
+bool OptionalType::equals(const Type &o) const {
+    if (o.kind != TypeKind::Optional) return false;
+    return typeEqual(inner, static_cast<const OptionalType &>(o).inner);
+}
+
+bool SliceType::equals(const Type &o) const {
+    if (o.kind != TypeKind::Slice) return false;
+    return typeEqual(element, static_cast<const SliceType &>(o).element);
+}
+
 // ── Comparison helpers ────────────────────────────────────────────────────────
 bool typeEqual(const TypePtr &a, const TypePtr &b) {
     if (!a || !b) return a == b;
@@ -247,6 +257,14 @@ TypePtr makeFunction(TypePtr ret, std::vector<TypePtr> params, bool va) {
 
 TypePtr makeTuple(std::vector<TypePtr> elems) {
     return std::make_shared<TupleType>(std::move(elems));
+}
+
+TypePtr makeOptional(TypePtr inner) {
+    return std::make_shared<OptionalType>(std::move(inner));
+}
+
+TypePtr makeSlice(TypePtr element) {
+    return std::make_shared<SliceType>(std::move(element));
 }
 
 } // namespace safec

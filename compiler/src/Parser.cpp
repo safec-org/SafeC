@@ -70,8 +70,10 @@ bool Parser::isTypeStart(const Token &t) const {
     case TK::KW_signed: case TK::KW_struct: case TK::KW_enum:
     case TK::KW_const:
     case TK::KW_tuple:    // tuple type
+    case TK::KW_fn:       // fn ReturnType(Params) — function pointer type
     case TK::Amp:         // &stack T
     case TK::QuestionAmp: // ?&stack T
+    case TK::Question:    // ?T (optional)
     case TK::Star:        // *T (pointer)
         return true;
     case TK::Ident:
@@ -187,6 +189,26 @@ TypePtr Parser::parseBaseType() {
         expect(TK::RParen, "expected ')' closing tuple type");
         return makeTuple(std::move(elems));
     }
+    case TK::KW_fn: {
+        // fn ReturnType(ParamType, ...) — safe function pointer type
+        consume(); // eat 'fn'
+        TypePtr ret = parseBaseType();
+        ret = parseTypeDeclarator(std::move(ret));
+        expect(TK::LParen, "expected '(' after 'fn' return type");
+        std::vector<TypePtr> params;
+        bool variadic = false;
+        if (!cur().is(TK::RParen)) {
+            do {
+                if (cur().is(TK::DotDotDot)) { consume(); variadic = true; break; }
+                if (cur().is(TK::KW_void) && peek().is(TK::RParen)) { consume(); break; }
+                params.push_back(parseType());
+                // allow optional param name (ignored in type context)
+                if (cur().is(TK::Ident)) consume();
+            } while (match(TK::Comma));
+        }
+        expect(TK::RParen, "expected ')' closing fn parameter list");
+        return makeFunction(std::move(ret), std::move(params), variadic);
+    }
     case TK::Ident: {
         std::string name = cur().text;
         consume();
@@ -212,6 +234,19 @@ TypePtr Parser::parseType() {
     if (cur().is(TK::Amp)) {
         consume();
         return parseReferenceType(false);
+    }
+    // ?T (optional type) — '?' not followed by '&'
+    if (cur().is(TK::Question)) {
+        consume();
+        TypePtr inner = parseBaseType();
+        inner = parseTypeDeclarator(std::move(inner));
+        return makeOptional(std::move(inner));
+    }
+    // []T (slice type, parse-only)
+    if (cur().is(TK::LBracket) && peek().is(TK::RBracket)) {
+        consume(); consume(); // consume '[' ']'
+        TypePtr elem = parseType();
+        return makeSlice(std::move(elem));
     }
     // Base type
     TypePtr base = parseBaseType();
@@ -280,13 +315,24 @@ std::unique_ptr<TranslationUnit> Parser::parseTranslationUnit() {
 DeclPtr Parser::parseTopLevelDecl() {
     auto loc = cur().loc;
 
+    // must_use keyword prefix (C-style: `must_use int fn(...)`)
+    bool isMustUse = false;
+    if (cur().is(TK::KW_must_use)) { isMustUse = true; consume(); }
+
+    // packed struct
+    bool isPacked = false;
+    if (cur().is(TK::KW_packed)) { consume(); isPacked = true; }
+
     // struct / union
     if (cur().is(TK::KW_struct) || cur().is(TK::KW_union)) {
         bool isUnion = cur().is(TK::KW_union);
         consume();
         // Is this a standalone struct decl or a function returning struct?
         if (peek().is(TK::LBrace) || (cur().is(TK::Ident) && peek().is(TK::LBrace))) {
-            return parseStructDecl(isUnion);
+            auto sd = parseStructDecl(isUnion);
+            if (isPacked && sd && sd->kind == DeclKind::Struct)
+                static_cast<StructDecl&>(*sd).isPacked = true;
+            return sd;
         }
         // Otherwise it's a function/var decl starting with struct T
         // Back up one and let the general path handle it
@@ -340,8 +386,11 @@ DeclPtr Parser::parseTopLevelDecl() {
         return nullptr;
     }
 
-    return parseFunctionOrGlobalVar(isConst, isConsteval, isInline, isExtern, isStatic,
-                                    std::move(genericParams));
+    auto decl = parseFunctionOrGlobalVar(isConst, isConsteval, isInline, isExtern, isStatic,
+                                         std::move(genericParams));
+    if (isMustUse && decl && decl->kind == DeclKind::Function)
+        static_cast<FunctionDecl&>(*decl).isMustUse = true;
+    return decl;
 }
 
 DeclPtr Parser::parseFunctionOrGlobalVar(bool isConst, bool isConsteval,
@@ -674,8 +723,19 @@ StmtPtr Parser::parseStmt() {
     auto loc = cur().loc;
 
     // Label: ident ':'  statement
+    // Special case: if the labeled stmt is for/while, embed the label in the loop
     if (cur().is(TK::Ident) && peek().is(TK::Colon)) {
         std::string lbl = cur().text; consume(); consume();
+        if (cur().is(TK::KW_for)) {
+            auto fs = parseForStmt();
+            static_cast<ForStmt&>(*fs).label = lbl;
+            return fs;
+        }
+        if (cur().is(TK::KW_while)) {
+            auto ws = parseWhileStmt();
+            static_cast<WhileStmt&>(*ws).label = lbl;
+            return ws;
+        }
         return std::make_unique<LabelStmt>(std::move(lbl), parseStmt(), loc);
     }
 
@@ -686,8 +746,23 @@ StmtPtr Parser::parseStmt() {
     case TK::KW_do:            return parseDoWhileStmt();
     case TK::KW_for:           return parseForStmt();
     case TK::KW_return:        return parseReturnStmt();
-    case TK::KW_break:         consume(); expect(TK::Semicolon); return std::make_unique<BreakStmt>(loc);
-    case TK::KW_continue:      consume(); expect(TK::Semicolon); return std::make_unique<ContinueStmt>(loc);
+    case TK::KW_defer:         return parseDeferStmt(false);
+    case TK::KW_errdefer:      return parseDeferStmt(true);
+    case TK::KW_match:         return parseMatchStmt();
+    case TK::KW_break: {
+        consume();
+        std::string lbl;
+        if (cur().is(TK::Ident)) { lbl = cur().text; consume(); }
+        expect(TK::Semicolon);
+        return std::make_unique<BreakStmt>(loc, std::move(lbl));
+    }
+    case TK::KW_continue: {
+        consume();
+        std::string lbl;
+        if (cur().is(TK::Ident)) { lbl = cur().text; consume(); }
+        expect(TK::Semicolon);
+        return std::make_unique<ContinueStmt>(loc, std::move(lbl));
+    }
     case TK::KW_goto: {
         consume();
         std::string lbl = cur().text;
@@ -721,8 +796,9 @@ StmtPtr Parser::parseStmt() {
                 cur().is(TK::KW_long) || cur().is(TK::KW_short) ||
                 cur().is(TK::KW_unsigned) || cur().is(TK::KW_signed) ||
                 cur().is(TK::KW_struct) || cur().is(TK::KW_enum) ||
-                cur().is(TK::KW_tuple) ||
-                cur().is(TK::Amp) || cur().is(TK::QuestionAmp)
+                cur().is(TK::KW_tuple) || cur().is(TK::KW_fn) ||
+                cur().is(TK::Amp) || cur().is(TK::QuestionAmp) ||
+                cur().is(TK::Question)   // ?T optional type
             );
             if (isKeywordType) return parseVarDeclStmt(false, false);
             // Ident followed by another ident → var decl (TypeName varName)
@@ -895,6 +971,97 @@ StmtPtr Parser::parseExprStmt() {
     auto e = parseExpr();
     expect(TK::Semicolon, "expected ';' after expression");
     return std::make_unique<ExprStmt>(std::move(e), loc);
+}
+
+StmtPtr Parser::parseDeferStmt(bool isErrDefer) {
+    auto loc = cur().loc;
+    consume(); // eat 'defer' or 'errdefer'
+    auto body = parseStmt();
+    return std::make_unique<DeferStmt>(std::move(body), loc, isErrDefer);
+}
+
+// Parse a single match pattern (used inside `case pat, pat: body`)
+// Handles: integer literal, char literal, N..M range, enum ident
+MatchPattern Parser::parseMatchPattern() {
+    MatchPattern p;
+    // Integer literal or N..M range
+    if (cur().is(TK::IntLit)) {
+        p.kind   = PatternKind::IntLit;
+        p.intVal = cur().intVal;
+        consume();
+        // Range: N..M — two consecutive dots
+        if (cur().is(TK::Dot) && peek().is(TK::Dot)) {
+            consume(); consume(); // eat '..'
+            if (cur().is(TK::IntLit)) {
+                p.kind    = PatternKind::Range;
+                p.intVal2 = cur().intVal;
+                consume();
+            } else {
+                diag_.error(cur().loc, "expected integer after '..' in range pattern");
+            }
+        }
+        return p;
+    }
+    // Char literal pattern: 'a'
+    if (cur().is(TK::CharLit)) {
+        p.kind   = PatternKind::IntLit;
+        p.intVal = (unsigned char)cur().text[0];
+        consume();
+        return p;
+    }
+    // Enum ident
+    if (cur().is(TK::Ident)) {
+        p.kind  = PatternKind::EnumIdent;
+        p.ident = cur().text;
+        consume();
+        if (match(TK::LParen)) {
+            if (cur().is(TK::Ident)) { p.bindName = cur().text; consume(); }
+            expect(TK::RParen);
+        }
+        return p;
+    }
+    diag_.error(cur().loc, "expected match pattern (integer, char, range, or identifier)");
+    consume();
+    return p;
+}
+
+// C-style match statement:
+//   match (expr) {
+//       case pat, pat:  stmt
+//       case N..M:      stmt
+//       default:        stmt
+//   }
+StmtPtr Parser::parseMatchStmt() {
+    auto loc = cur().loc;
+    consume(); // eat 'match'
+    expect(TK::LParen, "expected '(' after 'match'");
+    auto subject = parseExpr();
+    expect(TK::RParen, "expected ')' after match subject");
+    expect(TK::LBrace, "expected '{' opening match body");
+
+    std::vector<MatchArm> arms;
+    while (!atEnd() && !cur().is(TK::RBrace)) {
+        MatchArm arm;
+        if (cur().is(TK::KW_default)) {
+            // default: body  — wildcard arm
+            consume();
+            expect(TK::Colon, "expected ':' after 'default'");
+            MatchPattern p;
+            p.kind = PatternKind::Wildcard;
+            arm.patterns.push_back(std::move(p));
+        } else {
+            // case pattern, pattern, ...: body
+            expect(TK::KW_case, "expected 'case' or 'default' in match arm");
+            do {
+                arm.patterns.push_back(parseMatchPattern());
+            } while (match(TK::Comma));
+            expect(TK::Colon, "expected ':' after match pattern(s)");
+        }
+        arm.body = parseStmt();
+        arms.push_back(std::move(arm));
+    }
+    expect(TK::RBrace, "expected '}' closing match");
+    return std::make_unique<MatchStmt>(std::move(subject), std::move(arms), loc);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1131,6 +1298,12 @@ ExprPtr Parser::parseUnaryExpr() {
         auto e = parseUnaryExpr();
         return std::make_unique<UnaryExpr>(UnaryOp::SizeofExpr, std::move(e), loc);
     }
+    case TK::KW_try: {
+        // try expr — unwrap optional, propagate null on empty
+        consume();
+        auto inner = parseUnaryExpr();
+        return std::make_unique<TryExpr>(std::move(inner), loc);
+    }
     default:
         return parseCastExpr();
     }
@@ -1294,54 +1467,15 @@ ExprPtr Parser::parsePrimaryExpr() {
         auto callee = std::make_unique<IdentExpr>("__arena_reset_" + regionName, loc);
         return std::make_unique<CallExpr>(std::move(callee), std::vector<ExprPtr>{}, loc);
     }
-    case TK::Pipe: {
-        // Closure: |param: Type, ...| { body }
-        consume();
-        std::vector<ClosureParam> params;
-        while (!atEnd() && !cur().is(TK::Pipe)) {
-            ClosureParam cp;
-            cp.loc = cur().loc;
-            if (cur().is(TK::Ident)) { cp.name = cur().text; consume(); }
-            if (match(TK::Colon)) { cp.type = parseType(); }
-            params.push_back(std::move(cp));
-            if (!match(TK::Comma)) break;
-        }
-        expect(TK::Pipe, "expected '|' closing closure parameters");
-        if (!cur().is(TK::LBrace)) {
-            diag_.error(cur().loc, "expected '{' for closure body");
-            return std::make_unique<IntLitExpr>(0, loc);
-        }
-        auto body = parseCompoundStmt();
-        std::unique_ptr<CompoundStmt> bodyCS(
-            static_cast<CompoundStmt *>(body.release()));
-        return std::make_unique<ClosureExpr>(std::move(params), std::move(bodyCS), loc);
-    }
-    case TK::PipePipe: {
-        // No-param closure: || { body }
-        consume();
-        if (!cur().is(TK::LBrace)) {
-            diag_.error(cur().loc, "expected '{' for closure body");
-            return std::make_unique<IntLitExpr>(0, loc);
-        }
-        auto body = parseCompoundStmt();
-        std::unique_ptr<CompoundStmt> bodyCS(
-            static_cast<CompoundStmt *>(body.release()));
-        return std::make_unique<ClosureExpr>(
-            std::vector<ClosureParam>{}, std::move(bodyCS), loc);
-    }
     case TK::KW_spawn: {
-        // spawn<R1, R2> closure_expr
+        // spawn(fn_expr, arg_expr)
         consume();
-        std::vector<std::string> regions;
-        if (match(TK::Lt)) {
-            while (!atEnd() && !cur().is(TK::Gt)) {
-                if (cur().is(TK::Ident)) { regions.push_back(cur().text); consume(); }
-                if (!match(TK::Comma)) break;
-            }
-            expect(TK::Gt, "expected '>' closing spawn region list");
-        }
-        auto closure = parsePrimaryExpr();
-        return std::make_unique<SpawnExpr>(std::move(regions), std::move(closure), loc);
+        expect(TK::LParen, "expected '(' after 'spawn'");
+        auto fnExpr = parseAssignExpr();
+        expect(TK::Comma, "expected ',' separating spawn arguments");
+        auto argExpr = parseAssignExpr();
+        expect(TK::RParen, "expected ')' closing spawn");
+        return std::make_unique<SpawnExpr>(std::move(fnExpr), std::move(argExpr), loc);
     }
     case TK::KW_join: {
         // join(handle_expr)

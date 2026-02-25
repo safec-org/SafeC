@@ -38,22 +38,28 @@ public:
 
     const std::vector<Diagnostic> &diagnostics() const { return diags_; }
 
+    void setSilent(bool s) { silent_ = s; }
+    void reset() { diags_.clear(); errorCount_ = 0; }
+
 private:
     void emit(DiagLevel level, SourceLocation loc, std::string msg) {
-        const char *prefix = "";
-        switch (level) {
-        case DiagLevel::Note:    prefix = "note";    break;
-        case DiagLevel::Warning: prefix = "warning"; break;
-        case DiagLevel::Error:   prefix = "error";   break;
-        case DiagLevel::Fatal:   prefix = "fatal";   break;
+        if (!silent_) {
+            const char *prefix = "";
+            switch (level) {
+            case DiagLevel::Note:    prefix = "note";    break;
+            case DiagLevel::Warning: prefix = "warning"; break;
+            case DiagLevel::Error:   prefix = "error";   break;
+            case DiagLevel::Fatal:   prefix = "fatal";   break;
+            }
+            const char *f = loc.file ? loc.file : (filename_ ? filename_ : "<input>");
+            fprintf(stderr, "%s:%u:%u: %s: %s\n", f, loc.line, loc.col, prefix, msg.c_str());
         }
-        const char *f = loc.file ? loc.file : (filename_ ? filename_ : "<input>");
-        fprintf(stderr, "%s:%u:%u: %s: %s\n", f, loc.line, loc.col, prefix, msg.c_str());
         diags_.push_back({level, loc, std::move(msg)});
     }
 
     const char           *filename_   = nullptr;
     int                   errorCount_ = 0;
+    bool                  silent_     = false;
     std::vector<Diagnostic> diags_;
 };
 

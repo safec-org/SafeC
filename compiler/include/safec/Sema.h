@@ -114,7 +114,6 @@ private:
     TypePtr checkDeref(UnaryExpr &e);
     TypePtr checkNew(NewExpr &e);
     TypePtr checkTupleLit(TupleLitExpr &e);
-    TypePtr checkClosure(ClosureExpr &e);
     TypePtr checkSpawn(SpawnExpr &e);
 
     // ── Region safety ─────────────────────────────────────────────────────────
@@ -188,8 +187,6 @@ private:
     bool satisfiesTrait(const TypePtr &ty, const std::string &trait) const;
     static std::string binaryOpToMethodName(BinaryOp op);
 
-    // ── Closure support ───────────────────────────────────────────────────────
-    int closureCounter_ = 0;
 };
 
 } // namespace safec
