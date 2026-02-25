@@ -354,13 +354,26 @@ DeclPtr Parser::parseTopLevelDecl() {
         --pos_;
     }
 
-    // enum
+    // enum (with optional underlying type: enum Foo : uint8 { ... })
     if (cur().is(TK::KW_enum)) {
         consume();
-        if (cur().is(TK::Ident) && peek().is(TK::LBrace)) {
+        if (cur().is(TK::Ident) &&
+            (peek().is(TK::LBrace) || peek().is(TK::Colon))) {
             return parseEnumDecl();
         }
         --pos_;
+    }
+
+    // newtype Name = BaseType;
+    if (cur().is(TK::KW_newtype)) {
+        consume();
+        auto loc = cur().loc;
+        std::string name = cur().text;
+        expect(TK::Ident, "expected newtype name");
+        expect(TK::Eq, "expected '=' in newtype declaration");
+        TypePtr base = parseType();
+        expect(TK::Semicolon);
+        return std::make_unique<NewtypeDecl>(std::move(name), std::move(base), loc);
     }
 
     // region
@@ -390,9 +403,11 @@ DeclPtr Parser::parseTopLevelDecl() {
     bool isInterrupt = false;
     bool isNoReturn  = false;
     bool isPure      = false;
-    bool isVolatile  = false;
-    bool isAtomic    = false;
+    bool isVolatile    = false;
+    bool isAtomic      = false;
+    bool isThreadLocal = false;
     std::string sectionName;
+    std::string callingConv;
 
     while (true) {
         if (match(TK::KW_const))     { isConst     = true; continue; }
@@ -406,6 +421,10 @@ DeclPtr Parser::parseTopLevelDecl() {
         if (match(TK::KW_pure))      { isPure      = true; continue; }
         if (match(TK::KW_volatile))  { isVolatile  = true; continue; }
         if (match(TK::KW_atomic))    { isAtomic    = true; continue; }
+        if (match(TK::KW_thread_local)) { isThreadLocal = true; continue; }
+        if (match(TK::KW_stdcall))   { callingConv = "stdcall";  continue; }
+        if (match(TK::KW_cdecl))     { callingConv = "cdecl";    continue; }
+        if (match(TK::KW_fastcall))  { callingConv = "fastcall"; continue; }
         if (cur().is(TK::KW_section)) {
             consume(); // consume 'section'
             expect(TK::LParen, "expected '(' after section");
@@ -439,13 +458,15 @@ DeclPtr Parser::parseTopLevelDecl() {
         fn.isNoReturn  = isNoReturn;
         fn.isPure      = isPure;
         fn.sectionName = sectionName;
+        fn.callingConv = callingConv;
     }
-    // Propagate volatile/atomic/section to GlobalVarDecl
+    // Propagate volatile/atomic/thread_local/section to GlobalVarDecl
     if (decl && decl->kind == DeclKind::GlobalVar) {
         auto &gv = static_cast<GlobalVarDecl&>(*decl);
-        gv.isVolatile  = isVolatile;
-        gv.isAtomic    = isAtomic;
-        gv.sectionName = sectionName;
+        gv.isVolatile    = isVolatile;
+        gv.isAtomic      = isAtomic;
+        gv.isThreadLocal = isThreadLocal;
+        gv.sectionName   = sectionName;
     }
     return decl;
 }
@@ -693,6 +714,10 @@ std::unique_ptr<EnumDecl> Parser::parseEnumDecl() {
     if (cur().is(TK::Ident)) { name = cur().text; consume(); }
 
     auto ed = std::make_unique<EnumDecl>(std::move(name), loc);
+    // Parse optional underlying type: enum Foo : uint8 { ... }
+    if (match(TK::Colon)) {
+        ed->underlyingType = parseType();
+    }
     expect(TK::LBrace, "expected '{' in enum definition");
     int64_t nextVal = 0;
     while (!atEnd() && !cur().is(TK::RBrace)) {
@@ -854,6 +879,17 @@ StmtPtr Parser::parseStmt() {
             static_cast<VarDeclStmt&>(*vs).isAtomic = true;
         return vs;
     }
+    case TK::KW_thread_local: {
+        consume();
+        // thread_local at local scope must combine with static
+        bool isStaticTL = match(TK::KW_static);
+        bool isConst = false;
+        if (match(TK::KW_const)) isConst = true;
+        auto vs = parseVarDeclStmt(isConst, isStaticTL);
+        if (vs && vs->kind == StmtKind::VarDecl)
+            static_cast<VarDeclStmt&>(*vs).isThreadLocal = true;
+        return vs;
+    }
     case TK::KW_static: {
         consume();
         bool isConst = false;
@@ -861,6 +897,23 @@ StmtPtr Parser::parseStmt() {
         return parseVarDeclStmt(isConst, true);
     }
     default:
+        // align(N) Type name = init; — contextual keyword
+        if (cur().isIdent("align") && peek().is(TK::LParen)) {
+            consume();
+            expect(TK::LParen, "expected '(' after align");
+            int alignment = 0;
+            if (cur().is(TK::IntLit)) { alignment = (int)cur().intVal; consume(); }
+            else diag_.error(cur().loc, "expected integer alignment value");
+            expect(TK::RParen, "expected ')' after alignment value");
+            auto vs = parseVarDeclStmt(false, false);
+            if (vs && vs->kind == StmtKind::VarDecl)
+                static_cast<VarDeclStmt&>(*vs).alignment = alignment;
+            return vs;
+        }
+        // []T varName — slice type variable declaration
+        if (cur().is(TK::LBracket) && peek().is(TK::RBracket)) {
+            return parseVarDeclStmt(false, false);
+        }
         // Disambiguation: type-start → variable declaration
         if (isTypeStart() && !cur().is(TK::Star)) {
             // Could be a function call or a var decl.
@@ -1141,9 +1194,9 @@ MatchPattern Parser::parseMatchPattern() {
         p.kind   = PatternKind::IntLit;
         p.intVal = cur().intVal;
         consume();
-        // Range: N..M — two consecutive dots
-        if (cur().is(TK::Dot) && peek().is(TK::Dot)) {
-            consume(); consume(); // eat '..'
+        // Range: N..M — DotDot token or two consecutive dots
+        if (cur().is(TK::DotDot) || (cur().is(TK::Dot) && peek().is(TK::Dot))) {
+            if (cur().is(TK::DotDot)) consume(); else { consume(); consume(); }
             if (cur().is(TK::IntLit)) {
                 p.kind    = PatternKind::Range;
                 p.intVal2 = cur().intVal;
@@ -1371,9 +1424,17 @@ ExprPtr Parser::parseShiftExpr() {
 
 ExprPtr Parser::parseAddExpr() {
     auto lhs = parseMulExpr();
-    while (cur().is(TK::Plus) || cur().is(TK::Minus)) {
+    while (cur().is(TK::Plus) || cur().is(TK::Minus) ||
+           cur().is(TK::PlusPipe) || cur().is(TK::MinusPipe) ||
+           cur().is(TK::PlusPercent) || cur().is(TK::MinusPercent)) {
         auto loc = cur().loc;
-        BinaryOp op = cur().is(TK::Plus) ? BinaryOp::Add : BinaryOp::Sub;
+        BinaryOp op;
+        if      (cur().is(TK::Plus))         op = BinaryOp::Add;
+        else if (cur().is(TK::Minus))        op = BinaryOp::Sub;
+        else if (cur().is(TK::PlusPipe))     op = BinaryOp::WrapAdd;
+        else if (cur().is(TK::MinusPipe))    op = BinaryOp::WrapSub;
+        else if (cur().is(TK::PlusPercent))  op = BinaryOp::SatAdd;
+        else                                  op = BinaryOp::SatSub;
         consume();
         auto rhs = parseMulExpr();
         lhs = std::make_unique<BinaryExpr>(op, std::move(lhs), std::move(rhs), loc);
@@ -1383,10 +1444,15 @@ ExprPtr Parser::parseAddExpr() {
 
 ExprPtr Parser::parseMulExpr() {
     auto lhs = parseUnaryExpr();
-    while (cur().is(TK::Star) || cur().is(TK::Slash) || cur().is(TK::Percent)) {
+    while (cur().is(TK::Star) || cur().is(TK::Slash) || cur().is(TK::Percent) ||
+           cur().is(TK::StarPipe) || cur().is(TK::StarPercent)) {
         auto loc = cur().loc;
-        BinaryOp op = cur().is(TK::Star) ? BinaryOp::Mul
-                    : cur().is(TK::Slash)? BinaryOp::Div : BinaryOp::Mod;
+        BinaryOp op;
+        if      (cur().is(TK::Star))        op = BinaryOp::Mul;
+        else if (cur().is(TK::Slash))       op = BinaryOp::Div;
+        else if (cur().is(TK::Percent))     op = BinaryOp::Mod;
+        else if (cur().is(TK::StarPipe))    op = BinaryOp::WrapMul;
+        else                                 op = BinaryOp::SatMul;
         consume();
         auto rhs = parseUnaryExpr();
         lhs = std::make_unique<BinaryExpr>(op, std::move(lhs), std::move(rhs), loc);
@@ -1509,9 +1575,30 @@ ExprPtr Parser::parsePostfixExpr() {
         auto loc = cur().loc;
         if (cur().is(TK::LBracket)) {
             consume();
-            auto idx = parseExpr();
-            expect(TK::RBracket, "expected ']'");
-            e = std::make_unique<SubscriptExpr>(std::move(e), std::move(idx), loc);
+            // Check for slice expr: arr[start..end], arr[..end], arr[start..], arr[..]
+            if (cur().is(TK::DotDot)) {
+                // arr[..end] or arr[..]
+                consume();
+                ExprPtr endE;
+                if (!cur().is(TK::RBracket))
+                    endE = parseExpr();
+                expect(TK::RBracket, "expected ']'");
+                e = std::make_unique<SliceExpr>(std::move(e), nullptr, std::move(endE), loc);
+            } else {
+                auto idx = parseExpr();
+                if (cur().is(TK::DotDot)) {
+                    // arr[start..end] or arr[start..]
+                    consume();
+                    ExprPtr endE;
+                    if (!cur().is(TK::RBracket))
+                        endE = parseExpr();
+                    expect(TK::RBracket, "expected ']'");
+                    e = std::make_unique<SliceExpr>(std::move(e), std::move(idx), std::move(endE), loc);
+                } else {
+                    expect(TK::RBracket, "expected ']'");
+                    e = std::make_unique<SubscriptExpr>(std::move(e), std::move(idx), loc);
+                }
+            }
         } else if (cur().is(TK::LParen)) {
             consume();
             std::vector<ExprPtr> args;

@@ -86,6 +86,16 @@ TK Lexer::keywordKind(const std::string &w) {
         {"asm",           TK::KW_asm},
         {"pure",          TK::KW_pure},
         {"atomic",        TK::KW_atomic},
+        {"newtype",       TK::KW_newtype},
+        // Thread-local storage
+        {"thread_local",  TK::KW_thread_local},
+        {"_Thread_local", TK::KW_thread_local},  // C11 spelling
+        {"__thread",      TK::KW_thread_local},  // GCC spelling
+        // Calling conventions
+        {"__stdcall",     TK::KW_stdcall},
+        {"__cdecl",       TK::KW_cdecl},
+        {"__fastcall",    TK::KW_fastcall},
+        // "align" recognized contextually by parser (not a keyword)
     };
     auto it = kw.find(w);
     return (it != kw.end()) ? it->second : TK::Ident;
@@ -302,14 +312,20 @@ Token Lexer::lexPunct() {
     case '+':
         if (eat('+')) return mk(TK::PlusPlus, "++");
         if (eat('=')) return mk(TK::PlusEq,   "+=");
+        if (eat('|')) return mk(TK::PlusPipe,    "+|");
+        if (eat('%')) return mk(TK::PlusPercent, "+%");
         return mk(TK::Plus, "+");
     case '-':
         if (eat('-')) return mk(TK::MinusMinus, "--");
         if (eat('>')) return mk(TK::Arrow,      "->");
         if (eat('=')) return mk(TK::MinusEq,    "-=");
+        if (eat('|')) return mk(TK::MinusPipe,    "-|");
+        if (eat('%')) return mk(TK::MinusPercent, "-%");
         return mk(TK::Minus, "-");
     case '*':
         if (eat('=')) return mk(TK::StarEq, "*=");
+        if (eat('|')) return mk(TK::StarPipe,    "*|");
+        if (eat('%')) return mk(TK::StarPercent, "*%");
         return mk(TK::Star, "*");
     case '/':
         if (eat('=')) return mk(TK::SlashEq, "/=");
@@ -358,6 +374,7 @@ Token Lexer::lexPunct() {
         return mk(TK::Colon, ":");
     case '.':
         if (peek() == '.' && peek(1) == '.') { advance(); advance(); return mk(TK::DotDotDot, "..."); }
+        if (peek() == '.') { advance(); return mk(TK::DotDot, ".."); }
         return mk(TK::Dot, ".");
     case '(': return mk(TK::LParen, "(");
     case ')': return mk(TK::RParen, ")");

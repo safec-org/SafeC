@@ -219,6 +219,13 @@ void Sema::collectDecls(TranslationUnit &tu) {
             typeRegistry_[ta.name] = resolved ? resolved : ta.aliasedType;
             break;
         }
+        case DeclKind::Newtype: {
+            auto &nt = static_cast<NewtypeDecl &>(*d);
+            TypePtr base = resolveType(nt.baseType);
+            auto ntt = std::make_shared<NewtypeType>(nt.name, base ? base : nt.baseType);
+            typeRegistry_[nt.name] = ntt;
+            break;
+        }
         default: break;
         }
     }
@@ -366,6 +373,19 @@ void Sema::collectStruct(StructDecl &sd) {
 
 void Sema::collectEnum(EnumDecl &ed) {
     auto et = std::make_shared<EnumType>(ed.name);
+    // Determine underlying type from explicit annotation or default i32
+    int bitWidth = 32;
+    bool isSigned = true;
+    if (ed.underlyingType) {
+        auto &ut = *ed.underlyingType;
+        if (ut.isInteger() && ut.kind >= TypeKind::Bool && ut.kind <= TypeKind::UInt64) {
+            auto &pt = static_cast<const PrimType &>(ut);
+            bitWidth = pt.bitWidth();
+            isSigned = pt.isSigned();
+        }
+    }
+    et->bitWidth = bitWidth;
+    et->isSigned = isSigned;
     int64_t nextVal = 0;
     for (auto &[name, val] : ed.enumerators) {
         int64_t v = val ? *val : nextVal;
@@ -376,7 +396,7 @@ void Sema::collectEnum(EnumDecl &ed) {
         Symbol sym;
         sym.kind  = SymKind::Variable;
         sym.name  = name;
-        sym.type  = makeInt(32);
+        sym.type  = makeInt(bitWidth, isSigned);
         sym.initialized = true;
         define(std::move(sym));
     }
@@ -443,6 +463,14 @@ void Sema::checkFunction(FunctionDecl &fn) {
     // Generic templates: body is only type-checked on concrete instantiations
     if (!fn.genericParams.empty()) return;
 
+    // ── Calling convention validation ────────────────────────────────────────
+    if (!fn.callingConv.empty()) {
+        if (fn.callingConv != "stdcall" && fn.callingConv != "cdecl" &&
+            fn.callingConv != "fastcall") {
+            diag_.error(fn.loc, "unknown calling convention '" + fn.callingConv + "'");
+        }
+    }
+
     // ── Bare-metal attribute validation ─────────────────────────────────────
     // interrupt: must be void(void)
     if (fn.isInterrupt) {
@@ -506,9 +534,33 @@ void Sema::checkFunction(FunctionDecl &fn) {
     bool prevPure = checkingPure_;
     if (fn.isPure) checkingPure_ = true;
 
+    // Collect all labels in this function for goto validation
+    functionLabels_.clear();
+    loopDepth_ = 0;
+    std::function<void(Stmt&)> collectLabels = [&](Stmt &s) {
+        if (s.kind == StmtKind::Label) {
+            functionLabels_.insert(static_cast<LabelStmt&>(s).label);
+            collectLabels(*static_cast<LabelStmt&>(s).body);
+        } else if (s.kind == StmtKind::Compound) {
+            for (auto &c : static_cast<CompoundStmt&>(s).body) collectLabels(*c);
+        } else if (s.kind == StmtKind::If) {
+            auto &i = static_cast<IfStmt&>(s);
+            if (i.then) collectLabels(*i.then);
+            if (i.else_) collectLabels(*i.else_);
+        } else if (s.kind == StmtKind::While || s.kind == StmtKind::DoWhile) {
+            collectLabels(*static_cast<WhileStmt&>(s).body);
+        } else if (s.kind == StmtKind::For) {
+            collectLabels(*static_cast<ForStmt&>(s).body);
+        } else if (s.kind == StmtKind::Unsafe) {
+            collectLabels(*static_cast<UnsafeStmt&>(s).body);
+        }
+    };
+    collectLabels(*fn.body);
+
     checkCompound(*fn.body, fn);
 
     checkingPure_ = prevPure;
+    functionLabels_.clear();
     popScope();
 }
 
@@ -585,7 +637,9 @@ void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
                     define(std::move(sym));
                 }
             }
+            ++loopDepth_; // break is valid inside match arms
             if (arm.body) checkStmt(*arm.body, fn);
+            --loopDepth_;
             popScope();
         }
         if (!hasWildcard)
@@ -621,8 +675,19 @@ void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
         break;
     }
     case StmtKind::Break:
-    case StmtKind::Continue:     break; // TODO: check we're inside a loop
-    case StmtKind::Goto:         break; // TODO: check label exists
+        if (loopDepth_ == 0)
+            diag_.error(s.loc, "'break' statement not inside a loop or match");
+        break;
+    case StmtKind::Continue:
+        if (loopDepth_ == 0)
+            diag_.error(s.loc, "'continue' statement not inside a loop");
+        break;
+    case StmtKind::Goto: {
+        auto &gs = static_cast<GotoStmt &>(s);
+        if (functionLabels_.find(gs.label) == functionLabels_.end())
+            diag_.error(s.loc, "use of undeclared label '" + gs.label + "'");
+        break;
+    }
     case StmtKind::Label:
         checkStmt(*static_cast<LabelStmt &>(s).body, fn);
         break;
@@ -655,7 +720,9 @@ void Sema::checkWhile(WhileStmt &s, FunctionDecl &fn) {
         condTy->kind != TypeKind::Pointer) {
         diag_.error(s.cond->loc, "while condition must be boolean or numeric");
     }
+    ++loopDepth_;
     checkStmt(*s.body, fn);
+    --loopDepth_;
 }
 
 void Sema::checkFor(ForStmt &s, FunctionDecl &fn) {
@@ -663,7 +730,9 @@ void Sema::checkFor(ForStmt &s, FunctionDecl &fn) {
     if (s.init) checkStmt(*s.init, fn);
     if (s.cond) checkExpr(*s.cond);
     if (s.incr) checkExpr(*s.incr);
+    ++loopDepth_;
     checkStmt(*s.body, fn);
+    --loopDepth_;
     popScope();
 }
 
@@ -716,12 +785,13 @@ void Sema::checkVarDecl(VarDeclStmt &s, FunctionDecl &fn) {
             // the trackRef was already done. Nothing extra needed here.
         }
         // Also track if initTy is a reference to a named ident (direct ref binding)
+        // NLL: record borrower name so borrow can be released at last use
         if (!inUnsafeScope() && initTy && initTy->kind == TypeKind::Reference &&
             s.init && s.init->kind == ExprKind::Ident) {
             auto &rt    = static_cast<ReferenceType &>(*initTy);
             auto *ident = static_cast<IdentExpr *>(s.init.get());
             if (ident->resolved && rt.region != Region::Static) {
-                trackRef(ident->name, rt.mut, scopeDepth_);
+                trackRef(ident->name, rt.mut, scopeDepth_, /*borrower=*/s.name);
             }
         }
 
@@ -739,6 +809,11 @@ void Sema::checkVarDecl(VarDeclStmt &s, FunctionDecl &fn) {
         s.declType = initTy ? initTy : makeError();
     }
     s.resolvedType = s.declType;
+
+    // thread_local local variable must be static
+    if (s.isThreadLocal && !s.isStatic) {
+        diag_.error(s.loc, "thread_local local variable must be static");
+    }
 
     // Register in current scope
     VarDecl *vd = new VarDecl{};
@@ -807,6 +882,7 @@ TypePtr Sema::checkExpr(Expr &e) {
     case ExprKind::Ternary:   ty = checkTernary(static_cast<TernaryExpr &>(e));   break;
     case ExprKind::Call:      ty = checkCall(static_cast<CallExpr &>(e));         break;
     case ExprKind::Subscript: ty = checkSubscript(static_cast<SubscriptExpr &>(e));break;
+    case ExprKind::Slice:     ty = checkSlice(static_cast<SliceExpr &>(e));       break;
     case ExprKind::Member:
     case ExprKind::Arrow:     ty = checkMember(static_cast<MemberExpr &>(e));     break;
     case ExprKind::Cast:      ty = checkCast(static_cast<CastExpr &>(e));         break;
@@ -955,7 +1031,7 @@ TypePtr Sema::checkAddrOf(UnaryExpr &e) {
     if (!inUnsafeScope() && e.operand && e.operand->kind == ExprKind::Ident) {
         auto *ident = static_cast<IdentExpr *>(e.operand.get());
         if (ident->resolved) {
-            trackRef(ident->name, /*isMut=*/true, scopeDepth_);
+            trackRef(ident->name, /*isMut=*/true, scopeDepth_, /*borrower=*/{});
         }
     }
     // In safe code, & of a stack variable yields &stack T
@@ -1008,6 +1084,8 @@ TypePtr Sema::checkBinary(BinaryExpr &e) {
     // Arithmetic
     case BinaryOp::Add: case BinaryOp::Sub:
     case BinaryOp::Mul: case BinaryOp::Div: case BinaryOp::Mod:
+    case BinaryOp::WrapAdd: case BinaryOp::WrapSub: case BinaryOp::WrapMul:
+    case BinaryOp::SatAdd:  case BinaryOp::SatSub:  case BinaryOp::SatMul:
         if (!lhsTy->isArithmetic() || !rhsTy->isArithmetic()) {
             // Allow pointer arithmetic for raw pointers (unsafe)
             if (lhsTy->kind == TypeKind::Pointer || rhsTy->kind == TypeKind::Pointer) {
@@ -1197,6 +1275,60 @@ TypePtr Sema::checkCall(CallExpr &e) {
             e.type = makeVoid();
             return makeVoid();
         }
+        // ── Channel built-ins ───────────────────────────────────────────────
+        if (ident.name == "chan_create") {
+            // chan_create(capacity) → void* (opaque channel handle)
+            if (e.args.size() != 1)
+                diag_.error(e.loc, "chan_create expects 1 argument (capacity)");
+            for (auto &a : e.args) checkExpr(*a);
+            e.type = makePointer(makeVoid());
+            return e.type;
+        }
+        if (ident.name == "chan_send") {
+            // chan_send(channel, value_ptr) → bool (true = success)
+            if (e.args.size() != 2)
+                diag_.error(e.loc, "chan_send expects 2 arguments (channel, value_ptr)");
+            for (auto &a : e.args) checkExpr(*a);
+            e.type = makeBool();
+            return e.type;
+        }
+        if (ident.name == "chan_recv") {
+            // chan_recv(channel, out_ptr) → bool (true = received, false = closed)
+            if (e.args.size() != 2)
+                diag_.error(e.loc, "chan_recv expects 2 arguments (channel, out_ptr)");
+            for (auto &a : e.args) checkExpr(*a);
+            e.type = makeBool();
+            return e.type;
+        }
+        if (ident.name == "chan_close") {
+            // chan_close(channel) → void
+            if (e.args.size() != 1)
+                diag_.error(e.loc, "chan_close expects 1 argument (channel)");
+            for (auto &a : e.args) checkExpr(*a);
+            e.type = makeVoid();
+            return makeVoid();
+        }
+        // ── Scoped spawn: guarantees join before scope exit ─────────────────
+        if (ident.name == "spawn_scoped") {
+            // spawn_scoped(fn, arg) → long long (thread handle)
+            // Like spawn, but Sema registers a deferred join at current scope.
+            // Region isolation: mutable non-static refs are still rejected.
+            if (e.args.size() != 2)
+                diag_.error(e.loc, "spawn_scoped expects 2 arguments (function, arg)");
+            for (auto &a : e.args) {
+                TypePtr argTy = checkExpr(*a);
+                if (argTy && argTy->kind == TypeKind::Reference) {
+                    auto &ref = static_cast<ReferenceType &>(*argTy);
+                    if (ref.mut && ref.region != Region::Static) {
+                        diag_.error(a->loc,
+                            "spawn_scoped argument must not pass mutable non-static "
+                            "reference (region isolation violation)");
+                    }
+                }
+            }
+            e.type = makeInt(64, true);
+            return e.type;
+        }
         // ── Freestanding mode: warn on common stdlib calls ───────────────────
         if (freestanding_) {
             static const char *stdlibFns[] = {
@@ -1304,6 +1436,18 @@ TypePtr Sema::checkCall(CallExpr &e) {
             return makeError();
         }
 
+        // Enforce trait constraints on inferred type arguments
+        for (auto &gp : fnDecl->genericParams) {
+            if (!gp.constraint.empty()) {
+                auto it = subs.find(gp.name);
+                if (it != subs.end() && !satisfiesTrait(it->second, gp.constraint)) {
+                    diag_.error(e.loc,
+                        "type '" + it->second->str() + "' does not satisfy constraint '" +
+                        gp.constraint + "' for generic parameter '" + gp.name + "'");
+                }
+            }
+        }
+
         MonoKey key = makeMonoKey(fnDecl->name, subs, fnDecl->genericParams);
         if (!monoCache_.count(key)) {
             // Create a concrete clone
@@ -1384,6 +1528,10 @@ TypePtr Sema::checkCall(CallExpr &e) {
             }
         }
     }
+
+    // ── Inter-procedural region analysis ────────────────────────────────────
+    checkCallRegions(e, ft, selfOffset);
+
     return ft->returnType;
 }
 
@@ -1417,6 +1565,11 @@ TypePtr Sema::checkSubscript(SubscriptExpr &e) {
         e.isLValue = true;
         return static_cast<PointerType &>(*baseTy).base;
     }
+    if (baseTy->kind == TypeKind::Slice) {
+        e.boundsCheckOmit = inUnsafeScope();
+        e.isLValue = true;
+        return static_cast<SliceType &>(*baseTy).element;
+    }
     if (baseTy->kind == TypeKind::Reference) {
         auto &rt = static_cast<ReferenceType &>(*baseTy);
         if (rt.base->kind == TypeKind::Array) {
@@ -1426,6 +1579,43 @@ TypePtr Sema::checkSubscript(SubscriptExpr &e) {
     }
     diag_.error(e.loc, "subscript on non-array type '" + baseTy->str() + "'");
     return makeError();
+}
+
+TypePtr Sema::checkSlice(SliceExpr &e) {
+    TypePtr baseTy = checkExpr(*e.base);
+    if (e.start) {
+        auto st = checkExpr(*e.start);
+        if (!st->isInteger())
+            diag_.error(e.start->loc, "slice start index must be integer");
+    }
+    if (e.end) {
+        auto et = checkExpr(*e.end);
+        if (!et->isInteger())
+            diag_.error(e.end->loc, "slice end index must be integer");
+    }
+
+    TypePtr elemTy;
+    if (baseTy->kind == TypeKind::Array) {
+        elemTy = static_cast<ArrayType &>(*baseTy).element;
+    } else if (baseTy->kind == TypeKind::Pointer) {
+        if (!inUnsafeScope())
+            diag_.error(e.loc, "slicing a pointer requires 'unsafe' block");
+        elemTy = static_cast<PointerType &>(*baseTy).base;
+    } else if (baseTy->kind == TypeKind::Slice) {
+        elemTy = static_cast<SliceType &>(*baseTy).element;
+    } else if (baseTy->kind == TypeKind::Reference) {
+        auto &rt = static_cast<ReferenceType &>(*baseTy);
+        if (rt.base->kind == TypeKind::Array)
+            elemTy = static_cast<ArrayType &>(*rt.base).element;
+        else {
+            diag_.error(e.loc, "cannot slice type '" + baseTy->str() + "'");
+            return makeError();
+        }
+    } else {
+        diag_.error(e.loc, "cannot slice type '" + baseTy->str() + "'");
+        return makeError();
+    }
+    return makeSlice(elemTy);
 }
 
 TypePtr Sema::checkMember(MemberExpr &e) {
@@ -1471,6 +1661,15 @@ TypePtr Sema::checkMember(MemberExpr &e) {
             }
         }
         diag_.error(e.loc, "invalid tuple field '" + e.field + "'");
+        return makeError();
+    }
+
+    // Slice member access: .len → i64, .ptr → T*
+    if (baseTy->kind == TypeKind::Slice) {
+        auto &sl = static_cast<SliceType &>(*baseTy);
+        if (e.field == "len") return makeInt(64, false);
+        if (e.field == "ptr") return makePointer(sl.element, false);
+        diag_.error(e.loc, "slice has no member '" + e.field + "' (use .len or .ptr)");
         return makeError();
     }
 
@@ -1564,6 +1763,12 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
         }
     }
 
+    // NLL: if LHS held a borrow and is being reassigned, release the old borrow
+    if (e.op == AssignOp::Assign && e.lhs->kind == ExprKind::Ident) {
+        auto &ident = static_cast<IdentExpr &>(*e.lhs);
+        releaseUnusedBorrows(ident.name);
+    }
+
     // Mark variable as initialized
     if (e.op == AssignOp::Assign && e.lhs->kind == ExprKind::Ident) {
         auto &ident = static_cast<IdentExpr &>(*e.lhs);
@@ -1605,9 +1810,11 @@ void Sema::checkNullabilityDeref(const TypePtr &ty, SourceLocation loc) {
 }
 
 // ── Alias tracking ────────────────────────────────────────────────────────────
-void Sema::trackRef(const std::string &var, bool isMut, int depth) {
+void Sema::trackRef(const std::string &var, bool isMut, int depth,
+                    const std::string &borrower) {
     auto &recs = aliasMap_[var];
     for (auto &r : recs) {
+        if (r.released) continue;  // NLL: already released
         if (r.scopeDepth < depth) continue; // outer scope — no conflict
         if (isMut) {
             diag_.error({},
@@ -1618,7 +1825,19 @@ void Sema::trackRef(const std::string &var, bool isMut, int depth) {
         }
         return;
     }
-    recs.push_back({var, isMut, depth});
+    recs.push_back({var, borrower, isMut, depth, /*released=*/false});
+}
+
+// NLL: release borrows held by a specific borrower variable (at its last use)
+void Sema::releaseUnusedBorrows(const std::string &borrower) {
+    if (borrower.empty()) return;
+    for (auto &[name, records] : aliasMap_) {
+        for (auto &r : records) {
+            if (r.borrower == borrower && !r.released) {
+                r.released = true;
+            }
+        }
+    }
 }
 
 void Sema::untrackScope(int depth) {
@@ -1626,6 +1845,53 @@ void Sema::untrackScope(int depth) {
         records.erase(std::remove_if(records.begin(), records.end(),
             [depth](const AliasRecord &r){ return r.scopeDepth >= depth; }),
             records.end());
+    }
+}
+
+// ── Inter-procedural region analysis ──────────────────────────────────────────
+void Sema::checkCallRegions(CallExpr &e, FunctionType *ft, size_t selfOffset) {
+    // Check argument regions: passing &stack/&arena T to a function that expects
+    // a longer-lived reference is a region violation.
+    for (size_t i = 0; i < e.args.size(); ++i) {
+        size_t paramIdx = i + selfOffset;
+        if (paramIdx >= ft->paramTypes.size()) break;
+        auto &argExpr = e.args[i];
+        TypePtr argTy = argExpr->type;
+        TypePtr paramTy = ft->paramTypes[paramIdx];
+        if (!argTy || !paramTy) continue;
+
+        // If param expects &static T but arg is &stack/&arena T → error
+        if (paramTy->kind == TypeKind::Reference && argTy->kind == TypeKind::Reference) {
+            auto &paramRef = static_cast<ReferenceType &>(*paramTy);
+            auto &argRef = static_cast<ReferenceType &>(*argTy);
+            if (paramRef.region == Region::Static &&
+                (argRef.region == Region::Stack || argRef.region == Region::Arena)) {
+                diag_.error(argExpr->loc,
+                    "argument " + std::to_string(i+1) +
+                    ": cannot pass '" + argTy->str() +
+                    "' where '" + paramTy->str() +
+                    "' is expected (region lifetime insufficient)");
+            }
+            if (paramRef.region == Region::Heap && argRef.region == Region::Stack) {
+                diag_.error(argExpr->loc,
+                    "argument " + std::to_string(i+1) +
+                    ": cannot pass '&stack " + argRef.base->str() +
+                    "' where '&heap " + paramRef.base->str() +
+                    "' is expected (stack reference may dangle)");
+            }
+        }
+    }
+
+    // Check return region: if function returns &stack T or &arena T, those
+    // refer to the callee's stack — invalid in caller's context.
+    // Only &static, &heap, and caller-scoped arena refs are valid returns.
+    if (ft->returnType && ft->returnType->kind == TypeKind::Reference) {
+        auto &retRef = static_cast<ReferenceType &>(*ft->returnType);
+        if (retRef.region == Region::Stack) {
+            diag_.error(e.loc,
+                "called function returns '&stack " + retRef.base->str() +
+                "': stack reference does not survive call boundary");
+        }
     }
 }
 
@@ -1775,6 +2041,12 @@ bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
     if (is8bit(from) && is8bit(to)) return true;
     // Character promotion: char → any integer type (widening, always safe)
     if (from->kind == TypeKind::Char && to->isInteger()) return true;
+    // Integer widening: smaller → larger (always safe)
+    if (from->isInteger() && to->isInteger()) {
+        auto &fp = static_cast<const PrimType &>(*from);
+        auto &tp = static_cast<const PrimType &>(*to);
+        if (tp.bitWidth() >= fp.bitWidth()) return true;
+    }
     // Array-to-pointer decay: T[N] → T*
     if (from->kind == TypeKind::Array && to->kind == TypeKind::Pointer) {
         auto &at = static_cast<const ArrayType &>(*from);
@@ -1812,6 +2084,22 @@ bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
         if ((fr.region == Region::Arena || fr.region == Region::Heap) &&
             tp.base->isVoid()) return true;
     }
+    // Newtype ← base type: allow initialization from the underlying type
+    if (to->kind == TypeKind::Newtype) {
+        auto &nt = static_cast<const NewtypeType &>(*to);
+        if (typeEqual(from, nt.base)) return true;
+        // Also allow if the base types are implicitly convertible
+        if (canImplicitlyConvert(from, nt.base)) return true;
+    }
+    // Newtype → base type: allow extracting the underlying value
+    if (from->kind == TypeKind::Newtype) {
+        auto &nt = static_cast<const NewtypeType &>(*from);
+        if (typeEqual(nt.base, to)) return true;
+    }
+    // Enum → integer widening: enum values can be used as integers
+    if (from->kind == TypeKind::Enum && to->isInteger()) return true;
+    // integer → Enum: allow integer literals to initialize enum variables
+    if (from->isInteger() && to->kind == TypeKind::Enum) return true;
     if (from->kind == TypeKind::Reference && to->kind == TypeKind::Reference) {
         auto &fr = static_cast<const ReferenceType &>(*from);
         auto &tr = static_cast<const ReferenceType &>(*to);

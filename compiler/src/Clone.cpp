@@ -179,6 +179,14 @@ static ExprPtr cloneExprImpl(const Expr *ep, const TypeSubst &subs) {
         res->boundsCheckOmit = se.boundsCheckOmit;
         return fix(std::move(res));
     }
+    case ExprKind::Slice: {
+        auto &se = static_cast<const SliceExpr &>(e);
+        return fix(std::make_unique<SliceExpr>(
+            cloneExprImpl(se.base.get(), subs),
+            se.start ? cloneExprImpl(se.start.get(), subs) : nullptr,
+            se.end ? cloneExprImpl(se.end.get(), subs) : nullptr,
+            se.loc));
+    }
     case ExprKind::Member:
     case ExprKind::Arrow: {
         auto &me = static_cast<const MemberExpr &>(e);
@@ -329,10 +337,11 @@ static StmtPtr cloneStmtImpl(const Stmt *sp, const TypeSubst &subs) {
             substituteType(vs.declType, subs),
             cloneExprImpl(vs.init.get(), subs),
             vs.loc);
-        res->isConst    = vs.isConst;
-        res->isStatic   = vs.isStatic;
-        res->isVolatile = vs.isVolatile;
-        res->isAtomic   = vs.isAtomic;
+        res->isConst       = vs.isConst;
+        res->isStatic      = vs.isStatic;
+        res->isVolatile    = vs.isVolatile;
+        res->isAtomic      = vs.isAtomic;
+        res->isThreadLocal = vs.isThreadLocal;
         return res;
     }
     case StmtKind::Asm: {
@@ -392,6 +401,7 @@ std::unique_ptr<FunctionDecl> cloneFunctionDecl(const FunctionDecl &fn,
     clone->isNoReturn    = fn.isNoReturn;
     clone->isPure        = fn.isPure;
     clone->sectionName   = fn.sectionName;
+    clone->callingConv   = fn.callingConv;
     // caller clears genericParams and sets mangled name
 
     // Mutable copy of subs for pack expansion metadata

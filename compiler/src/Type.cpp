@@ -184,6 +184,11 @@ bool SliceType::equals(const Type &o) const {
     return typeEqual(element, static_cast<const SliceType &>(o).element);
 }
 
+bool NewtypeType::equals(const Type &o) const {
+    if (o.kind != TypeKind::Newtype) return false;
+    return name == static_cast<const NewtypeType &>(o).name;
+}
+
 // ── Comparison helpers ────────────────────────────────────────────────────────
 bool typeEqual(const TypePtr &a, const TypePtr &b) {
     if (!a || !b) return a == b;

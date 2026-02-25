@@ -67,6 +67,9 @@ struct FnEnv {
     // Defer tracking — LIFO list of deferred stmts
     std::vector<Stmt *> deferList;
     bool                hasError = false; // set by TryExpr on null path
+
+    // Goto/label support: forward-declared basic blocks for labels
+    std::unordered_map<std::string, llvm::BasicBlock *> gotoLabels;
 };
 
 // ── LLVM Code Generator ───────────────────────────────────────────────────────
@@ -102,6 +105,7 @@ private:
 
     // ── Statement codegen ──────────────────────────────────────────────────────
     void genStmt(Stmt &s, FnEnv &env);
+    void collectGotoLabels(Stmt &s, FnEnv &env); // pre-create BBs for goto labels
     void genCompound(CompoundStmt &s, FnEnv &env);
     void genIf(IfStmt &s, FnEnv &env);
     void genWhile(WhileStmt &s, FnEnv &env);
@@ -130,6 +134,7 @@ private:
     llvm::Value *genBinary(BinaryExpr &e, FnEnv &env);
     llvm::Value *genCall(CallExpr &e, FnEnv &env);
     llvm::Value *genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr = false);
+    llvm::Value *genSlice(SliceExpr &e, FnEnv &env);
     llvm::Value *genMember(MemberExpr &e, FnEnv &env, bool wantAddr = false);
     llvm::Value *genCast(CastExpr &e, FnEnv &env);
     llvm::Value *genAssign(AssignExpr &e, FnEnv &env);

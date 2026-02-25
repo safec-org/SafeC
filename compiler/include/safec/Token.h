@@ -60,9 +60,18 @@ enum class TK {
     KW_asm,           // asm [volatile] ("template" : outs : ins : clobbers)
     KW_pure,          // pure fn — no side effects (static effect system)
     KW_atomic,        // atomic qualifier on variables
+    KW_newtype,       // newtype Name = BaseType;
+    KW_align,         // align(N) annotation
+    KW_thread_local,  // thread_local / _Thread_local / __thread
+    KW_stdcall,       // __stdcall calling convention
+    KW_cdecl,         // __cdecl calling convention
+    KW_fastcall,      // __fastcall calling convention
 
     // ── Operators ─────────────────────────────────────────────────────────────
     Plus, Minus, Star, Slash, Percent,
+    // Overflow-aware arithmetic operators
+    PlusPipe, MinusPipe, StarPipe,      // +| -| *| (wrapping)
+    PlusPercent, MinusPercent, StarPercent, // +% -% *% (saturating)
     Amp, Pipe, Caret, Tilde,
     LShift, RShift,
     PlusPlus, MinusMinus,
@@ -72,7 +81,7 @@ enum class TK {
     EqEq, BangEq,
     Lt, Gt, LtEq, GtEq,
     Eq,
-    Arrow, Dot, DotDotDot,
+    Arrow, Dot, DotDot, DotDotDot,
     Question,    // ?
     QuestionAmp, // ?&  (nullable reference)
     Colon,

@@ -35,8 +35,9 @@ enum class TypeKind {
     Error,      // sentinel for error recovery
     Tuple,      // (T1, T2, ...) product type
     Optional,   // ?T — {T, i1} nullable wrapper
-    Slice,      // []T — fat pointer {T*, i64}  (parsed; codegen future)
+    Slice,      // []T — fat pointer {T*, i64}
     Typeof,     // typeof(expr) — resolved by Sema to concrete type
+    Newtype,    // newtype Name = BaseType; — distinct type wrapper
 };
 
 // Forward declarations
@@ -157,6 +158,8 @@ struct StructType : Type {
 struct EnumType : Type {
     std::string name;
     std::vector<std::pair<std::string, int64_t>> enumerators;
+    int bitWidth = 32;   // underlying type width: 8/16/32/64
+    bool isSigned = true; // signed or unsigned
 
     explicit EnumType(std::string n)
         : Type(TypeKind::Enum), name(std::move(n)) {}
@@ -219,6 +222,16 @@ struct SliceType : Type {
     explicit SliceType(TypePtr elem)
         : Type(TypeKind::Slice), element(std::move(elem)) {}
     std::string str() const override { return "[]" + element->str(); }
+    bool equals(const Type &o) const override;
+};
+
+// ── Newtype (distinct type wrapper) ──────────────────────────────────────
+struct NewtypeType : Type {
+    std::string name;
+    TypePtr     base;
+    explicit NewtypeType(std::string n, TypePtr b)
+        : Type(TypeKind::Newtype), name(std::move(n)), base(std::move(b)) {}
+    std::string str() const override { return name; }
     bool equals(const Type &o) const override;
 };
 

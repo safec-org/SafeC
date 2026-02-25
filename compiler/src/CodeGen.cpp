@@ -51,6 +51,22 @@ std::unique_ptr<llvm::Module> CodeGen::generate(TranslationUnit &tu) {
             if (sd.type) lowerStructType(*sd.type);
         } else if (d->kind == DeclKind::Region) {
             genArenaStateGlobal(static_cast<RegionDecl &>(*d));
+        } else if (d->kind == DeclKind::Enum) {
+            // Register enum constants as named globals (constant ints)
+            // Always use at least i32 to avoid ABI issues with variadic promotion
+            auto &ed = static_cast<EnumDecl &>(*d);
+            if (ed.type) {
+                unsigned bw = ed.type->bitWidth < 32 ? 32 : ed.type->bitWidth;
+                auto *intTy = llvm::Type::getIntNTy(ctx_, bw);
+                for (auto &[name, val] : ed.type->enumerators) {
+                    auto *gv = new llvm::GlobalVariable(
+                        *mod_, intTy, /*isConstant=*/true,
+                        llvm::GlobalValue::InternalLinkage,
+                        llvm::ConstantInt::get(intTy, val, ed.type->isSigned),
+                        name);
+                    globals_[name] = gv;
+                }
+            }
         }
     }
 
@@ -116,8 +132,10 @@ llvm::Type *CodeGen::lowerType(const TypePtr &ty) {
         if (at.size < 0) return llvm::PointerType::get(ctx_, 0);
         return llvm::ArrayType::get(elemTy, static_cast<uint64_t>(at.size));
     }
-    case TypeKind::Enum:
-        return llvm::Type::getInt32Ty(ctx_); // enums are i32
+    case TypeKind::Enum: {
+        auto &et = static_cast<const EnumType &>(*ty);
+        return llvm::Type::getIntNTy(ctx_, et.bitWidth);
+    }
     case TypeKind::Function: {
         auto &ft = static_cast<const FunctionType &>(*ty);
         std::vector<llvm::Type *> paramTys;
@@ -142,6 +160,11 @@ llvm::Type *CodeGen::lowerType(const TypePtr &ty) {
         // []T  →  { T*, i64 }  (ptr, length)
         return llvm::StructType::get(ctx_,
             {llvm::PointerType::get(ctx_, 0), llvm::Type::getInt64Ty(ctx_)});
+    }
+    case TypeKind::Newtype: {
+        // Newtype lowers to its underlying type
+        auto &nt = static_cast<const NewtypeType &>(*ty);
+        return lowerType(nt.base);
     }
     case TypeKind::Error:
     default:
@@ -335,6 +358,13 @@ llvm::Function *CodeGen::genFunctionProto(FunctionDecl &fn) {
         llvmFn->addFnAttr("interrupt");
     }
     if (!fn.sectionName.empty()) llvmFn->setSection(fn.sectionName);
+    // Calling convention
+    if (fn.callingConv == "stdcall")
+        llvmFn->setCallingConv(llvm::CallingConv::X86_StdCall);
+    else if (fn.callingConv == "fastcall")
+        llvmFn->setCallingConv(llvm::CallingConv::X86_FastCall);
+    else if (fn.callingConv == "cdecl")
+        llvmFn->setCallingConv(llvm::CallingConv::C);
     if (freestanding_) llvmFn->addFnAttr(llvm::Attribute::NoBuiltin);
 
     // Name parameters and add reference attributes
@@ -445,6 +475,10 @@ void CodeGen::genFunctionBody(FunctionDecl &fn, llvm::Function *llvmFn) {
         ++idx;
     }
 
+    // Pre-collect goto labels — create forward-declared BBs
+    for (auto &stmt : fn.body->body)
+        collectGotoLabels(*stmt, env);
+
     // Generate body
     genCompound(*fn.body, env);
 
@@ -492,8 +526,10 @@ llvm::GlobalVariable *CodeGen::genGlobalVar(GlobalVarDecl &gv) {
         gv.isExtern ? nullptr : init,
         gv.name);
 
-    // Bare-metal attributes: section, volatile
+    // Bare-metal attributes: section, volatile, thread_local
     if (!gv.sectionName.empty()) gvar->setSection(gv.sectionName);
+    if (gv.isThreadLocal)
+        gvar->setThreadLocalMode(llvm::GlobalVariable::GeneralDynamicTLSModel);
 
     globals_[gv.name] = gvar;
     return gvar;
@@ -655,8 +691,15 @@ void CodeGen::genStmt(Stmt &s, FnEnv &env) {
     }
     case StmtKind::Label: {
         auto &ls = static_cast<LabelStmt &>(s);
-        // Create BB for the label
-        auto *bb = llvm::BasicBlock::Create(ctx_, ls.label, env.fn);
+        // Use pre-collected BB if available, otherwise create new
+        llvm::BasicBlock *bb = nullptr;
+        auto it = env.gotoLabels.find(ls.label);
+        if (it != env.gotoLabels.end()) {
+            bb = it->second;
+        } else {
+            bb = llvm::BasicBlock::Create(ctx_, ls.label, env.fn);
+            env.gotoLabels[ls.label] = bb;
+        }
         if (!isTerminated(builder_.GetInsertBlock()))
             builder_.CreateBr(bb);
         builder_.SetInsertPoint(bb);
@@ -664,13 +707,66 @@ void CodeGen::genStmt(Stmt &s, FnEnv &env) {
         break;
     }
     case StmtKind::Goto: {
-        // Goto is complex with SSA; simplified: emit unreachable
-        diag_.warn(s.loc, "goto not fully implemented in codegen");
+        auto &gs = static_cast<GotoStmt &>(s);
+        auto it = env.gotoLabels.find(gs.label);
+        if (it != env.gotoLabels.end()) {
+            builder_.CreateBr(it->second);
+        } else {
+            // Forward goto — create BB now, will be used when label is visited
+            auto *bb = llvm::BasicBlock::Create(ctx_, gs.label, env.fn);
+            env.gotoLabels[gs.label] = bb;
+            builder_.CreateBr(bb);
+        }
+        // Code after goto is unreachable — create a new BB for it
+        auto *deadBB = llvm::BasicBlock::Create(ctx_, "post.goto", env.fn);
+        builder_.SetInsertPoint(deadBB);
         break;
     }
     case StmtKind::Asm:
         genAsm(static_cast<AsmStmt &>(s), env);
         break;
+    default: break;
+    }
+}
+
+// Pre-collect labels from a statement tree to create forward-declared BBs for goto
+void CodeGen::collectGotoLabels(Stmt &s, FnEnv &env) {
+    switch (s.kind) {
+    case StmtKind::Label: {
+        auto &ls = static_cast<LabelStmt &>(s);
+        if (env.gotoLabels.find(ls.label) == env.gotoLabels.end()) {
+            env.gotoLabels[ls.label] =
+                llvm::BasicBlock::Create(ctx_, ls.label, env.fn);
+        }
+        if (ls.body) collectGotoLabels(*ls.body, env);
+        break;
+    }
+    case StmtKind::Compound: {
+        auto &cs = static_cast<CompoundStmt &>(s);
+        for (auto &stmt : cs.body) collectGotoLabels(*stmt, env);
+        break;
+    }
+    case StmtKind::If: {
+        auto &is = static_cast<IfStmt &>(s);
+        if (is.then) collectGotoLabels(*is.then, env);
+        if (is.else_) collectGotoLabels(*is.else_, env);
+        break;
+    }
+    case StmtKind::While: case StmtKind::DoWhile: {
+        auto &ws = static_cast<WhileStmt &>(s);
+        if (ws.body) collectGotoLabels(*ws.body, env);
+        break;
+    }
+    case StmtKind::For: {
+        auto &fs = static_cast<ForStmt &>(s);
+        if (fs.body) collectGotoLabels(*fs.body, env);
+        break;
+    }
+    case StmtKind::Unsafe: {
+        auto &us = static_cast<UnsafeStmt &>(s);
+        if (us.body) collectGotoLabels(*us.body, env);
+        break;
+    }
     default: break;
     }
 }
@@ -948,7 +1044,44 @@ void CodeGen::genVarDecl(VarDeclStmt &s, FnEnv &env) {
     llvm::Type *allocaTy = (typeToUse && typeToUse->kind == TypeKind::Function)
         ? llvm::PointerType::get(ctx_, 0)
         : lowerType(typeToUse);
+
+    // ── Static local variables → module-level global with internal linkage ──
+    if (s.isStatic) {
+        std::string globalName = env.fnDecl->name + "." + s.name;
+        auto *gv = new llvm::GlobalVariable(
+            *mod_, allocaTy, /*isConstant=*/false,
+            llvm::GlobalValue::InternalLinkage,
+            llvm::Constant::getNullValue(allocaTy),
+            globalName);
+        if (s.isThreadLocal)
+            gv->setThreadLocalMode(llvm::GlobalVariable::GeneralDynamicTLSModel);
+        // Register in the globals_ map so genIdent finds it via the global path
+        globals_[s.name] = gv;
+        if (s.init) {
+            // Static init: only run once (use a guard flag)
+            std::string guardName = globalName + ".guard";
+            auto *guardGV = new llvm::GlobalVariable(
+                *mod_, llvm::Type::getInt1Ty(ctx_), false,
+                llvm::GlobalValue::InternalLinkage,
+                llvm::ConstantInt::getFalse(ctx_), guardName);
+            auto *guardVal = builder_.CreateLoad(llvm::Type::getInt1Ty(ctx_),
+                                                  guardGV, "guard");
+            auto *initBB = llvm::BasicBlock::Create(ctx_, "static.init", env.fn);
+            auto *contBB = llvm::BasicBlock::Create(ctx_, "static.cont", env.fn);
+            builder_.CreateCondBr(guardVal, contBB, initBB);
+            builder_.SetInsertPoint(initBB);
+            auto *val = genExpr(*s.init, env);
+            builder_.CreateStore(val, gv);
+            builder_.CreateStore(llvm::ConstantInt::getTrue(ctx_), guardGV);
+            builder_.CreateBr(contBB);
+            builder_.SetInsertPoint(contBB);
+        }
+        return;
+    }
+
     auto *alloca = createEntryAlloca(env, allocaTy, s.name);
+    if (s.alignment > 0)
+        alloca->setAlignment(llvm::Align(s.alignment));
     env.locals[s.name] = alloca;
 
     // Full debug: emit DILocalVariable + dbg.declare
@@ -1003,6 +1136,7 @@ llvm::Value *CodeGen::genExpr(Expr &e, FnEnv &env) {
     case ExprKind::Ternary:   return genTernary(static_cast<TernaryExpr &>(e), env);
     case ExprKind::Call:      return genCall(static_cast<CallExpr &>(e), env);
     case ExprKind::Subscript: return genSubscript(static_cast<SubscriptExpr &>(e), env);
+    case ExprKind::Slice:     return genSlice(static_cast<SliceExpr &>(e), env);
     case ExprKind::Member:
     case ExprKind::Arrow:     return genMember(static_cast<MemberExpr &>(e), env);
     case ExprKind::Cast:      return genCast(static_cast<CastExpr &>(e), env);
@@ -1334,6 +1468,39 @@ llvm::Value *CodeGen::applyBinaryOp(BinaryOp op, llvm::Value *l, llvm::Value *r,
                        : (isSigned ? builder_.CreateICmpSGE(l, r, "sge")
                                    : builder_.CreateICmpUGE(l, r, "uge"));
     case BinaryOp::Comma: return r;
+    // ── Wrapping arithmetic (no undefined behavior, modular) ────────────────
+    case BinaryOp::WrapAdd:
+        return builder_.CreateAdd(l, r, "wrapadd", /*NUW=*/false, /*NSW=*/false);
+    case BinaryOp::WrapSub:
+        return builder_.CreateSub(l, r, "wrapsub", /*NUW=*/false, /*NSW=*/false);
+    case BinaryOp::WrapMul:
+        return builder_.CreateMul(l, r, "wrapmul", /*NUW=*/false, /*NSW=*/false);
+    // ── Saturating arithmetic (clamp at min/max) ────────────────────────────
+    case BinaryOp::SatAdd: {
+        auto id = isSigned ? llvm::Intrinsic::sadd_sat : llvm::Intrinsic::uadd_sat;
+        return builder_.CreateBinaryIntrinsic(id, l, r, nullptr, "satadd");
+    }
+    case BinaryOp::SatSub: {
+        auto id = isSigned ? llvm::Intrinsic::ssub_sat : llvm::Intrinsic::usub_sat;
+        return builder_.CreateBinaryIntrinsic(id, l, r, nullptr, "satsub");
+    }
+    case BinaryOp::SatMul: {
+        // No direct LLVM sat mul intrinsic — use overflow intrinsic + select
+        auto id = isSigned ? llvm::Intrinsic::smul_with_overflow
+                           : llvm::Intrinsic::umul_with_overflow;
+        auto *result = builder_.CreateBinaryIntrinsic(id, l, r);
+        auto *val = builder_.CreateExtractValue(result, 0, "mul.val");
+        auto *ovf = builder_.CreateExtractValue(result, 1, "mul.ovf");
+        llvm::Value *maxVal;
+        unsigned bw = l->getType()->getIntegerBitWidth();
+        if (isSigned)
+            maxVal = llvm::ConstantInt::get(l->getType(),
+                llvm::APInt::getSignedMaxValue(bw));
+        else
+            maxVal = llvm::ConstantInt::get(l->getType(),
+                llvm::APInt::getMaxValue(bw));
+        return builder_.CreateSelect(ovf, maxVal, val, "satmul");
+    }
     default: return l;
     }
 }
@@ -1562,6 +1729,75 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
                 {handleVal, llvm::ConstantPointerNull::get(PtrTy)});
             return llvm::ConstantInt::get(Int32Ty, 0);
         }
+        // ── Channel built-ins ───────────────────────────────────────────────
+        // Channels are implemented as extern C functions (provided by std/thread.h
+        // or a user-supplied runtime). The compiler emits calls to:
+        //   void* __safec_chan_create(int capacity);
+        //   bool  __safec_chan_send(void* ch, void* val_ptr);
+        //   bool  __safec_chan_recv(void* ch, void* out_ptr);
+        //   void  __safec_chan_close(void* ch);
+        if (ident.name == "chan_create" && e.args.size() == 1) {
+            auto *PtrTy   = llvm::PointerType::get(ctx_, 0);
+            auto *Int32Ty = llvm::Type::getInt32Ty(ctx_);
+            auto *fnTy = llvm::FunctionType::get(PtrTy, {Int32Ty}, false);
+            auto fn = mod_->getOrInsertFunction("__safec_chan_create", fnTy);
+            auto *capVal = genExpr(*e.args[0], env);
+            if (capVal->getType() != Int32Ty)
+                capVal = builder_.CreateIntCast(capVal, Int32Ty, true);
+            return builder_.CreateCall(fnTy, fn.getCallee(), {capVal}, "chan");
+        }
+        if (ident.name == "chan_send" && e.args.size() == 2) {
+            auto *PtrTy  = llvm::PointerType::get(ctx_, 0);
+            auto *BoolTy = llvm::Type::getInt1Ty(ctx_);
+            auto *fnTy = llvm::FunctionType::get(BoolTy, {PtrTy, PtrTy}, false);
+            auto fn = mod_->getOrInsertFunction("__safec_chan_send", fnTy);
+            auto *chVal  = genExpr(*e.args[0], env);
+            auto *valPtr = genExpr(*e.args[1], env);
+            return builder_.CreateCall(fnTy, fn.getCallee(), {chVal, valPtr}, "sent");
+        }
+        if (ident.name == "chan_recv" && e.args.size() == 2) {
+            auto *PtrTy  = llvm::PointerType::get(ctx_, 0);
+            auto *BoolTy = llvm::Type::getInt1Ty(ctx_);
+            auto *fnTy = llvm::FunctionType::get(BoolTy, {PtrTy, PtrTy}, false);
+            auto fn = mod_->getOrInsertFunction("__safec_chan_recv", fnTy);
+            auto *chVal  = genExpr(*e.args[0], env);
+            auto *outPtr = genExpr(*e.args[1], env);
+            return builder_.CreateCall(fnTy, fn.getCallee(), {chVal, outPtr}, "recvd");
+        }
+        if (ident.name == "chan_close" && e.args.size() == 1) {
+            auto *PtrTy  = llvm::PointerType::get(ctx_, 0);
+            auto *VoidTy = llvm::Type::getVoidTy(ctx_);
+            auto *fnTy = llvm::FunctionType::get(VoidTy, {PtrTy}, false);
+            auto fn = mod_->getOrInsertFunction("__safec_chan_close", fnTy);
+            auto *chVal = genExpr(*e.args[0], env);
+            builder_.CreateCall(fnTy, fn.getCallee(), {chVal});
+            return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
+        }
+        // ── spawn_scoped: same as spawn but emits a deferred join ───────────
+        if (ident.name == "spawn_scoped" && e.args.size() == 2) {
+            // Reuse the same pthread_create codegen as spawn
+            auto *PtrTy   = llvm::PointerType::get(ctx_, 0);
+            auto *Int32Ty = llvm::Type::getInt32Ty(ctx_);
+            auto *Int64Ty = llvm::Type::getInt64Ty(ctx_);
+            // Create thread handle alloca
+            auto *tidAlloca = builder_.CreateAlloca(Int64Ty, nullptr, "scoped_tid");
+            // Get function pointer and arg
+            auto *fnVal  = genExpr(*e.args[0], env);
+            auto *argVal = genExpr(*e.args[1], env);
+            // Bitcast arg to void* if needed
+            if (argVal->getType() != PtrTy)
+                argVal = builder_.CreateBitOrPointerCast(argVal, PtrTy);
+            // pthread_create(&tid, null, fn, arg)
+            auto *ptCreateTy = llvm::FunctionType::get(Int32Ty,
+                {PtrTy, PtrTy, PtrTy, PtrTy}, false);
+            auto ptCreateFn = mod_->getOrInsertFunction("pthread_create", ptCreateTy);
+            builder_.CreateCall(ptCreateTy, ptCreateFn.getCallee(),
+                {tidAlloca, llvm::ConstantPointerNull::get(PtrTy), fnVal, argVal});
+            auto *tid = builder_.CreateLoad(Int64Ty, tidAlloca, "scoped_handle");
+            // Register deferred join: store handle for scope-exit join
+            // (The defer is handled by Sema inserting a DeferStmt with __safec_join)
+            return tid;
+        }
     }
 
     auto *calleeVal = genExpr(*e.callee, env);
@@ -1626,6 +1862,8 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
         ft = fn->getFunctionType();
         coerceArgs(ft);
         auto *call = builder_.CreateCall(ft, calleeVal, args);
+        // Propagate calling convention from the callee function
+        call->setCallingConv(fn->getCallingConv());
         return call;
     }
     // Indirect call via function pointer (fn type variable or closure)
@@ -1682,6 +1920,35 @@ llvm::Value *CodeGen::genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr) 
         if (wantAddr) return gep;
         return builder_.CreateLoad(arrTy->getElementType(), gep, "arr.elem");
     }
+    // Slice subscript: baseAddr is the alloca for the {T*, i64} struct
+    if (e.base->type && e.base->type->kind == TypeKind::Slice) {
+        auto *sliceTy = baseTy; // {T*, i64}
+        auto *i64Ty   = llvm::Type::getInt64Ty(ctx_);
+        auto *slPtr = builder_.CreateLoad(llvm::PointerType::get(ctx_, 0),
+            builder_.CreateStructGEP(sliceTy, baseAddr, 0), "sl.ptr");
+        // Runtime bounds check
+        if (!e.boundsCheckOmit) {
+            auto *slLen = builder_.CreateLoad(i64Ty,
+                builder_.CreateStructGEP(sliceTy, baseAddr, 1), "sl.len");
+            auto *idx64 = builder_.CreateZExtOrTrunc(idxVal, i64Ty);
+            auto *oob = builder_.CreateICmpUGE(idx64, slLen, "sl.oob");
+            auto *curFn  = builder_.GetInsertBlock()->getParent();
+            auto *trapBB = llvm::BasicBlock::Create(ctx_, "sl.trap", curFn);
+            auto *okBB   = llvm::BasicBlock::Create(ctx_, "sl.ok",   curFn);
+            builder_.CreateCondBr(oob, trapBB, okBB);
+            builder_.SetInsertPoint(trapBB);
+            auto abortFn = mod_->getOrInsertFunction(
+                "abort", llvm::FunctionType::get(llvm::Type::getVoidTy(ctx_), false));
+            builder_.CreateCall(abortFn);
+            builder_.CreateUnreachable();
+            builder_.SetInsertPoint(okBB);
+        }
+        auto *elemTy = e.type ? lowerType(e.type) : llvm::Type::getInt32Ty(ctx_);
+        gep = builder_.CreateGEP(elemTy, slPtr, idxVal, "sl.idx");
+        if (wantAddr) return gep;
+        return builder_.CreateLoad(elemTy, gep, "sl.elem");
+    }
+
     // Pointer subscript: baseAddr is the alloca for the pointer variable.
     // Load the actual pointer value from the alloca before indexing into it.
     auto *ptrVal = builder_.CreateLoad(llvm::PointerType::get(ctx_, 0),
@@ -1690,6 +1957,83 @@ llvm::Value *CodeGen::genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr) 
     gep = builder_.CreateGEP(elemTy, ptrVal, idxVal, "ptr.idx");
     if (wantAddr) return gep;
     return builder_.CreateLoad(elemTy, gep, "ptr.elem");
+}
+
+// ── Slice construction: arr[start..end] → {T*, i64} ────────────────────────
+llvm::Value *CodeGen::genSlice(SliceExpr &e, FnEnv &env) {
+    auto *i64Ty  = llvm::Type::getInt64Ty(ctx_);
+    auto *ptrTy  = llvm::PointerType::get(ctx_, 0);
+    auto *sliceST = lowerType(e.type); // {T*, i64}
+
+    // Determine base pointer and array length
+    llvm::Value *basePtr = nullptr;
+    llvm::Value *arrLen  = nullptr;
+
+    if (e.base->type->kind == TypeKind::Array) {
+        auto &at = static_cast<ArrayType &>(*e.base->type);
+        auto *arrAddr = genLValue(*e.base, env);
+        auto *arrTy   = lowerType(e.base->type);
+        // Pointer to element 0
+        basePtr = builder_.CreateGEP(arrTy, arrAddr,
+            {llvm::ConstantInt::get(i64Ty, 0), llvm::ConstantInt::get(i64Ty, 0)},
+            "slice.base");
+        arrLen = llvm::ConstantInt::get(i64Ty, at.size);
+    } else if (e.base->type->kind == TypeKind::Slice) {
+        // Re-slicing a slice
+        auto *sliceVal = genLValue(*e.base, env);
+        auto *slBaseTy = lowerType(e.base->type);
+        basePtr = builder_.CreateLoad(ptrTy,
+            builder_.CreateStructGEP(slBaseTy, sliceVal, 0), "reslice.ptr");
+        arrLen = builder_.CreateLoad(i64Ty,
+            builder_.CreateStructGEP(slBaseTy, sliceVal, 1), "reslice.len");
+    } else if (e.base->type->kind == TypeKind::Pointer) {
+        basePtr = genExpr(*e.base, env);
+        arrLen = nullptr; // unknown length for pointers
+    } else if (e.base->type->kind == TypeKind::Reference) {
+        auto &rt = static_cast<ReferenceType &>(*e.base->type);
+        if (rt.base->kind == TypeKind::Array) {
+            auto &at = static_cast<ArrayType &>(*rt.base);
+            auto *refPtr = genExpr(*e.base, env); // loads the pointer
+            auto *arrTy  = lowerType(rt.base);
+            basePtr = builder_.CreateGEP(arrTy, refPtr,
+                {llvm::ConstantInt::get(i64Ty, 0), llvm::ConstantInt::get(i64Ty, 0)},
+                "slice.refbase");
+            arrLen = llvm::ConstantInt::get(i64Ty, at.size);
+        } else {
+            basePtr = genExpr(*e.base, env);
+            arrLen = nullptr;
+        }
+    } else {
+        basePtr = genExpr(*e.base, env);
+        arrLen = nullptr;
+    }
+
+    auto *elemTy = lowerType(static_cast<SliceType &>(*e.type).element);
+
+    // Compute start
+    llvm::Value *startVal = e.start ? builder_.CreateZExtOrTrunc(
+        genExpr(*e.start, env), i64Ty) : llvm::ConstantInt::get(i64Ty, 0);
+    // Compute end
+    llvm::Value *endVal = e.end ? builder_.CreateZExtOrTrunc(
+        genExpr(*e.end, env), i64Ty) : arrLen;
+
+    if (!endVal) {
+        // Pointer with no end — can't determine length; use 0 as fallback
+        endVal = llvm::ConstantInt::get(i64Ty, 0);
+    }
+
+    // Slice pointer: basePtr + start
+    auto *slicePtr = builder_.CreateGEP(elemTy, basePtr, startVal, "slice.ptr");
+    // Slice length: end - start
+    auto *sliceLen = builder_.CreateSub(endVal, startVal, "slice.len");
+
+    // Construct {T*, i64} struct
+    auto *alloca = builder_.CreateAlloca(sliceST, nullptr, "slice.tmp");
+    builder_.CreateStore(slicePtr,
+        builder_.CreateStructGEP(sliceST, alloca, 0));
+    builder_.CreateStore(sliceLen,
+        builder_.CreateStructGEP(sliceST, alloca, 1));
+    return builder_.CreateLoad(sliceST, alloca, "slice.val");
 }
 
 // ── Member access ─────────────────────────────────────────────────────────────
@@ -1721,6 +2065,28 @@ llvm::Value *CodeGen::genMember(MemberExpr &e, FnEnv &env, bool wantAddr) {
         // s.field: base is a struct value; use its address directly
         baseAddr = genLValue(*e.base, env);
         structTy = e.base->type ? lowerType(e.base->type) : llvm::Type::getInt32Ty(ctx_);
+    }
+
+    // Slice member access: .ptr → index 0, .len → index 1
+    if (e.base->type) {
+        TypePtr bty = e.base->type;
+        if (bty->kind == TypeKind::Reference)
+            bty = static_cast<ReferenceType &>(*bty).base;
+        if (bty->kind == TypeKind::Slice) {
+            // Slice is {T*, i64}. baseAddr is alloca for the slice struct.
+            auto *sliceTy = lowerType(bty);
+            llvm::Value *sliceAddr;
+            if (e.isArrow || (e.base->type->kind == TypeKind::Reference)) {
+                sliceAddr = baseAddr;
+            } else {
+                sliceAddr = genLValue(*e.base, env);
+            }
+            unsigned idx = (e.field == "ptr") ? 0 : 1; // ptr=0, len=1
+            auto *gep = builder_.CreateStructGEP(sliceTy, sliceAddr, idx, "slice." + e.field);
+            if (wantAddr) return gep;
+            auto *fty = static_cast<llvm::StructType *>(sliceTy)->getElementType(idx);
+            return builder_.CreateLoad(fty, gep, "slice." + e.field + ".val");
+        }
     }
 
     // Find field index

@@ -46,6 +46,7 @@ enum class ExprKind {
     AlignofType,    // alignof(T)
     FieldCount,     // fieldcount(T)
     SizeofPack,     // sizeof...(T)
+    Slice,          // arr[start..end] → slice construction
     TaggedUnionInit,// Foo.variant(value)
 };
 
@@ -61,6 +62,9 @@ enum class BinaryOp {
     LogAnd, LogOr,
     Eq, NEq, Lt, Gt, LEq, GEq,
     Comma,
+    // Overflow-aware arithmetic
+    WrapAdd, WrapSub, WrapMul,     // +| -| *| (wrapping, no UB)
+    SatAdd, SatSub, SatMul,        // +% -% *% (saturating)
 };
 
 enum class AssignOp {
@@ -284,6 +288,16 @@ struct TaggedUnionInitExpr : Expr {
           variantName(std::move(vn)), tag(t), payload(std::move(p)) {}
 };
 
+// ── Slice expression: arr[start..end] ──────────────────────────────────────
+struct SliceExpr : Expr {
+    ExprPtr base;      // the array or pointer being sliced
+    ExprPtr start;     // start index (nullable → 0)
+    ExprPtr end;       // end index (nullable → array length)
+    SliceExpr(ExprPtr b, ExprPtr s, ExprPtr e, SourceLocation l)
+        : Expr(ExprKind::Slice, l), base(std::move(b)),
+          start(std::move(s)), end(std::move(e)) {}
+};
+
 // =============================================================================
 // STATEMENTS
 // =============================================================================
@@ -385,8 +399,10 @@ struct VarDeclStmt : Stmt {
     ExprPtr     init;       // nullable
     bool        isConst    = false;
     bool        isStatic   = false;
-    bool        isVolatile = false;
-    bool        isAtomic   = false;
+    bool        isVolatile    = false;
+    bool        isAtomic      = false;
+    bool        isThreadLocal = false;
+    int         alignment  = 0;  // align(N): 0 = default
 
     VarDeclStmt(std::string n, TypePtr t, ExprPtr i, SourceLocation l)
         : Stmt(StmtKind::VarDecl, l), name(std::move(n)),
@@ -477,7 +493,7 @@ struct AsmStmt : Stmt {
 // =============================================================================
 
 enum class DeclKind {
-    Function, Struct, Enum, Region, GlobalVar, TypeAlias, StaticAssert
+    Function, Struct, Enum, Region, GlobalVar, TypeAlias, StaticAssert, Newtype
 };
 
 struct Decl {
@@ -526,6 +542,7 @@ struct FunctionDecl : Decl {
     bool        isNoReturn    = false;   // noreturn — function never returns
     bool        isPure        = false;   // pure — no side effects
     std::string sectionName;             // section("name") — empty = default
+    std::string callingConv;             // "stdcall", "cdecl", "fastcall", or "" (default)
 
     FunctionDecl(std::string n, SourceLocation l)
         : Decl(DeclKind::Function, std::move(n), l) {}
@@ -560,9 +577,18 @@ struct StructDecl : Decl {
 struct EnumDecl : Decl {
     std::vector<std::pair<std::string, std::optional<int64_t>>> enumerators;
     std::shared_ptr<EnumType> type;   // filled by sema
+    TypePtr underlyingType;            // e.g. uint8, int16; nullptr = default (i32)
 
     EnumDecl(std::string n, SourceLocation l)
         : Decl(DeclKind::Enum, std::move(n), l) {}
+};
+
+// ── Newtype declaration: newtype Name = BaseType; ────────────────────────────
+struct NewtypeDecl : Decl {
+    TypePtr baseType;  // the underlying type being wrapped
+
+    NewtypeDecl(std::string n, TypePtr base, SourceLocation l)
+        : Decl(DeclKind::Newtype, std::move(n), l), baseType(std::move(base)) {}
 };
 
 // ── Region declaration ────────────────────────────────────────────────────────
@@ -581,8 +607,9 @@ struct GlobalVarDecl : Decl {
     bool    isConst    = false;
     bool    isStatic   = false;
     bool    isExtern   = false;
-    bool    isVolatile = false;
-    bool    isAtomic   = false;
+    bool    isVolatile    = false;
+    bool    isAtomic      = false;
+    bool    isThreadLocal = false;
     std::string sectionName;
 
     GlobalVarDecl(std::string n, SourceLocation l)

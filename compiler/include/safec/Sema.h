@@ -3,6 +3,7 @@
 #include "safec/Clone.h"
 #include "safec/Diagnostic.h"
 #include <unordered_map>
+#include <unordered_set>
 #include <map>
 #include <vector>
 #include <string>
@@ -109,6 +110,7 @@ private:
     TypePtr checkTernary(TernaryExpr &e);
     TypePtr checkCall(CallExpr &e);
     TypePtr checkSubscript(SubscriptExpr &e);
+    TypePtr checkSlice(SliceExpr &e);
     TypePtr checkMember(MemberExpr &e);
     TypePtr checkCast(CastExpr &e);
     TypePtr checkAssign(AssignExpr &e);
@@ -127,17 +129,25 @@ private:
     // Check that a nullable reference is tested before deref
     void checkNullabilityDeref(const TypePtr &ty, SourceLocation loc);
 
-    // ── Alias tracking ────────────────────────────────────────────────────────
-    // Tracks mutable references to each object to detect aliasing violations
+    // ── Alias tracking (NLL borrow checker) ─────────────────────────────────
+    // Non-Lexical Lifetimes: borrows end at last use, not scope exit.
     struct AliasRecord {
         std::string varName;
+        std::string borrower;     // name of the variable holding the borrow
         bool        isMutable;
         int         scopeDepth;
+        bool        released = false;  // NLL: marked true when borrow is no longer used
     };
     std::unordered_map<std::string, std::vector<AliasRecord>> aliasMap_;
 
-    void trackRef(const std::string &targetVar, bool isMut, int depth);
+    void trackRef(const std::string &targetVar, bool isMut, int depth,
+                  const std::string &borrower = {});
     void untrackScope(int depth);
+    void releaseUnusedBorrows(const std::string &borrower);
+
+    // ── Inter-procedural region analysis ─────────────────────────────────────
+    // Validates region constraints across function call boundaries
+    void checkCallRegions(CallExpr &e, FunctionType *ft, size_t selfOffset);
 
     // ── Generics monomorphization ─────────────────────────────────────────────
     struct MonoKey {
@@ -178,6 +188,8 @@ private:
     // ── State ─────────────────────────────────────────────────────────────────
     bool freestanding_ = false;  // --freestanding mode: warn on stdlib calls
     bool checkingPure_ = false;  // true while checking a 'pure' function body
+    int  loopDepth_    = 0;      // >0 when inside a loop (for break/continue validation)
+    std::unordered_set<std::string> functionLabels_; // labels in current function
     TranslationUnit &tu_;
     DiagEngine      &diag_;
 
