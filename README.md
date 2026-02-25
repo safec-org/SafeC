@@ -1034,10 +1034,10 @@ The SafeC compiler is a working prototype implementing:
 | Struct methods (static dispatch) | ✅ Complete |
 | Standard library (`std/`)        | ✅ Complete |
 | `safeguard` package manager      | ✅ Complete |
-| Arena region runtime allocator   | 🔲 Planned  |
-| Concurrency model                | 🔲 Planned  |
-| Operator overloading             | 🔲 Planned  |
-| Tuple / closure lowering         | 🔲 Planned  |
+| Arena region runtime allocator   | ✅ Complete |
+| Operator overloading             | ✅ Complete |
+| Tuple / closure lowering         | ✅ Complete |
+| Concurrency model (spawn/join)   | ✅ Complete |
 | Language server (LSP)            | 🔲 Planned  |
 | Debug info (DWARF)               | 🔲 Planned  |
 | Incremental compilation          | 🔲 Planned  |
@@ -1070,9 +1070,9 @@ These build directly on the current implementation:
 
 | Feature | Description |
 | ------- | ----------- |
-| **Arena runtime allocator** | Implement `new<R> T(…)` to pair with the compile-time escape checker; a bump-pointer allocator backed by a user-supplied byte buffer. |
-| **Operator overloading** | `operator +`, `operator ==`, etc. as statically resolved free functions lowered from `T::operator op(args)` — zero runtime dispatch. |
-| **Tuple / closure lowering** | `tuple(T, U)` lowers to compiler-generated structs; closures lower to a captured-values struct + a static call function with no implicit heap allocation. |
+| ~~**Arena runtime allocator**~~ | ✅ Done — `new<R> T` bump-pointer allocator with `arena_reset<R>()`. |
+| ~~**Operator overloading**~~ | ✅ Done — `operator +`, `operator ==`, etc. as method calls via `T::operator op`; trait enforcement on generics. |
+| ~~**Tuple / closure lowering**~~ | ✅ Done — `tuple(T, U)` lowers to anonymous structs; closures `\|params\| { body }` lower to internal LLVM functions; `spawn`/`join` via pthreads. |
 | **Debug info (DWARF)** | Source-level debugging via `llvm::DIBuilder`; line tables, variable locations, struct layouts. |
 | **Incremental compilation** | Per-function IR cache keyed on AST hash to avoid recompiling unchanged functions in large TUs. |
 | **Function pointer types** | First-class `fn(T, U) -> V` type syntax, enabling safe callbacks without `unsafe{}` wrappers. |

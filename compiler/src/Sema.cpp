@@ -913,8 +913,8 @@ TypePtr Sema::checkClosure(ClosureExpr &e) {
 TypePtr Sema::checkSpawn(SpawnExpr &e) {
     // Check the closure
     TypePtr closureTy = checkExpr(*e.closure);
-    // Return a void pointer handle (simplified — real implementation would use thread handles)
-    return makePointer(makeVoid());
+    // spawn returns a pthread_t (represented as signed i64)
+    return makeInt(64, true);  // pthread_t handle (long long)
 }
 
 TypePtr Sema::checkTernary(TernaryExpr &e) {
@@ -931,6 +931,16 @@ TypePtr Sema::checkTernary(TernaryExpr &e) {
 }
 
 TypePtr Sema::checkCall(CallExpr &e) {
+    // ── Builtin __safec_join ──────────────────────────────────────────────────
+    if (e.callee->kind == ExprKind::Ident) {
+        auto &ident = static_cast<IdentExpr &>(*e.callee);
+        if (ident.name == "__safec_join") {
+            for (auto &a : e.args) checkExpr(*a);
+            e.type = makeVoid();
+            return makeVoid();
+        }
+    }
+
     // ── Method call detection: x.m(args) → T_m(self=&x, args) ───────────────
     if (e.callee->kind == ExprKind::Member || e.callee->kind == ExprKind::Arrow) {
         auto &mem = static_cast<MemberExpr &>(*e.callee);

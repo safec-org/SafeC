@@ -264,8 +264,60 @@ llvm::Value *CodeGen::genClosure(ClosureExpr &e, FnEnv &env) {
 }
 
 llvm::Value *CodeGen::genSpawn(SpawnExpr &e, FnEnv &env) {
-    // Simplified: generate the closure and return its function pointer as handle
-    return genExpr(*e.closure, env);
+    // Generate the closure body function
+    llvm::Value *closureFn = genExpr(*e.closure, env);
+
+    auto *PtrTy   = llvm::PointerType::get(ctx_, 0);
+    auto *Int64Ty = llvm::Type::getInt64Ty(ctx_);
+    auto *Int32Ty = llvm::Type::getInt32Ty(ctx_);
+
+    // Allocate a pthread_t (i64) handle on the stack
+    auto *handleAlloca = createEntryAlloca(env, Int64Ty, "thread_handle");
+
+    // pthread_create(pthread_t*, attr*, void*(*)(void*), void*) → int
+    auto *ptCreateTy = llvm::FunctionType::get(Int32Ty,
+        {PtrTy, PtrTy, PtrTy, PtrTy}, false);
+    auto ptCreateFn = mod_->getOrInsertFunction("pthread_create", ptCreateTy);
+
+    // Build a pthread-compatible wrapper around the closure.
+    // Wrapper type: void*(void*)
+    llvm::Function *closureFnPtr = llvm::dyn_cast<llvm::Function>(closureFn);
+    llvm::Function *wrapper = nullptr;
+    if (closureFnPtr) {
+        std::string wrapName = closureFnPtr->getName().str() + "_pt";
+        wrapper = mod_->getFunction(wrapName);
+        if (!wrapper) {
+            auto *wrapTy = llvm::FunctionType::get(PtrTy, {PtrTy}, false);
+            wrapper = llvm::Function::Create(wrapTy, llvm::GlobalValue::InternalLinkage,
+                                             wrapName, *mod_);
+            auto *savedBB = builder_.GetInsertBlock();
+            auto *wrapEntry = llvm::BasicBlock::Create(ctx_, "entry", wrapper);
+            builder_.SetInsertPoint(wrapEntry);
+            auto *closureFnTy = closureFnPtr->getFunctionType();
+            if (closureFnTy->getNumParams() == 0) {
+                // No-param closure: just call it
+                builder_.CreateCall(closureFnTy, closureFnPtr, {});
+            } else if (closureFnTy->getNumParams() == 1 &&
+                       closureFnTy->getParamType(0)->isPointerTy()) {
+                // env-ptr closure: pass through the void* arg
+                builder_.CreateCall(closureFnTy, closureFnPtr, {wrapper->getArg(0)});
+            }
+            // Otherwise: typed-param closures aren't called as threads
+            builder_.CreateRet(llvm::ConstantPointerNull::get(PtrTy));
+            if (savedBB) builder_.SetInsertPoint(savedBB);
+        }
+    }
+
+    // pthread_create(&handle, NULL, wrapper, NULL)
+    auto *nullPtr = llvm::ConstantPointerNull::get(PtrTy);
+    llvm::Value *wrapperPtr = wrapper
+        ? static_cast<llvm::Value *>(wrapper)
+        : static_cast<llvm::Value *>(nullPtr);
+    builder_.CreateCall(ptCreateTy, ptCreateFn.getCallee(),
+        {handleAlloca, nullPtr, wrapperPtr, nullPtr});
+
+    // Return handle as i64 (pthread_t)
+    return builder_.CreateLoad(Int64Ty, handleAlloca, "thread_id");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1049,6 +1101,25 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
                 builder_.CreateStore(llvm::ConstantInt::get(Int64Ty, 0), usedPtr);
                 return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
             }
+        }
+        // Handle __safec_join(handle) — pthread_join
+        if (ident.name == "__safec_join" && !e.args.empty()) {
+            auto *PtrTy   = llvm::PointerType::get(ctx_, 0);
+            auto *Int32Ty = llvm::Type::getInt32Ty(ctx_);
+            auto *Int64Ty = llvm::Type::getInt64Ty(ctx_);
+            auto *ptJoinTy = llvm::FunctionType::get(Int32Ty, {Int64Ty, PtrTy}, false);
+            auto ptJoinFn  = mod_->getOrInsertFunction("pthread_join", ptJoinTy);
+            auto *handleVal = genExpr(*e.args[0], env);
+            // Ensure handle is i64
+            if (handleVal->getType() != Int64Ty) {
+                if (handleVal->getType()->isIntegerTy())
+                    handleVal = builder_.CreateZExt(handleVal, Int64Ty);
+                else if (handleVal->getType()->isPointerTy())
+                    handleVal = builder_.CreatePtrToInt(handleVal, Int64Ty);
+            }
+            builder_.CreateCall(ptJoinTy, ptJoinFn.getCallee(),
+                {handleVal, llvm::ConstantPointerNull::get(PtrTy)});
+            return llvm::ConstantInt::get(Int32Ty, 0);
         }
     }
 
