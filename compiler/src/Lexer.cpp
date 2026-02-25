@@ -75,6 +75,9 @@ TK Lexer::keywordKind(const std::string &w) {
         {"try",           TK::KW_try},
         {"must_use",      TK::KW_must_use},
         {"fn",            TK::KW_fn},
+        {"alignof",       TK::KW_alignof},
+        {"typeof",        TK::KW_typeof},
+        {"fieldcount",    TK::KW_fieldcount},
     };
     auto it = kw.find(w);
     return (it != kw.end()) ? it->second : TK::Ident;

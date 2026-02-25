@@ -140,9 +140,35 @@ static ExprPtr cloneExprImpl(const Expr *ep, const TypeSubst &subs) {
     case ExprKind::Call: {
         auto &ce = static_cast<const CallExpr &>(e);
         std::vector<ExprPtr> args;
-        for (auto &a : ce.args) args.push_back(cloneExprImpl(a.get(), subs));
-        return fix(std::make_unique<CallExpr>(
-            cloneExprImpl(ce.callee.get(), subs), std::move(args), ce.loc));
+        for (auto &a : ce.args) {
+            // Pack expansion: if arg is an ident matching a pack param name,
+            // expand to multiple args (args0, args1, ...)
+            if (a && a->kind == ExprKind::Ident) {
+                auto &id = static_cast<const IdentExpr &>(*a);
+                std::string countKey = "__pack_count_" + id.name;
+                auto pit = subs.find(countKey);
+                if (pit != subs.end()) {
+                    // pit->second is an Int type whose name encodes the count
+                    int count = 0;
+                    if (pit->second && pit->second->kind == TypeKind::Struct) {
+                        // We stored count in StructType name as a number string
+                        auto &st = static_cast<const StructType &>(*pit->second);
+                        count = std::atoi(st.name.c_str());
+                    }
+                    for (int pi = 0; pi < count; ++pi) {
+                        args.push_back(std::make_unique<IdentExpr>(
+                            id.name + std::to_string(pi), id.loc));
+                    }
+                    continue;
+                }
+            }
+            args.push_back(cloneExprImpl(a.get(), subs));
+        }
+        auto cloned = std::make_unique<CallExpr>(
+            cloneExprImpl(ce.callee.get(), subs), std::move(args), ce.loc);
+        cloned->taggedUnionTag = ce.taggedUnionTag;
+        cloned->taggedUnionName = ce.taggedUnionName;
+        return fix(std::move(cloned));
     }
     case ExprKind::Subscript: {
         auto &se = static_cast<const SubscriptExpr &>(e);
@@ -170,6 +196,34 @@ static ExprPtr cloneExprImpl(const Expr *ep, const TypeSubst &subs) {
         auto &se = static_cast<const SizeofTypeExpr &>(e);
         return fix(std::make_unique<SizeofTypeExpr>(
             substituteType(se.ofType, subs), se.loc));
+    }
+    case ExprKind::AlignofType: {
+        auto &ae = static_cast<const AlignofTypeExpr &>(e);
+        return fix(std::make_unique<AlignofTypeExpr>(
+            substituteType(ae.ofType, subs), ae.loc));
+    }
+    case ExprKind::FieldCount: {
+        auto &fc = static_cast<const FieldCountExpr &>(e);
+        return fix(std::make_unique<FieldCountExpr>(
+            substituteType(fc.ofType, subs), fc.loc));
+    }
+    case ExprKind::SizeofPack: {
+        auto &sp = static_cast<const SizeofPackExpr &>(e);
+        auto clone = std::make_unique<SizeofPackExpr>(sp.packName, sp.loc);
+        // Count pack entries in subs
+        int count = 0;
+        for (int i = 0; ; ++i) {
+            if (subs.count(sp.packName + "__" + std::to_string(i))) ++count;
+            else break;
+        }
+        clone->resolvedCount = count;
+        return fix(std::move(clone));
+    }
+    case ExprKind::TaggedUnionInit: {
+        auto &tui = static_cast<const TaggedUnionInitExpr &>(e);
+        return fix(std::make_unique<TaggedUnionInitExpr>(
+            tui.unionName, tui.variantName, tui.tag,
+            cloneExprImpl(tui.payload.get(), subs), tui.loc));
     }
     case ExprKind::Assign: {
         auto &ae = static_cast<const AssignExpr &>(e);
@@ -319,17 +373,42 @@ std::unique_ptr<FunctionDecl> cloneFunctionDecl(const FunctionDecl &fn,
     clone->isConstMethod = fn.isConstMethod;
     // caller clears genericParams and sets mangled name
 
+    // Mutable copy of subs for pack expansion metadata
+    TypeSubst bodySubs = subs;
+
     for (auto &p : fn.params) {
-        ParamDecl pd;
-        pd.name = p.name;
-        pd.type = substituteType(p.type, subs);
-        pd.loc  = p.loc;
-        clone->params.push_back(std::move(pd));
+        if (p.isPack) {
+            // Expand pack parameter into N concrete params
+            std::string packTypeName;
+            if (p.type && p.type->kind == TypeKind::Generic)
+                packTypeName = static_cast<const GenericType &>(*p.type).name;
+            int count = 0;
+            for (int i = 0; ; ++i) {
+                auto it = bodySubs.find(packTypeName + "__" + std::to_string(i));
+                if (it == bodySubs.end()) break;
+                ParamDecl pd;
+                pd.name = p.name + std::to_string(i);
+                pd.type = it->second;
+                pd.loc  = p.loc;
+                clone->params.push_back(std::move(pd));
+                ++count;
+            }
+            // Store pack count for body cloning (CallExpr expansion)
+            // Use StructType name to encode the count as a string
+            auto countTy = std::make_shared<StructType>(std::to_string(count), false);
+            bodySubs["__pack_count_" + p.name] = countTy;
+        } else {
+            ParamDecl pd;
+            pd.name = p.name;
+            pd.type = substituteType(p.type, bodySubs);
+            pd.loc  = p.loc;
+            clone->params.push_back(std::move(pd));
+        }
     }
 
     if (fn.body) {
         // Clone the body using the raw-pointer helper (no ownership transfer)
-        auto bodyClone = cloneStmtImpl(fn.body.get(), subs);
+        auto bodyClone = cloneStmtImpl(fn.body.get(), bodySubs);
         clone->body.reset(static_cast<CompoundStmt *>(bodyClone.release()));
     }
 

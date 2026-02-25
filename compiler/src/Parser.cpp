@@ -71,6 +71,7 @@ bool Parser::isTypeStart(const Token &t) const {
     case TK::KW_const:
     case TK::KW_tuple:    // tuple type
     case TK::KW_fn:       // fn ReturnType(Params) — function pointer type
+    case TK::KW_typeof:   // typeof(expr) — type position
     case TK::Amp:         // &stack T
     case TK::QuestionAmp: // ?&stack T
     case TK::Question:    // ?T (optional)
@@ -209,6 +210,15 @@ TypePtr Parser::parseBaseType() {
         expect(TK::RParen, "expected ')' closing fn parameter list");
         return makeFunction(std::move(ret), std::move(params), variadic);
     }
+    case TK::KW_typeof: {
+        // typeof(expr) — type position; Sema resolves to concrete type
+        consume(); // eat 'typeof'
+        expect(TK::LParen, "expected '(' after 'typeof'");
+        auto e = parseExpr();
+        Expr *rawExpr = e.release(); // ownership transferred to TypeofType
+        expect(TK::RParen, "expected ')' after typeof expression");
+        return std::make_shared<TypeofType>(static_cast<void *>(rawExpr));
+    }
     case TK::Ident: {
         std::string name = cur().text;
         consume();
@@ -285,6 +295,11 @@ std::vector<GenericParam> Parser::parseGenericParams() {
         if (!cur().is(TK::Ident)) {
             diag_.error(cur().loc, "expected generic parameter name");
         } else consume();
+        // T... — variadic type pack
+        if (cur().is(TK::DotDotDot)) {
+            consume();
+            p.isPack = true;
+        }
         if (cur().is(TK::Colon)) {
             consume();
             p.constraint = cur().text;
@@ -484,6 +499,11 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(
         ParamDecl p;
         p.loc  = cur().loc;
         p.type = parseType();
+        // T... args — variadic pack parameter
+        if (cur().is(TK::DotDotDot)) {
+            consume();
+            p.isPack = true;
+        }
         // Optional parameter name
         if (cur().is(TK::Ident)) {
             p.name = cur().text;
@@ -797,6 +817,7 @@ StmtPtr Parser::parseStmt() {
                 cur().is(TK::KW_unsigned) || cur().is(TK::KW_signed) ||
                 cur().is(TK::KW_struct) || cur().is(TK::KW_enum) ||
                 cur().is(TK::KW_tuple) || cur().is(TK::KW_fn) ||
+                cur().is(TK::KW_typeof) ||
                 cur().is(TK::Amp) || cur().is(TK::QuestionAmp) ||
                 cur().is(TK::Question)   // ?T optional type
             );
@@ -984,6 +1005,18 @@ StmtPtr Parser::parseDeferStmt(bool isErrDefer) {
 // Handles: integer literal, char literal, N..M range, enum ident
 MatchPattern Parser::parseMatchPattern() {
     MatchPattern p;
+    // .variant(bind) — tagged union pattern
+    if (cur().is(TK::Dot) && peek().is(TK::Ident)) {
+        consume(); // eat '.'
+        p.kind  = PatternKind::EnumIdent;
+        p.ident = cur().text;
+        consume();
+        if (match(TK::LParen)) {
+            if (cur().is(TK::Ident)) { p.bindName = cur().text; consume(); }
+            expect(TK::RParen);
+        }
+        return p;
+    }
     // Integer literal or N..M range
     if (cur().is(TK::IntLit)) {
         p.kind   = PatternKind::IntLit;
@@ -1289,6 +1322,15 @@ ExprPtr Parser::parseUnaryExpr() {
     }
     case TK::KW_sizeof: {
         consume();
+        // sizeof...(T) — variadic pack count
+        if (cur().is(TK::DotDotDot)) {
+            consume(); // eat '...'
+            expect(TK::LParen, "expected '(' after 'sizeof...'");
+            std::string packName = cur().text;
+            consume();
+            expect(TK::RParen, "expected ')' after sizeof... pack name");
+            return std::make_unique<SizeofPackExpr>(packName, loc);
+        }
         if (cur().is(TK::LParen) && isTypeStart(peek())) {
             consume(); // '('
             auto t = parseType();
@@ -1297,6 +1339,20 @@ ExprPtr Parser::parseUnaryExpr() {
         }
         auto e = parseUnaryExpr();
         return std::make_unique<UnaryExpr>(UnaryOp::SizeofExpr, std::move(e), loc);
+    }
+    case TK::KW_alignof: {
+        consume();
+        expect(TK::LParen, "expected '(' after 'alignof'");
+        auto t = parseType();
+        expect(TK::RParen, "expected ')' after alignof type");
+        return std::make_unique<AlignofTypeExpr>(std::move(t), loc);
+    }
+    case TK::KW_fieldcount: {
+        consume();
+        expect(TK::LParen, "expected '(' after 'fieldcount'");
+        auto t = parseType();
+        expect(TK::RParen, "expected ')' after fieldcount type");
+        return std::make_unique<FieldCountExpr>(std::move(t), loc);
     }
     case TK::KW_try: {
         // try expr — unwrap optional, propagate null on empty

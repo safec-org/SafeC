@@ -159,9 +159,19 @@ llvm::StructType *CodeGen::lowerStructType(const StructType &st) {
 
     // Fill in fields
     if (st.isDefined) {
-        std::vector<llvm::Type *> fieldTys;
-        for (auto &f : st.fields) fieldTys.push_back(lowerType(f.type));
-        llvmSt->setBody(fieldTys, st.isPacked);
+        if (st.isTaggedUnion) {
+            // Tagged union layout: { i32 tag, [maxPayloadSize x i8] payload }
+            int payloadSize = st.maxPayloadSize > 0 ? st.maxPayloadSize : 8;
+            std::vector<llvm::Type *> body = {
+                llvm::Type::getInt32Ty(ctx_),
+                llvm::ArrayType::get(llvm::Type::getInt8Ty(ctx_), payloadSize)
+            };
+            llvmSt->setBody(body, false);
+        } else {
+            std::vector<llvm::Type *> fieldTys;
+            for (auto &f : st.fields) fieldTys.push_back(lowerType(f.type));
+            llvmSt->setBody(fieldTys, st.isPacked);
+        }
     }
     return llvmSt;
 }
@@ -762,6 +772,27 @@ void CodeGen::genMatch(MatchStmt &s, FnEnv &env) {
     auto *subjectVal = genExpr(*s.subject, env);
     auto *exitBB = llvm::BasicBlock::Create(ctx_, "match.end", env.fn);
 
+    // Check if subject is a tagged union (struct type with tag+payload layout)
+    bool isTaggedUnion = false;
+    llvm::StructType *unionTy = nullptr;
+    if (s.subject->type && s.subject->type->kind == TypeKind::Struct) {
+        auto &st = static_cast<StructType &>(*s.subject->type);
+        if (st.isTaggedUnion) {
+            isTaggedUnion = true;
+            unionTy = lowerStructType(st);
+        }
+    }
+
+    // For tagged unions, store subject and extract tag
+    llvm::Value *tagVal = nullptr;
+    llvm::AllocaInst *subjectAlloca = nullptr;
+    if (isTaggedUnion && unionTy) {
+        subjectAlloca = createEntryAlloca(env, unionTy, "match.subject");
+        builder_.CreateStore(subjectVal, subjectAlloca);
+        auto *tagGEP = builder_.CreateStructGEP(unionTy, subjectAlloca, 0, "match.tag.ptr");
+        tagVal = builder_.CreateLoad(llvm::Type::getInt32Ty(ctx_), tagGEP, "match.tag");
+    }
+
     for (auto &arm : s.arms) {
         auto *bodyBB = llvm::BasicBlock::Create(ctx_, "match.arm",  env.fn);
         auto *nextBB = llvm::BasicBlock::Create(ctx_, "match.next", env.fn);
@@ -775,22 +806,28 @@ void CodeGen::genMatch(MatchStmt &s, FnEnv &env) {
                 thisCond = builder_.getTrue();
                 break;
             case PatternKind::IntLit: {
-                auto *lit = llvm::ConstantInt::get(subjectVal->getType(), pat.intVal, true);
-                thisCond  = builder_.CreateICmpEQ(subjectVal, lit, "match.eq");
+                auto *cmpVal = isTaggedUnion ? tagVal : subjectVal;
+                auto *lit = llvm::ConstantInt::get(cmpVal->getType(), pat.intVal, true);
+                thisCond  = builder_.CreateICmpEQ(cmpVal, lit, "match.eq");
                 break;
             }
             case PatternKind::Range: {
-                auto *lo  = llvm::ConstantInt::get(subjectVal->getType(), pat.intVal,  true);
-                auto *hi  = llvm::ConstantInt::get(subjectVal->getType(), pat.intVal2, true);
-                auto *geq = builder_.CreateICmpSGE(subjectVal, lo, "match.ge");
-                auto *leq = builder_.CreateICmpSLE(subjectVal, hi, "match.le");
+                auto *cmpVal = isTaggedUnion ? tagVal : subjectVal;
+                auto *lo  = llvm::ConstantInt::get(cmpVal->getType(), pat.intVal,  true);
+                auto *hi  = llvm::ConstantInt::get(cmpVal->getType(), pat.intVal2, true);
+                auto *geq = builder_.CreateICmpSGE(cmpVal, lo, "match.ge");
+                auto *leq = builder_.CreateICmpSLE(cmpVal, hi, "match.le");
                 thisCond  = builder_.CreateAnd(geq, leq, "match.range");
                 break;
             }
             case PatternKind::EnumIdent:
-                // Enum ident — treat as integer constant (resolved by Sema)
-                // For now fall through to wildcard as conservative fallback
-                thisCond = builder_.getTrue();
+                if (isTaggedUnion && pat.resolvedTag >= 0) {
+                    auto *lit = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_),
+                                                        pat.resolvedTag, true);
+                    thisCond = builder_.CreateICmpEQ(tagVal, lit, "match.tag.eq");
+                } else {
+                    thisCond = builder_.getTrue();
+                }
                 break;
             }
             cond = cond ? builder_.CreateOr(cond, thisCond, "match.or") : thisCond;
@@ -800,6 +837,23 @@ void CodeGen::genMatch(MatchStmt &s, FnEnv &env) {
         builder_.CreateCondBr(cond, bodyBB, nextBB);
 
         builder_.SetInsertPoint(bodyBB);
+
+        // For tagged union patterns with bind names, extract payload
+        if (isTaggedUnion && subjectAlloca) {
+            for (auto &pat : arm.patterns) {
+                if (!pat.bindName.empty() && pat.payloadType && pat.resolvedTag >= 0) {
+                    auto *payloadGEP = builder_.CreateStructGEP(
+                        unionTy, subjectAlloca, 1, "match.payload.ptr");
+                    auto *payloadTy = lowerType(pat.payloadType);
+                    auto *payloadVal = builder_.CreateLoad(payloadTy, payloadGEP,
+                                                            pat.bindName);
+                    auto *bindAlloca = createEntryAlloca(env, payloadTy, pat.bindName);
+                    builder_.CreateStore(payloadVal, bindAlloca);
+                    env.locals[pat.bindName] = bindAlloca;
+                }
+            }
+        }
+
         genStmt(*arm.body, env);
         if (!isTerminated(builder_.GetInsertBlock())) builder_.CreateBr(exitBB);
 
@@ -880,10 +934,33 @@ llvm::Value *CodeGen::genExpr(Expr &e, FnEnv &env) {
     case ExprKind::SizeofType: {
         auto &st = static_cast<SizeofTypeExpr &>(e);
         auto *llvmTy = lowerType(st.ofType);
-        // Use DataLayout-based size
         const auto &dl = mod_->getDataLayout();
         uint64_t sz = dl.getTypeAllocSize(llvmTy);
         return llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx_), sz);
+    }
+    case ExprKind::AlignofType: {
+        auto &ae = static_cast<AlignofTypeExpr &>(e);
+        auto *llvmTy = lowerType(ae.ofType);
+        const auto &dl = mod_->getDataLayout();
+        uint64_t al = dl.getABITypeAlign(llvmTy).value();
+        return llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx_), al);
+    }
+    case ExprKind::FieldCount: {
+        auto &fc = static_cast<FieldCountExpr &>(e);
+        if (fc.ofType && fc.ofType->kind == TypeKind::Struct) {
+            auto &st = static_cast<StructType &>(*fc.ofType);
+            return llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx_),
+                                           st.fields.size());
+        }
+        return llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx_), 0);
+    }
+    case ExprKind::SizeofPack: {
+        auto &sp = static_cast<SizeofPackExpr &>(e);
+        return llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx_), sp.resolvedCount);
+    }
+    case ExprKind::TaggedUnionInit: {
+        // Should not appear directly — handled via CallExpr with taggedUnionTag
+        return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
     }
     case ExprKind::Compound: {
         // Compound initializer: generate as struct/array aggregate (simplified)
@@ -1274,6 +1351,37 @@ llvm::Value *CodeGen::genBinary(BinaryExpr &e, FnEnv &env) {
 
 // ── Call ──────────────────────────────────────────────────────────────────────
 llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
+    // ── Tagged union init: Shape.radius(5.0) ──────────────────────────────────
+    if (e.taggedUnionTag >= 0 && !e.taggedUnionName.empty()) {
+        // Find the LLVM struct type for the tagged union
+        auto it = structCache_.find(e.taggedUnionName);
+        llvm::StructType *unionTy = nullptr;
+        if (it != structCache_.end()) {
+            unionTy = it->second;
+        } else if (e.type) {
+            unionTy = static_cast<llvm::StructType *>(lowerType(e.type));
+        }
+        if (!unionTy) {
+            diag_.error(e.loc, "codegen: unknown tagged union type '" + e.taggedUnionName + "'");
+            return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
+        }
+        auto *alloca = createEntryAlloca(env, unionTy, "union.init");
+        // Store tag (field 0: i32)
+        auto *tagGEP = builder_.CreateStructGEP(unionTy, alloca, 0, "union.tag");
+        builder_.CreateStore(
+            llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), e.taggedUnionTag),
+            tagGEP);
+        // Store payload (field 1: [N x i8]) — store value via pointer cast
+        if (!e.args.empty()) {
+            auto *payloadGEP = builder_.CreateStructGEP(unionTy, alloca, 1, "union.payload");
+            auto *val = genExpr(*e.args[0], env);
+            // With opaque pointers (LLVM 15+), payloadGEP is `ptr` so we can
+            // store any type through it. The payload area is large enough.
+            builder_.CreateStore(val, payloadGEP);
+        }
+        return builder_.CreateLoad(unionTy, alloca, "union.val");
+    }
+
     // Handle __arena_reset_<R>() builtin
     if (e.callee->kind == ExprKind::Ident) {
         auto &ident = static_cast<IdentExpr &>(*e.callee);

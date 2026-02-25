@@ -411,6 +411,39 @@ std::optional<ConstValue> ConstEvalEngine::evalExprF(const Expr &e, Frame &frame
         default:                               return ConstValue::mkInt(8);
         }
     }
+    case ExprKind::AlignofType: {
+        auto &ae = static_cast<const AlignofTypeExpr &>(e);
+        if (!ae.ofType) return ConstValue::mkInt(0);
+        switch (ae.ofType->kind) {
+        case TypeKind::Bool:
+        case TypeKind::Char:
+        case TypeKind::Int8:
+        case TypeKind::UInt8:                  return ConstValue::mkInt(1);
+        case TypeKind::Int16:
+        case TypeKind::UInt16:                 return ConstValue::mkInt(2);
+        case TypeKind::Int32:
+        case TypeKind::UInt32:
+        case TypeKind::Float32:                return ConstValue::mkInt(4);
+        case TypeKind::Int64:
+        case TypeKind::UInt64:
+        case TypeKind::Float64:
+        case TypeKind::Pointer:
+        case TypeKind::Reference:              return ConstValue::mkInt(8);
+        default:                               return ConstValue::mkInt(8);
+        }
+    }
+    case ExprKind::FieldCount: {
+        auto &fc = static_cast<const FieldCountExpr &>(e);
+        if (fc.ofType && fc.ofType->kind == TypeKind::Struct) {
+            auto &st = static_cast<const StructType &>(*fc.ofType);
+            return ConstValue::mkInt(static_cast<int64_t>(st.fields.size()));
+        }
+        return ConstValue::mkInt(0);
+    }
+    case ExprKind::SizeofPack: {
+        auto &sp = static_cast<const SizeofPackExpr &>(e);
+        return ConstValue::mkInt(sp.resolvedCount);
+    }
     default:
         diag_.error(e.loc,
             "expression is not a valid compile-time constant expression");
@@ -1025,7 +1058,10 @@ bool ConstEvalEngine::isConstExpr(const Expr &e) const {
         return ce.operand && isConstExpr(*ce.operand);
     }
     case ExprKind::SizeofType:
-        return true;  // sizeof is always constant
+    case ExprKind::AlignofType:
+    case ExprKind::FieldCount:
+    case ExprKind::SizeofPack:
+        return true;  // compile-time reflection is always constant
     default:
         return false;
     }

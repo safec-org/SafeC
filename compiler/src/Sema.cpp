@@ -144,6 +144,14 @@ TypePtr Sema::lookupType(const std::string &name) const {
 
 TypePtr Sema::resolveType(TypePtr ty) {
     if (!ty) return makeError();
+    if (ty->kind == TypeKind::Typeof) {
+        auto &tt = static_cast<TypeofType &>(*ty);
+        if (tt.expr) {
+            auto *expr = static_cast<Expr *>(tt.expr);
+            return checkExpr(*expr);
+        }
+        return makeError();
+    }
     if (ty->kind == TypeKind::Struct) {
         auto &st = static_cast<StructType &>(*ty);
         if (!st.isDefined) {
@@ -292,6 +300,35 @@ void Sema::collectFunction(FunctionDecl &fn) {
     define(std::move(sym));
 }
 
+// Helper: estimate byte size of a type (for tagged union payload sizing)
+static int sizeOfType(const TypePtr &ty) {
+    if (!ty) return 0;
+    switch (ty->kind) {
+    case TypeKind::Void:    return 0;
+    case TypeKind::Bool:    return 1;
+    case TypeKind::Char:
+    case TypeKind::Int8:
+    case TypeKind::UInt8:   return 1;
+    case TypeKind::Int16:
+    case TypeKind::UInt16:  return 2;
+    case TypeKind::Int32:
+    case TypeKind::UInt32:
+    case TypeKind::Float32: return 4;
+    case TypeKind::Int64:
+    case TypeKind::UInt64:
+    case TypeKind::Float64: return 8;
+    case TypeKind::Pointer:
+    case TypeKind::Reference: return 8;
+    case TypeKind::Struct: {
+        auto &st = static_cast<const StructType &>(*ty);
+        int total = 0;
+        for (auto &f : st.fields) total += sizeOfType(f.type);
+        return total;
+    }
+    default: return 8;
+    }
+}
+
 void Sema::collectStruct(StructDecl &sd) {
     auto st = std::make_shared<StructType>(sd.name, sd.isUnion);
     st->isDefined = true;
@@ -304,6 +341,18 @@ void Sema::collectStruct(StructDecl &sd) {
         fd.index = idx++;
         st->fields.push_back(std::move(fd));
     }
+
+    // Tagged union: compute max payload size and set tag indices
+    if (sd.isUnion) {
+        st->isTaggedUnion = true;
+        int maxSz = 0;
+        for (auto &f : st->fields) {
+            int sz = sizeOfType(f.type);
+            if (sz > maxSz) maxSz = sz;
+        }
+        st->maxPayloadSize = maxSz;
+    }
+
     sd.type = st;
     typeRegistry_[sd.name] = st;
 
@@ -454,12 +503,44 @@ void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
     }
     case StmtKind::Match: {
         auto &ms = static_cast<MatchStmt &>(s);
-        checkExpr(*ms.subject);
+        TypePtr subjectTy = checkExpr(*ms.subject);
         bool hasWildcard = false;
+        // Check if subject is a tagged union
+        bool isTaggedUnion = false;
+        StructType *unionSt = nullptr;
+        if (subjectTy && subjectTy->kind == TypeKind::Struct) {
+            unionSt = static_cast<StructType *>(subjectTy.get());
+            isTaggedUnion = unionSt->isTaggedUnion;
+        }
         for (auto &arm : ms.arms) {
-            for (auto &pat : arm.patterns)
+            for (auto &pat : arm.patterns) {
                 if (pat.kind == PatternKind::Wildcard) hasWildcard = true;
+                // Resolve tagged union patterns
+                if (isTaggedUnion && pat.kind == PatternKind::EnumIdent) {
+                    const FieldDecl *variantField = unionSt->findField(pat.ident);
+                    if (variantField) {
+                        pat.resolvedTag = variantField->index;
+                        pat.payloadType = variantField->type;
+                    } else {
+                        diag_.error(ms.loc, "unknown variant '" + pat.ident +
+                            "' in union '" + unionSt->name + "'");
+                    }
+                }
+            }
+            // If pattern has a bind name, add it to scope for the arm body
+            pushScope();
+            for (auto &pat : arm.patterns) {
+                if (!pat.bindName.empty() && pat.payloadType) {
+                    Symbol sym;
+                    sym.kind = SymKind::Variable;
+                    sym.name = pat.bindName;
+                    sym.type = pat.payloadType;
+                    sym.initialized = true;
+                    define(std::move(sym));
+                }
+            }
             if (arm.body) checkStmt(*arm.body, fn);
+            popScope();
         }
         if (!hasWildcard)
             diag_.warn(ms.loc, "match statement may not be exhaustive (no wildcard arm)");
@@ -671,6 +752,34 @@ TypePtr Sema::checkExpr(Expr &e) {
             resolveType(static_cast<SizeofTypeExpr &>(e).ofType);
         ty = makeInt(64, false);
         break;
+    case ExprKind::AlignofType:
+        static_cast<AlignofTypeExpr &>(e).ofType =
+            resolveType(static_cast<AlignofTypeExpr &>(e).ofType);
+        ty = makeInt(64, false);
+        break;
+    case ExprKind::FieldCount: {
+        auto &fc = static_cast<FieldCountExpr &>(e);
+        fc.ofType = resolveType(fc.ofType);
+        if (fc.ofType && fc.ofType->kind == TypeKind::Struct) {
+            ty = makeInt(64, false);
+        } else {
+            diag_.error(e.loc, "fieldcount() requires a struct type");
+            ty = makeInt(64, false);
+        }
+        break;
+    }
+    case ExprKind::SizeofPack:
+        // Resolved during monomorphization; type is always i64
+        ty = makeInt(64, false);
+        break;
+    case ExprKind::TaggedUnionInit: {
+        auto &tui = static_cast<TaggedUnionInitExpr &>(e);
+        if (tui.payload) checkExpr(*tui.payload);
+        auto it = typeRegistry_.find(tui.unionName);
+        if (it != typeRegistry_.end()) ty = it->second;
+        else ty = makeError();
+        break;
+    }
     case ExprKind::Compound: {
         auto &ci = static_cast<CompoundInitExpr &>(e);
         for (auto &init : ci.inits) checkExpr(*init);
@@ -965,6 +1074,28 @@ TypePtr Sema::checkCall(CallExpr &e) {
             for (auto &a : e.args) checkExpr(*a);
             e.type = makeVoid();
             return makeVoid();
+        }
+    }
+
+    // ── Tagged union construction: Shape.radius(5.0) ──────────────────────────
+    if (e.callee->kind == ExprKind::Member) {
+        auto &mem = static_cast<MemberExpr &>(*e.callee);
+        if (mem.base->kind == ExprKind::Ident) {
+            auto &baseIdent = static_cast<IdentExpr &>(*mem.base);
+            auto tit = typeRegistry_.find(baseIdent.name);
+            if (tit != typeRegistry_.end() && tit->second->kind == TypeKind::Struct) {
+                auto &st = static_cast<StructType &>(*tit->second);
+                if (st.isTaggedUnion) {
+                    const FieldDecl *variantField = st.findField(mem.field);
+                    if (variantField) {
+                        for (auto &a : e.args) checkExpr(*a);
+                        e.taggedUnionTag  = variantField->index;
+                        e.taggedUnionName = st.name;
+                        e.type = tit->second;
+                        return tit->second;
+                    }
+                }
+            }
         }
     }
 
@@ -1394,18 +1525,46 @@ bool Sema::inferTypeArgs(const std::vector<ParamDecl>   &params,
         return false;
     };
 
-    for (size_t i = 0; i < params.size() && i < argTypes.size(); ++i) {
-        // Only fail inference if a *generic* position cannot be matched.
-        // Mismatches on concrete (non-generic) params are left to the
-        // regular argument-type-check that runs after monomorphization.
-        if (hasGeneric(hasGeneric, params[i].type)) {
-            if (!matchType(params[i].type, argTypes[i], subs))
-                return false;
+    // Check if there's a variadic pack parameter
+    bool hasPack = false;
+    std::string packName;
+    for (auto &gp : genericParams) {
+        if (gp.isPack) { hasPack = true; packName = gp.name; break; }
+    }
+
+    if (hasPack) {
+        // Match non-pack params first
+        size_t nonPackParams = 0;
+        for (size_t i = 0; i < params.size(); ++i) {
+            if (params[i].isPack) break;
+            nonPackParams = i + 1;
+            if (i < argTypes.size() && hasGeneric(hasGeneric, params[i].type)) {
+                if (!matchType(params[i].type, argTypes[i], subs))
+                    return false;
+            }
+        }
+        // Remaining args are pack entries
+        for (size_t i = nonPackParams; i < argTypes.size(); ++i) {
+            std::string key = packName + "__" + std::to_string(i - nonPackParams);
+            subs[key] = argTypes[i];
+        }
+        // Store pack count
+        subs[packName + "__count"] = makeInt(64, false); // sentinel
+        int packCount = (int)argTypes.size() - (int)nonPackParams;
+        subs[packName + "__count_val"] = makeInt(packCount, false); // actual count as Int type with bits=count
+    } else {
+        for (size_t i = 0; i < params.size() && i < argTypes.size(); ++i) {
+            if (hasGeneric(hasGeneric, params[i].type)) {
+                if (!matchType(params[i].type, argTypes[i], subs))
+                    return false;
+            }
         }
     }
-    // Verify all generic params are bound
-    for (auto &gp : genericParams)
+    // Verify all non-pack generic params are bound
+    for (auto &gp : genericParams) {
+        if (gp.isPack) continue;
         if (!subs.count(gp.name)) return false;
+    }
     return true;
 }
 
@@ -1414,8 +1573,17 @@ Sema::MonoKey Sema::makeMonoKey(const std::string &name, const TypeSubst &subs,
     MonoKey key;
     key.funcName = name;
     for (auto &gp : params) {
-        auto it = subs.find(gp.name);
-        key.typeArgStrs.push_back(it != subs.end() ? it->second->str() : "?");
+        if (gp.isPack) {
+            // Iterate pack entries
+            for (int i = 0; ; ++i) {
+                auto it = subs.find(gp.name + "__" + std::to_string(i));
+                if (it == subs.end()) break;
+                key.typeArgStrs.push_back(it->second->str());
+            }
+        } else {
+            auto it = subs.find(gp.name);
+            key.typeArgStrs.push_back(it != subs.end() ? it->second->str() : "?");
+        }
     }
     return key;
 }
@@ -1424,8 +1592,16 @@ std::string Sema::mangleName(const std::string &base, const TypeSubst &subs,
                                const std::vector<GenericParam> &params) {
     std::string result = "__safec_" + base;
     for (auto &gp : params) {
-        auto it = subs.find(gp.name);
-        result += "_" + (it != subs.end() ? it->second->str() : "unknown");
+        if (gp.isPack) {
+            for (int i = 0; ; ++i) {
+                auto it = subs.find(gp.name + "__" + std::to_string(i));
+                if (it == subs.end()) break;
+                result += "_" + it->second->str();
+            }
+        } else {
+            auto it = subs.find(gp.name);
+            result += "_" + (it != subs.end() ? it->second->str() : "unknown");
+        }
     }
     return result;
 }

@@ -36,6 +36,7 @@ enum class TypeKind {
     Tuple,      // (T1, T2, ...) product type
     Optional,   // ?T — {T, i1} nullable wrapper
     Slice,      // []T — fat pointer {T*, i64}  (parsed; codegen future)
+    Typeof,     // typeof(expr) — resolved by Sema to concrete type
 };
 
 // Forward declarations
@@ -141,6 +142,8 @@ struct StructType : Type {
     bool                   isUnion   = false;   // tagged union
     bool                   isDefined = false;   // forward-declared?
     bool                   isPacked  = false;   // packed: no alignment padding
+    bool                   isTaggedUnion = false; // true for union decls (tag + payload)
+    int                    maxPayloadSize = 0;    // max(sizeof each variant) in bytes
 
     explicit StructType(std::string n, bool isUnion = false)
         : Type(TypeKind::Struct), name(std::move(n)), isUnion(isUnion) {}
@@ -217,6 +220,17 @@ struct SliceType : Type {
         : Type(TypeKind::Slice), element(std::move(elem)) {}
     std::string str() const override { return "[]" + element->str(); }
     bool equals(const Type &o) const override;
+};
+
+// ── Typeof type (resolved by Sema to concrete type) ──────────────────────
+// Stores a raw pointer to the Expr node (owned by the AST).
+// Sema resolves this to a concrete type; codegen never sees it.
+struct TypeofType : Type {
+    void *expr = nullptr;  // Expr* — untyped to avoid circular header dependency
+    explicit TypeofType(void *e)
+        : Type(TypeKind::Typeof), expr(e) {}
+    std::string str() const override { return "typeof(...)"; }
+    bool equals(const Type &o) const override { return false; }
 };
 
 // ── Type factory / interning helpers ──────────────────────────────────────────

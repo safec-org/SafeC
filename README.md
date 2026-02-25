@@ -1458,9 +1458,9 @@ SafeC needs to be pleasant to write, not just theoretically safe:
 | ~~**Pattern matching**~~ | ✅ Done — `match (expr) { pattern => stmt, ... }` with integer literals, ranges (`N..M`), wildcards (`_`), alternations (`\|`). Enum-value patterns planned. |
 | ~~**`defer` / `errdefer`**~~ | ✅ Done — LIFO deferred cleanup; `errdefer` runs only on error path. |
 | ~~**`try` / optional types**~~ | ✅ Done — `?T` optional as `{T, i1}`; `try` unwraps or early-returns. |
-| **Error propagation (`Result<T,E>`)** | Full `Result<T, E>` stdlib type with `?`-propagation sugar requires slice + richer match; planned. |
-| **Compile-time reflection** | `typeof(expr)`, `sizeof(T)`, `alignof(T)`, and limited struct field enumeration for generic algorithms. |
-| **Variadic generics** | `generic<T...>` for type-safe heterogeneous argument lists. |
+| ~~**Tagged unions & pattern matching**~~ | ✅ Done — `union` declarations with `isTaggedUnion` layout (`{i32 tag, [8 x i8] payload}`); `match` dispatches on tag with payload binding (`Foo.Variant(x) =>`); integer, range, wildcard, and alternation patterns all supported. |
+| ~~**Compile-time reflection**~~ | ✅ Done — `typeof(expr)` resolved at compile time, `alignof(T)` emits LLVM type alignment, `fieldcount(T)` returns struct field count as a constant. |
+| ~~**Variadic generics**~~ | ✅ Done — `generic<T...>` parameter packs with `T... args` syntax; monomorphized per call-site to concrete types; `sizeof...(pack)` returns pack length. |
 
 ## 17.3 Long-Term (Systems Reach)
 

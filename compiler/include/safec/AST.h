@@ -43,6 +43,10 @@ enum class ExprKind {
     TupleLit,       // (a, b, c)
     Spawn,          // spawn(fn, arg)
     Try,            // try expr  — unwrap optional or early-return
+    AlignofType,    // alignof(T)
+    FieldCount,     // fieldcount(T)
+    SizeofPack,     // sizeof...(T)
+    TaggedUnionInit,// Foo.variant(value)
 };
 
 enum class UnaryOp {
@@ -155,6 +159,9 @@ struct CallExpr : Expr {
     // Method call support (OBJECT.md §4.3): x.m(args) → T_m(&x, args)
     // If non-null, this is a method call; CodeGen prepends &methodBase as first arg.
     ExprPtr              methodBase;  // the base expression (x in x.m(args))
+    // Tagged union init: Shape.radius(5.0) — resolved by Sema
+    int                  taggedUnionTag = -1;   // >=0 → this is a tagged union init
+    std::string          taggedUnionName;       // union type name
 
     CallExpr(ExprPtr fn, std::vector<ExprPtr> a, SourceLocation l)
         : Expr(ExprKind::Call, l), callee(std::move(fn)),
@@ -242,6 +249,39 @@ struct TryExpr : Expr {
     ExprPtr inner;
     TryExpr(ExprPtr e, SourceLocation l)
         : Expr(ExprKind::Try, l), inner(std::move(e)) {}
+};
+
+// ── alignof(type) ─────────────────────────────────────────────────────────
+struct AlignofTypeExpr : Expr {
+    TypePtr ofType;
+    AlignofTypeExpr(TypePtr t, SourceLocation l)
+        : Expr(ExprKind::AlignofType, l), ofType(std::move(t)) {}
+};
+
+// ── fieldcount(type) ──────────────────────────────────────────────────────
+struct FieldCountExpr : Expr {
+    TypePtr ofType;
+    FieldCountExpr(TypePtr t, SourceLocation l)
+        : Expr(ExprKind::FieldCount, l), ofType(std::move(t)) {}
+};
+
+// ── sizeof...(Pack) ───────────────────────────────────────────────────────
+struct SizeofPackExpr : Expr {
+    std::string packName;
+    int resolvedCount = 0;  // filled during monomorphization
+    SizeofPackExpr(std::string name, SourceLocation l)
+        : Expr(ExprKind::SizeofPack, l), packName(std::move(name)) {}
+};
+
+// ── Tagged union initializer: Foo.variant(value) ──────────────────────────
+struct TaggedUnionInitExpr : Expr {
+    std::string unionName;
+    std::string variantName;
+    int tag = 0;           // resolved by Sema
+    ExprPtr payload;
+    TaggedUnionInitExpr(std::string un, std::string vn, int t, ExprPtr p, SourceLocation l)
+        : Expr(ExprKind::TaggedUnionInit, l), unionName(std::move(un)),
+          variantName(std::move(vn)), tag(t), payload(std::move(p)) {}
 };
 
 // =============================================================================
@@ -400,6 +440,8 @@ struct MatchPattern {
     int64_t     intVal2  = 0;   // Range end (inclusive)
     std::string ident;          // EnumIdent name
     std::string bindName;       // optional variable binding
+    int         resolvedTag = -1;  // filled by Sema for tagged union match
+    TypePtr     payloadType;       // type of extracted payload
 };
 
 struct MatchArm {
@@ -436,12 +478,14 @@ struct ParamDecl {
     std::string name;
     TypePtr     type;
     SourceLocation loc;
+    bool isPack = false;   // this param uses pack type (T... args)
 };
 
 // ── Generic parameter: <T: Constraint> ───────────────────────────────────────
 struct GenericParam {
     std::string name;
     std::string constraint; // e.g., "Numeric"; empty = unconstrained
+    bool isPack = false;    // T... variadic type pack
 };
 
 // ── Function declaration ──────────────────────────────────────────────────────

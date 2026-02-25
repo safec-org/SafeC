@@ -48,6 +48,9 @@ enum class TK {
     KW_try,           // try expr  (propagate null optional)
     KW_must_use,      // must_use fn — warn on discarded return value
     KW_fn,            // fn ReturnType(Params) name — function pointer type
+    KW_alignof,       // alignof(T)
+    KW_typeof,        // typeof(expr) — type position
+    KW_fieldcount,    // fieldcount(T) — struct field count
 
     // ── Operators ─────────────────────────────────────────────────────────────
     Plus, Minus, Star, Slash, Percent,
