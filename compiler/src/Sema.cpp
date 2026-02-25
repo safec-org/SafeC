@@ -12,8 +12,22 @@ Symbol *Scope::lookup(const std::string &name) {
 }
 
 bool Scope::define(Symbol sym) {
-    auto [it, inserted] = symbols_.emplace(sym.name, std::move(sym));
-    return inserted;
+    auto [it, inserted] = symbols_.emplace(sym.name, sym);
+    if (inserted) return true;
+    // Allow a function definition to follow a forward declaration:
+    // if the existing entry has no body and the new one does, update it.
+    if (it->second.kind == SymKind::Function && sym.kind == SymKind::Function) {
+        bool existingHasBody = it->second.fnDecl && it->second.fnDecl->body;
+        bool newHasBody      = sym.fnDecl && sym.fnDecl->body;
+        if (!existingHasBody && newHasBody) {
+            it->second = std::move(sym);
+            return true;
+        }
+        // Two declarations (both without body) for the same function are fine
+        // (idempotent re-declaration; e.g. header included multiple times).
+        if (!existingHasBody && !newHasBody) return true;
+    }
+    return false;
 }
 
 // ── Sema ──────────────────────────────────────────────────────────────────────
@@ -139,6 +153,14 @@ void Sema::collectDecls(TranslationUnit &tu) {
         case DeclKind::Enum:       collectEnum(static_cast<EnumDecl &>(*d));         break;
         case DeclKind::Region:     collectRegion(static_cast<RegionDecl &>(*d));     break;
         case DeclKind::GlobalVar:  collectGlobalVar(static_cast<GlobalVarDecl &>(*d));break;
+        case DeclKind::TypeAlias: {
+            // Register the typedef so that resolveType() can resolve names like
+            // `size_t`, `FILE`, `dev_t`, etc. imported from C headers.
+            auto &ta = static_cast<TypeAliasDecl &>(*d);
+            TypePtr resolved = resolveType(ta.aliasedType);
+            typeRegistry_[ta.name] = resolved ? resolved : ta.aliasedType;
+            break;
+        }
         default: break;
         }
     }
@@ -177,6 +199,31 @@ static TypePtr resolveGenericNames(const TypePtr &ty,
 }
 
 void Sema::collectFunction(FunctionDecl &fn) {
+    // Method support (OBJECT.md §4): T::m(P...) → T_m(T* self, P...)
+    if (fn.isMethod) {
+        // Look up owner struct type
+        auto it = typeRegistry_.find(fn.methodOwner);
+        if (it == typeRegistry_.end()) {
+            diag_.error(fn.loc,
+                "method owner struct '" + fn.methodOwner + "' not declared");
+        } else {
+            // Build self param: &stack T (reference) so self.field works in safe code.
+            // Const methods get immutable reference; mutable methods get mutable reference.
+            TypePtr selfTy = makeReference(it->second, Region::Stack,
+                                            /*nullable=*/false, /*mut=*/!fn.isConstMethod);
+            ParamDecl selfParam;
+            selfParam.name = "self";
+            selfParam.type = selfTy;
+            selfParam.loc  = fn.loc;
+            fn.params.insert(fn.params.begin(), std::move(selfParam));
+        }
+        // Mangle name: T_m
+        std::string originalName = fn.name;
+        fn.name = fn.methodOwner + "_" + fn.name;
+        // Register in method registry under original qualified name
+        methodRegistry_[fn.methodOwner + "::" + originalName] = &fn;
+    }
+
     std::vector<TypePtr> paramTys;
     for (auto &p : fn.params) {
         p.type = resolveGenericNames(resolveType(p.type), fn.genericParams);
@@ -537,7 +584,16 @@ TypePtr Sema::checkExpr(Expr &e) {
 }
 
 TypePtr Sema::checkIntLit(IntLitExpr &e) {
-    // Choose smallest fitting type
+    // LL suffix forces 64-bit; U suffix forces unsigned
+    if (e.isLongLong && e.isUnsigned) return makeInt(64, false);
+    if (e.isLongLong)                 return makeInt(64, true);
+    if (e.isUnsigned) {
+        // U suffix: choose smallest unsigned type
+        uint64_t uval = static_cast<uint64_t>(e.value);
+        if (uval <= 4294967295ULL) return makeInt(32, false);
+        return makeInt(64, false);
+    }
+    // No suffix: choose smallest fitting signed type
     if (e.value >= -2147483648LL && e.value <= 2147483647LL) return makeInt(32);
     return makeInt(64);
 }
@@ -549,8 +605,8 @@ TypePtr Sema::checkFloatLit(FloatLitExpr &e) {
 TypePtr Sema::checkBoolLit(BoolLitExpr &) { return makeBool(); }
 
 TypePtr Sema::checkStringLit(StringLitExpr &e) {
-    // String literal → &static char (zero-terminated C string as static ref)
-    return makeReference(makeInt(8), Region::Static, false, false);
+    // String literal → &static const char (zero-terminated C string)
+    return makeReference(makeChar(), Region::Static, false, false);
 }
 
 TypePtr Sema::checkIdent(IdentExpr &e) {
@@ -616,6 +672,7 @@ TypePtr Sema::checkDeref(UnaryExpr &e) {
             diag_.error(e.loc,
                 "dereference of raw pointer requires 'unsafe' block");
         }
+        e.isLValue = true; // *ptr is always an lvalue (writable through raw pointer)
         return static_cast<PointerType &>(*operandTy).base;
     }
     if (operandTy->kind == TypeKind::Reference) {
@@ -640,13 +697,36 @@ TypePtr Sema::checkBinary(BinaryExpr &e) {
     case BinaryOp::Mul: case BinaryOp::Div: case BinaryOp::Mod:
         if (!lhsTy->isArithmetic() || !rhsTy->isArithmetic()) {
             // Allow pointer arithmetic for raw pointers (unsafe)
-            if ((lhsTy->kind == TypeKind::Pointer || rhsTy->kind == TypeKind::Pointer)) {
+            if (lhsTy->kind == TypeKind::Pointer || rhsTy->kind == TypeKind::Pointer) {
                 if (!inUnsafeScope())
                     diag_.error(e.loc, "pointer arithmetic requires 'unsafe' block");
                 return lhsTy->kind == TypeKind::Pointer ? lhsTy : rhsTy;
             }
+            // Array arithmetic: T[N] + int → T* (array decays to pointer)
+            if (lhsTy->kind == TypeKind::Array && rhsTy->isInteger()) {
+                if (!inUnsafeScope())
+                    diag_.error(e.loc, "array pointer arithmetic requires 'unsafe' block");
+                return makePointer(static_cast<ArrayType &>(*lhsTy).element);
+            }
+            if (rhsTy->kind == TypeKind::Array && lhsTy->isInteger()) {
+                if (!inUnsafeScope())
+                    diag_.error(e.loc, "array pointer arithmetic requires 'unsafe' block");
+                return makePointer(static_cast<ArrayType &>(*rhsTy).element);
+            }
             diag_.error(e.loc, "arithmetic requires numeric types");
             return makeError();
+        }
+        // Char promotion: char + integer → int (standard C character arithmetic)
+        {
+            bool lIsChar = (lhsTy->kind == TypeKind::Char || lhsTy->kind == TypeKind::Int8
+                            || lhsTy->kind == TypeKind::UInt8);
+            bool rIsChar = (rhsTy->kind == TypeKind::Char || rhsTy->kind == TypeKind::Int8
+                            || rhsTy->kind == TypeKind::UInt8);
+            // If both sides are 8-bit compatible, allow and return int (promoted)
+            if (lIsChar && rIsChar) return makeInt(32);
+            // One side 8-bit, other side integer: promote char to match
+            if (lIsChar && rhsTy->isInteger()) return rhsTy;
+            if (rIsChar && lhsTy->isInteger()) return lhsTy;
         }
         // SafeC: no implicit conversions — both sides must match
         if (!typeEqual(lhsTy, rhsTy)) {
@@ -693,6 +773,42 @@ TypePtr Sema::checkTernary(TernaryExpr &e) {
 }
 
 TypePtr Sema::checkCall(CallExpr &e) {
+    // ── Method call detection: x.m(args) → T_m(self=&x, args) ───────────────
+    if (e.callee->kind == ExprKind::Member || e.callee->kind == ExprKind::Arrow) {
+        auto &mem = static_cast<MemberExpr &>(*e.callee);
+        // Type-check the base to get the struct type
+        TypePtr baseTy = checkExpr(*mem.base);
+        // Unwrap references/pointers to get struct type
+        TypePtr structTy = baseTy;
+        if (structTy->kind == TypeKind::Reference)
+            structTy = static_cast<ReferenceType &>(*structTy).base;
+        if (structTy->kind == TypeKind::Pointer)
+            structTy = static_cast<PointerType &>(*structTy).base;
+        if (structTy->kind == TypeKind::Struct) {
+            auto &st = static_cast<StructType &>(*structTy);
+            std::string key = st.name + "::" + mem.field;
+            auto mit = methodRegistry_.find(key);
+            if (mit != methodRegistry_.end()) {
+                // Found a method — transform: replace callee, store base for CodeGen
+                FunctionDecl *methodFn = mit->second;
+                auto newCallee = std::make_unique<IdentExpr>(methodFn->name, e.loc);
+                newCallee->resolvedFn = methodFn;
+                newCallee->type       = methodFn->funcType();
+                // Store base expression for CodeGen to emit self pointer
+                e.methodBase = std::move(mem.base);
+                e.callee     = std::move(newCallee);
+                // Now type-check as regular call (callee is now an IdentExpr)
+                // Fall through to regular call checking below.
+            } else if (!st.findField(mem.field)) {
+                // Not a field and not a method — error
+                diag_.error(e.loc,
+                    "no method '" + mem.field + "' on type '" + st.name + "'");
+                for (auto &a : e.args) checkExpr(*a);
+                return makeError();
+            }
+        }
+    }
+
     TypePtr calleeTy = checkExpr(*e.callee);
 
     // Find the FunctionDecl (for generic detection)
@@ -762,22 +878,29 @@ TypePtr Sema::checkCall(CallExpr &e) {
         return makeError();
     }
 
+    // For method calls, the first param is the implicit 'self' — skip it for
+    // arg count/type checking (self is passed by CodeGen from methodBase).
+    size_t selfOffset = (e.methodBase ? 1 : 0);
+
     // Check arg count
     size_t expected = ft->paramTypes.size();
     size_t provided = e.args.size();
-    if (provided < expected || (!ft->variadic && provided > expected)) {
+    size_t effExpected = expected - selfOffset;
+    if (provided < effExpected || (!ft->variadic && provided > effExpected)) {
         diag_.error(e.loc,
-            "wrong number of arguments: expected " + std::to_string(expected) +
+            "wrong number of arguments: expected " + std::to_string(effExpected) +
             ", got " + std::to_string(provided));
     }
 
     for (size_t i = 0; i < e.args.size(); ++i) {
         TypePtr argTy = checkExpr(*e.args[i]);
-        if (i < expected && !argTy->isError() && !ft->paramTypes[i]->isError()) {
-            if (!canImplicitlyConvert(argTy, ft->paramTypes[i])) {
+        size_t  paramIdx = i + selfOffset;
+        if (paramIdx < expected &&
+                !argTy->isError() && !ft->paramTypes[paramIdx]->isError()) {
+            if (!canImplicitlyConvert(argTy, ft->paramTypes[paramIdx])) {
                 diag_.error(e.args[i]->loc,
                     "argument " + std::to_string(i+1) + ": cannot convert '" +
-                    argTy->str() + "' to '" + ft->paramTypes[i]->str() + "'");
+                    argTy->str() + "' to '" + ft->paramTypes[paramIdx]->str() + "'");
             }
         }
     }
@@ -1030,9 +1153,27 @@ bool Sema::inferTypeArgs(const std::vector<ParamDecl>   &params,
                           const std::vector<TypePtr>      &argTypes,
                           const std::vector<GenericParam> &genericParams,
                           TypeSubst                       &subs) {
+    // Helper: does this type tree contain a generic param?
+    auto hasGeneric = [&](const auto &self, const TypePtr &ty) -> bool {
+        if (!ty) return false;
+        if (ty->kind == TypeKind::Generic) return true;
+        if (ty->kind == TypeKind::Pointer)
+            return self(self, static_cast<const PointerType &>(*ty).base);
+        if (ty->kind == TypeKind::Reference)
+            return self(self, static_cast<const ReferenceType &>(*ty).base);
+        if (ty->kind == TypeKind::Array)
+            return self(self, static_cast<const ArrayType &>(*ty).element);
+        return false;
+    };
+
     for (size_t i = 0; i < params.size() && i < argTypes.size(); ++i) {
-        if (!matchType(params[i].type, argTypes[i], subs))
-            return false;
+        // Only fail inference if a *generic* position cannot be matched.
+        // Mismatches on concrete (non-generic) params are left to the
+        // regular argument-type-check that runs after monomorphization.
+        if (hasGeneric(hasGeneric, params[i].type)) {
+            if (!matchType(params[i].type, argTypes[i], subs))
+                return false;
+        }
     }
     // Verify all generic params are bound
     for (auto &gp : genericParams)
@@ -1074,6 +1215,26 @@ bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
     if (!from || !to) return false;
     if (from->isError() || to->isError()) return true; // suppress cascaded errors
     if (typeEqual(from, to)) return true;
+    // Char ↔ Int8 ↔ UInt8: 8-bit types interop (char, signed char, unsigned char)
+    auto is8bit = [](const TypePtr &t) {
+        return t->kind == TypeKind::Char  || t->kind == TypeKind::Int8 ||
+               t->kind == TypeKind::UInt8 || t->kind == TypeKind::Bool;
+    };
+    if (is8bit(from) && is8bit(to)) return true;
+    // Character promotion: char → any integer type (widening, always safe)
+    if (from->kind == TypeKind::Char && to->isInteger()) return true;
+    // Array-to-pointer decay: T[N] → T*
+    if (from->kind == TypeKind::Array && to->kind == TypeKind::Pointer) {
+        auto &at = static_cast<const ArrayType &>(*from);
+        auto &pt = static_cast<const PointerType &>(*to);
+        if (typeEqual(at.element, pt.base)) return true;
+        // also allow 8-bit element type compatibility (char[] → char*, etc.)
+        auto is8 = [](const TypePtr &t) {
+            return t->kind == TypeKind::Char  || t->kind == TypeKind::Int8 ||
+                   t->kind == TypeKind::UInt8;
+        };
+        if (is8(at.element) && is8(pt.base)) return true;
+    }
     // void* → any pointer is allowed in unsafe (checked by caller)
     // bool ↔ integer (narrowing check needed but simplified here)
     if (from->isBool() && to->isInteger()) return true;

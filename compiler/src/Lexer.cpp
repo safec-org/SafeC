@@ -1,5 +1,6 @@
 #include "safec/Lexer.h"
 #include <cctype>
+#include <cerrno>
 #include <cstdlib>
 #include <unordered_map>
 
@@ -58,6 +59,9 @@ TK Lexer::keywordKind(const std::string &w) {
         {"heap",          TK::KW_heap},
         {"arena",         TK::KW_arena},
         {"capacity",      TK::KW_capacity},
+        // Method / object model keywords
+        {"self",          TK::KW_self},
+        {"operator",      TK::KW_operator},
     };
     auto it = kw.find(w);
     return (it != kw.end()) ? it->second : TK::Ident;
@@ -140,25 +144,61 @@ Token Lexer::lexNumber() {
         }
     }
 
-    // Optional suffix
+    // Save the numeric-only part for parsing before consuming the suffix.
+    std::string digits = s;
+
+    // Optional suffix: u/U (unsigned), l/L (long), ll/LL (long long), f/F (float).
+    bool isUnsigned = false;
+    bool isLongLong = false;
     while (!atEnd() && (peek() == 'u' || peek() == 'U' ||
                         peek() == 'l' || peek() == 'L' ||
                         peek() == 'f' || peek() == 'F')) {
         char sf = peek();
         s += advance();
         if (sf == 'f' || sf == 'F') isFloat = true;
+        if (sf == 'u' || sf == 'U') isUnsigned = true;
+        if (sf == 'l' || sf == 'L') {
+            // Check for LL/ll suffix
+            if (!atEnd() && (peek() == 'l' || peek() == 'L')) {
+                s += advance(); // consume second l/L
+                isLongLong = true;
+            } else {
+                isLongLong = true; // L alone also forces long
+            }
+        }
     }
 
     Token tok;
-    tok.loc  = startLoc_;
-    tok.text = s;
+    tok.loc        = startLoc_;
+    tok.text       = s;
+    tok.isLongLong = isLongLong;
+    tok.isUnsigned = isUnsigned;
     if (isFloat) {
         tok.kind     = TK::FloatLit;
-        tok.floatVal = std::stod(s);
+        tok.floatVal = std::stod(digits);
     } else {
-        tok.kind   = TK::IntLit;
-        tok.intVal = (isHex) ? std::stoll(s, nullptr, 16)
-                              : std::stoll(s, nullptr, 10);
+        tok.kind = TK::IntLit;
+        // For unsigned literals (or numbers that exceed LLONG_MAX),
+        // parse as unsigned long long and reinterpret the bit pattern.
+        int base = isHex ? 16 : 10;
+        if (isUnsigned) {
+            // Parse as unsigned; reinterpret bits as int64_t.
+            errno = 0;
+            unsigned long long uval = std::strtoull(digits.c_str(), nullptr, base);
+            tok.intVal = static_cast<int64_t>(uval);
+        } else {
+            // Try signed; if it overflows LLONG range, reinterpret as unsigned.
+            errno = 0;
+            long long sval = std::strtoll(digits.c_str(), nullptr, base);
+            if (errno == ERANGE) {
+                // Number exceeds signed range — parse unsigned and reinterpret.
+                errno = 0;
+                unsigned long long uval = std::strtoull(digits.c_str(), nullptr, base);
+                tok.intVal = static_cast<int64_t>(uval);
+            } else {
+                tok.intVal = sval;
+            }
+        }
     }
     return tok;
 }
@@ -288,7 +328,9 @@ Token Lexer::lexPunct() {
     case '?':
         if (next1() == '&') { advance(); return mk(TK::QuestionAmp, "?&"); }
         return mk(TK::Question, "?");
-    case ':': return mk(TK::Colon, ":");
+    case ':':
+        if (peek() == ':') { advance(); return mk(TK::ColonColon, "::"); }
+        return mk(TK::Colon, ":");
     case '.':
         if (peek() == '.' && peek(1) == '.') { advance(); advance(); return mk(TK::DotDotDot, "..."); }
         return mk(TK::Dot, ".");

@@ -34,6 +34,8 @@ enum class TK {
     KW_heap,          // &heap T
     KW_arena,         // &arena<R> T
     KW_capacity,      // region field keyword
+    KW_self,          // self — implicit receiver in methods
+    KW_operator,      // operator overloading
 
     // ── Operators ─────────────────────────────────────────────────────────────
     Plus, Minus, Star, Slash, Percent,
@@ -50,6 +52,7 @@ enum class TK {
     Question,    // ?
     QuestionAmp, // ?&  (nullable reference)
     Colon,
+    ColonColon,  // ::  (method scope resolution)
 
     // ── Punctuation ───────────────────────────────────────────────────────────
     LParen, RParen,
@@ -67,8 +70,10 @@ struct Token {
     SourceLocation loc;
 
     // Numeric payload
-    int64_t  intVal   = 0;
-    double   floatVal = 0.0;
+    int64_t  intVal      = 0;
+    double   floatVal    = 0.0;
+    bool     isLongLong  = false;  // LL/ll suffix
+    bool     isUnsigned  = false;  // U/u suffix
 
     Token() = default;
     Token(TK k, std::string t, SourceLocation l)

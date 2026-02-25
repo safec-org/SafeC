@@ -140,6 +140,10 @@ llvm::Function *CodeGen::genFunctionProto(FunctionDecl &fn) {
     auto *retTy  = fn.returnType ? lowerType(fn.returnType) : llvm::Type::getVoidTy(ctx_);
     auto *fnType = llvm::FunctionType::get(retTy, paramTys, fn.isVariadic);
 
+    // Reuse an existing declaration (forward-decl from .h already created it).
+    // This prevents LLVM from auto-renaming a second Function::Create to "name.1".
+    if (auto *existing = mod_->getFunction(fn.name)) return existing;
+
     auto linkage = fn.isExtern
         ? llvm::Function::ExternalLinkage
         : llvm::Function::ExternalLinkage;  // default external for C ABI
@@ -457,7 +461,17 @@ void CodeGen::genFor(ForStmt &s, FnEnv &env) {
 
 void CodeGen::genReturn(ReturnStmt &s, FnEnv &env) {
     if (s.value && env.returnSlot) {
-        auto *val = genExpr(*s.value, env);
+        auto *val     = genExpr(*s.value, env);
+        auto *slotTy  = static_cast<llvm::AllocaInst *>(env.returnSlot)->getAllocatedType();
+        // Coerce: widen i1 booleans to the slot's integer type (e.g., i32)
+        if (val->getType() != slotTy) {
+            if (val->getType()->isIntegerTy() && slotTy->isIntegerTy())
+                val = builder_.CreateZExtOrTrunc(val, slotTy, "retconv");
+            else if (val->getType()->isFloatingPointTy() && slotTy->isFloatingPointTy())
+                val = val->getType()->getPrimitiveSizeInBits() < slotTy->getPrimitiveSizeInBits()
+                      ? builder_.CreateFPExt(val, slotTy, "fpconv")
+                      : builder_.CreateFPTrunc(val, slotTy, "fpconv");
+        }
         builder_.CreateStore(val, env.returnSlot);
     }
     builder_.CreateBr(env.returnBB);
@@ -712,6 +726,31 @@ llvm::Value *CodeGen::applyBinaryOp(BinaryOp op, llvm::Value *l, llvm::Value *r,
     bool isFloat = ty && ty->isFloat();
     bool isSigned = !ty || (ty->kind == TypeKind::Int32 || ty->kind == TypeKind::Int64 ||
                              ty->kind == TypeKind::Int16 || ty->kind == TypeKind::Int8);
+
+    // Widen integer operands to the same bit-width (C integer promotion).
+    // This handles cases like `long long x < 0` where 0 is i32 but x is i64.
+    if (!isFloat && l->getType()->isIntegerTy() && r->getType()->isIntegerTy()) {
+        unsigned lw = l->getType()->getIntegerBitWidth();
+        unsigned rw = r->getType()->getIntegerBitWidth();
+        if (lw < rw) {
+            l = isSigned ? builder_.CreateSExt(l, r->getType(), "sext")
+                         : builder_.CreateZExt(l, r->getType(), "zext");
+        } else if (rw < lw) {
+            r = isSigned ? builder_.CreateSExt(r, l->getType(), "sext")
+                         : builder_.CreateZExt(r, l->getType(), "zext");
+        }
+    }
+    // Widen float operands to a common precision (e.g., float vs double).
+    if (isFloat && l->getType()->isFloatingPointTy() && r->getType()->isFloatingPointTy()) {
+        if (l->getType() != r->getType()) {
+            auto *wider = (l->getType()->getPrimitiveSizeInBits() >=
+                           r->getType()->getPrimitiveSizeInBits())
+                          ? l->getType() : r->getType();
+            if (l->getType() != wider) l = builder_.CreateFPExt(l, wider, "fpext");
+            if (r->getType() != wider) r = builder_.CreateFPExt(r, wider, "fpext");
+        }
+    }
+
     switch (op) {
     case BinaryOp::Add:  return isFloat ? builder_.CreateFAdd(l, r, "fadd")
                                         : builder_.CreateAdd(l, r, "add");
@@ -807,6 +846,24 @@ llvm::Value *CodeGen::genBinary(BinaryExpr &e, FnEnv &env) {
         return phi;
     }
 
+    // Array+int arithmetic: T[N] + int → T* via GEP (array decay)
+    if (e.left->type && e.left->type->kind == TypeKind::Array &&
+        (e.op == BinaryOp::Add || e.op == BinaryOp::Sub)) {
+        auto *arrAddr  = genLValue(*e.left, env);
+        auto *arrTy    = lowerType(e.left->type);
+        auto *Int64Ty  = llvm::Type::getInt64Ty(ctx_);
+        auto *arrDecay = builder_.CreateGEP(arrTy, arrAddr,
+            { llvm::ConstantInt::get(Int64Ty, 0), llvm::ConstantInt::get(Int64Ty, 0) },
+            "arrdecay");
+        auto *rhs = genExpr(*e.right, env);
+        // Extend index to i64 if needed
+        if (!rhs->getType()->isIntegerTy(64))
+            rhs = builder_.CreateSExt(rhs, Int64Ty, "idx64");
+        if (e.op == BinaryOp::Sub) rhs = builder_.CreateNeg(rhs);
+        auto &at = static_cast<ArrayType &>(*e.left->type);
+        return builder_.CreateGEP(lowerType(at.element), arrDecay, rhs, "ptrarith");
+    }
+
     auto *lhs = genExpr(*e.left,  env);
     auto *rhs = genExpr(*e.right, env);
 
@@ -824,12 +881,65 @@ llvm::Value *CodeGen::genBinary(BinaryExpr &e, FnEnv &env) {
 llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
     auto *calleeVal = genExpr(*e.callee, env);
 
+    // Helper: decay an array expression to a char* (pointer to first element).
+    auto decayArray = [&](Expr &a) -> llvm::Value * {
+        auto *arrAddr = genLValue(a, env);
+        auto *arrTy   = lowerType(a.type);
+        auto *Int64Ty = llvm::Type::getInt64Ty(ctx_);
+        return builder_.CreateGEP(arrTy, arrAddr,
+            { llvm::ConstantInt::get(Int64Ty, 0), llvm::ConstantInt::get(Int64Ty, 0) },
+            "arraydecay");
+    };
+
     std::vector<llvm::Value *> args;
-    for (auto &a : e.args) args.push_back(genExpr(*a, env));
+
+    // Method call: prepend 'self' pointer (address of base object)
+    if (e.methodBase) {
+        // Get the lvalue address of the base expression as self pointer
+        llvm::Value *selfPtr = nullptr;
+        if (e.methodBase->isLValue) {
+            selfPtr = genLValue(*e.methodBase, env);
+        } else {
+            // Base is a value expression — allocate temp storage
+            selfPtr = builder_.CreateAlloca(lowerType(e.methodBase->type), nullptr, "self.tmp");
+            builder_.CreateStore(genExpr(*e.methodBase, env), selfPtr);
+        }
+        args.push_back(selfPtr);
+    }
+
+    for (auto &a : e.args) {
+        // Perform automatic array-to-pointer decay for array arguments
+        if (a->type && a->type->kind == TypeKind::Array)
+            args.push_back(decayArray(*a));
+        else
+            args.push_back(genExpr(*a, env));
+    }
+
+    // Helper: coerce argument types to match the function signature.
+    // This fixes i1/i32 mismatches that arise when boolean comparisons
+    // (ICmpXX → i1) are passed to functions expecting i32.
+    auto coerceArgs = [&](llvm::FunctionType *fty) {
+        for (unsigned i = 0; i < fty->getNumParams() && i < args.size(); ++i) {
+            auto *paramTy = fty->getParamType(i);
+            auto *argTy   = args[i]->getType();
+            if (argTy == paramTy) continue;
+            if (argTy->isIntegerTy() && paramTy->isIntegerTy()) {
+                unsigned aw = argTy->getIntegerBitWidth();
+                unsigned pw = paramTy->getIntegerBitWidth();
+                if (pw > aw)
+                    args[i] = builder_.CreateZExt(args[i], paramTy, "argzext");
+                else if (pw < aw)
+                    args[i] = builder_.CreateTrunc(args[i], paramTy, "argtrunc");
+            } else if (argTy->isPointerTy() && paramTy->isPointerTy()) {
+                // opaque ptrs already match
+            }
+        }
+    };
 
     llvm::FunctionType *ft = nullptr;
     if (auto *fn = llvm::dyn_cast<llvm::Function>(calleeVal)) {
         ft = fn->getFunctionType();
+        coerceArgs(ft);
         auto *call = builder_.CreateCall(ft, calleeVal, args);
         return call;
     }
@@ -886,9 +996,12 @@ llvm::Value *CodeGen::genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr) 
         if (wantAddr) return gep;
         return builder_.CreateLoad(arrTy->getElementType(), gep, "arr.elem");
     }
-    // Pointer subscript
+    // Pointer subscript: baseAddr is the alloca for the pointer variable.
+    // Load the actual pointer value from the alloca before indexing into it.
+    auto *ptrVal = builder_.CreateLoad(llvm::PointerType::get(ctx_, 0),
+                                       baseAddr, "ptr.load");
     auto *elemTy = e.type ? lowerType(e.type) : llvm::Type::getInt32Ty(ctx_);
-    gep = builder_.CreateGEP(elemTy, baseAddr, idxVal, "ptr.idx");
+    gep = builder_.CreateGEP(elemTy, ptrVal, idxVal, "ptr.idx");
     if (wantAddr) return gep;
     return builder_.CreateLoad(elemTy, gep, "ptr.elem");
 }
@@ -953,8 +1066,22 @@ llvm::Value *CodeGen::genMember(MemberExpr &e, FnEnv &env, bool wantAddr) {
 
 // ── Cast ──────────────────────────────────────────────────────────────────────
 llvm::Value *CodeGen::genCast(CastExpr &e, FnEnv &env) {
+    auto *dstTy = lowerType(e.targetType);
+
+    // Array → Pointer decay: (T*)arr where arr is T[N]
+    // Must use the address of the array, not the loaded value.
+    if (dstTy->isPointerTy() && e.operand->type &&
+        e.operand->type->kind == TypeKind::Array) {
+        auto *arrAddr  = genLValue(*e.operand, env);
+        auto *arrTy    = lowerType(e.operand->type);
+        // GEP to element 0: &arr[0] — gives a ptr to the first element.
+        return builder_.CreateGEP(arrTy, arrAddr,
+            { llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx_), 0),
+              llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx_), 0) },
+            "arraydecay");
+    }
+
     auto *srcVal = genExpr(*e.operand, env);
-    auto *dstTy  = lowerType(e.targetType);
     auto *srcTy  = srcVal->getType();
 
     if (srcTy == dstTy) return srcVal;

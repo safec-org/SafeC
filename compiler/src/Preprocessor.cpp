@@ -1,4 +1,5 @@
 #include "safec/Preprocessor.h"
+#include "safec/CHeaderImporter.h"
 #include <fstream>
 #include <sstream>
 #include <filesystem>
@@ -65,6 +66,9 @@ Preprocessor::Preprocessor(std::string source, std::string filename,
         macros_[name] = std::move(def);
     }
 }
+
+// Destructor defined here so unique_ptr<CHeaderImporter> sees the complete type.
+Preprocessor::~Preprocessor() = default;
 
 // =============================================================================
 // Top-level process
@@ -462,6 +466,19 @@ std::string Preprocessor::handleInclude(const std::string &rest,
 
     std::string path = resolveInclude(name, isSystem, curFile);
     if (path.empty()) {
+        // For system includes that we can't resolve natively, try importing
+        // via clang's AST dump facility.  This covers headers like <stdio.h>
+        // that contain GCC extensions the SafeC parser cannot handle directly.
+        if (isSystem && opts_.importCHeaders) {
+            if (!cHeaderImporter_) {
+                cHeaderImporter_ = std::make_unique<CHeaderImporter>(diag_);
+            }
+            if (cHeaderImporter_->available()) {
+                std::string decls =
+                    cHeaderImporter_->import(name, opts_.includePaths);
+                if (!decls.empty()) return decls;
+            }
+        }
         diag_.error({lineNo, 1, curFile.c_str()},
                     "cannot find include file '" + name + "'");
         return {};

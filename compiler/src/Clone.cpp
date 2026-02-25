@@ -12,6 +12,17 @@ TypePtr substituteType(const TypePtr &ty, const TypeSubst &subs) {
         auto it = subs.find(gt.name);
         return (it != subs.end()) ? it->second : ty;
     }
+    // An undefined struct name inside a function body may represent a generic
+    // type parameter (the parser emits it as StructType; resolveGenericNames
+    // converts it for param/return types but not for body-level cast targets).
+    case TypeKind::Struct: {
+        auto &st = static_cast<const StructType &>(*ty);
+        if (!st.isDefined) {
+            auto it = subs.find(st.name);
+            if (it != subs.end()) return it->second;
+        }
+        return ty;
+    }
     case TypeKind::Pointer: {
         auto &pt = static_cast<const PointerType &>(*ty);
         auto nb = substituteType(pt.base, subs);
@@ -271,11 +282,14 @@ std::unique_ptr<FunctionDecl> cloneFunctionDecl(const FunctionDecl &fn,
                                                   const TypeSubst &subs) {
     auto clone = std::make_unique<FunctionDecl>(fn.name, fn.loc);
     clone->returnType  = substituteType(fn.returnType, subs);
-    clone->isConst     = fn.isConst;
-    clone->isConsteval = fn.isConsteval;
-    clone->isInline    = fn.isInline;
-    clone->isExtern    = fn.isExtern;
-    clone->isVariadic  = fn.isVariadic;
+    clone->isConst       = fn.isConst;
+    clone->isConsteval   = fn.isConsteval;
+    clone->isInline      = fn.isInline;
+    clone->isExtern      = fn.isExtern;
+    clone->isVariadic    = fn.isVariadic;
+    clone->isMethod      = fn.isMethod;
+    clone->methodOwner   = fn.methodOwner;
+    clone->isConstMethod = fn.isConstMethod;
     // caller clears genericParams and sets mangled name
 
     for (auto &p : fn.params) {

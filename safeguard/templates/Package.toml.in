@@ -1,0 +1,19 @@
+[package]
+name        = "{{NAME}}"
+version     = "{{VERSION}}"
+author      = "{{AUTHOR}}"
+description = ""
+license     = "MIT"
+
+[build]
+edition = "2025"
+
+# To add a GitHub dependency:
+# [[dependencies]]
+# name    = "mylib"
+# version = "https://github.com/user/mylib"
+#
+# To add a local path dependency:
+# [[dependencies]]
+# name    = "mylib"
+# path    = "../mylib"

@@ -146,7 +146,7 @@ TypePtr Parser::parseBaseType() {
     switch (cur().kind) {
     case TK::KW_void:   consume(); return makeVoid();
     case TK::KW_bool:   consume(); return makeBool();
-    case TK::KW_char:   consume(); return makeInt(8, !isUnsigned);
+    case TK::KW_char:   consume(); return isUnsigned ? makeInt(8, false) : makeChar();
     case TK::KW_short:  consume(); return makeInt(16, !isUnsigned);
     case TK::KW_int:    consume(); return makeInt(32, !isUnsigned);
     case TK::KW_long: {
@@ -347,12 +347,31 @@ DeclPtr Parser::parseFunctionOrGlobalVar(bool isConst, bool isConsteval,
     std::string name = cur().text;
     consume();
 
+    // Method definition: StructName :: methodName '(' ...
+    std::string methodOwner;
+    if (cur().is(TK::ColonColon)) {
+        consume(); // consume '::'
+        methodOwner = name;  // struct name
+        if (!cur().is(TK::Ident) && !cur().is(TK::KW_operator)) {
+            diag_.error(cur().loc, "expected method name after '::'");
+            syncToDecl();
+            return nullptr;
+        }
+        name = cur().text;
+        consume();
+    }
+
     // Function: name '(' ...
     if (cur().is(TK::LParen)) {
         consume(); // consume '('
-        return parseFunctionDecl(std::move(retType), std::move(name), loc,
-                                 isConst, isConsteval, isInline, isExtern,
-                                 false, std::move(genericParams));
+        auto fn = parseFunctionDecl(std::move(retType), std::move(name), loc,
+                                    isConst, isConsteval, isInline, isExtern,
+                                    false, std::move(genericParams));
+        if (!methodOwner.empty()) {
+            fn->isMethod    = true;
+            fn->methodOwner = std::move(methodOwner);
+        }
+        return fn;
     }
 
     // Global variable
@@ -397,6 +416,12 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(
     }
     expect(TK::RParen, "expected ')' closing parameter list");
 
+    // Optional 'const' qualifier after params (for const methods: T::m() const { ... })
+    if (cur().is(TK::KW_const)) {
+        consume();
+        fn->isConstMethod = true;
+    }
+
     // Body or declaration
     if (cur().is(TK::LBrace)) {
         fn->body = parseCompoundStmt();
@@ -417,23 +442,69 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion) {
     expect(TK::LBrace, "expected '{' in struct definition");
     int fieldIdx = 0;
     while (!atEnd() && !cur().is(TK::RBrace)) {
-        FieldDecl fd;
-        fd.index = fieldIdx++;
-        fd.type  = parseType();
-        fd.name  = cur().text;
-        if (!cur().is(TK::Ident)) {
-            diag_.error(cur().loc, "expected field name");
-        } else consume();
-        // Optional array size
-        if (cur().is(TK::LBracket)) {
-            consume();
-            int64_t sz = -1;
-            if (cur().is(TK::IntLit)) { sz = cur().intVal; consume(); }
-            expect(TK::RBracket);
-            fd.type = makeArray(std::move(fd.type), sz);
+        // Peek ahead: if we have "type name (" it's a method declaration,
+        // otherwise it's a field declaration.
+        // Heuristic: after parsing type + name, check for '('
+        auto savedPos = pos_;
+
+        // Try to parse as method declaration
+        TypePtr maybeType = parseType();
+        bool isMethodDecl = false;
+        std::string memberName;
+
+        if (cur().is(TK::Ident)) {
+            memberName = cur().text;
+            // Peek ahead to see if '(' follows (method) or not (field)
+            if (peek().is(TK::LParen)) {
+                isMethodDecl = true;
+            }
+        } else if (cur().is(TK::KW_operator)) {
+            // operator overload declaration
+            isMethodDecl = true;
+            memberName = cur().text;
         }
-        expect(TK::Semicolon, "expected ';' after struct field");
-        sd->fields.push_back(std::move(fd));
+
+        if (isMethodDecl) {
+            // Method declaration inside struct: T method(params) [const];
+            consume(); // consume method name
+            consume(); // consume '('
+            MethodDecl md;
+            md.loc        = cur().loc;
+            md.name       = memberName;
+            md.returnType = std::move(maybeType);
+            while (!atEnd() && !cur().is(TK::RParen)) {
+                if (cur().is(TK::DotDotDot)) { consume(); break; }
+                ParamDecl p;
+                p.loc  = cur().loc;
+                p.type = parseType();
+                if (cur().is(TK::Ident)) { p.name = cur().text; consume(); }
+                md.params.push_back(std::move(p));
+                if (!match(TK::Comma)) break;
+            }
+            expect(TK::RParen, "expected ')' closing method parameter list");
+            if (cur().is(TK::KW_const)) { consume(); md.isConst = true; }
+            expect(TK::Semicolon, "expected ';' after method declaration");
+            sd->methodDecls.push_back(std::move(md));
+        } else {
+            // Field declaration
+            FieldDecl fd;
+            fd.index = fieldIdx++;
+            fd.type  = std::move(maybeType);
+            fd.name  = memberName;
+            if (!cur().is(TK::Ident)) {
+                diag_.error(cur().loc, "expected field name");
+            } else consume();
+            // Optional array size
+            if (cur().is(TK::LBracket)) {
+                consume();
+                int64_t sz = -1;
+                if (cur().is(TK::IntLit)) { sz = cur().intVal; consume(); }
+                expect(TK::RBracket);
+                fd.type = makeArray(std::move(fd.type), sz);
+            }
+            expect(TK::Semicolon, "expected ';' after struct field");
+            sd->fields.push_back(std::move(fd));
+        }
     }
     expect(TK::RBrace, "expected '}' closing struct");
     match(TK::Semicolon);
@@ -1065,8 +1136,14 @@ ExprPtr Parser::parsePrimaryExpr() {
     auto loc = cur().loc;
     switch (cur().kind) {
     case TK::IntLit: {
-        int64_t v = cur().intVal; consume();
-        return std::make_unique<IntLitExpr>(v, loc);
+        int64_t v   = cur().intVal;
+        bool isLL   = cur().isLongLong;
+        bool isUns  = cur().isUnsigned;
+        consume();
+        auto expr = std::make_unique<IntLitExpr>(v, loc);
+        expr->isLongLong = isLL;
+        expr->isUnsigned = isUns;
+        return expr;
     }
     case TK::FloatLit: {
         double v = cur().floatVal; consume();
@@ -1085,7 +1162,8 @@ ExprPtr Parser::parsePrimaryExpr() {
     case TK::KW_null:  consume(); return std::make_unique<NullLitExpr>(loc);
     case TK::Ident:
     case TK::KW_stack: case TK::KW_heap:
-    case TK::KW_arena: case TK::KW_capacity: {
+    case TK::KW_arena: case TK::KW_capacity:
+    case TK::KW_self: {  // self is a valid expression in method bodies
         std::string name = cur().text; consume();
         return std::make_unique<IdentExpr>(std::move(name), loc);
     }

@@ -1,11 +1,14 @@
 #pragma once
 #include "safec/Diagnostic.h"
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 namespace safec {
+
+class CHeaderImporter; // forward-declared to keep the header self-contained
 
 // ── Macro definition ──────────────────────────────────────────────────────────
 struct MacroDef {
@@ -19,8 +22,9 @@ struct MacroDef {
 
 // ── Options ───────────────────────────────────────────────────────────────────
 struct PreprocOptions {
-    bool compatMode     = false;   // --compat-preprocessor: allow fn-like macros etc.
-    int  maxIncludeDepth = 64;
+    bool compatMode       = false; // --compat-preprocessor: allow fn-like macros etc.
+    bool importCHeaders   = true;  // fall back to clang import for unresolved <headers>
+    int  maxIncludeDepth  = 64;
     std::vector<std::string>                     includePaths;  // -I dirs
     std::unordered_map<std::string, std::string> cmdlineDefs;   // -D NAME[=VAL]
 };
@@ -39,6 +43,7 @@ class Preprocessor {
 public:
     Preprocessor(std::string source, std::string filename,
                  DiagEngine &diag, PreprocOptions opts = {});
+    ~Preprocessor(); // defined in .cpp so unique_ptr<CHeaderImporter> can see the complete type
 
     // Run preprocessing; returns preprocessed source text.
     // Directive lines are replaced with blank lines to preserve line numbers.
@@ -152,6 +157,9 @@ private:
 
     std::unordered_map<std::string, MacroDef> macros_;
     std::unordered_set<std::string>           pragmaOnceFiles_;
+
+    // Lazily-created C header importer (null if clang not found or disabled).
+    std::unique_ptr<CHeaderImporter> cHeaderImporter_;
 
     // Current file/line for __FILE__ / __LINE__ expansion
     std::string  curFile_;

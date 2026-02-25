@@ -174,6 +174,8 @@ private:
     std::vector<Scope>                      scopes_;
     std::unordered_map<std::string, TypePtr> typeRegistry_;  // struct/enum types by name
     std::unordered_map<std::string, RegionDecl*> regionRegistry_;
+    // Method registry: "StructName::methodName" → FunctionDecl* (mangled)
+    std::unordered_map<std::string, FunctionDecl*> methodRegistry_;
     int                                     scopeDepth_ = 0;
 };
 

@@ -202,7 +202,119 @@ No implicit destructor logic is injected.
 
 ---
 
-# 5. Compile-Time-First Design
+# 5. Object Model
+
+SafeC objects provide deterministic layout, pure static dispatch, and zero hidden runtime cost. All object behavior is resolved entirely at compile time.
+
+---
+
+## 5.1 Struct Layout
+
+Every SafeC struct is a contiguous, metadata-free block of memory whose size is determined solely by its declared fields. Methods, traits, and operators never affect object size.
+
+```c
+struct Foo {
+    double a;
+    double b;
+};
+
+// sizeof(Foo) = 2 * sizeof(double) — no hidden fields
+```
+
+No vtable pointer, no type tag, and no hidden destructor pointer is injected.
+
+---
+
+## 5.2 Value Semantics
+
+Structs are plain value types:
+
+* Assignment is a bitwise copy — no constructor or destructor is called.
+* No implicit move semantics.
+* No hidden heap promotion on assignment.
+
+```c
+Foo x = y;   // memory copy; no hidden side effects
+```
+
+---
+
+## 5.3 Methods
+
+Methods are declared inside the struct body and defined outside using qualified syntax.
+
+**Declaration:**
+
+```c
+struct Point {
+    double x;
+    double y;
+
+    double length() const;               // read-only receiver
+    double dot(double ox, double oy) const;
+    void   scale(double s);              // mutating receiver
+};
+```
+
+**Definition:**
+
+```c
+double Point::length() const {
+    return self.x * self.x + self.y * self.y;
+}
+
+void Point::scale(double s) {
+    self.x = self.x * s;
+    self.y = self.y * s;
+}
+```
+
+**Lowering rule** — methods lower to free functions at codegen:
+
+| SafeC form | Lowered form |
+| ---------- | ------------ |
+| `R T::m(P...) const` | `R T_m(const T* self, P...)` |
+| `R T::m(P...)` | `R T_m(T* self, P...)` |
+| `x.m(args)` call | `T_m(&x, args)` |
+
+`self` is the implicit receiver reference. In a `const` method it is a read-only non-null reference (`noalias nonnull const T*`); in a non-`const` method it is mutable (`noalias nonnull T*`). Accessing `self.field` in safe code requires no `unsafe {}` block.
+
+Method declarations do **not** alter the struct's memory layout.
+
+---
+
+## 5.4 Static Dispatch
+
+All method calls are resolved entirely at compile time based on:
+
+* Receiver type
+* Method name
+* Const qualifier
+* Parameter types (for future overload resolution)
+
+No vtable lookup. No runtime polymorphism. Dynamic dispatch is not supported in safe code.
+
+---
+
+## 5.5 Prohibited Object Features
+
+SafeC explicitly forbids:
+
+| Feature | Reason |
+| ------- | ------ |
+| Virtual functions | Runtime dispatch violates determinism |
+| Vtables | Hidden metadata, hidden allocation |
+| Inheritance | Implicit layout coupling |
+| Hidden constructors | No-surprise initialization |
+| Hidden destructors | No hidden resource cleanup |
+| RTTI | Runtime type metadata |
+| Implicit heap allocation | Violates zero-hidden-cost guarantee |
+
+Composition and generics replace inheritance.
+
+---
+
+# 6. Compile-Time-First Design
 
 SafeC's compile-time execution engine is a core part of the semantic model — not an optimization hint.
 
@@ -210,7 +322,7 @@ SafeC's compile-time execution engine is a core part of the semantic model — n
 
 ---
 
-## 5.1 Const Functions
+## 6.1 Const Functions
 
 A `const` function may execute at compile time or runtime:
 
@@ -228,7 +340,7 @@ If called at runtime → executed as a normal function.
 
 ---
 
-## 5.2 Consteval Functions
+## 6.2 Consteval Functions
 
 A `consteval` function must execute at compile time. Calling it in a runtime context is a compile error:
 
@@ -242,7 +354,7 @@ const int PAGE_SIZE = pow2(12);  // 4096, compile time only
 
 ---
 
-## 5.3 Const Contexts
+## 6.3 Const Contexts
 
 An expression is required to evaluate at compile time when it appears in:
 
@@ -257,7 +369,7 @@ An expression is required to evaluate at compile time when it appears in:
 
 ---
 
-## 5.4 Static Assertions
+## 6.4 Static Assertions
 
 ```c
 static_assert(sizeof(AudioFrame) == 64, "AudioFrame must be 64 bytes");
@@ -269,7 +381,7 @@ A false condition is a compile error, not a runtime check.
 
 ---
 
-## 5.5 Compile-Time Conditionals
+## 6.5 Compile-Time Conditionals
 
 ```c
 if const (WORD_SIZE == 8) {
@@ -286,7 +398,7 @@ This replaces preprocessor `#if` for architecture-specific code paths.
 
 ---
 
-## 5.6 Compile-Time Execution Rules
+## 6.6 Compile-Time Execution Rules
 
 Compile-time functions must:
 
@@ -306,21 +418,21 @@ Exceeding any limit is a compile-time error.
 
 ---
 
-## 5.7 ABI Guarantee
+## 6.7 ABI Guarantee
 
 Const-evaluated results become literal data in the output object.
 The compiler never injects hidden runtime initialization for `const` globals.
 
 ---
 
-# 6. Preprocessor Model
+# 7. Preprocessor Model
 
 SafeC includes a preprocessor for C interoperability and build configuration.
 It is a compatibility layer, not a metaprogramming system.
 
 ---
 
-## 6.1 Design Principles
+## 7.1 Design Principles
 
 1. **Deterministic** — same inputs always produce same expansion
 2. **No hidden semantics** — no type-oblivious substitution
@@ -329,7 +441,7 @@ It is a compatibility layer, not a metaprogramming system.
 
 ---
 
-## 6.2 Supported Directives
+## 7.2 Supported Directives
 
 **File inclusion:**
 
@@ -375,7 +487,7 @@ __LINE__   // current line number
 
 ---
 
-## 6.3 Safe Mode vs Compatibility Mode
+## 7.3 Safe Mode vs Compatibility Mode
 
 **Safe mode (default):**
 
@@ -392,7 +504,7 @@ __LINE__   // current line number
 
 ---
 
-## 6.4 Compile-Time-First Replacements
+## 7.4 Compile-Time-First Replacements
 
 Instead of preprocessor constants:
 
@@ -417,7 +529,7 @@ if const (WORD_SIZE == 8) { ... }
 
 ---
 
-## 6.5 Interaction with Region System
+## 7.5 Interaction with Region System
 
 The preprocessor must not:
 
@@ -430,11 +542,11 @@ All region semantics are enforced after preprocessing, in the semantic analysis 
 
 ---
 
-# 7. Safety Analysis
+# 8. Safety Analysis
 
 ---
 
-## 7.1 Definite Initialization
+## 8.1 Definite Initialization
 
 The compiler rejects use-before-initialization and conditional initialization gaps:
 
@@ -445,7 +557,7 @@ printf("%d", x);  // error: x used before initialization
 
 ---
 
-## 7.2 Region Escape Analysis
+## 8.2 Region Escape Analysis
 
 The compiler detects:
 
@@ -455,7 +567,7 @@ The compiler detects:
 
 ---
 
-## 7.3 Aliasing Rules
+## 8.3 Aliasing Rules
 
 For safe references:
 
@@ -465,7 +577,7 @@ For safe references:
 
 ---
 
-## 7.4 Nullability Enforcement
+## 8.4 Nullability Enforcement
 
 For `?&T` (nullable):
 
@@ -478,7 +590,7 @@ For `&T` (non-null):
 
 ---
 
-## 7.5 Bounds Safety
+## 8.5 Bounds Safety
 
 Arrays are bounds-aware:
 
@@ -490,7 +602,7 @@ Runtime bounds checks are explicit in the IR — no hidden runtime machinery.
 
 ---
 
-# 8. Unsafe Boundary Model
+# 9. Unsafe Boundary Model
 
 ```c
 unsafe {
@@ -513,7 +625,7 @@ Conversion requires an explicit safety assertion where the programmer accepts re
 
 ---
 
-## 8.1 Safe vs Unsafe Domains
+## 9.1 Safe vs Unsafe Domains
 
 SafeC defines two semantic domains:
 
@@ -526,7 +638,7 @@ Transition is explicit via `unsafe {}`. There are no implicit transitions.
 
 ---
 
-## 8.2 Lexical Unsafe Tracking
+## 9.2 Lexical Unsafe Tracking
 
 During semantic analysis, each scope carries an `unsafe_mode` flag:
 
@@ -537,7 +649,7 @@ During semantic analysis, each scope carries an `unsafe_mode` flag:
 
 ---
 
-## 8.3 Pointer Interpretation by Mode
+## 9.3 Pointer Interpretation by Mode
 
 Outside unsafe:
 
@@ -557,7 +669,7 @@ This requires unsafe context, does not change ownership, does not erase the regi
 
 ---
 
-## 8.4 Unsafe Escape
+## 9.4 Unsafe Escape
 
 `unsafe escape` permanently removes region guarantees for the affected reference:
 
@@ -575,7 +687,7 @@ This is the only legal region break.
 
 ---
 
-## 8.5 Formal Safety Boundary
+## 9.5 Formal Safety Boundary
 
 ```
 S = region-checked domain
@@ -589,7 +701,7 @@ No implicit transitions exist.
 
 ---
 
-## 8.6 Alias Rules Inside Unsafe
+## 9.6 Alias Rules Inside Unsafe
 
 Unsafe does **not** disable alias checking.
 
@@ -608,13 +720,13 @@ After leaving unsafe: no illegal alias may persist; the borrow graph must remain
 
 ---
 
-# 9. C Interoperability (FFI)
+# 10. C Interoperability (FFI)
 
 SafeC provides zero-cost, explicit, region-safe interoperability with C-compatible foreign code. FFI preserves all SafeC guarantees by default.
 
 ---
 
-## 9.1 FFI Function Declarations
+## 10.1 FFI Function Declarations
 
 Foreign functions must be declared using **raw C types**. Region-qualified references are not allowed in `extern` signatures:
 
@@ -629,7 +741,7 @@ Region qualifiers belong to the SafeC caller, not to the extern declaration.
 
 ---
 
-## 9.2 Calling FFI Functions
+## 10.2 Calling FFI Functions
 
 The rule depends on the region of the argument being passed:
 
@@ -655,7 +767,7 @@ fgets(buffer, 256, stdin);      // compile error: outside unsafe
 
 ---
 
-## 9.3 Lifetime Containment Rule
+## 10.3 Lifetime Containment Rule
 
 The compiler verifies that the region of every reference passed to a C function outlives the call:
 
@@ -668,7 +780,7 @@ lifetime(argument) ≥ lifetime(call)
 
 ---
 
-## 9.4 Escape Analysis in Unsafe
+## 10.4 Escape Analysis in Unsafe
 
 Inside `unsafe`, temporary raw interpretation does **not** allow region escape:
 
@@ -690,7 +802,7 @@ unsafe escape {
 
 ---
 
-## 9.5 Region-Specific FFI Rules
+## 10.5 Region-Specific FFI Rules
 
 | Region        | May Pass to C | Escape | Constraint                        |
 | ------------- | ------------- | ------ | --------------------------------- |
@@ -701,7 +813,7 @@ unsafe escape {
 
 ---
 
-## 9.6 Receiving Raw Pointers from C
+## 10.6 Receiving Raw Pointers from C
 
 Raw pointers returned from C functions must be handled inside `unsafe {}`. Region assignment is explicit:
 
@@ -720,7 +832,7 @@ No automatic wrapping.
 
 ---
 
-## 9.7 Optimizer Behavior
+## 10.7 Optimizer Behavior
 
 Because region references erase to raw pointers at codegen, FFI introduces:
 
@@ -734,7 +846,7 @@ Outside `unsafe`: full region-based alias analysis and optimization apply.
 
 ---
 
-## 9.8 Compiler FFI Responsibilities
+## 10.8 Compiler FFI Responsibilities
 
 The compiler must:
 
@@ -753,7 +865,7 @@ The compiler must not:
 
 ---
 
-## 9.9 FFI Summary
+## 10.9 FFI Summary
 
 | Feature            | Safe Mode | Unsafe Mode              |
 | ------------------ | --------- | ------------------------ |
@@ -767,7 +879,7 @@ SafeC is safe by default. Unsafe is visible. Region escape is explicit. FFI is p
 
 ---
 
-# 10. Error Handling Philosophy
+# 11. Error Handling Philosophy
 
 SafeC supports multiple styles without mandating one:
 
@@ -789,7 +901,7 @@ No implicit exceptions. No stack unwinding. Error propagation is explicit.
 
 ---
 
-# 11. Comparison with Other Languages
+# 12. Comparison with Other Languages
 
 | Feature                | C      | C++         | Rust          | Zig        | SafeC                 |
 | ---------------------- | ------ | ----------- | ------------- | ---------- | ----------------------|
@@ -806,9 +918,9 @@ SafeC is not a Rust clone, not a C++ competitor, and not a scripting language. I
 
 ---
 
-# 12. Compiler Architecture
+# 13. Compiler Architecture
 
-## 12.1 Pipeline
+## 13.1 Pipeline
 
 ```
 Source (.sc)
@@ -835,7 +947,7 @@ No implicit transformation inserting hidden allocations.
 
 ---
 
-## 12.2 Key Design Decisions
+## 13.2 Key Design Decisions
 
 * **References lower to `ptr`** with `noalias`, `nonnull`, `dereferenceable` attributes
 * **Regions are compile-time only** — zero runtime region metadata
@@ -846,15 +958,15 @@ No implicit transformation inserting hidden allocations.
 
 ---
 
-# 13. Build & Usage
+# 14. Build & Usage
 
-## 13.1 Prerequisites
+## 14.1 Prerequisites
 
 * CMake ≥ 3.20
 * C++17 compiler (Clang ≥ 14, GCC ≥ 12, or MSVC 2022)
 * LLVM ≥ 17 (with CMake config files)
 
-## 13.2 Building
+## 14.2 Building
 
 ```bash
 # Set LLVM_DIR if LLVM is not on the default search path:
@@ -869,7 +981,7 @@ cmake --build . --parallel
 
 The compiler binary is `build/safec`.
 
-## 13.3 Compiler Flags
+## 14.3 Compiler Flags
 
 ```
 safec <input.sc> [options]
@@ -886,7 +998,7 @@ safec <input.sc> [options]
   -v                       Verbose output
 ```
 
-## 13.4 Example Workflow
+## 14.4 Example Workflow
 
 ```bash
 # Compile to LLVM IR
@@ -901,7 +1013,7 @@ clang hello.ll -o hello
 
 ---
 
-# 14. Project Status
+# 15. Project Status
 
 The SafeC compiler is a working prototype implementing:
 
@@ -919,12 +1031,21 @@ The SafeC compiler is a working prototype implementing:
 | Arena region escape analysis     | ✅ Complete |
 | Alias / borrow checker           | ✅ Complete |
 | Generics monomorphization        | ✅ Complete |
-| Arena region runtime allocator   | 🔲 Future   |
-| Concurrency model                | 🔲 Future   |
+| Struct methods (static dispatch) | ✅ Complete |
+| Standard library (`std/`)        | ✅ Complete |
+| `safeguard` package manager      | ✅ Complete |
+| Arena region runtime allocator   | 🔲 Planned  |
+| Concurrency model                | 🔲 Planned  |
+| Operator overloading             | 🔲 Planned  |
+| Tuple / closure lowering         | 🔲 Planned  |
+| Language server (LSP)            | 🔲 Planned  |
+| Debug info (DWARF)               | 🔲 Planned  |
+| Incremental compilation          | 🔲 Planned  |
+| Self-hosting                     | 🔲 Planned  |
 
 ---
 
-# 15. Non-Goals (Initial Version)
+# 16. Non-Goals (Initial Version)
 
 * Async/await
 * Full concurrency model
@@ -937,25 +1058,94 @@ The SafeC compiler is a working prototype implementing:
 
 ---
 
-# 16. Long-Term Vision
+# 17. Long-Term Vision
 
-After the core compiler is stable:
+SafeC is not just a safer C compiler — it is a statement about the direction
+systems programming should go.  The milestones below trace a path from today's
+working prototype to a production-grade language.
 
-* Region isolation for safe concurrency
-* Verified kernel mode compilation target
-* Deterministic lock-free primitives
-* Formal safety proof model
-* Static effect system
+## 17.1 Near-Term (Compiler Completeness)
 
-SafeC aims to demonstrate that determinism and safety are not mutually exclusive,
-that compile-time design can eliminate runtime cost,
-and that C compatibility does not require sacrificing correctness.
+These build directly on the current implementation:
 
-SafeC is an exploration of what C could have become — if memory safety and compile-time reasoning were first-class citizens from the start.
+| Feature | Description |
+| ------- | ----------- |
+| **Arena runtime allocator** | Implement `new<R> T(…)` to pair with the compile-time escape checker; a bump-pointer allocator backed by a user-supplied byte buffer. |
+| **Operator overloading** | `operator +`, `operator ==`, etc. as statically resolved free functions lowered from `T::operator op(args)` — zero runtime dispatch. |
+| **Tuple / closure lowering** | `tuple(T, U)` lowers to compiler-generated structs; closures lower to a captured-values struct + a static call function with no implicit heap allocation. |
+| **Debug info (DWARF)** | Source-level debugging via `llvm::DIBuilder`; line tables, variable locations, struct layouts. |
+| **Incremental compilation** | Per-function IR cache keyed on AST hash to avoid recompiling unchanged functions in large TUs. |
+| **Function pointer types** | First-class `fn(T, U) -> V` type syntax, enabling safe callbacks without `unsafe{}` wrappers. |
+
+## 17.2 Mid-Term (Language Expressiveness)
+
+SafeC needs to be pleasant to write, not just theoretically safe:
+
+| Feature | Description |
+| ------- | ----------- |
+| **Trait / interface system** | Structural `interface I { fn method(self) -> T; }` — zero-vtable dispatch at the call site, monomorphized like generics. |
+| **Pattern matching** | `match` expressions over enums, integers, and struct fields; exhaustiveness checked at compile time. |
+| **Error propagation** | `Result<T, E>` built into the language with `?` propagation, without exceptions or longjmp. |
+| **Compile-time reflection** | `typeof(expr)`, `sizeof(T)`, `alignof(T)`, and limited struct field enumeration for generic algorithms. |
+| **Variadic generics** | `generic<T...>` for type-safe heterogeneous argument lists. |
+
+## 17.3 Long-Term (Systems Reach)
+
+The ambitions that motivate SafeC's design:
+
+| Feature | Description |
+| ------- | ----------- |
+| **Safe concurrency via region isolation** | Two threads may not hold mutable references to the same region simultaneously; enforced by the borrow checker at compile time, with zero runtime cost. |
+| **Kernel-mode compilation target** | A `--freestanding` mode that disables all C-stdlib dependencies and generates position-independent, no-implicit-call IR suitable for kernel subsystems. |
+| **Deterministic lock-free primitives** | `atomic<T>` with explicit memory-order annotations; no hidden mutex, no hidden spin. |
+| **Formal safety model** | A machine-checkable proof (Lean 4 or Coq) that well-typed SafeC programs do not exhibit use-after-free, data races, or out-of-bounds accesses. |
+| **Static effect system** | Track I/O, allocation, and non-termination effects in function signatures; pure functions verified at compile time. |
+| **Language server (LSP)** | Real-time diagnostics, completion, and rename in any LSP-compatible editor — built on the same frontend passes. |
+| **Self-hosting** | Rewrite `safec` in SafeC itself, bootstrapped from the LLVM-backed prototype. |
+
+## 17.4 Package Manager & Build System (safeguard)
+
+`safeguard` is the official package manager and build system for SafeC projects. It pairs
+with the compiler to provide a complete, reproducible development workflow.
+
+| Capability | Description |
+| ---------- | ----------- |
+| **Project scaffolding** | `safeguard new <name>` creates a `safeguard.toml` manifest, `src/`, and `examples/`. |
+| **Dependency resolution** | Declarative `[dependencies]` table in `safeguard.toml`; content-addressed package cache. |
+| **Build orchestration** | Drives `safec` per translation unit; links with LLVM `lld` or system linker; supports `--release` / `--debug` profiles. |
+| **Standard library integration** | `std/` is a built-in package; individual modules (`io`, `mem`, `str`, `collections`, …) are imported by name. |
+| **Workspace support** | Multi-crate monorepos with shared dependency resolution and incremental per-crate rebuilds. |
+| **Reproducible builds** | Lockfile (`safeguard.lock`) pins exact package hashes; deterministic build graph with no network access after first resolution. |
+
+`safeguard` is implemented in SafeC itself, demonstrating the language's suitability for
+systems tooling — no hidden allocator, no GC, deterministic build graph execution.
+
+## 17.5 The Core Thesis
+
+SafeC aims to demonstrate three things:
+
+1. **Determinism and safety are not mutually exclusive.**
+   The borrow checker, region escape analysis, and bounds checking all operate
+   entirely at compile time — there is no runtime safety overhead.
+
+2. **Compile-time design eliminates runtime cost.**
+   Generics are monomorphized, `if const` branches are dead-code-eliminated,
+   regions carry no runtime metadata, and const-eval folds constants before
+   codegen.  The resulting IR is as lean as hand-written C.
+
+3. **C compatibility does not require sacrificing correctness.**
+   Native C header import means every C library is immediately usable.
+   C ABI compatibility means SafeC objects can be linked into any C project.
+   The `unsafe{}` escape hatch provides explicit, auditable boundaries between
+   the safe core and C-interop code.
+
+SafeC is an exploration of what C could have become — if memory safety,
+compile-time reasoning, and zero-cost abstractions were first-class citizens
+from the start.
 
 ---
 
-# 17. Identity
+# 18. Identity
 
 SafeC is:
 

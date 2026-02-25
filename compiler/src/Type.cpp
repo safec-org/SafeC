@@ -53,8 +53,8 @@ unsigned PrimType::bitWidth() const {
     case TypeKind::UInt16:  return 16;
     case TypeKind::Int32:
     case TypeKind::UInt32:
-    case TypeKind::Float32:
-    case TypeKind::Char:    return 32;
+    case TypeKind::Float32: return 32;
+    case TypeKind::Char:    return 8;
     case TypeKind::Int64:
     case TypeKind::UInt64:
     case TypeKind::Float64: return 64;
@@ -166,6 +166,13 @@ bool typeCompatibleAssign(const TypePtr &dst, const TypePtr &src) {
     if (typeEqual(dst, src)) return true;
     // Error sentinel propagates silently
     if (dst->isError() || src->isError()) return true;
+    // Char ↔ Int8 ↔ UInt8: 8-bit types are mutually assignable
+    // (char, signed char, unsigned char are all 8-bit — compatible in practice)
+    auto is8bit = [](const TypePtr &t) {
+        return t->kind == TypeKind::Char  || t->kind == TypeKind::Int8 ||
+               t->kind == TypeKind::UInt8 || t->kind == TypeKind::Bool;
+    };
+    if (is8bit(dst) && is8bit(src)) return true;
     // Integer widening is NOT implicit in SafeC — explicit cast required
     // Reference → pointer decay allowed only in unsafe (enforced by sema)
     return false;

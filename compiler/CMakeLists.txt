@@ -27,6 +27,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 set(SAFEC_SOURCES
   src/Preprocessor.cpp
+  src/CHeaderImporter.cpp
   src/Lexer.cpp
   src/AST.cpp
   src/Type.cpp

@@ -74,6 +74,8 @@ struct Expr {
 // ── Literal expressions ───────────────────────────────────────────────────────
 struct IntLitExpr : Expr {
     int64_t value;
+    bool    isLongLong = false;  // LL/ll suffix → force Int64
+    bool    isUnsigned = false;  // U/u suffix → force unsigned type
     IntLitExpr(int64_t v, SourceLocation l)
         : Expr(ExprKind::IntLit, l), value(v) {}
 };
@@ -144,6 +146,10 @@ struct TernaryExpr : Expr {
 struct CallExpr : Expr {
     ExprPtr              callee;
     std::vector<ExprPtr> args;
+    // Method call support (OBJECT.md §4.3): x.m(args) → T_m(&x, args)
+    // If non-null, this is a method call; CodeGen prepends &methodBase as first arg.
+    ExprPtr              methodBase;  // the base expression (x in x.m(args))
+
     CallExpr(ExprPtr fn, std::vector<ExprPtr> a, SourceLocation l)
         : Expr(ExprKind::Call, l), callee(std::move(fn)),
           args(std::move(a)) {}
@@ -366,6 +372,10 @@ struct FunctionDecl : Decl {
     bool  isInline   = false;
     bool  isExtern   = false;
     bool  isVariadic = false;
+    // Method support (OBJECT.md §4)
+    bool        isMethod      = false;   // true → T::m(...)
+    std::string methodOwner;             // struct name (e.g. "Foo" for Foo::m)
+    bool        isConstMethod = false;   // const qualifier after params
 
     FunctionDecl(std::string n, SourceLocation l)
         : Decl(DeclKind::Function, std::move(n), l) {}
@@ -373,9 +383,19 @@ struct FunctionDecl : Decl {
     TypePtr funcType() const;
 };
 
+// ── Method declaration (forward-declared inside struct body) ──────────────────
+struct MethodDecl {
+    std::string              name;
+    TypePtr                  returnType;
+    std::vector<ParamDecl>   params;
+    bool                     isConst = false;   // const method qualifier
+    SourceLocation           loc;
+};
+
 // ── Struct declaration ────────────────────────────────────────────────────────
 struct StructDecl : Decl {
-    std::vector<FieldDecl> fields;
+    std::vector<FieldDecl>  fields;
+    std::vector<MethodDecl> methodDecls;   // forward declarations inside struct body
     bool isUnion   = false;
     bool isTaggedUnion = false;
     std::vector<GenericParam> genericParams;

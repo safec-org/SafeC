@@ -1,0 +1,10 @@
+// {{NAME}} — entry point
+// Uncomment to use the SafeC standard library:
+// #include "prelude.h"
+
+extern int printf(const char* fmt, ...);
+
+int main() {
+    unsafe { printf("Hello from {{NAME}}!\n"); }
+    return 0;
+}

@@ -51,6 +51,10 @@ static llvm::cl::opt<bool>
                        "token pasting, stringification)"));
 
 static llvm::cl::opt<bool>
+    NoImportCHeaders("no-import-c-headers",
+        llvm::cl::desc("Disable automatic C header import via clang"));
+
+static llvm::cl::opt<bool>
     Verbose("v", llvm::cl::desc("Verbose output"));
 
 // -I <dir> include paths
@@ -148,7 +152,8 @@ int main(int argc, char **argv) {
     if (Verbose) fprintf(stderr, "[safec] Preprocessing %s ...\n", fname);
 
     safec::PreprocOptions ppOpts;
-    ppOpts.compatMode = CompatPreprocessor;
+    ppOpts.compatMode     = CompatPreprocessor;
+    ppOpts.importCHeaders = !NoImportCHeaders;
     for (auto &d : IncludePaths) ppOpts.includePaths.push_back(d);
     for (auto &d : CmdlineDefs) {
         auto eq = d.find('=');
