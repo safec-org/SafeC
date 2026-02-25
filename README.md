@@ -4,7 +4,7 @@
 
 SafeC is an evolution of C — preserving C ABI compatibility — while enforcing memory safety, type safety, and real-time determinism at compile time with zero runtime overhead.
 
-**[Documentation](hhttps://safec-org.github.io/safec-docs/guide/introduction.html)** | **[Language Reference](ttps://safec-org.github.io/safec-docs/reference/types.html)** | **[Standard Library](https://safec-org.github.io/safec-docs/stdlib/)**
+**[Documentation](https://safec-org.github.io/safec-docs/guide/introduction.html)** | **[Language Reference](https://safec-org.github.io/safec-docs/reference/types.html)** | **[Standard Library](https://safec-org.github.io/safec-docs/stdlib/)**
 
 ---
 
