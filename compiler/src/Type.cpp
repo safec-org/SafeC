@@ -155,6 +155,25 @@ bool GenericType::equals(const Type &o) const {
     return name == static_cast<const GenericType &>(o).name;
 }
 
+// ── TupleType ─────────────────────────────────────────────────────────────────
+std::string TupleType::str() const {
+    std::string s = "(";
+    for (size_t i = 0; i < elementTypes.size(); ++i) {
+        if (i) s += ", ";
+        s += elementTypes[i]->str();
+    }
+    return s + ")";
+}
+
+bool TupleType::equals(const Type &o) const {
+    if (o.kind != TypeKind::Tuple) return false;
+    auto &t = static_cast<const TupleType &>(o);
+    if (elementTypes.size() != t.elementTypes.size()) return false;
+    for (size_t i = 0; i < elementTypes.size(); ++i)
+        if (!typeEqual(elementTypes[i], t.elementTypes[i])) return false;
+    return true;
+}
+
 // ── Comparison helpers ────────────────────────────────────────────────────────
 bool typeEqual(const TypePtr &a, const TypePtr &b) {
     if (!a || !b) return a == b;
@@ -224,6 +243,10 @@ TypePtr makeArray(TypePtr elem, int64_t sz) {
 
 TypePtr makeFunction(TypePtr ret, std::vector<TypePtr> params, bool va) {
     return std::make_shared<FunctionType>(std::move(ret), std::move(params), va);
+}
+
+TypePtr makeTuple(std::vector<TypePtr> elems) {
+    return std::make_shared<TupleType>(std::move(elems));
 }
 
 } // namespace safec

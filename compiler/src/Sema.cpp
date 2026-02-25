@@ -5,6 +5,56 @@
 
 namespace safec {
 
+// ── Operator overload helper ──────────────────────────────────────────────────
+std::string Sema::binaryOpToMethodName(BinaryOp op) {
+    switch (op) {
+    case BinaryOp::Add: return "operator+";
+    case BinaryOp::Sub: return "operator-";
+    case BinaryOp::Mul: return "operator*";
+    case BinaryOp::Div: return "operator/";
+    case BinaryOp::Mod: return "operator%";
+    case BinaryOp::Eq:  return "operator==";
+    case BinaryOp::NEq: return "operator!=";
+    case BinaryOp::Lt:  return "operator<";
+    case BinaryOp::Gt:  return "operator>";
+    case BinaryOp::LEq: return "operator<=";
+    case BinaryOp::GEq: return "operator>=";
+    default: return "";
+    }
+}
+
+const Sema::TraitDef Sema::builtinTraits_[] = {
+    { "Numeric",    {"operator+", "operator-", "operator*", "operator/"} },
+    { "Eq",         {"operator==", "operator!="} },
+    { "Ord",        {"operator<", "operator>", "operator<=", "operator>="} },
+    { "Add",        {"operator+"} },
+    { "Sub",        {"operator-"} },
+    { "Mul",        {"operator*"} },
+    { "Div",        {"operator/"} },
+    { "", {} }  // sentinel
+};
+
+bool Sema::satisfiesTrait(const TypePtr &ty, const std::string &trait) const {
+    if (trait.empty()) return true;
+    // Primitive numeric types satisfy Numeric/Ord/Eq/Add/Sub/Mul/Div
+    if (ty->isArithmetic()) return true;
+    // Struct types: check if they have the required operator methods
+    if (ty->kind == TypeKind::Struct) {
+        auto &st = static_cast<const StructType &>(*ty);
+        for (auto *td = builtinTraits_; !td->name.empty(); ++td) {
+            if (td->name == trait) {
+                for (auto &op : td->requiredOps) {
+                    std::string key = st.name + "::" + op;
+                    if (methodRegistry_.find(key) == methodRegistry_.end())
+                        return false;
+                }
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // ── Scope ─────────────────────────────────────────────────────────────────────
 Symbol *Scope::lookup(const std::string &name) {
     auto it = symbols_.find(name);
@@ -292,6 +342,22 @@ void Sema::collectEnum(EnumDecl &ed) {
 void Sema::collectRegion(RegionDecl &rd) {
     rd.declScopeDepth = scopeDepth_;
     regionRegistry_[rd.name] = &rd;
+    // Register __arena_reset_<name> as a callable function in global scope
+    {
+        auto fn = std::make_unique<FunctionDecl>("__arena_reset_" + rd.name, rd.loc);
+        fn->returnType = makeVoid();
+        fn->isExtern = false;
+        Symbol sym;
+        sym.kind = SymKind::Function;
+        sym.name = fn->name;
+        sym.type = fn->funcType();
+        sym.fnDecl = fn.get();
+        // Store in a stable location (leak intentionally — lives as long as compiler)
+        static std::vector<std::unique_ptr<FunctionDecl>> arenaResetFns;
+        arenaResetFns.push_back(std::move(fn));
+        sym.fnDecl = arenaResetFns.back().get();
+        define(sym);
+    }
 }
 
 void Sema::collectGlobalVar(GlobalVarDecl &gv) {
@@ -576,6 +642,18 @@ TypePtr Sema::checkExpr(Expr &e) {
         ty = makeVoid(); // resolved by context
         break;
     }
+    case ExprKind::New:
+        ty = checkNew(static_cast<NewExpr &>(e));
+        break;
+    case ExprKind::TupleLit:
+        ty = checkTupleLit(static_cast<TupleLitExpr &>(e));
+        break;
+    case ExprKind::Closure:
+        ty = checkClosure(static_cast<ClosureExpr &>(e));
+        break;
+    case ExprKind::Spawn:
+        ty = checkSpawn(static_cast<SpawnExpr &>(e));
+        break;
     default:
         ty = makeError();
     }
@@ -691,6 +769,22 @@ TypePtr Sema::checkBinary(BinaryExpr &e) {
 
     if (lhsTy->isError() || rhsTy->isError()) return makeError();
 
+    // Check for struct operator overloads (M1)
+    if (lhsTy->kind == TypeKind::Struct) {
+        auto &st = static_cast<const StructType &>(*lhsTy);
+        std::string methodName = binaryOpToMethodName(e.op);
+        if (!methodName.empty()) {
+            std::string key = st.name + "::" + methodName;
+            auto it = methodRegistry_.find(key);
+            if (it != methodRegistry_.end()) {
+                e.resolvedOperator = it->second;
+                auto *fn = it->second;
+                // Return type of operator
+                return fn->returnType ? fn->returnType : makeBool();
+            }
+        }
+    }
+
     switch (e.op) {
     // Arithmetic
     case BinaryOp::Add: case BinaryOp::Sub:
@@ -757,6 +851,70 @@ TypePtr Sema::checkBinary(BinaryExpr &e) {
     default:
         return lhsTy;
     }
+}
+
+TypePtr Sema::checkNew(NewExpr &e) {
+    // Verify region exists
+    if (!e.regionName.empty()) {
+        auto it = regionRegistry_.find(e.regionName);
+        if (it == regionRegistry_.end()) {
+            diag_.error(e.loc, "unknown region '" + e.regionName + "'");
+            return makeError();
+        }
+    }
+    e.allocType = resolveType(e.allocType);
+    // Returns a reference to the allocated type in the specified arena
+    Region r = e.regionName.empty() ? Region::Heap : Region::Arena;
+    return makeReference(e.allocType, r, false, true, e.regionName);
+}
+
+TypePtr Sema::checkTupleLit(TupleLitExpr &e) {
+    std::vector<TypePtr> elemTypes;
+    for (auto &elem : e.elements)
+        elemTypes.push_back(checkExpr(*elem));
+    return makeTuple(std::move(elemTypes));
+}
+
+TypePtr Sema::checkClosure(ClosureExpr &e) {
+    // Assign mangled name
+    e.mangledName = "__closure_" + std::to_string(closureCounter_++);
+    // Resolve parameter types
+    for (auto &p : e.params) {
+        if (p.type) p.type = resolveType(p.type);
+        else p.type = makeInt(32); // default untyped param to int
+    }
+    // Type-check the body in a new scope
+    pushScope();
+    for (auto &p : e.params) {
+        Symbol sym;
+        sym.kind = SymKind::Variable;
+        sym.name = p.name;
+        sym.type = p.type;
+        sym.initialized = true;
+        VarDecl *vd = new VarDecl{p.name, p.type, true, false, false, false, true};
+        sym.varDecl = vd;
+        define(sym);
+    }
+    if (e.body) {
+        // Create a dummy function for context
+        FunctionDecl dummy("__closure_dummy", e.loc);
+        dummy.returnType = makeVoid();
+        checkCompound(*e.body, dummy);
+        e.returnType = dummy.returnType;
+    }
+    popScope();
+    // Return a function pointer type representing the closure
+    std::vector<TypePtr> paramTypes;
+    for (auto &p : e.params) paramTypes.push_back(p.type);
+    TypePtr retTy = e.returnType ? e.returnType : makeVoid();
+    return makePointer(makeFunction(retTy, std::move(paramTypes)));
+}
+
+TypePtr Sema::checkSpawn(SpawnExpr &e) {
+    // Check the closure
+    TypePtr closureTy = checkExpr(*e.closure);
+    // Return a void pointer handle (simplified — real implementation would use thread handles)
+    return makePointer(makeVoid());
 }
 
 TypePtr Sema::checkTernary(TernaryExpr &e) {
@@ -975,6 +1133,23 @@ TypePtr Sema::checkMember(MemberExpr &e) {
             diag_.error(e.loc, "'->' requires pointer or reference, got '" + baseTy->str() + "'");
             return makeError();
         }
+    }
+
+    // Tuple field access: tuple.0, tuple.1, ...
+    if (baseTy->kind == TypeKind::Tuple) {
+        auto &tt = static_cast<const TupleType &>(*baseTy);
+        // Field name is a decimal integer string — parse without exceptions
+        bool validIdx = !e.field.empty();
+        for (char c : e.field) if (!isdigit((unsigned char)c)) { validIdx = false; break; }
+        if (validIdx) {
+            size_t idx = static_cast<size_t>(std::stoul(e.field));
+            if (idx < tt.elementTypes.size()) {
+                e.isLValue = e.base->isLValue;
+                return tt.elementTypes[idx];
+            }
+        }
+        diag_.error(e.loc, "invalid tuple field '" + e.field + "'");
+        return makeError();
     }
 
     StructType *st = asStruct(baseTy);
@@ -1253,6 +1428,12 @@ bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
         if (fr.region == Region::Static && typeEqual(fr.base, tp.base)) return true;
         // void* target accepts any static reference (e.g. &static char → void*)
         if (fr.region == Region::Static && tp.base->isVoid()) return true;
+        // Arena/Heap references → raw pointer: coerce to the base type pointer
+        // (Arena pointers are just raw memory addresses from the arena bump allocator)
+        if ((fr.region == Region::Arena || fr.region == Region::Heap) &&
+            typeEqual(fr.base, tp.base)) return true;
+        if ((fr.region == Region::Arena || fr.region == Region::Heap) &&
+            tp.base->isVoid()) return true;
     }
     if (from->kind == TypeKind::Reference && to->kind == TypeKind::Reference) {
         auto &fr = static_cast<const ReferenceType &>(*from);

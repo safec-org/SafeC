@@ -30,6 +30,8 @@ std::unique_ptr<llvm::Module> CodeGen::generate(TranslationUnit &tu) {
             // Ensure struct type is in the cache
             auto &sd = static_cast<StructDecl &>(*d);
             if (sd.type) lowerStructType(*sd.type);
+        } else if (d->kind == DeclKind::Region) {
+            genArenaStateGlobal(static_cast<RegionDecl &>(*d));
         }
     }
 
@@ -101,6 +103,13 @@ llvm::Type *CodeGen::lowerType(const TypePtr &ty) {
         auto *retTy = lowerType(ft.returnType);
         return llvm::FunctionType::get(retTy, paramTys, ft.variadic);
     }
+    case TypeKind::Tuple: {
+        // Tuple lowers to an anonymous LLVM struct type
+        auto &tt = static_cast<const TupleType &>(*ty);
+        std::vector<llvm::Type *> elemTys;
+        for (auto &e : tt.elementTypes) elemTys.push_back(lowerType(e));
+        return llvm::StructType::get(ctx_, elemTys);
+    }
     case TypeKind::Error:
     default:
         return llvm::Type::getInt32Ty(ctx_); // fallback
@@ -127,6 +136,136 @@ llvm::StructType *CodeGen::lowerStructType(const StructType &st) {
 llvm::PointerType *CodeGen::lowerRefType(const ReferenceType &) {
     // All references → opaque pointer at IR level
     return llvm::PointerType::get(ctx_, 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ARENA STATE GLOBAL
+// ─────────────────────────────────────────────────────────────────────────────
+
+void CodeGen::genArenaStateGlobal(RegionDecl &rd) {
+    // Create a global arena state: { ptr buf, i64 used, i64 cap }
+    auto *Int64Ty = llvm::Type::getInt64Ty(ctx_);
+    auto *PtrTy   = llvm::PointerType::get(ctx_, 0);
+    auto *stateTy = llvm::StructType::get(ctx_, {PtrTy, Int64Ty, Int64Ty});
+    std::string varName = "__arena_" + rd.name;
+    // Avoid duplicate global
+    if (mod_->getNamedGlobal(varName)) return;
+    auto *gv = new llvm::GlobalVariable(
+        *mod_, stateTy, /*isConst=*/false,
+        llvm::GlobalValue::InternalLinkage,
+        llvm::Constant::getNullValue(stateTy),
+        varName);
+    arenaStateMap_[rd.name] = {gv, stateTy, rd.capacity};
+    globals_[varName] = gv;
+}
+
+llvm::Value *CodeGen::genNew(NewExpr &e, FnEnv &env) {
+    auto *elemTy  = lowerType(e.allocType);
+    auto *Int64Ty = llvm::Type::getInt64Ty(ctx_);
+    auto *PtrTy   = llvm::PointerType::get(ctx_, 0);
+    const auto &dl = mod_->getDataLayout();
+    uint64_t elemSize = dl.getTypeAllocSize(elemTy);
+
+    if (!e.regionName.empty()) {
+        auto it = arenaStateMap_.find(e.regionName);
+        if (it != arenaStateMap_.end()) {
+            auto &info = it->second;
+            // Load buf pointer
+            auto *bufPtr  = builder_.CreateStructGEP(info.ty, info.var, 0, "arena.buf.ptr");
+            auto *buf     = builder_.CreateLoad(PtrTy, bufPtr, "arena.buf");
+            // Check if null → malloc
+            auto *isNull  = builder_.CreateIsNull(buf, "arena.null");
+            auto *mallocBB = llvm::BasicBlock::Create(ctx_, "arena.first", env.fn);
+            auto *contBB   = llvm::BasicBlock::Create(ctx_, "arena.cont",  env.fn);
+            builder_.CreateCondBr(isNull, mallocBB, contBB);
+
+            builder_.SetInsertPoint(mallocBB);
+            auto *capVal  = llvm::ConstantInt::get(Int64Ty, info.cap > 0 ? info.cap : 65536);
+            auto mallocFn = mod_->getOrInsertFunction("malloc",
+                llvm::FunctionType::get(PtrTy, {Int64Ty}, false));
+            auto *newBuf  = builder_.CreateCall(mallocFn, {capVal}, "arena.newbuf");
+            builder_.CreateStore(newBuf, bufPtr);
+            builder_.CreateBr(contBB);
+
+            builder_.SetInsertPoint(contBB);
+            auto *bufPhi  = builder_.CreatePHI(PtrTy, 2, "arena.buf.phi");
+            bufPhi->addIncoming(buf, mallocBB->getSinglePredecessor()
+                                     ? mallocBB->getSinglePredecessor() : mallocBB);
+            bufPhi->addIncoming(newBuf, mallocBB);
+
+            // Load used and bump
+            auto *usedPtr = builder_.CreateStructGEP(info.ty, info.var, 1, "arena.used.ptr");
+            auto *used    = builder_.CreateLoad(Int64Ty, usedPtr, "arena.used");
+            auto *allocPtr = builder_.CreateGEP(
+                llvm::Type::getInt8Ty(ctx_), bufPhi, used, "arena.ptr");
+            auto *newUsed = builder_.CreateAdd(
+                used, llvm::ConstantInt::get(Int64Ty, elemSize), "arena.newused");
+            builder_.CreateStore(newUsed, usedPtr);
+            return allocPtr;
+        }
+    }
+
+    // Fallback: heap malloc
+    auto *sizeVal = llvm::ConstantInt::get(Int64Ty, elemSize);
+    auto mallocFn = mod_->getOrInsertFunction("malloc",
+        llvm::FunctionType::get(PtrTy, {Int64Ty}, false));
+    return builder_.CreateCall(mallocFn, {sizeVal}, "heap.alloc");
+}
+
+llvm::Value *CodeGen::genTupleLit(TupleLitExpr &e, FnEnv &env) {
+    if (!e.type || e.type->kind != TypeKind::Tuple) {
+        if (!e.elements.empty()) return genExpr(*e.elements[0], env);
+        return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
+    }
+    auto *tupleTy = static_cast<llvm::StructType *>(lowerType(e.type));
+    auto *alloca  = createEntryAlloca(env, tupleTy, "tuple.tmp");
+    for (size_t i = 0; i < e.elements.size(); ++i) {
+        auto *val = genExpr(*e.elements[i], env);
+        auto *gep = builder_.CreateStructGEP(tupleTy, alloca, static_cast<unsigned>(i));
+        builder_.CreateStore(val, gep);
+    }
+    return builder_.CreateLoad(tupleTy, alloca, "tuple");
+}
+
+llvm::Value *CodeGen::genClosure(ClosureExpr &e, FnEnv &env) {
+    // Build param types
+    std::vector<llvm::Type *> paramTys;
+    for (auto &p : e.params)
+        paramTys.push_back(p.type ? lowerType(p.type) : llvm::Type::getInt32Ty(ctx_));
+    auto *retTy = e.returnType ? lowerType(e.returnType) : llvm::Type::getVoidTy(ctx_);
+    auto *fnTy  = llvm::FunctionType::get(retTy, paramTys, false);
+    std::string mangledName = e.mangledName.empty() ? "__closure_anon" : e.mangledName;
+    // Reuse if already declared
+    auto *fn = mod_->getFunction(mangledName);
+    if (!fn)
+        fn = llvm::Function::Create(fnTy, llvm::GlobalValue::InternalLinkage,
+                                    mangledName, *mod_);
+    if (e.body && !fn->empty()) return fn; // already generated
+    if (e.body) {
+        FunctionDecl dummy(mangledName, e.loc);
+        dummy.returnType = e.returnType ? e.returnType : makeVoid();
+        for (size_t i = 0; i < e.params.size(); ++i) {
+            ParamDecl pd;
+            pd.name = e.params[i].name;
+            pd.type = e.params[i].type ? e.params[i].type : makeInt(32);
+            pd.loc  = e.params[i].loc;
+            dummy.params.push_back(std::move(pd));
+        }
+        // borrow body (not owned by dummy)
+        dummy.body.reset(e.body.get());
+        // Save builder state before generating nested function
+        auto *savedBB = builder_.GetInsertBlock();
+        genFunctionBody(dummy, fn);
+        // Restore builder state to the enclosing function's insertion point
+        if (savedBB) builder_.SetInsertPoint(savedBB);
+        dummy.body.release();
+    }
+    return fn;
+}
+
+llvm::Value *CodeGen::genSpawn(SpawnExpr &e, FnEnv &env) {
+    // Simplified: generate the closure and return its function pointer as handle
+    return genExpr(*e.closure, env);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -548,6 +687,14 @@ llvm::Value *CodeGen::genExpr(Expr &e, FnEnv &env) {
         // Fallback: first element
         return genExpr(*ci.inits[0], env);
     }
+    case ExprKind::New:
+        return genNew(static_cast<NewExpr &>(e), env);
+    case ExprKind::TupleLit:
+        return genTupleLit(static_cast<TupleLitExpr &>(e), env);
+    case ExprKind::Closure:
+        return genClosure(static_cast<ClosureExpr &>(e), env);
+    case ExprKind::Spawn:
+        return genSpawn(static_cast<SpawnExpr &>(e), env);
     default:
         return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
     }
@@ -800,6 +947,15 @@ llvm::Value *CodeGen::applyBinaryOp(BinaryOp op, llvm::Value *l, llvm::Value *r,
 }
 
 llvm::Value *CodeGen::genBinary(BinaryExpr &e, FnEnv &env) {
+    // Operator overload via resolvedOperator (M1)
+    if (e.resolvedOperator) {
+        auto *fn = mod_->getFunction(e.resolvedOperator->name);
+        if (!fn) fn = genFunctionProto(*e.resolvedOperator);
+        auto *lhs = genLValue(*e.left, env);
+        auto *rhs = genExpr(*e.right, env);
+        return builder_.CreateCall(fn, {lhs, rhs}, "opovl");
+    }
+
     // Short-circuit evaluation for && and ||
     if (e.op == BinaryOp::LogAnd) {
         auto *lhsBB   = builder_.GetInsertBlock();
@@ -879,6 +1035,23 @@ llvm::Value *CodeGen::genBinary(BinaryExpr &e, FnEnv &env) {
 
 // ── Call ──────────────────────────────────────────────────────────────────────
 llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
+    // Handle __arena_reset_<R>() builtin
+    if (e.callee->kind == ExprKind::Ident) {
+        auto &ident = static_cast<IdentExpr &>(*e.callee);
+        if (ident.name.substr(0, 14) == "__arena_reset_") {
+            std::string regionName = ident.name.substr(14);
+            auto it = arenaStateMap_.find(regionName);
+            if (it != arenaStateMap_.end()) {
+                auto &info = it->second;
+                auto *Int64Ty = llvm::Type::getInt64Ty(ctx_);
+                // Reset used = 0
+                auto *usedPtr = builder_.CreateStructGEP(info.ty, info.var, 1, "arena.used.ptr");
+                builder_.CreateStore(llvm::ConstantInt::get(Int64Ty, 0), usedPtr);
+                return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
+            }
+        }
+    }
+
     auto *calleeVal = genExpr(*e.callee, env);
 
     // Helper: decay an array expression to a char* (pointer to first element).
@@ -1045,6 +1218,24 @@ llvm::Value *CodeGen::genMember(MemberExpr &e, FnEnv &env, bool wantAddr) {
             bty = static_cast<PointerType &>(*bty).base;
         if (bty->kind == TypeKind::Reference)
             bty = static_cast<ReferenceType &>(*bty).base;
+        // Tuple field access: field name is a decimal index string
+        if (bty->kind == TypeKind::Tuple) {
+            unsigned tupleIdx = 0;
+            if (!e.field.empty()) {
+                bool valid = true;
+                for (char c : e.field) if (!isdigit((unsigned char)c)) { valid = false; break; }
+                if (valid) tupleIdx = static_cast<unsigned>(std::stoul(e.field));
+            }
+            if (!structTy->isStructTy()) {
+                structTy = lowerType(bty);
+                baseAddr = genLValue(*e.base, env);
+            }
+            auto *gep = builder_.CreateStructGEP(
+                static_cast<llvm::StructType *>(structTy), baseAddr, tupleIdx, "tuple.field");
+            if (wantAddr) return gep;
+            auto *fieldTy = static_cast<llvm::StructType *>(structTy)->getElementType(tupleIdx);
+            return builder_.CreateLoad(fieldTy, gep, "tuple.elem");
+        }
         if (bty->kind == TypeKind::Struct) {
             auto &st = static_cast<StructType &>(*bty);
             for (auto &f : st.fields) {

@@ -50,6 +50,16 @@ TypePtr substituteType(const TypePtr &ty, const TypeSubst &subs) {
         }
         return changed ? makeFunction(nr, std::move(np), ft.variadic) : ty;
     }
+    case TypeKind::Tuple: {
+        auto &tt = static_cast<const TupleType &>(*ty);
+        bool changed = false;
+        std::vector<TypePtr> ne;
+        for (auto &e : tt.elementTypes) {
+            ne.push_back(substituteType(e, subs));
+            if (ne.back() != e) changed = true;
+        }
+        return changed ? makeTuple(std::move(ne)) : ty;
+    }
     default:
         return ty;
     }
@@ -174,6 +184,43 @@ static ExprPtr cloneExprImpl(const Expr *ep, const TypeSubst &subs) {
         std::vector<ExprPtr> inits;
         for (auto &i : ce.inits) inits.push_back(cloneExprImpl(i.get(), subs));
         return fix(std::make_unique<CompoundInitExpr>(std::move(inits), ce.loc));
+    }
+    case ExprKind::TupleLit: {
+        auto &te = static_cast<const TupleLitExpr &>(e);
+        std::vector<ExprPtr> elems;
+        for (auto &el : te.elements) elems.push_back(cloneExprImpl(el.get(), subs));
+        return fix(std::make_unique<TupleLitExpr>(std::move(elems), te.loc));
+    }
+    case ExprKind::New: {
+        auto &ne = static_cast<const NewExpr &>(e);
+        return fix(std::make_unique<NewExpr>(
+            ne.regionName, substituteType(ne.allocType, subs), ne.loc));
+    }
+    case ExprKind::Closure: {
+        auto &ce = static_cast<const ClosureExpr &>(e);
+        std::vector<ClosureParam> params;
+        for (auto &p : ce.params) {
+            ClosureParam cp;
+            cp.type = substituteType(p.type, subs);
+            cp.name = p.name;
+            cp.loc  = p.loc;
+            params.push_back(std::move(cp));
+        }
+        std::unique_ptr<CompoundStmt> body;
+        if (ce.body) {
+            auto bodyClone = cloneStmtImpl(ce.body.get(), subs);
+            body.reset(static_cast<CompoundStmt *>(bodyClone.release()));
+        }
+        auto res = std::make_unique<ClosureExpr>(std::move(params), std::move(body), ce.loc);
+        res->returnType  = substituteType(ce.returnType, subs);
+        res->captures    = ce.captures;
+        res->mangledName = ce.mangledName;
+        return fix(std::move(res));
+    }
+    case ExprKind::Spawn: {
+        auto &se = static_cast<const SpawnExpr &>(e);
+        return fix(std::make_unique<SpawnExpr>(
+            se.allowedRegions, cloneExprImpl(se.closure.get(), subs), se.loc));
     }
     default:
         return fix(std::make_unique<NullLitExpr>(e.loc));

@@ -69,6 +69,7 @@ bool Parser::isTypeStart(const Token &t) const {
     case TK::KW_long: case TK::KW_short: case TK::KW_unsigned:
     case TK::KW_signed: case TK::KW_struct: case TK::KW_enum:
     case TK::KW_const:
+    case TK::KW_tuple:    // tuple type
     case TK::Amp:         // &stack T
     case TK::QuestionAmp: // ?&stack T
     case TK::Star:        // *T (pointer)
@@ -173,6 +174,18 @@ TypePtr Parser::parseBaseType() {
             diag_.error(cur().loc, "expected enum name");
         } else consume();
         return std::make_shared<EnumType>(name);
+    }
+    case TK::KW_tuple: {
+        // tuple(T1, T2, ...) type syntax
+        consume();
+        expect(TK::LParen, "expected '(' after 'tuple'");
+        std::vector<TypePtr> elems;
+        while (!atEnd() && !cur().is(TK::RParen)) {
+            elems.push_back(parseType());
+            if (!match(TK::Comma)) break;
+        }
+        expect(TK::RParen, "expected ')' closing tuple type");
+        return makeTuple(std::move(elems));
     }
     case TK::Ident: {
         std::string name = cur().text;
@@ -357,8 +370,24 @@ DeclPtr Parser::parseFunctionOrGlobalVar(bool isConst, bool isConsteval,
             syncToDecl();
             return nullptr;
         }
-        name = cur().text;
-        consume();
+        if (cur().is(TK::KW_operator)) {
+            // operator overload: Vec2::operator+(Vec2 other)
+            consume(); // consume 'operator'
+            name = "operator";
+            // Collect operator symbol(s)
+            if (!cur().is(TK::LParen)) {
+                name += cur().text; consume();
+                // Two-char operators: ==, !=, <=, >=
+                if ((name == "operator=" || name == "operator!" ||
+                     name == "operator<" || name == "operator>") &&
+                    cur().is(TK::Eq)) {
+                    name += cur().text; consume();
+                }
+            }
+        } else {
+            name = cur().text;
+            consume();
+        }
     }
 
     // Function: name '(' ...
@@ -459,9 +488,45 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion) {
                 isMethodDecl = true;
             }
         } else if (cur().is(TK::KW_operator)) {
-            // operator overload declaration
+            // operator overload declaration: operator+, operator-, etc.
             isMethodDecl = true;
-            memberName = cur().text;
+            consume(); // consume 'operator'
+            // Collect the operator symbol (could be +, -, *, /, ==, !=, <, >, <=, >=)
+            memberName = "operator";
+            if (!cur().is(TK::LParen)) {
+                memberName += cur().text;
+                consume(); // consume operator symbol
+                // Handle two-char operators like ==, !=, <=, >=
+                if ((memberName == "operator=" && cur().is(TK::Eq)) ||
+                    (memberName == "operator!" && cur().is(TK::Eq)) ||
+                    (memberName == "operator<" && cur().is(TK::Eq)) ||
+                    (memberName == "operator>" && cur().is(TK::Eq))) {
+                    memberName += cur().text; consume();
+                }
+            }
+            // Now fall through to isMethodDecl block — skip the "consume method name" step
+            // We already consumed the full operator name
+            {
+                MethodDecl md;
+                md.loc        = cur().loc;
+                md.name       = memberName;
+                md.returnType = std::move(maybeType);
+                expect(TK::LParen, "expected '(' after operator name");
+                while (!atEnd() && !cur().is(TK::RParen)) {
+                    if (cur().is(TK::DotDotDot)) { consume(); break; }
+                    ParamDecl p;
+                    p.loc  = cur().loc;
+                    p.type = parseType();
+                    if (cur().is(TK::Ident)) { p.name = cur().text; consume(); }
+                    md.params.push_back(std::move(p));
+                    if (!match(TK::Comma)) break;
+                }
+                expect(TK::RParen, "expected ')' closing operator parameter list");
+                if (cur().is(TK::KW_const)) { consume(); md.isConst = true; }
+                expect(TK::Semicolon, "expected ';' after operator declaration");
+                sd->methodDecls.push_back(std::move(md));
+            }
+            continue; // skip the isMethodDecl block below
         }
 
         if (isMethodDecl) {
@@ -656,6 +721,7 @@ StmtPtr Parser::parseStmt() {
                 cur().is(TK::KW_long) || cur().is(TK::KW_short) ||
                 cur().is(TK::KW_unsigned) || cur().is(TK::KW_signed) ||
                 cur().is(TK::KW_struct) || cur().is(TK::KW_enum) ||
+                cur().is(TK::KW_tuple) ||
                 cur().is(TK::Amp) || cur().is(TK::QuestionAmp)
             );
             if (isKeywordType) return parseVarDeclStmt(false, false);
@@ -1109,9 +1175,16 @@ ExprPtr Parser::parsePostfixExpr() {
             e = std::make_unique<CallExpr>(std::move(e), std::move(args), loc);
         } else if (cur().is(TK::Dot)) {
             consume();
-            std::string field = cur().text;
-            if (!cur().is(TK::Ident)) diag_.error(cur().loc, "expected field name");
-            else consume();
+            std::string field;
+            if (cur().is(TK::Ident)) {
+                field = cur().text; consume();
+            } else if (cur().is(TK::IntLit)) {
+                // Tuple field access: t.0, t.1, ...
+                field = std::to_string(cur().intVal); consume();
+            } else {
+                diag_.error(cur().loc, "expected field name");
+                field = ""; consume();
+            }
             e = std::make_unique<MemberExpr>(std::move(e), std::move(field), false, loc);
         } else if (cur().is(TK::Arrow)) {
             consume();
@@ -1169,8 +1242,19 @@ ExprPtr Parser::parsePrimaryExpr() {
     }
     case TK::LParen: {
         consume();
-        // Compound initializer? No — primary '(' ... ')' is grouping
-        auto e = parseExpr();
+        // Detect tuple literal: (expr, expr, ...)
+        auto e = parseAssignExpr();
+        if (cur().is(TK::Comma)) {
+            // Tuple literal
+            std::vector<ExprPtr> elems;
+            elems.push_back(std::move(e));
+            while (match(TK::Comma)) {
+                if (cur().is(TK::RParen)) break;
+                elems.push_back(parseAssignExpr());
+            }
+            expect(TK::RParen, "expected ')' closing tuple literal");
+            return std::make_unique<TupleLitExpr>(std::move(elems), loc);
+        }
         expect(TK::RParen, "expected ')' closing parenthesized expression");
         return e;
     }
@@ -1184,6 +1268,91 @@ ExprPtr Parser::parsePrimaryExpr() {
         }
         expect(TK::RBrace, "expected '}' closing initializer");
         return std::make_unique<CompoundInitExpr>(std::move(inits), loc);
+    }
+    case TK::KW_new: {
+        // new<RegionName> Type
+        consume();
+        std::string regionName;
+        if (match(TK::Lt)) {
+            if (cur().is(TK::Ident)) { regionName = cur().text; consume(); }
+            expect(TK::Gt, "expected '>' closing region parameter");
+        }
+        TypePtr allocType = parseBaseType();
+        return std::make_unique<NewExpr>(std::move(regionName), std::move(allocType), loc);
+    }
+    case TK::KW_arena_reset: {
+        // arena_reset<RegionName>()
+        consume();
+        std::string regionName;
+        if (match(TK::Lt)) {
+            if (cur().is(TK::Ident)) { regionName = cur().text; consume(); }
+            expect(TK::Gt, "expected '>' closing region parameter");
+        }
+        expect(TK::LParen, "expected '(' for arena_reset");
+        expect(TK::RParen, "expected ')' for arena_reset");
+        // Represent as a CallExpr with a special callee name
+        auto callee = std::make_unique<IdentExpr>("__arena_reset_" + regionName, loc);
+        return std::make_unique<CallExpr>(std::move(callee), std::vector<ExprPtr>{}, loc);
+    }
+    case TK::Pipe: {
+        // Closure: |param: Type, ...| { body }
+        consume();
+        std::vector<ClosureParam> params;
+        while (!atEnd() && !cur().is(TK::Pipe)) {
+            ClosureParam cp;
+            cp.loc = cur().loc;
+            if (cur().is(TK::Ident)) { cp.name = cur().text; consume(); }
+            if (match(TK::Colon)) { cp.type = parseType(); }
+            params.push_back(std::move(cp));
+            if (!match(TK::Comma)) break;
+        }
+        expect(TK::Pipe, "expected '|' closing closure parameters");
+        if (!cur().is(TK::LBrace)) {
+            diag_.error(cur().loc, "expected '{' for closure body");
+            return std::make_unique<IntLitExpr>(0, loc);
+        }
+        auto body = parseCompoundStmt();
+        std::unique_ptr<CompoundStmt> bodyCS(
+            static_cast<CompoundStmt *>(body.release()));
+        return std::make_unique<ClosureExpr>(std::move(params), std::move(bodyCS), loc);
+    }
+    case TK::PipePipe: {
+        // No-param closure: || { body }
+        consume();
+        if (!cur().is(TK::LBrace)) {
+            diag_.error(cur().loc, "expected '{' for closure body");
+            return std::make_unique<IntLitExpr>(0, loc);
+        }
+        auto body = parseCompoundStmt();
+        std::unique_ptr<CompoundStmt> bodyCS(
+            static_cast<CompoundStmt *>(body.release()));
+        return std::make_unique<ClosureExpr>(
+            std::vector<ClosureParam>{}, std::move(bodyCS), loc);
+    }
+    case TK::KW_spawn: {
+        // spawn<R1, R2> closure_expr
+        consume();
+        std::vector<std::string> regions;
+        if (match(TK::Lt)) {
+            while (!atEnd() && !cur().is(TK::Gt)) {
+                if (cur().is(TK::Ident)) { regions.push_back(cur().text); consume(); }
+                if (!match(TK::Comma)) break;
+            }
+            expect(TK::Gt, "expected '>' closing spawn region list");
+        }
+        auto closure = parsePrimaryExpr();
+        return std::make_unique<SpawnExpr>(std::move(regions), std::move(closure), loc);
+    }
+    case TK::KW_join: {
+        // join(handle_expr)
+        consume();
+        expect(TK::LParen, "expected '(' after 'join'");
+        auto handle = parseExpr();
+        expect(TK::RParen, "expected ')' closing join");
+        auto callee = std::make_unique<IdentExpr>("__safec_join", loc);
+        std::vector<ExprPtr> args;
+        args.push_back(std::move(handle));
+        return std::make_unique<CallExpr>(std::move(callee), std::move(args), loc);
     }
     default:
         diag_.error(loc, std::string("unexpected token '") + cur().text + "' in expression");

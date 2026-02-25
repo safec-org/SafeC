@@ -36,6 +36,11 @@ enum class TK {
     KW_capacity,      // region field keyword
     KW_self,          // self — implicit receiver in methods
     KW_operator,      // operator overloading
+    KW_new,           // new<R> T  (arena allocation)
+    KW_arena_reset,   // arena_reset<R>()
+    KW_tuple,         // tuple(T1, T2, ...)
+    KW_spawn,         // spawn<R> closure
+    KW_join,          // join(handle)
 
     // ── Operators ─────────────────────────────────────────────────────────────
     Plus, Minus, Star, Slash, Percent,

@@ -11,6 +11,7 @@ namespace safec {
 // ── Forward declarations ──────────────────────────────────────────────────────
 struct Stmt;  struct Expr;  struct Decl;
 struct FunctionDecl; struct StructDecl; struct VarDecl;
+struct CompoundStmt;  // forward-declared for ClosureExpr
 using StmtPtr = std::unique_ptr<Stmt>;
 using ExprPtr = std::unique_ptr<Expr>;
 using DeclPtr = std::unique_ptr<Decl>;
@@ -38,6 +39,10 @@ enum class ExprKind {
     Compound,       // initializer: {a, b, c}
     AddrOf,         // address-of: &x  (in safe context → &stack ref)
     Deref,          // dereference: *p
+    New,            // new<R> T
+    TupleLit,       // (a, b, c)
+    Closure,        // |params| { body }
+    Spawn,          // spawn<R> closure
 };
 
 enum class UnaryOp {
@@ -129,6 +134,7 @@ struct UnaryExpr : Expr {
 struct BinaryExpr : Expr {
     BinaryOp op;
     ExprPtr  left, right;
+    FunctionDecl *resolvedOperator = nullptr;  // set by Sema for struct operator overloads
     BinaryExpr(BinaryOp o, ExprPtr l, ExprPtr r, SourceLocation loc)
         : Expr(ExprKind::Binary, loc), op(o),
           left(std::move(l)), right(std::move(r)) {}
@@ -203,6 +209,45 @@ struct CompoundInitExpr : Expr {
     std::vector<ExprPtr> inits;
     CompoundInitExpr(std::vector<ExprPtr> v, SourceLocation l)
         : Expr(ExprKind::Compound, l), inits(std::move(v)) {}
+};
+
+// ── New (arena allocation) ────────────────────────────────────────────────────
+struct NewExpr : Expr {
+    std::string regionName;
+    TypePtr     allocType;
+    NewExpr(std::string r, TypePtr t, SourceLocation l)
+        : Expr(ExprKind::New, l), regionName(std::move(r)), allocType(std::move(t)) {}
+};
+
+// ── Tuple literal ─────────────────────────────────────────────────────────────
+struct TupleLitExpr : Expr {
+    std::vector<ExprPtr> elements;
+    explicit TupleLitExpr(std::vector<ExprPtr> e, SourceLocation l)
+        : Expr(ExprKind::TupleLit, l), elements(std::move(e)) {}
+};
+
+// ── Closure param ─────────────────────────────────────────────────────────────
+struct ClosureParam { TypePtr type; std::string name; SourceLocation loc; };
+
+// ── Closure expression ────────────────────────────────────────────────────────
+struct ClosureExpr : Expr {
+    std::vector<ClosureParam> params;
+    std::unique_ptr<CompoundStmt> body;
+    TypePtr returnType;           // inferred by Sema
+    // Filled by Sema:
+    std::vector<std::string> captures;
+    std::string mangledName;      // "__closure_N"
+    ClosureExpr(std::vector<ClosureParam> p, std::unique_ptr<CompoundStmt> b,
+                SourceLocation l)
+        : Expr(ExprKind::Closure, l), params(std::move(p)), body(std::move(b)) {}
+};
+
+// ── Spawn expression ──────────────────────────────────────────────────────────
+struct SpawnExpr : Expr {
+    std::vector<std::string> allowedRegions;
+    ExprPtr closure;
+    SpawnExpr(std::vector<std::string> r, ExprPtr c, SourceLocation l)
+        : Expr(ExprKind::Spawn, l), allowedRegions(std::move(r)), closure(std::move(c)) {}
 };
 
 // =============================================================================

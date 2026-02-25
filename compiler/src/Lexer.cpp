@@ -62,6 +62,11 @@ TK Lexer::keywordKind(const std::string &w) {
         // Method / object model keywords
         {"self",          TK::KW_self},
         {"operator",      TK::KW_operator},
+        {"new",           TK::KW_new},
+        {"arena_reset",   TK::KW_arena_reset},
+        {"tuple",         TK::KW_tuple},
+        {"spawn",         TK::KW_spawn},
+        {"join",          TK::KW_join},
     };
     auto it = kw.find(w);
     return (it != kw.end()) ? it->second : TK::Ident;

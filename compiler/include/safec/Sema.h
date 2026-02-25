@@ -112,6 +112,10 @@ private:
     TypePtr checkAssign(AssignExpr &e);
     TypePtr checkAddrOf(UnaryExpr &e);
     TypePtr checkDeref(UnaryExpr &e);
+    TypePtr checkNew(NewExpr &e);
+    TypePtr checkTupleLit(TupleLitExpr &e);
+    TypePtr checkClosure(ClosureExpr &e);
+    TypePtr checkSpawn(SpawnExpr &e);
 
     // ── Region safety ─────────────────────────────────────────────────────────
     // Returns the scope depth a reference type originated from
@@ -177,6 +181,15 @@ private:
     // Method registry: "StructName::methodName" → FunctionDecl* (mangled)
     std::unordered_map<std::string, FunctionDecl*> methodRegistry_;
     int                                     scopeDepth_ = 0;
+
+    // ── Trait enforcement ─────────────────────────────────────────────────────
+    struct TraitDef { std::string name; std::vector<std::string> requiredOps; };
+    static const TraitDef builtinTraits_[];
+    bool satisfiesTrait(const TypePtr &ty, const std::string &trait) const;
+    static std::string binaryOpToMethodName(BinaryOp op);
+
+    // ── Closure support ───────────────────────────────────────────────────────
+    int closureCounter_ = 0;
 };
 
 } // namespace safec

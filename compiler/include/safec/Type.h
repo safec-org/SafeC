@@ -33,6 +33,7 @@ enum class TypeKind {
     Function,
     Generic,    // instantiated generic parameter
     Error,      // sentinel for error recovery
+    Tuple,      // (T1, T2, ...) product type
 };
 
 // Forward declarations
@@ -183,6 +184,17 @@ struct GenericType : Type {
     std::string str() const override { return name; }
     bool equals(const Type &o) const override;
 };
+
+// ── Tuple type ────────────────────────────────────────────────────────────────
+struct TupleType : Type {
+    std::vector<TypePtr> elementTypes;
+    explicit TupleType(std::vector<TypePtr> e)
+        : Type(TypeKind::Tuple), elementTypes(std::move(e)) {}
+    std::string str() const override;
+    bool equals(const Type &o) const override;
+    int bitWidth() const { return 0; }
+};
+TypePtr makeTuple(std::vector<TypePtr> elems);
 
 // ── Type factory / interning helpers ──────────────────────────────────────────
 TypePtr makeVoid();

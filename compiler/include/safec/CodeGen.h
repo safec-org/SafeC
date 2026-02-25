@@ -105,6 +105,21 @@ private:
     llvm::Value *genAddrOf(UnaryExpr &e, FnEnv &env);
     llvm::Value *genDeref(UnaryExpr &e, FnEnv &env, bool wantAddr = false);
 
+    // ── Arena state ───────────────────────────────────────────────────────────
+    struct ArenaInfo { llvm::GlobalVariable *var; llvm::StructType *ty; int64_t cap; };
+    std::unordered_map<std::string, ArenaInfo> arenaStateMap_;
+    void genArenaStateGlobal(RegionDecl &rd);
+    llvm::Value *genNew(NewExpr &e, FnEnv &env);
+
+    // ── Tuple ──────────────────────────────────────────────────────────────────
+    llvm::Value *genTupleLit(TupleLitExpr &e, FnEnv &env);
+
+    // ── Closure ───────────────────────────────────────────────────────────────
+    llvm::Value *genClosure(ClosureExpr &e, FnEnv &env);
+
+    // ── Spawn ─────────────────────────────────────────────────────────────────
+    llvm::Value *genSpawn(SpawnExpr &e, FnEnv &env);
+
     // Helpers
     llvm::AllocaInst *createEntryAlloca(FnEnv &env, llvm::Type *ty,
                                          const std::string &name);
