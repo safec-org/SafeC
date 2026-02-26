@@ -6,9 +6,11 @@ set -euo pipefail
 #  Usage:  bash install.sh [OPTIONS]
 #
 #  Options:
+#    --prefix=<path>     Install directory (default: ~/safec)
 #    --llvm-dir=<path>   Path to LLVM cmake directory (auto-detected if omitted)
 #    --jobs=N            Parallel build jobs (default: nproc)
 #    --skip-safeguard    Skip building the safeguard package manager
+#    --skip-lsp          Skip building the LSP language server
 #    --skip-env          Skip shell environment configuration
 #    --help              Show this help message
 # ──────────────────────────────────────────────────────────────────────────────
@@ -34,9 +36,11 @@ error() { echo -e "${RED}[error]${RESET} $*"; }
 die()   { error "$@"; exit 1; }
 
 # ── Parse arguments ───────────────────────────────────────────────────────────
+PREFIX=""
 LLVM_DIR=""
 JOBS=""
 SKIP_SAFEGUARD=false
+SKIP_LSP=false
 SKIP_ENV=false
 
 show_help() {
@@ -46,15 +50,18 @@ SafeC Install Script — macOS & Linux
 Usage:  bash install.sh [OPTIONS]
 
 Options:
+  --prefix=<path>     Install directory (default: ~/safec)
   --llvm-dir=<path>   Path to LLVM cmake directory (auto-detected if omitted)
   --jobs=N            Parallel build jobs (default: nproc / sysctl hw.ncpu)
   --skip-safeguard    Skip building the safeguard package manager
+  --skip-lsp          Skip building the LSP language server
   --skip-env          Skip shell environment configuration
   --help              Show this help message
 
 Examples:
+  curl -fsSL https://raw.githubusercontent.com/safec-org/SafeC/main/install.sh | bash
   bash install.sh
-  bash install.sh --llvm-dir=/usr/lib/llvm-17/lib/cmake/llvm --jobs=8
+  bash install.sh --prefix=/opt/safec --jobs=8
   bash install.sh --skip-safeguard --skip-env
 EOF
     exit 0
@@ -62,9 +69,11 @@ EOF
 
 for arg in "$@"; do
     case "$arg" in
+        --prefix=*)   PREFIX="${arg#*=}" ;;
         --llvm-dir=*) LLVM_DIR="${arg#*=}" ;;
         --jobs=*)     JOBS="${arg#*=}" ;;
         --skip-safeguard) SKIP_SAFEGUARD=true ;;
+        --skip-lsp)       SKIP_LSP=true ;;
         --skip-env)       SKIP_ENV=true ;;
         --help|-h)        show_help ;;
         *) die "Unknown option: $arg (use --help for usage)" ;;
@@ -152,11 +161,49 @@ check_cxx_compiler() {
 
 info "Checking prerequisites..."
 
+if ! check_command git; then
+    die "Git not found. Install git first (brew install git / apt install git)."
+fi
+ok "Git $(git --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
+
 if ! check_command cmake; then
     die "CMake not found. Install cmake first (brew install cmake / apt install cmake)."
 fi
 check_cmake_version
 check_cxx_compiler
+
+# ── Clone repositories ───────────────────────────────────────────────────────
+SAFEC_REPO="https://github.com/safec-org/SafeC.git"
+LSP_REPO="https://github.com/safec-org/sc-language-server.git"
+
+if [[ -d "${SCRIPT_DIR}/compiler" ]]; then
+    # Already inside a SafeC checkout — use it
+    info "Running from existing SafeC checkout: ${SCRIPT_DIR}"
+else
+    # Fresh install — clone into PREFIX
+    PREFIX="${PREFIX:-${HOME}/safec}"
+    info "Cloning SafeC into ${BOLD}${PREFIX}${RESET} ..."
+
+    if [[ -d "${PREFIX}/.git" ]]; then
+        info "SafeC repo already exists at ${PREFIX} — pulling latest..."
+        git -C "$PREFIX" pull --ff-only 2>&1 || warn "git pull failed — using existing checkout"
+    else
+        git clone "$SAFEC_REPO" "$PREFIX" 2>&1
+    fi
+
+    SCRIPT_DIR="$PREFIX"
+fi
+
+# Clone LSP server alongside SafeC if not present
+LSP_DIR="${SCRIPT_DIR}/../sc-language-server"
+if [[ "$SKIP_LSP" != true ]]; then
+    if [[ -d "$LSP_DIR" ]]; then
+        info "LSP server repo already exists at ${LSP_DIR}"
+    else
+        info "Cloning sc-language-server alongside SafeC..."
+        git clone "$LSP_REPO" "$LSP_DIR" 2>&1 || warn "Failed to clone sc-language-server (non-fatal)"
+    fi
+fi
 
 # ── LLVM detection ────────────────────────────────────────────────────────────
 find_llvm_cmake_dir() {
@@ -332,6 +379,35 @@ else
     fi
 fi
 
+# ── Build LSP language server ────────────────────────────────────────────────
+LSP_BIN=""
+
+if [[ "$SKIP_LSP" == true ]]; then
+    info "Skipping LSP build (--skip-lsp)"
+elif [[ ! -d "$LSP_DIR" ]]; then
+    warn "sc-language-server/ directory not found — skipping. Clone it alongside SafeC to enable LSP."
+else
+    echo ""
+    info "Building SafeC LSP language server..."
+    cd "$LSP_DIR"
+
+    if cmake -S . -B build -DSAFEC_DIR="${COMPILER_DIR}" 2>&1 | tail -3 && \
+       cmake --build build -j "${JOBS}" 2>&1; then
+        if [[ -f "build/sc-lsp" ]]; then
+            LSP_BIN="${LSP_DIR}/build/sc-lsp"
+        elif [[ -f "build/Release/sc-lsp" ]]; then
+            LSP_BIN="${LSP_DIR}/build/Release/sc-lsp"
+        fi
+        if [[ -n "$LSP_BIN" ]]; then
+            ok "LSP server built: ${LSP_BIN}"
+        else
+            warn "LSP build appeared to succeed but binary not found."
+        fi
+    else
+        warn "LSP build failed (non-fatal). You can retry later or use --skip-lsp."
+    fi
+fi
+
 cd "$SCRIPT_DIR"
 
 # ── Environment setup ────────────────────────────────────────────────────────
@@ -384,6 +460,9 @@ ENVEOF
         if [[ -n "$SAFEGUARD_BIN" ]]; then
             env_block+=$'\n'"fish_add_path \"$(dirname "$SAFEGUARD_BIN")\""
         fi
+        if [[ -n "$LSP_BIN" ]]; then
+            env_block+=$'\n'"fish_add_path \"$(dirname "$LSP_BIN")\""
+        fi
     else
         local env_block
         env_block=$(cat <<ENVEOF
@@ -397,6 +476,13 @@ ENVEOF
             sg_dir="$(dirname "$SAFEGUARD_BIN")"
             if [[ "$sg_dir" != "$bin_dir" ]]; then
                 env_block+=$'\n'"export PATH=\"${sg_dir}:\$PATH\""
+            fi
+        fi
+        if [[ -n "$LSP_BIN" ]]; then
+            local lsp_dir
+            lsp_dir="$(dirname "$LSP_BIN")"
+            if [[ "$lsp_dir" != "$bin_dir" ]]; then
+                env_block+=$'\n'"export PATH=\"${lsp_dir}:\$PATH\""
             fi
         fi
     fi
@@ -463,6 +549,15 @@ if [[ -n "$SAFEGUARD_BIN" ]]; then
     fi
 fi
 
+# Check LSP server
+if [[ -n "$LSP_BIN" ]]; then
+    if [[ -x "$LSP_BIN" ]]; then
+        ok "sc-lsp binary exists"
+    else
+        warn "sc-lsp binary not executable"
+    fi
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}${BOLD}════════════════════════════════════════════════════════════════${RESET}"
@@ -472,6 +567,7 @@ echo ""
 echo -e "  ${BOLD}SAFEC_HOME${RESET}  ${SCRIPT_DIR}"
 echo -e "  ${BOLD}safec${RESET}       ${SAFEC_BIN}"
 [[ -n "$SAFEGUARD_BIN" ]] && echo -e "  ${BOLD}safeguard${RESET}   ${SAFEGUARD_BIN}"
+[[ -n "$LSP_BIN" ]] && echo -e "  ${BOLD}sc-lsp${RESET}      ${LSP_BIN}"
 echo ""
 echo -e "  ${BOLD}Quick start:${RESET}"
 echo "    safec examples/hello.sc --emit-llvm -o hello.ll"

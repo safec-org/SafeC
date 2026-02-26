@@ -11,15 +11,23 @@ SafeC is an evolution of C — preserving C ABI compatibility — while enforcin
 ## Quick Start
 
 ```bash
-# Build the compiler (requires LLVM 17+)
-cd compiler
-cmake -S . -B build -DLLVM_DIR=$(brew --prefix llvm)/lib/cmake/llvm
-cmake --build build
+# One-liner install (clones, builds compiler + stdlib + package manager + LSP)
+curl -fsSL https://raw.githubusercontent.com/safec-org/SafeC/main/install.sh | bash
+```
 
-# Compile and run a SafeC program
-./build/safec hello.sc --emit-llvm -o hello.ll
-clang hello.ll -o hello
-./hello
+Or manually:
+
+```bash
+git clone https://github.com/safec-org/SafeC.git && cd SafeC
+bash install.sh                    # auto-detects LLVM, builds everything
+bash install.sh --prefix=~/safec   # or specify install directory
+```
+
+Then create a project and run:
+
+```bash
+safeguard new hello && cd hello
+safeguard run
 ```
 
 ```c
