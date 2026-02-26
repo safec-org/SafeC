@@ -1,5 +1,6 @@
 #pragma once
 #include "Manifest.h"
+#include "Lock.h"
 #include <string>
 #include <vector>
 
@@ -90,6 +91,15 @@ private:
 
     // Clone a git repository.  Returns true on success.
     bool gitClone(const std::string& url, const std::string& dest) const;
+
+    // ── Reproducible builds ───────────────────────────────────────────────────
+
+    // Write Package.lock after a successful build.
+    void writeLock(const std::vector<std::string>& srcFiles) const;
+
+    // Check Package.lock against current state.
+    // Prints warnings for mismatches; returns false if any dep SHA differs.
+    bool checkLock() const;
 };
 
 } // namespace safeguard

@@ -1,5 +1,6 @@
 #include "Manifest.h"
 #include "Builder.h"
+#include "Analyzer.h"
 #include "Project.h"
 #include <iostream>
 #include <string>
@@ -19,6 +20,8 @@ Commands:
   build         Compile all sources in the current project
   run   [args..]Build and immediately run the output binary
   clean         Remove the build/ and deps/ directories
+  verify-lock   Check Package.lock against current dependency state
+  analyze       Run static analysis lint passes on all source files
 
 Dependency format in Package.toml:
   [[dependencies]]
@@ -87,6 +90,33 @@ int main(int argc, char** argv) {
             return 1;
         }
         return 0;
+    }
+
+    // ── analyze ───────────────────────────────────────────────────────────────
+    if (cmd == "analyze") {
+        bool verbose = false;
+        for (int i = 2; i < argc; ++i)
+            if (std::string(argv[i]) == "--verbose") verbose = true;
+        try {
+            auto [root, manifest] = requireProject();
+            safeguard::Analyzer analyzer(root, manifest, verbose);
+            return analyzer.analyze() ? 0 : 1;
+        } catch (std::exception& e) {
+            std::cerr << "safeguard error: " << e.what() << "\n";
+            return 1;
+        }
+    }
+
+    // ── verify-lock ───────────────────────────────────────────────────────────
+    if (cmd == "verify-lock") {
+        try {
+            auto [root, manifest] = requireProject();
+            safeguard::Builder builder(root, manifest, {});
+            return builder.checkLock() ? 0 : 1;
+        } catch (std::exception& e) {
+            std::cerr << "safeguard error: " << e.what() << "\n";
+            return 1;
+        }
     }
 
     // ── fetch ─────────────────────────────────────────────────────────────────

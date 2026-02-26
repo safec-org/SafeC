@@ -53,13 +53,13 @@ int  io_read_line(char* buf, int n);
 int  io_read_token(char* buf, int n);
 
 // Parse a signed decimal integer from stdin. Returns 1 on success, 0 on error.
-int  io_scan_int(long long* out);
+int  io_scan_int(&stack long long out);
 
 // Parse an unsigned decimal integer from stdin. Returns 1 on success.
-int  io_scan_uint(unsigned long long* out);
+int  io_scan_uint(&stack unsigned long long out);
 
 // Parse a floating-point number from stdin. Returns 1 on success.
-int  io_scan_float(double* out);
+int  io_scan_float(&stack double out);
 
 // ── File system operations ────────────────────────────────────────────────────
 // Remove (delete) a file.  Returns 0 on success, non-zero on error.

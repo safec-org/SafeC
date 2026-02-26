@@ -11,27 +11,33 @@ struct MapEntry {
 };
 
 struct HashMap {
-    struct MapEntry* buckets;
-    unsigned long    cap;       // must be power of 2
-    unsigned long    len;       // live entries
+    struct MapEntry* buckets;  // heap-allocated bucket array
+    unsigned long    cap;      // must be power of 2
+    unsigned long    len;      // live entries
     unsigned long    key_size;
     unsigned long    val_size;
+
+    // ── Core operations ──────────────────────────────────────────────────────
+    int           insert(const void* key, const void* val);
+    void*         get(const void* key) const;    // NULL if missing
+    int           contains(const void* key) const;
+    int           remove(const void* key);
+    unsigned long length() const;
+    int           is_empty() const;
+    void          clear();
+    void          foreach(void* fn); // fn: void(*)(const void* key, void* val)
+
+    // ── Lifecycle ────────────────────────────────────────────────────────────
+    void          free();
+
+    // ── Internal ────────────────────────────────────────────────────────────
+    int           resize_(unsigned long new_cap);
+    void          free_entries_();
 };
 
-// ── Lifecycle ─────────────────────────────────────────────────────────────────
+// ── Constructor free functions ────────────────────────────────────────────────
 struct HashMap map_new(unsigned long key_size, unsigned long val_size);
 struct HashMap map_with_cap(unsigned long key_size, unsigned long val_size, unsigned long cap);
-void           map_free(struct HashMap* m);
-
-// ── Core operations ───────────────────────────────────────────────────────────
-int   map_insert(struct HashMap* m, const void* key, const void* val);
-void* map_get(struct HashMap* m, const void* key);   // NULL if missing
-int   map_contains(struct HashMap* m, const void* key);
-int   map_remove(struct HashMap* m, const void* key);
-unsigned long map_len(struct HashMap* m);
-int   map_is_empty(struct HashMap* m);
-void  map_clear(struct HashMap* m);
-void  map_foreach(struct HashMap* m, void* fn); // fn: void(*)(const void* key, void* val)
 
 // ── String-keyed convenience (keys are const char*) ───────────────────────────
 struct HashMap str_map_new(unsigned long val_size);
@@ -42,7 +48,7 @@ int   str_map_remove(struct HashMap* m, const char* key);
 
 // ── Typed generic wrappers ────────────────────────────────────────────────────
 generic<T>
-int map_insert_t(struct HashMap* m, const void* key, T val);
+int map_insert_t(&stack HashMap m, const void* key, T val);
 
 generic<T>
-T* map_get_t(struct HashMap* m, const void* key);
+T* map_get_t(&stack HashMap m, const void* key);

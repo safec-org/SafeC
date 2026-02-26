@@ -111,8 +111,8 @@ unsigned long str_cspan(const char* s, const char* reject) {
 
 // Reentrant tokeniser.  Pass s=NULL on subsequent calls.
 // Modifies `s` in place by writing NUL terminators.
-char* str_tok(char* s, const char* delim, char** saveptr) {
-    unsafe { return strtok_r(s, delim, saveptr); }
+char* str_tok(char* s, const char* delim, &stack char* saveptr) {
+    unsafe { return strtok_r(s, delim, (char**)saveptr); }
 }
 
 // ── Memory search ─────────────────────────────────────────────────────────────

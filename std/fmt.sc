@@ -1,8 +1,10 @@
 // SafeC Standard Library — String formatting implementation
 #pragma once
 #include "fmt.h"
-#include <stdio.h>
-#include <string.h>
+
+extern int            snprintf(char* buf, unsigned long n, const char* fmt, ...);
+extern unsigned long  strlen(const char* s);
+extern void*          memcpy(void* dst, const void* src, unsigned long n);
 
 int fmt_int(char* buf, unsigned long cap, long long v) {
     unsafe { return snprintf(buf, cap, "%lld", v); }

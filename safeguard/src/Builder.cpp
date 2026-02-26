@@ -1,4 +1,5 @@
 #include "Builder.h"
+#include "Lock.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -336,6 +337,9 @@ bool Builder::build() {
     std::string buildDir = (fs::path(root_) / "build").string();
     fs::create_directories(buildDir);
 
+    // 0. Verify lock file (aborts if dep SHAs mismatch).
+    if (!checkLock()) return false;
+
     // 1. Fetch + build dependencies
     if (!fetchAndBuildDeps()) return false;
 
@@ -403,7 +407,11 @@ bool Builder::build() {
     }
 
     // 7. Link final binary
-    return linkFinal(objFiles, archives, outputPath());
+    if (!linkFinal(objFiles, archives, outputPath())) return false;
+
+    // 8. Write / refresh Package.lock after a successful build.
+    writeLock(srcs);
+    return true;
 }
 
 // ── public: run ───────────────────────────────────────────────────────────────
@@ -431,6 +439,105 @@ void Builder::clean() {
         auto n = fs::remove_all(depsDir);
         std::cout << "safeguard: removed " << n << " file(s) in deps/\n";
     }
+}
+
+// ── Reproducible builds ───────────────────────────────────────────────────────
+
+void Builder::writeLock(const std::vector<std::string>& srcFiles) const {
+    LockFile lf;
+
+    // Hash the safec binary.
+    std::string safecBin = findSafec();
+    if (safecBin != "safec") {
+        lf.safec_hash = hashFile(safecBin);
+    }
+
+    // Record pinned git SHAs for all dependencies.
+    fs::path depsDir = fs::path(root_) / "deps";
+    for (auto& dep : manifest_.dependencies) {
+        LockedDep ld;
+        ld.name = dep.name;
+        ld.url  = dep.path.empty() ? dep.version : dep.path;
+        std::string depDir = dep.path.empty()
+            ? (depsDir / dep.name).string()
+            : dep.path;
+        if (fs::exists(depDir)) {
+            ld.git_sha = gitRevParse(depDir);
+        }
+        lf.deps.push_back(ld);
+    }
+
+    // Hash every source file.
+    for (auto& src : srcFiles) {
+        std::string h = hashFile(src);
+        if (!h.empty()) {
+            std::string rel;
+            try {
+                rel = fs::relative(src, root_).string();
+            } catch (...) {
+                rel = src;
+            }
+            lf.sources[rel] = h;
+        }
+    }
+
+    std::string lockPath = (fs::path(root_) / "Package.lock").string();
+    try {
+        lockWrite(lf, lockPath);
+        if (opts_.verbose)
+            std::cout << "safeguard: Package.lock written\n";
+    } catch (std::exception& e) {
+        std::cerr << "safeguard: warning: could not write lock: " << e.what() << "\n";
+    }
+}
+
+bool Builder::checkLock() const {
+    std::string lockPath = (fs::path(root_) / "Package.lock").string();
+    LockFile lf;
+    if (!lockRead(lf, lockPath)) {
+        // No lock file yet — nothing to check.
+        return true;
+    }
+
+    bool ok = true;
+
+    // Check safec binary hash.
+    std::string safecBin = findSafec();
+    if (!lf.safec_hash.empty() && safecBin != "safec") {
+        std::string cur = hashFile(safecBin);
+        if (!cur.empty() && cur != lf.safec_hash) {
+            std::cerr << "safeguard: warning: safec binary has changed since "
+                         "Package.lock was written (lock=" << lf.safec_hash
+                      << " current=" << cur << ")\n";
+            // Binary change: warn only, don't fail build.
+        }
+    }
+
+    // Check git SHAs for dependencies.
+    fs::path depsDir = fs::path(root_) / "deps";
+    for (auto& locked : lf.deps) {
+        std::string depDir;
+        // Find matching dep in manifest.
+        for (auto& dep : manifest_.dependencies) {
+            if (dep.name == locked.name) {
+                depDir = dep.path.empty()
+                    ? (depsDir / dep.name).string()
+                    : dep.path;
+                break;
+            }
+        }
+        if (depDir.empty() || !fs::exists(depDir)) continue;
+        std::string cur = gitRevParse(depDir);
+        if (!cur.empty() && !locked.git_sha.empty() && cur != locked.git_sha) {
+            std::cerr << "safeguard: error: dependency '" << locked.name
+                      << "' git SHA mismatch (locked=" << locked.git_sha
+                      << " current=" << cur << ")\n"
+                      << "  Run 'safeguard fetch' to update, then rebuild.\n";
+            ok = false;
+        }
+    }
+
+    return ok;
 }
 
 } // namespace safeguard

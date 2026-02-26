@@ -5,9 +5,9 @@
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 struct Vec vec_new(unsigned long elem_size) {
     struct Vec v;
-    v.data = (void*)0;
-    v.len = 0UL;
-    v.cap = 0UL;
+    unsafe { v.data = (&heap void)0; }
+    v.len      = 0UL;
+    v.cap      = 0UL;
     v.elem_size = elem_size;
     return v;
 }
@@ -15,168 +15,173 @@ struct Vec vec_new(unsigned long elem_size) {
 struct Vec vec_with_cap(unsigned long elem_size, unsigned long cap) {
     struct Vec v;
     v.elem_size = elem_size;
-    v.len = 0UL;
-    v.cap = cap;
+    v.len       = 0UL;
+    v.cap       = cap;
     unsafe {
-        v.data = alloc(elem_size * cap);
-        if (v.data == (void*)0) v.cap = 0UL;
+        v.data = (&heap void)alloc(elem_size * cap);
+        if ((void*)v.data == (void*)0) { v.cap = 0UL; }
     }
     return v;
 }
 
-void vec_free(struct Vec* v) {
+void Vec::free() {
     unsafe {
-        if (v->data != (void*)0) dealloc(v->data);
+        if ((void*)self.data != (void*)0) { dealloc((void*)self.data); }
     }
-    v->data = (void*)0;
-    v->len = 0UL;
-    v->cap = 0UL;
+    unsafe { self.data = (&heap void)0; }
+    self.len = 0UL;
+    self.cap = 0UL;
 }
 
 // ── Capacity ──────────────────────────────────────────────────────────────────
-unsigned long vec_len(struct Vec* v)    { return v->len; }
-unsigned long vec_cap(struct Vec* v)    { return v->cap; }
-int           vec_is_empty(struct Vec* v) { return v->len == 0UL; }
+unsigned long Vec::length() const { return self.len; }
+unsigned long Vec::capacity() const { return self.cap; }
+int           Vec::is_empty() const { return self.len == 0UL; }
 
-int vec_reserve(struct Vec* v, unsigned long new_cap) {
-    if (new_cap <= v->cap) return 1;
+int Vec::reserve(unsigned long new_cap) {
+    if (new_cap <= self.cap) { return 1; }
     unsafe {
-        void* nd = realloc_buf(v->data, new_cap * v->elem_size);
-        if (nd == (void*)0) return 0;
-        v->data = nd;
-        v->cap = new_cap;
+        void* nd = realloc_buf((void*)self.data, new_cap * self.elem_size);
+        if (nd == (void*)0) { return 0; }
+        self.data = (&heap void)nd;
+        self.cap  = new_cap;
     }
     return 1;
 }
 
-void vec_shrink(struct Vec* v) {
-    if (v->len == 0UL) {
-        unsafe { if (v->data != (void*)0) dealloc(v->data); }
-        v->data = (void*)0;
-        v->cap = 0UL;
+void Vec::shrink() {
+    if (self.len == 0UL) {
+        unsafe {
+            if ((void*)self.data != (void*)0) { dealloc((void*)self.data); }
+            self.data = (&heap void)0;
+        }
+        self.cap = 0UL;
         return;
     }
     unsafe {
-        void* nd = realloc_buf(v->data, v->len * v->elem_size);
-        if (nd != (void*)0) { v->data = nd; v->cap = v->len; }
+        void* nd = realloc_buf((void*)self.data, self.len * self.elem_size);
+        if (nd != (void*)0) { self.data = (&heap void)nd; self.cap = self.len; }
     }
 }
 
 // ── Internal grow helper ──────────────────────────────────────────────────────
-int vec_grow_(struct Vec* v) {
-    unsigned long new_cap = v->cap == 0UL ? 4UL : v->cap * 2UL;
-    return vec_reserve(v, new_cap);
+int Vec::grow_() {
+    unsigned long new_cap = self.cap == 0UL ? 4UL : self.cap * 2UL;
+    return self.reserve(new_cap);
 }
 
 // ── Element access ────────────────────────────────────────────────────────────
-void* vec_get_raw(struct Vec* v, unsigned long idx) {
-    if (idx >= v->len) return (void*)0;
-    unsafe { return (void*)((char*)v->data + idx * v->elem_size); }
+&heap void Vec::get_raw(unsigned long idx) {
+    if (idx >= self.len) { return (&heap void)0; }
+    unsafe { return (&heap void)((char*)self.data + idx * self.elem_size); }
 }
 
-int vec_set_raw(struct Vec* v, unsigned long idx, const void* elem) {
-    if (idx >= v->len) return 0;
+int Vec::set_raw(unsigned long idx, const void* elem) {
+    if (idx >= self.len) { return 0; }
     unsafe {
-        char* dst = (char*)v->data + idx * v->elem_size;
-        safe_memcpy((void*)dst, elem, v->elem_size);
+        char* dst = (char*)self.data + idx * self.elem_size;
+        safe_memcpy((void*)dst, elem, self.elem_size);
     }
     return 1;
 }
 
-void* vec_front_raw(struct Vec* v) { return v->len > 0UL ? v->data : (void*)0; }
-void* vec_back_raw(struct Vec* v) {
-    if (v->len == 0UL) return (void*)0;
-    unsafe { return (void*)((char*)v->data + (v->len - 1UL) * v->elem_size); }
+&heap void Vec::front_raw() {
+    if (self.len == 0UL) { return (&heap void)0; }
+    return self.data;
+}
+
+&heap void Vec::back_raw() {
+    if (self.len == 0UL) { return (&heap void)0; }
+    unsafe { return (&heap void)((char*)self.data + (self.len - 1UL) * self.elem_size); }
 }
 
 // ── Mutation ──────────────────────────────────────────────────────────────────
-int vec_push(struct Vec* v, const void* elem) {
-    if (v->len == v->cap) {
-        if (!vec_grow_(v)) return 0;
+int Vec::push(const void* elem) {
+    if (self.len == self.cap) {
+        if (!self.grow_()) { return 0; }
     }
     unsafe {
-        char* dst = (char*)v->data + v->len * v->elem_size;
-        safe_memcpy((void*)dst, elem, v->elem_size);
+        char* dst = (char*)self.data + self.len * self.elem_size;
+        safe_memcpy((void*)dst, elem, self.elem_size);
     }
-    v->len = v->len + 1UL;
+    self.len = self.len + 1UL;
     return 1;
 }
 
-int vec_pop(struct Vec* v, void* out) {
-    if (v->len == 0UL) return 0;
-    v->len = v->len - 1UL;
+int Vec::pop(void* out) {
+    if (self.len == 0UL) { return 0; }
+    self.len = self.len - 1UL;
     if (out != (void*)0) {
         unsafe {
-            char* src = (char*)v->data + v->len * v->elem_size;
-            safe_memcpy(out, (const void*)src, v->elem_size);
+            char* src = (char*)self.data + self.len * self.elem_size;
+            safe_memcpy(out, (const void*)src, self.elem_size);
         }
     }
     return 1;
 }
 
-int vec_insert(struct Vec* v, unsigned long idx, const void* elem) {
-    if (idx > v->len) return 0;
-    if (v->len == v->cap) {
-        if (!vec_grow_(v)) return 0;
+int Vec::insert(unsigned long idx, const void* elem) {
+    if (idx > self.len) { return 0; }
+    if (self.len == self.cap) {
+        if (!self.grow_()) { return 0; }
     }
     unsafe {
-        // Shift elements [idx, len) right by one position
-        char* base = (char*)v->data;
-        unsigned long bytes = (v->len - idx) * v->elem_size;
+        char* base = (char*)self.data;
+        unsigned long bytes = (self.len - idx) * self.elem_size;
         if (bytes > 0UL)
-            safe_memmove((void*)(base + (idx + 1UL) * v->elem_size),
-                         (const void*)(base + idx * v->elem_size), bytes);
-        safe_memcpy((void*)(base + idx * v->elem_size), elem, v->elem_size);
+            safe_memmove((void*)(base + (idx + 1UL) * self.elem_size),
+                         (const void*)(base + idx * self.elem_size), bytes);
+        safe_memcpy((void*)(base + idx * self.elem_size), elem, self.elem_size);
     }
-    v->len = v->len + 1UL;
+    self.len = self.len + 1UL;
     return 1;
 }
 
-int vec_remove(struct Vec* v, unsigned long idx, void* out) {
-    if (idx >= v->len) return 0;
+int Vec::remove(unsigned long idx, void* out) {
+    if (idx >= self.len) { return 0; }
     if (out != (void*)0) {
         unsafe {
-            char* src = (char*)v->data + idx * v->elem_size;
-            safe_memcpy(out, (const void*)src, v->elem_size);
+            char* src = (char*)self.data + idx * self.elem_size;
+            safe_memcpy(out, (const void*)src, self.elem_size);
         }
     }
     unsafe {
-        char* base = (char*)v->data;
-        unsigned long bytes = (v->len - idx - 1UL) * v->elem_size;
+        char* base = (char*)self.data;
+        unsigned long bytes = (self.len - idx - 1UL) * self.elem_size;
         if (bytes > 0UL)
-            safe_memmove((void*)(base + idx * v->elem_size),
-                         (const void*)(base + (idx + 1UL) * v->elem_size), bytes);
+            safe_memmove((void*)(base + idx * self.elem_size),
+                         (const void*)(base + (idx + 1UL) * self.elem_size), bytes);
     }
-    v->len = v->len - 1UL;
+    self.len = self.len - 1UL;
     return 1;
 }
 
-void vec_clear(struct Vec* v) { v->len = 0UL; }
+void Vec::clear() { self.len = 0UL; }
 
-int vec_extend(struct Vec* v, const void* arr, unsigned long count) {
-    if (!vec_reserve(v, v->len + count)) return 0;
+int Vec::extend(const void* arr, unsigned long count) {
+    if (!self.reserve(self.len + count)) { return 0; }
     unsafe {
-        char* dst = (char*)v->data + v->len * v->elem_size;
-        safe_memcpy((void*)dst, arr, count * v->elem_size);
+        char* dst = (char*)self.data + self.len * self.elem_size;
+        safe_memcpy((void*)dst, arr, count * self.elem_size);
     }
-    v->len = v->len + count;
+    self.len = self.len + count;
     return 1;
 }
 
 // ── Algorithms ────────────────────────────────────────────────────────────────
-void vec_reverse(struct Vec* v) {
-    if (v->len <= 1UL) return;
+void Vec::reverse() {
+    if (self.len <= 1UL) { return; }
     unsafe {
-        char* tmp = (char*)alloc(v->elem_size);
-        if (tmp == (char*)0) return;
+        char* tmp = (char*)alloc(self.elem_size);
+        if (tmp == (char*)0) { return; }
         unsigned long lo = 0UL;
-        unsigned long hi = v->len - 1UL;
+        unsigned long hi = self.len - 1UL;
         while (lo < hi) {
-            char* a = (char*)v->data + lo * v->elem_size;
-            char* b = (char*)v->data + hi * v->elem_size;
-            safe_memcpy((void*)tmp, (const void*)a, v->elem_size);
-            safe_memcpy((void*)a,   (const void*)b, v->elem_size);
-            safe_memcpy((void*)b,   (const void*)tmp, v->elem_size);
+            char* a = (char*)self.data + lo * self.elem_size;
+            char* b = (char*)self.data + hi * self.elem_size;
+            safe_memcpy((void*)tmp, (const void*)a, self.elem_size);
+            safe_memcpy((void*)a,   (const void*)b, self.elem_size);
+            safe_memcpy((void*)b,   (const void*)tmp, self.elem_size);
             lo = lo + 1UL;
             hi = hi - 1UL;
         }
@@ -186,76 +191,72 @@ void vec_reverse(struct Vec* v) {
 
 extern void qsort(void* base, unsigned long n, unsigned long sz, void* cmp);
 
-void vec_sort(struct Vec* v, void* cmp) {
-    if (v->len <= 1UL) return;
-    unsafe { qsort(v->data, v->len, v->elem_size, cmp); }
+void Vec::sort(void* cmp) {
+    if (self.len <= 1UL) { return; }
+    unsafe { qsort((void*)self.data, self.len, self.elem_size, cmp); }
 }
 
-long long vec_find(struct Vec* v, const void* key, void* cmp) {
-    // cmp: int(*)(const void*, const void*)
-    // We use it via a type-punned function pointer call in unsafe
+long long Vec::find(const void* key, void* cmp) const {
     unsafe {
-        // Cast cmp to a function pointer and call it
+        int (*cmpfn)(const void*, const void*) = (int (*)(const void*, const void*))cmp;
         int i = 0;
-        while ((unsigned long)i < v->len) {
-            char* elem = (char*)v->data + (unsigned long)i * v->elem_size;
-            // call cmp(key, elem) via indirect call
-            int (*cmpfn)(const void*, const void*) = (int (*)(const void*, const void*))cmp;
-            if (cmpfn(key, (const void*)elem) == 0) return (long long)i;
+        while ((unsigned long)i < self.len) {
+            char* elem = (char*)self.data + (unsigned long)i * self.elem_size;
+            if (cmpfn(key, (const void*)elem) == 0) { return (long long)i; }
             i = i + 1;
         }
     }
     return -1LL;
 }
 
-int vec_contains(struct Vec* v, const void* key, void* cmp) {
-    return vec_find(v, key, cmp) >= 0LL;
+int Vec::contains(const void* key, void* cmp) const {
+    return self.find(key, cmp) >= 0LL;
 }
 
-struct Vec vec_clone(struct Vec* v) {
-    struct Vec c = vec_with_cap(v->elem_size, v->len);
-    if (v->len > 0UL && c.data != (void*)0) {
-        unsafe { safe_memcpy(c.data, (const void*)v->data, v->len * v->elem_size); }
-        c.len = v->len;
+struct Vec Vec::clone() const {
+    struct Vec c = vec_with_cap(self.elem_size, self.len);
+    if (self.len > 0UL && (void*)c.data != (void*)0) {
+        unsafe { safe_memcpy((void*)c.data, (const void*)self.data, self.len * self.elem_size); }
+        c.len = self.len;
     }
     return c;
 }
 
-void vec_foreach(struct Vec* v, void* fn) {
+void Vec::foreach(void* fn) {
     unsafe {
         void (*f)(void*, unsigned long) = (void (*)(void*, unsigned long))fn;
         unsigned long i = 0UL;
-        while (i < v->len) {
-            f((void*)((char*)v->data + i * v->elem_size), i);
+        while (i < self.len) {
+            f((void*)((char*)self.data + i * self.elem_size), i);
             i = i + 1UL;
         }
     }
 }
 
-struct Vec vec_filter(struct Vec* v, void* pred) {
-    struct Vec out = vec_new(v->elem_size);
+struct Vec Vec::filter(void* pred) const {
+    struct Vec out = vec_new(self.elem_size);
     unsafe {
         int (*p)(const void*) = (int (*)(const void*))pred;
         unsigned long i = 0UL;
-        while (i < v->len) {
-            void* elem = (void*)((char*)v->data + i * v->elem_size);
-            if (p((const void*)elem)) vec_push(&out, (const void*)elem);
+        while (i < self.len) {
+            void* elem = (void*)((char*)self.data + i * self.elem_size);
+            if (p((const void*)elem)) { out.push((const void*)elem); }
             i = i + 1UL;
         }
     }
     return out;
 }
 
-struct Vec vec_map_raw(struct Vec* v, unsigned long out_elem_size, void* fn) {
-    struct Vec out = vec_with_cap(out_elem_size, v->len);
+struct Vec Vec::map_raw(unsigned long out_elem_size, void* fn) const {
+    struct Vec out = vec_with_cap(out_elem_size, self.len);
     unsafe {
         void (*f)(const void*, void*) = (void (*)(const void*, void*))fn;
         void* tmp = alloc(out_elem_size);
         unsigned long i = 0UL;
-        while (i < v->len) {
-            void* src = (void*)((char*)v->data + i * v->elem_size);
+        while (i < self.len) {
+            void* src = (void*)((char*)self.data + i * self.elem_size);
             f((const void*)src, tmp);
-            vec_push(&out, (const void*)tmp);
+            out.push((const void*)tmp);
             i = i + 1UL;
         }
         dealloc(tmp);
@@ -265,23 +266,23 @@ struct Vec vec_map_raw(struct Vec* v, unsigned long out_elem_size, void* fn) {
 
 // ── Typed generic wrappers ────────────────────────────────────────────────────
 generic<T>
-int vec_push_t(struct Vec* v, T val) {
-    return vec_push(v, (const void*)&val);
+int vec_push_t(&stack Vec v, T val) {
+    return v.push((const void*)&val);
 }
 
 generic<T>
-T* vec_at(struct Vec* v, unsigned long idx) {
-    return (T*)vec_get_raw(v, idx);
+T* vec_at(&stack Vec v, unsigned long idx) {
+    return (T*)v.get_raw(idx);
 }
 
 generic<T>
-int vec_pop_t(struct Vec* v, T* out) {
-    return vec_pop(v, (void*)out);
+int vec_pop_t(&stack Vec v, T* out) {
+    return v.pop((void*)out);
 }
 
 generic<T>
 struct Vec vec_from_arr(T* arr, unsigned long len) {
     struct Vec v = vec_new((unsigned long)sizeof(T));
-    vec_extend(&v, (const void*)arr, len);
+    v.extend((const void*)arr, len);
     return v;
 }

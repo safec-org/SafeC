@@ -54,3 +54,70 @@ void safe_memset(void* ptr, int val, unsigned long n) {
 int safe_memcmp(const void* a, const void* b, unsigned long n) {
     unsafe { return memcmp(a, b, n); }
 }
+
+// ── Cache-line helpers ────────────────────────────────────────────────────────
+
+unsigned long mem_align_up(unsigned long addr, unsigned long align) {
+    unsigned long mask = align - (unsigned long)1;
+    return (addr + mask) & ~mask;
+}
+
+unsigned long mem_align_down(unsigned long addr, unsigned long align) {
+    unsigned long mask = align - (unsigned long)1;
+    return addr & ~mask;
+}
+
+int mem_is_aligned(unsigned long addr, unsigned long align) {
+    unsigned long mask = align - (unsigned long)1;
+    if ((addr & mask) == (unsigned long)0) { return 1; }
+    return 0;
+}
+
+void mem_prefetch(const void* addr, int write, int locality) {
+    unsafe {
+#ifdef __GNUC__
+        __builtin_prefetch(addr, write, locality);
+#else
+        (void)addr; (void)write; (void)locality;
+#endif
+    }
+}
+
+void mem_zero_secure(void* ptr, unsigned long n) {
+    // Volatile write-through to prevent compiler elimination.
+    unsafe {
+        volatile unsigned char* p = (volatile unsigned char*)ptr;
+        unsigned long i = (unsigned long)0;
+        while (i < n) {
+            p[i] = (unsigned char)0;
+            i = i + (unsigned long)1;
+        }
+    }
+}
+
+void mem_clflush(const void* addr) {
+    unsafe {
+#ifdef __x86_64__
+        asm volatile ("clflush (%0)" : : "r"(addr) : "memory");
+#else
+        (void)addr;
+#endif
+    }
+}
+
+// ── Alignment utilities ───────────────────────────────────────────────────────
+
+void* mem_align_ptr(void* ptr, unsigned long align) {
+    unsafe {
+        unsigned long p = (unsigned long)ptr;
+        unsigned long a = mem_align_up(p, align);
+        return (void*)a;
+    }
+    return (void*)0;
+}
+
+int mem_fits_page(unsigned long addr, unsigned long size) {
+    unsigned long page_base = mem_align_down(addr, (unsigned long)4096);
+    if (addr + size <= page_base + (unsigned long)4096) { return 1; }
+    return 0;
+}

@@ -11,6 +11,8 @@ set(SOURCES
     src/Manifest.cpp
     src/Builder.cpp
     src/Project.cpp
+    src/Lock.cpp
+    src/Analyzer.cpp
 )
 
 add_executable(safeguard ${SOURCES})

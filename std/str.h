@@ -40,11 +40,11 @@ unsigned long str_cspan(const char* s, const char* reject);
 
 // ── Tokenisation ─────────────────────────────────────────────────────────────
 // Reentrant tokeniser (wraps strtok_r / strtok_s).
-// On first call: pass the string to tokenise as `s`, any non-NULL char** for `saveptr`.
+// On first call: pass the string to tokenise as `s`, any non-NULL &stack char* for `saveptr`.
 // Subsequent calls: pass NULL as `s`.
 // Returns pointer to next token, or NULL when exhausted.
 // The input string IS modified (NUL-terminators are written).
-char*         str_tok(char* s, const char* delim, char** saveptr);
+char*         str_tok(char* s, const char* delim, &stack char* saveptr);
 
 // ── Memory search ─────────────────────────────────────────────────────────────
 // Return pointer to first occurrence of byte `c` in the `n`-byte block at `s`.
