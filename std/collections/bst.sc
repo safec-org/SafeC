@@ -205,18 +205,18 @@ int bst_remove(struct BST* t, const void* key) {
 }
 
 // ── In-order traversal (iterative using Stack from stack.h would create a dep; use recursion helper) ──
-void bst_inorder_(struct BSTNode* n, void* fn) {
+void bst_inorder_(struct BSTNode* n, void* func) {
     if (n == (struct BSTNode*)0) return;
-    bst_inorder_(n->left, fn);
+    bst_inorder_(n->left, func);
     unsafe {
-        void (*f)(const void*, void*) = (void (*)(const void*, void*))fn;
+        void (*f)(const void*, void*) = (void (*)(const void*, void*))func;
         f((const void*)n->key, n->val);
     }
-    bst_inorder_(n->right, fn);
+    bst_inorder_(n->right, func);
 }
 
-void bst_foreach_inorder(struct BST* t, void* fn) {
-    bst_inorder_(t->root, fn);
+void bst_foreach_inorder(struct BST* t, void* func) {
+    bst_inorder_(t->root, func);
 }
 
 generic<T>

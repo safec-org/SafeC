@@ -5,7 +5,7 @@
 #define SYSCALL_MAX 256
 
 struct SyscallTable {
-    void* handlers[SYSCALL_MAX];  // fn: long long(*)(long long, long long, long long)
+    void* handlers[SYSCALL_MAX];  // func: long long(*)(long long, long long, long long)
     int   count;                  // number of registered syscalls
 
     // Register a handler for syscall number `num`.

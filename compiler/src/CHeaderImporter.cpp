@@ -42,15 +42,25 @@ std::string CHeaderImporter::findClang() {
 // =============================================================================
 
 std::string CHeaderImporter::import(const std::string &headerName,
-                                     const std::vector<std::string> &includePaths) {
+                                     const std::vector<std::string> &includePaths,
+                                     SourceLocation loc) {
     if (clangPath_.empty()) return {};
     if (imported_.count(headerName)) return {};
     imported_.insert(headerName);
 
     std::string json = runClangASTDump(headerName, includePaths);
-    if (json.empty()) return {};
+    if (json.empty()) {
+        diag_.note(loc, "clang -ast-dump=json produced no output while importing '" +
+                            headerName + "'");
+        return {};
+    }
 
-    return buildDeclarations(json);
+    std::string decls = buildDeclarations(json);
+    if (decls.empty()) {
+        diag_.note(loc, "clang AST for '" + headerName +
+                            "' contained no importable declarations");
+    }
+    return decls;
 }
 
 // =============================================================================
@@ -115,6 +125,10 @@ static bool hasUnsupportedType(const std::string &qt) {
     // Wide character types — not in SafeC's primitive set.
     if (qt.find("wchar_t")  != std::string::npos) return true;
     if (qt.find("__wchar_t") != std::string::npos) return true;
+    // C11 '_Atomic(T)' generic-selection form (e.g. from <stdatomic.h>'s
+    // typedefs) — SafeC only understands the '_Atomic T' qualifier form used
+    // directly in source, not this macro-call spelling.
+    if (qt.find("_Atomic(") != std::string::npos) return true;
     return false;
 }
 
@@ -160,7 +174,7 @@ std::string CHeaderImporter::cleanType(const std::string &qt) {
                     if (i < n && qt[i] == '(') {
                         int depth = 0;
                         while (i < n) {
-                            if      (qt[i] == '(') ++depth;
+                            if      (qt[i] == '(') { ++depth; ++i; }
                             else if (qt[i] == ')') { --depth; ++i; if (!depth) break; }
                             else ++i;
                         }

@@ -5,9 +5,9 @@
 int BlockDevice::read(unsigned long lba, &stack unsigned char buf, unsigned long count) {
     if (self.read_fn == (void*)0) { return -1; }
     unsafe {
-        int (*fn)(void*, unsigned long, unsigned char*, unsigned long) =
+        int (*func)(void*, unsigned long, unsigned char*, unsigned long) =
             (int (*)(void*, unsigned long, unsigned char*, unsigned long))self.read_fn;
-        return fn(self.ctx, lba, (unsigned char*)buf, count);
+        return func(self.ctx, lba, (unsigned char*)buf, count);
     }
     return -1;
 }
@@ -15,9 +15,9 @@ int BlockDevice::read(unsigned long lba, &stack unsigned char buf, unsigned long
 int BlockDevice::write(unsigned long lba, const &stack unsigned char buf, unsigned long count) {
     if (self.write_fn == (void*)0) { return -1; }
     unsafe {
-        int (*fn)(void*, unsigned long, const unsigned char*, unsigned long) =
+        int (*func)(void*, unsigned long, const unsigned char*, unsigned long) =
             (int (*)(void*, unsigned long, const unsigned char*, unsigned long))self.write_fn;
-        return fn(self.ctx, lba, (const unsigned char*)buf, count);
+        return func(self.ctx, lba, (const unsigned char*)buf, count);
     }
     return -1;
 }

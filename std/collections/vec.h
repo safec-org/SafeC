@@ -35,9 +35,9 @@ struct Vec {
     long long     find(const void* key, void* cmp) const; // -1 if not found
     int           contains(const void* key, void* cmp) const;
     struct Vec    clone() const;                    // deep copy
-    void          foreach(void* fn);               // fn: void(*)(void* elem, unsigned long idx)
+    void          foreach(void* func);               // func: void(*)(void* elem, unsigned long idx)
     struct Vec    filter(void* pred) const;        // pred: int(*)(const void*)
-    struct Vec    map_raw(unsigned long out_elem_size, void* fn) const; // fn: void(*)(const void* in, void* out)
+    struct Vec    map_raw(unsigned long out_elem_size, void* func) const; // func: void(*)(const void* in, void* out)
 
     // ── Lifecycle ────────────────────────────────────────────────────────────
     void          free();

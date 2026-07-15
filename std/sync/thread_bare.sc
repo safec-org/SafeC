@@ -13,8 +13,8 @@ struct ThreadSched thread_sched_init() {
     return s;
 }
 
-Thread ThreadSched::spawn(void* fn, void* arg, int priority) {
-    int id = self.inner.spawn(fn, arg);
+Thread ThreadSched::spawn(void* func, void* arg, int priority) {
+    int id = self.inner.spawn(func, arg);
     if (id == -1) { return (Thread)THREAD_NONE; }
     self.priority[id] = priority;
     return (Thread)id;
@@ -54,7 +54,7 @@ int ThreadSched::tick() {
             self.inner.current          = idx;
             self.inner.tasks[idx].state = TASK_RUNNING;
             unsafe {
-                int result = ((int(*)(void*, int))self.inner.tasks[idx].fn)(
+                int result = ((int(*)(void*, int))self.inner.tasks[idx].func)(
                     self.inner.tasks[idx].arg,
                     self.inner.tasks[idx].resume_point);
                 if (result == 0) {

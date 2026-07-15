@@ -110,8 +110,8 @@ int TimerWheel::tick() {
             // Call the callback through a void(*)(void*) function pointer.
             unsafe {
                 typedef void (*TimerCB)(void*);
-                TimerCB fn = (TimerCB)cb;
-                fn(context);
+                TimerCB func = (TimerCB)cb;
+                func(context);
             }
             fired = fired + 1;
 

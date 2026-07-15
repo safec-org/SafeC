@@ -12,8 +12,8 @@
 //   Win32 → pointer to heap-allocated Windows primitive
 
 // ── Thread ───────────────────────────────────────────────────────────────────
-// fn signature: void* fn(void*) on POSIX; DWORD WINAPI fn(LPVOID) on Win32.
-int  thread_create(unsigned long long* tid, void* fn, void* arg);
+// func signature: void* func(void*) on POSIX; DWORD WINAPI func(LPVOID) on Win32.
+int  thread_create(unsigned long long* tid, void* func, void* arg);
 int  thread_join(unsigned long long tid);
 int  thread_detach(unsigned long long tid);
 void thread_yield();

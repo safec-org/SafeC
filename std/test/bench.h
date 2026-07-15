@@ -9,8 +9,8 @@
 
 struct BenchCase {
     char          name[BENCH_NAME_MAX];
-    void*         fn;           // void (*fn)(void* arg)
-    void*         arg;          // user argument passed to fn
+    void*         func;           // void (*func)(void* arg)
+    void*         arg;          // user argument passed to func
     unsigned long iters;        // number of iterations to run
     double        elapsed_s;    // measured elapsed seconds (0 if unavailable)
     double        ops_per_s;    // iters / elapsed_s (0 if unavailable)
@@ -20,8 +20,8 @@ struct BenchSuite {
     struct BenchCase cases[BENCH_MAX];
     int count;
 
-    // Register a benchmark: fn is called `iters` times per run.
-    void add(const char* name, void* fn, void* arg, unsigned long iters);
+    // Register a benchmark: func is called `iters` times per run.
+    void add(const char* name, void* func, void* arg, unsigned long iters);
 
     // Run all benchmarks and record results.
     void run();

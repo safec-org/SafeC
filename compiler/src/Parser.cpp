@@ -1,5 +1,6 @@
 #include "safec/Parser.h"
 #include <cassert>
+#include <functional>
 #include <sstream>
 
 namespace safec {
@@ -75,7 +76,6 @@ bool Parser::isTypeStart(const Token &t) const {
     case TK::Amp:         // &stack T
     case TK::QuestionAmp: // ?&stack T
     case TK::Question:    // ?T (optional)
-    case TK::Star:        // *T (pointer)
         return true;
     case TK::Ident:
         return true; // user-defined type name
@@ -108,41 +108,46 @@ Region Parser::parseRegionQualifier(std::string &arenaName) {
 }
 
 // Parse a reference type: [?]& region T
-TypePtr Parser::parseReferenceType(bool nullable) {
-    // We already consumed '&' or '?&'
+TypePtr Parser::parseReferenceType(bool nullable, bool leadingConst) {
+    // We already consumed '&' or '?&' (and any 'const' preceding it)
     std::string arenaName;
     Region r = parseRegionQualifier(arenaName);
 
-    // Parse optional const
-    bool isConst = false;
+    // Parse optional const — either written before the sigil ('const &stack T')
+    // or after the region ('&stack const T'); both mean the same thing.
+    bool isConst = leadingConst;
     if (cur().is(TK::KW_const)) { consume(); isConst = true; }
 
     TypePtr base = parseBaseType();
-    // Array suffix
-    if (cur().is(TK::LBracket)) {
-        consume();
-        int64_t sz = -1;
-        if (!cur().is(TK::RBracket)) {
-            if (cur().is(TK::IntLit)) sz = cur().intVal;
-            consume(); // or error
-        }
-        expect(TK::RBracket);
-        base = makeArray(std::move(base), sz);
-    }
+    // Pointer / array suffixes, e.g. '&stack char* saveptr' (reference to a pointer)
+    base = parseTypeDeclarator(std::move(base));
     return makeReference(std::move(base), r, nullable, !isConst, std::move(arenaName));
 }
 
 // Parse a base type (no declarator suffixes yet)
 TypePtr Parser::parseBaseType() {
-    bool isConst    = false;
-    bool isSigned   = true;
     bool hasSign    = false;
     bool isUnsigned = false;
 
-    if (cur().is(TK::KW_const)) { consume(); isConst = true; }
+    // A bare 'const' on a base type (as opposed to a declarator: '*const' or
+    // '&const') is a no-op qualifier here — enforcement of immutability lives
+    // on references (parseReferenceType) and local/global declarations
+    // (parseVarDeclStmt), matching 'restrict' below which is likewise ignored.
+    if (cur().is(TK::KW_const)) { consume(); }
     // 'restrict' and compiler-specific '__restrict' are ignored qualifiers in SafeC
     if (cur().is(TK::KW_restrict)) { consume(); }
-    if (cur().is(TK::KW_unsigned)) { consume(); isUnsigned = true; hasSign = true; isSigned = false; }
+    // 'volatile' as a bare type qualifier (e.g. imported from C headers like
+    // <stdatomic.h>) is likewise a no-op here — SafeC's own volatile MMIO
+    // access goes through the explicit volatile_load/volatile_store builtins.
+    if (cur().is(TK::KW_volatile)) { consume(); }
+    // C11 '_Atomic' qualifier-prefix form ('_Atomic int', as opposed to the
+    // '_Atomic(int)' generic-selection form filtered out at header-import
+    // time) — not lexed as a keyword, so it reaches here as a plain
+    // identifier. SafeC has no atomic type qualifier; code that casts through
+    // it (e.g. std/atomic.sc calling into <stdatomic.h>) just needs it to
+    // parse as a no-op, matching const/restrict/volatile above.
+    if (cur().is(TK::Ident) && cur().text == "_Atomic") { consume(); }
+    if (cur().is(TK::KW_unsigned)) { consume(); isUnsigned = true; hasSign = true; }
     else if (cur().is(TK::KW_signed)) { consume(); hasSign = true; }
 
     auto loc = cur().loc;
@@ -235,6 +240,14 @@ TypePtr Parser::parseBaseType() {
 
 // Parse a complete type including reference, pointer, array declarators
 TypePtr Parser::parseType() {
+    // 'const' written before the reference sigil, e.g. 'const &stack T'
+    // (equivalent to '&stack const T').
+    if (cur().is(TK::KW_const) && (peek().is(TK::Amp) || peek().is(TK::QuestionAmp))) {
+        consume();
+        bool nullable = cur().is(TK::QuestionAmp);
+        consume();
+        return parseReferenceType(nullable, /*leadingConst=*/true);
+    }
     // ?& (nullable reference)
     if (cur().is(TK::QuestionAmp)) {
         consume();
@@ -265,6 +278,50 @@ TypePtr Parser::parseType() {
     return parseTypeDeclarator(std::move(base));
 }
 
+// Parses a small constant integer expression: literals combined with the
+// usual arithmetic operators and parentheses. This covers array sizes that
+// come from preprocessor macros like '#define N (A * B)', which expand to
+// a token sequence rather than a single literal.
+int64_t Parser::parseArraySizeConst() {
+    // Precedence-climbing over +/- (prec 1) and * / % (prec 2).
+    std::function<int64_t(int)> parseLevel = [&](int minPrec) -> int64_t {
+        int64_t lhs;
+        if (cur().is(TK::Minus)) { consume(); lhs = -parseLevel(3); }
+        else if (cur().is(TK::LParen)) {
+            consume();
+            lhs = parseLevel(1);
+            expect(TK::RParen, "expected ')' in array size expression");
+        } else if (cur().is(TK::IntLit)) {
+            lhs = cur().intVal;
+            consume();
+        } else {
+            diag_.error(cur().loc, "expected constant expression for array size");
+            lhs = -1;
+        }
+
+        for (;;) {
+            int prec = 0;
+            if (cur().is(TK::Plus) || cur().is(TK::Minus)) prec = 1;
+            else if (cur().is(TK::Star) || cur().is(TK::Slash) || cur().is(TK::Percent)) prec = 2;
+            if (prec == 0 || prec < minPrec) break;
+
+            TK op = cur().kind;
+            consume();
+            int64_t rhs = parseLevel(prec + 1);
+            switch (op) {
+            case TK::Plus:    lhs = lhs + rhs; break;
+            case TK::Minus:   lhs = lhs - rhs; break;
+            case TK::Star:    lhs = lhs * rhs; break;
+            case TK::Slash:   lhs = rhs != 0 ? lhs / rhs : 0; break;
+            case TK::Percent: lhs = rhs != 0 ? lhs % rhs : 0; break;
+            default: break;
+            }
+        }
+        return lhs;
+    };
+    return parseLevel(1);
+}
+
 TypePtr Parser::parseTypeDeclarator(TypePtr base) {
     // C-style pointer: T* or T* const / T* restrict
     while (cur().is(TK::Star)) {
@@ -272,13 +329,14 @@ TypePtr Parser::parseTypeDeclarator(TypePtr base) {
         bool isConst = false;
         if (cur().is(TK::KW_const))    { consume(); isConst = true; }
         if (cur().is(TK::KW_restrict)) { consume(); } // ignored in SafeC
+        if (cur().is(TK::KW_volatile)) { consume(); } // ignored in SafeC (see parseBaseType)
         base = makePointer(std::move(base), isConst);
     }
     // Array: T[N]
     while (cur().is(TK::LBracket)) {
         consume();
         int64_t sz = -1;
-        if (cur().is(TK::IntLit)) { sz = cur().intVal; consume(); }
+        if (!cur().is(TK::RBracket)) sz = parseArraySizeConst();
         expect(TK::RBracket, "expected ']'");
         base = makeArray(std::move(base), sz);
     }
@@ -695,13 +753,18 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion) {
             if (cur().is(TK::LBracket)) {
                 consume();
                 int64_t sz = -1;
-                if (cur().is(TK::IntLit)) { sz = cur().intVal; consume(); }
+                if (!cur().is(TK::RBracket)) sz = parseArraySizeConst();
                 expect(TK::RBracket);
                 fd.type = makeArray(std::move(fd.type), sz);
             }
             expect(TK::Semicolon, "expected ';' after struct field");
             sd->fields.push_back(std::move(fd));
         }
+
+        // Guarantee forward progress: if a malformed member produced only
+        // errors without consuming any token, force one token forward so
+        // parsing always terminates instead of looping on the same token.
+        if (pos_ == savedPos) consume();
     }
     expect(TK::RBrace, "expected '}' closing struct");
     match(TK::Semicolon);
@@ -1555,16 +1618,23 @@ ExprPtr Parser::parseCastExpr() {
     // Heuristic: '(' followed by a type keyword → cast
     if (cur().is(TK::LParen) && isTypeStart(peek())) {
         size_t saved = pos_;
+        size_t diagMark = diag_.checkpoint();
+        bool wasSilent = diag_.isSilent();
+        diag_.setSilent(true); // speculative — don't surface errors unless we commit
         consume(); // '('
         // Try to parse type
         TypePtr t = parseType();
-        if (cur().is(TK::RParen)) {
+        bool ok = cur().is(TK::RParen);
+        diag_.setSilent(wasSilent);
+        if (ok) {
             consume(); // ')'
             auto e = parseUnaryExpr();
             return std::make_unique<CastExpr>(std::move(t), std::move(e), toks_[saved].loc);
         }
-        // Not a cast — restore
+        // Not a cast — restore both the token position and any diagnostics
+        // emitted while speculatively parsing a type that didn't pan out.
         pos_ = saved;
+        diag_.discardSince(diagMark);
     }
     return parsePostfixExpr();
 }

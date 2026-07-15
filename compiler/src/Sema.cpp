@@ -1636,6 +1636,7 @@ TypePtr Sema::checkMember(MemberExpr &e) {
             if (!inUnsafeScope())
                 diag_.error(e.loc, "pointer member access requires 'unsafe' block");
             baseTy = static_cast<PointerType &>(*baseTy).base;
+            e.isLValue = true; // ptr->field is always an lvalue (writable through raw pointer)
         } else if (baseTy->kind == TypeKind::Reference) {
             auto &rt = static_cast<ReferenceType &>(*baseTy);
             checkNullabilityDeref(baseTy, e.loc);

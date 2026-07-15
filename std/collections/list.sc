@@ -131,9 +131,9 @@ int list_remove(struct List* l, const void* val, void* cmp) {
     return 1;
 }
 
-void list_foreach(struct List* l, void* fn) {
+void list_foreach(struct List* l, void* func) {
     unsafe {
-        void (*f)(void*) = (void (*)(void*))fn;
+        void (*f)(void*) = (void (*)(void*))func;
         struct ListNode* n = l->head;
         while (n != (struct ListNode*)0) {
             f(n->data);

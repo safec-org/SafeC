@@ -10,8 +10,7 @@ namespace safeguard {
 
 // ── FNV-1a 64-bit hash ────────────────────────────────────────────────────────
 
-static uint64_t fnv1a64(const uint8_t* data, size_t len) {
-    uint64_t h = 14695981039346656037ULL;
+static uint64_t fnv1a64(const uint8_t* data, size_t len, uint64_t h) {
     for (size_t i = 0; i < len; ++i) {
         h ^= static_cast<uint64_t>(data[i]);
         h *= 1099511628211ULL;
@@ -33,10 +32,7 @@ std::string hashFile(const std::string& path) {
     char buf[4096];
     while (f.read(buf, sizeof(buf)) || f.gcount() > 0) {
         auto n = static_cast<size_t>(f.gcount());
-        for (size_t i = 0; i < n; ++i) {
-            h ^= static_cast<uint64_t>(static_cast<uint8_t>(buf[i]));
-            h *= 1099511628211ULL;
-        }
+        h = fnv1a64(reinterpret_cast<const uint8_t*>(buf), n, h);
     }
     return toHex16(h);
 }

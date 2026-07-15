@@ -36,7 +36,7 @@ void* bst_min_key(struct BST* t);  // NULL if empty
 void* bst_max_key(struct BST* t);  // NULL if empty
 
 // ── Traversal (in-order = sorted ascending) ────────────────────────────────────
-void bst_foreach_inorder(struct BST* t, void* fn); // fn: void(*)(const void* key, void* val)
+void bst_foreach_inorder(struct BST* t, void* func); // func: void(*)(const void* key, void* val)
 
 // ── Typed generic wrappers ────────────────────────────────────────────────────
 generic<T>

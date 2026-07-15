@@ -20,7 +20,7 @@ extern unsigned long long strtoull(const char* s, char** end, int base);
 extern double strtod(const char* s, char** end);
 extern float  strtof(const char* s, char** end);
 // atexit: declared with void* for SafeC compatibility (no function pointer type syntax yet)
-extern int   atexit(void* fn);
+extern int   atexit(void* func);
 // qsort/bsearch: declared with void* comparator for SafeC compatibility
 extern void  qsort(void* base, unsigned long n, unsigned long size, void* cmp);
 extern void* bsearch(const void* key, const void* base, unsigned long n,
@@ -97,11 +97,11 @@ int sys_system(const char* cmd) {
 }
 
 // Register a function to be called at normal process exit.
-// `fn` must point to a void(void) function.
-// SafeC does not yet support function pointer cast syntax; fn is passed as void*.
+// `func` must point to a void(void) function.
+// SafeC does not yet support function pointer cast syntax; func is passed as void*.
 // Returns 0 on success, non-zero if the registration limit is exceeded.
-int sys_atexit(void* fn) {
-    unsafe { return atexit(fn); }
+int sys_atexit(void* func) {
+    unsafe { return atexit(func); }
 }
 
 // ── PRNG ──────────────────────────────────────────────────────────────────────

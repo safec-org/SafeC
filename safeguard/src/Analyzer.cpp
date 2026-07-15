@@ -73,12 +73,9 @@ std::vector<AnalyzerDiag> Analyzer::lintUnsafeBlocks(const std::string& src) con
     std::vector<AnalyzerDiag> diags;
     std::istringstream ss(src);
     std::string line;
-    int lineno = 0;
     int count  = 0;
-    std::string firstFile;
     // Just count occurrences of "unsafe {" across the whole file.
     while (std::getline(ss, line)) {
-        ++lineno;
         if (line.find("unsafe") != std::string::npos &&
             line.find('{')      != std::string::npos) {
             ++count;

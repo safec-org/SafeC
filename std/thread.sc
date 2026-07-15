@@ -6,7 +6,7 @@
 #ifdef __WINDOWS__
 
 // kernel32.dll — always linked on Windows
-extern void* CreateThread(void* sec, unsigned long stack_sz, void* fn, void* arg,
+extern void* CreateThread(void* sec, unsigned long stack_sz, void* func, void* arg,
                            unsigned long flags, unsigned long* tid_out);
 extern unsigned long WaitForSingleObject(void* handle, unsigned long ms);
 extern int CloseHandle(void* handle);
@@ -36,9 +36,9 @@ extern void ReleaseSRWLockExclusive(void* rw);
 extern int  TryAcquireSRWLockShared(void* rw);
 extern int  TryAcquireSRWLockExclusive(void* rw);
 
-int thread_create(unsigned long long* tid, void* fn, void* arg) {
+int thread_create(unsigned long long* tid, void* func, void* arg) {
     unsafe {
-        void* h = CreateThread((void*)0, 0UL, fn, arg, 0UL, (unsigned long*)0);
+        void* h = CreateThread((void*)0, 0UL, func, arg, 0UL, (unsigned long*)0);
         if (h == (void*)0) return -1;
         *tid = (unsigned long long)h;
         return 0;
@@ -142,7 +142,7 @@ int rwlock_wrunlock(unsigned long long* rw)  { unsafe { ReleaseSRWLockExclusive(
 // ════════════════════════════════ POSIX ══════════════════════════════════════
 #else
 
-extern int pthread_create(unsigned long long* tid, void* attr, void* fn, void* arg);
+extern int pthread_create(unsigned long long* tid, void* attr, void* func, void* arg);
 extern int pthread_join(unsigned long long tid, void** retval);
 extern int pthread_detach(unsigned long long tid);
 extern unsigned long long pthread_self();
@@ -171,8 +171,8 @@ extern int pthread_rwlock_tryrdlock(void* rw);
 extern int pthread_rwlock_trywrlock(void* rw);
 extern int pthread_rwlock_unlock(void* rw);
 
-int thread_create(unsigned long long* tid, void* fn, void* arg) {
-    unsafe { return pthread_create(tid, (void*)0, fn, arg); }
+int thread_create(unsigned long long* tid, void* func, void* arg) {
+    unsafe { return pthread_create(tid, (void*)0, func, arg); }
 }
 int thread_join(unsigned long long tid)    { unsafe { return pthread_join(tid, (void**)0); } }
 int thread_detach(unsigned long long tid)  { unsafe { return pthread_detach(tid); } }

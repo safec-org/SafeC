@@ -58,4 +58,4 @@ struct TlsfAllocator tlsf_init(&heap void buffer, unsigned long cap);
 struct TlsfAllocator tlsf_new(unsigned long cap);
 
 // Compute first-level and second-level indices for a given size.
-void tlsf_mapping_(unsigned long size, int* fl, int* sl);
+void tlsf_mapping_(unsigned long size, &stack int fl, &stack int sl);

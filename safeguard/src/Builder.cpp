@@ -343,9 +343,18 @@ bool Builder::build() {
     // 1. Fetch + build dependencies
     if (!fetchAndBuildDeps()) return false;
 
-    // 2. Build (or reuse) std library
-    std::string stdLib  = ensureStdLib();
+    // 2. Build (or reuse) std library. A missing std/ directory is only a
+    // warning (a project using nothing but extern declarations can still
+    // link without it), but if std/ was found and building it failed, that's
+    // a real error — silently linking without it just produces a wall of
+    // confusing "undefined symbol" errors instead.
     std::string stdDir  = findStdDir();
+    std::string stdLib  = ensureStdLib();
+    if (stdLib.empty() && !stdDir.empty()) {
+        std::cerr << "safeguard: failed to build the standard library "
+                     "(see compiler errors above) — aborting build\n";
+        return false;
+    }
 
     // 3. Determine include paths for user sources
     std::vector<std::string> userIncs;

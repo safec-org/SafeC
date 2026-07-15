@@ -16,9 +16,9 @@ static unsigned long fuzz_rng_(unsigned long* state) {
     return x;
 }
 
-struct FuzzTarget fuzz_target_init(void* fn, unsigned long iters) {
+struct FuzzTarget fuzz_target_init(void* func, unsigned long iters) {
     struct FuzzTarget t;
-    t.fn    = fn;
+    t.func    = func;
     t.seed  = (unsigned long)0xDEADBEEFCAFEBABE;
     t.iters = iters;
     return t;
@@ -36,7 +36,7 @@ void FuzzTarget::run(const unsigned char* corpus, unsigned long corpus_size) {
         memcpy((void*)buf, (const void*)corpus, corpus_size);
 
         // Call target on the original corpus first.
-        ((void(*)(const unsigned char*, unsigned long))self.fn)(buf, corpus_size);
+        ((void(*)(const unsigned char*, unsigned long))self.func)(buf, corpus_size);
 
         unsigned long i = (unsigned long)0;
         while (i < self.iters) {
@@ -68,7 +68,7 @@ void FuzzTarget::run(const unsigned char* corpus, unsigned long corpus_size) {
                 sz = (fuzz_rng_(&state) % corpus_size) + (unsigned long)1;
             }
 
-            ((void(*)(const unsigned char*, unsigned long))self.fn)(buf, sz);
+            ((void(*)(const unsigned char*, unsigned long))self.func)(buf, sz);
             i = i + (unsigned long)1;
         }
 

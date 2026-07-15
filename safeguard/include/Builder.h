@@ -32,6 +32,10 @@ public:
     // Return path to the compiled binary (valid after a successful build()).
     std::string outputPath() const;
 
+    // Check Package.lock against current state.
+    // Prints warnings for mismatches; returns false if any dep SHA differs.
+    bool checkLock() const;
+
     // ── Library support ──────────────────────────────────────────────────────
 
     // Build a static library from all .sc files in `srcDir` (recursively).
@@ -96,10 +100,6 @@ private:
 
     // Write Package.lock after a successful build.
     void writeLock(const std::vector<std::string>& srcFiles) const;
-
-    // Check Package.lock against current state.
-    // Prints warnings for mismatches; returns false if any dep SHA differs.
-    bool checkLock() const;
 };
 
 } // namespace safeguard

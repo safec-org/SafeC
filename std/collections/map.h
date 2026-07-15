@@ -25,7 +25,7 @@ struct HashMap {
     unsigned long length() const;
     int           is_empty() const;
     void          clear();
-    void          foreach(void* fn); // fn: void(*)(const void* key, void* val)
+    void          foreach(void* func); // func: void(*)(const void* key, void* val)
 
     // ── Lifecycle ────────────────────────────────────────────────────────────
     void          free();

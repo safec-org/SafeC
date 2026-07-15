@@ -9,12 +9,12 @@ struct TaskScheduler task_sched_init() {
     return s;
 }
 
-int TaskScheduler::spawn(void* fn, void* arg) {
+int TaskScheduler::spawn(void* func, void* arg) {
     if (self.count >= 64) {
         return -1;
     }
     int idx = self.count;
-    self.tasks[idx].fn           = fn;
+    self.tasks[idx].func           = func;
     self.tasks[idx].arg          = arg;
     self.tasks[idx].state        = 0; // TASK_READY
     self.tasks[idx].resume_point = 0;
@@ -30,8 +30,8 @@ int TaskScheduler::tick() {
             self.current = i;
             self.tasks[i].state = 1; // TASK_RUNNING
             unsafe {
-                // Call: int fn(void* arg, int resume_point)
-                int result = ((int(*)(void*, int))self.tasks[i].fn)(
+                // Call: int func(void* arg, int resume_point)
+                int result = ((int(*)(void*, int))self.tasks[i].func)(
                     self.tasks[i].arg, self.tasks[i].resume_point);
                 if (result == 0) {
                     self.tasks[i].state = 2; // TASK_DONE

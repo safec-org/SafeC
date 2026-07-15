@@ -36,12 +36,10 @@ void TlsfBlock::set_used_() {
 
 // ── Utility free function ────────────────────────────────────────────────────
 
-void tlsf_mapping_(unsigned long size, int* fl, int* sl) {
+void tlsf_mapping_(unsigned long size, &stack int fl, &stack int sl) {
     if (size < (unsigned long)256) {
-        unsafe {
-            *fl = 0;
-            *sl = (int)(size / (unsigned long)16);
-        }
+        *fl = 0;
+        *sl = (int)(size / (unsigned long)16);
     } else {
         int f = 0;
         unsigned long tmp = size;
@@ -49,21 +47,19 @@ void tlsf_mapping_(unsigned long size, int* fl, int* sl) {
             tmp = tmp / (unsigned long)2;
             f = f + 1;
         }
-        unsafe {
-            *fl = f;
-            int shift = f - 4;
-            if (shift < 0) { shift = 0; }
-            unsigned long s = size;
-            int i = 0;
-            while (i < shift) {
-                s = s / (unsigned long)2;
-                i = i + 1;
-            }
-            int sli = (int)s - 16;
-            if (sli < 0) { sli = 0; }
-            if (sli > 15) { sli = 15; }
-            *sl = sli;
+        *fl = f;
+        int shift = f - 4;
+        if (shift < 0) { shift = 0; }
+        unsigned long s = size;
+        int i = 0;
+        while (i < shift) {
+            s = s / (unsigned long)2;
+            i = i + 1;
         }
+        int sli = (int)s - 16;
+        if (sli < 0) { sli = 0; }
+        if (sli > 15) { sli = 15; }
+        *sl = sli;
     }
 }
 
@@ -166,7 +162,7 @@ struct TlsfAllocator tlsf_init(&heap void buffer, unsigned long cap) {
             blk->prev_phys = (void*)0;
             blk->next_free = (void*)0;
             blk->prev_free = (void*)0;
-            a.insert_(*blk);
+            a.insert_(&(*blk));
         }
     }
     return a;
@@ -189,7 +185,7 @@ struct TlsfAllocator tlsf_new(unsigned long cap) {
             blk->prev_phys = (void*)0;
             blk->next_free = (void*)0;
             blk->prev_free = (void*)0;
-            a.insert_(*blk);
+            a.insert_(&(*blk));
         }
     }
     return a;
@@ -208,7 +204,7 @@ struct TlsfAllocator tlsf_new(unsigned long cap) {
 
     unsafe {
         struct TlsfBlock* blk = (struct TlsfBlock*)found;
-        self.remove_(*blk);
+        self.remove_(&(*blk));
         unsigned long bsz = blk->block_size_();
 
         if (bsz >= aligned + hdr + min) {
@@ -218,7 +214,7 @@ struct TlsfAllocator tlsf_new(unsigned long cap) {
             rest->next_free = (void*)0;
             rest->prev_free = (void*)0;
             blk->size = aligned;
-            self.insert_(*rest);
+            self.insert_(&(*rest));
         }
 
         blk->set_used_();
@@ -237,7 +233,7 @@ void TlsfAllocator::free(&heap void ptr) {
         if (blk_end < buf_end) {
             struct TlsfBlock* next = (struct TlsfBlock*)blk_end;
             if (next->is_free_() == 1) {
-                self.remove_(*next);
+                self.remove_(&(*next));
                 blk->size = blk->block_size_() + hdr + next->block_size_();
             }
         }
@@ -246,13 +242,13 @@ void TlsfAllocator::free(&heap void ptr) {
         if (blk->prev_phys != (void*)0) {
             struct TlsfBlock* prev = (struct TlsfBlock*)blk->prev_phys;
             if (prev->is_free_() == 1) {
-                self.remove_(*prev);
+                self.remove_(&(*prev));
                 prev->size = prev->block_size_() + hdr + blk->block_size_();
                 blk = prev;
             }
         }
 
-        self.insert_(*blk);
+        self.insert_(&(*blk));
     }
 }
 

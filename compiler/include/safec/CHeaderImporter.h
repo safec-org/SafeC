@@ -23,9 +23,11 @@ public:
     /// Import declarations from the named C header.
     /// @param headerName  e.g. "stdio.h", "stdlib.h", "string.h"
     /// @param includePaths  additional -I search paths forwarded to clang
+    /// @param loc  location of the #include directive, for diagnostics on failure
     /// @return  SafeC extern declaration text, or empty string on failure
     std::string import(const std::string &headerName,
-                       const std::vector<std::string> &includePaths = {});
+                       const std::vector<std::string> &includePaths = {},
+                       SourceLocation loc = {});
 
 private:
     DiagEngine                     &diag_;

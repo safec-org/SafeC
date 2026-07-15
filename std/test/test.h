@@ -54,7 +54,7 @@ void test_assert_not_null(const void* p, const char* desc,
 
 struct TestCase {
     char        name[TEST_NAME_MAX];
-    void*       fn;          // void (*fn)(void)
+    void*       func;          // void (*func)(void)
     int         result;      // 1 = passed, 0 = failed, -1 = not run yet
     char        fail_expr[128];
     char        fail_file[128];
@@ -69,8 +69,8 @@ struct TestSuite {
     int passed;
     int failed;
 
-    // Register a test case.  fn signature: void fn(void).
-    void add(const char* name, void* fn);
+    // Register a test case.  func signature: void func(void).
+    void add(const char* name, void* func);
 
     // Run all registered tests, print each result, update passed/failed.
     void run();

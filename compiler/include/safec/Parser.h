@@ -34,8 +34,13 @@ private:
     TypePtr parseType();
     TypePtr parseBaseType();           // primitive / struct / named type
     TypePtr parseTypeDeclarator(TypePtr base); // array / pointer suffixes
-    TypePtr parseReferenceType(bool nullable); // &region T
+    TypePtr parseReferenceType(bool nullable, bool leadingConst = false); // &region T
     Region  parseRegionQualifier(std::string &arenaName);
+
+    // Constant integer expression inside 'T[...]' (array size). Supports
+    // integer literals combined with + - * / % and parentheses, so that
+    // preprocessor-expanded sizes like 'N * M' work, not just bare literals.
+    int64_t parseArraySizeConst();
 
     std::vector<GenericParam> parseGenericParams(); // <T: Constraint, ...>
 

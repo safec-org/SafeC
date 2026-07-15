@@ -74,11 +74,11 @@ struct TestSuite test_suite_init() {
     return s;
 }
 
-void TestSuite::add(const char* name, void* fn) {
+void TestSuite::add(const char* name, void* func) {
     if (self.count >= TEST_MAX) { return; }
     int idx = self.count;
     tc_copy_(self.cases[idx].name, name, (unsigned long)TEST_NAME_MAX);
-    self.cases[idx].fn        = fn;
+    self.cases[idx].func        = func;
     self.cases[idx].result    = -1;
     self.cases[idx].fail_line = 0;
     self.cases[idx].fail_expr[0] = '\0';
@@ -93,7 +93,7 @@ void TestSuite::run() {
         test_current_ = &self.cases[i]; // set global context
 
         unsafe {
-            ((void(*)(void))self.cases[i].fn)();
+            ((void(*)(void))self.cases[i].func)();
         }
 
         test_current_ = (struct TestCase*)0;

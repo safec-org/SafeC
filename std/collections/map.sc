@@ -188,9 +188,9 @@ int HashMap::remove(const void* key) {
     return 0;
 }
 
-void HashMap::foreach(void* fn) {
+void HashMap::foreach(void* func) {
     unsafe {
-        void (*f)(const void*, void*) = (void (*)(const void*, void*))fn;
+        void (*f)(const void*, void*) = (void (*)(const void*, void*))func;
         unsigned long i = 0UL;
         while (i < self.cap) {
             if (self.buckets[i].state == 1)

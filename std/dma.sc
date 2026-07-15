@@ -75,9 +75,9 @@ int DmaChannel::start(unsigned long src_phys, unsigned long dst_phys, unsigned l
     if (self.start_fn == (void*)0) { return -1; }
     if (self.busy != 0) { return -1; }
     unsafe {
-        int (*fn)(void*, unsigned long, unsigned long, unsigned long) =
+        int (*func)(void*, unsigned long, unsigned long, unsigned long) =
             (int (*)(void*, unsigned long, unsigned long, unsigned long))self.start_fn;
-        int rc = fn(self.ctx, src_phys, dst_phys, len);
+        int rc = func(self.ctx, src_phys, dst_phys, len);
         if (rc == 0) { self.busy = 1; }
         return rc;
     }
@@ -93,8 +93,8 @@ int DmaChannel::wait(unsigned int max_polls) {
     while (i < max_polls) {
         int done;
         unsafe {
-            int (*fn)(void*) = (int (*)(void*))self.poll_fn;
-            done = fn(self.ctx);
+            int (*func)(void*) = (int (*)(void*))self.poll_fn;
+            done = func(self.ctx);
         }
         if (done != 0) {
             self.busy = 0;

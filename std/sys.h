@@ -12,7 +12,7 @@
 void          sys_exit(int code);
 void          sys_abort();
 int           sys_system(const char* cmd);
-int           sys_atexit(void* fn);
+int           sys_atexit(void* func);
 
 // ── Environment ───────────────────────────────────────────────────────────────
 const char*   sys_getenv(const char* name);

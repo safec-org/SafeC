@@ -214,16 +214,14 @@ int main() {
         printf("str_find_any first vowel: '%s'\n", pb);
 
         // Tokenisation (reentrant)
-        // Use heap-allocated char** for save state (SafeC needs raw pointer, not &stack ref)
-        char** sv = (char**)alloc((unsigned long)8);
-        *sv = (char*)0;
+        char* saveptr = (char*)0;
+        &stack char* sv = &saveptr;
         char sentence[64];
         str_copy((char*)sentence, "one two three", (unsigned long)64);
         char* t1 = str_tok((char*)sentence, " ", sv);
         char* t2 = str_tok((char*)0, " ", sv);
         char* t3 = str_tok((char*)0, " ", sv);
         printf("str_tok: '%s' '%s' '%s'\n", t1, t2, t3);
-        dealloc((void*)sv);
 
         // mem_chr
         const char* needle = "find the X here";

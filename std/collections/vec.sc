@@ -222,9 +222,9 @@ struct Vec Vec::clone() const {
     return c;
 }
 
-void Vec::foreach(void* fn) {
+void Vec::foreach(void* func) {
     unsafe {
-        void (*f)(void*, unsigned long) = (void (*)(void*, unsigned long))fn;
+        void (*f)(void*, unsigned long) = (void (*)(void*, unsigned long))func;
         unsigned long i = 0UL;
         while (i < self.len) {
             f((void*)((char*)self.data + i * self.elem_size), i);
@@ -247,10 +247,10 @@ struct Vec Vec::filter(void* pred) const {
     return out;
 }
 
-struct Vec Vec::map_raw(unsigned long out_elem_size, void* fn) const {
+struct Vec Vec::map_raw(unsigned long out_elem_size, void* func) const {
     struct Vec out = vec_with_cap(out_elem_size, self.len);
     unsafe {
-        void (*f)(const void*, void*) = (void (*)(const void*, void*))fn;
+        void (*f)(const void*, void*) = (void (*)(const void*, void*))func;
         void* tmp = alloc(out_elem_size);
         unsigned long i = 0UL;
         while (i < self.len) {

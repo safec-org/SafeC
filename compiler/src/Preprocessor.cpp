@@ -475,7 +475,8 @@ std::string Preprocessor::handleInclude(const std::string &rest,
             }
             if (cHeaderImporter_->available()) {
                 std::string decls =
-                    cHeaderImporter_->import(name, opts_.includePaths);
+                    cHeaderImporter_->import(name, opts_.includePaths,
+                                              {lineNo, 1, curFile.c_str()});
                 if (!decls.empty()) return decls;
             }
         }

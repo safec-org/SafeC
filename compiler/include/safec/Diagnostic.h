@@ -39,7 +39,24 @@ public:
     const std::vector<Diagnostic> &diagnostics() const { return diags_; }
 
     void setSilent(bool s) { silent_ = s; }
+    bool isSilent() const { return silent_; }
     void reset() { diags_.clear(); errorCount_ = 0; }
+
+    // ── Speculative-parse support ──────────────────────────────────────────
+    // Some grammar productions are ambiguous (e.g. '(' could start a cast or
+    // a parenthesized expression) and are resolved by trying one parse and
+    // backtracking on failure. Backtracking the token stream alone isn't
+    // enough — any diagnostics emitted mid-attempt must be discarded too, or
+    // an abandoned speculative parse silently poisons the real error count.
+    size_t checkpoint() const { return diags_.size(); }
+    void discardSince(size_t mark) {
+        if (mark >= diags_.size()) return;
+        for (size_t i = mark; i < diags_.size(); ++i) {
+            if (diags_[i].level == DiagLevel::Error || diags_[i].level == DiagLevel::Fatal)
+                --errorCount_;
+        }
+        diags_.resize(mark);
+    }
 
 private:
     void emit(DiagLevel level, SourceLocation loc, std::string msg) {

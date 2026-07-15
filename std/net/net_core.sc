@@ -119,9 +119,9 @@ void PacketBuf::reset() {
 int NetIf::tx(&stack PacketBuf pkt) {
     if (self.tx_fn == (void*)0) { return -1; }
     unsafe {
-        int (*fn)(void*, unsigned char*, unsigned long) =
+        int (*func)(void*, unsigned char*, unsigned long) =
             (int (*)(void*, unsigned char*, unsigned long))self.tx_fn;
-        return fn(self.iface_ctx, (unsigned char*)pkt.data, pkt.len);
+        return func(self.iface_ctx, (unsigned char*)pkt.data, pkt.len);
     }
     return -1;
 }

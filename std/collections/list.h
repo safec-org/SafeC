@@ -35,7 +35,7 @@ struct ListNode* list_find(struct List* l, const void* val, void* cmp);
 int              list_contains(struct List* l, const void* val, void* cmp);
 void             list_remove_node(struct List* l, struct ListNode* node);
 int              list_remove(struct List* l, const void* val, void* cmp);  // remove first match
-void             list_foreach(struct List* l, void* fn);  // fn: void(*)(void* data)
+void             list_foreach(struct List* l, void* func);  // func: void(*)(void* data)
 
 // ── Reorder ───────────────────────────────────────────────────────────────────
 void list_reverse(struct List* l);
