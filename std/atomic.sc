@@ -70,5 +70,5 @@ int atomic_cas_ll(long long* addr, long long* expected, long long desired) {
 }
 
 void atomic_thread_fence() {
-    unsafe { atomic_thread_fence(memory_order_seq_cst); }
+    unsafe { atomic_fence(); }
 }

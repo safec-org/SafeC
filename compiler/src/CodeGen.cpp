@@ -1689,6 +1689,32 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
             return builder_.CreateAtomicRMW(op, ptr, val, llvm::MaybeAlign(),
                                              parseOrdering(2));
         }
+        if ((ident.name == "atomic_fetch_and" || ident.name == "atomic_fetch_or" ||
+             ident.name == "atomic_fetch_xor") && e.args.size() >= 2) {
+            auto *ptr = genExpr(*e.args[0], env);
+            auto *val = genExpr(*e.args[1], env);
+            auto op = llvm::AtomicRMWInst::And;
+            if (ident.name == "atomic_fetch_or")  op = llvm::AtomicRMWInst::Or;
+            if (ident.name == "atomic_fetch_xor") op = llvm::AtomicRMWInst::Xor;
+            return builder_.CreateAtomicRMW(op, ptr, val, llvm::MaybeAlign(),
+                                             parseOrdering(2));
+        }
+        if (ident.name == "atomic_compare_exchange_strong" && e.args.size() >= 3) {
+            auto *ptr         = genExpr(*e.args[0], env);
+            auto *expectedPtr = genExpr(*e.args[1], env);
+            auto *desired     = genExpr(*e.args[2], env);
+            auto *elemTy      = desired->getType();
+            auto *expectedVal = builder_.CreateLoad(elemTy, expectedPtr, "cas.expected");
+            auto ord = parseOrdering(3);
+            auto *cmpxchg = builder_.CreateAtomicCmpXchg(
+                ptr, expectedVal, desired, llvm::MaybeAlign(), ord, ord);
+            auto *oldVal  = builder_.CreateExtractValue(cmpxchg, 0, "cas.old");
+            auto *success = builder_.CreateExtractValue(cmpxchg, 1, "cas.ok");
+            // C11 semantics: the 'expected' out-pointer is updated with the
+            // actual prior value (a no-op on success, since old == expected).
+            builder_.CreateStore(oldVal, expectedPtr);
+            return success;
+        }
         if (ident.name == "atomic_exchange" && e.args.size() >= 2) {
             auto *ptr = genExpr(*e.args[0], env);
             auto *val = genExpr(*e.args[1], env);
@@ -1709,6 +1735,34 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
             auto ord = parseOrdering(0);
             builder_.CreateFence(ord);
             return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
+        }
+        // ── GCC/Clang bit-manipulation built-ins (std/bit.sc) ────────────────
+        // These map 1:1 onto LLVM intrinsics; the '32'/'ll' suffix just picks
+        // the operand width.
+        if (ident.name == "__builtin_popcount" || ident.name == "__builtin_popcountll") {
+            auto *val = genExpr(*e.args[0], env);
+            auto *fn  = llvm::Intrinsic::getOrInsertDeclaration(
+                mod_.get(), llvm::Intrinsic::ctpop, {val->getType()});
+            auto *r   = builder_.CreateCall(fn, {val}, "popcount");
+            return builder_.CreateIntCast(r, llvm::Type::getInt32Ty(ctx_), false);
+        }
+        if (ident.name == "__builtin_clz" || ident.name == "__builtin_clzll" ||
+            ident.name == "__builtin_ctz" || ident.name == "__builtin_ctzll") {
+            auto *val = genExpr(*e.args[0], env);
+            bool isClz = ident.name == "__builtin_clz" || ident.name == "__builtin_clzll";
+            auto id = isClz ? llvm::Intrinsic::ctlz : llvm::Intrinsic::cttz;
+            auto *fn = llvm::Intrinsic::getOrInsertDeclaration(mod_.get(), id, {val->getType()});
+            // Matches GCC/Clang semantics: undefined on a zero input (callers
+            // in std/bit.sc already special-case x == 0 before calling this).
+            auto *isZeroUndef = llvm::ConstantInt::getTrue(ctx_);
+            auto *r = builder_.CreateCall(fn, {val, isZeroUndef}, isClz ? "clz" : "ctz");
+            return builder_.CreateIntCast(r, llvm::Type::getInt32Ty(ctx_), false);
+        }
+        if (ident.name == "__builtin_bswap32" || ident.name == "__builtin_bswap64") {
+            auto *val = genExpr(*e.args[0], env);
+            auto *fn  = llvm::Intrinsic::getOrInsertDeclaration(
+                mod_.get(), llvm::Intrinsic::bswap, {val->getType()});
+            return builder_.CreateCall(fn, {val}, "bswap");
         }
         // Handle __safec_join(handle) — pthread_join
         if (ident.name == "__safec_join" && !e.args.empty()) {
@@ -1872,6 +1926,18 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
         coerceArgs(rawFT);
         auto *call  = builder_.CreateCall(rawFT, calleeVal, args);
         return call;
+    }
+    // Same, but through a '&static' reference to a function type — this is
+    // how 'fn T(Params)'-typed variables are represented (see parseBaseType's
+    // KW_fn case), so calling one needs to unwrap the reference first.
+    if (e.callee->type && e.callee->type->kind == TypeKind::Reference) {
+        auto &rt = static_cast<ReferenceType &>(*e.callee->type);
+        if (rt.base && rt.base->kind == TypeKind::Function) {
+            auto *rawFT = static_cast<llvm::FunctionType *>(lowerType(rt.base));
+            coerceArgs(rawFT);
+            auto *call  = builder_.CreateCall(rawFT, calleeVal, args);
+            return call;
+        }
     }
     diag_.error(e.loc, "codegen: cannot determine callee function type");
     return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);

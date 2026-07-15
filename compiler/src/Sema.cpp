@@ -1250,6 +1250,8 @@ TypePtr Sema::checkCall(CallExpr &e) {
         // ── Atomic built-ins ─────────────────────────────────────────────────
         if (ident.name == "atomic_load" || ident.name == "atomic_store" ||
             ident.name == "atomic_fetch_add" || ident.name == "atomic_fetch_sub" ||
+            ident.name == "atomic_fetch_and" || ident.name == "atomic_fetch_or" ||
+            ident.name == "atomic_fetch_xor" ||
             ident.name == "atomic_exchange" || ident.name == "atomic_cas") {
             for (auto &a : e.args) checkExpr(*a);
             if (ident.name == "atomic_store") {
@@ -1260,7 +1262,7 @@ TypePtr Sema::checkCall(CallExpr &e) {
                 e.type = makeBool();
                 return makeBool();
             }
-            // load/fetch_add/fetch_sub/exchange: return the base type of the pointer
+            // load/fetch_*/exchange: return the base type of the pointer
             if (!e.args.empty() && e.args[0]->type &&
                 e.args[0]->type->kind == TypeKind::Pointer) {
                 auto &pt = static_cast<PointerType &>(*e.args[0]->type);
@@ -1269,6 +1271,30 @@ TypePtr Sema::checkCall(CallExpr &e) {
             }
             e.type = makeInt(32, true);
             return makeInt(32, true);
+        }
+        if (ident.name == "atomic_compare_exchange_strong") {
+            // (ptr, &expected, desired) → bool (true on success)
+            for (auto &a : e.args) checkExpr(*a);
+            e.type = makeBool();
+            return makeBool();
+        }
+        // ── GCC/Clang bit-manipulation built-ins (std/bit.sc) ────────────────
+        if (ident.name == "__builtin_popcount"  || ident.name == "__builtin_popcountll" ||
+            ident.name == "__builtin_clz"       || ident.name == "__builtin_clzll" ||
+            ident.name == "__builtin_ctz"        || ident.name == "__builtin_ctzll") {
+            for (auto &a : e.args) checkExpr(*a);
+            e.type = makeInt(32, true);
+            return e.type;
+        }
+        if (ident.name == "__builtin_bswap32" || ident.name == "__builtin_bswap64") {
+            for (auto &a : e.args) checkExpr(*a);
+            // Result has the same width as the operand being byte-swapped.
+            if (!e.args.empty() && e.args[0]->type) {
+                e.type = e.args[0]->type;
+                return e.type;
+            }
+            e.type = makeInt(32, false);
+            return e.type;
         }
         if (ident.name == "atomic_fence") {
             for (auto &a : e.args) checkExpr(*a);

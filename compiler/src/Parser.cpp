@@ -213,7 +213,12 @@ TypePtr Parser::parseBaseType() {
             } while (match(TK::Comma));
         }
         expect(TK::RParen, "expected ')' closing fn parameter list");
-        return makeFunction(std::move(ret), std::move(params), variadic);
+        // 'fn T(Params)' names a function pointer/reference, not a bare
+        // function type — wrap it in a &static reference so it matches how
+        // Sema types a bare function name used as a value (also &static),
+        // letting 'op = square;' and similar assignments type-check.
+        return makeReference(makeFunction(std::move(ret), std::move(params), variadic),
+                              Region::Static, /*nullable=*/false, /*mut=*/false);
     }
     case TK::KW_typeof: {
         // typeof(expr) — type position; Sema resolves to concrete type
