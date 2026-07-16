@@ -5,6 +5,8 @@
 // ── CSR helpers ───────────────────────────────────────────────────────────────
 // Read / write arbitrary CSRs by name (uses inline asm).
 
+namespace std {
+
 unsigned long rv_csr_read_mstatus();
 void          rv_csr_write_mstatus(unsigned long val);
 unsigned long rv_csr_read_mie();
@@ -70,3 +72,5 @@ struct Plic {
 
 extern struct Plic plic;
 void plic_init(unsigned long base_addr);
+
+} // namespace std

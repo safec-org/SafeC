@@ -1,10 +1,12 @@
 // SafeC Standard Library — Performance Counter Implementation
 #pragma once
-#include "perf.h"
+#include <std/debug/perf.h>
 
 // ── Hosted-mode extern declarations ──────────────────────────────────────────
 // clock_gettime and clock are used only in hosted mode.
 // CLOCK_MONOTONIC = 1 on Linux/macOS.
+namespace std {
+
 extern int   clock_gettime(int clk, void* ts);
 extern long  clock();    // POSIX clock() returns long; CLOCKS_PER_SEC = 1000000
 
@@ -126,3 +128,5 @@ struct PerfCounter perf_counter_init() {
 
     return ctr;
 }
+
+} // namespace std

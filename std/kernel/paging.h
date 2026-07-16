@@ -15,6 +15,8 @@
 #define PAGE_SIZE       4096
 #define PAGE_TABLE_SIZE 512
 
+namespace std {
+
 struct PageEntry {
     unsigned long value;  // raw page table entry (flags + physical address)
 };
@@ -43,3 +45,5 @@ struct PageTable {
     // Set flags on existing mapping (preserves physical address).
     void          set_flags(int idx, unsigned int flags);
 };
+
+} // namespace std

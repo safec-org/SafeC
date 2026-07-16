@@ -2,6 +2,8 @@
 // O(1) alloc, O(1) reset. No individual free — reset reclaims all.
 #pragma once
 
+namespace std {
+
 struct BumpAllocator {
     &heap void    base;    // heap-backed backing buffer
     unsigned long used;    // bytes currently allocated
@@ -26,3 +28,5 @@ struct BumpAllocator bump_init(&heap void buffer, unsigned long cap);
 
 // Create a heap-backed bump allocator with the given capacity.
 struct BumpAllocator bump_new(unsigned long cap);
+
+} // namespace std

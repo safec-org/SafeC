@@ -1,11 +1,14 @@
 // SafeC Standard Library — Thread (cross-platform implementation)
-#include "thread.h"
-#include "mem.h"
+#include <std/thread.h>
+#include <std/mem.h>
+
+namespace std {
 
 // ════════════════════════════════ WIN32 ══════════════════════════════════════
 #ifdef __WINDOWS__
 
 // kernel32.dll — always linked on Windows
+
 extern void* CreateThread(void* sec, unsigned long stack_sz, void* func, void* arg,
                            unsigned long flags, unsigned long* tid_out);
 extern unsigned long WaitForSingleObject(void* handle, unsigned long ms);
@@ -285,3 +288,5 @@ int rwlock_rdunlock(unsigned long long* rw)  { unsafe { return pthread_rwlock_un
 int rwlock_wrunlock(unsigned long long* rw)  { unsafe { return pthread_rwlock_unlock((void*)(*rw)); } }
 
 #endif
+
+} // namespace std

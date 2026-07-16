@@ -1,6 +1,8 @@
 // SafeC Standard Library — Audio Buffer Implementation
 #pragma once
-#include "audio_buffer.h"
+#include <std/dsp/audio_buffer.h>
+
+namespace std {
 
 struct AudioBuffer audio_buf_init(unsigned long channels) {
     struct AudioBuffer ab;
@@ -129,3 +131,5 @@ void AudioBuffer::clear() {
         i = i + (unsigned long)1;
     }
 }
+
+} // namespace std

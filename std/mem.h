@@ -1,6 +1,8 @@
 // SafeC Standard Library — Memory declarations
 #pragma once
 
+namespace std {
+
 void*         alloc(unsigned long size);
 void*         alloc_zeroed(unsigned long size);
 void          dealloc(void* ptr);
@@ -40,3 +42,5 @@ void*         mem_align_ptr(void* ptr, unsigned long align);
 
 // Check if `size` bytes fit within a page (4096 bytes) from `addr`.
 int           mem_fits_page(unsigned long addr, unsigned long size);
+
+} // namespace std

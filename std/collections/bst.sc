@@ -1,9 +1,11 @@
 // SafeC Standard Library — BST implementation
-#include "bst.h"
-#include "../mem.h"
-#include "../str.h"
+#include <std/collections/bst.h>
+#include <std/mem.h>
+#include <std/str.h>
 
 // ── Built-in comparators ──────────────────────────────────────────────────────
+namespace std {
+
 int bst_cmp_int(const void* a, const void* b) {
     unsafe {
         int ia = *(int*)a;
@@ -234,3 +236,5 @@ generic<T>
 T* bst_get_t(struct BST* t, const void* key) {
     return (T*)bst_get(t, key);
 }
+
+} // namespace std

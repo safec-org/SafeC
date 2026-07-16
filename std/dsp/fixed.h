@@ -4,6 +4,8 @@
 #pragma once
 
 // Newtype so Fixed is distinct from plain int in SafeC's type system.
+namespace std {
+
 newtype Fixed = int;
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -48,3 +50,5 @@ Fixed fixed_neg(Fixed x);
 
 // Integer square root (Newton-Raphson, 4 iterations). Argument must be >= 0.
 Fixed fixed_sqrt(Fixed x);
+
+} // namespace std

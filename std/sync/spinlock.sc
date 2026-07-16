@@ -1,6 +1,8 @@
 // SafeC Standard Library — Spinlock
 #pragma once
-#include "spinlock.h"
+#include <std/sync/spinlock.h>
+
+namespace std {
 
 struct Spinlock spinlock_init() {
     struct Spinlock s;
@@ -38,3 +40,5 @@ void Spinlock::unlock() {
 int Spinlock::is_locked() const {
     return self.locked;
 }
+
+} // namespace std

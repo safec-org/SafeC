@@ -17,6 +17,8 @@
 #define result_get_ok_t(r, T)  ((T*)result_get_ok(r))
 #define result_get_err_t(r, T) ((T*)result_get_err(r))
 
+namespace std {
+
 struct Result {
     void* data;    // heap pointer to ok value or error value
     int   is_ok;   // 1 = ok, 0 = err
@@ -45,3 +47,5 @@ void* result_get_err(&stack Result r);
 
 // Construct an empty/null Result (no allocation, is_ok = 0, data = NULL).
 struct Result result_none();
+
+} // namespace std

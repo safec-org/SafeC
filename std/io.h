@@ -8,6 +8,8 @@
 #define SC_EOF       (-1)
 
 // ── Formatted output (stdout) ─────────────────────────────────────────────────
+namespace std {
+
 void print(const char* s);
 void println(const char* s);
 void print_char(int c);
@@ -74,3 +76,5 @@ void* io_tmpfile();
 // ── Flush ─────────────────────────────────────────────────────────────────────
 void flush_stdout();
 void flush_stderr();
+
+} // namespace std

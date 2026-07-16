@@ -1,6 +1,8 @@
 // SafeC Standard Library — TLSF Allocator
 #pragma once
-#include "tlsf.h"
+#include <std/alloc/tlsf.h>
+
+namespace std {
 
 extern void* malloc(unsigned long size);
 extern void  free(void* ptr);
@@ -256,3 +258,5 @@ void TlsfAllocator::destroy() {
     unsafe { free((void*)self.base); }
     self.cap = (unsigned long)0;
 }
+
+} // namespace std

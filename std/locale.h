@@ -2,6 +2,8 @@
 // SafeC Standard Library — Locale (C11 <locale.h>)
 
 // Locale category constants (POSIX values)
+namespace std {
+
 const int LC_ALL()      { return 6; }
 const int LC_COLLATE()  { return 3; }
 const int LC_CTYPE()    { return 0; }
@@ -16,3 +18,5 @@ const char* locale_set(int category, const char* name);
 
 // Query the current locale for a category without changing it.
 const char* locale_get(int category);
+
+} // namespace std

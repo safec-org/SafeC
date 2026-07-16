@@ -2,6 +2,8 @@
 // Fixed-size object pool. O(1) alloc/free via embedded free-list.
 #pragma once
 
+namespace std {
+
 struct SlabAllocator {
     &heap void    base;       // heap-backed backing buffer
     void*         free_head;  // head of embedded free-list (raw — unsafe arithmetic)
@@ -30,3 +32,5 @@ struct SlabAllocator slab_init(&heap void buffer, unsigned long obj_size, unsign
 
 // Create a heap-backed slab allocator.
 struct SlabAllocator slab_new(unsigned long obj_size, unsigned long count);
+
+} // namespace std

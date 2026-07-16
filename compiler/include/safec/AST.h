@@ -543,6 +543,7 @@ struct FunctionDecl : Decl {
     bool        isPure        = false;   // pure — no side effects
     std::string sectionName;             // section("name") — empty = default
     std::string callingConv;             // "stdcall", "cdecl", "fastcall", or "" (default)
+    std::string namespaceName;           // enclosing 'namespace X { ... }', e.g. "std"; empty = none
 
     FunctionDecl(std::string n, SourceLocation l)
         : Decl(DeclKind::Function, std::move(n), l) {}
@@ -612,6 +613,7 @@ struct GlobalVarDecl : Decl {
     bool    isThreadLocal = false;
     std::string sectionName;
     int     alignment = 0;  // align(N): 0 = default
+    std::string namespaceName;  // enclosing 'namespace X { ... }'; empty = none
 
     GlobalVarDecl(std::string n, SourceLocation l)
         : Decl(DeclKind::GlobalVar, std::move(n), l) {}

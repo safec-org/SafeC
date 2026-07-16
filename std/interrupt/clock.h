@@ -7,6 +7,8 @@
 #define CLK_SRC_HSE   1   // High-speed external oscillator
 #define CLK_SRC_PLL   2   // PLL output
 
+namespace std {
+
 struct ClockConfig {
     void*        base;      // clock control MMIO base
     int          source;    // CLK_SRC_HSI, CLK_SRC_HSE, or CLK_SRC_PLL
@@ -36,3 +38,5 @@ struct ClockConfig {
 
 // Initialize clock configuration at `base`.
 struct ClockConfig clock_init(void* base);
+
+} // namespace std

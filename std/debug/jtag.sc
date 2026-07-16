@@ -1,6 +1,6 @@
 // SafeC Standard Library — Hardware Debug Helpers Implementation
 #pragma once
-#include "jtag.h"
+#include <std/debug/jtag.h>
 
 // ── debug_break ───────────────────────────────────────────────────────────────
 // Emits a software breakpoint instruction for the current architecture.
@@ -8,6 +8,8 @@
 //   - ARM Cortex-M: trigger a DebugMon or HardFault exception (config-dependent)
 //   - x86-64: raise SIGTRAP (caught by the OS; usually terminates process without dbg)
 //   - RISC-V: trigger a breakpoint exception (handled by debug module or M-mode trap)
+
+namespace std {
 
 void debug_break() {
 #if defined(__aarch64__) || defined(__arm64__)
@@ -183,3 +185,5 @@ void itm_put32(unsigned char port, unsigned int word) {
         *stim = word;
     }
 }
+
+} // namespace std

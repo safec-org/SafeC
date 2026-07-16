@@ -5,6 +5,8 @@
 // ── NVIC — Nested Vectored Interrupt Controller ───────────────────────────────
 #define NVIC_BASE  0xE000E100UL
 
+namespace std {
+
 struct Nvic {
     void* base;   // NVIC_BASE cast to void* for MMIO access
 
@@ -86,3 +88,5 @@ void scb_init();
 #define SCB_FAULT_USAGE  (1u << 18)
 #define SCB_FAULT_BUS    (1u << 17)
 #define SCB_FAULT_MEM    (1u << 16)
+
+} // namespace std

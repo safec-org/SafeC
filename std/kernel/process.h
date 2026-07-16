@@ -8,6 +8,8 @@
 #define PROC_BLOCKED  2
 #define PROC_ZOMBIE   3
 
+namespace std {
+
 struct PCB {
     int           pid;         // process ID
     int           state;       // PROC_READY, PROC_RUNNING, etc.
@@ -33,3 +35,5 @@ struct PCB {
 
 // Initialize a PCB with the given pid, entry point, and stack.
 struct PCB pcb_init(int pid, unsigned long entry, unsigned long sp, unsigned long page_table);
+
+} // namespace std

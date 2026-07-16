@@ -1,6 +1,8 @@
 // SafeC Standard Library — Generic Slice implementation
 #pragma once
-#include "slice.h"
+#include <std/collections/slice.h>
+
+namespace std {
 
 extern void* malloc(unsigned long size);
 extern void* calloc(unsigned long n, unsigned long size);
@@ -143,3 +145,5 @@ void arr_reverse(T* ptr, unsigned long len) {
         hi = hi - (unsigned long)1;
     }
 }
+
+} // namespace std

@@ -2,6 +2,8 @@
 // SafeC Standard Library — Stack (LIFO)
 // Backed by a growing array. O(1) amortized push/pop.
 
+namespace std {
+
 struct Stack {
     void*         data;
     unsigned long top;       // number of elements
@@ -31,3 +33,5 @@ T* stack_peek_t(struct Stack* s);
 
 generic<T>
 int stack_pop_t(struct Stack* s, T* out);
+
+} // namespace std

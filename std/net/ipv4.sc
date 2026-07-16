@@ -1,6 +1,8 @@
 // SafeC Standard Library — IPv4 Implementation
 #pragma once
-#include "ipv4.h"
+#include <std/net/ipv4.h>
+
+namespace std {
 
 unsigned short ip_checksum(const unsigned char* data, unsigned long len) {
     unsigned long sum = (unsigned long)0;
@@ -88,3 +90,5 @@ unsigned long ipv4_build(&stack PacketBuf pkt, unsigned long offset,
     }
     return payload_start;
 }
+
+} // namespace std

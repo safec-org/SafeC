@@ -6,6 +6,8 @@
 
 // Open a file.  mode: "r", "w", "a", "rb", "wb", etc.
 // Returns a file handle (void*) or NULL on failure.
+namespace std {
+
 void* file_open(const char* path, const char* mode);
 
 // Close a file handle opened by file_open.  Returns 0 on success.
@@ -60,3 +62,5 @@ int  file_flush(void* f);
 // Return the size of the file in bytes, or -1 on error.
 // (Seeks to end, reads position, seeks back.)
 long long file_size(void* f);
+
+} // namespace std

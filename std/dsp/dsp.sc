@@ -1,8 +1,10 @@
 #pragma once
-#include "dsp.h"
+#include <std/dsp/dsp.h>
 
 // ── dsp_dot ──────────────────────────────────────────────────────────────────
 // Accumulate fixed-point dot product.
+namespace std {
+
 Fixed dsp_dot(&stack Fixed a, &stack Fixed b, unsigned long n) {
     Fixed acc = (Fixed)0;
     unsigned long i = 0UL;
@@ -182,3 +184,5 @@ Fixed dsp_rms(&stack Fixed a, unsigned long n) {
     Fixed mean_sq = fixed_mul(sum, inv_n);
     return fixed_sqrt(mean_sq);
 }
+
+} // namespace std

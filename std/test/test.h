@@ -18,6 +18,8 @@
 // into the currently running TestCase via a global thread-local pointer.
 
 // Assert that cond is non-zero.
+namespace std {
+
 void test_assert_true(int cond, const char* expr, const char* file, int line);
 
 // Assert that two long-long integers are equal.
@@ -88,3 +90,5 @@ struct TestSuite test_suite_init();
 // Run all tests in `suite`, print summary, then call exit(1) on any failure.
 // Useful as the last line of a test main().
 void test_run_and_exit(&stack TestSuite suite);
+
+} // namespace std

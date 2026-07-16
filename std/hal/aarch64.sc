@@ -1,8 +1,10 @@
 // SafeC Standard Library — AArch64 HAL Implementation
 #pragma once
-#include "aarch64.h"
+#include <std/hal/aarch64.h>
 
 // ── System registers ──────────────────────────────────────────────────────────
+
+namespace std {
 
 unsigned long aa64_read_mpidr() {
     unsigned long v = (unsigned long)0;
@@ -174,3 +176,5 @@ void gic_init(unsigned long dist_base, unsigned long cpu_base) {
     gic_dist.base = dist_base;
     gic_cpu.base  = cpu_base;
 }
+
+} // namespace std

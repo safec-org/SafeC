@@ -9,6 +9,8 @@
 #define X509_KEY_LEN        256   // max RSA/EC public key bytes
 
 // Validity period (Unix timestamps, 64-bit).
+namespace std {
+
 struct X509Validity {
     unsigned long long not_before;   // seconds since epoch
     unsigned long long not_after;
@@ -61,3 +63,5 @@ int x509_parse_der(const unsigned char* der, unsigned long len,
 //       this function checks only the structural chain (issuer name match).
 int x509_verify_chain(const &stack X509Cert cert,
                        const &stack X509Cert issuer_cert);
+
+} // namespace std

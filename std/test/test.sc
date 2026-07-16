@@ -1,6 +1,8 @@
 // SafeC Standard Library — Unit Testing Framework
 #pragma once
-#include "test.h"
+#include <std/test/test.h>
+
+namespace std {
 
 extern int    printf(const char* fmt, ...);
 extern int    strcmp(const char* a, const char* b);
@@ -137,3 +139,5 @@ void test_run_and_exit(&stack TestSuite suite) {
         unsafe { exit(1); }
     }
 }
+
+} // namespace std

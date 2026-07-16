@@ -13,6 +13,8 @@
 
 // ── Thread ───────────────────────────────────────────────────────────────────
 // func signature: void* func(void*) on POSIX; DWORD WINAPI func(LPVOID) on Win32.
+namespace std {
+
 int  thread_create(unsigned long long* tid, void* func, void* arg);
 int  thread_join(unsigned long long tid);
 int  thread_detach(unsigned long long tid);
@@ -46,3 +48,5 @@ int rwlock_tryrdlock(unsigned long long* rw);
 int rwlock_trywrlock(unsigned long long* rw);
 int rwlock_rdunlock(unsigned long long* rw);
 int rwlock_wrunlock(unsigned long long* rw);
+
+} // namespace std

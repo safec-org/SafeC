@@ -7,6 +7,8 @@
 #define NET_IP4_LEN       4
 
 // ── Byte-order conversions (network = big-endian) ─────────────────────────────
+namespace std {
+
 unsigned short net_htons(unsigned short v);
 unsigned short net_ntohs(unsigned short v);
 unsigned int   net_htonl(unsigned int v);
@@ -52,3 +54,5 @@ struct NetIf {
     // Transmit a packet.  Returns 0 on success.
     int  tx(&stack PacketBuf pkt);
 };
+
+} // namespace std

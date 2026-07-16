@@ -1,13 +1,15 @@
 // SafeC Standard Library — IPv4 Layer
 // Parse, build, and checksum IPv4 headers. Freestanding-safe.
 #pragma once
-#include "net_core.h"
+#include <std/net/net_core.h>
 
 #define IPV4_HDR_LEN  20    // minimum (no options)
 
 #define IP_PROTO_ICMP  1
 #define IP_PROTO_TCP   6
 #define IP_PROTO_UDP   17
+
+namespace std {
 
 struct Ipv4Hdr {
     unsigned char  ihl;       // header length in 32-bit words (usually 5)
@@ -35,3 +37,5 @@ int  ipv4_parse(&stack PacketBuf pkt, unsigned long offset,
 unsigned long ipv4_build(&stack PacketBuf pkt, unsigned long offset,
                          unsigned char proto, unsigned int src, unsigned int dst,
                          unsigned short payload_len);
+
+} // namespace std

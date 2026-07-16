@@ -66,6 +66,7 @@ enum class TK {
     KW_stdcall,       // __stdcall calling convention
     KW_cdecl,         // __cdecl calling convention
     KW_fastcall,      // __fastcall calling convention
+    KW_namespace,     // namespace std { ... } — qualified declarations
 
     // ── Operators ─────────────────────────────────────────────────────────────
     Plus, Minus, Star, Slash, Percent,

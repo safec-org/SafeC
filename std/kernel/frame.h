@@ -6,6 +6,8 @@
 // 4096 unsigned int entries = 4096 * 32 = 131072 frames = 512 MB.
 #define FRAME_BITMAP_SIZE 4096
 
+namespace std {
+
 struct FrameAllocator {
     unsigned int  bitmap[FRAME_BITMAP_SIZE];
     unsigned long total_frames;  // total number of physical frames
@@ -32,3 +34,5 @@ struct FrameAllocator {
     // Internal: count trailing zeros in a 32-bit word.
     int           ctz32_(unsigned int x) const;
 };
+
+} // namespace std

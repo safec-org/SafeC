@@ -2,6 +2,8 @@
 // SafeC Standard Library — String (mutable, heap-allocated)
 // A growable UTF-8 byte string with rich manipulation methods.
 
+namespace std {
+
 struct String {
     &heap char    data; // NUL-terminated heap buffer
     unsigned long len;  // byte length (not including NUL)
@@ -103,3 +105,5 @@ struct String string_from_n(const char* s, unsigned long n);
 struct String string_with_cap(unsigned long cap);
 struct String string_repeat(const char* s, unsigned long n);
 struct String string_join(const char* sep, &stack String parts, unsigned long count);
+
+} // namespace std

@@ -12,6 +12,8 @@
 // Or use the generic inline helpers below.
 
 #define STATIC_VEC_DECL(TypeName, ElemType, Cap)          \
+namespace std {
+
     struct TypeName {                                      \
         ElemType      data[(Cap)];                        \
         unsigned long len;                                \
@@ -108,3 +110,5 @@ static inline void* static_map_get_(unsigned long* keys, void** vals,
     static_map_get_((m)->keys, (m)->vals, (m)->used, (m)->cap, (key))
 
 #define STATIC_MAP_LEN(m) ((m)->count)
+
+} // namespace std

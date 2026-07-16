@@ -5,6 +5,8 @@
 #define BLOCK_SIZE  512   // bytes per sector (standard)
 
 // Abstract block device.  Implementors fill in read_fn/write_fn/ctx.
+namespace std {
+
 struct BlockDevice {
     unsigned long  sector_count;   // total sectors on device
     unsigned long  sector_size;    // bytes per sector (usually 512)
@@ -24,3 +26,5 @@ struct BlockDevice {
     // Is the device valid / initialised?
     int  valid() const;
 };
+
+} // namespace std

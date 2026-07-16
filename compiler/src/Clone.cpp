@@ -402,6 +402,7 @@ std::unique_ptr<FunctionDecl> cloneFunctionDecl(const FunctionDecl &fn,
     clone->isPure        = fn.isPure;
     clone->sectionName   = fn.sectionName;
     clone->callingConv   = fn.callingConv;
+    clone->namespaceName = fn.namespaceName;
     // caller clears genericParams and sets mangled name
 
     // Mutable copy of subs for pack expansion metadata

@@ -2,6 +2,8 @@
 // Hardware timer control. Freestanding-safe.
 #pragma once
 
+namespace std {
+
 struct Timer {
     void*        base;       // MMIO base address
     unsigned int prescaler;  // clock divider
@@ -27,3 +29,5 @@ struct Timer {
 
 // Initialize a hardware timer at `base` with the given prescaler.
 struct Timer timer_init(void* base, unsigned int prescaler);
+
+} // namespace std

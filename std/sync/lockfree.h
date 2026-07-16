@@ -2,6 +2,8 @@
 // Single-Producer Single-Consumer bounded queue using atomic head/tail.
 #pragma once
 
+namespace std {
+
 struct LFQueue {
     &heap void    buffer;     // heap-backed element storage
     unsigned long cap;        // capacity (must be power of 2)
@@ -40,3 +42,5 @@ int lfq_enqueue_t(&stack LFQueue q, T val);
 
 generic<T>
 int lfq_dequeue_t(&stack LFQueue q, T* out);
+
+} // namespace std

@@ -1,9 +1,11 @@
 // SafeC Standard Library — DNS Implementation
 #pragma once
-#include "dns.h"
+#include <std/net/dns.h>
 
 // Encode `name` (e.g. "example.com") as DNS labels into `buf`.
 // Returns number of bytes written.
+namespace std {
+
 static unsigned long dns_encode_name_(const char* name, unsigned char* buf) {
     unsigned long pos = (unsigned long)0;
     unsigned long label_len_pos = pos;
@@ -143,3 +145,5 @@ int dns_parse_reply(&stack PacketBuf pkt, unsigned long off,
     }
     return 0;
 }
+
+} // namespace std

@@ -1,6 +1,8 @@
 // SafeC Standard Library — String formatting implementation
 #pragma once
-#include "fmt.h"
+#include <std/fmt.h>
+
+namespace std {
 
 extern int            snprintf(char* buf, unsigned long n, const char* fmt, ...);
 extern unsigned long  strlen(const char* s);
@@ -50,3 +52,5 @@ inline int fmt_append(char* dst, unsigned long cap, const char* src) {
         return (int)(dlen + slen);
     }
 }
+
+} // namespace std

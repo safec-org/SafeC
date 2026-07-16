@@ -4,6 +4,8 @@
 
 // ── System register helpers ───────────────────────────────────────────────────
 
+namespace std {
+
 unsigned long aa64_read_mpidr();     // processor affinity / CPU ID
 unsigned long aa64_read_currentel(); // current exception level (EL0–EL3)
 unsigned long aa64_read_daif();      // interrupt mask bits
@@ -61,3 +63,5 @@ struct GicCpu {
 extern struct GicDist  gic_dist;
 extern struct GicCpu   gic_cpu;
 void gic_init(unsigned long dist_base, unsigned long cpu_base);
+
+} // namespace std

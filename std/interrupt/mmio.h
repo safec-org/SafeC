@@ -3,6 +3,8 @@
 #pragma once
 
 // ── MmioReg: single-register wrapper with methods ────────────────────────────
+namespace std {
+
 struct MmioReg {
     void* addr;  // MMIO register address
 
@@ -28,3 +30,5 @@ void         mmio_set_bits32(void* addr, unsigned int mask);
 void         mmio_clear_bits32(void* addr, unsigned int mask);
 unsigned int mmio_read_field32(void* addr, int lo, int hi);
 void         mmio_write_field32(void* addr, int lo, int hi, unsigned int val);
+
+} // namespace std

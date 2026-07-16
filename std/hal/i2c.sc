@@ -6,7 +6,9 @@
 //   base + 0x0C = address register
 //   base + 0x10 = speed register
 #pragma once
-#include "i2c.h"
+#include <std/hal/i2c.h>
+
+namespace std {
 
 struct I2cBus i2c_init(void* base, unsigned int speed) {
     struct I2cBus bus;
@@ -115,3 +117,5 @@ int I2cBus::probe(unsigned char addr) {
         return 0;
     }
 }
+
+} // namespace std

@@ -1,9 +1,11 @@
 // SafeC Standard Library — UDP Layer
 // Freestanding-safe.
 #pragma once
-#include "ipv4.h"
+#include <std/net/ipv4.h>
 
 #define UDP_HDR_LEN  8
+
+namespace std {
 
 struct UdpHdr {
     unsigned short src_port;   // host byte order
@@ -33,3 +35,5 @@ unsigned long udp_frame(&stack PacketBuf pkt,
                         unsigned int ip_src, unsigned int ip_dst,
                         unsigned short src_port, unsigned short dst_port,
                         unsigned short payload_len);
+
+} // namespace std

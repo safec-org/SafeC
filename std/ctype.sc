@@ -3,9 +3,11 @@
 // Explicit extern declarations are used because ctype.h implements these
 // as macros on many platforms (e.g., macOS), which SafeC cannot resolve.
 #pragma once
-#include "ctype.h"
+#include <std/ctype.h>
 
 // ── Explicit extern declarations for libc ctype functions ────────────────────
+namespace std {
+
 extern int isalpha(int c);
 extern int isdigit(int c);
 extern int isalnum(int c);
@@ -35,3 +37,5 @@ inline int char_is_upper(int c)  { unsafe { return isupper(c); } }
 inline int char_is_lower(int c)  { unsafe { return islower(c); } }
 inline int char_to_lower(int c)  { unsafe { return tolower(c); } }
 inline int char_to_upper(int c)  { unsafe { return toupper(c); } }
+
+} // namespace std

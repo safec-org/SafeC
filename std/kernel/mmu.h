@@ -12,11 +12,13 @@
 //   bits [63:12] = physical frame number (physical address >> 12)
 //   bits [11:0]  = flags (PAGE_PRESENT, PAGE_WRITABLE, etc.)
 #pragma once
-#include "paging.h"
-#include "frame.h"
+#include <std/kernel/paging.h>
+#include <std/kernel/frame.h>
 
 // Maximum number of L2 tables cached in one MmuContext.
 #define MMU_L2_MAX 512
+
+namespace std {
 
 struct MmuContext {
     unsigned long root;          // physical address of L1 page table (4 KiB aligned)
@@ -52,3 +54,5 @@ struct MmuContext {
 // `root` must be the physical address of a zeroed, 4 KiB-aligned L1 page table.
 // `frames` must point to a live FrameAllocator with PAGE_SIZE == 4096.
 struct MmuContext mmu_init(unsigned long root, void* frames);
+
+} // namespace std

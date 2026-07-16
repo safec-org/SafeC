@@ -1,21 +1,21 @@
 // SafeC — Comprehensive standard library test
 // Exercises stdint, stddef, stdbool, limits, float, inttypes,
 // ctype, assert, stdckdint, and the expanded io/sys/str APIs.
-// Compile: ./build/safec examples/stdlib_complete.sc --emit-llvm -o /tmp/sc.ll -I ../std
+// Compile: ./build/safec examples/stdlib_complete.sc --emit-llvm -o /tmp/sc.ll -I ..
 // Link:    clang -isysroot $(xcrun --show-sdk-path) /tmp/sc.ll -o /tmp/sc && /tmp/sc
 
-#include "stdint.h"
-#include "limits.h"
-#include "float.h"
-#include "stdbool.h"
-#include "inttypes.h"
-#include "ctype.h"
-#include "assert.h"
-#include "stdckdint.h"
-#include "io.h"
-#include "sys.h"
-#include "str.h"
-#include "mem.h"
+#include <std/stdint.h>
+#include <std/limits.h>
+#include <std/float.h>
+#include <std/stdbool.h>
+#include <std/inttypes.h>
+#include <std/ctype.h>
+#include <std/assert.h>
+#include <std/stdckdint.h>
+#include <std/io.h>
+#include <std/sys.h>
+#include <std/str.h>
+#include <std/mem.h>
 
 extern int printf(char* fmt, ...);
 

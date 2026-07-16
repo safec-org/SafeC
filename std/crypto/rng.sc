@@ -1,6 +1,8 @@
 // SafeC Standard Library — Cryptographic RNG (ChaCha20-based)
 #pragma once
-#include "rng.h"
+#include <std/crypto/rng.h>
+
+namespace std {
 
 extern void* memcpy(void* d, const void* s, unsigned long n);
 // Hosted-mode seeding from /dev/urandom. Declared here at file scope: this
@@ -204,3 +206,5 @@ unsigned long RngCtx::rand_range(unsigned long bound) {
     }
     return (unsigned long)0;
 }
+
+} // namespace std

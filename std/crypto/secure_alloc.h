@@ -3,7 +3,9 @@
 // Uses a slab allocator so object sizes are fixed — no fragmentation metadata
 // can leak size information.
 #pragma once
-#include "../alloc/slab.h"
+#include <std/alloc/slab.h>
+
+namespace std {
 
 struct SecureAllocator {
     struct SlabAllocator slab;   // underlying slab
@@ -24,3 +26,5 @@ struct SecureAllocator {
 // Initialise a secure allocator for objects of `obj_size` bytes, `count` slots.
 struct SecureAllocator secure_alloc_new(unsigned long obj_size,
                                         unsigned long count);
+
+} // namespace std

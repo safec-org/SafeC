@@ -3,6 +3,8 @@
 // Each allocation is preceded by a PoolBlock header.
 #pragma once
 
+namespace std {
+
 struct PoolBlock {
     unsigned long size;       // usable size (excluding header)
     int           is_free;    // 1 = free, 0 = allocated
@@ -35,3 +37,5 @@ struct PoolAllocator pool_init(&heap void buffer, unsigned long cap);
 
 // Create a heap-backed pool allocator.
 struct PoolAllocator pool_new(unsigned long cap);
+
+} // namespace std

@@ -1,6 +1,8 @@
 // SafeC Standard Library — Secure Allocator
 #pragma once
-#include "secure_alloc.h"
+#include <std/crypto/secure_alloc.h>
+
+namespace std {
 
 extern void* memset(void* p, int v, unsigned long n);
 
@@ -36,3 +38,5 @@ void SecureAllocator::destroy() {
     }
     self.slab.destroy();
 }
+
+} // namespace std

@@ -3,6 +3,8 @@
 // Read and set floating-point exception flags and rounding mode.
 
 // Rounding modes (C99 FE_* constants, platform values)
+namespace std {
+
 const int FE_TONEAREST()  { return 0; }
 const int FE_DOWNWARD()   { return 1024; }
 const int FE_UPWARD()     { return 2048; }
@@ -36,3 +38,5 @@ int fenv_set_round(int mode);
 int fenv_save(void* env);
 int fenv_restore(const void* env);
 int fenv_save_clear(void* env); // save + clear all exceptions
+
+} // namespace std

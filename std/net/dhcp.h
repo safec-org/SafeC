@@ -1,7 +1,7 @@
 // SafeC Standard Library — DHCP Client (Discover/Offer/Request/Ack)
 // Freestanding-safe; implements the 4-step DORA handshake.
 #pragma once
-#include "udp.h"
+#include <std/net/udp.h>
 
 #define DHCP_SERVER_PORT  67
 #define DHCP_CLIENT_PORT  68
@@ -22,6 +22,8 @@
 #define DHCP_STATE_SELECTING  1
 #define DHCP_STATE_REQUESTING 2
 #define DHCP_STATE_BOUND      3
+
+namespace std {
 
 struct DhcpLease {
     unsigned int  your_ip;       // offered/assigned IPv4 (network order)
@@ -54,3 +56,5 @@ struct DhcpClient {
     // Is the client bound (has a valid lease)?
     int  is_bound() const;
 };
+
+} // namespace std

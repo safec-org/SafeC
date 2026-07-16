@@ -1,6 +1,8 @@
 // SafeC Standard Library — Block Device Implementation
 #pragma once
-#include "block.h"
+#include <std/fs/block.h>
+
+namespace std {
 
 int BlockDevice::read(unsigned long lba, &stack unsigned char buf, unsigned long count) {
     if (self.read_fn == (void*)0) { return -1; }
@@ -26,3 +28,5 @@ int BlockDevice::valid() const {
     if (self.read_fn != (void*)0 && self.sector_count > (unsigned long)0) { return 1; }
     return 0;
 }
+
+} // namespace std

@@ -1,8 +1,10 @@
 // SafeC Standard Library — UDP Implementation
 #pragma once
-#include "udp.h"
-#include "ethernet.h"
-#include "net_core.h"
+#include <std/net/udp.h>
+#include <std/net/ethernet.h>
+#include <std/net/net_core.h>
+
+namespace std {
 
 int udp_parse(&stack PacketBuf pkt, unsigned long offset,
               &stack UdpHdr hdr_out) {
@@ -63,3 +65,5 @@ unsigned long udp_frame(&stack PacketBuf pkt,
     unsigned long data_off = udp_build(pkt, udp_off, src_port, dst_port, payload_len);
     return data_off;
 }
+
+} // namespace std

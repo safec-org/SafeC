@@ -1,7 +1,9 @@
 // SafeC Standard Library — MMU Context
 #pragma once
-#include "mmu.h"
-#include "frame.h"
+#include <std/kernel/mmu.h>
+#include <std/kernel/frame.h>
+
+namespace std {
 
 extern void* memset(void* ptr, int val, unsigned long n);
 
@@ -155,3 +157,5 @@ void MmuContext::activate() {
 #endif
     }
 }
+
+} // namespace std

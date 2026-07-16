@@ -1,9 +1,11 @@
 // SafeC Standard Library — IPv6 Layer Implementation
 #pragma once
-#include "ipv6.h"
-#include "ethernet.h"
+#include <std/net/ipv6.h>
+#include <std/net/ethernet.h>
 
 // ── ipv6_addr_eq ──────────────────────────────────────────────────────────────
+
+namespace std {
 
 int ipv6_addr_eq(const struct Ipv6Addr* a, const struct Ipv6Addr* b) {
     unsafe {
@@ -182,3 +184,5 @@ unsigned long ipv6_frame(&stack PacketBuf pkt,
                       next_hdr, (unsigned char)64,
                       src, dst, payload_len);
 }
+
+} // namespace std

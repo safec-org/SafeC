@@ -316,6 +316,29 @@ void Sema::collectFunction(FunctionDecl &fn) {
         methodRegistry_[fn.methodOwner + "::" + originalName] = &fn;
     }
 
+    // Namespace support: 'namespace std { void foo(); }' → mangled symbol
+    // 'std_foo', callable as 'std::foo(...)'. Mirrors the method-mangling
+    // scheme just above (qualified name for lookup, mangled name for the
+    // actual emitted/linked symbol) so CodeGen needs no namespace-specific
+    // logic — it already emits/looks up functions by FunctionDecl::name.
+    //
+    // Excluded: 'extern' declarations (an extern decl's whole point is to
+    // bind to a pre-existing external symbol by its exact C name — e.g.
+    // 'extern void* memcpy(...)' inside 'namespace std { ... }' must stay
+    // plain 'memcpy', not 'std_memcpy', or linkage against the real libc
+    // symbol breaks) and methods (dispatched entirely through the separate
+    // obj.method() / methodOwner mechanism above; double-mangling their
+    // name would be pointless since nothing calls them by qualified name).
+    if (!fn.namespaceName.empty() && !fn.isExtern && !fn.isMethod) {
+        std::string originalName = fn.name;
+        std::string nsPrefix = fn.namespaceName;
+        size_t p;
+        while ((p = nsPrefix.find("::")) != std::string::npos) nsPrefix.replace(p, 2, "_");
+        fn.name = nsPrefix + "_" + fn.name;
+        namespaceFnRegistry_[fn.namespaceName + "::" + originalName] = &fn;
+        namespaceNames_.insert(fn.namespaceName);
+    }
+
     std::vector<TypePtr> paramTys;
     for (auto &p : fn.params) {
         p.type = resolveGenericNames(resolveType(p.type), fn.genericParams);
@@ -495,6 +518,20 @@ void Sema::collectRegion(RegionDecl &rd) {
 }
 
 void Sema::collectGlobalVar(GlobalVarDecl &gv) {
+    // Namespace support — see the matching block in collectFunction for the
+    // mangling scheme ("ns::name" lookup key → mangled "ns_name" symbol).
+    // 'extern' globals are excluded for the same linkage-preserving reason
+    // extern functions are (see collectFunction).
+    if (!gv.namespaceName.empty() && !gv.isExtern) {
+        std::string originalName = gv.name;
+        std::string nsPrefix = gv.namespaceName;
+        size_t p;
+        while ((p = nsPrefix.find("::")) != std::string::npos) nsPrefix.replace(p, 2, "_");
+        gv.name = nsPrefix + "_" + gv.name;
+        namespaceVarRegistry_[gv.namespaceName + "::" + originalName] = &gv;
+        namespaceNames_.insert(gv.namespaceName);
+    }
+
     gv.type = resolveType(gv.type);
 
     // Without a backing VarDecl, checkIdent never sets isLValue for this
@@ -1080,7 +1117,55 @@ TypePtr Sema::checkStringLit(StringLitExpr &e) {
 }
 
 TypePtr Sema::checkIdent(IdentExpr &e) {
+    // Namespace-qualified reference (e.g. 'std::foo', parsed as one IdentExpr
+    // whose name is the literal "std::foo" — see Parser::parsePrimaryExpr).
+    // Resolve against the namespace registries and rewrite e.name to the
+    // mangled symbol (e.g. "std_foo") so every later stage — the normal
+    // Scope lookup below, and CodeGen's genIdent, which looks functions/
+    // globals up by e.name — needs no namespace-specific handling at all.
+    if (e.name.find("::") != std::string::npos) {
+        auto fit = namespaceFnRegistry_.find(e.name);
+        if (fit != namespaceFnRegistry_.end()) {
+            e.name = fit->second->name;
+            e.resolvedFn = fit->second;
+            auto *sym = lookup(e.name);
+            return sym && sym->type ? sym->type : makeError();
+        }
+        auto vit = namespaceVarRegistry_.find(e.name);
+        if (vit != namespaceVarRegistry_.end()) {
+            e.name = vit->second->name;
+        } else {
+            diag_.error(e.loc, "use of undeclared namespace member '" + e.name + "'");
+            return makeError();
+        }
+    }
     auto *sym = lookup(e.name);
+    if (!sym && e.name.find("::") == std::string::npos) {
+        // Unqualified fallback: code lexically inside 'namespace std { ... }'
+        // calls its own siblings unqualified ('chacha_qr_(...)', not
+        // 'std::chacha_qr_(...)') — migrating the *declarations* into the
+        // namespace didn't rewrite every internal call site to match, so
+        // a plain name that fails normal lookup gets one more try against
+        // each known namespace before being declared undeclared. Ambiguous
+        // only if the same bare name were namespaced under two different
+        // namespaces, which doesn't happen for the single "std" namespace.
+        for (auto &ns : namespaceNames_) {
+            std::string qualified = ns + "::" + e.name;
+            auto fit = namespaceFnRegistry_.find(qualified);
+            if (fit != namespaceFnRegistry_.end()) {
+                e.name = fit->second->name;
+                e.resolvedFn = fit->second;
+                sym = lookup(e.name);
+                break;
+            }
+            auto vit = namespaceVarRegistry_.find(qualified);
+            if (vit != namespaceVarRegistry_.end()) {
+                e.name = vit->second->name;
+                sym = lookup(e.name);
+                break;
+            }
+        }
+    }
     if (!sym) {
         diag_.error(e.loc, "use of undeclared identifier '" + e.name + "'");
         return makeError();

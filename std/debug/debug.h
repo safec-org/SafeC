@@ -2,6 +2,6 @@
 // Include this file to pull in all debug module declarations.
 #pragma once
 
-#include "perf.h"
-#include "coverage.h"
-#include "jtag.h"
+#include <std/debug/perf.h>
+#include <std/debug/coverage.h>
+#include <std/debug/jtag.h>

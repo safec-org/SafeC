@@ -1,11 +1,13 @@
 // SafeC Standard Library — FAT32 Read-Only Driver
 // Freestanding-safe. Uses a BlockDevice for sector reads.
 #pragma once
-#include "block.h"
-#include "vfs.h"
+#include <std/fs/block.h>
+#include <std/fs/vfs.h>
 
 // Maximum path components parsed
 #define FAT_MAX_DEPTH  8
+
+namespace std {
 
 struct FatBpb {
     unsigned char  oem_name[8];
@@ -52,3 +54,5 @@ int fat_init(&stack FatCtx ctx, &stack BlockDevice dev, unsigned long lba);
 
 // Return VfsOps for the FAT32 driver (ctx must be a FatCtx*).
 struct VfsOps fat_ops();
+
+} // namespace std

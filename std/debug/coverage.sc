@@ -1,6 +1,8 @@
 // SafeC Standard Library — Code Coverage Tracker Implementation
 #pragma once
-#include "coverage.h"
+#include <std/debug/coverage.h>
+
+namespace std {
 
 extern int printf(const char* fmt, ...);
 
@@ -113,3 +115,5 @@ void Coverage::reset() {
         i = i + 1;
     }
 }
+
+} // namespace std

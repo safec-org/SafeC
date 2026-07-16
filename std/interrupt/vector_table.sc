@@ -1,6 +1,8 @@
 // SafeC Standard Library — Vector Table Management Implementation
 #pragma once
-#include "vector_table.h"
+#include <std/interrupt/vector_table.h>
+
+namespace std {
 
 static IrqHandler vtable_default_ = (IrqHandler)0;
 
@@ -78,3 +80,5 @@ void vtable_activate() {
 #endif
     }
 }
+
+} // namespace std

@@ -1,8 +1,10 @@
 // SafeC Standard Library — MMIO Helpers
 #pragma once
-#include "mmio.h"
+#include <std/interrupt/mmio.h>
 
 // ── MmioReg constructor ───────────────────────────────────────────────────────
+namespace std {
+
 struct MmioReg mmio_reg(void* addr) {
     struct MmioReg r;
     r.addr = addr;
@@ -116,3 +118,5 @@ void mmio_write_field32(void* addr, int lo, int hi, unsigned int val) {
         volatile_store((unsigned int*)addr, reg);
     }
 }
+
+} // namespace std

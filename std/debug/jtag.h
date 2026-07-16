@@ -7,6 +7,8 @@
 // ── Software breakpoint ───────────────────────────────────────────────────────
 // Inserts a software breakpoint instruction (BKPT on ARM, INT3 on x86-64).
 // No-op if no debugger is connected (on most targets; may fault on some).
+namespace std {
+
 void  debug_break();
 
 // ── Semihosting output ────────────────────────────────────────────────────────
@@ -33,3 +35,5 @@ void  itm_enable_port(unsigned char port);
 
 // ── Assert with debug break ───────────────────────────────────────────────────
 #define DBG_ASSERT(cond)  do { if (!(cond)) { debug_break(); } } while(0)
+
+} // namespace std

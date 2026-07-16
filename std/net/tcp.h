@@ -1,7 +1,7 @@
 // SafeC Standard Library — TCP Layer (minimal state machine)
 // Freestanding-safe. No dynamic allocation — caller supplies fixed buffers.
 #pragma once
-#include "ipv4.h"
+#include <std/net/ipv4.h>
 
 #define TCP_HDR_MIN_LEN   20
 
@@ -25,6 +25,8 @@
 #define TCP_CLOSING      8
 #define TCP_LAST_ACK     9
 #define TCP_TIME_WAIT    10
+
+namespace std {
 
 struct TcpHdr {
     unsigned short src_port;
@@ -90,3 +92,5 @@ int tcp_parse(&stack PacketBuf pkt, unsigned long offset,
 // Compute TCP checksum (pseudo-header + segment).
 unsigned short tcp_checksum(unsigned int src_ip, unsigned int dst_ip,
                              const unsigned char* tcp_seg, unsigned long seg_len);
+
+} // namespace std

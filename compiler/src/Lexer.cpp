@@ -95,6 +95,8 @@ TK Lexer::keywordKind(const std::string &w) {
         {"__stdcall",     TK::KW_stdcall},
         {"__cdecl",       TK::KW_cdecl},
         {"__fastcall",    TK::KW_fastcall},
+        // Namespaces
+        {"namespace",     TK::KW_namespace},
         // "align" recognized contextually by parser (not a keyword)
     };
     auto it = kw.find(w);
@@ -446,6 +448,7 @@ const char *Token::kindName() const {
     case TK::FatArrow:     return "'=>'";
     case TK::KW_must_use:  return "'must_use'";
     case TK::KW_fn:        return "'fn'";
+    case TK::KW_namespace: return "'namespace'";
     case TK::Eof:          return "end of file";
     default:               return "<token>";
     }

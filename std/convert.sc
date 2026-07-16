@@ -1,12 +1,14 @@
 // SafeC Standard Library — Type conversions implementation
 #pragma once
-#include "convert.h"
+#include <std/convert.h>
 
 // ── Explicit extern declarations for libc functions ───────────────────────────
 // '#include <stdlib.h>' etc. aren't usable here: this compiler's preprocessor
 // doesn't parse the system headers' macro-heavy declarations, so nothing was
 // ever actually declared. Declare the exact symbols used below instead, same
 // as mem.sc/str.sc/math.sc do for their libc dependencies.
+namespace std {
+
 extern long long      strtoll(const char* s, char** endptr, int base);
 extern unsigned long long strtoull(const char* s, char** endptr, int base);
 extern double          strtod(const char* s, char** endptr);
@@ -114,3 +116,5 @@ inline int str_is_float(const char* s) {
     unsafe { str_to_float(s, (int*)&ok); }
     return ok;
 }
+
+} // namespace std

@@ -7,6 +7,8 @@
 #define BENCH_MAX      64
 #define BENCH_NAME_MAX 64
 
+namespace std {
+
 struct BenchCase {
     char          name[BENCH_NAME_MAX];
     void*         func;           // void (*func)(void* arg)
@@ -31,3 +33,5 @@ struct BenchSuite {
 };
 
 struct BenchSuite bench_suite_init();
+
+} // namespace std

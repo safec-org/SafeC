@@ -2,6 +2,8 @@
 // Hardware watchdog feed/enable. Freestanding-safe.
 #pragma once
 
+namespace std {
+
 struct Watchdog {
     void*        base;     // MMIO base address
     unsigned int timeout;  // timeout period (hardware-specific units)
@@ -18,3 +20,5 @@ struct Watchdog {
 
 // Initialize watchdog at `base` with the given timeout period.
 struct Watchdog watchdog_init(void* base, unsigned int timeout);
+
+} // namespace std

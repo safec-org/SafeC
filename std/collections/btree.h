@@ -8,6 +8,8 @@
 #define BTREE_MAX_KEYS   7      // 2*ORDER - 1
 #define BTREE_MAX_CHILD  8      // 2*ORDER
 
+namespace std {
+
 struct BTreeNode {
     unsigned long keys[BTREE_MAX_KEYS];
     void*         vals[BTREE_MAX_KEYS];
@@ -49,3 +51,5 @@ struct BTree {
 // Typed generic wrappers (value stored as pointer; caller manages lifetime).
 generic<T> int  btree_insert(&stack BTree t, unsigned long key, T* val);
 generic<T> T*   btree_get(const &stack BTree t, unsigned long key);
+
+} // namespace std

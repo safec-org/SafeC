@@ -1,5 +1,7 @@
 #pragma once
-#include "log.h"
+#include <std/log.h>
+
+namespace std {
 
 extern int fprintf(void* stream, const char* fmt, ...);
 extern void* stderr;
@@ -51,3 +53,5 @@ void log_write(int level, const char* tag, const char* msg,
     }
 #endif
 }
+
+} // namespace std

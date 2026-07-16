@@ -1,6 +1,8 @@
 // SafeC Standard Library — Stack implementation
-#include "stack.h"
-#include "../mem.h"
+#include <std/collections/stack.h>
+#include <std/mem.h>
+
+namespace std {
 
 struct Stack stack_new(unsigned long elem_size) {
     struct Stack s;
@@ -83,3 +85,5 @@ generic<T>
 inline int stack_pop_t(struct Stack* s, T* out) {
     return stack_pop(s, (void*)out);
 }
+
+} // namespace std

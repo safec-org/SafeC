@@ -3,10 +3,12 @@
 // Specialized version of RingBuffer for DSP use — operates in frames.
 // Freestanding-safe.
 #pragma once
-#include "fixed.h"
+#include <std/dsp/fixed.h>
 
 #define AUDIO_MAX_CHANNELS  8
 #define AUDIO_BUF_FRAMES    512   // default frame capacity (override before include)
+
+namespace std {
 
 struct AudioBuffer {
     Fixed         data[AUDIO_BUF_FRAMES * AUDIO_MAX_CHANNELS];
@@ -43,3 +45,5 @@ struct AudioBuffer {
 
 // Initialise with given channel count (capacity = AUDIO_BUF_FRAMES).
 struct AudioBuffer audio_buf_init(unsigned long channels);
+
+} // namespace std

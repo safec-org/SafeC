@@ -6,6 +6,8 @@
 #define DMA_ALIGN  64   // typical DMA burst-alignment (cache line)
 
 // A DMA-coherent buffer descriptor.
+namespace std {
+
 struct DmaBuffer {
     void*         virt;       // virtual address (CPU view)
     unsigned long phys;       // physical address (device view, 0 if identity-mapped)
@@ -66,3 +68,5 @@ struct DmaSgList {
     void  clear();
     unsigned long total_len() const;
 };
+
+} // namespace std

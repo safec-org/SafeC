@@ -9,6 +9,8 @@
 
 #define TASK_MAX 64
 
+namespace std {
+
 struct Task {
     void*  func;            // task function: int(*)(void* arg, int resume_point)
     void*  arg;           // user argument
@@ -40,3 +42,5 @@ struct TaskScheduler {
 
 // Initialize a task scheduler.
 struct TaskScheduler task_sched_init();
+
+} // namespace std

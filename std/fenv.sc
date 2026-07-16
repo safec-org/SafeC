@@ -1,7 +1,9 @@
 // SafeC Standard Library — floating-point environment implementation
-#include "fenv.h"
+#include <std/fenv.h>
 
 // fenv.h C functions (all take/return fenv_t / fexcept_t which fit in int/long)
+namespace std {
+
 extern int feclearexcept(int excepts);
 extern int fetestexcept(int excepts);
 extern int feraiseexcept(int excepts);
@@ -19,3 +21,5 @@ int fenv_set_round(int mode)      { unsafe { return fesetround(mode); } }
 int fenv_save(void* env)          { unsafe { return fegetenv(env); } }
 int fenv_restore(const void* env) { unsafe { return fesetenv(env); } }
 int fenv_save_clear(void* env)    { unsafe { return feholdexcept(env); } }
+
+} // namespace std

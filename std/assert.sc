@@ -2,10 +2,12 @@
 // runtime_assert() — checked condition with diagnostic message.
 // assert_true()    — checked condition, minimal overhead.
 #pragma once
-#include "assert.h"
-#include "io.h"
+#include <std/assert.h>
+#include <std/io.h>
 
 // ── Explicit extern declarations ─────────────────────────────────────────────
+namespace std {
+
 extern int   fputs(const char* s, void* stream);
 extern int   fputc(int c, void* stream);
 extern int   fflush(void* stream);
@@ -57,3 +59,5 @@ void assert_true(int cond) {
         assert_fail_(__FILE__, __LINE__, (const char*)0);
     }
 }
+
+} // namespace std

@@ -4,6 +4,8 @@
 
 #define SYSCALL_MAX 256
 
+namespace std {
+
 struct SyscallTable {
     void* handlers[SYSCALL_MAX];  // func: long long(*)(long long, long long, long long)
     int   count;                  // number of registered syscalls
@@ -25,3 +27,5 @@ struct SyscallTable {
 
 // Initialize syscall table (all entries NULL).
 struct SyscallTable syscall_init();
+
+} // namespace std

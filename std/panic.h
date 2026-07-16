@@ -4,6 +4,8 @@
 #pragma once
 
 // Panic handler function type: fn(message, file, line) → noreturn
+namespace std {
+
 typedef fn void(const char* msg, const char* file, int line) PanicHandler;
 
 // Install a custom panic handler. Pass NULL to reset to default.
@@ -18,3 +20,5 @@ void panic_at(const char* msg, const char* file, int line);
 
 // Assert that condition is true; panics with expression string if false.
 #define PANIC_ASSERT(cond)  do { if (!(cond)) { PANIC(#cond); } } while(0)
+
+} // namespace std

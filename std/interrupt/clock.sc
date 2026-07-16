@@ -5,7 +5,9 @@
 //   base + 0x08 = clock config register (AHB/APB prescalers)
 //   base + 0x0C = status register (PLL ready, clock ready)
 #pragma once
-#include "clock.h"
+#include <std/interrupt/clock.h>
+
+namespace std {
 
 struct ClockConfig clock_init(void* base) {
     struct ClockConfig c;
@@ -106,3 +108,5 @@ void ClockConfig::set_apb2_div(unsigned int div) {
 unsigned int ClockConfig::get_freq() const {
     return self.sys_freq / self.ahb_div;
 }
+
+} // namespace std

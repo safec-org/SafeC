@@ -1,12 +1,14 @@
 // SafeC Standard Library — ARP (Address Resolution Protocol)
 // Freestanding-safe; uses a fixed-size table.
 #pragma once
-#include "net_core.h"
+#include <std/net/net_core.h>
 
 #define ARP_TABLE_SIZE  16   // max cached entries
 
 #define ARP_OP_REQUEST  1
 #define ARP_OP_REPLY    2
+
+namespace std {
 
 struct ArpEntry {
     unsigned int  ip4;                  // IPv4 in network byte order (0 = empty)
@@ -42,3 +44,5 @@ int  arp_parse_packet(&stack PacketBuf pkt, unsigned long offset,
                       &stack unsigned short op,
                       unsigned char sha[NET_MAC_LEN], &stack unsigned int spa,
                       unsigned char tha[NET_MAC_LEN], &stack unsigned int tpa);
+
+} // namespace std

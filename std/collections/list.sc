@@ -1,6 +1,8 @@
 // SafeC Standard Library — List (doubly linked list) implementation
-#include "list.h"
-#include "../mem.h"
+#include <std/collections/list.h>
+#include <std/mem.h>
+
+namespace std {
 
 struct List list_new(unsigned long elem_size) {
     struct List l;
@@ -182,3 +184,5 @@ generic<T>
 T* list_back_t(struct List* l) {
     return (T*)list_back(l);
 }
+
+} // namespace std

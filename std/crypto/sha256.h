@@ -6,6 +6,8 @@
 #define SHA224_DIGEST_SIZE  28   // bytes
 #define SHA256_BLOCK_SIZE   64   // bytes
 
+namespace std {
+
 struct Sha256Ctx {
     unsigned int  h[8];          // current hash state
     unsigned char buf[SHA256_BLOCK_SIZE]; // partial block buffer
@@ -30,3 +32,5 @@ struct Sha256Ctx sha224_init();
 // Convenience: hash `len` bytes and write 32-byte digest.
 void sha256(const &stack unsigned char data, unsigned long len,
             &stack unsigned char digest);
+
+} // namespace std

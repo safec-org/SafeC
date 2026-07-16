@@ -6,6 +6,8 @@
 
 // ── Type-erased fat pointer ────────────────────────────────────────────────────
 
+namespace std {
+
 struct Slice {
     void*         ptr;       // pointer to first element (may point into any region)
     unsigned long len;       // number of elements
@@ -54,3 +56,5 @@ T arr_max(T* ptr, unsigned long len);
 
 generic<T>
 void arr_reverse(T* ptr, unsigned long len);
+
+} // namespace std

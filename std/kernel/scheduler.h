@@ -3,9 +3,11 @@
 // Freestanding-safe.
 #pragma once
 
-#include "process.h"
+#include <std/kernel/process.h>
 
 #define SCHED_MAX_PROCS 256
+
+namespace std {
 
 struct Scheduler {
     struct PCB    procs[SCHED_MAX_PROCS];
@@ -37,3 +39,5 @@ struct Scheduler {
 
 // Initialize the scheduler.
 struct Scheduler sched_init();
+
+} // namespace std

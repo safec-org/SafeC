@@ -3,6 +3,8 @@
 // Access the thread-local errno value and error descriptions.
 
 // Read the current thread-local errno value.
+namespace std {
+
 int  errno_get();
 // Set errno explicitly (rarely needed).
 void errno_set(int code);
@@ -27,3 +29,5 @@ const int ERRNO_ERANGE() { return 34; }
 const int ERRNO_EAGAIN() { return 11; }
 const int ERRNO_EWOULDBLOCK() { return 11; }
 const int ERRNO_ETIMEDOUT()   { return 110; }
+
+} // namespace std

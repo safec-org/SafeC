@@ -6,8 +6,8 @@
 // and AEAD encryption/decryption stubs.
 // Freestanding-safe.
 #pragma once
-#include "aes.h"
-#include "sha256.h"
+#include <std/crypto/aes.h>
+#include <std/crypto/sha256.h>
 
 // TLS content types
 #define TLS_CHANGE_CIPHER_SPEC  20
@@ -23,6 +23,8 @@
 #define TLS_ALERT_DECODE_ERROR   50
 
 // TLS record header (5 bytes on the wire)
+namespace std {
+
 struct TlsRecord {
     unsigned char  content_type;
     unsigned char  legacy_version_major;  // 0x03
@@ -95,3 +97,5 @@ struct TlsSession {
 
 // Initialise a TLS session (zero keys, seq=0, handshake_done=0).
 struct TlsSession tls_session_init();
+
+} // namespace std

@@ -1,7 +1,9 @@
 // SafeC Standard Library — ext2 Read-Only Filesystem Driver Implementation
 #pragma once
-#include "ext.h"
-#include "block.h"
+#include <std/fs/ext.h>
+#include <std/fs/block.h>
+
+namespace std {
 
 extern void* memset(void* p, int v, unsigned long n);
 extern void* memcpy(void* d, const void* s, unsigned long n);
@@ -439,3 +441,5 @@ struct VfsOps ext2_ops() {
     }
     return ops;
 }
+
+} // namespace std

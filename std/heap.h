@@ -11,6 +11,8 @@
 
 // Initialize the global heap.  Must be called once before any heap_alloc().
 // In hosted mode this is a no-op.
+namespace std {
+
 void          heap_init();
 
 // Allocate `size` bytes from the global heap.  Returns NULL on failure.
@@ -26,3 +28,5 @@ void          heap_free(&heap void ptr);
 // Return total heap capacity in bytes.
 // In hosted mode returns 0 (unbounded).
 unsigned long heap_capacity();
+
+} // namespace std

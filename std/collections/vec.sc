@@ -1,8 +1,10 @@
 // SafeC Standard Library — Vec implementation
-#include "vec.h"
-#include "../mem.h"
+#include <std/collections/vec.h>
+#include <std/mem.h>
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
+namespace std {
+
 struct Vec vec_new(unsigned long elem_size) {
     struct Vec v;
     unsafe { v.data = (&heap void)0; }
@@ -288,3 +290,5 @@ struct Vec vec_from_arr(T* arr, unsigned long len) {
     v.extend((const void*)arr, len);
     return v;
 }
+
+} // namespace std

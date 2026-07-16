@@ -5,6 +5,8 @@
 #define WHEEL_SLOTS   256    // power-of-two number of buckets
 #define WHEEL_TIMERS  64     // max timers (indices 0..WHEEL_TIMERS-1)
 
+namespace std {
+
 struct WheelTimer {
     unsigned long expires;   // absolute tick when the timer fires
     void*         callback;  // function pointer: void(*)(void* ctx)
@@ -45,3 +47,5 @@ struct TimerWheel {
 
 // Initialise a TimerWheel to a clean state (all slots free, tick = 0).
 void timer_wheel_init(&stack TimerWheel tw);
+
+} // namespace std

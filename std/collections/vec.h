@@ -2,6 +2,8 @@
 // SafeC Standard Library — Vec (dynamic array)
 // Type-erased dynamic array. Use generic<T> wrappers for typed access.
 
+namespace std {
+
 struct Vec {
     &heap void    data;      // heap-backed element buffer
     unsigned long len;       // current element count
@@ -62,3 +64,5 @@ int vec_pop_t(&stack Vec v, T* out);
 
 generic<T>
 struct Vec vec_from_arr(T* arr, unsigned long len);
+
+} // namespace std

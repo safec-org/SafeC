@@ -1,6 +1,8 @@
 // SafeC Standard Library — tmpfs Implementation
 #pragma once
-#include "tmpfs.h"
+#include <std/fs/tmpfs.h>
+
+namespace std {
 
 extern void* memset(void* p, int v, unsigned long n);
 extern void* memcpy(void* d, const void* s, unsigned long n);
@@ -286,3 +288,5 @@ struct VfsOps tmpfs_ops() {
     }
     return ops;
 }
+
+} // namespace std

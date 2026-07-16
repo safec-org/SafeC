@@ -4,6 +4,8 @@
 
 // Opaque time value: seconds since Unix epoch (1970-01-01 00:00:00 UTC).
 // Returned by time_now().
+namespace std {
+
 long long time_now();
 
 // Convert a Unix timestamp to a broken-down UTC time.
@@ -54,3 +56,5 @@ int time_days_in_month(int month, int year);
 
 // Return 1 if year is a leap year, 0 otherwise.
 int time_is_leap(int year);
+
+} // namespace std

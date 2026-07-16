@@ -11,6 +11,8 @@
 #define GPIO_PULL_UP   1
 #define GPIO_PULL_DOWN 2
 
+namespace std {
+
 struct GpioPin {
     void*        base;       // MMIO base address of GPIO port
     unsigned int pin_mask;   // bitmask for this pin (1 << pin_number)
@@ -34,3 +36,5 @@ struct GpioPin {
 
 // Initialize a GPIO pin. `base` = MMIO port base, `pin` = pin number (0-31).
 struct GpioPin gpio_init(void* base, int pin, int direction);
+
+} // namespace std

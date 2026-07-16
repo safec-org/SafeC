@@ -6,6 +6,8 @@
 
 #define RING_DEFAULT_CAP  4096   // bytes; override before including if needed
 
+namespace std {
+
 struct RingBuffer {
     &static unsigned char buf;   // backing store (set by ring_init)
     unsigned long     cap;    // capacity in bytes (must be power of two)
@@ -50,3 +52,5 @@ struct RingBuffer ring_init(&static unsigned char buf, unsigned long cap);
 #define RING_STATIC(name, N)                          \
     static unsigned char name##_storage_[N];          \
     static struct RingBuffer name = { name##_storage_, N, N-1, 0, 0 }
+
+} // namespace std

@@ -1,6 +1,8 @@
 // SafeC Standard Library — Ring Buffer Implementation
 #pragma once
-#include "ringbuffer.h"
+#include <std/collections/ringbuffer.h>
+
+namespace std {
 
 struct RingBuffer ring_init(&static unsigned char buf, unsigned long cap) {
     struct RingBuffer rb;
@@ -88,3 +90,5 @@ inline void RingBuffer::clear() {
     self.head = (unsigned long)0;
     self.tail = (unsigned long)0;
 }
+
+} // namespace std

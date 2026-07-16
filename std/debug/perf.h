@@ -3,6 +3,8 @@
 // Freestanding-safe.
 #pragma once
 
+namespace std {
+
 struct PerfCounter {
     unsigned long long start_val;
     unsigned long long end_val;
@@ -32,3 +34,5 @@ unsigned long long perf_read_ns();
 
 #define PERF_BEGIN(ctr)  do { (ctr).start(); } while(0)
 #define PERF_END(ctr)    do { (ctr).stop();  } while(0)
+
+} // namespace std

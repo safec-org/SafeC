@@ -2,8 +2,8 @@
 // Implements read-only access to ext2 (and compatible ext3/ext4) volumes.
 // Freestanding-safe.
 #pragma once
-#include "block.h"
-#include "vfs.h"
+#include <std/fs/block.h>
+#include <std/fs/vfs.h>
 
 // ext2 constants
 #define EXT2_SUPER_MAGIC   0xEF53
@@ -15,6 +15,8 @@
 #define EXT2_S_IFDIR  0x4000
 
 // Superblock (relevant fields only, 1024-byte block at offset 1024).
+namespace std {
+
 struct Ext2Super {
     unsigned int  inodes_count;
     unsigned int  blocks_count;
@@ -92,3 +94,5 @@ int  ext2_init(&stack Ext2Ctx ctx, &stack BlockDevice dev);
 
 // Return VfsOps for the ext2 driver.
 struct VfsOps ext2_ops();
+
+} // namespace std

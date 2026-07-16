@@ -2,6 +2,8 @@
 // SafeC Standard Library — Queue (FIFO, circular buffer)
 // Amortized O(1) enqueue/dequeue. Grows automatically when full.
 
+namespace std {
+
 struct Queue {
     void*         data;
     unsigned long head;      // index of front element
@@ -34,3 +36,5 @@ T* queue_front_t(struct Queue* q);
 
 generic<T>
 int queue_dequeue_t(struct Queue* q, T* out);
+
+} // namespace std

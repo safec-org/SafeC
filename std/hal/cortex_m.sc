@@ -1,8 +1,10 @@
 // SafeC Standard Library — Cortex-M HAL Implementation
 #pragma once
-#include "cortex_m.h"
+#include <std/hal/cortex_m.h>
 
 // MMIO read/write helpers for 32-bit registers.
+namespace std {
+
 static unsigned int cm_read32_(unsigned long addr) {
     unsafe {
         volatile unsigned int* p = (volatile unsigned int*)addr;
@@ -153,3 +155,5 @@ void Scb::set_psp(unsigned int addr) {
 void Scb::set_msp(unsigned int addr) {
     unsafe { asm volatile ("msr msp, %0" : : "r"(addr)); }
 }
+
+} // namespace std

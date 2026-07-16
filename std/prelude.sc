@@ -5,53 +5,53 @@
 #pragma once
 
 // ── Fundamental types (header-only, no .sc needed) ───────────────────────────
-#include "stddef.h"
-#include "stdint.h"
-#include "stdbool.h"
-#include "limits.h"
-#include "float.h"
-#include "inttypes.h"
+#include <std/stddef.h>
+#include <std/stdint.h>
+#include <std/stdbool.h>
+#include <std/limits.h>
+#include <std/float.h>
+#include <std/inttypes.h>
 
 // ── Core ─────────────────────────────────────────────────────────────────────
-#include "mem.sc"
-#include "io.sc"
-#include "io_file.sc"
-#include "str.sc"
-#include "fmt.sc"
-#include "convert.sc"
+#include <std/mem.sc>
+#include <std/io.sc>
+#include <std/io_file.sc>
+#include <std/str.sc>
+#include <std/fmt.sc>
+#include <std/convert.sc>
 
 // ── Math & numeric ────────────────────────────────────────────────────────────
-#include "math.sc"
-#include "complex.sc"
-#include "bit.sc"
+#include <std/math.sc>
+#include <std/complex.sc>
+#include <std/bit.sc>
 
 // ── Character ─────────────────────────────────────────────────────────────────
-#include "ctype.sc"
+#include <std/ctype.sc>
 
 // ── Assertions ────────────────────────────────────────────────────────────────
-#include "assert.sc"
+#include <std/assert.sc>
 
 // ── Checked arithmetic (C23) ──────────────────────────────────────────────────
-#include "stdckdint.sc"
+#include <std/stdckdint.sc>
 
 // ── System & OS ───────────────────────────────────────────────────────────────
-#include "sys.sc"
-#include "errno.sc"
-#include "signal.sc"
-#include "time.sc"
-#include "locale.sc"
-#include "fenv.sc"
+#include <std/sys.sc>
+#include <std/errno.sc>
+#include <std/signal.sc>
+#include <std/time.sc>
+#include <std/locale.sc>
+#include <std/fenv.sc>
 
 // ── Concurrency ───────────────────────────────────────────────────────────────
-#include "atomic.sc"
-#include "thread.sc"
+#include <std/atomic.sc>
+#include <std/thread.sc>
 
 // ── Collections ───────────────────────────────────────────────────────────────
-#include "collections/slice.sc"
-#include "collections/vec.sc"
-#include "collections/string.sc"
-#include "collections/stack.sc"
-#include "collections/queue.sc"
-#include "collections/list.sc"
-#include "collections/map.sc"
-#include "collections/bst.sc"
+#include <std/collections/slice.sc>
+#include <std/collections/vec.sc>
+#include <std/collections/string.sc>
+#include <std/collections/stack.sc>
+#include <std/collections/queue.sc>
+#include <std/collections/list.sc>
+#include <std/collections/map.sc>
+#include <std/collections/bst.sc>

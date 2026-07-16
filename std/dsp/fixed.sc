@@ -1,5 +1,7 @@
 #pragma once
-#include "fixed.h"
+#include <std/dsp/fixed.h>
+
+namespace std {
 
 newtype Fixed = int;
 
@@ -81,3 +83,5 @@ inline const Fixed fixed_sqrt(Fixed x) {
     // sqrt(x) in Q8.24 is sqrt(raw)/2^12 * 2^24 = sqrt(raw) * 2^12.
     return (Fixed)(int)(r << 12);
 }
+
+} // namespace std

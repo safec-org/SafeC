@@ -6,6 +6,8 @@
 
 #define RNG_BLOCK_SIZE 64   // ChaCha20 output block (bytes)
 
+namespace std {
+
 struct RngCtx {
     unsigned int  state[16];  // ChaCha20 key + nonce + counter
     unsigned char buf[RNG_BLOCK_SIZE];
@@ -30,3 +32,5 @@ int rng_init(&stack RngCtx ctx);
 
 // Initialise with a user-provided 32-byte seed (deterministic; useful for tests).
 void rng_init_seed(&stack RngCtx ctx, const unsigned char seed[32]);
+
+} // namespace std

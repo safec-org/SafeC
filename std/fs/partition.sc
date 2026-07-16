@@ -1,13 +1,15 @@
 // SafeC Standard Library — Partition Table Implementation
 #pragma once
-#include "partition.h"
-#include "block.h"
+#include <std/fs/partition.h>
+#include <std/fs/block.h>
 
 // MBR layout: 446 bytes bootstrap + 4×16-byte partition entries + 2-byte signature
 #define MBR_ENTRY_OFFSET  446
 #define MBR_SIG_OFFSET    510
 #define MBR_SIG_0         0x55
 #define MBR_SIG_1         0xAA
+
+namespace std {
 
 const struct PartEntry* PartTable::get(int idx) const {
     if (idx < 0 || idx >= PART_MAX) { return (const struct PartEntry*)0; }
@@ -54,3 +56,5 @@ int partition_read(&stack BlockDevice dev, &stack PartTable table_out) {
     }
     return 0;
 }
+
+} // namespace std

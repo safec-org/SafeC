@@ -1,7 +1,7 @@
 // SafeC Standard Library — Fixed-width integer format specifiers (C99/C11/C17/C23)
 // Use these macros with printf/scanf and the io_printf/io_scan family.
 #pragma once
-#include "stdint.h"
+#include <std/stdint.h>
 
 // ── printf: signed decimal ────────────────────────────────────────────────────
 #define PRId8    "hhd"

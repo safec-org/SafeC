@@ -2,10 +2,12 @@
 // Fixed inode table; no dynamic allocation (backed by static arrays).
 // Freestanding-safe.
 #pragma once
-#include "vfs.h"
+#include <std/fs/vfs.h>
 
 #define TMPFS_MAX_FILES   32
 #define TMPFS_MAX_DATA    (64 * 1024)   // 64 KiB total data pool
+
+namespace std {
 
 struct TmpfsInode {
     char           name[VFS_MAX_NAME];
@@ -28,3 +30,5 @@ void tmpfs_init(&stack TmpfsCtx ctx);
 
 // Return VfsOps for the tmpfs driver (ctx must be a TmpfsCtx*).
 struct VfsOps tmpfs_ops();
+
+} // namespace std

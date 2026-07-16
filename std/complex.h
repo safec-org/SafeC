@@ -6,6 +6,8 @@
 // ── Construction ─────────────────────────────────────────────────────────────
 // Create complex from real+imag parts (pack into a 2-element array).
 // NOTE: Pass a float[2] or double[2] out-array; result is written there.
+namespace std {
+
 void  cmplx_f(float* out, float re, float im);
 void  cmplx_d(double* out, double re, double im);
 
@@ -48,3 +50,5 @@ void csin_f(float* out, const float* z);
 void csin_d(double* out, const double* z);
 void ccos_f(float* out, const float* z);
 void ccos_d(double* out, const double* z);
+
+} // namespace std

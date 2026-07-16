@@ -1,8 +1,10 @@
 #pragma once
-#include "timer_wheel.h"
+#include <std/dsp/timer_wheel.h>
 
 // ── timer_wheel_init ──────────────────────────────────────────────────────────
 // Zero-initialise the wheel.  Must be called before any other operation.
+namespace std {
+
 void timer_wheel_init(&stack TimerWheel tw) {
     tw.current_tick = 0;
     int i = 0;
@@ -140,3 +142,5 @@ int TimerWheel::tick() {
 unsigned long TimerWheel::now() const {
     return self.current_tick;
 }
+
+} // namespace std

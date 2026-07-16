@@ -1,9 +1,11 @@
 // SafeC Standard Library — Checked integer arithmetic (C23)
 // Pure SafeC implementation — overflow is detected before the operation.
 #pragma once
-#include "stdckdint.h"
+#include <std/stdckdint.h>
 
 // ── 32-bit signed ─────────────────────────────────────────────────────────────
+
+namespace std {
 
 int ckd_add_i32(int* result, int a, int b) {
     int overflow = 0;
@@ -107,3 +109,5 @@ int ckd_mul_u64(unsigned long long* result, unsigned long long a, unsigned long 
     unsafe { *result = a * b; }
     return overflow;
 }
+
+} // namespace std

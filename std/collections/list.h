@@ -1,6 +1,8 @@
 #pragma once
 // SafeC Standard Library — List (doubly linked list)
 
+namespace std {
+
 struct ListNode {
     void*            data;
     struct ListNode* next;
@@ -49,3 +51,5 @@ T* list_front_t(struct List* l);
 
 generic<T>
 T* list_back_t(struct List* l);
+
+} // namespace std

@@ -10,6 +10,8 @@
 #define TLSF_FL_MAX   32
 #define TLSF_SL_COUNT 16
 
+namespace std {
+
 struct TlsfBlock {
     unsigned long size;       // block size (excluding header), low bit = free flag
     void*         prev_phys;  // previous physical block (for coalescing)
@@ -59,3 +61,5 @@ struct TlsfAllocator tlsf_new(unsigned long cap);
 
 // Compute first-level and second-level indices for a given size.
 void tlsf_mapping_(unsigned long size, &stack int fl, &stack int sl);
+
+} // namespace std

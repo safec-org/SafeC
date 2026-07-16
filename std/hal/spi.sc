@@ -5,7 +5,9 @@
 //   base + 0x08 = control register (mode, enable)
 //   base + 0x0C = chip select register
 #pragma once
-#include "spi.h"
+#include <std/hal/spi.h>
+
+namespace std {
 
 struct SpiDevice spi_init(void* base, int mode) {
     struct SpiDevice s;
@@ -70,3 +72,5 @@ void SpiDevice::read(unsigned char* rx, unsigned long len) {
         i = i + (unsigned long)1;
     }
 }
+
+} // namespace std

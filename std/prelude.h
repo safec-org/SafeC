@@ -3,123 +3,123 @@
 #pragma once
 
 // ── Fundamental types and constants ──────────────────────────────────────────
-#include "stddef.h"
-#include "stdint.h"
-#include "stdbool.h"
-#include "limits.h"
-#include "float.h"
-#include "inttypes.h"
+#include <std/stddef.h>
+#include <std/stdint.h>
+#include <std/stdbool.h>
+#include <std/limits.h>
+#include <std/float.h>
+#include <std/inttypes.h>
 
 // ── Core ─────────────────────────────────────────────────────────────────────
-#include "mem.h"
-#include "io.h"
-#include "io_file.h"
-#include "str.h"
-#include "fmt.h"
-#include "convert.h"
-#include "heap.h"
-#include "result.h"
+#include <std/mem.h>
+#include <std/io.h>
+#include <std/io_file.h>
+#include <std/str.h>
+#include <std/fmt.h>
+#include <std/convert.h>
+#include <std/heap.h>
+#include <std/result.h>
 
 // ── Math & numeric ────────────────────────────────────────────────────────────
-#include "math.h"
-#include "complex.h"
-#include "bit.h"
+#include <std/math.h>
+#include <std/complex.h>
+#include <std/bit.h>
 
 // ── Character ─────────────────────────────────────────────────────────────────
-#include "ctype.h"
+#include <std/ctype.h>
 
 // ── Assertions ────────────────────────────────────────────────────────────────
-#include "assert.h"
+#include <std/assert.h>
 
 // ── Checked arithmetic (C23) ──────────────────────────────────────────────────
-#include "stdckdint.h"
+#include <std/stdckdint.h>
 
 // ── System & OS ───────────────────────────────────────────────────────────────
-#include "sys.h"
-#include "errno.h"
-#include "signal.h"
-#include "time.h"
-#include "locale.h"
-#include "fenv.h"
+#include <std/sys.h>
+#include <std/errno.h>
+#include <std/signal.h>
+#include <std/time.h>
+#include <std/locale.h>
+#include <std/fenv.h>
 
 // ── Concurrency ───────────────────────────────────────────────────────────────
-#include "atomic.h"
-#include "thread.h"
+#include <std/atomic.h>
+#include <std/thread.h>
 
 // ── Collections ───────────────────────────────────────────────────────────────
-#include "collections/slice.h"
-#include "collections/vec.h"
-#include "collections/string.h"
-#include "collections/stack.h"
-#include "collections/queue.h"
-#include "collections/list.h"
-#include "collections/map.h"
-#include "collections/bst.h"
-#include "collections/btree.h"
-#include "collections/ringbuffer.h"
-#include "collections/static_vec.h"
+#include <std/collections/slice.h>
+#include <std/collections/vec.h>
+#include <std/collections/string.h>
+#include <std/collections/stack.h>
+#include <std/collections/queue.h>
+#include <std/collections/list.h>
+#include <std/collections/map.h>
+#include <std/collections/bst.h>
+#include <std/collections/btree.h>
+#include <std/collections/ringbuffer.h>
+#include <std/collections/static_vec.h>
 
 // ── Allocators ────────────────────────────────────────────────────────────
-#include "alloc/bump.h"
-#include "alloc/slab.h"
-#include "alloc/pool.h"
-#include "alloc/tlsf.h"
+#include <std/alloc/bump.h>
+#include <std/alloc/slab.h>
+#include <std/alloc/pool.h>
+#include <std/alloc/tlsf.h>
 
 // ── Synchronization ──────────────────────────────────────────────────────
-#include "sync/spinlock.h"
-#include "sync/lockfree.h"
-#include "sync/task.h"
-#include "sync/thread_bare.h"
+#include <std/sync/spinlock.h>
+#include <std/sync/lockfree.h>
+#include <std/sync/task.h>
+#include <std/sync/thread_bare.h>
 
 // ── Testing framework ────────────────────────────────────────────────────
-#include "test/test.h"
-#include "test/bench.h"
-#include "test/fuzz.h"
+#include <std/test/test.h>
+#include <std/test/bench.h>
+#include <std/test/fuzz.h>
 
 // ── Security / Cryptography ───────────────────────────────────────────────
-#include "crypto/crypto.h"
+#include <std/crypto/crypto.h>
 
 // ── Networking ────────────────────────────────────────────────────────────
-#include "net/net.h"
+#include <std/net/net.h>
 
 // ── Filesystem ────────────────────────────────────────────────────────────
-#include "fs/fs.h"
+#include <std/fs/fs.h>
 
 // ── DSP & Real-Time ───────────────────────────────────────────────────────
-#include "dsp/dsp_all.h"
+#include <std/dsp/dsp_all.h>
 
 // ── Debugging & Profiling ─────────────────────────────────────────────────
-#include "debug/debug.h"
+#include <std/debug/debug.h>
 
 // ── Panic & Logging ───────────────────────────────────────────────────────
-#include "panic.h"
-#include "log.h"
+#include <std/panic.h>
+#include <std/log.h>
 
 // ── DMA ───────────────────────────────────────────────────────────────────
-#include "dma.h"
+#include <std/dma.h>
 
 // ── Hardware Abstraction (freestanding) ──────────────────────────────────
 #ifdef __SAFEC_FREESTANDING__
-#include "hal/gpio.h"
-#include "hal/uart.h"
-#include "hal/spi.h"
-#include "hal/i2c.h"
-#include "hal/timer.h"
-#include "hal/watchdog.h"
+#include <std/hal/gpio.h>
+#include <std/hal/uart.h>
+#include <std/hal/spi.h>
+#include <std/hal/i2c.h>
+#include <std/hal/timer.h>
+#include <std/hal/watchdog.h>
 
 // ── Interrupt & Register Access (freestanding) ──────────────────────────
-#include "interrupt/mmio.h"
-#include "interrupt/bitfield.h"
-#include "interrupt/isr.h"
-#include "interrupt/clock.h"
-#include "interrupt/vector_table.h"
+#include <std/interrupt/mmio.h>
+#include <std/interrupt/bitfield.h>
+#include <std/interrupt/isr.h>
+#include <std/interrupt/clock.h>
+#include <std/interrupt/vector_table.h>
 
 // ── Kernel Data Structures (freestanding) ───────────────────────────────
-#include "kernel/paging.h"
-#include "kernel/frame.h"
-#include "kernel/mmu.h"
-#include "kernel/process.h"
-#include "kernel/scheduler.h"
-#include "kernel/ipc.h"
-#include "kernel/syscall.h"
+#include <std/kernel/paging.h>
+#include <std/kernel/frame.h>
+#include <std/kernel/mmu.h>
+#include <std/kernel/process.h>
+#include <std/kernel/scheduler.h>
+#include <std/kernel/ipc.h>
+#include <std/kernel/syscall.h>
 #endif

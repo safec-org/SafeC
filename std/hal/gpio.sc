@@ -5,7 +5,9 @@
 //   base + 0x08 = input data register
 //   base + 0x0C = pull config register
 #pragma once
-#include "gpio.h"
+#include <std/hal/gpio.h>
+
+namespace std {
 
 struct GpioPin gpio_init(void* base, int pin, int direction) {
     struct GpioPin p;
@@ -83,3 +85,5 @@ void GpioPin::set_pull(int pull) {
         volatile_store(pull_reg, val);
     }
 }
+
+} // namespace std

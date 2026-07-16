@@ -3,6 +3,8 @@
 // cmp_fn: int(*)(const void* a, const void* b) → <0, 0, >0
 // Keys are heap-copies; values are heap-copies.
 
+namespace std {
+
 struct BSTNode {
     void*            key;
     void*            val;
@@ -50,3 +52,5 @@ int bst_cmp_int(const void* a, const void* b);          // int keys
 int bst_cmp_ll(const void* a, const void* b);           // long long keys
 int bst_cmp_str(const void* a, const void* b);          // const char* keys (pointer inside)
 int bst_cmp_uint(const void* a, const void* b);         // unsigned int keys
+
+} // namespace std

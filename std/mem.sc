@@ -1,9 +1,11 @@
 // SafeC Standard Library — Memory
 // Safe wrappers around malloc / free / realloc / mem* from libc.
 #pragma once
-#include "mem.h"
+#include <std/mem.h>
 
 // ── Explicit extern declarations for libc memory functions ───────────────────
+namespace std {
+
 extern void* malloc(unsigned long size);
 extern void* calloc(unsigned long count, unsigned long size);
 extern void  free(void* ptr);
@@ -120,3 +122,5 @@ inline const int mem_fits_page(unsigned long addr, unsigned long size) {
     if (addr + size <= page_base + (unsigned long)4096) { return 1; }
     return 0;
 }
+
+} // namespace std

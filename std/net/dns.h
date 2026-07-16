@@ -2,7 +2,7 @@
 // Builds a DNS A-record query packet; parses the first A-record from the reply.
 // Freestanding-safe.
 #pragma once
-#include "udp.h"
+#include <std/net/udp.h>
 
 #define DNS_PORT       53
 #define DNS_MAX_NAME  255
@@ -10,6 +10,8 @@
 
 // Build a DNS query for hostname `name` (null-terminated) into pkt.
 // Returns the transaction ID used (caller must match reply).
+namespace std {
+
 unsigned short dns_query(&stack PacketBuf pkt,
                          const unsigned char eth_src[NET_MAC_LEN],
                          const unsigned char eth_dst[NET_MAC_LEN],
@@ -24,3 +26,5 @@ unsigned short dns_query(&stack PacketBuf pkt,
 int dns_parse_reply(&stack PacketBuf pkt, unsigned long udp_payload_offset,
                     unsigned short expected_txid,
                     &stack unsigned int ip4_out);
+
+} // namespace std

@@ -9,6 +9,8 @@
 #define RAND_MAX  2147483647
 
 // ── Process control ───────────────────────────────────────────────────────────
+namespace std {
+
 void          sys_exit(int code);
 void          sys_abort();
 int           sys_system(const char* cmd);
@@ -50,3 +52,5 @@ void* sys_bsearch(const void* key, const void* base,
 long long     sys_cpu_time_ns();
 long long     sys_time_now_ns();
 long long     sys_monotonic_ns();
+
+} // namespace std

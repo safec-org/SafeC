@@ -1,7 +1,9 @@
 // SafeC Standard Library — FAT32 Read-Only Driver Implementation
 #pragma once
-#include "fat.h"
-#include "block.h"
+#include <std/fs/fat.h>
+#include <std/fs/block.h>
+
+namespace std {
 
 extern void* memset(void* p, int v, unsigned long n);
 extern void* memcpy(void* d, const void* s, unsigned long n);
@@ -336,3 +338,5 @@ struct VfsOps fat_ops() {
     }
     return ops;
 }
+
+} // namespace std

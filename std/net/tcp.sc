@@ -1,9 +1,11 @@
 // SafeC Standard Library — TCP Implementation (minimal state machine)
 #pragma once
-#include "tcp.h"
-#include "ethernet.h"
+#include <std/net/tcp.h>
+#include <std/net/ethernet.h>
 
 // ── Checksum helpers ──────────────────────────────────────────────────────────
+
+namespace std {
 
 unsigned short tcp_checksum(unsigned int src_ip, unsigned int dst_ip,
                              const unsigned char* tcp_seg, unsigned long seg_len) {
@@ -287,3 +289,5 @@ unsigned long TcpConn::read(unsigned char* out, unsigned long len) {
     self.rx_len = self.rx_len - len;
     return len;
 }
+
+} // namespace std

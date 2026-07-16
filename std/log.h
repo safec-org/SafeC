@@ -14,6 +14,8 @@
 #endif
 
 // Backend: fn(level, tag, msg, file, line)
+namespace std {
+
 typedef fn void(int level, const char* tag, const char* msg,
                 const char* file, int line) LogBackend;
 
@@ -45,3 +47,5 @@ void log_write(int level, const char* tag, const char* msg,
 #else
 #define LOG_D(tag, msg)  do {} while(0)
 #endif
+
+} // namespace std

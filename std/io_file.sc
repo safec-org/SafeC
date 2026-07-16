@@ -1,7 +1,9 @@
 // SafeC Standard Library — File I/O implementation
 // Uses void* for FILE* handles to avoid exposing the C FILE struct.
 #pragma once
-#include "io_file.h"
+#include <std/io_file.h>
+
+namespace std {
 
 extern void*          fopen(const char* path, const char* mode);
 extern int            fclose(void* stream);
@@ -84,3 +86,5 @@ long long file_size(void* f) {
         return end;
     }
 }
+
+} // namespace std

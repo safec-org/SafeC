@@ -1,9 +1,11 @@
 // SafeC Standard Library — DMA Implementation
 #pragma once
-#include "dma.h"
-#include "mem.h"
+#include <std/dma.h>
+#include <std/mem.h>
 
 // ── DmaBuffer ─────────────────────────────────────────────────────────────────
+
+namespace std {
 
 struct DmaBuffer dma_buf_wrap(void* virt, unsigned long phys, unsigned long size) {
     struct DmaBuffer buf;
@@ -132,3 +134,5 @@ unsigned long DmaSgList::total_len() const {
     }
     return total;
 }
+
+} // namespace std

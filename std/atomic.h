@@ -7,6 +7,8 @@
 // ── atomic_int (32-bit signed) ────────────────────────────────────────────────
 
 // Atomically load *addr (sequential consistency).
+namespace std {
+
 int  atomic_load_int(const int* addr);
 
 // Atomically store val into *addr.
@@ -47,3 +49,5 @@ int        atomic_cas_ll(long long* addr, long long* expected, long long desired
 
 // Full sequential-consistency fence.
 void atomic_thread_fence();
+
+} // namespace std

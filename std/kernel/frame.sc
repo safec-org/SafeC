@@ -1,6 +1,8 @@
 // SafeC Standard Library — Physical Frame Allocator
 #pragma once
-#include "frame.h"
+#include <std/kernel/frame.h>
+
+namespace std {
 
 void FrameAllocator::init(unsigned long total_frames) {
     self.total_frames = total_frames;
@@ -76,3 +78,5 @@ void FrameAllocator::mark_range(unsigned long start, unsigned long count) {
 unsigned long FrameAllocator::free_count() const {
     return self.total_frames - self.used_frames;
 }
+
+} // namespace std

@@ -1,10 +1,12 @@
 // SafeC Standard Library — complex number implementation
 // Represented as float[2] or double[2]: [0]=real, [1]=imag.
 // Uses math.h functions for transcendentals.
-#include "complex.h"
-#include "math.h"
+#include <std/complex.h>
+#include <std/math.h>
 
 // ── Construction / access ─────────────────────────────────────────────────────
+namespace std {
+
 void  cmplx_f(float* out, float re, float im) { unsafe { out[0] = re; out[1] = im; } }
 void  cmplx_d(double* out, double re, double im) { unsafe { out[0] = re; out[1] = im; } }
 float  creal_f(const float* z)  { unsafe { return z[0]; } }
@@ -119,3 +121,5 @@ void ccos_d(double* out, const double* z) { unsafe {
     out[0] =  cos_d(z[0]) * cosh_d(z[1]);
     out[1] = -sin_d(z[0]) * sinh_d(z[1]);
 } }
+
+} // namespace std

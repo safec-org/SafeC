@@ -4,6 +4,8 @@
 
 // Format into buf[0..cap-1]; always NUL-terminates.
 // Returns number of characters written (not counting NUL), or -1 on error.
+namespace std {
+
 int  fmt_int(char* buf, unsigned long cap, long long v);
 int  fmt_uint(char* buf, unsigned long cap, unsigned long long v);
 int  fmt_float(char* buf, unsigned long cap, double v, int decimals);
@@ -18,3 +20,5 @@ int  fmt_str(char* dst, unsigned long cap, const char* src);
 // Concatenate src onto dst (treats dst as a NUL-terminated string).
 // Returns total length after append, or -1 if cap was exceeded.
 int  fmt_append(char* dst, unsigned long cap, const char* src);
+
+} // namespace std

@@ -8,6 +8,8 @@
 #define SPI_MODE_2 2  // CPOL=1, CPHA=0
 #define SPI_MODE_3 3  // CPOL=1, CPHA=1
 
+namespace std {
+
 struct SpiDevice {
     void*        base;  // MMIO base address
     int          mode;  // SPI mode (0-3)
@@ -30,3 +32,5 @@ struct SpiDevice {
 
 // Initialize SPI master at `base` with the given mode.
 struct SpiDevice spi_init(void* base, int mode);
+
+} // namespace std

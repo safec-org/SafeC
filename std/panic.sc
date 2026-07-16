@@ -1,5 +1,7 @@
 #pragma once
-#include "panic.h"
+#include <std/panic.h>
+
+namespace std {
 
 extern void abort();
 extern int fprintf(void* stream, const char* fmt, ...);
@@ -34,3 +36,5 @@ noreturn void panic_at(const char* msg, const char* file, int line) {
     abort();
 #endif
 }
+
+} // namespace std

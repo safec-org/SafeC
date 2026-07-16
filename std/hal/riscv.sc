@@ -1,8 +1,10 @@
 // SafeC Standard Library — RISC-V HAL Implementation
 #pragma once
-#include "riscv.h"
+#include <std/hal/riscv.h>
 
 // ── CSR accessors ─────────────────────────────────────────────────────────────
+
+namespace std {
 
 unsigned long rv_csr_read_mstatus() {
     unsigned long v = (unsigned long)0;
@@ -182,3 +184,5 @@ void Plic::complete(unsigned int irq) {
         *p = irq;
     }
 }
+
+} // namespace std

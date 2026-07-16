@@ -2,6 +2,8 @@
 #pragma once
 
 // ── Length / comparison ───────────────────────────────────────────────────────
+namespace std {
+
 unsigned long str_len(const char* s);
 int           str_cmp(const char* a, const char* b);
 int           str_ncmp(const char* a, const char* b, unsigned long n);
@@ -56,3 +58,5 @@ char*         str_dup(const char* s);
 
 // Return a heap-allocated copy of the first `n` bytes of `s`, NUL-terminated.
 char*         str_ndup(const char* s, unsigned long n);
+
+} // namespace std

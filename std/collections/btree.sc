@@ -1,8 +1,10 @@
 // SafeC Standard Library — B-Tree Implementation
 #pragma once
-#include "btree.h"
+#include <std/collections/btree.h>
 
 // ── Node pool allocator ───────────────────────────────────────────────────────
+
+namespace std {
 
 static unsigned long btree_alloc_node_(struct BTree* t) {
     unsafe {
@@ -235,3 +237,5 @@ generic<T> T* btree_get(const &stack BTree t, unsigned long key) {
         return (T*)btree_search_(tp, tp->root, key);
     }
 }
+
+} // namespace std

@@ -1,10 +1,12 @@
 // SafeC Standard Library — Global Freestanding Heap
 #pragma once
-#include "heap.h"
+#include <std/heap.h>
+#include <std/alloc/tlsf.h>
+
+namespace std {
 
 #ifdef __SAFEC_FREESTANDING__
 // ── Freestanding path: static buffer + TLSF ──────────────────────────────────
-#include "alloc/tlsf.h"
 
 extern void* memcpy(void* dst, const void* src, unsigned long n);
 
@@ -90,3 +92,5 @@ unsigned long heap_capacity() {
 }
 
 #endif
+
+} // namespace std

@@ -2,7 +2,7 @@
 // Integer utilities are pure const functions eligible for compile-time evaluation.
 // Float/double utilities wrap the corresponding <math.h> functions.
 #pragma once
-#include "math.h"
+#include <std/math.h>
 
 // ── Explicit extern declarations for libm functions ───────────────────────────
 // '#include <math.h>' isn't usable here: the system header's macro-heavy,
@@ -10,6 +10,8 @@
 // re-parses, so nothing was ever actually declared — every call below was
 // silently unresolved. Declare the exact symbols this file calls instead,
 // same as mem.sc/str.sc do for libc.
+namespace std {
+
 extern float  fabsf(float x);
 extern float  sqrtf(float x);
 extern float  cbrtf(float x);
@@ -191,3 +193,5 @@ inline const double clamp_d(double v, double lo, double hi){ return v < lo ? lo 
 inline const int isnan_d(double x)    { return x != x; }
 inline const int isinf_d(double x)    { return x != 0.0 && x + x == x; }
 inline const int isfinite_d(double x) { return !isnan_d(x) && !isinf_d(x); }
+
+} // namespace std

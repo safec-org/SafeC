@@ -1,9 +1,11 @@
 // SafeC Standard Library — HashMap implementation
-#include "map.h"
-#include "../mem.h"
-#include "../str.h"
+#include <std/collections/map.h>
+#include <std/mem.h>
+#include <std/str.h>
 
 // ── Hash functions ────────────────────────────────────────────────────────────
+namespace std {
+
 unsigned int map_hash_bytes_(const void* data, unsigned long len) {
     unsigned int h = 5381U;
     unsigned long i = 0UL;
@@ -310,3 +312,5 @@ generic<T>
 T* map_get_t(&stack HashMap m, const void* key) {
     return (T*)m.get(key);
 }
+
+} // namespace std

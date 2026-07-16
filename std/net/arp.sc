@@ -1,10 +1,12 @@
 // SafeC Standard Library — ARP Implementation
 #pragma once
-#include "arp.h"
-#include "ethernet.h"
+#include <std/net/arp.h>
+#include <std/net/ethernet.h>
 
 // ARP packet size over Ethernet: 8 bytes fixed + 2*(6+4) = 28 bytes
 #define ARP_PKT_LEN  28
+
+namespace std {
 
 void ArpTable::update(unsigned int ip4, const unsigned char mac[NET_MAC_LEN]) {
     // Find existing entry first.
@@ -139,3 +141,5 @@ int arp_parse_packet(&stack PacketBuf pkt, unsigned long offset,
     }
     return 0;
 }
+
+} // namespace std

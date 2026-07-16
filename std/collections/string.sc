@@ -1,11 +1,13 @@
 // SafeC Standard Library — String implementation
-#include "string.h"
-#include "../mem.h"
-#include "../str.h"
-#include "../fmt.h"
-#include "../convert.h"
+#include <std/collections/string.h>
+#include <std/mem.h>
+#include <std/str.h>
+#include <std/fmt.h>
+#include <std/convert.h>
 
 // ── Internal: ensure at least `need` bytes of capacity (not counting NUL) ─────
+namespace std {
+
 int String::reserve_(unsigned long need) {
     unsigned long needed_cap = need + 1UL;
     if (needed_cap <= self.cap) { return 1; }
@@ -772,3 +774,5 @@ long long String::parse_int(int* ok) const {
 double String::parse_float(int* ok) const {
     unsafe { return str_to_float((const char*)self.data, ok); }
 }
+
+} // namespace std

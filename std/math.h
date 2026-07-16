@@ -7,6 +7,8 @@
 
 // ── Constants (double and float) ─────────────────────────────────────────────
 
+namespace std {
+
 const double PI_D();
 const double E_D();
 const double LN2_D();
@@ -100,3 +102,5 @@ double clamp_d(double v, double lo, double hi);
 int    isnan_d(double x);
 int    isinf_d(double x);
 int    isfinite_d(double x);
+
+} // namespace std

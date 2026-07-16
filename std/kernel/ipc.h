@@ -5,6 +5,8 @@
 #define MAILBOX_CAPACITY 64
 #define MSG_MAX_SIZE     256
 
+namespace std {
+
 struct Message {
     int           sender_pid;            // sender process ID
     int           type;                  // user-defined message type
@@ -40,3 +42,5 @@ struct Mailbox {
 
 // Initialize a mailbox for the given process.
 struct Mailbox mailbox_init(int owner_pid);
+
+} // namespace std

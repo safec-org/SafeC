@@ -1,6 +1,8 @@
 // SafeC Standard Library — Priority Round-Robin Scheduler
 #pragma once
-#include "scheduler.h"
+#include <std/kernel/scheduler.h>
+
+namespace std {
 
 struct Scheduler sched_init() {
     struct Scheduler s;
@@ -102,3 +104,5 @@ int Scheduler::ready_count() const {
     }
     return count;
 }
+
+} // namespace std

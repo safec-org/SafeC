@@ -1,6 +1,8 @@
 // SafeC Standard Library — Fuzz Harness
 #pragma once
-#include "fuzz.h"
+#include <std/test/fuzz.h>
+
+namespace std {
 
 extern void* malloc(unsigned long size);
 extern void  free(void* ptr);
@@ -79,3 +81,5 @@ void FuzzTarget::run(const unsigned char* corpus, unsigned long corpus_size) {
         free((void*)buf);
     }
 }
+
+} // namespace std

@@ -1,7 +1,7 @@
 // SafeC Standard Library — MBR Partition Table Parser
 // Freestanding-safe.
 #pragma once
-#include "block.h"
+#include <std/fs/block.h>
 
 #define PART_MAX  4       // MBR has 4 primary partitions
 
@@ -10,6 +10,8 @@
 #define PART_TYPE_FAT32X  0x0C   // FAT32 with LBA
 #define PART_TYPE_LINUX   0x83
 #define PART_TYPE_SWAP    0x82
+
+namespace std {
 
 struct PartEntry {
     unsigned char  status;      // 0x80 = bootable
@@ -30,3 +32,5 @@ struct PartTable {
 // Read and parse the MBR from sector 0 of `dev`.
 // Returns 0 on success, -1 on read error or bad signature.
 int partition_read(&stack BlockDevice dev, &stack PartTable table_out);
+
+} // namespace std

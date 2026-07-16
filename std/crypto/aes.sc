@@ -1,6 +1,8 @@
 // SafeC Standard Library — AES Block Cipher
 #pragma once
-#include "aes.h"
+#include <std/crypto/aes.h>
+
+namespace std {
 
 extern void* memcpy(void* d, const void* s, unsigned long n);
 
@@ -344,3 +346,5 @@ static void memset_byte_(unsigned char* p, unsigned char v, int n) {
         i = i + 1;
     }
 }
+
+} // namespace std

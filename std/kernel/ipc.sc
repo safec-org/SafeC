@@ -1,6 +1,8 @@
 // SafeC Standard Library — IPC Mailbox
 #pragma once
-#include "ipc.h"
+#include <std/kernel/ipc.h>
+
+namespace std {
 
 extern void* memcpy(void* dst, const void* src, unsigned long n);
 
@@ -71,3 +73,5 @@ void Mailbox::clear() {
     self.tail  = 0;
     self.count = 0;
 }
+
+} // namespace std

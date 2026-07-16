@@ -5,9 +5,11 @@
 //   base + 0x08 = feed register (write magic value to feed)
 //   base + 0x0C = status register (bit 0 = WDT reset occurred)
 #pragma once
-#include "watchdog.h"
+#include <std/hal/watchdog.h>
 
 // Magic feed value (common on ARM Cortex-M)
+namespace std {
+
 unsigned int wdt_feed_magic_() {
     return (unsigned int)0x6969;
 }
@@ -47,3 +49,5 @@ int Watchdog::caused_reset() const {
         return 0;
     }
 }
+
+} // namespace std

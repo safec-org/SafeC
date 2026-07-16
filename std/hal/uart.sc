@@ -4,7 +4,9 @@
 //   base + 0x04 = status register (bit 0 = RX ready, bit 1 = TX ready)
 //   base + 0x08 = control/baud register
 #pragma once
-#include "uart.h"
+#include <std/hal/uart.h>
+
+namespace std {
 
 struct Uart uart_init(void* base, unsigned int baud) {
     struct Uart u;
@@ -60,3 +62,5 @@ void Uart::write_str(const char* s) {
         }
     }
 }
+
+} // namespace std

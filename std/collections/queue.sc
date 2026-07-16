@@ -1,6 +1,8 @@
 // SafeC Standard Library — Queue (circular buffer) implementation
-#include "queue.h"
-#include "../mem.h"
+#include <std/collections/queue.h>
+#include <std/mem.h>
+
+namespace std {
 
 struct Queue queue_new(unsigned long elem_size) {
     struct Queue q;
@@ -121,3 +123,5 @@ generic<T>
 inline int queue_dequeue_t(struct Queue* q, T* out) {
     return queue_dequeue(q, (void*)out);
 }
+
+} // namespace std

@@ -1,8 +1,10 @@
 // SafeC Standard Library — DSP Primitives (Q8.24 fixed-point)
 #pragma once
-#include "fixed.h"
+#include <std/dsp/fixed.h>
 
 // Dot product of two Fixed arrays of length n.
+namespace std {
+
 Fixed dsp_dot(&stack Fixed a, &stack Fixed b, unsigned long n);
 
 // Scale array in-place: a[i] *= scale.
@@ -30,3 +32,5 @@ Fixed dsp_peak(&stack Fixed a, unsigned long n);
 
 // Root mean square value of array.
 Fixed dsp_rms(&stack Fixed a, unsigned long n);
+
+} // namespace std

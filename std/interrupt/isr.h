@@ -4,6 +4,8 @@
 
 #define ISR_MAX 256
 
+namespace std {
+
 struct IsrTable {
     void* handlers[ISR_MAX];  // function pointers: void(*)(void)
     int   count;              // number of registered handlers
@@ -28,3 +30,5 @@ void irq_disable();
 
 // Enable all interrupts (platform-specific inline asm).
 void irq_enable();
+
+} // namespace std

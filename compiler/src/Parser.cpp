@@ -456,8 +456,46 @@ std::unique_ptr<TranslationUnit> Parser::parseTranslationUnit() {
         auto decl = parseTopLevelDecl();
         if (decl) tu->decls.push_back(std::move(decl));
     }
+    for (auto &decl : pendingNamespaceDecls_) tu->decls.push_back(std::move(decl));
+    pendingNamespaceDecls_.clear();
     tu->arraySizeExprs = std::move(pendingArraySizeExprs_);
     return tu;
+}
+
+// namespace X { decl* } — see the pendingNamespaceDecls_ comment in Parser.h
+// for why this doesn't return through the normal DeclPtr path. Nested
+// namespaces ('namespace a { namespace b { ... } }') fall out naturally:
+// the recursive parseTopLevelDecl() call for 'namespace b' pushes its own
+// (already fully "a::b"-qualified) decls into pendingNamespaceDecls_ and
+// returns nullptr, so the outer loop here just skips it.
+void Parser::parseNamespaceDecl() {
+    consume(); // 'namespace'
+    if (!cur().is(TK::Ident)) {
+        diag_.error(cur().loc, "expected namespace name after 'namespace'");
+        syncToDecl();
+        return;
+    }
+    std::string name = cur().text;
+    consume();
+    expect(TK::LBrace, "expected '{' after namespace name");
+
+    namespaceStack_.push_back(name);
+    std::string qualified = namespaceStack_[0];
+    for (size_t i = 1; i < namespaceStack_.size(); ++i) qualified += "::" + namespaceStack_[i];
+
+    while (!atEnd() && !cur().is(TK::RBrace)) {
+        auto decl = parseTopLevelDecl();
+        if (!decl) continue;
+        if (decl->kind == DeclKind::Function) {
+            static_cast<FunctionDecl &>(*decl).namespaceName = qualified;
+        } else if (decl->kind == DeclKind::GlobalVar) {
+            static_cast<GlobalVarDecl &>(*decl).namespaceName = qualified;
+        }
+        pendingNamespaceDecls_.push_back(std::move(decl));
+    }
+    expect(TK::RBrace, "expected '}' to close namespace");
+    match(TK::Semicolon); // tolerate an optional trailing ';'
+    namespaceStack_.pop_back();
 }
 
 DeclPtr Parser::parseTopLevelDecl() {
@@ -508,6 +546,9 @@ DeclPtr Parser::parseTopLevelDecl() {
         expect(TK::Semicolon);
         return std::make_unique<NewtypeDecl>(std::move(name), std::move(base), loc);
     }
+
+    // namespace X { ... }
+    if (cur().is(TK::KW_namespace)) { parseNamespaceDecl(); return nullptr; }
 
     // region
     if (cur().is(TK::KW_region)) { consume(); return parseRegionDecl(); }
@@ -1851,7 +1892,19 @@ ExprPtr Parser::parsePrimaryExpr() {
     case TK::KW_true:  consume(); return std::make_unique<BoolLitExpr>(true, loc);
     case TK::KW_false: consume(); return std::make_unique<BoolLitExpr>(false, loc);
     case TK::KW_null:  consume(); return std::make_unique<NullLitExpr>(loc);
-    case TK::Ident:
+    case TK::Ident: {
+        std::string name = cur().text; consume();
+        // Namespace-qualified reference: std::foo, a::b::c, ... — joined
+        // into one IdentExpr whose 'name' is the qualified string; Sema
+        // resolves it against the namespace registry (see checkIdent).
+        while (cur().is(TK::ColonColon) && peek().is(TK::Ident)) {
+            consume(); // '::'
+            name += "::";
+            name += cur().text;
+            consume();
+        }
+        return std::make_unique<IdentExpr>(std::move(name), loc);
+    }
     case TK::KW_stack: case TK::KW_heap:
     case TK::KW_arena: case TK::KW_capacity:
     case TK::KW_self: {  // self is a valid expression in method bodies

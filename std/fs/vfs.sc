@@ -1,6 +1,8 @@
 // SafeC Standard Library — VFS Implementation
 #pragma once
-#include "vfs.h"
+#include <std/fs/vfs.h>
+
+namespace std {
 
 extern void* memset(void* p, int v, unsigned long n);
 extern void* memcpy(void* d, const void* s, unsigned long n);
@@ -175,3 +177,5 @@ int Vfs::mkdir(const char* path) {
     }
     return -1;
 }
+
+} // namespace std

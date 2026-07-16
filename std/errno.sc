@@ -1,7 +1,9 @@
 // SafeC Standard Library — errno implementation
-#include "errno.h"
+#include <std/errno.h>
 
 // Access errno via a C helper to handle its macro nature
+namespace std {
+
 extern int* __errno_location();   // Linux glibc
 extern int* __error();            // macOS/BSD
 extern int  strerror_r(int errnum, char* buf, unsigned long buflen); // POSIX
@@ -41,3 +43,5 @@ void errno_print(const char* prefix) {
         fputs("\n", stderr);
     }
 }
+
+} // namespace std

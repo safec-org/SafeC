@@ -3,6 +3,8 @@
 // Install signal handlers and send signals.
 
 // Standard signal numbers (POSIX values; matches Linux/macOS).
+namespace std {
+
 const int SIG_HUP()  { return 1; }   // Hangup
 const int SIG_INT()  { return 2; }   // Interrupt (Ctrl+C)
 const int SIG_QUIT() { return 3; }   // Quit
@@ -41,3 +43,5 @@ int signal_kill(int pid, int sig);
 
 // Block until any signal arrives (pause).
 void signal_pause();
+
+} // namespace std

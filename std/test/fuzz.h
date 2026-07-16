@@ -5,6 +5,8 @@
 #pragma once
 
 // Fuzz target signature: void func(const unsigned char* data, unsigned long size)
+namespace std {
+
 struct FuzzTarget {
     void*         func;        // fuzz target function
     unsigned long seed;      // PRNG seed (set before run())
@@ -17,3 +19,5 @@ struct FuzzTarget {
 
 // Initialise a fuzz target with a default seed and iteration count.
 struct FuzzTarget fuzz_target_init(void* func, unsigned long iters);
+
+} // namespace std

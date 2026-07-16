@@ -1,6 +1,8 @@
 // SafeC Standard Library — Lock-free SPSC Ring Buffer Queue
 #pragma once
-#include "lockfree.h"
+#include <std/sync/lockfree.h>
+
+namespace std {
 
 extern void* malloc(unsigned long size);
 extern void  free(void* ptr);
@@ -99,3 +101,5 @@ generic<T>
 int lfq_dequeue_t(&stack LFQueue q, T* out) {
     return q.dequeue((void*)out);
 }
+
+} // namespace std

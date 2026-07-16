@@ -1,9 +1,11 @@
 // SafeC Standard Library — System (C11/C17/C23 stdlib coverage)
 // Process control, PRNG, conversions, sorting, and clock wrappers.
 #pragma once
-#include "sys.h"
+#include <std/sys.h>
 
 // ── Explicit extern declarations (avoid complex C header parsing) ─────────────
+namespace std {
+
 extern void  exit(int code);
 extern void  abort();
 extern char* getenv(const char* name);
@@ -180,3 +182,5 @@ void* sys_bsearch(const void* key, const void* base,
                   unsigned long n, unsigned long elem_size, void* cmp) {
     unsafe { return bsearch(key, base, n, elem_size, cmp); }
 }
+
+} // namespace std

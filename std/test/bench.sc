@@ -1,6 +1,8 @@
 // SafeC Standard Library — Benchmark Framework
 #pragma once
-#include "bench.h"
+#include <std/test/bench.h>
+
+namespace std {
 
 extern int    printf(const char* fmt, ...);
 extern long   clock();           // returns clock_t; CLOCKS_PER_SEC = 1000000
@@ -82,3 +84,5 @@ void BenchSuite::print_results() const {
         }
     }
 }
+
+} // namespace std

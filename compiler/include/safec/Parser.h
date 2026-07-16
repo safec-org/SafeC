@@ -67,6 +67,17 @@ private:
     // parsing completes so the Expr*s stashed in ArrayType::sizeExpr stay valid.
     std::vector<ExprPtr> pendingArraySizeExprs_;
 
+    // ── Namespaces ────────────────────────────────────────────────────────────
+    // 'namespace X { decl* }' recurses through parseTopLevelDecl() for its
+    // body, so each contained decl gets stamped with the (possibly nested,
+    // "::"-joined) enclosing namespace name and collected here rather than
+    // returned directly — parseTopLevelDecl() can only hand back one decl at
+    // a time, but a namespace body holds many. Drained into
+    // TranslationUnit::decls once parsing completes (see parseTranslationUnit).
+    std::vector<DeclPtr>     pendingNamespaceDecls_;
+    std::vector<std::string> namespaceStack_;
+    void parseNamespaceDecl();
+
     std::vector<GenericParam> parseGenericParams(); // <T: Constraint, ...>
 
     // ── Top-level declarations ────────────────────────────────────────────────

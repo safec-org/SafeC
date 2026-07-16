@@ -3,6 +3,8 @@
 // Keys are compared byte-by-byte (memcmp). Use str_map_* for C-string keys.
 // Load factor threshold: 0.75 — resizes automatically.
 
+namespace std {
+
 struct MapEntry {
     void*        key;
     void*        val;
@@ -52,3 +54,5 @@ int map_insert_t(&stack HashMap m, const void* key, T val);
 
 generic<T>
 T* map_get_t(&stack HashMap m, const void* key);
+
+} // namespace std

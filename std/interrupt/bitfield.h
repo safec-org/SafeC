@@ -3,6 +3,8 @@
 #pragma once
 
 // Extract bits [hi:lo] (inclusive) from a 32-bit value.
+namespace std {
+
 unsigned int bf_extract32(unsigned int val, int lo, int hi);
 
 // Insert `field` into bits [hi:lo] of `val`. Returns modified value.
@@ -25,3 +27,5 @@ unsigned int bf_mask32(int lo, int hi);
 
 // Count set bits in a 32-bit value.
 int bf_popcount32(unsigned int val);
+
+} // namespace std

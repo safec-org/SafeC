@@ -6,6 +6,8 @@
 // ── Runtime assertion ─────────────────────────────────────────────────────────
 
 // Internal failure handler — do not call directly.
+namespace std {
+
 void assert_fail_(const char* file, int line, const char* msg);
 
 // Assert that `cond` is true at runtime.
@@ -27,3 +29,5 @@ void assert_true(int cond);
 #define runtime_assert(cond, msg)  ((void)0)
 #define assert_true(cond)          ((void)0)
 #endif
+
+} // namespace std

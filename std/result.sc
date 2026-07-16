@@ -1,6 +1,8 @@
 // SafeC Standard Library — Result Type
 #pragma once
-#include "result.h"
+#include <std/result.h>
+
+namespace std {
 
 extern void* malloc(unsigned long size);
 extern void  free(void* ptr);
@@ -69,3 +71,5 @@ void* result_get_err(&stack Result r) {
     if (r.is_ok != 0) { return (void*)0; }
     return r.data;
 }
+
+} // namespace std

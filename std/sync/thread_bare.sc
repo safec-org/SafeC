@@ -1,6 +1,8 @@
 // SafeC Standard Library — Freestanding Cooperative Threads
 #pragma once
-#include "thread_bare.h"
+#include <std/sync/thread_bare.h>
+
+namespace std {
 
 struct ThreadSched thread_sched_init() {
     struct ThreadSched s;
@@ -91,3 +93,5 @@ void ThreadSched::join_thread(Thread t) {
 int ThreadSched::active_count() const {
     return self.inner.active_count();
 }
+
+} // namespace std

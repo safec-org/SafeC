@@ -1,6 +1,8 @@
 // SafeC Standard Library — Process Control Block
 #pragma once
-#include "process.h"
+#include <std/kernel/process.h>
+
+namespace std {
 
 struct PCB pcb_init(int pid, unsigned long entry, unsigned long sp, unsigned long page_table) {
     struct PCB p;
@@ -32,3 +34,5 @@ void PCB::exit(int exit_code) {
     self.state     = 3; // PROC_ZOMBIE
     self.exit_code = exit_code;
 }
+
+} // namespace std

@@ -1,6 +1,8 @@
 // SafeC Standard Library — X.509 Certificate Parsing (DER / ASN.1)
 #pragma once
-#include "x509.h"
+#include <std/crypto/x509.h>
+
+namespace std {
 
 extern void* memcpy(void* d, const void* s, unsigned long n);
 extern void* memset(void* p, int v, unsigned long n);
@@ -639,3 +641,5 @@ int x509_verify_chain(const &stack X509Cert cert,
     }
     return 1;
 }
+
+} // namespace std

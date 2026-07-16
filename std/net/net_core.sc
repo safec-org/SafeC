@@ -1,8 +1,10 @@
 // SafeC Standard Library — Network Core Implementation
 #pragma once
-#include "net_core.h"
+#include <std/net/net_core.h>
 
 // ── Byte-order conversions ────────────────────────────────────────────────────
+
+namespace std {
 
 unsigned short net_htons(unsigned short v) {
     return (unsigned short)(((v & (unsigned short)0xFF) << 8) |
@@ -126,3 +128,5 @@ int NetIf::tx(&stack PacketBuf pkt) {
     }
     return -1;
 }
+
+} // namespace std

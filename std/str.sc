@@ -1,9 +1,11 @@
 // SafeC Standard Library — Strings
 // Safe wrappers around libc string functions.
 #pragma once
-#include "str.h"
+#include <std/str.h>
 
 // ── Explicit extern declarations for libc string/memory functions ─────────────
+namespace std {
+
 extern unsigned long strlen(const char* s);
 extern int   strcmp(const char* a, const char* b);
 extern int   strncmp(const char* a, const char* b, unsigned long n);
@@ -135,3 +137,5 @@ inline char* str_ndup(const char* s, unsigned long n) {
         return buf;
     }
 }
+
+} // namespace std

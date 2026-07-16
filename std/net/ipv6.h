@@ -1,11 +1,13 @@
 // SafeC Standard Library — IPv6 Layer
 // Parse and build IPv6 headers. Freestanding-safe.
 #pragma once
-#include "net_core.h"
+#include <std/net/net_core.h>
 
 #define IPV6_HDR_LEN  40   // fixed header length
 
 #define IPV6_ADDR_LEN 16   // bytes in an IPv6 address
+
+namespace std {
 
 struct Ipv6Addr {
     unsigned char bytes[IPV6_ADDR_LEN];
@@ -56,3 +58,5 @@ unsigned long ipv6_frame(&stack PacketBuf pkt,
                           const struct Ipv6Addr* src,
                           const struct Ipv6Addr* dst,
                           unsigned short payload_len);
+
+} // namespace std

@@ -222,6 +222,18 @@ private:
     std::unordered_map<std::string, RegionDecl*> regionRegistry_;
     // Method registry: "StructName::methodName" → FunctionDecl* (mangled)
     std::unordered_map<std::string, FunctionDecl*> methodRegistry_;
+    // Namespace registries: "ns::name" (as written at the call site) →
+    // decl* (already mangled, e.g. FunctionDecl::name == "ns_name"). See
+    // collectFunction/collectGlobalVar for population and checkIdent for
+    // the lookup that rewrites a qualified IdentExpr to the mangled name.
+    std::unordered_map<std::string, FunctionDecl*>  namespaceFnRegistry_;
+    std::unordered_map<std::string, GlobalVarDecl*> namespaceVarRegistry_;
+    // Distinct namespace names seen (usually just {"std"}); used by
+    // checkIdent's unqualified-name fallback so code lexically inside
+    // 'namespace std { ... }' can still call siblings unqualified
+    // ('chacha_qr_(...)' resolving to 'std::chacha_qr_') without every
+    // internal call site needing to be rewritten to 'std::chacha_qr_(...)'.
+    std::unordered_set<std::string> namespaceNames_;
     int                                     scopeDepth_ = 0;
 
     // ── Trait enforcement ─────────────────────────────────────────────────────

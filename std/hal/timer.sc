@@ -6,7 +6,9 @@
 //   base + 0x0C = counter register (read-only)
 //   base + 0x10 = status register (bit 0 = overflow flag)
 #pragma once
-#include "timer.h"
+#include <std/hal/timer.h>
+
+namespace std {
 
 struct Timer timer_init(void* base, unsigned int prescaler) {
     struct Timer t;
@@ -66,3 +68,5 @@ int Timer::flag_set() const {
         return 0;
     }
 }
+
+} // namespace std

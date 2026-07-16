@@ -1,7 +1,9 @@
 // SafeC Standard Library — Atomics (C11 <stdatomic.h>)
 #pragma once
-#include "atomic.h"
+#include <std/atomic.h>
 #include <stdatomic.h>
+
+namespace std {
 
 int atomic_load_int(const int* addr) {
     unsafe { return atomic_load((const _Atomic int*)addr); }
@@ -72,3 +74,5 @@ int atomic_cas_ll(long long* addr, long long* expected, long long desired) {
 void atomic_thread_fence() {
     unsafe { atomic_fence(); }
 }
+
+} // namespace std

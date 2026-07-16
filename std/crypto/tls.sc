@@ -1,6 +1,8 @@
 // SafeC Standard Library — TLS 1.3 Record Layer (implementation)
 #pragma once
-#include "tls.h"
+#include <std/crypto/tls.h>
+
+namespace std {
 
 extern void* memcpy(void* d, const void* s, unsigned long n);
 extern void* memset(void* p, int v, unsigned long n);
@@ -333,3 +335,5 @@ unsigned long TlsSession::build_alert(unsigned char level,
                                (unsigned long)2,
                                out, out_cap);
 }
+
+} // namespace std

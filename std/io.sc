@@ -3,9 +3,11 @@
 // Explicit extern declarations are used because macOS stdio.h uses FILE*,
 // __attribute__, and macros that SafeC's parser cannot handle directly.
 #pragma once
-#include "io.h"
+#include <std/io.h>
 
 // ── Explicit extern declarations for stdio functions ─────────────────────────
+namespace std {
+
 extern int   printf(const char* fmt, ...);
 extern int   fprintf(void* stream, const char* fmt, ...);
 extern int   fputs(const char* s, void* stream);
@@ -246,3 +248,5 @@ int io_rename(const char* old_path, const char* new_path) {
 void* io_tmpfile() {
     unsafe { return tmpfile(); }
 }
+
+} // namespace std

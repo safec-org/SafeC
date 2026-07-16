@@ -2,6 +2,8 @@
 // Atomic test-and-set spinlock with platform-specific pause hints.
 #pragma once
 
+namespace std {
+
 struct Spinlock {
     int locked;    // 0 = unlocked, 1 = locked (accessed atomically)
 
@@ -20,3 +22,5 @@ struct Spinlock {
 
 // Initialize a spinlock (unlocked).
 struct Spinlock spinlock_init();
+
+} // namespace std

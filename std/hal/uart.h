@@ -2,6 +2,8 @@
 // Polling-based UART serial driver. Freestanding-safe.
 #pragma once
 
+namespace std {
+
 struct Uart {
     void*        base;  // MMIO base address
     unsigned int baud;  // configured baud rate
@@ -24,3 +26,5 @@ struct Uart {
 
 // Initialize UART at `base` with the given baud rate.
 struct Uart uart_init(void* base, unsigned int baud);
+
+} // namespace std

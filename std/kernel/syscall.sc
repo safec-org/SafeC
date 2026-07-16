@@ -1,6 +1,8 @@
 // SafeC Standard Library — Syscall Table
 #pragma once
-#include "syscall.h"
+#include <std/kernel/syscall.h>
+
+namespace std {
 
 struct SyscallTable syscall_init() {
     struct SyscallTable t;
@@ -46,3 +48,5 @@ int SyscallTable::is_registered(int num) const {
     if (self.handlers[num] != (void*)0) { return 1; }
     return 0;
 }
+
+} // namespace std

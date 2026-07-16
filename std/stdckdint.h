@@ -5,6 +5,8 @@
 #pragma once
 
 // ── Checked int (32-bit signed) ───────────────────────────────────────────────
+namespace std {
+
 int ckd_add_i32(int* result, int a, int b);
 int ckd_sub_i32(int* result, int a, int b);
 int ckd_mul_i32(int* result, int a, int b);
@@ -29,3 +31,5 @@ int ckd_mul_u64(unsigned long long* result, unsigned long long a, unsigned long 
 #define CKD_OK        0
 // CKD_OVERFLOW: mathematical result overflowed; wrapped value is stored.
 #define CKD_OVERFLOW  1
+
+} // namespace std

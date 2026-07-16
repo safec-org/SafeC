@@ -5,6 +5,8 @@
 // ── Population count ──────────────────────────────────────────────────────────
 
 // Count set bits in a 32-bit value.
+namespace std {
+
 const int popcount32(unsigned int x);
 
 // Count set bits in a 64-bit value.
@@ -71,3 +73,5 @@ const unsigned long long bits64(unsigned long long x, int lo, int hi);
 
 // Set bits [hi:lo] to val in x, return new value.
 const unsigned int  set_bits32(unsigned int x, int lo, int hi, unsigned int val);
+
+} // namespace std

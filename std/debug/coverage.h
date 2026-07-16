@@ -6,6 +6,8 @@
 
 #define COV_MAX_SITES  1024
 
+namespace std {
+
 struct CovSite {
     const char*   file;
     int           line;
@@ -51,3 +53,5 @@ void coverage_init();
     }                                                             \
     if (_cov_id >= 0) { coverage.hit(_cov_id); }                  \
 } while(0)
+
+} // namespace std

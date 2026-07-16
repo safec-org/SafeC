@@ -1,6 +1,8 @@
 // SafeC Standard Library — Ethernet Layer Implementation
 #pragma once
-#include "ethernet.h"
+#include <std/net/ethernet.h>
+
+namespace std {
 
 int eth_parse(&stack PacketBuf pkt, &stack EthernetHdr hdr_out) {
     if (pkt.len < (unsigned long)ETH_HDR_LEN) { return -1; }
@@ -34,3 +36,5 @@ void eth_build(&stack PacketBuf pkt, const unsigned char dst[NET_MAC_LEN],
     }
     pkt.len = (unsigned long)ETH_HDR_LEN;
 }
+
+} // namespace std

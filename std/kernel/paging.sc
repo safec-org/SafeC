@@ -1,7 +1,9 @@
 // SafeC Standard Library — Page Table Management
 // Page entry format: bits [12:63] = physical address (4K aligned), bits [0:11] = flags
 #pragma once
-#include "paging.h"
+#include <std/kernel/paging.h>
+
+namespace std {
 
 void PageTable::init() {
     int i = 0;
@@ -44,3 +46,5 @@ void PageTable::set_flags(int idx, unsigned int flags) {
     unsigned long phys = self.entries[idx].value & ~(unsigned long)0xFFF;
     self.entries[idx].value = phys | (unsigned long)flags;
 }
+
+} // namespace std

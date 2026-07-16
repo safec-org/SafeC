@@ -1,5 +1,7 @@
 // SafeC Standard Library — time implementation
-#include "time.h"
+#include <std/time.h>
+
+namespace std {
 
 extern long long time(long long* t);
 extern void* gmtime_r(const long long* t, void* tm);
@@ -140,3 +142,5 @@ int time_days_in_month(int month, int year) {
     if (month < 0 || month > 11) return -1;
     return days[month];
 }
+
+} // namespace std

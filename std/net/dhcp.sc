@@ -1,7 +1,7 @@
 // SafeC Standard Library — DHCP Client Implementation
 #pragma once
-#include "dhcp.h"
-#include "ethernet.h"
+#include <std/net/dhcp.h>
+#include <std/net/ethernet.h>
 
 // DHCP BOOTP message: 236 bytes fixed + 4-byte magic cookie + options
 // op(1) htype(1) hlen(1) hops(1) xid(4) secs(2) flags(2)
@@ -11,6 +11,8 @@
 
 #define DHCP_FIXED_LEN   236
 #define DHCP_HDR_LEN     (DHCP_FIXED_LEN + 4)  // + magic cookie
+
+namespace std {
 
 static unsigned char dhcp_bcast_mac_[NET_MAC_LEN] = {
     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
@@ -191,3 +193,5 @@ int DhcpClient::is_bound() const {
     if (self.state == DHCP_STATE_BOUND) { return 1; }
     return 0;
 }
+
+} // namespace std

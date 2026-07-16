@@ -8,12 +8,14 @@
 // Threads with higher priority values run before lower-priority ones
 // within each scheduling tick.
 #pragma once
-#include "task.h"
+#include <std/sync/task.h>
 
 #define THREAD_MAX  TASK_MAX
 #define THREAD_NONE (-1)
 
 // Thread identifier: index into the ThreadSched table.
+namespace std {
+
 newtype Thread = int;
 
 struct ThreadSched {
@@ -44,3 +46,5 @@ struct ThreadSched {
 
 // Initialize a thread scheduler (all slots empty, no threads running).
 struct ThreadSched thread_sched_init();
+
+} // namespace std

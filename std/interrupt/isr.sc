@@ -1,6 +1,8 @@
 // SafeC Standard Library — ISR Vector Table
 #pragma once
-#include "isr.h"
+#include <std/interrupt/isr.h>
+
+namespace std {
 
 struct IsrTable isr_init() {
     struct IsrTable t;
@@ -46,3 +48,5 @@ void irq_disable() {
 void irq_enable() {
     unsafe { asm volatile("" ::: "memory"); }
 }
+
+} // namespace std

@@ -1,7 +1,9 @@
 // SafeC Standard Library — Bit manipulation implementation
 // Uses GCC/Clang compiler builtins for hardware-accelerated operations.
 #pragma once
-#include "bit.h"
+#include <std/bit.h>
+
+namespace std {
 
 inline const int popcount32(unsigned int x) {
     unsafe { return __builtin_popcount(x); }
@@ -121,3 +123,5 @@ inline const unsigned int set_bits32(unsigned int x, int lo, int hi, unsigned in
     unsigned int mask = (unsigned int)((1 << width) - 1);
     return (x & ~(mask << lo)) | ((val & mask) << lo);
 }
+
+} // namespace std

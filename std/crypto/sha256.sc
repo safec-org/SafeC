@@ -1,6 +1,8 @@
 // SafeC Standard Library — SHA-256
 #pragma once
-#include "sha256.h"
+#include <std/crypto/sha256.h>
+
+namespace std {
 
 extern void* memcpy(void* d, const void* s, unsigned long n);
 extern void* memset(void* p, int v, unsigned long n);
@@ -176,3 +178,5 @@ void sha256(const &stack unsigned char data, unsigned long len,
     ctx.update(data, len);
     ctx.finish(digest);
 }
+
+} // namespace std

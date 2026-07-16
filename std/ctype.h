@@ -8,6 +8,8 @@
 // `c` must be in the range [0, 255] or EOF (-1).
 
 // Is `c` a letter (a-z, A-Z)?
+namespace std {
+
 int char_is_alpha(int c);
 
 // Is `c` a decimal digit (0-9)?
@@ -50,3 +52,5 @@ int char_to_lower(int c);
 
 // Return the uppercase version of `c` (unchanged if not lowercase).
 int char_to_upper(int c);
+
+} // namespace std

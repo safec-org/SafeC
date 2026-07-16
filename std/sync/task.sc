@@ -1,6 +1,8 @@
 // SafeC Standard Library — Cooperative Task Scheduler
 #pragma once
-#include "task.h"
+#include <std/sync/task.h>
+
+namespace std {
 
 struct TaskScheduler task_sched_init() {
     struct TaskScheduler s;
@@ -65,3 +67,5 @@ int TaskScheduler::active_count() const {
     }
     return count;
 }
+
+} // namespace std

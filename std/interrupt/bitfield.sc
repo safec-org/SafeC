@@ -1,7 +1,9 @@
 // SafeC Standard Library — Bitfield Helpers
 // All functions are pure — no side effects, no MMIO access.
 #pragma once
-#include "bitfield.h"
+#include <std/interrupt/bitfield.h>
+
+namespace std {
 
 unsigned int bf_mask32(int lo, int hi) {
     unsigned int width = (unsigned int)(hi - lo + 1);
@@ -48,3 +50,5 @@ int bf_popcount32(unsigned int val) {
     }
     return count;
 }
+
+} // namespace std

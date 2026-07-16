@@ -5,6 +5,8 @@
 // ── String → number ───────────────────────────────────────────────────────────
 
 // Parse a decimal integer.  On failure *ok = 0 and returns 0.
+namespace std {
+
 long long    str_to_int(const char* s, int* ok);
 
 // Parse an unsigned decimal integer.
@@ -36,3 +38,5 @@ int  str_is_int(const char* s);
 
 // Return 1 if the string is a valid floating-point representation.
 int  str_is_float(const char* s);
+
+} // namespace std

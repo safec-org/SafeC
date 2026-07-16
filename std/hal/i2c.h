@@ -7,6 +7,8 @@
 #define I2C_NACK   1
 #define I2C_ERROR  2
 
+namespace std {
+
 struct I2cBus {
     void*        base;   // MMIO base address
     unsigned int speed;  // bus speed in Hz
@@ -31,3 +33,5 @@ struct I2cBus {
 
 // Initialize I2C master at `base` with the given bus speed.
 struct I2cBus i2c_init(void* base, unsigned int speed);
+
+} // namespace std

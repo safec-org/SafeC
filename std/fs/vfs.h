@@ -21,6 +21,8 @@
 #define VFS_SEEK_CUR    1
 #define VFS_SEEK_END    2
 
+namespace std {
+
 struct VfsNode {
     char          name[VFS_MAX_NAME];
     int           type;             // VFS_TYPE_FILE / VFS_TYPE_DIR
@@ -84,3 +86,5 @@ struct Vfs {
 // Global VFS instance (single-root for embedded use).
 extern struct Vfs vfs_root;
 void vfs_init();
+
+} // namespace std

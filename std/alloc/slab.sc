@@ -1,6 +1,8 @@
 // SafeC Standard Library — Slab Allocator
 #pragma once
-#include "slab.h"
+#include <std/alloc/slab.h>
+
+namespace std {
 
 extern void* malloc(unsigned long size);
 extern void  free(void* ptr);
@@ -83,3 +85,5 @@ void SlabAllocator::destroy() {
     self.used      = (unsigned long)0;
     self.cap       = (unsigned long)0;
 }
+
+} // namespace std

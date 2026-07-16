@@ -12,6 +12,8 @@
 // Expanded key schedule: max 15 round keys × 4 words × 4 bytes = 240 bytes.
 #define AES_KS_WORDS   60
 
+namespace std {
+
 struct AesCtx {
     unsigned int  ks[AES_KS_WORDS]; // expanded key schedule
     int           rounds;            // 10 (AES-128) or 14 (AES-256)
@@ -39,3 +41,5 @@ struct AesCtx aes128_init(const &stack unsigned char key);
 
 // Initialise AES-256 context from a 32-byte key.
 struct AesCtx aes256_init(const &stack unsigned char key);
+
+} // namespace std

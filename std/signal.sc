@@ -1,5 +1,7 @@
 // SafeC Standard Library — signal implementation
-#include "signal.h"
+#include <std/signal.h>
+
+namespace std {
 
 extern void* signal(int sig, void* handler);
 extern int   raise(int sig);
@@ -22,3 +24,5 @@ void signal_ignore(int sig) {
 int signal_raise(int sig)        { unsafe { return raise(sig); } }
 int signal_kill(int pid, int sig) { unsafe { return kill(pid, sig); } }
 void signal_pause()               { unsafe { pause(); } }
+
+} // namespace std

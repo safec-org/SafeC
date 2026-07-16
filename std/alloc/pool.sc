@@ -1,6 +1,8 @@
 // SafeC Standard Library — Pool Allocator
 #pragma once
-#include "pool.h"
+#include <std/alloc/pool.h>
+
+namespace std {
 
 extern void* malloc(unsigned long size);
 extern void  free(void* ptr);
@@ -109,3 +111,5 @@ void PoolAllocator::destroy() {
     self.head = (void*)0;
     self.cap  = (unsigned long)0;
 }
+
+} // namespace std
