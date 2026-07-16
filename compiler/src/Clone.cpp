@@ -245,7 +245,27 @@ static ExprPtr cloneExprImpl(const Expr *ep, const TypeSubst &subs) {
         auto &ce = static_cast<const CompoundInitExpr &>(e);
         std::vector<ExprPtr> inits;
         for (auto &i : ce.inits) inits.push_back(cloneExprImpl(i.get(), subs));
-        return fix(std::make_unique<CompoundInitExpr>(std::move(inits), ce.loc));
+        auto clone = std::make_unique<CompoundInitExpr>(std::move(inits), ce.loc);
+        // Designator info (see AST.h) must survive cloning too, or a
+        // monomorphized copy of a generic function using '{.field = v}' /
+        // '{[i] = v}' would silently revert to purely positional semantics.
+        clone->designatedFields  = ce.designatedFields;
+        clone->designatedIndices = ce.designatedIndices;
+        clone->resolvedSlots     = ce.resolvedSlots;
+        return fix(std::move(clone));
+    }
+    case ExprKind::GenericSelection: {
+        auto &ge = static_cast<const GenericSelectionExpr &>(e);
+        std::vector<GenericAssoc> assocs;
+        for (auto &a : ge.associations) {
+            GenericAssoc na;
+            na.type = a.type ? substituteType(a.type, subs) : nullptr;
+            na.expr = cloneExprImpl(a.expr.get(), subs);
+            assocs.push_back(std::move(na));
+        }
+        auto clone = std::make_unique<GenericSelectionExpr>(
+            cloneExprImpl(ge.controlling.get(), subs), std::move(assocs), ge.loc);
+        return fix(std::move(clone));
     }
     case ExprKind::TupleLit: {
         auto &te = static_cast<const TupleLitExpr &>(e);
