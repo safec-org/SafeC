@@ -103,6 +103,15 @@ private:
     llvm::GlobalVariable *genGlobalVar(GlobalVarDecl &gv);
     void              genStaticAssert(StaticAssertDecl &sa);
 
+    // Fold a global-variable initializer expression into an LLVM constant.
+    // Handles int/float literals, negation of a literal, references to other
+    // globals (e.g. a static array's address), and struct/array aggregate
+    // initializers (recursively). Returns nullptr if the expression isn't a
+    // constant this evaluator understands, so the caller can fall back to
+    // zero-initializing (with a diagnostic) rather than silently dropping
+    // the initializer's actual value.
+    llvm::Constant *evalConstInit(Expr &e, llvm::Type *expectedTy);
+
     // ── Statement codegen ──────────────────────────────────────────────────────
     void genStmt(Stmt &s, FnEnv &env);
     void collectGotoLabels(Stmt &s, FnEnv &env); // pre-create BBs for goto labels

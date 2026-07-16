@@ -53,9 +53,9 @@ struct BSTNode* bst_alloc_node_(unsigned long key_size, unsigned long val_size,
 
 void bst_free_node_(struct BSTNode* n) {
     if (n == (struct BSTNode*)0) return;
-    bst_free_node_(n->left);
-    bst_free_node_(n->right);
     unsafe {
+        bst_free_node_(n->left);
+        bst_free_node_(n->right);
         dealloc(n->key);
         dealloc(n->val);
         dealloc((void*)n);
@@ -74,20 +74,22 @@ struct BST bst_new(unsigned long key_size, unsigned long val_size, void* cmp_fn)
 }
 
 void bst_clear(struct BST* t) {
-    bst_free_node_(t->root);
-    t->root = (struct BSTNode*)0;
-    t->len = 0UL;
+    unsafe {
+        bst_free_node_(t->root);
+        t->root = (struct BSTNode*)0;
+        t->len = 0UL;
+    }
 }
 
 void bst_free(struct BST* t) { bst_clear(t); }
 
-unsigned long bst_len(struct BST* t)    { return t->len; }
-int           bst_is_empty(struct BST* t) { return t->len == 0UL; }
+unsigned long bst_len(struct BST* t)    { unsafe { return t->len; } }
+int           bst_is_empty(struct BST* t) { unsafe { return t->len == 0UL; } }
 
 // ── Insert (recursive via stack simulation using while) ───────────────────────
 int bst_insert(struct BST* t, const void* key, const void* val) {
     unsafe {
-        int (*cmp)(const void*, const void*) = (int (*)(const void*, const void*))t->cmp_fn;
+        fn int(const void*, const void*) cmp = (fn int(const void*, const void*))t->cmp_fn;
         if (t->root == (struct BSTNode*)0) {
             t->root = bst_alloc_node_(t->key_size, t->val_size, key, val);
             if (t->root == (struct BSTNode*)0) return 0;
@@ -126,7 +128,7 @@ int bst_insert(struct BST* t, const void* key, const void* val) {
 // ── Get ───────────────────────────────────────────────────────────────────────
 void* bst_get(struct BST* t, const void* key) {
     unsafe {
-        int (*cmp)(const void*, const void*) = (int (*)(const void*, const void*))t->cmp_fn;
+        fn int(const void*, const void*) cmp = (fn int(const void*, const void*))t->cmp_fn;
         struct BSTNode* cur = t->root;
         while (cur != (struct BSTNode*)0) {
             int c = cmp(key, (const void*)cur->key);
@@ -143,22 +145,26 @@ int bst_contains(struct BST* t, const void* key) {
 
 // ── Min / max ─────────────────────────────────────────────────────────────────
 void* bst_min_key(struct BST* t) {
-    if (t->root == (struct BSTNode*)0) return (void*)0;
-    struct BSTNode* n = t->root;
-    while (n->left != (struct BSTNode*)0) n = n->left;
-    return n->key;
+    unsafe {
+        if (t->root == (struct BSTNode*)0) return (void*)0;
+        struct BSTNode* n = t->root;
+        while (n->left != (struct BSTNode*)0) n = n->left;
+        return n->key;
+    }
 }
 void* bst_max_key(struct BST* t) {
-    if (t->root == (struct BSTNode*)0) return (void*)0;
-    struct BSTNode* n = t->root;
-    while (n->right != (struct BSTNode*)0) n = n->right;
-    return n->key;
+    unsafe {
+        if (t->root == (struct BSTNode*)0) return (void*)0;
+        struct BSTNode* n = t->root;
+        while (n->right != (struct BSTNode*)0) n = n->right;
+        return n->key;
+    }
 }
 
 // ── Remove (iterative) ────────────────────────────────────────────────────────
 int bst_remove(struct BST* t, const void* key) {
     unsafe {
-        int (*cmp)(const void*, const void*) = (int (*)(const void*, const void*))t->cmp_fn;
+        fn int(const void*, const void*) cmp = (fn int(const void*, const void*))t->cmp_fn;
         struct BSTNode* parent = (struct BSTNode*)0;
         struct BSTNode* cur    = t->root;
         int went_left = 0;
@@ -207,16 +213,16 @@ int bst_remove(struct BST* t, const void* key) {
 // ── In-order traversal (iterative using Stack from stack.h would create a dep; use recursion helper) ──
 void bst_inorder_(struct BSTNode* n, void* func) {
     if (n == (struct BSTNode*)0) return;
-    bst_inorder_(n->left, func);
     unsafe {
-        void (*f)(const void*, void*) = (void (*)(const void*, void*))func;
+        bst_inorder_(n->left, func);
+        fn void(const void*, void*) f = (fn void(const void*, void*))func;
         f((const void*)n->key, n->val);
+        bst_inorder_(n->right, func);
     }
-    bst_inorder_(n->right, func);
 }
 
 void bst_foreach_inorder(struct BST* t, void* func) {
-    bst_inorder_(t->root, func);
+    unsafe { bst_inorder_(t->root, func); }
 }
 
 generic<T>

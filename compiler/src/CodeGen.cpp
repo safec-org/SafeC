@@ -503,20 +503,105 @@ void CodeGen::genFunctionBody(FunctionDecl &fn, llvm::Function *llvmFn) {
 // GLOBAL VARIABLES
 // ─────────────────────────────────────────────────────────────────────────────
 
+llvm::Constant *CodeGen::evalConstInit(Expr &e, llvm::Type *expectedTy) {
+    switch (e.kind) {
+    case ExprKind::IntLit: {
+        int64_t v = static_cast<IntLitExpr &>(e).value;
+        if (expectedTy->isIntegerTy())      return llvm::ConstantInt::get(expectedTy, (uint64_t)v, true);
+        if (expectedTy->isFloatingPointTy()) return llvm::ConstantFP::get(expectedTy, (double)v);
+        if (expectedTy->isPointerTy() && v == 0)
+            return llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(expectedTy));
+        return nullptr;
+    }
+    case ExprKind::FloatLit:
+        return expectedTy->isFloatingPointTy()
+            ? llvm::ConstantFP::get(expectedTy, static_cast<FloatLitExpr &>(e).value)
+            : nullptr;
+    case ExprKind::BoolLit:
+        return expectedTy->isIntegerTy()
+            ? llvm::ConstantInt::get(expectedTy, static_cast<BoolLitExpr &>(e).value ? 1 : 0)
+            : nullptr;
+    case ExprKind::NullLit:
+        return expectedTy->isPointerTy()
+            ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(expectedTy))
+            : nullptr;
+    case ExprKind::Unary: {
+        auto &ue = static_cast<UnaryExpr &>(e);
+        if (ue.op != UnaryOp::Neg) return nullptr;
+        auto *inner = evalConstInit(*ue.operand, expectedTy);
+        if (!inner) return nullptr;
+        if (auto *ci = llvm::dyn_cast<llvm::ConstantInt>(inner))
+            return llvm::ConstantInt::get(expectedTy, (uint64_t)(-ci->getSExtValue()), true);
+        if (auto *cf = llvm::dyn_cast<llvm::ConstantFP>(inner))
+            return llvm::ConstantFP::get(expectedTy, -cf->getValueAPF().convertToDouble());
+        return nullptr;
+    }
+    case ExprKind::Cast:
+        return evalConstInit(*static_cast<CastExpr &>(e).operand, expectedTy);
+    case ExprKind::Ident: {
+        // Reference to another global (e.g. a static array's address) — under
+        // opaque pointers the global's own address already *is* "pointer to
+        // its first element", so no GEP is needed for array decay here.
+        auto it = globals_.find(static_cast<IdentExpr &>(e).name);
+        if (it == globals_.end()) return nullptr;
+        auto *c = llvm::dyn_cast<llvm::Constant>(it->second);
+        if (!c) return nullptr;
+        if (expectedTy->isPointerTy() && c->getType()->isPointerTy()) return c;
+        return (c->getType() == expectedTy) ? c : nullptr;
+    }
+    case ExprKind::Compound: {
+        auto &ci = static_cast<CompoundInitExpr &>(e);
+        if (expectedTy->isStructTy()) {
+            auto *st = llvm::cast<llvm::StructType>(expectedTy);
+            if (ci.inits.size() > st->getNumElements()) return nullptr;
+            std::vector<llvm::Constant *> fields;
+            for (unsigned i = 0; i < st->getNumElements(); ++i) {
+                if (i < ci.inits.size()) {
+                    auto *c = evalConstInit(*ci.inits[i], st->getElementType(i));
+                    if (!c) return nullptr;
+                    fields.push_back(c);
+                } else {
+                    fields.push_back(llvm::Constant::getNullValue(st->getElementType(i)));
+                }
+            }
+            return llvm::ConstantStruct::get(st, fields);
+        }
+        if (expectedTy->isArrayTy()) {
+            auto *at = llvm::cast<llvm::ArrayType>(expectedTy);
+            auto *elemTy = at->getElementType();
+            if (ci.inits.size() > at->getNumElements()) return nullptr;
+            std::vector<llvm::Constant *> elems;
+            for (unsigned i = 0; i < at->getNumElements(); ++i) {
+                if (i < ci.inits.size()) {
+                    auto *c = evalConstInit(*ci.inits[i], elemTy);
+                    if (!c) return nullptr;
+                    elems.push_back(c);
+                } else {
+                    elems.push_back(llvm::Constant::getNullValue(elemTy));
+                }
+            }
+            return llvm::ConstantArray::get(at, elems);
+        }
+        return nullptr;
+    }
+    default:
+        return nullptr;
+    }
+}
+
 llvm::GlobalVariable *CodeGen::genGlobalVar(GlobalVarDecl &gv) {
     auto *ty = lowerType(gv.type);
     llvm::Constant *init = llvm::Constant::getNullValue(ty);
 
     if (gv.init && !ty->isVoidTy()) {
-        // Compile-time constant initializer only (integer/float literals)
-        if (gv.init->kind == ExprKind::IntLit) {
-            int64_t v = static_cast<IntLitExpr &>(*gv.init).value;
-            init = llvm::ConstantInt::get(ty, v, /*isSigned=*/true);
-        } else if (gv.init->kind == ExprKind::FloatLit) {
-            double v = static_cast<FloatLitExpr &>(*gv.init).value;
-            init = llvm::ConstantFP::get(ty, v);
+        if (auto *folded = evalConstInit(*gv.init, ty)) {
+            init = folded;
+        } else {
+            diag_.warn(gv.loc,
+                "codegen: global initializer for '" + gv.name +
+                "' isn't a compile-time constant this compiler can fold yet; "
+                "zero-initializing instead");
         }
-        // Other initializers would need the consteval engine
     }
 
     auto *gvar = new llvm::GlobalVariable(
@@ -772,7 +857,16 @@ void CodeGen::collectGotoLabels(Stmt &s, FnEnv &env) {
 }
 
 void CodeGen::genCompound(CompoundStmt &s, FnEnv &env) {
-    for (auto &stmt : s.body) genStmt(*stmt, env);
+    for (auto &stmt : s.body) {
+        // Once a statement has terminated the current block (return, or an
+        // if/else where both arms already return, etc.), any further
+        // statements in this compound are unreachable dead code. Emitting IR
+        // for them would insert instructions after the block's terminator —
+        // invalid IR ("terminator found in the middle of a basic block").
+        if (builder_.GetInsertBlock() && builder_.GetInsertBlock()->getTerminator())
+            break;
+        genStmt(*stmt, env);
+    }
 }
 
 void CodeGen::genExprStmt(ExprStmt &s, FnEnv &env) {
@@ -1870,9 +1964,20 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
 
     // Method call: prepend 'self' pointer (address of base object)
     if (e.methodBase) {
-        // Get the lvalue address of the base expression as self pointer
         llvm::Value *selfPtr = nullptr;
-        if (e.methodBase->isLValue) {
+        bool baseIsIndirection = e.methodBase->type &&
+            (e.methodBase->type->kind == TypeKind::Pointer ||
+             e.methodBase->type->kind == TypeKind::Reference);
+        if (baseIsIndirection) {
+            // 'p->method()', or 'self.method()' from inside another method
+            // (self's type is '&stack T' — a Reference) — the base is
+            // already a pointer/reference to the object, so its *value* (not
+            // the address of the pointer/reference variable) is self. Using
+            // genLValue here would add a spurious extra indirection — self
+            // ends up pointing at the stack slot holding the pointer rather
+            // than at the object, and every field read is garbage.
+            selfPtr = genExpr(*e.methodBase, env);
+        } else if (e.methodBase->isLValue) {
             selfPtr = genLValue(*e.methodBase, env);
         } else {
             // Base is a value expression — allocate temp storage
@@ -2221,6 +2326,12 @@ llvm::Value *CodeGen::genCast(CastExpr &e, FnEnv &env) {
     auto *srcTy  = srcVal->getType();
 
     if (srcTy == dstTy) return srcVal;
+
+    // '(void)expr' — the classic C idiom for "evaluate for side effects,
+    // discard the result" (e.g. silencing an unused-parameter warning).
+    // There's nothing to cast to: void isn't a real SSA value type, so
+    // the fallback bitcast below would be malformed IR.
+    if (dstTy->isVoidTy()) return srcVal;
 
     // Integer ↔ Integer
     if (srcTy->isIntegerTy() && dstTy->isIntegerTy()) {

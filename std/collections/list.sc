@@ -33,75 +33,85 @@ void list_free_node_(struct ListNode* n) {
 }
 
 void list_free(struct List* l) {
-    struct ListNode* n = l->head;
-    while (n != (struct ListNode*)0) {
-        struct ListNode* next = n->next;
-        list_free_node_(n);
-        n = next;
+    unsafe {
+        struct ListNode* n = l->head;
+        while (n != (struct ListNode*)0) {
+            struct ListNode* next = n->next;
+            list_free_node_(n);
+            n = next;
+        }
+        l->head = (struct ListNode*)0;
+        l->tail = (struct ListNode*)0;
+        l->len = 0UL;
     }
-    l->head = (struct ListNode*)0;
-    l->tail = (struct ListNode*)0;
-    l->len = 0UL;
 }
 
-unsigned long list_len(struct List* l)      { return l->len; }
-int           list_is_empty(struct List* l) { return l->len == 0UL; }
-void*         list_front(struct List* l)    { return l->head != (struct ListNode*)0 ? l->head->data : (void*)0; }
-void*         list_back(struct List* l)     { return l->tail != (struct ListNode*)0 ? l->tail->data : (void*)0; }
+unsigned long list_len(struct List* l)      { unsafe { return l->len; } }
+int           list_is_empty(struct List* l) { unsafe { return l->len == 0UL; } }
+void*         list_front(struct List* l)    { unsafe { return l->head != (struct ListNode*)0 ? l->head->data : (void*)0; } }
+void*         list_back(struct List* l)     { unsafe { return l->tail != (struct ListNode*)0 ? l->tail->data : (void*)0; } }
 
 void list_clear(struct List* l) { list_free(l); }
 
 int list_push_front(struct List* l, const void* elem) {
-    struct ListNode* n = list_alloc_node_(l->elem_size, elem);
-    if (n == (struct ListNode*)0) return 0;
-    n->next = l->head;
-    n->prev = (struct ListNode*)0;
-    if (l->head != (struct ListNode*)0) l->head->prev = n;
-    else l->tail = n;
-    l->head = n;
-    l->len = l->len + 1UL;
+    unsafe {
+        struct ListNode* n = list_alloc_node_(l->elem_size, elem);
+        if (n == (struct ListNode*)0) return 0;
+        n->next = l->head;
+        n->prev = (struct ListNode*)0;
+        if (l->head != (struct ListNode*)0) l->head->prev = n;
+        else l->tail = n;
+        l->head = n;
+        l->len = l->len + 1UL;
+    }
     return 1;
 }
 
 int list_push_back(struct List* l, const void* elem) {
-    struct ListNode* n = list_alloc_node_(l->elem_size, elem);
-    if (n == (struct ListNode*)0) return 0;
-    n->prev = l->tail;
-    n->next = (struct ListNode*)0;
-    if (l->tail != (struct ListNode*)0) l->tail->next = n;
-    else l->head = n;
-    l->tail = n;
-    l->len = l->len + 1UL;
+    unsafe {
+        struct ListNode* n = list_alloc_node_(l->elem_size, elem);
+        if (n == (struct ListNode*)0) return 0;
+        n->prev = l->tail;
+        n->next = (struct ListNode*)0;
+        if (l->tail != (struct ListNode*)0) l->tail->next = n;
+        else l->head = n;
+        l->tail = n;
+        l->len = l->len + 1UL;
+    }
     return 1;
 }
 
 int list_pop_front(struct List* l, void* out) {
-    if (l->head == (struct ListNode*)0) return 0;
-    struct ListNode* n = l->head;
-    if (out != (void*)0) unsafe { safe_memcpy(out, (const void*)n->data, l->elem_size); }
-    l->head = n->next;
-    if (l->head != (struct ListNode*)0) l->head->prev = (struct ListNode*)0;
-    else l->tail = (struct ListNode*)0;
-    list_free_node_(n);
-    l->len = l->len - 1UL;
+    unsafe {
+        if (l->head == (struct ListNode*)0) return 0;
+        struct ListNode* n = l->head;
+        if (out != (void*)0) safe_memcpy(out, (const void*)n->data, l->elem_size);
+        l->head = n->next;
+        if (l->head != (struct ListNode*)0) l->head->prev = (struct ListNode*)0;
+        else l->tail = (struct ListNode*)0;
+        list_free_node_(n);
+        l->len = l->len - 1UL;
+    }
     return 1;
 }
 
 int list_pop_back(struct List* l, void* out) {
-    if (l->tail == (struct ListNode*)0) return 0;
-    struct ListNode* n = l->tail;
-    if (out != (void*)0) unsafe { safe_memcpy(out, (const void*)n->data, l->elem_size); }
-    l->tail = n->prev;
-    if (l->tail != (struct ListNode*)0) l->tail->next = (struct ListNode*)0;
-    else l->head = (struct ListNode*)0;
-    list_free_node_(n);
-    l->len = l->len - 1UL;
+    unsafe {
+        if (l->tail == (struct ListNode*)0) return 0;
+        struct ListNode* n = l->tail;
+        if (out != (void*)0) safe_memcpy(out, (const void*)n->data, l->elem_size);
+        l->tail = n->prev;
+        if (l->tail != (struct ListNode*)0) l->tail->next = (struct ListNode*)0;
+        else l->head = (struct ListNode*)0;
+        list_free_node_(n);
+        l->len = l->len - 1UL;
+    }
     return 1;
 }
 
 struct ListNode* list_find(struct List* l, const void* val, void* cmp) {
     unsafe {
-        int (*cmpfn)(const void*, const void*) = (int (*)(const void*, const void*))cmp;
+        fn int(const void*, const void*) cmpfn = (fn int(const void*, const void*))cmp;
         struct ListNode* n = l->head;
         while (n != (struct ListNode*)0) {
             if (cmpfn((const void*)n->data, val) == 0) return n;
@@ -116,12 +126,14 @@ int list_contains(struct List* l, const void* val, void* cmp) {
 }
 
 void list_remove_node(struct List* l, struct ListNode* node) {
-    if (node->prev != (struct ListNode*)0) node->prev->next = node->next;
-    else l->head = node->next;
-    if (node->next != (struct ListNode*)0) node->next->prev = node->prev;
-    else l->tail = node->prev;
-    list_free_node_(node);
-    l->len = l->len - 1UL;
+    unsafe {
+        if (node->prev != (struct ListNode*)0) node->prev->next = node->next;
+        else l->head = node->next;
+        if (node->next != (struct ListNode*)0) node->next->prev = node->prev;
+        else l->tail = node->prev;
+        list_free_node_(node);
+        l->len = l->len - 1UL;
+    }
 }
 
 int list_remove(struct List* l, const void* val, void* cmp) {
@@ -133,7 +145,7 @@ int list_remove(struct List* l, const void* val, void* cmp) {
 
 void list_foreach(struct List* l, void* func) {
     unsafe {
-        void (*f)(void*) = (void (*)(void*))func;
+        fn void(void*) f = (fn void(void*))func;
         struct ListNode* n = l->head;
         while (n != (struct ListNode*)0) {
             f(n->data);
@@ -143,14 +155,16 @@ void list_foreach(struct List* l, void* func) {
 }
 
 void list_reverse(struct List* l) {
-    struct ListNode* n = l->head;
-    l->tail = l->head;
-    while (n != (struct ListNode*)0) {
-        struct ListNode* tmp = n->next;
-        n->next = n->prev;
-        n->prev = tmp;
-        if (tmp == (struct ListNode*)0) l->head = n;
-        n = tmp;
+    unsafe {
+        struct ListNode* n = l->head;
+        l->tail = l->head;
+        while (n != (struct ListNode*)0) {
+            struct ListNode* tmp = n->next;
+            n->next = n->prev;
+            n->prev = tmp;
+            if (tmp == (struct ListNode*)0) l->head = n;
+            n = tmp;
+        }
     }
 }
 

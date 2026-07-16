@@ -120,6 +120,13 @@ private:
     TypePtr checkTupleLit(TupleLitExpr &e);
     TypePtr checkSpawn(SpawnExpr &e);
 
+    // Aggregate initializer '{a, b, c}' against a known target type (struct
+    // fields or array elements, matched positionally). Falls back to
+    // checking each element with no target type (result type 'void') when
+    // the target isn't a struct or array — e.g. type is still being
+    // inferred from the initializer.
+    TypePtr checkCompoundInit(CompoundInitExpr &e, const TypePtr &targetTy);
+
     // ── Region safety ─────────────────────────────────────────────────────────
     // Returns the scope depth a reference type originated from
     // Emits error if a reference escapes to a shorter-lived scope
@@ -141,7 +148,7 @@ private:
     std::unordered_map<std::string, std::vector<AliasRecord>> aliasMap_;
 
     void trackRef(const std::string &targetVar, bool isMut, int depth,
-                  const std::string &borrower = {});
+                  const std::string &borrower = {}, SourceLocation loc = {});
     void untrackScope(int depth);
     void releaseUnusedBorrows(const std::string &borrower);
 

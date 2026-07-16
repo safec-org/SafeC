@@ -40,10 +40,15 @@ public:
 
     // Build a static library from all .sc files in `srcDir` (recursively).
     // Outputs to `libOut` (e.g., "build/libfoo.a").
+    // 'compatPreprocessor' passes --compat-preprocessor to safec — needed for
+    // the standard library itself, which (unlike ordinary user code) relies
+    // on function-like macros in a few headers (e.g. ring buffer static
+    // storage declarations).
     // Returns true on success.
     bool buildLib(const std::string& srcDir,
                   const std::string& libOut,
-                  const std::vector<std::string>& includeDirs = {});
+                  const std::vector<std::string>& includeDirs = {},
+                  bool compatPreprocessor = false);
 
     // Build (or use cached) SafeC standard library.
     // Returns the path to the built .a, or "" on failure.
@@ -75,7 +80,8 @@ private:
     std::string compileSrc(const std::string& safecBin,
                             const std::string& srcPath,
                             const std::string& buildDir,
-                            const std::vector<std::string>& includeDirs = {}) const;
+                            const std::vector<std::string>& includeDirs = {},
+                            bool compatPreprocessor = false) const;
 
     // Compile .ll to .o with clang.  Returns .o path or "".
     std::string llToObj(const std::string& llFile,

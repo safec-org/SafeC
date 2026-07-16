@@ -113,7 +113,6 @@ void* mem_align_ptr(void* ptr, unsigned long align) {
         unsigned long a = mem_align_up(p, align);
         return (void*)a;
     }
-    return (void*)0;
 }
 
 int mem_fits_page(unsigned long addr, unsigned long size) {

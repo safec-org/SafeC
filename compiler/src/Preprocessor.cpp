@@ -16,6 +16,24 @@ namespace fs = std::filesystem;
 // Static helpers
 // =============================================================================
 
+// Strip a trailing '//' line comment, ignoring '//' that appears inside a
+// string or char literal. Used for both directive lines ('#define X 7 //
+// comment' must not capture the comment into X's body) and regular code
+// lines.
+static std::string stripLineComment(const std::string &line) {
+    bool inStr  = false;
+    bool inChar = false;
+    for (size_t k = 0; k < line.size(); ++k) {
+        char c = line[k];
+        if (c == '\\' && (inStr || inChar)) { ++k; continue; }
+        if (c == '"'  && !inChar) { inStr  = !inStr;  continue; }
+        if (c == '\'' && !inStr)  { inChar = !inChar; continue; }
+        if (!inStr && !inChar && c == '/' && k + 1 < line.size() && line[k + 1] == '/')
+            return line.substr(0, k);
+    }
+    return line;
+}
+
 std::string Preprocessor::trim(const std::string &s) {
     size_t b = s.find_first_not_of(" \t\r\n");
     if (b == std::string::npos) return {};
@@ -126,8 +144,12 @@ std::string Preprocessor::processFile(const std::string &src,
         while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) ++i;
 
         if (i < line.size() && line[i] == '#') {
-            // Directive line
-            std::string rest = (i + 1 < line.size()) ? line.substr(i + 1) : std::string{};
+            // Directive line. Strip a trailing '//' comment first — otherwise
+            // e.g. '#define N 7 // comment' captures the comment text into
+            // the macro body, corrupting every expansion site.
+            std::string directiveLine = stripLineComment(line);
+            std::string rest = (i + 1 < directiveLine.size())
+                                    ? directiveLine.substr(i + 1) : std::string{};
             // Skip optional whitespace between # and directive name
             std::string injected = handleDirective(rest, filename, lineNo, depth);
             if (!injected.empty()) {
@@ -138,23 +160,8 @@ std::string Preprocessor::processFile(const std::string &src,
             }
         } else if (isActive()) {
             // Active code line: strip single-line comments then expand macros
-            // Strip // comments (naive: doesn't handle // inside strings perfectly
-            // but the lexer handles multi-line /* */ so we leave those)
-            std::string effective = line;
-            // Find // outside string literals
-            bool inStr  = false;
-            bool inChar = false;
-            for (size_t k = 0; k < effective.size(); ++k) {
-                char c = effective[k];
-                if (c == '\\' && (inStr || inChar)) { ++k; continue; }
-                if (c == '"'  && !inChar) { inStr  = !inStr;  continue; }
-                if (c == '\'' && !inStr)  { inChar = !inChar; continue; }
-                if (!inStr && !inChar && c == '/' && k + 1 < effective.size()
-                    && effective[k + 1] == '/') {
-                    effective = effective.substr(0, k);
-                    break;
-                }
-            }
+            // (multi-line /* */ comments are left for the lexer to handle)
+            std::string effective = stripLineComment(line);
             output += expandLine(effective, filename, lineNo);
             output += '\n';
         } else {

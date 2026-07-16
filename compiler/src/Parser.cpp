@@ -70,6 +70,7 @@ bool Parser::isTypeStart(const Token &t) const {
     case TK::KW_long: case TK::KW_short: case TK::KW_unsigned:
     case TK::KW_signed: case TK::KW_struct: case TK::KW_enum:
     case TK::KW_const:
+    case TK::KW_volatile: // e.g. cast '(volatile T*)expr'
     case TK::KW_tuple:    // tuple type
     case TK::KW_fn:       // fn ReturnType(Params) — function pointer type
     case TK::KW_typeof:   // typeof(expr) — type position
@@ -594,6 +595,16 @@ DeclPtr Parser::parseFunctionOrGlobalVar(bool isConst, bool isConsteval,
     }
 
     // Global variable
+    // C-style array dimension after name: T name[N]; — same declarator
+    // position as local variables and struct fields.
+    while (cur().is(TK::LBracket)) {
+        consume();
+        int64_t sz = -1;
+        if (!cur().is(TK::RBracket)) sz = parseArraySizeConst();
+        expect(TK::RBracket, "expected ']' in array declaration");
+        retType = makeArray(std::move(retType), sz);
+    }
+
     auto gv = std::make_unique<GlobalVarDecl>(std::move(name), loc);
     gv->type      = std::move(retType);
     gv->isConst   = isConst;
@@ -1147,7 +1158,7 @@ StmtPtr Parser::parseVarDeclStmt(bool isConst, bool isStatic) {
     while (cur().is(TK::LBracket)) {
         consume();
         int64_t sz = -1;
-        if (cur().is(TK::IntLit)) { sz = cur().intVal; consume(); }
+        if (!cur().is(TK::RBracket)) sz = parseArraySizeConst();
         expect(TK::RBracket, "expected ']' in array declaration");
         ty = makeArray(std::move(ty), sz);
     }

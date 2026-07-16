@@ -20,7 +20,7 @@ void* Slice::get_raw(unsigned long idx) const {
 
 int Slice::set_raw(unsigned long idx, const void* val) {
     if (idx >= self.len) { return 0; }
-    unsafe { memcpy((char*)self.ptr + idx * self.elem_size, val, self.elem_size); }
+    unsafe { memcpy((void*)((char*)self.ptr + idx * self.elem_size), val, self.elem_size); }
     return 1;
 }
 

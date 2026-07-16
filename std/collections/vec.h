@@ -12,7 +12,7 @@ struct Vec {
     int           reserve(unsigned long new_cap);  // ensure capacity >= new_cap
     void          shrink();                         // shrink cap to len
     unsigned long length() const;                  // element count
-    unsigned long capacity() const;                // allocated capacity
+    unsigned long total_capacity() const;           // allocated capacity
     int           is_empty() const;
 
     // ── Element access (raw/type-erased) ────────────────────────────────────

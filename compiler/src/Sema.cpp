@@ -340,6 +340,25 @@ void Sema::collectStruct(StructDecl &sd) {
     auto st = std::make_shared<StructType>(sd.name, sd.isUnion);
     st->isDefined = true;
     st->isPacked  = sd.isPacked;
+
+    // Register the struct *before* resolving its fields — a self-referential
+    // field like 'struct Node* next;' inside 'struct Node' needs
+    // typeRegistry_["Node"] to already point at this (shared, still being
+    // populated) StructType. Otherwise resolveType() falls back to the
+    // parse-time placeholder (fieldless, isDefined=false) for the pointee,
+    // and any later '->next'-style chained access on it fails with a
+    // spurious "struct 'Node' has no field 'next'".
+    sd.type = st;
+    typeRegistry_[sd.name] = st;
+    {
+        Symbol sym;
+        sym.kind  = SymKind::Type;
+        sym.name  = sd.name;
+        sym.type  = st;
+        sym.initialized = true;
+        define(std::move(sym));
+    }
+
     int idx = 0;
     for (auto &f : sd.fields) {
         FieldDecl fd;
@@ -359,16 +378,6 @@ void Sema::collectStruct(StructDecl &sd) {
         }
         st->maxPayloadSize = maxSz;
     }
-
-    sd.type = st;
-    typeRegistry_[sd.name] = st;
-
-    Symbol sym;
-    sym.kind  = SymKind::Type;
-    sym.name  = sd.name;
-    sym.type  = st;
-    sym.initialized = true;
-    define(std::move(sym));
 }
 
 void Sema::collectEnum(EnumDecl &ed) {
@@ -434,11 +443,25 @@ void Sema::collectRegion(RegionDecl &rd) {
 
 void Sema::collectGlobalVar(GlobalVarDecl &gv) {
     gv.type = resolveType(gv.type);
+
+    // Without a backing VarDecl, checkIdent never sets isLValue for this
+    // symbol (see its 'if (sym->varDecl) ... e.isLValue = true' check) —
+    // globals would be permanently unassignable, including through struct
+    // field access ('g.field = x'), which just inherits the base's isLValue.
+    VarDecl *vd = new VarDecl{}; // leaked intentionally, matches param/local pattern
+    vd->name        = gv.name;
+    vd->type        = gv.type;
+    vd->isConst     = gv.isConst;
+    vd->isStatic    = true;
+    vd->isGlobal    = true;
+    vd->initialized = (gv.init != nullptr || gv.isExtern);
+
     Symbol sym;
     sym.kind        = SymKind::Variable;
     sym.name        = gv.name;
     sym.type        = gv.type;
-    sym.initialized = (gv.init != nullptr || gv.isExtern);
+    sym.varDecl     = vd;
+    sym.initialized = vd->initialized;
     define(std::move(sym));
 }
 
@@ -566,7 +589,9 @@ void Sema::checkFunction(FunctionDecl &fn) {
 
 void Sema::checkGlobalVar(GlobalVarDecl &gv) {
     if (gv.init) {
-        TypePtr initTy = checkExpr(*gv.init);
+        TypePtr initTy = (gv.init->kind == ExprKind::Compound)
+            ? checkCompoundInit(static_cast<CompoundInitExpr &>(*gv.init), gv.type)
+            : checkExpr(*gv.init);
         if (!gv.type->isError() && !initTy->isError()) {
             if (!canImplicitlyConvert(initTy, gv.type)) {
                 diag_.error(gv.loc,
@@ -740,17 +765,18 @@ void Sema::checkReturn(ReturnStmt &s, FunctionDecl &fn) {
     if (s.value) {
         TypePtr valTy = checkExpr(*s.value);
 
-        // Region escape check: returned reference must not be &stack or &arena T
+        // Region escape check: a returned '&stack T' refers to a local that's
+        // gone the moment the function returns, so it can never be valid.
+        // '&arena<R> T' is fine to return — regions are only ever declared
+        // at the top level (see parseTopLevelDecl), so every arena already
+        // outlives any individual function call; there's no such thing as a
+        // arena scoped more narrowly than "the whole program".
         if (valTy && valTy->kind == TypeKind::Reference) {
             auto &rt = static_cast<ReferenceType &>(*valTy);
             if (rt.region == Region::Stack) {
                 diag_.error(s.loc,
                     "cannot return '&stack " + rt.base->str() +
                     "': stack reference escapes function scope");
-            } else if (rt.region == Region::Arena) {
-                diag_.error(s.loc,
-                    "cannot return '&arena<" + rt.arenaName + "> " +
-                    rt.base->str() + "': arena reference escapes function scope");
             }
         }
 
@@ -775,14 +801,24 @@ void Sema::checkVarDecl(VarDeclStmt &s, FunctionDecl &fn) {
 
     TypePtr initTy;
     if (s.init) {
-        initTy = checkExpr(*s.init);
+        initTy = (s.init->kind == ExprKind::Compound)
+            ? checkCompoundInit(static_cast<CompoundInitExpr &>(*s.init), s.declType)
+            : checkExpr(*s.init);
 
-        // Borrow checker: if declaring a reference var from address-of, track the borrow
-        if (!inUnsafeScope() && s.declType && s.declType->kind == TypeKind::Reference) {
+        // Borrow checker: declaring a reference var from address-of ('&region T r = &x')
+        // registers the borrow with the *declared* mutability — not always mutable —
+        // so that e.g. two '&stack const T' (shared) borrows of the same variable
+        // can coexist, matching the mutable-XOR-shared aliasing rule.
+        if (!inUnsafeScope() && s.declType && s.declType->kind == TypeKind::Reference &&
+            s.init && s.init->kind == ExprKind::AddrOf) {
             auto &rt = static_cast<ReferenceType &>(*s.declType);
-            // If init is address-of a named variable, trackRef was already called
-            // in checkAddrOf. For explicit reference bindings (&stack T r = &x),
-            // the trackRef was already done. Nothing extra needed here.
+            auto &ue = static_cast<UnaryExpr &>(*s.init);
+            if (ue.operand && ue.operand->kind == ExprKind::Ident) {
+                auto *ident = static_cast<IdentExpr *>(ue.operand.get());
+                if (ident->resolved && rt.region != Region::Static) {
+                    trackRef(ident->name, rt.mut, scopeDepth_, /*borrower=*/s.name, s.loc);
+                }
+            }
         }
         // Also track if initTy is a reference to a named ident (direct ref binding)
         // NLL: record borrower name so borrow can be released at last use
@@ -791,7 +827,7 @@ void Sema::checkVarDecl(VarDeclStmt &s, FunctionDecl &fn) {
             auto &rt    = static_cast<ReferenceType &>(*initTy);
             auto *ident = static_cast<IdentExpr *>(s.init.get());
             if (ident->resolved && rt.region != Region::Static) {
-                trackRef(ident->name, rt.mut, scopeDepth_, /*borrower=*/s.name);
+                trackRef(ident->name, rt.mut, scopeDepth_, /*borrower=*/s.name, s.loc);
             }
         }
 
@@ -921,9 +957,13 @@ TypePtr Sema::checkExpr(Expr &e) {
         break;
     }
     case ExprKind::Compound: {
+        // No target type available here (e.g. reached via a generic
+        // checkExpr call rather than through checkVarDecl/checkGlobalVar,
+        // which call checkCompoundInit directly once they know the
+        // declared type) — nothing to match fields/elements against yet.
         auto &ci = static_cast<CompoundInitExpr &>(e);
         for (auto &init : ci.inits) checkExpr(*init);
-        ty = makeVoid(); // resolved by context
+        ty = makeVoid();
         break;
     }
     case ExprKind::New:
@@ -1027,13 +1067,11 @@ TypePtr Sema::checkAddrOf(UnaryExpr &e) {
     if (!e.operand->isLValue) {
         diag_.error(e.loc, "address-of operator requires lvalue");
     }
-    // Track for borrow checker
-    if (!inUnsafeScope() && e.operand && e.operand->kind == ExprKind::Ident) {
-        auto *ident = static_cast<IdentExpr *>(e.operand.get());
-        if (ident->resolved) {
-            trackRef(ident->name, /*isMut=*/true, scopeDepth_, /*borrower=*/{});
-        }
-    }
+    // Borrow tracking happens at the binding site (var decl, assignment, or
+    // call argument), not here — '&x' alone doesn't know whether the
+    // resulting reference will be bound mutably or as a shared/const
+    // reference, and blindly assuming 'mutable' rejected perfectly valid
+    // multiple shared borrows of the same variable.
     // In safe code, & of a stack variable yields &stack T
     return makeReference(std::move(operandTy), Region::Stack, false, true);
 }
@@ -1202,6 +1240,52 @@ TypePtr Sema::checkSpawn(SpawnExpr &e) {
     }
     // spawn returns a pthread_t (represented as signed i64)
     return makeInt(64, true);  // pthread_t handle (long long)
+}
+
+TypePtr Sema::checkCompoundInit(CompoundInitExpr &e, const TypePtr &targetTy) {
+    if (targetTy && targetTy->kind == TypeKind::Struct) {
+        auto &st = static_cast<StructType &>(*targetTy);
+        if (e.inits.size() > st.fields.size()) {
+            diag_.error(e.loc, "too many initializers for struct '" + st.name + "'");
+        }
+        for (size_t i = 0; i < e.inits.size(); ++i) {
+            TypePtr initTy = checkExpr(*e.inits[i]);
+            if (i >= st.fields.size()) continue; // already reported above
+            const TypePtr &fieldTy = st.fields[i].type;
+            if (fieldTy && !initTy->isError() && !fieldTy->isError() &&
+                !canImplicitlyConvert(initTy, fieldTy)) {
+                diag_.error(e.inits[i]->loc,
+                    "type mismatch initializing field '" + st.fields[i].name +
+                    "': cannot convert '" + initTy->str() + "' to '" + fieldTy->str() + "'");
+            }
+        }
+        e.type = targetTy;
+        return targetTy;
+    }
+    if (targetTy && targetTy->kind == TypeKind::Array) {
+        auto &at = static_cast<ArrayType &>(*targetTy);
+        if (at.size > 0 && (int64_t)e.inits.size() > at.size) {
+            diag_.error(e.loc, "too many initializers for array of size " +
+                                std::to_string(at.size));
+        }
+        for (auto &init : e.inits) {
+            TypePtr initTy = checkExpr(*init);
+            if (at.element && !initTy->isError() && !at.element->isError() &&
+                !canImplicitlyConvert(initTy, at.element)) {
+                diag_.error(init->loc,
+                    "type mismatch in array initializer: cannot convert '" +
+                    initTy->str() + "' to '" + at.element->str() + "'");
+            }
+        }
+        e.type = targetTy;
+        return targetTy;
+    }
+    // No usable target type (e.g. still being inferred) — check each element
+    // with no expected type and leave the compound literal untyped, matching
+    // prior behavior.
+    for (auto &init : e.inits) checkExpr(*init);
+    e.type = makeVoid();
+    return e.type;
 }
 
 TypePtr Sema::checkTernary(TernaryExpr &e) {
@@ -1602,6 +1686,14 @@ TypePtr Sema::checkSubscript(SubscriptExpr &e) {
             e.isLValue = rt.mut;
             return static_cast<ArrayType &>(*rt.base).element;
         }
+        // A reference to a scalar (e.g. '&static unsigned char buf') used as
+        // a buffer pointer — the same C idiom as indexing a raw pointer, and
+        // needs the same 'unsafe' bar: there's no bounds information to
+        // check against, unlike a real array or slice.
+        if (!inUnsafeScope())
+            diag_.error(e.loc, "reference subscript requires 'unsafe' block");
+        e.isLValue = rt.mut;
+        return rt.base;
     }
     diag_.error(e.loc, "subscript on non-array type '" + baseTy->str() + "'");
     return makeError();
@@ -1756,27 +1848,33 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
         }
     }
 
-    // Region escape: RHS &stack/&arena can't be assigned to variable with wider scope
+    // Region escape: RHS &stack/&arena can't be assigned to variable with wider
+    // scope. This also has to cover assignment through struct fields
+    // ('h.ref = &x') — not just plain identifiers — by walking the '.' chain
+    // down to its base variable ('->' breaks the chain: it indirects through
+    // a pointer/reference with its own, independent lifetime).
     if (rhsTy && rhsTy->kind == TypeKind::Reference) {
         auto &rt = static_cast<ReferenceType &>(*rhsTy);
-        if (rt.region == Region::Stack && e.lhs->kind == ExprKind::Ident) {
-            auto &ident = static_cast<IdentExpr &>(*e.lhs);
-            if (ident.resolved && ident.resolved->scopeDepth < scopeDepth_) {
+        VarDecl *baseVd = nullptr;
+        for (Expr *cur = e.lhs.get(); cur; ) {
+            if (cur->kind == ExprKind::Ident) { baseVd = static_cast<IdentExpr *>(cur)->resolved; break; }
+            if (cur->kind == ExprKind::Member) { cur = static_cast<MemberExpr *>(cur)->base.get(); continue; }
+            break;
+        }
+        if (rt.region == Region::Stack && baseVd) {
+            if (baseVd->scopeDepth < scopeDepth_) {
                 diag_.error(e.loc,
                     "cannot assign '&stack " + rt.base->str() +
                     "' to variable in outer scope: reference would escape");
             }
         }
-        if (rt.region == Region::Arena && e.lhs->kind == ExprKind::Ident) {
-            auto &ident = static_cast<IdentExpr &>(*e.lhs);
-            if (ident.resolved) {
-                auto it = regionRegistry_.find(rt.arenaName);
-                int minDepth = (it != regionRegistry_.end()) ? it->second->declScopeDepth : 0;
-                if (ident.resolved->scopeDepth < minDepth) {
-                    diag_.error(e.loc,
-                        "cannot assign '&arena<" + rt.arenaName + "> " + rt.base->str() +
-                        "' to variable in outer scope: arena reference would escape");
-                }
+        if (rt.region == Region::Arena && baseVd) {
+            auto it = regionRegistry_.find(rt.arenaName);
+            int minDepth = (it != regionRegistry_.end()) ? it->second->declScopeDepth : 0;
+            if (baseVd->scopeDepth < minDepth) {
+                diag_.error(e.loc,
+                    "cannot assign '&arena<" + rt.arenaName + "> " + rt.base->str() +
+                    "' to variable in outer scope: arena reference would escape");
             }
         }
     }
@@ -1794,6 +1892,25 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
     if (e.op == AssignOp::Assign && e.lhs->kind == ExprKind::Ident) {
         auto &ident = static_cast<IdentExpr &>(*e.lhs);
         releaseUnusedBorrows(ident.name);
+    }
+
+    // Borrow checker: rebinding an existing reference variable ('r = &x;')
+    // registers the new borrow with r's declared mutability, same as at
+    // declaration time — see checkVarDecl for why this can't be done inside
+    // checkAddrOf itself.
+    if (!inUnsafeScope() && e.op == AssignOp::Assign &&
+        e.lhs->kind == ExprKind::Ident && e.rhs->kind == ExprKind::AddrOf &&
+        lhsTy && lhsTy->kind == TypeKind::Reference) {
+        auto &ident = static_cast<IdentExpr &>(*e.lhs);
+        auto &rt    = static_cast<ReferenceType &>(*lhsTy);
+        auto &ue    = static_cast<UnaryExpr &>(*e.rhs);
+        if (ue.operand && ue.operand->kind == ExprKind::Ident) {
+            auto *rhsIdent = static_cast<IdentExpr *>(ue.operand.get());
+            if (rhsIdent->resolved && rt.region != Region::Static) {
+                trackRef(rhsIdent->name, rt.mut, scopeDepth_,
+                         /*borrower=*/ident.name, e.loc);
+            }
+        }
     }
 
     // Mark variable as initialized
@@ -1838,21 +1955,28 @@ void Sema::checkNullabilityDeref(const TypePtr &ty, SourceLocation loc) {
 
 // ── Alias tracking ────────────────────────────────────────────────────────────
 void Sema::trackRef(const std::string &var, bool isMut, int depth,
-                    const std::string &borrower) {
+                    const std::string &borrower, SourceLocation loc) {
     auto &recs = aliasMap_[var];
+    bool conflict = false;
+    // Check *every* live record, not just the first — otherwise a borrow that
+    // happens to sort before a real conflict lets the conflict slip through
+    // unnoticed (and the new borrow used to never get registered either way).
     for (auto &r : recs) {
         if (r.released) continue;  // NLL: already released
         if (r.scopeDepth < depth) continue; // outer scope — no conflict
-        if (isMut) {
-            diag_.error({},
-                "cannot borrow '" + var + "' as mutable: already borrowed");
-        } else if (r.isMutable) {
-            diag_.error({},
-                "cannot borrow '" + var + "' as immutable: already mutably borrowed");
+        if (isMut || r.isMutable) {
+            diag_.error(loc,
+                "cannot borrow '" + var + "' as " + (isMut ? "mutable" : "immutable") +
+                ": already borrowed" + (r.isMutable ? " as mutable" : ""));
+            conflict = true;
+            break; // one diagnostic is enough; further records won't change the outcome
         }
-        return;
+        // Two shared (non-mutable) borrows of the same variable are fine —
+        // keep scanning the rest of the records regardless.
     }
-    recs.push_back({var, borrower, isMut, depth, /*released=*/false});
+    if (!conflict) {
+        recs.push_back({var, borrower, isMut, depth, /*released=*/false});
+    }
 }
 
 // NLL: release borrows held by a specific borrower variable (at its last use)
@@ -1905,6 +2029,45 @@ void Sema::checkCallRegions(CallExpr &e, FunctionType *ft, size_t selfOffset) {
                     ": cannot pass '&stack " + argRef.base->str() +
                     "' where '&heap " + paramRef.base->str() +
                     "' is expected (stack reference may dangle)");
+            }
+        }
+    }
+
+    // Aliasing within a single call: 'foo(&x, &x)' hands the callee two
+    // references to the same variable. That's fine if both parameters are
+    // shared/const references, but a conflict (mutable XOR shared) the
+    // moment either side is mutable. This is scoped to the call's own
+    // arguments rather than going through trackRef/aliasMap_, since the
+    // borrow here only lives for the duration of the call.
+    for (size_t i = 0; i < e.args.size(); ++i) {
+        if (e.args[i]->kind != ExprKind::AddrOf) continue;
+        auto &ue_i = static_cast<UnaryExpr &>(*e.args[i]);
+        if (!ue_i.operand || ue_i.operand->kind != ExprKind::Ident) continue;
+        auto &ident_i = static_cast<IdentExpr &>(*ue_i.operand);
+        size_t paramIdx_i = i + selfOffset;
+        if (paramIdx_i >= ft->paramTypes.size()) continue;
+        auto &pty_i = ft->paramTypes[paramIdx_i];
+        bool mut_i = pty_i && pty_i->kind == TypeKind::Reference &&
+                     static_cast<ReferenceType &>(*pty_i).mut;
+
+        for (size_t j = i + 1; j < e.args.size(); ++j) {
+            if (e.args[j]->kind != ExprKind::AddrOf) continue;
+            auto &ue_j = static_cast<UnaryExpr &>(*e.args[j]);
+            if (!ue_j.operand || ue_j.operand->kind != ExprKind::Ident) continue;
+            auto &ident_j = static_cast<IdentExpr &>(*ue_j.operand);
+            if (ident_i.name != ident_j.name) continue;
+
+            size_t paramIdx_j = j + selfOffset;
+            if (paramIdx_j >= ft->paramTypes.size()) continue;
+            auto &pty_j = ft->paramTypes[paramIdx_j];
+            bool mut_j = pty_j && pty_j->kind == TypeKind::Reference &&
+                         static_cast<ReferenceType &>(*pty_j).mut;
+
+            if (mut_i || mut_j) {
+                diag_.error(e.args[j]->loc,
+                    "cannot borrow '" + ident_j.name + "' as " +
+                    (mut_j ? "mutable" : "immutable") +
+                    ": already borrowed by argument " + std::to_string(i + 1));
             }
         }
     }

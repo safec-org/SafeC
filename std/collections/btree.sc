@@ -5,40 +5,43 @@
 // ── Node pool allocator ───────────────────────────────────────────────────────
 
 static unsigned long btree_alloc_node_(struct BTree* t) {
-    if (t->pool_used >= BTREE_POOL_SIZE) { return (unsigned long)0; }
-    unsigned long idx = (unsigned long)t->pool_used + (unsigned long)1; // 1-indexed (0 = null)
-    t->pool_used = t->pool_used + 1;
-    // Zero the node.
-    struct BTreeNode* n = &t->pool[idx - 1];
     unsafe {
+        if (t->pool_used >= BTREE_POOL_SIZE) { return (unsigned long)0; }
+        unsigned long idx = (unsigned long)t->pool_used + (unsigned long)1; // 1-indexed (0 = null)
+        t->pool_used = t->pool_used + 1;
+        // Zero the node.
+        struct BTreeNode* n = (struct BTreeNode*)&t->pool[idx - (unsigned long)1];
         int i = 0;
         while (i < BTREE_MAX_KEYS)  { n->keys[i] = (unsigned long)0; n->vals[i] = (void*)0; i = i + 1; }
         i = 0;
         while (i < BTREE_MAX_CHILD) { n->children[i] = (unsigned long)0; i = i + 1; }
+        n->n    = 0;
+        n->leaf = 1;
+        return idx;
     }
-    n->n    = 0;
-    n->leaf = 1;
-    return idx;
 }
 
 static struct BTreeNode* btree_node_(struct BTree* t, unsigned long idx) {
-    if (idx == (unsigned long)0) { return (struct BTreeNode*)0; }
-    unsafe { return &t->pool[idx - 1]; }
-    return (struct BTreeNode*)0;
+    unsafe {
+        if (idx == (unsigned long)0) { return (struct BTreeNode*)0; }
+        return (struct BTreeNode*)&t->pool[idx - (unsigned long)1];
+    }
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────
 
 static void* btree_search_(struct BTree* t, unsigned long node_idx, unsigned long key) {
     struct BTreeNode* n = btree_node_(t, node_idx);
-    if (n == (struct BTreeNode*)0) { return (void*)0; }
-    int i = 0;
-    while (i < n->n && key > n->keys[i]) { i = i + 1; }
-    if (i < n->n && key == n->keys[i]) {
-        unsafe { return n->vals[i]; }
+    unsafe {
+        if (n == (struct BTreeNode*)0) { return (void*)0; }
+        int i = 0;
+        while (i < n->n && key > n->keys[i]) { i = i + 1; }
+        if (i < n->n && key == n->keys[i]) {
+            return n->vals[i];
+        }
+        if (n->leaf != 0) { return (void*)0; }
+        return btree_search_(t, n->children[i], key);
     }
-    if (n->leaf != 0) { return (void*)0; }
-    return btree_search_(t, n->children[i], key);
 }
 
 // ── Split child ───────────────────────────────────────────────────────────────
@@ -51,11 +54,10 @@ static void btree_split_child_(struct BTree* t, unsigned long parent_idx,
     if (new_idx == (unsigned long)0) { return; }
     struct BTreeNode* sib = btree_node_(t, new_idx);
 
-    sib->leaf = child->leaf;
-    sib->n    = BTREE_ORDER - 1;
-
     // Copy right half of child to sib.
     unsafe {
+        sib->leaf = child->leaf;
+        sib->n    = BTREE_ORDER - 1;
         int i = 0;
         while (i < BTREE_ORDER - 1) {
             sib->keys[i] = child->keys[BTREE_ORDER + i];
@@ -97,18 +99,16 @@ static void btree_split_child_(struct BTree* t, unsigned long parent_idx,
 static void btree_insert_nonfull_(struct BTree* t, unsigned long node_idx,
                                    unsigned long key, void* val) {
     struct BTreeNode* n = btree_node_(t, node_idx);
-    int i = n->n - 1;
-    if (n->leaf != 0) {
-        // Check for duplicate key update.
-        unsafe {
+    unsafe {
+        int i = n->n - 1;
+        if (n->leaf != 0) {
+            // Check for duplicate key update.
             int j = 0;
             while (j < n->n) {
                 if (n->keys[j] == key) { n->vals[j] = val; return; }
                 j = j + 1;
             }
-        }
-        // Insert in sorted position.
-        unsafe {
+            // Insert in sorted position.
             while (i >= 0 && key < n->keys[i]) {
                 n->keys[i + 1] = n->keys[i];
                 n->vals[i + 1] = n->vals[i];
@@ -117,9 +117,7 @@ static void btree_insert_nonfull_(struct BTree* t, unsigned long node_idx,
             n->keys[i + 1] = key;
             n->vals[i + 1] = val;
             n->n = n->n + 1;
-        }
-    } else {
-        unsafe {
+        } else {
             // Check for key in current node.
             int j = 0;
             while (j < n->n) {
@@ -135,38 +133,43 @@ static void btree_insert_nonfull_(struct BTree* t, unsigned long node_idx,
                 if (key > n->keys[i]) { i = i + 1; }
                 else if (key == n->keys[i]) { n->vals[i] = val; return; }
             }
+            btree_insert_nonfull_(t, btree_node_(t, node_idx)->children[i], key, val);
         }
-        btree_insert_nonfull_(t, btree_node_(t, node_idx)->children[i], key, val);
     }
 }
 
 // ── Public methods ────────────────────────────────────────────────────────────
 
 int BTree::insert(unsigned long key, void* val) {
-    if (self.root == (unsigned long)0) {
-        unsigned long r = btree_alloc_node_(&self);
-        if (r == (unsigned long)0) { return -1; }
-        self.root = r;
+    unsafe {
+        struct BTree* t = (struct BTree*)self;
+        if (self.root == (unsigned long)0) {
+            unsigned long r = btree_alloc_node_(t);
+            if (r == (unsigned long)0) { return -1; }
+            self.root = r;
+        }
+        struct BTreeNode* root = btree_node_(t, self.root);
+        if (root->n == BTREE_MAX_KEYS) {
+            unsigned long new_root = btree_alloc_node_(t);
+            if (new_root == (unsigned long)0) { return -1; }
+            struct BTreeNode* nr = btree_node_(t, new_root);
+            nr->leaf = 0;
+            nr->n    = 0;
+            nr->children[0] = self.root;
+            btree_split_child_(t, new_root, 0, self.root);
+            self.root = new_root;
+        }
+        btree_insert_nonfull_(t, self.root, key, val);
+        self.count = self.count + (unsigned long)1;
+        return 0;
     }
-    struct BTreeNode* root = btree_node_(&self, self.root);
-    if (root->n == BTREE_MAX_KEYS) {
-        unsigned long new_root = btree_alloc_node_(&self);
-        if (new_root == (unsigned long)0) { return -1; }
-        struct BTreeNode* nr = btree_node_(&self, new_root);
-        nr->leaf = 0;
-        nr->n    = 0;
-        nr->children[0] = self.root;
-        btree_split_child_(&self, new_root, 0, self.root);
-        self.root = new_root;
-    }
-    btree_insert_nonfull_(&self, self.root, key, val);
-    self.count = self.count + (unsigned long)1;
-    return 0;
 }
 
 void* BTree::get(unsigned long key) const {
-    struct BTree* t = (struct BTree*)&self;
-    return btree_search_(t, t->root, key);
+    unsafe {
+        struct BTree* t = (struct BTree*)self;
+        return btree_search_(t, t->root, key);
+    }
 }
 
 int BTree::contains(unsigned long key) const {
@@ -182,27 +185,29 @@ unsigned long BTree::len() const {
 static void btree_foreach_(struct BTree* t, unsigned long node_idx,
                              void* cb, void* user) {
     struct BTreeNode* n = btree_node_(t, node_idx);
-    if (n == (struct BTreeNode*)0) { return; }
-    int i = 0;
-    while (i < n->n) {
-        if (n->leaf == 0) {
-            btree_foreach_(t, n->children[i], cb, user);
-        }
-        unsafe {
-            void (*callback)(unsigned long, void*, void*) =
-                (void (*)(unsigned long, void*, void*))cb;
+    unsafe {
+        if (n == (struct BTreeNode*)0) { return; }
+        int i = 0;
+        while (i < n->n) {
+            if (n->leaf == 0) {
+                btree_foreach_(t, n->children[i], cb, user);
+            }
+            fn void(unsigned long, void*, void*) callback =
+                (fn void(unsigned long, void*, void*))cb;
             callback(n->keys[i], n->vals[i], user);
+            i = i + 1;
         }
-        i = i + 1;
-    }
-    if (n->leaf == 0) {
-        btree_foreach_(t, n->children[n->n], cb, user);
+        if (n->leaf == 0) {
+            btree_foreach_(t, n->children[n->n], cb, user);
+        }
     }
 }
 
 void BTree::foreach(void* cb, void* user) const {
-    struct BTree* t = (struct BTree*)&self;
-    btree_foreach_(t, t->root, cb, user);
+    unsafe {
+        struct BTree* t = (struct BTree*)self;
+        btree_foreach_(t, t->root, cb, user);
+    }
 }
 
 void BTree::clear() {
@@ -225,6 +230,8 @@ generic<T> int btree_insert(&stack BTree t, unsigned long key, T* val) {
 }
 
 generic<T> T* btree_get(const &stack BTree t, unsigned long key) {
-    struct BTree* tp = (struct BTree*)&t;
-    return (T*)btree_search_(tp, tp->root, key);
+    unsafe {
+        struct BTree* tp = (struct BTree*)t;
+        return (T*)btree_search_(tp, tp->root, key);
+    }
 }

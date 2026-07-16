@@ -52,16 +52,16 @@ struct HashMap map_with_cap(unsigned long key_size, unsigned long val_size, unsi
 }
 
 void HashMap::free_entries_() {
-    if (self.buckets == (struct MapEntry*)0) { return; }
-    unsigned long i = 0UL;
-    while (i < self.cap) {
-        if (self.buckets[i].state == 1) {
-            unsafe {
+    unsafe {
+        if (self.buckets == (struct MapEntry*)0) { return; }
+        unsigned long i = 0UL;
+        while (i < self.cap) {
+            if (self.buckets[i].state == 1) {
                 if (self.buckets[i].key != (void*)0) { dealloc(self.buckets[i].key); }
                 if (self.buckets[i].val != (void*)0) { dealloc(self.buckets[i].val); }
             }
+            i = i + 1UL;
         }
-        i = i + 1UL;
     }
 }
 
@@ -85,22 +85,24 @@ int           HashMap::is_empty() const { return self.len == 0UL; }
 int HashMap::resize_(unsigned long new_cap) {
     struct HashMap nm = map_alloc_table_(self.key_size, self.val_size, new_cap);
     if (nm.buckets == (struct MapEntry*)0) { return 0; }
-    unsigned long i = 0UL;
-    while (i < self.cap) {
-        if (self.buckets[i].state == 1) {
-            unsigned int h   = self.buckets[i].hash;
-            unsigned long idx = (unsigned long)(h & (unsigned int)(new_cap - 1UL));
-            unsigned long j   = 0UL;
-            while (nm.buckets[idx].state == 1) {
-                idx = (idx + 1UL) % new_cap;
-                j = j + 1UL;
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < self.cap) {
+            if (self.buckets[i].state == 1) {
+                unsigned int h   = self.buckets[i].hash;
+                unsigned long idx = (unsigned long)(h & (unsigned int)(new_cap - 1UL));
+                unsigned long j   = 0UL;
+                while (nm.buckets[idx].state == 1) {
+                    idx = (idx + 1UL) % new_cap;
+                    j = j + 1UL;
+                }
+                nm.buckets[idx] = self.buckets[i];
+                nm.len = nm.len + 1UL;
             }
-            nm.buckets[idx] = self.buckets[i];
-            nm.len = nm.len + 1UL;
+            i = i + 1UL;
         }
-        i = i + 1UL;
+        dealloc((void*)self.buckets);
     }
-    unsafe { dealloc((void*)self.buckets); }
     self.buckets = nm.buckets;
     self.cap = new_cap;
     return 1;
@@ -111,13 +113,13 @@ int HashMap::insert(const void* key, const void* val) {
     if (self.len * 4UL >= self.cap * 3UL) {
         if (!self.resize_(self.cap * 2UL)) { return 0; }
     }
-    unsigned int h = map_hash_bytes_(key, self.key_size);
-    unsigned long idx = (unsigned long)(h & (unsigned int)(self.cap - 1UL));
-    unsigned long i = 0UL;
-    while (i < self.cap) {
-        int s = self.buckets[idx].state;
-        if (s == 0 || s == 2) {
-            unsafe {
+    unsafe {
+        unsigned int h = map_hash_bytes_(key, self.key_size);
+        unsigned long idx = (unsigned long)(h & (unsigned int)(self.cap - 1UL));
+        unsigned long i = 0UL;
+        while (i < self.cap) {
+            int s = self.buckets[idx].state;
+            if (s == 0 || s == 2) {
                 if (self.buckets[idx].key == (void*)0)
                     self.buckets[idx].key = alloc(self.key_size);
                 if (self.buckets[idx].val == (void*)0)
@@ -125,39 +127,41 @@ int HashMap::insert(const void* key, const void* val) {
                 if (self.buckets[idx].key == (void*)0 || self.buckets[idx].val == (void*)0) { return 0; }
                 safe_memcpy(self.buckets[idx].key, key, self.key_size);
                 safe_memcpy(self.buckets[idx].val, val, self.val_size);
-            }
-            self.buckets[idx].hash  = h;
-            self.buckets[idx].state = 1;
-            self.len = self.len + 1UL;
-            return 1;
-        }
-        if (s == 1 && self.buckets[idx].hash == h) {
-            int eq = safe_memcmp((const void*)self.buckets[idx].key, key, self.key_size) == 0;
-            if (eq) {
-                unsafe { safe_memcpy(self.buckets[idx].val, val, self.val_size); }
+                self.buckets[idx].hash  = h;
+                self.buckets[idx].state = 1;
+                self.len = self.len + 1UL;
                 return 1;
             }
+            if (s == 1 && self.buckets[idx].hash == h) {
+                int eq = safe_memcmp((const void*)self.buckets[idx].key, key, self.key_size) == 0;
+                if (eq) {
+                    safe_memcpy(self.buckets[idx].val, val, self.val_size);
+                    return 1;
+                }
+            }
+            idx = (idx + 1UL) % self.cap;
+            i = i + 1UL;
         }
-        idx = (idx + 1UL) % self.cap;
-        i = i + 1UL;
     }
     return 0;
 }
 
 void* HashMap::get(const void* key) const {
     if (self.len == 0UL) { return (void*)0; }
-    unsigned int h = map_hash_bytes_(key, self.key_size);
-    unsigned long idx = (unsigned long)(h & (unsigned int)(self.cap - 1UL));
-    unsigned long i = 0UL;
-    while (i < self.cap) {
-        int s = self.buckets[idx].state;
-        if (s == 0) { return (void*)0; }
-        if (s == 1 && self.buckets[idx].hash == h) {
-            int eq = safe_memcmp((const void*)self.buckets[idx].key, key, self.key_size) == 0;
-            if (eq) { return self.buckets[idx].val; }
+    unsafe {
+        unsigned int h = map_hash_bytes_(key, self.key_size);
+        unsigned long idx = (unsigned long)(h & (unsigned int)(self.cap - 1UL));
+        unsigned long i = 0UL;
+        while (i < self.cap) {
+            int s = self.buckets[idx].state;
+            if (s == 0) { return (void*)0; }
+            if (s == 1 && self.buckets[idx].hash == h) {
+                int eq = safe_memcmp((const void*)self.buckets[idx].key, key, self.key_size) == 0;
+                if (eq) { return self.buckets[idx].val; }
+            }
+            idx = (idx + 1UL) % self.cap;
+            i = i + 1UL;
         }
-        idx = (idx + 1UL) % self.cap;
-        i = i + 1UL;
     }
     return (void*)0;
 }
@@ -168,29 +172,31 @@ int HashMap::contains(const void* key) const {
 
 int HashMap::remove(const void* key) {
     if (self.len == 0UL) { return 0; }
-    unsigned int h = map_hash_bytes_(key, self.key_size);
-    unsigned long idx = (unsigned long)(h & (unsigned int)(self.cap - 1UL));
-    unsigned long i = 0UL;
-    while (i < self.cap) {
-        int s = self.buckets[idx].state;
-        if (s == 0) { return 0; }
-        if (s == 1 && self.buckets[idx].hash == h) {
-            int eq = safe_memcmp((const void*)self.buckets[idx].key, key, self.key_size) == 0;
-            if (eq) {
-                self.buckets[idx].state = 2; // tombstone
-                self.len = self.len - 1UL;
-                return 1;
+    unsafe {
+        unsigned int h = map_hash_bytes_(key, self.key_size);
+        unsigned long idx = (unsigned long)(h & (unsigned int)(self.cap - 1UL));
+        unsigned long i = 0UL;
+        while (i < self.cap) {
+            int s = self.buckets[idx].state;
+            if (s == 0) { return 0; }
+            if (s == 1 && self.buckets[idx].hash == h) {
+                int eq = safe_memcmp((const void*)self.buckets[idx].key, key, self.key_size) == 0;
+                if (eq) {
+                    self.buckets[idx].state = 2; // tombstone
+                    self.len = self.len - 1UL;
+                    return 1;
+                }
             }
+            idx = (idx + 1UL) % self.cap;
+            i = i + 1UL;
         }
-        idx = (idx + 1UL) % self.cap;
-        i = i + 1UL;
     }
     return 0;
 }
 
 void HashMap::foreach(void* func) {
     unsafe {
-        void (*f)(const void*, void*) = (void (*)(const void*, void*))func;
+        fn void(const void*, void*) f = (fn void(const void*, void*))func;
         unsigned long i = 0UL;
         while (i < self.cap) {
             if (self.buckets[i].state == 1)
@@ -206,16 +212,16 @@ struct HashMap str_map_new(unsigned long val_size) {
 }
 
 int str_map_insert(struct HashMap* m, const char* key, const void* val) {
-    if (m->len * 4UL >= m->cap * 3UL) {
-        if (!m->resize_(m->cap * 2UL)) { return 0; }
-    }
-    unsigned int h = map_hash_str_(key);
-    unsigned long idx = (unsigned long)(h & (unsigned int)(m->cap - 1UL));
-    unsigned long i = 0UL;
-    while (i < m->cap) {
-        int s = m->buckets[idx].state;
-        if (s == 0 || s == 2) {
-            unsafe {
+    unsafe {
+        if (m->len * 4UL >= m->cap * 3UL) {
+            if (!m->resize_(m->cap * 2UL)) { return 0; }
+        }
+        unsigned int h = map_hash_str_(key);
+        unsigned long idx = (unsigned long)(h & (unsigned int)(m->cap - 1UL));
+        unsigned long i = 0UL;
+        while (i < m->cap) {
+            int s = m->buckets[idx].state;
+            if (s == 0 || s == 2) {
                 unsigned long klen = str_len(key) + 1UL;
                 char* kcopy = (char*)alloc(klen);
                 if (kcopy == (char*)0) { return 0; }
@@ -227,42 +233,40 @@ int str_map_insert(struct HashMap* m, const char* key, const void* val) {
                     m->buckets[idx].val = alloc(m->val_size);
                 if (m->buckets[idx].val == (void*)0) { return 0; }
                 safe_memcpy(m->buckets[idx].val, val, m->val_size);
+                m->buckets[idx].hash  = h;
+                m->buckets[idx].state = 1;
+                m->len = m->len + 1UL;
+                return 1;
             }
-            m->buckets[idx].hash  = h;
-            m->buckets[idx].state = 1;
-            m->len = m->len + 1UL;
-            return 1;
-        }
-        if (s == 1 && m->buckets[idx].hash == h) {
-            unsafe {
+            if (s == 1 && m->buckets[idx].hash == h) {
                 if (str_cmp((const char*)m->buckets[idx].key, key) == 0) {
                     safe_memcpy(m->buckets[idx].val, val, m->val_size);
                     return 1;
                 }
             }
+            idx = (idx + 1UL) % m->cap;
+            i = i + 1UL;
         }
-        idx = (idx + 1UL) % m->cap;
-        i = i + 1UL;
     }
     return 0;
 }
 
 void* str_map_get(struct HashMap* m, const char* key) {
-    if (m->len == 0UL) { return (void*)0; }
-    unsigned int h = map_hash_str_(key);
-    unsigned long idx = (unsigned long)(h & (unsigned int)(m->cap - 1UL));
-    unsigned long i = 0UL;
-    while (i < m->cap) {
-        int s = m->buckets[idx].state;
-        if (s == 0) { return (void*)0; }
-        if (s == 1 && m->buckets[idx].hash == h) {
-            unsafe {
+    unsafe {
+        if (m->len == 0UL) { return (void*)0; }
+        unsigned int h = map_hash_str_(key);
+        unsigned long idx = (unsigned long)(h & (unsigned int)(m->cap - 1UL));
+        unsigned long i = 0UL;
+        while (i < m->cap) {
+            int s = m->buckets[idx].state;
+            if (s == 0) { return (void*)0; }
+            if (s == 1 && m->buckets[idx].hash == h) {
                 if (str_cmp((const char*)m->buckets[idx].key, key) == 0)
                     return m->buckets[idx].val;
             }
+            idx = (idx + 1UL) % m->cap;
+            i = i + 1UL;
         }
-        idx = (idx + 1UL) % m->cap;
-        i = i + 1UL;
     }
     return (void*)0;
 }
@@ -272,15 +276,15 @@ int str_map_contains(struct HashMap* m, const char* key) {
 }
 
 int str_map_remove(struct HashMap* m, const char* key) {
-    if (m->len == 0UL) { return 0; }
-    unsigned int h = map_hash_str_(key);
-    unsigned long idx = (unsigned long)(h & (unsigned int)(m->cap - 1UL));
-    unsigned long i = 0UL;
-    while (i < m->cap) {
-        int s = m->buckets[idx].state;
-        if (s == 0) { return 0; }
-        if (s == 1 && m->buckets[idx].hash == h) {
-            unsafe {
+    unsafe {
+        if (m->len == 0UL) { return 0; }
+        unsigned int h = map_hash_str_(key);
+        unsigned long idx = (unsigned long)(h & (unsigned int)(m->cap - 1UL));
+        unsigned long i = 0UL;
+        while (i < m->cap) {
+            int s = m->buckets[idx].state;
+            if (s == 0) { return 0; }
+            if (s == 1 && m->buckets[idx].hash == h) {
                 if (str_cmp((const char*)m->buckets[idx].key, key) == 0) {
                     dealloc(m->buckets[idx].key);
                     m->buckets[idx].key   = (void*)0;
@@ -289,9 +293,9 @@ int str_map_remove(struct HashMap* m, const char* key) {
                     return 1;
                 }
             }
+            idx = (idx + 1UL) % m->cap;
+            i = i + 1UL;
         }
-        idx = (idx + 1UL) % m->cap;
-        i = i + 1UL;
     }
     return 0;
 }

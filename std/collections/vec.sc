@@ -35,7 +35,7 @@ void Vec::free() {
 
 // ── Capacity ──────────────────────────────────────────────────────────────────
 unsigned long Vec::length() const { return self.len; }
-unsigned long Vec::capacity() const { return self.cap; }
+unsigned long Vec::total_capacity() const { return self.cap; }
 int           Vec::is_empty() const { return self.len == 0UL; }
 
 int Vec::reserve(unsigned long new_cap) {
@@ -198,7 +198,7 @@ void Vec::sort(void* cmp) {
 
 long long Vec::find(const void* key, void* cmp) const {
     unsafe {
-        int (*cmpfn)(const void*, const void*) = (int (*)(const void*, const void*))cmp;
+        fn int(const void*, const void*) cmpfn = (fn int(const void*, const void*))cmp;
         int i = 0;
         while ((unsigned long)i < self.len) {
             char* elem = (char*)self.data + (unsigned long)i * self.elem_size;
@@ -215,16 +215,18 @@ int Vec::contains(const void* key, void* cmp) const {
 
 struct Vec Vec::clone() const {
     struct Vec c = vec_with_cap(self.elem_size, self.len);
-    if (self.len > 0UL && (void*)c.data != (void*)0) {
-        unsafe { safe_memcpy((void*)c.data, (const void*)self.data, self.len * self.elem_size); }
-        c.len = self.len;
+    unsafe {
+        if (self.len > 0UL && (void*)c.data != (void*)0) {
+            safe_memcpy((void*)c.data, (const void*)self.data, self.len * self.elem_size);
+            c.len = self.len;
+        }
     }
     return c;
 }
 
 void Vec::foreach(void* func) {
     unsafe {
-        void (*f)(void*, unsigned long) = (void (*)(void*, unsigned long))func;
+        fn void(void*, unsigned long) f = (fn void(void*, unsigned long))func;
         unsigned long i = 0UL;
         while (i < self.len) {
             f((void*)((char*)self.data + i * self.elem_size), i);
@@ -236,7 +238,7 @@ void Vec::foreach(void* func) {
 struct Vec Vec::filter(void* pred) const {
     struct Vec out = vec_new(self.elem_size);
     unsafe {
-        int (*p)(const void*) = (int (*)(const void*))pred;
+        fn int(const void*) p = (fn int(const void*))pred;
         unsigned long i = 0UL;
         while (i < self.len) {
             void* elem = (void*)((char*)self.data + i * self.elem_size);
@@ -250,7 +252,7 @@ struct Vec Vec::filter(void* pred) const {
 struct Vec Vec::map_raw(unsigned long out_elem_size, void* func) const {
     struct Vec out = vec_with_cap(out_elem_size, self.len);
     unsafe {
-        void (*f)(const void*, void*) = (void (*)(const void*, void*))func;
+        fn void(const void*, void*) f = (fn void(const void*, void*))func;
         void* tmp = alloc(out_elem_size);
         unsigned long i = 0UL;
         while (i < self.len) {

@@ -96,6 +96,21 @@ static uint64_t fnv1a64(const std::string &s) {
     return h;
 }
 
+// A cache key of just the preprocessed source text is stale the moment the
+// compiler itself is rebuilt: unchanged source silently gets a previous
+// binary's cached bitcode forever, even across semantic/codegen fixes. Fold
+// in an identifier for the running executable (its mtime + size) so a
+// rebuilt compiler always misses old entries instead of silently reusing
+// possibly-incorrect output.
+static std::string compilerIdentity(const char *argv0) {
+    std::string exe = llvm::sys::fs::getMainExecutable(argv0, (void *)&compilerIdentity);
+    llvm::sys::fs::file_status st;
+    if (exe.empty() || llvm::sys::fs::status(exe, st))
+        return {}; // best-effort — an empty identity just means no extra protection
+    auto mtime = st.getLastModificationTime().time_since_epoch().count();
+    return exe + "|" + std::to_string(mtime) + "|" + std::to_string(st.getSize());
+}
+
 // ── Read file ─────────────────────────────────────────────────────────────────
 static std::string readFile(const std::string &path) {
     std::ifstream f(path);
@@ -227,8 +242,12 @@ int main(int argc, char **argv) {
     }
 
     // ── 2b. Incremental cache check ───────────────────────────────────────────
-    if (!NoIncremental) {
-        uint64_t hash = fnv1a64(ppSrc);
+    // Skipped entirely for --dump-ast: that mode inspects the parse tree
+    // itself, which the cache (populated from --emit-llvm/object-file runs)
+    // has no representation of — honoring a cache hit here silently printed
+    // disassembled bitcode from a previous invocation instead of an AST dump.
+    if (!NoIncremental && !DumpAST) {
+        uint64_t hash = fnv1a64(ppSrc + "|" + compilerIdentity(argv[0]));
         char hexBuf[17];
         snprintf(hexBuf, sizeof(hexBuf), "%016llx", (unsigned long long)hash);
         llvm::SmallString<256> cachePath(CacheDir.getValue());
@@ -345,7 +364,7 @@ int main(int argc, char **argv) {
     // ── 8b. Write to incremental cache ───────────────────────────────────────
     if (!NoIncremental) {
         llvm::sys::fs::create_directories(CacheDir.getValue());
-        uint64_t hash = fnv1a64(ppSrc);
+        uint64_t hash = fnv1a64(ppSrc + "|" + compilerIdentity(argv[0]));
         char hexBuf[17];
         snprintf(hexBuf, sizeof(hexBuf), "%016llx", (unsigned long long)hash);
         llvm::SmallString<256> cachePath(CacheDir.getValue());

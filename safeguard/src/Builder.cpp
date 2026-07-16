@@ -97,7 +97,8 @@ int Builder::runCmd(const std::vector<std::string>& argv, bool verbose) {
 std::string Builder::compileSrc(const std::string& safecBin,
                                   const std::string& srcPath,
                                   const std::string& buildDir,
-                                  const std::vector<std::string>& includeDirs) const {
+                                  const std::vector<std::string>& includeDirs,
+                                  bool compatPreprocessor) const {
     // Derive a flat output name to avoid collisions across subdirectories
     fs::path src(srcPath);
     // Use relative-path-derived stem: e.g. src/foo/bar.sc → foo_bar.ll
@@ -121,6 +122,7 @@ std::string Builder::compileSrc(const std::string& safecBin,
     }
     cmd.push_back(srcPath);
     cmd.push_back("--emit-llvm");
+    if (compatPreprocessor) cmd.push_back("--compat-preprocessor");
     cmd.push_back("-o");
     cmd.push_back(llFile.string());
     if (!opts_.extraFlags.empty())
@@ -193,7 +195,8 @@ bool Builder::linkFinal(const std::vector<std::string>& objFiles,
 
 bool Builder::buildLib(const std::string& srcDir,
                         const std::string& libOut,
-                        const std::vector<std::string>& includeDirs) {
+                        const std::vector<std::string>& includeDirs,
+                        bool compatPreprocessor) {
     std::string safecBin = findSafec();
     std::string buildDir = fs::path(libOut).parent_path().string();
     fs::create_directories(buildDir);
@@ -203,7 +206,7 @@ bool Builder::buildLib(const std::string& srcDir,
 
     std::vector<std::string> objs;
     for (auto& src : srcs) {
-        std::string ll = compileSrc(safecBin, src, buildDir, includeDirs);
+        std::string ll = compileSrc(safecBin, src, buildDir, includeDirs, compatPreprocessor);
         if (ll.empty()) return false;
         std::string obj = llToObj(ll, buildDir);
         if (obj.empty()) return false;
@@ -236,7 +239,7 @@ std::string Builder::ensureStdLib() {
     fs::path stdParent = fs::path(stdDir).parent_path();
     std::vector<std::string> incs = { stdDir, stdParent.string() };
 
-    if (!buildLib(stdDir, libPath.string(), incs)) return "";
+    if (!buildLib(stdDir, libPath.string(), incs, /*compatPreprocessor=*/true)) return "";
     return libPath.string();
 }
 
