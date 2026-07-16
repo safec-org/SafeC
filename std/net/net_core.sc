@@ -30,16 +30,16 @@ unsigned int net_ntohl(unsigned int v) {
 static int net_write_dec_(char* buf, unsigned int val) {
     if (val >= 100) {
         unsafe {
-            buf[0] = (char)('0' + val / 100);
-            buf[1] = (char)('0' + (val / 10) % 10);
-            buf[2] = (char)('0' + val % 10);
+            buf[0] = (char)('0' + val / (unsigned int)100);
+            buf[1] = (char)('0' + (val / (unsigned int)10) % (unsigned int)10);
+            buf[2] = (char)('0' + val % (unsigned int)10);
         }
         return 3;
     }
     if (val >= 10) {
         unsafe {
-            buf[0] = (char)('0' + val / 10);
-            buf[1] = (char)('0' + val % 10);
+            buf[0] = (char)('0' + val / (unsigned int)10);
+            buf[1] = (char)('0' + val % (unsigned int)10);
         }
         return 2;
     }
@@ -61,8 +61,9 @@ void net_ip4_str(unsigned int ip_be, char* buf) {
     int i = 3;
     while (i >= 0) {
         unsigned int octet;
-        unsafe { octet = (ip_be >> ((unsigned int)i * 8)) & (unsigned int)0xFF; }
-        int n = net_write_dec_(buf + pos, octet);
+        unsafe { octet = (ip_be >> ((unsigned int)i * (unsigned int)8)) & (unsigned int)0xFF; }
+        int n;
+        unsafe { n = net_write_dec_(buf + pos, octet); }
         pos = pos + n;
         if (i > 0) {
             unsafe { buf[pos] = '.'; }
@@ -101,7 +102,7 @@ unsigned int net_ip4(unsigned char a, unsigned char b,
 // ── PacketBuf ─────────────────────────────────────────────────────────────────
 
 void* PacketBuf::at(unsigned long offset) {
-    unsafe { return (void*)((unsigned long)self.data + offset); }
+    unsafe { return (void*)((unsigned long)(unsigned char*)self.data + offset); }
     return (void*)0;
 }
 
@@ -119,8 +120,8 @@ void PacketBuf::reset() {
 int NetIf::tx(&stack PacketBuf pkt) {
     if (self.tx_fn == (void*)0) { return -1; }
     unsafe {
-        int (*func)(void*, unsigned char*, unsigned long) =
-            (int (*)(void*, unsigned char*, unsigned long))self.tx_fn;
+        fn int(void*, unsigned char*, unsigned long) func =
+            (fn int(void*, unsigned char*, unsigned long))self.tx_fn;
         return func(self.iface_ctx, (unsigned char*)pkt.data, pkt.len);
     }
     return -1;

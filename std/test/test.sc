@@ -15,12 +15,14 @@ static struct TestCase* test_current_ = (struct TestCase*)0;
 
 // ── strncpy helper ────────────────────────────────────────────────────────────
 static void tc_copy_(char* dst, const char* src, unsigned long n) {
-    unsigned long i = (unsigned long)0;
-    while (i < n - (unsigned long)1 && src[i] != '\0') {
-        dst[i] = src[i];
-        i = i + (unsigned long)1;
+    unsafe {
+        unsigned long i = (unsigned long)0;
+        while (i < n - (unsigned long)1 && src[i] != '\0') {
+            dst[i] = src[i];
+            i = i + (unsigned long)1;
+        }
+        dst[i] = '\0';
     }
-    dst[i] = '\0';
 }
 
 // ── Assertion functions ────────────────────────────────────────────────────────
@@ -28,11 +30,13 @@ static void tc_copy_(char* dst, const char* src, unsigned long n) {
 void test_assert_true(int cond, const char* expr, const char* file, int line) {
     if (cond != 0) { return; }
     if (test_current_ == (struct TestCase*)0) { return; }
-    if (test_current_->result == 0) { return; }   // already failed; keep first
-    test_current_->result    = 0;
-    test_current_->fail_line = line;
-    tc_copy_(test_current_->fail_expr, expr, (unsigned long)128);
-    tc_copy_(test_current_->fail_file, file, (unsigned long)128);
+    unsafe {
+        if (test_current_->result == 0) { return; }   // already failed; keep first
+        test_current_->result    = 0;
+        test_current_->fail_line = line;
+        tc_copy_(test_current_->fail_expr, expr, (unsigned long)128);
+        tc_copy_(test_current_->fail_file, file, (unsigned long)128);
+    }
 }
 
 void test_assert_eq_i(long long a, long long b, const char* desc,
@@ -90,10 +94,11 @@ void TestSuite::run() {
     int i = 0;
     while (i < self.count) {
         self.cases[i].result = 1;       // assume pass
-        test_current_ = &self.cases[i]; // set global context
+        unsafe { test_current_ = (struct TestCase*)&self.cases[i]; } // set global context
 
         unsafe {
-            ((void(*)(void))self.cases[i].func)();
+            fn void(void) test_fn = (fn void(void))self.cases[i].func;
+            test_fn();
         }
 
         test_current_ = (struct TestCase*)0;

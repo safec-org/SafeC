@@ -9,16 +9,16 @@ extern void* memcpy(void* dst, const void* src, unsigned long n);
 
 // ── Slice methods ─────────────────────────────────────────────────────────────
 
-int Slice::in_bounds(unsigned long idx) const {
+inline int Slice::in_bounds(unsigned long idx) const {
     return idx < self.len;
 }
 
-void* Slice::get_raw(unsigned long idx) const {
+inline void* Slice::get_raw(unsigned long idx) const {
     if (idx >= self.len) { return (void*)0; }
     unsafe { return (void*)((char*)self.ptr + idx * self.elem_size); }
 }
 
-int Slice::set_raw(unsigned long idx, const void* val) {
+inline int Slice::set_raw(unsigned long idx, const void* val) {
     if (idx >= self.len) { return 0; }
     unsafe { memcpy((void*)((char*)self.ptr + idx * self.elem_size), val, self.elem_size); }
     return 1;
@@ -38,8 +38,8 @@ struct Slice Slice::sub(unsigned long start, unsigned long end) const {
     return out;
 }
 
-unsigned long Slice::length() const { return self.len; }
-int           Slice::is_empty() const { return self.len == (unsigned long)0; }
+inline unsigned long Slice::length() const { return self.len; }
+inline int           Slice::is_empty() const { return self.len == (unsigned long)0; }
 
 void Slice::free() {
     unsafe { free(self.ptr); self.ptr = (void*)0; self.len = (unsigned long)0; }
@@ -77,18 +77,18 @@ struct Slice slice_of(&stack T ptr, unsigned long len) {
 }
 
 generic<T>
-T* arr_at(T* ptr, unsigned long len, unsigned long idx) {
+inline T* arr_at(T* ptr, unsigned long len, unsigned long idx) {
     if (idx >= len) { return (T*)0; }
     unsafe { return ptr + idx; }
 }
 
 generic<T>
-void arr_set(T* ptr, unsigned long len, unsigned long idx, T val) {
+inline void arr_set(T* ptr, unsigned long len, unsigned long idx, T val) {
     if (idx < len) { unsafe { ptr[idx] = val; } }
 }
 
 generic<T>
-T arr_get(T* ptr, unsigned long idx) {
+inline T arr_get(T* ptr, unsigned long idx) {
     unsafe { return ptr[idx]; }
 }
 

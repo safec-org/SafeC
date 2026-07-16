@@ -12,20 +12,20 @@ struct RingBuffer ring_init(&static unsigned char buf, unsigned long cap) {
     return rb;
 }
 
-unsigned long RingBuffer::readable() const {
+inline unsigned long RingBuffer::readable() const {
     return self.head - self.tail;
 }
 
-unsigned long RingBuffer::writable() const {
+inline unsigned long RingBuffer::writable() const {
     return self.cap - (self.head - self.tail);
 }
 
-int RingBuffer::is_empty() const {
+inline int RingBuffer::is_empty() const {
     if (self.head == self.tail) { return 1; }
     return 0;
 }
 
-int RingBuffer::is_full() const {
+inline int RingBuffer::is_full() const {
     if ((self.head - self.tail) >= self.cap) { return 1; }
     return 0;
 }
@@ -84,7 +84,7 @@ unsigned long RingBuffer::discard(unsigned long len) {
     return len;
 }
 
-void RingBuffer::clear() {
+inline void RingBuffer::clear() {
     self.head = (unsigned long)0;
     self.tail = (unsigned long)0;
 }

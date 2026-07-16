@@ -177,7 +177,7 @@ int BTree::contains(unsigned long key) const {
     return 0;
 }
 
-unsigned long BTree::len() const {
+inline unsigned long BTree::len() const {
     return self.count;
 }
 
@@ -210,7 +210,7 @@ void BTree::foreach(void* cb, void* user) const {
     }
 }
 
-void BTree::clear() {
+inline void BTree::clear() {
     self.pool_used = 0;
     self.root      = (unsigned long)0;
     self.count     = (unsigned long)0;

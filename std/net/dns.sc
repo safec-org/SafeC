@@ -63,10 +63,10 @@ unsigned short dns_query(&stack PacketBuf pkt,
         d[8] = (unsigned char)0; d[9] = (unsigned char)0;
         d[10]= (unsigned char)0; d[11]= (unsigned char)0;
         unsigned long i = (unsigned long)0;
-        while (i < qname_len) { d[12 + i] = qname[i]; i = i + (unsigned long)1; }
+        while (i < qname_len) { d[(unsigned long)12 + i] = qname[i]; i = i + (unsigned long)1; }
         unsigned long q = (unsigned long)12 + qname_len;
-        d[q+0] = (unsigned char)0; d[q+1] = (unsigned char)1; // QTYPE A
-        d[q+2] = (unsigned char)0; d[q+3] = (unsigned char)1; // QCLASS IN
+        d[q+(unsigned long)0] = (unsigned char)0; d[q+(unsigned long)1] = (unsigned char)1; // QTYPE A
+        d[q+(unsigned long)2] = (unsigned char)0; d[q+(unsigned long)3] = (unsigned char)1; // QCLASS IN
     }
     pkt.len = data_off + (unsigned long)dns_payload;
     return txid;
@@ -124,17 +124,17 @@ int dns_parse_reply(&stack PacketBuf pkt, unsigned long off,
             }
             if (pos + (unsigned long)10 > pkt.len) { break; }
             unsigned short rtype = (unsigned short)(((unsigned short)d[pos-off] << 8)
-                                                   | (unsigned short)d[pos-off+1]);
-            unsigned short rdlen = (unsigned short)(((unsigned short)d[pos-off+8] << 8)
-                                                   | (unsigned short)d[pos-off+9]);
+                                                   | (unsigned short)d[pos-off+(unsigned long)1]);
+            unsigned short rdlen = (unsigned short)(((unsigned short)d[pos-off+(unsigned long)8] << 8)
+                                                   | (unsigned short)d[pos-off+(unsigned long)9]);
             pos = pos + (unsigned long)10;  // skip TYPE CLASS TTL RDLENGTH
             if (rtype == (unsigned short)1 && rdlen == (unsigned short)4
                 && pos + (unsigned long)4 <= pkt.len) {
                 // A record
-                ip4_out = net_ntohl(((unsigned int)d[pos-off+0] << 24)
-                                  | ((unsigned int)d[pos-off+1] << 16)
-                                  | ((unsigned int)d[pos-off+2] <<  8)
-                                  |  (unsigned int)d[pos-off+3]);
+                *ip4_out = net_ntohl(((unsigned int)d[pos-off+(unsigned long)0] << 24)
+                                  | ((unsigned int)d[pos-off+(unsigned long)1] << 16)
+                                  | ((unsigned int)d[pos-off+(unsigned long)2] <<  8)
+                                  |  (unsigned int)d[pos-off+(unsigned long)3]);
                 return 1;
             }
             pos = pos + (unsigned long)rdlen;

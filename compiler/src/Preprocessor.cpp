@@ -696,6 +696,65 @@ std::string Preprocessor::expandTokens(const std::string &text,
     return result;
 }
 
+// See the declaration in Preprocessor.h for why this is heuristic rather
+// than a real hygiene proof.
+std::unordered_map<std::string, std::string>
+Preprocessor::computeHygienicRenames(const MacroDef &def, uint64_t hygieneId) const {
+    std::unordered_map<std::string, std::string> renames;
+    static const std::unordered_set<std::string> kTypeKeywords = {
+        "int", "char", "short", "long", "unsigned", "signed", "float", "double",
+        "void", "bool", "const", "volatile", "size_t", "auto",
+    };
+    const std::string &body = def.body;
+    size_t p = 0;
+    bool sawTypeTok        = false; // inside a run of type-looking tokens
+    bool expectDeclarator  = false; // next identifier is the name being declared
+    bool expectTagName     = false; // next identifier is a struct/union/enum tag (not a declarator)
+
+    while (p < body.size()) {
+        char c = body[p];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') { ++p; continue; }
+        if (c == '"' || c == '\'') {
+            char q = c;
+            ++p;
+            while (p < body.size() && body[p] != q) { if (body[p] == '\\') ++p; ++p; }
+            if (p < body.size()) ++p;
+            sawTypeTok = expectDeclarator = expectTagName = false;
+            continue;
+        }
+        if (isIdentStart(c)) {
+            std::string tok = readIdentAt(body, p);
+            if (tok == "struct" || tok == "union" || tok == "enum") {
+                sawTypeTok = true; expectDeclarator = false; expectTagName = true;
+                continue;
+            }
+            if (expectTagName) {
+                expectTagName = false; expectDeclarator = true; // tag name itself isn't renamed
+                continue;
+            }
+            if (kTypeKeywords.count(tok)) {
+                sawTypeTok = true; expectDeclarator = true;
+                continue;
+            }
+            if (expectDeclarator && sawTypeTok) {
+                bool isParam = std::find(def.params.begin(), def.params.end(), tok)
+                               != def.params.end();
+                if (!isParam && !renames.count(tok))
+                    renames[tok] = "__hyg" + std::to_string(hygieneId) + "_" + tok;
+                expectDeclarator = false; // allow a following ', name2' declarator
+                continue;
+            }
+            sawTypeTok = expectDeclarator = expectTagName = false;
+            continue;
+        }
+        if (c == '*') { ++p; continue; } // pointer stars don't break a pending declarator
+        if (c == ',') { if (sawTypeTok) expectDeclarator = true; ++p; continue; }
+        sawTypeTok = expectDeclarator = expectTagName = false;
+        ++p;
+    }
+    return renames;
+}
+
 std::string Preprocessor::expandFunctionLike(const MacroDef &def,
                                                const std::string &text,
                                                size_t &pos,
@@ -734,6 +793,11 @@ std::string Preprocessor::expandFunctionLike(const MacroDef &def,
         std::unordered_set<std::string> ag;
         expArgs.push_back(expandTokens(a, ag, filename, lineNo));
     }
+
+    // Hygiene: identifiers this macro declares internally (not parameters)
+    // get a fresh, call-site-unique name so they can't collide with a
+    // same-named variable at the call site (see computeHygienicRenames).
+    auto hygienicRenames = computeHygienicRenames(def, ++hygieneCounter_);
 
     // Substitute into body
     std::string body = def.body;
@@ -779,13 +843,16 @@ std::string Preprocessor::expandFunctionLike(const MacroDef &def,
             }
             continue;
         }
-        // Identifier: possibly a parameter
+        // Identifier: possibly a parameter, else possibly a hygienically-
+        // renamed macro-local declaration
         if (isIdentStart(body[p])) {
             std::string tok = readIdentAt(body, p);
             auto it = std::find(def.params.begin(), def.params.end(), tok);
             if (it != def.params.end()) {
                 size_t idx = (size_t)(it - def.params.begin());
                 result += (idx < expArgs.size()) ? expArgs[idx] : std::string{};
+            } else if (auto rit = hygienicRenames.find(tok); rit != hygienicRenames.end()) {
+                result += rit->second;
             } else {
                 result += tok;
             }

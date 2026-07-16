@@ -188,11 +188,18 @@ static unsigned long long utctime_to_epoch_(const unsigned char* s,
     if (len < (unsigned long)13) { return (unsigned long long)0; }
     int yy    = parse2_(s);
     int year  = (yy >= 50) ? (1900 + yy) : (2000 + yy);
-    int month = parse2_(s + 2);
-    int day   = parse2_(s + 4);
-    int hour  = parse2_(s + 6);
-    int min   = parse2_(s + 8);
-    int sec   = parse2_(s + 10);
+    int month;
+    int day;
+    int hour;
+    int min;
+    int sec;
+    unsafe {
+        month = parse2_(s + 2);
+        day   = parse2_(s + 4);
+        hour  = parse2_(s + 6);
+        min   = parse2_(s + 8);
+        sec   = parse2_(s + 10);
+    }
     return date_to_epoch_(year, month, day, hour, min, sec);
 }
 
@@ -395,7 +402,7 @@ int x509_parse_der(const unsigned char* der, unsigned long len,
     unsigned long iss_start;
     unsigned long iss_len;
     if (asn1_tag_len_(der, len, &pos, &iss_tag, &iss_start, &iss_len) != 0) { return -1; }
-    if (parse_name_(der, len, iss_start, iss_len, cert_out.issuer) != 0) { return -1; }
+    if (parse_name_(der, len, iss_start, iss_len, &cert_out.issuer) != 0) { return -1; }
     pos = iss_start + iss_len;
 
     // validity SEQUENCE
@@ -440,7 +447,7 @@ int x509_parse_der(const unsigned char* der, unsigned long len,
     unsigned long subj_start;
     unsigned long subj_len;
     if (asn1_tag_len_(der, len, &pos, &subj_tag, &subj_start, &subj_len) != 0) { return -1; }
-    if (parse_name_(der, len, subj_start, subj_len, cert_out.subject) != 0) { return -1; }
+    if (parse_name_(der, len, subj_start, subj_len, &cert_out.subject) != 0) { return -1; }
     pos = subj_start + subj_len;
 
     // subjectPublicKeyInfo SEQUENCE
@@ -520,7 +527,7 @@ int x509_parse_der(const unsigned char* der, unsigned long len,
 
                 if (oid_eq_(oid_bytes, oid_len2,
                              (const unsigned char*)oid_san_, (unsigned long)3) != 0) {
-                    parse_san_(der, len, ev_start, ev_len, cert_out.san);
+                    parse_san_(der, len, ev_start, ev_len, &cert_out.san);
                 } else if (oid_eq_(oid_bytes, oid_len2,
                                     (const unsigned char*)oid_bc_, (unsigned long)3) != 0) {
                     // BasicConstraints: SEQUENCE { cA BOOLEAN OPTIONAL, ... }
@@ -553,7 +560,7 @@ int x509_parse_der(const unsigned char* der, unsigned long len,
                                        &ks_start, &ks_len) == 0
                         && ks_len >= (unsigned long)2) {
                         // First byte = unused bits count; second byte = usage bits
-                        cert_out.key_usage = (int)der[ks_start + 1];
+                        cert_out.key_usage = (int)der[ks_start + 1UL];
                     }
                 }
 

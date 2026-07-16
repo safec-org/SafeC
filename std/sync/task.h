@@ -25,7 +25,7 @@ struct TaskScheduler {
     //   - func returns >0 to yield with a new resume_point
     //   - func returns 0 to indicate completion
     // Returns task index, or -1 if scheduler is full.
-    int           spawn(void* func, void* arg);
+    int           spawn_task(void* func, void* arg);
 
     // Run one scheduling round (each ready task gets one turn).
     // Returns the count of still-active tasks.

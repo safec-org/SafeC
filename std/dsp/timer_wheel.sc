@@ -87,7 +87,7 @@ void TimerWheel::cancel(int id) {
 // Advance by one tick.  Fire all timers whose expires == new current_tick.
 // Periodic timers are rescheduled by incrementing expires by their period.
 int TimerWheel::tick() {
-    self.current_tick = self.current_tick + 1;
+    self.current_tick = self.current_tick + (unsigned long)1;
     unsigned long now = self.current_tick;
 
     int fired = 0;
@@ -109,8 +109,7 @@ int TimerWheel::tick() {
             }
             // Call the callback through a void(*)(void*) function pointer.
             unsafe {
-                typedef void (*TimerCB)(void*);
-                TimerCB func = (TimerCB)cb;
+                fn void(void*) func = (fn void(void*))cb;
                 func(context);
             }
             fired = fired + 1;

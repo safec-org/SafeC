@@ -332,62 +332,86 @@ llvm::Value *CodeGen::genSpawn(SpawnExpr &e, FnEnv &env) {
 llvm::Function *CodeGen::genFunctionProto(FunctionDecl &fn) {
     // Build LLVM function type
     std::vector<llvm::Type *> paramTys;
-    for (auto &p : fn.params) paramTys.push_back(lowerType(p.type));
+    for (auto &p : fn.params) {
+        // Array-typed parameters decay to a pointer at the C ABI boundary
+        // (same rule as C: 'void f(int x[10])' really takes 'int*') — the
+        // caller already decays the argument (see genCall's array-to-pointer
+        // decay), so the callee's declared signature must match or the LLVM
+        // call site and the function definition disagree on the parameter's
+        // LLVM type (aggregate vs pointer), which the verifier rejects.
+        if (p.type && p.type->kind == TypeKind::Array)
+            paramTys.push_back(llvm::PointerType::get(ctx_, 0));
+        else
+            paramTys.push_back(lowerType(p.type));
+    }
     auto *retTy  = fn.returnType ? lowerType(fn.returnType) : llvm::Type::getVoidTy(ctx_);
     auto *fnType = llvm::FunctionType::get(retTy, paramTys, fn.isVariadic);
 
     // Reuse an existing declaration (forward-decl from .h already created it).
     // This prevents LLVM from auto-renaming a second Function::Create to "name.1".
-    if (auto *existing = mod_->getFunction(fn.name)) return existing;
-
-    auto linkage = fn.isExtern
-        ? llvm::Function::ExternalLinkage
-        : llvm::Function::ExternalLinkage;  // default external for C ABI
-    auto *llvmFn = llvm::Function::Create(fnType, linkage, fn.name, *mod_);
-
-    if (fn.isInline) llvmFn->addFnAttr(llvm::Attribute::InlineHint);
-
-    // ── Bare-metal / effect system attributes ────────────────────────────────
-    if (fn.isNaked)    llvmFn->addFnAttr(llvm::Attribute::Naked);
-    if (fn.isNoReturn) llvmFn->addFnAttr(llvm::Attribute::NoReturn);
-    if (fn.isPure) {
-        llvmFn->setMemoryEffects(llvm::MemoryEffects::readOnly());
-        llvmFn->addFnAttr(llvm::Attribute::NoUnwind);
+    //
+    // A header prototype and the '.sc' definition are two separate
+    // FunctionDecl nodes for the same symbol (see the '.h'/'.sc' pairing
+    // convention elsewhere in this file). Attribute-bearing modifiers like
+    // 'inline'/'pure'/'noreturn' are written on the DEFINING declaration
+    // (the one with a body) — if that's the second FunctionDecl processed
+    // here, naively returning the already-created (attribute-less) Function
+    // would silently drop them. So: apply attributes whenever 'fn' is the
+    // defining occurrence, whether or not the Function already exists.
+    llvm::Function *llvmFn = mod_->getFunction(fn.name);
+    bool isNewFunction = (llvmFn == nullptr);
+    if (isNewFunction) {
+        auto linkage = fn.isExtern
+            ? llvm::Function::ExternalLinkage
+            : llvm::Function::ExternalLinkage;  // default external for C ABI
+        llvmFn = llvm::Function::Create(fnType, linkage, fn.name, *mod_);
     }
-    if (fn.isInterrupt) {
-        llvmFn->addFnAttr("interrupt");
-    }
-    if (!fn.sectionName.empty()) llvmFn->setSection(fn.sectionName);
-    // Calling convention
-    if (fn.callingConv == "stdcall")
-        llvmFn->setCallingConv(llvm::CallingConv::X86_StdCall);
-    else if (fn.callingConv == "fastcall")
-        llvmFn->setCallingConv(llvm::CallingConv::X86_FastCall);
-    else if (fn.callingConv == "cdecl")
-        llvmFn->setCallingConv(llvm::CallingConv::C);
-    if (freestanding_) llvmFn->addFnAttr(llvm::Attribute::NoBuiltin);
 
-    // Name parameters and add reference attributes
-    unsigned idx = 0;
-    for (auto &arg : llvmFn->args()) {
-        if (idx < fn.params.size()) {
-            arg.setName(fn.params[idx].name);
-            // If param type is a non-null reference, add nonnull attr
-            auto &pt = fn.params[idx].type;
-            if (pt && pt->kind == TypeKind::Reference) {
-                auto &rt = static_cast<const ReferenceType &>(*pt);
-                if (!rt.nullable) {
-                    llvmFn->addParamAttr(idx, llvm::Attribute::NonNull);
-                }
-                // For safe references: add noalias if mutable (exclusive access)
-                if (rt.mut) {
-                    llvmFn->addParamAttr(idx, llvm::Attribute::NoAlias);
-                }
-                // dereferenceable: we know the base type size statically
-                // (simplified — would need DataLayout for exact size)
-            }
+    if (isNewFunction || fn.body) {
+        if (fn.isInline) llvmFn->addFnAttr(llvm::Attribute::InlineHint);
+
+        // ── Bare-metal / effect system attributes ────────────────────────
+        if (fn.isNaked)    llvmFn->addFnAttr(llvm::Attribute::Naked);
+        if (fn.isNoReturn) llvmFn->addFnAttr(llvm::Attribute::NoReturn);
+        if (fn.isPure) {
+            llvmFn->setMemoryEffects(llvm::MemoryEffects::readOnly());
+            llvmFn->addFnAttr(llvm::Attribute::NoUnwind);
         }
-        ++idx;
+        if (fn.isInterrupt) {
+            llvmFn->addFnAttr("interrupt");
+        }
+        if (!fn.sectionName.empty()) llvmFn->setSection(fn.sectionName);
+        // Calling convention
+        if (fn.callingConv == "stdcall")
+            llvmFn->setCallingConv(llvm::CallingConv::X86_StdCall);
+        else if (fn.callingConv == "fastcall")
+            llvmFn->setCallingConv(llvm::CallingConv::X86_FastCall);
+        else if (fn.callingConv == "cdecl")
+            llvmFn->setCallingConv(llvm::CallingConv::C);
+        if (freestanding_) llvmFn->addFnAttr(llvm::Attribute::NoBuiltin);
+
+        // Name parameters and add reference attributes
+        unsigned idx = 0;
+        for (auto &arg : llvmFn->args()) {
+            if (idx < fn.params.size()) {
+                arg.setName(fn.params[idx].name);
+                // If param type is a non-null reference, add nonnull attr
+                auto &pt = fn.params[idx].type;
+                if (pt && pt->kind == TypeKind::Reference) {
+                    auto &rt = static_cast<const ReferenceType &>(*pt);
+                    if (!rt.nullable) {
+                        llvmFn->addParamAttr(idx, llvm::Attribute::NonNull);
+                    }
+                    // For safe references: add noalias if mutable (exclusive access)
+                    if (rt.mut) {
+                        llvmFn->addParamAttr(idx, llvm::Attribute::NoAlias);
+                    }
+                    // dereferenceable: we know the base type size statically
+                    // (simplified — would need DataLayout for exact size)
+                }
+            }
+            ++idx;
+        }
     }
 
     globals_[fn.name] = llvmFn;
@@ -468,7 +492,12 @@ void CodeGen::genFunctionBody(FunctionDecl &fn, llvm::Function *llvmFn) {
     for (auto &arg : llvmFn->args()) {
         if (idx >= fn.params.size()) break;
         auto &p    = fn.params[idx];
-        auto *aTy  = lowerType(p.type);
+        // Array-typed parameters decay to a pointer (see genFunctionProto) —
+        // the incoming LLVM arg is already that pointer, so the local slot
+        // holds a 'ptr' rather than the array aggregate.
+        auto *aTy  = (p.type && p.type->kind == TypeKind::Array)
+                         ? llvm::PointerType::get(ctx_, 0)
+                         : lowerType(p.type);
         auto *alloca = createEntryAlloca(env, aTy, p.name + ".addr");
         builder_.CreateStore(&arg, alloca);
         env.locals[p.name] = alloca;
@@ -535,6 +564,36 @@ llvm::Constant *CodeGen::evalConstInit(Expr &e, llvm::Type *expectedTy) {
         if (auto *cf = llvm::dyn_cast<llvm::ConstantFP>(inner))
             return llvm::ConstantFP::get(expectedTy, -cf->getValueAPF().convertToDouble());
         return nullptr;
+    }
+    case ExprKind::Binary: {
+        // Simple constant arithmetic (e.g. 'N - 1' from a macro-expanded
+        // static-buffer declaration like RING_STATIC). Both operands are
+        // evaluated against the same expected type — good enough for the
+        // common case of same-width integer arithmetic in an initializer;
+        // not a general constexpr interpreter.
+        auto &be = static_cast<BinaryExpr &>(e);
+        auto *lhs = evalConstInit(*be.left, expectedTy);
+        auto *rhs = evalConstInit(*be.right, expectedTy);
+        auto *lci = lhs ? llvm::dyn_cast<llvm::ConstantInt>(lhs) : nullptr;
+        auto *rci = rhs ? llvm::dyn_cast<llvm::ConstantInt>(rhs) : nullptr;
+        if (!lci || !rci) return nullptr;
+        int64_t l = lci->getSExtValue(), r = rci->getSExtValue(), result = 0;
+        switch (be.op) {
+        case BinaryOp::Add:    result = l + r; break;
+        case BinaryOp::Sub:    result = l - r; break;
+        case BinaryOp::Mul:    result = l * r; break;
+        case BinaryOp::Div:    if (r == 0) return nullptr; result = l / r; break;
+        case BinaryOp::Mod:    if (r == 0) return nullptr; result = l % r; break;
+        case BinaryOp::BitAnd: result = l & r; break;
+        case BinaryOp::BitOr:  result = l | r; break;
+        case BinaryOp::BitXor: result = l ^ r; break;
+        case BinaryOp::Shl:    result = l << r; break;
+        case BinaryOp::Shr:    result = l >> r; break;
+        default: return nullptr;
+        }
+        return expectedTy->isIntegerTy()
+            ? llvm::ConstantInt::get(expectedTy, (uint64_t)result, true)
+            : nullptr;
     }
     case ExprKind::Cast:
         return evalConstInit(*static_cast<CastExpr &>(e).operand, expectedTy);
@@ -611,8 +670,9 @@ llvm::GlobalVariable *CodeGen::genGlobalVar(GlobalVarDecl &gv) {
         gv.isExtern ? nullptr : init,
         gv.name);
 
-    // Bare-metal attributes: section, volatile, thread_local
+    // Bare-metal attributes: section, alignment, volatile, thread_local
     if (!gv.sectionName.empty()) gvar->setSection(gv.sectionName);
+    if (gv.alignment > 0) gvar->setAlignment(llvm::Align(gv.alignment));
     if (gv.isThreadLocal)
         gvar->setThreadLocalMode(llvm::GlobalVariable::GeneralDynamicTLSModel);
 
@@ -1196,7 +1256,13 @@ void CodeGen::genVarDecl(VarDeclStmt &s, FnEnv &env) {
     }
 
     if (s.init) {
-        auto *val = genExpr(*s.init, env);
+        // Array-typed initializer flowing into a pointer/reference-typed
+        // declaration (e.g. '&static T x = some_array;') needs decay to the
+        // array's address, same as a call argument would.
+        bool needsDecay = s.init->type && s.init->type->kind == TypeKind::Array &&
+                          typeToUse && (typeToUse->kind == TypeKind::Pointer ||
+                                        typeToUse->kind == TypeKind::Reference);
+        auto *val = needsDecay ? decayArrayToPtr(*s.init, env) : genExpr(*s.init, env);
         builder_.CreateStore(val, alloca);
     } else {
         // Zero-initialize (null function pointer)
@@ -1320,6 +1386,15 @@ llvm::Value *CodeGen::genExpr(Expr &e, FnEnv &env) {
     }
 }
 
+llvm::Value *CodeGen::decayArrayToPtr(Expr &a, FnEnv &env) {
+    auto *arrAddr = genLValue(a, env);
+    auto *arrTy   = lowerType(a.type);
+    auto *Int64Ty = llvm::Type::getInt64Ty(ctx_);
+    return builder_.CreateGEP(arrTy, arrAddr,
+        { llvm::ConstantInt::get(Int64Ty, 0), llvm::ConstantInt::get(Int64Ty, 0) },
+        "arraydecay");
+}
+
 llvm::Value *CodeGen::genLValue(Expr &e, FnEnv &env) {
     // Return the address of an lvalue expression
     switch (e.kind) {
@@ -1386,7 +1461,20 @@ llvm::Value *CodeGen::genIdent(IdentExpr &e, FnEnv &env, bool wantAddr) {
     // Check local variables first
     auto it = env.locals.find(e.name);
     if (it != env.locals.end()) {
-        if (wantAddr) return it->second;
+        if (wantAddr) {
+            // Decayed array parameter (see genFunctionProto/genFunctionBody):
+            // Sema still types 'e' as Array, but the alloca holds a POINTER
+            // to the caller's storage, not the array itself — so the
+            // "address" callers need for GEP-based subscripting is the
+            // pointer VALUE (a load), not this alloca's own address. A real
+            // array-typed local's alloca IS the storage, so its address is
+            // correct as-is; distinguish by checking what got allocated.
+            if (e.type && e.type->kind == TypeKind::Array &&
+                !it->second->getAllocatedType()->isArrayTy()) {
+                return builder_.CreateLoad(it->second->getAllocatedType(), it->second, e.name);
+            }
+            return it->second;
+        }
         auto *ty = it->second->getAllocatedType();
         return builder_.CreateLoad(ty, it->second, e.name);
     }
@@ -1543,7 +1631,12 @@ llvm::Value *CodeGen::applyBinaryOp(BinaryOp op, llvm::Value *l, llvm::Value *r,
         return isFloat ? builder_.CreateFCmpOEQ(l, r, "feq")
                        : builder_.CreateICmpEQ(l, r, "eq");
     case BinaryOp::NEq:
-        return isFloat ? builder_.CreateFCmpONE(l, r, "fne")
+        // Unordered-or-not-equal, not ordered-not-equal: C/IEEE754 '!=' is
+        // the negation of '==', and '==' is false for any NaN operand, so
+        // '!=' must be true whenever either operand is NaN (including the
+        // classic 'x != x' NaN-detection idiom, e.g. isnan_d/isnan_f) —
+        // 'one' (ordered) incorrectly returns false when a NaN is involved.
+        return isFloat ? builder_.CreateFCmpUNE(l, r, "fne")
                        : builder_.CreateICmpNE(l, r, "ne");
     case BinaryOp::Lt:
         return isFloat ? builder_.CreateFCmpOLT(l, r, "flt")
@@ -1675,6 +1768,32 @@ llvm::Value *CodeGen::genBinary(BinaryExpr &e, FnEnv &env) {
 
     auto *lhs = genExpr(*e.left,  env);
     auto *rhs = genExpr(*e.right, env);
+
+    // Pointer - pointer = ptrdiff_t (element distance), e.g. 'found - base'.
+    // Must be distinguished from pointer +/- integer (GEP offset) below: both
+    // operands here are addresses, so the result is their byte distance
+    // (scaled by pointee size), not a new address — treating rhs as a GEP
+    // index would try to integer-negate a pointer value, which isn't valid IR.
+    if (lhs->getType()->isPointerTy() && rhs->getType()->isPointerTy() &&
+        e.op == BinaryOp::Sub) {
+        auto *i64Ty  = llvm::Type::getInt64Ty(ctx_);
+        auto *lhsInt = builder_.CreatePtrToInt(lhs, i64Ty, "ptrdiff.lhs");
+        auto *rhsInt = builder_.CreatePtrToInt(rhs, i64Ty, "ptrdiff.rhs");
+        auto *diff   = builder_.CreateSub(lhsInt, rhsInt, "ptrdiff");
+        TypePtr pointee;
+        if (e.left->type) {
+            if (e.left->type->kind == TypeKind::Pointer)
+                pointee = static_cast<PointerType &>(*e.left->type).base;
+            else if (e.left->type->kind == TypeKind::Reference)
+                pointee = static_cast<ReferenceType &>(*e.left->type).base;
+        }
+        if (pointee) {
+            uint64_t elemSize = mod_->getDataLayout().getTypeAllocSize(lowerType(pointee));
+            if (elemSize > 1)
+                diff = builder_.CreateSDiv(diff, llvm::ConstantInt::get(i64Ty, elemSize), "ptrdiff.scaled");
+        }
+        return diff;
+    }
 
     // Pointer arithmetic (e.g., &arr[i+offset])
     if (lhs->getType()->isPointerTy() && (e.op == BinaryOp::Add || e.op == BinaryOp::Sub)) {
@@ -1950,16 +2069,6 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
 
     auto *calleeVal = genExpr(*e.callee, env);
 
-    // Helper: decay an array expression to a char* (pointer to first element).
-    auto decayArray = [&](Expr &a) -> llvm::Value * {
-        auto *arrAddr = genLValue(a, env);
-        auto *arrTy   = lowerType(a.type);
-        auto *Int64Ty = llvm::Type::getInt64Ty(ctx_);
-        return builder_.CreateGEP(arrTy, arrAddr,
-            { llvm::ConstantInt::get(Int64Ty, 0), llvm::ConstantInt::get(Int64Ty, 0) },
-            "arraydecay");
-    };
-
     std::vector<llvm::Value *> args;
 
     // Method call: prepend 'self' pointer (address of base object)
@@ -1988,9 +2097,9 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
     }
 
     for (auto &a : e.args) {
-        // Perform automatic array-to-pointer decay for array arguments
+        // Perform automatic array-to-pointer/reference decay for array arguments
         if (a->type && a->type->kind == TypeKind::Array)
-            args.push_back(decayArray(*a));
+            args.push_back(decayArrayToPtr(*a, env));
         else
             args.push_back(genExpr(*a, env));
     }
@@ -2051,9 +2160,20 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
 // ── Subscript ─────────────────────────────────────────────────────────────────
 llvm::Value *CodeGen::genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr) {
     auto *idxVal   = genExpr(*e.index, env);
-    auto *baseAddr = genLValue(*e.base, env);
     auto *baseTy   = e.base->type ? lowerType(e.base->type)
                                   : llvm::Type::getInt32Ty(ctx_);
+    // Array/Slice subscripting needs the aggregate's own address (to GEP
+    // into its inline storage), which only exists for an lvalue base.
+    // Plain-pointer subscripting doesn't: the base is only ever a pointer
+    // VALUE, which may come from an lvalue (a pointer variable — load the
+    // current value from its alloca) or an arbitrary rvalue pointer
+    // expression (e.g. a cast like '(unsigned char*)pkt.data', or a call
+    // returning a pointer) that has no addressable storage of its own.
+    // Only compute an lvalue address when the base actually needs/has one.
+    auto *baseAddr = (baseTy->isArrayTy() ||
+                      (e.base->type && e.base->type->kind == TypeKind::Slice) ||
+                      e.base->isLValue)
+                         ? genLValue(*e.base, env) : nullptr;
 
     llvm::Value *gep = nullptr;
     if (baseTy->isArrayTy()) {
@@ -2120,10 +2240,14 @@ llvm::Value *CodeGen::genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr) 
         return builder_.CreateLoad(elemTy, gep, "sl.elem");
     }
 
-    // Pointer subscript: baseAddr is the alloca for the pointer variable.
-    // Load the actual pointer value from the alloca before indexing into it.
-    auto *ptrVal = builder_.CreateLoad(llvm::PointerType::get(ctx_, 0),
-                                       baseAddr, "ptr.load");
+    // Pointer subscript: if the base is an lvalue (e.g. a pointer variable),
+    // baseAddr is that variable's own alloca — load the current pointer
+    // value from it. Otherwise the base is an rvalue pointer expression
+    // (cast result, call, ...) with no alloca of its own; evaluate it
+    // directly to get the pointer value.
+    auto *ptrVal = baseAddr
+        ? builder_.CreateLoad(llvm::PointerType::get(ctx_, 0), baseAddr, "ptr.load")
+        : genExpr(*e.base, env);
     auto *elemTy = e.type ? lowerType(e.type) : llvm::Type::getInt32Ty(ctx_);
     gep = builder_.CreateGEP(elemTy, ptrVal, idxVal, "ptr.idx");
     if (wantAddr) return gep;
@@ -2322,6 +2446,20 @@ llvm::Value *CodeGen::genCast(CastExpr &e, FnEnv &env) {
             "arraydecay");
     }
 
+    // Scalar lvalue → Reference: (&region T)lvalueExpr, e.g. '(&stack u8)data[0]'.
+    // The operand is a plain value of type T (not itself a reference/pointer/
+    // array), so casting to a reference means "take this lvalue's address"
+    // (matching '&expr' semantics) — NOT "reinterpret the loaded scalar value
+    // as a pointer", which would treat e.g. an element's runtime value (1)
+    // as if it were the address 0x1.
+    if (e.targetType->kind == TypeKind::Reference && e.operand->isLValue &&
+        e.operand->type &&
+        e.operand->type->kind != TypeKind::Reference &&
+        e.operand->type->kind != TypeKind::Pointer &&
+        e.operand->type->kind != TypeKind::Array) {
+        return genLValue(*e.operand, env);
+    }
+
     auto *srcVal = genExpr(*e.operand, env);
     auto *srcTy  = srcVal->getType();
 
@@ -2376,7 +2514,13 @@ llvm::Value *CodeGen::genCast(CastExpr &e, FnEnv &env) {
 
 // ── Assignment ────────────────────────────────────────────────────────────────
 llvm::Value *CodeGen::genAssign(AssignExpr &e, FnEnv &env) {
-    auto *rhs   = genExpr(*e.rhs, env);
+    // Same array-to-pointer/reference decay as call arguments and var-decl
+    // initializers — an array RHS assigned into a pointer/reference LHS
+    // needs its address, not an attempted load of the whole array.
+    bool rhsNeedsDecay = e.rhs->type && e.rhs->type->kind == TypeKind::Array &&
+                         e.lhs->type && (e.lhs->type->kind == TypeKind::Pointer ||
+                                         e.lhs->type->kind == TypeKind::Reference);
+    auto *rhs   = rhsNeedsDecay ? decayArrayToPtr(*e.rhs, env) : genExpr(*e.rhs, env);
     auto *addr  = genLValue(*e.lhs, env);
     auto *lhsTy = e.lhs->type ? lowerType(e.lhs->type) : rhs->getType();
 

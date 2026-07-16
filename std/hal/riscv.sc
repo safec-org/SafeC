@@ -82,14 +82,14 @@ void clint_init(unsigned long base_addr) {
 
 void Clint::set_msip(unsigned int hart_id) {
     unsafe {
-        volatile unsigned int* p = (volatile unsigned int*)(self.base + (unsigned long)hart_id * 4);
+        volatile unsigned int* p = (volatile unsigned int*)(self.base + (unsigned long)hart_id * (unsigned long)4);
         *p = (unsigned int)1;
     }
 }
 
 void Clint::clear_msip(unsigned int hart_id) {
     unsafe {
-        volatile unsigned int* p = (volatile unsigned int*)(self.base + (unsigned long)hart_id * 4);
+        volatile unsigned int* p = (volatile unsigned int*)(self.base + (unsigned long)hart_id * (unsigned long)4);
         *p = (unsigned int)0;
     }
 }
@@ -109,7 +109,8 @@ unsigned long long Clint::read_mtime() const {
     unsafe {
         volatile unsigned int* lo = (volatile unsigned int*)(self.base + (unsigned long)0xBFF8);
         volatile unsigned int* hi = (volatile unsigned int*)(self.base + (unsigned long)0xBFFC);
-        unsigned int l, h;
+        unsigned int l = (unsigned int)0;
+        unsigned int h = (unsigned int)0;
         // Re-read if hi changed during lo read (rollover guard).
         do {
             h = *hi;
@@ -139,24 +140,24 @@ void plic_init(unsigned long base_addr) {
 
 void Plic::set_priority(unsigned int irq, unsigned int priority) {
     unsafe {
-        volatile unsigned int* p = (volatile unsigned int*)(self.base + (unsigned long)irq * 4);
+        volatile unsigned int* p = (volatile unsigned int*)(self.base + (unsigned long)irq * (unsigned long)4);
         *p = priority & (unsigned int)7;
     }
 }
 
 void Plic::enable(unsigned int irq) {
     unsafe {
-        unsigned long reg = self.base + (unsigned long)0x2000 + (unsigned long)(irq / 32) * 4;
+        unsigned long reg = self.base + (unsigned long)0x2000 + (unsigned long)(irq / (unsigned int)32) * (unsigned long)4;
         volatile unsigned int* p = (volatile unsigned int*)reg;
-        *p = *p | ((unsigned int)1 << (irq % 32));
+        *p = *p | ((unsigned int)1 << (irq % (unsigned int)32));
     }
 }
 
 void Plic::disable(unsigned int irq) {
     unsafe {
-        unsigned long reg = self.base + (unsigned long)0x2000 + (unsigned long)(irq / 32) * 4;
+        unsigned long reg = self.base + (unsigned long)0x2000 + (unsigned long)(irq / (unsigned int)32) * (unsigned long)4;
         volatile unsigned int* p = (volatile unsigned int*)reg;
-        *p = *p & ~((unsigned int)1 << (irq % 32));
+        *p = *p & ~((unsigned int)1 << (irq % (unsigned int)32));
     }
 }
 

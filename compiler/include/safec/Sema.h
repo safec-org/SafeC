@@ -168,6 +168,16 @@ private:
     std::map<MonoKey, FunctionDecl *>              monoCache_;    // non-owning
     std::vector<std::unique_ptr<FunctionDecl>>     monoFunctions_; // owns clones
 
+    // Struct-internal method forward-declarations ('int read(...);' inside a
+    // struct body, as opposed to an out-of-line 'T::read(...) { ... }'
+    // definition) get synthesized into full FunctionDecl nodes so a method
+    // call type-checks from the declaration alone — the definition can then
+    // live in a different translation unit and be resolved at link time,
+    // same as any other extern function (the '.h'/'.sc' pairing convention).
+    // Owned here; appended to tu_.decls at the end of run() so CodeGen emits
+    // the matching extern declaration, exactly like monoFunctions_ above.
+    std::vector<std::unique_ptr<FunctionDecl>>     synthesizedMethods_;
+
     // Return true if inference succeeded, filling subs.
     bool inferTypeArgs(const std::vector<ParamDecl>      &params,
                        const std::vector<TypePtr>         &argTypes,
@@ -191,6 +201,13 @@ private:
     bool isNumeric(const TypePtr &ty) const;
     bool isIntegral(const TypePtr &ty) const;
     bool canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const;
+    // True if 'e' is a (possibly negative-signed) integer literal whose value
+    // fits exactly in 'to' — standard C allows 'unsigned char c[] = {0x63,
+    // ...}' even though each element is nominally an 'int' literal, because
+    // the *value* is known at compile time to fit; canImplicitlyConvert()
+    // alone can't see the value, only the two static types.
+    bool intLiteralFitsType(const Expr &e, const TypePtr &to) const;
+    bool refToPointerArgCompatible(const TypePtr &from, const TypePtr &to) const;
 
     // ── State ─────────────────────────────────────────────────────────────────
     bool freestanding_ = false;  // --freestanding mode: warn on stdlib calls

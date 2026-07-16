@@ -112,6 +112,22 @@ private:
                                    std::unordered_set<std::string> &guard,
                                    const std::string &filename, unsigned lineNo);
 
+    // ── Macro hygiene ─────────────────────────────────────────────────────────
+    // Textual macro expansion has the classic C capture problem: a variable a
+    // macro declares internally (e.g. 'int tmp' in a SWAP(a, b) macro) can
+    // collide with a same-named variable at the call site. Real hygiene (as
+    // in Rust's macro_rules!) needs a token-tree representation with syntax
+    // contexts, which a text-substitution preprocessor doesn't have — so this
+    // is a heuristic, not a proof: scan the macro body for C-declaration-
+    // shaped patterns ('TYPE name', 'TYPE* name', 'struct Tag name', ...) and
+    // rename any such identifier that ISN'T one of the macro's own parameters
+    // to a fresh alias, unique to this expansion. Parameters are never
+    // renamed — they refer to the call site's own expressions, which is
+    // exactly what should stay unhygienic (that's how the macro receives
+    // arguments at all).
+    std::unordered_map<std::string, std::string>
+    computeHygienicRenames(const MacroDef &def, uint64_t hygieneId) const;
+
     // ── #if expression evaluator ──────────────────────────────────────────────
     // Full recursive-descent C preprocessor integer expression evaluator.
     int64_t evalCondExpr(const std::string &expr,
@@ -165,6 +181,10 @@ private:
     // Current file/line for __FILE__ / __LINE__ expansion
     std::string  curFile_;
     unsigned     curLine_ = 1;
+
+    // Monotonic counter — one fresh value per function-like macro expansion,
+    // used to make hygienic renames unique per call site.
+    uint64_t     hygieneCounter_ = 0;
 };
 
 } // namespace safec

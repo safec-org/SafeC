@@ -1,6 +1,7 @@
 // SafeC Standard Library — FAT32 Read-Only Driver Implementation
 #pragma once
 #include "fat.h"
+#include "block.h"
 
 extern void* memset(void* p, int v, unsigned long n);
 extern void* memcpy(void* d, const void* s, unsigned long n);
@@ -27,10 +28,10 @@ static unsigned short fat_read16_(const unsigned char* p) {
 }
 
 int fat_init(&stack FatCtx ctx, &stack BlockDevice dev, unsigned long lba) {
-    ctx.dev = dev;
+    ctx.dev = *dev;
     ctx.partition_lba = lba;
     unsigned char boot[512];
-    if (dev.read(lba, (unsigned char*)boot, (unsigned long)1) != 0) { return -1; }
+    if (dev.read(lba, (&stack unsigned char)boot, (unsigned long)1) != 0) { return -1; }
     // BPB parsing
     unsafe {
         ctx.bpb.bytes_per_sector     = fat_read16_(boot + 11);
@@ -58,13 +59,16 @@ int fat_init(&stack FatCtx ctx, &stack BlockDevice dev, unsigned long lba) {
 
 // Convert cluster number to LBA.
 static unsigned long fat_cluster_to_lba_(struct FatCtx* ctx, unsigned long cluster) {
-    return ctx->data_lba + (cluster - (unsigned long)2)
-           * (unsigned long)ctx->bpb.sectors_per_cluster;
+    unsafe {
+        return ctx->data_lba + (cluster - (unsigned long)2)
+               * (unsigned long)ctx->bpb.sectors_per_cluster;
+    }
 }
 
 int FatCtx::read_cluster(unsigned long cluster, unsigned char* buf) {
-    unsigned long lba = fat_cluster_to_lba_(&self, cluster);
-    return self.dev.read(lba, buf,
+    unsigned long lba;
+    unsafe { lba = fat_cluster_to_lba_((struct FatCtx*)self, cluster); }
+    return self.dev.read(lba, (&stack unsigned char)buf,
                          (unsigned long)self.bpb.sectors_per_cluster);
 }
 
@@ -77,7 +81,7 @@ unsigned long FatCtx::follow_fat(unsigned long start_cluster, unsigned long idx)
         unsigned long fat_sector   = fat_byte_off / (unsigned long)512;
         unsigned long fat_off_in   = fat_byte_off % (unsigned long)512;
         if (self.dev.read(self.fat_lba + fat_sector,
-                          (unsigned char*)fat_sect, (unsigned long)1) != 0) {
+                          (&stack unsigned char)fat_sect, (unsigned long)1) != 0) {
             return (unsigned long)0;
         }
         unsigned int next;
@@ -139,7 +143,8 @@ static unsigned long fat_walk_component_(struct FatCtx* ctx,
     unsigned long cluster = dir_cluster;
     while (cluster != (unsigned long)0) {
         if (ctx->read_cluster(cluster, (unsigned char*)buf) != 0) { break; }
-        unsigned long entries = ctx->bytes_per_cluster / (unsigned long)32;
+        unsigned long entries;
+        unsafe { entries = ctx->bytes_per_cluster / (unsigned long)32; }
         unsigned long e = (unsigned long)0;
         while (e < entries) {
             unsafe {
@@ -204,7 +209,7 @@ static int fat_vfs_open_(void* ctx, const char* path, int flags,
     struct FatCtx* fc = (struct FatCtx*)ctx;
     // Tokenise path.
     char parts[FAT_MAX_DEPTH][VFS_MAX_NAME];
-    int n = fat_split_path_(path, (char(*)[VFS_MAX_NAME])parts, FAT_MAX_DEPTH);
+    int n = fat_split_path_(path, parts, FAT_MAX_DEPTH);
     if (n == 0) {
         // Root directory.
         unsafe {
@@ -215,13 +220,16 @@ static int fat_vfs_open_(void* ctx, const char* path, int flags,
         }
         return 0;
     }
-    unsigned long cluster = fc->root_cluster;
+    unsigned long cluster;
+    unsafe { cluster = fc->root_cluster; }
     int i = 0;
     int is_dir = 1;
     while (i < n) {
         int d = 0;
-        unsigned long next = fat_walk_component_(fc, cluster,
-                                                  (const char*)parts[i], &d);
+        unsigned long next;
+        unsafe {
+            next = fat_walk_component_(fc, cluster, (const char*)parts[i], (int*)&d);
+        }
         if (next == (unsigned long)0) { return -1; }
         cluster = next;
         is_dir  = d;
@@ -246,7 +254,8 @@ static unsigned long fat_vfs_read_(void* ctx, unsigned long inode,
                                     unsigned long offset,
                                     unsigned char* buf, unsigned long len) {
     struct FatCtx* fc = (struct FatCtx*)ctx;
-    unsigned long bpc = fc->bytes_per_cluster;
+    unsigned long bpc;
+    unsafe { bpc = fc->bytes_per_cluster; }
     unsigned long cluster_idx = offset / bpc;
     unsigned long off_in = offset % bpc;
     unsigned long cluster = fc->follow_fat(inode, cluster_idx);
@@ -275,7 +284,8 @@ static int fat_vfs_readdir_(void* ctx, unsigned long inode, void* cb, void* user
     unsigned char buf[4096];
     while (cluster != (unsigned long)0) {
         if (fc->read_cluster(cluster, (unsigned char*)buf) != 0) { break; }
-        unsigned long entries = fc->bytes_per_cluster / (unsigned long)32;
+        unsigned long entries;
+        unsafe { entries = fc->bytes_per_cluster / (unsigned long)32; }
         unsigned long e = (unsigned long)0;
         while (e < entries) {
             unsafe {
@@ -303,9 +313,9 @@ static int fat_vfs_readdir_(void* ctx, unsigned long inode, void* cb, void* user
                 unsigned long lo = (unsigned long)fat_read16_(entry + 26);
                 node.inode    = (hi << 16) | lo;
                 node.fs_ctx   = ctx;
-                void (*callback)(struct VfsNode*, void*) =
-                    (void (*)(struct VfsNode*, void*))cb;
-                callback(&node, user);
+                fn void(struct VfsNode*, void*) callback =
+                    (fn void(struct VfsNode*, void*))cb;
+                callback((struct VfsNode*)&node, user);
                 count = count + 1;
             }
             e = e + (unsigned long)1;

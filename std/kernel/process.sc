@@ -2,12 +2,12 @@
 #pragma once
 #include "process.h"
 
-struct PCB pcb_init(int pid, unsigned long entry, unsigned long stack, unsigned long page_table) {
+struct PCB pcb_init(int pid, unsigned long entry, unsigned long sp, unsigned long page_table) {
     struct PCB p;
     p.pid        = pid;
     p.state      = 0; // PROC_READY
     p.priority   = 0;
-    p.stack_ptr  = stack;
+    p.stack_ptr  = sp;
     p.pc         = entry;
     p.page_table = page_table;
     p.parent_pid = -1;

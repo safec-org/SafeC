@@ -3,6 +3,12 @@
 #include "rng.h"
 
 extern void* memcpy(void* d, const void* s, unsigned long n);
+// Hosted-mode seeding from /dev/urandom. Declared here at file scope: this
+// parser only accepts 'extern' declarations at top level, not nested inside
+// a function body.
+extern void* fopen(const char* path, const char* mode);
+extern unsigned long fread(void* buf, unsigned long size, unsigned long n, void* f);
+extern int fclose(void* f);
 
 // ── ChaCha20 core ─────────────────────────────────────────────────────────────
 
@@ -24,24 +30,26 @@ static void chacha_qr_(unsigned int* a, unsigned int* b,
 static void chacha20_block_(const unsigned int* s, unsigned char* out) {
     unsigned int x[16];
     int i = 0;
-    while (i < 16) { x[i] = s[i]; i = i + 1; }
+    unsafe { while (i < 16) { x[i] = s[i]; i = i + 1; } }
 
     // 10 double-rounds
     int r = 0;
     while (r < 10) {
-        chacha_qr_(&x[ 0],&x[ 4],&x[ 8],&x[12]);
-        chacha_qr_(&x[ 1],&x[ 5],&x[ 9],&x[13]);
-        chacha_qr_(&x[ 2],&x[ 6],&x[10],&x[14]);
-        chacha_qr_(&x[ 3],&x[ 7],&x[11],&x[15]);
-        chacha_qr_(&x[ 0],&x[ 5],&x[10],&x[15]);
-        chacha_qr_(&x[ 1],&x[ 6],&x[11],&x[12]);
-        chacha_qr_(&x[ 2],&x[ 7],&x[ 8],&x[13]);
-        chacha_qr_(&x[ 3],&x[ 4],&x[ 9],&x[14]);
+        unsafe {
+            chacha_qr_((unsigned int*)&x[ 0],(unsigned int*)&x[ 4],(unsigned int*)&x[ 8],(unsigned int*)&x[12]);
+            chacha_qr_((unsigned int*)&x[ 1],(unsigned int*)&x[ 5],(unsigned int*)&x[ 9],(unsigned int*)&x[13]);
+            chacha_qr_((unsigned int*)&x[ 2],(unsigned int*)&x[ 6],(unsigned int*)&x[10],(unsigned int*)&x[14]);
+            chacha_qr_((unsigned int*)&x[ 3],(unsigned int*)&x[ 7],(unsigned int*)&x[11],(unsigned int*)&x[15]);
+            chacha_qr_((unsigned int*)&x[ 0],(unsigned int*)&x[ 5],(unsigned int*)&x[10],(unsigned int*)&x[15]);
+            chacha_qr_((unsigned int*)&x[ 1],(unsigned int*)&x[ 6],(unsigned int*)&x[11],(unsigned int*)&x[12]);
+            chacha_qr_((unsigned int*)&x[ 2],(unsigned int*)&x[ 7],(unsigned int*)&x[ 8],(unsigned int*)&x[13]);
+            chacha_qr_((unsigned int*)&x[ 3],(unsigned int*)&x[ 4],(unsigned int*)&x[ 9],(unsigned int*)&x[14]);
+        }
         r = r + 1;
     }
 
     i = 0;
-    while (i < 16) { x[i] = x[i] + s[i]; i = i + 1; }
+    unsafe { while (i < 16) { x[i] = x[i] + s[i]; i = i + 1; } }
 
     // Serialise little-endian
     unsafe {
@@ -66,7 +74,7 @@ static unsigned int chacha_const_[4] = {
 static void rng_setup_(unsigned int* state, const unsigned char* key32,
                         unsigned int ctr, unsigned int nonce) {
     int i = 0;
-    while (i < 4) { state[i] = chacha_const_[i]; i = i + 1; }
+    unsafe { while (i < 4) { state[i] = chacha_const_[i]; i = i + 1; } }
     unsafe {
         i = 0;
         while (i < 8) {
@@ -77,10 +85,12 @@ static void rng_setup_(unsigned int* state, const unsigned char* key32,
             i = i + 1;
         }
     }
-    state[12] = ctr;
-    state[13] = (unsigned int)0;
-    state[14] = nonce;
-    state[15] = (unsigned int)0;
+    unsafe {
+        state[12] = ctr;
+        state[13] = (unsigned int)0;
+        state[14] = nonce;
+        state[15] = (unsigned int)0;
+    }
 }
 
 void rng_init_seed(&stack RngCtx ctx, const unsigned char seed[32]) {
@@ -126,9 +136,6 @@ int rng_init(&stack RngCtx ctx) {
 
 #ifndef __SAFEC_FREESTANDING__
     // Hosted: seed from /dev/urandom
-    extern void* fopen(const char* path, const char* mode);
-    extern unsigned long fread(void* buf, unsigned long size, unsigned long n, void* f);
-    extern int fclose(void* f);
     unsafe {
         void* f = fopen("/dev/urandom", "rb");
         if (f != (void*)0) {

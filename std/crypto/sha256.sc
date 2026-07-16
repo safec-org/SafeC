@@ -63,8 +63,12 @@ static void sha256_compress_(unsigned int* h, const unsigned char* block) {
         }
     }
 
-    unsigned int a=h[0],b=h[1],c=h[2],d=h[3];
-    unsigned int e=h[4],f=h[5],g=h[6],hh=h[7];
+    unsigned int a; unsigned int b; unsigned int c; unsigned int d;
+    unsigned int e; unsigned int f; unsigned int g; unsigned int hh;
+    unsafe {
+        a=h[0]; b=h[1]; c=h[2]; d=h[3];
+        e=h[4]; f=h[5]; g=h[6]; hh=h[7];
+    }
 
     t = 0;
     while (t < 64) {
@@ -79,8 +83,10 @@ static void sha256_compress_(unsigned int* h, const unsigned char* block) {
         t = t + 1;
     }
 
-    h[0]=h[0]+a; h[1]=h[1]+b; h[2]=h[2]+c; h[3]=h[3]+d;
-    h[4]=h[4]+e; h[5]=h[5]+f; h[6]=h[6]+g; h[7]=h[7]+hh;
+    unsafe {
+        h[0]=h[0]+a; h[1]=h[1]+b; h[2]=h[2]+c; h[3]=h[3]+d;
+        h[4]=h[4]+e; h[5]=h[5]+f; h[6]=h[6]+g; h[7]=h[7]+hh;
+    }
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────

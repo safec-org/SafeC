@@ -4,7 +4,7 @@
 #pragma once
 
 // Panic handler function type: fn(message, file, line) → noreturn
-typedef void (*PanicHandler)(const char* msg, const char* file, int line);
+typedef fn void(const char* msg, const char* file, int line) PanicHandler;
 
 // Install a custom panic handler. Pass NULL to reset to default.
 void panic_set_handler(PanicHandler handler);

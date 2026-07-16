@@ -75,7 +75,7 @@ static unsigned int sub_word_(unsigned int w) {
     return ((unsigned int)aes_sbox_[(w >> 24) & 0xFF] << 24)
          | ((unsigned int)aes_sbox_[(w >> 16) & 0xFF] << 16)
          | ((unsigned int)aes_sbox_[(w >>  8) & 0xFF] <<  8)
-         | ((unsigned int)aes_sbox_[(w      ) & 0xFF]      );
+         | ((unsigned int)aes_sbox_[w & 0xFF]);
 }
 
 static unsigned int rot_word_(unsigned int w) {
@@ -95,13 +95,15 @@ static void expand_key_(const unsigned char* key, int nk, int nr,
         i = i + 1;
     }
     while (i < 4 * (nr + 1)) {
-        unsigned int tmp = ks[i - 1];
-        if (i % nk == 0) {
-            tmp = sub_word_(rot_word_(tmp)) ^ ((unsigned int)aes_rcon_[i / nk] << 24);
-        } else if (nk > 6 && i % nk == 4) {
-            tmp = sub_word_(tmp);
+        unsafe {
+            unsigned int tmp = ks[i - 1];
+            if (i % nk == 0) {
+                tmp = sub_word_(rot_word_(tmp)) ^ ((unsigned int)aes_rcon_[i / nk] << 24);
+            } else if (nk > 6 && i % nk == 4) {
+                tmp = sub_word_(tmp);
+            }
+            ks[i] = ks[i - nk] ^ tmp;
         }
-        ks[i] = ks[i - nk] ^ tmp;
         i = i + 1;
     }
 }
@@ -128,7 +130,7 @@ static void add_round_key_(unsigned char* state, const unsigned int* rk) {
 static void sub_bytes_(unsigned char* state) {
     int i = 0;
     while (i < 16) {
-        state[i] = aes_sbox_[state[i]];
+        unsafe { state[i] = aes_sbox_[state[i]]; }
         i = i + 1;
     }
 }
@@ -136,7 +138,7 @@ static void sub_bytes_(unsigned char* state) {
 static void inv_sub_bytes_(unsigned char* state) {
     int i = 0;
     while (i < 16) {
-        state[i] = aes_inv_sbox_[state[i]];
+        unsafe { state[i] = aes_inv_sbox_[state[i]]; }
         i = i + 1;
     }
 }
@@ -172,7 +174,7 @@ static void mix_columns_(unsigned char* s) {
     int c = 0;
     while (c < 4) {
         unsafe {
-            unsigned char a0=s[c*4+0], a1=s[c*4+1], a2=s[c*4+2], a3=s[c*4+3];
+            unsigned char a0=s[c*4+0]; unsigned char a1=s[c*4+1]; unsigned char a2=s[c*4+2]; unsigned char a3=s[c*4+3];
             s[c*4+0] = gmul_(2,a0)^gmul_(3,a1)^a2^a3;
             s[c*4+1] = a0^gmul_(2,a1)^gmul_(3,a2)^a3;
             s[c*4+2] = a0^a1^gmul_(2,a2)^gmul_(3,a3);
@@ -186,7 +188,7 @@ static void inv_mix_columns_(unsigned char* s) {
     int c = 0;
     while (c < 4) {
         unsafe {
-            unsigned char a0=s[c*4+0],a1=s[c*4+1],a2=s[c*4+2],a3=s[c*4+3];
+            unsigned char a0=s[c*4+0]; unsigned char a1=s[c*4+1]; unsigned char a2=s[c*4+2]; unsigned char a3=s[c*4+3];
             s[c*4+0]=gmul_(14,a0)^gmul_(11,a1)^gmul_(13,a2)^gmul_(9,a3);
             s[c*4+1]=gmul_(9,a0) ^gmul_(14,a1)^gmul_(11,a2)^gmul_(13,a3);
             s[c*4+2]=gmul_(13,a0)^gmul_(9,a1) ^gmul_(14,a2)^gmul_(11,a3);
@@ -289,7 +291,7 @@ void AesCtx::cbc_encrypt(&stack unsigned char data, unsigned long len) {
                 blk[k] = blk[k] ^ self.iv[k];
                 k = k + 1;
             }
-            self.encrypt_block(blk);
+            self.encrypt_block((&stack unsigned char)blk);
             memcpy((void*)self.iv, (const void*)blk, (unsigned long)AES_BLOCK_SIZE);
         }
         b = b + (unsigned long)1;
@@ -304,7 +306,7 @@ void AesCtx::cbc_decrypt(&stack unsigned char data, unsigned long len) {
             unsigned char* blk = (unsigned char*)data + b * (unsigned long)AES_BLOCK_SIZE;
             unsigned char prev[16];
             memcpy((void*)prev, (const void*)blk, (unsigned long)AES_BLOCK_SIZE);
-            self.decrypt_block(blk);
+            self.decrypt_block((&stack unsigned char)blk);
             int k = 0;
             while (k < AES_BLOCK_SIZE) {
                 blk[k] = blk[k] ^ self.iv[k];
@@ -338,7 +340,7 @@ struct AesCtx aes256_init(const &stack unsigned char key) {
 static void memset_byte_(unsigned char* p, unsigned char v, int n) {
     int i = 0;
     while (i < n) {
-        p[i] = v;
+        unsafe { p[i] = v; }
         i = i + 1;
     }
 }

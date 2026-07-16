@@ -63,6 +63,16 @@ public:
     // Returns false if any error was emitted.
     bool run();
 
+    // Resolves deferred array-size expressions (ArrayType::sizeExpr) across
+    // every type reachable from the TU — global vars, struct fields, function
+    // params/return types, and local var decls in function bodies — so that
+    // sizes like 'int arr[square(3)]' (a named constant or consteval function
+    // call, not a bare literal) are known before Sema runs. Must run BEFORE
+    // Sema/run(), since it only needs the raw parsed AST (function lookup by
+    // name, no resolved symbol table). Returns false if any size expression
+    // failed to resolve to a constant (diagnostic already emitted).
+    bool resolveArraySizes();
+
     // Evaluate a single expression in a const context.
     // The expression must have its types resolved (run after sema).
     // Returns nullopt on error (diagnostic already emitted).
@@ -123,6 +133,11 @@ private:
     FunctionDecl *lookupFn(const std::string &name) const;
     bool          isBudgetExceeded(SourceLocation loc);
     void          tickInstr(int n = 1) { instrBudget_ -= n; }
+    void          buildFnTable();
+
+    // ── resolveArraySizes() helpers ───────────────────────────────────────────
+    bool resolveTypeArraySizes(const TypePtr &ty);
+    bool resolveStmtArraySizes(Stmt &s);
 
     // ── Limits ────────────────────────────────────────────────────────────────
     static constexpr int     kMaxRecursion = 256;

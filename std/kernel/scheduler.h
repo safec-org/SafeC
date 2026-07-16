@@ -13,7 +13,7 @@ struct Scheduler {
     int           current;  // index of currently running process (-1 if none)
 
     // Add a process. Returns the process index, or -1 if full.
-    int           spawn(&stack PCB proc);
+    int           spawn_proc(&stack PCB proc);
 
     // Select the next READY process with highest priority.
     // Returns the index of the selected process, or -1 if none are ready.

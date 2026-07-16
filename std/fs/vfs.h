@@ -42,16 +42,16 @@ struct VfsNode {
 // Driver interface: filled by each filesystem.
 struct VfsOps {
     // Mount from a raw byte buffer (e.g. RAM disk) or opaque driver handle.
-    int (*mount)(void* ctx, unsigned long size);
-    int (*unmount)(void* ctx);
-    int (*open)(void* ctx, const char* path, int flags, &stack VfsNode node_out);
-    int (*unlink)(void* ctx, const char* path);
-    int (*mkdir)(void* ctx, const char* path);
-    unsigned long (*read)(void* ctx, unsigned long inode, unsigned long off,
-                          unsigned char* buf, unsigned long len);
-    unsigned long (*write)(void* ctx, unsigned long inode, unsigned long off,
-                           const unsigned char* buf, unsigned long len);
-    int (*readdir)(void* ctx, unsigned long inode, void* cb, void* user);
+    fn int(void* ctx, unsigned long size) mount;
+    fn int(void* ctx) unmount;
+    fn int(void* ctx, const char* path, int flags, &stack VfsNode node_out) open;
+    fn int(void* ctx, const char* path) unlink;
+    fn int(void* ctx, const char* path) mkdir;
+    fn unsigned long(void* ctx, unsigned long inode, unsigned long off,
+                      unsigned char* buf, unsigned long len) read;
+    fn unsigned long(void* ctx, unsigned long inode, unsigned long off,
+                      const unsigned char* buf, unsigned long len) write;
+    fn int(void* ctx, unsigned long inode, void* cb, void* user) readdir;
 };
 
 struct VfsMount {

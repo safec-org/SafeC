@@ -9,12 +9,14 @@ extern void*  memset(void* p, int v, unsigned long n);
 #define CLOCKS_PER_SEC_VAL 1000000
 
 static void bench_copy_(char* dst, const char* src, unsigned long n) {
-    unsigned long i = (unsigned long)0;
-    while (i < n - (unsigned long)1 && src[i] != '\0') {
-        dst[i] = src[i];
-        i = i + (unsigned long)1;
+    unsafe {
+        unsigned long i = (unsigned long)0;
+        while (i < n - (unsigned long)1 && src[i] != '\0') {
+            dst[i] = src[i];
+            i = i + (unsigned long)1;
+        }
+        dst[i] = '\0';
     }
-    dst[i] = '\0';
 }
 
 struct BenchSuite bench_suite_init() {
@@ -44,7 +46,10 @@ void BenchSuite::run() {
             long t0 = clock();
             unsigned long j = (unsigned long)0;
             while (j < n) {
-                ((void(*)(void*))self.cases[i].func)(self.cases[i].arg);
+                {
+                    fn void(void*) bench_fn = (fn void(void*))self.cases[i].func;
+                    bench_fn(self.cases[i].arg);
+                }
                 j = j + (unsigned long)1;
             }
             long t1 = clock();

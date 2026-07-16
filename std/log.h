@@ -14,8 +14,8 @@
 #endif
 
 // Backend: fn(level, tag, msg, file, line)
-typedef void (*LogBackend)(int level, const char* tag, const char* msg,
-                            const char* file, int line);
+typedef fn void(int level, const char* tag, const char* msg,
+                const char* file, int line) LogBackend;
 
 void log_set_backend(LogBackend backend);
 void log_write(int level, const char* tag, const char* msg,

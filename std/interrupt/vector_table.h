@@ -8,7 +8,7 @@
 #define VTABLE_MAX_VECTORS  256   // Cortex-M can have up to 256 external IRQs + 16 core
 
 // Handler function type: void(*)(void)
-typedef void (*IrqHandler)(void);
+typedef fn void(void) IrqHandler;
 
 struct VectorTable {
     IrqHandler handlers[VTABLE_MAX_VECTORS];

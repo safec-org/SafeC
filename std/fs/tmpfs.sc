@@ -10,7 +10,7 @@ extern unsigned long strlen(const char* s);
 extern void* strncpy(char* d, const char* s, unsigned long n);
 
 void tmpfs_init(&stack TmpfsCtx ctx) {
-    unsafe { memset((void*)&ctx, 0, sizeof(struct TmpfsCtx)); }
+    unsafe { memset((void*)ctx, 0, sizeof(struct TmpfsCtx)); }
     // Create root inode at index 0.
     ctx.inodes[0].used   = 1;
     ctx.inodes[0].type   = VFS_TYPE_DIR;
@@ -28,16 +28,17 @@ void tmpfs_init(&stack TmpfsCtx ctx) {
 
 // Tokenise a path and resolve down from root; returns inode index or -1.
 static int tmpfs_resolve_(struct TmpfsCtx* tc, const char* path) {
-    if (path[0] == '/' && path[1] == (char)0) { return 0; }
+    unsafe { if (path[0] == '/' && path[1] == (char)0) { return 0; } }
     // Walk components.
     unsigned long cur = (unsigned long)0;
     unsigned long i   = (unsigned long)0;
-    while (path[i] == '/') { i = i + (unsigned long)1; }
+    unsafe { while (path[i] == '/') { i = i + (unsigned long)1; } }
+    unsafe {
     while (path[i] != (char)0) {
         // Extract component.
         char comp[VFS_MAX_NAME];
         unsigned long clen = (unsigned long)0;
-        unsafe {
+        {
             while (path[i] != (char)0 && path[i] != '/' &&
                    clen < (unsigned long)VFS_MAX_NAME - (unsigned long)1) {
                 comp[clen] = path[i];
@@ -54,13 +55,14 @@ static int tmpfs_resolve_(struct TmpfsCtx* tc, const char* path) {
             if (tc->inodes[j].used != 0 &&
                 (unsigned long)tc->inodes[j].parent == cur) {
                 int eq = 0;
-                unsafe { eq = (strcmp(tc->inodes[j].name, (const char*)comp) == 0); }
+                eq = (strcmp(tc->inodes[j].name, (const char*)comp) == 0);
                 if (eq != 0) { found = j; break; }
             }
             j = j + 1;
         }
         if (found < 0) { return -1; }
         cur = (unsigned long)found;
+    }
     }
     return (int)cur;
 }
@@ -69,7 +71,7 @@ static int tmpfs_resolve_(struct TmpfsCtx* tc, const char* path) {
 static int tmpfs_alloc_inode_(struct TmpfsCtx* tc) {
     int i = 0;
     while (i < TMPFS_MAX_FILES) {
-        if (tc->inodes[i].used == 0) { return i; }
+        unsafe { if (tc->inodes[i].used == 0) { return i; } }
         i = i + 1;
     }
     return -1;
@@ -89,13 +91,13 @@ static void tmpfs_split_path_(const char* path,
         }
         if (last <= 0L) {
             parent_out[0] = '/'; parent_out[1] = (char)0;
-            strncpy(leaf_out, path + (last + 1L), (unsigned long)VFS_MAX_NAME - 1);
+            strncpy(leaf_out, path + (last + 1L), (unsigned long)VFS_MAX_NAME - (unsigned long)1);
             leaf_out[VFS_MAX_NAME - 1] = (char)0;
         } else {
             strncpy(parent_out, path, (unsigned long)last);
             parent_out[last] = (char)0;
             strncpy(leaf_out, path + last + 1L,
-                    (unsigned long)VFS_MAX_NAME - 1);
+                    (unsigned long)VFS_MAX_NAME - (unsigned long)1);
             leaf_out[VFS_MAX_NAME - 1] = (char)0;
         }
     }
@@ -117,17 +119,17 @@ static int tmpfs_vfs_open_(void* ctx, const char* path, int flags,
         if (pidx < 0) { return -1; }
         int new_idx = tmpfs_alloc_inode_(tc);
         if (new_idx < 0) { return -1; }
-        tc->inodes[new_idx].used     = 1;
-        tc->inodes[new_idx].type     = VFS_TYPE_FILE;
-        tc->inodes[new_idx].parent   = (unsigned long)pidx;
-        tc->inodes[new_idx].size     = (unsigned long)0;
-        tc->inodes[new_idx].data_off = tc->data_used;
         unsafe {
+            tc->inodes[new_idx].used     = 1;
+            tc->inodes[new_idx].type     = VFS_TYPE_FILE;
+            tc->inodes[new_idx].parent   = (unsigned long)pidx;
+            tc->inodes[new_idx].size     = (unsigned long)0;
+            tc->inodes[new_idx].data_off = tc->data_used;
             strncpy(tc->inodes[new_idx].name, (const char*)leaf,
-                    (unsigned long)VFS_MAX_NAME - 1);
+                    (unsigned long)VFS_MAX_NAME - (unsigned long)1);
             tc->inodes[new_idx].name[VFS_MAX_NAME - 1] = (char)0;
+            tc->inode_count = tc->inode_count + 1;
         }
-        tc->inode_count = tc->inode_count + 1;
         idx = new_idx;
     }
     unsafe {
@@ -138,9 +140,9 @@ static int tmpfs_vfs_open_(void* ctx, const char* path, int flags,
             k = k + (unsigned long)1;
         }
         node_out.name[k] = (char)0;
+        node_out.type  = tc->inodes[idx].type;
+        node_out.size  = tc->inodes[idx].size;
     }
-    node_out.type  = tc->inodes[idx].type;
-    node_out.size  = tc->inodes[idx].size;
     node_out.inode = (unsigned long)idx;
     return 0;
 }
@@ -149,8 +151,10 @@ static int tmpfs_vfs_unlink_(void* ctx, const char* path) {
     struct TmpfsCtx* tc = (struct TmpfsCtx*)ctx;
     int idx = tmpfs_resolve_(tc, path);
     if (idx < 0) { return -1; }
-    tc->inodes[idx].used = 0;
-    tc->inode_count = tc->inode_count - 1;
+    unsafe {
+        tc->inodes[idx].used = 0;
+        tc->inode_count = tc->inode_count - 1;
+    }
     return 0;
 }
 
@@ -163,16 +167,16 @@ static int tmpfs_vfs_mkdir_(void* ctx, const char* path) {
     if (pidx < 0) { return -1; }
     int new_idx = tmpfs_alloc_inode_(tc);
     if (new_idx < 0) { return -1; }
-    tc->inodes[new_idx].used   = 1;
-    tc->inodes[new_idx].type   = VFS_TYPE_DIR;
-    tc->inodes[new_idx].parent = (unsigned long)pidx;
-    tc->inodes[new_idx].size   = (unsigned long)0;
     unsafe {
+        tc->inodes[new_idx].used   = 1;
+        tc->inodes[new_idx].type   = VFS_TYPE_DIR;
+        tc->inodes[new_idx].parent = (unsigned long)pidx;
+        tc->inodes[new_idx].size   = (unsigned long)0;
         strncpy(tc->inodes[new_idx].name, (const char*)leaf,
-                (unsigned long)VFS_MAX_NAME - 1);
+                (unsigned long)VFS_MAX_NAME - (unsigned long)1);
         tc->inodes[new_idx].name[VFS_MAX_NAME - 1] = (char)0;
+        tc->inode_count = tc->inode_count + 1;
     }
-    tc->inode_count = tc->inode_count + 1;
     return 0;
 }
 
@@ -182,10 +186,13 @@ static unsigned long tmpfs_vfs_read_(void* ctx, unsigned long inode,
     struct TmpfsCtx* tc = (struct TmpfsCtx*)ctx;
     int idx = (int)inode;
     if (idx < 0 || idx >= TMPFS_MAX_FILES) { return (unsigned long)0; }
-    if (tc->inodes[idx].used == 0 || tc->inodes[idx].type != VFS_TYPE_FILE) {
-        return (unsigned long)0;
+    unsigned long fsize;
+    unsafe {
+        if (tc->inodes[idx].used == 0 || tc->inodes[idx].type != VFS_TYPE_FILE) {
+            return (unsigned long)0;
+        }
+        fsize = tc->inodes[idx].size;
     }
-    unsigned long fsize = tc->inodes[idx].size;
     if (offset >= fsize) { return (unsigned long)0; }
     unsigned long avail = fsize - offset;
     if (avail > len) { avail = len; }
@@ -206,24 +213,26 @@ static unsigned long tmpfs_vfs_write_(void* ctx, unsigned long inode,
     struct TmpfsCtx* tc = (struct TmpfsCtx*)ctx;
     int idx = (int)inode;
     if (idx < 0 || idx >= TMPFS_MAX_FILES) { return (unsigned long)0; }
-    if (tc->inodes[idx].used == 0 || tc->inodes[idx].type != VFS_TYPE_FILE) {
-        return (unsigned long)0;
-    }
-    unsigned long doff = tc->inodes[idx].data_off + offset;
-    unsigned long end  = doff + len;
-    if (end > (unsigned long)TMPFS_MAX_DATA) {
-        len = (unsigned long)TMPFS_MAX_DATA - doff;
-    }
+    unsigned long doff;
+    unsigned long end;
     unsafe {
+        if (tc->inodes[idx].used == 0 || tc->inodes[idx].type != VFS_TYPE_FILE) {
+            return (unsigned long)0;
+        }
+        doff = tc->inodes[idx].data_off + offset;
+        end  = doff + len;
+        if (end > (unsigned long)TMPFS_MAX_DATA) {
+            len = (unsigned long)TMPFS_MAX_DATA - doff;
+        }
         unsigned long k = (unsigned long)0;
         while (k < len) {
             tc->data[doff + k] = buf[k];
             k = k + (unsigned long)1;
         }
+        unsigned long new_size = offset + len;
+        if (new_size > tc->inodes[idx].size) { tc->inodes[idx].size = new_size; }
+        if (end > tc->data_used) { tc->data_used = end; }
     }
-    unsigned long new_size = offset + len;
-    if (new_size > tc->inodes[idx].size) { tc->inodes[idx].size = new_size; }
-    if (end > tc->data_used) { tc->data_used = end; }
     return len;
 }
 
@@ -233,9 +242,13 @@ static int tmpfs_vfs_readdir_(void* ctx, unsigned long inode,
     int count = 0;
     int j = 0;
     while (j < TMPFS_MAX_FILES) {
-        if (tc->inodes[j].used != 0 &&
-            (unsigned long)tc->inodes[j].parent == inode &&
-            j != (int)inode) {
+        int matched;
+        unsafe {
+            matched = (tc->inodes[j].used != 0 &&
+                     (unsigned long)tc->inodes[j].parent == inode &&
+                     j != (int)inode) ? 1 : 0;
+        }
+        if (matched != 0) {
             struct VfsNode node;
             unsafe {
                 unsigned long nlen = strlen(tc->inodes[j].name);
@@ -245,15 +258,13 @@ static int tmpfs_vfs_readdir_(void* ctx, unsigned long inode,
                     k = k + (unsigned long)1;
                 }
                 node.name[k] = (char)0;
-            }
-            node.type  = tc->inodes[j].type;
-            node.size  = tc->inodes[j].size;
-            node.inode = (unsigned long)j;
-            node.fs_ctx = ctx;
-            unsafe {
-                void (*callback)(struct VfsNode*, void*) =
-                    (void (*)(struct VfsNode*, void*))cb;
-                callback(&node, user);
+                node.type  = tc->inodes[j].type;
+                node.size  = tc->inodes[j].size;
+                node.inode = (unsigned long)j;
+                node.fs_ctx = ctx;
+                fn void(struct VfsNode*, void*) callback =
+                    (fn void(struct VfsNode*, void*))cb;
+                callback((struct VfsNode*)&node, user);
             }
             count = count + 1;
         }

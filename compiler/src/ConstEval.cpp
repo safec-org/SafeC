@@ -85,14 +85,17 @@ bool ConstEvalEngine::isBudgetExceeded(SourceLocation loc) {
 // run() — TU-level const-eval pass
 // =============================================================================
 
-bool ConstEvalEngine::run() {
-    // Build function table
+void ConstEvalEngine::buildFnTable() {
     for (auto &decl : tu_.decls) {
         if (decl->kind == DeclKind::Function) {
             auto &fn = static_cast<FunctionDecl &>(*decl);
             fnTable_[fn.name] = &fn;
         }
     }
+}
+
+bool ConstEvalEngine::run() {
+    buildFnTable();
 
     // Process all top-level declarations
     for (auto &decl : tu_.decls) {
@@ -153,6 +156,130 @@ bool ConstEvalEngine::run() {
     }
 
     return !diag_.hasErrors();
+}
+
+// =============================================================================
+// resolveArraySizes() — fills in ArrayType::size for deferred size expressions
+// (named constants / consteval calls) before Sema runs.
+// =============================================================================
+
+bool ConstEvalEngine::resolveTypeArraySizes(const TypePtr &ty) {
+    if (!ty) return true;
+    bool ok = true;
+    switch (ty->kind) {
+    case TypeKind::Array: {
+        auto &at = static_cast<ArrayType &>(*ty);
+        // Element first, so nested arrays (e.g. 'T arr[square(2)][3]') resolve
+        // inside-out the same way normal type-checking would visit them.
+        ok = resolveTypeArraySizes(at.element) && ok;
+        if (at.sizeExpr) {
+            auto *sizeExpr = static_cast<const Expr *>(at.sizeExpr);
+            auto val = evalExpr(*sizeExpr);
+            if (!val) { ok = false; break; }
+            if (val->toInt() < 0) {
+                diag_.error(sizeExpr->loc, "array size must be non-negative");
+                ok = false;
+                break;
+            }
+            at.size = val->toInt();
+            at.sizeExpr = nullptr;
+        }
+        break;
+    }
+    case TypeKind::Pointer:
+        ok = resolveTypeArraySizes(static_cast<PointerType &>(*ty).base);
+        break;
+    case TypeKind::Reference:
+        ok = resolveTypeArraySizes(static_cast<ReferenceType &>(*ty).base);
+        break;
+    default:
+        break;
+    }
+    return ok;
+}
+
+bool ConstEvalEngine::resolveStmtArraySizes(Stmt &s) {
+    bool ok = true;
+    switch (s.kind) {
+    case StmtKind::Compound: {
+        auto &cs = static_cast<CompoundStmt &>(s);
+        for (auto &child : cs.body) ok = resolveStmtArraySizes(*child) && ok;
+        break;
+    }
+    case StmtKind::VarDecl: {
+        auto &vd = static_cast<VarDeclStmt &>(s);
+        ok = resolveTypeArraySizes(vd.declType) && ok;
+        break;
+    }
+    case StmtKind::If: {
+        auto &is = static_cast<IfStmt &>(s);
+        if (is.then)  ok = resolveStmtArraySizes(*is.then) && ok;
+        if (is.else_) ok = resolveStmtArraySizes(*is.else_) && ok;
+        break;
+    }
+    case StmtKind::While:
+    case StmtKind::DoWhile: {
+        auto &ws = static_cast<WhileStmt &>(s);
+        if (ws.body) ok = resolveStmtArraySizes(*ws.body) && ok;
+        break;
+    }
+    case StmtKind::For: {
+        auto &fs = static_cast<ForStmt &>(s);
+        if (fs.init) ok = resolveStmtArraySizes(*fs.init) && ok;
+        if (fs.body) ok = resolveStmtArraySizes(*fs.body) && ok;
+        break;
+    }
+    case StmtKind::Unsafe: {
+        auto &us = static_cast<UnsafeStmt &>(s);
+        if (us.body) ok = resolveStmtArraySizes(*us.body) && ok;
+        break;
+    }
+    case StmtKind::Defer: {
+        auto &ds = static_cast<DeferStmt &>(s);
+        if (ds.body) ok = resolveStmtArraySizes(*ds.body) && ok;
+        break;
+    }
+    case StmtKind::Match: {
+        auto &ms = static_cast<MatchStmt &>(s);
+        for (auto &arm : ms.arms)
+            if (arm.body) ok = resolveStmtArraySizes(*arm.body) && ok;
+        break;
+    }
+    default:
+        break;
+    }
+    return ok;
+}
+
+bool ConstEvalEngine::resolveArraySizes() {
+    buildFnTable();
+    bool ok = true;
+
+    for (auto &decl : tu_.decls) {
+        switch (decl->kind) {
+        case DeclKind::GlobalVar: {
+            auto &gv = static_cast<GlobalVarDecl &>(*decl);
+            ok = resolveTypeArraySizes(gv.type) && ok;
+            break;
+        }
+        case DeclKind::Struct: {
+            auto &sd = static_cast<StructDecl &>(*decl);
+            for (auto &f : sd.fields) ok = resolveTypeArraySizes(f.type) && ok;
+            break;
+        }
+        case DeclKind::Function: {
+            auto &fn = static_cast<FunctionDecl &>(*decl);
+            ok = resolveTypeArraySizes(fn.returnType) && ok;
+            for (auto &p : fn.params) ok = resolveTypeArraySizes(p.type) && ok;
+            if (fn.body) ok = resolveStmtArraySizes(*fn.body) && ok;
+            break;
+        }
+        default:
+            break;
+        }
+    }
+
+    return ok;
 }
 
 // Resolve all IfConstStmt nodes in a statement tree.

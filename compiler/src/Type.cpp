@@ -252,8 +252,10 @@ TypePtr makeReference(TypePtr base, Region r, bool nullable, bool mut, std::stri
     return std::make_shared<ReferenceType>(std::move(base), r, nullable, mut, std::move(arena));
 }
 
-TypePtr makeArray(TypePtr elem, int64_t sz) {
-    return std::make_shared<ArrayType>(std::move(elem), sz);
+TypePtr makeArray(TypePtr elem, int64_t sz, void *sizeExpr) {
+    auto at = std::make_shared<ArrayType>(std::move(elem), sz);
+    at->sizeExpr = sizeExpr;
+    return at;
 }
 
 TypePtr makeFunction(TypePtr ret, std::vector<TypePtr> params, bool va) {

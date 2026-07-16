@@ -318,6 +318,21 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    // ── 5b. Resolve deferred array-size expressions ──────────────────────────
+    // Array sizes that weren't plain literals (named constants, consteval
+    // function calls like 'square(3)') were left unresolved by the parser —
+    // fold them now, before Sema, since Sema/CodeGen assume ArrayType::size
+    // is already known.
+    {
+        safec::ConstEvalEngine arraySizeCE(*tu, diag);
+        bool ok = arraySizeCE.resolveArraySizes();
+        if (!ok || diag.hasErrors()) {
+            fprintf(stderr, "Array-size resolution failed with %d error(s)\n",
+                    diag.errorCount());
+            return 1;
+        }
+    }
+
     // ── 6. Semantic analysis ──────────────────────────────────────────────────
     if (!NoSema) {
         if (Verbose) fprintf(stderr, "[safec] Running semantic analysis ...\n");

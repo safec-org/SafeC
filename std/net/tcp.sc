@@ -10,10 +10,10 @@ unsigned short tcp_checksum(unsigned int src_ip, unsigned int dst_ip,
     unsigned long sum = (unsigned long)0;
     // Pseudo-header: src_ip, dst_ip, 0x00, proto=6, tcp_length
     unsafe {
-        sum = sum + ((src_ip >> 16) & (unsigned int)0xFFFF);
-        sum = sum + (src_ip & (unsigned int)0xFFFF);
-        sum = sum + ((dst_ip >> 16) & (unsigned int)0xFFFF);
-        sum = sum + (dst_ip & (unsigned int)0xFFFF);
+        sum = sum + (unsigned long)((src_ip >> 16) & (unsigned int)0xFFFF);
+        sum = sum + (unsigned long)(src_ip & (unsigned int)0xFFFF);
+        sum = sum + (unsigned long)((dst_ip >> 16) & (unsigned int)0xFFFF);
+        sum = sum + (unsigned long)(dst_ip & (unsigned int)0xFFFF);
         sum = sum + (unsigned long)6;   // protocol = TCP
         sum = sum + seg_len;
         unsigned long i = (unsigned long)0;
@@ -118,7 +118,7 @@ void TcpConn::close() {
 
 int TcpConn::recv(&stack PacketBuf pkt, unsigned long tcp_offset) {
     struct TcpHdr hdr;
-    if (tcp_parse(pkt, tcp_offset, hdr) != 0) { return 0; }
+    if (tcp_parse(pkt, tcp_offset, &hdr) != 0) { return 0; }
     if (hdr.dst_port != self.local_port) { return 0; }
 
     unsigned char flags = hdr.flags;
@@ -235,7 +235,7 @@ int TcpConn::build_segment(&stack PacketBuf pkt,
         // Copy tx_buf payload.
         unsigned long i = (unsigned long)0;
         while (i < payload_len) {
-            d[TCP_HDR_MIN_LEN + i] = self.tx_buf[i];
+            d[(unsigned long)TCP_HDR_MIN_LEN + i] = self.tx_buf[i];
             i = i + (unsigned long)1;
         }
         // Fill checksum.

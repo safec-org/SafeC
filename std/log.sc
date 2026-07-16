@@ -3,11 +3,15 @@
 
 extern int fprintf(void* stream, const char* fmt, ...);
 extern void* stderr;
+#define NULL ((void*)0)
 
-static LogBackend backend_ = NULL;
+// Stored as a raw pointer (not 'LogBackend' directly): a '&static fn(...)'
+// reference is non-nullable, but "no custom backend installed" needs a null
+// sentinel here. Cast back to 'LogBackend' at the call site instead.
+static void* backend_ = NULL;
 
 void log_set_backend(LogBackend backend) {
-    backend_ = backend;
+    unsafe { backend_ = (void*)backend; }
 }
 
 void log_write(int level, const char* tag, const char* msg,
@@ -19,7 +23,10 @@ void log_write(int level, const char* tag, const char* msg,
 
     // Dispatch to custom backend if installed.
     if (backend_ != NULL) {
-        backend_(level, tag, msg, file, line);
+        unsafe {
+            LogBackend cb = (LogBackend)backend_;
+            cb(level, tag, msg, file, line);
+        }
         return;
     }
 

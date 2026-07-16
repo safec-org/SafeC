@@ -1,6 +1,7 @@
 // SafeC Standard Library — Partition Table Implementation
 #pragma once
 #include "partition.h"
+#include "block.h"
 
 // MBR layout: 446 bytes bootstrap + 4×16-byte partition entries + 2-byte signature
 #define MBR_ENTRY_OFFSET  446
@@ -16,7 +17,7 @@ const struct PartEntry* PartTable::get(int idx) const {
 
 int partition_read(&stack BlockDevice dev, &stack PartTable table_out) {
     unsigned char mbr[512];
-    if (dev.read((unsigned long)0, (unsigned char*)mbr, (unsigned long)1) != 0) {
+    if (dev.read((unsigned long)0, (&stack unsigned char)mbr, (unsigned long)1) != 0) {
         return -1;
     }
     // Validate signature.

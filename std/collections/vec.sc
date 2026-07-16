@@ -34,9 +34,9 @@ void Vec::free() {
 }
 
 // ── Capacity ──────────────────────────────────────────────────────────────────
-unsigned long Vec::length() const { return self.len; }
+inline unsigned long Vec::length() const { return self.len; }
 unsigned long Vec::total_capacity() const { return self.cap; }
-int           Vec::is_empty() const { return self.len == 0UL; }
+inline int           Vec::is_empty() const { return self.len == 0UL; }
 
 int Vec::reserve(unsigned long new_cap) {
     if (new_cap <= self.cap) { return 1; }
@@ -156,7 +156,7 @@ int Vec::remove(unsigned long idx, void* out) {
     return 1;
 }
 
-void Vec::clear() { self.len = 0UL; }
+inline void Vec::clear() { self.len = 0UL; }
 
 int Vec::extend(const void* arr, unsigned long count) {
     if (!self.reserve(self.len + count)) { return 0; }

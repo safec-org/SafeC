@@ -23,7 +23,7 @@ struct ThreadSched {
     // Spawn a new thread.  func: int(*)(void* arg, int resume_point).
     // priority >= 0; higher values run earlier in each tick.
     // Returns Thread id (>= 0) or THREAD_NONE if table is full.
-    Thread  spawn(void* func, void* arg, int priority);
+    Thread  spawn_thread(void* func, void* arg, int priority);
 
     // Run one scheduling pass: threads are served in descending priority order.
     // Returns the number of still-active threads.
@@ -36,7 +36,7 @@ struct ThreadSched {
     int     is_active(Thread t) const;
 
     // Cooperative join: calls tick() until thread `t` is done.
-    void    join(Thread t);
+    void    join_thread(Thread t);
 
     // Return number of active (non-DONE) threads.
     int     active_count() const;

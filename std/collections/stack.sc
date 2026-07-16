@@ -30,11 +30,11 @@ void stack_free(struct Stack* s) {
     }
 }
 
-unsigned long stack_len(struct Stack* s)    { unsafe { return s->top; } }
-int           stack_is_empty(struct Stack* s) { unsafe { return s->top == 0UL; } }
-void          stack_clear(struct Stack* s)  { unsafe { s->top = 0UL; } }
+inline unsigned long stack_len(struct Stack* s)    { unsafe { return s->top; } }
+inline int           stack_is_empty(struct Stack* s) { unsafe { return s->top == 0UL; } }
+inline void          stack_clear(struct Stack* s)  { unsafe { s->top = 0UL; } }
 
-void* stack_peek(struct Stack* s) {
+inline void* stack_peek(struct Stack* s) {
     unsafe {
         if (s->top == 0UL) return (void*)0;
         return (void*)((char*)s->data + (s->top - 1UL) * s->elem_size);
@@ -70,16 +70,16 @@ int stack_pop(struct Stack* s, void* out) {
 }
 
 generic<T>
-int stack_push_t(struct Stack* s, T val) {
+inline int stack_push_t(struct Stack* s, T val) {
     return stack_push(s, (const void*)&val);
 }
 
 generic<T>
-T* stack_peek_t(struct Stack* s) {
+inline T* stack_peek_t(struct Stack* s) {
     return (T*)stack_peek(s);
 }
 
 generic<T>
-int stack_pop_t(struct Stack* s, T* out) {
+inline int stack_pop_t(struct Stack* s, T* out) {
     return stack_pop(s, (void*)out);
 }

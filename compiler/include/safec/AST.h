@@ -611,6 +611,7 @@ struct GlobalVarDecl : Decl {
     bool    isAtomic      = false;
     bool    isThreadLocal = false;
     std::string sectionName;
+    int     alignment = 0;  // align(N): 0 = default
 
     GlobalVarDecl(std::string n, SourceLocation l)
         : Decl(DeclKind::GlobalVar, std::move(n), l) {}
@@ -640,6 +641,11 @@ struct StaticAssertDecl : Decl {
 struct TranslationUnit {
     std::vector<DeclPtr> decls;
     const char          *filename = nullptr;
+    // Owns array-size expressions deferred for post-parse const-eval
+    // resolution (see ArrayType::sizeExpr and resolveArraySizes() in
+    // main.cpp) — these Exprs have no natural AST parent since they're
+    // parsed as part of a type, not a statement/decl body.
+    std::vector<ExprPtr> arraySizeExprs;
 };
 
 // ── Variable reference (for sema symbol table) ────────────────────────────────
@@ -650,6 +656,7 @@ struct VarDecl {
     bool        isConst   = false;
     bool        isStatic  = false;
     bool        isGlobal  = false;
+    bool        isExtern  = false; // true only for a bodiless 'extern' declaration
     bool        initialized = false;
     // For region safety: if this is a reference, which scope depth it came from
     int         scopeDepth  = 0;

@@ -67,7 +67,7 @@ exit /b 1
 
 echo.
 echo  ╔════════════════════════════════════════════════╗
-echo  ║       SafeC Installer — Windows (cmd)         ║
+echo  ║       SafeC Installer — Windows (cmd)          ║
 echo  ╚════════════════════════════════════════════════╝
 echo.
 

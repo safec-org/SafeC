@@ -120,7 +120,16 @@ struct ReferenceType : Type {
 // ── Array type ────────────────────────────────────────────────────────────────
 struct ArrayType : Type {
     TypePtr  element;
-    int64_t  size = -1;  // -1 = unsized (pointer decay compatible)
+    int64_t  size = -1;  // -1 = unsized (pointer decay compatible), or unresolved
+                         // (see sizeExpr) until the post-parse const-eval pass runs
+
+    // Set when the array-size expression in source wasn't a plain literal
+    // (e.g. a named constant or a consteval function call like 'square(3)').
+    // Untyped (Expr*) to avoid a circular header dependency with AST.h, same
+    // pattern as TypeofType::expr. Non-owning: the TranslationUnit's
+    // arraySizeExprs list owns the node. Resolved into 'size' by
+    // resolveArraySizes() (see main.cpp) before Sema runs; nulled out once resolved.
+    void *sizeExpr = nullptr;
 
     ArrayType(TypePtr elem, int64_t sz = -1)
         : Type(TypeKind::Array), element(std::move(elem)), size(sz) {}
@@ -256,7 +265,10 @@ TypePtr makeError();
 TypePtr makePointer(TypePtr base, bool isConst = false);
 TypePtr makeReference(TypePtr base, Region r, bool nullable = false,
                       bool mut = true, std::string arena = {});
-TypePtr makeArray(TypePtr elem, int64_t sz = -1);
+// 'sizeExpr' is non-null when the source size wasn't a plain literal (see
+// ArrayType::sizeExpr); it's resolved into a concrete 'size' by
+// resolveArraySizes() before Sema runs.
+TypePtr makeArray(TypePtr elem, int64_t sz = -1, void *sizeExpr = nullptr);
 TypePtr makeFunction(TypePtr ret, std::vector<TypePtr> params, bool va = false);
 TypePtr makeOptional(TypePtr inner);
 TypePtr makeSlice(TypePtr element);

@@ -9,10 +9,10 @@ struct Scheduler sched_init() {
     return s;
 }
 
-int Scheduler::spawn(&stack PCB proc) {
+int Scheduler::spawn_proc(&stack PCB proc) {
     if (self.count >= 256) { return -1; }
     int idx = self.count;
-    self.procs[idx] = proc;
+    self.procs[idx] = *proc;
     self.count = self.count + 1;
     return idx;
 }

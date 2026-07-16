@@ -32,4 +32,4 @@ struct PCB {
 };
 
 // Initialize a PCB with the given pid, entry point, and stack.
-struct PCB pcb_init(int pid, unsigned long entry, unsigned long stack, unsigned long page_table);
+struct PCB pcb_init(int pid, unsigned long entry, unsigned long sp, unsigned long page_table);

@@ -133,6 +133,14 @@ private:
     // Returns the LLVM alloca/GEP representing the lvalue address (without load)
     llvm::Value *genLValue(Expr &e, FnEnv &env);
 
+    // Array-to-pointer/reference decay: GEP to the address of element 0.
+    // Used wherever an array-typed expression flows into a context expecting
+    // a pointer or reference (call arguments, var-decl initializers,
+    // assignment) — an array is an aggregate, not a pointer value, so a
+    // plain genExpr()+store would try to copy the whole array (and mismatch
+    // types under opaque pointers) instead of taking its address.
+    llvm::Value *decayArrayToPtr(Expr &a, FnEnv &env);
+
     llvm::Value *genIntLit(IntLitExpr &e);
     llvm::Value *genFloatLit(FloatLitExpr &e);
     llvm::Value *genBoolLit(BoolLitExpr &e);

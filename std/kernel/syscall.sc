@@ -35,7 +35,9 @@ long long SyscallTable::dispatch(int num, long long arg0, long long arg1, long l
     if (num < 0 || num >= 256) { return (long long)-1; }
     if (self.handlers[num] == (void*)0) { return (long long)-1; }
     unsafe {
-        return ((long long(*)(long long, long long, long long))self.handlers[num])(arg0, arg1, arg2);
+        fn long long(long long, long long, long long) handler =
+            (fn long long(long long, long long, long long))self.handlers[num];
+        return handler(arg0, arg1, arg2);
     }
 }
 

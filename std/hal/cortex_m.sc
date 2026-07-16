@@ -32,25 +32,25 @@ void nvic_init() {
 }
 
 void Nvic::enable(unsigned int irq) {
-    unsigned long reg = (unsigned long)self.base + (unsigned long)0 + (unsigned long)(irq / 32) * 4;
-    cm_write32_(reg, (unsigned int)1 << (irq % 32));
+    unsigned long reg = (unsigned long)self.base + (unsigned long)0 + (unsigned long)(irq / (unsigned int)32) * (unsigned long)4;
+    cm_write32_(reg, (unsigned int)1 << (irq % (unsigned int)32));
 }
 
 void Nvic::disable(unsigned int irq) {
-    unsigned long reg = (unsigned long)self.base + (unsigned long)0x80 + (unsigned long)(irq / 32) * 4;
-    cm_write32_(reg, (unsigned int)1 << (irq % 32));
+    unsigned long reg = (unsigned long)self.base + (unsigned long)0x80 + (unsigned long)(irq / (unsigned int)32) * (unsigned long)4;
+    cm_write32_(reg, (unsigned int)1 << (irq % (unsigned int)32));
 }
 
 int Nvic::is_pending(unsigned int irq) const {
-    unsigned long reg = (unsigned long)self.base + (unsigned long)0x100 + (unsigned long)(irq / 32) * 4;
+    unsigned long reg = (unsigned long)self.base + (unsigned long)0x100 + (unsigned long)(irq / (unsigned int)32) * (unsigned long)4;
     unsigned int val = cm_read32_(reg);
-    if ((val >> (irq % 32)) & (unsigned int)1) { return 1; }
+    if ((val >> (irq % (unsigned int)32)) & (unsigned int)1) { return 1; }
     return 0;
 }
 
 void Nvic::clear_pending(unsigned int irq) {
-    unsigned long reg = (unsigned long)self.base + (unsigned long)0x180 + (unsigned long)(irq / 32) * 4;
-    cm_write32_(reg, (unsigned int)1 << (irq % 32));
+    unsigned long reg = (unsigned long)self.base + (unsigned long)0x180 + (unsigned long)(irq / (unsigned int)32) * (unsigned long)4;
+    cm_write32_(reg, (unsigned int)1 << (irq % (unsigned int)32));
 }
 
 void Nvic::set_priority(unsigned int irq, unsigned char priority) {

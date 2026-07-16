@@ -1,6 +1,7 @@
 // SafeC Standard Library — MMU Context
 #pragma once
 #include "mmu.h"
+#include "frame.h"
 
 extern void* memset(void* ptr, int val, unsigned long n);
 
@@ -86,7 +87,7 @@ int MmuContext::walk(unsigned long virt, &stack unsigned long phys_out) const {
 
         unsigned long page_base  = l2[l2_idx] & ~(unsigned long)0xFFF;
         unsigned long page_offset = virt & (unsigned long)0xFFF;
-        phys_out = page_base + page_offset;
+        *phys_out = page_base + page_offset;
     }
     return 1;
 }

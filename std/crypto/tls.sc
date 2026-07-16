@@ -260,7 +260,7 @@ unsigned long TlsSession::decode_record(const unsigned char* data,
         if (flen > out_cap) { return (unsigned long)0; }
         unsafe {
             memcpy((void*)out, (const void*)(data + 5), flen);
-            content_type_out = wire_ct;
+            *content_type_out = wire_ct;
         }
         return flen;
     }
@@ -306,7 +306,7 @@ unsigned long TlsSession::decode_record(const unsigned char* data,
     // per RFC 8446 §5.4 (content type byte is the rightmost non-zero byte).
     unsigned long payload_end = unpadded - (unsigned long)1;
     unsafe {
-        content_type_out = plain[payload_end];
+        *content_type_out = plain[payload_end];
     }
 
     if (payload_end > out_cap) { return (unsigned long)0; }

@@ -78,8 +78,8 @@ void HashMap::clear() {
     self.len = 0UL;
 }
 
-unsigned long HashMap::length() const { return self.len; }
-int           HashMap::is_empty() const { return self.len == 0UL; }
+inline unsigned long HashMap::length() const { return self.len; }
+inline int           HashMap::is_empty() const { return self.len == 0UL; }
 
 // ── Resize ────────────────────────────────────────────────────────────────────
 int HashMap::resize_(unsigned long new_cap) {

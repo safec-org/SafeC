@@ -21,7 +21,7 @@ void time_gmtime(long long t, int* out) {
     unsafe {
         // struct tm is platform-specific; use a generous 56-byte buffer
         int tm_buf[14]; // 14 ints = 56 bytes, covers struct tm on all platforms
-        gmtime_r(&t, (void*)tm_buf);
+        gmtime_r((const long long*)&t, (void*)tm_buf);
         // Copy the first 9 standard fields
         out[0] = tm_buf[0]; // tm_sec
         out[1] = tm_buf[1]; // tm_min
@@ -38,7 +38,7 @@ void time_gmtime(long long t, int* out) {
 void time_localtime(long long t, int* out) {
     unsafe {
         int tm_buf[14];
-        localtime_r(&t, (void*)tm_buf);
+        localtime_r((const long long*)&t, (void*)tm_buf);
         out[0] = tm_buf[0]; out[1] = tm_buf[1]; out[2] = tm_buf[2];
         out[3] = tm_buf[3]; out[4] = tm_buf[4]; out[5] = tm_buf[5];
         out[6] = tm_buf[6]; out[7] = tm_buf[7]; out[8] = tm_buf[8];

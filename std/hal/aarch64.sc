@@ -96,13 +96,13 @@ void GicDist::enable_group0() {
 }
 
 void GicDist::enable_irq(unsigned int irq) {
-    unsigned long reg = self.base + (unsigned long)0x100 + (unsigned long)(irq / 32) * 4;
-    gic_write32_(reg, (unsigned int)1 << (irq % 32));
+    unsigned long reg = self.base + (unsigned long)0x100 + (unsigned long)(irq / (unsigned int)32) * (unsigned long)4;
+    gic_write32_(reg, (unsigned int)1 << (irq % (unsigned int)32));
 }
 
 void GicDist::disable_irq(unsigned int irq) {
-    unsigned long reg = self.base + (unsigned long)0x180 + (unsigned long)(irq / 32) * 4;
-    gic_write32_(reg, (unsigned int)1 << (irq % 32));
+    unsigned long reg = self.base + (unsigned long)0x180 + (unsigned long)(irq / (unsigned int)32) * (unsigned long)4;
+    gic_write32_(reg, (unsigned int)1 << (irq % (unsigned int)32));
 }
 
 void GicDist::set_priority(unsigned int irq, unsigned char priority) {
@@ -122,8 +122,8 @@ void GicDist::set_target(unsigned int irq, unsigned char cpu_mask) {
 }
 
 void GicDist::set_config(unsigned int irq, int edge_triggered) {
-    unsigned long reg = self.base + (unsigned long)0xC00 + (unsigned long)(irq / 16) * 4;
-    unsigned int  shift = (irq % 16) * 2;
+    unsigned long reg = self.base + (unsigned long)0xC00 + (unsigned long)(irq / (unsigned int)16) * (unsigned long)4;
+    unsigned int  shift = (irq % (unsigned int)16) * (unsigned int)2;
     unsigned int val = gic_read32_(reg);
     if (edge_triggered != 0) {
         val = val | ((unsigned int)2 << shift);
@@ -134,15 +134,15 @@ void GicDist::set_config(unsigned int irq, int edge_triggered) {
 }
 
 int GicDist::is_pending(unsigned int irq) const {
-    unsigned long reg = self.base + (unsigned long)0x200 + (unsigned long)(irq / 32) * 4;
+    unsigned long reg = self.base + (unsigned long)0x200 + (unsigned long)(irq / (unsigned int)32) * (unsigned long)4;
     unsigned int val = gic_read32_(reg);
-    if ((val >> (irq % 32)) & (unsigned int)1) { return 1; }
+    if ((val >> (irq % (unsigned int)32)) & (unsigned int)1) { return 1; }
     return 0;
 }
 
 void GicDist::clear_pending(unsigned int irq) {
-    unsigned long reg = self.base + (unsigned long)0x280 + (unsigned long)(irq / 32) * 4;
-    gic_write32_(reg, (unsigned int)1 << (irq % 32));
+    unsigned long reg = self.base + (unsigned long)0x280 + (unsigned long)(irq / (unsigned int)32) * (unsigned long)4;
+    gic_write32_(reg, (unsigned int)1 << (irq % (unsigned int)32));
 }
 
 // ── GicCpu ────────────────────────────────────────────────────────────────────

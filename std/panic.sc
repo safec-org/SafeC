@@ -4,16 +4,23 @@
 extern void abort();
 extern int fprintf(void* stream, const char* fmt, ...);
 extern void* stderr;
+#define NULL ((void*)0)
 
-static PanicHandler current_handler_ = NULL;
+// Stored as a raw pointer, not 'PanicHandler' directly: a '&static fn(...)'
+// reference is non-nullable, but "no handler installed" needs a null
+// sentinel — cast back to 'PanicHandler' at the call site instead.
+static void* current_handler_ = NULL;
 
 void panic_set_handler(PanicHandler handler) {
-    current_handler_ = handler;
+    unsafe { current_handler_ = (void*)handler; }
 }
 
-void panic_at(const char* msg, const char* file, int line) noreturn {
+noreturn void panic_at(const char* msg, const char* file, int line) {
     if (current_handler_ != NULL) {
-        current_handler_(msg, file, line);
+        unsafe {
+            PanicHandler cb = (PanicHandler)current_handler_;
+            cb(msg, file, line);
+        }
     }
 
 #ifdef __SAFEC_FREESTANDING__

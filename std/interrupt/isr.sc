@@ -32,7 +32,10 @@ void IsrTable::unregister_(int irq) {
 int IsrTable::dispatch(int irq) {
     if (irq < 0 || irq >= 256) { return 0; }
     if (self.handlers[irq] == (void*)0) { return 0; }
-    unsafe { ((void(*)(void))self.handlers[irq])(); }
+    unsafe {
+        fn void(void) handler = (fn void(void))self.handlers[irq];
+        handler();
+    }
     return 1;
 }
 

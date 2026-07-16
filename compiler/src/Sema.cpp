@@ -76,6 +76,25 @@ bool Scope::define(Symbol sym) {
         // Two declarations (both without body) for the same function are fine
         // (idempotent re-declaration; e.g. header included multiple times).
         if (!existingHasBody && !newHasBody) return true;
+        // A definition followed by a later bodiless re-declaration is also
+        // fine (e.g. '.sc' pairs with a '.h' the way '.c' pairs with '.h':
+        // a module defines its own functions after '#include'-ing its own
+        // header, and callers that include both the header and the '.sc'
+        // implementation in one TU will see the header's prototype again
+        // after the real definition). Keep the existing (defined) entry.
+        if (existingHasBody && !newHasBody) return true;
+    }
+    // Same '.h'/'.sc' pairing tolerance as above, for global variables:
+    // 'extern struct Foo x;' in a header followed (or preceded) by the real
+    // 'struct Foo x;' definition in the '.sc' file — whichever order they're
+    // seen in, an extern-declaration and a real definition of the same name
+    // are compatible, not a redefinition. Prefer keeping the real definition.
+    if (it->second.kind == SymKind::Variable && sym.kind == SymKind::Variable) {
+        bool existingIsExtern = it->second.varDecl && it->second.varDecl->isExtern;
+        bool newIsExtern      = sym.varDecl && sym.varDecl->isExtern;
+        if (existingIsExtern && !newIsExtern) { it->second = std::move(sym); return true; }
+        if (!existingIsExtern && newIsExtern) return true;
+        if (existingIsExtern && newIsExtern) return true;
     }
     return false;
 }
@@ -198,6 +217,14 @@ bool Sema::run() {
     for (auto &fn : monoFunctions_)
         tu_.decls.emplace_back(std::move(fn));
     monoFunctions_.clear();
+
+    // Same for struct-internal method forward-declarations synthesized in
+    // collectStruct() — bodyless, so CodeGen just emits an extern
+    // declaration for them (the definition is resolved at link time,
+    // possibly from a different translation unit).
+    for (auto &fn : synthesizedMethods_)
+        tu_.decls.emplace_back(std::move(fn));
+    synthesizedMethods_.clear();
 
     popScope();
     return !diag_.hasErrors();
@@ -378,6 +405,32 @@ void Sema::collectStruct(StructDecl &sd) {
         }
         st->maxPayloadSize = maxSz;
     }
+
+    // Struct-internal method forward-declarations ('int read(...);' inside
+    // the struct body) previously had no effect at all on call-site type
+    // checking — only an out-of-line 'T::read(...) { body }' definition
+    // registered anything in methodRegistry_, so calling a method whose
+    // definition lives in another translation unit (the normal '.h'
+    // declares / '.sc' defines split) failed with "no method 'read' on type
+    // 'T'" even though that's exactly the intended usage. Synthesize an
+    // equivalent bodyless FunctionDecl and run it through the same
+    // isMethod-handling collectFunction() already uses for out-of-line
+    // definitions, so the declaration alone is enough to type-check calls;
+    // if a same-TU out-of-line definition also exists, whichever is
+    // processed second simply overwrites methodRegistry_'s entry (and the
+    // existing '.h'/'.sc' pairing logic in Scope::define/genFunctionProto
+    // already merges the two FunctionDecl nodes' attributes correctly).
+    for (auto &md : sd.methodDecls) {
+        auto synth = std::make_unique<FunctionDecl>(md.name, md.loc);
+        synth->returnType    = md.returnType;
+        synth->params        = md.params;
+        synth->isMethod      = true;
+        synth->methodOwner   = sd.name;
+        synth->isConstMethod = md.isConst;
+        synth->isExtern      = true; // no body here; defined elsewhere and linked
+        collectFunction(*synth);
+        synthesizedMethods_.push_back(std::move(synth));
+    }
 }
 
 void Sema::collectEnum(EnumDecl &ed) {
@@ -454,6 +507,7 @@ void Sema::collectGlobalVar(GlobalVarDecl &gv) {
     vd->isConst     = gv.isConst;
     vd->isStatic    = true;
     vd->isGlobal    = true;
+    vd->isExtern    = gv.isExtern;
     vd->initialized = (gv.init != nullptr || gv.isExtern);
 
     Symbol sym;
@@ -593,7 +647,8 @@ void Sema::checkGlobalVar(GlobalVarDecl &gv) {
             ? checkCompoundInit(static_cast<CompoundInitExpr &>(*gv.init), gv.type)
             : checkExpr(*gv.init);
         if (!gv.type->isError() && !initTy->isError()) {
-            if (!canImplicitlyConvert(initTy, gv.type)) {
+            if (!canImplicitlyConvert(initTy, gv.type) &&
+                !intLiteralFitsType(*gv.init, gv.type)) {
                 diag_.error(gv.loc,
                     "type mismatch in global variable initializer: cannot convert '"
                     + initTy->str() + "' to '" + gv.type->str() + "'");
@@ -783,7 +838,8 @@ void Sema::checkReturn(ReturnStmt &s, FunctionDecl &fn) {
         // Type compatibility
         if (fn.returnType && !fn.returnType->isVoid() &&
             !valTy->isError() && !fn.returnType->isError()) {
-            if (!canImplicitlyConvert(valTy, fn.returnType)) {
+            if (!canImplicitlyConvert(valTy, fn.returnType) &&
+                !intLiteralFitsType(*s.value, fn.returnType)) {
                 diag_.error(s.loc,
                     "return type mismatch: cannot convert '" + valTy->str() +
                     "' to '" + fn.returnType->str() + "'");
@@ -832,7 +888,8 @@ void Sema::checkVarDecl(VarDeclStmt &s, FunctionDecl &fn) {
         }
 
         if (s.declType && !s.declType->isError() && !initTy->isError()) {
-            if (!canImplicitlyConvert(initTy, s.declType)) {
+            if (!canImplicitlyConvert(initTy, s.declType) &&
+                !intLiteralFitsType(*s.init, s.declType)) {
                 diag_.error(s.loc,
                     "type mismatch in variable declaration: cannot convert '"
                     + initTy->str() + "' to '" + s.declType->str() + "'");
@@ -1072,8 +1129,21 @@ TypePtr Sema::checkAddrOf(UnaryExpr &e) {
     // resulting reference will be bound mutably or as a shared/const
     // reference, and blindly assuming 'mutable' rejected perfectly valid
     // multiple shared borrows of the same variable.
-    // In safe code, & of a stack variable yields &stack T
-    return makeReference(std::move(operandTy), Region::Stack, false, true);
+
+    // '&x' on a static/global variable (or a '.'-chain rooted in one, e.g.
+    // '&g_holder.field') has program lifetime, not stack lifetime — it
+    // should produce '&static T', not '&stack T'. Getting this wrong meant
+    // e.g. taking the address of a top-level 'static T arr[N];' could never
+    // be stored anywhere that expected '&static T' (region-escape rejected
+    // it as if it were a dangling stack reference).
+    VarDecl *baseVd = nullptr;
+    for (Expr *cur = e.operand.get(); cur; ) {
+        if (cur->kind == ExprKind::Ident) { baseVd = static_cast<IdentExpr *>(cur)->resolved; break; }
+        if (cur->kind == ExprKind::Member) { cur = static_cast<MemberExpr *>(cur)->base.get(); continue; }
+        break;
+    }
+    Region r = (baseVd && (baseVd->isStatic || baseVd->isGlobal)) ? Region::Static : Region::Stack;
+    return makeReference(std::move(operandTy), r, false, true);
 }
 
 TypePtr Sema::checkDeref(UnaryExpr &e) {
@@ -1253,7 +1323,8 @@ TypePtr Sema::checkCompoundInit(CompoundInitExpr &e, const TypePtr &targetTy) {
             if (i >= st.fields.size()) continue; // already reported above
             const TypePtr &fieldTy = st.fields[i].type;
             if (fieldTy && !initTy->isError() && !fieldTy->isError() &&
-                !canImplicitlyConvert(initTy, fieldTy)) {
+                !canImplicitlyConvert(initTy, fieldTy) &&
+                !intLiteralFitsType(*e.inits[i], fieldTy)) {
                 diag_.error(e.inits[i]->loc,
                     "type mismatch initializing field '" + st.fields[i].name +
                     "': cannot convert '" + initTy->str() + "' to '" + fieldTy->str() + "'");
@@ -1271,7 +1342,8 @@ TypePtr Sema::checkCompoundInit(CompoundInitExpr &e, const TypePtr &targetTy) {
         for (auto &init : e.inits) {
             TypePtr initTy = checkExpr(*init);
             if (at.element && !initTy->isError() && !at.element->isError() &&
-                !canImplicitlyConvert(initTy, at.element)) {
+                !canImplicitlyConvert(initTy, at.element) &&
+                !intLiteralFitsType(*init, at.element)) {
                 diag_.error(init->loc,
                     "type mismatch in array initializer: cannot convert '" +
                     initTy->str() + "' to '" + at.element->str() + "'");
@@ -1627,11 +1699,40 @@ TypePtr Sema::checkCall(CallExpr &e) {
     }
 
     for (size_t i = 0; i < e.args.size(); ++i) {
+        // Out-parameter idiom: 'foo(&x)' where foo's parameter is a
+        // non-const pointer/mutable reference is how C-style code
+        // initializes 'x' (e.g. 'unsigned long len; get_len(&len);').
+        // Pre-mark 'x' as initialized before checkExpr() below walks into
+        // the AddrOf and flags it as read-before-init — a *const*-qualified
+        // parameter (read-only intent) is deliberately excluded so a
+        // genuinely uninitialized read still gets caught.
+        size_t peekParamIdx = i + selfOffset;
+        if (peekParamIdx < expected && e.args[i]->kind == ExprKind::AddrOf) {
+            auto &ue = static_cast<UnaryExpr &>(*e.args[i]);
+            if (ue.operand && ue.operand->kind == ExprKind::Ident) {
+                auto &paramTy = ft->paramTypes[peekParamIdx];
+                bool isOutParam = false;
+                if (paramTy && paramTy->kind == TypeKind::Pointer &&
+                        !static_cast<PointerType &>(*paramTy).isConst) {
+                    isOutParam = true;
+                } else if (paramTy && paramTy->kind == TypeKind::Reference &&
+                        static_cast<ReferenceType &>(*paramTy).mut) {
+                    isOutParam = true;
+                }
+                if (isOutParam) {
+                    auto &ident = static_cast<IdentExpr &>(*ue.operand);
+                    if (auto *sym = lookup(ident.name)) sym->initialized = true;
+                    if (ident.resolved) ident.resolved->initialized = true;
+                }
+            }
+        }
         TypePtr argTy = checkExpr(*e.args[i]);
         size_t  paramIdx = i + selfOffset;
         if (paramIdx < expected &&
                 !argTy->isError() && !ft->paramTypes[paramIdx]->isError()) {
-            if (!canImplicitlyConvert(argTy, ft->paramTypes[paramIdx])) {
+            if (!canImplicitlyConvert(argTy, ft->paramTypes[paramIdx]) &&
+                !intLiteralFitsType(*e.args[i], ft->paramTypes[paramIdx]) &&
+                !refToPointerArgCompatible(argTy, ft->paramTypes[paramIdx])) {
                 diag_.error(e.args[i]->loc,
                     "argument " + std::to_string(i+1) + ": cannot convert '" +
                     argTy->str() + "' to '" + ft->paramTypes[paramIdx]->str() + "'");
@@ -1881,7 +1982,8 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
 
     // Type compatibility
     if (!lhsTy->isError() && !rhsTy->isError()) {
-        if (!canImplicitlyConvert(rhsTy, lhsTy)) {
+        if (!canImplicitlyConvert(rhsTy, lhsTy) &&
+            !intLiteralFitsType(*e.rhs, lhsTy)) {
             diag_.error(e.loc,
                 "type mismatch in assignment: cannot convert '" +
                 rhsTy->str() + "' to '" + lhsTy->str() + "'");
@@ -2219,6 +2321,61 @@ bool Sema::isIntegral(const TypePtr &ty) const {
     return ty && ty->isInteger();
 }
 
+bool Sema::intLiteralFitsType(const Expr &e, const TypePtr &to) const {
+    if (!to) return false;
+    // Unwrap a leading unary minus so '-1' is checked as the value -1, not
+    // just its magnitude (still an IntLitExpr underneath in this parser).
+    const Expr *inner = &e;
+    bool negate = false;
+    if (inner->kind == ExprKind::Unary) {
+        auto &u = static_cast<const UnaryExpr &>(*inner);
+        if (u.op == UnaryOp::Neg && u.operand) {
+            inner = u.operand.get();
+            negate = true;
+        }
+    }
+    if (inner->kind != ExprKind::IntLit) return false;
+    bool isIntTarget = to->kind == TypeKind::Char  || to->kind == TypeKind::Bool ||
+                       (to->kind >= TypeKind::Int8 && to->kind <= TypeKind::UInt64);
+    if (!isIntTarget) return false;
+    auto &pt = static_cast<const PrimType &>(*to);
+    int64_t v = static_cast<const IntLitExpr &>(*inner).value;
+    if (negate) v = -v;
+    unsigned bits = pt.bitWidth();
+    if (bits == 0 || bits >= 64) return true; // bool / 64-bit: literal always fits an int64_t
+    if (pt.isSigned()) {
+        int64_t lo = -(int64_t(1) << (bits - 1));
+        int64_t hi = (int64_t(1) << (bits - 1)) - 1;
+        return v >= lo && v <= hi;
+    }
+    if (v < 0) return false;
+    uint64_t hi = (uint64_t(1) << bits) - 1;
+    return static_cast<uint64_t>(v) <= hi;
+}
+
+// &stack T argument → T* parameter, call-argument-only leniency.
+// canImplicitlyConvert() deliberately refuses this conversion in general
+// (assigning a &stack reference into a raw pointer variable could let it
+// outlive the stack frame it points into), but a CALL ARGUMENT can't
+// outlive the call: the callee's frame nests entirely inside the caller's,
+// so passing '&stack T' where a 'T*' out-parameter is expected (the classic
+// C out-param idiom, e.g. 'get_len(&len)') is exactly as safe as passing it
+// where a '&stack T' reference parameter is expected, which is already
+// allowed. Kept separate from canImplicitlyConvert so non-call contexts
+// (assignments, initializers) keep the stricter rule.
+bool Sema::refToPointerArgCompatible(const TypePtr &from, const TypePtr &to) const {
+    if (!from || !to) return false;
+    if (from->kind != TypeKind::Reference || to->kind != TypeKind::Pointer) return false;
+    auto &fr = static_cast<const ReferenceType &>(*from);
+    auto &tp = static_cast<const PointerType &>(*to);
+    if (typeEqual(fr.base, tp.base)) return true;
+    auto is8 = [](const TypePtr &t) {
+        return t->kind == TypeKind::Char  || t->kind == TypeKind::Int8 ||
+               t->kind == TypeKind::UInt8;
+    };
+    return is8(fr.base) && is8(tp.base);
+}
+
 bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
     if (!from || !to) return false;
     if (from->isError() || to->isError()) return true; // suppress cascaded errors
@@ -2249,16 +2406,75 @@ bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
         };
         if (is8(at.element) && is8(pt.base)) return true;
     }
+    // Array-to-reference decay: T[N] → &region T (same idea as array-to-
+    // pointer decay above, for the reference side of the type system — e.g.
+    // a 'static unsigned char storage[N];' binding into a '&static
+    // unsigned char' field/parameter, exactly like C lets an array decay to
+    // a pointer to its first element).
+    if (from->kind == TypeKind::Array && to->kind == TypeKind::Reference) {
+        auto &at = static_cast<const ArrayType &>(*from);
+        auto &rt = static_cast<const ReferenceType &>(*to);
+        if (typeEqual(at.element, rt.base)) return true;
+    }
+    // Pointer → Array parameter: the reverse of array-to-pointer decay.
+    // Array-typed PARAMETERS decay to a pointer at the LLVM ABI boundary
+    // (see genFunctionProto), so 'void f(unsigned char mac[6])' really takes
+    // a pointer — passing an already-decayed 'unsigned char*' argument
+    // (e.g. an explicit '(const unsigned char*)arr' cast) must be accepted
+    // the same way plain C accepts it.
+    if (from->kind == TypeKind::Pointer && to->kind == TypeKind::Array) {
+        auto &fp = static_cast<const PointerType &>(*from);
+        auto &tt = static_cast<const ArrayType &>(*to);
+        if (typeEqual(fp.base, tt.element)) return true;
+        auto is8 = [](const TypePtr &t) {
+            return t->kind == TypeKind::Char  || t->kind == TypeKind::Int8 ||
+                   t->kind == TypeKind::UInt8;
+        };
+        if (is8(fp.base) && is8(tt.element)) return true;
+    }
+    // Multi-dimensional array outer-dimension decay: T[N][M] → T[][M], the
+    // same C rule that lets 'char parts[8][64]' bind to a 'char[][64]'
+    // parameter — only the outermost dimension is elidable (a function
+    // parameter 'T x[][M]' is really 'T (*x)[M]'), so the inner dimensions
+    // must still match exactly while the outer size is unconstrained.
+    if (from->kind == TypeKind::Array && to->kind == TypeKind::Array) {
+        auto &at = static_cast<const ArrayType &>(*from);
+        auto &tt = static_cast<const ArrayType &>(*to);
+        if (tt.size == -1 && typeEqual(at.element, tt.element)) return true;
+    }
     // void* → any pointer is allowed in unsafe (checked by caller)
     // bool ↔ integer (narrowing check needed but simplified here)
     if (from->isBool() && to->isInteger()) return true;
     if (from->isInteger() && to->isBool()) return true;
-    // null literal (void*) → any pointer/reference
+    // null literal (void*) → any pointer/reference, and (matching plain C)
+    // any T* → void* — e.g. passing a 'char*' where 'memcpy(void*, ...)'
+    // expects 'void*'. Only one side needs to be void for the conversion to
+    // be a safe, information-preserving widening (both-void is handled by
+    // the typeEqual() fast path above already).
     if (from->kind == TypeKind::Pointer && to->kind == TypeKind::Pointer) {
         auto &fp = static_cast<const PointerType &>(*from);
-        if (fp.base->isVoid()) return true;
+        auto &tp = static_cast<const PointerType &>(*to);
+        if (fp.base->isVoid() || tp.base->isVoid()) return true;
     }
-    if (from->kind == TypeKind::Pointer && to->kind == TypeKind::Reference) return false;
+    // Pointer → Reference parameter: mirrors Pointer → Array above. Raw
+    // pointers (e.g. a 'const unsigned char*' function parameter that
+    // already decayed from some caller's array, or any C-interop pointer)
+    // must be accepted where a '&region T' reference parameter is expected,
+    // the same way plain C lets a pointer be passed to a function taking a
+    // pointer to its pointee type — the callee can only use it within
+    // 'unsafe{}' regardless, so the region annotation carries no additional
+    // safety obligation here.
+    if (from->kind == TypeKind::Pointer && to->kind == TypeKind::Reference) {
+        auto &fp = static_cast<const PointerType &>(*from);
+        auto &tr = static_cast<const ReferenceType &>(*to);
+        if (typeEqual(fp.base, tr.base)) return true;
+        auto is8 = [](const TypePtr &t) {
+            return t->kind == TypeKind::Char  || t->kind == TypeKind::Int8 ||
+                   t->kind == TypeKind::UInt8;
+        };
+        if (is8(fp.base) && is8(tr.base)) return true;
+        return false;
+    }
     // README §9.2: &static T is always safe — escape allowed.
     // Passing a static reference to a raw C pointer parameter does not require unsafe{}.
     if (from->kind == TypeKind::Reference && to->kind == TypeKind::Pointer) {

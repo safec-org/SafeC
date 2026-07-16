@@ -27,21 +27,21 @@ void queue_free(struct Queue* q) {
     }
 }
 
-unsigned long queue_len(struct Queue* q)     { unsafe { return q->len; } }
-int           queue_is_empty(struct Queue* q){ unsafe { return q->len == 0UL; } }
+inline unsigned long queue_len(struct Queue* q)     { unsafe { return q->len; } }
+inline int           queue_is_empty(struct Queue* q){ unsafe { return q->len == 0UL; } }
 
-void queue_clear(struct Queue* q) {
+inline void queue_clear(struct Queue* q) {
     unsafe { q->head = 0UL; q->tail = 0UL; q->len = 0UL; }
 }
 
-void* queue_front(struct Queue* q) {
+inline void* queue_front(struct Queue* q) {
     unsafe {
         if (q->len == 0UL) return (void*)0;
         return (void*)((char*)q->data + q->head * q->elem_size);
     }
 }
 
-void* queue_back(struct Queue* q) {
+inline void* queue_back(struct Queue* q) {
     unsafe {
         if (q->len == 0UL) return (void*)0;
         unsigned long back_idx = (q->tail == 0UL) ? (q->cap - 1UL) : (q->tail - 1UL);
@@ -108,16 +108,16 @@ int queue_dequeue(struct Queue* q, void* out) {
 }
 
 generic<T>
-int queue_enqueue_t(struct Queue* q, T val) {
+inline int queue_enqueue_t(struct Queue* q, T val) {
     return queue_enqueue(q, (const void*)&val);
 }
 
 generic<T>
-T* queue_front_t(struct Queue* q) {
+inline T* queue_front_t(struct Queue* q) {
     return (T*)queue_front(q);
 }
 
 generic<T>
-int queue_dequeue_t(struct Queue* q, T* out) {
+inline int queue_dequeue_t(struct Queue* q, T* out) {
     return queue_dequeue(q, (void*)out);
 }

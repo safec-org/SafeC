@@ -127,14 +127,14 @@ int arp_parse_packet(&stack PacketBuf pkt, unsigned long offset,
     if (pkt.len < offset + (unsigned long)ARP_PKT_LEN) { return -1; }
     unsafe {
         unsigned char* d = (unsigned char*)pkt.data + offset;
-        op = net_ntohs((unsigned short)(((unsigned short)d[6] << 8) | (unsigned short)d[7]));
+        *op = net_ntohs((unsigned short)(((unsigned short)d[6] << 8) | (unsigned short)d[7]));
         int i = 0;
         while (i < NET_MAC_LEN) { sha[i] = d[8 + i]; i = i + 1; }
-        spa = net_ntohl(((unsigned int)d[14] << 24) | ((unsigned int)d[15] << 16)
+        *spa = net_ntohl(((unsigned int)d[14] << 24) | ((unsigned int)d[15] << 16)
                        | ((unsigned int)d[16] << 8) | (unsigned int)d[17]);
         i = 0;
         while (i < NET_MAC_LEN) { tha[i] = d[18 + i]; i = i + 1; }
-        tpa = net_ntohl(((unsigned int)d[22] << 24) | ((unsigned int)d[23] << 16)
+        *tpa = net_ntohl(((unsigned int)d[22] << 24) | ((unsigned int)d[23] << 16)
                        | ((unsigned int)d[24] << 8) | (unsigned int)d[25]);
     }
     return 0;

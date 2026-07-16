@@ -2,6 +2,7 @@
 #pragma once
 #include "udp.h"
 #include "ethernet.h"
+#include "net_core.h"
 
 int udp_parse(&stack PacketBuf pkt, unsigned long offset,
               &stack UdpHdr hdr_out) {

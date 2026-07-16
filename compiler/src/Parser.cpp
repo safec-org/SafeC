@@ -84,6 +84,30 @@ bool Parser::isTypeStart(const Token &t) const {
     }
 }
 
+// Could this token plausibly start a cast operand (a unary/postfix/primary
+// expression)? Used to reject a speculative '(name)' cast parse when name is
+// a bare identifier (always a valid type-start guess, since it might be a
+// user type) but what follows makes it obvious this was actually a
+// parenthesized lvalue/expression instead — e.g. '(x) = 5' or '(x).field'.
+// This doesn't solve the general typedef-name ambiguity (that needs a live
+// type-name table threaded through parsing); it only catches the common,
+// unambiguous case where the following token can never begin an operand.
+static bool canStartCastOperand(const Token &t) {
+    switch (t.kind) {
+    case TK::IntLit: case TK::FloatLit: case TK::StringLit: case TK::CharLit:
+    case TK::KW_true: case TK::KW_false: case TK::KW_null:
+    case TK::Ident: case TK::KW_stack: case TK::KW_heap:
+    case TK::KW_arena: case TK::KW_capacity: case TK::KW_self:
+    case TK::LParen: case TK::LBrace:
+    case TK::Minus: case TK::Plus: case TK::Bang: case TK::Tilde:
+    case TK::PlusPlus: case TK::MinusMinus:
+    case TK::Amp: case TK::Star: case TK::KW_sizeof: case TK::KW_new:
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool Parser::isTypeStart() const { return isTypeStart(cur()); }
 
 // Parse a region qualifier: 'stack' | 'static' | 'heap' | 'arena' '<' Ident '>'
@@ -328,6 +352,56 @@ int64_t Parser::parseArraySizeConst() {
     return parseLevel(1);
 }
 
+int64_t Parser::parseArraySize(Expr **outSizeExpr) {
+    *outSizeExpr = nullptr;
+
+    // Scan ahead to the matching ']' (tracking nested brackets) to decide
+    // whether this is pure literal arithmetic (the fast, common path) or
+    // contains an identifier/call that needs deferred const-eval.
+    bool literalOnly = true;
+    {
+        int depth = 0;
+        for (size_t i = pos_; ; ++i) {
+            const Token &t = toks_[i];
+            if (t.is(TK::LBracket)) { depth++; continue; }
+            if (t.is(TK::RBracket)) { if (depth == 0) break; depth--; continue; }
+            if (t.is(TK::Eof)) { literalOnly = false; break; }
+            if (!(t.is(TK::IntLit) || t.is(TK::Plus) || t.is(TK::Minus) ||
+                  t.is(TK::Star) || t.is(TK::Slash) || t.is(TK::Percent) ||
+                  t.is(TK::LParen) || t.is(TK::RParen))) {
+                literalOnly = false;
+            }
+        }
+    }
+    if (literalOnly) return parseArraySizeConst();
+
+    // General path: named constant or consteval function call, e.g.
+    // 'int arr[square(3)]'. Resolved later by resolveArraySizes() once
+    // function bodies are available for the const-eval interpreter.
+    ExprPtr e = parseTernaryExpr();
+    *outSizeExpr = e.get();
+    pendingArraySizeExprs_.push_back(std::move(e));
+    return -1;
+}
+
+TypePtr Parser::parseArrayDeclaratorSuffix(TypePtr base) {
+    std::vector<std::pair<int64_t, Expr *>> dims;
+    while (cur().is(TK::LBracket)) {
+        consume();
+        int64_t sz = -1;
+        Expr *sizeExpr = nullptr;
+        if (!cur().is(TK::RBracket)) sz = parseArraySize(&sizeExpr);
+        expect(TK::RBracket, "expected ']'");
+        dims.emplace_back(sz, sizeExpr);
+    }
+    // Build from the last-parsed dimension inward so the first bracket ends
+    // up outermost (see header comment for why naive left-to-right wrapping
+    // gets this backwards).
+    for (auto it = dims.rbegin(); it != dims.rend(); ++it)
+        base = makeArray(std::move(base), it->first, it->second);
+    return base;
+}
+
 TypePtr Parser::parseTypeDeclarator(TypePtr base) {
     // C-style pointer: T* or T* const / T* restrict
     while (cur().is(TK::Star)) {
@@ -339,13 +413,7 @@ TypePtr Parser::parseTypeDeclarator(TypePtr base) {
         base = makePointer(std::move(base), isConst);
     }
     // Array: T[N]
-    while (cur().is(TK::LBracket)) {
-        consume();
-        int64_t sz = -1;
-        if (!cur().is(TK::RBracket)) sz = parseArraySizeConst();
-        expect(TK::RBracket, "expected ']'");
-        base = makeArray(std::move(base), sz);
-    }
+    base = parseArrayDeclaratorSuffix(std::move(base));
     return base;
 }
 
@@ -388,6 +456,7 @@ std::unique_ptr<TranslationUnit> Parser::parseTranslationUnit() {
         auto decl = parseTopLevelDecl();
         if (decl) tu->decls.push_back(std::move(decl));
     }
+    tu->arraySizeExprs = std::move(pendingArraySizeExprs_);
     return tu;
 }
 
@@ -472,8 +541,17 @@ DeclPtr Parser::parseTopLevelDecl() {
     bool isThreadLocal = false;
     std::string sectionName;
     std::string callingConv;
+    int alignment = 0;
 
     while (true) {
+        if (cur().isIdent("align") && peek().is(TK::LParen)) {
+            consume(); // consume 'align'
+            expect(TK::LParen, "expected '(' after align");
+            if (cur().is(TK::IntLit)) { alignment = (int)cur().intVal; consume(); }
+            else diag_.error(cur().loc, "expected integer alignment value");
+            expect(TK::RParen, "expected ')' after alignment value");
+            continue;
+        }
         if (match(TK::KW_const))     { isConst     = true; continue; }
         if (match(TK::KW_consteval)) { isConsteval = true; continue; }
         if (match(TK::KW_inline))    { isInline    = true; continue; }
@@ -531,6 +609,7 @@ DeclPtr Parser::parseTopLevelDecl() {
         gv.isAtomic      = isAtomic;
         gv.isThreadLocal = isThreadLocal;
         gv.sectionName   = sectionName;
+        gv.alignment     = alignment;
     }
     return decl;
 }
@@ -597,13 +676,7 @@ DeclPtr Parser::parseFunctionOrGlobalVar(bool isConst, bool isConsteval,
     // Global variable
     // C-style array dimension after name: T name[N]; — same declarator
     // position as local variables and struct fields.
-    while (cur().is(TK::LBracket)) {
-        consume();
-        int64_t sz = -1;
-        if (!cur().is(TK::RBracket)) sz = parseArraySizeConst();
-        expect(TK::RBracket, "expected ']' in array declaration");
-        retType = makeArray(std::move(retType), sz);
-    }
+    retType = parseArrayDeclaratorSuffix(std::move(retType));
 
     auto gv = std::make_unique<GlobalVarDecl>(std::move(name), loc);
     gv->type      = std::move(retType);
@@ -631,6 +704,11 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(
     fn->genericParams = std::move(genericParams);
 
     // Parse parameter list (we're past the '(')
+    // C-style 'f(void)' means zero parameters, not one void-typed parameter
+    // (there's no such thing as a value of type void) — without this check
+    // the loop below would parse 'void' as a legitimate param type, and
+    // every call site would then mismatch on argument count.
+    if (cur().is(TK::KW_void) && peek().is(TK::RParen)) consume();
     while (!atEnd() && !cur().is(TK::RParen)) {
         if (cur().is(TK::DotDotDot)) { consume(); fn->isVariadic = true; break; }
         ParamDecl p;
@@ -646,6 +724,11 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(
             p.name = cur().text;
             consume();
         }
+        // C-style array parameter suffix: 'T name[N]' (e.g. 'const char*
+        // comp_ptrs[16]'). Array parameters decay to pointers at the call
+        // boundary just like C, but the declared element/size still needs
+        // parsing here or the '[' desyncs the rest of the parameter list.
+        p.type = parseArrayDeclaratorSuffix(std::move(p.type));
         fn->params.push_back(std::move(p));
         if (!match(TK::Comma)) break;
     }
@@ -718,12 +801,14 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion) {
                 md.name       = memberName;
                 md.returnType = std::move(maybeType);
                 expect(TK::LParen, "expected '(' after operator name");
+                if (cur().is(TK::KW_void) && peek().is(TK::RParen)) consume();
                 while (!atEnd() && !cur().is(TK::RParen)) {
                     if (cur().is(TK::DotDotDot)) { consume(); break; }
                     ParamDecl p;
                     p.loc  = cur().loc;
                     p.type = parseType();
                     if (cur().is(TK::Ident)) { p.name = cur().text; consume(); }
+                    p.type = parseArrayDeclaratorSuffix(std::move(p.type));
                     md.params.push_back(std::move(p));
                     if (!match(TK::Comma)) break;
                 }
@@ -743,12 +828,14 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion) {
             md.loc        = cur().loc;
             md.name       = memberName;
             md.returnType = std::move(maybeType);
+            if (cur().is(TK::KW_void) && peek().is(TK::RParen)) consume();
             while (!atEnd() && !cur().is(TK::RParen)) {
                 if (cur().is(TK::DotDotDot)) { consume(); break; }
                 ParamDecl p;
                 p.loc  = cur().loc;
                 p.type = parseType();
                 if (cur().is(TK::Ident)) { p.name = cur().text; consume(); }
+                p.type = parseArrayDeclaratorSuffix(std::move(p.type));
                 md.params.push_back(std::move(p));
                 if (!match(TK::Comma)) break;
             }
@@ -765,14 +852,8 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion) {
             if (!cur().is(TK::Ident)) {
                 diag_.error(cur().loc, "expected field name");
             } else consume();
-            // Optional array size
-            if (cur().is(TK::LBracket)) {
-                consume();
-                int64_t sz = -1;
-                if (!cur().is(TK::RBracket)) sz = parseArraySizeConst();
-                expect(TK::RBracket);
-                fd.type = makeArray(std::move(fd.type), sz);
-            }
+            // Optional array size(s)
+            fd.type = parseArrayDeclaratorSuffix(std::move(fd.type));
             expect(TK::Semicolon, "expected ';' after struct field");
             sd->fields.push_back(std::move(fd));
         }
@@ -942,7 +1023,23 @@ StmtPtr Parser::parseStmt() {
     case TK::KW_asm:           return parseAsmStmt();
     case TK::KW_const: {
         consume();
-        return parseVarDeclStmt(true, false);
+        // 'const T x' binds to the BASE type: for a plain type that makes
+        // the variable itself const/immutable ('const int x' — x can't be
+        // reassigned), but for a pointer type it makes only the POINTEE
+        // const ('const char* p' is a *mutable pointer* to const data,
+        // exactly like C — 'p = other;' is legal and extremely common,
+        // e.g. reassigning a string-literal pointer). Making the pointer
+        // itself const additionally requires a trailing 'T* const p'.
+        // Peek at the parsed type (then backtrack) to tell these apart —
+        // a single leading 'const' can't be resolved without seeing
+        // whether a '*' declarator follows.
+        size_t savedPos = pos_;
+        size_t diagMark = diag_.checkpoint();
+        TypePtr peeked = parseType();
+        pos_ = savedPos;
+        diag_.discardSince(diagMark);
+        bool variableIsConst = !(peeked && peeked->kind == TypeKind::Pointer);
+        return parseVarDeclStmt(variableIsConst, false);
     }
     case TK::KW_volatile: {
         consume();
@@ -1155,13 +1252,7 @@ StmtPtr Parser::parseVarDeclStmt(bool isConst, bool isStatic) {
     } else consume();
 
     // C-style array dimension after name: int arr[N]
-    while (cur().is(TK::LBracket)) {
-        consume();
-        int64_t sz = -1;
-        if (!cur().is(TK::RBracket)) sz = parseArraySizeConst();
-        expect(TK::RBracket, "expected ']' in array declaration");
-        ty = makeArray(std::move(ty), sz);
-    }
+    ty = parseArrayDeclaratorSuffix(std::move(ty));
 
     ExprPtr init;
     if (match(TK::Eq)) init = parseAssignExpr();
@@ -1640,7 +1731,13 @@ ExprPtr Parser::parseCastExpr() {
         consume(); // '('
         // Try to parse type
         TypePtr t = parseType();
-        bool ok = cur().is(TK::RParen);
+        // Committing needs both a matching ')' AND a token after it that
+        // could plausibly start the cast's operand — otherwise a bare
+        // identifier type-guess like '(x)' in '(x) = 5' or '(x).field' would
+        // "succeed" as a cast up through the ')' and only fail later trying
+        // to parse '=' or '.' as an operand, instead of being recognized as
+        // not a cast at all.
+        bool ok = cur().is(TK::RParen) && canStartCastOperand(peek());
         diag_.setSilent(wasSilent);
         if (ok) {
             consume(); // ')'

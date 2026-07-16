@@ -1,6 +1,7 @@
 // SafeC Standard Library — ext2 Read-Only Filesystem Driver Implementation
 #pragma once
 #include "ext.h"
+#include "block.h"
 
 extern void* memset(void* p, int v, unsigned long n);
 extern void* memcpy(void* d, const void* s, unsigned long n);
@@ -30,11 +31,11 @@ static unsigned short ext2_read16_(const unsigned char* p) {
 // Superblock lives at byte offset 1024 = sector 2 on a 512-byte device.
 
 int ext2_init(&stack Ext2Ctx ctx, &stack BlockDevice dev) {
-    ctx.dev = dev;
+    ctx.dev = *dev;
 
     // Read two sectors starting at LBA 2 to get the 1024-byte superblock.
     unsigned char sb_buf[1024];
-    if (dev.read((unsigned long)2, (unsigned char*)sb_buf, (unsigned long)2) != 0) {
+    if (dev.read((unsigned long)2, (&stack unsigned char)sb_buf, (unsigned long)2) != 0) {
         return -1;
     }
 
@@ -88,7 +89,7 @@ int ext2_init(&stack Ext2Ctx ctx, &stack BlockDevice dev) {
 int Ext2Ctx::read_block(unsigned long block_no, unsigned char* buf) {
     unsigned long sectors_per_block = self.block_size / (unsigned long)512;
     unsigned long lba = block_no * sectors_per_block;
-    return self.dev.read(lba, buf, sectors_per_block);
+    return self.dev.read(lba, (&stack unsigned char)buf, sectors_per_block);
 }
 
 // ── Ext2Ctx::read_inode ───────────────────────────────────────────────────────
@@ -102,7 +103,7 @@ int Ext2Ctx::read_inode(unsigned long ino, &stack Ext2Inode inode_out) {
 
     // Read the block group descriptor table.
     // BGDT is always in the block immediately after the superblock.
-    unsigned long bgdt_block = (unsigned long)ctx_super_first_data_block_(self) + (unsigned long)1;
+    unsigned long bgdt_block = (unsigned long)self.super.first_data_block + (unsigned long)1;
     unsigned char block_buf[4096]; // enough for up to 4K block size
     if (self.read_block(bgdt_block, (unsigned char*)block_buf) != 0) { return -1; }
 
@@ -139,7 +140,7 @@ int Ext2Ctx::read_inode(unsigned long ino, &stack Ext2Inode inode_out) {
         inode_out.reserved1   = ext2_read32_(p + 36);
         int bi = 0;
         while (bi < 15) {
-            inode_out.block[bi] = ext2_read32_(p + 40 + (unsigned long)bi * 4);
+            inode_out.block[bi] = ext2_read32_(p + 40 + (unsigned long)bi * (unsigned long)4);
             bi = bi + 1;
         }
     }
@@ -159,7 +160,7 @@ static unsigned long ctx_super_first_data_block_(struct Ext2Ctx ctx) {
 unsigned long Ext2Ctx::read_file(unsigned long ino, unsigned long offset,
                                   unsigned char* buf, unsigned long len) {
     struct Ext2Inode inode;
-    if (self.read_inode(ino, inode) != 0) { return (unsigned long)0; }
+    if (self.read_inode(ino, &inode) != 0) { return (unsigned long)0; }
 
     unsigned long file_size = (unsigned long)inode.size_lo;
     if (offset >= file_size) { return (unsigned long)0; }
@@ -211,10 +212,11 @@ static unsigned long ext2_dir_find_(struct Ext2Ctx* ctx, unsigned long dir_ino,
                                      const char* component, unsigned long comp_len,
                                      int* type_out) {
     struct Ext2Inode dir_inode;
-    if (ctx->read_inode(dir_ino, dir_inode) != 0) { return (unsigned long)0; }
+    if (ctx->read_inode(dir_ino, &dir_inode) != 0) { return (unsigned long)0; }
 
     unsigned long dir_size = (unsigned long)dir_inode.size_lo;
-    unsigned long bs       = ctx->block_size;
+    unsigned long bs;
+    unsafe { bs = ctx->block_size; }
     unsigned long blk_idx  = (unsigned long)0;
     unsigned long read_pos = (unsigned long)0;
     unsigned char blk_buf[4096];
@@ -294,7 +296,7 @@ static int ext2_vfs_open_(void* ctx, const char* path, int flags,
 
     const char* comp_ptrs[EXT2_MAX_DEPTH];
     unsigned long comp_lens[EXT2_MAX_DEPTH];
-    int n = ext2_split_path_(path, (const char**)comp_ptrs, (unsigned long*)comp_lens);
+    int n = ext2_split_path_(path, comp_ptrs, comp_lens);
 
     if (n == 0) {
         // Root directory.
@@ -316,7 +318,7 @@ static int ext2_vfs_open_(void* ctx, const char* path, int flags,
         unsafe {
             int tp = 0;
             unsigned long next = ext2_dir_find_(ec, cur_ino,
-                                                comp_ptrs[i], comp_lens[i], &tp);
+                                                comp_ptrs[i], comp_lens[i], (int*)&tp);
             if (next == (unsigned long)0) { return -1; }
             cur_ino = next;
             is_dir  = tp;
@@ -326,7 +328,7 @@ static int ext2_vfs_open_(void* ctx, const char* path, int flags,
 
     // Stat the found inode for size.
     struct Ext2Inode inode;
-    if (ec->read_inode(cur_ino, inode) != 0) { return -1; }
+    if (ec->read_inode(cur_ino, &inode) != 0) { return -1; }
 
     unsafe {
         node_out.inode  = cur_ino;
@@ -357,10 +359,11 @@ static int ext2_vfs_readdir_(void* ctx, unsigned long dir_ino,
     struct Ext2Ctx* ec = (struct Ext2Ctx*)ctx;
 
     struct Ext2Inode dir_inode;
-    if (ec->read_inode(dir_ino, dir_inode) != 0) { return -1; }
+    if (ec->read_inode(dir_ino, &dir_inode) != 0) { return -1; }
 
     unsigned long dir_size = (unsigned long)dir_inode.size_lo;
-    unsigned long bs       = ec->block_size;
+    unsigned long bs;
+    unsafe { bs = ec->block_size; }
     unsigned long blk_idx  = (unsigned long)0;
     unsigned long read_pos = (unsigned long)0;
     unsigned char blk_buf[4096];
@@ -392,7 +395,7 @@ static int ext2_vfs_readdir_(void* ctx, unsigned long dir_ino,
                     unsigned long k = (unsigned long)0;
                     while (k < (unsigned long)e_nlen
                            && k < (unsigned long)VFS_MAX_NAME - (unsigned long)1) {
-                        node.name[k] = (char)entry[8 + k];
+                        node.name[k] = (char)entry[(unsigned long)8 + k];
                         k = k + (unsigned long)1;
                     }
                     node.name[k]  = (char)0;
@@ -403,15 +406,15 @@ static int ext2_vfs_readdir_(void* ctx, unsigned long dir_ino,
 
                     // Stat to get size for files.
                     struct Ext2Inode child_inode;
-                    if (ec->read_inode((unsigned long)e_ino, child_inode) == 0) {
+                    if (ec->read_inode((unsigned long)e_ino, &child_inode) == 0) {
                         node.size = (unsigned long)child_inode.size_lo;
                     } else {
                         node.size = (unsigned long)0;
                     }
 
-                    void (*callback)(struct VfsNode*, void*) =
-                        (void (*)(struct VfsNode*, void*))cb;
-                    callback(&node, user);
+                    fn void(struct VfsNode*, void*) callback =
+                        (fn void(struct VfsNode*, void*))cb;
+                    callback((struct VfsNode*)&node, user);
                     count = count + 1;
                 }
                 pos_in_blk = pos_in_blk + (unsigned long)e_rec;

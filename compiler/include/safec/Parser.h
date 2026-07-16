@@ -42,6 +42,31 @@ private:
     // preprocessor-expanded sizes like 'N * M' work, not just bare literals.
     int64_t parseArraySizeConst();
 
+    // Parses the array-size expression inside 'T[...]'. Fast path: pure
+    // literal arithmetic is folded immediately via parseArraySizeConst() (the
+    // common case, avoids building an AST + interpreter round-trip). Falls
+    // back to parsing a full expression when an identifier is present — a
+    // named constant or a consteval function call, e.g. 'T arr[square(3)]' —
+    // which can't be evaluated until function bodies exist and const-eval
+    // runs post-parse. Returns the resolved size, or -1 with '*outSizeExpr'
+    // set to the deferred (owned-by-TU) expression when resolution must wait.
+    int64_t parseArraySize(Expr **outSizeExpr);
+
+    // Consumes zero or more '[size]' suffixes after a declarator (e.g. the
+    // '[8][64]' in 'char parts[8][64]') and wraps 'base' in nested ArrayTypes
+    // with the CORRECT C nesting order: the first bracket written is the
+    // outermost array (parts has 8 elements, each a 64-char buffer), not the
+    // last. A naive left-to-right wrap ('base = makeArray(base, sz)' inside
+    // the loop) nests them backwards, since each iteration wraps the
+    // previous result rather than the previous result wrapping it — so this
+    // collects all dimensions first and builds from the last one inward.
+    TypePtr parseArrayDeclaratorSuffix(TypePtr base);
+
+    // Owns array-size expressions that couldn't be folded at parse time (see
+    // parseArraySize); moved into TranslationUnit::arraySizeExprs when
+    // parsing completes so the Expr*s stashed in ArrayType::sizeExpr stay valid.
+    std::vector<ExprPtr> pendingArraySizeExprs_;
+
     std::vector<GenericParam> parseGenericParams(); // <T: Constraint, ...>
 
     // ── Top-level declarations ────────────────────────────────────────────────
