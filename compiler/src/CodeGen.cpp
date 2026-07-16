@@ -129,6 +129,12 @@ llvm::Type *CodeGen::lowerType(const TypePtr &ty) {
     case TypeKind::Array: {
         auto &at = static_cast<const ArrayType &>(*ty);
         auto *elemTy = lowerType(at.element);
+        // size < 0: unsized array in parameter/local/global position decays
+        // to a bare pointer (the C ABI rule). size == 0 is reserved
+        // specifically for a struct's flexible array member (see
+        // Sema::collectStruct) — a real zero-length LLVM array, not a
+        // pointer, since it's embedded storage whose address IS the
+        // struct field's address, not a separately-allocated pointee.
         if (at.size < 0) return llvm::PointerType::get(ctx_, 0);
         return llvm::ArrayType::get(elemTy, static_cast<uint64_t>(at.size));
     }
@@ -191,8 +197,18 @@ llvm::StructType *CodeGen::lowerStructType(const StructType &st) {
             };
             llvmSt->setBody(body, false);
         } else {
+            // Bitfields share an LLVM struct slot across multiple SafeC
+            // FieldDecls (same 'index') — emit one LLVM field per *distinct*
+            // index, typed as whichever field declared that slot (they're
+            // all the same underlying type within one packed run; see
+            // Sema::collectStruct), not one per SafeC-level field.
             std::vector<llvm::Type *> fieldTys;
-            for (auto &f : st.fields) fieldTys.push_back(lowerType(f.type));
+            int lastIdx = -1;
+            for (auto &f : st.fields) {
+                if (f.index == lastIdx) continue;
+                lastIdx = f.index;
+                fieldTys.push_back(lowerType(f.type));
+            }
             llvmSt->setBody(fieldTys, st.isPacked);
         }
     }
@@ -609,36 +625,39 @@ llvm::Constant *CodeGen::evalConstInit(Expr &e, llvm::Type *expectedTy) {
         return (c->getType() == expectedTy) ? c : nullptr;
     }
     case ExprKind::Compound: {
+        // Designated initializers ('{.field = v}' / '{[i] = v}') resolve to
+        // a target slot per element via Sema::checkCompoundInit's
+        // 'resolvedSlots' (parallel to 'inits'); plain positional literals
+        // ('{a, b, c}', no designators at all) leave resolvedSlots empty,
+        // so slot == source position, same as before designators existed.
         auto &ci = static_cast<CompoundInitExpr &>(e);
         if (expectedTy->isStructTy()) {
             auto *st = llvm::cast<llvm::StructType>(expectedTy);
-            if (ci.inits.size() > st->getNumElements()) return nullptr;
-            std::vector<llvm::Constant *> fields;
-            for (unsigned i = 0; i < st->getNumElements(); ++i) {
-                if (i < ci.inits.size()) {
-                    auto *c = evalConstInit(*ci.inits[i], st->getElementType(i));
-                    if (!c) return nullptr;
-                    fields.push_back(c);
-                } else {
-                    fields.push_back(llvm::Constant::getNullValue(st->getElementType(i)));
-                }
+            std::vector<llvm::Constant *> fields(st->getNumElements(), nullptr);
+            for (size_t i = 0; i < ci.inits.size(); ++i) {
+                int64_t slot = ci.resolvedSlots.empty() ? (int64_t)i : ci.resolvedSlots[i];
+                if (slot < 0 || slot >= (int64_t)st->getNumElements()) return nullptr;
+                auto *c = evalConstInit(*ci.inits[i], st->getElementType((unsigned)slot));
+                if (!c) return nullptr;
+                fields[(size_t)slot] = c;
             }
+            for (unsigned i = 0; i < st->getNumElements(); ++i)
+                if (!fields[i]) fields[i] = llvm::Constant::getNullValue(st->getElementType(i));
             return llvm::ConstantStruct::get(st, fields);
         }
         if (expectedTy->isArrayTy()) {
             auto *at = llvm::cast<llvm::ArrayType>(expectedTy);
             auto *elemTy = at->getElementType();
-            if (ci.inits.size() > at->getNumElements()) return nullptr;
-            std::vector<llvm::Constant *> elems;
-            for (unsigned i = 0; i < at->getNumElements(); ++i) {
-                if (i < ci.inits.size()) {
-                    auto *c = evalConstInit(*ci.inits[i], elemTy);
-                    if (!c) return nullptr;
-                    elems.push_back(c);
-                } else {
-                    elems.push_back(llvm::Constant::getNullValue(elemTy));
-                }
+            std::vector<llvm::Constant *> elems(at->getNumElements(), nullptr);
+            for (size_t i = 0; i < ci.inits.size(); ++i) {
+                int64_t slot = ci.resolvedSlots.empty() ? (int64_t)i : ci.resolvedSlots[i];
+                if (slot < 0 || slot >= (int64_t)at->getNumElements()) return nullptr;
+                auto *c = evalConstInit(*ci.inits[i], elemTy);
+                if (!c) return nullptr;
+                elems[(size_t)slot] = c;
             }
+            for (unsigned i = 0; i < at->getNumElements(); ++i)
+                if (!elems[i]) elems[i] = llvm::Constant::getNullValue(elemTy);
             return llvm::ConstantArray::get(at, elems);
         }
         return nullptr;
@@ -656,10 +675,16 @@ llvm::GlobalVariable *CodeGen::genGlobalVar(GlobalVarDecl &gv) {
         if (auto *folded = evalConstInit(*gv.init, ty)) {
             init = folded;
         } else {
-            diag_.warn(gv.loc,
-                "codegen: global initializer for '" + gv.name +
-                "' isn't a compile-time constant this compiler can fold yet; "
-                "zero-initializing instead");
+            // File-scope variables require a compile-time-constant initializer
+            // unconditionally — this isn't a SafeC-specific restriction to
+            // relax later, it's the same constraint plain C places on
+            // file-scope initializers (C11 §6.7.9p4), so every global is
+            // already 'constinit' whether or not that keyword is written.
+            // Silently zero-initializing here would substitute the wrong
+            // value without any indication something was rejected.
+            diag_.error(gv.loc,
+                "global initializer for '" + gv.name +
+                "' is not a compile-time constant expression");
         }
     }
 
@@ -1233,6 +1258,28 @@ void CodeGen::genVarDecl(VarDeclStmt &s, FnEnv &env) {
         return;
     }
 
+    // Variable-length array ('unsafe { int arr[n]; }', n not a compile-time
+    // constant — see ArrayType::size==-2 in ConstEval.cpp/Sema.cpp). 'alloca'
+    // here already gets the pointer type lowerType() gives *any* size<0
+    // array (parameter-decay and VLA share that rule), so the only new work
+    // is computing the runtime length and dynamically sizing the backing
+    // storage — the variable itself still behaves like a plain T* for
+    // subscripting, decay, etc., exactly like an unsized-array parameter.
+    if (typeToUse && typeToUse->kind == TypeKind::Array &&
+        static_cast<ArrayType &>(*typeToUse).size == -2) {
+        auto &at = static_cast<ArrayType &>(*typeToUse);
+        auto *sizeExpr = static_cast<Expr *>(at.sizeExpr);
+        auto *countVal = genExpr(*sizeExpr, env);
+        auto *elemTy   = lowerType(at.element);
+        countVal = builder_.CreateIntCast(countVal, llvm::Type::getInt64Ty(ctx_),
+                                           /*isSigned=*/true, "vla.count");
+        auto *dataPtr = builder_.CreateAlloca(elemTy, countVal, "vla.data");
+        auto *ptrSlot = createEntryAlloca(env, allocaTy, s.name);
+        builder_.CreateStore(dataPtr, ptrSlot);
+        env.locals[s.name] = ptrSlot;
+        return;
+    }
+
     auto *alloca = createEntryAlloca(env, allocaTy, s.name);
     if (s.alignment > 0)
         alloca->setAlignment(llvm::Align(s.alignment));
@@ -1332,18 +1379,44 @@ llvm::Value *CodeGen::genExpr(Expr &e, FnEnv &env) {
         // Should not appear directly — handled via CallExpr with taggedUnionTag
         return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
     }
+    case ExprKind::GenericSelection: {
+        // Compile-time selection (Sema::checkGenericSelection already
+        // picked the association) — only the winning expression is ever
+        // generated; the others don't need to be codegen-able at all
+        // (real C11 doesn't evaluate them either), matching how e.g. a
+        // 'const'-folded 'if const' branch elides its other side.
+        auto &gs = static_cast<GenericSelectionExpr &>(e);
+        if (gs.selectedIndex < 0 || gs.selectedIndex >= (int)gs.associations.size())
+            return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
+        return genExpr(*gs.associations[gs.selectedIndex].expr, env);
+    }
     case ExprKind::Compound: {
-        // Compound initializer: generate as struct/array aggregate (simplified)
+        // Aggregate initializer: build via a temp alloca + per-element
+        // GEP+store. Handles designators via Sema's resolvedSlots (empty
+        // resolvedSlots = purely positional, slot == source position,
+        // identical to the pre-designator behavior). Also fixes a real bug
+        // in array-typed compound inits: this used to fall through to
+        // 'return genExpr(ci.inits[0])' for anything that wasn't a struct,
+        // silently leaving every element after the first as uninitialized
+        // stack garbage instead of actually storing each one.
         auto &ci = static_cast<CompoundInitExpr &>(e);
         auto *ty = e.type ? lowerType(e.type) : llvm::Type::getInt32Ty(ctx_);
         if (ci.inits.empty()) return llvm::Constant::getNullValue(ty);
-        // For struct types: store into a temp alloca
-        if (ty->isStructTy()) {
+        if (ty->isStructTy() || ty->isArrayTy()) {
             auto *alloca = createEntryAlloca(env, ty, "compound.init");
-            unsigned i = 0;
-            for (auto &init : ci.inits) {
-                auto *val  = genExpr(*init, env);
-                auto *gep  = builder_.CreateStructGEP(ty, alloca, i++);
+            // Zero-init first: designators can skip slots, and a shorter
+            // initializer list than the aggregate's size is valid C
+            // ('int arr[100] = {0};' zero-fills elements 1..99).
+            builder_.CreateStore(llvm::Constant::getNullValue(ty), alloca);
+            auto *Int32Ty = llvm::Type::getInt32Ty(ctx_);
+            for (size_t i = 0; i < ci.inits.size(); ++i) {
+                int64_t slot = ci.resolvedSlots.empty() ? (int64_t)i : ci.resolvedSlots[i];
+                auto *val = genExpr(*ci.inits[i], env);
+                llvm::Value *gep = ty->isStructTy()
+                    ? builder_.CreateStructGEP(ty, alloca, (unsigned)slot)
+                    : builder_.CreateGEP(ty, alloca,
+                          { llvm::ConstantInt::get(Int32Ty, 0),
+                            llvm::ConstantInt::get(Int32Ty, (uint64_t)slot) });
                 builder_.CreateStore(val, gep);
             }
             return builder_.CreateLoad(ty, alloca, "compound");
@@ -1469,7 +1542,16 @@ llvm::Value *CodeGen::genIdent(IdentExpr &e, FnEnv &env, bool wantAddr) {
             // pointer VALUE (a load), not this alloca's own address. A real
             // array-typed local's alloca IS the storage, so its address is
             // correct as-is; distinguish by checking what got allocated.
-            if (e.type && e.type->kind == TypeKind::Array &&
+            // Excludes a VLA (ArrayType::size == -2, see genVarDecl): that
+            // alloca is *itself* a plain pointer-typed local variable slot
+            // (holding the address of the separately-allocated dynamic
+            // storage), exactly like an ordinary 'T* p' — its own address
+            // is what genSubscript's pointer-fallback path expects to load
+            // the pointer value from, same one level of indirection as any
+            // other pointer variable, not two.
+            bool isVLA = e.type && e.type->kind == TypeKind::Array &&
+                         static_cast<ArrayType &>(*e.type).size == -2;
+            if (e.type && e.type->kind == TypeKind::Array && !isVLA &&
                 !it->second->getAllocatedType()->isArrayTy()) {
                 return builder_.CreateLoad(it->second->getAllocatedType(), it->second, e.name);
             }
@@ -2332,6 +2414,16 @@ llvm::Value *CodeGen::genSlice(SliceExpr &e, FnEnv &env) {
 }
 
 // ── Member access ─────────────────────────────────────────────────────────────
+const FieldDecl *CodeGen::findMemberFieldDecl(MemberExpr &e, std::vector<int> &outPath) {
+    if (!e.base->type) return nullptr;
+    TypePtr bty = e.base->type;
+    if (bty->kind == TypeKind::Pointer)   bty = static_cast<PointerType &>(*bty).base;
+    if (bty->kind == TypeKind::Reference) bty = static_cast<ReferenceType &>(*bty).base;
+    if (bty->kind != TypeKind::Struct) return nullptr;
+    auto &st = static_cast<StructType &>(*bty);
+    return st.findFieldPath(e.field, outPath);
+}
+
 llvm::Value *CodeGen::genMember(MemberExpr &e, FnEnv &env, bool wantAddr) {
     llvm::Value *baseAddr;
     llvm::Type  *structTy;
@@ -2384,8 +2476,9 @@ llvm::Value *CodeGen::genMember(MemberExpr &e, FnEnv &env, bool wantAddr) {
         }
     }
 
-    // Find field index
-    unsigned fieldIdx = 0;
+    // Find field index (or index chain, for a field reached through one or
+    // more anonymous struct/union members — see StructType::findFieldPath).
+    std::vector<int> fieldPath;
     if (e.base->type) {
         TypePtr bty = e.base->type;
         if (bty->kind == TypeKind::Pointer)
@@ -2412,20 +2505,60 @@ llvm::Value *CodeGen::genMember(MemberExpr &e, FnEnv &env, bool wantAddr) {
         }
         if (bty->kind == TypeKind::Struct) {
             auto &st = static_cast<StructType &>(*bty);
-            for (auto &f : st.fields) {
-                if (f.name == e.field) { fieldIdx = f.index; break; }
-            }
+            st.findFieldPath(e.field, fieldPath);
         }
     }
+    if (fieldPath.empty()) fieldPath.push_back(0);
 
     if (!structTy->isStructTy()) {
         diag_.error(e.loc, "codegen: member access on non-struct");
         return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
     }
 
-    auto *gep = builder_.CreateStructGEP(structTy, baseAddr, fieldIdx, e.field);
+    // A single-element path is the common case (a direct field): use the
+    // simple single-level GEP. A longer path (through an anonymous member)
+    // needs a full multi-index GEP descending through each nested struct —
+    // valid in one 'getelementptr' as long as every intermediate type is
+    // itself a struct, which anonymous members always are.
+    llvm::Value *gep;
+    llvm::Type  *fieldTy;
+    if (fieldPath.size() == 1) {
+        gep = builder_.CreateStructGEP(structTy, baseAddr, (unsigned)fieldPath[0], e.field);
+        fieldTy = static_cast<llvm::StructType *>(structTy)->getElementType((unsigned)fieldPath[0]);
+    } else {
+        auto *Int32Ty = llvm::Type::getInt32Ty(ctx_);
+        std::vector<llvm::Value *> indices = { llvm::ConstantInt::get(Int32Ty, 0) };
+        llvm::Type *cur = structTy;
+        for (int idx : fieldPath) {
+            indices.push_back(llvm::ConstantInt::get(Int32Ty, (uint64_t)idx));
+            cur = static_cast<llvm::StructType *>(cur)->getElementType((unsigned)idx);
+        }
+        gep = builder_.CreateGEP(structTy, baseAddr, indices, e.field);
+        fieldTy = cur;
+    }
     if (wantAddr) return gep;
-    auto *fieldTy = static_cast<llvm::StructType *>(structTy)->getElementType(fieldIdx);
+
+    // Bitfield read: extract via shift-left-then-shift-right, which lands
+    // the field's bits at position 0 and sign/zero-extends in one step
+    // (arithmetic shift for signed fields, logical for unsigned) — the
+    // standard bitfield-extraction trick. 'gep' already points at the whole
+    // shared storage unit (see the packing scheme in Sema::collectStruct),
+    // not a per-bit address, since LLVM has no bitfield concept natively.
+    std::vector<int> ignoredPath;
+    if (const FieldDecl *fd = findMemberFieldDecl(e, ignoredPath); fd && fd->bitWidth >= 0) {
+        auto *raw = builder_.CreateLoad(fieldTy, gep, e.field + ".unit");
+        unsigned unitBits  = fieldTy->getIntegerBitWidth();
+        unsigned leftShift = unitBits - fd->bitOffset - fd->bitWidth;
+        unsigned rightShift = unitBits - fd->bitWidth;
+        auto *shiftedUp = builder_.CreateShl(raw,
+            llvm::ConstantInt::get(fieldTy, leftShift));
+        bool isSigned = fd->type && fd->type->isInteger() &&
+                        static_cast<PrimType &>(*fd->type).isSigned();
+        return isSigned
+            ? builder_.CreateAShr(shiftedUp, llvm::ConstantInt::get(fieldTy, rightShift), e.field)
+            : builder_.CreateLShr(shiftedUp, llvm::ConstantInt::get(fieldTy, rightShift), e.field);
+    }
+
     return builder_.CreateLoad(fieldTy, gep, e.field);
 }
 
@@ -2514,6 +2647,70 @@ llvm::Value *CodeGen::genCast(CastExpr &e, FnEnv &env) {
 
 // ── Assignment ────────────────────────────────────────────────────────────────
 llvm::Value *CodeGen::genAssign(AssignExpr &e, FnEnv &env) {
+    // Bitfield assignment: read-modify-write on the shared storage unit.
+    // A plain store here (the path below, for ordinary fields) would
+    // clobber sibling bitfields packed into the same LLVM struct slot — see
+    // the packing scheme in Sema::collectStruct and genMember's read-side
+    // extraction, which this mirrors for writes.
+    if (e.lhs->kind == ExprKind::Member || e.lhs->kind == ExprKind::Arrow) {
+        auto &me = static_cast<MemberExpr &>(*e.lhs);
+        std::vector<int> ignoredPath;
+        if (const FieldDecl *fd = findMemberFieldDecl(me, ignoredPath); fd && fd->bitWidth >= 0) {
+            auto *unitAddr = genLValue(*e.lhs, env); // GEP to the shared storage unit
+            auto *unitTy   = lowerType(fd->type);
+            auto *rawUnit  = builder_.CreateLoad(unitTy, unitAddr, "bf.unit");
+
+            unsigned unitBits   = unitTy->getIntegerBitWidth();
+            unsigned leftShift  = unitBits - fd->bitOffset - fd->bitWidth;
+            unsigned rightShift = unitBits - fd->bitWidth;
+            bool isSigned = fd->type && fd->type->isInteger() &&
+                            static_cast<PrimType &>(*fd->type).isSigned();
+            auto *shiftedUp = builder_.CreateShl(rawUnit, llvm::ConstantInt::get(unitTy, leftShift));
+            auto *curVal = isSigned
+                ? builder_.CreateAShr(shiftedUp, llvm::ConstantInt::get(unitTy, rightShift))
+                : builder_.CreateLShr(shiftedUp, llvm::ConstantInt::get(unitTy, rightShift));
+
+            auto *rhs = genExpr(*e.rhs, env);
+            if (rhs->getType() != unitTy && rhs->getType()->isIntegerTy() && unitTy->isIntegerTy()) {
+                unsigned dstBits = unitTy->getIntegerBitWidth();
+                unsigned srcBits = rhs->getType()->getIntegerBitWidth();
+                if (dstBits < srcBits) rhs = builder_.CreateTrunc(rhs, unitTy);
+                else if (dstBits > srcBits) rhs = builder_.CreateSExt(rhs, unitTy);
+            }
+
+            llvm::Value *newVal = rhs;
+            if (e.op != AssignOp::Assign) {
+                BinaryOp binOp;
+                switch (e.op) {
+                case AssignOp::AddAssign: binOp = BinaryOp::Add; break;
+                case AssignOp::SubAssign: binOp = BinaryOp::Sub; break;
+                case AssignOp::MulAssign: binOp = BinaryOp::Mul; break;
+                case AssignOp::DivAssign: binOp = BinaryOp::Div; break;
+                case AssignOp::ModAssign: binOp = BinaryOp::Mod; break;
+                case AssignOp::AndAssign: binOp = BinaryOp::BitAnd; break;
+                case AssignOp::OrAssign:  binOp = BinaryOp::BitOr;  break;
+                case AssignOp::XorAssign: binOp = BinaryOp::BitXor; break;
+                case AssignOp::ShlAssign: binOp = BinaryOp::Shl;    break;
+                case AssignOp::ShrAssign: binOp = BinaryOp::Shr;    break;
+                default:                  binOp = BinaryOp::Add;   break;
+                }
+                newVal = applyBinaryOp(binOp, curVal, rhs, fd->type);
+            }
+
+            uint64_t maskVal = (fd->bitWidth >= 64) ? ~0ULL : ((1ULL << fd->bitWidth) - 1);
+            auto *mask       = llvm::ConstantInt::get(unitTy, maskVal);
+            auto *maskedNew  = builder_.CreateAnd(newVal, mask);
+            auto *shiftedNew = builder_.CreateShl(maskedNew,
+                llvm::ConstantInt::get(unitTy, (uint64_t)fd->bitOffset));
+            auto *clearMask  = builder_.CreateNot(builder_.CreateShl(mask,
+                llvm::ConstantInt::get(unitTy, (uint64_t)fd->bitOffset)));
+            auto *cleared    = builder_.CreateAnd(rawUnit, clearMask);
+            auto *merged     = builder_.CreateOr(cleared, shiftedNew);
+            builder_.CreateStore(merged, unitAddr);
+            return newVal;
+        }
+    }
+
     // Same array-to-pointer/reference decay as call arguments and var-decl
     // initializers — an array RHS assigned into a pointer/reference LHS
     // needs its address, not an attempted load of the whole array.

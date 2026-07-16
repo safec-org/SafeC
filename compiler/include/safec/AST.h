@@ -48,6 +48,7 @@ enum class ExprKind {
     SizeofPack,     // sizeof...(T)
     Slice,          // arr[start..end] → slice construction
     TaggedUnionInit,// Foo.variant(value)
+    GenericSelection, // _Generic(expr, T1: e1, T2: e2, default: e3)
 };
 
 enum class UnaryOp {
@@ -216,10 +217,40 @@ struct AssignExpr : Expr {
 };
 
 // ── Compound initializer {a, b, c} ────────────────────────────────────────────
+// Also covers C99 designated initializers: '{.field = val, ...}' for structs
+// and '{[i] = val, ...}' for arrays. 'designatedFields'/'designatedIndices'
+// are parallel to 'inits' (same size, same order as written in source); an
+// empty field name / -1 index means that element is positional. Resolved to
+// concrete target slots (accounting for C's "designator sets the position
+// for subsequent positional elements too") by Sema::checkCompoundInit into
+// 'resolvedSlots' (parallel array, filled in for both designated and
+// positional elements alike) so CodeGen never has to re-derive positions.
 struct CompoundInitExpr : Expr {
-    std::vector<ExprPtr> inits;
+    std::vector<ExprPtr>     inits;
+    std::vector<std::string> designatedFields;  // "" = positional (no '.field =')
+    std::vector<int64_t>     designatedIndices;  // -1 = positional (no '[i] =')
+    std::vector<int64_t>     resolvedSlots;       // filled in by Sema
     CompoundInitExpr(std::vector<ExprPtr> v, SourceLocation l)
         : Expr(ExprKind::Compound, l), inits(std::move(v)) {}
+};
+
+// ── C11 _Generic(expr, T1: e1, T2: e2, default: e3) ───────────────────────────
+// Type-generic selection: picks exactly one association's expression based
+// on the controlling expression's type, entirely at compile time — no
+// runtime branch, and (see Sema::checkGenericSelection) the non-selected
+// associations aren't even required to be well-typed against each other,
+// only individually valid, matching real C11 semantics.
+struct GenericAssoc {
+    TypePtr type; // nullptr means the 'default:' association
+    ExprPtr expr;
+};
+struct GenericSelectionExpr : Expr {
+    ExprPtr                   controlling;
+    std::vector<GenericAssoc> associations;
+    int                       selectedIndex = -1; // filled by Sema
+    GenericSelectionExpr(ExprPtr c, std::vector<GenericAssoc> a, SourceLocation l)
+        : Expr(ExprKind::GenericSelection, l),
+          controlling(std::move(c)), associations(std::move(a)) {}
 };
 
 // ── New (arena allocation) ────────────────────────────────────────────────────
@@ -614,6 +645,12 @@ struct GlobalVarDecl : Decl {
     std::string sectionName;
     int     alignment = 0;  // align(N): 0 = default
     std::string namespaceName;  // enclosing 'namespace X { ... }'; empty = none
+    // constinit is accepted C++-style syntax, but SafeC file-scope variables
+    // already require a compile-time-constant initializer unconditionally
+    // (matching plain C's constraint on file-scope initializers — see
+    // CodeGen::genGlobalVar) — so this doesn't change enforcement, it's an
+    // explicit spelling of the only mode that exists.
+    bool    isConstinit = false;
 
     GlobalVarDecl(std::string n, SourceLocation l)
         : Decl(DeclKind::GlobalVar, std::move(n), l) {}

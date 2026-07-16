@@ -67,6 +67,10 @@ enum class TK {
     KW_cdecl,         // __cdecl calling convention
     KW_fastcall,      // __fastcall calling convention
     KW_namespace,     // namespace std { ... } — qualified declarations
+    KW_constinit,     // constinit T x = expr; — must constant-initialize (C++-style;
+                       // SafeC globals already require this, so this is an explicit,
+                       // enforced spelling of the only mode that exists)
+    KW_c11_generic,   // _Generic(expr, T1: e1, T2: e2, default: e3) — C11 type-generic selection
 
     // ── Operators ─────────────────────────────────────────────────────────────
     Plus, Minus, Star, Slash, Percent,

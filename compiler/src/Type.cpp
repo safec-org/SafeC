@@ -117,6 +117,26 @@ const FieldDecl *StructType::findField(const std::string &fname) const {
     return nullptr;
 }
 
+const FieldDecl *StructType::findFieldPath(const std::string &fname,
+                                            std::vector<int> &outPath) const {
+    for (auto &f : fields) {
+        if (!f.isAnonymous && f.name == fname) {
+            outPath.push_back(f.index);
+            return &f;
+        }
+        if (f.isAnonymous && f.type && f.type->kind == TypeKind::Struct) {
+            auto &inner = static_cast<const StructType &>(*f.type);
+            std::vector<int> innerPath;
+            if (const FieldDecl *found = inner.findFieldPath(fname, innerPath)) {
+                outPath.push_back(f.index);
+                for (int p : innerPath) outPath.push_back(p);
+                return found;
+            }
+        }
+    }
+    return nullptr;
+}
+
 bool StructType::equals(const Type &o) const {
     if (o.kind != TypeKind::Struct) return false;
     return name == static_cast<const StructType &>(o).name;

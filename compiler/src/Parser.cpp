@@ -1,5 +1,6 @@
 #include "safec/Parser.h"
 #include <cassert>
+#include <cctype>
 #include <functional>
 #include <sstream>
 
@@ -190,15 +191,32 @@ TypePtr Parser::parseBaseType() {
     }
     case TK::KW_float:  consume(); return makeFloat(32);
     case TK::KW_double: consume(); return makeFloat(64);
-    case TK::KW_struct: {
+    case TK::KW_struct:
+    case TK::KW_union: {
+        bool isUnion = cur().is(TK::KW_union);
         consume();
-        std::string name = cur().text;
-        if (!cur().is(TK::Ident)) {
-            diag_.error(cur().loc, "expected struct name");
-        } else consume();
-        // Create a named struct type (to be resolved by sema)
-        auto st = std::make_shared<StructType>(name, false);
-        return st;
+        // Inline body (named or anonymous): 'struct { ... }' / 'union { ...
+        // }' — most commonly an anonymous struct/union member (see
+        // parseStructDecl's field loop, which flags these for flattened
+        // member lookup), but 'struct Tag { ... } x;' in type position is
+        // also valid C. Reuses parseStructDecl unmodified (so name/'{'/
+        // fields/'}' parsing stays in exactly one place) and drains the
+        // result into TranslationUnit::decls (see pendingAnonStructs_) so
+        // Sema's normal collectStruct()/resolveType() picks it up — this
+        // function just returns the placeholder type referencing its name.
+        if (cur().is(TK::LBrace) || (cur().is(TK::Ident) && peek().is(TK::LBrace))) {
+            auto sd = parseStructDecl(isUnion, /*consumeTrailingSemicolon=*/false);
+            if (sd->name.empty())
+                sd->name = "__anon_struct_" + std::to_string(anonStructCounter_++);
+            std::string bodyName = sd->name;
+            pendingAnonStructs_.push_back(std::move(sd));
+            return std::make_shared<StructType>(bodyName, isUnion);
+        }
+        std::string name;
+        if (cur().is(TK::Ident)) { name = cur().text; consume(); }
+        else diag_.error(cur().loc, isUnion ? "expected union name" : "expected struct name");
+        // Create a named struct/union type (to be resolved by sema)
+        return std::make_shared<StructType>(name, isUnion);
     }
     case TK::KW_enum: {
         consume();
@@ -450,6 +468,144 @@ std::vector<GenericParam> Parser::parseGenericParams() {
 // TOP-LEVEL DECLARATIONS
 // ─────────────────────────────────────────────────────────────────────────────
 
+bool Parser::tryParseCStyleFuncPtrDeclarator(TypePtr retType, std::string &outName,
+                                              TypePtr &outType) {
+    if (!cur().is(TK::LParen)) return false;
+    size_t savedPos  = pos_;
+    size_t diagMark  = diag_.checkpoint();
+
+    consume(); // '('
+    if (!cur().is(TK::Star)) { pos_ = savedPos; diag_.discardSince(diagMark); return false; }
+    consume(); // '*'
+    // The declarator name: accept any identifier-shaped token, not just
+    // TK::Ident — SafeC keywords ('fn', 'stack', 'match', ...) are common,
+    // unremarkable C parameter/variable names ('int (*fn)(int)' is the
+    // single most natural name for a callback parameter), and unlike
+    // expression contexts there's no other grammar production this could
+    // be confused with: '(*' only ever starts this declarator pattern.
+    bool nameIsIdentShaped = !cur().text.empty() &&
+        (std::isalpha((unsigned char)cur().text[0]) || cur().text[0] == '_');
+    if (!nameIsIdentShaped) { pos_ = savedPos; diag_.discardSince(diagMark); return false; }
+    std::string name = cur().text;
+    consume();
+    if (!cur().is(TK::RParen)) { pos_ = savedPos; diag_.discardSince(diagMark); return false; }
+    consume(); // ')'
+    if (!cur().is(TK::LParen)) { pos_ = savedPos; diag_.discardSince(diagMark); return false; }
+    consume(); // '(' — start of the function's own parameter list
+
+    std::vector<TypePtr> params;
+    bool variadic = false;
+    if (cur().is(TK::KW_void) && peek().is(TK::RParen)) {
+        consume();
+    } else if (!cur().is(TK::RParen)) {
+        do {
+            if (cur().is(TK::DotDotDot)) { consume(); variadic = true; break; }
+            params.push_back(parseType());
+            if (cur().is(TK::Ident)) consume(); // optional param name, ignored in type position
+        } while (match(TK::Comma));
+    }
+    expect(TK::RParen, "expected ')' closing function-pointer parameter list");
+
+    outName = std::move(name);
+    outType = makeReference(makeFunction(std::move(retType), std::move(params), variadic),
+                             Region::Static, /*nullable=*/false, /*mut=*/false);
+    return true;
+}
+
+bool Parser::parseGnuAttributes(GnuAttrs &out) {
+    bool any = false;
+    while (cur().isIdent("__attribute__") || cur().isIdent("__attribute")) {
+        any = true;
+        consume();
+        expect(TK::LParen, "expected '(' after __attribute__");
+        expect(TK::LParen, "expected '((' after __attribute__");
+
+        while (!atEnd() && !cur().is(TK::RParen)) {
+            // Attribute name: any identifier-shaped token, including ones
+            // that collide with existing SafeC/C keywords (e.g. 'const',
+            // 'packed', 'pure', 'noreturn' are all valid GCC attribute
+            // names too, and still keyword tokens here, not TK::Ident).
+            if (cur().text.empty() ||
+                !(std::isalpha((unsigned char)cur().text[0]) || cur().text[0] == '_')) {
+                break; // defensive: not attribute-name shaped, stop rather than loop forever
+            }
+            std::string attrName = cur().text;
+            consume();
+            // Normalize GCC's '__name__' spelling to plain 'name'
+            if (attrName.size() > 4 && attrName.substr(0, 2) == "__" &&
+                attrName.substr(attrName.size() - 2) == "__") {
+                attrName = attrName.substr(2, attrName.size() - 4);
+            }
+
+            std::vector<std::string> args;
+            if (cur().is(TK::LParen)) {
+                consume();
+                int depth = 1;
+                std::string curArg;
+                while (!atEnd() && depth > 0) {
+                    if (cur().is(TK::LParen)) { depth++; curArg += "("; consume(); continue; }
+                    if (cur().is(TK::RParen)) {
+                        depth--;
+                        consume();
+                        if (depth == 0) break;
+                        curArg += ")";
+                        continue;
+                    }
+                    if (cur().is(TK::Comma) && depth == 1) {
+                        args.push_back(curArg); curArg.clear(); consume(); continue;
+                    }
+                    if (cur().is(TK::StringLit)) curArg += "\"" + cur().text + "\"";
+                    else if (cur().is(TK::IntLit)) curArg += std::to_string(cur().intVal);
+                    else curArg += cur().text;
+                    consume();
+                }
+                args.push_back(curArg);
+            }
+
+            // Map the common, semantically-meaningful attributes onto
+            // SafeC's native equivalents; everything else (deprecated,
+            // unused, used, visibility, format, nonnull, cold, hot, weak,
+            // constructor, destructor, may_alias, vector_size, mode, ...)
+            // is accepted syntactically and dropped — there's no SafeC
+            // equivalent, and erroring on them would defeat the point of
+            // tolerating this GCC/Clang extension at all.
+            if (attrName == "always_inline" || attrName == "gnu_inline" ||
+                attrName == "artificial") {
+                out.hasInline = true;
+            } else if (attrName == "noreturn") {
+                out.hasNoReturn = true;
+            } else if (attrName == "const" || attrName == "pure") {
+                out.hasPure = true;
+            } else if (attrName == "packed") {
+                out.hasPacked = true;
+            } else if (attrName == "warn_unused_result" || attrName == "nodiscard") {
+                out.hasMustUse = true;
+            } else if (attrName == "aligned") {
+                if (!args.empty() && !args[0].empty() &&
+                    std::isdigit((unsigned char)args[0][0])) {
+                    out.alignment = std::atoi(args[0].c_str());
+                } else if (out.alignment == 0) {
+                    out.alignment = 16; // bare '__attribute__((aligned))': GCC picks the
+                                         // target's max useful alignment; 16 is a reasonable default
+                }
+            } else if (attrName == "section") {
+                if (!args.empty()) {
+                    std::string s = args[0];
+                    if (s.size() >= 2 && s.front() == '"' && s.back() == '"')
+                        s = s.substr(1, s.size() - 2);
+                    out.sectionName = s;
+                }
+            }
+
+            if (cur().is(TK::Comma)) { consume(); continue; }
+            break;
+        }
+        expect(TK::RParen, "expected ')' to close __attribute__ list");
+        expect(TK::RParen, "expected '))' to close __attribute__");
+    }
+    return any;
+}
+
 std::unique_ptr<TranslationUnit> Parser::parseTranslationUnit() {
     auto tu = std::make_unique<TranslationUnit>();
     while (!atEnd()) {
@@ -458,6 +614,13 @@ std::unique_ptr<TranslationUnit> Parser::parseTranslationUnit() {
     }
     for (auto &decl : pendingNamespaceDecls_) tu->decls.push_back(std::move(decl));
     pendingNamespaceDecls_.clear();
+    // Anonymous inline struct/union StructDecls must be visible to Sema
+    // before the fields that reference them (so resolveType() finds the
+    // synthesized name already registered) — prepend rather than append.
+    tu->decls.insert(tu->decls.begin(),
+        std::make_move_iterator(pendingAnonStructs_.begin()),
+        std::make_move_iterator(pendingAnonStructs_.end()));
+    pendingAnonStructs_.clear();
     tu->arraySizeExprs = std::move(pendingArraySizeExprs_);
     return tu;
 }
@@ -501,23 +664,42 @@ void Parser::parseNamespaceDecl() {
 DeclPtr Parser::parseTopLevelDecl() {
     auto loc = cur().loc;
 
+    // GNU/Clang '__attribute__((...))' in prefix position (before the rest
+    // of the declaration) — see GnuAttrs / parseGnuAttributes for why this
+    // is tolerated rather than rejected. Merged into the existing qualifier
+    // locals below once they're in scope; also re-checked inside the
+    // qualifier loop so it can appear interspersed with const/static/etc.
+    GnuAttrs gnuAttrs;
+    parseGnuAttributes(gnuAttrs);
+
     // must_use keyword prefix (C-style: `must_use int fn(...)`)
-    bool isMustUse = false;
+    bool isMustUse = gnuAttrs.hasMustUse;
     if (cur().is(TK::KW_must_use)) { isMustUse = true; consume(); }
 
     // packed struct
-    bool isPacked = false;
+    bool isPacked = gnuAttrs.hasPacked;
     if (cur().is(TK::KW_packed)) { consume(); isPacked = true; }
 
     // struct / union
     if (cur().is(TK::KW_struct) || cur().is(TK::KW_union)) {
         bool isUnion = cur().is(TK::KW_union);
         consume();
+        // 'struct __attribute__((packed)) Foo { ... }' — tag-position attrs
+        {
+            GnuAttrs tagAttrs;
+            if (parseGnuAttributes(tagAttrs)) isPacked = isPacked || tagAttrs.hasPacked;
+        }
         // Is this a standalone struct decl or a function returning struct?
         if (peek().is(TK::LBrace) || (cur().is(TK::Ident) && peek().is(TK::LBrace))) {
             auto sd = parseStructDecl(isUnion);
             if (isPacked && sd && sd->kind == DeclKind::Struct)
                 static_cast<StructDecl&>(*sd).isPacked = true;
+            // Trailing '} __attribute__((packed));' — suffix-position attrs
+            GnuAttrs trailingAttrs;
+            if (parseGnuAttributes(trailingAttrs) && trailingAttrs.hasPacked &&
+                sd && sd->kind == DeclKind::Struct) {
+                static_cast<StructDecl&>(*sd).isPacked = true;
+            }
             return sd;
         }
         // Otherwise it's a function/var decl starting with struct T
@@ -569,22 +751,35 @@ DeclPtr Parser::parseTopLevelDecl() {
     // Qualifiers
     bool isConst    = false;
     bool isConsteval = false;
-    bool isInline   = false;
+    bool isInline   = gnuAttrs.hasInline;
     bool isExtern   = false;
     bool isStatic   = false;
     // Bare-metal / effect system attributes
     bool isNaked     = false;
     bool isInterrupt = false;
-    bool isNoReturn  = false;
-    bool isPure      = false;
+    bool isNoReturn  = gnuAttrs.hasNoReturn;
+    bool isPure      = gnuAttrs.hasPure;
     bool isVolatile    = false;
     bool isAtomic      = false;
     bool isThreadLocal = false;
-    std::string sectionName;
+    bool isConstinit   = false;
+    std::string sectionName = gnuAttrs.sectionName;
     std::string callingConv;
-    int alignment = 0;
+    int alignment = gnuAttrs.alignment;
 
     while (true) {
+        if (cur().isIdent("__attribute__") || cur().isIdent("__attribute")) {
+            GnuAttrs more;
+            parseGnuAttributes(more);
+            isInline    = isInline    || more.hasInline;
+            isNoReturn  = isNoReturn  || more.hasNoReturn;
+            isPure      = isPure      || more.hasPure;
+            isMustUse   = isMustUse   || more.hasMustUse;
+            isPacked    = isPacked    || more.hasPacked;
+            if (more.alignment > 0) alignment = more.alignment;
+            if (!more.sectionName.empty()) sectionName = more.sectionName;
+            continue;
+        }
         if (cur().isIdent("align") && peek().is(TK::LParen)) {
             consume(); // consume 'align'
             expect(TK::LParen, "expected '(' after align");
@@ -595,6 +790,7 @@ DeclPtr Parser::parseTopLevelDecl() {
         }
         if (match(TK::KW_const))     { isConst     = true; continue; }
         if (match(TK::KW_consteval)) { isConsteval = true; continue; }
+        if (match(TK::KW_constinit)) { isConstinit  = true; continue; }
         if (match(TK::KW_inline))    { isInline    = true; continue; }
         if (match(TK::KW_extern))    { isExtern    = true; continue; }
         if (match(TK::KW_static))    { isStatic    = true; continue; }
@@ -638,9 +834,13 @@ DeclPtr Parser::parseTopLevelDecl() {
         auto &fn = static_cast<FunctionDecl&>(*decl);
         fn.isNaked     = isNaked;
         fn.isInterrupt = isInterrupt;
-        fn.isNoReturn  = isNoReturn;
-        fn.isPure      = isPure;
-        fn.sectionName = sectionName;
+        // OR rather than overwrite: parseFunctionDecl may already have set
+        // these from a suffix '__attribute__((...))' after the parameter
+        // list (e.g. 'void f(void) __attribute__((noreturn));') — a plain
+        // assignment here would silently clobber that back to false/empty.
+        fn.isNoReturn  = fn.isNoReturn  || isNoReturn;
+        fn.isPure      = fn.isPure      || isPure;
+        fn.sectionName = fn.sectionName.empty() ? sectionName : fn.sectionName;
         fn.callingConv = callingConv;
     }
     // Propagate volatile/atomic/thread_local/section to GlobalVarDecl
@@ -649,8 +849,12 @@ DeclPtr Parser::parseTopLevelDecl() {
         gv.isVolatile    = isVolatile;
         gv.isAtomic      = isAtomic;
         gv.isThreadLocal = isThreadLocal;
-        gv.sectionName   = sectionName;
-        gv.alignment     = alignment;
+        // OR/fallback rather than overwrite — a suffix '__attribute__((...))'
+        // after the declarator may already have set these (see the
+        // 'Global variable' branch above).
+        gv.sectionName   = gv.sectionName.empty() ? sectionName : gv.sectionName;
+        gv.alignment     = gv.alignment > 0 ? gv.alignment : alignment;
+        gv.isConstinit   = isConstinit;
     }
     return decl;
 }
@@ -661,6 +865,30 @@ DeclPtr Parser::parseFunctionOrGlobalVar(bool isConst, bool isConsteval,
     auto loc = cur().loc;
     TypePtr retType = parseType();
     if (!retType) return nullptr;
+
+    // C-style function-pointer variable: 'RetType (*name)(Params);' (e.g.
+    // 'void (*on_tick)(int);') — a variable of function-pointer-reference
+    // type, not a function declaration, so it's handled entirely here
+    // rather than falling into the method/'::'/param-list logic below.
+    {
+        std::string fpName;
+        TypePtr fpType;
+        if (tryParseCStyleFuncPtrDeclarator(retType, fpName, fpType)) {
+            auto gv = std::make_unique<GlobalVarDecl>(std::move(fpName), loc);
+            gv->type     = std::move(fpType);
+            gv->isConst  = isConst;
+            gv->isStatic = isStatic;
+            gv->isExtern = isExtern;
+            GnuAttrs suffixAttrs;
+            if (parseGnuAttributes(suffixAttrs)) {
+                if (suffixAttrs.alignment > 0) gv->alignment = suffixAttrs.alignment;
+                if (!suffixAttrs.sectionName.empty()) gv->sectionName = suffixAttrs.sectionName;
+            }
+            if (match(TK::Eq)) gv->init = parseAssignExpr();
+            expect(TK::Semicolon);
+            return gv;
+        }
+    }
 
     // Expect an identifier for name
     if (!cur().is(TK::Ident)) {
@@ -724,6 +952,14 @@ DeclPtr Parser::parseFunctionOrGlobalVar(bool isConst, bool isConsteval,
     gv->isConst   = isConst;
     gv->isStatic  = isStatic;
     gv->isExtern  = isExtern;
+    // GNU/Clang suffix attributes: 'int x __attribute__((aligned(16)));'
+    {
+        GnuAttrs suffixAttrs;
+        if (parseGnuAttributes(suffixAttrs)) {
+            if (suffixAttrs.alignment > 0) gv->alignment = suffixAttrs.alignment;
+            if (!suffixAttrs.sectionName.empty()) gv->sectionName = suffixAttrs.sectionName;
+        }
+    }
     if (match(TK::Eq)) {
         gv->init = parseAssignExpr();
     }
@@ -755,6 +991,12 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(
         ParamDecl p;
         p.loc  = cur().loc;
         p.type = parseType();
+        // C-style function-pointer parameter: 'void f(int (*cb)(int))'
+        if (tryParseCStyleFuncPtrDeclarator(p.type, p.name, p.type)) {
+            fn->params.push_back(std::move(p));
+            if (!match(TK::Comma)) break;
+            continue;
+        }
         // T... args — variadic pack parameter
         if (cur().is(TK::DotDotDot)) {
             consume();
@@ -775,6 +1017,17 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(
     }
     expect(TK::RParen, "expected ')' closing parameter list");
 
+    // GNU/Clang suffix attributes: 'void f(void) __attribute__((noreturn));'
+    {
+        GnuAttrs suffixAttrs;
+        if (parseGnuAttributes(suffixAttrs)) {
+            if (suffixAttrs.hasNoReturn) fn->isNoReturn = true;
+            if (suffixAttrs.hasPure)     fn->isPure     = true;
+            if (suffixAttrs.hasMustUse)  fn->isMustUse  = true;
+            if (!suffixAttrs.sectionName.empty()) fn->sectionName = suffixAttrs.sectionName;
+        }
+    }
+
     // Optional 'const' qualifier after params (for const methods: T::m() const { ... })
     if (cur().is(TK::KW_const)) {
         consume();
@@ -790,7 +1043,7 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(
     return fn;
 }
 
-std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion) {
+std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTrailingSemicolon) {
     auto loc = cur().loc;
     std::string name;
     if (cur().is(TK::Ident)) { name = cur().text; consume(); }
@@ -810,6 +1063,23 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion) {
         TypePtr maybeType = parseType();
         bool isMethodDecl = false;
         std::string memberName;
+
+        // C-style function-pointer field: 'RetType (*name)(Params);'
+        // (e.g. a vtable/callback-table entry: 'void (*on_tick)(int);').
+        {
+            TypePtr fpType = maybeType;
+            std::string fpName;
+            if (tryParseCStyleFuncPtrDeclarator(fpType, fpName, fpType)) {
+                FieldDecl fd;
+                fd.index = fieldIdx++;
+                fd.type  = std::move(fpType);
+                fd.name  = std::move(fpName);
+                expect(TK::Semicolon, "expected ';' after struct field");
+                sd->fields.push_back(std::move(fd));
+                if (pos_ == savedPos) consume();
+                continue;
+            }
+        }
 
         if (cur().is(TK::Ident)) {
             memberName = cur().text;
@@ -890,11 +1160,30 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion) {
             fd.index = fieldIdx++;
             fd.type  = std::move(maybeType);
             fd.name  = memberName;
-            if (!cur().is(TK::Ident)) {
+            // Anonymous struct/union member: 'struct S { union { int a; }; };'
+            // — no name follows the (struct/union-typed) field at all, just
+            // the terminating ';'. Its own members ('s.a') become reachable
+            // on the enclosing struct via StructType::findFieldPath.
+            if (memberName.empty() && cur().is(TK::Semicolon) &&
+                fd.type && fd.type->kind == TypeKind::Struct) {
+                fd.isAnonymous = true;
+                fd.name = static_cast<StructType &>(*fd.type).name; // internal only
+            } else if (!cur().is(TK::Ident)) {
                 diag_.error(cur().loc, "expected field name");
             } else consume();
-            // Optional array size(s)
-            fd.type = parseArrayDeclaratorSuffix(std::move(fd.type));
+            // Bitfield: 'unsigned x : 4;' — mutually exclusive with an array
+            // declarator in C grammar, so only checked when no '[' follows.
+            if (!fd.isAnonymous && cur().is(TK::Colon)) {
+                consume();
+                fd.bitWidth = static_cast<int>(parseArraySizeConst());
+                if (fd.bitWidth < 0) {
+                    diag_.error(cur().loc, "bitfield width must be a non-negative constant");
+                    fd.bitWidth = 0;
+                }
+            } else {
+                // Optional array size(s)
+                fd.type = parseArrayDeclaratorSuffix(std::move(fd.type));
+            }
             expect(TK::Semicolon, "expected ';' after struct field");
             sd->fields.push_back(std::move(fd));
         }
@@ -905,7 +1194,7 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion) {
         if (pos_ == savedPos) consume();
     }
     expect(TK::RBrace, "expected '}' closing struct");
-    match(TK::Semicolon);
+    if (consumeTrailingSemicolon) match(TK::Semicolon);
     return sd;
 }
 
@@ -981,10 +1270,18 @@ DeclPtr Parser::parseTypedef() {
     auto loc = cur().loc;
     consume(); // eat 'typedef'
     TypePtr t = parseType();
-    std::string name = cur().text;
-    if (!cur().is(TK::Ident)) {
-        diag_.error(cur().loc, "expected typedef name");
-    } else consume();
+    // 'typedef RetType (*Name)(Params);' — C-style function-pointer typedef
+    // (e.g. 'typedef void (*Callback)(int);'), the classic form real C code
+    // uses instead of SafeC's native 'typedef fn RetType(Params) Name;'.
+    std::string name;
+    if (tryParseCStyleFuncPtrDeclarator(t, name, t)) {
+        // t reassigned to the &static fn(...) reference type; name filled.
+    } else {
+        name = cur().text;
+        if (!cur().is(TK::Ident)) {
+            diag_.error(cur().loc, "expected typedef name");
+        } else consume();
+    }
     expect(TK::Semicolon);
     return std::make_unique<TypeAliasDecl>(std::move(name), std::move(t), loc);
 }
@@ -1287,10 +1584,14 @@ StmtPtr Parser::parseStaticAssertStmt() {
 StmtPtr Parser::parseVarDeclStmt(bool isConst, bool isStatic) {
     auto loc = cur().loc;
     TypePtr ty = parseType();
-    std::string name = cur().text;
-    if (!cur().is(TK::Ident)) {
-        diag_.error(cur().loc, "expected variable name");
-    } else consume();
+    // C-style function-pointer local: 'RetType (*name)(Params);'
+    std::string name;
+    if (!tryParseCStyleFuncPtrDeclarator(ty, name, ty)) {
+        name = cur().text;
+        if (!cur().is(TK::Ident)) {
+            diag_.error(cur().loc, "expected variable name");
+        } else consume();
+    }
 
     // C-style array dimension after name: int arr[N]
     ty = parseArrayDeclaratorSuffix(std::move(ty));
@@ -1750,6 +2051,28 @@ ExprPtr Parser::parseUnaryExpr() {
         expect(TK::RParen, "expected ')' after fieldcount type");
         return std::make_unique<FieldCountExpr>(std::move(t), loc);
     }
+    case TK::KW_c11_generic: {
+        // _Generic(controlling-expr, T1: e1, T2: e2, ..., default: eN)
+        consume();
+        expect(TK::LParen, "expected '(' after '_Generic'");
+        auto controlling = parseAssignExpr();
+        expect(TK::Comma, "expected ',' after _Generic controlling expression");
+        std::vector<GenericAssoc> assocs;
+        do {
+            GenericAssoc ga;
+            if (cur().is(TK::KW_default)) {
+                consume();
+            } else {
+                ga.type = parseType();
+            }
+            expect(TK::Colon, "expected ':' in _Generic association");
+            ga.expr = parseAssignExpr();
+            assocs.push_back(std::move(ga));
+        } while (match(TK::Comma) && !cur().is(TK::RParen));
+        expect(TK::RParen, "expected ')' closing '_Generic'");
+        return std::make_unique<GenericSelectionExpr>(std::move(controlling),
+                                                        std::move(assocs), loc);
+    }
     case TK::KW_try: {
         // try expr — unwrap optional, propagate null on empty
         consume();
@@ -1930,15 +2253,40 @@ ExprPtr Parser::parsePrimaryExpr() {
         return e;
     }
     case TK::LBrace: {
-        // Compound initializer: { a, b, c }
+        // Compound initializer: { a, b, c }, with C99 designators:
+        // '{.field = val, ...}' (struct) and '{[i] = val, ...}' (array).
+        // GNU's older 'field: val' colon form is also accepted since it's
+        // common in ported C code (e.g. some Linux kernel-style headers).
         consume();
         std::vector<ExprPtr> inits;
+        std::vector<std::string> designatedFields;
+        std::vector<int64_t> designatedIndices;
         while (!atEnd() && !cur().is(TK::RBrace)) {
+            std::string fieldDesig;
+            int64_t indexDesig = -1;
+            if (cur().is(TK::Dot) && peek().is(TK::Ident)) {
+                consume(); // '.'
+                fieldDesig = cur().text;
+                consume();
+                if (cur().is(TK::Colon)) consume(); // tolerate GNU 'field: val'
+                else expect(TK::Eq, "expected '=' after '.field' designator");
+            } else if (cur().is(TK::LBracket)) {
+                consume(); // '['
+                indexDesig = parseArraySizeConst();
+                expect(TK::RBracket, "expected ']' closing array designator");
+                if (cur().is(TK::Colon)) consume();
+                else expect(TK::Eq, "expected '=' after array designator");
+            }
+            designatedFields.push_back(fieldDesig);
+            designatedIndices.push_back(indexDesig);
             inits.push_back(parseAssignExpr());
             if (!match(TK::Comma)) break;
         }
         expect(TK::RBrace, "expected '}' closing initializer");
-        return std::make_unique<CompoundInitExpr>(std::move(inits), loc);
+        auto ci = std::make_unique<CompoundInitExpr>(std::move(inits), loc);
+        ci->designatedFields  = std::move(designatedFields);
+        ci->designatedIndices = std::move(designatedIndices);
+        return ci;
     }
     case TK::KW_new: {
         // new<RegionName> Type

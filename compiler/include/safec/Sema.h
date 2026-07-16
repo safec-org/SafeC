@@ -207,6 +207,7 @@ private:
     // the *value* is known at compile time to fit; canImplicitlyConvert()
     // alone can't see the value, only the two static types.
     bool intLiteralFitsType(const Expr &e, const TypePtr &to) const;
+    TypePtr checkGenericSelection(GenericSelectionExpr &e);
     bool refToPointerArgCompatible(const TypePtr &from, const TypePtr &to) const;
 
     // ── State ─────────────────────────────────────────────────────────────────

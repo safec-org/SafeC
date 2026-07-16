@@ -410,12 +410,63 @@ void Sema::collectStruct(StructDecl &sd) {
     }
 
     int idx = 0;
+    // Bitfield packing: consecutive fields with the same declared type and
+    // bitWidth >= 0 share one storage slot (LLVM struct field), packed LSB-
+    // first, until the unit is full or a differently-typed/non-bitfield
+    // field breaks the run — the common real-world C-compiler convention.
+    // 'openUnitIdx' is the shared slot index for the currently-open run of
+    // same-typed bitfields; -1 means no run is open.
+    int openUnitIdx = -1;
+    TypePtr openUnitType;
+    int openUnitUsedBits = 0;
     for (auto &f : sd.fields) {
         FieldDecl fd;
         fd.name  = f.name;
         fd.type  = resolveType(f.type);
-        fd.index = idx++;
+        fd.bitWidth = f.bitWidth;
+        fd.isAnonymous = f.isAnonymous;
+        if (fd.bitWidth >= 0) {
+            int unitBits = sizeOfType(fd.type) * 8;
+            bool canReuse = openUnitIdx >= 0 && typeEqual(openUnitType, fd.type) &&
+                            openUnitUsedBits + fd.bitWidth <= unitBits;
+            if (!canReuse) {
+                openUnitIdx = idx++;
+                openUnitType = fd.type;
+                openUnitUsedBits = 0;
+            }
+            fd.index     = openUnitIdx;
+            fd.bitOffset = openUnitUsedBits;
+            openUnitUsedBits += fd.bitWidth;
+        } else {
+            openUnitIdx = -1; // a plain field closes any open bitfield run
+            fd.index = idx++;
+        }
         st->fields.push_back(std::move(fd));
+    }
+
+    // Flexible array member: 'struct S { int len; char data[]; };' — an
+    // unsized-array field is only meaningful as the struct's last field
+    // (C11 §6.7.2.1p18). The *same* ArrayType{size=-1} also means "this
+    // parameter decays to a pointer" everywhere else (function params,
+    // locals, globals) — those two meanings need different CodeGen lowering
+    // (a real embedded zero-length array here vs. a bare pointer there), so
+    // give the struct-field occurrence a distinct size marker (0, vs. -1
+    // for decay-to-pointer) that only ever appears on a FieldDecl::type,
+    // never on the shared parsed-type node other contexts see. lowerType's
+    // Array case treats size==0 as a genuine (zero-length) LLVM array.
+    for (size_t i = 0; i < st->fields.size(); ++i) {
+        auto &f = st->fields[i];
+        if (f.type && f.type->kind == TypeKind::Array &&
+            static_cast<ArrayType &>(*f.type).size < 0) {
+            if (i + 1 != st->fields.size()) {
+                diag_.error(sd.loc,
+                    "flexible array member '" + f.name + "' must be the last field in '" +
+                    sd.name + "'");
+            } else {
+                auto &at = static_cast<ArrayType &>(*f.type);
+                f.type = makeArray(at.element, 0);
+            }
+        }
     }
 
     // Tagged union: compute max payload size and set tag indices
@@ -892,6 +943,25 @@ void Sema::checkReturn(ReturnStmt &s, FunctionDecl &fn) {
 void Sema::checkVarDecl(VarDeclStmt &s, FunctionDecl &fn) {
     s.declType = resolveType(s.declType);
 
+    // Variable-length array: 'unsafe { int arr[n]; }' where 'n' isn't a
+    // compile-time constant (ConstEvalEngine::resolveArraySizes marked this
+    // with size==-2 rather than erroring, since it ran before any scope
+    // existed to resolve 'n' against). Check the stored size expression now,
+    // against this function's real local scope, so 'n' resolves properly
+    // and a non-integer size is still caught.
+    if (s.declType && s.declType->kind == TypeKind::Array) {
+        auto &at = static_cast<ArrayType &>(*s.declType);
+        if (at.size == -2 && at.sizeExpr) {
+            auto *sizeExpr = static_cast<Expr *>(at.sizeExpr);
+            TypePtr sizeTy = checkExpr(*sizeExpr);
+            if (!sizeTy->isError() && !sizeTy->isInteger()) {
+                diag_.error(sizeExpr->loc,
+                    "variable-length array size must be an integer, got '" +
+                    sizeTy->str() + "'");
+            }
+        }
+    }
+
     TypePtr initTy;
     if (s.init) {
         initTy = (s.init->kind == ExprKind::Compound)
@@ -1060,6 +1130,9 @@ TypePtr Sema::checkExpr(Expr &e) {
         ty = makeVoid();
         break;
     }
+    case ExprKind::GenericSelection:
+        ty = checkGenericSelection(static_cast<GenericSelectionExpr &>(e));
+        break;
     case ExprKind::New:
         ty = checkNew(static_cast<NewExpr &>(e));
         break;
@@ -1397,21 +1470,97 @@ TypePtr Sema::checkSpawn(SpawnExpr &e) {
     return makeInt(64, true);  // pthread_t handle (long long)
 }
 
+TypePtr Sema::checkGenericSelection(GenericSelectionExpr &e) {
+    // The controlling expression's value is never evaluated for selection
+    // purposes in real C11 either (only its type matters) — but SafeC has
+    // no "unevaluated context" concept, so just type-check it normally;
+    // side effects in the controlling expression are extremely unusual and
+    // this matches how e.g. sizeof(expr) is already handled here.
+    TypePtr controllingTy = checkExpr(*e.controlling);
+
+    int defaultIdx = -1;
+    int matchIdx   = -1;
+    for (size_t i = 0; i < e.associations.size(); ++i) {
+        auto &assoc = e.associations[i];
+        if (!assoc.type) {
+            if (defaultIdx >= 0)
+                diag_.error(e.loc, "duplicate 'default' association in '_Generic'");
+            defaultIdx = (int)i;
+            continue;
+        }
+        assoc.type = resolveType(assoc.type);
+        if (typeEqual(controllingTy, assoc.type)) {
+            if (matchIdx >= 0)
+                diag_.error(e.loc, "'_Generic' controlling expression type matches "
+                                   "more than one association");
+            matchIdx = (int)i;
+        }
+    }
+
+    e.selectedIndex = (matchIdx >= 0) ? matchIdx : defaultIdx;
+    if (e.selectedIndex < 0) {
+        diag_.error(e.loc,
+            "'_Generic' controlling expression type '" + controllingTy->str() +
+            "' matches no association and there is no 'default'");
+    }
+
+    // Still type-check every association (rather than only the selected
+    // one) so unrelated errors elsewhere in an association's expression
+    // are still caught — SafeC doesn't have C11's "unevaluated" branches.
+    TypePtr selectedTy = makeError();
+    for (size_t i = 0; i < e.associations.size(); ++i) {
+        TypePtr t = checkExpr(*e.associations[i].expr);
+        if ((int)i == e.selectedIndex) selectedTy = t;
+    }
+    e.type = selectedTy;
+    return selectedTy;
+}
+
 TypePtr Sema::checkCompoundInit(CompoundInitExpr &e, const TypePtr &targetTy) {
+    bool hasDesignators = !e.designatedFields.empty();
+    e.resolvedSlots.assign(e.inits.size(), 0);
+
     if (targetTy && targetTy->kind == TypeKind::Struct) {
         auto &st = static_cast<StructType &>(*targetTy);
-        if (e.inits.size() > st.fields.size()) {
-            diag_.error(e.loc, "too many initializers for struct '" + st.name + "'");
-        }
+        int64_t nextSlot = 0;
         for (size_t i = 0; i < e.inits.size(); ++i) {
+            int64_t slot = nextSlot;
+            if (hasDesignators && !e.designatedFields[i].empty()) {
+                const FieldDecl *fd = st.findField(e.designatedFields[i]);
+                if (!fd) {
+                    diag_.error(e.inits[i]->loc,
+                        "struct '" + st.name + "' has no field '" +
+                        e.designatedFields[i] + "'");
+                    slot = 0;
+                } else {
+                    // Field index in st.fields may not equal its declared
+                    // position for bitfield-packed structs, but positional
+                    // designated-init advancement is about *declaration
+                    // order*, so use the field's vector position, not
+                    // FieldDecl::index (which can repeat for packed
+                    // bitfields sharing a storage slot).
+                    slot = &(*fd) - &st.fields[0];
+                }
+            } else if (hasDesignators && e.designatedIndices[i] >= 0) {
+                diag_.error(e.inits[i]->loc,
+                    "array designator '[" + std::to_string(e.designatedIndices[i]) +
+                    "]' used initializing struct '" + st.name + "' (expected '.field =')");
+            }
+            e.resolvedSlots[i] = slot;
+            nextSlot = slot + 1;
+
             TypePtr initTy = checkExpr(*e.inits[i]);
-            if (i >= st.fields.size()) continue; // already reported above
-            const TypePtr &fieldTy = st.fields[i].type;
+            if (slot < 0 || slot >= (int64_t)st.fields.size()) {
+                if (!hasDesignators)
+                    diag_.error(e.loc, "too many initializers for struct '" + st.name + "'");
+                continue;
+            }
+            const TypePtr &fieldTy = st.fields[slot].type;
             if (fieldTy && !initTy->isError() && !fieldTy->isError() &&
                 !canImplicitlyConvert(initTy, fieldTy) &&
                 !intLiteralFitsType(*e.inits[i], fieldTy)) {
                 diag_.error(e.inits[i]->loc,
-                    "type mismatch initializing field '" + st.fields[i].name +
+                    "type mismatch initializing field '" + st.fields[slot].name +
                     "': cannot convert '" + initTy->str() + "' to '" + fieldTy->str() + "'");
             }
         }
@@ -1420,19 +1569,33 @@ TypePtr Sema::checkCompoundInit(CompoundInitExpr &e, const TypePtr &targetTy) {
     }
     if (targetTy && targetTy->kind == TypeKind::Array) {
         auto &at = static_cast<ArrayType &>(*targetTy);
-        if (at.size > 0 && (int64_t)e.inits.size() > at.size) {
-            diag_.error(e.loc, "too many initializers for array of size " +
-                                std::to_string(at.size));
-        }
-        for (auto &init : e.inits) {
-            TypePtr initTy = checkExpr(*init);
+        int64_t nextSlot = 0;
+        int64_t maxSlot = -1;
+        for (size_t i = 0; i < e.inits.size(); ++i) {
+            int64_t slot = nextSlot;
+            if (hasDesignators && e.designatedIndices[i] >= 0) {
+                slot = e.designatedIndices[i];
+            } else if (hasDesignators && !e.designatedFields[i].empty()) {
+                diag_.error(e.inits[i]->loc,
+                    "field designator '." + e.designatedFields[i] +
+                    "' used initializing an array (expected '[index] =')");
+            }
+            e.resolvedSlots[i] = slot;
+            nextSlot = slot + 1;
+            if (slot > maxSlot) maxSlot = slot;
+
+            TypePtr initTy = checkExpr(*e.inits[i]);
             if (at.element && !initTy->isError() && !at.element->isError() &&
                 !canImplicitlyConvert(initTy, at.element) &&
-                !intLiteralFitsType(*init, at.element)) {
-                diag_.error(init->loc,
+                !intLiteralFitsType(*e.inits[i], at.element)) {
+                diag_.error(e.inits[i]->loc,
                     "type mismatch in array initializer: cannot convert '" +
                     initTy->str() + "' to '" + at.element->str() + "'");
             }
+        }
+        if (at.size > 0 && maxSlot >= at.size) {
+            diag_.error(e.loc, "too many initializers for array of size " +
+                                std::to_string(at.size));
         }
         e.type = targetTy;
         return targetTy;
@@ -1983,7 +2146,12 @@ TypePtr Sema::checkMember(MemberExpr &e) {
         diag_.error(e.loc, "member access on non-struct type '" + baseTy->str() + "'");
         return makeError();
     }
-    const FieldDecl *fd = st->findField(e.field);
+    // findFieldPath reaches through anonymous struct/union members
+    // ('struct S { union { int a; }; };' — 's.a' isn't a direct field of
+    // S). CodeGen re-derives the same path via findMemberFieldDecl to
+    // build the (possibly multi-level) GEP chain.
+    std::vector<int> path;
+    const FieldDecl *fd = st->findFieldPath(e.field, path);
     if (!fd) {
         diag_.error(e.loc, "struct '" + st->name + "' has no field '" + e.field + "'");
         return makeError();
@@ -1994,7 +2162,21 @@ TypePtr Sema::checkMember(MemberExpr &e) {
 
 TypePtr Sema::checkCast(CastExpr &e) {
     e.targetType = resolveType(e.targetType);
-    TypePtr srcTy = checkExpr(*e.operand);
+
+    // Compound literal: '(Type){...}' parses as a cast applied to a
+    // CompoundInitExpr operand (canStartCastOperand() already accepts '{'
+    // as a valid cast-operand start) — but a generic checkExpr() on that
+    // operand has no target type to check fields/elements against (that's
+    // otherwise only threaded through by checkVarDecl/checkGlobalVar,
+    // which call checkCompoundInit directly). The cast's own target type
+    // IS that type, so use it here instead of falling through to the
+    // generic (target-type-less) dispatch.
+    TypePtr srcTy;
+    if (e.operand->kind == ExprKind::Compound) {
+        srcTy = checkCompoundInit(static_cast<CompoundInitExpr &>(*e.operand), e.targetType);
+    } else {
+        srcTy = checkExpr(*e.operand);
+    }
 
     // In safe code, cast from reference to pointer is not allowed
     if (!inUnsafeScope()) {

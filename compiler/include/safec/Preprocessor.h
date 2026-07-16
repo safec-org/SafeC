@@ -128,6 +128,15 @@ private:
     std::unordered_map<std::string, std::string>
     computeHygienicRenames(const MacroDef &def, uint64_t hygieneId) const;
 
+    // Applies a hygienic-rename map to raw macro-body text (identifier
+    // substitution only — no parameters, no # / ## since those only exist
+    // on function-like macros). Used for object-like macro expansion, which
+    // otherwise expanded its body with no hygiene pass at all (see the
+    // object-like branch in expandTokens).
+    std::string applyHygienicRenames(
+        const std::string &body,
+        const std::unordered_map<std::string, std::string> &renames) const;
+
     // ── #if expression evaluator ──────────────────────────────────────────────
     // Full recursive-descent C preprocessor integer expression evaluator.
     int64_t evalCondExpr(const std::string &expr,

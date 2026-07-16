@@ -681,9 +681,19 @@ std::string Preprocessor::expandTokens(const std::string &text,
                     result += name;
                 }
             } else {
-                // Object-like macro: expand body
+                // Object-like macro: expand body. Hygiene applies here too —
+                // '#define MAKE_TMP { int tmp = 5; ...}' can capture a
+                // call-site 'tmp' exactly like a function-like macro can;
+                // only function-like macros were getting the hygienic-rename
+                // pass before this, which was an unintended gap since
+                // computeHygienicRenames works unchanged for an empty
+                // parameter list (every declaration-shaped identifier is a
+                // rename candidate, which is exactly right with no params
+                // to exempt).
                 guard.insert(name);
-                std::string expanded = expandTokens(def.body, guard, filename, lineNo);
+                auto renames = computeHygienicRenames(def, ++hygieneCounter_);
+                std::string renamedBody = applyHygienicRenames(def.body, renames);
+                std::string expanded = expandTokens(renamedBody, guard, filename, lineNo);
                 guard.erase(name);
                 result += expanded;
             }
@@ -753,6 +763,36 @@ Preprocessor::computeHygienicRenames(const MacroDef &def, uint64_t hygieneId) co
         ++p;
     }
     return renames;
+}
+
+std::string Preprocessor::applyHygienicRenames(
+    const std::string &body,
+    const std::unordered_map<std::string, std::string> &renames) const {
+    if (renames.empty()) return body;
+    std::string result;
+    size_t p = 0;
+    while (p < body.size()) {
+        char c = body[p];
+        if (c == '"' || c == '\'') {
+            char q = c;
+            result += c; ++p;
+            while (p < body.size() && body[p] != q) {
+                if (body[p] == '\\' && p + 1 < body.size()) { result += body[p++]; }
+                result += body[p++];
+            }
+            if (p < body.size()) { result += body[p]; ++p; }
+            continue;
+        }
+        if (isIdentStart(c)) {
+            std::string tok = readIdentAt(body, p);
+            auto it = renames.find(tok);
+            result += (it != renames.end()) ? it->second : tok;
+            continue;
+        }
+        result += c;
+        ++p;
+    }
+    return result;
 }
 
 std::string Preprocessor::expandFunctionLike(const MacroDef &def,

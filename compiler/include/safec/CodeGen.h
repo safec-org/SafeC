@@ -153,6 +153,14 @@ private:
     llvm::Value *genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr = false);
     llvm::Value *genSlice(SliceExpr &e, FnEnv &env);
     llvm::Value *genMember(MemberExpr &e, FnEnv &env, bool wantAddr = false);
+    // Resolves e.base's type (through pointer/reference) to a struct and
+    // looks up e.field by name — used by genMember's read path and
+    // genAssign's write path to detect bitfield members (FieldDecl::bitWidth
+    // >= 0) without duplicating the base-type-unwrapping logic twice.
+    // 'outPath' receives the GEP index chain (see StructType::findFieldPath) —
+    // a single index for a direct field, more for one reached through an
+    // anonymous struct/union member.
+    const FieldDecl *findMemberFieldDecl(MemberExpr &e, std::vector<int> &outPath);
     llvm::Value *genCast(CastExpr &e, FnEnv &env);
     llvm::Value *genAssign(AssignExpr &e, FnEnv &env);
     llvm::Value *genTernary(TernaryExpr &e, FnEnv &env);

@@ -97,6 +97,11 @@ TK Lexer::keywordKind(const std::string &w) {
         {"__fastcall",    TK::KW_fastcall},
         // Namespaces
         {"namespace",     TK::KW_namespace},
+        // Compile-time-init enforcement (constexpr trio: const fn == constexpr,
+        // consteval fn == consteval, constinit == this)
+        {"constinit",     TK::KW_constinit},
+        // C11 type-generic selection
+        {"_Generic",      TK::KW_c11_generic},
         // "align" recognized contextually by parser (not a keyword)
     };
     auto it = kw.find(w);

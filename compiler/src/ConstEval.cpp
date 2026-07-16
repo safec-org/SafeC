@@ -163,7 +163,7 @@ bool ConstEvalEngine::run() {
 // (named constants / consteval calls) before Sema runs.
 // =============================================================================
 
-bool ConstEvalEngine::resolveTypeArraySizes(const TypePtr &ty) {
+bool ConstEvalEngine::resolveTypeArraySizes(const TypePtr &ty, bool allowVLA) {
     if (!ty) return true;
     bool ok = true;
     switch (ty->kind) {
@@ -174,8 +174,32 @@ bool ConstEvalEngine::resolveTypeArraySizes(const TypePtr &ty) {
         ok = resolveTypeArraySizes(at.element) && ok;
         if (at.sizeExpr) {
             auto *sizeExpr = static_cast<const Expr *>(at.sizeExpr);
+            // Speculative when allowVLA: silence diagnostics for the
+            // attempt (not just their effect on the error count — emit()
+            // prints to stderr immediately, so discardSince() alone would
+            // leave a misleading "not a compile-time constant" message on
+            // screen for what turns out to be a perfectly legal VLA).
+            size_t mark = diag_.checkpoint();
+            bool wasSilent = diag_.isSilent();
+            if (allowVLA) diag_.setSilent(true);
             auto val = evalExpr(*sizeExpr);
-            if (!val) { ok = false; break; }
+            if (allowVLA) diag_.setSilent(wasSilent);
+            if (!val) {
+                // Not foldable to a compile-time constant. If this is a
+                // local variable's array type inside 'unsafe{}', treat it
+                // as a variable-length array instead of an error: discard
+                // whatever diagnostic evalExpr emitted (it doesn't apply —
+                // this isn't a constant-expression context after all) and
+                // leave sizeExpr set for Sema/CodeGen to check/evaluate at
+                // runtime, at the declaration's actual scope.
+                if (allowVLA) {
+                    diag_.discardSince(mark);
+                    at.size = -2;
+                    break;
+                }
+                ok = false;
+                break;
+            }
             if (val->toInt() < 0) {
                 diag_.error(sizeExpr->loc, "array size must be non-negative");
                 ok = false;
@@ -198,51 +222,58 @@ bool ConstEvalEngine::resolveTypeArraySizes(const TypePtr &ty) {
     return ok;
 }
 
-bool ConstEvalEngine::resolveStmtArraySizes(Stmt &s) {
+bool ConstEvalEngine::resolveStmtArraySizes(Stmt &s, bool insideUnsafe) {
     bool ok = true;
     switch (s.kind) {
     case StmtKind::Compound: {
         auto &cs = static_cast<CompoundStmt &>(s);
-        for (auto &child : cs.body) ok = resolveStmtArraySizes(*child) && ok;
+        for (auto &child : cs.body) ok = resolveStmtArraySizes(*child, insideUnsafe) && ok;
         break;
     }
     case StmtKind::VarDecl: {
         auto &vd = static_cast<VarDeclStmt &>(s);
-        ok = resolveTypeArraySizes(vd.declType) && ok;
+        // VLA only for a local variable's own array type, and only inside
+        // 'unsafe{}' (see the ArrayType::size==-2 comment on
+        // resolveTypeArraySizes) — matches the "any C feature not natively
+        // modeled must at least work in unsafe{}" rule applied everywhere
+        // else in this pass (bitfields, designated inits, etc. don't need
+        // it since those are always foldable/well-defined; a VLA's whole
+        // point is a runtime-determined size, which is inherently unsafe).
+        ok = resolveTypeArraySizes(vd.declType, insideUnsafe) && ok;
         break;
     }
     case StmtKind::If: {
         auto &is = static_cast<IfStmt &>(s);
-        if (is.then)  ok = resolveStmtArraySizes(*is.then) && ok;
-        if (is.else_) ok = resolveStmtArraySizes(*is.else_) && ok;
+        if (is.then)  ok = resolveStmtArraySizes(*is.then, insideUnsafe) && ok;
+        if (is.else_) ok = resolveStmtArraySizes(*is.else_, insideUnsafe) && ok;
         break;
     }
     case StmtKind::While:
     case StmtKind::DoWhile: {
         auto &ws = static_cast<WhileStmt &>(s);
-        if (ws.body) ok = resolveStmtArraySizes(*ws.body) && ok;
+        if (ws.body) ok = resolveStmtArraySizes(*ws.body, insideUnsafe) && ok;
         break;
     }
     case StmtKind::For: {
         auto &fs = static_cast<ForStmt &>(s);
-        if (fs.init) ok = resolveStmtArraySizes(*fs.init) && ok;
-        if (fs.body) ok = resolveStmtArraySizes(*fs.body) && ok;
+        if (fs.init) ok = resolveStmtArraySizes(*fs.init, insideUnsafe) && ok;
+        if (fs.body) ok = resolveStmtArraySizes(*fs.body, insideUnsafe) && ok;
         break;
     }
     case StmtKind::Unsafe: {
         auto &us = static_cast<UnsafeStmt &>(s);
-        if (us.body) ok = resolveStmtArraySizes(*us.body) && ok;
+        if (us.body) ok = resolveStmtArraySizes(*us.body, /*insideUnsafe=*/true) && ok;
         break;
     }
     case StmtKind::Defer: {
         auto &ds = static_cast<DeferStmt &>(s);
-        if (ds.body) ok = resolveStmtArraySizes(*ds.body) && ok;
+        if (ds.body) ok = resolveStmtArraySizes(*ds.body, insideUnsafe) && ok;
         break;
     }
     case StmtKind::Match: {
         auto &ms = static_cast<MatchStmt &>(s);
         for (auto &arm : ms.arms)
-            if (arm.body) ok = resolveStmtArraySizes(*arm.body) && ok;
+            if (arm.body) ok = resolveStmtArraySizes(*arm.body, insideUnsafe) && ok;
         break;
     }
     default:

@@ -143,6 +143,21 @@ struct FieldDecl {
     std::string name;
     TypePtr     type;
     int         index = 0;
+    // Bitfield support ('unsigned x : 4;'): bitWidth == -1 means "not a
+    // bitfield" (the common case). When >= 0, this field shares LLVM struct
+    // slot 'index' with any other bitfields packed into the same storage
+    // unit (consecutive same-typed bitfields are packed together, LSB
+    // first — see Sema::collectStruct), and 'bitOffset' is this field's bit
+    // position within that shared unit. CodeGen reads/writes it via
+    // shift+mask on the whole unit rather than a plain GEP+load/store.
+    int         bitWidth  = -1;
+    int         bitOffset = 0;
+    // Anonymous struct/union member ('struct S { union { int a; float b; }; };')
+    // — 'type' is the anonymous inline struct/union's (synthesized-name)
+    // StructType, and unqualified access to its members ('s.a', 's.b')
+    // should transparently reach through this field. See
+    // StructType::findFieldPath, which does the recursive search.
+    bool        isAnonymous = false;
 };
 
 // ── Struct type ───────────────────────────────────────────────────────────────
@@ -159,6 +174,16 @@ struct StructType : Type {
         : Type(TypeKind::Struct), name(std::move(n)), isUnion(isUnion) {}
 
     const FieldDecl *findField(const std::string &fname) const;
+    // Recursive lookup reaching through anonymous struct/union members
+    // ('struct S { union { int a; }; };' — 's.a' isn't a direct field of
+    // S, it's a field of S's anonymous union member). Returns the matched
+    // FieldDecl (its type is the *innermost* field's real type) and fills
+    // 'outPath' with the GEP index chain from S down to it — [outer field's
+    // index] for a direct field, or [anon field's index, ..., inner field's
+    // index] when it's reached through one or more anonymous members.
+    // Returns nullptr (path unspecified) if not found anywhere.
+    const FieldDecl *findFieldPath(const std::string &fname,
+                                   std::vector<int> &outPath) const;
     std::string str() const override { return name; }
     bool equals(const Type &o) const override;
 };

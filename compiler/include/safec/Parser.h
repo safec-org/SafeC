@@ -78,7 +78,63 @@ private:
     std::vector<std::string> namespaceStack_;
     void parseNamespaceDecl();
 
+    // ── Anonymous inline struct/union ('struct S { union { int a; }; };') ───
+    // An inline 'struct { ... }' / 'union { ... }' with no tag name, used
+    // directly as a field's type, is parsed as a full StructDecl (like any
+    // top-level struct) under a synthesized unique name and stashed here —
+    // parseBaseType() can only return a TypePtr placeholder, not inject a
+    // whole extra top-level declaration, so (mirroring
+    // pendingNamespaceDecls_) it's collected and drained into
+    // TranslationUnit::decls once parsing completes, letting Sema's normal
+    // collectStruct()/resolveType() machinery pick it up unmodified.
+    std::vector<DeclPtr> pendingAnonStructs_;
+    int                  anonStructCounter_ = 0;
+
     std::vector<GenericParam> parseGenericParams(); // <T: Constraint, ...>
+
+    // ── GNU/Clang __attribute__((...)) tolerance ─────────────────────────────
+    // SafeC has its own native attribute keywords (inline, noreturn, pure,
+    // packed, align(N), section("...")), but real-world C source (headers
+    // copy-pasted into a .sc file, or code ported from C) uses GCC/Clang's
+    // '__attribute__((...))' syntax pervasively. Rather than reject it
+    // outright, recognize the syntax generically (arbitrary attribute-spec
+    // list, arbitrary parenthesized args) and map the handful of common
+    // attributes onto SafeC's existing equivalents; anything unrecognized is
+    // accepted and silently dropped rather than erroring — matching "any C
+    // feature not natively modeled must at least be accepted" for a claimed
+    // C superset. Legal in prefix position (before a declaration) and
+    // suffix position (after a declarator, before ';' or '{}'); may repeat
+    // ('__attribute__((a)) __attribute__((b))'), which the caller loops for.
+    struct GnuAttrs {
+        bool        hasInline    = false;
+        bool        hasNoReturn  = false;
+        bool        hasPure      = false;
+        bool        hasPacked    = false;
+        bool        hasMustUse   = false;
+        int         alignment    = 0;
+        std::string sectionName;
+    };
+    // Consumes zero or more consecutive '__attribute__((...))' groups,
+    // merging recognized attributes into 'out'. Returns true if at least one
+    // group was consumed (false, no tokens consumed, if none present).
+    bool parseGnuAttributes(GnuAttrs &out);
+
+    // ── C-style function-pointer declarator: T (*name)(params) ──────────────
+    // SafeC's native spelling is 'fn RetType(Params) name' (see the KW_fn
+    // case in parseBaseType) — the parser never supported C's declarator-
+    // based 'T (*name)(params)' syntax (the '*' binds to the *name*, not the
+    // type, unlike every other C declarator SafeC does support). Real C code
+    // uses this constantly for callback typedefs/fields/params, so this is
+    // tolerated as an alternative spelling for the same underlying type
+    // ('&static fn(Params) RetType', identical to what 'fn' produces) rather
+    // than requiring every ported C header to be rewritten.
+    // Call with the parser positioned right after the base return type has
+    // already been parsed (parseBaseType + parseTypeDeclarator, stopping at
+    // '(' since '*'/'[' are the only declarator suffixes recognized there).
+    // On match: consumes '(*name)(params)', fills outName/outType, returns
+    // true. On no match: restores the position exactly and returns false.
+    bool tryParseCStyleFuncPtrDeclarator(TypePtr retType, std::string &outName,
+                                         TypePtr &outType);
 
     // ── Top-level declarations ────────────────────────────────────────────────
     DeclPtr parseTopLevelDecl();
@@ -89,7 +145,14 @@ private:
         TypePtr retType, std::string name, SourceLocation loc,
         bool isConst, bool isConsteval, bool isInline, bool isExtern,
         bool isVariadic, std::vector<GenericParam> genericParams);
-    std::unique_ptr<StructDecl> parseStructDecl(bool isUnion);
+    // 'consumeTrailingSemicolon': the top-level 'struct Foo { ... };' form
+    // needs its own terminating ';' consumed here; an inline anonymous/named
+    // struct-as-type-position use ('struct S { struct { ... } x; };' — see
+    // the KW_struct/KW_union case in parseBaseType) must NOT consume it,
+    // since that ';' belongs to the *enclosing* field declaration and the
+    // struct-field-parsing loop expects to consume it itself.
+    std::unique_ptr<StructDecl> parseStructDecl(bool isUnion,
+                                                 bool consumeTrailingSemicolon = true);
     std::unique_ptr<EnumDecl>   parseEnumDecl();
     std::unique_ptr<RegionDecl> parseRegionDecl();
     DeclPtr                     parseTypedef();

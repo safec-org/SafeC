@@ -136,8 +136,16 @@ private:
     void          buildFnTable();
 
     // ── resolveArraySizes() helpers ───────────────────────────────────────────
-    bool resolveTypeArraySizes(const TypePtr &ty);
-    bool resolveStmtArraySizes(Stmt &s);
+    // 'allowVLA': true only for a local variable's declared type while
+    // inside an 'unsafe { ... }' block — see resolveStmtArraySizes. When an
+    // array-size expression can't be folded to a constant AND allowVLA is
+    // set, this is a variable-length array rather than an error: the
+    // (still-)diagnostic is discarded, ArrayType::size is set to -2 (a
+    // distinct "VLA" marker so CodeGen dynamically allocates it — see
+    // genVarDecl), and sizeExpr is *not* cleared, since Sema/CodeGen still
+    // need it to check/evaluate the size at its actual (runtime) scope.
+    bool resolveTypeArraySizes(const TypePtr &ty, bool allowVLA = false);
+    bool resolveStmtArraySizes(Stmt &s, bool insideUnsafe = false);
 
     // ── Limits ────────────────────────────────────────────────────────────────
     static constexpr int     kMaxRecursion = 256;
