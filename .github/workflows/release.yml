@@ -205,21 +205,35 @@ jobs:
         shell: bash
 
       - name: Locate LLVM cmake config
+        # See the matching, more detailed comment in ci.yml — two rounds
+        # of guessing a fixed path both came up empty, so this does an
+        # actual filesystem search plus diagnostics instead of a third
+        # blind guess.
         shell: bash
         run: |
-          set -euo pipefail
-          for candidate in \
-              "C:/Program Files/LLVM/lib/cmake/llvm" \
-              "C:/Program Files (x86)/LLVM/lib/cmake/llvm" \
-              "/c/Program Files/LLVM/lib/cmake/llvm" \
-              "/c/Program Files (x86)/LLVM/lib/cmake/llvm"; do
-            if [[ -f "${candidate}/LLVMConfig.cmake" ]]; then
-              echo "Found LLVMConfig.cmake at: $candidate"
-              echo "LLVM_CMAKE_DIR=$candidate" >> "$GITHUB_ENV"
+          set -uo pipefail
+          echo "── choco's own record of the install ──"
+          choco list --local-only llvm 2>&1 || true
+          CHOCO_LIB="$(choco info llvm --local-only 2>/dev/null | grep -i "Software location" | sed -E 's/.*: *//')"
+          echo "choco-reported software location: ${CHOCO_LIB:-<none reported>}"
+
+          echo "── searching for LLVMConfig.cmake ──"
+          FOUND="$(find "/c/Program Files" "/c/Program Files (x86)" "/c/ProgramData/chocolatey/lib" \
+                        -iname 'LLVMConfig.cmake' 2>/dev/null | head -1)"
+
+          if [[ -n "$FOUND" ]]; then
+              LLVM_CMAKE_DIR="$(dirname "$FOUND")"
+              echo "Found: $FOUND"
+              echo "LLVM_CMAKE_DIR=$LLVM_CMAKE_DIR" >> "$GITHUB_ENV"
               exit 0
-            fi
-          done
-          echo "::error::LLVMConfig.cmake not found in any expected location after 'choco install llvm --force'."
+          fi
+
+          echo "::error::LLVMConfig.cmake not found anywhere under Program Files, Program Files (x86), or the Chocolatey lib directory."
+          echo "── diagnostics: contents of likely install roots ──"
+          echo "-- C:/Program Files --"
+          ls -la "/c/Program Files" 2>&1 || true
+          echo "-- C:/ProgramData/chocolatey/lib/llvm (if present) --"
+          find "/c/ProgramData/chocolatey/lib/llvm" -maxdepth 4 2>&1 || true
           exit 1
 
       - name: Build safec compiler
