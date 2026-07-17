@@ -202,22 +202,28 @@ jobs:
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
       - name: Install LLVM (vcpkg)
-        # See the matching, more detailed comment in ci.yml: Chocolatey's
-        # llvm package is a thin wrapper around LLVM.org's official Windows
-        # installer, which never ships LLVMConfig.cmake — confirmed in a
-        # real CI run (C:/Program Files/LLVM populated, but no
-        # LLVMConfig.cmake anywhere under it). vcpkg (preinstalled on
-        # windows-latest at VCPKG_INSTALLATION_ROOT) builds LLVM from source
-        # and produces a real CMake config package, matching the path this
-        # project's own compiler/CMakeLists.txt already documented as the
-        # intended Windows setup. GHA binary caching (x-gha) keeps repeat
-        # runs from re-building LLVM from scratch every time.
+        # See the matching, more detailed comment in ci.yml. Short version:
+        # Chocolatey's llvm package never shipped LLVMConfig.cmake (wrong
+        # artifact). Plain 'vcpkg install llvm:x64-windows' ran ~95 minutes
+        # in a real CI run and then died — it defaults to building a full
+        # clang front-end nothing here uses, plus both Debug and Release,
+        # and LLVM buildtrees hit 50-100GB+ doing that. llvm[core] (drops
+        # clang/clang-tools-extra and the non-native default targets — only
+        # the native target is needed, see compiler/CMakeLists.txt's linked
+        # components) on the x64-windows-release community triplet
+        # (release-only, no Debug) plus buildtree/package cleanup flags
+        # keeps this within a standard runner's disk budget.
         shell: bash
         env:
           VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
         run: |
-          "$VCPKG_INSTALLATION_ROOT/vcpkg" install llvm:x64-windows
-          echo "LLVM_CMAKE_DIR=$VCPKG_INSTALLATION_ROOT/installed/x64-windows/share/llvm" >> "$GITHUB_ENV"
+          echo "── disk space before install ──"
+          df -h 2>/dev/null || true
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" install "llvm[core]:x64-windows-release" \
+            --clean-buildtrees-after-build --clean-packages-after-build
+          echo "── disk space after install ──"
+          df -h 2>/dev/null || true
+          echo "LLVM_CMAKE_DIR=$VCPKG_INSTALLATION_ROOT/installed/x64-windows-release/share/llvm" >> "$GITHUB_ENV"
 
       - name: Build safec compiler
         shell: bash

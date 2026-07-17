@@ -165,34 +165,51 @@ jobs:
 
       - name: Install LLVM (vcpkg)
         # Chocolatey's llvm package turned out to be a thin wrapper around
-        # LLVM.org's official Windows installer .exe: real CI runs showed it
-        # populating C:/Program Files/LLVM with clang.exe/lld.exe, but
-        # LLVMConfig.cmake was nowhere in that tree — that installer targets
-        # end users invoking clang from the command line, not programs
-        # linking against libLLVM, and simply doesn't ship the CMake devel
-        # package. No install-command or path-detection variant was ever
-        # going to fix that; it's the wrong artifact, not the wrong flags.
+        # LLVM.org's official Windows installer .exe, which never ships
+        # LLVMConfig.cmake — see git history for that dead end. Switching to
+        # plain 'vcpkg install llvm:x64-windows' was the next attempt, but a
+        # real CI run of that ran for ~95 minutes and then died: vcpkg's
+        # llvm port defaults to also building a full clang front-end
+        # ('clang'/'clang-tools-extra' default features — safec doesn't use
+        # libclang, only LLVM's own codegen libraries per
+        # compiler/CMakeLists.txt) and x64-windows builds both Debug AND
+        # Release by default. LLVM buildtrees are documented to reach
+        # 50-100GB+ doing that, well past what a standard GitHub-hosted
+        # Windows runner has free.
         #
-        # vcpkg (preinstalled on GitHub's windows-latest images at
-        # VCPKG_INSTALLATION_ROOT) builds LLVM from source and produces a
-        # real CMake config package — this project's own CMakeLists.txt
-        # already documented this exact path as the intended Windows setup
-        # (see compiler/CMakeLists.txt's LLVM_DIR comment) even though CI
-        # itself hadn't caught up to it yet. Only 'core support irreader
-        # bitwriter bitreader passes target nativecodegen nativedisassembler
-        # mc mcparser asmprinter' components are linked (compiler/CMakeLists.txt)
-        # — no cross-target backends — so vcpkg's default llvm port features
-        # are sufficient; no extra target-* features need enabling.
+        # Fix, both changes load-bearing:
+        #   - llvm[core]: drops the clang/clang-tools-extra default
+        #     features. Per vcpkg's own docs, disabling the 'core' default
+        #     feature also drops the default extra target backends, leaving
+        #     just the native/host target — which is all that's needed:
+        #     compiler/CMakeLists.txt only links 'nativecodegen'/
+        #     'nativedisassembler', no cross-target backends.
+        #   - x64-windows-release: vcpkg's community release-only triplet
+        #     (VCPKG_BUILD_TYPE=release), so Debug is never built at all.
+        # --clean-buildtrees-after-build/--clean-packages-after-build
+        # reclaim each package's buildtree as it's installed rather than
+        # letting them all accumulate (deliberately not the blanket
+        # --clean-after-build, which also wipes downloaded source archives
+        # and can force re-downloads mid-run).
         #
-        # Building LLVM from source is slow on a cold cache (potentially
-        # over an hour), hence VCPKG_BINARY_SOURCES routing through GitHub
-        # Actions' own cache (x-gha) so only the first run pays that cost.
+        # The runner's own pre-installed clang (independent of this vcpkg
+        # install — see the v20.1.8 noted in earlier CI diagnostics) stays
+        # on PATH for smoke-test.sh's CLANG_BIN, so dropping vcpkg's clang
+        # feature doesn't affect that.
+        #
+        # VCPKG_BINARY_SOURCES routes through GitHub Actions' own cache
+        # (x-gha) so only a cache-miss run pays the from-source build cost.
         shell: bash
         env:
           VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
         run: |
-          "$VCPKG_INSTALLATION_ROOT/vcpkg" install llvm:x64-windows
-          echo "LLVM_CMAKE_DIR=$VCPKG_INSTALLATION_ROOT/installed/x64-windows/share/llvm" >> "$GITHUB_ENV"
+          echo "── disk space before install ──"
+          df -h 2>/dev/null || true
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" install "llvm[core]:x64-windows-release" \
+            --clean-buildtrees-after-build --clean-packages-after-build
+          echo "── disk space after install ──"
+          df -h 2>/dev/null || true
+          echo "LLVM_CMAKE_DIR=$VCPKG_INSTALLATION_ROOT/installed/x64-windows-release/share/llvm" >> "$GITHUB_ENV"
 
       - name: Build safec compiler
         shell: bash
