@@ -45,8 +45,9 @@ Options (format):
                 (exit code 1 if any would change)
 
 Environment:
-  SAFEC_HOME    Path to the SafeC repository root
-                (e.g. export SAFEC_HOME=/path/to/SafeC)
+  SAFEC_HOME    Path to the SafeC install prefix (set automatically by
+                install.sh/install.ps1), or a from-source repository root
+                (e.g. export SAFEC_HOME=/path/to/safec or /path/to/SafeC)
 
 Examples:
   safeguard new hello_world

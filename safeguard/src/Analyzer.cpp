@@ -31,7 +31,21 @@ Analyzer::Analyzer(std::string projectRoot, Manifest manifest, bool verbose)
 std::string Analyzer::findSafec() const {
     const char* home = std::getenv("SAFEC_HOME");
     if (home) {
+        // 1. $SAFEC_HOME/bin/safec[.exe] — the installed layout install.sh/
+        //    install.ps1 produce (SAFEC_HOME = install prefix, e.g. ~/safec).
+#ifdef _WIN32
+        fs::path installed = fs::path(home) / "bin" / "safec.exe";
+#else
+        fs::path installed = fs::path(home) / "bin" / "safec";
+#endif
+        if (fs::exists(installed)) return installed.string();
+        // 2. $SAFEC_HOME/compiler/build/safec[.exe] — a from-source checkout
+        //    built directly via CMake (SAFEC_HOME = SafeC repo root).
+#ifdef _WIN32
+        fs::path c = fs::path(home) / "compiler" / "build" / "safec.exe";
+#else
         fs::path c = fs::path(home) / "compiler" / "build" / "safec";
+#endif
         if (fs::exists(c)) return c.string();
     }
     return "safec";

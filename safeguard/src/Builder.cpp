@@ -29,13 +29,26 @@ Builder::Builder(std::string projectRoot, Manifest manifest, BuildOptions opts)
 // ── safec / std discovery ─────────────────────────────────────────────────────
 
 std::string Builder::findSafec() const {
-    // 1. $SAFEC_HOME/compiler/build/safec  (SAFEC_HOME = SafeC repo root)
     const char* home = std::getenv("SAFEC_HOME");
     if (home) {
+        // 1. $SAFEC_HOME/bin/safec[.exe] — the installed layout install.sh/
+        //    install.ps1 produce (SAFEC_HOME = install prefix, e.g. ~/safec).
+#ifdef _WIN32
+        fs::path installed = fs::path(home) / "bin" / "safec.exe";
+#else
+        fs::path installed = fs::path(home) / "bin" / "safec";
+#endif
+        if (fs::exists(installed)) return installed.string();
+        // 2. $SAFEC_HOME/compiler/build/safec[.exe] — a from-source checkout
+        //    built directly via CMake (SAFEC_HOME = SafeC repo root).
+#ifdef _WIN32
+        fs::path c = fs::path(home) / "compiler" / "build" / "safec.exe";
+#else
         fs::path c = fs::path(home) / "compiler" / "build" / "safec";
+#endif
         if (fs::exists(c)) return c.string();
     }
-    // 2. PATH fallback
+    // 3. PATH fallback
     return "safec";
 }
 
@@ -371,7 +384,7 @@ std::string Builder::ensureStdLib() {
     std::string stdDir = findStdDir();
     if (stdDir.empty()) {
         std::cerr << "safeguard: warning: cannot find SafeC std/ directory; "
-                     "set SAFEC_HOME to the SafeC repository root\n";
+                     "set SAFEC_HOME to your SafeC install prefix or repository root\n";
         return "";
     }
 
