@@ -200,6 +200,7 @@ private:
     ExprPtr parsePostfixExpr();
     ExprPtr parsePrimaryExpr();
     ExprPtr parseMatchExpr();      // match (expr) { case pat: val, ... } as a value
+    ExprPtr parseFnEvalExpr();     // fn_eval(object, func)
 
     // ── Helpers ───────────────────────────────────────────────────────────────
     bool isTypeStart() const;       // current token begins a type?

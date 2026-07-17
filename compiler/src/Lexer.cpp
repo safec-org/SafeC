@@ -89,6 +89,7 @@ TK Lexer::keywordKind(const std::string &w) {
         {"atomic",        TK::KW_atomic},
         {"newtype",       TK::KW_newtype},
         {"trait",         TK::KW_trait},
+        {"fn_eval",       TK::KW_fn_eval},
         // Thread-local storage
         {"thread_local",  TK::KW_thread_local},
         {"_Thread_local", TK::KW_thread_local},  // C11 spelling

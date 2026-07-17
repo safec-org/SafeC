@@ -1233,6 +1233,9 @@ TypePtr Sema::checkExpr(Expr &e) {
     case ExprKind::Match:
         ty = checkMatchExpr(static_cast<MatchExpr &>(e));
         break;
+    case ExprKind::FnEval:
+        ty = checkFnEval(static_cast<FnEvalExpr &>(e));
+        break;
     case ExprKind::Try: {
         auto &te = static_cast<TryExpr &>(e);
         TypePtr innerTy = checkExpr(*te.inner);
@@ -1819,6 +1822,95 @@ TypePtr Sema::checkMatchExpr(MatchExpr &e) {
 
     if (sawError || !resultTy) return makeError();
     return resultTy;
+}
+
+// fn_eval(object, func) — see FnEvalExpr in AST.h for the design rationale.
+// 'object' is only checked for its type (never evaluated/codegen'd, same as
+// sizeof's operand); 'func' must directly name an already-declared plain
+// (non-method) function, whose name+signature is the lookup key against
+// object's struct type's own methodRegistry_ entries.
+TypePtr Sema::checkFnEval(FnEvalExpr &e) {
+    TypePtr objTy = checkExpr(*e.object);
+    checkExpr(*e.func);
+
+    if (e.func->kind != ExprKind::Ident) {
+        diag_.error(e.loc,
+            "fn_eval: second argument must directly name a declared function");
+        return makeError();
+    }
+    auto &funcId = static_cast<IdentExpr &>(*e.func);
+    FunctionDecl *shapeFn = funcId.resolvedFn;
+    if (!shapeFn) {
+        diag_.error(e.loc, "fn_eval: '" + funcId.name + "' does not name a function");
+        return makeError();
+    }
+    if (shapeFn->isMethod) {
+        diag_.error(e.loc,
+            "fn_eval: '" + funcId.name + "' must be a plain function, not a method — "
+            "it's used only as a name+signature key, never called");
+        return makeError();
+    }
+
+    TypePtr structTy = objTy;
+    if (structTy && (structTy->kind == TypeKind::Pointer || structTy->kind == TypeKind::Reference)) {
+        structTy = structTy->kind == TypeKind::Pointer
+            ? static_cast<PointerType &>(*structTy).base
+            : static_cast<ReferenceType &>(*structTy).base;
+    }
+    if (!structTy || structTy->kind != TypeKind::Struct) {
+        diag_.error(e.loc,
+            "fn_eval: first argument must be a struct (or a pointer/reference to one), got '" +
+            (objTy ? objTy->str() : std::string("?")) + "'");
+        return makeError();
+    }
+    auto &st = static_cast<StructType &>(*structTy);
+
+    auto it = methodRegistry_.find(st.name + "::" + shapeFn->name);
+    if (it == methodRegistry_.end()) {
+        diag_.error(e.loc,
+            "fn_eval: type '" + st.name + "' has no method named '" + shapeFn->name + "'");
+        return makeError();
+    }
+    FunctionDecl *method = it->second;
+
+    // method->params[0] is the Sema-inserted 'self' (see collectFunction) —
+    // everything after it must match shapeFn's params 1:1, since shapeFn
+    // (a plain function) has no self slot of its own.
+    size_t methodArity = method->params.empty() ? 0 : method->params.size() - 1;
+    if (methodArity != shapeFn->params.size()) {
+        diag_.error(e.loc,
+            "fn_eval: '" + st.name + "::" + shapeFn->name + "' takes " +
+            std::to_string(methodArity) + " parameter(s), but '" + funcId.name +
+            "' declares " + std::to_string(shapeFn->params.size()));
+        return makeError();
+    }
+    for (size_t i = 0; i < shapeFn->params.size(); ++i) {
+        const TypePtr &methodParamTy = method->params[i + 1].type;
+        const TypePtr &shapeParamTy  = shapeFn->params[i].type;
+        if (!typeEqual(methodParamTy, shapeParamTy)) {
+            diag_.error(e.loc,
+                "fn_eval: parameter " + std::to_string(i + 1) + " of '" + st.name + "::" +
+                shapeFn->name + "' is '" + (methodParamTy ? methodParamTy->str() : "?") +
+                "', but '" + funcId.name + "' declares '" +
+                (shapeParamTy ? shapeParamTy->str() : "?") + "'");
+            return makeError();
+        }
+    }
+    if (!typeEqual(method->returnType, shapeFn->returnType)) {
+        diag_.error(e.loc,
+            "fn_eval: '" + st.name + "::" + shapeFn->name + "' returns '" +
+            (method->returnType ? method->returnType->str() : "?") + "', but '" +
+            funcId.name + "' declares '" +
+            (shapeFn->returnType ? shapeFn->returnType->str() : "?") + "'");
+        return makeError();
+    }
+
+    e.matchedMethod = method;
+    // Same shape as any other bare-function-name value (see checkIdent's
+    // function-symbol case) — a '&static fn(...)' reference, self included
+    // in the signature since the caller must still pass it explicitly.
+    e.type = makeReference(method->funcType(), Region::Static);
+    return e.type;
 }
 
 TypePtr Sema::checkCall(CallExpr &e) {

@@ -133,11 +133,12 @@ jobs:
           CLANG_BIN: clang-${{ env.LLVM_VERSION }}
 
   # ── Windows (x86_64) ──────────────────────────────────────────────────────
-  # Same build steps as release.yml's windows job (LLVM via vcpkg, not
-  # Chocolatey — see that step's comment for why).
+  # Same build steps as release.yml's windows job (LLVM via LLVM.org's own
+  # prebuilt SDK archive, not Chocolatey or vcpkg — see that step's comment
+  # for why).
   windows:
     runs-on: windows-latest
-    timeout-minutes: 180
+    timeout-minutes: 30
     steps:
       - name: Checkout SafeC
         uses: actions/checkout@v4
@@ -153,63 +154,47 @@ jobs:
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Export GitHub Actions cache vars for vcpkg
-        # vcpkg's own GHA binary-caching provider (x-gha) needs these two
-        # vars exported into the environment; actions/github-script is the
-        # documented way to surface them (they aren't plain env context).
-        uses: actions/github-script@v7
-        with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-
-      - name: Install LLVM (vcpkg)
-        # Chocolatey's llvm package turned out to be a thin wrapper around
-        # LLVM.org's official Windows installer .exe, which never ships
-        # LLVMConfig.cmake — see git history for that dead end. Switching to
-        # plain 'vcpkg install llvm:x64-windows' was the next attempt, but a
-        # real CI run of that ran for ~95 minutes and then died: vcpkg's
-        # llvm port defaults to also building a full clang front-end
-        # ('clang'/'clang-tools-extra' default features — safec doesn't use
-        # libclang, only LLVM's own codegen libraries per
-        # compiler/CMakeLists.txt) and x64-windows builds both Debug AND
-        # Release by default. LLVM buildtrees are documented to reach
-        # 50-100GB+ doing that, well past what a standard GitHub-hosted
-        # Windows runner has free.
+      - name: Install LLVM (official prebuilt SDK archive)
+        # Third attempt at Windows LLVM acquisition. Chocolatey's llvm
+        # package wraps LLVM.org's installer .exe, which never ships
+        # LLVMConfig.cmake at all (confirmed in a real CI run: it populated
+        # C:/Program Files/LLVM but with no LLVMConfig.cmake anywhere in
+        # it). vcpkg was the next attempt, but its llvm port is pinned to
+        # v18.1.6 in the registry snapshot available here — below this
+        # project's documented 21+ minimum — and classic-mode 'vcpkg
+        # install' has no way to request a different port version.
         #
-        # Fix, both changes load-bearing:
-        #   - llvm[core]: drops the clang/clang-tools-extra default
-        #     features. Per vcpkg's own docs, disabling the 'core' default
-        #     feature also drops the default extra target backends, leaving
-        #     just the native/host target — which is all that's needed:
-        #     compiler/CMakeLists.txt only links 'nativecodegen'/
-        #     'nativedisassembler', no cross-target backends.
-        #   - x64-windows-release: vcpkg's community release-only triplet
-        #     (VCPKG_BUILD_TYPE=release), so Debug is never built at all.
-        # --clean-buildtrees-after-build/--clean-packages-after-build
-        # reclaim each package's buildtree as it's installed rather than
-        # letting them all accumulate (deliberately not the blanket
-        # --clean-after-build, which also wipes downloaded source archives
-        # and can force re-downloads mid-run).
+        # LLVM.org's own GitHub releases publish a second Windows archive
+        # alongside the installer for exactly this situation: files named
+        # 'clang+llvm-<version>-x86_64-pc-windows-msvc.tar.xz' are prebuilt
+        # (not source — this is a download+extract, no from-source build
+        # time or disk risk) and contain the full headers/libs/CMake config
+        # needed to link against libLLVM, as opposed to the installer's
+        # CLI-tools-only layout. Version pinned to 21.1.8 to match
+        # LLVM_VERSION used on Linux and this project's documented minimum.
         #
-        # The runner's own pre-installed clang (independent of this vcpkg
-        # install — see the v20.1.8 noted in earlier CI diagnostics) stays
-        # on PATH for smoke-test.sh's CLANG_BIN, so dropping vcpkg's clang
-        # feature doesn't affect that.
-        #
-        # VCPKG_BINARY_SOURCES routes through GitHub Actions' own cache
-        # (x-gha) so only a cache-miss run pays the from-source build cost.
+        # 'find' locates LLVMConfig.cmake inside the extracted tree rather
+        # than assuming an exact directory layout, and fails fast with a
+        # directory dump if it's ever not where expected — cheaper to
+        # diagnose than a downstream CMake failure.
         shell: bash
-        env:
-          VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
         run: |
-          echo "── disk space before install ──"
-          df -h 2>/dev/null || true
-          "$VCPKG_INSTALLATION_ROOT/vcpkg" install "llvm[core]:x64-windows-release" \
-            --clean-buildtrees-after-build --clean-packages-after-build
-          echo "── disk space after install ──"
-          df -h 2>/dev/null || true
-          echo "LLVM_CMAKE_DIR=$VCPKG_INSTALLATION_ROOT/installed/x64-windows-release/share/llvm" >> "$GITHUB_ENV"
+          set -euo pipefail
+          LLVM_PKG_VERSION="21.1.8"
+          URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_PKG_VERSION}/clang+llvm-${LLVM_PKG_VERSION}-x86_64-pc-windows-msvc.tar.xz"
+          curl -fL -o llvm-sdk.tar.xz "$URL"
+          mkdir -p /c/llvm-sdk
+          tar -xf llvm-sdk.tar.xz -C /c/llvm-sdk
+
+          FOUND="$(find /c/llvm-sdk -iname 'LLVMConfig.cmake' | head -1)"
+          if [[ -z "$FOUND" ]]; then
+            echo "::error::LLVMConfig.cmake not found after extracting the official LLVM SDK archive."
+            echo "-- top-level contents of /c/llvm-sdk --"
+            ls -la /c/llvm-sdk
+            exit 1
+          fi
+          echo "Found: $FOUND"
+          echo "LLVM_CMAKE_DIR=$(dirname "$FOUND")" >> "$GITHUB_ENV"
 
       - name: Build safec compiler
         shell: bash

@@ -210,6 +210,7 @@ private:
     bool floatLitFitsType(const Expr &e, const TypePtr &to) const;
     TypePtr checkGenericSelection(GenericSelectionExpr &e);
     TypePtr checkMatchExpr(MatchExpr &e);
+    TypePtr checkFnEval(FnEvalExpr &e);
     bool refToPointerArgCompatible(const TypePtr &from, const TypePtr &to) const;
 
     // ── State ─────────────────────────────────────────────────────────────────

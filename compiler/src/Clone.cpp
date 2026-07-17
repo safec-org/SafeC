@@ -300,6 +300,16 @@ static ExprPtr cloneExprImpl(const Expr *ep, const TypeSubst &subs) {
             cloneExprImpl(me.subject.get(), subs), std::move(arms), me.loc);
         return fix(std::move(clone));
     }
+    case ExprKind::FnEval: {
+        // matchedMethod is deliberately NOT copied from the template — it's
+        // resolved fresh (see Sema::checkFnEval) once the clone's 'object'
+        // has a concrete (substituted) type, which is the whole point of
+        // using fn_eval inside a generic function in the first place.
+        auto &fe = static_cast<const FnEvalExpr &>(e);
+        return fix(std::make_unique<FnEvalExpr>(
+            cloneExprImpl(fe.object.get(), subs),
+            cloneExprImpl(fe.func.get(), subs), fe.loc));
+    }
     default:
         return fix(std::make_unique<NullLitExpr>(e.loc));
     }

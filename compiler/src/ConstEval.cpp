@@ -44,6 +44,8 @@ std::string ConstValue::typeStr() const {
     case Float:  return "float";
     case Bool:   return "bool";
     case String: return "string";
+    case Array:  return "array";
+    case Struct: return "struct";
     }
     return "?";
 }
@@ -55,6 +57,16 @@ std::string ConstValue::repr() const {
     case Float:  return std::to_string(floatVal);
     case Bool:   return boolVal ? "true" : "false";
     case String: return '"' + strVal + '"';
+    case Array:
+    case Struct: {
+        std::string s = (kind == Array) ? "[" : "{";
+        for (size_t i = 0; i < elems.size(); ++i) {
+            if (i) s += ", ";
+            s += elems[i].repr();
+        }
+        s += (kind == Array) ? "]" : "}";
+        return s;
+    }
     }
     return "?";
 }
@@ -65,6 +77,61 @@ std::string ConstValue::repr() const {
 
 ConstEvalEngine::ConstEvalEngine(TranslationUnit &tu, DiagEngine &diag)
     : tu_(tu), diag_(diag) {}
+
+ConstValue ConstEvalEngine::zeroValue(const TypePtr &ty) {
+    if (!ty) return ConstValue::mkInt(0);
+    switch (ty->kind) {
+    case TypeKind::Float32:
+    case TypeKind::Float64:
+        return ConstValue::mkFloat(0.0);
+    case TypeKind::Bool:
+        return ConstValue::mkBool(false);
+    case TypeKind::Struct: {
+        auto &st = static_cast<const StructType &>(*ty);
+        std::vector<ConstValue> fields;
+        fields.reserve(st.fields.size());
+        for (auto &f : st.fields) fields.push_back(zeroValue(f.type));
+        return ConstValue::mkStruct(std::move(fields));
+    }
+    case TypeKind::Array: {
+        auto &at = static_cast<const ArrayType &>(*ty);
+        int64_t n = at.size > 0 ? at.size : 0;
+        std::vector<ConstValue> elems;
+        elems.reserve((size_t)n);
+        for (int64_t i = 0; i < n; ++i) elems.push_back(zeroValue(at.element));
+        return ConstValue::mkArray(std::move(elems));
+    }
+    default:
+        return ConstValue::mkInt(0);
+    }
+}
+
+// Synthesizes an AST literal from a computed ConstValue, for folding a
+// global initializer back into something CodeGen::evalConstInit can lower
+// without re-running this engine (see the GlobalVar case in run() below).
+// Struct/Array values become a plain positional CompoundInitExpr (empty
+// resolvedSlots — slot == source position), which evalConstInit already
+// knows how to walk recursively for both kinds.
+static ExprPtr constValueToExpr(const ConstValue &v, SourceLocation loc) {
+    switch (v.kind) {
+    case ConstValue::Bool:
+    case ConstValue::Int:
+        return std::make_unique<IntLitExpr>(v.toInt(), loc);
+    case ConstValue::Float:
+        return std::make_unique<FloatLitExpr>(v.floatVal, loc);
+    case ConstValue::String:
+        return std::make_unique<StringLitExpr>(v.strVal, loc);
+    case ConstValue::Struct:
+    case ConstValue::Array: {
+        std::vector<ExprPtr> inits;
+        inits.reserve(v.elems.size());
+        for (auto &el : v.elems) inits.push_back(constValueToExpr(el, loc));
+        return std::make_unique<CompoundInitExpr>(std::move(inits), loc);
+    }
+    default:
+        return std::make_unique<IntLitExpr>(0, loc);
+    }
+}
 
 // ── Build function table ──────────────────────────────────────────────────────
 
@@ -120,7 +187,14 @@ bool ConstEvalEngine::run() {
                 if (val) {
                     globalConsts_[gv.name] = *val;
                     // Replace the initializer with a folded literal so CodeGen
-                    // can emit the constant directly without calling consteval again.
+                    // can emit the constant directly without calling consteval
+                    // again — CodeGen::evalConstInit has its own independent
+                    // (non-interpreting) constant folder that only handles
+                    // literals/negation/global-refs/aggregate *literals*, not
+                    // e.g. a call to a consteval function; folding back here
+                    // is what makes 'const int arr[3] = make_array();' work
+                    // for any kind this engine can produce, not just
+                    // Int/Float — including the new Struct/Array kinds.
                     switch (val->kind) {
                     case ConstValue::Int:
                     case ConstValue::Bool:
@@ -128,6 +202,13 @@ bool ConstEvalEngine::run() {
                         break;
                     case ConstValue::Float:
                         gv.init = std::make_unique<FloatLitExpr>(val->floatVal, gv.loc);
+                        break;
+                    case ConstValue::String:
+                        gv.init = std::make_unique<StringLitExpr>(val->strVal, gv.loc);
+                        break;
+                    case ConstValue::Struct:
+                    case ConstValue::Array:
+                        gv.init = constValueToExpr(*val, gv.loc);
                         break;
                     default: break;
                     }
@@ -547,6 +628,13 @@ std::optional<ConstValue> ConstEvalEngine::evalExprF(const Expr &e, Frame &frame
         return evalCast(static_cast<const CastExpr &>(e), frame);
     case ExprKind::Assign:
         return evalAssign(static_cast<const AssignExpr &>(e), frame);
+    case ExprKind::Compound:
+        return evalCompoundInit(static_cast<const CompoundInitExpr &>(e), frame);
+    case ExprKind::Member:
+    case ExprKind::Arrow:
+        return evalMember(static_cast<const MemberExpr &>(e), frame);
+    case ExprKind::Subscript:
+        return evalSubscriptConst(static_cast<const SubscriptExpr &>(e), frame);
     case ExprKind::SizeofType: {
         // sizeof(T) — return a fixed size (basic impl)
         auto &ste = static_cast<const SizeofTypeExpr &>(e);
@@ -678,6 +766,29 @@ std::optional<ConstValue> ConstEvalEngine::evalUnary(const UnaryExpr &e, Frame &
         return evalExprF(fake, frame);
     }
 
+    // Inc/dec go through resolveLValueSlot (not the plain evalExprF read
+    // below) so the target evaluates exactly once — for e.g. 'arr[j++]++',
+    // evaluating the operand both to read it *and* separately to locate
+    // its slot would double-apply the index's own side effect. This also
+    // generalizes inc/dec to any Member/Subscript-rooted lvalue, not just
+    // a bare identifier.
+    switch (e.op) {
+    case UnaryOp::PreInc: case UnaryOp::PreDec:
+    case UnaryOp::PostInc: case UnaryOp::PostDec: {
+        ConstValue *slot = resolveLValueSlot(*e.operand, frame);
+        if (!slot) return {};
+        ConstValue old = *slot;
+        bool isDec = (e.op == UnaryOp::PreDec || e.op == UnaryOp::PostDec);
+        double delta = isDec ? -1.0 : 1.0;
+        *slot = (slot->kind == ConstValue::Float)
+            ? ConstValue::mkFloat(slot->floatVal + delta)
+            : ConstValue::mkInt(slot->toInt() + (int64_t)delta);
+        bool isPost = (e.op == UnaryOp::PostInc || e.op == UnaryOp::PostDec);
+        return isPost ? old : *slot;
+    }
+    default: break;
+    }
+
     auto operand = evalExprF(*e.operand, frame);
     if (!operand) return {};
 
@@ -690,39 +801,6 @@ std::optional<ConstValue> ConstEvalEngine::evalUnary(const UnaryExpr &e, Frame &
         return ConstValue::mkBool(!operand->toBool());
     case UnaryOp::BitNot:
         return ConstValue::mkInt(~operand->toInt());
-    case UnaryOp::PreInc: {
-        int64_t v = operand->toInt() + 1;
-        // Try to write back to local
-        if (e.operand->kind == ExprKind::Ident) {
-            auto &id = static_cast<const IdentExpr &>(*e.operand);
-            frame.locals[id.name] = ConstValue::mkInt(v);
-        }
-        return ConstValue::mkInt(v);
-    }
-    case UnaryOp::PreDec: {
-        int64_t v = operand->toInt() - 1;
-        if (e.operand->kind == ExprKind::Ident) {
-            auto &id = static_cast<const IdentExpr &>(*e.operand);
-            frame.locals[id.name] = ConstValue::mkInt(v);
-        }
-        return ConstValue::mkInt(v);
-    }
-    case UnaryOp::PostInc: {
-        int64_t old = operand->toInt();
-        if (e.operand->kind == ExprKind::Ident) {
-            auto &id = static_cast<const IdentExpr &>(*e.operand);
-            frame.locals[id.name] = ConstValue::mkInt(old + 1);
-        }
-        return ConstValue::mkInt(old);
-    }
-    case UnaryOp::PostDec: {
-        int64_t old = operand->toInt();
-        if (e.operand->kind == ExprKind::Ident) {
-            auto &id = static_cast<const IdentExpr &>(*e.operand);
-            frame.locals[id.name] = ConstValue::mkInt(old - 1);
-        }
-        return ConstValue::mkInt(old);
-    }
     default:
         diag_.error(e.loc, "unsupported unary operation in const context");
         return {};
@@ -867,74 +945,221 @@ std::optional<ConstValue> ConstEvalEngine::evalAssign(const AssignExpr &e, Frame
     auto rval = evalExprF(*e.rhs, frame);
     if (!rval) return {};
 
-    // Resolve lhs to a variable name
-    auto getLhsName = [&]() -> std::string {
-        if (e.lhs->kind == ExprKind::Ident)
-            return static_cast<const IdentExpr &>(*e.lhs).name;
-        return {};
-    };
-    std::string lhsName = getLhsName();
-
-    if (lhsName.empty()) {
-        diag_.error(e.loc, "complex assignment targets are not supported in const context");
-        return {};
-    }
-
-    // Get current value for compound assignments
-    auto getOld = [&]() -> ConstValue {
-        auto it = frame.locals.find(lhsName);
-        if (it != frame.locals.end()) return it->second;
-        return ConstValue::mkInt(0);
-    };
+    // Resolves to a mutable slot for any lvalue this engine can track — a
+    // bare local, or a Member/Subscript chain rooted at one (e.g.
+    // 's.field = x', 'arr[i] = x', 'arr[i].field = x') — not just a plain
+    // identifier as before, so aggregate locals can actually be mutated.
+    ConstValue *slot = resolveLValueSlot(*e.lhs, frame);
+    if (!slot) return {};
 
     ConstValue newVal;
     switch (e.op) {
     case AssignOp::Assign:    newVal = *rval; break;
-    case AssignOp::AddAssign: {
-        auto old = getOld();
-        newVal = (old.kind == ConstValue::Float || rval->kind == ConstValue::Float)
-            ? ConstValue::mkFloat(old.toFloat() + rval->toFloat())
-            : ConstValue::mkInt(old.toInt() + rval->toInt());
+    case AssignOp::AddAssign:
+        newVal = (slot->kind == ConstValue::Float || rval->kind == ConstValue::Float)
+            ? ConstValue::mkFloat(slot->toFloat() + rval->toFloat())
+            : ConstValue::mkInt(slot->toInt() + rval->toInt());
         break;
-    }
-    case AssignOp::SubAssign: {
-        auto old = getOld();
-        newVal = ConstValue::mkInt(old.toInt() - rval->toInt());
+    case AssignOp::SubAssign:
+        newVal = ConstValue::mkInt(slot->toInt() - rval->toInt());
         break;
-    }
-    case AssignOp::MulAssign: {
-        auto old = getOld();
-        newVal = ConstValue::mkInt(old.toInt() * rval->toInt());
+    case AssignOp::MulAssign:
+        newVal = ConstValue::mkInt(slot->toInt() * rval->toInt());
         break;
-    }
     case AssignOp::DivAssign: {
-        auto old = getOld();
         int64_t r = rval->toInt();
         if (!r) { diag_.error(e.loc, "division by zero in const context"); return {}; }
-        newVal = ConstValue::mkInt(old.toInt() / r);
+        newVal = ConstValue::mkInt(slot->toInt() / r);
         break;
     }
     case AssignOp::ModAssign: {
-        auto old = getOld();
         int64_t r = rval->toInt();
         if (!r) { diag_.error(e.loc, "modulo by zero in const context"); return {}; }
-        newVal = ConstValue::mkInt(old.toInt() % r);
+        newVal = ConstValue::mkInt(slot->toInt() % r);
         break;
     }
-    case AssignOp::AndAssign:
-        newVal = ConstValue::mkInt(getOld().toInt() & rval->toInt()); break;
-    case AssignOp::OrAssign:
-        newVal = ConstValue::mkInt(getOld().toInt() | rval->toInt()); break;
-    case AssignOp::XorAssign:
-        newVal = ConstValue::mkInt(getOld().toInt() ^ rval->toInt()); break;
-    case AssignOp::ShlAssign:
-        newVal = ConstValue::mkInt(getOld().toInt() << rval->toInt()); break;
-    case AssignOp::ShrAssign:
-        newVal = ConstValue::mkInt(getOld().toInt() >> rval->toInt()); break;
+    case AssignOp::AndAssign: newVal = ConstValue::mkInt(slot->toInt() & rval->toInt()); break;
+    case AssignOp::OrAssign:  newVal = ConstValue::mkInt(slot->toInt() | rval->toInt()); break;
+    case AssignOp::XorAssign: newVal = ConstValue::mkInt(slot->toInt() ^ rval->toInt()); break;
+    case AssignOp::ShlAssign: newVal = ConstValue::mkInt(slot->toInt() << rval->toInt()); break;
+    case AssignOp::ShrAssign: newVal = ConstValue::mkInt(slot->toInt() >> rval->toInt()); break;
     }
 
-    frame.locals[lhsName] = newVal;
+    *slot = newVal;
     return newVal;
+}
+
+// Unwraps a pointer/reference type to its pointee — used by evalMember and
+// resolveLValueSlot so 'p->field' and 'p.field' (p a struct value or a
+// pointer/reference to one) resolve the same field lookup either way.
+static TypePtr unwrapPointeeType(const TypePtr &ty) {
+    if (!ty) return ty;
+    if (ty->kind == TypeKind::Pointer)   return static_cast<const PointerType &>(*ty).base;
+    if (ty->kind == TypeKind::Reference) return static_cast<const ReferenceType &>(*ty).base;
+    return ty;
+}
+
+std::optional<ConstValue> ConstEvalEngine::evalCompoundInit(const CompoundInitExpr &e, Frame &frame) {
+    if (!e.type) {
+        diag_.error(e.loc, "compound initializer has no resolved type in const context");
+        return {};
+    }
+
+    // Slot count and shape come from the resolved type, not from
+    // e.inits.size(), so a partial initializer ('struct S s = {.a = 1};')
+    // still produces a full-shaped value with the untouched fields
+    // zero-valued — same as CodeGen::evalConstInit's approach.
+    ConstValue result;
+    size_t slotCount;
+    if (e.type->kind == TypeKind::Struct) {
+        auto &st = static_cast<const StructType &>(*e.type);
+        result.kind = ConstValue::Struct;
+        result.elems.reserve(st.fields.size());
+        for (auto &f : st.fields) result.elems.push_back(zeroValue(f.type));
+        slotCount = st.fields.size();
+    } else if (e.type->kind == TypeKind::Array) {
+        auto &at = static_cast<const ArrayType &>(*e.type);
+        int64_t n = at.size > 0 ? at.size : (int64_t)e.inits.size();
+        result.kind = ConstValue::Array;
+        result.elems.reserve((size_t)n);
+        for (int64_t i = 0; i < n; ++i) result.elems.push_back(zeroValue(at.element));
+        slotCount = (size_t)n;
+    } else {
+        diag_.error(e.loc,
+            "compound initializer not supported for type '" + e.type->str() +
+            "' in const context");
+        return {};
+    }
+
+    for (size_t i = 0; i < e.inits.size(); ++i) {
+        int64_t slot = e.resolvedSlots.empty() ? (int64_t)i : e.resolvedSlots[i];
+        if (slot < 0 || (size_t)slot >= slotCount) {
+            diag_.error(e.loc, "designated initializer slot out of range");
+            return {};
+        }
+        auto v = evalExprF(*e.inits[i], frame);
+        if (!v) return {};
+        result.elems[(size_t)slot] = *v;
+    }
+    return result;
+}
+
+std::optional<ConstValue> ConstEvalEngine::evalMember(const MemberExpr &e, Frame &frame) {
+    if (!e.base) return {};
+    auto base = evalExprF(*e.base, frame);
+    if (!base) return {};
+    if (base->kind != ConstValue::Struct) {
+        diag_.error(e.loc, "'." + e.field + "' member access on a non-struct compile-time value");
+        return {};
+    }
+    TypePtr baseTy = unwrapPointeeType(e.base->type);
+    if (!baseTy || baseTy->kind != TypeKind::Struct) {
+        diag_.error(e.loc, "member access requires a struct type");
+        return {};
+    }
+    auto &st = static_cast<const StructType &>(*baseTy);
+    std::vector<int> path;
+    const FieldDecl *fd = st.findFieldPath(e.field, path);
+    if (!fd || path.empty()) {
+        diag_.error(e.loc, "unknown field '" + e.field + "' in compile-time struct value");
+        return {};
+    }
+    const ConstValue *cur = &*base;
+    for (int idx : path) {
+        if (idx < 0 || (size_t)idx >= cur->elems.size()) {
+            diag_.error(e.loc, "field index out of range in compile-time struct value");
+            return {};
+        }
+        cur = &cur->elems[(size_t)idx];
+    }
+    return *cur;
+}
+
+std::optional<ConstValue> ConstEvalEngine::evalSubscriptConst(const SubscriptExpr &e, Frame &frame) {
+    if (!e.base || !e.index) return {};
+    auto base = evalExprF(*e.base, frame);
+    if (!base) return {};
+    if (base->kind != ConstValue::Array) {
+        diag_.error(e.loc, "subscript on a non-array compile-time value");
+        return {};
+    }
+    auto idxVal = evalExprF(*e.index, frame);
+    if (!idxVal) return {};
+    int64_t idx = idxVal->toInt();
+    if (idx < 0 || (size_t)idx >= base->elems.size()) {
+        diag_.error(e.loc, "compile-time array index " + std::to_string(idx) + " out of bounds");
+        return {};
+    }
+    return base->elems[(size_t)idx];
+}
+
+ConstValue *ConstEvalEngine::resolveLValueSlot(const Expr &e, Frame &frame) {
+    switch (e.kind) {
+    case ExprKind::Ident: {
+        auto &id = static_cast<const IdentExpr &>(e);
+        auto it = frame.locals.find(id.name);
+        if (it == frame.locals.end()) {
+            diag_.error(e.loc,
+                "'" + id.name + "' is not an assignable compile-time local variable");
+            return nullptr;
+        }
+        return &it->second;
+    }
+    case ExprKind::Member:
+    case ExprKind::Arrow: {
+        auto &me = static_cast<const MemberExpr &>(e);
+        if (!me.base) return nullptr;
+        ConstValue *base = resolveLValueSlot(*me.base, frame);
+        if (!base) return nullptr;
+        if (base->kind != ConstValue::Struct) {
+            diag_.error(e.loc, "'." + me.field + "' member access on a non-struct compile-time value");
+            return nullptr;
+        }
+        TypePtr baseTy = unwrapPointeeType(me.base->type);
+        if (!baseTy || baseTy->kind != TypeKind::Struct) {
+            diag_.error(e.loc, "member access requires a struct type");
+            return nullptr;
+        }
+        auto &st = static_cast<const StructType &>(*baseTy);
+        std::vector<int> path;
+        const FieldDecl *fd = st.findFieldPath(me.field, path);
+        if (!fd || path.empty()) {
+            diag_.error(e.loc, "unknown field '" + me.field + "' in compile-time struct value");
+            return nullptr;
+        }
+        for (int idx : path) {
+            if (idx < 0 || (size_t)idx >= base->elems.size()) {
+                diag_.error(e.loc, "field index out of range in compile-time struct value");
+                return nullptr;
+            }
+            base = &base->elems[(size_t)idx];
+        }
+        return base;
+    }
+    case ExprKind::Subscript: {
+        auto &se = static_cast<const SubscriptExpr &>(e);
+        if (!se.base || !se.index) return nullptr;
+        ConstValue *base = resolveLValueSlot(*se.base, frame);
+        if (!base) return nullptr;
+        if (base->kind != ConstValue::Array) {
+            diag_.error(e.loc, "subscript on a non-array compile-time value");
+            return nullptr;
+        }
+        auto idxVal = evalExprF(*se.index, frame);
+        if (!idxVal) return nullptr;
+        int64_t idx = idxVal->toInt();
+        if (idx < 0 || (size_t)idx >= base->elems.size()) {
+            diag_.error(e.loc, "compile-time array index " + std::to_string(idx) + " out of bounds");
+            return nullptr;
+        }
+        return &base->elems[(size_t)idx];
+    }
+    default:
+        diag_.error(e.loc, "expression is not an assignable compile-time lvalue "
+                            "(only locals and struct/array field or index chains "
+                            "rooted at one can be mutated at compile time)");
+        return nullptr;
+    }
 }
 
 std::optional<ConstValue> ConstEvalEngine::evalCast(const CastExpr &e, Frame &frame) {
@@ -1147,11 +1372,17 @@ bool ConstEvalEngine::evalReturn(const ReturnStmt &s, Frame &frame) {
 }
 
 bool ConstEvalEngine::evalVarDecl(const VarDeclStmt &s, Frame &frame) {
-    ConstValue val = ConstValue::mkVoid();
+    ConstValue val;
     if (s.init) {
         auto v = evalExprF(*s.init, frame);
         if (!v) return false;
         val = *v;
+    } else {
+        // No initializer: zero-construct matching the declared shape (e.g.
+        // 'struct Circle c;' still needs a Struct-kind slot with one entry
+        // per field, not Void) so a later 'c.radius = 2.0;' has something
+        // to mutate into via resolveLValueSlot.
+        val = zeroValue(s.resolvedType ? s.resolvedType : s.declType);
     }
     frame.locals[s.name] = val;
     return true;

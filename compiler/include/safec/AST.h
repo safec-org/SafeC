@@ -51,6 +51,8 @@ enum class ExprKind {
     TaggedUnionInit,// Foo.variant(value)
     GenericSelection, // _Generic(expr, T1: e1, T2: e2, default: e3)
     Match,          // match (expr) { case pat: val, ... } — value-producing
+    FnEval,         // fn_eval(object, func) — resolves object's own method
+                     // matching func's name/signature, vtable-free
 };
 
 enum class UnaryOp {
@@ -253,6 +255,30 @@ struct GenericSelectionExpr : Expr {
     GenericSelectionExpr(ExprPtr c, std::vector<GenericAssoc> a, SourceLocation l)
         : Expr(ExprKind::GenericSelection, l),
           controlling(std::move(c)), associations(std::move(a)) {}
+};
+
+// ── fn_eval(object, func) — vtable-free polymorphism ──────────────────────────
+// Resolves, at compile time, to a plain function-pointer value for whichever
+// method 'object's struct type declares under the same name as 'func' (a
+// direct reference to an already-declared plain function used purely as a
+// name+signature key — never itself called). Inside a 'generic<T>' function,
+// this resolves once per monomorphized instantiation of T, giving static,
+// zero-overhead dispatch without a vtable: the source reads like it's
+// picking a method dynamically, but every call site is a direct function
+// reference by the time CodeGen sees it.
+//
+// 'object' is only ever used for its *type* (like sizeof's operand) — never
+// evaluated or codegen'd — since the result is an unbound function pointer;
+// the receiver must still be passed explicitly by the caller as the
+// resolved function's first argument, exactly as any method already expects
+// (see FunctionDecl::isMethod / the Sema-inserted 'self' at params[0]).
+struct FnEvalExpr : Expr {
+    ExprPtr object;
+    ExprPtr func;
+    // Filled by Sema: the concrete method found on object's struct type.
+    FunctionDecl *matchedMethod = nullptr;
+    FnEvalExpr(ExprPtr obj, ExprPtr f, SourceLocation l)
+        : Expr(ExprKind::FnEval, l), object(std::move(obj)), func(std::move(f)) {}
 };
 
 // ── New (arena allocation) ────────────────────────────────────────────────────

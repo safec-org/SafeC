@@ -101,7 +101,19 @@ std::unique_ptr<llvm::Module> CodeGen::generate(TranslationUnit &tu) {
         if (d->kind == DeclKind::Function) {
             auto &fn = static_cast<FunctionDecl &>(*d);
             if (!fn.genericParams.empty()) continue; // skip uninstantiated templates
-            if (fn.body) {
+            // consteval functions are compile-time-only by construction —
+            // Sema::checkFunctionForConstevalCalls already rejects every
+            // call site that isn't itself a const-eval context (another
+            // const/consteval body, a global initializer, static_assert,
+            // or an array-size expression), and ConstEvalEngine interprets
+            // the AST directly for all of those, never through the LLVM
+            // function this would emit. Skipping the body here means a
+            // consteval function's dead runtime codegen can't crash or
+            // bloat a build for a path that will never execute — 'full
+            // compile-time execution... to reduce overhead' includes not
+            // spending overhead on code that's already guaranteed to have
+            // run entirely at compile time.
+            if (fn.body && !fn.isConsteval) {
                 auto *llvmFn = mod_->getFunction(fn.name);
                 if (llvmFn) genFunctionBody(fn, llvmFn);
             }
@@ -1473,6 +1485,26 @@ llvm::Value *CodeGen::genMatchExpr(MatchExpr &e, FnEnv &env) {
     return phi;
 }
 
+// fn_eval(object, func) — Sema has already resolved e.matchedMethod (the
+// concrete method on object's struct type); 'object'/'func' themselves are
+// never evaluated here (see FnEvalExpr's comment in AST.h — object is only
+// ever used for its type, same as sizeof's operand). This is exactly the
+// existing "bare function name as a value" mechanism (see genIdent's
+// llvm::Function* fast path) applied to a method's already-mangled symbol —
+// no new runtime machinery, no vtable: the method's prototype was already
+// emitted in generate()'s Pass 1 over every top-level function (methods are
+// ordinary top-level FunctionDecls with isMethod/methodOwner set), so this
+// is always just a lookup by then.
+llvm::Value *CodeGen::genFnEval(FnEvalExpr &e) {
+    if (!e.matchedMethod) {
+        diag_.error(e.loc, "codegen: fn_eval did not resolve to a method");
+        return llvm::ConstantPointerNull::get(llvm::PointerType::get(ctx_, 0));
+    }
+    if (auto *fn = mod_->getFunction(e.matchedMethod->name)) return fn;
+    // Defensive fallback — shouldn't happen given Pass 1 always runs first.
+    return genFunctionProto(*e.matchedMethod);
+}
+
 void CodeGen::genVarDecl(VarDeclStmt &s, FnEnv &env) {
     auto typeToUse = s.resolvedType ? s.resolvedType : s.declType;
     // Function pointer types (fn RetType(Params)) must be stored as opaque ptr,
@@ -1600,6 +1632,7 @@ llvm::Value *CodeGen::genExpr(Expr &e, FnEnv &env) {
     case ExprKind::Binary:    return genBinary(static_cast<BinaryExpr &>(e), env);
     case ExprKind::Ternary:   return genTernary(static_cast<TernaryExpr &>(e), env);
     case ExprKind::Match:     return genMatchExpr(static_cast<MatchExpr &>(e), env);
+    case ExprKind::FnEval:    return genFnEval(static_cast<FnEvalExpr &>(e));
     case ExprKind::Call:      return genCall(static_cast<CallExpr &>(e), env);
     case ExprKind::Subscript: return genSubscript(static_cast<SubscriptExpr &>(e), env);
     case ExprKind::Slice:     return genSlice(static_cast<SliceExpr &>(e), env);
@@ -1877,36 +1910,52 @@ llvm::Value *CodeGen::genUnary(UnaryExpr &e, FnEnv &env) {
     }
     case UnaryOp::PreInc: {
         auto *addr = genLValue(*e.operand, env);
-        auto *ty   = static_cast<llvm::AllocaInst *>(addr)->getAllocatedType();
-        auto *val  = builder_.CreateLoad(ty, addr);
-        auto *one  = llvm::ConstantInt::get(ty, 1);
-        auto *inc  = builder_.CreateAdd(val, one, "inc");
+        // e.operand->type (Sema's resolved type), not
+        // 'static_cast<AllocaInst*>(addr)->getAllocatedType()' — addr is
+        // only actually an AllocaInst for a plain local; for 'arr[i]++' or
+        // 's.field++', genLValue returns a GEP into that storage instead,
+        // and static_cast'ing a non-AllocaInst Value* to AllocaInst* to
+        // call an AllocaInst-only accessor is undefined behavior (in
+        // practice: reading whichever type happened to sit at that
+        // reinterpreted field, e.g. the *whole array's* type instead of
+        // one element's — which then fails IR verification when used in
+        // an add).
+        auto *ty = e.operand->type ? lowerType(e.operand->type) : llvm::Type::getInt32Ty(ctx_);
+        auto *val = builder_.CreateLoad(ty, addr);
+        llvm::Value *inc = ty->isFloatingPointTy()
+            ? builder_.CreateFAdd(val, llvm::ConstantFP::get(ty, 1.0), "inc")
+            : builder_.CreateAdd(val, llvm::ConstantInt::get(ty, 1), "inc");
         builder_.CreateStore(inc, addr);
         return inc;
     }
     case UnaryOp::PreDec: {
         auto *addr = genLValue(*e.operand, env);
-        auto *ty   = static_cast<llvm::AllocaInst *>(addr)->getAllocatedType();
-        auto *val  = builder_.CreateLoad(ty, addr);
-        auto *one  = llvm::ConstantInt::get(ty, 1);
-        auto *dec  = builder_.CreateSub(val, one, "dec");
+        auto *ty = e.operand->type ? lowerType(e.operand->type) : llvm::Type::getInt32Ty(ctx_);
+        auto *val = builder_.CreateLoad(ty, addr);
+        llvm::Value *dec = ty->isFloatingPointTy()
+            ? builder_.CreateFSub(val, llvm::ConstantFP::get(ty, 1.0), "dec")
+            : builder_.CreateSub(val, llvm::ConstantInt::get(ty, 1), "dec");
         builder_.CreateStore(dec, addr);
         return dec;
     }
     case UnaryOp::PostInc: {
         auto *addr = genLValue(*e.operand, env);
-        auto *ty   = static_cast<llvm::AllocaInst *>(addr)->getAllocatedType();
-        auto *old  = builder_.CreateLoad(ty, addr, "old");
-        auto *one  = llvm::ConstantInt::get(ty, 1);
-        builder_.CreateStore(builder_.CreateAdd(old, one), addr);
+        auto *ty = e.operand->type ? lowerType(e.operand->type) : llvm::Type::getInt32Ty(ctx_);
+        auto *old = builder_.CreateLoad(ty, addr, "old");
+        llvm::Value *inc = ty->isFloatingPointTy()
+            ? builder_.CreateFAdd(old, llvm::ConstantFP::get(ty, 1.0))
+            : builder_.CreateAdd(old, llvm::ConstantInt::get(ty, 1));
+        builder_.CreateStore(inc, addr);
         return old;
     }
     case UnaryOp::PostDec: {
         auto *addr = genLValue(*e.operand, env);
-        auto *ty   = static_cast<llvm::AllocaInst *>(addr)->getAllocatedType();
-        auto *old  = builder_.CreateLoad(ty, addr, "old");
-        auto *one  = llvm::ConstantInt::get(ty, 1);
-        builder_.CreateStore(builder_.CreateSub(old, one), addr);
+        auto *ty = e.operand->type ? lowerType(e.operand->type) : llvm::Type::getInt32Ty(ctx_);
+        auto *old = builder_.CreateLoad(ty, addr, "old");
+        llvm::Value *dec = ty->isFloatingPointTy()
+            ? builder_.CreateFSub(old, llvm::ConstantFP::get(ty, 1.0))
+            : builder_.CreateSub(old, llvm::ConstantInt::get(ty, 1));
+        builder_.CreateStore(dec, addr);
         return old;
     }
     case UnaryOp::SizeofExpr: {

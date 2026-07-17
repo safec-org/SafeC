@@ -1915,6 +1915,18 @@ ExprPtr Parser::parseMatchExpr() {
     return std::make_unique<MatchExpr>(std::move(subject), std::move(arms), loc);
 }
 
+// fn_eval(object, func) — see FnEvalExpr in AST.h
+ExprPtr Parser::parseFnEvalExpr() {
+    auto loc = cur().loc;
+    consume(); // 'fn_eval'
+    expect(TK::LParen, "expected '(' after 'fn_eval'");
+    auto object = parseAssignExpr();
+    expect(TK::Comma, "expected ',' after fn_eval's object argument");
+    auto func = parseAssignExpr();
+    expect(TK::RParen, "expected ')' closing 'fn_eval'");
+    return std::make_unique<FnEvalExpr>(std::move(object), std::move(func), loc);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // EXPRESSIONS  (standard C precedence, recursive descent)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2330,6 +2342,12 @@ ExprPtr Parser::parsePostfixExpr() {
 ExprPtr Parser::parsePrimaryExpr() {
     auto loc = cur().loc;
     switch (cur().kind) {
+    case TK::KW_fn_eval:
+        // Parsed here (not parseUnaryExpr, unlike 'match'/'_Generic') so
+        // the result flows through parsePostfixExpr's call-chaining loop —
+        // 'fn_eval(obj, shape)(&obj, args...)' calling the result
+        // immediately is the expected usage, not an edge case.
+        return parseFnEvalExpr();
     case TK::IntLit: {
         int64_t v   = cur().intVal;
         bool isLL   = cur().isLongLong;

@@ -210,6 +210,7 @@ private:
     llvm::Value *genAssign(AssignExpr &e, FnEnv &env);
     llvm::Value *genTernary(TernaryExpr &e, FnEnv &env);
     llvm::Value *genMatchExpr(MatchExpr &e, FnEnv &env);
+    llvm::Value *genFnEval(FnEvalExpr &e);
     llvm::Value *genAddrOf(UnaryExpr &e, FnEnv &env);
     llvm::Value *genDeref(UnaryExpr &e, FnEnv &env, bool wantAddr = false);
 

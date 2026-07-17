@@ -72,6 +72,7 @@ enum class TK {
                        // enforced spelling of the only mode that exists)
     KW_c11_generic,   // _Generic(expr, T1: e1, T2: e2, default: e3) — C11 type-generic selection
     KW_trait,         // trait Name { RetType method(Params); ... } — user-definable generic constraint
+    KW_fn_eval,       // fn_eval(object, func) — vtable-free polymorphism
 
     // ── Operators ─────────────────────────────────────────────────────────────
     Plus, Minus, Star, Slash, Percent,
