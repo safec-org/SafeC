@@ -1,5 +1,6 @@
 .DS_Store
 .vscode/
+.safc_cache/
 build/
 compiler/build/
 *.bc

@@ -32,6 +32,33 @@ static std::string unquote(const std::string& s) {
     return s;
 }
 
+// Parse a TOML array value like '["src/main.sc", "src/foo.c"]' into a
+// vector of unquoted strings. tok.value has already been through unquote()
+// in tokenize(), which only strips a single leading/trailing quote pair, so
+// a bracketed array survives here as the literal '[...]' text — split it
+// on commas, tolerating (and stripping) per-element quotes ourselves.
+static std::vector<std::string> splitList(const std::string& value) {
+    std::vector<std::string> out;
+    std::string v = trim(value);
+    if (v.size() >= 2 && v.front() == '[' && v.back() == ']')
+        v = v.substr(1, v.size() - 2);
+    std::string cur;
+    bool inQ = false;
+    for (char c : v) {
+        if (c == '"') { inQ = !inQ; continue; }
+        if (c == ',' && !inQ) {
+            std::string t = trim(cur);
+            if (!t.empty()) out.push_back(t);
+            cur.clear();
+            continue;
+        }
+        cur += c;
+    }
+    std::string t = trim(cur);
+    if (!t.empty()) out.push_back(t);
+    return out;
+}
+
 // ── tokenize ─────────────────────────────────────────────────────────────────
 
 // Returns tokens as {section.key, value} pairs.
@@ -116,6 +143,8 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
         // build.*
         else if (tok.key == "build.edition")  m.build.edition  = tok.value;
         else if (tok.key == "build.output")   m.build.output   = tok.value;
+        else if (tok.key == "build.srcs")     m.build.srcs     = splitList(tok.value);
+        else if (tok.key == "build.cflags")   m.build.cflags   = splitList(tok.value);
 
         // dependencies.*
         else if (tok.key == "dependencies.name")    curDep.name    = tok.value;
@@ -165,6 +194,18 @@ std::string ManifestParser::serialize(const Manifest& m) {
     o << "edition = \"" << m.build.edition << "\"\n";
     if (!m.build.output.empty() && m.build.output != m.package.name)
         o << "output  = \"" << m.build.output << "\"\n";
+    if (!m.build.srcs.empty()) {
+        o << "srcs    = [";
+        for (size_t i = 0; i < m.build.srcs.size(); ++i)
+            o << (i ? ", " : "") << "\"" << m.build.srcs[i] << "\"";
+        o << "]\n";
+    }
+    if (!m.build.cflags.empty()) {
+        o << "cflags  = [";
+        for (size_t i = 0; i < m.build.cflags.size(); ++i)
+            o << (i ? ", " : "") << "\"" << m.build.cflags[i] << "\"";
+        o << "]\n";
+    }
 
     for (auto& d : m.dependencies) {
         o << "\n[[dependencies]]\n";

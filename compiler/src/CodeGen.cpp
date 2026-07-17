@@ -14,6 +14,7 @@
 #include "llvm/TargetParser/Host.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include <cassert>
+#include <cctype>
 
 namespace safec {
 
@@ -1132,8 +1133,60 @@ void CodeGen::emitDefers(FnEnv &env, bool errOnly) {
 }
 
 // ── Inline assembly codegen ──────────────────────────────────────────────────
+// GCC/Clang extended-asm source syntax (which SafeC's own asm{} statement
+// mirrors) references operands as '%N' (or '%<modifier><N>', e.g. '%b0' for
+// an 8-bit sub-register view of operand 0). LLVM IR's inline-asm *template*
+// string uses a different operand-reference syntax entirely: '$N' (or
+// '${N:modifier}') — bare '%' has no special meaning to LLVM's AsmPrinter
+// at all. Real clang performs exactly this translation when lowering a C
+// asm() to LLVM IR; genAsm previously passed s.asmTemplate straight through
+// unmodified, so any asm block referencing an operand (almost every one
+// with an input or output) produced IR whose template LLVM's own
+// AsmPrinter/MC layer had no operand to substitute for — the literal text
+// '%0' reached the target assembler, which naturally didn't understand it.
+static std::string translateAsmTemplate(const std::string &gcc) {
+    std::string out;
+    out.reserve(gcc.size());
+    for (size_t i = 0; i < gcc.size(); ++i) {
+        char c = gcc[i];
+        if (c != '%') { out += c; continue; }
+        if (i + 1 >= gcc.size()) { out += c; continue; }
+        char n = gcc[i + 1];
+        if (n == '%') { out += '%'; ++i; continue; } // GCC '%%' -> literal '%'
+        if (std::isdigit(static_cast<unsigned char>(n))) {
+            size_t j = i + 1;
+            while (j < gcc.size() && std::isdigit(static_cast<unsigned char>(gcc[j]))) ++j;
+            out += '$';
+            out += gcc.substr(i + 1, j - i - 1);
+            i = j - 1;
+            continue;
+        }
+        if (std::isalpha(static_cast<unsigned char>(n)) && i + 2 < gcc.size() &&
+            std::isdigit(static_cast<unsigned char>(gcc[i + 2]))) {
+            size_t j = i + 2;
+            while (j < gcc.size() && std::isdigit(static_cast<unsigned char>(gcc[j]))) ++j;
+            out += "${";
+            out += gcc.substr(i + 2, j - i - 2);
+            out += ':';
+            out += n;
+            out += '}';
+            i = j - 1;
+            continue;
+        }
+        // Bare '%' not followed by a recognized operand form (e.g. a raw
+        // '%eax'-style register name written directly in the template) —
+        // not a GCC operand reference at all; pass through unchanged.
+        out += c;
+    }
+    return out;
+}
+
 void CodeGen::genAsm(AsmStmt &s, FnEnv &env) {
-    // Build constraint string: outputs,inputs,~clobbers
+    // Build constraint string: outputs,inputs,~clobbers — LLVM's InlineAsm
+    // expects output constraints first (they map onto the call's return
+    // type, struct-packed if there's more than one output), then input
+    // constraints (mapping onto the call's argument list, in order), then
+    // clobbers.
     std::string constraints;
     for (size_t i = 0; i < s.outputs.size(); ++i) {
         if (i > 0) constraints += ",";
@@ -1148,27 +1201,50 @@ void CodeGen::genAsm(AsmStmt &s, FnEnv &env) {
         constraints += "~{" + s.clobbers[i] + "}";
     }
 
-    // Collect input values
+    // Output operands (e.g. "=r"(v) in 'asm("mrs %0,x" : "=r"(v))') are NOT
+    // call arguments in GCC/Clang extended-asm semantics — the instruction
+    // *produces* a value that becomes the call's own return value (struct-
+    // packed across all outputs when there's more than one), which the
+    // caller then stores into each output lvalue after the call returns.
+    // Only plain input operands (no '=' / '+' prefix) are passed as actual
+    // call arguments. The previous implementation passed every output's
+    // address as an ordinary argument and always used a void return type,
+    // which mismatched any real "=r"-style constraint (LLVM's asm verifier
+    // rejects the resulting operand-count mismatch) and had never worked.
+    std::vector<llvm::Type *> outTys;
+    for (auto &e : s.outputExprs)
+        outTys.push_back(e && e->type ? lowerType(e->type) : llvm::Type::getInt32Ty(ctx_));
+
     std::vector<llvm::Value *> argVals;
-    for (auto &e : s.outputExprs) {
-        if (e) argVals.push_back(genLValue(*e, env));
-    }
-    for (auto &e : s.inputExprs) {
-        if (e) argVals.push_back(genExpr(*e, env));
-    }
-
-    // Build argument types
     std::vector<llvm::Type *> argTys;
-    for (auto *v : argVals) argTys.push_back(v->getType());
+    for (auto &e : s.inputExprs) {
+        if (!e) continue;
+        auto *v = genExpr(*e, env);
+        argVals.push_back(v);
+        argTys.push_back(v->getType());
+    }
 
-    // Result type: void if no outputs, otherwise the output type
-    llvm::Type *resTy = llvm::Type::getVoidTy(ctx_);
+    llvm::Type *resTy;
+    if (outTys.empty())          resTy = llvm::Type::getVoidTy(ctx_);
+    else if (outTys.size() == 1) resTy = outTys[0];
+    else                          resTy = llvm::StructType::get(ctx_, outTys);
 
     auto *asmFnTy = llvm::FunctionType::get(resTy, argTys, false);
     auto *inlineAsm = llvm::InlineAsm::get(
-        asmFnTy, s.asmTemplate, constraints,
+        asmFnTy, translateAsmTemplate(s.asmTemplate), constraints,
         s.isVolatile || s.outputs.empty());
-    builder_.CreateCall(asmFnTy, inlineAsm, argVals);
+    auto *call = builder_.CreateCall(asmFnTy, inlineAsm, argVals);
+
+    // Store each output register's value back into its lvalue.
+    for (size_t i = 0; i < s.outputExprs.size(); ++i) {
+        auto &e = s.outputExprs[i];
+        if (!e) continue;
+        auto *dst = genLValue(*e, env);
+        llvm::Value *val = (outTys.size() == 1)
+            ? static_cast<llvm::Value *>(call)
+            : builder_.CreateExtractValue(call, (unsigned)i);
+        builder_.CreateStore(val, dst);
+    }
 }
 
 void CodeGen::genMatch(MatchStmt &s, FnEnv &env) {

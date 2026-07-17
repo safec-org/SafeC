@@ -35,6 +35,28 @@ std::string Builder::findSafec() const {
     return "safec";
 }
 
+std::string Builder::findClang(bool cxx) const {
+    const char* envVar = cxx ? "SAFEC_CLANGXX" : "SAFEC_CLANG";
+    if (const char* e = std::getenv(envVar); e && *e) return e;
+
+    const char* name = cxx ? "clang++" : "clang";
+    static const char* kPrefixes[] = {
+        "/opt/homebrew/opt/llvm/bin",  // Homebrew, Apple Silicon
+        "/usr/local/opt/llvm/bin",     // Homebrew, Intel
+    };
+    for (auto* prefix : kPrefixes) {
+        fs::path c = fs::path(prefix) / name;
+        if (fs::exists(c)) return c.string();
+    }
+    return name; // PATH fallback — previous behavior
+}
+
+std::string Builder::findSystemClang(bool cxx) const {
+    const char* envVar = cxx ? "SAFEC_CLANGXX" : "SAFEC_CLANG";
+    if (const char* e = std::getenv(envVar); e && *e) return e;
+    return cxx ? "clang++" : "clang";
+}
+
 std::string Builder::findStdDir() const {
     // 1. $SAFEC_HOME/std
     const char* home = std::getenv("SAFEC_HOME");
@@ -59,6 +81,28 @@ std::vector<std::string> Builder::collectSources(const std::string& srcDir) cons
     for (auto& e : fs::recursive_directory_iterator(srcDir)) {
         if (e.is_regular_file() && e.path().extension() == ".sc")
             srcs.push_back(e.path().string());
+    }
+    std::sort(srcs.begin(), srcs.end());
+    return srcs;
+}
+
+SrcLang Builder::langOf(const std::string& path) {
+    std::string ext = fs::path(path).extension().string();
+    if (ext == ".c")   return SrcLang::C;
+    if (ext == ".cc" || ext == ".cpp" || ext == ".cxx") return SrcLang::Cpp;
+    return SrcLang::SafeC;
+}
+
+std::vector<std::string> Builder::collectAllSources(const std::string& srcDir) const {
+    std::vector<std::string> srcs;
+    if (!fs::exists(srcDir)) return srcs;
+    static const char* kExts[] = { ".sc", ".c", ".cc", ".cpp", ".cxx" };
+    for (auto& e : fs::recursive_directory_iterator(srcDir)) {
+        if (!e.is_regular_file()) continue;
+        std::string ext = e.path().extension().string();
+        for (auto* k : kExts) {
+            if (ext == k) { srcs.push_back(e.path().string()); break; }
+        }
     }
     std::sort(srcs.begin(), srcs.end());
     return srcs;
@@ -141,11 +185,50 @@ std::string Builder::compileSrc(const std::string& safecBin,
 std::string Builder::llToObj(const std::string& llFile,
                                const std::string& buildDir) const {
     fs::path obj = fs::path(buildDir) / (fs::path(llFile).stem().string() + ".o");
-    std::vector<std::string> cmd = { "clang", "-c", llFile, "-o", obj.string() };
+    std::vector<std::string> cmd = { findClang(false), "-c", llFile, "-o", obj.string() };
     if (opts_.release) cmd.push_back("-O2");
     int rc = runCmd(cmd, opts_.verbose);
     if (rc != 0) {
         std::cerr << "safeguard: clang -c failed for " << llFile << "\n";
+        return "";
+    }
+    return obj.string();
+}
+
+// ── compile .c/.cpp → .o directly ────────────────────────────────────────────
+
+std::string Builder::compileForeign(const std::string& srcPath,
+                                     const std::string& buildDir,
+                                     const std::vector<std::string>& includeDirs,
+                                     SrcLang lang) const {
+    // Flatten to a unique object name the same way compileSrc() does for
+    // .sc files, so a C file and a SafeC file with the same basename in
+    // different subdirectories don't clobber each other's .o.
+    fs::path src(srcPath);
+    std::string stem;
+    try {
+        fs::path rel = fs::relative(src, root_);
+        std::string r = rel.string();
+        for (char& c : r)
+            if (c == '/' || c == '\\' || c == '.') c = '_';
+        stem = r;
+    } catch (...) {
+        stem = src.stem().string();
+    }
+    fs::path obj = fs::path(buildDir) / (stem + ".o");
+
+    std::string compiler = findSystemClang(lang == SrcLang::Cpp);
+    std::vector<std::string> cmd = { compiler, "-c", srcPath, "-o", obj.string() };
+    for (auto& inc : includeDirs) {
+        cmd.push_back("-I");
+        cmd.push_back(inc);
+    }
+    if (opts_.release) cmd.push_back("-O2");
+    for (auto& f : manifest_.build.cflags) cmd.push_back(f);
+
+    int rc = runCmd(cmd, opts_.verbose);
+    if (rc != 0) {
+        std::cerr << "safeguard: " << compiler << " -c failed for " << srcPath << "\n";
         return "";
     }
     return obj.string();
@@ -170,8 +253,9 @@ bool Builder::packArchive(const std::vector<std::string>& objFiles,
 
 bool Builder::linkFinal(const std::vector<std::string>& objFiles,
                           const std::vector<std::string>& archives,
-                          const std::string& output) const {
-    std::vector<std::string> cmd = { "clang" };
+                          const std::string& output,
+                          bool useCxxDriver) const {
+    std::vector<std::string> cmd = { findSystemClang(useCxxDriver) };
     if (opts_.release) cmd.push_back("-O2");
     for (auto& o : objFiles) cmd.push_back(o);
     // Archives: pass with -force_load on macOS so unused symbols are kept,
@@ -196,22 +280,64 @@ bool Builder::linkFinal(const std::vector<std::string>& objFiles,
 bool Builder::buildLib(const std::string& srcDir,
                         const std::string& libOut,
                         const std::vector<std::string>& includeDirs,
-                        bool compatPreprocessor) {
+                        bool compatPreprocessor,
+                        bool tolerateArchMismatch,
+                        const std::vector<std::string>& foreignIncludeDirs) {
     std::string safecBin = findSafec();
     std::string buildDir = fs::path(libOut).parent_path().string();
     fs::create_directories(buildDir);
 
-    auto srcs = collectSources(srcDir);
+    auto srcs = collectAllSources(srcDir);
     if (srcs.empty()) return true; // nothing to compile
 
     std::vector<std::string> objs;
     for (auto& src : srcs) {
-        std::string ll = compileSrc(safecBin, src, buildDir, includeDirs, compatPreprocessor);
-        if (ll.empty()) return false;
-        std::string obj = llToObj(ll, buildDir);
-        if (obj.empty()) return false;
-        objs.push_back(obj);
+        SrcLang lang = langOf(src);
+        if (lang == SrcLang::SafeC) {
+            // safec itself can also reject a file purely for being
+            // architecture-inapplicable (e.g. std::simd's ARM-only DSP
+            // builtins raising a Sema/CodeGen error on a non-ARM target,
+            // the same intent as the assembler rejecting riscv.sc's CSR
+            // instructions on non-RISC-V — just enforced earlier in the
+            // pipeline). Both are tolerated identically here: either way,
+            // the practical effect of skipping is the same (the file's
+            // functions simply aren't available for this target; anything
+            // that actually calls them gets a normal, clear "undefined
+            // symbol" at link time instead of a silent wrong answer).
+            std::string ll = compileSrc(safecBin, src, buildDir, includeDirs, compatPreprocessor);
+            if (ll.empty()) {
+                if (tolerateArchMismatch) {
+                    std::cerr << "safeguard: warning: skipping '" << src
+                              << "' — does not compile for the current target\n";
+                    continue;
+                }
+                return false;
+            }
+            std::string obj = llToObj(ll, buildDir);
+            if (obj.empty()) {
+                if (tolerateArchMismatch) {
+                    std::cerr << "safeguard: warning: skipping '" << src
+                              << "' — does not assemble for the current target "
+                                 "(likely architecture-specific inline asm)\n";
+                    continue;
+                }
+                return false;
+            }
+            objs.push_back(obj);
+        } else {
+            std::string obj = compileForeign(src, buildDir, foreignIncludeDirs, lang);
+            if (obj.empty()) {
+                if (tolerateArchMismatch) {
+                    std::cerr << "safeguard: warning: skipping '" << src
+                              << "' — does not compile for the current target\n";
+                    continue;
+                }
+                return false;
+            }
+            objs.push_back(obj);
+        }
     }
+    if (objs.empty()) return true; // everything tolerated/skipped
     return packArchive(objs, libOut);
 }
 
@@ -239,7 +365,9 @@ std::string Builder::ensureStdLib() {
     fs::path stdParent = fs::path(stdDir).parent_path();
     std::vector<std::string> incs = { stdDir, stdParent.string() };
 
-    if (!buildLib(stdDir, libPath.string(), incs, /*compatPreprocessor=*/true)) return "";
+    if (!buildLib(stdDir, libPath.string(), incs, /*compatPreprocessor=*/true,
+                  /*tolerateArchMismatch=*/true))
+        return "";
     return libPath.string();
 }
 
@@ -311,14 +439,20 @@ bool Builder::fetchAndBuildDeps() {
             fs::path depInc = fs::path(destDir) / "include";
             if (fs::exists(depInc)) incs.push_back(depInc.string());
             incs.push_back(depSrc.string());
-            // Also add std dir
+            // Also add std dir (SafeC-side only — see buildLib's
+            // foreignIncludeDirs doc comment for why this must not reach
+            // a real C/C++ compiler's search path).
             std::string stdDir = findStdDir();
             if (!stdDir.empty()) {
                 incs.push_back(stdDir);
                 incs.push_back(fs::path(stdDir).parent_path().string());
             }
+            std::vector<std::string> foreignIncs;
+            if (fs::exists(depInc)) foreignIncs.push_back(depInc.string());
 
-            if (!buildLib(depSrc.string(), libOut.string(), incs)) {
+            if (!buildLib(depSrc.string(), libOut.string(), incs,
+                          /*compatPreprocessor=*/false, /*tolerateArchMismatch=*/false,
+                          foreignIncs)) {
                 std::cerr << "safeguard: failed to build dependency '"
                           << dep.name << "'\n";
                 return false;
@@ -376,37 +510,79 @@ bool Builder::build() {
         if (fs::exists(depSrc)) userIncs.push_back(depSrc.string());
     }
 
-    // 4. Compile user sources
+    // 3b. Separate, narrower include list for genuine .c/.cpp files.
+    // SafeC's own std/ directory must NOT be on a real C/C++ compiler's
+    // search path: std/stdint.h etc. use #define (not typedef) for their
+    // typedefs — fine for SafeC's own preprocessing model, but a real
+    // #include <cstdint>/<vector>/... pulling those macro names in scope
+    // corrupts libc++'s own declarations of the same names (observed: a
+    // plain '#include <vector>' file failed to compile with cryptic
+    // "expected unqualified-id" errors deep inside libc++ headers once
+    // std/stdint.h's '#define uint8_t unsigned char' etc. were in scope).
+    // A project's own include/ and each dependency's include/ are still
+    // fair game — those are meant to be consumed by any language.
+    std::vector<std::string> foreignIncs;
+    fs::path projInc = fs::path(root_) / "include";
+    if (fs::exists(projInc)) foreignIncs.push_back(projInc.string());
+    for (auto& dep : manifest_.dependencies) {
+        std::string destDir = dep.path.empty()
+            ? (fs::path(root_) / "deps" / dep.name).string()
+            : dep.path;
+        fs::path depInc = fs::path(destDir) / "include";
+        if (fs::exists(depInc)) foreignIncs.push_back(depInc.string());
+    }
+
+    // 4. Compile user sources. Mixed SafeC/C/C++ — each file is dispatched
+    // by extension and compiled to its own .o (SafeC via safec --emit-llvm
+    // + clang -c; C/C++ straight to .o via clang/clang++), never merged
+    // into a shared translation unit, so per-file recompilation stays
+    // granular the same way it already was for pure-SafeC projects.
     fs::path srcDir = fs::path(root_) / "src";
     std::vector<std::string> srcs;
     if (!manifest_.build.srcs.empty()) {
-        srcs = manifest_.build.srcs;
+        for (auto& s : manifest_.build.srcs) {
+            fs::path p(s);
+            srcs.push_back(p.is_absolute() ? s : (fs::path(root_) / p).string());
+        }
     } else {
-        srcs = collectSources(srcDir.string());
+        srcs = collectAllSources(srcDir.string());
     }
     if (srcs.empty()) {
-        std::cerr << "safeguard: no .sc source files found under src/\n";
+        std::cerr << "safeguard: no .sc/.c/.cpp source files found under src/\n";
         return false;
     }
 
-    std::vector<std::string> llFiles;
-    for (auto& src : srcs) {
-        std::string ll = compileSrc(safecBin, src, buildDir, userIncs);
-        if (ll.empty()) return false;
-        llFiles.push_back(ll);
-    }
+    bool hasCpp = false;
+    for (auto& src : srcs) if (langOf(src) == SrcLang::Cpp) hasCpp = true;
 
     if (opts_.emitLLVM) {
+        // Only SafeC sources have an LLVM IR stage to stop at; C/C++ files
+        // have no equivalent partial output, so skip them entirely here
+        // rather than compiling straight to .o for a build that won't link.
+        for (auto& src : srcs) {
+            if (langOf(src) != SrcLang::SafeC) continue;
+            if (compileSrc(safecBin, src, buildDir, userIncs).empty()) return false;
+        }
         std::cout << "safeguard: LLVM IR written to " << buildDir << "/\n";
         return true;
     }
 
-    // 5. Compile .ll → .o
+    // 5. Compile each source straight through to a .o (SafeC via .ll; C/C++
+    // directly), collecting object files for the final link.
     std::vector<std::string> objFiles;
-    for (auto& ll : llFiles) {
-        std::string obj = llToObj(ll, buildDir);
-        if (obj.empty()) return false;
-        objFiles.push_back(obj);
+    for (auto& src : srcs) {
+        SrcLang lang = langOf(src);
+        if (lang == SrcLang::SafeC) {
+            std::string ll = compileSrc(safecBin, src, buildDir, userIncs);
+            if (ll.empty()) return false;
+            std::string obj = llToObj(ll, buildDir);
+            if (obj.empty()) return false;
+            objFiles.push_back(obj);
+        } else {
+            std::string obj = compileForeign(src, buildDir, foreignIncs, lang);
+            if (obj.empty()) return false;
+            objFiles.push_back(obj);
+        }
     }
 
     // 6. Collect archive libraries
@@ -418,8 +594,12 @@ bool Builder::build() {
         if (fs::exists(libOut)) archives.push_back(libOut.string());
     }
 
-    // 7. Link final binary
-    if (!linkFinal(objFiles, archives, outputPath())) return false;
+    // 7. Link final binary. clang++ as the driver whenever any C++ source
+    // was compiled in, so the C++ runtime (libc++/libstdc++, exceptions,
+    // RTTI) links in — plain clang can link the resulting object files
+    // (SafeC's LLVM-emitted .o and C/C++'s clang-emitted .o are all just
+    // ordinary object code) but won't pull in libc++ on its own.
+    if (!linkFinal(objFiles, archives, outputPath(), hasCpp)) return false;
 
     // 8. Write / refresh Package.lock after a successful build.
     writeLock(srcs);

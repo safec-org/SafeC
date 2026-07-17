@@ -1650,10 +1650,13 @@ StmtPtr Parser::parseAsmStmt() {
     auto stmt = std::make_unique<AsmStmt>(loc);
     if (match(TK::KW_volatile)) stmt->isVolatile = true;
     expect(TK::LParen, "expected '(' after asm");
-    // Template string
+    // Template string (adjacent string literals concatenate, same as any
+    // other string-literal position — asm templates are routinely split
+    // across lines, one instruction per literal, e.g. "a\n\t" "b\n\t").
     if (cur().is(TK::StringLit)) {
         stmt->asmTemplate = cur().text;
         consume();
+        while (cur().is(TK::StringLit)) { stmt->asmTemplate += cur().text; consume(); }
     } else {
         diag_.error(cur().loc, "expected string literal for asm template");
     }
@@ -2238,7 +2241,12 @@ ExprPtr Parser::parsePrimaryExpr() {
         return std::make_unique<FloatLitExpr>(v, loc);
     }
     case TK::StringLit: {
+        // Adjacent string-literal concatenation (C translation phase 6):
+        // "a" "b" is one literal "ab" — used pervasively for wrapping long
+        // format strings/messages across lines and by macro-generated
+        // strings (e.g. token-pasting a prefix onto a literal).
         std::string s = cur().text; consume();
+        while (cur().is(TK::StringLit)) { s += cur().text; consume(); }
         return std::make_unique<StringLitExpr>(std::move(s), loc);
     }
     case TK::CharLit: {
