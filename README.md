@@ -127,7 +127,6 @@ The boundary is explicit and auditable.
 
 Formal treatment uses syntactic type safety (Wright & Felleisen) with region semantics
 drawn from Oxide (Weiss et al., 2019) and Cyclone (Grossman et al., 2002).
-Lean 4 proof structure is in `proofs/SafeCCore.lean`.
 
 ---
 
@@ -138,7 +137,6 @@ Lean 4 proof structure is in `proofs/SafeCCore.lean`.
 | `compiler/` | SafeC → LLVM IR compiler (C++17, ~10K LOC) |
 | `std/` | Standard library modules (.h declarations + .sc implementations), including `std/simd/` (portable `vec<T,N>`-based SIMD + per-ISA convenience headers) and `std/hal/` (per-architecture bare-metal HAL) |
 | `safeguard/` | Package manager and build system — compiles and links mixed SafeC/C/C++ projects |
-| `proofs/` | Lean 4 formalization of the safety model |
 
 ### Compiler Pipeline
 

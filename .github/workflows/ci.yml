@@ -1,25 +1,25 @@
-name: Release
+name: CI
 
-# Builds the SafeC toolchain (compiler, safeguard, sc-lsp) for macOS, Linux,
-# and Windows, packages each as an installable archive, and — on a version
-# tag push — publishes them as GitHub Release assets. Also runnable by hand
-# (workflow_dispatch) to validate the build matrix without cutting a release.
+# Runs on every push/PR to main — this is the gate release.yml's tag-triggered
+# builds implicitly assume already passed. Without this, nothing actually
+# verifies a commit builds before it gets tagged for release.
 #
-# Each platform job is independent and best-effort documented inline; the
-# Windows job in particular has not yet had a real CI run to shake out
-# environment-specific issues the way the macOS/Linux jobs' build steps
-# have been exercised locally throughout this project's development — see
-# that job's comments for specifics on what's untested.
+# Builds the same three platforms as release.yml (kept as separate,
+# independent workflows rather than a shared reusable workflow, since their
+# needs diverge: this one runs smoke tests and skips packaging, release.yml
+# does the reverse) but goes further — it doesn't just build, it exercises
+# the actual toolchain: compiles the standard library, scaffolds and builds
+# a project with safeguard, runs safeguard's own check/lint/format/test
+# subcommands, and does a wire-protocol smoke test against sc-lsp.
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch: {}
 
 env:
-  # Keep in sync with compiler/CMakeLists.txt's 'find_package(LLVM REQUIRED
-  # CONFIG)' — this just pins *which* LLVM release each job installs.
   LLVM_VERSION: "18"
 
 jobs:
@@ -44,6 +44,7 @@ jobs:
       - name: Build safec compiler
         run: |
           LLVM_DIR="$(brew --prefix llvm@${{ env.LLVM_VERSION }})/lib/cmake/llvm"
+          echo "LLVM_DIR=$LLVM_DIR" >> "$GITHUB_ENV"
           cmake -S SafeC/compiler -B SafeC/compiler/build \
             -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR"
           cmake --build SafeC/compiler/build -j "$(sysctl -n hw.ncpu)"
@@ -59,7 +60,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release -DSAFEC_DIR="$GITHUB_WORKSPACE/SafeC/compiler"
           cmake --build sc-language-server/build -j "$(sysctl -n hw.ncpu)"
 
-      - name: Smoke test before packaging
+      - name: Smoke tests
         run: bash SafeC/.github/scripts/smoke-test.sh
         env:
           SAFEC_BIN: ${{ github.workspace }}/SafeC/compiler/build/safec
@@ -67,24 +68,6 @@ jobs:
           SC_LSP_BIN: ${{ github.workspace }}/sc-language-server/build/sc-lsp
           SAFEC_HOME: ${{ github.workspace }}/SafeC
           CLANG_BIN: clang
-
-      - name: Package
-        run: |
-          set -euo pipefail
-          OUT="safec-macos-arm64"
-          mkdir -p "$OUT/bin" "$OUT/std"
-          cp SafeC/compiler/build/safec "$OUT/bin/"
-          cp SafeC/safeguard/build/safeguard "$OUT/bin/"
-          cp sc-language-server/build/sc-lsp "$OUT/bin/"
-          cp -R SafeC/std/* "$OUT/std/"
-          cp SafeC/README.md "$OUT/"
-          tar czf "${OUT}.tar.gz" "$OUT"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: safec-macos-arm64
-          path: safec-macos-arm64.tar.gz
-          if-no-files-found: error
 
   # ── Linux (x86_64) ────────────────────────────────────────────────────────
   linux:
@@ -126,7 +109,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release -DSAFEC_DIR="$GITHUB_WORKSPACE/SafeC/compiler"
           cmake --build sc-language-server/build -j "$(nproc)"
 
-      - name: Smoke test before packaging
+      - name: Smoke tests
         run: bash SafeC/.github/scripts/smoke-test.sh
         env:
           SAFEC_BIN: ${{ github.workspace }}/SafeC/compiler/build/safec
@@ -135,36 +118,10 @@ jobs:
           SAFEC_HOME: ${{ github.workspace }}/SafeC
           CLANG_BIN: clang-${{ env.LLVM_VERSION }}
 
-      - name: Package
-        run: |
-          set -euo pipefail
-          OUT="safec-linux-x86_64"
-          mkdir -p "$OUT/bin" "$OUT/std"
-          cp SafeC/compiler/build/safec "$OUT/bin/"
-          cp SafeC/safeguard/build/safeguard "$OUT/bin/"
-          cp sc-language-server/build/sc-lsp "$OUT/bin/"
-          cp -R SafeC/std/* "$OUT/std/"
-          cp SafeC/README.md "$OUT/"
-          tar czf "${OUT}.tar.gz" "$OUT"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: safec-linux-x86_64
-          path: safec-linux-x86_64.tar.gz
-          if-no-files-found: error
-
   # ── Windows (x86_64) ──────────────────────────────────────────────────────
-  # UNVERIFIED: written to the best of available knowledge of GitHub's
-  # windows-latest runner image and standard CMake/MSVC practice, but this
-  # job has not had a real run yet — unlike macOS/Linux, whose build
-  # commands mirror steps exercised directly during this project's
-  # development. Two source-level portability fixes were needed before this
-  # job could even be attempted (safeguard's process-spawning code used
-  # POSIX fork()/execvp()/waitpid() directly with no Windows path, and three
-  # files used popen()/pclose() instead of MSVC's _popen()/_pclose()) — both
-  # are now behind '#ifdef _WIN32' in the SafeC/safeguard sources. The first
-  # real run of this job should be treated as the actual test of Windows
-  # support, not this comment.
+  # See release.yml's windows job for the "this is unverified" caveat — same
+  # build steps apply here, and this job is the actual first place that
+  # claim gets tested.
   windows:
     runs-on: windows-latest
     steps:
@@ -208,7 +165,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release -DSAFEC_DIR="$GITHUB_WORKSPACE/SafeC/compiler"
           cmake --build sc-language-server/build
 
-      - name: Smoke test before packaging
+      - name: Smoke tests
         shell: bash
         run: bash SafeC/.github/scripts/smoke-test.sh
         env:
@@ -217,43 +174,3 @@ jobs:
           SC_LSP_BIN: ${{ github.workspace }}/sc-language-server/build/sc-lsp.exe
           SAFEC_HOME: ${{ github.workspace }}/SafeC
           CLANG_BIN: clang
-
-      - name: Package
-        shell: bash
-        run: |
-          set -euo pipefail
-          OUT="safec-windows-x86_64"
-          mkdir -p "$OUT/bin" "$OUT/std"
-          cp SafeC/compiler/build/safec.exe "$OUT/bin/"
-          cp SafeC/safeguard/build/safeguard.exe "$OUT/bin/"
-          cp sc-language-server/build/sc-lsp.exe "$OUT/bin/"
-          cp -R SafeC/std/* "$OUT/std/"
-          cp SafeC/README.md "$OUT/"
-          7z a "${OUT}.zip" "$OUT"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: safec-windows-x86_64
-          path: safec-windows-x86_64.zip
-          if-no-files-found: error
-
-  # ── Publish a GitHub Release (tag pushes only) ───────────────────────────
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [macos, linux, windows]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write   # required for softprops/action-gh-release to create the release
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-
-      - name: Create release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/safec-macos-arm64/safec-macos-arm64.tar.gz
-            dist/safec-linux-x86_64/safec-linux-x86_64.tar.gz
-            dist/safec-windows-x86_64/safec-windows-x86_64.zip
-          generate_release_notes: true
