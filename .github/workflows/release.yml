@@ -166,19 +166,19 @@ jobs:
           if-no-files-found: error
 
   # ── Windows (x86_64) ──────────────────────────────────────────────────────
-  # UNVERIFIED: written to the best of available knowledge of GitHub's
-  # windows-latest runner image and standard CMake/MSVC practice, but this
-  # job has not had a real run yet — unlike macOS/Linux, whose build
-  # commands mirror steps exercised directly during this project's
-  # development. Two source-level portability fixes were needed before this
-  # job could even be attempted (safeguard's process-spawning code used
-  # POSIX fork()/execvp()/waitpid() directly with no Windows path, and three
-  # files used popen()/pclose() instead of MSVC's _popen()/_pclose()) — both
-  # are now behind '#ifdef _WIN32' in the SafeC/safeguard sources. The first
-  # real run of this job should be treated as the actual test of Windows
-  # support, not this comment.
+  # Two source-level portability fixes were needed before this job could
+  # even be attempted (safeguard's process-spawning code used POSIX
+  # fork()/execvp()/waitpid() directly with no Windows path, and three files
+  # used popen()/pclose() instead of MSVC's _popen()/_pclose()) — both are
+  # now behind '#ifdef _WIN32' in the SafeC/safeguard sources. LLVM
+  # acquisition went through several real, CI-verified rounds before
+  # landing on vcpkg (see the "Install LLVM (vcpkg)" step below) — a
+  # Chocolatey-based approach was tried first and failed in several distinct
+  # ways across multiple real CI runs before diagnostics showed it was never
+  # going to work.
   windows:
     runs-on: windows-latest
+    timeout-minutes: 180
     steps:
       - name: Checkout SafeC
         uses: actions/checkout@v4
@@ -194,50 +194,30 @@ jobs:
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Install LLVM
-        # --force with plain 'install': see the matching comment in
-        # ci.yml — 'upgrade' was tried first and left no LLVMConfig.cmake
-        # anywhere findable, because the runner's pre-existing LLVM likely
-        # isn't Chocolatey-managed, so 'upgrade' had nothing recognized to
-        # act on. --force makes Chocolatey perform a fresh, self-managed
-        # install regardless of what unmanaged LLVM the image ships with.
-        run: choco install llvm -y --force --no-progress
-        shell: bash
+      - name: Export GitHub Actions cache vars for vcpkg
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
-      - name: Locate LLVM cmake config
-        # See the matching, more detailed comment in ci.yml — two rounds
-        # of guessing a fixed path both came up empty, so this does an
-        # actual filesystem search plus diagnostics instead of a third
-        # blind guess.
+      - name: Install LLVM (vcpkg)
+        # See the matching, more detailed comment in ci.yml: Chocolatey's
+        # llvm package is a thin wrapper around LLVM.org's official Windows
+        # installer, which never ships LLVMConfig.cmake — confirmed in a
+        # real CI run (C:/Program Files/LLVM populated, but no
+        # LLVMConfig.cmake anywhere under it). vcpkg (preinstalled on
+        # windows-latest at VCPKG_INSTALLATION_ROOT) builds LLVM from source
+        # and produces a real CMake config package, matching the path this
+        # project's own compiler/CMakeLists.txt already documented as the
+        # intended Windows setup. GHA binary caching (x-gha) keeps repeat
+        # runs from re-building LLVM from scratch every time.
         shell: bash
+        env:
+          VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
         run: |
-          set -uo pipefail
-          # Not using 'choco list/info --local-only' here — see the
-          # matching comment in ci.yml, that flag was removed from newer
-          # Chocolatey and broke this exact diagnostic. Not load-bearing
-          # for LLVM_CMAKE_DIR below (the 'find' is), so just use the
-          # stable form and treat failure as non-fatal.
-          echo "── choco's own record of the install ──"
-          choco list llvm 2>&1 || true
-
-          echo "── searching for LLVMConfig.cmake ──"
-          FOUND="$(find "/c/Program Files" "/c/Program Files (x86)" "/c/ProgramData/chocolatey/lib" \
-                        -iname 'LLVMConfig.cmake' 2>/dev/null | head -1)"
-
-          if [[ -n "$FOUND" ]]; then
-              LLVM_CMAKE_DIR="$(dirname "$FOUND")"
-              echo "Found: $FOUND"
-              echo "LLVM_CMAKE_DIR=$LLVM_CMAKE_DIR" >> "$GITHUB_ENV"
-              exit 0
-          fi
-
-          echo "::error::LLVMConfig.cmake not found anywhere under Program Files, Program Files (x86), or the Chocolatey lib directory."
-          echo "── diagnostics: contents of likely install roots ──"
-          echo "-- C:/Program Files --"
-          ls -la "/c/Program Files" 2>&1 || true
-          echo "-- C:/ProgramData/chocolatey/lib/llvm (if present) --"
-          find "/c/ProgramData/chocolatey/lib/llvm" -maxdepth 4 2>&1 || true
-          exit 1
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" install llvm:x64-windows
+          echo "LLVM_CMAKE_DIR=$VCPKG_INSTALLATION_ROOT/installed/x64-windows/share/llvm" >> "$GITHUB_ENV"
 
       - name: Build safec compiler
         shell: bash
