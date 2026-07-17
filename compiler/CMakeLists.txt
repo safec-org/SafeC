@@ -66,27 +66,38 @@ endif()
 if(LLVM_LINK_LLVM_DYLIB)
   target_link_libraries(safec PRIVATE LLVM)
 else()
-  # 'nativecodegen'/'nativedisassembler' (llvm_map_components_to_libnames'
-  # convenience aliases for "whatever the host arch's CodeGen/Disassembler
-  # library is") resolve via LLVM_NATIVE_ARCH, which LLVM.org's official
-  # prebuilt Windows release archive exports empty — the alias then falls
-  # through to a literal, nonexistent 'LLVMnativedisassembler.lib' instead
-  # of the real 'LLVMX86Disassembler.lib'. Requesting the concrete
-  # per-target component name directly sidesteps that substitution
-  # entirely; those names are as stable as LLVM's target directory layout
-  # itself, unlike the alias.
-  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
-    set(SAFEC_LLVM_NATIVE_ARCH X86)
-  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64|ARM64)$")
-    set(SAFEC_LLVM_NATIVE_ARCH AArch64)
-  else()
-    message(FATAL_ERROR "safec: unsupported host architecture '${CMAKE_SYSTEM_PROCESSOR}' — add a case mapping it to its LLVM target component name.")
-  endif()
-
+  # safec is a multi-target cross-compiler, not host-only: main.cpp calls
+  # llvm::InitializeAllTargets()/InitializeAllTargetMCs()/
+  # InitializeAllAsmPrinters()/InitializeAllAsmParsers() so a single binary
+  # can codegen for any ISA this LLVM was built with (--target flag;
+  # std::simd needs genuinely different per-ISA vector codegen, not just
+  # the host's). That requires every target's libraries to be linked, not
+  # just the host's — plain 'nativecodegen'/'nativedisassembler'
+  # (llvm_map_components_to_libnames' aliases for "the host arch's
+  # CodeGen/Disassembler library", resolved via LLVM_NATIVE_ARCH) were
+  # already too narrow for that even before LLVM_NATIVE_ARCH turned out to
+  # come back empty from LLVM.org's official prebuilt Windows archive (that
+  # emptiness turned the alias into a literal, nonexistent
+  # 'LLVMnativedisassembler.lib' instead of even the single host library).
+  # There's no single "all targets" pseudo-component either — 'all-targets'
+  # was tried and hits that exact same empty-substitution failure mode,
+  # producing a bogus 'LLVMall-targets'.
+  #
+  # What actually works, verified locally: LLVM_TARGETS_TO_BUILD is a
+  # plain list CMake variable the LLVM package config exports (e.g.
+  # "AArch64;ARM;X86;...", every target that LLVM build has), and passing
+  # its entries as bare component names expands each into its full
+  # CodeGen/AsmParser/Desc/Disassembler/Info set — exactly what
+  # InitializeAllTargets() et al. need.
+  #
+  # This is only reached on Windows today (LLVM_LINK_LLVM_DYLIB is true on
+  # macOS/Linux, where the monolithic library already contains every target
+  # regardless of what's requested here — this branch was never actually
+  # exercised on those platforms before).
   llvm_map_components_to_libnames(LLVM_COMPONENT_LIBS
     core support irreader bitwriter bitreader passes
-    target ${SAFEC_LLVM_NATIVE_ARCH}CodeGen ${SAFEC_LLVM_NATIVE_ARCH}Disassembler
-    mc mcparser asmprinter
+    target mc mcparser asmprinter
+    ${LLVM_TARGETS_TO_BUILD}
   )
   target_link_libraries(safec PRIVATE ${LLVM_COMPONENT_LIBS})
 endif()
