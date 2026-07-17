@@ -162,22 +162,28 @@ private:
     static SrcLang langOf(const std::string& path);
 
     // Compile one .sc file to a .ll file.  Returns the .ll path, or "".
+    // 'suppressOutput': discard the child compiler's own stdout/stderr
+    // (unless verbose) — see runCmd's comment; only buildLib's
+    // tolerateArchMismatch path sets this.
     std::string compileSrc(const std::string& safecBin,
                             const std::string& srcPath,
                             const std::string& buildDir,
                             const std::vector<std::string>& includeDirs = {},
-                            bool compatPreprocessor = false) const;
+                            bool compatPreprocessor = false,
+                            bool suppressOutput = false) const;
 
     // Compile .ll to .o with clang.  Returns .o path or "".
     std::string llToObj(const std::string& llFile,
-                         const std::string& buildDir) const;
+                         const std::string& buildDir,
+                         bool suppressOutput = false) const;
 
     // Compile a .c/.cpp/.cc/.cxx file straight to a .o with clang/clang++.
     // Returns the .o path, or "" on failure.
     std::string compileForeign(const std::string& srcPath,
                                 const std::string& buildDir,
                                 const std::vector<std::string>& includeDirs,
-                                SrcLang lang) const;
+                                SrcLang lang,
+                                bool suppressOutput = false) const;
 
     // Pack .o files into a static archive with ar.  Returns true on success.
     bool packArchive(const std::vector<std::string>& objFiles,
@@ -193,7 +199,11 @@ private:
                     bool useCxxDriver = false) const;
 
     // Fork + exec a command, wait for it, return exit code.
-    static int runCmd(const std::vector<std::string>& argv, bool verbose);
+    // 'suppressOutput': when true and 'verbose' is false, discard the
+    // child's stdout/stderr instead of letting it print — see the call
+    // site comment in runCmd's definition for why this exists.
+    static int runCmd(const std::vector<std::string>& argv, bool verbose,
+                       bool suppressOutput = false);
 
     // Clone a git repository.  Returns true on success.
     bool gitClone(const std::string& url, const std::string& dest) const;

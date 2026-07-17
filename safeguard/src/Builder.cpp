@@ -9,8 +9,10 @@
 #include <cstdlib>
 #include <cerrno>
 #include <cstring>
+#include <fcntl.h>
 #ifdef _WIN32
 #include <process.h>   // _spawnvp
+#include <io.h>        // _dup, _dup2, _open, _close (stdout/stderr redirection)
 #else
 #include <sys/wait.h>
 #include <unistd.h>
@@ -127,13 +129,23 @@ std::vector<std::string> Builder::collectAllSources(const std::string& srcDir) c
 
 // ── command runner ────────────────────────────────────────────────────────────
 
-int Builder::runCmd(const std::vector<std::string>& argv, bool verbose) {
+int Builder::runCmd(const std::vector<std::string>& argv, bool verbose,
+                     bool suppressOutput) {
     if (argv.empty()) return -1;
     if (verbose) {
         for (size_t i = 0; i < argv.size(); ++i)
             std::cout << (i ? " " : "") << argv[i];
         std::cout << "\n";
     }
+    // Only used by buildLib's tolerateArchMismatch path: a stdlib file that
+    // fails to assemble for the current target (e.g. std/hal/riscv.sc's CSR
+    // asm on a non-RISC-V host) is an *expected*, already-summarized-by-the-
+    // caller outcome ("safeguard: warning: skipping ..."), not a real
+    // failure — letting the child's own multi-line compiler error through
+    // on every one of those (there are several across the stdlib) buried
+    // genuine failures in noise. Verbose mode still shows everything, since
+    // its whole contract is "show me every command and its output."
+    bool quiet = suppressOutput && !verbose;
 #ifdef _WIN32
     // _spawnvp is the MSVC CRT's argv-based process launcher — like
     // execvp, it searches PATH and takes an argv array directly (no shell
@@ -142,33 +154,73 @@ int Builder::runCmd(const std::vector<std::string>& argv, bool verbose) {
     // _P_WAIT blocks until the child exits and yields its exit code
     // directly, playing the same role fork()+waitpid()+WEXITSTATUS() does
     // on POSIX below.
+    int savedOut = -1, savedErr = -1, nullFd = -1;
+    if (quiet) {
+        fflush(stdout); fflush(stderr);
+        savedOut = _dup(1);
+        savedErr = _dup(2);
+        nullFd = _open("NUL", _O_WRONLY);
+        if (nullFd != -1) { _dup2(nullFd, 1); _dup2(nullFd, 2); }
+    }
     std::vector<const char*> args;
     for (auto& s : argv) args.push_back(s.c_str());
     args.push_back(nullptr);
     intptr_t rc = _spawnvp(_P_WAIT, args[0], args.data());
+    int spawnErrno = errno;
+    if (quiet) {
+        fflush(stdout); fflush(stderr);
+        if (savedOut != -1) { _dup2(savedOut, 1); _close(savedOut); }
+        if (savedErr != -1) { _dup2(savedErr, 2); _close(savedErr); }
+        if (nullFd != -1) _close(nullFd);
+    }
     if (rc == -1) {
-        std::cerr << "safeguard: spawn '" << argv[0] << "' failed: "
-                  << strerror(errno) << "\n";
+        if (!quiet) {
+            std::cerr << "safeguard: spawn '" << argv[0] << "' failed: "
+                      << strerror(spawnErrno) << "\n";
+        }
         return -1;
     }
     return (int)rc;
 #else
+    int savedOut = -1, savedErr = -1, nullFd = -1;
+    if (quiet) {
+        fflush(stdout); fflush(stderr);
+        savedOut = dup(1);
+        savedErr = dup(2);
+        nullFd = open("/dev/null", O_WRONLY);
+        if (nullFd != -1) { dup2(nullFd, 1); dup2(nullFd, 2); }
+    }
     pid_t pid = fork();
     if (pid < 0) {
         std::cerr << "safeguard: fork failed: " << strerror(errno) << "\n";
+        if (quiet) {
+            if (savedOut != -1) { dup2(savedOut, 1); close(savedOut); }
+            if (savedErr != -1) { dup2(savedErr, 2); close(savedErr); }
+            if (nullFd != -1) close(nullFd);
+        }
         return -1;
     }
     if (pid == 0) {
+        // Child inherits the redirected (or original) fds from the fork —
+        // no per-child redirect needed here.
         std::vector<char*> args;
         for (auto& s : argv) args.push_back(const_cast<char*>(s.c_str()));
         args.push_back(nullptr);
         execvp(args[0], args.data());
-        std::cerr << "safeguard: exec '" << argv[0] << "' failed: "
-                  << strerror(errno) << "\n";
+        if (!quiet) {
+            std::cerr << "safeguard: exec '" << argv[0] << "' failed: "
+                      << strerror(errno) << "\n";
+        }
         _exit(127);
     }
     int status = 0;
     waitpid(pid, &status, 0);
+    if (quiet) {
+        fflush(stdout); fflush(stderr);
+        if (savedOut != -1) { dup2(savedOut, 1); close(savedOut); }
+        if (savedErr != -1) { dup2(savedErr, 2); close(savedErr); }
+        if (nullFd != -1) close(nullFd);
+    }
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 #endif
 }
@@ -179,7 +231,8 @@ std::string Builder::compileSrc(const std::string& safecBin,
                                   const std::string& srcPath,
                                   const std::string& buildDir,
                                   const std::vector<std::string>& includeDirs,
-                                  bool compatPreprocessor) const {
+                                  bool compatPreprocessor,
+                                  bool suppressOutput) const {
     // Derive a flat output name to avoid collisions across subdirectories
     fs::path src(srcPath);
     // Use relative-path-derived stem: e.g. src/foo/bar.sc → foo_bar.ll
@@ -209,9 +262,10 @@ std::string Builder::compileSrc(const std::string& safecBin,
     if (!opts_.extraFlags.empty())
         cmd.push_back(opts_.extraFlags);
 
-    int rc = runCmd(cmd, opts_.verbose);
+    int rc = runCmd(cmd, opts_.verbose, suppressOutput);
     if (rc != 0) {
-        std::cerr << "safeguard: compilation failed for " << srcPath << "\n";
+        if (!suppressOutput)
+            std::cerr << "safeguard: compilation failed for " << srcPath << "\n";
         return "";
     }
     return llFile.string();
@@ -220,13 +274,15 @@ std::string Builder::compileSrc(const std::string& safecBin,
 // ── compile .ll → .o ─────────────────────────────────────────────────────────
 
 std::string Builder::llToObj(const std::string& llFile,
-                               const std::string& buildDir) const {
+                               const std::string& buildDir,
+                               bool suppressOutput) const {
     fs::path obj = fs::path(buildDir) / (fs::path(llFile).stem().string() + ".o");
     std::vector<std::string> cmd = { findClang(false), "-c", llFile, "-o", obj.string() };
     if (opts_.release) cmd.push_back("-O2");
-    int rc = runCmd(cmd, opts_.verbose);
+    int rc = runCmd(cmd, opts_.verbose, suppressOutput);
     if (rc != 0) {
-        std::cerr << "safeguard: clang -c failed for " << llFile << "\n";
+        if (!suppressOutput)
+            std::cerr << "safeguard: clang -c failed for " << llFile << "\n";
         return "";
     }
     return obj.string();
@@ -237,7 +293,8 @@ std::string Builder::llToObj(const std::string& llFile,
 std::string Builder::compileForeign(const std::string& srcPath,
                                      const std::string& buildDir,
                                      const std::vector<std::string>& includeDirs,
-                                     SrcLang lang) const {
+                                     SrcLang lang,
+                                     bool suppressOutput) const {
     // Flatten to a unique object name the same way compileSrc() does for
     // .sc files, so a C file and a SafeC file with the same basename in
     // different subdirectories don't clobber each other's .o.
@@ -263,9 +320,10 @@ std::string Builder::compileForeign(const std::string& srcPath,
     if (opts_.release) cmd.push_back("-O2");
     for (auto& f : manifest_.build.cflags) cmd.push_back(f);
 
-    int rc = runCmd(cmd, opts_.verbose);
+    int rc = runCmd(cmd, opts_.verbose, suppressOutput);
     if (rc != 0) {
-        std::cerr << "safeguard: " << compiler << " -c failed for " << srcPath << "\n";
+        if (!suppressOutput)
+            std::cerr << "safeguard: " << compiler << " -c failed for " << srcPath << "\n";
         return "";
     }
     return obj.string();
@@ -299,7 +357,14 @@ bool Builder::linkFinal(const std::vector<std::string>& objFiles,
     // or use the portable -Wl,--whole-archive on Linux.
     // For simplicity, just list the .a files directly (works for most cases).
     for (auto& a : archives) cmd.push_back(a);
+#ifndef _WIN32
+    // math functions live in a separate libm on macOS/Linux; on Windows
+    // they're part of the standard CRT that's always linked, and there is
+    // no 'm.lib' for clang's MSVC-style link.exe driver to find — passing
+    // -lm there fails the link with LNK1181 ("cannot open input file
+    // 'm.lib'") instead of being a harmless no-op.
     cmd.push_back("-lm"); // math library for std/math.sc
+#endif
     // Extra link flags from manifest
     for (auto& f : manifest_.build.cflags) cmd.push_back(f);
     cmd.push_back("-o");
@@ -341,7 +406,8 @@ bool Builder::buildLib(const std::string& srcDir,
             // functions simply aren't available for this target; anything
             // that actually calls them gets a normal, clear "undefined
             // symbol" at link time instead of a silent wrong answer).
-            std::string ll = compileSrc(safecBin, src, buildDir, includeDirs, compatPreprocessor);
+            std::string ll = compileSrc(safecBin, src, buildDir, includeDirs, compatPreprocessor,
+                                         /*suppressOutput=*/tolerateArchMismatch);
             if (ll.empty()) {
                 if (tolerateArchMismatch) {
                     std::cerr << "safeguard: warning: skipping '" << src
@@ -350,7 +416,7 @@ bool Builder::buildLib(const std::string& srcDir,
                 }
                 return false;
             }
-            std::string obj = llToObj(ll, buildDir);
+            std::string obj = llToObj(ll, buildDir, /*suppressOutput=*/tolerateArchMismatch);
             if (obj.empty()) {
                 if (tolerateArchMismatch) {
                     std::cerr << "safeguard: warning: skipping '" << src
@@ -362,7 +428,8 @@ bool Builder::buildLib(const std::string& srcDir,
             }
             objs.push_back(obj);
         } else {
-            std::string obj = compileForeign(src, buildDir, foreignIncludeDirs, lang);
+            std::string obj = compileForeign(src, buildDir, foreignIncludeDirs, lang,
+                                              /*suppressOutput=*/tolerateArchMismatch);
             if (obj.empty()) {
                 if (tolerateArchMismatch) {
                     std::cerr << "safeguard: warning: skipping '" << src
