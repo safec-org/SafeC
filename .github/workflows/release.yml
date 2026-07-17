@@ -226,6 +226,30 @@ jobs:
           echo "Found: $FOUND"
           echo "LLVM_CMAKE_DIR=$(dirname "$FOUND")" >> "$GITHUB_ENV"
 
+      - name: Work around LLVM's hardcoded DIA SDK path (llvm/llvm-project#86250)
+        # See the matching, more detailed comment in ci.yml. LLVM.org's
+        # official Windows release archives hardcode an absolute path to
+        # diaguids.lib from whatever VS install built that release into
+        # LLVMExports.cmake — a long-standing, still-unfixed upstream bug
+        # (llvm/llvm-project#86250, #100372, #152268) present through LLVM
+        # 22.x, so no version pin avoids it. Confirmed community workaround:
+        # fabricate that exact fake path and populate it with a copy of
+        # whatever DIA SDK actually exists on this runner's own VS install
+        # (safec never calls into LLVMDebugInfoPDB, so which copy doesn't
+        # matter — it only needs to exist to satisfy the link step).
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC="$(find "/c/Program Files" "/c/Program Files (x86)" -maxdepth 6 -type d -iname 'DIA SDK' 2>/dev/null | head -1)"
+          if [[ -z "$SRC" ]]; then
+            echo "::error::Could not locate this runner's own DIA SDK (searched under Program Files and Program Files (x86)) to work around llvm/llvm-project#86250."
+            exit 1
+          fi
+          DEST="/c/Program Files (x86)/Microsoft Visual Studio/2019/Professional"
+          mkdir -p "$DEST"
+          cp -r "$SRC" "$DEST/DIA SDK"
+          echo "Copied DIA SDK from '$SRC' to '$DEST/DIA SDK'"
+
       - name: Build safec compiler
         shell: bash
         run: |

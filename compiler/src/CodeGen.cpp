@@ -13,6 +13,7 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Host.h"
+#include "llvm/TargetParser/Triple.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include <cassert>
 #include <cctype>
@@ -360,36 +361,121 @@ llvm::Value *CodeGen::genTupleLit(TupleLitExpr &e, FnEnv &env) {
     return builder_.CreateLoad(tupleTy, alloca, "tuple");
 }
 
-llvm::Value *CodeGen::genSpawn(SpawnExpr &e, FnEnv &env) {
-    // Evaluate function reference and argument
-    llvm::Value *fnVal  = genExpr(*e.fnExpr, env);
-    llvm::Value *argVal = genExpr(*e.argExpr, env);
+// See ThreadBackend in CodeGen.h for what each case means. freestanding_
+// always wins (no OS thread API exists to assume there, regardless of
+// --target); otherwise dispatch on the target triple, when one was given
+// (targetMachine_ is only non-null for an explicit '--target' — see the
+// constructor). No explicit target at all keeps meaning "host default",
+// i.e. Pthread, exactly as it always has — this dispatch changes nothing
+// for the common case of compiling for the host with no --target flag.
+CodeGen::ThreadBackend CodeGen::selectThreadBackend() const {
+    if (freestanding_) return ThreadBackend::Hook;
+    if (targetMachine_) {
+        llvm::Triple triple(mod_->getTargetTriple());
+        if (triple.isOSWindows()) return ThreadBackend::Win32;
+        if (triple.isOSLinux() || triple.isMacOSX() || triple.isOSFreeBSD() ||
+            triple.isOSNetBSD() || triple.isOSOpenBSD() || triple.isOSDragonFly() ||
+            triple.isOSSolaris())
+            return ThreadBackend::Pthread;
+        // wasm32-*, riscv64-unknown-elf, spirv64-*, or any other triple with
+        // no recognized OS-level thread API — see the Hook case comment.
+        return ThreadBackend::Hook;
+    }
+    return ThreadBackend::Pthread;
+}
 
+llvm::Value *CodeGen::genThreadCreate(llvm::Value *fnVal, llvm::Value *argVal, FnEnv &env) {
     auto *PtrTy   = llvm::PointerType::get(ctx_, 0);
     auto *Int64Ty = llvm::Type::getInt64Ty(ctx_);
     auto *Int32Ty = llvm::Type::getInt32Ty(ctx_);
 
-    // Allocate a pthread_t (i64) handle on the stack
-    auto *handleAlloca = createEntryAlloca(env, Int64Ty, "thread_handle");
-
-    // pthread_create(pthread_t*, attr*, void*(*)(void*), void*) -> int
-    auto *ptCreateTy = llvm::FunctionType::get(Int32Ty,
-        {PtrTy, PtrTy, PtrTy, PtrTy}, false);
-    auto ptCreateFn = mod_->getOrInsertFunction("pthread_create", ptCreateTy);
-
-    // Convert integer arg to pointer (e.g., 0 -> null ptr)
-    if (argVal->getType()->isIntegerTy()) {
+    // Convert integer arg to pointer (e.g., 0 -> null ptr) — shared by
+    // every backend below, so callers (genSpawn, spawn_scoped) no longer
+    // need their own copy of this normalization.
+    if (argVal->getType()->isIntegerTy())
         argVal = builder_.CreateIntToPtr(argVal, PtrTy, "arg.ptr");
+
+    switch (selectThreadBackend()) {
+    case ThreadBackend::Win32: {
+        // CreateThread(secAttrs, stackSz, startAddr, param, flags, tidOut)
+        // -> HANDLE. Same signature std/thread.sc's own wrapper already
+        // declares and calls (thread.sc:12,44) — kept consistent so both
+        // the language-level 'spawn' and the library-level 'thread_create'
+        // agree on the Win32 ABI.
+        auto *ctTy = llvm::FunctionType::get(PtrTy,
+            {PtrTy, Int64Ty, PtrTy, PtrTy, Int32Ty, PtrTy}, false);
+        auto ctFn = mod_->getOrInsertFunction("CreateThread", ctTy);
+        auto *nullPtr = llvm::ConstantPointerNull::get(PtrTy);
+        auto *handle = builder_.CreateCall(ctTy, ctFn.getCallee(),
+            {nullPtr, llvm::ConstantInt::get(Int64Ty, 0), fnVal, argVal,
+             llvm::ConstantInt::get(Int32Ty, 0), nullPtr}, "win_thread");
+        return builder_.CreatePtrToInt(handle, Int64Ty, "thread_id");
+    }
+    case ThreadBackend::Hook: {
+        // __safec_thread_create(func, arg) -> i64 handle — see the
+        // ThreadBackend::Hook comment in CodeGen.h for who implements this.
+        auto *hookTy = llvm::FunctionType::get(Int64Ty, {PtrTy, PtrTy}, false);
+        auto hookFn  = mod_->getOrInsertFunction("__safec_thread_create", hookTy);
+        return builder_.CreateCall(hookTy, hookFn.getCallee(), {fnVal, argVal}, "thread_id");
+    }
+    case ThreadBackend::Pthread:
+    default: {
+        // pthread_create(pthread_t*, attr*, void*(*)(void*), void*) -> int
+        auto *handleAlloca = createEntryAlloca(env, Int64Ty, "thread_handle");
+        auto *ptCreateTy = llvm::FunctionType::get(Int32Ty,
+            {PtrTy, PtrTy, PtrTy, PtrTy}, false);
+        auto ptCreateFn = mod_->getOrInsertFunction("pthread_create", ptCreateTy);
+        auto *nullPtr = llvm::ConstantPointerNull::get(PtrTy);
+        builder_.CreateCall(ptCreateTy, ptCreateFn.getCallee(),
+            {handleAlloca, nullPtr, fnVal, argVal});
+        return builder_.CreateLoad(Int64Ty, handleAlloca, "thread_id");
+    }
+    }
+}
+
+void CodeGen::genThreadJoin(llvm::Value *handleVal, FnEnv &env) {
+    (void)env;
+    auto *PtrTy   = llvm::PointerType::get(ctx_, 0);
+    auto *Int32Ty = llvm::Type::getInt32Ty(ctx_);
+    auto *Int64Ty = llvm::Type::getInt64Ty(ctx_);
+    if (handleVal->getType() != Int64Ty) {
+        if (handleVal->getType()->isIntegerTy())
+            handleVal = builder_.CreateZExt(handleVal, Int64Ty);
+        else if (handleVal->getType()->isPointerTy())
+            handleVal = builder_.CreatePtrToInt(handleVal, Int64Ty);
     }
 
-    auto *nullPtr = llvm::ConstantPointerNull::get(PtrTy);
+    switch (selectThreadBackend()) {
+    case ThreadBackend::Win32: {
+        // WaitForSingleObject(handle, INFINITE=0xFFFFFFFF)
+        auto *wfsoTy = llvm::FunctionType::get(Int32Ty, {PtrTy, Int32Ty}, false);
+        auto wfsoFn  = mod_->getOrInsertFunction("WaitForSingleObject", wfsoTy);
+        auto *handlePtr = builder_.CreateIntToPtr(handleVal, PtrTy);
+        builder_.CreateCall(wfsoTy, wfsoFn.getCallee(),
+            {handlePtr, llvm::ConstantInt::get(Int32Ty, 0xFFFFFFFFu)});
+        return;
+    }
+    case ThreadBackend::Hook: {
+        auto *hookTy = llvm::FunctionType::get(llvm::Type::getVoidTy(ctx_), {Int64Ty}, false);
+        auto hookFn  = mod_->getOrInsertFunction("__safec_thread_join", hookTy);
+        builder_.CreateCall(hookTy, hookFn.getCallee(), {handleVal});
+        return;
+    }
+    case ThreadBackend::Pthread:
+    default: {
+        auto *ptJoinTy = llvm::FunctionType::get(Int32Ty, {Int64Ty, PtrTy}, false);
+        auto ptJoinFn  = mod_->getOrInsertFunction("pthread_join", ptJoinTy);
+        builder_.CreateCall(ptJoinTy, ptJoinFn.getCallee(),
+            {handleVal, llvm::ConstantPointerNull::get(PtrTy)});
+        return;
+    }
+    }
+}
 
-    // pthread_create(&handle, NULL, fn, arg)
-    builder_.CreateCall(ptCreateTy, ptCreateFn.getCallee(),
-        {handleAlloca, nullPtr, fnVal, argVal});
-
-    // Return handle as i64 (pthread_t)
-    return builder_.CreateLoad(Int64Ty, handleAlloca, "thread_id");
+llvm::Value *CodeGen::genSpawn(SpawnExpr &e, FnEnv &env) {
+    llvm::Value *fnVal  = genExpr(*e.fnExpr, env);
+    llvm::Value *argVal = genExpr(*e.argExpr, env);
+    return genThreadCreate(fnVal, argVal, env);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2476,24 +2562,11 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
                 mod_.get(), llvm::Intrinsic::bswap, {val->getType()});
             return builder_.CreateCall(fn, {val}, "bswap");
         }
-        // Handle __safec_join(handle) — pthread_join
+        // Handle __safec_join(handle) — dispatches per selectThreadBackend()
         if (ident.name == "__safec_join" && !e.args.empty()) {
-            auto *PtrTy   = llvm::PointerType::get(ctx_, 0);
-            auto *Int32Ty = llvm::Type::getInt32Ty(ctx_);
-            auto *Int64Ty = llvm::Type::getInt64Ty(ctx_);
-            auto *ptJoinTy = llvm::FunctionType::get(Int32Ty, {Int64Ty, PtrTy}, false);
-            auto ptJoinFn  = mod_->getOrInsertFunction("pthread_join", ptJoinTy);
             auto *handleVal = genExpr(*e.args[0], env);
-            // Ensure handle is i64
-            if (handleVal->getType() != Int64Ty) {
-                if (handleVal->getType()->isIntegerTy())
-                    handleVal = builder_.CreateZExt(handleVal, Int64Ty);
-                else if (handleVal->getType()->isPointerTy())
-                    handleVal = builder_.CreatePtrToInt(handleVal, Int64Ty);
-            }
-            builder_.CreateCall(ptJoinTy, ptJoinFn.getCallee(),
-                {handleVal, llvm::ConstantPointerNull::get(PtrTy)});
-            return llvm::ConstantInt::get(Int32Ty, 0);
+            genThreadJoin(handleVal, env);
+            return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
         }
         // ── Channel built-ins ───────────────────────────────────────────────
         // Channels are implemented as extern C functions (provided by std/thread.h
@@ -2540,29 +2613,13 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
             return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
         }
         // ── spawn_scoped: same as spawn but emits a deferred join ───────────
+        // (The defer itself is handled by Sema inserting a DeferStmt with
+        // __safec_join — this just needs to produce the same handle spawn
+        // does, via the same backend-dispatching path.)
         if (ident.name == "spawn_scoped" && e.args.size() == 2) {
-            // Reuse the same pthread_create codegen as spawn
-            auto *PtrTy   = llvm::PointerType::get(ctx_, 0);
-            auto *Int32Ty = llvm::Type::getInt32Ty(ctx_);
-            auto *Int64Ty = llvm::Type::getInt64Ty(ctx_);
-            // Create thread handle alloca
-            auto *tidAlloca = builder_.CreateAlloca(Int64Ty, nullptr, "scoped_tid");
-            // Get function pointer and arg
             auto *fnVal  = genExpr(*e.args[0], env);
             auto *argVal = genExpr(*e.args[1], env);
-            // Bitcast arg to void* if needed
-            if (argVal->getType() != PtrTy)
-                argVal = builder_.CreateBitOrPointerCast(argVal, PtrTy);
-            // pthread_create(&tid, null, fn, arg)
-            auto *ptCreateTy = llvm::FunctionType::get(Int32Ty,
-                {PtrTy, PtrTy, PtrTy, PtrTy}, false);
-            auto ptCreateFn = mod_->getOrInsertFunction("pthread_create", ptCreateTy);
-            builder_.CreateCall(ptCreateTy, ptCreateFn.getCallee(),
-                {tidAlloca, llvm::ConstantPointerNull::get(PtrTy), fnVal, argVal});
-            auto *tid = builder_.CreateLoad(Int64Ty, tidAlloca, "scoped_handle");
-            // Register deferred join: store handle for scope-exit join
-            // (The defer is handled by Sema inserting a DeferStmt with __safec_join)
-            return tid;
+            return genThreadCreate(fnVal, argVal, env);
         }
     }
 

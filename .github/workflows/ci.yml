@@ -196,6 +196,35 @@ jobs:
           echo "Found: $FOUND"
           echo "LLVM_CMAKE_DIR=$(dirname "$FOUND")" >> "$GITHUB_ENV"
 
+      - name: Work around LLVM's hardcoded DIA SDK path (llvm/llvm-project#86250)
+        # LLVM.org's official Windows release archives have a long-standing,
+        # still-unfixed bug (llvm/llvm-project#86250, #100372, #152268,
+        # confirmed still present through LLVM 22.x — a different LLVM
+        # version would not avoid this): LLVMExports.cmake hardcodes an
+        # *absolute* path to diaguids.lib from whatever VS install/edition
+        # built that specific release ("C:/Program Files
+        # (x86)/Microsoft Visual Studio/2019/Professional/DIA
+        # SDK/lib/amd64/diaguids.lib"), regardless of what's actually on the
+        # consuming machine — this runner has a different VS edition
+        # entirely. The confirmed community workaround (from that issue
+        # thread) is to fabricate that exact fake path and populate it with
+        # a copy of whatever DIA SDK actually exists on this runner's own
+        # VS install; diaguids.lib only needs to be present to satisfy the
+        # link step; safec never calls into LLVMDebugInfoPDB / the DIA-based
+        # PDB reader, so which copy it is doesn't matter.
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC="$(find "/c/Program Files" "/c/Program Files (x86)" -maxdepth 6 -type d -iname 'DIA SDK' 2>/dev/null | head -1)"
+          if [[ -z "$SRC" ]]; then
+            echo "::error::Could not locate this runner's own DIA SDK (searched under Program Files and Program Files (x86)) to work around llvm/llvm-project#86250."
+            exit 1
+          fi
+          DEST="/c/Program Files (x86)/Microsoft Visual Studio/2019/Professional"
+          mkdir -p "$DEST"
+          cp -r "$SRC" "$DEST/DIA SDK"
+          echo "Copied DIA SDK from '$SRC' to '$DEST/DIA SDK'"
+
       - name: Build safec compiler
         shell: bash
         run: |

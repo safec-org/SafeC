@@ -223,7 +223,28 @@ private:
     // ── Tuple ──────────────────────────────────────────────────────────────────
     llvm::Value *genTupleLit(TupleLitExpr &e, FnEnv &env);
 
-    // ── Spawn ─────────────────────────────────────────────────────────────────
+    // ── Spawn / thread backends ────────────────────────────────────────────────
+    // spawn/join/spawn_scoped no longer hardcode pthread unconditionally —
+    // selectThreadBackend() picks one based on the compile target (see
+    // CodeGen.cpp for the full rationale):
+    //   - Pthread: default hosted POSIX targets (macOS/Linux/BSD), and the
+    //     no-'--target' host-default case — unchanged from before this
+    //     dispatch existed.
+    //   - Win32: an explicit Windows target triple — CreateThread /
+    //     WaitForSingleObject, matching std/thread.sc's own wrapper.
+    //   - Hook: freestanding/bare-metal, or any target with no recognized
+    //     OS thread API (wasm32-*, a vendor's own unrecognized triple,
+    //     etc.) — emits calls to a small documented contract
+    //     (__safec_thread_create/__safec_thread_join) that ANY runtime can
+    //     satisfy without compiler changes: std/sync/bare_spawn.sc
+    //     implements it via the existing cooperative TaskScheduler for
+    //     bare-metal ('SafeC thread' with no OS underneath), and the same
+    //     two symbols are the extension point for a WASM JS/Worker shim or
+    //     a vendor/third-party thread library.
+    enum class ThreadBackend { Pthread, Win32, Hook };
+    ThreadBackend selectThreadBackend() const;
+    llvm::Value *genThreadCreate(llvm::Value *fnVal, llvm::Value *argVal, FnEnv &env);
+    void         genThreadJoin(llvm::Value *handleVal, FnEnv &env);
     llvm::Value *genSpawn(SpawnExpr &e, FnEnv &env);
 
     // Helpers
