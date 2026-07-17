@@ -66,9 +66,26 @@ endif()
 if(LLVM_LINK_LLVM_DYLIB)
   target_link_libraries(safec PRIVATE LLVM)
 else()
+  # 'nativecodegen'/'nativedisassembler' (llvm_map_components_to_libnames'
+  # convenience aliases for "whatever the host arch's CodeGen/Disassembler
+  # library is") resolve via LLVM_NATIVE_ARCH, which LLVM.org's official
+  # prebuilt Windows release archive exports empty — the alias then falls
+  # through to a literal, nonexistent 'LLVMnativedisassembler.lib' instead
+  # of the real 'LLVMX86Disassembler.lib'. Requesting the concrete
+  # per-target component name directly sidesteps that substitution
+  # entirely; those names are as stable as LLVM's target directory layout
+  # itself, unlike the alias.
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
+    set(SAFEC_LLVM_NATIVE_ARCH X86)
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64|ARM64)$")
+    set(SAFEC_LLVM_NATIVE_ARCH AArch64)
+  else()
+    message(FATAL_ERROR "safec: unsupported host architecture '${CMAKE_SYSTEM_PROCESSOR}' — add a case mapping it to its LLVM target component name.")
+  endif()
+
   llvm_map_components_to_libnames(LLVM_COMPONENT_LIBS
     core support irreader bitwriter bitreader passes
-    target nativecodegen nativedisassembler
+    target ${SAFEC_LLVM_NATIVE_ARCH}CodeGen ${SAFEC_LLVM_NATIVE_ARCH}Disassembler
     mc mcparser asmprinter
   )
   target_link_libraries(safec PRIVATE ${LLVM_COMPONENT_LIBS})
