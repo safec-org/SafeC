@@ -92,7 +92,7 @@ int main() {
 | **Bare-Metal Ready** | `--freestanding` mode, `naked`/`interrupt` functions, inline assembly, volatile MMIO, atomic built-ins, ARM Cortex-M HAL (NVIC/SysTick/SCB) and DSP-extension intrinsics. |
 | **Modern Language** | Generics, struct methods, operator overloading, pattern matching, optional types, slices, defer, tuples, typed channels. |
 | **Borrow Checker** | Mutable-XOR-shared aliasing discipline with non-lexical lifetimes (NLL). |
-| **Standard Library** | 20+ modules: mem, io, str, math, collections (vec, map, list, bst, ...), thread, atomic, simd. |
+| **Standard Library** | 30+ modules: mem, io, str, math, collections (vec, map, list, bst, ...), thread, atomic, simd, serialization (JSON/XML/HTML), a cooperative task scheduler + real-time I/O reactor, and more. |
 | **Package Manager** | `safeguard` — project scaffolding, dependency resolution, build orchestration, mixed SafeC/C/C++ compilation and linking, plus `format` (reindenter), `lint` (static analysis), `check` (fast compile-only), and `test` (build + run `tests/`). |
 | **LSP Support** | Language server sharing the compiler's own frontend (always in sync with the language); diagnostics, hover, completion, go-to-definition; VS Code extension (`.sc` and `.h`), Neovim, Emacs. |
 
@@ -119,7 +119,7 @@ SafeC enforces seven safety properties entirely at compile time:
 | **Aliasing discipline** | One mutable XOR many shared references (borrow checker with NLL) |
 | **Region escape** | References cannot outlive their region; inter-procedural analysis at call sites |
 | **Data race freedom** | `spawn` rejects mutable non-static refs; channels for message passing |
-| **Null safety** | References are non-null by default; `?T` optionals require explicit unwrap |
+| **Null safety** | References are non-null by default. Pointers, nullable references (`?&region T`), and `?T` optionals cannot be dereferenced, member-accessed, or force-unwrapped directly — only `is_null()`/`is_none()`, `.default(fallback)`, `match`, or an explicit `unsafe {}` block can read one |
 | **Determinism** | No hidden allocator, no GC, no implicit nondeterminism in the safe fragment |
 
 Inside `unsafe {}`, all properties become the programmer's responsibility.
@@ -278,15 +278,28 @@ match (status) {
 }
 ```
 
-### Optional Types and `try`
+### Optional Types, Nullable References, and `try`
+
+A plain `T` implicitly wraps to `?T` ("present"); `null` is the empty case for both `?T` and `?&region T`. Reading one back requires `is_null()`/`is_none()`, `.default(fallback)`, `match`, or `unsafe {}` — direct dereference/member-access/`!` force-unwrap outside those is a compile error.
 
 ```c
 ?int find(int *arr, int n, int target) {
-    for (int i = 0; i < n; i++)
-        if (arr[i] == target) return arr[i];
-    return (int)0;  // None
+    int i = 0;
+    while (i < n) {
+        int v; unsafe { v = arr[i]; }
+        if (v == target) return v;   // implicit T -> ?T wrap
+        i = i + 1;
+    }
+    return null;                     // the empty case
 }
-int val = try find(arr, n, 42);  // propagates None on failure
+
+int val = try find(arr, n, 42);      // propagates the empty case to the caller
+int safe = find(arr, n, 42).default(-1);
+
+match (find(arr, n, 42)) {
+    case none:    printf("not found\n");
+    case some(v): printf("found %d\n", v);
+}
 ```
 
 ### Defer
