@@ -67,14 +67,14 @@ static unsigned long fat_cluster_to_lba_(struct FatCtx* ctx, unsigned long clust
     }
 }
 
-int FatCtx::read_cluster(unsigned long cluster, unsigned char* buf) {
+inline int FatCtx::read_cluster(unsigned long cluster, unsigned char* buf) {
     unsigned long lba;
     unsafe { lba = fat_cluster_to_lba_((struct FatCtx*)self, cluster); }
     return self.dev.read(lba, (&stack unsigned char)buf,
                          (unsigned long)self.bpb.sectors_per_cluster);
 }
 
-unsigned long FatCtx::follow_fat(unsigned long start_cluster, unsigned long idx) {
+inline unsigned long FatCtx::follow_fat(unsigned long start_cluster, unsigned long idx) {
     unsigned long cluster = start_cluster;
     unsigned long i = (unsigned long)0;
     unsigned char fat_sect[512];
@@ -328,7 +328,7 @@ static int fat_vfs_readdir_(void* ctx, unsigned long inode, void* cb, void* user
     return count;
 }
 
-struct VfsOps fat_ops() {
+inline struct VfsOps fat_ops() {
     struct VfsOps ops;
     unsafe {
         memset((void*)&ops, 0, sizeof(struct VfsOps));

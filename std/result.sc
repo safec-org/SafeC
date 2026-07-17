@@ -10,15 +10,15 @@ extern void* memcpy(void* dst, const void* src, unsigned long n);
 
 // ── Result methods ────────────────────────────────────────────────────────────
 
-int Result::ok() const {
+inline int Result::ok() const {
     return self.is_ok;
 }
 
-int Result::err() const {
+inline int Result::err() const {
     return self.is_ok == 0 ? 1 : 0;
 }
 
-void Result::free() {
+inline void Result::free() {
     if (self.data != (void*)0) {
         unsafe { free(self.data); }
         self.data = (void*)0;
@@ -53,7 +53,7 @@ struct Result result_err(T err) {
     return r;
 }
 
-struct Result result_none() {
+inline struct Result result_none() {
     struct Result r;
     r.data  = (void*)0;
     r.is_ok = 0;
@@ -62,12 +62,12 @@ struct Result result_none() {
 
 // ── Accessors ─────────────────────────────────────────────────────────────────
 
-void* result_get_ok(&stack Result r) {
+inline void* result_get_ok(&stack Result r) {
     if (r.is_ok == 0) { return (void*)0; }
     return r.data;
 }
 
-void* result_get_err(&stack Result r) {
+inline void* result_get_err(&stack Result r) {
     if (r.is_ok != 0) { return (void*)0; }
     return r.data;
 }

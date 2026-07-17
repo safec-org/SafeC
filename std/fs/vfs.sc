@@ -12,14 +12,14 @@ extern void* strncpy(char* d, const char* s, unsigned long n);
 
 struct Vfs vfs_root;
 
-void vfs_init() {
+inline void vfs_init() {
     unsafe { memset((void*)&vfs_root, 0, sizeof(struct Vfs)); }
     vfs_root.mount_count = 0;
 }
 
 // ── VfsNode forwarding methods ────────────────────────────────────────────────
 
-unsigned long VfsNode::read(unsigned long offset, &stack unsigned char buf, unsigned long len) {
+inline unsigned long VfsNode::read(unsigned long offset, &stack unsigned char buf, unsigned long len) {
     if (self.fs_ctx == (void*)0) { return (unsigned long)0; }
     struct VfsMount* m = (struct VfsMount*)self.fs_ctx;
     unsafe {
@@ -29,7 +29,7 @@ unsigned long VfsNode::read(unsigned long offset, &stack unsigned char buf, unsi
     return (unsigned long)0;
 }
 
-unsigned long VfsNode::write(unsigned long offset, const &stack unsigned char buf, unsigned long len) {
+inline unsigned long VfsNode::write(unsigned long offset, const &stack unsigned char buf, unsigned long len) {
     if (self.fs_ctx == (void*)0) { return (unsigned long)0; }
     struct VfsMount* m = (struct VfsMount*)self.fs_ctx;
     unsafe {
@@ -39,7 +39,7 @@ unsigned long VfsNode::write(unsigned long offset, const &stack unsigned char bu
     return (unsigned long)0;
 }
 
-int VfsNode::readdir(void* cb, void* user) {
+inline int VfsNode::readdir(void* cb, void* user) {
     if (self.fs_ctx == (void*)0) { return -1; }
     struct VfsMount* m = (struct VfsMount*)self.fs_ctx;
     unsafe {
@@ -118,7 +118,7 @@ int Vfs::mount(const char* mountpoint, struct VfsOps ops, void* ctx) {
     return -1;
 }
 
-int Vfs::unmount(const char* mountpoint) {
+inline int Vfs::unmount(const char* mountpoint) {
     int i = 0;
     while (i < VFS_MAX_MOUNTS) {
         if (self.mounts[i].active != 0) {
@@ -138,7 +138,7 @@ int Vfs::unmount(const char* mountpoint) {
     return -1;
 }
 
-int Vfs::open(const char* path, int flags, &stack VfsNode node_out) {
+inline int Vfs::open(const char* path, int flags, &stack VfsNode node_out) {
     struct VfsMount* m;
     unsafe { m = vfs_find_mount_((struct Vfs*)self, path); }
     if (m == (struct VfsMount*)0) { return -1; }
@@ -154,7 +154,7 @@ int Vfs::open(const char* path, int flags, &stack VfsNode node_out) {
     return rc;
 }
 
-int Vfs::unlink(const char* path) {
+inline int Vfs::unlink(const char* path) {
     struct VfsMount* m;
     unsafe { m = vfs_find_mount_((struct Vfs*)self, path); }
     if (m == (struct VfsMount*)0) { return -1; }
@@ -166,7 +166,7 @@ int Vfs::unlink(const char* path) {
     return -1;
 }
 
-int Vfs::mkdir(const char* path) {
+inline int Vfs::mkdir(const char* path) {
     struct VfsMount* m;
     unsafe { m = vfs_find_mount_((struct Vfs*)self, path); }
     if (m == (struct VfsMount*)0) { return -1; }

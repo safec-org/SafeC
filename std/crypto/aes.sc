@@ -278,11 +278,11 @@ void AesCtx::decrypt_block(&stack unsigned char block) {
     }
 }
 
-void AesCtx::set_iv(const &stack unsigned char iv) {
+inline void AesCtx::set_iv(const &stack unsigned char iv) {
     unsafe { memcpy((void*)self.iv, (const void*)iv, (unsigned long)AES_BLOCK_SIZE); }
 }
 
-void AesCtx::cbc_encrypt(&stack unsigned char data, unsigned long len) {
+inline void AesCtx::cbc_encrypt(&stack unsigned char data, unsigned long len) {
     unsigned long blocks = len / (unsigned long)AES_BLOCK_SIZE;
     unsigned long b = (unsigned long)0;
     while (b < blocks) {
@@ -300,7 +300,7 @@ void AesCtx::cbc_encrypt(&stack unsigned char data, unsigned long len) {
     }
 }
 
-void AesCtx::cbc_decrypt(&stack unsigned char data, unsigned long len) {
+inline void AesCtx::cbc_decrypt(&stack unsigned char data, unsigned long len) {
     unsigned long blocks = len / (unsigned long)AES_BLOCK_SIZE;
     unsigned long b = (unsigned long)0;
     while (b < blocks) {
@@ -322,7 +322,7 @@ void AesCtx::cbc_decrypt(&stack unsigned char data, unsigned long len) {
 
 // ── Constructors ──────────────────────────────────────────────────────────────
 
-struct AesCtx aes128_init(const &stack unsigned char key) {
+inline struct AesCtx aes128_init(const &stack unsigned char key) {
     struct AesCtx ctx;
     ctx.rounds = AES128_ROUNDS;
     unsafe { expand_key_((const unsigned char*)key, 4, AES128_ROUNDS, ctx.ks); }
@@ -330,7 +330,7 @@ struct AesCtx aes128_init(const &stack unsigned char key) {
     return ctx;
 }
 
-struct AesCtx aes256_init(const &stack unsigned char key) {
+inline struct AesCtx aes256_init(const &stack unsigned char key) {
     struct AesCtx ctx;
     ctx.rounds = AES256_ROUNDS;
     unsafe { expand_key_((const unsigned char*)key, 8, AES256_ROUNDS, ctx.ks); }

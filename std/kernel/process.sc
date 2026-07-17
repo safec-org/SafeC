@@ -4,7 +4,7 @@
 
 namespace std {
 
-struct PCB pcb_init(int pid, unsigned long entry, unsigned long sp, unsigned long page_table) {
+inline struct PCB pcb_init(int pid, unsigned long entry, unsigned long sp, unsigned long page_table) {
     struct PCB p;
     p.pid        = pid;
     p.state      = 0; // PROC_READY
@@ -17,20 +17,20 @@ struct PCB pcb_init(int pid, unsigned long entry, unsigned long sp, unsigned lon
     return p;
 }
 
-void PCB::set_state(int state) {
+inline void PCB::set_state(int state) {
     self.state = state;
 }
 
-void PCB::set_priority(int priority) {
+inline void PCB::set_priority(int priority) {
     self.priority = priority;
 }
 
-void PCB::save_context(unsigned long sp, unsigned long pc) {
+inline void PCB::save_context(unsigned long sp, unsigned long pc) {
     self.stack_ptr = sp;
     self.pc        = pc;
 }
 
-void PCB::exit(int exit_code) {
+inline void PCB::exit(int exit_code) {
     self.state     = 3; // PROC_ZOMBIE
     self.exit_code = exit_code;
 }

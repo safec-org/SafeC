@@ -85,7 +85,7 @@ inline void mem_prefetch(const void* addr, int write, int locality) {
     }
 }
 
-void mem_zero_secure(void* ptr, unsigned long n) {
+inline void mem_zero_secure(void* ptr, unsigned long n) {
     // Volatile write-through to prevent compiler elimination.
     unsafe {
         volatile unsigned char* p = (volatile unsigned char*)ptr;

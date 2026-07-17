@@ -576,12 +576,12 @@ int x509_parse_der(const unsigned char* der, unsigned long len,
 
 // ── X509Cert methods ──────────────────────────────────────────────────────────
 
-int X509Cert::is_valid_at(unsigned long long ts) const {
+inline int X509Cert::is_valid_at(unsigned long long ts) const {
     return (ts >= self.validity.not_before && ts <= self.validity.not_after)
            ? 1 : 0;
 }
 
-int X509Cert::is_ca_cert() const {
+inline int X509Cert::is_ca_cert() const {
     return self.is_ca;
 }
 

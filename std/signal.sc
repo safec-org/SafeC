@@ -9,15 +9,15 @@ extern int   kill(int pid, int sig);
 extern int   pause();
 
 // SIG_DFL = 0, SIG_IGN = 1 on POSIX
-void* signal_handle(int sig, void* handler) {
+inline void* signal_handle(int sig, void* handler) {
     unsafe { return signal(sig, handler); }
 }
 
-void signal_default(int sig) {
+inline void signal_default(int sig) {
     unsafe { signal(sig, (void*)0); }
 }
 
-void signal_ignore(int sig) {
+inline void signal_ignore(int sig) {
     unsafe { signal(sig, (void*)1); }
 }
 

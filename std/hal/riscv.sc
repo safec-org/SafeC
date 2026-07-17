@@ -6,70 +6,70 @@
 
 namespace std {
 
-unsigned long rv_csr_read_mstatus() {
+inline unsigned long rv_csr_read_mstatus() {
     unsigned long v = (unsigned long)0;
     unsafe { asm volatile ("csrr %0, mstatus" : "=r"(v)); }
     return v;
 }
-void rv_csr_write_mstatus(unsigned long val) {
+inline void rv_csr_write_mstatus(unsigned long val) {
     unsafe { asm volatile ("csrw mstatus, %0" : : "r"(val)); }
 }
-unsigned long rv_csr_read_mie() {
+inline unsigned long rv_csr_read_mie() {
     unsigned long v = (unsigned long)0;
     unsafe { asm volatile ("csrr %0, mie" : "=r"(v)); }
     return v;
 }
-void rv_csr_write_mie(unsigned long val) {
+inline void rv_csr_write_mie(unsigned long val) {
     unsafe { asm volatile ("csrw mie, %0" : : "r"(val)); }
 }
-unsigned long rv_csr_read_mip() {
+inline unsigned long rv_csr_read_mip() {
     unsigned long v = (unsigned long)0;
     unsafe { asm volatile ("csrr %0, mip" : "=r"(v)); }
     return v;
 }
-unsigned long rv_csr_read_mcause() {
+inline unsigned long rv_csr_read_mcause() {
     unsigned long v = (unsigned long)0;
     unsafe { asm volatile ("csrr %0, mcause" : "=r"(v)); }
     return v;
 }
-unsigned long rv_csr_read_mepc() {
+inline unsigned long rv_csr_read_mepc() {
     unsigned long v = (unsigned long)0;
     unsafe { asm volatile ("csrr %0, mepc" : "=r"(v)); }
     return v;
 }
-void rv_csr_write_mepc(unsigned long val) {
+inline void rv_csr_write_mepc(unsigned long val) {
     unsafe { asm volatile ("csrw mepc, %0" : : "r"(val)); }
 }
-unsigned long rv_csr_read_mtvec() {
+inline unsigned long rv_csr_read_mtvec() {
     unsigned long v = (unsigned long)0;
     unsafe { asm volatile ("csrr %0, mtvec" : "=r"(v)); }
     return v;
 }
-void rv_csr_write_mtvec(unsigned long val) {
+inline void rv_csr_write_mtvec(unsigned long val) {
     unsafe { asm volatile ("csrw mtvec, %0" : : "r"(val)); }
 }
-unsigned long rv_csr_read_time() {
+inline unsigned long rv_csr_read_time() {
     unsigned long v = (unsigned long)0;
     unsafe { asm volatile ("csrr %0, time" : "=r"(v)); }
     return v;
 }
-unsigned long rv_csr_read_cycle() {
+inline unsigned long rv_csr_read_cycle() {
     unsigned long v = (unsigned long)0;
     unsafe { asm volatile ("csrr %0, cycle" : "=r"(v)); }
     return v;
 }
-unsigned long rv_csr_read_instret() {
+inline unsigned long rv_csr_read_instret() {
     unsigned long v = (unsigned long)0;
     unsafe { asm volatile ("csrr %0, instret" : "=r"(v)); }
     return v;
 }
 
-void rv_global_irq_enable() {
+inline void rv_global_irq_enable() {
     // Set MIE bit (bit 3) in mstatus.
     unsafe { asm volatile ("csrsi mstatus, 0x8"); }
 }
 
-void rv_global_irq_disable() {
+inline void rv_global_irq_disable() {
     unsafe { asm volatile ("csrci mstatus, 0x8"); }
 }
 
@@ -78,25 +78,25 @@ void rv_global_irq_disable() {
 
 struct Clint clint;
 
-void clint_init(unsigned long base_addr) {
+inline void clint_init(unsigned long base_addr) {
     clint.base = base_addr;
 }
 
-void Clint::set_msip(unsigned int hart_id) {
+inline void Clint::set_msip(unsigned int hart_id) {
     unsafe {
         volatile unsigned int* p = (volatile unsigned int*)(self.base + (unsigned long)hart_id * (unsigned long)4);
         *p = (unsigned int)1;
     }
 }
 
-void Clint::clear_msip(unsigned int hart_id) {
+inline void Clint::clear_msip(unsigned int hart_id) {
     unsafe {
         volatile unsigned int* p = (volatile unsigned int*)(self.base + (unsigned long)hart_id * (unsigned long)4);
         *p = (unsigned int)0;
     }
 }
 
-void Clint::set_mtimecmp(unsigned long long cmp) {
+inline void Clint::set_mtimecmp(unsigned long long cmp) {
     // Split into lo/hi to avoid non-atomic 64-bit write on 32-bit cores.
     unsafe {
         volatile unsigned int* lo = (volatile unsigned int*)(self.base + (unsigned long)0x4000);
@@ -107,7 +107,7 @@ void Clint::set_mtimecmp(unsigned long long cmp) {
     }
 }
 
-unsigned long long Clint::read_mtime() const {
+inline unsigned long long Clint::read_mtime() const {
     unsafe {
         volatile unsigned int* lo = (volatile unsigned int*)(self.base + (unsigned long)0xBFF8);
         volatile unsigned int* hi = (volatile unsigned int*)(self.base + (unsigned long)0xBFFC);
@@ -123,7 +123,7 @@ unsigned long long Clint::read_mtime() const {
     return (unsigned long long)0;
 }
 
-void Clint::schedule(unsigned long delta) {
+inline void Clint::schedule(unsigned long delta) {
     unsigned long long now = self.read_mtime();
     self.set_mtimecmp(now + (unsigned long long)delta);
 }
@@ -136,18 +136,18 @@ void Clint::schedule(unsigned long delta) {
 
 struct Plic plic;
 
-void plic_init(unsigned long base_addr) {
+inline void plic_init(unsigned long base_addr) {
     plic.base = base_addr;
 }
 
-void Plic::set_priority(unsigned int irq, unsigned int priority) {
+inline void Plic::set_priority(unsigned int irq, unsigned int priority) {
     unsafe {
         volatile unsigned int* p = (volatile unsigned int*)(self.base + (unsigned long)irq * (unsigned long)4);
         *p = priority & (unsigned int)7;
     }
 }
 
-void Plic::enable(unsigned int irq) {
+inline void Plic::enable(unsigned int irq) {
     unsafe {
         unsigned long reg = self.base + (unsigned long)0x2000 + (unsigned long)(irq / (unsigned int)32) * (unsigned long)4;
         volatile unsigned int* p = (volatile unsigned int*)reg;
@@ -155,7 +155,7 @@ void Plic::enable(unsigned int irq) {
     }
 }
 
-void Plic::disable(unsigned int irq) {
+inline void Plic::disable(unsigned int irq) {
     unsafe {
         unsigned long reg = self.base + (unsigned long)0x2000 + (unsigned long)(irq / (unsigned int)32) * (unsigned long)4;
         volatile unsigned int* p = (volatile unsigned int*)reg;
@@ -163,14 +163,14 @@ void Plic::disable(unsigned int irq) {
     }
 }
 
-void Plic::set_threshold(unsigned int threshold) {
+inline void Plic::set_threshold(unsigned int threshold) {
     unsafe {
         volatile unsigned int* p = (volatile unsigned int*)(self.base + (unsigned long)0x200000);
         *p = threshold;
     }
 }
 
-unsigned int Plic::claim() {
+inline unsigned int Plic::claim() {
     unsafe {
         volatile unsigned int* p = (volatile unsigned int*)(self.base + (unsigned long)0x200004);
         return *p;
@@ -178,7 +178,7 @@ unsigned int Plic::claim() {
     return (unsigned int)0;
 }
 
-void Plic::complete(unsigned int irq) {
+inline void Plic::complete(unsigned int irq) {
     unsafe {
         volatile unsigned int* p = (volatile unsigned int*)(self.base + (unsigned long)0x200004);
         *p = irq;

@@ -189,7 +189,7 @@ int DhcpClient::parse_reply(&stack PacketBuf pkt, unsigned long udp_payload_offs
     return msg_type;
 }
 
-int DhcpClient::is_bound() const {
+inline int DhcpClient::is_bound() const {
     if (self.state == DHCP_STATE_BOUND) { return 1; }
     return 0;
 }

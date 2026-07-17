@@ -11,7 +11,7 @@
 
 namespace std {
 
-void debug_break() {
+inline void debug_break() {
 #if defined(__aarch64__) || defined(__arm64__)
     // AArch64 — BRK #0
     unsafe { asm volatile ("brk #0"); }
@@ -137,7 +137,7 @@ static void itm_reg_write_(unsigned long addr, unsigned int val) {
 }
 
 // Enable ITM stimulus port `port` (0-31).
-void itm_enable_port(unsigned char port) {
+inline void itm_enable_port(unsigned char port) {
     unsigned int mask = (unsigned int)1 << ((unsigned int)port & (unsigned int)31);
     unsigned int ter  = itm_reg_read_((unsigned long)ITM_TER_ADDR);
     itm_reg_write_((unsigned long)ITM_TER_ADDR, ter | mask);
@@ -169,7 +169,7 @@ void itm_putc(unsigned char port, unsigned char c) {
 }
 
 // Write a 32-bit word to ITM stimulus port `port`.
-void itm_put32(unsigned char port, unsigned int word) {
+inline void itm_put32(unsigned char port, unsigned int word) {
     if ((itm_reg_read_((unsigned long)ITM_TCR_ADDR) & (unsigned int)1) == (unsigned int)0) {
         return;
     }

@@ -4,7 +4,7 @@
 
 namespace std {
 
-struct IsrTable isr_init() {
+inline struct IsrTable isr_init() {
     struct IsrTable t;
     t.count = 0;
     int i = 0;
@@ -15,14 +15,14 @@ struct IsrTable isr_init() {
     return t;
 }
 
-int IsrTable::register_(int irq, void* handler) {
+inline int IsrTable::register_(int irq, void* handler) {
     if (irq < 0 || irq >= 256) { return 0; }
     self.handlers[irq] = handler;
     if (handler != (void*)0) { self.count = self.count + 1; }
     return 1;
 }
 
-void IsrTable::unregister_(int irq) {
+inline void IsrTable::unregister_(int irq) {
     if (irq >= 0 && irq < 256) {
         if (self.handlers[irq] != (void*)0) {
             self.handlers[irq] = (void*)0;
@@ -31,7 +31,7 @@ void IsrTable::unregister_(int irq) {
     }
 }
 
-int IsrTable::dispatch(int irq) {
+inline int IsrTable::dispatch(int irq) {
     if (irq < 0 || irq >= 256) { return 0; }
     if (self.handlers[irq] == (void*)0) { return 0; }
     unsafe {
@@ -41,11 +41,11 @@ int IsrTable::dispatch(int irq) {
     return 1;
 }
 
-void irq_disable() {
+inline void irq_disable() {
     unsafe { asm volatile("" ::: "memory"); }
 }
 
-void irq_enable() {
+inline void irq_enable() {
     unsafe { asm volatile("" ::: "memory"); }
 }
 

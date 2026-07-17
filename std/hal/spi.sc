@@ -9,7 +9,7 @@
 
 namespace std {
 
-struct SpiDevice spi_init(void* base, int mode) {
+inline struct SpiDevice spi_init(void* base, int mode) {
     struct SpiDevice s;
     s.base = base;
     s.mode = mode;
@@ -21,7 +21,7 @@ struct SpiDevice spi_init(void* base, int mode) {
     return s;
 }
 
-unsigned char SpiDevice::transfer(unsigned char tx) {
+inline unsigned char SpiDevice::transfer(unsigned char tx) {
     unsafe {
         unsigned int* status   = (unsigned int*)((unsigned long)self.base + (unsigned long)4);
         unsigned int* data_reg = (unsigned int*)self.base;
@@ -40,21 +40,21 @@ unsigned char SpiDevice::transfer(unsigned char tx) {
     }
 }
 
-void SpiDevice::cs_assert() {
+inline void SpiDevice::cs_assert() {
     unsafe {
         unsigned int* cs = (unsigned int*)((unsigned long)self.base + (unsigned long)12);
         volatile_store(cs, (unsigned int)0);
     }
 }
 
-void SpiDevice::cs_deassert() {
+inline void SpiDevice::cs_deassert() {
     unsafe {
         unsigned int* cs = (unsigned int*)((unsigned long)self.base + (unsigned long)12);
         volatile_store(cs, (unsigned int)1);
     }
 }
 
-void SpiDevice::write(const unsigned char* tx, unsigned char* rx, unsigned long len) {
+inline void SpiDevice::write(const unsigned char* tx, unsigned char* rx, unsigned long len) {
     unsigned long i = (unsigned long)0;
     while (i < len) {
         unsafe {
@@ -65,7 +65,7 @@ void SpiDevice::write(const unsigned char* tx, unsigned char* rx, unsigned long 
     }
 }
 
-void SpiDevice::read(unsigned char* rx, unsigned long len) {
+inline void SpiDevice::read(unsigned char* rx, unsigned long len) {
     unsigned long i = (unsigned long)0;
     while (i < len) {
         unsafe { rx[i] = self.transfer((unsigned char)0xFF); }

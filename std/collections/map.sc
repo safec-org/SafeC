@@ -6,7 +6,7 @@
 // ── Hash functions ────────────────────────────────────────────────────────────
 namespace std {
 
-unsigned int map_hash_bytes_(const void* data, unsigned long len) {
+inline unsigned int map_hash_bytes_(const void* data, unsigned long len) {
     unsigned int h = 5381U;
     unsigned long i = 0UL;
     unsafe {
@@ -19,7 +19,7 @@ unsigned int map_hash_bytes_(const void* data, unsigned long len) {
     return h;
 }
 
-unsigned int map_hash_str_(const char* s) {
+inline unsigned int map_hash_str_(const char* s) {
     unsigned int h = 5381U;
     unsafe {
         while (*s != 0) {
@@ -31,7 +31,7 @@ unsigned int map_hash_str_(const char* s) {
 }
 
 // ── Internal table allocator ──────────────────────────────────────────────────
-struct HashMap map_alloc_table_(unsigned long key_size, unsigned long val_size, unsigned long cap) {
+inline struct HashMap map_alloc_table_(unsigned long key_size, unsigned long val_size, unsigned long cap) {
     struct HashMap m;
     m.key_size = key_size; m.val_size = val_size;
     m.len = 0UL; m.cap = cap;
@@ -43,17 +43,17 @@ struct HashMap map_alloc_table_(unsigned long key_size, unsigned long val_size, 
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
-struct HashMap map_new(unsigned long key_size, unsigned long val_size) {
+inline struct HashMap map_new(unsigned long key_size, unsigned long val_size) {
     return map_alloc_table_(key_size, val_size, 16UL);
 }
 
-struct HashMap map_with_cap(unsigned long key_size, unsigned long val_size, unsigned long cap) {
+inline struct HashMap map_with_cap(unsigned long key_size, unsigned long val_size, unsigned long cap) {
     unsigned long c = 16UL;
     while (c < cap) { c = c * 2UL; }
     return map_alloc_table_(key_size, val_size, c);
 }
 
-void HashMap::free_entries_() {
+inline void HashMap::free_entries_() {
     unsafe {
         if (self.buckets == (struct MapEntry*)0) { return; }
         unsigned long i = 0UL;
@@ -67,14 +67,14 @@ void HashMap::free_entries_() {
     }
 }
 
-void HashMap::free() {
+inline void HashMap::free() {
     self.free_entries_();
     unsafe { if (self.buckets != (struct MapEntry*)0) { dealloc((void*)self.buckets); } }
     self.buckets = (struct MapEntry*)0;
     self.cap = 0UL; self.len = 0UL;
 }
 
-void HashMap::clear() {
+inline void HashMap::clear() {
     self.free_entries_();
     unsafe { safe_memset((void*)self.buckets, 0, self.cap * sizeof(struct MapEntry)); }
     self.len = 0UL;
@@ -148,7 +148,7 @@ int HashMap::insert(const void* key, const void* val) {
     return 0;
 }
 
-void* HashMap::get(const void* key) const {
+inline void* HashMap::get(const void* key) const {
     if (self.len == 0UL) { return (void*)0; }
     unsafe {
         unsigned int h = map_hash_bytes_(key, self.key_size);
@@ -168,7 +168,7 @@ void* HashMap::get(const void* key) const {
     return (void*)0;
 }
 
-int HashMap::contains(const void* key) const {
+inline int HashMap::contains(const void* key) const {
     return self.get(key) != (void*)0;
 }
 
@@ -196,7 +196,7 @@ int HashMap::remove(const void* key) {
     return 0;
 }
 
-void HashMap::foreach(void* func) {
+inline void HashMap::foreach(void* func) {
     unsafe {
         fn void(const void*, void*) f = (fn void(const void*, void*))func;
         unsigned long i = 0UL;
@@ -209,7 +209,7 @@ void HashMap::foreach(void* func) {
 }
 
 // ── String-keyed map ──────────────────────────────────────────────────────────
-struct HashMap str_map_new(unsigned long val_size) {
+inline struct HashMap str_map_new(unsigned long val_size) {
     return map_alloc_table_(8UL, val_size, 16UL);
 }
 
@@ -253,7 +253,7 @@ int str_map_insert(struct HashMap* m, const char* key, const void* val) {
     return 0;
 }
 
-void* str_map_get(struct HashMap* m, const char* key) {
+inline void* str_map_get(struct HashMap* m, const char* key) {
     unsafe {
         if (m->len == 0UL) { return (void*)0; }
         unsigned int h = map_hash_str_(key);
@@ -273,7 +273,7 @@ void* str_map_get(struct HashMap* m, const char* key) {
     return (void*)0;
 }
 
-int str_map_contains(struct HashMap* m, const char* key) {
+inline int str_map_contains(struct HashMap* m, const char* key) {
     return str_map_get(m, key) != (void*)0;
 }
 

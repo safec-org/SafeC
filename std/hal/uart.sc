@@ -8,7 +8,7 @@
 
 namespace std {
 
-struct Uart uart_init(void* base, unsigned int baud) {
+inline struct Uart uart_init(void* base, unsigned int baud) {
     struct Uart u;
     u.base = base;
     u.baud = baud;
@@ -19,7 +19,7 @@ struct Uart uart_init(void* base, unsigned int baud) {
     return u;
 }
 
-int Uart::tx_ready() const {
+inline int Uart::tx_ready() const {
     unsafe {
         unsigned int* status = (unsigned int*)((unsigned long)self.base + (unsigned long)4);
         unsigned int val = volatile_load(status);
@@ -28,7 +28,7 @@ int Uart::tx_ready() const {
     }
 }
 
-int Uart::rx_ready() const {
+inline int Uart::rx_ready() const {
     unsafe {
         unsigned int* status = (unsigned int*)((unsigned long)self.base + (unsigned long)4);
         unsigned int val = volatile_load(status);
@@ -37,7 +37,7 @@ int Uart::rx_ready() const {
     }
 }
 
-void Uart::write_byte(unsigned char c) {
+inline void Uart::write_byte(unsigned char c) {
     while (self.tx_ready() == 0) { }
     unsafe {
         unsigned int* data_reg = (unsigned int*)self.base;
@@ -45,7 +45,7 @@ void Uart::write_byte(unsigned char c) {
     }
 }
 
-unsigned char Uart::read_byte() {
+inline unsigned char Uart::read_byte() {
     while (self.rx_ready() == 0) { }
     unsafe {
         unsigned int* data_reg = (unsigned int*)self.base;
@@ -53,7 +53,7 @@ unsigned char Uart::read_byte() {
     }
 }
 
-void Uart::write_str(const char* s) {
+inline void Uart::write_str(const char* s) {
     unsafe {
         int i = 0;
         while (s[i] != (char)0) {

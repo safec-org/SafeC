@@ -10,7 +10,7 @@
 
 namespace std {
 
-struct I2cBus i2c_init(void* base, unsigned int speed) {
+inline struct I2cBus i2c_init(void* base, unsigned int speed) {
     struct I2cBus bus;
     bus.base  = base;
     bus.speed = speed;
@@ -22,7 +22,7 @@ struct I2cBus i2c_init(void* base, unsigned int speed) {
 }
 
 // Wait until bus is not busy. Returns 0 on success, I2C_ERROR on timeout.
-int I2cBus::wait_() {
+inline int I2cBus::wait_() {
     unsafe {
         unsigned int* status = (unsigned int*)((unsigned long)self.base + (unsigned long)4);
         int timeout = 100000;
@@ -103,7 +103,7 @@ int I2cBus::write_read(unsigned char addr,
     return self.read(addr, rd, rd_len);
 }
 
-int I2cBus::probe(unsigned char addr) {
+inline int I2cBus::probe(unsigned char addr) {
     unsafe {
         unsigned int* addr_reg = (unsigned int*)((unsigned long)self.base + (unsigned long)12);
         unsigned int* ctrl     = (unsigned int*)((unsigned long)self.base + (unsigned long)8);

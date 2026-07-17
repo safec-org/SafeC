@@ -45,7 +45,7 @@ void ArpTable::update(unsigned int ip4, const unsigned char mac[NET_MAC_LEN]) {
     }
 }
 
-int ArpTable::lookup(unsigned int ip4, unsigned char mac_out[NET_MAC_LEN]) const {
+inline int ArpTable::lookup(unsigned int ip4, unsigned char mac_out[NET_MAC_LEN]) const {
     int i = 0;
     while (i < ARP_TABLE_SIZE) {
         if (self.entries[i].ip4 == ip4) {
@@ -61,7 +61,7 @@ int ArpTable::lookup(unsigned int ip4, unsigned char mac_out[NET_MAC_LEN]) const
     return 0;
 }
 
-void ArpTable::evict(unsigned int ip4) {
+inline void ArpTable::evict(unsigned int ip4) {
     int i = 0;
     while (i < ARP_TABLE_SIZE) {
         if (self.entries[i].ip4 == ip4) {
@@ -72,7 +72,7 @@ void ArpTable::evict(unsigned int ip4) {
     }
 }
 
-void ArpTable::clear() {
+inline void ArpTable::clear() {
     int i = 0;
     while (i < ARP_TABLE_SIZE) {
         self.entries[i].ip4 = (unsigned int)0;

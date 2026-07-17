@@ -4,7 +4,7 @@
 
 namespace std {
 
-void FrameAllocator::init(unsigned long total_frames) {
+inline void FrameAllocator::init(unsigned long total_frames) {
     self.total_frames = total_frames;
     self.used_frames  = (unsigned long)0;
     int i = 0;
@@ -14,7 +14,7 @@ void FrameAllocator::init(unsigned long total_frames) {
     }
 }
 
-int FrameAllocator::ctz32_(unsigned int x) const {
+inline int FrameAllocator::ctz32_(unsigned int x) const {
     if (x == (unsigned int)0) { return 32; }
     int n = 0;
     while ((x & (unsigned int)1) == (unsigned int)0) {
@@ -24,7 +24,7 @@ int FrameAllocator::ctz32_(unsigned int x) const {
     return n;
 }
 
-long long FrameAllocator::alloc() {
+inline long long FrameAllocator::alloc() {
     unsigned long max_idx = self.total_frames / (unsigned long)32;
     if (max_idx > (unsigned long)4096) { max_idx = (unsigned long)4096; }
 
@@ -44,7 +44,7 @@ long long FrameAllocator::alloc() {
     return (long long)-1;
 }
 
-void FrameAllocator::free(unsigned long frame) {
+inline void FrameAllocator::free(unsigned long frame) {
     if (frame >= self.total_frames) { return; }
     unsigned long idx = frame / (unsigned long)32;
     int bit = (int)(frame & (unsigned long)31);
@@ -52,7 +52,7 @@ void FrameAllocator::free(unsigned long frame) {
     self.used_frames  = self.used_frames - (unsigned long)1;
 }
 
-int FrameAllocator::is_used(unsigned long frame) const {
+inline int FrameAllocator::is_used(unsigned long frame) const {
     if (frame >= self.total_frames) { return 0; }
     unsigned long idx = frame / (unsigned long)32;
     int bit = (int)(frame & (unsigned long)31);
@@ -60,7 +60,7 @@ int FrameAllocator::is_used(unsigned long frame) const {
     return 0;
 }
 
-void FrameAllocator::mark_range(unsigned long start, unsigned long count) {
+inline void FrameAllocator::mark_range(unsigned long start, unsigned long count) {
     unsigned long i = (unsigned long)0;
     while (i < count) {
         unsigned long frame = start + i;
@@ -75,7 +75,7 @@ void FrameAllocator::mark_range(unsigned long start, unsigned long count) {
     }
 }
 
-unsigned long FrameAllocator::free_count() const {
+inline unsigned long FrameAllocator::free_count() const {
     return self.total_frames - self.used_frames;
 }
 

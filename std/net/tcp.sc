@@ -110,7 +110,7 @@ void TcpConn::connect(unsigned int remote_ip, unsigned short remote_port,
     self.tx_len      = (unsigned long)0;
 }
 
-void TcpConn::close() {
+inline void TcpConn::close() {
     if (self.state == TCP_ESTABLISHED) {
         self.state = TCP_FIN_WAIT1;
     } else if (self.state == TCP_CLOSE_WAIT) {
@@ -178,7 +178,7 @@ int TcpConn::recv(&stack PacketBuf pkt, unsigned long tcp_offset) {
     return 0;
 }
 
-unsigned long TcpConn::send(const unsigned char* data, unsigned long len) {
+inline unsigned long TcpConn::send(const unsigned char* data, unsigned long len) {
     unsigned long space = (unsigned long)TCP_TX_BUF - self.tx_len;
     if (len > space) { len = space; }
     unsafe {
@@ -265,12 +265,12 @@ int TcpConn::build_segment(&stack PacketBuf pkt,
     return 1;
 }
 
-int TcpConn::rx_ready() const {
+inline int TcpConn::rx_ready() const {
     if (self.rx_len > (unsigned long)0) { return 1; }
     return 0;
 }
 
-unsigned long TcpConn::read(unsigned char* out, unsigned long len) {
+inline unsigned long TcpConn::read(unsigned char* out, unsigned long len) {
     if (len > self.rx_len) { len = self.rx_len; }
     unsafe {
         unsigned long i = (unsigned long)0;

@@ -6,7 +6,7 @@ namespace std {
 
 extern void* memcpy(void* dst, const void* src, unsigned long n);
 
-struct Mailbox mailbox_init(int owner_pid) {
+inline struct Mailbox mailbox_init(int owner_pid) {
     struct Mailbox mb;
     mb.head      = 0;
     mb.tail      = 0;
@@ -15,7 +15,7 @@ struct Mailbox mailbox_init(int owner_pid) {
     return mb;
 }
 
-int Mailbox::send(int sender_pid, int type, const void* payload, unsigned long size) {
+inline int Mailbox::send(int sender_pid, int type, const void* payload, unsigned long size) {
     if (self.count >= 64) { return 0; } // full
     if (size > (unsigned long)256) { size = (unsigned long)256; } // truncate
 
@@ -32,7 +32,7 @@ int Mailbox::send(int sender_pid, int type, const void* payload, unsigned long s
     return 1;
 }
 
-int Mailbox::recv(&stack Message out) {
+inline int Mailbox::recv(&stack Message out) {
     if (self.count <= 0) { return 0; } // empty
 
     int idx = self.tail;
@@ -48,7 +48,7 @@ int Mailbox::recv(&stack Message out) {
     return 1;
 }
 
-int Mailbox::peek(&stack Message out) const {
+inline int Mailbox::peek(&stack Message out) const {
     if (self.count <= 0) { return 0; }
 
     int idx = self.tail;
@@ -61,14 +61,14 @@ int Mailbox::peek(&stack Message out) const {
     return 1;
 }
 
-int Mailbox::has_msg() const {
+inline int Mailbox::has_msg() const {
     if (self.count > 0) { return 1; }
     return 0;
 }
 
 int Mailbox::length() const { return self.count; }
 
-void Mailbox::clear() {
+inline void Mailbox::clear() {
     self.head  = 0;
     self.tail  = 0;
     self.count = 0;

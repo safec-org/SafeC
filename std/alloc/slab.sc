@@ -8,7 +8,7 @@ extern void* malloc(unsigned long size);
 extern void  free(void* ptr);
 
 // Build free-list through the buffer: each free slot stores a pointer to the next.
-void SlabAllocator::build_freelist_() {
+inline void SlabAllocator::build_freelist_() {
     unsigned long i = (unsigned long)0;
     unsafe {
         while (i < self.cap - (unsigned long)1) {
@@ -24,7 +24,7 @@ void SlabAllocator::build_freelist_() {
     }
 }
 
-struct SlabAllocator slab_init(&heap void buffer, unsigned long obj_size, unsigned long count) {
+inline struct SlabAllocator slab_init(&heap void buffer, unsigned long obj_size, unsigned long count) {
     struct SlabAllocator a;
     a.base = buffer;
     // Ensure minimum object size can hold a pointer
@@ -40,7 +40,7 @@ struct SlabAllocator slab_init(&heap void buffer, unsigned long obj_size, unsign
     return a;
 }
 
-struct SlabAllocator slab_new(unsigned long obj_size, unsigned long count) {
+inline struct SlabAllocator slab_new(unsigned long obj_size, unsigned long count) {
     struct SlabAllocator a;
     if (obj_size < (unsigned long)8) {
         a.obj_size = (unsigned long)8;
@@ -67,7 +67,7 @@ struct SlabAllocator slab_new(unsigned long obj_size, unsigned long count) {
     }
 }
 
-void SlabAllocator::dealloc(void* ptr) {
+inline void SlabAllocator::dealloc(void* ptr) {
     unsafe {
         *(void**)ptr   = self.free_head;
         self.free_head = ptr;
@@ -75,11 +75,11 @@ void SlabAllocator::dealloc(void* ptr) {
     }
 }
 
-unsigned long SlabAllocator::available() const {
+inline unsigned long SlabAllocator::available() const {
     return self.cap - self.used;
 }
 
-void SlabAllocator::destroy() {
+inline void SlabAllocator::destroy() {
     unsafe { free((void*)self.base); }
     self.free_head = (void*)0;
     self.used      = (unsigned long)0;

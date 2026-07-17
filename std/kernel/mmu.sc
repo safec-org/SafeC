@@ -10,18 +10,18 @@ extern void* memset(void* ptr, int val, unsigned long n);
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // Extract L1 index from a 30-bit virtual address (bits [29:21]).
-unsigned long mmu_l1_idx_(unsigned long virt) {
+inline unsigned long mmu_l1_idx_(unsigned long virt) {
     return (virt >> (unsigned long)21) & (unsigned long)0x1FF;
 }
 
 // Extract L2 index from a 30-bit virtual address (bits [20:12]).
-unsigned long mmu_l2_idx_(unsigned long virt) {
+inline unsigned long mmu_l2_idx_(unsigned long virt) {
     return (virt >> (unsigned long)12) & (unsigned long)0x1FF;
 }
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 
-struct MmuContext mmu_init(unsigned long root, void* frames) {
+inline struct MmuContext mmu_init(unsigned long root, void* frames) {
     struct MmuContext ctx;
     ctx.root   = root;
     ctx.frames = frames;
@@ -61,7 +61,7 @@ int MmuContext::map(unsigned long virt, unsigned long phys, unsigned int flags) 
     return 1;
 }
 
-void MmuContext::unmap(unsigned long virt) {
+inline void MmuContext::unmap(unsigned long virt) {
     unsigned long l1_idx = mmu_l1_idx_(virt);
     unsigned long l2_idx = mmu_l2_idx_(virt);
 
@@ -74,7 +74,7 @@ void MmuContext::unmap(unsigned long virt) {
     }
 }
 
-int MmuContext::walk(unsigned long virt, &stack unsigned long phys_out) const {
+inline int MmuContext::walk(unsigned long virt, &stack unsigned long phys_out) const {
     unsigned long l1_idx = mmu_l1_idx_(virt);
     unsigned long l2_idx = mmu_l2_idx_(virt);
 
@@ -117,7 +117,7 @@ void MmuContext::tlb_flush_all() {
     }
 }
 
-void MmuContext::tlb_flush_page(unsigned long virt) {
+inline void MmuContext::tlb_flush_page(unsigned long virt) {
     unsafe {
 #ifdef __x86_64__
         asm volatile ("invlpg (%0)" : : "r"(virt) : "memory");
@@ -137,7 +137,7 @@ void MmuContext::tlb_flush_page(unsigned long virt) {
     }
 }
 
-void MmuContext::activate() {
+inline void MmuContext::activate() {
     unsafe {
 #ifdef __x86_64__
         asm volatile ("mov %0, %%cr3" : : "r"(self.root) : "memory");

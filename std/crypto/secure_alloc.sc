@@ -17,18 +17,18 @@ struct SecureAllocator secure_alloc_new(unsigned long obj_size,
     return self.slab.alloc();
 }
 
-void SecureAllocator::dealloc(void* ptr) {
+inline void SecureAllocator::dealloc(void* ptr) {
     if (ptr == (void*)0) { return; }
     // Zero the slot before returning it to the free list.
     unsafe { memset(ptr, 0, self.slab.obj_size); }
     self.slab.dealloc(ptr);
 }
 
-unsigned long SecureAllocator::available() const {
+inline unsigned long SecureAllocator::available() const {
     return self.slab.available();
 }
 
-void SecureAllocator::destroy() {
+inline void SecureAllocator::destroy() {
     // Zero all backing memory before freeing.
     unsafe {
         if ((void*)self.slab.base != (void*)0) {

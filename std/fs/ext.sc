@@ -88,7 +88,7 @@ int ext2_init(&stack Ext2Ctx ctx, &stack BlockDevice dev) {
 // ── Ext2Ctx::read_block ───────────────────────────────────────────────────────
 // Convert block number to LBA (512-byte sectors) and read block_size bytes.
 
-int Ext2Ctx::read_block(unsigned long block_no, unsigned char* buf) {
+inline int Ext2Ctx::read_block(unsigned long block_no, unsigned char* buf) {
     unsigned long sectors_per_block = self.block_size / (unsigned long)512;
     unsigned long lba = block_no * sectors_per_block;
     return self.dev.read(lba, (&stack unsigned char)buf, sectors_per_block);
@@ -431,7 +431,7 @@ static int ext2_vfs_readdir_(void* ctx, unsigned long dir_ino,
 
 // ── ext2_ops ──────────────────────────────────────────────────────────────────
 
-struct VfsOps ext2_ops() {
+inline struct VfsOps ext2_ops() {
     struct VfsOps ops;
     unsafe {
         memset((void*)&ops, 0, sizeof(struct VfsOps));

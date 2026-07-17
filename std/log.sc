@@ -12,7 +12,7 @@ extern void* stderr;
 // sentinel here. Cast back to 'LogBackend' at the call site instead.
 static void* backend_ = NULL;
 
-void log_set_backend(LogBackend backend) {
+inline void log_set_backend(LogBackend backend) {
     unsafe { backend_ = (void*)backend; }
 }
 

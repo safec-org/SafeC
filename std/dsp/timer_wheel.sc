@@ -5,7 +5,7 @@
 // Zero-initialise the wheel.  Must be called before any other operation.
 namespace std {
 
-void timer_wheel_init(&stack TimerWheel tw) {
+inline void timer_wheel_init(&stack TimerWheel tw) {
     tw.current_tick = 0;
     int i = 0;
     while (i < WHEEL_TIMERS) {
@@ -37,7 +37,7 @@ static int alloc_slot(&stack TimerWheel tw) {
 }
 
 // ── TimerWheel::add ───────────────────────────────────────────────────────────
-int TimerWheel::add(unsigned long tick, void* callback, void* ctx) {
+inline int TimerWheel::add(unsigned long tick, void* callback, void* ctx) {
     int idx = alloc_slot(self);
     if (idx < 0) {
         return 0;  // wheel full
@@ -55,7 +55,7 @@ int TimerWheel::add(unsigned long tick, void* callback, void* ctx) {
 }
 
 // ── TimerWheel::add_periodic ──────────────────────────────────────────────────
-int TimerWheel::add_periodic(unsigned long period, void* callback, void* ctx) {
+inline int TimerWheel::add_periodic(unsigned long period, void* callback, void* ctx) {
     if (period == 0) {
         return 0;
     }
@@ -75,7 +75,7 @@ int TimerWheel::add_periodic(unsigned long period, void* callback, void* ctx) {
 }
 
 // ── TimerWheel::cancel ────────────────────────────────────────────────────────
-void TimerWheel::cancel(int id) {
+inline void TimerWheel::cancel(int id) {
     if (id <= 0 || id > WHEEL_TIMERS) {
         return;
     }
@@ -139,7 +139,7 @@ int TimerWheel::tick() {
 }
 
 // ── TimerWheel::now ───────────────────────────────────────────────────────────
-unsigned long TimerWheel::now() const {
+inline unsigned long TimerWheel::now() const {
     return self.current_tick;
 }
 

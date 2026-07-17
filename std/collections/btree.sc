@@ -167,14 +167,14 @@ int BTree::insert(unsigned long key, void* val) {
     }
 }
 
-void* BTree::get(unsigned long key) const {
+inline void* BTree::get(unsigned long key) const {
     unsafe {
         struct BTree* t = (struct BTree*)self;
         return btree_search_(t, t->root, key);
     }
 }
 
-int BTree::contains(unsigned long key) const {
+inline int BTree::contains(unsigned long key) const {
     if (self.get(key) != (void*)0) { return 1; }
     return 0;
 }
@@ -205,7 +205,7 @@ static void btree_foreach_(struct BTree* t, unsigned long node_idx,
     }
 }
 
-void BTree::foreach(void* cb, void* user) const {
+inline void BTree::foreach(void* cb, void* user) const {
     unsafe {
         struct BTree* t = (struct BTree*)self;
         btree_foreach_(t, t->root, cb, user);
@@ -220,7 +220,7 @@ inline void BTree::clear() {
 
 // BTree::remove is complex; provide a stub (returns 0 = not found always).
 // Full deletion requires rebalancing; the insert path covers all practical uses.
-int BTree::remove(unsigned long key) {
+inline int BTree::remove(unsigned long key) {
     (void)key;
     return 0;
 }

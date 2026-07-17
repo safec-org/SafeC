@@ -4,7 +4,7 @@
 
 namespace std {
 
-struct Queue queue_new(unsigned long elem_size) {
+inline struct Queue queue_new(unsigned long elem_size) {
     struct Queue q;
     q.data = (void*)0;
     q.head = 0UL; q.tail = 0UL; q.len = 0UL; q.cap = 0UL;
@@ -12,7 +12,7 @@ struct Queue queue_new(unsigned long elem_size) {
     return q;
 }
 
-struct Queue queue_with_cap(unsigned long elem_size, unsigned long cap) {
+inline struct Queue queue_with_cap(unsigned long elem_size, unsigned long cap) {
     struct Queue q;
     q.elem_size = elem_size;
     q.head = 0UL; q.tail = 0UL; q.len = 0UL; q.cap = cap;
@@ -21,7 +21,7 @@ struct Queue queue_with_cap(unsigned long elem_size, unsigned long cap) {
     return q;
 }
 
-void queue_free(struct Queue* q) {
+inline void queue_free(struct Queue* q) {
     unsafe {
         if (q->data != (void*)0) dealloc(q->data);
         q->data = (void*)0;
@@ -83,7 +83,7 @@ int queue_grow_(struct Queue* q) {
     return 1;
 }
 
-int queue_enqueue(struct Queue* q, const void* elem) {
+inline int queue_enqueue(struct Queue* q, const void* elem) {
     unsafe {
         if (q->len == q->cap) {
             if (!queue_grow_(q)) return 0;
@@ -96,7 +96,7 @@ int queue_enqueue(struct Queue* q, const void* elem) {
     }
 }
 
-int queue_dequeue(struct Queue* q, void* out) {
+inline int queue_dequeue(struct Queue* q, void* out) {
     unsafe {
         if (q->len == 0UL) return 0;
         if (out != (void*)0) {

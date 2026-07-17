@@ -6,24 +6,24 @@
 // ── Built-in comparators ──────────────────────────────────────────────────────
 namespace std {
 
-int bst_cmp_int(const void* a, const void* b) {
+inline int bst_cmp_int(const void* a, const void* b) {
     unsafe {
         int ia = *(int*)a;
         int ib = *(int*)b;
         return ia < ib ? -1 : (ia > ib ? 1 : 0);
     }
 }
-int bst_cmp_ll(const void* a, const void* b) {
+inline int bst_cmp_ll(const void* a, const void* b) {
     unsafe {
         long long la = *(long long*)a;
         long long lb = *(long long*)b;
         return la < lb ? -1 : (la > lb ? 1 : 0);
     }
 }
-int bst_cmp_str(const void* a, const void* b) {
+inline int bst_cmp_str(const void* a, const void* b) {
     unsafe { return str_cmp(*(const char**)a, *(const char**)b); }
 }
-int bst_cmp_uint(const void* a, const void* b) {
+inline int bst_cmp_uint(const void* a, const void* b) {
     unsafe {
         unsigned int ua = *(unsigned int*)a;
         unsigned int ub = *(unsigned int*)b;
@@ -53,7 +53,7 @@ struct BSTNode* bst_alloc_node_(unsigned long key_size, unsigned long val_size,
     }
 }
 
-void bst_free_node_(struct BSTNode* n) {
+inline void bst_free_node_(struct BSTNode* n) {
     if (n == (struct BSTNode*)0) return;
     unsafe {
         bst_free_node_(n->left);
@@ -65,7 +65,7 @@ void bst_free_node_(struct BSTNode* n) {
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
-struct BST bst_new(unsigned long key_size, unsigned long val_size, void* cmp_fn) {
+inline struct BST bst_new(unsigned long key_size, unsigned long val_size, void* cmp_fn) {
     struct BST t;
     t.root = (struct BSTNode*)0;
     t.key_size = key_size;
@@ -75,7 +75,7 @@ struct BST bst_new(unsigned long key_size, unsigned long val_size, void* cmp_fn)
     return t;
 }
 
-void bst_clear(struct BST* t) {
+inline void bst_clear(struct BST* t) {
     unsafe {
         bst_free_node_(t->root);
         t->root = (struct BSTNode*)0;
@@ -128,7 +128,7 @@ int bst_insert(struct BST* t, const void* key, const void* val) {
 }
 
 // ── Get ───────────────────────────────────────────────────────────────────────
-void* bst_get(struct BST* t, const void* key) {
+inline void* bst_get(struct BST* t, const void* key) {
     unsafe {
         fn int(const void*, const void*) cmp = (fn int(const void*, const void*))t->cmp_fn;
         struct BSTNode* cur = t->root;
@@ -141,12 +141,12 @@ void* bst_get(struct BST* t, const void* key) {
     return (void*)0;
 }
 
-int bst_contains(struct BST* t, const void* key) {
+inline int bst_contains(struct BST* t, const void* key) {
     return bst_get(t, key) != (void*)0;
 }
 
 // ── Min / max ─────────────────────────────────────────────────────────────────
-void* bst_min_key(struct BST* t) {
+inline void* bst_min_key(struct BST* t) {
     unsafe {
         if (t->root == (struct BSTNode*)0) return (void*)0;
         struct BSTNode* n = t->root;
@@ -154,7 +154,7 @@ void* bst_min_key(struct BST* t) {
         return n->key;
     }
 }
-void* bst_max_key(struct BST* t) {
+inline void* bst_max_key(struct BST* t) {
     unsafe {
         if (t->root == (struct BSTNode*)0) return (void*)0;
         struct BSTNode* n = t->root;
@@ -213,7 +213,7 @@ int bst_remove(struct BST* t, const void* key) {
 }
 
 // ── In-order traversal (iterative using Stack from stack.h would create a dep; use recursion helper) ──
-void bst_inorder_(struct BSTNode* n, void* func) {
+inline void bst_inorder_(struct BSTNode* n, void* func) {
     if (n == (struct BSTNode*)0) return;
     unsafe {
         bst_inorder_(n->left, func);
@@ -223,7 +223,7 @@ void bst_inorder_(struct BSTNode* n, void* func) {
     }
 }
 
-void bst_foreach_inorder(struct BST* t, void* func) {
+inline void bst_foreach_inorder(struct BST* t, void* func) {
     unsafe { bst_inorder_(t->root, func); }
 }
 

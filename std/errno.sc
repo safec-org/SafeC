@@ -11,7 +11,7 @@ extern char* strerror(int errnum);
 extern void  fputs(const char* s, void* stream);
 extern void* stderr;
 
-int errno_get() {
+inline int errno_get() {
     unsafe {
 #ifdef __linux__
         return *(__errno_location());
@@ -21,7 +21,7 @@ int errno_get() {
     }
 }
 
-void errno_set(int code) {
+inline void errno_set(int code) {
     unsafe {
 #ifdef __linux__
         *(__errno_location()) = code;
@@ -31,11 +31,11 @@ void errno_set(int code) {
     }
 }
 
-const char* errno_str(int code) {
+inline const char* errno_str(int code) {
     unsafe { return strerror(code); }
 }
 
-void errno_print(const char* prefix) {
+inline void errno_print(const char* prefix) {
     unsafe {
         fputs(prefix, stderr);
         fputs(": ", stderr);

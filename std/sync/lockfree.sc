@@ -8,7 +8,7 @@ extern void* malloc(unsigned long size);
 extern void  free(void* ptr);
 extern void* memcpy(void* dst, const void* src, unsigned long n);
 
-struct LFQueue lfq_init(&heap void buffer, unsigned long elem_size, unsigned long cap) {
+inline struct LFQueue lfq_init(&heap void buffer, unsigned long elem_size, unsigned long cap) {
     struct LFQueue q;
     q.buffer    = buffer;
     q.elem_size = elem_size;
@@ -18,7 +18,7 @@ struct LFQueue lfq_init(&heap void buffer, unsigned long elem_size, unsigned lon
     return q;
 }
 
-struct LFQueue lfq_new(unsigned long elem_size, unsigned long cap) {
+inline struct LFQueue lfq_new(unsigned long elem_size, unsigned long cap) {
     struct LFQueue q;
     unsafe { q.buffer = (&heap void)malloc(elem_size * cap); }
     q.elem_size = elem_size;
@@ -28,7 +28,7 @@ struct LFQueue lfq_new(unsigned long elem_size, unsigned long cap) {
     return q;
 }
 
-int LFQueue::enqueue(const void* elem) {
+inline int LFQueue::enqueue(const void* elem) {
     unsafe {
         long long h      = atomic_load(&self.head);
         long long t      = atomic_load(&self.tail);
@@ -44,7 +44,7 @@ int LFQueue::enqueue(const void* elem) {
     }
 }
 
-int LFQueue::dequeue(void* out) {
+inline int LFQueue::dequeue(void* out) {
     unsafe {
         long long h = atomic_load(&self.head);
         long long t = atomic_load(&self.tail);
@@ -60,7 +60,7 @@ int LFQueue::dequeue(void* out) {
     }
 }
 
-int LFQueue::is_empty() const {
+inline int LFQueue::is_empty() const {
     unsafe {
         long long h = atomic_load(&self.head);
         long long t = atomic_load(&self.tail);
@@ -69,7 +69,7 @@ int LFQueue::is_empty() const {
     }
 }
 
-int LFQueue::is_full() const {
+inline int LFQueue::is_full() const {
     unsafe {
         long long h      = atomic_load(&self.head);
         long long t      = atomic_load(&self.tail);
@@ -79,7 +79,7 @@ int LFQueue::is_full() const {
     }
 }
 
-unsigned long LFQueue::len() const {
+inline unsigned long LFQueue::len() const {
     unsafe {
         long long h = atomic_load(&self.head);
         long long t = atomic_load(&self.tail);
@@ -87,7 +87,7 @@ unsigned long LFQueue::len() const {
     }
 }
 
-void LFQueue::destroy() {
+inline void LFQueue::destroy() {
     unsafe { free((void*)self.buffer); }
     self.cap = (unsigned long)0;
 }

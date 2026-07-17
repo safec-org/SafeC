@@ -6,23 +6,23 @@
 
 namespace std {
 
-unsigned short net_htons(unsigned short v) {
+inline unsigned short net_htons(unsigned short v) {
     return (unsigned short)(((v & (unsigned short)0xFF) << 8) |
                             ((v >> 8) & (unsigned short)0xFF));
 }
 
-unsigned short net_ntohs(unsigned short v) {
+inline unsigned short net_ntohs(unsigned short v) {
     return net_htons(v);
 }
 
-unsigned int net_htonl(unsigned int v) {
+inline unsigned int net_htonl(unsigned int v) {
     return ((v & (unsigned int)0xFF)         << 24)
          | (((v >> 8)  & (unsigned int)0xFF) << 16)
          | (((v >> 16) & (unsigned int)0xFF) <<  8)
          |  ((v >> 24) & (unsigned int)0xFF);
 }
 
-unsigned int net_ntohl(unsigned int v) {
+inline unsigned int net_ntohl(unsigned int v) {
     return net_htonl(v);
 }
 
@@ -58,7 +58,7 @@ static char net_hex_nibble_(unsigned int v) {
     return (char)('a' + v - (unsigned int)10);
 }
 
-void net_ip4_str(unsigned int ip_be, char* buf) {
+inline void net_ip4_str(unsigned int ip_be, char* buf) {
     int pos = 0;
     int i = 3;
     while (i >= 0) {
@@ -76,7 +76,7 @@ void net_ip4_str(unsigned int ip_be, char* buf) {
     unsafe { buf[pos] = (char)0; }
 }
 
-void net_mac_str(const unsigned char mac[NET_MAC_LEN], char* buf) {
+inline void net_mac_str(const unsigned char mac[NET_MAC_LEN], char* buf) {
     int i = 0;
     while (i < NET_MAC_LEN) {
         unsigned int b;
@@ -103,12 +103,12 @@ unsigned int net_ip4(unsigned char a, unsigned char b,
 
 // ── PacketBuf ─────────────────────────────────────────────────────────────────
 
-void* PacketBuf::at(unsigned long offset) {
+inline void* PacketBuf::at(unsigned long offset) {
     unsafe { return (void*)((unsigned long)(unsigned char*)self.data + offset); }
     return (void*)0;
 }
 
-void PacketBuf::reset() {
+inline void PacketBuf::reset() {
     unsigned long i = (unsigned long)0;
     while (i < (unsigned long)NET_MTU) {
         unsafe { self.data[i] = (unsigned char)0; }
@@ -119,7 +119,7 @@ void PacketBuf::reset() {
 
 // ── NetIf ─────────────────────────────────────────────────────────────────────
 
-int NetIf::tx(&stack PacketBuf pkt) {
+inline int NetIf::tx(&stack PacketBuf pkt) {
     if (self.tx_fn == (void*)0) { return -1; }
     unsafe {
         fn int(void*, unsigned char*, unsigned long) func =

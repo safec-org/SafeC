@@ -4,14 +4,14 @@
 
 namespace std {
 
-struct TaskScheduler task_sched_init() {
+inline struct TaskScheduler task_sched_init() {
     struct TaskScheduler s;
     s.count   = 0;
     s.current = 0;
     return s;
 }
 
-int TaskScheduler::spawn_task(void* func, void* arg) {
+inline int TaskScheduler::spawn_task(void* func, void* arg) {
     if (self.count >= 64) {
         return -1;
     }
@@ -50,13 +50,13 @@ int TaskScheduler::tick() {
     return active;
 }
 
-void TaskScheduler::run_all() {
+inline void TaskScheduler::run_all() {
     while (self.tick() > 0) {
         // Keep running until all tasks are done
     }
 }
 
-int TaskScheduler::active_count() const {
+inline int TaskScheduler::active_count() const {
     int count = 0;
     int i = 0;
     while (i < self.count) {

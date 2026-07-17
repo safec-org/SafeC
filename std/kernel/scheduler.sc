@@ -4,14 +4,14 @@
 
 namespace std {
 
-struct Scheduler sched_init() {
+inline struct Scheduler sched_init() {
     struct Scheduler s;
     s.count   = 0;
     s.current = -1;
     return s;
 }
 
-int Scheduler::spawn_proc(&stack PCB proc) {
+inline int Scheduler::spawn_proc(&stack PCB proc) {
     if (self.count >= 256) { return -1; }
     int idx = self.count;
     self.procs[idx] = *proc;
@@ -63,20 +63,20 @@ int Scheduler::next() {
     return best;
 }
 
-int Scheduler::yield() {
+inline int Scheduler::yield() {
     if (self.current >= 0 && self.procs[self.current].state == 1) {
         self.procs[self.current].state = 0; // PROC_READY
     }
     return self.next();
 }
 
-void Scheduler::block_current() {
+inline void Scheduler::block_current() {
     if (self.current >= 0) {
         self.procs[self.current].state = 2; // PROC_BLOCKED
     }
 }
 
-void Scheduler::unblock(int idx) {
+inline void Scheduler::unblock(int idx) {
     if (idx >= 0 && idx < self.count) {
         if (self.procs[idx].state == 2) { // PROC_BLOCKED
             self.procs[idx].state = 0; // PROC_READY
@@ -84,7 +84,7 @@ void Scheduler::unblock(int idx) {
     }
 }
 
-void Scheduler::remove(int idx) {
+inline void Scheduler::remove(int idx) {
     if (idx < 0 || idx >= self.count) { return; }
     int i = idx;
     while (i < self.count - 1) {
@@ -95,7 +95,7 @@ void Scheduler::remove(int idx) {
     if (self.current >= self.count) { self.current = self.count - 1; }
 }
 
-int Scheduler::ready_count() const {
+inline int Scheduler::ready_count() const {
     int count = 0;
     int i = 0;
     while (i < self.count) {

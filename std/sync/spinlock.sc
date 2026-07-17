@@ -4,13 +4,13 @@
 
 namespace std {
 
-struct Spinlock spinlock_init() {
+inline struct Spinlock spinlock_init() {
     struct Spinlock s;
     s.locked = 0;
     return s;
 }
 
-void Spinlock::lock() {
+inline void Spinlock::lock() {
     unsafe {
         while (atomic_exchange(&self.locked, 1) != 0) {
             // Spin — compiler will emit a busy-wait loop
@@ -22,7 +22,7 @@ void Spinlock::lock() {
     }
 }
 
-int Spinlock::trylock() {
+inline int Spinlock::trylock() {
     unsafe {
         if (atomic_exchange(&self.locked, 1) == 0) {
             return 1;
@@ -31,13 +31,13 @@ int Spinlock::trylock() {
     }
 }
 
-void Spinlock::unlock() {
+inline void Spinlock::unlock() {
     unsafe {
         atomic_store(&self.locked, 0);
     }
 }
 
-int Spinlock::is_locked() const {
+inline int Spinlock::is_locked() const {
     return self.locked;
 }
 

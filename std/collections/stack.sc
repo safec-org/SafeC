@@ -4,7 +4,7 @@
 
 namespace std {
 
-struct Stack stack_new(unsigned long elem_size) {
+inline struct Stack stack_new(unsigned long elem_size) {
     struct Stack s;
     s.data = (void*)0;
     s.top = 0UL;
@@ -13,7 +13,7 @@ struct Stack stack_new(unsigned long elem_size) {
     return s;
 }
 
-struct Stack stack_with_cap(unsigned long elem_size, unsigned long cap) {
+inline struct Stack stack_with_cap(unsigned long elem_size, unsigned long cap) {
     struct Stack s;
     s.elem_size = elem_size;
     s.top = 0UL;
@@ -23,7 +23,7 @@ struct Stack stack_with_cap(unsigned long elem_size, unsigned long cap) {
     return s;
 }
 
-void stack_free(struct Stack* s) {
+inline void stack_free(struct Stack* s) {
     unsafe {
         if (s->data != (void*)0) dealloc(s->data);
         s->data = (void*)0;
@@ -43,7 +43,7 @@ inline void* stack_peek(struct Stack* s) {
     }
 }
 
-int stack_push(struct Stack* s, const void* elem) {
+inline int stack_push(struct Stack* s, const void* elem) {
     unsafe {
         if (s->top == s->cap) {
             unsigned long new_cap = s->cap == 0UL ? 8UL : s->cap * 2UL;
@@ -59,7 +59,7 @@ int stack_push(struct Stack* s, const void* elem) {
     }
 }
 
-int stack_pop(struct Stack* s, void* out) {
+inline int stack_pop(struct Stack* s, void* out) {
     unsafe {
         if (s->top == 0UL) return 0;
         s->top = s->top - 1UL;

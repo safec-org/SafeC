@@ -11,7 +11,7 @@ extern int   strncmp(const char* a, const char* b, unsigned long n);
 extern unsigned long strlen(const char* s);
 extern void* strncpy(char* d, const char* s, unsigned long n);
 
-void tmpfs_init(&stack TmpfsCtx ctx) {
+inline void tmpfs_init(&stack TmpfsCtx ctx) {
     unsafe { memset((void*)ctx, 0, sizeof(struct TmpfsCtx)); }
     // Create root inode at index 0.
     ctx.inodes[0].used   = 1;
@@ -275,7 +275,7 @@ static int tmpfs_vfs_readdir_(void* ctx, unsigned long inode,
     return count;
 }
 
-struct VfsOps tmpfs_ops() {
+inline struct VfsOps tmpfs_ops() {
     struct VfsOps ops;
     unsafe {
         memset((void*)&ops, 0, sizeof(struct VfsOps));

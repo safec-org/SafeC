@@ -7,7 +7,7 @@ namespace std {
 extern void* malloc(unsigned long size);
 extern void  free(void* ptr);
 
-struct BumpAllocator bump_init(&heap void buffer, unsigned long cap) {
+inline struct BumpAllocator bump_init(&heap void buffer, unsigned long cap) {
     struct BumpAllocator a;
     a.base = buffer;
     a.used = (unsigned long)0;
@@ -15,7 +15,7 @@ struct BumpAllocator bump_init(&heap void buffer, unsigned long cap) {
     return a;
 }
 
-struct BumpAllocator bump_new(unsigned long cap) {
+inline struct BumpAllocator bump_new(unsigned long cap) {
     struct BumpAllocator a;
     unsafe { a.base = (&heap void)malloc(cap); }
     a.used = (unsigned long)0;
@@ -36,15 +36,15 @@ struct BumpAllocator bump_new(unsigned long cap) {
     }
 }
 
-void BumpAllocator::reset() {
+inline void BumpAllocator::reset() {
     self.used = (unsigned long)0;
 }
 
-unsigned long BumpAllocator::remaining() const {
+inline unsigned long BumpAllocator::remaining() const {
     return self.cap - self.used;
 }
 
-void BumpAllocator::destroy() {
+inline void BumpAllocator::destroy() {
     unsafe { free((void*)self.base); }
     self.used = (unsigned long)0;
     self.cap  = (unsigned long)0;

@@ -4,7 +4,7 @@
 
 namespace std {
 
-int eth_parse(&stack PacketBuf pkt, &stack EthernetHdr hdr_out) {
+inline int eth_parse(&stack PacketBuf pkt, &stack EthernetHdr hdr_out) {
     if (pkt.len < (unsigned long)ETH_HDR_LEN) { return -1; }
     unsafe {
         unsigned char* d = (unsigned char*)pkt.data;

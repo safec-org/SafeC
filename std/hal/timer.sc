@@ -10,7 +10,7 @@
 
 namespace std {
 
-struct Timer timer_init(void* base, unsigned int prescaler) {
+inline struct Timer timer_init(void* base, unsigned int prescaler) {
     struct Timer t;
     t.base      = base;
     t.prescaler = prescaler;
@@ -21,14 +21,14 @@ struct Timer timer_init(void* base, unsigned int prescaler) {
     return t;
 }
 
-void Timer::set_period(unsigned int period) {
+inline void Timer::set_period(unsigned int period) {
     unsafe {
         unsigned int* arr_reg = (unsigned int*)((unsigned long)self.base + (unsigned long)8);
         volatile_store(arr_reg, period);
     }
 }
 
-void Timer::start() {
+inline void Timer::start() {
     unsafe {
         unsigned int* ctrl = (unsigned int*)self.base;
         unsigned int val = volatile_load(ctrl);
@@ -37,7 +37,7 @@ void Timer::start() {
     }
 }
 
-void Timer::stop() {
+inline void Timer::stop() {
     unsafe {
         unsigned int* ctrl = (unsigned int*)self.base;
         unsigned int val = volatile_load(ctrl);
@@ -46,21 +46,21 @@ void Timer::stop() {
     }
 }
 
-unsigned int Timer::read() const {
+inline unsigned int Timer::read() const {
     unsafe {
         unsigned int* cnt = (unsigned int*)((unsigned long)self.base + (unsigned long)12);
         return volatile_load(cnt);
     }
 }
 
-void Timer::clear_flag() {
+inline void Timer::clear_flag() {
     unsafe {
         unsigned int* status = (unsigned int*)((unsigned long)self.base + (unsigned long)16);
         volatile_store(status, (unsigned int)0);
     }
 }
 
-int Timer::flag_set() const {
+inline int Timer::flag_set() const {
     unsafe {
         unsigned int* status = (unsigned int*)((unsigned long)self.base + (unsigned long)16);
         unsigned int val = volatile_load(status);

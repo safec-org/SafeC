@@ -4,7 +4,7 @@
 
 namespace std {
 
-unsigned short ip_checksum(const unsigned char* data, unsigned long len) {
+inline unsigned short ip_checksum(const unsigned char* data, unsigned long len) {
     unsigned long sum = (unsigned long)0;
     unsigned long i = (unsigned long)0;
     unsafe {

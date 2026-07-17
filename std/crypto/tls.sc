@@ -76,11 +76,11 @@ static unsigned long pkcs7_unpad_(const unsigned char* data, unsigned long len,
 
 // ── TlsTranscript ─────────────────────────────────────────────────────────────
 
-void TlsTranscript::update(const unsigned char* data, unsigned long len) {
+inline void TlsTranscript::update(const unsigned char* data, unsigned long len) {
     self.hash.update(data, len);
 }
 
-void TlsTranscript::finish(unsigned char out[32]) {
+inline void TlsTranscript::finish(unsigned char out[32]) {
     // Finish on a copy so the transcript can continue to be used.
     struct Sha256Ctx snap;
     unsafe { memcpy((void*)&snap, (const void*)&self.hash, (unsigned long)sizeof(struct Sha256Ctx)); }
@@ -89,7 +89,7 @@ void TlsTranscript::finish(unsigned char out[32]) {
 
 // ── tls_session_init ──────────────────────────────────────────────────────────
 
-struct TlsSession tls_session_init() {
+inline struct TlsSession tls_session_init() {
     struct TlsSession s;
     unsafe { memset((void*)&s, 0, (unsigned long)sizeof(struct TlsSession)); }
     s.transcript.hash = sha256_init();
@@ -98,7 +98,7 @@ struct TlsSession tls_session_init() {
 
 // ── TlsSession methods ────────────────────────────────────────────────────────
 
-int TlsSession::is_established() const {
+inline int TlsSession::is_established() const {
     return self.handshake_done;
 }
 
@@ -116,7 +116,7 @@ void TlsSession::install_keys(const unsigned char write_key[TLS_KEY_LEN],
     self.read_seq  = (unsigned long long)0;
 }
 
-void TlsSession::compute_nonce(unsigned char nonce[TLS_IV_LEN], int is_write) const {
+inline void TlsSession::compute_nonce(unsigned char nonce[TLS_IV_LEN], int is_write) const {
     // Copy base IV into nonce, then XOR bytes [4..11] with the 8-byte big-endian
     // sequence number per RFC 8446 §5.3.
     unsigned char seq_bytes[8];

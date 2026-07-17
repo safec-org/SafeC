@@ -4,7 +4,7 @@
 
 namespace std {
 
-struct RingBuffer ring_init(&static unsigned char buf, unsigned long cap) {
+inline struct RingBuffer ring_init(&static unsigned char buf, unsigned long cap) {
     struct RingBuffer rb;
     rb.buf  = buf;
     rb.cap  = cap;
@@ -32,7 +32,7 @@ inline int RingBuffer::is_full() const {
     return 0;
 }
 
-unsigned long RingBuffer::write(const &stack unsigned char data, unsigned long len) {
+inline unsigned long RingBuffer::write(const &stack unsigned char data, unsigned long len) {
     unsigned long space = self.writable();
     if (len > space) { len = space; }
     unsigned long head = self.head;
@@ -49,7 +49,7 @@ unsigned long RingBuffer::write(const &stack unsigned char data, unsigned long l
     return len;
 }
 
-unsigned long RingBuffer::read(&stack unsigned char out, unsigned long len) {
+inline unsigned long RingBuffer::read(&stack unsigned char out, unsigned long len) {
     unsigned long avail = self.readable();
     if (len > avail) { len = avail; }
     unsigned long tail = self.tail;
@@ -65,7 +65,7 @@ unsigned long RingBuffer::read(&stack unsigned char out, unsigned long len) {
     return len;
 }
 
-unsigned long RingBuffer::peek(&stack unsigned char out, unsigned long len) const {
+inline unsigned long RingBuffer::peek(&stack unsigned char out, unsigned long len) const {
     unsigned long avail = self.readable();
     if (len > avail) { len = avail; }
     unsigned long tail = self.tail;
@@ -79,7 +79,7 @@ unsigned long RingBuffer::peek(&stack unsigned char out, unsigned long len) cons
     return len;
 }
 
-unsigned long RingBuffer::discard(unsigned long len) {
+inline unsigned long RingBuffer::discard(unsigned long len) {
     unsigned long avail = self.readable();
     if (len > avail) { len = avail; }
     self.tail = self.tail + len;

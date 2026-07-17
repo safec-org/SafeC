@@ -26,7 +26,7 @@ inline int Slice::set_raw(unsigned long idx, const void* val) {
     return 1;
 }
 
-struct Slice Slice::sub(unsigned long start, unsigned long end) const {
+inline struct Slice Slice::sub(unsigned long start, unsigned long end) const {
     struct Slice out;
     if (start > end || end > self.len) {
         out.ptr      = (void*)0;
@@ -43,13 +43,13 @@ struct Slice Slice::sub(unsigned long start, unsigned long end) const {
 inline unsigned long Slice::length() const { return self.len; }
 inline int           Slice::is_empty() const { return self.len == (unsigned long)0; }
 
-void Slice::free() {
+inline void Slice::free() {
     unsafe { free(self.ptr); self.ptr = (void*)0; self.len = (unsigned long)0; }
 }
 
 // ── Construction ──────────────────────────────────────────────────────────────
 
-struct Slice slice_void_from(void* ptr, unsigned long len, unsigned long elem_size) {
+inline struct Slice slice_void_from(void* ptr, unsigned long len, unsigned long elem_size) {
     struct Slice s;
     s.ptr       = ptr;
     s.len       = len;
@@ -57,7 +57,7 @@ struct Slice slice_void_from(void* ptr, unsigned long len, unsigned long elem_si
     return s;
 }
 
-struct Slice slice_void_alloc(unsigned long len, unsigned long elem_size) {
+inline struct Slice slice_void_alloc(unsigned long len, unsigned long elem_size) {
     struct Slice s;
     s.len       = len;
     s.elem_size = elem_size;

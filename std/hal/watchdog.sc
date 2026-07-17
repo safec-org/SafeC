@@ -10,11 +10,11 @@
 // Magic feed value (common on ARM Cortex-M)
 namespace std {
 
-unsigned int wdt_feed_magic_() {
+inline unsigned int wdt_feed_magic_() {
     return (unsigned int)0x6969;
 }
 
-struct Watchdog watchdog_init(void* base, unsigned int timeout) {
+inline struct Watchdog watchdog_init(void* base, unsigned int timeout) {
     struct Watchdog w;
     w.base    = base;
     w.timeout = timeout;
@@ -25,7 +25,7 @@ struct Watchdog watchdog_init(void* base, unsigned int timeout) {
     return w;
 }
 
-void Watchdog::enable() {
+inline void Watchdog::enable() {
     unsafe {
         unsigned int* ctrl = (unsigned int*)self.base;
         unsigned int val = volatile_load(ctrl);
@@ -34,14 +34,14 @@ void Watchdog::enable() {
     }
 }
 
-void Watchdog::feed() {
+inline void Watchdog::feed() {
     unsafe {
         unsigned int* feed_reg = (unsigned int*)((unsigned long)self.base + (unsigned long)8);
         volatile_store(feed_reg, wdt_feed_magic_());
     }
 }
 
-int Watchdog::caused_reset() const {
+inline int Watchdog::caused_reset() const {
     unsafe {
         unsigned int* status = (unsigned int*)((unsigned long)self.base + (unsigned long)12);
         unsigned int val = volatile_load(status);

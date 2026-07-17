@@ -93,7 +93,7 @@ static void sha256_compress_(unsigned int* h, const unsigned char* block) {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-struct Sha256Ctx sha256_init() {
+inline struct Sha256Ctx sha256_init() {
     struct Sha256Ctx ctx;
     int i = 0;
     while (i < 8) { ctx.h[i] = sha256_H0_[i]; i = i + 1; }
@@ -103,7 +103,7 @@ struct Sha256Ctx sha256_init() {
     return ctx;
 }
 
-struct Sha256Ctx sha224_init() {
+inline struct Sha256Ctx sha224_init() {
     struct Sha256Ctx ctx = sha256_init();
     int i = 0;
     while (i < 8) { ctx.h[i] = sha224_H0_[i]; i = i + 1; }
@@ -111,7 +111,7 @@ struct Sha256Ctx sha224_init() {
     return ctx;
 }
 
-void Sha256Ctx::update(const &stack unsigned char data, unsigned long len) {
+inline void Sha256Ctx::update(const &stack unsigned char data, unsigned long len) {
     unsigned long buf_used = self.total_bytes % (unsigned long)SHA256_BLOCK_SIZE;
     self.total_bytes = self.total_bytes + len;
 

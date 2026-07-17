@@ -9,7 +9,7 @@
 
 namespace std {
 
-struct GpioPin gpio_init(void* base, int pin, int direction) {
+inline struct GpioPin gpio_init(void* base, int pin, int direction) {
     struct GpioPin p;
     p.base      = base;
     p.pin_mask  = (unsigned int)1 << pin;
@@ -27,7 +27,7 @@ struct GpioPin gpio_init(void* base, int pin, int direction) {
     return p;
 }
 
-void GpioPin::set_direction(int direction) {
+inline void GpioPin::set_direction(int direction) {
     self.direction = direction;
     unsafe {
         unsigned int* dir_reg = (unsigned int*)self.base;
@@ -41,7 +41,7 @@ void GpioPin::set_direction(int direction) {
     }
 }
 
-void GpioPin::write(int value) {
+inline void GpioPin::write(int value) {
     unsafe {
         unsigned int* out_reg = (unsigned int*)((unsigned long)self.base + (unsigned long)4);
         unsigned int val = volatile_load(out_reg);
@@ -54,7 +54,7 @@ void GpioPin::write(int value) {
     }
 }
 
-int GpioPin::read() const {
+inline int GpioPin::read() const {
     unsafe {
         unsigned int* in_reg = (unsigned int*)((unsigned long)self.base + (unsigned long)8);
         unsigned int val = volatile_load(in_reg);
@@ -65,7 +65,7 @@ int GpioPin::read() const {
     }
 }
 
-void GpioPin::toggle() {
+inline void GpioPin::toggle() {
     unsafe {
         unsigned int* out_reg = (unsigned int*)((unsigned long)self.base + (unsigned long)4);
         unsigned int val = volatile_load(out_reg);
@@ -74,7 +74,7 @@ void GpioPin::toggle() {
     }
 }
 
-void GpioPin::set_pull(int pull) {
+inline void GpioPin::set_pull(int pull) {
     unsafe {
         unsigned int* pull_reg = (unsigned int*)((unsigned long)self.base + (unsigned long)12);
         unsigned int val = volatile_load(pull_reg);

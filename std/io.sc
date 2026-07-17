@@ -38,22 +38,22 @@ extern void* __stderrp;
 // ── Basic stdout output ───────────────────────────────────────────────────────
 
 // Print a string without a trailing newline.
-void print(const char* s) {
+inline void print(const char* s) {
     unsafe { fputs(s, __stdoutp); }
 }
 
 // Print a string followed by a newline.
-void println(const char* s) {
+inline void println(const char* s) {
     unsafe { puts(s); }
 }
 
 // Print a string to stderr without a trailing newline.
-void eprint(const char* s) {
+inline void eprint(const char* s) {
     unsafe { fputs(s, __stderrp); }
 }
 
 // Print a string to stderr followed by a newline.
-void eprintln(const char* s) {
+inline void eprintln(const char* s) {
     unsafe {
         fputs(s, __stderrp);
         fputc('\n', __stderrp);
@@ -61,63 +61,63 @@ void eprintln(const char* s) {
 }
 
 // Print a single character to stdout.
-void print_char(int c) {
+inline void print_char(int c) {
     unsafe { putchar(c); }
 }
 
 // Print a signed 64-bit integer to stdout.
-void print_int(long long v) {
+inline void print_int(long long v) {
     unsafe { printf("%lld", v); }
 }
 
 // Print a double to stdout.
-void print_float(double v) {
+inline void print_float(double v) {
     unsafe { printf("%g", v); }
 }
 
 // Print a signed 64-bit integer followed by newline.
-void println_int(long long v) {
+inline void println_int(long long v) {
     unsafe { printf("%lld\n", v); }
 }
 
 // Print a double followed by newline.
-void println_float(double v) {
+inline void println_float(double v) {
     unsafe { printf("%g\n", v); }
 }
 
 // Flush stdout — call before program exit if using print() without println().
-void flush_stdout() {
+inline void flush_stdout() {
     unsafe { fflush(__stdoutp); }
 }
 
 // Flush stderr.
-void flush_stderr() {
+inline void flush_stderr() {
     unsafe { fflush(__stderrp); }
 }
 
 // ── Additional stdout output ───────────────────────────────────────────────────
 
-void print_uint(unsigned long long v) {
+inline void print_uint(unsigned long long v) {
     unsafe { printf("%llu", v); }
 }
 
-void print_hex(unsigned long long v) {
+inline void print_hex(unsigned long long v) {
     unsafe { printf("0x%llx", v); }
 }
 
-void print_oct(unsigned long long v) {
+inline void print_oct(unsigned long long v) {
     unsafe { printf("0%llo", v); }
 }
 
-void print_ptr(const void* p) {
+inline void print_ptr(const void* p) {
     unsafe { printf("%p", p); }
 }
 
-void println_uint(unsigned long long v) {
+inline void println_uint(unsigned long long v) {
     unsafe { printf("%llu\n", v); }
 }
 
-void println_char(int c) {
+inline void println_char(int c) {
     unsafe {
         putchar(c);
         putchar('\n');
@@ -126,55 +126,55 @@ void println_char(int c) {
 
 // ── Stderr output ─────────────────────────────────────────────────────────────
 
-void eprint_int(long long v) {
+inline void eprint_int(long long v) {
     unsafe { fprintf(__stderrp, "%lld", v); }
 }
 
-void eprint_float(double v) {
+inline void eprint_float(double v) {
     unsafe { fprintf(__stderrp, "%g", v); }
 }
 
 // ── Buffer formatting (snprintf wrappers) ─────────────────────────────────────
 
-int io_fmt_int(char* buf, int n, long long v) {
+inline int io_fmt_int(char* buf, int n, long long v) {
     unsafe { return snprintf(buf, (unsigned long)n, "%lld", v); }
 }
 
-int io_fmt_uint(char* buf, int n, unsigned long long v) {
+inline int io_fmt_uint(char* buf, int n, unsigned long long v) {
     unsafe { return snprintf(buf, (unsigned long)n, "%llu", v); }
 }
 
-int io_fmt_float(char* buf, int n, double v) {
+inline int io_fmt_float(char* buf, int n, double v) {
     unsafe { return snprintf(buf, (unsigned long)n, "%g", v); }
 }
 
-int io_fmt_float_prec(char* buf, int n, double v, int prec) {
+inline int io_fmt_float_prec(char* buf, int n, double v, int prec) {
     unsafe { return snprintf(buf, (unsigned long)n, "%.*f", prec, v); }
 }
 
-int io_fmt_hex(char* buf, int n, unsigned long long v) {
+inline int io_fmt_hex(char* buf, int n, unsigned long long v) {
     unsafe { return snprintf(buf, (unsigned long)n, "0x%llx", v); }
 }
 
-int io_fmt_str(char* buf, int n, const char* s) {
+inline int io_fmt_str(char* buf, int n, const char* s) {
     unsafe { return snprintf(buf, (unsigned long)n, "%s", s); }
 }
 
 // ── Input ─────────────────────────────────────────────────────────────────────
 
 // Read a single character from stdin.  Returns the character or SC_EOF (-1).
-int io_getchar() {
+inline int io_getchar() {
     unsafe { return getchar(); }
 }
 
 // Push a character back so the next read returns it.
-int io_ungetc(int c) {
+inline int io_ungetc(int c) {
     unsafe { return ungetc(c, __stdinp); }
 }
 
 // Read a line (up to n-1 chars + NUL) from stdin.
 // Returns the number of characters read (excluding NUL), or -1 on EOF/error.
-int io_read_line(char* buf, int n) {
+inline int io_read_line(char* buf, int n) {
     if (n <= 0) { return -1; }
     unsafe {
         if (fgets(buf, n, __stdinp) == (char*)0) { return -1; }
@@ -190,7 +190,7 @@ int io_read_line(char* buf, int n) {
 
 // Read one whitespace-delimited token from stdin into buf[0..n-1].
 // Returns number of chars read, 0 = EOF before any token, -1 = buffer too small.
-int io_read_token(char* buf, int n) {
+inline int io_read_token(char* buf, int n) {
     if (n <= 0) { return -1; }
     unsafe {
         int c = getchar();
@@ -209,7 +209,7 @@ int io_read_token(char* buf, int n) {
 }
 
 // Parse a signed decimal integer from stdin.  Returns 1 on success.
-int io_scan_int(&stack long long out) {
+inline int io_scan_int(&stack long long out) {
     unsafe {
         int r = scanf("%lld", (long long*)out);
         return r == 1;
@@ -217,7 +217,7 @@ int io_scan_int(&stack long long out) {
 }
 
 // Parse an unsigned decimal integer from stdin.  Returns 1 on success.
-int io_scan_uint(&stack unsigned long long out) {
+inline int io_scan_uint(&stack unsigned long long out) {
     unsafe {
         int r = scanf("%llu", (unsigned long long*)out);
         return r == 1;
@@ -225,7 +225,7 @@ int io_scan_uint(&stack unsigned long long out) {
 }
 
 // Parse a floating-point number from stdin.  Returns 1 on success.
-int io_scan_float(&stack double out) {
+inline int io_scan_float(&stack double out) {
     unsafe {
         int r = scanf("%lf", (double*)out);
         return r == 1;
@@ -235,17 +235,17 @@ int io_scan_float(&stack double out) {
 // ── File system ───────────────────────────────────────────────────────────────
 
 // Delete a file.  Returns 0 on success, non-zero on error.
-int io_remove(const char* path) {
+inline int io_remove(const char* path) {
     unsafe { return remove(path); }
 }
 
 // Rename / move a file.  Returns 0 on success, non-zero on error.
-int io_rename(const char* old_path, const char* new_path) {
+inline int io_rename(const char* old_path, const char* new_path) {
     unsafe { return rename(old_path, new_path); }
 }
 
 // Create a temporary file opened in "w+b" mode.  Returns handle or NULL.
-void* io_tmpfile() {
+inline void* io_tmpfile() {
     unsafe { return tmpfile(); }
 }
 

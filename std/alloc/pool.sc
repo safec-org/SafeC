@@ -7,12 +7,12 @@ namespace std {
 extern void* malloc(unsigned long size);
 extern void  free(void* ptr);
 
-unsigned long PoolAllocator::header_size_() const {
+inline unsigned long PoolAllocator::header_size_() const {
     // sizeof(PoolBlock) = size(ul) + is_free(int) + next(ptr) — 24 bytes conservative
     return (unsigned long)24;
 }
 
-struct PoolAllocator pool_init(&heap void buffer, unsigned long cap) {
+inline struct PoolAllocator pool_init(&heap void buffer, unsigned long cap) {
     struct PoolAllocator a;
     a.base = buffer;
     a.cap  = cap;
@@ -26,7 +26,7 @@ struct PoolAllocator pool_init(&heap void buffer, unsigned long cap) {
     return a;
 }
 
-struct PoolAllocator pool_new(unsigned long cap) {
+inline struct PoolAllocator pool_new(unsigned long cap) {
     struct PoolAllocator a;
     unsafe { a.base = (&heap void)malloc(cap); }
     a.cap = cap;
@@ -92,7 +92,7 @@ void PoolAllocator::dealloc(void* ptr) {
     }
 }
 
-unsigned long PoolAllocator::available() const {
+inline unsigned long PoolAllocator::available() const {
     unsigned long total = (unsigned long)0;
     unsafe {
         struct PoolBlock* cur = (struct PoolBlock*)self.head;
@@ -106,7 +106,7 @@ unsigned long PoolAllocator::available() const {
     return total;
 }
 
-void PoolAllocator::destroy() {
+inline void PoolAllocator::destroy() {
     unsafe { free((void*)self.base); }
     self.head = (void*)0;
     self.cap  = (unsigned long)0;

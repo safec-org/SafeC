@@ -95,7 +95,7 @@ static void rng_setup_(unsigned int* state, const unsigned char* key32,
     }
 }
 
-void rng_init_seed(&stack RngCtx ctx, const unsigned char seed[32]) {
+inline void rng_init_seed(&stack RngCtx ctx, const unsigned char seed[32]) {
     rng_setup_(ctx.state, seed, (unsigned int)0, (unsigned int)1);
     chacha20_block_(ctx.state, (unsigned char*)ctx.buf);
     ctx.state[12] = ctx.state[12] + (unsigned int)1;
@@ -163,7 +163,7 @@ int rng_init(&stack RngCtx ctx) {
 
 // ── RngCtx methods ─────────────────────────────────────────────────────────────
 
-void RngCtx::fill(unsigned char* out, unsigned long len) {
+inline void RngCtx::fill(unsigned char* out, unsigned long len) {
     unsigned long i = (unsigned long)0;
     while (i < len) {
         if (self.buf_pos >= (unsigned long)RNG_BLOCK_SIZE) {
@@ -177,7 +177,7 @@ void RngCtx::fill(unsigned char* out, unsigned long len) {
     }
 }
 
-unsigned int RngCtx::rand32() {
+inline unsigned int RngCtx::rand32() {
     unsigned char b[4];
     self.fill((unsigned char*)b, (unsigned long)4);
     unsafe {
@@ -188,13 +188,13 @@ unsigned int RngCtx::rand32() {
     }
 }
 
-unsigned long RngCtx::rand64() {
+inline unsigned long RngCtx::rand64() {
     unsigned long lo = (unsigned long)self.rand32();
     unsigned long hi = (unsigned long)self.rand32();
     return (hi << (unsigned long)32) | lo;
 }
 
-unsigned long RngCtx::rand_range(unsigned long bound) {
+inline unsigned long RngCtx::rand_range(unsigned long bound) {
     if (bound <= (unsigned long)1) { return (unsigned long)0; }
     // Rejection sampling to eliminate bias
     unsigned long threshold = (~bound + (unsigned long)1) % bound;

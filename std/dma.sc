@@ -7,7 +7,7 @@
 
 namespace std {
 
-struct DmaBuffer dma_buf_wrap(void* virt, unsigned long phys, unsigned long size) {
+inline struct DmaBuffer dma_buf_wrap(void* virt, unsigned long phys, unsigned long size) {
     struct DmaBuffer buf;
     buf.virt  = virt;
     buf.phys  = (phys != (unsigned long)0) ? phys : (unsigned long)virt;
@@ -62,18 +62,18 @@ void DmaBuffer::to_cpu() {
     self.owner = 0;
 }
 
-int DmaBuffer::cpu_accessible() const {
+inline int DmaBuffer::cpu_accessible() const {
     if (self.owner == 0) { return 1; }
     return 0;
 }
 
-unsigned long DmaBuffer::phys_at(unsigned long offset) const {
+inline unsigned long DmaBuffer::phys_at(unsigned long offset) const {
     return self.phys + offset;
 }
 
 // ── DmaChannel ────────────────────────────────────────────────────────────────
 
-int DmaChannel::start(unsigned long src_phys, unsigned long dst_phys, unsigned long len) {
+inline int DmaChannel::start(unsigned long src_phys, unsigned long dst_phys, unsigned long len) {
     if (self.start_fn == (void*)0) { return -1; }
     if (self.busy != 0) { return -1; }
     unsafe {
@@ -86,7 +86,7 @@ int DmaChannel::start(unsigned long src_phys, unsigned long dst_phys, unsigned l
     return -1;
 }
 
-int DmaChannel::wait(unsigned int max_polls) {
+inline int DmaChannel::wait(unsigned int max_polls) {
     if (self.poll_fn == (void*)0) {
         self.busy = 0;
         return 0;
@@ -107,25 +107,25 @@ int DmaChannel::wait(unsigned int max_polls) {
     return -1;
 }
 
-int DmaChannel::is_busy() const {
+inline int DmaChannel::is_busy() const {
     if (self.busy != 0) { return 1; }
     return 0;
 }
 
 // ── DmaSgList ─────────────────────────────────────────────────────────────────
 
-void DmaSgList::add(unsigned long phys, unsigned long len) {
+inline void DmaSgList::add(unsigned long phys, unsigned long len) {
     if (self.count >= DMA_SG_MAX) { return; }
     self.entries[self.count].phys = phys;
     self.entries[self.count].len  = len;
     self.count = self.count + 1;
 }
 
-void DmaSgList::clear() {
+inline void DmaSgList::clear() {
     self.count = 0;
 }
 
-unsigned long DmaSgList::total_len() const {
+inline unsigned long DmaSgList::total_len() const {
     unsigned long total = (unsigned long)0;
     int i = 0;
     while (i < self.count) {

@@ -18,11 +18,11 @@ static struct TlsfAllocator heap_tlsf_;
 static int heap_ready_ = 0;
 
 // TLSF block header size (32 bytes: size + prev_phys + next_free + prev_free).
-unsigned long heap_hdr_() {
+inline unsigned long heap_hdr_() {
     return (unsigned long)32;
 }
 
-void heap_init() {
+inline void heap_init() {
     if (heap_ready_ != 0) { return; }
     unsafe {
         // Cast static storage to &heap void for tlsf_init.
@@ -37,7 +37,7 @@ void heap_init() {
     return heap_tlsf_.alloc(size);
 }
 
-void heap_free(&heap void ptr) {
+inline void heap_free(&heap void ptr) {
     if (heap_ready_ == 0) { return; }
     if ((void*)ptr == (void*)0) { return; }
     heap_tlsf_.free(ptr);
@@ -61,7 +61,7 @@ void heap_free(&heap void ptr) {
     return new_ptr;
 }
 
-unsigned long heap_capacity() {
+inline unsigned long heap_capacity() {
     return (unsigned long)HEAP_SIZE;
 }
 
@@ -79,7 +79,7 @@ void heap_init() { }  // no-op
     unsafe { return (&heap void)malloc(size); }
 }
 
-void heap_free(&heap void ptr) {
+inline void heap_free(&heap void ptr) {
     unsafe { free((void*)ptr); }
 }
 
@@ -87,7 +87,7 @@ void heap_free(&heap void ptr) {
     unsafe { return (&heap void)realloc((void*)ptr, new_size); }
 }
 
-unsigned long heap_capacity() {
+inline unsigned long heap_capacity() {
     return (unsigned long)0;  // unbounded
 }
 

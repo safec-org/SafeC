@@ -8,12 +8,12 @@ static IrqHandler vtable_default_ = (IrqHandler)0;
 
 struct VectorTable vtable;
 
-void vtable_default_handler() {
+inline void vtable_default_handler() {
     // Infinite loop — override in application.
     unsafe { while (1) {} }
 }
 
-void vtable_init() {
+inline void vtable_init() {
     vtable.count = 0;
     if (vtable_default_ == (IrqHandler)0) {
         vtable_default_ = vtable_default_handler;
@@ -25,24 +25,24 @@ void vtable_init() {
     }
 }
 
-void VectorTable::install(int index, IrqHandler handler) {
+inline void VectorTable::install(int index, IrqHandler handler) {
     if (index < 0 || index >= VTABLE_MAX_VECTORS) { return; }
     if (handler == (IrqHandler)0) { return; }
     self.handlers[index] = handler;
     if (index >= self.count) { self.count = index + 1; }
 }
 
-void VectorTable::remove(int index) {
+inline void VectorTable::remove(int index) {
     if (index < 0 || index >= VTABLE_MAX_VECTORS) { return; }
     self.handlers[index] = vtable_default_;
 }
 
-IrqHandler VectorTable::get(int index) const {
+inline IrqHandler VectorTable::get(int index) const {
     if (index < 0 || index >= VTABLE_MAX_VECTORS) { return (IrqHandler)0; }
     return self.handlers[index];
 }
 
-void VectorTable::dispatch(int index) {
+inline void VectorTable::dispatch(int index) {
     if (index < 0 || index >= VTABLE_MAX_VECTORS) {
         vtable_default_handler();
         return;
@@ -55,11 +55,11 @@ void VectorTable::dispatch(int index) {
     unsafe { h(); }
 }
 
-void VectorTable::set_default(IrqHandler handler) {
+inline void VectorTable::set_default(IrqHandler handler) {
     if (handler != (IrqHandler)0) { vtable_default_ = handler; }
 }
 
-void vtable_activate() {
+inline void vtable_activate() {
     unsafe {
 #if defined(__ARM_ARCH_7M__) || defined(__ARM_ARCH_7EM__) || defined(__ARM_ARCH_8M_MAIN__)
         // Cortex-M: set VTOR to address of vtable.handlers[0]

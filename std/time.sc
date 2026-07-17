@@ -15,11 +15,11 @@ extern int  nanosleep(void* req, void* rem);
 // struct tm has 9 int fields (at minimum); we use a 56-byte buffer to be safe
 // struct timespec = { time_t sec; long nsec } = 16 bytes on 64-bit
 
-long long time_now() {
+inline long long time_now() {
     unsafe { return time((long long*)0); }
 }
 
-void time_gmtime(long long t, int* out) {
+inline void time_gmtime(long long t, int* out) {
     unsafe {
         // struct tm is platform-specific; use a generous 56-byte buffer
         int tm_buf[14]; // 14 ints = 56 bytes, covers struct tm on all platforms
@@ -37,7 +37,7 @@ void time_gmtime(long long t, int* out) {
     }
 }
 
-void time_localtime(long long t, int* out) {
+inline void time_localtime(long long t, int* out) {
     unsafe {
         int tm_buf[14];
         localtime_r((const long long*)&t, (void*)tm_buf);
@@ -47,7 +47,7 @@ void time_localtime(long long t, int* out) {
     }
 }
 
-unsigned long time_format(char* buf, unsigned long cap, const char* fmt, int* tm_fields) {
+inline unsigned long time_format(char* buf, unsigned long cap, const char* fmt, int* tm_fields) {
     unsafe {
         int tm_buf[14];
         tm_buf[0] = tm_fields[0]; tm_buf[1] = tm_fields[1]; tm_buf[2] = tm_fields[2];
@@ -58,7 +58,7 @@ unsigned long time_format(char* buf, unsigned long cap, const char* fmt, int* tm
     }
 }
 
-int time_parse(const char* s, const char* fmt, int* tm_fields) {
+inline int time_parse(const char* s, const char* fmt, int* tm_fields) {
     unsafe {
         int tm_buf[14];
         tm_buf[0]=0; tm_buf[1]=0; tm_buf[2]=0; tm_buf[3]=0;
@@ -73,7 +73,7 @@ int time_parse(const char* s, const char* fmt, int* tm_fields) {
     }
 }
 
-long long time_mktime(int* tm_fields) {
+inline long long time_mktime(int* tm_fields) {
     unsafe {
         int tm_buf[14];
         tm_buf[0] = tm_fields[0]; tm_buf[1] = tm_fields[1]; tm_buf[2] = tm_fields[2];
@@ -84,11 +84,11 @@ long long time_mktime(int* tm_fields) {
     }
 }
 
-double time_diff(long long end, long long start) {
+inline double time_diff(long long end, long long start) {
     return (double)(end - start);
 }
 
-long long time_wall_ns() {
+inline long long time_wall_ns() {
     unsafe {
         long long ts[2];
         if (clock_gettime(0, (void*)ts) != 0) return -1LL;
@@ -96,7 +96,7 @@ long long time_wall_ns() {
     }
 }
 
-long long time_mono_ns() {
+inline long long time_mono_ns() {
     unsafe {
         long long ts[2];
         if (clock_gettime(1, (void*)ts) != 0) return -1LL;
@@ -104,7 +104,7 @@ long long time_mono_ns() {
     }
 }
 
-long long time_cpu_ns() {
+inline long long time_cpu_ns() {
     unsafe {
         long long ts[2];
         if (clock_gettime(2, (void*)ts) != 0) return -1LL;
@@ -112,15 +112,15 @@ long long time_cpu_ns() {
     }
 }
 
-long long time_elapsed_ns(long long start, long long end) {
+inline long long time_elapsed_ns(long long start, long long end) {
     return end - start;
 }
 
-double time_ns_to_ms(long long ns) {
+inline double time_ns_to_ms(long long ns) {
     return (double)ns / 1000000.0;
 }
 
-void time_sleep_ns(long long ns) {
+inline void time_sleep_ns(long long ns) {
     unsafe {
         long long ts[2];
         ts[0] = ns / 1000000000LL;
@@ -129,11 +129,11 @@ void time_sleep_ns(long long ns) {
     }
 }
 
-int time_is_leap(int year) {
+inline int time_is_leap(int year) {
     return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
 }
 
-int time_days_in_month(int month, int year) {
+inline int time_days_in_month(int month, int year) {
     int days[12];
     days[0]=31; days[1]=28; days[2]=31; days[3]=30;
     days[4]=31; days[5]=30; days[6]=31; days[7]=31;

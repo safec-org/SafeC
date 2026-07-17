@@ -5,7 +5,7 @@
 // Accumulate fixed-point dot product.
 namespace std {
 
-Fixed dsp_dot(&stack Fixed a, &stack Fixed b, unsigned long n) {
+inline Fixed dsp_dot(&stack Fixed a, &stack Fixed b, unsigned long n) {
     Fixed acc = (Fixed)0;
     unsigned long i = 0UL;
     while (i < n) {
@@ -21,7 +21,7 @@ Fixed dsp_dot(&stack Fixed a, &stack Fixed b, unsigned long n) {
 
 // ── dsp_scale ─────────────────────────────────────────────────────────────────
 // Multiply every element by scale in-place.
-void dsp_scale(&stack Fixed a, Fixed scale, unsigned long n) {
+inline void dsp_scale(&stack Fixed a, Fixed scale, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         unsafe {
@@ -34,7 +34,7 @@ void dsp_scale(&stack Fixed a, Fixed scale, unsigned long n) {
 
 // ── dsp_add ───────────────────────────────────────────────────────────────────
 // Element-wise addition: out[i] = a[i] + b[i].
-void dsp_add(&stack Fixed a, &stack Fixed b, &stack Fixed out, unsigned long n) {
+inline void dsp_add(&stack Fixed a, &stack Fixed b, &stack Fixed out, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         unsafe {
@@ -121,7 +121,7 @@ void dsp_iir_lp(&stack Fixed in, &stack Fixed out, unsigned long n,
 
 // ── dsp_clip ──────────────────────────────────────────────────────────────────
 // Clamp every element to [lo, hi].
-void dsp_clip(&stack Fixed a, Fixed lo, Fixed hi, unsigned long n) {
+inline void dsp_clip(&stack Fixed a, Fixed lo, Fixed hi, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         Fixed v;
@@ -144,7 +144,7 @@ void dsp_clip(&stack Fixed a, Fixed lo, Fixed hi, unsigned long n) {
 
 // ── dsp_peak ──────────────────────────────────────────────────────────────────
 // Return maximum absolute value in array.
-Fixed dsp_peak(&stack Fixed a, unsigned long n) {
+inline Fixed dsp_peak(&stack Fixed a, unsigned long n) {
     Fixed peak = (Fixed)0;
     unsigned long i = 0UL;
     while (i < n) {
@@ -164,7 +164,7 @@ Fixed dsp_peak(&stack Fixed a, unsigned long n) {
 
 // ── dsp_rms ───────────────────────────────────────────────────────────────────
 // Root mean square: sqrt( sum(x[i]^2) / n ).
-Fixed dsp_rms(&stack Fixed a, unsigned long n) {
+inline Fixed dsp_rms(&stack Fixed a, unsigned long n) {
     if (n == 0UL) {
         return (Fixed)0;
     }

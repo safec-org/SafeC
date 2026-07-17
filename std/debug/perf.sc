@@ -50,7 +50,7 @@ unsigned long long perf_read_cycle() {
 // Hosted: use CLOCK_MONOTONIC for nanosecond accuracy.
 // Freestanding: return 0 (caller should use ticks + known freq).
 
-unsigned long long perf_read_ns() {
+inline unsigned long long perf_read_ns() {
 #ifndef __SAFEC_FREESTANDING__
     unsafe {
         // struct timespec { time_t tv_sec; long tv_nsec; } — 16 bytes on 64-bit.
@@ -65,20 +65,20 @@ unsigned long long perf_read_ns() {
 
 // ── PerfCounter methods ───────────────────────────────────────────────────────
 
-void PerfCounter::start() {
+inline void PerfCounter::start() {
     self.start_val = perf_read_cycle();
     self.end_val   = self.start_val;
 }
 
-void PerfCounter::stop() {
+inline void PerfCounter::stop() {
     self.end_val = perf_read_cycle();
 }
 
-unsigned long long PerfCounter::ticks() const {
+inline unsigned long long PerfCounter::ticks() const {
     return self.end_val - self.start_val;
 }
 
-unsigned long long PerfCounter::ns() const {
+inline unsigned long long PerfCounter::ns() const {
     if (self.freq_hz == (unsigned long long)0) { return (unsigned long long)0; }
     unsigned long long t = self.end_val - self.start_val;
     // ns = ticks * 1e9 / freq_hz.  Avoid overflow: compute (ticks / freq_hz) * 1e9

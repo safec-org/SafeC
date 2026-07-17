@@ -12,7 +12,7 @@ struct Coverage coverage;
 
 // ── coverage_init ─────────────────────────────────────────────────────────────
 
-void coverage_init() {
+inline void coverage_init() {
     coverage.count = 0;
     int i = 0;
     while (i < COV_MAX_SITES) {
@@ -27,7 +27,7 @@ void coverage_init() {
 
 // ── Coverage::register_site ───────────────────────────────────────────────────
 
-int Coverage::register_site(const char* file, int line) {
+inline int Coverage::register_site(const char* file, int line) {
     if (self.count >= COV_MAX_SITES) { return -1; }
     int idx = self.count;
     unsafe {
@@ -41,7 +41,7 @@ int Coverage::register_site(const char* file, int line) {
 
 // ── Coverage::hit ─────────────────────────────────────────────────────────────
 
-void Coverage::hit(int idx) {
+inline void Coverage::hit(int idx) {
     if (idx < 0 || idx >= self.count) { return; }
     unsafe {
         self.sites[idx].count = self.sites[idx].count + (unsigned long)1;
@@ -50,7 +50,7 @@ void Coverage::hit(int idx) {
 
 // ── Coverage::get ─────────────────────────────────────────────────────────────
 
-unsigned long Coverage::get(int idx) const {
+inline unsigned long Coverage::get(int idx) const {
     if (idx < 0 || idx >= self.count) { return (unsigned long)0; }
     unsafe { return self.sites[idx].count; }
     return (unsigned long)0;
@@ -85,7 +85,7 @@ void Coverage::report() const {
 
 // ── Coverage::covered_count ───────────────────────────────────────────────────
 
-int Coverage::covered_count() const {
+inline int Coverage::covered_count() const {
     int n = 0;
     int i = 0;
     while (i < self.count) {
@@ -99,7 +99,7 @@ int Coverage::covered_count() const {
 
 // ── Coverage::coverage_pct ────────────────────────────────────────────────────
 
-int Coverage::coverage_pct() const {
+inline int Coverage::coverage_pct() const {
     if (self.count == 0) { return 0; }
     int covered = self.covered_count();
     // Integer percentage: (covered * 100) / total.
@@ -108,7 +108,7 @@ int Coverage::coverage_pct() const {
 
 // ── Coverage::reset ───────────────────────────────────────────────────────────
 
-void Coverage::reset() {
+inline void Coverage::reset() {
     int i = 0;
     while (i < self.count) {
         unsafe { self.sites[i].count = (unsigned long)0; }

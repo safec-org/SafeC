@@ -7,7 +7,7 @@
 
 namespace std {
 
-int ipv6_addr_eq(const struct Ipv6Addr* a, const struct Ipv6Addr* b) {
+inline int ipv6_addr_eq(const struct Ipv6Addr* a, const struct Ipv6Addr* b) {
     unsafe {
         int i = 0;
         while (i < IPV6_ADDR_LEN) {
@@ -20,7 +20,7 @@ int ipv6_addr_eq(const struct Ipv6Addr* a, const struct Ipv6Addr* b) {
 
 // ── ipv6_addr_is_unspecified ──────────────────────────────────────────────────
 
-int ipv6_addr_is_unspecified(const struct Ipv6Addr* a) {
+inline int ipv6_addr_is_unspecified(const struct Ipv6Addr* a) {
     unsafe {
         int i = 0;
         while (i < IPV6_ADDR_LEN) {
@@ -34,7 +34,7 @@ int ipv6_addr_is_unspecified(const struct Ipv6Addr* a) {
 // ── ipv6_addr_is_loopback ─────────────────────────────────────────────────────
 // ::1 = 15 zero bytes followed by 0x01.
 
-int ipv6_addr_is_loopback(const struct Ipv6Addr* a) {
+inline int ipv6_addr_is_loopback(const struct Ipv6Addr* a) {
     unsafe {
         int i = 0;
         while (i < 15) {
@@ -50,7 +50,7 @@ int ipv6_addr_is_loopback(const struct Ipv6Addr* a) {
 // fe80::/10 — top 10 bits are 1111111010.
 // bytes[0] == 0xFE, bytes[1] & 0xC0 == 0x80
 
-int ipv6_addr_is_link_local(const struct Ipv6Addr* a) {
+inline int ipv6_addr_is_link_local(const struct Ipv6Addr* a) {
     unsafe {
         if (a->bytes[0] != (unsigned char)0xFE) { return 0; }
         if ((a->bytes[1] & (unsigned char)0xC0) != (unsigned char)0x80) { return 0; }
@@ -70,7 +70,7 @@ static char hex_nibble_(unsigned int v) {
 // Writes 8 groups of 4 hex digits separated by ':'.
 // No :: compression — always 39 printable chars + NUL (40 bytes total).
 
-void ipv6_addr_str(const struct Ipv6Addr* addr, char* buf) {
+inline void ipv6_addr_str(const struct Ipv6Addr* addr, char* buf) {
     unsigned long pos = (unsigned long)0;
     int group = 0;
     unsafe {

@@ -6,22 +6,22 @@
 
 namespace std {
 
-unsigned long aa64_read_mpidr() {
+inline unsigned long aa64_read_mpidr() {
     unsigned long v = (unsigned long)0;
     unsafe { asm volatile ("mrs %0, mpidr_el1" : "=r"(v)); }
     return v;
 }
-unsigned long aa64_read_currentel() {
+inline unsigned long aa64_read_currentel() {
     unsigned long v = (unsigned long)0;
     unsafe { asm volatile ("mrs %0, CurrentEL" : "=r"(v)); }
     return (v >> 2) & (unsigned long)3;
 }
-unsigned long aa64_read_daif() {
+inline unsigned long aa64_read_daif() {
     unsigned long v = (unsigned long)0;
     unsafe { asm volatile ("mrs %0, daif" : "=r"(v)); }
     return v;
 }
-void aa64_write_daif(unsigned long val) {
+inline void aa64_write_daif(unsigned long val) {
     unsafe { asm volatile ("msr daif, %0" : : "r"(val)); }
 }
 void aa64_irq_enable()  { unsafe { asm volatile ("msr daifclr, #2"); } }
@@ -36,32 +36,32 @@ void aa64_dmb_sy(){ unsafe { asm volatile ("dmb sy" : : : "memory"); } }
 
 struct Aa64Timer aa64_timer;
 
-unsigned long long Aa64Timer::read_cntpct() {
+inline unsigned long long Aa64Timer::read_cntpct() {
     unsigned long v = (unsigned long)0;
     unsafe { asm volatile ("mrs %0, cntpct_el0" : "=r"(v)); }
     return (unsigned long long)v;
 }
 
-unsigned long Aa64Timer::read_cntfrq() {
+inline unsigned long Aa64Timer::read_cntfrq() {
     unsigned long v = (unsigned long)0;
     unsafe { asm volatile ("mrs %0, cntfrq_el0" : "=r"(v)); }
     return v;
 }
 
-void Aa64Timer::set_tval(unsigned int tval) {
+inline void Aa64Timer::set_tval(unsigned int tval) {
     unsafe { asm volatile ("msr cntp_tval_el0, %0" : : "r"((unsigned long)tval)); }
 }
 
-void Aa64Timer::enable() {
+inline void Aa64Timer::enable() {
     // CNTP_CTL_EL0: bit0=ENABLE, bit1=IMASK (clear), bit2=ISTATUS
     unsafe { asm volatile ("msr cntp_ctl_el0, %0" : : "r"((unsigned long)1)); }
 }
 
-void Aa64Timer::disable() {
+inline void Aa64Timer::disable() {
     unsafe { asm volatile ("msr cntp_ctl_el0, %0" : : "r"((unsigned long)0)); }
 }
 
-int Aa64Timer::fire_pending() const {
+inline int Aa64Timer::fire_pending() const {
     unsigned long v = (unsigned long)0;
     unsafe { asm volatile ("mrs %0, cntp_ctl_el0" : "=r"(v)); }
     // ISTATUS = bit 2
@@ -93,21 +93,21 @@ static void gic_write32_(unsigned long addr, unsigned int val) {
 struct GicDist gic_dist;
 struct GicCpu  gic_cpu;
 
-void GicDist::enable_group0() {
+inline void GicDist::enable_group0() {
     gic_write32_(self.base, (unsigned int)1);
 }
 
-void GicDist::enable_irq(unsigned int irq) {
+inline void GicDist::enable_irq(unsigned int irq) {
     unsigned long reg = self.base + (unsigned long)0x100 + (unsigned long)(irq / (unsigned int)32) * (unsigned long)4;
     gic_write32_(reg, (unsigned int)1 << (irq % (unsigned int)32));
 }
 
-void GicDist::disable_irq(unsigned int irq) {
+inline void GicDist::disable_irq(unsigned int irq) {
     unsigned long reg = self.base + (unsigned long)0x180 + (unsigned long)(irq / (unsigned int)32) * (unsigned long)4;
     gic_write32_(reg, (unsigned int)1 << (irq % (unsigned int)32));
 }
 
-void GicDist::set_priority(unsigned int irq, unsigned char priority) {
+inline void GicDist::set_priority(unsigned int irq, unsigned char priority) {
     unsigned long reg = self.base + (unsigned long)0x400 + (unsigned long)irq;
     unsafe {
         volatile unsigned char* p = (volatile unsigned char*)reg;
@@ -115,7 +115,7 @@ void GicDist::set_priority(unsigned int irq, unsigned char priority) {
     }
 }
 
-void GicDist::set_target(unsigned int irq, unsigned char cpu_mask) {
+inline void GicDist::set_target(unsigned int irq, unsigned char cpu_mask) {
     unsigned long reg = self.base + (unsigned long)0x800 + (unsigned long)irq;
     unsafe {
         volatile unsigned char* p = (volatile unsigned char*)reg;
@@ -123,7 +123,7 @@ void GicDist::set_target(unsigned int irq, unsigned char cpu_mask) {
     }
 }
 
-void GicDist::set_config(unsigned int irq, int edge_triggered) {
+inline void GicDist::set_config(unsigned int irq, int edge_triggered) {
     unsigned long reg = self.base + (unsigned long)0xC00 + (unsigned long)(irq / (unsigned int)16) * (unsigned long)4;
     unsigned int  shift = (irq % (unsigned int)16) * (unsigned int)2;
     unsigned int val = gic_read32_(reg);
@@ -135,14 +135,14 @@ void GicDist::set_config(unsigned int irq, int edge_triggered) {
     gic_write32_(reg, val);
 }
 
-int GicDist::is_pending(unsigned int irq) const {
+inline int GicDist::is_pending(unsigned int irq) const {
     unsigned long reg = self.base + (unsigned long)0x200 + (unsigned long)(irq / (unsigned int)32) * (unsigned long)4;
     unsigned int val = gic_read32_(reg);
     if ((val >> (irq % (unsigned int)32)) & (unsigned int)1) { return 1; }
     return 0;
 }
 
-void GicDist::clear_pending(unsigned int irq) {
+inline void GicDist::clear_pending(unsigned int irq) {
     unsigned long reg = self.base + (unsigned long)0x280 + (unsigned long)(irq / (unsigned int)32) * (unsigned long)4;
     gic_write32_(reg, (unsigned int)1 << (irq % (unsigned int)32));
 }
@@ -151,28 +151,28 @@ void GicDist::clear_pending(unsigned int irq) {
 // GICC_CTLR +0x000  GICC_PMR +0x004  GICC_IAR +0x00C  GICC_EOIR +0x010
 // GICC_RPR  +0x014
 
-void GicCpu::enable(unsigned char min_priority) {
+inline void GicCpu::enable(unsigned char min_priority) {
     gic_write32_(self.base + (unsigned long)4, (unsigned int)min_priority);
     gic_write32_(self.base, (unsigned int)1);
 }
 
-void GicCpu::disable() {
+inline void GicCpu::disable() {
     gic_write32_(self.base, (unsigned int)0);
 }
 
-unsigned int GicCpu::ack() {
+inline unsigned int GicCpu::ack() {
     return gic_read32_(self.base + (unsigned long)0xC) & (unsigned int)0x3FF;
 }
 
-void GicCpu::eoi(unsigned int irq) {
+inline void GicCpu::eoi(unsigned int irq) {
     gic_write32_(self.base + (unsigned long)0x10, irq & (unsigned int)0x3FF);
 }
 
-unsigned int GicCpu::running_priority() const {
+inline unsigned int GicCpu::running_priority() const {
     return gic_read32_(self.base + (unsigned long)0x14);
 }
 
-void gic_init(unsigned long dist_base, unsigned long cpu_base) {
+inline void gic_init(unsigned long dist_base, unsigned long cpu_base) {
     gic_dist.base = dist_base;
     gic_cpu.base  = cpu_base;
 }

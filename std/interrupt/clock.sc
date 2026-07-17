@@ -9,7 +9,7 @@
 
 namespace std {
 
-struct ClockConfig clock_init(void* base) {
+inline struct ClockConfig clock_init(void* base) {
     struct ClockConfig c;
     c.base     = base;
     c.source   = 0; // HSI default
@@ -20,7 +20,7 @@ struct ClockConfig clock_init(void* base) {
     return c;
 }
 
-void ClockConfig::set_source(int source) {
+inline void ClockConfig::set_source(int source) {
     self.source = source;
     unsafe {
         unsigned int* ctrl = (unsigned int*)self.base;
@@ -72,7 +72,7 @@ int ClockConfig::configure_pll(unsigned int mul, unsigned int div) {
     return 0;
 }
 
-void ClockConfig::set_ahb_div(unsigned int div) {
+inline void ClockConfig::set_ahb_div(unsigned int div) {
     self.ahb_div = div;
     unsafe {
         unsigned int* cfg = (unsigned int*)((unsigned long)self.base + (unsigned long)8);
@@ -83,7 +83,7 @@ void ClockConfig::set_ahb_div(unsigned int div) {
     }
 }
 
-void ClockConfig::set_apb1_div(unsigned int div) {
+inline void ClockConfig::set_apb1_div(unsigned int div) {
     self.apb1_div = div;
     unsafe {
         unsigned int* cfg = (unsigned int*)((unsigned long)self.base + (unsigned long)8);
@@ -94,7 +94,7 @@ void ClockConfig::set_apb1_div(unsigned int div) {
     }
 }
 
-void ClockConfig::set_apb2_div(unsigned int div) {
+inline void ClockConfig::set_apb2_div(unsigned int div) {
     self.apb2_div = div;
     unsafe {
         unsigned int* cfg = (unsigned int*)((unsigned long)self.base + (unsigned long)8);
@@ -105,7 +105,7 @@ void ClockConfig::set_apb2_div(unsigned int div) {
     }
 }
 
-unsigned int ClockConfig::get_freq() const {
+inline unsigned int ClockConfig::get_freq() const {
     return self.sys_freq / self.ahb_div;
 }
 

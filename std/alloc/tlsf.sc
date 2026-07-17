@@ -9,30 +9,30 @@ extern void  free(void* ptr);
 extern void* memset(void* ptr, int val, unsigned long n);
 
 // Block header size (32 bytes: size + prev_phys + next_free + prev_free)
-unsigned long tlsf_hdr_size_() {
+inline unsigned long tlsf_hdr_size_() {
     return (unsigned long)32;
 }
 
 // Minimum block size (must fit header pointers when free)
-unsigned long tlsf_min_block_() {
+inline unsigned long tlsf_min_block_() {
     return (unsigned long)32;
 }
 
 // ── TlsfBlock methods ────────────────────────────────────────────────────────
 
-int TlsfBlock::is_free_() const {
+inline int TlsfBlock::is_free_() const {
     unsafe { return (int)(self.size & (unsigned long)1); }
 }
 
-unsigned long TlsfBlock::block_size_() const {
+inline unsigned long TlsfBlock::block_size_() const {
     unsafe { return self.size & ~(unsigned long)1; }
 }
 
-void TlsfBlock::set_free_() {
+inline void TlsfBlock::set_free_() {
     unsafe { self.size = self.size | (unsigned long)1; }
 }
 
-void TlsfBlock::set_used_() {
+inline void TlsfBlock::set_used_() {
     unsafe { self.size = self.size & ~(unsigned long)1; }
 }
 
@@ -67,7 +67,7 @@ void tlsf_mapping_(unsigned long size, &stack int fl, &stack int sl) {
 
 // ── TlsfAllocator methods ────────────────────────────────────────────────────
 
-void TlsfAllocator::insert_(&stack TlsfBlock blk) {
+inline void TlsfAllocator::insert_(&stack TlsfBlock blk) {
     int fl = 0;
     int sl = 0;
     unsigned long sz = blk.block_size_();
@@ -254,7 +254,7 @@ void TlsfAllocator::free(&heap void ptr) {
     }
 }
 
-void TlsfAllocator::destroy() {
+inline void TlsfAllocator::destroy() {
     unsafe { free((void*)self.base); }
     self.cap = (unsigned long)0;
 }

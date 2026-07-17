@@ -11,7 +11,7 @@
 
 namespace std {
 
-const struct PartEntry* PartTable::get(int idx) const {
+inline const struct PartEntry* PartTable::get(int idx) const {
     if (idx < 0 || idx >= PART_MAX) { return (const struct PartEntry*)0; }
     unsafe { return (const struct PartEntry*)&self.entries[idx]; }
     return (const struct PartEntry*)0;

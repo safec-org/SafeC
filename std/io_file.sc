@@ -20,63 +20,63 @@ extern int            feof(void* stream);
 extern int            ferror(void* stream);
 extern int            fflush(void* stream);
 
-void* file_open(const char* path, const char* mode) {
+inline void* file_open(const char* path, const char* mode) {
     unsafe { return fopen(path, mode); }
 }
 
-int file_close(void* f) {
+inline int file_close(void* f) {
     unsafe { return fclose(f); }
 }
 
-unsigned long file_read(void* f, void* buf, unsigned long n) {
+inline unsigned long file_read(void* f, void* buf, unsigned long n) {
     unsafe { return fread(buf, (unsigned long)1, n, f); }
 }
 
-int file_getc(void* f) {
+inline int file_getc(void* f) {
     unsafe { return fgetc(f); }
 }
 
-char* file_gets(char* buf, int n, void* f) {
+inline char* file_gets(char* buf, int n, void* f) {
     unsafe { return fgets(buf, n, f); }
 }
 
-unsigned long file_write(void* f, const void* buf, unsigned long n) {
+inline unsigned long file_write(void* f, const void* buf, unsigned long n) {
     unsafe { return fwrite(buf, (unsigned long)1, n, f); }
 }
 
-int file_putc(int c, void* f) {
+inline int file_putc(int c, void* f) {
     unsafe { return fputc(c, f); }
 }
 
-int file_puts(const char* s, void* f) {
+inline int file_puts(const char* s, void* f) {
     unsafe { return fputs(s, f); }
 }
 
-int file_seek(void* f, long long offset, int whence) {
+inline int file_seek(void* f, long long offset, int whence) {
     unsafe { return fseek(f, (long)offset, whence); }
 }
 
-long long file_tell(void* f) {
+inline long long file_tell(void* f) {
     unsafe { return (long long)ftell(f); }
 }
 
-void file_rewind(void* f) {
+inline void file_rewind(void* f) {
     unsafe { rewind(f); }
 }
 
-int file_eof(void* f) {
+inline int file_eof(void* f) {
     unsafe { return feof(f); }
 }
 
-int file_error(void* f) {
+inline int file_error(void* f) {
     unsafe { return ferror(f); }
 }
 
-int file_flush(void* f) {
+inline int file_flush(void* f) {
     unsafe { return fflush(f); }
 }
 
-long long file_size(void* f) {
+inline long long file_size(void* f) {
     unsafe {
         long cur = ftell(f);
         if (cur < 0) return (long long)-1;

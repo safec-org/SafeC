@@ -4,7 +4,7 @@
 
 namespace std {
 
-struct List list_new(unsigned long elem_size) {
+inline struct List list_new(unsigned long elem_size) {
     struct List l;
     l.head = (struct ListNode*)0;
     l.tail = (struct ListNode*)0;
@@ -14,7 +14,7 @@ struct List list_new(unsigned long elem_size) {
 }
 
 // Allocate a new node with a copy of elem
-struct ListNode* list_alloc_node_(unsigned long elem_size, const void* elem) {
+inline struct ListNode* list_alloc_node_(unsigned long elem_size, const void* elem) {
     unsafe {
         struct ListNode* n = (struct ListNode*)alloc(sizeof(struct ListNode));
         if (n == (struct ListNode*)0) return (struct ListNode*)0;
@@ -27,14 +27,14 @@ struct ListNode* list_alloc_node_(unsigned long elem_size, const void* elem) {
     }
 }
 
-void list_free_node_(struct ListNode* n) {
+inline void list_free_node_(struct ListNode* n) {
     unsafe {
         if (n->data != (void*)0) dealloc(n->data);
         dealloc((void*)n);
     }
 }
 
-void list_free(struct List* l) {
+inline void list_free(struct List* l) {
     unsafe {
         struct ListNode* n = l->head;
         while (n != (struct ListNode*)0) {
@@ -55,7 +55,7 @@ void*         list_back(struct List* l)     { unsafe { return l->tail != (struct
 
 void list_clear(struct List* l) { list_free(l); }
 
-int list_push_front(struct List* l, const void* elem) {
+inline int list_push_front(struct List* l, const void* elem) {
     unsafe {
         struct ListNode* n = list_alloc_node_(l->elem_size, elem);
         if (n == (struct ListNode*)0) return 0;
@@ -69,7 +69,7 @@ int list_push_front(struct List* l, const void* elem) {
     return 1;
 }
 
-int list_push_back(struct List* l, const void* elem) {
+inline int list_push_back(struct List* l, const void* elem) {
     unsafe {
         struct ListNode* n = list_alloc_node_(l->elem_size, elem);
         if (n == (struct ListNode*)0) return 0;
@@ -83,7 +83,7 @@ int list_push_back(struct List* l, const void* elem) {
     return 1;
 }
 
-int list_pop_front(struct List* l, void* out) {
+inline int list_pop_front(struct List* l, void* out) {
     unsafe {
         if (l->head == (struct ListNode*)0) return 0;
         struct ListNode* n = l->head;
@@ -97,7 +97,7 @@ int list_pop_front(struct List* l, void* out) {
     return 1;
 }
 
-int list_pop_back(struct List* l, void* out) {
+inline int list_pop_back(struct List* l, void* out) {
     unsafe {
         if (l->tail == (struct ListNode*)0) return 0;
         struct ListNode* n = l->tail;
@@ -111,7 +111,7 @@ int list_pop_back(struct List* l, void* out) {
     return 1;
 }
 
-struct ListNode* list_find(struct List* l, const void* val, void* cmp) {
+inline struct ListNode* list_find(struct List* l, const void* val, void* cmp) {
     unsafe {
         fn int(const void*, const void*) cmpfn = (fn int(const void*, const void*))cmp;
         struct ListNode* n = l->head;
@@ -123,11 +123,11 @@ struct ListNode* list_find(struct List* l, const void* val, void* cmp) {
     return (struct ListNode*)0;
 }
 
-int list_contains(struct List* l, const void* val, void* cmp) {
+inline int list_contains(struct List* l, const void* val, void* cmp) {
     return list_find(l, val, cmp) != (struct ListNode*)0;
 }
 
-void list_remove_node(struct List* l, struct ListNode* node) {
+inline void list_remove_node(struct List* l, struct ListNode* node) {
     unsafe {
         if (node->prev != (struct ListNode*)0) node->prev->next = node->next;
         else l->head = node->next;
@@ -138,14 +138,14 @@ void list_remove_node(struct List* l, struct ListNode* node) {
     }
 }
 
-int list_remove(struct List* l, const void* val, void* cmp) {
+inline int list_remove(struct List* l, const void* val, void* cmp) {
     struct ListNode* n = list_find(l, val, cmp);
     if (n == (struct ListNode*)0) return 0;
     list_remove_node(l, n);
     return 1;
 }
 
-void list_foreach(struct List* l, void* func) {
+inline void list_foreach(struct List* l, void* func) {
     unsafe {
         fn void(void*) f = (fn void(void*))func;
         struct ListNode* n = l->head;
@@ -156,7 +156,7 @@ void list_foreach(struct List* l, void* func) {
     }
 }
 
-void list_reverse(struct List* l) {
+inline void list_reverse(struct List* l) {
     unsafe {
         struct ListNode* n = l->head;
         l->tail = l->head;
