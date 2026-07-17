@@ -86,10 +86,31 @@ inline void mem_prefetch(const void* addr, int write, int locality) {
 }
 
 inline void mem_zero_secure(void* ptr, unsigned long n) {
-    // Volatile write-through to prevent compiler elimination.
+    // Volatile write-through to prevent compiler elimination — the whole
+    // point of a "secure" zero (e.g. wiping a key before it goes out of
+    // scope) is that it survives dead-store elimination, so the bulk word
+    // path below must stay just as volatile as the byte loop it replaces.
     unsafe {
         volatile unsigned char* p = (volatile unsigned char*)ptr;
         unsigned long i = (unsigned long)0;
+
+        // Byte-at-a-time until the write pointer is 8-byte aligned (no-op
+        // if it already is), so the bulk loop never issues a misaligned
+        // volatile access.
+        while (i < n && mem_is_aligned((unsigned long)(p + i), (unsigned long)8) == 0) {
+            p[i] = (unsigned char)0;
+            i = i + (unsigned long)1;
+        }
+
+        volatile unsigned long* pw = (volatile unsigned long*)(p + i);
+        unsigned long words = (n - i) / (unsigned long)8;
+        unsigned long w = (unsigned long)0;
+        while (w < words) {
+            pw[w] = (unsigned long)0;
+            w = w + (unsigned long)1;
+        }
+        i = i + words * (unsigned long)8;
+
         while (i < n) {
             p[i] = (unsigned char)0;
             i = i + (unsigned long)1;

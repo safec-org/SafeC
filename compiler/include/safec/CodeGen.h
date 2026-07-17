@@ -104,6 +104,13 @@ public:
     // Generate all top-level declarations; returns the Module
     std::unique_ptr<llvm::Module> generate(TranslationUnit &tu);
 
+    // Non-null only when constructed with an explicit targetTriple (see
+    // constructor comment). The optimization pipeline in main.cpp uses this
+    // (when present) so target-aware analyses (TargetTransformInfo etc.)
+    // make correct cost decisions for the requested cross-target triple
+    // instead of silently falling back to host-CPU assumptions.
+    llvm::TargetMachine *getTargetMachine() const { return targetMachine_.get(); }
+
 private:
     // ── Type lowering ──────────────────────────────────────────────────────────
     // SafeC type → LLVM type

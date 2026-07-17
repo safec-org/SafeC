@@ -174,8 +174,19 @@ inline int Vec::extend(const void* arr, unsigned long count) {
 inline void Vec::reverse() {
     if (self.len <= 1UL) { return; }
     unsafe {
-        char* tmp = (char*)alloc(self.elem_size);
-        if (tmp == (char*)0) { return; }
+        // A single scratch element is all reverse() ever needs at once, and
+        // almost every real elem_size (primitives, small structs) fits in
+        // 64 bytes — so keep the swap buffer on the stack and only fall
+        // back to a heap alloc for oversized elements, instead of paying
+        // alloc()/dealloc() on every call regardless of size.
+        char stackTmp[64];
+        char* tmp = stackTmp;
+        int heapTmp = 0;
+        if (self.elem_size > 64UL) {
+            tmp = (char*)alloc(self.elem_size);
+            if (tmp == (char*)0) { return; }
+            heapTmp = 1;
+        }
         unsigned long lo = 0UL;
         unsigned long hi = self.len - 1UL;
         while (lo < hi) {
@@ -187,7 +198,7 @@ inline void Vec::reverse() {
             lo = lo + 1UL;
             hi = hi - 1UL;
         }
-        dealloc((void*)tmp);
+        if (heapTmp != 0) { dealloc((void*)tmp); }
     }
 }
 

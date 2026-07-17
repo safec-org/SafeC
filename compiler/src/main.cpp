@@ -19,6 +19,11 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/IR/PassManager.h"
+#include "llvm/Analysis/CGSCCPassManager.h"
+#include "llvm/Analysis/LoopAnalysisManager.h"
 
 #include <fstream>
 #include <sstream>
@@ -80,6 +85,14 @@ static llvm::cl::opt<bool>
     Freestanding("freestanding",
         llvm::cl::desc("Freestanding mode (no hosted runtime, no C header import)"));
 
+// Attached-value form (-O2, -Os, -Oz, bare -O = -O2, default O0) rather than
+// a separate '-opt-level <n>' flag, matching clang/rustc's '-O' convention
+// that release-mode invocations already expect.
+static llvm::cl::opt<std::string>
+    OptLevel("O", llvm::cl::desc("Optimization level: 0 (default), 1, 2, 3, s, z"),
+             llvm::cl::value_desc("level"), llvm::cl::Prefix, llvm::cl::init("0"),
+             llvm::cl::ValueOptional);
+
 static llvm::cl::opt<std::string>
     TargetTriple("target",
         llvm::cl::desc("Cross-target LLVM triple (e.g. x86_64-unknown-linux-gnu, "
@@ -134,7 +147,48 @@ static std::string compilerIdentity(const char *argv0) {
 static std::string cacheKeyFlags() {
     return "target=" + TargetTriple.getValue() +
            "|dbg=" + DebugInfoLevel.getValue() +
-           "|freestanding=" + (Freestanding ? "1" : "0");
+           "|freestanding=" + (Freestanding ? "1" : "0") +
+           "|opt=" + OptLevel.getValue();
+}
+
+// Bare '-O' (no attached digit) means "optimize, pick a sensible default" —
+// matches gcc/clang treating a bare '-O' as '-O1'/'-O2'-ish rather than a
+// parse error. Every other value maps 1:1 to LLVM's canned levels.
+static llvm::OptimizationLevel resolveOptLevel() {
+    std::string lvl = OptLevel.getValue();
+    if (lvl.empty() || lvl == "2") return llvm::OptimizationLevel::O2;
+    if (lvl == "0") return llvm::OptimizationLevel::O0;
+    if (lvl == "1") return llvm::OptimizationLevel::O1;
+    if (lvl == "3") return llvm::OptimizationLevel::O3;
+    if (lvl == "s") return llvm::OptimizationLevel::Os;
+    if (lvl == "z") return llvm::OptimizationLevel::Oz;
+    fprintf(stderr, "error: invalid -O level '%s' (expected 0,1,2,3,s,z)\n", lvl.c_str());
+    exit(1);
+}
+
+// Runs LLVM's standard per-module optimization pipeline in place. Reuses
+// 'tm' (the CodeGen's TargetMachine, when cross-targeting was requested via
+// --target) so target-aware analyses like TargetTransformInfo see the real
+// target instead of defaulting to host-CPU cost assumptions.
+static void optimizeModule(llvm::Module &mod, llvm::TargetMachine *tm,
+                            llvm::OptimizationLevel level) {
+    llvm::LoopAnalysisManager     lam;
+    llvm::FunctionAnalysisManager fam;
+    llvm::CGSCCAnalysisManager    cgam;
+    llvm::ModuleAnalysisManager   mam;
+
+    llvm::PassBuilder pb(tm);
+    pb.registerModuleAnalyses(mam);
+    pb.registerCGSCCAnalyses(cgam);
+    pb.registerFunctionAnalyses(fam);
+    pb.registerLoopAnalyses(lam);
+    pb.crossRegisterProxies(lam, fam, cgam, mam);
+
+    llvm::ModulePassManager mpm =
+        (level == llvm::OptimizationLevel::O0)
+            ? pb.buildO0DefaultPipeline(level)
+            : pb.buildPerModuleDefaultPipeline(level);
+    mpm.run(mod, mam);
 }
 
 // ── Read file ─────────────────────────────────────────────────────────────────
@@ -407,6 +461,18 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Code generation failed with %d error(s)\n",
                 diag.errorCount());
         return 1;
+    }
+
+    // ── 8a. Optimize ──────────────────────────────────────────────────────────
+    // Runs before the cache write below so cached bitcode already reflects
+    // the requested -O level (cacheKeyFlags() folds 'opt=' into the cache
+    // key, so a different -O next run is a cache miss rather than silently
+    // reusing this level's output).
+    llvm::OptimizationLevel optLevel = resolveOptLevel();
+    if (optLevel != llvm::OptimizationLevel::O0) {
+        if (Verbose) fprintf(stderr, "[safec] Running optimization pipeline (-O%s) ...\n",
+                             OptLevel.getValue().c_str());
+        optimizeModule(*mod, cg.getTargetMachine(), optLevel);
     }
 
     // ── 8b. Write to incremental cache ───────────────────────────────────────
