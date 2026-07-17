@@ -181,10 +181,16 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
+          # Deliberately not using 'choco list --local-only' / 'choco info
+          # --local-only' here — Chocolatey removed --local-only from
+          # 'list' at some point (newer versions are local-only
+          # unconditionally) and this hit that exact break. These
+          # diagnostic lines aren't load-bearing for finding LLVM_CMAKE_DIR
+          # below (the 'find' is), so rather than chase Chocolatey's
+          # current flag syntax too, just use the one form that's been
+          # stable across versions and treat any failure as non-fatal.
           echo "── choco's own record of the install ──"
-          choco list --local-only llvm 2>&1 || true
-          CHOCO_LIB="$(choco info llvm --local-only 2>/dev/null | grep -i "Software location" | sed -E 's/.*: *//')"
-          echo "choco-reported software location: ${CHOCO_LIB:-<none reported>}"
+          choco list llvm 2>&1 || true
 
           echo "── searching for LLVMConfig.cmake ──"
           FOUND="$(find "/c/Program Files" "/c/Program Files (x86)" "/c/ProgramData/chocolatey/lib" \
