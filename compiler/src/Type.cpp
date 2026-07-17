@@ -194,6 +194,17 @@ bool TupleType::equals(const Type &o) const {
     return true;
 }
 
+std::string VectorType::str() const {
+    return "vec<" + (element ? element->str() : std::string("?")) + ", " +
+           std::to_string(width) + ">";
+}
+
+bool VectorType::equals(const Type &o) const {
+    if (o.kind != TypeKind::Vector) return false;
+    auto &v = static_cast<const VectorType &>(o);
+    return width == v.width && typeEqual(element, v.element);
+}
+
 bool OptionalType::equals(const Type &o) const {
     if (o.kind != TypeKind::Optional) return false;
     return typeEqual(inner, static_cast<const OptionalType &>(o).inner);
@@ -284,6 +295,10 @@ TypePtr makeFunction(TypePtr ret, std::vector<TypePtr> params, bool va) {
 
 TypePtr makeTuple(std::vector<TypePtr> elems) {
     return std::make_shared<TupleType>(std::move(elems));
+}
+
+TypePtr makeVector(TypePtr element, int width) {
+    return std::make_shared<VectorType>(std::move(element), width);
 }
 
 TypePtr makeOptional(TypePtr inner) {

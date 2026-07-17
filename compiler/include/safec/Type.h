@@ -38,6 +38,8 @@ enum class TypeKind {
     Slice,      // []T — fat pointer {T*, i64}
     Typeof,     // typeof(expr) — resolved by Sema to concrete type
     Newtype,    // newtype Name = BaseType; — distinct type wrapper
+    Vector,     // vec<T, N> — fixed-width SIMD vector, lowers to LLVM's
+                // native <N x T> IR vector type (see std::simd)
 };
 
 // Forward declarations
@@ -238,6 +240,23 @@ struct TupleType : Type {
     int bitWidth() const { return 0; }
 };
 TypePtr makeTuple(std::vector<TypePtr> elems);
+
+// ── SIMD vector type: vec<T, N> ────────────────────────────────────────────────
+// A fixed-width homogeneous vector of N scalar elements, lowering directly to
+// LLVM's native <N x T> vector IR type — the actual per-ISA instruction
+// selection (SSE/AVX on x86_64, NEON on AArch64, the V extension on RISC-V,
+// SIMD128 on WebAssembly) is entirely LLVM's job once the operations are
+// expressed as ordinary vector-typed arithmetic; std::simd is a thin,
+// portable naming layer over this, not per-architecture hand-written code.
+struct VectorType : Type {
+    TypePtr element;
+    int     width;
+    VectorType(TypePtr e, int w)
+        : Type(TypeKind::Vector), element(std::move(e)), width(w) {}
+    std::string str() const override;
+    bool equals(const Type &o) const override;
+};
+TypePtr makeVector(TypePtr element, int width);
 
 // ── Optional type ?T ──────────────────────────────────────────────────────────
 // Lowers to LLVM struct { T, i1 }  (value, has_value)

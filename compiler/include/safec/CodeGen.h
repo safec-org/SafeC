@@ -21,6 +21,8 @@
 #include <string>
 #include <memory>
 
+namespace llvm { class TargetMachine; }
+
 namespace safec {
 
 enum class DebugLevel { None, Lines, Full };
@@ -75,8 +77,26 @@ struct FnEnv {
 // ── LLVM Code Generator ───────────────────────────────────────────────────────
 class CodeGen {
 public:
+    // 'targetTriple': empty (default) keeps the previous behavior of no
+    // explicit triple/data-layout — clang infers its own host default at
+    // link time, same as always. A non-empty triple (e.g.
+    // "x86_64-unknown-linux-gnu", "riscv64-unknown-elf") sets
+    // Module::setTargetTriple/setDataLayout *before* any codegen runs,
+    // since sizeof/alignment/struct-layout decisions during generate()
+    // read the data layout live (see e.g. genGlobalVar's getTypeAllocSize
+    // calls) — setting it after generate() would be too late for those.
+    // Needed for cross-target code (e.g. std::simd, which must lower to
+    // genuinely different vector-register widths per ISA) to actually
+    // target something other than the host.
     CodeGen(llvm::LLVMContext &ctx, const std::string &moduleName,
-            DiagEngine &diag, DebugLevel dbgLevel = DebugLevel::None);
+            DiagEngine &diag, DebugLevel dbgLevel = DebugLevel::None,
+            const std::string &targetTriple = "");
+    // Declared here, defined in CodeGen.cpp: std::unique_ptr<TargetMachine>'s
+    // destructor needs TargetMachine's complete definition, which only
+    // CodeGen.cpp includes — everywhere else (e.g. main.cpp) only sees the
+    // forward declaration above, so an implicitly-generated ~CodeGen() there
+    // would fail to compile.
+    ~CodeGen();
 
     void setFreestanding(bool v) { freestanding_ = v; }
 
@@ -196,6 +216,11 @@ private:
     std::unique_ptr<llvm::Module>                    mod_;
     llvm::IRBuilder<>                                builder_;
     DiagEngine                                      &diag_;
+    // Only set when constructed with a non-empty targetTriple (cross-target
+    // codegen — see the constructor comment). Owns the TargetMachine so its
+    // DataLayout (already installed on mod_) stays valid for the module's
+    // lifetime; unused otherwise.
+    std::unique_ptr<llvm::TargetMachine>             targetMachine_;
 
     // Struct LLVM type cache (name → StructType*)
     std::unordered_map<std::string, llvm::StructType *> structCache_;

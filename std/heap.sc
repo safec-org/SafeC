@@ -39,16 +39,16 @@ inline void heap_init() {
 
 inline void heap_free(&heap void ptr) {
     if (heap_ready_ == 0) { return; }
-    if ((void*)ptr == (void*)0) { return; }
+    unsafe { if ((void*)ptr == (void*)0) { return; } }
     heap_tlsf_.free(ptr);
 }
 
 &heap void heap_realloc(&heap void ptr, unsigned long new_size) {
     if (heap_ready_ == 0) { return (&heap void)0; }
-    if ((void*)ptr == (void*)0) { return heap_tlsf_.alloc(new_size); }
+    unsafe { if ((void*)ptr == (void*)0) { return heap_tlsf_.alloc(new_size); } }
 
     &heap void new_ptr = heap_tlsf_.alloc(new_size);
-    if ((void*)new_ptr == (void*)0) { return (&heap void)0; }
+    unsafe { if ((void*)new_ptr == (void*)0) { return (&heap void)0; } }
 
     unsafe {
         // Read old block size from the TLSF header sitting 32 bytes before data.

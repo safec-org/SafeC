@@ -178,6 +178,24 @@ TypePtr Parser::parseBaseType() {
 
     auto loc = cur().loc;
 
+    // vec<T, N> — fixed-width SIMD vector type (see std::simd). Contextual,
+    // like 'align(N)' elsewhere: 'vec' isn't a reserved keyword (a plain
+    // variable/field named 'vec' must keep working), so only treat it as
+    // this type constructor when immediately followed by '<'.
+    if (cur().isIdent("vec") && peek().is(TK::Lt)) {
+        consume(); // 'vec'
+        consume(); // '<'
+        TypePtr elem = parseType();
+        expect(TK::Comma, "expected ',' after vector element type");
+        int64_t width = parseArraySizeConst();
+        expect(TK::Gt, "expected '>' closing vec<T, N>");
+        if (width <= 0) {
+            diag_.error(loc, "vector width must be a positive constant");
+            width = 1;
+        }
+        return makeVector(std::move(elem), static_cast<int>(width));
+    }
+
     switch (cur().kind) {
     case TK::KW_void:   consume(); return makeVoid();
     case TK::KW_bool:   consume(); return makeBool();
@@ -611,9 +629,19 @@ std::unique_ptr<TranslationUnit> Parser::parseTranslationUnit() {
     while (!atEnd()) {
         auto decl = parseTopLevelDecl();
         if (decl) tu->decls.push_back(std::move(decl));
+        // Flush right here rather than once at EOF: collectDecls()/checkDecl()
+        // process tu->decls in a single forward pass (Sema.cpp), so a
+        // 'namespace std { typedef ...; }' block's contents must land at the
+        // point in decl order where the block actually appeared, not after
+        // every other top-level decl in the file — otherwise a plain
+        // top-level function using a std-namespaced typedef that textually
+        // precedes it would see the typedef still unregistered, since the
+        // typedef's TypeAlias decl wouldn't be collected until later.
+        if (!pendingNamespaceDecls_.empty()) {
+            for (auto &nd : pendingNamespaceDecls_) tu->decls.push_back(std::move(nd));
+            pendingNamespaceDecls_.clear();
+        }
     }
-    for (auto &decl : pendingNamespaceDecls_) tu->decls.push_back(std::move(decl));
-    pendingNamespaceDecls_.clear();
     // Anonymous inline struct/union StructDecls must be visible to Sema
     // before the fields that reference them (so resolveType() finds the
     // synthesized name already registered) — prepend rather than append.
@@ -1446,6 +1474,11 @@ StmtPtr Parser::parseStmt() {
                 cur().is(TK::Question)   // ?T optional type
             );
             if (isKeywordType) return parseVarDeclStmt(false, false);
+            // vec<T, N> varName — same contextual pattern as parseBaseType's
+            // vec<...> case (see there for why 'vec' isn't a keyword).
+            if (cur().isIdent("vec") && peek().is(TK::Lt)) {
+                return parseVarDeclStmt(false, false);
+            }
             // Ident followed by another ident → var decl (TypeName varName)
             if (cur().is(TK::Ident) && peek().is(TK::Ident)) {
                 return parseVarDeclStmt(false, false);

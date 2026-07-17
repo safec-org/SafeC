@@ -1,4 +1,5 @@
 #include "safec/CodeGen.h"
+#include "llvm/IR/IntrinsicsARM.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/GlobalValue.h"
@@ -6,6 +7,11 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/MC/TargetRegistry.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetOptions.h"
+#include "llvm/TargetParser/Host.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include <cassert>
 
@@ -13,13 +19,29 @@ namespace safec {
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 CodeGen::CodeGen(llvm::LLVMContext &ctx, const std::string &moduleName,
-                 DiagEngine &diag, DebugLevel dbgLevel)
+                 DiagEngine &diag, DebugLevel dbgLevel,
+                 const std::string &targetTriple)
     : ctx_(ctx),
       mod_(std::make_unique<llvm::Module>(moduleName, ctx)),
       builder_(ctx),
       diag_(diag),
       debugLevel_(dbgLevel)
 {
+    if (!targetTriple.empty()) {
+        llvm::Triple triple(targetTriple);
+        std::string err;
+        const llvm::Target *target = llvm::TargetRegistry::lookupTarget(triple, err);
+        if (!target) {
+            diag_.error({}, "unknown target triple '" + targetTriple + "': " + err);
+        } else {
+            llvm::TargetOptions opts;
+            auto *tm = target->createTargetMachine(
+                triple, /*CPU=*/"generic", /*Features=*/"", opts, llvm::Reloc::PIC_);
+            mod_->setTargetTriple(triple);
+            mod_->setDataLayout(tm->createDataLayout());
+            targetMachine_.reset(tm);
+        }
+    }
     if (debugLevel_ != DebugLevel::None) {
         dib_ = std::make_unique<llvm::DIBuilder>(*mod_);
         llvm::SmallString<256> absPath(moduleName);
@@ -34,6 +56,8 @@ CodeGen::CodeGen(llvm::LLVMContext &ctx, const std::string &moduleName,
             /*isOptimized=*/false, "", 0);
     }
 }
+
+CodeGen::~CodeGen() = default;
 
 // ── Top-level entry ───────────────────────────────────────────────────────────
 std::unique_ptr<llvm::Module> CodeGen::generate(TranslationUnit &tu) {
@@ -141,6 +165,19 @@ llvm::Type *CodeGen::lowerType(const TypePtr &ty) {
     case TypeKind::Enum: {
         auto &et = static_cast<const EnumType &>(*ty);
         return llvm::Type::getIntNTy(ctx_, et.bitWidth);
+    }
+    case TypeKind::Vector: {
+        // vec<T, N> → LLVM's native fixed-width <N x T> vector IR type —
+        // the whole point of std::simd being 'just' this plus a thin naming
+        // layer is that every arithmetic op, load/store, etc. on this type
+        // already lowers correctly through LLVM's normal (non-vector-
+        // specific) instruction builders (see applyBinaryOp's scalarTy
+        // unwrap), so the target's vector-register ISA (SSE/AVX/NEON/RVV/
+        // wasm SIMD128) is selected entirely by LLVM's backend, not by any
+        // per-architecture code in this compiler.
+        auto &vt = static_cast<const VectorType &>(*ty);
+        return llvm::FixedVectorType::get(lowerType(vt.element),
+                                           static_cast<unsigned>(vt.width));
     }
     case TypeKind::Function: {
         auto &ft = static_cast<const FunctionType &>(*ty);
@@ -631,6 +668,21 @@ llvm::Constant *CodeGen::evalConstInit(Expr &e, llvm::Type *expectedTy) {
         // ('{a, b, c}', no designators at all) leave resolvedSlots empty,
         // so slot == source position, same as before designators existed.
         auto &ci = static_cast<CompoundInitExpr &>(e);
+        if (expectedTy->isVectorTy()) {
+            auto *vt = llvm::cast<llvm::FixedVectorType>(expectedTy);
+            auto *elemTy = vt->getElementType();
+            std::vector<llvm::Constant *> elems(vt->getNumElements(), nullptr);
+            for (size_t i = 0; i < ci.inits.size(); ++i) {
+                int64_t slot = ci.resolvedSlots.empty() ? (int64_t)i : ci.resolvedSlots[i];
+                if (slot < 0 || slot >= (int64_t)vt->getNumElements()) return nullptr;
+                auto *c = evalConstInit(*ci.inits[i], elemTy);
+                if (!c) return nullptr;
+                elems[(size_t)slot] = c;
+            }
+            for (unsigned i = 0; i < vt->getNumElements(); ++i)
+                if (!elems[i]) elems[i] = llvm::Constant::getNullValue(elemTy);
+            return llvm::ConstantVector::get(elems);
+        }
         if (expectedTy->isStructTy()) {
             auto *st = llvm::cast<llvm::StructType>(expectedTy);
             std::vector<llvm::Constant *> fields(st->getNumElements(), nullptr);
@@ -1402,6 +1454,20 @@ llvm::Value *CodeGen::genExpr(Expr &e, FnEnv &env) {
         auto &ci = static_cast<CompoundInitExpr &>(e);
         auto *ty = e.type ? lowerType(e.type) : llvm::Type::getInt32Ty(ctx_);
         if (ci.inits.empty()) return llvm::Constant::getNullValue(ty);
+        // vec<T,N> v = {a, b, ...} — built directly as an SSA value via
+        // chained insertelement, no memory round-trip (unlike struct/array
+        // below): a SIMD register never needed an address to begin with.
+        if (ty->isVectorTy()) {
+            llvm::Value *vecVal = llvm::Constant::getNullValue(ty);
+            auto *Int32Ty = llvm::Type::getInt32Ty(ctx_);
+            for (size_t i = 0; i < ci.inits.size(); ++i) {
+                int64_t slot = ci.resolvedSlots.empty() ? (int64_t)i : ci.resolvedSlots[i];
+                auto *val = genExpr(*ci.inits[i], env);
+                vecVal = builder_.CreateInsertElement(
+                    vecVal, val, llvm::ConstantInt::get(Int32Ty, (uint64_t)slot), "vec.init");
+            }
+            return vecVal;
+        }
         if (ty->isStructTy() || ty->isArrayTy()) {
             auto *alloca = createEntryAlloca(env, ty, "compound.init");
             // Zero-init first: designators can skip slots, and a shorter
@@ -1660,9 +1726,16 @@ llvm::Value *CodeGen::genDeref(UnaryExpr &e, FnEnv &env, bool wantAddr) {
 // ── Binary ────────────────────────────────────────────────────────────────────
 llvm::Value *CodeGen::applyBinaryOp(BinaryOp op, llvm::Value *l, llvm::Value *r,
                                      const TypePtr &ty) {
-    bool isFloat = ty && ty->isFloat();
-    bool isSigned = !ty || (ty->kind == TypeKind::Int32 || ty->kind == TypeKind::Int64 ||
-                             ty->kind == TypeKind::Int16 || ty->kind == TypeKind::Int8);
+    // vec<T,N> (std::simd): float-vs-integer dispatch must look at the
+    // element type T, not the vector type itself (VectorType::isFloat() is
+    // always false — its own 'kind' is TypeKind::Vector — so a
+    // vec<float,4> add would otherwise wrongly take the integer CreateAdd
+    // path below instead of CreateFAdd).
+    const TypePtr &scalarTy = (ty && ty->kind == TypeKind::Vector)
+        ? static_cast<VectorType &>(*ty).element : ty;
+    bool isFloat = scalarTy && scalarTy->isFloat();
+    bool isSigned = !scalarTy || (scalarTy->kind == TypeKind::Int32 || scalarTy->kind == TypeKind::Int64 ||
+                             scalarTy->kind == TypeKind::Int16 || scalarTy->kind == TypeKind::Int8);
 
     // Widen integer operands to the same bit-width (C integer promotion).
     // This handles cases like `long long x < 0` where 0 is i32 but x is i64.
@@ -2031,6 +2104,74 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
             builder_.CreateFence(ord);
             return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
         }
+        // ── ARM Cortex-M4/M7 DSP-extension built-ins ─────────────────────────
+        // 1:1 mapping onto LLVM's 'llvm.arm.*' target intrinsics — all fixed
+        // (i32,i32[,i32])->i32 signatures, verified against real compiler
+        // output (llc -mtriple=thumbv7em-none-eabi -mcpu=cortex-m4 emits the
+        // real SADD16/SMLAD/USAD8/SSAT/... instructions from these calls,
+        // not a libcall or software emulation).
+        if (ident.name.rfind("__arm_dsp_", 0) == 0) {
+            static const std::pair<const char *, llvm::Intrinsic::ID> kArmDspIds[] = {
+                {"__arm_dsp_qadd",    llvm::Intrinsic::arm_qadd},
+                {"__arm_dsp_qsub",    llvm::Intrinsic::arm_qsub},
+                {"__arm_dsp_qadd16",  llvm::Intrinsic::arm_qadd16},
+                {"__arm_dsp_qadd8",   llvm::Intrinsic::arm_qadd8},
+                {"__arm_dsp_qsub16",  llvm::Intrinsic::arm_qsub16},
+                {"__arm_dsp_qsub8",   llvm::Intrinsic::arm_qsub8},
+                {"__arm_dsp_sadd16",  llvm::Intrinsic::arm_sadd16},
+                {"__arm_dsp_sadd8",   llvm::Intrinsic::arm_sadd8},
+                {"__arm_dsp_ssub16",  llvm::Intrinsic::arm_ssub16},
+                {"__arm_dsp_ssub8",   llvm::Intrinsic::arm_ssub8},
+                {"__arm_dsp_uqadd16", llvm::Intrinsic::arm_uqadd16},
+                {"__arm_dsp_uqadd8",  llvm::Intrinsic::arm_uqadd8},
+                {"__arm_dsp_uqsub16", llvm::Intrinsic::arm_uqsub16},
+                {"__arm_dsp_uqsub8",  llvm::Intrinsic::arm_uqsub8},
+                {"__arm_dsp_smlad",   llvm::Intrinsic::arm_smlad},
+                {"__arm_dsp_smladx",  llvm::Intrinsic::arm_smladx},
+                {"__arm_dsp_smlsd",   llvm::Intrinsic::arm_smlsd},
+                {"__arm_dsp_smlsdx",  llvm::Intrinsic::arm_smlsdx},
+                {"__arm_dsp_smuad",   llvm::Intrinsic::arm_smuad},
+                {"__arm_dsp_smuadx",  llvm::Intrinsic::arm_smuadx},
+                {"__arm_dsp_smusd",   llvm::Intrinsic::arm_smusd},
+                {"__arm_dsp_smusdx",  llvm::Intrinsic::arm_smusdx},
+                {"__arm_dsp_usad8",   llvm::Intrinsic::arm_usad8},
+                {"__arm_dsp_usada8",  llvm::Intrinsic::arm_usada8},
+                {"__arm_dsp_ssat",    llvm::Intrinsic::arm_ssat},
+                {"__arm_dsp_usat",    llvm::Intrinsic::arm_usat},
+                {"__arm_dsp_ssat16",  llvm::Intrinsic::arm_ssat16},
+                {"__arm_dsp_usat16",  llvm::Intrinsic::arm_usat16},
+                {"__arm_dsp_sxtab16", llvm::Intrinsic::arm_sxtab16},
+                {"__arm_dsp_uxtab16", llvm::Intrinsic::arm_uxtab16},
+            };
+            llvm::Intrinsic::ID id = llvm::Intrinsic::not_intrinsic;
+            for (auto &p : kArmDspIds) if (ident.name == p.first) { id = p.second; break; }
+            if (id == llvm::Intrinsic::not_intrinsic) {
+                diag_.error(e.loc, "unknown ARM DSP builtin '" + ident.name + "'");
+                return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
+            }
+            auto &triple = mod_->getTargetTriple();
+            if (!triple.isARM() && !triple.isThumb()) {
+                diag_.error(e.loc, "'" + ident.name +
+                    "' requires an ARM target (compile with --target thumbv7em-... "
+                    "or thumbv8m.main-...); current target is '" +
+                    mod_->getTargetTriple().str() + "'");
+                return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
+            }
+            auto *Int32Ty = llvm::Type::getInt32Ty(ctx_);
+            std::vector<llvm::Value *> args;
+            for (auto &a : e.args) {
+                auto *v = genExpr(*a, env);
+                if (v->getType() != Int32Ty && v->getType()->isIntegerTy()) {
+                    bool argUnsigned = a->type &&
+                        (a->type->kind == TypeKind::UInt8  || a->type->kind == TypeKind::UInt16 ||
+                         a->type->kind == TypeKind::UInt32  || a->type->kind == TypeKind::UInt64);
+                    v = builder_.CreateIntCast(v, Int32Ty, !argUnsigned, "dsp.arg");
+                }
+                args.push_back(v);
+            }
+            auto *fn = llvm::Intrinsic::getOrInsertDeclaration(mod_.get(), id, {});
+            return builder_.CreateCall(fn, args, "dsp");
+        }
         // ── GCC/Clang bit-manipulation built-ins (std/bit.sc) ────────────────
         // These map 1:1 onto LLVM intrinsics; the '32'/'ll' suffix just picks
         // the operand width.
@@ -2205,6 +2346,20 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
                 // opaque ptrs already match
             }
         }
+        // C's default argument promotion for the '...' tail of a variadic
+        // call: 'float' arguments must be widened to 'double' before the
+        // call (C11 §6.5.2.2p6) — printf's va_arg(ap, double) for '%f'
+        // reads 8 bytes regardless of what the caller's *source* type was,
+        // so passing a raw (unpromoted) float32 here fed the wrong bit
+        // pattern in and silently printed garbage/zero.
+        if (fty->isVarArg()) {
+            for (unsigned i = fty->getNumParams(); i < args.size(); ++i) {
+                if (args[i]->getType()->isFloatTy()) {
+                    args[i] = builder_.CreateFPExt(
+                        args[i], llvm::Type::getDoubleTy(ctx_), "varargpromote");
+                }
+            }
+        }
     };
 
     llvm::FunctionType *ft = nullptr;
@@ -2241,6 +2396,24 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
 
 // ── Subscript ─────────────────────────────────────────────────────────────────
 llvm::Value *CodeGen::genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr) {
+    // v[i] on a vec<T,N> (std::simd): extractelement straight from the SSA
+    // vector value — no address/GEP involved, unlike every other
+    // subscriptable kind below. Writes ('v[i] = x') are handled separately
+    // in genAssign (read-modify-write via insertelement, mirroring how
+    // bitfield writes work). 'wantAddr' has no real meaning for a register-
+    // resident vector lane; fall back to spilling the element to a fresh
+    // temp so callers expecting *some* address (e.g. '&v[i]') don't crash,
+    // at the cost of that address not aliasing the original vector.
+    if (e.base->type && e.base->type->kind == TypeKind::Vector) {
+        auto *vecVal = genExpr(*e.base, env);
+        auto *idx    = genExpr(*e.index, env);
+        auto *elem   = builder_.CreateExtractElement(vecVal, idx, "vec.extract");
+        if (!wantAddr) return elem;
+        auto *tmp = createEntryAlloca(env, elem->getType(), "vec.elem.tmp");
+        builder_.CreateStore(elem, tmp);
+        return tmp;
+    }
+
     auto *idxVal   = genExpr(*e.index, env);
     auto *baseTy   = e.base->type ? lowerType(e.base->type)
                                   : llvm::Type::getInt32Ty(ctx_);
@@ -2647,6 +2820,38 @@ llvm::Value *CodeGen::genCast(CastExpr &e, FnEnv &env) {
 
 // ── Assignment ────────────────────────────────────────────────────────────────
 llvm::Value *CodeGen::genAssign(AssignExpr &e, FnEnv &env) {
+    // Vector-lane assignment: 'v[i] = x' on a vec<T,N> (std::simd). Same
+    // shape as the bitfield case below — read the whole SSA value, modify
+    // one lane via insertelement, write the whole value back — since a
+    // single vector lane isn't independently addressable the way a plain
+    // array element is (see genSubscript's extractelement-only read path).
+    if (e.lhs->kind == ExprKind::Subscript) {
+        auto &se = static_cast<SubscriptExpr &>(*e.lhs);
+        if (se.base->type && se.base->type->kind == TypeKind::Vector) {
+            auto *vecAddr = genLValue(*se.base, env);
+            auto *vecTy   = lowerType(se.base->type);
+            auto *idx     = genExpr(*se.index, env);
+            auto *oldVec  = builder_.CreateLoad(vecTy, vecAddr, "vec.old");
+            auto *rhs     = genExpr(*e.rhs, env);
+            llvm::Value *newVal = rhs;
+            if (e.op != AssignOp::Assign) {
+                auto *cur = builder_.CreateExtractElement(oldVec, idx, "vec.cur");
+                BinaryOp binOp;
+                switch (e.op) {
+                case AssignOp::AddAssign: binOp = BinaryOp::Add; break;
+                case AssignOp::SubAssign: binOp = BinaryOp::Sub; break;
+                case AssignOp::MulAssign: binOp = BinaryOp::Mul; break;
+                case AssignOp::DivAssign: binOp = BinaryOp::Div; break;
+                default:                  binOp = BinaryOp::Add; break;
+                }
+                newVal = applyBinaryOp(binOp, cur, rhs, se.type);
+            }
+            auto *newVec = builder_.CreateInsertElement(oldVec, newVal, idx, "vec.new");
+            builder_.CreateStore(newVec, vecAddr);
+            return newVal;
+        }
+    }
+
     // Bitfield assignment: read-modify-write on the shared storage unit.
     // A plain store here (the path below, for ordinary fields) would
     // clobber sibling bitfields packed into the same LLVM struct slot — see

@@ -203,6 +203,12 @@ TypePtr Sema::resolveType(TypePtr ty) {
         if (resolvedElem != at.element)
             return makeArray(resolvedElem, at.size);
     }
+    if (ty->kind == TypeKind::Vector) {
+        auto &vt = static_cast<VectorType &>(*ty);
+        auto resolvedElem = resolveType(vt.element);
+        if (resolvedElem != vt.element)
+            return makeVector(resolvedElem, vt.width);
+    }
     return ty;
 }
 
@@ -1021,12 +1027,15 @@ void Sema::checkVarDecl(VarDeclStmt &s, FunctionDecl &fn) {
     vd->type        = s.resolvedType;
     vd->isConst     = s.isConst;
     vd->isStatic    = s.isStatic;
-    // Struct/array types are considered "initialized" even without an explicit
-    // initializer because their fields can be individually assigned before use.
+    // Struct/array/vector types are considered "initialized" even without an
+    // explicit initializer because their fields/lanes can be individually
+    // assigned before use (a vec<T,N> local built lane-by-lane via 'v[i] = x'
+    // — see std/simd/simd.sc — is exactly this pattern, same as an array).
     // Only scalar types strictly require initialization before reading.
     bool isAggregate = s.resolvedType &&
                        (s.resolvedType->kind == TypeKind::Struct ||
-                        s.resolvedType->kind == TypeKind::Array);
+                        s.resolvedType->kind == TypeKind::Array ||
+                        s.resolvedType->kind == TypeKind::Vector);
     vd->initialized = (s.init != nullptr) || isAggregate;
     vd->scopeDepth  = scopeDepth_;
 
@@ -1352,6 +1361,20 @@ TypePtr Sema::checkBinary(BinaryExpr &e) {
     case BinaryOp::Mul: case BinaryOp::Div: case BinaryOp::Mod:
     case BinaryOp::WrapAdd: case BinaryOp::WrapSub: case BinaryOp::WrapMul:
     case BinaryOp::SatAdd:  case BinaryOp::SatSub:  case BinaryOp::SatMul:
+        // SIMD vector arithmetic (std::simd): elementwise op across the
+        // whole vec<T,N> in one instruction — CodeGen just hands both
+        // operands straight to the same CreateAdd/CreateFAdd/etc it already
+        // uses for scalars, since LLVM's IRBuilder binary-op calls are
+        // generic over vector-typed operands with zero extra code needed.
+        if (lhsTy->kind == TypeKind::Vector && rhsTy->kind == TypeKind::Vector) {
+            if (!typeEqual(lhsTy, rhsTy)) {
+                diag_.error(e.loc,
+                    "vector arithmetic requires matching vector types: '" +
+                    lhsTy->str() + "' and '" + rhsTy->str() + "'");
+                return makeError();
+            }
+            return lhsTy;
+        }
         if (!lhsTy->isArithmetic() || !rhsTy->isArithmetic()) {
             // Allow pointer arithmetic for raw pointers (unsafe)
             if (lhsTy->kind == TypeKind::Pointer || rhsTy->kind == TypeKind::Pointer) {
@@ -1520,6 +1543,32 @@ TypePtr Sema::checkCompoundInit(CompoundInitExpr &e, const TypePtr &targetTy) {
     bool hasDesignators = !e.designatedFields.empty();
     e.resolvedSlots.assign(e.inits.size(), 0);
 
+    if (targetTy && targetTy->kind == TypeKind::Vector) {
+        // vec<T,N> v = {a, b, c, ...} — no designators (there's no notion of
+        // '.field' or a meaningful sparse '[i] = v' for a SIMD register;
+        // every lane must be given explicitly, matching real SIMD intrinsic
+        // init conventions like _mm_set_ps).
+        auto &vt = static_cast<VectorType &>(*targetTy);
+        if ((int64_t)e.inits.size() != vt.width) {
+            diag_.error(e.loc, "vec<" + vt.element->str() + ", " +
+                                std::to_string(vt.width) + "> initializer needs exactly " +
+                                std::to_string(vt.width) + " element(s), got " +
+                                std::to_string(e.inits.size()));
+        }
+        for (size_t i = 0; i < e.inits.size(); ++i) {
+            e.resolvedSlots[i] = (int64_t)i;
+            TypePtr initTy = checkExpr(*e.inits[i]);
+            if (vt.element && !initTy->isError() && !vt.element->isError() &&
+                !canImplicitlyConvert(initTy, vt.element) &&
+                !intLiteralFitsType(*e.inits[i], vt.element)) {
+                diag_.error(e.inits[i]->loc,
+                    "type mismatch in vector initializer: cannot convert '" +
+                    initTy->str() + "' to '" + vt.element->str() + "'");
+            }
+        }
+        e.type = targetTy;
+        return targetTy;
+    }
     if (targetTy && targetTy->kind == TypeKind::Struct) {
         auto &st = static_cast<StructType &>(*targetTy);
         int64_t nextSlot = 0;
@@ -1704,6 +1753,68 @@ TypePtr Sema::checkCall(CallExpr &e) {
             for (auto &a : e.args) checkExpr(*a);
             e.type = makeVoid();
             return makeVoid();
+        }
+        // ── ARM Cortex-M4/M7 DSP-extension built-ins ─────────────────────────
+        // Thin wrappers over the DSP extension's packed-SIMD/saturating
+        // instructions (SADD16, SMLAD, USAD8, SSAT, ...). LLVM does not
+        // auto-vectorize generic vec<T,N> IR into these (see std/simd/
+        // cortex_m.h's DSP caveat — confirmed by inspecting compiler output:
+        // a vec<short,2> add on thumbv7em lowers to two scalar 'add's, not
+        // 'sadd16'), so — exactly like atomic_* above expose hardware
+        // primitives no portable SafeC construct reaches — they're exposed
+        // directly as builtins. CodeGen rejects them on non-ARM targets.
+        if (ident.name.rfind("__arm_dsp_", 0) == 0) {
+            struct ArmDspSig { const char *name; int arity; bool immArg2; bool isUnsigned; };
+            static const ArmDspSig kArmDsp[] = {
+                {"__arm_dsp_qadd",    2, false, false},
+                {"__arm_dsp_qsub",    2, false, false},
+                {"__arm_dsp_qadd16",  2, false, false},
+                {"__arm_dsp_qadd8",   2, false, false},
+                {"__arm_dsp_qsub16",  2, false, false},
+                {"__arm_dsp_qsub8",   2, false, false},
+                {"__arm_dsp_sadd16",  2, false, false},
+                {"__arm_dsp_sadd8",   2, false, false},
+                {"__arm_dsp_ssub16",  2, false, false},
+                {"__arm_dsp_ssub8",   2, false, false},
+                {"__arm_dsp_uqadd16", 2, false, true},
+                {"__arm_dsp_uqadd8",  2, false, true},
+                {"__arm_dsp_uqsub16", 2, false, true},
+                {"__arm_dsp_uqsub8",  2, false, true},
+                {"__arm_dsp_smlad",   3, false, false},
+                {"__arm_dsp_smladx",  3, false, false},
+                {"__arm_dsp_smlsd",   3, false, false},
+                {"__arm_dsp_smlsdx",  3, false, false},
+                {"__arm_dsp_smuad",   2, false, false},
+                {"__arm_dsp_smuadx",  2, false, false},
+                {"__arm_dsp_smusd",   2, false, false},
+                {"__arm_dsp_smusdx",  2, false, false},
+                {"__arm_dsp_usad8",   2, false, true},
+                {"__arm_dsp_usada8",  3, false, true},
+                {"__arm_dsp_ssat",    2, true,  false},
+                {"__arm_dsp_usat",    2, true,  true},
+                {"__arm_dsp_ssat16",  2, true,  false},
+                {"__arm_dsp_usat16",  2, true,  true},
+                {"__arm_dsp_sxtab16", 2, false, false},
+                {"__arm_dsp_uxtab16", 2, false, true},
+            };
+            const ArmDspSig *found = nullptr;
+            for (auto &b : kArmDsp) if (ident.name == b.name) { found = &b; break; }
+            for (auto &a : e.args) checkExpr(*a);
+            if (!found) {
+                diag_.error(e.loc, "unknown ARM DSP builtin '" + ident.name + "'");
+                e.type = makeInt(32, true);
+                return e.type;
+            }
+            if ((int)e.args.size() != found->arity) {
+                diag_.error(e.loc, ident.name + " expects " + std::to_string(found->arity) +
+                    " argument(s), got " + std::to_string(e.args.size()));
+            }
+            if (found->immArg2 && e.args.size() >= 2 && e.args[1]->kind != ExprKind::IntLit) {
+                diag_.error(e.args[1]->loc, ident.name +
+                    "'s saturation-width argument must be a compile-time integer constant");
+            }
+            e.type = makeInt(32, !found->isUnsigned);
+            return e.type;
         }
         // ── Channel built-ins ───────────────────────────────────────────────
         if (ident.name == "chan_create") {
@@ -2017,6 +2128,25 @@ TypePtr Sema::checkSubscript(SubscriptExpr &e) {
         e.boundsCheckOmit = inUnsafeScope();
         e.isLValue = true;
         return at.element;
+    }
+    if (baseTy->kind == TypeKind::Vector) {
+        // v[i] on a vec<T,N> (std::simd): extractelement for reads,
+        // insertelement for writes — CodeGen (genSubscript) does both
+        // directly on the SSA vector value, no address/GEP involved, unlike
+        // every other subscriptable kind here.
+        auto &vt = static_cast<VectorType &>(*baseTy);
+        if (!inUnsafeScope() && e.index && e.index->kind == ExprKind::IntLit) {
+            auto *lit = static_cast<IntLitExpr *>(e.index.get());
+            if (lit->value < 0 || lit->value >= vt.width) {
+                diag_.error(e.loc,
+                    "vector index " + std::to_string(lit->value) +
+                    " out of bounds for vec<" + vt.element->str() + ", " +
+                    std::to_string(vt.width) + ">");
+            }
+        }
+        e.boundsCheckOmit = inUnsafeScope();
+        e.isLValue = e.base->isLValue;
+        return vt.element;
     }
     if (baseTy->kind == TypeKind::Pointer) {
         if (!inUnsafeScope())

@@ -73,7 +73,11 @@ private:
     // "::"-joined) enclosing namespace name and collected here rather than
     // returned directly — parseTopLevelDecl() can only hand back one decl at
     // a time, but a namespace body holds many. Drained into
-    // TranslationUnit::decls once parsing completes (see parseTranslationUnit).
+    // TranslationUnit::decls right after the top-level statement that
+    // produced them (see parseTranslationUnit) — NOT deferred to EOF, since
+    // Sema's collectDecls() is a single forward pass and needs a namespaced
+    // typedef to appear at its true source position relative to later
+    // top-level code that uses it.
     std::vector<DeclPtr>     pendingNamespaceDecls_;
     std::vector<std::string> namespaceStack_;
     void parseNamespaceDecl();

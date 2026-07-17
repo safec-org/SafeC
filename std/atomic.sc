@@ -1,7 +1,12 @@
-// SafeC Standard Library — Atomics (C11 <stdatomic.h>)
+// SafeC Standard Library — Atomics (C11 <stdatomic.h>-equivalent surface)
+//
+// atomic_load/store/fetch_*/exchange/cas below are SafeC compiler builtins
+// (see Sema::checkCall's "Atomic built-ins" handling), not C library
+// functions — unlike real C, they need no declaration from a system
+// <stdatomic.h> at all, so this file (unlike real C11 code) works
+// unmodified in --freestanding mode, where no hosted header is available.
 #pragma once
 #include <std/atomic.h>
-#include <stdatomic.h>
 
 namespace std {
 

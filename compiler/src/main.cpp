@@ -79,6 +79,15 @@ static llvm::cl::opt<bool>
     Freestanding("freestanding",
         llvm::cl::desc("Freestanding mode (no hosted runtime, no C header import)"));
 
+static llvm::cl::opt<std::string>
+    TargetTriple("target",
+        llvm::cl::desc("Cross-target LLVM triple (e.g. x86_64-unknown-linux-gnu, "
+                       "aarch64-unknown-linux-gnu, riscv64-unknown-elf, "
+                       "wasm32-unknown-unknown, spirv64-unknown-unknown). "
+                       "Empty (default) uses the host triple, same as before "
+                       "this flag existed."),
+        llvm::cl::init(""));
+
 // -I <dir> include paths
 static llvm::cl::list<std::string>
     IncludePaths("I", llvm::cl::desc("Add include search directory"),
@@ -109,6 +118,22 @@ static std::string compilerIdentity(const char *argv0) {
         return {}; // best-effort — an empty identity just means no extra protection
     auto mtime = st.getLastModificationTime().time_since_epoch().count();
     return exe + "|" + std::to_string(mtime) + "|" + std::to_string(st.getSize());
+}
+
+// CLI flags that change CodeGen output without changing it via ppSrc's text
+// (TargetTriple/DebugInfoLevel are applied after preprocessing, at CodeGen
+// construction) must be folded into the cache key too — otherwise compiling
+// the same file for two different '--target' triples (exactly what
+// multi-target support exists for) silently returns the first target's
+// stale cached bitcode for the second, with no error at all. Freestanding
+// is already reflected in ppSrc indirectly (it flips a preprocessor macro
+// that #ifdef-branches code), but is included explicitly anyway rather than
+// relying on that being true of every current and future freestanding-gated
+// file.
+static std::string cacheKeyFlags() {
+    return "target=" + TargetTriple.getValue() +
+           "|dbg=" + DebugInfoLevel.getValue() +
+           "|freestanding=" + (Freestanding ? "1" : "0");
 }
 
 // ── Read file ─────────────────────────────────────────────────────────────────
@@ -180,9 +205,16 @@ static void dumpDecl(safec::Decl &d, int indent = 0) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 int main(int argc, char **argv) {
     llvm::InitLLVM X(argc, argv);
-    llvm::InitializeNativeTarget();
-    llvm::InitializeNativeTargetAsmPrinter();
-    llvm::InitializeNativeTargetAsmParser();
+    // All targets, not just native: --target lets a single safec binary
+    // cross-generate for any ISA this LLVM was built with (this build has
+    // X86, AArch64, RISCV, WebAssembly and SPIRV, among others — see
+    // `llvm-config --targets-built`), which std::simd needs since its
+    // whole point is genuinely different per-ISA vector codegen, not just
+    // whatever the host happens to be.
+    llvm::InitializeAllTargets();
+    llvm::InitializeAllTargetMCs();
+    llvm::InitializeAllAsmPrinters();
+    llvm::InitializeAllAsmParsers();
 
     llvm::cl::ParseCommandLineOptions(argc, argv, "SafeC compiler\n");
 
@@ -247,7 +279,7 @@ int main(int argc, char **argv) {
     // has no representation of — honoring a cache hit here silently printed
     // disassembled bitcode from a previous invocation instead of an AST dump.
     if (!NoIncremental && !DumpAST) {
-        uint64_t hash = fnv1a64(ppSrc + "|" + compilerIdentity(argv[0]));
+        uint64_t hash = fnv1a64(ppSrc + "|" + compilerIdentity(argv[0]) + "|" + cacheKeyFlags());
         char hexBuf[17];
         snprintf(hexBuf, sizeof(hexBuf), "%016llx", (unsigned long long)hash);
         llvm::SmallString<256> cachePath(CacheDir.getValue());
@@ -366,7 +398,7 @@ int main(int argc, char **argv) {
     if (DebugInfoLevel == "lines") dbgLevel = safec::DebugLevel::Lines;
     else if (DebugInfoLevel == "full") dbgLevel = safec::DebugLevel::Full;
 
-    safec::CodeGen cg(ctx, InputFile, diag, dbgLevel);
+    safec::CodeGen cg(ctx, InputFile, diag, dbgLevel, TargetTriple);
     if (Freestanding) cg.setFreestanding(true);
     auto mod = cg.generate(*tu);
 
@@ -379,7 +411,7 @@ int main(int argc, char **argv) {
     // ── 8b. Write to incremental cache ───────────────────────────────────────
     if (!NoIncremental) {
         llvm::sys::fs::create_directories(CacheDir.getValue());
-        uint64_t hash = fnv1a64(ppSrc + "|" + compilerIdentity(argv[0]));
+        uint64_t hash = fnv1a64(ppSrc + "|" + compilerIdentity(argv[0]) + "|" + cacheKeyFlags());
         char hexBuf[17];
         snprintf(hexBuf, sizeof(hexBuf), "%016llx", (unsigned long long)hash);
         llvm::SmallString<256> cachePath(CacheDir.getValue());
