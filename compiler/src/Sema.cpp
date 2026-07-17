@@ -779,6 +779,34 @@ void Sema::checkStaticAssert(StaticAssertDecl &sa) {
     // Actual compile-time evaluation is handled by consteval engine (future)
 }
 
+// ── Match pattern resolution (shared by match-statement and match-expression) ──
+// Resolves EnumIdent patterns against a tagged union's variant fields
+// (fills resolvedTag/payloadType), reports unknown variant names, and notes
+// whether a wildcard/default arm was seen. 'coveredTags', when non-null,
+// collects every resolved tag so the caller can prove exhaustiveness over a
+// tagged union's variants (match-expression needs this; match-statement
+// doesn't since falling through with no value produced is harmless there).
+static void resolveMatchArmPatterns(std::vector<MatchPattern> &patterns,
+                                     bool isTaggedUnion, StructType *unionSt,
+                                     DiagEngine &diag, SourceLocation loc,
+                                     bool &hasWildcard,
+                                     std::unordered_set<int> *coveredTags) {
+    for (auto &pat : patterns) {
+        if (pat.kind == PatternKind::Wildcard) hasWildcard = true;
+        if (isTaggedUnion && pat.kind == PatternKind::EnumIdent) {
+            const FieldDecl *variantField = unionSt->findField(pat.ident);
+            if (variantField) {
+                pat.resolvedTag = variantField->index;
+                pat.payloadType = variantField->type;
+                if (coveredTags) coveredTags->insert(pat.resolvedTag);
+            } else {
+                diag.error(loc, "unknown variant '" + pat.ident +
+                    "' in union '" + unionSt->name + "'");
+            }
+        }
+    }
+}
+
 // ── Statement checking ────────────────────────────────────────────────────────
 void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
     switch (s.kind) {
@@ -806,20 +834,8 @@ void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
             isTaggedUnion = unionSt->isTaggedUnion;
         }
         for (auto &arm : ms.arms) {
-            for (auto &pat : arm.patterns) {
-                if (pat.kind == PatternKind::Wildcard) hasWildcard = true;
-                // Resolve tagged union patterns
-                if (isTaggedUnion && pat.kind == PatternKind::EnumIdent) {
-                    const FieldDecl *variantField = unionSt->findField(pat.ident);
-                    if (variantField) {
-                        pat.resolvedTag = variantField->index;
-                        pat.payloadType = variantField->type;
-                    } else {
-                        diag_.error(ms.loc, "unknown variant '" + pat.ident +
-                            "' in union '" + unionSt->name + "'");
-                    }
-                }
-            }
+            resolveMatchArmPatterns(arm.patterns, isTaggedUnion, unionSt, diag_,
+                                     ms.loc, hasWildcard, nullptr);
             // If pattern has a bind name, add it to scope for the arm body
             pushScope();
             for (auto &pat : arm.patterns) {
@@ -1173,6 +1189,9 @@ TypePtr Sema::checkExpr(Expr &e) {
         break;
     case ExprKind::Spawn:
         ty = checkSpawn(static_cast<SpawnExpr &>(e));
+        break;
+    case ExprKind::Match:
+        ty = checkMatchExpr(static_cast<MatchExpr &>(e));
         break;
     case ExprKind::Try: {
         auto &te = static_cast<TryExpr &>(e);
@@ -1694,6 +1713,72 @@ TypePtr Sema::checkTernary(TernaryExpr &e) {
         return makeError();
     }
     return thenTy;
+}
+
+TypePtr Sema::checkMatchExpr(MatchExpr &e) {
+    TypePtr subjectTy = checkExpr(*e.subject);
+    bool isTaggedUnion = false;
+    StructType *unionSt = nullptr;
+    if (subjectTy && subjectTy->kind == TypeKind::Struct) {
+        unionSt = static_cast<StructType *>(subjectTy.get());
+        isTaggedUnion = unionSt->isTaggedUnion;
+    }
+    if (e.arms.empty()) {
+        diag_.error(e.loc, "match expression must have at least one arm");
+        return makeError();
+    }
+
+    bool hasWildcard = false;
+    std::unordered_set<int> coveredTags;
+    TypePtr resultTy;
+    bool sawError = false;
+
+    for (auto &arm : e.arms) {
+        resolveMatchArmPatterns(arm.patterns, isTaggedUnion, unionSt, diag_,
+                                 e.loc, hasWildcard, &coveredTags);
+
+        // Payload bindings are only in scope for this arm's value expr.
+        pushScope();
+        for (auto &pat : arm.patterns) {
+            if (!pat.bindName.empty() && pat.payloadType) {
+                Symbol sym;
+                sym.kind = SymKind::Variable;
+                sym.name = pat.bindName;
+                sym.type = pat.payloadType;
+                sym.initialized = true;
+                define(std::move(sym));
+            }
+        }
+        TypePtr armTy = arm.value ? checkExpr(*arm.value) : makeError();
+        popScope();
+
+        if (!armTy || armTy->isError()) { sawError = true; continue; }
+        if (!resultTy) {
+            resultTy = armTy;
+        } else if (!typeEqual(resultTy, armTy)) {
+            diag_.error(arm.value->loc,
+                "match arms must have the same type: '" + resultTy->str() +
+                "' vs '" + armTy->str() + "'");
+            sawError = true;
+        }
+    }
+
+    // Unlike the statement form (which only warns — falling through with no
+    // value produced is harmless there), the expression form needs an
+    // actual value out of every reachable path: CodeGen merges arm values
+    // with a PHI whose incoming edges are exactly the arms, so an uncovered
+    // subject value would leave the merge with nothing to produce.
+    bool exhaustive = hasWildcard ||
+        (isTaggedUnion && unionSt && coveredTags.size() == unionSt->fields.size());
+    e.provenExhaustive = exhaustive;
+    if (!exhaustive) {
+        diag_.error(e.loc,
+            "match expression is not exhaustive: add a 'default' arm, or (for a "
+            "tagged union subject) cover every variant");
+    }
+
+    if (sawError || !resultTy) return makeError();
+    return resultTy;
 }
 
 TypePtr Sema::checkCall(CallExpr &e) {

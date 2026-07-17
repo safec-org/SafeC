@@ -284,6 +284,22 @@ static ExprPtr cloneExprImpl(const Expr *ep, const TypeSubst &subs) {
             cloneExprImpl(se.fnExpr.get(), subs),
             cloneExprImpl(se.argExpr.get(), subs), se.loc));
     }
+    case ExprKind::Match: {
+        // MatchPattern is a plain copyable struct (strings + a shared
+        // TypePtr, no owned unique_ptr) — only 'value' (the ExprPtr arm
+        // body) needs a real clone.
+        auto &me = static_cast<const MatchExpr &>(e);
+        std::vector<MatchExprArm> arms;
+        for (auto &arm : me.arms) {
+            MatchExprArm na;
+            na.patterns = arm.patterns;
+            na.value = cloneExprImpl(arm.value.get(), subs);
+            arms.push_back(std::move(na));
+        }
+        auto clone = std::make_unique<MatchExpr>(
+            cloneExprImpl(me.subject.get(), subs), std::move(arms), me.loc);
+        return fix(std::move(clone));
+    }
     default:
         return fix(std::make_unique<NullLitExpr>(e.loc));
     }
@@ -395,6 +411,20 @@ static StmtPtr cloneStmtImpl(const Stmt *sp, const TypeSubst &subs) {
             ic.loc);
         res->constResult = ic.constResult;
         return res;
+    }
+    case StmtKind::Match: {
+        // See the ExprKind::Match case above re: MatchPattern being
+        // plainly copyable — only 'body' (the arm's StmtPtr) needs cloning.
+        auto &ms = static_cast<const MatchStmt &>(s);
+        std::vector<MatchArm> arms;
+        for (auto &arm : ms.arms) {
+            MatchArm na;
+            na.patterns = arm.patterns;
+            na.body = cloneStmtImpl(arm.body.get(), subs);
+            arms.push_back(std::move(na));
+        }
+        return std::make_unique<MatchStmt>(
+            cloneExprImpl(ms.subject.get(), subs), std::move(arms), ms.loc);
     }
     default:
         return std::make_unique<BreakStmt>(s.loc); // safe sentinel

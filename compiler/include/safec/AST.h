@@ -50,6 +50,7 @@ enum class ExprKind {
     Slice,          // arr[start..end] → slice construction
     TaggedUnionInit,// Foo.variant(value)
     GenericSelection, // _Generic(expr, T1: e1, T2: e2, default: e3)
+    Match,          // match (expr) { case pat: val, ... } — value-producing
 };
 
 enum class UnaryOp {
@@ -505,6 +506,35 @@ struct MatchStmt : Stmt {
     std::vector<MatchArm> arms;
     MatchStmt(ExprPtr s, std::vector<MatchArm> a, SourceLocation l)
         : Stmt(StmtKind::Match, l), subject(std::move(s)), arms(std::move(a)) {}
+};
+
+// ── match expression ──────────────────────────────────────────────────────────
+// Same pattern grammar as MatchStmt (see parseMatchPattern), but each arm
+// yields a value instead of running a statement, so 'match' can appear
+// anywhere an expression can (e.g. 'int y = match (x) { case 1: 10, ... };').
+// Reuses MatchPattern/PatternKind rather than statement's MatchArm, whose
+// 'body' is a StmtPtr — the value-producing and statement-running forms
+// need different arm payload types, not a shared one repurposed by kind.
+struct MatchExprArm {
+    std::vector<MatchPattern> patterns;
+    ExprPtr                   value;
+};
+
+struct MatchExpr : Expr {
+    ExprPtr                   subject;
+    std::vector<MatchExprArm> arms;
+    // True once Sema has proven every possible subject value is covered
+    // (a wildcard/default arm, or — for tagged unions — every variant
+    // named by some arm). Sema rejects the expression form outright when
+    // this can't be proven (unlike the statement form, which only warns),
+    // since an unmatched arm would leave the merged PHI/result with no
+    // value to produce. CodeGen relies on this being true by the time it
+    // runs: the synthetic block after the last arm is emitted as
+    // unreachable rather than a normal exit edge.
+    bool                       provenExhaustive = false;
+
+    MatchExpr(ExprPtr s, std::vector<MatchExprArm> a, SourceLocation l)
+        : Expr(ExprKind::Match, l), subject(std::move(s)), arms(std::move(a)) {}
 };
 
 // ── Inline assembly ────────────────────────────────────────────────────────

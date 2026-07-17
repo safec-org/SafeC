@@ -1358,6 +1358,121 @@ void CodeGen::genMatch(MatchStmt &s, FnEnv &env) {
     builder_.SetInsertPoint(exitBB);
 }
 
+// Same pattern-matching structure as genMatch above, but each arm produces
+// a value that's merged via a PHI at the exit block instead of running a
+// statement for effect. See MatchExpr::provenExhaustive in AST.h — Sema
+// already rejected the program if some subject value could reach neither a
+// wildcard/default arm nor a covered tagged-union variant, so the block
+// left dangling after the last arm is unreachable at runtime; it's marked
+// 'unreachable' rather than branched into the merge, which would otherwise
+// need a PHI incoming edge with no value to offer.
+llvm::Value *CodeGen::genMatchExpr(MatchExpr &e, FnEnv &env) {
+    auto *subjectVal = genExpr(*e.subject, env);
+    auto *exitBB = llvm::BasicBlock::Create(ctx_, "match.expr.end", env.fn);
+
+    bool isTaggedUnion = false;
+    llvm::StructType *unionTy = nullptr;
+    if (e.subject->type && e.subject->type->kind == TypeKind::Struct) {
+        auto &st = static_cast<StructType &>(*e.subject->type);
+        if (st.isTaggedUnion) {
+            isTaggedUnion = true;
+            unionTy = lowerStructType(st);
+        }
+    }
+
+    llvm::Value *tagVal = nullptr;
+    llvm::AllocaInst *subjectAlloca = nullptr;
+    if (isTaggedUnion && unionTy) {
+        subjectAlloca = createEntryAlloca(env, unionTy, "match.expr.subject");
+        builder_.CreateStore(subjectVal, subjectAlloca);
+        auto *tagGEP = builder_.CreateStructGEP(unionTy, subjectAlloca, 0, "match.expr.tag.ptr");
+        tagVal = builder_.CreateLoad(llvm::Type::getInt32Ty(ctx_), tagGEP, "match.expr.tag");
+    }
+
+    llvm::Type *resultTy = e.type ? lowerType(e.type) : llvm::Type::getInt32Ty(ctx_);
+    std::vector<std::pair<llvm::Value *, llvm::BasicBlock *>> incoming;
+
+    for (auto &arm : e.arms) {
+        auto *bodyBB = llvm::BasicBlock::Create(ctx_, "match.expr.arm",  env.fn);
+        auto *nextBB = llvm::BasicBlock::Create(ctx_, "match.expr.next", env.fn);
+
+        // Build OR-combined condition for this arm's patterns (identical
+        // logic to genMatch's arm-condition loop above).
+        llvm::Value *cond = nullptr;
+        for (auto &pat : arm.patterns) {
+            llvm::Value *thisCond = nullptr;
+            switch (pat.kind) {
+            case PatternKind::Wildcard:
+                thisCond = builder_.getTrue();
+                break;
+            case PatternKind::IntLit: {
+                auto *cmpVal = isTaggedUnion ? tagVal : subjectVal;
+                auto *lit = llvm::ConstantInt::get(cmpVal->getType(), pat.intVal, true);
+                thisCond  = builder_.CreateICmpEQ(cmpVal, lit, "match.expr.eq");
+                break;
+            }
+            case PatternKind::Range: {
+                auto *cmpVal = isTaggedUnion ? tagVal : subjectVal;
+                auto *lo  = llvm::ConstantInt::get(cmpVal->getType(), pat.intVal,  true);
+                auto *hi  = llvm::ConstantInt::get(cmpVal->getType(), pat.intVal2, true);
+                auto *geq = builder_.CreateICmpSGE(cmpVal, lo, "match.expr.ge");
+                auto *leq = builder_.CreateICmpSLE(cmpVal, hi, "match.expr.le");
+                thisCond  = builder_.CreateAnd(geq, leq, "match.expr.range");
+                break;
+            }
+            case PatternKind::EnumIdent:
+                if (isTaggedUnion && pat.resolvedTag >= 0) {
+                    auto *lit = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_),
+                                                        pat.resolvedTag, true);
+                    thisCond = builder_.CreateICmpEQ(tagVal, lit, "match.expr.tag.eq");
+                } else {
+                    thisCond = builder_.getTrue();
+                }
+                break;
+            }
+            cond = cond ? builder_.CreateOr(cond, thisCond, "match.expr.or") : thisCond;
+        }
+        if (!cond) cond = builder_.getTrue();
+
+        builder_.CreateCondBr(cond, bodyBB, nextBB);
+
+        builder_.SetInsertPoint(bodyBB);
+
+        // For tagged union patterns with bind names, extract payload
+        if (isTaggedUnion && subjectAlloca) {
+            for (auto &pat : arm.patterns) {
+                if (!pat.bindName.empty() && pat.payloadType && pat.resolvedTag >= 0) {
+                    auto *payloadGEP = builder_.CreateStructGEP(
+                        unionTy, subjectAlloca, 1, "match.expr.payload.ptr");
+                    auto *payloadTy = lowerType(pat.payloadType);
+                    auto *payloadVal = builder_.CreateLoad(payloadTy, payloadGEP,
+                                                            pat.bindName);
+                    auto *bindAlloca = createEntryAlloca(env, payloadTy, pat.bindName);
+                    builder_.CreateStore(payloadVal, bindAlloca);
+                    env.locals[pat.bindName] = bindAlloca;
+                }
+            }
+        }
+
+        auto *armVal = genExpr(*arm.value, env);
+        armVal = coerceScalar(armVal, resultTy, arm.value->type);
+        auto *armEnd = builder_.GetInsertBlock();
+        if (!isTerminated(armEnd)) {
+            builder_.CreateBr(exitBB);
+            incoming.emplace_back(armVal, armEnd);
+        }
+
+        builder_.SetInsertPoint(nextBB);
+    }
+
+    builder_.CreateUnreachable();
+
+    builder_.SetInsertPoint(exitBB);
+    auto *phi = builder_.CreatePHI(resultTy, (unsigned)incoming.size(), "match.expr");
+    for (auto &pair : incoming) phi->addIncoming(pair.first, pair.second);
+    return phi;
+}
+
 void CodeGen::genVarDecl(VarDeclStmt &s, FnEnv &env) {
     auto typeToUse = s.resolvedType ? s.resolvedType : s.declType;
     // Function pointer types (fn RetType(Params)) must be stored as opaque ptr,
@@ -1484,6 +1599,7 @@ llvm::Value *CodeGen::genExpr(Expr &e, FnEnv &env) {
     case ExprKind::Deref:     return genDeref(static_cast<UnaryExpr &>(e), env);
     case ExprKind::Binary:    return genBinary(static_cast<BinaryExpr &>(e), env);
     case ExprKind::Ternary:   return genTernary(static_cast<TernaryExpr &>(e), env);
+    case ExprKind::Match:     return genMatchExpr(static_cast<MatchExpr &>(e), env);
     case ExprKind::Call:      return genCall(static_cast<CallExpr &>(e), env);
     case ExprKind::Subscript: return genSubscript(static_cast<SubscriptExpr &>(e), env);
     case ExprKind::Slice:     return genSlice(static_cast<SliceExpr &>(e), env);

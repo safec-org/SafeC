@@ -209,6 +209,7 @@ private:
     bool intLiteralFitsType(const Expr &e, const TypePtr &to) const;
     bool floatLitFitsType(const Expr &e, const TypePtr &to) const;
     TypePtr checkGenericSelection(GenericSelectionExpr &e);
+    TypePtr checkMatchExpr(MatchExpr &e);
     bool refToPointerArgCompatible(const TypePtr &from, const TypePtr &to) const;
 
     // ── State ─────────────────────────────────────────────────────────────────

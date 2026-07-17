@@ -198,6 +198,7 @@ private:
     ExprPtr parseCastExpr();       // (type) expr
     ExprPtr parsePostfixExpr();
     ExprPtr parsePrimaryExpr();
+    ExprPtr parseMatchExpr();      // match (expr) { case pat: val, ... } as a value
 
     // ── Helpers ───────────────────────────────────────────────────────────────
     bool isTypeStart() const;       // current token begins a type?

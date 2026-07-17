@@ -1818,6 +1818,47 @@ StmtPtr Parser::parseMatchStmt() {
     return std::make_unique<MatchStmt>(std::move(subject), std::move(arms), loc);
 }
 
+// match-as-expression:
+//   match (expr) {
+//       case pat, pat: val_expr,
+//       case N..M:     val_expr,
+//       default:       val_expr,
+//   }
+// Arms are comma-separated (each yields a value, so there's no statement
+// sequence to delimit them the way MatchStmt's bare 'stmt' per arm does) —
+// trailing comma after the last arm is optional.
+ExprPtr Parser::parseMatchExpr() {
+    auto loc = cur().loc;
+    consume(); // eat 'match'
+    expect(TK::LParen, "expected '(' after 'match'");
+    auto subject = parseExpr();
+    expect(TK::RParen, "expected ')' after match subject");
+    expect(TK::LBrace, "expected '{' opening match body");
+
+    std::vector<MatchExprArm> arms;
+    while (!atEnd() && !cur().is(TK::RBrace)) {
+        MatchExprArm arm;
+        if (cur().is(TK::KW_default)) {
+            consume();
+            expect(TK::Colon, "expected ':' after 'default'");
+            MatchPattern p;
+            p.kind = PatternKind::Wildcard;
+            arm.patterns.push_back(std::move(p));
+        } else {
+            expect(TK::KW_case, "expected 'case' or 'default' in match arm");
+            do {
+                arm.patterns.push_back(parseMatchPattern());
+            } while (match(TK::Comma));
+            expect(TK::Colon, "expected ':' after match pattern(s)");
+        }
+        arm.value = parseAssignExpr();
+        arms.push_back(std::move(arm));
+        if (!match(TK::Comma)) break;
+    }
+    expect(TK::RBrace, "expected '}' closing match");
+    return std::make_unique<MatchExpr>(std::move(subject), std::move(arms), loc);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // EXPRESSIONS  (standard C precedence, recursive descent)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2116,6 +2157,12 @@ ExprPtr Parser::parseUnaryExpr() {
         auto inner = parseUnaryExpr();
         return std::make_unique<TryExpr>(std::move(inner), loc);
     }
+    case TK::KW_match:
+        // Only reached in expression position — parseStmt() intercepts
+        // 'match' at the start of a statement and routes it to
+        // parseMatchStmt() before parseExpr() is ever called, so the two
+        // forms never compete for the same 'match' token.
+        return parseMatchExpr();
     default:
         return parseCastExpr();
     }

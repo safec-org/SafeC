@@ -37,17 +37,18 @@ void log_write(int level, const char* tag, const char* msg,
     // No I/O available in freestanding mode — silently drop.
     return;
 #else
-    // Hosted: emit to stderr with level prefix.
-    const char* prefix = "?";
-    if (level == LOG_LEVEL_ERROR) {
-        prefix = "E";
-    } else if (level == LOG_LEVEL_WARN) {
-        prefix = "W";
-    } else if (level == LOG_LEVEL_INFO) {
-        prefix = "I";
-    } else if (level == LOG_LEVEL_DEBUG) {
-        prefix = "D";
-    }
+    // Hosted: emit to stderr with level prefix. A match-expression here
+    // (vs. the previous if/else-if chain reassigning one variable) lets
+    // CodeGen merge the four cases with a PHI instead of a stack
+    // alloca+store+load for 'prefix' — fewer instructions per log call
+    // even before the optimizer's own mem2reg would erase the difference.
+    const char* prefix = match (level) {
+        case LOG_LEVEL_ERROR: "E",
+        case LOG_LEVEL_WARN:  "W",
+        case LOG_LEVEL_INFO:  "I",
+        case LOG_LEVEL_DEBUG: "D",
+        default:              "?",
+    };
     unsafe {
         fprintf(stderr, "[%s] %s (%s:%d): %s\n", prefix, tag, file, line, msg);
     }
