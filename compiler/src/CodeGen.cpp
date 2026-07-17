@@ -1950,10 +1950,26 @@ llvm::Value *CodeGen::applyBinaryOp(BinaryOp op, llvm::Value *l, llvm::Value *r,
 
     // Widen integer operands to the same bit-width (C integer promotion).
     // This handles cases like `long long x < 0` where 0 is i32 but x is i64.
+    //
+    // Wrap/saturate ops are the deliberate exception: their entire point is
+    // to overflow/clamp at a *specific* declared width (e.g. 'uint8_t x +%
+    // 10' saturating at 255), and Sema types a bare int literal like '10'
+    // as plain 'int' (i32) — widening the i8 operand up to i32 before the
+    // op would make the add/saturate run at i32 width, where an i8-range
+    // value can never overflow, silently turning "saturate at 255" into
+    // "never saturates, then truncate() at the result's cast back to i8
+    // wraps instead of clamping". Truncating the *wider* operand down to
+    // the narrower one's width instead keeps the op running at the width
+    // that was actually declared.
+    bool isWrapOrSat = op == BinaryOp::WrapAdd || op == BinaryOp::WrapSub || op == BinaryOp::WrapMul ||
+                        op == BinaryOp::SatAdd  || op == BinaryOp::SatSub  || op == BinaryOp::SatMul;
     if (!isFloat && l->getType()->isIntegerTy() && r->getType()->isIntegerTy()) {
         unsigned lw = l->getType()->getIntegerBitWidth();
         unsigned rw = r->getType()->getIntegerBitWidth();
-        if (lw < rw) {
+        if (isWrapOrSat && lw != rw) {
+            if (lw > rw)      l = builder_.CreateTrunc(l, r->getType(), "sat.trunc");
+            else               r = builder_.CreateTrunc(r, l->getType(), "sat.trunc");
+        } else if (lw < rw) {
             l = isSigned ? builder_.CreateSExt(l, r->getType(), "sext")
                          : builder_.CreateZExt(l, r->getType(), "zext");
         } else if (rw < lw) {

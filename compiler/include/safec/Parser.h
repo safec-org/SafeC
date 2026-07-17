@@ -159,6 +159,7 @@ private:
     std::unique_ptr<StructDecl> parseStructDecl(bool isUnion,
                                                  bool consumeTrailingSemicolon = true);
     std::unique_ptr<EnumDecl>   parseEnumDecl();
+    std::unique_ptr<TraitDecl>  parseTraitDecl();
     std::unique_ptr<RegionDecl> parseRegionDecl();
     DeclPtr                     parseTypedef();
     DeclPtr                     parseStaticAssertDecl();

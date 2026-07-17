@@ -221,11 +221,11 @@ struct FunctionType : Type {
 
 // ── Generic placeholder ───────────────────────────────────────────────────────
 struct GenericType : Type {
-    std::string name;       // e.g., "T"
-    std::string constraint; // e.g., "Numeric"
+    std::string name;                     // e.g., "T"
+    std::vector<std::string> constraints; // e.g., {"Numeric", "Indexed"}
 
-    GenericType(std::string n, std::string c = {})
-        : Type(TypeKind::Generic), name(std::move(n)), constraint(std::move(c)) {}
+    GenericType(std::string n, std::vector<std::string> c = {})
+        : Type(TypeKind::Generic), name(std::move(n)), constraints(std::move(c)) {}
 
     std::string str() const override { return name; }
     bool equals(const Type &o) const override;

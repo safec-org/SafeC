@@ -555,7 +555,7 @@ struct AsmStmt : Stmt {
 // =============================================================================
 
 enum class DeclKind {
-    Function, Struct, Enum, Region, GlobalVar, TypeAlias, StaticAssert, Newtype
+    Function, Struct, Enum, Region, GlobalVar, TypeAlias, StaticAssert, Newtype, Trait
 };
 
 struct Decl {
@@ -575,10 +575,14 @@ struct ParamDecl {
     bool isPack = false;   // this param uses pack type (T... args)
 };
 
-// ── Generic parameter: <T: Constraint> ───────────────────────────────────────
+// ── Generic parameter: <T: Constraint1 + Constraint2 + ...> ──────────────────
 struct GenericParam {
     std::string name;
-    std::string constraint; // e.g., "Numeric"; empty = unconstrained
+    // Stacked constraints ('T: Numeric + Indexed'): the type argument must
+    // satisfy every entry (AND semantics, same as Rust's 'T: A + B'). Empty
+    // = unconstrained. Each entry names either a builtin trait
+    // (Sema::builtinTraits_) or a user 'trait' declaration.
+    std::vector<std::string> constraints;
     bool isPack = false;    // T... variadic type pack
 };
 
@@ -644,6 +648,20 @@ struct EnumDecl : Decl {
 
     EnumDecl(std::string n, SourceLocation l)
         : Decl(DeclKind::Enum, std::move(n), l) {}
+};
+
+// ── Trait declaration: trait Name { RetType method(Params); ... } ────────────
+// A user-definable generic constraint: 'generic<T: Name>' is satisfied by any
+// type that has a method matching each required name (checked by name only,
+// same fidelity as the builtin traits in Sema::builtinTraits_ — neither
+// verifies full signature compatibility, just that a same-named method
+// exists). 'methods' reuses MethodDecl's (name, returnType, params, isConst)
+// shape purely for the declared signature's documentation/hover value; only
+// '.name' is currently enforced.
+struct TraitDecl : Decl {
+    std::vector<MethodDecl> methods;
+    TraitDecl(std::string n, SourceLocation l)
+        : Decl(DeclKind::Trait, std::move(n), l) {}
 };
 
 // ── Newtype declaration: newtype Name = BaseType; ────────────────────────────

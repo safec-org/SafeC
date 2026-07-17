@@ -242,6 +242,10 @@ private:
     // ── Trait enforcement ─────────────────────────────────────────────────────
     struct TraitDef { std::string name; std::vector<std::string> requiredOps; };
     static const TraitDef builtinTraits_[];
+    // User 'trait Name { ... }' declarations: trait name → required method
+    // names (see TraitDecl in AST.h). Populated in collectDecls, consulted
+    // by satisfiesTrait() alongside builtinTraits_.
+    std::unordered_map<std::string, std::vector<std::string>> userTraits_;
     bool satisfiesTrait(const TypePtr &ty, const std::string &trait) const;
     static std::string binaryOpToMethodName(BinaryOp op);
 

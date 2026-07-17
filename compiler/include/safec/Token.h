@@ -71,6 +71,7 @@ enum class TK {
                        // SafeC globals already require this, so this is an explicit,
                        // enforced spelling of the only mode that exists)
     KW_c11_generic,   // _Generic(expr, T1: e1, T2: e2, default: e3) — C11 type-generic selection
+    KW_trait,         // trait Name { RetType method(Params); ... } — user-definable generic constraint
 
     // ── Operators ─────────────────────────────────────────────────────────────
     Plus, Minus, Star, Slash, Percent,

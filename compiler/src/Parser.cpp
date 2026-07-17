@@ -454,7 +454,7 @@ TypePtr Parser::parseTypeDeclarator(TypePtr base) {
     return base;
 }
 
-// Parse <T: Constraint, U, ...>
+// Parse <T: Constraint1 + Constraint2, U, ...>
 std::vector<GenericParam> Parser::parseGenericParams() {
     std::vector<GenericParam> params;
     expect(TK::Lt, "expected '<' after 'generic'");
@@ -471,10 +471,15 @@ std::vector<GenericParam> Parser::parseGenericParams() {
         }
         if (cur().is(TK::Colon)) {
             consume();
-            p.constraint = cur().text;
-            if (!cur().is(TK::Ident)) {
-                diag_.error(cur().loc, "expected constraint name");
-            } else consume();
+            // Stacked constraints: 'T: Numeric + Indexed + Pointer'.
+            do {
+                if (!cur().is(TK::Ident)) {
+                    diag_.error(cur().loc, "expected constraint name");
+                    break;
+                }
+                p.constraints.push_back(cur().text);
+                consume();
+            } while (match(TK::Plus));
         }
         params.push_back(std::move(p));
         if (!match(TK::Comma)) break;
@@ -757,6 +762,9 @@ DeclPtr Parser::parseTopLevelDecl() {
         expect(TK::Semicolon);
         return std::make_unique<NewtypeDecl>(std::move(name), std::move(base), loc);
     }
+
+    // trait Name { RetType method(Params); ... }
+    if (cur().is(TK::KW_trait)) return parseTraitDecl();
 
     // namespace X { ... }
     if (cur().is(TK::KW_namespace)) { parseNamespaceDecl(); return nullptr; }
@@ -1225,6 +1233,54 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTr
     expect(TK::RBrace, "expected '}' closing struct");
     if (consumeTrailingSemicolon) match(TK::Semicolon);
     return sd;
+}
+
+// trait Name { RetType method(Params) [const]; ... }
+// Deliberately simpler than parseStructDecl's method-parsing branch (no
+// fields, no operator overloads, no C-style function-pointer members) —
+// a trait body is only ever a list of required method signatures.
+std::unique_ptr<TraitDecl> Parser::parseTraitDecl() {
+    auto loc = cur().loc;
+    consume(); // 'trait'
+    std::string name;
+    if (cur().is(TK::Ident)) { name = cur().text; consume(); }
+    else diag_.error(cur().loc, "expected trait name after 'trait'");
+
+    auto td = std::make_unique<TraitDecl>(std::move(name), loc);
+    expect(TK::LBrace, "expected '{' in trait definition");
+    while (!atEnd() && !cur().is(TK::RBrace)) {
+        auto savedPos = pos_;
+        MethodDecl md;
+        md.loc        = cur().loc;
+        md.returnType = parseType();
+        if (!cur().is(TK::Ident)) {
+            diag_.error(cur().loc, "expected method name in trait body");
+        } else {
+            md.name = cur().text;
+            consume();
+            expect(TK::LParen, "expected '(' after method name in trait body");
+            if (cur().is(TK::KW_void) && peek().is(TK::RParen)) consume();
+            while (!atEnd() && !cur().is(TK::RParen)) {
+                if (cur().is(TK::DotDotDot)) { consume(); break; }
+                ParamDecl p;
+                p.loc  = cur().loc;
+                p.type = parseType();
+                if (cur().is(TK::Ident)) { p.name = cur().text; consume(); }
+                p.type = parseArrayDeclaratorSuffix(std::move(p.type));
+                md.params.push_back(std::move(p));
+                if (!match(TK::Comma)) break;
+            }
+            expect(TK::RParen, "expected ')' closing method parameter list");
+            if (cur().is(TK::KW_const)) { consume(); md.isConst = true; }
+            expect(TK::Semicolon, "expected ';' after trait method declaration");
+            td->methods.push_back(std::move(md));
+        }
+        // Guarantee forward progress on malformed input (see parseStructDecl).
+        if (pos_ == savedPos) consume();
+    }
+    expect(TK::RBrace, "expected '}' closing trait");
+    match(TK::Semicolon); // optional trailing ';'
+    return td;
 }
 
 std::unique_ptr<EnumDecl> Parser::parseEnumDecl() {

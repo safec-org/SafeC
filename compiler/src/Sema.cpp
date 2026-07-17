@@ -37,9 +37,29 @@ const Sema::TraitDef Sema::builtinTraits_[] = {
 
 bool Sema::satisfiesTrait(const TypePtr &ty, const std::string &trait) const {
     if (trait.empty()) return true;
+    if (!ty) return false;
+
+    // Structural traits: judged by TypeKind, not by looking up a method —
+    // SafeC has no 'operator[]' overload mechanism, so these apply only to
+    // the built-in kinds that are natively indexable/pointer-like. Checked
+    // before the isArithmetic() shortcut below so 'int' doesn't spuriously
+    // satisfy 'Indexed'/'Pointer' just for being numeric. A struct can only
+    // satisfy them via a user 'trait' that names an explicit accessor
+    // method instead (e.g. 'trait Indexable { int get(int i); }').
+    if (trait == "Indexed") {
+        return ty->kind == TypeKind::Array   || ty->kind == TypeKind::Pointer ||
+               ty->kind == TypeKind::Slice   || ty->kind == TypeKind::Vector  ||
+               ty->kind == TypeKind::Reference;
+    }
+    if (trait == "Pointer") {
+        return ty->kind == TypeKind::Pointer || ty->kind == TypeKind::Reference;
+    }
+
     // Primitive numeric types satisfy Numeric/Ord/Eq/Add/Sub/Mul/Div
     if (ty->isArithmetic()) return true;
-    // Struct types: check if they have the required operator methods
+    // Struct types: check if they have the required operator/method names —
+    // whether 'trait' names a builtin trait or a user 'trait Name { ... }'
+    // declaration, both are just a list of required method names.
     if (ty->kind == TypeKind::Struct) {
         auto &st = static_cast<const StructType &>(*ty);
         for (auto *td = builtinTraits_; !td->name.empty(); ++td) {
@@ -51,6 +71,15 @@ bool Sema::satisfiesTrait(const TypePtr &ty, const std::string &trait) const {
                 }
                 return true;
             }
+        }
+        auto uit = userTraits_.find(trait);
+        if (uit != userTraits_.end()) {
+            for (auto &methodName : uit->second) {
+                std::string key = st.name + "::" + methodName;
+                if (methodRegistry_.find(key) == methodRegistry_.end())
+                    return false;
+            }
+            return true;
         }
     }
     return false;
@@ -260,6 +289,17 @@ void Sema::collectDecls(TranslationUnit &tu) {
             typeRegistry_[nt.name] = ntt;
             break;
         }
+        case DeclKind::Trait: {
+            // Only method *names* are recorded (see TraitDecl's comment in
+            // AST.h) — satisfiesTrait() checks the same way builtinTraits_
+            // does: a same-named method must exist on the candidate struct,
+            // full signature compatibility isn't verified.
+            auto &td = static_cast<TraitDecl &>(*d);
+            std::vector<std::string> methodNames;
+            for (auto &m : td.methods) methodNames.push_back(m.name);
+            userTraits_[td.name] = std::move(methodNames);
+            break;
+        }
         default: break;
         }
     }
@@ -275,7 +315,7 @@ static TypePtr resolveGenericNames(const TypePtr &ty,
         if (!st.isDefined) {
             for (auto &gp : gps)
                 if (gp.name == st.name)
-                    return std::make_shared<GenericType>(gp.name, gp.constraint);
+                    return std::make_shared<GenericType>(gp.name, gp.constraints);
         }
     }
     if (ty->kind == TypeKind::Pointer) {
@@ -2088,14 +2128,20 @@ TypePtr Sema::checkCall(CallExpr &e) {
             return makeError();
         }
 
-        // Enforce trait constraints on inferred type arguments
+        // Enforce trait constraints on inferred type arguments. Stacked
+        // constraints ('T: Numeric + Indexed') are AND semantics — every
+        // one must be satisfied, so report each unmet constraint rather
+        // than stopping at the first (matches how a missing-field struct
+        // literal reports every missing field, not just one).
         for (auto &gp : fnDecl->genericParams) {
-            if (!gp.constraint.empty()) {
-                auto it = subs.find(gp.name);
-                if (it != subs.end() && !satisfiesTrait(it->second, gp.constraint)) {
+            if (gp.constraints.empty()) continue;
+            auto it = subs.find(gp.name);
+            if (it == subs.end()) continue;
+            for (auto &constraint : gp.constraints) {
+                if (!satisfiesTrait(it->second, constraint)) {
                     diag_.error(e.loc,
                         "type '" + it->second->str() + "' does not satisfy constraint '" +
-                        gp.constraint + "' for generic parameter '" + gp.name + "'");
+                        constraint + "' for generic parameter '" + gp.name + "'");
                 }
             }
         }
