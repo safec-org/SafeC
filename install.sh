@@ -3,44 +3,36 @@ set -euo pipefail
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  SafeC Install Script — macOS & Linux
+#
+#  Downloads a prebuilt safec/safeguard/sc-lsp release from GitHub Releases
+#  and installs it — no LLVM, no CMake, no compiler needed on the machine
+#  you're installing to.
+#
 #  Usage:  bash install.sh [OPTIONS]
 #
 #  Options:
-#    --prefix=<path>     Install directory (default: ~/safec)
-#    --llvm-dir=<path>   Path to LLVM cmake directory (auto-detected if omitted)
-#    --jobs=N            Parallel build jobs (default: nproc)
-#    --skip-safeguard    Skip building the safeguard package manager
-#    --skip-lsp          Skip building the LSP language server
-#    --skip-env          Skip shell environment configuration
-#    --help              Show this help message
+#    --prefix=<path>   Install directory (default: ~/safec)
+#    --version=<tag>   Release tag to install (default: latest)
+#    --skip-env        Skip shell environment configuration
+#    --help            Show this help message
 # ──────────────────────────────────────────────────────────────────────────────
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="safec-org/SafeC"
 
-# ── Color helpers ─────────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then
-    BOLD="\033[1m"
-    RED="\033[1;31m"
-    GREEN="\033[1;32m"
-    YELLOW="\033[1;33m"
-    BLUE="\033[1;34m"
-    RESET="\033[0m"
+    BOLD="\033[1m"; RED="\033[1;31m"; GREEN="\033[1;32m"
+    YELLOW="\033[1;33m"; BLUE="\033[1;34m"; RESET="\033[0m"
 else
     BOLD="" RED="" GREEN="" YELLOW="" BLUE="" RESET=""
 fi
-
 info()  { echo -e "${BLUE}[info]${RESET}  $*"; }
 ok()    { echo -e "${GREEN}[ok]${RESET}    $*"; }
 warn()  { echo -e "${YELLOW}[warn]${RESET}  $*"; }
 error() { echo -e "${RED}[error]${RESET} $*"; }
 die()   { error "$@"; exit 1; }
 
-# ── Parse arguments ───────────────────────────────────────────────────────────
 PREFIX=""
-LLVM_DIR=""
-JOBS=""
-SKIP_SAFEGUARD=false
-SKIP_LSP=false
+VERSION="latest"
 SKIP_ENV=false
 
 show_help() {
@@ -50,541 +42,124 @@ SafeC Install Script — macOS & Linux
 Usage:  bash install.sh [OPTIONS]
 
 Options:
-  --prefix=<path>     Install directory (default: ~/safec)
-  --llvm-dir=<path>   Path to LLVM cmake directory (auto-detected if omitted)
-  --jobs=N            Parallel build jobs (default: nproc / sysctl hw.ncpu)
-  --skip-safeguard    Skip building the safeguard package manager
-  --skip-lsp          Skip building the LSP language server
-  --skip-env          Skip shell environment configuration
-  --help              Show this help message
+  --prefix=<path>   Install directory (default: ~/safec)
+  --version=<tag>   Release tag to install, e.g. v0.2.0 (default: latest)
+  --skip-env        Skip shell environment configuration
+  --help            Show this help message
 
 Examples:
   curl -fsSL https://raw.githubusercontent.com/safec-org/SafeC/main/install.sh | bash
-  bash install.sh
-  bash install.sh --prefix=/opt/safec --jobs=8
-  bash install.sh --skip-safeguard --skip-env
+  bash install.sh --prefix=/opt/safec
+  bash install.sh --version=v0.2.0
 EOF
     exit 0
 }
 
 for arg in "$@"; do
     case "$arg" in
-        --prefix=*)   PREFIX="${arg#*=}" ;;
-        --llvm-dir=*) LLVM_DIR="${arg#*=}" ;;
-        --jobs=*)     JOBS="${arg#*=}" ;;
-        --skip-safeguard) SKIP_SAFEGUARD=true ;;
-        --skip-lsp)       SKIP_LSP=true ;;
-        --skip-env)       SKIP_ENV=true ;;
-        --help|-h)        show_help ;;
+        --prefix=*)  PREFIX="${arg#*=}" ;;
+        --version=*) VERSION="${arg#*=}" ;;
+        --skip-env)  SKIP_ENV=true ;;
+        --help|-h)   show_help ;;
         *) die "Unknown option: $arg (use --help for usage)" ;;
     esac
 done
+PREFIX="${PREFIX:-${HOME}/safec}"
 
 # ── Platform detection ────────────────────────────────────────────────────────
-PLATFORM=""
-DISTRO=""
+os="$(uname -s)"
+arch="$(uname -m)"
+case "$os" in
+    Darwin) plat_os="macos" ;;
+    Linux)  plat_os="linux" ;;
+    *)      die "Unsupported platform: $os (only macOS and Linux prebuilt releases are published — see https://github.com/${REPO})" ;;
+esac
+case "$arch" in
+    arm64|aarch64) plat_arch="arm64" ;;
+    x86_64|amd64)  plat_arch="x86_64" ;;
+    *)             die "Unsupported architecture: $arch" ;;
+esac
 
-detect_platform() {
-    local os
-    os="$(uname -s)"
-    case "$os" in
-        Darwin) PLATFORM="macos" ;;
-        Linux)  PLATFORM="linux" ;;
-        *)      die "Unsupported platform: $os" ;;
-    esac
-
-    if [[ "$PLATFORM" == "linux" ]]; then
-        if [[ -f /etc/os-release ]]; then
-            # shellcheck source=/dev/null
-            . /etc/os-release
-            case "${ID:-}" in
-                ubuntu|debian|pop|linuxmint|elementary) DISTRO="debian" ;;
-                fedora|rhel|centos|rocky|alma)          DISTRO="fedora" ;;
-                arch|manjaro|endeavouros)               DISTRO="arch" ;;
-                opensuse*|sles)                         DISTRO="suse" ;;
-                *)                                      DISTRO="unknown" ;;
-            esac
-        elif command -v apt-get &>/dev/null; then
-            DISTRO="debian"
-        elif command -v dnf &>/dev/null; then
-            DISTRO="fedora"
-        elif command -v pacman &>/dev/null; then
-            DISTRO="arch"
-        else
-            DISTRO="unknown"
-        fi
-    fi
-}
-
-detect_platform
-info "Platform: ${BOLD}${PLATFORM}${RESET}${DISTRO:+ ($DISTRO)}"
-
-# ── Default jobs ──────────────────────────────────────────────────────────────
-if [[ -z "$JOBS" ]]; then
-    if [[ "$PLATFORM" == "macos" ]]; then
-        JOBS="$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
-    else
-        JOBS="$(nproc 2>/dev/null || echo 4)"
-    fi
+ASSET="safec-${plat_os}-${plat_arch}.tar.gz"
+# Published assets today: safec-macos-arm64.tar.gz, safec-linux-x86_64.tar.gz.
+# A combination outside that set (e.g. macos-x86_64, linux-arm64) has no
+# published release binary yet — fail clearly instead of a confusing 404.
+if [[ "$ASSET" != "safec-macos-arm64.tar.gz" && "$ASSET" != "safec-linux-x86_64.tar.gz" ]]; then
+    die "No prebuilt release for ${plat_os}/${plat_arch} yet — see https://github.com/${REPO}/releases"
 fi
-info "Build parallelism: ${BOLD}${JOBS}${RESET} jobs"
+info "Platform: ${BOLD}${plat_os}/${plat_arch}${RESET} → ${ASSET}"
 
-# ── Prerequisite checks ──────────────────────────────────────────────────────
-check_command() {
-    if ! command -v "$1" &>/dev/null; then
-        return 1
-    fi
-    return 0
-}
+command -v curl &>/dev/null || die "curl not found — required to download the release"
+command -v tar  &>/dev/null || die "tar not found — required to extract the release"
 
-check_cmake_version() {
-    local ver
-    ver="$(cmake --version | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)"
-    local major minor
-    major="${ver%%.*}"
-    minor="${ver#*.}"
-    if (( major < 3 || (major == 3 && minor < 20) )); then
-        die "CMake 3.20+ required (found ${ver}). Please upgrade cmake."
-    fi
-    ok "CMake ${ver}"
-}
-
-check_cxx_compiler() {
-    if check_command c++ || check_command g++ || check_command clang++; then
-        local cxx
-        cxx="$(command -v c++ 2>/dev/null || command -v g++ 2>/dev/null || command -v clang++ 2>/dev/null)"
-        ok "C++ compiler: ${cxx}"
-    else
-        die "No C++ compiler found. Install g++ or clang++."
-    fi
-}
-
-info "Checking prerequisites..."
-
-if ! check_command git; then
-    die "Git not found. Install git first (brew install git / apt install git)."
-fi
-ok "Git $(git --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
-
-if ! check_command cmake; then
-    die "CMake not found. Install cmake first (brew install cmake / apt install cmake)."
-fi
-check_cmake_version
-check_cxx_compiler
-
-# ── Clone repositories ───────────────────────────────────────────────────────
-SAFEC_REPO="https://github.com/safec-org/SafeC.git"
-LSP_REPO="https://github.com/safec-org/sc-language-server.git"
-
-if [[ -d "${SCRIPT_DIR}/compiler" ]]; then
-    # Already inside a SafeC checkout — use it
-    info "Running from existing SafeC checkout: ${SCRIPT_DIR}"
+# ── Resolve download URL ──────────────────────────────────────────────────────
+if [[ "$VERSION" == "latest" ]]; then
+    API_URL="https://api.github.com/repos/${REPO}/releases/latest"
 else
-    # Fresh install — clone into PREFIX
-    PREFIX="${PREFIX:-${HOME}/safec}"
-    info "Cloning SafeC into ${BOLD}${PREFIX}${RESET} ..."
-
-    if [[ -d "${PREFIX}/.git" ]]; then
-        info "SafeC repo already exists at ${PREFIX} — pulling latest..."
-        git -C "$PREFIX" pull --ff-only 2>&1 || warn "git pull failed — using existing checkout"
-    else
-        git clone "$SAFEC_REPO" "$PREFIX" 2>&1
-    fi
-
-    SCRIPT_DIR="$PREFIX"
+    API_URL="https://api.github.com/repos/${REPO}/releases/tags/${VERSION}"
 fi
 
-# Clone LSP server alongside SafeC if not present
-LSP_DIR="${SCRIPT_DIR}/../sc-language-server"
-if [[ "$SKIP_LSP" != true ]]; then
-    if [[ -d "$LSP_DIR" ]]; then
-        info "LSP server repo already exists at ${LSP_DIR}"
-    else
-        info "Cloning sc-language-server alongside SafeC..."
-        git clone "$LSP_REPO" "$LSP_DIR" 2>&1 || warn "Failed to clone sc-language-server (non-fatal)"
-    fi
-fi
+info "Resolving release (${VERSION})..."
+DOWNLOAD_URL="$(curl -fsSL "$API_URL" | grep -o "\"browser_download_url\": *\"[^\"]*${ASSET}\"" | sed -E 's/.*"(https:[^"]+)"/\1/' | head -1)"
+[[ -n "$DOWNLOAD_URL" ]] || die "Could not find asset '${ASSET}' in release '${VERSION}' — check https://github.com/${REPO}/releases"
+ok "Found: ${DOWNLOAD_URL}"
 
-# ── LLVM detection ────────────────────────────────────────────────────────────
-find_llvm_cmake_dir() {
-    # User-supplied path
-    if [[ -n "$LLVM_DIR" ]]; then
-        if [[ -f "${LLVM_DIR}/LLVMConfig.cmake" ]]; then
-            ok "LLVM (user-supplied): ${LLVM_DIR}"
-            return 0
-        else
-            die "LLVMConfig.cmake not found in ${LLVM_DIR}"
-        fi
-    fi
+# ── Download + extract ────────────────────────────────────────────────────────
+TMPDIR="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR"' EXIT
 
-    info "Auto-detecting LLVM installation..."
+info "Downloading..."
+curl -fsSL -o "${TMPDIR}/${ASSET}" "$DOWNLOAD_URL"
+ok "Downloaded $(du -h "${TMPDIR}/${ASSET}" | cut -f1)"
 
-    # macOS: Homebrew
-    if [[ "$PLATFORM" == "macos" ]] && check_command brew; then
-        local brew_prefix
-        brew_prefix="$(brew --prefix llvm 2>/dev/null || true)"
-        if [[ -n "$brew_prefix" && -d "$brew_prefix" ]]; then
-            local candidate="${brew_prefix}/lib/cmake/llvm"
-            if [[ -f "${candidate}/LLVMConfig.cmake" ]]; then
-                LLVM_DIR="$candidate"
-                ok "LLVM (Homebrew): ${LLVM_DIR}"
-                return 0
-            fi
-        fi
-        # Homebrew opt symlinks can be stale — check Cellar directly
-        local cellar_dir
-        cellar_dir="$(brew --cellar 2>/dev/null || true)"
-        if [[ -n "$cellar_dir" && -d "${cellar_dir}/llvm" ]]; then
-            local latest
-            latest="$(ls -1d "${cellar_dir}/llvm/"*/ 2>/dev/null | sort -V | tail -1)"
-            if [[ -n "$latest" ]]; then
-                local candidate="${latest}lib/cmake/llvm"
-                if [[ -f "${candidate}/LLVMConfig.cmake" ]]; then
-                    LLVM_DIR="$candidate"
-                    ok "LLVM (Homebrew Cellar): ${LLVM_DIR}"
-                    return 0
-                fi
-            fi
-        fi
-    fi
+info "Extracting to ${BOLD}${PREFIX}${RESET}..."
+mkdir -p "$PREFIX"
+tar xzf "${TMPDIR}/${ASSET}" -C "$TMPDIR"
+EXTRACTED_DIR="$(find "$TMPDIR" -maxdepth 1 -type d -name 'safec-*')"
+[[ -n "$EXTRACTED_DIR" ]] || die "Unexpected archive layout"
+cp -R "${EXTRACTED_DIR}/." "$PREFIX/"
+chmod +x "${PREFIX}/bin/"* 2>/dev/null || true
+ok "Installed to ${PREFIX}"
 
-    # Linux: versioned paths.
-    # 21 is the true floor, not just a preference: CodeGen.cpp uses LLVM
-    # APIs (Module::setTargetTriple(Triple)/getTargetTriple() returning
-    # Triple, the Triple-overload of TargetRegistry::lookupTarget,
-    # Intrinsic::getOrInsertDeclaration with no older-name fallback) that
-    # were introduced somewhere between v18 and v21 and simply don't exist
-    # on anything older — a version below 21 found here would configure
-    # successfully and then fail to compile, which is worse than not
-    # finding it at all. 25 is just headroom so this doesn't need editing
-    # every time a new LLVM major ships; adjust upward as needed.
-    if [[ "$PLATFORM" == "linux" ]]; then
-        local search_dirs=()
-        for v in 25 24 23 22 21; do
-            search_dirs+=("/usr/lib/llvm-${v}/lib/cmake/llvm")           # Debian
-            search_dirs+=("/usr/lib64/llvm${v}/lib/cmake/llvm")          # Fedora
-            search_dirs+=("/usr/lib/llvm/${v}/lib/cmake/llvm")           # Arch
-        done
-        search_dirs+=("/usr/lib/cmake/llvm")                             # Generic
-        search_dirs+=("/usr/local/lib/cmake/llvm")
+# ── Shell environment ─────────────────────────────────────────────────────────
+if [[ "$SKIP_ENV" != true ]]; then
+    shell_name="$(basename "${SHELL:-/bin/bash}")"
+    bin_dir="${PREFIX}/bin"
 
-        for d in "${search_dirs[@]}"; do
-            if [[ -f "${d}/LLVMConfig.cmake" ]]; then
-                LLVM_DIR="$d"
-                ok "LLVM: ${LLVM_DIR}"
-                return 0
-            fi
-        done
-    fi
-
-    # Generic fallback paths (both platforms)
-    local fallbacks=(
-        "/usr/local/lib/cmake/llvm"
-        "/opt/homebrew/opt/llvm/lib/cmake/llvm"
-    )
-    for d in "${fallbacks[@]}"; do
-        if [[ -f "${d}/LLVMConfig.cmake" ]]; then
-            LLVM_DIR="$d"
-            ok "LLVM: ${LLVM_DIR}"
-            return 0
-        fi
-    done
-
-    return 1
-}
-
-offer_install_llvm() {
-    echo ""
-    warn "LLVM development libraries not found."
-    echo ""
-
-    local install_cmd=""
-    case "${PLATFORM}:${DISTRO}" in
-        macos:*)    install_cmd="brew install llvm" ;;
-        linux:debian) install_cmd="sudo apt-get install -y llvm-17-dev" ;;
-        linux:fedora) install_cmd="sudo dnf install -y llvm17-devel" ;;
-        linux:arch)   install_cmd="sudo pacman -S --noconfirm llvm" ;;
-        linux:suse)   install_cmd="sudo zypper install -y llvm-devel" ;;
+    case "$shell_name" in
+        fish)
+            rc_file="${HOME}/.config/fish/config.fish"
+            env_block=$'\n# SafeC\nset -gx SAFEC_HOME "'"${PREFIX}"$'"\nfish_add_path "'"${bin_dir}"$'"\n'
+            ;;
+        zsh)
+            rc_file="${HOME}/.zshrc"
+            env_block=$'\n# SafeC\nexport SAFEC_HOME="'"${PREFIX}"$'"\nexport PATH="'"${bin_dir}"$':$PATH"\n'
+            ;;
         *)
-            die "Could not determine how to install LLVM on this system. Use --llvm-dir=<path>."
+            rc_file="${HOME}/.bashrc"
+            env_block=$'\n# SafeC\nexport SAFEC_HOME="'"${PREFIX}"$'"\nexport PATH="'"${bin_dir}"$':$PATH"\n'
             ;;
     esac
 
-    echo -e "  Suggested command: ${BOLD}${install_cmd}${RESET}"
-    echo ""
-    read -rp "Install LLVM now? [y/N] " response
-    if [[ "${response,,}" == "y" || "${response,,}" == "yes" ]]; then
-        info "Running: ${install_cmd}"
-        eval "$install_cmd"
-        # Re-detect after install
-        if find_llvm_cmake_dir; then
-            return 0
-        else
-            die "LLVM installed but cmake directory not found. Use --llvm-dir=<path>."
-        fi
+    if [[ -f "$rc_file" ]] && grep -q "SAFEC_HOME" "$rc_file" 2>/dev/null; then
+        info "Shell env already configured in ${rc_file} — leaving as-is"
     else
-        die "LLVM is required to build SafeC. Use --llvm-dir=<path> or install LLVM manually."
+        echo "$env_block" >> "$rc_file"
+        ok "Added SAFEC_HOME/PATH to ${rc_file} — restart your shell or 'source ${rc_file}'"
     fi
-}
-
-if ! find_llvm_cmake_dir; then
-    offer_install_llvm
-fi
-
-# ── Build compiler ────────────────────────────────────────────────────────────
-echo ""
-info "Building SafeC compiler..."
-
-COMPILER_DIR="${SCRIPT_DIR}/compiler"
-if [[ ! -d "$COMPILER_DIR" ]]; then
-    die "compiler/ directory not found at ${COMPILER_DIR}"
-fi
-
-cd "$COMPILER_DIR"
-
-cmake -S . -B build -DLLVM_DIR="${LLVM_DIR}" 2>&1 | tail -5
-info "Running cmake --build build -j ${JOBS} ..."
-cmake --build build -j "${JOBS}" 2>&1
-
-SAFEC_BIN=""
-if [[ -f "build/safec" ]]; then
-    SAFEC_BIN="${COMPILER_DIR}/build/safec"
-elif [[ -f "build/Release/safec" ]]; then
-    SAFEC_BIN="${COMPILER_DIR}/build/Release/safec"
-fi
-
-if [[ -z "$SAFEC_BIN" || ! -x "$SAFEC_BIN" ]]; then
-    die "Compiler build failed — safec binary not found."
-fi
-ok "Compiler built: ${SAFEC_BIN}"
-
-# ── Build safeguard ──────────────────────────────────────────────────────────
-SAFEGUARD_DIR="${SCRIPT_DIR}/safeguard"
-SAFEGUARD_BIN=""
-
-if [[ "$SKIP_SAFEGUARD" == true ]]; then
-    info "Skipping safeguard build (--skip-safeguard)"
-elif [[ ! -d "$SAFEGUARD_DIR" ]]; then
-    warn "safeguard/ directory not found — skipping."
 else
-    echo ""
-    info "Building safeguard package manager..."
-    cd "$SAFEGUARD_DIR"
-
-    if cmake -S . -B build 2>&1 | tail -3 && \
-       cmake --build build -j "${JOBS}" 2>&1; then
-        if [[ -f "build/safeguard" ]]; then
-            SAFEGUARD_BIN="${SAFEGUARD_DIR}/build/safeguard"
-        elif [[ -f "build/Release/safeguard" ]]; then
-            SAFEGUARD_BIN="${SAFEGUARD_DIR}/build/Release/safeguard"
-        fi
-        if [[ -n "$SAFEGUARD_BIN" ]]; then
-            ok "Safeguard built: ${SAFEGUARD_BIN}"
-        else
-            warn "Safeguard build appeared to succeed but binary not found."
-        fi
-    else
-        warn "Safeguard build failed (non-fatal). You can retry later or use --skip-safeguard."
-    fi
+    info "Skipping shell setup (--skip-env). Add manually:"
+    echo "  export SAFEC_HOME=\"${PREFIX}\""
+    echo "  export PATH=\"${PREFIX}/bin:\$PATH\""
 fi
 
-# ── Build LSP language server ────────────────────────────────────────────────
-LSP_BIN=""
-
-if [[ "$SKIP_LSP" == true ]]; then
-    info "Skipping LSP build (--skip-lsp)"
-elif [[ ! -d "$LSP_DIR" ]]; then
-    warn "sc-language-server/ directory not found — skipping. Clone it alongside SafeC to enable LSP."
-else
-    echo ""
-    info "Building SafeC LSP language server..."
-    cd "$LSP_DIR"
-
-    if cmake -S . -B build -DSAFEC_DIR="${COMPILER_DIR}" 2>&1 | tail -3 && \
-       cmake --build build -j "${JOBS}" 2>&1; then
-        if [[ -f "build/sc-lsp" ]]; then
-            LSP_BIN="${LSP_DIR}/build/sc-lsp"
-        elif [[ -f "build/Release/sc-lsp" ]]; then
-            LSP_BIN="${LSP_DIR}/build/Release/sc-lsp"
-        fi
-        if [[ -n "$LSP_BIN" ]]; then
-            ok "LSP server built: ${LSP_BIN}"
-        else
-            warn "LSP build appeared to succeed but binary not found."
-        fi
-    else
-        warn "LSP build failed (non-fatal). You can retry later or use --skip-lsp."
-    fi
-fi
-
-cd "$SCRIPT_DIR"
-
-# ── Environment setup ────────────────────────────────────────────────────────
-MARKER="# SafeC environment"
-
-detect_shell_profile() {
-    local shell_name
-    shell_name="$(basename "${SHELL:-/bin/bash}")"
-    case "$shell_name" in
-        zsh)  echo "${HOME}/.zshrc" ;;
-        fish) echo "${HOME}/.config/fish/config.fish" ;;
-        *)    echo "${HOME}/.bashrc" ;;
-    esac
-}
-
-setup_env() {
-    if [[ "$SKIP_ENV" == true ]]; then
-        info "Skipping environment setup (--skip-env)"
-        return
-    fi
-
-    echo ""
-    info "Configuring shell environment..."
-
-    local profile
-    profile="$(detect_shell_profile)"
-    local shell_name
-    shell_name="$(basename "${SHELL:-/bin/bash}")"
-
-    local bin_dir="${COMPILER_DIR}/build"
-    local safec_home="${SCRIPT_DIR}"
-
-    # Check if already configured
-    if [[ -f "$profile" ]] && grep -qF "$MARKER" "$profile" 2>/dev/null; then
-        ok "Environment already configured in ${profile}"
-        return
-    fi
-
-    echo ""
-    info "Will add the following to ${BOLD}${profile}${RESET}:"
-
-    if [[ "$shell_name" == "fish" ]]; then
-        local env_block
-        env_block=$(cat <<ENVEOF
-${MARKER}
-set -gx SAFEC_HOME "${safec_home}"
-fish_add_path "${bin_dir}"
-ENVEOF
-)
-        if [[ -n "$SAFEGUARD_BIN" ]]; then
-            env_block+=$'\n'"fish_add_path \"$(dirname "$SAFEGUARD_BIN")\""
-        fi
-        if [[ -n "$LSP_BIN" ]]; then
-            env_block+=$'\n'"fish_add_path \"$(dirname "$LSP_BIN")\""
-        fi
-    else
-        local env_block
-        env_block=$(cat <<ENVEOF
-${MARKER}
-export SAFEC_HOME="${safec_home}"
-export PATH="${bin_dir}:\$PATH"
-ENVEOF
-)
-        if [[ -n "$SAFEGUARD_BIN" ]]; then
-            local sg_dir
-            sg_dir="$(dirname "$SAFEGUARD_BIN")"
-            if [[ "$sg_dir" != "$bin_dir" ]]; then
-                env_block+=$'\n'"export PATH=\"${sg_dir}:\$PATH\""
-            fi
-        fi
-        if [[ -n "$LSP_BIN" ]]; then
-            local lsp_dir
-            lsp_dir="$(dirname "$LSP_BIN")"
-            if [[ "$lsp_dir" != "$bin_dir" ]]; then
-                env_block+=$'\n'"export PATH=\"${lsp_dir}:\$PATH\""
-            fi
-        fi
-    fi
-
-    echo "$env_block"
-    echo ""
-    read -rp "Apply these changes? [Y/n] " response
-    if [[ "${response,,}" == "n" || "${response,,}" == "no" ]]; then
-        warn "Skipped environment setup. Add the above lines manually."
-        return
-    fi
-
-    echo "" >> "$profile"
-    echo "$env_block" >> "$profile"
-    ok "Updated ${profile}"
-    info "Run ${BOLD}source ${profile}${RESET} or open a new terminal to apply."
-}
-
-setup_env
-
-# ── Verification ──────────────────────────────────────────────────────────────
 echo ""
-info "Verifying installation..."
-
-VERIFY_OK=true
-
-# Check safec binary
-if "${SAFEC_BIN}" --help &>/dev/null; then
-    ok "safec --help works"
-else
-    warn "safec --help returned non-zero (may be expected if --help isn't implemented)"
-fi
-
-# Compile hello.sc
-HELLO_SC="${COMPILER_DIR}/examples/hello.sc"
-if [[ -f "$HELLO_SC" ]]; then
-    TMPLL="$(mktemp /tmp/safec_test_XXXXXX.ll)"
-    if "${SAFEC_BIN}" "$HELLO_SC" --emit-llvm -o "$TMPLL" 2>/dev/null; then
-        ok "Compiled examples/hello.sc to LLVM IR"
-    else
-        warn "Failed to compile examples/hello.sc (non-fatal)"
-        VERIFY_OK=false
-    fi
-    rm -f "$TMPLL"
-else
-    warn "examples/hello.sc not found — skipping compile test"
-fi
-
-# Count std headers
-STD_DIR="${SCRIPT_DIR}/std"
-if [[ -d "$STD_DIR" ]]; then
-    local_count="$(find "$STD_DIR" -name '*.h' -o -name '*.sc' | wc -l | tr -d ' ')"
-    ok "Standard library: ${local_count} files in std/"
-else
-    warn "std/ directory not found"
-fi
-
-# Check safeguard
-if [[ -n "$SAFEGUARD_BIN" ]]; then
-    if "${SAFEGUARD_BIN}" --help &>/dev/null || "${SAFEGUARD_BIN}" help &>/dev/null; then
-        ok "safeguard works"
-    else
-        warn "safeguard returned non-zero"
-    fi
-fi
-
-# Check LSP server
-if [[ -n "$LSP_BIN" ]]; then
-    if [[ -x "$LSP_BIN" ]]; then
-        ok "sc-lsp binary exists"
-    else
-        warn "sc-lsp binary not executable"
-    fi
-fi
-
-# ── Summary ───────────────────────────────────────────────────────────────────
+echo -e "${BOLD}SafeC installed.${RESET}"
+echo -e "  ${BOLD}SAFEC_HOME${RESET}  ${PREFIX}"
+echo -e "  ${BOLD}safec${RESET}       ${PREFIX}/bin/safec"
+echo -e "  ${BOLD}safeguard${RESET}   ${PREFIX}/bin/safeguard"
+echo -e "  ${BOLD}sc-lsp${RESET}      ${PREFIX}/bin/sc-lsp"
 echo ""
-echo -e "${GREEN}${BOLD}════════════════════════════════════════════════════════════════${RESET}"
-echo -e "${GREEN}${BOLD}  SafeC installation complete!${RESET}"
-echo -e "${GREEN}${BOLD}════════════════════════════════════════════════════════════════${RESET}"
-echo ""
-echo -e "  ${BOLD}SAFEC_HOME${RESET}  ${SCRIPT_DIR}"
-echo -e "  ${BOLD}safec${RESET}       ${SAFEC_BIN}"
-[[ -n "$SAFEGUARD_BIN" ]] && echo -e "  ${BOLD}safeguard${RESET}   ${SAFEGUARD_BIN}"
-[[ -n "$LSP_BIN" ]] && echo -e "  ${BOLD}sc-lsp${RESET}      ${LSP_BIN}"
-echo ""
-echo -e "  ${BOLD}Quick start:${RESET}"
-echo "    safec examples/hello.sc --emit-llvm -o hello.ll"
-echo "    clang hello.ll -o hello"
-echo "    ./hello"
-echo ""
-if [[ "$SKIP_ENV" != true ]]; then
-    echo -e "  ${YELLOW}Restart your terminal or run:${RESET}"
-    echo "    source $(detect_shell_profile)"
-    echo ""
-fi
+echo "Try it:"
+echo "  source ${rc_file:-your shell rc file} (or restart your shell)"
+echo "  safeguard new hello && cd hello && safeguard run"

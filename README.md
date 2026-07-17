@@ -10,33 +10,21 @@ SafeC is an evolution of C — preserving C ABI compatibility — while enforcin
 
 ## Quick Start
 
-**Prebuilt** (macOS/Linux/Windows — no LLVM or C++ toolchain needed):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/safec-org/SafeC/main/install-release.sh | bash
-```
-```powershell
-irm https://raw.githubusercontent.com/safec-org/SafeC/main/install-release.ps1 | iex
-```
-
-**Build from source** (clones, builds compiler + stdlib + package manager + LSP):
+Installs a prebuilt `safec`/`safeguard`/`sc-lsp` release from GitHub Releases — no LLVM or C++ toolchain needed on the machine you're installing to:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/safec-org/SafeC/main/install.sh | bash
 ```
-
-Or manually:
-
-```bash
-git clone https://github.com/safec-org/SafeC.git && cd SafeC
-bash install.sh                    # auto-detects LLVM, builds everything
-bash install.sh --prefix=~/safec   # or specify install directory
+```powershell
+irm https://raw.githubusercontent.com/safec-org/SafeC/main/install.ps1 | iex
 ```
 
-Windows: `.\install.ps1` (PowerShell) builds from source the same way;
-`.\install-release.ps1` installs a prebuilt release instead. See
-[Releases](https://github.com/safec-org/SafeC/releases) for prebuilt
-binaries, or `.github/workflows/release.yml` for how they're built.
+```bash
+bash install.sh --prefix=/opt/safec   # or specify install directory
+bash install.sh --version=v0.2.0      # or pin a specific release
+```
+
+macOS/Linux publish `arm64`/`x86_64` binaries; Windows publishes `x86_64`. See [Releases](https://github.com/safec-org/SafeC/releases) for the full asset list, or `.github/workflows/release.yml` for how they're built. To build the compiler, stdlib, `safeguard`, or `sc-lsp` from source instead (e.g. for a platform the release workflow doesn't publish, or from an unreleased commit), see each component's own `CMakeLists.txt` under `compiler/`, `safeguard/`, and the sibling `sc-language-server` repo.
 
 Then create a project and run:
 
