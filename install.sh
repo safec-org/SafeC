@@ -248,10 +248,19 @@ find_llvm_cmake_dir() {
         fi
     fi
 
-    # Linux: versioned paths
+    # Linux: versioned paths.
+    # 21 is the true floor, not just a preference: CodeGen.cpp uses LLVM
+    # APIs (Module::setTargetTriple(Triple)/getTargetTriple() returning
+    # Triple, the Triple-overload of TargetRegistry::lookupTarget,
+    # Intrinsic::getOrInsertDeclaration with no older-name fallback) that
+    # were introduced somewhere between v18 and v21 and simply don't exist
+    # on anything older — a version below 21 found here would configure
+    # successfully and then fail to compile, which is worse than not
+    # finding it at all. 25 is just headroom so this doesn't need editing
+    # every time a new LLVM major ships; adjust upward as needed.
     if [[ "$PLATFORM" == "linux" ]]; then
         local search_dirs=()
-        for v in 21 20 19 18 17; do
+        for v in 25 24 23 22 21; do
             search_dirs+=("/usr/lib/llvm-${v}/lib/cmake/llvm")           # Debian
             search_dirs+=("/usr/lib64/llvm${v}/lib/cmake/llvm")          # Fedora
             search_dirs+=("/usr/lib/llvm/${v}/lib/cmake/llvm")           # Arch

@@ -18,9 +18,15 @@ on:
   workflow_dispatch: {}
 
 env:
-  # Keep in sync with compiler/CMakeLists.txt's 'find_package(LLVM REQUIRED
-  # CONFIG)' — this just pins *which* LLVM release each job installs.
-  LLVM_VERSION: "18"
+  # CodeGen.cpp uses Module::setTargetTriple(Triple)/getTargetTriple()
+  # returning Triple (not std::string), the Triple-overload of
+  # TargetRegistry::lookupTarget, and Intrinsic::getOrInsertDeclaration
+  # (which fully replaced getDeclaration — no back-compat alias) — all of
+  # which landed in LLVM's API somewhere between v18 and v21/22 and simply
+  # don't exist on older LLVM. 21 is this project's documented minimum
+  # (see docs/advanced/compiler.md); a CI run against 18 confirmed the
+  # hard way that the minimum is a real requirement, not a suggestion.
+  LLVM_VERSION: "21"
 
 jobs:
   # ── macOS (Apple Silicon) ────────────────────────────────────────────────
@@ -39,11 +45,17 @@ jobs:
           path: sc-language-server
 
       - name: Install LLVM
-        run: brew install llvm@${{ env.LLVM_VERSION }}
+        # Unversioned — Homebrew's llvm@N formulas are only kept around for
+        # a few recent majors and can disappear from homebrew-core, while
+        # plain 'llvm' always tracks current stable (>= this project's
+        # minimum by construction, since that's what it's developed
+        # against). Pinning to a specific old major here is what actually
+        # caused the CI failure this fix addresses.
+        run: brew install llvm
 
       - name: Build safec compiler
         run: |
-          LLVM_DIR="$(brew --prefix llvm@${{ env.LLVM_VERSION }})/lib/cmake/llvm"
+          LLVM_DIR="$(brew --prefix llvm)/lib/cmake/llvm"
           cmake -S SafeC/compiler -B SafeC/compiler/build \
             -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR"
           cmake --build SafeC/compiler/build -j "$(sysctl -n hw.ncpu)"
@@ -183,7 +195,11 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Install LLVM
-        run: choco install llvm --version=${{ env.LLVM_VERSION }}.1.8 -y --no-progress
+        # 'upgrade' rather than 'install --version=X': see the matching
+        # comment in ci.yml — the runner image's pre-installed LLVM has
+        # been observed below this project's minimum, and Chocolatey
+        # refuses to downgrade a pinned old version without --force.
+        run: choco upgrade llvm -y --no-progress
         shell: bash
 
       - name: Build safec compiler
