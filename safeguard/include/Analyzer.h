@@ -62,6 +62,17 @@ private:
                                                const std::string& ast) const;
     std::vector<AnalyzerDiag> lintUnsafeBlocks(const std::string& src) const;
     std::vector<AnalyzerDiag> lintNullChecks(const std::string& src) const;
+    // Empty 'unsafe { }' block — no statements, so the escape hatch is
+    // buying nothing; likely leftover from editing.
+    std::vector<AnalyzerDiag> lintEmptyUnsafe(const std::string& src) const;
+    // TODO/FIXME/XXX left in the source — surfaced as a note so
+    // 'safeguard lint' can be used to track down unresolved markers.
+    std::vector<AnalyzerDiag> lintTodoMarkers(const std::string& src) const;
+    // 'if (x = y)' — single '=' in an if-condition, almost always meant
+    // '=='. Mirrors GCC/Clang's -Wparentheses; single-line conditions only.
+    std::vector<AnalyzerDiag> lintSuspiciousAssign(const std::string& src) const;
+    // The same '#include' path appearing more than once in one file.
+    std::vector<AnalyzerDiag> lintDuplicateInclude(const std::string& src) const;
 };
 
 } // namespace safeguard

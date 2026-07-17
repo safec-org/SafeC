@@ -13,6 +13,7 @@ set(SOURCES
     src/Project.cpp
     src/Lock.cpp
     src/Analyzer.cpp
+    src/Formatter.cpp
 )
 
 add_executable(safeguard ${SOURCES})

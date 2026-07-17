@@ -10,8 +10,18 @@ SafeC is an evolution of C — preserving C ABI compatibility — while enforcin
 
 ## Quick Start
 
+**Prebuilt** (macOS/Linux/Windows — no LLVM or C++ toolchain needed):
+
 ```bash
-# One-liner install (clones, builds compiler + stdlib + package manager + LSP)
+curl -fsSL https://raw.githubusercontent.com/safec-org/SafeC/main/install-release.sh | bash
+```
+```powershell
+irm https://raw.githubusercontent.com/safec-org/SafeC/main/install-release.ps1 | iex
+```
+
+**Build from source** (clones, builds compiler + stdlib + package manager + LSP):
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/safec-org/SafeC/main/install.sh | bash
 ```
 
@@ -22,6 +32,11 @@ git clone https://github.com/safec-org/SafeC.git && cd SafeC
 bash install.sh                    # auto-detects LLVM, builds everything
 bash install.sh --prefix=~/safec   # or specify install directory
 ```
+
+Windows: `.\install.ps1` (PowerShell) builds from source the same way;
+`.\install-release.ps1` installs a prebuilt release instead. See
+[Releases](https://github.com/safec-org/SafeC/releases) for prebuilt
+binaries, or `.github/workflows/release.yml` for how they're built.
 
 Then create a project and run:
 
@@ -78,7 +93,7 @@ int main() {
 | **Modern Language** | Generics, struct methods, operator overloading, pattern matching, optional types, slices, defer, tuples, typed channels. |
 | **Borrow Checker** | Mutable-XOR-shared aliasing discipline with non-lexical lifetimes (NLL). |
 | **Standard Library** | 20+ modules: mem, io, str, math, collections (vec, map, list, bst, ...), thread, atomic, simd. |
-| **Package Manager** | `safeguard` — project scaffolding, dependency resolution, build orchestration, mixed SafeC/C/C++ compilation and linking. |
+| **Package Manager** | `safeguard` — project scaffolding, dependency resolution, build orchestration, mixed SafeC/C/C++ compilation and linking, plus `format` (reindenter), `lint` (static analysis), `check` (fast compile-only), and `test` (build + run `tests/`). |
 | **LSP Support** | Language server sharing the compiler's own frontend (always in sync with the language); diagnostics, hover, completion, go-to-definition; VS Code extension (`.sc` and `.h`), Neovim, Emacs. |
 
 ---

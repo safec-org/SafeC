@@ -245,7 +245,6 @@ if ($SkipSafeguard) {
 } else {
     Write-Host ""
     Write-Info "Building safeguard package manager..."
-    Write-Warn "Note: safeguard uses POSIX APIs and may not compile with MSVC."
 
     Push-Location $safeguardDir
     try {
@@ -255,12 +254,12 @@ if ($SkipSafeguard) {
         & cmake @sgArgs 2>$null
         if ($LASTEXITCODE -ne 0) {
             Write-Warn "Safeguard cmake configure failed (non-fatal)."
-            Write-Warn "Safeguard uses POSIX APIs (sys/wait.h) — try WSL or -SkipSafeguard."
+            Write-Warn "Try -SkipSafeguard, or report the error — safeguard's process-spawning code has a Windows (_spawnvp) path as of this version, so this shouldn't be the known POSIX-only issue from earlier releases."
         } else {
             & cmake --build build --config Release -j $Jobs 2>$null
             if ($LASTEXITCODE -ne 0) {
                 Write-Warn "Safeguard build failed (non-fatal)."
-                Write-Warn "Safeguard uses POSIX APIs — consider using WSL or -SkipSafeguard."
+                Write-Warn "Try -SkipSafeguard, or report the error."
             } else {
                 foreach ($candidate in @(
                     (Join-Path $safeguardDir "build\safeguard.exe"),

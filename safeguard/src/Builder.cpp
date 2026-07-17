@@ -9,8 +9,12 @@
 #include <cstdlib>
 #include <cerrno>
 #include <cstring>
+#ifdef _WIN32
+#include <process.h>   // _spawnvp
+#else
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -117,6 +121,25 @@ int Builder::runCmd(const std::vector<std::string>& argv, bool verbose) {
             std::cout << (i ? " " : "") << argv[i];
         std::cout << "\n";
     }
+#ifdef _WIN32
+    // _spawnvp is the MSVC CRT's argv-based process launcher — like
+    // execvp, it searches PATH and takes an argv array directly (no shell
+    // involved), so arguments containing spaces/quotes don't need manual
+    // shell-quoting the way a system()-based approach would require.
+    // _P_WAIT blocks until the child exits and yields its exit code
+    // directly, playing the same role fork()+waitpid()+WEXITSTATUS() does
+    // on POSIX below.
+    std::vector<const char*> args;
+    for (auto& s : argv) args.push_back(s.c_str());
+    args.push_back(nullptr);
+    intptr_t rc = _spawnvp(_P_WAIT, args[0], args.data());
+    if (rc == -1) {
+        std::cerr << "safeguard: spawn '" << argv[0] << "' failed: "
+                  << strerror(errno) << "\n";
+        return -1;
+    }
+    return (int)rc;
+#else
     pid_t pid = fork();
     if (pid < 0) {
         std::cerr << "safeguard: fork failed: " << strerror(errno) << "\n";
@@ -134,6 +157,7 @@ int Builder::runCmd(const std::vector<std::string>& argv, bool verbose) {
     int status = 0;
     waitpid(pid, &status, 0);
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#endif
 }
 
 // ── compile one .sc → .ll ─────────────────────────────────────────────────────
@@ -604,6 +628,159 @@ bool Builder::build() {
     // 8. Write / refresh Package.lock after a successful build.
     writeLock(srcs);
     return true;
+}
+
+// ── public: check ─────────────────────────────────────────────────────────────
+
+bool Builder::check() {
+    std::string safecBin = findSafec();
+    fs::path checkDir = fs::path(root_) / "build" / "check";
+    fs::create_directories(checkDir);
+
+    // No ensureStdLib()/fetchAndBuildDeps() here on purpose — checking only
+    // needs the std/ *headers* on the include path for declarations to
+    // resolve, not the archived, linkable implementation, which is the
+    // part of a full build that actually takes real time.
+    std::string stdDir = findStdDir();
+    std::vector<std::string> userIncs;
+    if (!stdDir.empty()) {
+        userIncs.push_back(stdDir);
+        userIncs.push_back(fs::path(stdDir).parent_path().string());
+    }
+    std::vector<std::string> foreignIncs;
+    fs::path projInc = fs::path(root_) / "include";
+    if (fs::exists(projInc)) foreignIncs.push_back(projInc.string());
+    for (auto& dep : manifest_.dependencies) {
+        std::string destDir = dep.path.empty()
+            ? (fs::path(root_) / "deps" / dep.name).string()
+            : dep.path;
+        fs::path depInc = fs::path(destDir) / "include";
+        if (fs::exists(depInc)) { userIncs.push_back(depInc.string()); foreignIncs.push_back(depInc.string()); }
+        fs::path depSrc = fs::path(destDir) / "src";
+        if (fs::exists(depSrc)) userIncs.push_back(depSrc.string());
+    }
+
+    fs::path srcDir = fs::path(root_) / "src";
+    std::vector<std::string> srcs;
+    if (!manifest_.build.srcs.empty()) {
+        for (auto& s : manifest_.build.srcs) {
+            fs::path p(s);
+            srcs.push_back(p.is_absolute() ? s : (fs::path(root_) / p).string());
+        }
+    } else {
+        srcs = collectAllSources(srcDir.string());
+    }
+    if (srcs.empty()) {
+        std::cerr << "safeguard: no .sc/.c/.cpp source files found under src/\n";
+        return false;
+    }
+
+    bool ok = true;
+    for (auto& src : srcs) {
+        SrcLang lang = langOf(src);
+        if (lang == SrcLang::SafeC) {
+            // --emit-llvm runs the full front end (Preprocess/Lex/Parse/
+            // Sema/ConstEval) and stops right after emitting IR — no
+            // object-file assembly, no link.
+            if (compileSrc(safecBin, src, checkDir.string(), userIncs).empty()) ok = false;
+        } else {
+            std::vector<std::string> cmd = { findSystemClang(lang == SrcLang::Cpp),
+                                              "-fsyntax-only", src };
+            for (auto& inc : foreignIncs) { cmd.push_back("-I"); cmd.push_back(inc); }
+            if (runCmd(cmd, opts_.verbose) != 0) {
+                std::cerr << "safeguard: check failed for " << src << "\n";
+                ok = false;
+            }
+        }
+    }
+    if (ok) std::cout << "safeguard: check passed (" << srcs.size() << " file(s))\n";
+    return ok;
+}
+
+// ── public: test ──────────────────────────────────────────────────────────────
+
+bool Builder::test() {
+    fs::path testsDir = fs::path(root_) / "tests";
+    if (!fs::exists(testsDir)) {
+        std::cout << "safeguard: no tests/ directory — nothing to run\n";
+        return true;
+    }
+
+    if (!fetchAndBuildDeps()) return false;
+    std::string stdDir = findStdDir();
+    std::string stdLib = ensureStdLib();
+    if (stdLib.empty() && !stdDir.empty()) {
+        std::cerr << "safeguard: failed to build the standard library "
+                     "(see compiler errors above) — aborting test run\n";
+        return false;
+    }
+
+    std::vector<std::string> userIncs;
+    if (!stdDir.empty()) {
+        userIncs.push_back(stdDir);
+        userIncs.push_back(fs::path(stdDir).parent_path().string());
+    }
+    for (auto& dep : manifest_.dependencies) {
+        std::string destDir = dep.path.empty()
+            ? (fs::path(root_) / "deps" / dep.name).string()
+            : dep.path;
+        fs::path depInc = fs::path(destDir) / "include";
+        if (fs::exists(depInc)) userIncs.push_back(depInc.string());
+        fs::path depSrc = fs::path(destDir) / "src";
+        if (fs::exists(depSrc)) userIncs.push_back(depSrc.string());
+    }
+
+    std::vector<std::string> archives;
+    if (!stdLib.empty()) archives.push_back(stdLib);
+    fs::path depLibDir = fs::path(root_) / "build" / "deps";
+    for (auto& dep : manifest_.dependencies) {
+        fs::path libOut = depLibDir / ("lib" + dep.name + ".a");
+        if (fs::exists(libOut)) archives.push_back(libOut.string());
+    }
+
+    std::string safecBin = findSafec();
+    fs::path buildDir = fs::path(root_) / "build" / "tests";
+    fs::create_directories(buildDir);
+
+    auto testSrcs = collectAllSources(testsDir.string());
+    if (testSrcs.empty()) {
+        std::cout << "safeguard: tests/ has no .sc/.c/.cpp files\n";
+        return true;
+    }
+
+    int passed = 0, failed = 0;
+    for (auto& src : testSrcs) {
+        std::string name = fs::path(src).stem().string();
+        SrcLang lang = langOf(src);
+        std::string obj;
+        if (lang == SrcLang::SafeC) {
+            std::string ll = compileSrc(safecBin, src, buildDir.string(), userIncs);
+            if (!ll.empty()) obj = llToObj(ll, buildDir.string());
+        } else {
+            obj = compileForeign(src, buildDir.string(), userIncs, lang);
+        }
+        if (obj.empty()) {
+            std::cout << "test " << name << " ... FAILED (build error)\n";
+            ++failed;
+            continue;
+        }
+        std::string testBin = (buildDir / name).string();
+        if (!linkFinal({obj}, archives, testBin, lang == SrcLang::Cpp)) {
+            std::cout << "test " << name << " ... FAILED (link error)\n";
+            ++failed;
+            continue;
+        }
+        int rc = runCmd({testBin}, opts_.verbose);
+        if (rc == 0) {
+            std::cout << "test " << name << " ... ok\n";
+            ++passed;
+        } else {
+            std::cout << "test " << name << " ... FAILED (exit " << rc << ")\n";
+            ++failed;
+        }
+    }
+    std::cout << "safeguard: " << passed << " passed, " << failed << " failed\n";
+    return failed == 0;
 }
 
 // ── public: run ───────────────────────────────────────────────────────────────

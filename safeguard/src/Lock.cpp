@@ -6,6 +6,13 @@
 #include <cstring>
 #include <array>
 
+// See the matching comment in Analyzer.cpp — popen/pclose vs _popen/_pclose
+// is a naming difference only, not a behavior one.
+#ifdef _WIN32
+#define popen  _popen
+#define pclose _pclose
+#endif
+
 namespace safeguard {
 
 // ── FNV-1a 64-bit hash ────────────────────────────────────────────────────────

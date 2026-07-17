@@ -1,6 +1,7 @@
 #include "Manifest.h"
 #include "Builder.h"
 #include "Analyzer.h"
+#include "Formatter.h"
 #include "Project.h"
 #include <iostream>
 #include <string>
@@ -18,10 +19,13 @@ Commands:
   init  [name]  Initialise the current directory as a project
   fetch         Clone and build all [dependencies] from Package.toml
   build         Compile all sources in the current project
+  check         Fast compile-only pass — reports errors without linking
+  test          Build and run every file under tests/ as a standalone binary
   run   [args..]Build and immediately run the output binary
   clean         Remove the build/ and deps/ directories
   verify-lock   Check Package.lock against current dependency state
-  analyze       Run static analysis lint passes on all source files
+  lint          Run static-analysis lint passes on all source files
+  format        Reindent and whitespace-normalize all .sc/.h source files
 
 Dependency format in Package.toml:
   [[dependencies]]
@@ -31,10 +35,14 @@ Dependency format in Package.toml:
   name    = "mylib"
   path    = "../mylib"
 
-Options (build / run):
+Options (build / run / check):
   --release     Enable optimisations (-O2)
-  --emit-llvm   Stop after emitting LLVM IR (do not link)
+  --emit-llvm   Stop after emitting LLVM IR (do not link) [build only]
   --verbose     Print every command before executing it
+
+Options (format):
+  --check       Report files that would change, without writing them
+                (exit code 1 if any would change)
 
 Environment:
   SAFEC_HOME    Path to the SafeC repository root
@@ -43,6 +51,9 @@ Environment:
 Examples:
   safeguard new hello_world
   cd hello_world && safeguard build
+  safeguard check
+  safeguard test
+  safeguard format --check
   safeguard run -- --my-flag
 )";
 }
@@ -92,8 +103,8 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    // ── analyze ───────────────────────────────────────────────────────────────
-    if (cmd == "analyze") {
+    // ── lint (formerly 'analyze', kept as an alias) ─────────────────────────────
+    if (cmd == "lint" || cmd == "analyze") {
         bool verbose = false;
         for (int i = 2; i < argc; ++i)
             if (std::string(argv[i]) == "--verbose") verbose = true;
@@ -101,6 +112,29 @@ int main(int argc, char** argv) {
             auto [root, manifest] = requireProject();
             safeguard::Analyzer analyzer(root, manifest, verbose);
             return analyzer.analyze() ? 0 : 1;
+        } catch (std::exception& e) {
+            std::cerr << "safeguard error: " << e.what() << "\n";
+            return 1;
+        }
+    }
+
+    // ── format ────────────────────────────────────────────────────────────────
+    if (cmd == "format" || cmd == "fmt") {
+        bool checkOnly = false, verbose = false;
+        for (int i = 2; i < argc; ++i) {
+            std::string arg = argv[i];
+            if (arg == "--check")   { checkOnly = true; continue; }
+            if (arg == "--verbose") { verbose   = true; continue; }
+            std::cerr << "safeguard: unknown option '" << arg << "'\n";
+            return 1;
+        }
+        try {
+            auto [root, manifest] = requireProject();
+            (void)manifest;
+            safeguard::Formatter fmt;
+            std::string srcDir = (fs::path(root) / "src").string();
+            bool ok = fmt.run(srcDir, checkOnly, verbose);
+            return ok ? 0 : 1;
         } catch (std::exception& e) {
             std::cerr << "safeguard error: " << e.what() << "\n";
             return 1;
@@ -133,8 +167,8 @@ int main(int argc, char** argv) {
         }
     }
 
-    // ── build / run / clean ───────────────────────────────────────────────────
-    if (cmd == "build" || cmd == "run" || cmd == "clean") {
+    // ── build / check / test / run / clean ─────────────────────────────────────
+    if (cmd == "build" || cmd == "check" || cmd == "test" || cmd == "run" || cmd == "clean") {
         safeguard::BuildOptions opts;
         std::vector<std::string> runArgs;
         bool pastSep = false; // '--' separator for run args
@@ -160,6 +194,12 @@ int main(int argc, char** argv) {
             }
             if (cmd == "build") {
                 return builder.build() ? 0 : 1;
+            }
+            if (cmd == "check") {
+                return builder.check() ? 0 : 1;
+            }
+            if (cmd == "test") {
+                return builder.test() ? 0 : 1;
             }
             if (cmd == "run") {
                 int rc = builder.run(runArgs);

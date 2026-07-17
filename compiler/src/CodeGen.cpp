@@ -2940,7 +2940,8 @@ llvm::Value *CodeGen::genAssign(AssignExpr &e, FnEnv &env) {
             auto *vecTy   = lowerType(se.base->type);
             auto *idx     = genExpr(*se.index, env);
             auto *oldVec  = builder_.CreateLoad(vecTy, vecAddr, "vec.old");
-            auto *rhs     = genExpr(*e.rhs, env);
+            auto *elemTy  = llvm::cast<llvm::VectorType>(vecTy)->getElementType();
+            auto *rhs     = coerceScalar(genExpr(*e.rhs, env), elemTy, e.rhs->type);
             llvm::Value *newVal = rhs;
             if (e.op != AssignOp::Assign) {
                 auto *cur = builder_.CreateExtractElement(oldVec, idx, "vec.cur");

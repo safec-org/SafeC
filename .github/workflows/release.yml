@@ -1,0 +1,229 @@
+name: Release
+
+# Builds the SafeC toolchain (compiler, safeguard, sc-lsp) for macOS, Linux,
+# and Windows, packages each as an installable archive, and — on a version
+# tag push — publishes them as GitHub Release assets. Also runnable by hand
+# (workflow_dispatch) to validate the build matrix without cutting a release.
+#
+# Each platform job is independent and best-effort documented inline; the
+# Windows job in particular has not yet had a real CI run to shake out
+# environment-specific issues the way the macOS/Linux jobs' build steps
+# have been exercised locally throughout this project's development — see
+# that job's comments for specifics on what's untested.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+env:
+  # Keep in sync with compiler/CMakeLists.txt's 'find_package(LLVM REQUIRED
+  # CONFIG)' — this just pins *which* LLVM release each job installs.
+  LLVM_VERSION: "18"
+
+jobs:
+  # ── macOS (Apple Silicon) ────────────────────────────────────────────────
+  macos:
+    runs-on: macos-14
+    steps:
+      - name: Checkout SafeC
+        uses: actions/checkout@v4
+        with:
+          path: SafeC
+
+      - name: Checkout sc-language-server
+        uses: actions/checkout@v4
+        with:
+          repository: safec-org/sc-language-server
+          path: sc-language-server
+
+      - name: Install LLVM
+        run: brew install llvm@${{ env.LLVM_VERSION }}
+
+      - name: Build safec compiler
+        run: |
+          LLVM_DIR="$(brew --prefix llvm@${{ env.LLVM_VERSION }})/lib/cmake/llvm"
+          cmake -S SafeC/compiler -B SafeC/compiler/build \
+            -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR"
+          cmake --build SafeC/compiler/build -j "$(sysctl -n hw.ncpu)"
+
+      - name: Build safeguard
+        run: |
+          cmake -S SafeC/safeguard -B SafeC/safeguard/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build SafeC/safeguard/build -j "$(sysctl -n hw.ncpu)"
+
+      - name: Build sc-lsp
+        run: |
+          cmake -S sc-language-server -B sc-language-server/build \
+            -DCMAKE_BUILD_TYPE=Release -DSAFEC_DIR="$GITHUB_WORKSPACE/SafeC/compiler"
+          cmake --build sc-language-server/build -j "$(sysctl -n hw.ncpu)"
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          OUT="safec-macos-arm64"
+          mkdir -p "$OUT/bin" "$OUT/std"
+          cp SafeC/compiler/build/safec "$OUT/bin/"
+          cp SafeC/safeguard/build/safeguard "$OUT/bin/"
+          cp sc-language-server/build/sc-lsp "$OUT/bin/"
+          cp -R SafeC/std/* "$OUT/std/"
+          cp SafeC/README.md "$OUT/"
+          tar czf "${OUT}.tar.gz" "$OUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: safec-macos-arm64
+          path: safec-macos-arm64.tar.gz
+          if-no-files-found: error
+
+  # ── Linux (x86_64) ────────────────────────────────────────────────────────
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout SafeC
+        uses: actions/checkout@v4
+        with:
+          path: SafeC
+
+      - name: Checkout sc-language-server
+        uses: actions/checkout@v4
+        with:
+          repository: safec-org/sc-language-server
+          path: sc-language-server
+
+      - name: Install LLVM
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh ${{ env.LLVM_VERSION }}
+          sudo apt-get install -y "llvm-${{ env.LLVM_VERSION }}-dev" "clang-${{ env.LLVM_VERSION }}"
+
+      - name: Build safec compiler
+        run: |
+          LLVM_DIR="/usr/lib/llvm-${{ env.LLVM_VERSION }}/lib/cmake/llvm"
+          cmake -S SafeC/compiler -B SafeC/compiler/build \
+            -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR"
+          cmake --build SafeC/compiler/build -j "$(nproc)"
+
+      - name: Build safeguard
+        run: |
+          cmake -S SafeC/safeguard -B SafeC/safeguard/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build SafeC/safeguard/build -j "$(nproc)"
+
+      - name: Build sc-lsp
+        run: |
+          cmake -S sc-language-server -B sc-language-server/build \
+            -DCMAKE_BUILD_TYPE=Release -DSAFEC_DIR="$GITHUB_WORKSPACE/SafeC/compiler"
+          cmake --build sc-language-server/build -j "$(nproc)"
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          OUT="safec-linux-x86_64"
+          mkdir -p "$OUT/bin" "$OUT/std"
+          cp SafeC/compiler/build/safec "$OUT/bin/"
+          cp SafeC/safeguard/build/safeguard "$OUT/bin/"
+          cp sc-language-server/build/sc-lsp "$OUT/bin/"
+          cp -R SafeC/std/* "$OUT/std/"
+          cp SafeC/README.md "$OUT/"
+          tar czf "${OUT}.tar.gz" "$OUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: safec-linux-x86_64
+          path: safec-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  # ── Windows (x86_64) ──────────────────────────────────────────────────────
+  # UNVERIFIED: written to the best of available knowledge of GitHub's
+  # windows-latest runner image and standard CMake/MSVC practice, but this
+  # job has not had a real run yet — unlike macOS/Linux, whose build
+  # commands mirror steps exercised directly during this project's
+  # development. Two source-level portability fixes were needed before this
+  # job could even be attempted (safeguard's process-spawning code used
+  # POSIX fork()/execvp()/waitpid() directly with no Windows path, and three
+  # files used popen()/pclose() instead of MSVC's _popen()/_pclose()) — both
+  # are now behind '#ifdef _WIN32' in the SafeC/safeguard sources. The first
+  # real run of this job should be treated as the actual test of Windows
+  # support, not this comment.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout SafeC
+        uses: actions/checkout@v4
+        with:
+          path: SafeC
+
+      - name: Checkout sc-language-server
+        uses: actions/checkout@v4
+        with:
+          repository: safec-org/sc-language-server
+          path: sc-language-server
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install LLVM
+        run: choco install llvm --version=${{ env.LLVM_VERSION }}.1.8 -y --no-progress
+        shell: bash
+
+      - name: Build safec compiler
+        shell: bash
+        run: |
+          LLVM_DIR="C:/Program Files/LLVM/lib/cmake/llvm"
+          cmake -S SafeC/compiler -B SafeC/compiler/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR"
+          cmake --build SafeC/compiler/build
+
+      - name: Build safeguard
+        shell: bash
+        run: |
+          cmake -S SafeC/safeguard -B SafeC/safeguard/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build SafeC/safeguard/build
+
+      - name: Build sc-lsp
+        shell: bash
+        run: |
+          cmake -S sc-language-server -B sc-language-server/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DSAFEC_DIR="$GITHUB_WORKSPACE/SafeC/compiler"
+          cmake --build sc-language-server/build
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="safec-windows-x86_64"
+          mkdir -p "$OUT/bin" "$OUT/std"
+          cp SafeC/compiler/build/safec.exe "$OUT/bin/"
+          cp SafeC/safeguard/build/safeguard.exe "$OUT/bin/"
+          cp sc-language-server/build/sc-lsp.exe "$OUT/bin/"
+          cp -R SafeC/std/* "$OUT/std/"
+          cp SafeC/README.md "$OUT/"
+          7z a "${OUT}.zip" "$OUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: safec-windows-x86_64
+          path: safec-windows-x86_64.zip
+          if-no-files-found: error
+
+  # ── Publish a GitHub Release (tag pushes only) ───────────────────────────
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/safec-macos-arm64/safec-macos-arm64.tar.gz
+            dist/safec-linux-x86_64/safec-linux-x86_64.tar.gz
+            dist/safec-windows-x86_64/safec-windows-x86_64.zip
+          generate_release_notes: true

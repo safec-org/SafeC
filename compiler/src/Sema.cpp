@@ -328,19 +328,26 @@ void Sema::collectFunction(FunctionDecl &fn) {
     // actual emitted/linked symbol) so CodeGen needs no namespace-specific
     // logic — it already emits/looks up functions by FunctionDecl::name.
     //
-    // Excluded: 'extern' declarations (an extern decl's whole point is to
-    // bind to a pre-existing external symbol by its exact C name — e.g.
-    // 'extern void* memcpy(...)' inside 'namespace std { ... }' must stay
-    // plain 'memcpy', not 'std_memcpy', or linkage against the real libc
-    // symbol breaks) and methods (dispatched entirely through the separate
-    // obj.method() / methodOwner mechanism above; double-mangling their
-    // name would be pointless since nothing calls them by qualified name).
-    if (!fn.namespaceName.empty() && !fn.isExtern && !fn.isMethod) {
+    // 'extern' declarations skip *mangling* (an extern decl's whole point
+    // is to bind to a pre-existing external symbol by its exact C name —
+    // e.g. 'extern void* memcpy(...)' inside 'namespace std { ... }' must
+    // stay plain 'memcpy', not 'std_memcpy', or linkage against the real
+    // libc symbol breaks) but are still registered for *qualified lookup*
+    // — 'std::printf' (an extern decl) resolving is no different from
+    // 'std::nvic_init()' (a non-extern one) resolving; only the mangling
+    // decision differs, so it shouldn't also gate whether 'std::name' is
+    // even recognized as a name at all. Methods stay fully excluded from
+    // both — they're dispatched entirely through the separate
+    // obj.method() / methodOwner mechanism above; nothing calls them by
+    // 'std::'-qualified name, so registering them here would be inert.
+    if (!fn.namespaceName.empty() && !fn.isMethod) {
         std::string originalName = fn.name;
-        std::string nsPrefix = fn.namespaceName;
-        size_t p;
-        while ((p = nsPrefix.find("::")) != std::string::npos) nsPrefix.replace(p, 2, "_");
-        fn.name = nsPrefix + "_" + fn.name;
+        if (!fn.isExtern) {
+            std::string nsPrefix = fn.namespaceName;
+            size_t p;
+            while ((p = nsPrefix.find("::")) != std::string::npos) nsPrefix.replace(p, 2, "_");
+            fn.name = nsPrefix + "_" + fn.name;
+        }
         namespaceFnRegistry_[fn.namespaceName + "::" + originalName] = &fn;
         namespaceNames_.insert(fn.namespaceName);
     }
@@ -577,14 +584,26 @@ void Sema::collectRegion(RegionDecl &rd) {
 void Sema::collectGlobalVar(GlobalVarDecl &gv) {
     // Namespace support — see the matching block in collectFunction for the
     // mangling scheme ("ns::name" lookup key → mangled "ns_name" symbol).
-    // 'extern' globals are excluded for the same linkage-preserving reason
-    // extern functions are (see collectFunction).
-    if (!gv.namespaceName.empty() && !gv.isExtern) {
+    // 'extern' globals skip *mangling* for the same linkage-preserving
+    // reason extern functions do (see collectFunction) — an extern decl's
+    // whole point is binding to a pre-existing symbol by its exact C name.
+    // They're still registered for *qualified lookup* though: mangling and
+    // lookup-registration are separate concerns that used to share one
+    // gate, which meant 'std::nvic' (referencing an extern global declared
+    // inside 'namespace std { }', e.g. std/hal/cortex_m.h's NVIC/SysTick/
+    // SCB instances) failed to resolve at all even though the identical
+    // function case ('std::nvic_init()') and a non-extern namespaced
+    // global ('std::counter') both worked — an asymmetry with no reason
+    // to exist, since the qualified name just needs to redirect to
+    // whatever (mangled or not) symbol name the decl actually uses.
+    if (!gv.namespaceName.empty()) {
         std::string originalName = gv.name;
-        std::string nsPrefix = gv.namespaceName;
-        size_t p;
-        while ((p = nsPrefix.find("::")) != std::string::npos) nsPrefix.replace(p, 2, "_");
-        gv.name = nsPrefix + "_" + gv.name;
+        if (!gv.isExtern) {
+            std::string nsPrefix = gv.namespaceName;
+            size_t p;
+            while ((p = nsPrefix.find("::")) != std::string::npos) nsPrefix.replace(p, 2, "_");
+            gv.name = nsPrefix + "_" + gv.name;
+        }
         namespaceVarRegistry_[gv.namespaceName + "::" + originalName] = &gv;
         namespaceNames_.insert(gv.namespaceName);
     }

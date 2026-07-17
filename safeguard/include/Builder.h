@@ -29,6 +29,26 @@ public:
     // Returns true on success.
     bool build();
 
+    // Fast compile-only pass ('cargo check' equivalent): runs every project
+    // source through its front end (safec's Sema for .sc, 'clang -fsyntax-only'
+    // for .c/.cpp) far enough to report every error, but never builds the
+    // standard library, never assembles an object file, and never links —
+    // just the parts needed to know "does this compile," which is normally
+    // the majority of a full build's wall time. Returns true if every file
+    // is error-free.
+    bool check();
+
+    // Build and run every file under tests/ as an independent standalone
+    // binary linked against the same stdlib/dependencies as the main
+    // project (mirrors Rust's integration-test convention: each file in
+    // tests/ is its own program with its own main(), not a set of #[test]
+    // functions extracted from one binary — SafeC has no such attribute).
+    // A test passes if its binary exits 0. Prints a per-file pass/fail
+    // line plus a final summary; returns true iff every test passed (or
+    // there is no tests/ directory at all, matching 'no tests' being a
+    // trivially-passing state rather than a failure).
+    bool test();
+
     // Build then execute the output binary.
     // Returns the exit code of the child process, or -1 on build failure.
     int run(const std::vector<std::string>& args = {});

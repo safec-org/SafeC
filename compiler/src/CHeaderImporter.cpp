@@ -7,6 +7,13 @@
 #include <sstream>
 #include <unordered_set>
 
+// popen/pclose are POSIX; MSVC's CRT exposes the identical functions under
+// an underscore-prefixed name only — no behavior difference.
+#ifdef _WIN32
+#define popen  _popen
+#define pclose _pclose
+#endif
+
 namespace safec {
 
 // =============================================================================
