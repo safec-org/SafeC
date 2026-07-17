@@ -68,14 +68,18 @@ int main() {
 |---------|-------------|
 | **Region-Based Memory Safety** | `stack`, `heap`, `arena<R>`, `static` regions enforced at compile time. No GC, no runtime metadata. |
 | **Zero Hidden Cost** | No implicit allocations, no hidden runtime, no background GC, no implicit exceptions. |
-| **C ABI Compatible** | C struct layout, C calling conventions, native `#include <stdio.h>`. Link SafeC objects into any C project. |
-| **Compile-Time First** | `consteval` functions, `static_assert`, `if const`, generics via monomorphization. |
-| **Bare-Metal Ready** | `--freestanding` mode, `naked`/`interrupt` functions, inline assembly, volatile MMIO, atomic built-ins. |
+| **C ABI Compatible** | C struct layout, C calling conventions, native `#include <stdio.h>`. Link SafeC objects into any C or C++ project. |
+| **Full C Superset** | `__attribute__`, C-style function pointers, bitfields, designated initializers, flexible array members, anonymous struct/union, compound literals, `_Generic`, VLAs (gated to `unsafe{}`). |
+| **Compile-Time First** | `const fn`/`consteval`/`constinit`, `static_assert`, `if const`, generics via monomorphization. |
+| **`namespace`** | C++-style `namespace std { ... }` blocks — qualified lookup, mangled linkage, unqualified-fallback resolution. Types are not namespaced by design. |
+| **Native SIMD** | `vec<T, N>` — a first-class vector type lowering directly to LLVM vector IR; portable `std::simd` library with per-ISA convenience headers for x86_64 (SSE/AVX), AArch64 (NEON), RISC-V (RVV), WebAssembly (SIMD128), SPIR-V, ARM Cortex-M (MVE + DSP extension), CUDA (NVPTX), and ROCm (AMDGPU). |
+| **Multi-Target Codegen** | `--target <triple>` cross-compiles to any LLVM-supported architecture/OS — see the target matrix below. |
+| **Bare-Metal Ready** | `--freestanding` mode, `naked`/`interrupt` functions, inline assembly, volatile MMIO, atomic built-ins, ARM Cortex-M HAL (NVIC/SysTick/SCB) and DSP-extension intrinsics. |
 | **Modern Language** | Generics, struct methods, operator overloading, pattern matching, optional types, slices, defer, tuples, typed channels. |
 | **Borrow Checker** | Mutable-XOR-shared aliasing discipline with non-lexical lifetimes (NLL). |
-| **Standard Library** | 20+ modules: mem, io, str, math, collections (vec, map, list, bst, ...), thread, atomic. |
-| **Package Manager** | `safeguard` — project scaffolding, dependency resolution, build orchestration. |
-| **LSP Support** | Language server with diagnostics, hover, completion, go-to-definition; VS Code extension. |
+| **Standard Library** | 20+ modules: mem, io, str, math, collections (vec, map, list, bst, ...), thread, atomic, simd. |
+| **Package Manager** | `safeguard` — project scaffolding, dependency resolution, build orchestration, mixed SafeC/C/C++ compilation and linking. |
+| **LSP Support** | Language server sharing the compiler's own frontend (always in sync with the language); diagnostics, hover, completion, go-to-definition; VS Code extension (`.sc` and `.h`), Neovim, Emacs. |
 
 ---
 
@@ -117,8 +121,8 @@ Lean 4 proof structure is in `proofs/SafeCCore.lean`.
 | Directory | Description |
 |-----------|-------------|
 | `compiler/` | SafeC → LLVM IR compiler (C++17, ~10K LOC) |
-| `std/` | Standard library modules (.h declarations + .sc implementations) |
-| `safeguard/` | Package manager and build system |
+| `std/` | Standard library modules (.h declarations + .sc implementations), including `std/simd/` (portable `vec<T,N>`-based SIMD + per-ISA convenience headers) and `std/hal/` (per-architecture bare-metal HAL) |
+| `safeguard/` | Package manager and build system — compiles and links mixed SafeC/C/C++ projects |
 | `proofs/` | Lean 4 formalization of the safety model |
 
 ### Compiler Pipeline
@@ -143,6 +147,8 @@ Compilation:
   --no-consteval           Skip const-eval pass
   --freestanding           Freestanding mode (no hosted headers, warns on stdlib)
   --compat-preprocessor    Enable full C preprocessor
+  --target <triple>        Cross-target LLVM triple (default: host). See
+                            "Target Support" below for the verified matrix.
 
 Preprocessor:
   -I <dir>                 Add include search path
@@ -158,6 +164,38 @@ Incremental:
   --cache-dir <dir>        Cache directory (default: .safec_cache)
   --clear-cache            Clear cached .bc files
 ```
+
+---
+
+## Target Support
+
+`--target <triple>` selects any LLVM-registered target; SafeC hardcodes
+nothing architecture-specific — `vec<T,N>` and the rest of codegen lower to
+portable LLVM IR, and the target's own backend does instruction selection.
+Verified with real generated machine code (not just accepted input) across:
+
+| OS | Architectures |
+|---|---|
+| macOS | x86_64, AArch64 |
+| Linux | x86_64, x86, AArch64, Aarch32 (ARMv7), RV64, RV32 |
+| Windows (MSVC) | x86_64, x86, AArch64 |
+| iOS | AArch64 (device + simulator) |
+| Android | AArch64, Aarch32, x86_64, x86 |
+| FreeBSD | x86_64, AArch64 |
+| Bare metal (`--freestanding`) | ARM Cortex-M (Thumb/Thumb2), RV32, RV64, AArch64 |
+| Portable / GPU | WebAssembly, SPIR-V, CUDA (NVPTX), ROCm (AMDGPU) |
+
+**Metal Shading Language is not supported** — Apple's Metal compiler has no
+LLVM backend upstream (it's a separate, closed toolchain), unlike NVPTX/
+AMDGPU/SPIR-V which are real LLVM targets. The only practical interop path
+from SPIR-V output is a third-party translator (e.g. SPIRV-Cross), not
+something `safec` does itself.
+
+ARM Cortex-M gets first-class treatment: cross-compiles cleanly with
+`--freestanding`, has a HAL (`std/hal/cortex_m.sc` — NVIC, SysTick, SCB),
+and exposes the DSP extension's packed-SIMD/saturating instructions
+(SADD16, SMLAD, USAD8, SSAT, ...) as `std::dsp_*` builtins on M4/M7, plus
+real MVE vector codegen through `vec<T,N>` on M55/M85.
 
 ---
 
@@ -179,6 +217,27 @@ Incremental:
 generic<T: Numeric> T add(T a, T b) { return a + b; }
 int r = add(3, 4);          // monomorphized to add_int
 double d = add(1.0, 2.0);   // monomorphized to add_double
+```
+
+### Namespaces
+
+```c
+namespace std {
+    void log(const char* msg);
+}
+std::log("hello");   // or just log("hello") — unqualified fallback resolves too
+```
+
+### Native SIMD
+
+```c
+#include <std/simd/simd.h>   // portable f32x4/i32x4/... type aliases
+
+vec<float, 4> a = {1.0, 2.0, 3.0, 4.0};
+vec<float, 4> b = simd_splat_f32x4(10.0);
+vec<float, 4> c = a + b;      // lowers directly to LLVM vector IR —
+                               // real SSE/NEON/RVV/SIMD128 instructions
+                               // depending on --target, no intrinsics needed
 ```
 
 ### Struct Methods and Operator Overloading
@@ -248,7 +307,7 @@ section(".rodata") const int MAGIC = 42;
 ### Known Limitations
 
 - `switch`/`case` with fall-through not supported (use `match`)
-- Bitfield structs not supported (use `packed struct` + bit masking)
+- Metal Shading Language has no LLVM backend upstream — not reachable via `--target` (see "Target Support")
 - `thread_local` / `_Thread_local` / `__thread` supported on globals and static locals
 - Calling convention annotations: `__stdcall`, `__cdecl`, `__fastcall`
 

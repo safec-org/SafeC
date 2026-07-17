@@ -1104,19 +1104,32 @@ void CodeGen::genFor(ForStmt &s, FnEnv &env) {
     builder_.SetInsertPoint(exitBB);
 }
 
+llvm::Value *CodeGen::coerceScalar(llvm::Value *val, llvm::Type *targetTy,
+                                    const TypePtr &srcType) {
+    if (val->getType() == targetTy) return val;
+    if (val->getType()->isIntegerTy() && targetTy->isIntegerTy()) {
+        unsigned srcBits = val->getType()->getIntegerBitWidth();
+        unsigned dstBits = targetTy->getIntegerBitWidth();
+        if (dstBits < srcBits) return builder_.CreateTrunc(val, targetTy, "coerce");
+        if (dstBits == srcBits) return val;
+        bool isSigned = true; // default: plain 'int'/'long' etc. — the common case
+        if (srcType && srcType->kind >= TypeKind::Int8 && srcType->kind <= TypeKind::UInt64)
+            isSigned = static_cast<PrimType &>(*srcType).isSigned();
+        return isSigned ? builder_.CreateSExt(val, targetTy, "coerce")
+                         : builder_.CreateZExt(val, targetTy, "coerce");
+    }
+    if (val->getType()->isFloatingPointTy() && targetTy->isFloatingPointTy())
+        return val->getType()->getPrimitiveSizeInBits() < targetTy->getPrimitiveSizeInBits()
+               ? builder_.CreateFPExt(val, targetTy, "coerce")
+               : builder_.CreateFPTrunc(val, targetTy, "coerce");
+    return val;
+}
+
 void CodeGen::genReturn(ReturnStmt &s, FnEnv &env) {
     if (s.value && env.returnSlot) {
         auto *val     = genExpr(*s.value, env);
         auto *slotTy  = static_cast<llvm::AllocaInst *>(env.returnSlot)->getAllocatedType();
-        // Coerce: widen i1 booleans to the slot's integer type (e.g., i32)
-        if (val->getType() != slotTy) {
-            if (val->getType()->isIntegerTy() && slotTy->isIntegerTy())
-                val = builder_.CreateZExtOrTrunc(val, slotTy, "retconv");
-            else if (val->getType()->isFloatingPointTy() && slotTy->isFloatingPointTy())
-                val = val->getType()->getPrimitiveSizeInBits() < slotTy->getPrimitiveSizeInBits()
-                      ? builder_.CreateFPExt(val, slotTy, "fpconv")
-                      : builder_.CreateFPTrunc(val, slotTy, "fpconv");
-        }
+        val = coerceScalar(val, slotTy, s.value->type);
         builder_.CreateStore(val, env.returnSlot);
     }
     // Emit deferred statements in LIFO order before branching to return block
@@ -1438,6 +1451,7 @@ void CodeGen::genVarDecl(VarDeclStmt &s, FnEnv &env) {
                           typeToUse && (typeToUse->kind == TypeKind::Pointer ||
                                         typeToUse->kind == TypeKind::Reference);
         auto *val = needsDecay ? decayArrayToPtr(*s.init, env) : genExpr(*s.init, env);
+        val = coerceScalar(val, allocaTy, s.init->type);
         builder_.CreateStore(val, alloca);
     } else {
         // Zero-initialize (null function pointer)
@@ -1536,9 +1550,10 @@ llvm::Value *CodeGen::genExpr(Expr &e, FnEnv &env) {
         if (ty->isVectorTy()) {
             llvm::Value *vecVal = llvm::Constant::getNullValue(ty);
             auto *Int32Ty = llvm::Type::getInt32Ty(ctx_);
+            auto *elemTy  = llvm::cast<llvm::VectorType>(ty)->getElementType();
             for (size_t i = 0; i < ci.inits.size(); ++i) {
                 int64_t slot = ci.resolvedSlots.empty() ? (int64_t)i : ci.resolvedSlots[i];
-                auto *val = genExpr(*ci.inits[i], env);
+                auto *val = coerceScalar(genExpr(*ci.inits[i], env), elemTy, ci.inits[i]->type);
                 vecVal = builder_.CreateInsertElement(
                     vecVal, val, llvm::ConstantInt::get(Int32Ty, (uint64_t)slot), "vec.init");
             }
@@ -1559,6 +1574,9 @@ llvm::Value *CodeGen::genExpr(Expr &e, FnEnv &env) {
                     : builder_.CreateGEP(ty, alloca,
                           { llvm::ConstantInt::get(Int32Ty, 0),
                             llvm::ConstantInt::get(Int32Ty, (uint64_t)slot) });
+                auto *slotTy = ty->isStructTy() ? ty->getStructElementType((unsigned)slot)
+                                                 : llvm::cast<llvm::ArrayType>(ty)->getElementType();
+                val = coerceScalar(val, slotTy, ci.inits[i]->type);
                 builder_.CreateStore(val, gep);
             }
             return builder_.CreateLoad(ty, alloca, "compound");
@@ -2406,6 +2424,7 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
     // Helper: coerce argument types to match the function signature.
     // This fixes i1/i32 mismatches that arise when boolean comparisons
     // (ICmpXX → i1) are passed to functions expecting i32.
+    unsigned argOffset = e.methodBase ? 1 : 0; // args[0] is 'self', not e.args[0]
     auto coerceArgs = [&](llvm::FunctionType *fty) {
         for (unsigned i = 0; i < fty->getNumParams() && i < args.size(); ++i) {
             auto *paramTy = fty->getParamType(i);
@@ -2414,10 +2433,23 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
             if (argTy->isIntegerTy() && paramTy->isIntegerTy()) {
                 unsigned aw = argTy->getIntegerBitWidth();
                 unsigned pw = paramTy->getIntegerBitWidth();
-                if (pw > aw)
-                    args[i] = builder_.CreateZExt(args[i], paramTy, "argzext");
-                else if (pw < aw)
+                if (pw > aw) {
+                    TypePtr srcTy = (i >= argOffset && (i - argOffset) < e.args.size())
+                        ? e.args[i - argOffset]->type : nullptr;
+                    bool isSigned = true;
+                    if (srcTy && srcTy->kind >= TypeKind::Int8 && srcTy->kind <= TypeKind::UInt64)
+                        isSigned = static_cast<PrimType &>(*srcTy).isSigned();
+                    args[i] = isSigned ? builder_.CreateSExt(args[i], paramTy, "argsext")
+                                        : builder_.CreateZExt(args[i], paramTy, "argzext");
+                } else if (pw < aw)
                     args[i] = builder_.CreateTrunc(args[i], paramTy, "argtrunc");
+            } else if (argTy->isFloatingPointTy() && paramTy->isFloatingPointTy()) {
+                // e.g. a double-valued literal narrowing into a 'float'
+                // parameter (Sema's floatLitFitsType bypass) — without
+                // this, the call would pass the argument's full original
+                // width, reinterpreting the wrong bit pattern in the
+                // narrower parameter register/slot.
+                args[i] = coerceScalar(args[i], paramTy);
             } else if (argTy->isPointerTy() && paramTy->isPointerTy()) {
                 // opaque ptrs already match
             }
@@ -3023,15 +3055,11 @@ llvm::Value *CodeGen::genAssign(AssignExpr &e, FnEnv &env) {
         val = applyBinaryOp(binOp, cur, rhs, e.lhs->type);
     }
 
-    // Type coercion for mismatched integer sizes (e.g., int literal → i8)
-    if (val->getType() != lhsTy) {
-        if (lhsTy->isIntegerTy() && val->getType()->isIntegerTy()) {
-            unsigned dstBits = lhsTy->getIntegerBitWidth();
-            unsigned srcBits = val->getType()->getIntegerBitWidth();
-            if (dstBits < srcBits) val = builder_.CreateTrunc(val, lhsTy);
-            else if (dstBits > srcBits) val = builder_.CreateSExt(val, lhsTy);
-        }
-    }
+    // Type coercion for mismatched scalar sizes (e.g., int literal → i8,
+    // or a double-valued literal narrowing into a 'float' lhs). Signedness
+    // for widening comes from rhs on a plain assign; a compound assign's
+    // 'val' is applyBinaryOp's result, whose natural type tracks lhs.
+    val = coerceScalar(val, lhsTy, e.op == AssignOp::Assign ? e.rhs->type : e.lhs->type);
 
     builder_.CreateStore(val, addr);
     return val;

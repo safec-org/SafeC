@@ -742,7 +742,8 @@ void Sema::checkGlobalVar(GlobalVarDecl &gv) {
             : checkExpr(*gv.init);
         if (!gv.type->isError() && !initTy->isError()) {
             if (!canImplicitlyConvert(initTy, gv.type) &&
-                !intLiteralFitsType(*gv.init, gv.type)) {
+                !intLiteralFitsType(*gv.init, gv.type) &&
+                !floatLitFitsType(*gv.init, gv.type)) {
                 diag_.error(gv.loc,
                     "type mismatch in global variable initializer: cannot convert '"
                     + initTy->str() + "' to '" + gv.type->str() + "'");
@@ -933,7 +934,8 @@ void Sema::checkReturn(ReturnStmt &s, FunctionDecl &fn) {
         if (fn.returnType && !fn.returnType->isVoid() &&
             !valTy->isError() && !fn.returnType->isError()) {
             if (!canImplicitlyConvert(valTy, fn.returnType) &&
-                !intLiteralFitsType(*s.value, fn.returnType)) {
+                !intLiteralFitsType(*s.value, fn.returnType) &&
+                !floatLitFitsType(*s.value, fn.returnType)) {
                 diag_.error(s.loc,
                     "return type mismatch: cannot convert '" + valTy->str() +
                     "' to '" + fn.returnType->str() + "'");
@@ -1002,7 +1004,8 @@ void Sema::checkVarDecl(VarDeclStmt &s, FunctionDecl &fn) {
 
         if (s.declType && !s.declType->isError() && !initTy->isError()) {
             if (!canImplicitlyConvert(initTy, s.declType) &&
-                !intLiteralFitsType(*s.init, s.declType)) {
+                !intLiteralFitsType(*s.init, s.declType) &&
+                !floatLitFitsType(*s.init, s.declType)) {
                 diag_.error(s.loc,
                     "type mismatch in variable declaration: cannot convert '"
                     + initTy->str() + "' to '" + s.declType->str() + "'");
@@ -1560,7 +1563,8 @@ TypePtr Sema::checkCompoundInit(CompoundInitExpr &e, const TypePtr &targetTy) {
             TypePtr initTy = checkExpr(*e.inits[i]);
             if (vt.element && !initTy->isError() && !vt.element->isError() &&
                 !canImplicitlyConvert(initTy, vt.element) &&
-                !intLiteralFitsType(*e.inits[i], vt.element)) {
+                !intLiteralFitsType(*e.inits[i], vt.element) &&
+                !floatLitFitsType(*e.inits[i], vt.element)) {
                 diag_.error(e.inits[i]->loc,
                     "type mismatch in vector initializer: cannot convert '" +
                     initTy->str() + "' to '" + vt.element->str() + "'");
@@ -1607,7 +1611,8 @@ TypePtr Sema::checkCompoundInit(CompoundInitExpr &e, const TypePtr &targetTy) {
             const TypePtr &fieldTy = st.fields[slot].type;
             if (fieldTy && !initTy->isError() && !fieldTy->isError() &&
                 !canImplicitlyConvert(initTy, fieldTy) &&
-                !intLiteralFitsType(*e.inits[i], fieldTy)) {
+                !intLiteralFitsType(*e.inits[i], fieldTy) &&
+                !floatLitFitsType(*e.inits[i], fieldTy)) {
                 diag_.error(e.inits[i]->loc,
                     "type mismatch initializing field '" + st.fields[slot].name +
                     "': cannot convert '" + initTy->str() + "' to '" + fieldTy->str() + "'");
@@ -1636,7 +1641,8 @@ TypePtr Sema::checkCompoundInit(CompoundInitExpr &e, const TypePtr &targetTy) {
             TypePtr initTy = checkExpr(*e.inits[i]);
             if (at.element && !initTy->isError() && !at.element->isError() &&
                 !canImplicitlyConvert(initTy, at.element) &&
-                !intLiteralFitsType(*e.inits[i], at.element)) {
+                !intLiteralFitsType(*e.inits[i], at.element) &&
+                !floatLitFitsType(*e.inits[i], at.element)) {
                 diag_.error(e.inits[i]->loc,
                     "type mismatch in array initializer: cannot convert '" +
                     initTy->str() + "' to '" + at.element->str() + "'");
@@ -2091,6 +2097,7 @@ TypePtr Sema::checkCall(CallExpr &e) {
                 !argTy->isError() && !ft->paramTypes[paramIdx]->isError()) {
             if (!canImplicitlyConvert(argTy, ft->paramTypes[paramIdx]) &&
                 !intLiteralFitsType(*e.args[i], ft->paramTypes[paramIdx]) &&
+                !floatLitFitsType(*e.args[i], ft->paramTypes[paramIdx]) &&
                 !refToPointerArgCompatible(argTy, ft->paramTypes[paramIdx])) {
                 diag_.error(e.args[i]->loc,
                     "argument " + std::to_string(i+1) + ": cannot convert '" +
@@ -2380,7 +2387,8 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
     // Type compatibility
     if (!lhsTy->isError() && !rhsTy->isError()) {
         if (!canImplicitlyConvert(rhsTy, lhsTy) &&
-            !intLiteralFitsType(*e.rhs, lhsTy)) {
+            !intLiteralFitsType(*e.rhs, lhsTy) &&
+            !floatLitFitsType(*e.rhs, lhsTy)) {
             diag_.error(e.loc,
                 "type mismatch in assignment: cannot convert '" +
                 rhsTy->str() + "' to '" + lhsTy->str() + "'");
@@ -2748,6 +2756,22 @@ bool Sema::intLiteralFitsType(const Expr &e, const TypePtr &to) const {
     if (v < 0) return false;
     uint64_t hi = (uint64_t(1) << bits) - 1;
     return static_cast<uint64_t>(v) <= hi;
+}
+
+// A double-valued literal narrowing to 'float' is always allowed — matches
+// real C ('float x = 1.0;' is ordinary, valid C), unlike intLiteralFitsType
+// there's no "does the magnitude fit" question: a float can represent any
+// double's rounded value, possibly losing precision or saturating to
+// +-inf for extreme magnitudes, exactly as plain C already permits without
+// requiring an explicit cast.
+bool Sema::floatLitFitsType(const Expr &e, const TypePtr &to) const {
+    if (!to || to->kind != TypeKind::Float32) return false;
+    const Expr *inner = &e;
+    if (inner->kind == ExprKind::Unary) {
+        auto &u = static_cast<const UnaryExpr &>(*inner);
+        if (u.op == UnaryOp::Neg && u.operand) inner = u.operand.get();
+    }
+    return inner->kind == ExprKind::FloatLit;
 }
 
 // &stack T argument → T* parameter, call-argument-only leniency.

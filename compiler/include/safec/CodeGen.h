@@ -141,6 +141,23 @@ private:
     void genFor(ForStmt &s, FnEnv &env);
     void genReturn(ReturnStmt &s, FnEnv &env);
     void genVarDecl(VarDeclStmt &s, FnEnv &env);
+    // Coerce a scalar int/float value to exactly match targetTy (same-kind
+    // width mismatches only — int<->int via zext/trunc, float<->float via
+    // fpext/fptrunc; no-op if already matching or not a scalar pair). Used
+    // everywhere Sema permits a literal to narrow into a smaller declared
+    // type (e.g. 'unsigned char x = 200;', 'float x = 1.0;') — Sema only
+    // grants *permission*; without this, the store below would write the
+    // literal's full original width (e.g. i32) into a narrower alloca
+    // (e.g. i8), overrunning it by however many bytes short the true type
+    // is — a real stack-corruption bug, not merely invalid-looking IR.
+    // 'srcType' (optional) is the source value's SafeC-level type, used
+    // only to pick sign- vs zero-extend when *widening* an integer — get
+    // this wrong and widening a negative signed value (e.g. int -5 -> long
+    // long) zero-extends instead of sign-extends, silently turning -5 into
+    // 4294967291. Defaults to signed (matches plain 'int'/'long' — the
+    // common case) when the source type isn't available/known.
+    llvm::Value *coerceScalar(llvm::Value *val, llvm::Type *targetTy,
+                               const TypePtr &srcType = nullptr);
     void genUnsafe(UnsafeStmt &s, FnEnv &env);
     void genExprStmt(ExprStmt &s, FnEnv &env);
     void genMatch(MatchStmt &s, FnEnv &env);
