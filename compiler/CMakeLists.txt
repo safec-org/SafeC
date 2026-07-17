@@ -94,11 +94,22 @@ else()
   # macOS/Linux, where the monolithic library already contains every target
   # regardless of what's requested here — this branch was never actually
   # exercised on those platforms before).
+  # Diagnostic: the immediately preceding fix (this same ${LLVM_TARGETS_TO_BUILD}
+  # expansion) produced byte-for-byte the same unresolved-symbol list as
+  # before it was added, on a real Windows CI run — meaning either this
+  # variable comes back narrower than expected from this specific LLVM
+  # package's exported config (same failure family as LLVM_NATIVE_ARCH
+  # earlier), or something else is dropping these libraries before the
+  # final link line. Printing both the input and the resolved output here
+  # so the next CI run's CMake-configure log settles which, instead of
+  # guessing a third time.
+  message(STATUS "safec: LLVM_TARGETS_TO_BUILD = '${LLVM_TARGETS_TO_BUILD}'")
   llvm_map_components_to_libnames(LLVM_COMPONENT_LIBS
     core support irreader bitwriter bitreader passes
     target mc mcparser asmprinter
     ${LLVM_TARGETS_TO_BUILD}
   )
+  message(STATUS "safec: LLVM_COMPONENT_LIBS = '${LLVM_COMPONENT_LIBS}'")
   target_link_libraries(safec PRIVATE ${LLVM_COMPONENT_LIBS})
 endif()
 

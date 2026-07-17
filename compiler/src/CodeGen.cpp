@@ -1224,11 +1224,43 @@ llvm::Value *CodeGen::coerceScalar(llvm::Value *val, llvm::Type *targetTy,
     return val;
 }
 
+llvm::Value *CodeGen::coerceToOptional(llvm::Value *val, const TypePtr &srcType,
+                                        const TypePtr &targetTy) {
+    if (!targetTy || targetTy->kind != TypeKind::Optional) return val;
+    // Already Optional-shaped (e.g. re-returning an existing '?T' local, or
+    // a call that itself returns '?T') — nothing to wrap.
+    if (srcType && srcType->kind == TypeKind::Optional) return val;
+
+    auto &ot = static_cast<OptionalType &>(*targetTy);
+    auto *optTy = lowerType(targetTy);
+
+    // null → empty '?T': {zeroinitializer-of-T, false}. 'null' is always
+    // typed as 'void*' (see checkIntLit's NullLit sibling in Sema), so a
+    // void*-typed source is the only realistic way to reach here without
+    // already being the inner type.
+    bool isNull = srcType && srcType->kind == TypeKind::Pointer &&
+                  static_cast<PointerType &>(*srcType).base->isVoid();
+    if (isNull) {
+        auto *innerTy = lowerType(ot.inner);
+        llvm::Value *agg = llvm::UndefValue::get(optTy);
+        agg = builder_.CreateInsertValue(agg, llvm::Constant::getNullValue(innerTy), {0}, "opt.none");
+        agg = builder_.CreateInsertValue(agg, builder_.getFalse(), {1});
+        return agg;
+    }
+
+    // Plain T → present '?T': {val, true}.
+    llvm::Value *agg = llvm::UndefValue::get(optTy);
+    agg = builder_.CreateInsertValue(agg, val, {0}, "opt.some");
+    agg = builder_.CreateInsertValue(agg, builder_.getTrue(), {1});
+    return agg;
+}
+
 void CodeGen::genReturn(ReturnStmt &s, FnEnv &env) {
     if (s.value && env.returnSlot) {
         auto *val     = genExpr(*s.value, env);
         auto *slotTy  = static_cast<llvm::AllocaInst *>(env.returnSlot)->getAllocatedType();
         val = coerceScalar(val, slotTy, s.value->type);
+        val = coerceToOptional(val, s.value->type, env.fnDecl ? env.fnDecl->returnType : nullptr);
         builder_.CreateStore(val, env.returnSlot);
     }
     // Emit deferred statements in LIFO order before branching to return block
@@ -1373,6 +1405,24 @@ void CodeGen::genMatch(MatchStmt &s, FnEnv &env) {
             unionTy = lowerStructType(st);
         }
     }
+    // A nullable pointer/reference or Optional subject: 'null'/'some(x)' (or
+    // 'none'/'some(x)') patterns behave like a two-variant tagged union
+    // (tag 0 = empty, tag 1 = present) without an actual struct-with-tag
+    // layout — see resolveMatchArmPatterns in Sema.cpp for the pattern
+    // resolution side.
+    bool isNullLike = false; // Pointer, or nullable Reference
+    bool isOptional = false;
+    if (s.subject->type) {
+        if (s.subject->type->kind == TypeKind::Pointer) {
+            isNullLike = true;
+        } else if (s.subject->type->kind == TypeKind::Reference &&
+                   static_cast<ReferenceType &>(*s.subject->type).nullable) {
+            isNullLike = true;
+        } else if (s.subject->type->kind == TypeKind::Optional) {
+            isOptional = true;
+        }
+    }
+    bool hasTag = isTaggedUnion || isNullLike || isOptional;
 
     // For tagged unions, store subject and extract tag
     llvm::Value *tagVal = nullptr;
@@ -1382,6 +1432,13 @@ void CodeGen::genMatch(MatchStmt &s, FnEnv &env) {
         builder_.CreateStore(subjectVal, subjectAlloca);
         auto *tagGEP = builder_.CreateStructGEP(unionTy, subjectAlloca, 0, "match.tag.ptr");
         tagVal = builder_.CreateLoad(llvm::Type::getInt32Ty(ctx_), tagGEP, "match.tag");
+    } else if (isNullLike) {
+        auto *nullPtr = llvm::ConstantPointerNull::get(llvm::PointerType::get(ctx_, 0));
+        auto *notNull = builder_.CreateICmpNE(subjectVal, nullPtr, "match.notnull");
+        tagVal = builder_.CreateZExt(notNull, llvm::Type::getInt32Ty(ctx_), "match.tag");
+    } else if (isOptional) {
+        auto *hasVal = builder_.CreateExtractValue(subjectVal, {1}, "match.hasval");
+        tagVal = builder_.CreateZExt(hasVal, llvm::Type::getInt32Ty(ctx_), "match.tag");
     }
 
     for (auto &arm : s.arms) {
@@ -1397,13 +1454,13 @@ void CodeGen::genMatch(MatchStmt &s, FnEnv &env) {
                 thisCond = builder_.getTrue();
                 break;
             case PatternKind::IntLit: {
-                auto *cmpVal = isTaggedUnion ? tagVal : subjectVal;
+                auto *cmpVal = hasTag ? tagVal : subjectVal;
                 auto *lit = llvm::ConstantInt::get(cmpVal->getType(), pat.intVal, true);
                 thisCond  = builder_.CreateICmpEQ(cmpVal, lit, "match.eq");
                 break;
             }
             case PatternKind::Range: {
-                auto *cmpVal = isTaggedUnion ? tagVal : subjectVal;
+                auto *cmpVal = hasTag ? tagVal : subjectVal;
                 auto *lo  = llvm::ConstantInt::get(cmpVal->getType(), pat.intVal,  true);
                 auto *hi  = llvm::ConstantInt::get(cmpVal->getType(), pat.intVal2, true);
                 auto *geq = builder_.CreateICmpSGE(cmpVal, lo, "match.ge");
@@ -1412,7 +1469,7 @@ void CodeGen::genMatch(MatchStmt &s, FnEnv &env) {
                 break;
             }
             case PatternKind::EnumIdent:
-                if (isTaggedUnion && pat.resolvedTag >= 0) {
+                if (hasTag && pat.resolvedTag >= 0) {
                     auto *lit = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_),
                                                         pat.resolvedTag, true);
                     thisCond = builder_.CreateICmpEQ(tagVal, lit, "match.tag.eq");
@@ -1439,6 +1496,25 @@ void CodeGen::genMatch(MatchStmt &s, FnEnv &env) {
                     auto *payloadVal = builder_.CreateLoad(payloadTy, payloadGEP,
                                                             pat.bindName);
                     auto *bindAlloca = createEntryAlloca(env, payloadTy, pat.bindName);
+                    builder_.CreateStore(payloadVal, bindAlloca);
+                    env.locals[pat.bindName] = bindAlloca;
+                }
+            }
+        } else if (isNullLike || isOptional) {
+            // 'some(x)': bind x to the dereferenced pointer (nullable
+            // pointer/reference) or the '{T,i1}' value field (Optional) —
+            // safe to read unconditionally here since we're already inside
+            // the branch this arm's own tag==1 condition selected.
+            for (auto &pat : arm.patterns) {
+                if (!pat.bindName.empty() && pat.payloadType && pat.resolvedTag >= 0) {
+                    llvm::Value *payloadVal;
+                    if (isNullLike) {
+                        auto *payloadTy = lowerType(pat.payloadType);
+                        payloadVal = builder_.CreateLoad(payloadTy, subjectVal, pat.bindName);
+                    } else {
+                        payloadVal = builder_.CreateExtractValue(subjectVal, {0}, pat.bindName);
+                    }
+                    auto *bindAlloca = createEntryAlloca(env, payloadVal->getType(), pat.bindName);
                     builder_.CreateStore(payloadVal, bindAlloca);
                     env.locals[pat.bindName] = bindAlloca;
                 }
@@ -1477,6 +1553,22 @@ llvm::Value *CodeGen::genMatchExpr(MatchExpr &e, FnEnv &env) {
             unionTy = lowerStructType(st);
         }
     }
+    // See genMatch's identical comment above — 'null'/'some(x)' and
+    // 'none'/'some(x)' behave like a two-variant tagged union without an
+    // actual struct-with-tag layout.
+    bool isNullLike = false;
+    bool isOptional = false;
+    if (e.subject->type) {
+        if (e.subject->type->kind == TypeKind::Pointer) {
+            isNullLike = true;
+        } else if (e.subject->type->kind == TypeKind::Reference &&
+                   static_cast<ReferenceType &>(*e.subject->type).nullable) {
+            isNullLike = true;
+        } else if (e.subject->type->kind == TypeKind::Optional) {
+            isOptional = true;
+        }
+    }
+    bool hasTag = isTaggedUnion || isNullLike || isOptional;
 
     llvm::Value *tagVal = nullptr;
     llvm::AllocaInst *subjectAlloca = nullptr;
@@ -1485,6 +1577,13 @@ llvm::Value *CodeGen::genMatchExpr(MatchExpr &e, FnEnv &env) {
         builder_.CreateStore(subjectVal, subjectAlloca);
         auto *tagGEP = builder_.CreateStructGEP(unionTy, subjectAlloca, 0, "match.expr.tag.ptr");
         tagVal = builder_.CreateLoad(llvm::Type::getInt32Ty(ctx_), tagGEP, "match.expr.tag");
+    } else if (isNullLike) {
+        auto *nullPtr = llvm::ConstantPointerNull::get(llvm::PointerType::get(ctx_, 0));
+        auto *notNull = builder_.CreateICmpNE(subjectVal, nullPtr, "match.expr.notnull");
+        tagVal = builder_.CreateZExt(notNull, llvm::Type::getInt32Ty(ctx_), "match.expr.tag");
+    } else if (isOptional) {
+        auto *hasVal = builder_.CreateExtractValue(subjectVal, {1}, "match.expr.hasval");
+        tagVal = builder_.CreateZExt(hasVal, llvm::Type::getInt32Ty(ctx_), "match.expr.tag");
     }
 
     llvm::Type *resultTy = e.type ? lowerType(e.type) : llvm::Type::getInt32Ty(ctx_);
@@ -1504,13 +1603,13 @@ llvm::Value *CodeGen::genMatchExpr(MatchExpr &e, FnEnv &env) {
                 thisCond = builder_.getTrue();
                 break;
             case PatternKind::IntLit: {
-                auto *cmpVal = isTaggedUnion ? tagVal : subjectVal;
+                auto *cmpVal = hasTag ? tagVal : subjectVal;
                 auto *lit = llvm::ConstantInt::get(cmpVal->getType(), pat.intVal, true);
                 thisCond  = builder_.CreateICmpEQ(cmpVal, lit, "match.expr.eq");
                 break;
             }
             case PatternKind::Range: {
-                auto *cmpVal = isTaggedUnion ? tagVal : subjectVal;
+                auto *cmpVal = hasTag ? tagVal : subjectVal;
                 auto *lo  = llvm::ConstantInt::get(cmpVal->getType(), pat.intVal,  true);
                 auto *hi  = llvm::ConstantInt::get(cmpVal->getType(), pat.intVal2, true);
                 auto *geq = builder_.CreateICmpSGE(cmpVal, lo, "match.expr.ge");
@@ -1519,7 +1618,7 @@ llvm::Value *CodeGen::genMatchExpr(MatchExpr &e, FnEnv &env) {
                 break;
             }
             case PatternKind::EnumIdent:
-                if (isTaggedUnion && pat.resolvedTag >= 0) {
+                if (hasTag && pat.resolvedTag >= 0) {
                     auto *lit = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_),
                                                         pat.resolvedTag, true);
                     thisCond = builder_.CreateICmpEQ(tagVal, lit, "match.expr.tag.eq");
@@ -1546,6 +1645,22 @@ llvm::Value *CodeGen::genMatchExpr(MatchExpr &e, FnEnv &env) {
                     auto *payloadVal = builder_.CreateLoad(payloadTy, payloadGEP,
                                                             pat.bindName);
                     auto *bindAlloca = createEntryAlloca(env, payloadTy, pat.bindName);
+                    builder_.CreateStore(payloadVal, bindAlloca);
+                    env.locals[pat.bindName] = bindAlloca;
+                }
+            }
+        } else if (isNullLike || isOptional) {
+            // See genMatch's identical comment above.
+            for (auto &pat : arm.patterns) {
+                if (!pat.bindName.empty() && pat.payloadType && pat.resolvedTag >= 0) {
+                    llvm::Value *payloadVal;
+                    if (isNullLike) {
+                        auto *payloadTy = lowerType(pat.payloadType);
+                        payloadVal = builder_.CreateLoad(payloadTy, subjectVal, pat.bindName);
+                    } else {
+                        payloadVal = builder_.CreateExtractValue(subjectVal, {0}, pat.bindName);
+                    }
+                    auto *bindAlloca = createEntryAlloca(env, payloadVal->getType(), pat.bindName);
                     builder_.CreateStore(payloadVal, bindAlloca);
                     env.locals[pat.bindName] = bindAlloca;
                 }
@@ -1625,6 +1740,7 @@ void CodeGen::genVarDecl(VarDeclStmt &s, FnEnv &env) {
             builder_.CreateCondBr(guardVal, contBB, initBB);
             builder_.SetInsertPoint(initBB);
             auto *val = genExpr(*s.init, env);
+            val = coerceToOptional(val, s.init->type, typeToUse);
             builder_.CreateStore(val, gv);
             builder_.CreateStore(llvm::ConstantInt::getTrue(ctx_), guardGV);
             builder_.CreateBr(contBB);
@@ -1686,6 +1802,7 @@ void CodeGen::genVarDecl(VarDeclStmt &s, FnEnv &env) {
                                         typeToUse->kind == TypeKind::Reference);
         auto *val = needsDecay ? decayArrayToPtr(*s.init, env) : genExpr(*s.init, env);
         val = coerceScalar(val, allocaTy, s.init->type);
+        val = coerceToOptional(val, s.init->type, typeToUse);
         builder_.CreateStore(val, alloca);
     } else {
         // Zero-initialize (null function pointer)
@@ -1876,6 +1993,17 @@ llvm::Value *CodeGen::genLValue(Expr &e, FnEnv &env) {
         return genMember(static_cast<MemberExpr &>(e), env, /*wantAddr=*/true);
     case ExprKind::Deref:
         return genDeref(static_cast<UnaryExpr &>(e), env, /*wantAddr=*/true);
+    case ExprKind::Unary: {
+        auto &ue = static_cast<UnaryExpr &>(e);
+        // 'x!' on a pointer/nullable-reference (Sema only sets isLValue in
+        // that case, never for Optional — see checkUnary) is the same
+        // address as a direct '*x': both lower to a plain opaque ptr, so
+        // the pointer value itself already *is* that address, letting
+        // 'x! = value' reuse this exactly like '*x = value' does above.
+        if (ue.op == UnaryOp::ForceUnwrap) return genExpr(*ue.operand, env);
+        diag_.error(e.loc, "cannot take address of this expression");
+        return llvm::ConstantPointerNull::get(llvm::PointerType::get(ctx_, 0));
+    }
     default:
         diag_.error(e.loc, "cannot take address of this expression");
         return llvm::ConstantPointerNull::get(llvm::PointerType::get(ctx_, 0));
@@ -2051,6 +2179,27 @@ llvm::Value *CodeGen::genUnary(UnaryExpr &e, FnEnv &env) {
         const auto &dl = mod_->getDataLayout();
         uint64_t sz = dl.getTypeAllocSize(ty);
         return llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx_), sz);
+    }
+    case UnaryOp::ForceUnwrap: {
+        // No runtime has_value/null check — '!' trusts the caller (Sema
+        // already required 'unsafe' to reach here), matching every other
+        // unsafe-gated operation's zero-runtime-cost philosophy elsewhere
+        // in this compiler (e.g. raw pointer deref).
+        auto &operandTy = e.operand->type;
+        if (operandTy && operandTy->kind == TypeKind::Optional) {
+            // Optional lowers to '{T, i1}' — extract the value directly.
+            auto *val = genExpr(*e.operand, env);
+            return builder_.CreateExtractValue(val, {0}, "force_unwrap");
+        }
+        // Pointer or nullable Reference: both lower to a plain opaque ptr
+        // (see lowerType) — '!' just dereferences it, same as '*x'.
+        auto *ptrVal = genExpr(*e.operand, env);
+        llvm::Type *innerTy = llvm::Type::getInt32Ty(ctx_);
+        if (operandTy && operandTy->kind == TypeKind::Pointer)
+            innerTy = lowerType(static_cast<PointerType &>(*operandTy).base);
+        else if (operandTy && operandTy->kind == TypeKind::Reference)
+            innerTy = lowerType(static_cast<ReferenceType &>(*operandTy).base);
+        return builder_.CreateLoad(innerTy, ptrVal, "force_unwrap");
     }
     default:
         return genExpr(*e.operand, env);
@@ -2324,6 +2473,9 @@ llvm::Value *CodeGen::genBinary(BinaryExpr &e, FnEnv &env) {
 
 // ── Call ──────────────────────────────────────────────────────────────────────
 llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
+    if (e.nullOp != CallExpr::NullOp::None) {
+        return genNullOp(e, env);
+    }
     // ── Tagged union init: Shape.radius(5.0) ──────────────────────────────────
     if (e.taggedUnionTag >= 0 && !e.taggedUnionName.empty()) {
         // Find the LLVM struct type for the tagged union
@@ -2691,6 +2843,25 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
                 args[i] = coerceScalar(args[i], paramTy);
             } else if (argTy->isPointerTy() && paramTy->isPointerTy()) {
                 // opaque ptrs already match
+            } else if (paramTy->isStructTy() && paramTy->getStructNumElements() == 2 &&
+                       paramTy->getStructElementType(1)->isIntegerTy(1)) {
+                // Optional-shaped parameter ('{T, i1}') receiving a plain T
+                // argument, or a null-literal 'ptr' — same wrapping
+                // coerceToOptional does for return/var-decl/assignment,
+                // needed here too since this lambda only sees LLVM types
+                // (Sema::canImplicitlyConvert already granted the call).
+                auto *innerTy = paramTy->getStructElementType(0);
+                if (argTy == innerTy) {
+                    llvm::Value *agg = llvm::UndefValue::get(paramTy);
+                    agg = builder_.CreateInsertValue(agg, args[i], {0});
+                    agg = builder_.CreateInsertValue(agg, builder_.getTrue(), {1});
+                    args[i] = agg;
+                } else if (argTy->isPointerTy()) {
+                    llvm::Value *agg = llvm::UndefValue::get(paramTy);
+                    agg = builder_.CreateInsertValue(agg, llvm::Constant::getNullValue(innerTy), {0});
+                    agg = builder_.CreateInsertValue(agg, builder_.getFalse(), {1});
+                    args[i] = agg;
+                }
             }
         }
         // C's default argument promotion for the '...' tail of a variadic
@@ -2738,6 +2909,78 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
         }
     }
     diag_.error(e.loc, "codegen: cannot determine callee function type");
+    return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
+}
+
+// x.is_null() / x.is_none() / x.default(fallback) — see CallExpr::NullOp
+// (AST.h) and Sema::checkCall's "safe pseudo-methods" section.
+llvm::Value *CodeGen::genNullOp(CallExpr &e, FnEnv &env) {
+    TypePtr baseTy = e.nullOpBase ? e.nullOpBase->type : nullptr;
+    bool isPointer  = baseTy && baseTy->kind == TypeKind::Pointer;
+    bool isOptional = baseTy && baseTy->kind == TypeKind::Optional;
+    // The remaining case (not Pointer, not Optional) is a nullable
+    // reference — the only other receiver Sema accepts here.
+
+    switch (e.nullOp) {
+    case CallExpr::NullOp::IsNull: {
+        // Pointer and (nullable) Reference both lower to a plain opaque
+        // ptr (see lowerType) — the same null check works for either.
+        auto *val = genExpr(*e.nullOpBase, env);
+        auto *nullPtr = llvm::ConstantPointerNull::get(llvm::PointerType::get(ctx_, 0));
+        return builder_.CreateICmpEQ(val, nullPtr, "is_null");
+    }
+    case CallExpr::NullOp::IsNone: {
+        // Optional lowers to '{T, i1}' (see lowerType) — has_value is
+        // field 1; is_none is just its negation.
+        auto *val = genExpr(*e.nullOpBase, env);
+        auto *hasVal = builder_.CreateExtractValue(val, {1}, "opt.has");
+        return builder_.CreateNot(hasVal, "is_none");
+    }
+    case CallExpr::NullOp::Default: {
+        auto *fallback = genExpr(*e.args[0], env);
+        if (isOptional) {
+            auto *val = genExpr(*e.nullOpBase, env);
+            auto *hasVal = builder_.CreateExtractValue(val, {1}, "opt.has");
+            auto *inner  = builder_.CreateExtractValue(val, {0}, "opt.val");
+            fallback = coerceScalar(fallback, inner->getType(), e.args[0]->type);
+            return builder_.CreateSelect(hasVal, inner, fallback, "opt.default");
+        }
+        // Pointer / nullable reference: '.default(fallback)' dereferences
+        // when non-null, returns 'fallback' otherwise — genuine branching
+        // (not a naive load-then-select), since a null pointer must never
+        // actually be dereferenced, even speculatively.
+        TypePtr innerTy = isPointer ? static_cast<PointerType &>(*baseTy).base
+                                     : static_cast<ReferenceType &>(*baseTy).base;
+        auto *innerLLVMTy = lowerType(innerTy);
+        fallback = coerceScalar(fallback, innerLLVMTy, e.args[0]->type);
+
+        auto *ptrVal  = genExpr(*e.nullOpBase, env);
+        auto *nullPtr = llvm::ConstantPointerNull::get(llvm::PointerType::get(ctx_, 0));
+        auto *isNull  = builder_.CreateICmpEQ(ptrVal, nullPtr, "default.isnull");
+
+        auto *loadBB  = llvm::BasicBlock::Create(ctx_, "default.load",     env.fn);
+        auto *fallBB  = llvm::BasicBlock::Create(ctx_, "default.fallback", env.fn);
+        auto *mergeBB = llvm::BasicBlock::Create(ctx_, "default.end",      env.fn);
+        builder_.CreateCondBr(isNull, fallBB, loadBB);
+
+        builder_.SetInsertPoint(loadBB);
+        auto *loaded  = builder_.CreateLoad(innerLLVMTy, ptrVal, "default.val");
+        auto *loadEnd = builder_.GetInsertBlock();
+        builder_.CreateBr(mergeBB);
+
+        builder_.SetInsertPoint(fallBB);
+        auto *fallEnd = builder_.GetInsertBlock();
+        builder_.CreateBr(mergeBB);
+
+        builder_.SetInsertPoint(mergeBB);
+        auto *phi = builder_.CreatePHI(innerLLVMTy, 2, "default.result");
+        phi->addIncoming(loaded, loadEnd);
+        phi->addIncoming(fallback, fallEnd);
+        return phi;
+    }
+    case CallExpr::NullOp::None:
+        break;
+    }
     return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
 }
 
@@ -3300,6 +3543,8 @@ llvm::Value *CodeGen::genAssign(AssignExpr &e, FnEnv &env) {
     // for widening comes from rhs on a plain assign; a compound assign's
     // 'val' is applyBinaryOp's result, whose natural type tracks lhs.
     val = coerceScalar(val, lhsTy, e.op == AssignOp::Assign ? e.rhs->type : e.lhs->type);
+    if (e.op == AssignOp::Assign)
+        val = coerceToOptional(val, e.rhs->type, e.lhs->type);
 
     builder_.CreateStore(val, addr);
     return val;

@@ -1819,8 +1819,11 @@ MatchPattern Parser::parseMatchPattern() {
         consume();
         return p;
     }
-    // Enum ident
-    if (cur().is(TK::Ident)) {
+    // Enum ident — also accepts the keyword 'null' so 'case null:' works
+    // for a nullable-pointer/reference match subject (see
+    // classifyNullMatchSubject/resolveMatchArmPatterns in Sema.cpp); a
+    // pattern position is never ambiguous with 'null' the literal.
+    if (cur().is(TK::Ident) || cur().is(TK::KW_null)) {
         p.kind  = PatternKind::EnumIdent;
         p.ident = cur().text;
         consume();
@@ -2310,7 +2313,13 @@ ExprPtr Parser::parsePostfixExpr() {
         } else if (cur().is(TK::Dot)) {
             consume();
             std::string field;
-            if (cur().is(TK::Ident)) {
+            // 'default' is a keyword (switch/match's default label) but is
+            // also the name of the nullable-pointer/reference/Optional
+            // '.default(value)' pseudo-method (see Sema::checkCall) — a
+            // dotted position is never ambiguous with the label use, so it
+            // gets a targeted carve-out rather than accepting every
+            // keyword as a field name here.
+            if (cur().is(TK::Ident) || cur().is(TK::KW_default)) {
                 field = cur().text; consume();
             } else if (cur().is(TK::IntLit)) {
                 // Tuple field access: t.0, t.1, ...
@@ -2323,7 +2332,8 @@ ExprPtr Parser::parsePostfixExpr() {
         } else if (cur().is(TK::Arrow)) {
             consume();
             std::string field = cur().text;
-            if (!cur().is(TK::Ident)) diag_.error(cur().loc, "expected field name");
+            if (!cur().is(TK::Ident) && !cur().is(TK::KW_default))
+                diag_.error(cur().loc, "expected field name");
             else consume();
             e = std::make_unique<MemberExpr>(std::move(e), std::move(field), true, loc);
         } else if (cur().is(TK::PlusPlus)) {
@@ -2332,6 +2342,12 @@ ExprPtr Parser::parsePostfixExpr() {
         } else if (cur().is(TK::MinusMinus)) {
             consume();
             e = std::make_unique<UnaryExpr>(UnaryOp::PostDec, std::move(e), loc);
+        } else if (cur().is(TK::Bang)) {
+            // Postfix force-unwrap 'x!' (see UnaryOp::ForceUnwrap) — '!='
+            // is its own distinct token (BangEq) from the lexer, so a bare
+            // TK::Bang here is never part of a following '!=' comparison.
+            consume();
+            e = std::make_unique<UnaryExpr>(UnaryOp::ForceUnwrap, std::move(e), loc);
         } else {
             break;
         }

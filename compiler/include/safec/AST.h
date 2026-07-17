@@ -59,6 +59,12 @@ enum class UnaryOp {
     Neg, Not, BitNot,
     PreInc, PreDec, PostInc, PostDec,
     SizeofExpr,
+    // Postfix 'x!' — force-unwraps a nullable pointer/reference (dereferences
+    // it) or an Optional (extracts the inner value), trusting the caller
+    // that it's actually present. Only legal inside 'unsafe' (see
+    // Sema::checkUnary) — the safe alternatives (match, is_null()/
+    // is_none(), .default(value)) don't need it.
+    ForceUnwrap,
 };
 
 enum class BinaryOp {
@@ -171,6 +177,16 @@ struct CallExpr : Expr {
     // Tagged union init: Shape.radius(5.0) — resolved by Sema
     int                  taggedUnionTag = -1;   // >=0 → this is a tagged union init
     std::string          taggedUnionName;       // union type name
+
+    // Nullable-reference (?&T) / Optional (?T) safe pseudo-methods —
+    // x.is_null(), x.is_none(), x.default(fallback). These have no real
+    // FunctionDecl backing them (unlike a struct method): Sema::checkCall
+    // resolves them directly and CodeGen switches on 'nullOp' instead of
+    // emitting an actual call. 'nullOpBase' is the receiver (x); for
+    // Default, 'args[0]' (already populated normally) is the fallback.
+    enum class NullOp { None, IsNull, IsNone, Default };
+    NullOp  nullOp = NullOp::None;
+    ExprPtr nullOpBase;
 
     CallExpr(ExprPtr fn, std::vector<ExprPtr> a, SourceLocation l)
         : Expr(ExprKind::Call, l), callee(std::move(fn)),

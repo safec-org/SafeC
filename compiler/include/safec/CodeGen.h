@@ -166,6 +166,21 @@ private:
     // common case) when the source type isn't available/known.
     llvm::Value *coerceScalar(llvm::Value *val, llvm::Type *targetTy,
                                const TypePtr &srcType = nullptr);
+    // Wraps 'val' into Optional's '{T, i1}' representation when 'targetTy'
+    // is '?T' and 'val' isn't already shaped that way — Sema::
+    // canImplicitlyConvert permits 'return someTValue;' / 'return null;'
+    // from a '?T'-returning function (mirroring '&T' → '?&T' already being
+    // implicit), a plain T value, or literal 'null', to flow anywhere a
+    // '?T' is expected — but *permission* isn't the same as the actual
+    // struct construction: without this, a plain T store into a '{T, i1}'
+    // slot would leave the has_value bit uninitialized. No-op for every
+    // non-Optional target, and a no-op when 'srcType' is already the same
+    // Optional (e.g. forwarding an existing '?T' value unchanged).
+    llvm::Value *coerceToOptional(llvm::Value *val, const TypePtr &srcType,
+                                   const TypePtr &targetTy);
+    // x.is_null() / x.is_none() / x.default(fallback) — see CallExpr::NullOp
+    // in AST.h and the "safe pseudo-methods" section of Sema::checkCall.
+    llvm::Value *genNullOp(CallExpr &e, FnEnv &env);
     void genUnsafe(UnsafeStmt &s, FnEnv &env);
     void genExprStmt(ExprStmt &s, FnEnv &env);
     void genMatch(MatchStmt &s, FnEnv &env);

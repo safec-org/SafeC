@@ -819,15 +819,44 @@ void Sema::checkStaticAssert(StaticAssertDecl &sa) {
     // Actual compile-time evaluation is handled by consteval engine (future)
 }
 
+// Determines whether 'subjectTy' has the built-in nullable-pointer/
+// reference or Optional match shape resolveMatchArmPatterns understands
+// (null/some(x), none/some(x)), and what type a 'some(x)' pattern's
+// payload binds to. Shared by the match-statement and match-expression
+// subject-classification code below.
+static void classifyNullMatchSubject(const TypePtr &subjectTy, bool &isNullLike,
+                                      bool &isOptional, TypePtr &payloadTy) {
+    isNullLike = false;
+    isOptional = false;
+    payloadTy  = nullptr;
+    if (!subjectTy) return;
+    if (subjectTy->kind == TypeKind::Pointer) {
+        isNullLike = true;
+        payloadTy  = static_cast<const PointerType &>(*subjectTy).base;
+    } else if (subjectTy->kind == TypeKind::Reference &&
+               static_cast<const ReferenceType &>(*subjectTy).nullable) {
+        isNullLike = true;
+        payloadTy  = static_cast<const ReferenceType &>(*subjectTy).base;
+    } else if (subjectTy->kind == TypeKind::Optional) {
+        isOptional = true;
+        payloadTy  = static_cast<const OptionalType &>(*subjectTy).inner;
+    }
+}
+
 // ── Match pattern resolution (shared by match-statement and match-expression) ──
-// Resolves EnumIdent patterns against a tagged union's variant fields
-// (fills resolvedTag/payloadType), reports unknown variant names, and notes
-// whether a wildcard/default arm was seen. 'coveredTags', when non-null,
-// collects every resolved tag so the caller can prove exhaustiveness over a
-// tagged union's variants (match-expression needs this; match-statement
-// doesn't since falling through with no value produced is harmless there).
+// Resolves EnumIdent patterns against a tagged union's variant fields, or
+// (when 'isNullLike'/'isOptional') against the built-in two-variant
+// null/some(x) or none/some(x) shape a nullable pointer/reference or
+// Optional subject has — filling resolvedTag/payloadType either way,
+// reporting unknown variant/pattern names, and noting whether a
+// wildcard/default arm was seen. 'coveredTags', when non-null, collects
+// every resolved tag so the caller can prove exhaustiveness (match-
+// expression needs this; match-statement doesn't since falling through
+// with no value produced is harmless there).
 static void resolveMatchArmPatterns(std::vector<MatchPattern> &patterns,
                                      bool isTaggedUnion, StructType *unionSt,
+                                     bool isNullLike, bool isOptional,
+                                     const TypePtr &nullPayloadTy,
                                      DiagEngine &diag, SourceLocation loc,
                                      bool &hasWildcard,
                                      std::unordered_set<int> *coveredTags) {
@@ -842,6 +871,22 @@ static void resolveMatchArmPatterns(std::vector<MatchPattern> &patterns,
             } else {
                 diag.error(loc, "unknown variant '" + pat.ident +
                     "' in union '" + unionSt->name + "'");
+            }
+        } else if ((isNullLike || isOptional) && pat.kind == PatternKind::EnumIdent) {
+            const char *emptyName = isOptional ? "none" : "null";
+            if (pat.ident == emptyName) {
+                pat.resolvedTag = 0;
+                if (coveredTags) coveredTags->insert(0);
+                if (!pat.bindName.empty())
+                    diag.error(loc, std::string("'") + emptyName +
+                        "' does not carry a value to bind");
+            } else if (pat.ident == "some") {
+                pat.resolvedTag = 1;
+                pat.payloadType = nullPayloadTy;
+                if (coveredTags) coveredTags->insert(1);
+            } else {
+                diag.error(loc, "unknown pattern '" + pat.ident + "' — expected '" +
+                    emptyName + "' or 'some(x)'");
             }
         }
     }
@@ -873,8 +918,12 @@ void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
             unionSt = static_cast<StructType *>(subjectTy.get());
             isTaggedUnion = unionSt->isTaggedUnion;
         }
+        bool isNullLike = false, isOptional = false;
+        TypePtr nullPayloadTy;
+        classifyNullMatchSubject(subjectTy, isNullLike, isOptional, nullPayloadTy);
         for (auto &arm : ms.arms) {
-            resolveMatchArmPatterns(arm.patterns, isTaggedUnion, unionSt, diag_,
+            resolveMatchArmPatterns(arm.patterns, isTaggedUnion, unionSt,
+                                     isNullLike, isOptional, nullPayloadTy, diag_,
                                      ms.loc, hasWildcard, nullptr);
             // If pattern has a bind name, add it to scope for the arm body
             pushScope();
@@ -1366,6 +1415,37 @@ TypePtr Sema::checkUnary(UnaryExpr &e) {
         return operandTy;
     case UnaryOp::SizeofExpr:
         return makeInt(64, false);
+    case UnaryOp::ForceUnwrap: {
+        bool isPointer = operandTy->kind == TypeKind::Pointer;
+        bool isNullableRef = operandTy->kind == TypeKind::Reference &&
+                              static_cast<ReferenceType &>(*operandTy).nullable;
+        bool isOptional = operandTy->kind == TypeKind::Optional;
+        if (!isPointer && !isNullableRef && !isOptional) {
+            diag_.error(e.loc,
+                "'!' can only force-unwrap a pointer, nullable reference (?&T), "
+                "or optional (?T), got '" + operandTy->str() + "'");
+            return makeError();
+        }
+        // The one and only gate: 'match'/'is_null()'/'is_none()'/
+        // '.default(value)' are always available without 'unsafe' (see
+        // Sema::checkCall's pseudo-methods section); a blind force-unwrap
+        // that trusts the value is present is not.
+        if (!inUnsafeScope()) {
+            diag_.error(e.loc,
+                "'!' force-unwrap requires 'unsafe', or use "
+                "match/is_null()/is_none()/.default(value) instead");
+        }
+        if (isPointer) {
+            e.isLValue = true;
+            return static_cast<PointerType &>(*operandTy).base;
+        }
+        if (isNullableRef) {
+            auto &rt = static_cast<ReferenceType &>(*operandTy);
+            e.isLValue = rt.mut;
+            return rt.base;
+        }
+        return static_cast<OptionalType &>(*operandTy).inner;
+    }
     default:
         return operandTy;
     }
@@ -1766,6 +1846,9 @@ TypePtr Sema::checkMatchExpr(MatchExpr &e) {
         unionSt = static_cast<StructType *>(subjectTy.get());
         isTaggedUnion = unionSt->isTaggedUnion;
     }
+    bool isNullLike = false, isOptional = false;
+    TypePtr nullPayloadTy;
+    classifyNullMatchSubject(subjectTy, isNullLike, isOptional, nullPayloadTy);
     if (e.arms.empty()) {
         diag_.error(e.loc, "match expression must have at least one arm");
         return makeError();
@@ -1777,7 +1860,8 @@ TypePtr Sema::checkMatchExpr(MatchExpr &e) {
     bool sawError = false;
 
     for (auto &arm : e.arms) {
-        resolveMatchArmPatterns(arm.patterns, isTaggedUnion, unionSt, diag_,
+        resolveMatchArmPatterns(arm.patterns, isTaggedUnion, unionSt,
+                                 isNullLike, isOptional, nullPayloadTy, diag_,
                                  e.loc, hasWildcard, &coveredTags);
 
         // Payload bindings are only in scope for this arm's value expr.
@@ -1812,12 +1896,14 @@ TypePtr Sema::checkMatchExpr(MatchExpr &e) {
     // with a PHI whose incoming edges are exactly the arms, so an uncovered
     // subject value would leave the merge with nothing to produce.
     bool exhaustive = hasWildcard ||
-        (isTaggedUnion && unionSt && coveredTags.size() == unionSt->fields.size());
+        (isTaggedUnion && unionSt && coveredTags.size() == unionSt->fields.size()) ||
+        ((isNullLike || isOptional) && coveredTags.size() == 2);
     e.provenExhaustive = exhaustive;
     if (!exhaustive) {
         diag_.error(e.loc,
-            "match expression is not exhaustive: add a 'default' arm, or (for a "
-            "tagged union subject) cover every variant");
+            "match expression is not exhaustive: add a 'default' arm, or cover every "
+            "case (every tagged-union variant; or both '" +
+            std::string(isOptional ? "none" : "null") + "' and 'some(x)')");
     }
 
     if (sawError || !resultTy) return makeError();
@@ -2160,6 +2246,83 @@ TypePtr Sema::checkCall(CallExpr &e) {
                     }
                 }
             }
+        }
+    }
+
+    // ── Nullable pointer (T*) / nullable reference (?&T) / Optional (?T)
+    // safe pseudo-methods ────────────────────────────────────────────────
+    // x.is_null() / x.is_none() / x.default(fallback) — the *only*
+    // sanctioned way to inspect or unwrap one of these outside 'unsafe'
+    // (see checkNullabilityDeref/checkDeref's pointer case and the '!'
+    // ForceUnwrap operator, both of which require 'unsafe'). Resolved
+    // directly here since there's no real FunctionDecl / methodRegistry_
+    // entry backing them. 'is_null'/'default' cover raw pointers (always
+    // potentially null in this language, unlike a plain '&T' reference)
+    // and nullable references (?&T); 'is_none' covers Optional (?T) —
+    // named separately since a bare pointer/reference isn't "empty" the
+    // way an Optional is, it's a different value entirely.
+    if ((e.callee->kind == ExprKind::Member || e.callee->kind == ExprKind::Arrow) &&
+        !static_cast<MemberExpr &>(*e.callee).isArrow) {
+        auto &mem = static_cast<MemberExpr &>(*e.callee);
+        if (mem.field == "is_null" || mem.field == "is_none" || mem.field == "default") {
+            TypePtr baseTy = checkExpr(*mem.base);
+            bool isPointer = baseTy && baseTy->kind == TypeKind::Pointer;
+            bool isNullableRef = baseTy && baseTy->kind == TypeKind::Reference &&
+                                  static_cast<ReferenceType &>(*baseTy).nullable;
+            bool isOptional = baseTy && baseTy->kind == TypeKind::Optional;
+            bool isNullLike = isPointer || isNullableRef;
+            if (isNullLike || isOptional) {
+                if (mem.field == "is_null") {
+                    if (isOptional)
+                        diag_.error(e.loc, "'is_null()' is for pointers/nullable references; "
+                                            "use 'is_none()' for optional (?T)");
+                    if (!e.args.empty())
+                        diag_.error(e.loc, "'is_null()' takes no arguments");
+                    for (auto &a : e.args) checkExpr(*a);
+                    e.nullOp     = CallExpr::NullOp::IsNull;
+                    e.nullOpBase = std::move(mem.base);
+                    e.type       = makeBool();
+                    return e.type;
+                }
+                if (mem.field == "is_none") {
+                    if (isNullLike)
+                        diag_.error(e.loc, "'is_none()' is for optional (?T); "
+                                            "use 'is_null()' for pointers/nullable references");
+                    if (!e.args.empty())
+                        diag_.error(e.loc, "'is_none()' takes no arguments");
+                    for (auto &a : e.args) checkExpr(*a);
+                    e.nullOp     = CallExpr::NullOp::IsNone;
+                    e.nullOpBase = std::move(mem.base);
+                    e.type       = makeBool();
+                    return e.type;
+                }
+                // "default"
+                TypePtr innerTy = isPointer ? static_cast<PointerType &>(*baseTy).base
+                    : isNullableRef ? static_cast<ReferenceType &>(*baseTy).base
+                                    : static_cast<OptionalType &>(*baseTy).inner;
+                if (e.args.size() != 1) {
+                    diag_.error(e.loc, "'.default(value)' takes exactly 1 argument");
+                    for (auto &a : e.args) checkExpr(*a);
+                } else {
+                    TypePtr argTy = checkExpr(*e.args[0]);
+                    if (!argTy->isError() && !innerTy->isError() &&
+                        !canImplicitlyConvert(argTy, innerTy) &&
+                        !intLiteralFitsType(*e.args[0], innerTy) &&
+                        !floatLitFitsType(*e.args[0], innerTy)) {
+                        diag_.error(e.loc,
+                            "'.default(value)': fallback type '" + argTy->str() +
+                            "' does not match '" + innerTy->str() + "'");
+                    }
+                }
+                e.nullOp     = CallExpr::NullOp::Default;
+                e.nullOpBase = std::move(mem.base);
+                e.type       = innerTy;
+                return e.type;
+            }
+            // Not a pointer/nullable-ref/Optional receiver ('mem.base' is
+            // still intact — only moved out on the return paths above) —
+            // fall through to the ordinary method/field-call path below,
+            // e.g. some unrelated struct genuinely has an 'is_null' method.
         }
     }
 
@@ -2696,10 +2859,15 @@ void Sema::checkRegionEscape(const TypePtr &ty, int targetScopeDepth,
 void Sema::checkNullabilityDeref(const TypePtr &ty, SourceLocation loc) {
     if (!ty || ty->kind != TypeKind::Reference) return;
     auto &rt = static_cast<const ReferenceType &>(*ty);
-    if (rt.nullable) {
+    // Direct dereference of a nullable reference is only permitted inside
+    // 'unsafe' (matching raw-pointer dereference just above in checkDeref)
+    // — everywhere else, go through 'match', 'is_null()', or
+    // '.default(value)' (see Sema::checkCall's pseudo-methods section),
+    // or the unsafe-gated '!' force-unwrap (UnaryOp::ForceUnwrap).
+    if (rt.nullable && !inUnsafeScope()) {
         diag_.error(loc,
-            "dereference of nullable reference '?" + std::string("&") + rt.base->str() +
-            "' without null check; use if-null-check before dereferencing");
+            "dereference of nullable reference '?&" + rt.base->str() +
+            "' requires 'unsafe', or use match/is_null()/.default(value) instead");
     }
 }
 
@@ -3131,6 +3299,13 @@ bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
     if (from->kind == TypeKind::Pointer && to->kind == TypeKind::Reference) {
         auto &fp = static_cast<const PointerType &>(*from);
         auto &tr = static_cast<const ReferenceType &>(*to);
+        // null → ?&T: 'null' is always typed as 'void*' (see checkExpr's
+        // NullLit case) and is the only realistic source of a genuinely
+        // void*-typed value flowing into a reference-typed slot — this is
+        // what actually makes '?&T x = null;' legal at all; only the
+        // *nullable* reference kind may receive it, matching how &T → ?&T
+        // is already implicit just below but T → &T is not.
+        if (fp.base->isVoid() && tr.nullable) return true;
         if (typeEqual(fp.base, tr.base)) return true;
         auto is8 = [](const TypePtr &t) {
             return t->kind == TypeKind::Char  || t->kind == TypeKind::Int8 ||
@@ -3138,6 +3313,17 @@ bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
         };
         if (is8(fp.base) && is8(tr.base)) return true;
         return false;
+    }
+    // T → ?T (implicit "always present" wrap) and null → ?T (the empty
+    // case) — mirrors &T → ?&T being implicit above: a function declared
+    // to return '?T' can just 'return someTValue;' or 'return null;'
+    // without a separate explicit wrap/empty-construction step.
+    if (to->kind == TypeKind::Optional) {
+        auto &ot = static_cast<const OptionalType &>(*to);
+        if (typeEqual(from, ot.inner)) return true;
+        if (from->kind == TypeKind::Pointer &&
+            static_cast<const PointerType &>(*from).base->isVoid())
+            return true;
     }
     // README §9.2: &static T is always safe — escape allowed.
     // Passing a static reference to a raw C pointer parameter does not require unsafe{}.
