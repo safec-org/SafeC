@@ -1,4 +1,5 @@
 // SafeC Standard Library — signal implementation
+#pragma once
 #include <std/signal.h>
 
 namespace std {

@@ -1,4 +1,5 @@
 // SafeC Standard Library — Thread (cross-platform implementation)
+#pragma once
 #include <std/thread.h>
 #include <std/mem.h>
 

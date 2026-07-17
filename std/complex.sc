@@ -1,6 +1,7 @@
 // SafeC Standard Library — complex number implementation
 // Represented as float[2] or double[2]: [0]=real, [1]=imag.
 // Uses math.h functions for transcendentals.
+#pragma once
 #include <std/complex.h>
 #include <std/math.h>
 

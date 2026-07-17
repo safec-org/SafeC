@@ -1211,6 +1211,12 @@ llvm::Value *CodeGen::coerceScalar(llvm::Value *val, llvm::Type *targetTy,
         unsigned dstBits = targetTy->getIntegerBitWidth();
         if (dstBits < srcBits) return builder_.CreateTrunc(val, targetTy, "coerce");
         if (dstBits == srcBits) return val;
+        // An i1 is always the 0/1 result of a bool expression (comparison,
+        // logical op, etc.) — it must zero-extend so 'true' widens to 1, not
+        // -1. This can't be folded into the srcType lookup below: Bool sits
+        // outside the Int8..UInt64 range that lookup checks, so without this
+        // it silently fell through to the signed-by-default case.
+        if (srcBits == 1) return builder_.CreateZExt(val, targetTy, "coerce");
         bool isSigned = true; // default: plain 'int'/'long' etc. — the common case
         if (srcType && srcType->kind >= TypeKind::Int8 && srcType->kind <= TypeKind::UInt64)
             isSigned = static_cast<PrimType &>(*srcType).isSigned();
@@ -2825,11 +2831,20 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
                 unsigned aw = argTy->getIntegerBitWidth();
                 unsigned pw = paramTy->getIntegerBitWidth();
                 if (pw > aw) {
-                    TypePtr srcTy = (i >= argOffset && (i - argOffset) < e.args.size())
-                        ? e.args[i - argOffset]->type : nullptr;
-                    bool isSigned = true;
-                    if (srcTy && srcTy->kind >= TypeKind::Int8 && srcTy->kind <= TypeKind::UInt64)
-                        isSigned = static_cast<PrimType &>(*srcTy).isSigned();
+                    // Same i1-is-always-unsigned rule as coerceScalar above:
+                    // a bool comparison result must zero-extend (true -> 1,
+                    // not -1) regardless of what the srcTy lookup below finds
+                    // (Bool sits outside the Int8..UInt64 range it checks).
+                    bool isSigned;
+                    if (aw == 1) {
+                        isSigned = false;
+                    } else {
+                        TypePtr srcTy = (i >= argOffset && (i - argOffset) < e.args.size())
+                            ? e.args[i - argOffset]->type : nullptr;
+                        isSigned = true;
+                        if (srcTy && srcTy->kind >= TypeKind::Int8 && srcTy->kind <= TypeKind::UInt64)
+                            isSigned = static_cast<PrimType &>(*srcTy).isSigned();
+                    }
                     args[i] = isSigned ? builder_.CreateSExt(args[i], paramTy, "argsext")
                                         : builder_.CreateZExt(args[i], paramTy, "argzext");
                 } else if (pw < aw)

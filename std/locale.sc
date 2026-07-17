@@ -1,4 +1,5 @@
 // SafeC Standard Library — locale implementation
+#pragma once
 #include <std/locale.h>
 
 namespace std {

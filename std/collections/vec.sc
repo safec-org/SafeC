@@ -1,4 +1,5 @@
 // SafeC Standard Library — Vec implementation
+#pragma once
 #include <std/collections/vec.h>
 #include <std/mem.h>
 

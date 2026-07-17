@@ -1,4 +1,5 @@
 // SafeC Standard Library — errno implementation
+#pragma once
 #include <std/errno.h>
 
 // Access errno via a C helper to handle its macro nature

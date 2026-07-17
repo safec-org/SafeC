@@ -1,4 +1,5 @@
 // SafeC Standard Library — String implementation
+#pragma once
 #include <std/collections/string.h>
 #include <std/mem.h>
 #include <std/str.h>
@@ -166,6 +167,15 @@ inline int String::push(const char* cstr) {
     if (!self.reserve_(self.len + clen)) { return 0; }
     unsafe { safe_memcpy((void*)((char*)self.data + self.len), (const void*)cstr, clen + 1UL); }
     self.len = self.len + clen;
+    return 1;
+}
+
+inline int String::push_n(const char* data, unsigned long n) {
+    if (n == 0UL) { return 1; }
+    if (!self.reserve_(self.len + n)) { return 0; }
+    unsafe { safe_memcpy((void*)((char*)self.data + self.len), (const void*)data, n); }
+    self.len = self.len + n;
+    unsafe { self.data[self.len] = (char)0; }
     return 1;
 }
 

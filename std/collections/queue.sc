@@ -1,4 +1,5 @@
 // SafeC Standard Library — Queue (circular buffer) implementation
+#pragma once
 #include <std/collections/queue.h>
 #include <std/mem.h>
 

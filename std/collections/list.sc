@@ -1,4 +1,5 @@
 // SafeC Standard Library — List (doubly linked list) implementation
+#pragma once
 #include <std/collections/list.h>
 #include <std/mem.h>
 

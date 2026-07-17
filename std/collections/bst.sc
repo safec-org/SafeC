@@ -1,4 +1,5 @@
 // SafeC Standard Library — BST implementation
+#pragma once
 #include <std/collections/bst.h>
 #include <std/mem.h>
 #include <std/str.h>

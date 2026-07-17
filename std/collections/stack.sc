@@ -1,4 +1,5 @@
 // SafeC Standard Library — Stack implementation
+#pragma once
 #include <std/collections/stack.h>
 #include <std/mem.h>
 

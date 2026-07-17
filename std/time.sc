@@ -1,4 +1,5 @@
 // SafeC Standard Library — time implementation
+#pragma once
 #include <std/time.h>
 
 namespace std {

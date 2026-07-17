@@ -1,4 +1,5 @@
 // SafeC Standard Library — HashMap implementation
+#pragma once
 #include <std/collections/map.h>
 #include <std/mem.h>
 #include <std/str.h>

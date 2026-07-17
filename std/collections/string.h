@@ -23,6 +23,7 @@ struct String {
     // ── Append ──────────────────────────────────────────────────────────────
     int            push_char(char c);
     int            push(const char* cstr);
+    int            push_n(const char* data, unsigned long n); // append n raw bytes (source need not be NUL-terminated)
     int            push_str(&stack String other);
     int            push_int(long long v);
     int            push_uint(unsigned long long v);

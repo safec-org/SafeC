@@ -1,4 +1,5 @@
 // SafeC Standard Library — floating-point environment implementation
+#pragma once
 #include <std/fenv.h>
 
 // fenv.h C functions (all take/return fenv_t / fexcept_t which fit in int/long)
