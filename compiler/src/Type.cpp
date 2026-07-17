@@ -1,6 +1,7 @@
 #include "safec/Type.h"
 #include <sstream>
 #include <cassert>
+#include <cstdint>
 
 namespace safec {
 

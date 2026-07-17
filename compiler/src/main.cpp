@@ -5,6 +5,7 @@
 #include "safec/Sema.h"
 #include "safec/ConstEval.h"
 #include "safec/CodeGen.h"
+#include <cstdint>
 
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"

@@ -1,6 +1,7 @@
 #include "safec/ConstEval.h"
 #include <cmath>
 #include <cassert>
+#include <cstdint>
 #include <cstring>
 
 namespace safec {

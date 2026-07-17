@@ -1,6 +1,7 @@
 #include "safec/Sema.h"
 #include "safec/Clone.h"
 #include <cassert>
+#include <cstdint>
 #include <algorithm>
 
 namespace safec {

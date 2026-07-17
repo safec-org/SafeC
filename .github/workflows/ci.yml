@@ -158,19 +158,43 @@ jobs:
         # image already ships an LLVM (v20.1.8 as of one real CI run of this
         # workflow — below this project's minimum), and Chocolatey refuses to
         # *downgrade* a pinned-version install without --force, which a
-        # pinned old version here previously triggered. 'upgrade' installs
-        # fresh if absent or moves to latest if present, either way landing
-        # on something >= the pre-existing 20.1.8, without needing to guess
-        # an exact Chocolatey package version string that may not exist.
-        run: choco upgrade llvm -y --no-progress
+        # pinned old version here previously triggered. --force with plain
+        # 'install' (rather than 'upgrade', which was tried and left no
+        # LLVMConfig.cmake anywhere Chocolatey or this script could find —
+        # the runner's pre-existing v20.1.8 likely isn't Chocolatey-managed,
+        # so 'upgrade' had nothing it recognized as installed to act on)
+        # makes Chocolatey actually perform a fresh, self-managed install
+        # regardless of whatever unmanaged LLVM the image ships with.
+        run: choco install llvm -y --force --no-progress
         shell: bash
+
+      - name: Locate LLVM cmake config
+        shell: bash
+        run: |
+          set -euo pipefail
+          for candidate in \
+              "C:/Program Files/LLVM/lib/cmake/llvm" \
+              "C:/Program Files (x86)/LLVM/lib/cmake/llvm" \
+              "/c/Program Files/LLVM/lib/cmake/llvm" \
+              "/c/Program Files (x86)/LLVM/lib/cmake/llvm"; do
+            if [[ -f "${candidate}/LLVMConfig.cmake" ]]; then
+              echo "Found LLVMConfig.cmake at: $candidate"
+              echo "LLVM_CMAKE_DIR=$candidate" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          echo "::error::LLVMConfig.cmake not found in any expected location after 'choco install llvm --force'. Searched:"
+          printf '  %s\n' \
+              "C:/Program Files/LLVM/lib/cmake/llvm" \
+              "C:/Program Files (x86)/LLVM/lib/cmake/llvm"
+          echo "This means the Chocolatey LLVM package layout has changed, or the install genuinely failed — check the 'Install LLVM' step's output above."
+          exit 1
 
       - name: Build safec compiler
         shell: bash
         run: |
-          LLVM_DIR="C:/Program Files/LLVM/lib/cmake/llvm"
           cmake -S SafeC/compiler -B SafeC/compiler/build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR"
+            -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_CMAKE_DIR"
           cmake --build SafeC/compiler/build
 
       - name: Build safeguard

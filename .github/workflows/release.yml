@@ -195,19 +195,38 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Install LLVM
-        # 'upgrade' rather than 'install --version=X': see the matching
-        # comment in ci.yml — the runner image's pre-installed LLVM has
-        # been observed below this project's minimum, and Chocolatey
-        # refuses to downgrade a pinned old version without --force.
-        run: choco upgrade llvm -y --no-progress
+        # --force with plain 'install': see the matching comment in
+        # ci.yml — 'upgrade' was tried first and left no LLVMConfig.cmake
+        # anywhere findable, because the runner's pre-existing LLVM likely
+        # isn't Chocolatey-managed, so 'upgrade' had nothing recognized to
+        # act on. --force makes Chocolatey perform a fresh, self-managed
+        # install regardless of what unmanaged LLVM the image ships with.
+        run: choco install llvm -y --force --no-progress
         shell: bash
+
+      - name: Locate LLVM cmake config
+        shell: bash
+        run: |
+          set -euo pipefail
+          for candidate in \
+              "C:/Program Files/LLVM/lib/cmake/llvm" \
+              "C:/Program Files (x86)/LLVM/lib/cmake/llvm" \
+              "/c/Program Files/LLVM/lib/cmake/llvm" \
+              "/c/Program Files (x86)/LLVM/lib/cmake/llvm"; do
+            if [[ -f "${candidate}/LLVMConfig.cmake" ]]; then
+              echo "Found LLVMConfig.cmake at: $candidate"
+              echo "LLVM_CMAKE_DIR=$candidate" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          echo "::error::LLVMConfig.cmake not found in any expected location after 'choco install llvm --force'."
+          exit 1
 
       - name: Build safec compiler
         shell: bash
         run: |
-          LLVM_DIR="C:/Program Files/LLVM/lib/cmake/llvm"
           cmake -S SafeC/compiler -B SafeC/compiler/build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR"
+            -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_CMAKE_DIR"
           cmake --build SafeC/compiler/build
 
       - name: Build safeguard

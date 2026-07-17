@@ -3,8 +3,10 @@
 #include <sstream>
 #include <stdexcept>
 #include <cstdio>
+#include <cstdint>
 #include <cstring>
 #include <array>
+#include <algorithm>
 
 // See the matching comment in Analyzer.cpp — popen/pclose vs _popen/_pclose
 // is a naming difference only, not a behavior one.

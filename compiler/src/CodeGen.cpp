@@ -1,4 +1,5 @@
 #include "safec/CodeGen.h"
+#include <cstdint>
 #include "llvm/IR/IntrinsicsARM.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/InstrTypes.h"

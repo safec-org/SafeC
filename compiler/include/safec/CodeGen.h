@@ -1,6 +1,7 @@
 #pragma once
 #include "safec/AST.h"
 #include "safec/Diagnostic.h"
+#include <cstdint>
 
 // LLVM headers (C++ API)
 #include "llvm/IR/IRBuilder.h"

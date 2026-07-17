@@ -1,6 +1,7 @@
 #include "safec/Parser.h"
 #include <cassert>
 #include <cctype>
+#include <cstdint>
 #include <functional>
 #include <sstream>
 

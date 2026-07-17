@@ -4,6 +4,7 @@
 #include "safec/Diagnostic.h"
 #include <vector>
 #include <memory>
+#include <cstdint>
 
 namespace safec {
 

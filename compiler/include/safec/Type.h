@@ -3,6 +3,7 @@
 #include <vector>
 #include <memory>
 #include <cassert>
+#include <cstdint>
 
 namespace safec {
 

@@ -1,6 +1,7 @@
 #include "safec/Lexer.h"
 #include <cctype>
 #include <cerrno>
+#include <cstdint>
 #include <cstdlib>
 #include <unordered_map>
 
