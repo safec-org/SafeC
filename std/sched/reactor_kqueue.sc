@@ -1,14 +1,11 @@
-// SafeC Standard Library — Reactor backend: kqueue (macOS / BSD)
+// SafeC Standard Library — Reactor backend: kqueue (macOS / iOS / BSD)
 //
-// See reactor.h for the portable API and usage shape. This file is the
-// only platform-specific piece — a Linux backend (reactor_epoll.sc) would
-// implement the exact same std::Reactor/reactor_init/reactor_run surface
-// using epoll_create1/epoll_ctl/epoll_wait instead; nothing else in this
-// module (or in task.h/task.sc) would need to change, since SCHED_READ/
-// SCHED_WRITE/SCHED_SIGNAL are already backend-agnostic. Not implemented
-// here — there's no Linux host available to build and test it against in
-// this environment, and shipping an unverified epoll backend alongside a
-// verified kqueue one would blur which is which.
+// See reactor.h for the portable API and usage shape, and for the full
+// list of backend files (reactor_epoll.sc for Linux/Android,
+// reactor_win32.sc for Windows) — all three implement the exact same
+// std::Reactor/reactor_init/reactor_run surface, since SCHED_READ/
+// SCHED_WRITE/SCHED_SIGNAL are already backend-agnostic; nothing in this
+// module's callers needs to know which one is actually compiled in.
 //
 // struct kevent's real layout (from <sys/event.h>) is 32 bytes on 64-bit
 // Darwin: ident(8) filter(2) flags(2) fflags(4) data(8) udata(8), each
@@ -18,6 +15,7 @@
 #pragma once
 #include <std/sched/reactor.h>
 #include <std/sync/task.sc>
+#include <std/collections/vec.sc>
 
 namespace std {
 
@@ -69,6 +67,12 @@ static int reactor_portable_filter_(short kqFilter) {
 inline struct Reactor reactor_init() {
     struct Reactor r;
     r.kq = -1;
+    // Unused on this backend (kqueue has native EVFILT_SIGNAL and
+    // persistent kernel-side registration) — only initialized to satisfy
+    // definite-initialization for these shared struct Reactor fields; see
+    // reactor.h's comments on sigfds/watched.
+    r.sigfds = vec_new(sizeof(struct SigFdEntry));
+    r.watched = vec_new(sizeof(struct WatchedFd));
     return r;
 }
 
@@ -144,23 +148,6 @@ inline void Reactor::close_() {
     unsafe { close(self.kq); }
 }
 
-void reactor_run(struct TaskScheduler* sched, struct Reactor* r) {
-    while (sched->active_count() > 0) {
-        int active = sched->tick();
-        if (active == 0) {
-            break;
-        }
-        if (sched->has_ready() != 0) {
-            // Some task is still immediately runnable this round — drain
-            // any already-pending events without stalling, then loop back
-            // to tick() right away.
-            r->poll(sched, 0LL);
-        } else {
-            // Everything remaining is blocked on I/O: nothing to do until
-            // the OS reports something, so wait for it instead of spinning.
-            r->poll(sched, -1LL);
-        }
-    }
-}
-
 } // namespace std
+
+#include <std/sched/reactor.sc>

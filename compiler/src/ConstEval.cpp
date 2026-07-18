@@ -7,6 +7,186 @@
 namespace safec {
 
 // =============================================================================
+// Compile-time type layout (sizeof/alignof for SizeofType/AlignofType nodes)
+// =============================================================================
+// A standalone implementation of C struct-layout rules over safec::Type,
+// independent of CodeGen/LLVM (ConstEval must be usable before codegen even
+// runs, e.g. to resolve array sizes). Mirrors what CodeGen's lowerType() +
+// LLVM DataLayout::getTypeAllocSize() compute for the real thing — the two
+// must agree, since a static_assert(sizeof(T) == N) has to describe the
+// same T the rest of the program actually gets. Previously this only
+// handled primitive/pointer/reference kinds and silently returned 8 for
+// every aggregate (struct, array, enum, tuple, optional, ...), which meant
+// e.g. static_assert(sizeof(struct Foo) == N) was checking a number that
+// had nothing to do with Foo's real size.
+static uint64_t constEvalTypeAlign(const TypePtr &ty);
+
+static uint64_t constEvalTypeSize(const TypePtr &ty) {
+    if (!ty) return 0;
+    switch (ty->kind) {
+    case TypeKind::Void:                   return 0;
+    case TypeKind::Bool:
+    case TypeKind::Char:
+    case TypeKind::Int8:
+    case TypeKind::UInt8:                  return 1;
+    case TypeKind::Int16:
+    case TypeKind::UInt16:                 return 2;
+    case TypeKind::Int32:
+    case TypeKind::UInt32:
+    case TypeKind::Float32:                return 4;
+    case TypeKind::Int64:
+    case TypeKind::UInt64:
+    case TypeKind::Float64:
+    case TypeKind::Pointer:
+    case TypeKind::Reference:              return 8;
+    case TypeKind::Array: {
+        auto &at = static_cast<const ArrayType &>(*ty);
+        if (at.size < 0) return 0; // unsized / VLA — no compile-time size
+        return constEvalTypeSize(at.element) * (uint64_t)at.size;
+    }
+    case TypeKind::Struct: {
+        auto &st = static_cast<const StructType &>(*ty);
+        if (st.isUnion) {
+            uint64_t maxSize = 0;
+            for (auto &f : st.fields) {
+                uint64_t s = constEvalTypeSize(f.type);
+                if (s > maxSize) maxSize = s;
+            }
+            if (!st.isPacked) {
+                uint64_t align = constEvalTypeAlign(ty);
+                if (align > 1) maxSize = (maxSize + align - 1) / align * align;
+            }
+            return maxSize;
+        }
+        uint64_t offset = 0;
+        uint64_t maxAlign = 1;
+        int lastBitfieldIndex = -1;
+        for (auto &f : st.fields) {
+            if (f.bitWidth >= 0) {
+                // Consecutive same-typed bitfields share one storage slot
+                // ('f.index') — see FieldDecl's own comment. Only the
+                // first bitfield mapped to a given slot contributes size.
+                if (f.index == lastBitfieldIndex) continue;
+                lastBitfieldIndex = f.index;
+            }
+            uint64_t fSize  = constEvalTypeSize(f.type);
+            uint64_t fAlign = st.isPacked ? 1 : constEvalTypeAlign(f.type);
+            if (fAlign > maxAlign) maxAlign = fAlign;
+            if (fAlign > 1) offset = (offset + fAlign - 1) / fAlign * fAlign;
+            offset += fSize;
+        }
+        if (!st.isPacked && maxAlign > 1)
+            offset = (offset + maxAlign - 1) / maxAlign * maxAlign;
+        return offset;
+    }
+    case TypeKind::Enum: {
+        auto &et = static_cast<const EnumType &>(*ty);
+        return (uint64_t)(et.bitWidth / 8);
+    }
+    case TypeKind::Optional: {
+        // Lowers to { T, i1 } (see OptionalType's own comment) — laid out
+        // like an ordinary (non-packed) 2-field struct regardless of
+        // whether 'inner' itself is packed, since the wrapper isn't.
+        auto &ot = static_cast<const OptionalType &>(*ty);
+        uint64_t innerSize  = constEvalTypeSize(ot.inner);
+        uint64_t innerAlign = constEvalTypeAlign(ot.inner);
+        uint64_t offset = innerSize + 1; // bool member: 1 byte, align 1
+        uint64_t maxAlign = innerAlign > 1 ? innerAlign : 1;
+        if (maxAlign > 1) offset = (offset + maxAlign - 1) / maxAlign * maxAlign;
+        return offset;
+    }
+    case TypeKind::Tuple: {
+        auto &tt = static_cast<const TupleType &>(*ty);
+        uint64_t offset = 0;
+        uint64_t maxAlign = 1;
+        for (auto &e : tt.elementTypes) {
+            uint64_t eSize  = constEvalTypeSize(e);
+            uint64_t eAlign = constEvalTypeAlign(e);
+            if (eAlign > maxAlign) maxAlign = eAlign;
+            if (eAlign > 1) offset = (offset + eAlign - 1) / eAlign * eAlign;
+            offset += eSize;
+        }
+        if (maxAlign > 1) offset = (offset + maxAlign - 1) / maxAlign * maxAlign;
+        return offset;
+    }
+    case TypeKind::Slice:                  return 16; // { T*, i64 }
+    case TypeKind::Newtype: {
+        auto &nt = static_cast<const NewtypeType &>(*ty);
+        return constEvalTypeSize(nt.base);
+    }
+    case TypeKind::Vector: {
+        auto &vt = static_cast<const VectorType &>(*ty);
+        return constEvalTypeSize(vt.element) * (uint64_t)vt.width;
+    }
+    default:                               return 8;
+    }
+}
+
+static uint64_t constEvalTypeAlign(const TypePtr &ty) {
+    if (!ty) return 1;
+    switch (ty->kind) {
+    case TypeKind::Void:                   return 1;
+    case TypeKind::Bool:
+    case TypeKind::Char:
+    case TypeKind::Int8:
+    case TypeKind::UInt8:                  return 1;
+    case TypeKind::Int16:
+    case TypeKind::UInt16:                 return 2;
+    case TypeKind::Int32:
+    case TypeKind::UInt32:
+    case TypeKind::Float32:                return 4;
+    case TypeKind::Int64:
+    case TypeKind::UInt64:
+    case TypeKind::Float64:
+    case TypeKind::Pointer:
+    case TypeKind::Reference:              return 8;
+    case TypeKind::Array: {
+        auto &at = static_cast<const ArrayType &>(*ty);
+        return constEvalTypeAlign(at.element);
+    }
+    case TypeKind::Struct: {
+        auto &st = static_cast<const StructType &>(*ty);
+        if (st.isPacked) return 1;
+        uint64_t maxAlign = 1;
+        for (auto &f : st.fields) {
+            uint64_t a = constEvalTypeAlign(f.type);
+            if (a > maxAlign) maxAlign = a;
+        }
+        return maxAlign;
+    }
+    case TypeKind::Enum: {
+        auto &et = static_cast<const EnumType &>(*ty);
+        uint64_t a = (uint64_t)(et.bitWidth / 8);
+        return a ? a : 1;
+    }
+    case TypeKind::Optional: {
+        auto &ot = static_cast<const OptionalType &>(*ty);
+        uint64_t a = constEvalTypeAlign(ot.inner);
+        return a > 1 ? a : 1;
+    }
+    case TypeKind::Tuple: {
+        auto &tt = static_cast<const TupleType &>(*ty);
+        uint64_t maxAlign = 1;
+        for (auto &e : tt.elementTypes) {
+            uint64_t a = constEvalTypeAlign(e);
+            if (a > maxAlign) maxAlign = a;
+        }
+        return maxAlign;
+    }
+    case TypeKind::Slice:                  return 8;
+    case TypeKind::Newtype: {
+        auto &nt = static_cast<const NewtypeType &>(*ty);
+        return constEvalTypeAlign(nt.base);
+    }
+    case TypeKind::Vector: {
+        auto &vt = static_cast<const VectorType &>(*ty);
+        return constEvalTypeAlign(vt.element);
+    }
+    default:                               return 8;
+    }
+}
+
+// =============================================================================
 // ConstValue helpers
 // =============================================================================
 
@@ -636,48 +816,14 @@ std::optional<ConstValue> ConstEvalEngine::evalExprF(const Expr &e, Frame &frame
     case ExprKind::Subscript:
         return evalSubscriptConst(static_cast<const SubscriptExpr &>(e), frame);
     case ExprKind::SizeofType: {
-        // sizeof(T) — return a fixed size (basic impl)
         auto &ste = static_cast<const SizeofTypeExpr &>(e);
         if (!ste.ofType) return ConstValue::mkInt(0);
-        switch (ste.ofType->kind) {
-        case TypeKind::Void:                   return ConstValue::mkInt(0);
-        case TypeKind::Bool:                   return ConstValue::mkInt(1);
-        case TypeKind::Char:
-        case TypeKind::Int8:
-        case TypeKind::UInt8:                  return ConstValue::mkInt(1);
-        case TypeKind::Int16:
-        case TypeKind::UInt16:                 return ConstValue::mkInt(2);
-        case TypeKind::Int32:
-        case TypeKind::UInt32:
-        case TypeKind::Float32:                return ConstValue::mkInt(4);
-        case TypeKind::Int64:
-        case TypeKind::UInt64:
-        case TypeKind::Float64:                return ConstValue::mkInt(8);
-        case TypeKind::Pointer:
-        case TypeKind::Reference:              return ConstValue::mkInt(8);
-        default:                               return ConstValue::mkInt(8);
-        }
+        return ConstValue::mkInt((int64_t)constEvalTypeSize(ste.ofType));
     }
     case ExprKind::AlignofType: {
         auto &ae = static_cast<const AlignofTypeExpr &>(e);
         if (!ae.ofType) return ConstValue::mkInt(0);
-        switch (ae.ofType->kind) {
-        case TypeKind::Bool:
-        case TypeKind::Char:
-        case TypeKind::Int8:
-        case TypeKind::UInt8:                  return ConstValue::mkInt(1);
-        case TypeKind::Int16:
-        case TypeKind::UInt16:                 return ConstValue::mkInt(2);
-        case TypeKind::Int32:
-        case TypeKind::UInt32:
-        case TypeKind::Float32:                return ConstValue::mkInt(4);
-        case TypeKind::Int64:
-        case TypeKind::UInt64:
-        case TypeKind::Float64:
-        case TypeKind::Pointer:
-        case TypeKind::Reference:              return ConstValue::mkInt(8);
-        default:                               return ConstValue::mkInt(8);
-        }
+        return ConstValue::mkInt((int64_t)constEvalTypeAlign(ae.ofType));
     }
     case ExprKind::FieldCount: {
         auto &fc = static_cast<const FieldCountExpr &>(e);
