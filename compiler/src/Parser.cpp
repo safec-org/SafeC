@@ -2578,6 +2578,40 @@ ExprPtr Parser::parsePrimaryExpr() {
         auto callee = std::make_unique<IdentExpr>("__arena_destroy_" + regionName, loc);
         return std::make_unique<CallExpr>(std::move(callee), std::vector<ExprPtr>{}, loc);
     }
+    case TK::KW_arena_mark: {
+        // arena_mark<RegionName>() — returns the region's current byte
+        // offset as an 'unsigned long' checkpoint, for a later
+        // arena_free_to<RegionName>(mark) to rewind to.
+        consume();
+        std::string regionName;
+        if (match(TK::Lt)) {
+            if (cur().is(TK::Ident)) { regionName = cur().text; consume(); }
+            expect(TK::Gt, "expected '>' closing region parameter");
+        }
+        expect(TK::LParen, "expected '(' for arena_mark");
+        expect(TK::RParen, "expected ')' for arena_mark");
+        auto callee = std::make_unique<IdentExpr>("__arena_mark_" + regionName, loc);
+        return std::make_unique<CallExpr>(std::move(callee), std::vector<ExprPtr>{}, loc);
+    }
+    case TK::KW_arena_free_to: {
+        // arena_free_to<RegionName>(mark) — rewinds the region's bump
+        // offset back to a checkpoint from arena_mark<RegionName>(),
+        // freeing everything allocated after it while keeping everything
+        // allocated before it (unlike arena_reset<R>(), which always
+        // rewinds all the way to zero).
+        consume();
+        std::string regionName;
+        if (match(TK::Lt)) {
+            if (cur().is(TK::Ident)) { regionName = cur().text; consume(); }
+            expect(TK::Gt, "expected '>' closing region parameter");
+        }
+        expect(TK::LParen, "expected '(' for arena_free_to");
+        std::vector<ExprPtr> args;
+        args.push_back(parseAssignExpr()); // avoid consuming ',' as the comma operator
+        expect(TK::RParen, "expected ')' for arena_free_to");
+        auto callee = std::make_unique<IdentExpr>("__arena_free_to_" + regionName, loc);
+        return std::make_unique<CallExpr>(std::move(callee), std::move(args), loc);
+    }
     case TK::KW_spawn: {
         // spawn(fn_expr, arg_expr)
         consume();

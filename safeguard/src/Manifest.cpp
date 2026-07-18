@@ -145,6 +145,10 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
         else if (tok.key == "build.output")   m.build.output   = tok.value;
         else if (tok.key == "build.srcs")     m.build.srcs     = splitList(tok.value);
         else if (tok.key == "build.cflags")   m.build.cflags   = splitList(tok.value);
+        else if (tok.key == "build.libs")     m.build.libs     = splitList(tok.value);
+        else if (tok.key == "build.lib_dirs") m.build.libDirs  = splitList(tok.value);
+        else if (tok.key == "build.lto")      m.build.lto      = tok.value;
+        else if (tok.key == "build.crate_type") m.build.crateType = tok.value;
 
         // dependencies.*
         else if (tok.key == "dependencies.name")    curDep.name    = tok.value;
@@ -159,6 +163,16 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
         m.package.version = "0.1.0";
     if (m.build.output.empty())
         m.build.output = m.package.name;
+    if (m.build.crateType.empty())
+        m.build.crateType = "bin";
+    else if (m.build.crateType != "bin" && m.build.crateType != "staticlib" &&
+             m.build.crateType != "cdylib")
+        throw std::runtime_error(srcName + ": build.crate_type must be "
+                                 "\"bin\", \"staticlib\", or \"cdylib\", got \"" +
+                                 m.build.crateType + "\"");
+    if (!m.build.lto.empty() && m.build.lto != "thin" && m.build.lto != "full")
+        throw std::runtime_error(srcName + ": build.lto must be \"thin\" or "
+                                 "\"full\", got \"" + m.build.lto + "\"");
 
     return m;
 }
@@ -206,6 +220,22 @@ std::string ManifestParser::serialize(const Manifest& m) {
             o << (i ? ", " : "") << "\"" << m.build.cflags[i] << "\"";
         o << "]\n";
     }
+    if (!m.build.libs.empty()) {
+        o << "libs     = [";
+        for (size_t i = 0; i < m.build.libs.size(); ++i)
+            o << (i ? ", " : "") << "\"" << m.build.libs[i] << "\"";
+        o << "]\n";
+    }
+    if (!m.build.libDirs.empty()) {
+        o << "lib_dirs = [";
+        for (size_t i = 0; i < m.build.libDirs.size(); ++i)
+            o << (i ? ", " : "") << "\"" << m.build.libDirs[i] << "\"";
+        o << "]\n";
+    }
+    if (!m.build.lto.empty())
+        o << "lto        = \"" << m.build.lto << "\"\n";
+    if (!m.build.crateType.empty() && m.build.crateType != "bin")
+        o << "crate_type = \"" << m.build.crateType << "\"\n";
 
     for (auto& d : m.dependencies) {
         o << "\n[[dependencies]]\n";

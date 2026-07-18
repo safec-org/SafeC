@@ -40,6 +40,7 @@ set(SAFEC_SOURCES
 )
 
 add_executable(safec ${SAFEC_SOURCES})
+target_compile_definitions(safec PRIVATE SAFEC_VERSION="${PROJECT_VERSION}")
 
 # ── Compile options ───────────────────────────────────────────────────────────
 if(MSVC)

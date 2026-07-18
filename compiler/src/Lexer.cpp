@@ -66,6 +66,8 @@ TK Lexer::keywordKind(const std::string &w) {
         {"new",           TK::KW_new},
         {"arena_reset",   TK::KW_arena_reset},
         {"arena_destroy", TK::KW_arena_destroy},
+        {"arena_mark",    TK::KW_arena_mark},
+        {"arena_free_to", TK::KW_arena_free_to},
         {"tuple",         TK::KW_tuple},
         {"spawn",         TK::KW_spawn},
         {"join",          TK::KW_join},

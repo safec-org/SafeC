@@ -349,9 +349,13 @@ bool Builder::packArchive(const std::vector<std::string>& objFiles,
 bool Builder::linkFinal(const std::vector<std::string>& objFiles,
                           const std::vector<std::string>& archives,
                           const std::string& output,
-                          bool useCxxDriver) const {
+                          bool useCxxDriver,
+                          bool shared) const {
     std::vector<std::string> cmd = { findSystemClang(useCxxDriver) };
     if (opts_.release) cmd.push_back("-O2");
+    if (!manifest_.build.lto.empty())
+        cmd.push_back(manifest_.build.lto == "full" ? "-flto" : "-flto=thin");
+    if (shared) cmd.push_back("-shared");
     for (auto& o : objFiles) cmd.push_back(o);
     // Archives: pass with -force_load on macOS so unused symbols are kept,
     // or use the portable -Wl,--whole-archive on Linux.
@@ -365,6 +369,8 @@ bool Builder::linkFinal(const std::vector<std::string>& objFiles,
     // 'm.lib'") instead of being a harmless no-op.
     cmd.push_back("-lm"); // math library for std/math.sc
 #endif
+    for (auto& d : manifest_.build.libDirs) cmd.push_back("-L" + d);
+    for (auto& l : manifest_.build.libs)    cmd.push_back("-l" + l);
     // Extra link flags from manifest
     for (auto& f : manifest_.build.cflags) cmd.push_back(f);
     cmd.push_back("-o");
@@ -570,6 +576,22 @@ bool Builder::fetchAndBuildDeps() {
 // ── public: build ─────────────────────────────────────────────────────────────
 
 std::string Builder::outputPath() const {
+    const std::string& type = manifest_.build.crateType;
+    if (type == "staticlib") {
+        return (fs::path(root_) / "build" /
+                ("lib" + manifest_.build.output + ".a")).string();
+    }
+    if (type == "cdylib") {
+#if defined(__APPLE__)
+        const char* ext = ".dylib";
+#elif defined(_WIN32)
+        const char* ext = ".dll";
+#else
+        const char* ext = ".so";
+#endif
+        return (fs::path(root_) / "build" /
+                ("lib" + manifest_.build.output + ext)).string();
+    }
     return (fs::path(root_) / "build" / manifest_.build.output).string();
 }
 
@@ -698,12 +720,29 @@ bool Builder::build() {
         if (fs::exists(libOut)) archives.push_back(libOut.string());
     }
 
-    // 7. Link final binary. clang++ as the driver whenever any C++ source
+    // 7. Produce the final artifact. build.crate_type selects what "final"
+    // means: a linked executable (the default, "bin"), a dynamic library
+    // ("cdylib", linked with -shared), or a static archive ("staticlib",
+    // packed with 'ar' — no linker/-l/-L/lto involved, since a .a is just
+    // object files bundled for a *later* link to consume, not itself
+    // linked). clang++ is used as the link driver whenever any C++ source
     // was compiled in, so the C++ runtime (libc++/libstdc++, exceptions,
     // RTTI) links in — plain clang can link the resulting object files
     // (SafeC's LLVM-emitted .o and C/C++'s clang-emitted .o are all just
     // ordinary object code) but won't pull in libc++ on its own.
-    if (!linkFinal(objFiles, archives, outputPath(), hasCpp)) return false;
+    const std::string& crateType = manifest_.build.crateType;
+    if (crateType == "staticlib") {
+        std::vector<std::string> allObjs = objFiles;
+        // Static libs bundle only this project's own objects — archives
+        // (std/deps' .a files) are meant to be linked in later by whatever
+        // consumes this .a, not re-flattened into it here.
+        if (!packArchive(allObjs, outputPath())) return false;
+    } else if (crateType == "cdylib") {
+        if (!linkFinal(objFiles, archives, outputPath(), hasCpp, /*shared=*/true))
+            return false;
+    } else {
+        if (!linkFinal(objFiles, archives, outputPath(), hasCpp)) return false;
+    }
 
     // 8. Write / refresh Package.lock after a successful build.
     writeLock(srcs);
@@ -866,6 +905,12 @@ bool Builder::test() {
 // ── public: run ───────────────────────────────────────────────────────────────
 
 int Builder::run(const std::vector<std::string>& args) {
+    if (manifest_.build.crateType != "bin") {
+        std::cerr << "safeguard: 'run' requires build.crate_type = \"bin\" "
+                     "(this project builds a " << manifest_.build.crateType
+                  << " — there is no executable entry point to run)\n";
+        return -1;
+    }
     if (!build()) return -1;
     std::string out = outputPath();
     std::vector<std::string> cmd = { out };

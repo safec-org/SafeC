@@ -192,11 +192,15 @@ private:
     // Link all .o files + extra libs. Uses clang++ as the link driver when
     // useCxxDriver is set (any C++ sources were compiled into the build) so
     // the C++ runtime (libc++/libstdc++, exceptions, RTTI) links in; plain
-    // clang otherwise. Returns true on success.
+    // clang otherwise. Also applies manifest_.build.libs/libDirs/lto
+    // (-l/-L/-flto). 'shared' produces a dynamic library (-shared) instead
+    // of an executable, for build.crate_type = "cdylib". Returns true on
+    // success.
     bool linkFinal(const std::vector<std::string>& objFiles,
                     const std::vector<std::string>& archives,
                     const std::string& output,
-                    bool useCxxDriver = false) const;
+                    bool useCxxDriver = false,
+                    bool shared = false) const;
 
     // Fork + exec a command, wait for it, return exit code.
     // 'suppressOutput': when true and 'verbose' is false, discard the

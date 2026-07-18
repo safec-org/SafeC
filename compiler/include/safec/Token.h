@@ -39,6 +39,8 @@ enum class TK {
     KW_new,           // new<R> T  (arena allocation)
     KW_arena_reset,   // arena_reset<R>()
     KW_arena_destroy, // arena_destroy<R>() — frees the region's backing buffer
+    KW_arena_mark,    // arena_mark<R>() — snapshot of R's current byte offset
+    KW_arena_free_to, // arena_free_to<R>(mark) — rewinds R to a arena_mark<R>() checkpoint
     KW_tuple,         // tuple(T1, T2, ...)
     KW_spawn,         // spawn<R> closure
     KW_join,          // join(handle)

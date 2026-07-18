@@ -22,6 +22,13 @@ struct Symbol {
     FunctionDecl *fnDecl   = nullptr;
     int          scopeDepth = 0;
     bool         initialized = false;
+    // Arena-reset invalidation tracking (see Sema::regionGeneration_): set
+    // when this variable is bound to a '&arena<R> T' value. 'arenaBindGen'
+    // is a snapshot of R's generation counter at bind time; a later read of
+    // this variable is stale if R's generation has since advanced (i.e. an
+    // arena_reset<R>()/arena_destroy<R>() happened in between).
+    std::string  arenaRegionName;
+    int          arenaBindGen = -1;
 };
 
 // ── Scope ─────────────────────────────────────────────────────────────────────
@@ -224,6 +231,23 @@ private:
     std::vector<Scope>                      scopes_;
     std::unordered_map<std::string, TypePtr> typeRegistry_;  // struct/enum types by name
     std::unordered_map<std::string, RegionDecl*> regionRegistry_;
+    // Arena-reset invalidation: bumped every time a call to
+    // '__arena_reset_<name>'/'__arena_destroy_<name>' is seen during
+    // traversal (see checkCall) — see Symbol::arenaBindGen for how this is
+    // consulted. Flow-insensitive (a running counter over AST traversal
+    // order, not real control-flow simulation): a reset inside an
+    // if-branch is treated as having happened for everything textually
+    // after the if-statement, whether or not that branch actually runs at
+    // runtime — sound (never misses a real bug) but can over-flag safe
+    // code. See reference/memory.md's "Arena References Die on Reset"
+    // section for the full caveat, including the known loop-iteration gap.
+    std::unordered_map<std::string, int> regionGeneration_;
+    // Suppresses the arena-staleness check in checkIdent for exactly one
+    // identifier occurrence: the LHS of 'p = <new-arena-value>;' evaluates
+    // 'p' as an assignment target, not a read of its old (possibly stale)
+    // value — same shape of exemption as definite-init's pre-marking of
+    // 'sym->initialized = true' before checking that same LHS occurrence.
+    bool suppressArenaStaleCheck_ = false;
     // Method registry: "StructName::methodName" → FunctionDecl* (mangled)
     std::unordered_map<std::string, FunctionDecl*> methodRegistry_;
     // Namespace registries: "ns::name" (as written at the call site) →

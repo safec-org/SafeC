@@ -22,8 +22,12 @@ struct PackageInfo {
 struct BuildConfig {
     std::string edition;           // e.g. "2025"
     std::vector<std::string> srcs; // explicit source files (empty = auto-discover)
-    std::string output;            // output binary name (defaults to package name)
+    std::string output;            // output binary/library name (defaults to package name)
     std::vector<std::string> cflags; // extra clang flags for final link
+    std::vector<std::string> libs;    // external libraries: -l<name> at final link
+    std::vector<std::string> libDirs; // library search dirs: -L<dir> at final link
+    std::string lto;               // "" (off, default), "thin", or "full"
+    std::string crateType;         // "bin" (default), "staticlib", or "cdylib"
 };
 
 struct Manifest {

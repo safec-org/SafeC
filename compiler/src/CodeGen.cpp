@@ -2597,6 +2597,38 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
                 return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
             }
         }
+        // Handle __arena_mark_<R>() builtin: returns the region's current
+        // byte offset ('used') as a checkpoint for __arena_free_to_<R>().
+        if (ident.name.substr(0, 13) == "__arena_mark_") {
+            std::string regionName = ident.name.substr(13);
+            auto it = arenaStateMap_.find(regionName);
+            if (it != arenaStateMap_.end()) {
+                auto &info = it->second;
+                auto *usedPtr = builder_.CreateStructGEP(info.ty, info.var, 1, "arena.used.ptr");
+                return builder_.CreateLoad(llvm::Type::getInt64Ty(ctx_), usedPtr, "arena.mark");
+            }
+        }
+        // Handle __arena_free_to_<R>(mark) builtin: rewinds 'used' to
+        // min(used, mark) — a partial free that keeps everything allocated
+        // before the checkpoint. The min() clamp means passing a mark
+        // larger than the current 'used' (e.g. a stale mark from before an
+        // intervening arena_reset<R>()) is a harmless no-op rather than
+        // corrupting 'used' with a bogus larger value.
+        if (ident.name.substr(0, 16) == "__arena_free_to_") {
+            std::string regionName = ident.name.substr(16);
+            auto it = arenaStateMap_.find(regionName);
+            if (it != arenaStateMap_.end() && !e.args.empty()) {
+                auto &info = it->second;
+                auto *Int64Ty = llvm::Type::getInt64Ty(ctx_);
+                auto *usedPtr = builder_.CreateStructGEP(info.ty, info.var, 1, "arena.used.ptr");
+                auto *used    = builder_.CreateLoad(Int64Ty, usedPtr, "arena.used");
+                auto *mark    = genExpr(*e.args[0], env);
+                auto *le      = builder_.CreateICmpULE(used, mark, "arena.freeto.le");
+                auto *newUsed = builder_.CreateSelect(le, used, mark, "arena.freeto.new");
+                builder_.CreateStore(newUsed, usedPtr);
+                return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
+            }
+        }
         // ── volatile_load / volatile_store built-ins ─────────────────────────
         if (ident.name == "volatile_load" && !e.args.empty()) {
             auto *ptr = genExpr(*e.args[0], env);

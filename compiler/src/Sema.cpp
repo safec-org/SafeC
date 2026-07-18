@@ -637,6 +637,46 @@ void Sema::collectRegion(RegionDecl &rd) {
         sym.fnDecl = arenaDestroyFns.back().get();
         define(sym);
     }
+    // __arena_mark_<name>() -> unsigned long: snapshot of the region's
+    // current byte offset, for __arena_free_to_<name>(mark) (below) to
+    // rewind to — see Parser.cpp's KW_arena_mark/KW_arena_free_to cases.
+    {
+        auto fn = std::make_unique<FunctionDecl>("__arena_mark_" + rd.name, rd.loc);
+        fn->returnType = makeInt(64, false);
+        fn->isExtern = false;
+        Symbol sym;
+        sym.kind = SymKind::Function;
+        sym.name = fn->name;
+        sym.type = makeReference(fn->funcType(), Region::Static);
+        sym.fnDecl = fn.get();
+        static std::vector<std::unique_ptr<FunctionDecl>> arenaMarkFns;
+        arenaMarkFns.push_back(std::move(fn));
+        sym.fnDecl = arenaMarkFns.back().get();
+        define(sym);
+    }
+    // __arena_free_to_<name>(mark: unsigned long) -> void: rewinds the
+    // region's bump offset back to a checkpoint from __arena_mark_<name>(),
+    // freeing everything allocated after it (but not before it) — a
+    // partial alternative to __arena_reset_<name>()'s always-rewind-to-zero.
+    {
+        auto fn = std::make_unique<FunctionDecl>("__arena_free_to_" + rd.name, rd.loc);
+        fn->returnType = makeVoid();
+        fn->isExtern = false;
+        ParamDecl markParam;
+        markParam.name = "mark";
+        markParam.type = makeInt(64, false);
+        markParam.loc  = rd.loc;
+        fn->params.push_back(markParam);
+        Symbol sym;
+        sym.kind = SymKind::Function;
+        sym.name = fn->name;
+        sym.type = makeReference(fn->funcType(), Region::Static);
+        sym.fnDecl = fn.get();
+        static std::vector<std::unique_ptr<FunctionDecl>> arenaFreeToFns;
+        arenaFreeToFns.push_back(std::move(fn));
+        sym.fnDecl = arenaFreeToFns.back().get();
+        define(sym);
+    }
 }
 
 void Sema::collectGlobalVar(GlobalVarDecl &gv) {
@@ -1190,6 +1230,13 @@ void Sema::checkVarDecl(VarDeclStmt &s, FunctionDecl &fn) {
     sym.type        = s.resolvedType;
     sym.varDecl     = vd;
     sym.initialized = vd->initialized;
+    if (sym.type && sym.type->kind == TypeKind::Reference) {
+        auto &rt = static_cast<ReferenceType &>(*sym.type);
+        if (rt.region == Region::Arena) {
+            sym.arenaRegionName = rt.arenaName;
+            sym.arenaBindGen    = regionGeneration_[rt.arenaName]; // 0 if unseen yet
+        }
+    }
     define(std::move(sym));
 }
 
@@ -1406,6 +1453,23 @@ TypePtr Sema::checkIdent(IdentExpr &e) {
     // Definite initialization check
     if (sym->kind == SymKind::Variable && !sym->initialized) {
         diag_.error(e.loc, "use of possibly uninitialized variable '" + e.name + "'");
+    }
+    // Arena-reset invalidation check (see Sema::regionGeneration_'s doc
+    // comment for the flow-insensitive caveat). Skipped inside 'unsafe' —
+    // same escape hatch as every other region/aliasing check — and for the
+    // one exempted occurrence (assignment target being rebound; see
+    // suppressArenaStaleCheck_'s doc comment).
+    if (sym->kind == SymKind::Variable && !sym->arenaRegionName.empty() &&
+        !suppressArenaStaleCheck_ && !inUnsafeScope()) {
+        int curGen = regionGeneration_[sym->arenaRegionName];
+        if (curGen != sym->arenaBindGen) {
+            diag_.error(e.loc,
+                "use of '" + e.name + "' (&arena<" + sym->arenaRegionName +
+                "> reference) after arena_reset<" + sym->arenaRegionName +
+                ">(), arena_destroy<" + sym->arenaRegionName +
+                ">(), or arena_free_to<" + sym->arenaRegionName +
+                ">() invalidated it");
+        }
     }
     if (sym->varDecl)   { e.resolved   = sym->varDecl;  e.isLValue = true; }
     if (sym->fnDecl)    { e.resolvedFn = sym->fnDecl; }
@@ -2024,6 +2088,31 @@ TypePtr Sema::checkCall(CallExpr &e) {
             for (auto &a : e.args) checkExpr(*a);
             e.type = makeVoid();
             return makeVoid();
+        }
+        // ── arena_reset<R>()/arena_destroy<R>() invalidate outstanding
+        // '&arena<R> T' references — bump R's generation counter so any
+        // later read of a reference bound before this call is flagged as
+        // stale (see regionGeneration_'s doc comment for the flow-
+        // insensitive caveat, and checkIdent for where this is consulted).
+        // Doesn't return early: these still resolve to real synthesized
+        // functions (see collectRegion) that need normal call type-checking
+        // below, same as any other call.
+        // __arena_free_to_<R>(mark) is a partial free — conservatively
+        // treated the same as a full reset/destroy for staleness purposes,
+        // since generation tracking only knows "was *any* free called
+        // since this reference was bound," not which byte range a specific
+        // reference points into.
+        {
+            static const std::string kResetPrefix   = "__arena_reset_";
+            static const std::string kDestroyPrefix = "__arena_destroy_";
+            static const std::string kFreeToPrefix  = "__arena_free_to_";
+            if (ident.name.rfind(kResetPrefix, 0) == 0) {
+                regionGeneration_[ident.name.substr(kResetPrefix.size())]++;
+            } else if (ident.name.rfind(kDestroyPrefix, 0) == 0) {
+                regionGeneration_[ident.name.substr(kDestroyPrefix.size())]++;
+            } else if (ident.name.rfind(kFreeToPrefix, 0) == 0) {
+                regionGeneration_[ident.name.substr(kFreeToPrefix.size())]++;
+            }
         }
         // ── volatile_load / volatile_store built-ins ─────────────────────────
         if (ident.name == "volatile_load") {
@@ -2773,14 +2862,43 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
     // is valid and should initialize it. Pre-mark the symbol as initialized so
     // checkIdent doesn't fire a false "uninitialized" error on the LHS.
     // Compound assignments (+=, etc.) read before writing — no pre-marking.
+    // Also suppress the arena-staleness check for this same LHS occurrence —
+    // rebinding a stale reference to a fresh value is exactly how you
+    // recover from staleness, not a read of the old (possibly-invalid)
+    // value; the rebind below (after rhsTy is known) sets the real
+    // arenaBindGen for whatever the RHS actually is.
+    bool suppressedHere = false;
     if (e.op == AssignOp::Assign && e.lhs->kind == ExprKind::Ident) {
         auto &ident = static_cast<IdentExpr &>(*e.lhs);
         if (auto *sym = lookup(ident.name))
-            if (sym->kind == SymKind::Variable)
+            if (sym->kind == SymKind::Variable) {
                 sym->initialized = true;
+                if (!suppressArenaStaleCheck_) {
+                    suppressArenaStaleCheck_ = true;
+                    suppressedHere = true;
+                }
+            }
     }
     TypePtr lhsTy = checkExpr(*e.lhs);
+    if (suppressedHere) suppressArenaStaleCheck_ = false;
     TypePtr rhsTy = checkExpr(*e.rhs);
+
+    // Rebind arena tracking: 'p = <arena-ref-value>;' establishes a fresh
+    // binding, so p's staleness is judged against the region's generation
+    // *now*, not whatever it was bound to before.
+    if (e.op == AssignOp::Assign && e.lhs->kind == ExprKind::Ident &&
+        rhsTy && rhsTy->kind == TypeKind::Reference) {
+        auto &rrt = static_cast<ReferenceType &>(*rhsTy);
+        if (rrt.region == Region::Arena) {
+            auto &ident = static_cast<IdentExpr &>(*e.lhs);
+            if (auto *sym = lookup(ident.name)) {
+                if (sym->kind == SymKind::Variable) {
+                    sym->arenaRegionName = rrt.arenaName;
+                    sym->arenaBindGen    = regionGeneration_[rrt.arenaName];
+                }
+            }
+        }
+    }
 
     if (!e.lhs->isLValue) {
         diag_.error(e.loc, "left side of assignment must be lvalue");
