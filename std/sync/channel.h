@@ -21,7 +21,7 @@
 //
 //   void* ch = chan_create(16);              // still the raw built-in
 //   std::chan_send_t(ch, 42);                // T=int inferred from the argument
-//   int v;
+//   int v = 0;
 //   int ok;
 //   unsafe { ok = std::chan_recv_t(ch, (int*)&v); }
 //   if (ok) { ... }

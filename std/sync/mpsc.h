@@ -19,6 +19,7 @@
 // it's a naming/intent signal for callers, the same way LFQueue's SPSC
 // contract is documented rather than mechanically checked.
 #pragma once
+#include <std/sync/spinlock.h>
 
 namespace std {
 
