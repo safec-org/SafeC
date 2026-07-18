@@ -259,19 +259,60 @@ inline int String::replace(const char* from, const char* to) {
     return 1;
 }
 
+// Single left-to-right pass into a freshly-sized buffer — O(n). The
+// previous implementation called index_of() (a full O(n) scan from the
+// *start* of the string, not from the current position) once per match,
+// then shifted the whole remaining tail via remove_range()+insert() for
+// each one — O(matches * n) overall, quadratic for a string with many
+// matches.
 inline int String::replace_all(const char* from, const char* to) {
-    int cnt = 0;
     unsigned long from_len = str_len(from);
     if (from_len == 0UL) { return 0; }
     unsigned long to_len = str_len(to);
+
+    // Count non-overlapping matches first, so the replacement buffer can
+    // be allocated exactly once at its final size.
+    int cnt = 0;
     unsigned long i = 0UL;
-    while (i + from_len <= self.len) {
-        long long pos = self.index_of(from);
-        if (pos < 0LL || (unsigned long)pos < i) { break; }
-        self.remove_range((unsigned long)pos, (unsigned long)pos + from_len);
-        self.insert((unsigned long)pos, to);
-        i = (unsigned long)pos + to_len;
-        cnt = cnt + 1;
+    unsafe {
+        while (i + from_len <= self.len) {
+            if (safe_memcmp((const void*)((char*)self.data + i), (const void*)from, from_len) == 0) {
+                cnt = cnt + 1;
+                i = i + from_len;
+            } else {
+                i = i + 1UL;
+            }
+        }
+    }
+    if (cnt == 0) { return 0; }
+
+    unsigned long newLen = self.len - (unsigned long)cnt * from_len + (unsigned long)cnt * to_len;
+    unsafe {
+        char* newBuf = (char*)alloc(newLen + 1UL);
+        if (newBuf == (char*)0) { return 0; }
+
+        unsigned long src = 0UL;
+        unsigned long dst = 0UL;
+        while (src < self.len) {
+            if (src + from_len <= self.len &&
+                safe_memcmp((const void*)((char*)self.data + src), (const void*)from, from_len) == 0) {
+                if (to_len > 0UL) {
+                    safe_memcpy((void*)(newBuf + dst), (const void*)to, to_len);
+                }
+                dst = dst + to_len;
+                src = src + from_len;
+            } else {
+                newBuf[dst] = self.data[src];
+                dst = dst + 1UL;
+                src = src + 1UL;
+            }
+        }
+        newBuf[dst] = (char)0;
+
+        if (self.data != (&heap char)0) { dealloc((void*)self.data); }
+        self.data = (&heap char)newBuf;
+        self.len  = newLen;
+        self.cap  = newLen + 1UL;
     }
     return cnt;
 }

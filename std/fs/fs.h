@@ -5,4 +5,5 @@
 #include <std/fs/partition.h>
 #include <std/fs/vfs.h>
 #include <std/fs/fat.h>
+#include <std/fs/ext.h>
 #include <std/fs/tmpfs.h>

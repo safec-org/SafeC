@@ -17,7 +17,7 @@ inline struct Queue queue_with_cap(unsigned long elem_size, unsigned long cap) {
     struct Queue q;
     q.elem_size = elem_size;
     q.head = 0UL; q.tail = 0UL; q.len = 0UL; q.cap = cap;
-    unsafe { q.data = alloc(elem_size * cap); }
+    unsafe { q.data = alloc(checked_mul_size(elem_size, cap)); }
     if (q.data == (void*)0) q.cap = 0UL;
     return q;
 }
@@ -56,7 +56,7 @@ inline void* queue_back(struct Queue* q) {
 int queue_grow_(struct Queue* q) {
     unsafe {
         unsigned long new_cap = q->cap == 0UL ? 8UL : q->cap * 2UL;
-        void* nd = alloc(new_cap * q->elem_size);
+        void* nd = alloc(checked_mul_size(new_cap, q->elem_size));
         if (nd == (void*)0) return 0;
         // Copy elements in logical order
         if (q->len > 0UL) {

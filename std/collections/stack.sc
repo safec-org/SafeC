@@ -19,7 +19,7 @@ inline struct Stack stack_with_cap(unsigned long elem_size, unsigned long cap) {
     s.elem_size = elem_size;
     s.top = 0UL;
     s.cap = cap;
-    unsafe { s.data = alloc(elem_size * cap); }
+    unsafe { s.data = alloc(checked_mul_size(elem_size, cap)); }
     if (s.data == (void*)0) s.cap = 0UL;
     return s;
 }
@@ -48,7 +48,7 @@ inline int stack_push(struct Stack* s, const void* elem) {
     unsafe {
         if (s->top == s->cap) {
             unsigned long new_cap = s->cap == 0UL ? 8UL : s->cap * 2UL;
-            void* nd = realloc_buf(s->data, new_cap * s->elem_size);
+            void* nd = realloc_buf(s->data, checked_mul_size(new_cap, s->elem_size));
             if (nd == (void*)0) return 0;
             s->data = nd;
             s->cap = new_cap;

@@ -35,7 +35,7 @@ inline unsigned int map_hash_str_(const char* s) {
 inline struct HashMap map_alloc_table_(unsigned long key_size, unsigned long val_size, unsigned long cap) {
     struct HashMap m;
     m.key_size = key_size; m.val_size = val_size;
-    m.len = 0UL; m.cap = cap;
+    m.len = 0UL; m.tombstones = 0UL; m.cap = cap;
     unsafe {
         m.buckets = (struct MapEntry*)alloc_zeroed(cap * sizeof(struct MapEntry));
     }
@@ -59,7 +59,13 @@ inline void HashMap::free_entries_() {
         if (self.buckets == (struct MapEntry*)0) { return; }
         unsigned long i = 0UL;
         while (i < self.cap) {
-            if (self.buckets[i].state == 1) {
+            // Tombstoned (state==2) slots keep their key/val allocations
+            // live too — insert() reuses them without reallocating when it
+            // lands on a tombstone (see the 's == 2' branch there) — so
+            // this must free both state==1 (occupied) and state==2
+            // (tombstoned) slots, not just occupied ones. Only state==0
+            // (never-used) slots genuinely have nothing allocated.
+            if (self.buckets[i].state == 1 || self.buckets[i].state == 2) {
                 if (self.buckets[i].key != (void*)0) { dealloc(self.buckets[i].key); }
                 if (self.buckets[i].val != (void*)0) { dealloc(self.buckets[i].val); }
             }
@@ -79,6 +85,7 @@ inline void HashMap::clear() {
     self.free_entries_();
     unsafe { safe_memset((void*)self.buckets, 0, self.cap * sizeof(struct MapEntry)); }
     self.len = 0UL;
+    self.tombstones = 0UL;
 }
 
 inline unsigned long HashMap::length() const { return self.len; }
@@ -101,6 +108,17 @@ int HashMap::resize_(unsigned long new_cap) {
                 }
                 nm.buckets[idx] = self.buckets[i];
                 nm.len = nm.len + 1UL;
+            } else if (self.buckets[i].state == 2) {
+                // Tombstoned slots aren't carried over to the new table
+                // (only live entries are — that's the whole point of a
+                // resize purging tombstones), but they may still be
+                // holding a live key/val allocation kept around for reuse
+                // (see insert()'s 's == 2' branch) — free it here or it's
+                // orphaned: not copied to the new table, and the old
+                // bucket array holding the only other reference to it is
+                // about to be freed too.
+                if (self.buckets[i].key != (void*)0) { dealloc(self.buckets[i].key); }
+                if (self.buckets[i].val != (void*)0) { dealloc(self.buckets[i].val); }
             }
             i = i + 1UL;
         }
@@ -108,12 +126,13 @@ int HashMap::resize_(unsigned long new_cap) {
     }
     self.buckets = nm.buckets;
     self.cap = new_cap;
+    self.tombstones = 0UL; // rebuilt table only carries over live (state==1) entries
     return 1;
 }
 
 // ── Core operations ───────────────────────────────────────────────────────────
 int HashMap::insert(const void* key, const void* val) {
-    if (self.len * 4UL >= self.cap * 3UL) {
+    if ((self.len + self.tombstones) * 4UL >= self.cap * 3UL) {
         if (!self.resize_(self.cap * 2UL)) { return 0; }
     }
     unsafe {
@@ -123,6 +142,7 @@ int HashMap::insert(const void* key, const void* val) {
         while (i < self.cap) {
             int s = self.buckets[idx].state;
             if (s == 0 || s == 2) {
+                if (s == 2) { self.tombstones = self.tombstones - 1UL; }
                 if (self.buckets[idx].key == (void*)0)
                     self.buckets[idx].key = alloc(self.key_size);
                 if (self.buckets[idx].val == (void*)0)
@@ -187,6 +207,7 @@ int HashMap::remove(const void* key) {
                 if (eq) {
                     self.buckets[idx].state = 2; // tombstone
                     self.len = self.len - 1UL;
+                    self.tombstones = self.tombstones + 1UL;
                     return 1;
                 }
             }
@@ -216,7 +237,7 @@ inline struct HashMap str_map_new(unsigned long val_size) {
 
 int str_map_insert(struct HashMap* m, const char* key, const void* val) {
     unsafe {
-        if (m->len * 4UL >= m->cap * 3UL) {
+        if ((m->len + m->tombstones) * 4UL >= m->cap * 3UL) {
             if (!m->resize_(m->cap * 2UL)) { return 0; }
         }
         unsigned int h = map_hash_str_(key);
@@ -225,6 +246,7 @@ int str_map_insert(struct HashMap* m, const char* key, const void* val) {
         while (i < m->cap) {
             int s = m->buckets[idx].state;
             if (s == 0 || s == 2) {
+                if (s == 2) { m->tombstones = m->tombstones - 1UL; }
                 unsigned long klen = str_len(key) + 1UL;
                 char* kcopy = (char*)alloc(klen);
                 if (kcopy == (char*)0) { return 0; }
@@ -293,6 +315,7 @@ int str_map_remove(struct HashMap* m, const char* key) {
                     m->buckets[idx].key   = (void*)0;
                     m->buckets[idx].state = 2;
                     m->len = m->len - 1UL;
+                    m->tombstones = m->tombstones + 1UL;
                     return 1;
                 }
             }

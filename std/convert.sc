@@ -1,6 +1,7 @@
 // SafeC Standard Library — Type conversions implementation
 #pragma once
 #include <std/convert.h>
+#include <std/mem.h>
 
 // ── Explicit extern declarations for libc functions ───────────────────────────
 // '#include <stdlib.h>' etc. aren't usable here: this compiler's preprocessor
@@ -12,7 +13,6 @@ namespace std {
 extern long long      strtoll(const char* s, char** endptr, int base);
 extern unsigned long long strtoull(const char* s, char** endptr, int base);
 extern double          strtod(const char* s, char** endptr);
-extern void*           malloc(unsigned long size);
 extern int             snprintf(char* buf, unsigned long n, const char* fmt, ...);
 
 // errno: macOS's libc exposes it via a thread-local accessor, not a plain
@@ -71,7 +71,7 @@ inline double str_to_float(const char* s, int* ok) {
 inline char* int_to_str(long long v) {
     unsafe {
         // -9223372036854775808 is 20 digits + sign + NUL = 22 bytes
-        char* buf = (char*)malloc((unsigned long)22);
+        char* buf = (char*)alloc((unsigned long)22);
         if (buf != (char*)0) snprintf(buf, (unsigned long)22, "%lld", v);
         return buf;
     }
@@ -79,7 +79,7 @@ inline char* int_to_str(long long v) {
 
 inline char* uint_to_str(unsigned long long v) {
     unsafe {
-        char* buf = (char*)malloc((unsigned long)21);
+        char* buf = (char*)alloc((unsigned long)21);
         if (buf != (char*)0) snprintf(buf, (unsigned long)21, "%llu", v);
         return buf;
     }
@@ -87,7 +87,7 @@ inline char* uint_to_str(unsigned long long v) {
 
 inline char* float_to_str(double v, int decimals) {
     unsafe {
-        char* buf = (char*)malloc((unsigned long)64);
+        char* buf = (char*)alloc((unsigned long)64);
         if (buf != (char*)0) snprintf(buf, (unsigned long)64, "%.*f", decimals, v);
         return buf;
     }

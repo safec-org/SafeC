@@ -34,6 +34,15 @@ struct AesCtx {
 
     // Set the CBC initialisation vector.
     void set_iv(const &stack unsigned char iv);
+
+    // Securely wipe the expanded key schedule and IV (via
+    // mem_zero_secure — a volatile write-through that survives
+    // dead-store elimination, unlike a plain assignment the optimizer
+    // could see is never read again and drop). Call this once a context
+    // is done being used, before it goes out of scope, so the key
+    // material doesn't linger readable in memory (e.g. in a stack frame
+    // reused by a later, unrelated function, or in a crash dump).
+    void destroy();
 };
 
 // Initialise AES-128 context from a 16-byte key.

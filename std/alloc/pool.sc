@@ -6,6 +6,19 @@ namespace std {
 
 extern void* malloc(unsigned long size);
 extern void  free(void* ptr);
+// Not '#include <std/panic.h>' (function-like macros need
+// --compat-preprocessor — see mem.sc's identical comment) and not an
+// 'extern panic_at' either, to avoid making every PoolAllocator user also
+// link a --compat-preprocessor build of panic.sc: same inline
+// diagnostic-then-abort mem.sc's alloc_abort_ uses.
+extern void  abort();
+extern int   fprintf(void* stream, const char* fmt, ...);
+extern void* __stderrp;
+
+static void pool_abort_(const char* msg) {
+    unsafe { fprintf(__stderrp, "std::alloc (pool) fatal: %s\n", msg); }
+    unsafe { abort(); }
+}
 
 inline unsigned long PoolAllocator::header_size_() const {
     // sizeof(PoolBlock) = size(ul) + is_free(int) + next(ptr) — 24 bytes conservative
@@ -16,9 +29,18 @@ inline struct PoolAllocator pool_init(&heap void buffer, unsigned long cap) {
     struct PoolAllocator a;
     a.base = buffer;
     a.cap  = cap;
+    unsigned long hdr = (unsigned long)24;
     unsafe {
         struct PoolBlock* first = (struct PoolBlock*)buffer;
-        first->size    = cap - (unsigned long)24;
+        // cap < hdr means the caller's buffer can't even hold one block
+        // header; 'cap - hdr' would underflow to a huge value and the pool
+        // would believe it owns far more memory than it actually does, so
+        // clamp to an empty (permanently exhausted) pool instead.
+        if (cap >= hdr) {
+            first->size = cap - hdr;
+        } else {
+            first->size = (unsigned long)0;
+        }
         first->is_free = 1;
         first->next    = (void*)0;
         a.head = (void*)first;
@@ -28,11 +50,18 @@ inline struct PoolAllocator pool_init(&heap void buffer, unsigned long cap) {
 
 inline struct PoolAllocator pool_new(unsigned long cap) {
     struct PoolAllocator a;
-    unsafe { a.base = (&heap void)malloc(cap); }
-    a.cap = cap;
+    unsigned long hdr = (unsigned long)24;
+    // Always malloc at least enough room for one block header, regardless
+    // of what 'cap' the caller asked for — otherwise a small 'cap' still
+    // underflows 'size' below into a huge value while the actual backing
+    // buffer stays tiny, corrupting the very first real allocation.
+    unsigned long allocCap = cap;
+    if (allocCap < hdr) { allocCap = hdr; }
+    unsafe { a.base = (&heap void)malloc(allocCap); }
+    a.cap = allocCap;
     unsafe {
         struct PoolBlock* first = (struct PoolBlock*)a.base;
-        first->size    = cap - (unsigned long)24;
+        first->size    = allocCap - hdr;
         first->is_free = 1;
         first->next    = (void*)0;
         a.head = (void*)first;
@@ -68,9 +97,21 @@ inline struct PoolAllocator pool_new(unsigned long cap) {
 }
 
 void PoolAllocator::dealloc(void* ptr) {
+    if (ptr == (void*)0) { return; }
     unsigned long hdr = self.header_size_();
     unsafe {
         struct PoolBlock* blk = (struct PoolBlock*)((unsigned long)ptr - hdr);
+        // Unlike mem.sc's alloc()/dealloc(), no quarantine is needed here
+        // to make this reliable: a pool block's 'is_free' flag lives in
+        // the pool's own backing buffer for the pool's whole lifetime —
+        // freeing it never hands the memory back to a system allocator
+        // that might immediately overwrite it with its own bookkeeping,
+        // so the flag is always readable as whatever this allocator itself
+        // last wrote.
+        if (blk->is_free == 1) {
+            pool_abort_("dealloc() called twice on the same pointer (double free)");
+            return;
+        }
         blk->is_free = 1;
 
         // Coalesce adjacent free blocks

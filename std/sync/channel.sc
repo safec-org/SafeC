@@ -57,7 +57,7 @@ void* __safec_chan_create(int requestedCap) {
         return (void*)0;
     }
     unsafe {
-        ch->buf = (unsigned long long*)std::alloc((unsigned long)cap * 8UL);
+        ch->buf = (unsigned long long*)std::alloc(std::checked_mul_size((unsigned long)cap, 8UL));
         ch->cap = cap;
         ch->head = 0;
         ch->tail = 0;

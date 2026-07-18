@@ -21,7 +21,7 @@ inline struct Vec vec_with_cap(unsigned long elem_size, unsigned long cap) {
     v.len       = 0UL;
     v.cap       = cap;
     unsafe {
-        v.data = (&heap void)alloc(elem_size * cap);
+        v.data = (&heap void)alloc(checked_mul_size(elem_size, cap));
         if ((void*)v.data == (void*)0) { v.cap = 0UL; }
     }
     return v;
@@ -44,7 +44,7 @@ inline int           Vec::is_empty() const { return self.len == 0UL; }
 inline int Vec::reserve(unsigned long new_cap) {
     if (new_cap <= self.cap) { return 1; }
     unsafe {
-        void* nd = realloc_buf((void*)self.data, new_cap * self.elem_size);
+        void* nd = realloc_buf((void*)self.data, checked_mul_size(new_cap, self.elem_size));
         if (nd == (void*)0) { return 0; }
         self.data = (&heap void)nd;
         self.cap  = new_cap;
@@ -62,7 +62,7 @@ inline void Vec::shrink() {
         return;
     }
     unsafe {
-        void* nd = realloc_buf((void*)self.data, self.len * self.elem_size);
+        void* nd = realloc_buf((void*)self.data, checked_mul_size(self.len, self.elem_size));
         if (nd != (void*)0) { self.data = (&heap void)nd; self.cap = self.len; }
     }
 }

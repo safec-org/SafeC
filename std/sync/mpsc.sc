@@ -2,6 +2,7 @@
 #pragma once
 #include <std/sync/mpsc.h>
 #include <std/sync/spinlock.sc>
+#include <std/mem.h>
 
 namespace std {
 
@@ -11,7 +12,7 @@ extern void* memcpy(void* dst, const void* src, unsigned long n);
 
 inline struct MpscQueue mpsc_new(unsigned long elem_size, unsigned long cap) {
     struct MpscQueue q;
-    unsafe { q.buffer = (&heap void)malloc(elem_size * cap); }
+    unsafe { q.buffer = (&heap void)malloc(checked_mul_size(elem_size, cap)); }
     q.elem_size = elem_size;
     q.cap       = cap;
     q.head      = 0UL;

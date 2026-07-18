@@ -2,6 +2,7 @@
 // Safe wrappers around libc string functions.
 #pragma once
 #include <std/str.h>
+#include <std/mem.h>
 
 // ── Explicit extern declarations for libc string/memory functions ─────────────
 namespace std {
@@ -20,7 +21,6 @@ extern unsigned long strspn(const char* s, const char* accept);
 extern unsigned long strcspn(const char* s, const char* reject);
 extern char* strtok_r(char* s, const char* delim, char** saveptr);
 extern void* memchr(const void* s, int c, unsigned long n);
-extern void* malloc(unsigned long size);
 extern void* memcpy(void* dst, const void* src, unsigned long n);
 
 // Return the length (in bytes) of a null-terminated string.
@@ -65,7 +65,7 @@ inline const char* str_find_char(const char* s, int c) {
 inline char* str_dup(const char* s) {
     unsafe {
         unsigned long len = strlen(s) + (unsigned long)1;
-        char* buf = (char*)malloc(len);
+        char* buf = (char*)alloc(len);
         if (buf != (char*)0) {
             memcpy((void*)buf, (const void*)s, len);
         }
@@ -129,7 +129,7 @@ inline void* mem_chr(const void* s, int c, unsigned long n) {
 // Return heap copy of first `n` bytes of `s`, NUL-terminated.
 inline char* str_ndup(const char* s, unsigned long n) {
     unsafe {
-        char* buf = (char*)malloc(n + (unsigned long)1);
+        char* buf = (char*)alloc(n + (unsigned long)1);
         if (buf != (char*)0) {
             memcpy((void*)buf, (const void*)s, n);
             buf[n] = '\0';

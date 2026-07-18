@@ -218,11 +218,284 @@ inline void BTree::clear() {
     self.count     = (unsigned long)0;
 }
 
-// BTree::remove is complex; provide a stub (returns 0 = not found always).
-// Full deletion requires rebalancing; the insert path covers all practical uses.
-inline int BTree::remove(unsigned long key) {
-    (void)key;
-    return 0;
+// ── Delete ────────────────────────────────────────────────────────────────────
+// Standard B-tree deletion (CLRS/geeksforgeeks formulation): a key found in
+// a leaf is removed directly; a key found in an internal node is replaced by
+// its in-order predecessor or successor (pulled up from whichever adjacent
+// child has a spare key to give up without violating the minimum-keys
+// invariant) and that replacement key is then recursively deleted from the
+// child it came from; and before descending into any child during the
+// search for a key that isn't in the current node, that child is first
+// topped up to at least BTREE_ORDER keys (via a borrow from a sibling with
+// spare keys, or a merge with a sibling that has none) so the recursion
+// never has to delete out of a node already at the minimum.
+//
+// Deleted nodes are not returned to a free list — the pool (BTree.pool,
+// sized BTREE_POOL_SIZE) only ever grows via btree_alloc_node_, so a tree
+// under heavy insert/delete churn can still exhaust the pool even though
+// its live key count stays low. Reclaiming freed slots would need a
+// free-list field added to 'struct BTree' (a public API/layout change);
+// out of scope for fixing the correctness bug this replaces (remove()
+// silently doing nothing and still reporting "removed").
+
+static int btree_find_idx_(struct BTreeNode* n, unsigned long key) {
+    unsafe {
+        int idx = 0;
+        while (idx < n->n && n->keys[idx] < key) { idx = idx + 1; }
+        return idx;
+    }
+}
+
+// Max key (and its value) in the subtree rooted at node_idx — always the
+// last key of the rightmost leaf.
+static void btree_get_pred_(struct BTree* t, unsigned long node_idx,
+                             &stack unsigned long outKey, &stack void* outVal) {
+    unsafe {
+        struct BTreeNode* cur = btree_node_(t, node_idx);
+        while (cur->leaf == 0) {
+            cur = btree_node_(t, cur->children[cur->n]);
+        }
+        *outKey = cur->keys[cur->n - 1];
+        *outVal = cur->vals[cur->n - 1];
+    }
+}
+
+// Min key (and its value) in the subtree rooted at node_idx — always the
+// first key of the leftmost leaf.
+static void btree_get_succ_(struct BTree* t, unsigned long node_idx,
+                             &stack unsigned long outKey, &stack void* outVal) {
+    unsafe {
+        struct BTreeNode* cur = btree_node_(t, node_idx);
+        while (cur->leaf == 0) {
+            cur = btree_node_(t, cur->children[0]);
+        }
+        *outKey = cur->keys[0];
+        *outVal = cur->vals[0];
+    }
+}
+
+// Merge node->children[idx], node->keys[idx]/vals[idx] (the separator), and
+// node->children[idx+1] into a single node at node->children[idx]. Both
+// children must have exactly BTREE_ORDER-1 keys (the merge-eligible case),
+// so the combined key count is exactly BTREE_MAX_KEYS — fits without
+// overflow. node loses one key and one child pointer.
+static void btree_merge_(struct BTree* t, unsigned long node_idx, int idx) {
+    unsafe {
+        struct BTreeNode* node  = btree_node_(t, node_idx);
+        struct BTreeNode* left  = btree_node_(t, node->children[idx]);
+        struct BTreeNode* right = btree_node_(t, node->children[idx + 1]);
+
+        left->keys[left->n] = node->keys[idx];
+        left->vals[left->n] = node->vals[idx];
+
+        int i = 0;
+        while (i < right->n) {
+            left->keys[left->n + 1 + i] = right->keys[i];
+            left->vals[left->n + 1 + i] = right->vals[i];
+            i = i + 1;
+        }
+        if (left->leaf == 0) {
+            i = 0;
+            while (i <= right->n) {
+                left->children[left->n + 1 + i] = right->children[i];
+                i = i + 1;
+            }
+        }
+        left->n = left->n + 1 + right->n;
+
+        i = idx;
+        while (i < node->n - 1) {
+            node->keys[i] = node->keys[i + 1];
+            node->vals[i] = node->vals[i + 1];
+            i = i + 1;
+        }
+        i = idx + 1;
+        while (i < node->n) {
+            node->children[i] = node->children[i + 1];
+            i = i + 1;
+        }
+        node->n = node->n - 1;
+    }
+}
+
+// Move node->children[idx-1]'s last key up through node into the front of
+// node->children[idx] (used when the left sibling has a spare key).
+static void btree_borrow_from_prev_(struct BTree* t, unsigned long node_idx, int idx) {
+    unsafe {
+        struct BTreeNode* node  = btree_node_(t, node_idx);
+        struct BTreeNode* child = btree_node_(t, node->children[idx]);
+        struct BTreeNode* sib   = btree_node_(t, node->children[idx - 1]);
+
+        int i = child->n - 1;
+        while (i >= 0) {
+            child->keys[i + 1] = child->keys[i];
+            child->vals[i + 1] = child->vals[i];
+            i = i - 1;
+        }
+        if (child->leaf == 0) {
+            i = child->n;
+            while (i >= 0) {
+                child->children[i + 1] = child->children[i];
+                i = i - 1;
+            }
+        }
+        child->keys[0] = node->keys[idx - 1];
+        child->vals[0] = node->vals[idx - 1];
+        if (child->leaf == 0) {
+            child->children[0] = sib->children[sib->n];
+        }
+        node->keys[idx - 1] = sib->keys[sib->n - 1];
+        node->vals[idx - 1] = sib->vals[sib->n - 1];
+
+        child->n = child->n + 1;
+        sib->n   = sib->n - 1;
+    }
+}
+
+// Move node->children[idx+1]'s first key up through node into the back of
+// node->children[idx] (used when the right sibling has a spare key).
+static void btree_borrow_from_next_(struct BTree* t, unsigned long node_idx, int idx) {
+    unsafe {
+        struct BTreeNode* node  = btree_node_(t, node_idx);
+        struct BTreeNode* child = btree_node_(t, node->children[idx]);
+        struct BTreeNode* sib   = btree_node_(t, node->children[idx + 1]);
+
+        child->keys[child->n] = node->keys[idx];
+        child->vals[child->n] = node->vals[idx];
+        if (child->leaf == 0) {
+            child->children[child->n + 1] = sib->children[0];
+        }
+
+        node->keys[idx] = sib->keys[0];
+        node->vals[idx] = sib->vals[0];
+
+        int i = 0;
+        while (i < sib->n - 1) {
+            sib->keys[i] = sib->keys[i + 1];
+            sib->vals[i] = sib->vals[i + 1];
+            i = i + 1;
+        }
+        if (sib->leaf == 0) {
+            i = 0;
+            while (i < sib->n) {
+                sib->children[i] = sib->children[i + 1];
+                i = i + 1;
+            }
+        }
+
+        child->n = child->n + 1;
+        sib->n   = sib->n - 1;
+    }
+}
+
+// Ensure node->children[idx] has at least BTREE_ORDER keys before the
+// caller descends into it, by borrowing from whichever neighbor has spare
+// keys, or merging with a neighbor if neither does.
+static void btree_fill_(struct BTree* t, unsigned long node_idx, int idx) {
+    unsafe {
+        struct BTreeNode* node = btree_node_(t, node_idx);
+        if (idx != 0) {
+            struct BTreeNode* prevSib = btree_node_(t, node->children[idx - 1]);
+            if (prevSib->n >= BTREE_ORDER) {
+                btree_borrow_from_prev_(t, node_idx, idx);
+                return;
+            }
+        }
+        if (idx != node->n) {
+            struct BTreeNode* nextSib = btree_node_(t, node->children[idx + 1]);
+            if (nextSib->n >= BTREE_ORDER) {
+                btree_borrow_from_next_(t, node_idx, idx);
+                return;
+            }
+        }
+        if (idx != node->n) {
+            btree_merge_(t, node_idx, idx);
+        } else {
+            btree_merge_(t, node_idx, idx - 1);
+        }
+    }
+}
+
+static int btree_remove_(struct BTree* t, unsigned long node_idx, unsigned long key) {
+    unsafe {
+        struct BTreeNode* node = btree_node_(t, node_idx);
+        int idx = btree_find_idx_(node, key);
+
+        if (idx < node->n && node->keys[idx] == key) {
+            if (node->leaf != 0) {
+                int i = idx;
+                while (i < node->n - 1) {
+                    node->keys[i] = node->keys[i + 1];
+                    node->vals[i] = node->vals[i + 1];
+                    i = i + 1;
+                }
+                node->n = node->n - 1;
+                return 1;
+            }
+
+            struct BTreeNode* leftChild  = btree_node_(t, node->children[idx]);
+            struct BTreeNode* rightChild = btree_node_(t, node->children[idx + 1]);
+            if (leftChild->n >= BTREE_ORDER) {
+                unsigned long predKey = (unsigned long)0;
+                void* predVal = (void*)0;
+                btree_get_pred_(t, node->children[idx], &predKey, &predVal);
+                struct BTreeNode* n2 = btree_node_(t, node_idx);
+                n2->keys[idx] = predKey;
+                n2->vals[idx] = predVal;
+                btree_remove_(t, n2->children[idx], predKey);
+            } else if (rightChild->n >= BTREE_ORDER) {
+                unsigned long succKey = (unsigned long)0;
+                void* succVal = (void*)0;
+                btree_get_succ_(t, node->children[idx + 1], &succKey, &succVal);
+                struct BTreeNode* n2 = btree_node_(t, node_idx);
+                n2->keys[idx] = succKey;
+                n2->vals[idx] = succVal;
+                btree_remove_(t, n2->children[idx + 1], succKey);
+            } else {
+                btree_merge_(t, node_idx, idx);
+                struct BTreeNode* n2 = btree_node_(t, node_idx);
+                btree_remove_(t, n2->children[idx], key);
+            }
+            return 1;
+        }
+
+        if (node->leaf != 0) {
+            return 0; // key not present anywhere in the tree
+        }
+
+        int flag = 0;
+        if (idx == node->n) { flag = 1; }
+        struct BTreeNode* child = btree_node_(t, node->children[idx]);
+        if (child->n < BTREE_ORDER) {
+            btree_fill_(t, node_idx, idx);
+        }
+        struct BTreeNode* n2 = btree_node_(t, node_idx);
+        if (flag != 0 && idx > n2->n) {
+            return btree_remove_(t, n2->children[idx - 1], key);
+        }
+        return btree_remove_(t, n2->children[idx], key);
+    }
+}
+
+int BTree::remove(unsigned long key) {
+    unsafe {
+        struct BTree* t = (struct BTree*)self;
+        if (self.root == (unsigned long)0) { return 0; }
+
+        int found = btree_remove_(t, self.root, key);
+        if (found == 0) { return 0; }
+
+        struct BTreeNode* root = btree_node_(t, self.root);
+        if (root->n == 0) {
+            if (root->leaf == 0) {
+                self.root = root->children[0];
+            } else {
+                self.root = (unsigned long)0;
+            }
+        }
+        self.count = self.count - (unsigned long)1;
+        return 1;
+    }
 }
 
 // ── Generic wrappers ──────────────────────────────────────────────────────────

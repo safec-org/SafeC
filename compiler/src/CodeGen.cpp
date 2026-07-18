@@ -2562,6 +2562,41 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
                 return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
             }
         }
+        // Handle __arena_destroy_<R>() builtin: frees the region's backing
+        // buffer (unlike __arena_reset_ above, which only rewinds the bump
+        // pointer for reuse). Safe to call more than once or before the
+        // region's first allocation — buf is null-checked first, and
+        // nulled out afterward so a subsequent new<R> re-mallocs cleanly
+        // (mirroring genNew's own null-check-then-malloc logic) and a
+        // second arena_destroy<R>() call is a no-op instead of a double free.
+        if (ident.name.substr(0, 16) == "__arena_destroy_") {
+            std::string regionName = ident.name.substr(16);
+            auto it = arenaStateMap_.find(regionName);
+            if (it != arenaStateMap_.end()) {
+                auto &info = it->second;
+                auto *Int64Ty = llvm::Type::getInt64Ty(ctx_);
+                auto *PtrTy   = llvm::PointerType::get(ctx_, 0);
+
+                auto *bufPtr = builder_.CreateStructGEP(info.ty, info.var, 0, "arena.buf.ptr");
+                auto *buf    = builder_.CreateLoad(PtrTy, bufPtr, "arena.buf");
+                auto *isNull = builder_.CreateIsNull(buf, "arena.destroy.null");
+                auto *freeBB = llvm::BasicBlock::Create(ctx_, "arena.destroy.free", env.fn);
+                auto *contBB = llvm::BasicBlock::Create(ctx_, "arena.destroy.cont", env.fn);
+                builder_.CreateCondBr(isNull, contBB, freeBB);
+
+                builder_.SetInsertPoint(freeBB);
+                auto freeFn = mod_->getOrInsertFunction("free",
+                    llvm::FunctionType::get(llvm::Type::getVoidTy(ctx_), {PtrTy}, false));
+                builder_.CreateCall(freeFn, {buf});
+                builder_.CreateStore(llvm::ConstantPointerNull::get(PtrTy), bufPtr);
+                auto *usedPtr = builder_.CreateStructGEP(info.ty, info.var, 1, "arena.used.ptr");
+                builder_.CreateStore(llvm::ConstantInt::get(Int64Ty, 0), usedPtr);
+                builder_.CreateBr(contBB);
+
+                builder_.SetInsertPoint(contBB);
+                return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
+            }
+        }
         // ── volatile_load / volatile_store built-ins ─────────────────────────
         if (ident.name == "volatile_load" && !e.args.empty()) {
             auto *ptr = genExpr(*e.args[0], env);

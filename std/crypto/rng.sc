@@ -11,6 +11,17 @@ extern void* memcpy(void* d, const void* s, unsigned long n);
 extern void* fopen(const char* path, const char* mode);
 extern unsigned long fread(void* buf, unsigned long size, unsigned long n, void* f);
 extern int fclose(void* f);
+// Same rationale as mem.sc/pool.sc/slab.sc/tlsf.sc for not using
+// panic.h/panic_at here (no forced --compat-preprocessor link dependency
+// for every RNG user).
+extern void  abort();
+extern int   fprintf(void* stream, const char* fmt, ...);
+extern void* __stderrp;
+
+static void rng_abort_(const char* msg) {
+    unsafe { fprintf(__stderrp, "std::crypto::rng fatal: %s\n", msg); }
+    unsafe { abort(); }
+}
 
 // ── ChaCha20 core ─────────────────────────────────────────────────────────────
 
@@ -150,14 +161,20 @@ int rng_init(&stack RngCtx ctx) {
     }
 #endif
 
-    // Fallback: deterministic seed (not cryptographically safe)
-    unsigned char fallback[32];
-    int k = 0;
-    while (k < 32) {
-        unsafe { fallback[k] = (unsigned char)(k * 37 + 1); }
-        k = k + 1;
-    }
-    rng_init_seed(ctx, (const unsigned char*)fallback);
+    // No real entropy source was available (no rdrand, no /dev/urandom —
+    // e.g. a freestanding target without either). Previously this silently
+    // fell back to a fixed, fully-predictable seed and returned 0, trusting
+    // every caller to check that return value before treating the "random"
+    // stream as safe to use for keys/nonces — nothing enforced that, so a
+    // caller that (reasonably) assumed rng_init() always produces usable
+    // randomness would get deterministic output with no warning. Aborting
+    // here instead makes the failure impossible to miss. Callers that
+    // genuinely have their own entropy source (e.g. a hardware TRNG driver
+    // on a microcontroller with no rdrand/urandom) should call
+    // rng_init_seed() directly with that source instead of rng_init().
+    rng_abort_("rng_init() found no entropy source (no rdrand, no /dev/urandom) — "
+               "refusing to seed with a predictable fallback; call rng_init_seed() "
+               "with your own entropy source instead");
     return 0;
 }
 

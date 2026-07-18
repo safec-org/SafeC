@@ -4,3 +4,5 @@
 #include <std/crypto/sha256.h>
 #include <std/crypto/rng.h>
 #include <std/crypto/secure_alloc.h>
+#include <std/crypto/tls.h>
+#include <std/crypto/x509.h>

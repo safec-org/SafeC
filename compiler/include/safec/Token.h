@@ -38,6 +38,7 @@ enum class TK {
     KW_operator,      // operator overloading
     KW_new,           // new<R> T  (arena allocation)
     KW_arena_reset,   // arena_reset<R>()
+    KW_arena_destroy, // arena_destroy<R>() — frees the region's backing buffer
     KW_tuple,         // tuple(T1, T2, ...)
     KW_spawn,         // spawn<R> closure
     KW_join,          // join(handle)

@@ -16,6 +16,13 @@ struct HashMap {
     struct MapEntry* buckets;  // heap-allocated bucket array
     unsigned long    cap;      // must be power of 2
     unsigned long    len;      // live entries
+    unsigned long    tombstones; // removed-but-not-yet-reclaimed slots — counted
+                                  // toward the resize threshold alongside 'len' so a
+                                  // remove-heavy workload (many inserts followed by
+                                  // many removes, with 'len' staying low) can't fill
+                                  // the table with tombstones and silently degrade
+                                  // every subsequent probe toward O(cap) without ever
+                                  // triggering a resize.
     unsigned long    key_size;
     unsigned long    val_size;
 

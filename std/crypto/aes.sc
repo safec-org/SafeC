@@ -1,6 +1,7 @@
 // SafeC Standard Library — AES Block Cipher
 #pragma once
 #include <std/crypto/aes.h>
+#include <std/mem.h>
 
 namespace std {
 
@@ -280,6 +281,14 @@ void AesCtx::decrypt_block(&stack unsigned char block) {
 
 inline void AesCtx::set_iv(const &stack unsigned char iv) {
     unsafe { memcpy((void*)self.iv, (const void*)iv, (unsigned long)AES_BLOCK_SIZE); }
+}
+
+inline void AesCtx::destroy() {
+    unsafe {
+        mem_zero_secure((void*)self.ks, (unsigned long)AES_KS_WORDS * (unsigned long)sizeof(unsigned int));
+        mem_zero_secure((void*)self.iv, (unsigned long)AES_BLOCK_SIZE);
+    }
+    self.rounds = 0;
 }
 
 inline void AesCtx::cbc_encrypt(&stack unsigned char data, unsigned long len) {

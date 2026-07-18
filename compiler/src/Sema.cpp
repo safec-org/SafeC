@@ -604,7 +604,10 @@ void Sema::collectEnum(EnumDecl &ed) {
 void Sema::collectRegion(RegionDecl &rd) {
     rd.declScopeDepth = scopeDepth_;
     regionRegistry_[rd.name] = &rd;
-    // Register __arena_reset_<name> as a callable function in global scope
+    // Register __arena_reset_<name> and __arena_destroy_<name> as callable
+    // functions in global scope (arena_reset<R>()/arena_destroy<R>() parse
+    // to calls to these — see Parser.cpp's KW_arena_reset/KW_arena_destroy
+    // cases).
     {
         auto fn = std::make_unique<FunctionDecl>("__arena_reset_" + rd.name, rd.loc);
         fn->returnType = makeVoid();
@@ -618,6 +621,20 @@ void Sema::collectRegion(RegionDecl &rd) {
         static std::vector<std::unique_ptr<FunctionDecl>> arenaResetFns;
         arenaResetFns.push_back(std::move(fn));
         sym.fnDecl = arenaResetFns.back().get();
+        define(sym);
+    }
+    {
+        auto fn = std::make_unique<FunctionDecl>("__arena_destroy_" + rd.name, rd.loc);
+        fn->returnType = makeVoid();
+        fn->isExtern = false;
+        Symbol sym;
+        sym.kind = SymKind::Function;
+        sym.name = fn->name;
+        sym.type = makeReference(fn->funcType(), Region::Static);
+        sym.fnDecl = fn.get();
+        static std::vector<std::unique_ptr<FunctionDecl>> arenaDestroyFns;
+        arenaDestroyFns.push_back(std::move(fn));
+        sym.fnDecl = arenaDestroyFns.back().get();
         define(sym);
     }
 }

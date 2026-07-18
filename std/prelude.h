@@ -68,8 +68,14 @@
 // ── Synchronization ──────────────────────────────────────────────────────
 #include <std/sync/spinlock.h>
 #include <std/sync/lockfree.h>
+#include <std/sync/channel.h>
+#include <std/sync/mpsc.h>
 #include <std/sync/task.h>
 #include <std/sync/thread_bare.h>
+
+// ── Inter-process communication ──────────────────────────────────────────
+#include <std/ipc/pipe.h>
+#include <std/ipc/uds.h>
 
 // ── Testing framework ────────────────────────────────────────────────────
 #include <std/test/test.h>
@@ -84,6 +90,9 @@
 
 // ── Filesystem ────────────────────────────────────────────────────────────
 #include <std/fs/fs.h>
+
+// ── Serialization ─────────────────────────────────────────────────────────
+#include <std/serial/serial.h>
 
 // ── DSP & Real-Time ───────────────────────────────────────────────────────
 #include <std/dsp/dsp_all.h>

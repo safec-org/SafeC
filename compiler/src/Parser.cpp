@@ -76,6 +76,7 @@ bool Parser::isTypeStart(const Token &t) const {
     case TK::KW_tuple:    // tuple type
     case TK::KW_fn:       // fn ReturnType(Params) — function pointer type
     case TK::KW_typeof:   // typeof(expr) — type position
+    case TK::KW_auto:     // auto x = expr — inferred from the initializer
     case TK::Amp:         // &stack T
     case TK::QuestionAmp: // ?&stack T
     case TK::Question:    // ?T (optional)
@@ -1526,7 +1527,7 @@ StmtPtr Parser::parseStmt() {
                 cur().is(TK::KW_unsigned) || cur().is(TK::KW_signed) ||
                 cur().is(TK::KW_struct) || cur().is(TK::KW_enum) ||
                 cur().is(TK::KW_tuple) || cur().is(TK::KW_fn) ||
-                cur().is(TK::KW_typeof) ||
+                cur().is(TK::KW_typeof) || cur().is(TK::KW_auto) ||
                 cur().is(TK::Amp) || cur().is(TK::QuestionAmp) ||
                 cur().is(TK::Question)   // ?T optional type
             );
@@ -1558,6 +1559,11 @@ std::unique_ptr<CompoundStmt> Parser::parseCompoundStmt() {
     while (!atEnd() && !cur().is(TK::RBrace)) {
         auto s = parseStmt();
         if (s) cs->body.push_back(std::move(s));
+        // Drain a malloc_defer() desugaring's synthesized second statement
+        // (see pendingExtraStmt_) — must land right after the statement
+        // that produced it, in the same scope, for the defer to see the
+        // variable it refers to.
+        if (pendingExtraStmt_) cs->body.push_back(std::move(pendingExtraStmt_));
     }
     expect(TK::RBrace, "expected '}'");
     return cs;
@@ -1671,8 +1677,71 @@ StmtPtr Parser::parseStaticAssertStmt() {
     return std::make_unique<StaticAssertStmt>(std::move(cond), std::move(msg), loc);
 }
 
+// 'T x = malloc_defer(n);' desugars to two statements: 'T x = alloc(n);'
+// followed by 'defer { dealloc(x); }' — malloc_defer isn't a real callable
+// (no FunctionDecl backs it anywhere), it's pure parser sugar recognized
+// only in this one position (a var-decl initializer), so that a heap
+// allocation and its guaranteed cleanup are written as a single visible
+// statement instead of two easily-desynced ones. Declares the variable's
+// type as whatever alloc() returns (void*) — same as every other alloc()
+// call site in std/, which already all require an explicit unsafe cast at
+// the point of use — so callers write 'auto p = malloc_defer(n);' (auto
+// infers void* automatically) or 'void* p = malloc_defer(n);' explicitly;
+// any other declared type fails the normal type-mismatch check in Sema,
+// with no special-casing needed here for that.
+static void desugarMallocDefer(ExprPtr &initExpr, const std::string &varName,
+                                SourceLocation loc, StmtPtr &pendingExtraStmt) {
+    if (!initExpr || initExpr->kind != ExprKind::Call) return;
+    auto &call = static_cast<CallExpr &>(*initExpr);
+    if (!call.callee || call.callee->kind != ExprKind::Ident) return;
+    auto &calleeIdent = static_cast<IdentExpr &>(*call.callee);
+    if (calleeIdent.name != "malloc_defer" || call.args.size() != 1) return;
+
+    auto allocCallee = std::make_unique<IdentExpr>("alloc", loc);
+    std::vector<ExprPtr> allocArgs;
+    allocArgs.push_back(std::move(call.args[0]));
+    initExpr = std::make_unique<CallExpr>(std::move(allocCallee), std::move(allocArgs), loc);
+
+    auto deallocCallee = std::make_unique<IdentExpr>("dealloc", loc);
+    std::vector<ExprPtr> deallocArgs;
+    deallocArgs.push_back(std::make_unique<IdentExpr>(varName, loc));
+    auto deallocCall = std::make_unique<CallExpr>(std::move(deallocCallee),
+                                                   std::move(deallocArgs), loc);
+    auto deallocStmt = std::make_unique<ExprStmt>(std::move(deallocCall), loc);
+    pendingExtraStmt = std::make_unique<DeferStmt>(std::move(deallocStmt), loc, false);
+}
+
 StmtPtr Parser::parseVarDeclStmt(bool isConst, bool isStatic) {
     auto loc = cur().loc;
+
+    // 'auto x = expr;' — declType stays null, which Sema::checkVarDecl
+    // already resolves from the initializer's checked type (see the
+    // VarDeclStmt::declType doc comment: "null → infer (future)"). No
+    // C-style function-pointer/array declarator makes sense without a
+    // known type, so those forms just aren't supported for 'auto'.
+    if (cur().is(TK::KW_auto)) {
+        consume();
+        std::string autoName = cur().text;
+        if (!cur().is(TK::Ident)) {
+            diag_.error(cur().loc, "expected variable name");
+        } else consume();
+
+        ExprPtr autoInit;
+        if (!match(TK::Eq)) {
+            diag_.error(cur().loc, "'auto' variable must have an initializer");
+        } else {
+            autoInit = parseAssignExpr();
+        }
+        expect(TK::Semicolon, "expected ';' after variable declaration");
+
+        desugarMallocDefer(autoInit, autoName, loc, pendingExtraStmt_);
+        auto autoVs = std::make_unique<VarDeclStmt>(std::move(autoName), nullptr,
+                                                      std::move(autoInit), loc);
+        autoVs->isConst  = isConst;
+        autoVs->isStatic = isStatic;
+        return autoVs;
+    }
+
     TypePtr ty = parseType();
     // C-style function-pointer local: 'RetType (*name)(Params);'
     std::string name;
@@ -1691,6 +1760,7 @@ StmtPtr Parser::parseVarDeclStmt(bool isConst, bool isStatic) {
 
     expect(TK::Semicolon, "expected ';' after variable declaration");
 
+    desugarMallocDefer(init, name, loc, pendingExtraStmt_);
     auto vs = std::make_unique<VarDeclStmt>(std::move(name), std::move(ty),
                                              std::move(init), loc);
     vs->isConst  = isConst;
@@ -2490,6 +2560,22 @@ ExprPtr Parser::parsePrimaryExpr() {
         expect(TK::RParen, "expected ')' for arena_reset");
         // Represent as a CallExpr with a special callee name
         auto callee = std::make_unique<IdentExpr>("__arena_reset_" + regionName, loc);
+        return std::make_unique<CallExpr>(std::move(callee), std::vector<ExprPtr>{}, loc);
+    }
+    case TK::KW_arena_destroy: {
+        // arena_destroy<RegionName>() — frees the region's backing buffer
+        // (arena_reset<R>() above only rewinds the bump pointer for reuse;
+        // this actually releases the memory, for a region that's done
+        // being used for the rest of the program).
+        consume();
+        std::string regionName;
+        if (match(TK::Lt)) {
+            if (cur().is(TK::Ident)) { regionName = cur().text; consume(); }
+            expect(TK::Gt, "expected '>' closing region parameter");
+        }
+        expect(TK::LParen, "expected '(' for arena_destroy");
+        expect(TK::RParen, "expected ')' for arena_destroy");
+        auto callee = std::make_unique<IdentExpr>("__arena_destroy_" + regionName, loc);
         return std::make_unique<CallExpr>(std::move(callee), std::vector<ExprPtr>{}, loc);
     }
     case TK::KW_spawn: {

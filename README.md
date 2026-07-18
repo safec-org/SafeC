@@ -110,8 +110,9 @@ SafeC enforces seven safety properties entirely at compile time:
 | **Null safety** | References are non-null by default. Pointers, nullable references (`?&region T`), and `?T` optionals cannot be dereferenced, member-accessed, or force-unwrapped directly — only `is_null()`/`is_none()`, `.default(fallback)`, `match`, or an explicit `unsafe {}` block can read one |
 | **Determinism** | No hidden allocator, no GC, no implicit nondeterminism in the safe fragment |
 
-Inside `unsafe {}`, all properties become the programmer's responsibility.
-The boundary is explicit and auditable.
+Inside `unsafe {}`, all properties become the programmer's responsibility. The boundary is explicit and auditable — raw-pointer aliasing (WAR/RAW/WAW hazards) and raw-pointer subscript bounds are two examples of *not* being tracked in `unsafe` code, by design, the same way real C leaves them to the programmer there.
+
+One class of `unsafe`-adjacent bug the table above doesn't cover — since it isn't a type-safety property — is heap allocator misuse: double-free, use-after-free, freeing a pointer a different allocator produced, and freeing NULL. This can't be caught at compile time in general (whether two pointers alias is undecidable at scale), so `std::alloc`/`std::dealloc` catch it at runtime instead, for a fixed, small cost: every allocation carries a 16-byte header tagging it live/freed, `dealloc()`/`realloc_buf()` check the tag and abort with a diagnostic on a double-free or a pointer `alloc()` never returned, `dealloc(NULL)` is a safe no-op, and a bounded quarantine (freed blocks aren't handed back to the system allocator for a further ~64 frees) keeps that check reliable even though this platform's allocator overwrites a freed block's first bytes almost immediately. `std/alloc/pool.h`/`slab.h`/`tlsf.h`'s allocators get the equivalent check using their own existing per-block metadata.
 
 Formal treatment uses syntactic type safety (Wright & Felleisen) with region semantics
 drawn from Oxide (Weiss et al., 2019) and Cyclone (Grossman et al., 2002).
@@ -210,7 +211,11 @@ real MVE vector codegen through `vec<T,N>` on M55/M85.
 &arena<AudioPool> Sample s = new<AudioPool> Sample;  // arena reference
 &static Config cfg = &global_config;      // static reference (program lifetime)
 ?&stack Node next;                        // nullable reference
+
+auto x = compute_something();             // type inferred from the initializer
 ```
+
+An arena region (`region AudioPool { capacity: 65536 }`) lazily allocates its backing buffer on first `new<AudioPool>`. `arena_reset<AudioPool>()` rewinds the bump pointer for reuse (the buffer itself stays allocated); `arena_destroy<AudioPool>()` actually frees the buffer — safe to call more than once (a no-op past the first call) or before any allocation has happened, and a later `new<AudioPool>` after destroying transparently re-allocates.
 
 ### Generics
 
@@ -218,6 +223,44 @@ real MVE vector codegen through `vec<T,N>` on M55/M85.
 generic<T: Numeric> T add(T a, T b) { return a + b; }
 int r = add(3, 4);          // monomorphized to add_int
 double d = add(1.0, 2.0);   // monomorphized to add_double
+```
+
+### Traits
+
+A trait declares a method signature set; a struct satisfies it **structurally** — just by defining methods with matching names/signatures, no `impl Trait for Type` block. Traits are used as generic bounds (`generic<T: Drawable>`), checked at the call site during monomorphization.
+
+```c
+trait Drawable {
+    void draw() const;
+}
+
+struct Circle {
+    double radius;
+    void draw() const;   // satisfies Drawable structurally — nothing else needed
+}
+void Circle::draw() const { printf("circle r=%.1f\n", self.radius); }
+
+generic<T: Drawable> void render(T shape) { shape.draw(); }
+render(circle);   // OK: Circle has a matching draw() const
+```
+
+Built-in traits usable as bounds: `Eq`, `Ord`, `Add`, `Sub`, `Mul`, `Div`, `Numeric` (int/float family), plus the structural `Indexed`/`Pointer` traits satisfied automatically by array/slice and pointer/reference types.
+
+### Newtype and Tuples
+
+`newtype` wraps a base type in a distinct one — same representation, but not implicitly interchangeable with the base type or other newtypes over it (this is how `std::dsp`'s `Fixed` Q8.24 type keeps itself from being accidentally mixed with a plain `int`):
+
+```c
+newtype UserId = int;
+UserId id = (UserId)42;   // explicit cast required both ways
+```
+
+Tuples are `tuple(T1, T2, ...)`, constructed with a parenthesized literal and accessed by position (`.0`, `.1`, ...):
+
+```c
+tuple(int, double) p = (42, 3.14);
+int x = p.0;
+double y = p.1;
 ```
 
 ### Namespaces
@@ -300,6 +343,8 @@ defer free(buf);
 // both run in LIFO order at function exit
 ```
 
+`auto p = malloc_defer(64);` is sugar for exactly the `alloc()`+`defer dealloc()` pair above in one statement — `malloc_defer` isn't a real callable (nothing to look up or link), it's recognized only as a variable declaration's initializer and expands to those two statements at parse time. Declares as `void*` (like `alloc()` itself), so `auto` or an explicit `void*` are the only valid declared types.
+
 ### Concurrency
 
 ```c
@@ -307,6 +352,19 @@ void* worker(void* arg) { printf("hello from thread\n"); return (void*)0; }
 long long h = spawn(worker, 0);
 join(h);
 ```
+
+Channels — `chan_create`/`chan_send`/`chan_recv`/`chan_close` are compiler built-ins (no `#include` needed), a bounded blocking MPMC channel backed by `std/sync/channel.h`'s runtime; `std/sync/channel.h` itself adds a typed generic wrapper (`chan_send_t<T>`/`chan_recv_t<T>`) over the same untyped `void*` handle:
+
+```c
+void* ch = chan_create(4);      // capacity 4
+int v = 42;
+unsafe { chan_send(ch, (void*)&v); }
+int out;
+unsafe { chan_recv(ch, (void*)&out); }  // out == 42
+chan_close(ch);
+```
+
+For single-consumer fan-in from multiple producer threads without the channel runtime's blocking/condvar overhead, `std/sync/mpsc.h` provides a lock-free-ish spinlock-guarded bounded ring buffer (`MpscQueue`/`mpsc_new`/`mpsc_enqueue_t`/`mpsc_dequeue_t`); `std/sync/lockfree.h`'s `LFQueue` is the single-producer/single-consumer case with no locking at all. For communicating with a *different process* rather than another thread, see `std/ipc/pipe.h` (anonymous pipes, typically parent/child after `fork()`) and `std/ipc/uds.h` (named Unix domain sockets, for unrelated processes).
 
 ### Bare-Metal
 

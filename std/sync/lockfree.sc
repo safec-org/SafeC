@@ -1,6 +1,7 @@
 // SafeC Standard Library — Lock-free SPSC Ring Buffer Queue
 #pragma once
 #include <std/sync/lockfree.h>
+#include <std/mem.h>
 
 namespace std {
 
@@ -8,11 +9,32 @@ extern void* malloc(unsigned long size);
 extern void  free(void* ptr);
 extern void* memcpy(void* dst, const void* src, unsigned long n);
 
+// LFQueue's head/tail indexing uses '& (cap - 1)' throughout this file
+// (see lfq_push/lfq_pop/lfq_len below) instead of '% cap' — only correct
+// when cap is a power of two, silently producing wrong (not just slower)
+// indices otherwise. Neither constructor validated that until now.
+static unsigned long lfq_floor_pow2_(unsigned long n) {
+    if (n == (unsigned long)0) { return (unsigned long)1; }
+    unsigned long p = (unsigned long)1;
+    while (p * (unsigned long)2 <= n) { p = p * (unsigned long)2; }
+    return p;
+}
+
+static unsigned long lfq_ceil_pow2_(unsigned long n) {
+    if (n <= (unsigned long)1) { return (unsigned long)1; }
+    unsigned long p = (unsigned long)1;
+    while (p < n) { p = p * (unsigned long)2; }
+    return p;
+}
+
 inline struct LFQueue lfq_init(&heap void buffer, unsigned long elem_size, unsigned long cap) {
     struct LFQueue q;
     q.buffer    = buffer;
     q.elem_size = elem_size;
-    q.cap       = cap;
+    // Round DOWN, never up: 'buffer' is caller-provided and sized for the
+    // caller's original 'cap', so this may only ever use less of it, never
+    // more (rounding up here could read/write past the caller's buffer).
+    q.cap       = lfq_floor_pow2_(cap);
     q.head      = (long long)0;
     q.tail      = (long long)0;
     return q;
@@ -20,9 +42,12 @@ inline struct LFQueue lfq_init(&heap void buffer, unsigned long elem_size, unsig
 
 inline struct LFQueue lfq_new(unsigned long elem_size, unsigned long cap) {
     struct LFQueue q;
-    unsafe { q.buffer = (&heap void)malloc(elem_size * cap); }
+    // Round UP: this allocator mallocs its own buffer, so it can just size
+    // it to match — no reason to hand back less capacity than requested.
+    unsigned long roundedCap = lfq_ceil_pow2_(cap);
+    unsafe { q.buffer = (&heap void)malloc(checked_mul_size(elem_size, roundedCap)); }
     q.elem_size = elem_size;
-    q.cap       = cap;
+    q.cap       = roundedCap;
     q.head      = (long long)0;
     q.tail      = (long long)0;
     return q;

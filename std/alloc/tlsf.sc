@@ -7,6 +7,15 @@ namespace std {
 extern void* malloc(unsigned long size);
 extern void  free(void* ptr);
 extern void* memset(void* ptr, int val, unsigned long n);
+// Same rationale as mem.sc/pool.sc/slab.sc for not using panic.h/panic_at here.
+extern void  abort();
+extern int   fprintf(void* stream, const char* fmt, ...);
+extern void* __stderrp;
+
+static void tlsf_abort_(const char* msg) {
+    unsafe { fprintf(__stderrp, "std::alloc (tlsf) fatal: %s\n", msg); }
+    unsafe { abort(); }
+}
 
 // Block header size (32 bytes: size + prev_phys + next_free + prev_free)
 inline unsigned long tlsf_hdr_size_() {
@@ -225,9 +234,22 @@ struct TlsfAllocator tlsf_new(unsigned long cap) {
 }
 
 void TlsfAllocator::free(&heap void ptr) {
+    unsafe {
+        if ((void*)ptr == (void*)0) { return; }
+    }
     unsigned long hdr = tlsf_hdr_size_();
     unsafe {
         struct TlsfBlock* blk = (struct TlsfBlock*)((unsigned long)ptr - hdr);
+
+        // blk's header lives in this allocator's own backing buffer for
+        // the buffer's whole lifetime — freeing it never hands memory to
+        // a system allocator that could clobber the free/used bit before
+        // a second free() reads it, so (unlike mem.sc's alloc()/dealloc())
+        // this check is reliable without a quarantine.
+        if (blk->is_free_() == 1) {
+            tlsf_abort_("free() called twice on the same pointer (double free)");
+            return;
+        }
 
         // Coalesce with next physical block if free
         unsigned long blk_end = (unsigned long)blk + hdr + blk->block_size_();

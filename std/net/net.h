@@ -5,6 +5,7 @@
 #include <std/net/ethernet.h>
 #include <std/net/arp.h>
 #include <std/net/ipv4.h>
+#include <std/net/ipv6.h>
 #include <std/net/udp.h>
 #include <std/net/tcp.h>
 #include <std/net/dns.h>

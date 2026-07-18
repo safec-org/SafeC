@@ -54,14 +54,52 @@ struct BSTNode* bst_alloc_node_(unsigned long key_size, unsigned long val_size,
     }
 }
 
-inline void bst_free_node_(struct BSTNode* n) {
-    if (n == (struct BSTNode*)0) return;
+// Iterative (not recursive): bst.h documents this as an unbalanced BST, so
+// adversarial or sorted-order insertion degenerates into an n-deep linked
+// list — a recursive free would then risk a native stack overflow on
+// exactly the input that's already worst-case for lookup time, not just
+// slow. Uses an explicit, heap-growable stack instead; traversal order
+// doesn't matter for freeing (every node is visited and freed exactly
+// once), so this pushes both children before freeing the popped node
+// rather than doing a strict postorder walk.
+inline void bst_free_node_(struct BSTNode* root) {
+    if (root == (struct BSTNode*)0) { return; }
     unsafe {
-        bst_free_node_(n->left);
-        bst_free_node_(n->right);
-        dealloc(n->key);
-        dealloc(n->val);
-        dealloc((void*)n);
+        unsigned long cap = (unsigned long)64;
+        unsigned long top = (unsigned long)0;
+        struct BSTNode** stk =
+            (struct BSTNode**)alloc(checked_mul_size(cap, (unsigned long)sizeof(struct BSTNode*)));
+        stk[top] = root;
+        top = top + 1UL;
+
+        while (top > (unsigned long)0) {
+            top = top - 1UL;
+            struct BSTNode* n = stk[top];
+
+            if (n->left != (struct BSTNode*)0) {
+                if (top >= cap) {
+                    cap = cap * (unsigned long)2;
+                    stk = (struct BSTNode**)realloc_buf(
+                        (void*)stk, checked_mul_size(cap, (unsigned long)sizeof(struct BSTNode*)));
+                }
+                stk[top] = n->left;
+                top = top + 1UL;
+            }
+            if (n->right != (struct BSTNode*)0) {
+                if (top >= cap) {
+                    cap = cap * (unsigned long)2;
+                    stk = (struct BSTNode**)realloc_buf(
+                        (void*)stk, checked_mul_size(cap, (unsigned long)sizeof(struct BSTNode*)));
+                }
+                stk[top] = n->right;
+                top = top + 1UL;
+            }
+
+            dealloc(n->key);
+            dealloc(n->val);
+            dealloc((void*)n);
+        }
+        dealloc((void*)stk);
     }
 }
 
@@ -213,19 +251,38 @@ int bst_remove(struct BST* t, const void* key) {
     }
 }
 
-// ── In-order traversal (iterative using Stack from stack.h would create a dep; use recursion helper) ──
-inline void bst_inorder_(struct BSTNode* n, void* func) {
-    if (n == (struct BSTNode*)0) return;
-    unsafe {
-        bst_inorder_(n->left, func);
-        fn void(const void*, void*) f = (fn void(const void*, void*))func;
-        f((const void*)n->key, n->val);
-        bst_inorder_(n->right, func);
-    }
-}
-
+// ── In-order traversal (iterative, explicit stack — same unbalanced-BST
+// stack-overflow concern as bst_free_node_ above) ─────────────────────────
 inline void bst_foreach_inorder(struct BST* t, void* func) {
-    unsafe { bst_inorder_(t->root, func); }
+    unsafe {
+        struct BSTNode* root = t->root;
+        if (root == (struct BSTNode*)0) { return; }
+        fn void(const void*, void*) f = (fn void(const void*, void*))func;
+
+        unsigned long cap = (unsigned long)64;
+        unsigned long top = (unsigned long)0;
+        struct BSTNode** stk =
+            (struct BSTNode**)alloc(checked_mul_size(cap, (unsigned long)sizeof(struct BSTNode*)));
+
+        struct BSTNode* cur = root;
+        while (cur != (struct BSTNode*)0 || top > (unsigned long)0) {
+            while (cur != (struct BSTNode*)0) {
+                if (top >= cap) {
+                    cap = cap * (unsigned long)2;
+                    stk = (struct BSTNode**)realloc_buf(
+                        (void*)stk, checked_mul_size(cap, (unsigned long)sizeof(struct BSTNode*)));
+                }
+                stk[top] = cur;
+                top = top + 1UL;
+                cur = cur->left;
+            }
+            top = top - 1UL;
+            struct BSTNode* n = stk[top];
+            f((const void*)n->key, n->val);
+            cur = n->right;
+        }
+        dealloc((void*)stk);
+    }
 }
 
 generic<T>

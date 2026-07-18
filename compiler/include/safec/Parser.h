@@ -95,6 +95,15 @@ private:
     std::vector<DeclPtr> pendingAnonStructs_;
     int                  anonStructCounter_ = 0;
 
+    // ── malloc_defer() desugaring ────────────────────────────────────────────
+    // 'T x = malloc_defer(n);' expands to two statements ('T x = alloc(n);'
+    // then 'defer { dealloc(x); }') but parseStmt()/parseVarDeclStmt() can
+    // only return one Stmt — mirroring pendingAnonStructs_'s approach, the
+    // synthesized second statement is stashed here and drained by whichever
+    // statement-list-building loop called parseStmt() (see parseCompoundStmt).
+    StmtPtr pendingExtraStmt_;
+    int     mallocDeferCounter_ = 0;
+
     std::vector<GenericParam> parseGenericParams(); // <T: Constraint, ...>
 
     // ── GNU/Clang __attribute__((...)) tolerance ─────────────────────────────

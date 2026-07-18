@@ -26,7 +26,11 @@ inline struct BumpAllocator bump_new(unsigned long cap) {
 &heap void BumpAllocator::alloc(unsigned long size, unsigned long align) {
     unsigned long mask    = align - (unsigned long)1;
     unsigned long aligned = (self.used + mask) & ~mask;
-    if (aligned + size > self.cap) {
+    // 'aligned + size > self.cap' would wrap around for a large enough
+    // 'size', silently passing the check and handing back an out-of-bounds
+    // pointer; comparing against 'self.cap - aligned' instead can't
+    // overflow, since 'aligned' is already checked <= self.cap here.
+    if (aligned > self.cap || size > self.cap - aligned) {
         return (&heap void)0;
     }
     unsafe {

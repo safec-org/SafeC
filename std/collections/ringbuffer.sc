@@ -4,11 +4,24 @@
 
 namespace std {
 
+// RingBuffer's '& self.mask' indexing (readable()/write()/etc. below) only
+// gives correct results when cap is a power of two; nothing previously
+// checked that. Rounds DOWN (never up) since 'buf' is caller-provided and
+// sized for the caller's original 'cap' — this may only ever use less of
+// it, never more.
+static unsigned long ringbuf_floor_pow2_(unsigned long n) {
+    if (n == (unsigned long)0) { return (unsigned long)1; }
+    unsigned long p = (unsigned long)1;
+    while (p * (unsigned long)2 <= n) { p = p * (unsigned long)2; }
+    return p;
+}
+
 inline struct RingBuffer ring_init(&static unsigned char buf, unsigned long cap) {
     struct RingBuffer rb;
+    unsigned long roundedCap = ringbuf_floor_pow2_(cap);
     rb.buf  = buf;
-    rb.cap  = cap;
-    rb.mask = cap - (unsigned long)1;
+    rb.cap  = roundedCap;
+    rb.mask = roundedCap - (unsigned long)1;
     rb.head = (unsigned long)0;
     rb.tail = (unsigned long)0;
     return rb;

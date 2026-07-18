@@ -7,6 +7,14 @@ void*         alloc(unsigned long size);
 void*         alloc_zeroed(unsigned long size);
 void          dealloc(void* ptr);
 void*         realloc_buf(void* ptr, unsigned long new_size);
+
+// Multiply two allocation-size factors (typically an element count and an
+// element size) and abort with a diagnostic instead of silently wrapping
+// if the product overflows unsigned long — the classic "count * elem_size"
+// integer-overflow-to-undersized-allocation bug. Use this instead of a
+// bare '*' anywhere the multiplicands aren't both compile-time constants
+// small enough to prove can't overflow.
+unsigned long checked_mul_size(unsigned long a, unsigned long b);
 void          safe_memcpy(void* dst, const void* src, unsigned long n);
 void          safe_memmove(void* dst, const void* src, unsigned long n);
 void          safe_memset(void* ptr, int val, unsigned long n);
