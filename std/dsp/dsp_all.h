@@ -11,5 +11,14 @@
 #include <std/dsp/window.h>
 #include <std/dsp/filter.h>
 #include <std/dsp/biquad.h>
+#include <std/dsp/dct.h>
+#include <std/dsp/stft.h>
+#include <std/dsp/resample.h>
+#include <std/dsp/ztransform.h>
+#include <std/dsp/comb.h>
+#include <std/dsp/minphase.h>
+#include <std/dsp/cqt.h>
+#include <std/dsp/cwt.h>
+#include <std/dsp/imaging.h>
 #include <std/dsp/audio_buffer.h>
 #include <std/dsp/timer_wheel.h>
