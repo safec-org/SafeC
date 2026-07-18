@@ -2489,9 +2489,21 @@ llvm::Value *CodeGen::genBinary(BinaryExpr &e, FnEnv &env) {
         return diff;
     }
 
-    // Pointer arithmetic (e.g., &arr[i+offset])
+    // Pointer arithmetic (e.g., &arr[i+offset]). The GEP element type must
+    // be the pointee's actual type so the index gets scaled by sizeof(T) —
+    // using i8 here would silently turn 'p + i' into a raw byte offset
+    // instead of the i-th element's address for any T wider than 1 byte.
     if (lhs->getType()->isPointerTy() && (e.op == BinaryOp::Add || e.op == BinaryOp::Sub)) {
-        auto *elemTy = llvm::Type::getInt8Ty(ctx_); // byte offset
+        TypePtr pointee;
+        if (e.left->type) {
+            if (e.left->type->kind == TypeKind::Pointer)
+                pointee = static_cast<PointerType &>(*e.left->type).base;
+            else if (e.left->type->kind == TypeKind::Reference)
+                pointee = static_cast<ReferenceType &>(*e.left->type).base;
+        }
+        auto *elemTy = pointee ? lowerType(pointee) : llvm::Type::getInt8Ty(ctx_);
+        if (!rhs->getType()->isIntegerTy(64))
+            rhs = builder_.CreateSExt(rhs, llvm::Type::getInt64Ty(ctx_), "idx64");
         if (e.op == BinaryOp::Sub) rhs = builder_.CreateNeg(rhs);
         return builder_.CreateGEP(elemTy, lhs, rhs, "ptrarith");
     }

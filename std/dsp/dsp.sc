@@ -1,11 +1,12 @@
 #pragma once
 #include <std/dsp/dsp.h>
+#include <std/simd/simd.h>
 
 // ── dsp_dot ──────────────────────────────────────────────────────────────────
 // Accumulate fixed-point dot product.
 namespace std {
 
-inline Fixed dsp_dot(&stack Fixed a, &stack Fixed b, unsigned long n) {
+Fixed dsp_dot(&stack Fixed a, &stack Fixed b, unsigned long n) {
     Fixed acc = (Fixed)0;
     unsigned long i = 0UL;
     while (i < n) {
@@ -21,7 +22,7 @@ inline Fixed dsp_dot(&stack Fixed a, &stack Fixed b, unsigned long n) {
 
 // ── dsp_scale ─────────────────────────────────────────────────────────────────
 // Multiply every element by scale in-place.
-inline void dsp_scale(&stack Fixed a, Fixed scale, unsigned long n) {
+void dsp_scale(&stack Fixed a, Fixed scale, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         unsafe {
@@ -34,7 +35,7 @@ inline void dsp_scale(&stack Fixed a, Fixed scale, unsigned long n) {
 
 // ── dsp_add ───────────────────────────────────────────────────────────────────
 // Element-wise addition: out[i] = a[i] + b[i].
-inline void dsp_add(&stack Fixed a, &stack Fixed b, &stack Fixed out, unsigned long n) {
+void dsp_add(&stack Fixed a, &stack Fixed b, &stack Fixed out, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         unsafe {
@@ -47,81 +48,9 @@ inline void dsp_add(&stack Fixed a, &stack Fixed b, &stack Fixed out, unsigned l
     }
 }
 
-// ── dsp_moving_avg ────────────────────────────────────────────────────────────
-// Causal moving average of order `order`.
-// state[0..order-1] holds the history ring buffer (oldest first).
-// Simple O(n*order) reference implementation — suitable for small order values.
-void dsp_moving_avg(&stack Fixed in, &stack Fixed out, unsigned long n,
-                    &stack Fixed state, unsigned long order) {
-    if (order == 0UL) {
-        return;
-    }
-    // Divisor in Q8.24: 1/order.
-    Fixed inv_order = fixed_div((Fixed)FIXED_ONE, fixed_from_int((int)order));
-
-    unsigned long i = 0UL;
-    while (i < n) {
-        // Shift state left (drop oldest) and insert new sample.
-        unsigned long k = 0UL;
-        while (k < order - 1UL) {
-            unsafe {
-                Fixed* ps = (Fixed*)state;
-                ps[k] = ps[k + 1UL];
-            }
-            k = k + 1UL;
-        }
-        unsafe {
-            Fixed* ps = (Fixed*)state;
-            Fixed* pi = (Fixed*)in;
-            ps[order - 1UL] = pi[i];
-        }
-
-        // Sum all state elements.
-        Fixed sum = (Fixed)0;
-        k = 0;
-        while (k < order) {
-            unsafe {
-                Fixed* ps = (Fixed*)state;
-                sum = fixed_add(sum, ps[k]);
-            }
-            k = k + 1UL;
-        }
-
-        // Divide by order using Q8.24 multiply by 1/order.
-        unsafe {
-            Fixed* po = (Fixed*)out;
-            po[i] = fixed_mul(sum, inv_order);
-        }
-        i = i + 1UL;
-    }
-}
-
-// ── dsp_iir_lp ───────────────────────────────────────────────────────────────
-// First-order IIR low-pass: y[n] = alpha*x[n] + (1-alpha)*y[n-1]
-void dsp_iir_lp(&stack Fixed in, &stack Fixed out, unsigned long n,
-                Fixed alpha, &stack Fixed prev_y) {
-    Fixed one_minus_alpha = fixed_sub((Fixed)FIXED_ONE, alpha);
-    unsigned long i = 0UL;
-    while (i < n) {
-        Fixed xn;
-        unsafe {
-            Fixed* pi = (Fixed*)in;
-            xn = pi[i];
-        }
-        Fixed yn = fixed_add(fixed_mul(alpha, xn),
-                             fixed_mul(one_minus_alpha, *prev_y));
-        unsafe {
-            Fixed* po = (Fixed*)out;
-            po[i] = yn;
-        }
-        *prev_y = yn;
-        i = i + 1UL;
-    }
-}
-
 // ── dsp_clip ──────────────────────────────────────────────────────────────────
 // Clamp every element to [lo, hi].
-inline void dsp_clip(&stack Fixed a, Fixed lo, Fixed hi, unsigned long n) {
+void dsp_clip(&stack Fixed a, Fixed lo, Fixed hi, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         Fixed v;
@@ -144,7 +73,7 @@ inline void dsp_clip(&stack Fixed a, Fixed lo, Fixed hi, unsigned long n) {
 
 // ── dsp_peak ──────────────────────────────────────────────────────────────────
 // Return maximum absolute value in array.
-inline Fixed dsp_peak(&stack Fixed a, unsigned long n) {
+Fixed dsp_peak(&stack Fixed a, unsigned long n) {
     Fixed peak = (Fixed)0;
     unsigned long i = 0UL;
     while (i < n) {
@@ -164,7 +93,7 @@ inline Fixed dsp_peak(&stack Fixed a, unsigned long n) {
 
 // ── dsp_rms ───────────────────────────────────────────────────────────────────
 // Root mean square: sqrt( sum(x[i]^2) / n ).
-inline Fixed dsp_rms(&stack Fixed a, unsigned long n) {
+Fixed dsp_rms(&stack Fixed a, unsigned long n) {
     if (n == 0UL) {
         return (Fixed)0;
     }
@@ -183,6 +112,29 @@ inline Fixed dsp_rms(&stack Fixed a, unsigned long n) {
     Fixed inv_n = fixed_div((Fixed)FIXED_ONE, fixed_from_int((int)n));
     Fixed mean_sq = fixed_mul(sum, inv_n);
     return fixed_sqrt(mean_sq);
+}
+
+// ── dsp_dot_f64 ──────────────────────────────────────────────────────────────
+// SIMD FMA dot product (see dsp.h for why this stays float64-only).
+double dsp_dot_f64(const double* a, const double* b, unsigned long n) {
+    f64x4 vacc = simd_splat_f64x4(0.0);
+    unsigned long i = 0UL;
+    while (i + 4UL <= n) {
+        f64x4 va;
+        f64x4 vb;
+        unsafe {
+            va = simd_load_f64x4(a + i);
+            vb = simd_load_f64x4(b + i);
+        }
+        vacc = simd_fma_f64x4(va, vb, vacc);
+        i = i + 4UL;
+    }
+    double acc = simd_hsum_f64x4(vacc);
+    while (i < n) {
+        unsafe { acc = acc + a[i] * b[i]; }
+        i = i + 1UL;
+    }
+    return acc;
 }
 
 } // namespace std
