@@ -70,7 +70,7 @@ bool Parser::isTypeStart(const Token &t) const {
     case TK::KW_int: case TK::KW_void: case TK::KW_char:
     case TK::KW_float: case TK::KW_double: case TK::KW_bool:
     case TK::KW_long: case TK::KW_short: case TK::KW_unsigned:
-    case TK::KW_signed: case TK::KW_struct: case TK::KW_enum:
+    case TK::KW_signed: case TK::KW_struct: case TK::KW_union: case TK::KW_enum:
     case TK::KW_const:
     case TK::KW_volatile: // e.g. cast '(volatile T*)expr'
     case TK::KW_tuple:    // tuple type
@@ -1525,7 +1525,7 @@ StmtPtr Parser::parseStmt() {
                 cur().is(TK::KW_double) || cur().is(TK::KW_bool) ||
                 cur().is(TK::KW_long) || cur().is(TK::KW_short) ||
                 cur().is(TK::KW_unsigned) || cur().is(TK::KW_signed) ||
-                cur().is(TK::KW_struct) || cur().is(TK::KW_enum) ||
+                cur().is(TK::KW_struct) || cur().is(TK::KW_union) || cur().is(TK::KW_enum) ||
                 cur().is(TK::KW_tuple) || cur().is(TK::KW_fn) ||
                 cur().is(TK::KW_typeof) || cur().is(TK::KW_auto) ||
                 cur().is(TK::Amp) || cur().is(TK::QuestionAmp) ||
