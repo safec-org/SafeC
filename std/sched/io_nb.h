@@ -1,16 +1,27 @@
 // SafeC Standard Library — Non-blocking file/socket helpers for the reactor
 //
 // Thin wrappers around real OS syscalls (open/socket/accept/connect) that
-// set O_NONBLOCK, meant to be paired with std::Reactor/std::TaskScheduler
-// (see reactor.h): a task calls one of these, gets EAGAIN/EWOULDBLOCK back
-// immediately instead of blocking the whole program, and awaits readiness
-// via TaskScheduler::await_fd(fd, SCHED_READ/SCHED_WRITE) instead.
+// enable non-blocking mode, meant to be paired with std::Reactor/
+// std::TaskScheduler (see reactor.h): a task calls one of these, gets
+// EAGAIN/EWOULDBLOCK back immediately instead of blocking the whole
+// program, and awaits readiness via
+// TaskScheduler::await_fd(fd, SCHED_READ/SCHED_WRITE) instead.
 //
-// macOS/BSD-only constant values below (O_NONBLOCK, sockaddr_in layout) —
-// matches the kqueue backend this module is meant to pair with
-// (reactor_kqueue.sc). A Linux build needs the equivalent Linux constants
-// (O_NONBLOCK is 0x800 there, not 0x0004; sockaddr_in has no sin_len byte)
-// wired up alongside a future epoll reactor backend.
+// This header declares only the genuinely portable pieces (AF_INET/
+// SOCK_STREAM/O_RDONLY/O_WRONLY/O_RDWR share the same values across every
+// backend below — a historical BSD-sockets accident every later API,
+// including Winsock, deliberately preserved for source compatibility) and
+// the function signatures every backend implements identically. Anything
+// that actually differs by platform — sockaddr_in's layout (BSD has an
+// extra sin_len byte Linux/Windows don't), O_NONBLOCK's value (or lack of
+// a direct equivalent at all, on Windows), the non-blocking-mode syscall
+// itself (fcntl vs. ioctlsocket) — lives in the matching backend file
+// instead, picked the same way as reactor.h's own backends:
+//   io_nb_bsd.sc    — macOS, iOS, FreeBSD
+//   io_nb_linux.sc  — Linux, Android
+//   io_nb_win32.sc  — Windows (fd_open_nb is best-effort there — see its
+//                     own comment; Windows has no non-blocking-file-open
+//                     equivalent to O_NONBLOCK, only non-blocking sockets)
 #pragma once
 #include <std/sched/reactor.h>
 
@@ -20,36 +31,25 @@
 #define SCHED_O_RDONLY    0
 #define SCHED_O_WRONLY    1
 #define SCHED_O_RDWR      2
-#define SCHED_O_CREAT     0x0200  // macOS value
-#define SCHED_O_NONBLOCK  0x0004  // macOS value
 
 namespace std {
-
-// BSD/macOS 'struct sockaddr_in' (16 bytes): sin_len(1) sin_family(1)
-// sin_port(2) sin_addr(4) sin_zero(8) — note macOS has the extra 1-byte
-// sin_len field Linux's sockaddr_in doesn't, ahead of sin_family (which is
-// also only 1 byte here, not 2 as on Linux).
-struct SockAddrIn {
-    unsigned char  sin_len;
-    unsigned char  sin_family;
-    unsigned short sin_port;   // network byte order — see sched_htons
-    unsigned int   sin_addr;   // network byte order — see sched_htonl
-    unsigned long  sin_zero;   // 8 bytes, always zero
-};
 
 unsigned short sched_htons(unsigned short host16);
 unsigned int   sched_htonl(unsigned int host32);
 // Packs four host-order octets (e.g. 127,0,0,1) into a network-order
-// address suitable for SockAddrIn::sin_addr — avoids callers needing to
-// hand-compute the byte order themselves for the common "literal IP"
-// case.
+// address suitable for a backend's sockaddr_in sin_addr field — avoids
+// callers needing to hand-compute the byte order themselves for the
+// common "literal IP" case.
 unsigned int   sched_ipv4(unsigned char a, unsigned char b,
                            unsigned char c, unsigned char d);
 
-// Sets O_NONBLOCK on an already-open fd. Returns 0 on success.
+// Puts an already-open socket fd into non-blocking mode (fcntl+O_NONBLOCK
+// on BSD/Linux, ioctlsocket+FIONBIO on Windows). Returns 0 on success.
 int fd_set_nonblocking(int fd);
 
-// open() + O_NONBLOCK. Returns fd, or -1 on failure.
+// open() in non-blocking mode where the platform supports it for regular
+// files (BSD/Linux: O_NONBLOCK; Windows: no equivalent — see
+// io_nb_win32.sc). Returns fd, or -1 on failure.
 int fd_open_nb(const char* path, int flags, int mode);
 
 // socket()+bind()+listen(), non-blocking. Returns listening fd, or -1.

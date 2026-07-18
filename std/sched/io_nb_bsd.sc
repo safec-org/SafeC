@@ -1,11 +1,27 @@
-// SafeC Standard Library — Non-blocking file/socket helpers (see io_nb.h)
+// SafeC Standard Library — Non-blocking file/socket helpers: BSD backend
+// (macOS / iOS / FreeBSD — see io_nb.h for the portable API and the full
+// backend file list)
 #pragma once
 #include <std/sched/io_nb.h>
 
-#define SCHED_F_GETFL 3
-#define SCHED_F_SETFL 4
+#define SCHED_O_CREAT     0x0200
+#define SCHED_O_NONBLOCK  0x0004
+#define SCHED_F_GETFL     3
+#define SCHED_F_SETFL     4
 
 namespace std {
+
+// BSD/macOS 'struct sockaddr_in' (16 bytes): sin_len(1) sin_family(1)
+// sin_port(2) sin_addr(4) sin_zero(8) — note macOS has the extra 1-byte
+// sin_len field Linux's/Windows' sockaddr_in doesn't, ahead of sin_family
+// (which is also only 1 byte here, not 2 as on those platforms).
+struct SockAddrIn {
+    unsigned char  sin_len;
+    unsigned char  sin_family;
+    unsigned short sin_port;   // network byte order — see sched_htons
+    unsigned int   sin_addr;   // network byte order — see sched_htonl
+    unsigned long  sin_zero;   // 8 bytes, always zero
+};
 
 extern int open(const char* path, int flags, int mode);
 extern int socket(int domain, int type, int protocol);
