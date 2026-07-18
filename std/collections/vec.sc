@@ -283,7 +283,7 @@ inline struct Vec Vec::map_raw(unsigned long out_elem_size, void* func) const {
 // ── Typed generic wrappers ────────────────────────────────────────────────────
 generic<T>
 int vec_push_t(&stack Vec v, T val) {
-    return v.push((const void*)&val);
+    unsafe { return v.push((const void*)&val); }
 }
 
 generic<T>
@@ -293,7 +293,7 @@ T* vec_at(&stack Vec v, unsigned long idx) {
 
 generic<T>
 int vec_pop_t(&stack Vec v, T* out) {
-    return v.pop((void*)out);
+    unsafe { return v.pop((void*)out); }
 }
 
 generic<T>

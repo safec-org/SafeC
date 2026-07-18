@@ -74,7 +74,7 @@ inline int stack_pop(struct Stack* s, void* out) {
 
 generic<T>
 inline int stack_push_t(struct Stack* s, T val) {
-    return stack_push(s, (const void*)&val);
+    unsafe { return stack_push(s, (const void*)&val); }
 }
 
 generic<T>
@@ -84,7 +84,7 @@ inline T* stack_peek_t(struct Stack* s) {
 
 generic<T>
 inline int stack_pop_t(struct Stack* s, T* out) {
-    return stack_pop(s, (void*)out);
+    unsafe { return stack_pop(s, (void*)out); }
 }
 
 } // namespace std

@@ -232,11 +232,33 @@ llvm::Type *CodeGen::lowerType(const TypePtr &ty) {
 
 llvm::StructType *CodeGen::lowerStructType(const StructType &st) {
     auto it = structCache_.find(st.name);
-    if (it != structCache_.end()) return it->second;
+    // A cache hit only short-circuits if that entry's body was actually
+    // filled in. It's possible to reach here first via an incomplete
+    // forward-reference to this struct name (e.g. a sibling struct's field
+    // typed with this one, resolved to a not-yet-fully-parsed StructType
+    // object distinct from the real one Sema later creates when the
+    // struct's own definition is parsed) — that path still calls
+    // lowerStructType (with st.isDefined false / st.fields empty at the
+    // time), which caches a bare opaque struct. Treating that as a
+    // permanent, final result would leave every later reference to this
+    // struct name silently bound to a 0-element type — including this
+    // struct's own methods, whose 'self.field' accesses would then GEP
+    // out of bounds and crash CodeGen (observed via std::sync::mpsc.h's
+    // MpscQueue embedding std::Spinlock as a field: Spinlock's own
+    // lock()/unlock() bodies crashed compiling 'self.locked = ...' because
+    // the cached Spinlock type had been frozen empty by MpscQueue's field
+    // resolving it first). So: still complete a stale opaque entry's body
+    // below if we now have real field data, instead of returning early.
+    if (it != structCache_.end() && !it->second->isOpaque()) return it->second;
 
-    // Create opaque struct first (handles recursive types)
-    auto *llvmSt = llvm::StructType::create(ctx_, st.name);
-    structCache_[st.name] = llvmSt;
+    llvm::StructType *llvmSt;
+    if (it != structCache_.end()) {
+        llvmSt = it->second; // opaque placeholder from an earlier forward-reference
+    } else {
+        // Create opaque struct first (handles recursive types)
+        llvmSt = llvm::StructType::create(ctx_, st.name);
+        structCache_[st.name] = llvmSt;
+    }
 
     // Fill in fields
     if (st.isDefined) {

@@ -112,7 +112,7 @@ inline int queue_dequeue(struct Queue* q, void* out) {
 
 generic<T>
 inline int queue_enqueue_t(struct Queue* q, T val) {
-    return queue_enqueue(q, (const void*)&val);
+    unsafe { return queue_enqueue(q, (const void*)&val); }
 }
 
 generic<T>
@@ -122,7 +122,7 @@ inline T* queue_front_t(struct Queue* q) {
 
 generic<T>
 inline int queue_dequeue_t(struct Queue* q, T* out) {
-    return queue_dequeue(q, (void*)out);
+    unsafe { return queue_dequeue(q, (void*)out); }
 }
 
 } // namespace std

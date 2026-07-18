@@ -306,7 +306,7 @@ int str_map_remove(struct HashMap* m, const char* key) {
 // ── Typed generic wrappers ────────────────────────────────────────────────────
 generic<T>
 int map_insert_t(&stack HashMap m, const void* key, T val) {
-    return m.insert(key, (const void*)&val);
+    unsafe { return m.insert(key, (const void*)&val); }
 }
 
 generic<T>

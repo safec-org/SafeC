@@ -94,12 +94,12 @@ inline void LFQueue::destroy() {
 
 generic<T>
 int lfq_enqueue_t(&stack LFQueue q, T val) {
-    return q.enqueue((const void*)&val);
+    unsafe { return q.enqueue((const void*)&val); }
 }
 
 generic<T>
 int lfq_dequeue_t(&stack LFQueue q, T* out) {
-    return q.dequeue((void*)out);
+    unsafe { return q.dequeue((void*)out); }
 }
 
 } // namespace std

@@ -230,7 +230,7 @@ inline void bst_foreach_inorder(struct BST* t, void* func) {
 
 generic<T>
 int bst_insert_t(struct BST* t, const void* key, T val) {
-    return bst_insert(t, key, (const void*)&val);
+    unsafe { return bst_insert(t, key, (const void*)&val); }
 }
 
 generic<T>

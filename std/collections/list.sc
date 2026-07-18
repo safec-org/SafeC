@@ -173,7 +173,7 @@ inline void list_reverse(struct List* l) {
 
 generic<T>
 int list_push_back_t(struct List* l, T val) {
-    return list_push_back(l, (const void*)&val);
+    unsafe { return list_push_back(l, (const void*)&val); }
 }
 
 generic<T>

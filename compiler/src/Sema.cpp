@@ -2420,8 +2420,26 @@ TypePtr Sema::checkCall(CallExpr &e) {
             sym.initialized = true;
             if (!scopes_.empty()) scopes_[0].define(std::move(sym));
 
-            // Type-check the instantiation
+            // Type-check the instantiation. checkFunction() unconditionally
+            // resets loopDepth_/functionLabels_/checkingPure_ at its start
+            // (correct when it's called once per function from the top of
+            // the TU) — but monomorphization happens lazily, on the first
+            // call site actually reached, which is frequently *inside*
+            // another function's own body currently being checked (e.g. a
+            // generic<T> call inside a loop). Without saving/restoring
+            // here, checking the monomorphized clone would clobber the
+            // enclosing function's in-progress state — observed as, e.g.,
+            // a 'break' later in that same enclosing loop wrongly
+            // reported as "not inside a loop or match", because
+            // loopDepth_ got reset to 0 by the nested checkFunction call
+            // and never recovered its outer value.
+            bool savedPure = checkingPure_;
+            int savedLoopDepth = loopDepth_;
+            auto savedLabels = functionLabels_;
             checkFunction(*clone);
+            checkingPure_ = savedPure;
+            loopDepth_ = savedLoopDepth;
+            functionLabels_ = savedLabels;
 
             monoCache_[key] = clone.get();
             monoFunctions_.push_back(std::move(clone));
