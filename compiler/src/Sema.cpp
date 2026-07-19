@@ -1330,14 +1330,190 @@ void Sema::checkCompound(CompoundStmt &cs, FunctionDecl &fn) {
     popScope();
 }
 
+// ── Arena-reset flow sensitivity (if/else branches, loop bodies) ───────────────
+// regionGeneration_/regionMarkDepth_/regionScratchGeneration_ (see their doc
+// comments in Sema.h) are plain counters bumped as checkStmt/checkExpr walks
+// the AST in textual order. Two gaps that used to leave in the "flow-
+// insensitive" caveat those comments documented:
+//
+//  1. if/else branch bleed-through: checkIf used to check 'then' then
+//     'else' sequentially against the *same* counters, so a reset inside
+//     'then' made 'else' see an already-bumped generation even though only
+//     one of the two branches can run at a time. mergeRegionCountersMax
+//     plus the snapshot/restore in checkIf below fix this: each branch now
+//     starts from the same pre-if state, and the state after the whole
+//     if-statement is the conservative (max) merge of what either branch
+//     could have done -- still sound (a reset on either path must still be
+//     assumed possible downstream), but no longer cross-contaminates the
+//     *other* branch's own checking.
+//
+//  2. Loop-iteration gap: a reset call near the *end* of a loop body used
+//     to only affect generation for code checked *after* it was textually
+//     seen -- code earlier in the same body (which, on a later iteration,
+//     runs *after* the previous iteration's reset) wasn't flagged.
+//     collectArenaResetRegions does a best-effort syntactic pre-scan of a
+//     loop body for reset/destroy calls anywhere inside it and bumps those
+//     regions' generation *before* the real check pass, so the whole body
+//     -- including code textually before the reset -- sees the "possibly
+//     reset by an earlier iteration" state. It's a name-based scan (these
+//     calls parse to "__arena_reset_<R>"/"__arena_destroy_<R>", see
+//     collectRegion/checkCall), not a type-checking pass, so it needs no
+//     symbol resolution and has no side effects of its own to worry about
+//     duplicating. It covers the statement/expression forms a void-
+//     returning call can plausibly appear in (blocks, if/while/for/unsafe/
+//     defer/match/switch bodies, var-decl initializers, and the common
+//     binary/unary/ternary/assign/cast expression nestings) rather than
+//     being exhaustive over every ExprKind — deeply unusual nesting can
+//     still fall back to the old (safe, just less precise) behavior.
+static void mergeRegionCountersMax(std::unordered_map<std::string, int> &dst,
+                                    const std::unordered_map<std::string, int> &other) {
+    for (auto &kv : other) {
+        auto it = dst.find(kv.first);
+        if (it == dst.end() || it->second < kv.second) dst[kv.first] = kv.second;
+    }
+}
+
+static void collectArenaResetRegions(const Expr *e, std::unordered_set<std::string> &out) {
+    if (!e) return;
+    switch (e->kind) {
+    case ExprKind::Call: {
+        auto &ce = static_cast<const CallExpr &>(*e);
+        if (ce.callee && ce.callee->kind == ExprKind::Ident) {
+            auto &ident = static_cast<const IdentExpr &>(*ce.callee);
+            static const std::string kResetPrefix   = "__arena_reset_";
+            static const std::string kDestroyPrefix = "__arena_destroy_";
+            if (ident.name.rfind(kResetPrefix, 0) == 0) {
+                out.insert(ident.name.substr(kResetPrefix.size()));
+            } else if (ident.name.rfind(kDestroyPrefix, 0) == 0) {
+                out.insert(ident.name.substr(kDestroyPrefix.size()));
+            }
+        }
+        collectArenaResetRegions(ce.callee.get(), out);
+        for (auto &a : ce.args) collectArenaResetRegions(a.get(), out);
+        break;
+    }
+    case ExprKind::Binary: {
+        auto &be = static_cast<const BinaryExpr &>(*e);
+        collectArenaResetRegions(be.left.get(), out);
+        collectArenaResetRegions(be.right.get(), out);
+        break;
+    }
+    case ExprKind::Unary:
+        collectArenaResetRegions(static_cast<const UnaryExpr &>(*e).operand.get(), out);
+        break;
+    case ExprKind::Ternary: {
+        auto &te = static_cast<const TernaryExpr &>(*e);
+        collectArenaResetRegions(te.cond.get(), out);
+        collectArenaResetRegions(te.then.get(), out);
+        collectArenaResetRegions(te.else_.get(), out);
+        break;
+    }
+    case ExprKind::Assign: {
+        auto &ae = static_cast<const AssignExpr &>(*e);
+        collectArenaResetRegions(ae.lhs.get(), out);
+        collectArenaResetRegions(ae.rhs.get(), out);
+        break;
+    }
+    case ExprKind::Cast:
+        collectArenaResetRegions(static_cast<const CastExpr &>(*e).operand.get(), out);
+        break;
+    default:
+        break; // other ExprKinds can't plausibly hold a void-returning reset call
+    }
+}
+
+static void collectArenaResetRegions(const Stmt *s, std::unordered_set<std::string> &out) {
+    if (!s) return;
+    switch (s->kind) {
+    case StmtKind::Compound:
+        for (auto &st : static_cast<const CompoundStmt &>(*s).body)
+            collectArenaResetRegions(st.get(), out);
+        break;
+    case StmtKind::Expr:
+        collectArenaResetRegions(static_cast<const ExprStmt &>(*s).expr.get(), out);
+        break;
+    case StmtKind::If: {
+        auto &is = static_cast<const IfStmt &>(*s);
+        collectArenaResetRegions(is.cond.get(), out);
+        collectArenaResetRegions(is.then.get(), out);
+        collectArenaResetRegions(is.else_.get(), out);
+        break;
+    }
+    case StmtKind::While:
+    case StmtKind::DoWhile: {
+        auto &ws = static_cast<const WhileStmt &>(*s);
+        collectArenaResetRegions(ws.cond.get(), out);
+        collectArenaResetRegions(ws.body.get(), out);
+        break;
+    }
+    case StmtKind::For: {
+        auto &fs = static_cast<const ForStmt &>(*s);
+        collectArenaResetRegions(fs.init.get(), out);
+        collectArenaResetRegions(fs.cond.get(), out);
+        collectArenaResetRegions(fs.incr.get(), out);
+        collectArenaResetRegions(fs.body.get(), out);
+        break;
+    }
+    case StmtKind::VarDecl:
+        collectArenaResetRegions(static_cast<const VarDeclStmt &>(*s).init.get(), out);
+        break;
+    case StmtKind::MultiVarDecl:
+        for (auto &d : static_cast<const MultiVarDeclStmt &>(*s).decls)
+            collectArenaResetRegions(d.get(), out);
+        break;
+    case StmtKind::Unsafe:
+        collectArenaResetRegions(static_cast<const UnsafeStmt &>(*s).body.get(), out);
+        break;
+    case StmtKind::Defer:
+        collectArenaResetRegions(static_cast<const DeferStmt &>(*s).body.get(), out);
+        break;
+    case StmtKind::Match: {
+        auto &ms = static_cast<const MatchStmt &>(*s);
+        collectArenaResetRegions(ms.subject.get(), out);
+        for (auto &arm : ms.arms) collectArenaResetRegions(arm.body.get(), out);
+        break;
+    }
+    case StmtKind::Switch: {
+        auto &sw = static_cast<const SwitchStmt &>(*s);
+        collectArenaResetRegions(sw.controlling.get(), out);
+        for (auto &c : sw.cases)
+            for (auto &st : c.body) collectArenaResetRegions(st.get(), out);
+        break;
+    }
+    case StmtKind::Return:
+        collectArenaResetRegions(static_cast<const ReturnStmt &>(*s).value.get(), out);
+        break;
+    default:
+        break; // Break/Continue/Goto/Label/StaticAssert/IfConst/Asm: no reset call to find
+    }
+}
+
 void Sema::checkIf(IfStmt &s, FunctionDecl &fn) {
     TypePtr condTy = checkExpr(*s.cond);
     if (!condTy->isError() && !condTy->isInteger() && !condTy->isBool() &&
         condTy->kind != TypeKind::Pointer && condTy->kind != TypeKind::Reference) {
         diag_.error(s.cond->loc, "condition must be boolean or numeric");
     }
+
+    // See the "Arena-reset flow sensitivity" comment above item 1.
+    auto genBefore     = regionGeneration_;
+    auto markBefore    = regionMarkDepth_;
+    auto scratchBefore = regionScratchGeneration_;
+
     checkStmt(*s.then, fn);
+    auto genThen     = std::move(regionGeneration_);
+    auto markThen    = std::move(regionMarkDepth_);
+    auto scratchThen = std::move(regionScratchGeneration_);
+
+    regionGeneration_        = genBefore;
+    regionMarkDepth_         = markBefore;
+    regionScratchGeneration_ = scratchBefore;
+
     if (s.else_) checkStmt(*s.else_, fn);
+
+    mergeRegionCountersMax(regionGeneration_, genThen);
+    mergeRegionCountersMax(regionMarkDepth_, markThen);
+    mergeRegionCountersMax(regionScratchGeneration_, scratchThen);
 }
 
 void Sema::checkWhile(WhileStmt &s, FunctionDecl &fn) {
@@ -1346,6 +1522,12 @@ void Sema::checkWhile(WhileStmt &s, FunctionDecl &fn) {
         condTy->kind != TypeKind::Pointer) {
         diag_.error(s.cond->loc, "while condition must be boolean or numeric");
     }
+
+    // See the "Arena-reset flow sensitivity" comment above item 2.
+    std::unordered_set<std::string> resetRegions;
+    collectArenaResetRegions(s.body.get(), resetRegions);
+    for (auto &r : resetRegions) regionGeneration_[r]++;
+
     ++loopDepth_;
     checkStmt(*s.body, fn);
     --loopDepth_;
@@ -1356,6 +1538,12 @@ void Sema::checkFor(ForStmt &s, FunctionDecl &fn) {
     if (s.init) checkStmt(*s.init, fn);
     if (s.cond) checkExpr(*s.cond);
     if (s.incr) checkExpr(*s.incr);
+
+    // See the "Arena-reset flow sensitivity" comment above item 2.
+    std::unordered_set<std::string> resetRegions;
+    collectArenaResetRegions(s.body.get(), resetRegions);
+    for (auto &r : resetRegions) regionGeneration_[r]++;
+
     ++loopDepth_;
     checkStmt(*s.body, fn);
     --loopDepth_;
