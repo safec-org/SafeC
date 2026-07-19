@@ -1,0 +1,35 @@
+#pragma once
+// SafeC Standard Library — GPU tensor ops via ROCm/HIP (AMD).
+//
+// Written against the real HIP Runtime API's C ABI (hand-matched to
+// hip_runtime_api.h) and type-checked by safec, but — like gpu_cuda.h,
+// gui_win32.sc, and gui_x11.sc — genuinely UNLINKABLE/UNRUNNABLE in this
+// sandbox: no AMD GPU, no ROCm toolkit installed here. Sanity-check
+// against a real ROCm-capable host before depending on it.
+//
+// Narrower than gpu_cuda.h's PTX approach: CUDA's PTX is a stable,
+// human-writable *text* IR, so gpu_cuda.sc can embed a kernel as a string
+// literal and load it with cuModuleLoadData at runtime with no build-time
+// toolchain dependency. HIP's equivalent module format (HSACO) is a
+// compiled ELF-like *binary* blob — there's no practical hand-written-text
+// equivalent — so hipModuleLoadData here is real and correctly declared,
+// but actually calling it requires a real hipcc/offline-compiled HSACO
+// byte array this header does not (and, without a ROCm toolchain
+// available to produce one, cannot) embed. See gpu_rocm.sc's
+// rocm_add_f32 for exactly where that gap is and what it would take to
+// close it on a real ROCm host.
+//
+// Gated behind the 'rocm' feature (see Package.toml's [features]).
+namespace std {
+
+// Elementwise 'out[i] = a[i] + b[i]' for i in [0, n) on an AMD GPU.
+// Currently always returns 0 (see gpu_rocm.sc's header comment on the
+// HSACO gap) — the HIP Runtime API plumbing around it is real and
+// type-checked, but there's no embeddable kernel body yet.
+int rocm_add_f32(const float* a, const float* b, float* out, unsigned long n);
+
+// True if a ROCm-capable device is present (hipInit(0) == hipSuccess &&
+// hipGetDeviceCount() > 0).
+int rocm_available();
+
+} // namespace std

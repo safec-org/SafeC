@@ -1,0 +1,189 @@
+// SafeC Standard Library — Diffusion implementation (see diffusion.h).
+//
+// Derivation note (DPM-Solver++ order 1 == DDIM): substituting
+// eps = (x_cur - alpha_cur*x0Pred)/sigma_cur into DDIM's update
+// x_next = alpha_next*x0Pred + sigma_next*eps and simplifying with
+// lambda_t = log(alpha_t/sigma_t), h = lambda_next - lambda_cur gives
+// exactly x_next = (sigma_next/sigma_cur)*x_cur - alpha_next*(exp(-h)-1)*x0Pred
+// — dpm_solver_pp_1_step below — so the two must agree bit-for-bit
+// (mod float rounding) for the same (x0Pred, eps) pair. Verified in
+// this library's ml test suite.
+#pragma once
+#include <std/ml/diffusion.h>
+#include <std/ml/tensor.h>
+#include <std/ml/tensor.sc>
+#include <std/math.h>
+#include <std/math.sc>
+#include <std/mem.sc>
+
+namespace std {
+
+void edm_karras_sigmas(unsigned long numSteps, double sigmaMin, double sigmaMax, double rho,
+                        double* outSigmas) {
+    double minInvRho = pow_d(sigmaMin, 1.0 / rho);
+    double maxInvRho = pow_d(sigmaMax, 1.0 / rho);
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < numSteps) {
+            double frac = (double)i / (double)(numSteps - 1UL);
+            double s = maxInvRho + frac * (minInvRho - maxInvRho);
+            outSigmas[i] = pow_d(s, rho);
+            i = i + 1UL;
+        }
+        outSigmas[numSteps] = 0.0;
+    }
+}
+
+void ddpm_linear_schedule(unsigned long numSteps, double betaStart, double betaEnd,
+                           double* outBeta, double* outAlphaBar) {
+    unsafe {
+        double alphaBarAcc = 1.0;
+        unsigned long t = 0UL;
+        while (t < numSteps) {
+            double frac = (double)t / (double)(numSteps - 1UL);
+            double beta = betaStart + frac * (betaEnd - betaStart);
+            outBeta[t] = beta;
+            alphaBarAcc = alphaBarAcc * (1.0 - beta);
+            outAlphaBar[t] = alphaBarAcc;
+            t = t + 1UL;
+        }
+    }
+}
+
+struct Tensor* ddpm_sampler_step(struct Tensor* x_t, struct Tensor* epsPred,
+                                  double beta_t, double alphaBar_t, struct Tensor* noise) {
+    double invSqrtAlpha = 1.0 / sqrt_d(1.0 - beta_t);
+    double coef = beta_t / sqrt_d(1.0 - alphaBar_t);
+    struct Tensor* scaledEps = tensor_scale(epsPred, coef);
+    struct Tensor* diff = tensor_sub(x_t, scaledEps);
+    struct Tensor* mean = tensor_scale(diff, invSqrtAlpha);
+    double sigma_t = sqrt_d(beta_t);
+    struct Tensor* scaledNoise = tensor_scale(noise, sigma_t);
+    struct Tensor* out = tensor_add(mean, scaledNoise);
+
+    scaledEps->free(); diff->free(); mean->free(); scaledNoise->free();
+    unsafe { free((void*)scaledEps); free((void*)diff); free((void*)mean); free((void*)scaledNoise); }
+    return out;
+}
+
+struct Tensor* ddim_sampler_step(struct Tensor* x_t, struct Tensor* epsPred,
+                                  double alphaBar_t, double alphaBar_prev) {
+    double sqrtAlphaBar_t = sqrt_d(alphaBar_t);
+    double sqrtOneMinusAlphaBar_t = sqrt_d(1.0 - alphaBar_t);
+    struct Tensor* scaledEps1 = tensor_scale(epsPred, sqrtOneMinusAlphaBar_t);
+    struct Tensor* numer = tensor_sub(x_t, scaledEps1);
+    struct Tensor* x0Pred = tensor_scale(numer, 1.0 / sqrtAlphaBar_t);
+
+    double sqrtAlphaBarPrev = sqrt_d(alphaBar_prev);
+    double sqrtOneMinusAlphaBarPrev = sqrt_d(1.0 - alphaBar_prev);
+    struct Tensor* term1 = tensor_scale(x0Pred, sqrtAlphaBarPrev);
+    struct Tensor* term2 = tensor_scale(epsPred, sqrtOneMinusAlphaBarPrev);
+    struct Tensor* out = tensor_add(term1, term2);
+
+    scaledEps1->free(); numer->free(); x0Pred->free(); term1->free(); term2->free();
+    unsafe {
+        free((void*)scaledEps1); free((void*)numer); free((void*)x0Pred);
+        free((void*)term1); free((void*)term2);
+    }
+    return out;
+}
+
+struct Tensor* dpm_solver_1_step(struct Tensor* x_cur, struct Tensor* epsPred,
+                                  double alpha_cur, double sigma_cur,
+                                  double alpha_next, double sigma_next) {
+    double lambda_cur = log_d(alpha_cur / sigma_cur);
+    double lambda_next = log_d(alpha_next / sigma_next);
+    double h = lambda_next - lambda_cur;
+    double expm1h = exp_d(h) - 1.0;
+
+    struct Tensor* term1 = tensor_scale(x_cur, sigma_next / sigma_cur);
+    struct Tensor* term2 = tensor_scale(epsPred, alpha_next * expm1h);
+    struct Tensor* out = tensor_sub(term1, term2);
+
+    term1->free(); term2->free();
+    unsafe { free((void*)term1); free((void*)term2); }
+    return out;
+}
+
+struct Tensor* dpm_solver_2_step(EpsModelFn model, void* userData,
+                                  struct Tensor* x_cur, struct Tensor* epsPred,
+                                  double alpha_cur, double sigma_cur,
+                                  double alpha_next, double sigma_next) {
+    double lambda_cur = log_d(alpha_cur / sigma_cur);
+    double lambda_next = log_d(alpha_next / sigma_next);
+    double h = lambda_next - lambda_cur;
+    double lambda_s = lambda_cur + 0.5 * h;
+    double sigma_s = 1.0 / sqrt_d(exp_d(2.0 * lambda_s) + 1.0);
+    double alpha_s = exp_d(lambda_s) * sigma_s;
+    double expm1Half = exp_d(0.5 * h) - 1.0;
+
+    struct Tensor* sTerm1 = tensor_scale(x_cur, sigma_s / sigma_cur);
+    struct Tensor* sTerm2 = tensor_scale(epsPred, alpha_s * expm1Half);
+    struct Tensor* x_s = tensor_sub(sTerm1, sTerm2);
+
+    struct Tensor* eps_s;
+    unsafe { eps_s = model(x_s, sigma_s, userData); }
+
+    double expm1h = exp_d(h) - 1.0;
+    struct Tensor* nTerm1 = tensor_scale(x_cur, sigma_next / sigma_cur);
+    struct Tensor* nTerm2 = tensor_scale(eps_s, alpha_next * expm1h);
+    struct Tensor* out = tensor_sub(nTerm1, nTerm2);
+
+    sTerm1->free(); sTerm2->free(); x_s->free(); eps_s->free(); nTerm1->free(); nTerm2->free();
+    unsafe {
+        free((void*)sTerm1); free((void*)sTerm2); free((void*)x_s);
+        free((void*)eps_s); free((void*)nTerm1); free((void*)nTerm2);
+    }
+    return out;
+}
+
+struct Tensor* dpm_solver_pp_1_step(struct Tensor* x_cur, struct Tensor* x0Pred,
+                                     double alpha_cur, double sigma_cur,
+                                     double alpha_next, double sigma_next) {
+    double lambda_cur = log_d(alpha_cur / sigma_cur);
+    double lambda_next = log_d(alpha_next / sigma_next);
+    double h = lambda_next - lambda_cur;
+    double expm1NegH = exp_d(-h) - 1.0;
+
+    struct Tensor* term1 = tensor_scale(x_cur, sigma_next / sigma_cur);
+    struct Tensor* term2 = tensor_scale(x0Pred, alpha_next * expm1NegH);
+    struct Tensor* out = tensor_sub(term1, term2);
+
+    term1->free(); term2->free();
+    unsafe { free((void*)term1); free((void*)term2); }
+    return out;
+}
+
+struct Tensor* dpm_solver_pp_2_step(DataModelFn model, void* userData,
+                                     struct Tensor* x_cur, struct Tensor* x0Pred,
+                                     double alpha_cur, double sigma_cur,
+                                     double alpha_next, double sigma_next) {
+    double lambda_cur = log_d(alpha_cur / sigma_cur);
+    double lambda_next = log_d(alpha_next / sigma_next);
+    double h = lambda_next - lambda_cur;
+    double lambda_s = lambda_cur + 0.5 * h;
+    double sigma_s = 1.0 / sqrt_d(exp_d(2.0 * lambda_s) + 1.0);
+    double alpha_s = exp_d(lambda_s) * sigma_s;
+    double expm1NegHalf = exp_d(-0.5 * h) - 1.0;
+
+    struct Tensor* sTerm1 = tensor_scale(x_cur, sigma_s / sigma_cur);
+    struct Tensor* sTerm2 = tensor_scale(x0Pred, alpha_s * expm1NegHalf);
+    struct Tensor* x_s = tensor_sub(sTerm1, sTerm2);
+
+    struct Tensor* x0_s;
+    unsafe { x0_s = model(x_s, sigma_s, userData); }
+
+    double expm1NegH = exp_d(-h) - 1.0;
+    struct Tensor* nTerm1 = tensor_scale(x_cur, sigma_next / sigma_cur);
+    struct Tensor* nTerm2 = tensor_scale(x0_s, alpha_next * expm1NegH);
+    struct Tensor* out = tensor_sub(nTerm1, nTerm2);
+
+    sTerm1->free(); sTerm2->free(); x_s->free(); x0_s->free(); nTerm1->free(); nTerm2->free();
+    unsafe {
+        free((void*)sTerm1); free((void*)sTerm2); free((void*)x_s);
+        free((void*)x0_s); free((void*)nTerm1); free((void*)nTerm2);
+    }
+    return out;
+}
+
+} // namespace std
