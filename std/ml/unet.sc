@@ -34,7 +34,7 @@ struct UNet unet_new(unsigned long inChannels, unsigned long c1, unsigned long c
     return net;
 }
 
-void unet_free(struct UNet* net) {
+void unet_free(&UNet net) {
     unsafe {
         conv2d_free((struct Conv2D*)&net->encConv1);
         conv2d_free((struct Conv2D*)&net->encConv2);
@@ -44,7 +44,7 @@ void unet_free(struct UNet* net) {
     }
 }
 
-struct FeatureMap unet_forward(struct UNet* net, const struct FeatureMap* input) {
+struct FeatureMap unet_forward(&UNet net, const &FeatureMap input) {
     struct Conv2D* pEnc1; struct Conv2D* pEnc2; struct Conv2D* pBottle;
     struct Conv2D* pDec1; struct Conv2D* pDec2;
     unsafe {

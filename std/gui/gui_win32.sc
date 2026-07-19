@@ -131,11 +131,19 @@ static int __gui_win32_keycode(unsigned long vk) {
 // runs inside this callback, only gui_poll_event()'s caller sees events.
 void* __gui_win32_wndproc(void* hwnd, unsigned int msg, unsigned long wparam, long lparam) {
     unsafe {
-        void* userData = GetWindowLongPtrW(hwnd, GUI_GWLP_USERDATA);
-        if (userData == (void*)0) {
+        // GWLP_USERDATA round-trips a 'struct GuiWin32Platform*' through
+        // Win32's untyped LPARAM-sized storage slot — the pointee's type is
+        // known and fixed (this file's own struct), only the slot itself is
+        // 'void*' because that's SetWindowLongPtrW/GetWindowLongPtrW's fixed
+        // signature. '?&GuiWin32Platform' (an outliving reference — see
+        // README's "Outliving references" section) makes that a type-
+        // checked cast instead of a bare '(struct GuiWin32Platform*)void*'
+        // one, at no runtime cost (same pointer value, same codegen).
+        ?&GuiWin32Platform userDataRef = GetWindowLongPtrW(hwnd, GUI_GWLP_USERDATA);
+        struct GuiWin32Platform* p = userDataRef;
+        if (p == (void*)0) {
             return DefWindowProcA(hwnd, msg, wparam, lparam);
         }
-        struct GuiWin32Platform* p = (struct GuiWin32Platform*)userData;
 
         if (msg == GUI_WM_CLOSE) {
             p->closeRequested = 1;
@@ -262,7 +270,8 @@ struct GuiWindow gui_create_window(const char* title, int width, int height) {
                                       (void*)0, (void*)0, inst, (void*)0);
         p->hwnd = hwnd;
         if (hwnd != (void*)0) {
-            SetWindowLongPtrW(hwnd, GUI_GWLP_USERDATA, (void*)p);
+            ?&GuiWin32Platform pRef = p;
+            SetWindowLongPtrW(hwnd, GUI_GWLP_USERDATA, pRef);
             ShowWindow(hwnd, 1 /* SW_SHOWNORMAL */);
             UpdateWindow(hwnd);
             win.platform = (void*)p;

@@ -9,7 +9,7 @@
 
 namespace std {
 
-struct Tensor* tensor_sigmoid(struct Tensor* a) {
+&Tensor tensor_sigmoid(const &Tensor a) {
     struct Tensor* out = tensor_zeros_like(a);
     unsafe {
         unsigned long i = 0UL;
@@ -21,7 +21,7 @@ struct Tensor* tensor_sigmoid(struct Tensor* a) {
     return out;
 }
 
-struct Tensor* tensor_tanh(struct Tensor* a) {
+&Tensor tensor_tanh(const &Tensor a) {
     struct Tensor* out = tensor_zeros_like(a);
     unsafe {
         unsigned long i = 0UL;
@@ -33,7 +33,7 @@ struct Tensor* tensor_tanh(struct Tensor* a) {
     return out;
 }
 
-struct Tensor* tensor_silu(struct Tensor* a) {
+&Tensor tensor_silu(const &Tensor a) {
     struct Tensor* out = tensor_zeros_like(a);
     unsafe {
         unsigned long i = 0UL;
@@ -47,7 +47,7 @@ struct Tensor* tensor_silu(struct Tensor* a) {
     return out;
 }
 
-struct Tensor* tensor_gelu(struct Tensor* a) {
+&Tensor tensor_gelu(const &Tensor a) {
     struct Tensor* out = tensor_zeros_like(a);
     double c = 0.7978845608028654; // sqrt(2/pi)
     unsafe {
@@ -62,7 +62,7 @@ struct Tensor* tensor_gelu(struct Tensor* a) {
     return out;
 }
 
-struct Tensor* tensor_layernorm_rows(struct Tensor* x, double eps) {
+&Tensor tensor_layernorm_rows(const &Tensor x, double eps) {
     unsigned long rows; unsigned long cols;
     unsafe { rows = x->shape[0]; cols = x->shape[1]; }
     struct Tensor* out = tensor_new_2d(rows, cols, 0);
@@ -95,7 +95,7 @@ struct Tensor* tensor_layernorm_rows(struct Tensor* x, double eps) {
     return out;
 }
 
-struct Tensor* tensor_residual_add(struct Tensor* x, struct Tensor* sublayerOut) {
+&Tensor tensor_residual_add(const &Tensor x, const &Tensor sublayerOut) {
     return tensor_add(x, sublayerOut);
 }
 

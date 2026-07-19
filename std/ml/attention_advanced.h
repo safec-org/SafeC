@@ -22,8 +22,8 @@ namespace std {
 //   K    = c_kv @ Wuk                    [seqLen, dModel]
 //   V    = c_kv @ Wuv                    [seqLen, dModel]
 //   out  = mha_forward(Q, K, V, numHeads)
-struct Tensor* mla_forward(struct Tensor* X, struct Tensor* Wq, struct Tensor* Wdkv,
-                            struct Tensor* Wuk, struct Tensor* Wuv, unsigned long numHeads);
+&Tensor mla_forward(const &Tensor X, const &Tensor Wq, const &Tensor Wdkv,
+                     const &Tensor Wuk, const &Tensor Wuv, unsigned long numHeads);
 
 // EG-MLA (Extended-Group MLA): shares one down-projected latent c_kv
 // across 'numGroups' independent up-projection groups (grouped-query
@@ -33,9 +33,9 @@ struct Tensor* mla_forward(struct Tensor* X, struct Tensor* Wq, struct Tensor* W
 // over its own up-projected K/V slice; results are concatenated back
 // into one [seqLen, dModel] tensor. WukGroups/WuvGroups are numGroups-
 // length C arrays of Tensor pointers (caller-owned).
-struct Tensor* eg_mla_forward(struct Tensor* X, struct Tensor* Wq, struct Tensor* Wdkv,
-                               struct Tensor** WukGroups, struct Tensor** WuvGroups,
-                               unsigned long numGroups, unsigned long headsPerGroup);
+&Tensor eg_mla_forward(const &Tensor X, const &Tensor Wq, const &Tensor Wdkv,
+                        struct Tensor** WukGroups, struct Tensor** WuvGroups,
+                        unsigned long numGroups, unsigned long headsPerGroup);
 
 // ── Shifted-Window attention (Swin, adapted to 1D sequences) ────────────────
 // Swin's two core ideas — partition into fixed-size local windows and
@@ -49,8 +49,8 @@ struct Tensor* eg_mla_forward(struct Tensor* X, struct Tensor* Wq, struct Tensor
 // cyclically rotates rows before windowing and rotates the result back
 // after, so windows at the boundary contain rows from both original
 // neighbors on the next layer.
-struct Tensor* windowed_attention_forward(struct Tensor* Q, struct Tensor* K, struct Tensor* V,
-                                           unsigned long windowSize, unsigned long shift);
+&Tensor windowed_attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
+                                    unsigned long windowSize, unsigned long shift);
 
 // ── Gated DeltaNet ────────────────────────────────────────────────────────────
 // Linear-recurrent attention replacement (Yang et al. 2024): a
@@ -70,8 +70,8 @@ struct Tensor* windowed_attention_forward(struct Tensor* Q, struct Tensor* K, st
 // full paper — documented simplification, same spirit as this file's
 // other scope cuts.
 struct GatedDeltaNet {
-    struct Tensor* Walpha; // [dModel, 1]
-    struct Tensor* Wbeta;  // [dModel, 1]
+    &Tensor Walpha; // [dModel, 1]
+    &Tensor Wbeta;  // [dModel, 1]
     unsigned long  keyDim;
     unsigned long  valueDim;
 };
@@ -79,8 +79,8 @@ struct GatedDeltaNet {
 struct GatedDeltaNet gated_deltanet_new(unsigned long dModel, unsigned long keyDim, unsigned long valueDim);
 // X: [seqLen, dModel] (gate input only), Q/K: [seqLen, keyDim], V: [seqLen, valueDim]
 // -> result: [seqLen, valueDim], computed via a sequential scan over time.
-struct Tensor* gated_deltanet_forward(struct GatedDeltaNet* layer, struct Tensor* X,
-                                       struct Tensor* Q, struct Tensor* K, struct Tensor* V);
-void gated_deltanet_free(struct GatedDeltaNet* layer);
+&Tensor gated_deltanet_forward(const &GatedDeltaNet layer, const &Tensor X,
+                                const &Tensor Q, const &Tensor K, const &Tensor V);
+void gated_deltanet_free(&GatedDeltaNet layer);
 
 } // namespace std

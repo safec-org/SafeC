@@ -27,7 +27,9 @@ struct UNet {
 struct UNet unet_new(unsigned long inChannels, unsigned long c1, unsigned long c2,
                       unsigned long outChannels);
 // Input height/width must each be divisible by 4 (two 2x poolings).
-struct FeatureMap unet_forward(struct UNet* net, const struct FeatureMap* input);
-void unet_free(struct UNet* net);
+// 'net' isn't semantically mutated, but is taken by mutable reference
+// since its Conv2D sub-layers are threaded through by address internally.
+struct FeatureMap unet_forward(&UNet net, const &FeatureMap input);
+void unet_free(&UNet net);
 
 } // namespace std

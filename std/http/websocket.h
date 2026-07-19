@@ -63,26 +63,26 @@ int ws_listen(unsigned short port);
 // response with the computed Sec-WebSocket-Accept). On success, fills
 // '*out' and returns 1; on a connection that fails to complete the
 // handshake, returns 0 (the underlying fd is already closed).
-int ws_accept(int listenFd, struct WsConn* out);
+int ws_accept(int listenFd, &WsConn out);
 
 // ── Framing ───────────────────────────────────────────────────────────────
 
-int ws_send_text(struct WsConn* conn, const char* text);
-int ws_send_binary(struct WsConn* conn, const unsigned char* data, unsigned long len);
-int ws_send_ping(struct WsConn* conn);
-int ws_send_pong(struct WsConn* conn);
+int ws_send_text(&WsConn conn, const char* text);
+int ws_send_binary(&WsConn conn, const unsigned char* data, unsigned long len);
+int ws_send_ping(&WsConn conn);
+int ws_send_pong(&WsConn conn);
 // Sends a close frame. Does not close the underlying socket — call
 // ws_close (below) to do both.
-int ws_send_close(struct WsConn* conn);
+int ws_send_close(&WsConn conn);
 
 // Reads one complete frame (see the file-level comment on fragmentation).
-// Returns 1 with '*out' filled on success, 0 on a connection error/EOF/
+// Returns 1 with 'out' filled on success, 0 on a connection error/EOF/
 // malformed frame. A WS_OPCODE_CLOSE message is returned like any other
 // (not treated specially) — check for it and call ws_close yourself.
-int ws_recv(struct WsConn* conn, struct WsMessage* out);
+int ws_recv(&WsConn conn, &WsMessage out);
 
 // Sends a close frame (best-effort — ignores failure, since the peer may
 // already be gone) and closes the socket.
-void ws_close(struct WsConn* conn);
+void ws_close(&WsConn conn);
 
 } // namespace std

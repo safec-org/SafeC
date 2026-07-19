@@ -23,23 +23,23 @@ namespace std {
 // Row-wise softmax: for a [rows, cols] tensor, each output row sums to 1.
 // Numerically stable (subtracts each row's max before exponentiating).
 // Forward-only — see this header's note above.
-struct Tensor* softmax_rows(struct Tensor* x);
+&Tensor softmax_rows(const &Tensor x);
 
 // out[r][c] = in[r][c] transposed -> [cols, rows].
-struct Tensor* tensor_transpose(struct Tensor* in);
+&Tensor tensor_transpose(const &Tensor in);
 
 // Copies out the column range [startCol, startCol+numCols) of every row.
-struct Tensor* tensor_slice_cols(struct Tensor* in, unsigned long startCol, unsigned long numCols);
+&Tensor tensor_slice_cols(const &Tensor in, unsigned long startCol, unsigned long numCols);
 
 // Writes 'src' into 'dst's column range [startCol, startCol+numCols)
 // (numCols == src's own column count), row by row. Used to reassemble
 // per-head outputs into one [seqLen, dModel] tensor after mha_forward's
 // per-head loop.
-void tensor_set_cols(struct Tensor* dst, unsigned long startCol, struct Tensor* src);
+void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src);
 
 // Single-head scaled dot-product attention: softmax(Q @ K^T / sqrt(headDim)) @ V.
 // Q: [seqLen, headDim], K/V: [kvLen, headDim] -> result: [seqLen, headDim].
-struct Tensor* attention_forward(struct Tensor* Q, struct Tensor* K, struct Tensor* V);
+&Tensor attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V);
 
 // Multi-head attention: splits Q/K/V's dModel columns into 'numHeads'
 // equal headDim-wide slices (dModel must be divisible by numHeads), runs
@@ -47,7 +47,7 @@ struct Tensor* attention_forward(struct Tensor* Q, struct Tensor* K, struct Tens
 // back into one [seqLen, dModel] result — the standard MHA shape from
 // "Attention Is All You Need", without a separate output-projection
 // matrix (apply your own W_O via tensor_matmul on the result if needed).
-struct Tensor* mha_forward(struct Tensor* Q, struct Tensor* K, struct Tensor* V, unsigned long numHeads);
+&Tensor mha_forward(const &Tensor Q, const &Tensor K, const &Tensor V, unsigned long numHeads);
 
 // ── Gated attention ──────────────────────────────────────────────────────────
 // Output gating: sigmoid(gateLogits) elementwise-multiplied into the
@@ -55,10 +55,10 @@ struct Tensor* mha_forward(struct Tensor* Q, struct Tensor* K, struct Tensor* V,
 // modulate an attention block's contribution to the residual stream).
 // 'gateLogits' must match the output shape: [seqLen, headDim] for
 // gated_attention_forward, [seqLen, dModel] for gated_mha_forward.
-struct Tensor* gated_attention_forward(struct Tensor* Q, struct Tensor* K, struct Tensor* V,
-                                        struct Tensor* gateLogits);
-struct Tensor* gated_mha_forward(struct Tensor* Q, struct Tensor* K, struct Tensor* V,
-                                  unsigned long numHeads, struct Tensor* gateLogits);
+&Tensor gated_attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
+                                 const &Tensor gateLogits);
+&Tensor gated_mha_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
+                           unsigned long numHeads, const &Tensor gateLogits);
 
 // ── Linear attention ─────────────────────────────────────────────────────────
 // Kernel-trick reformulation (Katharopoulos et al., "Transformers are
@@ -68,7 +68,7 @@ struct Tensor* gated_mha_forward(struct Tensor* Q, struct Tensor* K, struct Tens
 // ([headDim,headDim]) instead of the full [seqLen,kvLen] score matrix:
 //   out_i = (phi(Q_i) . sum_j phi(K_j) (x) V_j) / (phi(Q_i) . sum_j phi(K_j))
 // Q: [seqLen,headDim], K/V: [kvLen,headDim] -> result: [seqLen,headDim].
-struct Tensor* linear_attention_forward(struct Tensor* Q, struct Tensor* K, struct Tensor* V);
+&Tensor linear_attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V);
 
 // ── Flash attention ──────────────────────────────────────────────────────────
 // Tiled, online-softmax attention (Dao et al.): processes K/V in blocks
@@ -78,7 +78,7 @@ struct Tensor* linear_attention_forward(struct Tensor* Q, struct Tensor* K, stru
 // the same result as attention_forward() (up to floating-point rounding)
 // — the point is the memory-access pattern, not a different answer.
 // Q: [seqLen,headDim], K/V: [kvLen,headDim] -> result: [seqLen,headDim].
-struct Tensor* flash_attention_forward(struct Tensor* Q, struct Tensor* K, struct Tensor* V,
-                                        unsigned long kvBlockSize);
+&Tensor flash_attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
+                                 unsigned long kvBlockSize);
 
 } // namespace std

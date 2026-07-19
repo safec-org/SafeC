@@ -179,7 +179,7 @@ int ws_listen(unsigned short port) {
     return fd;
 }
 
-int ws_accept(int listenFd, struct WsConn* out) {
+int ws_accept(int listenFd, &WsConn out) {
     int fd;
     unsafe { fd = tcp_accept_nb(listenFd); }
     if (fd < 0) { return 0; }
@@ -296,30 +296,30 @@ static int ws_write_frame_(struct WsConn* conn, int opcode,
     return 1;
 }
 
-int ws_send_text(struct WsConn* conn, const char* text) {
+int ws_send_text(&WsConn conn, const char* text) {
     unsigned long len = str_len(text);
     const unsigned char* udata;
     unsafe { udata = (const unsigned char*)text; }
     return ws_write_frame_(conn, WS_OPCODE_TEXT, udata, len);
 }
 
-int ws_send_binary(struct WsConn* conn, const unsigned char* data, unsigned long len) {
+int ws_send_binary(&WsConn conn, const unsigned char* data, unsigned long len) {
     return ws_write_frame_(conn, WS_OPCODE_BINARY, data, len);
 }
 
-int ws_send_ping(struct WsConn* conn) {
+int ws_send_ping(&WsConn conn) {
     return ws_write_frame_(conn, WS_OPCODE_PING, (const unsigned char*)0, 0UL);
 }
 
-int ws_send_pong(struct WsConn* conn) {
+int ws_send_pong(&WsConn conn) {
     return ws_write_frame_(conn, WS_OPCODE_PONG, (const unsigned char*)0, 0UL);
 }
 
-int ws_send_close(struct WsConn* conn) {
+int ws_send_close(&WsConn conn) {
     return ws_write_frame_(conn, WS_OPCODE_CLOSE, (const unsigned char*)0, 0UL);
 }
 
-int ws_recv(struct WsConn* conn, struct WsMessage* out) {
+int ws_recv(&WsConn conn, &WsMessage out) {
     int fd;
     unsafe { fd = conn->fd; }
 
@@ -386,7 +386,7 @@ int ws_recv(struct WsConn* conn, struct WsMessage* out) {
     return 1;
 }
 
-void ws_close(struct WsConn* conn) {
+void ws_close(&WsConn conn) {
     ws_send_close(conn);
     int fd;
     unsafe { fd = conn->fd; }

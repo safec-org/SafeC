@@ -20,7 +20,7 @@ struct FeatureMap feature_map_new(unsigned long channels, unsigned long height, 
     return fm;
 }
 
-void feature_map_free(struct FeatureMap* fm) {
+void feature_map_free(&FeatureMap fm) {
     unsafe { free((void*)fm->data); }
 }
 
@@ -55,11 +55,11 @@ struct Conv2D conv2d_new(unsigned long inChannels, unsigned long outChannels,
     return layer;
 }
 
-void conv2d_free(struct Conv2D* layer) {
+void conv2d_free(&Conv2D layer) {
     unsafe { free((void*)layer->weight); free((void*)layer->bias); }
 }
 
-struct FeatureMap conv2d_forward(struct Conv2D* layer, const struct FeatureMap* input) {
+struct FeatureMap conv2d_forward(const &Conv2D layer, const &FeatureMap input) {
     unsigned long inH; unsigned long inW; unsigned long inC;
     unsigned long kH; unsigned long kW; unsigned long stride; unsigned long padding;
     unsigned long outC;
@@ -111,7 +111,7 @@ struct FeatureMap conv2d_forward(struct Conv2D* layer, const struct FeatureMap* 
     return out;
 }
 
-struct FeatureMap maxpool2d_forward(const struct FeatureMap* input, unsigned long kernel, unsigned long stride) {
+struct FeatureMap maxpool2d_forward(const &FeatureMap input, unsigned long kernel, unsigned long stride) {
     unsigned long c; unsigned long h; unsigned long w;
     unsafe { c = input->channels; h = input->height; w = input->width; }
     unsigned long outH = (h - kernel) / stride + 1UL;
@@ -146,7 +146,7 @@ struct FeatureMap maxpool2d_forward(const struct FeatureMap* input, unsigned lon
     return out;
 }
 
-struct FeatureMap avgpool2d_forward(const struct FeatureMap* input, unsigned long kernel, unsigned long stride) {
+struct FeatureMap avgpool2d_forward(const &FeatureMap input, unsigned long kernel, unsigned long stride) {
     unsigned long c; unsigned long h; unsigned long w;
     unsafe { c = input->channels; h = input->height; w = input->width; }
     unsigned long outH = (h - kernel) / stride + 1UL;
@@ -181,7 +181,7 @@ struct FeatureMap avgpool2d_forward(const struct FeatureMap* input, unsigned lon
     return out;
 }
 
-struct FeatureMap upsample2x_nearest(const struct FeatureMap* input) {
+struct FeatureMap upsample2x_nearest(const &FeatureMap input) {
     unsigned long c; unsigned long h; unsigned long w;
     unsafe { c = input->channels; h = input->height; w = input->width; }
     unsigned long outH = h * 2UL;
@@ -209,7 +209,7 @@ struct FeatureMap upsample2x_nearest(const struct FeatureMap* input) {
     return out;
 }
 
-struct FeatureMap concat_channels(const struct FeatureMap* a, const struct FeatureMap* b) {
+struct FeatureMap concat_channels(const &FeatureMap a, const &FeatureMap b) {
     unsigned long ca; unsigned long cb; unsigned long h; unsigned long w;
     unsafe { ca = a->channels; cb = b->channels; h = a->height; w = a->width; }
     struct FeatureMap out = feature_map_new(ca + cb, h, w);

@@ -39,8 +39,8 @@ namespace std {
 
 // One key/value pair inside a VAL_OBJECT's obj_val Vec.
 struct ObjectEntry {
-    char*        key;   // heap-allocated, NUL-terminated, owned
-    struct Value* val;  // heap-allocated, owned
+    char*   key;  // heap-allocated, NUL-terminated, owned
+    &Value  val;  // heap-allocated, owned, always present once inserted
 };
 
 struct Value {
@@ -59,13 +59,16 @@ struct Value {
     double as_float() const;
     const char* as_string() const;
 
-    // Array/Object element access (read-only views — the returned pointer
-    // aliases storage owned by this Value, don't free it separately).
+    // Array/Object element access (read-only views — the returned
+    // reference aliases storage owned by this Value, don't free it
+    // separately). 'array_at' trusts 'idx' is in range (see array_len());
+    // 'object_get' is the one nullable lookup — no entry for 'key' is a
+    // real, expected outcome, not a caller error.
     unsigned long   array_len() const;
-    struct Value*   array_at(unsigned long idx) const;
+    &Value          array_at(unsigned long idx) const;
     unsigned long   object_len() const;
-    // NULL if the key isn't present.
-    struct Value*   object_get(const char* key) const;
+    // Empty (null case) if the key isn't present.
+    ?&Value         object_get(const char* key) const;
 };
 
 struct Value value_null();
@@ -77,10 +80,10 @@ struct Value value_array();                 // empty; grow with value_array_push
 struct Value value_object();                // empty; grow with value_object_set
 
 // Both take ownership of 'v' (see the file-level ownership note above).
-void value_array_push(struct Value* arr, struct Value v);
-void value_object_set(struct Value* obj, const char* key, struct Value v);
+void value_array_push(&Value arr, struct Value v);
+void value_object_set(&Value obj, const char* key, struct Value v);
 
-struct Value value_clone(const struct Value* v);
-void value_free(struct Value* v);
+struct Value value_clone(const &Value v);
+void value_free(&Value v);
 
 } // namespace std

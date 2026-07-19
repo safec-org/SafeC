@@ -21,7 +21,7 @@ inline unsigned long mmu_l2_idx_(unsigned long virt) {
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 
-inline struct MmuContext mmu_init(unsigned long root, void* frames) {
+inline struct MmuContext mmu_init(unsigned long root, &static FrameAllocator frames) {
     struct MmuContext ctx;
     ctx.root   = root;
     ctx.frames = frames;
@@ -40,8 +40,7 @@ int MmuContext::map(unsigned long virt, unsigned long phys, unsigned int flags) 
 
         // If L1 entry absent, allocate a new L2 frame.
         if ((l1[l1_idx] & (unsigned long)PAGE_PRESENT) == (unsigned long)0) {
-            struct FrameAllocator* fa = (struct FrameAllocator*)self.frames;
-            long long frame = fa->alloc();
+            long long frame = self.frames.alloc();
             if (frame < 0) { return 0; }                   // OOM
             unsigned long l2_phys = (unsigned long)frame * (unsigned long)PAGE_SIZE;
             // Zero the new L2 frame.

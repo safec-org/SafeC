@@ -20,7 +20,7 @@ struct FeatureMap {
 };
 
 struct FeatureMap feature_map_new(unsigned long channels, unsigned long height, unsigned long width);
-void feature_map_free(struct FeatureMap* fm);
+void feature_map_free(&FeatureMap fm);
 
 // out[oc][oh][ow] = bias[oc] + sum_ic sum_kh sum_kw
 //                     weight[oc][ic][kh][kw] * in[ic][oh*stride+kh-padding][ow*stride+kw-padding]
@@ -42,24 +42,24 @@ struct Conv2D {
 struct Conv2D conv2d_new(unsigned long inChannels, unsigned long outChannels,
                           unsigned long kH, unsigned long kW,
                           unsigned long stride, unsigned long padding);
-struct FeatureMap conv2d_forward(struct Conv2D* layer, const struct FeatureMap* input);
-void conv2d_free(struct Conv2D* layer);
+struct FeatureMap conv2d_forward(const &Conv2D layer, const &FeatureMap input);
+void conv2d_free(&Conv2D layer);
 
 // Max/avg pooling: kernel x kernel window, given stride, no padding.
 // Channel count is preserved; caller must choose dimensions divisible by
 // the kernel/stride combination.
-struct FeatureMap maxpool2d_forward(const struct FeatureMap* input, unsigned long kernel, unsigned long stride);
-struct FeatureMap avgpool2d_forward(const struct FeatureMap* input, unsigned long kernel, unsigned long stride);
+struct FeatureMap maxpool2d_forward(const &FeatureMap input, unsigned long kernel, unsigned long stride);
+struct FeatureMap avgpool2d_forward(const &FeatureMap input, unsigned long kernel, unsigned long stride);
 
 // Nearest-neighbor 2x spatial upsample: out[c][2h+dh][2w+dw] = in[c][h][w]
 // for dh,dw in {0,1}. Used by U-Net's decoder path (see unet.h) in place
 // of a learned transposed convolution.
-struct FeatureMap upsample2x_nearest(const struct FeatureMap* input);
+struct FeatureMap upsample2x_nearest(const &FeatureMap input);
 
 // Concatenates 'a' and 'b' along the channel axis: out has
 // a.channels + b.channels channels, a's copied first, then b's. Both
 // must share the same height/width. Used to implement U-Net's encoder-
 // to-decoder skip connections.
-struct FeatureMap concat_channels(const struct FeatureMap* a, const struct FeatureMap* b);
+struct FeatureMap concat_channels(const &FeatureMap a, const &FeatureMap b);
 
 } // namespace std

@@ -32,7 +32,24 @@ struct DmaBuffer {
 struct DmaBuffer dma_buf_wrap(void* virt, unsigned long phys, unsigned long size);
 
 // A simple DMA channel descriptor (driver fills function pointers).
-struct DmaChannel {
+//
+// Generic over 'T', the driver context type start_fn/poll_fn are called
+// with: unlike std/gui's Widget (one shared tree holding many widgets
+// with unrelated context types at once — see README's "Outliving
+// references" section) or std/dsp's TimerWheel/std/fs's BlockDevice/
+// std/rpc's handler table (same shape: one process-wide, multi-tenant
+// collection), a single DmaChannel is owned by exactly one driver for
+// its whole lifetime, so there's no heterogeneity to lose by pinning
+// 'ctx' to one concrete type per channel — a real 'T*'/'&T' fits, not
+// just a 'void*' erasure. 'ctx' is '?&T' rather than '&T' because a
+// driver with no per-transfer state legitimately passes none (see
+// start()/wait() below, which treat a null ctx as "no context needed"
+// the same way they already treat a null start_fn/poll_fn as "unset").
+// start_fn/poll_fn stay 'void*' (function pointers, not object
+// pointers — matches std/gui/gui_widget.h's WidgetCallback fields, cast
+// back to a real 'fn' type only at the call site, same documented
+// workaround).
+generic<T> struct DmaChannel {
     unsigned int  id;
     int           busy;
 
@@ -40,7 +57,7 @@ struct DmaChannel {
     void*         start_fn;
     // poll_fn(ctx) → 1 when complete, 0 while busy.
     void*         poll_fn;
-    void*         ctx;
+    ?&T           ctx;
 
     // Start a memory-to-memory DMA transfer.
     int  start(unsigned long src_phys, unsigned long dst_phys, unsigned long len);

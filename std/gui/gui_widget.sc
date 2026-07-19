@@ -133,7 +133,7 @@ struct Widget* widget_custom(WidgetDrawFn draw, WidgetLayoutFn layout,
     }
 }
 
-void widget_add_child(struct Widget* parent, struct Widget* child) {
+void widget_add_child(&Widget parent, &Widget child) {
     unsafe {
         child->parent = parent;
         parent->children.push((const void*)&child);
@@ -179,7 +179,7 @@ struct Widget* widget_set_font_scale(struct Widget* w, int scale) {
     unsafe { w->style.fontScale = scale; }
     return w;
 }
-struct Widget* widget_set_font(struct Widget* w, const struct GuiFont* font) {
+struct Widget* widget_set_font(struct Widget* w, const ?&GuiFont font) {
     unsafe { w->style.font = font; }
     return w;
 }

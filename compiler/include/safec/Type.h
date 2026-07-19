@@ -14,30 +14,45 @@ enum class Region {
     Static,  // &static T — program lifetime
     Heap,    // &heap T   — explicit free required
     Arena,   // &arena<R> T — user-defined arena
-    // ?&T — an "outliving reference": no region is declared or tracked at
-    // all. Exists for pointers that cross the extern-function boundary
-    // (an 'extern' — SafeC's only linkage form, always C-ABI — function's
-    // T* parameter/return, or a value handed to one) and may be retained
-    // by the extern side past the current function's return (a stored
-    // callback userData pointer, an opaque handle, etc.), so neither
-    // '&stack' (dies with this scope) nor '&heap'/'&static' (claims an
-    // ownership/lifetime guarantee SafeC has no way to verify across the
-    // ABI boundary) fit. A raw T* converts to '?&T' implicitly with no
-    // 'unsafe' (see Sema::canImplicitlyConvert's Pointer→Reference rule,
-    // which every region already takes this same path); reading the
-    // value out requires 'match'/'is_null()'/'.default(value)' or an
-    // 'unsafe'-gated '!', identical to any other nullable reference (see
+    // &T / ?&T with no region keyword at all — an "outliving reference":
+    // no region is declared or tracked. Two overlapping uses:
+    //   1. Pointers crossing the extern-function boundary (an 'extern' —
+    //      SafeC's only linkage form, always C-ABI — function's T*
+    //      parameter/return, or a value handed to one) that may be
+    //      retained by the extern side past the current function's
+    //      return (a stored callback userData pointer, an opaque
+    //      handle, etc.), so neither '&stack' (dies with this scope) nor
+    //      '&heap'/'&static' (claims an ownership/lifetime guarantee
+    //      SafeC has no way to verify across the ABI boundary) fit.
+    //   2. The general case of a parameter/field/return whose region
+    //      isn't "obviously" one specific thing — a caller might
+    //      reasonably pass a &stack, &heap, &static, or &arena value,
+    //      and forcing one specific region would just reject the others
+    //      for no real safety gain. Default to Extern (open) rather than
+    //      picking a region when nothing in the value's own semantics
+    //      pins it to one; reserve a concrete region ('&stack T' etc.)
+    //      for when the parameter genuinely only makes sense for that
+    //      one lifetime (e.g. a callee that stores the reference past
+    //      its own return needs '&heap'/'&static', not '&stack').
+    // Nullable ('?&T') vs non-nullable ('&T') is an orthogonal, ordinary
+    // choice — pick nullable only where the value can genuinely be
+    // absent, exactly as with any other reference kind.
+    //
+    // A raw T* converts to '&T'/'?&T' implicitly with no 'unsafe' (see
+    // Sema::canImplicitlyConvert's Pointer→Reference rule, which every
+    // region already takes this same path); reading a *nullable* one out
+    // requires 'match'/'is_null()'/'.default(value)' or an 'unsafe'-gated
+    // '!', identical to any other nullable reference (see
     // Sema::checkNullabilityDeref) — those all already exist and don't
-    // special-case Extern. checkAssign/checkCallRegions/checkRegionEscape
-    // only ever test the specific Stack/Static/Heap/Arena cases above, so
-    // Extern references skip every escape/lifetime check by construction
-    // — "it doesn't have to determine region" falls out of the existing
-    // design rather than needing new logic. Printed without a region
-    // keyword at all (ReferenceType::str() special-cases this), so it
-    // round-trips as exactly '?&T' (or '&T' once unwrapped to non-
-    // nullable — though in practice '!'/'match'/'try' all unwrap straight
-    // to the plain base type T, not a reference, so that form rarely
-    // appears in practice; see those in Sema.cpp).
+    // special-case Extern. A *non-nullable* '&T' derefs/member-accesses
+    // freely, same as any other non-nullable reference.
+    // checkAssign/checkCallRegions/checkRegionEscape only ever test the
+    // specific Stack/Static/Heap/Arena cases above, so Extern references
+    // skip every escape/lifetime check by construction — "it doesn't
+    // have to determine region" falls out of the existing design rather
+    // than needing new logic. Printed without a region keyword at all
+    // (ReferenceType::str() special-cases this), so it round-trips as
+    // exactly '&T'/'?&T'.
     Extern,
 };
 

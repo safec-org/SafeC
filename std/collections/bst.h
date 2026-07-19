@@ -6,14 +6,14 @@
 namespace std {
 
 struct BSTNode {
-    void*            key;
-    void*            val;
-    struct BSTNode*  left;
-    struct BSTNode*  right;
+    void*        key;   // generic-erasure (element type is caller-parametric — see gui_widget.h's field comment for the same shape)
+    void*        val;
+    ?&heap BSTNode left;  // empty (null) for a leaf's missing child
+    ?&heap BSTNode right;
 };
 
 struct BST {
-    struct BSTNode* root;
+    ?&heap BSTNode root;  // empty (null) for an empty tree; heap-owned by this BST
     unsigned long   key_size;
     unsigned long   val_size;
     void*           cmp_fn;   // int(*)(const void*, const void*)

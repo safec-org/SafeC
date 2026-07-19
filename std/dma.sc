@@ -79,7 +79,12 @@ inline int DmaChannel::start(unsigned long src_phys, unsigned long dst_phys, uns
     unsafe {
         fn int(void*, unsigned long, unsigned long, unsigned long) func =
             (fn int(void*, unsigned long, unsigned long, unsigned long))self.start_fn;
-        int rc = func(self.ctx, src_phys, dst_phys, len);
+        // '?&T -> void*': implicit, no unsafe needed on its own (see
+        // Sema::canImplicitlyConvert's Region::Extern -> Pointer rule) —
+        // still inside this 'unsafe' block only for the fn-pointer cast
+        // above, which raw function-pointer calls always require.
+        void* ctxRaw = self.ctx;
+        int rc = func(ctxRaw, src_phys, dst_phys, len);
         if (rc == 0) { self.busy = 1; }
         return rc;
     }
@@ -96,7 +101,8 @@ inline int DmaChannel::wait(unsigned int max_polls) {
         int done;
         unsafe {
             fn int(void*) func = (fn int(void*))self.poll_fn;
-            done = func(self.ctx);
+            void* ctxRaw = self.ctx;
+            done = func(ctxRaw);
         }
         if (done != 0) {
             self.busy = 0;

@@ -10,6 +10,16 @@ namespace std {
 struct WheelTimer {
     unsigned long expires;   // absolute tick when the timer fires
     void*         callback;  // function pointer: void(*)(void* ctx)
+    // 'ctx' stays 'void*' rather than a typed '?&T': one TimerWheel is
+    // meant to be a single, process-wide, multi-tenant scheduler — its
+    // WHEEL_TIMERS slots routinely host unrelated subsystems' timers
+    // (a network retransmit timer next to a UI blink-cursor timer) with
+    // different context types at once. Genericizing TimerWheel<T> would
+    // force every timer in a given wheel to share one T instead — see
+    // std/gui/gui_widget.h's Widget.userData for the fuller writeup of
+    // this tradeoff, and std/dma.h's DmaChannel<T> for a case where a
+    // concrete T *does* fit (one driver owns a whole channel, no
+    // multi-tenancy to lose).
     void*         ctx;       // user context passed to callback
     int           used;      // 1 if slot occupied, 0 if free
     int           periodic;  // 1 → auto-reschedule every `period` ticks

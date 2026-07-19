@@ -30,17 +30,17 @@ namespace std {
 //   h2 = LN(x); h2 = h2*(1+scale2)+shift2
 //   x = x + gate2 * (relu(h2@W1+b1)@W2+b2)
 struct DiTBlock {
-    struct Tensor* Wq; struct Tensor* Wk; struct Tensor* Wv; struct Tensor* Wo; // [dModel,dModel]
-    struct Tensor* W1; struct Tensor* b1; // [dModel,dHidden], [1,dHidden]
-    struct Tensor* W2; struct Tensor* b2; // [dHidden,dModel], [1,dModel]
-    struct Tensor* WadaLN; // [dModelCond, 6*dModel]
+    &Tensor Wq; &Tensor Wk; &Tensor Wv; &Tensor Wo; // [dModel,dModel]
+    &Tensor W1; &Tensor b1; // [dModel,dHidden], [1,dHidden]
+    &Tensor W2; &Tensor b2; // [dHidden,dModel], [1,dModel]
+    &Tensor WadaLN; // [dModelCond, 6*dModel]
     unsigned long numHeads;
 };
 
 struct DiTBlock dit_block_new(unsigned long dModel, unsigned long dHidden,
                                unsigned long dModelCond, unsigned long numHeads);
-struct Tensor* dit_block_forward(struct DiTBlock* block, struct Tensor* x, struct Tensor* c);
-void dit_block_free(struct DiTBlock* block);
+&Tensor dit_block_forward(const &DiTBlock block, const &Tensor x, const &Tensor c);
+void dit_block_free(&DiTBlock block);
 
 // ── JiT (plain pre-LN transformer, additive conditioning) ───────────────────
 // Conditioning is added directly to the token embeddings once, up front
@@ -51,21 +51,21 @@ void dit_block_free(struct DiTBlock* block);
 //   h = LN(x); x = x + MHA(h@Wq,h@Wk,h@Wv,heads)@Wo
 //   h2 = LN(x); x = x + relu(h2@W1+b1)@W2+b2
 struct JiTBlock {
-    struct Tensor* Wq; struct Tensor* Wk; struct Tensor* Wv; struct Tensor* Wo;
-    struct Tensor* W1; struct Tensor* b1;
-    struct Tensor* W2; struct Tensor* b2;
+    &Tensor Wq; &Tensor Wk; &Tensor Wv; &Tensor Wo;
+    &Tensor W1; &Tensor b1;
+    &Tensor W2; &Tensor b2;
     unsigned long numHeads;
 };
 
 struct JiTBlock jit_block_new(unsigned long dModel, unsigned long dHidden, unsigned long numHeads);
-struct Tensor* jit_block_forward(struct JiTBlock* block, struct Tensor* x);
-void jit_block_free(struct JiTBlock* block);
+&Tensor jit_block_forward(const &JiTBlock block, const &Tensor x);
+void jit_block_free(&JiTBlock block);
 
 // patches: [seqLen, patchDim], WPatchEmbed: [patchDim, dModel], cond:
 // [1, dModel] (broadcast-added to every token's embedding once, up
-// front). Runs 'blocks' (an array of numBlocks JiTBlock, caller-owned)
-// in sequence and returns the final [seqLen, dModel] token sequence.
-struct Tensor* jit_forward(struct Tensor* patches, struct Tensor* WPatchEmbed, struct Tensor* cond,
-                            struct JiTBlock* blocks, unsigned long numBlocks);
+// front). Runs 'blocks' (an array of numBlocks JiTBlock, caller-owned —
+// stays a raw pointer: it's indexed as an array, not a single object).
+&Tensor jit_forward(const &Tensor patches, const &Tensor WPatchEmbed, const &Tensor cond,
+                     struct JiTBlock* blocks, unsigned long numBlocks);
 
 } // namespace std

@@ -15,6 +15,12 @@ struct BlockDevice {
     void*          read_fn;
     // write_fn(ctx, lba, buf, count) → 0 on success
     void*          write_fn;
+    // 'ctx' stays 'void*': BlockDevice is implemented by both the ext
+    // (std/fs/ext.sc) and FAT (std/fs/fat.sc) drivers, and a VFS can
+    // mount both at once — a generic 'BlockDevice<T>' would force every
+    // mounted device to share one driver-context type. See std/gui/
+    // gui_widget.h's Widget.userData for the fuller writeup, and
+    // std/dma.h's DmaChannel<T> for the case where a concrete T fits.
     void*          ctx;            // driver context
 
     // Read `count` sectors starting at `lba` into `buf`.

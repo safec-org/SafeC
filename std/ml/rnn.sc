@@ -65,7 +65,7 @@ struct RNNCell rnn_cell_new(unsigned long inputSize, unsigned long hiddenSize) {
     return c;
 }
 
-struct Tensor* rnn_cell_forward(struct RNNCell* cell, struct Tensor* x_t, struct Tensor* h_prev) {
+&Tensor rnn_cell_forward(const &RNNCell cell, const &Tensor x_t, const &Tensor h_prev) {
     unsafe {
         struct Tensor* xi = tensor_matmul(x_t, cell->W_ih);
         struct Tensor* hh = tensor_matmul(h_prev, cell->W_hh);
@@ -77,7 +77,7 @@ struct Tensor* rnn_cell_forward(struct RNNCell* cell, struct Tensor* x_t, struct
     }
 }
 
-void rnn_cell_free(struct RNNCell* cell) {
+void rnn_cell_free(&RNNCell cell) {
     unsafe {
         cell->W_ih->free(); cell->W_hh->free(); cell->b_ih->free(); cell->b_hh->free();
         free((void*)cell->W_ih); free((void*)cell->W_hh);
@@ -98,7 +98,7 @@ struct GRUCell gru_cell_new(unsigned long inputSize, unsigned long hiddenSize) {
     return c;
 }
 
-struct Tensor* gru_cell_forward(struct GRUCell* cell, struct Tensor* x_t, struct Tensor* h_prev) {
+&Tensor gru_cell_forward(const &GRUCell cell, const &Tensor x_t, const &Tensor h_prev) {
     unsafe {
         struct Tensor* r_sum = __row_add4(tensor_matmul(x_t, cell->W_ir), tensor_matmul(h_prev, cell->W_hr),
                                            cell->b_ir, cell->b_hr);
@@ -133,7 +133,7 @@ struct Tensor* gru_cell_forward(struct GRUCell* cell, struct Tensor* x_t, struct
     }
 }
 
-void gru_cell_free(struct GRUCell* cell) {
+void gru_cell_free(&GRUCell cell) {
     unsafe {
         struct Tensor* all[12];
         all[0]=cell->W_ir; all[1]=cell->W_hr; all[2]=cell->b_ir; all[3]=cell->b_hr;
@@ -159,9 +159,9 @@ struct LSTMCell lstm_cell_new(unsigned long inputSize, unsigned long hiddenSize)
     return c;
 }
 
-struct Tensor* lstm_cell_forward(struct LSTMCell* cell, struct Tensor* x_t,
-                                  struct Tensor* h_prev, struct Tensor* c_prev,
-                                  struct Tensor** c_out) {
+&Tensor lstm_cell_forward(const &LSTMCell cell, const &Tensor x_t,
+                           const &Tensor h_prev, const &Tensor c_prev,
+                           struct Tensor** c_out) {
     unsafe {
         struct Tensor* i_sum = __row_add4(tensor_matmul(x_t, cell->W_ii), tensor_matmul(h_prev, cell->W_hi),
                                            cell->b_ii, cell->b_hi);
@@ -196,7 +196,7 @@ struct Tensor* lstm_cell_forward(struct LSTMCell* cell, struct Tensor* x_t,
     }
 }
 
-void lstm_cell_free(struct LSTMCell* cell) {
+void lstm_cell_free(&LSTMCell cell) {
     unsafe {
         struct Tensor* all[16];
         all[0]=cell->W_ii; all[1]=cell->W_hi; all[2]=cell->b_ii; all[3]=cell->b_hi;
@@ -223,8 +223,8 @@ struct XLSTMCell xlstm_cell_new(unsigned long inputSize, unsigned long hiddenSiz
     return c;
 }
 
-struct XLSTMState xlstm_cell_forward(struct XLSTMCell* cell, struct Tensor* x_t,
-                                      struct XLSTMState* prev) {
+struct XLSTMState xlstm_cell_forward(const &XLSTMCell cell, const &Tensor x_t,
+                                      const &XLSTMState prev) {
     unsafe {
         struct Tensor* z_sum = __row_add4(tensor_matmul(x_t, cell->Wz), tensor_matmul(prev->h, cell->Rz),
                                            cell->bz, tensor_zeros_like(cell->bz));
@@ -304,7 +304,7 @@ struct XLSTMState xlstm_cell_forward(struct XLSTMCell* cell, struct Tensor* x_t,
     }
 }
 
-void xlstm_cell_free(struct XLSTMCell* cell) {
+void xlstm_cell_free(&XLSTMCell cell) {
     unsafe {
         struct Tensor* all[12];
         all[0]=cell->Wz; all[1]=cell->Rz; all[2]=cell->bz;
@@ -316,7 +316,7 @@ void xlstm_cell_free(struct XLSTMCell* cell) {
     }
 }
 
-void xlstm_state_free(struct XLSTMState* s) {
+void xlstm_state_free(&XLSTMState s) {
     unsafe {
         s->h->free(); s->c->free(); s->n->free(); s->m->free();
         free((void*)s->h); free((void*)s->c); free((void*)s->n); free((void*)s->m);

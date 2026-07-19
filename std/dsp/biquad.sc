@@ -173,12 +173,11 @@ struct Biquad bilinear_2nd_order(double B0, double B1, double B2,
 // SafeC operator calls require an lvalue receiver, so each intermediate
 // product/sum is bound to a named local rather than chained inline) exists
 // in exactly one place.
-static struct Complex biquad_freq_response_(const struct Biquad* bq, double fs, double freqHz) {
+static struct Complex biquad_freq_response_(const &stack Biquad bq, double fs, double freqHz) {
     double omega = SAFEC_DSP_TWO_PI_B * freqHz / fs;
     struct Complex zInv = complex_new(cos_d(-omega), sin_d(-omega));
     struct Complex zInv2 = zInv * zInv;
-    double b0; double b1; double b2; double a1; double a2;
-    unsafe { b0 = bq->b0; b1 = bq->b1; b2 = bq->b2; a1 = bq->a1; a2 = bq->a2; }
+    double b0 = bq.b0; double b1 = bq.b1; double b2 = bq.b2; double a1 = bq.a1; double a2 = bq.a2;
 
     struct Complex cb0 = complex_new(b0, 0.0);
     struct Complex cb1 = complex_new(b1, 0.0);
@@ -199,12 +198,12 @@ static struct Complex biquad_freq_response_(const struct Biquad* bq, double fs, 
     return num / den;
 }
 
-double biquad_response_mag(const struct Biquad* bq, double fs, double freqHz) {
+double biquad_response_mag(const &stack Biquad bq, double fs, double freqHz) {
     struct Complex h = biquad_freq_response_(bq, fs, freqHz);
     return h.abs();
 }
 
-double biquad_response_phase(const struct Biquad* bq, double fs, double freqHz) {
+double biquad_response_phase(const &stack Biquad bq, double fs, double freqHz) {
     struct Complex h = biquad_freq_response_(bq, fs, freqHz);
     return h.arg();
 }

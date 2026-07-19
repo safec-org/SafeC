@@ -7,26 +7,22 @@
 
 namespace std {
 
-inline int ipv6_addr_eq(const struct Ipv6Addr* a, const struct Ipv6Addr* b) {
-    unsafe {
-        int i = 0;
-        while (i < IPV6_ADDR_LEN) {
-            if (a->bytes[i] != b->bytes[i]) { return 0; }
-            i = i + 1;
-        }
+inline int ipv6_addr_eq(const &stack Ipv6Addr a, const &stack Ipv6Addr b) {
+    int i = 0;
+    while (i < IPV6_ADDR_LEN) {
+        if (a.bytes[i] != b.bytes[i]) { return 0; }
+        i = i + 1;
     }
     return 1;
 }
 
 // ── ipv6_addr_is_unspecified ──────────────────────────────────────────────────
 
-inline int ipv6_addr_is_unspecified(const struct Ipv6Addr* a) {
-    unsafe {
-        int i = 0;
-        while (i < IPV6_ADDR_LEN) {
-            if (a->bytes[i] != (unsigned char)0) { return 0; }
-            i = i + 1;
-        }
+inline int ipv6_addr_is_unspecified(const &stack Ipv6Addr a) {
+    int i = 0;
+    while (i < IPV6_ADDR_LEN) {
+        if (a.bytes[i] != (unsigned char)0) { return 0; }
+        i = i + 1;
     }
     return 1;
 }
@@ -34,15 +30,13 @@ inline int ipv6_addr_is_unspecified(const struct Ipv6Addr* a) {
 // ── ipv6_addr_is_loopback ─────────────────────────────────────────────────────
 // ::1 = 15 zero bytes followed by 0x01.
 
-inline int ipv6_addr_is_loopback(const struct Ipv6Addr* a) {
-    unsafe {
-        int i = 0;
-        while (i < 15) {
-            if (a->bytes[i] != (unsigned char)0) { return 0; }
-            i = i + 1;
-        }
-        if (a->bytes[15] != (unsigned char)1) { return 0; }
+inline int ipv6_addr_is_loopback(const &stack Ipv6Addr a) {
+    int i = 0;
+    while (i < 15) {
+        if (a.bytes[i] != (unsigned char)0) { return 0; }
+        i = i + 1;
     }
+    if (a.bytes[15] != (unsigned char)1) { return 0; }
     return 1;
 }
 
@@ -50,11 +44,9 @@ inline int ipv6_addr_is_loopback(const struct Ipv6Addr* a) {
 // fe80::/10 — top 10 bits are 1111111010.
 // bytes[0] == 0xFE, bytes[1] & 0xC0 == 0x80
 
-inline int ipv6_addr_is_link_local(const struct Ipv6Addr* a) {
-    unsafe {
-        if (a->bytes[0] != (unsigned char)0xFE) { return 0; }
-        if ((a->bytes[1] & (unsigned char)0xC0) != (unsigned char)0x80) { return 0; }
-    }
+inline int ipv6_addr_is_link_local(const &stack Ipv6Addr a) {
+    if (a.bytes[0] != (unsigned char)0xFE) { return 0; }
+    if ((a.bytes[1] & (unsigned char)0xC0) != (unsigned char)0x80) { return 0; }
     return 1;
 }
 
@@ -70,13 +62,13 @@ static char hex_nibble_(unsigned int v) {
 // Writes 8 groups of 4 hex digits separated by ':'.
 // No :: compression — always 39 printable chars + NUL (40 bytes total).
 
-inline void ipv6_addr_str(const struct Ipv6Addr* addr, char* buf) {
+inline void ipv6_addr_str(const &stack Ipv6Addr addr, char* buf) {
     unsigned long pos = (unsigned long)0;
     int group = 0;
     unsafe {
         while (group < 8) {
-            unsigned int hi = (unsigned int)addr->bytes[group * 2];
-            unsigned int lo = (unsigned int)addr->bytes[group * 2 + 1];
+            unsigned int hi = (unsigned int)addr.bytes[group * 2];
+            unsigned int lo = (unsigned int)addr.bytes[group * 2 + 1];
             unsigned int word = (hi << 8) | lo;
             buf[pos] = hex_nibble_((word >> 12) & (unsigned int)0xF); pos = pos + (unsigned long)1;
             buf[pos] = hex_nibble_((word >>  8) & (unsigned int)0xF); pos = pos + (unsigned long)1;
@@ -123,7 +115,7 @@ int ipv6_parse(&stack PacketBuf pkt, unsigned long offset,
 
 unsigned long ipv6_build(&stack PacketBuf pkt, unsigned long offset,
                           unsigned char next_hdr, unsigned char hop_limit,
-                          const struct Ipv6Addr* src, const struct Ipv6Addr* dst,
+                          const &stack Ipv6Addr src, const &stack Ipv6Addr dst,
                           unsigned short payload_len) {
     unsafe {
         unsigned char* d = (unsigned char*)pkt.data + offset;
@@ -140,8 +132,8 @@ unsigned long ipv6_build(&stack PacketBuf pkt, unsigned long offset,
         d[7] = hop_limit;
         int i = 0;
         while (i < IPV6_ADDR_LEN) {
-            d[8  + i] = src->bytes[i];
-            d[24 + i] = dst->bytes[i];
+            d[8  + i] = src.bytes[i];
+            d[24 + i] = dst.bytes[i];
             i = i + 1;
         }
     }
@@ -161,8 +153,8 @@ unsigned long ipv6_frame(&stack PacketBuf pkt,
                           const unsigned char eth_src[NET_MAC_LEN],
                           const unsigned char eth_dst[NET_MAC_LEN],
                           unsigned char next_hdr,
-                          const struct Ipv6Addr* src,
-                          const struct Ipv6Addr* dst,
+                          const &stack Ipv6Addr src,
+                          const &stack Ipv6Addr dst,
                           unsigned short payload_len) {
     // Write Ethernet header (14 bytes).
     unsafe {

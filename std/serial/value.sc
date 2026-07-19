@@ -68,11 +68,11 @@ inline struct Value value_object() {
     return v;
 }
 
-inline void value_array_push(struct Value* arr, struct Value v) {
+inline void value_array_push(&Value arr, struct Value v) {
     unsafe { arr->arr_val.push((const void*)&v); }
 }
 
-inline void value_object_set(struct Value* obj, const char* key, struct Value v) {
+inline void value_object_set(&Value obj, const char* key, struct Value v) {
     struct ObjectEntry e;
     e.key = value_strdup_(key);
     // Store the value on the heap so ObjectEntry::val is a stable pointer
@@ -86,7 +86,7 @@ inline void value_object_set(struct Value* obj, const char* key, struct Value v)
     }
 }
 
-struct Value value_clone(const struct Value* v) {
+struct Value value_clone(const &Value v) {
     struct Value out = value_null();
     int kind;
     unsafe { kind = v->kind; }
@@ -124,7 +124,7 @@ struct Value value_clone(const struct Value* v) {
     return out;
 }
 
-void value_free(struct Value* v) {
+void value_free(&Value v) {
     int kind;
     unsafe { kind = v->kind; }
     if (kind == VAL_STRING) {
@@ -177,12 +177,12 @@ inline const char* Value::as_string() const {
 }
 
 inline unsigned long Value::array_len() const { return self.arr_val.length(); }
-inline struct Value* Value::array_at(unsigned long idx) const {
+inline &Value Value::array_at(unsigned long idx) const {
     unsafe { return (struct Value*)self.arr_val.get_raw(idx); }
 }
 inline unsigned long Value::object_len() const { return self.obj_val.length(); }
 
-struct Value* Value::object_get(const char* key) const {
+?&Value Value::object_get(const char* key) const {
     unsigned long i = 0UL;
     unsigned long n = self.obj_val.length();
     while (i < n) {

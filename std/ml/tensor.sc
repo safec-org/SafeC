@@ -72,7 +72,7 @@ static void __tensor_ensure_grad(struct Tensor* t) {
     }
 }
 
-struct Tensor* tensor_new_1d(unsigned long n, int requiresGrad) {
+&Tensor tensor_new_1d(unsigned long n, int requiresGrad) {
     unsigned long shape[1];
     unsafe { shape[0] = n; }
     struct Tensor* t = __tensor_alloc(shape, 1UL, requiresGrad);
@@ -80,7 +80,7 @@ struct Tensor* tensor_new_1d(unsigned long n, int requiresGrad) {
     return t;
 }
 
-struct Tensor* tensor_new_2d(unsigned long rows, unsigned long cols, int requiresGrad) {
+&Tensor tensor_new_2d(unsigned long rows, unsigned long cols, int requiresGrad) {
     unsigned long shape[2];
     unsafe { shape[0] = rows; shape[1] = cols; }
     struct Tensor* t = __tensor_alloc(shape, 2UL, requiresGrad);
@@ -88,7 +88,7 @@ struct Tensor* tensor_new_2d(unsigned long rows, unsigned long cols, int require
     return t;
 }
 
-struct Tensor* tensor_from_1d(const double* values, unsigned long n, int requiresGrad) {
+&Tensor tensor_from_1d(const double* values, unsigned long n, int requiresGrad) {
     struct Tensor* t = tensor_new_1d(n, requiresGrad);
     unsafe {
         unsigned long i = 0UL;
@@ -97,7 +97,7 @@ struct Tensor* tensor_from_1d(const double* values, unsigned long n, int require
     return t;
 }
 
-struct Tensor* tensor_from_2d(const double* values, unsigned long rows, unsigned long cols, int requiresGrad) {
+&Tensor tensor_from_2d(const double* values, unsigned long rows, unsigned long cols, int requiresGrad) {
     struct Tensor* t = tensor_new_2d(rows, cols, requiresGrad);
     unsigned long total = rows * cols;
     unsafe {
@@ -107,14 +107,14 @@ struct Tensor* tensor_from_2d(const double* values, unsigned long rows, unsigned
     return t;
 }
 
-struct Tensor* tensor_zeros_like(const struct Tensor* t) {
+&Tensor tensor_zeros_like(const &Tensor t) {
     struct Tensor* out;
     unsafe { out = __tensor_alloc((const unsigned long*)t->shape, t->ndim, 0); }
     tensor_fill(out, 0.0);
     return out;
 }
 
-struct Tensor* tensor_fill(struct Tensor* t, double v) {
+&Tensor tensor_fill(&Tensor t, double v) {
     unsafe {
         unsigned long i = 0UL;
         while (i < t->size) { t->data[i] = v; i = i + 1UL; }
@@ -305,7 +305,7 @@ static void __tensor_link1(struct Tensor* out, struct Tensor* a, void* backwardF
     }
 }
 
-struct Tensor* tensor_add(struct Tensor* a, struct Tensor* b) {
+&Tensor tensor_add(const &Tensor a, const &Tensor b) {
     struct Tensor* out = tensor_zeros_like(a);
     unsafe {
         unsigned long i = 0UL;
@@ -315,7 +315,7 @@ struct Tensor* tensor_add(struct Tensor* a, struct Tensor* b) {
     return out;
 }
 
-struct Tensor* tensor_sub(struct Tensor* a, struct Tensor* b) {
+&Tensor tensor_sub(const &Tensor a, const &Tensor b) {
     struct Tensor* out = tensor_zeros_like(a);
     unsafe {
         unsigned long i = 0UL;
@@ -325,7 +325,7 @@ struct Tensor* tensor_sub(struct Tensor* a, struct Tensor* b) {
     return out;
 }
 
-struct Tensor* tensor_mul(struct Tensor* a, struct Tensor* b) {
+&Tensor tensor_mul(const &Tensor a, const &Tensor b) {
     struct Tensor* out = tensor_zeros_like(a);
     unsafe {
         unsigned long i = 0UL;
@@ -335,7 +335,7 @@ struct Tensor* tensor_mul(struct Tensor* a, struct Tensor* b) {
     return out;
 }
 
-struct Tensor* tensor_scale(struct Tensor* a, double k) {
+&Tensor tensor_scale(const &Tensor a, double k) {
     struct Tensor* out = tensor_zeros_like(a);
     unsafe {
         unsigned long i = 0UL;
@@ -346,7 +346,7 @@ struct Tensor* tensor_scale(struct Tensor* a, double k) {
     return out;
 }
 
-struct Tensor* tensor_relu(struct Tensor* a) {
+&Tensor tensor_relu(const &Tensor a) {
     struct Tensor* out = tensor_zeros_like(a);
     unsafe {
         unsigned long i = 0UL;
@@ -360,7 +360,7 @@ struct Tensor* tensor_relu(struct Tensor* a) {
     return out;
 }
 
-struct Tensor* tensor_sum(struct Tensor* a) {
+&Tensor tensor_sum(const &Tensor a) {
     unsigned long one[1];
     unsafe { one[0] = 1UL; }
     struct Tensor* out = __tensor_alloc(one, 1UL, 0);
@@ -374,7 +374,7 @@ struct Tensor* tensor_sum(struct Tensor* a) {
     return out;
 }
 
-struct Tensor* tensor_matmul(struct Tensor* a, struct Tensor* b) {
+&Tensor tensor_matmul(const &Tensor a, const &Tensor b) {
     unsigned long m; unsigned long k; unsigned long n;
     unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
     struct Tensor* out = tensor_new_2d(m, n, 0);
@@ -414,7 +414,7 @@ static void __tensor_toposort(struct Tensor* t, struct Vec* order) {
     unsafe { order->push((const void*)&t); }
 }
 
-void tensor_backward(struct Tensor* t) {
+void tensor_backward(&Tensor t) {
     __tensor_ensure_grad(t);
     unsafe {
         unsigned long i = 0UL;
@@ -448,7 +448,7 @@ void tensor_backward(struct Tensor* t) {
     }
 }
 
-void tensor_zero_grad(struct Tensor* t) {
+void tensor_zero_grad(&Tensor t) {
     unsafe {
         if (t->grad != (double*)0) {
             unsigned long i = 0UL;

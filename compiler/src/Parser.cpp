@@ -188,13 +188,12 @@ bool Parser::atRegionQualifier() const {
 TypePtr Parser::parseReferenceType(bool nullable, bool leadingConst) {
     // We already consumed '&' or '?&' (and any 'const' preceding it)
     std::string arenaName;
-    // '?&T' with no region keyword at all — an outliving reference
-    // (Region::Extern, see Type.h's doc comment on it): only reachable
-    // through the nullable ('?&') spelling, matching the fact that a
-    // region-less pointer arriving from outside SafeC (an extern
-    // function's T*) is never provably non-null.
-    Region r = (nullable && !atRegionQualifier()) ? Region::Extern
-                                                   : parseRegionQualifier(arenaName);
+    // '&T' / '?&T' with no region keyword at all — an outliving
+    // reference (Region::Extern, see Type.h's doc comment on it).
+    // Nullability is independent of this: both spellings can omit the
+    // region.
+    Region r = atRegionQualifier() ? parseRegionQualifier(arenaName)
+                                    : Region::Extern;
 
     // Parse optional const — either written before the sigil ('const &stack T')
     // or after the region ('&stack const T'); both mean the same thing.

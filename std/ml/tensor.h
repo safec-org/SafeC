@@ -42,25 +42,37 @@ struct Tensor {
     void    free();
 };
 
+// Every function below takes/returns 'Tensor' by a region-less reference
+// ('&Tensor'/'const &Tensor' — see README's "Outliving references"
+// section): a Tensor is never null anywhere in this library, and nothing
+// here cares whether the caller's tensor is heap/stack/static/arena-
+// backed, so pinning one specific region would only narrow who can call
+// these for no safety benefit. Internally, tensors are still allocated
+// with a plain 'malloc' (see tensor.sc's '__tensor_alloc') and freed
+// with 'free()' via 'Tensor::free()' below — 'free()' takes no argument
+// beyond 'self' precisely because there's no separate heap-region
+// bookkeeping to release; call it, then let the reference go out of
+// scope.
+
 // ── Construction ─────────────────────────────────────────────────────────────
-struct Tensor* tensor_new_1d(unsigned long n, int requiresGrad);
-struct Tensor* tensor_new_2d(unsigned long rows, unsigned long cols, int requiresGrad);
+&Tensor tensor_new_1d(unsigned long n, int requiresGrad);
+&Tensor tensor_new_2d(unsigned long rows, unsigned long cols, int requiresGrad);
 // Copies 'values' (length must equal the tensor's size) into a freshly
 // allocated tensor of the given shape.
-struct Tensor* tensor_from_1d(const double* values, unsigned long n, int requiresGrad);
-struct Tensor* tensor_from_2d(const double* values, unsigned long rows, unsigned long cols, int requiresGrad);
-struct Tensor* tensor_zeros_like(const struct Tensor* t);
-struct Tensor* tensor_fill(struct Tensor* t, double v);
+&Tensor tensor_from_1d(const double* values, unsigned long n, int requiresGrad);
+&Tensor tensor_from_2d(const double* values, unsigned long rows, unsigned long cols, int requiresGrad);
+&Tensor tensor_zeros_like(const &Tensor t);
+&Tensor tensor_fill(&Tensor t, double v);
 
 // ── Forward ops (each records a backward edge when either operand
 // requires grad) ────────────────────────────────────────────────────────────
-struct Tensor* tensor_add(struct Tensor* a, struct Tensor* b);
-struct Tensor* tensor_sub(struct Tensor* a, struct Tensor* b);
-struct Tensor* tensor_mul(struct Tensor* a, struct Tensor* b);      // elementwise
-struct Tensor* tensor_scale(struct Tensor* a, double k);            // a * scalar k
-struct Tensor* tensor_matmul(struct Tensor* a, struct Tensor* b);   // 2D x 2D
-struct Tensor* tensor_relu(struct Tensor* a);
-struct Tensor* tensor_sum(struct Tensor* a);                        // -> scalar (1-element) tensor
+&Tensor tensor_add(const &Tensor a, const &Tensor b);
+&Tensor tensor_sub(const &Tensor a, const &Tensor b);
+&Tensor tensor_mul(const &Tensor a, const &Tensor b);      // elementwise
+&Tensor tensor_scale(const &Tensor a, double k);            // a * scalar k
+&Tensor tensor_matmul(const &Tensor a, const &Tensor b);   // 2D x 2D
+&Tensor tensor_relu(const &Tensor a);
+&Tensor tensor_sum(const &Tensor a);                        // -> scalar (1-element) tensor
 
 // ── Autograd ─────────────────────────────────────────────────────────────────
 // 't' must be a scalar (size == 1, e.g. a loss). Seeds t->grad = 1, walks
@@ -69,7 +81,7 @@ struct Tensor* tensor_sum(struct Tensor* a);                        // -> scalar
 // write). Safe to call multiple times — gradients accumulate across
 // calls, matching PyTorch's default (call tensor_zero_grad() between
 // optimizer steps if that's not what you want).
-void tensor_backward(struct Tensor* t);
-void tensor_zero_grad(struct Tensor* t);
+void tensor_backward(&Tensor t);
+void tensor_zero_grad(&Tensor t);
 
 } // namespace std

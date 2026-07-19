@@ -59,8 +59,8 @@ struct WidgetStyle {
     int borderWidth;
     int padding;
     int spacing;               // gap between children, for VSTACK/HSTACK
-    int fontScale;              // 1, 2, 3, ... (built-in/assigned font's glyph cell * this)
-    const struct GuiFont* font; // NULL = built-in default font
+    int fontScale;         // 1, 2, 3, ... (built-in/assigned font's glyph cell * this)
+    const ?&GuiFont font;  // empty (null) = built-in default font
 };
 
 struct Widget {
@@ -105,8 +105,21 @@ struct Widget {
     void* customEvent;  // WidgetCustomEventFn
     void* userData;
 
+    // onClickData/onChangeData/userData stay 'void*' rather than a typed
+    // '?&T' (see README's "Outliving references" section, and
+    // std/dma.h's 'generic<T> struct DmaChannel' for the pattern where a
+    // concrete T *does* fit) deliberately: 'children' below is one
+    // Vec<struct Widget*> holding buttons, sliders, labels, etc.
+    // together, each with its own unrelated userData type. Genericizing
+    // Widget over T would make 'Widget<ButtonCtx>' and 'Widget<SliderCtx>'
+    // distinct, incompatible types — unable to share one tree. Same
+    // shape as std/dsp/timer_wheel.h's WheelTimer and std/fs/block.h's
+    // BlockDevice (implemented by both the ext and FAT drivers): a
+    // single, multi-tenant collection meant to hold many unrelated
+    // context types at once, which 'void*' erasure supports and a
+    // generic struct's one-type-per-instantiation model does not.
     struct Vec children;    // Vec<struct Widget*>
-    struct Widget* parent;
+    ?&Widget parent;        // empty (null) for the root widget
 };
 
 // onClick/onChange(widget, userData).
@@ -143,7 +156,7 @@ struct Widget* widget_custom(WidgetDrawFn draw, WidgetLayoutFn layout,
                               WidgetCustomEventFn eventFn, void* userData);
 
 // ── tree ─────────────────────────────────────────────────────────────────────
-void widget_add_child(struct Widget* parent, struct Widget* child);
+void widget_add_child(&Widget parent, &Widget child);
 
 // ── customization (each returns 'w', so calls chain) ────────────────────────
 struct Widget* widget_set_bg(struct Widget* w, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
@@ -156,7 +169,7 @@ struct Widget* widget_set_pref_size(struct Widget* w, int prefW, int prefH);
 struct Widget* widget_set_stretch(struct Widget* w, int stretch);
 struct Widget* widget_set_alignment(struct Widget* w, int alignment);
 struct Widget* widget_set_font_scale(struct Widget* w, int scale);
-struct Widget* widget_set_font(struct Widget* w, const struct GuiFont* font);
+struct Widget* widget_set_font(struct Widget* w, const ?&GuiFont font);
 struct Widget* widget_set_visible(struct Widget* w, int visible);
 struct Widget* widget_set_enabled(struct Widget* w, int enabled);
 struct Widget* widget_set_text(struct Widget* w, const char* text);

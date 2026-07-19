@@ -44,7 +44,7 @@ static struct Vec __b64url_decode(const char* s, int* ok) {
     return out;
 }
 
-struct String jwt_sign(const struct Value* claims, const char* secret) {
+struct String jwt_sign(const &Value claims, const char* secret) {
     struct Value header;
     unsafe {
         header = value_object();

@@ -11,7 +11,7 @@
 
 namespace std {
 
-struct Tensor* softmax_rows(struct Tensor* x) {
+&Tensor softmax_rows(const &Tensor x) {
     unsigned long rows; unsigned long cols;
     unsafe { rows = x->shape[0]; cols = x->shape[1]; }
     struct Tensor* out = tensor_new_2d(rows, cols, 0);
@@ -46,7 +46,7 @@ struct Tensor* softmax_rows(struct Tensor* x) {
     return out;
 }
 
-struct Tensor* tensor_transpose(struct Tensor* in) {
+&Tensor tensor_transpose(const &Tensor in) {
     unsigned long rows; unsigned long cols;
     unsafe { rows = in->shape[0]; cols = in->shape[1]; }
     struct Tensor* out = tensor_new_2d(cols, rows, 0);
@@ -62,7 +62,7 @@ struct Tensor* tensor_transpose(struct Tensor* in) {
     return out;
 }
 
-struct Tensor* tensor_slice_cols(struct Tensor* in, unsigned long startCol, unsigned long numCols) {
+&Tensor tensor_slice_cols(const &Tensor in, unsigned long startCol, unsigned long numCols) {
     unsigned long rows; unsigned long cols;
     unsafe { rows = in->shape[0]; cols = in->shape[1]; }
     struct Tensor* out = tensor_new_2d(rows, numCols, 0);
@@ -78,7 +78,7 @@ struct Tensor* tensor_slice_cols(struct Tensor* in, unsigned long startCol, unsi
     return out;
 }
 
-void tensor_set_cols(struct Tensor* dst, unsigned long startCol, struct Tensor* src) {
+void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src) {
     unsigned long rows; unsigned long dstCols; unsigned long srcCols;
     unsafe { rows = dst->shape[0]; dstCols = dst->shape[1]; srcCols = src->shape[1]; }
     unsigned long r = 0UL;
@@ -92,7 +92,7 @@ void tensor_set_cols(struct Tensor* dst, unsigned long startCol, struct Tensor* 
     }
 }
 
-struct Tensor* attention_forward(struct Tensor* Q, struct Tensor* K, struct Tensor* V) {
+&Tensor attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V) {
     unsigned long headDim;
     unsafe { headDim = Q->shape[1]; }
     struct Tensor* Kt = tensor_transpose(K);
@@ -107,7 +107,7 @@ struct Tensor* attention_forward(struct Tensor* Q, struct Tensor* K, struct Tens
     return result;
 }
 
-struct Tensor* mha_forward(struct Tensor* Q, struct Tensor* K, struct Tensor* V, unsigned long numHeads) {
+&Tensor mha_forward(const &Tensor Q, const &Tensor K, const &Tensor V, unsigned long numHeads) {
     unsigned long seqLen; unsigned long dModel;
     unsafe { seqLen = Q->shape[0]; dModel = Q->shape[1]; }
     unsigned long headDim = dModel / numHeads;
@@ -129,8 +129,8 @@ struct Tensor* mha_forward(struct Tensor* Q, struct Tensor* K, struct Tensor* V,
     return out;
 }
 
-struct Tensor* gated_attention_forward(struct Tensor* Q, struct Tensor* K, struct Tensor* V,
-                                        struct Tensor* gateLogits) {
+&Tensor gated_attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
+                                 const &Tensor gateLogits) {
     struct Tensor* raw = attention_forward(Q, K, V);
     struct Tensor* gate = tensor_sigmoid(gateLogits);
     struct Tensor* out = tensor_mul(raw, gate);
@@ -139,8 +139,8 @@ struct Tensor* gated_attention_forward(struct Tensor* Q, struct Tensor* K, struc
     return out;
 }
 
-struct Tensor* gated_mha_forward(struct Tensor* Q, struct Tensor* K, struct Tensor* V,
-                                  unsigned long numHeads, struct Tensor* gateLogits) {
+&Tensor gated_mha_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
+                           unsigned long numHeads, const &Tensor gateLogits) {
     struct Tensor* raw = mha_forward(Q, K, V, numHeads);
     struct Tensor* gate = tensor_sigmoid(gateLogits);
     struct Tensor* out = tensor_mul(raw, gate);
@@ -164,7 +164,7 @@ static struct Tensor* __phi_elu_p1(struct Tensor* x) {
     return out;
 }
 
-struct Tensor* linear_attention_forward(struct Tensor* Q, struct Tensor* K, struct Tensor* V) {
+&Tensor linear_attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V) {
     unsigned long seqLen; unsigned long headDim; unsigned long kvLen;
     unsafe { seqLen = Q->shape[0]; headDim = Q->shape[1]; kvLen = K->shape[0]; }
 
@@ -223,8 +223,8 @@ struct Tensor* linear_attention_forward(struct Tensor* Q, struct Tensor* K, stru
     return out;
 }
 
-struct Tensor* flash_attention_forward(struct Tensor* Q, struct Tensor* K, struct Tensor* V,
-                                        unsigned long kvBlockSize) {
+&Tensor flash_attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
+                                 unsigned long kvBlockSize) {
     unsigned long seqLen; unsigned long headDim; unsigned long kvLen;
     unsafe { seqLen = Q->shape[0]; headDim = Q->shape[1]; kvLen = K->shape[0]; }
     double scale = 1.0 / sqrt_d((double)headDim);

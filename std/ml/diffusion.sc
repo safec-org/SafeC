@@ -50,8 +50,8 @@ void ddpm_linear_schedule(unsigned long numSteps, double betaStart, double betaE
     }
 }
 
-struct Tensor* ddpm_sampler_step(struct Tensor* x_t, struct Tensor* epsPred,
-                                  double beta_t, double alphaBar_t, struct Tensor* noise) {
+&Tensor ddpm_sampler_step(const &Tensor x_t, const &Tensor epsPred,
+                           double beta_t, double alphaBar_t, const &Tensor noise) {
     double invSqrtAlpha = 1.0 / sqrt_d(1.0 - beta_t);
     double coef = beta_t / sqrt_d(1.0 - alphaBar_t);
     struct Tensor* scaledEps = tensor_scale(epsPred, coef);
@@ -66,8 +66,8 @@ struct Tensor* ddpm_sampler_step(struct Tensor* x_t, struct Tensor* epsPred,
     return out;
 }
 
-struct Tensor* ddim_sampler_step(struct Tensor* x_t, struct Tensor* epsPred,
-                                  double alphaBar_t, double alphaBar_prev) {
+&Tensor ddim_sampler_step(const &Tensor x_t, const &Tensor epsPred,
+                           double alphaBar_t, double alphaBar_prev) {
     double sqrtAlphaBar_t = sqrt_d(alphaBar_t);
     double sqrtOneMinusAlphaBar_t = sqrt_d(1.0 - alphaBar_t);
     struct Tensor* scaledEps1 = tensor_scale(epsPred, sqrtOneMinusAlphaBar_t);
@@ -88,9 +88,9 @@ struct Tensor* ddim_sampler_step(struct Tensor* x_t, struct Tensor* epsPred,
     return out;
 }
 
-struct Tensor* dpm_solver_1_step(struct Tensor* x_cur, struct Tensor* epsPred,
-                                  double alpha_cur, double sigma_cur,
-                                  double alpha_next, double sigma_next) {
+&Tensor dpm_solver_1_step(const &Tensor x_cur, const &Tensor epsPred,
+                           double alpha_cur, double sigma_cur,
+                           double alpha_next, double sigma_next) {
     double lambda_cur = log_d(alpha_cur / sigma_cur);
     double lambda_next = log_d(alpha_next / sigma_next);
     double h = lambda_next - lambda_cur;
@@ -105,10 +105,10 @@ struct Tensor* dpm_solver_1_step(struct Tensor* x_cur, struct Tensor* epsPred,
     return out;
 }
 
-struct Tensor* dpm_solver_2_step(EpsModelFn model, void* userData,
-                                  struct Tensor* x_cur, struct Tensor* epsPred,
-                                  double alpha_cur, double sigma_cur,
-                                  double alpha_next, double sigma_next) {
+&Tensor dpm_solver_2_step(EpsModelFn model, void* userData,
+                           const &Tensor x_cur, const &Tensor epsPred,
+                           double alpha_cur, double sigma_cur,
+                           double alpha_next, double sigma_next) {
     double lambda_cur = log_d(alpha_cur / sigma_cur);
     double lambda_next = log_d(alpha_next / sigma_next);
     double h = lambda_next - lambda_cur;
@@ -137,9 +137,9 @@ struct Tensor* dpm_solver_2_step(EpsModelFn model, void* userData,
     return out;
 }
 
-struct Tensor* dpm_solver_pp_1_step(struct Tensor* x_cur, struct Tensor* x0Pred,
-                                     double alpha_cur, double sigma_cur,
-                                     double alpha_next, double sigma_next) {
+&Tensor dpm_solver_pp_1_step(const &Tensor x_cur, const &Tensor x0Pred,
+                              double alpha_cur, double sigma_cur,
+                              double alpha_next, double sigma_next) {
     double lambda_cur = log_d(alpha_cur / sigma_cur);
     double lambda_next = log_d(alpha_next / sigma_next);
     double h = lambda_next - lambda_cur;
@@ -154,10 +154,10 @@ struct Tensor* dpm_solver_pp_1_step(struct Tensor* x_cur, struct Tensor* x0Pred,
     return out;
 }
 
-struct Tensor* dpm_solver_pp_2_step(DataModelFn model, void* userData,
-                                     struct Tensor* x_cur, struct Tensor* x0Pred,
-                                     double alpha_cur, double sigma_cur,
-                                     double alpha_next, double sigma_next) {
+&Tensor dpm_solver_pp_2_step(DataModelFn model, void* userData,
+                              const &Tensor x_cur, const &Tensor x0Pred,
+                              double alpha_cur, double sigma_cur,
+                              double alpha_next, double sigma_next) {
     double lambda_cur = log_d(alpha_cur / sigma_cur);
     double lambda_next = log_d(alpha_next / sigma_next);
     double h = lambda_next - lambda_cur;

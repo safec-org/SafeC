@@ -92,7 +92,7 @@ struct DiTBlock dit_block_new(unsigned long dModel, unsigned long dHidden,
     return blk;
 }
 
-void dit_block_free(struct DiTBlock* block) {
+void dit_block_free(&DiTBlock block) {
     unsafe {
         block->Wq->free(); block->Wk->free(); block->Wv->free(); block->Wo->free();
         block->W1->free(); block->b1->free(); block->W2->free(); block->b2->free(); block->WadaLN->free();
@@ -102,7 +102,7 @@ void dit_block_free(struct DiTBlock* block) {
     }
 }
 
-struct Tensor* dit_block_forward(struct DiTBlock* block, struct Tensor* x, struct Tensor* c) {
+&Tensor dit_block_forward(const &DiTBlock block, const &Tensor x, const &Tensor c) {
     struct Tensor* Wq; struct Tensor* Wk; struct Tensor* Wv; struct Tensor* Wo;
     struct Tensor* W1; struct Tensor* b1w; struct Tensor* W2; struct Tensor* b2w; struct Tensor* WadaLN;
     unsigned long numHeads; unsigned long dModel;
@@ -175,7 +175,7 @@ struct JiTBlock jit_block_new(unsigned long dModel, unsigned long dHidden, unsig
     return blk;
 }
 
-void jit_block_free(struct JiTBlock* block) {
+void jit_block_free(&JiTBlock block) {
     unsafe {
         block->Wq->free(); block->Wk->free(); block->Wv->free(); block->Wo->free();
         block->W1->free(); block->b1->free(); block->W2->free(); block->b2->free();
@@ -184,7 +184,7 @@ void jit_block_free(struct JiTBlock* block) {
     }
 }
 
-struct Tensor* jit_block_forward(struct JiTBlock* block, struct Tensor* x) {
+&Tensor jit_block_forward(const &JiTBlock block, const &Tensor x) {
     struct Tensor* Wq; struct Tensor* Wk; struct Tensor* Wv; struct Tensor* Wo;
     struct Tensor* W1; struct Tensor* b1w; struct Tensor* W2; struct Tensor* b2w;
     unsigned long numHeads;
@@ -221,8 +221,8 @@ struct Tensor* jit_block_forward(struct JiTBlock* block, struct Tensor* x) {
     return out;
 }
 
-struct Tensor* jit_forward(struct Tensor* patches, struct Tensor* WPatchEmbed, struct Tensor* cond,
-                            struct JiTBlock* blocks, unsigned long numBlocks) {
+&Tensor jit_forward(const &Tensor patches, const &Tensor WPatchEmbed, const &Tensor cond,
+                     struct JiTBlock* blocks, unsigned long numBlocks) {
     struct Tensor* embedRaw = tensor_matmul(patches, WPatchEmbed);
     struct Tensor* x = __add_broadcast_row(embedRaw, cond);
     embedRaw->free();

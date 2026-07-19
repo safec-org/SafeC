@@ -3877,12 +3877,16 @@ bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
         auto &tr = static_cast<const ReferenceType &>(*to);
         // Same region, same base, nullable compat: non-null → nullable is OK
         if (!typeEqual(fr.base, tr.base)) return false;
-        // Any region → Region::Extern ('?&T', no declared region): an
-        // outliving reference makes no lifetime claim, so it accepts a
-        // reference from any other region (see Type.h's Region::Extern
+        // Any region → Region::Extern ('&T'/'?&T', no declared region):
+        // an outliving reference makes no lifetime claim, so it accepts
+        // a reference from any other region (see Type.h's Region::Extern
         // doc comment) — the one pairing exempt from the same-region
-        // rule below.
-        if (tr.region == Region::Extern) return true;
+        // rule below. Nullability still applies normally: a nullable
+        // source can't silently become non-nullable.
+        if (tr.region == Region::Extern) {
+            if (fr.nullable && !tr.nullable) return false;
+            return true;
+        }
         if (fr.region != tr.region) return false;
         if (!fr.nullable && tr.nullable) return true;  // &T → ?&T is OK
         if (fr.nullable && !tr.nullable) return false; // ?&T → &T is not OK

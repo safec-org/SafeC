@@ -21,8 +21,8 @@
 namespace std {
 
 struct MmuContext {
-    unsigned long root;          // physical address of L1 page table (4 KiB aligned)
-    void*         frames;        // raw ptr to FrameAllocator — kernel-lifetime object
+    unsigned long root;             // physical address of L1 page table (4 KiB aligned)
+    &static FrameAllocator frames;  // kernel-lifetime object (see mmu_init's doc comment)
 
     // Map virtual address `virt` to physical `phys` with `flags`.
     // Allocates a new L2 frame via `frames` if the L1 entry is absent.
@@ -52,7 +52,9 @@ struct MmuContext {
 
 // Initialise an MmuContext.
 // `root` must be the physical address of a zeroed, 4 KiB-aligned L1 page table.
-// `frames` must point to a live FrameAllocator with PAGE_SIZE == 4096.
-struct MmuContext mmu_init(unsigned long root, void* frames);
+// `frames` must be a live, `&static`-lifetime FrameAllocator (the kernel's
+// single global physical-frame allocator, in the usual freestanding setup)
+// with PAGE_SIZE == 4096.
+struct MmuContext mmu_init(unsigned long root, &static FrameAllocator frames);
 
 } // namespace std

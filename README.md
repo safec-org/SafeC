@@ -212,17 +212,21 @@ real MVE vector codegen through `vec<T,N>` on M55/M85.
 &static Config cfg = &global_config;      // static reference (program lifetime)
 ?&stack Node next;                        // nullable reference
 ?&Handle outliving;                       // outliving reference — no region at all
+&Point sumPoint(&Point p);                // non-nullable, region left to the caller
 
 auto x = compute_something();             // type inferred from the initializer
 ```
 
 An arena region (`region AudioPool { capacity: 65536 }`) lazily allocates its backing buffer on first `new<AudioPool>`. `arena_reset<AudioPool>()` rewinds the bump pointer for reuse (the buffer itself stays allocated); `arena_destroy<AudioPool>()` actually frees the buffer — safe to call more than once (a no-op past the first call) or before any allocation has happened, and a later `new<AudioPool>` after destroying transparently re-allocates.
 
-#### Outliving references (`?&T`)
+#### Outliving references (`&T` / `?&T` with no region)
 
-`extern` declarations (SafeC's only linkage form — always C ABI, no name mangling) use plain `T*` for pointer parameters/returns, same as C. Most of the time a raw pointer only needs to survive the one call it's used in, so an ordinary `unsafe {}`-gated `T*` is enough. But sometimes a pointer crossing that boundary is meant to be *retained* by the C side past the current function returning — a callback's registered context, an opaque handle a C API hands you and expects back later — and neither `&stack T` (dies with this scope, can't be handed to something that outlives it) nor `&heap`/`&static T` (both claim an ownership/lifetime guarantee SafeC has no way to verify across an ABI boundary it doesn't control) are the right fit for that value while it's on the SafeC side.
+Leaving off the region qualifier — `&T` (non-nullable) or `?&T` (nullable) — gives a reference with **no declared or tracked region**. Two overlapping reasons to reach for it:
 
-`?&T` — a nullable reference with **no region qualifier at all** — is for exactly that case:
+1. **Crossing the `extern` boundary.** `extern` declarations (SafeC's only linkage form — always C ABI, no name mangling) use plain `T*` for pointer parameters/returns, same as C. Most of the time a raw pointer only needs to survive the one call it's used in, so an ordinary `unsafe {}`-gated `T*` is enough. But sometimes a pointer crossing that boundary is meant to be *retained* by the C side past the current function returning — a callback's registered context, an opaque handle a C API hands you and expects back later — and neither `&stack T` (dies with this scope, can't be handed to something that outlives it) nor `&heap`/`&static T` (both claim an ownership/lifetime guarantee SafeC has no way to verify across an ABI boundary it doesn't control) are the right fit for that value while it's on the SafeC side.
+2. **Not committing to a region for its own sake.** Most functions that just read or write through a reference for the duration of one call don't actually care whether the caller's value is `&stack`, `&heap`, `&static`, or `&arena` — picking one specific region as the parameter type only narrows who can call it, for no real safety benefit. Default to the region-less form unless the parameter's own semantics genuinely pin it to one lifetime (e.g. a callee that *stores* the reference past its own return needs `&heap`/`&static`, not `&stack`).
+
+Nullable vs. non-nullable is the ordinary, orthogonal choice here too — use `?&T` only where the value can genuinely be absent, `&T` otherwise:
 
 ```c
 extern int c_register_callback(struct Widget* w);   // conceptually retains 'w'
@@ -240,9 +244,9 @@ use_outliving(wref);
 c_register_callback(wref);     // ?&T → T*: implicit, no unsafe
 ```
 
-A raw `T*` (from any extern call) converts to `?&T` implicitly, and a `?&T` converts back to `T*`/`void*` implicitly — no `unsafe` either direction, and no region bookkeeping, because `?&T` doesn't claim a region to check: `Region::Extern` is exempt from every escape/lifetime check by construction (see `Type.h`'s `Region::Extern` for the full rationale). Reading the value out still goes through the same nullable-reference grammar as `?&stack T`: `match`, `is_null()`, `.default(fallback)`, or an `unsafe`-gated `!`.
+A raw `T*` (from any extern call) converts to `&T`/`?&T` implicitly, a reference of *any* region converts to either implicitly (`&stack Widget` → `&Widget`/`?&Widget`, no cast), and `&T`/`?&T` converts back to `T*`/`void*` implicitly — no `unsafe` in any direction, and no region bookkeeping, because the region-less form doesn't claim a region to check: `Region::Extern` is exempt from every escape/lifetime check by construction (see `Type.h`'s `Region::Extern` for the full rationale). A non-nullable `&T` derefs/member-accesses freely, same as any other non-nullable reference; reading a nullable `?&T` out still goes through the same grammar as `?&stack T`: `match`, `is_null()`, `.default(fallback)`, or an `unsafe`-gated `!`.
 
-This is deliberately narrow: `?&T` needs a concrete `T`, so it doesn't help with the (common, and intentionally type-erased) `void* userData` callback-context pattern — that stays `void*` on purpose, since the whole point there is that the caller can stash *any* type. `?&T` is for the case where the pointee's type is known and fixed but its region isn't and can't be, because it came from outside SafeC's tracking.
+This is deliberately narrow in one direction: `&T`/`?&T` needs a concrete `T`, so it doesn't help with the (common, and intentionally type-erased) `void* userData` callback-context pattern — that stays `void*` on purpose, since the whole point there is that the caller can stash *any* type, and a single collection instance is expected to hold many unrelated types at once (see `std/gui/gui_widget.h`'s `Widget.userData` for the fuller writeup, and `std/dma.h`'s `generic<T> struct DmaChannel` for the case where a concrete `T` — genericized per instantiation — *does* fit). `&T`/`?&T` is for the case where the pointee's type is known and fixed but its region isn't, either because it came from outside SafeC's tracking or because the function simply doesn't need to care.
 
 ### Generics
 

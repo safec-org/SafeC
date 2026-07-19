@@ -13,8 +13,8 @@
 namespace std {
 
 // ── MLA / EG-MLA ─────────────────────────────────────────────────────────────
-struct Tensor* mla_forward(struct Tensor* X, struct Tensor* Wq, struct Tensor* Wdkv,
-                            struct Tensor* Wuk, struct Tensor* Wuv, unsigned long numHeads) {
+&Tensor mla_forward(const &Tensor X, const &Tensor Wq, const &Tensor Wdkv,
+                     const &Tensor Wuk, const &Tensor Wuv, unsigned long numHeads) {
     struct Tensor* Q = tensor_matmul(X, Wq);
     struct Tensor* c_kv = tensor_matmul(X, Wdkv);
     struct Tensor* K = tensor_matmul(c_kv, Wuk);
@@ -26,8 +26,8 @@ struct Tensor* mla_forward(struct Tensor* X, struct Tensor* Wq, struct Tensor* W
     return out;
 }
 
-struct Tensor* eg_mla_forward(struct Tensor* X, struct Tensor* Wq, struct Tensor* Wdkv,
-                               struct Tensor** WukGroups, struct Tensor** WuvGroups,
+&Tensor eg_mla_forward(const &Tensor X, const &Tensor Wq, const &Tensor Wdkv,
+                        struct Tensor** WukGroups, struct Tensor** WuvGroups,
                                unsigned long numGroups, unsigned long headsPerGroup) {
     unsigned long seqLen; unsigned long dModel;
     unsafe { seqLen = X->shape[0]; dModel = Wq->shape[1]; }
@@ -111,8 +111,8 @@ static struct Tensor* __row_cyclic_shift(struct Tensor* in, unsigned long shift)
     return out;
 }
 
-struct Tensor* windowed_attention_forward(struct Tensor* Q, struct Tensor* K, struct Tensor* V,
-                                           unsigned long windowSize, unsigned long shift) {
+&Tensor windowed_attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
+                                    unsigned long windowSize, unsigned long shift) {
     unsigned long seqLen; unsigned long dim;
     unsafe { seqLen = Q->shape[0]; dim = Q->shape[1]; }
 
@@ -177,15 +177,15 @@ struct GatedDeltaNet gated_deltanet_new(unsigned long dModel, unsigned long keyD
     return layer;
 }
 
-void gated_deltanet_free(struct GatedDeltaNet* layer) {
+void gated_deltanet_free(&GatedDeltaNet layer) {
     unsafe {
         layer->Walpha->free(); layer->Wbeta->free();
         free((void*)layer->Walpha); free((void*)layer->Wbeta);
     }
 }
 
-struct Tensor* gated_deltanet_forward(struct GatedDeltaNet* layer, struct Tensor* X,
-                                       struct Tensor* Q, struct Tensor* K, struct Tensor* V) {
+&Tensor gated_deltanet_forward(const &GatedDeltaNet layer, const &Tensor X,
+                                const &Tensor Q, const &Tensor K, const &Tensor V) {
     unsigned long seqLen; unsigned long dModel;
     unsigned long keyDim; unsigned long valueDim;
     unsafe {
