@@ -276,7 +276,21 @@ TypePtr Parser::parseBaseType() {
         if (cur().is(TK::Ident)) { name = cur().text; consume(); }
         else diag_.error(cur().loc, isUnion ? "expected union name" : "expected struct name");
         // Create a named struct/union type (to be resolved by sema)
-        return std::make_shared<StructType>(name, isUnion);
+        auto st = std::make_shared<StructType>(name, isUnion);
+        // 'struct Box<int>' / 'struct Pair<int, double>' — a reference to a
+        // generic struct template instantiated with concrete type
+        // arguments (see StructType::typeArgs's doc comment). No ambiguity
+        // with '<' as less-than here: this is a type-grammar position,
+        // which never expects a comparison operator.
+        if (cur().is(TK::Lt)) {
+            consume();
+            while (!atEnd() && !cur().is(TK::Gt)) {
+                st->typeArgs.push_back(parseType());
+                if (!match(TK::Comma)) break;
+            }
+            expect(TK::Gt, "expected '>' closing generic struct type arguments");
+        }
+        return st;
     }
     case TK::KW_enum: {
         consume();
@@ -824,6 +838,34 @@ DeclPtr Parser::parseTopLevelDecl() {
     if (cur().is(TK::KW_generic)) {
         consume();
         genericParams = parseGenericParams();
+
+        // generic<T> struct Name { ... } — a generic struct *template*
+        // (see StructDecl::genericParams in AST.h; this is the first
+        // parser path that ever actually populates it — every struct
+        // parsed via the plain 'struct Name { ... }' branch above this
+        // 'generic<...>' block, which runs *before* the 'generic' token
+        // is even checked, never reaches here). Field/method types
+        // referencing 'T' resolve to TypeKind::Generic (see parseBaseType's
+        // bare-identifier case) the same way a generic function's
+        // parameter types already do — Sema::instantiateGenericStruct
+        // substitutes them per concrete instantiation, exactly like
+        // cloneFunctionDecl already does for generic functions.
+        // Disambiguate from 'generic<T> struct Vec someFn(...)' — a
+        // generic *function* whose return type merely starts with a
+        // plain (non-generic) 'struct Vec' reference. Same lookahead the
+        // ordinary (non-generic-prefixed) struct/union branch above uses:
+        // only a '{' (an actual body) right after the name means this
+        // 'struct'/'union' token is introducing a declaration, not just a
+        // type mention.
+        if ((cur().is(TK::KW_struct) || cur().is(TK::KW_union)) &&
+            (peek().is(TK::LBrace) || (peek().is(TK::Ident) && peek(2).is(TK::LBrace)))) {
+            bool isUnion = cur().is(TK::KW_union);
+            consume();
+            auto sd = parseStructDecl(isUnion);
+            if (sd && sd->kind == DeclKind::Struct)
+                static_cast<StructDecl &>(*sd).genericParams = std::move(genericParams);
+            return sd;
+        }
     }
 
     // Qualifiers

@@ -172,6 +172,13 @@ struct StructType : Type {
     bool                   isPacked  = false;   // packed: no alignment padding
     bool                   isTaggedUnion = false; // true for union decls (tag + payload)
     int                    maxPayloadSize = 0;    // max(sizeof each variant) in bytes
+    // Non-empty only for an *unresolved* reference to a generic struct
+    // template, e.g. 'struct Box<int>' parses to a StructType named "Box"
+    // with typeArgs=[int] — Sema::resolveType monomorphizes it (see
+    // Sema::instantiateGenericStruct) into a concrete StructType (name
+    // becomes the mangled "Box_int") whose own typeArgs is empty, same
+    // as any ordinary struct. Never set on a StructDecl's own '.type'.
+    std::vector<TypePtr>  typeArgs;
 
     explicit StructType(std::string n, bool isUnion = false)
         : Type(TypeKind::Struct), name(std::move(n)), isUnion(isUnion) {}

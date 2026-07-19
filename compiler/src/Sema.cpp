@@ -203,6 +203,16 @@ TypePtr Sema::resolveType(TypePtr ty) {
     }
     if (ty->kind == TypeKind::Struct) {
         auto &st = static_cast<StructType &>(*ty);
+        // 'struct Box<int>' — a reference to a generic struct template
+        // with concrete type arguments (see StructType::typeArgs's doc
+        // comment). Resolve each argument first (so 'Box<Pair<int,int>>'-
+        // style nesting works), then monomorphize.
+        if (!st.typeArgs.empty()) {
+            std::vector<TypePtr> resolvedArgs;
+            resolvedArgs.reserve(st.typeArgs.size());
+            for (auto &arg : st.typeArgs) resolvedArgs.push_back(resolveType(arg));
+            return instantiateGenericStruct(st.name, resolvedArgs, SourceLocation{});
+        }
         if (!st.isDefined) {
             auto it = typeRegistry_.find(st.name);
             if (it != typeRegistry_.end()) return it->second;
@@ -248,6 +258,16 @@ bool Sema::run() {
     pushScope();
     collectDecls(tu_);
     for (auto &d : tu_.decls) checkDecl(*d);
+
+    // Append monomorphized generic struct instances (before the function
+    // append just below, so a monomorphized struct's own out-of-line
+    // method clones — which reference it by mangled name — land after
+    // their owning struct's LLVM type, though CodeGen resolves struct
+    // types by name lookup regardless and doesn't strictly require this
+    // order).
+    for (auto &sd : monoStructs_)
+        tu_.decls.emplace_back(std::move(sd));
+    monoStructs_.clear();
 
     // Append monomorphized function instances to the TU so CodeGen sees them
     for (auto &fn : monoFunctions_)
@@ -340,6 +360,36 @@ static TypePtr resolveGenericNames(const TypePtr &ty,
 void Sema::collectFunction(FunctionDecl &fn) {
     // Method support (OBJECT.md §4): T::m(P...) → T_m(T* self, P...)
     if (fn.isMethod) {
+        // 'inline int Box::get() const {...}' where "Box" names a
+        // generic<T> struct template (see collectStruct's early-return
+        // branch — a template is never registered into typeRegistry_,
+        // since there's no concrete "T" to synthesize a 'self' param
+        // against yet). Defer whole cloth: instantiateGenericStruct
+        // clones+finishes this the first time 'Box<SomeType>' is actually
+        // instantiated, substituting the concrete struct type in for
+        // 'self' at that point instead of here.
+        auto genTplIt = genericStructTemplates_.find(fn.methodOwner);
+        if (genTplIt != genericStructTemplates_.end()) {
+            fn.isDeferredGenericMethod = true;
+            // 'Box::get()' has no generic<...> prefix of its own — its "T"
+            // is the *owning struct's* generic parameter, so (unlike a
+            // real generic function template, whose own genericParams
+            // collectFunction already resolves names against a few lines
+            // below) nothing has resolved this method's bare "T"
+            // references from StructType("T") to GenericType("T") yet.
+            // Do it now, against the template struct's genericParams —
+            // matching collectStruct's identical treatment of in-body
+            // method forward-declarations — so substituteType has
+            // GenericType nodes to find at instantiation time instead of
+            // silently leaving them as an unrelated (and unresolvable)
+            // struct type reference literally named "T".
+            const auto &ownerParams = genTplIt->second->genericParams;
+            fn.returnType = resolveGenericNames(resolveType(fn.returnType), ownerParams);
+            for (auto &p : fn.params)
+                p.type = resolveGenericNames(resolveType(p.type), ownerParams);
+            genericStructMethodTemplates_[fn.methodOwner].push_back(&fn);
+            return;
+        }
         // Look up owner struct type
         auto it = typeRegistry_.find(fn.methodOwner);
         if (it == typeRegistry_.end()) {
@@ -441,6 +491,33 @@ static int sizeOfType(const TypePtr &ty) {
 }
 
 void Sema::collectStruct(StructDecl &sd) {
+    // 'generic<T> struct Box { ... }' — a template, not a concrete type.
+    // Field types still reference the bare name "T" (the parser has no
+    // notion of generics; only Sema resolves a name against an enclosing
+    // genericParams list — see resolveGenericNames), so there is no
+    // concrete layout to register yet. Record the template and stop;
+    // instantiateGenericStruct clones+substitutes+collectStruct()s a
+    // concrete copy the first time 'Box<SomeType>' is actually resolved.
+    if (!sd.genericParams.empty()) {
+        // Resolve each field's raw parsed type (the parser has no notion
+        // of generics — 'T value;' parses its type as an ordinary
+        // StructType("T") reference, same as any other unknown type name)
+        // against this struct's own generic parameter list, in place —
+        // matching collectFunction's identical one-time resolution of a
+        // generic function template's own param/return types. Once done,
+        // substituteType (used by cloneStructDecl at instantiation time)
+        // can find the GenericType nodes it needs to replace.
+        for (auto &f : sd.fields)
+            f.type = resolveGenericNames(resolveType(f.type), sd.genericParams);
+        for (auto &md : sd.methodDecls) {
+            md.returnType = resolveGenericNames(resolveType(md.returnType), sd.genericParams);
+            for (auto &p : md.params)
+                p.type = resolveGenericNames(resolveType(p.type), sd.genericParams);
+        }
+        genericStructTemplates_[sd.name] = &sd;
+        return;
+    }
+
     auto st = std::make_shared<StructType>(sd.name, sd.isUnion);
     st->isDefined = true;
     st->isPacked  = sd.isPacked;
@@ -559,6 +636,114 @@ void Sema::collectStruct(StructDecl &sd) {
         collectFunction(*synth);
         synthesizedMethods_.push_back(std::move(synth));
     }
+}
+
+TypePtr Sema::instantiateGenericStruct(const std::string &name,
+                                        const std::vector<TypePtr> &typeArgs,
+                                        SourceLocation loc) {
+    auto tplIt = genericStructTemplates_.find(name);
+    if (tplIt == genericStructTemplates_.end()) {
+        diag_.error(loc, "'" + name + "' is not a generic struct template");
+        return makeError();
+    }
+    StructDecl *tpl = tplIt->second;
+
+    if (typeArgs.size() != tpl->genericParams.size()) {
+        diag_.error(loc, "generic struct '" + name + "' expects " +
+            std::to_string(tpl->genericParams.size()) + " type argument(s), got " +
+            std::to_string(typeArgs.size()));
+        return makeError();
+    }
+
+    TypeSubst subs;
+    for (size_t i = 0; i < tpl->genericParams.size(); ++i) {
+        auto &gp = tpl->genericParams[i];
+        subs[gp.name] = typeArgs[i];
+        for (auto &constraint : gp.constraints) {
+            if (!satisfiesTrait(typeArgs[i], constraint)) {
+                diag_.error(loc, "type '" + typeArgs[i]->str() +
+                    "' does not satisfy constraint '" + constraint +
+                    "' for generic parameter '" + gp.name + "' of struct '" + name + "'");
+            }
+        }
+    }
+
+    MonoKey key = makeMonoKey(name, subs, tpl->genericParams);
+    auto cacheIt = genericStructCache_.find(key);
+    if (cacheIt != genericStructCache_.end()) {
+        return cacheIt->second;
+    }
+
+    // Clone the template's fields/in-body method forward-decls, substituting
+    // T -> the concrete type argument(s), and give the clone a mangled,
+    // collision-proof name ("Box_int") — reusing exactly the same
+    // mangleName scheme generic *functions* already use, since MonoKey/
+    // mangleName never assumed "name" was specifically a function name.
+    auto clone = cloneStructDecl(*tpl, subs);
+    clone->name = mangleName(name, subs, tpl->genericParams);
+    clone->genericParams.clear();
+
+    // collectStruct() takes the now-fully-concrete clone through the exact
+    // same path an ordinary (non-generic) struct goes through — field
+    // resolution, bitfield packing, tagged-union sizing, and (crucially)
+    // synthesizing bodyless FunctionDecls for any in-body method forward-
+    // declarations, all "just work" unmodified since clone.genericParams
+    // is now empty.
+    StructDecl *clonePtr = clone.get();
+    collectStruct(*clonePtr);
+    monoStructs_.push_back(std::move(clone));
+
+    genericStructCache_[key] = clonePtr->type;
+
+    // Out-of-line method *definitions* ('inline int Box::get() const {
+    // ... }') deferred by collectFunction — clone each, substitute types,
+    // and finish the same self-synthesis + mangling + registration
+    // collectFunction() does for an ordinary method, then type-check the
+    // body via checkFunction() exactly like a monomorphized generic
+    // *function* already does (see the CallExpr generic-instantiation
+    // code below).
+    auto methodsIt = genericStructMethodTemplates_.find(name);
+    if (methodsIt != genericStructMethodTemplates_.end()) {
+        for (FunctionDecl *methodTpl : methodsIt->second) {
+            auto methodClone = cloneFunctionDecl(*methodTpl, subs);
+            std::string originalName = methodTpl->name;
+            methodClone->methodOwner = clonePtr->name;
+
+            TypePtr selfTy = makeReference(clonePtr->type, Region::Stack,
+                                            /*nullable=*/false, /*mut=*/!methodClone->isConstMethod);
+            ParamDecl selfParam;
+            selfParam.name = "self";
+            selfParam.type = selfTy;
+            selfParam.loc  = methodClone->loc;
+            methodClone->params.insert(methodClone->params.begin(), std::move(selfParam));
+
+            methodClone->name = clonePtr->name + "_" + originalName;
+            methodRegistry_[clonePtr->name + "::" + originalName] = methodClone.get();
+
+            std::vector<TypePtr> paramTys;
+            for (auto &p : methodClone->params) paramTys.push_back(p.type);
+            auto monoFT = makeFunction(methodClone->returnType, paramTys, methodClone->isVariadic);
+            Symbol sym;
+            sym.kind        = SymKind::Function;
+            sym.name        = methodClone->name;
+            sym.type        = makeReference(monoFT, Region::Static);
+            sym.fnDecl      = methodClone.get();
+            sym.initialized = true;
+            if (!scopes_.empty()) scopes_[0].define(std::move(sym));
+
+            bool savedPure = checkingPure_;
+            int savedLoopDepth = loopDepth_;
+            auto savedLabels = functionLabels_;
+            checkFunction(*methodClone);
+            checkingPure_ = savedPure;
+            loopDepth_ = savedLoopDepth;
+            functionLabels_ = savedLabels;
+
+            monoFunctions_.push_back(std::move(methodClone));
+        }
+    }
+
+    return clonePtr->type;
 }
 
 void Sema::collectEnum(EnumDecl &ed) {
@@ -750,6 +935,11 @@ void Sema::checkFunction(FunctionDecl &fn) {
     if (!fn.body) return; // declaration only
     // Generic templates: body is only type-checked on concrete instantiations
     if (!fn.genericParams.empty()) return;
+    // Out-of-line generic-struct method template — see
+    // isDeferredGenericMethod's doc comment; only its cloned,
+    // fully-substituted instantiations (built by instantiateGenericStruct)
+    // ever get checked.
+    if (fn.isDeferredGenericMethod) return;
 
     // ── Calling convention validation ────────────────────────────────────────
     if (!fn.callingConv.empty()) {

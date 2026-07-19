@@ -22,4 +22,15 @@ StmtPtr cloneStmt(const StmtPtr &s, const TypeSubst &subs);
 std::unique_ptr<FunctionDecl> cloneFunctionDecl(const FunctionDecl &fn,
                                                   const TypeSubst &subs);
 
+// Clone a StructDecl, substituting all generic type references in its
+// fields and struct-internal method forward-declarations. Assumes the
+// template's field/method types have already been resolved against its
+// own genericParams (GenericType nodes in place of bare names — see
+// Sema::collectStruct's generic-template branch, which does this once
+// when the template is first collected). The caller must clear
+// genericParams and rename the result (same contract as
+// cloneFunctionDecl).
+std::unique_ptr<StructDecl> cloneStructDecl(const StructDecl &sd,
+                                             const TypeSubst &subs);
+
 } // namespace safec

@@ -68,7 +68,7 @@ std::unique_ptr<llvm::Module> CodeGen::generate(TranslationUnit &tu) {
     for (auto &d : tu.decls) {
         if (d->kind == DeclKind::Function) {
             auto &fn = static_cast<FunctionDecl &>(*d);
-            if (!fn.genericParams.empty()) continue; // skip uninstantiated templates
+            if (!fn.genericParams.empty() || fn.isDeferredGenericMethod) continue; // skip uninstantiated templates
             genFunctionProto(fn);
         } else if (d->kind == DeclKind::GlobalVar) {
             genGlobalVar(static_cast<GlobalVarDecl &>(*d));
@@ -101,7 +101,7 @@ std::unique_ptr<llvm::Module> CodeGen::generate(TranslationUnit &tu) {
     for (auto &d : tu.decls) {
         if (d->kind == DeclKind::Function) {
             auto &fn = static_cast<FunctionDecl &>(*d);
-            if (!fn.genericParams.empty()) continue; // skip uninstantiated templates
+            if (!fn.genericParams.empty() || fn.isDeferredGenericMethod) continue; // skip uninstantiated templates
             // consteval functions are compile-time-only by construction —
             // Sema::checkFunctionForConstevalCalls already rejects every
             // call site that isn't itself a const-eval context (another

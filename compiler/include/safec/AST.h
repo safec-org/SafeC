@@ -688,6 +688,18 @@ struct FunctionDecl : Decl {
     std::string methodOwner;             // struct name (e.g. "Foo" for Foo::m)
     bool        isConstMethod = false;   // const qualifier after params
     bool        isMustUse     = false;   // [[must_use]] — warn if return discarded
+    // True for an out-of-line method definition ('inline T Box::get()...')
+    // whose methodOwner names a generic struct *template* — collectFunction
+    // defers all normal processing (self-param synthesis, mangling,
+    // registration) to Sema::instantiateGenericStruct instead, since there's
+    // no concrete struct to build a 'self' param against yet. This flag
+    // stops checkFunction() from body-checking the un-instantiated original
+    // (which has no 'self' param at all) the same way the existing
+    // '!genericParams.empty()' check already skips a template's own body —
+    // only cloned, fully-substituted copies (see instantiateGenericStruct)
+    // ever get body-checked. Never copied onto a clone (cloneFunctionDecl
+    // starts from a fresh FunctionDecl, same as genericParams).
+    bool        isDeferredGenericMethod = false;
     // Bare-metal / effect system attributes
     bool        isNaked       = false;   // naked — no prologue/epilogue
     bool        isInterrupt   = false;   // interrupt — ISR calling convention

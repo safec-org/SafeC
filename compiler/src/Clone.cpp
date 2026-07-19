@@ -172,6 +172,25 @@ static ExprPtr cloneExprImpl(const Expr *ep, const TypeSubst &subs) {
     }
     case ExprKind::Subscript: {
         auto &se = static_cast<const SubscriptExpr &>(e);
+        // Pack element access: 'args[2]' where 'args' is a pack parameter
+        // and the index is a literal constant — rewritten straight to the
+        // 'args2' concrete parameter the pack was expanded into (see
+        // cloneFunctionDecl's pack-expansion loop above). Same idea as the
+        // Call case's bare-identifier pack-forwarding rewrite just above,
+        // just indexing one element instead of forwarding all of them.
+        // Only literal indices are handled — pack elements can each have a
+        // different type, so there's no single element type a
+        // runtime-computed index could type-check against anyway.
+        if (se.base && se.base->kind == ExprKind::Ident && se.index &&
+            se.index->kind == ExprKind::IntLit) {
+            auto &id = static_cast<const IdentExpr &>(*se.base);
+            std::string countKey = "__pack_count_" + id.name;
+            if (subs.count(countKey)) {
+                int64_t idx = static_cast<const IntLitExpr &>(*se.index).value;
+                return fix(std::make_unique<IdentExpr>(
+                    id.name + std::to_string(idx), se.loc));
+            }
+        }
         auto res = std::make_unique<SubscriptExpr>(
             cloneExprImpl(se.base.get(), subs),
             cloneExprImpl(se.index.get(), subs),
@@ -527,6 +546,42 @@ std::unique_ptr<FunctionDecl> cloneFunctionDecl(const FunctionDecl &fn,
         clone->body.reset(static_cast<CompoundStmt *>(bodyClone.release()));
     }
 
+    return clone;
+}
+
+std::unique_ptr<StructDecl> cloneStructDecl(const StructDecl &sd,
+                                             const TypeSubst &subs) {
+    auto clone = std::make_unique<StructDecl>(sd.name, sd.loc);
+    clone->isUnion       = sd.isUnion;
+    clone->isTaggedUnion = sd.isTaggedUnion;
+    clone->isPacked      = sd.isPacked;
+    // caller clears genericParams and sets the mangled name
+
+    for (auto &f : sd.fields) {
+        FieldDecl fd;
+        fd.name        = f.name;
+        fd.type        = substituteType(f.type, subs);
+        fd.index       = f.index;
+        fd.bitWidth    = f.bitWidth;
+        fd.bitOffset   = f.bitOffset;
+        fd.isAnonymous = f.isAnonymous;
+        clone->fields.push_back(std::move(fd));
+    }
+    for (auto &md : sd.methodDecls) {
+        MethodDecl cmd;
+        cmd.name       = md.name;
+        cmd.returnType = substituteType(md.returnType, subs);
+        cmd.isConst    = md.isConst;
+        cmd.loc        = md.loc;
+        for (auto &p : md.params) {
+            ParamDecl pd;
+            pd.name = p.name;
+            pd.type = substituteType(p.type, subs);
+            pd.loc  = p.loc;
+            cmd.params.push_back(std::move(pd));
+        }
+        clone->methodDecls.push_back(std::move(cmd));
+    }
     return clone;
 }
 

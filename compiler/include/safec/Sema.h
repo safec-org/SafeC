@@ -186,6 +186,36 @@ private:
     std::map<MonoKey, FunctionDecl *>              monoCache_;    // non-owning
     std::vector<std::unique_ptr<FunctionDecl>>     monoFunctions_; // owns clones
 
+    // ── Generic structs ────────────────────────────────────────────────────────
+    // 'generic<T> struct Box { ... }' templates — collectStruct() never
+    // registers these into typeRegistry_ (there's no concrete "T" to lay
+    // out a real LLVM struct with); it just records the StructDecl here.
+    // Instantiated lazily, the first time 'struct Box<SomeType>' is
+    // actually resolved (see instantiateGenericStruct), same "monomorphize
+    // on first use, cache by (name, type args) after that" shape as
+    // generic functions above.
+    std::unordered_map<std::string, StructDecl *>  genericStructTemplates_; // non-owning
+    std::map<MonoKey, std::shared_ptr<StructType>>  genericStructCache_;
+    std::vector<std::unique_ptr<StructDecl>>       monoStructs_;            // owns clones
+    // Out-of-line method definitions ('inline int Box::get() const {...}')
+    // whose methodOwner names a generic struct template — collectFunction
+    // defers these here instead of processing them immediately (there's
+    // no concrete "Box" type yet to synthesize a 'self' param against).
+    // instantiateGenericStruct clones+finishes each one the first time
+    // that template is actually instantiated.
+    std::unordered_map<std::string, std::vector<FunctionDecl *>> genericStructMethodTemplates_;
+
+    // Monomorphizes 'name<typeArgs...>' (a generic struct template
+    // reference) into a concrete StructType, cloning+substituting its
+    // fields and any associated methods (top-level FunctionDecls with
+    // isMethod=true and methodOwner==name) the same way a generic
+    // function call already clones+substitutes its body. Returns an error
+    // type (already diagnosed) if 'name' isn't a known generic struct
+    // template or the type-argument count doesn't match.
+    TypePtr instantiateGenericStruct(const std::string &name,
+                                      const std::vector<TypePtr> &typeArgs,
+                                      SourceLocation loc);
+
     // Struct-internal method forward-declarations ('int read(...);' inside a
     // struct body, as opposed to an out-of-line 'T::read(...) { ... }'
     // definition) get synthesized into full FunctionDecl nodes so a method
