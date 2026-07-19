@@ -117,12 +117,26 @@ SrcLang Builder::langOf(const std::string& path) {
     return SrcLang::SafeC;
 }
 
-std::vector<std::string> Builder::collectAllSources(const std::string& srcDir) const {
+std::vector<std::string> Builder::collectAllSources(
+    const std::string& srcDir, const std::vector<std::string>& excludeSubdirNames) const {
     std::vector<std::string> srcs;
     if (!fs::exists(srcDir)) return srcs;
     static const char* kExts[] = { ".sc", ".scx", ".c", ".cc", ".cpp", ".cxx" };
     for (auto& e : fs::recursive_directory_iterator(srcDir)) {
         if (!e.is_regular_file()) continue;
+        if (!excludeSubdirNames.empty()) {
+            bool excluded = false;
+            fs::path p = e.path();
+            for (const auto& comp : p) {
+                std::string name = comp.string();
+                if (std::find(excludeSubdirNames.begin(), excludeSubdirNames.end(), name)
+                    != excludeSubdirNames.end()) {
+                    excluded = true;
+                    break;
+                }
+            }
+            if (excluded) continue;
+        }
         std::string ext = e.path().extension().string();
         for (auto* k : kExts) {
             if (ext == k) { srcs.push_back(e.path().string()); break; }
@@ -460,12 +474,13 @@ bool Builder::buildLib(const std::string& srcDir,
                         const std::vector<std::string>& includeDirs,
                         bool compatPreprocessor,
                         bool tolerateArchMismatch,
-                        const std::vector<std::string>& foreignIncludeDirs) {
+                        const std::vector<std::string>& foreignIncludeDirs,
+                        const std::vector<std::string>& excludeSubdirNames) {
     std::string safecBin = findSafec();
     std::string buildDir = fs::path(libOut).parent_path().string();
     fs::create_directories(buildDir);
 
-    auto srcs = collectAllSources(srcDir);
+    auto srcs = collectAllSources(srcDir, excludeSubdirNames);
     if (srcs.empty()) return true; // nothing to compile
 
     std::vector<std::string> objs;
@@ -550,8 +565,13 @@ std::string Builder::ensureStdLib() {
     fs::path stdParent = fs::path(stdDir).parent_path();
     std::vector<std::string> incs = { stdDir, stdParent.string() };
 
+    // 'wasm': std/wasm/*.sc's malloc/free/etc. are wasm32-freestanding-only
+    // — see collectAllSources's doc comment and std/wasm/wasm_rt.sc's own
+    // header comment for the full story (a real, CI-confirmed Windows
+    // LNK2005 symbol collision against libucrt otherwise).
     if (!buildLib(stdDir, libPath.string(), incs, /*compatPreprocessor=*/true,
-                  /*tolerateArchMismatch=*/true))
+                  /*tolerateArchMismatch=*/true, /*foreignIncludeDirs=*/{},
+                  /*excludeSubdirNames=*/{"wasm"}))
         return "";
     return libPath.string();
 }

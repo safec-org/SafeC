@@ -7,6 +7,8 @@
 #include <std/convert.sc>
 #include <std/str.sc>
 #include <std/sched/io_nb.h>
+#include <std/thread.h>
+#include <std/thread.sc>
 // A backend for io_nb.h's declarations (io_nb_bsd.sc / io_nb_linux.sc /
 // io_nb_win32.sc) must be included by the caller before this file, the
 // same way std/ipc/uds.h's callers pick uds_bsd.sc/uds_linux.sc themselves
@@ -456,6 +458,72 @@ int http_serve(unsigned short port, HttpHandler handler) {
         req.free();
         unsafe { close(clientFd); }
     }
+}
+
+// ── Threaded server ──────────────────────────────────────────────────────────
+
+struct __HttpThreadCtx {
+    int         listenFd;
+    HttpHandler handler;
+};
+
+static void* __http_worker_main(void* argPtr) {
+    struct __HttpThreadCtx* ctx;
+    unsafe { ctx = (struct __HttpThreadCtx*)argPtr; }
+
+    while (1) {
+        int clientFd;
+        unsafe { clientFd = tcp_accept_nb(ctx->listenFd); }
+        if (clientFd < 0) { continue; }
+        unsafe { fd_set_blocking(clientFd); }
+
+        int reqOk = 0;
+        struct HttpRequest req = http_parse_request_(clientFd, &reqOk);
+        if (reqOk) {
+            struct HttpResponse resp;
+            unsafe { resp = ctx->handler(&req); }
+            struct String contentType = http_header_get(resp.headers.as_ptr(), "Content-Type");
+            struct String respText;
+            unsafe {
+                respText = http_build_response(
+                    resp.status, contentType.as_ptr(),
+                    (const unsigned char*)resp.body.as_ptr(), resp.body.length());
+            }
+            contentType.free();
+            write_all_(clientFd, respText.as_ptr(), respText.length());
+            respText.free();
+            resp.free();
+        }
+        req.free();
+        unsafe { close(clientFd); }
+    }
+    return (void*)0;
+}
+
+int http_serve_threaded(unsigned short port, HttpHandler handler, int numThreads) {
+    if (numThreads < 1) { return -1; }
+    int listenFd;
+    unsafe { listenFd = tcp_listen_nb(port); }
+    if (listenFd < 0) { return -1; }
+    unsafe { fd_set_blocking(listenFd); }
+
+    struct __HttpThreadCtx* ctx;
+    unsafe { ctx = (struct __HttpThreadCtx*)malloc(sizeof(struct __HttpThreadCtx)); }
+    unsafe { ctx->listenFd = listenFd; ctx->handler = handler; }
+
+    unsigned long long tid = 0ULL;
+    int i = 0;
+    while (i < numThreads) {
+        unsafe {
+            if (thread_create(&tid, (void*)__http_worker_main, (void*)ctx) != 0) { return -1; }
+        }
+        i = i + 1;
+    }
+    // Every worker loops forever (same "does not return" contract as
+    // http_serve) — joining the last one blocks the calling thread for
+    // the process's lifetime, same as http_serve's own infinite while(1).
+    unsafe { thread_join(tid); }
+    return 0;
 }
 
 } // namespace std

@@ -8,6 +8,20 @@
 // time without either side needing to know about the other).
 #pragma once
 #include <std/wasm/wasm_rt.h>
+//
+// NOT part of the general stdlib archive (libsafec_std.a): this file
+// defines the bare libc-shaped 'malloc'/'free'/'calloc'/'memcpy'/
+// 'memmove'/'memset'/'memcmp'/'realloc' symbols wasm32 freestanding
+// builds need (see the header comment below) — linking those same
+// symbol names into a *hosted* build's archive collides with the real
+// libc there (confirmed in CI: Windows' libucrt raised LNK2005 "already
+// defined" for exactly these five symbols once this file made it into
+// libsafec_std.a). safeguard's Builder.cpp excludes 'std/wasm/' from the
+// stdlib archive build specifically because of this file — see the
+// 'kExcludedStdSubdirs' comment there. A wasm32 build never links
+// against that archive anyway (it's a host-arch .a); it reaches this
+// file the same way every test in this repo does, via a direct
+// '#include <std/wasm/wasm_rt.sc>' in wasm32-target source.
 
 static unsigned char gWasmRtPool[WASM_RT_POOL_SIZE];
 static unsigned long gWasmRtOffset = 0UL;

@@ -93,6 +93,21 @@ typedef fn struct HttpResponse(struct HttpRequest*) HttpHandler;
 // return otherwise.
 int http_serve(unsigned short port, HttpHandler handler);
 
+// Same contract as http_serve(), but 'numThreads' worker threads (see
+// std/thread.h) all call accept() on the same listening socket instead
+// of one — the OS kernel fairly and safely distributes incoming
+// connections across whichever threads are currently blocked in
+// accept(), so this needs no manual work queue/condvar dispatch (the
+// standard "thread-per-listener" pattern nginx's worker model and
+// classic prefork Apache both use). Each connection is still handled
+// entirely on the thread that accepted it, one at a time — 'handler'
+// itself is called concurrently from up to 'numThreads' OS threads, so
+// it (and anything it touches — shared globals, etc.) must be safe to
+// call that way. Returns -1 immediately on setup failure (bad
+// 'numThreads', listen/bind failure, or a worker thread failing to
+// start); does not return otherwise.
+int http_serve_threaded(unsigned short port, HttpHandler handler, int numThreads);
+
 // Builds a complete "HTTP/1.1 <status> <reason>\r\n...\r\n\r\n<body>" text
 // block ready to send to a client. 'status' must be one of the codes
 // http_reason_phrase (below) recognizes (100–599 range; unrecognized

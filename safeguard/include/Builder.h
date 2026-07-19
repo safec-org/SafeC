@@ -102,12 +102,19 @@ public:
     // if put on their search path. Defaults to empty (no extra include
     // dirs for foreign files) when not given.
     // Returns true on success.
+    // 'excludeSubdirNames': directory-name components to skip entirely
+    // during source discovery (e.g. "wasm" for the SafeC stdlib build —
+    // see collectAllSources's matching comment for why). Defaults to
+    // none; only the stdlib's own buildLib() call passes anything here,
+    // since this is about std/'s own internal layout, not something a
+    // user's project or a fetched dependency should ever need.
     bool buildLib(const std::string& srcDir,
                   const std::string& libOut,
                   const std::vector<std::string>& includeDirs = {},
                   bool compatPreprocessor = false,
                   bool tolerateArchMismatch = false,
-                  const std::vector<std::string>& foreignIncludeDirs = {});
+                  const std::vector<std::string>& foreignIncludeDirs = {},
+                  const std::vector<std::string>& excludeSubdirNames = {});
 
     // Build (or use cached) SafeC standard library.
     // Returns the path to the built .a, or "" on failure.
@@ -165,7 +172,19 @@ private:
 
     // Collect *.sc, *.c, *.cc, *.cpp, *.cxx source files under srcDir,
     // sorted together so mixed-language builds are deterministic.
-    std::vector<std::string> collectAllSources(const std::string& srcDir) const;
+    // 'excludeSubdirNames': any path whose components include one of
+    // these names (case-sensitive, exact directory-name match — e.g.
+    // "wasm" matches ".../std/wasm/..." but not ".../std/webassembly/...")
+    // is skipped. See the stdlib's own buildLib() call for why this
+    // exists: std/wasm/*.sc defines bare 'malloc'/'free'/etc. symbols
+    // meant only for a wasm32-target build that #includes them directly
+    // from source — compiling them into the general, all-hosted-platforms
+    // stdlib archive collides with the real libc there (confirmed in CI:
+    // Windows' libucrt raised LNK2005 "already defined" for exactly
+    // those symbols once std/wasm/wasm_rt.sc made it into libsafec_std.a).
+    std::vector<std::string> collectAllSources(
+        const std::string& srcDir,
+        const std::vector<std::string>& excludeSubdirNames = {}) const;
 
     // Classify a source file by extension. Unrecognized extensions default
     // to SafeC (matches the pre-mixed-language behavior of collectSources,
