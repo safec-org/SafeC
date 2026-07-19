@@ -27,6 +27,29 @@ struct String render_about() {
     </html>;
 }
 
+// Server-rendered shell for the WASM-hydrated counter — the interactive
+// half of the fullstack demo. The initial markup (div#count showing "0",
+// two buttons) is real server-rendered HTML, so it's visible/correct
+// even before the script loads; counter_client.wasm (built from
+// src/counter_client.sc — see that file's header comment for the build
+// command) then hydrates it via static/counter_client.js's DOM glue.
+struct String render_counter() {
+    return <html>
+        <head><title>Counter — SafeC Fullstack Demo</title></head>
+        <body>
+            <h1>WASM-Hydrated Counter</h1>
+            <p>Server-rendered shell below; a wasm32 SafeC module
+               (std::Signal, std::dom_*, std::hydrate_*) takes over once
+               it loads.</p>
+            <p>Count: <span id="count">0</span></p>
+            <button id="decrement">-</button>
+            <button id="increment">+</button>
+            <p><a href="/">Home</a></p>
+            <script type="module" src="/counter_client.js"></script>
+        </body>
+    </html>;
+}
+
 struct String render_not_found(const char* path) {
     return <html>
         <head><title>404</title></head>

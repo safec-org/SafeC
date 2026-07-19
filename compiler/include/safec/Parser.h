@@ -188,6 +188,8 @@ private:
     StmtPtr parseDeferStmt(bool isErrDefer = false);
     StmtPtr parseMatchStmt();
     MatchPattern parseMatchPattern();
+    StmtPtr parseSwitchStmt();
+    int64_t parseSwitchCaseValue();
     StmtPtr parseAsmStmt();
 
     // ── Expressions ───────────────────────────────────────────────────────────
@@ -214,6 +216,14 @@ private:
     // ── Helpers ───────────────────────────────────────────────────────────────
     bool isTypeStart() const;       // current token begins a type?
     bool isTypeStart(const Token &t) const;
+    // Disambiguates "type-start token that's actually a declaration" from
+    // "type-start token that's actually the start of an expression" (an
+    // Ident is always a plausible type name — see isTypeStart(Token) — so
+    // this adds the lookahead needed to tell 'Foo x = ...;' apart from
+    // 'x = ...;'/'x * y;'). Shared by parseStmt() and parseForStmt() so a
+    // for-loop's init clause gets the same treatment as an ordinary
+    // statement instead of a cruder, unguarded isTypeStart() check.
+    bool looksLikeVarDeclStart() const;
     AssignOp tokenToAssignOp(TK k) const;
     BinaryOp tokenToBinOp(TK k)    const;
 

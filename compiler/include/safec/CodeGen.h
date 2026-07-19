@@ -147,6 +147,7 @@ private:
     void genIf(IfStmt &s, FnEnv &env);
     void genWhile(WhileStmt &s, FnEnv &env);
     void genFor(ForStmt &s, FnEnv &env);
+    void genSwitch(SwitchStmt &s, FnEnv &env);
     void genReturn(ReturnStmt &s, FnEnv &env);
     void genVarDecl(VarDeclStmt &s, FnEnv &env);
     // Coerce a scalar int/float value to exactly match targetTy (same-kind

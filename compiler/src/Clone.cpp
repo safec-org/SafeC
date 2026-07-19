@@ -390,6 +390,29 @@ static StmtPtr cloneStmtImpl(const Stmt *sp, const TypeSubst &subs) {
         res->isThreadLocal = vs.isThreadLocal;
         return res;
     }
+    case StmtKind::MultiVarDecl: {
+        auto &mv = static_cast<const MultiVarDeclStmt &>(s);
+        std::vector<StmtPtr> decls;
+        decls.reserve(mv.decls.size());
+        for (auto &d : mv.decls) decls.push_back(cloneStmtImpl(d.get(), subs));
+        return std::make_unique<MultiVarDeclStmt>(std::move(decls), mv.loc);
+    }
+    case StmtKind::Switch: {
+        auto &sw = static_cast<const SwitchStmt &>(s);
+        std::vector<SwitchCase> cases;
+        cases.reserve(sw.cases.size());
+        for (auto &c : sw.cases) {
+            SwitchCase nc;
+            nc.values    = c.values;
+            nc.isDefault = c.isDefault;
+            nc.loc       = c.loc;
+            nc.body.reserve(c.body.size());
+            for (auto &stmt : c.body) nc.body.push_back(cloneStmtImpl(stmt.get(), subs));
+            cases.push_back(std::move(nc));
+        }
+        return std::make_unique<SwitchStmt>(cloneExprImpl(sw.controlling.get(), subs),
+                                             std::move(cases), sw.loc);
+    }
     case StmtKind::Asm: {
         auto &as = static_cast<const AsmStmt &>(s);
         auto res = std::make_unique<AsmStmt>(as.loc);

@@ -841,6 +841,9 @@ void Sema::checkFunction(FunctionDecl &fn) {
             collectLabels(*static_cast<ForStmt&>(s).body);
         } else if (s.kind == StmtKind::Unsafe) {
             collectLabels(*static_cast<UnsafeStmt&>(s).body);
+        } else if (s.kind == StmtKind::Switch) {
+            for (auto &c : static_cast<SwitchStmt&>(s).cases)
+                for (auto &sub : c.body) collectLabels(*sub);
         }
     };
     collectLabels(*fn.body);
@@ -985,6 +988,15 @@ void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
     case StmtKind::For:          checkFor(static_cast<ForStmt &>(s), fn);              break;
     case StmtKind::Return:       checkReturn(static_cast<ReturnStmt &>(s), fn);        break;
     case StmtKind::VarDecl:      checkVarDecl(static_cast<VarDeclStmt &>(s), fn);     break;
+    case StmtKind::MultiVarDecl: {
+        // No pushScope()/popScope() here — see MultiVarDeclStmt's header
+        // comment in AST.h: each declarator must land in this statement's
+        // own (enclosing) scope, same as if it had been written as its
+        // own separate 'T name = init;' statement.
+        auto &mv = static_cast<MultiVarDeclStmt &>(s);
+        for (auto &d : mv.decls) checkStmt(*d, fn);
+        break;
+    }
     case StmtKind::Defer: {
         auto &ds = static_cast<DeferStmt &>(s);
         if (ds.body) checkStmt(*ds.body, fn);
@@ -1031,6 +1043,43 @@ void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
         }
         if (!hasWildcard)
             diag_.warn(ms.loc, "match statement may not be exhaustive (no wildcard arm)");
+        break;
+    }
+    case StmtKind::Switch: {
+        auto &sw = static_cast<SwitchStmt &>(s);
+        TypePtr subjectTy = checkExpr(*sw.controlling);
+        if (subjectTy && !subjectTy->isError() && !subjectTy->isInteger() &&
+            !subjectTy->isBool() && subjectTy->kind != TypeKind::Char) {
+            diag_.error(sw.controlling->loc,
+                "switch subject must be an integer, char, or bool type, got '" +
+                subjectTy->str() + "'");
+        }
+        bool sawDefault = false;
+        std::unordered_set<int64_t> seenValues;
+        for (auto &c : sw.cases) {
+            if (c.isDefault) {
+                sawDefault = true;
+            } else {
+                for (int64_t v : c.values) {
+                    if (!seenValues.insert(v).second)
+                        diag_.error(c.loc, "duplicate case value " + std::to_string(v) + " in switch");
+                }
+            }
+            // Own scope per case body (locals declared in one case aren't
+            // visible in the next, even though execution can fall through
+            // into it — matches real C: a fallthrough runs the next case's
+            // statements, but goto-into-scope rules already forbid jumping
+            // past a declaration with an initializer, so this doesn't hide
+            // any real fallthrough-initialization footgun beyond what C
+            // itself has).
+            pushScope();
+            ++loopDepth_; // 'break' exits the switch — see genSwitch's own break target
+            for (auto &stmt : c.body) checkStmt(*stmt, fn);
+            --loopDepth_;
+            popScope();
+        }
+        if (!sawDefault)
+            diag_.warn(sw.loc, "switch statement may not be exhaustive (no 'default' label)");
         break;
     }
     case StmtKind::Expr: {

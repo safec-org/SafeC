@@ -504,6 +504,17 @@ bool ConstEvalEngine::resolveStmtArraySizes(Stmt &s, bool insideUnsafe) {
         ok = resolveTypeArraySizes(vd.declType, insideUnsafe) && ok;
         break;
     }
+    case StmtKind::MultiVarDecl: {
+        auto &mv = static_cast<MultiVarDeclStmt &>(s);
+        for (auto &d : mv.decls) ok = resolveStmtArraySizes(*d, insideUnsafe) && ok;
+        break;
+    }
+    case StmtKind::Switch: {
+        auto &sw = static_cast<SwitchStmt &>(s);
+        for (auto &c : sw.cases)
+            for (auto &stmt : c.body) ok = resolveStmtArraySizes(*stmt, insideUnsafe) && ok;
+        break;
+    }
     case StmtKind::If: {
         auto &is = static_cast<IfStmt &>(s);
         if (is.then)  ok = resolveStmtArraySizes(*is.then, insideUnsafe) && ok;
@@ -617,6 +628,12 @@ void ConstEvalEngine::resolveIfConstInStmt(Stmt &s) {
         if (us.body) resolveIfConstInStmt(*us.body);
         break;
     }
+    case StmtKind::Switch: {
+        auto &sw = static_cast<SwitchStmt &>(s);
+        for (auto &c : sw.cases)
+            for (auto &stmt : c.body) resolveIfConstInStmt(*stmt);
+        break;
+    }
     default:
         break;
     }
@@ -675,6 +692,18 @@ void ConstEvalEngine::checkStmtForConstevalCalls(const Stmt &s,
     case StmtKind::VarDecl: {
         auto &vd = static_cast<const VarDeclStmt &>(s);
         if (vd.init) checkExprForConstevalCalls(*vd.init, inConstContext);
+        break;
+    }
+    case StmtKind::MultiVarDecl: {
+        auto &mv = static_cast<const MultiVarDeclStmt &>(s);
+        for (auto &d : mv.decls) checkStmtForConstevalCalls(*d, inConstContext);
+        break;
+    }
+    case StmtKind::Switch: {
+        auto &sw = static_cast<const SwitchStmt &>(s);
+        if (sw.controlling) checkExprForConstevalCalls(*sw.controlling, inConstContext);
+        for (auto &c : sw.cases)
+            for (auto &stmt : c.body) checkStmtForConstevalCalls(*stmt, inConstContext);
         break;
     }
     case StmtKind::Unsafe: {
@@ -1389,10 +1418,23 @@ bool ConstEvalEngine::evalStmt(const Stmt &s, Frame &frame) {
         return evalWhile(static_cast<const WhileStmt &>(s), frame);
     case StmtKind::For:
         return evalFor(static_cast<const ForStmt &>(s), frame);
+    case StmtKind::Switch:
+        return evalSwitch(static_cast<const SwitchStmt &>(s), frame);
     case StmtKind::Return:
         return evalReturn(static_cast<const ReturnStmt &>(s), frame);
     case StmtKind::VarDecl:
         return evalVarDecl(static_cast<const VarDeclStmt &>(s), frame);
+    case StmtKind::MultiVarDecl: {
+        // Same "no new scope" rule as everywhere else this statement
+        // shows up (see AST.h) — evaluate each declarator straight into
+        // the current frame, same as if evalCompound had walked N
+        // separate VarDeclStmts.
+        auto &mv = static_cast<const MultiVarDeclStmt &>(s);
+        for (auto &d : mv.decls) {
+            if (!evalStmt(*d, frame)) return false;
+        }
+        return true;
+    }
     case StmtKind::Break:
         breakFlag_ = true;
         return true;
@@ -1500,6 +1542,39 @@ bool ConstEvalEngine::evalFor(const ForStmt &s, Frame &frame) {
                 "compile-time loop iteration limit (" +
                 std::to_string(kLoopLimit) + ") exceeded");
             return false;
+        }
+    }
+    return !diag_.hasErrors();
+}
+
+// Real fallthrough dispatch, mirroring genSwitch's codegen shape: find the
+// first case whose value matches (or 'default' if none do), then run every
+// statement from there through the end of the switch, stopping early on
+// 'break' (consumed here, like a loop consumes it) or 'return'/'continue'
+// (left set for whatever encloses this switch to handle, since neither
+// belongs to the switch itself).
+bool ConstEvalEngine::evalSwitch(const SwitchStmt &s, Frame &frame) {
+    auto subject = evalExprF(*s.controlling, frame);
+    if (!subject) return false;
+    int64_t v = subject->toInt();
+
+    size_t n = s.cases.size();
+    size_t startIdx = n, defaultIdx = n;
+    for (size_t i = 0; i < n && startIdx == n; ++i) {
+        const auto &c = s.cases[i];
+        if (c.isDefault) { defaultIdx = i; continue; }
+        for (int64_t cv : c.values) {
+            if (cv == v) { startIdx = i; break; }
+        }
+    }
+    if (startIdx == n) startIdx = defaultIdx;
+    if (startIdx == n) return !diag_.hasErrors(); // no case matched, no default
+
+    for (size_t i = startIdx; i < n; ++i) {
+        for (auto &stmt : s.cases[i].body) {
+            if (!evalStmt(*stmt, frame)) return false;
+            if (frame.hasReturn || continueFlag_) return true;
+            if (breakFlag_) { breakFlag_ = false; return true; }
         }
     }
     return !diag_.hasErrors();

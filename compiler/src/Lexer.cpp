@@ -172,13 +172,23 @@ Token Lexer::lexNumber() {
     bool isFloat = false;
     bool isHex   = false;
 
+    bool isBinary = false;
+    bool isOctal  = false;
     if (peek() == '0' && (peek(1) == 'x' || peek(1) == 'X')) {
         s += advance(); s += advance(); // "0x"
         isHex = true;
         while (!atEnd() && std::isxdigit(peek())) s += advance();
+    } else if (peek() == '0' && (peek(1) == 'b' || peek(1) == 'B')) {
+        s += advance(); s += advance(); // "0b"
+        isBinary = true;
+        while (!atEnd() && (peek() == '0' || peek() == '1')) s += advance();
+    } else if (peek() == '0' && (peek(1) == 'o' || peek(1) == 'O')) {
+        s += advance(); s += advance(); // "0o"
+        isOctal = true;
+        while (!atEnd() && peek() >= '0' && peek() <= '7') s += advance();
     } else {
         while (!atEnd() && std::isdigit(peek())) s += advance();
-        if (!atEnd() && peek() == '.' && std::isdigit(peek(1))) {
+        if (!atEnd() && peek() == '.' && peek(1) != '.') {
             isFloat = true;
             s += advance();
             while (!atEnd() && std::isdigit(peek())) s += advance();
@@ -192,7 +202,9 @@ Token Lexer::lexNumber() {
     }
 
     // Save the numeric-only part for parsing before consuming the suffix.
-    std::string digits = s;
+    // For 0b/0o literals this drops the prefix so std::strtoull can parse
+    // with an explicit base (it doesn't understand "0b"/"0o" itself).
+    std::string digits = (isBinary || isOctal) ? s.substr(2) : s;
 
     // Optional suffix: u/U (unsigned), l/L (long), ll/LL (long long), f/F (float).
     bool isUnsigned = false;
@@ -227,7 +239,7 @@ Token Lexer::lexNumber() {
         tok.kind = TK::IntLit;
         // For unsigned literals (or numbers that exceed LLONG_MAX),
         // parse as unsigned long long and reinterpret the bit pattern.
-        int base = isHex ? 16 : 10;
+        int base = isHex ? 16 : (isBinary ? 2 : (isOctal ? 8 : 10));
         if (isUnsigned) {
             // Parse as unsigned; reinterpret bits as int64_t.
             errno = 0;
@@ -267,6 +279,16 @@ Token Lexer::lexString() {
             case '\\': s += '\\'; break;
             case '"':  s += '"';  break;
             case '0':  s += '\0'; break;
+            case 'x': {
+                std::string hex;
+                while (hex.size() < 2 && !atEnd() && std::isxdigit(peek())) hex += advance();
+                if (hex.empty()) {
+                    diag_.error(curLoc(), "\\x used with no following hex digits");
+                } else {
+                    s += static_cast<char>(std::strtoul(hex.c_str(), nullptr, 16));
+                }
+                break;
+            }
             default:   s += '\\'; s += esc;
             }
         } else {
@@ -290,6 +312,16 @@ Token Lexer::lexChar() {
         case 'n': c = '\n'; break; case 't': c = '\t'; break;
         case 'r': c = '\r'; break; case '\\': c = '\\'; break;
         case '\'': c = '\''; break; case '0': c = '\0'; break;
+        case 'x': {
+            std::string hex;
+            while (hex.size() < 2 && !atEnd() && std::isxdigit(peek())) hex += advance();
+            if (hex.empty()) {
+                diag_.error(curLoc(), "\\x used with no following hex digits");
+            } else {
+                c = static_cast<char>(std::strtoul(hex.c_str(), nullptr, 16));
+            }
+            break;
+        }
         default: c = esc;
         }
     }

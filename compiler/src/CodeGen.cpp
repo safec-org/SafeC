@@ -991,8 +991,14 @@ void CodeGen::genStmt(Stmt &s, FnEnv &env) {
     case StmtKind::While:
     case StmtKind::DoWhile:      genWhile(static_cast<WhileStmt &>(s), env);         break;
     case StmtKind::For:          genFor(static_cast<ForStmt &>(s), env);             break;
+    case StmtKind::Switch:       genSwitch(static_cast<SwitchStmt &>(s), env);       break;
     case StmtKind::Return:       genReturn(static_cast<ReturnStmt &>(s), env);       break;
     case StmtKind::VarDecl:      genVarDecl(static_cast<VarDeclStmt &>(s), env);    break;
+    case StmtKind::MultiVarDecl: {
+        auto &mv = static_cast<MultiVarDeclStmt &>(s);
+        for (auto &d : mv.decls) genStmt(*d, env);
+        break;
+    }
     case StmtKind::Unsafe:       genUnsafe(static_cast<UnsafeStmt &>(s), env);      break;
     case StmtKind::Break: {
         auto &bs = static_cast<BreakStmt &>(s);
@@ -1126,6 +1132,12 @@ void CodeGen::collectGotoLabels(Stmt &s, FnEnv &env) {
         if (us.body) collectGotoLabels(*us.body, env);
         break;
     }
+    case StmtKind::Switch: {
+        auto &sw = static_cast<SwitchStmt &>(s);
+        for (auto &c : sw.cases)
+            for (auto &stmt : c.body) collectGotoLabels(*stmt, env);
+        break;
+    }
     default: break;
     }
 }
@@ -1237,6 +1249,53 @@ void CodeGen::genFor(ForStmt &s, FnEnv &env) {
     if (!isTerminated(builder_.GetInsertBlock())) builder_.CreateBr(headerBB);
 
     env.popLoop();
+    builder_.SetInsertPoint(exitBB);
+}
+
+void CodeGen::genSwitch(SwitchStmt &s, FnEnv &env) {
+    auto *subjectVal = genExpr(*s.controlling, env);
+    auto *exitBB = llvm::BasicBlock::Create(ctx_, "switch.end", env.fn);
+
+    // One real llvm::BasicBlock per case, in source order, so an
+    // unterminated case body's natural fallthrough is just "the next
+    // block in sequence" — exactly how C fallthrough already works at
+    // the machine level, no special-casing needed here beyond wiring the
+    // branches up that way.
+    std::vector<llvm::BasicBlock *> blocks;
+    blocks.reserve(s.cases.size());
+    llvm::BasicBlock *defaultBB = exitBB; // no 'default:' → falls past the switch
+    for (auto &c : s.cases) {
+        auto *bb = llvm::BasicBlock::Create(ctx_, c.isDefault ? "switch.default" : "switch.case", env.fn);
+        blocks.push_back(bb);
+        if (c.isDefault) defaultBB = bb;
+    }
+
+    unsigned numDistinctValues = 0;
+    for (auto &c : s.cases) numDistinctValues += (unsigned)c.values.size();
+    auto *swInst = builder_.CreateSwitch(subjectVal, defaultBB, numDistinctValues);
+    auto *subjectTy = subjectVal->getType();
+    for (size_t i = 0; i < s.cases.size(); ++i) {
+        for (int64_t v : s.cases[i].values) {
+            swInst->addCase(llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(subjectTy), v, true),
+                             blocks[i]);
+        }
+    }
+
+    // Unlabeled 'break' exits the switch; 'continue' isn't ours to
+    // consume, so it keeps referring to whatever loop (if any) already
+    // encloses this switch — matches real C's "switch doesn't establish
+    // a continue target" rule.
+    env.pushLoop(exitBB, env.continueBB(), "");
+    for (size_t i = 0; i < s.cases.size(); ++i) {
+        builder_.SetInsertPoint(blocks[i]);
+        for (auto &stmt : s.cases[i].body) genStmt(*stmt, env);
+        if (!isTerminated(builder_.GetInsertBlock())) {
+            auto *fallTo = (i + 1 < blocks.size()) ? blocks[i + 1] : exitBB;
+            builder_.CreateBr(fallTo);
+        }
+    }
+    env.popLoop();
+
     builder_.SetInsertPoint(exitBB);
 }
 
@@ -2280,6 +2339,18 @@ llvm::Value *CodeGen::genDeref(UnaryExpr &e, FnEnv &env, bool wantAddr) {
 // ── Binary ────────────────────────────────────────────────────────────────────
 llvm::Value *CodeGen::applyBinaryOp(BinaryOp op, llvm::Value *l, llvm::Value *r,
                                      const TypePtr &ty) {
+    // Comma: 'l' was only evaluated for its side effects and is discarded —
+    // unlike every other case below, this is not "combine two operands of a
+    // shared type," so it must bypass the integer/float width-unification
+    // logic just below. That logic keys off 'ty' (the *left* operand's
+    // type, passed in by genBinary for every op) and would otherwise widen
+    // 'r' up to 'l's width whenever the left operand's type happens to be
+    // wider (e.g. '(someLongLong, someInt)') — corrupting the comma's
+    // result to a bit-width that doesn't match its actual (right-operand)
+    // static type, exactly the "doesn't work like C" gap this exists to
+    // close: in C, '(a, b)' is always simply b's value and type.
+    if (op == BinaryOp::Comma) return r;
+
     // vec<T,N> (std::simd): float-vs-integer dispatch must look at the
     // element type T, not the vector type itself (VectorType::isFloat() is
     // always false — its own 'kind' is TypeKind::Vector — so a

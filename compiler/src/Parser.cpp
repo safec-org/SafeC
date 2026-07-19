@@ -111,7 +111,47 @@ static bool canStartCastOperand(const Token &t) {
     }
 }
 
+// Applies 'fn' (setting a modifier like isVolatile/isAtomic/alignment) to
+// every VarDeclStmt in 'vs' — a plain VarDeclStmt, or every declarator of
+// a MultiVarDeclStmt ('volatile int a, b;' marks both 'a' and 'b').
+template <typename F>
+static void applyToVarDecls(Stmt *vs, F &&fn) {
+    if (!vs) return;
+    if (vs->kind == StmtKind::VarDecl) {
+        fn(static_cast<VarDeclStmt &>(*vs));
+    } else if (vs->kind == StmtKind::MultiVarDecl) {
+        for (auto &d : static_cast<MultiVarDeclStmt &>(*vs).decls) fn(static_cast<VarDeclStmt &>(*d));
+    }
+}
+
 bool Parser::isTypeStart() const { return isTypeStart(cur()); }
+
+bool Parser::looksLikeVarDeclStart() const {
+    if (!isTypeStart() || cur().is(TK::Star)) return false;
+    bool isKeywordType = (
+        cur().is(TK::KW_int) || cur().is(TK::KW_void) ||
+        cur().is(TK::KW_char) || cur().is(TK::KW_float) ||
+        cur().is(TK::KW_double) || cur().is(TK::KW_bool) ||
+        cur().is(TK::KW_long) || cur().is(TK::KW_short) ||
+        cur().is(TK::KW_unsigned) || cur().is(TK::KW_signed) ||
+        cur().is(TK::KW_struct) || cur().is(TK::KW_union) || cur().is(TK::KW_enum) ||
+        cur().is(TK::KW_tuple) || cur().is(TK::KW_fn) ||
+        cur().is(TK::KW_typeof) || cur().is(TK::KW_auto) ||
+        cur().is(TK::Amp) || cur().is(TK::QuestionAmp) ||
+        cur().is(TK::Question)   // ?T optional type
+    );
+    if (isKeywordType) return true;
+    // vec<T, N> varName — same contextual pattern as parseBaseType's
+    // vec<...> case (see there for why 'vec' isn't a keyword).
+    if (cur().isIdent("vec") && peek().is(TK::Lt)) return true;
+    // Ident followed by another ident → var decl (TypeName varName)
+    if (cur().is(TK::Ident) && peek().is(TK::Ident)) return true;
+    // Ident followed by * then ident → pointer var decl (TypeName* varName)
+    // Disambiguate: TypeName * varName vs expr * expr
+    // Heuristic: if token[2] is an ident (name), it's a declaration
+    if (cur().is(TK::Ident) && peek().is(TK::Star) && peek(2).is(TK::Ident)) return true;
+    return false;
+}
 
 // Parse a region qualifier: 'stack' | 'static' | 'heap' | 'arena' '<' Ident '>'
 Region Parser::parseRegionQualifier(std::string &arenaName) {
@@ -1420,6 +1460,7 @@ StmtPtr Parser::parseStmt() {
     case TK::KW_defer:         return parseDeferStmt(false);
     case TK::KW_errdefer:      return parseDeferStmt(true);
     case TK::KW_match:         return parseMatchStmt();
+    case TK::KW_switch:        return parseSwitchStmt();
     case TK::KW_break: {
         consume();
         std::string lbl;
@@ -1468,15 +1509,13 @@ StmtPtr Parser::parseStmt() {
     case TK::KW_volatile: {
         consume();
         auto vs = parseVarDeclStmt(false, false);
-        if (vs && vs->kind == StmtKind::VarDecl)
-            static_cast<VarDeclStmt&>(*vs).isVolatile = true;
+        applyToVarDecls(vs.get(), [](VarDeclStmt &d) { d.isVolatile = true; });
         return vs;
     }
     case TK::KW_atomic: {
         consume();
         auto vs = parseVarDeclStmt(false, false);
-        if (vs && vs->kind == StmtKind::VarDecl)
-            static_cast<VarDeclStmt&>(*vs).isAtomic = true;
+        applyToVarDecls(vs.get(), [](VarDeclStmt &d) { d.isAtomic = true; });
         return vs;
     }
     case TK::KW_thread_local: {
@@ -1486,8 +1525,7 @@ StmtPtr Parser::parseStmt() {
         bool isConst = false;
         if (match(TK::KW_const)) isConst = true;
         auto vs = parseVarDeclStmt(isConst, isStaticTL);
-        if (vs && vs->kind == StmtKind::VarDecl)
-            static_cast<VarDeclStmt&>(*vs).isThreadLocal = true;
+        applyToVarDecls(vs.get(), [](VarDeclStmt &d) { d.isThreadLocal = true; });
         return vs;
     }
     case TK::KW_static: {
@@ -1506,8 +1544,7 @@ StmtPtr Parser::parseStmt() {
             else diag_.error(cur().loc, "expected integer alignment value");
             expect(TK::RParen, "expected ')' after alignment value");
             auto vs = parseVarDeclStmt(false, false);
-            if (vs && vs->kind == StmtKind::VarDecl)
-                static_cast<VarDeclStmt&>(*vs).alignment = alignment;
+            applyToVarDecls(vs.get(), [alignment](VarDeclStmt &d) { d.alignment = alignment; });
             return vs;
         }
         // []T varName — slice type variable declaration
@@ -1515,38 +1552,8 @@ StmtPtr Parser::parseStmt() {
             return parseVarDeclStmt(false, false);
         }
         // Disambiguation: type-start → variable declaration
-        if (isTypeStart() && !cur().is(TK::Star)) {
-            // Could be a function call or a var decl.
-            // Look ahead: if after the type-name we see an identifier, it's a decl.
-            // Simple heuristic: if cur is a keyword type → definitely decl
-            bool isKeywordType = (
-                cur().is(TK::KW_int) || cur().is(TK::KW_void) ||
-                cur().is(TK::KW_char) || cur().is(TK::KW_float) ||
-                cur().is(TK::KW_double) || cur().is(TK::KW_bool) ||
-                cur().is(TK::KW_long) || cur().is(TK::KW_short) ||
-                cur().is(TK::KW_unsigned) || cur().is(TK::KW_signed) ||
-                cur().is(TK::KW_struct) || cur().is(TK::KW_union) || cur().is(TK::KW_enum) ||
-                cur().is(TK::KW_tuple) || cur().is(TK::KW_fn) ||
-                cur().is(TK::KW_typeof) || cur().is(TK::KW_auto) ||
-                cur().is(TK::Amp) || cur().is(TK::QuestionAmp) ||
-                cur().is(TK::Question)   // ?T optional type
-            );
-            if (isKeywordType) return parseVarDeclStmt(false, false);
-            // vec<T, N> varName — same contextual pattern as parseBaseType's
-            // vec<...> case (see there for why 'vec' isn't a keyword).
-            if (cur().isIdent("vec") && peek().is(TK::Lt)) {
-                return parseVarDeclStmt(false, false);
-            }
-            // Ident followed by another ident → var decl (TypeName varName)
-            if (cur().is(TK::Ident) && peek().is(TK::Ident)) {
-                return parseVarDeclStmt(false, false);
-            }
-            // Ident followed by * then ident → pointer var decl (TypeName* varName)
-            // Disambiguate: TypeName * varName vs expr * expr
-            // Heuristic: if token[2] is an ident (name), it's a declaration
-            if (cur().is(TK::Ident) && peek().is(TK::Star) && peek(2).is(TK::Ident)) {
-                return parseVarDeclStmt(false, false);
-            }
+        if (looksLikeVarDeclStart()) {
+            return parseVarDeclStmt(false, false);
         }
         return parseExprStmt();
     }
@@ -1626,7 +1633,7 @@ StmtPtr Parser::parseForStmt() {
     // init
     StmtPtr init;
     if (!cur().is(TK::Semicolon)) {
-        if (isTypeStart()) init = parseVarDeclStmt(false, false);
+        if (looksLikeVarDeclStart()) init = parseVarDeclStmt(false, false);
         else init = parseExprStmt();
     } else {
         expect(TK::Semicolon);
@@ -1742,7 +1749,8 @@ StmtPtr Parser::parseVarDeclStmt(bool isConst, bool isStatic) {
         return autoVs;
     }
 
-    TypePtr ty = parseType();
+    TypePtr baseTy = parseType();
+    TypePtr ty = baseTy;
     // C-style function-pointer local: 'RetType (*name)(Params);'
     std::string name;
     if (!tryParseCStyleFuncPtrDeclarator(ty, name, ty)) {
@@ -1758,14 +1766,41 @@ StmtPtr Parser::parseVarDeclStmt(bool isConst, bool isStatic) {
     ExprPtr init;
     if (match(TK::Eq)) init = parseAssignExpr();
 
-    expect(TK::Semicolon, "expected ';' after variable declaration");
+    auto mkDecl = [&](std::string n, TypePtr t, ExprPtr i, SourceLocation l) {
+        desugarMallocDefer(i, n, l, pendingExtraStmt_);
+        auto vs = std::make_unique<VarDeclStmt>(std::move(n), std::move(t), std::move(i), l);
+        vs->isConst  = isConst;
+        vs->isStatic = isStatic;
+        return vs;
+    };
 
-    desugarMallocDefer(init, name, loc, pendingExtraStmt_);
-    auto vs = std::make_unique<VarDeclStmt>(std::move(name), std::move(ty),
-                                             std::move(init), loc);
-    vs->isConst  = isConst;
-    vs->isStatic = isStatic;
-    return vs;
+    if (!cur().is(TK::Comma)) {
+        expect(TK::Semicolon, "expected ';' after variable declaration");
+        return mkDecl(std::move(name), std::move(ty), std::move(init), loc);
+    }
+
+    // C-style 'T a, b = 1, c[3];' — every subsequent declarator shares
+    // 'baseTy' (the type as written before the first declarator's own
+    // pointer/array suffixes — so 'int* a, b;' makes both 'a' and 'b'
+    // pointers, not just 'a' as real C's declarator-grammar would have it;
+    // documented scope cut, not an oversight, since re-deriving a
+    // "pointer-ness stripped" base type per declarator is a wart even C
+    // style guides steer away from relying on).
+    std::vector<StmtPtr> decls;
+    decls.push_back(mkDecl(std::move(name), std::move(ty), std::move(init), loc));
+    while (match(TK::Comma)) {
+        auto declLoc = cur().loc;
+        std::string n = cur().text;
+        if (!cur().is(TK::Ident)) {
+            diag_.error(cur().loc, "expected variable name");
+        } else consume();
+        TypePtr t = parseArrayDeclaratorSuffix(baseTy);
+        ExprPtr i;
+        if (match(TK::Eq)) i = parseAssignExpr();
+        decls.push_back(mkDecl(std::move(n), std::move(t), std::move(i), declLoc));
+    }
+    expect(TK::Semicolon, "expected ';' after variable declaration");
+    return std::make_unique<MultiVarDeclStmt>(std::move(decls), loc);
 }
 
 // ── Inline assembly statement ──────────────────────────────────────────────
@@ -1869,9 +1904,10 @@ MatchPattern Parser::parseMatchPattern() {
         p.kind   = PatternKind::IntLit;
         p.intVal = cur().intVal;
         consume();
-        // Range: N..M — DotDot token or two consecutive dots
-        if (cur().is(TK::DotDot) || (cur().is(TK::Dot) && peek().is(TK::Dot))) {
-            if (cur().is(TK::DotDot)) consume(); else { consume(); consume(); }
+        // Range: N..M or N...M — DotDot/DotDotDot token, or two consecutive dots
+        if (cur().is(TK::DotDot) || cur().is(TK::DotDotDot) ||
+            (cur().is(TK::Dot) && peek().is(TK::Dot))) {
+            if (cur().is(TK::Dot)) { consume(); consume(); } else { consume(); }
             if (cur().is(TK::IntLit)) {
                 p.kind    = PatternKind::Range;
                 p.intVal2 = cur().intVal;
@@ -1882,11 +1918,22 @@ MatchPattern Parser::parseMatchPattern() {
         }
         return p;
     }
-    // Char literal pattern: 'a'
+    // Char literal pattern: 'a', or a char range: 'a'..'z' / 'a'...'z'
     if (cur().is(TK::CharLit)) {
         p.kind   = PatternKind::IntLit;
         p.intVal = (unsigned char)cur().text[0];
         consume();
+        if (cur().is(TK::DotDot) || cur().is(TK::DotDotDot) ||
+            (cur().is(TK::Dot) && peek().is(TK::Dot))) {
+            if (cur().is(TK::Dot)) { consume(); consume(); } else { consume(); }
+            if (cur().is(TK::CharLit)) {
+                p.kind    = PatternKind::Range;
+                p.intVal2 = (unsigned char)cur().text[0];
+                consume();
+            } else {
+                diag_.error(cur().loc, "expected char after '..' in range pattern");
+            }
+        }
         return p;
     }
     // Enum ident — also accepts the keyword 'null' so 'case null:' works
@@ -1945,6 +1992,82 @@ StmtPtr Parser::parseMatchStmt() {
     }
     expect(TK::RBrace, "expected '}' closing match");
     return std::make_unique<MatchStmt>(std::move(subject), std::move(arms), loc);
+}
+
+// A switch case label's value: a literal (optionally negated) integer or
+// char constant — see SwitchCase's header comment in AST.h for why this
+// is deliberately narrower than a general constant-expression.
+int64_t Parser::parseSwitchCaseValue() {
+    bool neg = false;
+    if (cur().is(TK::Minus)) { neg = true; consume(); }
+    if (cur().is(TK::IntLit)) {
+        int64_t v = cur().intVal;
+        consume();
+        return neg ? -v : v;
+    }
+    if (cur().is(TK::CharLit)) {
+        int64_t v = (unsigned char)cur().text[0];
+        consume();
+        return neg ? -v : v;
+    }
+    diag_.error(cur().loc, "expected integer or char literal in case label");
+    return 0;
+}
+
+// C-style switch statement:
+//   switch (expr) {
+//   case V1:
+//   case V2:
+//       stmt...          // falls through to the next case without 'break'
+//   default:
+//       stmt...
+//   }
+StmtPtr Parser::parseSwitchStmt() {
+    auto loc = cur().loc;
+    consume(); // eat 'switch'
+    expect(TK::LParen, "expected '(' after 'switch'");
+    auto controlling = parseExpr();
+    expect(TK::RParen, "expected ')' after switch subject");
+    expect(TK::LBrace, "expected '{' opening switch body");
+
+    std::vector<SwitchCase> cases;
+    bool sawDefault = false;
+    while (!atEnd() && !cur().is(TK::RBrace)) {
+        SwitchCase sc;
+        sc.loc = cur().loc;
+        // One or more stacked 'case V:'/'default:' labels sharing one body
+        // (real C's "case 1: case 2: stmt;" style — a label with no
+        // statements before the next label falls straight through).
+        bool sawLabel = false;
+        while (cur().is(TK::KW_case) || cur().is(TK::KW_default)) {
+            if (cur().is(TK::KW_default)) {
+                consume();
+                expect(TK::Colon, "expected ':' after 'default'");
+                if (sawDefault)
+                    diag_.error(sc.loc, "multiple 'default' labels in one switch");
+                sc.isDefault = true;
+                sawDefault = true;
+            } else {
+                consume(); // 'case'
+                sc.values.push_back(parseSwitchCaseValue());
+                expect(TK::Colon, "expected ':' after case value");
+            }
+            sawLabel = true;
+            // Only keep stacking labels while no statement has appeared yet.
+            if (!(cur().is(TK::KW_case) || cur().is(TK::KW_default))) break;
+        }
+        if (!sawLabel) {
+            diag_.error(cur().loc, "expected 'case' or 'default' in switch body");
+            break;
+        }
+        while (!atEnd() && !cur().is(TK::RBrace) &&
+               !cur().is(TK::KW_case) && !cur().is(TK::KW_default)) {
+            sc.body.push_back(parseStmt());
+        }
+        cases.push_back(std::move(sc));
+    }
+    expect(TK::RBrace, "expected '}' closing switch");
+    return std::make_unique<SwitchStmt>(std::move(controlling), std::move(cases), loc);
 }
 
 // match-as-expression:
@@ -2485,18 +2608,20 @@ ExprPtr Parser::parsePrimaryExpr() {
     }
     case TK::LParen: {
         consume();
-        // Detect tuple literal: (expr, expr, ...)
+        // '(e1, e2, ..., eN)' is the C comma operator, not a tuple
+        // literal (the 'tuple(T1, T2, ...)' *type* syntax above is
+        // unrelated — parseType's handling, not this value position):
+        // evaluate every operand left to right for its side effects, in a
+        // left-associative BinaryOp::Comma chain whose value and type are
+        // simply the last operand's — see applyBinaryOp's Comma case in
+        // CodeGen.cpp for why that chain must bypass the usual arithmetic
+        // width-unification logic.
         auto e = parseAssignExpr();
-        if (cur().is(TK::Comma)) {
-            // Tuple literal
-            std::vector<ExprPtr> elems;
-            elems.push_back(std::move(e));
-            while (match(TK::Comma)) {
-                if (cur().is(TK::RParen)) break;
-                elems.push_back(parseAssignExpr());
-            }
-            expect(TK::RParen, "expected ')' closing tuple literal");
-            return std::make_unique<TupleLitExpr>(std::move(elems), loc);
+        while (cur().is(TK::Comma)) {
+            auto commaLoc = cur().loc;
+            consume();
+            auto rhs = parseAssignExpr();
+            e = std::make_unique<BinaryExpr>(BinaryOp::Comma, std::move(e), std::move(rhs), commaLoc);
         }
         expect(TK::RParen, "expected ')' closing parenthesized expression");
         return e;

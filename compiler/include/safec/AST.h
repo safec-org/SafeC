@@ -381,11 +381,13 @@ enum class StmtKind {
     Compound, Expr, If, While, DoWhile, For, Return,
     Break, Continue, Goto, Label,
     VarDecl,       // local variable declaration
+    MultiVarDecl,  // C-style 'T a, b = 1, c;' — sibling VarDecls, same scope
     Unsafe,        // unsafe { ... }
     StaticAssert,  // static_assert(cond[, "msg"])
     IfConst,       // if const (cond) { ... } — compile-time branch selection
     Defer,         // defer stmt  / errdefer stmt
     Match,         // match (expr) { arm, ... }
+    Switch,        // C-style switch (expr) { case V: ... default: ... }
     Asm,           // asm [volatile] ("template" [: outs [: ins [: clobbers]]]) ;
 };
 
@@ -487,6 +489,20 @@ struct VarDeclStmt : Stmt {
     TypePtr resolvedType;
 };
 
+// C-style 'T a, b = 1, c;' desugars to N sibling VarDeclStmts that must
+// land in whatever scope this statement itself sits in — unlike
+// CompoundStmt, this deliberately does *not* push its own scope, so 'b'
+// and 'c' stay visible for the rest of that scope exactly as if each had
+// been written as its own 'T b = 1; T c;' statement. This also makes it
+// safe to use as a ForStmt::init: checkFor()/genFor() already share one
+// scope across init/cond/incr/body, so declarations here are visible to
+// all of them, which wrapping in a CompoundStmt would break.
+struct MultiVarDeclStmt : Stmt {
+    std::vector<StmtPtr> decls;   // each a VarDeclStmt
+    explicit MultiVarDeclStmt(std::vector<StmtPtr> d, SourceLocation l)
+        : Stmt(StmtKind::MultiVarDecl, l), decls(std::move(d)) {}
+};
+
 // ── unsafe { ... } ───────────────────────────────────────────────────────────
 struct UnsafeStmt : Stmt {
     StmtPtr body;
@@ -548,6 +564,34 @@ struct MatchStmt : Stmt {
     std::vector<MatchArm> arms;
     MatchStmt(ExprPtr s, std::vector<MatchArm> a, SourceLocation l)
         : Stmt(StmtKind::Match, l), subject(std::move(s)), arms(std::move(a)) {}
+};
+
+// ── switch statement ────────────────────────────────────────────────────────
+// Real C fallthrough dispatch — deliberately not desugared to 'match'
+// (which never falls through and whose 'break' passes through to an
+// *enclosing* loop, Rust-style — see genMatch's header comment). Case
+// values are restricted to literal (optionally negated) int/char
+// constants, same as MatchPattern::IntLit/Range above rather than
+// general constant-expressions — this keeps codegen able to emit a real
+// llvm::SwitchInst (a jump table / O(1) dispatch, not a chain of icmps)
+// exactly the way C's own "case labels must be ICEs" rule enables the
+// same in a C compiler, without this switch needing to fold arbitrary
+// expressions at compile time the way a full C constant-expression
+// evaluator would.
+struct SwitchCase {
+    std::vector<int64_t> values;     // one or more; ignored when isDefault
+    bool                  isDefault = false;
+    std::vector<StmtPtr>  body;      // flat statement list; falls through
+                                       // into the next case unless it ends
+                                       // in 'break'
+    SourceLocation         loc;
+};
+
+struct SwitchStmt : Stmt {
+    ExprPtr                 controlling;
+    std::vector<SwitchCase> cases;
+    SwitchStmt(ExprPtr c, std::vector<SwitchCase> cs, SourceLocation l)
+        : Stmt(StmtKind::Switch, l), controlling(std::move(c)), cases(std::move(cs)) {}
 };
 
 // ── match expression ──────────────────────────────────────────────────────────

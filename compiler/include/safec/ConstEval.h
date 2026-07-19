@@ -157,6 +157,7 @@ private:
     bool evalIf      (const IfStmt &s, Frame &frame);
     bool evalWhile   (const WhileStmt &s, Frame &frame);
     bool evalFor     (const ForStmt &s, Frame &frame);
+    bool evalSwitch  (const SwitchStmt &s, Frame &frame);
     bool evalReturn  (const ReturnStmt &s, Frame &frame);
     bool evalVarDecl (const VarDeclStmt &s, Frame &frame);
 
