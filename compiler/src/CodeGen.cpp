@@ -842,6 +842,21 @@ llvm::Constant *CodeGen::evalConstInit(Expr &e, llvm::Type *expectedTy) {
 }
 
 llvm::GlobalVariable *CodeGen::genGlobalVar(GlobalVarDecl &gv) {
+    // Repeated 'extern T x;' declarations of the same name across
+    // independently-included .sc/.h files are common in std/ (each file
+    // re-declares whatever externs it needs, the same de-duplication
+    // genFunction already does for extern functions via
+    // mod_->getFunction() above) — reuse the existing global instead of
+    // creating a second one. Without this, LLVM's Module silently
+    // uniquifies the name (e.g. '__stderrp' -> '__stderrp.1') to avoid an
+    // in-module collision, and that renamed symbol then fails to resolve
+    // at link time since no library actually exports it under that name.
+    if (gv.isExtern) {
+        if (auto *existing = mod_->getNamedGlobal(gv.name)) {
+            globals_[gv.name] = existing;
+            return existing;
+        }
+    }
     auto *ty = lowerType(gv.type);
     llvm::Constant *init = llvm::Constant::getNullValue(ty);
 
@@ -1451,6 +1466,12 @@ void CodeGen::genMatch(MatchStmt &s, FnEnv &env) {
         }
     }
     bool hasTag = isTaggedUnion || isNullLike || isOptional;
+    // Plain 'enum' subject: EnumIdent patterns compare directly against
+    // subjectVal (an integer), using pat.resolvedTag as resolved by
+    // Sema's resolveMatchArmPatterns — see that function's comment for why
+    // this branch exists (without it, every EnumIdent pattern against a
+    // plain enum silently matched unconditionally).
+    bool isPlainEnum = s.subject->type && s.subject->type->kind == TypeKind::Enum;
 
     // For tagged unions, store subject and extract tag
     llvm::Value *tagVal = nullptr;
@@ -1501,6 +1522,10 @@ void CodeGen::genMatch(MatchStmt &s, FnEnv &env) {
                     auto *lit = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_),
                                                         pat.resolvedTag, true);
                     thisCond = builder_.CreateICmpEQ(tagVal, lit, "match.tag.eq");
+                } else if (isPlainEnum && pat.resolvedTag >= 0) {
+                    auto *lit = llvm::ConstantInt::get(subjectVal->getType(),
+                                                        pat.resolvedTag, true);
+                    thisCond = builder_.CreateICmpEQ(subjectVal, lit, "match.enum.eq");
                 } else {
                     thisCond = builder_.getTrue();
                 }
@@ -1597,6 +1622,8 @@ llvm::Value *CodeGen::genMatchExpr(MatchExpr &e, FnEnv &env) {
         }
     }
     bool hasTag = isTaggedUnion || isNullLike || isOptional;
+    // See genMatch's identical comment above.
+    bool isPlainEnum = e.subject->type && e.subject->type->kind == TypeKind::Enum;
 
     llvm::Value *tagVal = nullptr;
     llvm::AllocaInst *subjectAlloca = nullptr;
@@ -1650,6 +1677,10 @@ llvm::Value *CodeGen::genMatchExpr(MatchExpr &e, FnEnv &env) {
                     auto *lit = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_),
                                                         pat.resolvedTag, true);
                     thisCond = builder_.CreateICmpEQ(tagVal, lit, "match.expr.tag.eq");
+                } else if (isPlainEnum && pat.resolvedTag >= 0) {
+                    auto *lit = llvm::ConstantInt::get(subjectVal->getType(),
+                                                        pat.resolvedTag, true);
+                    thisCond = builder_.CreateICmpEQ(subjectVal, lit, "match.expr.enum.eq");
                 } else {
                     thisCond = builder_.getTrue();
                 }

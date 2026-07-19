@@ -85,6 +85,13 @@ inline int fd_set_nonblocking(int fd) {
     return rc;
 }
 
+inline int fd_set_blocking(int fd) {
+    unsigned long mode = 0UL; // zero = disable non-blocking mode
+    int rc;
+    unsafe { rc = ioctlsocket((unsigned long long)fd, (int)SAFEC_FIONBIO, &mode); }
+    return rc;
+}
+
 // See file header comment — this is a plain (blocking) file open on this
 // backend; the O_NONBLOCK-style flag argument callers may pass has no
 // effect here.

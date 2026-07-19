@@ -59,6 +59,17 @@ inline int fd_set_nonblocking(int fd) {
     return rc;
 }
 
+inline int fd_set_blocking(int fd) {
+    int flags;
+    unsafe { flags = fcntl(fd, SCHED_F_GETFL, 0); }
+    if (flags < 0) {
+        return -1;
+    }
+    int rc;
+    unsafe { rc = fcntl(fd, SCHED_F_SETFL, flags & ~SCHED_O_NONBLOCK); }
+    return rc;
+}
+
 inline int fd_open_nb(const char* path, int flags, int mode) {
     int fd;
     unsafe { fd = open(path, flags | SCHED_O_NONBLOCK, mode); }

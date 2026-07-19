@@ -47,6 +47,16 @@ unsigned int   sched_ipv4(unsigned char a, unsigned char b,
 // on BSD/Linux, ioctlsocket+FIONBIO on Windows). Returns 0 on success.
 int fd_set_nonblocking(int fd);
 
+// Puts an already-open socket fd back into blocking mode — the inverse of
+// fd_set_nonblocking, for callers (e.g. std::http, see std/http/http.h)
+// that want simple synchronous request/response semantics on top of
+// tcp_listen_nb/tcp_accept_nb/tcp_connect_nb's portable socket setup
+// rather than pairing them with std::Reactor/std::TaskScheduler. Returns 0
+// on success. Safe to call on a socket with a connect() already in
+// progress — per POSIX, a blocking-mode I/O call on such a socket waits
+// for the connection to complete rather than failing.
+int fd_set_blocking(int fd);
+
 // open() in non-blocking mode where the platform supports it for regular
 // files (BSD/Linux: O_NONBLOCK; Windows: no equivalent — see
 // io_nb_win32.sc). Returns fd, or -1 on failure.

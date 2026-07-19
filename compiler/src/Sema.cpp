@@ -916,9 +916,35 @@ static void resolveMatchArmPatterns(std::vector<MatchPattern> &patterns,
                                      const TypePtr &nullPayloadTy,
                                      DiagEngine &diag, SourceLocation loc,
                                      bool &hasWildcard,
-                                     std::unordered_set<int> *coveredTags) {
+                                     std::unordered_set<int> *coveredTags,
+                                     EnumType *enumSubject = nullptr) {
     for (auto &pat : patterns) {
         if (pat.kind == PatternKind::Wildcard) hasWildcard = true;
+        // Plain 'enum' subject (not a tagged union/nullable/optional): an
+        // EnumIdent pattern names one of the enum's own enumerators
+        // ('case Monday:') — resolve it to that enumerator's integer value
+        // so genMatch has something to compare the subject against.
+        // Without this resolution, every EnumIdent pattern against a plain
+        // enum subject silently fell through to the "not a tagged union"
+        // branch below both here and in genMatch, which treated it as an
+        // unconditional match — the first arm always "matched," regardless
+        // of the subject's actual value.
+        if (enumSubject && pat.kind == PatternKind::EnumIdent) {
+            bool found = false;
+            for (auto &en : enumSubject->enumerators) {
+                if (en.first == pat.ident) {
+                    pat.resolvedTag = (int)en.second;
+                    if (coveredTags) coveredTags->insert(pat.resolvedTag);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                diag.error(loc, "unknown enumerator '" + pat.ident +
+                    "' in enum '" + enumSubject->name + "'");
+            }
+            continue;
+        }
         if (isTaggedUnion && pat.kind == PatternKind::EnumIdent) {
             const FieldDecl *variantField = unionSt->findField(pat.ident);
             if (variantField) {
@@ -975,13 +1001,17 @@ void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
             unionSt = static_cast<StructType *>(subjectTy.get());
             isTaggedUnion = unionSt->isTaggedUnion;
         }
+        EnumType *enumSubject = nullptr;
+        if (subjectTy && subjectTy->kind == TypeKind::Enum) {
+            enumSubject = static_cast<EnumType *>(subjectTy.get());
+        }
         bool isNullLike = false, isOptional = false;
         TypePtr nullPayloadTy;
         classifyNullMatchSubject(subjectTy, isNullLike, isOptional, nullPayloadTy);
         for (auto &arm : ms.arms) {
             resolveMatchArmPatterns(arm.patterns, isTaggedUnion, unionSt,
                                      isNullLike, isOptional, nullPayloadTy, diag_,
-                                     ms.loc, hasWildcard, nullptr);
+                                     ms.loc, hasWildcard, nullptr, enumSubject);
             // If pattern has a bind name, add it to scope for the arm body
             pushScope();
             for (auto &pat : arm.patterns) {
@@ -1927,6 +1957,10 @@ TypePtr Sema::checkMatchExpr(MatchExpr &e) {
         unionSt = static_cast<StructType *>(subjectTy.get());
         isTaggedUnion = unionSt->isTaggedUnion;
     }
+    EnumType *enumSubject = nullptr;
+    if (subjectTy && subjectTy->kind == TypeKind::Enum) {
+        enumSubject = static_cast<EnumType *>(subjectTy.get());
+    }
     bool isNullLike = false, isOptional = false;
     TypePtr nullPayloadTy;
     classifyNullMatchSubject(subjectTy, isNullLike, isOptional, nullPayloadTy);
@@ -1943,7 +1977,7 @@ TypePtr Sema::checkMatchExpr(MatchExpr &e) {
     for (auto &arm : e.arms) {
         resolveMatchArmPatterns(arm.patterns, isTaggedUnion, unionSt,
                                  isNullLike, isOptional, nullPayloadTy, diag_,
-                                 e.loc, hasWildcard, &coveredTags);
+                                 e.loc, hasWildcard, &coveredTags, enumSubject);
 
         // Payload bindings are only in scope for this arm's value expr.
         pushScope();
@@ -1978,7 +2012,8 @@ TypePtr Sema::checkMatchExpr(MatchExpr &e) {
     // subject value would leave the merge with nothing to produce.
     bool exhaustive = hasWildcard ||
         (isTaggedUnion && unionSt && coveredTags.size() == unionSt->fields.size()) ||
-        ((isNullLike || isOptional) && coveredTags.size() == 2);
+        ((isNullLike || isOptional) && coveredTags.size() == 2) ||
+        (enumSubject && coveredTags.size() == enumSubject->enumerators.size());
     e.provenExhaustive = exhaustive;
     if (!exhaustive) {
         diag_.error(e.loc,
