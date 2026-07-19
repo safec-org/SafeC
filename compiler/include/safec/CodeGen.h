@@ -186,7 +186,14 @@ private:
     void genExprStmt(ExprStmt &s, FnEnv &env);
     void genMatch(MatchStmt &s, FnEnv &env);
     void genAsm(AsmStmt &s, FnEnv &env);
-    void emitDefers(FnEnv &env, bool errOnly = false);
+    // isErrorPath = false (a normal explicit 'return' or a function falling
+    // off its own end): runs plain 'defer's only — 'errdefer's are for the
+    // error path exclusively and must NOT fire here.
+    // isErrorPath = true (a try-propagated failure unwinding the
+    // function): runs *both* — general cleanup ('defer') still needs to
+    // happen, plus whatever error-specific cleanup ('errdefer') was
+    // registered.
+    void emitDefers(FnEnv &env, bool isErrorPath = false);
 
     // ── Expression codegen ────────────────────────────────────────────────────
     // Returns the LLVM value of the expression (always an rvalue / load result)

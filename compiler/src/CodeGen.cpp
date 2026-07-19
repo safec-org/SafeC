@@ -689,7 +689,7 @@ void CodeGen::genFunctionBody(FunctionDecl &fn, llvm::Function *llvmFn) {
     // Fallthrough to return block if not already terminated
     // Emit deferred statements before branching (same as genReturn does for explicit return)
     if (!isTerminated(builder_.GetInsertBlock())) {
-        emitDefers(env, /*errOnly=*/false);
+        emitDefers(env, /*isErrorPath=*/false);
         builder_.CreateBr(env.returnBB);
     }
 
@@ -770,8 +770,25 @@ llvm::Constant *CodeGen::evalConstInit(Expr &e, llvm::Type *expectedTy) {
             ? llvm::ConstantInt::get(expectedTy, (uint64_t)result, true)
             : nullptr;
     }
-    case ExprKind::Cast:
-        return evalConstInit(*static_cast<CastExpr &>(e).operand, expectedTy);
+    case ExprKind::Cast: {
+        auto &ce = static_cast<CastExpr &>(e);
+        // Integer constant -> pointer, e.g. 'volatile int *UART_DATA =
+        // (volatile int*)0x40001000;' — an MMIO-register-style global.
+        // Recursing into the operand against 'expectedTy' (a pointer type)
+        // used to be the whole body here, which only ever produced a
+        // non-null result for the v==0 case (evalConstInit's IntLit arm
+        // only special-cases a null pointer) — any real address silently
+        // fell through to returning nullptr, reported by the caller as
+        // "not a compile-time constant expression". Evaluate the operand
+        // as an i64 instead and wrap it in a genuine inttoptr constant.
+        if (expectedTy->isPointerTy()) {
+            auto *asInt = evalConstInit(*ce.operand, llvm::Type::getInt64Ty(ctx_));
+            if (auto *ci = llvm::dyn_cast_or_null<llvm::ConstantInt>(asInt)) {
+                return llvm::ConstantExpr::getIntToPtr(ci, expectedTy);
+            }
+        }
+        return evalConstInit(*ce.operand, expectedTy);
+    }
     case ExprKind::Ident: {
         // Reference to another global (e.g. a static array's address) — under
         // opaque pointers the global's own address already *is* "pointer to
@@ -1323,6 +1340,20 @@ llvm::Value *CodeGen::coerceScalar(llvm::Value *val, llvm::Type *targetTy,
         return val->getType()->getPrimitiveSizeInBits() < targetTy->getPrimitiveSizeInBits()
                ? builder_.CreateFPExt(val, targetTy, "coerce")
                : builder_.CreateFPTrunc(val, targetTy, "coerce");
+    // Integer → float widening (see canImplicitlyConvert's matching rule
+    // in Sema.cpp): an i1 is always an unsigned 0/1 bool result (same
+    // reasoning as the ZExt special-case above), everything else defaults
+    // signed unless srcType says otherwise.
+    if (val->getType()->isIntegerTy() && targetTy->isFloatingPointTy()) {
+        bool isSigned = true;
+        if (val->getType()->getIntegerBitWidth() == 1) {
+            isSigned = false;
+        } else if (srcType && srcType->kind >= TypeKind::Int8 && srcType->kind <= TypeKind::UInt64) {
+            isSigned = static_cast<PrimType &>(*srcType).isSigned();
+        }
+        return isSigned ? builder_.CreateSIToFP(val, targetTy, "coerce")
+                         : builder_.CreateUIToFP(val, targetTy, "coerce");
+    }
     return val;
 }
 
@@ -1366,14 +1397,17 @@ void CodeGen::genReturn(ReturnStmt &s, FnEnv &env) {
         builder_.CreateStore(val, env.returnSlot);
     }
     // Emit deferred statements in LIFO order before branching to return block
-    emitDefers(env, /*errOnly=*/false);
+    emitDefers(env, /*isErrorPath=*/false);
     builder_.CreateBr(env.returnBB);
 }
 
-void CodeGen::emitDefers(FnEnv &env, bool errOnly) {
+void CodeGen::emitDefers(FnEnv &env, bool isErrorPath) {
     for (int i = (int)env.deferList.size() - 1; i >= 0; --i) {
         auto *ds = static_cast<DeferStmt *>(env.deferList[i]);
-        if (!errOnly || ds->isErrDefer)
+        // Normal exit: skip errdefers (they're for the error path only).
+        // Error exit: run everything — plain defers still owe their
+        // cleanup, on top of whatever errdefers add.
+        if (isErrorPath || !ds->isErrDefer)
             genStmt(*ds->body, env);
     }
 }
@@ -2074,7 +2108,7 @@ llvm::Value *CodeGen::genExpr(Expr &e, FnEnv &env) {
         // Error path: return a zero/null optional from this function
         builder_.SetInsertPoint(errBB);
         env.hasError = true;
-        emitDefers(env, /*errOnly=*/true);
+        emitDefers(env, /*isErrorPath=*/true);
         if (env.returnSlot) {
             auto *slotTy = static_cast<llvm::AllocaInst *>(env.returnSlot)->getAllocatedType();
             builder_.CreateStore(llvm::Constant::getNullValue(slotTy), env.returnSlot);
@@ -2325,6 +2359,14 @@ llvm::Value *CodeGen::genUnary(UnaryExpr &e, FnEnv &env) {
 }
 
 llvm::Value *CodeGen::genAddrOf(UnaryExpr &e, FnEnv &env) {
+    // '&funcName' — see checkAddrOf's matching exemption in Sema.cpp: a
+    // bare function name is not an lvalue (genLValue has no alloca to find
+    // an address of), but already evaluates to the function's pointer
+    // value directly via genExpr, same as the cast-less/'&'-less form.
+    if (e.operand->kind == ExprKind::Ident &&
+        static_cast<IdentExpr &>(*e.operand).resolvedFn) {
+        return genExpr(*e.operand, env);
+    }
     // Address-of: return pointer to lvalue
     return genLValue(*e.operand, env);
 }
@@ -3059,6 +3101,15 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
                 // width, reinterpreting the wrong bit pattern in the
                 // narrower parameter register/slot.
                 args[i] = coerceScalar(args[i], paramTy);
+            } else if (argTy->isIntegerTy() && paramTy->isFloatingPointTy()) {
+                // Integer argument -> floating-point parameter (see
+                // canImplicitlyConvert's int-to-float widening rule in
+                // Sema.cpp) — coerceScalar has the actual SIToFP/UIToFP
+                // logic; this call site just needed to reach it, same as
+                // the int-int and float-float branches around it.
+                TypePtr srcTy = (i >= argOffset && (i - argOffset) < e.args.size())
+                    ? e.args[i - argOffset]->type : nullptr;
+                args[i] = coerceScalar(args[i], paramTy, srcTy);
             } else if (argTy->isPointerTy() && paramTy->isPointerTy()) {
                 // opaque ptrs already match
             } else if (paramTy->isStructTy() && paramTy->getStructNumElements() == 2 &&

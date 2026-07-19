@@ -1312,8 +1312,10 @@ void Sema::checkVarDecl(VarDeclStmt &s, FunctionDecl &fn) {
     if (sym.type && sym.type->kind == TypeKind::Reference) {
         auto &rt = static_cast<ReferenceType &>(*sym.type);
         if (rt.region == Region::Arena) {
-            sym.arenaRegionName = rt.arenaName;
-            sym.arenaBindGen    = regionGeneration_[rt.arenaName]; // 0 if unseen yet
+            sym.arenaRegionName    = rt.arenaName;
+            sym.arenaBindGen       = regionGeneration_[rt.arenaName]; // 0 if unseen yet
+            sym.arenaBindMarkDepth = regionMarkDepth_[rt.arenaName];
+            sym.arenaBindScratchGen = regionScratchGeneration_[rt.arenaName];
         }
     }
     define(std::move(sym));
@@ -1339,8 +1341,31 @@ void Sema::checkAsmStmt(Stmt &s, FunctionDecl &fn) {
     if (checkingPure_) {
         diag_.error(as.loc, "asm statement not allowed in pure function");
     }
-    // Type-check output and input expressions
-    for (auto &e : as.outputExprs) if (e) checkExpr(*e);
+    // Type-check output and input expressions. A write-only output operand
+    // ('"=r"(var)', as opposed to a read-write '"+r"(var)') is how the
+    // definite-initialization checker learns 'var' has a value at all — an
+    // asm statement is opaque to it otherwise, so 'int result;' followed
+    // by '"=r"(result)' would (before this) look exactly like a read of an
+    // uninitialized variable. Pre-mark it initialized, the same way a
+    // plain 'var = ...;' assignment's LHS does (see checkAssign), before
+    // the checkExpr() below does its own (now-satisfied) read of that
+    // state — a '"+r"(var)' operand is a genuine read too and must NOT be
+    // exempted this way.
+    for (size_t i = 0; i < as.outputExprs.size(); ++i) {
+        auto &e = as.outputExprs[i];
+        if (!e) continue;
+        bool writeOnly = i < as.outputs.size() && !as.outputs[i].empty() &&
+                         as.outputs[i][0] == '=';
+        if (writeOnly && e->kind == ExprKind::Ident) {
+            auto &ident = static_cast<IdentExpr &>(*e);
+            if (auto *sym = lookup(ident.name)) sym->initialized = true;
+        }
+        checkExpr(*e);
+        if (writeOnly && e->kind == ExprKind::Ident) {
+            auto &ident = static_cast<IdentExpr &>(*e);
+            if (ident.resolved) ident.resolved->initialized = true;
+        }
+    }
     for (auto &e : as.inputExprs) if (e) checkExpr(*e);
 }
 
@@ -1541,7 +1566,16 @@ TypePtr Sema::checkIdent(IdentExpr &e) {
     if (sym->kind == SymKind::Variable && !sym->arenaRegionName.empty() &&
         !suppressArenaStaleCheck_ && !inUnsafeScope()) {
         int curGen = regionGeneration_[sym->arenaRegionName];
-        if (curGen != sym->arenaBindGen) {
+        bool staleByReset = (curGen != sym->arenaBindGen);
+        // free_to() only ever rewinds into an active mark scope, so it can
+        // never invalidate a reference bound *before* any arena_mark<R>()
+        // call (arenaBindMarkDepth == 0) — see Symbol::arenaBindMarkDepth.
+        bool staleByFreeTo = false;
+        if (sym->arenaBindMarkDepth > 0) {
+            int curScratchGen = regionScratchGeneration_[sym->arenaRegionName];
+            staleByFreeTo = (curScratchGen != sym->arenaBindScratchGen);
+        }
+        if (staleByReset || staleByFreeTo) {
             diag_.error(e.loc,
                 "use of '" + e.name + "' (&arena<" + sym->arenaRegionName +
                 "> reference) after arena_reset<" + sym->arenaRegionName +
@@ -1613,6 +1647,16 @@ TypePtr Sema::checkUnary(UnaryExpr &e) {
 
 TypePtr Sema::checkAddrOf(UnaryExpr &e) {
     TypePtr operandTy = checkExpr(*e.operand);
+    // '&funcName' — a bare function name is never an lvalue (there's no
+    // storage location holding it the way a variable has), but C and every
+    // C-like language still allow taking a function's address; a bare
+    // function-name IdentExpr already evaluates to '&static fn(...)' (see
+    // checkIdent's SymKind::Function case), so '&funcName' is just
+    // 'funcName' again — the '&' is a no-op here, not an error.
+    if (e.operand->kind == ExprKind::Ident &&
+        static_cast<IdentExpr &>(*e.operand).resolvedFn) {
+        return operandTy;
+    }
     if (!e.operand->isLValue) {
         diag_.error(e.loc, "address-of operator requires lvalue");
     }
@@ -2173,29 +2217,38 @@ TypePtr Sema::checkCall(CallExpr &e) {
             e.type = makeVoid();
             return makeVoid();
         }
-        // ── arena_reset<R>()/arena_destroy<R>() invalidate outstanding
-        // '&arena<R> T' references — bump R's generation counter so any
-        // later read of a reference bound before this call is flagged as
-        // stale (see regionGeneration_'s doc comment for the flow-
-        // insensitive caveat, and checkIdent for where this is consulted).
-        // Doesn't return early: these still resolve to real synthesized
-        // functions (see collectRegion) that need normal call type-checking
-        // below, same as any other call.
-        // __arena_free_to_<R>(mark) is a partial free — conservatively
-        // treated the same as a full reset/destroy for staleness purposes,
-        // since generation tracking only knows "was *any* free called
-        // since this reference was bound," not which byte range a specific
-        // reference points into.
+        // ── arena_reset<R>()/arena_destroy<R>() invalidate *every*
+        // outstanding '&arena<R> T' reference — bump R's generation
+        // counter so any later read of a reference bound before this call
+        // is flagged as stale (see regionGeneration_'s doc comment for the
+        // flow-insensitive caveat, and checkIdent for where this is
+        // consulted). Doesn't return early: these still resolve to real
+        // synthesized functions (see collectRegion) that need normal call
+        // type-checking below, same as any other call.
+        //
+        // arena_mark<R>()/arena_free_to<R>(mark) are narrower: free_to only
+        // rewinds *into* the scratch scope opened by the most recent
+        // mark(), so it must not stale a reference bound before any mark()
+        // was taken (see Symbol::arenaBindMarkDepth/regionMarkDepth_'s doc
+        // comments) — tracked with its own depth counter and generation
+        // instead of reusing regionGeneration_, which previously made
+        // free_to() indistinguishable from a full reset/destroy.
         {
             static const std::string kResetPrefix   = "__arena_reset_";
             static const std::string kDestroyPrefix = "__arena_destroy_";
+            static const std::string kMarkPrefix    = "__arena_mark_";
             static const std::string kFreeToPrefix  = "__arena_free_to_";
             if (ident.name.rfind(kResetPrefix, 0) == 0) {
                 regionGeneration_[ident.name.substr(kResetPrefix.size())]++;
             } else if (ident.name.rfind(kDestroyPrefix, 0) == 0) {
                 regionGeneration_[ident.name.substr(kDestroyPrefix.size())]++;
+            } else if (ident.name.rfind(kMarkPrefix, 0) == 0) {
+                regionMarkDepth_[ident.name.substr(kMarkPrefix.size())]++;
             } else if (ident.name.rfind(kFreeToPrefix, 0) == 0) {
-                regionGeneration_[ident.name.substr(kFreeToPrefix.size())]++;
+                const std::string region = ident.name.substr(kFreeToPrefix.size());
+                int &depth = regionMarkDepth_[region];
+                if (depth > 0) depth--;
+                regionScratchGeneration_[region]++;
             }
         }
         // ── volatile_load / volatile_store built-ins ─────────────────────────
@@ -2929,10 +2982,20 @@ TypePtr Sema::checkCast(CastExpr &e) {
         srcTy = checkExpr(*e.operand);
     }
 
-    // In safe code, cast from reference to pointer is not allowed
+    // In safe code, cast from reference to pointer is not allowed — except
+    // a '&static fn(...)' function reference (the type a bare function
+    // name always evaluates to; see checkIdent's SymKind::Function case).
+    // The whole point of the reference-to-pointer restriction is dangling/
+    // aliasing safety for *data* — a function's code address is neither
+    // freed nor moved for the life of the program, so '(void*)someFunc' (a
+    // function-pointer table entry, an ISR vector table, etc.) carries none
+    // of the risk 'unsafe' exists to flag.
     if (!inUnsafeScope()) {
+        bool isFuncRef = srcTy->kind == TypeKind::Reference &&
+            static_cast<ReferenceType &>(*srcTy).base &&
+            static_cast<ReferenceType &>(*srcTy).base->kind == TypeKind::Function;
         if (srcTy->kind == TypeKind::Reference &&
-            e.targetType->kind == TypeKind::Pointer) {
+            e.targetType->kind == TypeKind::Pointer && !isFuncRef) {
             diag_.error(e.loc,
                 "cast from safe reference to raw pointer requires 'unsafe' block");
         }
@@ -2977,8 +3040,10 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
             auto &ident = static_cast<IdentExpr &>(*e.lhs);
             if (auto *sym = lookup(ident.name)) {
                 if (sym->kind == SymKind::Variable) {
-                    sym->arenaRegionName = rrt.arenaName;
-                    sym->arenaBindGen    = regionGeneration_[rrt.arenaName];
+                    sym->arenaRegionName    = rrt.arenaName;
+                    sym->arenaBindGen       = regionGeneration_[rrt.arenaName];
+                    sym->arenaBindMarkDepth = regionMarkDepth_[rrt.arenaName];
+                    sym->arenaBindScratchGen = regionScratchGeneration_[rrt.arenaName];
                 }
             }
         }
@@ -3463,6 +3528,24 @@ bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
         auto &tp = static_cast<const PrimType &>(*to);
         if (tp.bitWidth() >= fp.bitWidth()) return true;
     }
+    // Float widening: float → double (same "smaller → larger is always
+    // safe" rule as integer widening just above — every float value is
+    // exactly representable as a double, so nothing is lost). Narrowing
+    // (double → float) still needs an explicit cast, same as int narrowing.
+    if (from->isFloat() && to->isFloat()) {
+        auto &fp = static_cast<const PrimType &>(*from);
+        auto &tp = static_cast<const PrimType &>(*to);
+        if (tp.bitWidth() >= fp.bitWidth()) return true;
+    }
+    // Integer → float widening: any integer type may implicitly widen to
+    // any floating-point type (matches C's usual arithmetic conversions —
+    // 'double d = someInt;' or passing an int where a function expects a
+    // double is exactly the "smaller numeric type → bigger numeric type"
+    // rule this whole block implements, just crossing the int/float
+    // category line instead of staying within it). The reverse
+    // (float → integer) is a narrowing, lossy conversion and still needs
+    // an explicit cast.
+    if (from->isInteger() && to->isFloat()) return true;
     // Array-to-pointer decay: T[N] → T*
     if (from->kind == TypeKind::Array && to->kind == TypeKind::Pointer) {
         auto &at = static_cast<const ArrayType &>(*from);

@@ -29,6 +29,17 @@ struct Symbol {
     // arena_reset<R>()/arena_destroy<R>() happened in between).
     std::string  arenaRegionName;
     int          arenaBindGen = -1;
+    // arena_free_to<R>(mark) invalidation tracking (see
+    // Sema::regionMarkDepth_/regionScratchGeneration_): a reference bound
+    // before any arena_mark<R>() call ('arenaBindMarkDepth' == 0) is a
+    // "permanent" binding that only a real reset/destroy can stale — a
+    // free_to() only ever rewinds *into* an active mark scope, so it can
+    // never be freeing memory a depth-0 reference points into. A reference
+    // bound while inside a mark scope ('arenaBindMarkDepth' > 0) is
+    // checked against 'arenaBindScratchGen', a snapshot of R's
+    // free_to-only generation counter at bind time.
+    int          arenaBindMarkDepth  = 0;
+    int          arenaBindScratchGen = -1;
 };
 
 // ── Scope ─────────────────────────────────────────────────────────────────────
@@ -242,6 +253,18 @@ private:
     // code. See reference/memory.md's "Arena References Die on Reset"
     // section for the full caveat, including the known loop-iteration gap.
     std::unordered_map<std::string, int> regionGeneration_;
+    // arena_mark<R>()/arena_free_to<R>(mark) invalidation (see
+    // Symbol::arenaBindMarkDepth's doc comment): 'regionMarkDepth_[R]' is
+    // incremented by every arena_mark<R>() and decremented (floored at 0)
+    // by every arena_free_to<R>(...) seen during traversal — a running
+    // nesting depth, same flow-insensitive AST-order approximation as
+    // regionGeneration_ above. 'regionScratchGeneration_[R]' is bumped by
+    // free_to only, and is what actually staless a reference bound at
+    // depth > 0 — depth-0 (pre-mark) references never consult it at all,
+    // which is the fix for free_to() no longer nuking bindings that exist
+    // *outside* the scratch scope it's rewinding.
+    std::unordered_map<std::string, int> regionMarkDepth_;
+    std::unordered_map<std::string, int> regionScratchGeneration_;
     // Suppresses the arena-staleness check in checkIdent for exactly one
     // identifier occurrence: the LHS of 'p = <new-arena-value>;' evaluates
     // 'p' as an assignment target, not a read of its old (possibly stale)
