@@ -3849,6 +3849,12 @@ bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
             typeEqual(fr.base, tp.base)) return true;
         if ((fr.region == Region::Arena || fr.region == Region::Heap) &&
             tp.base->isVoid()) return true;
+        // Extern (outliving) references → raw pointer: always safe, since
+        // '?&T'/'&T' (Region::Extern) never claimed any lifetime guarantee
+        // in the first place — handing the same pointer value back to
+        // another extern-facing T*/void* parameter carries no new risk.
+        if (fr.region == Region::Extern &&
+            (typeEqual(fr.base, tp.base) || tp.base->isVoid())) return true;
     }
     // Newtype ← base type: allow initialization from the underlying type
     if (to->kind == TypeKind::Newtype) {
@@ -3871,6 +3877,12 @@ bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
         auto &tr = static_cast<const ReferenceType &>(*to);
         // Same region, same base, nullable compat: non-null → nullable is OK
         if (!typeEqual(fr.base, tr.base)) return false;
+        // Any region → Region::Extern ('?&T', no declared region): an
+        // outliving reference makes no lifetime claim, so it accepts a
+        // reference from any other region (see Type.h's Region::Extern
+        // doc comment) — the one pairing exempt from the same-region
+        // rule below.
+        if (tr.region == Region::Extern) return true;
         if (fr.region != tr.region) return false;
         if (!fr.nullable && tr.nullable) return true;  // &T → ?&T is OK
         if (fr.nullable && !tr.nullable) return false; // ?&T → &T is not OK

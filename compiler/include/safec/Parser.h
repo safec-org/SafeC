@@ -37,6 +37,12 @@ private:
     TypePtr parseTypeDeclarator(TypePtr base); // array / pointer suffixes
     TypePtr parseReferenceType(bool nullable, bool leadingConst = false); // &region T
     Region  parseRegionQualifier(std::string &arenaName);
+    // True if the current token starts a region qualifier (stack/heap/
+    // static/arena<R>) — lookahead only, mirrors parseRegionQualifier's
+    // own branches without consuming or diagnosing. Used to tell '?&T'
+    // (no region — an outliving/Region::Extern reference) apart from
+    // '?&stack T' etc. before committing to parseRegionQualifier.
+    bool atRegionQualifier() const;
 
     // Constant integer expression inside 'T[...]' (array size). Supports
     // integer literals combined with + - * / % and parentheses, so that

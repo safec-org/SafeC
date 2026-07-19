@@ -12,6 +12,7 @@ std::string regionName(Region r) {
     case Region::Static: return "static";
     case Region::Heap:   return "heap";
     case Region::Arena:  return "arena";
+    case Region::Extern: return "extern";
     default:             return "?";
     }
 }
@@ -83,10 +84,13 @@ bool PointerType::equals(const Type &o) const {
 // ── ReferenceType ─────────────────────────────────────────────────────────────
 std::string ReferenceType::str() const {
     std::string s = nullable ? "?&" : "&";
-    if (region == Region::Arena)
+    if (region == Region::Extern) {
+        // No region keyword at all — round-trips as exactly '?&T'/'&T'.
+    } else if (region == Region::Arena) {
         s += "arena<" + arenaName + "> ";
-    else
+    } else {
         s += regionName(region) + " ";
+    }
     if (!mut) s += "const ";
     s += base->str();
     return s;

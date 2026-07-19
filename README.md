@@ -107,7 +107,7 @@ SafeC enforces seven safety properties entirely at compile time:
 | **Aliasing discipline** | One mutable XOR many shared references (borrow checker with NLL) |
 | **Region escape** | References cannot outlive their region; inter-procedural analysis at call sites |
 | **Data race freedom** | `spawn` rejects mutable non-static refs; channels for message passing |
-| **Null safety** | References are non-null by default. Pointers, nullable references (`?&region T`), and `?T` optionals cannot be dereferenced, member-accessed, or force-unwrapped directly — only `is_null()`/`is_none()`, `.default(fallback)`, `match`, or an explicit `unsafe {}` block can read one |
+| **Null safety** | References are non-null by default. Pointers, nullable references (`?&region T`, and the region-less `?&T` outliving reference — see below), and `?T` optionals cannot be dereferenced, member-accessed, or force-unwrapped directly — only `is_null()`/`is_none()`, `.default(fallback)`, `match`, or an explicit `unsafe {}` block can read one |
 | **Determinism** | No hidden allocator, no GC, no implicit nondeterminism in the safe fragment |
 
 Inside `unsafe {}`, all properties become the programmer's responsibility. The boundary is explicit and auditable — raw-pointer aliasing (WAR/RAW/WAW hazards) and raw-pointer subscript bounds are two examples of *not* being tracked in `unsafe` code, by design, the same way real C leaves them to the programmer there.
@@ -211,11 +211,38 @@ real MVE vector codegen through `vec<T,N>` on M55/M85.
 &arena<AudioPool> Sample s = new<AudioPool> Sample;  // arena reference
 &static Config cfg = &global_config;      // static reference (program lifetime)
 ?&stack Node next;                        // nullable reference
+?&Handle outliving;                       // outliving reference — no region at all
 
 auto x = compute_something();             // type inferred from the initializer
 ```
 
 An arena region (`region AudioPool { capacity: 65536 }`) lazily allocates its backing buffer on first `new<AudioPool>`. `arena_reset<AudioPool>()` rewinds the bump pointer for reuse (the buffer itself stays allocated); `arena_destroy<AudioPool>()` actually frees the buffer — safe to call more than once (a no-op past the first call) or before any allocation has happened, and a later `new<AudioPool>` after destroying transparently re-allocates.
+
+#### Outliving references (`?&T`)
+
+`extern` declarations (SafeC's only linkage form — always C ABI, no name mangling) use plain `T*` for pointer parameters/returns, same as C. Most of the time a raw pointer only needs to survive the one call it's used in, so an ordinary `unsafe {}`-gated `T*` is enough. But sometimes a pointer crossing that boundary is meant to be *retained* by the C side past the current function returning — a callback's registered context, an opaque handle a C API hands you and expects back later — and neither `&stack T` (dies with this scope, can't be handed to something that outlives it) nor `&heap`/`&static T` (both claim an ownership/lifetime guarantee SafeC has no way to verify across an ABI boundary it doesn't control) are the right fit for that value while it's on the SafeC side.
+
+`?&T` — a nullable reference with **no region qualifier at all** — is for exactly that case:
+
+```c
+extern int c_register_callback(struct Widget* w);   // conceptually retains 'w'
+
+int use_outliving(?&Widget w) {
+    match (w) {
+        case null: return -1;
+        case some(v): return v.value;   // 'v' is a plain 'Widget' value, no unsafe
+    }
+}
+
+struct Widget local;
+?&Widget wref = &local;        // &stack T → ?&T: implicit, no unsafe, no region check
+use_outliving(wref);
+c_register_callback(wref);     // ?&T → T*: implicit, no unsafe
+```
+
+A raw `T*` (from any extern call) converts to `?&T` implicitly, and a `?&T` converts back to `T*`/`void*` implicitly — no `unsafe` either direction, and no region bookkeeping, because `?&T` doesn't claim a region to check: `Region::Extern` is exempt from every escape/lifetime check by construction (see `Type.h`'s `Region::Extern` for the full rationale). Reading the value out still goes through the same nullable-reference grammar as `?&stack T`: `match`, `is_null()`, `.default(fallback)`, or an `unsafe`-gated `!`.
+
+This is deliberately narrow: `?&T` needs a concrete `T`, so it doesn't help with the (common, and intentionally type-erased) `void* userData` callback-context pattern — that stays `void*` on purpose, since the whole point there is that the caller can stash *any* type. `?&T` is for the case where the pointee's type is known and fixed but its region isn't and can't be, because it came from outside SafeC's tracking.
 
 ### Generics
 
