@@ -31,6 +31,7 @@
 // specific GuiWindow, left as a documented limitation for now.
 
 #include <std/gui/gui.h>
+#include <std/gui/gui_draw.h>
 #include <std/mem.sc>
 
 namespace std {
