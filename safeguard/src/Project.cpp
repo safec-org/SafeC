@@ -59,7 +59,7 @@ description = ""
 license     = "MIT"
 
 [build]
-edition = "2025"
+edition = "2026"
 
 # To add a GitHub dependency:
 # [[dependencies]]

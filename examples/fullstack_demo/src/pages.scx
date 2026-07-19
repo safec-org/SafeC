@@ -1,0 +1,38 @@
+// fullstack_demo — frontend pages, written in scx (SafeC's JSX/TSX/RSX-style
+// HTML-string templating language). Compiled unconditionally (it's cheap,
+// pure string-building with no I/O), but only *called* when the "frontend"
+// feature is enabled — see src/main.sc.
+
+struct String render_home(const char* visitor_name) {
+    return <html>
+        <head><title>SafeC Fullstack Demo</title></head>
+        <body>
+            <h1>Welcome to the SafeC Fullstack Demo</h1>
+            <p>Hello, {visitor_name}! This page was rendered from a .scx template.</p>
+            <p><a href="/about">About this demo</a></p>
+        </body>
+    </html>;
+}
+
+struct String render_about() {
+    return <html>
+        <head><title>About — SafeC Fullstack Demo</title></head>
+        <body>
+            <h1>About</h1>
+            <p>Rendered server-side by SafeC's scx templating transpiler,
+               which turns markup into ordinary <code>struct String</code>
+               builder calls before safec ever sees the file.</p>
+            <p><a href="/">Home</a></p>
+        </body>
+    </html>;
+}
+
+struct String render_not_found(const char* path) {
+    return <html>
+        <head><title>404</title></head>
+        <body>
+            <h1>404 Not Found</h1>
+            <p>No page at {path}.</p>
+        </body>
+    </html>;
+}

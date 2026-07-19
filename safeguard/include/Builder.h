@@ -18,6 +18,17 @@ struct BuildOptions {
     bool   emitLLVM = false;      // stop after safec --emit-llvm
     bool   verbose = false;       // print every command before running it
     std::string extraFlags;       // appended to every safec invocation
+
+    // Rust-Cargo-style [features] selection. 'features' are explicitly
+    // requested feature names (--features a,b); 'noDefaultFeatures' skips
+    // the manifest's "default" feature entry (--no-default-features).
+    // Builder::build()/check()/test() resolve these against the manifest's
+    // [features] table (see Manifest.h's resolveFeatures) and pass each
+    // enabled feature to safec as -DSAFEC_FEATURE_<UPPERNAME>=1, so project
+    // sources gate code with '#ifdef SAFEC_FEATURE_<NAME>' — reusing
+    // safec's existing preprocessor rather than adding new language syntax.
+    std::vector<std::string> features;
+    bool   noDefaultFeatures = false;
 };
 
 class Builder {
@@ -165,12 +176,34 @@ private:
     // 'suppressOutput': discard the child compiler's own stdout/stderr
     // (unless verbose) — see runCmd's comment; only buildLib's
     // tolerateArchMismatch path sets this.
+    // 'defines': extra -DNAME[=VALUE] flags (used to pass enabled [features]
+    // through as SAFEC_FEATURE_<NAME>=1 — see BuildOptions::features).
     std::string compileSrc(const std::string& safecBin,
                             const std::string& srcPath,
                             const std::string& buildDir,
                             const std::vector<std::string>& includeDirs = {},
                             bool compatPreprocessor = false,
-                            bool suppressOutput = false) const;
+                            bool suppressOutput = false,
+                            const std::vector<std::string>& defines = {}) const;
+
+    // ── [features] ────────────────────────────────────────────────────────────
+
+    // Resolves opts_.features/noDefaultFeatures against manifest_.features
+    // (see Manifest.h's resolveFeatures) into the final enabled-feature set.
+    std::vector<std::string> enabledFeatures() const;
+
+    // enabledFeatures(), reshaped into '-DSAFEC_FEATURE_<UPPERNAME>=1' argv
+    // entries ready to append to a safec invocation.
+    std::vector<std::string> featureDefines() const;
+
+    // ── .scx (HTML-templating source) ───────────────────────────────────────
+
+    // If 'src' has a .scx extension, transpiles it (see ScxTranspiler.h)
+    // into plain SafeC source written under buildDir/scx/ and returns that
+    // generated .sc path; otherwise returns 'src' unchanged. Returns "" and
+    // prints a "safeguard: scx: ..." error on malformed markup.
+    std::string materializeScx(const std::string& src,
+                                const std::string& buildDir) const;
 
     // Compile .ll to .o with clang.  Returns .o path or "".
     std::string llToObj(const std::string& llFile,

@@ -110,7 +110,7 @@ std::vector<ManifestParser::Token> ManifestParser::tokenize(
 Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
                                         const std::string& srcName) {
     Manifest m;
-    m.build.edition = "2025";
+    m.build.edition = "2026";
     Dependency curDep;
     bool inDep = false;
 
@@ -154,6 +154,12 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
         else if (tok.key == "dependencies.name")    curDep.name    = tok.value;
         else if (tok.key == "dependencies.version") curDep.version = tok.value;
         else if (tok.key == "dependencies.path")    curDep.path    = tok.value;
+
+        // features.* — [features] table: name = ["dep1", "dep2", ...]
+        else if (tok.key.rfind("features.", 0) == 0) {
+            std::string featName = tok.key.substr(9);
+            m.features.push_back({featName, splitList(tok.value)});
+        }
     }
     flushDep();
 
@@ -244,7 +250,52 @@ std::string ManifestParser::serialize(const Manifest& m) {
         if (!d.path.empty())
             o << "path    = \"" << d.path    << "\"\n";
     }
+
+    if (!m.features.empty()) {
+        o << "\n[features]\n";
+        for (auto& [name, deps] : m.features) {
+            o << name << " = [";
+            for (size_t i = 0; i < deps.size(); ++i)
+                o << (i ? ", " : "") << "\"" << deps[i] << "\"";
+            o << "]\n";
+        }
+    }
+
     return o.str();
+}
+
+// ── feature resolution ──────────────────────────────────────────────────────
+
+std::vector<std::string> resolveFeatures(const Manifest& m,
+                                          const std::vector<std::string>& requested,
+                                          bool noDefault) {
+    std::vector<std::string> enabled;
+    std::vector<std::string> seenNames;
+
+    auto isSeen = [&](const std::string& n) {
+        for (auto& s : seenNames) if (s == n) return true;
+        return false;
+    };
+    auto lookup = [&](const std::string& n) -> const std::vector<std::string>* {
+        for (auto& [name, deps] : m.features) if (name == n) return &deps;
+        return nullptr;
+    };
+
+    std::vector<std::string> worklist;
+    if (!noDefault) {
+        if (auto* def = lookup("default")) worklist = *def;
+    }
+    for (auto& r : requested) worklist.push_back(r);
+
+    for (size_t i = 0; i < worklist.size(); ++i) {
+        const std::string& name = worklist[i];
+        if (isSeen(name)) continue;
+        seenNames.push_back(name);
+        enabled.push_back(name);
+        if (auto* subDeps = lookup(name))
+            for (auto& d : *subDeps) worklist.push_back(d);
+    }
+    return enabled;
 }
 
 } // namespace safeguard

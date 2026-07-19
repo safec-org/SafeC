@@ -1,0 +1,30 @@
+[package]
+name        = "fullstack_demo"
+version     = "0.1.0"
+author      = "minjaekim"
+description = ""
+license     = "MIT"
+
+[build]
+edition = "2026"
+
+# Rust-Cargo-style feature flags. "default" is enabled unless the build is
+# invoked with --no-default-features; enabling "fullstack" also enables
+# "frontend" and "backend" (each feature's list names the other features it
+# pulls in). Each enabled feature reaches project sources as a preprocessor
+# define: SAFEC_FEATURE_FRONTEND, SAFEC_FEATURE_BACKEND (see src/main.sc).
+[features]
+default   = ["fullstack"]
+frontend  = []
+backend   = []
+fullstack = ["frontend", "backend"]
+
+# To add a GitHub dependency:
+# [[dependencies]]
+# name    = "mylib"
+# version = "https://github.com/user/mylib"
+#
+# To add a local path dependency:
+# [[dependencies]]
+# name    = "mylib"
+# path    = "../mylib"

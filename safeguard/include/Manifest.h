@@ -20,7 +20,7 @@ struct PackageInfo {
 };
 
 struct BuildConfig {
-    std::string edition;           // e.g. "2025"
+    std::string edition;           // e.g. "2026"
     std::vector<std::string> srcs; // explicit source files (empty = auto-discover)
     std::string output;            // output binary/library name (defaults to package name)
     std::vector<std::string> cflags; // extra clang flags for final link
@@ -34,7 +34,30 @@ struct Manifest {
     PackageInfo  package;
     BuildConfig  build;
     std::vector<Dependency> dependencies;
+
+    // [features] table, Cargo-style: name -> list of other feature names it
+    // turns on when enabled (an "optional dependency" style entry — SafeC
+    // has no optional-dependency concept yet, so this only chains other
+    // features). Declaration order preserved (matches Package.toml order).
+    // A feature named "default" is not special to the parser — it's just
+    // an ordinary entry — but resolveFeatures() treats it as the implicit
+    // starting set unless the caller opts out.
+    std::vector<std::pair<std::string, std::vector<std::string>>> features;
 };
+
+// Computes the enabled feature set for a build: starts from the "default"
+// feature's list (unless noDefault), adds every name in 'requested', then
+// repeatedly follows each enabled feature's own sub-feature list to a fixed
+// point (so e.g. fullstack = ["frontend", "backend"] pulls both in when
+// "fullstack" is requested or default). Unknown names in 'requested' or in
+// a feature's sub-list are kept as plain leaf features (a feature need not
+// be declared with its own [features] entry to be turned on — mirrors
+// Cargo's "features are just string flags" model, minus optional deps).
+// Result order is deterministic (first-enabled order), each name appears
+// once.
+std::vector<std::string> resolveFeatures(const Manifest& m,
+                                          const std::vector<std::string>& requested,
+                                          bool noDefault);
 
 class ManifestParser {
 public:

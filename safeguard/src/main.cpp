@@ -35,10 +35,28 @@ Dependency format in Package.toml:
   name    = "mylib"
   path    = "../mylib"
 
-Options (build / run / check):
+Options (build / run / check / test):
   --release     Enable optimisations (-O2)
   --emit-llvm   Stop after emitting LLVM IR (do not link) [build only]
   --verbose     Print every command before executing it
+  --features <a,b,c>       Enable the named [features] (comma-separated;
+                            repeatable) in addition to the manifest's
+                            "default" feature
+  --no-default-features    Do not enable the manifest's "default" feature
+
+[features] format in Package.toml (Rust-Cargo-style; see advanced/safeguard
+docs for the full write-up):
+  [features]
+  default   = ["backend"]           # enabled unless --no-default-features
+  frontend  = []
+  backend   = []
+  fullstack = ["frontend", "backend"]  # enabling one feature can enable others
+
+Each enabled feature 'name' is passed to safec as -DSAFEC_FEATURE_<NAME>=1
+(hyphens become underscores), so project sources gate code with:
+  #ifdef SAFEC_FEATURE_BACKEND
+  ...
+  #endif
 
 Options (format):
   --check       Report files that would change, without writing them
@@ -56,6 +74,7 @@ Examples:
   safeguard test
   safeguard format --check
   safeguard run -- --my-flag
+  safeguard build --features frontend --no-default-features
 )";
 }
 
@@ -181,6 +200,35 @@ int main(int argc, char** argv) {
             if (arg == "--release") { opts.release   = true; continue; }
             if (arg == "--emit-llvm") { opts.emitLLVM = true; continue; }
             if (arg == "--verbose") { opts.verbose   = true; continue; }
+            if (arg == "--no-default-features") { opts.noDefaultFeatures = true; continue; }
+            if (arg == "--features") {
+                if (i + 1 >= argc) {
+                    std::cerr << "safeguard: --features requires an argument\n";
+                    return 1;
+                }
+                std::string list = argv[++i];
+                size_t start = 0;
+                while (start <= list.size()) {
+                    size_t comma = list.find(',', start);
+                    std::string item = list.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+                    if (!item.empty()) opts.features.push_back(item);
+                    if (comma == std::string::npos) break;
+                    start = comma + 1;
+                }
+                continue;
+            }
+            if (arg.rfind("--features=", 0) == 0) {
+                std::string list = arg.substr(11);
+                size_t start = 0;
+                while (start <= list.size()) {
+                    size_t comma = list.find(',', start);
+                    std::string item = list.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+                    if (!item.empty()) opts.features.push_back(item);
+                    if (comma == std::string::npos) break;
+                    start = comma + 1;
+                }
+                continue;
+            }
             std::cerr << "safeguard: unknown option '" << arg << "'\n";
             return 1;
         }

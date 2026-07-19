@@ -1,5 +1,6 @@
 #include "Builder.h"
 #include "Lock.h"
+#include "ScxTranspiler.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -9,6 +10,7 @@
 #include <cstdlib>
 #include <cerrno>
 #include <cstring>
+#include <cctype>
 #include <fcntl.h>
 #ifdef _WIN32
 #include <process.h>   // _spawnvp
@@ -109,13 +111,16 @@ SrcLang Builder::langOf(const std::string& path) {
     std::string ext = fs::path(path).extension().string();
     if (ext == ".c")   return SrcLang::C;
     if (ext == ".cc" || ext == ".cpp" || ext == ".cxx") return SrcLang::Cpp;
+    // .scx (scx markup templating) transpiles to plain SafeC before it ever
+    // reaches safec (see materializeScx) — from compileSrc's point of view
+    // it's just SafeC source, same as .sc.
     return SrcLang::SafeC;
 }
 
 std::vector<std::string> Builder::collectAllSources(const std::string& srcDir) const {
     std::vector<std::string> srcs;
     if (!fs::exists(srcDir)) return srcs;
-    static const char* kExts[] = { ".sc", ".c", ".cc", ".cpp", ".cxx" };
+    static const char* kExts[] = { ".sc", ".scx", ".c", ".cc", ".cpp", ".cxx" };
     for (auto& e : fs::recursive_directory_iterator(srcDir)) {
         if (!e.is_regular_file()) continue;
         std::string ext = e.path().extension().string();
@@ -125,6 +130,69 @@ std::vector<std::string> Builder::collectAllSources(const std::string& srcDir) c
     }
     std::sort(srcs.begin(), srcs.end());
     return srcs;
+}
+
+// ── [features] ───────────────────────────────────────────────────────────────
+
+std::vector<std::string> Builder::enabledFeatures() const {
+    return resolveFeatures(manifest_, opts_.features, opts_.noDefaultFeatures);
+}
+
+std::vector<std::string> Builder::featureDefines() const {
+    std::vector<std::string> defs;
+    for (auto& name : enabledFeatures()) {
+        std::string upper;
+        upper.reserve(name.size());
+        for (char c : name)
+            upper += (char)std::toupper((unsigned char)(c == '-' ? '_' : c));
+        defs.push_back("-DSAFEC_FEATURE_" + upper + "=1");
+    }
+    return defs;
+}
+
+// ── .scx (HTML-templating source) ───────────────────────────────────────────
+
+std::string Builder::materializeScx(const std::string& src,
+                                     const std::string& buildDir) const {
+    if (fs::path(src).extension() != ".scx") return src;
+
+    std::ifstream f(src);
+    if (!f) {
+        std::cerr << "safeguard: cannot open " << src << "\n";
+        return "";
+    }
+    std::string source((std::istreambuf_iterator<char>(f)),
+                        std::istreambuf_iterator<char>());
+
+    std::string transpiled;
+    try {
+        transpiled = safeguard::transpileScx(source, src);
+    } catch (std::exception& e) {
+        std::cerr << "safeguard: " << e.what() << "\n";
+        return "";
+    }
+
+    fs::path scxOutDir = fs::path(buildDir) / "scx";
+    fs::create_directories(scxOutDir);
+    std::string stem;
+    try {
+        fs::path rel = fs::relative(fs::path(src), root_);
+        std::string r = rel.string();
+        for (char& c : r)
+            if (c == '/' || c == '\\' || c == '.') c = '_';
+        stem = r;
+    } catch (...) {
+        stem = fs::path(src).stem().string();
+    }
+    fs::path outPath = scxOutDir / (stem + ".sc");
+    std::ofstream out(outPath);
+    if (!out) {
+        std::cerr << "safeguard: cannot write " << outPath << "\n";
+        return "";
+    }
+    out << transpiled;
+    out.close();
+    return outPath.string();
 }
 
 // ── command runner ────────────────────────────────────────────────────────────
@@ -232,7 +300,8 @@ std::string Builder::compileSrc(const std::string& safecBin,
                                   const std::string& buildDir,
                                   const std::vector<std::string>& includeDirs,
                                   bool compatPreprocessor,
-                                  bool suppressOutput) const {
+                                  bool suppressOutput,
+                                  const std::vector<std::string>& defines) const {
     // Derive a flat output name to avoid collisions across subdirectories
     fs::path src(srcPath);
     // Use relative-path-derived stem: e.g. src/foo/bar.sc → foo_bar.ll
@@ -254,6 +323,7 @@ std::string Builder::compileSrc(const std::string& safecBin,
         cmd.push_back("-I");
         cmd.push_back(inc);
     }
+    for (auto& d : defines) cmd.push_back(d);
     cmd.push_back(srcPath);
     cmd.push_back("--emit-llvm");
     if (compatPreprocessor) cmd.push_back("--compat-preprocessor");
@@ -402,6 +472,11 @@ bool Builder::buildLib(const std::string& srcDir,
     for (auto& src : srcs) {
         SrcLang lang = langOf(src);
         if (lang == SrcLang::SafeC) {
+            std::string realSrc = materializeScx(src, buildDir);
+            if (realSrc.empty()) {
+                if (tolerateArchMismatch) continue; // scx error already printed
+                return false;
+            }
             // safec itself can also reject a file purely for being
             // architecture-inapplicable (e.g. std::simd's ARM-only DSP
             // builtins raising a Sema/CodeGen error on a non-ARM target,
@@ -412,7 +487,7 @@ bool Builder::buildLib(const std::string& srcDir,
             // functions simply aren't available for this target; anything
             // that actually calls them gets a normal, clear "undefined
             // symbol" at link time instead of a silent wrong answer).
-            std::string ll = compileSrc(safecBin, src, buildDir, includeDirs, compatPreprocessor,
+            std::string ll = compileSrc(safecBin, realSrc, buildDir, includeDirs, compatPreprocessor,
                                          /*suppressOutput=*/tolerateArchMismatch);
             if (ll.empty()) {
                 if (tolerateArchMismatch) {
@@ -681,13 +756,23 @@ bool Builder::build() {
     bool hasCpp = false;
     for (auto& src : srcs) if (langOf(src) == SrcLang::Cpp) hasCpp = true;
 
+    std::vector<std::string> defs = featureDefines();
+    if (opts_.verbose && !defs.empty()) {
+        std::cout << "safeguard: enabled features:";
+        for (auto& f : enabledFeatures()) std::cout << " " << f;
+        std::cout << "\n";
+    }
+
     if (opts_.emitLLVM) {
         // Only SafeC sources have an LLVM IR stage to stop at; C/C++ files
         // have no equivalent partial output, so skip them entirely here
         // rather than compiling straight to .o for a build that won't link.
         for (auto& src : srcs) {
             if (langOf(src) != SrcLang::SafeC) continue;
-            if (compileSrc(safecBin, src, buildDir, userIncs).empty()) return false;
+            std::string realSrc = materializeScx(src, buildDir);
+            if (realSrc.empty()) return false;
+            if (compileSrc(safecBin, realSrc, buildDir, userIncs, false, false, defs).empty())
+                return false;
         }
         std::cout << "safeguard: LLVM IR written to " << buildDir << "/\n";
         return true;
@@ -699,7 +784,9 @@ bool Builder::build() {
     for (auto& src : srcs) {
         SrcLang lang = langOf(src);
         if (lang == SrcLang::SafeC) {
-            std::string ll = compileSrc(safecBin, src, buildDir, userIncs);
+            std::string realSrc = materializeScx(src, buildDir);
+            if (realSrc.empty()) return false;
+            std::string ll = compileSrc(safecBin, realSrc, buildDir, userIncs, false, false, defs);
             if (ll.empty()) return false;
             std::string obj = llToObj(ll, buildDir);
             if (obj.empty()) return false;
@@ -794,6 +881,8 @@ bool Builder::check() {
         return false;
     }
 
+    std::vector<std::string> defs = featureDefines();
+
     bool ok = true;
     for (auto& src : srcs) {
         SrcLang lang = langOf(src);
@@ -801,7 +890,10 @@ bool Builder::check() {
             // --emit-llvm runs the full front end (Preprocess/Lex/Parse/
             // Sema/ConstEval) and stops right after emitting IR — no
             // object-file assembly, no link.
-            if (compileSrc(safecBin, src, checkDir.string(), userIncs).empty()) ok = false;
+            std::string realSrc = materializeScx(src, checkDir.string());
+            if (realSrc.empty()) { ok = false; continue; }
+            if (compileSrc(safecBin, realSrc, checkDir.string(), userIncs, false, false, defs).empty())
+                ok = false;
         } else {
             std::vector<std::string> cmd = { findSystemClang(lang == SrcLang::Cpp),
                                               "-fsyntax-only", src };
@@ -867,13 +959,17 @@ bool Builder::test() {
         return true;
     }
 
+    std::vector<std::string> defs = featureDefines();
+
     int passed = 0, failed = 0;
     for (auto& src : testSrcs) {
         std::string name = fs::path(src).stem().string();
         SrcLang lang = langOf(src);
         std::string obj;
         if (lang == SrcLang::SafeC) {
-            std::string ll = compileSrc(safecBin, src, buildDir.string(), userIncs);
+            std::string realSrc = materializeScx(src, buildDir.string());
+            std::string ll = realSrc.empty() ? "" :
+                compileSrc(safecBin, realSrc, buildDir.string(), userIncs, false, false, defs);
             if (!ll.empty()) obj = llToObj(ll, buildDir.string());
         } else {
             obj = compileForeign(src, buildDir.string(), userIncs, lang);
