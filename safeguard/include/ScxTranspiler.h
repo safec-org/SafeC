@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <vector>
 
 namespace safeguard {
 
@@ -36,5 +37,24 @@ namespace safeguard {
 // unterminated {expr}, or a 'return <ident...' that never resolves to a
 // complete, well-formed element followed by ';'.
 std::string transpileScx(const std::string& source, const std::string& filename);
+
+// Same transpilation, plus a line map for tools (the LSP) that need to
+// translate a position in the *generated* SafeC source back to the
+// original .scx buffer — e.g. to point a diagnostic or a hover result at
+// the right spot in the file the user is actually editing, since safec
+// itself only ever sees the generated text.
+//
+// 'lineMap' is filled with one entry per generated line, 1-indexed
+// (lineMap[0] is unused/zero; lineMap[1] is the original line generated
+// line 1 corresponds to, and so on — size() == generated line count + 1).
+// Mapping is exact for every line outside a 'return <markup>;' expansion
+// (those are copied byte-for-byte, so original and generated lines
+// coincide 1:1); every line *inside* an expansion — including the two
+// '#include' lines auto-prepended when the file used any markup — maps to
+// the original line the expansion started on (its 'return' keyword, or
+// line 1 for the prepended includes), since those lines have no true 1:1
+// original counterpart.
+std::string transpileScx(const std::string& source, const std::string& filename,
+                          std::vector<int>* lineMap);
 
 } // namespace safeguard

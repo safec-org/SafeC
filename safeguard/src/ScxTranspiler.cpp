@@ -321,14 +321,69 @@ bool matchesKeywordAt(const std::string& s, size_t i, const char* kw) {
     return true;
 }
 
+// ── output + line-map builder ───────────────────────────────────────────────
+// Tracks, alongside the generated text, which *original* source line each
+// generated line corresponds to — good enough for an editor to point
+// diagnostics/hover/go-to-def at approximately the right spot in the .scx
+// buffer (see ScxTranspiler.h's line-map contract). Two write modes:
+//   - copySrc(): verbatim source characters — origLine advances exactly in
+//     step with '\n's actually consumed from 'src' (byte-for-byte copy, so
+//     this is precise).
+//   - emitGen(): synthesized code with no 1:1 source counterpart (the
+//     builder statements a markup block expands to) — origLine stays
+//     pinned wherever the caller left it (the start of that 'return
+//     <markup>;' statement) for every line the generated block spans.
+class Output {
+public:
+    explicit Output(const std::string& reserveHint) { out_.reserve(reserveHint.size() + 256); }
+
+    void copySrc(char c, int& origLine) {
+        if (c == '\n') { ++origLine; out_ += c; lineMap_.push_back(origLine); return; }
+        out_ += c;
+    }
+    void copySrc(const std::string& s, int& origLine) {
+        for (char c : s) copySrc(c, origLine);
+    }
+    void emitGen(const std::string& s, int pinnedOrigLine) {
+        for (char c : s) {
+            out_ += c;
+            if (c == '\n') lineMap_.push_back(pinnedOrigLine);
+        }
+    }
+
+    // Prepends 'header' (whole lines, must end in '\n') to the output,
+    // shifting every existing line-map entry down by the number of lines
+    // in 'header' and giving the new leading lines 'headerOrigLine'.
+    void prependHeader(const std::string& header, int headerOrigLine) {
+        int n = 0;
+        for (char c : header) if (c == '\n') ++n;
+        out_ = header + out_;
+        lineMap_.insert(lineMap_.begin() + 1, n, headerOrigLine);
+    }
+
+    std::string&       text() { return out_; }
+    std::vector<int>&  lineMap() { return lineMap_; }
+
+    void initLineMap(int firstLine) {
+        lineMap_.push_back(0);         // index 0 unused (lines are 1-based)
+        lineMap_.push_back(firstLine); // generated line 1 begins at firstLine
+    }
+
+private:
+    std::string      out_;
+    std::vector<int> lineMap_;
+};
+
 } // namespace
 
-std::string transpileScx(const std::string& src, const std::string& filename) {
-    std::string out;
-    out.reserve(src.size() + 256);
+std::string transpileScx(const std::string& src, const std::string& filename,
+                          std::vector<int>* lineMapOut) {
+    Output out(src);
+    out.initLineMap(1);
     size_t i = 0;
     int tmpCounter = 0;
     bool usedMarkup = false;
+    int origLine = 1;
 
     while (i < src.size()) {
         char c = src[i];
@@ -336,33 +391,35 @@ std::string transpileScx(const std::string& src, const std::string& filename) {
         // String / char literals — copy verbatim, don't scan their contents.
         if (c == '"' || c == '\'') {
             char q = c;
-            out += c;
+            out.copySrc(c, origLine);
             ++i;
             while (i < src.size() && src[i] != q) {
                 if (src[i] == '\\' && i + 1 < src.size()) {
-                    out += src[i];
-                    out += src[i + 1];
+                    out.copySrc(src[i], origLine);
+                    out.copySrc(src[i + 1], origLine);
                     i += 2;
                     continue;
                 }
-                out += src[i];
+                out.copySrc(src[i], origLine);
                 ++i;
             }
-            if (i < src.size()) { out += src[i]; ++i; }
+            if (i < src.size()) { out.copySrc(src[i], origLine); ++i; }
             continue;
         }
         // Line comments.
         if (c == '/' && i + 1 < src.size() && src[i + 1] == '/') {
-            while (i < src.size() && src[i] != '\n') { out += src[i]; ++i; }
+            while (i < src.size() && src[i] != '\n') { out.copySrc(src[i], origLine); ++i; }
             continue;
         }
         // Block comments.
         if (c == '/' && i + 1 < src.size() && src[i + 1] == '*') {
-            out += src[i]; out += src[i + 1]; i += 2;
+            out.copySrc(src[i], origLine); out.copySrc(src[i + 1], origLine); i += 2;
             while (i + 1 < src.size() && !(src[i] == '*' && src[i + 1] == '/')) {
-                out += src[i]; ++i;
+                out.copySrc(src[i], origLine); ++i;
             }
-            if (i + 1 < src.size()) { out += src[i]; out += src[i + 1]; i += 2; }
+            if (i + 1 < src.size()) {
+                out.copySrc(src[i], origLine); out.copySrc(src[i + 1], origLine); i += 2;
+            }
             continue;
         }
 
@@ -372,6 +429,8 @@ std::string transpileScx(const std::string& src, const std::string& filename) {
             while (j < src.size() && isWs(src[j])) ++j;
             if (j < src.size() && src[j] == '<' && j + 1 < src.size() &&
                 isIdentStart(src[j + 1])) {
+                int markupOrigLine = origLine; // pin generated lines here
+
                 MarkupParser mp(src, filename);
                 size_t p = j;
                 NodePtr root = mp.parseElement(p); // throws on malformed markup
@@ -383,24 +442,32 @@ std::string transpileScx(const std::string& src, const std::string& filename) {
                 ++k;
 
                 std::string bufVar = "__scx" + std::to_string(tmpCounter++);
-                out += "struct String " + bufVar + " = std::string_new();\n";
-                out += "unsafe {\n";
+                std::ostringstream gen;
+                gen << "struct String " << bufVar << " = std::string_new();\n";
+                gen << "unsafe {\n";
                 std::ostringstream body;
-                CodeGen gen(bufVar);
-                gen.emit(*root, body);
-                out += body.str();
-                out += "}\n";
-                out += "return " + bufVar + ";\n";
+                CodeGen(bufVar).emit(*root, body);
+                gen << body.str();
+                gen << "}\n";
+                gen << "return " << bufVar << ";\n";
+                out.emitGen(gen.str(), markupOrigLine);
+
+                // Resume normal scanning right after the consumed original
+                // 'return <markup>;' text — advance origLine by however
+                // many original lines that span crossed, so subsequent
+                // verbatim copying picks up at the right original line.
+                origLine += lineOf(src, k) - lineOf(src, i);
+
                 usedMarkup = true;
                 i = k;
                 continue;
             }
-            out += src.substr(i, 6);
+            out.copySrc(src.substr(i, 6), origLine);
             i = afterKw;
             continue;
         }
 
-        out += c;
+        out.copySrc(c, origLine);
         ++i;
     }
 
@@ -418,10 +485,16 @@ std::string transpileScx(const std::string& src, const std::string& filename) {
         // files). Leaving these as undefined references lets them
         // resolve against whichever single place in the link — another
         // project file, or libsafec_std.a — actually defines them.
-        out = "#include <std/scx/scx.h>\n"
-              "#include <std/collections/string.h>\n" + out;
+        out.prependHeader("#include <std/scx/scx.h>\n"
+                           "#include <std/collections/string.h>\n", 1);
     }
-    return out;
+
+    if (lineMapOut) *lineMapOut = out.lineMap();
+    return out.text();
+}
+
+std::string transpileScx(const std::string& source, const std::string& filename) {
+    return transpileScx(source, filename, nullptr);
 }
 
 } // namespace safeguard
