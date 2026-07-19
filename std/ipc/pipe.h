@@ -26,33 +26,33 @@ struct Pipe {
 };
 
 // Creates a new pipe. Returns 0 on success, -1 on failure.
-int pipe_create(struct Pipe* out);
+int pipe_create(&Pipe out);
 
 // Reads up to 'count' bytes from the pipe's read end into 'buf'. Returns
 // the number of bytes read (0 means the write end was closed and the
 // pipe is drained — EOF), or -1 on error.
-long long pipe_read(struct Pipe* p, void* buf, unsigned long count);
+long long pipe_read(&Pipe p, void* buf, unsigned long count);
 
 // Writes up to 'count' bytes from 'buf' to the pipe's write end. Returns
 // the number of bytes written, or -1 on error.
-long long pipe_write(struct Pipe* p, const void* buf, unsigned long count);
+long long pipe_write(&Pipe p, const void* buf, unsigned long count);
 
 // Puts the read end into non-blocking mode (pairs with std::Reactor —
 // await_fd(p->read_fd, SCHED_READ) once this returns 0). Returns 0 on
 // success, -1 on failure.
-int pipe_set_read_nonblocking(struct Pipe* p);
+int pipe_set_read_nonblocking(&Pipe p);
 
 // Puts the write end into non-blocking mode. Returns 0 on success, -1 on
 // failure.
-int pipe_set_write_nonblocking(struct Pipe* p);
+int pipe_set_write_nonblocking(&Pipe p);
 
 // Closes the read end. Safe to call once; closing twice is undefined the
 // same way double-close(2) is on any platform.
-int pipe_close_read(struct Pipe* p);
+int pipe_close_read(&Pipe p);
 
 // Closes the write end. A reader blocked in pipe_read (or awaiting
 // SCHED_READ on read_fd) sees EOF (pipe_read returns 0) once this runs
 // and the pipe is drained.
-int pipe_close_write(struct Pipe* p);
+int pipe_close_write(&Pipe p);
 
 } // namespace std

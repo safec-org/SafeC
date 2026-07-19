@@ -38,7 +38,7 @@ struct FirFilter {
 struct FirFilter fir_init(const double* coeffs, unsigned long numTaps, double* history);
 
 // Processes 'n' samples through 'f', writing to 'out' (may alias 'in').
-void fir_process_block(struct FirFilter* f, const double* in, double* out, unsigned long n);
+void fir_process_block(&FirFilter f, const double* in, double* out, unsigned long n);
 
 struct FFirFilter {
     const Fixed*  coeffs;
@@ -51,7 +51,7 @@ struct FFirFilter {
 };
 
 struct FFirFilter ffir_init(const Fixed* coeffs, unsigned long numTaps, Fixed* history);
-void ffir_process_block(struct FFirFilter* f, const Fixed* in, Fixed* out, unsigned long n);
+void ffir_process_block(&FFirFilter f, const Fixed* in, Fixed* out, unsigned long n);
 
 // ── IIR (general order, direct form I) ────────────────────────────────────────
 
@@ -72,7 +72,7 @@ struct IirFilter {
 struct IirFilter iir_init(const double* b, unsigned long numB,
                            const double* a, unsigned long numA,
                            double* xHistory, double* yHistory);
-void iir_process_block(struct IirFilter* f, const double* in, double* out, unsigned long n);
+void iir_process_block(&IirFilter f, const double* in, double* out, unsigned long n);
 
 struct FIirFilter {
     const Fixed*  b;
@@ -91,6 +91,6 @@ struct FIirFilter {
 struct FIirFilter fiir_init(const Fixed* b, unsigned long numB,
                              const Fixed* a, unsigned long numA,
                              Fixed* xHistory, Fixed* yHistory);
-void fiir_process_block(struct FIirFilter* f, const Fixed* in, Fixed* out, unsigned long n);
+void fiir_process_block(&FIirFilter f, const Fixed* in, Fixed* out, unsigned long n);
 
 } // namespace std

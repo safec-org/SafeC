@@ -17,7 +17,7 @@ extern long  write(int fd, const void* buf, unsigned long count);
 extern int   close(int fd);
 extern int   fcntl(int fd, int cmd, int arg);
 
-inline int pipe_create(struct Pipe* out) {
+inline int pipe_create(&Pipe out) {
     int fds[2];
     int rc;
     unsafe { rc = pipe((void*)&fds[0]); }
@@ -31,13 +31,13 @@ inline int pipe_create(struct Pipe* out) {
     return 0;
 }
 
-inline long long pipe_read(struct Pipe* p, void* buf, unsigned long count) {
+inline long long pipe_read(&Pipe p, void* buf, unsigned long count) {
     long n;
     unsafe { n = read((int)p->read_fd, buf, count); }
     return (long long)n;
 }
 
-inline long long pipe_write(struct Pipe* p, const void* buf, unsigned long count) {
+inline long long pipe_write(&Pipe p, const void* buf, unsigned long count) {
     long n;
     unsafe { n = write((int)p->write_fd, buf, count); }
     return (long long)n;
@@ -64,19 +64,19 @@ static int pipe_set_nonblocking_(int fd) {
     return rc;
 }
 
-inline int pipe_set_read_nonblocking(struct Pipe* p) {
+inline int pipe_set_read_nonblocking(&Pipe p) {
     int fd;
     unsafe { fd = (int)p->read_fd; }
     return pipe_set_nonblocking_(fd);
 }
 
-inline int pipe_set_write_nonblocking(struct Pipe* p) {
+inline int pipe_set_write_nonblocking(&Pipe p) {
     int fd;
     unsafe { fd = (int)p->write_fd; }
     return pipe_set_nonblocking_(fd);
 }
 
-inline int pipe_close_read(struct Pipe* p) {
+inline int pipe_close_read(&Pipe p) {
     int fd;
     unsafe { fd = (int)p->read_fd; }
     int rc;
@@ -84,7 +84,7 @@ inline int pipe_close_read(struct Pipe* p) {
     return rc;
 }
 
-inline int pipe_close_write(struct Pipe* p) {
+inline int pipe_close_write(&Pipe p) {
     int fd;
     unsafe { fd = (int)p->write_fd; }
     int rc;

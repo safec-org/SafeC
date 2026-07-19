@@ -13,7 +13,7 @@
 
 namespace std {
 
-void reactor_run(struct TaskScheduler* sched, struct Reactor* r) {
+void reactor_run(&TaskScheduler sched, &Reactor r) {
     while (sched->active_count() > 0) {
         int active = sched->tick();
         if (active == 0) {

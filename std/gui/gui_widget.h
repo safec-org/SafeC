@@ -138,43 +138,46 @@ typedef fn void(struct Widget*, int, int, int, int) WidgetLayoutFn;
 typedef fn int(struct Widget*, struct GuiEvent*) WidgetCustomEventFn;
 
 // ── constructors ─────────────────────────────────────────────────────────────
-struct Widget* widget_vstack();
-struct Widget* widget_hstack();
-struct Widget* widget_button(const char* text);
-struct Widget* widget_label(const char* text);
-struct Widget* widget_checkbox(const char* text, int checked);
-struct Widget* widget_textinput(const char* placeholder);
-struct Widget* widget_spacer();
-struct Widget* widget_slider(double minValue, double maxValue, double value);
+// All return a freshly heap-allocated, non-null widget — a region-less
+// '&Widget' (see README's "Outliving references"), since nothing here
+// cares whether the tree it ends up in is heap/stack/static/arena-owned.
+&Widget widget_vstack();
+&Widget widget_hstack();
+&Widget widget_button(const char* text);
+&Widget widget_label(const char* text);
+&Widget widget_checkbox(const char* text, int checked);
+&Widget widget_textinput(const char* placeholder);
+&Widget widget_spacer();
+&Widget widget_slider(double minValue, double maxValue, double value);
 
 // Custom widgets: 'draw'/'layout' are required; 'eventFn' may be NULL (the
 // widget then just participates in hit-testing/hover/press/click like a
 // button would, with onClick/onChange still firing normally — set eventFn
 // only when you need to intercept raw events yourself, e.g. for a custom
 // slider/canvas that tracks drag deltas).
-struct Widget* widget_custom(WidgetDrawFn draw, WidgetLayoutFn layout,
-                              WidgetCustomEventFn eventFn, void* userData);
+&Widget widget_custom(WidgetDrawFn draw, WidgetLayoutFn layout,
+                       WidgetCustomEventFn eventFn, void* userData);
 
 // ── tree ─────────────────────────────────────────────────────────────────────
 void widget_add_child(&Widget parent, &Widget child);
 
 // ── customization (each returns 'w', so calls chain) ────────────────────────
-struct Widget* widget_set_bg(struct Widget* w, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
-struct Widget* widget_set_fg(struct Widget* w, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
-struct Widget* widget_set_border(struct Widget* w, unsigned char r, unsigned char g, unsigned char b,
-                                  unsigned char a, int width);
-struct Widget* widget_set_padding(struct Widget* w, int padding);
-struct Widget* widget_set_spacing(struct Widget* w, int spacing);
-struct Widget* widget_set_pref_size(struct Widget* w, int prefW, int prefH);
-struct Widget* widget_set_stretch(struct Widget* w, int stretch);
-struct Widget* widget_set_alignment(struct Widget* w, int alignment);
-struct Widget* widget_set_font_scale(struct Widget* w, int scale);
-struct Widget* widget_set_font(struct Widget* w, const ?&GuiFont font);
-struct Widget* widget_set_visible(struct Widget* w, int visible);
-struct Widget* widget_set_enabled(struct Widget* w, int enabled);
-struct Widget* widget_set_text(struct Widget* w, const char* text);
-struct Widget* widget_on_click(struct Widget* w, WidgetCallback cb, void* userData);
-struct Widget* widget_on_change(struct Widget* w, WidgetCallback cb, void* userData);
+&Widget widget_set_bg(&Widget w, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+&Widget widget_set_fg(&Widget w, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+&Widget widget_set_border(&Widget w, unsigned char r, unsigned char g, unsigned char b,
+                           unsigned char a, int width);
+&Widget widget_set_padding(&Widget w, int padding);
+&Widget widget_set_spacing(&Widget w, int spacing);
+&Widget widget_set_pref_size(&Widget w, int prefW, int prefH);
+&Widget widget_set_stretch(&Widget w, int stretch);
+&Widget widget_set_alignment(&Widget w, int alignment);
+&Widget widget_set_font_scale(&Widget w, int scale);
+&Widget widget_set_font(&Widget w, const ?&GuiFont font);
+&Widget widget_set_visible(&Widget w, int visible);
+&Widget widget_set_enabled(&Widget w, int enabled);
+&Widget widget_set_text(&Widget w, const char* text);
+&Widget widget_on_click(&Widget w, WidgetCallback cb, void* userData);
+&Widget widget_on_change(&Widget w, WidgetCallback cb, void* userData);
 
 // ── per-frame pipeline ────────────────────────────────────────────────────────
 
@@ -183,10 +186,10 @@ struct Widget* widget_on_change(struct Widget* w, WidgetCallback cb, void* userD
 // giving each non-stretched child its natural/preferred size), applying
 // 'padding' inside the container and 'spacing' between children;
 // WIDGET_CUSTOM nodes call their own WidgetLayoutFn instead.
-void gui_layout(struct Widget* root, int x, int y, int w, int h);
+void gui_layout(&Widget root, int x, int y, int w, int h);
 
 // Draws 'root' and its whole subtree into 'win' (call after gui_layout()).
-void gui_render(struct GuiWindow* win, struct Widget* root);
+void gui_render(&GuiWindow win, &Widget root);
 
 // Routes one event through the tree (deepest/topmost widget under the
 // cursor first): updates hover/pressed/focused state, fires onClick on
@@ -206,14 +209,14 @@ void gui_render(struct GuiWindow* win, struct Widget* root);
 // These are genuinely *default* actions: they still run even if dispatch
 // already returned 1 for this event (e.g. a focused text input consuming
 // Backspace doesn't block Tab from later moving focus off it).
-int gui_dispatch_event(struct Widget* root, struct GuiEvent* ev);
+int gui_dispatch_event(&Widget root, &GuiEvent ev);
 
 // Suppresses gui_dispatch_event()'s default key action for 'ev' — call
 // from a WIDGET_CUSTOM node's WidgetCustomEventFn when you're handling a
 // key yourself and don't want e.g. Tab/Enter's default behavior on top.
-void gui_event_prevent_default(struct GuiEvent* ev);
+void gui_event_prevent_default(&GuiEvent ev);
 
 // Recursively frees 'w' and its whole subtree (children, text, style).
-void widget_free(struct Widget* w);
+void widget_free(&Widget w);
 
 } // namespace std

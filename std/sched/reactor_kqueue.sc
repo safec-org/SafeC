@@ -117,7 +117,7 @@ inline void Reactor::remove(int fd, int filter) {
     }
 }
 
-inline int Reactor::poll(struct TaskScheduler* sched, long long timeout_ms) {
+inline int Reactor::poll(&TaskScheduler sched, long long timeout_ms) {
     struct KEvent events[64];
     struct TimeSpec ts;
     const void* toPtr;

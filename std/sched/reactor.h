@@ -110,7 +110,7 @@ struct Reactor {
     // (fd, filter). Returns the number of OS events processed (not the
     // number of tasks unblocked, which may differ if several tasks await
     // the same fd).
-    int  poll(struct TaskScheduler* sched, long long timeout_ms);
+    int  poll(&TaskScheduler sched, long long timeout_ms);
 
     void close_();
 };
@@ -125,6 +125,6 @@ struct Reactor reactor_init();
 // CPU until the OS actually has something to report. This is the
 // scheduler itself: replaces TaskScheduler::run_all() for any workload
 // where tasks call await_fd().
-void reactor_run(struct TaskScheduler* sched, struct Reactor* r);
+void reactor_run(&TaskScheduler sched, &Reactor r);
 
 } // namespace std

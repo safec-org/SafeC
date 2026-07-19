@@ -21,7 +21,7 @@ extern int  ReadFile(unsigned long long hFile, void* lpBuffer, unsigned int nNum
 extern int  WriteFile(unsigned long long hFile, const void* lpBuffer, unsigned int nNumberOfBytesToWrite, void* lpNumberOfBytesWritten, void* lpOverlapped);
 extern int  CloseHandle(unsigned long long hObject);
 
-inline int pipe_create(struct Pipe* out) {
+inline int pipe_create(&Pipe out) {
     unsigned long long readH = 0ULL;
     unsigned long long writeH = 0ULL;
     int ok;
@@ -36,7 +36,7 @@ inline int pipe_create(struct Pipe* out) {
     return 0;
 }
 
-inline long long pipe_read(struct Pipe* p, void* buf, unsigned long count) {
+inline long long pipe_read(&Pipe p, void* buf, unsigned long count) {
     unsigned long long h;
     unsafe { h = (unsigned long long)p->read_fd; }
     unsigned int got = 0U;
@@ -48,7 +48,7 @@ inline long long pipe_read(struct Pipe* p, void* buf, unsigned long count) {
     return (long long)got;
 }
 
-inline long long pipe_write(struct Pipe* p, const void* buf, unsigned long count) {
+inline long long pipe_write(&Pipe p, const void* buf, unsigned long count) {
     unsigned long long h;
     unsafe { h = (unsigned long long)p->write_fd; }
     unsigned int sent = 0U;
@@ -62,15 +62,15 @@ inline long long pipe_write(struct Pipe* p, const void* buf, unsigned long count
 
 // See file header comment — anonymous CreatePipe handles have no
 // non-blocking mode on this backend.
-inline int pipe_set_read_nonblocking(struct Pipe* p) {
+inline int pipe_set_read_nonblocking(&Pipe p) {
     return -1;
 }
 
-inline int pipe_set_write_nonblocking(struct Pipe* p) {
+inline int pipe_set_write_nonblocking(&Pipe p) {
     return -1;
 }
 
-inline int pipe_close_read(struct Pipe* p) {
+inline int pipe_close_read(&Pipe p) {
     unsigned long long h;
     unsafe { h = (unsigned long long)p->read_fd; }
     int ok;
@@ -78,7 +78,7 @@ inline int pipe_close_read(struct Pipe* p) {
     return ok != 0 ? 0 : -1;
 }
 
-inline int pipe_close_write(struct Pipe* p) {
+inline int pipe_close_write(&Pipe p) {
     unsigned long long h;
     unsafe { h = (unsigned long long)p->write_fd; }
     int ok;

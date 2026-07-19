@@ -69,17 +69,17 @@ static struct Widget* __widget_new(int kind) {
     return w;
 }
 
-struct Widget* widget_vstack() {
+&Widget widget_vstack() {
     return __widget_new(WIDGET_VSTACK);
 }
-struct Widget* widget_hstack() {
+&Widget widget_hstack() {
     return __widget_new(WIDGET_HSTACK);
 }
-struct Widget* widget_spacer() {
+&Widget widget_spacer() {
     struct Widget* w = __widget_new(WIDGET_SPACER);
     unsafe { w->stretch = 1; return w; }
 }
-struct Widget* widget_button(const char* text) {
+&Widget widget_button(const char* text) {
     struct Widget* w = __widget_new(WIDGET_BUTTON);
     unsafe {
         w->text.free();
@@ -87,7 +87,7 @@ struct Widget* widget_button(const char* text) {
         return w;
     }
 }
-struct Widget* widget_label(const char* text) {
+&Widget widget_label(const char* text) {
     struct Widget* w = __widget_new(WIDGET_LABEL);
     unsafe {
         w->text.free();
@@ -95,7 +95,7 @@ struct Widget* widget_label(const char* text) {
         return w;
     }
 }
-struct Widget* widget_checkbox(const char* text, int checked) {
+&Widget widget_checkbox(const char* text, int checked) {
     struct Widget* w = __widget_new(WIDGET_CHECKBOX);
     unsafe {
         w->text.free();
@@ -104,7 +104,7 @@ struct Widget* widget_checkbox(const char* text, int checked) {
         return w;
     }
 }
-struct Widget* widget_textinput(const char* placeholder) {
+&Widget widget_textinput(const char* placeholder) {
     struct Widget* w = __widget_new(WIDGET_TEXTINPUT);
     unsafe {
         w->text.free();
@@ -112,7 +112,7 @@ struct Widget* widget_textinput(const char* placeholder) {
         return w;
     }
 }
-struct Widget* widget_slider(double minValue, double maxValue, double value) {
+&Widget widget_slider(double minValue, double maxValue, double value) {
     struct Widget* w = __widget_new(WIDGET_SLIDER);
     unsafe {
         w->sliderMin = minValue;
@@ -121,7 +121,7 @@ struct Widget* widget_slider(double minValue, double maxValue, double value) {
         return w;
     }
 }
-struct Widget* widget_custom(WidgetDrawFn draw, WidgetLayoutFn layout,
+&Widget widget_custom(WidgetDrawFn draw, WidgetLayoutFn layout,
                               WidgetCustomEventFn eventFn, void* userData) {
     struct Widget* w = __widget_new(WIDGET_CUSTOM);
     unsafe {
@@ -142,67 +142,67 @@ void widget_add_child(&Widget parent, &Widget child) {
 
 // ── customization ────────────────────────────────────────────────────────────
 
-struct Widget* widget_set_bg(struct Widget* w, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+&Widget widget_set_bg(&Widget w, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
     unsafe { w->style.bg = gui_rgba(r, g, b, a); }
     return w;
 }
-struct Widget* widget_set_fg(struct Widget* w, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+&Widget widget_set_fg(&Widget w, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
     unsafe { w->style.fg = gui_rgba(r, g, b, a); }
     return w;
 }
-struct Widget* widget_set_border(struct Widget* w, unsigned char r, unsigned char g, unsigned char b,
+&Widget widget_set_border(&Widget w, unsigned char r, unsigned char g, unsigned char b,
                                   unsigned char a, int width) {
     unsafe { w->style.border = gui_rgba(r, g, b, a); w->style.borderWidth = width; }
     return w;
 }
-struct Widget* widget_set_padding(struct Widget* w, int padding) {
+&Widget widget_set_padding(&Widget w, int padding) {
     unsafe { w->style.padding = padding; }
     return w;
 }
-struct Widget* widget_set_spacing(struct Widget* w, int spacing) {
+&Widget widget_set_spacing(&Widget w, int spacing) {
     unsafe { w->style.spacing = spacing; }
     return w;
 }
-struct Widget* widget_set_pref_size(struct Widget* w, int prefW, int prefH) {
+&Widget widget_set_pref_size(&Widget w, int prefW, int prefH) {
     unsafe { w->prefW = prefW; w->prefH = prefH; }
     return w;
 }
-struct Widget* widget_set_stretch(struct Widget* w, int stretch) {
+&Widget widget_set_stretch(&Widget w, int stretch) {
     unsafe { w->stretch = stretch; }
     return w;
 }
-struct Widget* widget_set_alignment(struct Widget* w, int alignment) {
+&Widget widget_set_alignment(&Widget w, int alignment) {
     unsafe { w->alignment = alignment; }
     return w;
 }
-struct Widget* widget_set_font_scale(struct Widget* w, int scale) {
+&Widget widget_set_font_scale(&Widget w, int scale) {
     unsafe { w->style.fontScale = scale; }
     return w;
 }
-struct Widget* widget_set_font(struct Widget* w, const ?&GuiFont font) {
+&Widget widget_set_font(&Widget w, const ?&GuiFont font) {
     unsafe { w->style.font = font; }
     return w;
 }
-struct Widget* widget_set_visible(struct Widget* w, int visible) {
+&Widget widget_set_visible(&Widget w, int visible) {
     unsafe { w->visible = visible; }
     return w;
 }
-struct Widget* widget_set_enabled(struct Widget* w, int enabled) {
+&Widget widget_set_enabled(&Widget w, int enabled) {
     unsafe { w->enabled = enabled; }
     return w;
 }
-struct Widget* widget_set_text(struct Widget* w, const char* text) {
+&Widget widget_set_text(&Widget w, const char* text) {
     unsafe {
         w->text.free();
         w->text = string_from(text);
     }
     return w;
 }
-struct Widget* widget_on_click(struct Widget* w, WidgetCallback cb, void* userData) {
+&Widget widget_on_click(&Widget w, WidgetCallback cb, void* userData) {
     unsafe { w->onClick = (void*)cb; w->onClickData = userData; }
     return w;
 }
-struct Widget* widget_on_change(struct Widget* w, WidgetCallback cb, void* userData) {
+&Widget widget_on_change(&Widget w, WidgetCallback cb, void* userData) {
     unsafe { w->onChange = (void*)cb; w->onChangeData = userData; }
     return w;
 }
@@ -260,7 +260,7 @@ static int __widget_natural_h(struct Widget* w) {
 
 // ── layout ───────────────────────────────────────────────────────────────────
 
-void gui_layout(struct Widget* root, int x, int y, int w, int h) {
+void gui_layout(&Widget root, int x, int y, int w, int h) {
     int kind;
     unsafe { kind = root->kind; }
 
@@ -369,7 +369,7 @@ static void __widget_draw_text_centered(struct GuiWindow* win, struct Widget* w,
     }
 }
 
-void gui_render(struct GuiWindow* win, struct Widget* root) {
+void gui_render(&GuiWindow win, &Widget root) {
     int visible; unsafe { visible = root->visible; }
     if (!visible) { return; }
 
@@ -623,7 +623,7 @@ static int __widget_dispatch_one(struct Widget* w, struct GuiEvent* ev) {
 
 // ── default key actions + prevent_default ───────────────────────────────────
 
-void gui_event_prevent_default(struct GuiEvent* ev) {
+void gui_event_prevent_default(&GuiEvent ev) {
     unsafe { ev->defaultPrevented = 1; }
 }
 
@@ -738,7 +738,7 @@ static void __widget_apply_default_key_action(struct Widget* root, struct GuiEve
     }
 }
 
-int gui_dispatch_event(struct Widget* root, struct GuiEvent* ev) {
+int gui_dispatch_event(&Widget root, &GuiEvent ev) {
     int evKind; unsafe { evKind = ev->kind; }
     if (evKind == GUI_EVENT_MOUSE_MOVE) {
         // Hover state always updates on move, but the event must still
@@ -757,7 +757,7 @@ int gui_dispatch_event(struct Widget* root, struct GuiEvent* ev) {
 
 // ── lifecycle ─────────────────────────────────────────────────────────────────
 
-void widget_free(struct Widget* w) {
+void widget_free(&Widget w) {
     unsigned long n; unsafe { n = w->children.length(); }
     unsigned long i = 0UL;
     while (i < n) {

@@ -161,7 +161,7 @@ inline void Reactor::remove(int fd, int filter) {
     }
 }
 
-inline int Reactor::poll(struct TaskScheduler* sched, long long timeout_ms) {
+inline int Reactor::poll(&TaskScheduler sched, long long timeout_ms) {
     unsigned long n;
     unsafe { n = self.watched.length(); }
     if (n == 0UL) {

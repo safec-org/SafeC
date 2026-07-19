@@ -38,7 +38,7 @@ void FirFilter::reset() {
     self.pos = 0UL;
 }
 
-void fir_process_block(struct FirFilter* f, const double* in, double* out, unsigned long n) {
+void fir_process_block(&FirFilter f, const double* in, double* out, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         double xi;
@@ -81,7 +81,7 @@ void FFirFilter::reset() {
     self.pos = 0UL;
 }
 
-void ffir_process_block(struct FFirFilter* f, const Fixed* in, Fixed* out, unsigned long n) {
+void ffir_process_block(&FFirFilter f, const Fixed* in, Fixed* out, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         Fixed xi;
@@ -142,7 +142,7 @@ void IirFilter::reset() {
     self.yPos = 0UL;
 }
 
-void iir_process_block(struct IirFilter* f, const double* in, double* out, unsigned long n) {
+void iir_process_block(&IirFilter f, const double* in, double* out, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         double xi;
@@ -201,7 +201,7 @@ void FIirFilter::reset() {
     self.yPos = 0UL;
 }
 
-void fiir_process_block(struct FIirFilter* f, const Fixed* in, Fixed* out, unsigned long n) {
+void fiir_process_block(&FIirFilter f, const Fixed* in, Fixed* out, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         Fixed xi;

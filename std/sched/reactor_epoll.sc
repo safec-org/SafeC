@@ -187,7 +187,7 @@ inline void Reactor::remove(int fd, int filter) {
     unsafe { epoll_ctl(self.kq, SAFEC_EPOLL_CTL_DEL, fd, (const void*)&ev); }
 }
 
-inline int Reactor::poll(struct TaskScheduler* sched, long long timeout_ms) {
+inline int Reactor::poll(&TaskScheduler sched, long long timeout_ms) {
     struct EpollEvent events[64];
     int timeout;
     if (timeout_ms < 0LL) {
