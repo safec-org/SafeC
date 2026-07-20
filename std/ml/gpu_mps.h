@@ -59,6 +59,18 @@ int mps_pow_f32(const float* a, const float* b, float* out, unsigned long n);
 int mps_log_f32(const float* a, float* out, unsigned long n);
 int mps_exp_f32(const float* a, float* out, unsigned long n);
 int mps_sqrt_f32(const float* a, float* out, unsigned long n);
+int mps_relu_f32(const float* a, float* out, unsigned long n);
+int mps_scale_f32(const float* a, float k, float* out, unsigned long n);
+
+// out[0] = sum(a[0..n)) -- serial single-thread reduction, not a real
+// parallel tree reduction. See gpu_mps.sc's comment for why.
+int mps_sum_f32(const float* a, float* out, unsigned long n);
+
+// out[M,N] = a[M,K] . b[K,N], computed on the GPU. Naive (no threadgroup-
+// memory tiling), float32-only (Metal has no 'double' type at all) — see
+// gpu_mps.sc's comment on the implementation for both caveats in detail.
+int mps_matmul_f32(const float* a, const float* b, float* out,
+                    unsigned long M, unsigned long K, unsigned long N);
 
 // True if a Metal device is available on this machine at all (checks
 // MTLCreateSystemDefaultDevice() != nil) — lets callers fall back to the

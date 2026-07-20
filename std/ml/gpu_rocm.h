@@ -28,6 +28,22 @@ namespace std {
 // type-checked, but there's no embeddable kernel body yet.
 int rocm_add_f32(const float* a, const float* b, float* out, unsigned long n);
 
+// Same shape and same HSACO-gap caveat as rocm_add_f32 — all real HIP
+// Runtime API plumbing, all currently always returning 0 for lack of a
+// compiled kernel image. See gpu_rocm.sc's header comment.
+int rocm_sub_f32(const float* a, const float* b, float* out, unsigned long n);
+int rocm_mul_f32(const float* a, const float* b, float* out, unsigned long n);
+int rocm_div_f32(const float* a, const float* b, float* out, unsigned long n);
+int rocm_pow_f32(const float* a, const float* b, float* out, unsigned long n);
+int rocm_relu_f32(const float* a, float* out, unsigned long n);
+int rocm_log_f32(const float* a, float* out, unsigned long n);
+int rocm_exp_f32(const float* a, float* out, unsigned long n);
+int rocm_sqrt_f32(const float* a, float* out, unsigned long n);
+int rocm_scale_f32(const float* a, float k, float* out, unsigned long n);
+int rocm_sum_f32(const float* a, float* out, unsigned long n);
+int rocm_matmul_f32(const float* a, const float* b, float* out,
+                     unsigned long M, unsigned long K, unsigned long N);
+
 // True if a ROCm-capable device is present (hipInit(0) == hipSuccess &&
 // hipGetDeviceCount() > 0).
 int rocm_available();

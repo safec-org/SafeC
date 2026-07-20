@@ -26,6 +26,22 @@ namespace std {
 // device, driver/runtime mismatch, PTX load failure, etc.).
 int cuda_add_f32(const float* a, const float* b, float* out, unsigned long n);
 
+// Same shape/caveats as cuda_add_f32 -- all hand-written PTX, all
+// UNVERIFIED (no ptxas, no NVIDIA GPU in this sandbox). See gpu_cuda.sc
+// for each kernel's source and the pow/log/exp approximation notes.
+int cuda_sub_f32(const float* a, const float* b, float* out, unsigned long n);
+int cuda_mul_f32(const float* a, const float* b, float* out, unsigned long n);
+int cuda_div_f32(const float* a, const float* b, float* out, unsigned long n);
+int cuda_pow_f32(const float* a, const float* b, float* out, unsigned long n);
+int cuda_relu_f32(const float* a, float* out, unsigned long n);
+int cuda_log_f32(const float* a, float* out, unsigned long n);
+int cuda_exp_f32(const float* a, float* out, unsigned long n);
+int cuda_sqrt_f32(const float* a, float* out, unsigned long n);
+int cuda_scale_f32(const float* a, float k, float* out, unsigned long n);
+int cuda_sum_f32(const float* a, float* out, unsigned long n);
+int cuda_matmul_f32(const float* a, const float* b, float* out,
+                     unsigned long M, unsigned long K, unsigned long N);
+
 // True if a CUDA-capable device is present and the driver initializes
 // successfully (cuInit(0) == CUDA_SUCCESS && cuDeviceGetCount() > 0).
 int cuda_available();
