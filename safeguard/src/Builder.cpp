@@ -988,8 +988,12 @@ bool Builder::test() {
         std::string obj;
         if (lang == SrcLang::SafeC) {
             std::string realSrc = materializeScx(src, buildDir.string());
+            // compatPreprocessor=true: tests routinely pull in
+            // <std/test/test.h>, whose ASSERT_* convenience macros are
+            // function-like — parsing that #define requires compat mode
+            // regardless of whether a given test file invokes them.
             std::string ll = realSrc.empty() ? "" :
-                compileSrc(safecBin, realSrc, buildDir.string(), userIncs, false, false, defs);
+                compileSrc(safecBin, realSrc, buildDir.string(), userIncs, true, false, defs);
             if (!ll.empty()) obj = llToObj(ll, buildDir.string());
         } else {
             obj = compileForeign(src, buildDir.string(), userIncs, lang);

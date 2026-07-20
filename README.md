@@ -90,7 +90,7 @@ int main() {
 
 1. **Determinism** — same input, same output; no hidden runtime variance
 2. **Zero hidden cost** — every operation has a visible, predictable cost
-3. **Explicit control** — no implicit memory, no implicit conversions, no implicit error handling
+3. **Explicit control** — no implicit memory, no implicit narrowing conversions, no implicit error handling (safe *widening* between numeric types is the one deliberate exception — see [Numeric Widening](#numeric-widening) below)
 4. **C ABI compatibility** — C struct layout, C calling conventions, C linkage by default
 5. **Compile-time first** — anything knowable at compile time is resolved at compile time
 
@@ -112,7 +112,7 @@ SafeC enforces seven safety properties entirely at compile time:
 
 Inside `unsafe {}`, all properties become the programmer's responsibility. The boundary is explicit and auditable — raw-pointer aliasing (WAR/RAW/WAW hazards) and raw-pointer subscript bounds are two examples of *not* being tracked in `unsafe` code, by design, the same way real C leaves them to the programmer there.
 
-One class of `unsafe`-adjacent bug the table above doesn't cover — since it isn't a type-safety property — is heap allocator misuse: double-free, use-after-free, freeing a pointer a different allocator produced, and freeing NULL. This can't be caught at compile time in general (whether two pointers alias is undecidable at scale), so `std::alloc`/`std::dealloc` catch it at runtime instead, for a fixed, small cost: every allocation carries a 16-byte header tagging it live/freed, `dealloc()`/`realloc_buf()` check the tag and abort with a diagnostic on a double-free or a pointer `alloc()` never returned, `dealloc(NULL)` is a safe no-op, and a bounded quarantine (freed blocks aren't handed back to the system allocator for a further ~64 frees) keeps that check reliable even though this platform's allocator overwrites a freed block's first bytes almost immediately. `std/alloc/pool.h`/`slab.h`/`tlsf.h`'s allocators get the equivalent check using their own existing per-block metadata.
+Heap allocator misuse — double-free, use-after-free, freeing a pointer a different allocator produced, and freeing NULL — sits partly inside and partly outside the table above. The common, single-variable case (`&heap T p = new T; ... std::dealloc(p);`) *is* caught at compile time: `p`'s use-after-free and double-free are tracked with the same flow-sensitive generation-counter analysis as arena references (if/else branches checked independently, loop bodies pre-scanned so a free on one iteration is visible to code textually before it on the next — see [Memory & Regions](https://safec-org.github.io/safec-docs/reference/memory.html#compile-time-use-after-free-and-double-free-checking)). That check is intra-procedural and syntactic, though — it only recognizes `std::dealloc(p)` with a bare identifier argument, and doesn't follow a pointer across aliases or function-call boundaries, so it can't be a general solution (whether two arbitrary pointers alias is undecidable at scale). `std::alloc`/`std::dealloc` catch the rest at runtime instead, for a fixed, small cost: every allocation carries a 16-byte header tagging it live/freed, `dealloc()`/`realloc_buf()` check the tag and abort with a diagnostic on a double-free or a pointer `alloc()` never returned, `dealloc(NULL)` is a safe no-op, and a bounded quarantine (freed blocks aren't handed back to the system allocator for a further ~64 frees) keeps that check reliable even though this platform's allocator overwrites a freed block's first bytes almost immediately. `std/alloc/pool.h`/`slab.h`/`tlsf.h`'s allocators get the equivalent runtime check using their own existing per-block metadata; freeing a pointer through the *wrong* allocator's free function (mismatched free) is also runtime-only, since the compiler doesn't track which allocator produced a given pointer. Memory leaks aren't checked at all, at compile time or runtime — general leak detection needs whole-program ownership/escape analysis; pair every allocation with `defer std::dealloc(...)` to make cleanup structurally hard to forget instead.
 
 Formal treatment uses syntactic type safety (Wright & Felleisen) with region semantics
 drawn from Oxide (Weiss et al., 2019) and Cyclone (Grossman et al., 2002).
@@ -292,6 +292,27 @@ Tuples are `tuple(T1, T2, ...)`, constructed with a parenthesized literal and ac
 tuple(int, double) p = (42, 3.14);
 int x = p.0;
 double y = p.1;
+```
+
+### Numeric Widening
+
+Binary operators (`+`, `*`, comparisons, ...) require both operands to
+already be the same type — SafeC never does C's "usual arithmetic
+conversions" to silently reconcile mismatched signedness. Assignment and
+argument-passing are more permissive: a value implicitly *widens* to any
+larger numeric type, including crossing from integer to floating-point
+(`int` → `long`, `float` → `double`, `int` → `double`). Anything that
+isn't a pure widening — narrowing (`long` → `int`), or float → integer in
+either direction — requires an explicit cast:
+
+```c
+int x = 42;
+double dx = x;              // implicit: int -> double widens safely
+
+long long big = 100LL;
+int small = (int)big;       // explicit cast required: this narrows
+double pi = 3.14;
+int truncated = (int)pi;    // explicit cast required: float -> int narrows
 ```
 
 ### Namespaces

@@ -1347,24 +1347,33 @@ void Sema::checkCompound(CompoundStmt &cs, FunctionDecl &fn) {
 //     assumed possible downstream), but no longer cross-contaminates the
 //     *other* branch's own checking.
 //
-//  2. Loop-iteration gap: a reset call near the *end* of a loop body used
-//     to only affect generation for code checked *after* it was textually
-//     seen -- code earlier in the same body (which, on a later iteration,
-//     runs *after* the previous iteration's reset) wasn't flagged.
-//     collectArenaResetRegions does a best-effort syntactic pre-scan of a
-//     loop body for reset/destroy calls anywhere inside it and bumps those
-//     regions' generation *before* the real check pass, so the whole body
-//     -- including code textually before the reset -- sees the "possibly
-//     reset by an earlier iteration" state. It's a name-based scan (these
-//     calls parse to "__arena_reset_<R>"/"__arena_destroy_<R>", see
-//     collectRegion/checkCall), not a type-checking pass, so it needs no
-//     symbol resolution and has no side effects of its own to worry about
+//  2. Loop-iteration gap: a reset/free_to call near the *end* of a loop body
+//     used to only affect generation for code checked *after* it was
+//     textually seen -- code earlier in the same body (which, on a later
+//     iteration, runs *after* the previous iteration's reset/free_to) wasn't
+//     flagged. collectArenaResetRegions does a best-effort syntactic
+//     pre-scan of a loop body for reset/destroy/free_to calls anywhere
+//     inside it and bumps the matching regions' generation
+//     (reset/destroy -> regionGeneration_) or scratch generation
+//     (free_to -> regionScratchGeneration_) *before* the real check pass, so
+//     the whole body -- including code textually before the call -- sees
+//     the "possibly invalidated by an earlier iteration" state. It's a
+//     name-based scan (these calls parse to "__arena_reset_<R>"/
+//     "__arena_destroy_<R>"/"__arena_free_to_<R>", see collectRegion/
+//     checkCall), not a type-checking pass, so it needs no symbol
+//     resolution and has no side effects of its own to worry about
 //     duplicating. It covers the statement/expression forms a void-
 //     returning call can plausibly appear in (blocks, if/while/for/unsafe/
 //     defer/match/switch bodies, var-decl initializers, and the common
 //     binary/unary/ternary/assign/cast expression nestings) rather than
 //     being exhaustive over every ExprKind — deeply unusual nesting can
-//     still fall back to the old (safe, just less precise) behavior.
+//     still fall back to the old (safe, just less precise) behavior. This
+//     does not attempt to track free_to's mark-nesting *depth* precisely
+//     across iterations (see Sema.h's regionScratchGeneration_ doc comment
+//     for why nested marks remain conservative independent of
+//     flow-sensitivity) -- it only closes the specific "an unpaired
+//     free_to in a loop body invalidates an outer reference used earlier
+//     in the same body" gap.
 static void mergeRegionCountersMax(std::unordered_map<std::string, int> &dst,
                                     const std::unordered_map<std::string, int> &other) {
     for (auto &kv : other) {
@@ -1373,7 +1382,35 @@ static void mergeRegionCountersMax(std::unordered_map<std::string, int> &dst,
     }
 }
 
-static void collectArenaResetRegions(const Expr *e, std::unordered_set<std::string> &out) {
+// Same element-wise-max merge as above, for heapFreeGeneration_'s VarDecl*-
+// keyed map (see its doc comment in Sema.h for why heap tracking is keyed
+// by declaration identity rather than name).
+static void mergeRegionCountersMax(std::unordered_map<const VarDecl *, int> &dst,
+                                    const std::unordered_map<const VarDecl *, int> &other) {
+    for (auto &kv : other) {
+        auto it = dst.find(kv.first);
+        if (it == dst.end() || it->second < kv.second) dst[kv.first] = kv.second;
+    }
+}
+
+// Output of the syntactic loop-body pre-scan below. 'resetRegions' and
+// 'freeToRegions' collect arena region names (from '__arena_reset_<R>'/
+// '__arena_destroy_<R>' and '__arena_free_to_<R>' respectively — kept
+// separate since they invalidate different counters, regionGeneration_ vs.
+// regionScratchGeneration_). 'heapFreeVarNames' collects the *variable
+// names* passed as the sole argument to a recognized 'std::dealloc(p)'
+// call — unlike the region cases, there's no naming convention to extract
+// a target from the callee itself, so the call site (checkWhile/checkFor)
+// resolves each name via lookup() to find the VarDecl to pre-bump in
+// heapFreeGeneration_; the scan itself stays purely syntactic (no symbol
+// resolution, no Sema access) to match the rest of this pre-scan.
+struct ArenaLoopScan {
+    std::unordered_set<std::string> resetRegions;
+    std::unordered_set<std::string> freeToRegions;
+    std::unordered_set<std::string> heapFreeVarNames;
+};
+
+static void collectArenaResetRegions(const Expr *e, ArenaLoopScan &out) {
     if (!e) return;
     switch (e->kind) {
     case ExprKind::Call: {
@@ -1382,10 +1419,19 @@ static void collectArenaResetRegions(const Expr *e, std::unordered_set<std::stri
             auto &ident = static_cast<const IdentExpr &>(*ce.callee);
             static const std::string kResetPrefix   = "__arena_reset_";
             static const std::string kDestroyPrefix = "__arena_destroy_";
+            static const std::string kFreeToPrefix  = "__arena_free_to_";
             if (ident.name.rfind(kResetPrefix, 0) == 0) {
-                out.insert(ident.name.substr(kResetPrefix.size()));
+                out.resetRegions.insert(ident.name.substr(kResetPrefix.size()));
             } else if (ident.name.rfind(kDestroyPrefix, 0) == 0) {
-                out.insert(ident.name.substr(kDestroyPrefix.size()));
+                out.resetRegions.insert(ident.name.substr(kDestroyPrefix.size()));
+            } else if (ident.name.rfind(kFreeToPrefix, 0) == 0) {
+                out.freeToRegions.insert(ident.name.substr(kFreeToPrefix.size()));
+            } else if ((ident.name == "dealloc" ||
+                        (ident.name.size() > 9 &&
+                         ident.name.compare(ident.name.size() - 9, 9, "::dealloc") == 0)) &&
+                       ce.args.size() == 1 && ce.args[0] &&
+                       ce.args[0]->kind == ExprKind::Ident) {
+                out.heapFreeVarNames.insert(static_cast<const IdentExpr &>(*ce.args[0]).name);
             }
         }
         collectArenaResetRegions(ce.callee.get(), out);
@@ -1418,11 +1464,11 @@ static void collectArenaResetRegions(const Expr *e, std::unordered_set<std::stri
         collectArenaResetRegions(static_cast<const CastExpr &>(*e).operand.get(), out);
         break;
     default:
-        break; // other ExprKinds can't plausibly hold a void-returning reset call
+        break; // other ExprKinds can't plausibly hold a void-returning reset/free call
     }
 }
 
-static void collectArenaResetRegions(const Stmt *s, std::unordered_set<std::string> &out) {
+static void collectArenaResetRegions(const Stmt *s, ArenaLoopScan &out) {
     if (!s) return;
     switch (s->kind) {
     case StmtKind::Compound:
@@ -1495,25 +1541,32 @@ void Sema::checkIf(IfStmt &s, FunctionDecl &fn) {
         diag_.error(s.cond->loc, "condition must be boolean or numeric");
     }
 
-    // See the "Arena-reset flow sensitivity" comment above item 1.
+    // See the "Arena-reset flow sensitivity" comment above item 1. Heap
+    // free tracking (heapFreeGeneration_) gets the same snapshot/restore/
+    // merge treatment for the same reason: a dealloc() inside 'then' must
+    // not bleed into 'else''s own checking.
     auto genBefore     = regionGeneration_;
     auto markBefore    = regionMarkDepth_;
     auto scratchBefore = regionScratchGeneration_;
+    auto heapBefore    = heapFreeGeneration_;
 
     checkStmt(*s.then, fn);
     auto genThen     = std::move(regionGeneration_);
     auto markThen    = std::move(regionMarkDepth_);
     auto scratchThen = std::move(regionScratchGeneration_);
+    auto heapThen    = std::move(heapFreeGeneration_);
 
     regionGeneration_        = genBefore;
     regionMarkDepth_         = markBefore;
     regionScratchGeneration_ = scratchBefore;
+    heapFreeGeneration_      = heapBefore;
 
     if (s.else_) checkStmt(*s.else_, fn);
 
     mergeRegionCountersMax(regionGeneration_, genThen);
     mergeRegionCountersMax(regionMarkDepth_, markThen);
     mergeRegionCountersMax(regionScratchGeneration_, scratchThen);
+    mergeRegionCountersMax(heapFreeGeneration_, heapThen);
 }
 
 void Sema::checkWhile(WhileStmt &s, FunctionDecl &fn) {
@@ -1523,10 +1576,24 @@ void Sema::checkWhile(WhileStmt &s, FunctionDecl &fn) {
         diag_.error(s.cond->loc, "while condition must be boolean or numeric");
     }
 
-    // See the "Arena-reset flow sensitivity" comment above item 2.
-    std::unordered_set<std::string> resetRegions;
-    collectArenaResetRegions(s.body.get(), resetRegions);
-    for (auto &r : resetRegions) regionGeneration_[r]++;
+    // See the "Arena-reset flow sensitivity" comment above item 2. Also
+    // pre-bumps regionScratchGeneration_ for any '__arena_free_to_<R>' found
+    // in the body, closing the "unpaired free_to in a loop" gap: an outer
+    // reference bound before the loop (with an active mark scope already
+    // open) that's read earlier in the body than the free_to call must still
+    // be treated as possibly invalidated by a *previous* iteration's call.
+    // Same reasoning extends heapFreeGeneration_ to std::dealloc(p) calls —
+    // 'heapFreeVarNames' are resolved to VarDecls here (not inside the
+    // scan itself, which stays symbol-resolution-free) via a plain lookup().
+    ArenaLoopScan scan;
+    collectArenaResetRegions(s.body.get(), scan);
+    for (auto &r : scan.resetRegions) regionGeneration_[r]++;
+    for (auto &r : scan.freeToRegions) regionScratchGeneration_[r]++;
+    for (auto &name : scan.heapFreeVarNames) {
+        if (auto *sym = lookup(name))
+            if (sym->kind == SymKind::Variable && sym->varDecl)
+                heapFreeGeneration_[sym->varDecl]++;
+    }
 
     ++loopDepth_;
     checkStmt(*s.body, fn);
@@ -1539,10 +1606,17 @@ void Sema::checkFor(ForStmt &s, FunctionDecl &fn) {
     if (s.cond) checkExpr(*s.cond);
     if (s.incr) checkExpr(*s.incr);
 
-    // See the "Arena-reset flow sensitivity" comment above item 2.
-    std::unordered_set<std::string> resetRegions;
-    collectArenaResetRegions(s.body.get(), resetRegions);
-    for (auto &r : resetRegions) regionGeneration_[r]++;
+    // See the "Arena-reset flow sensitivity" comment above item 2, and the
+    // free_to/heap-free note on checkWhile's pre-scan above.
+    ArenaLoopScan scan;
+    collectArenaResetRegions(s.body.get(), scan);
+    for (auto &r : scan.resetRegions) regionGeneration_[r]++;
+    for (auto &r : scan.freeToRegions) regionScratchGeneration_[r]++;
+    for (auto &name : scan.heapFreeVarNames) {
+        if (auto *sym = lookup(name))
+            if (sym->kind == SymKind::Variable && sym->varDecl)
+                heapFreeGeneration_[sym->varDecl]++;
+    }
 
     ++loopDepth_;
     checkStmt(*s.body, fn);
@@ -1694,6 +1768,8 @@ void Sema::checkVarDecl(VarDeclStmt &s, FunctionDecl &fn) {
             sym.arenaBindGen       = regionGeneration_[rt.arenaName]; // 0 if unseen yet
             sym.arenaBindMarkDepth = regionMarkDepth_[rt.arenaName];
             sym.arenaBindScratchGen = regionScratchGeneration_[rt.arenaName];
+        } else if (rt.region == Region::Heap) {
+            sym.heapBindGen = heapFreeGeneration_[vd]; // 0 if unseen yet
         }
     }
     define(std::move(sym));
@@ -1960,6 +2036,20 @@ TypePtr Sema::checkIdent(IdentExpr &e) {
                 ">(), arena_destroy<" + sym->arenaRegionName +
                 ">(), or arena_free_to<" + sym->arenaRegionName +
                 ">() invalidated it");
+        }
+    }
+    // Heap use-after-free/double-free check (see Sema::heapFreeGeneration_'s
+    // doc comment) — same shape as the arena check above, keyed by this
+    // variable's own VarDecl instead of a shared region name. Skipped inside
+    // 'unsafe' and for the one exempted occurrence (std::dealloc(p)'s own
+    // argument; see suppressHeapStaleCheck_'s doc comment and checkCall).
+    if (sym->kind == SymKind::Variable && sym->varDecl && sym->heapBindGen >= 0 &&
+        !suppressHeapStaleCheck_ && !inUnsafeScope()) {
+        int curGen = heapFreeGeneration_[sym->varDecl];
+        if (curGen != sym->heapBindGen) {
+            diag_.error(e.loc,
+                "use of '" + e.name + "' (&heap reference) after "
+                "std::dealloc() freed it");
         }
     }
     if (sym->varDecl)   { e.resolved   = sym->varDecl;  e.isLValue = true; }
@@ -2587,6 +2677,25 @@ TypePtr Sema::checkFnEval(FnEvalExpr &e) {
 }
 
 TypePtr Sema::checkCall(CallExpr &e) {
+    // RAII so the heap-free bump (and un-suppressing the staleness check)
+    // happens on every exit path of this function, regardless of which of
+    // checkCall's many special-case branches or early returns is taken
+    // below — see the 'std::dealloc(p)' detection right after the arena
+    // block for what populates 'target'/'wasSuppressedHere'. The bump must
+    // happen *after* the normal argument-checking below has had a chance to
+    // see 'p' at its pre-free generation (that read is the last valid use,
+    // not a use-after-free), which a guard destructor gives for free
+    // without needing to touch every return statement in this function.
+    struct HeapFreeGuard {
+        Sema *self;
+        bool wasSuppressedHere = false;
+        const VarDecl *target = nullptr;
+        ~HeapFreeGuard() {
+            if (wasSuppressedHere) self->suppressHeapStaleCheck_ = false;
+            if (target) self->heapFreeGeneration_[target]++;
+        }
+    } heapFreeGuard{this};
+
     // ── Builtin __safec_join ──────────────────────────────────────────────────
     if (e.callee->kind == ExprKind::Ident) {
         auto &ident = static_cast<IdentExpr &>(*e.callee);
@@ -2594,6 +2703,39 @@ TypePtr Sema::checkCall(CallExpr &e) {
             for (auto &a : e.args) checkExpr(*a);
             e.type = makeVoid();
             return makeVoid();
+        }
+        // ── std::dealloc(p): the one recognized heap-free call (see
+        // heapFreeGeneration_'s doc comment in Sema.h for the intra-
+        // procedural, VarDecl*-keyed scope of this check). Only a bare
+        // identifier argument is tracked — same "syntactic, not a full
+        // points-to analysis" restriction as the arena checks above.
+        // Suppressed here (via the guard above) so the normal argument-
+        // checking pass below sees this as the last *valid* read of 'p',
+        // not the use-after-free itself; the actual bump happens in the
+        // guard's destructor, after that pass has run. Suppression is
+        // withheld when 'p' is *already* stale (a prior free already
+        // bumped its generation past what it was bound against) so the
+        // normal argument-checking pass's staleness check still fires —
+        // this is exactly what turns a second 'dealloc(p)' into a
+        // detected double-free instead of a silently-suppressed no-op.
+        if ((ident.name == "dealloc" ||
+             (ident.name.size() > 9 &&
+              ident.name.compare(ident.name.size() - 9, 9, "::dealloc") == 0)) &&
+            e.args.size() == 1 && e.args[0] &&
+            e.args[0]->kind == ExprKind::Ident) {
+            auto &argIdent = static_cast<IdentExpr &>(*e.args[0]);
+            if (auto *sym = lookup(argIdent.name)) {
+                if (sym->kind == SymKind::Variable && sym->varDecl &&
+                    sym->type && sym->type->kind == TypeKind::Reference &&
+                    static_cast<ReferenceType &>(*sym->type).region == Region::Heap) {
+                    heapFreeGuard.target = sym->varDecl;
+                    bool alreadyStale = heapFreeGeneration_[sym->varDecl] != sym->heapBindGen;
+                    if (!alreadyStale && !suppressHeapStaleCheck_) {
+                        suppressHeapStaleCheck_ = true;
+                        heapFreeGuard.wasSuppressedHere = true;
+                    }
+                }
+            }
         }
         // ── arena_reset<R>()/arena_destroy<R>() invalidate *every*
         // outstanding '&arena<R> T' reference — bump R's generation
@@ -3387,12 +3529,13 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
     // is valid and should initialize it. Pre-mark the symbol as initialized so
     // checkIdent doesn't fire a false "uninitialized" error on the LHS.
     // Compound assignments (+=, etc.) read before writing — no pre-marking.
-    // Also suppress the arena-staleness check for this same LHS occurrence —
-    // rebinding a stale reference to a fresh value is exactly how you
-    // recover from staleness, not a read of the old (possibly-invalid)
-    // value; the rebind below (after rhsTy is known) sets the real
-    // arenaBindGen for whatever the RHS actually is.
+    // Also suppress the arena/heap-staleness checks for this same LHS
+    // occurrence — rebinding a stale reference to a fresh value is exactly
+    // how you recover from staleness, not a read of the old (possibly-
+    // invalid) value; the rebind below (after rhsTy is known) sets the real
+    // arenaBindGen/heapBindGen for whatever the RHS actually is.
     bool suppressedHere = false;
+    bool suppressedHeapHere = false;
     if (e.op == AssignOp::Assign && e.lhs->kind == ExprKind::Ident) {
         auto &ident = static_cast<IdentExpr &>(*e.lhs);
         if (auto *sym = lookup(ident.name))
@@ -3402,15 +3545,22 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
                     suppressArenaStaleCheck_ = true;
                     suppressedHere = true;
                 }
+                if (!suppressHeapStaleCheck_) {
+                    suppressHeapStaleCheck_ = true;
+                    suppressedHeapHere = true;
+                }
             }
     }
     TypePtr lhsTy = checkExpr(*e.lhs);
     if (suppressedHere) suppressArenaStaleCheck_ = false;
+    if (suppressedHeapHere) suppressHeapStaleCheck_ = false;
     TypePtr rhsTy = checkExpr(*e.rhs);
 
     // Rebind arena tracking: 'p = <arena-ref-value>;' establishes a fresh
     // binding, so p's staleness is judged against the region's generation
-    // *now*, not whatever it was bound to before.
+    // *now*, not whatever it was bound to before. Same idea for heap
+    // tracking: 'p = new int;' after a free recovers p (fresh allocation,
+    // fresh VarDecl-keyed generation snapshot).
     if (e.op == AssignOp::Assign && e.lhs->kind == ExprKind::Ident &&
         rhsTy && rhsTy->kind == TypeKind::Reference) {
         auto &rrt = static_cast<ReferenceType &>(*rhsTy);
@@ -3422,6 +3572,13 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
                     sym->arenaBindGen       = regionGeneration_[rrt.arenaName];
                     sym->arenaBindMarkDepth = regionMarkDepth_[rrt.arenaName];
                     sym->arenaBindScratchGen = regionScratchGeneration_[rrt.arenaName];
+                }
+            }
+        } else if (rrt.region == Region::Heap) {
+            auto &ident = static_cast<IdentExpr &>(*e.lhs);
+            if (auto *sym = lookup(ident.name)) {
+                if (sym->kind == SymKind::Variable && sym->varDecl) {
+                    sym->heapBindGen = heapFreeGeneration_[sym->varDecl];
                 }
             }
         }

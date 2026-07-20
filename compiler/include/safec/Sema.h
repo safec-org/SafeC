@@ -40,6 +40,13 @@ struct Symbol {
     // free_to-only generation counter at bind time.
     int          arenaBindMarkDepth  = 0;
     int          arenaBindScratchGen = -1;
+    // Heap use-after-free/double-free tracking (see Sema::heapFreeGeneration_):
+    // set when this variable is bound to a '&heap T' value. 'heapBindGen' is
+    // a snapshot, at bind time, of the free-generation counter for *this
+    // specific variable's* VarDecl — a later read is stale if that counter
+    // has since advanced (i.e. std::dealloc() was called on this same
+    // variable in between). -1 means not tracked (not a '&heap T' binding).
+    int          heapBindGen = -1;
 };
 
 // ── Scope ─────────────────────────────────────────────────────────────────────
@@ -275,26 +282,54 @@ private:
     // Arena-reset invalidation: bumped every time a call to
     // '__arena_reset_<name>'/'__arena_destroy_<name>' is seen during
     // traversal (see checkCall) — see Symbol::arenaBindGen for how this is
-    // consulted. Flow-insensitive (a running counter over AST traversal
-    // order, not real control-flow simulation): a reset inside an
-    // if-branch is treated as having happened for everything textually
-    // after the if-statement, whether or not that branch actually runs at
-    // runtime — sound (never misses a real bug) but can over-flag safe
-    // code. See reference/memory.md's "Arena References Die on Reset"
-    // section for the full caveat, including the known loop-iteration gap.
+    // consulted. Flow-*sensitive* over the function's actual control flow
+    // (see the "Arena-reset flow sensitivity" comment above Sema::checkIf
+    // in Sema.cpp): if/else branches are checked against independent
+    // snapshots and merged conservatively afterward rather than sharing one
+    // running counter, and loop bodies are pre-scanned for reset/destroy/
+    // free_to calls so an earlier-iteration invalidation is visible to
+    // code textually before the call within the same body. Still sound
+    // (never misses a real bug) but not a full dataflow fixpoint — see
+    // reference/memory.md's "Arena References Die on Reset" section for
+    // the precise remaining imprecision (deeply nested marks; unusual
+    // expression nesting inside a loop body).
     std::unordered_map<std::string, int> regionGeneration_;
     // arena_mark<R>()/arena_free_to<R>(mark) invalidation (see
     // Symbol::arenaBindMarkDepth's doc comment): 'regionMarkDepth_[R]' is
     // incremented by every arena_mark<R>() and decremented (floored at 0)
-    // by every arena_free_to<R>(...) seen during traversal — a running
-    // nesting depth, same flow-insensitive AST-order approximation as
-    // regionGeneration_ above. 'regionScratchGeneration_[R]' is bumped by
-    // free_to only, and is what actually staless a reference bound at
-    // depth > 0 — depth-0 (pre-mark) references never consult it at all,
-    // which is the fix for free_to() no longer nuking bindings that exist
-    // *outside* the scratch scope it's rewinding.
+    // by every arena_free_to<R>(...) seen during traversal — same flow-
+    // sensitive control-flow tracking as regionGeneration_ above (if/else
+    // snapshot+merge, loop-body pre-scan covering free_to as well as
+    // reset/destroy). 'regionScratchGeneration_[R]' is bumped by free_to
+    // only, and is what actually staless a reference bound at depth > 0 —
+    // depth-0 (pre-mark) references never consult it at all, which is the
+    // fix for free_to() no longer nuking bindings that exist *outside* the
+    // scratch scope it's rewinding. One remaining imprecision, independent
+    // of flow-sensitivity: both counters are one-per-region rather than
+    // one-per-nesting-level, so a deeply nested mark's free_to can over-
+    // flag an outer scope's still-valid reference (documented, sound-safe
+    // direction — see reference/memory.md).
     std::unordered_map<std::string, int> regionMarkDepth_;
     std::unordered_map<std::string, int> regionScratchGeneration_;
+    // Heap use-after-free/double-free invalidation: bumped every time a
+    // recognized 'std::dealloc(p)' call is seen during traversal, keyed by
+    // *the specific variable's VarDecl* rather than by name (see
+    // Symbol::heapBindGen) — heap allocations are per-variable, not a
+    // shared named entity like an arena region, and keying by VarDecl*
+    // (stable, unique per declaration) sidesteps the false-positive risk a
+    // name-keyed map would have across shadowed/reused variable names.
+    // Same flow-sensitive if/else + loop-body tracking as the arena
+    // counters above (see checkIf/checkWhile/checkFor); intra-procedural
+    // only — a '&heap T' value freed through a *different* variable/alias
+    // than the one being read (including across a function call boundary)
+    // isn't tracked, so this is sound but not exhaustive, same spirit as
+    // every other checker in this section.
+    std::unordered_map<const VarDecl *, int> heapFreeGeneration_;
+    // Suppresses the heap-staleness check in checkIdent for exactly one
+    // identifier occurrence: the argument of 'std::dealloc(p)' itself is
+    // the last *valid* read of 'p', not a use-after-free — same shape of
+    // exemption as suppressArenaStaleCheck_ below.
+    bool suppressHeapStaleCheck_ = false;
     // Suppresses the arena-staleness check in checkIdent for exactly one
     // identifier occurrence: the LHS of 'p = <new-arena-value>;' evaluates
     // 'p' as an assignment target, not a read of its old (possibly stale)
