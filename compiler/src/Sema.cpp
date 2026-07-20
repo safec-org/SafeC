@@ -806,8 +806,20 @@ void Sema::collectRegion(RegionDecl &rd) {
         sym.name = fn->name;
         sym.type = makeReference(fn->funcType(), Region::Static);
         sym.fnDecl = fn.get();
-        // Store in a stable location (leak intentionally — lives as long as compiler)
-        static std::vector<std::unique_ptr<FunctionDecl>> arenaResetFns;
+        // Store in a stable location (leak intentionally — lives as long as
+        // this thread). thread_local, not a plain process-wide static: with
+        // parallel compilation (main.cpp's -j), two threads compiling two
+        // different files that both declare a region would otherwise
+        // push_back into the SAME shared vector with no synchronization — a
+        // real data race, not hypothetical (this codebase's own std/mem.sc,
+        // std/collections/*.sc etc. all declare regions, so any real
+        // parallel build hits this constantly). thread_local keeps each
+        // compiling thread's FunctionDecls in its own vector; still safe to
+        // read from CodeGen afterward as long as Sema and CodeGen for the
+        // same file run on the same thread, which main.cpp's compileOneFile
+        // always does (the whole per-file pipeline is sequential within one
+        // thread, only different files' pipelines run concurrently).
+        thread_local static std::vector<std::unique_ptr<FunctionDecl>> arenaResetFns;
         arenaResetFns.push_back(std::move(fn));
         sym.fnDecl = arenaResetFns.back().get();
         define(sym);
@@ -821,7 +833,7 @@ void Sema::collectRegion(RegionDecl &rd) {
         sym.name = fn->name;
         sym.type = makeReference(fn->funcType(), Region::Static);
         sym.fnDecl = fn.get();
-        static std::vector<std::unique_ptr<FunctionDecl>> arenaDestroyFns;
+        thread_local static std::vector<std::unique_ptr<FunctionDecl>> arenaDestroyFns;
         arenaDestroyFns.push_back(std::move(fn));
         sym.fnDecl = arenaDestroyFns.back().get();
         define(sym);
@@ -838,7 +850,7 @@ void Sema::collectRegion(RegionDecl &rd) {
         sym.name = fn->name;
         sym.type = makeReference(fn->funcType(), Region::Static);
         sym.fnDecl = fn.get();
-        static std::vector<std::unique_ptr<FunctionDecl>> arenaMarkFns;
+        thread_local static std::vector<std::unique_ptr<FunctionDecl>> arenaMarkFns;
         arenaMarkFns.push_back(std::move(fn));
         sym.fnDecl = arenaMarkFns.back().get();
         define(sym);
@@ -861,7 +873,7 @@ void Sema::collectRegion(RegionDecl &rd) {
         sym.name = fn->name;
         sym.type = makeReference(fn->funcType(), Region::Static);
         sym.fnDecl = fn.get();
-        static std::vector<std::unique_ptr<FunctionDecl>> arenaFreeToFns;
+        thread_local static std::vector<std::unique_ptr<FunctionDecl>> arenaFreeToFns;
         arenaFreeToFns.push_back(std::move(fn));
         sym.fnDecl = arenaFreeToFns.back().get();
         define(sym);

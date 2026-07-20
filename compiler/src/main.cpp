@@ -30,19 +30,42 @@
 #include <sstream>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
+#include <atomic>
+#include <mutex>
 
 #ifndef SAFEC_VERSION
 #define SAFEC_VERSION "unknown"
 #endif
 
 // ── CLI options ───────────────────────────────────────────────────────────────
-static llvm::cl::opt<std::string>
-    InputFile(llvm::cl::Positional, llvm::cl::desc("<input.sc>"),
-              llvm::cl::Required);
+// A list, not a single required value: safec accepts one input file (the
+// original, still-default behavior, exercised by every existing script and
+// build in this project) or several, in which case they're compiled in
+// parallel — see compileOneFile/runParallel below. cl::list + cl::Positional
+// is the same idiom llvm-link/llvm-dis use for "one or more trailing file
+// arguments".
+static llvm::cl::list<std::string>
+    InputFiles(llvm::cl::Positional, llvm::cl::desc("<input.sc> [input2.sc ...]"),
+               llvm::cl::OneOrMore);
 
 static llvm::cl::opt<std::string>
-    OutputFile("o", llvm::cl::desc("Output file"),
+    OutputFile("o", llvm::cl::desc("Output file (single input), output "
+                                   "directory (multiple inputs, non---emit-bin), "
+                                   "or combined binary path (multiple inputs "
+                                   "with --emit-bin)"),
                llvm::cl::value_desc("filename"), llvm::cl::init("-"));
+
+// Degree of parallelism when multiple input files are given. 0 (default)
+// means "let std::thread::hardware_concurrency() decide" — matches make -j
+// with no argument being "unlimited" less closely than ninja/cargo's "-j
+// with no value means use all cores" default, which is the more common
+// expectation for a compiler specifically (as opposed to a general build
+// orchestrator that might be juggling other concurrent load too).
+static llvm::cl::opt<unsigned>
+    Jobs("j", llvm::cl::desc("Parallel compile jobs for multiple input files "
+                             "(default: hardware concurrency)"),
+         llvm::cl::value_desc("N"), llvm::cl::init(0));
 
 static llvm::cl::opt<bool>
     EmitLLVM("emit-llvm", llvm::cl::desc("Emit LLVM IR instead of bitcode"));
@@ -300,10 +323,14 @@ static int runTool(const std::string &exe, const std::vector<std::string> &args,
     return rc;
 }
 
-// Assembles+links (or archives) 'llPath' into 'outputPath'. Returns true on
-// success. Consults LinkLibs/LinkLibDirs/Shared/StaticLib/LtoMode/TargetTriple
-// — see their cl::opt declarations above for what each means.
-static bool linkBinary(const std::string &llPath, const std::string &outputPath,
+// Assembles+links (or archives) 'llPaths' (one .ll per compiled input —
+// almost always a single entry, but multiple with --emit-bin over several
+// input files: each compiles to its own temp .ll in parallel, then all of
+// them link into ONE combined binary here, same as 'clang a.o b.o -o prog'
+// linking several object files) into 'outputPath'. Returns true on success.
+// Consults LinkLibs/LinkLibDirs/Shared/StaticLib/LtoMode/TargetTriple — see
+// their cl::opt declarations above for what each means.
+static bool linkBinary(const std::vector<std::string> &llPaths, const std::string &outputPath,
                         llvm::OptimizationLevel optLevel, bool verbose) {
     std::string optFlag = std::string("-O") + optLevelName(optLevel);
 
@@ -323,22 +350,31 @@ static bool linkBinary(const std::string &llPath, const std::string &outputPath,
         // A static library is just an archive — 'ar' does the packaging, no
         // linker/-l/-L/LTO involved (those are link-time concepts; a .a is
         // just object files bundled together for a *later* link to consume).
+        // Each .ll compiles to its own .o first, then all of them go into
+        // one archive.
         std::string clang = findTool("SAFEC_CLANG", "clang");
-        llvm::SmallString<256> objPath(llPath);
-        llvm::sys::path::replace_extension(objPath, "o");
-        std::vector<std::string> compileArgs = { clang, "-c", llPath, "-o", std::string(objPath) };
-        if (!TargetTriple.getValue().empty())
-            compileArgs.push_back("--target=" + TargetTriple.getValue());
-        compileArgs.push_back(optFlag);
-        if (runTool(clang, compileArgs, verbose) != 0) return false;
+        std::vector<std::string> objPaths;
+        for (auto &llPath : llPaths) {
+            llvm::SmallString<256> objPath(llPath);
+            llvm::sys::path::replace_extension(objPath, "o");
+            std::vector<std::string> compileArgs = { clang, "-c", llPath, "-o", std::string(objPath) };
+            if (!TargetTriple.getValue().empty())
+                compileArgs.push_back("--target=" + TargetTriple.getValue());
+            compileArgs.push_back(optFlag);
+            if (runTool(clang, compileArgs, verbose) != 0) return false;
+            objPaths.push_back(std::string(objPath));
+        }
 
         std::string ar = findTool("SAFEC_AR", "ar");
-        std::vector<std::string> arArgs = { ar, "rcs", outputPath, std::string(objPath) };
+        std::vector<std::string> arArgs = { ar, "rcs", outputPath };
+        for (auto &o : objPaths) arArgs.push_back(o);
         return runTool(ar, arArgs, verbose) == 0;
     }
 
     std::string clang = findTool("SAFEC_CLANG", "clang");
-    std::vector<std::string> args = { clang, llPath, "-o", outputPath, optFlag };
+    std::vector<std::string> args = { clang };
+    for (auto &llPath : llPaths) args.push_back(llPath);
+    args.push_back("-o"); args.push_back(outputPath); args.push_back(optFlag);
     if (!TargetTriple.getValue().empty())
         args.push_back("--target=" + TargetTriple.getValue());
     if (!ltoFlag.empty()) args.push_back(ltoFlag);
@@ -414,63 +450,28 @@ static void dumpDecl(safec::Decl &d, int indent = 0) {
     }
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
-int main(int argc, char **argv) {
-    llvm::InitLLVM X(argc, argv);
-
-    // --version is handled by scanning argv directly, before
-    // ParseCommandLineOptions: InputFile is a cl::Required positional, so
-    // the normal parse path exits with a "missing input file" error before
-    // ShowVersion could ever be checked if no .sc file was also given (the
-    // common case: 'safec --version' alone).
-    for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--version") == 0) {
-            fprintf(stdout, "safec %s\n", SAFEC_VERSION);
-            return 0;
-        }
-    }
-
-    // All targets, not just native: --target lets a single safec binary
-    // cross-generate for any ISA this LLVM was built with (this build has
-    // X86, AArch64, RISCV, WebAssembly and SPIRV, among others — see
-    // `llvm-config --targets-built`), which std::simd needs since its
-    // whole point is genuinely different per-ISA vector codegen, not just
-    // whatever the host happens to be.
-    llvm::InitializeAllTargets();
-    llvm::InitializeAllTargetMCs();
-    llvm::InitializeAllAsmPrinters();
-    llvm::InitializeAllAsmParsers();
-
-    llvm::cl::ParseCommandLineOptions(argc, argv, "SafeC compiler\n");
-
-    if (!EmitBin) {
-        if (!LinkLibs.empty() || !LinkLibDirs.empty() || Shared || StaticLib ||
-            LtoMode.getNumOccurrences() > 0) {
-            fprintf(stderr, "warning: -l/-L/--shared/--static-lib/--lto have no "
-                            "effect without --emit-bin\n");
-        }
-    } else if (OutputFile == "-") {
-        fprintf(stderr, "error: --emit-bin requires an explicit -o <path> "
-                        "(stdout is not a valid binary output)\n");
-        return 1;
-    }
-
-    // ── --clear-cache early exit ───────────────────────────────────────────────
-    if (ClearCache) {
-        std::error_code EC;
-        llvm::sys::fs::directory_iterator it(CacheDir, EC), end;
-        for (; !EC && it != end; it.increment(EC)) {
-            llvm::StringRef p = it->path();
-            if (p.ends_with(".bc"))
-                llvm::sys::fs::remove(p);
-        }
-        if (Verbose) fprintf(stderr, "[safec] Cache cleared: %s\n", CacheDir.c_str());
-        return 0;
-    }
-
+// ── Per-file compilation ─────────────────────────────────────────────────────
+// Compiles exactly one .sc file end to end (preprocess through emit).
+// Every piece of state that matters (LLVMContext, DiagEngine, the AST) is a
+// local variable here — nothing this function touches is shared with any
+// other call to it, which is what makes it safe to call concurrently from
+// multiple threads, one per input file (see runParallel below). The one
+// piece of *implicit* shared state that used to violate that — Sema.cpp's
+// per-region synthesized-function vectors — is now thread_local for exactly
+// this reason.
+//
+// 'outputPath' is used directly as this file's final output when EmitBin is
+// off. When EmitBin is on, 'outputPath' is ignored and this function writes
+// a temporary .ll file instead, returned via 'tempLLOut' — the actual
+// clang link step is the caller's job, once every file in the batch has
+// compiled, so N input files can link into ONE combined binary instead of
+// each becoming its own (mirrors 'clang a.o b.o -o prog' linking several
+// object files together).
+static int compileOneFile(const std::string &inputPath, const std::string &outputPath,
+                           const char *argv0, std::string &tempLLOut) {
     // ── 1. Read source ─────────────────────────────────────────────────────────
-    std::string src   = readFile(InputFile);
-    const char *fname = InputFile.c_str();
+    std::string src   = readFile(inputPath);
+    const char *fname = inputPath.c_str();
 
     safec::DiagEngine diag(fname);
 
@@ -518,15 +519,15 @@ int main(int argc, char **argv) {
     // Also skipped for --emit-bin: the cache-hit path below only knows how
     // to replay a cached module as IR text or bitcode, not run it through
     // the link driver, so honoring a hit here would silently skip linking
-    // and leave OutputFile as raw bitcode instead of a real binary/library.
+    // and leave outputPath as raw bitcode instead of a real binary/library.
     if (!NoIncremental && !DumpAST && !EmitBin) {
-        uint64_t hash = fnv1a64(ppSrc + "|" + compilerIdentity(argv[0]) + "|" + cacheKeyFlags());
+        uint64_t hash = fnv1a64(ppSrc + "|" + compilerIdentity(argv0) + "|" + cacheKeyFlags());
         char hexBuf[17];
         snprintf(hexBuf, sizeof(hexBuf), "%016llx", (unsigned long long)hash);
         llvm::SmallString<256> cachePath(CacheDir.getValue());
         llvm::sys::path::append(cachePath,
             std::string(hexBuf) + "_" +
-            llvm::sys::path::filename(InputFile.getValue()).str() + ".bc");
+            llvm::sys::path::filename(inputPath).str() + ".bc");
 
         auto mbOrErr = llvm::MemoryBuffer::getFile(cachePath);
         if (mbOrErr) {
@@ -536,17 +537,16 @@ int main(int argc, char **argv) {
             auto modOrErr = llvm::parseBitcodeFile(**mbOrErr, ctx2);
             if (modOrErr) {
                 auto &cachedMod = *modOrErr;
-                if (OutputFile == "-") {
+                if (outputPath == "-") {
                     cachedMod->print(llvm::outs(), nullptr);
                 } else if (EmitLLVM) {
                     std::error_code EC2;
-                    llvm::raw_fd_ostream out(OutputFile.getValue(), EC2,
+                    llvm::raw_fd_ostream out(outputPath, EC2,
                                             llvm::sys::fs::OF_Text);
                     cachedMod->print(out, nullptr);
                 } else {
                     std::error_code EC2;
-                    std::string outPath = (OutputFile == "-")
-                        ? "out.bc" : OutputFile.getValue();
+                    std::string outPath = (outputPath == "-") ? "out.bc" : outputPath;
                     llvm::raw_fd_ostream out(outPath, EC2,
                                             llvm::sys::fs::OF_None);
                     llvm::WriteBitcodeToFile(*cachedMod, out);
@@ -634,12 +634,16 @@ int main(int argc, char **argv) {
     }
 
     // ── 8. Code generation ────────────────────────────────────────────────────
+    // A fresh LLVMContext per call — LLVMContext is explicitly not safe to
+    // share across threads, so this being a local variable (not, say, a
+    // global reused across calls) is what makes concurrent compileOneFile
+    // calls for different files safe with respect to LLVM's own state.
     llvm::LLVMContext ctx;
     safec::DebugLevel dbgLevel = safec::DebugLevel::None;
     if (DebugInfoLevel == "lines") dbgLevel = safec::DebugLevel::Lines;
     else if (DebugInfoLevel == "full") dbgLevel = safec::DebugLevel::Full;
 
-    safec::CodeGen cg(ctx, InputFile, diag, dbgLevel, TargetTriple);
+    safec::CodeGen cg(ctx, inputPath, diag, dbgLevel, TargetTriple);
     if (Freestanding) cg.setFreestanding(true);
     auto mod = cg.generate(*tu);
 
@@ -662,15 +666,19 @@ int main(int argc, char **argv) {
     }
 
     // ── 8b. Write to incremental cache ───────────────────────────────────────
+    // create_directories on a path multiple threads might hit concurrently
+    // (they all share the same CacheDir) is safe: LLVM's implementation
+    // treats "already exists" as success, not an error, matching POSIX
+    // mkdir -p semantics.
     if (!NoIncremental) {
         llvm::sys::fs::create_directories(CacheDir.getValue());
-        uint64_t hash = fnv1a64(ppSrc + "|" + compilerIdentity(argv[0]) + "|" + cacheKeyFlags());
+        uint64_t hash = fnv1a64(ppSrc + "|" + compilerIdentity(argv0) + "|" + cacheKeyFlags());
         char hexBuf[17];
         snprintf(hexBuf, sizeof(hexBuf), "%016llx", (unsigned long long)hash);
         llvm::SmallString<256> cachePath(CacheDir.getValue());
         llvm::sys::path::append(cachePath,
             std::string(hexBuf) + "_" +
-            llvm::sys::path::filename(InputFile.getValue()).str() + ".bc");
+            llvm::sys::path::filename(inputPath).str() + ".bc");
         std::error_code EC;
         llvm::raw_fd_ostream cacheOut(cachePath, EC, llvm::sys::fs::OF_None);
         if (!EC) llvm::WriteBitcodeToFile(*mod, cacheOut);
@@ -696,32 +704,25 @@ int main(int argc, char **argv) {
             }
             mod->print(out, nullptr);
         }
-        bool ok = linkBinary(std::string(tmpLL), OutputFile.getValue(), optLevel, Verbose);
-        llvm::sys::fs::remove(tmpLL);
-        if (!ok) {
-            fprintf(stderr, "error: linking failed for '%s'\n", OutputFile.c_str());
-            return 1;
-        }
-        if (Verbose) fprintf(stderr, "[safec] Wrote %s: %s\n",
-                             StaticLib ? "static library" : Shared ? "shared library" : "binary",
-                             OutputFile.c_str());
+        tempLLOut = std::string(tmpLL);
+        if (Verbose) fprintf(stderr, "[safec] Compiled %s -> %s\n", fname, tempLLOut.c_str());
         return 0;
     }
 
-    if (OutputFile == "-") {
+    if (outputPath == "-") {
         mod->print(llvm::outs(), nullptr);
     } else if (EmitLLVM) {
         std::error_code EC;
-        llvm::raw_fd_ostream out(OutputFile, EC, llvm::sys::fs::OF_Text);
+        llvm::raw_fd_ostream out(outputPath, EC, llvm::sys::fs::OF_Text);
         if (EC) {
             fprintf(stderr, "error: cannot open output file '%s': %s\n",
-                    OutputFile.c_str(), EC.message().c_str());
+                    outputPath.c_str(), EC.message().c_str());
             return 1;
         }
         mod->print(out, nullptr);
     } else {
         std::error_code EC;
-        std::string outPath = (OutputFile == "-") ? "out.bc" : OutputFile.getValue();
+        std::string outPath = (outputPath == "-") ? "out.bc" : outputPath;
         llvm::raw_fd_ostream out(outPath, EC, llvm::sys::fs::OF_None);
         if (EC) {
             fprintf(stderr, "error: cannot open output file '%s': %s\n",
@@ -730,6 +731,165 @@ int main(int argc, char **argv) {
         }
         llvm::WriteBitcodeToFile(*mod, out);
         if (Verbose) fprintf(stderr, "[safec] Wrote bitcode to %s\n", outPath.c_str());
+    }
+
+    return 0;
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+int main(int argc, char **argv) {
+    llvm::InitLLVM X(argc, argv);
+
+    // --version is handled by scanning argv directly, before
+    // ParseCommandLineOptions: InputFiles is cl::OneOrMore, so the normal
+    // parse path exits with a "missing input file" error before ShowVersion
+    // could ever be checked if no .sc file was also given (the common case:
+    // 'safec --version' alone).
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--version") == 0) {
+            fprintf(stdout, "safec %s\n", SAFEC_VERSION);
+            return 0;
+        }
+    }
+
+    // All targets, not just native: --target lets a single safec binary
+    // cross-generate for any ISA this LLVM was built with (this build has
+    // X86, AArch64, RISCV, WebAssembly and SPIRV, among others — see
+    // `llvm-config --targets-built`), which std::simd needs since its
+    // whole point is genuinely different per-ISA vector codegen, not just
+    // whatever the host happens to be. Called once, here, before any worker
+    // thread exists — LLVM's target-registry init is meant to run once
+    // up front like this, not per-thread.
+    llvm::InitializeAllTargets();
+    llvm::InitializeAllTargetMCs();
+    llvm::InitializeAllAsmPrinters();
+    llvm::InitializeAllAsmParsers();
+
+    llvm::cl::ParseCommandLineOptions(argc, argv, "SafeC compiler\n");
+
+    if (!EmitBin) {
+        if (!LinkLibs.empty() || !LinkLibDirs.empty() || Shared || StaticLib ||
+            LtoMode.getNumOccurrences() > 0) {
+            fprintf(stderr, "warning: -l/-L/--shared/--static-lib/--lto have no "
+                            "effect without --emit-bin\n");
+        }
+    } else if (OutputFile == "-") {
+        fprintf(stderr, "error: --emit-bin requires an explicit -o <path> "
+                        "(stdout is not a valid binary output)\n");
+        return 1;
+    }
+
+    // ── --clear-cache early exit ───────────────────────────────────────────────
+    if (ClearCache) {
+        std::error_code EC;
+        llvm::sys::fs::directory_iterator it(CacheDir, EC), end;
+        for (; !EC && it != end; it.increment(EC)) {
+            llvm::StringRef p = it->path();
+            if (p.ends_with(".bc"))
+                llvm::sys::fs::remove(p);
+        }
+        if (Verbose) fprintf(stderr, "[safec] Cache cleared: %s\n", CacheDir.c_str());
+        return 0;
+    }
+
+    // ── Single input file: identical to every prior safec release ────────────
+    // No thread spun up, no per-file output-path derivation — outputPath is
+    // used exactly as given, exactly like before InputFiles became a list.
+    if (InputFiles.size() == 1) {
+        std::string tempLL;
+        int rc = compileOneFile(InputFiles[0], OutputFile.getValue(), argv[0], tempLL);
+        if (rc != 0) return rc;
+        if (EmitBin) {
+            llvm::OptimizationLevel optLevel = resolveOptLevel();
+            bool ok = linkBinary({tempLL}, OutputFile.getValue(), optLevel, Verbose);
+            llvm::sys::fs::remove(tempLL);
+            if (!ok) {
+                fprintf(stderr, "error: linking failed for '%s'\n", OutputFile.c_str());
+                return 1;
+            }
+            if (Verbose) fprintf(stderr, "[safec] Wrote %s: %s\n",
+                                 StaticLib ? "static library" : Shared ? "shared library" : "binary",
+                                 OutputFile.c_str());
+        }
+        return 0;
+    }
+
+    // ── Multiple input files: parallel compile, scheduled over a thread pool ──
+    // A single -o path can't correspond to N per-file outputs unless
+    // --emit-bin (where linking naturally reduces N inputs to one binary,
+    // same as 'clang a.c b.c -o prog') — everything else writes each file's
+    // output next to that file, so require -o to have been left untouched.
+    if (!EmitBin && OutputFile.getNumOccurrences() > 0) {
+        fprintf(stderr, "error: -o <path> is a single output path and can't be used with "
+                        "multiple input files unless --emit-bin (which links them into one "
+                        "combined binary); omit -o to write each file's output next to its "
+                        "input\n");
+        return 1;
+    }
+
+    std::vector<std::string> perFileOutputs(InputFiles.size());
+    if (!EmitBin) {
+        for (size_t i = 0; i < InputFiles.size(); ++i) {
+            llvm::SmallString<256> out(llvm::sys::path::parent_path(InputFiles[i]));
+            llvm::SmallString<64> base(llvm::sys::path::filename(InputFiles[i]));
+            llvm::sys::path::replace_extension(base, EmitLLVM ? "ll" : "bc");
+            llvm::sys::path::append(out, base);
+            perFileOutputs[i] = std::string(out);
+        }
+    }
+
+    unsigned jobs = Jobs;
+    if (jobs == 0) jobs = std::max(1u, std::thread::hardware_concurrency());
+    jobs = static_cast<unsigned>(std::min<size_t>(jobs, InputFiles.size()));
+    if (Verbose) fprintf(stderr, "[safec] Compiling %zu files with %u parallel job(s)\n",
+                         InputFiles.size(), jobs);
+
+    // Each worker claims the next unclaimed index and runs compileOneFile
+    // for it start to finish on its own thread; every output vector below
+    // is pre-sized before any thread starts and each index is written by
+    // exactly one thread, so no element is ever touched concurrently even
+    // though the vectors themselves are shared.
+    std::atomic<size_t> nextIndex{0};
+    std::atomic<int>    failures{0};
+    std::vector<int>         results(InputFiles.size(), 0);
+    std::vector<std::string> tempLLs(InputFiles.size());
+
+    auto worker = [&]() {
+        for (;;) {
+            size_t i = nextIndex.fetch_add(1);
+            if (i >= InputFiles.size()) return;
+            std::string tempLL;
+            int rc = compileOneFile(InputFiles[i], EmitBin ? std::string() : perFileOutputs[i],
+                                     argv[0], tempLL);
+            results[i] = rc;
+            if (rc != 0) failures.fetch_add(1);
+            else if (EmitBin) tempLLs[i] = tempLL;
+        }
+    };
+
+    std::vector<std::thread> pool;
+    pool.reserve(jobs);
+    for (unsigned t = 0; t < jobs; ++t) pool.emplace_back(worker);
+    for (auto &t : pool) t.join();
+
+    if (failures.load() > 0) {
+        for (auto &llp : tempLLs) if (!llp.empty()) llvm::sys::fs::remove(llp);
+        fprintf(stderr, "error: %d of %zu file(s) failed to compile\n",
+                failures.load(), InputFiles.size());
+        return 1;
+    }
+
+    if (EmitBin) {
+        llvm::OptimizationLevel optLevel = resolveOptLevel();
+        bool ok = linkBinary(tempLLs, OutputFile.getValue(), optLevel, Verbose);
+        for (auto &llp : tempLLs) llvm::sys::fs::remove(llp);
+        if (!ok) {
+            fprintf(stderr, "error: linking failed for '%s'\n", OutputFile.c_str());
+            return 1;
+        }
+        if (Verbose) fprintf(stderr, "[safec] Wrote %s from %zu input(s): %s\n",
+                             StaticLib ? "static library" : Shared ? "shared library" : "binary",
+                             InputFiles.size(), OutputFile.c_str());
     }
 
     return 0;
