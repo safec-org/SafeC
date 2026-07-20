@@ -12,8 +12,6 @@
 // Or use the generic inline helpers below.
 
 #define STATIC_VEC_DECL(TypeName, ElemType, Cap)          \
-namespace std {
-
     struct TypeName {                                      \
         ElemType      data[(Cap)];                        \
         unsigned long len;                                \
@@ -39,7 +37,7 @@ namespace std {
      : 0)
 
 // Peek at last element without removing.
-#define STATIC_VEC_TOP(vec)  ((vec)->data[(vec)->len - 1])
+#define STATIC_VEC_TOP(vec)  ((vec)->data[(vec)->len - 1UL])
 
 // Access element by index (unchecked).
 #define STATIC_VEC_AT(vec, i)  ((vec)->data[(i)])
@@ -78,11 +76,13 @@ static inline int static_map_insert_(unsigned long* keys, void** vals,
     unsigned long i = 0;
     while (i < cap) {
         unsigned long slot = (h + i) % cap;
-        if (!used[slot] || keys[slot] == key) {
-            keys[slot] = key;
-            vals[slot] = val;
-            if (!used[slot]) { used[slot] = 1; (*count)++; }
-            return 1;
+        unsafe {
+            if (!used[slot] || keys[slot] == key) {
+                keys[slot] = key;
+                vals[slot] = val;
+                if (!used[slot]) { used[slot] = 1; (*count)++; }
+                return 1;
+            }
         }
         i++;
     }
@@ -96,8 +96,10 @@ static inline void* static_map_get_(unsigned long* keys, void** vals,
     unsigned long i = 0;
     while (i < cap) {
         unsigned long slot = (h + i) % cap;
-        if (!used[slot]) return (void*)0;
-        if (keys[slot] == key) return vals[slot];
+        unsafe {
+            if (!used[slot]) return (void*)0;
+            if (keys[slot] == key) return vals[slot];
+        }
         i++;
     }
     return (void*)0;
@@ -110,5 +112,3 @@ static inline void* static_map_get_(unsigned long* keys, void** vals,
     static_map_get_((m)->keys, (m)->vals, (m)->used, (m)->cap, (key))
 
 #define STATIC_MAP_LEN(m) ((m)->count)
-
-} // namespace std

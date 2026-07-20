@@ -16,25 +16,25 @@ struct Queue {
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 struct Queue queue_new(unsigned long elem_size);
 struct Queue queue_with_cap(unsigned long elem_size, unsigned long cap);
-void         queue_free(struct Queue* q);
+void         queue_free(&Queue q);
 
 // ── Core operations ───────────────────────────────────────────────────────────
-int           queue_enqueue(struct Queue* q, const void* elem);
-int           queue_dequeue(struct Queue* q, void* out);
-void*         queue_front(struct Queue* q);   // peek front; NULL if empty
-void*         queue_back(struct Queue* q);    // peek back; NULL if empty
-unsigned long queue_len(struct Queue* q);
-int           queue_is_empty(struct Queue* q);
-void          queue_clear(struct Queue* q);
+int           queue_enqueue(&Queue q, const void* elem);
+int           queue_dequeue(&Queue q, void* out);
+void*         queue_front(&Queue q);   // peek front; NULL if empty
+void*         queue_back(&Queue q);    // peek back; NULL if empty
+unsigned long queue_len(&Queue q);
+int           queue_is_empty(&Queue q);
+void          queue_clear(&Queue q);
 
 // ── Typed generic wrappers ────────────────────────────────────────────────────
 generic<T>
-int queue_enqueue_t(struct Queue* q, T val);
+int queue_enqueue_t(&Queue q, T val);
 
 generic<T>
-T* queue_front_t(struct Queue* q);
+T* queue_front_t(&Queue q);
 
 generic<T>
-int queue_dequeue_t(struct Queue* q, T* out);
+int queue_dequeue_t(&Queue q, T* out);
 
 } // namespace std

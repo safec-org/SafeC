@@ -50,16 +50,16 @@ struct HashMap map_with_cap(unsigned long key_size, unsigned long val_size, unsi
 
 // ── String-keyed convenience (keys are const char*) ───────────────────────────
 struct HashMap str_map_new(unsigned long val_size);
-int   str_map_insert(struct HashMap* m, const char* key, const void* val);
-void* str_map_get(struct HashMap* m, const char* key);
-int   str_map_contains(struct HashMap* m, const char* key);
-int   str_map_remove(struct HashMap* m, const char* key);
+int   str_map_insert(&HashMap m, const char* key, const void* val);
+void* str_map_get(&HashMap m, const char* key);
+int   str_map_contains(&HashMap m, const char* key);
+int   str_map_remove(&HashMap m, const char* key);
 
 // ── Typed generic wrappers ────────────────────────────────────────────────────
 generic<T>
-int map_insert_t(&stack HashMap m, const void* key, T val);
+int map_insert_t(&HashMap m, const void* key, T val);
 
 generic<T>
-T* map_get_t(&stack HashMap m, const void* key);
+T* map_get_t(&HashMap m, const void* key);
 
 } // namespace std

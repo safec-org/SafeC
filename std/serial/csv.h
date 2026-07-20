@@ -8,8 +8,8 @@
 // std/collections/string.h) if a column is known to hold numbers.
 //
 //   struct Value rows = csv_parse("name,age\nAda,36\n", &ok);
-//   struct Value* row0 = rows.array_at(0);
-//   struct Value* name = row0->array_at(0);   // VAL_STRING "name"
+//   &Value row0 = rows.array_at(0);
+//   &Value name = row0.array_at(0);   // VAL_STRING "name"
 #pragma once
 #include <std/serial/value.h>
 #include <std/collections/string.h>
@@ -22,10 +22,10 @@ namespace std {
 // json_write formats them, VAL_NULL becomes an empty field. Fields
 // containing a comma, double quote, or newline are quoted per RFC 4180,
 // with embedded double quotes doubled ("" ). Rows are separated by "\n".
-void csv_write(const struct Value* v, struct String* out);
+void csv_write(const &Value v, &String out);
 
 // Convenience wrapper: a fresh String holding just v's CSV text.
-struct String value_to_csv(const struct Value* v);
+struct String value_to_csv(const &Value v);
 
 // Parses a CSV document into a VAL_ARRAY of VAL_ARRAY of VAL_STRING (every
 // field, quoted or not, becomes a string — see the file-level comment).

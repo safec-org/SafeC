@@ -11,10 +11,10 @@
 
 namespace std {
 
-inline const struct PartEntry* PartTable::get(int idx) const {
-    if (idx < 0 || idx >= PART_MAX) { return (const struct PartEntry*)0; }
-    unsafe { return (const struct PartEntry*)&self.entries[idx]; }
-    return (const struct PartEntry*)0;
+inline const ?&PartEntry PartTable::get(int idx) const {
+    if (idx < 0 || idx >= PART_MAX) { return (const ?&PartEntry)(const struct PartEntry*)0; }
+    unsafe { return (const ?&PartEntry)(const struct PartEntry*)&self.entries[idx]; }
+    return (const ?&PartEntry)(const struct PartEntry*)0;
 }
 
 int partition_read(&stack BlockDevice dev, &stack PartTable table_out) {

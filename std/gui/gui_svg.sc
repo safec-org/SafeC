@@ -130,7 +130,7 @@ static struct GuiColor __svg_color(struct String v, int* has) {
 #define GUI_SVG_MAX_POINTS 512
 
 // Even-odd-rule scanline fill.
-static void __svg_fill_polygon(struct GuiWindow* win, int ox, int oy,
+static void __svg_fill_polygon(&GuiWindow win, int ox, int oy,
                                 const double* xs, const double* ys, int n, struct GuiColor color) {
     if (n < 3) { return; }
     unsafe {
@@ -182,7 +182,7 @@ static void __svg_fill_polygon(struct GuiWindow* win, int ox, int oy,
     }
 }
 
-static void __svg_stroke_polyline(struct GuiWindow* win, int ox, int oy,
+static void __svg_stroke_polyline(&GuiWindow win, int ox, int oy,
                                    const double* xs, const double* ys, int n, int closed,
                                    struct GuiColor color) {
     if (n < 2) { return; }
@@ -198,7 +198,7 @@ static void __svg_stroke_polyline(struct GuiWindow* win, int ox, int oy,
     }
 }
 
-static void __svg_draw_shape(struct GuiWindow* win, int ox, int oy,
+static void __svg_draw_shape(&GuiWindow win, int ox, int oy,
                               const double* xs, const double* ys, int n,
                               struct GuiColor fill, int hasFill, struct GuiColor stroke, int hasStroke) {
     if (hasFill) { __svg_fill_polygon(win, ox, oy, xs, ys, n, fill); }
@@ -247,7 +247,7 @@ static void __bezier_flatten(double x0, double y0, double x1, double y1, double 
   }
 }
 
-static void __svg_draw_path(struct GuiWindow* win, int ox, int oy, struct String d,
+static void __svg_draw_path(&GuiWindow win, int ox, int oy, struct String d,
                              struct GuiColor fill, int hasFill, struct GuiColor stroke, int hasStroke) {
     unsigned long len; unsafe { len = d.len; }
     unsigned long i = 0UL;
@@ -339,7 +339,7 @@ static unsigned long __svg_find_tag_end(const char* text, unsigned long len, uns
     return len;
 }
 
-int gui_draw_svg(struct GuiWindow* win, int ox, int oy, const char* svgText) {
+int gui_draw_svg(&GuiWindow win, int ox, int oy, const char* svgText) {
     unsigned long len = 0UL;
     unsafe { while (svgText[len] != '\0') { len = len + 1UL; } }
 

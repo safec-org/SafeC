@@ -38,6 +38,6 @@ struct OAuth2Token oauth2_refresh(const char* tokenHost, unsigned short tokenPor
                                   const char* tokenPath, const char* clientId,
                                   const char* clientSecret, const char* refreshToken, int* ok);
 
-void oauth2_token_free(struct OAuth2Token* t);
+void oauth2_token_free(&OAuth2Token t);
 
 } // namespace std

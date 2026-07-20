@@ -18,6 +18,6 @@ namespace std {
 // code (the default, safe form — mirrors JSX's automatic escaping of
 // embedded expressions). Raw/unescaped interpolation uses '{!expr}' in
 // scx source, which compiles directly to buf.push(expr) instead.
-void scx_append_esc(struct String* buf, const char* s);
+void scx_append_esc(&String buf, const char* s);
 
 } // namespace std

@@ -33,20 +33,20 @@ static void __hydrate_text_int_listener(void* userdata) {
     unsafe { dom_set_text(handle, (const char*)buf); }
 }
 
-void hydrate_bind_text_int_handle(struct Signal* signal, int elementHandle) {
+void hydrate_bind_text_int_handle(&stack Signal signal, int elementHandle) {
     struct HydrateTextBinding* b;
     unsafe { b = (struct HydrateTextBinding*)malloc(sizeof(struct HydrateTextBinding)); }
     if (b == (struct HydrateTextBinding*)0) {
         return;
     }
     unsafe {
-        b->signal = signal;
+        b->signal = (struct Signal*)signal;
         b->elementHandle = elementHandle;
     }
-    unsafe { signal->subscribe(__hydrate_text_int_listener, (void*)b); }
+    unsafe { signal.subscribe(__hydrate_text_int_listener, (void*)b); }
 }
 
-int hydrate_bind_text_int(struct Signal* signal, const char* selector) {
+int hydrate_bind_text_int(&stack Signal signal, const char* selector) {
     int handle = dom_get_element(selector);
     if (handle < 0) {
         return -1;

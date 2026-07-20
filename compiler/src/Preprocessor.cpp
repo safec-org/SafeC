@@ -721,6 +721,24 @@ Preprocessor::computeHygienicRenames(const MacroDef &def, uint64_t hygieneId) co
     bool sawTypeTok        = false; // inside a run of type-looking tokens
     bool expectDeclarator  = false; // next identifier is the name being declared
     bool expectTagName     = false; // next identifier is a struct/union/enum tag (not a declarator)
+    // A 'struct { ... }'/'union { ... }'/'enum { ... }' body declares
+    // *fields*, not local variables — they're only ever reachable through
+    // '.field'/'->field' off the struct's own name, so they can't collide
+    // with a caller's identifier the way a bare local variable could, and
+    // renaming them breaks the struct's public API (a caller expecting
+    // '.len' after 'STATIC_VEC_DECL(...)' would find '__hygN_len'
+    // instead). 'braceIsStructBody' is a stack (parallel to brace nesting)
+    // recording whether each open brace started such a body, so a
+    // declarator seen while any enclosing brace is a struct/union/enum
+    // body is left alone; 'pendingStructTag' bridges the gap between the
+    // 'struct'/'union'/'enum' keyword (and its optional tag name) and the
+    // '{' that actually opens the body.
+    bool pendingStructTag = false;
+    std::vector<bool> braceIsStructBody;
+    auto insideStructBody = [&]() {
+        for (bool b : braceIsStructBody) if (b) return true;
+        return false;
+    };
 
     while (p < body.size()) {
         char c = body[p];
@@ -730,13 +748,27 @@ Preprocessor::computeHygienicRenames(const MacroDef &def, uint64_t hygieneId) co
             ++p;
             while (p < body.size() && body[p] != q) { if (body[p] == '\\') ++p; ++p; }
             if (p < body.size()) ++p;
+            sawTypeTok = expectDeclarator = expectTagName = pendingStructTag = false;
+            continue;
+        }
+        if (c == '{') {
+            braceIsStructBody.push_back(pendingStructTag);
+            pendingStructTag = false;
             sawTypeTok = expectDeclarator = expectTagName = false;
+            ++p;
+            continue;
+        }
+        if (c == '}') {
+            if (!braceIsStructBody.empty()) braceIsStructBody.pop_back();
+            sawTypeTok = expectDeclarator = expectTagName = pendingStructTag = false;
+            ++p;
             continue;
         }
         if (isIdentStart(c)) {
             std::string tok = readIdentAt(body, p);
             if (tok == "struct" || tok == "union" || tok == "enum") {
                 sawTypeTok = true; expectDeclarator = false; expectTagName = true;
+                pendingStructTag = true;
                 continue;
             }
             if (expectTagName) {
@@ -750,7 +782,7 @@ Preprocessor::computeHygienicRenames(const MacroDef &def, uint64_t hygieneId) co
             if (expectDeclarator && sawTypeTok) {
                 bool isParam = std::find(def.params.begin(), def.params.end(), tok)
                                != def.params.end();
-                if (!isParam && !renames.count(tok))
+                if (!isParam && !insideStructBody() && !renames.count(tok))
                     renames[tok] = "__hyg" + std::to_string(hygieneId) + "_" + tok;
                 expectDeclarator = false; // allow a following ', name2' declarator
                 continue;

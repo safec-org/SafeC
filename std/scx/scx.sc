@@ -13,17 +13,17 @@
 
 namespace std {
 
-void scx_append_esc(struct String* buf, const char* s) {
+void scx_append_esc(&String buf, const char* s) {
     unsigned long i = 0UL;
     unsafe {
         while (s[i] != '\0') {
             char c = s[i];
-            if (c == '&') { buf->push("&amp;"); }
-            else if (c == '<') { buf->push("&lt;"); }
-            else if (c == '>') { buf->push("&gt;"); }
-            else if (c == '"') { buf->push("&quot;"); }
-            else if (c == '\'') { buf->push("&#39;"); }
-            else { buf->push_char(c); }
+            if (c == '&') { buf.push("&amp;"); }
+            else if (c == '<') { buf.push("&lt;"); }
+            else if (c == '>') { buf.push("&gt;"); }
+            else if (c == '"') { buf.push("&quot;"); }
+            else if (c == '\'') { buf.push("&#39;"); }
+            else { buf.push_char(c); }
             i = i + 1UL;
         }
     }

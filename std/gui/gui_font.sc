@@ -28,13 +28,13 @@ struct GuiFont gui_font_new(int glyphW, int glyphH, int first, int count) {
     return f;
 }
 
-int gui_font_get_bit(const struct GuiFont* font, int cp, int px, int py) {
+int gui_font_get_bit(const &GuiFont font, int cp, int px, int py) {
     int idx = 0; int glyphW = 0; int glyphH = 0; int count = 0;
     unsafe {
-        idx = cp - font->first;
-        glyphW = font->glyphW;
-        glyphH = font->glyphH;
-        count = font->count;
+        idx = cp - font.first;
+        glyphW = font.glyphW;
+        glyphH = font.glyphH;
+        count = font.count;
     }
     if (idx < 0 || idx >= count) { return 0; }
     if (px < 0 || py < 0 || px >= glyphW || py >= glyphH) { return 0; }
@@ -43,17 +43,17 @@ int gui_font_get_bit(const struct GuiFont* font, int cp, int px, int py) {
     unsigned long byteOff = (unsigned long)(idx * bytesPerGlyph) + (unsigned long)(bitIndex / 8);
     int bitInByte = 7 - (bitIndex % 8);
     unsigned char byteVal;
-    unsafe { byteVal = font->bitmap[byteOff]; }
+    unsafe { byteVal = font.bitmap[byteOff]; }
     return (int)((byteVal >> bitInByte) & 1U);
 }
 
-void gui_font_set_bit(struct GuiFont* font, int cp, int px, int py, int value) {
+void gui_font_set_bit(&GuiFont font, int cp, int px, int py, int value) {
     int idx = 0; int glyphW = 0; int glyphH = 0; int count = 0;
     unsafe {
-        idx = cp - font->first;
-        glyphW = font->glyphW;
-        glyphH = font->glyphH;
-        count = font->count;
+        idx = cp - font.first;
+        glyphW = font.glyphW;
+        glyphH = font.glyphH;
+        count = font.count;
     }
     if (idx < 0 || idx >= count) { return; }
     if (px < 0 || py < 0 || px >= glyphW || py >= glyphH) { return; }
@@ -62,11 +62,11 @@ void gui_font_set_bit(struct GuiFont* font, int cp, int px, int py, int value) {
     unsigned long byteOff = (unsigned long)(idx * bytesPerGlyph) + (unsigned long)(bitIndex / 8);
     int bitInByte = 7 - (bitIndex % 8);
     unsafe {
-        unsigned char cur = font->bitmap[byteOff];
+        unsigned char cur = font.bitmap[byteOff];
         if (value) {
-            font->bitmap[byteOff] = cur | (unsigned char)(1U << bitInByte);
+            font.bitmap[byteOff] = cur | (unsigned char)(1U << bitInByte);
         } else {
-            font->bitmap[byteOff] = cur & (unsigned char)(~(1U << bitInByte));
+            font.bitmap[byteOff] = cur & (unsigned char)(~(1U << bitInByte));
         }
     }
 }
@@ -117,15 +117,15 @@ struct GuiFont gui_font_default() {
     return f;
 }
 
-void gui_font_free(struct GuiFont* font) {
+void gui_font_free(&GuiFont font) {
     unsafe {
-        if ((void*)font->bitmap != (void*)0) { dealloc((void*)font->bitmap); }
-        font->bitmap = (&heap unsigned char)0;
-        font->count = 0;
+        if ((void*)font.bitmap != (void*)0) { dealloc((void*)font.bitmap); }
+        font.bitmap = (&heap unsigned char)0;
+        font.count = 0;
     }
 }
 
-int gui_font_save(const struct GuiFont* font, const char* path) {
+int gui_font_save(const &GuiFont font, const char* path) {
     void* f;
     unsafe { f = file_open(path, "wb"); }
     if (f == (void*)0) { return 0; }
@@ -135,15 +135,15 @@ int gui_font_save(const struct GuiFont* font, const char* path) {
         header[0] = (unsigned char)'S'; header[1] = (unsigned char)'C';
         header[2] = (unsigned char)'X'; header[3] = (unsigned char)'F';
         header[4] = 1U;
-        header[5] = (unsigned char)font->glyphW;
-        header[6] = (unsigned char)font->glyphH;
+        header[5] = (unsigned char)font.glyphW;
+        header[6] = (unsigned char)font.glyphH;
         header[7] = 0U;
-        unsigned int first = (unsigned int)font->first;
+        unsigned int first = (unsigned int)font.first;
         header[8]  = (unsigned char)(first & 0xFFU);
         header[9]  = (unsigned char)((first >> 8) & 0xFFU);
         header[10] = (unsigned char)((first >> 16) & 0xFFU);
         header[11] = (unsigned char)((first >> 24) & 0xFFU);
-        unsigned int count = (unsigned int)font->count;
+        unsigned int count = (unsigned int)font.count;
         header[12] = (unsigned char)(count & 0xFFU);
         header[13] = (unsigned char)((count >> 8) & 0xFFU);
         header[14] = (unsigned char)((count >> 16) & 0xFFU);
@@ -154,15 +154,15 @@ int gui_font_save(const struct GuiFont* font, const char* path) {
     if (wrote != 16UL) { unsafe { file_close(f); } return 0; }
 
     int glyphW; int glyphH; int count;
-    unsafe { glyphW = font->glyphW; glyphH = font->glyphH; count = font->count; }
+    unsafe { glyphW = font.glyphW; glyphH = font.glyphH; count = font.count; }
     unsigned long total = (unsigned long)(__gui_font_bytes_per_glyph(glyphW, glyphH) * count);
     unsigned long bodyWrote;
-    unsafe { bodyWrote = file_write(f, (const void*)font->bitmap, total); }
+    unsafe { bodyWrote = file_write(f, (const void*)font.bitmap, total); }
     unsafe { file_close(f); }
     return (bodyWrote == total) ? 1 : 0;
 }
 
-int gui_font_load(struct GuiFont* outFont, const char* path) {
+int gui_font_load(&GuiFont outFont, const char* path) {
     void* f;
     unsafe { f = file_open(path, "rb"); }
     if (f == (void*)0) { return 0; }
@@ -205,17 +205,17 @@ int gui_font_load(struct GuiFont* outFont, const char* path) {
     return 1;
 }
 
-int gui_draw_text_ex(struct GuiWindow* win, int x, int y, const char* text,
-                      struct GuiColor color, int scale, const struct GuiFont* font) {
+int gui_draw_text_ex(&GuiWindow win, int x, int y, const char* text,
+                      struct GuiColor color, int scale, const &GuiFont font) {
     int cx = x;
     unsigned long i = 0UL;
     unsafe {
         while (text[i] != '\0') {
             int cp = (int)(unsigned char)text[i];
             int py = 0;
-            while (py < font->glyphH) {
+            while (py < font.glyphH) {
                 int px = 0;
-                while (px < font->glyphW) {
+                while (px < font.glyphW) {
                     if (gui_font_get_bit(font, cp, px, py)) {
                         gui_fill_rect(win, cx + px * scale, y + py * scale, scale, scale, color);
                     }
@@ -223,26 +223,26 @@ int gui_draw_text_ex(struct GuiWindow* win, int x, int y, const char* text,
                 }
                 py = py + 1;
             }
-            cx = cx + font->glyphW * scale;
+            cx = cx + font.glyphW * scale;
             i = i + 1UL;
         }
     }
     return cx - x;
 }
 
-int gui_text_width_ex(const char* text, int scale, const struct GuiFont* font) {
+int gui_text_width_ex(const char* text, int scale, const &GuiFont font) {
     unsigned long len = 0UL;
     int glyphW;
     unsafe {
         while (text[len] != '\0') { len = len + 1UL; }
-        glyphW = font->glyphW;
+        glyphW = font.glyphW;
     }
     return (int)len * glyphW * scale;
 }
 
-int gui_text_height_ex(int scale, const struct GuiFont* font) {
+int gui_text_height_ex(int scale, const &GuiFont font) {
     int glyphH;
-    unsafe { glyphH = font->glyphH; }
+    unsafe { glyphH = font.glyphH; }
     return glyphH * scale;
 }
 

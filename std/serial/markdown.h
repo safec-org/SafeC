@@ -45,22 +45,22 @@ struct MdNode {
 };
 
 // Parses 'text' into a heap-allocated MD_DOC root node (see md_free()).
-struct MdNode* md_parse(const char* text);
+&heap MdNode md_parse(const char* text);
 
 // Renders 'doc' (or any node) to an HTML fragment (headings become
 // <h1>-<h6>, paragraphs <p>, lists <ul>/<ol><li>, code blocks <pre><code>,
 // blockquotes <blockquote>, inline runs their usual <strong>/<em>/<code>/
 // <a href>). Text content is HTML-escaped; only md_render_html output
 // itself is trusted markup.
-struct String md_render_html(const struct MdNode* doc);
+struct String md_render_html(const &heap MdNode doc);
 
 // Renders 'doc' back to canonical Markdown text (a round-trip — not
 // guaranteed byte-identical to arbitrary input, since e.g. '*bold*' and
 // '_bold_' both parse to the same MD_BOLD node and always render as
 // '**bold**').
-struct String md_render_markdown(const struct MdNode* doc);
+struct String md_render_markdown(const &heap MdNode doc);
 
 // Recursively frees 'node' and its whole subtree.
-void md_free(struct MdNode* node);
+void md_free(&heap MdNode node);
 
 } // namespace std

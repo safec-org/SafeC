@@ -110,11 +110,11 @@ struct OAuth2Token oauth2_refresh(const char* tokenHost, unsigned short tokenPor
     return t;
 }
 
-void oauth2_token_free(struct OAuth2Token* t) {
+void oauth2_token_free(&OAuth2Token t) {
     unsafe {
-        t->accessToken.free();
-        t->refreshToken.free();
-        t->tokenType.free();
+        t.accessToken.free();
+        t.refreshToken.free();
+        t.tokenType.free();
     }
 }
 

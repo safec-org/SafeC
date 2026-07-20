@@ -25,8 +25,10 @@ struct PartTable {
     int              count;     // number of valid (non-empty) entries
 
     // Access entry by index (0-3).
-    // Returns pointer into entries[]; check entry.type != PART_TYPE_EMPTY.
-    const struct PartEntry* get(int idx) const;
+    // Returns a reference into entries[], or empty (null) if idx is out of
+    // range — check entry.type != PART_TYPE_EMPTY too, for a valid index
+    // that just has no partition recorded there.
+    const ?&PartEntry get(int idx) const;
 };
 
 // Read and parse the MBR from sector 0 of `dev`.

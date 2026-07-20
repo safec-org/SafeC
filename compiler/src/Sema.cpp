@@ -1685,9 +1685,21 @@ void Sema::checkVarDecl(VarDeclStmt &s, FunctionDecl &fn) {
 
     TypePtr initTy;
     if (s.init) {
+        // See expectedType_'s doc comment: an explicit declared type (not
+        // auto-inferred, not already an error) is a fallback hint for
+        // generic-function inference when the initializer is a call whose
+        // type parameter appears only in its return type, e.g.
+        // 'int* p = std::vec_at(&v, 1UL);'. checkCall consumes/clears this
+        // immediately, but only if the initializer actually reaches a call
+        // — always restored below regardless, so a non-call initializer
+        // ('int* p = some_var;') can't leave it dangling for whatever's
+        // checked next.
+        TypePtr savedExpectedType = expectedType_;
+        if (s.declType && !s.declType->isError()) expectedType_ = s.declType;
         initTy = (s.init->kind == ExprKind::Compound)
             ? checkCompoundInit(static_cast<CompoundInitExpr &>(*s.init), s.declType)
             : checkExpr(*s.init);
+        expectedType_ = savedExpectedType;
 
         // Borrow checker: declaring a reference var from address-of ('&region T r = &x')
         // registers the borrow with the *declared* mutability — not always mutable —
@@ -2696,6 +2708,14 @@ TypePtr Sema::checkCall(CallExpr &e) {
         }
     } heapFreeGuard{this};
 
+    // Consume the pending expected-type hint (see expectedType_'s doc
+    // comment in Sema.h) right away so it can't leak into checking this
+    // call's own callee/arguments/any nested call below — only the
+    // generic-inference fallback near the bottom of this function
+    // (matching 'vec_at(&v, i)' against an 'int* p = ...' target) uses it.
+    TypePtr callExpectedType = std::move(expectedType_);
+    expectedType_ = nullptr;
+
     // ── Builtin __safec_join ──────────────────────────────────────────────────
     if (e.callee->kind == ExprKind::Ident) {
         auto &ident = static_cast<IdentExpr &>(*e.callee);
@@ -3139,7 +3159,8 @@ TypePtr Sema::checkCall(CallExpr &e) {
         for (auto &a : e.args) argTypes.push_back(checkExpr(*a));
 
         TypeSubst subs;
-        if (!inferTypeArgs(fnDecl->params, argTypes, fnDecl->genericParams, subs)) {
+        if (!inferTypeArgs(fnDecl->params, argTypes, fnDecl->genericParams, subs,
+                           fnDecl->returnType, callExpectedType)) {
             diag_.error(e.loc,
                 "cannot infer type arguments for generic function '" +
                 fnDecl->name + "'");
@@ -3554,7 +3575,15 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
     TypePtr lhsTy = checkExpr(*e.lhs);
     if (suppressedHere) suppressArenaStaleCheck_ = false;
     if (suppressedHeapHere) suppressHeapStaleCheck_ = false;
+    // See expectedType_'s doc comment: 'p = std::vec_at(&v, 1UL);' (p
+    // already declared 'int*') gets the same fallback hint a var-decl's
+    // explicit type does. Simple assignment only, matching the rebind
+    // logic below this uses lhsTy for.
+    TypePtr savedExpectedType = expectedType_;
+    if (e.op == AssignOp::Assign && lhsTy && !lhsTy->isError())
+        expectedType_ = lhsTy;
     TypePtr rhsTy = checkExpr(*e.rhs);
+    expectedType_ = savedExpectedType;
 
     // Rebind arena tracking: 'p = <arena-ref-value>;' establishes a fresh
     // binding, so p's staleness is judged against the region's generation
@@ -3870,7 +3899,9 @@ bool Sema::matchType(const TypePtr &paramTy, const TypePtr &argTy, TypeSubst &su
 bool Sema::inferTypeArgs(const std::vector<ParamDecl>   &params,
                           const std::vector<TypePtr>      &argTypes,
                           const std::vector<GenericParam> &genericParams,
-                          TypeSubst                       &subs) {
+                          TypeSubst                       &subs,
+                          const TypePtr                   &returnType,
+                          const TypePtr                   &expectedType) {
     // Helper: does this type tree contain a generic param?
     auto hasGeneric = [&](const auto &self, const TypePtr &ty) -> bool {
         if (!ty) return false;
@@ -3918,6 +3949,20 @@ bool Sema::inferTypeArgs(const std::vector<ParamDecl>   &params,
                     return false;
             }
         }
+    }
+    // Fallback for a generic param that appears only in the return type
+    // (e.g. 'generic<T> T* vec_at(&stack Vec v, unsigned long idx)') and so
+    // has nothing to bind against in the loops above: match the function's
+    // return type, as a pattern, against the caller's expected type (see
+    // expectedType_'s doc comment in Sema.h for where that comes from).
+    // Only attempted when something is still unbound, so a call that
+    // already inferred everything from its arguments is unaffected.
+    bool anyUnbound = false;
+    for (auto &gp : genericParams) {
+        if (!gp.isPack && !subs.count(gp.name)) { anyUnbound = true; break; }
+    }
+    if (anyUnbound && returnType && expectedType) {
+        matchType(returnType, expectedType, subs); // best-effort; still verified below
     }
     // Verify all non-pack generic params are bound
     for (auto &gp : genericParams) {

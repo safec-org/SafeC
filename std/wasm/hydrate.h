@@ -20,11 +20,11 @@ namespace std {
 // Does not set the element's *initial* text — call dom_set_text()
 // yourself first (or signal_set_t() once) if it needs to show a value
 // before the first change.
-void hydrate_bind_text_int_handle(struct Signal* signal, int elementHandle);
+void hydrate_bind_text_int_handle(&stack Signal signal, int elementHandle);
 
 // Convenience: dom_get_element(selector) + hydrate_bind_text_int_handle().
 // Returns the resolved element handle (-1 if 'selector' matched nothing,
 // in which case no binding was registered).
-int hydrate_bind_text_int(struct Signal* signal, const char* selector);
+int hydrate_bind_text_int(&stack Signal signal, const char* selector);
 
 } // namespace std

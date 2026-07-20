@@ -168,22 +168,22 @@ struct GuiWindow gui_create_window(const char* title, int width, int height) {
 
 // ── presentation ─────────────────────────────────────────────────────────────
 
-void gui_present(struct GuiWindow* win) {
+void gui_present(&GuiWindow win) {
     int noPlatform = 0;
-    unsafe { if (win->platform == (void*)0) { noPlatform = 1; } }
+    unsafe { if (win.platform == (void*)0) { noPlatform = 1; } }
     if (noPlatform) { return; }
     unsafe {
         MsgSend0 contentView = (MsgSend0)objc_msgSend;
-        void* view = contentView(win->platform, sel_registerName("contentView"));
+        void* view = contentView(win.platform, sel_registerName("contentView"));
         MsgSend0 layerMsg = (MsgSend0)objc_msgSend;
         void* layer = layerMsg(view, sel_registerName("layer"));
 
         void* space = CGColorSpaceCreateDeviceRGB();
-        unsigned long rowBytes = (unsigned long)win->width * 4UL;
-        unsigned long total = rowBytes * (unsigned long)win->height;
-        void* provider = CGDataProviderCreateWithData((void*)0, (const void*)win->pixels, total, (void*)0);
+        unsigned long rowBytes = (unsigned long)win.width * 4UL;
+        unsigned long total = rowBytes * (unsigned long)win.height;
+        void* provider = CGDataProviderCreateWithData((void*)0, (const void*)win.pixels, total, (void*)0);
         // bitmapInfo = kCGImageAlphaPremultipliedLast (1)
-        void* image = CGImageCreate((unsigned long)win->width, (unsigned long)win->height, 8UL, 32UL,
+        void* image = CGImageCreate((unsigned long)win.width, (unsigned long)win.height, 8UL, 32UL,
                                      rowBytes, space, 1U, provider, (const double*)0, 0, 0);
 
         MsgSendVoid1 setContents = (MsgSendVoid1)objc_msgSend;
@@ -195,16 +195,16 @@ void gui_present(struct GuiWindow* win) {
     }
 }
 
-void gui_set_pixel(struct GuiWindow* win, int x, int y, unsigned int rgba) {
+void gui_set_pixel(&GuiWindow win, int x, int y, unsigned int rgba) {
     int oob = 0;
-    unsafe { if (x < 0 || y < 0 || x >= win->width || y >= win->height) { oob = 1; } }
+    unsafe { if (x < 0 || y < 0 || x >= win.width || y >= win.height) { oob = 1; } }
     if (oob) { return; }
     unsafe {
-        unsigned long idx = ((unsigned long)y * (unsigned long)win->width + (unsigned long)x) * 4UL;
-        win->pixels[idx + 0UL] = (unsigned char)((rgba >> 24) & 0xFFU);
-        win->pixels[idx + 1UL] = (unsigned char)((rgba >> 16) & 0xFFU);
-        win->pixels[idx + 2UL] = (unsigned char)((rgba >> 8)  & 0xFFU);
-        win->pixels[idx + 3UL] = (unsigned char)(rgba & 0xFFU);
+        unsigned long idx = ((unsigned long)y * (unsigned long)win.width + (unsigned long)x) * 4UL;
+        win.pixels[idx + 0UL] = (unsigned char)((rgba >> 24) & 0xFFU);
+        win.pixels[idx + 1UL] = (unsigned char)((rgba >> 16) & 0xFFU);
+        win.pixels[idx + 2UL] = (unsigned char)((rgba >> 8)  & 0xFFU);
+        win.pixels[idx + 3UL] = (unsigned char)(rgba & 0xFFU);
     }
 }
 
@@ -224,14 +224,14 @@ static int __gui_cocoa_keycode(unsigned short native) {
     return GUI_KEY_UNKNOWN;
 }
 
-int gui_poll_event(struct GuiWindow* win, struct GuiEvent* outEvent) {
-    unsafe { outEvent->kind = GUI_EVENT_NONE; outEvent->defaultPrevented = 0; }
+int gui_poll_event(&GuiWindow win, &GuiEvent outEvent) {
+    unsafe { outEvent.kind = GUI_EVENT_NONE; outEvent.defaultPrevented = 0; }
 
     if (gCloseRequested) {
         gCloseRequested = 0;
         unsafe {
-            win->shouldClose = 1;
-            outEvent->kind = GUI_EVENT_CLOSE;
+            win.shouldClose = 1;
+            outEvent.kind = GUI_EVENT_CLOSE;
         }
         return 1;
     }
@@ -258,30 +258,30 @@ int gui_poll_event(struct GuiWindow* win, struct GuiEvent* outEvent) {
 
             MsgSendPoint locMsg = (MsgSendPoint)objc_msgSend;
             struct NSPoint loc = locMsg(ev, sel_registerName("locationInWindow"));
-            outEvent->x = loc.x;
-            outEvent->y = (double)win->height - loc.y; // flip to top-left origin
+            outEvent.x = loc.x;
+            outEvent.y = (double)win.height - loc.y; // flip to top-left origin
 
-            if (etype == 1UL) { outEvent->kind = GUI_EVENT_MOUSE_DOWN; outEvent->button = 0; handled = 1; }
-            else if (etype == 2UL) { outEvent->kind = GUI_EVENT_MOUSE_UP; outEvent->button = 0; handled = 1; }
-            else if (etype == 3UL) { outEvent->kind = GUI_EVENT_MOUSE_DOWN; outEvent->button = 1; handled = 1; }
-            else if (etype == 4UL) { outEvent->kind = GUI_EVENT_MOUSE_UP; outEvent->button = 1; handled = 1; }
-            else if (etype == 5UL || etype == 6UL || etype == 7UL) { outEvent->kind = GUI_EVENT_MOUSE_MOVE; handled = 1; }
+            if (etype == 1UL) { outEvent.kind = GUI_EVENT_MOUSE_DOWN; outEvent.button = 0; handled = 1; }
+            else if (etype == 2UL) { outEvent.kind = GUI_EVENT_MOUSE_UP; outEvent.button = 0; handled = 1; }
+            else if (etype == 3UL) { outEvent.kind = GUI_EVENT_MOUSE_DOWN; outEvent.button = 1; handled = 1; }
+            else if (etype == 4UL) { outEvent.kind = GUI_EVENT_MOUSE_UP; outEvent.button = 1; handled = 1; }
+            else if (etype == 5UL || etype == 6UL || etype == 7UL) { outEvent.kind = GUI_EVENT_MOUSE_MOVE; handled = 1; }
             else if (etype == 22UL) {
                 MsgSendDouble dxMsg = (MsgSendDouble)objc_msgSend;
                 double dx = dxMsg(ev, sel_registerName("scrollingDeltaX"));
                 MsgSendDouble dyMsg = (MsgSendDouble)objc_msgSend;
                 double dy = dyMsg(ev, sel_registerName("scrollingDeltaY"));
-                outEvent->kind = GUI_EVENT_SCROLL;
-                outEvent->scrollDx = dx;
-                outEvent->scrollDy = dy;
+                outEvent.kind = GUI_EVENT_SCROLL;
+                outEvent.scrollDx = dx;
+                outEvent.scrollDy = dy;
                 handled = 1;
             }
             else if (etype == 10UL || etype == 11UL) {
                 MsgSendRetUShort kcMsg = (MsgSendRetUShort)objc_msgSend;
                 unsigned short nativeKc = kcMsg(ev, sel_registerName("keyCode"));
-                outEvent->kind = (etype == 10UL) ? GUI_EVENT_KEY_DOWN : GUI_EVENT_KEY_UP;
-                outEvent->keycode = __gui_cocoa_keycode(nativeKc);
-                outEvent->codepoint = 0U;
+                outEvent.kind = (etype == 10UL) ? GUI_EVENT_KEY_DOWN : GUI_EVENT_KEY_UP;
+                outEvent.keycode = __gui_cocoa_keycode(nativeKc);
+                outEvent.codepoint = 0U;
                 if (etype == 10UL) {
                     // Also decode the typed character (if any) into
                     // codepoint, so a focused text widget can insert it
@@ -297,7 +297,7 @@ int gui_poll_event(struct GuiWindow* win, struct GuiEvent* outEvent) {
                         if (cstr != (void*)0) {
                             const char* s = (const char*)cstr;
                             if (s[0] != '\0') {
-                                outEvent->codepoint = (unsigned int)(unsigned char)s[0];
+                                outEvent.codepoint = (unsigned int)(unsigned char)s[0];
                             }
                         }
                     }
@@ -309,16 +309,16 @@ int gui_poll_event(struct GuiWindow* win, struct GuiEvent* outEvent) {
     return handled;
 }
 
-void gui_destroy_window(struct GuiWindow* win) {
+void gui_destroy_window(&GuiWindow win) {
     unsafe {
-        if (win->platform != (void*)0) {
+        if (win.platform != (void*)0) {
             MsgSendVoid0 closeMsg = (MsgSendVoid0)objc_msgSend;
-            closeMsg(win->platform, sel_registerName("close"));
+            closeMsg(win.platform, sel_registerName("close"));
         }
-        if ((void*)win->pixels != (void*)0) {
-            dealloc((void*)win->pixels);
+        if ((void*)win.pixels != (void*)0) {
+            dealloc((void*)win.pixels);
         }
-        win->platform = (void*)0;
+        win.platform = (void*)0;
     }
 }
 
@@ -349,15 +349,15 @@ extern void  CGContextSelectFont(void* ctx, const char* fontName, double size, u
 extern void  CGContextSetTextDrawingMode(void* ctx, unsigned int mode);
 extern void  CGContextShowTextAtPoint(void* ctx, double x, double y, const char* text, unsigned long length);
 
-int gui_draw_text_system(struct GuiWindow* win, int x, int y, const char* text,
+int gui_draw_text_system(&GuiWindow win, int x, int y, const char* text,
                           struct GuiColor color, double fontSize, const char* fontName) {
     unsafe {
         void* space = CGColorSpaceCreateDeviceRGB();
-        unsigned long rowBytes = (unsigned long)win->width * 4UL;
-        // Draws directly into win->pixels (no separate blit) — same
+        unsigned long rowBytes = (unsigned long)win.width * 4UL;
+        // Draws directly into win.pixels (no separate blit) — same
         // buffer gui_present() reads every frame.
-        void* ctx = CGBitmapContextCreate((void*)win->pixels, (unsigned long)win->width,
-                                           (unsigned long)win->height, 8UL, rowBytes, space, 1U);
+        void* ctx = CGBitmapContextCreate((void*)win.pixels, (unsigned long)win.width,
+                                           (unsigned long)win.height, 8UL, rowBytes, space, 1U);
         if (ctx == (void*)0) { CGColorSpaceRelease(space); return 0; }
 
         CGContextSetRGBFillColor(ctx, (double)color.r / 255.0, (double)color.g / 255.0,
@@ -370,7 +370,7 @@ int gui_draw_text_system(struct GuiWindow* win, int x, int y, const char* text,
         // CGBitmapContextCreate's coordinate origin is bottom-left; flip
         // Y (and nudge up by the font size so 'y' means "top of the text"
         // like gui_draw_text(), not the Quartz baseline).
-        double cgY = (double)win->height - (double)y - fontSize;
+        double cgY = (double)win.height - (double)y - fontSize;
         CGContextShowTextAtPoint(ctx, (double)x, cgY, text, textLen);
 
         CGContextRelease(ctx);

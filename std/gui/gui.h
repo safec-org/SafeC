@@ -87,16 +87,16 @@ struct GuiWindow gui_create_window(const char* title, int width, int height);
 // or returns 0 immediately if none is pending (never blocks) — call in a
 // loop ("while (gui_poll_event(&win, &ev)) { ... }") once per frame to
 // drain everything queued since the last call. Also updates
-// win->shouldClose when the platform's own close control is used.
-int gui_poll_event(struct GuiWindow* win, struct GuiEvent* outEvent);
+// win.shouldClose when the platform's own close control is used.
+int gui_poll_event(&GuiWindow win, &GuiEvent outEvent);
 
-// Uploads win->pixels to the screen. Call once per frame after drawing.
-void gui_present(struct GuiWindow* win);
+// Uploads win.pixels to the screen. Call once per frame after drawing.
+void gui_present(&GuiWindow win);
 
 // Sets pixel (x,y) to 'rgba' (0xRRGGBBAA), no-op if out of bounds.
-void gui_set_pixel(struct GuiWindow* win, int x, int y, unsigned int rgba);
+void gui_set_pixel(&GuiWindow win, int x, int y, unsigned int rgba);
 
 // Releases the window and its pixel buffer.
-void gui_destroy_window(struct GuiWindow* win);
+void gui_destroy_window(&GuiWindow win);
 
 } // namespace std

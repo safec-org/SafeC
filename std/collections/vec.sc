@@ -288,7 +288,7 @@ int vec_push_t(&stack Vec v, T val) {
 
 generic<T>
 T* vec_at(&stack Vec v, unsigned long idx) {
-    return (T*)v.get_raw(idx);
+    unsafe { return (T*)v.get_raw(idx); }
 }
 
 generic<T>

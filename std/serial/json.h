@@ -23,10 +23,10 @@ namespace std {
 
 // Appends v's JSON text representation to 'out' (does not clear 'out'
 // first — lets you build up a larger document across multiple calls).
-void json_write(const struct Value* v, struct String* out);
+void json_write(const &Value v, &String out);
 
 // Convenience wrapper: a fresh String holding just v's JSON text.
-struct String value_to_json(const struct Value* v);
+struct String value_to_json(const &Value v);
 
 // Parses a JSON document. On success, '*ok' (if non-NULL) is set to 1 and
 // the parsed tree is returned; on failure, '*ok' is set to 0 and the

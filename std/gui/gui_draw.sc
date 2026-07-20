@@ -127,7 +127,7 @@ static unsigned int __gui_pack(struct GuiColor c) {
     return (r << 24) | (g << 16) | (b << 8) | a;
 }
 
-void gui_fill_rect(struct GuiWindow* win, int x, int y, int w, int h, struct GuiColor color) {
+void gui_fill_rect(&GuiWindow win, int x, int y, int w, int h, struct GuiColor color) {
     unsigned int rgbaPacked = __gui_pack(color);
     int yy = y;
     while (yy < y + h) {
@@ -140,7 +140,7 @@ void gui_fill_rect(struct GuiWindow* win, int x, int y, int w, int h, struct Gui
     }
 }
 
-void gui_draw_rect_border(struct GuiWindow* win, int x, int y, int w, int h,
+void gui_draw_rect_border(&GuiWindow win, int x, int y, int w, int h,
                            struct GuiColor color, int thickness) {
     gui_fill_rect(win, x, y, w, thickness, color);
     gui_fill_rect(win, x, y + h - thickness, w, thickness, color);
@@ -148,7 +148,7 @@ void gui_draw_rect_border(struct GuiWindow* win, int x, int y, int w, int h,
     gui_fill_rect(win, x + w - thickness, y, thickness, h, color);
 }
 
-void gui_draw_line(struct GuiWindow* win, int x0, int y0, int x1, int y1, struct GuiColor color) {
+void gui_draw_line(&GuiWindow win, int x0, int y0, int x1, int y1, struct GuiColor color) {
     unsigned int rgbaPacked = __gui_pack(color);
     int dx = x1 - x0; if (dx < 0) { dx = -dx; }
     int dy = y1 - y0; if (dy < 0) { dy = -dy; }
@@ -168,7 +168,7 @@ void gui_draw_line(struct GuiWindow* win, int x0, int y0, int x1, int y1, struct
     }
 }
 
-static void __gui_draw_glyph(struct GuiWindow* win, int x, int y, char ch,
+static void __gui_draw_glyph(&GuiWindow win, int x, int y, char ch,
                               struct GuiColor color, int scale) {
     int code = (int)(unsigned char)ch;
     if (code < GUI_FONT_FIRST || code > GUI_FONT_LAST) { return; }
@@ -191,7 +191,7 @@ static void __gui_draw_glyph(struct GuiWindow* win, int x, int y, char ch,
     (void)rgbaPacked;
 }
 
-int gui_draw_text(struct GuiWindow* win, int x, int y, const char* text,
+int gui_draw_text(&GuiWindow win, int x, int y, const char* text,
                    struct GuiColor color, int scale) {
     int cx = x;
     unsigned long i = 0UL;

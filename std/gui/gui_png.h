@@ -23,12 +23,12 @@ struct GuiImage {
 // Decodes a PNG file's bytes (already read into memory) into 'out'.
 // Returns 1 on success, 0 on failure (unsupported feature or malformed
 // input) — 'out' is left zeroed on failure.
-int gui_load_png(const unsigned char* data, unsigned long size, struct GuiImage* out);
+int gui_load_png(const unsigned char* data, unsigned long size, &GuiImage out);
 
 // Draws 'img' with its top-left at (x, y) into 'win' (see gui_draw.h) —
 // works with any GuiImage, PNG-decoded or otherwise constructed.
-void gui_draw_image(struct GuiWindow* win, int x, int y, const struct GuiImage* img);
+void gui_draw_image(&GuiWindow win, int x, int y, const &GuiImage img);
 
-void gui_image_free(struct GuiImage* img);
+void gui_image_free(&GuiImage img);
 
 } // namespace std

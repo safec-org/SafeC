@@ -223,25 +223,25 @@ struct GuiWindow gui_create_window(const char* title, int width, int height) {
     return win;
 }
 
-void gui_present(struct GuiWindow* win) {
+void gui_present(&GuiWindow win) {
     int hasPlatform = 0;
-    unsafe { if (win->platform != (void*)0) { hasPlatform = 1; } }
+    unsafe { if (win.platform != (void*)0) { hasPlatform = 1; } }
     if (!hasPlatform) { return; }
     unsafe {
-        struct GuiX11Platform* p = (struct GuiX11Platform*)win->platform;
+        struct GuiX11Platform* p = (struct GuiX11Platform*)win.platform;
         int screen = XDefaultScreen(p->display);
         void* visual = XDefaultVisual(p->display, screen);
         unsigned int depth = XDefaultDepth(p->display, screen);
         // ZPixmap = 2. bytesPerLine=0 lets Xlib compute it from width*32bpp.
         void* image = XCreateImage(p->display, visual, depth, 2, 0,
-                                    (const void*)win->pixels,
-                                    (unsigned int)win->width, (unsigned int)win->height,
+                                    (const void*)win.pixels,
+                                    (unsigned int)win.width, (unsigned int)win.height,
                                     32, 0);
         if (image != (void*)0) {
             XPutImage(p->display, p->window, p->gc, image, 0, 0, 0, 0,
-                      (unsigned int)win->width, (unsigned int)win->height);
+                      (unsigned int)win.width, (unsigned int)win.height);
             // XCreateImage takes ownership of 'data' for XDestroyImage's
-            // sake in real Xlib usage; since win->pixels is *our* buffer
+            // sake in real Xlib usage; since win.pixels is *our* buffer
             // (reused every frame, not handed off), a real integration
             // must NOT let XDestroyImage free it — build with a static
             // XImage and memcpy per frame instead of XCreateImage-per-
@@ -252,31 +252,31 @@ void gui_present(struct GuiWindow* win) {
     }
 }
 
-void gui_set_pixel(struct GuiWindow* win, int x, int y, unsigned int rgba) {
+void gui_set_pixel(&GuiWindow win, int x, int y, unsigned int rgba) {
     int oob = 0;
-    unsafe { if (x < 0 || y < 0 || x >= win->width || y >= win->height) { oob = 1; } }
+    unsafe { if (x < 0 || y < 0 || x >= win.width || y >= win.height) { oob = 1; } }
     if (oob) { return; }
     unsafe {
-        unsigned long idx = ((unsigned long)y * (unsigned long)win->width + (unsigned long)x) * 4UL;
+        unsigned long idx = ((unsigned long)y * (unsigned long)win.width + (unsigned long)x) * 4UL;
         // XCreateImage with ZPixmap defaults to the server's native byte
         // order for 32bpp TrueColor, virtually always BGRA/little-endian
         // on X86/ARM Linux (matches Win32's DIB convention) — swap R/B
         // here for the same reason gui_win32.sc does.
-        win->pixels[idx + 0UL] = (unsigned char)((rgba >> 8)  & 0xFFU); // B
-        win->pixels[idx + 1UL] = (unsigned char)((rgba >> 16) & 0xFFU); // G
-        win->pixels[idx + 2UL] = (unsigned char)((rgba >> 24) & 0xFFU); // R
-        win->pixels[idx + 3UL] = (unsigned char)(rgba & 0xFFU);          // A
+        win.pixels[idx + 0UL] = (unsigned char)((rgba >> 8)  & 0xFFU); // B
+        win.pixels[idx + 1UL] = (unsigned char)((rgba >> 16) & 0xFFU); // G
+        win.pixels[idx + 2UL] = (unsigned char)((rgba >> 24) & 0xFFU); // R
+        win.pixels[idx + 3UL] = (unsigned char)(rgba & 0xFFU);          // A
     }
 }
 
-int gui_poll_event(struct GuiWindow* win, struct GuiEvent* outEvent) {
-    unsafe { outEvent->kind = GUI_EVENT_NONE; outEvent->defaultPrevented = 0; }
+int gui_poll_event(&GuiWindow win, &GuiEvent outEvent) {
+    unsafe { outEvent.kind = GUI_EVENT_NONE; outEvent.defaultPrevented = 0; }
     int hasPlatform = 0;
-    unsafe { if (win->platform != (void*)0) { hasPlatform = 1; } }
+    unsafe { if (win.platform != (void*)0) { hasPlatform = 1; } }
     if (!hasPlatform) { return 0; }
 
     unsafe {
-        struct GuiX11Platform* p = (struct GuiX11Platform*)win->platform;
+        struct GuiX11Platform* p = (struct GuiX11Platform*)win.platform;
         if (XPending(p->display) == 0) { return 0; }
 
         struct X11EventBuf buf;
@@ -287,61 +287,61 @@ int gui_poll_event(struct GuiWindow* win, struct GuiEvent* outEvent) {
         if (t == GUI_X11_CLIENT_MESSAGE_TYPE) {
             struct X11ClientMessageEvent* cm = (struct X11ClientMessageEvent*)&buf;
             if ((unsigned long)cm->data0 == p->wmDeleteMessage) {
-                win->shouldClose = 1;
-                outEvent->kind = GUI_EVENT_CLOSE;
+                win.shouldClose = 1;
+                outEvent.kind = GUI_EVENT_CLOSE;
                 return 1;
             }
             return 0;
         }
         if (t == GUI_X11_BUTTON_PRESS_TYPE || t == GUI_X11_BUTTON_RELEASE_TYPE) {
             struct X11ButtonEvent* be = (struct X11ButtonEvent*)&buf;
-            outEvent->kind = (t == GUI_X11_BUTTON_PRESS_TYPE) ? GUI_EVENT_MOUSE_DOWN : GUI_EVENT_MOUSE_UP;
-            outEvent->x = (double)be->x; outEvent->y = (double)be->y;
+            outEvent.kind = (t == GUI_X11_BUTTON_PRESS_TYPE) ? GUI_EVENT_MOUSE_DOWN : GUI_EVENT_MOUSE_UP;
+            outEvent.x = (double)be->x; outEvent.y = (double)be->y;
             // Button1=left(1), Button2=middle, Button3=right in X11's
             // 1-based numbering — map to gui.h's 0=left/1=right/2=other.
-            if (be->button == 1U) { outEvent->button = 0; }
-            else if (be->button == 3U) { outEvent->button = 1; }
-            else { outEvent->button = 2; }
+            if (be->button == 1U) { outEvent.button = 0; }
+            else if (be->button == 3U) { outEvent.button = 1; }
+            else { outEvent.button = 2; }
             return 1;
         }
         if (t == GUI_X11_MOTION_NOTIFY_TYPE) {
             struct X11MotionEvent* me = (struct X11MotionEvent*)&buf;
-            outEvent->kind = GUI_EVENT_MOUSE_MOVE;
-            outEvent->x = (double)me->x; outEvent->y = (double)me->y;
+            outEvent.kind = GUI_EVENT_MOUSE_MOVE;
+            outEvent.x = (double)me->x; outEvent.y = (double)me->y;
             return 1;
         }
         if (t == GUI_X11_KEY_PRESS_TYPE || t == GUI_X11_KEY_RELEASE_TYPE) {
             struct X11KeyEvent* ke = (struct X11KeyEvent*)&buf;
-            outEvent->kind = (t == GUI_X11_KEY_PRESS_TYPE) ? GUI_EVENT_KEY_DOWN : GUI_EVENT_KEY_UP;
-            outEvent->keycode = __gui_x11_keycode(ke->keycode);
+            outEvent.kind = (t == GUI_X11_KEY_PRESS_TYPE) ? GUI_EVENT_KEY_DOWN : GUI_EVENT_KEY_UP;
+            outEvent.keycode = __gui_x11_keycode(ke->keycode);
             // Full text (via XLookupString + an XIC for proper input-
             // method support) isn't wired up here — see file header;
             // codepoint stays 0, same keycode-only limitation gui_win32.sc
             // documents.
-            outEvent->codepoint = 0U;
+            outEvent.codepoint = 0U;
             return 1;
         }
         if (t == GUI_X11_CONFIGURE_NOTIFY_TYPE) {
             struct X11ConfigureEvent* ce = (struct X11ConfigureEvent*)&buf;
-            outEvent->kind = GUI_EVENT_RESIZE;
-            outEvent->width = ce->w; outEvent->height = ce->h;
+            outEvent.kind = GUI_EVENT_RESIZE;
+            outEvent.width = ce->w; outEvent.height = ce->h;
             return 1;
         }
         return 0;
     }
 }
 
-void gui_destroy_window(struct GuiWindow* win) {
+void gui_destroy_window(&GuiWindow win) {
     unsafe {
-        if (win->platform != (void*)0) {
-            struct GuiX11Platform* p = (struct GuiX11Platform*)win->platform;
+        if (win.platform != (void*)0) {
+            struct GuiX11Platform* p = (struct GuiX11Platform*)win.platform;
             if (p->gc != (void*)0) { XFreeGC(p->display, p->gc); }
             XDestroyWindow(p->display, p->window);
             XCloseDisplay(p->display);
             dealloc((void*)p);
         }
-        if ((void*)win->pixels != (void*)0) { dealloc((void*)win->pixels); }
-        win->platform = (void*)0;
+        if ((void*)win.pixels != (void*)0) { dealloc((void*)win.pixels); }
+        win.platform = (void*)0;
     }
 }
 

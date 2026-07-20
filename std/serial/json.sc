@@ -24,14 +24,14 @@ static char json_hex_digit_(int v) {
 // Appends s[run_start, i) as one push_n() call — batching runs of bytes
 // that need no escaping avoids a push_char() (and reserve_() check) per
 // byte, which matters since most string content has no special chars.
-static void json_flush_run_(struct String* out, const char* s, unsigned long run_start, unsigned long i) {
+static void json_flush_run_(&String out, const char* s, unsigned long run_start, unsigned long i) {
     if (i > run_start) {
-        unsafe { out->push_n(s + run_start, i - run_start); }
+        unsafe { out.push_n(s + run_start, i - run_start); }
     }
 }
 
-static void json_append_escaped_(struct String* out, const char* s) {
-    unsafe { out->push_char('"'); }
+static void json_append_escaped_(&String out, const char* s) {
+    unsafe { out.push_char('"'); }
     unsigned long i = 0UL;
     unsigned long run_start = 0UL;
     while (1) {
@@ -41,20 +41,20 @@ static void json_append_escaped_(struct String* out, const char* s) {
         if (c == '"' || c == '\\' || c == '\n' || c == '\r' || c == '\t' || (int)c < 32) {
             json_flush_run_(out, s, run_start, i);
             if (c == '"') {
-                unsafe { out->push("\\\""); }
+                unsafe { out.push("\\\""); }
             } else if (c == '\\') {
-                unsafe { out->push("\\\\"); }
+                unsafe { out.push("\\\\"); }
             } else if (c == '\n') {
-                unsafe { out->push("\\n"); }
+                unsafe { out.push("\\n"); }
             } else if (c == '\r') {
-                unsafe { out->push("\\r"); }
+                unsafe { out.push("\\r"); }
             } else if (c == '\t') {
-                unsafe { out->push("\\t"); }
+                unsafe { out.push("\\t"); }
             } else {
                 unsafe {
-                    out->push("\\u00");
-                    out->push_char(json_hex_digit_(((int)c >> 4) & 0xF));
-                    out->push_char(json_hex_digit_((int)c & 0xF));
+                    out.push("\\u00");
+                    out.push_char(json_hex_digit_(((int)c >> 4) & 0xF));
+                    out.push_char(json_hex_digit_((int)c & 0xF));
                 }
             }
             i = i + 1UL;
@@ -64,91 +64,91 @@ static void json_append_escaped_(struct String* out, const char* s) {
         }
     }
     json_flush_run_(out, s, run_start, i);
-    unsafe { out->push_char('"'); }
+    unsafe { out.push_char('"'); }
 }
 
 // push_float always emits a fixed number of decimals ('3.140000') — trim
 // the trailing zeros (and a now-bare trailing '.') so ordinary values read
 // the way a human (or another JSON parser's float formatter) would write
 // them, without losing precision push_float actually computed.
-static void json_append_float_(struct String* out, double v) {
+static void json_append_float_(&String out, double v) {
     unsafe {
-        unsigned long before = out->length();
-        out->push_float(v, 6);
-        unsigned long end = out->length();
+        unsigned long before = out.length();
+        out.push_float(v, 6);
+        unsigned long end = out.length();
         while (end > before) {
-            int c = out->char_at(end - 1UL);
+            int c = out.char_at(end - 1UL);
             if (c != (int)'0') { break; }
             end = end - 1UL;
         }
         if (end > before) {
-            int c = out->char_at(end - 1UL);
+            int c = out.char_at(end - 1UL);
             if (c == (int)'.') { end = end - 1UL; }
         }
-        out->truncate(end);
+        out.truncate(end);
     }
 }
 
-void json_write(const struct Value* v, struct String* out) {
+void json_write(const &Value v, &String out) {
     int kind;
-    unsafe { kind = v->kind; }
+    unsafe { kind = v.kind; }
     if (kind == VAL_NULL) {
-        unsafe { out->push("null"); }
+        unsafe { out.push("null"); }
     } else if (kind == VAL_BOOL) {
         int b;
-        unsafe { b = v->bool_val; }
-        unsafe { out->push(b != 0 ? "true" : "false"); }
+        unsafe { b = v.bool_val; }
+        unsafe { out.push(b != 0 ? "true" : "false"); }
     } else if (kind == VAL_INT) {
         long long n;
-        unsafe { n = v->int_val; }
-        unsafe { out->push_int(n); }
+        unsafe { n = v.int_val; }
+        unsafe { out.push_int(n); }
     } else if (kind == VAL_FLOAT) {
         double f;
-        unsafe { f = v->float_val; }
+        unsafe { f = v.float_val; }
         json_append_float_(out, f);
     } else if (kind == VAL_STRING) {
         const char* s;
         unsafe {
-            if (v->str_val != (char*)0) { s = (const char*)v->str_val; }
+            if (v.str_val != (char*)0) { s = (const char*)v.str_val; }
             else { s = (const char*)""; }
         }
         json_append_escaped_(out, s);
     } else if (kind == VAL_ARRAY) {
-        unsafe { out->push_char('['); }
+        unsafe { out.push_char('['); }
         unsigned long n;
-        unsafe { n = v->arr_val.length(); }
+        unsafe { n = v.arr_val.length(); }
         unsigned long i = 0UL;
         while (i < n) {
-            if (i > 0UL) { unsafe { out->push_char(','); } }
+            if (i > 0UL) { unsafe { out.push_char(','); } }
             struct Value* elem;
-            unsafe { elem = (struct Value*)v->arr_val.get_raw(i); }
+            unsafe { elem = (struct Value*)v.arr_val.get_raw(i); }
             json_write(elem, out);
             i = i + 1UL;
         }
-        unsafe { out->push_char(']'); }
+        unsafe { out.push_char(']'); }
     } else if (kind == VAL_OBJECT) {
-        unsafe { out->push_char('{'); }
+        unsafe { out.push_char('{'); }
         unsigned long n;
-        unsafe { n = v->obj_val.length(); }
+        unsafe { n = v.obj_val.length(); }
         unsigned long i = 0UL;
         while (i < n) {
-            if (i > 0UL) { unsafe { out->push_char(','); } }
+            if (i > 0UL) { unsafe { out.push_char(','); } }
             struct ObjectEntry* e;
-            unsafe { e = (struct ObjectEntry*)v->obj_val.get_raw(i); }
+            unsafe { e = (struct ObjectEntry*)v.obj_val.get_raw(i); }
             const char* key;
             unsafe { key = (const char*)e->key; }
             json_append_escaped_(out, key);
-            unsafe { out->push_char(':'); }
+            unsafe { out.push_char(':'); }
             struct Value* val;
             unsafe { val = e->val; }
             json_write(val, out);
             i = i + 1UL;
         }
-        unsafe { out->push_char('}'); }
+        unsafe { out.push_char('}'); }
     }
 }
 
-inline struct String value_to_json(const struct Value* v) {
+inline struct String value_to_json(const &Value v) {
     struct String out = string_new();
     json_write(v, &out);
     return out;

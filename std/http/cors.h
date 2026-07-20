@@ -19,13 +19,13 @@ namespace std {
 
 // True if 'req' is a CORS preflight request (OPTIONS with an
 // 'Access-Control-Request-Method' header).
-int cors_is_preflight(const struct HttpRequest* req);
+int cors_is_preflight(const &HttpRequest req);
 
 // Adds 'Access-Control-Allow-Origin: <allowedOrigin>' (and
 // '...-Credentials: true' when 'allowedOrigin' isn't "*") to 'resp's
 // headers — call on every response (not just preflights) so the browser
 // accepts the actual response, not just the preflight.
-void cors_apply_headers(struct HttpResponse* resp, const char* allowedOrigin);
+void cors_apply_headers(&HttpResponse resp, const char* allowedOrigin);
 
 // Builds a complete 204 response for a preflight OPTIONS request, with
 // Allow-Origin/-Methods/-Headers/-Max-Age all set.

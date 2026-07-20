@@ -25,8 +25,8 @@ static int csv_needs_quoting_(const char* s) {
     }
 }
 
-static void csv_append_quoted_(struct String* out, const char* s) {
-    unsafe { out->push_char('"'); }
+static void csv_append_quoted_(&String out, const char* s) {
+    unsafe { out.push_char('"'); }
     unsigned long i = 0UL;
     unsigned long run_start = 0UL;
     while (1) {
@@ -34,41 +34,41 @@ static void csv_append_quoted_(struct String* out, const char* s) {
         unsafe { c = s[i]; }
         if (c == (char)0) { break; }
         if (c == '"') {
-            if (i > run_start) { unsafe { out->push_n(s + run_start, i - run_start); } }
-            unsafe { out->push("\"\""); } // escape: one quote becomes two
+            if (i > run_start) { unsafe { out.push_n(s + run_start, i - run_start); } }
+            unsafe { out.push("\"\""); } // escape: one quote becomes two
             i = i + 1UL;
             run_start = i;
         } else {
             i = i + 1UL;
         }
     }
-    if (i > run_start) { unsafe { out->push_n(s + run_start, i - run_start); } }
-    unsafe { out->push_char('"'); }
+    if (i > run_start) { unsafe { out.push_n(s + run_start, i - run_start); } }
+    unsafe { out.push_char('"'); }
 }
 
 // Same trailing-zero-trim behavior as json.sc's json_append_float_ (kept
 // as a separate copy rather than shared, matching html.sc/xml.sc each
 // having their own small helpers instead of a cross-format-backend
 // dependency between the format modules themselves).
-static void csv_append_float_(struct String* out, double v) {
+static void csv_append_float_(&String out, double v) {
     unsafe {
-        unsigned long before = out->length();
-        out->push_float(v, 6);
-        unsigned long end = out->length();
+        unsigned long before = out.length();
+        out.push_float(v, 6);
+        unsigned long end = out.length();
         while (end > before) {
-            int c = out->char_at(end - 1UL);
+            int c = out.char_at(end - 1UL);
             if (c != (int)'0') { break; }
             end = end - 1UL;
         }
         if (end > before) {
-            int c = out->char_at(end - 1UL);
+            int c = out.char_at(end - 1UL);
             if (c == (int)'.') { end = end - 1UL; }
         }
-        out->truncate(end);
+        out.truncate(end);
     }
 }
 
-static void csv_append_field_(struct String* out, const struct Value* field) {
+static void csv_append_field_(&String out, const struct Value* field) {
     int kind;
     unsafe { kind = field->kind; }
     if (kind == VAL_NULL) {
@@ -80,11 +80,11 @@ static void csv_append_field_(struct String* out, const struct Value* field) {
             else { s = (const char*)""; }
         }
         if (csv_needs_quoting_(s)) { csv_append_quoted_(out, s); }
-        else { unsafe { out->push(s); } }
+        else { unsafe { out.push(s); } }
     } else if (kind == VAL_INT) {
         long long n;
         unsafe { n = field->int_val; }
-        unsafe { out->push_int(n); }
+        unsafe { out.push_int(n); }
     } else if (kind == VAL_FLOAT) {
         double f;
         unsafe { f = field->float_val; }
@@ -92,7 +92,7 @@ static void csv_append_field_(struct String* out, const struct Value* field) {
     } else if (kind == VAL_BOOL) {
         int b;
         unsafe { b = field->bool_val; }
-        unsafe { out->push(b != 0 ? "true" : "false"); }
+        unsafe { out.push(b != 0 ? "true" : "false"); }
     }
     // VAL_ARRAY/VAL_OBJECT fields aren't meaningful in a CSV cell — silently
     // written as nothing, same as VAL_NULL, rather than erroring: a caller
@@ -100,19 +100,19 @@ static void csv_append_field_(struct String* out, const struct Value* field) {
     // value abort the whole document.
 }
 
-void csv_write(const struct Value* v, struct String* out) {
+void csv_write(const &Value v, &String out) {
     unsigned long rowCount;
-    unsafe { rowCount = v->arr_val.length(); }
+    unsafe { rowCount = v.arr_val.length(); }
     unsigned long r = 0UL;
     while (r < rowCount) {
-        if (r > 0UL) { unsafe { out->push_char('\n'); } }
+        if (r > 0UL) { unsafe { out.push_char('\n'); } }
         struct Value* row;
-        unsafe { row = (struct Value*)v->arr_val.get_raw(r); }
+        unsafe { row = (struct Value*)v.arr_val.get_raw(r); }
         unsigned long fieldCount;
         unsafe { fieldCount = row->arr_val.length(); }
         unsigned long f = 0UL;
         while (f < fieldCount) {
-            if (f > 0UL) { unsafe { out->push_char(','); } }
+            if (f > 0UL) { unsafe { out.push_char(','); } }
             struct Value* field;
             unsafe { field = (struct Value*)row->arr_val.get_raw(f); }
             csv_append_field_(out, field);
@@ -122,7 +122,7 @@ void csv_write(const struct Value* v, struct String* out) {
     }
 }
 
-inline struct String value_to_csv(const struct Value* v) {
+inline struct String value_to_csv(const &Value v) {
     struct String out = string_new();
     csv_write(v, &out);
     return out;

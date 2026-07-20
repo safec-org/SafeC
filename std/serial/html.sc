@@ -11,13 +11,13 @@ namespace std {
 // Batches runs of bytes needing no escaping into one push_n() call rather
 // than one push_char() per byte — most string content has no special
 // chars, so this is the hot path.
-static void html_flush_run_(struct String* out, const char* s, unsigned long run_start, unsigned long i) {
+static void html_flush_run_(&String out, const char* s, unsigned long run_start, unsigned long i) {
     if (i > run_start) {
-        unsafe { out->push_n(s + run_start, i - run_start); }
+        unsafe { out.push_n(s + run_start, i - run_start); }
     }
 }
 
-void html_escape(struct String* out, const char* s) {
+void html_escape(&String out, const char* s) {
     unsigned long i = 0UL;
     unsigned long run_start = 0UL;
     while (1) {
@@ -26,10 +26,10 @@ void html_escape(struct String* out, const char* s) {
         if (c == (char)0) { break; }
         if (c == '&' || c == '<' || c == '>' || c == '"') {
             html_flush_run_(out, s, run_start, i);
-            if (c == '&') { unsafe { out->push("&amp;"); } }
-            else if (c == '<') { unsafe { out->push("&lt;"); } }
-            else if (c == '>') { unsafe { out->push("&gt;"); } }
-            else { unsafe { out->push("&quot;"); } }
+            if (c == '&') { unsafe { out.push("&amp;"); } }
+            else if (c == '<') { unsafe { out.push("&lt;"); } }
+            else if (c == '>') { unsafe { out.push("&gt;"); } }
+            else { unsafe { out.push("&quot;"); } }
             i = i + 1UL;
             run_start = i;
         } else {
@@ -41,87 +41,87 @@ void html_escape(struct String* out, const char* s) {
 
 // Trims push_float's fixed trailing zeros — see the identical helper's
 // comment in json.sc/xml.sc for why this is duplicated per format module.
-static void html_append_float_(struct String* out, double v) {
+static void html_append_float_(&String out, double v) {
     unsafe {
-        unsigned long before = out->length();
-        out->push_float(v, 6);
-        unsigned long end = out->length();
+        unsigned long before = out.length();
+        out.push_float(v, 6);
+        unsigned long end = out.length();
         while (end > before) {
-            int c = out->char_at(end - 1UL);
+            int c = out.char_at(end - 1UL);
             if (c != (int)'0') { break; }
             end = end - 1UL;
         }
         if (end > before) {
-            int c = out->char_at(end - 1UL);
+            int c = out.char_at(end - 1UL);
             if (c == (int)'.') { end = end - 1UL; }
         }
-        out->truncate(end);
+        out.truncate(end);
     }
 }
 
-void html_write(const struct Value* v, struct String* out) {
+void html_write(const &Value v, &String out) {
     int kind;
-    unsafe { kind = v->kind; }
+    unsafe { kind = v.kind; }
 
     if (kind == VAL_NULL) {
-        unsafe { out->push("<em>null</em>"); }
+        unsafe { out.push("<em>null</em>"); }
     } else if (kind == VAL_BOOL) {
         int b;
-        unsafe { b = v->bool_val; }
-        unsafe { out->push(b != 0 ? "true" : "false"); }
+        unsafe { b = v.bool_val; }
+        unsafe { out.push(b != 0 ? "true" : "false"); }
     } else if (kind == VAL_INT) {
         long long n;
-        unsafe { n = v->int_val; }
-        unsafe { out->push_int(n); }
+        unsafe { n = v.int_val; }
+        unsafe { out.push_int(n); }
     } else if (kind == VAL_FLOAT) {
         double f;
-        unsafe { f = v->float_val; }
+        unsafe { f = v.float_val; }
         html_append_float_(out, f);
     } else if (kind == VAL_STRING) {
         const char* s;
         unsafe {
-            if (v->str_val != (char*)0) { s = (const char*)v->str_val; }
+            if (v.str_val != (char*)0) { s = (const char*)v.str_val; }
             else { s = (const char*)""; }
         }
         html_escape(out, s);
     } else if (kind == VAL_ARRAY) {
-        unsafe { out->push("<ul>"); }
+        unsafe { out.push("<ul>"); }
         unsigned long n;
-        unsafe { n = v->arr_val.length(); }
+        unsafe { n = v.arr_val.length(); }
         unsigned long i = 0UL;
         while (i < n) {
             struct Value* elem;
-            unsafe { elem = (struct Value*)v->arr_val.get_raw(i); }
-            unsafe { out->push("<li>"); }
+            unsafe { elem = (struct Value*)v.arr_val.get_raw(i); }
+            unsafe { out.push("<li>"); }
             html_write(elem, out);
-            unsafe { out->push("</li>"); }
+            unsafe { out.push("</li>"); }
             i = i + 1UL;
         }
-        unsafe { out->push("</ul>"); }
+        unsafe { out.push("</ul>"); }
     } else if (kind == VAL_OBJECT) {
-        unsafe { out->push("<dl>"); }
+        unsafe { out.push("<dl>"); }
         unsigned long n;
-        unsafe { n = v->obj_val.length(); }
+        unsafe { n = v.obj_val.length(); }
         unsigned long i = 0UL;
         while (i < n) {
             struct ObjectEntry* e;
-            unsafe { e = (struct ObjectEntry*)v->obj_val.get_raw(i); }
+            unsafe { e = (struct ObjectEntry*)v.obj_val.get_raw(i); }
             const char* key;
             unsafe { key = (const char*)e->key; }
             struct Value* val;
             unsafe { val = e->val; }
-            unsafe { out->push("<dt>"); }
+            unsafe { out.push("<dt>"); }
             html_escape(out, key);
-            unsafe { out->push("</dt><dd>"); }
+            unsafe { out.push("</dt><dd>"); }
             html_write(val, out);
-            unsafe { out->push("</dd>"); }
+            unsafe { out.push("</dd>"); }
             i = i + 1UL;
         }
-        unsafe { out->push("</dl>"); }
+        unsafe { out.push("</dl>"); }
     }
 }
 
-inline struct String value_to_html(const struct Value* v) {
+inline struct String value_to_html(const &Value v) {
     struct String out = string_new();
     html_write(v, &out);
     return out;

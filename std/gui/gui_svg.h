@@ -19,6 +19,6 @@ namespace std {
 // was found and parsed, 0 on malformed/unsupported input (some shapes may
 // already have been drawn before a later parse failure — this is a direct
 // parse-and-draw pass, not transactional).
-int gui_draw_svg(struct GuiWindow* win, int ox, int oy, const char* svgText);
+int gui_draw_svg(&GuiWindow win, int ox, int oy, const char* svgText);
 
 } // namespace std

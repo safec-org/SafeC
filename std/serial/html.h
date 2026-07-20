@@ -21,13 +21,13 @@ namespace std {
 // Escapes '&', '<', '>', '"' for safe inclusion in HTML text/attribute
 // content — useful on its own, independent of the Value-tree renderer
 // below, for anything that needs to drop untrusted text into HTML.
-void html_escape(struct String* out, const char* s);
+void html_escape(&String out, const char* s);
 
 // Appends v's rendered HTML fragment to 'out'.
-void html_write(const struct Value* v, struct String* out);
+void html_write(const &Value v, &String out);
 
 // Convenience wrapper: a fresh String holding just that fragment.
-struct String value_to_html(const struct Value* v);
+struct String value_to_html(const &Value v);
 
 // Parses this module's own <dl>/<ul>/<em>null</em>/text fragment shape
 // back into a Value tree. Sets *ok to 0 (and returns VAL_NULL) on

@@ -24,10 +24,10 @@ namespace std {
 // Appends v's YAML text representation to 'out' (does not clear 'out'
 // first). Only VAL_NULL/VAL_BOOL/VAL_INT/VAL_FLOAT/VAL_STRING/VAL_ARRAY/
 // VAL_OBJECT are meaningful — same value tree json_write accepts.
-void yaml_write(const struct Value* v, struct String* out);
+void yaml_write(const &Value v, &String out);
 
 // Convenience wrapper: a fresh String holding just v's YAML text.
-struct String value_to_yaml(const struct Value* v);
+struct String value_to_yaml(const &Value v);
 
 // Parses a block-style YAML document (see the file-level comment for the
 // supported subset). On success, '*ok' (if non-NULL) is set to 1; on a

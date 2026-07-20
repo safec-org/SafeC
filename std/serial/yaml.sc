@@ -14,10 +14,10 @@ namespace std {
 
 // ── Writer ──────────────────────────────────────────────────────────────────
 
-static void yaml_indent_(struct String* out, int depth) {
+static void yaml_indent_(&String out, int depth) {
     int i = 0;
     while (i < depth) {
-        unsafe { out->push("  "); }
+        unsafe { out.push("  "); }
         i = i + 1;
     }
 }
@@ -51,9 +51,9 @@ static int yaml_scalar_needs_quoting_(const char* s) {
     return looksLikeOther;
 }
 
-static void yaml_append_scalar_string_(struct String* out, const char* s) {
+static void yaml_append_scalar_string_(&String out, const char* s) {
     if (!yaml_scalar_needs_quoting_(s)) {
-        unsafe { out->push(s); }
+        unsafe { out.push(s); }
         return;
     }
     // Single-quoted form: only escaping rule is '' for a literal quote —
@@ -61,7 +61,7 @@ static void yaml_append_scalar_string_(struct String* out, const char* s) {
     // for YAML's syntactic reasons above, not to represent control chars
     // (a control-char-bearing string is a corner case this writer doesn't
     // specially handle, matching the writer's overall "common case" scope).
-    unsafe { out->push_char('\''); }
+    unsafe { out.push_char('\''); }
     unsigned long i = 0UL;
     unsigned long run_start = 0UL;
     while (1) {
@@ -69,130 +69,130 @@ static void yaml_append_scalar_string_(struct String* out, const char* s) {
         unsafe { c = s[i]; }
         if (c == (char)0) { break; }
         if (c == '\'') {
-            if (i > run_start) { unsafe { out->push_n(s + run_start, i - run_start); } }
-            unsafe { out->push("''"); }
+            if (i > run_start) { unsafe { out.push_n(s + run_start, i - run_start); } }
+            unsafe { out.push("''"); }
             i = i + 1UL;
             run_start = i;
         } else {
             i = i + 1UL;
         }
     }
-    if (i > run_start) { unsafe { out->push_n(s + run_start, i - run_start); } }
-    unsafe { out->push_char('\''); }
+    if (i > run_start) { unsafe { out.push_n(s + run_start, i - run_start); } }
+    unsafe { out.push_char('\''); }
 }
 
-static void yaml_append_float_(struct String* out, double v) {
+static void yaml_append_float_(&String out, double v) {
     unsafe {
-        unsigned long before = out->length();
-        out->push_float(v, 6);
-        unsigned long end = out->length();
+        unsigned long before = out.length();
+        out.push_float(v, 6);
+        unsigned long end = out.length();
         while (end > before) {
-            int c = out->char_at(end - 1UL);
+            int c = out.char_at(end - 1UL);
             if (c != (int)'0') { break; }
             end = end - 1UL;
         }
         if (end > before) {
-            int c = out->char_at(end - 1UL);
+            int c = out.char_at(end - 1UL);
             if (c == (int)'.') { end = end - 1UL; }
         }
-        out->truncate(end);
+        out.truncate(end);
     }
 }
 
-static void yaml_append_scalar_(struct String* out, const struct Value* v) {
+static void yaml_append_scalar_(&String out, const &Value v) {
     int kind;
-    unsafe { kind = v->kind; }
-    if (kind == VAL_NULL) { unsafe { out->push("null"); } }
+    unsafe { kind = v.kind; }
+    if (kind == VAL_NULL) { unsafe { out.push("null"); } }
     else if (kind == VAL_BOOL) {
         int b;
-        unsafe { b = v->bool_val; }
-        unsafe { out->push(b != 0 ? "true" : "false"); }
+        unsafe { b = v.bool_val; }
+        unsafe { out.push(b != 0 ? "true" : "false"); }
     } else if (kind == VAL_INT) {
         long long n;
-        unsafe { n = v->int_val; }
-        unsafe { out->push_int(n); }
+        unsafe { n = v.int_val; }
+        unsafe { out.push_int(n); }
     } else if (kind == VAL_FLOAT) {
         double f;
-        unsafe { f = v->float_val; }
+        unsafe { f = v.float_val; }
         yaml_append_float_(out, f);
     } else if (kind == VAL_STRING) {
         const char* s;
         unsafe {
-            if (v->str_val != (char*)0) { s = (const char*)v->str_val; }
+            if (v.str_val != (char*)0) { s = (const char*)v.str_val; }
             else { s = (const char*)""; }
         }
         yaml_append_scalar_string_(out, s);
     }
 }
 
-static void yaml_write_block_(const struct Value* v, struct String* out, int depth);
+static void yaml_write_block_(const &Value v, &String out, int depth);
 
-static void yaml_write_array_(const struct Value* v, struct String* out, int depth) {
+static void yaml_write_array_(const &Value v, &String out, int depth) {
     unsigned long n;
-    unsafe { n = v->arr_val.length(); }
-    if (n == 0UL) { unsafe { out->push("[]\n"); } return; }
+    unsafe { n = v.arr_val.length(); }
+    if (n == 0UL) { unsafe { out.push("[]\n"); } return; }
     unsigned long i = 0UL;
     while (i < n) {
         yaml_indent_(out, depth);
-        unsafe { out->push_char('-'); }
+        unsafe { out.push_char('-'); }
         struct Value* elem;
-        unsafe { elem = (struct Value*)v->arr_val.get_raw(i); }
+        unsafe { elem = (struct Value*)v.arr_val.get_raw(i); }
         int ekind;
         unsafe { ekind = elem->kind; }
         if (ekind == VAL_ARRAY || ekind == VAL_OBJECT) {
-            unsafe { out->push_char('\n'); }
+            unsafe { out.push_char('\n'); }
             yaml_write_block_(elem, out, depth + 1);
         } else {
-            unsafe { out->push_char(' '); }
+            unsafe { out.push_char(' '); }
             yaml_append_scalar_(out, elem);
-            unsafe { out->push_char('\n'); }
+            unsafe { out.push_char('\n'); }
         }
         i = i + 1UL;
     }
 }
 
-static void yaml_write_object_(const struct Value* v, struct String* out, int depth) {
+static void yaml_write_object_(const &Value v, &String out, int depth) {
     unsigned long n;
-    unsafe { n = v->obj_val.length(); }
-    if (n == 0UL) { unsafe { out->push("{}\n"); } return; }
+    unsafe { n = v.obj_val.length(); }
+    if (n == 0UL) { unsafe { out.push("{}\n"); } return; }
     unsigned long i = 0UL;
     while (i < n) {
         yaml_indent_(out, depth);
         struct ObjectEntry* e;
-        unsafe { e = (struct ObjectEntry*)v->obj_val.get_raw(i); }
+        unsafe { e = (struct ObjectEntry*)v.obj_val.get_raw(i); }
         const char* key;
         unsafe { key = (const char*)e->key; }
         yaml_append_scalar_string_(out, key);
-        unsafe { out->push_char(':'); }
+        unsafe { out.push_char(':'); }
         struct Value* val;
         unsafe { val = e->val; }
         int vkind;
         unsafe { vkind = val->kind; }
         if (vkind == VAL_ARRAY || vkind == VAL_OBJECT) {
-            unsafe { out->push_char('\n'); }
+            unsafe { out.push_char('\n'); }
             yaml_write_block_(val, out, depth + 1);
         } else {
-            unsafe { out->push_char(' '); }
+            unsafe { out.push_char(' '); }
             yaml_append_scalar_(out, val);
-            unsafe { out->push_char('\n'); }
+            unsafe { out.push_char('\n'); }
         }
         i = i + 1UL;
     }
 }
 
-static void yaml_write_block_(const struct Value* v, struct String* out, int depth) {
+static void yaml_write_block_(const &Value v, &String out, int depth) {
     int kind;
-    unsafe { kind = v->kind; }
+    unsafe { kind = v.kind; }
     if (kind == VAL_ARRAY) { yaml_write_array_(v, out, depth); }
     else if (kind == VAL_OBJECT) { yaml_write_object_(v, out, depth); }
-    else { yaml_append_scalar_(out, v); unsafe { out->push_char('\n'); } }
+    else { yaml_append_scalar_(out, v); unsafe { out.push_char('\n'); } }
 }
 
-void yaml_write(const struct Value* v, struct String* out) {
+void yaml_write(const &Value v, &String out) {
     yaml_write_block_(v, out, 0);
 }
 
-inline struct String value_to_yaml(const struct Value* v) {
+inline struct String value_to_yaml(const &Value v) {
     struct String out = string_new();
     yaml_write(v, &out);
     return out;

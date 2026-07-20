@@ -233,11 +233,18 @@ private:
     // the matching extern declaration, exactly like monoFunctions_ above.
     std::vector<std::unique_ptr<FunctionDecl>>     synthesizedMethods_;
 
-    // Return true if inference succeeded, filling subs.
+    // Return true if inference succeeded, filling subs. 'returnType'/
+    // 'expectedType' are an optional fallback (see expectedType_'s doc
+    // comment below) for generic parameters that appear only in the
+    // return type -- unbound after the normal per-argument pass, they're
+    // matched against 'expectedType' via 'returnType' as the pattern
+    // (e.g. return type 'T*' against an expected 'int*' binds T=int).
     bool inferTypeArgs(const std::vector<ParamDecl>      &params,
                        const std::vector<TypePtr>         &argTypes,
                        const std::vector<GenericParam>    &genericParams,
-                       TypeSubst                          &subs);
+                       TypeSubst                          &subs,
+                       const TypePtr                       &returnType = nullptr,
+                       const TypePtr                       &expectedType = nullptr);
     bool matchType(const TypePtr &paramTy, const TypePtr &argTy, TypeSubst &subs);
 
     MonoKey   makeMonoKey(const std::string &name, const TypeSubst &subs,
@@ -336,6 +343,19 @@ private:
     // value — same shape of exemption as definite-init's pre-marking of
     // 'sym->initialized = true' before checking that same LHS occurrence.
     bool suppressArenaStaleCheck_ = false;
+    // Fallback hint for generic-function inference when a type parameter
+    // appears only in the return type (e.g. 'generic<T> T* vec_at(&stack
+    // Vec v, unsigned long idx)') — inference is otherwise call-site-only
+    // (reads argument types, never a target type), so a call like
+    // 'vec_at(&v, 1UL)' has nothing to infer T from on its own. Set by
+    // checkVarDecl (from an explicit, non-inferred declared type) and
+    // checkAssign (from the LHS's resolved type) just before checking the
+    // initializer/RHS expression, and consumed — cleared immediately,
+    // regardless of whether it ends up used — at the top of checkCall, so
+    // it never leaks into unrelated nested expression checks (the callee,
+    // the call's own arguments, a deeper nested call). See inferTypeArgs's
+    // 'expectedType' parameter for where it's actually applied.
+    TypePtr expectedType_;
     // Method registry: "StructName::methodName" → FunctionDecl* (mangled)
     std::unordered_map<std::string, FunctionDecl*> methodRegistry_;
     // Namespace registries: "ns::name" (as written at the call site) →

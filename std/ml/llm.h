@@ -40,28 +40,28 @@ struct LlmClient llm_client_new(const char* host, unsigned short port,
 // '{"model":..., "messages":[{"role":...,"content":...}, ...]}' and
 // returns 'choices[0].message.content' from the JSON response.
 // *ok is set to 0 on any transport, HTTP-status, or JSON-shape failure.
-struct String llm_chat(struct LlmClient* client, struct Vec* messages, int* ok);
+struct String llm_chat(&LlmClient client, &Vec messages, int* ok);
 
 // ── PromptTemplate ───────────────────────────────────────────────────────────
 // Replaces every '{name}' occurrence in 'tmpl' with 'vars' object field
 // 'name' (stringified: strings pass through as-is, numbers/bools render
 // via their natural text form). A '{name}' whose key isn't present in
 // 'vars' is left as literal text, unexpanded.
-struct String prompt_template_render(const char* tmpl, const struct Value* vars);
+struct String prompt_template_render(const char* tmpl, const &Value vars);
 
 // ── Chain ────────────────────────────────────────────────────────────────────
 // A fixed sequence of Value -> Value steps, run in order — the output of
 // each step becomes the input to the next.
-typedef fn struct Value(const struct Value* input) ChainStepFn;
+typedef fn struct Value(const &Value input) ChainStepFn;
 
 struct Chain {
     struct Vec steps; // Vec<ChainStepFn>
 };
 
 struct Chain chain_new();
-void chain_add_step(struct Chain* c, ChainStepFn step);
-struct Value chain_run(struct Chain* c, const struct Value* input);
-void chain_free(struct Chain* c);
+void chain_add_step(&Chain c, ChainStepFn step);
+struct Value chain_run(&Chain c, const &Value input);
+void chain_free(&Chain c);
 
 // ── Graph executor ───────────────────────────────────────────────────────────
 // Named nodes transform a shared Value state; each node either always
@@ -71,8 +71,8 @@ void chain_free(struct Chain* c);
 // node returns/routes to "__end__", a named node isn't found (also
 // treated as end), or 'maxSteps' is hit (guards against an accidental
 // infinite loop in a misconfigured graph).
-typedef fn struct Value(const struct Value* state) GraphNodeFn;
-typedef fn struct String(const struct Value* state) GraphRouterFn;
+typedef fn struct Value(const &Value state) GraphNodeFn;
+typedef fn struct String(const &Value state) GraphRouterFn;
 
 struct GraphNode {
     struct String   name;
@@ -87,10 +87,10 @@ struct Graph {
 };
 
 struct Graph graph_new(const char* entryNode);
-void graph_add_node(struct Graph* g, const char* name, GraphNodeFn nodeFn, const char* nextNode);
-void graph_add_conditional_node(struct Graph* g, const char* name, GraphNodeFn nodeFn, GraphRouterFn router);
-struct Value graph_run(struct Graph* g, struct Value initialState, int maxSteps);
-void graph_free(struct Graph* g);
+void graph_add_node(&Graph g, const char* name, GraphNodeFn nodeFn, const char* nextNode);
+void graph_add_conditional_node(&Graph g, const char* name, GraphNodeFn nodeFn, GraphRouterFn router);
+struct Value graph_run(&Graph g, struct Value initialState, int maxSteps);
+void graph_free(&Graph g);
 
 // ── Tracer ───────────────────────────────────────────────────────────────────
 struct TraceEvent {
@@ -105,11 +105,11 @@ struct Tracer {
 };
 
 struct Tracer tracer_new();
-void tracer_record(struct Tracer* t, const char* name, const struct Value* input,
-                    const struct Value* output, double durationMs);
+void tracer_record(&Tracer t, const char* name, const &Value input,
+                    const &Value output, double durationMs);
 // Dumps every recorded event as a JSON array: '[{"name":...,"input":...,
 // "output":...,"durationMs":...}, ...]'.
-struct String tracer_to_json(const struct Tracer* t);
-void tracer_free(struct Tracer* t);
+struct String tracer_to_json(const &Tracer t);
+void tracer_free(&Tracer t);
 
 } // namespace std

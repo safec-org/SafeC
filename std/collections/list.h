@@ -5,51 +5,51 @@ namespace std {
 
 struct ListNode {
     void*            data;
-    struct ListNode* next;
-    struct ListNode* prev;
+    ?&heap ListNode  next;
+    ?&heap ListNode  prev;
 };
 
 struct List {
-    struct ListNode* head;
-    struct ListNode* tail;
+    ?&heap ListNode  head;
+    ?&heap ListNode  tail;
     unsigned long    len;
     unsigned long    elem_size;
 };
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 struct List list_new(unsigned long elem_size);
-void        list_free(struct List* l);
+void        list_free(&List l);
 
 // ── Core operations ───────────────────────────────────────────────────────────
-int           list_push_front(struct List* l, const void* elem);
-int           list_push_back(struct List* l, const void* elem);
-int           list_pop_front(struct List* l, void* out);
-int           list_pop_back(struct List* l, void* out);
-void*         list_front(struct List* l);    // NULL if empty
-void*         list_back(struct List* l);     // NULL if empty
-unsigned long list_len(struct List* l);
-int           list_is_empty(struct List* l);
-void          list_clear(struct List* l);
+int           list_push_front(&List l, const void* elem);
+int           list_push_back(&List l, const void* elem);
+int           list_pop_front(&List l, void* out);
+int           list_pop_back(&List l, void* out);
+void*         list_front(&List l);    // NULL if empty
+void*         list_back(&List l);     // NULL if empty
+unsigned long list_len(&List l);
+int           list_is_empty(&List l);
+void          list_clear(&List l);
 
 // ── Search & iteration ────────────────────────────────────────────────────────
 // cmp: int(*)(const void*, const void*) — passed as void*
-struct ListNode* list_find(struct List* l, const void* val, void* cmp);
-int              list_contains(struct List* l, const void* val, void* cmp);
-void             list_remove_node(struct List* l, struct ListNode* node);
-int              list_remove(struct List* l, const void* val, void* cmp);  // remove first match
-void             list_foreach(struct List* l, void* func);  // func: void(*)(void* data)
+?&heap ListNode list_find(&List l, const void* val, void* cmp);
+int             list_contains(&List l, const void* val, void* cmp);
+void            list_remove_node(&List l, &heap ListNode node);
+int             list_remove(&List l, const void* val, void* cmp);  // remove first match
+void            list_foreach(&List l, void* func);  // func: void(*)(void* data)
 
 // ── Reorder ───────────────────────────────────────────────────────────────────
-void list_reverse(struct List* l);
+void list_reverse(&List l);
 
 // ── Typed generic wrappers ────────────────────────────────────────────────────
 generic<T>
-int list_push_back_t(struct List* l, T val);
+int list_push_back_t(&List l, T val);
 
 generic<T>
-T* list_front_t(struct List* l);
+T* list_front_t(&List l);
 
 generic<T>
-T* list_back_t(struct List* l);
+T* list_back_t(&List l);
 
 } // namespace std

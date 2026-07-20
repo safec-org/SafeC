@@ -45,20 +45,20 @@ struct GuiFont gui_font_default();
 // Bit accessors, (0,0) = top-left of the glyph for codepoint 'cp'.
 // Reads return 0 for an out-of-range codepoint or pixel; writes are a
 // no-op in that case.
-int  gui_font_get_bit(const struct GuiFont* font, int cp, int px, int py);
-void gui_font_set_bit(struct GuiFont* font, int cp, int px, int py, int value);
+int  gui_font_get_bit(const &GuiFont font, int cp, int px, int py);
+void gui_font_set_bit(&GuiFont font, int cp, int px, int py, int value);
 
 // Serialization.
-int gui_font_save(const struct GuiFont* font, const char* path); // 1 = ok
-int gui_font_load(struct GuiFont* outFont, const char* path);    // 1 = ok
+int gui_font_save(const &GuiFont font, const char* path); // 1 = ok
+int gui_font_load(&GuiFont outFont, const char* path);    // 1 = ok
 
-void gui_font_free(struct GuiFont* font);
+void gui_font_free(&GuiFont font);
 
 // Drawing with an explicit font (see gui_draw.h for the built-in-font
 // versions these mirror).
-int gui_draw_text_ex(struct GuiWindow* win, int x, int y, const char* text,
-                      struct GuiColor color, int scale, const struct GuiFont* font);
-int gui_text_width_ex(const char* text, int scale, const struct GuiFont* font);
-int gui_text_height_ex(int scale, const struct GuiFont* font);
+int gui_draw_text_ex(&GuiWindow win, int x, int y, const char* text,
+                      struct GuiColor color, int scale, const &GuiFont font);
+int gui_text_width_ex(const char* text, int scale, const &GuiFont font);
+int gui_text_height_ex(int scale, const &GuiFont font);
 
 } // namespace std

@@ -106,7 +106,7 @@ inline void bst_free_node_(struct BSTNode* root) {
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 inline struct BST bst_new(unsigned long key_size, unsigned long val_size, void* cmp_fn) {
     struct BST t;
-    t.root = (struct BSTNode*)0;
+    unsafe { t.root = (struct BSTNode*)0; }
     t.key_size = key_size;
     t.val_size = val_size;
     t.cmp_fn = cmp_fn;
@@ -114,49 +114,52 @@ inline struct BST bst_new(unsigned long key_size, unsigned long val_size, void* 
     return t;
 }
 
-inline void bst_clear(struct BST* t) {
+inline void bst_clear(&BST t) {
     unsafe {
-        bst_free_node_(t->root);
-        t->root = (struct BSTNode*)0;
-        t->len = 0UL;
+        struct BSTNode* root = t.root;
+        bst_free_node_(root);
+        t.root = (struct BSTNode*)0;
     }
+    t.len = 0UL;
 }
 
-void bst_free(struct BST* t) { bst_clear(t); }
+void bst_free(&BST t) { bst_clear(t); }
 
-unsigned long bst_len(struct BST* t)    { unsafe { return t->len; } }
-int           bst_is_empty(struct BST* t) { unsafe { return t->len == 0UL; } }
+unsigned long bst_len(&BST t)      { return t.len; }
+int           bst_is_empty(&BST t) { return t.len == 0UL; }
 
 // ── Insert (recursive via stack simulation using while) ───────────────────────
-int bst_insert(struct BST* t, const void* key, const void* val) {
+int bst_insert(&BST t, const void* key, const void* val) {
     unsafe {
-        fn int(const void*, const void*) cmp = (fn int(const void*, const void*))t->cmp_fn;
-        if (t->root == (struct BSTNode*)0) {
-            t->root = bst_alloc_node_(t->key_size, t->val_size, key, val);
-            if (t->root == (struct BSTNode*)0) return 0;
-            t->len = t->len + 1UL;
+        fn int(const void*, const void*) cmp = (fn int(const void*, const void*))t.cmp_fn;
+        struct BSTNode* root = t.root;
+        if (root == (struct BSTNode*)0) {
+            struct BSTNode* nn = bst_alloc_node_(t.key_size, t.val_size, key, val);
+            if (nn == (struct BSTNode*)0) return 0;
+            t.root = nn;
+            t.len = t.len + 1UL;
             return 1;
         }
-        struct BSTNode* cur = t->root;
+        struct BSTNode* cur = root;
         while (1) {
             int c = cmp(key, (const void*)cur->key);
             if (c == 0) {
                 // Update value
-                safe_memcpy(cur->val, val, t->val_size);
+                safe_memcpy(cur->val, val, t.val_size);
                 return 1;
             } else if (c < 0) {
                 if (cur->left == (struct BSTNode*)0) {
-                    cur->left = bst_alloc_node_(t->key_size, t->val_size, key, val);
+                    cur->left = bst_alloc_node_(t.key_size, t.val_size, key, val);
                     if (cur->left == (struct BSTNode*)0) return 0;
-                    t->len = t->len + 1UL;
+                    t.len = t.len + 1UL;
                     return 1;
                 }
                 cur = cur->left;
             } else {
                 if (cur->right == (struct BSTNode*)0) {
-                    cur->right = bst_alloc_node_(t->key_size, t->val_size, key, val);
+                    cur->right = bst_alloc_node_(t.key_size, t.val_size, key, val);
                     if (cur->right == (struct BSTNode*)0) return 0;
-                    t->len = t->len + 1UL;
+                    t.len = t.len + 1UL;
                     return 1;
                 }
                 cur = cur->right;
@@ -167,10 +170,10 @@ int bst_insert(struct BST* t, const void* key, const void* val) {
 }
 
 // ── Get ───────────────────────────────────────────────────────────────────────
-inline void* bst_get(struct BST* t, const void* key) {
+inline void* bst_get(&BST t, const void* key) {
     unsafe {
-        fn int(const void*, const void*) cmp = (fn int(const void*, const void*))t->cmp_fn;
-        struct BSTNode* cur = t->root;
+        fn int(const void*, const void*) cmp = (fn int(const void*, const void*))t.cmp_fn;
+        struct BSTNode* cur = t.root;
         while (cur != (struct BSTNode*)0) {
             int c = cmp(key, (const void*)cur->key);
             if (c == 0) return cur->val;
@@ -180,34 +183,34 @@ inline void* bst_get(struct BST* t, const void* key) {
     return (void*)0;
 }
 
-inline int bst_contains(struct BST* t, const void* key) {
+inline int bst_contains(&BST t, const void* key) {
     return bst_get(t, key) != (void*)0;
 }
 
 // ── Min / max ─────────────────────────────────────────────────────────────────
-inline void* bst_min_key(struct BST* t) {
+inline void* bst_min_key(&BST t) {
     unsafe {
-        if (t->root == (struct BSTNode*)0) return (void*)0;
-        struct BSTNode* n = t->root;
+        struct BSTNode* n = t.root;
+        if (n == (struct BSTNode*)0) return (void*)0;
         while (n->left != (struct BSTNode*)0) n = n->left;
         return n->key;
     }
 }
-inline void* bst_max_key(struct BST* t) {
+inline void* bst_max_key(&BST t) {
     unsafe {
-        if (t->root == (struct BSTNode*)0) return (void*)0;
-        struct BSTNode* n = t->root;
+        struct BSTNode* n = t.root;
+        if (n == (struct BSTNode*)0) return (void*)0;
         while (n->right != (struct BSTNode*)0) n = n->right;
         return n->key;
     }
 }
 
 // ── Remove (iterative) ────────────────────────────────────────────────────────
-int bst_remove(struct BST* t, const void* key) {
+int bst_remove(&BST t, const void* key) {
     unsafe {
-        fn int(const void*, const void*) cmp = (fn int(const void*, const void*))t->cmp_fn;
+        fn int(const void*, const void*) cmp = (fn int(const void*, const void*))t.cmp_fn;
         struct BSTNode* parent = (struct BSTNode*)0;
-        struct BSTNode* cur    = t->root;
+        struct BSTNode* cur    = t.root;
         int went_left = 0;
 
         while (cur != (struct BSTNode*)0) {
@@ -233,29 +236,29 @@ int bst_remove(struct BST* t, const void* key) {
                 succ = succ->left;
             }
             // Copy successor key/val into cur
-            safe_memcpy(cur->key, (const void*)succ->key, t->key_size);
-            safe_memcpy(cur->val, (const void*)succ->val, t->val_size);
+            safe_memcpy(cur->key, (const void*)succ->key, t.key_size);
+            safe_memcpy(cur->val, (const void*)succ->val, t.val_size);
             // Remove successor node
             if (succ_parent == cur) succ_parent->right = succ->right;
             else                    succ_parent->left  = succ->right;
             dealloc(succ->key); dealloc(succ->val); dealloc((void*)succ);
-            t->len = t->len - 1UL;
+            t.len = t.len - 1UL;
             return 1;
         }
-        if (parent == (struct BSTNode*)0) t->root = replacement;
+        if (parent == (struct BSTNode*)0) t.root = replacement;
         else if (went_left)               parent->left  = replacement;
         else                              parent->right = replacement;
         dealloc(cur->key); dealloc(cur->val); dealloc((void*)cur);
-        t->len = t->len - 1UL;
+        t.len = t.len - 1UL;
         return 1;
     }
 }
 
 // ── In-order traversal (iterative, explicit stack — same unbalanced-BST
 // stack-overflow concern as bst_free_node_ above) ─────────────────────────
-inline void bst_foreach_inorder(struct BST* t, void* func) {
+inline void bst_foreach_inorder(&BST t, void* func) {
     unsafe {
-        struct BSTNode* root = t->root;
+        struct BSTNode* root = t.root;
         if (root == (struct BSTNode*)0) { return; }
         fn void(const void*, void*) f = (fn void(const void*, void*))func;
 
@@ -286,12 +289,12 @@ inline void bst_foreach_inorder(struct BST* t, void* func) {
 }
 
 generic<T>
-int bst_insert_t(struct BST* t, const void* key, T val) {
+int bst_insert_t(&BST t, const void* key, T val) {
     unsafe { return bst_insert(t, key, (const void*)&val); }
 }
 
 generic<T>
-T* bst_get_t(struct BST* t, const void* key) {
+T* bst_get_t(&BST t, const void* key) {
     return (T*)bst_get(t, key);
 }
 

@@ -320,11 +320,11 @@ static unsigned int __be32(const unsigned char* p) {
     return r;
 }
 
-int gui_load_png(const unsigned char* data, unsigned long size, struct GuiImage* out) {
+int gui_load_png(const unsigned char* data, unsigned long size, &GuiImage out) {
     unsafe {
-        out->pixels = (&heap unsigned char)0;
-        out->width = 0;
-        out->height = 0;
+        out.pixels = (&heap unsigned char)0;
+        out.width = 0;
+        out.height = 0;
     }
 
     if (size < 8UL) { return 0; }
@@ -405,9 +405,9 @@ int gui_load_png(const unsigned char* data, unsigned long size, struct GuiImage*
 
     unsigned long npix = (unsigned long)width * (unsigned long)height * 4UL;
     unsafe {
-        out->pixels = (&heap unsigned char)alloc(npix);
+        out.pixels = (&heap unsigned char)alloc(npix);
     }
-    unsafe { out->width = width; out->height = height; }
+    unsafe { out.width = width; out.height = height; }
 
     unsigned long rowBytes = (unsigned long)width * (unsigned long)channels;
     // Previous-scanline reconstructed bytes (for Up/Average/Paeth), zeroed
@@ -461,10 +461,10 @@ int gui_load_png(const unsigned char* data, unsigned long size, struct GuiImage*
                 unsafe { r = curRow[si]; g = curRow[si + 1UL]; b2 = curRow[si + 2UL]; a2 = curRow[si + 3UL]; }
             }
             unsafe {
-                out->pixels[di + 0UL] = r;
-                out->pixels[di + 1UL] = g;
-                out->pixels[di + 2UL] = b2;
-                out->pixels[di + 3UL] = a2;
+                out.pixels[di + 0UL] = r;
+                out.pixels[di + 1UL] = g;
+                out.pixels[di + 2UL] = b2;
+                out.pixels[di + 3UL] = a2;
             }
             px = px + 1UL;
         }
@@ -483,9 +483,9 @@ int gui_load_png(const unsigned char* data, unsigned long size, struct GuiImage*
     return 1;
 }
 
-void gui_draw_image(struct GuiWindow* win, int x, int y, const struct GuiImage* img) {
+void gui_draw_image(&GuiWindow win, int x, int y, const &GuiImage img) {
     int iw; int ih;
-    unsafe { iw = img->width; ih = img->height; }
+    unsafe { iw = img.width; ih = img.height; }
     int yy = 0;
     while (yy < ih) {
         int xx = 0;
@@ -493,8 +493,8 @@ void gui_draw_image(struct GuiWindow* win, int x, int y, const struct GuiImage* 
             unsigned long si = ((unsigned long)yy * (unsigned long)iw + (unsigned long)xx) * 4UL;
             unsigned char r; unsigned char g; unsigned char b; unsigned char a;
             unsafe {
-                r = img->pixels[si + 0UL]; g = img->pixels[si + 1UL];
-                b = img->pixels[si + 2UL]; a = img->pixels[si + 3UL];
+                r = img.pixels[si + 0UL]; g = img.pixels[si + 1UL];
+                b = img.pixels[si + 2UL]; a = img.pixels[si + 3UL];
             }
             unsigned int rgba = ((unsigned int)r << 24) | ((unsigned int)g << 16) |
                                  ((unsigned int)b << 8) | (unsigned int)a;
@@ -505,12 +505,12 @@ void gui_draw_image(struct GuiWindow* win, int x, int y, const struct GuiImage* 
     }
 }
 
-void gui_image_free(struct GuiImage* img) {
+void gui_image_free(&GuiImage img) {
     unsafe {
-        if ((void*)img->pixels != (void*)0) { dealloc((void*)img->pixels); }
-        img->pixels = (&heap unsigned char)0;
-        img->width = 0;
-        img->height = 0;
+        if ((void*)img.pixels != (void*)0) { dealloc((void*)img.pixels); }
+        img.pixels = (&heap unsigned char)0;
+        img.width = 0;
+        img.height = 0;
     }
 }
 

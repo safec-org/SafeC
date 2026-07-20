@@ -99,7 +99,7 @@ struct GuiWin32Platform {
     int queueHead;
     int queueTail;
     int closeRequested;
-    struct GuiWindow* selfWin; // so WndProc can update win->width/height on resize
+    struct GuiWindow* selfWin; // so WndProc can update win.width/height on resize
 };
 
 static void __gui_win32_push(struct GuiWin32Platform* p, struct GuiEvent ev) {
@@ -282,52 +282,52 @@ struct GuiWindow gui_create_window(const char* title, int width, int height) {
     return win;
 }
 
-void gui_present(struct GuiWindow* win) {
+void gui_present(&GuiWindow win) {
     int hasPlatform = 0;
-    unsafe { if (win->platform != (void*)0) { hasPlatform = 1; } }
+    unsafe { if (win.platform != (void*)0) { hasPlatform = 1; } }
     if (!hasPlatform) { return; }
     unsafe {
-        struct GuiWin32Platform* p = (struct GuiWin32Platform*)win->platform;
+        struct GuiWin32Platform* p = (struct GuiWin32Platform*)win.platform;
         void* dc = GetDC(p->hwnd);
         // BITMAPINFOHEADER, biHeight negative = top-down DIB (matches our
         // top-left-origin row-major buffer directly, no vertical flip).
         int bmi[10];
         bmi[0] = 40;                 // biSize
-        bmi[1] = win->width;         // biWidth
-        bmi[2] = -win->height;       // biHeight (top-down)
+        bmi[1] = win.width;         // biWidth
+        bmi[2] = -win.height;       // biHeight (top-down)
         bmi[3] = (1 << 16) | 32;     // biPlanes=1 (low word), biBitCount=32 (high word)
         bmi[4] = 0;                  // biCompression = BI_RGB
         bmi[5] = 0; bmi[6] = 0; bmi[7] = 0; bmi[8] = 0; bmi[9] = 0;
-        StretchDIBits(dc, 0, 0, win->width, win->height, 0, 0, win->width, win->height,
-                       (const void*)win->pixels, (const void*)bmi, 0U, 0x00CC0020U /* SRCCOPY */);
+        StretchDIBits(dc, 0, 0, win.width, win.height, 0, 0, win.width, win.height,
+                       (const void*)win.pixels, (const void*)bmi, 0U, 0x00CC0020U /* SRCCOPY */);
         ReleaseDC(p->hwnd, dc);
     }
 }
 
-void gui_set_pixel(struct GuiWindow* win, int x, int y, unsigned int rgba) {
+void gui_set_pixel(&GuiWindow win, int x, int y, unsigned int rgba) {
     int oob = 0;
-    unsafe { if (x < 0 || y < 0 || x >= win->width || y >= win->height) { oob = 1; } }
+    unsafe { if (x < 0 || y < 0 || x >= win.width || y >= win.height) { oob = 1; } }
     if (oob) { return; }
     unsafe {
-        unsigned long idx = ((unsigned long)y * (unsigned long)win->width + (unsigned long)x) * 4UL;
+        unsigned long idx = ((unsigned long)y * (unsigned long)win.width + (unsigned long)x) * 4UL;
         // Win32's DIB is BGRA byte order for BI_RGB 32bpp, unlike Cocoa's
         // RGBA CGImage — swap R/B here so gui_draw.h's gui_rgba(r,g,b,a)
         // still means the same visual color on both backends.
-        win->pixels[idx + 0UL] = (unsigned char)((rgba >> 8)  & 0xFFU); // B
-        win->pixels[idx + 1UL] = (unsigned char)((rgba >> 16) & 0xFFU); // G
-        win->pixels[idx + 2UL] = (unsigned char)((rgba >> 24) & 0xFFU); // R
-        win->pixels[idx + 3UL] = (unsigned char)(rgba & 0xFFU);          // A
+        win.pixels[idx + 0UL] = (unsigned char)((rgba >> 8)  & 0xFFU); // B
+        win.pixels[idx + 1UL] = (unsigned char)((rgba >> 16) & 0xFFU); // G
+        win.pixels[idx + 2UL] = (unsigned char)((rgba >> 24) & 0xFFU); // R
+        win.pixels[idx + 3UL] = (unsigned char)(rgba & 0xFFU);          // A
     }
 }
 
-int gui_poll_event(struct GuiWindow* win, struct GuiEvent* outEvent) {
-    unsafe { outEvent->kind = GUI_EVENT_NONE; outEvent->defaultPrevented = 0; }
+int gui_poll_event(&GuiWindow win, &GuiEvent outEvent) {
+    unsafe { outEvent.kind = GUI_EVENT_NONE; outEvent.defaultPrevented = 0; }
     int hasPlatform = 0;
-    unsafe { if (win->platform != (void*)0) { hasPlatform = 1; } }
+    unsafe { if (win.platform != (void*)0) { hasPlatform = 1; } }
     if (!hasPlatform) { return 0; }
 
     unsafe {
-        struct GuiWin32Platform* p = (struct GuiWin32Platform*)win->platform;
+        struct GuiWin32Platform* p = (struct GuiWin32Platform*)win.platform;
 
         // Pump the Win32 message loop (non-blocking) so WndProc runs and
         // fills the queue.
@@ -339,8 +339,8 @@ int gui_poll_event(struct GuiWindow* win, struct GuiEvent* outEvent) {
 
         if (p->closeRequested) {
             p->closeRequested = 0;
-            win->shouldClose = 1;
-            outEvent->kind = GUI_EVENT_CLOSE;
+            win.shouldClose = 1;
+            outEvent.kind = GUI_EVENT_CLOSE;
             return 1;
         }
 
@@ -351,15 +351,15 @@ int gui_poll_event(struct GuiWindow* win, struct GuiEvent* outEvent) {
     }
 }
 
-void gui_destroy_window(struct GuiWindow* win) {
+void gui_destroy_window(&GuiWindow win) {
     unsafe {
-        if (win->platform != (void*)0) {
-            struct GuiWin32Platform* p = (struct GuiWin32Platform*)win->platform;
+        if (win.platform != (void*)0) {
+            struct GuiWin32Platform* p = (struct GuiWin32Platform*)win.platform;
             if (p->hwnd != (void*)0) { DestroyWindow(p->hwnd); }
             dealloc((void*)p);
         }
-        if ((void*)win->pixels != (void*)0) { dealloc((void*)win->pixels); }
-        win->platform = (void*)0;
+        if ((void*)win.pixels != (void*)0) { dealloc((void*)win.pixels); }
+        win.platform = (void*)0;
     }
 }
 

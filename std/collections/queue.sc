@@ -22,106 +22,106 @@ inline struct Queue queue_with_cap(unsigned long elem_size, unsigned long cap) {
     return q;
 }
 
-inline void queue_free(struct Queue* q) {
+inline void queue_free(&Queue q) {
     unsafe {
-        if (q->data != (void*)0) dealloc(q->data);
-        q->data = (void*)0;
-        q->head = 0UL; q->tail = 0UL; q->len = 0UL; q->cap = 0UL;
+        if (q.data != (void*)0) dealloc(q.data);
+        q.data = (void*)0;
+    }
+    q.head = 0UL; q.tail = 0UL; q.len = 0UL; q.cap = 0UL;
+}
+
+inline unsigned long queue_len(&Queue q)      { return q.len; }
+inline int           queue_is_empty(&Queue q) { return q.len == 0UL; }
+
+inline void queue_clear(&Queue q) {
+    q.head = 0UL; q.tail = 0UL; q.len = 0UL;
+}
+
+inline void* queue_front(&Queue q) {
+    unsafe {
+        if (q.len == 0UL) return (void*)0;
+        return (void*)((char*)q.data + q.head * q.elem_size);
     }
 }
 
-inline unsigned long queue_len(struct Queue* q)     { unsafe { return q->len; } }
-inline int           queue_is_empty(struct Queue* q){ unsafe { return q->len == 0UL; } }
-
-inline void queue_clear(struct Queue* q) {
-    unsafe { q->head = 0UL; q->tail = 0UL; q->len = 0UL; }
-}
-
-inline void* queue_front(struct Queue* q) {
+inline void* queue_back(&Queue q) {
     unsafe {
-        if (q->len == 0UL) return (void*)0;
-        return (void*)((char*)q->data + q->head * q->elem_size);
-    }
-}
-
-inline void* queue_back(struct Queue* q) {
-    unsafe {
-        if (q->len == 0UL) return (void*)0;
-        unsigned long back_idx = (q->tail == 0UL) ? (q->cap - 1UL) : (q->tail - 1UL);
-        return (void*)((char*)q->data + back_idx * q->elem_size);
+        if (q.len == 0UL) return (void*)0;
+        unsigned long back_idx = (q.tail == 0UL) ? (q.cap - 1UL) : (q.tail - 1UL);
+        return (void*)((char*)q.data + back_idx * q.elem_size);
     }
 }
 
 // Grow: linearize circular buffer into a new allocation of double capacity
-int queue_grow_(struct Queue* q) {
+int queue_grow_(&Queue q) {
+    unsigned long new_cap = q.cap == 0UL ? 8UL : q.cap * 2UL;
     unsafe {
-        unsigned long new_cap = q->cap == 0UL ? 8UL : q->cap * 2UL;
-        void* nd = alloc(checked_mul_size(new_cap, q->elem_size));
+        void* nd = alloc(checked_mul_size(new_cap, q.elem_size));
         if (nd == (void*)0) return 0;
         // Copy elements in logical order
-        if (q->len > 0UL) {
-            if (q->head < q->tail) {
+        if (q.len > 0UL) {
+            if (q.head < q.tail) {
                 // Contiguous
-                safe_memcpy(nd, (const void*)((char*)q->data + q->head * q->elem_size),
-                            q->len * q->elem_size);
+                safe_memcpy(nd, (const void*)((char*)q.data + q.head * q.elem_size),
+                            q.len * q.elem_size);
             } else {
                 // Wrapped
-                unsigned long first_part = q->cap - q->head;
+                unsigned long first_part = q.cap - q.head;
                 safe_memcpy(nd,
-                    (const void*)((char*)q->data + q->head * q->elem_size),
-                    first_part * q->elem_size);
-                safe_memcpy((void*)((char*)nd + first_part * q->elem_size),
-                    (const void*)q->data,
-                    q->tail * q->elem_size);
+                    (const void*)((char*)q.data + q.head * q.elem_size),
+                    first_part * q.elem_size);
+                safe_memcpy((void*)((char*)nd + first_part * q.elem_size),
+                    (const void*)q.data,
+                    q.tail * q.elem_size);
             }
         }
-        if (q->data != (void*)0) dealloc(q->data);
-        q->data = nd;
-        q->head = 0UL;
-        q->tail = q->len;
-        q->cap  = new_cap;
+        if (q.data != (void*)0) dealloc(q.data);
+        q.data = nd;
     }
+    q.head = 0UL;
+    q.tail = q.len;
+    q.cap  = new_cap;
     return 1;
 }
 
-inline int queue_enqueue(struct Queue* q, const void* elem) {
-    unsafe {
-        if (q->len == q->cap) {
-            if (!queue_grow_(q)) return 0;
-        }
-        char* dst = (char*)q->data + q->tail * q->elem_size;
-        safe_memcpy((void*)dst, elem, q->elem_size);
-        q->tail = (q->tail + 1UL) % q->cap;
-        q->len = q->len + 1UL;
-        return 1;
+inline int queue_enqueue(&Queue q, const void* elem) {
+    if (q.len == q.cap) {
+        if (!queue_grow_(q)) return 0;
     }
+    unsafe {
+        char* dst = (char*)q.data + q.tail * q.elem_size;
+        safe_memcpy((void*)dst, elem, q.elem_size);
+    }
+    q.tail = (q.tail + 1UL) % q.cap;
+    q.len = q.len + 1UL;
+    return 1;
 }
 
-inline int queue_dequeue(struct Queue* q, void* out) {
+inline int queue_dequeue(&Queue q, void* out) {
+    if (q.len == 0UL) return 0;
     unsafe {
-        if (q->len == 0UL) return 0;
         if (out != (void*)0) {
-            char* src = (char*)q->data + q->head * q->elem_size;
-            safe_memcpy(out, (const void*)src, q->elem_size);
+            char* src = (char*)q.data + q.head * q.elem_size;
+            safe_memcpy(out, (const void*)src, q.elem_size);
         }
-        q->head = (q->head + 1UL) % q->cap;
-        q->len = q->len - 1UL;
-        return 1;
     }
+    q.head = (q.head + 1UL) % q.cap;
+    q.len = q.len - 1UL;
+    return 1;
 }
 
 generic<T>
-inline int queue_enqueue_t(struct Queue* q, T val) {
+inline int queue_enqueue_t(&Queue q, T val) {
     unsafe { return queue_enqueue(q, (const void*)&val); }
 }
 
 generic<T>
-inline T* queue_front_t(struct Queue* q) {
+inline T* queue_front_t(&Queue q) {
     return (T*)queue_front(q);
 }
 
 generic<T>
-inline int queue_dequeue_t(struct Queue* q, T* out) {
+inline int queue_dequeue_t(&Queue q, T* out) {
     unsafe { return queue_dequeue(q, (void*)out); }
 }
 

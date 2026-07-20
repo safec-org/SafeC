@@ -11,13 +11,13 @@ namespace std {
 // Batches runs of bytes needing no escaping into one push_n() call rather
 // than one push_char() per byte — most string content has no special
 // chars, so this is the hot path.
-static void xml_flush_run_(struct String* out, const char* s, unsigned long run_start, unsigned long i) {
+static void xml_flush_run_(&String out, const char* s, unsigned long run_start, unsigned long i) {
     if (i > run_start) {
-        unsafe { out->push_n(s + run_start, i - run_start); }
+        unsafe { out.push_n(s + run_start, i - run_start); }
     }
 }
 
-static void xml_append_escaped_(struct String* out, const char* s) {
+static void xml_append_escaped_(&String out, const char* s) {
     unsigned long i = 0UL;
     unsigned long run_start = 0UL;
     while (1) {
@@ -26,11 +26,11 @@ static void xml_append_escaped_(struct String* out, const char* s) {
         if (c == (char)0) { break; }
         if (c == '&' || c == '<' || c == '>' || c == '"' || c == '\'') {
             xml_flush_run_(out, s, run_start, i);
-            if (c == '&') { unsafe { out->push("&amp;"); } }
-            else if (c == '<') { unsafe { out->push("&lt;"); } }
-            else if (c == '>') { unsafe { out->push("&gt;"); } }
-            else if (c == '"') { unsafe { out->push("&quot;"); } }
-            else { unsafe { out->push("&apos;"); } }
+            if (c == '&') { unsafe { out.push("&amp;"); } }
+            else if (c == '<') { unsafe { out.push("&lt;"); } }
+            else if (c == '>') { unsafe { out.push("&gt;"); } }
+            else if (c == '"') { unsafe { out.push("&quot;"); } }
+            else { unsafe { out.push("&apos;"); } }
             i = i + 1UL;
             run_start = i;
         } else {
@@ -44,71 +44,71 @@ static void xml_append_escaped_(struct String* out, const char* s) {
 // shared across modules since the two are otherwise independent leaf
 // files (see the file-level comments in each) — trims push_float's fixed
 // trailing zeros.
-static void xml_append_float_(struct String* out, double v) {
+static void xml_append_float_(&String out, double v) {
     unsafe {
-        unsigned long before = out->length();
-        out->push_float(v, 6);
-        unsigned long end = out->length();
+        unsigned long before = out.length();
+        out.push_float(v, 6);
+        unsigned long end = out.length();
         while (end > before) {
-            int c = out->char_at(end - 1UL);
+            int c = out.char_at(end - 1UL);
             if (c != (int)'0') { break; }
             end = end - 1UL;
         }
         if (end > before) {
-            int c = out->char_at(end - 1UL);
+            int c = out.char_at(end - 1UL);
             if (c == (int)'.') { end = end - 1UL; }
         }
-        out->truncate(end);
+        out.truncate(end);
     }
 }
 
-void xml_write(const struct Value* v, const char* tag, struct String* out) {
+void xml_write(const &Value v, const char* tag, &String out) {
     int kind;
-    unsafe { kind = v->kind; }
+    unsafe { kind = v.kind; }
 
     if (kind == VAL_NULL) {
-        unsafe { out->push_char('<'); out->push(tag); out->push("/>"); }
+        unsafe { out.push_char('<'); out.push(tag); out.push("/>"); }
         return;
     }
 
-    unsafe { out->push_char('<'); out->push(tag); out->push_char('>'); }
+    unsafe { out.push_char('<'); out.push(tag); out.push_char('>'); }
 
     if (kind == VAL_BOOL) {
         int b;
-        unsafe { b = v->bool_val; }
-        unsafe { out->push(b != 0 ? "true" : "false"); }
+        unsafe { b = v.bool_val; }
+        unsafe { out.push(b != 0 ? "true" : "false"); }
     } else if (kind == VAL_INT) {
         long long n;
-        unsafe { n = v->int_val; }
-        unsafe { out->push_int(n); }
+        unsafe { n = v.int_val; }
+        unsafe { out.push_int(n); }
     } else if (kind == VAL_FLOAT) {
         double f;
-        unsafe { f = v->float_val; }
+        unsafe { f = v.float_val; }
         xml_append_float_(out, f);
     } else if (kind == VAL_STRING) {
         const char* s;
         unsafe {
-            if (v->str_val != (char*)0) { s = (const char*)v->str_val; }
+            if (v.str_val != (char*)0) { s = (const char*)v.str_val; }
             else { s = (const char*)""; }
         }
         xml_append_escaped_(out, s);
     } else if (kind == VAL_ARRAY) {
         unsigned long n;
-        unsafe { n = v->arr_val.length(); }
+        unsafe { n = v.arr_val.length(); }
         unsigned long i = 0UL;
         while (i < n) {
             struct Value* elem;
-            unsafe { elem = (struct Value*)v->arr_val.get_raw(i); }
+            unsafe { elem = (struct Value*)v.arr_val.get_raw(i); }
             xml_write(elem, "item", out);
             i = i + 1UL;
         }
     } else if (kind == VAL_OBJECT) {
         unsigned long n;
-        unsafe { n = v->obj_val.length(); }
+        unsafe { n = v.obj_val.length(); }
         unsigned long i = 0UL;
         while (i < n) {
             struct ObjectEntry* e;
-            unsafe { e = (struct ObjectEntry*)v->obj_val.get_raw(i); }
+            unsafe { e = (struct ObjectEntry*)v.obj_val.get_raw(i); }
             const char* key;
             unsafe { key = (const char*)e->key; }
             struct Value* val;
@@ -118,10 +118,10 @@ void xml_write(const struct Value* v, const char* tag, struct String* out) {
         }
     }
 
-    unsafe { out->push("</"); out->push(tag); out->push_char('>'); }
+    unsafe { out.push("</"); out.push(tag); out.push_char('>'); }
 }
 
-inline struct String value_to_xml(const struct Value* v, const char* root_tag) {
+inline struct String value_to_xml(const &Value v, const char* root_tag) {
     struct String out = string_new();
     xml_write(v, root_tag, &out);
     return out;

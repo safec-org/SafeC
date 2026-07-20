@@ -233,7 +233,7 @@ static int __md_is_ordered_item(const char* line, unsigned long* markerLen) {
     return 0;
 }
 
-struct MdNode* md_parse(const char* text) {
+&heap MdNode md_parse(const char* text) {
     struct MdNode* doc = __md_new(MD_DOC);
 
     // Split into lines.
@@ -550,7 +550,7 @@ static void __md_render_block_html(const struct MdNode* n, struct String* out) {
     }
 }
 
-struct String md_render_html(const struct MdNode* doc) {
+struct String md_render_html(const &heap MdNode doc) {
     struct String out = string_new();
     __md_render_block_html(doc, &out);
     return out;
@@ -671,7 +671,7 @@ static void __md_render_block_md(const struct MdNode* n, struct String* out) {
     }
 }
 
-struct String md_render_markdown(const struct MdNode* doc) {
+struct String md_render_markdown(const &heap MdNode doc) {
     struct String out = string_new();
     __md_render_block_md(doc, &out);
     return out;
@@ -679,7 +679,7 @@ struct String md_render_markdown(const struct MdNode* doc) {
 
 // ── lifecycle ─────────────────────────────────────────────────────────────────
 
-void md_free(struct MdNode* node) {
+void md_free(&heap MdNode node) {
     unsigned long cn; unsafe { cn = node->children.length(); }
     unsigned long ci = 0UL;
     while (ci < cn) {

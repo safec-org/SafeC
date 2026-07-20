@@ -22,16 +22,16 @@ struct GuiColor {
 struct GuiColor gui_rgba(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
 struct GuiColor gui_rgb(unsigned char r, unsigned char g, unsigned char b);
 
-void gui_fill_rect(struct GuiWindow* win, int x, int y, int w, int h, struct GuiColor color);
-void gui_draw_rect_border(struct GuiWindow* win, int x, int y, int w, int h,
+void gui_fill_rect(&GuiWindow win, int x, int y, int w, int h, struct GuiColor color);
+void gui_draw_rect_border(&GuiWindow win, int x, int y, int w, int h,
                            struct GuiColor color, int thickness);
-void gui_draw_line(struct GuiWindow* win, int x0, int y0, int x1, int y1, struct GuiColor color);
+void gui_draw_line(&GuiWindow win, int x0, int y0, int x1, int y1, struct GuiColor color);
 
 // Draws 'text' with its top-left at (x,y), each glyph cell 8*scale by
 // 8*scale pixels (scale=1 -> 8x8, scale=2 -> 16x16, ...). Unsupported
 // codepoints (outside the printable-ASCII range the built-in font covers,
 // 0x20-0x7E) draw as a blank cell. Returns the total pixel width drawn.
-int gui_draw_text(struct GuiWindow* win, int x, int y, const char* text,
+int gui_draw_text(&GuiWindow win, int x, int y, const char* text,
                    struct GuiColor color, int scale);
 
 // Width/height in pixels 'text' would occupy if drawn at the given scale,
