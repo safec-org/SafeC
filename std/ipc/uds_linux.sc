@@ -76,7 +76,10 @@ inline int uds_listen_nb(const char* path) {
     if (rc != 0) {
         return -1;
     }
-    unsafe { rc = listen(fd, 16); }
+    // See std/sched/io_nb_bsd.sc's tcp_listen_nb for why 512, not a small
+    // literal like 16 -- same backlog-overflow tail-latency issue applies
+    // to any listening socket, not just TCP ones.
+    unsafe { rc = listen(fd, 512); }
     if (rc != 0) {
         return -1;
     }

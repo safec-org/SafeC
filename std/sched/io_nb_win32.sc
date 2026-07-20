@@ -121,7 +121,11 @@ inline int tcp_listen_nb(unsigned short port) {
     if (rc != 0) {
         return -1;
     }
-    unsafe { rc = listen(fd, 16); }
+    // See io_nb_bsd.sc's tcp_listen_nb for why 512, not a small literal
+    // like 16: verified that a small backlog causes real TCP
+    // SYN-retransmit tail latency once concurrent connection bursts
+    // exceed it, not just a theoretical concern.
+    unsafe { rc = listen(fd, 512); }
     if (rc != 0) {
         return -1;
     }

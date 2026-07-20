@@ -30,6 +30,10 @@ extern int listen(int fd, int backlog);
 extern int accept(int fd, void* addr, void* addrlen);
 extern int connect(int fd, const void* addr, unsigned int addrlen);
 extern int fcntl(int fd, int cmd, int arg);
+extern int setsockopt(int fd, int level, int optname, const void* optval, unsigned int optlen);
+
+#define SCHED_SOL_SOCKET    0xffff
+#define SCHED_SO_REUSEADDR  0x0004
 
 inline unsigned short sched_htons(unsigned short host16) {
     return (unsigned short)(((host16 & (unsigned short)0xFF) << 8) |
@@ -85,6 +89,21 @@ inline int tcp_listen_nb(unsigned short port) {
     if (fd_set_nonblocking(fd) != 0) {
         return -1;
     }
+    // Without SO_REUSEADDR, rebinding this exact port fails (EADDRINUSE)
+    // for as long as any connection this process just served still has a
+    // socket in TIME_WAIT on this port -- which after any real traffic is
+    // the normal case, not an edge case. Verified: kill a server that just
+    // handled a real load test, then immediately try to start a new one on
+    // the same port -- it silently fails to bind (the old code didn't
+    // check tcp_listen_nb's return value against this failure mode either,
+    // so the process would print its own "listening" banner and then just
+    // exit). Setting this is what lets "stop the server, start it again"
+    // actually work like every other language's server here does.
+    unsafe {
+        int reuseOpt = 1;
+        setsockopt(fd, SCHED_SOL_SOCKET, SCHED_SO_REUSEADDR,
+                   (const void*)&reuseOpt, 4U);
+    }
 
     struct SockAddrIn addr;
     addr.sin_len    = (unsigned char)16;
@@ -98,7 +117,16 @@ inline int tcp_listen_nb(unsigned short port) {
     if (rc != 0) {
         return -1;
     }
-    unsafe { rc = listen(fd, 16); }
+    // 512, not the socket API's traditional tiny default (historically
+    // 5, sometimes seen as low as 16 in example code) -- verified this
+    // actually matters: at 16, a burst of ~50 concurrent client
+    // connections (a completely ordinary load-test concurrency, see
+    // safec-docs's Benchmarks page) overflows the kernel's pending-accept
+    // queue, and the connections that don't fit hit real TCP SYN-retransmit
+    // delays (observed: 500ms+ tail latency on connect(), not on request
+    // processing) waiting for a slot to free up -- not a "the OS is slow"
+    // effect, a "we told it to only queue 16" one.
+    unsafe { rc = listen(fd, 512); }
     if (rc != 0) {
         return -1;
     }

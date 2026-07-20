@@ -29,6 +29,10 @@ extern int listen(int fd, int backlog);
 extern int accept(int fd, void* addr, void* addrlen);
 extern int connect(int fd, const void* addr, unsigned int addrlen);
 extern int fcntl(int fd, int cmd, int arg);
+extern int setsockopt(int fd, int level, int optname, const void* optval, unsigned int optlen);
+
+#define SCHED_SOL_SOCKET    1
+#define SCHED_SO_REUSEADDR  2
 
 inline unsigned short sched_htons(unsigned short host16) {
     return (unsigned short)(((host16 & (unsigned short)0xFF) << 8) |
@@ -84,6 +88,15 @@ inline int tcp_listen_nb(unsigned short port) {
     if (fd_set_nonblocking(fd) != 0) {
         return -1;
     }
+    // See io_nb_bsd.sc's tcp_listen_nb for why: without this, rebinding
+    // the port fails for as long as a just-served connection's socket
+    // sits in TIME_WAIT on it -- the normal case after any real traffic,
+    // not an edge case.
+    unsafe {
+        int reuseOpt = 1;
+        setsockopt(fd, SCHED_SOL_SOCKET, SCHED_SO_REUSEADDR,
+                   (const void*)&reuseOpt, 4U);
+    }
 
     struct SockAddrIn addr;
     addr.sin_family = (unsigned short)SCHED_AF_INET;
@@ -96,7 +109,11 @@ inline int tcp_listen_nb(unsigned short port) {
     if (rc != 0) {
         return -1;
     }
-    unsafe { rc = listen(fd, 16); }
+    // See io_nb_bsd.sc's tcp_listen_nb for why 512, not a small literal
+    // like 16: verified that a small backlog causes real TCP
+    // SYN-retransmit tail latency once concurrent connection bursts
+    // exceed it, not just a theoretical concern.
+    unsafe { rc = listen(fd, 512); }
     if (rc != 0) {
         return -1;
     }
