@@ -74,16 +74,45 @@ kernel void scale_kernel(device const float* a [[buffer(0)]],
     out[id] = a[id] * k;
 }
 
-// Serial single-thread reduction — see gpu_mps.sc's mps_sum_f32 comment for
-// why this isn't a real parallel reduction.
+// Two-stage parallel reduction. This used to be a single GPU thread
+// running a serial O(n) loop while every other thread returned
+// immediately — correct, but using none of the GPU's actual parallelism:
+// O(n) *span* (critical-path length), not just O(n) total work, on
+// hardware built to do thousands of things at once. Stage 1 (this
+// kernel): grid-stride accumulate (each thread sums every
+// (SUM_TG_SIZE * threadgroup-count)-th element, so a BOUNDED number of
+// threadgroups covers arbitrarily large n) followed by a binary-tree
+// reduction in threadgroup memory — O(log SUM_TG_SIZE) span per
+// threadgroup instead of O(n). Each threadgroup emits one partial sum.
+// Stage 2 (mps_sum_f32 in gpu_mps.sc): the partial-sums array is capped
+// at SUM_MAX_GROUPS entries regardless of n, small enough to finish on
+// the CPU after one readback rather than needing a second GPU dispatch.
+#define SUM_TG_SIZE 256
+
 kernel void sum_kernel(device const float* a [[buffer(0)]],
-                        device float* out [[buffer(1)]],
+                        device float* partialOut [[buffer(1)]],
                         constant uint& n [[buffer(2)]],
-                        uint id [[thread_position_in_grid]]) {
-    if (id != 0) return;
+                        uint tid [[thread_position_in_threadgroup]],
+                        uint tgid [[threadgroup_position_in_grid]],
+                        uint tgCount [[threadgroups_per_grid]]) {
+    threadgroup float shared[SUM_TG_SIZE];
+
+    uint globalStride = tgCount * SUM_TG_SIZE;
+    uint idx = tgid * SUM_TG_SIZE + tid;
     float acc = 0.0;
-    for (uint i = 0; i < n; i++) { acc += a[i]; }
-    out[0] = acc;
+    while (idx < n) {
+        acc += a[idx];
+        idx += globalStride;
+    }
+    shared[tid] = acc;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint s = SUM_TG_SIZE / 2; s > 0; s >>= 1) {
+        if (tid < s) { shared[tid] += shared[tid + s]; }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    if (tid == 0) { partialOut[tgid] = shared[0]; }
 }
 
 kernel void relu_kernel(device const float* a [[buffer(0)]],

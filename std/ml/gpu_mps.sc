@@ -561,15 +561,17 @@ int mps_scale_f32(const float* a, float k, float* out, unsigned long n) {
     }
 }
 
-// out[0] = sum(a[0..n)) -- a single GPU thread walks the whole array and
-// accumulates serially. Correct, and enough to prove the reduction-shaped
-// dispatch works end to end, but not a real parallel reduction (no
-// threadgroup-memory tree, no multiple-threadgroups-then-combine pass) --
-// same "simplest real version first" spirit as mps_matmul_f32's lack of
-// tiling. A single GPU thread doing a serial O(n) sum is, unsurprisingly,
-// not where GPU dispatch is going to win; this exists for completeness of
-// the op set (tensor_sum is used for the loss in the training benchmark)
-// more than as a performance claim.
+// out[0] = sum(a[0..n)) -- two-stage parallel reduction (see
+// gpu_mps_kernels.metal's sum_kernel comment for the full design): a
+// bounded number of threadgroups each grid-stride-accumulate then
+// tree-reduce their own share of the input in threadgroup memory
+// (O(log SUM_TG_SIZE) span instead of the old single-thread version's
+// O(n)), emitting one partial sum per threadgroup; this function combines
+// those (at most SUM_MAX_GROUPS of them, however large n is) on the CPU
+// after one readback, which is cheap enough not to need a second GPU pass.
+#define SUM_TG_SIZE     ((unsigned long)256)
+#define SUM_MAX_GROUPS  ((unsigned long)256)
+
 static void* __mps_sum_pipeline = (void*)0;
 
 int mps_sum_f32(const float* a, float* out, unsigned long n) {
@@ -587,8 +589,13 @@ int mps_sum_f32(const float* a, float* out, unsigned long n) {
         void* pipeline = __mps_sum_pipeline;
 
         unsigned long bytes = n * sizeof(float);
+        unsigned long numGroups = (n + SUM_TG_SIZE - 1UL) / SUM_TG_SIZE;
+        if (numGroups > SUM_MAX_GROUPS) numGroups = SUM_MAX_GROUPS;
+        if (numGroups == 0UL) numGroups = 1UL;
+        unsigned long partialBytes = numGroups * sizeof(float);
+
         void* bufA = __mps_buf_get_with_bytes((const void*)a, bytes);
-        void* bufOut = __mps_buf_get(4UL);
+        void* bufOut = __mps_buf_get(partialBytes);
         if (bufA == (void*)0 || bufOut == (void*)0) return 0;
 
         void* cmdBuf = msg0(queue, __sel_commandBuffer);
@@ -604,9 +611,9 @@ int mps_sum_f32(const float* a, float* out, unsigned long n) {
         setBytesFn(encoder, __sel_setBytes, (void*)&nu, 4UL, 2UL);
 
         struct MTLSize gridSize;
-        gridSize.width = 1UL; gridSize.height = 1UL; gridSize.depth = 1UL;
+        gridSize.width = numGroups; gridSize.height = 1UL; gridSize.depth = 1UL;
         struct MTLSize tgSize;
-        tgSize.width = 1UL; tgSize.height = 1UL; tgSize.depth = 1UL;
+        tgSize.width = SUM_TG_SIZE; tgSize.height = 1UL; tgSize.depth = 1UL;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
         dispatchFn(encoder, __sel_dispatchThreadgroups, gridSize, tgSize);
         MMsgVoid0 msgVoid0 = (MMsgVoid0)objc_msgSend;
@@ -616,9 +623,13 @@ int mps_sum_f32(const float* a, float* out, unsigned long n) {
 
         void* outPtr = msg0(bufOut, __sel_contents);
         if (outPtr == (void*)0) return 0;
-        memcpy((void*)out, outPtr, 4UL);
+        float* partials = (float*)outPtr;
+        float acc = 0.0f;
+        unsigned long g = 0UL;
+        while (g < numGroups) { acc = acc + partials[g]; g = g + 1UL; }
+        *out = acc;
         __mps_buf_put(bufA, bytes);
-        __mps_buf_put(bufOut, 4UL);
+        __mps_buf_put(bufOut, partialBytes);
         return 1;
     }
 }
