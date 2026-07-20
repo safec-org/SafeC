@@ -2318,6 +2318,13 @@ TypePtr Sema::checkNew(NewExpr &e) {
         }
     }
     e.allocType = resolveType(e.allocType);
+    if (e.arraySize) {
+        TypePtr sizeTy = checkExpr(*e.arraySize);
+        if (sizeTy && !sizeTy->isError() && !sizeTy->isInteger()) {
+            diag_.error(e.arraySize->loc,
+                "'new' array size must be an integer, got '" + sizeTy->str() + "'");
+        }
+    }
     // Returns a reference to the allocated type in the specified arena
     Region r = e.regionName.empty() ? Region::Heap : Region::Arena;
     return makeReference(e.allocType, r, false, true, e.regionName);
@@ -3372,6 +3379,15 @@ TypePtr Sema::checkSubscript(SubscriptExpr &e) {
         }
         e.boundsCheckOmit = inUnsafeScope();
         e.isLValue = true;
+        // Arena staleness through array-element storage — see this file's
+        // "Arena staleness through struct fields / array elements"
+        // section (near checkMember) for the design and
+        // arenaArrayGeneration_'s doc comment in Sema.h for the
+        // per-array-variable (not per-index) precision tradeoff.
+        if (at.element && at.element->kind == TypeKind::Reference && !suppressArenaStaleCheck_) {
+            auto &rt = static_cast<ReferenceType &>(*at.element);
+            if (rt.region == Region::Arena) checkArenaTargetStale(e, rt.arenaName, e.loc);
+        }
         return at.element;
     }
     if (baseTy->kind == TypeKind::Vector) {
@@ -3460,6 +3476,148 @@ TypePtr Sema::checkSlice(SliceExpr &e) {
     return makeSlice(elemTy);
 }
 
+// ── Arena staleness through struct fields / array elements ─────────────────
+// See Sema.h's ArenaGenSnapshot/arenaFieldPathGeneration_/
+// arenaFieldDeclGeneration_/arenaArrayGeneration_ doc comments for the
+// overall design. This block implements the write-side stamping and
+// read-side checking those maps exist to support.
+
+// Builds a key like "0x7f...  .field1.field2" for a chain of plain '.'
+// MemberExprs rooted at a local variable identifier — returns "" if the
+// expression isn't such a chain (rooted at something other than a bare
+// identifier, or passes through a '->' indirection, which breaks
+// per-instance precision the same way it already does for the region-
+// escape check in checkAssign — see that check's own comment on why
+// '->' indirects through independent-lifetime memory). An empty result
+// tells the caller to fall back to the coarser FieldDecl*-keyed map.
+static std::string dotChainArenaKey(const Expr *e) {
+    if (!e) return "";
+    if (e->kind == ExprKind::Ident) {
+        auto *ident = static_cast<const IdentExpr *>(e);
+        if (!ident->resolved) return "";
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%p", (const void *)ident->resolved);
+        return std::string(buf);
+    }
+    if (e->kind == ExprKind::Member) { // '.' only — Arrow is a different ExprKind
+        auto *me = static_cast<const MemberExpr *>(e);
+        std::string baseKey = dotChainArenaKey(me->base.get());
+        if (baseKey.empty()) return "";
+        return baseKey + "." + me->field;
+    }
+    return "";
+}
+
+Sema::ArenaGenSnapshot Sema::arenaSnapshotNow(const std::string &regionName) const {
+    ArenaGenSnapshot snap;
+    snap.regionName     = regionName;
+    snap.bindGen        = regionGeneration_.count(regionName) ? regionGeneration_.at(regionName) : 0;
+    snap.bindMarkDepth  = regionMarkDepth_.count(regionName) ? regionMarkDepth_.at(regionName) : 0;
+    snap.bindScratchGen = regionScratchGeneration_.count(regionName) ? regionScratchGeneration_.at(regionName) : 0;
+    return snap;
+}
+
+bool Sema::isArenaSnapshotStale(const ArenaGenSnapshot &snap) const {
+    int curGen = regionGeneration_.count(snap.regionName) ? regionGeneration_.at(snap.regionName) : 0;
+    bool staleByReset = (curGen != snap.bindGen);
+    bool staleByFreeTo = false;
+    if (snap.bindMarkDepth > 0) {
+        int curScratchGen = regionScratchGeneration_.count(snap.regionName)
+                                 ? regionScratchGeneration_.at(snap.regionName) : 0;
+        staleByFreeTo = (curScratchGen != snap.bindScratchGen);
+    }
+    return staleByReset || staleByFreeTo;
+}
+
+// Called from checkAssign when 'lhs = <fresh &arena<regionName> T value>'
+// writes into a MemberExpr (dot or arrow) or SubscriptExpr — stamps
+// whichever map (path-precise or FieldDecl*/VarDecl*-coarse) applies.
+void Sema::stampArenaTarget(const Expr &lhs, const std::string &regionName) {
+    ArenaGenSnapshot snap = arenaSnapshotNow(regionName);
+    if (lhs.kind == ExprKind::Member || lhs.kind == ExprKind::Arrow) {
+        auto &me = static_cast<const MemberExpr &>(lhs);
+        if (!me.isArrow) {
+            std::string key = dotChainArenaKey(&me);
+            if (!key.empty()) {
+                arenaFieldPathGeneration_[key] = snap;
+                return;
+            }
+        }
+        // Arrow, or a '.'-chain not rooted at a plain local variable —
+        // fall back to the coarser field-declaration-keyed map.
+        TypePtr baseTy = me.base->type;
+        if (baseTy && baseTy->kind == TypeKind::Reference)
+            baseTy = static_cast<ReferenceType &>(*baseTy).base;
+        else if (baseTy && baseTy->kind == TypeKind::Pointer)
+            baseTy = static_cast<PointerType &>(*baseTy).base;
+        if (auto *st = asStruct(baseTy)) {
+            std::vector<int> path;
+            if (const FieldDecl *fd = st->findFieldPath(me.field, path))
+                arenaFieldDeclGeneration_[fd] = snap;
+        }
+    } else if (lhs.kind == ExprKind::Subscript) {
+        auto &se = static_cast<const SubscriptExpr &>(lhs);
+        VarDecl *baseVd = nullptr;
+        if (se.base && se.base->kind == ExprKind::Ident)
+            baseVd = static_cast<IdentExpr *>(se.base.get())->resolved;
+        if (baseVd) arenaArrayGeneration_[baseVd] = snap;
+    }
+}
+
+// Called from checkMember/checkSubscript when reading a field/element
+// whose static type is '&arena<regionName> T' — mirrors checkIdent's own
+// check (see that function), just against the path/FieldDecl*/VarDecl*
+// maps instead of a Symbol. Absence from the relevant map means "never
+// stamped through this mechanism" (e.g. a field never written via a
+// tracked assignment) — treated as not-yet-tracked rather than stale, the
+// same permissive default the rest of this checker family uses for
+// anything outside its precise reach, so this only ever *adds*
+// diagnostics for writes it actually observed, never invents one from
+// silence.
+bool Sema::checkArenaTargetStale(const Expr &e, const std::string &regionName, SourceLocation loc) {
+    if (inUnsafeScope()) return false;
+    const ArenaGenSnapshot *snap = nullptr;
+    if (e.kind == ExprKind::Member || e.kind == ExprKind::Arrow) {
+        auto &me = static_cast<const MemberExpr &>(e);
+        if (!me.isArrow) {
+            std::string key = dotChainArenaKey(&me);
+            if (!key.empty()) {
+                auto it = arenaFieldPathGeneration_.find(key);
+                if (it != arenaFieldPathGeneration_.end()) snap = &it->second;
+            }
+        }
+        if (!snap) {
+            TypePtr baseTy = me.base->type;
+            if (baseTy && baseTy->kind == TypeKind::Reference)
+                baseTy = static_cast<ReferenceType &>(*baseTy).base;
+            else if (baseTy && baseTy->kind == TypeKind::Pointer)
+                baseTy = static_cast<PointerType &>(*baseTy).base;
+            if (auto *st = asStruct(baseTy)) {
+                std::vector<int> path;
+                if (const FieldDecl *fd = st->findFieldPath(me.field, path)) {
+                    auto it = arenaFieldDeclGeneration_.find(fd);
+                    if (it != arenaFieldDeclGeneration_.end()) snap = &it->second;
+                }
+            }
+        }
+    } else if (e.kind == ExprKind::Subscript) {
+        auto &se = static_cast<const SubscriptExpr &>(e);
+        if (se.base && se.base->kind == ExprKind::Ident) {
+            if (auto *baseVd = static_cast<IdentExpr *>(se.base.get())->resolved) {
+                auto it = arenaArrayGeneration_.find(baseVd);
+                if (it != arenaArrayGeneration_.end()) snap = &it->second;
+            }
+        }
+    }
+    if (!snap || snap->regionName != regionName) return false;
+    if (!isArenaSnapshotStale(*snap)) return false;
+    diag_.error(loc,
+        "use of a '&arena<" + regionName + "> T' value read through a struct "
+        "field/array element after arena_reset<" + regionName + ">(), arena_destroy<" +
+        regionName + ">(), or arena_free_to<" + regionName + ">() invalidated it");
+    return true;
+}
+
 TypePtr Sema::checkMember(MemberExpr &e) {
     TypePtr baseTy = checkExpr(*e.base);
 
@@ -3532,6 +3690,17 @@ TypePtr Sema::checkMember(MemberExpr &e) {
         return makeError();
     }
     if (!e.isArrow) e.isLValue = e.base->isLValue;
+    // Arena staleness through struct-field storage (see this file's
+    // "Arena staleness through struct fields / array elements" section,
+    // just above checkMember) — only meaningful when this occurrence is a
+    // *read* of the field's current value, not the LHS of an assignment
+    // about to overwrite it (checkAssign suppresses this the same way it
+    // already suppresses checkIdent's analogous check for a plain
+    // variable LHS).
+    if (fd->type && fd->type->kind == TypeKind::Reference && !suppressArenaStaleCheck_) {
+        auto &rt = static_cast<ReferenceType &>(*fd->type);
+        if (rt.region == Region::Arena) checkArenaTargetStale(e, rt.arenaName, e.loc);
+    }
     return fd->type;
 }
 
@@ -3602,6 +3771,19 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
                 }
             }
     }
+    // Same suppression, extended to a struct-field/array-element LHS
+    // ('h.n = ref;', 'p->n = ref;', 'arr[i] = ref;') — this occurrence is
+    // the assignment target, not a read of whatever stale value used to
+    // be there, so checkMember/checkSubscript's own arena-staleness check
+    // (see stampArenaTarget/checkArenaTargetStale) must not fire on it.
+    if (e.op == AssignOp::Assign &&
+        (e.lhs->kind == ExprKind::Member || e.lhs->kind == ExprKind::Arrow ||
+         e.lhs->kind == ExprKind::Subscript)) {
+        if (!suppressArenaStaleCheck_) {
+            suppressArenaStaleCheck_ = true;
+            suppressedHere = true;
+        }
+    }
     TypePtr lhsTy = checkExpr(*e.lhs);
     if (suppressedHere) suppressArenaStaleCheck_ = false;
     if (suppressedHeapHere) suppressHeapStaleCheck_ = false;
@@ -3653,6 +3835,14 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
                 }
             }
         }
+    } else if (e.op == AssignOp::Assign &&
+               (e.lhs->kind == ExprKind::Member || e.lhs->kind == ExprKind::Arrow ||
+                e.lhs->kind == ExprKind::Subscript) &&
+               rhsTy && rhsTy->kind == TypeKind::Reference) {
+        // Same rebind idea as the Ident case above, for a struct-field/
+        // array-element LHS — see stampArenaTarget's doc comment.
+        auto &rrt = static_cast<ReferenceType &>(*rhsTy);
+        if (rrt.region == Region::Arena) stampArenaTarget(*e.lhs, rrt.arenaName);
     }
 
     if (!e.lhs->isLValue) {

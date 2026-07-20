@@ -3,14 +3,13 @@
 #pragma once
 #include <std/ml/attention_advanced.h>
 #include <std/ml/tensor.h>
-#include <std/ml/tensor.sc>
 #include <std/ml/attention.h>
-#include <std/ml/attention.sc>
 #include <std/math.h>
-#include <std/math.sc>
-#include <std/mem.sc>
 
 namespace std {
+
+extern void* malloc(unsigned long size);
+extern void  free(void* ptr);
 
 // ── MLA / EG-MLA ─────────────────────────────────────────────────────────────
 &Tensor mla_forward(const &Tensor X, const &Tensor Wq, const &Tensor Wdkv,

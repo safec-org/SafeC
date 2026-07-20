@@ -2,9 +2,8 @@
 // tensor_cuda.h). UNVERIFIED — see gpu_cuda.h/.sc's warnings.
 #pragma once
 #include <std/ml/tensor_cuda.h>
-#include <std/ml/tensor.sc>
+#include <std/ml/tensor_nn.h>
 #include <std/ml/gpu_cuda.h>
-#include <std/ml/gpu_cuda.sc>
 
 namespace std {
 
@@ -167,6 +166,55 @@ static void __tensor_cuda_from_f32(double* dst, const float* src, unsigned long 
         while (z < k * n) { fb[z] = (float)b->data[z]; z = z + 1UL; }
 
         int ok = cuda_matmul_f32((const float*)fa, (const float*)fb, fout, m, k, n);
+        if (ok) {
+            z = 0UL;
+            while (z < m * n) { out->data[z] = (double)fout[z]; z = z + 1UL; }
+        } else {
+            unsigned long i = 0UL;
+            while (i < m) {
+                unsigned long j0 = 0UL;
+                while (j0 < n) { out->data[i * n + j0] = 0.0; j0 = j0 + 1UL; }
+                i = i + 1UL;
+            }
+            i = 0UL;
+            while (i < m) {
+                unsigned long p = 0UL;
+                while (p < k) {
+                    double aVal = a->data[i * k + p];
+                    unsigned long j = 0UL;
+                    while (j < n) {
+                        out->data[i * n + j] = out->data[i * n + j] + aVal * b->data[p * n + j];
+                        j = j + 1UL;
+                    }
+                    p = p + 1UL;
+                }
+                i = i + 1UL;
+            }
+        }
+
+        dealloc((void*)fa); dealloc((void*)fb); dealloc((void*)fout);
+    }
+    __tensor_link2(out, a, b, (void*)__matmul_backward);
+    return out;
+}
+
+&Tensor tensor_matmul_cuda_blas(const &Tensor a, const &Tensor b) {
+    if (!cuda_available()) { return tensor_matmul(a, b); }
+
+    unsigned long m; unsigned long k; unsigned long n;
+    unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
+    struct Tensor* out = tensor_new_2d(m, n, 0);
+    unsafe {
+        float* fa   = (float*)alloc(checked_mul_size(sizeof(float), m * k));
+        float* fb   = (float*)alloc(checked_mul_size(sizeof(float), k * n));
+        float* fout = (float*)alloc(checked_mul_size(sizeof(float), m * n));
+
+        unsigned long z = 0UL;
+        while (z < m * k) { fa[z] = (float)a->data[z]; z = z + 1UL; }
+        z = 0UL;
+        while (z < k * n) { fb[z] = (float)b->data[z]; z = z + 1UL; }
+
+        int ok = cuda_matmul_f32_blas((const float*)fa, (const float*)fb, fout, m, k, n);
         if (ok) {
             z = 0UL;
             while (z < m * n) { out->data[z] = (double)fout[z]; z = z + 1UL; }

@@ -17,4 +17,10 @@ namespace std {
 &Tensor tensor_sum_rocm(const &Tensor a);
 &Tensor tensor_matmul_rocm(const &Tensor a, const &Tensor b);
 
+// Dispatched to rocBLAS (gpu_rocm.h's rocm_matmul_f32_blas) instead of
+// the HSACO-blocked naive kernel tensor_matmul_rocm uses — see that
+// function's comment. This one doesn't hit the HSACO gap, so it's the
+// one actually worth trying on real ROCm hardware.
+&Tensor tensor_matmul_rocm_blas(const &Tensor a, const &Tensor b);
+
 } // namespace std

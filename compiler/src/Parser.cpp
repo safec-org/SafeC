@@ -1068,7 +1068,7 @@ DeclPtr Parser::parseFunctionOrGlobalVar(bool isConst, bool isConsteval,
         consume(); // consume '('
         auto fn = parseFunctionDecl(std::move(retType), std::move(name), loc,
                                     isConst, isConsteval, isInline, isExtern,
-                                    false, std::move(genericParams));
+                                    isStatic, std::move(genericParams));
         if (!methodOwner.empty()) {
             fn->isMethod    = true;
             fn->methodOwner = std::move(methodOwner);
@@ -1104,7 +1104,7 @@ DeclPtr Parser::parseFunctionOrGlobalVar(bool isConst, bool isConsteval,
 std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(
     TypePtr retType, std::string name, SourceLocation loc,
     bool isConst, bool isConsteval, bool isInline, bool isExtern,
-    bool /*isVariadic_unused*/, std::vector<GenericParam> genericParams)
+    bool isStatic, std::vector<GenericParam> genericParams)
 {
     auto fn = std::make_unique<FunctionDecl>(std::move(name), loc);
     fn->returnType   = std::move(retType);
@@ -1112,6 +1112,7 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(
     fn->isConsteval  = isConsteval;
     fn->isInline     = isInline;
     fn->isExtern     = isExtern;
+    fn->isStatic     = isStatic;
     fn->genericParams = std::move(genericParams);
 
     // Parse parameter list (we're past the '(')
@@ -2727,7 +2728,15 @@ ExprPtr Parser::parsePrimaryExpr() {
             expect(TK::Gt, "expected '>' closing region parameter");
         }
         TypePtr allocType = parseBaseType();
-        return std::make_unique<NewExpr>(std::move(regionName), std::move(allocType), loc);
+        auto ne = std::make_unique<NewExpr>(std::move(regionName), std::move(allocType), loc);
+        // 'new<R> Type[count]' — array form, 'count' a general (runtime)
+        // expression, not restricted to a compile-time constant the way a
+        // fixed declarator array size is.
+        if (match(TK::LBracket)) {
+            ne->arraySize = parseExpr();
+            expect(TK::RBracket, "expected ']' closing 'new' array size");
+        }
+        return ne;
     }
     case TK::KW_arena_reset: {
         // arena_reset<RegionName>()

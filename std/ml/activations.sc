@@ -3,13 +3,24 @@
 #pragma once
 #include <std/ml/activations.h>
 #include <std/ml/tensor.h>
-#include <std/ml/tensor.sc>
 #include <std/math.h>
-#include <std/math.sc>
 
 namespace std {
 
-&Tensor tensor_sigmoid(const &Tensor a) {
+&Tensor tensor_relu_fwd(const &Tensor a) {
+    struct Tensor* out = tensor_zeros_like(a);
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < out->size) {
+            double v = a->data[i];
+            out->data[i] = (v > 0.0) ? v : 0.0;
+            i = i + 1UL;
+        }
+    }
+    return out;
+}
+
+&Tensor tensor_sigmoid_fwd(const &Tensor a) {
     struct Tensor* out = tensor_zeros_like(a);
     unsafe {
         unsigned long i = 0UL;
@@ -21,7 +32,7 @@ namespace std {
     return out;
 }
 
-&Tensor tensor_tanh(const &Tensor a) {
+&Tensor tensor_tanh_fwd(const &Tensor a) {
     struct Tensor* out = tensor_zeros_like(a);
     unsafe {
         unsigned long i = 0UL;
@@ -33,7 +44,7 @@ namespace std {
     return out;
 }
 
-&Tensor tensor_silu(const &Tensor a) {
+&Tensor tensor_silu_fwd(const &Tensor a) {
     struct Tensor* out = tensor_zeros_like(a);
     unsafe {
         unsigned long i = 0UL;
@@ -47,7 +58,7 @@ namespace std {
     return out;
 }
 
-&Tensor tensor_gelu(const &Tensor a) {
+&Tensor tensor_gelu_fwd(const &Tensor a) {
     struct Tensor* out = tensor_zeros_like(a);
     double c = 0.7978845608028654; // sqrt(2/pi)
     unsafe {

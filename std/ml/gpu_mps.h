@@ -78,4 +78,86 @@ int mps_matmul_f32(const float* a, const float* b, float* out,
 // attempt an mps_* call first just to find out.
 int mps_available();
 
+// ── Batched dispatch ──────────────────────────────────────────────────────────
+// Every mps_*_f32 call above independently creates its own command
+// buffer, dispatches, and blocks on waitUntilCompleted before returning
+// -- correct, but for a chain of several ops (e.g. matmul -> relu ->
+// matmul in a forward pass), paying one full command-buffer-submission +
+// host/device sync round trip PER OP is the dominant cost once shader
+// compilation is already cached (see mps_matmul_f32's implementation
+// comment), especially for small workloads where dispatch latency swamps
+// actual compute time.
+//
+// mps_batch_begin()/mps_batch_end() let a caller wrap several mps_*_f32
+// calls so they share ONE command buffer and ONE sync point:
+//
+//   mps_batch_begin();
+//   mps_matmul_f32(x, w1, h, ...);    // encoded onto the shared buffer,
+//                                      // NOT dispatched yet -- 'h' is not
+//                                      // valid at this point
+//   mps_relu_f32(h, r, ...);          // reads 'h' — safe: this dispatch
+//                                      // is encoded AFTER matmul's on the
+//                                      // same buffer, so Metal orders it
+//                                      // after even though the CPU
+//                                      // hasn't waited yet
+//   mps_matmul_f32(r, w2, y, ...);
+//   mps_batch_end();                   // commits once, waits once, THEN
+//                                       // every op's 'out' pointer above
+//                                       // becomes valid
+//
+// Every batched op's 'out' buffer is invalid to read until
+// mps_batch_end() returns — the same contract as reading a
+// cudaMemcpyAsync destination before synchronizing.
+//
+// IMPORTANT: that example is only safe because none of mps_matmul_f32's
+// or mps_relu_f32's *inputs* above are themselves another batched op's
+// still-pending output — 'x'/'w1'/'w2' are all already-populated,
+// ordinary CPU float arrays. mps_matmul_f32/mps_relu_f32 always upload
+// their input from a CPU float* into a fresh GPU buffer, so feeding one
+// batched op's 'out' pointer into a later op's 'a'/'b' *within the same
+// unflushed batch* silently reads whatever was in that CPU memory before
+// the batch started (found and fixed via direct testing, not something
+// caught by inspection: a naive matmul -> relu chain like this computed
+// 0 instead of the real value). Use mps_matmul_f32_chained/
+// mps_relu_f32_chained (below) instead for that case — they take the
+// *GPU buffer* a previous batched op already wrote to directly, skipping
+// the CPU round trip entirely rather than reading stale CPU data.
+void mps_batch_begin();
+void mps_batch_end();
+int  mps_batch_is_active();
+
+typedef fn void(void* ctx) MpsFinalizeFn;
+
+// Register a callback to run once, in registration order, after
+// mps_batch_end()'s single wait and raw GPU->CPU readback of every
+// batched op's output buffer. Exists for callers (tensor_gpu.sc) that
+// need to do their own CPU-side post-processing on a batched op's result
+// (e.g. float32->float64 conversion) — that processing has to wait for
+// the same sync point the raw readback does, so it can't just run
+// immediately after the mps_*_f32 call returns the way it does outside
+// a batch.
+void mps_batch_register_finalize(MpsFinalizeFn finalizeFn, void* ctx);
+
+// The GPU buffer handle mps_matmul_f32/mps_relu_f32 most recently wrote
+// their (still-pending) output to, while a batch is active — NULL if no
+// batch is active or nothing's been dispatched into this batch yet. Call
+// right after a batched op returns to capture its output buffer for
+// chaining into the *_chained entry points below, instead of waiting for
+// mps_batch_end() and reading CPU floats.
+void* mps_batch_last_output_buffer();
+
+// Same computation as mps_matmul_f32/mps_relu_f32, but the primary input
+// ('bufA') is a GPU buffer handle — typically mps_batch_last_output_
+// buffer()'s return from a previous batched op in the same still-open
+// batch — instead of a CPU float array, so no CPU<->GPU round trip
+// happens for that input at all. Only usable while a batch is active
+// (mps_batch_is_active()); the secondary input 'b' (matmul's second
+// operand) is still an ordinary CPU float array — realistic chains in
+// this codebase (matmul -> relu -> matmul) only ever have ONE chained
+// input at a time (the running activation; weight matrices are always
+// freshly uploaded), so that's the only shape these support.
+int mps_matmul_f32_chained(void* bufA, const float* b, float* out,
+                            unsigned long M, unsigned long K, unsigned long N);
+int mps_relu_f32_chained(void* bufA, float* out, unsigned long n);
+
 } // namespace std

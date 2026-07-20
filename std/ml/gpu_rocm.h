@@ -44,6 +44,18 @@ int rocm_sum_f32(const float* a, float* out, unsigned long n);
 int rocm_matmul_f32(const float* a, const float* b, float* out,
                      unsigned long M, unsigned long K, unsigned long N);
 
+// Same computation as rocm_matmul_f32, dispatched to rocBLAS's
+// rocblas_sgemm instead — the ROCm-vendor equivalent of tensor_blas.h's
+// Accelerate-backed tensor_matmul_blas / gpu_cuda.h's cuBLAS-backed
+// cuda_matmul_f32_blas. Unlike rocm_matmul_f32, this does NOT hit the
+// HSACO-embedding gap described above: rocblas_sgemm is an ordinary
+// exported symbol in librocblas.so, not a kernel image that needs
+// offline compilation, so this is actually usable on real ROCm hardware
+// today (still UNVERIFIED in this sandbox — no AMD GPU/ROCm toolkit here
+// either).
+int rocm_matmul_f32_blas(const float* a, const float* b, float* out,
+                          unsigned long M, unsigned long K, unsigned long N);
+
 // True if a ROCm-capable device is present (hipInit(0) == hipSuccess &&
 // hipGetDeviceCount() > 0).
 int rocm_available();

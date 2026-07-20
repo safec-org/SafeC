@@ -10,7 +10,7 @@
 // from 'hipcc --genco' run against the matching .hip source for that op.
 #pragma once
 #include <std/ml/gpu_rocm.h>
-#include <std/mem.sc>
+#include <std/mem.h>
 
 namespace std {
 
@@ -31,7 +31,26 @@ extern int hipModuleLaunchKernel(void* f,
                                   void** kernelParams, void** extra);
 extern int hipDeviceSynchronize();
 
+// ── rocBLAS (rocblas.h) — hand-matched signatures ───────────────────────────
+// Unlike rocm_matmul_f32 above, this needs no HSACO kernel image at all
+// -- rocblas_sgemm is a real exported symbol in librocblas.so, called
+// directly like any other C library function, so it doesn't hit this
+// file's HSACO gap (see this file's own header comment). rocblas_handle
+// is opaque (void*); rocblas_status is a plain C enum (int),
+// rocblas_status_success == 0. rocblas_operation matches CBLAS's
+// convention (rocblas_operation_none=111, unlike cuBLAS's 0/1) since
+// rocBLAS is AMD's BLAS built to be largely drop-in compatible with
+// existing BLAS/cuBLAS-style call sites.
+extern int rocblas_create_handle(void** handle);
+extern int rocblas_destroy_handle(void* handle);
+extern int rocblas_sgemm(void* handle, int transA, int transB,
+                          int m, int n, int k,
+                          const float* alpha, const float* A, int lda,
+                          const float* B, int ldb,
+                          const float* beta, float* C, int ldc);
+
 #define HIP_SUCCESS 0
+#define ROCBLAS_OP_N 111
 
 int rocm_available() {
     if (hipInit(0U) != HIP_SUCCESS) return 0;
@@ -414,6 +433,52 @@ int rocm_matmul_f32(const float* a, const float* b, float* out,
 
         hipFree(devA); hipFree(devB); hipFree(devOut);
         return launchOk ? 1 : 0;
+    }
+}
+
+// out[M,N] = a[M,K] . b[K,N] via rocblas_sgemm -- unlike rocm_matmul_f32
+// above (blocked on the HSACO-embedding gap this file's header comment
+// describes), this needs no compiled kernel image at all: rocblas_sgemm
+// is an ordinary exported function in librocblas.so, so this path is
+// actually usable on real ROCm hardware where the naive kernel path
+// currently isn't. Same row-major/column-major handling as
+// gpu_cuda.sc's cuda_matmul_f32_blas (rocBLAS mirrors BLAS/cuBLAS's
+// column-major convention) -- see that function's comment for the
+// "compute C^T = B^T*A^T via operand-swap" reasoning; identical trick,
+// just a different vendor library underneath.
+int rocm_matmul_f32_blas(const float* a, const float* b, float* out,
+                          unsigned long M, unsigned long K, unsigned long N) {
+    unsafe {
+        if (hipInit(0U) != HIP_SUCCESS) return 0;
+        if (hipSetDevice(0) != HIP_SUCCESS) return 0;
+
+        void* handle = (void*)0;
+        if (rocblas_create_handle(&handle) != HIP_SUCCESS) return 0;
+
+        unsigned long bytesA = M * K * sizeof(float);
+        unsigned long bytesB = K * N * sizeof(float);
+        unsigned long bytesOut = M * N * sizeof(float);
+        void* devA = (void*)0; void* devB = (void*)0; void* devOut = (void*)0;
+        hipMalloc(&devA, bytesA); hipMalloc(&devB, bytesB); hipMalloc(&devOut, bytesOut);
+        hipMemcpyHtoD(devA, (void*)a, bytesA);
+        hipMemcpyHtoD(devB, (void*)b, bytesB);
+
+        float alpha = 1.0f;
+        float beta = 0.0f;
+        int Mi = (int)M; int Ki = (int)K; int Ni = (int)N;
+        int status = rocblas_sgemm(handle, ROCBLAS_OP_N, ROCBLAS_OP_N,
+            Ni, Mi, Ki,
+            (const float*)&alpha,
+            (const float*)devB, Ni,
+            (const float*)devA, Ki,
+            (const float*)&beta,
+            (float*)devOut, Ni);
+        int ok = (status == HIP_SUCCESS);
+        if (ok) hipMemcpyDtoH((void*)out, devOut, bytesOut);
+
+        hipFree(devA); hipFree(devB); hipFree(devOut);
+        rocblas_destroy_handle(handle);
+        return ok ? 1 : 0;
     }
 }
 

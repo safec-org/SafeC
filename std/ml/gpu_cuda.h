@@ -42,6 +42,18 @@ int cuda_sum_f32(const float* a, float* out, unsigned long n);
 int cuda_matmul_f32(const float* a, const float* b, float* out,
                      unsigned long M, unsigned long K, unsigned long N);
 
+// Same computation as cuda_matmul_f32, dispatched to cuBLAS's cublasSgemm
+// instead of the hand-written PTX kernel above — the CUDA-vendor
+// equivalent of tensor_blas.h's Accelerate-backed tensor_matmul_blas.
+// Real vendor GEMMs (cuBLAS included) are tuned per-GPU-architecture in
+// ways a single hand-written PTX kernel isn't; see gpu_cuda.sc's
+// implementation comment for the row-major/column-major handling (cuBLAS
+// is Fortran-convention column-major; SafeC's Tensor is row-major).
+// Same UNVERIFIED caveat as every other function in this file (no NVIDIA
+// GPU, no CUDA toolkit, no cuBLAS library in this sandbox).
+int cuda_matmul_f32_blas(const float* a, const float* b, float* out,
+                          unsigned long M, unsigned long K, unsigned long N);
+
 // True if a CUDA-capable device is present and the driver initializes
 // successfully (cuInit(0) == CUDA_SUCCESS && cuDeviceGetCount() > 0).
 int cuda_available();

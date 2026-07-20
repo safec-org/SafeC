@@ -50,4 +50,24 @@ namespace std {
 &Tensor tensor_sum_gpu(const &Tensor a);
 &Tensor tensor_matmul_gpu(const &Tensor a, const &Tensor b);
 
+// ── Batched dispatch (chains of tensor_*_gpu ops with no CPU step
+// between them, e.g. matmul -> relu -> matmul) ──────────────────────────────
+// Thin wrappers around gpu_mps.h's mps_batch_begin/mps_batch_end that
+// also reset tensor_gpu.sc's own "which Tensor*s are still-pending
+// GPU-only results" chain-tracking table. That table has to be cleared
+// at the exact moment a NEW batch starts, not lazily whenever the
+// tracking code next notices no batch is active — by the time any
+// tensor_*_gpu call runs, mps_batch_begin() has already flipped
+// mps_batch_is_active() to true, so "reset if idle" checked from inside
+// an op is always too late, and stale entries from a PREVIOUS batch
+// silently accumulate (found via direct testing across a real 100-step
+// training loop: the table overflowing its fixed size after enough
+// iterations caused later chained ops to silently fall back to reading
+// stale CPU data again — the exact bug mps_batch_begin's own doc
+// comment describes, just delayed rather than immediate). Call these,
+// not gpu_mps.h's mps_batch_begin/end directly, whenever the batch
+// contains any tensor_*_gpu call.
+void tensor_gpu_batch_begin();
+void tensor_gpu_batch_end();
+
 } // namespace std

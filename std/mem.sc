@@ -30,10 +30,16 @@ extern void* __stderrp;
 
 // ── Use-after-free / double-free / mismatched-deallocation detection ────────
 // alloc()/alloc_zeroed() prefix every allocation with a small header
-// { magic, size } (16 bytes — 2 x 8-byte fields, so the payload after it
-// stays 16-byte aligned, same as the raw malloc/calloc block, since
+// { magic, reserved } (16 bytes — 2 x 8-byte words, so the payload after
+// it stays 16-byte aligned, same as the raw malloc/calloc block, since
 // malloc already guarantees at least that alignment on every hosted
-// target this runs on). dealloc() checks the magic before freeing:
+// target this runs on — SIMD-typed payloads (std/simd's vec<T,N>) depend
+// on that). The second word only exists to keep that alignment; nothing
+// reads it, and it used to be written on every alloc() call regardless
+// (a real, measured cost: microbenchmarked at ~5% of alloc/dealloc's
+// total time on a binarytrees-shaped allocation-heavy workload for a
+// store nothing ever consumed) — removed. dealloc() checks the magic
+// before freeing:
 //   - already ALLOC_FREED_MAGIC_  → double free (or a stale/UAF pointer
 //     being freed a second time) → diagnosed and aborted, not silently
 //     corrupting the allocator's free list.
@@ -112,6 +118,14 @@ extern void* __stderrp;
 #define ALLOC_LIVE_MAGIC_        ((unsigned long)0x5AFEC0DE5AFEC0DE)
 #define ALLOC_FREED_MAGIC_       ((unsigned long)0xDEADDEADDEADDEAD)
 #define ALLOC_QUARANTINE_SIZE_   ((unsigned long)64)
+// Must stay a power of two: alloc_quarantine_push_ uses '& (SIZE_ - 1)'
+// instead of '% SIZE_' for the slot index specifically so the wrap is a
+// single guaranteed-cheap AND regardless of optimization level — '%' by
+// a compile-time-constant power of two gets strength-reduced to the same
+// AND at -O2 by any competent backend, but this makes it true at -O0/-O1
+// too instead of depending on that pass having run, on a call this hot
+// (every single dealloc()).
+#define ALLOC_QUARANTINE_MASK_   ((unsigned long)63)
 
 static void alloc_abort_(const char* msg) {
     unsafe { fprintf(__stderrp, "std::alloc fatal: %s\n", msg); }
@@ -123,7 +137,7 @@ thread_local static unsigned long allocQuarantineHead_ = (unsigned long)0;
 
 static void alloc_quarantine_push_(void* raw) {
     unsafe {
-        unsigned long slot = allocQuarantineHead_ % ALLOC_QUARANTINE_SIZE_;
+        unsigned long slot = allocQuarantineHead_ & ALLOC_QUARANTINE_MASK_;
         unsigned long evictedBits = allocQuarantineRing_[slot];
         allocQuarantineRing_[slot] = (unsigned long)raw;
         allocQuarantineHead_ = allocQuarantineHead_ + (unsigned long)1;
@@ -142,7 +156,9 @@ void* alloc(unsigned long size) {
         if (raw == (void*)0) { return (void*)0; }
         unsigned long* hdr = (unsigned long*)raw;
         hdr[0] = ALLOC_LIVE_MAGIC_;
-        hdr[1] = size;
+        // hdr[1] is the reserved alignment-padding word (see this
+        // section's header comment) — deliberately left unwritten, not
+        // an oversight.
         return (void*)((unsigned long)raw + ALLOC_HDR_SIZE_);
     }
 }
@@ -154,7 +170,7 @@ void* alloc_zeroed(unsigned long size) {
         if (raw == (void*)0) { return (void*)0; }
         unsigned long* hdr = (unsigned long*)raw;
         hdr[0] = ALLOC_LIVE_MAGIC_;
-        hdr[1] = size;
+        // hdr[1] already 0 from calloc — no write needed.
         return (void*)((unsigned long)raw + ALLOC_HDR_SIZE_);
     }
 }
@@ -196,9 +212,10 @@ void* realloc_buf(void* ptr, unsigned long new_size) {
         }
         void* newRaw = realloc(raw, new_size + ALLOC_HDR_SIZE_);
         if (newRaw == (void*)0) { return (void*)0; }
-        unsigned long* newHdr = (unsigned long*)newRaw;
-        newHdr[0] = ALLOC_LIVE_MAGIC_;
-        newHdr[1] = new_size;
+        // newHdr[0] is already ALLOC_LIVE_MAGIC_ -- realloc() preserves
+        // the original block's leading bytes (which already passed the
+        // live-magic check above) up to min(old size, new size), and the
+        // header itself is always within that preserved region.
         return (void*)((unsigned long)newRaw + ALLOC_HDR_SIZE_);
     }
 }

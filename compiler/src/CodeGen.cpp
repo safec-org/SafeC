@@ -322,6 +322,19 @@ llvm::Value *CodeGen::genNew(NewExpr &e, FnEnv &env) {
     const auto &dl = mod_->getDataLayout();
     uint64_t elemSize = dl.getTypeAllocSize(elemTy);
 
+    // 'new<R> Type[count]': total size is a runtime 'count * elemSize',
+    // not the compile-time constant 'elemSize' the single-object form
+    // uses below. Every use of 'elemSize' as the allocation size past
+    // this point goes through 'totalSize' instead so both forms share
+    // the same arena-bump / heap-alloc code beneath.
+    llvm::Value *totalSize = llvm::ConstantInt::get(Int64Ty, elemSize);
+    if (e.arraySize) {
+        auto *countVal = genExpr(*e.arraySize, env);
+        countVal = builder_.CreateIntCast(countVal, Int64Ty, /*isSigned=*/false, "new.count64");
+        totalSize = builder_.CreateMul(
+            llvm::ConstantInt::get(Int64Ty, elemSize), countVal, "new.arraysize");
+    }
+
     if (!e.regionName.empty()) {
         auto it = arenaStateMap_.find(e.regionName);
         if (it != arenaStateMap_.end()) {
@@ -354,8 +367,7 @@ llvm::Value *CodeGen::genNew(NewExpr &e, FnEnv &env) {
             auto *used    = builder_.CreateLoad(Int64Ty, usedPtr, "arena.used");
             auto *allocPtr = builder_.CreateGEP(
                 llvm::Type::getInt8Ty(ctx_), bufPhi, used, "arena.ptr");
-            auto *newUsed = builder_.CreateAdd(
-                used, llvm::ConstantInt::get(Int64Ty, elemSize), "arena.newused");
+            auto *newUsed = builder_.CreateAdd(used, totalSize, "arena.newused");
             builder_.CreateStore(newUsed, usedPtr);
             return allocPtr;
         }
@@ -372,10 +384,9 @@ llvm::Value *CodeGen::genNew(NewExpr &e, FnEnv &env) {
     // must share the same allocator for the compile-time UAF/double-free
     // tracking (see Sema::heapFreeGeneration_) to correspond to anything
     // real at runtime.
-    auto *sizeVal = llvm::ConstantInt::get(Int64Ty, elemSize);
     auto allocFn = mod_->getOrInsertFunction("std_alloc",
         llvm::FunctionType::get(PtrTy, {Int64Ty}, false));
-    return builder_.CreateCall(allocFn, {sizeVal}, "heap.alloc");
+    return builder_.CreateCall(allocFn, {totalSize}, "heap.alloc");
 }
 
 llvm::Value *CodeGen::genTupleLit(TupleLitExpr &e, FnEnv &env) {
@@ -546,9 +557,18 @@ llvm::Function *CodeGen::genFunctionProto(FunctionDecl &fn) {
     llvm::Function *llvmFn = mod_->getFunction(fn.name);
     bool isNewFunction = (llvmFn == nullptr);
     if (isNewFunction) {
-        auto linkage = fn.isExtern
-            ? llvm::Function::ExternalLinkage
-            : llvm::Function::ExternalLinkage;  // default external for C ABI
+        // 'static' functions get real internal linkage, matching C: each
+        // translation unit that defines one (e.g. a 'static' helper body
+        // written directly in a shared header, included by several .sc
+        // files that are compiled and linked separately) gets its own
+        // private copy, invisible to and non-conflicting with every other
+        // TU's copy of the same-named function. Without this, two TUs
+        // defining the same 'static' function both export an identical
+        // external symbol and the linker rejects the link as a duplicate
+        // definition — 'static' would parse but silently not do anything.
+        auto linkage = fn.isStatic
+            ? llvm::Function::InternalLinkage
+            : llvm::Function::ExternalLinkage;
         llvmFn = llvm::Function::Create(fnType, linkage, fn.name, *mod_);
     }
 

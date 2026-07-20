@@ -15,9 +15,11 @@
 // equivalent HLSL/WGSL-to-SPIR-V) build step.
 #pragma once
 #include <std/ml/gpu_spirv.h>
-#include <std/mem.sc>
+#include <std/mem.h>
 
 namespace std {
+
+extern void* memcpy(void* dst, const void* src, unsigned long n);
 
 // ── Vulkan core structs (hand-matched to vulkan_core.h's field order) ──────
 struct VkApplicationInfo {

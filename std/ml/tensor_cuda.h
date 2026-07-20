@@ -17,4 +17,10 @@ namespace std {
 &Tensor tensor_sum_cuda(const &Tensor a);
 &Tensor tensor_matmul_cuda(const &Tensor a, const &Tensor b);
 
+// Same op, dispatched to cuBLAS (gpu_cuda.h's cuda_matmul_f32_blas)
+// instead of the hand-written PTX kernel tensor_matmul_cuda uses — the
+// CUDA-vendor equivalent of tensor_blas.h's Accelerate-backed
+// tensor_matmul_blas.
+&Tensor tensor_matmul_cuda_blas(const &Tensor a, const &Tensor b);
+
 } // namespace std

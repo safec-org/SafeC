@@ -2,14 +2,13 @@
 #pragma once
 #include <std/ml/attention.h>
 #include <std/ml/tensor.h>
-#include <std/ml/tensor.sc>
 #include <std/ml/activations.h>
-#include <std/ml/activations.sc>
 #include <std/math.h>
-#include <std/math.sc>
-#include <std/mem.sc>
 
 namespace std {
+
+extern void* malloc(unsigned long size);
+extern void  free(void* ptr);
 
 &Tensor softmax_rows(const &Tensor x) {
     unsigned long rows; unsigned long cols;
@@ -132,7 +131,7 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src) {
 &Tensor gated_attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
                                  const &Tensor gateLogits) {
     struct Tensor* raw = attention_forward(Q, K, V);
-    struct Tensor* gate = tensor_sigmoid(gateLogits);
+    struct Tensor* gate = tensor_sigmoid_fwd(gateLogits);
     struct Tensor* out = tensor_mul(raw, gate);
     raw->free(); gate->free();
     unsafe { free((void*)raw); free((void*)gate); }
@@ -142,7 +141,7 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src) {
 &Tensor gated_mha_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
                            unsigned long numHeads, const &Tensor gateLogits) {
     struct Tensor* raw = mha_forward(Q, K, V, numHeads);
-    struct Tensor* gate = tensor_sigmoid(gateLogits);
+    struct Tensor* gate = tensor_sigmoid_fwd(gateLogits);
     struct Tensor* out = tensor_mul(raw, gate);
     raw->free(); gate->free();
     unsafe { free((void*)raw); free((void*)gate); }

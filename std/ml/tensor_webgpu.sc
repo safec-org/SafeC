@@ -2,9 +2,8 @@
 // tensor_webgpu.h). UNVERIFIED — see gpu_webgpu.h/.sc's warnings.
 #pragma once
 #include <std/ml/tensor_webgpu.h>
-#include <std/ml/tensor.sc>
+#include <std/ml/tensor_nn.h>
 #include <std/ml/gpu_webgpu.h>
-#include <std/ml/gpu_webgpu.sc>
 
 namespace std {
 

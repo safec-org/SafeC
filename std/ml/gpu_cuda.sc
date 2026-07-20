@@ -12,7 +12,7 @@
 // this needs real hardware verification before being trusted.
 #pragma once
 #include <std/ml/gpu_cuda.h>
-#include <std/mem.sc>
+#include <std/mem.h>
 
 namespace std {
 
@@ -35,7 +35,25 @@ extern int cuLaunchKernel(void* f,
                            void** kernelParams, void** extra);
 extern int cuCtxSynchronize();
 
+// ── cuBLAS (cublas_v2.h) — hand-matched signatures ──────────────────────────
+// cublasHandle_t is an opaque pointer (void*), same treatment as every
+// other CUDA/Metal/Vulkan opaque handle in this codebase. cublasStatus_t
+// is a plain C enum (int); CUBLAS_STATUS_SUCCESS == 0, matching
+// CUDA_SUCCESS above. cublasOperation_t: CUBLAS_OP_N=0 (no transpose),
+// CUBLAS_OP_T=1 (transpose) — only these two are used here.
+extern int cublasCreate_v2(void** handle);
+extern int cublasDestroy_v2(void* handle);
+// alpha/beta are host pointers under cuBLAS's default pointer mode
+// (CUBLAS_POINTER_MODE_HOST) — a plain address-of a local float works,
+// no device allocation needed for the two scalars.
+extern int cublasSgemm_v2(void* handle, int transa, int transb,
+                           int m, int n, int k,
+                           const float* alpha, const float* A, int lda,
+                           const float* B, int ldb,
+                           const float* beta, float* C, int ldc);
+
 #define CUDA_SUCCESS 0
+#define CUBLAS_OP_N 0
 
 int cuda_available() {
     if (cuInit(0U) != CUDA_SUCCESS) return 0;
@@ -817,6 +835,70 @@ int cuda_matmul_f32(const float* a, const float* b, float* out,
         cuMemFree_v2(devOut);
         cuCtxDestroy_v2(ctx);
         return launchOk ? 1 : 0;
+    }
+}
+
+// out[M,N] = a[M,K] . b[K,N] via cublasSgemm instead of the hand-written
+// PTX kernel above -- same device setup (init/context/memory), different
+// compute dispatch.
+//
+// cuBLAS follows Fortran/BLAS convention: column-major, and it computes
+// C = alpha*op(A)*op(B) + beta*C where A is m-by-k, B is k-by-n, C is
+// m-by-n, all COLUMN-major. SafeC's Tensor is row-major throughout. The
+// standard trick for calling a column-major GEMM on row-major data
+// without physically transposing anything: a row-major M*K matrix IS a
+// column-major K*M matrix over the same bytes (and vice versa), so
+// instead of computing row-major C(M,N) = A(M,K)*B(K,N) directly, this
+// computes column-major C^T(N,M) = B^T(N,K) * A^T(K,M) -- which is the
+// exact same bytes as row-major C(M,N), just asking cuBLAS to compute
+// "B times A" (operands swapped) with M/N swapped too, both still
+// CUBLAS_OP_N since no operand is actually transposed, only reinterpreted.
+// (Same trick tensor_blas.sc's Accelerate path does NOT need, since
+// Apple's CBLAS accepts an explicit row-major order flag directly.)
+int cuda_matmul_f32_blas(const float* a, const float* b, float* out,
+                          unsigned long M, unsigned long K, unsigned long N) {
+    unsafe {
+        if (cuInit(0U) != CUDA_SUCCESS) return 0;
+        int device;
+        if (cuDeviceGet(&device, 0) != CUDA_SUCCESS) return 0;
+        void* ctx = (void*)0;
+        if (cuCtxCreate_v2(&ctx, 0U, device) != CUDA_SUCCESS) return 0;
+
+        void* handle = (void*)0;
+        if (cublasCreate_v2(&handle) != CUDA_SUCCESS) {
+            cuCtxDestroy_v2(ctx);
+            return 0;
+        }
+
+        unsigned long bytesA = M * K * sizeof(float);
+        unsigned long bytesB = K * N * sizeof(float);
+        unsigned long bytesOut = M * N * sizeof(float);
+        unsigned long long devA = 0ULL; unsigned long long devB = 0ULL; unsigned long long devOut = 0ULL;
+        cuMemAlloc_v2(&devA, bytesA);
+        cuMemAlloc_v2(&devB, bytesB);
+        cuMemAlloc_v2(&devOut, bytesOut);
+        cuMemcpyHtoD_v2(devA, (const void*)a, bytesA);
+        cuMemcpyHtoD_v2(devB, (const void*)b, bytesB);
+
+        float alpha = 1.0f;
+        float beta = 0.0f;
+        int Mi = (int)M; int Ki = (int)K; int Ni = (int)N;
+        int status = cublasSgemm_v2(handle, CUBLAS_OP_N, CUBLAS_OP_N,
+            Ni, Mi, Ki,
+            (const float*)&alpha,
+            (const float*)(unsigned long)devB, Ni,
+            (const float*)(unsigned long)devA, Ki,
+            (const float*)&beta,
+            (float*)(unsigned long)devOut, Ni);
+        int ok = (status == CUDA_SUCCESS);
+        if (ok) cuMemcpyDtoH_v2((void*)out, devOut, bytesOut);
+
+        cuMemFree_v2(devA);
+        cuMemFree_v2(devB);
+        cuMemFree_v2(devOut);
+        cublasDestroy_v2(handle);
+        cuCtxDestroy_v2(ctx);
+        return ok ? 1 : 0;
     }
 }
 

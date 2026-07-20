@@ -2,9 +2,8 @@
 // tensor_spirv.h). UNVERIFIED — see gpu_spirv.h/.sc's warnings; every op falls back to CPU today.
 #pragma once
 #include <std/ml/tensor_spirv.h>
-#include <std/ml/tensor.sc>
+#include <std/ml/tensor_nn.h>
 #include <std/ml/gpu_spirv.h>
-#include <std/ml/gpu_spirv.sc>
 
 namespace std {
 

@@ -102,6 +102,21 @@ public:
     bool run();
 
 private:
+    // Snapshot of the three arena generation counters (regionGeneration_/
+    // regionMarkDepth_/regionScratchGeneration_) at the moment a
+    // '&arena<R> T' value is stored somewhere other than a plain local
+    // variable (struct field, array element) — see
+    // arenaFieldPathGeneration_/arenaFieldDeclGeneration_/
+    // arenaArrayGeneration_'s own doc comments further down for what each
+    // map covers, and isArenaSnapshotStale for how a snapshot is checked
+    // against the region's current counters.
+    struct ArenaGenSnapshot {
+        std::string regionName;
+        int         bindGen        = -1;
+        int         bindMarkDepth  = 0;
+        int         bindScratchGen = -1;
+    };
+
     // ── Scope management ──────────────────────────────────────────────────────
     void pushScope(bool isUnsafe = false);
     void popScope();
@@ -159,6 +174,16 @@ private:
     TypePtr checkMember(MemberExpr &e);
     TypePtr checkCast(CastExpr &e);
     TypePtr checkAssign(AssignExpr &e);
+    // Arena-staleness-through-storage helpers (see the ArenaGenSnapshot
+    // maps' doc comments above for what each covers). 'stampArenaTarget'
+    // is called from checkAssign whenever the RHS is a fresh '&arena<R> T'
+    // value being written into a MemberExpr/SubscriptExpr LHS; the
+    // matching check runs from checkMember/checkSubscript on the read side.
+    bool        isArenaSnapshotStale(const ArenaGenSnapshot &snap) const;
+    ArenaGenSnapshot arenaSnapshotNow(const std::string &regionName) const;
+    void        stampArenaTarget(const Expr &lhs, const std::string &regionName);
+    bool        checkArenaTargetStale(const Expr &e, const std::string &regionName,
+                                       SourceLocation loc);
     TypePtr checkAddrOf(UnaryExpr &e);
     TypePtr checkDeref(UnaryExpr &e);
     TypePtr checkNew(NewExpr &e);
@@ -363,6 +388,42 @@ private:
     // value — same shape of exemption as definite-init's pre-marking of
     // 'sym->initialized = true' before checking that same LHS occurrence.
     bool suppressArenaStaleCheck_ = false;
+
+    // ── Arena staleness through struct fields / array elements ─────────────────
+    // Symbol::arenaBindGen (above) only tracks a *local variable* directly
+    // holding a '&arena<R> T' value — storing that value into a struct
+    // field or array element ('h.n = ref;', 'arr[i] = ref;') used to
+    // escape all tracking entirely: checkMember/checkSubscript never
+    // consulted anything, so a later read through the field/element after
+    // arena_reset<R>()/arena_free_to<R>() went unchecked. ArenaGenSnapshot
+    // (declared at the top of this class) is the snapshot type stored per
+    // path/field/array below.
+    // '.'-chain field access rooted at a plain local variable ('h.n', not
+    // 'p->n') — keyed by a string built from the root VarDecl* plus the
+    // dotted field path (see dotChainArenaKey in Sema.cpp), so 'h1.n' and
+    // 'h2.n' (two different Holder instances) get independent tracking.
+    // Precise: only the exact instance/path written is ever marked.
+    std::unordered_map<std::string, ArenaGenSnapshot> arenaFieldPathGeneration_;
+    // '->'-chain (or any field access not reachable as a plain '.'-chain
+    // from a local variable — see dotChainArenaKey's empty-string return)
+    // — keyed by the field's declaration identity (FieldDecl*, stable and
+    // shared across every instance of that struct type), since arrow
+    // access indirects through a reference/pointer with its own
+    // independent lifetime, making per-instance tracking impossible
+    // without real alias analysis. Necessarily coarser than the path map:
+    // a store through *any* instance bumps the one counter *every*
+    // instance's read is checked against. Sound (never misses a real
+    // staleness bug) but can over-flag a read of a different, still-valid
+    // instance after some *other* instance's field was restamped — the
+    // same conservative-by-construction tradeoff regionGeneration_ itself
+    // already makes (one counter per region, not per allocation).
+    std::unordered_map<const FieldDecl *, ArenaGenSnapshot> arenaFieldDeclGeneration_;
+    // Array-element tracking — keyed by the array variable's VarDecl*,
+    // collapsing every index into one bucket (no compile-time index
+    // precision for a runtime-computed subscript). Same soundness
+    // tradeoff as the FieldDecl* map above: a store to any element
+    // restamps the one entry every element's read is checked against.
+    std::unordered_map<const VarDecl *, ArenaGenSnapshot> arenaArrayGeneration_;
     // Fallback hint for generic-function inference when a type parameter
     // appears only in the return type (e.g. 'generic<T> T* vec_at(&stack
     // Vec v, unsigned long idx)') — inference is otherwise call-site-only

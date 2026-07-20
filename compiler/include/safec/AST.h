@@ -301,6 +301,13 @@ struct FnEvalExpr : Expr {
 struct NewExpr : Expr {
     std::string regionName;
     TypePtr     allocType;
+    // 'new<R> Type[count]' — null for the plain single-object 'new<R>
+    // Type' form. 'count' is a general runtime expression (not
+    // necessarily a compile-time constant): e.g. a Tensor's flat data
+    // buffer needs 'rows * cols' doubles, known only at the call site,
+    // not at compile time — unlike a fixed-size stack/global array
+    // declarator, which does require a constant.
+    ExprPtr     arraySize;
     NewExpr(std::string r, TypePtr t, SourceLocation l)
         : Expr(ExprKind::New, l), regionName(std::move(r)), allocType(std::move(t)) {}
 };
@@ -682,6 +689,7 @@ struct FunctionDecl : Decl {
     bool  isConsteval = false;
     bool  isInline   = false;
     bool  isExtern   = false;
+    bool  isStatic   = false;  // internal linkage — private to the defining TU
     bool  isVariadic = false;
     // Method support (OBJECT.md §4)
     bool        isMethod      = false;   // true → T::m(...)

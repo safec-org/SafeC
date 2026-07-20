@@ -70,7 +70,7 @@ struct RNNCell rnn_cell_new(unsigned long inputSize, unsigned long hiddenSize) {
         struct Tensor* xi = tensor_matmul(x_t, cell->W_ih);
         struct Tensor* hh = tensor_matmul(h_prev, cell->W_hh);
         struct Tensor* sum = __row_add4(xi, hh, cell->b_ih, cell->b_hh);
-        struct Tensor* h_t = tensor_tanh(sum);
+        struct Tensor* h_t = tensor_tanh_fwd(sum);
         xi->free(); hh->free(); sum->free();
         free((void*)xi); free((void*)hh); free((void*)sum);
         return h_t;
@@ -102,11 +102,11 @@ struct GRUCell gru_cell_new(unsigned long inputSize, unsigned long hiddenSize) {
     unsafe {
         struct Tensor* r_sum = __row_add4(tensor_matmul(x_t, cell->W_ir), tensor_matmul(h_prev, cell->W_hr),
                                            cell->b_ir, cell->b_hr);
-        struct Tensor* r_t = tensor_sigmoid(r_sum);
+        struct Tensor* r_t = tensor_sigmoid_fwd(r_sum);
 
         struct Tensor* z_sum = __row_add4(tensor_matmul(x_t, cell->W_iz), tensor_matmul(h_prev, cell->W_hz),
                                            cell->b_iz, cell->b_hz);
-        struct Tensor* z_t = tensor_sigmoid(z_sum);
+        struct Tensor* z_t = tensor_sigmoid_fwd(z_sum);
 
         struct Tensor* hn = tensor_matmul(h_prev, cell->W_hn);
         struct Tensor* hn_b = tensor_add(hn, cell->b_hn);
@@ -114,7 +114,7 @@ struct GRUCell gru_cell_new(unsigned long inputSize, unsigned long hiddenSize) {
         struct Tensor* in_ = tensor_matmul(x_t, cell->W_in);
         struct Tensor* in_b = tensor_add(in_, cell->b_in);
         struct Tensor* n_sum = tensor_add(in_b, r_hn);
-        struct Tensor* n_t = tensor_tanh(n_sum);
+        struct Tensor* n_t = tensor_tanh_fwd(n_sum);
 
         struct Tensor* one_minus_z = __one_minus(z_t);
         struct Tensor* term1 = tensor_mul(one_minus_z, n_t);
@@ -165,21 +165,21 @@ struct LSTMCell lstm_cell_new(unsigned long inputSize, unsigned long hiddenSize)
     unsafe {
         struct Tensor* i_sum = __row_add4(tensor_matmul(x_t, cell->W_ii), tensor_matmul(h_prev, cell->W_hi),
                                            cell->b_ii, cell->b_hi);
-        struct Tensor* i_t = tensor_sigmoid(i_sum);
+        struct Tensor* i_t = tensor_sigmoid_fwd(i_sum);
         struct Tensor* f_sum = __row_add4(tensor_matmul(x_t, cell->W_if), tensor_matmul(h_prev, cell->W_hf),
                                            cell->b_if, cell->b_hf);
-        struct Tensor* f_t = tensor_sigmoid(f_sum);
+        struct Tensor* f_t = tensor_sigmoid_fwd(f_sum);
         struct Tensor* g_sum = __row_add4(tensor_matmul(x_t, cell->W_ig), tensor_matmul(h_prev, cell->W_hg),
                                            cell->b_ig, cell->b_hg);
-        struct Tensor* g_t = tensor_tanh(g_sum);
+        struct Tensor* g_t = tensor_tanh_fwd(g_sum);
         struct Tensor* o_sum = __row_add4(tensor_matmul(x_t, cell->W_io), tensor_matmul(h_prev, cell->W_ho),
                                            cell->b_io, cell->b_ho);
-        struct Tensor* o_t = tensor_sigmoid(o_sum);
+        struct Tensor* o_t = tensor_sigmoid_fwd(o_sum);
 
         struct Tensor* fc = tensor_mul(f_t, c_prev);
         struct Tensor* ig = tensor_mul(i_t, g_t);
         struct Tensor* c_t = tensor_add(fc, ig);
-        struct Tensor* tanh_c = tensor_tanh(c_t);
+        struct Tensor* tanh_c = tensor_tanh_fwd(c_t);
         struct Tensor* h_t = tensor_mul(o_t, tanh_c);
 
         struct Tensor* garbage[9];
@@ -228,7 +228,7 @@ struct XLSTMState xlstm_cell_forward(const &XLSTMCell cell, const &Tensor x_t,
     unsafe {
         struct Tensor* z_sum = __row_add4(tensor_matmul(x_t, cell->Wz), tensor_matmul(prev->h, cell->Rz),
                                            cell->bz, tensor_zeros_like(cell->bz));
-        struct Tensor* z_t = tensor_tanh(z_sum);
+        struct Tensor* z_t = tensor_tanh_fwd(z_sum);
 
         struct Tensor* zerob = tensor_zeros_like(cell->bi);
         struct Tensor* i_raw = __row_add4(tensor_matmul(x_t, cell->Wi), tensor_matmul(prev->h, cell->Ri),
@@ -239,7 +239,7 @@ struct XLSTMState xlstm_cell_forward(const &XLSTMCell cell, const &Tensor x_t,
         struct Tensor* zerob3 = tensor_zeros_like(cell->bo);
         struct Tensor* o_sum = __row_add4(tensor_matmul(x_t, cell->Wo), tensor_matmul(prev->h, cell->Ro),
                                            cell->bo, zerob3);
-        struct Tensor* o_t = tensor_sigmoid(o_sum);
+        struct Tensor* o_t = tensor_sigmoid_fwd(o_sum);
 
         // Stabilizer: m_t = max(f_raw + m_prev, i_raw), elementwise
         // (broadcasting prev->m's single scalar across the hidden dim).

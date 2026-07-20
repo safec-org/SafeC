@@ -294,8 +294,10 @@ static ExprPtr cloneExprImpl(const Expr *ep, const TypeSubst &subs) {
     }
     case ExprKind::New: {
         auto &ne = static_cast<const NewExpr &>(e);
-        return fix(std::make_unique<NewExpr>(
-            ne.regionName, substituteType(ne.allocType, subs), ne.loc));
+        auto cloned = std::make_unique<NewExpr>(
+            ne.regionName, substituteType(ne.allocType, subs), ne.loc);
+        if (ne.arraySize) cloned->arraySize = cloneExprImpl(ne.arraySize.get(), subs);
+        return fix(std::move(cloned));
     }
     case ExprKind::Spawn: {
         auto &se = static_cast<const SpawnExpr &>(e);

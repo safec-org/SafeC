@@ -2,14 +2,13 @@
 #pragma once
 #include <std/ml/transformer.h>
 #include <std/ml/tensor.h>
-#include <std/ml/tensor.sc>
 #include <std/ml/attention.h>
-#include <std/ml/attention.sc>
 #include <std/ml/activations.h>
-#include <std/ml/activations.sc>
-#include <std/mem.sc>
 
 namespace std {
+
+extern void* malloc(unsigned long size);
+extern void  free(void* ptr);
 
 static struct Tensor* __xf_init_weight(unsigned long rows, unsigned long cols, unsigned long seed) {
     struct Tensor* t = tensor_new_2d(rows, cols, 0);
@@ -137,7 +136,7 @@ void dit_block_free(&DiTBlock block) {
     struct Tensor* h2Mod = __add_broadcast_row(h2Scaled, shift2);
     struct Tensor* ffnHiddenRaw = tensor_matmul(h2Mod, W1);
     struct Tensor* ffnHiddenBias = __add_broadcast_row(ffnHiddenRaw, b1w);
-    struct Tensor* ffnHidden = tensor_relu(ffnHiddenBias);
+    struct Tensor* ffnHidden = tensor_relu_fwd(ffnHiddenBias);
     struct Tensor* ffnOutRaw = tensor_matmul(ffnHidden, W2);
     struct Tensor* ffnOut = __add_broadcast_row(ffnOutRaw, b2w);
     struct Tensor* gatedFfn = __mul_broadcast_row(ffnOut, gate2);
@@ -205,7 +204,7 @@ void jit_block_free(&JiTBlock block) {
     struct Tensor* h2 = tensor_layernorm_rows(x1, 1e-5);
     struct Tensor* ffnHiddenRaw = tensor_matmul(h2, W1);
     struct Tensor* ffnHiddenBias = __add_broadcast_row(ffnHiddenRaw, b1w);
-    struct Tensor* ffnHidden = tensor_relu(ffnHiddenBias);
+    struct Tensor* ffnHidden = tensor_relu_fwd(ffnHiddenBias);
     struct Tensor* ffnOutRaw = tensor_matmul(ffnHidden, W2);
     struct Tensor* ffnOut = __add_broadcast_row(ffnOutRaw, b2w);
     struct Tensor* out = tensor_residual_add(x1, ffnOut);

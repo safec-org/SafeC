@@ -164,7 +164,7 @@ private:
     std::unique_ptr<FunctionDecl> parseFunctionDecl(
         TypePtr retType, std::string name, SourceLocation loc,
         bool isConst, bool isConsteval, bool isInline, bool isExtern,
-        bool isVariadic, std::vector<GenericParam> genericParams);
+        bool isStatic, std::vector<GenericParam> genericParams);
     // 'consumeTrailingSemicolon': the top-level 'struct Foo { ... };' form
     // needs its own terminating ';' consumed here; an inline anonymous/named
     // struct-as-type-position use ('struct S { struct { ... } x; };' — see

@@ -17,9 +17,11 @@
 // one. wgpuBufferMapAsync's readback is handled the same way.
 #pragma once
 #include <std/ml/gpu_webgpu.h>
-#include <std/mem.sc>
+#include <std/mem.h>
 
 namespace std {
+
+extern void* memcpy(void* dst, const void* src, unsigned long n);
 
 // ── WebGPU native C API (webgpu.h) — hand-matched signatures ───────────────
 extern void* wgpuCreateInstance(const void* descriptor);
