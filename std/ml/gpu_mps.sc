@@ -59,26 +59,24 @@ int mps_available() {
     return dev != (void*)0;
 }
 
-int mps_add_f32(const float* a, const float* b, float* out, unsigned long n) {
-    // A single-buffer elementwise-add kernel — deliberately the simplest
-    // possible real GPU-executed op (compiles, dispatches, and reads back
-    // through the shared-storage 'contents' pointer) rather than a large
-    // kernel library, since the point here is proving the whole
-    // SafeC -> objc_msgSend -> Metal pipeline works end to end, not
-    // building out a full shader library. gpu_mps.h's header comment
-    // covers the unified-memory story this demonstrates. Local (not a
-    // file-scope global) because SafeC's global-initializer constant
-    // folder doesn't fold adjacent-string-literal concatenation.
-    const char* kernelSrc =
-        "#include <metal_stdlib>\n"
-        "using namespace metal;\n"
-        "kernel void add_kernel(device const float* a [[buffer(0)]],\n"
-        "                        device const float* b [[buffer(1)]],\n"
-        "                        device float* out [[buffer(2)]],\n"
-        "                        uint id [[thread_position_in_grid]]) {\n"
-        "    out[id] = a[id] + b[id];\n"
-        "}\n";
-
+// Shared setup/dispatch/readback for every elementwise binary kernel below
+// (add/sub/mul/div/pow) — the only thing that varies between them is the
+// one-line kernel body, so that's the only thing each op passes in.
+// Previously, the dispatchThreadgroups:threadsPerThreadgroup: call inside
+// here segfaulted on real Apple Silicon hardware: it passes *two* struct
+// arguments (each 'struct MTLSize', 3x unsigned long = 24 bytes) by value
+// through an objc_msgSend cast. Root-caused and fixed in CodeGen.cpp's
+// genCall: indirect calls (through a function-pointer cast, exactly this
+// pattern) now lower non-HFA struct-by-value arguments over 16 bytes to the
+// real AAPCS64 form (caller copies to a stack temporary, passes a plain
+// pointer) instead of a raw aggregate value — the raw-value form is self-
+// consistent for SafeC-to-SafeC calls (which is why every earlier single-
+// struct-argument call in this function, and std/gui/gui_cocoa.sc's NSRect
+// case, worked fine already) but wasn't what a real, externally-compiled
+// function's argument registers actually expect. Verified end to end: this
+// now returns correct results from a real GPU dispatch for every op below.
+static int __mps_run_binary_kernel(const char* kernelSrc, const char* kernelName,
+                                    const float* a, const float* b, float* out, unsigned long n) {
     unsafe {
         void* device = MTLCreateSystemDefaultDevice();
         if (device == (void*)0) return 0;
@@ -93,7 +91,7 @@ int mps_add_f32(const float* a, const float* b, float* out, unsigned long n) {
                                   srcStr, (void*)0, (void*)&errPtr);
         if (library == (void*)0) return 0;
 
-        void* fnNameStr = __mps_nsstring("add_kernel");
+        void* fnNameStr = __mps_nsstring(kernelName);
         MMsg1 msg1 = (MMsg1)objc_msgSend;
         void* kernelFn = msg1(library, __mps_sel("newFunctionWithName:"), fnNameStr);
         if (kernelFn == (void*)0) return 0;
@@ -135,22 +133,6 @@ int mps_add_f32(const float* a, const float* b, float* out, unsigned long n) {
         unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
         struct MTLSize numThreadgroups;
         numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
-        // KNOWN ISSUE, confirmed on real Apple Silicon hardware: this
-        // specific call — the one selector here passing *two* struct
-        // arguments (each 'struct MTLSize', 3x unsigned long = 24 bytes)
-        // by value through an objc_msgSend cast — segfaults. Every call
-        // above it (device/queue creation, a real runtime MSL shader
-        // *compile*, pipeline-state creation, buffer allocation, encoder
-        // creation, setComputePipelineState:/setBuffer:offset:atIndex:,
-        // each passing at most *one* non-scalar or scalar argument) was
-        // individually verified working via debug-instrumented bisection.
-        // std/gui/gui_cocoa.sc's single-struct-by-value case (NSRect, 4
-        // doubles) works fine, so this looks like a SafeC codegen gap
-        // specific to *multiple consecutive* struct-by-value objc_msgSend
-        // arguments (ARM64 AAPCS64 stack-argument layout for back-to-back
-        // aggregates > 16 bytes each) — not yet root-caused or fixed.
-        // mps_available() above this function is fully verified; this
-        // function is not yet safe to call outside of further debugging.
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
         dispatchFn(encoder, __mps_sel("dispatchThreadgroups:threadsPerThreadgroup:"),
                    numThreadgroups, tgSize);
@@ -164,6 +146,177 @@ int mps_add_f32(const float* a, const float* b, float* out, unsigned long n) {
         memcpy((void*)out, outPtr, bytes);
         return 1;
     }
+}
+
+// Same as __mps_run_binary_kernel but for a single-input elementwise kernel
+// (log/exp/sqrt) — one input buffer instead of two, otherwise identical
+// setup/dispatch/readback.
+static int __mps_run_unary_kernel(const char* kernelSrc, const char* kernelName,
+                                   const float* a, float* out, unsigned long n) {
+    unsafe {
+        void* device = MTLCreateSystemDefaultDevice();
+        if (device == (void*)0) return 0;
+        MMsg0 msg0 = (MMsg0)objc_msgSend;
+        void* queue = msg0(device, __mps_sel("newCommandQueue"));
+        if (queue == (void*)0) return 0;
+
+        void* srcStr = __mps_nsstring(kernelSrc);
+        void* errPtr = (void*)0;
+        MMsg3Lib newLibFn = (MMsg3Lib)objc_msgSend;
+        void* library = newLibFn(device, __mps_sel("newLibraryWithSource:options:error:"),
+                                  srcStr, (void*)0, (void*)&errPtr);
+        if (library == (void*)0) return 0;
+
+        void* fnNameStr = __mps_nsstring(kernelName);
+        MMsg1 msg1 = (MMsg1)objc_msgSend;
+        void* kernelFn = msg1(library, __mps_sel("newFunctionWithName:"), fnNameStr);
+        if (kernelFn == (void*)0) return 0;
+
+        MMsg2 newPipelineFn = (MMsg2)objc_msgSend;
+        void* pipeline = newPipelineFn(device, __mps_sel("newComputePipelineStateWithFunction:error:"),
+                                        kernelFn, (void*)&errPtr);
+        if (pipeline == (void*)0) return 0;
+
+        unsigned long bytes = n * sizeof(float);
+        MMsgNewBufferBytes newBufBytesFn = (MMsgNewBufferBytes)objc_msgSend;
+        void* bufA = newBufBytesFn(device, __mps_sel("newBufferWithBytes:length:options:"),
+                                    (const void*)a, bytes, 0UL);
+        MMsgNewBufferLen newBufLenFn = (MMsgNewBufferLen)objc_msgSend;
+        void* bufOut = newBufLenFn(device, __mps_sel("newBufferWithLength:options:"), bytes, 0UL);
+        if (bufA == (void*)0 || bufOut == (void*)0) return 0;
+
+        void* cmdBuf = msg0(queue, __mps_sel("commandBuffer"));
+        void* encoder = msg0(cmdBuf, __mps_sel("computeCommandEncoder"));
+
+        MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
+        msgVoid1(encoder, __mps_sel("setComputePipelineState:"), pipeline);
+        MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
+        setBufFn(encoder, __mps_sel("setBuffer:offset:atIndex:"), bufA, 0UL, 0UL);
+        setBufFn(encoder, __mps_sel("setBuffer:offset:atIndex:"), bufOut, 0UL, 1UL);
+
+        struct MTLSize gridSize;
+        gridSize.width = n; gridSize.height = 1UL; gridSize.depth = 1UL;
+        unsigned long tgWidth = n < 64UL ? n : 64UL;
+        if (tgWidth == 0UL) tgWidth = 1UL;
+        struct MTLSize tgSize;
+        tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
+        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
+        struct MTLSize numThreadgroups;
+        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
+        MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
+        dispatchFn(encoder, __mps_sel("dispatchThreadgroups:threadsPerThreadgroup:"),
+                   numThreadgroups, tgSize);
+        MMsgVoid0 msgVoid0 = (MMsgVoid0)objc_msgSend;
+        msgVoid0(encoder, __mps_sel("endEncoding"));
+        msgVoid0(cmdBuf, __mps_sel("commit"));
+        msgVoid0(cmdBuf, __mps_sel("waitUntilCompleted"));
+
+        void* outPtr = msg0(bufOut, __mps_sel("contents"));
+        if (outPtr == (void*)0) return 0;
+        memcpy((void*)out, outPtr, bytes);
+        return 1;
+    }
+}
+
+int mps_add_f32(const float* a, const float* b, float* out, unsigned long n) {
+    const char* kernelSrc =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "kernel void add_kernel(device const float* a [[buffer(0)]],\n"
+        "                        device const float* b [[buffer(1)]],\n"
+        "                        device float* out [[buffer(2)]],\n"
+        "                        uint id [[thread_position_in_grid]]) {\n"
+        "    out[id] = a[id] + b[id];\n"
+        "}\n";
+    return __mps_run_binary_kernel(kernelSrc, "add_kernel", a, b, out, n);
+}
+
+int mps_sub_f32(const float* a, const float* b, float* out, unsigned long n) {
+    const char* kernelSrc =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "kernel void sub_kernel(device const float* a [[buffer(0)]],\n"
+        "                        device const float* b [[buffer(1)]],\n"
+        "                        device float* out [[buffer(2)]],\n"
+        "                        uint id [[thread_position_in_grid]]) {\n"
+        "    out[id] = a[id] - b[id];\n"
+        "}\n";
+    return __mps_run_binary_kernel(kernelSrc, "sub_kernel", a, b, out, n);
+}
+
+int mps_mul_f32(const float* a, const float* b, float* out, unsigned long n) {
+    const char* kernelSrc =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "kernel void mul_kernel(device const float* a [[buffer(0)]],\n"
+        "                        device const float* b [[buffer(1)]],\n"
+        "                        device float* out [[buffer(2)]],\n"
+        "                        uint id [[thread_position_in_grid]]) {\n"
+        "    out[id] = a[id] * b[id];\n"
+        "}\n";
+    return __mps_run_binary_kernel(kernelSrc, "mul_kernel", a, b, out, n);
+}
+
+int mps_div_f32(const float* a, const float* b, float* out, unsigned long n) {
+    const char* kernelSrc =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "kernel void div_kernel(device const float* a [[buffer(0)]],\n"
+        "                        device const float* b [[buffer(1)]],\n"
+        "                        device float* out [[buffer(2)]],\n"
+        "                        uint id [[thread_position_in_grid]]) {\n"
+        "    out[id] = a[id] / b[id];\n"
+        "}\n";
+    return __mps_run_binary_kernel(kernelSrc, "div_kernel", a, b, out, n);
+}
+
+int mps_pow_f32(const float* a, const float* b, float* out, unsigned long n) {
+    const char* kernelSrc =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "kernel void pow_kernel(device const float* a [[buffer(0)]],\n"
+        "                        device const float* b [[buffer(1)]],\n"
+        "                        device float* out [[buffer(2)]],\n"
+        "                        uint id [[thread_position_in_grid]]) {\n"
+        "    out[id] = pow(a[id], b[id]);\n"
+        "}\n";
+    return __mps_run_binary_kernel(kernelSrc, "pow_kernel", a, b, out, n);
+}
+
+int mps_log_f32(const float* a, float* out, unsigned long n) {
+    const char* kernelSrc =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "kernel void log_kernel(device const float* a [[buffer(0)]],\n"
+        "                        device float* out [[buffer(1)]],\n"
+        "                        uint id [[thread_position_in_grid]]) {\n"
+        "    out[id] = log(a[id]);\n"
+        "}\n";
+    return __mps_run_unary_kernel(kernelSrc, "log_kernel", a, out, n);
+}
+
+int mps_exp_f32(const float* a, float* out, unsigned long n) {
+    const char* kernelSrc =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "kernel void exp_kernel(device const float* a [[buffer(0)]],\n"
+        "                        device float* out [[buffer(1)]],\n"
+        "                        uint id [[thread_position_in_grid]]) {\n"
+        "    out[id] = exp(a[id]);\n"
+        "}\n";
+    return __mps_run_unary_kernel(kernelSrc, "exp_kernel", a, out, n);
+}
+
+int mps_sqrt_f32(const float* a, float* out, unsigned long n) {
+    const char* kernelSrc =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "kernel void sqrt_kernel(device const float* a [[buffer(0)]],\n"
+        "                        device float* out [[buffer(1)]],\n"
+        "                        uint id [[thread_position_in_grid]]) {\n"
+        "    out[id] = sqrt(a[id]);\n"
+        "}\n";
+    return __mps_run_unary_kernel(kernelSrc, "sqrt_kernel", a, out, n);
 }
 
 } // namespace std

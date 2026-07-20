@@ -45,14 +45,33 @@ inline int RingBuffer::is_full() const {
     return 0;
 }
 
+// write()/read()/peek() copy in at most two contiguous runs (the part up to
+// the physical end of 'buf', then the wrapped remainder from its start)
+// instead of one loop that recomputes '(pos + i) & mask' every iteration.
+// Both do exactly the same bytes in the same order and stay allocation-free
+// and dependency-free (no memcpy call, so this file's "Freestanding-safe"
+// guarantee for real-time audio/DSP use is unaffected) — the only change is
+// that each run is now a straight, unwrapped index sequence, which the
+// auto-vectorizer can turn into real SIMD loads/stores; the masked version
+// couldn't be vectorized as well with a data-dependent wraparound computed
+// fresh every byte.
 inline unsigned long RingBuffer::write(const &stack unsigned char data, unsigned long len) {
     unsigned long space = self.writable();
     if (len > space) { len = space; }
     unsigned long head = self.head;
     unsafe {
+        unsigned long start = head & self.mask;
+        unsigned long firstChunk = self.cap - start;
+        if (firstChunk > len) { firstChunk = len; }
         unsigned long i = (unsigned long)0;
-        while (i < len) {
-            self.buf[(head + i) & self.mask] = data[i];
+        while (i < firstChunk) {
+            self.buf[start + i] = data[i];
+            i = i + (unsigned long)1;
+        }
+        unsigned long remaining = len - firstChunk;
+        i = (unsigned long)0;
+        while (i < remaining) {
+            self.buf[i] = data[firstChunk + i];
             i = i + (unsigned long)1;
         }
     }
@@ -67,9 +86,18 @@ inline unsigned long RingBuffer::read(&stack unsigned char out, unsigned long le
     if (len > avail) { len = avail; }
     unsigned long tail = self.tail;
     unsafe {
+        unsigned long start = tail & self.mask;
+        unsigned long firstChunk = self.cap - start;
+        if (firstChunk > len) { firstChunk = len; }
         unsigned long i = (unsigned long)0;
-        while (i < len) {
-            out[i] = self.buf[(tail + i) & self.mask];
+        while (i < firstChunk) {
+            out[i] = self.buf[start + i];
+            i = i + (unsigned long)1;
+        }
+        unsigned long remaining = len - firstChunk;
+        i = (unsigned long)0;
+        while (i < remaining) {
+            out[firstChunk + i] = self.buf[i];
             i = i + (unsigned long)1;
         }
     }
@@ -83,9 +111,18 @@ inline unsigned long RingBuffer::peek(&stack unsigned char out, unsigned long le
     if (len > avail) { len = avail; }
     unsigned long tail = self.tail;
     unsafe {
+        unsigned long start = tail & self.mask;
+        unsigned long firstChunk = self.cap - start;
+        if (firstChunk > len) { firstChunk = len; }
         unsigned long i = (unsigned long)0;
-        while (i < len) {
-            out[i] = self.buf[(tail + i) & self.mask];
+        while (i < firstChunk) {
+            out[i] = self.buf[start + i];
+            i = i + (unsigned long)1;
+        }
+        unsigned long remaining = len - firstChunk;
+        i = (unsigned long)0;
+        while (i < remaining) {
+            out[firstChunk + i] = self.buf[i];
             i = i + (unsigned long)1;
         }
     }

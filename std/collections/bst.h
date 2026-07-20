@@ -1,7 +1,8 @@
 #pragma once
 // SafeC Standard Library — BST (unbalanced binary search tree)
 // cmp_fn: int(*)(const void* a, const void* b) → <0, 0, >0
-// Keys are heap-copies; values are heap-copies.
+// Keys and values are heap-copies, stored inline in the same allocation as
+// their node (one alloc() per node, not three).
 
 namespace std {
 

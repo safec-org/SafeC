@@ -16,13 +16,19 @@ inline struct List list_new(unsigned long elem_size) {
     return l;
 }
 
-// Allocate a new node with a copy of elem
+// Allocate a new node with a copy of elem. The node and its data used to be
+// two separate alloc()s -- every push/pop paid std::alloc's 16-byte header
+// and quarantine-ring bookkeeping twice per element instead of once. Since
+// elem_size is fixed for the list's lifetime, the data bytes are stored
+// inline right after the node in one allocation instead (same
+// alloc()/dealloc() pairing and double-free/UAF tracking on the node, just
+// nothing separate left to double-free for data).
 inline struct ListNode* list_alloc_node_(unsigned long elem_size, const void* elem) {
     unsafe {
-        struct ListNode* n = (struct ListNode*)alloc(sizeof(struct ListNode));
+        unsigned long total = checked_add_size(sizeof(struct ListNode), elem_size);
+        struct ListNode* n = (struct ListNode*)alloc(total);
         if (n == (struct ListNode*)0) return (struct ListNode*)0;
-        n->data = alloc(elem_size);
-        if (n->data == (void*)0) { dealloc((void*)n); return (struct ListNode*)0; }
+        n->data = (void*)((char*)n + sizeof(struct ListNode));
         safe_memcpy(n->data, elem, elem_size);
         n->next = (struct ListNode*)0;
         n->prev = (struct ListNode*)0;
@@ -32,7 +38,6 @@ inline struct ListNode* list_alloc_node_(unsigned long elem_size, const void* el
 
 inline void list_free_node_(struct ListNode* n) {
     unsafe {
-        if (n->data != (void*)0) dealloc(n->data);
         dealloc((void*)n);
     }
 }

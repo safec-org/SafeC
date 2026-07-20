@@ -15,6 +15,10 @@ void*         realloc_buf(void* ptr, unsigned long new_size);
 // bare '*' anywhere the multiplicands aren't both compile-time constants
 // small enough to prove can't overflow.
 unsigned long checked_mul_size(unsigned long a, unsigned long b);
+// Same idea as checked_mul_size but for addition (e.g. summing several
+// fields' sizes into one combined allocation) -- abort instead of silently
+// wrapping if the sum overflows unsigned long.
+unsigned long checked_add_size(unsigned long a, unsigned long b);
 void          safe_memcpy(void* dst, const void* src, unsigned long n);
 void          safe_memmove(void* dst, const void* src, unsigned long n);
 void          safe_memset(void* ptr, int val, unsigned long n);

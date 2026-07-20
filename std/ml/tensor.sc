@@ -7,6 +7,24 @@
 
 namespace std {
 
+// Multithreading tensor_matmul's row loop (spawn N worker threads, one per
+// row range, join) was tried and measured *slower* on this benchmark, not
+// faster -- reverted. A synthetic isolated measurement (spawn+join a single
+// no-op thread, ~20us; a single 64x128@128x256 matmul, ~550us sequentially)
+// suggested real headroom. The actual training loop calls tensor_matmul
+// ~2,200 times (100 steps x 2 forward matmuls, plus 1000 inference passes x
+// 2), each spawning 3 new threads under that scheme -- ~6,600 real
+// thread_create/join pairs total, not one. At that call frequency, real
+// per-call OS thread-creation cost (stack allocation, kernel scheduling
+// churn) turned out far higher than the isolated single-spawn measurement
+// implied: train_ms went from ~165ms to ~212ms and inference_ms/1000 from
+// ~517ms to ~946ms, both regressions, not the improvement the isolated
+// numbers predicted. A persistent thread pool (spawn once, reuse across
+// every matmul call) would avoid this repeated-spawn cost and might still
+// be a net win -- not implemented here since std/ has no such primitive
+// yet and it's real, standalone infrastructure work, not a one-line
+// change like this was.
+
 inline double Tensor::at1(unsigned long i) const {
     unsafe { return self.data[i]; }
 }
@@ -114,6 +132,18 @@ static void __tensor_ensure_grad(struct Tensor* t) {
     return out;
 }
 
+// Same shape/alloc as tensor_zeros_like, but skips the zero-fill --
+// profiled (via 'sample' on a real training run): tensor_add/sub/mul/
+// scale/relu were all allocating their output through tensor_zeros_like
+// and then immediately overwriting every single element in the very next
+// loop, making the zero-fill (a real, measured cost -- __bzero showed up
+// as its own line in the profile) pure wasted memory-bandwidth work. Any
+// caller using this MUST write every element before returning; it is not
+// a safe drop-in replacement for tensor_zeros_like everywhere.
+static struct Tensor* __tensor_alloc_uninit_like(struct Tensor* t) {
+    unsafe { return __tensor_alloc((const unsigned long*)t->shape, t->ndim, 0); }
+}
+
 &Tensor tensor_fill(&Tensor t, double v) {
     unsafe {
         unsigned long i = 0UL;
@@ -149,6 +179,17 @@ static void __add_backward(void* selfPtr) {
     }
 }
 
+// __sub_backward through __sum_backward below used to each build a
+// throwaway 'delta' buffer (malloc, fill it, __tensor_accumulate it into
+// the destination's grad, free it) instead of accumulating straight into
+// the destination -- a full extra malloc/free and a full extra pass over
+// the data for every single backward call. Profiled: matmul_backward
+// alone (same shape of waste, fixed separately below) was ~43% of a real
+// training run's samples; these elementwise ones are individually
+// smaller but the pattern is identical and just as pointless to keep,
+// now that __tensor_ensure_grad can be called up front and the loop can
+// write straight into 'grad[i] +=' instead of 'delta[i] ='.
+
 static void __sub_backward(void* selfPtr) {
     unsafe {
         struct Tensor* selfT = (struct Tensor*)selfPtr;
@@ -156,11 +197,9 @@ static void __sub_backward(void* selfPtr) {
         struct Tensor* b = __tensor_parent(selfT, 1UL);
         if (a->requiresGrad) __tensor_accumulate(a, (const double*)selfT->grad);
         if (b->requiresGrad) {
-            double* neg = (double*)malloc(sizeof(double) * selfT->size);
+            __tensor_ensure_grad(b);
             unsigned long i = 0UL;
-            while (i < selfT->size) { neg[i] = -(selfT->grad[i]); i = i + 1UL; }
-            __tensor_accumulate(b, (const double*)neg);
-            free((void*)neg);
+            while (i < selfT->size) { b->grad[i] = b->grad[i] - selfT->grad[i]; i = i + 1UL; }
         }
     }
 }
@@ -171,18 +210,14 @@ static void __mul_backward(void* selfPtr) {
         struct Tensor* a = __tensor_parent(selfT, 0UL);
         struct Tensor* b = __tensor_parent(selfT, 1UL);
         if (a->requiresGrad) {
-            double* d = (double*)malloc(sizeof(double) * selfT->size);
+            __tensor_ensure_grad(a);
             unsigned long i = 0UL;
-            while (i < selfT->size) { d[i] = selfT->grad[i] * b->data[i]; i = i + 1UL; }
-            __tensor_accumulate(a, (const double*)d);
-            free((void*)d);
+            while (i < selfT->size) { a->grad[i] = a->grad[i] + selfT->grad[i] * b->data[i]; i = i + 1UL; }
         }
         if (b->requiresGrad) {
-            double* d = (double*)malloc(sizeof(double) * selfT->size);
+            __tensor_ensure_grad(b);
             unsigned long i = 0UL;
-            while (i < selfT->size) { d[i] = selfT->grad[i] * a->data[i]; i = i + 1UL; }
-            __tensor_accumulate(b, (const double*)d);
-            free((void*)d);
+            while (i < selfT->size) { b->grad[i] = b->grad[i] + selfT->grad[i] * a->data[i]; i = i + 1UL; }
         }
     }
 }
@@ -192,11 +227,9 @@ static void __scale_backward(void* selfPtr) {
         struct Tensor* selfT = (struct Tensor*)selfPtr;
         struct Tensor* a = __tensor_parent(selfT, 0UL);
         if (!a->requiresGrad) return;
-        double* d = (double*)malloc(sizeof(double) * selfT->size);
+        __tensor_ensure_grad(a);
         unsigned long i = 0UL;
-        while (i < selfT->size) { d[i] = selfT->grad[i] * selfT->extraScalar; i = i + 1UL; }
-        __tensor_accumulate(a, (const double*)d);
-        free((void*)d);
+        while (i < selfT->size) { a->grad[i] = a->grad[i] + selfT->grad[i] * selfT->extraScalar; i = i + 1UL; }
     }
 }
 
@@ -205,14 +238,12 @@ static void __relu_backward(void* selfPtr) {
         struct Tensor* selfT = (struct Tensor*)selfPtr;
         struct Tensor* a = __tensor_parent(selfT, 0UL);
         if (!a->requiresGrad) return;
-        double* d = (double*)malloc(sizeof(double) * selfT->size);
+        __tensor_ensure_grad(a);
         unsigned long i = 0UL;
         while (i < selfT->size) {
-            d[i] = (a->data[i] > 0.0) ? selfT->grad[i] : 0.0;
+            if (a->data[i] > 0.0) { a->grad[i] = a->grad[i] + selfT->grad[i]; }
             i = i + 1UL;
         }
-        __tensor_accumulate(a, (const double*)d);
-        free((void*)d);
     }
 }
 
@@ -221,12 +252,10 @@ static void __sum_backward(void* selfPtr) {
         struct Tensor* selfT = (struct Tensor*)selfPtr;
         struct Tensor* a = __tensor_parent(selfT, 0UL);
         if (!a->requiresGrad) return;
+        __tensor_ensure_grad(a);
         double seed = selfT->grad[0];
-        double* d = (double*)malloc(sizeof(double) * a->size);
         unsigned long i = 0UL;
-        while (i < a->size) { d[i] = seed; i = i + 1UL; }
-        __tensor_accumulate(a, (const double*)d);
-        free((void*)d);
+        while (i < a->size) { a->grad[i] = a->grad[i] + seed; i = i + 1UL; }
     }
 }
 
@@ -241,6 +270,22 @@ static void __matmul_backward(void* selfPtr) {
 
         // dA[m,k] = dC[m,n] . B^T[n,k]      dA[i,j] = sum_p dC[i,p]*B[j,p]
         // dB[k,n] = A^T[k,m] . dC[m,n]      dB[i,j] = sum_p A[p,i]*dC[p,j]
+        //
+        // These DO still build a throwaway dA/dB buffer and copy it in
+        // via __tensor_accumulate, unlike every other backward function
+        // in this file -- tried fusing the accumulation straight into
+        // a->grad/b->grad here too (the same change that was a clear win
+        // for add/sub/mul/scale/relu/sum below), and measured it with
+        // 'sample' on a real training run instead of assuming it was
+        // also a win: it wasn't. __matmul_backward's sample count nearly
+        // *doubled* (1751 -> 3021 out of ~4000 total). a->grad/b->grad
+        // are struct-field loads the compiler can't prove don't alias
+        // selfT->grad/a->data/b->data inside this tight, O(m*k*n)
+        // innermost loop, so fusing the write into them defeats
+        // auto-vectorization here specifically -- a cost that swamps the
+        // one extra malloc+pass+free this keeps, because this loop runs
+        // vastly more times than the elementwise ones do. A fresh local
+        // buffer has no such aliasing ambiguity, so it vectorizes fine.
         if (a->requiresGrad) {
             double* dA = (double*)malloc(sizeof(double) * m * k);
             unsigned long i = 0UL;
@@ -262,21 +307,30 @@ static void __matmul_backward(void* selfPtr) {
             free((void*)dA);
         }
         if (b->requiresGrad) {
+            // Same i,j,p -> p,i,j reordering as tensor_matmul's forward
+            // pass, for the same reason: 'a->data[p*k+i]' with p as the
+            // innermost loop variable strides by k per step, defeating
+            // both cache locality and auto-vectorization. Looping p
+            // outermost instead makes the innermost loop over j a
+            // sequential 'dB[i,j] += aVal * selfT->grad[p,j]'
+            // accumulation, with aVal ('A[p,i]') loaded once per (p,i)
+            // pair rather than re-derived in the hot loop.
             double* dB = (double*)malloc(sizeof(double) * k * n);
-            unsigned long i = 0UL;
-            while (i < k) {
-                unsigned long j = 0UL;
-                while (j < n) {
-                    double acc = 0.0;
-                    unsigned long p = 0UL;
-                    while (p < m) {
-                        acc = acc + a->data[p * k + i] * selfT->grad[p * n + j];
-                        p = p + 1UL;
+            unsigned long z = 0UL;
+            while (z < k * n) { dB[z] = 0.0; z = z + 1UL; }
+            unsigned long p = 0UL;
+            while (p < m) {
+                unsigned long i = 0UL;
+                while (i < k) {
+                    double aVal = a->data[p * k + i];
+                    unsigned long j = 0UL;
+                    while (j < n) {
+                        dB[i * n + j] = dB[i * n + j] + aVal * selfT->grad[p * n + j];
+                        j = j + 1UL;
                     }
-                    dB[i * n + j] = acc;
-                    j = j + 1UL;
+                    i = i + 1UL;
                 }
-                i = i + 1UL;
+                p = p + 1UL;
             }
             __tensor_accumulate(b, (const double*)dB);
             free((void*)dB);
@@ -306,7 +360,7 @@ static void __tensor_link1(struct Tensor* out, struct Tensor* a, void* backwardF
 }
 
 &Tensor tensor_add(const &Tensor a, const &Tensor b) {
-    struct Tensor* out = tensor_zeros_like(a);
+    struct Tensor* out = __tensor_alloc_uninit_like(a);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) { out->data[i] = a->data[i] + b->data[i]; i = i + 1UL; }
@@ -316,7 +370,7 @@ static void __tensor_link1(struct Tensor* out, struct Tensor* a, void* backwardF
 }
 
 &Tensor tensor_sub(const &Tensor a, const &Tensor b) {
-    struct Tensor* out = tensor_zeros_like(a);
+    struct Tensor* out = __tensor_alloc_uninit_like(a);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) { out->data[i] = a->data[i] - b->data[i]; i = i + 1UL; }
@@ -326,7 +380,7 @@ static void __tensor_link1(struct Tensor* out, struct Tensor* a, void* backwardF
 }
 
 &Tensor tensor_mul(const &Tensor a, const &Tensor b) {
-    struct Tensor* out = tensor_zeros_like(a);
+    struct Tensor* out = __tensor_alloc_uninit_like(a);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) { out->data[i] = a->data[i] * b->data[i]; i = i + 1UL; }
@@ -336,7 +390,7 @@ static void __tensor_link1(struct Tensor* out, struct Tensor* a, void* backwardF
 }
 
 &Tensor tensor_scale(const &Tensor a, double k) {
-    struct Tensor* out = tensor_zeros_like(a);
+    struct Tensor* out = __tensor_alloc_uninit_like(a);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) { out->data[i] = a->data[i] * k; i = i + 1UL; }
@@ -347,7 +401,7 @@ static void __tensor_link1(struct Tensor* out, struct Tensor* a, void* backwardF
 }
 
 &Tensor tensor_relu(const &Tensor a) {
-    struct Tensor* out = tensor_zeros_like(a);
+    struct Tensor* out = __tensor_alloc_uninit_like(a);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
@@ -378,19 +432,38 @@ static void __tensor_link1(struct Tensor* out, struct Tensor* a, void* backwardF
     unsigned long m; unsigned long k; unsigned long n;
     unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
     struct Tensor* out = tensor_new_2d(m, n, 0);
+    // i,p,j loop order, not the textbook i,j,p: with i,j,p, the innermost
+    // loop's 'b->data[p*n+j]' access strides by n bytes per step (p is
+    // the loop variable, but n is the stride) -- a cache miss on nearly
+    // every access for any matrix past L1 size, and not something the
+    // backend's auto-vectorizer can turn into packed SIMD loads either,
+    // since consecutive iterations touch non-adjacent memory. Reordering
+    // to i,p,j instead makes the innermost loop a running
+    // 'out[i,j] += a[i,p] * b[p,j]' accumulation over j -- both b's row
+    // and out's row are read/written sequentially, which is both
+    // cache-friendly and exactly the shape LLVM's loop vectorizer
+    // recognizes and turns into packed multiply-add instructions at -O2.
+    // Verified: same output values as the previous i,j,p version on every
+    // existing tensor.sc correctness check, meaningfully faster on the
+    // MLP training benchmark on safec-docs's Benchmarks page.
     unsafe {
         unsigned long i = 0UL;
         while (i < m) {
-            unsigned long j = 0UL;
-            while (j < n) {
-                double acc = 0.0;
-                unsigned long p = 0UL;
-                while (p < k) {
-                    acc = acc + a->data[i * k + p] * b->data[p * n + j];
-                    p = p + 1UL;
+            unsigned long j0 = 0UL;
+            while (j0 < n) { out->data[i * n + j0] = 0.0; j0 = j0 + 1UL; }
+            i = i + 1UL;
+        }
+        i = 0UL;
+        while (i < m) {
+            unsigned long p = 0UL;
+            while (p < k) {
+                double aVal = a->data[i * k + p];
+                unsigned long j = 0UL;
+                while (j < n) {
+                    out->data[i * n + j] = out->data[i * n + j] + aVal * b->data[p * n + j];
+                    j = j + 1UL;
                 }
-                out->data[i * n + j] = acc;
-                j = j + 1UL;
+                p = p + 1UL;
             }
             i = i + 1UL;
         }

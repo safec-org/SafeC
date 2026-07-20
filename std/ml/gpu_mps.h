@@ -29,15 +29,36 @@ namespace std {
 // step of the pipeline setup fails (compile error in the embedded MSL
 // source, no GPU present, etc.) — 'out' is left untouched on failure.
 //
-// KNOWN ISSUE (see gpu_mps.sc): segfaults on real hardware at the
-// dispatchThreadgroups:threadsPerThreadgroup: call specifically — every
-// earlier pipeline-setup step (device/queue, a real runtime MSL compile,
-// pipeline state, buffers, encoder) was individually confirmed working.
-// Apparent SafeC codegen gap with two consecutive struct-by-value
-// objc_msgSend arguments; not yet fixed. Do not call this outside of
-// further debugging — use mps_available() (fully verified) to at least
-// confirm GPU presence.
+// Verified working end-to-end on real Apple Silicon hardware (correct
+// output for a real GPU dispatch). Previously segfaulted at the
+// dispatchThreadgroups:threadsPerThreadgroup: call specifically — root
+// cause was a genuine SafeC compiler codegen bug (fixed in CodeGen.cpp's
+// genCall), not anything specific to this file: any indirect call passing
+// two or more consecutive struct-by-value arguments over 16 bytes (and not
+// a Homogeneous Floating-point Aggregate) through a function-pointer cast
+// hit it, because this compiler represented such arguments as raw LLVM
+// aggregate values instead of the AAPCS64-correct "caller copies to a
+// stack temporary, passes a plain pointer" form — self-consistent for
+// SafeC-to-SafeC calls (which is why that never showed up before), but not
+// what a real, externally-compiled function like objc_msgSend's target IMP
+// expects to receive in its argument registers.
 int mps_add_f32(const float* a, const float* b, float* out, unsigned long n);
+
+// Same shape/verification status as mps_add_f32 (elementwise, GPU-executed,
+// unified-memory readback) — sub/mul/div/pow are two-input, log/exp/sqrt
+// are one-input. All share mps_add_f32's setup/dispatch/readback path
+// (see __mps_run_binary_kernel/__mps_run_unary_kernel in gpu_mps.sc), so
+// the fix that made mps_add_f32's GPU dispatch work applies to all of them
+// identically — verified directly for mps_sub_f32/mps_mul_f32 as
+// representative binary/no-special-case cases; div/pow/log/exp/sqrt follow
+// the exact same code path with only the one-line kernel body differing.
+int mps_sub_f32(const float* a, const float* b, float* out, unsigned long n);
+int mps_mul_f32(const float* a, const float* b, float* out, unsigned long n);
+int mps_div_f32(const float* a, const float* b, float* out, unsigned long n);
+int mps_pow_f32(const float* a, const float* b, float* out, unsigned long n);
+int mps_log_f32(const float* a, float* out, unsigned long n);
+int mps_exp_f32(const float* a, float* out, unsigned long n);
+int mps_sqrt_f32(const float* a, float* out, unsigned long n);
 
 // True if a Metal device is available on this machine at all (checks
 // MTLCreateSystemDefaultDevice() != nil) — lets callers fall back to the

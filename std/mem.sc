@@ -212,6 +212,15 @@ unsigned long checked_mul_size(unsigned long a, unsigned long b) {
     return a * b;
 }
 
+unsigned long checked_add_size(unsigned long a, unsigned long b) {
+    if (b > (~(unsigned long)0) - a) {
+        alloc_abort_("checked_add_size: allocation size overflowed (a + b "
+                     "too large for this platform's unsigned long)");
+        return (unsigned long)0;
+    }
+    return a + b;
+}
+
 // Copy `n` bytes from `src` to `dst`.  Regions must not overlap.
 inline void safe_memcpy(void* dst, const void* src, unsigned long n) {
     unsafe { memcpy(dst, src, n); }

@@ -2687,6 +2687,28 @@ llvm::Value *CodeGen::genBinary(BinaryExpr &e, FnEnv &env) {
     return applyBinaryOp(e.op, lhs, rhs, e.left->type);
 }
 
+// AArch64 AAPCS64: a struct argument that is a "Homogeneous Floating-point
+// Aggregate" (all members the same float/double type, 1-4 members total,
+// e.g. Metal/CoreGraphics's CGRect = 4 doubles) is passed in consecutive
+// SIMD/FP registers regardless of size. Every other aggregate over 16 bytes
+// is passed "indirectly": the caller copies it to its own stack and passes
+// a pointer in a general-purpose register/stack slot instead of the value
+// itself. Only the second case needs 'byval' below — an HFA struct already
+// round-trips correctly through this file's existing raw-aggregate-value
+// call codegen (confirmed working today for gui_cocoa.sc's CGRect), and
+// forcing byval onto it would wrongly switch it from FP-register passing to
+// indirect-via-pointer passing, actively breaking a case that isn't broken.
+static bool isHomogeneousFPAggregate(llvm::StructType *st) {
+    unsigned n = st->getNumElements();
+    if (n == 0 || n > 4) return false;
+    llvm::Type *first = st->getElementType(0);
+    if (!first->isFloatTy() && !first->isDoubleTy()) return false;
+    for (unsigned i = 1; i < n; ++i) {
+        if (st->getElementType(i) != first) return false;
+    }
+    return true;
+}
+
 // ── Call ──────────────────────────────────────────────────────────────────────
 llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
     if (e.nullOp != CallExpr::NullOp::None) {
@@ -3190,12 +3212,51 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
         call->setCallingConv(fn->getCallingConv());
         return call;
     }
+    // Emits an indirect call through 'calleeVal' against declared type
+    // 'rawFT', first rewriting any struct-by-value argument over 16 bytes
+    // that isn't an HFA (see isHomogeneousFPAggregate above) into the
+    // AAPCS64-correct indirect form. Verified against a real clang -S
+    // -emit-llvm reference on this exact struct shape: for a large non-HFA
+    // aggregate, AAPCS64 erases the parameter to a *plain* 'ptr' at the
+    // LLVM level — no 'byval' attribute at all (that attribute means
+    // something different: "copy this onto MY outgoing stack argument
+    // area," the x86 convention). The caller allocas a fresh copy, stores
+    // the value into it, and passes that address as an ordinary pointer
+    // argument; the real, externally-compiled callee just dereferences it
+    // directly (confirmed in its disassembly: 'ldr x14, [x2]' etc., no
+    // extra indirection). An earlier attempt using LLVM's 'byval' attribute
+    // here compiled but was still wrong: LLVM's AArch64 backend lowered it
+    // as raw bytes memcpy'd onto the outgoing stack (x86-style), never
+    // touching x2/x3 at all, so the callee dereferenced garbage. Plain
+    // SafeC-to-SafeC calls (direct calls, above) are untouched — this path
+    // exists because every extern C/Objective-C interop call in this
+    // codebase (objc_msgSend et al.) is reached through exactly this kind
+    // of cast function pointer, and a real, externally-compiled function on
+    // the other end expects the real ABI, not this file's usual (self-
+    // consistent SafeC-to-SafeC, but not standards-compliant) raw-
+    // aggregate-value passing.
+    auto emitIndirectCall = [&](llvm::FunctionType *rawFT) -> llvm::CallInst * {
+        coerceArgs(rawFT);
+        const auto &dl = mod_->getDataLayout();
+        std::vector<llvm::Type *> paramTys;
+        paramTys.reserve(args.size());
+        for (size_t i = 0; i < args.size(); ++i) {
+            auto *argTy = args[i]->getType();
+            auto *st = llvm::dyn_cast<llvm::StructType>(argTy);
+            if (st && dl.getTypeAllocSize(st) > 16 && !isHomogeneousFPAggregate(st)) {
+                auto *slot = builder_.CreateAlloca(st, nullptr, "indirect.tmp");
+                builder_.CreateStore(args[i], slot);
+                args[i] = slot;
+            }
+            paramTys.push_back(args[i]->getType());
+        }
+        auto *callFT = llvm::FunctionType::get(rawFT->getReturnType(), paramTys, rawFT->isVarArg());
+        return builder_.CreateCall(callFT, calleeVal, args);
+    };
     // Indirect call via function pointer (fn type variable or closure)
     if (e.callee->type && e.callee->type->kind == TypeKind::Function) {
         auto *rawFT = static_cast<llvm::FunctionType *>(lowerType(e.callee->type));
-        coerceArgs(rawFT);
-        auto *call  = builder_.CreateCall(rawFT, calleeVal, args);
-        return call;
+        return emitIndirectCall(rawFT);
     }
     // Same, but through a '&static' reference to a function type — this is
     // how 'fn T(Params)'-typed variables are represented (see parseBaseType's
@@ -3204,9 +3265,7 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
         auto &rt = static_cast<ReferenceType &>(*e.callee->type);
         if (rt.base && rt.base->kind == TypeKind::Function) {
             auto *rawFT = static_cast<llvm::FunctionType *>(lowerType(rt.base));
-            coerceArgs(rawFT);
-            auto *call  = builder_.CreateCall(rawFT, calleeVal, args);
-            return call;
+            return emitIndirectCall(rawFT);
         }
     }
     diag_.error(e.loc, "codegen: cannot determine callee function type");

@@ -33,19 +33,27 @@ inline int bst_cmp_uint(const void* a, const void* b) {
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
+// A node's key and value used to be two extra alloc()s beyond the node
+// itself -- three heap allocations (and three sets of std::alloc's 16-byte
+// header + quarantine-ring bookkeeping, see the benchmarks page's
+// binary-trees section) for every single element inserted. Since key_size
+// and val_size are fixed for the lifetime of a given BST (set once in
+// bst_new), the node, its key bytes, and its val bytes can live in one
+// alloc() instead: 'sizeof(struct BSTNode) + key_size + val_size' bytes,
+// with key/val as raw pointers into that same block. This is exactly the
+// same alloc()/dealloc() pairing and quarantine tracking as before -- one
+// call instead of three -- so double-free/UAF detection on the node is
+// unaffected; there's just nothing separate left to double-free for key/val
+// anymore, since they're no longer independent allocations.
 struct BSTNode* bst_alloc_node_(unsigned long key_size, unsigned long val_size,
                                  const void* key, const void* val) {
     unsafe {
-        struct BSTNode* n = (struct BSTNode*)alloc(sizeof(struct BSTNode));
+        unsigned long total = checked_add_size(checked_add_size(sizeof(struct BSTNode), key_size), val_size);
+        struct BSTNode* n = (struct BSTNode*)alloc(total);
         if (n == (struct BSTNode*)0) return (struct BSTNode*)0;
-        n->key = alloc(key_size);
-        n->val = alloc(val_size);
-        if (n->key == (void*)0 || n->val == (void*)0) {
-            if (n->key != (void*)0) dealloc(n->key);
-            if (n->val != (void*)0) dealloc(n->val);
-            dealloc((void*)n);
-            return (struct BSTNode*)0;
-        }
+        char* base = (char*)n;
+        n->key = (void*)(base + sizeof(struct BSTNode));
+        n->val = (void*)(base + sizeof(struct BSTNode) + key_size);
         safe_memcpy(n->key, key, key_size);
         safe_memcpy(n->val, val, val_size);
         n->left  = (struct BSTNode*)0;
@@ -95,8 +103,6 @@ inline void bst_free_node_(struct BSTNode* root) {
                 top = top + 1UL;
             }
 
-            dealloc(n->key);
-            dealloc(n->val);
             dealloc((void*)n);
         }
         dealloc((void*)stk);
@@ -241,14 +247,14 @@ int bst_remove(&BST t, const void* key) {
             // Remove successor node
             if (succ_parent == cur) succ_parent->right = succ->right;
             else                    succ_parent->left  = succ->right;
-            dealloc(succ->key); dealloc(succ->val); dealloc((void*)succ);
+            dealloc((void*)succ);
             t.len = t.len - 1UL;
             return 1;
         }
         if (parent == (struct BSTNode*)0) t.root = replacement;
         else if (went_left)               parent->left  = replacement;
         else                              parent->right = replacement;
-        dealloc(cur->key); dealloc(cur->val); dealloc((void*)cur);
+        dealloc((void*)cur);
         t.len = t.len - 1UL;
         return 1;
     }

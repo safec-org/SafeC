@@ -89,6 +89,24 @@ inline double time_diff(long long end, long long start) {
     return (double)(end - start);
 }
 
+// clockid_t values passed to clock_gettime() are NOT standardized by
+// POSIX -- only the *names* are; each OS assigns its own integers, and
+// they genuinely differ. CLOCK_REALTIME is 0 on both of the two families
+// below (coincidence, not a guarantee), but CLOCK_MONOTONIC and
+// CLOCK_PROCESS_CPUTIME_ID are not:
+//   Darwin (macOS/iOS):  REALTIME=0  MONOTONIC=6   PROCESS_CPUTIME_ID=12
+//   Linux (glibc/musl):  REALTIME=0  MONOTONIC=1   PROCESS_CPUTIME_ID=2
+// This file currently hardcodes the Darwin values (verified against a
+// real 'CLOCK_MONOTONIC'/'CLOCK_PROCESS_CPUTIME_ID' lookup compiled and
+// run on this platform) -- unlike std/sched/io_nb_{bsd,linux,win32}.sc's
+// established per-platform-backend-file pattern for exactly this kind of
+// divergence, time.sc is a single file with no Linux backend yet, so
+// time_mono_ns()/time_cpu_ns() are Darwin-only today: on Linux, passing
+// these same integers to clock_gettime() would silently read the wrong
+// clock (or fail) rather than the intended one. Swap in the Linux values
+// above (a straight substitution, same shape) when porting this to a
+// non-Darwin BSD/Linux build; time_wall_ns() (CLOCK_REALTIME=0) is
+// unaffected either way.
 inline long long time_wall_ns() {
     unsafe {
         long long ts[2];
@@ -100,7 +118,7 @@ inline long long time_wall_ns() {
 inline long long time_mono_ns() {
     unsafe {
         long long ts[2];
-        if (clock_gettime(1, (void*)ts) != 0) return -1LL;
+        if (clock_gettime(6, (void*)ts) != 0) return -1LL;
         return ts[0] * 1000000000LL + ts[1];
     }
 }
@@ -108,7 +126,7 @@ inline long long time_mono_ns() {
 inline long long time_cpu_ns() {
     unsafe {
         long long ts[2];
-        if (clock_gettime(2, (void*)ts) != 0) return -1LL;
+        if (clock_gettime(12, (void*)ts) != 0) return -1LL;
         return ts[0] * 1000000000LL + ts[1];
     }
 }

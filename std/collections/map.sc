@@ -59,15 +59,16 @@ inline void HashMap::free_entries_() {
         if (self.buckets == (struct MapEntry*)0) { return; }
         unsigned long i = 0UL;
         while (i < self.cap) {
-            // Tombstoned (state==2) slots keep their key/val allocations
-            // live too — insert() reuses them without reallocating when it
+            // Tombstoned (state==2) slots keep their key/val allocation
+            // live too — insert() reuses it without reallocating when it
             // lands on a tombstone (see the 's == 2' branch there) — so
             // this must free both state==1 (occupied) and state==2
             // (tombstoned) slots, not just occupied ones. Only state==0
             // (never-used) slots genuinely have nothing allocated.
+            // key and val are one combined allocation (val == key +
+            // key_size, set up in insert() below) so only key is dealloc'd.
             if (self.buckets[i].state == 1 || self.buckets[i].state == 2) {
                 if (self.buckets[i].key != (void*)0) { dealloc(self.buckets[i].key); }
-                if (self.buckets[i].val != (void*)0) { dealloc(self.buckets[i].val); }
             }
             i = i + 1UL;
         }
@@ -112,13 +113,13 @@ int HashMap::resize_(unsigned long new_cap) {
                 // Tombstoned slots aren't carried over to the new table
                 // (only live entries are — that's the whole point of a
                 // resize purging tombstones), but they may still be
-                // holding a live key/val allocation kept around for reuse
+                // holding a live key+val allocation kept around for reuse
                 // (see insert()'s 's == 2' branch) — free it here or it's
                 // orphaned: not copied to the new table, and the old
                 // bucket array holding the only other reference to it is
-                // about to be freed too.
+                // about to be freed too. key and val are one combined
+                // allocation, so only key is dealloc'd.
                 if (self.buckets[i].key != (void*)0) { dealloc(self.buckets[i].key); }
-                if (self.buckets[i].val != (void*)0) { dealloc(self.buckets[i].val); }
             }
             i = i + 1UL;
         }
@@ -143,11 +144,19 @@ int HashMap::insert(const void* key, const void* val) {
             int s = self.buckets[idx].state;
             if (s == 0 || s == 2) {
                 if (s == 2) { self.tombstones = self.tombstones - 1UL; }
-                if (self.buckets[idx].key == (void*)0)
-                    self.buckets[idx].key = alloc(self.key_size);
-                if (self.buckets[idx].val == (void*)0)
-                    self.buckets[idx].val = alloc(self.val_size);
-                if (self.buckets[idx].key == (void*)0 || self.buckets[idx].val == (void*)0) { return 0; }
+                // key and val are one combined allocation (key_size +
+                // val_size bytes, val pointing key_size bytes into it) --
+                // both fixed for the map's lifetime, so unlike a variable-
+                // length key this never needs to grow. Reused across
+                // tombstone recycling exactly like the old separate
+                // allocations were, just one alloc()/dealloc() instead of
+                // two.
+                if (self.buckets[idx].key == (void*)0) {
+                    void* blk = alloc(checked_add_size(self.key_size, self.val_size));
+                    if (blk == (void*)0) { return 0; }
+                    self.buckets[idx].key = blk;
+                    self.buckets[idx].val = (void*)((char*)blk + self.key_size);
+                }
                 safe_memcpy(self.buckets[idx].key, key, self.key_size);
                 safe_memcpy(self.buckets[idx].val, val, self.val_size);
                 self.buckets[idx].hash  = h;

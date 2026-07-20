@@ -6,7 +6,9 @@
 namespace std {
 
 struct MapEntry {
-    void*        key;
+    void*        key;   // fixed-size-key maps: key and val are one combined
+                         // alloc(), val == (char*)key + key_size; str_map_*
+                         // keys are variable-length so keep key/val separate
     void*        val;
     unsigned int hash;
     int          state; // 0=empty, 1=occupied, 2=tombstone
