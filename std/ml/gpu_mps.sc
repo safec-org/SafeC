@@ -9,23 +9,34 @@
 // verifier failure; the assign-then-call form (matching gui_cocoa.sc's
 // existing convention throughout) reliably picks up the cast type.
 //
-// Two things this file used to do at runtime, on every process, that are
-// now done once, offline, at build time instead:
+// Three things this file used to do at runtime, on every process or every
+// dispatch, that are now either done once or not at all:
 //   1. Kernel compilation. Every mps_*_f32 call used to hand a Metal
 //      Shading Language *source string* to newLibraryWithSource:options:
-//      error:, a real MSL-to-AIR compile, the most expensive single step
-//      in the whole dispatch (cached after the first call per op, but
-//      still paid once per process per op). gpu_mps_kernels.metal is now
+//      error:, a real MSL-to-AIR compile. gpu_mps_kernels.metal is now
 //      compiled ahead of time by gen_mps_metallib.sh into a .metallib,
-//      embedded as a byte array (gpu_mps_metallib.h), and loaded directly
-//      via newLibraryWithData:error: — no MSL compiler runs in-process at
-//      all anymore.
+//      embedded as a byte array (gpu_mps_metallib.h), and loaded once via
+//      newLibraryWithData:error: — no MSL compiler runs in-process.
 //   2. Selector lookup. Every objc_msgSend call used to re-resolve its
-//      selector via sel_registerName(name) — a string lookup — on every
-//      single dispatch. The full set this file ever sends is fixed and
-//      known ahead of time, so they're resolved once (in
-//      __mps_init_selectors, called from __mps_ensure_device_queue) into
-//      static SEL variables instead.
+//      selector via sel_registerName(name) on every single dispatch,
+//      resolved once now (__mps_init_selectors) into static SEL variables.
+//   3. Buffer allocation — the one that actually mattered. Every op used
+//      to call newBufferWithBytes:length:options:/newBufferWithLength:
+//      options: fresh, on *every single dispatch*, and never released
+//      them: a real Metal buffer allocation (IOSurface/IOAccelerator
+//      resource creation, not a cheap malloc) on every op call, growing
+//      without bound over a training loop. Measured directly: this, not
+//      shader compilation, was the actual dominant per-call cost once
+//      pipelines were already cached — fixing (1)/(2) alone left the
+//      bigger-model training loop's GPU time unchanged, because neither
+//      addressed the thing actually being paid for on every op.
+//      PyTorch's MPSAllocator and MLX's Metal buffer cache both solve
+//      this the same way: a caching allocator over MTLBuffer objects,
+//      keyed by size, so a same-shape op reuses a buffer instead of
+//      asking the driver for a new one — see the size-class buffer pool
+//      below (__mps_buf_get/__mps_buf_put), which applies that exact
+//      pattern here, the same size-class-cache design std::alloc/dealloc
+//      already uses on the CPU side (see std/mem.sc).
 #pragma once
 #include <std/ml/gpu_mps.h>
 #include <std/ml/gpu_mps_metallib.h>
@@ -59,7 +70,6 @@ struct MTLSize {
 typedef fn void*(void*, void*) MMsg0;
 typedef fn void*(void*, void*, void*) MMsg1;
 typedef fn void*(void*, void*, void*, void*) MMsg2;
-typedef fn void*(void*, void*, const void*, unsigned long, unsigned long) MMsgNewBufferBytes;
 typedef fn void*(void*, void*, unsigned long, unsigned long) MMsgNewBufferLen;
 typedef fn void(void*, void*, void*) MMsgVoid1;
 typedef fn void(void*, void*, void*, unsigned long, unsigned long) MMsgSetBuffer;
@@ -76,7 +86,6 @@ static void* __sel_newCommandQueue = (void*)0;
 static void* __sel_newLibraryWithData = (void*)0;
 static void* __sel_newFunctionWithName = (void*)0;
 static void* __sel_newComputePipelineState = (void*)0;
-static void* __sel_newBufferWithBytes = (void*)0;
 static void* __sel_newBufferWithLength = (void*)0;
 static void* __sel_commandBuffer = (void*)0;
 static void* __sel_computeCommandEncoder = (void*)0;
@@ -88,6 +97,7 @@ static void* __sel_endEncoding = (void*)0;
 static void* __sel_commit = (void*)0;
 static void* __sel_waitUntilCompleted = (void*)0;
 static void* __sel_contents = (void*)0;
+static void* __sel_release = (void*)0;
 
 static void __mps_init_selectors() {
     unsafe {
@@ -97,7 +107,6 @@ static void __mps_init_selectors() {
         __sel_newLibraryWithData = sel_registerName("newLibraryWithData:error:");
         __sel_newFunctionWithName = sel_registerName("newFunctionWithName:");
         __sel_newComputePipelineState = sel_registerName("newComputePipelineStateWithFunction:error:");
-        __sel_newBufferWithBytes = sel_registerName("newBufferWithBytes:length:options:");
         __sel_newBufferWithLength = sel_registerName("newBufferWithLength:options:");
         __sel_commandBuffer = sel_registerName("commandBuffer");
         __sel_computeCommandEncoder = sel_registerName("computeCommandEncoder");
@@ -109,6 +118,7 @@ static void __mps_init_selectors() {
         __sel_commit = sel_registerName("commit");
         __sel_waitUntilCompleted = sel_registerName("waitUntilCompleted");
         __sel_contents = sel_registerName("contents");
+        __sel_release = sel_registerName("release");
     }
 }
 
@@ -185,6 +195,119 @@ static void* __mps_make_pipeline(const char* kernelName) {
     }
 }
 
+// ── Size-class MTLBuffer pool ────────────────────────────────────────────────
+// Same idea as std::alloc/dealloc's size-class cache (std/mem.sc), applied
+// to Metal buffers instead of heap blocks: a freed buffer goes back into a
+// thread-local(-ish; this file was never thread-safe — see __mps_device's
+// own lack of synchronization) free list bucketed by power-of-two size
+// class, and the next request for that class is satisfied from there
+// instead of asking the Metal driver for a brand new buffer. Classes run
+// 4KB to 8MB (12 classes) — small enough to cover every buffer this file's
+// actual op set ever allocates (a batch of matmul/relu/elementwise calls
+// over a training-loop-sized MLP, not arbitrary user data), large enough
+// that a single class comfortably holds this bigger benchmark's biggest
+// tensor (W1 at 512x1024 doubles-converted-to-float32 = 2MB). Anything
+// larger just allocates directly, uncached, same as std::alloc's oversize
+// path. Per-class capacity is memory-budget-scaled (roughly 16MB worth of
+// buffers per class, floored at 2 slots) rather than a flat count, so a
+// class of huge buffers doesn't retain as many as a class of small ones —
+// same reasoning as alloc_class_cap_ in std/mem.sc. A slot that overflows
+// its class's cap gets an explicit 'release' instead of being silently
+// dropped (leaked): Metal buffers are real, non-trivial GPU resources, not
+// a few bytes of heap, so an unbounded leak here is worth avoiding even in
+// the overflow case std::alloc's own quarantine ring tolerates for plain
+// memory.
+#define MPS_BUF_MIN_CLASS_   ((unsigned long)4096)
+#define MPS_BUF_NUM_CLASSES_ ((unsigned long)12)
+#define MPS_BUF_MAX_SLOTS_   ((unsigned long)8)
+
+static void*         __mps_bufSlot[12][8];
+static unsigned long __mps_bufCount[12];
+
+static long __mps_buf_class_for(unsigned long bytes) {
+    unsigned long clsBytes = MPS_BUF_MIN_CLASS_;
+    long idx = 0L;
+    while (clsBytes < bytes) {
+        if (idx >= (long)(MPS_BUF_NUM_CLASSES_ - (unsigned long)1)) { return -1L; }
+        clsBytes = clsBytes << 1UL;
+        idx = idx + 1L;
+    }
+    return idx;
+}
+
+static unsigned long __mps_buf_class_bytes(unsigned long idx) {
+    return MPS_BUF_MIN_CLASS_ << idx;
+}
+
+// ~16MB budget per class, floored at 2 slots, capped at the array's
+// physical width (MPS_BUF_MAX_SLOTS_) -- same shift-based, division-free
+// approach as std/mem.sc's alloc_class_cap_.
+static unsigned long __mps_buf_class_cap(unsigned long cls) {
+    unsigned long classBytes = __mps_buf_class_bytes(cls);
+    unsigned long cap = ((unsigned long)16 * (unsigned long)1024 * (unsigned long)1024) / classBytes;
+    if (cap > MPS_BUF_MAX_SLOTS_) { cap = MPS_BUF_MAX_SLOTS_; }
+    if (cap < (unsigned long)2) { cap = (unsigned long)2; }
+    return cap;
+}
+
+// Returns an MTLBuffer of at least 'bytes', either popped from its size
+// class's free list or freshly allocated (at the class's rounded-up size,
+// so it's reusable by any future request that rounds to the same class).
+static void* __mps_buf_get(unsigned long bytes) {
+    unsafe {
+        long clsSigned = __mps_buf_class_for(bytes);
+        MMsgNewBufferLen newBufLenFn = (MMsgNewBufferLen)objc_msgSend;
+        if (clsSigned >= 0L) {
+            unsigned long cls = (unsigned long)clsSigned;
+            if (__mps_bufCount[cls] > 0UL) {
+                __mps_bufCount[cls] = __mps_bufCount[cls] - 1UL;
+                return __mps_bufSlot[cls][__mps_bufCount[cls]];
+            }
+            return newBufLenFn(__mps_device, __sel_newBufferWithLength, __mps_buf_class_bytes(cls), 0UL);
+        }
+        return newBufLenFn(__mps_device, __sel_newBufferWithLength, bytes, 0UL);
+    }
+}
+
+// Same as __mps_buf_get, but also copies 'src' into the buffer's
+// CPU-visible 'contents' (storage mode 0 = MTLResourceStorageModeShared,
+// set on every allocation above) -- replaces the old
+// newBufferWithBytes:length:options: call, which allocated and copied in
+// one step but could never be satisfied from the pool.
+static void* __mps_buf_get_with_bytes(const void* src, unsigned long bytes) {
+    unsafe {
+        void* buf = __mps_buf_get(bytes);
+        if (buf == (void*)0) return (void*)0;
+        MMsg0 msg0 = (MMsg0)objc_msgSend;
+        void* contents = msg0(buf, __sel_contents);
+        if (contents != (void*)0) { memcpy(contents, src, bytes); }
+        return buf;
+    }
+}
+
+// Returns 'buf' (of size 'bytes') to its size class's free list, or
+// releases it outright if that class is already at capacity. Only valid
+// to call once the GPU is provably done with the buffer -- i.e. after the
+// command buffer that used it has completed (waitUntilCompleted returned,
+// whether that wait happened here or, for batched dispatches, in
+// mps_batch_end()).
+static void __mps_buf_put(void* buf, unsigned long bytes) {
+    if (buf == (void*)0) return;
+    unsafe {
+        long clsSigned = __mps_buf_class_for(bytes);
+        if (clsSigned >= 0L) {
+            unsigned long cls = (unsigned long)clsSigned;
+            if (__mps_bufCount[cls] < __mps_buf_class_cap(cls)) {
+                __mps_bufSlot[cls][__mps_bufCount[cls]] = buf;
+                __mps_bufCount[cls] = __mps_bufCount[cls] + 1UL;
+                return;
+            }
+        }
+        MMsgVoid0 releaseFn = (MMsgVoid0)objc_msgSend;
+        releaseFn(buf, __sel_release);
+    }
+}
+
 // Shared setup/dispatch/readback for every elementwise binary kernel
 // (add/sub/mul/div/pow) — the only thing that varies between them is which
 // compiled kernel function they bind. Previously, the
@@ -217,14 +340,9 @@ static int __mps_run_binary_kernel(void** pipelineCache, const char* kernelName,
         void* pipeline = *pipelineCache;
 
         unsigned long bytes = n * sizeof(float);
-        // storage mode 0 = MTLResourceStorageModeShared — the unified-
-        // memory mode: 'contents' below is directly CPU-readable with no
-        // explicit sync step needed after waitUntilCompleted.
-        MMsgNewBufferBytes newBufBytesFn = (MMsgNewBufferBytes)objc_msgSend;
-        void* bufA = newBufBytesFn(device, __sel_newBufferWithBytes, (const void*)a, bytes, 0UL);
-        void* bufB = newBufBytesFn(device, __sel_newBufferWithBytes, (const void*)b, bytes, 0UL);
-        MMsgNewBufferLen newBufLenFn = (MMsgNewBufferLen)objc_msgSend;
-        void* bufOut = newBufLenFn(device, __sel_newBufferWithLength, bytes, 0UL);
+        void* bufA = __mps_buf_get_with_bytes((const void*)a, bytes);
+        void* bufB = __mps_buf_get_with_bytes((const void*)b, bytes);
+        void* bufOut = __mps_buf_get(bytes);
         if (bufA == (void*)0 || bufB == (void*)0 || bufOut == (void*)0) return 0;
 
         void* cmdBuf = msg0(queue, __sel_commandBuffer);
@@ -256,6 +374,9 @@ static int __mps_run_binary_kernel(void** pipelineCache, const char* kernelName,
         void* outPtr = msg0(bufOut, __sel_contents);
         if (outPtr == (void*)0) return 0;
         memcpy((void*)out, outPtr, bytes);
+        __mps_buf_put(bufA, bytes);
+        __mps_buf_put(bufB, bytes);
+        __mps_buf_put(bufOut, bytes);
         return 1;
     }
 }
@@ -279,10 +400,8 @@ static int __mps_run_unary_kernel(void** pipelineCache, const char* kernelName,
         void* pipeline = *pipelineCache;
 
         unsigned long bytes = n * sizeof(float);
-        MMsgNewBufferBytes newBufBytesFn = (MMsgNewBufferBytes)objc_msgSend;
-        void* bufA = newBufBytesFn(device, __sel_newBufferWithBytes, (const void*)a, bytes, 0UL);
-        MMsgNewBufferLen newBufLenFn = (MMsgNewBufferLen)objc_msgSend;
-        void* bufOut = newBufLenFn(device, __sel_newBufferWithLength, bytes, 0UL);
+        void* bufA = __mps_buf_get_with_bytes((const void*)a, bytes);
+        void* bufOut = __mps_buf_get(bytes);
         if (bufA == (void*)0 || bufOut == (void*)0) return 0;
 
         void* cmdBuf = msg0(queue, __sel_commandBuffer);
@@ -313,6 +432,8 @@ static int __mps_run_unary_kernel(void** pipelineCache, const char* kernelName,
         void* outPtr = msg0(bufOut, __sel_contents);
         if (outPtr == (void*)0) return 0;
         memcpy((void*)out, outPtr, bytes);
+        __mps_buf_put(bufA, bytes);
+        __mps_buf_put(bufOut, bytes);
         return 1;
     }
 }
@@ -329,9 +450,16 @@ static void* __mps_pow_pipeline  = (void*)0;
 static void* __mps_log_pipeline  = (void*)0;
 static void* __mps_exp_pipeline  = (void*)0;
 static void* __mps_sqrt_pipeline = (void*)0;
+static void* __mps_relu_backward_pipeline = (void*)0;
 
 int mps_add_f32(const float* a, const float* b, float* out, unsigned long n) {
     return __mps_run_binary_kernel(&__mps_add_pipeline, "add_kernel", a, b, out, n);
+}
+
+// out[i] = a[i] > 0 ? selfGrad[i] : 0 -- relu's backward, same elementwise
+// binary-kernel shape as add/sub/mul, just a different one-line kernel body.
+int mps_relu_backward_f32(const float* a, const float* selfGrad, float* out, unsigned long n) {
+    return __mps_run_binary_kernel(&__mps_relu_backward_pipeline, "relu_backward_kernel", a, selfGrad, out, n);
 }
 
 int mps_sub_f32(const float* a, const float* b, float* out, unsigned long n) {
@@ -389,10 +517,8 @@ int mps_scale_f32(const float* a, float k, float* out, unsigned long n) {
         void* pipeline = __mps_scale_pipeline;
 
         unsigned long bytes = n * sizeof(float);
-        MMsgNewBufferBytes newBufBytesFn = (MMsgNewBufferBytes)objc_msgSend;
-        void* bufA = newBufBytesFn(device, __sel_newBufferWithBytes, (const void*)a, bytes, 0UL);
-        MMsgNewBufferLen newBufLenFn = (MMsgNewBufferLen)objc_msgSend;
-        void* bufOut = newBufLenFn(device, __sel_newBufferWithLength, bytes, 0UL);
+        void* bufA = __mps_buf_get_with_bytes((const void*)a, bytes);
+        void* bufOut = __mps_buf_get(bytes);
         if (bufA == (void*)0 || bufOut == (void*)0) return 0;
 
         void* cmdBuf = msg0(queue, __sel_commandBuffer);
@@ -429,6 +555,8 @@ int mps_scale_f32(const float* a, float k, float* out, unsigned long n) {
         void* outPtr = msg0(bufOut, __sel_contents);
         if (outPtr == (void*)0) return 0;
         memcpy((void*)out, outPtr, bytes);
+        __mps_buf_put(bufA, bytes);
+        __mps_buf_put(bufOut, bytes);
         return 1;
     }
 }
@@ -459,10 +587,8 @@ int mps_sum_f32(const float* a, float* out, unsigned long n) {
         void* pipeline = __mps_sum_pipeline;
 
         unsigned long bytes = n * sizeof(float);
-        MMsgNewBufferBytes newBufBytesFn = (MMsgNewBufferBytes)objc_msgSend;
-        void* bufA = newBufBytesFn(device, __sel_newBufferWithBytes, (const void*)a, bytes, 0UL);
-        MMsgNewBufferLen newBufLenFn = (MMsgNewBufferLen)objc_msgSend;
-        void* bufOut = newBufLenFn(device, __sel_newBufferWithLength, 4UL, 0UL);
+        void* bufA = __mps_buf_get_with_bytes((const void*)a, bytes);
+        void* bufOut = __mps_buf_get(4UL);
         if (bufA == (void*)0 || bufOut == (void*)0) return 0;
 
         void* cmdBuf = msg0(queue, __sel_commandBuffer);
@@ -491,6 +617,8 @@ int mps_sum_f32(const float* a, float* out, unsigned long n) {
         void* outPtr = msg0(bufOut, __sel_contents);
         if (outPtr == (void*)0) return 0;
         memcpy((void*)out, outPtr, 4UL);
+        __mps_buf_put(bufA, bytes);
+        __mps_buf_put(bufOut, 4UL);
         return 1;
     }
 }
@@ -505,9 +633,20 @@ int mps_sum_f32(const float* a, float* out, unsigned long n) {
 // std/collections, and a bounds-checked fixed array covers every actual
 // use here without adding that dependency). __mps_finalize_* is the
 // parallel list of caller-supplied post-readback callbacks (e.g.
-// tensor_gpu.sc's float32->float64 conversion).
+// tensor_gpu.sc's float32->float64 conversion). __mps_poolbuf_* is a
+// third, separate list: every buffer __mps_buf_get/_with_bytes hands out
+// *while a batch is open* stays in flight until the whole batch's command
+// buffer completes (the GPU may still be reading or writing it right up
+// until waitUntilCompleted returns in mps_batch_end() below), so it can't
+// go back to the pool at the point it's used the way the non-batched path
+// does -- it's tracked here instead and returned in bulk once the wait is
+// done. A buffer obtained via a _chained call's 'bufA' parameter (i.e.
+// someone else's still-pending output, not a fresh __mps_buf_get) is never
+// double-tracked, because tracking only happens at the __mps_buf_get call
+// site itself, and chained functions never call it for their input.
 #define MPS_BATCH_MAX_PENDING 64
 #define MPS_BATCH_MAX_FINALIZE 64
+#define MPS_BATCH_MAX_POOLBUFS 128
 
 static int           __mps_batch_active = 0;
 static void*         __mps_batch_cmdBuf = (void*)0;
@@ -519,6 +658,32 @@ static unsigned long __mps_pending_count = 0UL;
 static MpsFinalizeFn __mps_finalize_fn[MPS_BATCH_MAX_FINALIZE];
 static void*         __mps_finalize_ctx[MPS_BATCH_MAX_FINALIZE];
 static unsigned long __mps_finalize_count = 0UL;
+static void*         __mps_poolbuf_buf[MPS_BATCH_MAX_POOLBUFS];
+static unsigned long __mps_poolbuf_bytes[MPS_BATCH_MAX_POOLBUFS];
+static unsigned long __mps_poolbuf_count = 0UL;
+
+static void __mps_batch_track_pool_buf(void* buf, unsigned long bytes) {
+    if (buf == (void*)0) return;
+    if (__mps_poolbuf_count < (unsigned long)MPS_BATCH_MAX_POOLBUFS) {
+        __mps_poolbuf_buf[__mps_poolbuf_count] = buf;
+        __mps_poolbuf_bytes[__mps_poolbuf_count] = bytes;
+        __mps_poolbuf_count = __mps_poolbuf_count + 1UL;
+    }
+}
+
+// Batch-scoped versions of __mps_buf_get/_with_bytes: same allocation, but
+// also register the buffer for deferred pool-return in mps_batch_end().
+static void* __mps_buf_get_batched(unsigned long bytes) {
+    void* buf = __mps_buf_get(bytes);
+    __mps_batch_track_pool_buf(buf, bytes);
+    return buf;
+}
+
+static void* __mps_buf_get_with_bytes_batched(const void* src, unsigned long bytes) {
+    void* buf = __mps_buf_get_with_bytes(src, bytes);
+    __mps_batch_track_pool_buf(buf, bytes);
+    return buf;
+}
 
 int mps_batch_is_active() { return __mps_batch_active; }
 
@@ -530,6 +695,7 @@ void mps_batch_begin() {
         __mps_batch_encoder = msg0(__mps_batch_cmdBuf, __sel_computeCommandEncoder);
         __mps_pending_count = 0UL;
         __mps_finalize_count = 0UL;
+        __mps_poolbuf_count = 0UL;
         __mps_batch_active = 1;
     }
 }
@@ -564,6 +730,17 @@ void mps_batch_end() {
             i = i + 1UL;
         }
         __mps_pending_count = 0UL;
+
+        // Every buffer used in this batch is now provably done (the GPU
+        // finished reading/writing it before waitUntilCompleted returned)
+        // -- safe to return the whole set to the pool at once.
+        i = 0UL;
+        while (i < __mps_poolbuf_count) {
+            __mps_buf_put(__mps_poolbuf_buf[i], __mps_poolbuf_bytes[i]);
+            i = i + 1UL;
+        }
+        __mps_poolbuf_count = 0UL;
+
         // Deactivate before running finalizers: a finalize callback must
         // never itself try to enqueue more batched work against a buffer
         // that's already been committed.
@@ -613,22 +790,25 @@ int mps_matmul_f32(const float* a, const float* b, float* out,
         unsigned long bytesA = M * K * sizeof(float);
         unsigned long bytesB = K * N * sizeof(float);
         unsigned long bytesOut = M * N * sizeof(float);
-        MMsgNewBufferBytes newBufBytesFn = (MMsgNewBufferBytes)objc_msgSend;
-        void* bufA = newBufBytesFn(device, __sel_newBufferWithBytes, (const void*)a, bytesA, 0UL);
-        void* bufB = newBufBytesFn(device, __sel_newBufferWithBytes, (const void*)b, bytesB, 0UL);
-        MMsgNewBufferLen newBufLenFn = (MMsgNewBufferLen)objc_msgSend;
-        void* bufOut = newBufLenFn(device, __sel_newBufferWithLength, bytesOut, 0UL);
+
+        // Batched: reuse the shared command buffer/encoder that
+        // mps_batch_begin() already opened instead of creating our own
+        // (and don't end/commit/wait/readback here — mps_batch_end()
+        // does all of that once, for every op encoded since begin()).
+        // Buffers obtained while batched are tracked for deferred
+        // pool-return there too, instead of being put back immediately.
+        int batched = __mps_batch_active;
+        void* bufA = batched ? __mps_buf_get_with_bytes_batched((const void*)a, bytesA)
+                              : __mps_buf_get_with_bytes((const void*)a, bytesA);
+        void* bufB = batched ? __mps_buf_get_with_bytes_batched((const void*)b, bytesB)
+                              : __mps_buf_get_with_bytes((const void*)b, bytesB);
+        void* bufOut = batched ? __mps_buf_get_batched(bytesOut) : __mps_buf_get(bytesOut);
         if (bufA == (void*)0 || bufB == (void*)0 || bufOut == (void*)0) return 0;
 
         unsigned int Mu = (unsigned int)M;
         unsigned int Ku = (unsigned int)K;
         unsigned int Nu = (unsigned int)N;
 
-        // Batched: reuse the shared command buffer/encoder that
-        // mps_batch_begin() already opened instead of creating our own
-        // (and don't end/commit/wait/readback here — mps_batch_end()
-        // does all of that once, for every op encoded since begin()).
-        int batched = __mps_batch_active;
         void* cmdBuf = (void*)0;
         void* encoder;
         if (batched) {
@@ -654,15 +834,18 @@ int mps_matmul_f32(const float* a, const float* b, float* out,
         setBytesFn(encoder, __sel_setBytes, (void*)&Ku, 4UL, 4UL);
         setBytesFn(encoder, __sel_setBytes, (void*)&Nu, 4UL, 5UL);
 
-        // 2D dispatch: one thread per output element, 16x16 threadgroups
-        // (a conventional default for a 2D elementwise-per-output kernel;
-        // no tiling/threadgroup-memory reuse here to tune against).
+        // 2D dispatch: TILE_SIZE(16) x TILE_SIZE(16) threadgroups, matching
+        // matmul_kernel's threadgroup-memory tiling in gpu_mps_kernels.metal
+        // exactly -- MUST stay fixed at the tile size regardless of M/N
+        // (not shrunk for small matrices the way the old untiled kernel's
+        // dispatch did), since the kernel's cooperative tile load assumes
+        // every thread in the threadgroup participates; the kernel's own
+        // bounds checks (row < M, col < N, tile index < K) are what make a
+        // fixed 16x16 dispatch safe for matrices smaller than one tile.
         struct MTLSize gridSize;
         gridSize.width = N; gridSize.height = M; gridSize.depth = 1UL;
-        unsigned long tgW = N < 16UL ? N : 16UL;
-        unsigned long tgH = M < 16UL ? M : 16UL;
-        if (tgW == 0UL) tgW = 1UL;
-        if (tgH == 0UL) tgH = 1UL;
+        unsigned long tgW = 16UL;
+        unsigned long tgH = 16UL;
         struct MTLSize tgSize;
         tgSize.width = tgW; tgSize.height = tgH; tgSize.depth = 1UL;
         unsigned long groupsX = (N + tgW - 1UL) / tgW;
@@ -690,6 +873,162 @@ int mps_matmul_f32(const float* a, const float* b, float* out,
         void* outPtr = msg0(bufOut, __sel_contents);
         if (outPtr == (void*)0) return 0;
         memcpy((void*)out, outPtr, bytesOut);
+        __mps_buf_put(bufA, bytesA);
+        __mps_buf_put(bufB, bytesB);
+        __mps_buf_put(bufOut, bytesOut);
+        return 1;
+    }
+}
+
+// ── matmul backward (see gpu_mps.h's own comment on these two) ───────────────
+// Same dispatch shape as mps_matmul_f32 (2D grid, cached pipeline, pooled
+// buffers) but against matmul_abt_kernel/matmul_atb_kernel instead of
+// matmul_kernel -- not routed through mps_matmul_f32 itself since the
+// output shape and which operand reads transposed differ between the two,
+// and neither needs batching (tensor_backward() always runs after any
+// forward-pass batch has already ended).
+static void* __mps_matmul_abt_pipeline = (void*)0;
+
+int mps_matmul_abt_f32(const float* a, const float* b, float* out,
+                        unsigned long M, unsigned long N, unsigned long K) {
+    unsafe {
+        if (!__mps_ensure_device_queue()) return 0;
+        void* device = __mps_device;
+        void* queue = __mps_queue;
+        MMsg0 msg0 = (MMsg0)objc_msgSend;
+
+        if (__mps_matmul_abt_pipeline == (void*)0) {
+            void* pipeline = __mps_make_pipeline("matmul_abt_kernel");
+            if (pipeline == (void*)0) return 0;
+            __mps_matmul_abt_pipeline = pipeline;
+        }
+        void* pipeline = __mps_matmul_abt_pipeline;
+
+        unsigned long bytesA = M * N * sizeof(float);
+        unsigned long bytesB = K * N * sizeof(float);
+        unsigned long bytesOut = M * K * sizeof(float);
+        void* bufA = __mps_buf_get_with_bytes((const void*)a, bytesA);
+        void* bufB = __mps_buf_get_with_bytes((const void*)b, bytesB);
+        void* bufOut = __mps_buf_get(bytesOut);
+        if (bufA == (void*)0 || bufB == (void*)0 || bufOut == (void*)0) return 0;
+
+        unsigned int Mu = (unsigned int)M;
+        unsigned int Nu = (unsigned int)N;
+        unsigned int Ku = (unsigned int)K;
+
+        void* cmdBuf = msg0(queue, __sel_commandBuffer);
+        void* encoder = msg0(cmdBuf, __sel_computeCommandEncoder);
+
+        MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
+        msgVoid1(encoder, __sel_setComputePipelineState, pipeline);
+        MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
+        setBufFn(encoder, __sel_setBuffer, bufA, 0UL, 0UL);
+        setBufFn(encoder, __sel_setBuffer, bufB, 0UL, 1UL);
+        setBufFn(encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
+        MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
+        setBytesFn(encoder, __sel_setBytes, (void*)&Mu, 4UL, 3UL);
+        setBytesFn(encoder, __sel_setBytes, (void*)&Nu, 4UL, 4UL);
+        setBytesFn(encoder, __sel_setBytes, (void*)&Ku, 4UL, 5UL);
+
+        // Fixed 16x16 (TILE_SIZE) dispatch -- see mps_matmul_f32's comment
+        // on why this can't shrink for small matrices with a tiled kernel.
+        struct MTLSize gridSize;
+        gridSize.width = K; gridSize.height = M; gridSize.depth = 1UL;
+        unsigned long tgW = 16UL;
+        unsigned long tgH = 16UL;
+        struct MTLSize tgSize;
+        tgSize.width = tgW; tgSize.height = tgH; tgSize.depth = 1UL;
+        unsigned long groupsX = (K + tgW - 1UL) / tgW;
+        unsigned long groupsY = (M + tgH - 1UL) / tgH;
+        struct MTLSize numThreadgroups;
+        numThreadgroups.width = groupsX; numThreadgroups.height = groupsY; numThreadgroups.depth = 1UL;
+        MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
+        dispatchFn(encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+
+        MMsgVoid0 msgVoid0 = (MMsgVoid0)objc_msgSend;
+        msgVoid0(encoder, __sel_endEncoding);
+        msgVoid0(cmdBuf, __sel_commit);
+        msgVoid0(cmdBuf, __sel_waitUntilCompleted);
+
+        void* outPtr = msg0(bufOut, __sel_contents);
+        if (outPtr == (void*)0) return 0;
+        memcpy((void*)out, outPtr, bytesOut);
+        __mps_buf_put(bufA, bytesA);
+        __mps_buf_put(bufB, bytesB);
+        __mps_buf_put(bufOut, bytesOut);
+        return 1;
+    }
+}
+
+static void* __mps_matmul_atb_pipeline = (void*)0;
+
+int mps_matmul_atb_f32(const float* a, const float* b, float* out,
+                        unsigned long M, unsigned long K, unsigned long N) {
+    unsafe {
+        if (!__mps_ensure_device_queue()) return 0;
+        void* device = __mps_device;
+        void* queue = __mps_queue;
+        MMsg0 msg0 = (MMsg0)objc_msgSend;
+
+        if (__mps_matmul_atb_pipeline == (void*)0) {
+            void* pipeline = __mps_make_pipeline("matmul_atb_kernel");
+            if (pipeline == (void*)0) return 0;
+            __mps_matmul_atb_pipeline = pipeline;
+        }
+        void* pipeline = __mps_matmul_atb_pipeline;
+
+        unsigned long bytesA = M * K * sizeof(float);
+        unsigned long bytesB = M * N * sizeof(float);
+        unsigned long bytesOut = K * N * sizeof(float);
+        void* bufA = __mps_buf_get_with_bytes((const void*)a, bytesA);
+        void* bufB = __mps_buf_get_with_bytes((const void*)b, bytesB);
+        void* bufOut = __mps_buf_get(bytesOut);
+        if (bufA == (void*)0 || bufB == (void*)0 || bufOut == (void*)0) return 0;
+
+        unsigned int Mu = (unsigned int)M;
+        unsigned int Ku = (unsigned int)K;
+        unsigned int Nu = (unsigned int)N;
+
+        void* cmdBuf = msg0(queue, __sel_commandBuffer);
+        void* encoder = msg0(cmdBuf, __sel_computeCommandEncoder);
+
+        MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
+        msgVoid1(encoder, __sel_setComputePipelineState, pipeline);
+        MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
+        setBufFn(encoder, __sel_setBuffer, bufA, 0UL, 0UL);
+        setBufFn(encoder, __sel_setBuffer, bufB, 0UL, 1UL);
+        setBufFn(encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
+        MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
+        setBytesFn(encoder, __sel_setBytes, (void*)&Mu, 4UL, 3UL);
+        setBytesFn(encoder, __sel_setBytes, (void*)&Ku, 4UL, 4UL);
+        setBytesFn(encoder, __sel_setBytes, (void*)&Nu, 4UL, 5UL);
+
+        // Fixed 16x16 (TILE_SIZE) dispatch -- see mps_matmul_f32's comment
+        // on why this can't shrink for small matrices with a tiled kernel.
+        struct MTLSize gridSize;
+        gridSize.width = N; gridSize.height = K; gridSize.depth = 1UL;
+        unsigned long tgW = 16UL;
+        unsigned long tgH = 16UL;
+        struct MTLSize tgSize;
+        tgSize.width = tgW; tgSize.height = tgH; tgSize.depth = 1UL;
+        unsigned long groupsX = (N + tgW - 1UL) / tgW;
+        unsigned long groupsY = (K + tgH - 1UL) / tgH;
+        struct MTLSize numThreadgroups;
+        numThreadgroups.width = groupsX; numThreadgroups.height = groupsY; numThreadgroups.depth = 1UL;
+        MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
+        dispatchFn(encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+
+        MMsgVoid0 msgVoid0 = (MMsgVoid0)objc_msgSend;
+        msgVoid0(encoder, __sel_endEncoding);
+        msgVoid0(cmdBuf, __sel_commit);
+        msgVoid0(cmdBuf, __sel_waitUntilCompleted);
+
+        void* outPtr = msg0(bufOut, __sel_contents);
+        if (outPtr == (void*)0) return 0;
+        memcpy((void*)out, outPtr, bytesOut);
+        __mps_buf_put(bufA, bytesA);
+        __mps_buf_put(bufB, bytesB);
+        __mps_buf_put(bufOut, bytesOut);
         return 1;
     }
 }
@@ -716,13 +1055,12 @@ int mps_relu_f32(const float* a, float* out, unsigned long n) {
         void* pipeline = __mps_relu_pipeline;
 
         unsigned long bytes = n * sizeof(float);
-        MMsgNewBufferBytes newBufBytesFn = (MMsgNewBufferBytes)objc_msgSend;
-        void* bufA = newBufBytesFn(device, __sel_newBufferWithBytes, (const void*)a, bytes, 0UL);
-        MMsgNewBufferLen newBufLenFn = (MMsgNewBufferLen)objc_msgSend;
-        void* bufOut = newBufLenFn(device, __sel_newBufferWithLength, bytes, 0UL);
+        int batched = __mps_batch_active;
+        void* bufA = batched ? __mps_buf_get_with_bytes_batched((const void*)a, bytes)
+                              : __mps_buf_get_with_bytes((const void*)a, bytes);
+        void* bufOut = batched ? __mps_buf_get_batched(bytes) : __mps_buf_get(bytes);
         if (bufA == (void*)0 || bufOut == (void*)0) return 0;
 
-        int batched = __mps_batch_active;
         void* cmdBuf = (void*)0;
         void* encoder;
         if (batched) {
@@ -768,6 +1106,8 @@ int mps_relu_f32(const float* a, float* out, unsigned long n) {
         void* outPtr = msg0(bufOut, __sel_contents);
         if (outPtr == (void*)0) return 0;
         memcpy((void*)out, outPtr, bytes);
+        __mps_buf_put(bufA, bytes);
+        __mps_buf_put(bufOut, bytes);
         return 1;
     }
 }
@@ -778,7 +1118,8 @@ int mps_relu_f32(const float* a, float* out, unsigned long n) {
 // this encodes reads whatever a PREVIOUS dispatch on the same command
 // buffer already wrote there -- correct without any CPU round trip
 // specifically because Metal executes dispatches encoded on the same
-// encoder in encoding order.
+// encoder in encoding order. 'bufA' itself is never pool-tracked here: it
+// was already tracked by whichever op produced it as its own bufOut.
 int mps_matmul_f32_chained(void* bufA, const float* b, float* out,
                             unsigned long M, unsigned long K, unsigned long N) {
     if (!__mps_batch_active) return 0;
@@ -791,10 +1132,8 @@ int mps_matmul_f32_chained(void* bufA, const float* b, float* out,
 
         unsigned long bytesB = K * N * sizeof(float);
         unsigned long bytesOut = M * N * sizeof(float);
-        MMsgNewBufferBytes newBufBytesFn = (MMsgNewBufferBytes)objc_msgSend;
-        void* bufB = newBufBytesFn(__mps_device, __sel_newBufferWithBytes, (const void*)b, bytesB, 0UL);
-        MMsgNewBufferLen newBufLenFn = (MMsgNewBufferLen)objc_msgSend;
-        void* bufOut = newBufLenFn(__mps_device, __sel_newBufferWithLength, bytesOut, 0UL);
+        void* bufB = __mps_buf_get_with_bytes_batched((const void*)b, bytesB);
+        void* bufOut = __mps_buf_get_batched(bytesOut);
         if (bufB == (void*)0 || bufOut == (void*)0) return 0;
 
         unsigned int Mu = (unsigned int)M;
@@ -812,12 +1151,12 @@ int mps_matmul_f32_chained(void* bufA, const float* b, float* out,
         setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&Ku, 4UL, 4UL);
         setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&Nu, 4UL, 5UL);
 
+        // Fixed 16x16 (TILE_SIZE) dispatch -- see mps_matmul_f32's comment
+        // on why this can't shrink for small matrices with a tiled kernel.
         struct MTLSize gridSize;
         gridSize.width = N; gridSize.height = M; gridSize.depth = 1UL;
-        unsigned long tgW = N < 16UL ? N : 16UL;
-        unsigned long tgH = M < 16UL ? M : 16UL;
-        if (tgW == 0UL) tgW = 1UL;
-        if (tgH == 0UL) tgH = 1UL;
+        unsigned long tgW = 16UL;
+        unsigned long tgH = 16UL;
         struct MTLSize tgSize;
         tgSize.width = tgW; tgSize.height = tgH; tgSize.depth = 1UL;
         unsigned long groupsX = (N + tgW - 1UL) / tgW;
@@ -847,8 +1186,7 @@ int mps_relu_f32_chained(void* bufA, float* out, unsigned long n) {
         }
 
         unsigned long bytes = n * sizeof(float);
-        MMsgNewBufferLen newBufLenFn = (MMsgNewBufferLen)objc_msgSend;
-        void* bufOut = newBufLenFn(__mps_device, __sel_newBufferWithLength, bytes, 0UL);
+        void* bufOut = __mps_buf_get_batched(bytes);
         if (bufOut == (void*)0) return 0;
 
         MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;

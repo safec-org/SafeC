@@ -72,6 +72,25 @@ int mps_sum_f32(const float* a, float* out, unsigned long n);
 int mps_matmul_f32(const float* a, const float* b, float* out,
                     unsigned long M, unsigned long K, unsigned long N);
 
+// GPU-backed matmul backward: dA = dC . B^T, dB = A^T . dC (same math
+// tensor_blas.sc's __matmul_backward_blas passes to cblas_dgemm via a
+// transpose flag; here each is its own kernel instead). Used by
+// tensor_gpu.sc's __matmul_backward_gpu so a matmul_gpu forward pass gets
+// a matmul_gpu backward pass too, instead of falling back to the CPU
+// backward the way it used to — see that function's comment for why that
+// fallback was the actual dominant cost in a training loop, not dispatch
+// overhead.
+//   mps_matmul_abt_f32: out[M,K] = a[M,N] . b^T, b stored [K,N] (dA's shape)
+//   mps_matmul_atb_f32: out[K,N] = a^T . b, a stored [M,K] (dB's shape)
+int mps_matmul_abt_f32(const float* a, const float* b, float* out,
+                        unsigned long M, unsigned long N, unsigned long K);
+int mps_matmul_atb_f32(const float* a, const float* b, float* out,
+                        unsigned long M, unsigned long K, unsigned long N);
+
+// GPU-backed relu backward: out[i] = a[i] > 0 ? selfGrad[i] : 0. Same
+// shape/verification path as mps_add_f32 (see __mps_run_binary_kernel).
+int mps_relu_backward_f32(const float* a, const float* selfGrad, float* out, unsigned long n);
+
 // True if a Metal device is available on this machine at all (checks
 // MTLCreateSystemDefaultDevice() != nil) — lets callers fall back to the
 // CPU Tensor ops (tensor.h) when there's no GPU, without needing to

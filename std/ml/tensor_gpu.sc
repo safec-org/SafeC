@@ -195,6 +195,119 @@ static void* __mps_chain_lookup(struct Tensor* t) {
     return out;
 }
 
+// ── GPU-backed backward passes ────────────────────────────────────────────────
+// Profiling train_gpu.sc's actual training loop (not guessing) found the
+// real bottleneck: tensor_matmul_gpu/tensor_relu_gpu only ran their FORWARD
+// pass on the GPU — both were still linked to tensor.h/tensor_nn.h's plain
+// CPU __matmul_backward/__relu_backward for backward, the same functions
+// the naive CPU-only path uses. Measured directly: backward accounted for
+// ~2400ms out of a ~2650ms training step (roughly 90%) while GPU forward
+// was ~215ms — every earlier fix to the GPU dispatch path itself (pipeline
+// caching, compile-time kernel loading, buffer pooling) could only ever
+// move that ~215ms, never the ~2400ms actually dominating the number. This
+// is exactly the gap PyTorch and MLX don't have: moving a tensor to a GPU
+// device there puts the *entire* graph — forward and backward alike — on
+// that device; there's no per-op forward/backward device split the way
+// this file used to have. __matmul_backward_gpu/__relu_backward_gpu close
+// it the same way tensor_blas.sc's __matmul_backward_blas already closes
+// the equivalent gap for the BLAS path: dedicated backward kernels
+// (mps_matmul_abt_f32/mps_matmul_atb_f32/mps_relu_backward_f32, see
+// gpu_mps.h) instead of falling through to the CPU functions.
+static void __relu_backward_gpu(void* selfPtr) {
+    unsafe {
+        struct Tensor* selfT = (struct Tensor*)selfPtr;
+        struct Tensor* a = __tensor_parent(selfT, 0UL);
+        if (!a->requiresGrad) return;
+        __tensor_ensure_grad(a);
+        if (!mps_available()) { __relu_backward(selfPtr); return; }
+
+        float* fa = __tensor_gpu_to_f32(a->data, selfT->size);
+        float* fgrad = __tensor_gpu_to_f32(selfT->grad, selfT->size);
+        float* fout = (float*)alloc(checked_mul_size(sizeof(float), selfT->size));
+        int ok = mps_relu_backward_f32((const float*)fa, (const float*)fgrad, fout, selfT->size);
+        if (ok) {
+            unsigned long i = 0UL;
+            while (i < selfT->size) { a->grad[i] = a->grad[i] + (double)fout[i]; i = i + 1UL; }
+        } else {
+            // Device present but dispatch failed -- same rare fallback
+            // shape as tensor_matmul_gpu's __tensor_matmul_cpu_into.
+            unsigned long i = 0UL;
+            while (i < selfT->size) {
+                if (a->data[i] > 0.0) { a->grad[i] = a->grad[i] + selfT->grad[i]; }
+                i = i + 1UL;
+            }
+        }
+        dealloc((void*)fa); dealloc((void*)fgrad); dealloc((void*)fout);
+    }
+}
+
+static void __matmul_backward_gpu(void* selfPtr) {
+    unsafe {
+        struct Tensor* selfT = (struct Tensor*)selfPtr;
+        struct Tensor* a = __tensor_parent(selfT, 0UL);
+        struct Tensor* b = __tensor_parent(selfT, 1UL);
+        unsigned long m = a->shape[0];
+        unsigned long k = a->shape[1];
+        unsigned long n = b->shape[1];
+        if (!mps_available()) { __matmul_backward(selfPtr); return; }
+
+        if (a->requiresGrad) {
+            __tensor_ensure_grad(a);
+            // dA[m,k] = dC[m,n] . B^T[n,k]
+            float* fgrad = __tensor_gpu_to_f32(selfT->grad, m * n);
+            float* fb = __tensor_gpu_to_f32(b->data, k * n);
+            float* fdA = (float*)alloc(checked_mul_size(sizeof(float), m * k));
+            int ok = mps_matmul_abt_f32((const float*)fgrad, (const float*)fb, fdA, m, n, k);
+            if (ok) {
+                unsigned long i = 0UL;
+                while (i < m * k) { a->grad[i] = a->grad[i] + (double)fdA[i]; i = i + 1UL; }
+            } else {
+                unsigned long ii = 0UL;
+                while (ii < m) {
+                    unsigned long jj = 0UL;
+                    while (jj < k) {
+                        double acc = 0.0;
+                        unsigned long p = 0UL;
+                        while (p < n) { acc = acc + selfT->grad[ii * n + p] * b->data[jj * n + p]; p = p + 1UL; }
+                        a->grad[ii * k + jj] = a->grad[ii * k + jj] + acc;
+                        jj = jj + 1UL;
+                    }
+                    ii = ii + 1UL;
+                }
+            }
+            dealloc((void*)fgrad); dealloc((void*)fb); dealloc((void*)fdA);
+        }
+        if (b->requiresGrad) {
+            __tensor_ensure_grad(b);
+            // dB[k,n] = A^T[k,m] . dC[m,n]
+            float* fa = __tensor_gpu_to_f32(a->data, m * k);
+            float* fgrad2 = __tensor_gpu_to_f32(selfT->grad, m * n);
+            float* fdB = (float*)alloc(checked_mul_size(sizeof(float), k * n));
+            int ok = mps_matmul_atb_f32((const float*)fa, (const float*)fgrad2, fdB, m, k, n);
+            if (ok) {
+                unsigned long i = 0UL;
+                while (i < k * n) { b->grad[i] = b->grad[i] + (double)fdB[i]; i = i + 1UL; }
+            } else {
+                unsigned long p = 0UL;
+                while (p < m) {
+                    unsigned long ii = 0UL;
+                    while (ii < k) {
+                        double aVal = a->data[p * k + ii];
+                        unsigned long jj = 0UL;
+                        while (jj < n) {
+                            b->grad[ii * n + jj] = b->grad[ii * n + jj] + aVal * selfT->grad[p * n + jj];
+                            jj = jj + 1UL;
+                        }
+                        ii = ii + 1UL;
+                    }
+                    p = p + 1UL;
+                }
+            }
+            dealloc((void*)fa); dealloc((void*)fgrad2); dealloc((void*)fdB);
+        }
+    }
+}
+
 &Tensor tensor_relu_gpu(const &Tensor a) {
     if (!mps_available()) { return tensor_relu(a); }
     struct Tensor* out = __tensor_alloc_uninit_like(a);
@@ -265,7 +378,7 @@ static void* __mps_chain_lookup(struct Tensor* t) {
             dealloc((void*)fa); dealloc((void*)fout);
         }
     }
-    __tensor_link1(out, a, (void*)__relu_backward);
+    __tensor_link1(out, a, (void*)__relu_backward_gpu);
     return out;
 }
 
@@ -381,7 +494,7 @@ static void __tensor_matmul_cpu_into(struct Tensor* out, struct Tensor* a, struc
             dealloc((void*)fa); dealloc((void*)fb); dealloc((void*)fout);
         }
     }
-    __tensor_link2(out, a, b, (void*)__matmul_backward);
+    __tensor_link2(out, a, b, (void*)__matmul_backward_gpu);
     return out;
 }
 
