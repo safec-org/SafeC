@@ -30,7 +30,7 @@ struct Aa64Timer {
     int                fire_pending() const;
 };
 
-extern struct Aa64Timer aa64_timer;
+struct Aa64Timer aa64_timer;
 
 // ── GIC — Generic Interrupt Controller (GICv2 compatible) ────────────────────
 
@@ -60,8 +60,8 @@ struct GicCpu {
     unsigned int  running_priority() const;
 };
 
-extern struct GicDist  gic_dist;
-extern struct GicCpu   gic_cpu;
+struct GicDist  gic_dist;
+struct GicCpu   gic_cpu;
 void gic_init(unsigned long dist_base, unsigned long cpu_base);
 
 } // namespace std

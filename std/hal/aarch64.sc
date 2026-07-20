@@ -34,7 +34,6 @@ void aa64_dmb_sy(){ unsafe { asm volatile ("dmb sy" : : : "memory"); } }
 
 // ── Generic Timer ─────────────────────────────────────────────────────────────
 
-struct Aa64Timer aa64_timer;
 
 inline unsigned long long Aa64Timer::read_cntpct() {
     unsigned long v = (unsigned long)0;
@@ -90,8 +89,6 @@ static void gic_write32_(unsigned long addr, unsigned int val) {
 // GICD_ISPENDR+0x200  GICD_ICPENDR   +0x280
 // GICD_IPRIORITYR +0x400  GICD_ITARGETSR +0x800  GICD_ICFGR +0xC00
 
-struct GicDist gic_dist;
-struct GicCpu  gic_cpu;
 
 inline void GicDist::enable_group0() {
     gic_write32_(self.base, (unsigned int)1);

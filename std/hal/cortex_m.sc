@@ -27,7 +27,6 @@ static void cm_write32_(unsigned long addr, unsigned int val) {
 // NVIC_ICPR0: base + 0x180
 // NVIC_IPR0:  base + 0x300  (8-bit priority per IRQ)
 
-struct Nvic nvic;
 
 inline void nvic_init() {
     unsafe { nvic.base = (void*)NVIC_BASE; }
@@ -77,7 +76,6 @@ inline unsigned char Nvic::get_priority(unsigned int irq) const {
 // SYST_RVR  = base + 0x4
 // SYST_CVR  = base + 0x8
 
-struct SysTick systick;
 
 inline void systick_init() {
     unsafe { systick.base = (void*)SYSTICK_BASE; }
@@ -110,7 +108,6 @@ inline int SysTick::flag_set() const {
 // ── SCB ───────────────────────────────────────────────────────────────────────
 // SCB: CPUID=+0, ICSR=+4, VTOR=+8, AIRCR=+0xC, SCR=+0x10, CCR=+0x14, SHCSR=+0x24
 
-struct Scb scb;
 
 inline void scb_init() {
     unsafe { scb.base = (void*)SCB_BASE; }

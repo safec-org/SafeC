@@ -8,7 +8,6 @@ extern int printf(const char* fmt, ...);
 
 // ── Global coverage instance ──────────────────────────────────────────────────
 
-struct Coverage coverage;
 
 // ── coverage_init ─────────────────────────────────────────────────────────────
 

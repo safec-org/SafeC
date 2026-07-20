@@ -39,8 +39,9 @@ namespace std {
 
 // One key/value pair inside a VAL_OBJECT's obj_val Vec.
 struct ObjectEntry {
-    char*   key;  // heap-allocated, NUL-terminated, owned
-    &Value  val;  // heap-allocated, owned, always present once inserted
+    ?&heap char  key;  // heap-allocated, NUL-terminated, owned — empty (null)
+                        // only on an allocation failure inside value_object_set()
+    &Value       val;  // heap-allocated, owned, always present once inserted
 };
 
 struct Value {
@@ -48,7 +49,8 @@ struct Value {
     long long    int_val;   // VAL_INT
     double       float_val; // VAL_FLOAT
     int          bool_val;  // VAL_BOOL
-    char*        str_val;   // VAL_STRING — heap-allocated, NUL-terminated, owned
+    ?&heap char  str_val;   // VAL_STRING — heap-allocated, NUL-terminated, owned;
+                             // empty (null) for every other 'kind'
     struct Vec   arr_val;   // VAL_ARRAY  — elements are 'struct Value' by value
     struct Vec   obj_val;   // VAL_OBJECT — elements are 'struct ObjectEntry' by value
 

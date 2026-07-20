@@ -10,7 +10,6 @@ extern int   strcmp(const char* a, const char* b);
 extern unsigned long strlen(const char* s);
 extern void* strncpy(char* d, const char* s, unsigned long n);
 
-struct Vfs vfs_root;
 
 inline void vfs_init() {
     unsafe { memset((void*)&vfs_root, 0, sizeof(struct Vfs)); }

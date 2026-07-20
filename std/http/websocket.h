@@ -35,9 +35,9 @@ struct WsConn {
 };
 
 struct WsMessage {
-    int            opcode;  // one of the WS_OPCODE_* constants above
-    unsigned char* data;    // heap-owned; NULL/0-length for e.g. a bare ping
-    unsigned long  len;
+    int                    opcode;  // one of the WS_OPCODE_* constants above
+    ?&heap unsigned char   data;    // heap-owned; empty (null)/0-length for e.g. a bare ping
+    unsigned long          len;
 
     void free();
 };

@@ -33,7 +33,7 @@ struct VectorTable {
 };
 
 // Global vector table instance.
-extern struct VectorTable vtable;
+struct VectorTable vtable;
 
 // Initialise all slots to the default handler.
 void vtable_init();

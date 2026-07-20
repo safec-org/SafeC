@@ -84,7 +84,7 @@ struct Vfs {
 };
 
 // Global VFS instance (single-root for embedded use).
-extern struct Vfs vfs_root;
+struct Vfs vfs_root;
 void vfs_init();
 
 } // namespace std

@@ -3114,6 +3114,16 @@ TypePtr Sema::checkCall(CallExpr &e) {
         auto &mem = static_cast<MemberExpr &>(*e.callee);
         // Type-check the base to get the struct type
         TypePtr baseTy = checkExpr(*mem.base);
+        // 'x.method(...)' on a nullable reference dereferences 'x' to find
+        // and invoke the method against it exactly as much as 'x.field'
+        // does — checkMember (the non-call member-access path) already
+        // enforces this same check; without it here, 'f.bump()' on a
+        // '?&Foo f' silently compiled and dereferenced a possibly-null
+        // pointer at runtime with no 'unsafe' in sight, a real, confirmed
+        // null-pointer-dereference gap (the pseudo-methods 'is_null()'/
+        // 'is_none()'/'default(...)' just above this block are resolved
+        // and returned before reaching here, so they're unaffected).
+        checkNullabilityDeref(baseTy, e.loc);
         // Unwrap references/pointers to get struct type
         TypePtr structTy = baseTy;
         if (structTy->kind == TypeKind::Reference)

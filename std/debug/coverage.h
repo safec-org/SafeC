@@ -40,7 +40,7 @@ struct Coverage {
     void reset();
 };
 
-extern struct Coverage coverage;
+struct Coverage coverage;
 void coverage_init();
 
 // Place COV_SITE() once per code region you want to track.

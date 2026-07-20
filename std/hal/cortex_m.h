@@ -30,7 +30,7 @@ struct Nvic {
 };
 
 // Global NVIC instance at the standard Cortex-M base address.
-extern struct Nvic nvic;
+struct Nvic nvic;
 void nvic_init();
 
 // ── SysTick ───────────────────────────────────────────────────────────────────
@@ -52,7 +52,7 @@ struct SysTick {
     int  flag_set() const;
 };
 
-extern struct SysTick systick;
+struct SysTick systick;
 void systick_init();
 
 // ── SCB — System Control Block ────────────────────────────────────────────────
@@ -81,7 +81,7 @@ struct Scb {
     void  set_msp(unsigned int addr);
 };
 
-extern struct Scb scb;
+struct Scb scb;
 void scb_init();
 
 // Fault mask bits for enable_fault / disable_fault

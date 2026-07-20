@@ -24,10 +24,10 @@
 namespace std {
 
 struct RpcResult {
-    int            ok;      // 1 = success, 0 = failure (see error_message)
-    unsigned char* data;    // heap-owned; response bytes on success
-    unsigned long  len;
-    struct String  error_message; // meaningful when ok == 0
+    int                    ok;      // 1 = success, 0 = failure (see error_message)
+    ?&heap unsigned char   data;    // heap-owned; empty (null) on failure, response bytes on success
+    unsigned long          len;
+    struct String          error_message; // meaningful when ok == 0
 
     void free();
 };

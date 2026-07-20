@@ -6,7 +6,6 @@ namespace std {
 
 static IrqHandler vtable_default_ = (IrqHandler)0;
 
-struct VectorTable vtable;
 
 inline void vtable_default_handler() {
     // Infinite loop — override in application.

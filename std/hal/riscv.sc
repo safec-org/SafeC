@@ -76,7 +76,6 @@ inline void rv_global_irq_disable() {
 // ── CLINT ─────────────────────────────────────────────────────────────────────
 // Layout: msip[0..MAX_HARTS] @ +0, mtimecmp[hart] @ +0x4000, mtime @ +0xBFF8
 
-struct Clint clint;
 
 inline void clint_init(unsigned long base_addr) {
     clint.base = base_addr;
@@ -134,7 +133,6 @@ inline void Clint::schedule(unsigned long delta) {
 // Threshold (ctx0): base + 0x200000
 // Claim/complete (ctx0): base + 0x200004
 
-struct Plic plic;
 
 inline void plic_init(unsigned long base_addr) {
     plic.base = base_addr;
