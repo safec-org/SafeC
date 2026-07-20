@@ -59,14 +59,55 @@ extern void* __stderrp;
 // same-cost-but-differently-worded diagnosis rather than reliably
 // recognizing "freed twice". alloc_quarantine_push_ below fixes this by
 // deferring the real free() for a bounded number of calls (a small ring
-// of raw pointers, spinlocked since dealloc() is already used from
-// multithreaded code elsewhere in std/, e.g. sync/channel.sc) so the
-// header — and thus the double-free check — stays reliable for any
-// re-free that happens within that window, which covers the common case
-// (the two dealloc() calls are close together: same function, both
-// branches of an if/else, a destructor invoked twice, etc). A double-free
-// separated by 64+ *other* frees can still fall back to the weaker
-// "neither magic" diagnosis — a known, documented limit, not a silent gap.
+// of raw pointers) so the header — and thus the double-free check — stays
+// reliable for any re-free that happens within that window, which covers
+// the common case (the two dealloc() calls are close together: same
+// function, both branches of an if/else, a destructor invoked twice,
+// etc). A double-free separated by 64+ *other* frees can still fall back
+// to the weaker "neither magic" diagnosis — a known, documented limit,
+// not a silent gap.
+//
+// The ring is per-thread (thread_local), not one shared global structure.
+// Two earlier versions of this both serialized every thread's dealloc()
+// calls against each other, just by different mechanisms:
+//   1. A single global spinlock around one shared ring -- every dealloc()
+//      in the process, on any thread, waited for the same lock. Measured:
+//      an 8-thread allocation-heavy workload got ~15x *slower* than
+//      single-threaded, not faster, with all 8 threads spinning.
+//   2. A lock-free shared ring (atomic_fetch_add for the slot claim,
+//      atomic_exchange for the swap, each ring slot padded to its own
+//      cache line to stop false sharing between unrelated slots). This
+//      removed the software lock, but a *shared* ring still means a block
+//      one thread allocated is often evicted (and actually free()'d) by a
+//      *different* thread than the one that allocated it -- profiled with
+//      'sample' on real hardware: worker threads were spending real,
+//      measurable time inside libsystem_malloc's own internal zone lock
+//      (_os_unfair_lock_lock_slow, reached from _xzm_free /
+//      _xzm_xzone_malloc_freelist_outlined) -- the platform allocator's
+//      cross-thread free path is exactly the slow path for a per-thread-
+//      cache allocator like macOS's. Removing our own lock didn't remove
+//      that one.
+// Giving each thread its own quarantine ring means a thread only ever
+// evicts (and really free()s) blocks *it* previously quarantined -- for
+// code where a thread mostly allocates and frees its own data (the common
+// case, and exactly the shape of e.g. a per-thread work-stealing or
+// partitioned workload), this keeps every real free() on the same thread
+// that malloc'd it, which is the fast path every mainstream allocator
+// optimizes for. No atomics are needed here at all: 'thread_local' means
+// no other thread can ever observe or race this data, so the same
+// slot-claim-then-swap logic that used to need atomic_fetch_add/
+// atomic_exchange for correctness is now plain sequential code.
+//
+// This does NOT weaken double-free detection: the magic-value check that
+// actually catches a double-free lives in the allocated block's own
+// header (see dealloc() below), set the instant *any* thread calls
+// dealloc() on it, independent of which thread's ring later evicts (and
+// genuinely frees) the underlying memory. What per-thread rings change is
+// only the bookkeeping question of *when* a quarantined block's memory
+// is handed back to the platform allocator -- and if anything this makes
+// the detection window longer in aggregate (up to 64 per thread now
+// live at once, rather than 64 total across every thread), at the cost of
+// proportionally more memory held in quarantine at any given moment.
 #define ALLOC_HDR_SIZE_          ((unsigned long)16)
 #define ALLOC_LIVE_MAGIC_        ((unsigned long)0x5AFEC0DE5AFEC0DE)
 #define ALLOC_FREED_MAGIC_       ((unsigned long)0xDEADDEADDEADDEAD)
@@ -77,31 +118,18 @@ static void alloc_abort_(const char* msg) {
     unsafe { abort(); }
 }
 
-static void* allocQuarantineRing_[64];
-static unsigned long allocQuarantineHead_ = (unsigned long)0;
-static int allocQuarantineLock_ = 0;
+thread_local static unsigned long allocQuarantineRing_[64];
+thread_local static unsigned long allocQuarantineHead_ = (unsigned long)0;
 
-// Defers the real free() of 'raw' (the header-prefixed block, not the
-// user-facing payload pointer) by pushing it into a fixed-size ring;
-// whatever pointer that eviction displaces (if any — the ring starts
-// zeroed, so early calls displace nothing) gets actually freed now. Same
-// lock/spin shape as std/sync/spinlock.sc's Spinlock — inlined directly
-// via the atomic_exchange/atomic_load/atomic_store builtins rather than
-// linking that module, since this is used from mem.sc's alloc()/dealloc(),
-// which is itself a dependency of nearly everything in std/.
 static void alloc_quarantine_push_(void* raw) {
     unsafe {
-        while (atomic_exchange(&allocQuarantineLock_, 1) != 0) {
-            while (atomic_load(&allocQuarantineLock_) != 0) {}
-        }
         unsigned long slot = allocQuarantineHead_ % ALLOC_QUARANTINE_SIZE_;
-        void* evicted = allocQuarantineRing_[slot];
-        allocQuarantineRing_[slot] = raw;
+        unsigned long evictedBits = allocQuarantineRing_[slot];
+        allocQuarantineRing_[slot] = (unsigned long)raw;
         allocQuarantineHead_ = allocQuarantineHead_ + (unsigned long)1;
-        atomic_store(&allocQuarantineLock_, 0);
 
-        if (evicted != (void*)0) {
-            free(evicted);
+        if (evictedBits != (unsigned long)0) {
+            free((void*)evictedBits);
         }
     }
 }

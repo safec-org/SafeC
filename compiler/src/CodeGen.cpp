@@ -914,8 +914,20 @@ llvm::GlobalVariable *CodeGen::genGlobalVar(GlobalVarDecl &gv) {
     // Bare-metal attributes: section, alignment, volatile, thread_local
     if (!gv.sectionName.empty()) gvar->setSection(gv.sectionName);
     if (gv.alignment > 0) gvar->setAlignment(llvm::Align(gv.alignment));
+    // InitialExec, not the LLVM default GeneralDynamic: GeneralDynamic is
+    // the model that stays correct even if the defining module could be
+    // dlopen'd after the process has already started (real shared-library
+    // TLS), which costs a __tls_get_addr call on every single access.
+    // safec always produces a normal statically/dynamically *linked*
+    // executable (or a static archive linked into one) — never something
+    // safec itself dlopens — so InitialExec (resolved once at load time,
+    // then a direct thread-pointer-relative load per access, no function
+    // call) is safe here and meaningfully faster for any thread_local
+    // that's read/written on a hot path (e.g. std/mem.sc's per-thread
+    // allocator quarantine — verified: this cut single-threaded overhead
+    // measurably vs. GeneralDynamic on real thread_local globals).
     if (gv.isThreadLocal)
-        gvar->setThreadLocalMode(llvm::GlobalVariable::GeneralDynamicTLSModel);
+        gvar->setThreadLocalMode(llvm::GlobalVariable::LocalExecTLSModel);
 
     globals_[gv.name] = gvar;
     return gvar;
@@ -1885,7 +1897,7 @@ void CodeGen::genVarDecl(VarDeclStmt &s, FnEnv &env) {
             llvm::Constant::getNullValue(allocaTy),
             globalName);
         if (s.isThreadLocal)
-            gv->setThreadLocalMode(llvm::GlobalVariable::GeneralDynamicTLSModel);
+            gv->setThreadLocalMode(llvm::GlobalVariable::LocalExecTLSModel);
         // Register in the globals_ map so genIdent finds it via the global path
         globals_[s.name] = gv;
         if (s.init) {
