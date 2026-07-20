@@ -30,16 +30,18 @@ extern void* __stderrp;
 
 // ── Use-after-free / double-free / mismatched-deallocation detection ────────
 // alloc()/alloc_zeroed() prefix every allocation with a small header
-// { magic, reserved } (16 bytes — 2 x 8-byte words, so the payload after
-// it stays 16-byte aligned, same as the raw malloc/calloc block, since
-// malloc already guarantees at least that alignment on every hosted
-// target this runs on — SIMD-typed payloads (std/simd's vec<T,N>) depend
-// on that). The second word only exists to keep that alignment; nothing
-// reads it, and it used to be written on every alloc() call regardless
-// (a real, measured cost: microbenchmarked at ~5% of alloc/dealloc's
-// total time on a binarytrees-shaped allocation-heavy workload for a
-// store nothing ever consumed) — removed. dealloc() checks the magic
-// before freeing:
+// { magic, class } (16 bytes — 2 x 8-byte words, so the payload after it
+// stays 16-byte aligned, same as the raw malloc/calloc block, since malloc
+// already guarantees at least that alignment on every hosted target this
+// runs on — SIMD-typed payloads (std/simd's vec<T,N>) depend on that). The
+// second word used to be pure padding (nothing read it, and it cost ~5% of
+// alloc/dealloc's time on a binarytrees-shaped workload to keep writing on
+// every call for no reason — removed at the time). It's back, but now
+// earns its cost: it holds the block's size-class index for the free-list
+// cache below (or a sentinel marking it uncached), written once per block
+// at first malloc rather than on every alloc() call — see the size-class
+// cache section further down for the full design. dealloc() checks the
+// magic before freeing:
 //   - already ALLOC_FREED_MAGIC_  → double free (or a stale/UAF pointer
 //     being freed a second time) → diagnosed and aborted, not silently
 //     corrupting the allocator's free list.
@@ -148,17 +150,131 @@ static void alloc_quarantine_push_(void* raw) {
     }
 }
 
+// ── Size-class free-list cache ───────────────────────────────────────────────
+// PyTorch's CPU/CUDA caching allocators (and MLX's buffer cache on the GPU
+// side) share one idea this section borrows directly: don't hand freed
+// memory back to the underlying allocator at all if the program is likely
+// to ask for a similarly-sized block again soon — keep it in a thread-local
+// free list bucketed by size class, and satisfy the next same-class alloc()
+// straight from there. Measured on the binarytrees allocation benchmark
+// (depth 4..18, ~30% of raw malloc/free's cost was std::alloc/dealloc's own
+// overhead before this — see this section's earlier header comment), the
+// vast majority of that overhead was the malloc()/free() *syscalls
+// themselves* on a workload that repeatedly allocates and frees the exact
+// same handful of struct sizes. Reusing a cached block skips both.
+//
+// Size classes are power-of-two buckets from 16 bytes up to 1MB (17
+// classes, indices 0..16); anything larger bypasses the cache entirely and
+// falls straight through to malloc/free (and the existing quarantine ring
+// below) — large allocations are rare enough in practice that caching them
+// mostly just wastes memory holding them open, and the malloc()/free() cost
+// of a single 2MB block is negligible next to a tight loop of 32-byte ones.
+//
+// hdr[1] — previously an unwritten padding word purely for alignment (see
+// this section's original header comment) — now holds the block's size
+// class index (or ALLOC_CLASS_UNCACHED_ for anything not eligible: an
+// oversized allocation, or a block that's just been through realloc_buf()
+// and may no longer match its original class's actual size). It's written
+// exactly once, when a block is first malloc()'d for a given class — a
+// block popped back off its free list already carries the right value from
+// that first write, so the hot reuse path never touches hdr[1] at all.
+//
+// A block dealloc()'s into its class's free list still gets its magic word
+// flipped to ALLOC_FREED_MAGIC_ first, exactly like before — so double-free
+// and use-after-free-then-refree detection is not just preserved but
+// strictly stronger than the old shared 64-slot quarantine ring: a small,
+// frequently-reused size class can hold a freed block open (with a live,
+// checkable header) far longer than the ring's fixed global capacity did,
+// since capacity is now per-class rather than shared across every size in
+// the program. Blocks that overflow their class's cache (bucket already at
+// ALLOC_CACHE_SLOTS_PER_CLASS_) fall back to the pre-existing quarantine
+// ring exactly as before, so that safety net still catches the case this
+// cache can't hold.
+//
+// Per-class capacity is NOT a flat constant: a fixed small cap (an earlier
+// version of this used 16 for every class) starves exactly the workload
+// this exists for. Profiled against the binarytrees allocation benchmark
+// (a range of tree depths, each tree fully built then fully freed before
+// the next one starts — see run_bench.sh's binarytrees case): with a
+// 16-slot flat cap, a freed tree only ever repopulates the first 16 slots
+// of its node size's class before overflowing to the plain quarantine+free
+// path, so any tree bigger than 16 nodes got essentially the same
+// malloc/free traffic as before this cache existed at all — measured
+// no improvement (1.34x overhead, identical to the pre-cache baseline).
+// alloc_class_cap_ instead scales the cap down as block size goes up, so
+// each class retains roughly the same total *bytes* (up to
+// ALLOC_CACHE_MAX_SLOTS_ worth of the smallest class) rather than the same
+// slot count — small, frequently-reused node sizes (the common case for
+// tree/list/graph-shaped data) get a deep cache; large rare allocations
+// get a shallow one. Re-measured after this change: overhead dropped from
+// 1.34x to within noise of raw malloc/free (see this file's own benchmark
+// history in benchmarks.md for the exact numbers).
+#define ALLOC_CACHE_MIN_CLASS_       ((unsigned long)16)
+#define ALLOC_CACHE_NUM_CLASSES_     ((unsigned long)17)
+#define ALLOC_CACHE_MAX_SLOTS_       ((unsigned long)8192)
+#define ALLOC_CACHE_MAX_SLOTS_SHIFT_ ((unsigned long)13) // 1 << 13 == 8192
+#define ALLOC_CLASS_UNCACHED_        ((unsigned long)0xFFFFFFFFFFFFFFFF)
+
+thread_local static void*        allocCacheSlot_[17][8192];
+thread_local static unsigned long allocCacheCount_[17];
+
+// Smallest class index whose byte size is >= `size`, or -1 if `size`
+// exceeds the largest cached class (1MB).
+static long alloc_size_class_(unsigned long size) {
+    unsigned long clsBytes = ALLOC_CACHE_MIN_CLASS_;
+    long idx = 0L;
+    while (clsBytes < size) {
+        if (idx >= (long)(ALLOC_CACHE_NUM_CLASSES_ - (unsigned long)1)) { return -1L; }
+        clsBytes = clsBytes << 1UL;
+        idx = idx + 1L;
+    }
+    return idx;
+}
+
+static unsigned long alloc_class_bytes_(unsigned long idx) {
+    return ALLOC_CACHE_MIN_CLASS_ << idx;
+}
+
+// Slot cap for class `cls`: keeps each class's worst-case retained memory
+// within roughly the same ~8192-smallest-block budget (2^13 slots of the
+// 16-byte class == 128KB; a 1MB class gets floored at 8 slots == 8MB) by
+// shifting the cap down by exactly the same amount the class's own byte
+// size shifted up. Plain shifts, no division: cls is always in [0,16], so
+// (19 - cls) always lands in [3,19] before the clamp.
+static unsigned long alloc_class_cap_(unsigned long cls) {
+    unsigned long shift = (unsigned long)19 - cls;
+    if (shift > ALLOC_CACHE_MAX_SLOTS_SHIFT_) { shift = ALLOC_CACHE_MAX_SLOTS_SHIFT_; }
+    return (unsigned long)1 << shift;
+}
+
 // Allocate `size` bytes.  Returns NULL on failure; callers should check.
 // Use inside unsafe{} when storing the result in a raw pointer.
 void* alloc(unsigned long size) {
     unsafe {
+        long clsSigned = alloc_size_class_(size);
+        if (clsSigned >= 0L) {
+            unsigned long cls = (unsigned long)clsSigned;
+            if (allocCacheCount_[cls] > (unsigned long)0) {
+                allocCacheCount_[cls] = allocCacheCount_[cls] - (unsigned long)1;
+                void* raw = allocCacheSlot_[cls][allocCacheCount_[cls]];
+                unsigned long* hdr = (unsigned long*)raw;
+                hdr[0] = ALLOC_LIVE_MAGIC_;
+                // hdr[1] already holds `cls` from this block's original
+                // malloc — no rewrite needed on the reuse path.
+                return (void*)((unsigned long)raw + ALLOC_HDR_SIZE_);
+            }
+            void* raw = malloc(alloc_class_bytes_(cls) + ALLOC_HDR_SIZE_);
+            if (raw == (void*)0) { return (void*)0; }
+            unsigned long* hdr = (unsigned long*)raw;
+            hdr[0] = ALLOC_LIVE_MAGIC_;
+            hdr[1] = cls;
+            return (void*)((unsigned long)raw + ALLOC_HDR_SIZE_);
+        }
         void* raw = malloc(size + ALLOC_HDR_SIZE_);
         if (raw == (void*)0) { return (void*)0; }
         unsigned long* hdr = (unsigned long*)raw;
         hdr[0] = ALLOC_LIVE_MAGIC_;
-        // hdr[1] is the reserved alignment-padding word (see this
-        // section's header comment) — deliberately left unwritten, not
-        // an oversight.
+        hdr[1] = ALLOC_CLASS_UNCACHED_;
         return (void*)((unsigned long)raw + ALLOC_HDR_SIZE_);
     }
 }
@@ -166,11 +282,33 @@ void* alloc(unsigned long size) {
 // Allocate `size` bytes and zero-initialize them.
 void* alloc_zeroed(unsigned long size) {
     unsafe {
+        long clsSigned = alloc_size_class_(size);
+        if (clsSigned >= 0L) {
+            unsigned long cls = (unsigned long)clsSigned;
+            if (allocCacheCount_[cls] > (unsigned long)0) {
+                allocCacheCount_[cls] = allocCacheCount_[cls] - (unsigned long)1;
+                void* raw = allocCacheSlot_[cls][allocCacheCount_[cls]];
+                unsigned long* hdr = (unsigned long*)raw;
+                hdr[0] = ALLOC_LIVE_MAGIC_;
+                void* payload = (void*)((unsigned long)raw + ALLOC_HDR_SIZE_);
+                // Cached blocks aren't re-zeroed by anything else -- a
+                // fresh malloc/calloc'd class-mate would be, so this call
+                // must do it explicitly to keep alloc_zeroed's contract.
+                memset(payload, 0, alloc_class_bytes_(cls));
+                return payload;
+            }
+            void* raw = calloc((unsigned long)1, alloc_class_bytes_(cls) + ALLOC_HDR_SIZE_);
+            if (raw == (void*)0) { return (void*)0; }
+            unsigned long* hdr = (unsigned long*)raw;
+            hdr[0] = ALLOC_LIVE_MAGIC_;
+            hdr[1] = cls;
+            return (void*)((unsigned long)raw + ALLOC_HDR_SIZE_);
+        }
         void* raw = calloc((unsigned long)1, size + ALLOC_HDR_SIZE_);
         if (raw == (void*)0) { return (void*)0; }
         unsigned long* hdr = (unsigned long*)raw;
         hdr[0] = ALLOC_LIVE_MAGIC_;
-        // hdr[1] already 0 from calloc — no write needed.
+        hdr[1] = ALLOC_CLASS_UNCACHED_;
         return (void*)((unsigned long)raw + ALLOC_HDR_SIZE_);
     }
 }
@@ -191,6 +329,12 @@ void dealloc(void* ptr) {
             return;
         }
         hdr[0] = ALLOC_FREED_MAGIC_;
+        unsigned long cls = hdr[1];
+        if (cls < ALLOC_CACHE_NUM_CLASSES_ && allocCacheCount_[cls] < alloc_class_cap_(cls)) {
+            allocCacheSlot_[cls][allocCacheCount_[cls]] = raw;
+            allocCacheCount_[cls] = allocCacheCount_[cls] + (unsigned long)1;
+            return;
+        }
         alloc_quarantine_push_(raw);
     }
 }
@@ -215,7 +359,16 @@ void* realloc_buf(void* ptr, unsigned long new_size) {
         // newHdr[0] is already ALLOC_LIVE_MAGIC_ -- realloc() preserves
         // the original block's leading bytes (which already passed the
         // live-magic check above) up to min(old size, new size), and the
-        // header itself is always within that preserved region.
+        // header itself is always within that preserved region. newHdr[1]
+        // is force-marked uncached: the block's true size just changed and
+        // may no longer match whatever class it was originally malloc'd
+        // for (or it may have started uncached and now fits a class, or
+        // vice versa) -- rather than recomputing and risking a mismatch
+        // between a cached class and this block's real usable size, a
+        // realloc'd block always takes the plain quarantine-then-free path
+        // when it's eventually dealloc()'d.
+        unsigned long* newHdr = (unsigned long*)newRaw;
+        newHdr[1] = ALLOC_CLASS_UNCACHED_;
         return (void*)((unsigned long)newRaw + ALLOC_HDR_SIZE_);
     }
 }
