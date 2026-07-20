@@ -361,11 +361,21 @@ llvm::Value *CodeGen::genNew(NewExpr &e, FnEnv &env) {
         }
     }
 
-    // Fallback: heap malloc
+    // Fallback: heap allocation via std::alloc (mangled 'std_alloc'), NOT a
+    // raw 'malloc' call — std::alloc prefixes every block with the 16-byte
+    // live/freed-magic header std::dealloc() requires (see mem.sc's
+    // ALLOC_HDR_SIZE_ doc comment). A plain 'malloc(size)' here would hand
+    // back a pointer with no such header, so the *very first*
+    // std::dealloc() call on a '&heap T' from 'new T' would misread
+    // whatever bytes happen to precede the block as a bad magic value and
+    // abort ("mismatched allocator or corrupted heap") — 'new'/'dealloc'
+    // must share the same allocator for the compile-time UAF/double-free
+    // tracking (see Sema::heapFreeGeneration_) to correspond to anything
+    // real at runtime.
     auto *sizeVal = llvm::ConstantInt::get(Int64Ty, elemSize);
-    auto mallocFn = mod_->getOrInsertFunction("malloc",
+    auto allocFn = mod_->getOrInsertFunction("std_alloc",
         llvm::FunctionType::get(PtrTy, {Int64Ty}, false));
-    return builder_.CreateCall(mallocFn, {sizeVal}, "heap.alloc");
+    return builder_.CreateCall(allocFn, {sizeVal}, "heap.alloc");
 }
 
 llvm::Value *CodeGen::genTupleLit(TupleLitExpr &e, FnEnv &env) {
@@ -2535,7 +2545,17 @@ llvm::Value *CodeGen::genBinary(BinaryExpr &e, FnEnv &env) {
     if (e.resolvedOperator) {
         auto *fn = mod_->getFunction(e.resolvedOperator->name);
         if (!fn) fn = genFunctionProto(*e.resolvedOperator);
-        auto *lhs = genLValue(*e.left, env);
+        // Same rule as a regular method call's self (see the methodBase
+        // handling below): the operator's receiver needs an address, but
+        // 'e.left' isn't always addressable on its own -- a chained call
+        // like 'complex_new(x,0.0) * zInv' has a temporary as its left
+        // operand. Materialize it into a fresh alloca in that case instead
+        // of failing through genLValue's "not addressable" default case.
+        llvm::Value *lhs = e.left->isLValue ? genLValue(*e.left, env) : nullptr;
+        if (!lhs) {
+            lhs = builder_.CreateAlloca(lowerType(e.left->type), nullptr, "opovl.lhs.tmp");
+            builder_.CreateStore(genExpr(*e.left, env), lhs);
+        }
         auto *rhs = genExpr(*e.right, env);
         return builder_.CreateCall(fn, {lhs, rhs}, "opovl");
     }

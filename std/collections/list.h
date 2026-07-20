@@ -44,6 +44,9 @@ void list_reverse(&List l);
 
 // ── Typed generic wrappers ────────────────────────────────────────────────────
 generic<T>
+int list_push_front_t(&List l, T val);
+
+generic<T>
 int list_push_back_t(&List l, T val);
 
 generic<T>

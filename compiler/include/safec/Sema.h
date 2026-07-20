@@ -47,6 +47,22 @@ struct Symbol {
     // has since advanced (i.e. std::dealloc() was called on this same
     // variable in between). -1 means not tracked (not a '&heap T' binding).
     int          heapBindGen = -1;
+    // Direct-copy alias tracking: when a '&heap T' variable's initializer
+    // (or a later simple assignment) is exactly another already-tracked
+    // '&heap T' variable's bare identifier ('&heap T q = p;' or 'q = p;'),
+    // 'heapTrackKey' is set to *that* variable's own tracking key (resolved
+    // transitively through any earlier aliasing) instead of this variable's
+    // own VarDecl — so std::dealloc() on either p or q bumps the one shared
+    // counter both are checked against, catching a use-after-free through
+    // whichever name it happens via. nullptr (the common case: not a direct
+    // alias of another tracked heap variable) means "key off my own
+    // VarDecl," queried through Sema::heapKeyOf(sym) rather than reading
+    // this field directly. This only follows the single-hop, syntactically
+    // obvious "whole variable copied from another whole variable" shape —
+    // an allocation reached through a struct field, an array element, a
+    // function parameter/return, or any expression more complex than a bare
+    // identifier still isn't tracked (see the warning in Memory & Regions).
+    const VarDecl *heapTrackKey = nullptr;
 };
 
 // ── Scope ─────────────────────────────────────────────────────────────────────
@@ -92,6 +108,10 @@ private:
     Symbol *lookup(const std::string &name);
     void    define(Symbol sym);
     bool    inUnsafeScope() const;
+    // Resolves a heap-tracked symbol's actual generation-counter key (see
+    // Symbol::heapTrackKey) — its own VarDecl, unless it's a direct alias of
+    // another tracked '&heap T' variable, in which case that variable's key.
+    static const VarDecl *heapKeyOf(const Symbol *sym);
 
     // ── Type registry ─────────────────────────────────────────────────────────
     void registerBuiltinTypes();

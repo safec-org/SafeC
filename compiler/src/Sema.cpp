@@ -186,6 +186,10 @@ bool Sema::inUnsafeScope() const {
     return false;
 }
 
+const VarDecl *Sema::heapKeyOf(const Symbol *sym) {
+    return sym->heapTrackKey ? sym->heapTrackKey : sym->varDecl;
+}
+
 TypePtr Sema::lookupType(const std::string &name) const {
     auto it = typeRegistry_.find(name);
     return (it != typeRegistry_.end()) ? it->second : nullptr;
@@ -1592,7 +1596,7 @@ void Sema::checkWhile(WhileStmt &s, FunctionDecl &fn) {
     for (auto &name : scan.heapFreeVarNames) {
         if (auto *sym = lookup(name))
             if (sym->kind == SymKind::Variable && sym->varDecl)
-                heapFreeGeneration_[sym->varDecl]++;
+                heapFreeGeneration_[heapKeyOf(sym)]++;
     }
 
     ++loopDepth_;
@@ -1615,7 +1619,7 @@ void Sema::checkFor(ForStmt &s, FunctionDecl &fn) {
     for (auto &name : scan.heapFreeVarNames) {
         if (auto *sym = lookup(name))
             if (sym->kind == SymKind::Variable && sym->varDecl)
-                heapFreeGeneration_[sym->varDecl]++;
+                heapFreeGeneration_[heapKeyOf(sym)]++;
     }
 
     ++loopDepth_;
@@ -1781,7 +1785,23 @@ void Sema::checkVarDecl(VarDeclStmt &s, FunctionDecl &fn) {
             sym.arenaBindMarkDepth = regionMarkDepth_[rt.arenaName];
             sym.arenaBindScratchGen = regionScratchGeneration_[rt.arenaName];
         } else if (rt.region == Region::Heap) {
-            sym.heapBindGen = heapFreeGeneration_[vd]; // 0 if unseen yet
+            // Direct-copy alias: '&heap T q = p;' where 'p' is itself a
+            // currently-tracked heap variable — key q's tracking off the
+            // SAME VarDecl p already uses (transitively, via heapKeyOf), so
+            // std::dealloc() on either name invalidates both. See
+            // Symbol::heapTrackKey's doc comment; anything other than a
+            // bare identifier initializer falls through to the untracked-
+            // alias default below, exactly like before this existed.
+            if (s.init && s.init->kind == ExprKind::Ident) {
+                auto &initIdent = static_cast<IdentExpr &>(*s.init);
+                if (auto *initSym = lookup(initIdent.name)) {
+                    if (initSym->kind == SymKind::Variable && initSym->varDecl &&
+                        initSym->heapBindGen >= 0) {
+                        sym.heapTrackKey = heapKeyOf(initSym);
+                    }
+                }
+            }
+            sym.heapBindGen = heapFreeGeneration_[heapKeyOf(&sym)]; // 0 if unseen yet
         }
     }
     define(std::move(sym));
@@ -2057,7 +2077,7 @@ TypePtr Sema::checkIdent(IdentExpr &e) {
     // argument; see suppressHeapStaleCheck_'s doc comment and checkCall).
     if (sym->kind == SymKind::Variable && sym->varDecl && sym->heapBindGen >= 0 &&
         !suppressHeapStaleCheck_ && !inUnsafeScope()) {
-        int curGen = heapFreeGeneration_[sym->varDecl];
+        int curGen = heapFreeGeneration_[heapKeyOf(sym)];
         if (curGen != sym->heapBindGen) {
             diag_.error(e.loc,
                 "use of '" + e.name + "' (&heap reference) after "
@@ -2748,8 +2768,8 @@ TypePtr Sema::checkCall(CallExpr &e) {
                 if (sym->kind == SymKind::Variable && sym->varDecl &&
                     sym->type && sym->type->kind == TypeKind::Reference &&
                     static_cast<ReferenceType &>(*sym->type).region == Region::Heap) {
-                    heapFreeGuard.target = sym->varDecl;
-                    bool alreadyStale = heapFreeGeneration_[sym->varDecl] != sym->heapBindGen;
+                    heapFreeGuard.target = heapKeyOf(sym);
+                    bool alreadyStale = heapFreeGeneration_[heapKeyOf(sym)] != sym->heapBindGen;
                     if (!alreadyStale && !suppressHeapStaleCheck_) {
                         suppressHeapStaleCheck_ = true;
                         heapFreeGuard.wasSuppressedHere = true;
@@ -3617,7 +3637,19 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
             auto &ident = static_cast<IdentExpr &>(*e.lhs);
             if (auto *sym = lookup(ident.name)) {
                 if (sym->kind == SymKind::Variable && sym->varDecl) {
-                    sym->heapBindGen = heapFreeGeneration_[sym->varDecl];
+                    // Same direct-copy alias detection as checkVarDecl's
+                    // '&heap T q = p;' case, for 'q = p;' reassignment.
+                    sym->heapTrackKey = nullptr;
+                    if (e.rhs->kind == ExprKind::Ident) {
+                        auto &rhsIdent = static_cast<IdentExpr &>(*e.rhs);
+                        if (auto *rhsSym = lookup(rhsIdent.name)) {
+                            if (rhsSym->kind == SymKind::Variable && rhsSym->varDecl &&
+                                rhsSym->heapBindGen >= 0 && rhsSym != sym) {
+                                sym->heapTrackKey = heapKeyOf(rhsSym);
+                            }
+                        }
+                    }
+                    sym->heapBindGen = heapFreeGeneration_[heapKeyOf(sym)];
                 }
             }
         }

@@ -183,6 +183,11 @@ inline void list_reverse(&List l) {
 }
 
 generic<T>
+int list_push_front_t(&List l, T val) {
+    unsafe { return list_push_front(l, (const void*)&val); }
+}
+
+generic<T>
 int list_push_back_t(&List l, T val) {
     unsafe { return list_push_back(l, (const void*)&val); }
 }

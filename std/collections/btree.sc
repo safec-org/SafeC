@@ -6,6 +6,12 @@
 
 namespace std {
 
+inline void btree_init(&stack BTree t) {
+    t.pool_used = 0;
+    t.root      = (unsigned long)0;
+    t.count     = (unsigned long)0;
+}
+
 static unsigned long btree_alloc_node_(struct BTree* t) {
     unsafe {
         if (t->pool_used >= BTREE_POOL_SIZE) { return (unsigned long)0; }

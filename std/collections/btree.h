@@ -48,6 +48,16 @@ struct BTree {
     void clear();
 };
 
+// Initialise (or reset) an empty tree in place — matches the
+// '<foo>_init(&stack Ctx ctx)' convention other pool-backed std/ structs
+// use (see std/fs/tmpfs.h's tmpfs_init, std/fs/fat.h's fat_init), rather
+// than a by-value 'btree_new()' constructor: only the three scalar fields
+// above are touched. 'pool' is intentionally left untouched — nodes are
+// claimed from it lazily as 'pool_used' grows, so zeroing all ~47KB of it
+// up front would be pure waste, and returning a fresh 'struct BTree' by
+// value would copy that whole pool on every call.
+void btree_init(&stack BTree t);
+
 // Typed generic wrappers (value stored as pointer; caller manages lifetime).
 generic<T> int  btree_insert(&stack BTree t, unsigned long key, T* val);
 generic<T> T*   btree_get(const &stack BTree t, unsigned long key);
