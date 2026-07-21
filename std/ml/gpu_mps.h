@@ -205,13 +205,35 @@ void* mps_batch_last_output_buffer();
 // batch — instead of a CPU float array, so no CPU<->GPU round trip
 // happens for that input at all. Only usable while a batch is active
 // (mps_batch_is_active()); the secondary input 'b' (matmul's second
-// operand) is still an ordinary CPU float array — realistic chains in
-// this codebase (matmul -> relu -> matmul) only ever have ONE chained
-// input at a time (the running activation; weight matrices are always
-// freshly uploaded), so that's the only shape these support.
+// operand) is still an ordinary CPU float array here — see
+// mps_matmul_f32_persistent below for the case where BOTH operands are
+// already device buffers (e.g. a weight matrix uploaded once via
+// mps_upload_persistent instead of fresh every call).
 int mps_matmul_f32_chained(void* bufA, const float* b, float* out,
                             unsigned long M, unsigned long K, unsigned long N);
 int mps_relu_f32_chained(void* bufA, float* out, unsigned long n);
+
+// out[M,N] = bufA[M,K] . bufB[K,N] -- like mps_matmul_f32_chained, but
+// 'bufB' is ALSO a pre-existing device buffer instead of a plain CPU
+// array to upload fresh. For a matmul run repeatedly against the same
+// weight matrix (e.g. an inference loop doing the same forward pass
+// hundreds of times), mps_matmul_f32_chained would re-upload (memcpy)
+// that weight matrix from CPU on every single call even though it never
+// changes — this skips that entirely for both operands.
+int mps_matmul_f32_persistent(void* bufA, void* bufB, float* out,
+                               unsigned long M, unsigned long K, unsigned long N);
+
+// Uploads 'data' to a device buffer ONCE; the caller keeps the returned
+// handle and reuses it directly (as an argument to mps_matmul_f32_
+// persistent/_chained above) across as many dispatches and batches as it
+// wants, instead of re-uploading fresh every call. Safe to call whether
+// or not a batch is open, but only once no GPU work that might still be
+// reading the reused pool slot's previous contents is in flight (i.e.
+// after any earlier batch's mps_batch_end() has already returned). The
+// caller owns the returned buffer's lifetime and must release it with
+// mps_release_persistent below exactly once, when truly done with it.
+void* mps_upload_persistent(const float* data, unsigned long bytes);
+void  mps_release_persistent(void* buf, unsigned long bytes);
 
 // out[i] = bufA[i] - b[i] -- same chaining shape as mps_matmul_f32_chained/
 // mps_relu_f32_chained above, used by tensor_sub_gpu for the loss

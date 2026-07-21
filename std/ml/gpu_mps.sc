@@ -1619,6 +1619,117 @@ int mps_matmul_f32_chained(void* bufA, const float* b, float* out,
     }
 }
 
+// out[M,N] = bufA[M,K] . bufB[K,N] -- same computation as mps_matmul_f32_
+// chained, but 'bufB' is ALSO a pre-existing device buffer (typically from
+// mps_upload_persistent below) instead of a plain CPU array to upload
+// fresh. Needed for e.g. an inference loop that runs the same matmul
+// against the same weight matrix hundreds of times: mps_matmul_f32_chained
+// would re-upload (memcpy) that weight matrix from CPU on every single
+// call, even though it never changes between calls. 'bufA' can be either
+// another persistent buffer or a previous op's still-pending chained
+// output (mps_batch_last_output_buffer()) -- this function doesn't care
+// which, both are just "already a device buffer".
+int mps_matmul_f32_persistent(void* bufA, void* bufB, float* out,
+                               unsigned long M, unsigned long K, unsigned long N) {
+    if (!__mps_batch_active) return 0;
+    unsafe {
+        int useMulti = (M % 32UL == 0UL) && (K % 32UL == 0UL) && (N % 32UL == 0UL);
+        int useSmma = (M % 8UL == 0UL) && (K % 8UL == 0UL) && (N % 8UL == 0UL);
+        void* pipeline;
+        if (useMulti) {
+            if (__mps_matmul_multi_pipeline == (void*)0) {
+                void* p = __mps_make_pipeline("matmul_kernel_smma_multi");
+                if (p == (void*)0) { useMulti = 0; } else { __mps_matmul_multi_pipeline = p; }
+            }
+            if (useMulti) pipeline = __mps_matmul_multi_pipeline;
+        }
+        if (!useMulti && useSmma) {
+            if (__mps_matmul_smma_pipeline == (void*)0) {
+                void* p = __mps_make_pipeline("matmul_kernel_smma");
+                if (p == (void*)0) { useSmma = 0; } else { __mps_matmul_smma_pipeline = p; }
+            }
+            if (useSmma) pipeline = __mps_matmul_smma_pipeline;
+        }
+        if (!useMulti && !useSmma) {
+            if (__mps_matmul_pipeline == (void*)0) {
+                void* p = __mps_make_pipeline("matmul_kernel");
+                if (p == (void*)0) return 0;
+                __mps_matmul_pipeline = p;
+            }
+            pipeline = __mps_matmul_pipeline;
+        }
+
+        unsigned long bytesOut = M * N * sizeof(float);
+        void* bufOut = __mps_buf_get_batched(bytesOut);
+        if (bufOut == (void*)0) return 0;
+
+        unsigned int Mu = (unsigned int)M;
+        unsigned int Ku = (unsigned int)K;
+        unsigned int Nu = (unsigned int)N;
+
+        MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
+        msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, pipeline);
+        MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufB, 0UL, 1UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
+        MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
+        setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&Mu, 4UL, 3UL);
+        setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&Ku, 4UL, 4UL);
+        setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&Nu, 4UL, 5UL);
+
+        struct MTLSize tgSize;
+        struct MTLSize numThreadgroups;
+        if (useMulti) {
+            tgSize.width = 128UL; tgSize.height = 1UL; tgSize.depth = 1UL;
+            numThreadgroups.width = N / 32UL; numThreadgroups.height = M / 32UL; numThreadgroups.depth = 1UL;
+        } else if (useSmma) {
+            tgSize.width = 32UL; tgSize.height = 1UL; tgSize.depth = 1UL;
+            numThreadgroups.width = N / 8UL; numThreadgroups.height = M / 8UL; numThreadgroups.depth = 1UL;
+        } else {
+            unsigned long tgW = 16UL;
+            unsigned long tgH = 16UL;
+            tgSize.width = tgW; tgSize.height = tgH; tgSize.depth = 1UL;
+            unsigned long groupsX = (N + tgW - 1UL) / tgW;
+            unsigned long groupsY = (M + tgH - 1UL) / tgH;
+            numThreadgroups.width = groupsX; numThreadgroups.height = groupsY; numThreadgroups.depth = 1UL;
+        }
+        MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+
+        if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
+            __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
+            __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
+            __mps_pending_bytes[__mps_pending_count] = bytesOut;
+            __mps_pending_count = __mps_pending_count + 1UL;
+        }
+        return 1;
+    }
+}
+
+// Uploads 'data' to a device buffer ONCE and hands back a handle the
+// caller keeps and reuses directly (as 'bufA'/'bufB' above) across as many
+// dispatches and batches as it wants, instead of it being re-uploaded
+// fresh on every single call the way an ordinary (non-persistent) Tensor
+// operand is. Safe to call whether or not a batch is currently open (it's
+// just a pool allocation + memcpy, no command buffer involved) -- but only
+// safe to call when no GPU work that might still be reading the reused
+// pool slot's previous contents is in flight, i.e. after any previous
+// batch's mps_batch_end() has already returned. NOT tracked by the
+// batching machinery the way __mps_buf_get_with_bytes_batched's return
+// value is -- the caller owns this buffer's lifetime and must release it
+// with mps_release_persistent below when done, exactly once.
+void* mps_upload_persistent(const float* data, unsigned long bytes) {
+    return __mps_buf_get_with_bytes((const void*)data, bytes);
+}
+
+// Returns a buffer obtained from mps_upload_persistent to the size-class
+// pool (see __mps_buf_put's own comment) -- call once, after every batch
+// that might still be reading it has completed.
+void mps_release_persistent(void* buf, unsigned long bytes) {
+    __mps_buf_put(buf, bytes);
+}
+
 int mps_relu_f32_chained(void* bufA, float* out, unsigned long n) {
     if (!__mps_batch_active) return 0;
     unsafe {
