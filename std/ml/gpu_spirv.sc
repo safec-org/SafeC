@@ -585,4 +585,121 @@ int spirv_matmul_f32(const float* a, const float* b, float* out,
     }
 }
 
+// ── Persistent-buffer tier (see gpu_spirv.h) ────────────────────────────────
+extern void* malloc(unsigned long size);
+extern void free(void* ptr);
+
+static void* __spirv_persistent_instance_ = (void*)0;
+static void* __spirv_persistent_device_ = (void*)0;
+static int __spirv_persistent_failed_ = 0;
+
+struct __SpirvPersistentBuf { void* buffer; void* memory; };
+
+// Creates a shared VkInstance + VkDevice once and reuses them forever
+// after -- the Vulkan analogue of gpu_cuda.sc's __cuda_ensure_context and
+// gpu_rocm.sc's __rocm_ensure_device. Picks physical device 0 / queue
+// family 0, same simplification spirv_available()/__vk_run_kernel above
+// already make.
+static int __spirv_ensure_device() {
+    if (__spirv_persistent_device_ != (void*)0) return 1;
+    if (__spirv_persistent_failed_) return 0;
+    unsafe {
+        struct VkApplicationInfo appInfo;
+        appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO; appInfo.pNext = (const void*)0;
+        appInfo.pApplicationName = "safec-tensor-gpu"; appInfo.applicationVersion = 1U;
+        appInfo.pEngineName = "std::ml"; appInfo.engineVersion = 1U;
+        appInfo.apiVersion = 4194304U;
+
+        struct VkInstanceCreateInfo ici;
+        ici.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO; ici.pNext = (const void*)0; ici.flags = 0U;
+        ici.pApplicationInfo = (const struct VkApplicationInfo*)&appInfo;
+        ici.enabledLayerCount = 0U; ici.ppEnabledLayerNames = (const void*)0;
+        ici.enabledExtensionCount = 0U; ici.ppEnabledExtensionNames = (const void*)0;
+
+        void* instance = (void*)0;
+        if (vkCreateInstance(&ici, (const void*)0, &instance) != VK_SUCCESS) { __spirv_persistent_failed_ = 1; return 0; }
+
+        unsigned int deviceCount = 0U;
+        vkEnumeratePhysicalDevices(instance, &deviceCount, (void**)0);
+        if (deviceCount == 0U) { vkDestroyInstance(instance, (const void*)0); __spirv_persistent_failed_ = 1; return 0; }
+        void* physicalDevices[1];
+        deviceCount = 1U;
+        vkEnumeratePhysicalDevices(instance, &deviceCount, physicalDevices);
+        void* physicalDevice = physicalDevices[0];
+
+        float prio = 1.0f;
+        struct VkDeviceQueueCreateInfo qci;
+        qci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO; qci.pNext = (const void*)0; qci.flags = 0U;
+        qci.queueFamilyIndex = 0U; qci.queueCount = 1U; qci.pQueuePriorities = (const float*)&prio;
+
+        struct VkDeviceCreateInfo dci;
+        dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO; dci.pNext = (const void*)0; dci.flags = 0U;
+        dci.queueCreateInfoCount = 1U; dci.pQueueCreateInfos = (const struct VkDeviceQueueCreateInfo*)&qci;
+        dci.enabledLayerCount = 0U; dci.ppEnabledLayerNames = (const void*)0;
+        dci.enabledExtensionCount = 0U; dci.ppEnabledExtensionNames = (const void*)0;
+        dci.pEnabledFeatures = (const void*)0;
+
+        void* device = (void*)0;
+        if (vkCreateDevice(physicalDevice, &dci, (const void*)0, &device) != VK_SUCCESS) {
+            vkDestroyInstance(instance, (const void*)0);
+            __spirv_persistent_failed_ = 1;
+            return 0;
+        }
+
+        __spirv_persistent_instance_ = instance;
+        __spirv_persistent_device_ = device;
+        return 1;
+    }
+}
+
+int spirv_persistent_available() {
+    return __spirv_ensure_device();
+}
+
+void* spirv_upload_persistent(const float* data, unsigned long bytes) {
+    if (!__spirv_ensure_device()) return (void*)0;
+    unsafe {
+        struct VkBufferCreateInfo bci;
+        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO; bci.pNext = (const void*)0; bci.flags = 0U;
+        bci.size = bytes;
+        bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE; bci.queueFamilyIndexCount = 0U; bci.pQueueFamilyIndices = (const unsigned int*)0;
+        void* buffer = (void*)0;
+        if (vkCreateBuffer(__spirv_persistent_device_, &bci, (const void*)0, &buffer) != VK_SUCCESS) return (void*)0;
+
+        struct VkMemoryRequirements req;
+        vkGetBufferMemoryRequirements(__spirv_persistent_device_, buffer, &req);
+        struct VkMemoryAllocateInfo mai;
+        mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO; mai.pNext = (const void*)0;
+        mai.allocationSize = req.size; mai.memoryTypeIndex = 0U; // real code: pick a host-visible|coherent type from VkPhysicalDeviceMemoryProperties
+        void* memory = (void*)0;
+        if (vkAllocateMemory(__spirv_persistent_device_, &mai, (const void*)0, &memory) != VK_SUCCESS) {
+            vkDestroyBuffer(__spirv_persistent_device_, buffer, (const void*)0);
+            return (void*)0;
+        }
+        vkBindBufferMemory(__spirv_persistent_device_, buffer, memory, 0UL);
+
+        void* mapped = (void*)0;
+        vkMapMemory(__spirv_persistent_device_, memory, 0UL, bytes, 0U, &mapped);
+        memcpy(mapped, (const void*)data, bytes);
+        vkUnmapMemory(__spirv_persistent_device_, memory);
+
+        struct __SpirvPersistentBuf* box = (struct __SpirvPersistentBuf*)malloc(sizeof(struct __SpirvPersistentBuf));
+        box->buffer = buffer; box->memory = memory;
+        return (void*)box;
+    }
+}
+
+void spirv_release_persistent(void* buf) {
+    if (buf == (void*)0) return;
+    unsafe {
+        struct __SpirvPersistentBuf* box = (struct __SpirvPersistentBuf*)buf;
+        if (__spirv_persistent_device_ != (void*)0) {
+            vkDestroyBuffer(__spirv_persistent_device_, box->buffer, (const void*)0);
+            vkFreeMemory(__spirv_persistent_device_, box->memory, (const void*)0);
+        }
+        free((void*)box);
+    }
+}
+
 } // namespace std

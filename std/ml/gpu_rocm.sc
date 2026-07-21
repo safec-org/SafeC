@@ -482,4 +482,75 @@ int rocm_matmul_f32_blas(const float* a, const float* b, float* out,
     }
 }
 
+// ── Persistent-buffer tier (see gpu_rocm.h) ─────────────────────────────────
+static int __rocm_persistent_ready_ = 0;
+static int __rocm_persistent_failed_ = 0;
+static void* __rocm_persistent_blas_handle_ = (void*)0;
+
+// hipSetDevice once, reused forever after -- the ROCm analogue of
+// gpu_cuda.sc's __cuda_ensure_context, minus the explicit context object
+// (HIP's runtime API is implicit-context, unlike the CUDA driver API).
+static int __rocm_ensure_device() {
+    if (__rocm_persistent_ready_) return 1;
+    if (__rocm_persistent_failed_) return 0;
+    unsafe {
+        if (hipInit(0U) != HIP_SUCCESS) { __rocm_persistent_failed_ = 1; return 0; }
+        if (hipSetDevice(0) != HIP_SUCCESS) { __rocm_persistent_failed_ = 1; return 0; }
+    }
+    __rocm_persistent_ready_ = 1;
+    return 1;
+}
+
+int rocm_persistent_available() {
+    return __rocm_ensure_device();
+}
+
+void* rocm_upload_persistent(const float* data, unsigned long bytes) {
+    if (!__rocm_ensure_device()) return (void*)0;
+    unsafe {
+        void* devPtr = (void*)0;
+        if (hipMalloc(&devPtr, bytes) != HIP_SUCCESS) return (void*)0;
+        if (hipMemcpyHtoD(devPtr, (void*)data, bytes) != HIP_SUCCESS) {
+            hipFree(devPtr);
+            return (void*)0;
+        }
+        return devPtr;
+    }
+}
+
+void rocm_release_persistent(void* devPtr) {
+    unsafe { hipFree(devPtr); }
+}
+
+int rocm_matmul_f32_blas_persistent(void* devA, void* devB, float* out,
+                                     unsigned long M, unsigned long K, unsigned long N) {
+    if (!__rocm_ensure_device()) return 0;
+    unsafe {
+        if (__rocm_persistent_blas_handle_ == (void*)0) {
+            void* handle = (void*)0;
+            if (rocblas_create_handle(&handle) != HIP_SUCCESS) return 0;
+            __rocm_persistent_blas_handle_ = handle;
+        }
+
+        unsigned long bytesOut = M * N * sizeof(float);
+        void* devOut = (void*)0;
+        if (hipMalloc(&devOut, bytesOut) != HIP_SUCCESS) return 0;
+
+        float alpha = 1.0f;
+        float beta = 0.0f;
+        int Mi = (int)M; int Ki = (int)K; int Ni = (int)N;
+        int status = rocblas_sgemm(__rocm_persistent_blas_handle_, ROCBLAS_OP_N, ROCBLAS_OP_N,
+            Ni, Mi, Ki,
+            (const float*)&alpha,
+            (const float*)devB, Ni,
+            (const float*)devA, Ki,
+            (const float*)&beta,
+            (float*)devOut, Ni);
+        int ok = (status == HIP_SUCCESS);
+        if (ok) hipMemcpyDtoH((void*)out, devOut, bytesOut);
+        hipFree(devOut);
+        return ok ? 1 : 0;
+    }
+}
+
 } // namespace std

@@ -60,4 +60,44 @@ int rocm_matmul_f32_blas(const float* a, const float* b, float* out,
 // hipGetDeviceCount() > 0).
 int rocm_available();
 
+// ── Persistent-buffer tier ───────────────────────────────────────────────
+// Real HIP Runtime API device-memory management (hipMalloc/hipMemcpyHtoD/
+// hipFree) plus a persistent hipInit/hipSetDevice singleton -- unlike the
+// elementwise ops above, buffer upload/release and device selection need
+// no HSACO kernel image at all, so neither hits this file's HSACO gap
+// (see this file's header comment). Mirrors gpu_mps.h's
+// mps_upload_persistent/mps_release_persistent and gpu_cuda.h's
+// cuda_upload_persistent/cuda_release_persistent: upload once, dispatch
+// many times against the same device buffer instead of re-uploading per
+// call. rocm_matmul_f32_blas_persistent gets the same treatment for
+// rocblas_sgemm, since that (like the buffer functions here) is a real,
+// linkable library call, not blocked on the HSACO gap the way
+// rocm_matmul_f32 itself is.
+//
+// What's deliberately NOT here: an in-place SGD kernel (gpu_mps.sc's
+// sgd_update_kernel / gpu_cuda.sc's cuda_sgd_update_f32) and a persistent
+// variant of rocm_matmul_f32 itself both need a real compiled HSACO
+// kernel image this sandbox has no ROCm toolchain to produce. This tier
+// is scoped to what's real and usable without one; closing the HSACO gap
+// (see gpu_rocm.sc) is what would unlock the rest of this family here.
+
+// Uploads 'bytes' from host memory to a new persistent device buffer.
+// Returns (void*)0 on failure (no device, or allocation failure).
+void* rocm_upload_persistent(const float* data, unsigned long bytes);
+
+// Frees a buffer returned by rocm_upload_persistent.
+void rocm_release_persistent(void* devPtr);
+
+// Same computation as rocm_matmul_f32_blas, but 'devA'/'devB' are already
+// device buffers (e.g. from rocm_upload_persistent) -- no upload for
+// either operand -- and reuses a persistent device selection + rocBLAS
+// handle instead of re-initializing both on every call. Returns 1 on
+// success, 0 on failure.
+int rocm_matmul_f32_blas_persistent(void* devA, void* devB, float* out,
+                                     unsigned long M, unsigned long K, unsigned long N);
+
+// True if the shared persistent device selection (used by every function
+// in this tier) is available.
+int rocm_persistent_available();
+
 } // namespace std

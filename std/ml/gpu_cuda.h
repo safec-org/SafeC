@@ -58,4 +58,66 @@ int cuda_matmul_f32_blas(const float* a, const float* b, float* out,
 // successfully (cuInit(0) == CUDA_SUCCESS && cuDeviceGetCount() > 0).
 int cuda_available();
 
+// ── Persistent-context / GPU-resident tier ──────────────────────────────────
+// Applies the same fix the MPS backend's GPU-resident training rewrite
+// used, to a worse version of the same problem: every cuda_*_f32 function
+// above pays a full cuInit/cuCtxCreate_v2/cuCtxDestroy_v2 cycle AND a
+// fresh cuMemAlloc_v2/cuMemcpyHtoD_v2/cuMemFree_v2 round trip on EVERY
+// call -- there is no context or buffer reuse at all above (MPS's
+// pre-session code at least kept one shared MTLDevice/command queue
+// alive). The functions below fix both: a process-lifetime CUcontext
+// (see gpu_cuda.sc's __cuda_ensure_context) created once and reused by
+// every call in this tier, and persistent device buffers uploaded once
+// and reused across many dispatches -- e.g. a training loop's weights,
+// updated in place by cuda_sgd_update_f32 without ever coming back to the
+// host, the same shape as gpu_mps.h's mps_upload_persistent/
+// mps_matmul_f32_persistent/mps_sgd_update_f32_chained family. UNVERIFIED
+// like the rest of this file (no NVIDIA GPU/CUDA toolkit in this
+// sandbox), but the reason for this tier is a real, structural fix, not
+// speculative tuning: the existing per-call functions above are left
+// untouched (still correct, still usable standalone) so this tier is
+// additive, not a rewrite.
+//
+// CUdeviceptr (an unsigned long long) is boxed/unboxed through a plain
+// void* here, the same round-trip cuda_matmul_f32_blas already uses for
+// cuBLAS's pointer-typed arguments -- safe on any platform where
+// sizeof(void*) >= 8, true of every target this compiler supports.
+
+// Uploads 'bytes' from host memory to a new persistent device buffer.
+// Returns (void*)0 on failure (no device, context creation failure, or
+// allocation failure).
+void* cuda_upload_persistent(const float* data, unsigned long bytes);
+
+// Frees a buffer returned by cuda_upload_persistent.
+void cuda_release_persistent(void* devPtr);
+
+// Same computation as cuda_matmul_f32, but 'devA'/'devB' are already
+// device buffers (e.g. from cuda_upload_persistent) -- no upload for
+// either operand -- and dispatch reuses the shared persistent context and
+// a cached module/kernel instead of reloading PTX and creating/destroying
+// a context on every call. Still copies the MxN result back to host
+// 'out': unlike MPS, this file has no command-buffer batching layer (see
+// gpu_mps.sc's mps_batch_begin/mps_batch_end) to defer that across
+// multiple chained ops, so each call here still does one cuCtxSynchronize
+// + cuMemcpyDtoH_v2. Returns 1 on success, 0 on failure.
+int cuda_matmul_f32_persistent(void* devA, void* devB, float* out,
+                                unsigned long M, unsigned long K, unsigned long N);
+
+// In-place SGD step against a persistent device buffer:
+// devW[i] -= lr * devGrad[i] for i in [0, n), computed entirely on-GPU --
+// the result is never copied back to host memory, mirroring
+// gpu_mps.h's mps_sgd_update_f32_chained. This is the primitive that lets
+// a training loop keep weights GPU-resident across steps: upload once via
+// cuda_upload_persistent, forward/backward via cuda_matmul_f32_persistent
+// (and this file's other _persistent ops), update in place via this
+// function, repeat -- with no per-step re-upload the way a CPU-resident
+// weight array read/written by a CPU-side SGD loop would need. Returns 1
+// on success, 0 on failure.
+int cuda_sgd_update_f32(void* devW, void* devGrad, float lr, unsigned long n);
+
+// True if the shared persistent context (used by every function in this
+// tier) is available -- like cuda_available(), but also confirms context
+// creation succeeded, not just device enumeration.
+int cuda_persistent_available();
+
 } // namespace std

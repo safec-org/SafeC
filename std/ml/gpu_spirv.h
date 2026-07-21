@@ -48,4 +48,40 @@ int spirv_matmul_f32(const float* a, const float* b, float* out,
 // per the SPIR-V-bytecode gap above.
 int spirv_available();
 
+// ── Persistent-buffer tier ───────────────────────────────────────────────
+// Real Vulkan device-memory management (vkCreateBuffer/vkAllocateMemory/
+// vkMapMemory/vkUnmapMemory) plus a persistent VkInstance/VkDevice
+// singleton -- unlike compute dispatch, buffer upload and device creation
+// need no SPIR-V module at all, so neither hits this file's SPIR-V-
+// bytecode gap (see this file's header comment). Mirrors gpu_mps.h/
+// gpu_cuda.h/gpu_rocm.h's persistent-buffer tier: allocate + upload once,
+// reuse the handle across many dispatches instead of paying
+// vkCreateInstance/vkCreateDevice/vkCreateBuffer/vkAllocateMemory/
+// vkMapMemory/copy/vkUnmapMemory on every call the way spirv_*_f32 above
+// does internally (once real SPIR-V bytecode exists to dispatch with).
+//
+// What's deliberately NOT here: a persistent-buffer compute-dispatch
+// variant (the Vulkan analogue of mps_matmul_f32_persistent/
+// cuda_matmul_f32_persistent) still needs real SPIR-V bytecode this
+// sandbox has no glslc/glslangValidator/spirv-as toolchain to produce --
+// see this file's header comment. This tier is scoped to what's real
+// without one: a persistent instance/device (spirv_persistent_available)
+// and persistent buffers, ready for a future dispatch layer to bind
+// directly once the SPIR-V-bytecode gap closes.
+
+// Uploads 'bytes' from host memory to a new persistent, host-visible
+// device buffer. Returns (void*)0 on failure (no device, or Vulkan
+// buffer/memory allocation failure). The returned handle is opaque (an
+// internal {VkBuffer, VkDeviceMemory} pair) — pass it only to
+// spirv_release_persistent, not to spirv_*_f32 above (which take raw
+// host float* pointers, not device buffer handles).
+void* spirv_upload_persistent(const float* data, unsigned long bytes);
+
+// Frees a buffer returned by spirv_upload_persistent.
+void spirv_release_persistent(void* buf);
+
+// True if the shared persistent Vulkan instance/device (used by
+// spirv_upload_persistent/spirv_release_persistent) is available.
+int spirv_persistent_available();
+
 } // namespace std
