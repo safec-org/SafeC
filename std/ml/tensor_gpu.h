@@ -77,4 +77,19 @@ namespace std {
 void tensor_gpu_batch_begin();
 void tensor_gpu_batch_end();
 
+// ── Cross-batch persistent tensors ──────────────────────────────────────────
+// Marks 't' so every tensor_matmul_gpu/tensor_relu_gpu call (forward AND
+// the corresponding backward's data lookups) that reads it finds its
+// device buffer directly instead of re-uploading (memcpy) t->data fresh on
+// every single call — see tensor_gpu.sc's comment on the implementation.
+// Only correct for a tensor whose data genuinely never changes for as long
+// as it stays marked: a training loop's fixed input X is the case this
+// was built for (uploaded once, read by every step's forward AND backward
+// matmul instead of BATCH*IN_DIM*sizeof(float) bytes of real memcpy per
+// step) — NOT a weight matrix, which SGD rewrites every step. Call
+// tensor_gpu_release_all_persistent() once, when truly done with every
+// marked tensor (e.g. at the very end of a training run).
+void tensor_gpu_mark_persistent(const &Tensor t);
+void tensor_gpu_release_all_persistent();
+
 } // namespace std

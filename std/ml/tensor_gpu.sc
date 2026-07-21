@@ -88,9 +88,66 @@ static void __mps_chain_data_mark(struct Tensor* t, void* buf) {
     }
 }
 
+// ── Cross-batch persistent tensors ──────────────────────────────────────────
+// A second, separate table from the per-batch chain tables above: entries
+// here are NOT reset by tensor_gpu_batch_begin() and stay valid across as
+// many batches as the caller wants (typically an entire training run).
+// tensor_gpu_mark_persistent(t) uploads t's CURRENT ->data to a device
+// buffer once (mps_upload_persistent, see gpu_mps.h) and registers it here;
+// __mps_chain_data_lookup below then finds it automatically for every
+// caller that already consults that function (tensor_matmul_gpu/
+// tensor_relu_gpu's forward chaining, __matmul_backward_gpu/__relu_
+// backward_gpu's dB/aDataBuf checks) — no other code needs to change to
+// benefit. Only correct for a tensor whose ->data genuinely never changes
+// for as long as it stays marked (e.g. a training loop's fixed input X,
+// not a weight matrix SGD rewrites every step) — nothing here re-uploads
+// on a data change, since nothing here is told one happened.
+#define MPS_PERSISTENT_MAX 16
+static struct Tensor* __mps_persistent_tensor[MPS_PERSISTENT_MAX];
+static void*          __mps_persistent_buf[MPS_PERSISTENT_MAX];
+static unsigned long  __mps_persistent_count = 0UL;
+
+static void* __mps_persistent_lookup(struct Tensor* t) {
+    unsigned long i = 0UL;
+    while (i < __mps_persistent_count) {
+        if (__mps_persistent_tensor[i] == t) return __mps_persistent_buf[i];
+        i = i + 1UL;
+    }
+    return (void*)0;
+}
+
+void tensor_gpu_mark_persistent(const &Tensor t) {
+    unsafe {
+        if (__mps_persistent_count >= (unsigned long)MPS_PERSISTENT_MAX) return;
+        if (!mps_available()) return;
+        struct Tensor* tp = (struct Tensor*)t;
+        void* buf = mps_upload_persistent((const float*)tp->data, tp->size * sizeof(float));
+        if (buf == (void*)0) return;
+        __mps_persistent_tensor[__mps_persistent_count] = tp;
+        __mps_persistent_buf[__mps_persistent_count] = buf;
+        __mps_persistent_count = __mps_persistent_count + 1UL;
+    }
+}
+
+// Releases every tensor mps_release_persistent above ever marked, in
+// registration order, and empties the table. Call once, when truly done
+// (e.g. at the very end of a training run) — not safe to call while a
+// batch that might still be reading one of these buffers is open.
+void tensor_gpu_release_all_persistent() {
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < __mps_persistent_count) {
+            mps_release_persistent(__mps_persistent_buf[i], __mps_persistent_tensor[i]->size * sizeof(float));
+            i = i + 1UL;
+        }
+        __mps_persistent_count = 0UL;
+    }
+}
+
 // Returns the pending GPU data buffer for 't', or NULL if 't' isn't
 // batched-pending (an ordinary, already-populated tensor — the common
-// case, e.g. a persistent weight matrix).
+// case, e.g. a persistent weight matrix) AND isn't cross-batch-persistent
+// either (see tensor_gpu_mark_persistent above).
 static void* __mps_chain_data_lookup(struct Tensor* t) {
     unsigned long i = __mps_chain_data_count;
     // Walk backwards: if the same Tensor* were ever marked more than
@@ -100,7 +157,7 @@ static void* __mps_chain_data_lookup(struct Tensor* t) {
         i = i - 1UL;
         if (__mps_chain_data_tensor[i] == t) return __mps_chain_data_buf[i];
     }
-    return (void*)0;
+    return __mps_persistent_lookup(t);
 }
 
 static void __mps_chain_grad_mark(struct Tensor* t, void* buf) {

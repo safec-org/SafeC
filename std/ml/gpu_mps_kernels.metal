@@ -258,6 +258,21 @@ kernel void relu_backward_kernel(device const float* a [[buffer(0)]],
     out[id] = (a[id] > 0.0f) ? selfGrad[id] : 0.0f;
 }
 
+// In-place SGD step: w[id] -= lr * grad[id]. Reads and writes the SAME
+// buffer -- safe because each thread only ever touches its own index, no
+// thread reads another's element, so there's no ordering hazard within
+// the dispatch. Lets a weight tensor's device buffer stay the single
+// source of truth across an entire training run: nothing ever re-uploads
+// it from a CPU array (there's no CPU array in the loop at all, once
+// this runs) and nothing ever reads it back except the caller's own
+// choice to do so when actually done training.
+kernel void sgd_update_kernel(device float* w [[buffer(0)]],
+                               device const float* grad [[buffer(1)]],
+                               constant float& lr [[buffer(2)]],
+                               uint id [[thread_position_in_grid]]) {
+    w[id] = w[id] - lr * grad[id];
+}
+
 // ── simdgroup_matrix (hardware matrix-unit) GEMM kernels ────────────────────
 // Apple Silicon GPUs (A14/M1 and later) have dedicated matrix-multiply
 // hardware, exposed in MSL as simdgroup_matrix -- one simdgroup (32
@@ -269,10 +284,9 @@ kernel void relu_backward_kernel(device const float* a [[buffer(0)]],
 //
 // Each threadgroup here is exactly one simdgroup (32 threads) computing
 // exactly one 8x8 output tile, accumulating over the reduction dimension
-// in 8-wide steps -- the simplest correct simdgroup_matrix layout, not
-// the further tier of multi-simdgroup-per-threadgroup tiling that a
-// maximally-tuned GEMM would add on top (real remaining headroom, not
-// attempted here).
+// in 8-wide steps -- the simplest correct simdgroup_matrix layout. One
+// further tier below adds threadgroup-memory tiling on top (matmul_
+// kernel_smma_multi, 4 simdgroups / 32x32 tile).
 //
 // simdgroup_load/store past a matrix's real bounds is undefined behavior
 // (can read/write out of bounds device memory) -- unlike the tiled

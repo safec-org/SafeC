@@ -307,4 +307,21 @@ int mps_relu_backward_f32_chained_ab(void* bufA, void* bufSelfGrad, float* out, 
 int mps_matmul_atb_f32_chained_ab(void* bufA, void* bufDC, float* out,
                                    unsigned long M, unsigned long K, unsigned long N);
 
+// Same as mps_matmul_abt_f32_chained, but 'b' is ALSO a pre-existing
+// device buffer (typically mps_upload_persistent, e.g. a weight matrix
+// that stays GPU-resident across a whole training run) instead of a
+// plain CPU array. Needed for dH = dY . W2^T when W2 is never read back
+// to a CPU array between steps (see mps_sgd_update_f32_chained below).
+int mps_matmul_abt_f32_persistent(void* bufDC, void* bufB, float* out,
+                                   unsigned long M, unsigned long N, unsigned long K);
+
+// In-place SGD step against a persistent device buffer: w[i] -= lr*
+// grad[i]. Both 'bufW' and 'bufGrad' are already device buffers (bufW
+// typically from mps_upload_persistent, bufGrad typically another op's
+// still-pending output from the same batch's backward pass) -- no 'out'
+// parameter, since the whole point is that the updated weight never
+// leaves the GPU. See gpu_mps.sc's comment and gpu_mps_kernels.metal's
+// sgd_update_kernel.
+int mps_sgd_update_f32_chained(void* bufW, void* bufGrad, float lr, unsigned long n);
+
 } // namespace std

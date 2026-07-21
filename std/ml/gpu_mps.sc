@@ -1719,7 +1719,21 @@ int mps_matmul_f32_persistent(void* bufA, void* bufB, float* out,
 // batching machinery the way __mps_buf_get_with_bytes_batched's return
 // value is -- the caller owns this buffer's lifetime and must release it
 // with mps_release_persistent below when done, exactly once.
+//
+// __mps_ensure_device_queue() first, unlike a bare __mps_buf_get_with_
+// bytes call: every OTHER public entry point in this file only ever runs
+// after mps_matmul_f32 or similar has already lazily initialized __mps_
+// device as a side effect of an earlier call, so nothing else needed this
+// check explicitly. This one doesn't get that for free -- it's meant to
+// be usable as the FIRST GPU call in a whole program (e.g. uploading a
+// training loop's weights before any forward pass has run at all), and
+// without this, __mps_buf_get would silently newBufferWithLength: a nil
+// device (Objective-C's "message to nil returns nil" behavior, not a
+// crash) and hand back a nil buffer that reads back as all zeros forever
+// after -- found by a real correctness test that returned exactly zero
+// for every output element, not by inspection.
 void* mps_upload_persistent(const float* data, unsigned long bytes) {
+    if (!__mps_ensure_device_queue()) return (void*)0;
     return __mps_buf_get_with_bytes((const void*)data, bytes);
 }
 
@@ -2034,6 +2048,91 @@ int mps_matmul_abt_f32_chained(void* bufDC, const float* b, float* out,
     }
 }
 
+// Same as mps_matmul_abt_f32_chained above, but 'b' is ALSO a pre-existing
+// device buffer (typically mps_upload_persistent, e.g. a weight matrix
+// that never leaves the GPU across a whole training run) instead of a
+// plain CPU array to upload fresh -- same reasoning as mps_matmul_f32_
+// persistent. Needed for dH = dY . W2^T when W2 stays GPU-resident and
+// is updated in place by sgd_update_kernel every step instead of ever
+// being read back to a CPU array.
+int mps_matmul_abt_f32_persistent(void* bufDC, void* bufB, float* out,
+                                   unsigned long M, unsigned long N, unsigned long K) {
+    if (!__mps_batch_active) return 0;
+    unsafe {
+        int useMulti = (M % 32UL == 0UL) && (N % 32UL == 0UL) && (K % 32UL == 0UL);
+        int useSmma = (M % 8UL == 0UL) && (N % 8UL == 0UL) && (K % 8UL == 0UL);
+        void* pipeline;
+        if (useMulti) {
+            if (__mps_matmul_abt_multi_pipeline == (void*)0) {
+                void* p = __mps_make_pipeline("matmul_abt_kernel_smma_multi");
+                if (p == (void*)0) { useMulti = 0; } else { __mps_matmul_abt_multi_pipeline = p; }
+            }
+            if (useMulti) pipeline = __mps_matmul_abt_multi_pipeline;
+        }
+        if (!useMulti && useSmma) {
+            if (__mps_matmul_abt_smma_pipeline == (void*)0) {
+                void* p = __mps_make_pipeline("matmul_abt_kernel_smma");
+                if (p == (void*)0) { useSmma = 0; } else { __mps_matmul_abt_smma_pipeline = p; }
+            }
+            if (useSmma) pipeline = __mps_matmul_abt_smma_pipeline;
+        }
+        if (!useMulti && !useSmma) {
+            if (__mps_matmul_abt_pipeline == (void*)0) {
+                void* p = __mps_make_pipeline("matmul_abt_kernel");
+                if (p == (void*)0) return 0;
+                __mps_matmul_abt_pipeline = p;
+            }
+            pipeline = __mps_matmul_abt_pipeline;
+        }
+
+        unsigned long bytesOut = M * K * sizeof(float);
+        void* bufOut = __mps_buf_get_batched(bytesOut);
+        if (bufOut == (void*)0) return 0;
+
+        unsigned int Mu = (unsigned int)M;
+        unsigned int Nu = (unsigned int)N;
+        unsigned int Ku = (unsigned int)K;
+
+        MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
+        msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, pipeline);
+        MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufDC, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufB, 0UL, 1UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
+        MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
+        setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&Mu, 4UL, 3UL);
+        setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&Nu, 4UL, 4UL);
+        setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&Ku, 4UL, 5UL);
+
+        struct MTLSize tgSize;
+        struct MTLSize numThreadgroups;
+        if (useMulti) {
+            tgSize.width = 128UL; tgSize.height = 1UL; tgSize.depth = 1UL;
+            numThreadgroups.width = K / 32UL; numThreadgroups.height = M / 32UL; numThreadgroups.depth = 1UL;
+        } else if (useSmma) {
+            tgSize.width = 32UL; tgSize.height = 1UL; tgSize.depth = 1UL;
+            numThreadgroups.width = K / 8UL; numThreadgroups.height = M / 8UL; numThreadgroups.depth = 1UL;
+        } else {
+            unsigned long tgW = 16UL;
+            unsigned long tgH = 16UL;
+            tgSize.width = tgW; tgSize.height = tgH; tgSize.depth = 1UL;
+            unsigned long groupsX = (K + tgW - 1UL) / tgW;
+            unsigned long groupsY = (M + tgH - 1UL) / tgH;
+            numThreadgroups.width = groupsX; numThreadgroups.height = groupsY; numThreadgroups.depth = 1UL;
+        }
+        MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+
+        if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
+            __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
+            __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
+            __mps_pending_bytes[__mps_pending_count] = bytesOut;
+            __mps_pending_count = __mps_pending_count + 1UL;
+        }
+        return 1;
+    }
+}
+
 int mps_matmul_atb_f32_chained(const float* a, void* bufDC, float* out,
                                 unsigned long M, unsigned long K, unsigned long N) {
     if (!__mps_batch_active) return 0;
@@ -2287,6 +2386,53 @@ int mps_relu_backward_f32_chained_ab(void* bufA, void* bufSelfGrad, float* out, 
             __mps_pending_bytes[__mps_pending_count] = bytes;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
+        return 1;
+    }
+}
+
+// In-place SGD step against a persistent device buffer (see gpu_mps_
+// kernels.metal's sgd_update_kernel): w[i] -= lr*grad[i], both already
+// device buffers -- 'bufW' typically from mps_upload_persistent (a weight
+// matrix uploaded once at the start of training and never read back to a
+// CPU array until the caller is actually done with it), 'bufGrad'
+// typically another op's still-pending chained output from the SAME
+// batch's backward pass. No 'out'/pending-readback parameter: unlike
+// every other batched op here, this one's result is never meant to reach
+// CPU memory as part of the batch ending -- that's the entire point of
+// keeping a weight GPU-resident across a training run instead of
+// re-uploading it (mps_matmul_f32/_persistent) every step.
+static void* __mps_sgd_update_pipeline = (void*)0;
+
+int mps_sgd_update_f32_chained(void* bufW, void* bufGrad, float lr, unsigned long n) {
+    if (!__mps_batch_active) return 0;
+    unsafe {
+        if (__mps_sgd_update_pipeline == (void*)0) {
+            void* pipeline = __mps_make_pipeline("sgd_update_kernel");
+            if (pipeline == (void*)0) return 0;
+            __mps_sgd_update_pipeline = pipeline;
+        }
+
+        MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
+        msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, __mps_sgd_update_pipeline);
+        MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufW, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufGrad, 0UL, 1UL);
+        MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
+        float lrVal = lr;
+        setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&lrVal, 4UL, 2UL);
+
+        struct MTLSize gridSize;
+        gridSize.width = n; gridSize.height = 1UL; gridSize.depth = 1UL;
+        unsigned long tgWidth = n < 64UL ? n : 64UL;
+        if (tgWidth == 0UL) tgWidth = 1UL;
+        struct MTLSize tgSize;
+        tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
+        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
+        struct MTLSize numThreadgroups;
+        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
+        MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+
         return 1;
     }
 }
