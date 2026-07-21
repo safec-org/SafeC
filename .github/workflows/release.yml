@@ -5,16 +5,20 @@ name: Release
 # tag push — publishes them as GitHub Release assets. Also runnable by hand
 # (workflow_dispatch) to validate the build matrix without cutting a release.
 #
-# Each platform job is independent and best-effort documented inline; the
-# Windows job in particular has not yet had a real CI run to shake out
-# environment-specific issues the way the macOS/Linux jobs' build steps
-# have been exercised locally throughout this project's development — see
-# that job's comments for specifics on what's untested.
+# Each platform job is independent and best-effort documented inline; see
+# the Windows job's comments for the history of environment-specific issues
+# that had to be worked through there (LLVM acquisition, MSVC-vs-GCC compile
+# flags, etc.) before it reached parity with macOS/Linux.
+#
+# Tag patterns accept both 'v1.2.3' and '1.2.3'-style tags (no required 'v'
+# prefix) — this project's actual releases use the latter (e.g.
+# '1.0.0-beta'), and the release job's own gate below matches the same way.
 
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*.*.*'
+      - '*.*.*'
   workflow_dispatch: {}
 
 env:
@@ -301,8 +305,13 @@ jobs:
           if-no-files-found: error
 
   # ── Publish a GitHub Release (tag pushes only) ───────────────────────────
+  # Bare 'refs/tags/' (no 'v' requirement) so this matches both tag
+  # conventions the workflow trigger above accepts — a workflow_dispatch
+  # run's ref is 'refs/heads/<branch>', which never matches, so manual runs
+  # still correctly skip publishing (the "validate without releasing" case
+  # from the top-of-file comment) without needing a separate check for it.
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/')
     needs: [macos, linux, windows]
     runs-on: ubuntu-latest
     permissions:
