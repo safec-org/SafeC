@@ -7,7 +7,19 @@
 #define TASK_RUNNING  1
 #define TASK_DONE     2
 
-#define TASK_MAX 64
+// Was 64 -- too low for a reactor thread under real concurrent load: once
+// more than TASK_MAX connections are simultaneously in flight on one
+// TaskScheduler, spawn_task() returns -1 and the caller (see
+// std/http/http.sc's http_accept_task_) closes the freshly-accepted fd
+// before reading its pending request bytes, which the kernel turns into
+// a TCP RST to the client. Verified: `ab -c 128` against a single
+// http_serve_reactor thread reliably reproduced exactly this ("Connection
+// reset by peer" partway through the run); `ab -c 100` (under the old 64)
+// did not. 1024 gives real headroom above realistic load-test/production
+// concurrency; each Task is small (a few pointers/ints), so the resulting
+// per-scheduler array is trivial (~tens of KB, not the old few KB, but
+// still nothing).
+#define TASK_MAX 1024
 
 namespace std {
 

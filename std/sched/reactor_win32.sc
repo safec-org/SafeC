@@ -179,14 +179,14 @@ inline int Reactor::poll(&TaskScheduler sched, long long timeout_ms) {
         return 0;
     }
 
-    // WSAPOLLFD array sized to the current watch set. 256 is a generous
-    // static cap matching TASK_MAX's own headroom (std/sync/task.h) — a
-    // real caller registering more concurrent fds than that would need a
-    // heap-allocated array instead, not something this reactor currently
-    // does.
-    struct WSAPollFd fds[256];
+    // WSAPOLLFD array sized to the current watch set — kept at TASK_MAX
+    // (std/sync/task.h) so this cap is never the bottleneck below whatever
+    // the scheduler itself can already hold; a real caller registering
+    // more concurrent fds than that would need a heap-allocated array
+    // instead, not something this reactor currently does.
+    struct WSAPollFd fds[TASK_MAX];
     unsigned long cap = n;
-    if (cap > 256UL) { cap = 256UL; }
+    if (cap > (unsigned long)TASK_MAX) { cap = (unsigned long)TASK_MAX; }
     unsigned long i = 0UL;
     while (i < cap) {
         struct WatchedFd* w;

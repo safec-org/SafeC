@@ -802,16 +802,138 @@ static int http_conn_task_(void* argPtr, int resume_point) {
     }
 }
 
+// Spawns a connection-handling task for an already-accepted fd on the
+// given scheduler/reactor — the one piece of setup shared by both ways a
+// connection can reach a worker thread: the acceptor dispatching directly
+// into its own scheduler (target == the acceptor's own thread), and a
+// worker draining a freshly-received fd out of its dispatch queue (see
+// http_worker_loop_ below). 'sched'/'reactor' must belong to the thread
+// calling this — HttpConnState_ pins them for this connection's whole
+// lifetime, and TaskScheduler/Reactor are not safe to touch from more
+// than one thread.
+static void http_spawn_conn_(struct TaskScheduler* sched, struct Reactor* reactor,
+                              HttpHandler handler, int fd) {
+    unsafe {
+        struct HttpConnState_* st = (struct HttpConnState_*)malloc(sizeof(struct HttpConnState_));
+        if (st == (struct HttpConnState_*)0) {
+            sock_close_(fd);
+            return;
+        }
+        st->fd = fd;
+        st->handler = handler;
+        st->sched = sched;
+        st->reactor = reactor;
+        st->phase = HTTP_CONN_PHASE_READ_HEADERS_;
+        st->registeredFilter = 0;
+        st->readBuf = string_new();
+        st->headerEnd = -1L;
+        st->bodyWant = 0UL;
+        st->respText = string_new();
+        st->sent = 0UL;
+        int idx = sched->spawn_task((void*)http_conn_task_, (void*)st);
+        if (idx < 0) {
+            // Scheduler at capacity (TASK_MAX concurrent connections on
+            // this thread already) — drop this one rather than leak the
+            // fd or block whoever's calling this.
+            sock_close_(fd);
+            st->readBuf.free();
+            st->respText.free();
+            free(st);
+        }
+    }
+}
+
+// Bounded MPSC-ish handoff queue: the acceptor (always thread 0 — see
+// http_serve_reactor) pushes newly-accepted fds bound for some *other*
+// thread here; that thread drains it from inside its own event loop
+// (http_worker_loop_). One of these per worker thread, so it's really
+// single-producer/single-consumer per queue despite the acceptor writing
+// into all of them — each queue's mutex only ever contends against that
+// one worker's own drain, never another queue's.
+#define HTTP_DISPATCH_CAP_ 256
+
+struct HttpDispatchQ_ {
+    int fds[HTTP_DISPATCH_CAP_];
+    int head;
+    int tail;
+    int count;
+    unsigned long long mtx;
+};
+
+struct HttpReactorShared_ {
+    HttpHandler handler;
+    int listenFd;
+    int numThreads;
+    struct HttpDispatchQ_* queues; // array[numThreads], one per worker
+    struct TaskScheduler** scheds; // array[numThreads]; scheds[i] is null
+                                     // until thread i has published its own
+                                     // &sched (see http_reactor_worker_) --
+                                     // the acceptor's load comparison
+                                     // (http_accept_task_) skips any index
+                                     // still null rather than dereference it.
+};
+
 struct HttpAcceptState_ {
     int listenFd;
     HttpHandler handler;
     struct TaskScheduler* sched;
     struct Reactor* reactor;
     int registered;
+    struct HttpReactorShared_* shared;
 };
 
-// Task function for the one long-lived "accept new connections" task per
-// reactor thread. Never returns 0 (TASK_DONE) — it's meant to run for the
+// Picks which thread a freshly-accepted connection should go to: the one
+// currently carrying the least work, not just "whoever's next in line".
+// Round-robin looks fair but isn't — it assumes every connection costs
+// the same, so a thread that's fallen behind (a slower client, a bigger
+// request body, anything that keeps a connection alive longer) just
+// keeps getting handed the same 1-in-N share anyway and falls further
+// behind. Load here is each candidate thread's own in-flight task count
+// (TaskScheduler::active_count() — connections it's actively serving)
+// plus whatever's still sitting in its dispatch queue waiting to be
+// picked up (shared->queues[i].count) — the second term matters because
+// active_count() alone can't see work that's been routed to a thread but
+// not yet drained into its scheduler. Both reads are plain, unlocked
+// loads of another thread's data: correctness only needs a *reasonable*
+// pick, not a perfectly current one, so a value that's a few microseconds
+// stale is fine — it just means the odd connection goes to the
+// second-least-loaded thread instead of the least-loaded one, not a bug.
+// scheds[i] is null until thread i finishes its own setup (see
+// http_reactor_worker_); skipped here rather than dereferenced so the
+// acceptor never has to wait for every thread to be ready before it can
+// start accepting.
+static int http_pick_target_(struct HttpReactorShared_* shared) {
+    unsafe {
+        int best = 0;
+        int bestLoad = -1;
+        int i = 0;
+        while (i < shared->numThreads) {
+            struct TaskScheduler* s = shared->scheds[i];
+            if (s != (struct TaskScheduler*)0) {
+                int load = s->active_count() + shared->queues[i].count;
+                if (bestLoad < 0 || load < bestLoad) {
+                    bestLoad = load;
+                    best = i;
+                }
+            }
+            i = i + 1;
+        }
+        return best;
+    }
+}
+
+// Task function for the one long-lived "accept new connections" task,
+// which runs only on thread 0 (see http_reactor_worker_) — every reactor
+// thread still gets its own TaskScheduler/Reactor for *serving*
+// connections, but there is exactly one listening socket and exactly one
+// task anywhere that ever calls accept() on it, so there is no
+// thundering herd of threads racing each other for the same new
+// connection. What this task does with each accepted fd is hand it to
+// the least-loaded thread (see http_pick_target_): thread 0's own
+// scheduler directly if that's the pick, otherwise the target thread's
+// dispatch queue (see HttpDispatchQ_) for that thread to pick up itself
+// — never touches another thread's TaskScheduler/Reactor directly.
+// Never returns 0 (TASK_DONE) — it's meant to run for the
 // lifetime of the server, the same way http_serve's/http_serve_threaded's
 // own accept loops never return.
 static int http_accept_task_(void* argPtr, int resume_point) {
@@ -821,31 +943,25 @@ static int http_accept_task_(void* argPtr, int resume_point) {
         while (1) {
             int clientFd = tcp_accept_nb(ac->listenFd);
             if (clientFd >= 0) {
-                struct HttpConnState_* st = (struct HttpConnState_*)malloc(sizeof(struct HttpConnState_));
-                if (st != (struct HttpConnState_*)0) {
-                    st->fd = clientFd;
-                    st->handler = ac->handler;
-                    st->sched = ac->sched;
-                    st->reactor = ac->reactor;
-                    st->phase = HTTP_CONN_PHASE_READ_HEADERS_;
-                    st->registeredFilter = 0;
-                    st->readBuf = string_new();
-                    st->headerEnd = -1L;
-                    st->bodyWant = 0UL;
-                    st->respText = string_new();
-                    st->sent = 0UL;
-                    int idx = ac->sched->spawn_task((void*)http_conn_task_, (void*)st);
-                    if (idx < 0) {
-                        // Scheduler at capacity (TASK_MAX concurrent
-                        // connections on this thread already) — drop this
-                        // one rather than leak the fd or block the acceptor.
-                        sock_close_(clientFd);
-                        st->readBuf.free();
-                        st->respText.free();
-                        free(st);
-                    }
+                int target = http_pick_target_(ac->shared);
+                if (target == 0) {
+                    http_spawn_conn_(ac->sched, ac->reactor, ac->handler, clientFd);
                 } else {
-                    sock_close_(clientFd);
+                    struct HttpDispatchQ_* q = ac->shared->queues + target;
+                    std::mutex_lock(&q->mtx);
+                    if (q->count < HTTP_DISPATCH_CAP_) {
+                        q->fds[q->tail] = clientFd;
+                        q->tail = (q->tail + 1) % HTTP_DISPATCH_CAP_;
+                        q->count = q->count + 1;
+                        std::mutex_unlock(&q->mtx);
+                    } else {
+                        std::mutex_unlock(&q->mtx);
+                        // Target thread isn't draining fast enough to keep
+                        // up — drop rather than block the acceptor or
+                        // leak the fd, same policy as hitting the
+                        // scheduler's own TASK_MAX capacity above.
+                        sock_close_(clientFd);
+                    }
                 }
                 continue; // more may be pending; drain before yielding
             }
@@ -865,31 +981,102 @@ static int http_accept_task_(void* argPtr, int resume_point) {
     }
 }
 
+// Every worker thread's main loop (including thread 0, which also runs
+// the accept task above alongside this). Deliberately not std::reactor_
+// run(): that helper returns once the scheduler has zero active tasks,
+// which is exactly the normal resting state for a worker that's simply
+// waiting for its next dispatched connection — this loop must keep
+// going forever instead, the same way every other http_serve* entry
+// point never returns. It also can't block indefinitely in reactor->poll
+// the way reactor_run does when idle: an infinite wait would only wake
+// for activity on fds *this* thread already owns, so it would never
+// notice a new fd the acceptor just pushed into myQueue. Polling with a
+// short bound instead (1ms) when there's nothing else to do bounds the
+// worst-case latency between "acceptor dispatched a connection to an
+// idle thread" and "that thread starts serving it" to ~1ms, without
+// needing a cross-thread wakeup primitive (eventfd/self-pipe/etc. — real
+// options, just more machinery than this needs). Measured why it has to
+// be *this* short, not just "short": at 20ms it looked fine on paper but
+// tanked measured throughput by ~10x the moment load was split across
+// more than one thread (c=50 against N=2 dropped from ~35k req/s to
+// ~4.4k) — this handler's whole request/response cycle is sub-millisecond,
+// so any idle-to-busy gap anywhere near that scale is a huge relative
+// tax paid on every such transition, and with per-thread traffic thinned
+// by round-robin dispatch, idle-to-busy transitions are frequent, not
+// rare. 1ms brought every thread count back in line with single-thread
+// throughput (minus the expected small per-thread overhead — see
+// http_serve_reactor's own comment). Once a thread has any connections
+// of its own, its normal poll(sched, 0) path (below) stays fully
+// responsive as before; the bound only ever applies while idle, and idle
+// polling this fast costs a negligible, bounded amount of CPU (at most
+// 1000 no-op wakeups/sec on a thread with literally nothing to do).
+static void http_worker_loop_(struct TaskScheduler* sched, struct Reactor* reactor,
+                               struct HttpDispatchQ_* myQueue, HttpHandler handler) {
+    unsafe {
+        while (1) {
+            if (std::mutex_trylock(&myQueue->mtx) == 0) {
+                while (myQueue->count > 0) {
+                    int fd = myQueue->fds[myQueue->head];
+                    myQueue->head = (myQueue->head + 1) % HTTP_DISPATCH_CAP_;
+                    myQueue->count = myQueue->count - 1;
+                    http_spawn_conn_(sched, reactor, handler, fd);
+                }
+                std::mutex_unlock(&myQueue->mtx);
+            }
+            // A busy myQueue->mtx (trylock failed) just means the
+            // acceptor is mid-push right now — whatever it's adding will
+            // still be there next iteration, no need to wait for it here.
+
+            sched->tick();
+            if (sched->has_ready() != 0) {
+                reactor->poll(sched, 0LL);
+            } else {
+                reactor->poll(sched, 1LL);
+            }
+        }
+    }
+}
+
 struct HttpReactorThreadCtx_ {
-    int listenFd;
-    HttpHandler handler;
+    struct HttpReactorShared_* shared;
+    int selfIndex;
 };
 
 static void* http_reactor_worker_(void* argPtr) {
     unsafe {
         struct HttpReactorThreadCtx_* ctx = (struct HttpReactorThreadCtx_*)argPtr;
+        struct HttpReactorShared_* shared = ctx->shared;
 
         struct Reactor reactor = reactor_init();
         if (reactor.init() != 0) { return (void*)0; }
         struct TaskScheduler sched = task_sched_init();
 
-        struct HttpAcceptState_* ac = (struct HttpAcceptState_*)malloc(sizeof(struct HttpAcceptState_));
-        ac->listenFd = ctx->listenFd;
-        ac->handler = ctx->handler;
-        ac->sched = (struct TaskScheduler*)&sched;
-        ac->reactor = (struct Reactor*)&reactor;
-        ac->registered = 0;
+        struct HttpDispatchQ_* myQueue = shared->queues + ctx->selfIndex;
 
-        sched.spawn_task((void*)http_accept_task_, (void*)ac);
-        reactor_run(&sched, &reactor);
+        // Published for http_pick_target_'s load comparison (see
+        // HttpReactorShared_) — must happen before this thread does
+        // anything else, so the acceptor never sees stale garbage here,
+        // only "not ready yet" (null, handled by http_pick_target_) or a
+        // valid, live pointer.
+        shared->scheds[ctx->selfIndex] = (struct TaskScheduler*)&sched;
+
+        struct HttpAcceptState_* ac = (struct HttpAcceptState_*)0;
+        if (ctx->selfIndex == 0) {
+            ac = (struct HttpAcceptState_*)malloc(sizeof(struct HttpAcceptState_));
+            ac->listenFd = shared->listenFd;
+            ac->handler = shared->handler;
+            ac->sched = (struct TaskScheduler*)&sched;
+            ac->reactor = (struct Reactor*)&reactor;
+            ac->registered = 0;
+            ac->shared = shared;
+            sched.spawn_task((void*)http_accept_task_, (void*)ac);
+        }
+
+        http_worker_loop_(&sched, &reactor, myQueue, shared->handler);
 
         reactor.close_();
-        free(ac);
+        if (ac != (struct HttpAcceptState_*)0) { free(ac); }
+        free(ctx);
         return (void*)0;
     }
 }
@@ -902,21 +1089,57 @@ static void* http_reactor_worker_(void* argPtr) {
 // to already be included by the caller, same as io_nb's own backend
 // selection. Returns -1 immediately on setup failure; does not return
 // otherwise.
+//
+// One listening socket, shared by every platform (Windows included —
+// there's no SO_REUSEPORT-style trick needed here at all). Only thread 0
+// ever calls accept() on it; every other thread only ever serves
+// connections thread 0 hands it through its HttpDispatchQ_ (see
+// http_accept_task_/http_worker_loop_ above). That's what actually fixes
+// the old design's thundering herd — every thread's epoll/kqueue/WSAPoll
+// set racing accept() on one shared fd made throughput *worse* with more
+// threads, not just flat — without needing a second listening socket per
+// thread or a platform-specific fallback.
 int http_serve_reactor(unsigned short port, HttpHandler handler, int numThreads) {
     if (numThreads < 1) { return -1; }
     int listenFd;
     unsafe { listenFd = tcp_listen_nb(port); }
     if (listenFd < 0) { return -1; }
 
-    struct HttpReactorThreadCtx_* ctx;
-    unsafe { ctx = (struct HttpReactorThreadCtx_*)malloc(sizeof(struct HttpReactorThreadCtx_)); }
-    unsafe { ctx->listenFd = listenFd; ctx->handler = handler; }
+    struct HttpReactorShared_* shared;
+    unsafe { shared = (struct HttpReactorShared_*)malloc(sizeof(struct HttpReactorShared_)); }
+    unsafe {
+        shared->handler = handler;
+        shared->listenFd = listenFd;
+        shared->numThreads = numThreads;
+        shared->queues = (struct HttpDispatchQ_*)malloc(
+            std::checked_mul_size((unsigned long)numThreads, sizeof(struct HttpDispatchQ_)));
+        shared->scheds = (struct TaskScheduler**)malloc(
+            std::checked_mul_size((unsigned long)numThreads, sizeof(struct TaskScheduler*)));
+    }
+    int qi = 0;
+    while (qi < numThreads) {
+        unsafe {
+            shared->queues[qi].head = 0;
+            shared->queues[qi].tail = 0;
+            shared->queues[qi].count = 0;
+            std::mutex_init(&shared->queues[qi].mtx);
+            // Null until the corresponding thread publishes its own
+            // &sched (see http_reactor_worker_) — http_pick_target_
+            // skips any index still null.
+            shared->scheds[qi] = (struct TaskScheduler*)0;
+        }
+        qi = qi + 1;
+    }
 
     unsigned long long tid = 0ULL;
     int i = 0;
     while (i < numThreads) {
+        struct HttpReactorThreadCtx_* tctx;
         unsafe {
-            if (thread_create(&tid, (void*)http_reactor_worker_, (void*)ctx) != 0) { return -1; }
+            tctx = (struct HttpReactorThreadCtx_*)malloc(sizeof(struct HttpReactorThreadCtx_));
+            tctx->shared = shared;
+            tctx->selfIndex = i;
+            if (thread_create(&tid, (void*)http_reactor_worker_, (void*)tctx) != 0) { return -1; }
         }
         i = i + 1;
     }

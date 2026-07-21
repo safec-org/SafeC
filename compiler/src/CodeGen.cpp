@@ -30,25 +30,50 @@ CodeGen::CodeGen(llvm::LLVMContext &ctx, const std::string &moduleName,
       diag_(diag),
       debugLevel_(dbgLevel)
 {
-    if (!targetTriple.empty()) {
-        llvm::Triple triple(targetTriple);
-        std::string err;
-        const llvm::Target *target = llvm::TargetRegistry::lookupTarget(triple, err);
-        if (!target) {
+    // Picks the triple to actually build a TargetMachine/DataLayout for:
+    // the caller-supplied one if given, otherwise the host's own default
+    // triple. Without this else-branch call to setDataLayout(), mod_ kept
+    // LLVM's generic fallback DataLayout, which gives 64-bit fields only
+    // 4-byte ABI alignment instead of every real target's 8 -- silently
+    // wrong for any struct whose layout depends on that (getTypeAllocSize,
+    // used by sizeof/alignof/new/array-of-struct sizing throughout this
+    // file, all read mod_->getDataLayout()). Confirmed as a real bug, not
+    // just a theoretical one: 'struct { int fds[256]; int head, tail,
+    // count; unsigned long long mtx; }' compiled the normal way (no
+    // --target flag, i.e. every invocation before this fix) reported
+    // sizeof() == 1044, but the actual struct/array layout LLVM generates
+    // elsewhere in this same module used the correctly-padded 1048 (needed
+    // so an array element's trailing 'mtx' field stays 8-byte aligned) --
+    // so 'malloc(sizeof(T) * n)' for such a struct under-allocates by 4
+    // bytes per element, and the last element's trailing field silently
+    // reads/writes past the buffer. Reproduced as a genuine heap-corruption
+    // crash. Not target-specific — every target needs *some* real
+    // DataLayout here, the host's own is simply the correct default when
+    // the caller didn't ask for cross-compilation.
+    std::string effectiveTriple =
+        targetTriple.empty() ? llvm::sys::getDefaultTargetTriple() : targetTriple;
+    llvm::Triple triple(effectiveTriple);
+    std::string err;
+    const llvm::Target *target = llvm::TargetRegistry::lookupTarget(triple, err);
+    if (!target) {
+        if (!targetTriple.empty()) {
             diag_.error({}, "unknown target triple '" + targetTriple + "': " + err);
-        } else {
-            llvm::TargetOptions opts;
-            auto *tm = target->createTargetMachine(
-                triple, /*CPU=*/"generic", /*Features=*/"", opts, llvm::Reloc::PIC_);
-            mod_->setTargetTriple(triple);
-            mod_->setDataLayout(tm->createDataLayout());
-            targetMachine_.reset(tm);
         }
-        targetIsWindows_ = triple.isOSWindows();
+        // Host triple failing to look up would mean this LLVM build wasn't
+        // even configured with its own host backend -- nothing sensible to
+        // do but fall back to the generic DataLayout, same as before this
+        // fix, rather than hard-erroring every plain (no --target) build.
     } else {
-        targetIsWindows_ =
-            llvm::Triple(llvm::sys::getDefaultTargetTriple()).isOSWindows();
+        llvm::TargetOptions opts;
+        auto *tm = target->createTargetMachine(
+            triple, /*CPU=*/"generic", /*Features=*/"", opts, llvm::Reloc::PIC_);
+        if (!targetTriple.empty()) {
+            mod_->setTargetTriple(triple);
+        }
+        mod_->setDataLayout(tm->createDataLayout());
+        targetMachine_.reset(tm);
     }
+    targetIsWindows_ = triple.isOSWindows();
     if (debugLevel_ != DebugLevel::None) {
         dib_ = std::make_unique<llvm::DIBuilder>(*mod_);
         llvm::SmallString<256> absPath(moduleName);
