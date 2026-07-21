@@ -99,4 +99,35 @@ int webgpu_sgd_update_f32(void* bufW, void* bufGrad, float lr, unsigned long n);
 // tier) is available.
 int webgpu_persistent_available();
 
+// ── fp16 tier ────────────────────────────────────────────────────────────
+// Real f16 arithmetic in WGSL, not just storage: WGSL's 'enable f16;'
+// extension (part of the WebGPU spec, shipping in real browser/native
+// implementations) adds a genuine 16-bit float scalar/array type with
+// native arithmetic -- webgpu_matmul_f16_persistent's kernel stores in
+// f16 and accumulates in f32 (same mixed-precision-GEMM shape as
+// gpu_mps_kernels.metal's matmul_kernel_f16 and gpu_cuda.sc's
+// cuda_matmul_f16_persistent), converting with WGSL's f32()/f16() cast
+// functions instead of MSL's implicit conversions or PTX's cvt
+// instructions -- three different surfaces for the same technique.
+//
+// No bf16 tier here: unlike f16, bf16 has no equivalent WGSL extension
+// in the current WebGPU spec (nothing like Metal's 'bfloat' type or
+// CUDA's PTX '.bf16' storage class exists for WGSL as of this writing) --
+// this isn't a scope decision, there's genuinely nothing to bind to.
+//
+// Deliberately smaller than gpu_mps.h's fp16 tier (upload/release,
+// matmul, in-place SGD only, not the full backward-pass op set) for the
+// same reason gpu_cuda.h's fp16/bf16 tier is: this file's UNVERIFIED
+// status (no wgpu-native/Dawn library in this sandbox) means there's no
+// way to catch a WGSL syntax error here the way the MPS tier's kernels
+// were actually compiled and run.
+
+void* webgpu_upload_f16_persistent(const float* data, unsigned long n);
+// Releases through webgpu_release_persistent(buf) above.
+
+int webgpu_matmul_f16_persistent(void* bufA, void* bufB, unsigned short* out,
+                                  unsigned long M, unsigned long K, unsigned long N);
+
+int webgpu_sgd_update_f16(void* bufW, void* bufGrad, float lr, unsigned long n);
+
 } // namespace std

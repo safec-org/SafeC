@@ -17,6 +17,7 @@
 // one. wgpuBufferMapAsync's readback is handled the same way.
 #pragma once
 #include <std/ml/gpu_webgpu.h>
+#include <std/ml/float16.h>
 #include <std/mem.h>
 
 namespace std {
@@ -741,6 +742,216 @@ int webgpu_sgd_update_f32(void* bufW, void* bufGrad, float lr, unsigned long n) 
         void* encoder = wgpuDeviceCreateCommandEncoder(__wgpu_persistent_device_, (const void*)0);
         void* pass = wgpuCommandEncoderBeginComputePass(encoder, (const void*)0);
         wgpuComputePassEncoderSetPipeline(pass, __wgpu_sgd_pipeline_);
+        wgpuComputePassEncoderSetBindGroup(pass, 0U, bindGroup, 0U, (const unsigned int*)0);
+        wgpuComputePassEncoderDispatchWorkgroups(pass, (unsigned int)((n + 63UL) / 64UL), 1U, 1U);
+        wgpuComputePassEncoderEnd(pass);
+        void* cmdBuf = wgpuCommandEncoderFinish(encoder, (const void*)0);
+        wgpuQueueSubmit(__wgpu_persistent_queue_, 1U, (const void*)&cmdBuf);
+        wgpuBufferRelease(paramsBuf);
+        return 1;
+    }
+}
+
+// ── fp16 tier (see gpu_webgpu.h) ─────────────────────────────────────────────
+extern void* malloc(unsigned long size);
+extern void  free(void* ptr);
+
+void* webgpu_upload_f16_persistent(const float* data, unsigned long n) {
+    unsafe {
+        unsigned short* tmp = (unsigned short*)malloc(n * 2UL);
+        if (tmp == (void*)0) return (void*)0;
+        f32_to_fp16_bulk(data, tmp, n);
+        void* buf = webgpu_upload_persistent((const float*)tmp, n * 2UL);
+        free((void*)tmp);
+        return buf;
+    }
+}
+
+static void* __wgpu_matmul_f16_pipeline = (void*)0;
+static void* __wgpu_sgd_f16_pipeline = (void*)0;
+
+int webgpu_matmul_f16_persistent(void* bufA, void* bufB, unsigned short* out,
+                                  unsigned long M, unsigned long K, unsigned long N) {
+    if (!__wgpu_ensure_device()) return 0;
+    unsafe {
+        if (__wgpu_matmul_f16_pipeline == (void*)0) {
+            // Same accumulate-in-f32 shape as webgpu_matmul_f32_
+            // persistent's kernel and gpu_mps_kernels.metal's
+            // matmul_kernel_f16 -- 'enable f16;' is WGSL's real fp16
+            // extension, not a storage-only workaround.
+            const char* wgslSrc =
+                "enable f16;\n"
+                "struct Dims { M: u32, K: u32, N: u32 };\n"
+                "@group(0) @binding(0) var<storage, read> a: array<f16>;\n"
+                "@group(0) @binding(1) var<storage, read> b: array<f16>;\n"
+                "@group(0) @binding(2) var<storage, read> d: Dims;\n"
+                "@group(0) @binding(3) var<storage, read_write> out: array<f16>;\n"
+                "@compute @workgroup_size(8, 8)\n"
+                "fn main(@builtin(global_invocation_id) gid: vec3<u32>) {\n"
+                "    if (gid.x >= d.N || gid.y >= d.M) { return; }\n"
+                "    var acc: f32 = 0.0;\n"
+                "    for (var p: u32 = 0u; p < d.K; p = p + 1u) {\n"
+                "        acc = acc + f32(a[gid.y * d.K + p]) * f32(b[p * d.N + gid.x]);\n"
+                "    }\n"
+                "    out[gid.y * d.N + gid.x] = f16(acc);\n"
+                "}\n";
+            struct WGPUShaderModuleWGSLDescriptor wgslDesc;
+            wgslDesc.chainSType = (int)WGPU_SHADER_MODULE_WGSL_DESCRIPTOR_STYPE; wgslDesc.chainNext = (const void*)0;
+            wgslDesc.code = wgslSrc;
+            struct WGPUShaderModuleDescriptor smDesc;
+            smDesc.nextInChain = (const void*)&wgslDesc; smDesc.label = "safec_matmul_f16";
+            void* shaderModule = wgpuDeviceCreateShaderModule(__wgpu_persistent_device_, &smDesc);
+            if (shaderModule == (void*)0) return 0;
+
+            struct WGPUComputePipelineDescriptor cpDesc;
+            cpDesc.nextInChain = (const void*)0; cpDesc.label = "safec_matmul_f16_pipeline"; cpDesc.layout = (void*)0;
+            cpDesc.compute.nextInChain = (const void*)0; cpDesc.compute.module = shaderModule;
+            cpDesc.compute.entryPoint = "main"; cpDesc.compute.constantCount = 0U; cpDesc.compute.constants = (const void*)0;
+            void* pipeline = wgpuDeviceCreateComputePipeline(__wgpu_persistent_device_, &cpDesc);
+            if (pipeline == (void*)0) return 0;
+            __wgpu_matmul_f16_pipeline = pipeline;
+        }
+
+        char dims[12];
+        unsigned int Mu = (unsigned int)M; unsigned int Ku = (unsigned int)K; unsigned int Nu = (unsigned int)N;
+        memcpy((void*)dims, (const void*)&Mu, 4UL);
+        memcpy((void*)(dims + 4), (const void*)&Ku, 4UL);
+        memcpy((void*)(dims + 8), (const void*)&Nu, 4UL);
+        struct WGPUBufferDescriptor dimsBd;
+        dimsBd.nextInChain = (const void*)0; dimsBd.label = "safec_matmul_f16_dims";
+        dimsBd.usage = WGPU_BUFFER_USAGE_STORAGE | WGPU_BUFFER_USAGE_COPY_DST;
+        dimsBd.size = 12UL; dimsBd.mappedAtCreation = 0;
+        void* dimsBuf = wgpuDeviceCreateBuffer(__wgpu_persistent_device_, &dimsBd);
+        wgpuQueueWriteBuffer(__wgpu_persistent_queue_, dimsBuf, 0UL, (const void*)dims, 12UL);
+
+        unsigned long outputSize = M * N * 2UL;
+        struct WGPUBufferDescriptor outBd;
+        outBd.nextInChain = (const void*)0; outBd.label = "safec_matmul_f16_out";
+        outBd.usage = WGPU_BUFFER_USAGE_STORAGE | WGPU_BUFFER_USAGE_COPY_SRC;
+        outBd.size = outputSize; outBd.mappedAtCreation = 0;
+        void* outBuf = wgpuDeviceCreateBuffer(__wgpu_persistent_device_, &outBd);
+
+        struct WGPUBufferDescriptor stagingBd;
+        stagingBd.nextInChain = (const void*)0; stagingBd.label = "safec_matmul_f16_staging";
+        stagingBd.usage = WGPU_BUFFER_USAGE_MAP_READ | WGPU_BUFFER_USAGE_COPY_DST;
+        stagingBd.size = outputSize; stagingBd.mappedAtCreation = 0;
+        void* stagingBuf = wgpuDeviceCreateBuffer(__wgpu_persistent_device_, &stagingBd);
+
+        struct WGPUBindGroupEntry entries[4];
+        entries[0].nextInChain = (const void*)0; entries[0].binding = 0U; entries[0].buffer = bufA;
+        entries[0].offset = 0UL; entries[0].size = M * K * 2UL; entries[0].sampler = (void*)0; entries[0].textureView = (void*)0;
+        entries[1].nextInChain = (const void*)0; entries[1].binding = 1U; entries[1].buffer = bufB;
+        entries[1].offset = 0UL; entries[1].size = K * N * 2UL; entries[1].sampler = (void*)0; entries[1].textureView = (void*)0;
+        entries[2].nextInChain = (const void*)0; entries[2].binding = 2U; entries[2].buffer = dimsBuf;
+        entries[2].offset = 0UL; entries[2].size = 12UL; entries[2].sampler = (void*)0; entries[2].textureView = (void*)0;
+        entries[3].nextInChain = (const void*)0; entries[3].binding = 3U; entries[3].buffer = outBuf;
+        entries[3].offset = 0UL; entries[3].size = outputSize; entries[3].sampler = (void*)0; entries[3].textureView = (void*)0;
+
+        void* bgLayout = wgpuComputePipelineGetBindGroupLayout(__wgpu_matmul_f16_pipeline, 0U);
+        struct WGPUBindGroupDescriptor bgDesc;
+        bgDesc.nextInChain = (const void*)0; bgDesc.label = "safec_matmul_f16_bg"; bgDesc.layout = bgLayout;
+        bgDesc.entryCount = 4U; bgDesc.entries = (const struct WGPUBindGroupEntry*)entries;
+        void* bindGroup = wgpuDeviceCreateBindGroup(__wgpu_persistent_device_, &bgDesc);
+
+        void* encoder = wgpuDeviceCreateCommandEncoder(__wgpu_persistent_device_, (const void*)0);
+        void* pass = wgpuCommandEncoderBeginComputePass(encoder, (const void*)0);
+        wgpuComputePassEncoderSetPipeline(pass, __wgpu_matmul_f16_pipeline);
+        wgpuComputePassEncoderSetBindGroup(pass, 0U, bindGroup, 0U, (const unsigned int*)0);
+        unsigned int groupsX = (unsigned int)((N + 7UL) / 8UL);
+        unsigned int groupsY = (unsigned int)((M + 7UL) / 8UL);
+        wgpuComputePassEncoderDispatchWorkgroups(pass, groupsX, groupsY, 1U);
+        wgpuComputePassEncoderEnd(pass);
+        wgpuCommandEncoderCopyBufferToBuffer(encoder, outBuf, 0UL, stagingBuf, 0UL, outputSize);
+        void* cmdBuf = wgpuCommandEncoderFinish(encoder, (const void*)0);
+        wgpuQueueSubmit(__wgpu_persistent_queue_, 1U, (const void*)&cmdBuf);
+
+        __wgpu_map_done_ = 0;
+        wgpuBufferMapAsync(stagingBuf, (unsigned int)WGPU_MAP_MODE_READ, 0UL, outputSize, __wgpu_on_map, (void*)0);
+        int iter = 0;
+        while (__wgpu_map_done_ == 0 && iter < WGPU_POLL_ITERATION_CAP) {
+            wgpuInstanceProcessEvents(__wgpu_persistent_instance_);
+            iter = iter + 1;
+        }
+        int ok = 0;
+        if (__wgpu_map_done_ != 0) {
+            const void* mapped = wgpuBufferGetConstMappedRange(stagingBuf, 0UL, outputSize);
+            if (mapped != (const void*)0) {
+                memcpy((void*)out, mapped, outputSize);
+                wgpuBufferUnmap(stagingBuf);
+                ok = 1;
+            }
+        }
+        wgpuBufferRelease(dimsBuf);
+        wgpuBufferRelease(outBuf);
+        wgpuBufferRelease(stagingBuf);
+        return ok;
+    }
+}
+
+// bufW[i] -= lr*bufGrad[i], f16 storage, in place -- promote/demote via
+// WGSL's f32()/f16() casts, same shape as webgpu_sgd_update_f32 (no
+// f32 twin of this exists; this file's non-persistent tier never had an
+// SGD op at all, that concept only arrived with the persistent tier).
+int webgpu_sgd_update_f16(void* bufW, void* bufGrad, float lr, unsigned long n) {
+    if (!__wgpu_ensure_device()) return 0;
+    unsafe {
+        if (__wgpu_sgd_f16_pipeline == (void*)0) {
+            const char* wgslSrc =
+                "enable f16;\n"
+                "struct Params { lr: f32, n: u32 };\n"
+                "@group(0) @binding(0) var<storage, read_write> w: array<f16>;\n"
+                "@group(0) @binding(1) var<storage, read> grad: array<f16>;\n"
+                "@group(0) @binding(2) var<storage, read> p: Params;\n"
+                "@compute @workgroup_size(64)\n"
+                "fn main(@builtin(global_invocation_id) gid: vec3<u32>) {\n"
+                "    if (gid.x >= p.n) { return; }\n"
+                "    w[gid.x] = f16(f32(w[gid.x]) - p.lr * f32(grad[gid.x]));\n"
+                "}\n";
+            struct WGPUShaderModuleWGSLDescriptor wgslDesc;
+            wgslDesc.chainSType = (int)WGPU_SHADER_MODULE_WGSL_DESCRIPTOR_STYPE; wgslDesc.chainNext = (const void*)0;
+            wgslDesc.code = wgslSrc;
+            struct WGPUShaderModuleDescriptor smDesc;
+            smDesc.nextInChain = (const void*)&wgslDesc; smDesc.label = "safec_sgd_f16";
+            void* shaderModule = wgpuDeviceCreateShaderModule(__wgpu_persistent_device_, &smDesc);
+            if (shaderModule == (void*)0) return 0;
+
+            struct WGPUComputePipelineDescriptor cpDesc;
+            cpDesc.nextInChain = (const void*)0; cpDesc.label = "safec_sgd_f16_pipeline"; cpDesc.layout = (void*)0;
+            cpDesc.compute.nextInChain = (const void*)0; cpDesc.compute.module = shaderModule;
+            cpDesc.compute.entryPoint = "main"; cpDesc.compute.constantCount = 0U; cpDesc.compute.constants = (const void*)0;
+            void* pipeline = wgpuDeviceCreateComputePipeline(__wgpu_persistent_device_, &cpDesc);
+            if (pipeline == (void*)0) return 0;
+            __wgpu_sgd_f16_pipeline = pipeline;
+        }
+
+        char params[8];
+        memcpy((void*)params, (const void*)&lr, 4UL);
+        unsigned int nParam = (unsigned int)n;
+        memcpy((void*)(params + 4), (const void*)&nParam, 4UL);
+        struct WGPUBufferDescriptor pBd;
+        pBd.nextInChain = (const void*)0; pBd.label = "safec_sgd_f16_params";
+        pBd.usage = WGPU_BUFFER_USAGE_STORAGE | WGPU_BUFFER_USAGE_COPY_DST;
+        pBd.size = 8UL; pBd.mappedAtCreation = 0;
+        void* paramsBuf = wgpuDeviceCreateBuffer(__wgpu_persistent_device_, &pBd);
+        wgpuQueueWriteBuffer(__wgpu_persistent_queue_, paramsBuf, 0UL, (const void*)params, 8UL);
+
+        struct WGPUBindGroupEntry entries[3];
+        entries[0].nextInChain = (const void*)0; entries[0].binding = 0U; entries[0].buffer = bufW;
+        entries[0].offset = 0UL; entries[0].size = n * 2UL; entries[0].sampler = (void*)0; entries[0].textureView = (void*)0;
+        entries[1].nextInChain = (const void*)0; entries[1].binding = 1U; entries[1].buffer = bufGrad;
+        entries[1].offset = 0UL; entries[1].size = n * 2UL; entries[1].sampler = (void*)0; entries[1].textureView = (void*)0;
+        entries[2].nextInChain = (const void*)0; entries[2].binding = 2U; entries[2].buffer = paramsBuf;
+        entries[2].offset = 0UL; entries[2].size = 8UL; entries[2].sampler = (void*)0; entries[2].textureView = (void*)0;
+
+        void* bgLayout = wgpuComputePipelineGetBindGroupLayout(__wgpu_sgd_f16_pipeline, 0U);
+        struct WGPUBindGroupDescriptor bgDesc;
+        bgDesc.nextInChain = (const void*)0; bgDesc.label = "safec_sgd_f16_bg"; bgDesc.layout = bgLayout;
+        bgDesc.entryCount = 3U; bgDesc.entries = (const struct WGPUBindGroupEntry*)entries;
+        void* bindGroup = wgpuDeviceCreateBindGroup(__wgpu_persistent_device_, &bgDesc);
+
+        void* encoder = wgpuDeviceCreateCommandEncoder(__wgpu_persistent_device_, (const void*)0);
+        void* pass = wgpuCommandEncoderBeginComputePass(encoder, (const void*)0);
+        wgpuComputePassEncoderSetPipeline(pass, __wgpu_sgd_f16_pipeline);
         wgpuComputePassEncoderSetBindGroup(pass, 0U, bindGroup, 0U, (const unsigned int*)0);
         wgpuComputePassEncoderDispatchWorkgroups(pass, (unsigned int)((n + 63UL) / 64UL), 1U, 1U);
         wgpuComputePassEncoderEnd(pass);

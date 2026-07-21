@@ -324,4 +324,125 @@ int mps_matmul_abt_f32_persistent(void* bufDC, void* bufB, float* out,
 // sgd_update_kernel.
 int mps_sgd_update_f32_chained(void* bufW, void* bufGrad, float lr, unsigned long n);
 
+// ── fp16 / bf16 tier ─────────────────────────────────────────────────────
+// Real half/bfloat compute on the GPU, not just storage: gpu_mps_kernels.metal's
+// matmul_kernel_f16/matmul_kernel_bf16/relu_kernel_f16/relu_kernel_bf16
+// hold/multiply in the reduced-precision type and accumulate in float
+// (standard mixed-precision-GEMM practice) — verified to compile through
+// this machine's real Metal toolchain (both 'half' and 'bfloat' are
+// natively supported MSL types on this SDK). The functions below take
+// and return ordinary 'float*' host arrays, same shape as mps_matmul_f32/
+// mps_relu_f32, so a caller doesn't need to touch fp16/bf16 bit patterns
+// directly: conversion (see float16.h's f32_to_fp16_bulk/f32_to_bf16_bulk
+// and their inverses) happens on the CPU side of the upload/readback,
+// invisibly, inside these functions.
+//
+// This is the naive (TILE_SIZE=16, threadgroup-memory-tiled) kernel tier
+// only — the smma/multi-simdgroup tiers (see mps_matmul_f32's comment)
+// use simdgroup_float8x8, a float-only type on this Metal SDK; porting
+// those to half/bfloat accumulation is future work, not attempted here.
+// Every call here does its own upload/dispatch/readback (no persistent-
+// buffer or batching integration) — the simplest, most directly testable
+// shape, matching mps_matmul_f32's non-batched fallback path.
+//
+// Expected precision loss is real and by design: fp16's ~3-4 significant
+// decimal digits (10 mantissa bits) and bf16's ~2-3 (7 mantissa bits) are
+// both coarser than float32's ~7 — see float16.h's precision notes.
+// Returns 1 on success, 0 on failure (no Metal device, pipeline
+// compilation failure, or allocation failure) — 'out' is left untouched
+// on failure.
+int mps_matmul_f16(const float* a, const float* b, float* out,
+                    unsigned long M, unsigned long K, unsigned long N);
+int mps_matmul_bf16(const float* a, const float* b, float* out,
+                     unsigned long M, unsigned long K, unsigned long N);
+int mps_relu_f16(const float* a, float* out, unsigned long n);
+int mps_relu_bf16(const float* a, float* out, unsigned long n);
+
+// ── fp16 / bf16 persistent-buffer / batched tier ────────────────────────
+// Mirrors mps_upload_persistent/mps_matmul_f32_persistent/mps_relu_f32_
+// chained/mps_sub_f32_chained/mps_scale_f32_chained/mps_matmul_atb_f32_
+// chained_ab/mps_matmul_abt_f32_persistent/mps_relu_backward_f32_chained_
+// ab/mps_sgd_update_f32_chained's whole family, in fp16/bf16 — enough ops
+// to run a full GPU-resident forward+backward+SGD step (see
+// gpu_mps_kernels.metal's matching kernel-tier comment) with weights that
+// never leave the GPU as float32 at all, the same shape as the float32
+// GPU-resident training rewrite this session's MPS work already
+// delivered, just in half the bytes per weight/activation.
+//
+// Key difference from mps_matmul_f16/mps_relu_f16 above: those take/
+// return 'float*' and do a full convert-upload-dispatch-convert round
+// trip on every call, meant for one-shot use. Everything below instead
+// passes 'unsigned short*' scratch buffers (raw fp16/bf16 bits) for any
+// CPU-side throwaway output, exactly mirroring how mps_matmul_f32_
+// persistent's chained scratch arrays (scratchZ1/scratchH/etc. in
+// train_gpu.sc) are never meaningfully read except the one value that
+// matters -- so intermediate activations/gradients here never get
+// converted back to float32 at all, only read once as raw bits into a
+// scratch array mps_batch_end() overwrites into, matching the float32
+// version's "throwaway CPU scratch, GPU buffer is what actually chains"
+// design. A caller converts host-side f32 data to fp16/bf16 bits with
+// float16.h's f32_to_fp16_bulk/f32_to_bf16_bulk before calling
+// mps_upload_f16_persistent/mps_upload_bf16_persistent, and converts
+// back with fp16_to_f32_bulk/bf16_to_f32_bulk only for values it
+// actually needs on the CPU (e.g. a loss scalar for monitoring).
+//
+// Same naive (TILE_SIZE=16 tiled) kernel tier as mps_matmul_f16/
+// mps_matmul_bf16 above for every matmul-shaped op here -- no smma/
+// multi-simdgroup fast path (see that comment).
+
+void* mps_upload_f16_persistent(const float* data, unsigned long n);
+void* mps_upload_bf16_persistent(const float* data, unsigned long n);
+// Both release through mps_release_persistent(buf, n * 2UL) above --
+// storage is 2 bytes/element regardless of fp16 vs bf16, and
+// mps_release_persistent only ever needed the byte count, not the dtype.
+
+// out = bufA[M,K] . bufB[K,N] -- both operands already device buffers
+// (e.g. from mps_upload_f16_persistent). Must be called within an open
+// batch (mps_batch_begin()); 'out' is throwaway scratch (raw fp16/bf16
+// bits, not valid until mps_batch_end()) -- read the real result via
+// mps_batch_last_output_buffer() and chain it into the next op, same
+// pattern as mps_matmul_f32_persistent.
+int mps_matmul_f16_persistent(void* bufA, void* bufB, unsigned short* out,
+                               unsigned long M, unsigned long K, unsigned long N);
+int mps_matmul_bf16_persistent(void* bufA, void* bufB, unsigned short* out,
+                                unsigned long M, unsigned long K, unsigned long N);
+
+int mps_relu_f16_chained(void* bufA, unsigned short* out, unsigned long n);
+int mps_relu_bf16_chained(void* bufA, unsigned short* out, unsigned long n);
+
+// out[i] = bufA[i] - bHalf[i]/bBf[i] -- 'bHalf'/'bBf' is a plain CPU
+// array of raw fp16/bf16 bits (e.g. a training target, pre-converted
+// once with f32_to_fp16_bulk/f32_to_bf16_bulk before the loop), uploaded
+// fresh each call, same shape as mps_sub_f32_chained.
+int mps_sub_f16_chained(void* bufA, const unsigned short* bHalf, unsigned short* out, unsigned long n);
+int mps_sub_bf16_chained(void* bufA, const unsigned short* bBf, unsigned short* out, unsigned long n);
+
+// out[i] = buf[i] * k -- 'k' is a plain float scalar (see gpu_mps_
+// kernels.metal's scale_kernel_f16/bf16 comment on why the scalar itself
+// stays float-precision).
+int mps_scale_f16_chained(void* buf, float k, unsigned short* out, unsigned long n);
+int mps_scale_bf16_chained(void* buf, float k, unsigned short* out, unsigned long n);
+
+// dB[K,N] = A^T[K,M] . dC[M,N], A stored [M,K] -- both operands already
+// device buffers, same shape as mps_matmul_atb_f32_chained_ab.
+int mps_matmul_atb_f16_chained_ab(void* bufA, void* bufDC, unsigned short* out,
+                                   unsigned long M, unsigned long K, unsigned long N);
+int mps_matmul_atb_bf16_chained_ab(void* bufA, void* bufDC, unsigned short* out,
+                                    unsigned long M, unsigned long K, unsigned long N);
+
+// dA[M,K] = dC[M,N] . B^T[N,K], B stored [K,N] -- same shape as
+// mps_matmul_abt_f32_persistent.
+int mps_matmul_abt_f16_persistent(void* bufDC, void* bufB, unsigned short* out,
+                                   unsigned long M, unsigned long N, unsigned long K);
+int mps_matmul_abt_bf16_persistent(void* bufDC, void* bufB, unsigned short* out,
+                                    unsigned long M, unsigned long N, unsigned long K);
+
+int mps_relu_backward_f16_chained_ab(void* bufA, void* bufSelfGrad, unsigned short* out, unsigned long n);
+int mps_relu_backward_bf16_chained_ab(void* bufA, void* bufSelfGrad, unsigned short* out, unsigned long n);
+
+// In-place SGD step against a persistent fp16/bf16 device buffer --
+// same shape as mps_sgd_update_f32_chained, weights never leave the GPU.
+int mps_sgd_update_f16_chained(void* bufW, void* bufGrad, float lr, unsigned long n);
+int mps_sgd_update_bf16_chained(void* bufW, void* bufGrad, float lr, unsigned long n);
+
 } // namespace std

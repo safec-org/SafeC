@@ -12,6 +12,7 @@
 // this needs real hardware verification before being trusted.
 #pragma once
 #include <std/ml/gpu_cuda.h>
+#include <std/ml/float16.h>
 #include <std/mem.h>
 
 namespace std {
@@ -1121,6 +1122,419 @@ int cuda_sgd_update_f32(void* devW, void* devGrad, float lr, unsigned long n) {
         unsigned int blockSize = 256U;
         unsigned int gridSize = (unsigned int)((n + (unsigned long)blockSize - 1UL) / (unsigned long)blockSize);
         int launchOk = cuLaunchKernel(__cuda_sgd_kernel_, gridSize, 1U, 1U, blockSize, 1U, 1U,
+                                       0U, (void*)0, params, (void**)0) == CUDA_SUCCESS;
+        cuCtxSynchronize();
+        return launchOk ? 1 : 0;
+    }
+}
+
+extern void* malloc(unsigned long size);
+extern void  free(void* ptr);
+
+// ── fp16 / bf16 tier (see gpu_cuda.h) ────────────────────────────────────────
+void* cuda_upload_f16_persistent(const float* data, unsigned long n) {
+    unsafe {
+        unsigned short* tmp = (unsigned short*)malloc(n * 2UL);
+        if (tmp == (void*)0) return (void*)0;
+        f32_to_fp16_bulk(data, tmp, n);
+        void* buf = cuda_upload_persistent((const float*)tmp, n * 2UL);
+        free((void*)tmp);
+        return buf;
+    }
+}
+
+void* cuda_upload_bf16_persistent(const float* data, unsigned long n) {
+    unsafe {
+        unsigned short* tmp = (unsigned short*)malloc(n * 2UL);
+        if (tmp == (void*)0) return (void*)0;
+        f32_to_bf16_bulk(data, tmp, n);
+        void* buf = cuda_upload_persistent((const float*)tmp, n * 2UL);
+        free((void*)tmp);
+        return buf;
+    }
+}
+
+static void* __cuda_matmul_f16_kernel_ = (void*)0;
+static void* __cuda_matmul_bf16_kernel_ = (void*)0;
+static void* __cuda_sgd_f16_kernel_ = (void*)0;
+static void* __cuda_sgd_bf16_kernel_ = (void*)0;
+
+// out = devA[M,K] . devB[K,N] -- same naive one-thread-per-output-element
+// shape as cuda_matmul_f32_persistent, but 'devA'/'devB' hold fp16 bits
+// and the kernel promotes each loaded operand to f32 with 'cvt.f32.f16'
+// before the fma, converting the f32 accumulator back with
+// 'cvt.rn.f16.f32' only once, at the final store -- the same storage-
+// half/compute-float split gpu_mps_kernels.metal's matmul_kernel_f16
+// uses. Targets sm_60 (Pascal+): PTX's f16 storage/cvt instructions need
+// real f16 hardware datapaths, unlike this file's f32 kernels' sm_50.
+int cuda_matmul_f16_persistent(void* devA, void* devB, unsigned short* out,
+                                unsigned long M, unsigned long K, unsigned long N) {
+    if (!__cuda_ensure_context()) return 0;
+    const char* ptxSrc =
+        ".version 7.0\n"
+        ".target sm_60\n"
+        ".address_size 64\n"
+        ".visible .entry matmul_kernel_f16(\n"
+        "    .param .u64 matmul_kernel_f16_param_0,\n"
+        "    .param .u64 matmul_kernel_f16_param_1,\n"
+        "    .param .u64 matmul_kernel_f16_param_2,\n"
+        "    .param .u32 matmul_kernel_f16_param_3,\n"
+        "    .param .u32 matmul_kernel_f16_param_4,\n"
+        "    .param .u32 matmul_kernel_f16_param_5\n"
+        ") {\n"
+        "    .reg .pred %p<4>;\n"
+        "    .reg .f16 %h<4>;\n"
+        "    .reg .f32 %f<6>;\n"
+        "    .reg .b32 %r<20>;\n"
+        "    .reg .b64 %rd<20>;\n"
+        "    ld.param.u64 %rd1, [matmul_kernel_f16_param_0];\n"
+        "    ld.param.u64 %rd2, [matmul_kernel_f16_param_1];\n"
+        "    ld.param.u64 %rd3, [matmul_kernel_f16_param_2];\n"
+        "    ld.param.u32 %r1, [matmul_kernel_f16_param_3];\n"
+        "    ld.param.u32 %r2, [matmul_kernel_f16_param_4];\n"
+        "    ld.param.u32 %r3, [matmul_kernel_f16_param_5];\n"
+        "    mov.u32 %r4, %ctaid.x;\n"
+        "    mov.u32 %r5, %ntid.x;\n"
+        "    mov.u32 %r6, %tid.x;\n"
+        "    mad.lo.s32 %r7, %r4, %r5, %r6;\n"
+        "    mov.u32 %r8, %ctaid.y;\n"
+        "    mov.u32 %r9, %ntid.y;\n"
+        "    mov.u32 %r10, %tid.y;\n"
+        "    mad.lo.s32 %r11, %r8, %r9, %r10;\n"
+        "    setp.ge.s32 %p1, %r7, %r3;\n"
+        "    setp.ge.s32 %p2, %r11, %r1;\n"
+        "    or.pred %p3, %p1, %p2;\n"
+        "    @%p3 bra DONE;\n"
+        "    cvta.to.global.u64 %rd4, %rd1;\n"
+        "    cvta.to.global.u64 %rd5, %rd2;\n"
+        "    mov.f32 %f1, 0f00000000;\n"
+        "    mov.u32 %r12, 0;\n"
+        "LOOP:\n"
+        "    setp.ge.s32 %p1, %r12, %r2;\n"
+        "    @%p1 bra STORE;\n"
+        "    mul.lo.s32 %r13, %r11, %r2;\n"
+        "    add.s32 %r13, %r13, %r12;\n"
+        "    mul.wide.s32 %rd6, %r13, 2;\n"
+        "    add.s64 %rd7, %rd4, %rd6;\n"
+        "    ld.global.f16 %h1, [%rd7];\n"
+        "    cvt.f32.f16 %f2, %h1;\n"
+        "    mul.lo.s32 %r14, %r12, %r3;\n"
+        "    add.s32 %r14, %r14, %r7;\n"
+        "    mul.wide.s32 %rd8, %r14, 2;\n"
+        "    add.s64 %rd9, %rd5, %rd8;\n"
+        "    ld.global.f16 %h2, [%rd9];\n"
+        "    cvt.f32.f16 %f3, %h2;\n"
+        "    fma.rn.f32 %f1, %f2, %f3, %f1;\n"
+        "    add.s32 %r12, %r12, 1;\n"
+        "    bra.uni LOOP;\n"
+        "STORE:\n"
+        "    mul.lo.s32 %r15, %r11, %r3;\n"
+        "    add.s32 %r15, %r15, %r7;\n"
+        "    mul.wide.s32 %rd10, %r15, 2;\n"
+        "    cvta.to.global.u64 %rd11, %rd3;\n"
+        "    add.s64 %rd12, %rd11, %rd10;\n"
+        "    cvt.rn.f16.f32 %h3, %f1;\n"
+        "    st.global.f16 [%rd12], %h3;\n"
+        "DONE:\n"
+        "    ret;\n"
+        "}\n";
+    unsafe {
+        if (__cuda_matmul_f16_kernel_ == (void*)0) {
+            void* module = (void*)0;
+            if (cuModuleLoadData(&module, (const void*)ptxSrc) != CUDA_SUCCESS) return 0;
+            void* kernel = (void*)0;
+            if (cuModuleGetFunction(&kernel, module, "matmul_kernel_f16") != CUDA_SUCCESS) return 0;
+            __cuda_matmul_f16_kernel_ = kernel;
+        }
+
+        unsigned long long devA64 = (unsigned long long)(unsigned long)devA;
+        unsigned long long devB64 = (unsigned long long)(unsigned long)devB;
+        unsigned long bytesOut = M * N * 2UL;
+        unsigned long long devOut = 0ULL;
+        if (cuMemAlloc_v2(&devOut, bytesOut) != CUDA_SUCCESS) return 0;
+
+        unsigned int Mu = (unsigned int)M;
+        unsigned int Ku = (unsigned int)K;
+        unsigned int Nu = (unsigned int)N;
+        void* params[6];
+        params[0] = (void*)&devA64;
+        params[1] = (void*)&devB64;
+        params[2] = (void*)&devOut;
+        params[3] = (void*)&Mu;
+        params[4] = (void*)&Ku;
+        params[5] = (void*)&Nu;
+
+        unsigned int tgW = 16U;
+        unsigned int tgH = 16U;
+        unsigned int gridX = (unsigned int)((N + (unsigned long)tgW - 1UL) / (unsigned long)tgW);
+        unsigned int gridY = (unsigned int)((M + (unsigned long)tgH - 1UL) / (unsigned long)tgH);
+        int launchOk = cuLaunchKernel(__cuda_matmul_f16_kernel_, gridX, gridY, 1U, tgW, tgH, 1U,
+                                       0U, (void*)0, params, (void**)0) == CUDA_SUCCESS;
+        cuCtxSynchronize();
+        if (launchOk) cuMemcpyDtoH_v2((void*)out, devOut, bytesOut);
+        cuMemFree_v2(devOut);
+        return launchOk ? 1 : 0;
+    }
+}
+
+// Same shape as cuda_matmul_f16_persistent, storage in '.bf16' instead of
+// '.f16'. Targets sm_80 (Ampere+): bf16 is genuinely a newer NVIDIA GPU
+// feature than f16 (introduced with the Ampere architecture in 2020),
+// not an arbitrary stricter choice -- PTX's bf16 storage/cvt
+// instructions need PTX ISA 7.8, hence the '.version 7.8' bump too
+// (every other kernel in this file, including matmul_kernel_f16 above,
+// only needs 7.0).
+int cuda_matmul_bf16_persistent(void* devA, void* devB, unsigned short* out,
+                                 unsigned long M, unsigned long K, unsigned long N) {
+    if (!__cuda_ensure_context()) return 0;
+    const char* ptxSrc =
+        ".version 7.8\n"
+        ".target sm_80\n"
+        ".address_size 64\n"
+        ".visible .entry matmul_kernel_bf16(\n"
+        "    .param .u64 matmul_kernel_bf16_param_0,\n"
+        "    .param .u64 matmul_kernel_bf16_param_1,\n"
+        "    .param .u64 matmul_kernel_bf16_param_2,\n"
+        "    .param .u32 matmul_kernel_bf16_param_3,\n"
+        "    .param .u32 matmul_kernel_bf16_param_4,\n"
+        "    .param .u32 matmul_kernel_bf16_param_5\n"
+        ") {\n"
+        "    .reg .pred %p<4>;\n"
+        "    .reg .bf16 %b<4>;\n"
+        "    .reg .f32 %f<6>;\n"
+        "    .reg .b32 %r<20>;\n"
+        "    .reg .b64 %rd<20>;\n"
+        "    ld.param.u64 %rd1, [matmul_kernel_bf16_param_0];\n"
+        "    ld.param.u64 %rd2, [matmul_kernel_bf16_param_1];\n"
+        "    ld.param.u64 %rd3, [matmul_kernel_bf16_param_2];\n"
+        "    ld.param.u32 %r1, [matmul_kernel_bf16_param_3];\n"
+        "    ld.param.u32 %r2, [matmul_kernel_bf16_param_4];\n"
+        "    ld.param.u32 %r3, [matmul_kernel_bf16_param_5];\n"
+        "    mov.u32 %r4, %ctaid.x;\n"
+        "    mov.u32 %r5, %ntid.x;\n"
+        "    mov.u32 %r6, %tid.x;\n"
+        "    mad.lo.s32 %r7, %r4, %r5, %r6;\n"
+        "    mov.u32 %r8, %ctaid.y;\n"
+        "    mov.u32 %r9, %ntid.y;\n"
+        "    mov.u32 %r10, %tid.y;\n"
+        "    mad.lo.s32 %r11, %r8, %r9, %r10;\n"
+        "    setp.ge.s32 %p1, %r7, %r3;\n"
+        "    setp.ge.s32 %p2, %r11, %r1;\n"
+        "    or.pred %p3, %p1, %p2;\n"
+        "    @%p3 bra DONE;\n"
+        "    cvta.to.global.u64 %rd4, %rd1;\n"
+        "    cvta.to.global.u64 %rd5, %rd2;\n"
+        "    mov.f32 %f1, 0f00000000;\n"
+        "    mov.u32 %r12, 0;\n"
+        "LOOP:\n"
+        "    setp.ge.s32 %p1, %r12, %r2;\n"
+        "    @%p1 bra STORE;\n"
+        "    mul.lo.s32 %r13, %r11, %r2;\n"
+        "    add.s32 %r13, %r13, %r12;\n"
+        "    mul.wide.s32 %rd6, %r13, 2;\n"
+        "    add.s64 %rd7, %rd4, %rd6;\n"
+        "    ld.global.bf16 %b1, [%rd7];\n"
+        "    cvt.f32.bf16 %f2, %b1;\n"
+        "    mul.lo.s32 %r14, %r12, %r3;\n"
+        "    add.s32 %r14, %r14, %r7;\n"
+        "    mul.wide.s32 %rd8, %r14, 2;\n"
+        "    add.s64 %rd9, %rd5, %rd8;\n"
+        "    ld.global.bf16 %b2, [%rd9];\n"
+        "    cvt.f32.bf16 %f3, %b2;\n"
+        "    fma.rn.f32 %f1, %f2, %f3, %f1;\n"
+        "    add.s32 %r12, %r12, 1;\n"
+        "    bra.uni LOOP;\n"
+        "STORE:\n"
+        "    mul.lo.s32 %r15, %r11, %r3;\n"
+        "    add.s32 %r15, %r15, %r7;\n"
+        "    mul.wide.s32 %rd10, %r15, 2;\n"
+        "    cvta.to.global.u64 %rd11, %rd3;\n"
+        "    add.s64 %rd12, %rd11, %rd10;\n"
+        "    cvt.rn.bf16.f32 %b3, %f1;\n"
+        "    st.global.bf16 [%rd12], %b3;\n"
+        "DONE:\n"
+        "    ret;\n"
+        "}\n";
+    unsafe {
+        if (__cuda_matmul_bf16_kernel_ == (void*)0) {
+            void* module = (void*)0;
+            if (cuModuleLoadData(&module, (const void*)ptxSrc) != CUDA_SUCCESS) return 0;
+            void* kernel = (void*)0;
+            if (cuModuleGetFunction(&kernel, module, "matmul_kernel_bf16") != CUDA_SUCCESS) return 0;
+            __cuda_matmul_bf16_kernel_ = kernel;
+        }
+
+        unsigned long long devA64 = (unsigned long long)(unsigned long)devA;
+        unsigned long long devB64 = (unsigned long long)(unsigned long)devB;
+        unsigned long bytesOut = M * N * 2UL;
+        unsigned long long devOut = 0ULL;
+        if (cuMemAlloc_v2(&devOut, bytesOut) != CUDA_SUCCESS) return 0;
+
+        unsigned int Mu = (unsigned int)M;
+        unsigned int Ku = (unsigned int)K;
+        unsigned int Nu = (unsigned int)N;
+        void* params[6];
+        params[0] = (void*)&devA64;
+        params[1] = (void*)&devB64;
+        params[2] = (void*)&devOut;
+        params[3] = (void*)&Mu;
+        params[4] = (void*)&Ku;
+        params[5] = (void*)&Nu;
+
+        unsigned int tgW = 16U;
+        unsigned int tgH = 16U;
+        unsigned int gridX = (unsigned int)((N + (unsigned long)tgW - 1UL) / (unsigned long)tgW);
+        unsigned int gridY = (unsigned int)((M + (unsigned long)tgH - 1UL) / (unsigned long)tgH);
+        int launchOk = cuLaunchKernel(__cuda_matmul_bf16_kernel_, gridX, gridY, 1U, tgW, tgH, 1U,
+                                       0U, (void*)0, params, (void**)0) == CUDA_SUCCESS;
+        cuCtxSynchronize();
+        if (launchOk) cuMemcpyDtoH_v2((void*)out, devOut, bytesOut);
+        cuMemFree_v2(devOut);
+        return launchOk ? 1 : 0;
+    }
+}
+
+// w[i] -= lr*grad[i], in place, fp16 storage -- same cvt.f32.f16/
+// cvt.rn.f16.f32 promote-compute-demote shape as the matmul kernel above,
+// applied to cuda_sgd_update_f32's fused-multiply-add structure.
+int cuda_sgd_update_f16(void* devW, void* devGrad, float lr, unsigned long n) {
+    if (!__cuda_ensure_context()) return 0;
+    const char* ptxSrc =
+        ".version 7.0\n"
+        ".target sm_60\n"
+        ".address_size 64\n"
+        ".visible .entry sgd_update_kernel_f16(\n"
+        "    .param .u64 sgd_update_kernel_f16_param_0,\n"
+        "    .param .u64 sgd_update_kernel_f16_param_1,\n"
+        "    .param .f32 sgd_update_kernel_f16_param_2,\n"
+        "    .param .u32 sgd_update_kernel_f16_param_3\n"
+        ") {\n"
+        "    .reg .pred %p<2>;\n"
+        "    .reg .f16 %h<4>;\n"
+        "    .reg .f32 %f<6>;\n"
+        "    .reg .b32 %r<6>;\n"
+        "    .reg .b64 %rd<8>;\n"
+        "    ld.param.u64 %rd1, [sgd_update_kernel_f16_param_0];\n"
+        "    ld.param.u64 %rd2, [sgd_update_kernel_f16_param_1];\n"
+        "    ld.param.f32 %f3, [sgd_update_kernel_f16_param_2];\n"
+        "    ld.param.u32 %r2, [sgd_update_kernel_f16_param_3];\n"
+        "    mov.u32 %r3, %ctaid.x;\n"
+        "    mov.u32 %r4, %ntid.x;\n"
+        "    mov.u32 %r5, %tid.x;\n"
+        "    mad.lo.s32 %r1, %r3, %r4, %r5;\n"
+        "    setp.ge.s32 %p1, %r1, %r2;\n"
+        "    @%p1 bra DONE;\n"
+        "    cvta.to.global.u64 %rd3, %rd1;\n"
+        "    mul.wide.s32 %rd4, %r1, 2;\n"
+        "    add.s64 %rd5, %rd3, %rd4;\n"
+        "    ld.global.f16 %h1, [%rd5];\n"
+        "    cvt.f32.f16 %f1, %h1;\n"
+        "    cvta.to.global.u64 %rd6, %rd2;\n"
+        "    add.s64 %rd7, %rd6, %rd4;\n"
+        "    ld.global.f16 %h2, [%rd7];\n"
+        "    cvt.f32.f16 %f2, %h2;\n"
+        "    neg.f32 %f4, %f3;\n"
+        "    fma.rn.f32 %f5, %f2, %f4, %f1;\n"
+        "    cvt.rn.f16.f32 %h3, %f5;\n"
+        "    st.global.f16 [%rd5], %h3;\n"
+        "DONE:\n"
+        "    ret;\n"
+        "}\n";
+    unsafe {
+        if (__cuda_sgd_f16_kernel_ == (void*)0) {
+            void* module = (void*)0;
+            if (cuModuleLoadData(&module, (const void*)ptxSrc) != CUDA_SUCCESS) return 0;
+            void* kernel = (void*)0;
+            if (cuModuleGetFunction(&kernel, module, "sgd_update_kernel_f16") != CUDA_SUCCESS) return 0;
+            __cuda_sgd_f16_kernel_ = kernel;
+        }
+
+        unsigned long long devW64 = (unsigned long long)(unsigned long)devW;
+        unsigned long long devGrad64 = (unsigned long long)(unsigned long)devGrad;
+        float lrVal = lr;
+        unsigned int nParam = (unsigned int)n;
+        void* params[4];
+        params[0] = (void*)&devW64;
+        params[1] = (void*)&devGrad64;
+        params[2] = (void*)&lrVal;
+        params[3] = (void*)&nParam;
+
+        unsigned int blockSize = 256U;
+        unsigned int gridSize = (unsigned int)((n + (unsigned long)blockSize - 1UL) / (unsigned long)blockSize);
+        int launchOk = cuLaunchKernel(__cuda_sgd_f16_kernel_, gridSize, 1U, 1U, blockSize, 1U, 1U,
+                                       0U, (void*)0, params, (void**)0) == CUDA_SUCCESS;
+        cuCtxSynchronize();
+        return launchOk ? 1 : 0;
+    }
+}
+
+// Same shape as cuda_sgd_update_f16, '.bf16' storage, sm_80/PTX 7.8 (see
+// cuda_matmul_bf16_persistent's comment).
+int cuda_sgd_update_bf16(void* devW, void* devGrad, float lr, unsigned long n) {
+    if (!__cuda_ensure_context()) return 0;
+    const char* ptxSrc =
+        ".version 7.8\n"
+        ".target sm_80\n"
+        ".address_size 64\n"
+        ".visible .entry sgd_update_kernel_bf16(\n"
+        "    .param .u64 sgd_update_kernel_bf16_param_0,\n"
+        "    .param .u64 sgd_update_kernel_bf16_param_1,\n"
+        "    .param .f32 sgd_update_kernel_bf16_param_2,\n"
+        "    .param .u32 sgd_update_kernel_bf16_param_3\n"
+        ") {\n"
+        "    .reg .pred %p<2>;\n"
+        "    .reg .bf16 %b<4>;\n"
+        "    .reg .f32 %f<6>;\n"
+        "    .reg .b32 %r<6>;\n"
+        "    .reg .b64 %rd<8>;\n"
+        "    ld.param.u64 %rd1, [sgd_update_kernel_bf16_param_0];\n"
+        "    ld.param.u64 %rd2, [sgd_update_kernel_bf16_param_1];\n"
+        "    ld.param.f32 %f3, [sgd_update_kernel_bf16_param_2];\n"
+        "    ld.param.u32 %r2, [sgd_update_kernel_bf16_param_3];\n"
+        "    mov.u32 %r3, %ctaid.x;\n"
+        "    mov.u32 %r4, %ntid.x;\n"
+        "    mov.u32 %r5, %tid.x;\n"
+        "    mad.lo.s32 %r1, %r3, %r4, %r5;\n"
+        "    setp.ge.s32 %p1, %r1, %r2;\n"
+        "    @%p1 bra DONE;\n"
+        "    cvta.to.global.u64 %rd3, %rd1;\n"
+        "    mul.wide.s32 %rd4, %r1, 2;\n"
+        "    add.s64 %rd5, %rd3, %rd4;\n"
+        "    ld.global.bf16 %b1, [%rd5];\n"
+        "    cvt.f32.bf16 %f1, %b1;\n"
+        "    cvta.to.global.u64 %rd6, %rd2;\n"
+        "    add.s64 %rd7, %rd6, %rd4;\n"
+        "    ld.global.bf16 %b2, [%rd7];\n"
+        "    cvt.f32.bf16 %f2, %b2;\n"
+        "    neg.f32 %f4, %f3;\n"
+        "    fma.rn.f32 %f5, %f2, %f4, %f1;\n"
+        "    cvt.rn.bf16.f32 %b3, %f5;\n"
+        "    st.global.bf16 [%rd5], %b3;\n"
+        "DONE:\n"
+        "    ret;\n"
+        "}\n";
+    unsafe {
+        if (__cuda_sgd_bf16_kernel_ == (void*)0) {
+            void* module = (void*)0;
+            if (cuModuleLoadData(&module, (const void*)ptxSrc) != CUDA_SUCCESS) return 0;
+            void* kernel = (void*)0;
+            if (cuModuleGetFunction(&kernel, module, "sgd_update_kernel_bf16") != CUDA_SUCCESS) return 0;
+            __cuda_sgd_bf16_kernel_ = kernel;
+        }
+
+        unsigned long long devW64 = (unsigned long long)(unsigned long)devW;
+        unsigned long long devGrad64 = (unsigned long long)(unsigned long)devGrad;
+        float lrVal = lr;
+        unsigned int nParam = (unsigned int)n;
+        void* params[4];
+        params[0] = (void*)&devW64;
+        params[1] = (void*)&devGrad64;
+        params[2] = (void*)&lrVal;
+        params[3] = (void*)&nParam;
+
+        unsigned int blockSize = 256U;
+        unsigned int gridSize = (unsigned int)((n + (unsigned long)blockSize - 1UL) / (unsigned long)blockSize);
+        int launchOk = cuLaunchKernel(__cuda_sgd_bf16_kernel_, gridSize, 1U, 1U, blockSize, 1U, 1U,
                                        0U, (void*)0, params, (void**)0) == CUDA_SUCCESS;
         cuCtxSynchronize();
         return launchOk ? 1 : 0;

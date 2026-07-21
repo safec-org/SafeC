@@ -40,9 +40,13 @@
 #pragma once
 #include <std/ml/gpu_mps.h>
 #include <std/ml/gpu_mps_metallib.h>
+#include <std/ml/float16.h>
 #include <std/mem.h>
 
 namespace std {
+
+extern void* malloc(unsigned long size);
+extern void  free(void* ptr);
 
 extern void* objc_getClass(const char* name);
 extern void* sel_registerName(const char* name);
@@ -2435,6 +2439,676 @@ int mps_sgd_update_f32_chained(void* bufW, void* bufGrad, float lr, unsigned lon
 
         return 1;
     }
+}
+
+// ── fp16 / bf16 tier (see gpu_mps.h) ─────────────────────────────────────────
+static void* __mps_matmul_f16_pipeline = (void*)0;
+static void* __mps_matmul_bf16_pipeline = (void*)0;
+static void* __mps_relu_f16_pipeline = (void*)0;
+static void* __mps_relu_bf16_pipeline = (void*)0;
+
+int mps_matmul_f16(const float* a, const float* b, float* out,
+                    unsigned long M, unsigned long K, unsigned long N) {
+    unsafe {
+        if (!__mps_ensure_device_queue()) return 0;
+        void* queue = __mps_queue;
+        MMsg0 msg0 = (MMsg0)objc_msgSend;
+
+        if (__mps_matmul_f16_pipeline == (void*)0) {
+            void* p = __mps_make_pipeline("matmul_kernel_f16");
+            if (p == (void*)0) return 0;
+            __mps_matmul_f16_pipeline = p;
+        }
+
+        unsigned long nA = M * K;
+        unsigned long nB = K * N;
+        unsigned long nOut = M * N;
+        unsigned short* aHalf = (unsigned short*)malloc(nA * 2UL);
+        unsigned short* bHalf = (unsigned short*)malloc(nB * 2UL);
+        unsigned short* outHalf = (unsigned short*)malloc(nOut * 2UL);
+        if (aHalf == (void*)0 || bHalf == (void*)0 || outHalf == (void*)0) {
+            if (aHalf != (void*)0) free((void*)aHalf);
+            if (bHalf != (void*)0) free((void*)bHalf);
+            if (outHalf != (void*)0) free((void*)outHalf);
+            return 0;
+        }
+        f32_to_fp16_bulk(a, aHalf, nA);
+        f32_to_fp16_bulk(b, bHalf, nB);
+
+        unsigned long bytesA = nA * 2UL;
+        unsigned long bytesB = nB * 2UL;
+        unsigned long bytesOut = nOut * 2UL;
+        void* bufA = __mps_buf_get_with_bytes((const void*)aHalf, bytesA);
+        void* bufB = __mps_buf_get_with_bytes((const void*)bHalf, bytesB);
+        void* bufOut = __mps_buf_get(bytesOut);
+        free((void*)aHalf);
+        free((void*)bHalf);
+        if (bufA == (void*)0 || bufB == (void*)0 || bufOut == (void*)0) {
+            free((void*)outHalf);
+            return 0;
+        }
+
+        unsigned int Mu = (unsigned int)M;
+        unsigned int Ku = (unsigned int)K;
+        unsigned int Nu = (unsigned int)N;
+
+        void* cmdBuf = msg0(queue, __sel_commandBuffer);
+        void* encoder = msg0(cmdBuf, __sel_computeCommandEncoder);
+
+        MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
+        msgVoid1(encoder, __sel_setComputePipelineState, __mps_matmul_f16_pipeline);
+        MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
+        setBufFn(encoder, __sel_setBuffer, bufA, 0UL, 0UL);
+        setBufFn(encoder, __sel_setBuffer, bufB, 0UL, 1UL);
+        setBufFn(encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
+        MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
+        setBytesFn(encoder, __sel_setBytes, (void*)&Mu, 4UL, 3UL);
+        setBytesFn(encoder, __sel_setBytes, (void*)&Ku, 4UL, 4UL);
+        setBytesFn(encoder, __sel_setBytes, (void*)&Nu, 4UL, 5UL);
+
+        unsigned long tgW = 16UL;
+        unsigned long tgH = 16UL;
+        struct MTLSize tgSize;
+        tgSize.width = tgW; tgSize.height = tgH; tgSize.depth = 1UL;
+        struct MTLSize numThreadgroups;
+        numThreadgroups.width = (N + tgW - 1UL) / tgW;
+        numThreadgroups.height = (M + tgH - 1UL) / tgH;
+        numThreadgroups.depth = 1UL;
+        MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
+        dispatchFn(encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+
+        MMsgVoid0 msgVoid0 = (MMsgVoid0)objc_msgSend;
+        msgVoid0(encoder, __sel_endEncoding);
+        msgVoid0(cmdBuf, __sel_commit);
+        msgVoid0(cmdBuf, __sel_waitUntilCompleted);
+
+        void* outPtr = msg0(bufOut, __sel_contents);
+        if (outPtr == (void*)0) {
+            free((void*)outHalf);
+            __mps_buf_put(bufA, bytesA);
+            __mps_buf_put(bufB, bytesB);
+            __mps_buf_put(bufOut, bytesOut);
+            return 0;
+        }
+        memcpy((void*)outHalf, outPtr, bytesOut);
+        fp16_to_f32_bulk(outHalf, out, nOut);
+        free((void*)outHalf);
+
+        __mps_buf_put(bufA, bytesA);
+        __mps_buf_put(bufB, bytesB);
+        __mps_buf_put(bufOut, bytesOut);
+        return 1;
+    }
+}
+
+int mps_matmul_bf16(const float* a, const float* b, float* out,
+                     unsigned long M, unsigned long K, unsigned long N) {
+    unsafe {
+        if (!__mps_ensure_device_queue()) return 0;
+        void* queue = __mps_queue;
+        MMsg0 msg0 = (MMsg0)objc_msgSend;
+
+        if (__mps_matmul_bf16_pipeline == (void*)0) {
+            void* p = __mps_make_pipeline("matmul_kernel_bf16");
+            if (p == (void*)0) return 0;
+            __mps_matmul_bf16_pipeline = p;
+        }
+
+        unsigned long nA = M * K;
+        unsigned long nB = K * N;
+        unsigned long nOut = M * N;
+        unsigned short* aBf = (unsigned short*)malloc(nA * 2UL);
+        unsigned short* bBf = (unsigned short*)malloc(nB * 2UL);
+        unsigned short* outBf = (unsigned short*)malloc(nOut * 2UL);
+        if (aBf == (void*)0 || bBf == (void*)0 || outBf == (void*)0) {
+            if (aBf != (void*)0) free((void*)aBf);
+            if (bBf != (void*)0) free((void*)bBf);
+            if (outBf != (void*)0) free((void*)outBf);
+            return 0;
+        }
+        f32_to_bf16_bulk(a, aBf, nA);
+        f32_to_bf16_bulk(b, bBf, nB);
+
+        unsigned long bytesA = nA * 2UL;
+        unsigned long bytesB = nB * 2UL;
+        unsigned long bytesOut = nOut * 2UL;
+        void* bufA = __mps_buf_get_with_bytes((const void*)aBf, bytesA);
+        void* bufB = __mps_buf_get_with_bytes((const void*)bBf, bytesB);
+        void* bufOut = __mps_buf_get(bytesOut);
+        free((void*)aBf);
+        free((void*)bBf);
+        if (bufA == (void*)0 || bufB == (void*)0 || bufOut == (void*)0) {
+            free((void*)outBf);
+            return 0;
+        }
+
+        unsigned int Mu = (unsigned int)M;
+        unsigned int Ku = (unsigned int)K;
+        unsigned int Nu = (unsigned int)N;
+
+        void* cmdBuf = msg0(queue, __sel_commandBuffer);
+        void* encoder = msg0(cmdBuf, __sel_computeCommandEncoder);
+
+        MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
+        msgVoid1(encoder, __sel_setComputePipelineState, __mps_matmul_bf16_pipeline);
+        MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
+        setBufFn(encoder, __sel_setBuffer, bufA, 0UL, 0UL);
+        setBufFn(encoder, __sel_setBuffer, bufB, 0UL, 1UL);
+        setBufFn(encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
+        MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
+        setBytesFn(encoder, __sel_setBytes, (void*)&Mu, 4UL, 3UL);
+        setBytesFn(encoder, __sel_setBytes, (void*)&Ku, 4UL, 4UL);
+        setBytesFn(encoder, __sel_setBytes, (void*)&Nu, 4UL, 5UL);
+
+        unsigned long tgW = 16UL;
+        unsigned long tgH = 16UL;
+        struct MTLSize tgSize;
+        tgSize.width = tgW; tgSize.height = tgH; tgSize.depth = 1UL;
+        struct MTLSize numThreadgroups;
+        numThreadgroups.width = (N + tgW - 1UL) / tgW;
+        numThreadgroups.height = (M + tgH - 1UL) / tgH;
+        numThreadgroups.depth = 1UL;
+        MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
+        dispatchFn(encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+
+        MMsgVoid0 msgVoid0 = (MMsgVoid0)objc_msgSend;
+        msgVoid0(encoder, __sel_endEncoding);
+        msgVoid0(cmdBuf, __sel_commit);
+        msgVoid0(cmdBuf, __sel_waitUntilCompleted);
+
+        void* outPtr = msg0(bufOut, __sel_contents);
+        if (outPtr == (void*)0) {
+            free((void*)outBf);
+            __mps_buf_put(bufA, bytesA);
+            __mps_buf_put(bufB, bytesB);
+            __mps_buf_put(bufOut, bytesOut);
+            return 0;
+        }
+        memcpy((void*)outBf, outPtr, bytesOut);
+        bf16_to_f32_bulk(outBf, out, nOut);
+        free((void*)outBf);
+
+        __mps_buf_put(bufA, bytesA);
+        __mps_buf_put(bufB, bytesB);
+        __mps_buf_put(bufOut, bytesOut);
+        return 1;
+    }
+}
+
+// Shared elementwise-relu dispatch body for mps_relu_f16/mps_relu_bf16 --
+// only the pipeline name and the conversion functions differ, so this
+// takes both as parameters rather than duplicating the whole
+// upload/dispatch/readback sequence a third and fourth time.
+typedef fn void(const float*, unsigned short*, unsigned long) __MpsToReducedFn;
+typedef fn void(const unsigned short*, float*, unsigned long) __MpsToFloatFn;
+
+static int __mps_relu_reduced_precision(const char* kernelName, void** pipelineSlot,
+                                         const float* a, float* out, unsigned long n,
+                                         __MpsToReducedFn toReduced, __MpsToFloatFn toFloat) {
+    unsafe {
+        if (!__mps_ensure_device_queue()) return 0;
+        void* queue = __mps_queue;
+        MMsg0 msg0 = (MMsg0)objc_msgSend;
+
+        if (*pipelineSlot == (void*)0) {
+            void* p = __mps_make_pipeline(kernelName);
+            if (p == (void*)0) return 0;
+            *pipelineSlot = p;
+        }
+
+        unsigned short* aRed = (unsigned short*)malloc(n * 2UL);
+        unsigned short* outRed = (unsigned short*)malloc(n * 2UL);
+        if (aRed == (void*)0 || outRed == (void*)0) {
+            if (aRed != (void*)0) free((void*)aRed);
+            if (outRed != (void*)0) free((void*)outRed);
+            return 0;
+        }
+        toReduced(a, aRed, n);
+
+        unsigned long bytes = n * 2UL;
+        void* bufA = __mps_buf_get_with_bytes((const void*)aRed, bytes);
+        void* bufOut = __mps_buf_get(bytes);
+        free((void*)aRed);
+        if (bufA == (void*)0 || bufOut == (void*)0) {
+            free((void*)outRed);
+            return 0;
+        }
+
+        void* cmdBuf = msg0(queue, __sel_commandBuffer);
+        void* encoder = msg0(cmdBuf, __sel_computeCommandEncoder);
+
+        MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
+        msgVoid1(encoder, __sel_setComputePipelineState, *pipelineSlot);
+        MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
+        setBufFn(encoder, __sel_setBuffer, bufA, 0UL, 0UL);
+        setBufFn(encoder, __sel_setBuffer, bufOut, 0UL, 1UL);
+        MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
+        unsigned int nParam = (unsigned int)n;
+        setBytesFn(encoder, __sel_setBytes, (void*)&nParam, 4UL, 2UL);
+
+        struct MTLSize gridSize;
+        gridSize.width = n; gridSize.height = 1UL; gridSize.depth = 1UL;
+        unsigned long tgWidth = n < 256UL ? n : 256UL;
+        if (tgWidth == 0UL) tgWidth = 1UL;
+        struct MTLSize tgSize;
+        tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
+        struct MTLSize numThreadgroups;
+        numThreadgroups.width = (n + tgWidth - 1UL) / tgWidth;
+        numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
+        MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
+        dispatchFn(encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+
+        MMsgVoid0 msgVoid0 = (MMsgVoid0)objc_msgSend;
+        msgVoid0(encoder, __sel_endEncoding);
+        msgVoid0(cmdBuf, __sel_commit);
+        msgVoid0(cmdBuf, __sel_waitUntilCompleted);
+
+        void* outPtr = msg0(bufOut, __sel_contents);
+        if (outPtr == (void*)0) {
+            free((void*)outRed);
+            __mps_buf_put(bufA, bytes);
+            __mps_buf_put(bufOut, bytes);
+            return 0;
+        }
+        memcpy((void*)outRed, outPtr, bytes);
+        toFloat(outRed, out, n);
+        free((void*)outRed);
+
+        __mps_buf_put(bufA, bytes);
+        __mps_buf_put(bufOut, bytes);
+        return 1;
+    }
+}
+
+int mps_relu_f16(const float* a, float* out, unsigned long n) {
+    return __mps_relu_reduced_precision("relu_kernel_f16", &__mps_relu_f16_pipeline, a, out, n,
+                                         f32_to_fp16_bulk, fp16_to_f32_bulk);
+}
+
+int mps_relu_bf16(const float* a, float* out, unsigned long n) {
+    return __mps_relu_reduced_precision("relu_kernel_bf16", &__mps_relu_bf16_pipeline, a, out, n,
+                                         f32_to_bf16_bulk, bf16_to_f32_bulk);
+}
+
+// ── fp16 / bf16 persistent-buffer / batched tier (see gpu_mps.h) ────────────
+void* mps_upload_f16_persistent(const float* data, unsigned long n) {
+    unsafe {
+        unsigned short* tmp = (unsigned short*)malloc(n * 2UL);
+        if (tmp == (void*)0) return (void*)0;
+        f32_to_fp16_bulk(data, tmp, n);
+        void* buf = mps_upload_persistent((const float*)tmp, n * 2UL);
+        free((void*)tmp);
+        return buf;
+    }
+}
+
+void* mps_upload_bf16_persistent(const float* data, unsigned long n) {
+    unsafe {
+        unsigned short* tmp = (unsigned short*)malloc(n * 2UL);
+        if (tmp == (void*)0) return (void*)0;
+        f32_to_bf16_bulk(data, tmp, n);
+        void* buf = mps_upload_persistent((const float*)tmp, n * 2UL);
+        free((void*)tmp);
+        return buf;
+    }
+}
+
+// Shared dispatch body for every matmul-shaped fp16/bf16 chained op
+// (matmul_kernel_f16/bf16, matmul_atb_kernel_f16/bf16, matmul_abt_kernel_
+// f16/bf16 all take the same (bufA, bufB, bufOut, uint, uint, uint)
+// binding shape from the host side -- only the kernel name and what the
+// three uint constants/output shape mean differ between the three ops).
+static int __mps_matmul3_chained(const char* kernelName, void** pipelineSlot,
+                                  void* bufA, void* bufB, unsigned short* out,
+                                  unsigned int p0, unsigned int p1, unsigned int p2,
+                                  unsigned long outRows, unsigned long outCols) {
+    if (!__mps_batch_active) return 0;
+    unsafe {
+        if (*pipelineSlot == (void*)0) {
+            void* p = __mps_make_pipeline(kernelName);
+            if (p == (void*)0) return 0;
+            *pipelineSlot = p;
+        }
+        unsigned long bytesOut = outRows * outCols * 2UL;
+        void* bufOut = __mps_buf_get_batched(bytesOut);
+        if (bufOut == (void*)0) return 0;
+
+        MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
+        msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, *pipelineSlot);
+        MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufB, 0UL, 1UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
+        MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
+        setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&p0, 4UL, 3UL);
+        setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&p1, 4UL, 4UL);
+        setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&p2, 4UL, 5UL);
+
+        unsigned long tgW = 16UL;
+        unsigned long tgH = 16UL;
+        struct MTLSize tgSize;
+        tgSize.width = tgW; tgSize.height = tgH; tgSize.depth = 1UL;
+        struct MTLSize numThreadgroups;
+        numThreadgroups.width = (outCols + tgW - 1UL) / tgW;
+        numThreadgroups.height = (outRows + tgH - 1UL) / tgH;
+        numThreadgroups.depth = 1UL;
+        MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+
+        if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
+            __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
+            __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
+            __mps_pending_bytes[__mps_pending_count] = bytesOut;
+            __mps_pending_count = __mps_pending_count + 1UL;
+        }
+        return 1;
+    }
+}
+
+static void* __mps_matmul_f16_persistent_pipeline = (void*)0;
+int mps_matmul_f16_persistent(void* bufA, void* bufB, unsigned short* out,
+                               unsigned long M, unsigned long K, unsigned long N) {
+    return __mps_matmul3_chained("matmul_kernel_f16", &__mps_matmul_f16_persistent_pipeline,
+                                  bufA, bufB, out, (unsigned int)M, (unsigned int)K, (unsigned int)N, M, N);
+}
+
+static void* __mps_matmul_bf16_persistent_pipeline = (void*)0;
+int mps_matmul_bf16_persistent(void* bufA, void* bufB, unsigned short* out,
+                                unsigned long M, unsigned long K, unsigned long N) {
+    return __mps_matmul3_chained("matmul_kernel_bf16", &__mps_matmul_bf16_persistent_pipeline,
+                                  bufA, bufB, out, (unsigned int)M, (unsigned int)K, (unsigned int)N, M, N);
+}
+
+static void* __mps_matmul_atb_f16_pipeline = (void*)0;
+int mps_matmul_atb_f16_chained_ab(void* bufA, void* bufDC, unsigned short* out,
+                                   unsigned long M, unsigned long K, unsigned long N) {
+    return __mps_matmul3_chained("matmul_atb_kernel_f16", &__mps_matmul_atb_f16_pipeline,
+                                  bufA, bufDC, out, (unsigned int)M, (unsigned int)K, (unsigned int)N, K, N);
+}
+
+static void* __mps_matmul_atb_bf16_pipeline = (void*)0;
+int mps_matmul_atb_bf16_chained_ab(void* bufA, void* bufDC, unsigned short* out,
+                                    unsigned long M, unsigned long K, unsigned long N) {
+    return __mps_matmul3_chained("matmul_atb_kernel_bf16", &__mps_matmul_atb_bf16_pipeline,
+                                  bufA, bufDC, out, (unsigned int)M, (unsigned int)K, (unsigned int)N, K, N);
+}
+
+static void* __mps_matmul_abt_f16_pipeline = (void*)0;
+int mps_matmul_abt_f16_persistent(void* bufDC, void* bufB, unsigned short* out,
+                                   unsigned long M, unsigned long N, unsigned long K) {
+    return __mps_matmul3_chained("matmul_abt_kernel_f16", &__mps_matmul_abt_f16_pipeline,
+                                  bufDC, bufB, out, (unsigned int)M, (unsigned int)N, (unsigned int)K, M, K);
+}
+
+static void* __mps_matmul_abt_bf16_pipeline = (void*)0;
+int mps_matmul_abt_bf16_persistent(void* bufDC, void* bufB, unsigned short* out,
+                                    unsigned long M, unsigned long N, unsigned long K) {
+    return __mps_matmul3_chained("matmul_abt_kernel_bf16", &__mps_matmul_abt_bf16_pipeline,
+                                  bufDC, bufB, out, (unsigned int)M, (unsigned int)N, (unsigned int)K, M, K);
+}
+
+// Shared dispatch body for a single-device-input elementwise op (relu).
+static int __mps_unary_chained(const char* kernelName, void** pipelineSlot,
+                                void* bufA, unsigned short* out, unsigned long n) {
+    if (!__mps_batch_active) return 0;
+    unsafe {
+        if (*pipelineSlot == (void*)0) {
+            void* p = __mps_make_pipeline(kernelName);
+            if (p == (void*)0) return 0;
+            *pipelineSlot = p;
+        }
+        unsigned long bytes = n * 2UL;
+        void* bufOut = __mps_buf_get_batched(bytes);
+        if (bufOut == (void*)0) return 0;
+
+        MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
+        msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, *pipelineSlot);
+        MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 1UL);
+
+        struct MTLSize gridSize;
+        gridSize.width = n; gridSize.height = 1UL; gridSize.depth = 1UL;
+        unsigned long tgWidth = n < 64UL ? n : 64UL;
+        if (tgWidth == 0UL) tgWidth = 1UL;
+        struct MTLSize tgSize;
+        tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
+        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
+        struct MTLSize numThreadgroups;
+        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
+        MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+
+        if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
+            __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
+            __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
+            __mps_pending_bytes[__mps_pending_count] = bytes;
+            __mps_pending_count = __mps_pending_count + 1UL;
+        }
+        return 1;
+    }
+}
+
+static void* __mps_relu_f16_chained_pipeline = (void*)0;
+int mps_relu_f16_chained(void* bufA, unsigned short* out, unsigned long n) {
+    return __mps_unary_chained("relu_kernel_f16", &__mps_relu_f16_chained_pipeline, bufA, out, n);
+}
+
+static void* __mps_relu_bf16_chained_pipeline = (void*)0;
+int mps_relu_bf16_chained(void* bufA, unsigned short* out, unsigned long n) {
+    return __mps_unary_chained("relu_kernel_bf16", &__mps_relu_bf16_chained_pipeline, bufA, out, n);
+}
+
+// Shared dispatch body for a two-device-input elementwise op (relu
+// backward: dZ1 = relu'(Z1) * dH, both operands already GPU-pending).
+static int __mps_binary_dev_chained(const char* kernelName, void** pipelineSlot,
+                                     void* bufA, void* bufB, unsigned short* out, unsigned long n) {
+    if (!__mps_batch_active) return 0;
+    unsafe {
+        if (*pipelineSlot == (void*)0) {
+            void* p = __mps_make_pipeline(kernelName);
+            if (p == (void*)0) return 0;
+            *pipelineSlot = p;
+        }
+        unsigned long bytes = n * 2UL;
+        void* bufOut = __mps_buf_get_batched(bytes);
+        if (bufOut == (void*)0) return 0;
+
+        MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
+        msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, *pipelineSlot);
+        MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufB, 0UL, 1UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
+
+        struct MTLSize gridSize;
+        gridSize.width = n; gridSize.height = 1UL; gridSize.depth = 1UL;
+        unsigned long tgWidth = n < 64UL ? n : 64UL;
+        if (tgWidth == 0UL) tgWidth = 1UL;
+        struct MTLSize tgSize;
+        tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
+        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
+        struct MTLSize numThreadgroups;
+        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
+        MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+
+        if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
+            __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
+            __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
+            __mps_pending_bytes[__mps_pending_count] = bytes;
+            __mps_pending_count = __mps_pending_count + 1UL;
+        }
+        return 1;
+    }
+}
+
+static void* __mps_relu_backward_f16_pipeline = (void*)0;
+int mps_relu_backward_f16_chained_ab(void* bufA, void* bufSelfGrad, unsigned short* out, unsigned long n) {
+    return __mps_binary_dev_chained("relu_backward_kernel_f16", &__mps_relu_backward_f16_pipeline, bufA, bufSelfGrad, out, n);
+}
+
+static void* __mps_relu_backward_bf16_pipeline = (void*)0;
+int mps_relu_backward_bf16_chained_ab(void* bufA, void* bufSelfGrad, unsigned short* out, unsigned long n) {
+    return __mps_binary_dev_chained("relu_backward_kernel_bf16", &__mps_relu_backward_bf16_pipeline, bufA, bufSelfGrad, out, n);
+}
+
+// out[i] = bufA[i] - bHost[i] -- 'bHost' is a plain CPU array of raw
+// fp16/bf16 bits, uploaded fresh each call (see gpu_mps.h's comment).
+static int __mps_sub_chained(const char* kernelName, void** pipelineSlot,
+                              void* bufA, const unsigned short* bHost, unsigned short* out, unsigned long n) {
+    if (!__mps_batch_active) return 0;
+    unsafe {
+        if (*pipelineSlot == (void*)0) {
+            void* p = __mps_make_pipeline(kernelName);
+            if (p == (void*)0) return 0;
+            *pipelineSlot = p;
+        }
+        unsigned long bytes = n * 2UL;
+        void* bufB = __mps_buf_get_with_bytes_batched((const void*)bHost, bytes);
+        void* bufOut = __mps_buf_get_batched(bytes);
+        if (bufB == (void*)0 || bufOut == (void*)0) return 0;
+
+        MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
+        msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, *pipelineSlot);
+        MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufB, 0UL, 1UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
+
+        struct MTLSize gridSize;
+        gridSize.width = n; gridSize.height = 1UL; gridSize.depth = 1UL;
+        unsigned long tgWidth = n < 64UL ? n : 64UL;
+        if (tgWidth == 0UL) tgWidth = 1UL;
+        struct MTLSize tgSize;
+        tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
+        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
+        struct MTLSize numThreadgroups;
+        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
+        MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+
+        if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
+            __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
+            __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
+            __mps_pending_bytes[__mps_pending_count] = bytes;
+            __mps_pending_count = __mps_pending_count + 1UL;
+        }
+        return 1;
+    }
+}
+
+static void* __mps_sub_f16_pipeline = (void*)0;
+int mps_sub_f16_chained(void* bufA, const unsigned short* bHalf, unsigned short* out, unsigned long n) {
+    return __mps_sub_chained("sub_kernel_f16", &__mps_sub_f16_pipeline, bufA, bHalf, out, n);
+}
+
+static void* __mps_sub_bf16_pipeline = (void*)0;
+int mps_sub_bf16_chained(void* bufA, const unsigned short* bBf, unsigned short* out, unsigned long n) {
+    return __mps_sub_chained("sub_kernel_bf16", &__mps_sub_bf16_pipeline, bufA, bBf, out, n);
+}
+
+// out[i] = buf[i] * k -- 'k' stays a plain float scalar (see gpu_mps_
+// kernels.metal's scale_kernel_f16/bf16 comment).
+static int __mps_scale_chained(const char* kernelName, void** pipelineSlot,
+                                void* buf, float k, unsigned short* out, unsigned long n) {
+    if (!__mps_batch_active) return 0;
+    unsafe {
+        if (*pipelineSlot == (void*)0) {
+            void* p = __mps_make_pipeline(kernelName);
+            if (p == (void*)0) return 0;
+            *pipelineSlot = p;
+        }
+        unsigned long bytes = n * 2UL;
+        void* bufOut = __mps_buf_get_batched(bytes);
+        if (bufOut == (void*)0) return 0;
+
+        MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
+        msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, *pipelineSlot);
+        MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, buf, 0UL, 0UL);
+        MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
+        float kVal = k;
+        setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&kVal, 4UL, 1UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
+
+        struct MTLSize gridSize;
+        gridSize.width = n; gridSize.height = 1UL; gridSize.depth = 1UL;
+        unsigned long tgWidth = n < 64UL ? n : 64UL;
+        if (tgWidth == 0UL) tgWidth = 1UL;
+        struct MTLSize tgSize;
+        tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
+        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
+        struct MTLSize numThreadgroups;
+        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
+        MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+
+        if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
+            __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
+            __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
+            __mps_pending_bytes[__mps_pending_count] = bytes;
+            __mps_pending_count = __mps_pending_count + 1UL;
+        }
+        return 1;
+    }
+}
+
+static void* __mps_scale_f16_pipeline = (void*)0;
+int mps_scale_f16_chained(void* buf, float k, unsigned short* out, unsigned long n) {
+    return __mps_scale_chained("scale_kernel_f16", &__mps_scale_f16_pipeline, buf, k, out, n);
+}
+
+static void* __mps_scale_bf16_pipeline = (void*)0;
+int mps_scale_bf16_chained(void* buf, float k, unsigned short* out, unsigned long n) {
+    return __mps_scale_chained("scale_kernel_bf16", &__mps_scale_bf16_pipeline, buf, k, out, n);
+}
+
+// In-place SGD step against a persistent fp16/bf16 device buffer -- no
+// 'out'/pending-readback registration, result stays on the GPU (see
+// mps_sgd_update_f32_chained's comment).
+static int __mps_sgd_chained(const char* kernelName, void** pipelineSlot,
+                              void* bufW, void* bufGrad, float lr, unsigned long n) {
+    if (!__mps_batch_active) return 0;
+    unsafe {
+        if (*pipelineSlot == (void*)0) {
+            void* p = __mps_make_pipeline(kernelName);
+            if (p == (void*)0) return 0;
+            *pipelineSlot = p;
+        }
+        MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
+        msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, *pipelineSlot);
+        MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufW, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufGrad, 0UL, 1UL);
+        MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
+        float lrVal = lr;
+        setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&lrVal, 4UL, 2UL);
+
+        struct MTLSize gridSize;
+        gridSize.width = n; gridSize.height = 1UL; gridSize.depth = 1UL;
+        unsigned long tgWidth = n < 64UL ? n : 64UL;
+        if (tgWidth == 0UL) tgWidth = 1UL;
+        struct MTLSize tgSize;
+        tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
+        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
+        struct MTLSize numThreadgroups;
+        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
+        MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+
+        return 1;
+    }
+}
+
+static void* __mps_sgd_update_f16_pipeline = (void*)0;
+int mps_sgd_update_f16_chained(void* bufW, void* bufGrad, float lr, unsigned long n) {
+    return __mps_sgd_chained("sgd_update_kernel_f16", &__mps_sgd_update_f16_pipeline, bufW, bufGrad, lr, n);
+}
+
+static void* __mps_sgd_update_bf16_pipeline = (void*)0;
+int mps_sgd_update_bf16_chained(void* bufW, void* bufGrad, float lr, unsigned long n) {
+    return __mps_sgd_chained("sgd_update_kernel_bf16", &__mps_sgd_update_bf16_pipeline, bufW, bufGrad, lr, n);
 }
 
 } // namespace std

@@ -576,3 +576,309 @@ kernel void matmul_atb_kernel_smma_multi(device const float* a [[buffer(0)]],
     simdgroup_store(acc10, out + (outRow0 + 8) * N + outCol0, N);
     simdgroup_store(acc11, out + (outRow0 + 8) * N + outCol0 + 8, N);
 }
+
+// ── fp16 / bf16 matmul (see gpu_mps.h's mps_matmul_f16/mps_matmul_bf16) ─────
+// Same tiled-threadgroup-memory shape as matmul_kernel above (the naive
+// tier, not the smma/multi-simdgroup tiers -- those use
+// simdgroup_float8x8, a float-only type in this Metal SDK, and porting
+// them to half/bfloat accumulation is future work, not attempted here).
+// Storage and multiply are in the reduced-precision type (real half-rate-
+// or-better hardware throughput on Apple GPUs, and half the threadgroup
+// memory traffic per tile vs matmul_kernel's float tiles); accumulation
+// is in float, the standard mixed-precision-GEMM practice, so 16
+// TILE_SIZE-deep partial-sum steps don't compound rounding error the way
+// accumulating in half/bfloat directly would.
+kernel void matmul_kernel_f16(device const half* a [[buffer(0)]],
+                               device const half* b [[buffer(1)]],
+                               device half* out [[buffer(2)]],
+                               constant uint& M [[buffer(3)]],
+                               constant uint& K [[buffer(4)]],
+                               constant uint& N [[buffer(5)]],
+                               uint2 tid [[thread_position_in_threadgroup]],
+                               uint2 tgid [[threadgroup_position_in_grid]]) {
+    threadgroup half Atile[TILE_SIZE][TILE_SIZE];
+    threadgroup half Btile[TILE_SIZE][TILE_SIZE];
+
+    uint row = tgid.y * TILE_SIZE + tid.y;
+    uint col = tgid.x * TILE_SIZE + tid.x;
+
+    float acc = 0.0;
+    uint numTiles = (K + TILE_SIZE - 1) / TILE_SIZE;
+    for (uint t = 0; t < numTiles; t++) {
+        uint aCol = t * TILE_SIZE + tid.x;
+        uint bRow = t * TILE_SIZE + tid.y;
+        Atile[tid.y][tid.x] = (row < M && aCol < K) ? a[row * K + aCol] : half(0.0);
+        Btile[tid.y][tid.x] = (bRow < K && col < N) ? b[bRow * N + col] : half(0.0);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint k = 0; k < TILE_SIZE; k++) {
+            acc += float(Atile[tid.y][k]) * float(Btile[k][tid.x]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (row < M && col < N) {
+        out[row * N + col] = half(acc);
+    }
+}
+
+kernel void matmul_kernel_bf16(device const bfloat* a [[buffer(0)]],
+                                device const bfloat* b [[buffer(1)]],
+                                device bfloat* out [[buffer(2)]],
+                                constant uint& M [[buffer(3)]],
+                                constant uint& K [[buffer(4)]],
+                                constant uint& N [[buffer(5)]],
+                                uint2 tid [[thread_position_in_threadgroup]],
+                                uint2 tgid [[threadgroup_position_in_grid]]) {
+    threadgroup bfloat Atile[TILE_SIZE][TILE_SIZE];
+    threadgroup bfloat Btile[TILE_SIZE][TILE_SIZE];
+
+    uint row = tgid.y * TILE_SIZE + tid.y;
+    uint col = tgid.x * TILE_SIZE + tid.x;
+
+    float acc = 0.0;
+    uint numTiles = (K + TILE_SIZE - 1) / TILE_SIZE;
+    for (uint t = 0; t < numTiles; t++) {
+        uint aCol = t * TILE_SIZE + tid.x;
+        uint bRow = t * TILE_SIZE + tid.y;
+        Atile[tid.y][tid.x] = (row < M && aCol < K) ? a[row * K + aCol] : bfloat(0.0);
+        Btile[tid.y][tid.x] = (bRow < K && col < N) ? b[bRow * N + col] : bfloat(0.0);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint k = 0; k < TILE_SIZE; k++) {
+            acc += float(Atile[tid.y][k]) * float(Btile[k][tid.x]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (row < M && col < N) {
+        out[row * N + col] = bfloat(acc);
+    }
+}
+
+// Elementwise relu in half/bfloat -- used by the fp16/bf16 tensor path's
+// forward pass; storage/compute in the reduced-precision type throughout
+// (no accumulation to worry about for an elementwise op).
+kernel void relu_kernel_f16(device const half* a [[buffer(0)]],
+                             device half* out [[buffer(1)]],
+                             constant uint& n [[buffer(2)]],
+                             uint id [[thread_position_in_grid]]) {
+    if (id >= n) return;
+    out[id] = max(a[id], half(0.0));
+}
+
+kernel void relu_kernel_bf16(device const bfloat* a [[buffer(0)]],
+                              device bfloat* out [[buffer(1)]],
+                              constant uint& n [[buffer(2)]],
+                              uint id [[thread_position_in_grid]]) {
+    if (id >= n) return;
+    out[id] = bfloat(max(float(a[id]), 0.0f));
+}
+
+// ── fp16 / bf16 backward-pass kernels (see gpu_mps.h's mps_*_f16/mps_*_bf16
+// chained/persistent family) ────────────────────────────────────────────────
+// Completes the set matmul_kernel_f16/bf16 and relu_kernel_f16/bf16 above
+// started: enough ops (sub, scale, matmul^T two ways, relu-backward,
+// in-place SGD) to run a full GPU-resident forward+backward+SGD training
+// step in fp16/bf16, mirroring the float32 GPU-resident training loop's
+// op set exactly (see gpu_mps.sc's mps_sub_f32_chained/mps_scale_f32_
+// chained/mps_matmul_atb_f32_chained_ab/mps_matmul_abt_f32_persistent/
+// mps_relu_backward_f32_chained_ab/mps_sgd_update_f32_chained). Elementwise
+// ops (sub/scale/relu_backward/sgd_update) compute directly in the
+// reduced-precision type -- no iterative accumulation to protect against
+// rounding drift the way the matmul kernels' partial sums need. scale_
+// kernel_f16/bf16 and sgd_update_kernel_f16/bf16 take their scalar (k / lr)
+// as a plain float (promoted from half/bfloat operands at the point of
+// multiply, not stored as half/bfloat) since a learning rate this small
+// relative to typical gradient magnitudes is exactly the kind of value
+// fp16/bf16's coarse relative precision would otherwise distort.
+
+kernel void sub_kernel_f16(device const half* a [[buffer(0)]],
+                            device const half* b [[buffer(1)]],
+                            device half* out [[buffer(2)]],
+                            uint id [[thread_position_in_grid]]) {
+    out[id] = a[id] - b[id];
+}
+
+kernel void sub_kernel_bf16(device const bfloat* a [[buffer(0)]],
+                             device const bfloat* b [[buffer(1)]],
+                             device bfloat* out [[buffer(2)]],
+                             uint id [[thread_position_in_grid]]) {
+    out[id] = a[id] - b[id];
+}
+
+kernel void scale_kernel_f16(device const half* a [[buffer(0)]],
+                              constant float& k [[buffer(1)]],
+                              device half* out [[buffer(2)]],
+                              uint id [[thread_position_in_grid]]) {
+    out[id] = half(float(a[id]) * k);
+}
+
+kernel void scale_kernel_bf16(device const bfloat* a [[buffer(0)]],
+                               constant float& k [[buffer(1)]],
+                               device bfloat* out [[buffer(2)]],
+                               uint id [[thread_position_in_grid]]) {
+    out[id] = bfloat(float(a[id]) * k);
+}
+
+// dA[M,K] = dC[M,N] . B^T[N,K], B stored [K,N] -- see matmul_abt_kernel's
+// comment for the shape/transpose reasoning; same tiling here, half/
+// bfloat storage, float accumulation.
+kernel void matmul_abt_kernel_f16(device const half* a [[buffer(0)]],
+                                   device const half* b [[buffer(1)]],
+                                   device half* out [[buffer(2)]],
+                                   constant uint& M [[buffer(3)]],
+                                   constant uint& N [[buffer(4)]],
+                                   constant uint& K [[buffer(5)]],
+                                   uint2 tid [[thread_position_in_threadgroup]],
+                                   uint2 tgid [[threadgroup_position_in_grid]]) {
+    threadgroup half Atile[TILE_SIZE][TILE_SIZE];
+    threadgroup half Btile[TILE_SIZE][TILE_SIZE];
+
+    uint row = tgid.y * TILE_SIZE + tid.y;
+    uint col = tgid.x * TILE_SIZE + tid.x;
+
+    float acc = 0.0;
+    uint numTiles = (N + TILE_SIZE - 1) / TILE_SIZE;
+    for (uint t = 0; t < numTiles; t++) {
+        uint aCol = t * TILE_SIZE + tid.x;
+        uint bCol = t * TILE_SIZE + tid.y;
+        Atile[tid.y][tid.x] = (row < M && aCol < N) ? a[row * N + aCol] : half(0.0);
+        Btile[tid.y][tid.x] = (col < K && bCol < N) ? b[col * N + bCol] : half(0.0);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint k = 0; k < TILE_SIZE; k++) {
+            acc += float(Atile[tid.y][k]) * float(Btile[k][tid.x]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (row < M && col < K) {
+        out[row * K + col] = half(acc);
+    }
+}
+
+kernel void matmul_abt_kernel_bf16(device const bfloat* a [[buffer(0)]],
+                                    device const bfloat* b [[buffer(1)]],
+                                    device bfloat* out [[buffer(2)]],
+                                    constant uint& M [[buffer(3)]],
+                                    constant uint& N [[buffer(4)]],
+                                    constant uint& K [[buffer(5)]],
+                                    uint2 tid [[thread_position_in_threadgroup]],
+                                    uint2 tgid [[threadgroup_position_in_grid]]) {
+    threadgroup bfloat Atile[TILE_SIZE][TILE_SIZE];
+    threadgroup bfloat Btile[TILE_SIZE][TILE_SIZE];
+
+    uint row = tgid.y * TILE_SIZE + tid.y;
+    uint col = tgid.x * TILE_SIZE + tid.x;
+
+    float acc = 0.0;
+    uint numTiles = (N + TILE_SIZE - 1) / TILE_SIZE;
+    for (uint t = 0; t < numTiles; t++) {
+        uint aCol = t * TILE_SIZE + tid.x;
+        uint bCol = t * TILE_SIZE + tid.y;
+        Atile[tid.y][tid.x] = (row < M && aCol < N) ? a[row * N + aCol] : bfloat(0.0);
+        Btile[tid.y][tid.x] = (col < K && bCol < N) ? b[col * N + bCol] : bfloat(0.0);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint k = 0; k < TILE_SIZE; k++) {
+            acc += float(Atile[tid.y][k]) * float(Btile[k][tid.x]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (row < M && col < K) {
+        out[row * K + col] = bfloat(acc);
+    }
+}
+
+// dB[K,N] = A^T[K,M] . dC[M,N], A stored [M,K] -- see matmul_atb_kernel's
+// comment; same tiling here, half/bfloat storage, float accumulation.
+kernel void matmul_atb_kernel_f16(device const half* a [[buffer(0)]],
+                                   device const half* b [[buffer(1)]],
+                                   device half* out [[buffer(2)]],
+                                   constant uint& M [[buffer(3)]],
+                                   constant uint& K [[buffer(4)]],
+                                   constant uint& N [[buffer(5)]],
+                                   uint2 tid [[thread_position_in_threadgroup]],
+                                   uint2 tgid [[threadgroup_position_in_grid]]) {
+    threadgroup half Atile[TILE_SIZE][TILE_SIZE];
+    threadgroup half Btile[TILE_SIZE][TILE_SIZE];
+
+    uint row = tgid.y * TILE_SIZE + tid.y;
+    uint col = tgid.x * TILE_SIZE + tid.x;
+
+    float acc = 0.0;
+    uint numTiles = (M + TILE_SIZE - 1) / TILE_SIZE;
+    for (uint t = 0; t < numTiles; t++) {
+        uint aP = t * TILE_SIZE + tid.x;
+        uint bP = t * TILE_SIZE + tid.y;
+        Atile[tid.x][tid.y] = (aP < M && row < K) ? a[aP * K + row] : half(0.0);
+        Btile[tid.y][tid.x] = (bP < M && col < N) ? b[bP * N + col] : half(0.0);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint k = 0; k < TILE_SIZE; k++) {
+            acc += float(Atile[k][tid.y]) * float(Btile[k][tid.x]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (row < K && col < N) {
+        out[row * N + col] = half(acc);
+    }
+}
+
+kernel void matmul_atb_kernel_bf16(device const bfloat* a [[buffer(0)]],
+                                    device const bfloat* b [[buffer(1)]],
+                                    device bfloat* out [[buffer(2)]],
+                                    constant uint& M [[buffer(3)]],
+                                    constant uint& K [[buffer(4)]],
+                                    constant uint& N [[buffer(5)]],
+                                    uint2 tid [[thread_position_in_threadgroup]],
+                                    uint2 tgid [[threadgroup_position_in_grid]]) {
+    threadgroup bfloat Atile[TILE_SIZE][TILE_SIZE];
+    threadgroup bfloat Btile[TILE_SIZE][TILE_SIZE];
+
+    uint row = tgid.y * TILE_SIZE + tid.y;
+    uint col = tgid.x * TILE_SIZE + tid.x;
+
+    float acc = 0.0;
+    uint numTiles = (M + TILE_SIZE - 1) / TILE_SIZE;
+    for (uint t = 0; t < numTiles; t++) {
+        uint aP = t * TILE_SIZE + tid.x;
+        uint bP = t * TILE_SIZE + tid.y;
+        Atile[tid.x][tid.y] = (aP < M && row < K) ? a[aP * K + row] : bfloat(0.0);
+        Btile[tid.y][tid.x] = (bP < M && col < N) ? b[bP * N + col] : bfloat(0.0);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint k = 0; k < TILE_SIZE; k++) {
+            acc += float(Atile[k][tid.y]) * float(Btile[k][tid.x]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (row < K && col < N) {
+        out[row * N + col] = bfloat(acc);
+    }
+}
+
+kernel void relu_backward_kernel_f16(device const half* a [[buffer(0)]],
+                                      device const half* selfGrad [[buffer(1)]],
+                                      device half* out [[buffer(2)]],
+                                      uint id [[thread_position_in_grid]]) {
+    out[id] = (float(a[id]) > 0.0f) ? selfGrad[id] : half(0.0);
+}
+
+kernel void relu_backward_kernel_bf16(device const bfloat* a [[buffer(0)]],
+                                       device const bfloat* selfGrad [[buffer(1)]],
+                                       device bfloat* out [[buffer(2)]],
+                                       uint id [[thread_position_in_grid]]) {
+    out[id] = (float(a[id]) > 0.0f) ? selfGrad[id] : bfloat(0.0);
+}
+
+// In-place SGD step in fp16/bf16 -- w[id] -= lr*grad[id], read+write same
+// buffer, safe for the same reason sgd_update_kernel's comment gives
+// (each thread only ever touches its own index). lr stays a plain float
+// parameter (see this section's header comment) even though w/grad are
+// half/bfloat.
+kernel void sgd_update_kernel_f16(device half* w [[buffer(0)]],
+                                   device const half* grad [[buffer(1)]],
+                                   constant float& lr [[buffer(2)]],
+                                   uint id [[thread_position_in_grid]]) {
+    w[id] = half(float(w[id]) - lr * float(grad[id]));
+}
+
+kernel void sgd_update_kernel_bf16(device bfloat* w [[buffer(0)]],
+                                    device const bfloat* grad [[buffer(1)]],
+                                    constant float& lr [[buffer(2)]],
+                                    uint id [[thread_position_in_grid]]) {
+    w[id] = bfloat(float(w[id]) - lr * float(grad[id]));
+}
