@@ -94,7 +94,13 @@ command -v tar  &>/dev/null || die "tar not found — required to extract the re
 
 # ── Resolve download URL ──────────────────────────────────────────────────────
 if [[ "$VERSION" == "latest" ]]; then
-    API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+    # GitHub's /releases/latest endpoint explicitly excludes prereleases —
+    # it 404s outright when every published release is a prerelease (e.g.
+    # this project's "1.0.0-beta"). /releases (the list endpoint) includes
+    # prereleases and returns them newest-first, so pull the newest match
+    # from that instead; the DOWNLOAD_URL pipeline below already takes the
+    # first match regardless of which endpoint this came from.
+    API_URL="https://api.github.com/repos/${REPO}/releases"
 else
     API_URL="https://api.github.com/repos/${REPO}/releases/tags/${VERSION}"
 fi
