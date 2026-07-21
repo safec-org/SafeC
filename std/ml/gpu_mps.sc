@@ -208,20 +208,31 @@ static void* __mps_make_pipeline(const char* kernelName) {
 // that a single class comfortably holds this bigger benchmark's biggest
 // tensor (W1 at 512x1024 doubles-converted-to-float32 = 2MB). Anything
 // larger just allocates directly, uncached, same as std::alloc's oversize
-// path. Per-class capacity is memory-budget-scaled (roughly 16MB worth of
-// buffers per class, floored at 2 slots) rather than a flat count, so a
-// class of huge buffers doesn't retain as many as a class of small ones —
-// same reasoning as alloc_class_cap_ in std/mem.sc. A slot that overflows
-// its class's cap gets an explicit 'release' instead of being silently
-// dropped (leaked): Metal buffers are real, non-trivial GPU resources, not
-// a few bytes of heap, so an unbounded leak here is worth avoiding even in
+// path. Per-class capacity is memory-budget-scaled (roughly 128MB worth of
+// buffers per class, floored at 2 slots, capped at 128 slots) rather than a
+// flat count, so a class of huge buffers doesn't retain as many as a class
+// of small ones — same reasoning as alloc_class_cap_ in std/mem.sc. Raised
+// from an original 8-slot/16MB cap: with many independent ops sharing one
+// batch (see train_gpu.sc's inference loop — dozens of matmul/relu passes
+// batched together purely to amortize one command-buffer submit + wait
+// across all of them), every one of those ops needs its own buffer of the
+// same handful of sizes (the fixed X/W1/W2/activation shapes), and NONE of
+// them can return to the pool until the whole batch's wait completes — a
+// small pool that's fine for one training step's ~9 ops was measured
+// forcing hundreds of real newBufferWithLength allocations (not just pool
+// misses) once a single batch's own concurrent demand for one size class
+// exceeded 8, which cost far more than the extra command-buffer submits it
+// was meant to avoid. A slot that overflows its class's cap gets an
+// explicit 'release' instead of being silently dropped (leaked): Metal
+// buffers are real, non-trivial GPU resources, not a few bytes of heap, so
+// an unbounded leak here is worth avoiding even in
 // the overflow case std::alloc's own quarantine ring tolerates for plain
 // memory.
 #define MPS_BUF_MIN_CLASS_   ((unsigned long)4096)
 #define MPS_BUF_NUM_CLASSES_ ((unsigned long)12)
-#define MPS_BUF_MAX_SLOTS_   ((unsigned long)8)
+#define MPS_BUF_MAX_SLOTS_   ((unsigned long)128)
 
-static void*         __mps_bufSlot[12][8];
+static void*         __mps_bufSlot[12][128];
 static unsigned long __mps_bufCount[12];
 
 static long __mps_buf_class_for(unsigned long bytes) {
@@ -239,12 +250,12 @@ static unsigned long __mps_buf_class_bytes(unsigned long idx) {
     return MPS_BUF_MIN_CLASS_ << idx;
 }
 
-// ~16MB budget per class, floored at 2 slots, capped at the array's
+// ~128MB budget per class, floored at 2 slots, capped at the array's
 // physical width (MPS_BUF_MAX_SLOTS_) -- same shift-based, division-free
 // approach as std/mem.sc's alloc_class_cap_.
 static unsigned long __mps_buf_class_cap(unsigned long cls) {
     unsigned long classBytes = __mps_buf_class_bytes(cls);
-    unsigned long cap = ((unsigned long)16 * (unsigned long)1024 * (unsigned long)1024) / classBytes;
+    unsigned long cap = ((unsigned long)128 * (unsigned long)1024 * (unsigned long)1024) / classBytes;
     if (cap > MPS_BUF_MAX_SLOTS_) { cap = MPS_BUF_MAX_SLOTS_; }
     if (cap < (unsigned long)2) { cap = (unsigned long)2; }
     return cap;
@@ -583,11 +594,14 @@ static void* __mps_sum_pipeline = (void*)0;
 // full contract) ───────────────────────────────────────────────────────────
 // __mps_batch_active/_cmdBuf/_encoder track one in-flight shared command
 // buffer. __mps_pending_* is a fixed-size array of "GPU buffer -> CPU
-// pointer" raw-readback entries collected while a batch is open — sized
-// generously for any realistic single training step's op count (a real
+// pointer" raw-readback entries collected while a batch is open — originally
+// sized for a single training step's op count (a handful), raised to cover
+// many independent ops sharing one batch too (e.g. dozens of inference
+// passes batched together purely to amortize one command-buffer submit +
+// wait across all of them -- see train_gpu.sc's inference loop). A real
 // growable Vec would work too, but this file doesn't otherwise depend on
 // std/collections, and a bounds-checked fixed array covers every actual
-// use here without adding that dependency). __mps_finalize_* is the
+// use here without adding that dependency. __mps_finalize_* is the
 // parallel list of caller-supplied post-readback callbacks (e.g.
 // tensor_gpu.sc's float32->float64 conversion). __mps_poolbuf_* is a
 // third, separate list: every buffer __mps_buf_get/_with_bytes hands out
@@ -600,9 +614,9 @@ static void* __mps_sum_pipeline = (void*)0;
 // someone else's still-pending output, not a fresh __mps_buf_get) is never
 // double-tracked, because tracking only happens at the __mps_buf_get call
 // site itself, and chained functions never call it for their input.
-#define MPS_BATCH_MAX_PENDING 64
+#define MPS_BATCH_MAX_PENDING 1024
 #define MPS_BATCH_MAX_FINALIZE 64
-#define MPS_BATCH_MAX_POOLBUFS 128
+#define MPS_BATCH_MAX_POOLBUFS 1024
 
 static int           __mps_batch_active = 0;
 static void*         __mps_batch_cmdBuf = (void*)0;

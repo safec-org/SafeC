@@ -58,7 +58,7 @@ extern void  free(void* ptr);
 // returning, since every reader only consults them while their own count
 // reflects the CURRENTLY open batch (reset at the top of both, whenever
 // no batch is active).
-#define MPS_CHAIN_MAX 64
+#define MPS_CHAIN_MAX 512
 static struct Tensor* __mps_chain_data_tensor[MPS_CHAIN_MAX];
 static void*          __mps_chain_data_buf[MPS_CHAIN_MAX];
 static unsigned long  __mps_chain_data_count = 0UL;
