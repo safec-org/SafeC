@@ -17,9 +17,42 @@
 
 namespace std {
 
+// A connected socket's fd is not a CRT file descriptor on Windows — it's a
+// Winsock SOCKET (truncated to int here, same convention io_nb_win32.sc's
+// tcp_accept_nb/tcp_listen_nb already use), and Winsock sockets only
+// support recv/send/closesocket, not plain read/write/close (those work
+// only for CRT-wrapped handles, not raw SOCKETs). POSIX has no such split
+// — read/write/close work on any fd, sockets included. Plain wrapper
+// functions, not macros: function-like macros need --compat-preprocessor
+// (same reason mem.sc/pool.sc avoid panic.h's PANIC macro), and a real
+// function works in safe mode with no extra link dependency either way.
+#ifdef _WIN32
+extern int recv(unsigned long long fd, void* buf, int count, int flags);
+extern int send(unsigned long long fd, const void* buf, int count, int flags);
+extern int closesocket(unsigned long long fd);
+static int sock_read_(int fd, void* buf, unsigned long count) {
+    unsafe { return recv((unsigned long long)fd, buf, (int)count, 0); }
+}
+static long sock_write_(int fd, const void* buf, unsigned long count) {
+    unsafe { return (long)send((unsigned long long)fd, buf, (int)count, 0); }
+}
+static int sock_close_(int fd) {
+    unsafe { return closesocket((unsigned long long)fd); }
+}
+#else
 extern int read(int fd, void* buf, unsigned long count);
 extern long write(int fd, const void* buf, unsigned long count);
 extern int close(int fd);
+static int sock_read_(int fd, void* buf, unsigned long count) {
+    unsafe { return read(fd, buf, count); }
+}
+static long sock_write_(int fd, const void* buf, unsigned long count) {
+    unsafe { return write(fd, buf, count); }
+}
+static int sock_close_(int fd) {
+    unsafe { return close(fd); }
+}
+#endif
 
 // POSIX 'struct hostent' (<netdb.h>) — stable layout across BSD/Linux.
 struct HostEnt_ {
@@ -113,7 +146,7 @@ static long read_until_(int fd, struct String* out, const char* terminator) {
     char chunk[512];
     while (1) {
         long n;
-        unsafe { n = read(fd, (void*)chunk, 512UL); }
+        unsafe { n = sock_read_(fd, (void*)chunk, 512UL); }
         if (n <= 0L) { return -1L; }
         unsafe { out->push_n(chunk, (unsigned long)n); }
         long idx = out->index_of(terminator);
@@ -129,7 +162,7 @@ static int read_n_(int fd, struct String* out, unsigned long want) {
     while (remaining > 0UL) {
         unsigned long ask = (remaining < 4096UL) ? remaining : 4096UL;
         long n;
-        unsafe { n = read(fd, (void*)chunk, ask); }
+        unsafe { n = sock_read_(fd, (void*)chunk, ask); }
         if (n <= 0L) { return 0; }
         unsafe { out->push_n(chunk, (unsigned long)n); }
         remaining = remaining - (unsigned long)n;
@@ -141,7 +174,7 @@ static int write_all_(int fd, const char* data, unsigned long len) {
     unsigned long sent = 0UL;
     while (sent < len) {
         long n;
-        unsafe { n = write(fd, (const void*)(data + sent), len - sent); }
+        unsafe { n = sock_write_(fd, (const void*)(data + sent), len - sent); }
         if (n <= 0L) { return 0; }
         sent = sent + (unsigned long)n;
     }
@@ -333,7 +366,7 @@ struct HttpResponse http_request(const char* host, unsigned short port,
         buf.free();
     }
 
-    if (fd >= 0) { unsafe { close(fd); } }
+    if (fd >= 0) { unsafe { sock_close_(fd); } }
     if (ok != (int*)0) { unsafe { *ok = good; } }
     return resp;
 }
@@ -456,7 +489,7 @@ int http_serve(unsigned short port, HttpHandler handler) {
             resp.free();
         }
         req.free();
-        unsafe { close(clientFd); }
+        unsafe { sock_close_(clientFd); }
     }
 }
 
@@ -495,7 +528,7 @@ static void* __http_worker_main(void* argPtr) {
             resp.free();
         }
         req.free();
-        unsafe { close(clientFd); }
+        unsafe { sock_close_(clientFd); }
     }
     return (void*)0;
 }

@@ -1,35 +1,22 @@
 // SafeC Standard Library — errno implementation
 #pragma once
 #include <std/errno.h>
+#include <std/errno_compat.h>
+#include <std/stderr_compat.h>
 
 // Access errno via a C helper to handle its macro nature
 namespace std {
 
-extern int* __errno_location();   // Linux glibc
-extern int* __error();            // macOS/BSD
 extern int  strerror_r(int errnum, char* buf, unsigned long buflen); // POSIX
 extern char* strerror(int errnum);
 extern void  fputs(const char* s, void* stream);
-extern void* stderr;
 
 inline int errno_get() {
-    unsafe {
-#ifdef __linux__
-        return *(__errno_location());
-#else
-        return *(__error());
-#endif
-    }
+    unsafe { return errno; }
 }
 
 inline void errno_set(int code) {
-    unsafe {
-#ifdef __linux__
-        *(__errno_location()) = code;
-#else
-        *(__error()) = code;
-#endif
-    }
+    unsafe { errno = code; }
 }
 
 inline const char* errno_str(int code) {
@@ -38,10 +25,10 @@ inline const char* errno_str(int code) {
 
 inline void errno_print(const char* prefix) {
     unsafe {
-        fputs(prefix, stderr);
-        fputs(": ", stderr);
-        fputs(strerror(errno_get()), stderr);
-        fputs("\n", stderr);
+        fputs(prefix, SAFEC_STDERR_);
+        fputs(": ", SAFEC_STDERR_);
+        fputs(strerror(errno_get()), SAFEC_STDERR_);
+        fputs("\n", SAFEC_STDERR_);
     }
 }
 

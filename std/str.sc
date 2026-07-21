@@ -19,7 +19,13 @@ extern char* strncat(char* dst, const char* src, unsigned long n);
 extern char* strpbrk(const char* s, const char* accept);
 extern unsigned long strspn(const char* s, const char* accept);
 extern unsigned long strcspn(const char* s, const char* reject);
+// MSVC's CRT has no 'strtok_r' — 'strtok_s' is the same reentrant
+// tokenizer under a different name, same (str, delim, saveptr) shape.
+#ifdef _WIN32
+extern char* strtok_s(char* s, const char* delim, char** saveptr);
+#else
 extern char* strtok_r(char* s, const char* delim, char** saveptr);
+#endif
 extern void* memchr(const void* s, int c, unsigned long n);
 extern void* memcpy(void* dst, const void* src, unsigned long n);
 
@@ -114,7 +120,13 @@ inline unsigned long str_cspan(const char* s, const char* reject) {
 // Reentrant tokeniser.  Pass s=NULL on subsequent calls.
 // Modifies `s` in place by writing NUL terminators.
 inline char* str_tok(char* s, const char* delim, &stack char* saveptr) {
-    unsafe { return strtok_r(s, delim, (char**)saveptr); }
+    unsafe {
+#ifdef _WIN32
+        return strtok_s(s, delim, (char**)saveptr);
+#else
+        return strtok_r(s, delim, (char**)saveptr);
+#endif
+    }
 }
 
 // ── Memory search ─────────────────────────────────────────────────────────────

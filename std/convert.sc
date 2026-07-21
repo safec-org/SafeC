@@ -2,6 +2,7 @@
 #pragma once
 #include <std/convert.h>
 #include <std/mem.h>
+#include <std/errno_compat.h>
 
 // ── Explicit extern declarations for libc functions ───────────────────────────
 // '#include <stdlib.h>' etc. aren't usable here: this compiler's preprocessor
@@ -14,12 +15,6 @@ extern long long      strtoll(const char* s, char** endptr, int base);
 extern unsigned long long strtoull(const char* s, char** endptr, int base);
 extern double          strtod(const char* s, char** endptr);
 extern int             snprintf(char* buf, unsigned long n, const char* fmt, ...);
-
-// errno: macOS's libc exposes it via a thread-local accessor, not a plain
-// extern global (unlike glibc's 'extern int errno'). '__error()' is the
-// documented macOS entry point that the real <errno.h> macro expands to.
-extern int* __error(void);
-#define errno (*__error())
 
 #define INT_MIN (-2147483647 - 1)
 #define INT_MAX 2147483647

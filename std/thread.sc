@@ -6,7 +6,7 @@
 namespace std {
 
 // ════════════════════════════════ WIN32 ══════════════════════════════════════
-#ifdef __WINDOWS__
+#ifdef _WIN32
 
 // kernel32.dll — always linked on Windows
 

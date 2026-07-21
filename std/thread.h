@@ -1,7 +1,9 @@
 #pragma once
 // SafeC Standard Library — Thread
 // Cross-platform: POSIX pthreads (Linux/macOS) or Win32 (Windows).
-// Compile with -D__WINDOWS__ to select the Win32 backend.
+// Backend is selected automatically from '_WIN32', which safec auto-defines
+// for a Windows host/target (see main.cpp's platform-detection block) —
+// same convention as std/stderr_compat.h.
 //
 // Thread handles: unsigned long long
 //   POSIX → pthread_t value (8 bytes on 64-bit)
