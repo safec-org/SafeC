@@ -30,6 +30,14 @@
 #define SCHED_O_CREAT  0x0100
 #define SAFEC_FIONBIO  0x8004667EU
 #define SAFEC_WSA_VERSION 0x0202  // MAKEWORD(2, 2) — request Winsock 2.2
+// Winsock deliberately mirrors the original 4.3BSD values for these —
+// verified empirically against a real <winsock2.h>/<ws2tcpip.h>, not
+// assumed: SOL_SOCKET=0xffff and SO_REUSEADDR=0x0004 match io_nb_bsd.sc's
+// values exactly; IPPROTO_TCP=6/TCP_NODELAY=1 match every backend here.
+#define SCHED_SOL_SOCKET    0xffff
+#define SCHED_SO_REUSEADDR  0x0004
+#define SCHED_IPPROTO_TCP   6
+#define SCHED_TCP_NODELAY   1
 
 namespace std {
 
@@ -43,9 +51,18 @@ struct SockAddrIn {
     unsigned long  sin_zero;   // 8 bytes, always zero
 };
 
+// reactor_win32.sc declares this same struct (same purpose, same shape —
+// see its own comment) — guarded so a caller that includes both this file
+// and reactor_win32.sc (e.g. std::http_serve_reactor, which needs both)
+// doesn't hit a duplicate-definition error. #pragma once only guards a
+// single file against itself, not two different files defining the same
+// struct name.
+#ifndef SAFEC_WSADATA_DEFINED_
+#define SAFEC_WSADATA_DEFINED_
 struct WSAData_ {
     unsigned char reserved[32]; // oversized on purpose — see reactor_win32.sc's WSAData_
 };
+#endif
 
 extern int WSAStartup(unsigned short versionRequested, void* wsaData);
 extern int _open(const char* path, int flags, int mode); // MSVCRT — plain (blocking) file open
@@ -55,6 +72,10 @@ extern int listen(unsigned long long fd, int backlog);
 extern unsigned long long accept(unsigned long long fd, void* addr, void* addrlen);
 extern int connect(unsigned long long fd, const void* addr, int addrlen);
 extern int ioctlsocket(unsigned long long fd, int cmd, unsigned long* argp);
+extern int setsockopt(unsigned long long fd, int level, int optname, const void* optval, int optlen);
+extern int WSAGetLastError();
+
+#define SAFEC_WSAEWOULDBLOCK 10035
 
 inline unsigned short sched_htons(unsigned short host16) {
     return (unsigned short)(((host16 & (unsigned short)0xFF) << 8) |
@@ -76,6 +97,12 @@ inline unsigned int sched_ipv4(unsigned char a, unsigned char b,
 static void io_nb_wsa_init_() {
     struct WSAData_ wsaData;
     unsafe { WSAStartup((unsigned short)SAFEC_WSA_VERSION, (void*)&wsaData); }
+}
+
+inline int sock_would_block() {
+    int e;
+    unsafe { e = WSAGetLastError(); }
+    return e == SAFEC_WSAEWOULDBLOCK;
 }
 
 inline int fd_set_nonblocking(int fd) {
@@ -105,9 +132,29 @@ inline int tcp_listen_nb(unsigned short port) {
     io_nb_wsa_init_();
     unsigned long long fd;
     unsafe { fd = socket(SCHED_AF_INET, SCHED_SOCK_STREAM, 0); }
+    // socket() failure returns INVALID_SOCKET (~0, every bit set) — must
+    // check this *before* truncating to int and calling fd_set_nonblocking
+    // on it. Real bug found via this exact gap in tcp_accept_nb below:
+    // calling any further Winsock function on an invalid handle fails
+    // with its own error (WSAENOTSOCK) that overwrites whatever
+    // WSAGetLastError() the real failure had set, so a caller checking
+    // sock_would_block() afterward sees the wrong code entirely.
+    if (fd == 0xFFFFFFFFFFFFFFFFULL) {
+        return -1;
+    }
     int ifd = (int)fd;
     if (fd_set_nonblocking(ifd) != 0) {
         return -1;
+    }
+    // See io_nb_bsd.sc's tcp_listen_nb for why: without this, rebinding
+    // the port fails for as long as a just-served connection's socket
+    // sits in TIME_WAIT on it. Missing here before (unlike the BSD/Linux
+    // backends) — real gap, found while restarting this server rapidly
+    // during benchmarking (see benchmarks.md's web service section).
+    unsafe {
+        int reuseOpt = 1;
+        setsockopt(fd, SCHED_SOL_SOCKET, SCHED_SO_REUSEADDR,
+                   (const void*)&reuseOpt, 4);
     }
 
     struct SockAddrIn addr;
@@ -135,9 +182,31 @@ inline int tcp_listen_nb(unsigned short port) {
 inline int tcp_accept_nb(int listenfd) {
     unsigned long long fd;
     unsafe { fd = accept((unsigned long long)listenfd, (void*)0, (void*)0); }
+    // See tcp_listen_nb's identical check for why this must come before
+    // touching 'fd' any further — this is the specific call site where
+    // the missing check was actually found: an empty accept queue makes
+    // accept() correctly fail with WSAEWOULDBLOCK, but without this
+    // early return, the very next line (fd_set_nonblocking on the
+    // resulting INVALID_SOCKET) fails too and clobbers that error to
+    // WSAENOTSOCK before std::sock_would_block() ever gets to check it —
+    // observed as std::http_serve_reactor's Windows acceptor task
+    // silently taking the "real error" branch on every single
+    // connection attempt and hanging forever instead of registering
+    // with the reactor and waiting correctly.
+    if (fd == 0xFFFFFFFFFFFFFFFFULL) {
+        return -1;
+    }
     int ifd = (int)fd;
     if (fd_set_nonblocking(ifd) != 0) {
         return -1;
+    }
+    // See io_nb_bsd.sc's tcp_accept_nb for why: request/response protocols
+    // like HTTP get nothing from Nagle's write-batching and only pay its
+    // latency against the peer's delayed-ACK timer.
+    unsafe {
+        int nodelayOpt = 1;
+        setsockopt(fd, SCHED_IPPROTO_TCP, SCHED_TCP_NODELAY,
+                   (const void*)&nodelayOpt, 4);
     }
     return ifd;
 }
@@ -146,6 +215,10 @@ inline int tcp_connect_nb(unsigned int addr_network_order, unsigned short port) 
     io_nb_wsa_init_();
     unsigned long long fd;
     unsafe { fd = socket(SCHED_AF_INET, SCHED_SOCK_STREAM, 0); }
+    // See tcp_listen_nb's identical check.
+    if (fd == 0xFFFFFFFFFFFFFFFFULL) {
+        return -1;
+    }
     int ifd = (int)fd;
     if (fd_set_nonblocking(ifd) != 0) {
         return -1;

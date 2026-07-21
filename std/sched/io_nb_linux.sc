@@ -3,6 +3,7 @@
 // backend file list)
 #pragma once
 #include <std/sched/io_nb.h>
+#include <std/errno.sc>
 
 #define SCHED_O_CREAT     0x40
 #define SCHED_O_NONBLOCK  0x800
@@ -28,11 +29,17 @@ extern int bind(int fd, const void* addr, unsigned int addrlen);
 extern int listen(int fd, int backlog);
 extern int accept(int fd, void* addr, void* addrlen);
 extern int connect(int fd, const void* addr, unsigned int addrlen);
-extern int fcntl(int fd, int cmd, int arg);
+// Genuinely variadic in the real libc — see io_nb_bsd.sc's identical
+// declaration for why this matters (a real ARM64/AAPCS64 ABI mismatch
+// there; x86_64 happens to tolerate the fixed-arg form, but that's an
+// accident of this specific ABI, not something to depend on).
+extern int fcntl(int fd, int cmd, ...);
 extern int setsockopt(int fd, int level, int optname, const void* optval, unsigned int optlen);
 
 #define SCHED_SOL_SOCKET    1
 #define SCHED_SO_REUSEADDR  2
+#define SCHED_IPPROTO_TCP   6
+#define SCHED_TCP_NODELAY   1
 
 inline unsigned short sched_htons(unsigned short host16) {
     return (unsigned short)(((host16 & (unsigned short)0xFF) << 8) |
@@ -71,6 +78,11 @@ inline int fd_set_blocking(int fd) {
     int rc;
     unsafe { rc = fcntl(fd, SCHED_F_SETFL, flags & ~SCHED_O_NONBLOCK); }
     return rc;
+}
+
+inline int sock_would_block() {
+    int e = errno_get();
+    return (e == ERRNO_EAGAIN()) || (e == ERRNO_EWOULDBLOCK());
 }
 
 inline int fd_open_nb(const char* path, int flags, int mode) {
@@ -128,6 +140,14 @@ inline int tcp_accept_nb(int listenfd) {
     }
     if (fd_set_nonblocking(fd) != 0) {
         return -1;
+    }
+    // See io_nb_bsd.sc's tcp_accept_nb for why: request/response protocols
+    // like HTTP get nothing from Nagle's write-batching and only pay its
+    // latency against the peer's delayed-ACK timer.
+    unsafe {
+        int nodelayOpt = 1;
+        setsockopt(fd, SCHED_IPPROTO_TCP, SCHED_TCP_NODELAY,
+                   (const void*)&nodelayOpt, 4U);
     }
     return fd;
 }

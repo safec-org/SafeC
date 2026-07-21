@@ -26,8 +26,28 @@ const int ERRNO_EBUSY()  { return 16; }
 const int ERRNO_EEXIST() { return 17; }
 const int ERRNO_EINVAL() { return 22; }
 const int ERRNO_ERANGE() { return 34; }
-const int ERRNO_EAGAIN() { return 11; }
+// EAGAIN/EWOULDBLOCK/ETIMEDOUT are the one place this "subset" stops being
+// platform-stable: every other code above happens to share the same
+// number on Linux/macOS/BSD (a historical Unix errno.h accident), but
+// these three genuinely differ — verified empirically (a small C program
+// against each platform's real <errno.h>), not copied from memory:
+//   Linux (glibc):  EAGAIN=11  EWOULDBLOCK=11   ETIMEDOUT=110
+//   macOS/BSD:      EAGAIN=35  EWOULDBLOCK=35   ETIMEDOUT=60
+// Windows sockets don't use errno for this at all — recv/send/etc. report
+// failure via WSAGetLastError() on a completely separate per-thread error
+// slot, not the CRT errno _errno() wraps. Code that needs "did this
+// non-blocking socket call fail because it would've blocked" should call
+// std::sock_would_block() (std/sched/io_nb.h) instead of comparing
+// errno_get() to these — that helper is the one that's actually correct
+// on all three platforms, including Windows.
+#ifdef __APPLE__
+const int ERRNO_EAGAIN()      { return 35; }
+const int ERRNO_EWOULDBLOCK() { return 35; }
+const int ERRNO_ETIMEDOUT()   { return 60; }
+#else
+const int ERRNO_EAGAIN()      { return 11; }
 const int ERRNO_EWOULDBLOCK() { return 11; }
 const int ERRNO_ETIMEDOUT()   { return 110; }
+#endif
 
 } // namespace std

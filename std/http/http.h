@@ -108,6 +108,18 @@ int http_serve(unsigned short port, HttpHandler handler);
 // start); does not return otherwise.
 int http_serve_threaded(unsigned short port, HttpHandler handler, int numThreads);
 
+// Same contract as http_serve()/http_serve_threaded(), but each of
+// 'numThreads' OS threads runs a non-blocking std::Reactor/TaskScheduler
+// event loop (see std/sched/reactor.h) instead of blocking one connection
+// at a time — many concurrent connections per thread rather than one,
+// the same shape async runtimes elsewhere use for higher throughput
+// under concurrent load. Requires a reactor backend
+// (reactor_kqueue.sc/reactor_epoll.sc/reactor_win32.sc) to already be
+// included by the caller, same convention as io_nb.h's own backend
+// selection. Returns -1 immediately on setup failure; does not return
+// otherwise.
+int http_serve_reactor(unsigned short port, HttpHandler handler, int numThreads);
+
 // Builds a complete "HTTP/1.1 <status> <reason>\r\n...\r\n\r\n<body>" text
 // block ready to send to a client. 'status' must be one of the codes
 // http_reason_phrase (below) recognizes (100–599 range; unrecognized

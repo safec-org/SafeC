@@ -43,6 +43,8 @@
 // Win32 API surface and struct layouts, but not yet exercised against a
 // real WSAPoll call.
 #pragma once
+// See reactor_kqueue.sc's identical comment on this macro.
+#define SAFEC_REACTOR_BACKEND_INCLUDED_
 #include <std/sched/reactor.h>
 #include <std/sched/reactor.sc>
 #include <std/sync/task.sc>
@@ -63,9 +65,15 @@ struct WSAPollFd {
 // simpler, safer way to give the real function room to write into than
 // pinning down WSADATA's exact (version-dependent, historically fiddly)
 // layout for a value nothing in this file inspects.
+// Guarded — io_nb_win32.sc declares this same struct (same purpose, same
+// shape) and a caller may include both (e.g. std::http_serve_reactor
+// does). See io_nb_win32.sc's identical guard comment.
+#ifndef SAFEC_WSADATA_DEFINED_
+#define SAFEC_WSADATA_DEFINED_
 struct WSAData_ {
     unsigned char reserved[32];
 };
+#endif
 
 extern int   WSAStartup(unsigned short versionRequested, void* wsaData);
 extern int   WSACleanup();

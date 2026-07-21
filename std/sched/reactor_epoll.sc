@@ -32,6 +32,8 @@
 // only be 64 bytes on a 32-bit target, where 'unsigned long' is 4 bytes
 // instead of 8).
 #pragma once
+// See reactor_kqueue.sc's identical comment on this macro.
+#define SAFEC_REACTOR_BACKEND_INCLUDED_
 #include <std/sched/reactor.h>
 #include <std/sched/reactor.sc>
 #include <std/sync/task.sc>

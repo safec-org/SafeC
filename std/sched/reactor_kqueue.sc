@@ -13,6 +13,12 @@
 // for field rather than using an opaque byte blob, since the layout is a
 // stable, documented part of the kqueue syscall ABI.
 #pragma once
+// Marks that a reactor backend is present in this translation unit — lets
+// callers that need a reactor conditionally on it (std::http_serve_reactor
+// in std/http/http.sc) without forcing every other http.sc caller to also
+// link one just to satisfy Reactor::add/etc.'s symbol references. See that
+// file's own comment on this macro.
+#define SAFEC_REACTOR_BACKEND_INCLUDED_
 #include <std/sched/reactor.h>
 #include <std/sync/task.sc>
 #include <std/collections/vec.sc>

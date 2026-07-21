@@ -78,4 +78,17 @@ int tcp_accept_nb(int listenfd);
 // immediate failure.
 int tcp_connect_nb(unsigned int addr_network_order, unsigned short port);
 
+// True if the most recent non-blocking socket call (accept/recv/send/
+// connect/...) failed only because it would have blocked — i.e. "not
+// ready yet, try again after await_fd()", not a real error. Checking this
+// is genuinely platform-specific in a way none of the other functions
+// here are: BSD/Linux report it through errno (EAGAIN/EWOULDBLOCK, and
+// std/errno.h's ERRNO_EAGAIN()/ERRNO_EWOULDBLOCK() only recently started
+// giving the right numbers per platform there — see that header),
+// Windows sockets never touch errno at all and report it through a
+// separate per-thread slot, WSAGetLastError() == WSAEWOULDBLOCK (10035).
+// Call this immediately after the failing call, before anything else
+// that might itself set errno/WSAGetLastError() and clobber it.
+int sock_would_block();
+
 } // namespace std

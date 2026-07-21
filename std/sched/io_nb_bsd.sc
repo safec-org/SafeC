@@ -3,6 +3,7 @@
 // backend file list)
 #pragma once
 #include <std/sched/io_nb.h>
+#include <std/errno.sc>
 
 #define SCHED_O_CREAT     0x0200
 #define SCHED_O_NONBLOCK  0x0004
@@ -29,11 +30,27 @@ extern int bind(int fd, const void* addr, unsigned int addrlen);
 extern int listen(int fd, int backlog);
 extern int accept(int fd, void* addr, void* addrlen);
 extern int connect(int fd, const void* addr, unsigned int addrlen);
-extern int fcntl(int fd, int cmd, int arg);
+// Real libc fcntl is 'int fcntl(int fd, int cmd, ...)' — genuinely
+// variadic, not (fd, cmd, arg). Declaring it with a fixed third 'int arg'
+// parameter instead of '...' is a real ABI mismatch on arm64/AAPCS64
+// (Apple Silicon passes variadic-position arguments differently than
+// fixed ones): verified empirically that fd_set_nonblocking's
+// fcntl(fd, F_SETFL, flags|O_NONBLOCK) call silently failed to actually
+// set O_NONBLOCK with the fixed-arg declaration — a freshly-listened
+// socket read back as still blocking, so accept() on it blocked forever
+// instead of returning EAGAIN, hanging the reactor's acceptor task. Read
+// back with the correct variadic declaration below, the exact same call
+// works. x86_64 (Linux, and this same declaration in io_nb_linux.sc)
+// happens not to hit this — its calling convention doesn't special-case
+// variadic-position arguments the way AAPCS64 does — but this was never
+// something to rely on either way.
+extern int fcntl(int fd, int cmd, ...);
 extern int setsockopt(int fd, int level, int optname, const void* optval, unsigned int optlen);
 
 #define SCHED_SOL_SOCKET    0xffff
 #define SCHED_SO_REUSEADDR  0x0004
+#define SCHED_IPPROTO_TCP   6
+#define SCHED_TCP_NODELAY   1
 
 inline unsigned short sched_htons(unsigned short host16) {
     return (unsigned short)(((host16 & (unsigned short)0xFF) << 8) |
@@ -72,6 +89,11 @@ inline int fd_set_blocking(int fd) {
     int rc;
     unsafe { rc = fcntl(fd, SCHED_F_SETFL, flags & ~SCHED_O_NONBLOCK); }
     return rc;
+}
+
+inline int sock_would_block() {
+    int e = errno_get();
+    return (e == ERRNO_EAGAIN()) || (e == ERRNO_EWOULDBLOCK());
 }
 
 inline int fd_open_nb(const char* path, int flags, int mode) {
@@ -141,6 +163,18 @@ inline int tcp_accept_nb(int listenfd) {
     }
     if (fd_set_nonblocking(fd) != 0) {
         return -1;
+    }
+    // Nagle's algorithm batches small writes to wait for either a full
+    // segment or the peer's ACK before sending — request/response
+    // protocols like HTTP, where each side writes once and waits, get no
+    // benefit from that batching and instead just pay its latency
+    // (interacting with the peer's delayed-ACK timer, tens of ms per
+    // hop). Disabling it on the accepted socket is the standard fix for
+    // any server whose protocol already frames its own messages.
+    unsafe {
+        int nodelayOpt = 1;
+        setsockopt(fd, SCHED_IPPROTO_TCP, SCHED_TCP_NODELAY,
+                   (const void*)&nodelayOpt, 4U);
     }
     return fd;
 }

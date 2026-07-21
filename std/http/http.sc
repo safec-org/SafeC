@@ -7,6 +7,7 @@
 #include <std/convert.sc>
 #include <std/str.sc>
 #include <std/sched/io_nb.h>
+#include <std/sched/reactor.h>
 #include <std/thread.h>
 #include <std/thread.sc>
 // A backend for io_nb.h's declarations (io_nb_bsd.sc / io_nb_linux.sc /
@@ -14,6 +15,9 @@
 // same way std/ipc/uds.h's callers pick uds_bsd.sc/uds_linux.sc themselves
 // — see io_nb.h's top comment for the backend list. http.sc only ever
 // calls the portable function signatures, never anything backend-specific.
+// http_serve_reactor (below) needs the same treatment for its reactor
+// backend — reactor_kqueue.sc/reactor_epoll.sc/reactor_win32.sc — also the
+// caller's job to include first.
 
 namespace std {
 
@@ -30,8 +34,8 @@ namespace std {
 extern int recv(unsigned long long fd, void* buf, int count, int flags);
 extern int send(unsigned long long fd, const void* buf, int count, int flags);
 extern int closesocket(unsigned long long fd);
-static int sock_read_(int fd, void* buf, unsigned long count) {
-    unsafe { return recv((unsigned long long)fd, buf, (int)count, 0); }
+static long sock_read_(int fd, void* buf, unsigned long count) {
+    unsafe { return (long)recv((unsigned long long)fd, buf, (int)count, 0); }
 }
 static long sock_write_(int fd, const void* buf, unsigned long count) {
     unsafe { return (long)send((unsigned long long)fd, buf, (int)count, 0); }
@@ -40,10 +44,17 @@ static int sock_close_(int fd) {
     unsafe { return closesocket((unsigned long long)fd); }
 }
 #else
-extern int read(int fd, void* buf, unsigned long count);
+// read/write's real POSIX return type is ssize_t (8 bytes on every
+// 64-bit target this runs on) — declared 'long' here to match, not
+// 'int'. This isn't just pedantry: std/sched/reactor_epoll.sc declares
+// this same libc 'read' symbol (for draining signalfd) with the correct
+// 'long' return type, and a caller that also includes both reactor_*.sc
+// and this file (see http_serve_reactor below) hits a real duplicate-
+// extern-declaration mismatch if the two disagree.
+extern long read(int fd, void* buf, unsigned long count);
 extern long write(int fd, const void* buf, unsigned long count);
 extern int close(int fd);
-static int sock_read_(int fd, void* buf, unsigned long count) {
+static long sock_read_(int fd, void* buf, unsigned long count) {
     unsafe { return read(fd, buf, count); }
 }
 static long sock_write_(int fd, const void* buf, unsigned long count) {
@@ -558,5 +569,360 @@ int http_serve_threaded(unsigned short port, HttpHandler handler, int numThreads
     unsafe { thread_join(tid); }
     return 0;
 }
+
+// ── Reactor-based server ─────────────────────────────────────────────────────
+// Gated on SAFEC_REACTOR_BACKEND_INCLUDED_ (defined by reactor_kqueue.sc/
+// reactor_epoll.sc/reactor_win32.sc — see their own comment on this
+// macro): Reactor::add/remove/poll and TaskScheduler::spawn_task/await_fd
+// below are real symbol references, not just declarations, so a caller
+// that includes http.sc *without* a reactor backend (http_serve/
+// http_serve_threaded's ordinary callers, unchanged by any of this) would
+// otherwise fail to link over functions it never calls and code it never
+// asked for — SafeC doesn't dead-strip unused functions before linking.
+// Callers that DO want http_serve_reactor already have to include a
+// reactor backend first for the exact same reason http_serve/
+// http_serve_threaded already require an io_nb backend first (see the
+// file-header comment above); this just extends that same opt-in
+// convention to the reactor dependency specifically.
+#ifdef SAFEC_REACTOR_BACKEND_INCLUDED_
+//
+// http_serve/http_serve_threaded are a small, fixed-size pool of OS
+// threads each blocked on one connection's accept/read/write at a time —
+// simple, but the concurrency ceiling is exactly the thread count, and
+// each blocked thread costs a full OS stack and a context switch to wake.
+// http_serve_reactor instead runs 'numThreads' OS threads (typically one
+// per core, not one per connection), each driving its own
+// std::TaskScheduler/std::Reactor pair (see std/sched/reactor.h) so a
+// single thread can hold hundreds of connections open at once without
+// blocking on any one of them — the same non-blocking-I/O-plus-event-loop
+// shape Node/nginx/Rust's async runtimes use, built on the cooperative
+// task scheduler this codebase already had but nothing (including this
+// module, until now) actually drove with real socket I/O.
+//
+// Caller-selected backend, same convention as io_nb.h and this file's own
+// choice of io_nb_bsd.sc/io_nb_linux.sc/io_nb_win32.sc: before including
+// http.sc, also include whichever of std/sched/reactor_kqueue.sc /
+// reactor_epoll.sc / reactor_win32.sc matches your target.
+
+static struct HttpRequest http_parse_request_from_buf_(struct String* buf, long headerEnd, int* ok) {
+    struct HttpRequest req;
+    req.method  = string_new();
+    req.path    = string_new();
+    req.headers = string_new();
+    req.body    = string_new();
+    int good = 1;
+
+    unsafe {
+        struct String headerBlock = buf->substr(0UL, (unsigned long)headerEnd);
+        long firstLineEnd = headerBlock.index_of("\r\n");
+        struct String requestLine = (firstLineEnd >= 0L)
+            ? headerBlock.substr(0UL, (unsigned long)firstLineEnd)
+            : headerBlock.clone();
+        struct String restHeaders = (firstLineEnd >= 0L)
+            ? headerBlock.substr((unsigned long)firstLineEnd + 2UL, headerBlock.length())
+            : string_new();
+        headerBlock.free();
+
+        struct String parts[8];
+        unsigned long np = requestLine.split(" ", parts, 8UL);
+        if (np >= 2UL) {
+            req.method.free();
+            req.method = parts[0].clone();
+            req.path.free();
+            req.path = parts[1].clone();
+        } else {
+            good = 0;
+        }
+        unsigned long pi = 0UL;
+        while (pi < np) { parts[pi].free(); pi = pi + 1UL; }
+        requestLine.free();
+
+        req.headers.free();
+        req.headers = restHeaders;
+
+        // By the time this is called, the task's read phases have already
+        // accumulated the full body (Content-Length bytes past headerEnd) —
+        // no I/O needed here, pure parsing.
+        req.body.free();
+        req.body = buf->substr((unsigned long)headerEnd, buf->length());
+
+        if (ok != (int*)0) { *ok = good; }
+    }
+    return req;
+}
+
+#define HTTP_CONN_PHASE_READ_HEADERS_ 0
+#define HTTP_CONN_PHASE_READ_BODY_    1
+#define HTTP_CONN_PHASE_DISPATCH_     2
+#define HTTP_CONN_PHASE_WRITE_        3
+
+struct HttpConnState_ {
+    int fd;
+    HttpHandler handler;
+    struct TaskScheduler* sched;
+    struct Reactor* reactor;
+    int phase;
+    int registeredFilter; // 0 (none yet), SCHED_READ, or SCHED_WRITE — whichever
+                           // this fd is currently reactor-registered for, so
+                           // phase transitions know whether to remove()/add()
+    struct String readBuf;
+    long headerEnd;        // -1 until "\r\n\r\n" found
+    unsigned long bodyWant; // Content-Length target; 0 if no body expected
+    struct String respText;
+    unsigned long sent;
+};
+
+static void http_conn_cleanup_(struct HttpConnState_* st) {
+    unsafe {
+        if (st->registeredFilter != 0) {
+            st->reactor->remove(st->fd, st->registeredFilter);
+        }
+        sock_close_(st->fd);
+        st->readBuf.free();
+        st->respText.free();
+        free(st);
+    }
+}
+
+// Task function: int(void* arg, int resume_point) — see std/sync/task.h.
+// Always yields '1' (task.sc only checks zero-vs-nonzero; the actual
+// resume point lives in st->phase, not the return value) until the
+// connection is fully handled, then returns 0 (TASK_DONE). Entirely
+// pointer-driven (st is heap-allocated, shared across yields/resumes), so
+// the whole body runs inside one unsafe block rather than one per access.
+static int http_conn_task_(void* argPtr, int resume_point) {
+    unsafe {
+        struct HttpConnState_* st = (struct HttpConnState_*)argPtr;
+
+        if (st->phase == HTTP_CONN_PHASE_READ_HEADERS_) {
+            char chunk[4096];
+            while (1) {
+                long n = sock_read_(st->fd, (void*)chunk, 4096UL);
+                if (n > 0L) {
+                    st->readBuf.push_n(chunk, (unsigned long)n);
+                    long idx = st->readBuf.index_of("\r\n\r\n");
+                    if (idx >= 0L) {
+                        st->headerEnd = idx + 4L;
+                        st->phase = HTTP_CONN_PHASE_READ_BODY_;
+                        break;
+                    }
+                    continue; // more may already be available; avoid a needless yield
+                }
+                if (n == 0L) { http_conn_cleanup_(st); return 0; } // peer closed early
+                if (sock_would_block()) {
+                    if (st->registeredFilter != SCHED_READ) {
+                        st->reactor->add(st->fd, SCHED_READ);
+                        st->registeredFilter = SCHED_READ;
+                    }
+                    st->sched->await_fd(st->fd, SCHED_READ);
+                    return 1;
+                }
+                http_conn_cleanup_(st); return 0; // real error
+            }
+        }
+
+        if (st->phase == HTTP_CONN_PHASE_READ_BODY_) {
+            struct String headerBlockForCL = st->readBuf.substr(0UL, (unsigned long)st->headerEnd);
+            struct String clStr = http_header_get(headerBlockForCL.as_ptr(), "Content-Length");
+            headerBlockForCL.free();
+            if (!clStr.is_empty()) {
+                int clok = 0;
+                st->bodyWant = (unsigned long)clStr.parse_int(&clok);
+            }
+            clStr.free();
+
+            char chunk[4096];
+            while (st->readBuf.length() - (unsigned long)st->headerEnd < st->bodyWant) {
+                unsigned long haveBody = st->readBuf.length() - (unsigned long)st->headerEnd;
+                unsigned long want = st->bodyWant - haveBody;
+                unsigned long ask = want < 4096UL ? want : 4096UL;
+                long n = sock_read_(st->fd, (void*)chunk, ask);
+                if (n > 0L) {
+                    st->readBuf.push_n(chunk, (unsigned long)n);
+                    continue;
+                }
+                if (n == 0L) { http_conn_cleanup_(st); return 0; }
+                if (sock_would_block()) {
+                    if (st->registeredFilter != SCHED_READ) {
+                        st->reactor->add(st->fd, SCHED_READ);
+                        st->registeredFilter = SCHED_READ;
+                    }
+                    st->sched->await_fd(st->fd, SCHED_READ);
+                    return 1;
+                }
+                http_conn_cleanup_(st); return 0;
+            }
+            st->phase = HTTP_CONN_PHASE_DISPATCH_;
+        }
+
+        if (st->phase == HTTP_CONN_PHASE_DISPATCH_) {
+            int reqOk = 0;
+            struct HttpRequest req = http_parse_request_from_buf_(&st->readBuf, st->headerEnd, &reqOk);
+            if (reqOk) {
+                struct HttpResponse resp = st->handler(&req);
+                struct String contentType = http_header_get(resp.headers.as_ptr(), "Content-Type");
+                st->respText = http_build_response(
+                    resp.status, contentType.as_ptr(),
+                    (const unsigned char*)resp.body.as_ptr(), resp.body.length());
+                contentType.free();
+                resp.free();
+            } else {
+                st->respText = http_build_response(400, "text/plain", (const unsigned char*)"", 0UL);
+            }
+            req.free();
+            st->sent = 0UL;
+            if (st->registeredFilter == SCHED_READ) {
+                st->reactor->remove(st->fd, SCHED_READ);
+                st->registeredFilter = 0;
+            }
+            st->phase = HTTP_CONN_PHASE_WRITE_;
+        }
+
+        // HTTP_CONN_PHASE_WRITE_
+        while (st->sent < st->respText.length()) {
+            long n = sock_write_(st->fd,
+                (const void*)(st->respText.as_ptr() + st->sent),
+                st->respText.length() - st->sent);
+            if (n > 0L) {
+                st->sent = st->sent + (unsigned long)n;
+                continue;
+            }
+            if (sock_would_block()) {
+                if (st->registeredFilter != SCHED_WRITE) {
+                    st->reactor->add(st->fd, SCHED_WRITE);
+                    st->registeredFilter = SCHED_WRITE;
+                }
+                st->sched->await_fd(st->fd, SCHED_WRITE);
+                return 1;
+            }
+            http_conn_cleanup_(st); return 0; // write error
+        }
+        http_conn_cleanup_(st);
+        return 0; // done
+    }
+}
+
+struct HttpAcceptState_ {
+    int listenFd;
+    HttpHandler handler;
+    struct TaskScheduler* sched;
+    struct Reactor* reactor;
+    int registered;
+};
+
+// Task function for the one long-lived "accept new connections" task per
+// reactor thread. Never returns 0 (TASK_DONE) — it's meant to run for the
+// lifetime of the server, the same way http_serve's/http_serve_threaded's
+// own accept loops never return.
+static int http_accept_task_(void* argPtr, int resume_point) {
+    unsafe {
+        struct HttpAcceptState_* ac = (struct HttpAcceptState_*)argPtr;
+
+        while (1) {
+            int clientFd = tcp_accept_nb(ac->listenFd);
+            if (clientFd >= 0) {
+                struct HttpConnState_* st = (struct HttpConnState_*)malloc(sizeof(struct HttpConnState_));
+                if (st != (struct HttpConnState_*)0) {
+                    st->fd = clientFd;
+                    st->handler = ac->handler;
+                    st->sched = ac->sched;
+                    st->reactor = ac->reactor;
+                    st->phase = HTTP_CONN_PHASE_READ_HEADERS_;
+                    st->registeredFilter = 0;
+                    st->readBuf = string_new();
+                    st->headerEnd = -1L;
+                    st->bodyWant = 0UL;
+                    st->respText = string_new();
+                    st->sent = 0UL;
+                    int idx = ac->sched->spawn_task((void*)http_conn_task_, (void*)st);
+                    if (idx < 0) {
+                        // Scheduler at capacity (TASK_MAX concurrent
+                        // connections on this thread already) — drop this
+                        // one rather than leak the fd or block the acceptor.
+                        sock_close_(clientFd);
+                        st->readBuf.free();
+                        st->respText.free();
+                        free(st);
+                    }
+                } else {
+                    sock_close_(clientFd);
+                }
+                continue; // more may be pending; drain before yielding
+            }
+            if (sock_would_block()) {
+                if (ac->registered == 0) {
+                    ac->reactor->add(ac->listenFd, SCHED_READ);
+                    ac->registered = 1;
+                }
+                ac->sched->await_fd(ac->listenFd, SCHED_READ);
+                return 1;
+            }
+            // Some other accept() failure — yield and retry rather than
+            // spin or crash the acceptor over one bad call.
+            ac->sched->await_fd(ac->listenFd, SCHED_READ);
+            return 1;
+        }
+    }
+}
+
+struct HttpReactorThreadCtx_ {
+    int listenFd;
+    HttpHandler handler;
+};
+
+static void* http_reactor_worker_(void* argPtr) {
+    unsafe {
+        struct HttpReactorThreadCtx_* ctx = (struct HttpReactorThreadCtx_*)argPtr;
+
+        struct Reactor reactor = reactor_init();
+        if (reactor.init() != 0) { return (void*)0; }
+        struct TaskScheduler sched = task_sched_init();
+
+        struct HttpAcceptState_* ac = (struct HttpAcceptState_*)malloc(sizeof(struct HttpAcceptState_));
+        ac->listenFd = ctx->listenFd;
+        ac->handler = ctx->handler;
+        ac->sched = (struct TaskScheduler*)&sched;
+        ac->reactor = (struct Reactor*)&reactor;
+        ac->registered = 0;
+
+        sched.spawn_task((void*)http_accept_task_, (void*)ac);
+        reactor_run(&sched, &reactor);
+
+        reactor.close_();
+        free(ac);
+        return (void*)0;
+    }
+}
+
+// Same contract as http_serve()/http_serve_threaded(), but each of
+// 'numThreads' OS threads runs a non-blocking reactor event loop instead
+// of blocking one-connection-at-a-time — see the file-header comment
+// above for why this scales further under concurrent load. Requires a
+// reactor backend (reactor_kqueue.sc/reactor_epoll.sc/reactor_win32.sc)
+// to already be included by the caller, same as io_nb's own backend
+// selection. Returns -1 immediately on setup failure; does not return
+// otherwise.
+int http_serve_reactor(unsigned short port, HttpHandler handler, int numThreads) {
+    if (numThreads < 1) { return -1; }
+    int listenFd;
+    unsafe { listenFd = tcp_listen_nb(port); }
+    if (listenFd < 0) { return -1; }
+
+    struct HttpReactorThreadCtx_* ctx;
+    unsafe { ctx = (struct HttpReactorThreadCtx_*)malloc(sizeof(struct HttpReactorThreadCtx_)); }
+    unsafe { ctx->listenFd = listenFd; ctx->handler = handler; }
+
+    unsigned long long tid = 0ULL;
+    int i = 0;
+    while (i < numThreads) {
+        unsafe {
+            if (thread_create(&tid, (void*)http_reactor_worker_, (void*)ctx) != 0) { return -1; }
+        }
+        i = i + 1;
+    }
+    unsafe { thread_join(tid); }
+    return 0;
+}
+#endif // SAFEC_REACTOR_BACKEND_INCLUDED_
 
 } // namespace std
