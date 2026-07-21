@@ -33,13 +33,27 @@
 namespace std {
 
 &Tensor tensor_add_gpu(const &Tensor a, const &Tensor b);
+// tensor_sub_gpu is chain-aware (see tensor_gpu.sc's chain-tracking
+// comment): under an open batch, both its forward and its backward
+// (__sub_backward_gpu) participate in the fused forward+loss+backward
+// training-step path -- e.g. diff = tensor_sub_gpu(pred, target) reading
+// 'pred' straight from a still-pending matmul/relu output, no CPU round
+// trip, and diff's own gradient propagating onward the same way.
 &Tensor tensor_sub_gpu(const &Tensor a, const &Tensor b);
 &Tensor tensor_mul_gpu(const &Tensor a, const &Tensor b);
 &Tensor tensor_scale_gpu(const &Tensor a, float k);
 &Tensor tensor_relu_gpu(const &Tensor a);
+// out = a * a -- chain-aware self-multiply, used for the loss computation's
+// sq = diff * diff. Not just tensor_mul_gpu(a, a): when 'a' is itself still
+// GPU-pending (the usual case here, diff coming straight from a batched
+// tensor_sub_gpu), tensor_mul_gpu's generic two-CPU-array signature can't
+// express "both operands are the same still-pending buffer" -- see
+// gpu_mps.h's mps_square_f32_chained comment.
+&Tensor tensor_square_gpu(const &Tensor a);
 // tensor_sum_gpu's GPU reduction (std::mps_sum_f32) is a two-stage
 // parallel reduction (grid-stride accumulate + threadgroup tree
-// reduction) -- see gpu_mps.sc's comment on mps_sum_f32.
+// reduction) -- see gpu_mps.sc's comment on mps_sum_f32. Chain-aware like
+// tensor_sub_gpu/tensor_square_gpu above.
 &Tensor tensor_sum_gpu(const &Tensor a);
 &Tensor tensor_matmul_gpu(const &Tensor a, const &Tensor b);
 

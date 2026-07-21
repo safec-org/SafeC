@@ -12,6 +12,7 @@
 // process for every op. Regenerate the embedded copy (gpu_mps_metallib.h)
 // with gen_mps_metallib.sh after editing this file.
 #include <metal_stdlib>
+#include <metal_simdgroup_matrix>
 using namespace metal;
 
 kernel void add_kernel(device const float* a [[buffer(0)]],
@@ -255,4 +256,309 @@ kernel void relu_backward_kernel(device const float* a [[buffer(0)]],
                                   device float* out [[buffer(2)]],
                                   uint id [[thread_position_in_grid]]) {
     out[id] = (a[id] > 0.0f) ? selfGrad[id] : 0.0f;
+}
+
+// ── simdgroup_matrix (hardware matrix-unit) GEMM kernels ────────────────────
+// Apple Silicon GPUs (A14/M1 and later) have dedicated matrix-multiply
+// hardware, exposed in MSL as simdgroup_matrix -- one simdgroup (32
+// threads) cooperatively holds an 8x8 tile and simdgroup_multiply_
+// accumulate does a full 8x8x8 multiply-add in hardware, instead of the
+// tiled kernels above doing it as 512 individual scalar multiply-adds
+// across 256 threads. This is the same class of hardware
+// MPSMatrixMultiplication (and so PyTorch-MPS/MLX's fastest paths) uses.
+//
+// Each threadgroup here is exactly one simdgroup (32 threads) computing
+// exactly one 8x8 output tile, accumulating over the reduction dimension
+// in 8-wide steps -- the simplest correct simdgroup_matrix layout, not
+// the further tier of multi-simdgroup-per-threadgroup tiling that a
+// maximally-tuned GEMM would add on top (real remaining headroom, not
+// attempted here).
+//
+// simdgroup_load/store past a matrix's real bounds is undefined behavior
+// (can read/write out of bounds device memory) -- unlike the tiled
+// kernels above, which have explicit boundary checks for shapes smaller
+// than one tile, these kernels have NO boundary handling at all. Callers
+// (gpu_mps.sc) MUST only dispatch these when every relevant dimension is
+// an exact multiple of 8, and fall back to the tiled kernels otherwise.
+
+// out[M,N] = a[M,K] . b[K,N]
+kernel void matmul_kernel_smma(device const float* a [[buffer(0)]],
+                                device const float* b [[buffer(1)]],
+                                device float* out [[buffer(2)]],
+                                constant uint& M [[buffer(3)]],
+                                constant uint& K [[buffer(4)]],
+                                constant uint& N [[buffer(5)]],
+                                uint2 tgid [[threadgroup_position_in_grid]]) {
+    uint row = tgid.y * 8;
+    uint col = tgid.x * 8;
+
+    simdgroup_float8x8 acc = simdgroup_float8x8(0.0f);
+    uint numTiles = K / 8;
+    for (uint t = 0; t < numTiles; t++) {
+        uint p = t * 8;
+        simdgroup_float8x8 tileA;
+        simdgroup_float8x8 tileB;
+        simdgroup_load(tileA, a + row * K + p, K);
+        simdgroup_load(tileB, b + p * N + col, N);
+        simdgroup_multiply_accumulate(acc, tileA, tileB, acc);
+    }
+    simdgroup_store(acc, out + row * N + col, N);
+}
+
+// dA[M,K] = a[M,N] . b^T, b stored [K,N] -- same math as matmul_abt_kernel
+// (see its comment), 'b' read transposed via simdgroup_load's built-in
+// transpose_matrix flag instead of a manual transposed-index load.
+kernel void matmul_abt_kernel_smma(device const float* a [[buffer(0)]],
+                                    device const float* b [[buffer(1)]],
+                                    device float* out [[buffer(2)]],
+                                    constant uint& M [[buffer(3)]],
+                                    constant uint& N [[buffer(4)]],
+                                    constant uint& K [[buffer(5)]],
+                                    uint2 tgid [[threadgroup_position_in_grid]]) {
+    uint row = tgid.y * 8; // M dim
+    uint col = tgid.x * 8; // K dim (output cols)
+
+    simdgroup_float8x8 acc = simdgroup_float8x8(0.0f);
+    uint numTiles = N / 8;
+    for (uint t = 0; t < numTiles; t++) {
+        uint p = t * 8;
+        simdgroup_float8x8 tileA;
+        simdgroup_float8x8 tileBT;
+        simdgroup_load(tileA, a + row * N + p, N);
+        simdgroup_load(tileBT, b + col * N + p, N, ulong2(0, 0), true);
+        simdgroup_multiply_accumulate(acc, tileA, tileBT, acc);
+    }
+    simdgroup_store(acc, out + row * K + col, K);
+}
+
+// dB[K,N] = a^T . b, a stored [M,K] -- same math as matmul_atb_kernel, 'a'
+// read transposed via simdgroup_load's transpose_matrix flag.
+kernel void matmul_atb_kernel_smma(device const float* a [[buffer(0)]],
+                                    device const float* b [[buffer(1)]],
+                                    device float* out [[buffer(2)]],
+                                    constant uint& M [[buffer(3)]],
+                                    constant uint& K [[buffer(4)]],
+                                    constant uint& N [[buffer(5)]],
+                                    uint2 tgid [[threadgroup_position_in_grid]]) {
+    uint row = tgid.y * 8; // K dim (output rows)
+    uint col = tgid.x * 8; // N dim (output cols)
+
+    simdgroup_float8x8 acc = simdgroup_float8x8(0.0f);
+    uint numTiles = M / 8;
+    for (uint t = 0; t < numTiles; t++) {
+        uint p = t * 8;
+        simdgroup_float8x8 tileAT;
+        simdgroup_float8x8 tileB;
+        simdgroup_load(tileAT, a + p * K + row, K, ulong2(0, 0), true);
+        simdgroup_load(tileB, b + p * N + col, N);
+        simdgroup_multiply_accumulate(acc, tileAT, tileB, acc);
+    }
+    simdgroup_store(acc, out + row * N + col, N);
+}
+
+// ── Multi-simdgroup tiled simdgroup_matrix kernels ──────────────────────────
+// The single-simdgroup kernels above launch one simdgroup (32 threads) per
+// 8x8 output tile and re-read every operand tile straight from device
+// memory on every K-step -- correct, and already using the hardware matrix
+// units, but with no data reuse across a threadgroup's neighbors and no
+// reuse across a K-step beyond what one 8x8 load already gets. These
+// kernels combine BOTH optimizations PyTorch's MPSMatrixMultiplication and
+// MLX's fastest GEMM paths use together: standard threadgroup-memory tiling
+// (like matmul_kernel above) to cut device-memory traffic, PLUS
+// simdgroup_matrix hardware multiply-accumulate (like the kernels above)
+// for the compute itself -- instead of either alone.
+//
+// Each threadgroup computes one 32x32 output tile using 4 simdgroups (128
+// threads) arranged 2x2; each simdgroup owns a 16x16 sub-region (four 8x8
+// accumulator registers) within it. Every reduction-dimension step
+// cooperatively loads one 32x32 tile of each operand into threadgroup
+// memory ONCE per threadgroup (not once per simdgroup), and all 4
+// simdgroups then read their 8x8 sub-tiles for simdgroup_multiply_
+// accumulate out of that shared on-chip copy instead of device memory.
+//
+// Same undefined-behavior-on-misaligned-bounds caveat as the kernels above,
+// one tier stricter: dispatch MUST have M, K, and N (all three) exact
+// multiples of 32 (not just 8) -- gpu_mps.sc only routes here when that
+// holds, falling back to the single-simdgroup _smma kernels (8-aligned) or
+// the plain tiled kernels (any shape) otherwise. Dispatch must also use
+// exactly 128 threads (4 simdgroups) per threadgroup.
+#define SMMA_MULTI_TILE 32
+
+// out[M,N] = a[M,K] . b[K,N]
+kernel void matmul_kernel_smma_multi(device const float* a [[buffer(0)]],
+                                      device const float* b [[buffer(1)]],
+                                      device float* out [[buffer(2)]],
+                                      constant uint& M [[buffer(3)]],
+                                      constant uint& K [[buffer(4)]],
+                                      constant uint& N [[buffer(5)]],
+                                      uint2 tgid [[threadgroup_position_in_grid]],
+                                      uint tid [[thread_index_in_threadgroup]],
+                                      uint sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float Atile[SMMA_MULTI_TILE][SMMA_MULTI_TILE];
+    threadgroup float Btile[SMMA_MULTI_TILE][SMMA_MULTI_TILE];
+
+    uint tgRow = tgid.y * SMMA_MULTI_TILE;
+    uint tgCol = tgid.x * SMMA_MULTI_TILE;
+    uint simdRow = sgid / 2;
+    uint simdCol = sgid % 2;
+    uint outRow0 = tgRow + simdRow * 16;
+    uint outCol0 = tgCol + simdCol * 16;
+
+    simdgroup_float8x8 acc00 = simdgroup_float8x8(0.0f);
+    simdgroup_float8x8 acc01 = simdgroup_float8x8(0.0f);
+    simdgroup_float8x8 acc10 = simdgroup_float8x8(0.0f);
+    simdgroup_float8x8 acc11 = simdgroup_float8x8(0.0f);
+
+    uint numKTiles = K / SMMA_MULTI_TILE;
+    for (uint kt = 0; kt < numKTiles; kt++) {
+        uint kBase = kt * SMMA_MULTI_TILE;
+        for (uint e = 0; e < 8; e++) {
+            uint idx = tid + e * 128;
+            uint r = idx / SMMA_MULTI_TILE;
+            uint c = idx % SMMA_MULTI_TILE;
+            Atile[r][c] = a[(tgRow + r) * K + (kBase + c)];
+            Btile[r][c] = b[(kBase + r) * N + (tgCol + c)];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (uint kk = 0; kk < SMMA_MULTI_TILE; kk += 8) {
+            simdgroup_float8x8 a0, a1, b0, b1;
+            simdgroup_load(a0, &Atile[simdRow * 16][kk], SMMA_MULTI_TILE);
+            simdgroup_load(a1, &Atile[simdRow * 16 + 8][kk], SMMA_MULTI_TILE);
+            simdgroup_load(b0, &Btile[kk][simdCol * 16], SMMA_MULTI_TILE);
+            simdgroup_load(b1, &Btile[kk][simdCol * 16 + 8], SMMA_MULTI_TILE);
+            simdgroup_multiply_accumulate(acc00, a0, b0, acc00);
+            simdgroup_multiply_accumulate(acc01, a0, b1, acc01);
+            simdgroup_multiply_accumulate(acc10, a1, b0, acc10);
+            simdgroup_multiply_accumulate(acc11, a1, b1, acc11);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    simdgroup_store(acc00, out + outRow0 * N + outCol0, N);
+    simdgroup_store(acc01, out + outRow0 * N + outCol0 + 8, N);
+    simdgroup_store(acc10, out + (outRow0 + 8) * N + outCol0, N);
+    simdgroup_store(acc11, out + (outRow0 + 8) * N + outCol0 + 8, N);
+}
+
+// dA[M,K] = a[M,N] . b^T, b stored [K,N] -- multi-simdgroup version of
+// matmul_abt_kernel_smma above (see its comment for the math); the
+// transposed read of 'b' is done by the cooperative-load's index formula
+// (BTtile[p][k] = b[k,p]) instead of simdgroup_load's transpose flag, since
+// the transpose now has to happen once per threadgroup-tile into shared
+// memory, not once per simdgroup_load.
+kernel void matmul_abt_kernel_smma_multi(device const float* a [[buffer(0)]],
+                                          device const float* b [[buffer(1)]],
+                                          device float* out [[buffer(2)]],
+                                          constant uint& M [[buffer(3)]],
+                                          constant uint& N [[buffer(4)]],
+                                          constant uint& K [[buffer(5)]],
+                                          uint2 tgid [[threadgroup_position_in_grid]],
+                                          uint tid [[thread_index_in_threadgroup]],
+                                          uint sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float Atile[SMMA_MULTI_TILE][SMMA_MULTI_TILE];  // [M-local][N-local]
+    threadgroup float BTtile[SMMA_MULTI_TILE][SMMA_MULTI_TILE]; // [N-local][K-local], b read transposed
+
+    uint tgRow = tgid.y * SMMA_MULTI_TILE; // M
+    uint tgCol = tgid.x * SMMA_MULTI_TILE; // K (output cols)
+    uint simdRow = sgid / 2;
+    uint simdCol = sgid % 2;
+    uint outRow0 = tgRow + simdRow * 16;
+    uint outCol0 = tgCol + simdCol * 16;
+
+    simdgroup_float8x8 acc00 = simdgroup_float8x8(0.0f);
+    simdgroup_float8x8 acc01 = simdgroup_float8x8(0.0f);
+    simdgroup_float8x8 acc10 = simdgroup_float8x8(0.0f);
+    simdgroup_float8x8 acc11 = simdgroup_float8x8(0.0f);
+
+    uint numTiles = N / SMMA_MULTI_TILE;
+    for (uint t = 0; t < numTiles; t++) {
+        uint nBase = t * SMMA_MULTI_TILE;
+        for (uint e = 0; e < 8; e++) {
+            uint idx = tid + e * 128;
+            uint r = idx / SMMA_MULTI_TILE;
+            uint c = idx % SMMA_MULTI_TILE;
+            Atile[r][c] = a[(tgRow + r) * N + (nBase + c)];
+            BTtile[r][c] = b[(tgCol + c) * N + (nBase + r)];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (uint kk = 0; kk < SMMA_MULTI_TILE; kk += 8) {
+            simdgroup_float8x8 a0, a1, bt0, bt1;
+            simdgroup_load(a0, &Atile[simdRow * 16][kk], SMMA_MULTI_TILE);
+            simdgroup_load(a1, &Atile[simdRow * 16 + 8][kk], SMMA_MULTI_TILE);
+            simdgroup_load(bt0, &BTtile[kk][simdCol * 16], SMMA_MULTI_TILE);
+            simdgroup_load(bt1, &BTtile[kk][simdCol * 16 + 8], SMMA_MULTI_TILE);
+            simdgroup_multiply_accumulate(acc00, a0, bt0, acc00);
+            simdgroup_multiply_accumulate(acc01, a0, bt1, acc01);
+            simdgroup_multiply_accumulate(acc10, a1, bt0, acc10);
+            simdgroup_multiply_accumulate(acc11, a1, bt1, acc11);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    simdgroup_store(acc00, out + outRow0 * K + outCol0, K);
+    simdgroup_store(acc01, out + outRow0 * K + outCol0 + 8, K);
+    simdgroup_store(acc10, out + (outRow0 + 8) * K + outCol0, K);
+    simdgroup_store(acc11, out + (outRow0 + 8) * K + outCol0 + 8, K);
+}
+
+// dB[K,N] = a^T . b, a stored [M,K] -- multi-simdgroup version of
+// matmul_atb_kernel_smma above; the transposed read of 'a' is done by the
+// cooperative-load's index formula (ATtile[k][p] = a[p,k]), same reasoning
+// as matmul_abt_kernel_smma_multi's BTtile above.
+kernel void matmul_atb_kernel_smma_multi(device const float* a [[buffer(0)]],
+                                          device const float* b [[buffer(1)]],
+                                          device float* out [[buffer(2)]],
+                                          constant uint& M [[buffer(3)]],
+                                          constant uint& K [[buffer(4)]],
+                                          constant uint& N [[buffer(5)]],
+                                          uint2 tgid [[threadgroup_position_in_grid]],
+                                          uint tid [[thread_index_in_threadgroup]],
+                                          uint sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float ATtile[SMMA_MULTI_TILE][SMMA_MULTI_TILE]; // [K-local][M-local], a read transposed
+    threadgroup float Btile[SMMA_MULTI_TILE][SMMA_MULTI_TILE];  // [M-local][N-local]
+
+    uint tgRow = tgid.y * SMMA_MULTI_TILE; // K (output rows)
+    uint tgCol = tgid.x * SMMA_MULTI_TILE; // N (output cols)
+    uint simdRow = sgid / 2;
+    uint simdCol = sgid % 2;
+    uint outRow0 = tgRow + simdRow * 16;
+    uint outCol0 = tgCol + simdCol * 16;
+
+    simdgroup_float8x8 acc00 = simdgroup_float8x8(0.0f);
+    simdgroup_float8x8 acc01 = simdgroup_float8x8(0.0f);
+    simdgroup_float8x8 acc10 = simdgroup_float8x8(0.0f);
+    simdgroup_float8x8 acc11 = simdgroup_float8x8(0.0f);
+
+    uint numTiles = M / SMMA_MULTI_TILE;
+    for (uint t = 0; t < numTiles; t++) {
+        uint mBase = t * SMMA_MULTI_TILE;
+        for (uint e = 0; e < 8; e++) {
+            uint idx = tid + e * 128;
+            uint r = idx / SMMA_MULTI_TILE;
+            uint c = idx % SMMA_MULTI_TILE;
+            ATtile[r][c] = a[(mBase + c) * K + (tgRow + r)];
+            Btile[r][c] = b[(mBase + r) * N + (tgCol + c)];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (uint kk = 0; kk < SMMA_MULTI_TILE; kk += 8) {
+            simdgroup_float8x8 at0, at1, b0, b1;
+            simdgroup_load(at0, &ATtile[simdRow * 16][kk], SMMA_MULTI_TILE);
+            simdgroup_load(at1, &ATtile[simdRow * 16 + 8][kk], SMMA_MULTI_TILE);
+            simdgroup_load(b0, &Btile[kk][simdCol * 16], SMMA_MULTI_TILE);
+            simdgroup_load(b1, &Btile[kk][simdCol * 16 + 8], SMMA_MULTI_TILE);
+            simdgroup_multiply_accumulate(acc00, at0, b0, acc00);
+            simdgroup_multiply_accumulate(acc01, at0, b1, acc01);
+            simdgroup_multiply_accumulate(acc10, at1, b0, acc10);
+            simdgroup_multiply_accumulate(acc11, at1, b1, acc11);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    simdgroup_store(acc00, out + outRow0 * N + outCol0, N);
+    simdgroup_store(acc01, out + outRow0 * N + outCol0 + 8, N);
+    simdgroup_store(acc10, out + (outRow0 + 8) * N + outCol0, N);
+    simdgroup_store(acc11, out + (outRow0 + 8) * N + outCol0 + 8, N);
 }
