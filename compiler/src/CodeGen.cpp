@@ -303,10 +303,32 @@ llvm::PointerType *CodeGen::lowerRefType(const ReferenceType &) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void CodeGen::genArenaStateGlobal(RegionDecl &rd) {
-    // Create a global arena state: { ptr buf, i64 used, i64 cap }
+    // Create a global arena state: { ptr buf, i64 used, i64 cap, pad }.
+    // The trailing [40 x i8] pad brings this struct up to exactly 64
+    // bytes — a real x86-64/ARM64 cache line — and the explicit 64-byte
+    // alignment below makes sure the global actually starts on one.
+    // Without both, two of these 24-byte structs pack into a single
+    // cache line (verified on real hardware: consecutive regions land
+    // exactly 32 bytes apart in .bss). Every 'new<R>'/arena_reset<R>()
+    // on 'used' (field 1) is an unsynchronized read-modify-write from
+    // whichever thread owns that region — the intended, documented usage
+    // (see binarytrees_mt_arena.sc's one-named-region-per-worker-thread
+    // pattern: "arena state ... is a single global per region name with
+    // no locking, so sharing one region across threads would be a real
+    // data race"). Sharing a cache line between two *different* regions
+    // that two *different* threads each own is a distinct problem from
+    // that documented one — no logical data race (each thread only ever
+    // touches its own region's fields), but every bump-pointer write to
+    // 'used' still invalidates the whole line for whatever core is
+    // caching the neighboring region's copy, forcing a cache-coherency
+    // round trip on what should be a same-core, no-contention hot path.
+    // Measured impact of exactly this on an 8-thread arena workload
+    // (see benchmarks.md's multithreading section): performance
+    // *regressed* with more threads on some platforms before this fix.
     auto *Int64Ty = llvm::Type::getInt64Ty(ctx_);
     auto *PtrTy   = llvm::PointerType::get(ctx_, 0);
-    auto *stateTy = llvm::StructType::get(ctx_, {PtrTy, Int64Ty, Int64Ty});
+    auto *PadTy   = llvm::ArrayType::get(llvm::Type::getInt8Ty(ctx_), 40);
+    auto *stateTy = llvm::StructType::get(ctx_, {PtrTy, Int64Ty, Int64Ty, PadTy});
     std::string varName = "__arena_" + rd.name;
     // Avoid duplicate global
     if (mod_->getNamedGlobal(varName)) return;
@@ -315,6 +337,7 @@ void CodeGen::genArenaStateGlobal(RegionDecl &rd) {
         llvm::GlobalValue::InternalLinkage,
         llvm::Constant::getNullValue(stateTy),
         varName);
+    gv->setAlignment(llvm::Align(64));
     arenaStateMap_[rd.name] = {gv, stateTy, rd.capacity};
     globals_[varName] = gv;
 }
