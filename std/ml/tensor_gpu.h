@@ -12,22 +12,18 @@
 // function (tensor_add_gpu <-> tensor_add, etc): same forward math, linked
 // into the same autograd graph via the same backward function (backward
 // doesn't care which backend computed forward, so nothing autograd-side
-// needed to change), same fallback behavior, and the same two real costs
-// traded for GPU execution on every call, not something to reach for by
-// default:
-//   1. Metal has no 'double' type at all — Tensor's 'double' data gets
-//      converted to float32 on the way in and back to 'double' on the way
-//      out, on *every* call (not once, cached) since a Tensor doesn't carry
-//      a persistent GPU-resident copy of itself between ops. This loses
-//      precision (~7 decimal digits instead of ~15-17) and costs a real
-//      O(size) conversion pass beyond the GPU dispatch itself.
-//   2. GPU kernel dispatch has real fixed overhead (command buffer setup,
-//      submission, waitUntilCompleted) that a small op's actual compute
-//      time won't hide — see the benchmarks page's "GPU is slower than CPU
-//      here... and that's correct" finding for PyTorch-MPS/TensorFlow-GPU,
-//      and the follow-up "GPU wins here" finding once the shape is big
-//      enough to hide that overhead behind — the same physics applies to
-//      every op here, not just matmul.
+// needed to change), same fallback behavior. Tensor is float32 (see
+// tensor.h), the same precision Metal itself uses (Metal has no 'double'
+// at all) — every op here now reads/writes a Tensor's 'data'/'grad'
+// buffers directly with mps_*_f32, no per-call CPU-side conversion pass
+// the way this file needed when Tensor was double. What's left is GPU
+// kernel dispatch's own real fixed overhead (command buffer setup,
+// submission, waitUntilCompleted), which a small op's actual compute time
+// won't hide — see the benchmarks page's "GPU is slower than CPU here...
+// and that's correct" finding for PyTorch-MPS/TensorFlow-GPU, and the
+// follow-up "GPU wins here" finding once the shape is big enough to hide
+// that overhead behind — the same physics applies to every op here, not
+// just matmul.
 // Every op falls back to its ordinary CPU tensor.sc twin if no Metal
 // device is available (mps_available() == 0) or the GPU dispatch itself
 // fails for any other reason, so all of these are always safe to call —
@@ -39,14 +35,11 @@ namespace std {
 &Tensor tensor_add_gpu(const &Tensor a, const &Tensor b);
 &Tensor tensor_sub_gpu(const &Tensor a, const &Tensor b);
 &Tensor tensor_mul_gpu(const &Tensor a, const &Tensor b);
-&Tensor tensor_scale_gpu(const &Tensor a, double k);
+&Tensor tensor_scale_gpu(const &Tensor a, float k);
 &Tensor tensor_relu_gpu(const &Tensor a);
-// tensor_sum_gpu's GPU reduction (std::mps_sum_f32) is a single-thread
-// serial sum, not a real parallel tree reduction -- see gpu_mps.sc's
-// comment on mps_sum_f32. Included for completeness of the op set (every
-// other op here is real, dispatched, parallel GPU work); this one mostly
-// just isn't slower in a way that matters, since tensor_sum's whole input
-// is already read once regardless of backend.
+// tensor_sum_gpu's GPU reduction (std::mps_sum_f32) is a two-stage
+// parallel reduction (grid-stride accumulate + threadgroup tree
+// reduction) -- see gpu_mps.sc's comment on mps_sum_f32.
 &Tensor tensor_sum_gpu(const &Tensor a);
 &Tensor tensor_matmul_gpu(const &Tensor a, const &Tensor b);
 

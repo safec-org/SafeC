@@ -6,13 +6,10 @@
 // dependency baked into the portable core). Real BLAS libraries
 // (Accelerate on macOS, OpenBLAS/MKL elsewhere) are cache-blocked,
 // hand-vectorized, and multithreaded in ways a compiler-auto-vectorized
-// triple loop doesn't match: measured on this machine, PyTorch's CPU
-// matmul (itself Accelerate-backed on macOS) trains this codebase's MLP
-// benchmark shape (128->256(relu)->64, batch 64) about 6x faster and
-// runs inference about 36x faster than tensor.sc's tensor_matmul — see
-// the Benchmarks page. This file closes that gap by calling the same
-// underlying library PyTorch does, instead of re-implementing a
-// hand-tuned GEMM from scratch.
+// triple loop doesn't match — see the Benchmarks page. This file closes
+// that gap by calling the same underlying library PyTorch does (cblas_sgemm,
+// float32 like Tensor itself), instead of re-implementing a hand-tuned
+// GEMM from scratch.
 //
 // macOS/Accelerate only for now (matches gpu_mps.h's own precedent: one
 // real, hand-verified backend rather than an unverified multi-platform

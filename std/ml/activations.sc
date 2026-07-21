@@ -12,8 +12,8 @@ namespace std {
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
-            double v = a->data[i];
-            out->data[i] = (v > 0.0) ? v : 0.0;
+            float v = a->data[i];
+            out->data[i] = (v > (float)0.0) ? v : (float)0.0;
             i = i + 1UL;
         }
     }
@@ -25,7 +25,7 @@ namespace std {
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
-            out->data[i] = 1.0 / (1.0 + exp_d(-(a->data[i])));
+            out->data[i] = (float)1.0 / ((float)1.0 + exp_f(-(a->data[i])));
             i = i + 1UL;
         }
     }
@@ -37,7 +37,7 @@ namespace std {
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
-            out->data[i] = tanh_d(a->data[i]);
+            out->data[i] = tanh_f(a->data[i]);
             i = i + 1UL;
         }
     }
@@ -49,8 +49,8 @@ namespace std {
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
-            double x = a->data[i];
-            double sig = 1.0 / (1.0 + exp_d(-x));
+            float x = a->data[i];
+            float sig = (float)1.0 / ((float)1.0 + exp_f(-x));
             out->data[i] = x * sig;
             i = i + 1UL;
         }
@@ -60,40 +60,40 @@ namespace std {
 
 &Tensor tensor_gelu_fwd(const &Tensor a) {
     struct Tensor* out = tensor_zeros_like(a);
-    double c = 0.7978845608028654; // sqrt(2/pi)
+    float c = (float)0.7978845608028654; // sqrt(2/pi)
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
-            double x = a->data[i];
-            double inner = c * (x + 0.044715 * x * x * x);
-            out->data[i] = 0.5 * x * (1.0 + tanh_d(inner));
+            float x = a->data[i];
+            float inner = c * (x + (float)0.044715 * x * x * x);
+            out->data[i] = (float)0.5 * x * ((float)1.0 + tanh_f(inner));
             i = i + 1UL;
         }
     }
     return out;
 }
 
-&Tensor tensor_layernorm_rows(const &Tensor x, double eps) {
+&Tensor tensor_layernorm_rows(const &Tensor x, float eps) {
     unsigned long rows; unsigned long cols;
     unsafe { rows = x->shape[0]; cols = x->shape[1]; }
     struct Tensor* out = tensor_new_2d(rows, cols, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
-            double mean = 0.0;
+            float mean = (float)0.0;
             unsigned long c = 0UL;
             while (c < cols) { mean = mean + x->data[r * cols + c]; c = c + 1UL; }
-            mean = mean / (double)cols;
+            mean = mean / (float)cols;
 
-            double varAcc = 0.0;
+            float varAcc = (float)0.0;
             c = 0UL;
             while (c < cols) {
-                double d = x->data[r * cols + c] - mean;
+                float d = x->data[r * cols + c] - mean;
                 varAcc = varAcc + d * d;
                 c = c + 1UL;
             }
-            double variance = varAcc / (double)cols;
-            double invStd = 1.0 / sqrt_d(variance + eps);
+            float variance = varAcc / (float)cols;
+            float invStd = (float)1.0 / sqrt_f(variance + eps);
 
             c = 0UL;
             while (c < cols) {

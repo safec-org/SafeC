@@ -15,8 +15,8 @@ static struct FeatureMap __fm_relu(const struct FeatureMap* fm) {
         unsigned long size = fm->channels * fm->height * fm->width;
         unsigned long i = 0UL;
         while (i < size) {
-            double v = fm->data[i];
-            out.data[i] = (v > 0.0) ? v : 0.0;
+            float v = fm->data[i];
+            out.data[i] = (v > (float)0.0) ? v : (float)0.0;
             i = i + 1UL;
         }
     }

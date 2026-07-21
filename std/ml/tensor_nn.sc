@@ -20,8 +20,8 @@ namespace std {
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
-            double v = a->data[i];
-            out->data[i] = (v > 0.0) ? v : 0.0;
+            float v = a->data[i];
+            out->data[i] = (v > (float)0.0) ? v : (float)0.0;
             i = i + 1UL;
         }
     }
@@ -35,7 +35,7 @@ namespace std {
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
-            out->data[i] = 1.0 / (1.0 + exp_d(-a->data[i]));
+            out->data[i] = (float)1.0 / ((float)1.0 + exp_f(-a->data[i]));
             i = i + 1UL;
         }
     }
@@ -49,7 +49,7 @@ namespace std {
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
-            out->data[i] = tanh_d(a->data[i]);
+            out->data[i] = tanh_f(a->data[i]);
             i = i + 1UL;
         }
     }
@@ -66,16 +66,16 @@ namespace std {
         unsigned long r = 0UL;
         while (r < rows) {
             unsigned long base = r * lastDim;
-            double mx = a->data[base];
+            float mx = a->data[base];
             unsigned long j = 1UL;
             while (j < lastDim) {
                 if (a->data[base + j] > mx) { mx = a->data[base + j]; }
                 j = j + 1UL;
             }
-            double sum = 0.0;
+            float sum = (float)0.0;
             j = 0UL;
             while (j < lastDim) {
-                double e = exp_d(a->data[base + j] - mx);
+                float e = exp_f(a->data[base + j] - mx);
                 out->data[base + j] = e;
                 sum = sum + e;
                 j = j + 1UL;
@@ -93,13 +93,13 @@ namespace std {
 }
 
 // ── ELU ──────────────────────────────────────────────────────────────────────
-&Tensor tensor_elu(const &Tensor a, double alpha) {
+&Tensor tensor_elu(const &Tensor a, float alpha) {
     struct Tensor* out = __tensor_alloc_uninit_like(a);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
-            double x = a->data[i];
-            out->data[i] = (x > 0.0) ? x : (alpha * (exp_d(x) - 1.0));
+            float x = a->data[i];
+            out->data[i] = (x > (float)0.0) ? x : (alpha * (exp_f(x) - (float)1.0));
             i = i + 1UL;
         }
     }
@@ -112,12 +112,12 @@ namespace std {
 &Tensor tensor_gelu(const &Tensor a) {
     struct Tensor* out = __tensor_alloc_uninit_like(a);
     unsafe {
-        double c = 0.7978845608028654;
+        float c = (float)0.7978845608028654;
         unsigned long i = 0UL;
         while (i < out->size) {
-            double x = a->data[i];
-            double u = c * (x + 0.044715 * x * x * x);
-            out->data[i] = 0.5 * x * (1.0 + tanh_d(u));
+            float x = a->data[i];
+            float u = c * (x + (float)0.044715 * x * x * x);
+            out->data[i] = (float)0.5 * x * ((float)1.0 + tanh_f(u));
             i = i + 1UL;
         }
     }
@@ -131,8 +131,8 @@ namespace std {
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
-            double x = a->data[i];
-            double s = 1.0 / (1.0 + exp_d(-x));
+            float x = a->data[i];
+            float s = (float)1.0 / ((float)1.0 + exp_f(-x));
             out->data[i] = x * s;
             i = i + 1UL;
         }
@@ -163,9 +163,9 @@ namespace std {
             unsigned long inBase = r * inLast;
             unsigned long j = 0UL;
             while (j < outLast) {
-                double a1 = a->data[inBase + j];
-                double a2 = a->data[inBase + outLast + j];
-                double s = 1.0 / (1.0 + exp_d(-a2));
+                float a1 = a->data[inBase + j];
+                float a2 = a->data[inBase + outLast + j];
+                float s = (float)1.0 / ((float)1.0 + exp_f(-a2));
                 out->data[outBase + j] = a1 * s;
                 j = j + 1UL;
             }
@@ -198,9 +198,9 @@ namespace std {
             unsigned long inBase = r * inLast;
             unsigned long j = 0UL;
             while (j < outLast) {
-                double a1 = a->data[inBase + j];
-                double a2 = a->data[inBase + outLast + j];
-                double s1 = 1.0 / (1.0 + exp_d(-a1));
+                float a1 = a->data[inBase + j];
+                float a2 = a->data[inBase + outLast + j];
+                float s1 = (float)1.0 / ((float)1.0 + exp_f(-a1));
                 out->data[outBase + j] = (a1 * s1) * a2;
                 j = j + 1UL;
             }
@@ -214,15 +214,15 @@ namespace std {
 // ══ Optimizers ════════════════════════════════════════════════════════════════
 
 // ── Adam ─────────────────────────────────────────────────────────────────────
-struct AdamState adam_new(unsigned long size, double lr, double beta1, double beta2, double eps) {
+struct AdamState adam_new(unsigned long size, float lr, float beta1, float beta2, float eps) {
     struct AdamState s;
     unsafe {
-        double* mBuf = (double*)malloc(sizeof(double) * size);
-        double* vBuf = (double*)malloc(sizeof(double) * size);
+        float* mBuf = (float*)malloc(sizeof(float) * size);
+        float* vBuf = (float*)malloc(sizeof(float) * size);
         unsigned long i = 0UL;
-        while (i < size) { mBuf[i] = 0.0; vBuf[i] = 0.0; i = i + 1UL; }
-        s.m = (&heap double)mBuf;
-        s.v = (&heap double)vBuf;
+        while (i < size) { mBuf[i] = (float)0.0; vBuf[i] = (float)0.0; i = i + 1UL; }
+        s.m = (&heap float)mBuf;
+        s.v = (&heap float)vBuf;
     }
     s.size = size;
     s.lr = lr; s.beta1 = beta1; s.beta2 = beta2; s.eps = eps;
@@ -230,25 +230,25 @@ struct AdamState adam_new(unsigned long size, double lr, double beta1, double be
     return s;
 }
 
-struct AdamState adam_new_default(unsigned long size, double lr) {
-    return adam_new(size, lr, 0.9, 0.999, 0.00000001);
+struct AdamState adam_new_default(unsigned long size, float lr) {
+    return adam_new(size, lr, (float)0.9, (float)0.999, (float)0.00000001);
 }
 
 void adam_step(&AdamState state, &Tensor param) {
     unsafe {
         state.t = state.t + 1UL;
-        double b1 = state.beta1;
-        double b2 = state.beta2;
-        double biasCorr1 = 1.0 - pow_d(b1, (double)state.t);
-        double biasCorr2 = 1.0 - pow_d(b2, (double)state.t);
+        float b1 = state.beta1;
+        float b2 = state.beta2;
+        float biasCorr1 = (float)1.0 - pow_f(b1, (float)state.t);
+        float biasCorr2 = (float)1.0 - pow_f(b2, (float)state.t);
         unsigned long i = 0UL;
         while (i < state.size) {
-            double g = param->grad[i];
-            state.m[i] = b1 * state.m[i] + (1.0 - b1) * g;
-            state.v[i] = b2 * state.v[i] + (1.0 - b2) * g * g;
-            double mHat = state.m[i] / biasCorr1;
-            double vHat = state.v[i] / biasCorr2;
-            param->data[i] = param->data[i] - state.lr * mHat / (sqrt_d(vHat) + state.eps);
+            float g = param->grad[i];
+            state.m[i] = b1 * state.m[i] + ((float)1.0 - b1) * g;
+            state.v[i] = b2 * state.v[i] + ((float)1.0 - b2) * g * g;
+            float mHat = state.m[i] / biasCorr1;
+            float vHat = state.v[i] / biasCorr2;
+            param->data[i] = param->data[i] - state.lr * mHat / (sqrt_f(vHat) + state.eps);
             i = i + 1UL;
         }
     }
@@ -256,10 +256,10 @@ void adam_step(&AdamState state, &Tensor param) {
 
 void adam_free(&AdamState state) {
     unsafe {
-        if (state.m != (double*)0) { free((void*)state.m); }
-        if (state.v != (double*)0) { free((void*)state.v); }
-        state.m = (&heap double)0;
-        state.v = (&heap double)0;
+        if (state.m != (float*)0) { free((void*)state.m); }
+        if (state.v != (float*)0) { free((void*)state.v); }
+        state.m = (&heap float)0;
+        state.v = (&heap float)0;
     }
 }
 
@@ -288,16 +288,16 @@ void adam_free(&AdamState state) {
             unsigned long o = 0UL;
             while (o < outLen) {
                 unsigned long winStart = o * stride;
-                double best = a->data[inBase + winStart];
+                float best = a->data[inBase + winStart];
                 unsigned long bestIdx = inBase + winStart;
                 unsigned long k = 1UL;
                 while (k < kernel) {
-                    double v = a->data[inBase + winStart + k];
+                    float v = a->data[inBase + winStart + k];
                     if (v > best) { best = v; bestIdx = inBase + winStart + k; }
                     k = k + 1UL;
                 }
                 out->data[outBase + o] = best;
-                idxCache->data[outBase + o] = (double)bestIdx;
+                idxCache->data[outBase + o] = (float)bestIdx;
                 o = o + 1UL;
             }
             r = r + 1UL;
@@ -326,7 +326,7 @@ void adam_free(&AdamState state) {
     struct Tensor* out = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
     unsafe { dealloc((void*)outShape); }
     unsafe {
-        double invK = 1.0 / (double)kernel;
+        float invK = (float)1.0 / (float)kernel;
         unsigned long rows = out->size / outLen;
         unsigned long r = 0UL;
         while (r < rows) {
@@ -335,7 +335,7 @@ void adam_free(&AdamState state) {
             unsigned long o = 0UL;
             while (o < outLen) {
                 unsigned long winStart = o * stride;
-                double sum = 0.0;
+                float sum = (float)0.0;
                 unsigned long k = 0UL;
                 while (k < kernel) { sum = sum + a->data[inBase + winStart + k]; k = k + 1UL; }
                 out->data[outBase + o] = sum * invK;
@@ -343,7 +343,8 @@ void adam_free(&AdamState state) {
             }
             r = r + 1UL;
         }
-        out->extraScalar = (double)(kernel * 1000000UL + stride);
+        // See tensor_nn.h's __avgpool1d_backward comment for the base-10000 choice.
+        out->extraScalar = (float)(kernel * 10000UL + stride);
     }
     __tensor_link1(out, a, (void*)__avgpool1d_backward);
     return out;

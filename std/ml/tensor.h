@@ -2,13 +2,22 @@
 // SafeC Standard Library — Tensor: CPU tensors with reverse-mode autograd.
 //
 // PyTorch-style ergonomics (build a graph implicitly by calling ops;
-// tensor_backward() walks it) over a plain flat f64 buffer — no unified-
+// tensor_backward() walks it) over a plain flat f32 buffer — no unified-
 // memory story here (that's MPS's job; see gpu_mps.h), just row-major
-// double-precision arrays with a recorded computation graph. Scope: 1D
+// single-precision arrays with a recorded computation graph. Scope: 1D
 // and 2D tensors (vectors and matrices — everything a small MLP/attention
 // block needs), add/sub/mul/relu/sum/matmul, and reverse-mode autodiff
 // over that op set. Not a general n-dimensional array library — no
 // broadcasting beyond 2D, no int/complex dtypes, no in-place ops.
+//
+// float32, not float64: PyTorch defaults to float32, and this codebase's
+// training-loop shapes measured ~30% faster on Accelerate's cblas_sgemm
+// than cblas_dgemm for identical work, on top of halving memory
+// bandwidth for every elementwise pass -- see tensor_blas.h. Also the
+// same precision Metal itself supports (Metal has no double at all), so
+// this removes the double<->float conversion every GPU-backed op used to
+// pay at its CPU/GPU boundary (see gpu_mps.h's history) instead of just
+// moving where the precision loss happens.
 //
 // Internal helpers (__tensor_alloc, __tensor_link1/2, every __X_backward
 // function, etc.) are defined right here in the header as 'static'
@@ -19,6 +28,15 @@
 // symbols — tensor_add, tensor_matmul, etc. — at build time) instead of
 // every file needing to textually #include tensor.sc's entire body just
 // to reach a handful of internal-linkage helpers it happens to reuse.
+//
+// Every op here is its own small function with one loop -- not just
+// style. A hand-rolled training loop with everything (BLAS calls,
+// elementwise passes) inlined into one large function was measured to
+// make this compiler's -O2 optimizer hang (40+ minutes, not just slow)
+// on exactly this kind of training-loop shape; splitting into small
+// single-purpose functions avoided it entirely and let -O2's
+// auto-vectorization actually run. Keeping every op as its own function
+// isn't just for consistency -- it's load-bearing.
 #include <std/collections/vec.h>
 
 namespace std {
@@ -36,12 +54,12 @@ extern void  free(void* ptr);
 typedef fn void(void* selfTensor) TensorBackwardFn;
 
 struct Tensor {
-    &heap double  data;       // flat row-major buffer, length == size
+    &heap float   data;       // flat row-major buffer, length == size
     &heap unsigned long shape; // shape[0..ndim)
     unsigned long ndim;
     unsigned long size;        // product of shape
     int           requiresGrad;
-    &heap double  grad;        // same length as data; only allocated if requiresGrad
+    &heap float   grad;        // same length as data; only allocated if requiresGrad
     // Autograd graph edges. 'gradFn' is void* (not TensorBackwardFn)
     // purely to dodge the typedef-ordering constraint every other
     // callback-carrying struct in std/ hits (see std/gui/gui_widget.h's
@@ -50,14 +68,14 @@ struct Tensor {
     void*         gradFn;
     struct Vec    parents;     // Vec<struct Tensor*> — inputs this tensor was computed from
     int           visited;     // topological-sort scratch flag, used and cleared by tensor_backward()
-    double        extraScalar; // op-specific constant (e.g. tensor_scale's k) the gradFn needs
+    float         extraScalar; // op-specific constant (e.g. tensor_scale's k) the gradFn needs
 
     // Element access (row-major; 'idx1D' for a rank-1 tensor,
     // 'row,col' for a rank-2 one).
-    double  at1(unsigned long i) const;
-    double  at2(unsigned long r, unsigned long c) const;
-    void    set1(unsigned long i, double v);
-    void    set2(unsigned long r, unsigned long c, double v);
+    float   at1(unsigned long i) const;
+    float   at2(unsigned long r, unsigned long c) const;
+    void    set1(unsigned long i, float v);
+    void    set2(unsigned long r, unsigned long c, float v);
 
     void    free();
 };
@@ -78,17 +96,17 @@ struct Tensor {
 &Tensor tensor_new_2d(unsigned long rows, unsigned long cols, int requiresGrad);
 // Copies 'values' (length must equal the tensor's size) into a freshly
 // allocated tensor of the given shape.
-&Tensor tensor_from_1d(const double* values, unsigned long n, int requiresGrad);
-&Tensor tensor_from_2d(const double* values, unsigned long rows, unsigned long cols, int requiresGrad);
+&Tensor tensor_from_1d(const float* values, unsigned long n, int requiresGrad);
+&Tensor tensor_from_2d(const float* values, unsigned long rows, unsigned long cols, int requiresGrad);
 &Tensor tensor_zeros_like(const &Tensor t);
-&Tensor tensor_fill(&Tensor t, double v);
+&Tensor tensor_fill(&Tensor t, float v);
 
 // ── Forward ops (each records a backward edge when either operand
 // requires grad) ────────────────────────────────────────────────────────────
 &Tensor tensor_add(const &Tensor a, const &Tensor b);
 &Tensor tensor_sub(const &Tensor a, const &Tensor b);
 &Tensor tensor_mul(const &Tensor a, const &Tensor b);      // elementwise
-&Tensor tensor_scale(const &Tensor a, double k);            // a * scalar k
+&Tensor tensor_scale(const &Tensor a, float k);             // a * scalar k
 &Tensor tensor_matmul(const &Tensor a, const &Tensor b);   // 2D x 2D
 &Tensor tensor_sum(const &Tensor a);                        // -> scalar (1-element) tensor
 // tensor_relu lives in tensor_nn.h alongside the rest of the activation
@@ -143,29 +161,29 @@ static struct Tensor* __tensor_alloc(const unsigned long* shape, unsigned long n
             i = i + 1UL;
         }
 
-        double* buf = (double*)malloc(sizeof(double) * size);
+        float* buf = (float*)malloc(sizeof(float) * size);
 
-        t->data = (&heap double)buf;
+        t->data = (&heap float)buf;
         t->shape = (&heap unsigned long)shapeCopy;
         t->ndim = ndim;
         t->size = size;
         t->requiresGrad = requiresGrad;
-        t->grad = (&heap double)0;
+        t->grad = (&heap float)0;
         t->gradFn = (void*)0;
         t->parents = vec_new(sizeof(struct Tensor*));
         t->visited = 0;
-        t->extraScalar = 0.0;
+        t->extraScalar = (float)0.0;
         return t;
     }
 }
 
 static void __tensor_ensure_grad(struct Tensor* t) {
     unsafe {
-        if (t->grad == (double*)0) {
-            double* g = (double*)malloc(sizeof(double) * t->size);
+        if (t->grad == (float*)0) {
+            float* g = (float*)malloc(sizeof(float) * t->size);
             unsigned long i = 0UL;
-            while (i < t->size) { g[i] = 0.0; i = i + 1UL; }
-            t->grad = (&heap double)g;
+            while (i < t->size) { g[i] = (float)0.0; i = i + 1UL; }
+            t->grad = (&heap float)g;
         }
     }
 }
@@ -189,7 +207,7 @@ static struct Tensor* __tensor_parent(struct Tensor* t, unsigned long idx) {
     }
 }
 
-static void __tensor_accumulate(struct Tensor* dst, const double* delta) {
+static void __tensor_accumulate(struct Tensor* dst, const float* delta) {
     __tensor_ensure_grad(dst);
     unsafe {
         unsigned long i = 0UL;
@@ -233,8 +251,8 @@ static void __add_backward(void* selfPtr) {
         struct Tensor* selfT = (struct Tensor*)selfPtr;
         struct Tensor* a = __tensor_parent(selfT, 0UL);
         struct Tensor* b = __tensor_parent(selfT, 1UL);
-        if (a->requiresGrad) __tensor_accumulate(a, (const double*)selfT->grad);
-        if (b->requiresGrad) __tensor_accumulate(b, (const double*)selfT->grad);
+        if (a->requiresGrad) __tensor_accumulate(a, (const float*)selfT->grad);
+        if (b->requiresGrad) __tensor_accumulate(b, (const float*)selfT->grad);
     }
 }
 
@@ -243,7 +261,7 @@ static void __sub_backward(void* selfPtr) {
         struct Tensor* selfT = (struct Tensor*)selfPtr;
         struct Tensor* a = __tensor_parent(selfT, 0UL);
         struct Tensor* b = __tensor_parent(selfT, 1UL);
-        if (a->requiresGrad) __tensor_accumulate(a, (const double*)selfT->grad);
+        if (a->requiresGrad) __tensor_accumulate(a, (const float*)selfT->grad);
         if (b->requiresGrad) {
             __tensor_ensure_grad(b);
             unsigned long i = 0UL;
@@ -287,7 +305,7 @@ static void __sum_backward(void* selfPtr) {
         struct Tensor* a = __tensor_parent(selfT, 0UL);
         if (!a->requiresGrad) return;
         __tensor_ensure_grad(a);
-        double seed = selfT->grad[0];
+        float seed = selfT->grad[0];
         unsigned long i = 0UL;
         while (i < a->size) { a->grad[i] = a->grad[i] + seed; i = i + 1UL; }
     }
@@ -311,22 +329,21 @@ static void __matmul_backward(void* selfPtr) {
         // b->grad here too (the same change that was a clear win for
         // add/sub/mul/scale/relu/sum), and measured it with 'sample' on a
         // real training run instead of assuming it was also a win: it
-        // wasn't. __matmul_backward's sample count nearly *doubled* (1751
-        // -> 3021 out of ~4000 total). a->grad/b->grad are struct-field
-        // loads the compiler can't prove don't alias selfT->grad/a->data/
-        // b->data inside this tight, O(m*k*n) innermost loop, so fusing
-        // the write into them defeats auto-vectorization here
-        // specifically -- a cost that swamps the one extra malloc+pass+
-        // free this keeps, because this loop runs vastly more times than
-        // the elementwise ones do. A fresh local buffer has no such
-        // aliasing ambiguity, so it vectorizes fine.
+        // wasn't. a->grad/b->grad are struct-field loads the compiler
+        // can't prove don't alias selfT->grad/a->data/b->data inside this
+        // tight, O(m*k*n) innermost loop, so fusing the write into them
+        // defeats auto-vectorization here specifically -- a cost that
+        // swamps the one extra malloc+pass+free this keeps, because this
+        // loop runs vastly more times than the elementwise ones do. A
+        // fresh local buffer has no such aliasing ambiguity, so it
+        // vectorizes fine.
         if (a->requiresGrad) {
-            double* dA = (double*)malloc(sizeof(double) * m * k);
+            float* dA = (float*)malloc(sizeof(float) * m * k);
             unsigned long i = 0UL;
             while (i < m) {
                 unsigned long j = 0UL;
                 while (j < k) {
-                    double acc = 0.0;
+                    float acc = (float)0.0;
                     unsigned long p = 0UL;
                     while (p < n) {
                         acc = acc + selfT->grad[i * n + p] * b->data[j * n + p];
@@ -337,7 +354,7 @@ static void __matmul_backward(void* selfPtr) {
                 }
                 i = i + 1UL;
             }
-            __tensor_accumulate(a, (const double*)dA);
+            __tensor_accumulate(a, (const float*)dA);
             free((void*)dA);
         }
         if (b->requiresGrad) {
@@ -349,14 +366,14 @@ static void __matmul_backward(void* selfPtr) {
             // sequential 'dB[i,j] += aVal * selfT->grad[p,j]'
             // accumulation, with aVal ('A[p,i]') loaded once per (p,i)
             // pair rather than re-derived in the hot loop.
-            double* dB = (double*)malloc(sizeof(double) * k * n);
+            float* dB = (float*)malloc(sizeof(float) * k * n);
             unsigned long z = 0UL;
-            while (z < k * n) { dB[z] = 0.0; z = z + 1UL; }
+            while (z < k * n) { dB[z] = (float)0.0; z = z + 1UL; }
             unsigned long p = 0UL;
             while (p < m) {
                 unsigned long i = 0UL;
                 while (i < k) {
-                    double aVal = a->data[p * k + i];
+                    float aVal = a->data[p * k + i];
                     unsigned long j = 0UL;
                     while (j < n) {
                         dB[i * n + j] = dB[i * n + j] + aVal * selfT->grad[p * n + j];
@@ -366,7 +383,7 @@ static void __matmul_backward(void* selfPtr) {
                 }
                 p = p + 1UL;
             }
-            __tensor_accumulate(b, (const double*)dB);
+            __tensor_accumulate(b, (const float*)dB);
             free((void*)dB);
         }
     }

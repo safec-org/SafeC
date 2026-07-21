@@ -26,9 +26,9 @@ namespace std {
 // with the rest of them rather than with tensor.h's core arithmetic ops.
 &Tensor tensor_relu(const &Tensor a);
 &Tensor tensor_sigmoid(const &Tensor a);
-&Tensor tensor_tanh_t(const &Tensor a);      // 'tensor_tanh' would collide with math.h's tanh_d-style naming convention if this were 'tanh'; matches this file's other tensor_-prefixed names instead
+&Tensor tensor_tanh_t(const &Tensor a);      // 'tensor_tanh' would collide with math.h's tanh_f-style naming convention if this were 'tanh'; matches this file's other tensor_-prefixed names instead
 &Tensor tensor_softmax(const &Tensor a);     // last-axis softmax (row-wise for a rank-2 tensor)
-&Tensor tensor_elu(const &Tensor a, double alpha);
+&Tensor tensor_elu(const &Tensor a, float alpha);
 &Tensor tensor_gelu(const &Tensor a);        // tanh approximation (the common fast form, not the exact erf one)
 &Tensor tensor_silu(const &Tensor a);        // aka Swish: x * sigmoid(x)
 
@@ -47,20 +47,20 @@ namespace std {
 // unlike sgd_update (a pure function of data/grad/lr with no persistent
 // state), Adam needs m/v carried across steps.
 struct AdamState {
-    &heap double m;
-    &heap double v;
+    &heap float m;
+    &heap float v;
     unsigned long size;
-    double lr;
-    double beta1;
-    double beta2;
-    double eps;
+    float lr;
+    float beta1;
+    float beta2;
+    float eps;
     unsigned long t; // step count, starts at 0, incremented by adam_step
 };
 
-struct AdamState adam_new(unsigned long size, double lr, double beta1, double beta2, double eps);
+struct AdamState adam_new(unsigned long size, float lr, float beta1, float beta2, float eps);
 // Convenience default (lr=0.001, beta1=0.9, beta2=0.999, eps=1e-8 — the
 // values from the original Adam paper and every framework's default).
-struct AdamState adam_new_default(unsigned long size, double lr);
+struct AdamState adam_new_default(unsigned long size, float lr);
 void adam_step(&AdamState state, &Tensor param);
 void adam_free(&AdamState state);
 
@@ -86,7 +86,7 @@ static void __relu_backward(void* selfPtr) {
         __tensor_ensure_grad(a);
         unsigned long i = 0UL;
         while (i < selfT->size) {
-            if (a->data[i] > 0.0) { a->grad[i] = a->grad[i] + selfT->grad[i]; }
+            if (a->data[i] > (float)0.0) { a->grad[i] = a->grad[i] + selfT->grad[i]; }
             i = i + 1UL;
         }
     }
@@ -100,8 +100,8 @@ static void __sigmoid_backward(void* selfPtr) {
             __tensor_ensure_grad(a);
             unsigned long i = 0UL;
             while (i < selfT->size) {
-                double y = selfT->data[i];
-                a->grad[i] = a->grad[i] + selfT->grad[i] * y * (1.0 - y);
+                float y = selfT->data[i];
+                a->grad[i] = a->grad[i] + selfT->grad[i] * y * ((float)1.0 - y);
                 i = i + 1UL;
             }
         }
@@ -116,8 +116,8 @@ static void __tanh_t_backward(void* selfPtr) {
             __tensor_ensure_grad(a);
             unsigned long i = 0UL;
             while (i < selfT->size) {
-                double y = selfT->data[i];
-                a->grad[i] = a->grad[i] + selfT->grad[i] * (1.0 - y * y);
+                float y = selfT->data[i];
+                a->grad[i] = a->grad[i] + selfT->grad[i] * ((float)1.0 - y * y);
                 i = i + 1UL;
             }
         }
@@ -135,7 +135,7 @@ static void __softmax_backward(void* selfPtr) {
             unsigned long r = 0UL;
             while (r < rows) {
                 unsigned long base = r * lastDim;
-                double dot = 0.0;
+                float dot = (float)0.0;
                 unsigned long j = 0UL;
                 while (j < lastDim) {
                     dot = dot + selfT->grad[base + j] * selfT->data[base + j];
@@ -143,7 +143,7 @@ static void __softmax_backward(void* selfPtr) {
                 }
                 j = 0UL;
                 while (j < lastDim) {
-                    double y = selfT->data[base + j];
+                    float y = selfT->data[base + j];
                     a->grad[base + j] = a->grad[base + j] + y * (selfT->grad[base + j] - dot);
                     j = j + 1UL;
                 }
@@ -157,14 +157,14 @@ static void __elu_backward(void* selfPtr) {
     unsafe {
         struct Tensor* selfT = (struct Tensor*)selfPtr;
         struct Tensor* a = __tensor_parent(selfT, 0UL);
-        double alpha = selfT->extraScalar;
+        float alpha = selfT->extraScalar;
         if (a->requiresGrad) {
             __tensor_ensure_grad(a);
             unsigned long i = 0UL;
             while (i < selfT->size) {
-                double x = a->data[i];
-                double y = selfT->data[i];
-                double d = (x > 0.0) ? 1.0 : (y + alpha);
+                float x = a->data[i];
+                float y = selfT->data[i];
+                float d = (x > (float)0.0) ? (float)1.0 : (y + alpha);
                 a->grad[i] = a->grad[i] + selfT->grad[i] * d;
                 i = i + 1UL;
             }
@@ -178,14 +178,14 @@ static void __gelu_backward(void* selfPtr) {
         struct Tensor* a = __tensor_parent(selfT, 0UL);
         if (a->requiresGrad) {
             __tensor_ensure_grad(a);
-            double c = 0.7978845608028654; // sqrt(2/pi)
+            float c = (float)0.7978845608028654; // sqrt(2/pi)
             unsigned long i = 0UL;
             while (i < selfT->size) {
-                double x = a->data[i];
-                double u = c * (x + 0.044715 * x * x * x);
-                double t = tanh_d(u);
-                double dudx = c * (1.0 + 0.134145 * x * x);
-                double d = 0.5 * (1.0 + t) + 0.5 * x * (1.0 - t * t) * dudx;
+                float x = a->data[i];
+                float u = c * (x + (float)0.044715 * x * x * x);
+                float t = tanh_f(u);
+                float dudx = c * ((float)1.0 + (float)0.134145 * x * x);
+                float d = (float)0.5 * ((float)1.0 + t) + (float)0.5 * x * ((float)1.0 - t * t) * dudx;
                 a->grad[i] = a->grad[i] + selfT->grad[i] * d;
                 i = i + 1UL;
             }
@@ -201,9 +201,9 @@ static void __silu_backward(void* selfPtr) {
             __tensor_ensure_grad(a);
             unsigned long i = 0UL;
             while (i < selfT->size) {
-                double x = a->data[i];
-                double s = 1.0 / (1.0 + exp_d(-x));
-                double d = s + x * s * (1.0 - s);
+                float x = a->data[i];
+                float s = (float)1.0 / ((float)1.0 + exp_f(-x));
+                float d = s + x * s * ((float)1.0 - s);
                 a->grad[i] = a->grad[i] + selfT->grad[i] * d;
                 i = i + 1UL;
             }
@@ -226,12 +226,12 @@ static void __glu_backward(void* selfPtr) {
                 unsigned long inBase = r * inLast;
                 unsigned long j = 0UL;
                 while (j < outLast) {
-                    double a1 = a->data[inBase + j];
-                    double a2 = a->data[inBase + outLast + j];
-                    double s = 1.0 / (1.0 + exp_d(-a2));
-                    double dy = selfT->grad[outBase + j];
+                    float a1 = a->data[inBase + j];
+                    float a2 = a->data[inBase + outLast + j];
+                    float s = (float)1.0 / ((float)1.0 + exp_f(-a2));
+                    float dy = selfT->grad[outBase + j];
                     a->grad[inBase + j] = a->grad[inBase + j] + dy * s;
-                    a->grad[inBase + outLast + j] = a->grad[inBase + outLast + j] + dy * a1 * s * (1.0 - s);
+                    a->grad[inBase + outLast + j] = a->grad[inBase + outLast + j] + dy * a1 * s * ((float)1.0 - s);
                     j = j + 1UL;
                 }
                 r = r + 1UL;
@@ -255,12 +255,12 @@ static void __swiglu_backward(void* selfPtr) {
                 unsigned long inBase = r * inLast;
                 unsigned long j = 0UL;
                 while (j < outLast) {
-                    double a1 = a->data[inBase + j];
-                    double a2 = a->data[inBase + outLast + j];
-                    double s1 = 1.0 / (1.0 + exp_d(-a1));
-                    double silu1 = a1 * s1;
-                    double dsilu1 = s1 + a1 * s1 * (1.0 - s1);
-                    double dy = selfT->grad[outBase + j];
+                    float a1 = a->data[inBase + j];
+                    float a2 = a->data[inBase + outLast + j];
+                    float s1 = (float)1.0 / ((float)1.0 + exp_f(-a1));
+                    float silu1 = a1 * s1;
+                    float dsilu1 = s1 + a1 * s1 * ((float)1.0 - s1);
+                    float dy = selfT->grad[outBase + j];
                     a->grad[inBase + j] = a->grad[inBase + j] + dy * a2 * dsilu1;
                     a->grad[inBase + outLast + j] = a->grad[inBase + outLast + j] + dy * silu1;
                     j = j + 1UL;
@@ -294,13 +294,18 @@ static void __avgpool1d_backward(void* selfPtr) {
         struct Tensor* a = __tensor_parent(selfT, 0UL);
         if (a->requiresGrad) {
             __tensor_ensure_grad(a);
+            // Base 10000, not the double-precision predecessor's
+            // 1000000 -- float32 only represents integers exactly up to
+            // 2^24 (~16.7M), so kernel*BASE+stride must stay well under
+            // that. 10000 covers any realistic kernel/stride (both
+            // usually single- or double-digit) with a wide margin.
             unsigned long encoded = (unsigned long)selfT->extraScalar;
-            unsigned long kernel = encoded / 1000000UL;
-            unsigned long stride = encoded % 1000000UL;
+            unsigned long kernel = encoded / 10000UL;
+            unsigned long stride = encoded % 10000UL;
             unsigned long lastDim = a->shape[a->ndim - 1UL];
             unsigned long outLen = selfT->shape[selfT->ndim - 1UL];
             unsigned long rows = selfT->size / outLen;
-            double invK = 1.0 / (double)kernel;
+            float invK = (float)1.0 / (float)kernel;
             unsigned long r = 0UL;
             while (r < rows) {
                 unsigned long inBase = r * lastDim;
@@ -308,7 +313,7 @@ static void __avgpool1d_backward(void* selfPtr) {
                 unsigned long o = 0UL;
                 while (o < outLen) {
                     unsigned long winStart = o * stride;
-                    double dy = selfT->grad[outBase + o] * invK;
+                    float dy = selfT->grad[outBase + o] * invK;
                     unsigned long k = 0UL;
                     while (k < kernel) {
                         a->grad[inBase + winStart + k] = a->grad[inBase + winStart + k] + dy;

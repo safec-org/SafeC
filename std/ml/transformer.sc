@@ -17,8 +17,8 @@ static struct Tensor* __xf_init_weight(unsigned long rows, unsigned long cols, u
         while (i < t->size) {
             unsigned long h = (i + 1UL) * 2654435761UL + seed * 40503UL;
             h = (h ^ (h >> 13UL)) * 2246822519UL;
-            double v = ((double)(h % 2000UL) / 1000.0) - 1.0; // [-1, 1)
-            t->data[i] = v * 0.2;
+            float v = ((float)(h % 2000UL) / (float)1000.0) - (float)1.0; // [-1, 1)
+            t->data[i] = v * (float)0.2;
             i = i + 1UL;
         }
     }
@@ -65,7 +65,7 @@ static struct Tensor* __mul_broadcast_row_plus1(struct Tensor* mat, struct Tenso
         while (r < rows) {
             unsigned long c = 0UL;
             while (c < cols) {
-                out->data[r * cols + c] = mat->data[r * cols + c] * (1.0 + row->data[c]);
+                out->data[r * cols + c] = mat->data[r * cols + c] * ((float)1.0 + row->data[c]);
                 c = c + 1UL;
             }
             r = r + 1UL;
@@ -120,7 +120,7 @@ void dit_block_free(&DiTBlock block) {
     struct Tensor* scale2 = tensor_slice_cols(mod, 4UL * dModel, dModel);
     struct Tensor* gate2 = tensor_slice_cols(mod, 5UL * dModel, dModel);
 
-    struct Tensor* h = tensor_layernorm_rows(x, 1e-5);
+    struct Tensor* h = tensor_layernorm_rows(x, (float)1e-5);
     struct Tensor* hScaled = __mul_broadcast_row_plus1(h, scale1);
     struct Tensor* hMod = __add_broadcast_row(hScaled, shift1);
     struct Tensor* Q = tensor_matmul(hMod, Wq);
@@ -131,7 +131,7 @@ void dit_block_free(&DiTBlock block) {
     struct Tensor* gatedAttn = __mul_broadcast_row(attnOut, gate1);
     struct Tensor* x1 = tensor_residual_add(x, gatedAttn);
 
-    struct Tensor* h2 = tensor_layernorm_rows(x1, 1e-5);
+    struct Tensor* h2 = tensor_layernorm_rows(x1, (float)1e-5);
     struct Tensor* h2Scaled = __mul_broadcast_row_plus1(h2, scale2);
     struct Tensor* h2Mod = __add_broadcast_row(h2Scaled, shift2);
     struct Tensor* ffnHiddenRaw = tensor_matmul(h2Mod, W1);
@@ -193,7 +193,7 @@ void jit_block_free(&JiTBlock block) {
         numHeads = block->numHeads;
     }
 
-    struct Tensor* h = tensor_layernorm_rows(x, 1e-5);
+    struct Tensor* h = tensor_layernorm_rows(x, (float)1e-5);
     struct Tensor* Q = tensor_matmul(h, Wq);
     struct Tensor* K = tensor_matmul(h, Wk);
     struct Tensor* V = tensor_matmul(h, Wv);
@@ -201,7 +201,7 @@ void jit_block_free(&JiTBlock block) {
     struct Tensor* attnOut = tensor_matmul(attnRaw, Wo);
     struct Tensor* x1 = tensor_residual_add(x, attnOut);
 
-    struct Tensor* h2 = tensor_layernorm_rows(x1, 1e-5);
+    struct Tensor* h2 = tensor_layernorm_rows(x1, (float)1e-5);
     struct Tensor* ffnHiddenRaw = tensor_matmul(h2, W1);
     struct Tensor* ffnHiddenBias = __add_broadcast_row(ffnHiddenRaw, b1w);
     struct Tensor* ffnHidden = tensor_relu_fwd(ffnHiddenBias);

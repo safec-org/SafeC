@@ -11,10 +11,10 @@ struct FeatureMap feature_map_new(unsigned long channels, unsigned long height, 
     struct FeatureMap fm;
     unsigned long size = channels * height * width;
     unsafe {
-        double* buf = (double*)malloc(sizeof(double) * size);
+        float* buf = (float*)malloc(sizeof(float) * size);
         unsigned long i = 0UL;
-        while (i < size) { buf[i] = 0.0; i = i + 1UL; }
-        fm.data = (&heap double)buf;
+        while (i < size) { buf[i] = (float)0.0; i = i + 1UL; }
+        fm.data = (&heap float)buf;
     }
     fm.channels = channels;
     fm.height = height;
@@ -26,10 +26,10 @@ void feature_map_free(&FeatureMap fm) {
     unsafe { free((void*)fm->data); }
 }
 
-static double __cnn_init_weight(unsigned long i, unsigned long seed) {
+static float __cnn_init_weight(unsigned long i, unsigned long seed) {
     unsigned long h = (i + 1UL) * 2654435761UL + seed * 40503UL;
     h = (h ^ (h >> 13UL)) * 2246822519UL;
-    return (((double)(h % 2000UL) / 1000.0) - 1.0) * 0.3; // [-0.3, 0.3)
+    return (((float)(h % 2000UL) / (float)1000.0) - (float)1.0) * (float)0.3; // [-0.3, 0.3)
 }
 
 struct Conv2D conv2d_new(unsigned long inChannels, unsigned long outChannels,
@@ -38,15 +38,15 @@ struct Conv2D conv2d_new(unsigned long inChannels, unsigned long outChannels,
     struct Conv2D layer;
     unsigned long wSize = outChannels * inChannels * kH * kW;
     unsafe {
-        double* w = (double*)malloc(sizeof(double) * wSize);
+        float* w = (float*)malloc(sizeof(float) * wSize);
         unsigned long i = 0UL;
         while (i < wSize) { w[i] = __cnn_init_weight(i, 11UL); i = i + 1UL; }
-        layer.weight = (&heap double)w;
+        layer.weight = (&heap float)w;
 
-        double* b = (double*)malloc(sizeof(double) * outChannels);
+        float* b = (float*)malloc(sizeof(float) * outChannels);
         i = 0UL;
-        while (i < outChannels) { b[i] = 0.0; i = i + 1UL; }
-        layer.bias = (&heap double)b;
+        while (i < outChannels) { b[i] = (float)0.0; i = i + 1UL; }
+        layer.bias = (&heap float)b;
     }
     layer.inChannels = inChannels;
     layer.outChannels = outChannels;
@@ -77,12 +77,12 @@ struct FeatureMap conv2d_forward(const &Conv2D layer, const &FeatureMap input) {
     unsafe {
         unsigned long oc = 0UL;
         while (oc < outC) {
-            double bias = layer->bias[oc];
+            float bias = layer->bias[oc];
             unsigned long oh = 0UL;
             while (oh < outH) {
                 unsigned long ow = 0UL;
                 while (ow < outW) {
-                    double acc = bias;
+                    float acc = bias;
                     unsigned long ic = 0UL;
                     while (ic < inC) {
                         unsigned long kh = 0UL;
@@ -126,12 +126,12 @@ struct FeatureMap maxpool2d_forward(const &FeatureMap input, unsigned long kerne
             while (oh < outH) {
                 unsigned long ow = 0UL;
                 while (ow < outW) {
-                    double best = input->data[ch * h * w + (oh * stride) * w + (ow * stride)];
+                    float best = input->data[ch * h * w + (oh * stride) * w + (ow * stride)];
                     unsigned long kh = 0UL;
                     while (kh < kernel) {
                         unsigned long kw = 0UL;
                         while (kw < kernel) {
-                            double v = input->data[ch * h * w + (oh * stride + kh) * w + (ow * stride + kw)];
+                            float v = input->data[ch * h * w + (oh * stride + kh) * w + (ow * stride + kw)];
                             if (v > best) best = v;
                             kw = kw + 1UL;
                         }
@@ -154,7 +154,7 @@ struct FeatureMap avgpool2d_forward(const &FeatureMap input, unsigned long kerne
     unsigned long outH = (h - kernel) / stride + 1UL;
     unsigned long outW = (w - kernel) / stride + 1UL;
     struct FeatureMap out = feature_map_new(c, outH, outW);
-    double count = (double)(kernel * kernel);
+    float count = (float)(kernel * kernel);
     unsafe {
         unsigned long ch = 0UL;
         while (ch < c) {
@@ -162,7 +162,7 @@ struct FeatureMap avgpool2d_forward(const &FeatureMap input, unsigned long kerne
             while (oh < outH) {
                 unsigned long ow = 0UL;
                 while (ow < outW) {
-                    double sum = 0.0;
+                    float sum = (float)0.0;
                     unsigned long kh = 0UL;
                     while (kh < kernel) {
                         unsigned long kw = 0UL;
@@ -196,7 +196,7 @@ struct FeatureMap upsample2x_nearest(const &FeatureMap input) {
             while (y < h) {
                 unsigned long x = 0UL;
                 while (x < w) {
-                    double v = input->data[ch * h * w + y * w + x];
+                    float v = input->data[ch * h * w + y * w + x];
                     out.data[ch * outH * outW + (2UL * y) * outW + (2UL * x)] = v;
                     out.data[ch * outH * outW + (2UL * y) * outW + (2UL * x + 1UL)] = v;
                     out.data[ch * outH * outW + (2UL * y + 1UL) * outW + (2UL * x)] = v;

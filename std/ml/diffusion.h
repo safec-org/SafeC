@@ -35,15 +35,15 @@ namespace std {
 // k-diffusion-style samplers (e.g. Heun/Euler ancestral, not
 // reimplemented here — this schedule alone is the deferred-scope-item
 // std/ml/ROADMAP.md previously listed).
-void edm_karras_sigmas(unsigned long numSteps, double sigmaMin, double sigmaMax, double rho,
-                        double* outSigmas);
+void edm_karras_sigmas(unsigned long numSteps, float sigmaMin, float sigmaMax, float rho,
+                        float* outSigmas);
 
 // ── DDPM linear beta schedule ────────────────────────────────────────────────
 // beta_t = betaStart + (betaEnd-betaStart)*t/(numSteps-1), alpha_t = 1-beta_t,
 // alphaBar_t = prod_{s<=t} alpha_s. 'outBeta'/'outAlphaBar' must each have
 // numSteps slots (caller-allocated).
-void ddpm_linear_schedule(unsigned long numSteps, double betaStart, double betaEnd,
-                           double* outBeta, double* outAlphaBar);
+void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd,
+                           float* outBeta, float* outAlphaBar);
 
 // ── DDPM ancestral sampler step ──────────────────────────────────────────────
 // x_{t-1} = (1/sqrt(1-beta_t)) * (x_t - beta_t/sqrt(1-alphaBar_t) * epsPred) + sqrt(beta_t) * noise
@@ -51,13 +51,13 @@ void ddpm_linear_schedule(unsigned long numSteps, double betaStart, double betaE
 // mean-only) step — useful for verification, matching how the rest of
 // std/ml avoids baking in an RNG (see rnn.h's header comment).
 &Tensor ddpm_sampler_step(const &Tensor x_t, const &Tensor epsPred,
-                           double beta_t, double alphaBar_t, const &Tensor noise);
+                           float beta_t, float alphaBar_t, const &Tensor noise);
 
 // ── DDIM deterministic sampler step (eta=0) ─────────────────────────────────
 // x0Pred = (x_t - sqrt(1-alphaBar_t)*epsPred) / sqrt(alphaBar_t)
 // x_{t-1} = sqrt(alphaBar_prev)*x0Pred + sqrt(1-alphaBar_prev)*epsPred
 &Tensor ddim_sampler_step(const &Tensor x_t, const &Tensor epsPred,
-                           double alphaBar_t, double alphaBar_prev);
+                           float alphaBar_t, float alphaBar_prev);
 
 // ── DPM-Solver (Lu et al. 2022): eps-prediction exponential integrator ─────
 // in log-SNR space. lambda_t = log(alpha_t/sigma_t); order-1
@@ -66,8 +66,8 @@ void ddpm_linear_schedule(unsigned long numSteps, double betaStart, double betaE
 // holds for the *data*-prediction form below (dpm_solver_pp_1_step), not
 // this eps-prediction one; see diffusion.sc's header comment.
 &Tensor dpm_solver_1_step(const &Tensor x_cur, const &Tensor epsPred,
-                           double alpha_cur, double sigma_cur,
-                           double alpha_next, double sigma_next);
+                           float alpha_cur, float sigma_cur,
+                           float alpha_next, float sigma_next);
 
 // Order-2 (midpoint variant, r1=1/2): evaluates the eps-model a second
 // time at the log-SNR midpoint between the current and next step for a
@@ -80,12 +80,12 @@ void ddpm_linear_schedule(unsigned long numSteps, double betaStart, double betaE
 // (only parseBaseType()'s primitive/struct/pointer forms), so this is
 // the one spot in this file a reference type genuinely doesn't fit —
 // a real grammar limitation, not a scope choice.
-typedef fn struct Tensor*(struct Tensor* x, double sigma, void* userData) EpsModelFn;
+typedef fn struct Tensor*(struct Tensor* x, float sigma, void* userData) EpsModelFn;
 
 &Tensor dpm_solver_2_step(EpsModelFn model, void* userData,
                            const &Tensor x_cur, const &Tensor epsPred,
-                           double alpha_cur, double sigma_cur,
-                           double alpha_next, double sigma_next);
+                           float alpha_cur, float sigma_cur,
+                           float alpha_next, float sigma_next);
 
 // ── DPM-Solver++ (Lu et al. 2022b): data(x0)-prediction parametrization ────
 // Same exponential-integrator idea as DPM-Solver, reformulated around a
@@ -93,17 +93,17 @@ typedef fn struct Tensor*(struct Tensor* x, double sigma, void* userData) EpsMod
 // noise). Order-1 is provably identical to ddim_sampler_step — see
 // diffusion.sc's header comment for the derivation.
 &Tensor dpm_solver_pp_1_step(const &Tensor x_cur, const &Tensor x0Pred,
-                              double alpha_cur, double sigma_cur,
-                              double alpha_next, double sigma_next);
+                              float alpha_cur, float sigma_cur,
+                              float alpha_next, float sigma_next);
 
 // Order-2 midpoint variant, x0-prediction form. 'model' is called
 // internally as model(x_s, sigma_s, userData) at the log-SNR midpoint,
 // returning a predicted x0 (not eps).
-typedef fn struct Tensor*(struct Tensor* x, double sigma, void* userData) DataModelFn;
+typedef fn struct Tensor*(struct Tensor* x, float sigma, void* userData) DataModelFn;
 
 &Tensor dpm_solver_pp_2_step(DataModelFn model, void* userData,
                               const &Tensor x_cur, const &Tensor x0Pred,
-                              double alpha_cur, double sigma_cur,
-                              double alpha_next, double sigma_next);
+                              float alpha_cur, float sigma_cur,
+                              float alpha_next, float sigma_next);
 
 } // namespace std

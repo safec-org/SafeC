@@ -18,32 +18,32 @@
 
 namespace std {
 
-void edm_karras_sigmas(unsigned long numSteps, double sigmaMin, double sigmaMax, double rho,
-                        double* outSigmas) {
-    double minInvRho = pow_d(sigmaMin, 1.0 / rho);
-    double maxInvRho = pow_d(sigmaMax, 1.0 / rho);
+void edm_karras_sigmas(unsigned long numSteps, float sigmaMin, float sigmaMax, float rho,
+                        float* outSigmas) {
+    float minInvRho = pow_f(sigmaMin, (float)1.0 / rho);
+    float maxInvRho = pow_f(sigmaMax, (float)1.0 / rho);
     unsafe {
         unsigned long i = 0UL;
         while (i < numSteps) {
-            double frac = (double)i / (double)(numSteps - 1UL);
-            double s = maxInvRho + frac * (minInvRho - maxInvRho);
-            outSigmas[i] = pow_d(s, rho);
+            float frac = (float)i / (float)(numSteps - 1UL);
+            float s = maxInvRho + frac * (minInvRho - maxInvRho);
+            outSigmas[i] = pow_f(s, rho);
             i = i + 1UL;
         }
-        outSigmas[numSteps] = 0.0;
+        outSigmas[numSteps] = (float)0.0;
     }
 }
 
-void ddpm_linear_schedule(unsigned long numSteps, double betaStart, double betaEnd,
-                           double* outBeta, double* outAlphaBar) {
+void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd,
+                           float* outBeta, float* outAlphaBar) {
     unsafe {
-        double alphaBarAcc = 1.0;
+        float alphaBarAcc = (float)1.0;
         unsigned long t = 0UL;
         while (t < numSteps) {
-            double frac = (double)t / (double)(numSteps - 1UL);
-            double beta = betaStart + frac * (betaEnd - betaStart);
+            float frac = (float)t / (float)(numSteps - 1UL);
+            float beta = betaStart + frac * (betaEnd - betaStart);
             outBeta[t] = beta;
-            alphaBarAcc = alphaBarAcc * (1.0 - beta);
+            alphaBarAcc = alphaBarAcc * ((float)1.0 - beta);
             outAlphaBar[t] = alphaBarAcc;
             t = t + 1UL;
         }
@@ -51,13 +51,13 @@ void ddpm_linear_schedule(unsigned long numSteps, double betaStart, double betaE
 }
 
 &Tensor ddpm_sampler_step(const &Tensor x_t, const &Tensor epsPred,
-                           double beta_t, double alphaBar_t, const &Tensor noise) {
-    double invSqrtAlpha = 1.0 / sqrt_d(1.0 - beta_t);
-    double coef = beta_t / sqrt_d(1.0 - alphaBar_t);
+                           float beta_t, float alphaBar_t, const &Tensor noise) {
+    float invSqrtAlpha = (float)1.0 / sqrt_f((float)1.0 - beta_t);
+    float coef = beta_t / sqrt_f((float)1.0 - alphaBar_t);
     struct Tensor* scaledEps = tensor_scale(epsPred, coef);
     struct Tensor* diff = tensor_sub(x_t, scaledEps);
     struct Tensor* mean = tensor_scale(diff, invSqrtAlpha);
-    double sigma_t = sqrt_d(beta_t);
+    float sigma_t = sqrt_f(beta_t);
     struct Tensor* scaledNoise = tensor_scale(noise, sigma_t);
     struct Tensor* out = tensor_add(mean, scaledNoise);
 
@@ -67,15 +67,15 @@ void ddpm_linear_schedule(unsigned long numSteps, double betaStart, double betaE
 }
 
 &Tensor ddim_sampler_step(const &Tensor x_t, const &Tensor epsPred,
-                           double alphaBar_t, double alphaBar_prev) {
-    double sqrtAlphaBar_t = sqrt_d(alphaBar_t);
-    double sqrtOneMinusAlphaBar_t = sqrt_d(1.0 - alphaBar_t);
+                           float alphaBar_t, float alphaBar_prev) {
+    float sqrtAlphaBar_t = sqrt_f(alphaBar_t);
+    float sqrtOneMinusAlphaBar_t = sqrt_f((float)1.0 - alphaBar_t);
     struct Tensor* scaledEps1 = tensor_scale(epsPred, sqrtOneMinusAlphaBar_t);
     struct Tensor* numer = tensor_sub(x_t, scaledEps1);
-    struct Tensor* x0Pred = tensor_scale(numer, 1.0 / sqrtAlphaBar_t);
+    struct Tensor* x0Pred = tensor_scale(numer, (float)1.0 / sqrtAlphaBar_t);
 
-    double sqrtAlphaBarPrev = sqrt_d(alphaBar_prev);
-    double sqrtOneMinusAlphaBarPrev = sqrt_d(1.0 - alphaBar_prev);
+    float sqrtAlphaBarPrev = sqrt_f(alphaBar_prev);
+    float sqrtOneMinusAlphaBarPrev = sqrt_f((float)1.0 - alphaBar_prev);
     struct Tensor* term1 = tensor_scale(x0Pred, sqrtAlphaBarPrev);
     struct Tensor* term2 = tensor_scale(epsPred, sqrtOneMinusAlphaBarPrev);
     struct Tensor* out = tensor_add(term1, term2);
@@ -89,12 +89,12 @@ void ddpm_linear_schedule(unsigned long numSteps, double betaStart, double betaE
 }
 
 &Tensor dpm_solver_1_step(const &Tensor x_cur, const &Tensor epsPred,
-                           double alpha_cur, double sigma_cur,
-                           double alpha_next, double sigma_next) {
-    double lambda_cur = log_d(alpha_cur / sigma_cur);
-    double lambda_next = log_d(alpha_next / sigma_next);
-    double h = lambda_next - lambda_cur;
-    double expm1h = exp_d(h) - 1.0;
+                           float alpha_cur, float sigma_cur,
+                           float alpha_next, float sigma_next) {
+    float lambda_cur = log_f(alpha_cur / sigma_cur);
+    float lambda_next = log_f(alpha_next / sigma_next);
+    float h = lambda_next - lambda_cur;
+    float expm1h = exp_f(h) - (float)1.0;
 
     struct Tensor* term1 = tensor_scale(x_cur, sigma_next / sigma_cur);
     struct Tensor* term2 = tensor_scale(epsPred, alpha_next * expm1h);
@@ -107,15 +107,15 @@ void ddpm_linear_schedule(unsigned long numSteps, double betaStart, double betaE
 
 &Tensor dpm_solver_2_step(EpsModelFn model, void* userData,
                            const &Tensor x_cur, const &Tensor epsPred,
-                           double alpha_cur, double sigma_cur,
-                           double alpha_next, double sigma_next) {
-    double lambda_cur = log_d(alpha_cur / sigma_cur);
-    double lambda_next = log_d(alpha_next / sigma_next);
-    double h = lambda_next - lambda_cur;
-    double lambda_s = lambda_cur + 0.5 * h;
-    double sigma_s = 1.0 / sqrt_d(exp_d(2.0 * lambda_s) + 1.0);
-    double alpha_s = exp_d(lambda_s) * sigma_s;
-    double expm1Half = exp_d(0.5 * h) - 1.0;
+                           float alpha_cur, float sigma_cur,
+                           float alpha_next, float sigma_next) {
+    float lambda_cur = log_f(alpha_cur / sigma_cur);
+    float lambda_next = log_f(alpha_next / sigma_next);
+    float h = lambda_next - lambda_cur;
+    float lambda_s = lambda_cur + (float)0.5 * h;
+    float sigma_s = (float)1.0 / sqrt_f(exp_f((float)2.0 * lambda_s) + (float)1.0);
+    float alpha_s = exp_f(lambda_s) * sigma_s;
+    float expm1Half = exp_f((float)0.5 * h) - (float)1.0;
 
     struct Tensor* sTerm1 = tensor_scale(x_cur, sigma_s / sigma_cur);
     struct Tensor* sTerm2 = tensor_scale(epsPred, alpha_s * expm1Half);
@@ -124,7 +124,7 @@ void ddpm_linear_schedule(unsigned long numSteps, double betaStart, double betaE
     struct Tensor* eps_s;
     unsafe { eps_s = model(x_s, sigma_s, userData); }
 
-    double expm1h = exp_d(h) - 1.0;
+    float expm1h = exp_f(h) - (float)1.0;
     struct Tensor* nTerm1 = tensor_scale(x_cur, sigma_next / sigma_cur);
     struct Tensor* nTerm2 = tensor_scale(eps_s, alpha_next * expm1h);
     struct Tensor* out = tensor_sub(nTerm1, nTerm2);
@@ -138,12 +138,12 @@ void ddpm_linear_schedule(unsigned long numSteps, double betaStart, double betaE
 }
 
 &Tensor dpm_solver_pp_1_step(const &Tensor x_cur, const &Tensor x0Pred,
-                              double alpha_cur, double sigma_cur,
-                              double alpha_next, double sigma_next) {
-    double lambda_cur = log_d(alpha_cur / sigma_cur);
-    double lambda_next = log_d(alpha_next / sigma_next);
-    double h = lambda_next - lambda_cur;
-    double expm1NegH = exp_d(-h) - 1.0;
+                              float alpha_cur, float sigma_cur,
+                              float alpha_next, float sigma_next) {
+    float lambda_cur = log_f(alpha_cur / sigma_cur);
+    float lambda_next = log_f(alpha_next / sigma_next);
+    float h = lambda_next - lambda_cur;
+    float expm1NegH = exp_f(-h) - (float)1.0;
 
     struct Tensor* term1 = tensor_scale(x_cur, sigma_next / sigma_cur);
     struct Tensor* term2 = tensor_scale(x0Pred, alpha_next * expm1NegH);
@@ -156,15 +156,15 @@ void ddpm_linear_schedule(unsigned long numSteps, double betaStart, double betaE
 
 &Tensor dpm_solver_pp_2_step(DataModelFn model, void* userData,
                               const &Tensor x_cur, const &Tensor x0Pred,
-                              double alpha_cur, double sigma_cur,
-                              double alpha_next, double sigma_next) {
-    double lambda_cur = log_d(alpha_cur / sigma_cur);
-    double lambda_next = log_d(alpha_next / sigma_next);
-    double h = lambda_next - lambda_cur;
-    double lambda_s = lambda_cur + 0.5 * h;
-    double sigma_s = 1.0 / sqrt_d(exp_d(2.0 * lambda_s) + 1.0);
-    double alpha_s = exp_d(lambda_s) * sigma_s;
-    double expm1NegHalf = exp_d(-0.5 * h) - 1.0;
+                              float alpha_cur, float sigma_cur,
+                              float alpha_next, float sigma_next) {
+    float lambda_cur = log_f(alpha_cur / sigma_cur);
+    float lambda_next = log_f(alpha_next / sigma_next);
+    float h = lambda_next - lambda_cur;
+    float lambda_s = lambda_cur + (float)0.5 * h;
+    float sigma_s = (float)1.0 / sqrt_f(exp_f((float)2.0 * lambda_s) + (float)1.0);
+    float alpha_s = exp_f(lambda_s) * sigma_s;
+    float expm1NegHalf = exp_f((float)-0.5 * h) - (float)1.0;
 
     struct Tensor* sTerm1 = tensor_scale(x_cur, sigma_s / sigma_cur);
     struct Tensor* sTerm2 = tensor_scale(x0Pred, alpha_s * expm1NegHalf);
@@ -173,7 +173,7 @@ void ddpm_linear_schedule(unsigned long numSteps, double betaStart, double betaE
     struct Tensor* x0_s;
     unsafe { x0_s = model(x_s, sigma_s, userData); }
 
-    double expm1NegH = exp_d(-h) - 1.0;
+    float expm1NegH = exp_f(-h) - (float)1.0;
     struct Tensor* nTerm1 = tensor_scale(x_cur, sigma_next / sigma_cur);
     struct Tensor* nTerm2 = tensor_scale(x0_s, alpha_next * expm1NegH);
     struct Tensor* out = tensor_sub(nTerm1, nTerm2);

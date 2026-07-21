@@ -16,21 +16,21 @@ extern void  free(void* ptr);
     struct Tensor* out = tensor_new_2d(rows, cols, 0);
     unsigned long r = 0UL;
     while (r < rows) {
-        double rowMax;
+        float rowMax;
         unsafe { rowMax = x->data[r * cols]; }
         unsigned long c = 1UL;
         while (c < cols) {
-            double v;
+            float v;
             unsafe { v = x->data[r * cols + c]; }
             if (v > rowMax) rowMax = v;
             c = c + 1UL;
         }
-        double sum = 0.0;
+        float sum = (float)0.0;
         c = 0UL;
         while (c < cols) {
-            double v;
+            float v;
             unsafe { v = x->data[r * cols + c]; }
-            double e = exp_d(v - rowMax);
+            float e = exp_f(v - rowMax);
             unsafe { out->data[r * cols + c] = e; }
             sum = sum + e;
             c = c + 1UL;
@@ -96,7 +96,7 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src) {
     unsafe { headDim = Q->shape[1]; }
     struct Tensor* Kt = tensor_transpose(K);
     struct Tensor* scores = tensor_matmul(Q, Kt);
-    double scale = 1.0 / sqrt_d((double)headDim);
+    float scale = (float)1.0 / sqrt_f((float)headDim);
     struct Tensor* scaled = tensor_scale(scores, scale);
     struct Tensor* weights = softmax_rows(scaled);
     struct Tensor* result = tensor_matmul(weights, V);
@@ -155,8 +155,8 @@ static struct Tensor* __phi_elu_p1(struct Tensor* x) {
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
-            double v = x->data[i];
-            out->data[i] = (v > 0.0) ? (v + 1.0) : exp_d(v);
+            float v = x->data[i];
+            out->data[i] = (v > (float)0.0) ? (v + (float)1.0) : exp_f(v);
             i = i + 1UL;
         }
     }
@@ -173,15 +173,15 @@ static struct Tensor* __phi_elu_p1(struct Tensor* x) {
 
     unsafe {
         // KV[d1][d2] = sum_j phiK[j][d1] * V[j][d2]   ([headDim, headDim])
-        double* KV = (double*)malloc(sizeof(double) * headDim * headDim);
+        float* KV = (float*)malloc(sizeof(float) * headDim * headDim);
         // Z[d1] = sum_j phiK[j][d1]                   ([headDim])
-        double* Z = (double*)malloc(sizeof(double) * headDim);
+        float* Z = (float*)malloc(sizeof(float) * headDim);
         unsigned long d1 = 0UL;
         while (d1 < headDim) {
-            double zAcc = 0.0;
+            float zAcc = (float)0.0;
             unsigned long d2 = 0UL;
             while (d2 < headDim) {
-                double acc = 0.0;
+                float acc = (float)0.0;
                 unsigned long j = 0UL;
                 while (j < kvLen) {
                     acc = acc + phiK->data[j * headDim + d1] * V->data[j * headDim + d2];
@@ -198,12 +198,12 @@ static struct Tensor* __phi_elu_p1(struct Tensor* x) {
 
         unsigned long i = 0UL;
         while (i < seqLen) {
-            double denom = 0.0;
+            float denom = (float)0.0;
             unsigned long dd = 0UL;
             while (dd < headDim) { denom = denom + phiQ->data[i * headDim + dd] * Z[dd]; dd = dd + 1UL; }
             unsigned long d2 = 0UL;
             while (d2 < headDim) {
-                double numer = 0.0;
+                float numer = (float)0.0;
                 unsigned long dd2 = 0UL;
                 while (dd2 < headDim) {
                     numer = numer + phiQ->data[i * headDim + dd2] * KV[dd2 * headDim + d2];
@@ -226,15 +226,18 @@ static struct Tensor* __phi_elu_p1(struct Tensor* x) {
                                  unsigned long kvBlockSize) {
     unsigned long seqLen; unsigned long headDim; unsigned long kvLen;
     unsafe { seqLen = Q->shape[0]; headDim = Q->shape[1]; kvLen = K->shape[0]; }
-    double scale = 1.0 / sqrt_d((double)headDim);
+    float scale = (float)1.0 / sqrt_f((float)headDim);
 
     struct Tensor* out = tensor_new_2d(seqLen, headDim, 0); // doubles as the running 'acc' buffer
 
     unsafe {
-        double* m = (double*)malloc(sizeof(double) * seqLen); // running row max
-        double* l = (double*)malloc(sizeof(double) * seqLen); // running row sum
+        // -1.0e30, not double's -1.0e300 -- float32 only goes to ~3.4e38
+        // in magnitude, and -1.0e300 would overflow to -inf. -1.0e30 is
+        // still enormously larger than any real attention score.
+        float* m = (float*)malloc(sizeof(float) * seqLen); // running row max
+        float* l = (float*)malloc(sizeof(float) * seqLen); // running row sum
         unsigned long i0 = 0UL;
-        while (i0 < seqLen) { m[i0] = -1.0e300; l[i0] = 0.0; i0 = i0 + 1UL; }
+        while (i0 < seqLen) { m[i0] = (float)-1.0e30; l[i0] = (float)0.0; i0 = i0 + 1UL; }
 
         unsigned long blockStart = 0UL;
         while (blockStart < kvLen) {
@@ -245,30 +248,30 @@ static struct Tensor* __phi_elu_p1(struct Tensor* x) {
             unsigned long i = 0UL;
             while (i < seqLen) {
                 // scores[j] = scale * Q[i,:] . K[blockStart+j,:]
-                double* scores = (double*)malloc(sizeof(double) * bLen);
-                double blockMax = -1.0e300;
+                float* scores = (float*)malloc(sizeof(float) * bLen);
+                float blockMax = (float)-1.0e30;
                 unsigned long j = 0UL;
                 while (j < bLen) {
-                    double dot = 0.0;
+                    float dot = (float)0.0;
                     unsigned long d = 0UL;
                     while (d < headDim) {
                         dot = dot + Q->data[i * headDim + d] * K->data[(blockStart + j) * headDim + d];
                         d = d + 1UL;
                     }
-                    double s = dot * scale;
+                    float s = dot * scale;
                     scores[j] = s;
                     if (s > blockMax) blockMax = s;
                     j = j + 1UL;
                 }
 
-                double newMax = (m[i] > blockMax) ? m[i] : blockMax;
-                double correction = exp_d(m[i] - newMax);
+                float newMax = (m[i] > blockMax) ? m[i] : blockMax;
+                float correction = exp_f(m[i] - newMax);
 
-                double rowSumP = 0.0;
-                double* p = (double*)malloc(sizeof(double) * bLen);
+                float rowSumP = (float)0.0;
+                float* p = (float*)malloc(sizeof(float) * bLen);
                 j = 0UL;
                 while (j < bLen) {
-                    double pv = exp_d(scores[j] - newMax);
+                    float pv = exp_f(scores[j] - newMax);
                     p[j] = pv;
                     rowSumP = rowSumP + pv;
                     j = j + 1UL;
@@ -276,7 +279,7 @@ static struct Tensor* __phi_elu_p1(struct Tensor* x) {
 
                 unsigned long d2 = 0UL;
                 while (d2 < headDim) {
-                    double pv2 = 0.0;
+                    float pv2 = (float)0.0;
                     j = 0UL;
                     while (j < bLen) { pv2 = pv2 + p[j] * V->data[(blockStart + j) * headDim + d2]; j = j + 1UL; }
                     out->data[i * headDim + d2] = out->data[i * headDim + d2] * correction + pv2;

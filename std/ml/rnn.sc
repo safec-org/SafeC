@@ -23,8 +23,8 @@ static struct Tensor* __rnn_init_weight(unsigned long rows, unsigned long cols, 
         while (i < t->size) {
             unsigned long h = (i + 1UL) * 2654435761UL + seed * 40503UL;
             h = (h ^ (h >> 13UL)) * 2246822519UL;
-            double v = ((double)(h % 2000UL) / 1000.0) - 1.0; // [-1, 1)
-            t->data[i] = v * 0.3;
+            float v = ((float)(h % 2000UL) / (float)1000.0) - (float)1.0; // [-1, 1)
+            t->data[i] = v * (float)0.3;
             i = i + 1UL;
         }
     }
@@ -49,7 +49,7 @@ static struct Tensor* __one_minus(struct Tensor* z) {
     struct Tensor* out = tensor_zeros_like(z);
     unsafe {
         unsigned long i = 0UL;
-        while (i < out->size) { out->data[i] = 1.0 - z->data[i]; i = i + 1UL; }
+        while (i < out->size) { out->data[i] = (float)1.0 - z->data[i]; i = i + 1UL; }
     }
     return out;
 }
@@ -248,16 +248,16 @@ struct XLSTMState xlstm_cell_forward(const &XLSTMCell cell, const &Tensor x_t,
         struct Tensor* m_t = tensor_new_2d(1UL, hiddenSize, 0);
         struct Tensor* i_t = tensor_new_2d(1UL, hiddenSize, 0);
         struct Tensor* f_t = tensor_new_2d(1UL, hiddenSize, 0);
-        double mPrevScalar = prev->m->data[0];
+        float mPrevScalar = prev->m->data[0];
         unsigned long k = 0UL;
         while (k < hiddenSize) {
-            double fRaw = f_raw->data[k];
-            double iRaw = i_raw->data[k];
-            double candidateF = fRaw + mPrevScalar;
-            double m = (candidateF > iRaw) ? candidateF : iRaw;
+            float fRaw = f_raw->data[k];
+            float iRaw = i_raw->data[k];
+            float candidateF = fRaw + mPrevScalar;
+            float m = (candidateF > iRaw) ? candidateF : iRaw;
             m_t->data[k] = m;
-            i_t->data[k] = exp_d(iRaw - m);
-            f_t->data[k] = exp_d(candidateF - m);
+            i_t->data[k] = exp_f(iRaw - m);
+            f_t->data[k] = exp_f(candidateF - m);
             k = k + 1UL;
         }
 
@@ -272,8 +272,8 @@ struct XLSTMState xlstm_cell_forward(const &XLSTMCell cell, const &Tensor x_t,
         struct Tensor* ratio = tensor_new_2d(1UL, hiddenSize, 0);
         k = 0UL;
         while (k < hiddenSize) {
-            double denom = n_t->data[k];
-            ratio->data[k] = (denom != 0.0) ? (c_t->data[k] / denom) : 0.0;
+            float denom = n_t->data[k];
+            ratio->data[k] = (denom != (float)0.0) ? (c_t->data[k] / denom) : (float)0.0;
             k = k + 1UL;
         }
         struct Tensor* h_t = tensor_mul(o_t, ratio);
@@ -282,7 +282,7 @@ struct XLSTMState xlstm_cell_forward(const &XLSTMCell cell, const &Tensor x_t,
         // dim, matching the paper's scalar-per-timestep stabilizer) —
         // reduce the elementwise m_t computed above.
         struct Tensor* m_scalar = tensor_new_2d(1UL, 1UL, 0);
-        double mMax = m_t->data[0];
+        float mMax = m_t->data[0];
         k = 1UL;
         while (k < hiddenSize) { if (m_t->data[k] > mMax) mMax = m_t->data[k]; k = k + 1UL; }
         m_scalar->data[0] = mMax;

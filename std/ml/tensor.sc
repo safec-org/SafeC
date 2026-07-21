@@ -31,27 +31,27 @@ namespace std {
 
 // ══ Tensor methods ═══════════════════════════════════════════════════════════
 
-inline double Tensor::at1(unsigned long i) const {
+inline float Tensor::at1(unsigned long i) const {
     unsafe { return self.data[i]; }
 }
 
-inline double Tensor::at2(unsigned long r, unsigned long c) const {
+inline float Tensor::at2(unsigned long r, unsigned long c) const {
     unsafe { return self.data[r * self.shape[1] + c]; }
 }
 
-inline void Tensor::set1(unsigned long i, double v) {
+inline void Tensor::set1(unsigned long i, float v) {
     unsafe { self.data[i] = v; }
 }
 
-inline void Tensor::set2(unsigned long r, unsigned long c, double v) {
+inline void Tensor::set2(unsigned long r, unsigned long c, float v) {
     unsafe { self.data[r * self.shape[1] + c] = v; }
 }
 
 inline void Tensor::free() {
     unsafe {
-        if (self.data != (double*)0) { std::free((void*)self.data); self.data = (double*)0; }
+        if (self.data != (float*)0) { std::free((void*)self.data); self.data = (float*)0; }
         if (self.shape != (unsigned long*)0) { std::free((void*)self.shape); self.shape = (unsigned long*)0; }
-        if (self.grad != (double*)0) { std::free((void*)self.grad); self.grad = (double*)0; }
+        if (self.grad != (float*)0) { std::free((void*)self.grad); self.grad = (float*)0; }
         self.parents.free();
     }
 }
@@ -62,7 +62,7 @@ inline void Tensor::free() {
     unsigned long shape[1];
     unsafe { shape[0] = n; }
     struct Tensor* t = __tensor_alloc(shape, 1UL, requiresGrad);
-    tensor_fill(t, 0.0);
+    tensor_fill(t, (float)0.0);
     return t;
 }
 
@@ -70,11 +70,11 @@ inline void Tensor::free() {
     unsigned long shape[2];
     unsafe { shape[0] = rows; shape[1] = cols; }
     struct Tensor* t = __tensor_alloc(shape, 2UL, requiresGrad);
-    tensor_fill(t, 0.0);
+    tensor_fill(t, (float)0.0);
     return t;
 }
 
-&Tensor tensor_from_1d(const double* values, unsigned long n, int requiresGrad) {
+&Tensor tensor_from_1d(const float* values, unsigned long n, int requiresGrad) {
     struct Tensor* t = tensor_new_1d(n, requiresGrad);
     unsafe {
         unsigned long i = 0UL;
@@ -83,7 +83,7 @@ inline void Tensor::free() {
     return t;
 }
 
-&Tensor tensor_from_2d(const double* values, unsigned long rows, unsigned long cols, int requiresGrad) {
+&Tensor tensor_from_2d(const float* values, unsigned long rows, unsigned long cols, int requiresGrad) {
     struct Tensor* t = tensor_new_2d(rows, cols, requiresGrad);
     unsigned long total = rows * cols;
     unsafe {
@@ -96,11 +96,11 @@ inline void Tensor::free() {
 &Tensor tensor_zeros_like(const &Tensor t) {
     struct Tensor* out;
     unsafe { out = __tensor_alloc((const unsigned long*)t->shape, t->ndim, 0); }
-    tensor_fill(out, 0.0);
+    tensor_fill(out, (float)0.0);
     return out;
 }
 
-&Tensor tensor_fill(&Tensor t, double v) {
+&Tensor tensor_fill(&Tensor t, float v) {
     unsafe {
         unsigned long i = 0UL;
         while (i < t->size) { t->data[i] = v; i = i + 1UL; }
@@ -147,7 +147,7 @@ inline void Tensor::free() {
 }
 
 // ── Scale (multiply by a scalar constant) ─────────────────────────────────────
-&Tensor tensor_scale(const &Tensor a, double k) {
+&Tensor tensor_scale(const &Tensor a, float k) {
     struct Tensor* out = __tensor_alloc_uninit_like(a);
     unsafe {
         unsigned long i = 0UL;
@@ -170,7 +170,7 @@ inline void Tensor::free() {
     unsafe { one[0] = 1UL; }
     struct Tensor* out = __tensor_alloc(one, 1UL, 0);
     unsafe {
-        double acc = 0.0;
+        float acc = (float)0.0;
         unsigned long i = 0UL;
         while (i < a->size) { acc = acc + a->data[i]; i = i + 1UL; }
         out->data[0] = acc;
@@ -196,21 +196,18 @@ inline void Tensor::free() {
     // and out's row are read/written sequentially, which is both
     // cache-friendly and exactly the shape LLVM's loop vectorizer
     // recognizes and turns into packed multiply-add instructions at -O2.
-    // Verified: same output values as the previous i,j,p version on every
-    // existing tensor.sc correctness check, meaningfully faster on the
-    // MLP training benchmark on safec-docs's Benchmarks page.
     unsafe {
         unsigned long i = 0UL;
         while (i < m) {
             unsigned long j0 = 0UL;
-            while (j0 < n) { out->data[i * n + j0] = 0.0; j0 = j0 + 1UL; }
+            while (j0 < n) { out->data[i * n + j0] = (float)0.0; j0 = j0 + 1UL; }
             i = i + 1UL;
         }
         i = 0UL;
         while (i < m) {
             unsigned long p = 0UL;
             while (p < k) {
-                double aVal = a->data[i * k + p];
+                float aVal = a->data[i * k + p];
                 unsigned long j = 0UL;
                 while (j < n) {
                     out->data[i * n + j] = out->data[i * n + j] + aVal * b->data[p * n + j];
@@ -244,7 +241,7 @@ void tensor_backward(&Tensor t) {
     __tensor_ensure_grad(t);
     unsafe {
         unsigned long i = 0UL;
-        while (i < t->size) { t->grad[i] = 1.0; i = i + 1UL; }
+        while (i < t->size) { t->grad[i] = (float)1.0; i = i + 1UL; }
     }
 
     struct Vec order = vec_new(sizeof(struct Tensor*));
@@ -276,9 +273,9 @@ void tensor_backward(&Tensor t) {
 
 void tensor_zero_grad(&Tensor t) {
     unsafe {
-        if (t->grad != (double*)0) {
+        if (t->grad != (float*)0) {
             unsigned long i = 0UL;
-            while (i < t->size) { t->grad[i] = 0.0; i = i + 1UL; }
+            while (i < t->size) { t->grad[i] = (float)0.0; i = i + 1UL; }
         }
     }
 }

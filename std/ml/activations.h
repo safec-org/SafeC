@@ -30,7 +30,7 @@ namespace std {
 // var 1 across each row). No affine gain/bias — apply your own
 // elementwise scale/shift after calling this if you need one (e.g.
 // AdaLN-style conditioning, see transformer.h).
-&Tensor tensor_layernorm_rows(const &Tensor x, double eps);
+&Tensor tensor_layernorm_rows(const &Tensor x, float eps);
 
 // x + sublayerOut. A plain alias for tensor_add, named for residual/
 // skip-connection call sites (ResNet blocks, transformer sublayers).

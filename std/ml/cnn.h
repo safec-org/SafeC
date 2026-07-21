@@ -2,7 +2,7 @@
 // SafeC Standard Library — CNN: 2D convolution + pooling over flat CHW
 // feature maps.
 //
-// Feature maps are channels-first (CHW), flat row-major double buffers —
+// Feature maps are channels-first (CHW), flat row-major float32 buffers —
 // deliberately not std::Tensor (which tops out at 2D and is wired for
 // matmul-shaped autograd; convolution's 4D weight tensor and 3D
 // activations don't fit that shape). Forward-only, like the rest of
@@ -13,7 +13,7 @@
 namespace std {
 
 struct FeatureMap {
-    &heap double  data;   // flat, channels*height*width, CHW order (data[c*H*W + h*W + w])
+    &heap float   data;   // flat, channels*height*width, CHW order (data[c*H*W + h*W + w])
     unsigned long channels;
     unsigned long height;
     unsigned long width;
@@ -29,8 +29,8 @@ void feature_map_free(&FeatureMap fm);
 // (dim + 2*padding - kernel)/stride + 1; caller must choose dimensions
 // that divide evenly (no implicit ceil/floor rounding surprises).
 struct Conv2D {
-    &heap double  weight; // [outChannels, inChannels, kH, kW]
-    &heap double  bias;   // [outChannels]
+    &heap float   weight; // [outChannels, inChannels, kH, kW]
+    &heap float   bias;   // [outChannels]
     unsigned long inChannels;
     unsigned long outChannels;
     unsigned long kH;

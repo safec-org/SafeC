@@ -153,10 +153,10 @@ static struct Tensor* __row_cyclic_shift(struct Tensor* in, unsigned long shift)
 }
 
 // ── Gated DeltaNet ────────────────────────────────────────────────────────────
-static double __gdn_init_weight(unsigned long i, unsigned long seed) {
+static float __gdn_init_weight(unsigned long i, unsigned long seed) {
     unsigned long h = (i + 1UL) * 2654435761UL + seed * 40503UL;
     h = (h ^ (h >> 13UL)) * 2246822519UL;
-    return (((double)(h % 2000UL) / 1000.0) - 1.0) * 0.3;
+    return (((float)(h % 2000UL) / (float)1000.0) - (float)1.0) * (float)0.3;
 }
 
 struct GatedDeltaNet gated_deltanet_new(unsigned long dModel, unsigned long keyDim, unsigned long valueDim) {
@@ -195,27 +195,27 @@ void gated_deltanet_free(&GatedDeltaNet layer) {
     struct Tensor* out = tensor_new_2d(seqLen, valueDim, 0);
 
     unsafe {
-        double* S = (double*)malloc(sizeof(double) * keyDim * valueDim);
+        float* S = (float*)malloc(sizeof(float) * keyDim * valueDim);
         unsigned long si = 0UL;
-        while (si < keyDim * valueDim) { S[si] = 0.0; si = si + 1UL; }
+        while (si < keyDim * valueDim) { S[si] = (float)0.0; si = si + 1UL; }
 
         unsigned long t = 0UL;
         while (t < seqLen) {
-            double alphaLogit = 0.0; double betaLogit = 0.0;
+            float alphaLogit = (float)0.0; float betaLogit = (float)0.0;
             unsigned long d = 0UL;
             while (d < dModel) {
-                double xv = X->data[t * dModel + d];
+                float xv = X->data[t * dModel + d];
                 alphaLogit = alphaLogit + xv * layer->Walpha->data[d];
                 betaLogit = betaLogit + xv * layer->Wbeta->data[d];
                 d = d + 1UL;
             }
-            double alpha = 1.0 / (1.0 + exp_d(-alphaLogit));
-            double beta = 1.0 / (1.0 + exp_d(-betaLogit));
+            float alpha = (float)1.0 / ((float)1.0 + exp_f(-alphaLogit));
+            float beta = (float)1.0 / ((float)1.0 + exp_f(-betaLogit));
 
-            double* pred = (double*)malloc(sizeof(double) * valueDim);
+            float* pred = (float*)malloc(sizeof(float) * valueDim);
             unsigned long vd = 0UL;
             while (vd < valueDim) {
-                double acc = 0.0;
+                float acc = (float)0.0;
                 unsigned long kd = 0UL;
                 while (kd < keyDim) {
                     acc = acc + S[kd * valueDim + vd] * K->data[t * keyDim + kd];
@@ -227,10 +227,10 @@ void gated_deltanet_free(&GatedDeltaNet layer) {
 
             unsigned long kd2 = 0UL;
             while (kd2 < keyDim) {
-                double kv = K->data[t * keyDim + kd2];
+                float kv = K->data[t * keyDim + kd2];
                 unsigned long vd2 = 0UL;
                 while (vd2 < valueDim) {
-                    double deltaV = V->data[t * valueDim + vd2] - pred[vd2];
+                    float deltaV = V->data[t * valueDim + vd2] - pred[vd2];
                     unsigned long idx = kd2 * valueDim + vd2;
                     S[idx] = alpha * S[idx] + beta * kv * deltaV;
                     vd2 = vd2 + 1UL;
@@ -241,7 +241,7 @@ void gated_deltanet_free(&GatedDeltaNet layer) {
 
             unsigned long vd3 = 0UL;
             while (vd3 < valueDim) {
-                double acc = 0.0;
+                float acc = (float)0.0;
                 unsigned long kd3 = 0UL;
                 while (kd3 < keyDim) {
                     acc = acc + S[kd3 * valueDim + vd3] * Q->data[t * keyDim + kd3];
