@@ -2,6 +2,7 @@
 // Safe wrappers around malloc / free / realloc / mem* from libc.
 #pragma once
 #include <std/mem.h>
+#include <std/stderr_compat.h>
 
 // ── Explicit extern declarations for libc memory functions ───────────────────
 namespace std {
@@ -24,9 +25,6 @@ extern int   memcmp(const void* a, const void* b, unsigned long n);
 // behavior (see panic.sc) without the extra link dependency.
 extern void  abort();
 extern int   fprintf(void* stream, const char* fmt, ...);
-// macOS/BSD: stderr is a macro expanding to __stderrp, not a plain extern
-// symbol (same reason std/io.sc declares it this way — see io.sc:31-36).
-extern void* __stderrp;
 
 // ── Use-after-free / double-free / mismatched-deallocation detection ────────
 // alloc()/alloc_zeroed() prefix every allocation with a small header
@@ -130,7 +128,7 @@ extern void* __stderrp;
 #define ALLOC_QUARANTINE_MASK_   ((unsigned long)63)
 
 static void alloc_abort_(const char* msg) {
-    unsafe { fprintf(__stderrp, "std::alloc fatal: %s\n", msg); }
+    unsafe { fprintf(SAFEC_STDERR_, "std::alloc fatal: %s\n", msg); }
     unsafe { abort(); }
 }
 

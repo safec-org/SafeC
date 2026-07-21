@@ -486,6 +486,35 @@ static int compileOneFile(const std::string &inputPath, const std::string &outpu
         ppOpts.importCHeaders = false;
         ppOpts.cmdlineDefs["__SAFEC_FREESTANDING__"] = "1";
     }
+    // Standard platform-detection macros (same names a real C compiler
+    // predefines), so std/ code can branch on '#ifdef __APPLE__' /
+    // '#elif defined(__linux__)' / '#elif defined(_WIN32)' instead of
+    // hardcoding one platform's libc internals (see std/mem.sc's
+    // stderr-symbol split — __stderrp is macOS/BSD-only, glibc and UCRT
+    // each need something else). Derived from --target's triple when a
+    // cross-target was given, otherwise from the host platform this safec
+    // binary itself was built for.
+    {
+        std::string triple = TargetTriple.getValue();
+        if (triple.empty()) {
+#if defined(__APPLE__)
+            triple = "apple";
+#elif defined(_WIN32)
+            triple = "windows";
+#elif defined(__linux__)
+            triple = "linux";
+#endif
+        }
+        if (triple.find("apple") != std::string::npos ||
+            triple.find("darwin") != std::string::npos) {
+            ppOpts.cmdlineDefs["__APPLE__"] = "1";
+        } else if (triple.find("windows") != std::string::npos ||
+                   triple.find("win32") != std::string::npos) {
+            ppOpts.cmdlineDefs["_WIN32"] = "1";
+        } else if (triple.find("linux") != std::string::npos) {
+            ppOpts.cmdlineDefs["__linux__"] = "1";
+        }
+    }
     for (auto &d : IncludePaths) ppOpts.includePaths.push_back(d);
     for (auto &d : CmdlineDefs) {
         auto eq = d.find('=');

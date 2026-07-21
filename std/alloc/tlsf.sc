@@ -1,6 +1,7 @@
 // SafeC Standard Library — TLSF Allocator
 #pragma once
 #include <std/alloc/tlsf.h>
+#include <std/stderr_compat.h>
 
 namespace std {
 
@@ -10,10 +11,9 @@ extern void* memset(void* ptr, int val, unsigned long n);
 // Same rationale as mem.sc/pool.sc/slab.sc for not using panic.h/panic_at here.
 extern void  abort();
 extern int   fprintf(void* stream, const char* fmt, ...);
-extern void* __stderrp;
 
 static void tlsf_abort_(const char* msg) {
-    unsafe { fprintf(__stderrp, "std::alloc (tlsf) fatal: %s\n", msg); }
+    unsafe { fprintf(SAFEC_STDERR_, "std::alloc (tlsf) fatal: %s\n", msg); }
     unsafe { abort(); }
 }
 

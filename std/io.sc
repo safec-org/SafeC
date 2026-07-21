@@ -4,6 +4,7 @@
 // __attribute__, and macros that SafeC's parser cannot handle directly.
 #pragma once
 #include <std/io.h>
+#include <std/stderr_compat.h>
 
 // ── Explicit extern declarations for stdio functions ─────────────────────────
 namespace std {
@@ -28,18 +29,37 @@ extern void* tmpfile();
 extern unsigned long strlen(const char* s);
 
 // ── FILE* stream handles ──────────────────────────────────────────────────────
-// On macOS/BSD, stdout/stderr/stdin are macros expanding to __stdoutp etc.
-// We declare the underlying globals using void* to avoid needing FILE struct.
-// TODO: add Linux support (#define via __iob_func or extern FILE* stdout)
+// stdin/stdout/stderr are each a macro on every libc here, never a plain
+// fixed symbol under one universal name — the underlying handle differs by
+// platform:
+//   - macOS/BSD: '__stdinp'/'__stdoutp'/'__stderrp', real exported globals.
+//   - glibc:     'stdin'/'stdout'/'stderr' themselves, exported globals.
+//   - MSVC/UCRT: no exported globals at all; each macro expands to a call,
+//                '__acrt_iob_func(0/1/2)' (fd-style index order).
+// SAFEC_STDERR_ (stderr specifically) comes from stderr_compat.h, shared
+// with mem.sc/assert.sc/etc. stdin/stdout only matter here, so they're
+// declared locally with the same platform split rather than growing that
+// shared header for consumers that don't need them.
+#if defined(__APPLE__)
 extern void* __stdinp;
 extern void* __stdoutp;
-extern void* __stderrp;
+#define SAFEC_STDIN_  __stdinp
+#define SAFEC_STDOUT_ __stdoutp
+#elif defined(_WIN32)
+#define SAFEC_STDIN_  __acrt_iob_func(0)
+#define SAFEC_STDOUT_ __acrt_iob_func(1)
+#else
+extern void* stdin;
+extern void* stdout;
+#define SAFEC_STDIN_  stdin
+#define SAFEC_STDOUT_ stdout
+#endif
 
 // ── Basic stdout output ───────────────────────────────────────────────────────
 
 // Print a string without a trailing newline.
 inline void print(const char* s) {
-    unsafe { fputs(s, __stdoutp); }
+    unsafe { fputs(s, SAFEC_STDOUT_); }
 }
 
 // Print a string followed by a newline.
@@ -49,14 +69,14 @@ inline void println(const char* s) {
 
 // Print a string to stderr without a trailing newline.
 inline void eprint(const char* s) {
-    unsafe { fputs(s, __stderrp); }
+    unsafe { fputs(s, SAFEC_STDERR_); }
 }
 
 // Print a string to stderr followed by a newline.
 inline void eprintln(const char* s) {
     unsafe {
-        fputs(s, __stderrp);
-        fputc('\n', __stderrp);
+        fputs(s, SAFEC_STDERR_);
+        fputc('\n', SAFEC_STDERR_);
     }
 }
 
@@ -87,12 +107,12 @@ inline void println_float(double v) {
 
 // Flush stdout — call before program exit if using print() without println().
 inline void flush_stdout() {
-    unsafe { fflush(__stdoutp); }
+    unsafe { fflush(SAFEC_STDOUT_); }
 }
 
 // Flush stderr.
 inline void flush_stderr() {
-    unsafe { fflush(__stderrp); }
+    unsafe { fflush(SAFEC_STDERR_); }
 }
 
 // ── Additional stdout output ───────────────────────────────────────────────────
@@ -127,11 +147,11 @@ inline void println_char(int c) {
 // ── Stderr output ─────────────────────────────────────────────────────────────
 
 inline void eprint_int(long long v) {
-    unsafe { fprintf(__stderrp, "%lld", v); }
+    unsafe { fprintf(SAFEC_STDERR_, "%lld", v); }
 }
 
 inline void eprint_float(double v) {
-    unsafe { fprintf(__stderrp, "%g", v); }
+    unsafe { fprintf(SAFEC_STDERR_, "%g", v); }
 }
 
 // ── Buffer formatting (snprintf wrappers) ─────────────────────────────────────
@@ -169,7 +189,7 @@ inline int io_getchar() {
 
 // Push a character back so the next read returns it.
 inline int io_ungetc(int c) {
-    unsafe { return ungetc(c, __stdinp); }
+    unsafe { return ungetc(c, SAFEC_STDIN_); }
 }
 
 // Read a line (up to n-1 chars + NUL) from stdin.
@@ -177,7 +197,7 @@ inline int io_ungetc(int c) {
 inline int io_read_line(char* buf, int n) {
     if (n <= 0) { return -1; }
     unsafe {
-        if (fgets(buf, n, __stdinp) == (char*)0) { return -1; }
+        if (fgets(buf, n, SAFEC_STDIN_) == (char*)0) { return -1; }
         int len = (int)strlen(buf);
         // Strip trailing newline if present.
         if (len > 0 && buf[len - 1] == '\n') {
@@ -199,7 +219,7 @@ inline int io_read_token(char* buf, int n) {
             c = getchar();
         }
         if (c == -1) { return 0; }
-        ungetc(c, __stdinp);
+        ungetc(c, SAFEC_STDIN_);
         char fmt[16];
         snprintf(fmt, (unsigned long)16, "%%%ds", n - 1);
         int read = scanf(fmt, buf);

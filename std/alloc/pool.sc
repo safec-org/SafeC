@@ -1,6 +1,7 @@
 // SafeC Standard Library — Pool Allocator
 #pragma once
 #include <std/alloc/pool.h>
+#include <std/stderr_compat.h>
 
 namespace std {
 
@@ -13,10 +14,9 @@ extern void  free(void* ptr);
 // diagnostic-then-abort mem.sc's alloc_abort_ uses.
 extern void  abort();
 extern int   fprintf(void* stream, const char* fmt, ...);
-extern void* __stderrp;
 
 static void pool_abort_(const char* msg) {
-    unsafe { fprintf(__stderrp, "std::alloc (pool) fatal: %s\n", msg); }
+    unsafe { fprintf(SAFEC_STDERR_, "std::alloc (pool) fatal: %s\n", msg); }
     unsafe { abort(); }
 }
 

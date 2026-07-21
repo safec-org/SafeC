@@ -2,6 +2,7 @@
 #pragma once
 #include <std/alloc/slab.h>
 #include <std/mem.h>
+#include <std/stderr_compat.h>
 
 namespace std {
 
@@ -10,10 +11,9 @@ extern void  free(void* ptr);
 // Same rationale as mem.sc/pool.sc for not using panic.h/panic_at here.
 extern void  abort();
 extern int   fprintf(void* stream, const char* fmt, ...);
-extern void* __stderrp;
 
 static void slab_abort_(const char* msg) {
-    unsafe { fprintf(__stderrp, "std::alloc (slab) fatal: %s\n", msg); }
+    unsafe { fprintf(SAFEC_STDERR_, "std::alloc (slab) fatal: %s\n", msg); }
     unsafe { abort(); }
 }
 

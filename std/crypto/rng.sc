@@ -1,6 +1,7 @@
 // SafeC Standard Library — Cryptographic RNG (ChaCha20-based)
 #pragma once
 #include <std/crypto/rng.h>
+#include <std/stderr_compat.h>
 
 namespace std {
 
@@ -16,10 +17,9 @@ extern int fclose(void* f);
 // for every RNG user).
 extern void  abort();
 extern int   fprintf(void* stream, const char* fmt, ...);
-extern void* __stderrp;
 
 static void rng_abort_(const char* msg) {
-    unsafe { fprintf(__stderrp, "std::crypto::rng fatal: %s\n", msg); }
+    unsafe { fprintf(SAFEC_STDERR_, "std::crypto::rng fatal: %s\n", msg); }
     unsafe { abort(); }
 }
 

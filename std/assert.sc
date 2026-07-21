@@ -4,6 +4,7 @@
 #pragma once
 #include <std/assert.h>
 #include <std/io.h>
+#include <std/stderr_compat.h>
 
 // ── Explicit extern declarations ─────────────────────────────────────────────
 namespace std {
@@ -12,23 +13,22 @@ extern int   fputs(const char* s, void* stream);
 extern int   fputc(int c, void* stream);
 extern int   fflush(void* stream);
 extern void  abort();
-extern void* __stderrp;
 
 // Print failure diagnostics to stderr and abort the process.
 void assert_fail_(const char* file, int line, const char* msg) {
     unsafe {
-        fputs("Assertion failed", __stderrp);
+        fputs("Assertion failed", SAFEC_STDERR_);
         if (msg != (const char*)0) {
-            fputs(": ", __stderrp);
-            fputs(msg, __stderrp);
+            fputs(": ", SAFEC_STDERR_);
+            fputs(msg, SAFEC_STDERR_);
         }
-        fputs(" at ", __stderrp);
-        fputs(file, __stderrp);
-        fputc(':', __stderrp);
+        fputs(" at ", SAFEC_STDERR_);
+        fputs(file, SAFEC_STDERR_);
+        fputc(':', SAFEC_STDERR_);
         // Print line number manually (no printf here to avoid dependency).
         int tmp = line;
         if (tmp == 0) {
-            fputc('0', __stderrp);
+            fputc('0', SAFEC_STDERR_);
         } else {
             char buf[12];
             int i = 11;
@@ -38,10 +38,10 @@ void assert_fail_(const char* file, int line, const char* msg) {
                 buf[i] = (char)('0' + (tmp % 10));
                 tmp = tmp / 10;
             }
-            fputs((char*)(buf + i), __stderrp);
+            fputs((char*)(buf + i), SAFEC_STDERR_);
         }
-        fputc('\n', __stderrp);
-        fflush(__stderrp);
+        fputc('\n', SAFEC_STDERR_);
+        fflush(SAFEC_STDERR_);
         abort();
     }
 }

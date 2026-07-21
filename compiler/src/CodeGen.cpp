@@ -44,6 +44,10 @@ CodeGen::CodeGen(llvm::LLVMContext &ctx, const std::string &moduleName,
             mod_->setDataLayout(tm->createDataLayout());
             targetMachine_.reset(tm);
         }
+        targetIsWindows_ = triple.isOSWindows();
+    } else {
+        targetIsWindows_ =
+            llvm::Triple(llvm::sys::getDefaultTargetTriple()).isOSWindows();
     }
     if (debugLevel_ != DebugLevel::None) {
         dib_ = std::make_unique<llvm::DIBuilder>(*mod_);
@@ -934,20 +938,33 @@ llvm::GlobalVariable *CodeGen::genGlobalVar(GlobalVarDecl &gv) {
     // Bare-metal attributes: section, alignment, volatile, thread_local
     if (!gv.sectionName.empty()) gvar->setSection(gv.sectionName);
     if (gv.alignment > 0) gvar->setAlignment(llvm::Align(gv.alignment));
-    // InitialExec, not the LLVM default GeneralDynamic: GeneralDynamic is
-    // the model that stays correct even if the defining module could be
+    // LocalExec, not the LLVM default GeneralDynamic: GeneralDynamic is the
+    // model that stays correct even if the defining module could be
     // dlopen'd after the process has already started (real shared-library
     // TLS), which costs a __tls_get_addr call on every single access.
     // safec always produces a normal statically/dynamically *linked*
     // executable (or a static archive linked into one) — never something
-    // safec itself dlopens — so InitialExec (resolved once at load time,
-    // then a direct thread-pointer-relative load per access, no function
-    // call) is safe here and meaningfully faster for any thread_local
-    // that's read/written on a hot path (e.g. std/mem.sc's per-thread
-    // allocator quarantine — verified: this cut single-threaded overhead
-    // measurably vs. GeneralDynamic on real thread_local globals).
-    if (gv.isThreadLocal)
-        gvar->setThreadLocalMode(llvm::GlobalVariable::LocalExecTLSModel);
+    // safec itself dlopens — so LocalExec (resolved once at load time, then
+    // a direct thread-pointer-relative load per access, no function call)
+    // is safe here and meaningfully faster for any thread_local that's
+    // read/written on a hot path (e.g. std/mem.sc's per-thread allocator
+    // quarantine — verified: this cut single-threaded overhead measurably
+    // vs. GeneralDynamic on real thread_local globals).
+    //
+    // Windows/COFF is the one exception: confirmed empirically that LLVM's
+    // COFF backend does not correctly lower LocalExecTLSModel — a
+    // thread_local global compiles and links without any error, but reads
+    // back a wrong/garbage address at runtime (silent corruption for a
+    // small one, an access-violation crash for a large one, e.g.
+    // std/mem.sc's allocator size-class cache). GeneralDynamic is the model
+    // LLVM's Windows TLS lowering actually implements correctly, so Windows
+    // targets pay its extra indirection in exchange for being correct at
+    // all; every other target keeps the faster LocalExec.
+    if (gv.isThreadLocal) {
+        gvar->setThreadLocalMode(targetIsWindows_
+            ? llvm::GlobalVariable::GeneralDynamicTLSModel
+            : llvm::GlobalVariable::LocalExecTLSModel);
+    }
 
     globals_[gv.name] = gvar;
     return gvar;

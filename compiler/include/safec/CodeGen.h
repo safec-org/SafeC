@@ -303,6 +303,18 @@ private:
     // ── Freestanding mode ─────────────────────────────────────────────────────
     bool freestanding_ = false;
 
+    // Whether the effective target (explicit --target triple, or this
+    // safec binary's own host triple when none was given) is a Windows/COFF
+    // target — computed once in the constructor. genGlobalVar() reads this
+    // to pick a thread_local variable's TLS access model: LLVM's COFF
+    // backend does not correctly lower LocalExecTLSModel (confirmed
+    // empirically — a thread_local global compiles and links cleanly but
+    // reads back wrong/garbage addresses at runtime, crashing outright for
+    // large ones), so Windows targets need GeneralDynamicTLSModel instead.
+    // ELF/Mach-O targets keep LocalExec, which is correct there and avoids
+    // GeneralDynamic's extra indirection on every thread_local access.
+    bool targetIsWindows_ = false;
+
     // ── Debug info ────────────────────────────────────────────────────────────
     DebugLevel                           debugLevel_ = DebugLevel::None;
     std::unique_ptr<llvm::DIBuilder>     dib_;
