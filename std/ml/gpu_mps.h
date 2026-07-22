@@ -268,6 +268,18 @@ int mps_sum_f32_chained(void* bufA, float* out, unsigned long n);
 // itself still GPU-pending.
 int mps_scale_f32_chained(void* buf, float k, float* out, unsigned long n);
 
+// Fused gated-activation (GeGLU/tanh-GELU) step: 'bufRaw' is a still-
+// pending GPU buffer holding one row-major [rows, 2*intermediateSize]
+// matmul output (gate half then up half per row -- e.g. the result of a
+// matmul against a row-concatenated [gateW; upW] weight); computes
+// out[row,col] = gelu(bufRaw[row,col]) * bufRaw[row, intermediateSize+col]
+// for col in [0, intermediateSize), same tanh-approx GELU formula as
+// std::tensor_gelu_fwd (activations.sc), in one dispatch -- see
+// gpu_mps_kernels.metal's gated_gelu_kernel. 'out' has rows*
+// intermediateSize elements, same throwaway-CPU-scratch-until-batch-end
+// contract as every other *_chained function here.
+int mps_gated_gelu_f32_chained(void* bufRaw, float* out, unsigned long rows, unsigned long intermediateSize);
+
 // ── Backward chained variants ─────────────────────────────────────────────────
 // Same idea as mps_matmul_f32_chained/mps_relu_f32_chained above, for the
 // backward chain (matmul2-backward's dA=dH output feeds relu-backward's

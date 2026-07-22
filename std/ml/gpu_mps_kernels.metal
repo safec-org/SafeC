@@ -75,6 +75,43 @@ kernel void scale_kernel(device const float* a [[buffer(0)]],
     out[id] = a[id] * k;
 }
 
+// Fused gated-activation kernel (GeGLU/tanh-approx-GELU shape): 'raw' is
+// one row-major [rows, 2*intermediateSize] buffer holding a gate half and
+// an up half side by side per row (the natural output of a single matmul
+// against a row-concatenated [gateW; upW] weight matrix, e.g. this
+// library's own gemma4 benchmark's gate/up projection fusion) --
+// out[row,col] = gelu(raw[row,col]) * raw[row, intermediateSize+col] for
+// col in [0, intermediateSize). One dispatch computes the entire gated
+// activation (matmul -> gelu -> multiply's middle two steps) without ever
+// writing the gate/up split or the post-gelu intermediate back to host
+// memory. GELU here is the same tanh approximation as
+// std::tensor_gelu_fwd (activations.sc) -- bit-identical formula, GPU
+// float32 math instead of CPU, verified against it directly.
+kernel void gated_gelu_kernel(device const float* raw [[buffer(0)]],
+                               constant uint& intermediateSize [[buffer(1)]],
+                               device float* out [[buffer(2)]],
+                               uint id [[thread_position_in_grid]]) {
+    uint col = id % intermediateSize;
+    uint row = id / intermediateSize;
+    uint base = row * (2u * intermediateSize);
+    float x = raw[base + col];
+    float up = raw[base + intermediateSize + col];
+    float c = 0.7978845608028654f; // sqrt(2/pi)
+    float inner = c * (x + 0.044715f * x * x * x);
+    // Clamp before tanh: this GPU's tanh() overflows to NaN (instead of
+    // saturating to +-1, the way CPU libm's tanh does) for |inner| in the
+    // few-hundred range, reachable from a perfectly ordinary, finite x
+    // around 25-30 once cubed and scaled -- observed directly against the
+    // real gemma4-E2B checkpoint (x=27.39 -> inner=755 -> tanh()=NaN on
+    // this hardware/Metal build). tanh(20) already rounds to exactly
+    // 1.0f in float32, so clamping to +-20 changes nothing for any input
+    // this would otherwise get right, and fixes every input it wouldn't.
+    if (inner > 20.0f) { inner = 20.0f; }
+    else if (inner < -20.0f) { inner = -20.0f; }
+    float ga = 0.5f * x * (1.0f + tanh(inner));
+    out[id] = ga * up;
+}
+
 // Two-stage parallel reduction. This used to be a single GPU thread
 // running a serial O(n) loop while every other thread returned
 // immediately — correct, but using none of the GPU's actual parallelism:

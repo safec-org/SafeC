@@ -516,6 +516,7 @@ int mps_sqrt_f32(const float* a, float* out, unsigned long n) {
 // kept as its own function (rather than folded into __mps_run_unary_kernel)
 // because of that extra setBytes call.
 static void* __mps_scale_pipeline = (void*)0;
+static void* __mps_gated_gelu_pipeline = (void*)0;
 
 int mps_scale_f32(const float* a, float k, float* out, unsigned long n) {
     unsafe {
@@ -1944,6 +1945,56 @@ int mps_scale_f32_chained(void* buf, float k, float* out, unsigned long n) {
         MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
         float kVal = k;
         setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&kVal, 4UL, 1UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
+
+        struct MTLSize gridSize;
+        gridSize.width = n; gridSize.height = 1UL; gridSize.depth = 1UL;
+        unsigned long tgWidth = n < 64UL ? n : 64UL;
+        if (tgWidth == 0UL) tgWidth = 1UL;
+        struct MTLSize tgSize;
+        tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
+        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
+        struct MTLSize numThreadgroups;
+        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
+        MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+
+        if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
+            __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
+            __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
+            __mps_pending_bytes[__mps_pending_count] = bytes;
+            __mps_pending_count = __mps_pending_count + 1UL;
+        }
+        return 1;
+    }
+}
+
+// See gpu_mps.h's comment. Same dispatch shape as mps_scale_f32_chained
+// above (one buffer input, one scalar constant, one buffer output), just
+// with the scalar as a 4-byte 'uint' (matching the kernel's 'constant
+// uint&') instead of a float, and a fused gate/up-split + GELU + multiply
+// kernel body instead of a plain multiply-by-scalar.
+int mps_gated_gelu_f32_chained(void* bufRaw, float* out, unsigned long rows, unsigned long intermediateSize) {
+    if (!__mps_batch_active) return 0;
+    unsafe {
+        if (__mps_gated_gelu_pipeline == (void*)0) {
+            void* pipeline = __mps_make_pipeline("gated_gelu_kernel");
+            if (pipeline == (void*)0) return 0;
+            __mps_gated_gelu_pipeline = pipeline;
+        }
+
+        unsigned long n = rows * intermediateSize;
+        unsigned long bytes = n * sizeof(float);
+        void* bufOut = __mps_buf_get_batched(bytes);
+        if (bufOut == (void*)0) return 0;
+
+        MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
+        msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, __mps_gated_gelu_pipeline);
+        MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufRaw, 0UL, 0UL);
+        MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
+        unsigned int iSizeVal = (unsigned int)intermediateSize;
+        setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&iSizeVal, 4UL, 1UL);
         setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
 
         struct MTLSize gridSize;
