@@ -26,8 +26,64 @@ extern void cblas_sgemm(int order, int transA, int transB,
 // directly (not assumed) that C may alias B for an in-place accumulate
 // (C = A + C) before relying on that below (same check as tensor_f32's
 // predecessor did for the double-precision vDSP_vaddD).
+//
+// Apple-only API (Accelerate.framework) — everywhere else, cblas_sgemm
+// comes from a standalone CBLAS (OpenBLAS/MKL), which has no vDSP
+// equivalent bundled with it. Non-Apple falls back to a plain strided
+// accumulate loop instead: this is the backward pass, called once per
+// matmul per training step, not the hot cblas_sgemm calls themselves, so
+// losing vectorization here (a compiler-auto-vectorized loop still gets
+// most of it) doesn't erase BLAS's actual advantage the way re-
+// implementing cblas_sgemm by hand would.
+#ifdef __APPLE__
 extern void vDSP_vadd(const float* A, long IA, const float* B, long IB,
                        float* C, long IC, unsigned long N);
+#else
+static void vDSP_vadd(const float* A, long IA, const float* B, long IB,
+                       float* C, long IC, unsigned long N) {
+    unsafe {
+        // Every real call site here uses stride 1 (see __matmul_backward_
+        // blas below) and has C aliasing B (an in-place accumulate,
+        // C = A + C) -- which is exactly the case LLVM's auto-vectorizer
+        // has to assume is unsafe to reorder/widen without proof, so the
+        // plain scalar loop in the general branch below doesn't reliably
+        // get vectorized even under -O2. vec<float, 8> (8 x 32-bit lanes
+        // = 256 bits, the same AVX2/256-bit width std/benchmarks' own
+        // SIMD page uses for vec<double, 4>) sidesteps that: processing
+        // is still strictly index-ordered lane-by-lane, safe regardless
+        // of A/B/C aliasing, but now explicit instead of relying on the
+        // optimizer to prove it's allowed to.
+        if (IA == 1L && IB == 1L && IC == 1L) {
+            unsigned long i = 0UL;
+            unsigned long limit = (N / 8UL) * 8UL;
+            while (i < limit) {
+                vec<float, 8> va;
+                vec<float, 8> vb;
+                va[0] = A[i];      va[1] = A[i+1UL]; va[2] = A[i+2UL]; va[3] = A[i+3UL];
+                va[4] = A[i+4UL];  va[5] = A[i+5UL]; va[6] = A[i+6UL]; va[7] = A[i+7UL];
+                vb[0] = B[i];      vb[1] = B[i+1UL]; vb[2] = B[i+2UL]; vb[3] = B[i+3UL];
+                vb[4] = B[i+4UL];  vb[5] = B[i+5UL]; vb[6] = B[i+6UL]; vb[7] = B[i+7UL];
+                vec<float, 8> vc = va + vb;
+                C[i] = vc[0];      C[i+1UL] = vc[1]; C[i+2UL] = vc[2]; C[i+3UL] = vc[3];
+                C[i+4UL] = vc[4];  C[i+5UL] = vc[5]; C[i+6UL] = vc[6]; C[i+7UL] = vc[7];
+                i = i + 8UL;
+            }
+            while (i < N) {
+                C[i] = A[i] + B[i];
+                i = i + 1UL;
+            }
+            return;
+        }
+        unsigned long i = 0UL;
+        long ia = 0L; long ib = 0L; long ic = 0L;
+        while (i < N) {
+            C[ic] = A[ia] + B[ib];
+            ia = ia + IA; ib = ib + IB; ic = ic + IC;
+            i = i + 1UL;
+        }
+    }
+}
+#endif
 
 // ── Backward (BLAS-accelerated) ───────────────────────────────────────────────
 // Same math as tensor.h's __matmul_backward (dA = dC . B^T, dB = A^T . dC):
@@ -103,7 +159,19 @@ static void __matmul_backward_blas(void* selfPtr) {
 &Tensor tensor_matmul_blas(const &Tensor a, const &Tensor b) {
     unsigned long m; unsigned long k; unsigned long n;
     unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
-    struct Tensor* out = tensor_new_2d(m, n, 0);
+    // __tensor_alloc (not tensor_new_2d) deliberately: tensor_new_2d's
+    // extra tensor_fill(0.0) zero-pass is dead work here specifically —
+    // cblas_sgemm below runs with beta=0.0, which means "ignore C's
+    // incoming contents, write every element fresh", so the zero-fill's
+    // result is fully overwritten before anything ever reads it. A real,
+    // measured cost, not a theoretical one: one O(m*n) pass per matmul
+    // call, on every forward call this function ever makes.
+    unsigned long outShape[2];
+    struct Tensor* out;
+    unsafe {
+        outShape[0] = m; outShape[1] = n;
+        out = __tensor_alloc((const unsigned long*)&outShape[0], 2UL, 0);
+    }
     unsafe {
         cblas_sgemm(101, 111, 111, (int)m, (int)n, (int)k,
             (float)1.0, (const float*)a->data, (int)k,

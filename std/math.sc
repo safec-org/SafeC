@@ -116,7 +116,47 @@ inline const long long clamp_ll(long long v, long long lo, long long hi) {
 }
 
 // ── Single-precision float ────────────────────────────────────────────────────
-
+// MSVC's UCRT import libraries reliably export the double-precision libm
+// functions below (fabs, sqrt, ...) but not their 'f'-suffixed single-
+// precision counterparts (fabsf, sqrtf, ...) as real linkable symbols --
+// those are meant to be resolved through <math.h>'s intrinsic/inline
+// substitution, which this file can't use (see the file-header comment on
+// why math.h itself isn't included). Confirmed directly: a minimal
+// 'extern float fabsf(float); fabsf(-3.5f);' fails to link on Windows
+// (LNK2019, unresolved external), while the identical program calling
+// 'extern double fabs(double)' links and runs fine. So on Windows, route
+// every '_f' wrapper through the double-precision CRT function instead
+// (cast in, call, cast back) — everywhere else, xxxf() links normally, no
+// reason to pay the float->double->float round trip there.
+#ifdef _WIN32
+inline float abs_f(float x)                      { unsafe { return (float)fabs((double)x); } }
+inline float sqrt_f(float x)                     { unsafe { return (float)sqrt((double)x); } }
+inline float cbrt_f(float x)                     { unsafe { return (float)cbrt((double)x); } }
+inline float floor_f(float x)                    { unsafe { return (float)floor((double)x); } }
+inline float ceil_f(float x)                     { unsafe { return (float)ceil((double)x); } }
+inline float round_f(float x)                    { unsafe { return (float)round((double)x); } }
+inline float trunc_f(float x)                    { unsafe { return (float)trunc((double)x); } }
+inline float pow_f(float base, float exp)        { unsafe { return (float)pow((double)base, (double)exp); } }
+inline float exp_f(float x)                      { unsafe { return (float)exp((double)x); } }
+inline float exp2_f(float x)                     { unsafe { return (float)exp2((double)x); } }
+inline float log_f(float x)                      { unsafe { return (float)log((double)x); } }
+inline float log2_f(float x)                     { unsafe { return (float)log2((double)x); } }
+inline float log10_f(float x)                    { unsafe { return (float)log10((double)x); } }
+inline float sin_f(float x)                      { unsafe { return (float)sin((double)x); } }
+inline float cos_f(float x)                      { unsafe { return (float)cos((double)x); } }
+inline float tan_f(float x)                      { unsafe { return (float)tan((double)x); } }
+inline float asin_f(float x)                     { unsafe { return (float)asin((double)x); } }
+inline float acos_f(float x)                     { unsafe { return (float)acos((double)x); } }
+inline float atan_f(float x)                     { unsafe { return (float)atan((double)x); } }
+inline float atan2_f(float y, float x)           { unsafe { return (float)atan2((double)y, (double)x); } }
+inline float sinh_f(float x)                     { unsafe { return (float)sinh((double)x); } }
+inline float cosh_f(float x)                     { unsafe { return (float)cosh((double)x); } }
+inline float tanh_f(float x)                     { unsafe { return (float)tanh((double)x); } }
+inline float hypot_f(float x, float y)           { unsafe { return (float)hypot((double)x, (double)y); } }
+inline float fmod_f(float x, float y)            { unsafe { return (float)fmod((double)x, (double)y); } }
+inline float copysign_f(float mag, float sgn)    { unsafe { return (float)copysign((double)mag, (double)sgn); } }
+inline float fma_f(float a, float b, float c)    { unsafe { return (float)fma((double)a, (double)b, (double)c); } }
+#else
 inline float abs_f(float x)                      { unsafe { return fabsf(x); } }
 inline float sqrt_f(float x)                     { unsafe { return sqrtf(x); } }
 inline float cbrt_f(float x)                     { unsafe { return cbrtf(x); } }
@@ -144,6 +184,7 @@ inline float hypot_f(float x, float y)           { unsafe { return hypotf(x, y);
 inline float fmod_f(float x, float y)            { unsafe { return fmodf(x, y); } }
 inline float copysign_f(float mag, float sgn)    { unsafe { return copysignf(mag, sgn); } }
 inline float fma_f(float a, float b, float c)    { unsafe { return fmaf(a, b, c); } }
+#endif
 
 inline const float min_f(float a, float b)             { return a < b ? a : b; }
 inline const float max_f(float a, float b)             { return a > b ? a : b; }
