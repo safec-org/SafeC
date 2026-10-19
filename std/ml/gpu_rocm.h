@@ -1,103 +1,113 @@
 #pragma once
-// SafeC Standard Library — GPU tensor ops via ROCm/HIP (AMD).
+// SafeC Standard Library — AMD GPU backend (ROCm / HIP).
 //
-// Written against the real HIP Runtime API's C ABI (hand-matched to
-// hip_runtime_api.h) and type-checked by safec, but — like gpu_cuda.h,
-// gui_win32.sc, and gui_x11.sc — genuinely UNLINKABLE/UNRUNNABLE in this
-// sandbox: no AMD GPU, no ROCm toolkit installed here. Sanity-check
-// against a real ROCm-capable host before depending on it.
+// Two layers:
 //
-// Narrower than gpu_cuda.h's PTX approach: CUDA's PTX is a stable,
-// human-writable *text* IR, so gpu_cuda.sc can embed a kernel as a string
-// literal and load it with cuModuleLoadData at runtime with no build-time
-// toolchain dependency. HIP's equivalent module format (HSACO) is a
-// compiled ELF-like *binary* blob — there's no practical hand-written-text
-// equivalent — so hipModuleLoadData here is real and correctly declared,
-// but actually calling it requires a real hipcc/offline-compiled HSACO
-// byte array this header does not (and, without a ROCm toolchain
-// available to produce one, cannot) embed. See gpu_rocm.sc's
-// rocm_add_f32 for exactly where that gap is and what it would take to
-// close it on a real ROCm host.
+//  1. Device-resident buffers (RocmBuf) and queued device ops — the fast
+//     path. Upload once, run any number of ops on the GPU, read back only
+//     what you need. Matmuls go to rocBLAS; everything else runs custom
+//     HIP kernels (elementwise math, ReLU and its gradient, in-place SGD,
+//     sum reduction, and a fused MSE-loss gradient) that this library
+//     compiles at first use with hiprtc for whatever GPU is present — no
+//     offline build step and no per-architecture binaries.
+//  2. Host-array convenience ops (rocm_*_f32) — upload, compute, read back
+//     in one call. Simple, but each call pays two PCIe transfers; use (1)
+//     inside loops.
 //
-// Gated behind the 'rocm' feature (see Package.toml's [features]).
+// Ops on layer (1) are queued in order on one HIP stream and return as
+// soon as they're enqueued; rocm_read() and rocm_sync() wait. A sequence
+// of queued ops can be recorded once into a RocmGraph and replayed with a
+// single launch, which removes per-kernel launch overhead from small,
+// repeated workloads such as a training step.
+//
+// The backend picks the GPU with the most compute units (discrete over
+// integrated), so on a machine with both an Instinct/Radeon card and an
+// APU it uses the card. Link with: -lamdhip64 -lhiprtc -lrocblas
+// (from /opt/rocm/lib).
 namespace std {
 
-// Elementwise 'out[i] = a[i] + b[i]' for i in [0, n) on an AMD GPU.
-// Currently always returns 0 (see gpu_rocm.sc's header comment on the
-// HSACO gap) — the HIP Runtime API plumbing around it is real and
-// type-checked, but there's no embeddable kernel body yet.
-int rocm_add_f32(const float* a, const float* b, float* out, unsigned long n);
+// ── Device and buffers ───────────────────────────────────────────────────────
 
-// Same shape and same HSACO-gap caveat as rocm_add_f32 — all real HIP
-// Runtime API plumbing, all currently always returning 0 for lack of a
-// compiled kernel image. See gpu_rocm.sc's header comment.
-int rocm_sub_f32(const float* a, const float* b, float* out, unsigned long n);
-int rocm_mul_f32(const float* a, const float* b, float* out, unsigned long n);
-int rocm_div_f32(const float* a, const float* b, float* out, unsigned long n);
-int rocm_pow_f32(const float* a, const float* b, float* out, unsigned long n);
-int rocm_relu_f32(const float* a, float* out, unsigned long n);
-int rocm_log_f32(const float* a, float* out, unsigned long n);
-int rocm_exp_f32(const float* a, float* out, unsigned long n);
-int rocm_sqrt_f32(const float* a, float* out, unsigned long n);
-int rocm_scale_f32(const float* a, float k, float* out, unsigned long n);
-int rocm_sum_f32(const float* a, float* out, unsigned long n);
-int rocm_matmul_f32(const float* a, const float* b, float* out,
-                     unsigned long M, unsigned long K, unsigned long N);
-
-// Same computation as rocm_matmul_f32, dispatched to rocBLAS's
-// rocblas_sgemm instead — the ROCm-vendor equivalent of tensor_blas.h's
-// Accelerate-backed tensor_matmul_blas / gpu_cuda.h's cuBLAS-backed
-// cuda_matmul_f32_blas. Unlike rocm_matmul_f32, this does NOT hit the
-// HSACO-embedding gap described above: rocblas_sgemm is an ordinary
-// exported symbol in librocblas.so, not a kernel image that needs
-// offline compilation, so this is actually usable on real ROCm hardware
-// today (still UNVERIFIED in this sandbox — no AMD GPU/ROCm toolkit here
-// either).
-int rocm_matmul_f32_blas(const float* a, const float* b, float* out,
-                          unsigned long M, unsigned long K, unsigned long N);
-
-// True if a ROCm-capable device is present (hipInit(0) == hipSuccess &&
-// hipGetDeviceCount() > 0).
+// 1 if a HIP GPU is usable (initializes the backend on first call).
 int rocm_available();
 
-// ── Persistent-buffer tier ───────────────────────────────────────────────
-// Real HIP Runtime API device-memory management (hipMalloc/hipMemcpyHtoD/
-// hipFree) plus a persistent hipInit/hipSetDevice singleton -- unlike the
-// elementwise ops above, buffer upload/release and device selection need
-// no HSACO kernel image at all, so neither hits this file's HSACO gap
-// (see this file's header comment). Mirrors gpu_mps.h's
-// mps_upload_persistent/mps_release_persistent and gpu_cuda.h's
-// cuda_upload_persistent/cuda_release_persistent: upload once, dispatch
-// many times against the same device buffer instead of re-uploading per
-// call. rocm_matmul_f32_blas_persistent gets the same treatment for
-// rocblas_sgemm, since that (like the buffer functions here) is a real,
-// linkable library call, not blocked on the HSACO gap the way
-// rocm_matmul_f32 itself is.
-//
-// What's deliberately NOT here: an in-place SGD kernel (gpu_mps.sc's
-// sgd_update_kernel / gpu_cuda.sc's cuda_sgd_update_f32) and a persistent
-// variant of rocm_matmul_f32 itself both need a real compiled HSACO
-// kernel image this sandbox has no ROCm toolchain to produce. This tier
-// is scoped to what's real and usable without one; closing the HSACO gap
-// (see gpu_rocm.sc) is what would unlock the rest of this family here.
+// Name of the selected GPU ("AMD Instinct MI100"), or "" if none.
+const char* rocm_device_name();
 
-// Uploads 'bytes' from host memory to a new persistent device buffer.
-// Returns (void*)0 on failure (no device, or allocation failure).
-void* rocm_upload_persistent(const float* data, unsigned long bytes);
+// A float32 buffer in GPU memory. 'dev' is the device address — never
+// dereferenced on the host — and 0 for an invalid (failed or freed)
+// buffer; 'len' is the element count every op checks against.
+struct RocmBuf {
+    unsigned long dev;
+    unsigned long len;
+};
 
-// Frees a buffer returned by rocm_upload_persistent.
-void rocm_release_persistent(void* devPtr);
+struct RocmBuf rocm_alloc(unsigned long n);                       // uninitialized; dev == 0 on failure
+struct RocmBuf rocm_upload(const &float host, unsigned long n);  // dev == 0 on failure
+int  rocm_write(struct RocmBuf dst, const &float host, unsigned long n);  // 1 on success
+int  rocm_read(struct RocmBuf src, &float host, unsigned long n);         // waits for queued work
+void rocm_free(&RocmBuf b);                                       // b.dev := 0
+int  rocm_sync();                                                 // wait for all queued work
 
-// Same computation as rocm_matmul_f32_blas, but 'devA'/'devB' are already
-// device buffers (e.g. from rocm_upload_persistent) -- no upload for
-// either operand -- and reuses a persistent device selection + rocBLAS
-// handle instead of re-initializing both on every call. Returns 1 on
-// success, 0 on failure.
-int rocm_matmul_f32_blas_persistent(void* devA, void* devB, float* out,
-                                     unsigned long M, unsigned long K, unsigned long N);
+// ── Queued device ops (1 = enqueued, 0 = invalid buffer/size or no GPU) ─────
+// Matrices are row-major. 'ta'/'tb' = 1 means that operand is stored
+// transposed (A as k x m, B as n x k).
 
-// True if the shared persistent device selection (used by every function
-// in this tier) is available.
-int rocm_persistent_available();
+// c[m,n] = op(a)[m,k] * op(b)[k,n]  (rocBLAS sgemm)
+int rocm_gemm(struct RocmBuf a, int ta, struct RocmBuf b, int tb, struct RocmBuf c,
+              unsigned long m, unsigned long n, unsigned long k);
+
+int rocm_add(struct RocmBuf a, struct RocmBuf b, struct RocmBuf out);   // out = a + b
+int rocm_sub(struct RocmBuf a, struct RocmBuf b, struct RocmBuf out);
+int rocm_mul(struct RocmBuf a, struct RocmBuf b, struct RocmBuf out);
+int rocm_div(struct RocmBuf a, struct RocmBuf b, struct RocmBuf out);
+int rocm_pow(struct RocmBuf a, struct RocmBuf b, struct RocmBuf out);
+int rocm_scale(struct RocmBuf a, float k, struct RocmBuf out);         // out = a * k
+int rocm_relu(struct RocmBuf a, struct RocmBuf out);
+int rocm_exp(struct RocmBuf a, struct RocmBuf out);
+int rocm_log(struct RocmBuf a, struct RocmBuf out);
+int rocm_sqrt(struct RocmBuf a, struct RocmBuf out);
+int rocm_relu_grad(struct RocmBuf z, struct RocmBuf g, struct RocmBuf out);   // out = z > 0 ? g : 0
+int rocm_sgd(struct RocmBuf w, struct RocmBuf g, float lr);            // w -= lr * g, in place
+int rocm_sum(struct RocmBuf a, struct RocmBuf out1);                   // out1[0] = sum(a)
+// Fused MSE gradient: dy = 2 (y - t) and loss1[0] = sum((y - t)^2), in one pass.
+int rocm_mse_grad(struct RocmBuf y, struct RocmBuf t, struct RocmBuf dy, struct RocmBuf loss1);
+
+// ── Graphs: record queued ops once, replay with one launch ───────────────────
+
+struct RocmGraph {
+    unsigned long exec;   // 0 = invalid
+};
+
+// Ops issued between begin and end are recorded instead of run. Don't call
+// rocm_read/rocm_write/rocm_sync while recording.
+int  rocm_capture_begin();
+struct RocmGraph rocm_capture_end();          // exec == 0 on failure
+int  rocm_graph_launch(struct RocmGraph g);   // queued like any other op
+void rocm_graph_free(&RocmGraph g);
+
+// ── Host-array convenience ops (upload → compute → read back) ────────────────
+// 1 on success, 0 on failure (no GPU, allocation failure).
+
+int rocm_add_f32(const &float a, const &float b, &float out, unsigned long n);
+int rocm_sub_f32(const &float a, const &float b, &float out, unsigned long n);
+int rocm_mul_f32(const &float a, const &float b, &float out, unsigned long n);
+int rocm_div_f32(const &float a, const &float b, &float out, unsigned long n);
+int rocm_pow_f32(const &float a, const &float b, &float out, unsigned long n);
+int rocm_relu_f32(const &float a, &float out, unsigned long n);
+int rocm_log_f32(const &float a, &float out, unsigned long n);
+int rocm_exp_f32(const &float a, &float out, unsigned long n);
+int rocm_sqrt_f32(const &float a, &float out, unsigned long n);
+int rocm_scale_f32(const &float a, float k, &float out, unsigned long n);
+int rocm_sum_f32(const &float a, &float out1, unsigned long n);
+
+// out[M,N] = a[M,K] * b[K,N] with this library's own tiled HIP kernel
+// (64x64 tiles in LDS, 4x4 per thread). Kept as a dependency-free
+// reference; rocm_matmul_f32_blas is several times faster at every size.
+int rocm_matmul_f32(const &float a, const &float b, &float out,
+                    unsigned long M, unsigned long K, unsigned long N);
+// Same product through rocBLAS.
+int rocm_matmul_f32_blas(const &float a, const &float b, &float out,
+                         unsigned long M, unsigned long K, unsigned long N);
 
 } // namespace std

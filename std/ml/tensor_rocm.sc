@@ -1,5 +1,5 @@
 // SafeC Standard Library — GPU-backed Tensor ops implementation (ROCm/HIP (AMD), see
-// tensor_rocm.h). UNVERIFIED — see gpu_rocm.h/.sc's warnings; every op falls back to CPU today.
+// tensor_rocm.h). Each op falls back to the CPU loop if the GPU call fails.
 #pragma once
 #include <std/ml/tensor_rocm.h>
 #include <std/ml/tensor_nn.h>
@@ -11,7 +11,7 @@ namespace std {
     if (!rocm_available()) { return tensor_add(a, b); }
     struct Tensor* out = __tensor_alloc_uninit_like(a);
     unsafe {
-        int ok = rocm_add_f32((const float*)a->data, (const float*)b->data, (float*)out->data, out->size);
+        int ok = rocm_add_f32((const &float)a->data, (const &float)b->data, (&float)out->data, out->size);
         if (!ok) {
             unsigned long i = 0UL;
             while (i < out->size) { out->data[i] = a->data[i] + b->data[i]; i = i + 1UL; }
@@ -25,7 +25,7 @@ namespace std {
     if (!rocm_available()) { return tensor_sub(a, b); }
     struct Tensor* out = __tensor_alloc_uninit_like(a);
     unsafe {
-        int ok = rocm_sub_f32((const float*)a->data, (const float*)b->data, (float*)out->data, out->size);
+        int ok = rocm_sub_f32((const &float)a->data, (const &float)b->data, (&float)out->data, out->size);
         if (!ok) {
             unsigned long i = 0UL;
             while (i < out->size) { out->data[i] = a->data[i] - b->data[i]; i = i + 1UL; }
@@ -39,7 +39,7 @@ namespace std {
     if (!rocm_available()) { return tensor_mul(a, b); }
     struct Tensor* out = __tensor_alloc_uninit_like(a);
     unsafe {
-        int ok = rocm_mul_f32((const float*)a->data, (const float*)b->data, (float*)out->data, out->size);
+        int ok = rocm_mul_f32((const &float)a->data, (const &float)b->data, (&float)out->data, out->size);
         if (!ok) {
             unsigned long i = 0UL;
             while (i < out->size) { out->data[i] = a->data[i] * b->data[i]; i = i + 1UL; }
@@ -53,7 +53,7 @@ namespace std {
     if (!rocm_available()) { return tensor_scale(a, k); }
     struct Tensor* out = __tensor_alloc_uninit_like(a);
     unsafe {
-        int ok = rocm_scale_f32((const float*)a->data, k, (float*)out->data, out->size);
+        int ok = rocm_scale_f32((const &float)a->data, k, (&float)out->data, out->size);
         if (!ok) {
             unsigned long i = 0UL;
             while (i < out->size) { out->data[i] = a->data[i] * k; i = i + 1UL; }
@@ -68,7 +68,7 @@ namespace std {
     if (!rocm_available()) { return tensor_relu(a); }
     struct Tensor* out = __tensor_alloc_uninit_like(a);
     unsafe {
-        int ok = rocm_relu_f32((const float*)a->data, (float*)out->data, out->size);
+        int ok = rocm_relu_f32((const &float)a->data, (&float)out->data, out->size);
         if (!ok) {
             unsigned long i = 0UL;
             while (i < out->size) {
@@ -89,7 +89,7 @@ namespace std {
     struct Tensor* out = __tensor_alloc(one, 1UL, 0);
     unsafe {
         float fout[1];
-        int ok = rocm_sum_f32((const float*)a->data, (float*)fout, a->size);
+        int ok = rocm_sum_f32((const &float)a->data, (&float)fout, a->size);
         if (ok) {
             out->data[0] = fout[0];
         } else {
@@ -110,7 +110,7 @@ namespace std {
     unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
     struct Tensor* out = tensor_new_2d(m, n, 0);
     unsafe {
-        int ok = rocm_matmul_f32((const float*)a->data, (const float*)b->data, (float*)out->data, m, k, n);
+        int ok = rocm_matmul_f32((const &float)a->data, (const &float)b->data, (&float)out->data, m, k, n);
         if (!ok) {
             unsigned long i = 0UL;
             while (i < m) {
@@ -145,7 +145,7 @@ namespace std {
     unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
     struct Tensor* out = tensor_new_2d(m, n, 0);
     unsafe {
-        int ok = rocm_matmul_f32_blas((const float*)a->data, (const float*)b->data, (float*)out->data, m, k, n);
+        int ok = rocm_matmul_f32_blas((const &float)a->data, (const &float)b->data, (&float)out->data, m, k, n);
         if (!ok) {
             unsigned long i = 0UL;
             while (i < m) {

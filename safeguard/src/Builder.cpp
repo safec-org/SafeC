@@ -705,8 +705,23 @@ std::string Builder::ensureStdLib() {
         : fs::path(root_) / "build" / "deps" / "libsafec_std.a";
     fs::create_directories(libPath.parent_path());
 
-    // Only rebuild if the library is missing.
-    if (fs::exists(libPath)) return libPath.string();
+    // Reuse the archive unless a std source or the compiler changed since it
+    // was built (an edited std file used to keep linking the old object).
+    if (fs::exists(libPath)) {
+        std::error_code ec;
+        auto built = fs::last_write_time(libPath, ec);
+        bool stale = false;
+        for (auto it = fs::recursive_directory_iterator(stdDir, ec);
+             !ec && !stale && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+            auto ext = it->path().extension();
+            if ((ext == ".sc" || ext == ".h") && it->last_write_time(ec) > built) stale = true;
+        }
+        fs::path safec = findSafec();
+        if (!stale && fs::exists(safec, ec) && fs::last_write_time(safec, ec) > built) stale = true;
+        if (!stale) return libPath.string();
+        if (opts_.verbose) std::cout << "safeguard: std library is out of date, rebuilding\n";
+        fs::remove(libPath, ec);
+    }
 
     if (opts_.verbose)
         std::cout << "safeguard: building std library from " << stdDir << "\n";

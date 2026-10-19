@@ -12,7 +12,7 @@
 // struct field layouts especially as "should be right" rather than
 // "confirmed right" until sanity-checked against a real Vulkan SDK.
 //
-// Same shape as gpu_rocm.h's HSACO gap, for the same underlying reason:
+// The underlying gap:
 // SPIR-V is a *binary* IR (unlike CUDA's textual PTX), so there's no
 // hand-writable string literal to embed the way gpu_mps.sc/gpu_cuda.sc do.
 // A real deployment compiles a GLSL/HLSL/WGSL compute shader to SPIR-V

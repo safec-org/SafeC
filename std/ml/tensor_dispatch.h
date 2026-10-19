@@ -54,8 +54,8 @@ enum Device {
     DEVICE_MPS = 2,        // Apple Metal (tensor_gpu.sc)
     DEVICE_CUDA = 3,       // NVIDIA, hand-written PTX kernel (tensor_cuda.sc)
     DEVICE_CUDA_BLAS = 4,  // NVIDIA, cuBLAS (tensor_cuda.sc)
-    DEVICE_ROCM = 5,       // AMD, HIP kernel (tensor_rocm.sc) -- see that file's HSACO-gap caveat
-    DEVICE_ROCM_BLAS = 6,  // AMD, rocBLAS (tensor_rocm.sc) -- not affected by the HSACO gap
+    DEVICE_ROCM = 5,       // AMD, this library's own HIP matmul kernel (tensor_rocm.sc)
+    DEVICE_ROCM_BLAS = 6,  // AMD, rocBLAS (tensor_rocm.sc)
     DEVICE_SPIRV = 7,      // Vulkan/SPIR-V (tensor_spirv.sc)
     DEVICE_WEBGPU = 8,     // WebGPU (tensor_webgpu.sc)
 };
