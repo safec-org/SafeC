@@ -258,13 +258,13 @@ TypePtr Sema::resolveType(TypePtr ty) {
         auto &rt = static_cast<ReferenceType &>(*ty);
         auto resolvedBase = resolveType(rt.base);
         if (resolvedBase != rt.base)
-            return makeReference(resolvedBase, rt.region, rt.nullable, rt.mut, rt.arenaName);
+            return makeReference(resolvedBase, rt.region, rt.nullable, rt.mut, rt.arenaName, rt.pointeeVolatile);
     }
     if (ty->kind == TypeKind::Pointer) {
         auto &pt = static_cast<PointerType &>(*ty);
         auto resolvedBase = resolveType(pt.base);
         if (resolvedBase != pt.base)
-            return makePointer(resolvedBase, pt.isConst);
+            return makePointer(resolvedBase, pt.isConst, pt.pointeeVolatile);
     }
     if (ty->kind == TypeKind::Array) {
         auto &at = static_cast<ArrayType &>(*ty);
@@ -399,13 +399,13 @@ static TypePtr resolveGenericNames(const TypePtr &ty,
     if (ty->kind == TypeKind::Pointer) {
         auto &pt = static_cast<const PointerType &>(*ty);
         auto nb = resolveGenericNames(pt.base, gps);
-        return (nb == pt.base) ? ty : makePointer(nb, pt.isConst);
+        return (nb == pt.base) ? ty : makePointer(nb, pt.isConst, pt.pointeeVolatile);
     }
     if (ty->kind == TypeKind::Reference) {
         auto &rt = static_cast<const ReferenceType &>(*ty);
         auto nb = resolveGenericNames(rt.base, gps);
         return (nb == rt.base) ? ty
-             : makeReference(nb, rt.region, rt.nullable, rt.mut, rt.arenaName);
+             : makeReference(nb, rt.region, rt.nullable, rt.mut, rt.arenaName, rt.pointeeVolatile);
     }
     if (ty->kind == TypeKind::Array) {
         auto &at = static_cast<const ArrayType &>(*ty);
@@ -668,6 +668,7 @@ void Sema::collectStruct(StructDecl &sd) {
         fd.type  = resolveType(f.type);
         fd.bitWidth = f.bitWidth;
         fd.isAnonymous = f.isAnonymous;
+        fd.isVolatile  = f.isVolatile;
         if (fd.bitWidth >= 0) {
             int unitBits = sizeOfType(fd.type) * 8;
             bool canReuse = openUnitIdx >= 0 && typeEqual(openUnitType, fd.type) &&
@@ -1235,7 +1236,8 @@ static void classifyNullMatchSubject(const TypePtr &subjectTy, bool &isNullLike,
         // to narrow '?&T' to '&T' after the null check; a cast can't do it.
         isNullLike = true;
         auto &rt = static_cast<const ReferenceType &>(*subjectTy);
-        payloadTy  = makeReference(rt.base, rt.region, /*nullable=*/false, rt.mut, rt.arenaName);
+        payloadTy  = makeReference(rt.base, rt.region, /*nullable=*/false, rt.mut, rt.arenaName,
+                                   rt.pointeeVolatile);
     } else if (subjectTy->kind == TypeKind::Optional) {
         isOptional = true;
         payloadTy  = static_cast<const OptionalType &>(*subjectTy).inner;

@@ -19,6 +19,7 @@
 #include "llvm/IR/InlineAsm.h"
 
 #include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <memory>
 
@@ -236,6 +237,10 @@ private:
     // a single index for a direct field, more for one reached through an
     // anonymous struct/union member.
     const FieldDecl *findMemberFieldDecl(MemberExpr &e, std::vector<int> &outPath);
+    // Is every load/store of lvalue 'e' volatile? True for a 'volatile'
+    // variable, a 'volatile' struct field, anything reached through a
+    // 'volatile T*' / 'volatile &T', and elements/fields of any of those.
+    bool isVolatileLValue(Expr &e, FnEnv &env);
     llvm::Value *genCast(CastExpr &e, FnEnv &env);
     llvm::Value *genAssign(AssignExpr &e, FnEnv &env);
     llvm::Value *genTernary(TernaryExpr &e, FnEnv &env);
@@ -308,6 +313,8 @@ private:
     std::unordered_map<std::string, llvm::StructType *> structCache_;
     // Global symbol table (name → llvm::Value*)
     std::unordered_map<std::string, llvm::Value *>   globals_;
+    // Storage (allocas / globals) of variables declared 'volatile'.
+    std::unordered_set<const llvm::Value *>          volatileStorage_;
     // String literal cache
     std::unordered_map<std::string, llvm::GlobalVariable *> strLits_;
 
