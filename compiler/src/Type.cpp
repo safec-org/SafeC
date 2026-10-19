@@ -280,12 +280,24 @@ TypePtr makeFloat(unsigned bits) {
     return std::make_shared<PrimType>(bits == 32 ? TypeKind::Float32 : TypeKind::Float64);
 }
 
-TypePtr makePointer(TypePtr base, bool isConst) {
-    return std::make_shared<PointerType>(std::move(base), isConst);
+TypePtr makePointer(TypePtr base, bool isConst, bool pointeeVolatile) {
+    auto pt = std::make_shared<PointerType>(std::move(base), isConst);
+    pt->pointeeVolatile = pointeeVolatile;
+    return pt;
 }
 
-TypePtr makeReference(TypePtr base, Region r, bool nullable, bool mut, std::string arena) {
-    return std::make_shared<ReferenceType>(std::move(base), r, nullable, mut, std::move(arena));
+TypePtr makeReference(TypePtr base, Region r, bool nullable, bool mut, std::string arena,
+                      bool pointeeVolatile) {
+    auto rt = std::make_shared<ReferenceType>(std::move(base), r, nullable, mut, std::move(arena));
+    rt->pointeeVolatile = pointeeVolatile;
+    return rt;
+}
+
+bool pointeeIsVolatile(const TypePtr &ty) {
+    if (!ty) return false;
+    if (ty->kind == TypeKind::Pointer)   return static_cast<const PointerType &>(*ty).pointeeVolatile;
+    if (ty->kind == TypeKind::Reference) return static_cast<const ReferenceType &>(*ty).pointeeVolatile;
+    return false;
 }
 
 TypePtr makeArray(TypePtr elem, int64_t sz, void *sizeExpr) {

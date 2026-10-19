@@ -40,8 +40,12 @@ private:
     // ── Type parsing ──────────────────────────────────────────────────────────
     TypePtr parseType();
     TypePtr parseBaseType();           // primitive / struct / named type
-    TypePtr parseTypeDeclarator(TypePtr base); // array / pointer suffixes
-    TypePtr parseReferenceType(bool nullable, bool leadingConst = false); // &region T
+    TypePtr parseBaseTypeImpl();       // parseBaseType minus leading qualifiers
+    // Array / pointer suffixes. 'baseVolatile' says the base type was
+    // written 'volatile T', making the first '*' a pointer to volatile.
+    TypePtr parseTypeDeclarator(TypePtr base, bool baseVolatile = false);
+    TypePtr parseReferenceType(bool nullable, bool leadingConst = false,
+                               bool leadingVolatile = false); // &region T
     Region  parseRegionQualifier(std::string &arenaName);
     // True if the current token starts a region qualifier (stack/heap/
     // static/arena<R>) — lookahead only, mirrors parseRegionQualifier's
@@ -106,6 +110,16 @@ private:
     // collectStruct()/resolveType() machinery pick it up unmodified.
     std::vector<DeclPtr> pendingAnonStructs_;
     int                  anonStructCounter_ = 0;
+
+    // 'volatile' qualifier tracking. baseVolatile_ is set by every
+    // parseBaseType() call ('volatile int' / 'int volatile'). typeVolatile_
+    // is set by every parseType()/parseTypeDeclarator() call and says the
+    // declared object itself is volatile ('volatile int x', 'int *volatile
+    // p') as opposed to only its pointee ('volatile int *p', which instead
+    // sets PointerType::pointeeVolatile). Declarations read it straight
+    // after parsing their type, before anything else can clobber it.
+    bool baseVolatile_ = false;
+    bool typeVolatile_ = false;
 
     // ── malloc_defer() desugaring ────────────────────────────────────────────
     // 'T x = malloc_defer(n);' expands to two statements ('T x = alloc(n);'

@@ -1065,6 +1065,7 @@ llvm::GlobalVariable *CodeGen::genGlobalVar(GlobalVarDecl &gv) {
             gv.name);
 
     // Bare-metal attributes: section, alignment, volatile, thread_local
+    if (gv.isVolatile) volatileStorage_.insert(gvar);
     if (!gv.sectionName.empty()) gvar->setSection(gv.sectionName);
     if (gv.alignment > 0) gvar->setAlignment(llvm::Align(gv.alignment));
     // LocalExec, not the LLVM default GeneralDynamic: GeneralDynamic is the
@@ -2081,6 +2082,7 @@ void CodeGen::genVarDecl(VarDeclStmt &s, FnEnv &env) {
             gv->setThreadLocalMode(llvm::GlobalVariable::LocalExecTLSModel);
         // Register in the globals_ map so genIdent finds it via the global path
         globals_[s.name] = gv;
+        if (s.isVolatile) volatileStorage_.insert(gv);
         if (s.init) {
             // Static init: only run once (use a guard flag)
             std::string guardName = globalName + ".guard";
@@ -2096,7 +2098,7 @@ void CodeGen::genVarDecl(VarDeclStmt &s, FnEnv &env) {
             builder_.SetInsertPoint(initBB);
             auto *val = genExpr(*s.init, env);
             val = coerceToOptional(val, s.init->type, typeToUse);
-            builder_.CreateStore(val, gv);
+            builder_.CreateStore(val, gv, s.isVolatile);
             builder_.CreateStore(llvm::ConstantInt::getTrue(ctx_), guardGV);
             builder_.CreateBr(contBB);
             builder_.SetInsertPoint(contBB);
@@ -2130,6 +2132,7 @@ void CodeGen::genVarDecl(VarDeclStmt &s, FnEnv &env) {
     if (s.alignment > 0)
         alloca->setAlignment(llvm::Align(s.alignment));
     env.locals[s.name] = alloca;
+    if (s.isVolatile) volatileStorage_.insert(alloca);
 
     // Full debug: emit DILocalVariable + dbg.declare
     if (debugLevel_ == DebugLevel::Full && dib_ && env.fn->getSubprogram()) {
@@ -2158,10 +2161,10 @@ void CodeGen::genVarDecl(VarDeclStmt &s, FnEnv &env) {
         auto *val = needsDecay ? decayArrayToPtr(*s.init, env) : genExpr(*s.init, env);
         val = coerceScalar(val, allocaTy, s.init->type);
         val = coerceToOptional(val, s.init->type, typeToUse);
-        builder_.CreateStore(val, alloca);
+        builder_.CreateStore(val, alloca, s.isVolatile);
     } else {
         // Zero-initialize (null function pointer)
-        builder_.CreateStore(llvm::Constant::getNullValue(allocaTy), alloca);
+        builder_.CreateStore(llvm::Constant::getNullValue(allocaTy), alloca, s.isVolatile);
     }
 }
 
@@ -2447,7 +2450,7 @@ llvm::Value *CodeGen::genIdent(IdentExpr &e, FnEnv &env, bool wantAddr) {
             return it->second;
         }
         auto *ty = it->second->getAllocatedType();
-        return builder_.CreateLoad(ty, it->second, e.name);
+        return builder_.CreateLoad(ty, it->second, volatileStorage_.count(it->second), e.name);
     }
     // Global / function
     auto git = globals_.find(e.name);
@@ -2456,7 +2459,8 @@ llvm::Value *CodeGen::genIdent(IdentExpr &e, FnEnv &env, bool wantAddr) {
         if (auto *fn = llvm::dyn_cast<llvm::Function>(gv)) return fn;
         if (wantAddr) return gv;
         if (auto *ggv = llvm::dyn_cast<llvm::GlobalVariable>(gv)) {
-            return builder_.CreateLoad(ggv->getValueType(), ggv, e.name);
+            return builder_.CreateLoad(ggv->getValueType(), ggv,
+                                       volatileStorage_.count(ggv), e.name);
         }
         return gv;
     }
@@ -2464,7 +2468,7 @@ llvm::Value *CodeGen::genIdent(IdentExpr &e, FnEnv &env, bool wantAddr) {
     if (auto *fn = mod_->getFunction(e.name)) return fn;
     if (auto *gv = mod_->getGlobalVariable(e.name)) {
         if (wantAddr) return gv;
-        return builder_.CreateLoad(gv->getValueType(), gv, e.name);
+        return builder_.CreateLoad(gv->getValueType(), gv, volatileStorage_.count(gv), e.name);
     }
     diag_.error(e.loc, "codegen: undefined identifier '" + e.name + "'");
     return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
@@ -2500,33 +2504,37 @@ llvm::Value *CodeGen::genUnary(UnaryExpr &e, FnEnv &env) {
         // one element's — which then fails IR verification when used in
         // an add).
         auto *ty = e.operand->type ? lowerType(e.operand->type) : llvm::Type::getInt32Ty(ctx_);
-        auto *val = builder_.CreateLoad(ty, addr);
+        bool vol = isVolatileLValue(*e.operand, env);
+        auto *val = builder_.CreateLoad(ty, addr, vol);
         llvm::Value *inc = stepByOne(val, ty, e.operand->type, 1);
-        builder_.CreateStore(inc, addr);
+        builder_.CreateStore(inc, addr, vol);
         return inc;
     }
     case UnaryOp::PreDec: {
         auto *addr = genLValue(*e.operand, env);
         auto *ty = e.operand->type ? lowerType(e.operand->type) : llvm::Type::getInt32Ty(ctx_);
-        auto *val = builder_.CreateLoad(ty, addr);
+        bool vol = isVolatileLValue(*e.operand, env);
+        auto *val = builder_.CreateLoad(ty, addr, vol);
         llvm::Value *dec = stepByOne(val, ty, e.operand->type, -1);
-        builder_.CreateStore(dec, addr);
+        builder_.CreateStore(dec, addr, vol);
         return dec;
     }
     case UnaryOp::PostInc: {
         auto *addr = genLValue(*e.operand, env);
         auto *ty = e.operand->type ? lowerType(e.operand->type) : llvm::Type::getInt32Ty(ctx_);
-        auto *old = builder_.CreateLoad(ty, addr, "old");
+        bool vol = isVolatileLValue(*e.operand, env);
+        auto *old = builder_.CreateLoad(ty, addr, vol, "old");
         llvm::Value *inc = stepByOne(old, ty, e.operand->type, 1);
-        builder_.CreateStore(inc, addr);
+        builder_.CreateStore(inc, addr, vol);
         return old;
     }
     case UnaryOp::PostDec: {
         auto *addr = genLValue(*e.operand, env);
         auto *ty = e.operand->type ? lowerType(e.operand->type) : llvm::Type::getInt32Ty(ctx_);
-        auto *old = builder_.CreateLoad(ty, addr, "old");
+        bool vol = isVolatileLValue(*e.operand, env);
+        auto *old = builder_.CreateLoad(ty, addr, vol, "old");
         llvm::Value *dec = stepByOne(old, ty, e.operand->type, -1);
-        builder_.CreateStore(dec, addr);
+        builder_.CreateStore(dec, addr, vol);
         return old;
     }
     case UnaryOp::SizeofExpr: {
@@ -2556,7 +2564,7 @@ llvm::Value *CodeGen::genUnary(UnaryExpr &e, FnEnv &env) {
             innerTy = lowerType(static_cast<PointerType &>(*operandTy).base);
         else if (operandTy && operandTy->kind == TypeKind::Reference)
             innerTy = lowerType(static_cast<ReferenceType &>(*operandTy).base);
-        return builder_.CreateLoad(innerTy, ptrVal, "force_unwrap");
+        return builder_.CreateLoad(innerTy, ptrVal, pointeeIsVolatile(operandTy), "force_unwrap");
     }
     default:
         return genExpr(*e.operand, env);
@@ -2580,7 +2588,7 @@ llvm::Value *CodeGen::genDeref(UnaryExpr &e, FnEnv &env, bool wantAddr) {
     auto *ptr = genExpr(*e.operand, env);
     if (wantAddr) return ptr; // already a pointer
     auto *baseTy = e.type ? lowerType(e.type) : llvm::Type::getInt32Ty(ctx_);
-    return builder_.CreateLoad(baseTy, ptr, "deref");
+    return builder_.CreateLoad(baseTy, ptr, pointeeIsVolatile(e.operand->type), "deref");
 }
 
 // ── Binary ────────────────────────────────────────────────────────────────────
@@ -3668,7 +3676,7 @@ llvm::Value *CodeGen::genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr) 
                 {llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx_), 0), idxVal},
                 "arr.idx");
         if (wantAddr) return gep;
-        return builder_.CreateLoad(arrTy->getElementType(), gep, "arr.elem");
+        return builder_.CreateLoad(arrTy->getElementType(), gep, isVolatileLValue(e, env), "arr.elem");
     }
     // Slice subscript: baseAddr is the alloca for the {T*, i64} struct
     if (e.base->type && e.base->type->kind == TypeKind::Slice) {
@@ -3696,7 +3704,7 @@ llvm::Value *CodeGen::genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr) 
         auto *elemTy = e.type ? lowerType(e.type) : llvm::Type::getInt32Ty(ctx_);
         gep = builder_.CreateGEP(elemTy, slPtr, idxVal, "sl.idx");
         if (wantAddr) return gep;
-        return builder_.CreateLoad(elemTy, gep, "sl.elem");
+        return builder_.CreateLoad(elemTy, gep, isVolatileLValue(e, env), "sl.elem");
     }
 
     // Pointer subscript: if the base is an lvalue (e.g. a pointer variable),
@@ -3715,7 +3723,7 @@ llvm::Value *CodeGen::genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr) 
     auto *elemTy = e.type ? lowerType(e.type) : llvm::Type::getInt32Ty(ctx_);
     gep = builder_.CreateGEP(elemTy, ptrVal, idxVal, "ptr.idx");
     if (wantAddr) return gep;
-    return builder_.CreateLoad(elemTy, gep, "ptr.elem");
+    return builder_.CreateLoad(elemTy, gep, isVolatileLValue(e, env), "ptr.elem");
 }
 
 // ── Slice construction: arr[start..end] → {T*, i64} ────────────────────────
@@ -3806,6 +3814,49 @@ const FieldDecl *CodeGen::findMemberFieldDecl(MemberExpr &e, std::vector<int> &o
     return st.findFieldPath(e.field, outPath);
 }
 
+bool CodeGen::isVolatileLValue(Expr &e, FnEnv &env) {
+    switch (e.kind) {
+    case ExprKind::Ident: {
+        auto &ie = static_cast<IdentExpr &>(e);
+        auto it = env.locals.find(ie.name);
+        if (it != env.locals.end()) return volatileStorage_.count(it->second);
+        auto git = globals_.find(ie.name);
+        if (git != globals_.end()) return volatileStorage_.count(git->second);
+        auto *gv = mod_->getGlobalVariable(ie.name);
+        return gv && volatileStorage_.count(gv);
+    }
+    case ExprKind::Deref:
+        return pointeeIsVolatile(static_cast<UnaryExpr &>(e).operand->type);
+    case ExprKind::Unary: {
+        auto &ue = static_cast<UnaryExpr &>(e);
+        return ue.op == UnaryOp::ForceUnwrap && pointeeIsVolatile(ue.operand->type);
+    }
+    case ExprKind::Subscript: {
+        auto &se = static_cast<SubscriptExpr &>(e);
+        if (!se.base->type) return false;
+        // An element of a volatile array is volatile; an element reached
+        // through a pointer is volatile if the pointee is.
+        if (se.base->type->kind == TypeKind::Array || se.base->type->kind == TypeKind::Vector)
+            return isVolatileLValue(*se.base, env);
+        return pointeeIsVolatile(se.base->type);
+    }
+    case ExprKind::Member:
+    case ExprKind::Arrow: {
+        auto &me = static_cast<MemberExpr &>(e);
+        std::vector<int> path;
+        if (const FieldDecl *fd = findMemberFieldDecl(me, path); fd && fd->isVolatile)
+            return true;
+        if (!me.base->type) return false;
+        if (me.isArrow || me.base->type->kind == TypeKind::Pointer ||
+            me.base->type->kind == TypeKind::Reference)
+            return pointeeIsVolatile(me.base->type);
+        return isVolatileLValue(*me.base, env);
+    }
+    default:
+        return false;
+    }
+}
+
 llvm::Value *CodeGen::genMember(MemberExpr &e, FnEnv &env, bool wantAddr) {
     llvm::Value *baseAddr;
     llvm::Type  *structTy;
@@ -3883,7 +3934,7 @@ llvm::Value *CodeGen::genMember(MemberExpr &e, FnEnv &env, bool wantAddr) {
                 static_cast<llvm::StructType *>(structTy), baseAddr, tupleIdx, "tuple.field");
             if (wantAddr) return gep;
             auto *fieldTy = static_cast<llvm::StructType *>(structTy)->getElementType(tupleIdx);
-            return builder_.CreateLoad(fieldTy, gep, "tuple.elem");
+            return builder_.CreateLoad(fieldTy, gep, isVolatileLValue(e, env), "tuple.elem");
         }
         if (bty->kind == TypeKind::Struct) {
             auto &st = static_cast<StructType &>(*bty);
@@ -3928,7 +3979,7 @@ llvm::Value *CodeGen::genMember(MemberExpr &e, FnEnv &env, bool wantAddr) {
     // not a per-bit address, since LLVM has no bitfield concept natively.
     std::vector<int> ignoredPath;
     if (const FieldDecl *fd = findMemberFieldDecl(e, ignoredPath); fd && fd->bitWidth >= 0) {
-        auto *raw = builder_.CreateLoad(fieldTy, gep, e.field + ".unit");
+        auto *raw = builder_.CreateLoad(fieldTy, gep, isVolatileLValue(e, env), e.field + ".unit");
         unsigned unitBits  = fieldTy->getIntegerBitWidth();
         unsigned leftShift = unitBits - fd->bitOffset - fd->bitWidth;
         unsigned rightShift = unitBits - fd->bitWidth;
@@ -3941,7 +3992,7 @@ llvm::Value *CodeGen::genMember(MemberExpr &e, FnEnv &env, bool wantAddr) {
             : builder_.CreateLShr(shiftedUp, llvm::ConstantInt::get(fieldTy, rightShift), e.field);
     }
 
-    return builder_.CreateLoad(fieldTy, gep, e.field);
+    return builder_.CreateLoad(fieldTy, gep, isVolatileLValue(e, env), e.field);
 }
 
 // ── Cast ──────────────────────────────────────────────────────────────────────
@@ -4048,7 +4099,8 @@ llvm::Value *CodeGen::genAssign(AssignExpr &e, FnEnv &env) {
             auto *vecAddr = genLValue(*se.base, env);
             auto *vecTy   = lowerType(se.base->type);
             auto *idx     = genExpr(*se.index, env);
-            auto *oldVec  = builder_.CreateLoad(vecTy, vecAddr, "vec.old");
+            bool vol      = isVolatileLValue(*se.base, env);
+            auto *oldVec  = builder_.CreateLoad(vecTy, vecAddr, vol, "vec.old");
             auto *elemTy  = llvm::cast<llvm::VectorType>(vecTy)->getElementType();
             auto *rhs     = coerceScalar(genExpr(*e.rhs, env), elemTy, e.rhs->type);
             llvm::Value *newVal = rhs;
@@ -4065,7 +4117,7 @@ llvm::Value *CodeGen::genAssign(AssignExpr &e, FnEnv &env) {
                 newVal = applyBinaryOp(binOp, cur, rhs, se.type);
             }
             auto *newVec = builder_.CreateInsertElement(oldVec, newVal, idx, "vec.new");
-            builder_.CreateStore(newVec, vecAddr);
+            builder_.CreateStore(newVec, vecAddr, vol);
             return newVal;
         }
     }
@@ -4081,7 +4133,8 @@ llvm::Value *CodeGen::genAssign(AssignExpr &e, FnEnv &env) {
         if (const FieldDecl *fd = findMemberFieldDecl(me, ignoredPath); fd && fd->bitWidth >= 0) {
             auto *unitAddr = genLValue(*e.lhs, env); // GEP to the shared storage unit
             auto *unitTy   = lowerType(fd->type);
-            auto *rawUnit  = builder_.CreateLoad(unitTy, unitAddr, "bf.unit");
+            bool vol       = isVolatileLValue(*e.lhs, env);
+            auto *rawUnit  = builder_.CreateLoad(unitTy, unitAddr, vol, "bf.unit");
 
             unsigned unitBits   = unitTy->getIntegerBitWidth();
             unsigned leftShift  = unitBits - fd->bitOffset - fd->bitWidth;
@@ -4129,7 +4182,7 @@ llvm::Value *CodeGen::genAssign(AssignExpr &e, FnEnv &env) {
                 llvm::ConstantInt::get(unitTy, (uint64_t)fd->bitOffset)));
             auto *cleared    = builder_.CreateAnd(rawUnit, clearMask);
             auto *merged     = builder_.CreateOr(cleared, shiftedNew);
-            builder_.CreateStore(merged, unitAddr);
+            builder_.CreateStore(merged, unitAddr, vol);
             return newVal;
         }
     }
@@ -4143,11 +4196,12 @@ llvm::Value *CodeGen::genAssign(AssignExpr &e, FnEnv &env) {
     auto *rhs   = rhsNeedsDecay ? decayArrayToPtr(*e.rhs, env) : genExpr(*e.rhs, env);
     auto *addr  = genLValue(*e.lhs, env);
     auto *lhsTy = e.lhs->type ? lowerType(e.lhs->type) : rhs->getType();
+    bool vol    = isVolatileLValue(*e.lhs, env);
 
     llvm::Value *val = rhs;
     if (e.op != AssignOp::Assign) {
         // Compound assignment: load LHS, apply op, store
-        auto *cur = builder_.CreateLoad(lhsTy, addr, "cur");
+        auto *cur = builder_.CreateLoad(lhsTy, addr, vol, "cur");
         BinaryOp binOp;
         switch (e.op) {
         case AssignOp::AddAssign: binOp = BinaryOp::Add; break;
@@ -4170,7 +4224,7 @@ llvm::Value *CodeGen::genAssign(AssignExpr &e, FnEnv &env) {
             auto *idx = indexToI64(builder_, rhs, e.rhs->type);
             if (binOp == BinaryOp::Sub) idx = builder_.CreateNeg(idx);
             val = builder_.CreateGEP(elemTy, cur, idx, "ptrstep");
-            builder_.CreateStore(val, addr);
+            builder_.CreateStore(val, addr, vol);
             return val;
         }
         val = applyBinaryOp(binOp, cur, rhs, e.lhs->type);
@@ -4184,7 +4238,7 @@ llvm::Value *CodeGen::genAssign(AssignExpr &e, FnEnv &env) {
     if (e.op == AssignOp::Assign)
         val = coerceToOptional(val, e.rhs->type, e.lhs->type);
 
-    builder_.CreateStore(val, addr);
+    builder_.CreateStore(val, addr, vol);
     return val;
 }
 

@@ -132,6 +132,10 @@ struct PrimType : Type {
 struct PointerType : Type {
     TypePtr base;
     bool    isConst = false;
+    // 'volatile T*' — every load/store through this pointer is volatile.
+    // Deliberately ignored by equals(): like C's implicit 'T*' →
+    // 'volatile T*' conversion, it only changes how accesses are emitted.
+    bool    pointeeVolatile = false;
 
     explicit PointerType(TypePtr b, bool c = false)
         : Type(TypeKind::Pointer), base(std::move(b)), isConst(c) {}
@@ -149,6 +153,7 @@ struct ReferenceType : Type {
     Region   region  = Region::Unknown;
     bool     nullable = false;  // true → ?&T
     bool     mut      = true;   // mutable by default
+    bool     pointeeVolatile = false; // 'volatile &T' — see PointerType
     std::string arenaName;      // if region == Arena: the region identifier
 
     ReferenceType(TypePtr b, Region r, bool nullable = false,
@@ -201,6 +206,8 @@ struct FieldDecl {
     // should transparently reach through this field. See
     // StructType::findFieldPath, which does the recursive search.
     bool        isAnonymous = false;
+    // 'volatile T name;' — every load/store of this field is volatile.
+    bool        isVolatile  = false;
 };
 
 // ── Struct type ───────────────────────────────────────────────────────────────
@@ -354,9 +361,13 @@ TypePtr makeChar();
 TypePtr makeInt(unsigned bits, bool isSigned = true);
 TypePtr makeFloat(unsigned bits);
 TypePtr makeError();
-TypePtr makePointer(TypePtr base, bool isConst = false);
+TypePtr makePointer(TypePtr base, bool isConst = false, bool pointeeVolatile = false);
 TypePtr makeReference(TypePtr base, Region r, bool nullable = false,
-                      bool mut = true, std::string arena = {});
+                      bool mut = true, std::string arena = {},
+                      bool pointeeVolatile = false);
+// Does an access through a value of pointer/reference type 'ty' touch
+// volatile memory ('volatile T*' / 'volatile &T')? False for anything else.
+bool pointeeIsVolatile(const TypePtr &ty);
 // 'sizeExpr' is non-null when the source size wasn't a plain literal (see
 // ArrayType::sizeExpr); it's resolved into a concrete 'size' by
 // resolveArraySizes() before Sema runs.

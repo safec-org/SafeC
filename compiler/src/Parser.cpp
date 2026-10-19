@@ -111,6 +111,27 @@ static bool canStartCastOperand(const Token &t) {
     }
 }
 
+// Applies a 'volatile' written before an already-parsed type to that type's
+// base: the innermost pointee of a pointer/reference chain ('volatile int
+// **p' — the int is volatile). Returns true when the base is the declared
+// object itself (no indirection), which the caller then marks volatile.
+static bool qualifyBaseVolatile(const TypePtr &ty) {
+    if (!ty) return true;
+    if (ty->kind == TypeKind::Array)
+        return qualifyBaseVolatile(static_cast<ArrayType &>(*ty).element);
+    if (ty->kind == TypeKind::Pointer) {
+        auto &pt = static_cast<PointerType &>(*ty);
+        if (qualifyBaseVolatile(pt.base)) pt.pointeeVolatile = true;
+        return false;
+    }
+    if (ty->kind == TypeKind::Reference) {
+        auto &rt = static_cast<ReferenceType &>(*ty);
+        if (qualifyBaseVolatile(rt.base)) rt.pointeeVolatile = true;
+        return false;
+    }
+    return true;
+}
+
 // Applies 'fn' (setting a modifier like isVolatile/isAtomic/alignment) to
 // every VarDeclStmt in 'vs' — a plain VarDeclStmt, or every declarator of
 // a MultiVarDeclStmt ('volatile int a, b;' marks both 'a' and 'b').
@@ -185,7 +206,7 @@ bool Parser::atRegionQualifier() const {
 }
 
 // Parse a reference type: [?]& region T
-TypePtr Parser::parseReferenceType(bool nullable, bool leadingConst) {
+TypePtr Parser::parseReferenceType(bool nullable, bool leadingConst, bool leadingVolatile) {
     // We already consumed '&' or '?&' (and any 'const' preceding it)
     std::string arenaName;
     // '&T' / '?&T' with no region keyword at all — an outliving
@@ -202,15 +223,44 @@ TypePtr Parser::parseReferenceType(bool nullable, bool leadingConst) {
 
     // A reference to a reference ('&?&char saveptr' — an out-parameter
     // holding a nullable reference) nests the whole inner reference type.
-    TypePtr base = (cur().is(TK::Amp) || cur().is(TK::QuestionAmp)) ? parseType()
-                                                                   : parseBaseType();
+    TypePtr base;
+    bool baseVolatile = false;
+    if (cur().is(TK::Amp) || cur().is(TK::QuestionAmp)) {
+        base = parseType();
+    } else {
+        base = parseBaseType();
+        baseVolatile = baseVolatile_;
+    }
     // Pointer / array suffixes, e.g. '&stack char* saveptr' (reference to a pointer)
-    base = parseTypeDeclarator(std::move(base));
-    return makeReference(std::move(base), r, nullable, !isConst, std::move(arenaName));
+    base = parseTypeDeclarator(std::move(base), baseVolatile);
+    // '&volatile T' / '&stack T* volatile': the referenced object is volatile.
+    bool pointeeVolatile = leadingVolatile || typeVolatile_;
+    typeVolatile_ = false; // the reference itself never is
+    return makeReference(std::move(base), r, nullable, !isConst, std::move(arenaName),
+                         pointeeVolatile);
 }
 
-// Parse a base type (no declarator suffixes yet)
+// Parse a base type (no declarator suffixes yet). Leading/trailing
+// qualifiers are taken here in any order; 'volatile' among them is reported
+// through baseVolatile_ for the caller's parseTypeDeclarator to apply.
 TypePtr Parser::parseBaseType() {
+    bool vol = false;
+    while (true) {
+        if (cur().is(TK::KW_volatile)) { consume(); vol = true; continue; }
+        if (cur().is(TK::KW_const) || cur().is(TK::KW_restrict)) { consume(); continue; }
+        break;
+    }
+    TypePtr t = parseBaseTypeImpl();
+    // 'int volatile *p' / 'unsigned int const volatile x'
+    while (cur().is(TK::KW_volatile) || cur().is(TK::KW_const)) {
+        if (cur().is(TK::KW_volatile)) vol = true;
+        consume();
+    }
+    baseVolatile_ = vol;
+    return t;
+}
+
+TypePtr Parser::parseBaseTypeImpl() {
     bool hasSign    = false;
     bool isUnsigned = false;
 
@@ -221,16 +271,13 @@ TypePtr Parser::parseBaseType() {
     if (cur().is(TK::KW_const)) { consume(); }
     // 'restrict' and compiler-specific '__restrict' are ignored qualifiers in SafeC
     if (cur().is(TK::KW_restrict)) { consume(); }
-    // 'volatile' as a bare type qualifier (e.g. imported from C headers like
-    // <stdatomic.h>) is likewise a no-op here — SafeC's own volatile MMIO
-    // access goes through the explicit volatile_load/volatile_store builtins.
-    if (cur().is(TK::KW_volatile)) { consume(); }
+    // ('volatile' is consumed and recorded by the parseBaseType wrapper.)
     // C11 '_Atomic' qualifier-prefix form ('_Atomic int', as opposed to the
     // '_Atomic(int)' generic-selection form filtered out at header-import
     // time) — not lexed as a keyword, so it reaches here as a plain
     // identifier. SafeC has no atomic type qualifier; code that casts through
     // it (e.g. std/atomic.sc calling into <stdatomic.h>) just needs it to
-    // parse as a no-op, matching const/restrict/volatile above.
+    // parse as a no-op, matching const/restrict above.
     if (cur().is(TK::Ident) && cur().text == "_Atomic") { consume(); }
     if (cur().is(TK::KW_unsigned)) { consume(); isUnsigned = true; hasSign = true; }
     else if (cur().is(TK::KW_signed)) { consume(); hasSign = true; }
@@ -340,7 +387,7 @@ TypePtr Parser::parseBaseType() {
             ret = parseType();
         } else {
             ret = parseBaseType();
-            ret = parseTypeDeclarator(std::move(ret));
+            ret = parseTypeDeclarator(std::move(ret), baseVolatile_);
         }
         expect(TK::LParen, "expected '(' after 'fn' return type");
         std::vector<TypePtr> params;
@@ -405,6 +452,13 @@ TypePtr Parser::parseType() {
         consume();
         return parseReferenceType(nullable, /*leadingConst=*/true);
     }
+    // 'volatile &T' / 'volatile ?&T' — a reference to volatile T.
+    if (cur().is(TK::KW_volatile) && (peek().is(TK::Amp) || peek().is(TK::QuestionAmp))) {
+        consume();
+        bool nullable = cur().is(TK::QuestionAmp);
+        consume();
+        return parseReferenceType(nullable, /*leadingConst=*/false, /*leadingVolatile=*/true);
+    }
     // ?& (nullable reference)
     if (cur().is(TK::QuestionAmp)) {
         consume();
@@ -419,20 +473,21 @@ TypePtr Parser::parseType() {
     if (cur().is(TK::Question)) {
         consume();
         TypePtr inner = parseBaseType();
-        inner = parseTypeDeclarator(std::move(inner));
+        inner = parseTypeDeclarator(std::move(inner), baseVolatile_);
         return makeOptional(std::move(inner));
     }
     // []T (slice type, parse-only)
     if (cur().is(TK::LBracket) && peek().is(TK::RBracket)) {
         consume(); consume(); // consume '[' ']'
         TypePtr elem = parseType();
+        typeVolatile_ = false;
         return makeSlice(std::move(elem));
     }
     // Base type
     TypePtr base = parseBaseType();
 
     // Pointer / array suffixes
-    return parseTypeDeclarator(std::move(base));
+    return parseTypeDeclarator(std::move(base), baseVolatile_);
 }
 
 // Parses a small constant integer expression: literals combined with the
@@ -529,18 +584,28 @@ TypePtr Parser::parseArrayDeclaratorSuffix(TypePtr base) {
     return base;
 }
 
-TypePtr Parser::parseTypeDeclarator(TypePtr base) {
-    // C-style pointer: T* or T* const / T* restrict
+TypePtr Parser::parseTypeDeclarator(TypePtr base, bool baseVolatile) {
+    // C-style pointer: T* or T* const / T* restrict / T* volatile. A
+    // 'volatile' qualifies whatever sits to its left: the base type for the
+    // first '*' ('volatile T*' — pointer to volatile), the previous pointer
+    // for each later one ('T* volatile*'), or, after the last '*', the
+    // declared object itself (reported through typeVolatile_).
+    bool vol = baseVolatile;
     while (cur().is(TK::Star)) {
         consume();
-        bool isConst = false;
-        if (cur().is(TK::KW_const))    { consume(); isConst = true; }
-        if (cur().is(TK::KW_restrict)) { consume(); } // ignored in SafeC
-        if (cur().is(TK::KW_volatile)) { consume(); } // ignored in SafeC (see parseBaseType)
-        base = makePointer(std::move(base), isConst);
+        bool isConst = false, nextVol = false;
+        while (true) {
+            if (cur().is(TK::KW_const))    { consume(); isConst = true; continue; }
+            if (cur().is(TK::KW_restrict)) { consume(); continue; } // ignored in SafeC
+            if (cur().is(TK::KW_volatile)) { consume(); nextVol = true; continue; }
+            break;
+        }
+        base = makePointer(std::move(base), isConst, vol);
+        vol = nextVol;
     }
     // Array: T[N]
     base = parseArrayDeclaratorSuffix(std::move(base));
+    typeVolatile_ = vol;
     return base;
 }
 
@@ -1002,7 +1067,10 @@ DeclPtr Parser::parseTopLevelDecl() {
     // Propagate volatile/atomic/thread_local/section to GlobalVarDecl
     if (decl && decl->kind == DeclKind::GlobalVar) {
         auto &gv = static_cast<GlobalVarDecl&>(*decl);
-        gv.isVolatile    = isVolatile;
+        // A leading 'volatile' modifier was consumed above, before the
+        // type: it qualifies the base type, so 'volatile int *p' marks the
+        // pointee (not the pointer variable) volatile, as in C.
+        if (isVolatile && qualifyBaseVolatile(gv.type)) gv.isVolatile = true;
         gv.isAtomic      = isAtomic;
         gv.isThreadLocal = isThreadLocal;
         // OR/fallback rather than overwrite — a suffix '__attribute__((...))'
@@ -1021,6 +1089,7 @@ DeclPtr Parser::parseFunctionOrGlobalVar(bool isConst, bool isConsteval,
     auto loc = cur().loc;
     TypePtr retType = parseType();
     if (!retType) return nullptr;
+    bool objectVolatile = typeVolatile_;
 
     // C-style function-pointer variable: 'RetType (*name)(Params);' (e.g.
     // 'void (*on_tick)(int);') — a variable of function-pointer-reference
@@ -1105,6 +1174,7 @@ DeclPtr Parser::parseFunctionOrGlobalVar(bool isConst, bool isConsteval,
 
     auto gv = std::make_unique<GlobalVarDecl>(std::move(name), loc);
     gv->type      = std::move(retType);
+    gv->isVolatile = objectVolatile;
     gv->isConst   = isConst;
     gv->isStatic  = isStatic;
     gv->isExtern  = isExtern;
@@ -1218,6 +1288,7 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTr
 
         // Try to parse as method declaration
         TypePtr maybeType = parseType();
+        bool fieldVolatile = typeVolatile_;
         bool isMethodDecl = false;
         std::string memberName;
 
@@ -1317,6 +1388,7 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTr
             fd.index = fieldIdx++;
             fd.type  = std::move(maybeType);
             fd.name  = memberName;
+            fd.isVolatile = fieldVolatile;
             // Anonymous struct/union member: 'struct S { union { int a; }; };'
             // — no name follows the (struct/union-typed) field at all, just
             // the terminating ';'. Its own members ('s.a') become reachable
@@ -1586,12 +1658,11 @@ StmtPtr Parser::parseStmt() {
         bool variableIsConst = !(peeked && peeked->kind == TypeKind::Pointer);
         return parseVarDeclStmt(variableIsConst, false);
     }
-    case TK::KW_volatile: {
-        consume();
-        auto vs = parseVarDeclStmt(false, false);
-        applyToVarDecls(vs.get(), [](VarDeclStmt &d) { d.isVolatile = true; });
-        return vs;
-    }
+    case TK::KW_volatile:
+        // Left for parseType: 'volatile int x' makes x volatile, while
+        // 'volatile int *p' only makes the pointee volatile (see
+        // parseTypeDeclarator / typeVolatile_).
+        return parseVarDeclStmt(false, false);
     case TK::KW_atomic: {
         consume();
         auto vs = parseVarDeclStmt(false, false);
@@ -1830,6 +1901,7 @@ StmtPtr Parser::parseVarDeclStmt(bool isConst, bool isStatic) {
     }
 
     TypePtr baseTy = parseType();
+    bool objectVolatile = typeVolatile_;
     TypePtr ty = baseTy;
     // C-style function-pointer local: 'RetType (*name)(Params);'
     std::string name;
@@ -1851,6 +1923,7 @@ StmtPtr Parser::parseVarDeclStmt(bool isConst, bool isStatic) {
         auto vs = std::make_unique<VarDeclStmt>(std::move(n), std::move(t), std::move(i), l);
         vs->isConst  = isConst;
         vs->isStatic = isStatic;
+        vs->isVolatile = objectVolatile;
         return vs;
     };
 

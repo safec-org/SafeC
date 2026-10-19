@@ -40,13 +40,13 @@ TypePtr substituteType(const TypePtr &ty, const TypeSubst &subs) {
     case TypeKind::Pointer: {
         auto &pt = static_cast<const PointerType &>(*ty);
         auto nb = substituteType(pt.base, subs);
-        return (nb == pt.base) ? ty : makePointer(nb, pt.isConst);
+        return (nb == pt.base) ? ty : makePointer(nb, pt.isConst, pt.pointeeVolatile);
     }
     case TypeKind::Reference: {
         auto &rt = static_cast<const ReferenceType &>(*ty);
         auto nb = substituteType(rt.base, subs);
         return (nb == rt.base) ? ty
-             : makeReference(nb, rt.region, rt.nullable, rt.mut, rt.arenaName);
+             : makeReference(nb, rt.region, rt.nullable, rt.mut, rt.arenaName, rt.pointeeVolatile);
     }
     case TypeKind::Array: {
         auto &at = static_cast<const ArrayType &>(*ty);
@@ -604,6 +604,7 @@ std::unique_ptr<StructDecl> cloneStructDecl(const StructDecl &sd,
         fd.bitWidth    = f.bitWidth;
         fd.bitOffset   = f.bitOffset;
         fd.isAnonymous = f.isAnonymous;
+        fd.isVolatile  = f.isVolatile;
         clone->fields.push_back(std::move(fd));
     }
     for (auto &md : sd.methodDecls) {

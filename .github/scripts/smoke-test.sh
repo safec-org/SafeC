@@ -90,6 +90,21 @@ else
     fail "standard library: $STD_TOTAL files, $STD_FAILED unexpected failure(s)"
 fi
 
+# ── 3b. Compiler IR regression tests ──────────────────────────────────────────
+# compiler/tests/**/*.sc compiled at -O2 and checked against their
+# '// CHECK:' lines (e.g. volatile accesses surviving optimization).
+section "Compiler IR tests"
+if command -v python3 >/dev/null 2>&1; then
+    if SAFEC_BIN="$SAFEC_BIN" bash "$SAFEC_HOME/compiler/tests/run.sh" >/tmp/ir_tests.txt 2>&1; then
+        pass "compiler IR tests: $(tail -1 /tmp/ir_tests.txt)"
+    else
+        fail "compiler IR tests"
+        cat /tmp/ir_tests.txt
+    fi
+else
+    echo "  [SKIP] python3 not available"
+fi
+
 # ── 4. safeguard: scaffold, build, run ────────────────────────────────────────
 section "safeguard new / build / run"
 WORKDIR="$(mktemp -d)"
