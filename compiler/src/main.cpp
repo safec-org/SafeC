@@ -139,9 +139,29 @@ static llvm::cl::opt<std::string>
     TargetFeatures("target-features",
         llvm::cl::desc("Target feature string, LLVM -mattr syntax (e.g. +e,+c)"),
         llvm::cl::init(""));
-static llvm::cl::opt<std::string>
-    TargetAbi("target-abi", llvm::cl::desc("Target ABI name (e.g. ilp32e, lp64e)"),
-              llvm::cl::init(""));
+// --target-abi: a shared libLLVM (e.g. the apt.llvm.org packages) already
+// registers a '-target-abi' option of its own, and registering a second one
+// aborts at startup ("Option 'target-abi' registered more than once"). So
+// reuse LLVM's when the linked library has it, and only create ours when it
+// doesn't (static LLVM builds). Resolved at the start of main().
+struct TargetAbiOption {
+    llvm::cl::opt<std::string> *opt = nullptr;
+    void resolve() {
+        auto &opts = llvm::cl::getRegisteredOptions();
+        auto it = opts.find("target-abi");
+        if (it != opts.end()) {
+            opt = static_cast<llvm::cl::opt<std::string> *>(it->second);
+        } else {
+            opt = new llvm::cl::opt<std::string>(
+                "target-abi", llvm::cl::desc("Target ABI name (e.g. ilp32e, lp64e)"),
+                llvm::cl::init(""));
+        }
+    }
+    const std::string &getValue() const { return opt->getValue(); }
+    TargetAbiOption &operator=(const std::string &v) { *opt = v; return *this; }
+    operator const std::string &() const { return opt->getValue(); }
+};
+static TargetAbiOption TargetAbi;
 
 // ── Bare-metal target aliases ─────────────────────────────────────────────────
 // '--target=<alias>' picks a no-OS triple plus the CPU/feature/ABI settings
@@ -291,6 +311,11 @@ static std::string cacheKeyFlags() {
 // Bare '-O' (no attached digit) means "optimize, pick a sensible default" —
 // matches gcc/clang treating a bare '-O' as '-O1'/'-O2'-ish rather than a
 // parse error. Every other value maps 1:1 to LLVM's canned levels.
+// -Os / -Oz: LLVM 22 dropped OptimizationLevel::Os/Oz — size optimization
+// is the O2 pipeline steered by the optsize/minsize function attributes —
+// so that is what safec does on every LLVM version. 0 = none, 's' or 'z'.
+static char gSizeOpt = 0;
+
 static llvm::OptimizationLevel resolveOptLevel() {
     std::string lvl = OptLevel.getValue();
     // --release means "optimize for speed" but must not override an -O the
@@ -301,18 +326,15 @@ static llvm::OptimizationLevel resolveOptLevel() {
     if (lvl == "0") return llvm::OptimizationLevel::O0;
     if (lvl == "1") return llvm::OptimizationLevel::O1;
     if (lvl == "3") return llvm::OptimizationLevel::O3;
-    if (lvl == "s") return llvm::OptimizationLevel::Os;
-    if (lvl == "z") return llvm::OptimizationLevel::Oz;
+    if (lvl == "s" || lvl == "z") { gSizeOpt = lvl[0]; return llvm::OptimizationLevel::O2; }
     fprintf(stderr, "error: invalid -O level '%s' (expected 0,1,2,3,s,z)\n", lvl.c_str());
     exit(1);
 }
 
 static const char *optLevelName(llvm::OptimizationLevel level) {
     if (level == llvm::OptimizationLevel::O1) return "1";
-    if (level == llvm::OptimizationLevel::O2) return "2";
+    if (level == llvm::OptimizationLevel::O2) return gSizeOpt == 's' ? "s" : gSizeOpt == 'z' ? "z" : "2";
     if (level == llvm::OptimizationLevel::O3) return "3";
-    if (level == llvm::OptimizationLevel::Os) return "s";
-    if (level == llvm::OptimizationLevel::Oz) return "z";
     return "0";
 }
 
@@ -333,6 +355,14 @@ static void optimizeModule(llvm::Module &mod, llvm::TargetMachine *tm,
     pb.registerFunctionAnalyses(fam);
     pb.registerLoopAnalyses(lam);
     pb.crossRegisterProxies(lam, fam, cgam, mam);
+
+    if (gSizeOpt) {
+        for (llvm::Function &f : mod) {
+            if (f.isDeclaration() || f.hasFnAttribute(llvm::Attribute::OptimizeNone)) continue;
+            f.addFnAttr(llvm::Attribute::OptimizeForSize);
+            if (gSizeOpt == 'z') f.addFnAttr(llvm::Attribute::MinSize);
+        }
+    }
 
     llvm::ModulePassManager mpm =
         (level == llvm::OptimizationLevel::O0)
@@ -848,6 +878,7 @@ static int compileOneFile(const std::string &inputPath, const std::string &outpu
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 int main(int argc, char **argv) {
+    TargetAbi.resolve();
     llvm::InitLLVM X(argc, argv);
 
     // --version is handled by scanning argv directly, before
