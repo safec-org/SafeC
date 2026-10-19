@@ -1354,7 +1354,9 @@ void CodeGen::genCompound(CompoundStmt &s, FnEnv &env) {
         // statements in this compound are unreachable dead code. Emitting IR
         // for them would insert instructions after the block's terminator —
         // invalid IR ("terminator found in the middle of a basic block").
-        if (builder_.GetInsertBlock() && builder_.GetInsertBlock()->getTerminator())
+        // isTerminated, not getTerminator(): since LLVM 23 the latter assumes
+        // a well-formed block and no longer returns null for an open one.
+        if (isTerminated(builder_.GetInsertBlock()))
             break;
         genStmt(*stmt, env);
     }

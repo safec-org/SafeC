@@ -207,7 +207,7 @@ llvm::Function *rewriteFunction(llvm::Function *f, const Rules &r) {
         }
         std::vector<llvm::ReturnInst *> rets;
         for (auto &bb : *nf)
-            if (auto *ri = llvm::dyn_cast<llvm::ReturnInst>(bb.getTerminator()))
+            if (auto *ri = bb.empty() ? nullptr : llvm::dyn_cast<llvm::ReturnInst>(&bb.back()))
                 rets.push_back(ri);
         for (auto *ri : rets) {
             llvm::IRBuilder<> b(ri);
