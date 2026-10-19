@@ -1,10 +1,11 @@
 // SafeC Standard Library — CNN implementation (see cnn.h).
 #pragma once
+#include <std/stddef.h>
 #include <std/ml/cnn.h>
 
 namespace std {
 
-extern void* malloc(unsigned long size);
+extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
 struct FeatureMap feature_map_new(unsigned long channels, unsigned long height, unsigned long width) {

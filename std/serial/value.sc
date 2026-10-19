@@ -1,9 +1,9 @@
 // SafeC Standard Library — Serializer core implementation (see value.h)
 #pragma once
 #include <std/serial/value.h>
-#include <std/collections/vec.sc>
-#include <std/mem.sc>
-#include <std/str.sc>
+#include <std/collections/vec.h>
+#include <std/mem.h>
+#include <std/str.h>
 
 namespace std {
 
@@ -23,8 +23,8 @@ inline struct Value value_null() {
     v.float_val = 0.0;
     v.bool_val = 0;
     unsafe { v.str_val = (char*)0; }
-    v.arr_val = vec_new(sizeof(struct Value));
-    v.obj_val = vec_new(sizeof(struct ObjectEntry));
+    v.arr_val = vec_new();
+    v.obj_val = vec_new();
     return v;
 }
 
@@ -69,7 +69,7 @@ inline struct Value value_object() {
 }
 
 inline void value_array_push(&Value arr, struct Value v) {
-    unsafe { arr->arr_val.push((const void*)&v); }
+    unsafe { arr->arr_val.push(v); }
 }
 
 inline void value_object_set(&Value obj, const char* key, struct Value v) {
@@ -82,7 +82,7 @@ inline void value_object_set(&Value obj, const char* key, struct Value v) {
         struct Value* heapVal = (struct Value*)alloc(sizeof(struct Value));
         *heapVal = v;
         e.val = heapVal;
-        obj->obj_val.push((const void*)&e);
+        obj->obj_val.push(e);
     }
 }
 
@@ -106,7 +106,7 @@ struct Value value_clone(const &Value v) {
         unsafe { n = v->arr_val.length(); }
         while (i < n) {
             struct Value* elem;
-            unsafe { elem = (struct Value*)v->arr_val.get_raw(i); }
+            unsafe { elem = v->arr_val.at(i); }
             value_array_push(&out, value_clone(elem));
             i = i + 1UL;
         }
@@ -116,7 +116,7 @@ struct Value value_clone(const &Value v) {
         unsafe { n = v->obj_val.length(); }
         while (i < n) {
             struct ObjectEntry* e;
-            unsafe { e = (struct ObjectEntry*)v->obj_val.get_raw(i); }
+            unsafe { e = v->obj_val.at(i); }
             unsafe { value_object_set(&out, e->key, value_clone(e->val)); }
             i = i + 1UL;
         }
@@ -135,7 +135,7 @@ void value_free(&Value v) {
         unsafe { n = v->arr_val.length(); }
         while (i < n) {
             struct Value* elem;
-            unsafe { elem = (struct Value*)v->arr_val.get_raw(i); }
+            unsafe { elem = v->arr_val.at(i); }
             value_free(elem);
             i = i + 1UL;
         }
@@ -147,7 +147,7 @@ void value_free(&Value v) {
         while (i < n) {
             struct ObjectEntry* e;
             unsafe {
-                e = (struct ObjectEntry*)v->obj_val.get_raw(i);
+                e = v->obj_val.at(i);
                 value_free(e->val);
                 dealloc((void*)e->val);
                 dealloc((void*)e->key);
@@ -178,7 +178,7 @@ inline const char* Value::as_string() const {
 
 inline unsigned long Value::array_len() const { return self.arr_val.length(); }
 inline &Value Value::array_at(unsigned long idx) const {
-    unsafe { return (struct Value*)self.arr_val.get_raw(idx); }
+    unsafe { return self.arr_val.at(idx); }
 }
 inline unsigned long Value::object_len() const { return self.obj_val.length(); }
 
@@ -187,7 +187,7 @@ inline unsigned long Value::object_len() const { return self.obj_val.length(); }
     unsigned long n = self.obj_val.length();
     while (i < n) {
         struct ObjectEntry* e;
-        unsafe { e = (struct ObjectEntry*)self.obj_val.get_raw(i); }
+        unsafe { e = self.obj_val.at(i); }
         int matched;
         unsafe { matched = str_eq(e->key, key); }
         if (matched != 0) {

@@ -154,6 +154,9 @@ struct BinaryExpr : Expr {
     BinaryOp op;
     ExprPtr  left, right;
     FunctionDecl *resolvedOperator = nullptr;  // set by Sema for struct operator overloads
+    // Outermost node of a parenthesized comma chain '(a, b, c)': a tuple
+    // literal where a tuple type is expected, the C comma operator elsewhere.
+    bool parenComma = false;
     BinaryExpr(BinaryOp o, ExprPtr l, ExprPtr r, SourceLocation loc)
         : Expr(ExprKind::Binary, loc), op(o),
           left(std::move(l)), right(std::move(r)) {}
@@ -315,6 +318,7 @@ struct NewExpr : Expr {
 // ── Tuple literal ─────────────────────────────────────────────────────────────
 struct TupleLitExpr : Expr {
     std::vector<ExprPtr> elements;
+    TypePtr targetType;   // the tuple type it was written against, when known
     explicit TupleLitExpr(std::vector<ExprPtr> e, SourceLocation l)
         : Expr(ExprKind::TupleLit, l), elements(std::move(e)) {}
 };
@@ -708,6 +712,7 @@ struct FunctionDecl : Decl {
     // ever get body-checked. Never copied onto a clone (cloneFunctionDecl
     // starts from a fresh FunctionDecl, same as genericParams).
     bool        isDeferredGenericMethod = false;
+    bool isMonomorphized = false;   // clone of a generic function/method: linkonce_odr (template linkage)
     // Bare-metal / effect system attributes
     bool        isNaked       = false;   // naked — no prologue/epilogue
     bool        isInterrupt   = false;   // interrupt — ISR calling convention

@@ -81,6 +81,12 @@ struct TcpConn {
                  unsigned int local_ip, unsigned short local_port,
                  unsigned int isn);
 
+    // Passive open: wait in LISTEN for a SYN to local_port. The peer's
+    // address/port are taken from that SYN; the next build_segment() then
+    // produces the SYN+ACK (with sequence number 'isn').
+    void listen(unsigned int local_ip, unsigned short local_port,
+                unsigned int isn);
+
     // Close connection (send FIN).
     void close();
 };

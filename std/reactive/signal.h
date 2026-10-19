@@ -2,86 +2,108 @@
 // SafeC Standard Library — Signal<T>: fine-grained reactive state.
 //
 // The client-side reactivity primitive for WASM-hydrated scx pages (see
-// std/scx/scx.h for the *server-side* templating half — scx itself is
-// pure compile-time string building with no runtime state). A Signal
-// owns one value; std/reactive/hydrate.h's DOM bindings subscribe()
-// listeners onto it so that signal_set_t() both updates the value and
-// pushes the change straight to the specific DOM node(s) that depend on
-// it — no virtual DOM, no diffing, matching the "SolidJS-style" signal
-// model rather than a React-style re-render-the-tree one, since a from-
-// scratch vdom differ is a lot of machinery for what a WASM binary
-// linked with -nostdlib doesn't otherwise need.
+// std/scx/scx.h for the server-side templating half). A Signal owns one
+// value; std/wasm/hydrate.h's DOM bindings subscribe listeners onto it so
+// that set() both updates the value and pushes the change straight to the
+// DOM node(s) that depend on it — SolidJS-style signals, no virtual DOM.
 //
-// Like std::Result (see result.h), Signal is type-erased at the struct
-// level (SafeC structs cannot themselves be generic — only free
-// functions can be 'generic<T>') and heap-backs its value.
-//
-//   struct Signal count = signal_new(0);
-//   count.subscribe(on_count_changed, someUserdata);
-//   ...
-//   int cur = signal_get_t(&count, int);      // macro: (*(int*)signal_get_raw(&count))
-//   signal_set_t(&count, cur + 1);             // updates + bumps version + notifies
+//   struct Signal<int> count = std::signal_new(0);
+//   std::signal_subscribe(&count, on_count_changed, (?&Label)&label);
+//   count.set(count.get() + 1);      // updates, bumps version, notifies
 //   count.free();
 #include <std/collections/vec.h>
 
-#define signal_get_t(s, T) (*(T*)std::signal_get_raw(s))
-
 namespace std {
 
-typedef fn void(void* userdata) SignalListener;
-
+// One subscriber. Listeners on the same signal carry unrelated context
+// types, so each is stored type-erased; signal_subscribe() only ever pairs
+// a fn void(?&U) with a ?&U, so the erased call is always well-typed.
 struct SignalSub {
-    SignalListener listener;
-    void* userdata;
+    void* listener;   // fn void(?&U)
+    void* userdata;   // ?&U
 };
 
+generic<T>
 struct Signal {
-    &heap void    data;      // heap pointer to the current value
-    unsigned long elemSize;  // size of the held value, in bytes
-    unsigned long version;   // bumped on every set_raw()/signal_set_t()
-    struct Vec    subs;      // Vec<struct SignalSub>
+    T             value;
+    unsigned long version;   // bumped on every set()
+    struct Vec<struct SignalSub> subs;
 
-    // Current version number — compare against a previously-read value to
-    // detect whether this signal has changed since (see signal_changed()).
+    T             get() const;
+    &T            get_ref();            // in-place access; call notify() after mutating
+    void          set(T val);           // stores val, bumps version, notifies
     unsigned long get_version() const;
-
-    // Registers 'listener' to be called (with 'userdata') on every future
-    // set_raw()/signal_set_t(). Not called for the signal's initial value —
-    // read it directly after construction if you need the starting state.
-    void subscribe(SignalListener listener, void* userdata);
-
-    // Removes every subscriber (does not free their userdata).
-    void unsubscribe_all();
-
-    // Calls every subscriber once, in registration order. Called
-    // automatically by set_raw()/signal_set_t(); exposed directly for
-    // cases that mutate the pointed-to value in place (via signal_get_raw())
-    // and need to announce the change without a fresh set_raw() copy.
-    void notify();
-
-    // Frees the held value and the subscriber list. Does not call
-    // subscribers' free logic — unsubscribe_all() them first if needed.
-    void free();
+    // 1 (and updates *last_seen) if the version moved since *last_seen —
+    // polling-style change detection instead of subscribe()'s push style.
+    int           changed(&unsigned long last_seen) const;
+    void          notify();             // calls every subscriber in registration order
+    void          unsubscribe_all();
+    void          free();               // frees the subscriber list
 };
 
-// Constructs a Signal holding a copy of 'val' (version starts at 0, no
-// subscribers).
-generic<T> struct Signal signal_new(T val);
+generic<T>
+struct Signal<T> signal_new(T val) {
+    struct Signal<T> s;
+    s.value = val;
+    s.version = 0UL;
+    s.subs = vec_new();
+    return s;
+}
 
-// Raw (type-erased) read: pointer to the currently-held value, or NULL if
-// 's' is a freed/default-initialized Signal. Prefer signal_get_t(s, T).
-void* signal_get_raw(&stack Signal s);
+// Registers listener(userdata) to run on every future set()/notify(). Not
+// called for the initial value — read it directly after subscribing.
+generic<T, U>
+void signal_subscribe(&Signal<T> s, fn void(?&U) listener, ?&U userdata) {
+    struct SignalSub sub;
+    unsafe {
+        sub.listener = (void*)listener;
+        sub.userdata = (void*)userdata;
+    }
+    s.subs.push(sub);
+}
 
-// Raw (type-erased) write: memcpy's elemSize bytes from 'val' over the
-// held value, bumps the version, and calls notify(). Prefer
-// signal_set_t(s, val).
-void signal_set_raw(&stack Signal s, const void* val);
+generic<T>
+T Signal::get() const { return self.value; }
 
-generic<T> void signal_set_t(&stack Signal s, T val);
+generic<T>
+&T Signal::get_ref() {
+    unsafe { return &self.value; }
+}
 
-// Compares 's's current version against '*lastSeenVersion'; if different,
-// updates '*lastSeenVersion' to match and returns 1, else returns 0. Lets
-// polling-style code (rather than subscribe()'s push style) detect changes.
-int signal_changed(&stack Signal s, unsigned long* lastSeenVersion);
+generic<T>
+void Signal::set(T val) {
+    self.value = val;
+    self.version = self.version + 1UL;
+    self.notify();
+}
+
+generic<T>
+unsigned long Signal::get_version() const { return self.version; }
+
+generic<T>
+int Signal::changed(&unsigned long last_seen) const {
+    if (*last_seen == self.version) return 0;
+    *last_seen = self.version;
+    return 1;
+}
+
+generic<T>
+void Signal::notify() {
+    unsigned long i = 0UL;
+    while (i < self.subs.length()) {
+        &SignalSub sub = self.subs.at(i);
+        unsafe {
+            fn void(void*) f = (fn void(void*))sub.listener;
+            f(sub.userdata);
+        }
+        i = i + 1UL;
+    }
+}
+
+generic<T>
+void Signal::unsubscribe_all() { self.subs.clear(); }
+
+generic<T>
+void Signal::free() { self.subs.free(); }
 
 } // namespace std

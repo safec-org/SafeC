@@ -6,6 +6,11 @@
 
 namespace std {
 
+// Definitions of the globals riscv.h declares extern.
+struct Clint clint;
+struct Plic plic;
+
+
 inline unsigned long rv_csr_read_mstatus() {
     unsigned long v = (unsigned long)0;
     unsafe { asm volatile ("csrr %0, mstatus" : "=r"(v)); }

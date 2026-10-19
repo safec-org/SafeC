@@ -43,6 +43,13 @@ Options (build / run / check / test):
                             repeatable) in addition to the manifest's
                             "default" feature
   --no-default-features    Do not enable the manifest's "default" feature
+  --target <alias|triple>  Cross-compile: a bare-metal alias (x86, x86_64,
+                            aarch32, aarch64, thumb, thumb2, arm-6m, arm-7m,
+                            arm-7em, arm-8m, rv32i, rv32e, rv64i, rv64e —
+                            see 'safec --list-targets') or any LLVM triple.
+                            Bare-metal links use -nostdlib -static; supply a
+                            linker script/runtime via [build] cflags/libs.
+                            'test' builds without running; 'run' is refused.
 
 [features] format in Package.toml (Rust-Cargo-style; see advanced/safeguard
 docs for the full write-up):
@@ -201,6 +208,15 @@ int main(int argc, char** argv) {
             if (arg == "--emit-llvm") { opts.emitLLVM = true; continue; }
             if (arg == "--verbose") { opts.verbose   = true; continue; }
             if (arg == "--no-default-features") { opts.noDefaultFeatures = true; continue; }
+            if (arg == "--target") {
+                if (i + 1 >= argc) {
+                    std::cerr << "safeguard: --target requires an argument\n";
+                    return 1;
+                }
+                opts.target = argv[++i];
+                continue;
+            }
+            if (arg.rfind("--target=", 0) == 0) { opts.target = arg.substr(9); continue; }
             if (arg == "--features") {
                 if (i + 1 >= argc) {
                     std::cerr << "safeguard: --features requires an argument\n";

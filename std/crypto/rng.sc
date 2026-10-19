@@ -1,16 +1,17 @@
 // SafeC Standard Library — Cryptographic RNG (ChaCha20-based)
 #pragma once
+#include <std/stddef.h>
 #include <std/crypto/rng.h>
 #include <std/stderr_compat.h>
 
 namespace std {
 
-extern void* memcpy(void* d, const void* s, unsigned long n);
+extern void* memcpy(void* d, const void* s, size_t n);
 // Hosted-mode seeding from /dev/urandom. Declared here at file scope: this
 // parser only accepts 'extern' declarations at top level, not nested inside
 // a function body.
 extern void* fopen(const char* path, const char* mode);
-extern unsigned long fread(void* buf, unsigned long size, unsigned long n, void* f);
+extern size_t fread(void* buf, size_t size, size_t n, void* f);
 extern int fclose(void* f);
 // Same rationale as mem.sc/pool.sc/slab.sc/tlsf.sc for not using
 // panic.h/panic_at here (no forced --compat-preprocessor link dependency
@@ -106,14 +107,14 @@ static void rng_setup_(unsigned int* state, const unsigned char* key32,
     }
 }
 
-inline void rng_init_seed(&stack RngCtx ctx, const unsigned char seed[32]) {
+inline void rng_init_seed(&RngCtx ctx, const unsigned char seed[32]) {
     rng_setup_(ctx.state, seed, (unsigned int)0, (unsigned int)1);
     chacha20_block_(ctx.state, (unsigned char*)ctx.buf);
     ctx.state[12] = ctx.state[12] + (unsigned int)1;
     ctx.buf_pos = (unsigned long)0;
 }
 
-int rng_init(&stack RngCtx ctx) {
+int rng_init(&RngCtx ctx) {
 #ifdef __x86_64__
     // Try rdrand for seeding
     unsigned int seed_words[8];
@@ -180,7 +181,7 @@ int rng_init(&stack RngCtx ctx) {
 
 // ── RngCtx methods ─────────────────────────────────────────────────────────────
 
-inline void RngCtx::fill(unsigned char* out, unsigned long len) {
+inline void RngCtx::fill(&unsigned char out, unsigned long len) {
     unsigned long i = (unsigned long)0;
     while (i < len) {
         if (self.buf_pos >= (unsigned long)RNG_BLOCK_SIZE) {
@@ -196,7 +197,7 @@ inline void RngCtx::fill(unsigned char* out, unsigned long len) {
 
 inline unsigned int RngCtx::rand32() {
     unsigned char b[4];
-    self.fill((unsigned char*)b, (unsigned long)4);
+    self.fill(&b[0], 4UL);
     unsafe {
         return ((unsigned int)b[0])
              | ((unsigned int)b[1] << 8)

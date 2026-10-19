@@ -1,6 +1,6 @@
 // SafeC Standard Library — scx runtime support (see scx.h)
 //
-// Deliberately does NOT '#include <std/collections/string.sc>' (the String
+// Deliberately does NOT '#include <std/collections/string.h>' (the String
 // implementation) — scx_append_esc only needs String's declared shape
 // (from scx.h -> string.h) to call .push()/.push_char() on a pointer;
 // pulling in the implementation here too would make this file's own

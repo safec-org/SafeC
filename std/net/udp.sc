@@ -11,13 +11,13 @@ int udp_parse(&stack PacketBuf pkt, unsigned long offset,
     if (pkt.len < offset + (unsigned long)UDP_HDR_LEN) { return -1; }
     unsafe {
         unsigned char* d = (unsigned char*)pkt.data + offset;
-        hdr_out.src_port = net_ntohs((unsigned short)(((unsigned short)d[0] << 8)
+        hdr_out.src_port = ((unsigned short)(((unsigned short)d[0] << 8)
                                                      | (unsigned short)d[1]));
-        hdr_out.dst_port = net_ntohs((unsigned short)(((unsigned short)d[2] << 8)
+        hdr_out.dst_port = ((unsigned short)(((unsigned short)d[2] << 8)
                                                      | (unsigned short)d[3]));
-        hdr_out.length   = net_ntohs((unsigned short)(((unsigned short)d[4] << 8)
+        hdr_out.length   = ((unsigned short)(((unsigned short)d[4] << 8)
                                                      | (unsigned short)d[5]));
-        hdr_out.checksum = net_ntohs((unsigned short)(((unsigned short)d[6] << 8)
+        hdr_out.checksum = ((unsigned short)(((unsigned short)d[6] << 8)
                                                      | (unsigned short)d[7]));
     }
     return 0;
@@ -28,9 +28,9 @@ unsigned long udp_build(&stack PacketBuf pkt, unsigned long offset,
                         unsigned short payload_len) {
     unsafe {
         unsigned char* d = (unsigned char*)pkt.data + offset;
-        unsigned short sp = net_htons(src_port);
-        unsigned short dp = net_htons(dst_port);
-        unsigned short ln = net_htons((unsigned short)((unsigned short)UDP_HDR_LEN
+        unsigned short sp = (src_port);
+        unsigned short dp = (dst_port);
+        unsigned short ln = ((unsigned short)((unsigned short)UDP_HDR_LEN
                                                        + payload_len));
         d[0] = (unsigned char)((sp >> 8) & (unsigned short)0xFF);
         d[1] = (unsigned char)(sp & (unsigned short)0xFF);

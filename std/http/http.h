@@ -81,9 +81,9 @@ struct HttpResponse http_post(const char* host, unsigned short port, const char*
 
 // A request handler: given the parsed request, return the response to
 // send back.
-//   struct HttpResponse my_handler(struct HttpRequest* req) { ... }
+//   struct HttpResponse my_handler(&HttpRequest req) { ... }
 //   std::http_serve(8080, my_handler);
-typedef fn struct HttpResponse(struct HttpRequest*) HttpHandler;
+typedef fn struct HttpResponse(&HttpRequest) HttpHandler;
 
 // Binds 'port' and serves HTTP/1.1 requests in a blocking accept loop,
 // calling 'handler' for each parsed request and writing its returned

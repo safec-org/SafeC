@@ -1,14 +1,14 @@
 // SafeC Standard Library — CSV serialization implementation (see csv.h)
 #pragma once
 #include <std/serial/csv.h>
-#include <std/serial/value.sc>
-#include <std/collections/string.sc>
-#include <std/mem.sc>
+#include <std/serial/value.h>
+#include <std/collections/string.h>
+#include <std/mem.h>
 // String::push_int/push_float (used by csv_append_field_ below) are
 // declared in string.h but only *defined* in these two files — see
 // json.sc's identical comment for why both are needed here too.
-#include <std/fmt.sc>
-#include <std/convert.sc>
+#include <std/fmt.h>
+#include <std/convert.h>
 
 namespace std {
 
@@ -107,14 +107,14 @@ void csv_write(const &Value v, &String out) {
     while (r < rowCount) {
         if (r > 0UL) { unsafe { out.push_char('\n'); } }
         struct Value* row;
-        unsafe { row = (struct Value*)v.arr_val.get_raw(r); }
+        unsafe { row = v.arr_val.at(r); }
         unsigned long fieldCount;
         unsafe { fieldCount = row->arr_val.length(); }
         unsigned long f = 0UL;
         while (f < fieldCount) {
             if (f > 0UL) { unsafe { out.push_char(','); } }
             struct Value* field;
-            unsafe { field = (struct Value*)row->arr_val.get_raw(f); }
+            unsafe { field = row->arr_val.at(f); }
             csv_append_field_(out, field);
             f = f + 1UL;
         }

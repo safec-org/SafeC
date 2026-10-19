@@ -103,6 +103,45 @@ bool Preprocessor::isActive() const {
     return true;
 }
 
+// True if 'text' contains a function-like macro name followed by '(' whose
+// matching ')' hasn't appeared yet (strings/char literals are skipped).
+bool Preprocessor::hasOpenMacroCall(const std::string &text) const {
+    size_t p = 0;
+    while (p < text.size()) {
+        char c = text[p];
+        if (c == '"' || c == '\'') {
+            char q = c; ++p;
+            while (p < text.size() && text[p] != q) { if (text[p] == '\\') ++p; ++p; }
+            ++p;
+            continue;
+        }
+        if (isIdentStart(c)) {
+            std::string name = readIdentAt(text, p);
+            auto it = macros_.find(name);
+            if (it == macros_.end() || !it->second.isFunctionLike) continue;
+            size_t q = p;
+            while (q < text.size() && (text[q] == ' ' || text[q] == '\t')) ++q;
+            if (q >= text.size() || text[q] != '(') continue;
+            int depth = 0;
+            for (; q < text.size(); ++q) {
+                char d = text[q];
+                if (d == '"' || d == '\'') {
+                    char qq = d; ++q;
+                    while (q < text.size() && text[q] != qq) { if (text[q] == '\\') ++q; ++q; }
+                    continue;
+                }
+                if (d == '(') ++depth;
+                else if (d == ')' && --depth == 0) break;
+            }
+            if (depth > 0) return true;
+            p = q;
+            continue;
+        }
+        ++p;
+    }
+    return false;
+}
+
 std::string Preprocessor::processFile(const std::string &src,
                                        const std::string &filename,
                                        int depth) {
@@ -137,7 +176,15 @@ std::string Preprocessor::processFile(const std::string &src,
     unsigned    savedLine = curLine_;
     curFile_ = filename;
 
-    for (auto &[line, lineNo] : lines) {
+    // Output line this file's text is currently at. Logical lines that
+    // absorbed physical ones ('\\'-continuations, multi-line macro
+    // invocations below) are followed by padding newlines so every later
+    // token keeps its real source line.
+    unsigned outLine = 1;
+    for (size_t li = 0; li < lines.size(); ++li) {
+        auto &[line, lineNo] = lines[li];
+        while (outLine < lineNo) { output += '\n'; ++outLine; }
+        outLine = lineNo + 1;
         curLine_ = lineNo;
 
         // Find first non-whitespace
@@ -154,8 +201,12 @@ std::string Preprocessor::processFile(const std::string &src,
             // Skip optional whitespace between # and directive name
             std::string injected = handleDirective(rest, filename, lineNo, depth);
             if (!injected.empty()) {
-                // Injected include content: already ends with newlines
+                // Injected include content (already wrapped in a leading
+                // '# 1 "<child>"' marker by handleInclude); resume this
+                // file's numbering after it.
                 output += injected;
+                if (output.back() != '\n') output += '\n';
+                output += "# " + std::to_string(lineNo + 1) + " \"" + filename + "\"\n";
             } else {
                 output += '\n'; // blank line to preserve line numbers
             }
@@ -163,6 +214,18 @@ std::string Preprocessor::processFile(const std::string &src,
             // Active code line: strip single-line comments then expand macros
             // (multi-line /* */ comments are left for the lexer to handle)
             std::string effective = stripLineComment(line);
+            // A function-like macro invocation may span lines
+            // (ASSERT_TRUE(f(a,\n b))): pull following lines in until its
+            // parentheses close, then expand the joined text once.
+            while (hasOpenMacroCall(effective) && li + 1 < lines.size()) {
+                const std::string &nxt = lines[li + 1].first;
+                size_t k = 0;
+                while (k < nxt.size() && (nxt[k] == ' ' || nxt[k] == '\t')) ++k;
+                if (k < nxt.size() && nxt[k] == '#') break;   // never swallow a directive
+                ++li;
+                effective += ' ';
+                effective += stripLineComment(nxt);
+            }
             output += expandLine(effective, filename, lineNo);
             output += '\n';
         } else {
@@ -472,7 +535,25 @@ std::string Preprocessor::handleInclude(const std::string &rest,
         return {};
     }
 
-    std::string path = resolveInclude(name, isSystem, curFile);
+    // #include names headers only. A .sc file is a translation unit of its
+    // own: pasting one into another duplicates every definition it holds
+    // (multiple-definition link errors, or two diverging copies of its
+    // statics), so it is compiled separately and linked instead.
+    if (name.size() >= 3 && name.compare(name.size() - 3, 3, ".sc") == 0) {
+        diag_.error({lineNo, 1, curFile.c_str()},
+                    "#include must name a header (.h), not a source file '" + name +
+                    "': compile it as its own translation unit and include its .h");
+        return {};
+    }
+
+    // System headers that aren't on the user/std include path go through
+    // clang's importer first (that's also what happens on macOS, where
+    // /usr/include doesn't exist): glibc's raw headers lean on compiler-
+    // builtin headers (<stdarg.h>, <stddef.h>) and GNU extensions this
+    // preprocessor/parser doesn't model. The raw system directories are
+    // only a fallback for when no clang is available to import with.
+    std::string path = resolveInclude(name, isSystem, curFile,
+                                      /*searchSysDirs=*/!(isSystem && opts_.importCHeaders));
     if (path.empty()) {
         // For system includes that we can't resolve natively, try importing
         // via clang's AST dump facility.  This covers headers like <stdio.h>
@@ -485,12 +566,16 @@ std::string Preprocessor::handleInclude(const std::string &rest,
                 std::string decls =
                     cHeaderImporter_->import(name, opts_.includePaths,
                                               {lineNo, 1, curFile.c_str()});
-                if (!decls.empty()) return decls;
+                if (!decls.empty()) return "# 1 \"<" + name + ">\"\n" + decls;
             }
         }
-        diag_.error({lineNo, 1, curFile.c_str()},
-                    "cannot find include file '" + name + "'");
-        return {};
+        if (isSystem && opts_.importCHeaders)
+            path = resolveInclude(name, isSystem, curFile, /*searchSysDirs=*/true);
+        if (path.empty()) {
+            diag_.error({lineNo, 1, curFile.c_str()},
+                        "cannot find include file '" + name + "'");
+            return {};
+        }
     }
 
     // Canonicalize for pragma-once tracking
@@ -516,12 +601,13 @@ std::string Preprocessor::handleInclude(const std::string &rest,
         }
     }
 
-    return processFile(content, path, depth + 1);
+    return "# 1 \"" + path + "\"\n" + processFile(content, path, depth + 1);
 }
 
 std::string Preprocessor::resolveInclude(const std::string &name,
                                           bool isSystem,
-                                          const std::string &curFile) {
+                                          const std::string &curFile,
+                                          bool searchSysDirs) {
     // 1. Relative to current file (for quoted includes)
     if (!isSystem && !curFile.empty()) {
         fs::path p = fs::path(curFile).parent_path() / name;
@@ -535,10 +621,9 @@ std::string Preprocessor::resolveInclude(const std::string &name,
         if (fs::exists(p, ec)) return p.string();
     }
     // 3. System include paths (limited set for standalone use)
-    if (isSystem) {
+    if (isSystem && searchSysDirs) {
         static const char *sysDirs[] = {
-            "/usr/include", "/usr/local/include",
-            "/usr/local/Cellar/llvm/21.1.8_1/include", nullptr
+            "/usr/include", "/usr/local/include", nullptr
         };
         for (int i = 0; sysDirs[i]; ++i) {
             fs::path p = fs::path(sysDirs[i]) / name;
@@ -844,6 +929,19 @@ std::string Preprocessor::expandFunctionLike(const MacroDef &def,
         int depth = 0;
         while (pos < text.size()) {
             char c = text[pos++];
+            // String/char literals are opaque: a ',' or ')' inside one
+            // (e.g. ASSERT_STR_EQ(s, "a, b")) must not split or end the
+            // argument list.
+            if (c == '"' || c == '\'') {
+                cur += c;
+                while (pos < text.size()) {
+                    char sc = text[pos++];
+                    cur += sc;
+                    if (sc == '\\' && pos < text.size()) cur += text[pos++];
+                    else if (sc == c) break;
+                }
+                continue;
+            }
             if (c == '(' ) { depth++; cur += c; }
             else if (c == ')') {
                 if (depth == 0) {

@@ -6,6 +6,7 @@ namespace std {
 
 struct SlabAllocator {
     &heap void    base;       // heap-backed backing buffer
+    int           owned;   // 1 if slab_new allocated base (destroy() frees it)
     void*         free_head;  // head of embedded free-list (raw — unsafe arithmetic)
     unsigned long obj_size;   // size of each object (>= sizeof(void*))
     unsigned long cap;        // max number of objects
@@ -40,9 +41,22 @@ struct SlabAllocator {
 // Initialize over a user-provided heap buffer of exactly obj_size*count
 // bytes. obj_size must be >= 8 (pointer size). No double-free detection
 // (see has_tags) — the buffer size contract can't grow to fit a tag.
-struct SlabAllocator slab_init(&heap void buffer, unsigned long obj_size, unsigned long count);
+struct SlabAllocator slab_init(&unsigned char buffer, unsigned long obj_size, unsigned long count);
 
 // Create a heap-backed slab allocator (double-free-detecting).
 struct SlabAllocator slab_new(unsigned long obj_size, unsigned long count);
+
+// ── Typed allocation (recommended) ───────────────────────────────────────────
+// null if the slab is full or T doesn't fit in one slab object.
+generic<T>
+?&heap T slab_alloc_t(&SlabAllocator s) {
+    if (sizeof(T) > s.obj_size) return null;
+    unsafe { return (?&heap T)s.alloc(); }
+}
+
+generic<T>
+void slab_free_t(&SlabAllocator s, &heap T obj) {
+    unsafe { s.dealloc((void*)obj); }
+}
 
 } // namespace std

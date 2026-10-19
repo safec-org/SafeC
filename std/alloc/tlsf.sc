@@ -1,13 +1,14 @@
 // SafeC Standard Library — TLSF Allocator
 #pragma once
+#include <std/stddef.h>
 #include <std/alloc/tlsf.h>
 #include <std/stderr_compat.h>
 
 namespace std {
 
-extern void* malloc(unsigned long size);
+extern void* malloc(size_t size);
 extern void  free(void* ptr);
-extern void* memset(void* ptr, int val, unsigned long n);
+extern void* memset(void* ptr, int val, size_t n);
 // Same rationale as mem.sc/pool.sc/slab.sc for not using panic.h/panic_at here.
 extern void  abort();
 extern int   fprintf(void* stream, const char* fmt, ...);
@@ -76,6 +77,28 @@ void tlsf_mapping_(unsigned long size, &stack int fl, &stack int sl) {
 
 // ── TlsfAllocator methods ────────────────────────────────────────────────────
 
+// Physical successor of 'blk' inside the allocator's buffer, or null for
+// the last block. Every split/merge must re-point the successor's
+// prev_phys, or a later free() coalesces through a stale header.
+static ?&TlsfBlock tlsf_next_phys_(&TlsfBlock blk, &TlsfAllocator a) {
+    unsigned long end;
+    unsigned long limit;
+    unsafe {
+        end   = (unsigned long)blk + tlsf_hdr_size_() + blk.block_size_();
+        limit = (unsigned long)a.base + a.cap;
+    }
+    if (end + tlsf_hdr_size_() > limit) { return null; }
+    unsafe { return (?&TlsfBlock)end; }
+}
+
+// Point 'blk''s physical successor (if any) back at 'blk'.
+static void tlsf_link_next_(&TlsfBlock blk, &TlsfAllocator a) {
+    match (tlsf_next_phys_(blk, a)) {
+        case null: return;
+        case some(n): { unsafe { n.prev_phys = (void*)blk; } }
+    }
+}
+
 inline void TlsfAllocator::insert_(&stack TlsfBlock blk) {
     int fl = 0;
     int sl = 0;
@@ -126,9 +149,24 @@ void TlsfAllocator::remove_(&stack TlsfBlock blk) {
 }
 
 void* TlsfAllocator::find_(unsigned long size) {
+    // Round the request up to the start of the next size class first
+    // ("mapping_search" in the TLSF paper): every block in the request's
+    // own class is only >= that class's lower bound, which may be smaller
+    // than 'size' itself. Searching from the next class up guarantees any
+    // block found is big enough, keeping alloc O(1) with no list walk.
+    unsigned long search = size;
+    if (search < (unsigned long)256) {
+        search = search + (unsigned long)15;
+    } else {
+        int f = 0;
+        unsigned long tmp = search;
+        while (tmp >= (unsigned long)2) { tmp = tmp / (unsigned long)2; f = f + 1; }
+        search = search + (((unsigned long)1 << (unsigned long)(f - 4)) - (unsigned long)1);
+    }
     int fl = 0;
     int sl = 0;
-    tlsf_mapping_(size, &fl, &sl);
+    tlsf_mapping_(search, &fl, &sl);
+    if (fl >= TLSF_FL_MAX) { return (void*)0; }
 
     unsafe {
         unsigned int sl_map = self.sl_bitmap[fl] & ~(((unsigned int)1 << (sl + 1)) - (unsigned int)1);
@@ -156,14 +194,15 @@ void* TlsfAllocator::find_(unsigned long size) {
     }
 }
 
-struct TlsfAllocator tlsf_init(&heap void buffer, unsigned long cap) {
+struct TlsfAllocator tlsf_init(&unsigned char buffer, unsigned long cap) {
     struct TlsfAllocator a;
-    a.base      = buffer;
+    unsafe { a.base = (&heap void)buffer; }
+    a.owned     = 0;
     a.cap       = cap;
     a.fl_bitmap = (unsigned int)0;
     unsafe {
-        memset((void*)a.sl_bitmap, 0, (unsigned long)128);
-        memset((void*)a.blocks, 0, (unsigned long)(32 * 16 * 8));
+        memset((void*)a.sl_bitmap, 0, sizeof(a.sl_bitmap));
+        memset((void*)a.blocks, 0, sizeof(a.blocks));
     }
     unsigned long hdr = tlsf_hdr_size_();
     if (cap > hdr) {
@@ -182,11 +221,12 @@ struct TlsfAllocator tlsf_init(&heap void buffer, unsigned long cap) {
 struct TlsfAllocator tlsf_new(unsigned long cap) {
     struct TlsfAllocator a;
     unsafe { a.base = (&heap void)malloc(cap); }
+    a.owned = 1;
     a.cap       = cap;
     a.fl_bitmap = (unsigned int)0;
     unsafe {
-        memset((void*)a.sl_bitmap, 0, (unsigned long)128);
-        memset((void*)a.blocks, 0, (unsigned long)(32 * 16 * 8));
+        memset((void*)a.sl_bitmap, 0, sizeof(a.sl_bitmap));
+        memset((void*)a.blocks, 0, sizeof(a.blocks));
     }
     unsigned long hdr = tlsf_hdr_size_();
     if (cap > hdr) {
@@ -225,6 +265,7 @@ struct TlsfAllocator tlsf_new(unsigned long cap) {
             rest->next_free = (void*)0;
             rest->prev_free = (void*)0;
             blk->size = aligned;
+            tlsf_link_next_(rest, self);
             self.insert_(&(*rest));
         }
 
@@ -259,6 +300,7 @@ void TlsfAllocator::free(&heap void ptr) {
             if (next->is_free_() == 1) {
                 self.remove_(&(*next));
                 blk->size = blk->block_size_() + hdr + next->block_size_();
+                tlsf_link_next_(blk, self);
             }
         }
 
@@ -269,6 +311,7 @@ void TlsfAllocator::free(&heap void ptr) {
                 self.remove_(&(*prev));
                 prev->size = prev->block_size_() + hdr + blk->block_size_();
                 blk = prev;
+                tlsf_link_next_(blk, self);
             }
         }
 
@@ -277,7 +320,7 @@ void TlsfAllocator::free(&heap void ptr) {
 }
 
 inline void TlsfAllocator::destroy() {
-    unsafe { free((void*)self.base); }
+    if (self.owned) { unsafe { free((void*)self.base); } }
     self.cap = (unsigned long)0;
 }
 

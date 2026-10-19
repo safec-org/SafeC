@@ -18,13 +18,13 @@ namespace std {
 // Binds 'signal' (must hold an 'int') so every future change formats its
 // value as decimal text and writes it into 'elementHandle's text content.
 // Does not set the element's *initial* text — call dom_set_text()
-// yourself first (or signal_set_t() once) if it needs to show a value
+// yourself first (or set() once) if it needs to show a value
 // before the first change.
-void hydrate_bind_text_int_handle(&stack Signal signal, int elementHandle);
+void hydrate_bind_text_int_handle(&Signal<int> signal, int elementHandle);
 
 // Convenience: dom_get_element(selector) + hydrate_bind_text_int_handle().
 // Returns the resolved element handle (-1 if 'selector' matched nothing,
 // in which case no binding was registered).
-int hydrate_bind_text_int(&stack Signal signal, const char* selector);
+int hydrate_bind_text_int(&Signal<int> signal, const char* selector);
 
 } // namespace std

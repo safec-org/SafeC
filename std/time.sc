@@ -1,11 +1,12 @@
 // SafeC Standard Library — time implementation
 #pragma once
+#include <std/stddef.h>
 #include <std/time.h>
 
 namespace std {
 
 extern long long time(long long* t);
-extern unsigned long strftime(char* s, unsigned long max, const char* format, const void* tm);
+extern size_t strftime(char* s, size_t max, const char* format, const void* tm);
 extern long long mktime(void* tm);
 
 // gmtime_r/localtime_r/strptime are POSIX, not in any C standard --

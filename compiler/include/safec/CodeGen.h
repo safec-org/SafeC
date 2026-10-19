@@ -69,6 +69,10 @@ struct FnEnv {
 
     // Defer tracking — LIFO list of deferred stmts
     std::vector<Stmt *> deferList;
+    // spawn_scoped handles awaiting their implicit join: (deferList.size()
+    // at registration, alloca holding the i64 handle). Joined by
+    // emitDefers in the same LIFO order as the defers around them.
+    std::vector<std::pair<size_t, llvm::Value *>> scopedJoins;
     bool                hasError = false; // set by TryExpr on null path
 
     // Goto/label support: forward-declared basic blocks for labels
@@ -91,7 +95,10 @@ public:
     // target something other than the host.
     CodeGen(llvm::LLVMContext &ctx, const std::string &moduleName,
             DiagEngine &diag, DebugLevel dbgLevel = DebugLevel::None,
-            const std::string &targetTriple = "");
+            const std::string &targetTriple = "",
+            const std::string &targetCpu = "",
+            const std::string &targetFeatures = "",
+            const std::string &targetAbi = "");
     // Declared here, defined in CodeGen.cpp: std::unique_ptr<TargetMachine>'s
     // destructor needs TargetMachine's complete definition, which only
     // CodeGen.cpp includes — everywhere else (e.g. main.cpp) only sees the
@@ -268,6 +275,7 @@ private:
     ThreadBackend selectThreadBackend() const;
     llvm::Value *genThreadCreate(llvm::Value *fnVal, llvm::Value *argVal, FnEnv &env);
     void         genThreadJoin(llvm::Value *handleVal, FnEnv &env);
+    llvm::Value *stepByOne(llvm::Value *v, llvm::Type *ty, const TypePtr &srcTy, int dir);
     llvm::Value *genSpawn(SpawnExpr &e, FnEnv &env);
 
     // Helpers
@@ -292,6 +300,9 @@ private:
     // DataLayout (already installed on mod_) stays valid for the module's
     // lifetime; unused otherwise.
     std::unique_ptr<llvm::TargetMachine>             targetMachine_;
+    std::string                                      targetCpu_ = "generic";
+    std::string                                      targetFeatures_;
+    std::string                                      targetAbi_;
 
     // Struct LLVM type cache (name → StructType*)
     std::unordered_map<std::string, llvm::StructType *> structCache_;

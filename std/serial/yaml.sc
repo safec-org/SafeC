@@ -2,13 +2,13 @@
 // supported subset).
 #pragma once
 #include <std/serial/yaml.h>
-#include <std/serial/value.sc>
-#include <std/collections/string.sc>
-#include <std/collections/vec.sc>
-#include <std/mem.sc>
-#include <std/fmt.sc>
-#include <std/convert.sc>
-#include <std/str.sc>
+#include <std/serial/value.h>
+#include <std/collections/string.h>
+#include <std/collections/vec.h>
+#include <std/mem.h>
+#include <std/fmt.h>
+#include <std/convert.h>
+#include <std/str.h>
 
 namespace std {
 
@@ -136,7 +136,7 @@ static void yaml_write_array_(const &Value v, &String out, int depth) {
         yaml_indent_(out, depth);
         unsafe { out.push_char('-'); }
         struct Value* elem;
-        unsafe { elem = (struct Value*)v.arr_val.get_raw(i); }
+        unsafe { elem = v.arr_val.at(i); }
         int ekind;
         unsafe { ekind = elem->kind; }
         if (ekind == VAL_ARRAY || ekind == VAL_OBJECT) {
@@ -159,7 +159,7 @@ static void yaml_write_object_(const &Value v, &String out, int depth) {
     while (i < n) {
         yaml_indent_(out, depth);
         struct ObjectEntry* e;
-        unsafe { e = (struct ObjectEntry*)v.obj_val.get_raw(i); }
+        unsafe { e = v.obj_val.at(i); }
         const char* key;
         unsafe { key = (const char*)e->key; }
         yaml_append_scalar_string_(out, key);
@@ -242,8 +242,8 @@ static struct String yaml_strip_comment_(const char* line) {
 // whitespace ends the indent count at that point, generally producing an
 // indent that won't line up with anything and surfacing as a structural
 // mismatch rather than being silently misinterpreted.
-static struct Vec yaml_split_lines_(const char* text) {
-    struct Vec lines = vec_new(sizeof(struct YamlLine_));
+static struct Vec<struct YamlLine_> yaml_split_lines_(const char* text) {
+    struct Vec<struct YamlLine_> lines = vec_new();
     unsigned long i = 0UL;
     while (1) {
         char c0;
@@ -278,7 +278,7 @@ static struct Vec yaml_split_lines_(const char* text) {
             struct YamlLine_ yl;
             yl.indent = indent;
             yl.content = content;
-            unsafe { lines.push((void*)&yl); }
+            lines.push(yl);
         } else {
             content.free();
         }
@@ -286,13 +286,13 @@ static struct Vec yaml_split_lines_(const char* text) {
     return lines;
 }
 
-static void yaml_free_lines_(struct Vec* lines) {
+static void yaml_free_lines_(&Vec<struct YamlLine_> lines) {
     unsigned long n;
     unsafe { n = lines->length(); }
     unsigned long i = 0UL;
     while (i < n) {
         struct YamlLine_* yl;
-        unsafe { yl = (struct YamlLine_*)lines->get_raw(i); }
+        unsafe { yl = lines->at(i); }
         unsafe { yl->content.free(); }
         i = i + 1UL;
     }
@@ -390,7 +390,7 @@ static struct Value yaml_parse_scalar_(const char* text) {
     return result;
 }
 
-static struct Value yaml_parse_block_(struct Vec* lines, unsigned long* idx,
+static struct Value yaml_parse_block_(&Vec<struct YamlLine_> lines, unsigned long* idx,
                                        unsigned long minIndent, int* ok);
 
 // Splits "key: value" / "key:" at the first unquoted ':' followed by a
@@ -419,7 +419,7 @@ static long long yaml_find_colon_(const char* s) {
     }
 }
 
-static struct Value yaml_parse_mapping_(struct Vec* lines, unsigned long* idx,
+static struct Value yaml_parse_mapping_(&Vec<struct YamlLine_> lines, unsigned long* idx,
                                          unsigned long indent, int* ok) {
     struct Value obj = value_object();
     unsigned long n;
@@ -429,7 +429,7 @@ static struct Value yaml_parse_mapping_(struct Vec* lines, unsigned long* idx,
         unsafe { curIdx = *idx; }
         if (curIdx >= n) { break; }
         struct YamlLine_* yl;
-        unsafe { yl = (struct YamlLine_*)lines->get_raw(curIdx); }
+        unsafe { yl = lines->at(curIdx); }
         unsigned long ylIndent;
         unsafe { ylIndent = yl->indent; }
         if (ylIndent != indent) { break; }
@@ -477,7 +477,7 @@ static struct Value yaml_parse_mapping_(struct Vec* lines, unsigned long* idx,
     return obj;
 }
 
-static struct Value yaml_parse_sequence_(struct Vec* lines, unsigned long* idx,
+static struct Value yaml_parse_sequence_(&Vec<struct YamlLine_> lines, unsigned long* idx,
                                           unsigned long indent, int* ok) {
     struct Value arr = value_array();
     unsigned long n;
@@ -487,7 +487,7 @@ static struct Value yaml_parse_sequence_(struct Vec* lines, unsigned long* idx,
         unsafe { curIdx = *idx; }
         if (curIdx >= n) { break; }
         struct YamlLine_* yl;
-        unsafe { yl = (struct YamlLine_*)lines->get_raw(curIdx); }
+        unsafe { yl = lines->at(curIdx); }
         unsigned long ylIndent;
         unsafe { ylIndent = yl->indent; }
         if (ylIndent != indent) { break; }
@@ -536,7 +536,7 @@ static struct Value yaml_parse_sequence_(struct Vec* lines, unsigned long* idx,
     return arr;
 }
 
-static struct Value yaml_parse_block_(struct Vec* lines, unsigned long* idx,
+static struct Value yaml_parse_block_(&Vec<struct YamlLine_> lines, unsigned long* idx,
                                        unsigned long minIndent, int* ok) {
     unsigned long n;
     unsafe { n = lines->length(); }
@@ -544,7 +544,7 @@ static struct Value yaml_parse_block_(struct Vec* lines, unsigned long* idx,
     unsafe { curIdx = *idx; }
     if (curIdx >= n) { return value_null(); }
     struct YamlLine_* yl;
-    unsafe { yl = (struct YamlLine_*)lines->get_raw(curIdx); }
+    unsafe { yl = lines->at(curIdx); }
     unsigned long ylIndent;
     unsafe { ylIndent = yl->indent; }
     if (ylIndent < minIndent) { return value_null(); }
@@ -568,7 +568,7 @@ static struct Value yaml_parse_block_(struct Vec* lines, unsigned long* idx,
 }
 
 struct Value yaml_parse(const char* text, int* ok) {
-    struct Vec lines = yaml_split_lines_(text);
+    struct Vec<struct YamlLine_> lines = yaml_split_lines_(text);
     unsigned long idx = 0UL;
     int good = 1;
     struct Value result = yaml_parse_block_(&lines, &idx, 0UL, &good);

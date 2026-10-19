@@ -1,11 +1,12 @@
 // SafeC Standard Library — AES Block Cipher
 #pragma once
+#include <std/stddef.h>
 #include <std/crypto/aes.h>
 #include <std/mem.h>
 
 namespace std {
 
-extern void* memcpy(void* d, const void* s, unsigned long n);
+extern void* memcpy(void* d, const void* s, size_t n);
 
 // ── AES S-box and inverse S-box ───────────────────────────────────────────────
 
@@ -119,8 +120,10 @@ static void add_round_key_(unsigned char* state, const unsigned int* rk) {
         int j = 0;
         while (j < 4) {
             unsafe {
+                // state is column-major (state[c*4 + r], FIPS-197 input
+                // order): column i takes round-key word i, row j its byte j.
                 state[i*4+j] = state[i*4+j] ^
-                    (unsigned char)((rk[j] >> (unsigned int)(24 - 8*i)) & 0xFF);
+                    (unsigned char)((rk[i] >> (unsigned int)(24 - 8*j)) & 0xFF);
             }
             j = j + 1;
         }
@@ -204,13 +207,13 @@ static void inv_mix_columns_(unsigned char* s) {
 // ── Core encrypt / decrypt ────────────────────────────────────────────────────
 
 void AesCtx::encrypt_block(&stack unsigned char block) {
-    // Copy input into column-major state
+    // Copy input into the column-major state (byte order is already column-major)
     unsigned char state[16];
     int i = 0;
     while (i < 4) {
         int j = 0;
         while (j < 4) {
-            unsafe { state[i*4+j] = block[j*4+i]; }
+            unsafe { state[i*4+j] = block[i*4+j]; }
             j = j + 1;
         }
         i = i + 1;
@@ -230,12 +233,12 @@ void AesCtx::encrypt_block(&stack unsigned char block) {
     shift_rows_(state);
     unsafe { add_round_key_(state, self.ks + self.rounds * 4); }
 
-    // Write back row-major
+    // Write back (same column-major byte order)
     i = 0;
     while (i < 4) {
         int j = 0;
         while (j < 4) {
-            unsafe { block[j*4+i] = state[i*4+j]; }
+            unsafe { block[i*4+j] = state[i*4+j]; }
             j = j + 1;
         }
         i = i + 1;
@@ -248,7 +251,7 @@ void AesCtx::decrypt_block(&stack unsigned char block) {
     while (i < 4) {
         int j = 0;
         while (j < 4) {
-            unsafe { state[i*4+j] = block[j*4+i]; }
+            unsafe { state[i*4+j] = block[i*4+j]; }
             j = j + 1;
         }
         i = i + 1;
@@ -272,7 +275,7 @@ void AesCtx::decrypt_block(&stack unsigned char block) {
     while (i < 4) {
         int j = 0;
         while (j < 4) {
-            unsafe { block[j*4+i] = state[i*4+j]; }
+            unsafe { block[i*4+j] = state[i*4+j]; }
             j = j + 1;
         }
         i = i + 1;

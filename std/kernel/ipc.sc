@@ -1,10 +1,11 @@
 // SafeC Standard Library — IPC Mailbox
 #pragma once
+#include <std/stddef.h>
 #include <std/kernel/ipc.h>
 
 namespace std {
 
-extern void* memcpy(void* dst, const void* src, unsigned long n);
+extern void* memcpy(void* dst, const void* src, size_t n);
 
 inline struct Mailbox mailbox_init(int owner_pid) {
     struct Mailbox mb;
@@ -15,7 +16,7 @@ inline struct Mailbox mailbox_init(int owner_pid) {
     return mb;
 }
 
-inline int Mailbox::send(int sender_pid, int type, const void* payload, unsigned long size) {
+inline int Mailbox::send(int sender_pid, int type, const ?&unsigned char payload, unsigned long size) {
     if (self.count >= 64) { return 0; } // full
     if (size > (unsigned long)256) { size = (unsigned long)256; } // truncate
 
@@ -23,8 +24,10 @@ inline int Mailbox::send(int sender_pid, int type, const void* payload, unsigned
     self.messages[idx].sender_pid = sender_pid;
     self.messages[idx].type       = type;
     self.messages[idx].size       = size;
-    if (size > (unsigned long)0 && payload != (void*)0) {
-        unsafe { memcpy((void*)self.messages[idx].payload, payload, size); }
+    if (payload.is_null()) { size = 0UL; }
+    self.messages[idx].size = size;
+    if (size > 0UL) {
+        unsafe { memcpy((void*)self.messages[idx].payload, (const void*)payload, size); }
     }
 
     self.head  = (self.head + 1) & 63;

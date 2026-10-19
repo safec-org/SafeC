@@ -22,6 +22,7 @@ private:
     char  advance();
     bool  atEnd() const { return pos_ >= src_.size(); }
     void  skipWhitespaceAndComments();
+    void  skipLineMarker();
     bool  skipLineComment();
     bool  skipBlockComment();
 

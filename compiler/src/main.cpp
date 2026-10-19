@@ -1,4 +1,6 @@
 #include "safec/Preprocessor.h"
+#include "llvm/TargetParser/Host.h"
+#include "llvm/TargetParser/Triple.h"
 #include "safec/Diagnostic.h"
 #include "safec/Lexer.h"
 #include "safec/Parser.h"
@@ -130,6 +132,62 @@ static llvm::cl::opt<std::string>
                        "this flag existed."),
         llvm::cl::init(""));
 
+static llvm::cl::opt<std::string>
+    TargetCpu("target-cpu", llvm::cl::desc("Target CPU name (default: the triple's generic CPU)"),
+              llvm::cl::init(""));
+static llvm::cl::opt<std::string>
+    TargetFeatures("target-features",
+        llvm::cl::desc("Target feature string, LLVM -mattr syntax (e.g. +e,+c)"),
+        llvm::cl::init(""));
+static llvm::cl::opt<std::string>
+    TargetAbi("target-abi", llvm::cl::desc("Target ABI name (e.g. ilp32e, lp64e)"),
+              llvm::cl::init(""));
+
+// ── Bare-metal target aliases ─────────────────────────────────────────────────
+// '--target=<alias>' picks a no-OS triple plus the CPU/feature/ABI settings
+// that pin down the exact ISA, and implies --freestanding. The clang flags
+// are what a later 'clang -c' of the emitted IR (safec's own object/archive
+// emission, safeguard, or a user's build) needs so it agrees with the
+// target-features/target-abi recorded in the module — RISC-V in particular
+// rejects an object whose -mabi differs from the module's 'target-abi' flag.
+struct BareMetalTarget {
+    const char *alias, *triple, *cpu, *features, *abi;
+    std::vector<std::string> clangFlags;
+};
+static const std::vector<BareMetalTarget> &bareMetalTargets() {
+    static const std::vector<BareMetalTarget> kTargets = {
+        {"x86",     "i686-unknown-none-elf",    "i686",       "",   "",       {}},
+        {"x86_64",  "x86_64-unknown-none-elf",  "x86-64",     "",   "",       {}},
+        {"aarch32", "armv7a-none-eabi",         "generic",    "",   "",       {"-mfloat-abi=soft"}},
+        {"aarch64", "aarch64-unknown-none-elf", "generic",    "",   "",       {}},
+        {"thumb",   "thumbv6m-none-eabi",       "cortex-m0",  "",   "",       {"-mcpu=cortex-m0", "-mfloat-abi=soft"}},
+        {"thumb2",  "thumbv7m-none-eabi",       "cortex-m3",  "",   "",       {"-mcpu=cortex-m3", "-mfloat-abi=soft"}},
+        // Cortex-M series by architecture profile.
+        {"arm-6m",  "thumbv6m-none-eabi",       "cortex-m0",  "",   "",       {"-mcpu=cortex-m0", "-mfloat-abi=soft"}},
+        {"arm-7m",  "thumbv7m-none-eabi",       "cortex-m3",  "",   "",       {"-mcpu=cortex-m3", "-mfloat-abi=soft"}},
+        {"arm-7em", "thumbv7em-none-eabi",      "cortex-m4",  "",   "",       {"-mcpu=cortex-m4", "-mfloat-abi=soft"}},
+        {"arm-8m",  "thumbv8m.main-none-eabi",  "cortex-m33", "",   "",       {"-mcpu=cortex-m33", "-mfloat-abi=soft"}},
+        {"rv32i",   "riscv32-unknown-elf",      "generic-rv32", "",   "ilp32",  {"-march=rv32i", "-mabi=ilp32"}},
+        {"rv32e",   "riscv32-unknown-elf",      "generic-rv32", "+e", "ilp32e", {"-march=rv32e", "-mabi=ilp32e"}},
+        {"rv64i",   "riscv64-unknown-elf",      "generic-rv64", "",   "lp64",   {"-march=rv64i", "-mabi=lp64"}},
+        {"rv64e",   "riscv64-unknown-elf",      "generic-rv64", "+e", "lp64e",  {"-march=rv64e", "-mabi=lp64e"}},
+    };
+    return kTargets;
+}
+static const BareMetalTarget *findBareMetalTarget(const std::string &name) {
+    for (auto &t : bareMetalTargets())
+        if (name == t.alias) return &t;
+    return nullptr;
+}
+// Extra clang flags for the resolved target (empty for plain triples).
+static std::vector<std::string> gTargetClangFlags;
+
+static llvm::cl::list<std::string>
+    Provides("provides", llvm::cl::CommaSeparated,
+        llvm::cl::desc("Functions the program defines in another translation unit "
+                       "(e.g. a bare-metal runtime's malloc,free): no freestanding warning"),
+        llvm::cl::value_desc("name,..."));
+
 // -I <dir> include paths
 static llvm::cl::list<std::string>
     IncludePaths("I", llvm::cl::desc("Add include search directory"),
@@ -222,6 +280,8 @@ static std::string compilerIdentity(const char *argv0) {
 // file.
 static std::string cacheKeyFlags() {
     return "target=" + TargetTriple.getValue() +
+           "|cpu=" + TargetCpu.getValue() + "|features=" + TargetFeatures.getValue() +
+           "|abi=" + TargetAbi.getValue() +
            "|dbg=" + DebugInfoLevel.getValue() +
            "|freestanding=" + (Freestanding ? "1" : "0") +
            "|opt=" + OptLevel.getValue() +
@@ -360,6 +420,7 @@ static bool linkBinary(const std::vector<std::string> &llPaths, const std::strin
             std::vector<std::string> compileArgs = { clang, "-c", llPath, "-o", std::string(objPath) };
             if (!TargetTriple.getValue().empty())
                 compileArgs.push_back("--target=" + TargetTriple.getValue());
+            for (auto &f : gTargetClangFlags) compileArgs.push_back(f);
             compileArgs.push_back(optFlag);
             if (runTool(clang, compileArgs, verbose) != 0) return false;
             objPaths.push_back(std::string(objPath));
@@ -377,6 +438,7 @@ static bool linkBinary(const std::vector<std::string> &llPaths, const std::strin
     args.push_back("-o"); args.push_back(outputPath); args.push_back(optFlag);
     if (!TargetTriple.getValue().empty())
         args.push_back("--target=" + TargetTriple.getValue());
+    for (auto &f : gTargetClangFlags) args.push_back(f);
     if (!ltoFlag.empty()) args.push_back(ltoFlag);
     if (Shared) args.push_back("-shared");
     for (auto &dir : LinkLibDirs) args.push_back("-L" + dir);
@@ -515,6 +577,18 @@ static int compileOneFile(const std::string &inputPath, const std::string &outpu
             ppOpts.cmdlineDefs["__linux__"] = "1";
         }
     }
+    // Pointer width of the target, so headers can define the C ABI's
+    // pointer-width types (size_t, uintptr_t, ...) correctly on 32-bit
+    // targets — SafeC's own 'long' stays 64-bit everywhere.
+    {
+        std::string triple = TargetTriple.getValue().empty()
+            ? llvm::sys::getDefaultTargetTriple() : TargetTriple.getValue();
+        llvm::Triple t(triple);
+        ppOpts.cmdlineDefs["__SIZEOF_POINTER__"] = t.isArch16Bit() ? "2" : t.isArch32Bit() ? "4" : "8";
+    }
+    // Lets headers offer C-style function-like macros only to translation
+    // units that can parse them, instead of being unusable in safe mode.
+    if (CompatPreprocessor) ppOpts.cmdlineDefs["__SAFEC_COMPAT_PREPROCESSOR__"] = "1";
     for (auto &d : IncludePaths) ppOpts.includePaths.push_back(d);
     for (auto &d : CmdlineDefs) {
         auto eq = d.find('=');
@@ -640,6 +714,12 @@ static int compileOneFile(const std::string &inputPath, const std::string &outpu
         if (Verbose) fprintf(stderr, "[safec] Running semantic analysis ...\n");
         safec::Sema sema(*tu, diag);
         if (Freestanding) sema.setFreestanding(true);
+        for (auto &n : Provides) sema.addProvidedFunction(n);
+        {
+            llvm::Triple t(TargetTriple.getValue().empty()
+                ? llvm::sys::getDefaultTargetTriple() : TargetTriple.getValue());
+            sema.setPointerBits(t.isArch16Bit() ? 16u : t.isArch32Bit() ? 32u : 64u);
+        }
         bool ok = sema.run();
         if (!ok || diag.hasErrors()) {
             fprintf(stderr, "Semantic analysis failed with %d error(s)\n",
@@ -672,7 +752,8 @@ static int compileOneFile(const std::string &inputPath, const std::string &outpu
     if (DebugInfoLevel == "lines") dbgLevel = safec::DebugLevel::Lines;
     else if (DebugInfoLevel == "full") dbgLevel = safec::DebugLevel::Full;
 
-    safec::CodeGen cg(ctx, inputPath, diag, dbgLevel, TargetTriple);
+    safec::CodeGen cg(ctx, inputPath, diag, dbgLevel, TargetTriple,
+                      TargetCpu, TargetFeatures, TargetAbi);
     if (Freestanding) cg.setFreestanding(true);
     auto mod = cg.generate(*tu);
 
@@ -780,6 +861,30 @@ int main(int argc, char **argv) {
             return 0;
         }
     }
+    // '--print-target-clang-flags [--target=<alias|triple>]': print, one per
+    // line, the clang flags that compile/link this target's emitted IR
+    // (also needs no input file, so it's scanned before option parsing).
+    // '--list-targets' prints the bare-metal aliases.
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--list-targets") == 0) {
+            for (auto &t : bareMetalTargets())
+                fprintf(stdout, "%-8s %s%s%s\n", t.alias, t.triple,
+                        *t.abi ? "  abi=" : "", t.abi);
+            return 0;
+        }
+        if (std::strcmp(argv[i], "--print-target-clang-flags") == 0) {
+            std::string tgt;
+            for (int j = 1; j < argc; ++j) {
+                if (std::strncmp(argv[j], "--target=", 9) == 0) tgt = argv[j] + 9;
+                else if (std::strcmp(argv[j], "--target") == 0 && j + 1 < argc) tgt = argv[j + 1];
+            }
+            if (tgt.empty()) return 0;
+            const BareMetalTarget *bm = findBareMetalTarget(tgt);
+            fprintf(stdout, "--target=%s\n", bm ? bm->triple : tgt.c_str());
+            if (bm) for (auto &f : bm->clangFlags) fprintf(stdout, "%s\n", f.c_str());
+            return 0;
+        }
+    }
 
     // All targets, not just native: --target lets a single safec binary
     // cross-generate for any ISA this LLVM was built with (this build has
@@ -795,6 +900,15 @@ int main(int argc, char **argv) {
     llvm::InitializeAllAsmParsers();
 
     llvm::cl::ParseCommandLineOptions(argc, argv, "SafeC compiler\n");
+
+    if (const BareMetalTarget *bm = findBareMetalTarget(TargetTriple.getValue())) {
+        TargetTriple = std::string(bm->triple);
+        if (TargetCpu.getValue().empty()) TargetCpu = std::string(bm->cpu);
+        if (TargetFeatures.getValue().empty()) TargetFeatures = std::string(bm->features);
+        if (TargetAbi.getValue().empty()) TargetAbi = std::string(bm->abi);
+        gTargetClangFlags = bm->clangFlags;
+        Freestanding = true;   // bare metal: no hosted runtime
+    }
 
     if (!EmitBin) {
         if (!LinkLibs.empty() || !LinkLibDirs.empty() || Shared || StaticLib ||

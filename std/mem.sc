@@ -1,20 +1,21 @@
 // SafeC Standard Library — Memory
 // Safe wrappers around malloc / free / realloc / mem* from libc.
 #pragma once
+#include <std/stddef.h>
 #include <std/mem.h>
 #include <std/stderr_compat.h>
 
 // ── Explicit extern declarations for libc memory functions ───────────────────
 namespace std {
 
-extern void* malloc(unsigned long size);
-extern void* calloc(unsigned long count, unsigned long size);
+extern void* malloc(size_t size);
+extern void* calloc(size_t count, size_t size);
 extern void  free(void* ptr);
-extern void* realloc(void* ptr, unsigned long new_size);
-extern void* memcpy(void* dst, const void* src, unsigned long n);
-extern void* memmove(void* dst, const void* src, unsigned long n);
-extern void* memset(void* ptr, int val, unsigned long n);
-extern int   memcmp(const void* a, const void* b, unsigned long n);
+extern void* realloc(void* ptr, size_t new_size);
+extern void* memcpy(void* dst, const void* src, size_t n);
+extern void* memmove(void* dst, const void* src, size_t n);
+extern void* memset(void* ptr, int val, size_t n);
+extern int   memcmp(const void* a, const void* b, size_t n);
 
 // Not '#include <std/panic.h>' — that header also defines function-like
 // macros (PANIC/PANIC_ASSERT) that error out in safe mode without
@@ -132,8 +133,16 @@ static void alloc_abort_(const char* msg) {
     unsafe { abort(); }
 }
 
+#ifndef __SAFEC_FREESTANDING__
 thread_local static unsigned long allocQuarantineRing_[64];
 thread_local static unsigned long allocQuarantineHead_ = (unsigned long)0;
+#else
+// Bare metal has no thread-local storage set up (and usually one core):
+// a plain static ring. On a multi-core freestanding system, serialize
+// alloc/dealloc yourself (or give each core its own allocator).
+static unsigned long allocQuarantineRing_[64];
+static unsigned long allocQuarantineHead_ = (unsigned long)0;
+#endif
 
 static void alloc_quarantine_push_(void* raw) {
     unsafe {
@@ -185,7 +194,7 @@ static void alloc_quarantine_push_(void* raw) {
 // checkable header) far longer than the ring's fixed global capacity did,
 // since capacity is now per-class rather than shared across every size in
 // the program. Blocks that overflow their class's cache (bucket already at
-// ALLOC_CACHE_SLOTS_PER_CLASS_) fall back to the pre-existing quarantine
+// its alloc_class_cap_) fall back to the pre-existing quarantine
 // ring exactly as before, so that safety net still catches the case this
 // cache can't hold.
 //
@@ -201,48 +210,65 @@ static void alloc_quarantine_push_(void* raw) {
 // no improvement (1.34x overhead, identical to the pre-cache baseline).
 // alloc_class_cap_ instead scales the cap down as block size goes up, so
 // each class retains roughly the same total *bytes* (up to
-// ALLOC_CACHE_MAX_SLOTS_ worth of the smallest class) rather than the same
+// 8192 slots of the smallest class) rather than the same
 // slot count — small, frequently-reused node sizes (the common case for
 // tree/list/graph-shaped data) get a deep cache; large rare allocations
 // get a shallow one. Re-measured after this change: overhead dropped from
 // 1.34x to within noise of raw malloc/free (see this file's own benchmark
 // history in benchmarks.md for the exact numbers).
+//
+// Classes step by 1.5x rather than 2x (16, 24, 32, 48, 64, 96, ... 1MB),
+// so a request is padded by at most a third instead of up to double: a
+// 24-byte list/tree node used to land in the 32-byte class and, with the
+// 16-byte header, a 64-byte malloc chunk — twice what the same node costs
+// in plain C, and that extra footprint showed up directly as cache misses
+// in node-heavy benchmarks (see benchmarks.md, "Collections"). Each
+// class's slots live in one flat array at a precomputed offset, sized by
+// the same bytes-not-slots budget as before (min(8192, 8MB / class
+// size), at least 8), which also trims the per-thread table from ~1.1MB
+// to ~0.96MB.
 #define ALLOC_CACHE_MIN_CLASS_       ((unsigned long)16)
-#define ALLOC_CACHE_NUM_CLASSES_     ((unsigned long)17)
-#define ALLOC_CACHE_MAX_SLOTS_       ((unsigned long)8192)
-#define ALLOC_CACHE_MAX_SLOTS_SHIFT_ ((unsigned long)13) // 1 << 13 == 8192
+#define ALLOC_CACHE_NUM_CLASSES_     ((unsigned long)33)
+#define ALLOC_CACHE_TOTAL_SLOTS_     125587
 #define ALLOC_CLASS_UNCACHED_        ((unsigned long)0xFFFFFFFFFFFFFFFF)
 
-thread_local static void*        allocCacheSlot_[17][8192];
-thread_local static unsigned long allocCacheCount_[17];
+static const unsigned long allocClassCap_[33] = { 8192UL, 8192UL, 8192UL, 8192UL, 8192UL, 8192UL, 8192UL, 8192UL, 8192UL, 8192UL, 8192UL, 8192UL, 8192UL, 5461UL, 4096UL, 2730UL, 2048UL, 1365UL, 1024UL, 682UL, 512UL, 341UL, 256UL, 170UL, 128UL, 85UL, 64UL, 42UL, 32UL, 21UL, 16UL, 10UL, 8UL };
+static const unsigned long allocClassOff_[33] = { 0UL, 8192UL, 16384UL, 24576UL, 32768UL, 40960UL, 49152UL, 57344UL, 65536UL, 73728UL, 81920UL, 90112UL, 98304UL, 106496UL, 111957UL, 116053UL, 118783UL, 120831UL, 122196UL, 123220UL, 123902UL, 124414UL, 124755UL, 125011UL, 125181UL, 125309UL, 125394UL, 125458UL, 125500UL, 125532UL, 125553UL, 125569UL, 125579UL };
+
+#ifndef __SAFEC_FREESTANDING__
+thread_local static void*         allocCacheSlot_[ALLOC_CACHE_TOTAL_SLOTS_];
+thread_local static unsigned long allocCacheCount_[33];
+#else
+// No size-class cache on bare metal: it needs TLS and ~1 MB of slots per
+// thread, which no MCU has. Every request goes straight to malloc().
+static void*        allocCacheSlot_[1];
+static unsigned long allocCacheCount_[1];
+#endif
 
 // Smallest class index whose byte size is >= `size`, or -1 if `size`
 // exceeds the largest cached class (1MB).
 static long alloc_size_class_(unsigned long size) {
-    unsigned long clsBytes = ALLOC_CACHE_MIN_CLASS_;
+#ifdef __SAFEC_FREESTANDING__
+    return -1L;   // uncached (see allocCacheSlot_ above)
+#endif
+    unsigned long lo = ALLOC_CACHE_MIN_CLASS_;   // even class: lo; odd class: lo * 3 / 2
     long idx = 0L;
-    while (clsBytes < size) {
-        if (idx >= (long)(ALLOC_CACHE_NUM_CLASSES_ - (unsigned long)1)) { return -1L; }
-        clsBytes = clsBytes << 1UL;
-        idx = idx + 1L;
+    while (idx < (long)ALLOC_CACHE_NUM_CLASSES_) {
+        if (size <= lo) { return idx; }
+        if (size <= lo + (lo >> 1UL)) { return idx + 1L; }
+        lo = lo << 1UL;
+        idx = idx + 2L;
     }
-    return idx;
+    return -1L;
 }
 
 static unsigned long alloc_class_bytes_(unsigned long idx) {
-    return ALLOC_CACHE_MIN_CLASS_ << idx;
+    unsigned long base = ALLOC_CACHE_MIN_CLASS_ << (idx >> 1UL);
+    return (idx & 1UL) != 0UL ? base + (base >> 1UL) : base;
 }
 
-// Slot cap for class `cls`: keeps each class's worst-case retained memory
-// within roughly the same ~8192-smallest-block budget (2^13 slots of the
-// 16-byte class == 128KB; a 1MB class gets floored at 8 slots == 8MB) by
-// shifting the cap down by exactly the same amount the class's own byte
-// size shifted up. Plain shifts, no division: cls is always in [0,16], so
-// (19 - cls) always lands in [3,19] before the clamp.
 static unsigned long alloc_class_cap_(unsigned long cls) {
-    unsigned long shift = (unsigned long)19 - cls;
-    if (shift > ALLOC_CACHE_MAX_SLOTS_SHIFT_) { shift = ALLOC_CACHE_MAX_SLOTS_SHIFT_; }
-    return (unsigned long)1 << shift;
+    unsafe { return allocClassCap_[cls]; }
 }
 
 // Allocate `size` bytes.  Returns NULL on failure; callers should check.
@@ -254,7 +280,7 @@ void* alloc(unsigned long size) {
             unsigned long cls = (unsigned long)clsSigned;
             if (allocCacheCount_[cls] > (unsigned long)0) {
                 allocCacheCount_[cls] = allocCacheCount_[cls] - (unsigned long)1;
-                void* raw = allocCacheSlot_[cls][allocCacheCount_[cls]];
+                void* raw = allocCacheSlot_[allocClassOff_[cls] + allocCacheCount_[cls]];
                 unsigned long* hdr = (unsigned long*)raw;
                 hdr[0] = ALLOC_LIVE_MAGIC_;
                 // hdr[1] already holds `cls` from this block's original
@@ -285,7 +311,7 @@ void* alloc_zeroed(unsigned long size) {
             unsigned long cls = (unsigned long)clsSigned;
             if (allocCacheCount_[cls] > (unsigned long)0) {
                 allocCacheCount_[cls] = allocCacheCount_[cls] - (unsigned long)1;
-                void* raw = allocCacheSlot_[cls][allocCacheCount_[cls]];
+                void* raw = allocCacheSlot_[allocClassOff_[cls] + allocCacheCount_[cls]];
                 unsigned long* hdr = (unsigned long*)raw;
                 hdr[0] = ALLOC_LIVE_MAGIC_;
                 void* payload = (void*)((unsigned long)raw + ALLOC_HDR_SIZE_);
@@ -329,7 +355,7 @@ void dealloc(void* ptr) {
         hdr[0] = ALLOC_FREED_MAGIC_;
         unsigned long cls = hdr[1];
         if (cls < ALLOC_CACHE_NUM_CLASSES_ && allocCacheCount_[cls] < alloc_class_cap_(cls)) {
-            allocCacheSlot_[cls][allocCacheCount_[cls]] = raw;
+            allocCacheSlot_[allocClassOff_[cls] + allocCacheCount_[cls]] = raw;
             allocCacheCount_[cls] = allocCacheCount_[cls] + (unsigned long)1;
             return;
         }

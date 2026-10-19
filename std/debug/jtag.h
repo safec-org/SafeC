@@ -34,6 +34,8 @@ void  itm_put32(unsigned char port, unsigned int word);
 void  itm_enable_port(unsigned char port);
 
 // ── Assert with debug break ───────────────────────────────────────────────────
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
 #define DBG_ASSERT(cond)  do { if (!(cond)) { debug_break(); } } while(0)
+#endif
 
 } // namespace std

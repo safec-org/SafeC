@@ -1,6 +1,7 @@
 // SafeC Standard Library — GUI backend: macOS (Cocoa via the Objective-C
 // runtime + Core Graphics). See gui.h for the portable API this implements.
 #pragma once
+#include <std/stddef.h>
 //
 // There is no Objective-C support in safec itself — every AppKit/Core
 // Graphics call here goes through the plain-C Objective-C runtime API
@@ -32,7 +33,8 @@
 
 #include <std/gui/gui.h>
 #include <std/gui/gui_draw.h>
-#include <std/mem.sc>
+#include <std/mem.h>
+extern void* memset(void* ptr, int val, size_t n);
 
 namespace std {
 

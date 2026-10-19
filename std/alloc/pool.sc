@@ -1,11 +1,12 @@
 // SafeC Standard Library — Pool Allocator
 #pragma once
+#include <std/stddef.h>
 #include <std/alloc/pool.h>
 #include <std/stderr_compat.h>
 
 namespace std {
 
-extern void* malloc(unsigned long size);
+extern void* malloc(size_t size);
 extern void  free(void* ptr);
 // Not '#include <std/panic.h>' (function-like macros need
 // --compat-preprocessor — see mem.sc's identical comment) and not an
@@ -25,9 +26,10 @@ inline unsigned long PoolAllocator::header_size_() const {
     return (unsigned long)24;
 }
 
-inline struct PoolAllocator pool_init(&heap void buffer, unsigned long cap) {
+inline struct PoolAllocator pool_init(&unsigned char buffer, unsigned long cap) {
     struct PoolAllocator a;
-    a.base = buffer;
+    unsafe { a.base = (&heap void)buffer; }
+    a.owned = 0;
     a.cap  = cap;
     unsigned long hdr = (unsigned long)24;
     unsafe {
@@ -58,6 +60,7 @@ inline struct PoolAllocator pool_new(unsigned long cap) {
     unsigned long allocCap = cap;
     if (allocCap < hdr) { allocCap = hdr; }
     unsafe { a.base = (&heap void)malloc(allocCap); }
+    a.owned = 1;
     a.cap = allocCap;
     unsafe {
         struct PoolBlock* first = (struct PoolBlock*)a.base;
@@ -148,7 +151,7 @@ inline unsigned long PoolAllocator::available() const {
 }
 
 inline void PoolAllocator::destroy() {
-    unsafe { free((void*)self.base); }
+    if (self.owned) { unsafe { free((void*)self.base); } }
     self.head = (void*)0;
     self.cap  = (unsigned long)0;
 }

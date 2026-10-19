@@ -11,17 +11,13 @@ struct BlockDevice {
     unsigned long  sector_count;   // total sectors on device
     unsigned long  sector_size;    // bytes per sector (usually 512)
 
-    // read_fn(ctx, lba, buf, count) → 0 on success
-    void*          read_fn;
-    // write_fn(ctx, lba, buf, count) → 0 on success
-    void*          write_fn;
-    // 'ctx' stays 'void*': BlockDevice is implemented by both the ext
-    // (std/fs/ext.sc) and FAT (std/fs/fat.sc) drivers, and a VFS can
-    // mount both at once — a generic 'BlockDevice<T>' would force every
-    // mounted device to share one driver-context type. See std/gui/
-    // gui_widget.h's Widget.userData for the fuller writeup, and
-    // std/dma.h's DmaChannel<T> for the case where a concrete T fits.
-    void*          ctx;            // driver context
+    // Driver callbacks and context, stored type-erased: one VFS can mount
+    // devices from different drivers at once, so BlockDevice itself isn't
+    // generic. block_device_new<T> (below) is the only writer and always
+    // pairs fn(&T, ...) callbacks with a &T context.
+    void*          read_fn;        // fn int(&T, lba, &unsigned char buf, count) → 0 on success
+    void*          write_fn;       // fn int(&T, lba, const &unsigned char buf, count)
+    void*          ctx;            // &T
 
     // Read `count` sectors starting at `lba` into `buf`.
     int  read(unsigned long lba, &stack unsigned char buf, unsigned long count);
@@ -32,5 +28,20 @@ struct BlockDevice {
     // Is the device valid / initialised?
     int  valid() const;
 };
+
+generic<T>
+struct BlockDevice block_device_new(&T ctx, unsigned long sector_count, unsigned long sector_size,
+                                    fn int(&T, unsigned long, &unsigned char, unsigned long) read,
+                                    fn int(&T, unsigned long, const &unsigned char, unsigned long) write) {
+    struct BlockDevice dev;
+    dev.sector_count = sector_count;
+    dev.sector_size  = sector_size;
+    unsafe {
+        dev.read_fn  = (void*)read;
+        dev.write_fn = (void*)write;
+        dev.ctx      = (void*)ctx;
+    }
+    return dev;
+}
 
 } // namespace std

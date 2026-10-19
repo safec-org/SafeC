@@ -1,17 +1,18 @@
 // SafeC Standard Library — tmpfs Implementation
 #pragma once
+#include <std/stddef.h>
 #include <std/fs/tmpfs.h>
 
 namespace std {
 
-extern void* memset(void* p, int v, unsigned long n);
-extern void* memcpy(void* d, const void* s, unsigned long n);
+extern void* memset(void* p, int v, size_t n);
+extern void* memcpy(void* d, const void* s, size_t n);
 extern int   strcmp(const char* a, const char* b);
-extern int   strncmp(const char* a, const char* b, unsigned long n);
-extern unsigned long strlen(const char* s);
-extern void* strncpy(char* d, const char* s, unsigned long n);
+extern int   strncmp(const char* a, const char* b, size_t n);
+extern size_t strlen(const char* s);
+extern void* strncpy(char* d, const char* s, size_t n);
 
-inline void tmpfs_init(&stack TmpfsCtx ctx) {
+inline void tmpfs_init(&TmpfsCtx ctx) {
     unsafe { memset((void*)ctx, 0, sizeof(struct TmpfsCtx)); }
     // Create root inode at index 0.
     ctx.inodes[0].used   = 1;

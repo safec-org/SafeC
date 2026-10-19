@@ -2,6 +2,7 @@
 // Variable-size first-fit allocator with coalescing on free.
 // Each allocation is preceded by a PoolBlock header.
 #pragma once
+#include <std/mem.h>
 
 namespace std {
 
@@ -13,6 +14,7 @@ struct PoolBlock {
 
 struct PoolAllocator {
     &heap void    base;       // heap-backed managed memory
+    int           owned;   // 1 if pool_new allocated base (destroy() frees it)
     unsigned long cap;        // total buffer size
     void*         head;       // first PoolBlock* in the list (raw — unsafe only)
 
@@ -33,9 +35,20 @@ struct PoolAllocator {
 };
 
 // Initialize over a user-provided heap buffer.
-struct PoolAllocator pool_init(&heap void buffer, unsigned long cap);
+struct PoolAllocator pool_init(&unsigned char buffer, unsigned long cap);
 
 // Create a heap-backed pool allocator.
 struct PoolAllocator pool_new(unsigned long cap);
+
+// ── Typed allocation (recommended) ───────────────────────────────────────────
+generic<T>
+?&heap T pool_alloc_t(&PoolAllocator p) {
+    unsafe { return (?&heap T)p.alloc(sizeof(T)); }
+}
+
+generic<T>
+void pool_free_t(&PoolAllocator p, &heap T obj) {
+    unsafe { p.dealloc((void*)obj); }
+}
 
 } // namespace std

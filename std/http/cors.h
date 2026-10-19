@@ -6,7 +6,7 @@
 // header comment for the same constraint) — call these directly from your
 // own handler instead:
 //
-//   struct HttpResponse handle(struct HttpRequest* req) {
+//   struct HttpResponse handle(&HttpRequest req) {
 //       if (cors_is_preflight(req)) return cors_preflight_response("*", "GET, POST, OPTIONS", "Content-Type, Authorization");
 //       struct HttpResponse resp = ...;
 //       cors_apply_headers(&resp, "*");

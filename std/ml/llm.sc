@@ -2,19 +2,19 @@
 #pragma once
 #include <std/ml/llm.h>
 #include <std/serial/value.h>
-#include <std/serial/value.sc>
+#include <std/serial/value.h>
 #include <std/serial/json.h>
-#include <std/serial/json.sc>
+#include <std/serial/json.h>
 #include <std/collections/vec.h>
-#include <std/collections/vec.sc>
+#include <std/collections/vec.h>
 #include <std/collections/string.h>
-#include <std/collections/string.sc>
+#include <std/collections/string.h>
 #include <std/http/http.h>
-#include <std/http/http.sc>
-#include <std/mem.sc>
-#include <std/fmt.sc>
-#include <std/convert.sc>
-#include <std/str.sc>
+#include <std/http/http.h>
+#include <std/mem.h>
+#include <std/fmt.h>
+#include <std/convert.h>
+#include <std/str.h>
 
 namespace std {
 
@@ -30,7 +30,7 @@ struct LlmClient llm_client_new(const char* host, unsigned short port,
     return c;
 }
 
-struct String llm_chat(&LlmClient client, &Vec messages, int* ok) {
+struct String llm_chat(&LlmClient client, &Vec<struct LlmMessage> messages, int* ok) {
     struct Value req;
     unsafe {
         req = value_object();
@@ -39,7 +39,7 @@ struct String llm_chat(&LlmClient client, &Vec messages, int* ok) {
         unsigned long n = messages.length();
         unsigned long i = 0UL;
         while (i < n) {
-            struct LlmMessage* m = (struct LlmMessage*)messages.get_raw(i);
+            struct LlmMessage* m = messages.at(i);
             struct Value msgObj = value_object();
             value_object_set(&msgObj, "role", value_string(m->role.as_ptr()));
             value_object_set(&msgObj, "content", value_string(m->content.as_ptr()));
@@ -146,12 +146,12 @@ struct String prompt_template_render(const char* tmpl, const &Value vars) {
 
 struct Chain chain_new() {
     struct Chain c;
-    unsafe { c.steps = vec_new(sizeof(ChainStepFn)); }
+    unsafe { c.steps = vec_new(); }
     return c;
 }
 
 void chain_add_step(&Chain c, ChainStepFn step) {
-    unsafe { c.steps.push((const void*)&step); }
+    unsafe { c.steps.push(step); }
 }
 
 struct Value chain_run(&Chain c, const &Value input) {
@@ -162,7 +162,7 @@ struct Value chain_run(&Chain c, const &Value input) {
     unsigned long i = 0UL;
     while (i < n) {
         unsafe {
-            ChainStepFn* fp = (ChainStepFn*)c.steps.get_raw(i);
+            ChainStepFn* fp = c.steps.at(i);
             struct Value next = (*fp)(&current);
             value_free(&current);
             current = next;
@@ -180,7 +180,7 @@ void chain_free(&Chain c) {
 
 struct Graph graph_new(const char* entryNode) {
     struct Graph g;
-    unsafe { g.nodes = vec_new(sizeof(struct GraphNode)); }
+    unsafe { g.nodes = vec_new(); }
     g.entryNode = string_from(entryNode);
     return g;
 }
@@ -192,7 +192,7 @@ static void __graph_add(&Graph g, const char* name, GraphNodeFn nodeFn,
     node.nodeFn = nodeFn;
     node.router = router;
     node.nextNode = string_from(nextNode);
-    unsafe { g.nodes.push((const void*)&node); }
+    unsafe { g.nodes.push(node); }
 }
 
 void graph_add_node(&Graph g, const char* name, GraphNodeFn nodeFn, const char* nextNode) {
@@ -209,7 +209,7 @@ static struct GraphNode* __graph_find(&Graph g, const char* name) {
     unsigned long i = 0UL;
     while (i < n) {
         unsafe {
-            struct GraphNode* node = (struct GraphNode*)g.nodes.get_raw(i);
+            struct GraphNode* node = g.nodes.at(i);
             if (node->name.eq_cstr(name)) return node;
         }
         i = i + 1UL;
@@ -258,7 +258,7 @@ void graph_free(&Graph g) {
     unsigned long i = 0UL;
     while (i < n) {
         unsafe {
-            struct GraphNode* node = (struct GraphNode*)g.nodes.get_raw(i);
+            struct GraphNode* node = g.nodes.at(i);
             node->name.free();
             node->nextNode.free();
         }
@@ -272,7 +272,7 @@ void graph_free(&Graph g) {
 
 struct Tracer tracer_new() {
     struct Tracer t;
-    unsafe { t.events = vec_new(sizeof(struct TraceEvent)); }
+    unsafe { t.events = vec_new(); }
     return t;
 }
 
@@ -282,7 +282,7 @@ void tracer_record(&Tracer t, const char* name, const &Value input,
     ev.name = string_from(name);
     unsafe { ev.inputJson = value_to_json(input); ev.outputJson = value_to_json(output); }
     ev.durationMs = durationMs;
-    unsafe { t.events.push((const void*)&ev); }
+    unsafe { t.events.push(ev); }
 }
 
 struct String tracer_to_json(const &Tracer t) {
@@ -292,7 +292,7 @@ struct String tracer_to_json(const &Tracer t) {
         unsigned long n = t.events.length();
         unsigned long i = 0UL;
         while (i < n) {
-            struct TraceEvent* ev = (struct TraceEvent*)t.events.get_raw(i);
+            struct TraceEvent* ev = t.events.at(i);
             if (i > 0UL) out.push(",");
             out.push("{\"name\":\"");
             out.push(ev->name.as_ptr());
@@ -316,7 +316,7 @@ void tracer_free(&Tracer t) {
     unsigned long i = 0UL;
     while (i < n) {
         unsafe {
-            struct TraceEvent* ev = (struct TraceEvent*)t.events.get_raw(i);
+            struct TraceEvent* ev = t.events.at(i);
             ev->name.free();
             ev->inputJson.free();
             ev->outputJson.free();

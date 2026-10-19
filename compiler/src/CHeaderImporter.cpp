@@ -297,6 +297,11 @@ std::string CHeaderImporter::buildDeclarations(const std::string &jsonText) {
 
         // Skip typedefs whose underlying type is a function pointer / block.
         if (hasFunctionPointer(underlying)) continue;
+        // ...and plain function *types* ('typedef __ssize_t
+        // cookie_read_function_t (void *, char *, size_t);' in glibc's
+        // <stdio.h>): no '(*' to catch above, still not expressible as a
+        // SafeC typedef.
+        if (underlying.find('(') != std::string::npos) continue;
 
         // Skip array typedefs (e.g. "unsigned char [16]", "struct T [1]").
         // SafeC typedef syntax does not support array dimensions on the base.

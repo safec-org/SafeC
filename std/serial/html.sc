@@ -1,10 +1,10 @@
 // SafeC Standard Library — HTML serialization implementation (see html.h)
 #pragma once
 #include <std/serial/html.h>
-#include <std/serial/value.sc>
-#include <std/collections/string.sc>
-#include <std/fmt.sc>
-#include <std/convert.sc>
+#include <std/serial/value.h>
+#include <std/collections/string.h>
+#include <std/fmt.h>
+#include <std/convert.h>
 
 namespace std {
 
@@ -91,7 +91,7 @@ void html_write(const &Value v, &String out) {
         unsigned long i = 0UL;
         while (i < n) {
             struct Value* elem;
-            unsafe { elem = (struct Value*)v.arr_val.get_raw(i); }
+            unsafe { elem = v.arr_val.at(i); }
             unsafe { out.push("<li>"); }
             html_write(elem, out);
             unsafe { out.push("</li>"); }
@@ -105,7 +105,7 @@ void html_write(const &Value v, &String out) {
         unsigned long i = 0UL;
         while (i < n) {
             struct ObjectEntry* e;
-            unsafe { e = (struct ObjectEntry*)v.obj_val.get_raw(i); }
+            unsafe { e = v.obj_val.at(i); }
             const char* key;
             unsafe { key = (const char*)e->key; }
             struct Value* val;

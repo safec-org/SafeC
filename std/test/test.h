@@ -3,7 +3,7 @@
 //
 // SafeC usage (no function-like macros needed):
 //   struct TestSuite t = test_suite_init();
-//   t.add("addition works", (void*)my_test);
+//   t.add("addition works", my_test);
 //   t.run();
 //   return t.all_passed() ? 0 : 1;
 //
@@ -34,29 +34,46 @@ void test_assert_eq_u(unsigned long long a, unsigned long long b,
 void test_assert_eq_s(const char* a, const char* b, const char* desc,
                       const char* file, int line);
 
-// Assert a pointer is NULL.
-void test_assert_null(const void* p, const char* desc,
-                      const char* file, int line);
+// Assert a nullable reference is null / not null.
+generic<T>
+void test_assert_null(const ?&T p, const char* desc, const char* file, int line) {
+    test_assert_true(p.is_null(), desc, file, line);
+}
 
-// Assert a pointer is not NULL.
-void test_assert_not_null(const void* p, const char* desc,
-                           const char* file, int line);
+generic<T>
+void test_assert_not_null(const ?&T p, const char* desc, const char* file, int line) {
+    test_assert_true(!p.is_null(), desc, file, line);
+}
 
 // ── C-compatible convenience macros ───────────────────────────────────────────
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
 #define ASSERT_TRUE(e)        test_assert_true((e)!=0, #e, __FILE__, __LINE__)
+#endif
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
 #define ASSERT_FALSE(e)       test_assert_true((e)==0, "!" #e, __FILE__, __LINE__)
+#endif
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
 #define ASSERT_EQ(a,b)        test_assert_eq_i((long long)(a),(long long)(b),\
                                   #a " == " #b, __FILE__, __LINE__)
+#endif
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
 #define ASSERT_NE(a,b)        test_assert_true((a)!=(b), #a " != " #b, __FILE__, __LINE__)
-#define ASSERT_NULL(p)        test_assert_null((const void*)(p), #p, __FILE__, __LINE__)
-#define ASSERT_NOT_NULL(p)    test_assert_not_null((const void*)(p), #p, __FILE__, __LINE__)
+#endif
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
+#define ASSERT_NULL(p)        test_assert_null((p), #p, __FILE__, __LINE__)
+#endif
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
+#define ASSERT_NOT_NULL(p)    test_assert_not_null((p), #p, __FILE__, __LINE__)
+#endif
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
 #define ASSERT_STR_EQ(a,b)    test_assert_eq_s((a),(b), #a " == " #b, __FILE__, __LINE__)
+#endif
 
 // ── TestCase ──────────────────────────────────────────────────────────────────
 
 struct TestCase {
     char        name[TEST_NAME_MAX];
-    void*       func;          // void (*func)(void)
+    fn void()   func;
     int         result;      // 1 = passed, 0 = failed, -1 = not run yet
     char        fail_expr[128];
     char        fail_file[128];
@@ -71,8 +88,8 @@ struct TestSuite {
     int passed;
     int failed;
 
-    // Register a test case.  func signature: void func(void).
-    void add(const char* name, void* func);
+    // Register a test case.
+    void add(const char* name, fn void() func);
 
     // Run all registered tests, print each result, update passed/failed.
     void run();

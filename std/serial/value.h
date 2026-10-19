@@ -51,8 +51,8 @@ struct Value {
     int          bool_val;  // VAL_BOOL
     ?&heap char  str_val;   // VAL_STRING — heap-allocated, NUL-terminated, owned;
                              // empty (null) for every other 'kind'
-    struct Vec   arr_val;   // VAL_ARRAY  — elements are 'struct Value' by value
-    struct Vec   obj_val;   // VAL_OBJECT — elements are 'struct ObjectEntry' by value
+    struct Vec<struct Value>       arr_val;   // VAL_ARRAY  — elements by value
+    struct Vec<struct ObjectEntry> obj_val;   // VAL_OBJECT — key/value entries by value
 
     int kind_of() const;
     int is_null() const;

@@ -17,6 +17,20 @@ TypePtr substituteType(const TypePtr &ty, const TypeSubst &subs) {
     // converts it for param/return types but not for body-level cast targets).
     case TypeKind::Struct: {
         auto &st = static_cast<const StructType &>(*ty);
+        // 'struct Vec<T>' inside generic code: substitute its type arguments
+        // (Sema::resolveType then monomorphizes the result).
+        if (!st.typeArgs.empty()) {
+            bool changed = false;
+            std::vector<TypePtr> na;
+            for (auto &a : st.typeArgs) {
+                na.push_back(substituteType(a, subs));
+                if (na.back() != a) changed = true;
+            }
+            if (!changed) return ty;
+            auto nt = std::make_shared<StructType>(st.name, st.isUnion);
+            nt->typeArgs = std::move(na);
+            return nt;
+        }
         if (!st.isDefined) {
             auto it = subs.find(st.name);
             if (it != subs.end()) return it->second;
@@ -49,6 +63,21 @@ TypePtr substituteType(const TypePtr &ty, const TypeSubst &subs) {
             if (np.back() != p) changed = true;
         }
         return changed ? makeFunction(nr, std::move(np), ft.variadic) : ty;
+    }
+    case TypeKind::Optional: {
+        auto &ot = static_cast<const OptionalType &>(*ty);
+        auto ni = substituteType(ot.inner, subs);
+        return (ni == ot.inner) ? ty : makeOptional(ni);
+    }
+    case TypeKind::Slice: {
+        auto &sl = static_cast<const SliceType &>(*ty);
+        auto ne = substituteType(sl.element, subs);
+        return (ne == sl.element) ? ty : makeSlice(ne);
+    }
+    case TypeKind::Vector: {
+        auto &vt = static_cast<const VectorType &>(*ty);
+        auto ne = substituteType(vt.element, subs);
+        return (ne == vt.element) ? ty : makeVector(ne, vt.width);
     }
     case TypeKind::Tuple: {
         auto &tt = static_cast<const TupleType &>(*ty);
@@ -90,9 +119,15 @@ static ExprPtr cloneExprImpl(const Expr *ep, const TypeSubst &subs) {
     };
 
     switch (e.kind) {
-    case ExprKind::IntLit:
-        return fix(std::make_unique<IntLitExpr>(
-            static_cast<const IntLitExpr &>(e).value, e.loc));
+    case ExprKind::IntLit: {
+        // Keep the suffix flags: without them '2UL' in a generic body
+        // re-types as plain 'int' after monomorphization.
+        auto &il = static_cast<const IntLitExpr &>(e);
+        auto c = std::make_unique<IntLitExpr>(il.value, e.loc);
+        c->isLongLong = il.isLongLong;
+        c->isUnsigned = il.isUnsigned;
+        return fix(std::move(c));
+    }
     case ExprKind::FloatLit:
         return fix(std::make_unique<FloatLitExpr>(
             static_cast<const FloatLitExpr &>(e).value, e.loc));
@@ -123,11 +158,13 @@ static ExprPtr cloneExprImpl(const Expr *ep, const TypeSubst &subs) {
     }
     case ExprKind::Binary: {
         auto &be = static_cast<const BinaryExpr &>(e);
-        return fix(std::make_unique<BinaryExpr>(
+        auto c = std::make_unique<BinaryExpr>(
             be.op,
             cloneExprImpl(be.left.get(), subs),
             cloneExprImpl(be.right.get(), subs),
-            be.loc));
+            be.loc);
+        c->parenComma = be.parenComma;
+        return fix(std::move(c));
     }
     case ExprKind::Ternary: {
         auto &te = static_cast<const TernaryExpr &>(e);

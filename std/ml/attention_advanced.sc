@@ -1,6 +1,7 @@
 // SafeC Standard Library — Advanced attention implementation (see
 // attention_advanced.h).
 #pragma once
+#include <std/stddef.h>
 #include <std/ml/attention_advanced.h>
 #include <std/ml/tensor.h>
 #include <std/ml/attention.h>
@@ -8,7 +9,7 @@
 
 namespace std {
 
-extern void* malloc(unsigned long size);
+extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
 // ── MLA / EG-MLA ─────────────────────────────────────────────────────────────

@@ -103,9 +103,9 @@ unsigned int net_ip4(unsigned char a, unsigned char b,
 
 // ── PacketBuf ─────────────────────────────────────────────────────────────────
 
-inline void* PacketBuf::at(unsigned long offset) {
-    unsafe { return (void*)((unsigned long)(unsigned char*)self.data + offset); }
-    return (void*)0;
+inline ?&unsigned char PacketBuf::at(unsigned long offset) {
+    if (offset >= (unsigned long)NET_MTU) return null;
+    unsafe { return (?&unsigned char)&self.data[offset]; }
 }
 
 inline void PacketBuf::reset() {

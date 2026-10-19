@@ -26,11 +26,11 @@
 namespace std {
 
 struct DhcpLease {
-    unsigned int  your_ip;       // offered/assigned IPv4 (network order)
-    unsigned int  server_ip;     // DHCP server IPv4 (network order)
-    unsigned int  gateway;       // default gateway (network order)
-    unsigned int  subnet_mask;   // subnet mask (network order)
-    unsigned int  dns;           // DNS server (network order)
+    unsigned int  your_ip;       // offered/assigned IPv4 (numeric form, see net_ip4)
+    unsigned int  server_ip;     // DHCP server IPv4 (numeric form, see net_ip4)
+    unsigned int  gateway;       // default gateway (numeric form, see net_ip4)
+    unsigned int  subnet_mask;   // subnet mask (numeric form, see net_ip4)
+    unsigned int  dns;           // DNS server (numeric form, see net_ip4)
     unsigned int  lease_secs;    // lease duration in seconds
 };
 

@@ -1,37 +1,98 @@
 #pragma once
-// SafeC Standard Library — Stack (LIFO)
-// Backed by a growing array. O(1) amortized push/pop.
+// SafeC Standard Library — Stack<T> (LIFO)
+//
+//   struct Stack<int> s = std::stack_new();
+//   s.push(1); s.push(2);
+//   ?int top = s.pop();      // 2
+//   s.free();
+//
+// Backed by one growing heap buffer: O(1) amortized push/pop. peek() hands
+// out a '?&T' into that buffer, valid until the next push()/free().
+#include <std/mem.h>
 
 namespace std {
 
+generic<T>
 struct Stack {
-    void*         data;
+    ?&heap T      data;
     unsigned long top;       // number of elements
     unsigned long cap;
-    unsigned long elem_size;
+
+    int           push(T value);   // 0 on OOM
+    ?T            pop();           // null if empty
+    ?&T           peek() const;    // null if empty
+    unsigned long length() const;
+    int           is_empty() const;
+    void          clear();
+    int           reserve(unsigned long n);
+    void          free();
 };
 
-// ── Lifecycle ─────────────────────────────────────────────────────────────────
-struct Stack stack_new(unsigned long elem_size);
-struct Stack stack_with_cap(unsigned long elem_size, unsigned long cap);
-void         stack_free(&Stack s);
-
-// ── Core operations ───────────────────────────────────────────────────────────
-int           stack_push(&Stack s, const void* elem);  // returns 1 on success
-int           stack_pop(&Stack s, void* out);          // returns 0 if empty
-void*         stack_peek(&Stack s);                    // NULL if empty
-unsigned long stack_len(&Stack s);
-int           stack_is_empty(&Stack s);
-void          stack_clear(&Stack s);
-
-// ── Typed generic wrappers ────────────────────────────────────────────────────
 generic<T>
-int stack_push_t(&Stack s, T val);
+struct Stack<T> stack_new() {
+    struct Stack<T> s;
+    s.data = null;
+    s.top = 0UL;
+    s.cap = 0UL;
+    return s;
+}
 
 generic<T>
-T* stack_peek_t(&Stack s);
+struct Stack<T> stack_with_cap(unsigned long cap) {
+    struct Stack<T> s = stack_new();
+    s.reserve(cap);
+    return s;
+}
 
 generic<T>
-int stack_pop_t(&Stack s, T* out);
+int Stack::reserve(unsigned long n) {
+    if (n <= self.cap) return 1;
+    ?&heap T grown = null;
+    unsafe { grown = (?&heap T)realloc_buf((void*)self.data, checked_mul_size(n, sizeof(T))); }
+    if (grown.is_null()) return 0;
+    self.data = grown;
+    self.cap = n;
+    return 1;
+}
+
+generic<T>
+int Stack::push(T value) {
+    if (self.top == self.cap) {
+        if (!self.reserve(self.cap < 8UL ? 8UL : self.cap * 2UL)) return 0;
+    }
+    unsafe { self.data[self.top] = value; }
+    self.top = self.top + 1UL;
+    return 1;
+}
+
+generic<T>
+?T Stack::pop() {
+    if (self.top == 0UL) return null;
+    self.top = self.top - 1UL;
+    unsafe { return self.data[self.top]; }
+}
+
+generic<T>
+?&T Stack::peek() const {
+    if (self.top == 0UL) return null;
+    unsafe { return (?&T)&self.data[self.top - 1UL]; }
+}
+
+generic<T>
+unsigned long Stack::length() const { return self.top; }
+
+generic<T>
+int Stack::is_empty() const { return self.top == 0UL; }
+
+generic<T>
+void Stack::clear() { self.top = 0UL; }
+
+generic<T>
+void Stack::free() {
+    unsafe { dealloc((void*)self.data); }
+    self.data = null;
+    self.top = 0UL;
+    self.cap = 0UL;
+}
 
 } // namespace std

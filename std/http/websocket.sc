@@ -1,27 +1,28 @@
 // SafeC Standard Library — WebSocket implementation (see websocket.h)
 #pragma once
+#include <std/stddef.h>
 #include <std/http/websocket.h>
 #include <std/http/http.h>
-#include <std/collections/string.sc>
-#include <std/mem.sc>
-#include <std/fmt.sc>
-#include <std/convert.sc>
-#include <std/str.sc>
+#include <std/collections/string.h>
+#include <std/mem.h>
+#include <std/fmt.h>
+#include <std/convert.h>
+#include <std/str.h>
 #include <std/sched/io_nb.h>
 #include <std/crypto/sha1.h>
-#include <std/crypto/sha1.sc>
+#include <std/crypto/sha1.h>
 #include <std/crypto/rng.h>
-#include <std/crypto/rng.sc>
+#include <std/crypto/rng.h>
 #include <std/encoding/base64.h>
-#include <std/encoding/base64.sc>
+#include <std/encoding/base64.h>
 // See websocket.h's top comment: a std/sched/io_nb_*.sc backend and
 // std/http/http.sc must both already be included by the caller before this
 // file (http.sc supplies http_resolve_host/http_header_get, reused below).
 
 namespace std {
 
-extern int read(int fd, void* buf, unsigned long count);
-extern long write(int fd, const void* buf, unsigned long count);
+extern ssize_t read(int fd, void* buf, size_t count);
+extern ssize_t write(int fd, const void* buf, size_t count);
 extern int close(int fd);
 
 void WsMessage::free() {
@@ -118,7 +119,7 @@ struct WsConn ws_connect(const char* host, unsigned short port,
         if (!rngOk) {
             good = 0;
         } else {
-            unsafe { rng.fill(keyRaw, 16UL); }
+            unsafe { rng.fill(&keyRaw[0], 16UL); }
             struct String encoded = base64_encode(keyRaw, 16UL);
             keyB64.free();
             keyB64 = encoded;
@@ -269,7 +270,7 @@ static int ws_write_frame_(struct WsConn* conn, int opcode,
         int rngOk;
         unsafe { rngOk = rng_init(&rng); }
         if (!rngOk) { return 0; }
-        unsafe { rng.fill(maskKey, 4UL); }
+        unsafe { rng.fill(&maskKey[0], 4UL); }
         if (!ws_write_all_(fd, (const char*)maskKey, 4UL)) { return 0; }
 
         if (len > 0UL) {

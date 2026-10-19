@@ -2,20 +2,20 @@
 #pragma once
 #include <std/http/jwt.h>
 #include <std/crypto/hmac.h>
-#include <std/crypto/hmac.sc>
+#include <std/crypto/hmac.h>
 #include <std/encoding/base64.h>
-#include <std/encoding/base64.sc>
+#include <std/encoding/base64.h>
 #include <std/serial/value.h>
-#include <std/serial/value.sc>
+#include <std/serial/value.h>
 #include <std/serial/json.h>
-#include <std/serial/json.sc>
+#include <std/serial/json.h>
 #include <std/collections/string.h>
-#include <std/collections/string.sc>
+#include <std/collections/string.h>
 #include <std/collections/vec.h>
-#include <std/collections/vec.sc>
-#include <std/mem.sc>
+#include <std/collections/vec.h>
+#include <std/mem.h>
 #include <std/str.h>
-#include <std/str.sc>
+#include <std/str.h>
 
 namespace std {
 
@@ -31,14 +31,14 @@ static struct String __b64url_encode(const unsigned char* data, unsigned long le
     return s;
 }
 
-static struct Vec __b64url_decode(const char* s, int* ok) {
+static struct Vec<unsigned char> __b64url_decode(const char* s, int* ok) {
     struct String padded = string_from(s);
     unsafe {
         padded.replace_char('-', '+');
         padded.replace_char('_', '/');
         while (padded.length() % 4UL != 0UL) { padded.push_char('='); }
     }
-    struct Vec out;
+    struct Vec<unsigned char> out;
     unsafe { out = base64_decode(padded.as_ptr(), ok); }
     unsafe { padded.free(); }
     return out;
@@ -130,7 +130,7 @@ struct Value jwt_verify(const char* token, const char* secret, int* ok) {
     // signs with or trusts; a token's own claim to use anything else
     // (including "none") is rejected, not honored.
     int headerOk;
-    struct Vec headerBytes = __b64url_decode(headerB64.as_ptr(), &headerOk);
+    struct Vec<unsigned char> headerBytes = __b64url_decode(headerB64.as_ptr(), &headerOk);
     int headerValid = 0;
     if (headerOk) {
         struct String headerJson;
@@ -164,7 +164,7 @@ struct Value jwt_verify(const char* token, const char* secret, int* ok) {
     struct Value result = value_null();
     if (headerValid && sigMatch) {
         int payloadOk;
-        struct Vec payloadBytes = __b64url_decode(payloadB64.as_ptr(), &payloadOk);
+        struct Vec<unsigned char> payloadBytes = __b64url_decode(payloadB64.as_ptr(), &payloadOk);
         if (payloadOk) {
             struct String payloadJson;
             unsafe { payloadJson = string_from_n((const char*)payloadBytes.data, payloadBytes.len); }

@@ -1,11 +1,12 @@
 // SafeC Standard Library — BLAS-accelerated Tensor matmul implementation
 // (see tensor_blas.h).
 #pragma once
+#include <std/stddef.h>
 #include <std/ml/tensor_blas.h>
 
 namespace std {
 
-extern void* malloc(unsigned long size);
+extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
 // Standard CBLAS C ABI (Accelerate, OpenBLAS, and MKL's cblas_* entry

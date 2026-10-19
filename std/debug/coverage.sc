@@ -4,6 +4,10 @@
 
 namespace std {
 
+// Definitions of the globals coverage.h declares extern.
+struct Coverage coverage;
+
+
 extern int printf(const char* fmt, ...);
 
 // ── Global coverage instance ──────────────────────────────────────────────────

@@ -11,10 +11,10 @@
 #pragma once
 #include <std/ml/diffusion.h>
 #include <std/ml/tensor.h>
-#include <std/ml/tensor.sc>
+#include <std/ml/tensor.h>
 #include <std/math.h>
-#include <std/math.sc>
-#include <std/mem.sc>
+#include <std/math.h>
+#include <std/mem.h>
 
 namespace std {
 

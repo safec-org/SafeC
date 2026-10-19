@@ -1,16 +1,17 @@
 // SafeC Standard Library — JSON serialization implementation (see json.h)
 #pragma once
 #include <std/serial/json.h>
-#include <std/serial/value.sc>
-#include <std/collections/string.sc>
-#include <std/mem.sc>
+#include <std/serial/value.h>
+#include <std/collections/string.h>
+#include <std/mem.h>
 // String::push_int/push_float/parse_int/parse_float (both used heavily
 // below) are declared in string.h but only *defined* in these two files —
 // string.sc itself doesn't pull them in (see std/collections/string.sc's
 // own includes), so anything that actually calls them, like this file,
 // needs to.
-#include <std/fmt.sc>
-#include <std/convert.sc>
+#include <std/fmt.h>
+#include <std/convert.h>
+#include <std/encoding/utf8.h>
 
 namespace std {
 
@@ -38,7 +39,7 @@ static void json_append_escaped_(&String out, const char* s) {
         char c;
         unsafe { c = s[i]; }
         if (c == (char)0) { break; }
-        if (c == '"' || c == '\\' || c == '\n' || c == '\r' || c == '\t' || (int)c < 32) {
+        if (c == '"' || c == '\\' || c == '\n' || c == '\r' || c == '\t' || (int)(unsigned char)c < 32) {
             json_flush_run_(out, s, run_start, i);
             if (c == '"') {
                 unsafe { out.push("\\\""); }
@@ -121,7 +122,7 @@ void json_write(const &Value v, &String out) {
         while (i < n) {
             if (i > 0UL) { unsafe { out.push_char(','); } }
             struct Value* elem;
-            unsafe { elem = (struct Value*)v.arr_val.get_raw(i); }
+            unsafe { elem = v.arr_val.at(i); }
             json_write(elem, out);
             i = i + 1UL;
         }
@@ -134,7 +135,7 @@ void json_write(const &Value v, &String out) {
         while (i < n) {
             if (i > 0UL) { unsafe { out.push_char(','); } }
             struct ObjectEntry* e;
-            unsafe { e = (struct ObjectEntry*)v.obj_val.get_raw(i); }
+            unsafe { e = v.obj_val.at(i); }
             const char* key;
             unsafe { key = (const char*)e->key; }
             json_append_escaped_(out, key);
@@ -202,6 +203,23 @@ static int json_eat_literal_(struct JsonCursor_* c, const char* word) {
 
 static struct Value json_parse_value_(struct JsonCursor_* c);
 
+static unsigned int json_read_hex4_(&JsonCursor_ c) {
+    unsigned int val = 0u;
+    int k = 0;
+    while (k < 4) {
+        char hc = json_peek_(c);
+        c.pos = c.pos + 1UL;
+        unsigned int digit = 0u;
+        if (hc >= '0' && hc <= '9') { digit = (unsigned int)(hc - '0'); }
+        else if (hc >= 'a' && hc <= 'f') { digit = (unsigned int)(hc - 'a' + 10); }
+        else if (hc >= 'A' && hc <= 'F') { digit = (unsigned int)(hc - 'A' + 10); }
+        else { c.ok = 0; }
+        val = val * 16u + digit;
+        k = k + 1;
+    }
+    return val;
+}
+
 static struct Value json_parse_string_raw_(struct JsonCursor_* c) {
     // Caller already confirmed the opening '"'.
     struct String out = string_new();
@@ -223,25 +241,30 @@ static struct Value json_parse_string_raw_(struct JsonCursor_* c) {
             else if (esc == '"') { unsafe { out.push_char('"'); } }
             else if (esc == '\\') { unsafe { out.push_char('\\'); } }
             else if (esc == '/') { unsafe { out.push_char('/'); } }
+            else if (esc == 'b') { unsafe { out.push_char((char)8); } }
+            else if (esc == 'f') { unsafe { out.push_char((char)12); } }
             else if (esc == 'u') {
-                // \uXXXX — only the common BMP/ASCII-range case is decoded
-                // (surrogate pairs for astral characters are not); a
-                // best-effort single-byte fallback for anything outside
-                // that, rather than failing the whole parse over it.
-                int val = 0;
-                int k = 0;
-                while (k < 4) {
-                    char hc = json_peek_(c);
-                    unsafe { c->pos = c->pos + 1UL; }
-                    int digit = 0;
-                    if (hc >= '0' && hc <= '9') { digit = (int)hc - (int)'0'; }
-                    else if (hc >= 'a' && hc <= 'f') { digit = (int)hc - (int)'a' + 10; }
-                    else if (hc >= 'A' && hc <= 'F') { digit = (int)hc - (int)'A' + 10; }
-                    else { unsafe { c->ok = 0; } }
-                    val = val * 16 + digit;
-                    k = k + 1;
+                // \uXXXX → UTF-8, combining a UTF-16 surrogate pair
+                // (\uD83D\uDE00) into one astral code point.
+                unsigned int cp = json_read_hex4_(c);
+                if (cp >= 0xD800u && cp <= 0xDBFFu && json_peek_(c) == '\\') {
+                    unsigned long save;
+                    unsafe { save = c->pos; c->pos = c->pos + 1UL; }
+                    if (json_peek_(c) == 'u') {
+                        unsafe { c->pos = c->pos + 1UL; }
+                        unsigned int lo = json_read_hex4_(c);
+                        if (lo >= 0xDC00u && lo <= 0xDFFFu) {
+                            cp = 0x10000u + ((cp - 0xD800u) << 10) + (lo - 0xDC00u);
+                        } else {
+                            unsafe { c->pos = save; }
+                        }
+                    } else {
+                        unsafe { c->pos = save; }
+                    }
                 }
-                unsafe { out.push_char((char)(val & 0xFF)); }
+                char enc[4];
+                int n = utf8_encode(cp, (char*)enc);
+                unsafe { out.push_n((const char*)enc, (unsigned long)n); }
             } else {
                 unsafe { c->ok = 0; }
             }

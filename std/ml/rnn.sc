@@ -2,12 +2,12 @@
 #pragma once
 #include <std/ml/rnn.h>
 #include <std/ml/tensor.h>
-#include <std/ml/tensor.sc>
+#include <std/ml/tensor.h>
 #include <std/ml/activations.h>
-#include <std/ml/activations.sc>
+#include <std/ml/activations.h>
 #include <std/math.h>
-#include <std/math.sc>
-#include <std/mem.sc>
+#include <std/math.h>
+#include <std/mem.h>
 
 namespace std {
 

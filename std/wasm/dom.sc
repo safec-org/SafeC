@@ -46,13 +46,13 @@ void dom_console_log(const char* text) {
     unsafe { js_console_log(text, len); }
 }
 
-int dom_register_callback(DomEventHandler handler, void* userdata) {
+int dom_register_callback_raw_(void* handler, void* userdata) {
     if (gDomCallbackCount >= DOM_MAX_CALLBACKS) {
         return -1;
     }
     int id = gDomCallbackCount;
     unsafe {
-        gDomCallbacks[id].handler = handler;
+        gDomCallbacks[id].handler = (DomEventHandler)handler;
         gDomCallbacks[id].userdata = userdata;
         gDomCallbacks[id].used = 1;
     }
@@ -60,12 +60,12 @@ int dom_register_callback(DomEventHandler handler, void* userdata) {
     return id;
 }
 
-int dom_on_click(const char* selector, DomEventHandler handler, void* userdata) {
+int dom_on_click_raw_(const char* selector, void* handler, void* userdata) {
     int handle = dom_get_element(selector);
     if (handle < 0) {
         return -1;
     }
-    int id = dom_register_callback(handler, userdata);
+    int id = dom_register_callback_raw_(handler, userdata);
     unsafe { js_add_click_listener(handle, id); }
     return handle;
 }

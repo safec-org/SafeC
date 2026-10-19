@@ -8,9 +8,9 @@
 #include <std/gui/gui.h>
 #include <std/gui/gui_draw.h>
 #include <std/gui/gui_svg.h>
-#include <std/mem.sc>
+#include <std/mem.h>
 #include <std/collections/string.h>
-#include <std/collections/string.sc>
+#include <std/collections/string.h>
 
 namespace std {
 

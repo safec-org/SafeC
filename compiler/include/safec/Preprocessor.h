@@ -166,7 +166,8 @@ private:
     // ── File resolution ───────────────────────────────────────────────────────
     std::string resolveInclude(const std::string &name,
                                bool isSystem,
-                               const std::string &curFile);
+                               const std::string &curFile,
+                               bool searchSysDirs = true);
     static std::string readFile(const std::string &path);
 
     // ── Character / string helpers ────────────────────────────────────────────
@@ -183,6 +184,7 @@ private:
     PreprocOptions opts_;
 
     std::unordered_map<std::string, MacroDef> macros_;
+    bool hasOpenMacroCall(const std::string &text) const;
     std::unordered_set<std::string>           pragmaOnceFiles_;
 
     // Lazily-created C header importer (null if clang not found or disabled).

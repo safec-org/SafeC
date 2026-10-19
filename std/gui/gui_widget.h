@@ -118,7 +118,7 @@ struct Widget {
     // single, multi-tenant collection meant to hold many unrelated
     // context types at once, which 'void*' erasure supports and a
     // generic struct's one-type-per-instantiation model does not.
-    struct Vec children;    // Vec<struct Widget*>
+    struct Vec<&Widget> children;
     ?&Widget parent;        // empty (null) for the root widget
 };
 
@@ -155,8 +155,13 @@ typedef fn int(struct Widget*, struct GuiEvent*) WidgetCustomEventFn;
 // button would, with onClick/onChange still firing normally — set eventFn
 // only when you need to intercept raw events yourself, e.g. for a custom
 // slider/canvas that tracks drag deltas).
+&Widget widget_custom_raw_(WidgetDrawFn draw, WidgetLayoutFn layout,
+                            WidgetCustomEventFn eventFn, void* userData);
+generic<T>
 &Widget widget_custom(WidgetDrawFn draw, WidgetLayoutFn layout,
-                       WidgetCustomEventFn eventFn, void* userData);
+                      WidgetCustomEventFn eventFn, ?&T userData) {
+    unsafe { return widget_custom_raw_(draw, layout, eventFn, (void*)userData); }
+}
 
 // ── tree ─────────────────────────────────────────────────────────────────────
 void widget_add_child(&Widget parent, &Widget child);
@@ -176,8 +181,20 @@ void widget_add_child(&Widget parent, &Widget child);
 &Widget widget_set_visible(&Widget w, int visible);
 &Widget widget_set_enabled(&Widget w, int enabled);
 &Widget widget_set_text(&Widget w, const char* text);
-&Widget widget_on_click(&Widget w, WidgetCallback cb, void* userData);
-&Widget widget_on_change(&Widget w, WidgetCallback cb, void* userData);
+&Widget widget_on_click_raw_(&Widget w, void* cb, void* userData);
+&Widget widget_on_change_raw_(&Widget w, void* cb, void* userData);
+
+// cb(widget, userData) on click / value change. userData's type is the
+// caller's; the widget stores it erased (see the field comment above).
+generic<T>
+&Widget widget_on_click(&Widget w, fn void(&Widget, ?&T) cb, ?&T userData) {
+    unsafe { return widget_on_click_raw_(w, (void*)cb, (void*)userData); }
+}
+
+generic<T>
+&Widget widget_on_change(&Widget w, fn void(&Widget, ?&T) cb, ?&T userData) {
+    unsafe { return widget_on_change_raw_(w, (void*)cb, (void*)userData); }
+}
 
 // ── per-frame pipeline ────────────────────────────────────────────────────────
 

@@ -2,10 +2,11 @@
 // (see protobuf.h)
 #pragma once
 #include <std/serial/protobuf.h>
-#include <std/collections/string.sc>
-#include <std/mem.sc>
-#include <std/fmt.sc>
-#include <std/convert.sc>
+#include <std/collections/string.h>
+#include <std/mem.h>
+#include <std/fmt.h>
+#include <std/convert.h>
+#include <std/str.h>
 
 namespace std {
 

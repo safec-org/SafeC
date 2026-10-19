@@ -26,8 +26,12 @@ void assert_true(int cond);
 // static_assert is never affected by NDEBUG (it is always compile-time).
 
 #ifdef NDEBUG
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
 #define runtime_assert(cond, msg)  ((void)0)
+#endif
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
 #define assert_true(cond)          ((void)0)
+#endif
 #endif
 
 } // namespace std

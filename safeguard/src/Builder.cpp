@@ -8,6 +8,9 @@
 #include <stdexcept>
 #include <algorithm>
 #include <cstdlib>
+#include <set>
+#include <fstream>
+#include <cctype>
 #include <cerrno>
 #include <cstring>
 #include <cctype>
@@ -339,6 +342,9 @@ std::string Builder::compileSrc(const std::string& safecBin,
     }
     for (auto& d : defines) cmd.push_back(d);
     cmd.push_back(srcPath);
+    if (!opts_.target.empty()) cmd.push_back("--target=" + opts_.target);
+    if (targetIsBareMetal() && !providedFunctionsArg().empty())
+        cmd.push_back(providedFunctionsArg());
     cmd.push_back("--emit-llvm");
     if (compatPreprocessor) cmd.push_back("--compat-preprocessor");
     cmd.push_back("-o");
@@ -362,6 +368,8 @@ std::string Builder::llToObj(const std::string& llFile,
                                bool suppressOutput) const {
     fs::path obj = fs::path(buildDir) / (fs::path(llFile).stem().string() + ".o");
     std::vector<std::string> cmd = { findClang(false), "-c", llFile, "-o", obj.string() };
+    for (auto& f : targetClangFlags()) cmd.push_back(f);
+    cmd.push_back("-Wno-override-module");
     if (opts_.release) cmd.push_back("-O2");
     int rc = runCmd(cmd, opts_.verbose, suppressOutput);
     if (rc != 0) {
@@ -435,7 +443,15 @@ bool Builder::linkFinal(const std::vector<std::string>& objFiles,
                           const std::string& output,
                           bool useCxxDriver,
                           bool shared) const {
-    std::vector<std::string> cmd = { findSystemClang(useCxxDriver) };
+    // A cross target links with the same LLVM clang that assembled the IR
+    // (the system one may not know the target), through lld; bare metal
+    // gets no libc/crt — the program's own runtime, linker script ('-T') and
+    // libraries come from the manifest's [build] cflags/libs/lib_dirs.
+    std::vector<std::string> cmd = { isCrossTarget() ? findClang(useCxxDriver)
+                                                     : findSystemClang(useCxxDriver) };
+    for (auto& f : targetClangFlags()) cmd.push_back(f);
+    if (isCrossTarget()) cmd.push_back("-fuse-ld=lld");
+    if (targetIsBareMetal()) { cmd.push_back("-nostdlib"); cmd.push_back("-static"); }
     if (opts_.release) cmd.push_back("-O2");
     if (!manifest_.build.lto.empty())
         cmd.push_back(manifest_.build.lto == "full" ? "-flto" : "-flto=thin");
@@ -451,7 +467,7 @@ bool Builder::linkFinal(const std::vector<std::string>& objFiles,
     // no 'm.lib' for clang's MSVC-style link.exe driver to find — passing
     // -lm there fails the link with LNK1181 ("cannot open input file
     // 'm.lib'") instead of being a harmless no-op.
-    cmd.push_back("-lm"); // math library for std/math.sc
+    if (!targetIsBareMetal()) cmd.push_back("-lm"); // math library for std/math.sc
 #endif
     for (auto& d : manifest_.build.libDirs) cmd.push_back("-L" + d);
     for (auto& l : manifest_.build.libs)    cmd.push_back("-l" + l);
@@ -465,6 +481,136 @@ bool Builder::linkFinal(const std::vector<std::string>& objFiles,
         return false;
     }
     return true;
+}
+
+// ── platform-variant std sources ──────────────────────────────────────────────
+// Several std modules ship one implementation per OS API, distinguished by a
+// filename suffix (sched/io_nb_{bsd,linux,win32}.sc, sched/reactor_{kqueue,
+// epoll,win32}.sc, ipc/uds_{bsd,linux}.sc, ipc/pipe_{posix,win32}.sc,
+// gui/gui_{cocoa,x11,win32,fb}.sc — fb being the bare-metal one). They define the same symbols, so only the
+// host's variant may go into libsafec_std.a: with all of them archived, the
+// linker resolves each symbol from whichever member it meets first
+// (alphabetically the BSD one, whose sockaddr layout is wrong on Linux) and
+// then fails on the duplicates the next pulled-in member brings along.
+static bool stdVariantMatches(const fs::path& src, const std::string& triple, bool bareMetal) {
+    std::string stem = src.stem().string();
+    auto endsWith = [&](const char* suf) {
+        std::string s(suf);
+        return stem.size() > s.size() &&
+               stem.compare(stem.size() - s.size(), s.size(), s) == 0;
+    };
+    bool win, mac, linux_, bsd;
+    if (triple.empty()) {
+#if defined(_WIN32)
+        win = true; mac = false; linux_ = false; bsd = false;
+#elif defined(__APPLE__)
+        win = false; mac = true; linux_ = false; bsd = false;
+#elif defined(__linux__)
+        win = false; mac = false; linux_ = true; bsd = false;
+#else
+        win = false; mac = false; linux_ = false; bsd = true;
+#endif
+    } else {
+        win = triple.find("windows") != std::string::npos;
+        mac = triple.find("apple") != std::string::npos || triple.find("darwin") != std::string::npos;
+        linux_ = triple.find("linux") != std::string::npos;
+        bsd = triple.find("bsd") != std::string::npos;
+    }
+    if (endsWith("_fb")) return bareMetal;   // bare-metal framebuffer backend (see gui_fb.sc)
+    if (bareMetal) {
+        // No OS API at all: none of the OS-specific backends apply.
+        if (endsWith("_linux") || endsWith("_epoll") || endsWith("_bsd") || endsWith("_kqueue") ||
+            endsWith("_cocoa") || endsWith("_x11") || endsWith("_win32") || endsWith("_posix"))
+            return false;
+        return true;
+    }
+    if (endsWith("_linux") || endsWith("_epoll")) return linux_;
+    if (endsWith("_bsd") || endsWith("_kqueue")) return mac || bsd;
+    if (endsWith("_cocoa")) return mac;
+    if (endsWith("_x11")) return linux_ || bsd;
+    if (endsWith("_win32")) return win;
+    if (endsWith("_posix")) return !win;
+    return true;
+}
+
+// ── --target ─────────────────────────────────────────────────────────────────
+
+const std::vector<std::string>& Builder::targetClangFlags() const {
+    if (targetFlagsResolved_) return targetFlags_;
+    targetFlagsResolved_ = true;
+    if (opts_.target.empty()) return targetFlags_;
+    std::string cmd = "\"" + findSafec() + "\" --print-target-clang-flags --target=" + opts_.target;
+#ifdef _WIN32
+    FILE* p = _popen(cmd.c_str(), "r");
+#else
+    FILE* p = popen(cmd.c_str(), "r");
+#endif
+    if (p) {
+        char line[512];
+        while (fgets(line, sizeof(line), p)) {
+            std::string l(line);
+            while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
+            if (!l.empty()) targetFlags_.push_back(l);
+        }
+#ifdef _WIN32
+        _pclose(p);
+#else
+        pclose(p);
+#endif
+    }
+    if (targetFlags_.empty()) targetFlags_.push_back("--target=" + opts_.target);
+    return targetFlags_;
+}
+
+const std::string& Builder::providedFunctionsArg() const {
+    if (providesResolved_) return providesArg_;
+    providesResolved_ = true;
+    static const char* kNames[] = {
+        "malloc", "free", "calloc", "realloc", "printf", "fprintf", "sprintf",
+        "snprintf", "puts", "putchar", "getchar", "fopen", "fclose", "fread",
+        "fwrite", "exit", "abort", "atexit", nullptr };
+    std::set<std::string> found;
+    for (const char* dir : { "src", "tests" }) {
+        for (auto& f : collectAllSources((fs::path(root_) / dir).string())) {
+            std::ifstream in(f);
+            std::string line;
+            while (std::getline(in, line)) {
+                for (const char** n = kNames; *n; ++n) {
+                    // A definition: '<type> name(<params>) {' on one line.
+                    size_t at = line.find(std::string(*n) + "(");
+                    if (at == std::string::npos) continue;
+                    if (at > 0 && (std::isalnum((unsigned char)line[at - 1]) || line[at - 1] == '_')) continue;
+                    if (line.find("extern") != std::string::npos) continue;
+                    size_t close = line.find(')', at);
+                    size_t brace = close == std::string::npos ? std::string::npos : line.find('{', close);
+                    // '{' with no ';' between ')' and it: a body, not a prototype.
+                    if (brace != std::string::npos && at > 0 &&
+                        line.substr(close, brace - close).find(';') == std::string::npos)
+                        found.insert(*n);
+                }
+            }
+        }
+    }
+    if (!found.empty()) {
+        providesArg_ = "--provides=";
+        bool first = true;
+        for (auto& n : found) { if (!first) providesArg_ += ","; providesArg_ += n; first = false; }
+    }
+    return providesArg_;
+}
+
+std::string Builder::targetTriple() const {
+    for (auto& f : targetClangFlags())
+        if (f.rfind("--target=", 0) == 0) return f.substr(9);
+    return "";
+}
+
+// No-OS triples: '<arch>-unknown-none-elf', '<arch>-none-eabi', '<arch>-unknown-elf'.
+bool Builder::targetIsBareMetal() const {
+    std::string t = targetTriple();
+    if (t.empty()) return false;
+    return t.find("-none") != std::string::npos ||
+           (t.find("-unknown-elf") != std::string::npos);
 }
 
 // ── build a library from a source directory ───────────────────────────────────
@@ -485,6 +631,8 @@ bool Builder::buildLib(const std::string& srcDir,
 
     std::vector<std::string> objs;
     for (auto& src : srcs) {
+        // tolerateArchMismatch is only set for the std library build.
+        if (tolerateArchMismatch && !stdVariantMatches(src, targetTriple(), targetIsBareMetal())) continue;
         SrcLang lang = langOf(src);
         if (lang == SrcLang::SafeC) {
             std::string realSrc = materializeScx(src, buildDir);
@@ -551,7 +699,11 @@ std::string Builder::ensureStdLib() {
         return "";
     }
 
-    fs::path libPath = fs::path(root_) / "build" / "deps" / "libsafec_std.a";
+    // One std archive per target (host builds keep the historical path).
+    fs::path libPath = isCrossTarget()
+        ? fs::path(root_) / "build" / "deps" / targetDirName() / "libsafec_std.a"
+        : fs::path(root_) / "build" / "deps" / "libsafec_std.a";
+    fs::create_directories(libPath.parent_path());
 
     // Only rebuild if the library is missing.
     if (fs::exists(libPath)) return libPath.string();
@@ -1003,6 +1155,14 @@ bool Builder::test() {
             ++failed;
             continue;
         }
+        if (isCrossTarget()) {
+            // Can't execute a foreign-ISA test binary here: compiling it
+            // for the target (Sema, CodeGen and the assembler all ran) is
+            // what a cross 'test' run checks.
+            std::cout << "test " << name << " ... built for " << opts_.target << " (not run)\n";
+            ++passed;
+            continue;
+        }
         std::string testBin = (buildDir / name).string();
         if (!linkFinal({obj}, archives, testBin, lang == SrcLang::Cpp)) {
             std::cout << "test " << name << " ... FAILED (link error)\n";
@@ -1029,6 +1189,11 @@ int Builder::run(const std::vector<std::string>& args) {
         std::cerr << "safeguard: 'run' requires build.crate_type = \"bin\" "
                      "(this project builds a " << manifest_.build.crateType
                   << " — there is no executable entry point to run)\n";
+        return -1;
+    }
+    if (isCrossTarget()) {
+        std::cerr << "safeguard: 'run' can't execute a --target " << opts_.target
+                  << " binary on this host — use 'build' and run it on the target\n";
         return -1;
     }
     if (!build()) return -1;

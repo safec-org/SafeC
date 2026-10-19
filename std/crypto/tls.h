@@ -39,7 +39,7 @@ struct TlsRecord {
 struct TlsTranscript {
     struct Sha256Ctx hash;
 
-    void  update(const unsigned char* data, unsigned long len);
+    void  update(const &unsigned char data, unsigned long len);
     void  finish(unsigned char out[32]);
 };
 
@@ -60,24 +60,24 @@ struct TlsSession {
 
     // Encode a plaintext record into `out`.  Returns bytes written (0 on error).
     unsigned long encode_record(unsigned char content_type,
-                                 const unsigned char* payload,
+                                 const &unsigned char payload,
                                  unsigned long payload_len,
-                                 unsigned char* out,
+                                 &unsigned char out,
                                  unsigned long out_cap);
 
     // Decode a record from `data` (raw bytes from network).
     // Sets *content_type_out and writes decrypted payload into `out`.
     // Returns payload length, or 0 on error / insufficient data.
-    unsigned long decode_record(const unsigned char* data,
+    unsigned long decode_record(const &unsigned char data,
                                  unsigned long data_len,
                                  &stack unsigned char content_type_out,
-                                 unsigned char* out,
+                                 &unsigned char out,
                                  unsigned long out_cap);
 
     // Build a TLS Alert record into `out`.  Returns bytes written.
     unsigned long build_alert(unsigned char level,
                                unsigned char desc,
-                               unsigned char* out,
+                               &unsigned char out,
                                unsigned long out_cap);
 
     // XOR the IV with the sequence number per TLS 1.3 §5.3.

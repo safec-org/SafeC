@@ -97,7 +97,7 @@ int ipv6_parse(&stack PacketBuf pkt, unsigned long offset,
                           | ((unsigned int)d[2] <<  8)
                           |  (unsigned int)d[3];
         if ((hdr_out.ver_tc_fl >> 28) != (unsigned int)6) { return -1; }
-        hdr_out.payload_len = net_ntohs(
+        hdr_out.payload_len = (
             (unsigned short)(((unsigned short)d[4] << 8) | (unsigned short)d[5]));
         hdr_out.next_hdr  = d[6];
         hdr_out.hop_limit = d[7];
@@ -125,7 +125,7 @@ unsigned long ipv6_build(&stack PacketBuf pkt, unsigned long offset,
         d[1] = (unsigned char)((vtcfl >> 16) & (unsigned int)0xFF);
         d[2] = (unsigned char)((vtcfl >>  8) & (unsigned int)0xFF);
         d[3] = (unsigned char)( vtcfl        & (unsigned int)0xFF);
-        unsigned short plen = net_htons(payload_len);
+        unsigned short plen = (payload_len);
         d[4] = (unsigned char)((plen >> 8) & (unsigned short)0xFF);
         d[5] = (unsigned char)( plen       & (unsigned short)0xFF);
         d[6] = next_hdr;
@@ -165,7 +165,7 @@ unsigned long ipv6_frame(&stack PacketBuf pkt,
             d[6 + i] = eth_src[i];
             i = i + 1;
         }
-        unsigned short et = net_htons((unsigned short)ETHERTYPE_IPV6);
+        unsigned short et = ((unsigned short)ETHERTYPE_IPV6);
         d[12] = (unsigned char)((et >> 8) & (unsigned short)0xFF);
         d[13] = (unsigned char)( et       & (unsigned short)0xFF);
     }

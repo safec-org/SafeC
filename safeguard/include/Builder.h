@@ -29,6 +29,10 @@ struct BuildOptions {
     // safec's existing preprocessor rather than adding new language syntax.
     std::vector<std::string> features;
     bool   noDefaultFeatures = false;
+
+    // --target <alias|triple>: cross-compile (a bare-metal alias from
+    // 'safec --list-targets', or any LLVM triple). Empty = host.
+    std::string target;
 };
 
 class Builder {
@@ -135,6 +139,23 @@ private:
 
     // Locate the safec binary.
     std::string findSafec() const;
+
+    // --target support: the clang flags matching opts_.target (from
+    // 'safec --print-target-clang-flags'; empty for the host), whether the
+    // target has no OS, and the per-target build subdirectory name.
+    const std::vector<std::string>& targetClangFlags() const;
+    bool targetIsBareMetal() const;
+    bool isCrossTarget() const { return !opts_.target.empty(); }
+    std::string targetTriple() const;
+    std::string targetDirName() const { return opts_.target.empty() ? "host" : opts_.target; }
+    // libc-named functions (malloc, free, ...) the project itself defines —
+    // passed to safec as --provides on bare-metal builds so calls to them
+    // aren't flagged as needing a hosted runtime.
+    const std::string& providedFunctionsArg() const;
+    mutable bool providesResolved_ = false;
+    mutable std::string providesArg_;
+    mutable bool targetFlagsResolved_ = false;
+    mutable std::vector<std::string> targetFlags_;
 
     // Locate a clang/clang++ whose LLVM version matches (or is at least as
     // new as) the one safec was built against. safec's --emit-llvm output

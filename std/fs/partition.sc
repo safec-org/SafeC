@@ -17,7 +17,7 @@ inline const ?&PartEntry PartTable::get(int idx) const {
     return (const ?&PartEntry)(const struct PartEntry*)0;
 }
 
-int partition_read(&stack BlockDevice dev, &stack PartTable table_out) {
+int partition_read(&BlockDevice dev, &PartTable table_out) {
     unsigned char mbr[512];
     if (dev.read((unsigned long)0, (&stack unsigned char)mbr, (unsigned long)1) != 0) {
         return -1;

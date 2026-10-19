@@ -3,12 +3,12 @@
 #pragma once
 #include <std/gui/gui.h>
 #include <std/gui/gui_draw.h>
-#include <std/gui/gui_draw.sc>
+#include <std/gui/gui_draw.h>
 #include <std/gui/gui_font.h>
 #include <std/gui/gui_widget.h>
-#include <std/mem.sc>
-#include <std/collections/vec.sc>
-#include <std/collections/string.sc>
+#include <std/mem.h>
+#include <std/collections/vec.h>
+#include <std/collections/string.h>
 
 namespace std {
 
@@ -63,7 +63,7 @@ static struct Widget* __widget_new(int kind) {
         w->customEvent = (void*)0;
         w->userData = (void*)0;
 
-        w->children = vec_new(8UL); // sizeof(struct Widget*)
+        w->children = vec_new();
         w->parent = (struct Widget*)0;
     }
     return w;
@@ -121,7 +121,7 @@ static struct Widget* __widget_new(int kind) {
         return w;
     }
 }
-&Widget widget_custom(WidgetDrawFn draw, WidgetLayoutFn layout,
+&Widget widget_custom_raw_(WidgetDrawFn draw, WidgetLayoutFn layout,
                               WidgetCustomEventFn eventFn, void* userData) {
     struct Widget* w = __widget_new(WIDGET_CUSTOM);
     unsafe {
@@ -136,7 +136,7 @@ static struct Widget* __widget_new(int kind) {
 void widget_add_child(&Widget parent, &Widget child) {
     unsafe {
         child->parent = parent;
-        parent->children.push((const void*)&child);
+        parent->children.push(child);
     }
 }
 
@@ -198,12 +198,12 @@ void widget_add_child(&Widget parent, &Widget child) {
     }
     return w;
 }
-&Widget widget_on_click(&Widget w, WidgetCallback cb, void* userData) {
-    unsafe { w->onClick = (void*)cb; w->onClickData = userData; }
+&Widget widget_on_click_raw_(&Widget w, void* cb, void* userData) {
+    unsafe { w->onClick = cb; w->onClickData = userData; }
     return w;
 }
-&Widget widget_on_change(&Widget w, WidgetCallback cb, void* userData) {
-    unsafe { w->onChange = (void*)cb; w->onChangeData = userData; }
+&Widget widget_on_change_raw_(&Widget w, void* cb, void* userData) {
+    unsafe { w->onChange = cb; w->onChangeData = userData; }
     return w;
 }
 
@@ -295,8 +295,8 @@ void gui_layout(&Widget root, int x, int y, int w, int h) {
     while (i < n) {
         struct Widget* child;
         unsafe {
-            struct Widget** slot = (struct Widget**)root->children.get_raw(i);
-            child = *slot;
+            struct Widget* slotp = *root->children.at(i);
+            child = slotp;
         }
         int stretch; unsafe { stretch = child->stretch; }
         if (stretch > 0) {
@@ -316,8 +316,8 @@ void gui_layout(&Widget root, int x, int y, int w, int h) {
     while (i < n) {
         struct Widget* child;
         unsafe {
-            struct Widget** slot = (struct Widget**)root->children.get_raw(i);
-            child = *slot;
+            struct Widget* slotp = *root->children.at(i);
+            child = slotp;
         }
         int stretch; int alignment;
         unsafe { stretch = child->stretch; alignment = child->alignment; }
@@ -383,7 +383,7 @@ void gui_render(&GuiWindow win, &Widget root) {
         unsigned long i = 0UL;
         while (i < n) {
             struct Widget* child;
-            unsafe { struct Widget** slot = (struct Widget**)root->children.get_raw(i); child = *slot; }
+            unsafe { child = *root->children.at(i); }
             gui_render(win, child);
             i = i + 1UL;
         }
@@ -477,7 +477,7 @@ void gui_render(&GuiWindow win, &Widget root) {
         unsigned long i = 0UL;
         while (i < n) {
             struct Widget* child;
-            unsafe { struct Widget** slot = (struct Widget**)root->children.get_raw(i); child = *slot; }
+            unsafe { child = *root->children.at(i); }
             gui_render(win, child);
             i = i + 1UL;
         }
@@ -501,7 +501,7 @@ static void __widget_update_hover(struct Widget* w, struct GuiEvent* ev) {
     unsigned long i = 0UL;
     while (i < n) {
         struct Widget* child;
-        unsafe { struct Widget** slot = (struct Widget**)w->children.get_raw(i); child = *slot; }
+        unsafe { child = *w->children.at(i); }
         __widget_update_hover(child, ev);
         i = i + 1UL;
     }
@@ -529,7 +529,7 @@ static int __widget_dispatch_one(struct Widget* w, struct GuiEvent* ev) {
     unsigned long i = 0UL;
     while (i < n) {
         struct Widget* child;
-        unsafe { struct Widget** slot = (struct Widget**)w->children.get_raw(i); child = *slot; }
+        unsafe { child = *w->children.at(i); }
         if (__widget_dispatch_one(child, ev)) { return 1; }
         i = i + 1UL;
     }
@@ -633,15 +633,15 @@ static int __widget_is_focusable(struct Widget* w) {
             kind == WIDGET_TEXTINPUT || kind == WIDGET_SLIDER) ? 1 : 0;
 }
 
-static void __widget_collect_focusable(struct Widget* w, struct Vec* out) {
+static void __widget_collect_focusable(struct Widget* w, &Vec<&Widget> out) {
     if (__widget_is_focusable(w)) {
-        unsafe { out->push((const void*)&w); }
+        out.push(w);
     }
     unsigned long n; unsafe { n = w->children.length(); }
     unsigned long i = 0UL;
     while (i < n) {
         struct Widget* child;
-        unsafe { struct Widget** slot = (struct Widget**)w->children.get_raw(i); child = *slot; }
+        unsafe { child = *w->children.at(i); }
         __widget_collect_focusable(child, out);
         i = i + 1UL;
     }
@@ -653,7 +653,7 @@ static void __widget_clear_focus(struct Widget* w) {
     unsigned long i = 0UL;
     while (i < n) {
         struct Widget* child;
-        unsafe { struct Widget** slot = (struct Widget**)w->children.get_raw(i); child = *slot; }
+        unsafe { child = *w->children.at(i); }
         __widget_clear_focus(child);
         i = i + 1UL;
     }
@@ -666,7 +666,7 @@ static struct Widget* __widget_find_focused(struct Widget* w) {
     unsigned long i = 0UL;
     while (i < n) {
         struct Widget* child;
-        unsafe { struct Widget** slot = (struct Widget**)w->children.get_raw(i); child = *slot; }
+        unsafe { child = *w->children.at(i); }
         struct Widget* found = __widget_find_focused(child);
         if (found != (struct Widget*)0) { return found; }
         i = i + 1UL;
@@ -678,7 +678,7 @@ static void __widget_apply_default_key_action(struct Widget* root, struct GuiEve
     int keycode; unsafe { keycode = ev->keycode; }
 
     if (keycode == GUI_KEY_TAB) {
-        struct Vec list = vec_new(8UL);
+        struct Vec<&Widget> list = vec_new();
         __widget_collect_focusable(root, &list);
         unsigned long n; unsafe { n = list.length(); }
         if (n > 0UL) {
@@ -686,7 +686,7 @@ static void __widget_apply_default_key_action(struct Widget* root, struct GuiEve
             unsigned long i = 0UL;
             while (i < n) {
                 struct Widget* w;
-                unsafe { struct Widget** slot = (struct Widget**)list.get_raw(i); w = *slot; }
+                unsafe { w = *list.at(i); }
                 int f; unsafe { f = w->focused; }
                 if (f) { foundAt = i; }
                 i = i + 1UL;
@@ -694,7 +694,7 @@ static void __widget_apply_default_key_action(struct Widget* root, struct GuiEve
             unsigned long nextIdx = (foundAt == n) ? 0UL : ((foundAt + 1UL) % n);
             __widget_clear_focus(root);
             struct Widget* nextW;
-            unsafe { struct Widget** slot = (struct Widget**)list.get_raw(nextIdx); nextW = *slot; }
+            unsafe { nextW = *list.at(nextIdx); }
             unsafe { nextW->focused = 1; }
         }
         unsafe { list.free(); }
@@ -762,7 +762,7 @@ void widget_free(&Widget w) {
     unsigned long i = 0UL;
     while (i < n) {
         struct Widget* child;
-        unsafe { struct Widget** slot = (struct Widget**)w->children.get_raw(i); child = *slot; }
+        unsafe { child = *w->children.at(i); }
         widget_free(child);
         i = i + 1UL;
     }

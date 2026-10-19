@@ -53,7 +53,7 @@ unsigned short dns_query(&stack PacketBuf pkt,
     unsafe {
         unsigned char* d = (unsigned char*)pkt.data + data_off;
         // Transaction ID
-        unsigned short txid_n = net_htons(txid);
+        unsigned short txid_n = (txid);
         d[0] = (unsigned char)((txid_n >> 8) & (unsigned short)0xFF);
         d[1] = (unsigned char)(txid_n & (unsigned short)0xFF);
         // Flags: standard query, recursion desired
@@ -80,7 +80,7 @@ int dns_parse_reply(&stack PacketBuf pkt, unsigned long off,
     if (pkt.len < off + (unsigned long)12) { return 0; }
     unsafe {
         unsigned char* d = (unsigned char*)pkt.data + off;
-        unsigned short txid = net_ntohs((unsigned short)(((unsigned short)d[0] << 8)
+        unsigned short txid = ((unsigned short)(((unsigned short)d[0] << 8)
                                                         | (unsigned short)d[1]));
         if (txid != expected_txid) { return 0; }
         // Flags: check QR=1 (reply)
@@ -133,7 +133,7 @@ int dns_parse_reply(&stack PacketBuf pkt, unsigned long off,
             if (rtype == (unsigned short)1 && rdlen == (unsigned short)4
                 && pos + (unsigned long)4 <= pkt.len) {
                 // A record
-                *ip4_out = net_ntohl(((unsigned int)d[pos-off+(unsigned long)0] << 24)
+                *ip4_out = (((unsigned int)d[pos-off+(unsigned long)0] << 24)
                                   | ((unsigned int)d[pos-off+(unsigned long)1] << 16)
                                   | ((unsigned int)d[pos-off+(unsigned long)2] <<  8)
                                   |  (unsigned int)d[pos-off+(unsigned long)3]);

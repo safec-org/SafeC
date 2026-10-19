@@ -13,45 +13,45 @@
 #include <std/inttypes.h>
 
 // ── Core ─────────────────────────────────────────────────────────────────────
-#include <std/mem.sc>
-#include <std/io.sc>
-#include <std/io_file.sc>
-#include <std/str.sc>
-#include <std/fmt.sc>
-#include <std/convert.sc>
+#include <std/mem.h>
+#include <std/io.h>
+#include <std/io_file.h>
+#include <std/str.h>
+#include <std/fmt.h>
+#include <std/convert.h>
 
 // ── Math & numeric ────────────────────────────────────────────────────────────
-#include <std/math.sc>
-#include <std/complex.sc>
-#include <std/bit.sc>
+#include <std/math.h>
+#include <std/complex.h>
+#include <std/bit.h>
 
 // ── Character ─────────────────────────────────────────────────────────────────
-#include <std/ctype.sc>
+#include <std/ctype.h>
 
 // ── Assertions ────────────────────────────────────────────────────────────────
-#include <std/assert.sc>
+#include <std/assert.h>
 
 // ── Checked arithmetic (C23) ──────────────────────────────────────────────────
-#include <std/stdckdint.sc>
+#include <std/stdckdint.h>
 
 // ── System & OS ───────────────────────────────────────────────────────────────
-#include <std/sys.sc>
-#include <std/errno.sc>
-#include <std/signal.sc>
-#include <std/time.sc>
-#include <std/locale.sc>
-#include <std/fenv.sc>
+#include <std/sys.h>
+#include <std/errno.h>
+#include <std/signal.h>
+#include <std/time.h>
+#include <std/locale.h>
+#include <std/fenv.h>
 
 // ── Concurrency ───────────────────────────────────────────────────────────────
-#include <std/atomic.sc>
-#include <std/thread.sc>
+#include <std/atomic.h>
+#include <std/thread.h>
 
 // ── Collections ───────────────────────────────────────────────────────────────
-#include <std/collections/slice.sc>
-#include <std/collections/vec.sc>
-#include <std/collections/string.sc>
-#include <std/collections/stack.sc>
-#include <std/collections/queue.sc>
-#include <std/collections/list.sc>
-#include <std/collections/map.sc>
-#include <std/collections/bst.sc>
+#include <std/collections/slice.h>
+#include <std/collections/vec.h>
+#include <std/collections/string.h>
+#include <std/collections/stack.h>
+#include <std/collections/queue.h>
+#include <std/collections/list.h>
+#include <std/collections/map.h>
+#include <std/collections/bst.h>

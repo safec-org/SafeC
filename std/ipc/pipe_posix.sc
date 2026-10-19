@@ -2,6 +2,7 @@
 // (macOS / iOS / Linux / Android / FreeBSD — see pipe.h for the portable
 // API and the full backend file list)
 #pragma once
+#include <std/stddef.h>
 #include <std/ipc/pipe.h>
 
 #define SAFEC_PIPE_F_GETFL 3
@@ -12,8 +13,8 @@
 namespace std {
 
 extern int   pipe(void* pipefd);       // int pipefd[2]
-extern long  read(int fd, void* buf, unsigned long count);
-extern long  write(int fd, const void* buf, unsigned long count);
+extern ssize_t  read(int fd, void* buf, size_t count);
+extern ssize_t  write(int fd, const void* buf, size_t count);
 extern int   close(int fd);
 extern int   fcntl(int fd, int cmd, int arg);
 
@@ -31,15 +32,15 @@ inline int pipe_create(&Pipe out) {
     return 0;
 }
 
-inline long long pipe_read(&Pipe p, void* buf, unsigned long count) {
+inline long long pipe_read(&Pipe p, &unsigned char buf, unsigned long count) {
     long n;
-    unsafe { n = read((int)p->read_fd, buf, count); }
+    unsafe { n = read((int)p->read_fd, (void*)buf, count); }
     return (long long)n;
 }
 
-inline long long pipe_write(&Pipe p, const void* buf, unsigned long count) {
+inline long long pipe_write(&Pipe p, const &unsigned char buf, unsigned long count) {
     long n;
-    unsafe { n = write((int)p->write_fd, buf, count); }
+    unsafe { n = write((int)p->write_fd, (const void*)buf, count); }
     return (long long)n;
 }
 

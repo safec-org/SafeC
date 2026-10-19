@@ -6,6 +6,12 @@
 
 namespace std {
 
+// Definitions of the globals aarch64.h declares extern.
+struct Aa64Timer aa64_timer;
+struct GicDist gic_dist;
+struct GicCpu gic_cpu;
+
+
 inline unsigned long aa64_read_mpidr() {
     unsigned long v = (unsigned long)0;
     unsafe { asm volatile ("mrs %0, mpidr_el1" : "=r"(v)); }

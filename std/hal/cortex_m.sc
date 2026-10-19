@@ -5,6 +5,12 @@
 // MMIO read/write helpers for 32-bit registers.
 namespace std {
 
+// Definitions of the globals cortex_m.h declares extern.
+struct Nvic nvic;
+struct Scb scb;
+struct SysTick systick;
+
+
 static unsigned int cm_read32_(unsigned long addr) {
     unsafe {
         volatile unsigned int* p = (volatile unsigned int*)addr;

@@ -2,12 +2,13 @@
 #pragma once
 #include <std/rpc/rpc.h>
 #include <std/http/http.h>
-#include <std/collections/string.sc>
-#include <std/collections/map.sc>
-#include <std/mem.sc>
-#include <std/fmt.sc>
-#include <std/convert.sc>
-#include <std/str.sc>
+#include <std/collections/string.h>
+#include <std/collections/map.h>
+#include <std/mem.h>
+#include <std/fmt.h>
+#include <std/convert.h>
+#include <std/str.h>
+#include <std/panic.h>
 // See http.h's top comment: a std/sched/io_nb_*.sc backend and
 // std/http/http.sc must both already be included by the caller before this
 // file.
@@ -120,37 +121,29 @@ struct RpcResult rpc_call(const char* host, unsigned short port, const char* pat
 
 // ── Server ────────────────────────────────────────────────────────────────
 
-static struct HashMap rpc_handlers_;
+static struct StrMap<RpcMethodHandler> rpc_handlers_;
 static int rpc_handlers_init_ = 0;
 
 void rpc_register(const char* path, RpcMethodHandler handler) {
     if (rpc_handlers_init_ == 0) {
-        rpc_handlers_ = str_map_new(sizeof(void*));
+        rpc_handlers_ = str_map_new();
         rpc_handlers_init_ = 1;
     }
-    void* h;
-    unsafe { h = (void*)handler; }
-    unsafe { str_map_insert(&rpc_handlers_, path, (const void*)&h); }
+    rpc_handlers_.insert(path, handler);
 }
 
-static struct HttpResponse rpc_dispatch_(struct HttpRequest* req) {
+static struct HttpResponse rpc_dispatch_(&HttpRequest req) {
     const char* path;
     unsafe { path = req->path.as_ptr(); }
 
-    void* found = (void*)0;
-    if (rpc_handlers_init_ != 0) {
-        void* slot;
-        unsafe { slot = str_map_get(&rpc_handlers_, path); }
-        if (slot != (void*)0) {
-            unsafe { found = *(void**)slot; }
-        }
-    }
+    ?&RpcMethodHandler found = null;
+    if (rpc_handlers_init_ != 0) found = rpc_handlers_.get(path);
 
     struct HttpResponse resp;
     resp.headers = string_new();
     unsafe { resp.headers.push("Content-Type: application/grpc+safec\r\n"); }
 
-    if (found == (void*)0) {
+    if (found.is_null()) {
         resp.status = 404;
         unsafe { resp.body = string_from("no RPC method registered for this path"); }
         return resp;
@@ -170,8 +163,7 @@ static struct HttpResponse rpc_dispatch_(struct HttpRequest* req) {
         return resp;
     }
 
-    RpcMethodHandler handlerFn;
-    unsafe { handlerFn = (RpcMethodHandler)found; }
+    RpcMethodHandler handlerFn = *expect_ref(found, "rpc handler");
     struct RpcResult result = handlerFn(reqData, reqLen);
     if (reqData != (unsigned char*)0) { unsafe { dealloc((void*)reqData); } }
 

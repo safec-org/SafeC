@@ -32,7 +32,11 @@ unsigned long long perf_read_cycle();
 // Read timestamp in nanoseconds (best-effort; returns 0 in freestanding without freq).
 unsigned long long perf_read_ns();
 
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
 #define PERF_BEGIN(ctr)  do { (ctr).start(); } while(0)
+#endif
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
 #define PERF_END(ctr)    do { (ctr).stop();  } while(0)
+#endif
 
 } // namespace std

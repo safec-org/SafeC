@@ -1,5 +1,5 @@
 // SafeC Standard Library — Channel built-ins runtime (see channel.h for
-// the typed chan_send_t<T>/chan_recv_t<T> wrappers most callers want)
+// the typed Chan<T> wrapper most callers want)
 //
 // Implements the compiler's channel built-in contract — chan_create/
 // chan_send/chan_recv/chan_close, see CodeGen.cpp's "Channel built-ins"
@@ -28,13 +28,11 @@
 // functions — see bare_spawn.sc's comment for why (namespaced non-extern
 // functions get name-mangled to 'std_name' and would silently fail to
 // link against the literal symbol names the compiler's CodeGen emits
-// calls to). chan_send_t/chan_recv_t (channel.h) call these by their
-// literal names below and are themselves ordinary 'namespace std'
-// members, same as every other generic<T> wrapper in this stdlib.
+// calls to). Chan<T> (channel.h) calls these by their literal names.
 #pragma once
 #include <std/sync/channel.h>
-#include <std/thread.sc>
-#include <std/mem.sc>
+#include <std/thread.h>
+#include <std/mem.h>
 
 struct SafecChan_ {
     unsigned long long* buf;   // ring buffer, 'cap' 8-byte slots
@@ -140,26 +138,6 @@ void __safec_chan_close(void* chPtr) {
 
 namespace std {
 
-generic<T>
-int chan_send_t(void* ch, T val) {
-    static_assert(sizeof(T) <= 8UL, "chan_send_t: T must fit in 8 bytes (channels carry fixed 8-byte payload slots) — box larger types on the heap and send the pointer instead");
-    unsigned long long slot = 0ULL;
-    unsafe { *(T*)&slot = val; }
-    bool ok;
-    unsafe { ok = __safec_chan_send(ch, (void*)&slot); }
-    return ok ? 1 : 0;
-}
 
-generic<T>
-int chan_recv_t(void* ch, T* out) {
-    static_assert(sizeof(T) <= 8UL, "chan_recv_t: T must fit in 8 bytes (channels carry fixed 8-byte payload slots) — box larger types on the heap and send the pointer instead");
-    unsigned long long slot = 0ULL;
-    bool ok;
-    unsafe { ok = __safec_chan_recv(ch, (void*)&slot); }
-    if (ok) {
-        unsafe { *out = *(T*)&slot; }
-    }
-    return ok ? 1 : 0;
-}
 
 } // namespace std

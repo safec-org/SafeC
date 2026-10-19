@@ -1,11 +1,12 @@
 // SafeC Standard Library — MMU Context
 #pragma once
+#include <std/stddef.h>
 #include <std/kernel/mmu.h>
 #include <std/kernel/frame.h>
 
 namespace std {
 
-extern void* memset(void* ptr, int val, unsigned long n);
+extern void* memset(void* ptr, int val, size_t n);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

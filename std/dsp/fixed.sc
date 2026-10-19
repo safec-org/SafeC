@@ -63,25 +63,26 @@ inline const Fixed fixed_sqrt(Fixed x) {
     if ((int)x <= 0) {
         return (Fixed)0;
     }
-
-    // Initial guess: shift raw right 12 bits (midpoint of the
-    // Q24 fractional scale).
-    long long raw = (long long)(int)x;
-    long long r = raw >> 12;
-    if (r == 0) {
-        r = 1;
+    // sqrt(x) in Q8.24 is sqrt(raw / 2^24) * 2^24 = sqrt(raw * 2^24): take
+    // the exact integer square root of the widened value directly (raw <
+    // 2^31, so raw << 24 < 2^55 fits). Bit-by-bit method: 28 fixed
+    // iterations, exact floor result for every input — no initial-guess
+    // dependence like Newton's method, which needs input-dependent
+    // iteration counts to converge.
+    unsigned long long v = (unsigned long long)(long long)(int)x << 24;
+    unsigned long long res = 0ULL;
+    unsigned long long bit = 1ULL << 54;
+    while (bit > v) { bit = bit >> 2; }
+    while (bit != 0ULL) {
+        if (v >= res + bit) {
+            v = v - (res + bit);
+            res = (res >> 1) + bit;
+        } else {
+            res = res >> 1;
+        }
+        bit = bit >> 2;
     }
-
-    // 4 Newton-Raphson iterations for Q8.24 precision.
-    r = (r + raw / r) / (long long)2;
-    r = (r + raw / r) / (long long)2;
-    r = (r + raw / r) / (long long)2;
-    r = (r + raw / r) / (long long)2;
-
-    // Newton-Raphson above converges 'r' to the plain integer sqrt(raw), not
-    // the Q8.24 result: sqrt(x) = sqrt(raw/2^24) = sqrt(raw)/2^12, so
-    // sqrt(x) in Q8.24 is sqrt(raw)/2^12 * 2^24 = sqrt(raw) * 2^12.
-    return (Fixed)(int)(r << 12);
+    return (Fixed)(int)res;
 }
 
 } // namespace std

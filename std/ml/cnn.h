@@ -8,7 +8,7 @@
 // activations don't fit that shape). Forward-only, like the rest of
 // std/ml's newer additions (see attention.h). Conv2D supports stride and
 // zero-padding; no dilation, no grouped/depthwise convolution.
-#include <std/mem.sc>
+#include <std/mem.h>
 
 namespace std {
 

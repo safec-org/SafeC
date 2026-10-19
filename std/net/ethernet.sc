@@ -14,7 +14,7 @@ inline int eth_parse(&stack PacketBuf pkt, &stack EthernetHdr hdr_out) {
             hdr_out.src[i] = d[6 + i];
             i = i + 1;
         }
-        hdr_out.ethertype = net_ntohs(
+        hdr_out.ethertype = (
             (unsigned short)(((unsigned short)d[12] << 8) | (unsigned short)d[13]));
     }
     return 0;
@@ -30,7 +30,7 @@ void eth_build(&stack PacketBuf pkt, const unsigned char dst[NET_MAC_LEN],
             d[6 + i] = src[i];
             i = i + 1;
         }
-        unsigned short et = net_htons(ethertype);
+        unsigned short et = (ethertype);
         d[12] = (unsigned char)((et >> 8) & (unsigned short)0xFF);
         d[13] = (unsigned char)(et & (unsigned short)0xFF);
     }

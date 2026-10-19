@@ -36,9 +36,8 @@ struct VfsNode {
     // Write `len` bytes from `buf` to file at `offset`.  Returns bytes written.
     unsigned long write(unsigned long offset, const &stack unsigned char buf, unsigned long len);
 
-    // List directory entries.  Calls `cb(entry, user)` for each child.
-    // Returns count of entries, -1 on error.
-    int readdir(void* cb, void* user);
+    // Type-erased listing behind vfs_readdir (below).
+    int readdir_raw_(void* cb, void* user);
 };
 
 // Driver interface: filled by each filesystem.
@@ -67,8 +66,8 @@ struct Vfs {
     struct VfsMount mounts[VFS_MAX_MOUNTS];
     int             mount_count;
 
-    // Register a filesystem at `mountpoint` (e.g. "/" or "/tmp").
-    int  mount(const char* mountpoint, struct VfsOps ops, void* ctx);
+    // Type-erased registration behind vfs_mount (below).
+    int  mount_raw_(const char* mountpoint, struct VfsOps ops, void* ctx);
 
     // Unmount filesystem at `mountpoint`.
     int  unmount(const char* mountpoint);
@@ -84,7 +83,21 @@ struct Vfs {
 };
 
 // Global VFS instance (single-root for embedded use).
-struct Vfs vfs_root;
+extern struct Vfs vfs_root;
 void vfs_init();
+
+// Register a filesystem at `mountpoint` (e.g. "/" or "/tmp"); ctx is the
+// driver context its ops expect (TmpFs, FatCtx, Ext2Ctx, ...).
+generic<T>
+int vfs_mount(&Vfs v, const char* mountpoint, struct VfsOps ops, &T ctx) {
+    unsafe { return v.mount_raw_(mountpoint, ops, (void*)ctx); }
+}
+
+// Calls cb(entry, user) for each child of directory `dir`.
+// Returns the entry count, or -1 on error.
+generic<T>
+int vfs_readdir(&VfsNode dir, fn void(&VfsNode, &T) cb, &T user) {
+    unsafe { return dir.readdir_raw_((void*)cb, (void*)user); }
+}
 
 } // namespace std

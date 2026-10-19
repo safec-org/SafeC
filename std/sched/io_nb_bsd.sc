@@ -3,7 +3,7 @@
 // backend file list)
 #pragma once
 #include <std/sched/io_nb.h>
-#include <std/errno.sc>
+#include <std/errno.h>
 
 #define SCHED_O_CREAT     0x0200
 #define SCHED_O_NONBLOCK  0x0004

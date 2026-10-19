@@ -1,114 +1,169 @@
-// SafeC Standard Library — Static-capacity Vector and Map
-// All storage is on the stack / in static memory — zero heap allocation.
-// Capacity is a compile-time constant baked into the struct via macros.
+// SafeC Standard Library — StaticVec<T> / StaticMap<V>: zero-heap collections
+//
+// Fixed-capacity containers over storage the caller provides — a static
+// array, a stack array, an arena block — so nothing is ever allocated and
+// the capacity is whatever the backing array's (compile-time) size is.
 // Freestanding-safe.
+//
+//   static int g_buf[32];
+//   struct StaticVec<int> v = std::static_vec_init(&g_buf[0], 32UL);
+//   v.push(42);
+//   ?int top = v.pop();
+//
+//   static struct StaticMapSlot<int> g_slots[64];
+//   struct StaticMap<int> m = std::static_map_init(&g_slots[0], 64UL);
+//   m.insert(5UL, 100);
+//   int x = m.get(5UL).default(0);
+//
+// The container holds a region-less reference to the storage: keep the
+// backing array alive at least as long as the container.
 #pragma once
 
-// ── StaticVec ─────────────────────────────────────────────────────────────────
-// Usage:
-//   STATIC_VEC_DECL(IntVec, int, 64);   // declare a type
-//   struct IntVec v;
-//   static_vec_push(&v, 42);
-// Or use the generic inline helpers below.
+namespace std {
 
-#define STATIC_VEC_DECL(TypeName, ElemType, Cap)          \
-    struct TypeName {                                      \
-        ElemType      data[(Cap)];                        \
-        unsigned long len;                                \
-        unsigned long cap;                                \
-    }
+// ── StaticVec<T> ──────────────────────────────────────────────────────────────
 
-// Generic operations — work with any STATIC_VEC_DECL type via sizeof(elem).
-// Pass &vec and the value by pointer for type safety.
+generic<T>
+struct StaticVec {
+    &T            data;   // caller's storage, 'cap' elements
+    unsigned long len;
+    unsigned long cap;
 
-// Initialise a StaticVec (zero len; cap = Cap).  Must call before use.
-#define STATIC_VEC_INIT(vec, Cap)   do { (vec)->len = 0; (vec)->cap = (Cap); } while(0)
+    int           push(T val);                  // 0 if full
+    ?T            pop();                        // null if empty
+    ?&T           top() const;
+    ?&T           get(unsigned long idx) const; // null if out of range
+    unsigned long length() const;
+    int           is_empty() const;
+    int           is_full() const;
+    void          clear();
+};
 
-// Push one element.  Returns 1 on success, 0 if full.
-#define STATIC_VEC_PUSH(vec, val)                                         \
-    ((vec)->len < (vec)->cap                                              \
-     ? ((vec)->data[(vec)->len++] = (val), 1)                            \
-     : 0)
+generic<T>
+struct StaticVec<T> static_vec_init(&T storage, unsigned long cap) {
+    struct StaticVec<T> v;
+    v.data = storage;
+    v.len = 0UL;
+    v.cap = cap;
+    return v;
+}
 
-// Pop last element into *out.  Returns 1 on success, 0 if empty.
-#define STATIC_VEC_POP(vec, out)                                          \
-    ((vec)->len > 0                                                       \
-     ? (*(out) = (vec)->data[--(vec)->len], 1)                           \
-     : 0)
+generic<T>
+int StaticVec::push(T val) {
+    if (self.len >= self.cap) return 0;
+    unsafe { self.data[self.len] = val; }
+    self.len = self.len + 1UL;
+    return 1;
+}
 
-// Peek at last element without removing.
-#define STATIC_VEC_TOP(vec)  ((vec)->data[(vec)->len - 1UL])
+generic<T>
+?T StaticVec::pop() {
+    if (self.len == 0UL) return null;
+    self.len = self.len - 1UL;
+    unsafe { return self.data[self.len]; }
+}
 
-// Access element by index (unchecked).
-#define STATIC_VEC_AT(vec, i)  ((vec)->data[(i)])
+generic<T>
+?&T StaticVec::top() const {
+    if (self.len == 0UL) return null;
+    unsafe { return (?&T)&self.data[self.len - 1UL]; }
+}
 
-// Number of elements.
-#define STATIC_VEC_LEN(vec)  ((vec)->len)
+generic<T>
+?&T StaticVec::get(unsigned long idx) const {
+    if (idx >= self.len) return null;
+    unsafe { return (?&T)&self.data[idx]; }
+}
 
-// Is empty?
-#define STATIC_VEC_EMPTY(vec) ((vec)->len == 0)
+generic<T>
+unsigned long StaticVec::length() const { return self.len; }
 
-// ── StaticMap ─────────────────────────────────────────────────────────────────
-// Simple open-addressing hash map with compile-time capacity.
-// Keys are unsigned long; values are void* (cast as needed).
+generic<T>
+int StaticVec::is_empty() const { return self.len == 0UL; }
 
-#define STATIC_MAP_DECL(TypeName, Cap)                    \
-    struct TypeName {                                     \
-        unsigned long keys[(Cap)];                        \
-        void*         vals[(Cap)];                        \
-        int           used[(Cap)];                        \
-        unsigned long count;                              \
-        unsigned long cap;                                \
-    }
+generic<T>
+int StaticVec::is_full() const { return self.len >= self.cap; }
 
-#define STATIC_MAP_INIT(m, Cap)  do {                     \
-    (m)->count = 0; (m)->cap = (Cap);                     \
-    unsigned long _i = 0;                                 \
-    while (_i < (Cap)) { (m)->used[_i] = 0; _i++; }      \
-} while(0)
+generic<T>
+void StaticVec::clear() { self.len = 0UL; }
 
-// Insert key/val.  Returns 1 on success, 0 if full.
-static inline int static_map_insert_(unsigned long* keys, void** vals,
-                                      int* used, unsigned long cap,
-                                      unsigned long* count,
-                                      unsigned long key, void* val) {
-    unsigned long h = key % cap;
-    unsigned long i = 0;
-    while (i < cap) {
-        unsigned long slot = (h + i) % cap;
+// ── StaticMap<V> (unsigned long keys, open addressing) ────────────────────────
+
+generic<V>
+struct StaticMapSlot {
+    unsigned long key;
+    V             val;
+    int           used;
+};
+
+generic<V>
+struct StaticMap {
+    &StaticMapSlot<V> slots;   // caller's storage, 'cap' slots
+    unsigned long     cap;
+    unsigned long     count;
+
+    int           insert(unsigned long key, V val);   // insert or update; 0 if full
+    ?&V           get(unsigned long key) const;       // null if missing
+    int           contains(unsigned long key) const;
+    unsigned long length() const;
+    void          clear();
+};
+
+generic<V>
+struct StaticMap<V> static_map_init(&StaticMapSlot<V> storage, unsigned long cap) {
+    struct StaticMap<V> m;
+    m.slots = storage;
+    m.cap = cap;
+    m.count = 0UL;
+    m.clear();
+    return m;
+}
+
+generic<V>
+int StaticMap::insert(unsigned long key, V val) {
+    unsigned long i = 0UL;
+    while (i < self.cap) {
+        unsigned long s = (key + i) % self.cap;
         unsafe {
-            if (!used[slot] || keys[slot] == key) {
-                keys[slot] = key;
-                vals[slot] = val;
-                if (!used[slot]) { used[slot] = 1; (*count)++; }
+            if (!self.slots[s].used || self.slots[s].key == key) {
+                if (!self.slots[s].used) { self.slots[s].used = 1; self.count = self.count + 1UL; }
+                self.slots[s].key = key;
+                self.slots[s].val = val;
                 return 1;
             }
         }
-        i++;
+        i = i + 1UL;
     }
     return 0;
 }
 
-static inline void* static_map_get_(unsigned long* keys, void** vals,
-                                     int* used, unsigned long cap,
-                                     unsigned long key) {
-    unsigned long h = key % cap;
-    unsigned long i = 0;
-    while (i < cap) {
-        unsigned long slot = (h + i) % cap;
+generic<V>
+?&V StaticMap::get(unsigned long key) const {
+    unsigned long i = 0UL;
+    while (i < self.cap) {
+        unsigned long s = (key + i) % self.cap;
         unsafe {
-            if (!used[slot]) return (void*)0;
-            if (keys[slot] == key) return vals[slot];
+            if (!self.slots[s].used) return null;
+            if (self.slots[s].key == key) return (?&V)&self.slots[s].val;
         }
-        i++;
+        i = i + 1UL;
     }
-    return (void*)0;
+    return null;
 }
 
-#define STATIC_MAP_INSERT(m, key, val) \
-    static_map_insert_((m)->keys, (m)->vals, (m)->used, (m)->cap, &(m)->count, (key), (void*)(val))
+generic<V>
+int StaticMap::contains(unsigned long key) const { return !self.get(key).is_null(); }
 
-#define STATIC_MAP_GET(m, key) \
-    static_map_get_((m)->keys, (m)->vals, (m)->used, (m)->cap, (key))
+generic<V>
+unsigned long StaticMap::length() const { return self.count; }
 
-#define STATIC_MAP_LEN(m) ((m)->count)
+generic<V>
+void StaticMap::clear() {
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < self.cap) { self.slots[i].used = 0; i = i + 1UL; }
+    }
+    self.count = 0UL;
+}
+
+} // namespace std

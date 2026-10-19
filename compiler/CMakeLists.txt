@@ -36,6 +36,7 @@ set(SAFEC_SOURCES
   src/Clone.cpp
   src/ConstEval.cpp
   src/CodeGen.cpp
+  src/AbiLowering.cpp
   src/main.cpp
 )
 

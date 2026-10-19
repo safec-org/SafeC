@@ -1,10 +1,11 @@
 // SafeC Standard Library — Secure Allocator
 #pragma once
+#include <std/stddef.h>
 #include <std/crypto/secure_alloc.h>
 
 namespace std {
 
-extern void* memset(void* p, int v, unsigned long n);
+extern void* memset(void* p, int v, size_t n);
 
 struct SecureAllocator secure_alloc_new(unsigned long obj_size,
                                         unsigned long count) {

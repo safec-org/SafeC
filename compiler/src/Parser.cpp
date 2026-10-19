@@ -200,7 +200,10 @@ TypePtr Parser::parseReferenceType(bool nullable, bool leadingConst) {
     bool isConst = leadingConst;
     if (cur().is(TK::KW_const)) { consume(); isConst = true; }
 
-    TypePtr base = parseBaseType();
+    // A reference to a reference ('&?&char saveptr' — an out-parameter
+    // holding a nullable reference) nests the whole inner reference type.
+    TypePtr base = (cur().is(TK::Amp) || cur().is(TK::QuestionAmp)) ? parseType()
+                                                                   : parseBaseType();
     // Pointer / array suffixes, e.g. '&stack char* saveptr' (reference to a pointer)
     base = parseTypeDeclarator(std::move(base));
     return makeReference(std::move(base), r, nullable, !isConst, std::move(arenaName));
@@ -298,11 +301,11 @@ TypePtr Parser::parseBaseType() {
         // which never expects a comparison operator.
         if (cur().is(TK::Lt)) {
             consume();
-            while (!atEnd() && !cur().is(TK::Gt)) {
+            while (!atEnd() && !cur().is(TK::Gt) && !cur().is(TK::RShift)) {
                 st->typeArgs.push_back(parseType());
                 if (!match(TK::Comma)) break;
             }
-            expect(TK::Gt, "expected '>' closing generic struct type arguments");
+            expectTypeArgClose();
         }
         return st;
     }
@@ -329,8 +332,16 @@ TypePtr Parser::parseBaseType() {
     case TK::KW_fn: {
         // fn ReturnType(ParamType, ...) — safe function pointer type
         consume(); // eat 'fn'
-        TypePtr ret = parseBaseType();
-        ret = parseTypeDeclarator(std::move(ret));
+        // A reference/optional return type ('fn ?&T(?&T)') starts with a
+        // type prefix that parseBaseType doesn't take; parseType does.
+        TypePtr ret;
+        if (cur().is(TK::Amp) || cur().is(TK::QuestionAmp) || cur().is(TK::Question) ||
+            (cur().is(TK::KW_const) && (peek().is(TK::Amp) || peek().is(TK::QuestionAmp)))) {
+            ret = parseType();
+        } else {
+            ret = parseBaseType();
+            ret = parseTypeDeclarator(std::move(ret));
+        }
         expect(TK::LParen, "expected '(' after 'fn' return type");
         std::vector<TypePtr> params;
         bool variadic = false;
@@ -365,6 +376,16 @@ TypePtr Parser::parseBaseType() {
         consume();
         // Named user type (struct/typedef)
         auto st = std::make_shared<StructType>(name, false);
+        // 'Vec<int>' without the 'struct' keyword, for a declared struct
+        // name (a type position, so '<' can't be less-than here).
+        if (cur().is(TK::Lt) && typeNames_.count(name)) {
+            consume();
+            while (!atEnd() && !cur().is(TK::Gt) && !cur().is(TK::RShift)) {
+                st->typeArgs.push_back(parseType());
+                if (!match(TK::Comma)) break;
+            }
+            expectTypeArgClose();
+        }
         return st;
     }
     default:
@@ -829,6 +850,7 @@ DeclPtr Parser::parseTopLevelDecl() {
         expect(TK::Eq, "expected '=' in newtype declaration");
         TypePtr base = parseType();
         expect(TK::Semicolon);
+        typeNames_.insert(name);
         return std::make_unique<NewtypeDecl>(std::move(name), std::move(base), loc);
     }
 
@@ -1181,7 +1203,7 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(
 std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTrailingSemicolon) {
     auto loc = cur().loc;
     std::string name;
-    if (cur().is(TK::Ident)) { name = cur().text; consume(); }
+    if (cur().is(TK::Ident)) { name = cur().text; consume(); typeNames_.insert(name); }
 
     auto sd = std::make_unique<StructDecl>(std::move(name), loc);
     sd->isUnion = isUnion;
@@ -1384,7 +1406,7 @@ std::unique_ptr<TraitDecl> Parser::parseTraitDecl() {
 std::unique_ptr<EnumDecl> Parser::parseEnumDecl() {
     auto loc = cur().loc;
     std::string name;
-    if (cur().is(TK::Ident)) { name = cur().text; consume(); }
+    if (cur().is(TK::Ident)) { name = cur().text; consume(); typeNames_.insert(name); }
 
     auto ed = std::make_unique<EnumDecl>(std::move(name), loc);
     // Parse optional underlying type: enum Foo : uint8 { ... }
@@ -1466,6 +1488,7 @@ DeclPtr Parser::parseTypedef() {
         } else consume();
     }
     expect(TK::Semicolon);
+    typeNames_.insert(name);
     return std::make_unique<TypeAliasDecl>(std::move(name), std::move(t), loc);
 }
 
@@ -2427,7 +2450,12 @@ ExprPtr Parser::parseUnaryExpr() {
             expect(TK::RParen, "expected ')' after sizeof... pack name");
             return std::make_unique<SizeofPackExpr>(packName, loc);
         }
-        if (cur().is(TK::LParen) && isTypeStart(peek())) {
+        // 'sizeof(ident.field)' / 'sizeof(ident->f)' / 'sizeof(ident[i])'
+        // are expressions even though a bare identifier could start a type.
+        bool exprOperand = peek().is(TK::Ident) && pos_ + 2 < toks_.size() &&
+            (toks_[pos_ + 2].is(TK::Dot) || toks_[pos_ + 2].is(TK::Arrow) ||
+             toks_[pos_ + 2].is(TK::LBracket));
+        if (cur().is(TK::LParen) && isTypeStart(peek()) && !exprOperand) {
             consume(); // '('
             auto t = parseType();
             expect(TK::RParen, "expected ')' after sizeof type");
@@ -2494,6 +2522,18 @@ ExprPtr Parser::parseCastExpr() {
     // Heuristic: '(' followed by a type keyword → cast
     if (cur().is(TK::LParen) && isTypeStart(peek())) {
         size_t saved = pos_;
+        // '(name)' followed by a token that is also a binary operator
+        // ('(x) + 1', '(x) * y', '(x) & m', '(x) - 1') is a cast only if
+        // 'name' is a type this translation unit has declared; otherwise
+        // it's a parenthesized operand. (Same rule C uses for typedef
+        // names, restricted to the operators that are ambiguous.)
+        if (peek().is(TK::Ident) && pos_ + 3 < toks_.size() &&
+            toks_[pos_ + 2].is(TK::RParen) && !typeNames_.count(peek().text)) {
+            const Token &after = toks_[pos_ + 3];
+            if (after.is(TK::Plus) || after.is(TK::Minus) ||
+                after.is(TK::Star) || after.is(TK::Amp))
+                return parsePostfixExpr();
+        }
         size_t diagMark = diag_.checkpoint();
         bool wasSilent = diag_.isSilent();
         diag_.setSilent(true); // speculative — don't surface errors unless we commit
@@ -2681,6 +2721,8 @@ ExprPtr Parser::parsePrimaryExpr() {
             e = std::make_unique<BinaryExpr>(BinaryOp::Comma, std::move(e), std::move(rhs), commaLoc);
         }
         expect(TK::RParen, "expected ')' closing parenthesized expression");
+        if (e->kind == ExprKind::Binary && static_cast<BinaryExpr &>(*e).op == BinaryOp::Comma)
+            static_cast<BinaryExpr &>(*e).parenComma = true;   // maybe a tuple literal (Sema decides)
         return e;
     }
     case TK::LBrace: {
@@ -2831,3 +2873,14 @@ ExprPtr Parser::parsePrimaryExpr() {
 }
 
 } // namespace safec
+
+// Closes a type-argument list. 'A<B<int>>' lexes its two closers as one
+// '>>' token: consume half of it, leaving a '>' for the outer list.
+void safec::Parser::expectTypeArgClose() {
+    if (cur().is(TK::RShift)) {
+        toks_[pos_].kind = TK::Gt;
+        toks_[pos_].text = ">";
+        return;
+    }
+    expect(TK::Gt, "expected '>' closing generic struct type arguments");
+}

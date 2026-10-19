@@ -11,6 +11,7 @@
 // possible per kernel to minimize the chance of a transcription error, but
 // this needs real hardware verification before being trusted.
 #pragma once
+#include <std/stddef.h>
 #include <std/ml/gpu_cuda.h>
 #include <std/ml/float16.h>
 #include <std/mem.h>
@@ -1128,7 +1129,7 @@ int cuda_sgd_update_f32(void* devW, void* devGrad, float lr, unsigned long n) {
     }
 }
 
-extern void* malloc(unsigned long size);
+extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
 // ── fp16 / bf16 tier (see gpu_cuda.h) ────────────────────────────────────────

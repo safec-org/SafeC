@@ -1,0 +1,9 @@
+[package]
+name        = "stdlib_tests"
+version     = "0.1.0"
+author      = "SafeC"
+description = "Runtime test suite for the SafeC standard library (run with: safeguard test)"
+license     = "MIT"
+
+[build]
+edition = "2026"

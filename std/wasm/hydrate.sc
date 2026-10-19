@@ -5,48 +5,42 @@
 #include <std/wasm/dom.h>
 #include <std/wasm/wasm_rt.h>
 #include <std/reactive/signal.h>
+#include <std/mem.h>
 
 namespace std {
 
 struct HydrateTextBinding {
-    struct Signal* signal;
-    int elementHandle;
+    &Signal<int> signal;
+    int          elementHandle;
 };
 
-static void __hydrate_text_int_listener(void* userdata) {
-    struct HydrateTextBinding* b;
-    unsafe { b = (struct HydrateTextBinding*)userdata; }
-    struct Signal* s;
-    int handle;
-    unsafe { s = b->signal; handle = b->elementHandle; }
-
-    int* valPtr;
-    unsafe { valPtr = (int*)signal_get_raw(s); }
-    if (valPtr == (int*)0) {
-        return;
+static void __hydrate_text_int_listener(?&HydrateTextBinding bq) {
+    match (bq) {
+        case null: return;
+        case some(b): {
+            char buf[24];
+            unsafe {
+                wasm_itoa((long long)b.signal.get(), buf, 24UL);
+                dom_set_text(b.elementHandle, (const char*)buf);
+            }
+        }
     }
-    int val;
-    unsafe { val = *valPtr; }
-
-    char buf[24];
-    unsafe { wasm_itoa((long long)val, buf, 24UL); }
-    unsafe { dom_set_text(handle, (const char*)buf); }
 }
 
-void hydrate_bind_text_int_handle(&stack Signal signal, int elementHandle) {
-    struct HydrateTextBinding* b;
-    unsafe { b = (struct HydrateTextBinding*)malloc(sizeof(struct HydrateTextBinding)); }
-    if (b == (struct HydrateTextBinding*)0) {
-        return;
+void hydrate_bind_text_int_handle(&Signal<int> signal, int elementHandle) {
+    ?&HydrateTextBinding bq = null;
+    unsafe { bq = (?&HydrateTextBinding)alloc(sizeof(struct HydrateTextBinding)); }
+    match (bq) {
+        case null: return;
+        case some(b): {
+            b.signal = signal;
+            b.elementHandle = elementHandle;
+        }
     }
-    unsafe {
-        b->signal = (struct Signal*)signal;
-        b->elementHandle = elementHandle;
-    }
-    unsafe { signal.subscribe(__hydrate_text_int_listener, (void*)b); }
+    signal_subscribe(signal, __hydrate_text_int_listener, bq);
 }
 
-int hydrate_bind_text_int(&stack Signal signal, const char* selector) {
+int hydrate_bind_text_int(&Signal<int> signal, const char* selector) {
     int handle = dom_get_element(selector);
     if (handle < 0) {
         return -1;

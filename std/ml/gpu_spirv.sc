@@ -14,12 +14,13 @@
 // null with bytes from an offline 'glslc kernel.comp -o kernel.spv' (or
 // equivalent HLSL/WGSL-to-SPIR-V) build step.
 #pragma once
+#include <std/stddef.h>
 #include <std/ml/gpu_spirv.h>
 #include <std/mem.h>
 
 namespace std {
 
-extern void* memcpy(void* dst, const void* src, unsigned long n);
+extern void* memcpy(void* dst, const void* src, size_t n);
 
 // ── Vulkan core structs (hand-matched to vulkan_core.h's field order) ──────
 struct VkApplicationInfo {
@@ -586,7 +587,7 @@ int spirv_matmul_f32(const float* a, const float* b, float* out,
 }
 
 // ── Persistent-buffer tier (see gpu_spirv.h) ────────────────────────────────
-extern void* malloc(unsigned long size);
+extern void* malloc(size_t size);
 extern void free(void* ptr);
 
 static void* __spirv_persistent_instance_ = (void*)0;

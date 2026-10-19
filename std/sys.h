@@ -40,13 +40,22 @@ double        sys_strtod(const char* s, char** end);
 float         sys_strtof(const char* s, char** end);
 
 // ── Sorting and searching ─────────────────────────────────────────────────────
-// Sort `n` elements of size `elem_size` starting at `base` using comparator `cmp`.
-// cmp(a, b) must return <0 / 0 / >0  (same as strcmp convention).
-void  sys_qsort(void* base, unsigned long n, unsigned long elem_size, void* cmp);
+// libc-boundary sort/search over untyped elements; use sys_qsort/sys_bsearch.
+void  sys_qsort_raw_(void* base, unsigned long n, unsigned long elem_size, void* cmp);
+void* sys_bsearch_raw_(const void* key, const void* base,
+                       unsigned long n, unsigned long elem_size, void* cmp);
 
-// Binary search in a sorted array.  Returns pointer to matching element or NULL.
-void* sys_bsearch(const void* key, const void* base,
-                  unsigned long n, unsigned long elem_size, void* cmp);
+// Sort the n elements starting at `first`; cmp(a, b) returns <0 / 0 / >0.
+generic<T>
+void sys_qsort(&T first, unsigned long n, fn int(const &T, const &T) cmp) {
+    unsafe { sys_qsort_raw_((void*)first, n, sizeof(T), (void*)cmp); }
+}
+
+// Binary search of a sorted array; the matching element, or null.
+generic<T>
+?&T sys_bsearch(const &T key, const &T first, unsigned long n, fn int(const &T, const &T) cmp) {
+    unsafe { return (?&T)sys_bsearch_raw_((const void*)key, (const void*)first, n, sizeof(T), (void*)cmp); }
+}
 
 // ── Clocks ────────────────────────────────────────────────────────────────────
 long long     sys_cpu_time_ns();

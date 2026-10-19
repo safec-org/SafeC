@@ -40,17 +40,17 @@ int tcp_parse(&stack PacketBuf pkt, unsigned long offset,
     if (pkt.len < offset + (unsigned long)TCP_HDR_MIN_LEN) { return -1; }
     unsafe {
         unsigned char* d = (unsigned char*)pkt.data + offset;
-        hdr_out.src_port = net_ntohs((unsigned short)(((unsigned short)d[0] << 8)
+        hdr_out.src_port = ((unsigned short)(((unsigned short)d[0] << 8)
                                                      | (unsigned short)d[1]));
-        hdr_out.dst_port = net_ntohs((unsigned short)(((unsigned short)d[2] << 8)
+        hdr_out.dst_port = ((unsigned short)(((unsigned short)d[2] << 8)
                                                      | (unsigned short)d[3]));
-        hdr_out.seq      = net_ntohl(((unsigned int)d[4] << 24) | ((unsigned int)d[5] << 16)
+        hdr_out.seq      = (((unsigned int)d[4] << 24) | ((unsigned int)d[5] << 16)
                                    | ((unsigned int)d[6] << 8)  |  (unsigned int)d[7]);
-        hdr_out.ack_num  = net_ntohl(((unsigned int)d[8] << 24) | ((unsigned int)d[9] << 16)
+        hdr_out.ack_num  = (((unsigned int)d[8] << 24) | ((unsigned int)d[9] << 16)
                                    | ((unsigned int)d[10] << 8) |  (unsigned int)d[11]);
         hdr_out.data_off = (unsigned char)((d[12] >> 4) & (unsigned char)0xF);
         hdr_out.flags    = d[13];
-        hdr_out.window   = net_ntohs((unsigned short)(((unsigned short)d[14] << 8)
+        hdr_out.window   = ((unsigned short)(((unsigned short)d[14] << 8)
                                                      | (unsigned short)d[15]));
         hdr_out.checksum = (unsigned short)0;
         hdr_out.urgent   = (unsigned short)0;
@@ -65,25 +65,25 @@ static unsigned long tcp_write_hdr_(unsigned char* d,
                                     unsigned int seq, unsigned int ack_num,
                                     unsigned char flags, unsigned short window) {
     unsafe {
-        unsigned short sp = net_htons(src_port);
-        unsigned short dp = net_htons(dst_port);
+        unsigned short sp = (src_port);
+        unsigned short dp = (dst_port);
         d[0] = (unsigned char)((sp >> 8) & (unsigned short)0xFF);
         d[1] = (unsigned char)(sp & (unsigned short)0xFF);
         d[2] = (unsigned char)((dp >> 8) & (unsigned short)0xFF);
         d[3] = (unsigned char)(dp & (unsigned short)0xFF);
-        unsigned int seq_n = net_htonl(seq);
+        unsigned int seq_n = (seq);
         d[4] = (unsigned char)((seq_n >> 24) & (unsigned int)0xFF);
         d[5] = (unsigned char)((seq_n >> 16) & (unsigned int)0xFF);
         d[6] = (unsigned char)((seq_n >>  8) & (unsigned int)0xFF);
         d[7] = (unsigned char)(seq_n & (unsigned int)0xFF);
-        unsigned int ack_n = net_htonl(ack_num);
+        unsigned int ack_n = (ack_num);
         d[8]  = (unsigned char)((ack_n >> 24) & (unsigned int)0xFF);
         d[9]  = (unsigned char)((ack_n >> 16) & (unsigned int)0xFF);
         d[10] = (unsigned char)((ack_n >>  8) & (unsigned int)0xFF);
         d[11] = (unsigned char)(ack_n & (unsigned int)0xFF);
         d[12] = (unsigned char)0x50;  // data offset = 5 (20 bytes)
         d[13] = flags;
-        unsigned short win = net_htons(window);
+        unsigned short win = (window);
         d[14] = (unsigned char)((win >> 8) & (unsigned short)0xFF);
         d[15] = (unsigned char)(win & (unsigned short)0xFF);
         d[16] = (unsigned char)0; d[17] = (unsigned char)0;  // checksum placeholder
@@ -102,7 +102,24 @@ void TcpConn::connect(unsigned int remote_ip, unsigned short remote_port,
     self.remote_port = remote_port;
     self.local_ip    = local_ip;
     self.local_port  = local_port;
-    self.snd_nxt     = isn + (unsigned int)1;
+    // The SYN itself carries 'isn'; build_segment() advances snd_nxt past
+    // it (a SYN occupies one sequence number).
+    self.snd_nxt     = isn;
+    self.snd_una     = isn;
+    self.rcv_nxt     = (unsigned int)0;
+    self.rcv_wnd     = (unsigned int)TCP_RX_BUF;
+    self.rx_len      = (unsigned long)0;
+    self.tx_len      = (unsigned long)0;
+}
+
+void TcpConn::listen(unsigned int local_ip, unsigned short local_port,
+                     unsigned int isn) {
+    self.state       = TCP_LISTEN;
+    self.local_ip    = local_ip;
+    self.local_port  = local_port;
+    self.remote_ip   = (unsigned int)0;
+    self.remote_port = (unsigned short)0;
+    self.snd_nxt     = isn;
     self.snd_una     = isn;
     self.rcv_nxt     = (unsigned int)0;
     self.rcv_wnd     = (unsigned int)TCP_RX_BUF;
@@ -126,7 +143,26 @@ int TcpConn::recv(&stack PacketBuf pkt, unsigned long tcp_offset) {
     unsigned char flags = hdr.flags;
     int prev = self.state;
 
-    if (self.state == TCP_SYN_SENT) {
+    if (self.state == TCP_LISTEN) {
+        // Passive open: accept a SYN, learn the peer from it.
+        if ((flags & (unsigned char)(TCP_SYN | TCP_ACK)) == (unsigned char)TCP_SYN &&
+            tcp_offset >= (unsigned long)IPV4_HDR_LEN) {
+            struct Ipv4Hdr ih;
+            if (ipv4_parse(pkt, tcp_offset - (unsigned long)IPV4_HDR_LEN, &ih) == 0) {
+                self.remote_ip   = ih.src;
+                self.remote_port = hdr.src_port;
+                self.rcv_nxt     = hdr.seq + (unsigned int)1;
+                self.state       = TCP_SYN_RECEIVED;
+            }
+        }
+    } else if (self.state == TCP_SYN_RECEIVED) {
+        // Final ACK of the handshake (acknowledging our SYN).
+        if ((flags & (unsigned char)TCP_ACK) != (unsigned char)0 &&
+            hdr.ack_num == self.snd_nxt) {
+            self.snd_una = hdr.ack_num;
+            self.state   = TCP_ESTABLISHED;
+        }
+    } else if (self.state == TCP_SYN_SENT) {
         // Expect SYN+ACK
         if ((flags & (unsigned char)(TCP_SYN | TCP_ACK)) == (unsigned char)(TCP_SYN | TCP_ACK)) {
             self.rcv_nxt = hdr.seq + (unsigned int)1;
@@ -137,9 +173,12 @@ int TcpConn::recv(&stack PacketBuf pkt, unsigned long tcp_offset) {
         if ((flags & (unsigned char)TCP_ACK) != (unsigned char)0) {
             self.snd_una = hdr.ack_num;
         }
-        // Receive payload.
+        // Receive payload — in order only: a segment that doesn't start at
+        // rcv_nxt is a retransmit/duplicate or arrived early, and appending
+        // it would corrupt the byte stream (the peer retransmits on our ACK).
         unsigned long tcp_hdr_bytes = (unsigned long)hdr.data_off * (unsigned long)4;
         unsigned long data_start = tcp_offset + tcp_hdr_bytes;
+        if (hdr.seq != self.rcv_nxt) { return 0; }
         if (pkt.len > data_start) {
             unsigned long data_len = pkt.len - data_start;
             unsigned long space = (unsigned long)TCP_RX_BUF - self.rx_len;
@@ -202,6 +241,13 @@ int TcpConn::build_segment(&stack PacketBuf pkt,
 
     if (self.state == TCP_SYN_SENT) {
         flags = (unsigned char)TCP_SYN;
+        seq = self.snd_una;          // a retransmitted SYN keeps the ISN
+        self.snd_nxt = self.snd_una;
+    } else if (self.state == TCP_SYN_RECEIVED) {
+        flags = (unsigned char)(TCP_SYN | TCP_ACK);
+        // Re-sending the SYN+ACK (e.g. it was lost) reuses the same seq.
+        seq = self.snd_una;
+        self.snd_nxt = self.snd_una;
     } else if (self.state == TCP_ESTABLISHED) {
         flags = (unsigned char)TCP_ACK;
         if (self.tx_len > (unsigned long)0) {
@@ -244,7 +290,7 @@ int TcpConn::build_segment(&stack PacketBuf pkt,
         unsigned short csum = tcp_checksum(self.local_ip, self.remote_ip,
                                            (const unsigned char*)d,
                                            total_tcp);
-        unsigned short csum_n = net_htons(csum);
+        unsigned short csum_n = (csum);
         d[16] = (unsigned char)((csum_n >> 8) & (unsigned short)0xFF);
         d[17] = (unsigned char)(csum_n & (unsigned short)0xFF);
     }

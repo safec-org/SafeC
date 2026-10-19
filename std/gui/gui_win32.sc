@@ -18,8 +18,10 @@
 // buffer per window, and gui_poll_event() pops from that ring (pumping
 // PeekMessage/DispatchMessage first so WndProc actually gets called).
 #pragma once
+#include <std/stddef.h>
 #include <std/gui/gui.h>
-#include <std/mem.sc>
+#include <std/mem.h>
+extern void* memset(void* ptr, int val, size_t n);
 
 namespace std {
 

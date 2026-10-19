@@ -5,18 +5,18 @@
 // Rounding modes (C99 FE_* constants, platform values)
 namespace std {
 
-const int FE_TONEAREST()  { return 0; }
-const int FE_DOWNWARD()   { return 1024; }
-const int FE_UPWARD()     { return 2048; }
-const int FE_TOWARDZERO() { return 3072; }
+static const int FE_TONEAREST()  { return 0; }
+static const int FE_DOWNWARD()   { return 1024; }
+static const int FE_UPWARD()     { return 2048; }
+static const int FE_TOWARDZERO() { return 3072; }
 
 // Exception flags (combined bitmask)
-const int FE_INVALID()   { return 1; }
-const int FE_DIVBYZERO() { return 4; }
-const int FE_OVERFLOW()  { return 8; }
-const int FE_UNDERFLOW() { return 16; }
-const int FE_INEXACT()   { return 32; }
-const int FE_ALL_EXCEPT() { return 63; }
+static const int FE_INVALID()   { return 1; }
+static const int FE_DIVBYZERO() { return 4; }
+static const int FE_OVERFLOW()  { return 8; }
+static const int FE_UNDERFLOW() { return 16; }
+static const int FE_INEXACT()   { return 32; }
+static const int FE_ALL_EXCEPT() { return 63; }
 
 // Clear specified exception flags (pass FE_ALL_EXCEPT() to clear all).
 int fenv_clear(int excepts);

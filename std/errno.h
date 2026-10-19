@@ -15,17 +15,17 @@ void errno_print(const char* prefix);
 
 // Common POSIX error codes (subset; actual values are platform-defined).
 // Use errno_get() to retrieve the actual numeric code from the OS.
-const int ERRNO_OK()     { return 0; }
-const int ERRNO_EPERM()  { return 1; }
-const int ERRNO_ENOENT() { return 2; }
-const int ERRNO_EIO()    { return 5; }
-const int ERRNO_EBADF()  { return 9; }
-const int ERRNO_ENOMEM() { return 12; }
-const int ERRNO_EACCES() { return 13; }
-const int ERRNO_EBUSY()  { return 16; }
-const int ERRNO_EEXIST() { return 17; }
-const int ERRNO_EINVAL() { return 22; }
-const int ERRNO_ERANGE() { return 34; }
+static const int ERRNO_OK()     { return 0; }
+static const int ERRNO_EPERM()  { return 1; }
+static const int ERRNO_ENOENT() { return 2; }
+static const int ERRNO_EIO()    { return 5; }
+static const int ERRNO_EBADF()  { return 9; }
+static const int ERRNO_ENOMEM() { return 12; }
+static const int ERRNO_EACCES() { return 13; }
+static const int ERRNO_EBUSY()  { return 16; }
+static const int ERRNO_EEXIST() { return 17; }
+static const int ERRNO_EINVAL() { return 22; }
+static const int ERRNO_ERANGE() { return 34; }
 // EAGAIN/EWOULDBLOCK/ETIMEDOUT are the one place this "subset" stops being
 // platform-stable: every other code above happens to share the same
 // number on Linux/macOS/BSD (a historical Unix errno.h accident), but
@@ -41,13 +41,13 @@ const int ERRNO_ERANGE() { return 34; }
 // errno_get() to these — that helper is the one that's actually correct
 // on all three platforms, including Windows.
 #ifdef __APPLE__
-const int ERRNO_EAGAIN()      { return 35; }
-const int ERRNO_EWOULDBLOCK() { return 35; }
-const int ERRNO_ETIMEDOUT()   { return 60; }
+static const int ERRNO_EAGAIN()      { return 35; }
+static const int ERRNO_EWOULDBLOCK() { return 35; }
+static const int ERRNO_ETIMEDOUT()   { return 60; }
 #else
-const int ERRNO_EAGAIN()      { return 11; }
-const int ERRNO_EWOULDBLOCK() { return 11; }
-const int ERRNO_ETIMEDOUT()   { return 110; }
+static const int ERRNO_EAGAIN()      { return 11; }
+static const int ERRNO_EWOULDBLOCK() { return 11; }
+static const int ERRNO_ETIMEDOUT()   { return 110; }
 #endif
 
 } // namespace std

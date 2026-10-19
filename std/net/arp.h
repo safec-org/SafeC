@@ -11,7 +11,7 @@
 namespace std {
 
 struct ArpEntry {
-    unsigned int  ip4;                  // IPv4 in network byte order (0 = empty)
+    unsigned int  ip4;                  // IPv4, numeric form (see net_ip4); 0 = empty
     unsigned char mac[NET_MAC_LEN];
 };
 

@@ -31,7 +31,7 @@ struct String render_about() {
 // half of the fullstack demo. The initial markup (div#count showing "0",
 // two buttons) is real server-rendered HTML, so it's visible/correct
 // even before the script loads; counter_client.wasm (built from
-// src/counter_client.sc — see that file's header comment for the build
+// client/counter_client.sc — see that file's header comment for the build
 // command) then hydrates it via static/counter_client.js's DOM glue.
 struct String render_counter() {
     return <html>

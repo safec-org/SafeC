@@ -48,7 +48,7 @@ static void dhcp_write_fixed_(unsigned char* d, unsigned char op,
         d[1] = (unsigned char)1;    // htype: Ethernet
         d[2] = (unsigned char)6;    // hlen
         d[3] = (unsigned char)0;    // hops
-        unsigned int xid_n = net_htonl(xid);
+        unsigned int xid_n = (xid);
         d[4] = (unsigned char)((xid_n >> 24) & (unsigned int)0xFF);
         d[5] = (unsigned char)((xid_n >> 16) & (unsigned int)0xFF);
         d[6] = (unsigned char)((xid_n >>  8) & (unsigned int)0xFF);
@@ -136,16 +136,16 @@ int DhcpClient::parse_reply(&stack PacketBuf pkt, unsigned long udp_payload_offs
         unsigned char* d = (unsigned char*)pkt.data + udp_payload_offset;
         if (d[0] != (unsigned char)2) { return 0; }  // op must be BOOTREPLY
         // Check xid
-        unsigned int xid = net_ntohl(((unsigned int)d[4] << 24) | ((unsigned int)d[5] << 16)
+        unsigned int xid = (((unsigned int)d[4] << 24) | ((unsigned int)d[5] << 16)
                                     | ((unsigned int)d[6] << 8)  |  (unsigned int)d[7]);
         if (xid != self.xid) { return 0; }
         // yiaddr at offset 16
-        self.lease.your_ip = net_ntohl(((unsigned int)d[16] << 24)
+        self.lease.your_ip = (((unsigned int)d[16] << 24)
                                       | ((unsigned int)d[17] << 16)
                                       | ((unsigned int)d[18] << 8)
                                       |  (unsigned int)d[19]);
         // siaddr at offset 20
-        self.lease.server_ip = net_ntohl(((unsigned int)d[20] << 24)
+        self.lease.server_ip = (((unsigned int)d[20] << 24)
                                         | ((unsigned int)d[21] << 16)
                                         | ((unsigned int)d[22] << 8)
                                         |  (unsigned int)d[23]);
@@ -161,22 +161,22 @@ int DhcpClient::parse_reply(&stack PacketBuf pkt, unsigned long udp_payload_offs
                 if (code == (unsigned char)53 && opt_len == (unsigned char)1) {
                     msg_type = (int)v[0];
                 } else if (code == (unsigned char)1 && opt_len == (unsigned char)4) {
-                    self.lease.subnet_mask = net_ntohl(((unsigned int)v[0] << 24)
+                    self.lease.subnet_mask = (((unsigned int)v[0] << 24)
                                                       | ((unsigned int)v[1] << 16)
                                                       | ((unsigned int)v[2] << 8)
                                                       |  (unsigned int)v[3]);
                 } else if (code == (unsigned char)3 && opt_len >= (unsigned char)4) {
-                    self.lease.gateway = net_ntohl(((unsigned int)v[0] << 24)
+                    self.lease.gateway = (((unsigned int)v[0] << 24)
                                                   | ((unsigned int)v[1] << 16)
                                                   | ((unsigned int)v[2] << 8)
                                                   |  (unsigned int)v[3]);
                 } else if (code == (unsigned char)6 && opt_len >= (unsigned char)4) {
-                    self.lease.dns = net_ntohl(((unsigned int)v[0] << 24)
+                    self.lease.dns = (((unsigned int)v[0] << 24)
                                               | ((unsigned int)v[1] << 16)
                                               | ((unsigned int)v[2] << 8)
                                               |  (unsigned int)v[3]);
                 } else if (code == (unsigned char)51 && opt_len == (unsigned char)4) {
-                    self.lease.lease_secs = net_ntohl(((unsigned int)v[0] << 24)
+                    self.lease.lease_secs = (((unsigned int)v[0] << 24)
                                                      | ((unsigned int)v[1] << 16)
                                                      | ((unsigned int)v[2] << 8)
                                                      |  (unsigned int)v[3]);

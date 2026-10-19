@@ -15,8 +15,8 @@ inline struct ThreadSched thread_sched_init() {
     return s;
 }
 
-inline Thread ThreadSched::spawn_thread(void* func, void* arg, int priority) {
-    int id = self.inner.spawn_task(func, arg);
+inline Thread ThreadSched::spawn_raw_(void* func, void* arg, int priority) {
+    int id = self.inner.spawn_raw_(func, arg);
     if (id == -1) { return (Thread)THREAD_NONE; }
     self.priority[id] = priority;
     return (Thread)id;
@@ -33,7 +33,7 @@ int ThreadSched::tick() {
         order[i] = i;
         i = i + 1;
     }
-    // Sort descending by priority (bubble sort — n <= 64, acceptable).
+    // Sort descending by priority (bubble sort).
     int swapped = 1;
     while (swapped != 0) {
         swapped = 0;

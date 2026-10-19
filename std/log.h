@@ -25,27 +25,43 @@ void log_write(int level, const char* tag, const char* msg,
 
 // Convenience macros (compile out below threshold)
 #if LOG_LEVEL >= LOG_LEVEL_ERROR
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
 #define LOG_E(tag, msg)  log_write(LOG_LEVEL_ERROR, (tag), (msg), __FILE__, __LINE__)
+#endif
 #else
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
 #define LOG_E(tag, msg)  do {} while(0)
+#endif
 #endif
 
 #if LOG_LEVEL >= LOG_LEVEL_WARN
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
 #define LOG_W(tag, msg)  log_write(LOG_LEVEL_WARN, (tag), (msg), __FILE__, __LINE__)
+#endif
 #else
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
 #define LOG_W(tag, msg)  do {} while(0)
+#endif
 #endif
 
 #if LOG_LEVEL >= LOG_LEVEL_INFO
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
 #define LOG_I(tag, msg)  log_write(LOG_LEVEL_INFO, (tag), (msg), __FILE__, __LINE__)
+#endif
 #else
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
 #define LOG_I(tag, msg)  do {} while(0)
+#endif
 #endif
 
 #if LOG_LEVEL >= LOG_LEVEL_DEBUG
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
 #define LOG_D(tag, msg)  log_write(LOG_LEVEL_DEBUG, (tag), (msg), __FILE__, __LINE__)
+#endif
 #else
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
 #define LOG_D(tag, msg)  do {} while(0)
+#endif
 #endif
 
 } // namespace std

@@ -47,6 +47,9 @@ void dom_set_text(int handle, const char* text);
 void dom_set_attr(int handle, const char* name, const char* value);
 void dom_console_log(const char* text);
 
+// Stored type-erased (the table holds handlers with unrelated context
+// types); the generic dom_register_callback/dom_on_click below are the only
+// writers and always pair a fn void(?&T) with a ?&T.
 typedef fn void(void* userdata) DomEventHandler;
 
 // Registers 'handler'/'userdata' as a callback slot and returns its id
@@ -57,13 +60,21 @@ typedef fn void(void* userdata) DomEventHandler;
 // allocation, so a fixed dispatch table is the standard workaround
 // throughout std, not something new to this file).
 #define DOM_MAX_CALLBACKS 32
-int  dom_register_callback(DomEventHandler handler, void* userdata);
+int  dom_register_callback_raw_(void* handler, void* userdata);
+generic<T>
+int  dom_register_callback(fn void(?&T) handler, ?&T userdata) {
+    unsafe { return dom_register_callback_raw_((void*)handler, (void*)userdata); }
+}
 
 // Looks up 'selector' and wires a click listener to 'handler'/'userdata'
 // via dom_register_callback() + js_add_click_listener(). Returns the
 // element handle (as dom_get_element() would), or -1 if not found (no
 // listener registered in that case).
-int  dom_on_click(const char* selector, DomEventHandler handler, void* userdata);
+int  dom_on_click_raw_(const char* selector, void* handler, void* userdata);
+generic<T>
+int  dom_on_click(const char* selector, fn void(?&T) handler, ?&T userdata) {
+    unsafe { return dom_on_click_raw_(selector, (void*)handler, (void*)userdata); }
+}
 
 // Called BY THE HOST (exported at link time via
 // '-Wl,--export=std_dom_dispatch_event' — note the 'std_' prefix: a

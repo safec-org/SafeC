@@ -1,5 +1,6 @@
 // SafeC Standard Library — Global Freestanding Heap
 #pragma once
+#include <std/stddef.h>
 #include <std/heap.h>
 #include <std/alloc/tlsf.h>
 
@@ -8,7 +9,7 @@ namespace std {
 #ifdef __SAFEC_FREESTANDING__
 // ── Freestanding path: static buffer + TLSF ──────────────────────────────────
 
-extern void* memcpy(void* dst, const void* src, unsigned long n);
+extern void* memcpy(void* dst, const void* src, size_t n);
 
 // Backing store: static array aligned to 8 bytes.
 static unsigned long heap_buf_[(HEAP_SIZE + 7) / 8];  // word-aligned storage
@@ -25,9 +26,7 @@ inline unsigned long heap_hdr_() {
 inline void heap_init() {
     if (heap_ready_ != 0) { return; }
     unsafe {
-        // Cast static storage to &heap void for tlsf_init.
-        &heap void buf = (&heap void)(void*)heap_buf_;
-        heap_tlsf_ = tlsf_init(buf, (unsigned long)HEAP_SIZE);
+        heap_tlsf_ = tlsf_init((&unsigned char)(void*)heap_buf_, (unsigned long)HEAP_SIZE);
     }
     heap_ready_ = 1;
 }
@@ -68,10 +67,10 @@ inline unsigned long heap_capacity() {
 #else
 // ── Hosted path: malloc/free/realloc wrappers ─────────────────────────────────
 
-extern void* malloc(unsigned long size);
+extern void* malloc(size_t size);
 extern void  free(void* ptr);
-extern void* realloc(void* ptr, unsigned long new_size);
-extern void* memcpy(void* dst, const void* src, unsigned long n);
+extern void* realloc(void* ptr, size_t new_size);
+extern void* memcpy(void* dst, const void* src, size_t n);
 
 void heap_init() { }  // no-op
 

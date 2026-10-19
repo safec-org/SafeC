@@ -101,19 +101,19 @@ void arp_build_packet(&stack PacketBuf pkt,
         d[0]  = (unsigned char)0; d[1]  = (unsigned char)1;      // HTYPE
         d[2]  = (unsigned char)0x08; d[3] = (unsigned char)0x00; // PTYPE IPv4
         d[4]  = (unsigned char)6;    d[5] = (unsigned char)4;    // HLEN, PLEN
-        unsigned short op_n = net_htons(op);
+        unsigned short op_n = (op);
         d[6]  = (unsigned char)((op_n >> 8) & (unsigned short)0xFF);
         d[7]  = (unsigned char)(op_n & (unsigned short)0xFF);
         int i = 0;
         while (i < NET_MAC_LEN) { d[8  + i] = sha[i]; i = i + 1; }
-        unsigned int spa_n = net_htonl(spa);
+        unsigned int spa_n = (spa);
         d[14] = (unsigned char)((spa_n >> 24) & (unsigned int)0xFF);
         d[15] = (unsigned char)((spa_n >> 16) & (unsigned int)0xFF);
         d[16] = (unsigned char)((spa_n >>  8) & (unsigned int)0xFF);
         d[17] = (unsigned char)(spa_n & (unsigned int)0xFF);
         i = 0;
         while (i < NET_MAC_LEN) { d[18 + i] = tha[i]; i = i + 1; }
-        unsigned int tpa_n = net_htonl(tpa);
+        unsigned int tpa_n = (tpa);
         d[22] = (unsigned char)((tpa_n >> 24) & (unsigned int)0xFF);
         d[23] = (unsigned char)((tpa_n >> 16) & (unsigned int)0xFF);
         d[24] = (unsigned char)((tpa_n >>  8) & (unsigned int)0xFF);
@@ -129,14 +129,14 @@ int arp_parse_packet(&stack PacketBuf pkt, unsigned long offset,
     if (pkt.len < offset + (unsigned long)ARP_PKT_LEN) { return -1; }
     unsafe {
         unsigned char* d = (unsigned char*)pkt.data + offset;
-        *op = net_ntohs((unsigned short)(((unsigned short)d[6] << 8) | (unsigned short)d[7]));
+        *op = ((unsigned short)(((unsigned short)d[6] << 8) | (unsigned short)d[7]));
         int i = 0;
         while (i < NET_MAC_LEN) { sha[i] = d[8 + i]; i = i + 1; }
-        *spa = net_ntohl(((unsigned int)d[14] << 24) | ((unsigned int)d[15] << 16)
+        *spa = (((unsigned int)d[14] << 24) | ((unsigned int)d[15] << 16)
                        | ((unsigned int)d[16] << 8) | (unsigned int)d[17]);
         i = 0;
         while (i < NET_MAC_LEN) { tha[i] = d[18 + i]; i = i + 1; }
-        *tpa = net_ntohl(((unsigned int)d[22] << 24) | ((unsigned int)d[23] << 16)
+        *tpa = (((unsigned int)d[22] << 24) | ((unsigned int)d[23] << 16)
                        | ((unsigned int)d[24] << 8) | (unsigned int)d[25]);
     }
     return 0;

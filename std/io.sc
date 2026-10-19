@@ -3,6 +3,7 @@
 // Explicit extern declarations are used because macOS stdio.h uses FILE*,
 // __attribute__, and macros that SafeC's parser cannot handle directly.
 #pragma once
+#include <std/stddef.h>
 #include <std/io.h>
 #include <std/stderr_compat.h>
 
@@ -22,11 +23,11 @@ extern int   ungetc(int c, void* stream);
 extern int   scanf(const char* fmt, ...);
 extern int   fscanf(void* stream, const char* fmt, ...);
 extern int   sscanf(const char* buf, const char* fmt, ...);
-extern int   snprintf(char* buf, unsigned long n, const char* fmt, ...);
+extern int   snprintf(char* buf, size_t n, const char* fmt, ...);
 extern int   remove(const char* path);
 extern int   rename(const char* oldpath, const char* newpath);
 extern void* tmpfile();
-extern unsigned long strlen(const char* s);
+extern size_t strlen(const char* s);
 
 // ── FILE* stream handles ──────────────────────────────────────────────────────
 // stdin/stdout/stderr are each a macro on every libc here, never a plain
@@ -129,7 +130,7 @@ inline void print_oct(unsigned long long v) {
     unsafe { printf("0%llo", v); }
 }
 
-inline void print_ptr(const void* p) {
+inline void print_ptr_raw_(const void* p) {
     unsafe { printf("%p", p); }
 }
 
@@ -265,8 +266,8 @@ inline int io_rename(const char* old_path, const char* new_path) {
 }
 
 // Create a temporary file opened in "w+b" mode.  Returns handle or NULL.
-inline void* io_tmpfile() {
-    unsafe { return tmpfile(); }
+inline ?&File io_tmpfile() {
+    unsafe { return (?&File)tmpfile(); }
 }
 
 } // namespace std

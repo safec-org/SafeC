@@ -2,16 +2,16 @@
 #pragma once
 #include <std/http/oauth2.h>
 #include <std/http/http.h>
-#include <std/http/http.sc>
+#include <std/http/http.h>
 #include <std/serial/value.h>
-#include <std/serial/value.sc>
+#include <std/serial/value.h>
 #include <std/serial/json.h>
-#include <std/serial/json.sc>
+#include <std/serial/json.h>
 #include <std/encoding/url.h>
-#include <std/encoding/url.sc>
+#include <std/encoding/url.h>
 #include <std/collections/string.h>
-#include <std/collections/string.sc>
-#include <std/mem.sc>
+#include <std/collections/string.h>
+#include <std/mem.h>
 
 namespace std {
 

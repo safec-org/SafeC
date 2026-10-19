@@ -38,6 +38,7 @@
 //      pattern here, the same size-class-cache design std::alloc/dealloc
 //      already uses on the CPU side (see std/mem.sc).
 #pragma once
+#include <std/stddef.h>
 #include <std/ml/gpu_mps.h>
 #include <std/ml/gpu_mps_metallib.h>
 #include <std/ml/float16.h>
@@ -45,13 +46,13 @@
 
 namespace std {
 
-extern void* malloc(unsigned long size);
+extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
 extern void* objc_getClass(const char* name);
 extern void* sel_registerName(const char* name);
 extern void* objc_msgSend(void* recv, void* op);
-extern void* memcpy(void* dst, const void* src, unsigned long n);
+extern void* memcpy(void* dst, const void* src, size_t n);
 // The real Metal framework entry point — a plain C function (not a
 // message send): returns the default MTLDevice, or NULL if this machine
 // has no Metal-capable GPU.

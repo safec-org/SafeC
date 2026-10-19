@@ -11,13 +11,13 @@ inline struct TaskScheduler task_sched_init() {
     return s;
 }
 
-inline int TaskScheduler::spawn_task(void* func, void* arg) {
+inline int TaskScheduler::spawn_raw_(void* func, void* arg) {
     // Reuse a finished task's slot before growing count. Without this, a
     // long-running scheduler (e.g. std::http's reactor-based server,
     // accepting new connections for as long as the process runs) would
     // exhaust its fixed TASK_MAX slots after the first 64 tasks *ever*
     // spawned, not the first 64 *concurrent* ones — count never shrank
-    // when a task finished, so spawn_task started refusing every new
+    // when a task finished, so spawn started refusing every new
     // connection permanently once the lifetime total crossed 64, often
     // within the first second of real traffic.
     int i = 0;
@@ -34,7 +34,7 @@ inline int TaskScheduler::spawn_task(void* func, void* arg) {
         }
         i = i + 1;
     }
-    if (self.count >= 64) {
+    if (self.count >= TASK_MAX) {
         return -1;
     }
     int idx = self.count;

@@ -5,24 +5,24 @@
 // Standard signal numbers (POSIX values; matches Linux/macOS).
 namespace std {
 
-const int SIG_HUP()  { return 1; }   // Hangup
-const int SIG_INT()  { return 2; }   // Interrupt (Ctrl+C)
-const int SIG_QUIT() { return 3; }   // Quit
-const int SIG_ILL()  { return 4; }   // Illegal instruction
-const int SIG_ABRT() { return 6; }   // Abort
-const int SIG_FPE()  { return 8; }   // Floating-point exception
-const int SIG_KILL() { return 9; }   // Kill (cannot be caught)
-const int SIG_SEGV() { return 11; }  // Segmentation fault
-const int SIG_PIPE() { return 13; }  // Broken pipe
-const int SIG_ALRM() { return 14; }  // Alarm clock
-const int SIG_TERM() { return 15; }  // Termination
-const int SIG_USR1() { return 10; }  // User-defined signal 1
-const int SIG_USR2() { return 12; }  // User-defined signal 2
-const int SIG_CHLD() { return 17; }  // Child stopped/terminated
-const int SIG_CONT() { return 18; }  // Continue if stopped
-const int SIG_STOP() { return 19; }  // Stop process (cannot be caught)
-const int SIG_TSTP() { return 20; }  // Stop typed at terminal
-const int SIG_WINCH(){ return 28; }  // Window size change
+static const int SIG_HUP()  { return 1; }   // Hangup
+static const int SIG_INT()  { return 2; }   // Interrupt (Ctrl+C)
+static const int SIG_QUIT() { return 3; }   // Quit
+static const int SIG_ILL()  { return 4; }   // Illegal instruction
+static const int SIG_ABRT() { return 6; }   // Abort
+static const int SIG_FPE()  { return 8; }   // Floating-point exception
+static const int SIG_KILL() { return 9; }   // Kill (cannot be caught)
+static const int SIG_SEGV() { return 11; }  // Segmentation fault
+static const int SIG_PIPE() { return 13; }  // Broken pipe
+static const int SIG_ALRM() { return 14; }  // Alarm clock
+static const int SIG_TERM() { return 15; }  // Termination
+static const int SIG_USR1() { return 10; }  // User-defined signal 1
+static const int SIG_USR2() { return 12; }  // User-defined signal 2
+static const int SIG_CHLD() { return 17; }  // Child stopped/terminated
+static const int SIG_CONT() { return 18; }  // Continue if stopped
+static const int SIG_STOP() { return 19; }  // Stop process (cannot be caught)
+static const int SIG_TSTP() { return 20; }  // Stop typed at terminal
+static const int SIG_WINCH(){ return 28; }  // Window size change
 
 // Install a handler for signal sig.
 // handler: void (*handler)(int) — pass as void*

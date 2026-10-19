@@ -1,11 +1,12 @@
 // SafeC Standard Library — X.509 Certificate Parsing (DER / ASN.1)
 #pragma once
+#include <std/stddef.h>
 #include <std/crypto/x509.h>
 
 namespace std {
 
-extern void* memcpy(void* d, const void* s, unsigned long n);
-extern void* memset(void* p, int v, unsigned long n);
+extern void* memcpy(void* d, const void* s, size_t n);
+extern void* memset(void* p, int v, size_t n);
 
 // ── ASN.1 tag constants ────────────────────────────────────────────────────────
 

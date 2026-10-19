@@ -36,24 +36,24 @@ inline int pipe_create(&Pipe out) {
     return 0;
 }
 
-inline long long pipe_read(&Pipe p, void* buf, unsigned long count) {
+inline long long pipe_read(&Pipe p, &unsigned char buf, unsigned long count) {
     unsigned long long h;
     unsafe { h = (unsigned long long)p->read_fd; }
     unsigned int got = 0U;
     int ok;
-    unsafe { ok = ReadFile(h, buf, (unsigned int)count, (void*)&got, (void*)0); }
+    unsafe { ok = ReadFile(h, (void*)buf, (unsigned int)count, (void*)&got, (void*)0); }
     if (ok == 0) {
         return -1LL;
     }
     return (long long)got;
 }
 
-inline long long pipe_write(&Pipe p, const void* buf, unsigned long count) {
+inline long long pipe_write(&Pipe p, const &unsigned char buf, unsigned long count) {
     unsigned long long h;
     unsafe { h = (unsigned long long)p->write_fd; }
     unsigned int sent = 0U;
     int ok;
-    unsafe { ok = WriteFile(h, buf, (unsigned int)count, (void*)&sent, (void*)0); }
+    unsafe { ok = WriteFile(h, (const void*)buf, (unsigned int)count, (void*)&sent, (void*)0); }
     if (ok == 0) {
         return -1LL;
     }

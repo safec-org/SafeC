@@ -8,7 +8,7 @@
 // std/sched/io_nb_linux.sc's SockAddrIn comment) rather than BSD's.
 #pragma once
 #include <std/ipc/uds.h>
-#include <std/str.sc>
+#include <std/str.h>
 
 #define SAFEC_AF_UNIX     1
 #define SAFEC_SOCK_STREAM 1

@@ -1,7 +1,7 @@
 // SafeC Standard Library — URL encoding implementation (see url.h)
 #pragma once
 #include <std/encoding/url.h>
-#include <std/collections/string.sc>
+#include <std/collections/string.h>
 
 namespace std {
 

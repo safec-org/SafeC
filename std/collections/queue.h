@@ -1,40 +1,122 @@
 #pragma once
-// SafeC Standard Library — Queue (FIFO, circular buffer)
-// Amortized O(1) enqueue/dequeue. Grows automatically when full.
+// SafeC Standard Library — Queue<T> (FIFO, circular buffer)
+//
+//   struct Queue<int> q = std::queue_new();
+//   q.enqueue(1); q.enqueue(2);
+//   ?int first = q.dequeue();   // 1
+//   q.free();
+//
+// Amortized O(1) enqueue/dequeue; the ring grows (doubling, power-of-two
+// capacity) when full. front()/back() hand out '?&T' into the ring, valid
+// until the next enqueue()/free().
+#include <std/mem.h>
 
 namespace std {
 
+generic<T>
 struct Queue {
-    void*         data;
-    unsigned long head;      // index of front element
-    unsigned long tail;      // index where next element will be written
-    unsigned long len;       // current element count
-    unsigned long cap;       // total allocated slots
-    unsigned long elem_size;
+    ?&heap T      data;
+    unsigned long head;      // index of the front element
+    unsigned long len;       // element count
+    unsigned long cap;       // 0 or a power of two
+
+    int           enqueue(T value);   // 0 on OOM
+    ?T            dequeue();          // null if empty
+    ?&T           front() const;      // null if empty
+    ?&T           back() const;       // null if empty
+    unsigned long length() const;
+    int           is_empty() const;
+    void          clear();
+    int           reserve(unsigned long n);
+    void          free();
 };
 
-// ── Lifecycle ─────────────────────────────────────────────────────────────────
-struct Queue queue_new(unsigned long elem_size);
-struct Queue queue_with_cap(unsigned long elem_size, unsigned long cap);
-void         queue_free(&Queue q);
-
-// ── Core operations ───────────────────────────────────────────────────────────
-int           queue_enqueue(&Queue q, const void* elem);
-int           queue_dequeue(&Queue q, void* out);
-void*         queue_front(&Queue q);   // peek front; NULL if empty
-void*         queue_back(&Queue q);    // peek back; NULL if empty
-unsigned long queue_len(&Queue q);
-int           queue_is_empty(&Queue q);
-void          queue_clear(&Queue q);
-
-// ── Typed generic wrappers ────────────────────────────────────────────────────
 generic<T>
-int queue_enqueue_t(&Queue q, T val);
+struct Queue<T> queue_new() {
+    struct Queue<T> q;
+    q.data = null;
+    q.head = 0UL;
+    q.len = 0UL;
+    q.cap = 0UL;
+    return q;
+}
 
 generic<T>
-T* queue_front_t(&Queue q);
+struct Queue<T> queue_with_cap(unsigned long cap) {
+    struct Queue<T> q = queue_new();
+    q.reserve(cap);
+    return q;
+}
+
+// Re-lays the ring out linearly (front at index 0) in a buffer of
+// max(8, n) slots rounded up to a power of two.
+generic<T>
+int Queue::reserve(unsigned long n) {
+    if (n <= self.cap) return 1;
+    unsigned long c = 8UL;
+    while (c < n) { c = c * 2UL; }
+    ?&heap T grown = null;
+    unsafe { grown = (?&heap T)alloc(checked_mul_size(c, sizeof(T))); }
+    if (grown.is_null()) return 0;
+    unsafe {
+        unsigned long mask = self.cap - 1UL;
+        unsigned long i = 0UL;
+        while (i < self.len) { grown[i] = self.data[(self.head + i) & mask]; i = i + 1UL; }
+        dealloc((void*)self.data);
+    }
+    self.data = grown;
+    self.head = 0UL;
+    self.cap = c;
+    return 1;
+}
 
 generic<T>
-int queue_dequeue_t(&Queue q, T* out);
+int Queue::enqueue(T value) {
+    if (self.len == self.cap) {
+        if (!self.reserve(self.cap == 0UL ? 8UL : self.cap * 2UL)) return 0;
+    }
+    unsafe { self.data[(self.head + self.len) & (self.cap - 1UL)] = value; }
+    self.len = self.len + 1UL;
+    return 1;
+}
+
+generic<T>
+?T Queue::dequeue() {
+    if (self.len == 0UL) return null;
+    unsigned long at = self.head;
+    self.head = (self.head + 1UL) & (self.cap - 1UL);
+    self.len = self.len - 1UL;
+    unsafe { return self.data[at]; }
+}
+
+generic<T>
+?&T Queue::front() const {
+    if (self.len == 0UL) return null;
+    unsafe { return (?&T)&self.data[self.head]; }
+}
+
+generic<T>
+?&T Queue::back() const {
+    if (self.len == 0UL) return null;
+    unsafe { return (?&T)&self.data[(self.head + self.len - 1UL) & (self.cap - 1UL)]; }
+}
+
+generic<T>
+unsigned long Queue::length() const { return self.len; }
+
+generic<T>
+int Queue::is_empty() const { return self.len == 0UL; }
+
+generic<T>
+void Queue::clear() { self.head = 0UL; self.len = 0UL; }
+
+generic<T>
+void Queue::free() {
+    unsafe { dealloc((void*)self.data); }
+    self.data = null;
+    self.head = 0UL;
+    self.len = 0UL;
+    self.cap = 0UL;
+}
 
 } // namespace std

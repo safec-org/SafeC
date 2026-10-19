@@ -23,7 +23,7 @@
 // preempt it, so a function that never yields blocks the whole cooperative
 // scheduler (including whichever task called __safec_thread_join on it).
 #pragma once
-#include <std/sync/task.sc>
+#include <std/sync/task.h>
 
 // Deliberately NOT inside 'namespace std' — non-extern functions declared
 // inside 'namespace std { ... }' get mangled to 'std_name' (see
@@ -39,7 +39,7 @@ long long __safec_thread_create(void* func, void* arg) {
         __safec_bare_sched_ = std::task_sched_init();
         __safec_bare_sched_ready_ = 1;
     }
-    int idx = __safec_bare_sched_.spawn_task(func, arg);
+    int idx = __safec_bare_sched_.spawn_raw_(func, arg);
     return (long long)idx;
 }
 

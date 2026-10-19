@@ -1,11 +1,12 @@
 // SafeC Standard Library — device-selectable JiTBlock forward pass
 // implementation (see transformer_dispatch.h).
 #pragma once
+#include <std/stddef.h>
 #include <std/ml/transformer_dispatch.h>
 
 namespace std {
 
-extern void* malloc(unsigned long size);
+extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
 // Exact duplicate of transformer.sc's own private __add_broadcast_row —

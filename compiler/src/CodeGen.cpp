@@ -1,4 +1,5 @@
 #include "safec/CodeGen.h"
+#include "safec/AbiLowering.h"
 #include <cstdint>
 #include "llvm/IR/IntrinsicsARM.h"
 #include "llvm/IR/MDBuilder.h"
@@ -20,10 +21,15 @@
 
 namespace safec {
 
+static llvm::Value *indexToI64(llvm::IRBuilder<> &b, llvm::Value *v, const TypePtr &ty);
+
 // ── Constructor ───────────────────────────────────────────────────────────────
 CodeGen::CodeGen(llvm::LLVMContext &ctx, const std::string &moduleName,
                  DiagEngine &diag, DebugLevel dbgLevel,
-                 const std::string &targetTriple)
+                 const std::string &targetTriple,
+                 const std::string &targetCpu,
+                 const std::string &targetFeatures,
+                 const std::string &targetAbi)
     : ctx_(ctx),
       mod_(std::make_unique<llvm::Module>(moduleName, ctx)),
       builder_(ctx),
@@ -65,8 +71,12 @@ CodeGen::CodeGen(llvm::LLVMContext &ctx, const std::string &moduleName,
         // fix, rather than hard-erroring every plain (no --target) build.
     } else {
         llvm::TargetOptions opts;
+        opts.MCOptions.ABIName = targetAbi;
+        targetCpu_      = targetCpu.empty() ? std::string("generic") : targetCpu;
+        targetFeatures_ = targetFeatures;
+        targetAbi_      = targetAbi;
         auto *tm = target->createTargetMachine(
-            triple, /*CPU=*/"generic", /*Features=*/"", opts, llvm::Reloc::PIC_);
+            triple, targetCpu_, targetFeatures_, opts, llvm::Reloc::PIC_);
         if (!targetTriple.empty()) {
             mod_->setTargetTriple(triple);
         }
@@ -151,6 +161,26 @@ std::unique_ptr<llvm::Module> CodeGen::generate(TranslationUnit &tu) {
             genStaticAssert(static_cast<StaticAssertDecl &>(*d));
         }
     }
+
+    // Large aggregate returns → sret, large aggregate copies → memcpy
+    // (C ABI conformance + keeps SelectionDAG from choking on huge
+    // first-class aggregates; see AbiLowering.cpp).
+    lowerAggregateABI(*mod_);
+
+    // Record the exact ISA in the IR itself (what clang does), so a later
+    // 'clang -c' of this .ll can't silently pick a different subtarget —
+    // e.g. RV32E's 16-register file, or Thumb-1 vs Thumb-2.
+    if (targetMachine_ && (targetCpu_ != "generic" || !targetFeatures_.empty())) {
+        for (auto &f : *mod_) {
+            if (f.isDeclaration()) continue;
+            if (!f.hasFnAttribute("target-cpu")) f.addFnAttr("target-cpu", targetCpu_);
+            if (!targetFeatures_.empty() && !f.hasFnAttribute("target-features"))
+                f.addFnAttr("target-features", targetFeatures_);
+        }
+    }
+    if (!targetAbi_.empty())
+        mod_->addModuleFlag(llvm::Module::Error, "target-abi",
+                            llvm::MDString::get(ctx_, targetAbi_));
 
     // Finalize debug info (must be before verifyModule)
     if (dib_) dib_->finalize();
@@ -448,8 +478,13 @@ llvm::Value *CodeGen::genTupleLit(TupleLitExpr &e, FnEnv &env) {
     }
     auto *tupleTy = static_cast<llvm::StructType *>(lowerType(e.type));
     auto *alloca  = createEntryAlloca(env, tupleTy, "tuple.tmp");
+    auto &tt = static_cast<TupleType &>(*e.type);
     for (size_t i = 0; i < e.elements.size(); ++i) {
         auto *val = genExpr(*e.elements[i], env);
+        // Convert to the member type (e.g. an int literal into a 'long' slot).
+        val = coerceScalar(val, tupleTy->getElementType(static_cast<unsigned>(i)),
+                           e.elements[i]->type);
+        (void)tt;
         auto *gep = builder_.CreateStructGEP(tupleTy, alloca, static_cast<unsigned>(i));
         builder_.CreateStore(val, gep);
     }
@@ -466,7 +501,11 @@ llvm::Value *CodeGen::genTupleLit(TupleLitExpr &e, FnEnv &env) {
 CodeGen::ThreadBackend CodeGen::selectThreadBackend() const {
     if (freestanding_) return ThreadBackend::Hook;
     if (targetMachine_) {
-        llvm::Triple triple(mod_->getTargetTriple());
+        // The TargetMachine's triple, not the module's: the module only
+        // carries one when --target was given, and an empty triple would
+        // match no OS below — sending every native build to the
+        // cooperative Hook backend, where 'spawn' never starts a thread.
+        const llvm::Triple &triple = targetMachine_->getTargetTriple();
         if (triple.isOSWindows()) return ThreadBackend::Win32;
         if (triple.isOSLinux() || triple.isMacOSX() || triple.isOSFreeBSD() ||
             triple.isOSNetBSD() || triple.isOSOpenBSD() || triple.isOSDragonFly() ||
@@ -593,6 +632,20 @@ llvm::Function *CodeGen::genFunctionProto(FunctionDecl &fn) {
             paramTys.push_back(lowerType(p.type));
     }
     auto *retTy  = fn.returnType ? lowerType(fn.returnType) : llvm::Type::getVoidTy(ctx_);
+    // A by-value opaque (unsized) struct can't appear in an LLVM signature.
+    // That only happens for imported C prototypes whose struct lost its
+    // fields to unsupported members (glibc's fopencookie takes a
+    // cookie_io_functions_t of function-typedef fields); such a function
+    // can't be called correctly anyway, so leave it undeclared rather than
+    // fail verification of the whole module.
+    if (!fn.body) {
+        auto unsized = [](llvm::Type *t) {
+            return t->isStructTy() && !t->isSized();
+        };
+        bool bad = unsized(retTy);
+        for (auto *pt : paramTys) bad = bad || unsized(pt);
+        if (bad && !mod_->getFunction(fn.name)) return nullptr;
+    }
     auto *fnType = llvm::FunctionType::get(retTy, paramTys, fn.isVariadic);
 
     // Reuse an existing declaration (forward-decl from .h already created it).
@@ -618,10 +671,20 @@ llvm::Function *CodeGen::genFunctionProto(FunctionDecl &fn) {
         // defining the same 'static' function both export an identical
         // external symbol and the linker rejects the link as a duplicate
         // definition — 'static' would parse but silently not do anything.
+        // Monomorphized generics use C++ template linkage: every translation
+        // unit that instantiates Vec<int>::push emits its own identical copy,
+        // and the linker keeps one (linkonce_odr, in a COMDAT where the object
+        // format has them) instead of reporting duplicate symbols.
         auto linkage = fn.isStatic
             ? llvm::Function::InternalLinkage
-            : llvm::Function::ExternalLinkage;
+            : fn.isMonomorphized ? llvm::Function::LinkOnceODRLinkage
+                                 : llvm::Function::ExternalLinkage;
         llvmFn = llvm::Function::Create(fnType, linkage, fn.name, *mod_);
+        if (fn.isMonomorphized && !fn.isStatic) {
+            llvm::Triple t(mod_->getTargetTriple().empty()
+                ? llvm::Triple(llvm::sys::getDefaultTargetTriple()) : mod_->getTargetTriple());
+            if (t.supportsCOMDAT()) llvmFn->setComdat(mod_->getOrInsertComdat(fn.name));
+        }
     }
 
     if (isNewFunction || fn.body) {
@@ -976,12 +1039,30 @@ llvm::GlobalVariable *CodeGen::genGlobalVar(GlobalVarDecl &gv) {
         }
     }
 
-    auto *gvar = new llvm::GlobalVariable(
-        *mod_, ty, gv.isConst,
-        gv.isExtern ? llvm::GlobalValue::ExternalLinkage
-                    : llvm::GlobalValue::InternalLinkage,
-        gv.isExtern ? nullptr : init,
-        gv.name);
+    // C linkage rules: 'static' is private to this translation unit;
+    // everything else at file scope is an external definition other
+    // objects (SafeC 'extern' declarations, or C code) can link against.
+    auto linkage = (gv.isExtern || !gv.isStatic) ? llvm::GlobalValue::ExternalLinkage
+                                                 : llvm::GlobalValue::InternalLinkage;
+    llvm::GlobalVariable *gvar = nullptr;
+    if (!gv.isExtern) {
+        // A definition completes an earlier 'extern' declaration of the same
+        // symbol (header declares, .sc defines) rather than creating a
+        // second global LLVM would silently rename to 'name.1'.
+        if (auto *existing = mod_->getNamedGlobal(gv.name)) {
+            if (existing->isDeclaration() && existing->getValueType() == ty) {
+                existing->setInitializer(init);
+                existing->setLinkage(linkage);
+                existing->setConstant(gv.isConst);
+                gvar = existing;
+            }
+        }
+    }
+    if (!gvar)
+        gvar = new llvm::GlobalVariable(
+            *mod_, ty, gv.isConst, linkage,
+            gv.isExtern ? nullptr : init,
+            gv.name);
 
     // Bare-metal attributes: section, alignment, volatile, thread_local
     if (!gv.sectionName.empty()) gvar->setSection(gv.sectionName);
@@ -1509,8 +1590,17 @@ void CodeGen::genReturn(ReturnStmt &s, FnEnv &env) {
 }
 
 void CodeGen::emitDefers(FnEnv &env, bool isErrorPath) {
-    for (int i = (int)env.deferList.size() - 1; i >= 0; --i) {
-        auto *ds = static_cast<DeferStmt *>(env.deferList[i]);
+    // Walk registration positions newest-first: at position p, first join
+    // any spawn_scoped threads started after the first p defers were
+    // registered, then run defer p-1 — i.e. plain LIFO over both kinds.
+    for (size_t p = env.deferList.size() + 1; p-- > 0;) {
+        for (size_t j = env.scopedJoins.size(); j-- > 0;) {
+            if (env.scopedJoins[j].first != p) continue;
+            auto *slot = static_cast<llvm::AllocaInst *>(env.scopedJoins[j].second);
+            genThreadJoin(builder_.CreateLoad(slot->getAllocatedType(), slot, "scoped.h"), env);
+        }
+        if (p == 0) break;
+        auto *ds = static_cast<DeferStmt *>(env.deferList[p - 1]);
         // Normal exit: skip errdefers (they're for the error path only).
         // Error exit: run everything — plain defers still owe their
         // cleanup, on top of whatever errdefers add.
@@ -1761,7 +1851,9 @@ void CodeGen::genMatch(MatchStmt &s, FnEnv &env) {
             for (auto &pat : arm.patterns) {
                 if (!pat.bindName.empty() && pat.payloadType && pat.resolvedTag >= 0) {
                     llvm::Value *payloadVal;
-                    if (isNullLike) {
+                    if (isNullLike && pat.payloadType->kind == TypeKind::Reference) {
+                        payloadVal = subjectVal;   // ?&T narrowed to &T: same pointer
+                    } else if (isNullLike) {
                         auto *payloadTy = lowerType(pat.payloadType);
                         payloadVal = builder_.CreateLoad(payloadTy, subjectVal, pat.bindName);
                     } else {
@@ -1913,7 +2005,9 @@ llvm::Value *CodeGen::genMatchExpr(MatchExpr &e, FnEnv &env) {
             for (auto &pat : arm.patterns) {
                 if (!pat.bindName.empty() && pat.payloadType && pat.resolvedTag >= 0) {
                     llvm::Value *payloadVal;
-                    if (isNullLike) {
+                    if (isNullLike && pat.payloadType->kind == TypeKind::Reference) {
+                        payloadVal = subjectVal;   // ?&T narrowed to &T: same pointer
+                    } else if (isNullLike) {
                         auto *payloadTy = lowerType(pat.payloadType);
                         payloadVal = builder_.CreateLoad(payloadTy, subjectVal, pat.bindName);
                     } else {
@@ -2264,6 +2358,16 @@ llvm::Value *CodeGen::genLValue(Expr &e, FnEnv &env) {
         return llvm::ConstantPointerNull::get(llvm::PointerType::get(ctx_, 0));
     }
     default:
+        // An aggregate rvalue ('make_point().x', 'v.get(i).default(p).y'):
+        // materialize it in a temporary so member/element access has an
+        // address to work from. Sema keeps it non-assignable.
+        if (e.type && (e.type->kind == TypeKind::Struct || e.type->kind == TypeKind::Tuple ||
+                       e.type->kind == TypeKind::Array)) {
+            auto *val = genExpr(e, env);
+            auto *tmp = createEntryAlloca(env, val->getType(), "rvalue.tmp");
+            builder_.CreateStore(val, tmp);
+            return tmp;
+        }
         diag_.error(e.loc, "cannot take address of this expression");
         return llvm::ConstantPointerNull::get(llvm::PointerType::get(ctx_, 0));
     }
@@ -2395,9 +2499,7 @@ llvm::Value *CodeGen::genUnary(UnaryExpr &e, FnEnv &env) {
         // an add).
         auto *ty = e.operand->type ? lowerType(e.operand->type) : llvm::Type::getInt32Ty(ctx_);
         auto *val = builder_.CreateLoad(ty, addr);
-        llvm::Value *inc = ty->isFloatingPointTy()
-            ? builder_.CreateFAdd(val, llvm::ConstantFP::get(ty, 1.0), "inc")
-            : builder_.CreateAdd(val, llvm::ConstantInt::get(ty, 1), "inc");
+        llvm::Value *inc = stepByOne(val, ty, e.operand->type, 1);
         builder_.CreateStore(inc, addr);
         return inc;
     }
@@ -2405,9 +2507,7 @@ llvm::Value *CodeGen::genUnary(UnaryExpr &e, FnEnv &env) {
         auto *addr = genLValue(*e.operand, env);
         auto *ty = e.operand->type ? lowerType(e.operand->type) : llvm::Type::getInt32Ty(ctx_);
         auto *val = builder_.CreateLoad(ty, addr);
-        llvm::Value *dec = ty->isFloatingPointTy()
-            ? builder_.CreateFSub(val, llvm::ConstantFP::get(ty, 1.0), "dec")
-            : builder_.CreateSub(val, llvm::ConstantInt::get(ty, 1), "dec");
+        llvm::Value *dec = stepByOne(val, ty, e.operand->type, -1);
         builder_.CreateStore(dec, addr);
         return dec;
     }
@@ -2415,9 +2515,7 @@ llvm::Value *CodeGen::genUnary(UnaryExpr &e, FnEnv &env) {
         auto *addr = genLValue(*e.operand, env);
         auto *ty = e.operand->type ? lowerType(e.operand->type) : llvm::Type::getInt32Ty(ctx_);
         auto *old = builder_.CreateLoad(ty, addr, "old");
-        llvm::Value *inc = ty->isFloatingPointTy()
-            ? builder_.CreateFAdd(old, llvm::ConstantFP::get(ty, 1.0))
-            : builder_.CreateAdd(old, llvm::ConstantInt::get(ty, 1));
+        llvm::Value *inc = stepByOne(old, ty, e.operand->type, 1);
         builder_.CreateStore(inc, addr);
         return old;
     }
@@ -2425,9 +2523,7 @@ llvm::Value *CodeGen::genUnary(UnaryExpr &e, FnEnv &env) {
         auto *addr = genLValue(*e.operand, env);
         auto *ty = e.operand->type ? lowerType(e.operand->type) : llvm::Type::getInt32Ty(ctx_);
         auto *old = builder_.CreateLoad(ty, addr, "old");
-        llvm::Value *dec = ty->isFloatingPointTy()
-            ? builder_.CreateFSub(old, llvm::ConstantFP::get(ty, 1.0))
-            : builder_.CreateSub(old, llvm::ConstantInt::get(ty, 1));
+        llvm::Value *dec = stepByOne(old, ty, e.operand->type, -1);
         builder_.CreateStore(dec, addr);
         return old;
     }
@@ -2550,6 +2646,15 @@ llvm::Value *CodeGen::applyBinaryOp(BinaryOp op, llvm::Value *l, llvm::Value *r,
             if (r->getType() != wider) r = builder_.CreateFPExt(r, wider, "fpext");
         }
     }
+
+    // Pointer compared with an integer (C's null-pointer constant: 'p != 0'):
+    // compare in the pointer domain.
+    bool isCmp = op == BinaryOp::Eq || op == BinaryOp::NEq || op == BinaryOp::Lt ||
+                 op == BinaryOp::Gt || op == BinaryOp::LEq || op == BinaryOp::GEq;
+    if (isCmp && l->getType()->isPointerTy() && r->getType()->isIntegerTy())
+        r = builder_.CreateIntToPtr(r, l->getType(), "int2ptr");
+    else if (isCmp && r->getType()->isPointerTy() && l->getType()->isIntegerTy())
+        l = builder_.CreateIntToPtr(l, r->getType(), "int2ptr");
 
     switch (op) {
     case BinaryOp::Add:  return isFloat ? builder_.CreateFAdd(l, r, "fadd")
@@ -2712,10 +2817,7 @@ llvm::Value *CodeGen::genBinary(BinaryExpr &e, FnEnv &env) {
         auto *arrDecay = builder_.CreateGEP(arrTy, arrAddr,
             { llvm::ConstantInt::get(Int64Ty, 0), llvm::ConstantInt::get(Int64Ty, 0) },
             "arrdecay");
-        auto *rhs = genExpr(*e.right, env);
-        // Extend index to i64 if needed
-        if (!rhs->getType()->isIntegerTy(64))
-            rhs = builder_.CreateSExt(rhs, Int64Ty, "idx64");
+        auto *rhs = indexToI64(builder_, genExpr(*e.right, env), e.right->type);
         if (e.op == BinaryOp::Sub) rhs = builder_.CreateNeg(rhs);
         auto &at = static_cast<ArrayType &>(*e.left->type);
         return builder_.CreateGEP(lowerType(at.element), arrDecay, rhs, "ptrarith");
@@ -2763,8 +2865,7 @@ llvm::Value *CodeGen::genBinary(BinaryExpr &e, FnEnv &env) {
                 pointee = static_cast<ReferenceType &>(*e.left->type).base;
         }
         auto *elemTy = pointee ? lowerType(pointee) : llvm::Type::getInt8Ty(ctx_);
-        if (!rhs->getType()->isIntegerTy(64))
-            rhs = builder_.CreateSExt(rhs, llvm::Type::getInt64Ty(ctx_), "idx64");
+        rhs = indexToI64(builder_, rhs, e.right->type);
         if (e.op == BinaryOp::Sub) rhs = builder_.CreateNeg(rhs);
         return builder_.CreateGEP(elemTy, lhs, rhs, "ptrarith");
     }
@@ -2792,6 +2893,30 @@ static bool isHomogeneousFPAggregate(llvm::StructType *st) {
         if (st->getElementType(i) != first) return false;
     }
     return true;
+}
+
+// Widens an integer index/offset to i64 before it reaches a GEP. LLVM treats
+// every GEP index as SIGNED at its own width, so passing a narrow unsigned
+// value through unchanged ('tab[(unsigned char)200]' → 'i8 -56', or
+// 'p + u32' with the top bit set) silently addresses memory *before* the
+// base. Extension must follow the SafeC source type's signedness.
+static llvm::Value *indexToI64(llvm::IRBuilder<> &b, llvm::Value *v, const TypePtr &ty) {
+    auto *i64Ty = llvm::Type::getInt64Ty(b.getContext());
+    if (!v->getType()->isIntegerTy() || v->getType()->isIntegerTy(64)) return v;
+    bool isUnsigned = false;
+    if (ty) {
+        switch (ty->kind) {
+        case TypeKind::Bool:
+        case TypeKind::UInt8: case TypeKind::UInt16:
+        case TypeKind::UInt32: case TypeKind::UInt64:
+            isUnsigned = true; break;
+        case TypeKind::Enum:
+            isUnsigned = !static_cast<const EnumType &>(*ty).isSigned; break;
+        default: break;
+        }
+    }
+    if (v->getType()->getIntegerBitWidth() > 64) return b.CreateTrunc(v, i64Ty, "idx64");
+    return isUnsigned ? b.CreateZExt(v, i64Ty, "idx64") : b.CreateSExt(v, i64Ty, "idx64");
 }
 
 // ── Call ──────────────────────────────────────────────────────────────────────
@@ -3127,23 +3252,61 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
                 capVal = builder_.CreateIntCast(capVal, Int32Ty, true);
             return builder_.CreateCall(fnTy, fn.getCallee(), {capVal}, "chan");
         }
-        if (ident.name == "chan_send" && e.args.size() == 2) {
+        // The runtime moves fixed 8-byte slots. When the value pointer's
+        // real pointee type is visible (looking through '(void*)&x'),
+        // stage it through an 8-byte temp and copy exactly sizeof(pointee)
+        // bytes — otherwise chan_recv(ch, &someInt) writes 8 bytes into a
+        // 4-byte variable and corrupts the neighbouring stack slot.
+        auto chanPayloadSize = [&](Expr &arg) -> int64_t {
+            Expr *x = &arg;
+            while (x->kind == ExprKind::Cast)
+                x = static_cast<CastExpr &>(*x).operand.get();
+            TypePtr pointee;
+            if (x->type && x->type->kind == TypeKind::Pointer)
+                pointee = static_cast<PointerType &>(*x->type).base;
+            else if (x->type && x->type->kind == TypeKind::Reference)
+                pointee = static_cast<ReferenceType &>(*x->type).base;
+            if (!pointee || pointee->kind == TypeKind::Void) return -1;
+            auto *lt = lowerType(pointee);
+            if (!lt->isSized()) return -1;
+            return (int64_t)mod_->getDataLayout().getTypeAllocSize(lt);
+        };
+        if ((ident.name == "chan_send" || ident.name == "chan_recv") && e.args.size() == 2) {
+            bool isSend  = ident.name == "chan_send";
             auto *PtrTy  = llvm::PointerType::get(ctx_, 0);
             auto *BoolTy = llvm::Type::getInt1Ty(ctx_);
+            auto *I64Ty  = llvm::Type::getInt64Ty(ctx_);
             auto *fnTy = llvm::FunctionType::get(BoolTy, {PtrTy, PtrTy}, false);
-            auto fn = mod_->getOrInsertFunction("__safec_chan_send", fnTy);
+            auto fn = mod_->getOrInsertFunction(
+                isSend ? "__safec_chan_send" : "__safec_chan_recv", fnTy);
+            int64_t sz = chanPayloadSize(*e.args[1]);
+            if (sz > 8) {
+                diag_.error(e.args[1]->loc, std::string(isSend ? "chan_send" : "chan_recv") +
+                    ": value is " + std::to_string(sz) + " bytes, but channels carry "
+                    "8-byte slots — send a pointer to it instead");
+            }
             auto *chVal  = genExpr(*e.args[0], env);
             auto *valPtr = genExpr(*e.args[1], env);
-            return builder_.CreateCall(fnTy, fn.getCallee(), {chVal, valPtr}, "sent");
-        }
-        if (ident.name == "chan_recv" && e.args.size() == 2) {
-            auto *PtrTy  = llvm::PointerType::get(ctx_, 0);
-            auto *BoolTy = llvm::Type::getInt1Ty(ctx_);
-            auto *fnTy = llvm::FunctionType::get(BoolTy, {PtrTy, PtrTy}, false);
-            auto fn = mod_->getOrInsertFunction("__safec_chan_recv", fnTy);
-            auto *chVal  = genExpr(*e.args[0], env);
-            auto *outPtr = genExpr(*e.args[1], env);
-            return builder_.CreateCall(fnTy, fn.getCallee(), {chVal, outPtr}, "recvd");
+            if (sz <= 0 || sz >= 8)
+                return builder_.CreateCall(fnTy, fn.getCallee(), {chVal, valPtr},
+                                           isSend ? "sent" : "recvd");
+            auto *slot = createEntryAlloca(env, I64Ty, "chan.slot");
+            if (isSend) {
+                builder_.CreateStore(llvm::ConstantInt::get(I64Ty, 0), slot);
+                builder_.CreateMemCpy(slot, llvm::MaybeAlign(8), valPtr, llvm::MaybeAlign(1), (uint64_t)sz);
+                return builder_.CreateCall(fnTy, fn.getCallee(), {chVal, slot}, "sent");
+            }
+            auto *ok = builder_.CreateCall(fnTy, fn.getCallee(), {chVal, slot}, "recvd");
+            // Only touch the destination when a value actually arrived.
+            auto *curFn  = builder_.GetInsertBlock()->getParent();
+            auto *copyBB = llvm::BasicBlock::Create(ctx_, "chan.copy", curFn);
+            auto *doneBB = llvm::BasicBlock::Create(ctx_, "chan.done", curFn);
+            builder_.CreateCondBr(ok, copyBB, doneBB);
+            builder_.SetInsertPoint(copyBB);
+            builder_.CreateMemCpy(valPtr, llvm::MaybeAlign(1), slot, llvm::MaybeAlign(8), (uint64_t)sz);
+            builder_.CreateBr(doneBB);
+            builder_.SetInsertPoint(doneBB);
+            return ok;
         }
         if (ident.name == "chan_close" && e.args.size() == 1) {
             auto *PtrTy  = llvm::PointerType::get(ctx_, 0);
@@ -3154,14 +3317,18 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
             builder_.CreateCall(fnTy, fn.getCallee(), {chVal});
             return llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx_), 0);
         }
-        // ── spawn_scoped: same as spawn but emits a deferred join ───────────
-        // (The defer itself is handled by Sema inserting a DeferStmt with
-        // __safec_join — this just needs to produce the same handle spawn
-        // does, via the same backend-dispatching path.)
+        // ── spawn_scoped: same as spawn, plus an implicit join ──────────────
+        // The handle is kept in its own slot and joined by emitDefers on
+        // every exit path of the enclosing function, ordered like a 'defer'
+        // written at this point.
         if (ident.name == "spawn_scoped" && e.args.size() == 2) {
             auto *fnVal  = genExpr(*e.args[0], env);
             auto *argVal = genExpr(*e.args[1], env);
-            return genThreadCreate(fnVal, argVal, env);
+            auto *handle = genThreadCreate(fnVal, argVal, env);
+            auto *slot = createEntryAlloca(env, handle->getType(), "scoped.handle");
+            builder_.CreateStore(handle, slot);
+            env.scopedJoins.push_back({env.deferList.size(), slot});
+            return handle;
         }
     }
 
@@ -3449,7 +3616,7 @@ llvm::Value *CodeGen::genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr) 
         return tmp;
     }
 
-    auto *idxVal   = genExpr(*e.index, env);
+    auto *idxVal   = indexToI64(builder_, genExpr(*e.index, env), e.index->type);
     auto *baseTy   = e.base->type ? lowerType(e.base->type)
                                   : llvm::Type::getInt32Ty(ctx_);
     // Array/Slice subscripting needs the aggregate's own address (to GEP
@@ -3535,8 +3702,13 @@ llvm::Value *CodeGen::genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr) 
     // value from it. Otherwise the base is an rvalue pointer expression
     // (cast result, call, ...) with no alloca of its own; evaluate it
     // directly to get the pointer value.
+    // An unsized array ('T a[]' / 'T a[][N]' parameter) lowers to a bare
+    // pointer whose lvalue IS the element storage address already —
+    // loading through it again would dereference the first element's bytes.
+    bool decayedArray = e.base->type && e.base->type->kind == TypeKind::Array;
     auto *ptrVal = baseAddr
-        ? builder_.CreateLoad(llvm::PointerType::get(ctx_, 0), baseAddr, "ptr.load")
+        ? (decayedArray ? baseAddr
+                        : builder_.CreateLoad(llvm::PointerType::get(ctx_, 0), baseAddr, "ptr.load"))
         : genExpr(*e.base, env);
     auto *elemTy = e.type ? lowerType(e.type) : llvm::Type::getInt32Ty(ctx_);
     gep = builder_.CreateGEP(elemTy, ptrVal, idxVal, "ptr.idx");
@@ -3793,12 +3965,20 @@ llvm::Value *CodeGen::genCast(CastExpr &e, FnEnv &env) {
     // (matching '&expr' semantics) — NOT "reinterpret the loaded scalar value
     // as a pointer", which would treat e.g. an element's runtime value (1)
     // as if it were the address 0x1.
+    // Only when the lvalue's type IS the reference's referent type, though:
+    // '(?&Block)addr' with an integer 'addr' holding an address is a value
+    // conversion (inttoptr below), not "a reference to the variable addr".
     if (e.targetType->kind == TypeKind::Reference && e.operand->isLValue &&
         e.operand->type &&
         e.operand->type->kind != TypeKind::Reference &&
         e.operand->type->kind != TypeKind::Pointer &&
         e.operand->type->kind != TypeKind::Array) {
-        return genLValue(*e.operand, env);
+        auto &rt = static_cast<const ReferenceType &>(*e.targetType);
+        bool sameReferent = rt.base &&
+            (rt.base->kind == TypeKind::Void ||
+             lowerType(rt.base) == lowerType(e.operand->type));
+        if (sameReferent || !e.operand->type->isInteger())
+            return genLValue(*e.operand, env);
     }
 
     auto *srcVal = genExpr(*e.operand, env);
@@ -3980,6 +4160,17 @@ llvm::Value *CodeGen::genAssign(AssignExpr &e, FnEnv &env) {
         case AssignOp::ShrAssign: binOp = BinaryOp::Shr;    break;
         default:                  binOp = BinaryOp::Add;    break;
         }
+        if (e.lhs->type && e.lhs->type->kind == TypeKind::Pointer &&
+            (binOp == BinaryOp::Add || binOp == BinaryOp::Sub) && rhs->getType()->isIntegerTy()) {
+            // 'p += n' / 'p -= n': advance by n elements, like 'p + n'.
+            auto *elemTy = lowerType(static_cast<PointerType &>(*e.lhs->type).base);
+            if (elemTy->isVoidTy()) elemTy = llvm::Type::getInt8Ty(ctx_);
+            auto *idx = indexToI64(builder_, rhs, e.rhs->type);
+            if (binOp == BinaryOp::Sub) idx = builder_.CreateNeg(idx);
+            val = builder_.CreateGEP(elemTy, cur, idx, "ptrstep");
+            builder_.CreateStore(val, addr);
+            return val;
+        }
         val = applyBinaryOp(binOp, cur, rhs, e.lhs->type);
     }
 
@@ -3996,6 +4187,24 @@ llvm::Value *CodeGen::genAssign(AssignExpr &e, FnEnv &env) {
 }
 
 // ── Ternary ───────────────────────────────────────────────────────────────────
+// ++/-- on a scalar or a raw pointer ('p++' advances by one element).
+llvm::Value *CodeGen::stepByOne(llvm::Value *v, llvm::Type *ty, const TypePtr &srcTy, int dir) {
+    if (ty->isPointerTy()) {
+        llvm::Type *elemTy = llvm::Type::getInt8Ty(ctx_);
+        if (srcTy && srcTy->kind == TypeKind::Pointer) {
+            elemTy = lowerType(static_cast<PointerType &>(*srcTy).base);
+            if (elemTy->isVoidTy()) elemTy = llvm::Type::getInt8Ty(ctx_);
+        }
+        return builder_.CreateGEP(elemTy, v,
+            llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx_), (uint64_t)(int64_t)dir), "ptrstep");
+    }
+    if (ty->isFloatingPointTy())
+        return dir > 0 ? builder_.CreateFAdd(v, llvm::ConstantFP::get(ty, 1.0))
+                       : builder_.CreateFSub(v, llvm::ConstantFP::get(ty, 1.0));
+    return dir > 0 ? builder_.CreateAdd(v, llvm::ConstantInt::get(ty, 1))
+                   : builder_.CreateSub(v, llvm::ConstantInt::get(ty, 1));
+}
+
 llvm::Value *CodeGen::genTernary(TernaryExpr &e, FnEnv &env) {
     auto *condVal = genExpr(*e.cond, env);
     condVal = boolify(condVal, e.cond->type);

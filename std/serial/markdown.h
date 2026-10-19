@@ -41,7 +41,7 @@ struct MdNode {
     int level;          // MD_HEADING: 1-6
     int ordered;         // MD_LIST: 1 = "1. 2. ...", 0 = "- " / "* " / "+ "
     struct String text;  // MD_TEXT/MD_CODE_SPAN/MD_CODE_BLOCK content; MD_LINK's URL
-    struct Vec children;  // Vec<struct MdNode*> — block children, or inline children
+    struct Vec<&heap MdNode> children;  // block children, or inline children
 };
 
 // Parses 'text' into a heap-allocated MD_DOC root node (see md_free()).

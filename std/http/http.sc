@@ -1,15 +1,16 @@
 // SafeC Standard Library — HTTP/1.1 implementation (see http.h)
 #pragma once
+#include <std/stddef.h>
 #include <std/http/http.h>
-#include <std/collections/string.sc>
-#include <std/mem.sc>
-#include <std/fmt.sc>
-#include <std/convert.sc>
-#include <std/str.sc>
+#include <std/collections/string.h>
+#include <std/mem.h>
+#include <std/fmt.h>
+#include <std/convert.h>
+#include <std/str.h>
 #include <std/sched/io_nb.h>
 #include <std/sched/reactor.h>
 #include <std/thread.h>
-#include <std/thread.sc>
+extern void* malloc(size_t size);
 // A backend for io_nb.h's declarations (io_nb_bsd.sc / io_nb_linux.sc /
 // io_nb_win32.sc) must be included by the caller before this file, the
 // same way std/ipc/uds.h's callers pick uds_bsd.sc/uds_linux.sc themselves
@@ -51,8 +52,8 @@ static int sock_close_(int fd) {
 // 'long' return type, and a caller that also includes both reactor_*.sc
 // and this file (see http_serve_reactor below) hits a real duplicate-
 // extern-declaration mismatch if the two disagree.
-extern long read(int fd, void* buf, unsigned long count);
-extern long write(int fd, const void* buf, unsigned long count);
+extern ssize_t read(int fd, void* buf, size_t count);
+extern ssize_t write(int fd, const void* buf, size_t count);
 extern int close(int fd);
 static long sock_read_(int fd, void* buf, unsigned long count) {
     unsafe { return read(fd, buf, count); }
@@ -194,38 +195,116 @@ static int write_all_(int fd, const char* data, unsigned long len) {
 
 // ── Header parsing ────────────────────────────────────────────────────────
 
-struct String http_header_get(const char* raw_headers, const char* name) {
-    struct String result = string_new();
-    unsigned long nameLen = str_len(name);
-    struct String headersStr = string_from(raw_headers);
-    struct String lines[256];
-    unsigned long lineCount = headersStr.split("\r\n", lines, 256UL);
-    unsigned long i = 0UL;
-    while (i < lineCount) {
-        const char* line = lines[i].as_ptr();
-        long colon;
-        unsafe { colon = (long)string_from(line).index_of(":"); }
-        if (colon >= 0L) {
-            struct String key = lines[i].substr(0UL, (unsigned long)colon);
-            struct String keyTrim = key.trim();
-            key.free();
-            if (keyTrim.length() == nameLen && keyTrim.eq_cstr_ignore_case(name)) {
-                struct String val = lines[i].substr((unsigned long)colon + 1UL, lines[i].length());
-                struct String valTrim = val.trim();
-                val.free();
-                result.free();
-                result = valTrim;
-                keyTrim.free();
-                break;
-            }
-            keyTrim.free();
+static char http_lower_(char c) {
+    if (c >= 'A' && c <= 'Z') { return (char)(c + 32); }
+    return c;
+}
+
+// Header-line iteration over a raw "Key: value" block: lines end in "\r\n"
+// or a bare "\n". Sets [*ks,*ke) to the trimmed key and [*vs,*ve) to the
+// trimmed value of the line starting at 'pos'; returns the next line's start,
+// or 0 when there's no line left. *ks == *ke for a line with no ':'.
+static unsigned long http_next_header_(const &char h, unsigned long len, unsigned long pos,
+                                       &unsigned long ks, &unsigned long ke,
+                                       &unsigned long vs, &unsigned long ve) {
+    if (pos >= len) { return 0UL; }
+    unsafe {
+        unsigned long end = pos;
+        while (end < len && h[end] != '\n') { end = end + 1UL; }
+        unsigned long next = end < len ? end + 1UL : len;
+        if (end > pos && h[end - 1UL] == '\r') { end = end - 1UL; }
+        unsigned long colon = pos;
+        while (colon < end && h[colon] != ':') { colon = colon + 1UL; }
+        *ks = pos; *ke = pos; *vs = end; *ve = end;
+        if (colon < end) {
+            unsigned long a = pos;
+            unsigned long b = colon;
+            while (a < b && (h[a] == ' ' || h[a] == '\t')) { a = a + 1UL; }
+            while (b > a && (h[b - 1UL] == ' ' || h[b - 1UL] == '\t')) { b = b - 1UL; }
+            unsigned long c = colon + 1UL;
+            unsigned long d = end;
+            while (c < d && (h[c] == ' ' || h[c] == '\t')) { c = c + 1UL; }
+            while (d > c && (h[d - 1UL] == ' ' || h[d - 1UL] == '\t')) { d = d - 1UL; }
+            *ks = a; *ke = b; *vs = c; *ve = d;
         }
-        i = i + 1UL;
+        return next == pos ? 0UL : next;
     }
-    unsigned long j = 0UL;
-    while (j < lineCount) { lines[j].free(); j = j + 1UL; }
-    headersStr.free();
-    return result;
+}
+
+// Case-insensitive compare of h[ks..ke) with NUL-terminated 'name'.
+static int http_key_is_(const &char h, unsigned long ks, unsigned long ke, const &char name) {
+    unsafe {
+        unsigned long i = 0UL;
+        while (ks + i < ke) {
+            if (name[i] == (char)0 || http_lower_(h[ks + i]) != http_lower_(name[i])) { return 0; }
+            i = i + 1UL;
+        }
+        return name[i] == (char)0;
+    }
+}
+
+// Single pass over the raw block, no per-line allocation (the previous
+// version split it into up to 256 heap Strings — and leaked one more per
+// line — just to find one header, on every request and response).
+struct String http_header_get(const char* raw_headers, const char* name) {
+    if (raw_headers == (const char*)0) { return string_new(); }
+    unsigned long len = str_len(raw_headers);
+    unsigned long pos = 0UL;
+    unsigned long ks = 0UL;
+    unsigned long ke = 0UL;
+    unsigned long vs = 0UL;
+    unsigned long ve = 0UL;
+    while (1) {
+        unsigned long next = http_next_header_(raw_headers, len, pos, &ks, &ke, &vs, &ve);
+        if (ke > ks && http_key_is_(raw_headers, ks, ke, name)) {
+            unsafe { return string_from_n(&raw_headers[vs], ve - vs); }
+        }
+        if (next == 0UL) { break; }
+        pos = next;
+    }
+    return string_new();
+}
+
+// Serializes a handler's HttpResponse: status line, every header the
+// handler set (so CORS/Set-Cookie/Location/... reach the client — the
+// server loops used to forward Content-Type only), a default Content-Type
+// if it set none, then the Content-Length/Connection this server owns.
+static struct String http_render_response_(&HttpResponse resp) {
+    struct String out = string_with_cap(160UL + resp.headers.length() + resp.body.length());
+    unsafe {
+        out.push("HTTP/1.1 ");
+        out.push_int((long long)resp.status);
+        out.push_char(' ');
+        out.push(http_reason_phrase(resp.status));
+        out.push("\r\n");
+        const char* h = resp.headers.as_ptr();
+        unsigned long len = resp.headers.length();
+        unsigned long pos = 0UL;
+        unsigned long ks = 0UL;
+        unsigned long ke = 0UL;
+        unsigned long vs = 0UL;
+        unsigned long ve = 0UL;
+        int hasType = 0;
+        while (len > 0UL) {
+            unsigned long next = http_next_header_(h, len, pos, &ks, &ke, &vs, &ve);
+            if (ke > ks && !http_key_is_(h, ks, ke, "content-length") &&
+                !http_key_is_(h, ks, ke, "connection")) {
+                if (http_key_is_(h, ks, ke, "content-type")) { hasType = 1; }
+                out.push_n(&h[ks], ke - ks);
+                out.push(": ");
+                out.push_n(&h[vs], ve - vs);
+                out.push("\r\n");
+            }
+            if (next == 0UL) { break; }
+            pos = next;
+        }
+        if (!hasType) { out.push("Content-Type: text/plain\r\n"); }
+        out.push("Content-Length: ");
+        out.push_uint((unsigned long long)resp.body.length());
+        out.push("\r\nConnection: close\r\n\r\n");
+        out.push_n(resp.body.as_ptr(), resp.body.length());
+    }
+    return out;
 }
 
 // ── Response building (server side) ───────────────────────────────────────
@@ -487,14 +566,7 @@ int http_serve(unsigned short port, HttpHandler handler) {
         struct HttpRequest req = http_parse_request_(clientFd, &reqOk);
         if (reqOk) {
             struct HttpResponse resp = handler(&req);
-            struct String contentType = http_header_get(resp.headers.as_ptr(), "Content-Type");
-            struct String respText;
-            unsafe {
-                respText = http_build_response(
-                    resp.status, contentType.as_ptr(),
-                    (const unsigned char*)resp.body.as_ptr(), resp.body.length());
-            }
-            contentType.free();
+            struct String respText = http_render_response_(&resp);
             write_all_(clientFd, respText.as_ptr(), respText.length());
             respText.free();
             resp.free();
@@ -511,7 +583,7 @@ struct __HttpThreadCtx {
     HttpHandler handler;
 };
 
-static void* __http_worker_main(void* argPtr) {
+static ?&__HttpThreadCtx __http_worker_main(?&__HttpThreadCtx argPtr) {
     struct __HttpThreadCtx* ctx;
     unsafe { ctx = (struct __HttpThreadCtx*)argPtr; }
 
@@ -526,14 +598,7 @@ static void* __http_worker_main(void* argPtr) {
         if (reqOk) {
             struct HttpResponse resp;
             unsafe { resp = ctx->handler(&req); }
-            struct String contentType = http_header_get(resp.headers.as_ptr(), "Content-Type");
-            struct String respText;
-            unsafe {
-                respText = http_build_response(
-                    resp.status, contentType.as_ptr(),
-                    (const unsigned char*)resp.body.as_ptr(), resp.body.length());
-            }
-            contentType.free();
+            struct String respText = http_render_response_(&resp);
             write_all_(clientFd, respText.as_ptr(), respText.length());
             respText.free();
             resp.free();
@@ -541,7 +606,7 @@ static void* __http_worker_main(void* argPtr) {
         req.free();
         unsafe { sock_close_(clientFd); }
     }
-    return (void*)0;
+    return null;
 }
 
 int http_serve_threaded(unsigned short port, HttpHandler handler, int numThreads) {
@@ -559,7 +624,7 @@ int http_serve_threaded(unsigned short port, HttpHandler handler, int numThreads
     int i = 0;
     while (i < numThreads) {
         unsafe {
-            if (thread_create(&tid, (void*)__http_worker_main, (void*)ctx) != 0) { return -1; }
+            if (thread_create(&tid, __http_worker_main, (?&__HttpThreadCtx)ctx) != 0) { return -1; }
         }
         i = i + 1;
     }
@@ -573,7 +638,7 @@ int http_serve_threaded(unsigned short port, HttpHandler handler, int numThreads
 // ── Reactor-based server ─────────────────────────────────────────────────────
 // Gated on SAFEC_REACTOR_BACKEND_INCLUDED_ (defined by reactor_kqueue.sc/
 // reactor_epoll.sc/reactor_win32.sc — see their own comment on this
-// macro): Reactor::add/remove/poll and TaskScheduler::spawn_task/await_fd
+// macro): Reactor::add/remove/poll and task_spawn/TaskScheduler::await_fd
 // below are real symbol references, not just declarations, so a caller
 // that includes http.sc *without* a reactor backend (http_serve/
 // http_serve_threaded's ordinary callers, unchanged by any of this) would
@@ -684,13 +749,13 @@ static void http_conn_cleanup_(struct HttpConnState_* st) {
     }
 }
 
-// Task function: int(void* arg, int resume_point) — see std/sync/task.h.
+// Task function: int(?&HttpConnState_ arg, int resume_point) — see std/sync/task.h.
 // Always yields '1' (task.sc only checks zero-vs-nonzero; the actual
 // resume point lives in st->phase, not the return value) until the
 // connection is fully handled, then returns 0 (TASK_DONE). Entirely
 // pointer-driven (st is heap-allocated, shared across yields/resumes), so
 // the whole body runs inside one unsafe block rather than one per access.
-static int http_conn_task_(void* argPtr, int resume_point) {
+static int http_conn_task_(?&HttpConnState_ argPtr, int resume_point) {
     unsafe {
         struct HttpConnState_* st = (struct HttpConnState_*)argPtr;
 
@@ -760,11 +825,7 @@ static int http_conn_task_(void* argPtr, int resume_point) {
             struct HttpRequest req = http_parse_request_from_buf_(&st->readBuf, st->headerEnd, &reqOk);
             if (reqOk) {
                 struct HttpResponse resp = st->handler(&req);
-                struct String contentType = http_header_get(resp.headers.as_ptr(), "Content-Type");
-                st->respText = http_build_response(
-                    resp.status, contentType.as_ptr(),
-                    (const unsigned char*)resp.body.as_ptr(), resp.body.length());
-                contentType.free();
+                st->respText = http_render_response_(&resp);
                 resp.free();
             } else {
                 st->respText = http_build_response(400, "text/plain", (const unsigned char*)"", 0UL);
@@ -830,7 +891,7 @@ static void http_spawn_conn_(struct TaskScheduler* sched, struct Reactor* reacto
         st->bodyWant = 0UL;
         st->respText = string_new();
         st->sent = 0UL;
-        int idx = sched->spawn_task((void*)http_conn_task_, (void*)st);
+        int idx = task_spawn((&TaskScheduler)sched, http_conn_task_, (?&HttpConnState_)st);
         if (idx < 0) {
             // Scheduler at capacity (TASK_MAX concurrent connections on
             // this thread already) — drop this one rather than leak the
@@ -936,7 +997,7 @@ static int http_pick_target_(struct HttpReactorShared_* shared) {
 // Never returns 0 (TASK_DONE) — it's meant to run for the
 // lifetime of the server, the same way http_serve's/http_serve_threaded's
 // own accept loops never return.
-static int http_accept_task_(void* argPtr, int resume_point) {
+static int http_accept_task_(?&HttpAcceptState_ argPtr, int resume_point) {
     unsafe {
         struct HttpAcceptState_* ac = (struct HttpAcceptState_*)argPtr;
 
@@ -1042,13 +1103,13 @@ struct HttpReactorThreadCtx_ {
     int selfIndex;
 };
 
-static void* http_reactor_worker_(void* argPtr) {
+static ?&HttpReactorThreadCtx_ http_reactor_worker_(?&HttpReactorThreadCtx_ argPtr) {
     unsafe {
         struct HttpReactorThreadCtx_* ctx = (struct HttpReactorThreadCtx_*)argPtr;
         struct HttpReactorShared_* shared = ctx->shared;
 
         struct Reactor reactor = reactor_init();
-        if (reactor.init() != 0) { return (void*)0; }
+        if (reactor.init() != 0) { return null; }
         struct TaskScheduler sched = task_sched_init();
 
         struct HttpDispatchQ_* myQueue = shared->queues + ctx->selfIndex;
@@ -1069,7 +1130,7 @@ static void* http_reactor_worker_(void* argPtr) {
             ac->reactor = (struct Reactor*)&reactor;
             ac->registered = 0;
             ac->shared = shared;
-            sched.spawn_task((void*)http_accept_task_, (void*)ac);
+            task_spawn(&sched, http_accept_task_, (?&HttpAcceptState_)ac);
         }
 
         http_worker_loop_(&sched, &reactor, myQueue, shared->handler);
@@ -1077,7 +1138,7 @@ static void* http_reactor_worker_(void* argPtr) {
         reactor.close_();
         if (ac != (struct HttpAcceptState_*)0) { free(ac); }
         free(ctx);
-        return (void*)0;
+        return null;
     }
 }
 
@@ -1139,7 +1200,7 @@ int http_serve_reactor(unsigned short port, HttpHandler handler, int numThreads)
             tctx = (struct HttpReactorThreadCtx_*)malloc(sizeof(struct HttpReactorThreadCtx_));
             tctx->shared = shared;
             tctx->selfIndex = i;
-            if (thread_create(&tid, (void*)http_reactor_worker_, (void*)tctx) != 0) { return -1; }
+            if (thread_create(&tid, http_reactor_worker_, (?&HttpReactorThreadCtx_)tctx) != 0) { return -1; }
         }
         i = i + 1;
     }

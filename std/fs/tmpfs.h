@@ -26,7 +26,7 @@ struct TmpfsCtx {
 };
 
 // Initialise a tmpfs context (zero-fills).
-void tmpfs_init(&stack TmpfsCtx ctx);
+void tmpfs_init(&TmpfsCtx ctx);
 
 // Return VfsOps for the tmpfs driver (ctx must be a TmpfsCtx*).
 struct VfsOps tmpfs_ops();

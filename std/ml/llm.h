@@ -40,7 +40,7 @@ struct LlmClient llm_client_new(const char* host, unsigned short port,
 // '{"model":..., "messages":[{"role":...,"content":...}, ...]}' and
 // returns 'choices[0].message.content' from the JSON response.
 // *ok is set to 0 on any transport, HTTP-status, or JSON-shape failure.
-struct String llm_chat(&LlmClient client, &Vec messages, int* ok);
+struct String llm_chat(&LlmClient client, &Vec<struct LlmMessage> messages, int* ok);
 
 // ── PromptTemplate ───────────────────────────────────────────────────────────
 // Replaces every '{name}' occurrence in 'tmpl' with 'vars' object field
@@ -55,7 +55,7 @@ struct String prompt_template_render(const char* tmpl, const &Value vars);
 typedef fn struct Value(const &Value input) ChainStepFn;
 
 struct Chain {
-    struct Vec steps; // Vec<ChainStepFn>
+    struct Vec<ChainStepFn> steps;
 };
 
 struct Chain chain_new();
@@ -82,7 +82,7 @@ struct GraphNode {
 };
 
 struct Graph {
-    struct Vec    nodes; // Vec<struct GraphNode>
+    struct Vec<struct GraphNode> nodes;
     struct String entryNode;
 };
 
@@ -101,7 +101,7 @@ struct TraceEvent {
 };
 
 struct Tracer {
-    struct Vec events; // Vec<struct TraceEvent>
+    struct Vec<struct TraceEvent> events;
 };
 
 struct Tracer tracer_new();

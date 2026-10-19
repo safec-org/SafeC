@@ -1,5 +1,6 @@
 // SafeC Standard Library — I/O declarations (C11/C17/C23 stdio coverage)
 #pragma once
+#include <std/io_file.h>
 
 // ── Seek / EOF constants ──────────────────────────────────────────────────────
 #define SC_SEEK_SET  0
@@ -18,7 +19,10 @@ void print_uint(unsigned long long v);
 void print_float(double v);
 void print_hex(unsigned long long v);
 void print_oct(unsigned long long v);
-void print_ptr(const void* p);
+void print_ptr_raw_(const void* p);
+// Print the address a reference points at ("(nil)" for null).
+generic<T>
+void print_ptr(const ?&T p) { unsafe { print_ptr_raw_((const void*)p); } }
 void println_int(long long v);
 void println_uint(unsigned long long v);
 void println_float(double v);
@@ -71,7 +75,7 @@ int  io_remove(const char* path);
 int  io_rename(const char* old_path, const char* new_path);
 
 // Create a temporary file; returns file handle or NULL on error.
-void* io_tmpfile();
+?&File io_tmpfile();
 
 // ── Flush ─────────────────────────────────────────────────────────────────────
 void flush_stdout();

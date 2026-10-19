@@ -97,6 +97,11 @@ public:
     Sema(TranslationUnit &tu, DiagEngine &diag);
 
     void setFreestanding(bool v) { freestanding_ = v; }
+    // Target pointer width in bits (the width of size_t at the C boundary).
+    void setPointerBits(unsigned b) { pointerBits_ = b; }
+    // Functions the program provides itself, defined in another translation
+    // unit (safec --provides=malloc,free,...): no freestanding warning.
+    void addProvidedFunction(const std::string &n) { providedFns_.insert(n); }
 
     // Run all analyses; returns false if there were errors
     bool run();
@@ -321,6 +326,13 @@ private:
     bool refToPointerArgCompatible(const TypePtr &from, const TypePtr &to) const;
 
     // ── State ─────────────────────────────────────────────────────────────────
+    unsigned pointerBits_ = 64;
+    // Monomorphized generic struct name -> (template name, type arguments),
+    // so inference can match 'struct Vec<T>' against a concrete 'Vec_int'.
+    std::unordered_map<std::string, std::pair<std::string, std::vector<TypePtr>>> structInstanceOrigin_;
+    std::unordered_set<std::string> providedFns_;
+    void adoptTupleLiteral(ExprPtr &e, const TypePtr &expected);
+    bool cAbiSizeArgCompatible(CallExpr &e, const TypePtr &arg, const TypePtr &param) const;
     bool freestanding_ = false;  // --freestanding mode: warn on stdlib calls
     bool checkingPure_ = false;  // true while checking a 'pure' function body
     int  loopDepth_    = 0;      // >0 when inside a loop (for break/continue validation)

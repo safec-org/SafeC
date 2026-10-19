@@ -21,7 +21,7 @@
 // 'kExcludedStdSubdirs' comment there. A wasm32 build never links
 // against that archive anyway (it's a host-arch .a); it reaches this
 // file the same way every test in this repo does, via a direct
-// '#include <std/wasm/wasm_rt.sc>' in wasm32-target source.
+// '#include <std/wasm/wasm_rt.h>' in wasm32-target source.
 
 static unsigned char gWasmRtPool[WASM_RT_POOL_SIZE];
 static unsigned long gWasmRtOffset = 0UL;

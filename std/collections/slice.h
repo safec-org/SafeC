@@ -1,60 +1,174 @@
-// SafeC Standard Library — Generic Slice
-// A Slice wraps a typed T* pointer + a length, providing bounds-checked access.
-// Because SafeC does not support generic structs, the struct stores void* and
-// elem_size; generic<T> functions provide type-safe construction and access.
+// SafeC Standard Library — Slice<T>: a bounds-checked view of T elements
+//
+//   int arr[8];
+//   struct Slice<int> s = std::slice_of(&arr[0], 8UL);
+//   int third = s.get(2UL).default(0);
+//   struct Slice<int> mid = s.sub(2UL, 5UL);   // elements 2,3,4
+//
+// A Slice doesn't own its elements unless it came from slice_alloc() (then
+// free() releases them). The arr_* helpers do the same bounds-checked work on
+// a bare (reference, length) pair.
 #pragma once
-
-// ── Type-erased fat pointer ────────────────────────────────────────────────────
+#include <std/mem.h>
+#include <std/panic.h>
 
 namespace std {
 
+generic<T>
 struct Slice {
-    void*         ptr;       // pointer to first element (may point into any region)
-    unsigned long len;       // number of elements
-    unsigned long elem_size; // stride in bytes
+    ?&T           ptr;   // first element; null for an empty slice
+    unsigned long len;   // element count
 
-    // ── Methods ────────────────────────────────────────────────────────────────
-    int           in_bounds(unsigned long idx) const;
-    void*         get_raw(unsigned long idx) const;     // NULL if OOB
-    int           set_raw(unsigned long idx, const void* val);
-    struct Slice  sub(unsigned long start, unsigned long end) const;
-    unsigned long length() const;
-    int           is_empty() const;
-    void          free();
+    int             in_bounds(unsigned long idx) const;
+    ?&T             get(unsigned long idx) const;     // null if out of range
+    &T              at(unsigned long idx) const;      // panics if out of range
+    int             set(unsigned long idx, T val);    // 0 if out of range
+    struct Slice<T> sub(unsigned long start, unsigned long end) const; // [start, end); empty if invalid
+    unsigned long   length() const;
+    int             is_empty() const;
+    void            free();                            // only for slice_alloc() slices
 };
 
-// ── Construction ──────────────────────────────────────────────────────────────
-struct Slice  slice_void_from(void* ptr, unsigned long len, unsigned long elem_size);
-struct Slice  slice_void_alloc(unsigned long len, unsigned long elem_size);
+generic<T>
+struct Slice<T> slice_of(&T first, unsigned long len) {
+    struct Slice<T> s;
+    s.ptr = first;
+    s.len = len;
+    return s;
+}
 
-// ── Generic typed construction ────────────────────────────────────────────────
-// T is inferred from the typed pointer argument.
+// Zero-initialised heap slice of 'len' elements; empty (null) on OOM.
+generic<T>
+struct Slice<T> slice_alloc(unsigned long len) {
+    struct Slice<T> s;
+    s.ptr = null;
+    s.len = 0UL;
+    ?&T p = null;
+    unsafe { p = (?&T)alloc_zeroed(checked_mul_size(len, sizeof(T))); }
+    if (!p.is_null()) { s.ptr = p; s.len = len; }
+    return s;
+}
 
 generic<T>
-struct Slice slice_of(&stack T ptr, unsigned long len);
+int Slice::in_bounds(unsigned long idx) const { return idx < self.len; }
 
 generic<T>
-T* arr_at(T* ptr, unsigned long len, unsigned long idx);
+?&T Slice::get(unsigned long idx) const {
+    if (idx >= self.len) return null;
+    match (self.ptr) {
+        case some(p): unsafe { return (?&T)&p[idx]; }
+        case null: { }
+    }
+    return null;
+}
 
 generic<T>
-void arr_set(T* ptr, unsigned long len, unsigned long idx, T val);
+&T Slice::at(unsigned long idx) const {
+    return expect_ref(self.get(idx), "Slice::at: index out of range");
+}
 
 generic<T>
-T arr_get(T* ptr, unsigned long idx);
+int Slice::set(unsigned long idx, T val) {
+    match (self.get(idx)) {
+        case some(e): { *e = val; return 1; }
+        case null: { }
+    }
+    return 0;
+}
 
 generic<T>
-void arr_fill(T* ptr, unsigned long len, T val);
+struct Slice<T> Slice::sub(unsigned long start, unsigned long end) const {
+    struct Slice<T> out;
+    out.ptr = null;
+    out.len = 0UL;
+    if (start < end && end <= self.len) {
+        out.ptr = self.get(start);
+        out.len = end - start;
+    }
+    return out;
+}
 
 generic<T>
-void arr_copy(T* dst, T* src, unsigned long len);
+unsigned long Slice::length() const { return self.len; }
 
 generic<T>
-T arr_min(T* ptr, unsigned long len);
+int Slice::is_empty() const { return self.len == 0UL; }
 
 generic<T>
-T arr_max(T* ptr, unsigned long len);
+void Slice::free() {
+    unsafe { dealloc((void*)self.ptr); }
+    self.ptr = null;
+    self.len = 0UL;
+}
+
+// ── Bounds-checked helpers on a (first element, length) pair ────────────────
 
 generic<T>
-void arr_reverse(T* ptr, unsigned long len);
+?&T arr_at(&T first, unsigned long len, unsigned long idx) {
+    if (idx >= len) return null;
+    unsafe { return (?&T)&first[idx]; }
+}
+
+generic<T>
+int arr_set(&T first, unsigned long len, unsigned long idx, T val) {
+    if (idx >= len) return 0;
+    unsafe { first[idx] = val; }
+    return 1;
+}
+
+generic<T>
+void arr_fill(&T first, unsigned long len, T val) {
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < len) { first[i] = val; i = i + 1UL; }
+    }
+}
+
+generic<T>
+void arr_copy(&T dst, const &T src, unsigned long len) {
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < len) { dst[i] = src[i]; i = i + 1UL; }
+    }
+}
+
+// Smallest / largest element by '<'; null for an empty array.
+generic<T>
+?T arr_min(const &T first, unsigned long len) {
+    if (len == 0UL) return null;
+    T best = *first;
+    unsafe {
+        unsigned long i = 1UL;
+        while (i < len) { if (first[i] < best) best = first[i]; i = i + 1UL; }
+    }
+    return best;
+}
+
+generic<T>
+?T arr_max(const &T first, unsigned long len) {
+    if (len == 0UL) return null;
+    T best = *first;
+    unsafe {
+        unsigned long i = 1UL;
+        while (i < len) { if (first[i] > best) best = first[i]; i = i + 1UL; }
+    }
+    return best;
+}
+
+generic<T>
+void arr_reverse(&T first, unsigned long len) {
+    if (len < 2UL) return;
+    unsafe {
+        unsigned long lo = 0UL;
+        unsigned long hi = len - 1UL;
+        while (lo < hi) {
+            T tmp = first[lo];
+            first[lo] = first[hi];
+            first[hi] = tmp;
+            lo = lo + 1UL;
+            hi = hi - 1UL;
+        }
+    }
+}
 
 } // namespace std

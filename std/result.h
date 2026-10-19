@@ -1,51 +1,64 @@
-// SafeC Standard Library — Result Type
-// Explicit error-propagation type.  Heap-allocates the contained value.
+// SafeC Standard Library — Result<T,E>: a value or an error, stored inline
 //
-// Usage pattern (mirrors ?T optional for the ok-path):
+//   struct Result<int, long long> r = std::result_ok(42);   // E taken from the target type
+//   if (r.ok()) { int v = r.get_ok().default(0); }
+//   struct Result<int, long long> e = std::result_err(7LL);
+//   match (e.get_err()) { case some(code): ...; case null: ... }
 //
-//   struct Result r = result_ok(42);          // ok containing int 42
-//   if (r.ok()) { int* v = result_get_ok_t(&r, int); }
-//   r.free();
-//
-// Generic accessor macros are provided because SafeC generic functions
-// cannot return a typed pointer without a wrapper.
-//
-// result_get_ok_t(r, T)  — expands to (T*)result_get_ok(r)
-// result_get_err_t(r, T) — expands to (T*)result_get_err(r)
+// No heap allocation: both slots live in the struct and only the one named
+// by 'is_ok' is meaningful.
 #pragma once
-
-#define result_get_ok_t(r, T)  ((T*)result_get_ok(r))
-#define result_get_err_t(r, T) ((T*)result_get_err(r))
 
 namespace std {
 
+generic<T, E>
 struct Result {
-    void* data;    // heap pointer to ok value or error value
-    int   is_ok;   // 1 = ok, 0 = err
+    T   value;   // valid when is_ok == 1
+    E   error;   // valid when is_ok == 0
+    int is_ok;
 
-    // Return 1 if this is an ok result.
-    int   ok() const;
-
-    // Return 1 if this is an error result.
-    int   err() const;
-
-    // Free the heap-allocated data.  Safe to call on null results.
-    void  free();
+    int ok() const;
+    int err() const;
+    ?&T get_ok();             // null for an error result
+    ?&E get_err();            // null for an ok result
+    T   unwrap_or(T fallback) const;
 };
 
-// Construct an ok Result from a generic value (copied to heap).
-generic<T> struct Result result_ok(T val);
+generic<T, E>
+struct Result<T, E> result_ok(T val) {
+    struct Result<T, E> r;
+    r.value = val;
+    r.is_ok = 1;
+    return r;
+}
 
-// Construct an err Result from a generic error value (copied to heap).
-generic<T> struct Result result_err(T err);
+generic<T, E>
+struct Result<T, E> result_err(E err) {
+    struct Result<T, E> r;
+    r.error = err;
+    r.is_ok = 0;
+    return r;
+}
 
-// Return a pointer to the ok value, or NULL if this is an error.
-void* result_get_ok(&stack Result r);
+generic<T, E>
+int Result::ok() const { return self.is_ok; }
 
-// Return a pointer to the error value, or NULL if this is an ok result.
-void* result_get_err(&stack Result r);
+generic<T, E>
+int Result::err() const { return !self.is_ok; }
 
-// Construct an empty/null Result (no allocation, is_ok = 0, data = NULL).
-struct Result result_none();
+generic<T, E>
+?&T Result::get_ok() {
+    if (!self.is_ok) return null;
+    unsafe { return (?&T)&self.value; }
+}
+
+generic<T, E>
+?&E Result::get_err() {
+    if (self.is_ok) return null;
+    unsafe { return (?&E)&self.error; }
+}
+
+generic<T, E>
+T Result::unwrap_or(T fallback) const { return self.is_ok ? self.value : fallback; }
 
 } // namespace std

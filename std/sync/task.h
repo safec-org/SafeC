@@ -9,7 +9,7 @@
 
 // Was 64 -- too low for a reactor thread under real concurrent load: once
 // more than TASK_MAX connections are simultaneously in flight on one
-// TaskScheduler, spawn_task() returns -1 and the caller (see
+// TaskScheduler, task_spawn() returns -1 and the caller (see
 // std/http/http.sc's http_accept_task_) closes the freshly-accepted fd
 // before reading its pending request bytes, which the kernel turns into
 // a TCP RST to the client. Verified: `ab -c 128` against a single
@@ -24,8 +24,8 @@
 namespace std {
 
 struct Task {
-    void*  func;            // task function: int(*)(void* arg, int resume_point)
-    void*  arg;           // user argument
+    void*  func;          // type-erased task function: int(?&T arg, int resume_point);
+    void*  arg;           // type-erased ?&T argument — both set only by task_spawn
     int    state;         // TASK_READY, TASK_RUNNING, or TASK_DONE
     int    resume_point;  // where to resume (0 = start)
     // I/O-readiness blocking (std/sched/reactor.h drives these): a task
@@ -45,11 +45,9 @@ struct TaskScheduler {
     int           count;     // number of registered tasks
     int           current;   // index of currently running task
 
-    // Spawn a new task. func signature: int func(void* arg, int resume_point)
-    //   - func returns >0 to yield with a new resume_point
-    //   - func returns 0 to indicate completion
-    // Returns task index, or -1 if scheduler is full.
-    int           spawn_task(void* func, void* arg);
+    // Type-erased spawn behind task_spawn() (below) and the compiler's
+    // bare-metal spawn runtime. Returns task index, or -1 if full.
+    int           spawn_raw_(void* func, void* arg);
 
     // Run one scheduling round: every non-blocked, non-done task gets one
     // turn (blocked tasks are skipped without being invoked — see
@@ -87,5 +85,16 @@ struct TaskScheduler {
 
 // Initialize a task scheduler.
 struct TaskScheduler task_sched_init();
+
+// Spawn a task running func(arg, resume_point):
+//   - func returns >0 to yield, with that value as the next resume_point
+//   - func returns 0 when done
+// Returns the task index, or -1 if the scheduler is full.
+//   static int blink(?&Led led, int step) { ...; return step < 3 ? step + 1 : 0; }
+//   std::task_spawn(&sched, blink, (?&Led)&led);
+generic<T>
+int task_spawn(&TaskScheduler s, fn int(?&T, int) func, ?&T arg) {
+    unsafe { return s.spawn_raw_((void*)func, (void*)arg); }
+}
 
 } // namespace std

@@ -15,12 +15,12 @@ inline struct SyscallTable syscall_init() {
     return t;
 }
 
-inline int SyscallTable::register_(int num, void* handler) {
-    if (num < 0 || num >= 256) { return 0; }
-    if (self.handlers[num] == (void*)0 && handler != (void*)0) {
+inline int SyscallTable::register_(int num, fn long long(long long, long long, long long) handler) {
+    if (num < 0 || num >= SYSCALL_MAX) { return 0; }
+    if (self.handlers[num] == (void*)0) {
         self.count = self.count + 1;
     }
-    self.handlers[num] = handler;
+    unsafe { self.handlers[num] = (void*)handler; }
     return 1;
 }
 

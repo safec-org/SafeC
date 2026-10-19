@@ -1,11 +1,14 @@
 // SafeC Standard Library — GUI: loadable/serializable bitmap fonts (see
 // gui_font.h for the on-disk "SCXF" format).
 #pragma once
+#include <std/stddef.h>
 #include <std/gui/gui.h>
 #include <std/gui/gui_draw.h>
 #include <std/gui/gui_font.h>
-#include <std/mem.sc>
-#include <std/io_file.sc>
+#include <std/mem.h>
+#include <std/io_file.h>
+#include <std/panic.h>
+extern void* memset(void* ptr, int val, size_t n);
 
 namespace std {
 
@@ -126,9 +129,9 @@ void gui_font_free(&GuiFont font) {
 }
 
 int gui_font_save(const &GuiFont font, const char* path) {
-    void* f;
-    unsafe { f = file_open(path, "wb"); }
-    if (f == (void*)0) { return 0; }
+    ?&File fq = file_open(path, "wb");
+    if (fq.is_null()) { return 0; }
+    &File f = expect_ref(fq, "gui_font_save: file");
 
     unsigned char header[16];
     unsafe {
@@ -150,26 +153,26 @@ int gui_font_save(const &GuiFont font, const char* path) {
         header[15] = (unsigned char)((count >> 24) & 0xFFU);
     }
     unsigned long wrote;
-    unsafe { wrote = file_write(f, (const void*)header, 16UL); }
+    unsafe { wrote = file_write(f, &header[0], 16UL); }
     if (wrote != 16UL) { unsafe { file_close(f); } return 0; }
 
     int glyphW; int glyphH; int count;
     unsafe { glyphW = font.glyphW; glyphH = font.glyphH; count = font.count; }
     unsigned long total = (unsigned long)(__gui_font_bytes_per_glyph(glyphW, glyphH) * count);
     unsigned long bodyWrote;
-    unsafe { bodyWrote = file_write(f, (const void*)font.bitmap, total); }
+    unsafe { bodyWrote = file_write(f, (const &unsigned char)font.bitmap, total); }
     unsafe { file_close(f); }
     return (bodyWrote == total) ? 1 : 0;
 }
 
 int gui_font_load(&GuiFont outFont, const char* path) {
-    void* f;
-    unsafe { f = file_open(path, "rb"); }
-    if (f == (void*)0) { return 0; }
+    ?&File fq = file_open(path, "rb");
+    if (fq.is_null()) { return 0; }
+    &File f = expect_ref(fq, "gui_font_load: file");
 
     unsigned char header[16];
     unsigned long got;
-    unsafe { got = file_read(f, (void*)header, 16UL); }
+    unsafe { got = file_read(f, &header[0], 16UL); }
     if (got != 16UL) { unsafe { file_close(f); } return 0; }
 
     int ok = 1;
@@ -195,7 +198,7 @@ int gui_font_load(&GuiFont outFont, const char* path) {
     struct GuiFont loaded = gui_font_new(glyphW, glyphH, (int)first, (int)count);
     unsigned long total = (unsigned long)(__gui_font_bytes_per_glyph(glyphW, glyphH) * (int)count);
     unsigned long bodyGot;
-    unsafe { bodyGot = file_read(f, (void*)loaded.bitmap, total); }
+    unsafe { bodyGot = file_read(f, (&unsigned char)loaded.bitmap, total); }
     unsafe { file_close(f); }
     if (bodyGot != total) {
         gui_font_free(&loaded);

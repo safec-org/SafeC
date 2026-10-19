@@ -1,5 +1,6 @@
 // SafeC Standard Library — Attention implementation (see attention.h).
 #pragma once
+#include <std/stddef.h>
 #include <std/ml/attention.h>
 #include <std/ml/tensor.h>
 #include <std/ml/activations.h>
@@ -7,7 +8,7 @@
 
 namespace std {
 
-extern void* malloc(unsigned long size);
+extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
 &Tensor softmax_rows(const &Tensor x) {

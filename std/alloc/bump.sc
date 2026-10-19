@@ -1,15 +1,17 @@
 // SafeC Standard Library — Bump Allocator
 #pragma once
+#include <std/stddef.h>
 #include <std/alloc/bump.h>
 
 namespace std {
 
-extern void* malloc(unsigned long size);
+extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
-inline struct BumpAllocator bump_init(&heap void buffer, unsigned long cap) {
+inline struct BumpAllocator bump_init(&unsigned char buffer, unsigned long cap) {
     struct BumpAllocator a;
-    a.base = buffer;
+    unsafe { a.base = (&heap void)buffer; }
+    a.owned = 0;
     a.used = (unsigned long)0;
     a.cap  = cap;
     return a;
@@ -18,6 +20,7 @@ inline struct BumpAllocator bump_init(&heap void buffer, unsigned long cap) {
 inline struct BumpAllocator bump_new(unsigned long cap) {
     struct BumpAllocator a;
     unsafe { a.base = (&heap void)malloc(cap); }
+    a.owned = 1;
     a.used = (unsigned long)0;
     a.cap  = cap;
     return a;
@@ -49,7 +52,7 @@ inline unsigned long BumpAllocator::remaining() const {
 }
 
 inline void BumpAllocator::destroy() {
-    unsafe { free((void*)self.base); }
+    if (self.owned) { unsafe { free((void*)self.base); } }
     self.used = (unsigned long)0;
     self.cap  = (unsigned long)0;
 }

@@ -4,12 +4,12 @@
 #include <std/rpc/server_fn.h>
 #include <std/rpc/rpc.h>
 #include <std/serial/value.h>
-#include <std/serial/value.sc>
+#include <std/serial/value.h>
 #include <std/serial/json.h>
-#include <std/serial/json.sc>
+#include <std/serial/json.h>
 #include <std/collections/string.h>
-#include <std/collections/string.sc>
-#include <std/mem.sc>
+#include <std/collections/string.h>
+#include <std/mem.h>
 
 namespace std {
 

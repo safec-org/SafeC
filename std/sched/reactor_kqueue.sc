@@ -20,8 +20,8 @@
 // file's own comment on this macro.
 #define SAFEC_REACTOR_BACKEND_INCLUDED_
 #include <std/sched/reactor.h>
-#include <std/sync/task.sc>
-#include <std/collections/vec.sc>
+#include <std/sync/task.h>
+#include <std/collections/vec.h>
 
 namespace std {
 
@@ -77,8 +77,8 @@ inline struct Reactor reactor_init() {
     // persistent kernel-side registration) — only initialized to satisfy
     // definite-initialization for these shared struct Reactor fields; see
     // reactor.h's comments on sigfds/watched.
-    r.sigfds = vec_new(sizeof(struct SigFdEntry));
-    r.watched = vec_new(sizeof(struct WatchedFd));
+    r.sigfds = vec_new();
+    r.watched = vec_new();
     return r;
 }
 
@@ -156,4 +156,4 @@ inline void Reactor::close_() {
 
 } // namespace std
 
-#include <std/sched/reactor.sc>
+#include <std/sched/reactor.h>

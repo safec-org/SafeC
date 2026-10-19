@@ -1,10 +1,11 @@
 // SafeC Standard Library — SHA-512 / SHA-384 (see sha512.h)
 #pragma once
+#include <std/stddef.h>
 #include <std/crypto/sha512.h>
 
 namespace std {
 
-extern void* memset(void* p, int v, unsigned long n);
+extern void* memset(void* p, int v, size_t n);
 
 // ── SHA-512 constants ─────────────────────────────────────────────────────────
 

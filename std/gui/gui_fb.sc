@@ -20,8 +20,10 @@
 // values your bootloader handed you (e.g. a Multiboot2 framebuffer tag's
 // framebuffer_addr/framebuffer_pitch/framebuffer_bpp fields).
 #pragma once
+#include <std/stddef.h>
 #include <std/gui/gui.h>
-#include <std/mem.sc>
+#include <std/mem.h>
+extern void* memset(void* ptr, int val, size_t n);
 
 namespace std {
 

@@ -1,12 +1,13 @@
 // SafeC Standard Library — Slab Allocator
 #pragma once
+#include <std/stddef.h>
 #include <std/alloc/slab.h>
 #include <std/mem.h>
 #include <std/stderr_compat.h>
 
 namespace std {
 
-extern void* malloc(unsigned long size);
+extern void* malloc(size_t size);
 extern void  free(void* ptr);
 // Same rationale as mem.sc/pool.sc for not using panic.h/panic_at here.
 extern void  abort();
@@ -53,9 +54,10 @@ inline void SlabAllocator::build_freelist_() {
     }
 }
 
-inline struct SlabAllocator slab_init(&heap void buffer, unsigned long obj_size, unsigned long count) {
+inline struct SlabAllocator slab_init(&unsigned char buffer, unsigned long obj_size, unsigned long count) {
     struct SlabAllocator a;
-    a.base = buffer;
+    unsafe { a.base = (&heap void)buffer; }
+    a.owned = 0;
     // Ensure minimum object size can hold a pointer
     if (obj_size < (unsigned long)8) {
         a.obj_size = (unsigned long)8;
@@ -81,6 +83,7 @@ inline struct SlabAllocator slab_new(unsigned long obj_size, unsigned long count
     a.used     = (unsigned long)0;
     a.has_tags = 1;
     unsafe { a.base = (&heap void)malloc(checked_mul_size(a.obj_size + SLAB_TAG_SIZE_, count)); }
+    a.owned = 1;
     a.free_head = (void*)0;
     a.build_freelist_();
     return a;
@@ -129,7 +132,7 @@ inline unsigned long SlabAllocator::available() const {
 }
 
 inline void SlabAllocator::destroy() {
-    unsafe { free((void*)self.base); }
+    if (self.owned) { unsafe { free((void*)self.base); } }
     self.free_head = (void*)0;
     self.used      = (unsigned long)0;
     self.cap       = (unsigned long)0;

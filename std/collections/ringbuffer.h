@@ -49,8 +49,10 @@ struct RingBuffer ring_init(&static unsigned char buf, unsigned long cap);
 
 // Static-capacity helper: declares a RingBuffer backed by a static array of `N` bytes.
 // Usage: RING_STATIC(my_ring, 1024);
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
 #define RING_STATIC(name, N)                          \
     static unsigned char name##_storage_[N];          \
     static struct RingBuffer name = { name##_storage_, N, N-1, 0, 0 }
+#endif
 
 } // namespace std

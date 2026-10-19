@@ -304,8 +304,8 @@ void adam_free(&AdamState state) {
         }
         out->requiresGrad = a->requiresGrad;
         if (out->requiresGrad) {
-            out->parents.push((const void*)&a);
-            out->parents.push((const void*)&idxCache);
+            out->parents.push(a);
+            out->parents.push(idxCache);
             out->gradFn = (void*)__maxpool1d_backward;
         }
     }

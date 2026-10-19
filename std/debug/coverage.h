@@ -40,12 +40,13 @@ struct Coverage {
     void reset();
 };
 
-struct Coverage coverage;
+extern struct Coverage coverage;
 void coverage_init();
 
 // Place COV_SITE() once per code region you want to track.
 // Registers on first execution; subsequent calls increment the count.
 // Requires a static int site_id_ guard per call site (macro handles this).
+#ifdef __SAFEC_COMPAT_PREPROCESSOR__   // function-like macro: compat mode only
 #define COV_SITE()  do {                                          \
     static int _cov_id = -1;                                      \
     if (_cov_id < 0) {                                            \
@@ -53,5 +54,6 @@ void coverage_init();
     }                                                             \
     if (_cov_id >= 0) { coverage.hit(_cov_id); }                  \
 } while(0)
+#endif
 
 } // namespace std

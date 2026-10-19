@@ -40,7 +40,7 @@ extern void ReleaseSRWLockExclusive(void* rw);
 extern int  TryAcquireSRWLockShared(void* rw);
 extern int  TryAcquireSRWLockExclusive(void* rw);
 
-inline int thread_create(unsigned long long* tid, void* func, void* arg) {
+inline int thread_create_raw_(&unsigned long long tid, void* func, void* arg) {
     unsafe {
         void* h = CreateThread((void*)0, 0UL, func, arg, 0UL, (unsigned long*)0);
         if (h == (void*)0) return -1;
@@ -69,7 +69,7 @@ inline unsigned long long thread_self() {
     unsafe { return (unsigned long long)GetCurrentThreadId(); }
 }
 
-inline int mutex_init(unsigned long long* m) {
+inline int mutex_init(&unsigned long long m) {
     unsafe {
         void* cs = alloc(64UL);
         if (cs == (void*)0) return -1;
@@ -79,7 +79,7 @@ inline int mutex_init(unsigned long long* m) {
     }
 }
 
-inline int mutex_destroy(unsigned long long* m) {
+inline int mutex_destroy(&unsigned long long m) {
     unsafe {
         void* cs = (void*)(*m);
         DeleteCriticalSection(cs);
@@ -89,11 +89,11 @@ inline int mutex_destroy(unsigned long long* m) {
     }
 }
 
-int mutex_lock(unsigned long long* m)    { unsafe { EnterCriticalSection((void*)(*m)); return 0; } }
-int mutex_trylock(unsigned long long* m) { unsafe { return TryEnterCriticalSection((void*)(*m)) ? 0 : 1; } }
-int mutex_unlock(unsigned long long* m)  { unsafe { LeaveCriticalSection((void*)(*m)); return 0; } }
+int mutex_lock(&unsigned long long m)    { unsafe { EnterCriticalSection((void*)(*m)); return 0; } }
+int mutex_trylock(&unsigned long long m) { unsafe { return TryEnterCriticalSection((void*)(*m)) ? 0 : 1; } }
+int mutex_unlock(&unsigned long long m)  { unsafe { LeaveCriticalSection((void*)(*m)); return 0; } }
 
-inline int cond_init(unsigned long long* cv) {
+inline int cond_init(&unsigned long long cv) {
     unsafe {
         void* c = alloc(16UL);
         if (c == (void*)0) return -1;
@@ -103,26 +103,26 @@ inline int cond_init(unsigned long long* cv) {
     }
 }
 
-inline int cond_destroy(unsigned long long* cv) {
+inline int cond_destroy(&unsigned long long cv) {
     unsafe { dealloc((void*)(*cv)); *cv = 0ULL; return 0; }
 }
 
-inline int cond_wait(unsigned long long* cv, unsigned long long* m) {
+inline int cond_wait(&unsigned long long cv, &unsigned long long m) {
     unsafe {
         return SleepConditionVariableCS((void*)(*cv), (void*)(*m), 4294967295UL) ? 0 : -1;
     }
 }
 
-inline int cond_timedwait_ms(unsigned long long* cv, unsigned long long* m, unsigned long ms) {
+inline int cond_timedwait_ms(&unsigned long long cv, &unsigned long long m, unsigned long ms) {
     unsafe {
         return SleepConditionVariableCS((void*)(*cv), (void*)(*m), (unsigned long)ms) ? 0 : -1;
     }
 }
 
-int cond_signal(unsigned long long* cv)    { unsafe { WakeConditionVariable((void*)(*cv)); return 0; } }
-int cond_broadcast(unsigned long long* cv) { unsafe { WakeAllConditionVariable((void*)(*cv)); return 0; } }
+int cond_signal(&unsigned long long cv)    { unsafe { WakeConditionVariable((void*)(*cv)); return 0; } }
+int cond_broadcast(&unsigned long long cv) { unsafe { WakeAllConditionVariable((void*)(*cv)); return 0; } }
 
-inline int rwlock_init(unsigned long long* rw) {
+inline int rwlock_init(&unsigned long long rw) {
     unsafe {
         void* r = alloc(16UL);
         if (r == (void*)0) return -1;
@@ -132,16 +132,16 @@ inline int rwlock_init(unsigned long long* rw) {
     }
 }
 
-inline int rwlock_destroy(unsigned long long* rw) {
+inline int rwlock_destroy(&unsigned long long rw) {
     unsafe { dealloc((void*)(*rw)); *rw = 0ULL; return 0; }
 }
 
-int rwlock_rdlock(unsigned long long* rw)    { unsafe { AcquireSRWLockShared((void*)(*rw)); return 0; } }
-int rwlock_wrlock(unsigned long long* rw)    { unsafe { AcquireSRWLockExclusive((void*)(*rw)); return 0; } }
-int rwlock_tryrdlock(unsigned long long* rw) { unsafe { return TryAcquireSRWLockShared((void*)(*rw)) ? 0 : 1; } }
-int rwlock_trywrlock(unsigned long long* rw) { unsafe { return TryAcquireSRWLockExclusive((void*)(*rw)) ? 0 : 1; } }
-int rwlock_rdunlock(unsigned long long* rw)  { unsafe { ReleaseSRWLockShared((void*)(*rw)); return 0; } }
-int rwlock_wrunlock(unsigned long long* rw)  { unsafe { ReleaseSRWLockExclusive((void*)(*rw)); return 0; } }
+int rwlock_rdlock(&unsigned long long rw)    { unsafe { AcquireSRWLockShared((void*)(*rw)); return 0; } }
+int rwlock_wrlock(&unsigned long long rw)    { unsafe { AcquireSRWLockExclusive((void*)(*rw)); return 0; } }
+int rwlock_tryrdlock(&unsigned long long rw) { unsafe { return TryAcquireSRWLockShared((void*)(*rw)) ? 0 : 1; } }
+int rwlock_trywrlock(&unsigned long long rw) { unsafe { return TryAcquireSRWLockExclusive((void*)(*rw)) ? 0 : 1; } }
+int rwlock_rdunlock(&unsigned long long rw)  { unsafe { ReleaseSRWLockShared((void*)(*rw)); return 0; } }
+int rwlock_wrunlock(&unsigned long long rw)  { unsafe { ReleaseSRWLockExclusive((void*)(*rw)); return 0; } }
 
 // ════════════════════════════════ POSIX ══════════════════════════════════════
 #else
@@ -175,8 +175,8 @@ extern int pthread_rwlock_tryrdlock(void* rw);
 extern int pthread_rwlock_trywrlock(void* rw);
 extern int pthread_rwlock_unlock(void* rw);
 
-inline int thread_create(unsigned long long* tid, void* func, void* arg) {
-    unsafe { return pthread_create(tid, (void*)0, func, arg); }
+inline int thread_create_raw_(&unsigned long long tid, void* func, void* arg) {
+    unsafe { return pthread_create((unsigned long long*)tid, (void*)0, func, arg); }
 }
 int thread_join(unsigned long long tid)    { unsafe { return pthread_join(tid, (void**)0); } }
 int thread_detach(unsigned long long tid)  { unsafe { return pthread_detach(tid); } }
@@ -193,7 +193,7 @@ inline void thread_sleep_ms(unsigned long ms) {
     }
 }
 
-inline int mutex_init(unsigned long long* m) {
+inline int mutex_init(&unsigned long long m) {
     unsafe {
         void* pm = alloc(128UL); // pthread_mutex_t <= 128 bytes (64 on macOS, 40 on Linux)
         if (pm == (void*)0) return -1;
@@ -204,7 +204,7 @@ inline int mutex_init(unsigned long long* m) {
     }
 }
 
-inline int mutex_destroy(unsigned long long* m) {
+inline int mutex_destroy(&unsigned long long m) {
     unsafe {
         void* pm = (void*)(*m);
         int r = pthread_mutex_destroy(pm);
@@ -214,11 +214,11 @@ inline int mutex_destroy(unsigned long long* m) {
     }
 }
 
-int mutex_lock(unsigned long long* m)    { unsafe { return pthread_mutex_lock((void*)(*m)); } }
-int mutex_trylock(unsigned long long* m) { unsafe { return pthread_mutex_trylock((void*)(*m)); } }
-int mutex_unlock(unsigned long long* m)  { unsafe { return pthread_mutex_unlock((void*)(*m)); } }
+int mutex_lock(&unsigned long long m)    { unsafe { return pthread_mutex_lock((void*)(*m)); } }
+int mutex_trylock(&unsigned long long m) { unsafe { return pthread_mutex_trylock((void*)(*m)); } }
+int mutex_unlock(&unsigned long long m)  { unsafe { return pthread_mutex_unlock((void*)(*m)); } }
 
-inline int cond_init(unsigned long long* cv) {
+inline int cond_init(&unsigned long long cv) {
     unsafe {
         void* pc = alloc(128UL); // pthread_cond_t <= 128 bytes
         if (pc == (void*)0) return -1;
@@ -229,7 +229,7 @@ inline int cond_init(unsigned long long* cv) {
     }
 }
 
-inline int cond_destroy(unsigned long long* cv) {
+inline int cond_destroy(&unsigned long long cv) {
     unsafe {
         void* pc = (void*)(*cv);
         int r = pthread_cond_destroy(pc);
@@ -239,11 +239,11 @@ inline int cond_destroy(unsigned long long* cv) {
     }
 }
 
-inline int cond_wait(unsigned long long* cv, unsigned long long* m) {
+inline int cond_wait(&unsigned long long cv, &unsigned long long m) {
     unsafe { return pthread_cond_wait((void*)(*cv), (void*)(*m)); }
 }
 
-inline int cond_timedwait_ms(unsigned long long* cv, unsigned long long* m, unsigned long ms) {
+inline int cond_timedwait_ms(&unsigned long long cv, &unsigned long long m, unsigned long ms) {
     unsafe {
         long long ts[2];
         clock_gettime(0, (void*)ts); // CLOCK_REALTIME = 0
@@ -257,10 +257,10 @@ inline int cond_timedwait_ms(unsigned long long* cv, unsigned long long* m, unsi
     }
 }
 
-int cond_signal(unsigned long long* cv)    { unsafe { return pthread_cond_signal((void*)(*cv)); } }
-int cond_broadcast(unsigned long long* cv) { unsafe { return pthread_cond_broadcast((void*)(*cv)); } }
+int cond_signal(&unsigned long long cv)    { unsafe { return pthread_cond_signal((void*)(*cv)); } }
+int cond_broadcast(&unsigned long long cv) { unsafe { return pthread_cond_broadcast((void*)(*cv)); } }
 
-inline int rwlock_init(unsigned long long* rw) {
+inline int rwlock_init(&unsigned long long rw) {
     unsafe {
         void* pr = alloc(256UL); // pthread_rwlock_t <= 256 bytes (200 on macOS)
         if (pr == (void*)0) return -1;
@@ -271,7 +271,7 @@ inline int rwlock_init(unsigned long long* rw) {
     }
 }
 
-inline int rwlock_destroy(unsigned long long* rw) {
+inline int rwlock_destroy(&unsigned long long rw) {
     unsafe {
         void* pr = (void*)(*rw);
         int r = pthread_rwlock_destroy(pr);
@@ -281,12 +281,12 @@ inline int rwlock_destroy(unsigned long long* rw) {
     }
 }
 
-int rwlock_rdlock(unsigned long long* rw)    { unsafe { return pthread_rwlock_rdlock((void*)(*rw)); } }
-int rwlock_wrlock(unsigned long long* rw)    { unsafe { return pthread_rwlock_wrlock((void*)(*rw)); } }
-int rwlock_tryrdlock(unsigned long long* rw) { unsafe { return pthread_rwlock_tryrdlock((void*)(*rw)); } }
-int rwlock_trywrlock(unsigned long long* rw) { unsafe { return pthread_rwlock_trywrlock((void*)(*rw)); } }
-int rwlock_rdunlock(unsigned long long* rw)  { unsafe { return pthread_rwlock_unlock((void*)(*rw)); } }
-int rwlock_wrunlock(unsigned long long* rw)  { unsafe { return pthread_rwlock_unlock((void*)(*rw)); } }
+int rwlock_rdlock(&unsigned long long rw)    { unsafe { return pthread_rwlock_rdlock((void*)(*rw)); } }
+int rwlock_wrlock(&unsigned long long rw)    { unsafe { return pthread_rwlock_wrlock((void*)(*rw)); } }
+int rwlock_tryrdlock(&unsigned long long rw) { unsafe { return pthread_rwlock_tryrdlock((void*)(*rw)); } }
+int rwlock_trywrlock(&unsigned long long rw) { unsafe { return pthread_rwlock_trywrlock((void*)(*rw)); } }
+int rwlock_rdunlock(&unsigned long long rw)  { unsafe { return pthread_rwlock_unlock((void*)(*rw)); } }
+int rwlock_wrunlock(&unsigned long long rw)  { unsafe { return pthread_rwlock_unlock((void*)(*rw)); } }
 
 #endif
 

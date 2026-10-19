@@ -3,8 +3,8 @@
 #include <std/ml/unet.h>
 #include <std/ml/tensor.h>
 #include <std/ml/cnn.h>
-#include <std/ml/cnn.sc>
-#include <std/mem.sc>
+#include <std/ml/cnn.h>
+#include <std/mem.h>
 
 namespace std {
 

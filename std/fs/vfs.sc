@@ -1,14 +1,19 @@
 // SafeC Standard Library — VFS Implementation
 #pragma once
+#include <std/stddef.h>
 #include <std/fs/vfs.h>
 
 namespace std {
 
-extern void* memset(void* p, int v, unsigned long n);
-extern void* memcpy(void* d, const void* s, unsigned long n);
+// Definitions of the globals vfs.h declares extern.
+struct Vfs vfs_root;
+
+
+extern void* memset(void* p, int v, size_t n);
+extern void* memcpy(void* d, const void* s, size_t n);
 extern int   strcmp(const char* a, const char* b);
-extern unsigned long strlen(const char* s);
-extern void* strncpy(char* d, const char* s, unsigned long n);
+extern size_t strlen(const char* s);
+extern void* strncpy(char* d, const char* s, size_t n);
 
 
 inline void vfs_init() {
@@ -38,7 +43,7 @@ inline unsigned long VfsNode::write(unsigned long offset, const &stack unsigned 
     return (unsigned long)0;
 }
 
-inline int VfsNode::readdir(void* cb, void* user) {
+inline int VfsNode::readdir_raw_(void* cb, void* user) {
     if (self.fs_ctx == (void*)0) { return -1; }
     struct VfsMount* m = (struct VfsMount*)self.fs_ctx;
     unsafe {
@@ -93,7 +98,7 @@ static const char* vfs_rel_path_(const char* path, const char* mountpoint) {
     return path;
 }
 
-int Vfs::mount(const char* mountpoint, struct VfsOps ops, void* ctx) {
+int Vfs::mount_raw_(const char* mountpoint, struct VfsOps ops, void* ctx) {
     if (self.mount_count >= VFS_MAX_MOUNTS) { return -1; }
     int i = 0;
     while (i < VFS_MAX_MOUNTS) {

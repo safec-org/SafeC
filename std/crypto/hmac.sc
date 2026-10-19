@@ -2,8 +2,8 @@
 #pragma once
 #include <std/crypto/hmac.h>
 #include <std/crypto/sha256.h>
-#include <std/crypto/sha256.sc>
-#include <std/mem.sc>
+#include <std/crypto/sha256.h>
+#include <std/mem.h>
 
 namespace std {
 

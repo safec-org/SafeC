@@ -15,10 +15,11 @@ inline struct IsrTable isr_init() {
     return t;
 }
 
-inline int IsrTable::register_(int irq, void* handler) {
-    if (irq < 0 || irq >= 256) { return 0; }
-    self.handlers[irq] = handler;
-    if (handler != (void*)0) { self.count = self.count + 1; }
+inline int IsrTable::register_(int irq, fn void() handler) {
+    if (irq < 0 || irq >= ISR_MAX) { return 0; }
+    // Re-registering an IRQ replaces its handler; count only new slots.
+    if (self.handlers[irq] == (void*)0) { self.count = self.count + 1; }
+    unsafe { self.handlers[irq] = (void*)handler; }
     return 1;
 }
 

@@ -33,6 +33,6 @@ struct PartTable {
 
 // Read and parse the MBR from sector 0 of `dev`.
 // Returns 0 on success, -1 on read error or bad signature.
-int partition_read(&stack BlockDevice dev, &stack PartTable table_out);
+int partition_read(&BlockDevice dev, &PartTable table_out);
 
 } // namespace std

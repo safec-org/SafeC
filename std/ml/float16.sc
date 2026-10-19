@@ -5,11 +5,12 @@
 // avoids relying on pointer-punning through mismatched types, which
 // safec (like C) doesn't guarantee is well-defined.
 #pragma once
+#include <std/stddef.h>
 #include <std/ml/float16.h>
 
 namespace std {
 
-extern void* memcpy(void* dst, const void* src, unsigned long n);
+extern void* memcpy(void* dst, const void* src, size_t n);
 
 static unsigned int __f32_bits(float v) {
     unsigned int bits = 0U;

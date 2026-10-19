@@ -83,7 +83,7 @@ struct Reactor {
     // the right fd and translate a ready signalfd back into its original
     // signal number. Left empty and unused by the kqueue and Win32
     // backends, which handle (or don't support) signals differently.
-    struct Vec sigfds;
+    struct Vec<struct SigFdEntry> sigfds;
 
     // reactor_win32.sc's registration table (elements are struct
     // WatchedFd). Unlike kqueue/epoll, WSAPoll has no persistent OS-side
@@ -92,7 +92,7 @@ struct Reactor {
     // maintain that set here themselves. Left empty and unused by the
     // kqueue and epoll backends, which rely on real OS-side registration
     // instead.
-    struct Vec watched;
+    struct Vec<struct WatchedFd> watched;
 
     // Opens the underlying OS event queue. Returns 0 on success, -1 on
     // failure (check errno).

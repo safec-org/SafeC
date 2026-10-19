@@ -19,44 +19,86 @@
 // it's a naming/intent signal for callers, the same way LFQueue's SPSC
 // contract is documented rather than mechanically checked.
 #pragma once
+//
+//   struct MpscQueue<int> q = std::mpsc_new(64UL);
+//   q.enqueue(7);              // any thread; 0 if full
+//   ?int v = q.dequeue();      // consumer; null if empty
+//   q.destroy();
 #include <std/sync/spinlock.h>
+#include <std/mem.h>
 
 namespace std {
 
+generic<T>
 struct MpscQueue {
-    &heap void    buffer;
+    ?&heap T      buffer;
     unsigned long cap;        // capacity in elements
-    unsigned long elem_size;
     unsigned long head;       // consumer reads here
     unsigned long tail;       // producers write here
     unsigned long count;      // pending element count
     struct Spinlock lock;     // guards head/tail/count and the buffer contents
 
-    // Copies 'elem' into the queue. Returns 1 on success, 0 if full.
-    int           enqueue(const void* elem);
-
-    // Copies the front element into 'out' and removes it. Returns 1 on
-    // success, 0 if empty.
-    int           dequeue(void* out);
-
+    int           enqueue(T val);   // 1 on success, 0 if full
+    ?T            dequeue();        // null if empty
     int           is_empty() const;
     int           is_full() const;
     unsigned long len() const;
-
-    // Frees the backing buffer.
-    void          destroy();
+    void          destroy();        // frees the buffer
 };
 
-// Heap-allocates its own backing buffer. 'cap' need not be a power of two
-// (unlike LFQueue) — the spinlock already serializes index updates, so
-// there's no lock-free-algorithm reason to require it.
-struct MpscQueue mpsc_new(unsigned long elem_size, unsigned long cap);
-
-// ── Typed generic wrappers ──────────────────────────────────────────────────
+// Heap-allocates its own buffer. 'cap' need not be a power of two (unlike
+// LFQueue) — the spinlock already serializes index updates. A failed
+// allocation yields a queue with cap 0 (every enqueue reports full).
 generic<T>
-int mpsc_enqueue_t(&stack MpscQueue q, T val);
+struct MpscQueue<T> mpsc_new(unsigned long cap) {
+    struct MpscQueue<T> q;
+    q.buffer = null;
+    unsafe { q.buffer = (?&heap T)alloc(checked_mul_size(cap, sizeof(T))); }
+    q.cap   = q.buffer.is_null() ? 0UL : cap;
+    q.head  = 0UL;
+    q.tail  = 0UL;
+    q.count = 0UL;
+    q.lock  = spinlock_init();
+    return q;
+}
 
 generic<T>
-int mpsc_dequeue_t(&stack MpscQueue q, T* out);
+int MpscQueue::enqueue(T val) {
+    self.lock.lock();
+    if (self.count == self.cap) { self.lock.unlock(); return 0; }
+    unsafe { self.buffer[self.tail] = val; }
+    self.tail  = self.tail + 1UL == self.cap ? 0UL : self.tail + 1UL;
+    self.count = self.count + 1UL;
+    self.lock.unlock();
+    return 1;
+}
+
+generic<T>
+?T MpscQueue::dequeue() {
+    self.lock.lock();
+    if (self.count == 0UL) { self.lock.unlock(); return null; }
+    T v;
+    unsafe { v = self.buffer[self.head]; }
+    self.head  = self.head + 1UL == self.cap ? 0UL : self.head + 1UL;
+    self.count = self.count - 1UL;
+    self.lock.unlock();
+    return v;
+}
+
+generic<T>
+int MpscQueue::is_empty() const { return self.count == 0UL; }
+
+generic<T>
+int MpscQueue::is_full() const { return self.count == self.cap; }
+
+generic<T>
+unsigned long MpscQueue::len() const { return self.count; }
+
+generic<T>
+void MpscQueue::destroy() {
+    unsafe { dealloc((void*)self.buffer); }
+    self.buffer = null;
+    self.cap = 0UL;
+}
 
 } // namespace std

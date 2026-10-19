@@ -1,6 +1,7 @@
 // SafeC Standard Library — System (C11/C17/C23 stdlib coverage)
 // Process control, PRNG, conversions, sorting, and clock wrappers.
 #pragma once
+#include <std/stddef.h>
 #include <std/sys.h>
 
 // ── Explicit extern declarations (avoid complex C header parsing) ─────────────
@@ -24,9 +25,9 @@ extern float  strtof(const char* s, char** end);
 // atexit: declared with void* for SafeC compatibility (no function pointer type syntax yet)
 extern int   atexit(void* func);
 // qsort/bsearch: declared with void* comparator for SafeC compatibility
-extern void  qsort(void* base, unsigned long n, unsigned long size, void* cmp);
-extern void* bsearch(const void* key, const void* base, unsigned long n,
-                     unsigned long size, void* cmp);
+extern void  qsort(void* base, size_t n, size_t size, void* cmp);
+extern void* bsearch(const void* key, const void* base, size_t n,
+                     size_t size, void* cmp);
 // clock_gettime / POSIX time
 extern int   clock_gettime(int clk_id, void* ts);
 
@@ -173,12 +174,12 @@ inline float sys_strtof(const char* s, char** end) {
 
 // Sort n elements of elem_size bytes in place.
 // cmp is a pointer to a function: int cmp(const void* a, const void* b)
-inline void sys_qsort(void* base, unsigned long n, unsigned long elem_size, void* cmp) {
+inline void sys_qsort_raw_(void* base, unsigned long n, unsigned long elem_size, void* cmp) {
     unsafe { qsort(base, n, elem_size, cmp); }
 }
 
 // Binary search in sorted array.  Returns pointer to match or NULL.
-void* sys_bsearch(const void* key, const void* base,
+void* sys_bsearch_raw_(const void* key, const void* base,
                   unsigned long n, unsigned long elem_size, void* cmp) {
     unsafe { return bsearch(key, base, n, elem_size, cmp); }
 }

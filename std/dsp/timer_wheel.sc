@@ -5,7 +5,7 @@
 // Zero-initialise the wheel.  Must be called before any other operation.
 namespace std {
 
-inline void timer_wheel_init(&stack TimerWheel tw) {
+inline void timer_wheel_init(&TimerWheel tw) {
     tw.current_tick = 0;
     int i = 0;
     while (i < WHEEL_TIMERS) {
@@ -37,7 +37,7 @@ static int alloc_slot(&stack TimerWheel tw) {
 }
 
 // ── TimerWheel::add ───────────────────────────────────────────────────────────
-inline int TimerWheel::add(unsigned long tick, void* callback, void* ctx) {
+inline int TimerWheel::add_raw_(unsigned long tick, void* callback, void* ctx) {
     int idx = alloc_slot(self);
     if (idx < 0) {
         return 0;  // wheel full
@@ -55,7 +55,7 @@ inline int TimerWheel::add(unsigned long tick, void* callback, void* ctx) {
 }
 
 // ── TimerWheel::add_periodic ──────────────────────────────────────────────────
-inline int TimerWheel::add_periodic(unsigned long period, void* callback, void* ctx) {
+inline int TimerWheel::add_periodic_raw_(unsigned long period, void* callback, void* ctx) {
     if (period == 0) {
         return 0;
     }

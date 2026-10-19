@@ -1,8 +1,8 @@
 // SafeC Standard Library — Base64 implementation (see base64.h)
 #pragma once
 #include <std/encoding/base64.h>
-#include <std/collections/string.sc>
-#include <std/collections/vec.sc>
+#include <std/collections/string.h>
+#include <std/collections/vec.h>
 
 namespace std {
 
@@ -85,8 +85,8 @@ static int base64_val_(char c) {
     return -2;
 }
 
-struct Vec base64_decode(const char* s, int* ok) {
-    struct Vec out = vec_new(1UL);
+struct Vec<unsigned char> base64_decode(const char* s, int* ok) {
+    struct Vec<unsigned char> out = vec_new();
     int good = 1;
     int group[4];
     int groupLen = 0;
@@ -116,9 +116,9 @@ struct Vec base64_decode(const char* s, int* ok) {
             unsigned char b1 = (unsigned char)((((group[1] & 0xF) << 4) | (group[2] >> 2)) & 0xFF);
             unsigned char b2 = (unsigned char)((((group[2] & 0x3) << 6) | group[3]) & 0xFF);
             unsafe {
-                out.push((void*)&b0);
-                out.push((void*)&b1);
-                out.push((void*)&b2);
+                out.push(b0);
+                out.push(b1);
+                out.push(b2);
             }
             groupLen = 0;
         }
@@ -129,13 +129,13 @@ struct Vec base64_decode(const char* s, int* ok) {
             good = 0; // a single leftover sextet can never be valid Base64
         } else if (groupLen == 2) {
             unsigned char b0 = (unsigned char)(((group[0] << 2) | (group[1] >> 4)) & 0xFF);
-            unsafe { out.push((void*)&b0); }
+            unsafe { out.push(b0); }
         } else if (groupLen == 3) {
             unsigned char b0 = (unsigned char)(((group[0] << 2) | (group[1] >> 4)) & 0xFF);
             unsigned char b1 = (unsigned char)((((group[1] & 0xF) << 4) | (group[2] >> 2)) & 0xFF);
             unsafe {
-                out.push((void*)&b0);
-                out.push((void*)&b1);
+                out.push(b0);
+                out.push(b1);
             }
         }
     }

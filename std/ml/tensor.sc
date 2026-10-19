@@ -224,7 +224,7 @@ inline void Tensor::free() {
 
 // ══ Graph traversal & tensor_backward() ══════════════════════════════════════
 
-static void __tensor_toposort(struct Tensor* t, struct Vec* order) {
+static void __tensor_toposort(struct Tensor* t, &Vec<&Tensor> order) {
     unsafe { if (t->visited) return; }
     unsafe { t->visited = 1; }
     unsigned long n;
@@ -234,7 +234,7 @@ static void __tensor_toposort(struct Tensor* t, struct Vec* order) {
         __tensor_toposort(__tensor_parent(t, i), order);
         i = i + 1UL;
     }
-    unsafe { order->push((const void*)&t); }
+    order.push(t);
 }
 
 void tensor_backward(&Tensor t) {
@@ -244,15 +244,14 @@ void tensor_backward(&Tensor t) {
         while (i < t->size) { t->grad[i] = (float)1.0; i = i + 1UL; }
     }
 
-    struct Vec order = vec_new(sizeof(struct Tensor*));
+    struct Vec<&Tensor> order = vec_new();
     __tensor_toposort(t, &order);
 
     unsafe {
         unsigned long n = order.length();
         long long idx = (long long)n - 1LL;
         while (idx >= 0LL) {
-            struct Tensor** pp = (struct Tensor**)order.get_raw((unsigned long)idx);
-            struct Tensor* node = *pp;
+            struct Tensor* node = *order.at((unsigned long)idx);
             if (node->gradFn != (void*)0) {
                 TensorBackwardFn backwardFn = (TensorBackwardFn)node->gradFn;
                 backwardFn((void*)node);
@@ -262,8 +261,7 @@ void tensor_backward(&Tensor t) {
 
         unsigned long j = 0UL;
         while (j < n) {
-            struct Tensor** pp2 = (struct Tensor**)order.get_raw(j);
-            struct Tensor* node2 = *pp2;
+            struct Tensor* node2 = *order.at(j);
             node2->visited = 0;
             j = j + 1UL;
         }

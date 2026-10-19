@@ -6,6 +6,7 @@
 
 // Maximum path components parsed
 #define FAT_MAX_DEPTH  8
+#define FAT_MAX_CLUSTER 4096   // largest supported cluster size in bytes (fat_init rejects bigger)
 
 namespace std {
 
@@ -50,7 +51,7 @@ struct FatCtx {
 
 // Initialise FAT32 context from a block device partition starting at `lba`.
 // Returns 0 on success.
-int fat_init(&stack FatCtx ctx, &stack BlockDevice dev, unsigned long lba);
+int fat_init(&FatCtx ctx, &BlockDevice dev, unsigned long lba);
 
 // Return VfsOps for the FAT32 driver (ctx must be a FatCtx*).
 struct VfsOps fat_ops();

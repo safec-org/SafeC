@@ -1,13 +1,14 @@
 // SafeC Standard Library — GPU-backed Tensor ops implementation (see
 // tensor_gpu.h).
 #pragma once
+#include <std/stddef.h>
 #include <std/ml/tensor_gpu.h>
 #include <std/ml/tensor_nn.h>
 #include <std/ml/gpu_mps.h>
 
 namespace std {
 
-extern void* malloc(unsigned long size);
+extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
 // ── Batched-dispatch support ──────────────────────────────────────────────────

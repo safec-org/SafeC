@@ -20,8 +20,8 @@ struct Ipv4Hdr {
     unsigned char  ttl;
     unsigned char  proto;
     unsigned short checksum;  // 0 after parse (not verified here)
-    unsigned int   src;       // network byte order
-    unsigned int   dst;       // network byte order
+    unsigned int   src;       // numeric form (see net_ip4)
+    unsigned int   dst;       // numeric form (see net_ip4)
 };
 
 // Compute Internet checksum over `len` bytes starting at `data`.

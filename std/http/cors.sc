@@ -3,10 +3,10 @@
 #include <std/http/cors.h>
 #include <std/http/http.h>
 #include <std/collections/string.h>
-#include <std/collections/string.sc>
-#include <std/mem.sc>
+#include <std/collections/string.h>
+#include <std/mem.h>
 #include <std/str.h>
-#include <std/str.sc>
+#include <std/str.h>
 
 namespace std {
 

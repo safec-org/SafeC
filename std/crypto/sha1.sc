@@ -1,10 +1,11 @@
 // SafeC Standard Library — SHA-1 (see sha1.h)
 #pragma once
+#include <std/stddef.h>
 #include <std/crypto/sha1.h>
 
 namespace std {
 
-extern void* memset(void* p, int v, unsigned long n);
+extern void* memset(void* p, int v, size_t n);
 
 static unsigned int sha1_H0_[5] = {
     0x67452301,0xEFCDAB89,0x98BADCFE,0x10325476,0xC3D2E1F0

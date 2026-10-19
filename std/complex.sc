@@ -35,22 +35,26 @@ void csub_d(double* out, const double* a, const double* b) { unsafe {
     out[0] = a[0] - b[0]; out[1] = a[1] - b[1];
 } }
 void cmul_f(float* out, const float* a, const float* b) { unsafe {
-    out[0] = a[0]*b[0] - a[1]*b[1];
-    out[1] = a[0]*b[1] + a[1]*b[0];
+    float ar = a[0]; float ai = a[1]; float br = b[0]; float bi = b[1];
+    out[0] = ar*br - ai*bi;
+    out[1] = ar*bi + ai*br;
 } }
 void cmul_d(double* out, const double* a, const double* b) { unsafe {
-    out[0] = a[0]*b[0] - a[1]*b[1];
-    out[1] = a[0]*b[1] + a[1]*b[0];
+    double ar = a[0]; double ai = a[1]; double br = b[0]; double bi = b[1];
+    out[0] = ar*br - ai*bi;
+    out[1] = ar*bi + ai*br;
 } }
 void cdiv_f(float* out, const float* a, const float* b) { unsafe {
-    float denom = b[0]*b[0] + b[1]*b[1];
-    out[0] = (a[0]*b[0] + a[1]*b[1]) / denom;
-    out[1] = (a[1]*b[0] - a[0]*b[1]) / denom;
+    float ar = a[0]; float ai = a[1]; float br = b[0]; float bi = b[1];
+    float denom = br*br + bi*bi;
+    out[0] = (ar*br + ai*bi) / denom;
+    out[1] = (ai*br - ar*bi) / denom;
 } }
 void cdiv_d(double* out, const double* a, const double* b) { unsafe {
-    double denom = b[0]*b[0] + b[1]*b[1];
-    out[0] = (a[0]*b[0] + a[1]*b[1]) / denom;
-    out[1] = (a[1]*b[0] - a[0]*b[1]) / denom;
+    double ar = a[0]; double ai = a[1]; double br = b[0]; double bi = b[1];
+    double denom = br*br + bi*bi;
+    out[0] = (ar*br + ai*bi) / denom;
+    out[1] = (ai*br - ar*bi) / denom;
 } }
 void cneg_f(float* out, const float* z)   { unsafe { out[0] = -z[0]; out[1] = -z[1]; } }
 void cneg_d(double* out, const double* z) { unsafe { out[0] = -z[0]; out[1] = -z[1]; } }
@@ -86,12 +90,16 @@ void cexp_d(double* out, const double* z) { unsafe {
 } }
 // log(z) = log(|z|) + i*arg(z)
 void clog_f(float* out, const float* z) { unsafe {
-    out[0] = log_f(cabs_f(z));
-    out[1] = carg_f(z);
+    float mag = cabs_f(z);
+    float ang = carg_f(z);
+    out[0] = log_f(mag);
+    out[1] = ang;
 } }
 void clog_d(double* out, const double* z) { unsafe {
-    out[0] = log_d(cabs_d(z));
-    out[1] = carg_d(z);
+    double mag = cabs_d(z);
+    double ang = carg_d(z);
+    out[0] = log_d(mag);
+    out[1] = ang;
 } }
 // pow(base, exp) = exp(exp * log(base))
 void cpow_f(float* out, const float* base, const float* ex) { unsafe {
@@ -106,21 +114,25 @@ void cpow_d(double* out, const double* base, const double* ex) { unsafe {
 } }
 // sin(z) = sin(re)*cosh(im) + i*cos(re)*sinh(im)
 void csin_f(float* out, const float* z) { unsafe {
-    out[0] = sin_f(z[0]) * cosh_f(z[1]);
-    out[1] = cos_f(z[0]) * sinh_f(z[1]);
+    float re = z[0]; float im = z[1];
+    out[0] = sin_f(re) * cosh_f(im);
+    out[1] = cos_f(re) * sinh_f(im);
 } }
 void csin_d(double* out, const double* z) { unsafe {
-    out[0] = sin_d(z[0]) * cosh_d(z[1]);
-    out[1] = cos_d(z[0]) * sinh_d(z[1]);
+    double re = z[0]; double im = z[1];
+    out[0] = sin_d(re) * cosh_d(im);
+    out[1] = cos_d(re) * sinh_d(im);
 } }
 // cos(z) = cos(re)*cosh(im) - i*sin(re)*sinh(im)
 void ccos_f(float* out, const float* z) { unsafe {
-    out[0] =  cos_f(z[0]) * cosh_f(z[1]);
-    out[1] = -sin_f(z[0]) * sinh_f(z[1]);
+    float re = z[0]; float im = z[1];
+    out[0] =  cos_f(re) * cosh_f(im);
+    out[1] = -sin_f(re) * sinh_f(im);
 } }
 void ccos_d(double* out, const double* z) { unsafe {
-    out[0] =  cos_d(z[0]) * cosh_d(z[1]);
-    out[1] = -sin_d(z[0]) * sinh_d(z[1]);
+    double re = z[0]; double im = z[1];
+    out[0] =  cos_d(re) * cosh_d(im);
+    out[1] = -sin_d(re) * sinh_d(im);
 } }
 
 } // namespace std

@@ -43,7 +43,7 @@ struct Clint {
     void  schedule(unsigned long delta);
 };
 
-struct Clint clint;
+extern struct Clint clint;
 void clint_init(unsigned long base_addr);
 
 // ── PLIC — Platform-Level Interrupt Controller ───────────────────────────────
@@ -70,7 +70,7 @@ struct Plic {
     void  complete(unsigned int irq);
 };
 
-struct Plic plic;
+extern struct Plic plic;
 void plic_init(unsigned long base_addr);
 
 } // namespace std

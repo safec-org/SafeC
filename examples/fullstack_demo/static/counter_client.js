@@ -1,6 +1,6 @@
 // fullstack_demo — browser-side glue for counter_client.wasm.
 //
-// Provides the env.js_* imports src/counter_client.sc's std/wasm/dom.h
+// Provides the env.js_* imports client/counter_client.sc's std/wasm/dom.h
 // declares as 'extern' (an undefined extern in a wasm32 module linked
 // with --allow-undefined becomes an import resolved here, from the
 // default "env" module — see std/wasm/wasm_rt.h/dom.h's header comments

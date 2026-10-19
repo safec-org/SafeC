@@ -32,12 +32,13 @@
 // only be 64 bytes on a 32-bit target, where 'unsigned long' is 4 bytes
 // instead of 8).
 #pragma once
+#include <std/stddef.h>
 // See reactor_kqueue.sc's identical comment on this macro.
 #define SAFEC_REACTOR_BACKEND_INCLUDED_
 #include <std/sched/reactor.h>
-#include <std/sched/reactor.sc>
-#include <std/sync/task.sc>
-#include <std/collections/vec.sc>
+#include <std/sched/reactor.h>
+#include <std/sync/task.h>
+#include <std/collections/vec.h>
 
 namespace std {
 
@@ -58,7 +59,7 @@ extern int  epoll_create1(int flags);
 extern int  epoll_ctl(int epfd, int op, int fd, const void* event);
 extern int  epoll_wait(int epfd, void* events, int maxevents, int timeout_ms);
 extern int  close(int fd);
-extern long read(int fd, void* buf, unsigned long count);
+extern ssize_t read(int fd, void* buf, size_t count);
 extern int  sigemptyset(void* set);
 extern int  sigaddset(void* set, int signum);
 extern int  sigprocmask(int how, const void* set, void* oldset);
@@ -85,13 +86,13 @@ static unsigned int reactor_epoll_events_(int portableFilter) {
 // used by poll() to tell a ready signalfd apart from a ready ordinary fd
 // (both arrive through the same epoll_wait() array with no other marker).
 // Returns -1 if 'fd' isn't one of ours.
-static int reactor_signum_for_fd_(const struct Vec* sigfds, int fd) {
+static int reactor_signum_for_fd_(const &Vec<struct SigFdEntry> sigfds, int fd) {
     unsigned long n;
     unsafe { n = sigfds->length(); }
     unsigned long i = 0UL;
     while (i < n) {
         struct SigFdEntry* e;
-        unsafe { e = (struct SigFdEntry*)sigfds->get_raw(i); }
+        unsafe { e = sigfds->at(i); }
         int entryFd;
         int entrySignum;
         unsafe { entryFd = e->fd; entrySignum = e->signum; }
@@ -104,12 +105,12 @@ static int reactor_signum_for_fd_(const struct Vec* sigfds, int fd) {
 inline struct Reactor reactor_init() {
     struct Reactor r;
     r.kq = -1;
-    r.sigfds = vec_new(sizeof(struct SigFdEntry));
+    r.sigfds = vec_new();
     // Unused on this backend (epoll has persistent kernel-side
     // registration) — only initialized to satisfy definite-initialization
     // for this shared struct Reactor field; see reactor.h's comment on
     // watched.
-    r.watched = vec_new(sizeof(struct WatchedFd));
+    r.watched = vec_new();
     return r;
 }
 
@@ -144,7 +145,7 @@ inline void Reactor::add(int fd, int filter) {
         struct SigFdEntry e;
         e.signum = signum;
         e.fd = sfd;
-        unsafe { self.sigfds.push((const void*)&e); }
+        unsafe { self.sigfds.push(e); }
 
         struct EpollEvent ev;
         ev.events = (unsigned int)SAFEC_EPOLLIN;
@@ -166,7 +167,7 @@ inline void Reactor::remove(int fd, int filter) {
         unsigned long i = 0UL;
         while (i < n) {
             struct SigFdEntry* e;
-            unsafe { e = (struct SigFdEntry*)self.sigfds.get_raw(i); }
+            unsafe { e = self.sigfds.at(i); }
             int entrySignum;
             unsafe { entrySignum = e->signum; }
             if (entrySignum == signum) {
@@ -175,7 +176,7 @@ inline void Reactor::remove(int fd, int filter) {
                 unsafe { epoll_ctl(self.kq, SAFEC_EPOLL_CTL_DEL, sfd, (const void*)0); }
                 unsafe { close(sfd); }
                 struct SigFdEntry removed;
-                unsafe { self.sigfds.remove(i, (void*)&removed); }
+                unsafe { self.sigfds.remove(i); }
                 return;
             }
             i = i + 1UL;
@@ -233,7 +234,7 @@ inline void Reactor::close_() {
     unsigned long i = 0UL;
     while (i < n) {
         struct SigFdEntry* e;
-        unsafe { e = (struct SigFdEntry*)self.sigfds.get_raw(i); }
+        unsafe { e = self.sigfds.at(i); }
         unsafe { close(e->fd); }
         i = i + 1UL;
     }

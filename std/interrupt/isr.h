@@ -7,12 +7,11 @@
 namespace std {
 
 struct IsrTable {
-    void* handlers[ISR_MAX];  // function pointers: void(*)(void)
+    void* handlers[ISR_MAX];  // fn void() handlers, stored erased (null = none)
     int   count;              // number of registered handlers
 
     // Register a handler for IRQ number `irq`. Returns 1 on success, 0 if out of range.
-    // Handler signature: void handler(void)
-    int   register_(int irq, void* handler);
+    int   register_(int irq, fn void() handler);
 
     // Unregister the handler for IRQ `irq`.
     void  unregister_(int irq);

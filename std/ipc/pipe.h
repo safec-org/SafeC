@@ -31,11 +31,11 @@ int pipe_create(&Pipe out);
 // Reads up to 'count' bytes from the pipe's read end into 'buf'. Returns
 // the number of bytes read (0 means the write end was closed and the
 // pipe is drained — EOF), or -1 on error.
-long long pipe_read(&Pipe p, void* buf, unsigned long count);
+long long pipe_read(&Pipe p, &unsigned char buf, unsigned long count);
 
 // Writes up to 'count' bytes from 'buf' to the pipe's write end. Returns
 // the number of bytes written, or -1 on error.
-long long pipe_write(&Pipe p, const void* buf, unsigned long count);
+long long pipe_write(&Pipe p, const &unsigned char buf, unsigned long count);
 
 // Puts the read end into non-blocking mode (pairs with std::Reactor —
 // await_fd(p->read_fd, SCHED_READ) once this returns 0). Returns 0 on

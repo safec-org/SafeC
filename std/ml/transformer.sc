@@ -1,5 +1,6 @@
 // SafeC Standard Library — DiT/JiT implementation (see transformer.h).
 #pragma once
+#include <std/stddef.h>
 #include <std/ml/transformer.h>
 #include <std/ml/tensor.h>
 #include <std/ml/attention.h>
@@ -7,7 +8,7 @@
 
 namespace std {
 
-extern void* malloc(unsigned long size);
+extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
 static struct Tensor* __xf_init_weight(unsigned long rows, unsigned long cols, unsigned long seed) {

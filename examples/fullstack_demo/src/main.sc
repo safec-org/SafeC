@@ -12,23 +12,8 @@
 // style HTML-string templating language.
 extern int printf(const char* fmt, ...);
 
-#include <std/mem.sc>
-#include <std/fmt.sc>
-#include <std/convert.sc>
-#include <std/str.sc>
+#include <std/mem.h>
 #include <std/collections/string.h>
-#ifndef SAFEC_FEATURE_BACKEND
-// When backend is off, nothing else in this link pulls in String's
-// implementation (http.sc normally does) — bring it in here explicitly so
-// main.o and pages.scx's generated .o aren't both left with unresolved
-// references and nothing that defines them. (When backend IS on, http.sc's
-// own '#include <std/collections/string.sc>' already covers this — adding
-// it again here too would make main.o strongly define every String method
-// a second time next to pages.scx's generated .o, which is exactly the
-// duplicate-symbol trap scx's own auto-injected includes avoid; see
-// ScxTranspiler.cpp's comment on the same issue.)
-#include <std/collections/string.sc>
-#endif
 
 #ifdef SAFEC_FEATURE_FRONTEND
 // Defined in src/pages.scx (transpiled to plain SafeC before safec sees it).
@@ -38,11 +23,9 @@ struct String render_not_found(const char* path);
 #endif
 
 #ifdef SAFEC_FEATURE_BACKEND
-#include <std/sched/io_nb_bsd.sc>
 #include <std/http/http.h>
-#include <std/http/http.sc>
 
-struct HttpResponse handle(struct HttpRequest* req) {
+struct HttpResponse handle(&HttpRequest req) {
     struct String body;
     const char* contentType;
 

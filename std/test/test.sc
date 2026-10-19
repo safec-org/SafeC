@@ -1,15 +1,16 @@
 // SafeC Standard Library — Unit Testing Framework
 #pragma once
+#include <std/stddef.h>
 #include <std/test/test.h>
 
 namespace std {
 
 extern int    printf(const char* fmt, ...);
 extern int    strcmp(const char* a, const char* b);
-extern void*  memset(void* p, int v, unsigned long n);
-extern void*  memcpy(void* d, const void* s, unsigned long n);
+extern void*  memset(void* p, int v, size_t n);
+extern void*  memcpy(void* d, const void* s, size_t n);
 extern void   exit(int code);
-extern unsigned long strlen(const char* s);
+extern size_t strlen(const char* s);
 
 // ── Global test context ───────────────────────────────────────────────────────
 // Points to the TestCase currently being executed; set by run() before each call.
@@ -60,16 +61,6 @@ void test_assert_eq_s(const char* a, const char* b, const char* desc,
     test_assert_true(ok, desc, file, line);
 }
 
-void test_assert_null(const void* p, const char* desc,
-                      const char* file, int line) {
-    test_assert_true(p == (const void*)0, desc, file, line);
-}
-
-void test_assert_not_null(const void* p, const char* desc,
-                           const char* file, int line) {
-    test_assert_true(p != (const void*)0, desc, file, line);
-}
-
 // ── TestSuite ─────────────────────────────────────────────────────────────────
 
 struct TestSuite test_suite_init() {
@@ -80,7 +71,7 @@ struct TestSuite test_suite_init() {
     return s;
 }
 
-void TestSuite::add(const char* name, void* func) {
+void TestSuite::add(const char* name, fn void() func) {
     if (self.count >= TEST_MAX) { return; }
     int idx = self.count;
     tc_copy_(self.cases[idx].name, name, (unsigned long)TEST_NAME_MAX);
@@ -98,10 +89,7 @@ void TestSuite::run() {
         self.cases[i].result = 1;       // assume pass
         unsafe { test_current_ = (struct TestCase*)&self.cases[i]; } // set global context
 
-        unsafe {
-            fn void(void) test_fn = (fn void(void))self.cases[i].func;
-            test_fn();
-        }
+        self.cases[i].func();
 
         test_current_ = (struct TestCase*)0;
 

@@ -7,13 +7,12 @@
 namespace std {
 
 struct SyscallTable {
-    void* handlers[SYSCALL_MAX];  // func: long long(*)(long long, long long, long long)
+    void* handlers[SYSCALL_MAX];  // fn long long(long long, long long, long long), stored erased
     int   count;                  // number of registered syscalls
 
     // Register a handler for syscall number `num`.
-    // Handler signature: long long handler(long long arg0, long long arg1, long long arg2)
     // Returns 1 on success, 0 if out of range.
-    int       register_(int num, void* handler);
+    int       register_(int num, fn long long(long long, long long, long long) handler);
 
     // Unregister a syscall handler.
     void      unregister_(int num);

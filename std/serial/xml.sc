@@ -1,10 +1,10 @@
 // SafeC Standard Library — XML serialization implementation (see xml.h)
 #pragma once
 #include <std/serial/xml.h>
-#include <std/serial/value.sc>
-#include <std/collections/string.sc>
-#include <std/fmt.sc>
-#include <std/convert.sc>
+#include <std/serial/value.h>
+#include <std/collections/string.h>
+#include <std/fmt.h>
+#include <std/convert.h>
 
 namespace std {
 
@@ -98,7 +98,7 @@ void xml_write(const &Value v, const char* tag, &String out) {
         unsigned long i = 0UL;
         while (i < n) {
             struct Value* elem;
-            unsafe { elem = (struct Value*)v.arr_val.get_raw(i); }
+            unsafe { elem = v.arr_val.at(i); }
             xml_write(elem, "item", out);
             i = i + 1UL;
         }
@@ -108,7 +108,7 @@ void xml_write(const &Value v, const char* tag, &String out) {
         unsigned long i = 0UL;
         while (i < n) {
             struct ObjectEntry* e;
-            unsafe { e = (struct ObjectEntry*)v.obj_val.get_raw(i); }
+            unsafe { e = v.obj_val.at(i); }
             const char* key;
             unsafe { key = (const char*)e->key; }
             struct Value* val;

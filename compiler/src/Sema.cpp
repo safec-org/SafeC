@@ -1,10 +1,13 @@
 #include "safec/Sema.h"
+#include <functional>
 #include "safec/Clone.h"
 #include <cassert>
 #include <cstdint>
 #include <algorithm>
 
 namespace safec {
+
+bool typeMentionsGeneric(const TypePtr &ty);
 
 // ── Operator overload helper ──────────────────────────────────────────────────
 std::string Sema::binaryOpToMethodName(BinaryOp op) {
@@ -215,6 +218,28 @@ TypePtr Sema::resolveType(TypePtr ty) {
             std::vector<TypePtr> resolvedArgs;
             resolvedArgs.reserve(st.typeArgs.size());
             for (auto &arg : st.typeArgs) resolvedArgs.push_back(resolveType(arg));
+            // Still mentions a type parameter (a generic function's
+            // 'struct Vec<T>' return type): keep it symbolic until
+            // monomorphization substitutes T, instead of instantiating a
+            // bogus 'Vec_T'.
+            // An unknown bare name ('T' parsed as a struct name inside a
+            // template) counts too, at any depth: 'Pool<Node<T>>' must stay
+            // symbolic, not instantiate 'Pool' over a half-resolved 'Node'.
+            auto mentionsPlaceholder = [&](const auto &self, const TypePtr &a) -> bool {
+                if (!a || a->kind != TypeKind::Struct) return false;
+                auto &as = static_cast<StructType &>(*a);
+                if (as.typeArgs.empty())
+                    return !as.isDefined && !typeRegistry_.count(as.name) &&
+                           !genericStructTemplates_.count(as.name);
+                for (auto &x : as.typeArgs) if (self(self, x)) return true;
+                return false;
+            };
+            for (auto &a : resolvedArgs)
+                if (typeMentionsGeneric(a) || mentionsPlaceholder(mentionsPlaceholder, a)) {
+                    auto nt = std::make_shared<StructType>(st.name, st.isUnion);
+                    nt->typeArgs = resolvedArgs;
+                    return nt;
+                }
             return instantiateGenericStruct(st.name, resolvedArgs, SourceLocation{});
         }
         if (!st.isDefined) {
@@ -331,6 +356,35 @@ void Sema::collectDecls(TranslationUnit &tu) {
 
 // Replace StructType{name} with GenericType{name} when 'name' is in the
 // generic parameter list.  Recurses into pointer/reference/array/function types.
+// Does this type tree still contain an unsubstituted generic parameter?
+bool typeMentionsGeneric(const TypePtr &ty) {
+    if (!ty) return false;
+    switch (ty->kind) {
+    case TypeKind::Generic: return true;
+    case TypeKind::Pointer: return typeMentionsGeneric(static_cast<const PointerType &>(*ty).base);
+    case TypeKind::Reference: return typeMentionsGeneric(static_cast<const ReferenceType &>(*ty).base);
+    case TypeKind::Array: return typeMentionsGeneric(static_cast<const ArrayType &>(*ty).element);
+    case TypeKind::Optional: return typeMentionsGeneric(static_cast<const OptionalType &>(*ty).inner);
+    case TypeKind::Slice: return typeMentionsGeneric(static_cast<const SliceType &>(*ty).element);
+    case TypeKind::Vector: return typeMentionsGeneric(static_cast<const VectorType &>(*ty).element);
+    case TypeKind::Tuple:
+        for (auto &e : static_cast<const TupleType &>(*ty).elementTypes)
+            if (typeMentionsGeneric(e)) return true;
+        return false;
+    case TypeKind::Function: {
+        auto &ft = static_cast<const FunctionType &>(*ty);
+        if (typeMentionsGeneric(ft.returnType)) return true;
+        for (auto &p : ft.paramTypes) if (typeMentionsGeneric(p)) return true;
+        return false;
+    }
+    case TypeKind::Struct:
+        for (auto &a : static_cast<const StructType &>(*ty).typeArgs)
+            if (typeMentionsGeneric(a)) return true;
+        return false;
+    default: return false;
+    }
+}
+
 static TypePtr resolveGenericNames(const TypePtr &ty,
                                     const std::vector<GenericParam> &gps) {
     if (!ty || gps.empty()) return ty;
@@ -358,10 +412,64 @@ static TypePtr resolveGenericNames(const TypePtr &ty,
         auto ne = resolveGenericNames(at.element, gps);
         return (ne == at.element) ? ty : makeArray(ne, at.size);
     }
+    if (ty->kind == TypeKind::Struct) {   // 'struct Vec<T>' in a generic signature
+        auto &st = static_cast<const StructType &>(*ty);
+        if (st.typeArgs.empty()) return ty;
+        bool changed = false;
+        std::vector<TypePtr> na;
+        for (auto &a : st.typeArgs) {
+            na.push_back(resolveGenericNames(a, gps));
+            if (na.back() != a) changed = true;
+        }
+        if (!changed) return ty;
+        auto nt = std::make_shared<StructType>(st.name, st.isUnion);
+        nt->typeArgs = std::move(na);
+        return nt;
+    }
+    if (ty->kind == TypeKind::Optional) {
+        auto &ot = static_cast<const OptionalType &>(*ty);
+        auto ni = resolveGenericNames(ot.inner, gps);
+        return (ni == ot.inner) ? ty : makeOptional(ni);
+    }
+    if (ty->kind == TypeKind::Slice) {
+        auto &sl = static_cast<const SliceType &>(*ty);
+        auto ne = resolveGenericNames(sl.element, gps);
+        return (ne == sl.element) ? ty : makeSlice(ne);
+    }
+    if (ty->kind == TypeKind::Vector) {
+        auto &vt = static_cast<const VectorType &>(*ty);
+        auto ne = resolveGenericNames(vt.element, gps);
+        return (ne == vt.element) ? ty : makeVector(ne, vt.width);
+    }
+    if (ty->kind == TypeKind::Tuple) {
+        auto &tt = static_cast<const TupleType &>(*ty);
+        bool changed = false;
+        std::vector<TypePtr> ne;
+        for (auto &e : tt.elementTypes) {
+            ne.push_back(resolveGenericNames(e, gps));
+            if (ne.back() != e) changed = true;
+        }
+        return changed ? makeTuple(std::move(ne)) : ty;
+    }
+    if (ty->kind == TypeKind::Function) {
+        auto &ft = static_cast<const FunctionType &>(*ty);
+        auto nr = resolveGenericNames(ft.returnType, gps);
+        bool changed = nr != ft.returnType;
+        std::vector<TypePtr> np;
+        for (auto &p : ft.paramTypes) {
+            np.push_back(resolveGenericNames(p, gps));
+            if (np.back() != p) changed = true;
+        }
+        return changed ? makeFunction(nr, std::move(np), ft.variadic) : ty;
+    }
     return ty;
 }
 
 void Sema::collectFunction(FunctionDecl &fn) {
+    // Remember libc-named functions this TU itself implements (a bare-metal
+    // runtime defining malloc/free/...): calling them in freestanding mode
+    // is not a missing-runtime hazard.
+    if (fn.body && fn.namespaceName.empty()) providedFns_.insert(fn.name);
     // Method support (OBJECT.md §4): T::m(P...) → T_m(T* self, P...)
     if (fn.isMethod) {
         // 'inline int Box::get() const {...}' where "Box" names a
@@ -683,8 +791,19 @@ TypePtr Sema::instantiateGenericStruct(const std::string &name,
     // collision-proof name ("Box_int") — reusing exactly the same
     // mangleName scheme generic *functions* already use, since MonoKey/
     // mangleName never assumed "name" was specifically a function name.
+    // Re-entered while this very instance is still being collected (its
+    // own methods mention 'Vec<T>', e.g. clone()): collectStruct has
+    // already registered the in-progress type under its mangled name.
+    {
+        std::string mname = mangleName(name, subs, tpl->genericParams);
+        auto inProgress = typeRegistry_.find(mname);
+        if (inProgress != typeRegistry_.end() && inProgress->second &&
+            inProgress->second->kind == TypeKind::Struct)
+            return inProgress->second;
+    }
     auto clone = cloneStructDecl(*tpl, subs);
     clone->name = mangleName(name, subs, tpl->genericParams);
+    structInstanceOrigin_[clone->name] = {name, typeArgs};
     clone->genericParams.clear();
 
     // collectStruct() takes the now-fully-concrete clone through the exact
@@ -712,6 +831,9 @@ TypePtr Sema::instantiateGenericStruct(const std::string &name,
             auto methodClone = cloneFunctionDecl(*methodTpl, subs);
             std::string originalName = methodTpl->name;
             methodClone->methodOwner = clonePtr->name;
+            methodClone->isMonomorphized = true;
+            if (methodClone->returnType) methodClone->returnType = resolveType(methodClone->returnType);
+            for (auto &p : methodClone->params) if (p.type) p.type = resolveType(p.type);
 
             TypePtr selfTy = makeReference(clonePtr->type, Region::Stack,
                                             /*nullable=*/false, /*mut=*/!methodClone->isConstMethod);
@@ -897,7 +1019,14 @@ void Sema::collectGlobalVar(GlobalVarDecl &gv) {
     // whatever (mangled or not) symbol name the decl actually uses.
     if (!gv.namespaceName.empty()) {
         std::string originalName = gv.name;
-        if (!gv.isExtern) {
+        auto prior = namespaceVarRegistry_.find(gv.namespaceName + "::" + originalName);
+        if (!gv.isExtern && prior != namespaceVarRegistry_.end() && prior->second->isExtern) {
+            // The definition of a variable an earlier header declared
+            // 'extern' (namespace std { extern struct Vfs vfs_root; } in
+            // vfs.h, defined in vfs.sc): same entity, so same symbol —
+            // the declaration's unmangled name.
+            gv.name = prior->second->name;
+        } else if (!gv.isExtern) {
             std::string nsPrefix = gv.namespaceName;
             size_t p;
             while ((p = nsPrefix.find("::")) != std::string::npos) nsPrefix.replace(p, 2, "_");
@@ -1101,8 +1230,12 @@ static void classifyNullMatchSubject(const TypePtr &subjectTy, bool &isNullLike,
         payloadTy  = static_cast<const PointerType &>(*subjectTy).base;
     } else if (subjectTy->kind == TypeKind::Reference &&
                static_cast<const ReferenceType &>(*subjectTy).nullable) {
+        // 'some(r)' on a nullable reference binds r as the non-null
+        // reference itself (same object, same region) — the sanctioned way
+        // to narrow '?&T' to '&T' after the null check; a cast can't do it.
         isNullLike = true;
-        payloadTy  = static_cast<const ReferenceType &>(*subjectTy).base;
+        auto &rt = static_cast<const ReferenceType &>(*subjectTy);
+        payloadTy  = makeReference(rt.base, rt.region, /*nullable=*/false, rt.mut, rt.arenaName);
     } else if (subjectTy->kind == TypeKind::Optional) {
         isOptional = true;
         payloadTy  = static_cast<const OptionalType &>(*subjectTy).inner;
@@ -1226,10 +1359,13 @@ void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
         bool isNullLike = false, isOptional = false;
         TypePtr nullPayloadTy;
         classifyNullMatchSubject(subjectTy, isNullLike, isOptional, nullPayloadTy);
+        std::unordered_set<int> nullTagsSeen;
         for (auto &arm : ms.arms) {
             resolveMatchArmPatterns(arm.patterns, isTaggedUnion, unionSt,
                                      isNullLike, isOptional, nullPayloadTy, diag_,
-                                     ms.loc, hasWildcard, nullptr, enumSubject);
+                                     ms.loc, hasWildcard,
+                                     (isNullLike || isOptional) ? &nullTagsSeen : nullptr,
+                                     enumSubject);
             // If pattern has a bind name, add it to scope for the arm body
             pushScope();
             for (auto &pat : arm.patterns) {
@@ -1247,6 +1383,9 @@ void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
             --loopDepth_;
             popScope();
         }
+        // null/none plus some(x) covers a nullable/optional subject completely.
+        if ((isNullLike || isOptional) && nullTagsSeen.count(0) && nullTagsSeen.count(1))
+            hasWildcard = true;
         if (!hasWildcard)
             diag_.warn(ms.loc, "match statement may not be exhaustive (no wildcard arm)");
         break;
@@ -1642,6 +1781,7 @@ void Sema::checkFor(ForStmt &s, FunctionDecl &fn) {
 
 void Sema::checkReturn(ReturnStmt &s, FunctionDecl &fn) {
     if (s.value) {
+        if (fn.returnType) adoptTupleLiteral(s.value, fn.returnType);
         TypePtr valTy = checkExpr(*s.value);
 
         // Region escape check: a returned '&stack T' refers to a local that's
@@ -1712,6 +1852,7 @@ void Sema::checkVarDecl(VarDeclStmt &s, FunctionDecl &fn) {
         // checked next.
         TypePtr savedExpectedType = expectedType_;
         if (s.declType && !s.declType->isError()) expectedType_ = s.declType;
+        if (s.declType) adoptTupleLiteral(s.init, resolveType(s.declType));
         initTy = (s.init->kind == ExprKind::Compound)
             ? checkCompoundInit(static_cast<CompoundInitExpr &>(*s.init), s.declType)
             : checkExpr(*s.init);
@@ -2097,6 +2238,10 @@ TypePtr Sema::checkIdent(IdentExpr &e) {
         }
     }
     if (sym->varDecl)   { e.resolved   = sym->varDecl;  e.isLValue = true; }
+    // A 'some(r)' binding of a nullable reference is the matched reference
+    // itself: writes through it reach the referent.
+    else if (sym->kind == SymKind::Variable && sym->type &&
+             sym->type->kind == TypeKind::Reference) { e.isLValue = true; }
     if (sym->fnDecl)    { e.resolvedFn = sym->fnDecl; }
     return sym->type ? sym->type : makeError();
 }
@@ -2169,9 +2314,16 @@ TypePtr Sema::checkAddrOf(UnaryExpr &e) {
         static_cast<IdentExpr &>(*e.operand).resolvedFn) {
         return operandTy;
     }
-    if (!e.operand->isLValue) {
+    // Element/member/deref expressions designate an object even when it
+    // isn't assignable (an element of a 'const &T' buffer): its address is
+    // still meaningful, it just yields a const reference.
+    bool designatesObject = e.operand->kind == ExprKind::Subscript ||
+                            e.operand->kind == ExprKind::Member ||
+                            e.operand->kind == ExprKind::Arrow;
+    if (!e.operand->isLValue && !designatesObject) {
         diag_.error(e.loc, "address-of operator requires lvalue");
     }
+    bool resultMut = e.operand->isLValue;
     // Borrow tracking happens at the binding site (var decl, assignment, or
     // call argument), not here — '&x' alone doesn't know whether the
     // resulting reference will be bound mutably or as a shared/const
@@ -2184,14 +2336,45 @@ TypePtr Sema::checkAddrOf(UnaryExpr &e) {
     // e.g. taking the address of a top-level 'static T arr[N];' could never
     // be stored anywhere that expected '&static T' (region-escape rejected
     // it as if it were a dangling stack reference).
+    // The same walk continues through subscripts of an array ('&g_arr[i]'
+    // is as static as g_arr), and stops at an element reached *through* a
+    // reference or pointer: that element lives wherever the referent does,
+    // i.e. the reference's own region (region-less for a pointer).
     VarDecl *baseVd = nullptr;
+    bool haveRegion = false;
+    Region r = Region::Stack;
     for (Expr *cur = e.operand.get(); cur; ) {
         if (cur->kind == ExprKind::Ident) { baseVd = static_cast<IdentExpr *>(cur)->resolved; break; }
-        if (cur->kind == ExprKind::Member) { cur = static_cast<MemberExpr *>(cur)->base.get(); continue; }
+        if (cur->kind == ExprKind::Member) {
+            // A field reached through a reference lives wherever the
+            // referent does. 'self' is typed '&stack T' only so methods can
+            // use it freely; the receiver itself can be anywhere, so a field
+            // of it is region-less, like any other '&T' referent.
+            Expr *b = static_cast<MemberExpr *>(cur)->base.get();
+            if (b->type && b->type->kind == TypeKind::Reference) {
+                bool isSelf = b->kind == ExprKind::Ident &&
+                              static_cast<IdentExpr *>(b)->name == "self";
+                r = isSelf ? Region::Extern : static_cast<ReferenceType &>(*b->type).region;
+                haveRegion = true; break;
+            }
+            if (b->type && b->type->kind == TypeKind::Pointer) { r = Region::Extern; haveRegion = true; break; }
+            cur = b;
+            continue;
+        }
+        if (cur->kind == ExprKind::Subscript) {
+            Expr *b = static_cast<SubscriptExpr *>(cur)->base.get();
+            if (b->type && b->type->kind == TypeKind::Reference) {
+                r = static_cast<ReferenceType &>(*b->type).region; haveRegion = true; break;
+            }
+            if (b->type && b->type->kind == TypeKind::Pointer) { r = Region::Extern; haveRegion = true; break; }
+            cur = b;
+            continue;
+        }
         break;
     }
-    Region r = (baseVd && (baseVd->isStatic || baseVd->isGlobal)) ? Region::Static : Region::Stack;
-    return makeReference(std::move(operandTy), r, false, true);
+    if (!haveRegion)
+        r = (baseVd && (baseVd->isStatic || baseVd->isGlobal)) ? Region::Static : Region::Stack;
+    return makeReference(std::move(operandTy), r, false, resultMut);
 }
 
 TypePtr Sema::checkDeref(UnaryExpr &e) {
@@ -2257,10 +2440,15 @@ TypePtr Sema::checkBinary(BinaryExpr &e) {
             return lhsTy;
         }
         if (!lhsTy->isArithmetic() || !rhsTy->isArithmetic()) {
-            // Allow pointer arithmetic for raw pointers (unsafe)
+            // Raw pointer arithmetic computes an address without touching
+            // memory, so it's allowed anywhere (as in C); *accessing*
+            // through the result (deref, subscript, '->') is what needs
+            // 'unsafe'.
             if (lhsTy->kind == TypeKind::Pointer || rhsTy->kind == TypeKind::Pointer) {
-                if (!inUnsafeScope())
-                    diag_.error(e.loc, "pointer arithmetic requires 'unsafe' block");
+                // 'p - q' is the element distance (C's ptrdiff_t), not a pointer.
+                if (e.op == BinaryOp::Sub && lhsTy->kind == TypeKind::Pointer &&
+                    rhsTy->kind == TypeKind::Pointer)
+                    return makeInt(64, true);
                 return lhsTy->kind == TypeKind::Pointer ? lhsTy : rhsTy;
             }
             // Array arithmetic: T[N] + int → T* (array decays to pointer)
@@ -2346,7 +2534,59 @@ TypePtr Sema::checkTupleLit(TupleLitExpr &e) {
     std::vector<TypePtr> elemTypes;
     for (auto &elem : e.elements)
         elemTypes.push_back(checkExpr(*elem));
+    if (e.targetType) {
+        // Written against a known tuple type: each element converts to the
+        // corresponding member type (literals narrow like any initializer).
+        auto &tt = static_cast<TupleType &>(*e.targetType);
+        for (size_t i = 0; i < e.elements.size(); ++i) {
+            const TypePtr &want = tt.elementTypes[i];
+            if (!elemTypes[i]->isError() && !canImplicitlyConvert(elemTypes[i], want) &&
+                !intLiteralFitsType(*e.elements[i], want) &&
+                !floatLitFitsType(*e.elements[i], want)) {
+                diag_.error(e.elements[i]->loc,
+                    "tuple element " + std::to_string(i) + ": cannot convert '" +
+                    elemTypes[i]->str() + "' to '" + want->str() + "'");
+            }
+        }
+        return e.targetType;
+    }
     return makeTuple(std::move(elemTypes));
+}
+
+// '(a, b, c)' where a tuple type is expected is a tuple literal, not the C
+// comma operator: rewrite the parenthesized comma chain in place. Arity must
+// match; otherwise it's left alone (and type-checks as a comma expression).
+void Sema::adoptTupleLiteral(ExprPtr &e, const TypePtr &expected) {
+    if (!e || !expected || expected->kind != TypeKind::Tuple) return;
+    if (e->kind != ExprKind::Binary) return;
+    auto &be = static_cast<BinaryExpr &>(*e);
+    if (be.op != BinaryOp::Comma || !be.parenComma) return;
+    std::vector<ExprPtr> parts;
+    std::function<void(ExprPtr &)> flatten = [&](ExprPtr &x) {
+        if (x->kind == ExprKind::Binary) {
+            auto &b = static_cast<BinaryExpr &>(*x);
+            if (b.op == BinaryOp::Comma && (&x == &e || !b.parenComma)) {
+                flatten(b.left);
+                parts.push_back(std::move(b.right));
+                return;
+            }
+        }
+        parts.push_back(std::move(x));
+    };
+    auto &tt = static_cast<TupleType &>(*expected);
+    // Count first, so a mismatched arity leaves the expression untouched.
+    size_t n = 1;
+    for (Expr *x = e.get(); x->kind == ExprKind::Binary &&
+         static_cast<BinaryExpr *>(x)->op == BinaryOp::Comma &&
+         (x == e.get() || !static_cast<BinaryExpr *>(x)->parenComma);
+         x = static_cast<BinaryExpr *>(x)->left.get())
+        ++n;
+    if (n != tt.elementTypes.size()) return;
+    SourceLocation loc = e->loc;
+    flatten(e);
+    auto lit = std::make_unique<TupleLitExpr>(std::move(parts), loc);
+    lit->targetType = expected;
+    e = std::move(lit);
 }
 
 TypePtr Sema::checkSpawn(SpawnExpr &e) {
@@ -2727,6 +2967,20 @@ TypePtr Sema::checkFnEval(FnEvalExpr &e) {
     return e.type;
 }
 
+// Calls into C ('extern' functions): an integer argument converts
+// implicitly to a pointer-width integer parameter — C's own size_t
+// conversion. std declares libc's size_t parameters with the pointer-width
+// size_t (32-bit on 32-bit targets) while SafeC's 'unsigned long' is always
+// 64-bit, so 'memcpy(d, s, n)' with an 'unsigned long n' must still be
+// accepted there. Only at the C boundary, only for that exact width.
+bool Sema::cAbiSizeArgCompatible(CallExpr &e, const TypePtr &arg, const TypePtr &param) const {
+    if (!arg || !param || !arg->isInteger() || !param->isInteger()) return false;
+    if (static_cast<const PrimType &>(*param).bitWidth() != pointerBits_) return false;
+    if (!e.callee || e.callee->kind != ExprKind::Ident) return false;
+    auto *fn = static_cast<IdentExpr &>(*e.callee).resolvedFn;
+    return fn && fn->isExtern;
+}
+
 TypePtr Sema::checkCall(CallExpr &e) {
     // RAII so the heap-free bump (and un-suppressing the staleness check)
     // happens on every exit path of this function, regardless of which of
@@ -3032,7 +3286,7 @@ TypePtr Sema::checkCall(CallExpr &e) {
                 nullptr
             };
             for (const char **p = stdlibFns; *p; ++p) {
-                if (ident.name == *p) {
+                if (ident.name == *p && !providedFns_.count(ident.name)) {
                     diag_.warn(e.loc,
                         "call to '" + ident.name + "' in freestanding mode "
                         "(no hosted runtime available)");
@@ -3240,6 +3494,11 @@ TypePtr Sema::checkCall(CallExpr &e) {
             auto clone  = cloneFunctionDecl(*fnDecl, subs);
             clone->name = mangleName(fnDecl->name, subs, fnDecl->genericParams);
             clone->genericParams.clear();
+            clone->isMonomorphized = true;
+            // Substitution can leave generic-struct references symbolic
+            // ('struct Vec<int>'): resolve them to the concrete instance now.
+            if (clone->returnType) clone->returnType = resolveType(clone->returnType);
+            for (auto &p : clone->params) if (p.type) p.type = resolveType(p.type);
 
             // Register the monomorphized name in the global scope
             std::vector<TypePtr> paramTys;
@@ -3266,16 +3525,21 @@ TypePtr Sema::checkCall(CallExpr &e) {
             // reported as "not inside a loop or match", because
             // loopDepth_ got reset to 0 by the nested checkFunction call
             // and never recovered its outer value.
+            // Cache the instantiation *before* checking its body: a
+            // recursive call inside it (directly or through another
+            // generic) must resolve to this same clone instead of
+            // instantiating it again, forever.
+            FunctionDecl *cloneRaw = clone.get();
+            monoCache_[key] = cloneRaw;
+            monoFunctions_.push_back(std::move(clone));
+
             bool savedPure = checkingPure_;
             int savedLoopDepth = loopDepth_;
             auto savedLabels = functionLabels_;
-            checkFunction(*clone);
+            checkFunction(*cloneRaw);
             checkingPure_ = savedPure;
             loopDepth_ = savedLoopDepth;
             functionLabels_ = savedLabels;
-
-            monoCache_[key] = clone.get();
-            monoFunctions_.push_back(std::move(clone));
         }
 
         FunctionDecl *monoFn = monoCache_[key];
@@ -3284,6 +3548,27 @@ TypePtr Sema::checkCall(CallExpr &e) {
             auto &ident    = static_cast<IdentExpr &>(*e.callee);
             ident.resolvedFn = monoFn;
             ident.name       = monoFn->name;
+        }
+        // Inference only proves the arguments *match the pattern*; each one
+        // must still convert to its instantiated parameter type, exactly as
+        // for a non-generic call (a struct value can't bind to '&T', etc.).
+        bool hasPackParam = false;
+        for (auto &gp : fnDecl->genericParams) if (gp.isPack) hasPackParam = true;
+        if (!hasPackParam && !e.methodBase) {
+            for (size_t i = 0; i < e.args.size() && i < monoFn->params.size(); ++i) {
+                const TypePtr &paramTy = monoFn->params[i].type;
+                const TypePtr &argTy = argTypes[i];
+                if (!paramTy || !argTy || argTy->isError() || paramTy->isError()) continue;
+                if (!canImplicitlyConvert(argTy, paramTy) &&
+                    !cAbiSizeArgCompatible(e, argTy, paramTy) &&
+                    !intLiteralFitsType(*e.args[i], paramTy) &&
+                    !floatLitFitsType(*e.args[i], paramTy) &&
+                    !refToPointerArgCompatible(argTy, paramTy)) {
+                    diag_.error(e.args[i]->loc,
+                        "argument " + std::to_string(i+1) + ": cannot convert '" +
+                        argTy->str() + "' to '" + paramTy->str() + "'");
+                }
+            }
         }
         return monoFn->returnType;
     }
@@ -3348,11 +3633,13 @@ TypePtr Sema::checkCall(CallExpr &e) {
                 }
             }
         }
-        TypePtr argTy = checkExpr(*e.args[i]);
         size_t  paramIdx = i + selfOffset;
+        if (paramIdx < expected) adoptTupleLiteral(e.args[i], ft->paramTypes[paramIdx]);
+        TypePtr argTy = checkExpr(*e.args[i]);
         if (paramIdx < expected &&
                 !argTy->isError() && !ft->paramTypes[paramIdx]->isError()) {
             if (!canImplicitlyConvert(argTy, ft->paramTypes[paramIdx]) &&
+                !cAbiSizeArgCompatible(e, argTy, ft->paramTypes[paramIdx]) &&
                 !intLiteralFitsType(*e.args[i], ft->paramTypes[paramIdx]) &&
                 !floatLitFitsType(*e.args[i], ft->paramTypes[paramIdx]) &&
                 !refToPointerArgCompatible(argTy, ft->paramTypes[paramIdx])) {
@@ -3734,6 +4021,20 @@ TypePtr Sema::checkCast(CastExpr &e) {
         srcTy = checkExpr(*e.operand);
     }
 
+    // A cast can't drop nullability: '(&T)q' on a '?&T' would skip the null
+    // check nullable references always require (in safe and unsafe code
+    // alike). '(?&T)q' — keeping it nullable — is fine. Narrow with
+    // 'match (q) { case some(r): ... }', which binds r as '&T'.
+    if (srcTy && srcTy->kind == TypeKind::Reference &&
+        static_cast<ReferenceType &>(*srcTy).nullable &&
+        e.targetType->kind == TypeKind::Reference &&
+        !static_cast<ReferenceType &>(*e.targetType).nullable) {
+        diag_.error(e.loc,
+            "cannot cast nullable reference '" + srcTy->str() + "' to non-null '" +
+            e.targetType->str() + "': check it with 'match (x) { case null: ... "
+            "case some(r): ... }' (r is the non-null reference)");
+    }
+
     // In safe code, cast from reference to pointer is not allowed — except
     // a '&static fn(...)' function reference (the type a bare function
     // name always evaluates to; see checkIdent's SymKind::Function case).
@@ -3806,6 +4107,7 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
     TypePtr savedExpectedType = expectedType_;
     if (e.op == AssignOp::Assign && lhsTy && !lhsTy->isError())
         expectedType_ = lhsTy;
+    if (e.op == AssignOp::Assign) adoptTupleLiteral(e.rhs, lhsTy);
     TypePtr rhsTy = checkExpr(*e.rhs);
     expectedType_ = savedExpectedType;
 
@@ -3900,8 +4202,14 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
         }
     }
 
+    // Pointer compound arithmetic 'p += n' / 'p -= n' — C semantics (scaled
+    // by the element size). Like 'p + n' it only computes an address;
+    // reading or writing through 'p' still needs 'unsafe'.
+    bool ptrStep = lhsTy->kind == TypeKind::Pointer && rhsTy->isInteger() &&
+                   (e.op == AssignOp::AddAssign || e.op == AssignOp::SubAssign);
+
     // Type compatibility
-    if (!lhsTy->isError() && !rhsTy->isError()) {
+    if (!lhsTy->isError() && !rhsTy->isError() && !ptrStep) {
         if (!canImplicitlyConvert(rhsTy, lhsTy) &&
             !intLiteralFitsType(*e.rhs, lhsTy) &&
             !floatLitFitsType(*e.rhs, lhsTy)) {
@@ -4126,6 +4434,54 @@ bool Sema::matchType(const TypePtr &paramTy, const TypePtr &argTy, TypeSubst &su
     }
     if (paramTy->kind != argTy->kind) return false;
     switch (paramTy->kind) {
+    case TypeKind::Optional:
+        return matchType(static_cast<const OptionalType &>(*paramTy).inner,
+                         static_cast<const OptionalType &>(*argTy).inner, subs);
+    case TypeKind::Slice:
+        return matchType(static_cast<const SliceType &>(*paramTy).element,
+                         static_cast<const SliceType &>(*argTy).element, subs);
+    case TypeKind::Vector:
+        return matchType(static_cast<const VectorType &>(*paramTy).element,
+                         static_cast<const VectorType &>(*argTy).element, subs);
+    case TypeKind::Tuple: {
+        auto &pt = static_cast<const TupleType &>(*paramTy);
+        auto &at = static_cast<const TupleType &>(*argTy);
+        if (pt.elementTypes.size() != at.elementTypes.size()) return false;
+        for (size_t i = 0; i < pt.elementTypes.size(); ++i)
+            if (!matchType(pt.elementTypes[i], at.elementTypes[i], subs)) return false;
+        return true;
+    }
+    case TypeKind::Function: {
+        auto &pf = static_cast<const FunctionType &>(*paramTy);
+        auto &af = static_cast<const FunctionType &>(*argTy);
+        if (pf.paramTypes.size() != af.paramTypes.size() || pf.variadic != af.variadic) return false;
+        if (!matchType(pf.returnType, af.returnType, subs)) return false;
+        for (size_t i = 0; i < pf.paramTypes.size(); ++i)
+            if (!matchType(pf.paramTypes[i], af.paramTypes[i], subs)) return false;
+        return true;
+    }
+    case TypeKind::Struct: {
+        // A generic-struct pattern ('struct Vec<T>') against a concrete
+        // instance ('Vec_int'): match type arguments through the instance's
+        // recorded origin.
+        auto &ps = static_cast<const StructType &>(*paramTy);
+        auto &as = static_cast<const StructType &>(*argTy);
+        if (ps.typeArgs.empty()) return typeEqual(paramTy, argTy);
+        const std::vector<TypePtr> *args = nullptr;
+        std::string tplName = as.name;
+        if (!as.typeArgs.empty()) {
+            args = &as.typeArgs;
+        } else {
+            auto it = structInstanceOrigin_.find(as.name);
+            if (it == structInstanceOrigin_.end()) return false;
+            tplName = it->second.first;
+            args = &it->second.second;
+        }
+        if (tplName != ps.name || args->size() != ps.typeArgs.size()) return false;
+        for (size_t i = 0; i < ps.typeArgs.size(); ++i)
+            if (!matchType(ps.typeArgs[i], (*args)[i], subs)) return false;
+        return true;
+    }
     case TypeKind::Pointer:
         return matchType(static_cast<const PointerType &>(*paramTy).base,
                          static_cast<const PointerType &>(*argTy).base, subs);
@@ -4156,6 +4512,28 @@ bool Sema::inferTypeArgs(const std::vector<ParamDecl>   &params,
             return self(self, static_cast<const ReferenceType &>(*ty).base);
         if (ty->kind == TypeKind::Array)
             return self(self, static_cast<const ArrayType &>(*ty).element);
+        if (ty->kind == TypeKind::Optional)
+            return self(self, static_cast<const OptionalType &>(*ty).inner);
+        if (ty->kind == TypeKind::Slice)
+            return self(self, static_cast<const SliceType &>(*ty).element);
+        if (ty->kind == TypeKind::Vector)
+            return self(self, static_cast<const VectorType &>(*ty).element);
+        if (ty->kind == TypeKind::Tuple) {
+            for (auto &e : static_cast<const TupleType &>(*ty).elementTypes)
+                if (self(self, e)) return true;
+            return false;
+        }
+        if (ty->kind == TypeKind::Function) {
+            auto &ft = static_cast<const FunctionType &>(*ty);
+            if (self(self, ft.returnType)) return true;
+            for (auto &p : ft.paramTypes) if (self(self, p)) return true;
+            return false;
+        }
+        if (ty->kind == TypeKind::Struct) {
+            for (auto &a : static_cast<const StructType &>(*ty).typeArgs)
+                if (self(self, a)) return true;
+            return false;
+        }
         return false;
     };
 
@@ -4187,8 +4565,19 @@ bool Sema::inferTypeArgs(const std::vector<ParamDecl>   &params,
         int packCount = (int)argTypes.size() - (int)nonPackParams;
         subs[packName + "__count_val"] = makeInt(packCount, false); // actual count as Int type with bits=count
     } else {
+        // A bare 'null' (typed 'void*') carries no type information: let it
+        // stand for any nullable reference parameter and bind T from the
+        // other arguments ('thread_create(&tid, work, null)'). The call's
+        // argument conversion check still runs against the instantiation.
+        auto isNullArg = [](const TypePtr &paramTy, const TypePtr &argTy) {
+            if (!argTy || argTy->kind != TypeKind::Pointer) return false;
+            if (!static_cast<const PointerType &>(*argTy).base->isVoid()) return false;
+            return paramTy->kind == TypeKind::Reference &&
+                   static_cast<const ReferenceType &>(*paramTy).nullable;
+        };
         for (size_t i = 0; i < params.size() && i < argTypes.size(); ++i) {
             if (hasGeneric(hasGeneric, params[i].type)) {
+                if (isNullArg(params[i].type, argTypes[i])) continue;
                 if (!matchType(params[i].type, argTypes[i], subs))
                     return false;
             }
@@ -4338,6 +4727,47 @@ bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
     if (!from || !to) return false;
     if (from->isError() || to->isError()) return true; // suppress cascaded errors
     if (typeEqual(from, to)) return true;
+    // A function whose signature differs from the target function type only
+    // by raw 'T*' vs region-less '&T'/'?&T' in some parameter/return slots
+    // is the same function at the ABI level (both are one pointer), and
+    // those two already convert implicitly as values (see the
+    // Pointer↔Reference rules below). So a callback written with safe
+    // references — 'HttpResponse handler(&HttpRequest req)' — binds to a
+    // C-style callback type such as 'fn HttpResponse(HttpRequest*)'.
+    auto fnOf = [](const TypePtr &t) -> const FunctionType * {
+        if (t->kind == TypeKind::Function) return static_cast<const FunctionType *>(t.get());
+        if (t->kind == TypeKind::Reference) {
+            auto &r = static_cast<const ReferenceType &>(*t);
+            if (r.base && r.base->kind == TypeKind::Function)
+                return static_cast<const FunctionType *>(r.base.get());
+        }
+        return nullptr;
+    };
+    if (auto *ff = fnOf(from)) if (auto *tf = fnOf(to)) {
+        auto pointee = [](const TypePtr &t) -> TypePtr {
+            if (!t) return nullptr;
+            if (t->kind == TypeKind::Pointer) return static_cast<const PointerType &>(*t).base;
+            if (t->kind == TypeKind::Reference) {
+                auto &r = static_cast<const ReferenceType &>(*t);
+                if (r.region == Region::Extern) return r.base;
+            }
+            return nullptr;
+        };
+        auto sameSlot = [&](const TypePtr &a, const TypePtr &b) {
+            if (typeEqual(a, b)) return true;
+            TypePtr pa = pointee(a), pb = pointee(b);
+            if (!pa || !pb) return false;
+            if (a->kind == b->kind) return false;   // two refs / two pointers must match exactly
+            return typeEqual(pa, pb) || pa->kind == TypeKind::Void || pb->kind == TypeKind::Void;
+        };
+        if (ff->variadic == tf->variadic && ff->paramTypes.size() == tf->paramTypes.size() &&
+            sameSlot(ff->returnType, tf->returnType)) {
+            bool ok = true;
+            for (size_t i = 0; i < ff->paramTypes.size() && ok; ++i)
+                ok = sameSlot(ff->paramTypes[i], tf->paramTypes[i]);
+            if (ok) return true;
+        }
+    }
     // Char ↔ Int8 ↔ UInt8: 8-bit types interop (char, signed char, unsigned char)
     auto is8bit = [](const TypePtr &t) {
         return t->kind == TypeKind::Char  || t->kind == TypeKind::Int8 ||

@@ -34,11 +34,11 @@ int ipv4_parse(&stack PacketBuf pkt, unsigned long offset,
         if ((ver_ihl >> 4) != (unsigned char)4) { return -1; }
         hdr_out.ihl      = ver_ihl & (unsigned char)0xF;
         hdr_out.dscp     = d[1];
-        hdr_out.total_len= net_ntohs((unsigned short)(((unsigned short)d[2] << 8)
+        hdr_out.total_len= ((unsigned short)(((unsigned short)d[2] << 8)
                                                      | (unsigned short)d[3]));
-        hdr_out.id       = net_ntohs((unsigned short)(((unsigned short)d[4] << 8)
+        hdr_out.id       = ((unsigned short)(((unsigned short)d[4] << 8)
                                                      | (unsigned short)d[5]));
-        hdr_out.frag_off = net_ntohs((unsigned short)(((unsigned short)d[6] << 8)
+        hdr_out.frag_off = ((unsigned short)(((unsigned short)d[6] << 8)
                                                      | (unsigned short)d[7]));
         hdr_out.ttl      = d[8];
         hdr_out.proto    = d[9];
@@ -59,7 +59,7 @@ unsigned long ipv4_build(&stack PacketBuf pkt, unsigned long offset,
         unsigned char* d = (unsigned char*)pkt.data + offset;
         d[0] = (unsigned char)0x45;  // version=4, IHL=5
         d[1] = (unsigned char)0;     // DSCP
-        unsigned short tlen = net_htons(total);
+        unsigned short tlen = (total);
         d[2] = (unsigned char)((tlen >> 8) & (unsigned short)0xFF);
         d[3] = (unsigned char)(tlen & (unsigned short)0xFF);
         d[4] = (unsigned char)0; d[5] = (unsigned char)0; // id
@@ -67,12 +67,12 @@ unsigned long ipv4_build(&stack PacketBuf pkt, unsigned long offset,
         d[8] = (unsigned char)64;   // TTL
         d[9] = proto;
         d[10]= (unsigned char)0; d[11]= (unsigned char)0; // checksum placeholder
-        unsigned int s = net_htonl(src);
+        unsigned int s = (src);
         d[12]= (unsigned char)((s >> 24) & (unsigned int)0xFF);
         d[13]= (unsigned char)((s >> 16) & (unsigned int)0xFF);
         d[14]= (unsigned char)((s >>  8) & (unsigned int)0xFF);
         d[15]= (unsigned char)(s & (unsigned int)0xFF);
-        unsigned int ds = net_htonl(dst);
+        unsigned int ds = (dst);
         d[16]= (unsigned char)((ds >> 24) & (unsigned int)0xFF);
         d[17]= (unsigned char)((ds >> 16) & (unsigned int)0xFF);
         d[18]= (unsigned char)((ds >>  8) & (unsigned int)0xFF);
@@ -80,7 +80,7 @@ unsigned long ipv4_build(&stack PacketBuf pkt, unsigned long offset,
         // Fill checksum.
         unsigned short csum = ip_checksum((const unsigned char*)d,
                                           (unsigned long)IPV4_HDR_LEN);
-        unsigned short csum_n = net_htons(csum);
+        unsigned short csum_n = (csum);
         d[10]= (unsigned char)((csum_n >> 8) & (unsigned short)0xFF);
         d[11]= (unsigned char)(csum_n & (unsigned short)0xFF);
     }

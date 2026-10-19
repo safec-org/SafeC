@@ -1,3 +1,4 @@
+#include <unordered_set>
 #include "safec/Lexer.h"
 #include <cctype>
 #include <cerrno>
@@ -161,8 +162,36 @@ void Lexer::skipWhitespaceAndComments() {
         if (std::isspace(c)) { advance(); continue; }
         if (skipLineComment())  continue;
         if (skipBlockComment()) continue;
+        if (c == '#' && col_ == 1 && peek(1) == ' ' && std::isdigit((unsigned char)peek(2))) {
+            skipLineMarker();
+            continue;
+        }
         break;
     }
+}
+
+// GNU-style line marker '# <line> "<file>"' emitted by the preprocessor
+// around #include'd text, so token locations name the real file and line
+// instead of a position in the concatenated translation unit.
+void Lexer::skipLineMarker() {
+    // Interned for the process lifetime: SourceLocation keeps a raw
+    // 'const char*' that diagnostics read long after this Lexer is gone.
+    static std::unordered_set<std::string> fileNames;
+    advance(); advance(); // "# "
+    unsigned n = 0;
+    while (!atEnd() && std::isdigit((unsigned char)peek())) n = n * 10 + (unsigned)(advance() - '0');
+    while (!atEnd() && peek() == ' ') advance();
+    if (peek() == '"') {
+        advance();
+        std::string f;
+        while (!atEnd() && peek() != '"' && peek() != '\n') f += advance();
+        if (peek() == '"') advance();
+        filename_ = fileNames.insert(f).first->c_str();
+    }
+    while (!atEnd() && peek() != '\n') advance();
+    if (!atEnd()) advance();
+    line_ = n ? n : 1;
+    col_ = 1;
 }
 
 // ── Number ────────────────────────────────────────────────────────────────────

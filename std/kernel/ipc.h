@@ -22,7 +22,7 @@ struct Mailbox {
     int            owner_pid;  // owning process ID
 
     // Send a message. Returns 1 on success, 0 if full.
-    int            send(int sender_pid, int type, const void* payload, unsigned long size);
+    int            send(int sender_pid, int type, const ?&unsigned char payload, unsigned long size); // payload may be null when size == 0
 
     // Receive next message. Copies into `out`. Returns 1 on success, 0 if empty.
     int            recv(&stack Message out);

@@ -2,6 +2,7 @@
 // O(1) real-time allocator with bounded fragmentation.
 // Uses a two-level bitmap index for fast size-class lookup.
 #pragma once
+#include <std/mem.h>
 
 // First-level index: log2 buckets. Second-level: linear subdivisions.
 // SL_COUNT = 16 subdivisions per FL bucket.
@@ -33,6 +34,7 @@ struct TlsfBlock {
 
 struct TlsfAllocator {
     &heap void    base;                                       // heap-backed managed memory
+    int           owned;   // 1 if tlsf_new allocated base (destroy() frees it)
     unsigned long cap;
     unsigned int  fl_bitmap;                                  // first-level bitmap
     unsigned int  sl_bitmap[TLSF_FL_MAX];                     // second-level bitmaps
@@ -54,12 +56,28 @@ struct TlsfAllocator {
 };
 
 // Initialize over a user-provided heap buffer.
-struct TlsfAllocator tlsf_init(&heap void buffer, unsigned long cap);
+struct TlsfAllocator tlsf_init(&unsigned char buffer, unsigned long cap);
 
 // Create a heap-backed TLSF allocator.
 struct TlsfAllocator tlsf_new(unsigned long cap);
 
 // Compute first-level and second-level indices for a given size.
 void tlsf_mapping_(unsigned long size, &stack int fl, &stack int sl);
+
+// ── Typed allocation (recommended) ───────────────────────────────────────────
+generic<T>
+?&heap T tlsf_alloc_t(&TlsfAllocator t) {
+    unsafe { return (?&heap T)t.alloc(sizeof(T)); }
+}
+
+generic<T>
+?&heap T tlsf_alloc_array_t(&TlsfAllocator t, unsigned long n) {
+    unsafe { return (?&heap T)t.alloc(checked_mul_size(n, sizeof(T))); }
+}
+
+generic<T>
+void tlsf_free_t(&TlsfAllocator t, &heap T obj) {
+    unsafe { t.free((&heap void)obj); }
+}
 
 } // namespace std

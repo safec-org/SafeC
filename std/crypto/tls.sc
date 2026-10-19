@@ -1,11 +1,12 @@
 // SafeC Standard Library — TLS 1.3 Record Layer (implementation)
 #pragma once
+#include <std/stddef.h>
 #include <std/crypto/tls.h>
 
 namespace std {
 
-extern void* memcpy(void* d, const void* s, unsigned long n);
-extern void* memset(void* p, int v, unsigned long n);
+extern void* memcpy(void* d, const void* s, size_t n);
+extern void* memset(void* p, int v, size_t n);
 
 // ── Internal helpers ───────────────────────────────────────────────────────────
 
@@ -52,7 +53,7 @@ static unsigned long pkcs7_pad_(unsigned char* data, unsigned long len,
 }
 
 // Verify and strip PKCS#7 padding.  Returns unpadded length or 0 on error.
-static unsigned long pkcs7_unpad_(const unsigned char* data, unsigned long len,
+static unsigned long pkcs7_unpad_(const &unsigned char data, unsigned long len,
                                    unsigned long block_size) {
     if (len == (unsigned long)0 || len % block_size != (unsigned long)0) {
         return (unsigned long)0;
@@ -76,8 +77,8 @@ static unsigned long pkcs7_unpad_(const unsigned char* data, unsigned long len,
 
 // ── TlsTranscript ─────────────────────────────────────────────────────────────
 
-inline void TlsTranscript::update(const unsigned char* data, unsigned long len) {
-    self.hash.update(data, len);
+inline void TlsTranscript::update(const &unsigned char data, unsigned long len) {
+    unsafe { self.hash.update((const &stack unsigned char)data, len); }
 }
 
 inline void TlsTranscript::finish(unsigned char out[32]) {
@@ -150,10 +151,13 @@ inline void TlsSession::compute_nonce(unsigned char nonce[TLS_IV_LEN], int is_wr
 // with 4 zero-prefix bytes to fill 16 bytes).
 
 unsigned long TlsSession::encode_record(unsigned char content_type,
-                                         const unsigned char* payload,
+                                         const &unsigned char payload_ref,
                                          unsigned long payload_len,
-                                         unsigned char* out,
+                                         &unsigned char out_ref,
                                          unsigned long out_cap) {
+    const unsigned char* payload;
+    unsigned char* out;
+    unsafe { payload = (const unsigned char*)payload_ref; out = (unsigned char*)out_ref; }
     // Sanity checks
     if (payload_len > (unsigned long)TLS_MAX_RECORD_LEN) { return (unsigned long)0; }
 
@@ -227,11 +231,14 @@ unsigned long TlsSession::encode_record(unsigned char content_type,
 
 // ── decode_record ──────────────────────────────────────────────────────────────
 
-unsigned long TlsSession::decode_record(const unsigned char* data,
+unsigned long TlsSession::decode_record(const &unsigned char data_ref,
                                          unsigned long data_len,
                                          &stack unsigned char content_type_out,
-                                         unsigned char* out,
+                                         &unsigned char out_ref,
                                          unsigned long out_cap) {
+    const unsigned char* data;
+    unsigned char* out;
+    unsafe { data = (const unsigned char*)data_ref; out = (unsigned char*)out_ref; }
     // Need at least a 5-byte header
     if (data_len < (unsigned long)5) { return (unsigned long)0; }
 
@@ -322,8 +329,10 @@ unsigned long TlsSession::decode_record(const unsigned char* data,
 
 unsigned long TlsSession::build_alert(unsigned char level,
                                        unsigned char desc,
-                                       unsigned char* out,
+                                       &unsigned char out_ref,
                                        unsigned long out_cap) {
+    unsigned char* out;
+    unsafe { out = (unsigned char*)out_ref; }
     // Alert body: level (1 byte) + description (1 byte)
     unsigned char alert_body[2];
     unsafe {

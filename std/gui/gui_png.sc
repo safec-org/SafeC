@@ -3,12 +3,13 @@
 // parser, not a stub — see gui_png.h's header comment for exact scope
 // (8-bit depth, non-interlaced, grayscale/RGB/RGBA only).
 #pragma once
+#include <std/stddef.h>
 #include <std/gui/gui.h>
 #include <std/gui/gui_draw.h>
 #include <std/gui/gui_png.h>
-#include <std/mem.sc>
+#include <std/mem.h>
 #include <std/collections/string.h>
-#include <std/collections/string.sc>
+extern void* memset(void* ptr, int val, size_t n);
 
 namespace std {
 

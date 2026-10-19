@@ -3,6 +3,8 @@
 #include "safec/Token.h"
 #include "safec/Diagnostic.h"
 #include <vector>
+#include <string>
+#include <unordered_set>
 #include <memory>
 #include <cstdint>
 
@@ -16,8 +18,12 @@ public:
     std::unique_ptr<TranslationUnit> parseTranslationUnit();
 
 private:
+    // Names declared as types so far (struct/union/enum tags, typedefs,
+    // newtypes): disambiguates '(name) + x' as cast vs. expression.
+    std::unordered_set<std::string> typeNames_;
     // ── Token stream ──────────────────────────────────────────────────────────
     const Token &cur()  const { return toks_[pos_]; }
+    void expectTypeArgClose();
     const Token &peek(int offset = 1) const {
         size_t idx = pos_ + offset;
         return (idx < toks_.size()) ? toks_[idx] : toks_.back();

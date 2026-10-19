@@ -1,12 +1,13 @@
 // SafeC Standard Library — Benchmark Framework
 #pragma once
+#include <std/stddef.h>
 #include <std/test/bench.h>
 
 namespace std {
 
 extern int    printf(const char* fmt, ...);
 extern long   clock();           // returns clock_t; CLOCKS_PER_SEC = 1000000
-extern void*  memset(void* p, int v, unsigned long n);
+extern void*  memset(void* p, int v, size_t n);
 
 #define CLOCKS_PER_SEC_VAL 1000000
 
@@ -27,7 +28,7 @@ struct BenchSuite bench_suite_init() {
     return s;
 }
 
-void BenchSuite::add(const char* name, void* func, void* arg, unsigned long iters) {
+void BenchSuite::add_raw_(const char* name, void* func, void* arg, unsigned long iters) {
     if (self.count >= BENCH_MAX) { return; }
     int idx = self.count;
     bench_copy_(self.cases[idx].name, name, (unsigned long)BENCH_NAME_MAX);

@@ -14,17 +14,28 @@
 #define uint32_t  unsigned int
 #define uint64_t  unsigned long long
 
-// ── Pointer-sized integers ────────────────────────────────────────────────────
-#define intptr_t   long long
-#define uintptr_t  unsigned long long
-#define ptrdiff_t  long long
+// ── Pointer-sized integers (pointer-width; see stddef.h) ──────────────────────
+#ifndef SAFEC_PTRWIDTH_TYPES_
+#define SAFEC_PTRWIDTH_TYPES_
+#if __SIZEOF_POINTER__ == 4
+#define size_t      unsigned int
+#define ssize_t     int
+#define ptrdiff_t   int
+#define intptr_t    int
+#define uintptr_t   unsigned int
+#else
+#define size_t      unsigned long long
+#define ssize_t     long long
+#define ptrdiff_t   long long
+#define intptr_t    long long
+#define uintptr_t   unsigned long long
+#endif
+#endif
 
 // ── Maximum-width integers ────────────────────────────────────────────────────
 #define intmax_t   long long
 #define uintmax_t  unsigned long long
 
-// ── size_t ────────────────────────────────────────────────────────────────────
-#define size_t  unsigned long long
 
 // ── Exact-width signed limits ─────────────────────────────────────────────────
 #define INT8_MIN    (-128)

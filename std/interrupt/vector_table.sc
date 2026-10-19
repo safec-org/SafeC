@@ -4,6 +4,10 @@
 
 namespace std {
 
+// Definitions of the globals vector_table.h declares extern.
+struct VectorTable vtable;
+
+
 static IrqHandler vtable_default_ = (IrqHandler)0;
 
 

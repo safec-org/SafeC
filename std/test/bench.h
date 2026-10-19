@@ -11,8 +11,8 @@ namespace std {
 
 struct BenchCase {
     char          name[BENCH_NAME_MAX];
-    void*         func;           // void (*func)(void* arg)
-    void*         arg;          // user argument passed to func
+    void*         func;         // type-erased fn void(?&T), set by bench_add
+    void*         arg;          // type-erased ?&T passed to func
     unsigned long iters;        // number of iterations to run
     double        elapsed_s;    // measured elapsed seconds (0 if unavailable)
     double        ops_per_s;    // iters / elapsed_s (0 if unavailable)
@@ -22,8 +22,8 @@ struct BenchSuite {
     struct BenchCase cases[BENCH_MAX];
     int count;
 
-    // Register a benchmark: func is called `iters` times per run.
-    void add(const char* name, void* func, void* arg, unsigned long iters);
+    // Type-erased registration behind bench_add.
+    void add_raw_(const char* name, void* func, void* arg, unsigned long iters);
 
     // Run all benchmarks and record results.
     void run();
@@ -33,5 +33,11 @@ struct BenchSuite {
 };
 
 struct BenchSuite bench_suite_init();
+
+// Register a benchmark: func(arg) is called `iters` times per run.
+generic<T>
+void bench_add(&BenchSuite b, const char* name, fn void(?&T) func, ?&T arg, unsigned long iters) {
+    unsafe { b.add_raw_(name, (void*)func, (void*)arg, iters); }
+}
 
 } // namespace std

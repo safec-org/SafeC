@@ -1,14 +1,15 @@
 // SafeC Standard Library — ext2 Read-Only Filesystem Driver Implementation
 #pragma once
+#include <std/stddef.h>
 #include <std/fs/ext.h>
 #include <std/fs/block.h>
 
 namespace std {
 
-extern void* memset(void* p, int v, unsigned long n);
-extern void* memcpy(void* d, const void* s, unsigned long n);
-extern int   strncmp(const char* a, const char* b, unsigned long n);
-extern unsigned long strlen(const char* s);
+extern void* memset(void* p, int v, size_t n);
+extern void* memcpy(void* d, const void* s, size_t n);
+extern int   strncmp(const char* a, const char* b, size_t n);
+extern size_t strlen(const char* s);
 
 // ── Little-endian read helpers ────────────────────────────────────────────────
 
@@ -32,7 +33,7 @@ static unsigned short ext2_read16_(const unsigned char* p) {
 // ── ext2_init ─────────────────────────────────────────────────────────────────
 // Superblock lives at byte offset 1024 = sector 2 on a 512-byte device.
 
-int ext2_init(&stack Ext2Ctx ctx, &stack BlockDevice dev) {
+int ext2_init(&Ext2Ctx ctx, &BlockDevice dev) {
     ctx.dev = *dev;
 
     // Read two sectors starting at LBA 2 to get the 1024-byte superblock.
@@ -66,6 +67,10 @@ int ext2_init(&stack Ext2Ctx ctx, &stack BlockDevice dev) {
         ctx.super.checkinterval    = ext2_read32_(sb_buf + 68);
         ctx.super.creator_os       = ext2_read32_(sb_buf + 72);
         ctx.super.rev_level        = ext2_read32_(sb_buf + 76);
+        // Revision 0 has fixed 128-byte inodes; dynamic-revision (>= 1)
+        // filesystems — everything mke2fs creates — record the size here.
+        ctx.super.inode_size = (ctx.super.rev_level == (unsigned int)0)
+            ? (unsigned short)128 : ext2_read16_(sb_buf + 88);
     }
 
     // Validate magic.
@@ -74,6 +79,10 @@ int ext2_init(&stack Ext2Ctx ctx, &stack BlockDevice dev) {
     // Compute derived values.
     ctx.block_size        = (unsigned long)EXT2_BLOCK_SIZE_BASE
                             << (unsigned long)ctx.super.log_block_size;
+    // Blocks are staged in EXT2_MAX_BLOCK_SIZE-byte stack buffers.
+    if (ctx.block_size > (unsigned long)EXT2_MAX_BLOCK_SIZE) { return -1; }
+    if (ctx.super.inode_size < (unsigned short)128 ||
+        (unsigned long)ctx.super.inode_size > ctx.block_size) { return -1; }
     ctx.inodes_per_group  = (unsigned long)ctx.super.inodes_per_group;
     ctx.blocks_per_group  = (unsigned long)ctx.super.blocks_per_group;
 
@@ -106,7 +115,7 @@ int Ext2Ctx::read_inode(unsigned long ino, &stack Ext2Inode inode_out) {
     // Read the block group descriptor table.
     // BGDT is always in the block immediately after the superblock.
     unsigned long bgdt_block = (unsigned long)self.super.first_data_block + (unsigned long)1;
-    unsigned char block_buf[4096]; // enough for up to 4K block size
+    unsigned char block_buf[EXT2_MAX_BLOCK_SIZE];
     if (self.read_block(bgdt_block, (unsigned char*)block_buf) != 0) { return -1; }
 
     // Each group descriptor is 32 bytes.
@@ -116,14 +125,14 @@ int Ext2Ctx::read_inode(unsigned long ino, &stack Ext2Inode inode_out) {
         inode_table_block = (unsigned long)ext2_read32_((const unsigned char*)block_buf + gd_off + 8);
     }
 
-    // Inode size is 128 bytes for rev 0; for rev 1+ it may be larger but we
-    // only parse the first 128 bytes.
-    unsigned long inode_size   = (unsigned long)128;
+    // On-disk inode stride comes from the superblock (128 for rev 0, usually
+    // 256 for rev 1+); only the first 128 bytes (the classic fields) are parsed.
+    unsigned long inode_size   = (unsigned long)self.super.inode_size;
     unsigned long inodes_per_blk = self.block_size / inode_size;
     unsigned long inode_blk    = inode_table_block + local / inodes_per_blk;
     unsigned long inode_off    = (local % inodes_per_blk) * inode_size;
 
-    unsigned char ibuf[4096];
+    unsigned char ibuf[EXT2_MAX_BLOCK_SIZE];
     if (self.read_block(inode_blk, (unsigned char*)ibuf) != 0) { return -1; }
 
     unsafe {
@@ -171,7 +180,7 @@ unsigned long Ext2Ctx::read_file(unsigned long ino, unsigned long offset,
 
     unsigned long bs        = self.block_size;
     unsigned long total_read= (unsigned long)0;
-    unsigned char blk_buf[4096];
+    unsigned char blk_buf[EXT2_MAX_BLOCK_SIZE];
 
     while (total_read < len) {
         unsigned long cur_off   = offset + total_read;
@@ -221,7 +230,7 @@ static unsigned long ext2_dir_find_(struct Ext2Ctx* ctx, unsigned long dir_ino,
     unsafe { bs = ctx->block_size; }
     unsigned long blk_idx  = (unsigned long)0;
     unsigned long read_pos = (unsigned long)0;
-    unsigned char blk_buf[4096];
+    unsigned char blk_buf[EXT2_MAX_BLOCK_SIZE];
 
     while (read_pos < dir_size && blk_idx < (unsigned long)12) {
         unsigned long blk_no;
@@ -368,7 +377,7 @@ static int ext2_vfs_readdir_(void* ctx, unsigned long dir_ino,
     unsafe { bs = ec->block_size; }
     unsigned long blk_idx  = (unsigned long)0;
     unsigned long read_pos = (unsigned long)0;
-    unsigned char blk_buf[4096];
+    unsigned char blk_buf[EXT2_MAX_BLOCK_SIZE];
     int count = 0;
 
     while (read_pos < dir_size && blk_idx < (unsigned long)12) {

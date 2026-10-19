@@ -1,4 +1,5 @@
 #pragma once
+#include <std/stddef.h>
 // SafeC Standard Library — Tensor: CPU tensors with reverse-mode autograd.
 //
 // PyTorch-style ergonomics (build a graph implicitly by calling ops;
@@ -48,7 +49,7 @@ namespace std {
 // memory functions directly (see mem.sc, heap.sc, result.sc, etc., each
 // of which declares its own copy of these same externs rather than
 // including one another's .sc file for them).
-extern void* malloc(unsigned long size);
+extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
 typedef fn void(void* selfTensor) TensorBackwardFn;
@@ -66,7 +67,7 @@ struct Tensor {
     // header comment for the exact same workaround) — cast at the handful
     // of call sites that read/write it.
     void*         gradFn;
-    struct Vec    parents;     // Vec<struct Tensor*> — inputs this tensor was computed from
+    struct Vec<&Tensor> parents; // inputs this tensor was computed from
     int           visited;     // topological-sort scratch flag, used and cleared by tensor_backward()
     float         extraScalar; // op-specific constant (e.g. tensor_scale's k) the gradFn needs
 
@@ -170,7 +171,7 @@ static struct Tensor* __tensor_alloc(const unsigned long* shape, unsigned long n
         t->requiresGrad = requiresGrad;
         t->grad = (&heap float)0;
         t->gradFn = (void*)0;
-        t->parents = vec_new(sizeof(struct Tensor*));
+        t->parents = vec_new();
         t->visited = 0;
         t->extraScalar = (float)0.0;
         return t;
@@ -202,8 +203,7 @@ static struct Tensor* __tensor_alloc_uninit_like(struct Tensor* t) {
 
 static struct Tensor* __tensor_parent(struct Tensor* t, unsigned long idx) {
     unsafe {
-        struct Tensor** pp = (struct Tensor**)t->parents.get_raw(idx);
-        return *pp;
+        return *t->parents.at(idx);
     }
 }
 
@@ -220,8 +220,8 @@ static void __tensor_link2(struct Tensor* out, struct Tensor* a, struct Tensor* 
         if (!tensor_is_grad_enabled()) { out->requiresGrad = 0; return; }
         out->requiresGrad = a->requiresGrad || b->requiresGrad;
         if (!out->requiresGrad) return;
-        out->parents.push((const void*)&a);
-        out->parents.push((const void*)&b);
+        out->parents.push(a);
+        out->parents.push(b);
         out->gradFn = backwardFn;
     }
 }
@@ -231,7 +231,7 @@ static void __tensor_link1(struct Tensor* out, struct Tensor* a, void* backwardF
         if (!tensor_is_grad_enabled()) { out->requiresGrad = 0; return; }
         out->requiresGrad = a->requiresGrad;
         if (!out->requiresGrad) return;
-        out->parents.push((const void*)&a);
+        out->parents.push(a);
         out->gradFn = backwardFn;
     }
 }

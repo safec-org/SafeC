@@ -9,6 +9,7 @@
 #define EXT2_SUPER_MAGIC   0xEF53
 #define EXT2_ROOT_INODE    2
 #define EXT2_BLOCK_SIZE_BASE 1024
+#define EXT2_MAX_BLOCK_SIZE  4096   // largest supported block size (ext2_init rejects bigger)
 
 // Inode type masks
 #define EXT2_S_IFREG  0x8000
@@ -41,6 +42,7 @@ struct Ext2Super {
     unsigned int  checkinterval;
     unsigned int  creator_os;
     unsigned int  rev_level;
+    unsigned short inode_size;     // bytes per on-disk inode (128 for rev 0; s_inode_size for rev >= 1)
 };
 
 // Block group descriptor (32 bytes).
@@ -90,7 +92,7 @@ struct Ext2Ctx {
 };
 
 // Initialise ext2 context from a block device.  Returns 0 on success.
-int  ext2_init(&stack Ext2Ctx ctx, &stack BlockDevice dev);
+int  ext2_init(&Ext2Ctx ctx, &BlockDevice dev);
 
 // Return VfsOps for the ext2 driver.
 struct VfsOps ext2_ops();

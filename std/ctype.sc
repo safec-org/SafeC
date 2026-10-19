@@ -1,41 +1,24 @@
 // SafeC Standard Library — Character classification and conversion
-// Wraps libc ctype functions for locale-aware character operations.
-// Explicit extern declarations are used because ctype.h implements these
-// as macros on many platforms (e.g., macOS), which SafeC cannot resolve.
+// ASCII / "C" locale semantics, implemented natively: freestanding-safe, and
+// inlinable (libc's versions are an out-of-line call per character).
 #pragma once
 #include <std/ctype.h>
 
-// ── Explicit extern declarations for libc ctype functions ────────────────────
 namespace std {
 
-extern int isalpha(int c);
-extern int isdigit(int c);
-extern int isalnum(int c);
-extern int isxdigit(int c);
-extern int isspace(int c);
-extern int isblank(int c);
-extern int isprint(int c);
-extern int isgraph(int c);
-extern int ispunct(int c);
-extern int iscntrl(int c);
-extern int isupper(int c);
-extern int islower(int c);
-extern int tolower(int c);
-extern int toupper(int c);
-
-inline int char_is_alpha(int c)  { unsafe { return isalpha(c); } }
-inline int char_is_digit(int c)  { unsafe { return isdigit(c); } }
-inline int char_is_alnum(int c)  { unsafe { return isalnum(c); } }
-inline int char_is_xdigit(int c) { unsafe { return isxdigit(c); } }
-inline int char_is_space(int c)  { unsafe { return isspace(c); } }
-inline int char_is_blank(int c)  { unsafe { return isblank(c); } }
-inline int char_is_print(int c)  { unsafe { return isprint(c); } }
-inline int char_is_graph(int c)  { unsafe { return isgraph(c); } }
-inline int char_is_punct(int c)  { unsafe { return ispunct(c); } }
-inline int char_is_ctrl(int c)   { unsafe { return iscntrl(c); } }
-inline int char_is_upper(int c)  { unsafe { return isupper(c); } }
-inline int char_is_lower(int c)  { unsafe { return islower(c); } }
-inline int char_to_lower(int c)  { unsafe { return tolower(c); } }
-inline int char_to_upper(int c)  { unsafe { return toupper(c); } }
+inline int char_is_upper(int c)  { return c >= 'A' && c <= 'Z'; }
+inline int char_is_lower(int c)  { return c >= 'a' && c <= 'z'; }
+inline int char_is_alpha(int c)  { return char_is_upper(c) || char_is_lower(c); }
+inline int char_is_digit(int c)  { return c >= '0' && c <= '9'; }
+inline int char_is_alnum(int c)  { return char_is_alpha(c) || char_is_digit(c); }
+inline int char_is_xdigit(int c) { return char_is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
+inline int char_is_space(int c)  { return c == ' ' || (c >= 9 && c <= 13); }
+inline int char_is_blank(int c)  { return c == ' ' || c == 9; }
+inline int char_is_print(int c)  { return c >= 32 && c <= 126; }
+inline int char_is_graph(int c)  { return c >= 33 && c <= 126; }
+inline int char_is_punct(int c)  { return char_is_graph(c) && !char_is_alnum(c); }
+inline int char_is_ctrl(int c)   { return (c >= 0 && c < 32) || c == 127; }
+inline int char_to_lower(int c)  { return char_is_upper(c) ? c + 32 : c; }
+inline int char_to_upper(int c)  { return char_is_lower(c) ? c - 32 : c; }
 
 } // namespace std

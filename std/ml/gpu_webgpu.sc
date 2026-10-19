@@ -16,13 +16,14 @@
 // this file has no such loop to hook into, so it makes its own, minimal
 // one. wgpuBufferMapAsync's readback is handled the same way.
 #pragma once
+#include <std/stddef.h>
 #include <std/ml/gpu_webgpu.h>
 #include <std/ml/float16.h>
 #include <std/mem.h>
 
 namespace std {
 
-extern void* memcpy(void* dst, const void* src, unsigned long n);
+extern void* memcpy(void* dst, const void* src, size_t n);
 
 // ── WebGPU native C API (webgpu.h) — hand-matched signatures ───────────────
 extern void* wgpuCreateInstance(const void* descriptor);
@@ -753,7 +754,7 @@ int webgpu_sgd_update_f32(void* bufW, void* bufGrad, float lr, unsigned long n) 
 }
 
 // ── fp16 tier (see gpu_webgpu.h) ─────────────────────────────────────────────
-extern void* malloc(unsigned long size);
+extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
 void* webgpu_upload_f16_persistent(const float* data, unsigned long n) {

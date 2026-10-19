@@ -46,9 +46,9 @@
 // See reactor_kqueue.sc's identical comment on this macro.
 #define SAFEC_REACTOR_BACKEND_INCLUDED_
 #include <std/sched/reactor.h>
-#include <std/sched/reactor.sc>
-#include <std/sync/task.sc>
-#include <std/collections/vec.sc>
+#include <std/sched/reactor.h>
+#include <std/sync/task.h>
+#include <std/collections/vec.h>
 
 namespace std {
 
@@ -105,8 +105,8 @@ inline struct Reactor reactor_init() {
     // initialization for this shared struct Reactor field; see
     // reactor.h's comment on sigfds. SCHED_SIGNAL is a no-op here (see
     // this file's header comment), so nothing ever populates it.
-    r.sigfds = vec_new(sizeof(struct SigFdEntry));
-    r.watched = vec_new(sizeof(struct WatchedFd));
+    r.sigfds = vec_new();
+    r.watched = vec_new();
     return r;
 }
 
@@ -132,7 +132,7 @@ inline void Reactor::add(int fd, int filter) {
     unsigned long i = 0UL;
     while (i < n) {
         struct WatchedFd* e;
-        unsafe { e = (struct WatchedFd*)self.watched.get_raw(i); }
+        unsafe { e = self.watched.at(i); }
         int entryFd;
         int entryFilter;
         unsafe { entryFd = e->fd; entryFilter = e->filter; }
@@ -144,7 +144,7 @@ inline void Reactor::add(int fd, int filter) {
     struct WatchedFd w;
     w.fd = fd;
     w.filter = filter;
-    unsafe { self.watched.push((const void*)&w); }
+    unsafe { self.watched.push(w); }
 }
 
 inline void Reactor::remove(int fd, int filter) {
@@ -156,13 +156,13 @@ inline void Reactor::remove(int fd, int filter) {
     unsigned long i = 0UL;
     while (i < n) {
         struct WatchedFd* e;
-        unsafe { e = (struct WatchedFd*)self.watched.get_raw(i); }
+        unsafe { e = self.watched.at(i); }
         int entryFd;
         int entryFilter;
         unsafe { entryFd = e->fd; entryFilter = e->filter; }
         if (entryFd == fd && entryFilter == filter) {
             struct WatchedFd removed;
-            unsafe { self.watched.remove(i, (void*)&removed); }
+            unsafe { self.watched.remove(i); }
             return;
         }
         i = i + 1UL;
@@ -190,7 +190,7 @@ inline int Reactor::poll(&TaskScheduler sched, long long timeout_ms) {
     unsigned long i = 0UL;
     while (i < cap) {
         struct WatchedFd* w;
-        unsafe { w = (struct WatchedFd*)self.watched.get_raw(i); }
+        unsafe { w = self.watched.at(i); }
         int wFd;
         int wFilter;
         unsafe { wFd = w->fd; wFilter = w->filter; }
@@ -225,7 +225,7 @@ inline int Reactor::poll(&TaskScheduler sched, long long timeout_ms) {
         unsafe { revents = fds[i].revents; readyFd = fds[i].fd; }
         if (revents != (short)0) {
             struct WatchedFd* w;
-            unsafe { w = (struct WatchedFd*)self.watched.get_raw(i); }
+            unsafe { w = self.watched.at(i); }
             int wFilter;
             unsafe { wFilter = w->filter; }
             sched->unblock_fd((int)readyFd, wFilter);

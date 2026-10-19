@@ -4,11 +4,10 @@
 // Not coverage-guided; use with libFuzzer for production fuzzing.
 #pragma once
 
-// Fuzz target signature: void func(const unsigned char* data, unsigned long size)
 namespace std {
 
 struct FuzzTarget {
-    void*         func;        // fuzz target function
+    fn void(const &unsigned char, unsigned long) func;   // target: (data, size)
     unsigned long seed;      // PRNG seed (set before run())
     unsigned long iters;     // number of mutations to try
 
@@ -18,6 +17,6 @@ struct FuzzTarget {
 };
 
 // Initialise a fuzz target with a default seed and iteration count.
-struct FuzzTarget fuzz_target_init(void* func, unsigned long iters);
+struct FuzzTarget fuzz_target_init(fn void(const &unsigned char, unsigned long) func, unsigned long iters);
 
 } // namespace std
