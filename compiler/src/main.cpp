@@ -1,6 +1,7 @@
 #include "safec/Preprocessor.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/Triple.h"
+#include "llvm/TargetParser/ARMTargetParser.h"
 #include "safec/Diagnostic.h"
 #include "safec/Lexer.h"
 #include "safec/Parser.h"
@@ -615,6 +616,54 @@ static int compileOneFile(const std::string &inputPath, const std::string &outpu
             ? llvm::sys::getDefaultTargetTriple() : TargetTriple.getValue();
         llvm::Triple t(triple);
         ppOpts.cmdlineDefs["__SIZEOF_POINTER__"] = t.isArch16Bit() ? "2" : t.isArch32Bit() ? "4" : "8";
+        // Architecture macros, matching clang's, so std/ can pick per-ISA
+        // inline asm (barriers, cycle counters, trap-vector setup, ...).
+        if (t.getArch() == llvm::Triple::x86_64) {
+            ppOpts.cmdlineDefs["__x86_64__"] = "1";
+            ppOpts.cmdlineDefs["__amd64__"]  = "1";
+        } else if (t.getArch() == llvm::Triple::x86) {
+            ppOpts.cmdlineDefs["__i386__"] = "1";
+        } else if (t.isAArch64()) {
+            ppOpts.cmdlineDefs["__aarch64__"] = "1";
+        } else if (t.isRISCV()) {
+            ppOpts.cmdlineDefs["__riscv"]      = "1";
+            ppOpts.cmdlineDefs["__riscv_xlen"] = t.isRISCV64() ? "64" : "32";
+        }
+        // 32-bit ARM architecture macros, matching clang's ARMTargetInfo,
+        // so std/ can select Cortex-M / ARMv7-A code paths (e.g. the VTOR
+        // write in std/interrupt/vector_table.sc).
+        if (t.isARM() || t.isThumb()) {
+            llvm::StringRef archName = t.getArchName();
+            llvm::ARM::ArchKind kind = llvm::ARM::parseArch(archName);
+            unsigned version = llvm::ARM::parseArchVersion(archName);
+            ppOpts.cmdlineDefs["__arm__"] = "1";
+            if (version) ppOpts.cmdlineDefs["__ARM_ARCH"] = std::to_string(version);
+            // LLVM's CPU attr is "7E-M" / "8.1-A"; clang's macro spells it
+            // "7EM" / "8_1A", with the v8-M profiles named explicitly.
+            std::string attr;
+            switch (kind) {
+            case llvm::ARM::ArchKind::ARMV8MBaseline:   attr = "8M_BASE"; break;
+            case llvm::ARM::ArchKind::ARMV8MMainline:   attr = "8M_MAIN"; break;
+            case llvm::ARM::ArchKind::ARMV8_1MMainline: attr = "8_1M_MAIN"; break;
+            default:
+                for (char c : llvm::ARM::getCPUAttr(kind))
+                    if (c != '-') attr += c == '.' ? '_' : c;
+                break;
+            }
+            if (kind != llvm::ARM::ArchKind::INVALID && !attr.empty())
+                ppOpts.cmdlineDefs["__ARM_ARCH_" + attr + "__"] = "1";
+            switch (llvm::ARM::parseArchProfile(archName)) {
+            case llvm::ARM::ProfileKind::A: ppOpts.cmdlineDefs["__ARM_ARCH_PROFILE"] = "'A'"; break;
+            case llvm::ARM::ProfileKind::R: ppOpts.cmdlineDefs["__ARM_ARCH_PROFILE"] = "'R'"; break;
+            case llvm::ARM::ProfileKind::M: ppOpts.cmdlineDefs["__ARM_ARCH_PROFILE"] = "'M'"; break;
+            default: break;
+            }
+            if (t.isThumb()) {
+                ppOpts.cmdlineDefs["__thumb__"] = "1";
+                if (version >= 7 || kind == llvm::ARM::ArchKind::ARMV6T2)
+                    ppOpts.cmdlineDefs["__thumb2__"] = "1";
+            }
+        }
     }
     // Lets headers offer C-style function-like macros only to translation
     // units that can parse them, instead of being unusable in safe mode.

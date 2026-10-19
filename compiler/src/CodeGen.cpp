@@ -1660,20 +1660,43 @@ static std::string translateAsmTemplate(const std::string &gcc) {
     return out;
 }
 
+// GCC's x86 single-register constraint letters ("=a", "d", "+S", ...) are
+// a clang front-end convention — LLVM's backend only accepts the explicit
+// '{reg}' form, so translate them the way clang's X86 target does.
+static std::string translateAsmConstraint(const std::string &gcc, bool isX86) {
+    if (!isX86) return gcc;
+    std::string out;
+    for (char c : gcc) {
+        switch (c) {
+        case 'a': out += "{ax}"; break;
+        case 'b': out += "{bx}"; break;
+        case 'c': out += "{cx}"; break;
+        case 'd': out += "{dx}"; break;
+        case 'S': out += "{si}"; break;
+        case 'D': out += "{di}"; break;
+        default:  out += c; break;
+        }
+    }
+    return out;
+}
+
 void CodeGen::genAsm(AsmStmt &s, FnEnv &env) {
     // Build constraint string: outputs,inputs,~clobbers — LLVM's InlineAsm
     // expects output constraints first (they map onto the call's return
     // type, struct-packed if there's more than one output), then input
     // constraints (mapping onto the call's argument list, in order), then
     // clobbers.
+    llvm::Triple triple(mod_->getTargetTriple().empty()
+        ? llvm::Triple(llvm::sys::getDefaultTargetTriple()) : mod_->getTargetTriple());
+    bool isX86 = triple.isX86();
     std::string constraints;
     for (size_t i = 0; i < s.outputs.size(); ++i) {
         if (i > 0) constraints += ",";
-        constraints += s.outputs[i];
+        constraints += translateAsmConstraint(s.outputs[i], isX86);
     }
     for (size_t i = 0; i < s.inputs.size(); ++i) {
         if (!constraints.empty()) constraints += ",";
-        constraints += s.inputs[i];
+        constraints += translateAsmConstraint(s.inputs[i], isX86);
     }
     for (size_t i = 0; i < s.clobbers.size(); ++i) {
         if (!constraints.empty()) constraints += ",";
