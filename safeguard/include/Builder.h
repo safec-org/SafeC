@@ -145,6 +145,7 @@ private:
     // target has no OS, and the per-target build subdirectory name.
     const std::vector<std::string>& targetClangFlags() const;
     bool targetIsBareMetal() const;
+    bool targetIsWasm() const;
     bool isCrossTarget() const { return !opts_.target.empty(); }
     std::string targetTriple() const;
     std::string targetDirName() const { return opts_.target.empty() ? "host" : opts_.target; }

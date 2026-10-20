@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 # Builds the bare-metal stdlib test image (bm_main.sc + bm_rt.sc + a std
 # archive for the target) for each target alias and runs it in the Unicorn
-# emulator via run.py.
+# emulator via run.py — or, for wasm32/wasm64, links it with wasm-ld and
+# runs it under Node via run_wasm.mjs.
 #   usage: run.sh [alias...]            (default: every alias)
-# Env: SAFEC, CLANG, LLD (ld.lld), BUILTINS (dir from build_builtins.sh,
-#      default ~/opt/bm-builtins), PYTHONPATH must make 'unicorn' importable.
+# Env: SAFEC, CLANG, LLD (ld.lld), WASM_LD, NODE, BUILTINS (dir from
+#      build_builtins.sh, default ~/opt/bm-builtins), PYTHONPATH must make
+#      'unicorn' importable.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
 SAFEC="${SAFEC:-safec}"; CLANG="${CLANG:-clang}"; LLD="${LLD:-ld.lld}"
 OBJCOPY="${OBJCOPY:-llvm-objcopy}"; NM="${NM:-llvm-nm}"; AR="${AR:-llvm-ar}"
+WASM_LD="${WASM_LD:-wasm-ld}"; NODE="${NODE:-node}"
 BUILTINS="${BUILTINS:-$HOME/opt/bm-builtins}"
 OUT="${OUT:-$HERE/build}"
 if [[ $# -gt 0 ]]; then TARGETS=("$@"); else mapfile -t TARGETS < <("$SAFEC" --list-targets | awk '{print $1}'); fi
@@ -50,6 +53,19 @@ for t in "${TARGETS[@]}"; do
     "$AR" rcs "$d/libsafec_std.a" "$d"/std/*.o
     if ! compile "$t" "$HERE/bm_main.sc" "$d/bm_main.o" || ! compile "$t" "$HERE/bm_rt.sc" "$d/bm_rt.o"; then
         echo "$t BUILD-FAILED (test sources)"; fails=$((fails + 1)); continue
+    fi
+    if [[ $t == wasm* ]]; then
+        # No entry point: the harness calls main() itself and reads the
+        # result globals, so export those (each as its address).
+        exports=()
+        for s in main g_done g_fails g_checks g_first_fail_line g_aborted; do exports+=("--export=$s"); done
+        if ! "$WASM_LD" -o "$d/image.wasm" --no-entry --gc-sections "${exports[@]}" \
+                $([[ $t == wasm64 ]] && echo -mwasm64) \
+                "$d/bm_main.o" "$d/bm_rt.o" "$d/libsafec_std.a" 2>"$d/link.err"; then
+            echo "$t LINK-FAILED: $(head -3 "$d/link.err" | tr '\n' ' ')"; fails=$((fails + 1)); continue
+        fi
+        "$NODE" "$HERE/run_wasm.mjs" "$t" "$d/image.wasm" || fails=$((fails + 1))
+        continue
     fi
     if ! "$LLD" -o "$d/image.elf" -T "$LDS" --gc-sections -static -nostdlib \
             "$d/bm_main.o" "$d/bm_rt.o" "$d/libsafec_std.a" \

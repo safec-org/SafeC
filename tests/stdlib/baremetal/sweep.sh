@@ -27,6 +27,8 @@ total_unexpected=0
 for t in "${TARGETS[@]}"; do
     mapfile -t CFLAGS < <("$SAFEC" --print-target-clang-flags --target="$t")
     pass=0; fail=0; xfail=0; unexpected=()
+    # std/wasm/ is the wasm runtime + DOM bindings: only built for wasm targets.
+    skip=(-not -path '*/wasm/*'); [[ $t == wasm* ]] && skip=()
     while IFS= read -r -d '' f; do
         rel="${f#$ROOT/std/}"
         ll="$WORK/$t.ll"; obj="$WORK/$t.o"
@@ -40,7 +42,7 @@ for t in "${TARGETS[@]}"; do
             fail=$((fail + 1))
             unexpected+=("$rel: $(grep -m1 -E 'error' "$WORK/err" | cut -c1-160)")
         fi
-    done < <(find "$ROOT/std" -name '*.sc' -not -path '*/wasm/*' -print0 | sort -z)
+    done < <(find "$ROOT/std" -name '*.sc' "${skip[@]}" -print0 | sort -z)
     printf '%-8s pass=%-4d expected-fail=%-3d UNEXPECTED=%d\n' "$t" "$pass" "$xfail" "$fail"
     for u in "${unexpected[@]}"; do echo "    $u"; done
     total_unexpected=$((total_unexpected + fail))

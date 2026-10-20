@@ -192,6 +192,9 @@ static const std::vector<BareMetalTarget> &bareMetalTargets() {
         {"rv32e",   "riscv32-unknown-elf",      "generic-rv32", "+e", "ilp32e", {"-march=rv32e", "-mabi=ilp32e"}},
         {"rv64i",   "riscv64-unknown-elf",      "generic-rv64", "",   "lp64",   {"-march=rv64i", "-mabi=lp64"}},
         {"rv64e",   "riscv64-unknown-elf",      "generic-rv64", "+e", "lp64e",  {"-march=rv64e", "-mabi=lp64e"}},
+        // WebAssembly (no OS, no WASI): the host page/runtime supplies imports.
+        {"wasm32",  "wasm32-unknown-unknown",   "generic",    "",   "",       {}},
+        {"wasm64",  "wasm64-unknown-unknown",   "generic",    "",   "",       {}},
     };
     return kTargets;
 }
@@ -470,6 +473,14 @@ static bool linkBinary(const std::vector<std::string> &llPaths, const std::strin
     if (!TargetTriple.getValue().empty())
         args.push_back("--target=" + TargetTriple.getValue());
     for (auto &f : gTargetClangFlags) args.push_back(f);
+    // WebAssembly: no libc/crt to link, the module is a library the host
+    // instantiates (no _start), its non-hidden functions are its exports,
+    // and unresolved externs become "env" imports (see std/wasm/dom.h).
+    if (llvm::Triple(TargetTriple.getValue()).isWasm()) {
+        for (const char *f : {"-nostdlib", "-Wl,--no-entry", "-Wl,--export-dynamic",
+                              "-Wl,--allow-undefined"})
+            args.push_back(f);
+    }
     if (!ltoFlag.empty()) args.push_back(ltoFlag);
     if (Shared) args.push_back("-shared");
     for (auto &dir : LinkLibDirs) args.push_back("-L" + dir);
@@ -628,6 +639,9 @@ static int compileOneFile(const std::string &inputPath, const std::string &outpu
         } else if (t.isRISCV()) {
             ppOpts.cmdlineDefs["__riscv"]      = "1";
             ppOpts.cmdlineDefs["__riscv_xlen"] = t.isRISCV64() ? "64" : "32";
+        } else if (t.isWasm()) {
+            ppOpts.cmdlineDefs["__wasm__"] = "1";
+            ppOpts.cmdlineDefs[t.isArch64Bit() ? "__wasm64__" : "__wasm32__"] = "1";
         }
         // 32-bit ARM architecture macros, matching clang's ARMTargetInfo,
         // so std/ can select Cortex-M / ARMv7-A code paths (e.g. the VTOR

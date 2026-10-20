@@ -452,6 +452,11 @@ bool Builder::linkFinal(const std::vector<std::string>& objFiles,
     for (auto& f : targetClangFlags()) cmd.push_back(f);
     if (isCrossTarget()) cmd.push_back("-fuse-ld=lld");
     if (targetIsBareMetal()) { cmd.push_back("-nostdlib"); cmd.push_back("-static"); }
+    // WebAssembly: a library module the host instantiates — no _start, its
+    // functions are its exports, unresolved externs become "env" imports.
+    if (targetIsWasm())
+        for (const char* f : { "-Wl,--no-entry", "-Wl,--export-dynamic", "-Wl,--allow-undefined" })
+            cmd.push_back(f);
     if (opts_.release) cmd.push_back("-O2");
     if (!manifest_.build.lto.empty())
         cmd.push_back(manifest_.build.lto == "full" ? "-flto" : "-flto=thin");
@@ -605,12 +610,18 @@ std::string Builder::targetTriple() const {
     return "";
 }
 
-// No-OS triples: '<arch>-unknown-none-elf', '<arch>-none-eabi', '<arch>-unknown-elf'.
+// No-OS triples: '<arch>-unknown-none-elf', '<arch>-none-eabi', '<arch>-unknown-elf',
+// and WebAssembly without WASI ('wasm32-unknown-unknown').
 bool Builder::targetIsBareMetal() const {
     std::string t = targetTriple();
     if (t.empty()) return false;
     return t.find("-none") != std::string::npos ||
-           (t.find("-unknown-elf") != std::string::npos);
+           (t.find("-unknown-elf") != std::string::npos) || targetIsWasm();
+}
+
+bool Builder::targetIsWasm() const {
+    std::string t = targetTriple();
+    return t.rfind("wasm32-", 0) == 0 || t.rfind("wasm64-", 0) == 0;
 }
 
 // ── build a library from a source directory ───────────────────────────────────
@@ -732,13 +743,16 @@ std::string Builder::ensureStdLib() {
     fs::path stdParent = fs::path(stdDir).parent_path();
     std::vector<std::string> incs = { stdDir, stdParent.string() };
 
-    // 'wasm': std/wasm/*.sc's malloc/free/etc. are wasm32-freestanding-only
+    // 'wasm': std/wasm/*.sc's malloc/free/etc. are wasm-freestanding-only
     // — see collectAllSources's doc comment and std/wasm/wasm_rt.sc's own
     // header comment for the full story (a real, CI-confirmed Windows
-    // LNK2005 symbol collision against libucrt otherwise).
+    // LNK2005 symbol collision against libucrt otherwise). A wasm target's
+    // archive keeps them: they are its runtime.
+    std::vector<std::string> excluded;
+    if (!targetIsWasm()) excluded.push_back("wasm");
     if (!buildLib(stdDir, libPath.string(), incs, /*compatPreprocessor=*/true,
                   /*tolerateArchMismatch=*/true, /*foreignIncludeDirs=*/{},
-                  /*excludeSubdirNames=*/{"wasm"}))
+                  /*excludeSubdirNames=*/excluded))
         return "";
     return libPath.string();
 }

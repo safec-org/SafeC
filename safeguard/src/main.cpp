@@ -45,10 +45,14 @@ Options (build / run / check / test):
   --no-default-features    Do not enable the manifest's "default" feature
   --target <alias|triple>  Cross-compile: a bare-metal alias (x86, x86_64,
                             aarch32, aarch64, thumb, thumb2, arm-6m, arm-7m,
-                            arm-7em, arm-8m, rv32i, rv32e, rv64i, rv64e —
-                            see 'safec --list-targets') or any LLVM triple.
-                            Bare-metal links use -nostdlib -static; supply a
-                            linker script/runtime via [build] cflags/libs.
+                            arm-7em, arm-8m, rv32i, rv32e, rv64i, rv64e,
+                            wasm32, wasm64 — see 'safec --list-targets') or
+                            any LLVM triple. Bare-metal links use -nostdlib
+                            -static; supply a linker script/runtime via
+                            [build] cflags/libs. WebAssembly links a library
+                            module (no entry; functions exported, unresolved
+                            externs imported from "env"; std/wasm/wasm_rt
+                            supplies malloc & co.).
                             'test' builds without running; 'run' is refused.
 
 [features] format in Package.toml (Rust-Cargo-style; see advanced/safeguard

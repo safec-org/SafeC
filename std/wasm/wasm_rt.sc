@@ -26,10 +26,10 @@
 static unsigned char gWasmRtPool[WASM_RT_POOL_SIZE];
 static unsigned long gWasmRtOffset = 0UL;
 
-void* malloc(unsigned long size) {
+void* malloc(size_t size) {
     unsafe {
         unsigned long headerSize = sizeof(unsigned long);
-        unsigned long total = headerSize + size;
+        unsigned long total = headerSize + (unsigned long)size;
         unsigned long rem = total % 8UL;
         if (rem != 0UL) {
             total = total + (8UL - rem);
@@ -49,8 +49,8 @@ void free(void* ptr) {
     // Bump allocator: no reclamation. See wasm_rt.h for rationale.
 }
 
-void* calloc(unsigned long count, unsigned long size) {
-    unsigned long total = count * size;
+void* calloc(size_t count, size_t size) {
+    size_t total = count * size;
     void* p = malloc(total);
     if (p != (void*)0) {
         unsafe { memset(p, 0, total); }
@@ -58,7 +58,7 @@ void* calloc(unsigned long count, unsigned long size) {
     return p;
 }
 
-void* realloc(void* ptr, unsigned long new_size) {
+void* realloc(void* ptr, size_t new_size) {
     if (ptr == (void*)0) {
         return malloc(new_size);
     }
@@ -73,12 +73,12 @@ void* realloc(void* ptr, unsigned long new_size) {
     if (newPtr == (void*)0) {
         return (void*)0;
     }
-    unsigned long copyLen = oldSize < new_size ? oldSize : new_size;
-    unsafe { memcpy(newPtr, ptr, copyLen); }
+    unsigned long copyLen = oldSize < (unsigned long)new_size ? oldSize : (unsigned long)new_size;
+    unsafe { memcpy(newPtr, ptr, (size_t)copyLen); }
     return newPtr;
 }
 
-void* memcpy(void* dst, const void* src, unsigned long n) {
+void* memcpy(void* dst, const void* src, size_t n) {
     unsafe {
         unsigned char* d = (unsigned char*)dst;
         const unsigned char* s = (const unsigned char*)src;
@@ -91,7 +91,7 @@ void* memcpy(void* dst, const void* src, unsigned long n) {
     return dst;
 }
 
-void* memmove(void* dst, const void* src, unsigned long n) {
+void* memmove(void* dst, const void* src, size_t n) {
     unsafe {
         unsigned char* d = (unsigned char*)dst;
         const unsigned char* s = (const unsigned char*)src;
@@ -112,7 +112,7 @@ void* memmove(void* dst, const void* src, unsigned long n) {
     return dst;
 }
 
-void* memset(void* ptr, int val, unsigned long n) {
+void* memset(void* ptr, int val, size_t n) {
     unsafe {
         unsigned char* p = (unsigned char*)ptr;
         unsigned char b = (unsigned char)val;
@@ -125,7 +125,7 @@ void* memset(void* ptr, int val, unsigned long n) {
     return ptr;
 }
 
-int memcmp(const void* a, const void* b, unsigned long n) {
+int memcmp(const void* a, const void* b, size_t n) {
     unsafe {
         const unsigned char* pa = (const unsigned char*)a;
         const unsigned char* pb = (const unsigned char*)b;

@@ -6,6 +6,7 @@
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/GetElementPtrTypeIterator.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
@@ -181,6 +182,34 @@ std::unique_ptr<llvm::Module> CodeGen::generate(TranslationUnit &tu) {
     if (!targetAbi_.empty())
         mod_->addModuleFlag(llvm::Module::Error, "target-abi",
                             llvm::MDString::get(ctx_, targetAbi_));
+
+    // Array/pointer indexing widens every index to i64 (indexToI64), which
+    // is right for 64-bit targets. On targets with narrower pointers, narrow
+    // GEP indices to the DataLayout's index width, as clang emits them. This
+    // doesn't change meaning (LangRef truncates GEP indices to that width
+    // anyway), but WebAssembly's -O0 FastISel folds an i64 index straight
+    // into an i32 load/store address, so the module fails validation.
+    {
+        const llvm::DataLayout &dl = mod_->getDataLayout();
+        for (auto &f : *mod_)
+            for (auto &bb : f)
+                for (auto &inst : bb) {
+                    auto *gep = llvm::dyn_cast<llvm::GetElementPtrInst>(&inst);
+                    if (!gep) continue;
+                    auto *idxTy = dl.getIndexType(gep->getPointerOperandType());
+                    if (!idxTy || idxTy->isVectorTy()) continue;
+                    unsigned idxBits = idxTy->getIntegerBitWidth();
+                    auto it = llvm::gep_type_begin(gep);
+                    for (unsigned i = 1; i < gep->getNumOperands(); ++i, ++it) {
+                        if (it.isStruct()) continue;   // struct field numbers stay i32
+                        llvm::Value *idx = gep->getOperand(i);
+                        auto *ity = llvm::dyn_cast<llvm::IntegerType>(idx->getType());
+                        if (!ity || ity->getBitWidth() <= idxBits) continue;
+                        gep->setOperand(i, llvm::CastInst::CreateTruncOrBitCast(
+                            idx, idxTy, "idx.trunc", gep->getIterator()));
+                    }
+                }
+    }
 
     // Finalize debug info (must be before verifyModule)
     if (dib_) dib_->finalize();
@@ -3622,6 +3651,20 @@ llvm::Value *CodeGen::genNullOp(CallExpr &e, FnEnv &env) {
 }
 
 // ── Subscript ─────────────────────────────────────────────────────────────────
+// Out-of-bounds index: abort(). WebAssembly has no abort() to link (it would
+// become an "env" import the host must supply) but has a native trap, so
+// use that there — the host sees a RuntimeError ("unreachable").
+void CodeGen::emitBoundsTrap() {
+    if (llvm::Triple(mod_->getTargetTriple()).isWasm()) {
+        builder_.CreateIntrinsic(llvm::Intrinsic::trap, {});
+    } else {
+        auto abortFn = mod_->getOrInsertFunction(
+            "abort", llvm::FunctionType::get(llvm::Type::getVoidTy(ctx_), false));
+        builder_.CreateCall(abortFn);
+    }
+    builder_.CreateUnreachable();
+}
+
 llvm::Value *CodeGen::genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr) {
     // v[i] on a vec<T,N> (std::simd): extractelement straight from the SSA
     // vector value — no address/GEP involved, unlike every other
@@ -3675,13 +3718,9 @@ llvm::Value *CodeGen::genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr) 
                 auto *trapBB = llvm::BasicBlock::Create(ctx_, "bounds.trap", curFn);
                 auto *okBB   = llvm::BasicBlock::Create(ctx_, "bounds.ok",   curFn);
                 builder_.CreateCondBr(oob, trapBB, okBB);
-                // Trap path: call abort() and mark unreachable
+                // Trap path: abort and mark unreachable
                 builder_.SetInsertPoint(trapBB);
-                auto abortFn = mod_->getOrInsertFunction(
-                    "abort",
-                    llvm::FunctionType::get(llvm::Type::getVoidTy(ctx_), false));
-                builder_.CreateCall(abortFn);
-                builder_.CreateUnreachable();
+                emitBoundsTrap();
                 // Safe path continues here
                 builder_.SetInsertPoint(okBB);
             }
@@ -3710,10 +3749,7 @@ llvm::Value *CodeGen::genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr) 
             auto *okBB   = llvm::BasicBlock::Create(ctx_, "sl.ok",   curFn);
             builder_.CreateCondBr(oob, trapBB, okBB);
             builder_.SetInsertPoint(trapBB);
-            auto abortFn = mod_->getOrInsertFunction(
-                "abort", llvm::FunctionType::get(llvm::Type::getVoidTy(ctx_), false));
-            builder_.CreateCall(abortFn);
-            builder_.CreateUnreachable();
+            emitBoundsTrap();
             builder_.SetInsertPoint(okBB);
         }
         auto *elemTy = e.type ? lowerType(e.type) : llvm::Type::getInt32Ty(ctx_);
