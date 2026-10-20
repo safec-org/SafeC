@@ -121,6 +121,52 @@ struct CudaGraph cuda_capture_end();          // exec == 0 on failure
 int  cuda_graph_launch(struct CudaGraph g);   // queued like any other op
 void cuda_graph_free(&CudaGraph g);
 
+// ── fp16 / bf16 ──────────────────────────────────────────────────────────────
+// 16-bit storage, fp32 arithmetic (the same API as gpu_rocm.h's RocmHalfBuf):
+// half the memory and bandwidth of a CudaBuf. Every kernel widens on load
+// and rounds to nearest even once per stored value, giving exactly the bits
+// float16.h's f32_to_fp16 / f32_to_bf16 give on the CPU. GEMMs run on
+// tensor cores through cuBLAS / cuBLASLt with fp32 accumulation. All ops are
+// queued and can be recorded into a CudaGraph.
+
+#define CUDA_FP16 1   // same values as tensor_half.h's TENSOR_FP16 / TENSOR_BF16
+#define CUDA_BF16 2
+
+// 'len' fp16 or bf16 values ('dtype') in GPU memory; dev == 0 if invalid.
+struct CudaHalfBuf {
+    unsigned long dev;
+    unsigned long len;
+    int           dtype;
+};
+
+struct CudaHalfBuf cuda_half_alloc(unsigned long n, int dtype);                   // uninitialized
+struct CudaHalfBuf cuda_half_upload(const &float host, unsigned long n, int dtype); // rounded on the GPU
+int  cuda_half_write(struct CudaHalfBuf dst, const &unsigned short bits, unsigned long n);  // raw bits
+int  cuda_half_read(struct CudaHalfBuf src, &unsigned short bits, unsigned long n);         // waits
+void cuda_half_free(&CudaHalfBuf b);
+
+// Conversions over dst.len (to_half) / src.len (from_half) elements.
+int cuda_to_half(struct CudaBuf src, struct CudaHalfBuf dst);     // round to dst.dtype
+int cuda_from_half(struct CudaHalfBuf src, struct CudaBuf dst);   // exact
+
+// c[m,n] = op(a)[m,k] * op(b)[k,n] (ta/tb as in cuda_gemm), a and b of the
+// same dtype; c in that dtype (_relu: then max(0, .) in the epilogue), or
+// fp32 with _f32.
+int cuda_half_gemm(struct CudaHalfBuf a, int ta, struct CudaHalfBuf b, int tb, struct CudaHalfBuf c,
+                   unsigned long m, unsigned long n, unsigned long k);
+int cuda_half_gemm_relu(struct CudaHalfBuf a, int ta, struct CudaHalfBuf b, int tb, struct CudaHalfBuf c,
+                        unsigned long m, unsigned long n, unsigned long k);
+int cuda_half_gemm_f32(struct CudaHalfBuf a, int ta, struct CudaHalfBuf b, int tb, struct CudaBuf c,
+                       unsigned long m, unsigned long n, unsigned long k);
+
+// Training ops, as their CudaBuf versions above (loss stays fp32).
+int cuda_half_relu(struct CudaHalfBuf a, struct CudaHalfBuf out);
+int cuda_half_relu_grad(struct CudaHalfBuf z, struct CudaHalfBuf g, struct CudaHalfBuf out);
+int cuda_half_mse_grad(struct CudaHalfBuf y, struct CudaHalfBuf t, struct CudaHalfBuf dy, struct CudaBuf loss1);
+int cuda_half_sgd(struct CudaHalfBuf w, struct CudaHalfBuf g, float lr);   // w = round(w - lr * g)
+int cuda_half_sgd2(struct CudaHalfBuf w1, struct CudaHalfBuf g1, struct CudaHalfBuf w2, struct CudaHalfBuf g2,
+                   float lr);
+
 // ── Interop: for libraries layered on this backend (gpu_cudnn.h, dsp/fft_cuda.h)
 
 // The CUstream every op above is queued on (a cudaStream_t to the runtime

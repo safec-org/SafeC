@@ -67,6 +67,9 @@ extern int cublasSgemm_v2(void* handle, int transa, int transb, int m, int n, in
                           const float* B, int ldb,
                           const float* beta, float* C, int ldc);
 
+extern int cublasGemmEx(void* handle, int transa, int transb, int m, int n, int k, const void* alpha,
+                        const void* a, int aType, int lda, const void* b, int bType, int ldb,
+                        const void* beta, void* c, int cType, int ldc, int computeType, int algo);
 extern int cublasLtCreate(void** handle);
 extern int cublasLtMatmulDescCreate(void** desc, int computeType, int scaleType);
 extern int cublasLtMatmulDescSetAttribute(void* desc, int attr, const void* buf, size_t size);
@@ -94,6 +97,9 @@ extern int printf(const char* fmt, ...);
 #define CUDA_BLAS_N              0    // CUBLAS_OP_N
 #define CUDA_BLAS_T              1    // CUBLAS_OP_T
 #define CUDA_R_32F_              0    // CUDA_R_32F
+#define CUDA_R_16F_              2    // CUDA_R_16F
+#define CUDA_R_16BF_             14   // CUDA_R_16BF
+#define CUDA_GEMM_DEFAULT_       -1   // CUBLAS_GEMM_DEFAULT
 #define CUDA_COMPUTE_32F         68   // CUBLAS_COMPUTE_32F
 #define CUDA_COMPUTE_32F_TF32    77   // CUBLAS_COMPUTE_32F_FAST_TF32
 #define CUDA_MATH_DEFAULT        0    // CUBLAS_DEFAULT_MATH
@@ -324,7 +330,44 @@ static const char* cuda_kernel_source_() {
     "extern \"C\" __global__ void matmul_f16(const unsigned short* A, const unsigned short* B, unsigned short* C, int M, int N, int K) { matmul16<0>(A, B, C, M, N, K); }\n"
     "extern \"C\" __global__ void matmul_bf16(const unsigned short* A, const unsigned short* B, unsigned short* C, int M, int N, int K) { matmul16<1>(A, B, C, M, N, K); }\n"
     "extern \"C\" __global__ void sgd_f16(unsigned short* w, const unsigned short* g, float lr, unsigned n) { sgd16<0>(w, g, lr, n); }\n"
-    "extern \"C\" __global__ void sgd_bf16(unsigned short* w, const unsigned short* g, float lr, unsigned n) { sgd16<1>(w, g, lr, n); }\n";
+    "extern \"C\" __global__ void sgd_bf16(unsigned short* w, const unsigned short* g, float lr, unsigned n) { sgd16<1>(w, g, lr, n); }\n"
+    "// CudaHalfBuf ops (grid-stride, fp32 arithmetic, one rounding per stored value)\n"
+    "#define GS for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += gridDim.x * blockDim.x)\n"
+    "template <int BF> __device__ void to16(const float* a, unsigned short* o, unsigned n) { GS o[i] = st16<BF>(a[i]); }\n"
+    "template <int BF> __device__ void from16(const unsigned short* a, float* o, unsigned n) { GS o[i] = ld16<BF>(a[i]); }\n"
+    "template <int BF> __device__ void relu16(const unsigned short* a, unsigned short* o, unsigned n) {\n"
+    "    GS { float v = ld16<BF>(a[i]); o[i] = v > 0.0f ? a[i] : (unsigned short)0; }\n"
+    "}\n"
+    "template <int BF> __device__ void relug16(const unsigned short* z, const unsigned short* g, unsigned short* o, unsigned n) {\n"
+    "    GS o[i] = ld16<BF>(z[i]) > 0.0f ? g[i] : (unsigned short)0;\n"
+    "}\n"
+    "template <int BF> __device__ void mse16(const unsigned short* y, const unsigned short* t, unsigned short* dy,\n"
+    "                                      float* loss, unsigned n) {\n"
+    "    float s = 0.0f;\n"
+    "    GS { float d = ld16<BF>(y[i]) - ld16<BF>(t[i]); dy[i] = st16<BF>(2.0f * d); s += d * d; }\n"
+    "    s = block_sum(s);\n"
+    "    if (threadIdx.x == 0) { if (gridDim.x == 1) *loss = s; else atomicAdd(loss, s); }\n"
+    "}\n"
+    "template <int BF> __device__ void sgd2_16(unsigned short* w1, const unsigned short* g1, unsigned n1,\n"
+    "        unsigned short* w2, const unsigned short* g2, unsigned n2, float lr) {\n"
+    "    unsigned n = n1 + n2;\n"
+    "    GS {\n"
+    "        if (i < n1) w1[i] = st16<BF>(ld16<BF>(w1[i]) - lr * ld16<BF>(g1[i]));\n"
+    "        else w2[i - n1] = st16<BF>(ld16<BF>(w2[i - n1]) - lr * ld16<BF>(g2[i - n1]));\n"
+    "    }\n"
+    "}\n"
+    "extern \"C\" __global__ void to_f16(const float* a, unsigned short* o, unsigned n) { to16<0>(a, o, n); }\n"
+    "extern \"C\" __global__ void to_bf16(const float* a, unsigned short* o, unsigned n) { to16<1>(a, o, n); }\n"
+    "extern \"C\" __global__ void from_f16(const unsigned short* a, float* o, unsigned n) { from16<0>(a, o, n); }\n"
+    "extern \"C\" __global__ void from_bf16(const unsigned short* a, float* o, unsigned n) { from16<1>(a, o, n); }\n"
+    "extern \"C\" __global__ void relu_f16(const unsigned short* a, unsigned short* o, unsigned n) { relu16<0>(a, o, n); }\n"
+    "extern \"C\" __global__ void relu_bf16(const unsigned short* a, unsigned short* o, unsigned n) { relu16<1>(a, o, n); }\n"
+    "extern \"C\" __global__ void relug_f16(const unsigned short* z, const unsigned short* g, unsigned short* o, unsigned n) { relug16<0>(z, g, o, n); }\n"
+    "extern \"C\" __global__ void relug_bf16(const unsigned short* z, const unsigned short* g, unsigned short* o, unsigned n) { relug16<1>(z, g, o, n); }\n"
+    "extern \"C\" __global__ void mse_f16(const unsigned short* y, const unsigned short* t, unsigned short* dy, float* l, unsigned n) { mse16<0>(y, t, dy, l, n); }\n"
+    "extern \"C\" __global__ void mse_bf16(const unsigned short* y, const unsigned short* t, unsigned short* dy, float* l, unsigned n) { mse16<1>(y, t, dy, l, n); }\n"
+    "extern \"C\" __global__ void sgd2_f16(unsigned short* w1, const unsigned short* g1, unsigned n1, unsigned short* w2, const unsigned short* g2, unsigned n2, float lr) { sgd2_16<0>(w1, g1, n1, w2, g2, n2, lr); }\n"
+    "extern \"C\" __global__ void sgd2_bf16(unsigned short* w1, const unsigned short* g1, unsigned n1, unsigned short* w2, const unsigned short* g2, unsigned n2, float lr) { sgd2_16<1>(w1, g1, n1, w2, g2, n2, lr); }\n";
 }
 
 // Kernel table, in this order.
@@ -351,7 +394,14 @@ static const char* cuda_kernel_source_() {
 #define K_UPSAMPLE2X 20
 #define K_COPY_ROWS 21
 #define K_COPY_ROWS4 22
-#define K_COUNT 23
+// CudaHalfBuf kernels: each fp16 index is followed by its bf16 twin
+#define K_TO_F16 23
+#define K_FROM_F16 25
+#define K_RELU_F16 27
+#define K_RELUG_F16 29
+#define K_MSE_F16 31
+#define K_SGD2_F16 33
+#define K_COUNT 35
 
 static const char* cuda_kernel_name_(int k) {
     if (k == K_ADD) return "ew_add";
@@ -376,6 +426,18 @@ static const char* cuda_kernel_name_(int k) {
     if (k == K_SGD_BF16) return "sgd_bf16";
     if (k == K_COPY_ROWS) return "copy_rows";
     if (k == K_COPY_ROWS4) return "copy_rows4";
+    if (k == K_TO_F16) return "to_f16";
+    if (k == K_TO_F16 + 1) return "to_bf16";
+    if (k == K_FROM_F16) return "from_f16";
+    if (k == K_FROM_F16 + 1) return "from_bf16";
+    if (k == K_RELU_F16) return "relu_f16";
+    if (k == K_RELU_F16 + 1) return "relu_bf16";
+    if (k == K_RELUG_F16) return "relug_f16";
+    if (k == K_RELUG_F16 + 1) return "relug_bf16";
+    if (k == K_MSE_F16) return "mse_f16";
+    if (k == K_MSE_F16 + 1) return "mse_bf16";
+    if (k == K_SGD2_F16) return "sgd2_f16";
+    if (k == K_SGD2_F16 + 1) return "sgd2_bf16";
     return "upsample2x";
 }
 
@@ -924,8 +986,10 @@ int cuda_gemm(struct CudaBuf a, int ta, struct CudaBuf b, int tb, struct CudaBuf
 }
 
 // Finds or builds the cuBLASLt plan for this shape + epilogue; -1 if none.
-static int cuda_lt_plan_(int ta, int tb, unsigned long m, unsigned long n, unsigned long k, int epilogue) {
-    long key0 = (long)(ta | (tb << 1) | (g_cuda_tf32 << 2) | (epilogue << 3));
+// 'dtype' is the element type of a, b and c (CUDA_R_32F_/16F_/16BF_); 16-bit
+// types accumulate in fp32 (TF32 doesn't apply).
+static int cuda_lt_plan_(int ta, int tb, unsigned long m, unsigned long n, unsigned long k, int epilogue, int dtype) {
+    long key0 = (long)(ta | (tb << 1) | (g_cuda_tf32 << 2) | (epilogue << 3) | (dtype << 8));
     int slot = -1;
     int s = 0;
     while (s < LT_CACHE) {
@@ -942,7 +1006,8 @@ static int cuda_lt_plan_(int ta, int tb, unsigned long m, unsigned long n, unsig
         int opA = tb ? CUDA_BLAS_T : CUDA_BLAS_N;
         int opB = ta ? CUDA_BLAS_T : CUDA_BLAS_N;
         void* desc = (void*)0;
-        if (cublasLtMatmulDescCreate(&desc, g_cuda_tf32 ? CUDA_COMPUTE_32F_TF32 : CUDA_COMPUTE_32F, CUDA_R_32F_) != 0) return -1;
+        int compute = g_cuda_tf32 && dtype == CUDA_R_32F_ ? CUDA_COMPUTE_32F_TF32 : CUDA_COMPUTE_32F;
+        if (cublasLtMatmulDescCreate(&desc, compute, CUDA_R_32F_) != 0) return -1;
         cublasLtMatmulDescSetAttribute(desc, LT_DESC_TRANSA, (const void*)&opA, sizeof(int));
         cublasLtMatmulDescSetAttribute(desc, LT_DESC_TRANSB, (const void*)&opB, sizeof(int));
         cublasLtMatmulDescSetAttribute(desc, LT_DESC_EPILOGUE, (const void*)&epilogue, sizeof(int));
@@ -953,9 +1018,9 @@ static int cuda_lt_plan_(int ta, int tb, unsigned long m, unsigned long n, unsig
         unsigned long aCols = tb ? n : k;
         unsigned long bRows = ta ? m : k;
         unsigned long bCols = ta ? k : m;
-        if (cublasLtMatrixLayoutCreate(&la, CUDA_R_32F_, (unsigned long long)aRows, (unsigned long long)aCols, (long long)aRows) != 0 ||
-            cublasLtMatrixLayoutCreate(&lb, CUDA_R_32F_, (unsigned long long)bRows, (unsigned long long)bCols, (long long)bRows) != 0 ||
-            cublasLtMatrixLayoutCreate(&lc, CUDA_R_32F_, (unsigned long long)n, (unsigned long long)m, (long long)n) != 0)
+        if (cublasLtMatrixLayoutCreate(&la, dtype, (unsigned long long)aRows, (unsigned long long)aCols, (long long)aRows) != 0 ||
+            cublasLtMatrixLayoutCreate(&lb, dtype, (unsigned long long)bRows, (unsigned long long)bCols, (long long)bRows) != 0 ||
+            cublasLtMatrixLayoutCreate(&lc, dtype, (unsigned long long)n, (unsigned long long)m, (long long)n) != 0)
             return -1;
         void* pref = (void*)0;
         if (cublasLtMatmulPreferenceCreate(&pref) != 0) return -1;
@@ -982,7 +1047,7 @@ int cuda_gemm_relu(struct CudaBuf a, int ta, struct CudaBuf b, int tb, struct Cu
                    unsigned long m, unsigned long n, unsigned long k) {
     if (!cuda_ensure_() || !cuda_gemm_dims_ok_(m, n, k) ||
         !cuda_fits_(a, m * k) || !cuda_fits_(b, k * n) || !cuda_fits_(c, m * n)) return 0;
-    int plan = cuda_lt_plan_(ta, tb, m, n, k, LT_EPILOGUE_RELU);
+    int plan = cuda_lt_plan_(ta, tb, m, n, k, LT_EPILOGUE_RELU, CUDA_R_32F_);
     if (plan >= 0) {
         float one = 1.0f;
         float zero = 0.0f;
@@ -1404,6 +1469,207 @@ int cuda_sgd_update_f16(&void devW, &void devGrad, float lr, unsigned long n) {
 int cuda_sgd_update_bf16(&void devW, &void devGrad, float lr, unsigned long n) {
     if (devW == (void*)0 || devGrad == (void*)0 || n == 0UL || n > 4294967295UL || !cuda_ensure_()) return 0;
     unsafe { return cuda_sgd_raw_(K_SGD_BF16, (unsigned long)devW, (unsigned long)devGrad, lr, n); }
+}
+
+// ── fp16 / bf16 buffers (CudaHalfBuf) ────────────────────────────────────────
+
+static int cuda_half_ok_(struct CudaHalfBuf b, unsigned long n) {
+    return b.dev != 0UL && b.len >= n && (b.dtype == CUDA_FP16 || b.dtype == CUDA_BF16);
+}
+
+// Kernel index for a CudaHalfBuf op: the fp16 kernel or its bf16 twin.
+static int cuda_k16_(int fp16Kernel, int dtype) { return dtype == CUDA_BF16 ? fp16Kernel + 1 : fp16Kernel; }
+
+static int cuda_dtype_type_(int dtype) { return dtype == CUDA_BF16 ? CUDA_R_16BF_ : CUDA_R_16F_; }
+
+struct CudaHalfBuf cuda_half_alloc(unsigned long n, int dtype) {
+    struct CudaHalfBuf b;
+    b.dev = 0UL;
+    b.len = 0UL;
+    b.dtype = dtype;
+    if (n == 0UL || (dtype != CUDA_FP16 && dtype != CUDA_BF16)) return b;
+    unsigned long long p = cuda_alloc_bytes_(checked_mul_size(n, 2UL));
+    if (p == 0ULL) return b;
+    b.dev = (unsigned long)p;
+    b.len = n;
+    return b;
+}
+
+struct CudaHalfBuf cuda_half_upload(const &float host, unsigned long n, int dtype) {
+    struct CudaHalfBuf b = cuda_half_alloc(n, dtype);
+    if (b.dev == 0UL) return b;
+    struct CudaBuf tmp = cuda_upload(host, n);
+    int ok = tmp.dev != 0UL && cuda_to_half(tmp, b);
+    if (ok) ok = cuda_sync();   // tmp is freed next
+    cuda_free(&tmp);
+    if (!ok) cuda_half_free(&b);
+    return b;
+}
+
+int cuda_half_write(struct CudaHalfBuf dst, const &unsigned short bits, unsigned long n) {
+    if (!cuda_half_ok_(dst, n) || n == 0UL || !cuda_ensure_()) return 0;
+    unsafe { return cuda_write_bytes_((unsigned long long)dst.dev, (const void*)bits, n * 2UL); }
+}
+
+int cuda_half_read(struct CudaHalfBuf src, &unsigned short bits, unsigned long n) {
+    if (!cuda_half_ok_(src, n) || n == 0UL || !cuda_ensure_()) return 0;
+    unsafe { return cuda_read_bytes_((void*)bits, (unsigned long long)src.dev, n * 2UL); }
+}
+
+void cuda_half_free(&CudaHalfBuf b) {
+    if (b.dev != 0UL) { unsafe { cuMemFree_v2((unsigned long long)b.dev); } }
+    b.dev = 0UL;
+    b.len = 0UL;
+}
+
+// Launches a two-pointer CudaHalfBuf kernel over n elements: (a, out, n).
+static int cuda_launch2_(int kernel, unsigned long a, unsigned long out, unsigned long n) {
+    unsafe {
+        void* pa = (void*)a;
+        void* po = (void*)out;
+        unsigned int nn = (unsigned int)n;
+        void* params[3];
+        params[0] = (void*)&pa; params[1] = (void*)&po; params[2] = (void*)&nn;
+        return cuda_launch_(kernel, n, (&void)&params[0]);
+    }
+}
+
+int cuda_to_half(struct CudaBuf src, struct CudaHalfBuf dst) {
+    unsigned long n = dst.len;
+    if (!cuda_ensure_() || !cuda_half_ok_(dst, n) || !cuda_fits_(src, n) || n > 4294967295UL) return 0;
+    return cuda_launch2_(cuda_k16_(K_TO_F16, dst.dtype), src.dev, dst.dev, n);
+}
+
+int cuda_from_half(struct CudaHalfBuf src, struct CudaBuf dst) {
+    unsigned long n = src.len;
+    if (!cuda_ensure_() || !cuda_half_ok_(src, n) || !cuda_fits_(dst, n) || n > 4294967295UL) return 0;
+    return cuda_launch2_(cuda_k16_(K_FROM_F16, src.dtype), src.dev, dst.dev, n);
+}
+
+// c = op(a) op(b) through cublasGemmEx: a, b of 'dtype', c of cType, fp32
+// accumulation (row-major via the column-major swap of cuda_gemm_raw_).
+static int cuda_gemm_ex_(unsigned long a, int ta, unsigned long b, int tb, unsigned long c, int abType, int cType,
+                         unsigned long m, unsigned long n, unsigned long k) {
+    float one = 1.0f;
+    float zero = 0.0f;
+    unsafe {
+        return cublasGemmEx(g_cuda_blas, tb ? CUDA_BLAS_T : CUDA_BLAS_N, ta ? CUDA_BLAS_T : CUDA_BLAS_N,
+                            (int)n, (int)m, (int)k, (const void*)&one,
+                            (const void*)b, abType, tb ? (int)k : (int)n,
+                            (const void*)a, abType, ta ? (int)m : (int)k,
+                            (const void*)&zero, (void*)c, cType, (int)n,
+                            CUDA_COMPUTE_32F, CUDA_GEMM_DEFAULT_) == 0;
+    }
+}
+
+static int cuda_half_gemm_ok_(struct CudaHalfBuf a, struct CudaHalfBuf b, unsigned long m, unsigned long n,
+                              unsigned long k) {
+    return cuda_ensure_() && cuda_gemm_dims_ok_(m, n, k) && a.dtype == b.dtype &&
+           cuda_half_ok_(a, m * k) && cuda_half_ok_(b, k * n);
+}
+
+int cuda_half_gemm(struct CudaHalfBuf a, int ta, struct CudaHalfBuf b, int tb, struct CudaHalfBuf c,
+                   unsigned long m, unsigned long n, unsigned long k) {
+    if (!cuda_half_gemm_ok_(a, b, m, n, k) || c.dtype != a.dtype || !cuda_half_ok_(c, m * n)) return 0;
+    int t = cuda_dtype_type_(a.dtype);
+    return cuda_gemm_ex_(a.dev, ta, b.dev, tb, c.dev, t, t, m, n, k);
+}
+
+int cuda_half_gemm_f32(struct CudaHalfBuf a, int ta, struct CudaHalfBuf b, int tb, struct CudaBuf c,
+                       unsigned long m, unsigned long n, unsigned long k) {
+    if (!cuda_half_gemm_ok_(a, b, m, n, k) || !cuda_fits_(c, m * n)) return 0;
+    return cuda_gemm_ex_(a.dev, ta, b.dev, tb, c.dev, cuda_dtype_type_(a.dtype), CUDA_R_32F_, m, n, k);
+}
+
+int cuda_half_gemm_relu(struct CudaHalfBuf a, int ta, struct CudaHalfBuf b, int tb, struct CudaHalfBuf c,
+                        unsigned long m, unsigned long n, unsigned long k) {
+    if (!cuda_half_gemm_ok_(a, b, m, n, k) || c.dtype != a.dtype || !cuda_half_ok_(c, m * n)) return 0;
+    int t = cuda_dtype_type_(a.dtype);
+    int plan = cuda_lt_plan_(ta, tb, m, n, k, LT_EPILOGUE_RELU, t);
+    if (plan >= 0) {
+        float one = 1.0f;
+        float zero = 0.0f;
+        unsafe {
+            if (cublasLtMatmul(g_cuda_lt, g_lt_desc[plan], (const void*)&one,
+                               (const void*)b.dev, g_lt_la[plan], (const void*)a.dev, g_lt_lb[plan],
+                               (const void*)&zero, (const void*)c.dev, g_lt_lc[plan],
+                               (void*)c.dev, g_lt_lc[plan],
+                               (const void*)&g_lt_algo[plan * LT_RESULT_WORDS],
+                               (void*)(unsigned long)g_cuda_ws, CUDA_WORKSPACE_BYTES, g_cuda_stream) == 0)
+                return 1;
+        }
+    }
+    return cuda_gemm_ex_(a.dev, ta, b.dev, tb, c.dev, t, t, m, n, k) &&
+           cuda_launch2_(cuda_k16_(K_RELU_F16, a.dtype), c.dev, c.dev, m * n);
+}
+
+int cuda_half_relu(struct CudaHalfBuf a, struct CudaHalfBuf out) {
+    unsigned long n = a.len;
+    if (!cuda_ensure_() || !cuda_half_ok_(a, n) || !cuda_half_ok_(out, n) || a.dtype != out.dtype ||
+        n > 4294967295UL) return 0;
+    return cuda_launch2_(cuda_k16_(K_RELU_F16, a.dtype), a.dev, out.dev, n);
+}
+
+int cuda_half_relu_grad(struct CudaHalfBuf z, struct CudaHalfBuf g, struct CudaHalfBuf out) {
+    unsigned long n = z.len;
+    if (!cuda_ensure_() || !cuda_half_ok_(z, n) || !cuda_half_ok_(g, n) || !cuda_half_ok_(out, n) ||
+        z.dtype != g.dtype || z.dtype != out.dtype || n > 4294967295UL) return 0;
+    unsafe {
+        void* pz = (void*)z.dev;
+        void* pg = (void*)g.dev;
+        void* po = (void*)out.dev;
+        unsigned int nn = (unsigned int)n;
+        void* params[4];
+        params[0] = (void*)&pz; params[1] = (void*)&pg; params[2] = (void*)&po; params[3] = (void*)&nn;
+        return cuda_launch_(cuda_k16_(K_RELUG_F16, z.dtype), n, (&void)&params[0]);
+    }
+}
+
+int cuda_half_mse_grad(struct CudaHalfBuf y, struct CudaHalfBuf t, struct CudaHalfBuf dy, struct CudaBuf loss1) {
+    unsigned long n = y.len;
+    if (!cuda_ensure_() || !cuda_half_ok_(y, n) || !cuda_half_ok_(t, n) || !cuda_half_ok_(dy, n) ||
+        y.dtype != t.dtype || y.dtype != dy.dtype || !cuda_fits_(loss1, 1UL) || n > 4294967295UL) return 0;
+    unsafe {
+        void* py = (void*)y.dev;
+        void* pt = (void*)t.dev;
+        void* pd = (void*)dy.dev;
+        void* pl = (void*)loss1.dev;
+        unsigned int nn = (unsigned int)n;
+        void* params[5];
+        params[0] = (void*)&py; params[1] = (void*)&pt; params[2] = (void*)&pd;
+        params[3] = (void*)&pl; params[4] = (void*)&nn;
+        return cuda_reduce_launch_(cuda_k16_(K_MSE_F16, y.dtype), n, loss1.dev, (&void)&params[0]);
+    }
+}
+
+int cuda_half_sgd(struct CudaHalfBuf w, struct CudaHalfBuf g, float lr) {
+    unsigned long n = w.len;
+    if (!cuda_ensure_() || !cuda_half_ok_(w, n) || !cuda_half_ok_(g, n) || w.dtype != g.dtype ||
+        n > 4294967295UL) return 0;
+    return cuda_sgd_raw_(w.dtype == CUDA_BF16 ? K_SGD_BF16 : K_SGD_F16, w.dev, g.dev, lr, n);
+}
+
+int cuda_half_sgd2(struct CudaHalfBuf w1, struct CudaHalfBuf g1, struct CudaHalfBuf w2, struct CudaHalfBuf g2,
+                   float lr) {
+    unsigned long n1 = w1.len;
+    unsigned long n2 = w2.len;
+    if (!cuda_ensure_() || !cuda_half_ok_(w1, n1) || !cuda_half_ok_(g1, n1) || !cuda_half_ok_(w2, n2) ||
+        !cuda_half_ok_(g2, n2) || w1.dtype != g1.dtype || w1.dtype != w2.dtype || w1.dtype != g2.dtype ||
+        n1 + n2 > 4294967295UL) return 0;
+    unsafe {
+        void* pw1 = (void*)w1.dev;
+        void* pg1 = (void*)g1.dev;
+        void* pw2 = (void*)w2.dev;
+        void* pg2 = (void*)g2.dev;
+        unsigned int nn1 = (unsigned int)n1;
+        unsigned int nn2 = (unsigned int)n2;
+        float rate = lr;
+        void* params[7];
+        params[0] = (void*)&pw1; params[1] = (void*)&pg1; params[2] = (void*)&nn1;
+        params[3] = (void*)&pw2; params[4] = (void*)&pg2; params[5] = (void*)&nn2;
+        params[6] = (void*)&rate;
+        return cuda_launch_(cuda_k16_(K_SGD2_F16, w1.dtype), n1 + n2, (&void)&params[0]);
+    }
 }
 
 } // namespace std
