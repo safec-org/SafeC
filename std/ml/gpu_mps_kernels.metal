@@ -87,15 +87,7 @@ kernel void scale_kernel(device const float* a [[buffer(0)]],
 // memory. GELU here is the same tanh approximation as
 // std::tensor_gelu_fwd (activations.sc) -- bit-identical formula, GPU
 // float32 math instead of CPU, verified against it directly.
-kernel void gated_gelu_kernel(device const float* raw [[buffer(0)]],
-                               constant uint& intermediateSize [[buffer(1)]],
-                               device float* out [[buffer(2)]],
-                               uint id [[thread_position_in_grid]]) {
-    uint col = id % intermediateSize;
-    uint row = id / intermediateSize;
-    uint base = row * (2u * intermediateSize);
-    float x = raw[base + col];
-    float up = raw[base + intermediateSize + col];
+static inline float gelu_tanh(float x) {
     float c = 0.7978845608028654f; // sqrt(2/pi)
     float inner = c * (x + 0.044715f * x * x * x);
     // Clamp before tanh: this GPU's tanh() overflows to NaN (instead of
@@ -106,10 +98,32 @@ kernel void gated_gelu_kernel(device const float* raw [[buffer(0)]],
     // this hardware/Metal build). tanh(20) already rounds to exactly
     // 1.0f in float32, so clamping to +-20 changes nothing for any input
     // this would otherwise get right, and fixes every input it wouldn't.
-    if (inner > 20.0f) { inner = 20.0f; }
-    else if (inner < -20.0f) { inner = -20.0f; }
-    float ga = 0.5f * x * (1.0f + tanh(inner));
-    out[id] = ga * up;
+    inner = clamp(inner, -20.0f, 20.0f);
+    return 0.5f * x * (1.0f + tanh(inner));
+}
+
+kernel void gated_gelu_kernel(device const float* raw [[buffer(0)]],
+                               constant uint& intermediateSize [[buffer(1)]],
+                               device float* out [[buffer(2)]],
+                               uint id [[thread_position_in_grid]]) {
+    uint col = id % intermediateSize;
+    uint row = id / intermediateSize;
+    uint base = row * (2u * intermediateSize);
+    out[id] = gelu_tanh(raw[base + col]) * raw[base + intermediateSize + col];
+}
+
+// bf16 storage variant of gated_gelu_kernel above -- same [gate | up] row
+// layout, GELU math widened to float32.
+kernel void gated_gelu_kernel_bf16(device const bfloat* raw [[buffer(0)]],
+                                     constant uint& intermediateSize [[buffer(1)]],
+                                     device bfloat* out [[buffer(2)]],
+                                     uint id [[thread_position_in_grid]]) {
+    uint col = id % intermediateSize;
+    uint row = id / intermediateSize;
+    uint base = row * (2u * intermediateSize);
+    float x = float(raw[base + col]);
+    float up = float(raw[base + intermediateSize + col]);
+    out[id] = bfloat(gelu_tanh(x) * up);
 }
 
 // Two-stage parallel reduction. This used to be a single GPU thread
@@ -754,6 +768,63 @@ kernel void scale_kernel_bf16(device const bfloat* a [[buffer(0)]],
     out[id] = bfloat(float(a[id]) * k);
 }
 
+// out[i] = a[i] + b[i] with BOTH operands device buffers (sub_kernel_bf16's
+// host wrapper uploads its second operand from a CPU array instead) -- for
+// residual connections whose operands are both still-pending chained ops.
+kernel void add_kernel_bf16(device const bfloat* a [[buffer(0)]],
+                              device const bfloat* b [[buffer(1)]],
+                              device bfloat* out [[buffer(2)]],
+                              uint id [[thread_position_in_grid]]) {
+    out[id] = a[id] + b[id];
+}
+
+// out[i] = gelu(a[i]) * b[i] -- gated_gelu_kernel_bf16 with the gate and
+// up operands in two separate buffers rather than one [gate | up] row.
+kernel void gelu_mul_kernel_bf16(device const bfloat* a [[buffer(0)]],
+                                   device const bfloat* b [[buffer(1)]],
+                                   device bfloat* out [[buffer(2)]],
+                                   uint id [[thread_position_in_grid]]) {
+    out[id] = bfloat(gelu_tanh(float(a[id])) * float(b[id]));
+}
+
+// Row-wise RMSNorm: out[row,c] = x[row,c] * weight[c] / sqrt(mean(x[row,:]^2)
+// + eps). One RMSNORM_TG-thread threadgroup per row: every thread strides
+// over the row accumulating a partial sum of squares, simd_sum folds each
+// simdgroup's partials, and a second simd_sum over the per-simdgroup
+// totals (staged through threadgroup memory) gives the row total -- same
+// two-level shape as sum_kernel above, without its second dispatch since
+// a row always fits one threadgroup. An earlier one-simdgroup-per-row
+// version left most of the GPU idle and ran ~3-5x slower at hidden sizes
+// 1536-2560. Dispatch MUST use RMSNORM_TG threads per threadgroup, 'rows'
+// threadgroups -- see gpu_mps.sc's mps_rmsnorm_bf16_chained.
+#define RMSNORM_TG 256
+kernel void rmsnorm_kernel_bf16(device const bfloat* x [[buffer(0)]],
+                                  device const bfloat* weight [[buffer(1)]],
+                                  device bfloat* out [[buffer(2)]],
+                                  constant uint& cols [[buffer(3)]],
+                                  constant float& eps [[buffer(4)]],
+                                  uint row [[threadgroup_position_in_grid]],
+                                  uint tid [[thread_position_in_threadgroup]],
+                                  uint sgid [[simdgroup_index_in_threadgroup]],
+                                  uint lane [[thread_index_in_simdgroup]]) {
+    threadgroup float sgSums[RMSNORM_TG / 32];
+    device const bfloat* xRow = x + (ulong)row * (ulong)cols;
+    device bfloat* outRow = out + (ulong)row * (ulong)cols;
+    float partial = 0.0f;
+    for (uint c = tid; c < cols; c += RMSNORM_TG) {
+        float v = float(xRow[c]);
+        partial += v * v;
+    }
+    partial = simd_sum(partial);
+    if (lane == 0) { sgSums[sgid] = partial; }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float sumSq = simd_sum(lane < RMSNORM_TG / 32 ? sgSums[lane] : 0.0f);
+    float invRms = rsqrt(sumSq / float(cols) + eps);
+    for (uint c = tid; c < cols; c += RMSNORM_TG) {
+        outRow[c] = bfloat(float(xRow[c]) * invRms * float(weight[c]));
+    }
+}
+
 // dA[M,K] = dC[M,N] . B^T[N,K], B stored [K,N] -- see matmul_abt_kernel's
 // comment for the shape/transpose reasoning; same tiling here, half/
 // bfloat storage, float accumulation.
@@ -818,6 +889,53 @@ kernel void matmul_abt_kernel_bf16(device const bfloat* a [[buffer(0)]],
     }
     if (row < M && col < K) {
         out[row * K + col] = bfloat(acc);
+    }
+}
+
+// A single-simdgroup simdgroup_matrix bf16 variant of matmul_abt_kernel_bf16
+// was tried and reverted: at decode-step shapes (M tiny next to N/K) these
+// matmuls are bandwidth-bound, and without threadgroup-memory tiling it
+// measured ~13% slower than the tiled kernel above. Porting the f32
+// "_multi" tier's tiling+simdgroup_matrix combination is the real next
+// step if revisited.
+
+// dA[1,K] = a[1,N] . B^T, B stored [K,N] -- the M==1 (matrix-vector) case
+// of matmul_abt_kernel_bf16, where the 16x16 tiled kernel computes and
+// discards 15 of every 16 rows. One simdgroup per output element: lanes
+// stride over N reading 4 bf16 at a time (one 8-byte load per lane, 256
+// contiguous bytes per simdgroup step) and simd_sum folds the partials; no
+// threadgroup memory or barriers, since an M==1 tile has nothing to share.
+// The op is bound by reading the K*N weights once -- the wide loads
+// measured ~8-20% faster than one bf16 per lane on an M1 Pro, while
+// several rows per simdgroup measured no better than one. The bfloat4
+// path needs N % 4 == 0 (8-byte-aligned rows); other N use scalar loads.
+#define GEMV_SIMDGROUPS 4
+kernel void matmul_abt_kernel_bf16_gemv(device const bfloat* a [[buffer(0)]],
+                                          device const bfloat* b [[buffer(1)]],
+                                          device bfloat* out [[buffer(2)]],
+                                          constant uint& N [[buffer(3)]],
+                                          constant uint& K [[buffer(4)]],
+                                          uint tgid [[threadgroup_position_in_grid]],
+                                          uint sgid [[simdgroup_index_in_threadgroup]],
+                                          uint lane [[thread_index_in_simdgroup]]) {
+    uint k = tgid * GEMV_SIMDGROUPS + sgid;
+    if (k >= K) { return; }
+    device const bfloat* brow = b + (ulong)k * (ulong)N;
+    float partial = 0.0f;
+    if ((N & 3u) == 0u) {
+        device const bfloat4* a4 = (device const bfloat4*)a;
+        device const bfloat4* b4 = (device const bfloat4*)brow;
+        for (uint i = lane; i < (N >> 2); i += 32) {
+            partial += dot(float4(a4[i]), float4(b4[i]));
+        }
+    } else {
+        for (uint n = lane; n < N; n += 32) {
+            partial += float(a[n]) * float(brow[n]);
+        }
+    }
+    float total = simd_sum(partial);
+    if (lane == 0) {
+        out[k] = bfloat(total);
     }
 }
 
@@ -919,3 +1037,375 @@ kernel void sgd_update_kernel_bf16(device bfloat* w [[buffer(0)]],
                                     uint id [[thread_position_in_grid]]) {
     w[id] = bfloat(float(w[id]) - lr * float(grad[id]));
 }
+
+// ── Batched multi-head attention (bf16), decode-step shape ─────────────────
+// One new query token per sequence against that sequence's K/V history:
+// out[b,h,:] = softmax(q[b,h,:] . K[b,0:len,kvHead,:]^T) . V[b,0:len,kvHead,:]
+// (no 1/sqrt(headDim) factor -- callers fold any scaling into q), with
+// grouped-query heads (kvHead = h / (numHeads/numKvHeads)) and an optional
+// sliding window. 'cacheLens[b]' is the post-append KV length, so the query
+// sits at position len-1 and causal masking never excludes anything; only
+// the window can, and its masked prefix is skipped rather than visited.
+// 'kAll'/'vAll' are contiguous [batchSize, maxKvLen, numKvHeads*headDim].
+//
+// One threadgroup of ATTN_SIMDGROUPS(D) simdgroups per (batch, head). Each
+// simdgroup walks every ATTN_SIMDGROUPS(D)-th key with an online softmax
+// (running max/sum, accumulator rescaled as the max grows), so there is no
+// per-key scores array and no bound on the KV length. Lane i owns head-dim
+// elements [i*D/32, (i+1)*D/32) of q and of the accumulator in registers --
+// contiguous, so each K/V row read is one wide load per lane -- and the
+// simdgroups' partial (max, sum, acc) results are merged through
+// threadgroup memory at the end. D is a template parameter so those
+// per-lane arrays have a compile-time size and stay in registers (a
+// runtime-headDim version with predicated loops ran 3-5x slower), and the
+// simdgroup count scales inversely with D so the merge buffer is always
+// 16KB: more simdgroups -- more keys in flight -- for narrower heads.
+// Instantiated for headDim 64/128/256/512; gpu_mps.sc refuses others.
+#define ATTN_SIMDGROUPS(D) (4096u / (D) < 32u ? 4096u / (D) : 32u)
+
+template <uint D>
+kernel void attn_batch_bf16_kernel(device const bfloat* q          [[buffer(0)]],
+                                    device const bfloat* kAll       [[buffer(1)]],
+                                    device const bfloat* vAll       [[buffer(2)]],
+                                    device const uint* cacheLens    [[buffer(3)]],
+                                    device bfloat* out              [[buffer(4)]],
+                                    constant uint& numHeads         [[buffer(5)]],
+                                    constant uint& numKvHeads       [[buffer(6)]],
+                                    constant uint& maxKvLen         [[buffer(7)]],
+                                    constant uint& isSliding        [[buffer(8)]],
+                                    constant uint& slidingWindow    [[buffer(9)]],
+                                    uint2 tg [[threadgroup_position_in_grid]],
+                                    uint tid [[thread_index_in_threadgroup]],
+                                    uint sgid [[simdgroup_index_in_threadgroup]],
+                                    uint lane [[thread_index_in_simdgroup]]) {
+    constexpr uint SG = ATTN_SIMDGROUPS(D);
+    constexpr uint DPL = D / 32;
+    threadgroup float sgMax[SG];
+    threadgroup float sgSum[SG];
+    threadgroup float sgAcc[SG][D];
+
+    // The grid is exactly batchSize x numHeads threadgroups, so (b, h) is
+    // always in range -- no early return ahead of the barrier below.
+    uint b = tg.x;
+    uint h = tg.y;
+    uint kvHead = h / (numHeads / numKvHeads);
+    uint kvLen = min(cacheLens[b], maxKvLen);
+    uint jStart = (isSliding != 0u && kvLen > slidingWindow) ? kvLen - slidingWindow : 0u;
+
+    ulong kvRowStride = (ulong)numKvHeads * D;
+    ulong kvOffset = (ulong)b * maxKvLen * kvRowStride + (ulong)kvHead * D + lane * DPL;
+    device const bfloat* kBase = kAll + kvOffset;
+    device const bfloat* vBase = vAll + kvOffset;
+    device const bfloat* qRow = q + ((ulong)b * numHeads + h) * D + lane * DPL;
+
+    float qr[DPL];
+    float acc[DPL];
+    for (uint i = 0; i < DPL; i++) { qr[i] = float(qRow[i]); acc[i] = 0.0f; }
+
+    float m = -INFINITY;
+    float l = 0.0f;
+    for (uint j = jStart + sgid; j < kvLen; j += SG) {
+        device const bfloat* kRow = kBase + (ulong)j * kvRowStride;
+        float s = 0.0f;
+        for (uint i = 0; i < DPL; i++) { s += qr[i] * float(kRow[i]); }
+        s = simd_sum(s);
+        float mNew = max(m, s);
+        float corr = exp(m - mNew);
+        float p = exp(s - mNew);
+        l = l * corr + p;
+        m = mNew;
+        device const bfloat* vRow = vBase + (ulong)j * kvRowStride;
+        for (uint i = 0; i < DPL; i++) { acc[i] = acc[i] * corr + p * float(vRow[i]); }
+    }
+
+    if (lane == 0) { sgMax[sgid] = m; sgSum[sgid] = l; }
+    for (uint i = 0; i < DPL; i++) { sgAcc[sgid][lane * DPL + i] = acc[i]; }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // A simdgroup that saw no keys has max -inf, sum 0, acc 0 and drops out
+    // of the merge; if none saw any (empty or fully-masked window), the
+    // output is zeros.
+    float mAll = -INFINITY;
+    for (uint s = 0; s < SG; s++) { mAll = max(mAll, sgMax[s]); }
+    float w[SG];
+    float lAll = 0.0f;
+    for (uint s = 0; s < SG; s++) {
+        w[s] = sgMax[s] == -INFINITY ? 0.0f : exp(sgMax[s] - mAll);
+        lAll += w[s] * sgSum[s];
+    }
+    float invL = lAll > 0.0f ? 1.0f / lAll : 0.0f;
+    device bfloat* outRow = out + ((ulong)b * numHeads + h) * D;
+    for (uint d = tid; d < D; d += SG * 32u) {
+        float o = 0.0f;
+        for (uint s = 0; s < SG; s++) { o += w[s] * sgAcc[s][d]; }
+        outRow[d] = bfloat(o * invL);
+    }
+}
+
+#define ATTN_INSTANTIATE(D)                                                                    \
+    template [[host_name("attn_batch_bf16_kernel_d" #D)]] kernel void attn_batch_bf16_kernel<D>( \
+        device const bfloat*, device const bfloat*, device const bfloat*, device const uint*,  \
+        device bfloat*, constant uint&, constant uint&, constant uint&, constant uint&,        \
+        constant uint&, uint2, uint, uint, uint);
+ATTN_INSTANTIATE(64)
+ATTN_INSTANTIATE(128)
+ATTN_INSTANTIATE(256)
+ATTN_INSTANTIATE(512)
+
+// ── Flash attention (bf16), multi-query ─────────────────────────────────────
+// GPU counterpart of std::flash_attention_forward (attention.sc), multi-head
+// and for any number of query rows (a prefill), where attn_batch_bf16_kernel
+// above handles exactly one query per sequence:
+//   out[i,h,:] = softmax(scale * q[i,h,:] . K[0:kvLen,kvHead,:]^T) . V
+// q/out are [seqLen, numHeads*D], k/v are [kvLen, numKvHeads*D]. With
+// 'causal', query i sits at position kvLen-seqLen+i (the last seqLen keys
+// are the queries' own tokens, any before them a cache) and sees keys at
+// or before it; 'isSliding' additionally hides keys 'slidingWindow' or
+// more positions behind it.
+//
+// One FLASH_BQ-simdgroup threadgroup per (block of FLASH_BQ query rows,
+// head), one query row per simdgroup with lane i owning head-dim elements
+// [i*D/32, (i+1)*D/32) as in attn_batch_bf16_kernel. The threadgroup walks
+// the K/V rows its queries can see in tiles of FLASH_BK(D), staging each
+// tile in threadgroup memory once for all FLASH_BQ queries (the flash-
+// attention reuse), then every simdgroup scores the tile -- lane jj keeps
+// key jj's score -- and folds it into its running max/sum/accumulator
+// with one rescale per tile rather than per key. The [seqLen, kvLen]
+// score matrix never exists. FLASH_BK(D) keeps the K+V tiles at 16KB.
+// Instantiated for D = 64/128/256/512; gpu_mps.sc refuses others.
+#define FLASH_BQ 16
+#define FLASH_BK(D) (4096u / (D) < 32u ? 4096u / (D) : 32u)
+
+template <uint D>
+kernel void flash_attn_bf16_kernel(device const bfloat* q        [[buffer(0)]],
+                                    device const bfloat* k        [[buffer(1)]],
+                                    device const bfloat* v        [[buffer(2)]],
+                                    device bfloat* out            [[buffer(3)]],
+                                    constant uint& seqLen         [[buffer(4)]],
+                                    constant uint& kvLen          [[buffer(5)]],
+                                    constant uint& numHeads       [[buffer(6)]],
+                                    constant uint& numKvHeads     [[buffer(7)]],
+                                    constant uint& causal         [[buffer(8)]],
+                                    constant uint& isSliding      [[buffer(9)]],
+                                    constant uint& slidingWindow  [[buffer(10)]],
+                                    constant float& scale         [[buffer(11)]],
+                                    uint2 tg [[threadgroup_position_in_grid]],
+                                    uint tid [[thread_index_in_threadgroup]],
+                                    uint sgid [[simdgroup_index_in_threadgroup]],
+                                    uint lane [[thread_index_in_simdgroup]]) {
+    constexpr uint DPL = D / 32;
+    constexpr uint BK = FLASH_BK(D);
+    threadgroup bfloat kTile[BK * D];
+    threadgroup bfloat vTile[BK * D];
+
+    uint h = tg.y;
+    uint kvHead = h / (numHeads / numKvHeads);
+    uint q0 = tg.x * FLASH_BQ;
+    uint qi = q0 + sgid;
+    bool active = qi < seqLen;
+    uint posOff = kvLen - seqLen; // the host requires kvLen >= seqLen when masking
+    int qPos = int(qi + posOff);
+
+    ulong qStride = (ulong)numHeads * D;
+    ulong kvStride = (ulong)numKvHeads * D;
+    float qr[DPL];
+    float acc[DPL];
+    for (uint i = 0; i < DPL; i++) {
+        qr[i] = active ? float(q[qi * qStride + h * D + lane * DPL + i]) * scale : 0.0f;
+        acc[i] = 0.0f;
+    }
+
+    // Key range any query in this block can see -- tiles outside it are
+    // never loaded.
+    uint lastQ = min(q0 + FLASH_BQ, seqLen) - 1u;
+    uint kvEnd = causal != 0u ? min(kvLen, lastQ + posOff + 1u) : kvLen;
+    uint kvBegin = (isSliding != 0u && q0 + posOff + 1u > slidingWindow) ? q0 + posOff + 1u - slidingWindow : 0u;
+
+    float m = -INFINITY;
+    float l = 0.0f;
+    for (uint t = kvBegin; t < kvEnd; t += BK) {
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint e = tid; e < BK * D; e += FLASH_BQ * 32u) {
+            uint j = t + e / D;
+            ulong src = (ulong)j * kvStride + kvHead * D + e % D;
+            kTile[e] = j < kvEnd ? k[src] : bfloat(0.0f);
+            vTile[e] = j < kvEnd ? v[src] : bfloat(0.0f);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (!active) { continue; }
+
+        float mine = -INFINITY;
+        for (uint jj = 0; jj < BK; jj++) {
+            float s = 0.0f;
+            for (uint i = 0; i < DPL; i++) { s += qr[i] * float(kTile[jj * D + lane * DPL + i]); }
+            s = simd_sum(s);
+            int dist = qPos - int(t + jj);
+            bool visible = t + jj < kvEnd && !(causal != 0u && dist < 0) &&
+                           !(isSliding != 0u && dist >= int(slidingWindow));
+            if (lane == jj) { mine = visible ? s : -INFINITY; }
+        }
+        float tileMax = simd_max(mine);
+        if (tileMax == -INFINITY) { continue; }
+        float mNew = max(m, tileMax);
+        float corr = exp(m - mNew);
+        float p = exp(mine - mNew);
+        l = l * corr + simd_sum(p);
+        m = mNew;
+        for (uint i = 0; i < DPL; i++) { acc[i] *= corr; }
+        for (uint jj = 0; jj < BK; jj++) {
+            float pj = simd_shuffle(p, (ushort)jj);
+            for (uint i = 0; i < DPL; i++) { acc[i] += pj * float(vTile[jj * D + lane * DPL + i]); }
+        }
+    }
+
+    if (active) {
+        float invL = l > 0.0f ? 1.0f / l : 0.0f;
+        device bfloat* outRow = out + qi * qStride + h * D + lane * DPL;
+        for (uint i = 0; i < DPL; i++) { outRow[i] = bfloat(acc[i] * invL); }
+    }
+}
+
+#define FLASH_INSTANTIATE(D)                                                                  \
+    template [[host_name("flash_attn_bf16_kernel_d" #D)]] kernel void flash_attn_bf16_kernel<D>( \
+        device const bfloat*, device const bfloat*, device const bfloat*, device bfloat*,     \
+        constant uint&, constant uint&, constant uint&, constant uint&, constant uint&,       \
+        constant uint&, constant uint&, constant float&, uint2, uint, uint, uint);
+FLASH_INSTANTIATE(64)
+FLASH_INSTANTIATE(128)
+FLASH_INSTANTIATE(256)
+FLASH_INSTANTIATE(512)
+
+// ── Linear attention (bf16) ─────────────────────────────────────────────────
+// GPU counterpart of std::linear_attention_forward (attention.sc), multi-
+// head, with feature map phi(x) = elu(x)+1:
+//   out_i = phi(q_i) . S / phi(q_i) . z,  S = sum_j phi(k_j) (x) v_j,
+//                                         z = sum_j phi(k_j)
+// summed over every key (non-causal, as on the CPU) or, with 'causal',
+// over keys 0..i only -- the recurrent form, where S/z are a running state
+// a decode step extends by one token. q/out are [seqLen, numHeads*D], k/v
+// [kvLen, numKvHeads*D] (kvLen == seqLen when causal).
+//
+// With 'hasState', S/z start from 'state' and the final values are written
+// back, so a sequence can be fed in pieces (prefill, then one token per
+// decode step) with the state staying on the GPU. Every simdgroup of a
+// head reads z but none owns it, so this kernel writes back only its own
+// S columns and linear_attn_z_update_bf16 below, dispatched after it,
+// advances z. Layout per query head h:
+// S^T as [D][D] floats (row d2 = column d2 of S) then z as [D] floats --
+// see gpu_mps.h's mps_linear_attn_state_bytes. State is per query head,
+// not per KV head, so GQA heads sharing K/V never write the same state.
+//
+// One simdgroup per (head, block of LIN_COLS(D) output columns): lane i
+// keeps rows [i*D/32, (i+1)*D/32) of those columns of S, plus that slice
+// of z, in registers, and the numerators/denominator fold with simd_sum.
+// Tokens run sequentially inside a simdgroup; the parallelism is across
+// numHeads*D/LIN_COLS(D) simdgroups. LIN_COLS(D) = 512/D bounds the
+// per-lane state at 16 floats.
+#define LIN_SG 4
+#define LIN_COLS(D) (512u / (D))
+
+static inline float phi_elu_p1(float x) { return x > 0.0f ? x + 1.0f : exp(x); }
+
+template <uint D>
+kernel void linear_attn_bf16_kernel(device const bfloat* q      [[buffer(0)]],
+                                     device const bfloat* k      [[buffer(1)]],
+                                     device const bfloat* v      [[buffer(2)]],
+                                     device bfloat* out          [[buffer(3)]],
+                                     device float* state         [[buffer(4)]],
+                                     constant uint& seqLen       [[buffer(5)]],
+                                     constant uint& kvLen        [[buffer(6)]],
+                                     constant uint& numHeads     [[buffer(7)]],
+                                     constant uint& numKvHeads   [[buffer(8)]],
+                                     constant uint& causal       [[buffer(9)]],
+                                     constant uint& hasState     [[buffer(10)]],
+                                     uint tgid [[threadgroup_position_in_grid]],
+                                     uint sgid [[simdgroup_index_in_threadgroup]],
+                                     uint lane [[thread_index_in_simdgroup]]) {
+    constexpr uint DPL = D / 32;
+    constexpr uint COLS = LIN_COLS(D);
+    constexpr uint GROUPS_PER_HEAD = D / COLS;
+    uint g = tgid * LIN_SG + sgid;
+    if (g >= numHeads * GROUPS_PER_HEAD) { return; }
+    uint h = g / GROUPS_PER_HEAD;
+    uint c0 = (g % GROUPS_PER_HEAD) * COLS;
+    uint kvHead = h / (numHeads / numKvHeads);
+    ulong qStride = (ulong)numHeads * D;
+    ulong kvStride = (ulong)numKvHeads * D;
+    uint d1 = lane * DPL;
+
+    device float* st = state + (ulong)h * (D * D + D);
+    float S[COLS][DPL];
+    float z[DPL];
+    for (uint i = 0; i < DPL; i++) {
+        z[i] = hasState != 0u ? st[D * D + d1 + i] : 0.0f;
+        for (uint c = 0; c < COLS; c++) { S[c][i] = hasState != 0u ? st[(c0 + c) * D + d1 + i] : 0.0f; }
+    }
+
+    uint nAccum = causal != 0u ? seqLen : kvLen;
+    uint j = 0;
+    for (uint step = 0; step < nAccum + seqLen; step++) {
+        // Causal interleaves (absorb key t, emit query t); non-causal
+        // absorbs every key first, then emits every query.
+        bool absorb = causal != 0u ? (step & 1u) == 0u : step < kvLen;
+        if (causal != 0u) { j = step >> 1; } else { j = absorb ? step : step - kvLen; }
+        if (absorb) {
+            device const bfloat* kRow = k + (ulong)j * kvStride + kvHead * D + d1;
+            device const bfloat* vRow = v + (ulong)j * kvStride + kvHead * D + c0;
+            float pk[DPL];
+            for (uint i = 0; i < DPL; i++) { pk[i] = phi_elu_p1(float(kRow[i])); z[i] += pk[i]; }
+            for (uint c = 0; c < COLS; c++) {
+                float vc = float(vRow[c]);
+                for (uint i = 0; i < DPL; i++) { S[c][i] += pk[i] * vc; }
+            }
+        } else {
+            device const bfloat* qRow = q + (ulong)j * qStride + h * D + d1;
+            float pq[DPL];
+            float den = 0.0f;
+            for (uint i = 0; i < DPL; i++) { pq[i] = phi_elu_p1(float(qRow[i])); den += pq[i] * z[i]; }
+            den = simd_sum(den);
+            float invDen = den > 0.0f ? 1.0f / den : 0.0f;
+            for (uint c = 0; c < COLS; c++) {
+                float num = 0.0f;
+                for (uint i = 0; i < DPL; i++) { num += pq[i] * S[c][i]; }
+                num = simd_sum(num);
+                if (lane == 0) { out[(ulong)j * qStride + h * D + c0 + c] = bfloat(num * invDen); }
+            }
+        }
+    }
+
+    if (hasState != 0u) {
+        for (uint i = 0; i < DPL; i++) {
+            for (uint c = 0; c < COLS; c++) { st[(c0 + c) * D + d1 + i] = S[c][i]; }
+        }
+    }
+}
+
+// z[h,d] += sum_j phi(k[j,kvHead,d]) over 'kvLen' keys -- the z half of
+// linear_attn_bf16_kernel's state update (see its comment). One thread per
+// (head, d).
+kernel void linear_attn_z_update_bf16(device const bfloat* k    [[buffer(0)]],
+                                       device float* state      [[buffer(1)]],
+                                       constant uint& kvLen     [[buffer(2)]],
+                                       constant uint& numHeads  [[buffer(3)]],
+                                       constant uint& numKvHeads [[buffer(4)]],
+                                       constant uint& headDim   [[buffer(5)]],
+                                       uint id [[thread_position_in_grid]]) {
+    if (id >= numHeads * headDim) { return; }
+    uint h = id / headDim;
+    uint d = id % headDim;
+    uint kvHead = h / (numHeads / numKvHeads);
+    ulong kvStride = (ulong)numKvHeads * headDim;
+    float acc = 0.0f;
+    for (uint j = 0; j < kvLen; j++) { acc += phi_elu_p1(float(k[(ulong)j * kvStride + kvHead * headDim + d])); }
+    state[(ulong)h * (headDim * headDim + headDim) + headDim * headDim + d] += acc;
+}
+
+#define LINEAR_INSTANTIATE(D)                                                                   \
+    template [[host_name("linear_attn_bf16_kernel_d" #D)]] kernel void linear_attn_bf16_kernel<D>( \
+        device const bfloat*, device const bfloat*, device const bfloat*, device bfloat*,       \
+        device float*, constant uint&, constant uint&, constant uint&, constant uint&,          \
+        constant uint&, constant uint&, uint, uint, uint);
+LINEAR_INSTANTIATE(64)
+LINEAR_INSTANTIATE(128)
+LINEAR_INSTANTIATE(256)
+LINEAR_INSTANTIATE(512)
