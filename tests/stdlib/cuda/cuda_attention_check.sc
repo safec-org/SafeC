@@ -200,6 +200,9 @@ int main() {
         run_case(c ? "flash fp16 D96 causal" : "flash fp16 D96", shape(1UL, 2UL, 2UL, 65UL, 65UL, 96UL), CUDA_FP16, c, 0, 4.0e-3);
         run_case(c ? "flash bf16 D256 (CUDA cores) causal" : "flash bf16 D256 (CUDA cores)", shape(1UL, 2UL, 1UL, 40UL, 40UL, 256UL), CUDA_BF16, c, 0, 2.5e-2);
         run_case(c ? "flash fp32 D32 causal" : "flash fp32 D32", shape(1UL, 3UL, 1UL, 33UL, 97UL, 32UL), 0, c, 0, 2.0e-5);
+        run_case(c ? "flash fp32 D256 (CUDA cores) causal" : "flash fp32 D256 (CUDA cores)", shape(1UL, 2UL, 1UL, 40UL, 72UL, 256UL), 0, c, 0, 2.0e-5);
+        run_case(c ? "linear fp32 D256 (sequential) causal" : "linear fp32 D256 (two-pass)", shape(1UL, 2UL, 2UL, 50UL, 90UL, 256UL), 0, c, 1, 2.0e-5);
+        run_case(c ? "linear bf16 D64 long causal" : "linear bf16 D64 long", shape(1UL, 2UL, 1UL, 300UL, 1000UL, 64UL), CUDA_BF16, c, 1, 2.5e-2);
         // Linear attention
         run_case(c ? "linear fp32 D64 GQA causal" : "linear fp32 D64 GQA", shape(2UL, 4UL, 2UL, 77UL, 77UL, 64UL), 0, c, 1, 2.0e-5);
         run_case(c ? "linear fp32 D96 kv-cache causal" : "linear fp32 D96 kv-cache", shape(1UL, 2UL, 2UL, 65UL, 130UL, 96UL), 0, c, 1, 2.0e-5);
