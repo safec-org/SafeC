@@ -255,7 +255,9 @@ static long alloc_size_class_(unsigned long size) {
     long idx = 0L;
     while (idx < (long)ALLOC_CACHE_NUM_CLASSES_) {
         if (size <= lo) { return idx; }
-        if (size <= lo + (lo >> 1UL)) { return idx + 1L; }
+        // The last class (32, 1MB) is even: there is no 1.5MB class 33, and
+        // allocCacheCount_[33] would read whatever TLS variable follows it.
+        if (idx + 1L < (long)ALLOC_CACHE_NUM_CLASSES_ && size <= lo + (lo >> 1UL)) { return idx + 1L; }
         lo = lo << 1UL;
         idx = idx + 2L;
     }
