@@ -85,7 +85,7 @@ inline void TlsTranscript::finish(unsigned char out[32]) {
     // Finish on a copy so the transcript can continue to be used.
     struct Sha256Ctx snap;
     unsafe { memcpy((void*)&snap, (const void*)&self.hash, (unsigned long)sizeof(struct Sha256Ctx)); }
-    snap.finish((unsigned char*)out);
+    snap.finish(out);
 }
 
 // ── tls_session_init ──────────────────────────────────────────────────────────
@@ -211,9 +211,9 @@ unsigned long TlsSession::encode_record(unsigned char content_type,
     }
 
     // Encrypt in-place
-    struct AesCtx aes = aes256_init((const unsigned char*)self.write_key);
-    aes.set_iv((const unsigned char*)iv16);
-    aes.cbc_encrypt((unsigned char*)inner, padded_len);
+    struct AesCtx aes = aes256_init(self.write_key);
+    aes.set_iv(iv16);
+    aes.cbc_encrypt(inner, padded_len);
 
     self.write_seq = self.write_seq + (unsigned long long)1;
 
@@ -301,11 +301,11 @@ unsigned long TlsSession::decode_record(const &unsigned char data_ref,
         }
     }
 
-    struct AesCtx aes = aes256_init((const unsigned char*)self.read_key);
-    aes.set_iv((const unsigned char*)iv16);
-    aes.cbc_decrypt((unsigned char*)plain, flen);
+    struct AesCtx aes = aes256_init(self.read_key);
+    aes.set_iv(iv16);
+    aes.cbc_decrypt(plain, flen);
 
-    unsigned long unpadded = pkcs7_unpad_((const unsigned char*)plain, flen,
+    unsigned long unpadded = pkcs7_unpad_(plain, flen,
                                            (unsigned long)16);
     if (unpadded == (unsigned long)0) { return (unsigned long)0; }
 
@@ -331,8 +331,6 @@ unsigned long TlsSession::build_alert(unsigned char level,
                                        unsigned char desc,
                                        &unsigned char out_ref,
                                        unsigned long out_cap) {
-    unsigned char* out;
-    unsafe { out = (unsigned char*)out_ref; }
     // Alert body: level (1 byte) + description (1 byte)
     unsigned char alert_body[2];
     unsafe {
@@ -340,9 +338,9 @@ unsigned long TlsSession::build_alert(unsigned char level,
         alert_body[1] = desc;
     }
     return self.encode_record((unsigned char)TLS_ALERT,
-                               (const unsigned char*)alert_body,
+                               alert_body,
                                (unsigned long)2,
-                               out, out_cap);
+                               out_ref, out_cap);
 }
 
 } // namespace std

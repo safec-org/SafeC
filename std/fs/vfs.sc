@@ -25,7 +25,8 @@ inline void vfs_init() {
 
 inline unsigned long VfsNode::read(unsigned long offset, &stack unsigned char buf, unsigned long len) {
     if (self.fs_ctx == (void*)0) { return (unsigned long)0; }
-    struct VfsMount* m = (struct VfsMount*)self.fs_ctx;
+    struct VfsMount* m;
+    unsafe { m = (struct VfsMount*)self.fs_ctx; }
     unsafe {
         if (m->ops.read == (void*)0) { return (unsigned long)0; }
         return m->ops.read(m->ctx, self.inode, offset, (unsigned char*)buf, len);
@@ -35,7 +36,8 @@ inline unsigned long VfsNode::read(unsigned long offset, &stack unsigned char bu
 
 inline unsigned long VfsNode::write(unsigned long offset, const &stack unsigned char buf, unsigned long len) {
     if (self.fs_ctx == (void*)0) { return (unsigned long)0; }
-    struct VfsMount* m = (struct VfsMount*)self.fs_ctx;
+    struct VfsMount* m;
+    unsafe { m = (struct VfsMount*)self.fs_ctx; }
     unsafe {
         if (m->ops.write == (void*)0) { return (unsigned long)0; }
         return m->ops.write(m->ctx, self.inode, offset, (const unsigned char*)buf, len);
@@ -45,7 +47,8 @@ inline unsigned long VfsNode::write(unsigned long offset, const &stack unsigned 
 
 inline int VfsNode::readdir_raw_(void* cb, void* user) {
     if (self.fs_ctx == (void*)0) { return -1; }
-    struct VfsMount* m = (struct VfsMount*)self.fs_ctx;
+    struct VfsMount* m;
+    unsafe { m = (struct VfsMount*)self.fs_ctx; }
     unsafe {
         if (m->ops.readdir == (void*)0) { return -1; }
         return m->ops.readdir(m->ctx, self.inode, cb, user);
@@ -57,7 +60,8 @@ inline int VfsNode::readdir_raw_(void* cb, void* user) {
 
 // Find the mount whose mountpoint is longest prefix of `path`.
 static struct VfsMount* vfs_find_mount_(struct Vfs* v, const char* path) {
-    struct VfsMount* best = (struct VfsMount*)0;
+    struct VfsMount* best;
+    unsafe { best = (struct VfsMount*)0; }
     unsigned long best_len = (unsigned long)0;
     int i = 0;
     unsafe {

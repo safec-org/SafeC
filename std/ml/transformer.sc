@@ -11,8 +11,8 @@ namespace std {
 extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
-static struct Tensor* __xf_init_weight(unsigned long rows, unsigned long cols, unsigned long seed) {
-    struct Tensor* t = tensor_new_2d(rows, cols, 0);
+static &Tensor __xf_init_weight(unsigned long rows, unsigned long cols, unsigned long seed) {
+    &Tensor t = tensor_new_2d(rows, cols, 0);
     unsafe {
         unsigned long i = 0UL;
         while (i < t->size) {
@@ -26,10 +26,10 @@ static struct Tensor* __xf_init_weight(unsigned long rows, unsigned long cols, u
     return t;
 }
 
-static struct Tensor* __add_broadcast_row(struct Tensor* mat, struct Tensor* row) {
+static &Tensor __add_broadcast_row(&Tensor mat, &Tensor row) {
     unsigned long rows; unsigned long cols;
     unsafe { rows = mat->shape[0]; cols = mat->shape[1]; }
-    struct Tensor* out = tensor_new_2d(rows, cols, 0);
+    &Tensor out = tensor_new_2d(rows, cols, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
@@ -41,10 +41,10 @@ static struct Tensor* __add_broadcast_row(struct Tensor* mat, struct Tensor* row
     return out;
 }
 
-static struct Tensor* __mul_broadcast_row(struct Tensor* mat, struct Tensor* row) {
+static &Tensor __mul_broadcast_row(&Tensor mat, &Tensor row) {
     unsigned long rows; unsigned long cols;
     unsafe { rows = mat->shape[0]; cols = mat->shape[1]; }
-    struct Tensor* out = tensor_new_2d(rows, cols, 0);
+    &Tensor out = tensor_new_2d(rows, cols, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
@@ -57,10 +57,10 @@ static struct Tensor* __mul_broadcast_row(struct Tensor* mat, struct Tensor* row
 }
 
 // mat * (1 + row), broadcast — the "scale" half of AdaLN modulation.
-static struct Tensor* __mul_broadcast_row_plus1(struct Tensor* mat, struct Tensor* row) {
+static &Tensor __mul_broadcast_row_plus1(&Tensor mat, &Tensor row) {
     unsigned long rows; unsigned long cols;
     unsafe { rows = mat->shape[0]; cols = mat->shape[1]; }
-    struct Tensor* out = tensor_new_2d(rows, cols, 0);
+    &Tensor out = tensor_new_2d(rows, cols, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
@@ -103,8 +103,8 @@ void dit_block_free(&DiTBlock block) {
 }
 
 &Tensor dit_block_forward(const &DiTBlock block, const &Tensor x, const &Tensor c) {
-    struct Tensor* Wq; struct Tensor* Wk; struct Tensor* Wv; struct Tensor* Wo;
-    struct Tensor* W1; struct Tensor* b1w; struct Tensor* W2; struct Tensor* b2w; struct Tensor* WadaLN;
+    &Tensor Wq; &Tensor Wk; &Tensor Wv; &Tensor Wo;
+    &Tensor W1; &Tensor b1w; &Tensor W2; &Tensor b2w; &Tensor WadaLN;
     unsigned long numHeads; unsigned long dModel;
     unsafe {
         Wq = block->Wq; Wk = block->Wk; Wv = block->Wv; Wo = block->Wo;
@@ -113,35 +113,35 @@ void dit_block_free(&DiTBlock block) {
         dModel = x->shape[1];
     }
 
-    struct Tensor* mod = tensor_matmul(c, WadaLN);
-    struct Tensor* shift1 = tensor_slice_cols(mod, 0UL, dModel);
-    struct Tensor* scale1 = tensor_slice_cols(mod, dModel, dModel);
-    struct Tensor* gate1 = tensor_slice_cols(mod, 2UL * dModel, dModel);
-    struct Tensor* shift2 = tensor_slice_cols(mod, 3UL * dModel, dModel);
-    struct Tensor* scale2 = tensor_slice_cols(mod, 4UL * dModel, dModel);
-    struct Tensor* gate2 = tensor_slice_cols(mod, 5UL * dModel, dModel);
+    &Tensor mod = tensor_matmul(c, WadaLN);
+    &Tensor shift1 = tensor_slice_cols(mod, 0UL, dModel);
+    &Tensor scale1 = tensor_slice_cols(mod, dModel, dModel);
+    &Tensor gate1 = tensor_slice_cols(mod, 2UL * dModel, dModel);
+    &Tensor shift2 = tensor_slice_cols(mod, 3UL * dModel, dModel);
+    &Tensor scale2 = tensor_slice_cols(mod, 4UL * dModel, dModel);
+    &Tensor gate2 = tensor_slice_cols(mod, 5UL * dModel, dModel);
 
-    struct Tensor* h = tensor_layernorm_rows(x, (float)1e-5);
-    struct Tensor* hScaled = __mul_broadcast_row_plus1(h, scale1);
-    struct Tensor* hMod = __add_broadcast_row(hScaled, shift1);
-    struct Tensor* Q = tensor_matmul(hMod, Wq);
-    struct Tensor* K = tensor_matmul(hMod, Wk);
-    struct Tensor* V = tensor_matmul(hMod, Wv);
-    struct Tensor* attnRaw = mha_forward(Q, K, V, numHeads);
-    struct Tensor* attnOut = tensor_matmul(attnRaw, Wo);
-    struct Tensor* gatedAttn = __mul_broadcast_row(attnOut, gate1);
-    struct Tensor* x1 = tensor_residual_add(x, gatedAttn);
+    &Tensor h = tensor_layernorm_rows(x, (float)1e-5);
+    &Tensor hScaled = __mul_broadcast_row_plus1(h, scale1);
+    &Tensor hMod = __add_broadcast_row(hScaled, shift1);
+    &Tensor Q = tensor_matmul(hMod, Wq);
+    &Tensor K = tensor_matmul(hMod, Wk);
+    &Tensor V = tensor_matmul(hMod, Wv);
+    &Tensor attnRaw = mha_forward(Q, K, V, numHeads);
+    &Tensor attnOut = tensor_matmul(attnRaw, Wo);
+    &Tensor gatedAttn = __mul_broadcast_row(attnOut, gate1);
+    &Tensor x1 = tensor_residual_add(x, gatedAttn);
 
-    struct Tensor* h2 = tensor_layernorm_rows(x1, (float)1e-5);
-    struct Tensor* h2Scaled = __mul_broadcast_row_plus1(h2, scale2);
-    struct Tensor* h2Mod = __add_broadcast_row(h2Scaled, shift2);
-    struct Tensor* ffnHiddenRaw = tensor_matmul(h2Mod, W1);
-    struct Tensor* ffnHiddenBias = __add_broadcast_row(ffnHiddenRaw, b1w);
-    struct Tensor* ffnHidden = tensor_relu_fwd(ffnHiddenBias);
-    struct Tensor* ffnOutRaw = tensor_matmul(ffnHidden, W2);
-    struct Tensor* ffnOut = __add_broadcast_row(ffnOutRaw, b2w);
-    struct Tensor* gatedFfn = __mul_broadcast_row(ffnOut, gate2);
-    struct Tensor* out = tensor_residual_add(x1, gatedFfn);
+    &Tensor h2 = tensor_layernorm_rows(x1, (float)1e-5);
+    &Tensor h2Scaled = __mul_broadcast_row_plus1(h2, scale2);
+    &Tensor h2Mod = __add_broadcast_row(h2Scaled, shift2);
+    &Tensor ffnHiddenRaw = tensor_matmul(h2Mod, W1);
+    &Tensor ffnHiddenBias = __add_broadcast_row(ffnHiddenRaw, b1w);
+    &Tensor ffnHidden = tensor_relu_fwd(ffnHiddenBias);
+    &Tensor ffnOutRaw = tensor_matmul(ffnHidden, W2);
+    &Tensor ffnOut = __add_broadcast_row(ffnOutRaw, b2w);
+    &Tensor gatedFfn = __mul_broadcast_row(ffnOut, gate2);
+    &Tensor out = tensor_residual_add(x1, gatedFfn);
 
     mod->free(); shift1->free(); scale1->free(); gate1->free(); shift2->free(); scale2->free(); gate2->free();
     h->free(); hScaled->free(); hMod->free(); Q->free(); K->free(); V->free();
@@ -185,8 +185,8 @@ void jit_block_free(&JiTBlock block) {
 }
 
 &Tensor jit_block_forward(const &JiTBlock block, const &Tensor x) {
-    struct Tensor* Wq; struct Tensor* Wk; struct Tensor* Wv; struct Tensor* Wo;
-    struct Tensor* W1; struct Tensor* b1w; struct Tensor* W2; struct Tensor* b2w;
+    &Tensor Wq; &Tensor Wk; &Tensor Wv; &Tensor Wo;
+    &Tensor W1; &Tensor b1w; &Tensor W2; &Tensor b2w;
     unsigned long numHeads;
     unsafe {
         Wq = block->Wq; Wk = block->Wk; Wv = block->Wv; Wo = block->Wo;
@@ -194,21 +194,21 @@ void jit_block_free(&JiTBlock block) {
         numHeads = block->numHeads;
     }
 
-    struct Tensor* h = tensor_layernorm_rows(x, (float)1e-5);
-    struct Tensor* Q = tensor_matmul(h, Wq);
-    struct Tensor* K = tensor_matmul(h, Wk);
-    struct Tensor* V = tensor_matmul(h, Wv);
-    struct Tensor* attnRaw = mha_forward(Q, K, V, numHeads);
-    struct Tensor* attnOut = tensor_matmul(attnRaw, Wo);
-    struct Tensor* x1 = tensor_residual_add(x, attnOut);
+    &Tensor h = tensor_layernorm_rows(x, (float)1e-5);
+    &Tensor Q = tensor_matmul(h, Wq);
+    &Tensor K = tensor_matmul(h, Wk);
+    &Tensor V = tensor_matmul(h, Wv);
+    &Tensor attnRaw = mha_forward(Q, K, V, numHeads);
+    &Tensor attnOut = tensor_matmul(attnRaw, Wo);
+    &Tensor x1 = tensor_residual_add(x, attnOut);
 
-    struct Tensor* h2 = tensor_layernorm_rows(x1, (float)1e-5);
-    struct Tensor* ffnHiddenRaw = tensor_matmul(h2, W1);
-    struct Tensor* ffnHiddenBias = __add_broadcast_row(ffnHiddenRaw, b1w);
-    struct Tensor* ffnHidden = tensor_relu_fwd(ffnHiddenBias);
-    struct Tensor* ffnOutRaw = tensor_matmul(ffnHidden, W2);
-    struct Tensor* ffnOut = __add_broadcast_row(ffnOutRaw, b2w);
-    struct Tensor* out = tensor_residual_add(x1, ffnOut);
+    &Tensor h2 = tensor_layernorm_rows(x1, (float)1e-5);
+    &Tensor ffnHiddenRaw = tensor_matmul(h2, W1);
+    &Tensor ffnHiddenBias = __add_broadcast_row(ffnHiddenRaw, b1w);
+    &Tensor ffnHidden = tensor_relu_fwd(ffnHiddenBias);
+    &Tensor ffnOutRaw = tensor_matmul(ffnHidden, W2);
+    &Tensor ffnOut = __add_broadcast_row(ffnOutRaw, b2w);
+    &Tensor out = tensor_residual_add(x1, ffnOut);
 
     h->free(); Q->free(); K->free(); V->free(); attnRaw->free(); attnOut->free(); x1->free();
     h2->free(); ffnHiddenRaw->free(); ffnHiddenBias->free(); ffnHidden->free(); ffnOutRaw->free(); ffnOut->free();
@@ -223,19 +223,21 @@ void jit_block_free(&JiTBlock block) {
 
 &Tensor jit_forward(const &Tensor patches, const &Tensor WPatchEmbed, const &Tensor cond,
                      struct JiTBlock* blocks, unsigned long numBlocks) {
-    struct Tensor* embedRaw = tensor_matmul(patches, WPatchEmbed);
-    struct Tensor* x = __add_broadcast_row(embedRaw, cond);
+    &Tensor embedRaw = tensor_matmul(patches, WPatchEmbed);
+    &Tensor x = __add_broadcast_row(embedRaw, cond);
     embedRaw->free();
     unsafe { free((void*)embedRaw); }
 
     unsigned long i = 0UL;
     while (i < numBlocks) {
-        struct JiTBlock* blk;
-        unsafe { blk = (struct JiTBlock*)&blocks[i]; }
-        struct Tensor* next = jit_block_forward(blk, x);
-        x->free();
-        unsafe { free((void*)x); }
-        x = next;
+        // 'blocks' is a raw array: reaching blocks[i] needs 'unsafe'.
+        unsafe {
+            &JiTBlock blk = (&JiTBlock)&blocks[i];
+            &Tensor next = jit_block_forward(blk, x);
+            x->free();
+            free((void*)x);
+            x = next;
+        }
         i = i + 1UL;
     }
     return x;

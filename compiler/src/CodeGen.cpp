@@ -722,10 +722,14 @@ llvm::Function *CodeGen::genFunctionProto(FunctionDecl &fn) {
                     if (!rt.nullable) {
                         llvmFn->addParamAttr(idx, llvm::Attribute::NonNull);
                     }
-                    // For safe references: add noalias if mutable (exclusive access)
-                    if (rt.mut) {
-                        llvmFn->addParamAttr(idx, llvm::Attribute::NoAlias);
-                    }
+                    // No 'noalias', even for a mutable reference: the borrow
+                    // checker keeps two *arguments* from aliasing, but the
+                    // callee can still reach the same object another way —
+                    // a global it writes directly ('f(&g)' where f also
+                    // assigns 'g'), or a reference stored in another
+                    // argument — and LLVM would then reorder or drop
+                    // those accesses. Type-based alias info (tbaaTag)
+                    // recovers most of what it bought, soundly.
                     // dereferenceable: we know the base type size statically
                     // (simplified — would need DataLayout for exact size)
                 }
@@ -2506,8 +2510,9 @@ llvm::Value *CodeGen::genUnary(UnaryExpr &e, FnEnv &env) {
         auto *ty = e.operand->type ? lowerType(e.operand->type) : llvm::Type::getInt32Ty(ctx_);
         bool vol = isVolatileLValue(*e.operand, env);
         auto *val = builder_.CreateLoad(ty, addr, vol);
+        tagAccess(val, e.operand->type, e.operand.get());
         llvm::Value *inc = stepByOne(val, ty, e.operand->type, 1);
-        builder_.CreateStore(inc, addr, vol);
+        tagAccess(builder_.CreateStore(inc, addr, vol), e.operand->type, e.operand.get());
         return inc;
     }
     case UnaryOp::PreDec: {
@@ -2515,8 +2520,9 @@ llvm::Value *CodeGen::genUnary(UnaryExpr &e, FnEnv &env) {
         auto *ty = e.operand->type ? lowerType(e.operand->type) : llvm::Type::getInt32Ty(ctx_);
         bool vol = isVolatileLValue(*e.operand, env);
         auto *val = builder_.CreateLoad(ty, addr, vol);
+        tagAccess(val, e.operand->type, e.operand.get());
         llvm::Value *dec = stepByOne(val, ty, e.operand->type, -1);
-        builder_.CreateStore(dec, addr, vol);
+        tagAccess(builder_.CreateStore(dec, addr, vol), e.operand->type, e.operand.get());
         return dec;
     }
     case UnaryOp::PostInc: {
@@ -2524,8 +2530,9 @@ llvm::Value *CodeGen::genUnary(UnaryExpr &e, FnEnv &env) {
         auto *ty = e.operand->type ? lowerType(e.operand->type) : llvm::Type::getInt32Ty(ctx_);
         bool vol = isVolatileLValue(*e.operand, env);
         auto *old = builder_.CreateLoad(ty, addr, vol, "old");
+        tagAccess(old, e.operand->type, e.operand.get());
         llvm::Value *inc = stepByOne(old, ty, e.operand->type, 1);
-        builder_.CreateStore(inc, addr, vol);
+        tagAccess(builder_.CreateStore(inc, addr, vol), e.operand->type, e.operand.get());
         return old;
     }
     case UnaryOp::PostDec: {
@@ -2533,8 +2540,9 @@ llvm::Value *CodeGen::genUnary(UnaryExpr &e, FnEnv &env) {
         auto *ty = e.operand->type ? lowerType(e.operand->type) : llvm::Type::getInt32Ty(ctx_);
         bool vol = isVolatileLValue(*e.operand, env);
         auto *old = builder_.CreateLoad(ty, addr, vol, "old");
+        tagAccess(old, e.operand->type, e.operand.get());
         llvm::Value *dec = stepByOne(old, ty, e.operand->type, -1);
-        builder_.CreateStore(dec, addr, vol);
+        tagAccess(builder_.CreateStore(dec, addr, vol), e.operand->type, e.operand.get());
         return old;
     }
     case UnaryOp::SizeofExpr: {
@@ -2564,7 +2572,9 @@ llvm::Value *CodeGen::genUnary(UnaryExpr &e, FnEnv &env) {
             innerTy = lowerType(static_cast<PointerType &>(*operandTy).base);
         else if (operandTy && operandTy->kind == TypeKind::Reference)
             innerTy = lowerType(static_cast<ReferenceType &>(*operandTy).base);
-        return builder_.CreateLoad(innerTy, ptrVal, pointeeIsVolatile(operandTy), "force_unwrap");
+        auto *ld = builder_.CreateLoad(innerTy, ptrVal, pointeeIsVolatile(operandTy), "force_unwrap");
+        tagAccess(ld, e.type, &e);
+        return ld;
     }
     default:
         return genExpr(*e.operand, env);
@@ -2588,7 +2598,9 @@ llvm::Value *CodeGen::genDeref(UnaryExpr &e, FnEnv &env, bool wantAddr) {
     auto *ptr = genExpr(*e.operand, env);
     if (wantAddr) return ptr; // already a pointer
     auto *baseTy = e.type ? lowerType(e.type) : llvm::Type::getInt32Ty(ctx_);
-    return builder_.CreateLoad(baseTy, ptr, pointeeIsVolatile(e.operand->type), "deref");
+    auto *ld = builder_.CreateLoad(baseTy, ptr, pointeeIsVolatile(e.operand->type), "deref");
+    tagAccess(ld, e.type, &e);
+    return ld;
 }
 
 // ── Binary ────────────────────────────────────────────────────────────────────
@@ -3676,7 +3688,9 @@ llvm::Value *CodeGen::genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr) 
                 {llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx_), 0), idxVal},
                 "arr.idx");
         if (wantAddr) return gep;
-        return builder_.CreateLoad(arrTy->getElementType(), gep, isVolatileLValue(e, env), "arr.elem");
+        auto *ld = builder_.CreateLoad(arrTy->getElementType(), gep, isVolatileLValue(e, env), "arr.elem");
+        tagAccess(ld, e.type, &e);
+        return ld;
     }
     // Slice subscript: baseAddr is the alloca for the {T*, i64} struct
     if (e.base->type && e.base->type->kind == TypeKind::Slice) {
@@ -3704,7 +3718,9 @@ llvm::Value *CodeGen::genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr) 
         auto *elemTy = e.type ? lowerType(e.type) : llvm::Type::getInt32Ty(ctx_);
         gep = builder_.CreateGEP(elemTy, slPtr, idxVal, "sl.idx");
         if (wantAddr) return gep;
-        return builder_.CreateLoad(elemTy, gep, isVolatileLValue(e, env), "sl.elem");
+        auto *ld = builder_.CreateLoad(elemTy, gep, isVolatileLValue(e, env), "sl.elem");
+        tagAccess(ld, e.type, &e);
+        return ld;
     }
 
     // Pointer subscript: if the base is an lvalue (e.g. a pointer variable),
@@ -3716,14 +3732,25 @@ llvm::Value *CodeGen::genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr) 
     // pointer whose lvalue IS the element storage address already —
     // loading through it again would dereference the first element's bytes.
     bool decayedArray = e.base->type && e.base->type->kind == TypeKind::Array;
-    auto *ptrVal = baseAddr
-        ? (decayedArray ? baseAddr
-                        : builder_.CreateLoad(llvm::PointerType::get(ctx_, 0), baseAddr, "ptr.load"))
-        : genExpr(*e.base, env);
+    llvm::Value *ptrVal;
+    if (!baseAddr) {
+        ptrVal = genExpr(*e.base, env);
+    } else if (decayedArray) {
+        ptrVal = baseAddr;
+    } else {
+        // Reading the pointer itself out of its lvalue (a variable or a
+        // field like 'b->data') is a source-level access of 'e.base'.
+        auto *ld = builder_.CreateLoad(llvm::PointerType::get(ctx_, 0), baseAddr,
+                                       isVolatileLValue(*e.base, env), "ptr.load");
+        tagAccess(ld, e.base->type, e.base.get());
+        ptrVal = ld;
+    }
     auto *elemTy = e.type ? lowerType(e.type) : llvm::Type::getInt32Ty(ctx_);
     gep = builder_.CreateGEP(elemTy, ptrVal, idxVal, "ptr.idx");
     if (wantAddr) return gep;
-    return builder_.CreateLoad(elemTy, gep, isVolatileLValue(e, env), "ptr.elem");
+    auto *ld = builder_.CreateLoad(elemTy, gep, isVolatileLValue(e, env), "ptr.elem");
+    tagAccess(ld, e.type, &e);
+    return ld;
 }
 
 // ── Slice construction: arr[start..end] → {T*, i64} ────────────────────────
@@ -3855,6 +3882,95 @@ bool CodeGen::isVolatileLValue(Expr &e, FnEnv &env) {
     default:
         return false;
     }
+}
+
+// ── Strict aliasing (TBAA) ───────────────────────────────────────────────────
+// C's rule, applied to SafeC types: a value of one scalar type can't be read
+// or written through an lvalue of a different scalar type, except through
+// 8-bit (char-like) lvalues, which may access anything. That lets LLVM keep
+// e.g. 't->size' (an integer) in a register across 't->data[i] = x' (a float
+// store) — knowledge that 'noalias' on reference parameters used to supply,
+// unsoundly (see the parameter-attribute comment in genFunctionProto).
+//
+// Safe code can't reinterpret memory at all (pointer-type casts need
+// 'unsafe'), so the rule only binds 'unsafe' code: it must type-pun through
+// char* or memcpy, or the program must be built with --no-strict-aliasing.
+// Tags come from a SafeC-only root, so accesses compiled from C (clang's own
+// TBAA root) are never assumed distinct from these.
+//
+// Scalar type nodes only: signed and unsigned integers of one width share a
+// node (as in C), enums and newtypes use their underlying type, and every
+// pointer/reference is one 'any pointer' node. Only source-level accesses
+// get tags; the loads/stores CodeGen emits for itself (ABI coercion, struct
+// copies, spills) stay untagged and alias everything.
+llvm::MDNode *CodeGen::tbaaTag(const TypePtr &tyIn) {
+    if (!strictAliasing_ || !tyIn) return nullptr;
+    TypePtr ty = tyIn;
+    while (ty && ty->kind == TypeKind::Newtype)
+        ty = static_cast<const NewtypeType &>(*ty).base;
+    if (!ty) return nullptr;
+    std::string name;
+    switch (ty->kind) {
+    case TypeKind::Int16: case TypeKind::UInt16: name = "int16"; break;
+    case TypeKind::Int32: case TypeKind::UInt32: name = "int32"; break;
+    case TypeKind::Int64: case TypeKind::UInt64: name = "int64"; break;
+    case TypeKind::Float32: name = "float"; break;
+    case TypeKind::Float64: name = "double"; break;
+    case TypeKind::Pointer: case TypeKind::Reference: name = "any pointer"; break;
+    case TypeKind::Enum: {
+        int w = static_cast<const EnumType &>(*ty).bitWidth;
+        if (w == 16) name = "int16"; else if (w == 32) name = "int32";
+        else if (w == 64) name = "int64"; else return nullptr;
+        break;
+    }
+    default:
+        return nullptr; // Bool/Char/8-bit ints (may alias anything), aggregates, vectors
+    }
+    auto it = tbaaTags_.find(name);
+    if (it != tbaaTags_.end()) return it->second;
+    llvm::MDBuilder mdb(ctx_);
+    if (!tbaaRoot_) tbaaRoot_ = mdb.createTBAARoot("SafeC TBAA");
+    auto *charNode = mdb.createTBAAScalarTypeNode("omnipotent char", tbaaRoot_);
+    auto *node = mdb.createTBAAScalarTypeNode(name, charNode);
+    auto *tag = mdb.createTBAAStructTagNode(node, node, 0);
+    tbaaTags_[name] = tag;
+    return tag;
+}
+
+bool CodeGen::throughUnion(Expr &e) {
+    switch (e.kind) {
+    case ExprKind::Member:
+    case ExprKind::Arrow: {
+        auto &me = static_cast<MemberExpr &>(e);
+        TypePtr bt = me.base->type;
+        if (bt && (bt->kind == TypeKind::Pointer || bt->kind == TypeKind::Reference)) {
+            bt = bt->kind == TypeKind::Pointer ? static_cast<const PointerType &>(*bt).base
+                                               : static_cast<const ReferenceType &>(*bt).base;
+        }
+        if (bt && bt->kind == TypeKind::Struct && static_cast<const StructType &>(*bt).isUnion)
+            return true;
+        // Only a member of a member (u.s.x) stays inside the union's storage;
+        // going through a pointer/reference leaves it.
+        if (!me.isArrow && me.base->type && me.base->type->kind == TypeKind::Struct)
+            return throughUnion(*me.base);
+        return false;
+    }
+    case ExprKind::Subscript: {
+        auto &se = static_cast<SubscriptExpr &>(e);
+        if (se.base->type && se.base->type->kind == TypeKind::Array) return throughUnion(*se.base);
+        return false;
+    }
+    default:
+        return false;
+    }
+}
+
+void CodeGen::tagAccess(llvm::Instruction *inst, const TypePtr &ty, Expr *lvalue) {
+    if (!inst || !strictAliasing_) return;
+    if (auto *ld = llvm::dyn_cast<llvm::LoadInst>(inst); ld && ld->isVolatile()) return;
+    if (auto *st = llvm::dyn_cast<llvm::StoreInst>(inst); st && st->isVolatile()) return;
+    if (lvalue && throughUnion(*lvalue)) return;
+    if (auto *tag = tbaaTag(ty)) inst->setMetadata(llvm::LLVMContext::MD_tbaa, tag);
 }
 
 llvm::Value *CodeGen::genMember(MemberExpr &e, FnEnv &env, bool wantAddr) {
@@ -3992,7 +4108,9 @@ llvm::Value *CodeGen::genMember(MemberExpr &e, FnEnv &env, bool wantAddr) {
             : builder_.CreateLShr(shiftedUp, llvm::ConstantInt::get(fieldTy, rightShift), e.field);
     }
 
-    return builder_.CreateLoad(fieldTy, gep, isVolatileLValue(e, env), e.field);
+    auto *ld = builder_.CreateLoad(fieldTy, gep, isVolatileLValue(e, env), e.field);
+    tagAccess(ld, e.type, &e);
+    return ld;
 }
 
 // ── Cast ──────────────────────────────────────────────────────────────────────
@@ -4202,6 +4320,7 @@ llvm::Value *CodeGen::genAssign(AssignExpr &e, FnEnv &env) {
     if (e.op != AssignOp::Assign) {
         // Compound assignment: load LHS, apply op, store
         auto *cur = builder_.CreateLoad(lhsTy, addr, vol, "cur");
+        tagAccess(cur, e.lhs->type, e.lhs.get());
         BinaryOp binOp;
         switch (e.op) {
         case AssignOp::AddAssign: binOp = BinaryOp::Add; break;
@@ -4224,7 +4343,7 @@ llvm::Value *CodeGen::genAssign(AssignExpr &e, FnEnv &env) {
             auto *idx = indexToI64(builder_, rhs, e.rhs->type);
             if (binOp == BinaryOp::Sub) idx = builder_.CreateNeg(idx);
             val = builder_.CreateGEP(elemTy, cur, idx, "ptrstep");
-            builder_.CreateStore(val, addr, vol);
+            tagAccess(builder_.CreateStore(val, addr, vol), e.lhs->type, e.lhs.get());
             return val;
         }
         val = applyBinaryOp(binOp, cur, rhs, e.lhs->type);
@@ -4238,7 +4357,9 @@ llvm::Value *CodeGen::genAssign(AssignExpr &e, FnEnv &env) {
     if (e.op == AssignOp::Assign)
         val = coerceToOptional(val, e.rhs->type, e.lhs->type);
 
-    builder_.CreateStore(val, addr, vol);
+    // Tag only when the stored value really has the lhs's scalar type
+    // (coerceScalar/coerceToOptional made it so for scalars).
+    tagAccess(builder_.CreateStore(val, addr, vol), e.lhs->type, e.lhs.get());
     return val;
 }
 

@@ -123,8 +123,8 @@ inline void String::free() {
 unsigned long String::length() const  { return self.len; }
 int           String::is_empty() const { return self.len == 0UL; }
 
-inline const char* String::as_ptr() const {
-    unsafe { return (const char*)self.data; }
+inline const &char String::as_ptr() const {
+    return self.data;
 }
 
 inline int String::char_at(unsigned long idx) const {

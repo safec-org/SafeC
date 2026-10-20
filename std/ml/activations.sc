@@ -8,7 +8,7 @@
 namespace std {
 
 &Tensor tensor_relu_fwd(const &Tensor a) {
-    struct Tensor* out = tensor_zeros_like(a);
+    &Tensor out = tensor_zeros_like(a);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
@@ -21,7 +21,7 @@ namespace std {
 }
 
 &Tensor tensor_sigmoid_fwd(const &Tensor a) {
-    struct Tensor* out = tensor_zeros_like(a);
+    &Tensor out = tensor_zeros_like(a);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
@@ -33,7 +33,7 @@ namespace std {
 }
 
 &Tensor tensor_tanh_fwd(const &Tensor a) {
-    struct Tensor* out = tensor_zeros_like(a);
+    &Tensor out = tensor_zeros_like(a);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
@@ -45,7 +45,7 @@ namespace std {
 }
 
 &Tensor tensor_silu_fwd(const &Tensor a) {
-    struct Tensor* out = tensor_zeros_like(a);
+    &Tensor out = tensor_zeros_like(a);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
@@ -59,7 +59,7 @@ namespace std {
 }
 
 &Tensor tensor_gelu_fwd(const &Tensor a) {
-    struct Tensor* out = tensor_zeros_like(a);
+    &Tensor out = tensor_zeros_like(a);
     float c = (float)0.7978845608028654; // sqrt(2/pi)
     unsafe {
         unsigned long i = 0UL;
@@ -76,7 +76,7 @@ namespace std {
 &Tensor tensor_layernorm_rows(const &Tensor x, float eps) {
     unsigned long rows; unsigned long cols;
     unsafe { rows = x->shape[0]; cols = x->shape[1]; }
-    struct Tensor* out = tensor_new_2d(rows, cols, 0);
+    &Tensor out = tensor_new_2d(rows, cols, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {

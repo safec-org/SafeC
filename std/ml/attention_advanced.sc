@@ -15,11 +15,11 @@ extern void  free(void* ptr);
 // ── MLA / EG-MLA ─────────────────────────────────────────────────────────────
 &Tensor mla_forward(const &Tensor X, const &Tensor Wq, const &Tensor Wdkv,
                      const &Tensor Wuk, const &Tensor Wuv, unsigned long numHeads) {
-    struct Tensor* Q = tensor_matmul(X, Wq);
-    struct Tensor* c_kv = tensor_matmul(X, Wdkv);
-    struct Tensor* K = tensor_matmul(c_kv, Wuk);
-    struct Tensor* V = tensor_matmul(c_kv, Wuv);
-    struct Tensor* out = mha_forward(Q, K, V, numHeads);
+    &Tensor Q = tensor_matmul(X, Wq);
+    &Tensor c_kv = tensor_matmul(X, Wdkv);
+    &Tensor K = tensor_matmul(c_kv, Wuk);
+    &Tensor V = tensor_matmul(c_kv, Wuv);
+    &Tensor out = mha_forward(Q, K, V, numHeads);
 
     Q->free(); c_kv->free(); K->free(); V->free();
     unsafe { free((void*)Q); free((void*)c_kv); free((void*)K); free((void*)V); }
@@ -33,18 +33,18 @@ extern void  free(void* ptr);
     unsafe { seqLen = X->shape[0]; dModel = Wq->shape[1]; }
     unsigned long groupDim = dModel / numGroups;
 
-    struct Tensor* Q = tensor_matmul(X, Wq);
-    struct Tensor* c_kv = tensor_matmul(X, Wdkv);
-    struct Tensor* out = tensor_new_2d(seqLen, dModel, 0);
+    &Tensor Q = tensor_matmul(X, Wq);
+    &Tensor c_kv = tensor_matmul(X, Wdkv);
+    &Tensor out = tensor_new_2d(seqLen, dModel, 0);
 
     unsigned long g = 0UL;
     while (g < numGroups) {
         unsigned long startCol = g * groupDim;
-        struct Tensor* Qg = tensor_slice_cols(Q, startCol, groupDim);
-        struct Tensor* Kg;
-        struct Tensor* Vg;
+        &Tensor Qg = tensor_slice_cols(Q, startCol, groupDim);
+        &Tensor Kg;
+        &Tensor Vg;
         unsafe { Kg = tensor_matmul(c_kv, WukGroups[g]); Vg = tensor_matmul(c_kv, WuvGroups[g]); }
-        struct Tensor* groupOut = mha_forward(Qg, Kg, Vg, headsPerGroup);
+        &Tensor groupOut = mha_forward(Qg, Kg, Vg, headsPerGroup);
         tensor_set_cols(out, startCol, groupOut);
 
         Qg->free(); Kg->free(); Vg->free(); groupOut->free();
@@ -58,10 +58,10 @@ extern void  free(void* ptr);
 }
 
 // ── Shifted-window attention ─────────────────────────────────────────────────
-static struct Tensor* __row_slice(struct Tensor* in, unsigned long startRow, unsigned long numRows) {
+static &Tensor __row_slice(&Tensor in, unsigned long startRow, unsigned long numRows) {
     unsigned long cols;
     unsafe { cols = in->shape[1]; }
-    struct Tensor* out = tensor_new_2d(numRows, cols, 0);
+    &Tensor out = tensor_new_2d(numRows, cols, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < numRows) {
@@ -76,7 +76,7 @@ static struct Tensor* __row_slice(struct Tensor* in, unsigned long startRow, uns
     return out;
 }
 
-static void __row_set(struct Tensor* dst, unsigned long startRow, struct Tensor* src) {
+static void __row_set(&Tensor dst, unsigned long startRow, &Tensor src) {
     unsigned long cols; unsigned long numRows;
     unsafe { cols = dst->shape[1]; numRows = src->shape[0]; }
     unsafe {
@@ -92,10 +92,10 @@ static void __row_set(struct Tensor* dst, unsigned long startRow, struct Tensor*
     }
 }
 
-static struct Tensor* __row_cyclic_shift(struct Tensor* in, unsigned long shift) {
+static &Tensor __row_cyclic_shift(&Tensor in, unsigned long shift) {
     unsigned long rows; unsigned long cols;
     unsafe { rows = in->shape[0]; cols = in->shape[1]; }
-    struct Tensor* out = tensor_new_2d(rows, cols, 0);
+    &Tensor out = tensor_new_2d(rows, cols, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
@@ -117,7 +117,7 @@ static struct Tensor* __row_cyclic_shift(struct Tensor* in, unsigned long shift)
     unsafe { seqLen = Q->shape[0]; dim = Q->shape[1]; }
 
     int didShift = (shift > 0UL) ? 1 : 0;
-    struct Tensor* Qs; struct Tensor* Ks; struct Tensor* Vs;
+    &Tensor Qs; &Tensor Ks; &Tensor Vs;
     if (didShift) {
         Qs = __row_cyclic_shift(Q, shift);
         Ks = __row_cyclic_shift(K, shift);
@@ -126,15 +126,15 @@ static struct Tensor* __row_cyclic_shift(struct Tensor* in, unsigned long shift)
         Qs = Q; Ks = K; Vs = V;
     }
 
-    struct Tensor* winOut = tensor_new_2d(seqLen, dim, 0);
+    &Tensor winOut = tensor_new_2d(seqLen, dim, 0);
     unsigned long numWindows = seqLen / windowSize;
     unsigned long w = 0UL;
     while (w < numWindows) {
         unsigned long startRow = w * windowSize;
-        struct Tensor* qw = __row_slice(Qs, startRow, windowSize);
-        struct Tensor* kw = __row_slice(Ks, startRow, windowSize);
-        struct Tensor* vw = __row_slice(Vs, startRow, windowSize);
-        struct Tensor* ow = attention_forward(qw, kw, vw);
+        &Tensor qw = __row_slice(Qs, startRow, windowSize);
+        &Tensor kw = __row_slice(Ks, startRow, windowSize);
+        &Tensor vw = __row_slice(Vs, startRow, windowSize);
+        &Tensor ow = attention_forward(qw, kw, vw);
         __row_set(winOut, startRow, ow);
 
         qw->free(); kw->free(); vw->free(); ow->free();
@@ -145,7 +145,7 @@ static struct Tensor* __row_cyclic_shift(struct Tensor* in, unsigned long shift)
     if (didShift) {
         Qs->free(); Ks->free(); Vs->free();
         unsafe { free((void*)Qs); free((void*)Ks); free((void*)Vs); }
-        struct Tensor* out = __row_cyclic_shift(winOut, seqLen - shift);
+        &Tensor out = __row_cyclic_shift(winOut, seqLen - shift);
         winOut->free();
         unsafe { free((void*)winOut); }
         return out;
@@ -193,7 +193,7 @@ void gated_deltanet_free(&GatedDeltaNet layer) {
         keyDim = layer->keyDim; valueDim = layer->valueDim;
     }
 
-    struct Tensor* out = tensor_new_2d(seqLen, valueDim, 0);
+    &Tensor out = tensor_new_2d(seqLen, valueDim, 0);
 
     unsafe {
         float* S = (float*)malloc(sizeof(float) * keyDim * valueDim);

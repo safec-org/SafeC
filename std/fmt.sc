@@ -6,7 +6,7 @@
 namespace std {
 
 #ifndef __SAFEC_FREESTANDING__
-extern int            snprintf(char* buf, size_t n, const char* fmt, ...);
+extern int            snprintf(&char buf, size_t n, const char* fmt, ...);
 #endif
 extern size_t  strlen(const char* s);
 extern void*          memcpy(void* dst, const void* src, size_t n);
@@ -47,29 +47,29 @@ static int fmt_u64_(&char buf, unsigned long cap, unsigned long long v,
     }
 }
 
-inline int fmt_int(char* buf, unsigned long cap, long long v) {
+inline int fmt_int(&char buf, unsigned long cap, long long v) {
     // Negate in unsigned arithmetic so LLONG_MIN doesn't overflow.
     unsigned long long mag = v < 0LL ? 0ULL - (unsigned long long)v : (unsigned long long)v;
     return fmt_u64_(buf, cap, mag, 10u, 0, v < 0LL);
 }
 
-inline int fmt_uint(char* buf, unsigned long cap, unsigned long long v) {
+inline int fmt_uint(&char buf, unsigned long cap, unsigned long long v) {
     return fmt_u64_(buf, cap, v, 10u, 0, 0);
 }
 
-inline int fmt_hex(char* buf, unsigned long cap, unsigned long long v) {
+inline int fmt_hex(&char buf, unsigned long cap, unsigned long long v) {
     return fmt_u64_(buf, cap, v, 16u, 0, 0);
 }
 
-inline int fmt_hex_upper(char* buf, unsigned long cap, unsigned long long v) {
+inline int fmt_hex_upper(&char buf, unsigned long cap, unsigned long long v) {
     return fmt_u64_(buf, cap, v, 16u, 1, 0);
 }
 
-inline int fmt_bool(char* buf, unsigned long cap, int v) {
+inline int fmt_bool(&char buf, unsigned long cap, int v) {
     return v ? fmt_emit_(buf, cap, "true", 4) : fmt_emit_(buf, cap, "false", 5);
 }
 
-inline int fmt_float(char* buf, unsigned long cap, double v, int decimals) {
+inline int fmt_float(&char buf, unsigned long cap, double v, int decimals) {
 #ifndef __SAFEC_FREESTANDING__
     unsafe { return snprintf(buf, cap, "%.*f", decimals, v); }
 #else
@@ -108,7 +108,7 @@ inline int fmt_float(char* buf, unsigned long cap, double v, int decimals) {
 #endif
 }
 
-inline int fmt_str(char* dst, unsigned long cap, const char* src) {
+inline int fmt_str(&char dst, unsigned long cap, const &char src) {
     if (cap == (unsigned long)0) return 0;
     unsafe {
         unsigned long n = strlen(src);
@@ -119,12 +119,12 @@ inline int fmt_str(char* dst, unsigned long cap, const char* src) {
     }
 }
 
-inline int fmt_append(char* dst, unsigned long cap, const char* src) {
+inline int fmt_append(&char dst, unsigned long cap, const &char src) {
     unsafe {
         unsigned long dlen = strlen(dst);
         unsigned long slen = strlen(src);
         if (dlen + slen + (unsigned long)1 > cap) return -1;
-        memcpy(dst + dlen, src, slen + (unsigned long)1);
+        memcpy(&dst[dlen], src, slen + (unsigned long)1);
         return (int)(dlen + slen);
     }
 }

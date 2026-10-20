@@ -61,7 +61,7 @@ inline void Tensor::free() {
 &Tensor tensor_new_1d(unsigned long n, int requiresGrad) {
     unsigned long shape[1];
     unsafe { shape[0] = n; }
-    struct Tensor* t = __tensor_alloc(shape, 1UL, requiresGrad);
+    &Tensor t = __tensor_alloc(shape, 1UL, requiresGrad);
     tensor_fill(t, (float)0.0);
     return t;
 }
@@ -69,13 +69,13 @@ inline void Tensor::free() {
 &Tensor tensor_new_2d(unsigned long rows, unsigned long cols, int requiresGrad) {
     unsigned long shape[2];
     unsafe { shape[0] = rows; shape[1] = cols; }
-    struct Tensor* t = __tensor_alloc(shape, 2UL, requiresGrad);
+    &Tensor t = __tensor_alloc(shape, 2UL, requiresGrad);
     tensor_fill(t, (float)0.0);
     return t;
 }
 
 &Tensor tensor_from_1d(const float* values, unsigned long n, int requiresGrad) {
-    struct Tensor* t = tensor_new_1d(n, requiresGrad);
+    &Tensor t = tensor_new_1d(n, requiresGrad);
     unsafe {
         unsigned long i = 0UL;
         while (i < n) { t->data[i] = values[i]; i = i + 1UL; }
@@ -84,7 +84,7 @@ inline void Tensor::free() {
 }
 
 &Tensor tensor_from_2d(const float* values, unsigned long rows, unsigned long cols, int requiresGrad) {
-    struct Tensor* t = tensor_new_2d(rows, cols, requiresGrad);
+    &Tensor t = tensor_new_2d(rows, cols, requiresGrad);
     unsigned long total = rows * cols;
     unsafe {
         unsigned long i = 0UL;
@@ -94,7 +94,7 @@ inline void Tensor::free() {
 }
 
 &Tensor tensor_zeros_like(const &Tensor t) {
-    struct Tensor* out;
+    &Tensor out;
     unsafe { out = __tensor_alloc((const unsigned long*)t->shape, t->ndim, 0); }
     tensor_fill(out, (float)0.0);
     return out;
@@ -115,7 +115,7 @@ inline void Tensor::free() {
 
 // ── Add ──────────────────────────────────────────────────────────────────────
 &Tensor tensor_add(const &Tensor a, const &Tensor b) {
-    struct Tensor* out = __tensor_alloc_uninit_like(a);
+    &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) { out->data[i] = a->data[i] + b->data[i]; i = i + 1UL; }
@@ -126,7 +126,7 @@ inline void Tensor::free() {
 
 // ── Sub ──────────────────────────────────────────────────────────────────────
 &Tensor tensor_sub(const &Tensor a, const &Tensor b) {
-    struct Tensor* out = __tensor_alloc_uninit_like(a);
+    &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) { out->data[i] = a->data[i] - b->data[i]; i = i + 1UL; }
@@ -137,7 +137,7 @@ inline void Tensor::free() {
 
 // ── Mul (elementwise) ──────────────────────────────────────────────────────────
 &Tensor tensor_mul(const &Tensor a, const &Tensor b) {
-    struct Tensor* out = __tensor_alloc_uninit_like(a);
+    &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) { out->data[i] = a->data[i] * b->data[i]; i = i + 1UL; }
@@ -148,7 +148,7 @@ inline void Tensor::free() {
 
 // ── Scale (multiply by a scalar constant) ─────────────────────────────────────
 &Tensor tensor_scale(const &Tensor a, float k) {
-    struct Tensor* out = __tensor_alloc_uninit_like(a);
+    &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) { out->data[i] = a->data[i] * k; i = i + 1UL; }
@@ -168,7 +168,7 @@ inline void Tensor::free() {
 &Tensor tensor_sum(const &Tensor a) {
     unsigned long one[1];
     unsafe { one[0] = 1UL; }
-    struct Tensor* out = __tensor_alloc(one, 1UL, 0);
+    &Tensor out = __tensor_alloc(one, 1UL, 0);
     unsafe {
         float acc = (float)0.0;
         unsigned long i = 0UL;
@@ -184,7 +184,7 @@ inline void Tensor::free() {
 &Tensor tensor_matmul(const &Tensor a, const &Tensor b) {
     unsigned long m; unsigned long k; unsigned long n;
     unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
-    struct Tensor* out = tensor_new_2d(m, n, 0);
+    &Tensor out = tensor_new_2d(m, n, 0);
     // i,p,j loop order, not the textbook i,j,p: with i,j,p, the innermost
     // loop's 'b->data[p*n+j]' access strides by n bytes per step (p is
     // the loop variable, but n is the stride) -- a cache miss on nearly
@@ -224,7 +224,7 @@ inline void Tensor::free() {
 
 // ══ Graph traversal & tensor_backward() ══════════════════════════════════════
 
-static void __tensor_toposort(struct Tensor* t, &Vec<&Tensor> order) {
+static void __tensor_toposort(&Tensor t, &Vec<&Tensor> order) {
     unsafe { if (t->visited) return; }
     unsafe { t->visited = 1; }
     unsigned long n;
@@ -251,7 +251,7 @@ void tensor_backward(&Tensor t) {
         unsigned long n = order.length();
         long long idx = (long long)n - 1LL;
         while (idx >= 0LL) {
-            struct Tensor* node = *order.at((unsigned long)idx);
+            &Tensor node = *order.at((unsigned long)idx);
             if (node->gradFn != (void*)0) {
                 TensorBackwardFn backwardFn = (TensorBackwardFn)node->gradFn;
                 backwardFn((void*)node);
@@ -261,7 +261,7 @@ void tensor_backward(&Tensor t) {
 
         unsigned long j = 0UL;
         while (j < n) {
-            struct Tensor* node2 = *order.at(j);
+            &Tensor node2 = *order.at(j);
             node2->visited = 0;
             j = j + 1UL;
         }

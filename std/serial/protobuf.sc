@@ -8,6 +8,11 @@
 #include <std/convert.h>
 #include <std/str.h>
 
+// Float <-> bit-pattern copies go through memcpy, not a pointer cast:
+// strict aliasing (see safec-docs reference/safety) forbids reading a
+// double through an integer lvalue.
+extern void* memcpy(void* dst, const void* src, unsigned long n);
+
 namespace std {
 
 // ── Writer ──────────────────────────────────────────────────────────────────
@@ -50,8 +55,8 @@ void pb_write_bool_field(&String out, int field_num, int v) {
 
 void pb_write_double_field(&String out, int field_num, double v) {
     pb_write_tag(out, field_num, PB_WIRE_FIXED64);
-    unsigned long long bits;
-    unsafe { bits = *(unsigned long long*)&v; }
+    unsigned long long bits = 0ULL;
+    unsafe { memcpy((void*)&bits, (const void*)&v, 8UL); }
     int i = 0;
     while (i < 8) {
         unsigned char b = (unsigned char)((bits >> (i * 8)) & 0xFFULL);
@@ -62,8 +67,8 @@ void pb_write_double_field(&String out, int field_num, double v) {
 
 void pb_write_float_field(&String out, int field_num, float v) {
     pb_write_tag(out, field_num, PB_WIRE_FIXED32);
-    unsigned int bits;
-    unsafe { bits = *(unsigned int*)&v; }
+    unsigned int bits = 0U;
+    unsafe { memcpy((void*)&bits, (const void*)&v, 4UL); }
     int i = 0;
     while (i < 4) {
         unsigned char b = (unsigned char)((bits >> (i * 8)) & 0xFFU);
@@ -173,8 +178,8 @@ int pb_read_double(&PbReader r, double* out) {
         i = i + 1;
     }
     unsafe { r.pos = pos + 8UL; }
-    double d;
-    unsafe { d = *(double*)&bits; }
+    double d = 0.0;
+    unsafe { memcpy((void*)&d, (const void*)&bits, 8UL); }
     unsafe { *out = d; }
     return 1;
 }
@@ -193,8 +198,8 @@ int pb_read_float(&PbReader r, float* out) {
         i = i + 1;
     }
     unsafe { r.pos = pos + 4UL; }
-    float f;
-    unsafe { f = *(float*)&bits; }
+    float f = (float)0.0;
+    unsafe { memcpy((void*)&f, (const void*)&bits, 4UL); }
     unsafe { *out = f; }
     return 1;
 }

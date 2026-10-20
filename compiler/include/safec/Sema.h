@@ -313,6 +313,8 @@ private:
     bool isNumeric(const TypePtr &ty) const;
     bool isIntegral(const TypePtr &ty) const;
     bool canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const;
+    // Extra text for a failed raw T* → '&T' conversion in safe code.
+    std::string rawToRefHint(const TypePtr &from, const TypePtr &to) const;
     // True if 'e' is a (possibly negative-signed) integer literal whose value
     // fits exactly in 'to' — standard C allows 'unsigned char c[] = {0x63,
     // ...}' even though each element is nominally an 'int' literal, because

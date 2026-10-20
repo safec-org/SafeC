@@ -21,7 +21,7 @@ extern void vDSP_vmul(const float* A, long IA, const float* B, long IB,
 extern void vDSP_sve(const float* A, long IA, float* result, unsigned long N);
 
 &Tensor tensor_add_vdsp(const &Tensor a, const &Tensor b) {
-    struct Tensor* out = __tensor_alloc_uninit_like(a);
+    &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         vDSP_vadd((const float*)a->data, 1L, (const float*)b->data, 1L,
                   (float*)out->data, 1L, out->size);
@@ -31,7 +31,7 @@ extern void vDSP_sve(const float* A, long IA, float* result, unsigned long N);
 }
 
 &Tensor tensor_sub_vdsp(const &Tensor a, const &Tensor b) {
-    struct Tensor* out = __tensor_alloc_uninit_like(a);
+    &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         // out = a - b: vDSP_vsub(X, ..., Y, ..., Z, ...) computes Z = Y - X,
         // so X=b, Y=a gives Z=a-b.
@@ -43,7 +43,7 @@ extern void vDSP_sve(const float* A, long IA, float* result, unsigned long N);
 }
 
 &Tensor tensor_mul_vdsp(const &Tensor a, const &Tensor b) {
-    struct Tensor* out = __tensor_alloc_uninit_like(a);
+    &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         vDSP_vmul((const float*)a->data, 1L, (const float*)b->data, 1L,
                   (float*)out->data, 1L, out->size);
@@ -55,7 +55,7 @@ extern void vDSP_sve(const float* A, long IA, float* result, unsigned long N);
 &Tensor tensor_sum_vdsp(const &Tensor a) {
     unsigned long one[1];
     unsafe { one[0] = 1UL; }
-    struct Tensor* out = __tensor_alloc(one, 1UL, 0);
+    &Tensor out = __tensor_alloc(one, 1UL, 0);
     unsafe {
         float acc = (float)0.0;
         vDSP_sve((const float*)a->data, 1L, &acc, a->size);

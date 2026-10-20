@@ -81,7 +81,7 @@ struct Ext2Ctx {
     unsigned long      group_count;
 
     // Read block `block_no` into `buf` (must be >= block_size bytes).
-    int  read_block(unsigned long block_no, unsigned char* buf);
+    int  read_block(unsigned long block_no, &stack unsigned char buf);
 
     // Read inode `ino` into `inode_out`.  Returns 0 on success.
     int  read_inode(unsigned long ino, &stack Ext2Inode inode_out);

@@ -149,7 +149,7 @@ void tensor_set_grad_enabled(int enabled);
 // family so a GPU-computed forward result can link into the exact same
 // backward math as the CPU path, without duplicating that math.
 
-static struct Tensor* __tensor_alloc(const unsigned long* shape, unsigned long ndim, int requiresGrad) {
+static &Tensor __tensor_alloc(const unsigned long* shape, unsigned long ndim, int requiresGrad) {
     unsafe {
         struct Tensor* t = (struct Tensor*)malloc(sizeof(struct Tensor));
 
@@ -174,7 +174,7 @@ static struct Tensor* __tensor_alloc(const unsigned long* shape, unsigned long n
         t->parents = vec_new();
         t->visited = 0;
         t->extraScalar = (float)0.0;
-        return t;
+        return (&Tensor)t;
     }
 }
 
@@ -197,13 +197,13 @@ static void __tensor_ensure_grad(struct Tensor* t) {
 // as its own line in the profile) pure wasted memory-bandwidth work. Any
 // caller using this MUST write every element before returning; it is not
 // a safe drop-in replacement for tensor_zeros_like everywhere.
-static struct Tensor* __tensor_alloc_uninit_like(struct Tensor* t) {
+static &Tensor __tensor_alloc_uninit_like(struct Tensor* t) {
     unsafe { return __tensor_alloc((const unsigned long*)t->shape, t->ndim, 0); }
 }
 
-static struct Tensor* __tensor_parent(struct Tensor* t, unsigned long idx) {
+static &Tensor __tensor_parent(struct Tensor* t, unsigned long idx) {
     unsafe {
-        return *t->parents.at(idx);
+        return (&Tensor)*t->parents.at(idx);
     }
 }
 

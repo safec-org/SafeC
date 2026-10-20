@@ -12,7 +12,7 @@ struct String {
     // ── Access ──────────────────────────────────────────────────────────────
     unsigned long  length() const;
     int            is_empty() const;
-    const char*    as_ptr() const;          // NUL-terminated C string
+    const &char    as_ptr() const;          // NUL-terminated C string
     int            char_at(unsigned long idx) const; // -1 if OOB
     void           set_char(unsigned long idx, char c);
 

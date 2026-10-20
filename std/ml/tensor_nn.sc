@@ -16,7 +16,7 @@ namespace std {
 // Moved here from tensor.sc -- it's a neural-net activation function like
 // every other one in this section, not core tensor arithmetic.
 &Tensor tensor_relu(const &Tensor a) {
-    struct Tensor* out = __tensor_alloc_uninit_like(a);
+    &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
@@ -31,7 +31,7 @@ namespace std {
 
 // ── Sigmoid ──────────────────────────────────────────────────────────────────
 &Tensor tensor_sigmoid(const &Tensor a) {
-    struct Tensor* out = __tensor_alloc_uninit_like(a);
+    &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
@@ -45,7 +45,7 @@ namespace std {
 
 // ── Tanh ─────────────────────────────────────────────────────────────────────
 &Tensor tensor_tanh_t(const &Tensor a) {
-    struct Tensor* out = __tensor_alloc_uninit_like(a);
+    &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
@@ -59,7 +59,7 @@ namespace std {
 
 // ── Softmax (last axis) ───────────────────────────────────────────────────────
 &Tensor tensor_softmax(const &Tensor a) {
-    struct Tensor* out = __tensor_alloc_uninit_like(a);
+    &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         unsigned long lastDim = a->shape[a->ndim - 1UL];
         unsigned long rows = a->size / lastDim;
@@ -94,7 +94,7 @@ namespace std {
 
 // ── ELU ──────────────────────────────────────────────────────────────────────
 &Tensor tensor_elu(const &Tensor a, float alpha) {
-    struct Tensor* out = __tensor_alloc_uninit_like(a);
+    &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
@@ -110,7 +110,7 @@ namespace std {
 
 // ── GELU (tanh approximation) ─────────────────────────────────────────────────
 &Tensor tensor_gelu(const &Tensor a) {
-    struct Tensor* out = __tensor_alloc_uninit_like(a);
+    &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         float c = (float)0.7978845608028654;
         unsigned long i = 0UL;
@@ -127,7 +127,7 @@ namespace std {
 
 // ── SiLU / Swish ───────────────────────────────────────────────────────────────
 &Tensor tensor_silu(const &Tensor a) {
-    struct Tensor* out = __tensor_alloc_uninit_like(a);
+    &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
@@ -145,13 +145,14 @@ namespace std {
 &Tensor tensor_glu(const &Tensor a) {
     unsigned long ndim;
     unsafe { ndim = a->ndim; }
-    unsigned long* outShape = (unsigned long*)alloc(checked_mul_size(sizeof(unsigned long), ndim));
+    unsigned long* outShape;
+    unsafe { outShape = (unsigned long*)alloc(checked_mul_size(sizeof(unsigned long), ndim)); }
     unsafe {
         unsigned long i = 0UL;
         while (i < ndim) { outShape[i] = a->shape[i]; i = i + 1UL; }
         outShape[ndim - 1UL] = outShape[ndim - 1UL] / 2UL;
     }
-    struct Tensor* out = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
+    &Tensor out = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
     unsafe { dealloc((void*)outShape); }
     unsafe {
         unsigned long outLast = out->shape[out->ndim - 1UL];
@@ -180,13 +181,14 @@ namespace std {
 &Tensor tensor_swiglu(const &Tensor a) {
     unsigned long ndim;
     unsafe { ndim = a->ndim; }
-    unsigned long* outShape = (unsigned long*)alloc(checked_mul_size(sizeof(unsigned long), ndim));
+    unsigned long* outShape;
+    unsafe { outShape = (unsigned long*)alloc(checked_mul_size(sizeof(unsigned long), ndim)); }
     unsafe {
         unsigned long i = 0UL;
         while (i < ndim) { outShape[i] = a->shape[i]; i = i + 1UL; }
         outShape[ndim - 1UL] = outShape[ndim - 1UL] / 2UL;
     }
-    struct Tensor* out = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
+    &Tensor out = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
     unsafe { dealloc((void*)outShape); }
     unsafe {
         unsigned long outLast = out->shape[out->ndim - 1UL];
@@ -270,14 +272,15 @@ void adam_free(&AdamState state) {
     unsigned long ndim; unsigned long lastDim;
     unsafe { ndim = a->ndim; lastDim = a->shape[ndim - 1UL]; }
     unsigned long outLen = (lastDim - kernel) / stride + 1UL;
-    unsigned long* outShape = (unsigned long*)alloc(checked_mul_size(sizeof(unsigned long), ndim));
+    unsigned long* outShape;
+    unsafe { outShape = (unsigned long*)alloc(checked_mul_size(sizeof(unsigned long), ndim)); }
     unsafe {
         unsigned long i = 0UL;
         while (i < ndim) { outShape[i] = a->shape[i]; i = i + 1UL; }
         outShape[ndim - 1UL] = outLen;
     }
-    struct Tensor* out = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
-    struct Tensor* idxCache = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
+    &Tensor out = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
+    &Tensor idxCache = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
     unsafe { dealloc((void*)outShape); }
     unsafe {
         unsigned long rows = out->size / outLen;
@@ -317,13 +320,14 @@ void adam_free(&AdamState state) {
     unsigned long ndim; unsigned long lastDim;
     unsafe { ndim = a->ndim; lastDim = a->shape[ndim - 1UL]; }
     unsigned long outLen = (lastDim - kernel) / stride + 1UL;
-    unsigned long* outShape = (unsigned long*)alloc(checked_mul_size(sizeof(unsigned long), ndim));
+    unsigned long* outShape;
+    unsafe { outShape = (unsigned long*)alloc(checked_mul_size(sizeof(unsigned long), ndim)); }
     unsafe {
         unsigned long i = 0UL;
         while (i < ndim) { outShape[i] = a->shape[i]; i = i + 1UL; }
         outShape[ndim - 1UL] = outLen;
     }
-    struct Tensor* out = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
+    &Tensor out = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
     unsafe { dealloc((void*)outShape); }
     unsafe {
         float invK = (float)1.0 / (float)kernel;

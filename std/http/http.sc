@@ -247,8 +247,7 @@ static int http_key_is_(const &char h, unsigned long ks, unsigned long ke, const
 // Single pass over the raw block, no per-line allocation (the previous
 // version split it into up to 256 heap Strings — and leaked one more per
 // line — just to find one header, on every request and response).
-struct String http_header_get(const char* raw_headers, const char* name) {
-    if (raw_headers == (const char*)0) { return string_new(); }
+struct String http_header_get(const &char raw_headers, const &char name) {
     unsigned long len = str_len(raw_headers);
     unsigned long pos = 0UL;
     unsigned long ks = 0UL;
@@ -829,7 +828,7 @@ static int http_conn_task_(?&HttpConnState_ argPtr, int resume_point) {
         // HTTP_CONN_PHASE_WRITE_
         while (st->sent < st->respText.length()) {
             long n = sock_write_(st->fd,
-                (const void*)(st->respText.as_ptr() + st->sent),
+                (const void*)&st->respText.as_ptr()[st->sent],
                 st->respText.length() - st->sent);
             if (n > 0L) {
                 st->sent = st->sent + (unsigned long)n;

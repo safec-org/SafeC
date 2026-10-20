@@ -9,7 +9,7 @@ namespace std {
 
 &Tensor tensor_add_cuda(const &Tensor a, const &Tensor b) {
     if (!cuda_available()) { return tensor_add(a, b); }
-    struct Tensor* out = __tensor_alloc_uninit_like(a);
+    &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         int ok = cuda_add_f32((const float*)a->data, (const float*)b->data, (float*)out->data, out->size);
         if (!ok) {
@@ -23,7 +23,7 @@ namespace std {
 
 &Tensor tensor_sub_cuda(const &Tensor a, const &Tensor b) {
     if (!cuda_available()) { return tensor_sub(a, b); }
-    struct Tensor* out = __tensor_alloc_uninit_like(a);
+    &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         int ok = cuda_sub_f32((const float*)a->data, (const float*)b->data, (float*)out->data, out->size);
         if (!ok) {
@@ -37,7 +37,7 @@ namespace std {
 
 &Tensor tensor_mul_cuda(const &Tensor a, const &Tensor b) {
     if (!cuda_available()) { return tensor_mul(a, b); }
-    struct Tensor* out = __tensor_alloc_uninit_like(a);
+    &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         int ok = cuda_mul_f32((const float*)a->data, (const float*)b->data, (float*)out->data, out->size);
         if (!ok) {
@@ -51,7 +51,7 @@ namespace std {
 
 &Tensor tensor_scale_cuda(const &Tensor a, float k) {
     if (!cuda_available()) { return tensor_scale(a, k); }
-    struct Tensor* out = __tensor_alloc_uninit_like(a);
+    &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         int ok = cuda_scale_f32((const float*)a->data, k, (float*)out->data, out->size);
         if (!ok) {
@@ -66,7 +66,7 @@ namespace std {
 
 &Tensor tensor_relu_cuda(const &Tensor a) {
     if (!cuda_available()) { return tensor_relu(a); }
-    struct Tensor* out = __tensor_alloc_uninit_like(a);
+    &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         int ok = cuda_relu_f32((const float*)a->data, (float*)out->data, out->size);
         if (!ok) {
@@ -86,7 +86,7 @@ namespace std {
     if (!cuda_available()) { return tensor_sum(a); }
     unsigned long one[1];
     unsafe { one[0] = 1UL; }
-    struct Tensor* out = __tensor_alloc(one, 1UL, 0);
+    &Tensor out = __tensor_alloc(one, 1UL, 0);
     unsafe {
         float fout[1];
         int ok = cuda_sum_f32((const float*)a->data, (float*)fout, a->size);
@@ -108,7 +108,7 @@ namespace std {
 
     unsigned long m; unsigned long k; unsigned long n;
     unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
-    struct Tensor* out = tensor_new_2d(m, n, 0);
+    &Tensor out = tensor_new_2d(m, n, 0);
     unsafe {
         int ok = cuda_matmul_f32((const float*)a->data, (const float*)b->data, (float*)out->data, m, k, n);
         if (!ok) {
@@ -143,7 +143,7 @@ namespace std {
 
     unsigned long m; unsigned long k; unsigned long n;
     unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
-    struct Tensor* out = tensor_new_2d(m, n, 0);
+    &Tensor out = tensor_new_2d(m, n, 0);
     unsafe {
         int ok = cuda_matmul_f32_blas((const float*)a->data, (const float*)b->data, (float*)out->data, m, k, n);
         if (!ok) {

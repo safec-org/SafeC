@@ -1809,7 +1809,8 @@ void Sema::checkReturn(ReturnStmt &s, FunctionDecl &fn) {
                 !floatLitFitsType(*s.value, fn.returnType)) {
                 diag_.error(s.loc,
                     "return type mismatch: cannot convert '" + valTy->str() +
-                    "' to '" + fn.returnType->str() + "'");
+                    "' to '" + fn.returnType->str() + "'" +
+                    rawToRefHint(valTy, fn.returnType));
             }
         }
     } else {
@@ -1892,7 +1893,8 @@ void Sema::checkVarDecl(VarDeclStmt &s, FunctionDecl &fn) {
                 !floatLitFitsType(*s.init, s.declType)) {
                 diag_.error(s.loc,
                     "type mismatch in variable declaration: cannot convert '"
-                    + initTy->str() + "' to '" + s.declType->str() + "'");
+                    + initTy->str() + "' to '" + s.declType->str() + "'" +
+                    rawToRefHint(initTy, s.declType));
             }
         }
     }
@@ -2265,6 +2267,8 @@ TypePtr Sema::checkUnary(UnaryExpr &e) {
     case UnaryOp::PostInc: case UnaryOp::PostDec:
         if (!operandTy->isArithmetic() && operandTy->kind != TypeKind::Pointer)
             diag_.error(e.loc, "++ / -- requires numeric or pointer type");
+        else if (operandTy->kind == TypeKind::Pointer && !inUnsafeScope())
+            diag_.error(e.loc, "raw pointer arithmetic requires 'unsafe' block");
         return operandTy;
     case UnaryOp::SizeofExpr:
         return makeInt(64, false);
@@ -2442,11 +2446,13 @@ TypePtr Sema::checkBinary(BinaryExpr &e) {
             return lhsTy;
         }
         if (!lhsTy->isArithmetic() || !rhsTy->isArithmetic()) {
-            // Raw pointer arithmetic computes an address without touching
-            // memory, so it's allowed anywhere (as in C); *accessing*
-            // through the result (deref, subscript, '->') is what needs
-            // 'unsafe'.
+            // Raw pointer arithmetic requires 'unsafe': it's how an
+            // out-of-bounds address is made, and safe code may only reach
+            // memory through references (see checkCast for the matching
+            // pointer-forging casts).
             if (lhsTy->kind == TypeKind::Pointer || rhsTy->kind == TypeKind::Pointer) {
+                if (!inUnsafeScope())
+                    diag_.error(e.loc, "raw pointer arithmetic requires 'unsafe' block");
                 // 'p - q' is the element distance (C's ptrdiff_t), not a pointer.
                 if (e.op == BinaryOp::Sub && lhsTy->kind == TypeKind::Pointer &&
                     rhsTy->kind == TypeKind::Pointer)
@@ -3568,7 +3574,8 @@ TypePtr Sema::checkCall(CallExpr &e) {
                     !refToPointerArgCompatible(argTy, paramTy)) {
                     diag_.error(e.args[i]->loc,
                         "argument " + std::to_string(i+1) + ": cannot convert '" +
-                        argTy->str() + "' to '" + paramTy->str() + "'");
+                        argTy->str() + "' to '" + paramTy->str() + "'" +
+                        rawToRefHint(argTy, paramTy));
                 }
             }
         }
@@ -3647,7 +3654,8 @@ TypePtr Sema::checkCall(CallExpr &e) {
                 !refToPointerArgCompatible(argTy, ft->paramTypes[paramIdx])) {
                 diag_.error(e.args[i]->loc,
                     "argument " + std::to_string(i+1) + ": cannot convert '" +
-                    argTy->str() + "' to '" + ft->paramTypes[paramIdx]->str() + "'");
+                    argTy->str() + "' to '" + ft->paramTypes[paramIdx]->str() + "'" +
+                    rawToRefHint(argTy, ft->paramTypes[paramIdx]));
             }
         }
     }
@@ -4045,7 +4053,40 @@ TypePtr Sema::checkCast(CastExpr &e) {
     // freed nor moved for the life of the program, so '(void*)someFunc' (a
     // function-pointer table entry, an ISR vector table, etc.) carries none
     // of the risk 'unsafe' exists to flag.
-    if (!inUnsafeScope()) {
+    if (!inUnsafeScope() && srcTy && !srcTy->isError()) {
+        // Raw pointer → reference: '(&T)q' asserts q is non-null and valid
+        // with nothing checking it, so it's 'unsafe' only. '(?&T)q' is
+        // allowed: it keeps the null case, which must be matched away
+        // before the reference can be used, and its region stays open
+        // ('?&T', no region keyword).
+        if (srcTy->kind == TypeKind::Pointer &&
+            e.targetType->kind == TypeKind::Reference &&
+            !static_cast<ReferenceType &>(*e.targetType).nullable) {
+            diag_.error(e.loc,
+                "cast from raw pointer to non-null reference '" + e.targetType->str() +
+                "' requires 'unsafe' block; use '(?" + e.targetType->str() +
+                ")' and check it with 'match'");
+        }
+        // Making a raw pointer out of an integer, or reinterpreting one
+        // pointer type as another, forges an address/type the compiler
+        // can't vouch for. Widening to 'void*' (or adding const) and the
+        // 'null' literal are the safe exceptions.
+        if (e.targetType->kind == TypeKind::Pointer) {
+            auto &tp = static_cast<PointerType &>(*e.targetType);
+            // 'null' and C's null pointer constant '(T*)0'.
+            bool isNullLit = e.operand->kind == ExprKind::NullLit ||
+                (e.operand->kind == ExprKind::IntLit &&
+                 static_cast<IntLitExpr &>(*e.operand).value == 0);
+            if (srcTy->isInteger() && !isNullLit) {
+                diag_.error(e.loc, "cast from integer to raw pointer requires 'unsafe' block");
+            } else if (srcTy->kind == TypeKind::Pointer && !isNullLit) {
+                auto &sp = static_cast<PointerType &>(*srcTy);
+                if (!tp.base->isVoid() && !typeEqual(sp.base, tp.base))
+                    diag_.error(e.loc,
+                        "cast between raw pointer types '" + srcTy->str() + "' and '" +
+                        e.targetType->str() + "' requires 'unsafe' block");
+            }
+        }
         bool isFuncRef = srcTy->kind == TypeKind::Reference &&
             static_cast<ReferenceType &>(*srcTy).base &&
             static_cast<ReferenceType &>(*srcTy).base->kind == TypeKind::Function;
@@ -4205,10 +4246,11 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
     }
 
     // Pointer compound arithmetic 'p += n' / 'p -= n' — C semantics (scaled
-    // by the element size). Like 'p + n' it only computes an address;
-    // reading or writing through 'p' still needs 'unsafe'.
+    // by the element size); 'unsafe' only, like 'p + n'.
     bool ptrStep = lhsTy->kind == TypeKind::Pointer && rhsTy->isInteger() &&
                    (e.op == AssignOp::AddAssign || e.op == AssignOp::SubAssign);
+    if (ptrStep && !inUnsafeScope())
+        diag_.error(e.loc, "raw pointer arithmetic requires 'unsafe' block");
 
     // Type compatibility
     if (!lhsTy->isError() && !rhsTy->isError() && !ptrStep) {
@@ -4217,7 +4259,7 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
             !floatLitFitsType(*e.rhs, lhsTy)) {
             diag_.error(e.loc,
                 "type mismatch in assignment: cannot convert '" +
-                rhsTy->str() + "' to '" + lhsTy->str() + "'");
+                rhsTy->str() + "' to '" + lhsTy->str() + "'" + rawToRefHint(rhsTy, lhsTy));
         }
     }
 
@@ -4725,6 +4767,15 @@ bool Sema::refToPointerArgCompatible(const TypePtr &from, const TypePtr &to) con
     return is8(fr.base) && is8(tp.base);
 }
 
+std::string Sema::rawToRefHint(const TypePtr &from, const TypePtr &to) const {
+    if (!from || !to || inUnsafeScope()) return "";
+    if (from->kind != TypeKind::Pointer || to->kind != TypeKind::Reference) return "";
+    auto &tr = static_cast<const ReferenceType &>(*to);
+    if (tr.nullable) return "";
+    return " (a raw pointer becomes a non-null reference only inside 'unsafe'; "
+           "convert it to '?" + to->str() + "' and check it with 'match')";
+}
+
 bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
     if (!from || !to) return false;
     if (from->isError() || to->isError()) return true; // suppress cascaded errors
@@ -4864,14 +4915,11 @@ bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
         auto &tp = static_cast<const PointerType &>(*to);
         if (fp.base->isVoid() || tp.base->isVoid()) return true;
     }
-    // Pointer → Reference parameter: mirrors Pointer → Array above. Raw
-    // pointers (e.g. a 'const unsigned char*' function parameter that
-    // already decayed from some caller's array, or any C-interop pointer)
-    // must be accepted where a '&region T' reference parameter is expected,
-    // the same way plain C lets a pointer be passed to a function taking a
-    // pointer to its pointee type — the callee can only use it within
-    // 'unsafe{}' regardless, so the region annotation carries no additional
-    // safety obligation here.
+    // Pointer → Reference: a raw pointer (any C-interop pointer, or one
+    // that decayed from an array) can become a *nullable* reference
+    // anywhere — the null case stays visible and must be matched away
+    // before use. Becoming a non-null '&T' asserts the pointer is valid
+    // with nothing checking it, so that direction is 'unsafe' only.
     if (from->kind == TypeKind::Pointer && to->kind == TypeKind::Reference) {
         auto &fp = static_cast<const PointerType &>(*from);
         auto &tr = static_cast<const ReferenceType &>(*to);
@@ -4882,6 +4930,9 @@ bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
         // *nullable* reference kind may receive it, matching how &T → ?&T
         // is already implicit just below but T → &T is not.
         if (fp.base->isVoid() && tr.nullable) return true;
+        // Raw T* → non-null '&T' asserts non-null with no check: 'unsafe'
+        // only. T* → '?&T' is fine anywhere (the null case stays visible).
+        if (!tr.nullable && !inUnsafeScope()) return false;
         if (typeEqual(fp.base, tr.base)) return true;
         auto is8 = [](const TypePtr &t) {
             return t->kind == TypeKind::Char  || t->kind == TypeKind::Int8 ||

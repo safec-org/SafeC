@@ -135,7 +135,7 @@ static void yaml_write_array_(const &Value v, &String out, int depth) {
     while (i < n) {
         yaml_indent_(out, depth);
         unsafe { out.push_char('-'); }
-        struct Value* elem;
+        &Value elem;
         unsafe { elem = v.arr_val.at(i); }
         int ekind;
         unsafe { ekind = elem->kind; }
@@ -164,7 +164,7 @@ static void yaml_write_object_(const &Value v, &String out, int depth) {
         unsafe { key = (const char*)e->key; }
         yaml_append_scalar_string_(out, key);
         unsafe { out.push_char(':'); }
-        struct Value* val;
+        &Value val;
         unsafe { val = e->val; }
         int vkind;
         unsafe { vkind = val->kind; }

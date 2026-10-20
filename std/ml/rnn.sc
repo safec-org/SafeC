@@ -16,8 +16,8 @@ namespace std {
 // initialization should overwrite '.data' themselves, e.g. by loading
 // trained weights). Values stay in a small range to keep gate pre-
 // activations well-behaved.
-static struct Tensor* __rnn_init_weight(unsigned long rows, unsigned long cols, unsigned long seed) {
-    struct Tensor* t = tensor_new_2d(rows, cols, 0);
+static &Tensor __rnn_init_weight(unsigned long rows, unsigned long cols, unsigned long seed) {
+    &Tensor t = tensor_new_2d(rows, cols, 0);
     unsafe {
         unsigned long i = 0UL;
         while (i < t->size) {
@@ -31,22 +31,22 @@ static struct Tensor* __rnn_init_weight(unsigned long rows, unsigned long cols, 
     return t;
 }
 
-static struct Tensor* __rnn_zeros(unsigned long rows, unsigned long cols) {
+static &Tensor __rnn_zeros(unsigned long rows, unsigned long cols) {
     return tensor_new_2d(rows, cols, 0);
 }
 
-static struct Tensor* __row_add4(struct Tensor* a, struct Tensor* b,
-                                  struct Tensor* c, struct Tensor* d) {
-    struct Tensor* ab = tensor_add(a, b);
-    struct Tensor* cd = tensor_add(c, d);
-    struct Tensor* out = tensor_add(ab, cd);
+static &Tensor __row_add4(&Tensor a, &Tensor b,
+                                  &Tensor c, &Tensor d) {
+    &Tensor ab = tensor_add(a, b);
+    &Tensor cd = tensor_add(c, d);
+    &Tensor out = tensor_add(ab, cd);
     ab->free(); cd->free();
     unsafe { free((void*)ab); free((void*)cd); }
     return out;
 }
 
-static struct Tensor* __one_minus(struct Tensor* z) {
-    struct Tensor* out = tensor_zeros_like(z);
+static &Tensor __one_minus(&Tensor z) {
+    &Tensor out = tensor_zeros_like(z);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) { out->data[i] = (float)1.0 - z->data[i]; i = i + 1UL; }
@@ -67,10 +67,10 @@ struct RNNCell rnn_cell_new(unsigned long inputSize, unsigned long hiddenSize) {
 
 &Tensor rnn_cell_forward(const &RNNCell cell, const &Tensor x_t, const &Tensor h_prev) {
     unsafe {
-        struct Tensor* xi = tensor_matmul(x_t, cell->W_ih);
-        struct Tensor* hh = tensor_matmul(h_prev, cell->W_hh);
-        struct Tensor* sum = __row_add4(xi, hh, cell->b_ih, cell->b_hh);
-        struct Tensor* h_t = tensor_tanh_fwd(sum);
+        &Tensor xi = tensor_matmul(x_t, cell->W_ih);
+        &Tensor hh = tensor_matmul(h_prev, cell->W_hh);
+        &Tensor sum = __row_add4(xi, hh, cell->b_ih, cell->b_hh);
+        &Tensor h_t = tensor_tanh_fwd(sum);
         xi->free(); hh->free(); sum->free();
         free((void*)xi); free((void*)hh); free((void*)sum);
         return h_t;
@@ -100,28 +100,28 @@ struct GRUCell gru_cell_new(unsigned long inputSize, unsigned long hiddenSize) {
 
 &Tensor gru_cell_forward(const &GRUCell cell, const &Tensor x_t, const &Tensor h_prev) {
     unsafe {
-        struct Tensor* r_sum = __row_add4(tensor_matmul(x_t, cell->W_ir), tensor_matmul(h_prev, cell->W_hr),
+        &Tensor r_sum = __row_add4(tensor_matmul(x_t, cell->W_ir), tensor_matmul(h_prev, cell->W_hr),
                                            cell->b_ir, cell->b_hr);
-        struct Tensor* r_t = tensor_sigmoid_fwd(r_sum);
+        &Tensor r_t = tensor_sigmoid_fwd(r_sum);
 
-        struct Tensor* z_sum = __row_add4(tensor_matmul(x_t, cell->W_iz), tensor_matmul(h_prev, cell->W_hz),
+        &Tensor z_sum = __row_add4(tensor_matmul(x_t, cell->W_iz), tensor_matmul(h_prev, cell->W_hz),
                                            cell->b_iz, cell->b_hz);
-        struct Tensor* z_t = tensor_sigmoid_fwd(z_sum);
+        &Tensor z_t = tensor_sigmoid_fwd(z_sum);
 
-        struct Tensor* hn = tensor_matmul(h_prev, cell->W_hn);
-        struct Tensor* hn_b = tensor_add(hn, cell->b_hn);
-        struct Tensor* r_hn = tensor_mul(r_t, hn_b);
-        struct Tensor* in_ = tensor_matmul(x_t, cell->W_in);
-        struct Tensor* in_b = tensor_add(in_, cell->b_in);
-        struct Tensor* n_sum = tensor_add(in_b, r_hn);
-        struct Tensor* n_t = tensor_tanh_fwd(n_sum);
+        &Tensor hn = tensor_matmul(h_prev, cell->W_hn);
+        &Tensor hn_b = tensor_add(hn, cell->b_hn);
+        &Tensor r_hn = tensor_mul(r_t, hn_b);
+        &Tensor in_ = tensor_matmul(x_t, cell->W_in);
+        &Tensor in_b = tensor_add(in_, cell->b_in);
+        &Tensor n_sum = tensor_add(in_b, r_hn);
+        &Tensor n_t = tensor_tanh_fwd(n_sum);
 
-        struct Tensor* one_minus_z = __one_minus(z_t);
-        struct Tensor* term1 = tensor_mul(one_minus_z, n_t);
-        struct Tensor* term2 = tensor_mul(z_t, h_prev);
-        struct Tensor* h_t = tensor_add(term1, term2);
+        &Tensor one_minus_z = __one_minus(z_t);
+        &Tensor term1 = tensor_mul(one_minus_z, n_t);
+        &Tensor term2 = tensor_mul(z_t, h_prev);
+        &Tensor h_t = tensor_add(term1, term2);
 
-        struct Tensor* garbage[13];
+        &Tensor garbage[13];
         garbage[0]=r_sum; garbage[1]=r_t; garbage[2]=z_sum; garbage[3]=z_t;
         garbage[4]=hn; garbage[5]=hn_b; garbage[6]=r_hn; garbage[7]=in_;
         garbage[8]=in_b; garbage[9]=n_sum; garbage[10]=n_t;
@@ -135,7 +135,7 @@ struct GRUCell gru_cell_new(unsigned long inputSize, unsigned long hiddenSize) {
 
 void gru_cell_free(&GRUCell cell) {
     unsafe {
-        struct Tensor* all[12];
+        &Tensor all[12];
         all[0]=cell->W_ir; all[1]=cell->W_hr; all[2]=cell->b_ir; all[3]=cell->b_hr;
         all[4]=cell->W_iz; all[5]=cell->W_hz; all[6]=cell->b_iz; all[7]=cell->b_hz;
         all[8]=cell->W_in; all[9]=cell->W_hn; all[10]=cell->b_in; all[11]=cell->b_hn;
@@ -163,26 +163,26 @@ struct LSTMCell lstm_cell_new(unsigned long inputSize, unsigned long hiddenSize)
                            const &Tensor h_prev, const &Tensor c_prev,
                            struct Tensor** c_out) {
     unsafe {
-        struct Tensor* i_sum = __row_add4(tensor_matmul(x_t, cell->W_ii), tensor_matmul(h_prev, cell->W_hi),
+        &Tensor i_sum = __row_add4(tensor_matmul(x_t, cell->W_ii), tensor_matmul(h_prev, cell->W_hi),
                                            cell->b_ii, cell->b_hi);
-        struct Tensor* i_t = tensor_sigmoid_fwd(i_sum);
-        struct Tensor* f_sum = __row_add4(tensor_matmul(x_t, cell->W_if), tensor_matmul(h_prev, cell->W_hf),
+        &Tensor i_t = tensor_sigmoid_fwd(i_sum);
+        &Tensor f_sum = __row_add4(tensor_matmul(x_t, cell->W_if), tensor_matmul(h_prev, cell->W_hf),
                                            cell->b_if, cell->b_hf);
-        struct Tensor* f_t = tensor_sigmoid_fwd(f_sum);
-        struct Tensor* g_sum = __row_add4(tensor_matmul(x_t, cell->W_ig), tensor_matmul(h_prev, cell->W_hg),
+        &Tensor f_t = tensor_sigmoid_fwd(f_sum);
+        &Tensor g_sum = __row_add4(tensor_matmul(x_t, cell->W_ig), tensor_matmul(h_prev, cell->W_hg),
                                            cell->b_ig, cell->b_hg);
-        struct Tensor* g_t = tensor_tanh_fwd(g_sum);
-        struct Tensor* o_sum = __row_add4(tensor_matmul(x_t, cell->W_io), tensor_matmul(h_prev, cell->W_ho),
+        &Tensor g_t = tensor_tanh_fwd(g_sum);
+        &Tensor o_sum = __row_add4(tensor_matmul(x_t, cell->W_io), tensor_matmul(h_prev, cell->W_ho),
                                            cell->b_io, cell->b_ho);
-        struct Tensor* o_t = tensor_sigmoid_fwd(o_sum);
+        &Tensor o_t = tensor_sigmoid_fwd(o_sum);
 
-        struct Tensor* fc = tensor_mul(f_t, c_prev);
-        struct Tensor* ig = tensor_mul(i_t, g_t);
-        struct Tensor* c_t = tensor_add(fc, ig);
-        struct Tensor* tanh_c = tensor_tanh_fwd(c_t);
-        struct Tensor* h_t = tensor_mul(o_t, tanh_c);
+        &Tensor fc = tensor_mul(f_t, c_prev);
+        &Tensor ig = tensor_mul(i_t, g_t);
+        &Tensor c_t = tensor_add(fc, ig);
+        &Tensor tanh_c = tensor_tanh_fwd(c_t);
+        &Tensor h_t = tensor_mul(o_t, tanh_c);
 
-        struct Tensor* garbage[9];
+        &Tensor garbage[9];
         garbage[0]=i_sum; garbage[1]=i_t; garbage[2]=f_sum; garbage[3]=f_t;
         garbage[4]=g_sum; garbage[5]=g_t; garbage[6]=o_sum; garbage[7]=o_t;
         garbage[8]=tanh_c;
@@ -198,7 +198,7 @@ struct LSTMCell lstm_cell_new(unsigned long inputSize, unsigned long hiddenSize)
 
 void lstm_cell_free(&LSTMCell cell) {
     unsafe {
-        struct Tensor* all[16];
+        &Tensor all[16];
         all[0]=cell->W_ii; all[1]=cell->W_hi; all[2]=cell->b_ii; all[3]=cell->b_hi;
         all[4]=cell->W_if; all[5]=cell->W_hf; all[6]=cell->b_if; all[7]=cell->b_hf;
         all[8]=cell->W_ig; all[9]=cell->W_hg; all[10]=cell->b_ig; all[11]=cell->b_hg;
@@ -226,28 +226,28 @@ struct XLSTMCell xlstm_cell_new(unsigned long inputSize, unsigned long hiddenSiz
 struct XLSTMState xlstm_cell_forward(const &XLSTMCell cell, const &Tensor x_t,
                                       const &XLSTMState prev) {
     unsafe {
-        struct Tensor* z_sum = __row_add4(tensor_matmul(x_t, cell->Wz), tensor_matmul(prev->h, cell->Rz),
+        &Tensor z_sum = __row_add4(tensor_matmul(x_t, cell->Wz), tensor_matmul(prev->h, cell->Rz),
                                            cell->bz, tensor_zeros_like(cell->bz));
-        struct Tensor* z_t = tensor_tanh_fwd(z_sum);
+        &Tensor z_t = tensor_tanh_fwd(z_sum);
 
-        struct Tensor* zerob = tensor_zeros_like(cell->bi);
-        struct Tensor* i_raw = __row_add4(tensor_matmul(x_t, cell->Wi), tensor_matmul(prev->h, cell->Ri),
+        &Tensor zerob = tensor_zeros_like(cell->bi);
+        &Tensor i_raw = __row_add4(tensor_matmul(x_t, cell->Wi), tensor_matmul(prev->h, cell->Ri),
                                            cell->bi, zerob);
-        struct Tensor* zerob2 = tensor_zeros_like(cell->bf);
-        struct Tensor* f_raw = __row_add4(tensor_matmul(x_t, cell->Wf), tensor_matmul(prev->h, cell->Rf),
+        &Tensor zerob2 = tensor_zeros_like(cell->bf);
+        &Tensor f_raw = __row_add4(tensor_matmul(x_t, cell->Wf), tensor_matmul(prev->h, cell->Rf),
                                            cell->bf, zerob2);
-        struct Tensor* zerob3 = tensor_zeros_like(cell->bo);
-        struct Tensor* o_sum = __row_add4(tensor_matmul(x_t, cell->Wo), tensor_matmul(prev->h, cell->Ro),
+        &Tensor zerob3 = tensor_zeros_like(cell->bo);
+        &Tensor o_sum = __row_add4(tensor_matmul(x_t, cell->Wo), tensor_matmul(prev->h, cell->Ro),
                                            cell->bo, zerob3);
-        struct Tensor* o_t = tensor_sigmoid_fwd(o_sum);
+        &Tensor o_t = tensor_sigmoid_fwd(o_sum);
 
         // Stabilizer: m_t = max(f_raw + m_prev, i_raw), elementwise
         // (broadcasting prev->m's single scalar across the hidden dim).
         unsigned long hiddenSize;
         hiddenSize = i_raw->shape[1];
-        struct Tensor* m_t = tensor_new_2d(1UL, hiddenSize, 0);
-        struct Tensor* i_t = tensor_new_2d(1UL, hiddenSize, 0);
-        struct Tensor* f_t = tensor_new_2d(1UL, hiddenSize, 0);
+        &Tensor m_t = tensor_new_2d(1UL, hiddenSize, 0);
+        &Tensor i_t = tensor_new_2d(1UL, hiddenSize, 0);
+        &Tensor f_t = tensor_new_2d(1UL, hiddenSize, 0);
         float mPrevScalar = prev->m->data[0];
         unsigned long k = 0UL;
         while (k < hiddenSize) {
@@ -261,33 +261,33 @@ struct XLSTMState xlstm_cell_forward(const &XLSTMCell cell, const &Tensor x_t,
             k = k + 1UL;
         }
 
-        struct Tensor* fc = tensor_mul(f_t, prev->c);
-        struct Tensor* iz = tensor_mul(i_t, z_t);
-        struct Tensor* c_t = tensor_add(fc, iz);
+        &Tensor fc = tensor_mul(f_t, prev->c);
+        &Tensor iz = tensor_mul(i_t, z_t);
+        &Tensor c_t = tensor_add(fc, iz);
 
-        struct Tensor* fnT = tensor_mul(f_t, prev->n);
-        struct Tensor* n_t = tensor_add(fnT, i_t);
+        &Tensor fnT = tensor_mul(f_t, prev->n);
+        &Tensor n_t = tensor_add(fnT, i_t);
 
         // h_t = o_t * (c_t / n_t), elementwise divide
-        struct Tensor* ratio = tensor_new_2d(1UL, hiddenSize, 0);
+        &Tensor ratio = tensor_new_2d(1UL, hiddenSize, 0);
         k = 0UL;
         while (k < hiddenSize) {
             float denom = n_t->data[k];
             ratio->data[k] = (denom != (float)0.0) ? (c_t->data[k] / denom) : (float)0.0;
             k = k + 1UL;
         }
-        struct Tensor* h_t = tensor_mul(o_t, ratio);
+        &Tensor h_t = tensor_mul(o_t, ratio);
 
         // m_t is stored as a [1,1] scalar (the *maximum* over the hidden
         // dim, matching the paper's scalar-per-timestep stabilizer) —
         // reduce the elementwise m_t computed above.
-        struct Tensor* m_scalar = tensor_new_2d(1UL, 1UL, 0);
+        &Tensor m_scalar = tensor_new_2d(1UL, 1UL, 0);
         float mMax = m_t->data[0];
         k = 1UL;
         while (k < hiddenSize) { if (m_t->data[k] > mMax) mMax = m_t->data[k]; k = k + 1UL; }
         m_scalar->data[0] = mMax;
 
-        struct Tensor* garbage[15];
+        &Tensor garbage[15];
         garbage[0]=z_sum; garbage[1]=zerob; garbage[2]=i_raw; garbage[3]=zerob2;
         garbage[4]=f_raw; garbage[5]=zerob3; garbage[6]=o_sum; garbage[7]=m_t;
         garbage[8]=i_t; garbage[9]=f_t; garbage[10]=fc; garbage[11]=iz;
@@ -306,7 +306,7 @@ struct XLSTMState xlstm_cell_forward(const &XLSTMCell cell, const &Tensor x_t,
 
 void xlstm_cell_free(&XLSTMCell cell) {
     unsafe {
-        struct Tensor* all[12];
+        &Tensor all[12];
         all[0]=cell->Wz; all[1]=cell->Rz; all[2]=cell->bz;
         all[3]=cell->Wi; all[4]=cell->Ri; all[5]=cell->bi;
         all[6]=cell->Wf; all[7]=cell->Rf; all[8]=cell->bf;

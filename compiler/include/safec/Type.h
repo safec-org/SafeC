@@ -38,9 +38,10 @@ enum class Region {
     // choice — pick nullable only where the value can genuinely be
     // absent, exactly as with any other reference kind.
     //
-    // A raw T* converts to '&T'/'?&T' implicitly with no 'unsafe' (see
-    // Sema::canImplicitlyConvert's Pointer→Reference rule, which every
-    // region already takes this same path); reading a *nullable* one out
+    // A raw T* converts to '?&T' anywhere (implicitly, or as '(?&T)q'),
+    // and to non-null '&T' only inside 'unsafe' — nothing checks that the
+    // pointer isn't null (see Sema::canImplicitlyConvert's Pointer→
+    // Reference rule and Sema::checkCast). Reading a *nullable* one out
     // requires 'match'/'is_null()'/'.default(value)' or an 'unsafe'-gated
     // '!', identical to any other nullable reference (see
     // Sema::checkNullabilityDeref) — those all already exist and don't
