@@ -664,7 +664,8 @@ static const char* attn_kernel_source_() {
     "    }\n"
     "}\n"
     "\n"
-    "// grid (ceil((D*D + D) / 256), batch*kvHeads): one state element per thread, walked over chunks.\n"
+    "// grid (ceil((D*D + D) / 256), batch*kvHeads): one state element per thread, walked over\n"
+    "// chunks 8 at a time (the 8 loads are issued together, so they overlap).\n"
     "template <int D>\n"
     "__device__ void lin_cscan(float* __restrict__ W, float* __restrict__ Zc, int nc, int causal) {\n"
     "    const int kvh = blockIdx.y, e = blockIdx.x * 256 + threadIdx.x;\n"
@@ -674,12 +675,20 @@ static const char* attn_kernel_source_() {
     "    if (e < D * D) { p = W + (size_t)kvh * nc * D * D + e; stride = (size_t)D * D; }\n"
     "    else { p = Zc + (size_t)kvh * nc * D + (e - D * D); stride = D; }\n"
     "    float run = 0.0f;\n"
-    "    if (causal) {\n"
-    "        for (int c = 0; c < nc; ++c) { float v = p[c * stride]; p[c * stride] = run; run += v; }\n"
-    "    } else {\n"
-    "        for (int c = 0; c < nc; ++c) run += p[c * stride];\n"
-    "        p[0] = run;                        // total in chunk 0's slot\n"
+    "    for (int c0 = 0; c0 < nc; c0 += 8) {\n"
+    "        float v[8];\n"
+    "#pragma unroll\n"
+    "        for (int u = 0; u < 8; ++u) v[u] = c0 + u < nc ? p[(size_t)(c0 + u) * stride] : 0.0f;\n"
+    "        if (causal) {\n"
+    "#pragma unroll\n"
+    "            for (int u = 0; u < 8; ++u)\n"
+    "                if (c0 + u < nc) { p[(size_t)(c0 + u) * stride] = run; run += v[u]; }\n"
+    "        } else {\n"
+    "#pragma unroll\n"
+    "            for (int u = 0; u < 8; ++u) run += v[u];\n"
+    "        }\n"
     "    }\n"
+    "    if (!causal) p[0] = run;               // total in chunk 0's slot\n"
     "}\n"
     "\n"
     "template <int T, int D>\n"
@@ -697,6 +706,7 @@ static const char* attn_kernel_source_() {
     "    float* Vs = Kf + LC * DP;              // LC x DO   V_c[:, col0..]   (causal)\n"
     "    float* Zs = Vs + LC * DO;              // D\n"
     "    float* A = Zs + D;                     // LC x (LC+1)\n"
+    "    float* Sb = A + LC * (LC + 1);         // 32 x DO   slice of the state\n"
     "    const int c = blockIdx.x, bh = blockIdx.y, b = bh / H, h = bh % H, kvh = b * Hkv + h / (H / Hkv);\n"
     "    const int tid = threadIdx.x, ty = tid >> 4, tx = tid & 15, col0 = blockIdx.z * DO;\n"
     "    const int off = Sk - Sq;\n"
@@ -765,19 +775,29 @@ static const char* attn_kernel_source_() {
     "            }\n"
     "        }\n"
     "    }\n"
-    "    // acc += phi(Q_c) S, den += phi(Q_c) . z\n"
-    "    for (int d = 0; d < D; ++d) {\n"
-    "        float qv[RP], sv[CD];\n"
-    "        float zd = Zs[d];\n"
+    "    // acc += phi(Q_c) S, den += phi(Q_c) . z, with S streamed through shared memory 32 rows at a time\n"
+    "    for (int d0 = 0; d0 < D; d0 += 32) {\n"
+    "        __syncthreads();\n"
+    "        for (int i = tid; i < 32 * DO; i += 256) {\n"
+    "            int r = i / DO, cc = i - r * DO;\n"
+    "            Sb[i] = ws[(size_t)(d0 + r) * D + col0 + cc];\n"
+    "        }\n"
+    "        __syncthreads();\n"
+    "#pragma unroll 4\n"
+    "        for (int dd = 0; dd < 32; ++dd) {\n"
+    "            const int d = d0 + dd;\n"
+    "            float qv[RP], sv[CD];\n"
+    "            float zd = Zs[d];\n"
     "#pragma unroll\n"
-    "        for (int a = 0; a < RP; ++a) qv[a] = Qf[(ty * RP + a) * D + d];\n"
+    "            for (int a = 0; a < RP; ++a) qv[a] = Qf[(ty * RP + a) * D + d];\n"
     "#pragma unroll\n"
-    "        for (int b = 0; b < CD; ++b) sv[b] = __ldg(ws + d * D + col0 + tx + 16 * b);\n"
+    "            for (int b = 0; b < CD; ++b) sv[b] = Sb[dd * DO + tx + 16 * b];\n"
     "#pragma unroll\n"
-    "        for (int a = 0; a < RP; ++a) {\n"
-    "            den[a] += qv[a] * zd;\n"
+    "            for (int a = 0; a < RP; ++a) {\n"
+    "                den[a] += qv[a] * zd;\n"
     "#pragma unroll\n"
-    "            for (int b = 0; b < CD; ++b) acc[a][b] += qv[a] * sv[b];\n"
+    "                for (int b = 0; b < CD; ++b) acc[a][b] += qv[a] * sv[b];\n"
+    "            }\n"
     "        }\n"
     "    }\n"
     "#pragma unroll\n"
@@ -877,7 +897,7 @@ static unsigned long attn_smem_(int kind, unsigned long d) {
     if (kind == ATT_LIN_CSTATE) return 2UL * ATT_LC * d * 4UL;
     if (kind == ATT_LIN_COUT) {
         unsigned long cols = attn_lin_cols_(d);
-        return (ATT_LC * d + ATT_LC * (d + 1UL) + ATT_LC * cols + d + ATT_LC * (ATT_LC + 1UL)) * 4UL;
+        return (ATT_LC * d + ATT_LC * (d + 1UL) + ATT_LC * cols + d + ATT_LC * (ATT_LC + 1UL) + 32UL * cols) * 4UL;
     }
     if (kind == ATT_TF32X3) {
         unsigned long bn = d > 64UL ? 32UL : 64UL;
@@ -1061,7 +1081,7 @@ extern ?&void dlsym(void* handle, const char* name);
 #define SD_A_OPRED_X         1610
 #define SD_A_OPRED_Y         1611
 #define SD_A_OPRED_DESC      1612
-#define SD_SLOTS             16
+#define SD_SLOTS             64
 #define SD_DESCS             128  // descriptors kept alive per plan (a masked graph uses ~80)
 #define SD_CFGS              8
 #define SD_MAX_WS            268435456UL   // 256 MiB
@@ -1089,6 +1109,7 @@ static void* g_sd_desc[SD_SLOTS * SD_DESCS];
 static int   g_sd_ndesc[SD_SLOTS];
 static float g_sd_f[SD_SLOTS * 4];          // by-value: scale, -inf, -inf, window offset
 static int   g_sd_i[SD_SLOTS * 2];          // by-value: kvLen, seqLen
+static int   g_sd_next = 0;                 // next slot to evict when the cache is full
 
 static int sd_load_() {
     if (g_sd_state != 0) return g_sd_state == 1;
@@ -1410,6 +1431,26 @@ static int sd_bind_(int s, unsigned long q, unsigned long k, unsigned long v, un
     return 1;
 }
 
+// Frees slot s's plan, variant pack, descriptors and workspace.
+static void sd_evict_(int s) {
+    unsafe {
+        cuStreamSynchronize((void*)cuda_stream_handle());
+        if (g_sd_vp[s] != (void*)0) p_destroy(g_sd_vp[s]);
+        if (g_sd_plan[s] != (void*)0) p_destroy(g_sd_plan[s]);
+        int i = g_sd_ndesc[s] - 1;
+        while (i >= 0) { p_destroy(g_sd_desc[s * SD_DESCS + i]); i = i - 1; }
+        if (g_sd_ws[s] != 0ULL) cuMemFree_v2(g_sd_ws[s]);
+    }
+    g_sd_vp[s] = (void*)0;
+    g_sd_plan[s] = (void*)0;
+    g_sd_ndesc[s] = 0;
+    g_sd_ws[s] = 0ULL;
+    g_sd_ok[s] = 0;
+    g_sd_ptr[s * 4] = 0UL; g_sd_ptr[s * 4 + 1] = 0UL; g_sd_ptr[s * 4 + 2] = 0UL; g_sd_ptr[s * 4 + 3] = 0UL;
+    int j = 0;
+    while (j < 9) { g_sd_key[s * 9 + j] = 0L; j = j + 1; }
+}
+
 // Runs flash attention through cuDNN; 1 = enqueued, 0 = use the fallback.
 static int sd_run_(unsigned long q, unsigned long k, unsigned long v, unsigned long o, int dtype,
                    struct CudaAttnShape a, float scale, int causal) {
@@ -1430,7 +1471,12 @@ static int sd_run_(unsigned long q, unsigned long k, unsigned long v, unsigned l
         i = i + 1;
     }
     if (s < 0) {
-        if (free < 0) return 0;   // cache full: own kernels
+        if (free < 0) {
+            // Cache full: evict slots round-robin (after queued work that may use them).
+            free = g_sd_next;
+            g_sd_next = (g_sd_next + 1) % SD_SLOTS;
+            sd_evict_(free);
+        }
         s = free;
         i = 0;
         while (i < 9) { g_sd_key[s * 9 + i] = key[i]; i = i + 1; }
