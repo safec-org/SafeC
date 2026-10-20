@@ -639,6 +639,485 @@ static int attn_bufs_ok_(unsigned long q, unsigned long k, unsigned long v, unsi
            kn >= attn_kv_elems_(s) && vn >= attn_kv_elems_(s);
 }
 
+// ── cuDNN fused attention (fp16 / bf16) ─────────────────────────────────────
+// For fp16/bf16 on sm_80+, flash attention goes to cuDNN's fused SDPA
+// engine (on Hopper the wgmma "flash fprop" kernels PyTorch also uses)
+// when libcudnn.so.9 can be loaded; cuDNN is opened with dlopen, so this
+// library doesn't need it at link time and falls back to its own kernels
+// without it. The operation graph is the one cudnn-frontend's sdpa() builds:
+// Q K^T -> * scale -> [bottom-right causal mask] -> [sliding-window mask] ->
+// softmax (max, sub, exp, sum, div) -> P V, fp32 inside. One cached plan per
+// shape; the scalars (scale, lengths, window) are passed by value at execute.
+extern ?&void dlopen(const char* file, int mode);
+extern ?&void dlsym(void* handle, const char* name);
+
+#define SD_RTLD_NOW          2
+#define SD_TENSOR            17   // CUDNN_BACKEND_TENSOR_DESCRIPTOR
+#define SD_POINTWISE         0
+#define SD_ENGINECFG         3
+#define SD_ENGINEHEUR        4
+#define SD_PLAN              5
+#define SD_OP_POINTWISE      13
+#define SD_OPGRAPH           15
+#define SD_VARIANT_PACK      16
+#define SD_MATMUL            18
+#define SD_OP_MATMUL         19
+#define SD_REDUCTION         21
+#define SD_OP_REDUCTION      22
+#define SD_T_HANDLE          0    // cudnnBackendAttributeType_t
+#define SD_T_DATA_TYPE       1
+#define SD_T_BOOLEAN         2
+#define SD_T_INT64           3
+#define SD_T_VOID_PTR        6
+#define SD_T_HEUR_MODE       8
+#define SD_T_POINTWISE_MODE  14
+#define SD_T_DESCRIPTOR      15
+#define SD_T_REDUCTION_OP    18
+#define SD_D_FLOAT           0    // cudnnDataType_t
+#define SD_D_HALF            2
+#define SD_D_INT32           4
+#define SD_D_BF16            9
+#define SD_D_BOOL            11
+#define SD_PW_ADD            0    // cudnnPointwiseMode_t
+#define SD_PW_MUL            1
+#define SD_PW_DIV            6
+#define SD_PW_SUB            9
+#define SD_PW_EXP            13
+#define SD_PW_LOG            15
+#define SD_PW_CMP_GT         302
+#define SD_PW_CMP_GE         303
+#define SD_PW_GEN_INDEX      501
+#define SD_PW_SELECT         601
+#define SD_RED_ADD           0
+#define SD_RED_MAX           3
+#define SD_HEUR_A            3
+#define SD_A_PW_MODE         0    // cudnnBackendAttributeName_t
+#define SD_A_PW_PREC         1
+#define SD_A_PW_AXIS         9
+#define SD_A_HEUR_MODE       200
+#define SD_A_HEUR_GRAPH      201
+#define SD_A_HEUR_RESULTS    202
+#define SD_A_PLAN_HANDLE     400
+#define SD_A_PLAN_CFG        401
+#define SD_A_PLAN_WS         402
+#define SD_A_OPPW_DESC       750
+#define SD_A_OPPW_X          751
+#define SD_A_OPPW_B          752
+#define SD_A_OPPW_Y          753
+#define SD_A_OPPW_T          758
+#define SD_A_GRAPH_HANDLE    800
+#define SD_A_GRAPH_OPS       801
+#define SD_A_T_ALIGN         900
+#define SD_A_T_TYPE          901
+#define SD_A_T_DIMS          902
+#define SD_A_T_STRIDES       903
+#define SD_A_T_UID           906
+#define SD_A_T_VIRTUAL       907
+#define SD_A_T_BYVAL         908
+#define SD_A_VP_UIDS         1000
+#define SD_A_VP_PTRS         1001
+#define SD_A_VP_WS           1003
+#define SD_A_MM_COMP         1500
+#define SD_A_OPMM_A          1520
+#define SD_A_OPMM_B          1521
+#define SD_A_OPMM_C          1522
+#define SD_A_OPMM_DESC       1523
+#define SD_A_RED_OP          1600
+#define SD_A_RED_COMP        1601
+#define SD_A_OPRED_X         1610
+#define SD_A_OPRED_Y         1611
+#define SD_A_OPRED_DESC      1612
+#define SD_SLOTS             16
+#define SD_DESCS             128  // descriptors kept alive per plan (a masked graph uses ~80)
+#define SD_CFGS              8
+#define SD_MAX_WS            268435456UL   // 256 MiB
+
+static int   g_sd_state = 0;      // 0 = not tried, 1 = ready, -1 = unavailable
+static int   g_sd_enabled = 1;    // cuda_attention_use_cudnn
+static void* g_sd_handle = (void*)0;
+static fn int(void**) p_cudnnCreate;
+static fn int(void*, void*) p_cudnnSetStream;
+static fn int(int, void**) p_create;
+static fn int(void*) p_destroy;
+static fn int(void*, int, int, long, const void*) p_set;
+static fn int(void*, int, int, long, long*, void*) p_get;
+static fn int(void*) p_finalize;
+static fn int(void*, void*, void*) p_execute;
+
+// Per-shape plan cache.
+static long  g_sd_key[SD_SLOTS * 9];       // dtype, b, hq, hk, sq, sk, d, causal, window>0; key[0] == 0: free
+static int   g_sd_ok[SD_SLOTS];            // 1 = plan, -1 = cuDNN can't run this shape
+static void* g_sd_plan[SD_SLOTS];
+static void* g_sd_vp[SD_SLOTS];
+static unsigned long long g_sd_ws[SD_SLOTS];
+static unsigned long g_sd_ptr[SD_SLOTS * 4];   // q, k, v, o the variant pack points at
+static void* g_sd_desc[SD_SLOTS * SD_DESCS];
+static int   g_sd_ndesc[SD_SLOTS];
+static float g_sd_f[SD_SLOTS * 4];          // by-value: scale, -inf, -inf, window offset
+static int   g_sd_i[SD_SLOTS * 2];          // by-value: kvLen, seqLen
+
+static int sd_load_() {
+    if (g_sd_state != 0) return g_sd_state == 1;
+    g_sd_state = -1;
+    unsafe {
+        void* lib = (void*)dlopen("libcudnn.so.9", SD_RTLD_NOW);
+        if (lib == (void*)0) lib = (void*)dlopen("libcudnn.so", SD_RTLD_NOW);
+        if (lib == (void*)0) return 0;
+        void* f0 = (void*)dlsym(lib, "cudnnCreate");
+        void* f1 = (void*)dlsym(lib, "cudnnSetStream");
+        void* f2 = (void*)dlsym(lib, "cudnnBackendCreateDescriptor");
+        void* f3 = (void*)dlsym(lib, "cudnnBackendDestroyDescriptor");
+        void* f4 = (void*)dlsym(lib, "cudnnBackendSetAttribute");
+        void* f5 = (void*)dlsym(lib, "cudnnBackendGetAttribute");
+        void* f6 = (void*)dlsym(lib, "cudnnBackendFinalize");
+        void* f7 = (void*)dlsym(lib, "cudnnBackendExecute");
+        if (f0 == (void*)0 || f1 == (void*)0 || f2 == (void*)0 || f3 == (void*)0 || f4 == (void*)0 ||
+            f5 == (void*)0 || f6 == (void*)0 || f7 == (void*)0) return 0;
+        p_cudnnCreate = (fn int(void**))f0;
+        p_cudnnSetStream = (fn int(void*, void*))f1;
+        p_create = (fn int(int, void**))f2;
+        p_destroy = (fn int(void*))f3;
+        p_set = (fn int(void*, int, int, long, const void*))f4;
+        p_get = (fn int(void*, int, int, long, long*, void*))f5;
+        p_finalize = (fn int(void*))f6;
+        p_execute = (fn int(void*, void*, void*))f7;
+        if (p_cudnnCreate(&g_sd_handle) != 0) return 0;
+        if (p_cudnnSetStream(g_sd_handle, (void*)cuda_stream_handle()) != 0) return 0;
+    }
+    g_sd_state = 1;
+    return 1;
+}
+
+int cuda_attention_use_cudnn(int on) {
+    g_sd_enabled = on ? 1 : 0;
+    if (!on || !cuda_available()) return 0;
+    return sd_load_();
+}
+
+// Keeps a descriptor alive with slot 's''s plan.
+static ?&void sd_keep_(int s, ?&void d) {
+    if (d == (void*)0) return (void*)0;
+    unsafe {
+        if (g_sd_ndesc[s] >= SD_DESCS) return (void*)0;
+        g_sd_desc[s * SD_DESCS + g_sd_ndesc[s]] = (void*)d;
+        g_sd_ndesc[s] = g_sd_ndesc[s] + 1;
+    }
+    return d;
+}
+
+static ?&void sd_tensor_(int s, long uid, int dtype, long d0, long d1, long d2, long d3,
+                         long s0, long s1, long s2, long s3, int isVirtual, int byValue) {
+    unsafe {
+        void* d = (void*)0;
+        if (p_create(SD_TENSOR, &d) != 0) return (void*)0;
+        long dims[4];
+        long strides[4];
+        dims[0] = d0; dims[1] = d1; dims[2] = d2; dims[3] = d3;
+        strides[0] = s0; strides[1] = s1; strides[2] = s2; strides[3] = s3;
+        long align = 16L;
+        unsigned char yes = (unsigned char)1;
+        int ok = p_set(d, SD_A_T_TYPE, SD_T_DATA_TYPE, 1L, (const void*)&dtype) == 0 &&
+                 p_set(d, SD_A_T_DIMS, SD_T_INT64, 4L, (const void*)&dims[0]) == 0 &&
+                 p_set(d, SD_A_T_STRIDES, SD_T_INT64, 4L, (const void*)&strides[0]) == 0 &&
+                 p_set(d, SD_A_T_UID, SD_T_INT64, 1L, (const void*)&uid) == 0 &&
+                 p_set(d, SD_A_T_ALIGN, SD_T_INT64, 1L, (const void*)&align) == 0;
+        if (ok && isVirtual) ok = p_set(d, SD_A_T_VIRTUAL, SD_T_BOOLEAN, 1L, (const void*)&yes) == 0;
+        if (ok && byValue) ok = p_set(d, SD_A_T_BYVAL, SD_T_BOOLEAN, 1L, (const void*)&yes) == 0;
+        if (!ok || p_finalize(d) != 0) { p_destroy(d); return (void*)0; }
+        return sd_keep_(s, d);
+    }
+}
+
+// A by-value scalar [1,1,1,1].
+static ?&void sd_scalar_(int s, long uid, int dtype) {
+    return sd_tensor_(s, uid, dtype, 1L, 1L, 1L, 1L, 1L, 1L, 1L, 1L, 0, 1);
+}
+
+// Pointwise op y = mode(x [, b] [, t]) in 'prec'; axis >= 0 for GEN_INDEX.
+static ?&void sd_pointwise_(int s, int mode, int prec, long axis, ?&void x, ?&void b, ?&void t, ?&void y) {
+    if (x == (void*)0 || y == (void*)0) return (void*)0;
+    unsafe {
+        void* pw = (void*)0;
+        if (p_create(SD_POINTWISE, &pw) != 0) return (void*)0;
+        int ok = p_set(pw, SD_A_PW_MODE, SD_T_POINTWISE_MODE, 1L, (const void*)&mode) == 0 &&
+                 p_set(pw, SD_A_PW_PREC, SD_T_DATA_TYPE, 1L, (const void*)&prec) == 0;
+        if (ok && axis >= 0L) ok = p_set(pw, SD_A_PW_AXIS, SD_T_INT64, 1L, (const void*)&axis) == 0;
+        if (!ok || p_finalize(pw) != 0) { p_destroy(pw); return (void*)0; }
+        sd_keep_(s, pw);
+        void* op = (void*)0;
+        if (p_create(SD_OP_POINTWISE, &op) != 0) return (void*)0;
+        void* xd = (void*)x;
+        void* yd = (void*)y;
+        ok = p_set(op, SD_A_OPPW_DESC, SD_T_DESCRIPTOR, 1L, (const void*)&pw) == 0 &&
+             p_set(op, SD_A_OPPW_X, SD_T_DESCRIPTOR, 1L, (const void*)&xd) == 0 &&
+             p_set(op, SD_A_OPPW_Y, SD_T_DESCRIPTOR, 1L, (const void*)&yd) == 0;
+        if (ok && b != (void*)0) { void* bd = (void*)b; ok = p_set(op, SD_A_OPPW_B, SD_T_DESCRIPTOR, 1L, (const void*)&bd) == 0; }
+        if (ok && t != (void*)0) { void* td = (void*)t; ok = p_set(op, SD_A_OPPW_T, SD_T_DESCRIPTOR, 1L, (const void*)&td) == 0; }
+        if (!ok || p_finalize(op) != 0) { p_destroy(op); return (void*)0; }
+        return sd_keep_(s, op);
+    }
+}
+
+static ?&void sd_reduction_(int s, int redOp, ?&void x, ?&void y) {
+    if (x == (void*)0 || y == (void*)0) return (void*)0;
+    unsafe {
+        void* rd = (void*)0;
+        if (p_create(SD_REDUCTION, &rd) != 0) return (void*)0;
+        int comp = SD_D_FLOAT;
+        int ok = p_set(rd, SD_A_RED_OP, SD_T_REDUCTION_OP, 1L, (const void*)&redOp) == 0 &&
+                 p_set(rd, SD_A_RED_COMP, SD_T_DATA_TYPE, 1L, (const void*)&comp) == 0;
+        if (!ok || p_finalize(rd) != 0) { p_destroy(rd); return (void*)0; }
+        sd_keep_(s, rd);
+        void* op = (void*)0;
+        if (p_create(SD_OP_REDUCTION, &op) != 0) return (void*)0;
+        void* xd = (void*)x;
+        void* yd = (void*)y;
+        ok = p_set(op, SD_A_OPRED_DESC, SD_T_DESCRIPTOR, 1L, (const void*)&rd) == 0 &&
+             p_set(op, SD_A_OPRED_X, SD_T_DESCRIPTOR, 1L, (const void*)&xd) == 0 &&
+             p_set(op, SD_A_OPRED_Y, SD_T_DESCRIPTOR, 1L, (const void*)&yd) == 0;
+        if (!ok || p_finalize(op) != 0) { p_destroy(op); return (void*)0; }
+        return sd_keep_(s, op);
+    }
+}
+
+static ?&void sd_matmul_(int s, ?&void a, ?&void b, ?&void c) {
+    if (a == (void*)0 || b == (void*)0 || c == (void*)0) return (void*)0;
+    unsafe {
+        void* md = (void*)0;
+        if (p_create(SD_MATMUL, &md) != 0) return (void*)0;
+        int comp = SD_D_FLOAT;
+        if (p_set(md, SD_A_MM_COMP, SD_T_DATA_TYPE, 1L, (const void*)&comp) != 0 || p_finalize(md) != 0) {
+            p_destroy(md);
+            return (void*)0;
+        }
+        sd_keep_(s, md);
+        void* op = (void*)0;
+        if (p_create(SD_OP_MATMUL, &op) != 0) return (void*)0;
+        void* ad = (void*)a;
+        void* bd = (void*)b;
+        void* cd = (void*)c;
+        int ok = p_set(op, SD_A_OPMM_A, SD_T_DESCRIPTOR, 1L, (const void*)&ad) == 0 &&
+                 p_set(op, SD_A_OPMM_B, SD_T_DESCRIPTOR, 1L, (const void*)&bd) == 0 &&
+                 p_set(op, SD_A_OPMM_C, SD_T_DESCRIPTOR, 1L, (const void*)&cd) == 0 &&
+                 p_set(op, SD_A_OPMM_DESC, SD_T_DESCRIPTOR, 1L, (const void*)&md) == 0;
+        if (!ok || p_finalize(op) != 0) { p_destroy(op); return (void*)0; }
+        return sd_keep_(s, op);
+    }
+}
+
+// Builds slot s's operation graph and plan; 1 on success.
+static int sd_build_(int s, int dtype, struct CudaAttnShape a, int causal) {
+    long b = (long)a.batch;
+    long hq = (long)a.heads;
+    long hk = (long)a.kvHeads;
+    long sq = (long)a.seqLen;
+    long sk = (long)a.kvLen;
+    long d = (long)a.headDim;
+    int io = dtype == CUDA_BF16 ? SD_D_BF16 : SD_D_HALF;
+    int F = SD_D_FLOAT;
+    long sS0 = hq * sq * sk;
+    long sS1 = sq * sk;
+    unsafe {
+        void* ops[24];
+        int nops = 0;
+        ?&void tq = sd_tensor_(s, 1L, io, b, hq, sq, d, hq * sq * d, sq * d, d, 1L, 0, 0);
+        ?&void tkt = sd_tensor_(s, 2L, io, b, hk, d, sk, hk * sk * d, sk * d, 1L, d, 0, 0);   // K^T view of K
+        ?&void tv = sd_tensor_(s, 3L, io, b, hk, sk, d, hk * sk * d, sk * d, d, 1L, 0, 0);
+        ?&void to = sd_tensor_(s, 4L, io, b, hq, sq, d, hq * sq * d, sq * d, d, 1L, 0, 0);
+        ?&void tscale = sd_scalar_(s, 5L, F);
+        ?&void s0 = sd_tensor_(s, 6L, F, b, hq, sq, sk, sS0, sS1, sk, 1L, 1, 0);
+        ops[nops] = (void*)sd_matmul_(s, tq, tkt, s0); nops = nops + 1;
+        ?&void last = sd_tensor_(s, 7L, F, b, hq, sq, sk, sS0, sS1, sk, 1L, 1, 0);
+        ops[nops] = (void*)sd_pointwise_(s, SD_PW_MUL, F, -1L, s0, tscale, (void*)0, last); nops = nops + 1;
+        if (causal) {
+            // keep where row + (kvLen - seqLen) >= col
+            ?&void row = sd_tensor_(s, 8L, SD_D_INT32, b, hq, sq, sk, sS0, sS1, sk, 1L, 1, 0);
+            ?&void col = sd_tensor_(s, 9L, SD_D_INT32, b, hq, sq, sk, sS0, sS1, sk, 1L, 1, 0);
+            ops[nops] = (void*)sd_pointwise_(s, SD_PW_GEN_INDEX, F, 2L, last, (void*)0, (void*)0, row); nops = nops + 1;
+            ops[nops] = (void*)sd_pointwise_(s, SD_PW_GEN_INDEX, F, 3L, last, (void*)0, (void*)0, col); nops = nops + 1;
+            ?&void tskv = sd_scalar_(s, 10L, SD_D_INT32);
+            ?&void r1 = sd_tensor_(s, 11L, SD_D_INT32, b, hq, sq, sk, sS0, sS1, sk, 1L, 1, 0);
+            ops[nops] = (void*)sd_pointwise_(s, SD_PW_ADD, SD_D_INT32, -1L, row, tskv, (void*)0, r1); nops = nops + 1;
+            ?&void tsq = sd_scalar_(s, 12L, SD_D_INT32);
+            ?&void r2 = sd_tensor_(s, 13L, SD_D_INT32, b, hq, sq, sk, sS0, sS1, sk, 1L, 1, 0);
+            ops[nops] = (void*)sd_pointwise_(s, SD_PW_SUB, SD_D_INT32, -1L, r1, tsq, (void*)0, r2); nops = nops + 1;
+            ?&void keep = sd_tensor_(s, 14L, SD_D_BOOL, b, hq, sq, sk, sS0, sS1, sk, 1L, 1, 0);
+            ops[nops] = (void*)sd_pointwise_(s, SD_PW_CMP_GE, SD_D_BOOL, -1L, r2, col, (void*)0, keep); nops = nops + 1;
+            ?&void ninf = sd_scalar_(s, 15L, F);
+            ?&void masked = sd_tensor_(s, 16L, F, b, hq, sq, sk, sS0, sS1, sk, 1L, 1, 0);
+            ops[nops] = (void*)sd_pointwise_(s, SD_PW_SELECT, F, -1L, last, ninf, keep, masked); nops = nops + 1;
+            last = masked;
+        }
+        if (a.window > 0UL) {
+            // keep where col + (window - kvLen + seqLen) > row
+            ?&void row = sd_tensor_(s, 17L, F, b, hq, sq, sk, sS0, sS1, sk, 1L, 1, 0);
+            ?&void col = sd_tensor_(s, 18L, F, b, hq, sq, sk, sS0, sS1, sk, 1L, 1, 0);
+            ops[nops] = (void*)sd_pointwise_(s, SD_PW_GEN_INDEX, F, 2L, last, (void*)0, (void*)0, row); nops = nops + 1;
+            ops[nops] = (void*)sd_pointwise_(s, SD_PW_GEN_INDEX, F, 3L, last, (void*)0, (void*)0, col); nops = nops + 1;
+            ?&void toff = sd_scalar_(s, 19L, F);
+            ?&void c1 = sd_tensor_(s, 20L, F, b, hq, sq, sk, sS0, sS1, sk, 1L, 1, 0);
+            ops[nops] = (void*)sd_pointwise_(s, SD_PW_ADD, F, -1L, col, toff, (void*)0, c1); nops = nops + 1;
+            ?&void keep = sd_tensor_(s, 21L, SD_D_BOOL, b, hq, sq, sk, sS0, sS1, sk, 1L, 1, 0);
+            ops[nops] = (void*)sd_pointwise_(s, SD_PW_CMP_GT, SD_D_BOOL, -1L, c1, row, (void*)0, keep); nops = nops + 1;
+            ?&void ninf = sd_scalar_(s, 22L, F);
+            ?&void masked = sd_tensor_(s, 23L, F, b, hq, sq, sk, sS0, sS1, sk, 1L, 1, 0);
+            ops[nops] = (void*)sd_pointwise_(s, SD_PW_SELECT, F, -1L, last, ninf, keep, masked); nops = nops + 1;
+            last = masked;
+        }
+        // softmax with the row statistics cudnn-frontend also forms
+        ?&void mx = sd_tensor_(s, 26L, F, b, hq, sq, 1L, hq * sq, sq, 1L, 1L, 1, 0);
+        ops[nops] = (void*)sd_reduction_(s, SD_RED_MAX, last, mx); nops = nops + 1;
+        ?&void sub = sd_tensor_(s, 27L, F, b, hq, sq, sk, sS0, sS1, sk, 1L, 1, 0);
+        ops[nops] = (void*)sd_pointwise_(s, SD_PW_SUB, F, -1L, last, mx, (void*)0, sub); nops = nops + 1;
+        ?&void ex = sd_tensor_(s, 28L, F, b, hq, sq, sk, sS0, sS1, sk, 1L, 1, 0);
+        ops[nops] = (void*)sd_pointwise_(s, SD_PW_EXP, F, -1L, sub, (void*)0, (void*)0, ex); nops = nops + 1;
+        ?&void sum = sd_tensor_(s, 29L, F, b, hq, sq, 1L, hq * sq, sq, 1L, 1L, 1, 0);
+        ops[nops] = (void*)sd_reduction_(s, SD_RED_ADD, ex, sum); nops = nops + 1;
+        ?&void lg = sd_tensor_(s, 30L, F, b, hq, sq, 1L, hq * sq, sq, 1L, 1L, 1, 0);
+        ops[nops] = (void*)sd_pointwise_(s, SD_PW_LOG, F, -1L, sum, (void*)0, (void*)0, lg); nops = nops + 1;
+        ?&void stats = sd_tensor_(s, 24L, F, b, hq, sq, 1L, hq * sq, sq, 1L, 1L, 1, 0);
+        ops[nops] = (void*)sd_pointwise_(s, SD_PW_ADD, F, -1L, mx, lg, (void*)0, stats); nops = nops + 1;
+        ?&void pr = sd_tensor_(s, 25L, io, b, hq, sq, sk, sS0, sS1, sk, 1L, 1, 0);
+        ops[nops] = (void*)sd_pointwise_(s, SD_PW_DIV, F, -1L, ex, sum, (void*)0, pr); nops = nops + 1;
+        ops[nops] = (void*)sd_matmul_(s, pr, tv, to); nops = nops + 1;
+        int i = 0;
+        while (i < nops) { if (ops[i] == (void*)0) return 0; i = i + 1; }
+
+        void* graph = (void*)0;
+        if (p_create(SD_OPGRAPH, &graph) != 0) return 0;
+        sd_keep_(s, graph);
+        long nl = (long)nops;
+        if (p_set(graph, SD_A_GRAPH_OPS, SD_T_DESCRIPTOR, nl, (const void*)&ops[0]) != 0 ||
+            p_set(graph, SD_A_GRAPH_HANDLE, SD_T_HANDLE, 1L, (const void*)&g_sd_handle) != 0 ||
+            p_finalize(graph) != 0) return 0;
+
+        // First heuristic engine config that finalizes within the workspace limit.
+        void* heur = (void*)0;
+        int hm = SD_HEUR_A;
+        if (p_create(SD_ENGINEHEUR, &heur) != 0) return 0;
+        sd_keep_(s, heur);
+        if (p_set(heur, SD_A_HEUR_GRAPH, SD_T_DESCRIPTOR, 1L, (const void*)&graph) != 0 ||
+            p_set(heur, SD_A_HEUR_MODE, SD_T_HEUR_MODE, 1L, (const void*)&hm) != 0 ||
+            p_finalize(heur) != 0) return 0;
+        void* cfgs[SD_CFGS];
+        i = 0;
+        while (i < SD_CFGS) {
+            cfgs[i] = (void*)0;
+            if (p_create(SD_ENGINECFG, &cfgs[i]) != 0) return 0;
+            sd_keep_(s, cfgs[i]);
+            i = i + 1;
+        }
+        long ncfg = 0L;
+        if (p_get(heur, SD_A_HEUR_RESULTS, SD_T_DESCRIPTOR, (long)SD_CFGS, &ncfg, (void*)&cfgs[0]) != 0) return 0;
+        long c = 0L;
+        while (c < ncfg && c < (long)SD_CFGS) {
+            void* plan = (void*)0;
+            long ws = 0L;
+            long got = 0L;
+            if (p_create(SD_PLAN, &plan) == 0) {
+                if (p_set(plan, SD_A_PLAN_HANDLE, SD_T_HANDLE, 1L, (const void*)&g_sd_handle) == 0 &&
+                    p_set(plan, SD_A_PLAN_CFG, SD_T_DESCRIPTOR, 1L, (const void*)&cfgs[c]) == 0 &&
+                    p_finalize(plan) == 0 &&
+                    p_get(plan, SD_A_PLAN_WS, SD_T_INT64, 1L, &got, (void*)&ws) == 0 &&
+                    ws >= 0L && (unsigned long)ws <= SD_MAX_WS) {
+                    unsigned long long wsp = 0ULL;
+                    if (ws == 0L || cuMemAlloc_v2(&wsp, (size_t)ws) == 0) {
+                        g_sd_plan[s] = plan;
+                        g_sd_ws[s] = wsp;
+                        return 1;
+                    }
+                }
+                p_destroy(plan);
+            }
+            c = c + 1L;
+        }
+    }
+    return 0;
+}
+
+// (Re)binds slot s's variant pack to these buffers.
+static int sd_bind_(int s, unsigned long q, unsigned long k, unsigned long v, unsigned long o, int causal, int windowed) {
+    if (g_sd_vp[s] != (void*)0 && g_sd_ptr[s * 4] == q && g_sd_ptr[s * 4 + 1] == k &&
+        g_sd_ptr[s * 4 + 2] == v && g_sd_ptr[s * 4 + 3] == o) return 1;
+    unsafe {
+        if (g_sd_vp[s] != (void*)0) {
+            cuStreamSynchronize((void*)cuda_stream_handle());   // queued work may still use the old pack
+            p_destroy(g_sd_vp[s]);
+            g_sd_vp[s] = (void*)0;
+        }
+        long uids[10];
+        void* ptrs[10];
+        int n = 0;
+        uids[n] = 1L; ptrs[n] = (void*)q; n = n + 1;
+        uids[n] = 2L; ptrs[n] = (void*)k; n = n + 1;
+        uids[n] = 3L; ptrs[n] = (void*)v; n = n + 1;
+        uids[n] = 4L; ptrs[n] = (void*)o; n = n + 1;
+        uids[n] = 5L; ptrs[n] = (void*)&g_sd_f[s * 4]; n = n + 1;
+        if (causal) {
+            uids[n] = 10L; ptrs[n] = (void*)&g_sd_i[s * 2]; n = n + 1;
+            uids[n] = 12L; ptrs[n] = (void*)&g_sd_i[s * 2 + 1]; n = n + 1;
+            uids[n] = 15L; ptrs[n] = (void*)&g_sd_f[s * 4 + 1]; n = n + 1;
+        }
+        if (windowed) {
+            uids[n] = 19L; ptrs[n] = (void*)&g_sd_f[s * 4 + 3]; n = n + 1;
+            uids[n] = 22L; ptrs[n] = (void*)&g_sd_f[s * 4 + 2]; n = n + 1;
+        }
+        void* vp = (void*)0;
+        if (p_create(SD_VARIANT_PACK, &vp) != 0) return 0;
+        void* ws = (void*)(unsigned long)g_sd_ws[s];
+        long nl = (long)n;
+        if (p_set(vp, SD_A_VP_UIDS, SD_T_INT64, nl, (const void*)&uids[0]) != 0 ||
+            p_set(vp, SD_A_VP_PTRS, SD_T_VOID_PTR, nl, (const void*)&ptrs[0]) != 0 ||
+            p_set(vp, SD_A_VP_WS, SD_T_VOID_PTR, 1L, (const void*)&ws) != 0 ||
+            p_finalize(vp) != 0) { p_destroy(vp); return 0; }
+        g_sd_vp[s] = vp;
+    }
+    g_sd_ptr[s * 4] = q; g_sd_ptr[s * 4 + 1] = k; g_sd_ptr[s * 4 + 2] = v; g_sd_ptr[s * 4 + 3] = o;
+    return 1;
+}
+
+// Runs flash attention through cuDNN; 1 = enqueued, 0 = use the fallback.
+static int sd_run_(unsigned long q, unsigned long k, unsigned long v, unsigned long o, int dtype,
+                   struct CudaAttnShape a, float scale, int causal) {
+    if (!g_sd_enabled || !sd_load_()) return 0;
+    long key[9];
+    key[0] = (long)dtype; key[1] = (long)a.batch; key[2] = (long)a.heads; key[3] = (long)a.kvHeads;
+    key[4] = (long)a.seqLen; key[5] = (long)a.kvLen; key[6] = (long)a.headDim; key[7] = causal ? 1L : 0L;
+    key[8] = a.window > 0UL ? 1L : 0L;
+    int s = -1;
+    int free = -1;
+    int i = 0;
+    while (i < SD_SLOTS && s < 0) {
+        int same = g_sd_key[i * 9] != 0L;
+        int j = 0;
+        while (same && j < 9) { if (g_sd_key[i * 9 + j] != key[j]) same = 0; j = j + 1; }
+        if (same) s = i;
+        if (free < 0 && g_sd_key[i * 9] == 0L) free = i;
+        i = i + 1;
+    }
+    if (s < 0) {
+        if (free < 0) return 0;   // cache full: own kernels
+        s = free;
+        i = 0;
+        while (i < 9) { g_sd_key[s * 9 + i] = key[i]; i = i + 1; }
+        g_sd_ok[s] = sd_build_(s, dtype, a, causal) ? 1 : -1;
+    }
+    if (g_sd_ok[s] != 1) return 0;
+    unsafe {
+        unsigned int ninf = 0xff800000U;
+        float nf = 0.0f;
+        memcpy((void*)&nf, (const void*)&ninf, 4UL);
+        g_sd_f[s * 4] = scale;
+        g_sd_f[s * 4 + 1] = nf;
+        g_sd_f[s * 4 + 2] = nf;
+        g_sd_f[s * 4 + 3] = (float)((long)a.window - (long)a.kvLen + (long)a.seqLen);
+        g_sd_i[s * 2] = (int)a.kvLen;
+        g_sd_i[s * 2 + 1] = (int)a.seqLen;
+        if (!sd_bind_(s, q, k, v, o, causal, a.window > 0UL)) return 0;
+        return p_execute(g_sd_handle, g_sd_plan[s], g_sd_vp[s]) == 0;
+    }
+}
+
 // ── Flash attention ──────────────────────────────────────────────────────────
 
 static int attn_flash_(unsigned long q, unsigned long k, unsigned long v, unsigned long o, int dtype,
@@ -654,6 +1133,7 @@ static int attn_flash_(unsigned long q, unsigned long k, unsigned long v, unsign
         else if (s.headDim == 128UL) sc = (float)0.08838834764831845;
         else sc = 0.0625f;
     }
+    if (dtype != 0 && cuda_compute_capability() >= 80 && sd_run_(q, k, v, o, dtype, s, sc, causal)) return 1;
     float sl2 = sc * (float)1.4426950408889634;   // softmax in base 2
     // Tensor cores for fp16/bf16 on sm_80+ up to head dim 128.
     int useMma = dtype != 0 && cuda_compute_capability() >= 80 && s.headDim <= 128UL;

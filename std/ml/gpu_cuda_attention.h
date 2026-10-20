@@ -6,10 +6,12 @@
 // linear_attention_forward, on gpu_cuda.h's device buffers and stream:
 //
 //  - Flash attention: softmax(Q K^T * scale) V without materializing the
-//    score matrix (FlashAttention-2: K/V tiles in shared memory, online
-//    softmax in registers). fp16/bf16 run on tensor cores (mma.sync, fp32
-//    accumulation) on sm_80 and newer for head dims up to 128; fp32, head
-//    dim 256 and older GPUs use a CUDA-core kernel with the same algorithm.
+//    score matrix. fp16/bf16 go to cuDNN's fused attention (the kernels
+//    PyTorch's scaled_dot_product_attention uses on Hopper) when cuDNN 9 is
+//    installed; otherwise, and for anything cuDNN rejects, this library's
+//    FlashAttention-2 kernel runs them on tensor cores (mma.sync, fp32
+//    accumulation) on sm_80+ for head dims up to 128. fp32, head dim 256 and
+//    older GPUs use a CUDA-core kernel with the same algorithm.
 //  - Linear attention: Katharopoulos et al.'s kernel-trick attention with
 //    phi(x) = elu(x) + 1, in O((seqLen + kvLen) D^2) instead of
 //    O(seqLen kvLen D). Non-causal runs phi(K)^T V once per kv head; causal
@@ -59,6 +61,12 @@ struct CudaAttnShape {
 
 // 1 if 'headDim' is supported by the kernels below.
 int cuda_attention_head_dim_ok(unsigned long headDim);
+
+// fp16/bf16 flash attention uses cuDNN's fused attention engine when
+// libcudnn.so.9 can be loaded (dlopen; no link dependency) and the GPU is
+// sm_80 or newer, and this library's own kernels otherwise. on = 0 forces
+// the own kernels. Returns 1 if cuDNN is in use after the call.
+int cuda_attention_use_cudnn(int on);
 
 // out = softmax(q k^T * scale [+ mask]) v. 'scale' <= 0 means
 // 1 / sqrt(headDim). A query with no visible key gets zeros.

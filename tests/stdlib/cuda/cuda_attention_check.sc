@@ -208,6 +208,21 @@ int main() {
         run_case(c ? "linear fp32 D32 causal" : "linear fp32 D32", shape(1UL, 2UL, 2UL, 33UL, 97UL, 32UL), 0, c, 1, 2.0e-5);
         c = c + 1;
     }
+    // The same 16-bit flash cases through this library's own kernels (the
+    // loop above used cuDNN's fused attention where available).
+    int hadCudnn = std::cuda_attention_use_cudnn(1);
+    std::cuda_attention_use_cudnn(0);
+    unsafe { printf("  (cuDNN fused attention: %s)\n", hadCudnn ? "used above" : "not available"); }
+    c = 0;
+    while (c < 2) {
+        run_case(c ? "own flash fp16 D64 GQA causal" : "own flash fp16 D64 GQA", shape(2UL, 4UL, 2UL, 77UL, 77UL, 64UL), CUDA_FP16, c, 0, 4.0e-3);
+        run_case(c ? "own flash bf16 D128 kv-cache causal" : "own flash bf16 D128 kv-cache", shape(1UL, 4UL, 2UL, 100UL, 200UL, 128UL), CUDA_BF16, c, 0, 2.5e-2);
+        run_case(c ? "own flash fp16 D96 causal" : "own flash fp16 D96", shape(1UL, 2UL, 2UL, 65UL, 65UL, 96UL), CUDA_FP16, c, 0, 4.0e-3);
+        c = c + 1;
+    }
+    run_case("own flash fp16 D64 window 17", windowed(shape(1UL, 2UL, 2UL, 90UL, 90UL, 64UL), 17UL), CUDA_FP16, 0, 0, 4.0e-3);
+    run_case("own flash bf16 D128 window 100 causal", windowed(shape(1UL, 2UL, 2UL, 130UL, 130UL, 128UL), 100UL), CUDA_BF16, 1, 0, 2.5e-2);
+    std::cuda_attention_use_cudnn(1);
     // Sliding window (flash), with and without causal, narrower and wider than a tile
     run_case("flash fp32 D64 window 40 causal", windowed(shape(1UL, 2UL, 1UL, 150UL, 200UL, 64UL), 40UL), 0, 1, 0, 2.0e-5);
     run_case("flash fp16 D64 window 17", windowed(shape(1UL, 2UL, 2UL, 90UL, 90UL, 64UL), 17UL), CUDA_FP16, 0, 0, 4.0e-3);
