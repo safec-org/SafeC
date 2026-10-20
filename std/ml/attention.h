@@ -17,9 +17,11 @@
 // attention_advanced.h/.sc. std/ml/ROADMAP.md tracks anything still
 // outstanding.
 //
-// GPU versions: gpu_cuda_attention.h (NVIDIA: batched multi-head flash and
-// linear attention, GQA, causal and sliding-window masks, fp32/fp16/bf16)
-// and gpu_mps.h's mps_flash_attn_bf16 / mps_linear_attn_bf16 (Apple).
+// GPU versions: gpu_cuda_attention.h (NVIDIA) and gpu_mps.h's
+// mps_flash_attention / mps_linear_attention (Apple) -- batched multi-head
+// flash and linear attention, GQA, causal and sliding-window masks,
+// fp32/fp16/bf16, with the same argument forms -- and gpu_rocm.h's
+// rocm_flash_attention / rocm_linear_attention (AMD, fp32).
 #include <std/ml/tensor.h>
 
 namespace std {

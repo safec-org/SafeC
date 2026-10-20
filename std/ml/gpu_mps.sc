@@ -1751,6 +1751,21 @@ void mps_release_persistent(&void buf, unsigned long bytes) {
     __mps_buf_put(buf, bytes);
 }
 
+?&void mps_alloc_persistent(unsigned long bytes) {
+    if (!__mps_ensure_device_queue()) return (void*)0;
+    return __mps_buf_get(bytes);
+}
+
+int mps_read_persistent(&void buf, &void dst, unsigned long bytes) {
+    unsafe {
+        MMsg0 msg0 = (MMsg0)objc_msgSend;
+        void* src = msg0((void*)buf, __sel_contents);
+        if (src == (void*)0) return 0;
+        memcpy((void*)dst, src, bytes);
+        return 1;
+    }
+}
+
 int mps_relu_f32_chained(&void bufA, &float out, unsigned long n) {
     if (!__mps_batch_active) return 0;
     unsafe {
@@ -3483,31 +3498,137 @@ int mps_attn_batch_bf16_chained(&void bufQ, &void bufK, &void bufV, &void bufCac
     }
 }
 
-// ── Flash attention (bf16) ──────────────────────────────────────────────────
-// See flash_attn_bf16_kernel's comment in gpu_mps_kernels.metal. One
-// FLASH_BQ-simdgroup threadgroup per (block of FLASH_BQ query rows, head);
-// FLASH_BQ must match the kernel's.
+// ── Flash and linear attention ──────────────────────────────────────────────
+// See the "Flash and linear attention" kernels in gpu_mps_kernels.metal.
+// Every call fills one MpsAttnParams (the kernels' AttnParams, field for
+// field) with the problem size and element strides, so the head-major
+// [batch][heads][seq][dim] API (mps_*_attention_ex) and the token-major
+// [seq][heads*dim] bf16 API (mps_*_attn_bf16) share the same kernels.
+struct MpsAttnParams {
+    unsigned int seqLen;
+    unsigned int kvLen;
+    unsigned int heads;
+    unsigned int kvHeads;
+    unsigned int causal;
+    unsigned int window;
+    unsigned int hasState;
+    unsigned int seg;
+    float scale;
+    unsigned int qRow;
+    unsigned int qHead;
+    unsigned int qBatch;
+    unsigned int kvRow;
+    unsigned int kvHead;
+    unsigned int kvBatch;
+};
+
+// FLASH_SG / FLASH_BQ / LIN_SG must match gpu_mps_kernels.metal: the matrix
+// kernel (head dim <= 256) runs FLASH_SG simdgroups of 8 query rows, the
+// head-dim-512 kernel FLASH_BQ simdgroups of one row, linear attention
+// LIN_SG simdgroups of LIN_COLS(headDim) output columns.
+#define FLASH_SG ((unsigned long)4)
 #define FLASH_BQ ((unsigned long)16)
+#define LIN_SG   ((unsigned long)4)
 
-static void* __mps_flash_attn_pipelines[4];
+int mps_attention_head_dim_ok(unsigned long headDim) {
+    return headDim == 32UL || headDim == 64UL || headDim == 96UL || headDim == 128UL ||
+           headDim == 256UL || headDim == 512UL;
+}
 
-int mps_flash_attn_bf16_chained(&void bufQ, &void bufK, &void bufV, &unsigned short out,
-                                  unsigned long seqLen, unsigned long kvLen,
-                                  unsigned long numHeads, unsigned long numKvHeads, unsigned long headDim,
-                                  float scale, int causal, int isSliding, unsigned long slidingWindow) {
-    if (!__mps_batch_active) return 0;
-    if (seqLen == 0UL || !__mps_attn_shape_ok(numHeads, numKvHeads, headDim)) return 0;
-    if ((causal || isSliding) && kvLen < seqLen) return 0;
+static unsigned long __mps_attn_dim_index(unsigned long headDim) {
+    if (headDim == 32UL) return 0UL;
+    if (headDim == 64UL) return 1UL;
+    if (headDim == 96UL) return 2UL;
+    if (headDim == 128UL) return 3UL;
+    if (headDim == 256UL) return 4UL;
+    return 5UL;
+}
+
+// One cached pipeline per (dtype, head dim): slot dtype * 6 + dim index.
+static void* __mps_flash_pipelines[18];
+static void* __mps_linear_pipelines[18];
+static void* __mps_linear_z_pipelines[3];
+
+// "<prefix><f32|f16|bf16>_d<headDim>" into 'buf' (>= 48 bytes); headDim 0
+// leaves off the "_d" suffix.
+static void __mps_attn_kernel_name(&char buf, const char* prefix, int dtype, unsigned long headDim) {
     unsafe {
-        void* pipeline = __mps_head_dim_pipeline(__mps_flash_attn_pipelines, headDim,
-                                                 "flash_attn_bf16_kernel_d64", "flash_attn_bf16_kernel_d128",
-                                                 "flash_attn_bf16_kernel_d256", "flash_attn_bf16_kernel_d512");
-        if (pipeline == (void*)0) return 0;
-        unsigned long outBytes = seqLen * numHeads * headDim * 2UL;
-        void* bufOut = __mps_buf_get_batched(outBytes);
-        if (bufOut == (void*)0) return 0;
+        char* out = (char*)buf;
+        unsigned long n = 0UL;
+        while (prefix[n] != (char)0) { out[n] = prefix[n]; n = n + 1UL; }
+        const char* dt = dtype == MPS_FP16 ? "f16" : (dtype == MPS_BF16 ? "bf16" : "f32");
+        unsigned long i = 0UL;
+        while (dt[i] != (char)0) { out[n] = dt[i]; n = n + 1UL; i = i + 1UL; }
+        if (headDim != 0UL) {
+            out[n] = '_'; out[n + 1UL] = 'd'; n = n + 2UL;
+            char digits[8];
+            unsigned long nd = 0UL;
+            unsigned long x = headDim;
+            while (x != 0UL) { digits[nd] = (char)(48UL + x % 10UL); nd = nd + 1UL; x = x / 10UL; }
+            while (nd != 0UL) { nd = nd - 1UL; out[n] = digits[nd]; n = n + 1UL; }
+        }
+        out[n] = (char)0;
+    }
+}
 
-        void* encoder = __mps_batch_encoder;
+static void* __mps_attn_pipeline(void** slots, unsigned long slot, const char* prefix, int dtype,
+                                 unsigned long headDim) {
+    unsafe {
+        if (slots[slot] == (void*)0) {
+            char name[48];
+            __mps_attn_kernel_name(&name[0], prefix, dtype, headDim);
+            slots[slot] = __mps_make_pipeline(&name[0]);
+        }
+        return slots[slot];
+    }
+}
+
+// Shared shape checks: supported head dim, kvHeads dividing heads, a
+// non-empty problem, and kvLen >= seqLen whenever positions matter.
+static int __mps_attn_check(struct MpsAttnShape s, int dtype, int causal) {
+    if (dtype != 0 && dtype != MPS_FP16 && dtype != MPS_BF16) return 0;
+    if (!mps_attention_head_dim_ok(s.headDim)) return 0;
+    if (s.batch == 0UL || s.seqLen == 0UL || s.kvLen == 0UL) return 0;
+    if (s.kvHeads == 0UL || s.heads % s.kvHeads != 0UL) return 0;
+    if ((causal || s.window != 0UL) && s.kvLen < s.seqLen) return 0;
+    return 1;
+}
+
+// Head-major strides: q/out [batch][heads][seqLen][D], k/v [batch][kvHeads][kvLen][D].
+static struct MpsAttnParams __mps_attn_params_head_major(struct MpsAttnShape s, int causal) {
+    struct MpsAttnParams p;
+    p.seqLen = (unsigned int)s.seqLen; p.kvLen = (unsigned int)s.kvLen;
+    p.heads = (unsigned int)s.heads; p.kvHeads = (unsigned int)s.kvHeads;
+    p.causal = causal ? 1U : 0U; p.window = (unsigned int)s.window; p.hasState = 0U; p.seg = 0U;
+    p.scale = (float)0.0;
+    p.qRow = (unsigned int)s.headDim;
+    p.qHead = (unsigned int)(s.seqLen * s.headDim);
+    p.qBatch = (unsigned int)(s.heads * s.seqLen * s.headDim);
+    p.kvRow = (unsigned int)s.headDim;
+    p.kvHead = (unsigned int)(s.kvLen * s.headDim);
+    p.kvBatch = (unsigned int)(s.kvHeads * s.kvLen * s.headDim);
+    return p;
+}
+
+// Token-major strides (batch 1): q/out [seqLen][heads*D], k/v [kvLen][kvHeads*D].
+static struct MpsAttnParams __mps_attn_params_token_major(struct MpsAttnShape s, int causal) {
+    struct MpsAttnParams p = __mps_attn_params_head_major(s, causal);
+    p.qRow = (unsigned int)(s.heads * s.headDim);
+    p.qHead = (unsigned int)s.headDim;
+    p.kvRow = (unsigned int)(s.kvHeads * s.headDim);
+    p.kvHead = (unsigned int)s.headDim;
+    return p;
+}
+
+// Encodes flash attention onto 'encoder' ('p.scale' <= 0: the kernel uses 1/sqrt(headDim)).
+static int __mps_flash_encode(void* encoder, void* bufQ, void* bufK, void* bufV, void* bufOut,
+                              struct MpsAttnShape s, int dtype, struct MpsAttnParams p) {
+    unsafe {
+        int wide = s.headDim > 256UL;
+        unsigned long slot = (unsigned long)dtype * 6UL + __mps_attn_dim_index(s.headDim);
+        void* pipeline = __mps_attn_pipeline(__mps_flash_pipelines, slot,
+                                             wide ? "flash_attn_simd_" : "flash_attn_mma_", dtype, s.headDim);
+        if (pipeline == (void*)0) return 0;
         MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
         msgVoid1(encoder, __sel_setComputePipelineState, pipeline);
         MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
@@ -3515,28 +3636,294 @@ int mps_flash_attn_bf16_chained(&void bufQ, &void bufK, &void bufV, &unsigned sh
         setBufFn(encoder, __sel_setBuffer, bufK, 0UL, 1UL);
         setBufFn(encoder, __sel_setBuffer, bufV, 0UL, 2UL);
         setBufFn(encoder, __sel_setBuffer, bufOut, 0UL, 3UL);
-        unsigned int params[7];
-        params[0] = (unsigned int)seqLen;
-        params[1] = (unsigned int)kvLen;
-        params[2] = (unsigned int)numHeads;
-        params[3] = (unsigned int)numKvHeads;
-        params[4] = causal ? 1U : 0U;
-        params[5] = isSliding ? 1U : 0U;
-        params[6] = (unsigned int)slidingWindow;
-        __mps_set_uints(encoder, params, 7UL, 4UL);
         MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
-        float scaleVal = scale;
-        setBytesFn(encoder, __sel_setBytes, (void*)&scaleVal, 4UL, 11UL);
+        setBytesFn(encoder, __sel_setBytes, (void*)&p, sizeof(struct MpsAttnParams), 4UL);
 
+        unsigned long rowsPerGroup = wide ? FLASH_BQ : FLASH_SG * 8UL;
         struct MTLSize tgSize;
-        tgSize.width = FLASH_BQ * 32UL; tgSize.height = 1UL; tgSize.depth = 1UL;
+        tgSize.width = (wide ? FLASH_BQ : FLASH_SG) * 32UL; tgSize.height = 1UL; tgSize.depth = 1UL;
         struct MTLSize numThreadgroups;
-        numThreadgroups.width = (seqLen + FLASH_BQ - 1UL) / FLASH_BQ;
-        numThreadgroups.height = numHeads;
-        numThreadgroups.depth = 1UL;
+        numThreadgroups.width = (s.seqLen + rowsPerGroup - 1UL) / rowsPerGroup;
+        numThreadgroups.height = s.heads;
+        numThreadgroups.depth = s.batch;
+        MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
+        dispatchFn(encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        return 1;
+    }
+}
+
+// Chunk-parallel linear attention (see linear_chunk_state in
+// gpu_mps_kernels.metal): head dims 64 and 128, whole sequences only.
+#define LINC_ROWS ((unsigned long)64)   // must match the kernel source
+
+static void* __mps_linc_state_pipelines[6];
+static void* __mps_linc_out_pipelines[12];   // [causal][dtype][dim]
+static void* __mps_linc_prefix_pipelines[2];
+
+// The per-segment states live in one scratch buffer this library keeps and
+// grows. Calls in one batch may share it: the serial encoder orders their
+// dispatches. A buffer replaced mid-batch is released when the batch ends.
+static void* __mps_linc_scratch = (void*)0;
+static unsigned long __mps_linc_scratch_bytes = 0UL;
+
+static void* __mps_linc_scratch_get(unsigned long bytes) {
+    if (bytes <= __mps_linc_scratch_bytes) return __mps_linc_scratch;
+    if (__mps_linc_scratch != (void*)0) {
+        if (__mps_batch_active) { __mps_batch_track_pool_buf(__mps_linc_scratch, __mps_linc_scratch_bytes); }
+        else { __mps_buf_put(__mps_linc_scratch, __mps_linc_scratch_bytes); }
+    }
+    __mps_linc_scratch = __mps_buf_get(bytes);
+    __mps_linc_scratch_bytes = __mps_linc_scratch == (void*)0 ? 0UL : bytes;
+    return __mps_linc_scratch;
+}
+
+static int __mps_linear_chunked_encode(void* encoder, void* bufQ, void* bufK, void* bufV, void* bufOut,
+                                       struct MpsAttnShape s, int dtype, struct MpsAttnParams p) {
+    unsafe {
+        unsigned long di = s.headDim == 64UL ? 0UL : 1UL;
+        unsigned long slot = (unsigned long)dtype * 2UL + di;
+        void* stateP = __mps_attn_pipeline(__mps_linc_state_pipelines, slot, "linear_chunk_state_", dtype, s.headDim);
+        void* outP = p.causal ? __mps_attn_pipeline(__mps_linc_out_pipelines, 6UL + slot, "linear_chunk_out_causal_", dtype, s.headDim)
+                              : __mps_attn_pipeline(__mps_linc_out_pipelines, slot, "linear_chunk_out_", dtype, s.headDim);
+        if (__mps_linc_prefix_pipelines[di] == (void*)0) {
+            __mps_linc_prefix_pipelines[di] = __mps_make_pipeline(di == 0UL ? "linear_chunk_prefix_d64"
+                                                                            : "linear_chunk_prefix_d128");
+        }
+        void* prefixP = __mps_linc_prefix_pipelines[di];
+        if (stateP == (void*)0 || outP == (void*)0 || prefixP == (void*)0) return 0;
+
+        // Causal needs a state per LINC_ROWS-row chunk; non-causal only a
+        // total, summed from at most 16 segments.
+        unsigned long seg = LINC_ROWS;
+        if (!p.causal) {
+            unsigned long per = (s.kvLen + 15UL) / 16UL;
+            per = (per + LINC_ROWS - 1UL) / LINC_ROWS * LINC_ROWS;
+            if (per > seg) seg = per;
+        }
+        p.seg = (unsigned int)seg;
+        unsigned long nSeg = (s.kvLen + seg - 1UL) / seg;
+        unsigned long elems = s.headDim * s.headDim + s.headDim;
+        void* states = __mps_linc_scratch_get(s.batch * s.heads * nSeg * elems * 4UL);
+        if (states == (void*)0) return 0;
+
+        MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
+        MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
+        MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
+        MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
+        unsigned long slabs = s.headDim / 64UL;
+        struct MTLSize tgSize;
+        struct MTLSize grid;
+        tgSize.height = 1UL; tgSize.depth = 1UL;
+
+        msgVoid1(encoder, __sel_setComputePipelineState, stateP);
+        setBufFn(encoder, __sel_setBuffer, bufK, 0UL, 0UL);
+        setBufFn(encoder, __sel_setBuffer, bufV, 0UL, 1UL);
+        setBufFn(encoder, __sel_setBuffer, states, 0UL, 2UL);
+        setBytesFn(encoder, __sel_setBytes, (void*)&p, sizeof(struct MpsAttnParams), 3UL);
+        tgSize.width = s.headDim * 2UL;
+        grid.width = nSeg; grid.height = s.heads * slabs; grid.depth = s.batch;
+        dispatchFn(encoder, __sel_dispatchThreadgroups, grid, tgSize);
+
+        msgVoid1(encoder, __sel_setComputePipelineState, prefixP);
+        setBufFn(encoder, __sel_setBuffer, states, 0UL, 0UL);
+        setBytesFn(encoder, __sel_setBytes, (void*)&p, sizeof(struct MpsAttnParams), 1UL);
+        tgSize.width = 256UL;
+        grid.width = (elems + 255UL) / 256UL; grid.height = s.batch * s.heads; grid.depth = 1UL;
+        dispatchFn(encoder, __sel_dispatchThreadgroups, grid, tgSize);
+
+        msgVoid1(encoder, __sel_setComputePipelineState, outP);
+        setBufFn(encoder, __sel_setBuffer, bufQ, 0UL, 0UL);
+        setBufFn(encoder, __sel_setBuffer, bufK, 0UL, 1UL);
+        setBufFn(encoder, __sel_setBuffer, bufV, 0UL, 2UL);
+        setBufFn(encoder, __sel_setBuffer, bufOut, 0UL, 3UL);
+        setBufFn(encoder, __sel_setBuffer, states, 0UL, 4UL);
+        setBytesFn(encoder, __sel_setBytes, (void*)&p, sizeof(struct MpsAttnParams), 5UL);
+        tgSize.width = 256UL;
+        grid.width = (s.seqLen + LINC_ROWS - 1UL) / LINC_ROWS; grid.height = s.heads * slabs; grid.depth = s.batch;
+        dispatchFn(encoder, __sel_dispatchThreadgroups, grid, tgSize);
+        return 1;
+    }
+}
+
+// Encodes linear attention (and, with a state, the z update after it).
+static int __mps_linear_encode(void* encoder, void* bufQ, void* bufK, void* bufV, void* bufOut, void* bufState,
+                               struct MpsAttnShape s, int dtype, struct MpsAttnParams p) {
+    if (bufState == (void*)0 && (s.headDim == 64UL || s.headDim == 128UL) && (!p.causal || s.kvLen == s.seqLen)) {
+        return __mps_linear_chunked_encode(encoder, bufQ, bufK, bufV, bufOut, s, dtype, p);
+    }
+    unsafe {
+        unsigned long slot = (unsigned long)dtype * 6UL + __mps_attn_dim_index(s.headDim);
+        void* pipeline = __mps_attn_pipeline(__mps_linear_pipelines, slot, "linear_attn_", dtype, s.headDim);
+        if (pipeline == (void*)0) return 0;
+        int hasState = bufState != (void*)0;
+        void* zPipeline = (void*)0;
+        if (hasState) {
+            zPipeline = __mps_attn_pipeline(__mps_linear_z_pipelines, (unsigned long)dtype,
+                                            "linear_attn_z_update_", dtype, 0UL);
+            if (zPipeline == (void*)0) return 0;
+        }
+        p.hasState = hasState ? 1U : 0U;
+        MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
+        msgVoid1(encoder, __sel_setComputePipelineState, pipeline);
+        MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
+        setBufFn(encoder, __sel_setBuffer, bufQ, 0UL, 0UL);
+        setBufFn(encoder, __sel_setBuffer, bufK, 0UL, 1UL);
+        setBufFn(encoder, __sel_setBuffer, bufV, 0UL, 2UL);
+        setBufFn(encoder, __sel_setBuffer, bufOut, 0UL, 3UL);
+        // The kernel never touches buffer(4) without a state; any buffer
+        // satisfies the binding.
+        setBufFn(encoder, __sel_setBuffer, hasState ? bufState : bufOut, 0UL, 4UL);
+        MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
+        setBytesFn(encoder, __sel_setBytes, (void*)&p, sizeof(struct MpsAttnParams), 5UL);
+
+        unsigned long cols = 1UL;   // LIN_COLS(D) in the kernel source
+        if (s.headDim <= 256UL) cols = 2UL;
+        if (s.headDim <= 128UL) cols = 4UL;
+        if (s.headDim <= 64UL) cols = 8UL;
+        if (s.headDim <= 32UL) cols = 16UL;
+        unsigned long groups = s.headDim / cols;
+        struct MTLSize tgSize;
+        tgSize.width = LIN_SG * 32UL; tgSize.height = 1UL; tgSize.depth = 1UL;
+        struct MTLSize numThreadgroups;
+        numThreadgroups.width = (groups + LIN_SG - 1UL) / LIN_SG;
+        numThreadgroups.height = s.heads;
+        numThreadgroups.depth = s.batch;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
         dispatchFn(encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
 
+        if (hasState) {
+            msgVoid1(encoder, __sel_setComputePipelineState, zPipeline);
+            setBufFn(encoder, __sel_setBuffer, bufK, 0UL, 0UL);
+            setBufFn(encoder, __sel_setBuffer, bufState, 0UL, 1UL);
+            setBytesFn(encoder, __sel_setBytes, (void*)&p, sizeof(struct MpsAttnParams), 2UL);
+            unsigned int dim = (unsigned int)s.headDim;
+            setBytesFn(encoder, __sel_setBytes, (void*)&dim, 4UL, 3UL);
+            unsigned long n = s.heads * s.headDim;
+            tgSize.width = 64UL;
+            numThreadgroups.width = (n + 63UL) / 64UL;
+            numThreadgroups.height = 1UL;
+            dispatchFn(encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        }
+        return 1;
+    }
+}
+
+// Runs 'lin' (0 flash, 1 linear) into the open batch, or in a one-op batch
+// that is waited for when none is open.
+static int __mps_attn_run(int lin, void* bufQ, void* bufK, void* bufV, void* bufOut, struct MpsAttnShape s,
+                          int dtype, struct MpsAttnParams p) {
+    int ownBatch = !__mps_batch_active;
+    if (ownBatch) {
+        mps_batch_begin();
+        if (!__mps_batch_active) return 0;
+    }
+    int ok = lin ? __mps_linear_encode(__mps_batch_encoder, bufQ, bufK, bufV, bufOut, (void*)0, s, dtype, p)
+                 : __mps_flash_encode(__mps_batch_encoder, bufQ, bufK, bufV, bufOut, s, dtype, p);
+    if (ownBatch) { mps_batch_end(); }
+    return ok;
+}
+
+int mps_flash_attention_ex(&void q, &void k, &void v, &void out, struct MpsAttnShape s, int dtype,
+                           float scale, int causal) {
+    if (!__mps_attn_check(s, dtype, causal)) return 0;
+    struct MpsAttnParams p = __mps_attn_params_head_major(s, causal);
+    p.scale = scale;
+    unsafe { return __mps_attn_run(0, (void*)q, (void*)k, (void*)v, (void*)out, s, dtype, p); }
+}
+
+int mps_linear_attention_ex(&void q, &void k, &void v, &void out, struct MpsAttnShape s, int dtype, int causal) {
+    if (s.window != 0UL || !__mps_attn_check(s, dtype, causal)) return 0;
+    struct MpsAttnParams p = __mps_attn_params_head_major(s, causal);
+    unsafe { return __mps_attn_run(1, (void*)q, (void*)k, (void*)v, (void*)out, s, dtype, p); }
+}
+
+static struct MpsAttnShape __mps_attn_shape_flat(unsigned long heads, unsigned long seqLen, unsigned long kvLen,
+                                                 unsigned long headDim) {
+    struct MpsAttnShape s;
+    s.batch = 1UL; s.heads = heads; s.kvHeads = heads; s.seqLen = seqLen; s.kvLen = kvLen;
+    s.headDim = headDim; s.window = 0UL;
+    return s;
+}
+
+int mps_flash_attention(&void q, &void k, &void v, &void out, unsigned long heads, unsigned long seqLen,
+                        unsigned long kvLen, unsigned long headDim, float scale, int causal) {
+    return mps_flash_attention_ex(q, k, v, out, __mps_attn_shape_flat(heads, seqLen, kvLen, headDim), 0, scale, causal);
+}
+
+int mps_linear_attention(&void q, &void k, &void v, &void out, unsigned long heads, unsigned long seqLen,
+                         unsigned long kvLen, unsigned long headDim, int causal) {
+    return mps_linear_attention_ex(q, k, v, out, __mps_attn_shape_flat(heads, seqLen, kvLen, headDim), 0, causal);
+}
+
+// Host-array forms: upload, run, read back. Inside an open batch, 'out' is
+// filled at mps_batch_end() like every other batched op.
+static int __mps_attn_host_f32(int lin, const &float q, const &float k, const &float v, &float out,
+                               unsigned long heads, unsigned long seqLen, unsigned long kvLen,
+                               unsigned long headDim, float scale, int causal) {
+    struct MpsAttnShape s = __mps_attn_shape_flat(heads, seqLen, kvLen, headDim);
+    if (!__mps_attn_check(s, 0, causal)) return 0;
+    struct MpsAttnParams p = __mps_attn_params_head_major(s, causal);
+    p.scale = scale;
+    unsafe {
+        int ownBatch = !__mps_batch_active;
+        if (ownBatch) {
+            mps_batch_begin();
+            if (!__mps_batch_active) return 0;
+        }
+        unsigned long qBytes = heads * seqLen * headDim * 4UL;
+        unsigned long kvBytes = heads * kvLen * headDim * 4UL;
+        void* bufQ = __mps_buf_get_with_bytes_batched((const void*)q, qBytes);
+        void* bufK = __mps_buf_get_with_bytes_batched((const void*)k, kvBytes);
+        void* bufV = __mps_buf_get_with_bytes_batched((const void*)v, kvBytes);
+        void* bufOut = __mps_buf_get_batched(qBytes);
+        int ok = bufQ != (void*)0 && bufK != (void*)0 && bufV != (void*)0 && bufOut != (void*)0;
+        if (ok) {
+            ok = lin ? __mps_linear_encode(__mps_batch_encoder, bufQ, bufK, bufV, bufOut, (void*)0, s, 0, p)
+                     : __mps_flash_encode(__mps_batch_encoder, bufQ, bufK, bufV, bufOut, s, 0, p);
+        }
+        if (ok) { __mps_pending_add(bufOut, (void*)out, qBytes); }
+        if (ownBatch) { mps_batch_end(); }
+        return ok;
+    }
+}
+
+int mps_flash_attention_f32(const &float q, const &float k, const &float v, &float out,
+                            unsigned long heads, unsigned long seqLen, unsigned long kvLen,
+                            unsigned long headDim, float scale, int causal) {
+    return __mps_attn_host_f32(0, q, k, v, out, heads, seqLen, kvLen, headDim, scale, causal);
+}
+
+int mps_linear_attention_f32(const &float q, const &float k, const &float v, &float out,
+                             unsigned long heads, unsigned long seqLen, unsigned long kvLen,
+                             unsigned long headDim, int causal) {
+    return __mps_attn_host_f32(1, q, k, v, out, heads, seqLen, kvLen, headDim, (float)0.0, causal);
+}
+
+// ── Token-major bf16 API (flash) ────────────────────────────────────────────
+static struct MpsAttnShape __mps_attn_shape_tm(unsigned long seqLen, unsigned long kvLen, unsigned long numHeads,
+                                               unsigned long numKvHeads, unsigned long headDim,
+                                               unsigned long window) {
+    struct MpsAttnShape s;
+    s.batch = 1UL; s.heads = numHeads; s.kvHeads = numKvHeads; s.seqLen = seqLen; s.kvLen = kvLen;
+    s.headDim = headDim; s.window = window;
+    return s;
+}
+
+int mps_flash_attn_bf16_chained(&void bufQ, &void bufK, &void bufV, &unsigned short out,
+                                  unsigned long seqLen, unsigned long kvLen,
+                                  unsigned long numHeads, unsigned long numKvHeads, unsigned long headDim,
+                                  float scale, int causal, int isSliding, unsigned long slidingWindow) {
+    if (!__mps_batch_active) return 0;
+    struct MpsAttnShape s = __mps_attn_shape_tm(seqLen, kvLen, numHeads, numKvHeads, headDim,
+                                                isSliding ? slidingWindow : 0UL);
+    if (!__mps_attn_check(s, MPS_BF16, causal)) return 0;
+    struct MpsAttnParams p = __mps_attn_params_token_major(s, causal);
+    p.scale = scale;
+    unsafe {
+        unsigned long outBytes = seqLen * numHeads * headDim * 2UL;
+        void* bufOut = __mps_buf_get_batched(outBytes);
+        if (bufOut == (void*)0) return 0;
+        if (!__mps_flash_encode(__mps_batch_encoder, bufQ, bufK, bufV, bufOut, s, MPS_BF16, p)) return 0;
         __mps_pending_add(bufOut, (void*)out, outBytes);
         return 1;
     }
@@ -3569,16 +3956,7 @@ int mps_flash_attn_bf16(const &unsigned short q, const &unsigned short k, const 
     }
 }
 
-// ── Linear attention (bf16) ─────────────────────────────────────────────────
-// See linear_attn_bf16_kernel's comment in gpu_mps_kernels.metal. One
-// simdgroup per (head, block of 512/headDim output columns), LIN_SG
-// simdgroups per threadgroup (must match the kernel's); with a state
-// buffer, linear_attn_z_update_bf16 follows to advance z.
-#define LIN_SG ((unsigned long)4)
-
-static void* __mps_linear_attn_pipelines[4];
-static void* __mps_linear_attn_z_pipeline = (void*)0;
-
+// ── Token-major bf16 API (linear) ───────────────────────────────────────────
 unsigned long mps_linear_attn_state_bytes(unsigned long numHeads, unsigned long headDim) {
     return numHeads * (headDim * headDim + headDim) * 4UL;
 }
@@ -3597,72 +3975,20 @@ unsigned long mps_linear_attn_state_bytes(unsigned long numHeads, unsigned long 
     }
 }
 
-// Encodes onto the open batch; 'bufState' NULL means a zero start state
-// that is discarded (the kernel's hasState=0).
-static int __mps_linear_attn_encode(void* bufQ, void* bufK, void* bufV, void* bufState, void* out,
-                                     unsigned long seqLen, unsigned long kvLen,
-                                     unsigned long numHeads, unsigned long numKvHeads, unsigned long headDim,
-                                     int causal) {
+// Encodes token-major linear attention onto the open batch; 'bufState'
+// NULL means a zero start state that is discarded.
+static int __mps_linear_tm_encode(void* bufQ, void* bufK, void* bufV, void* bufState, void* out,
+                                  unsigned long seqLen, unsigned long kvLen,
+                                  unsigned long numHeads, unsigned long numKvHeads, unsigned long headDim,
+                                  int causal) {
+    struct MpsAttnShape s = __mps_attn_shape_tm(seqLen, kvLen, numHeads, numKvHeads, headDim, 0UL);
+    if (!__mps_attn_check(s, MPS_BF16, causal)) return 0;
+    struct MpsAttnParams p = __mps_attn_params_token_major(s, causal);
     unsafe {
-        void* pipeline = __mps_head_dim_pipeline(__mps_linear_attn_pipelines, headDim,
-                                                 "linear_attn_bf16_kernel_d64", "linear_attn_bf16_kernel_d128",
-                                                 "linear_attn_bf16_kernel_d256", "linear_attn_bf16_kernel_d512");
-        if (pipeline == (void*)0) return 0;
-        int hasState = bufState != (void*)0;
-        if (hasState && __mps_linear_attn_z_pipeline == (void*)0) {
-            void* p = __mps_make_pipeline("linear_attn_z_update_bf16");
-            if (p == (void*)0) return 0;
-            __mps_linear_attn_z_pipeline = p;
-        }
         unsigned long outBytes = seqLen * numHeads * headDim * 2UL;
         void* bufOut = __mps_buf_get_batched(outBytes);
         if (bufOut == (void*)0) return 0;
-
-        void* encoder = __mps_batch_encoder;
-        MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
-        msgVoid1(encoder, __sel_setComputePipelineState, pipeline);
-        MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
-        setBufFn(encoder, __sel_setBuffer, bufQ, 0UL, 0UL);
-        setBufFn(encoder, __sel_setBuffer, bufK, 0UL, 1UL);
-        setBufFn(encoder, __sel_setBuffer, bufV, 0UL, 2UL);
-        setBufFn(encoder, __sel_setBuffer, bufOut, 0UL, 3UL);
-        // The kernel never touches buffer(4) without a state; any buffer
-        // satisfies the binding.
-        setBufFn(encoder, __sel_setBuffer, hasState ? bufState : bufOut, 0UL, 4UL);
-        unsigned int params[6];
-        params[0] = (unsigned int)seqLen;
-        params[1] = (unsigned int)kvLen;
-        params[2] = (unsigned int)numHeads;
-        params[3] = (unsigned int)numKvHeads;
-        params[4] = causal ? 1U : 0U;
-        params[5] = hasState ? 1U : 0U;
-        __mps_set_uints(encoder, params, 6UL, 5UL);
-
-        unsigned long groups = numHeads * headDim / (512UL / headDim);
-        struct MTLSize tgSize;
-        tgSize.width = LIN_SG * 32UL; tgSize.height = 1UL; tgSize.depth = 1UL;
-        struct MTLSize numThreadgroups;
-        numThreadgroups.width = (groups + LIN_SG - 1UL) / LIN_SG;
-        numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
-        MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
-        dispatchFn(encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
-
-        if (hasState) {
-            msgVoid1(encoder, __sel_setComputePipelineState, __mps_linear_attn_z_pipeline);
-            setBufFn(encoder, __sel_setBuffer, bufK, 0UL, 0UL);
-            setBufFn(encoder, __sel_setBuffer, bufState, 0UL, 1UL);
-            unsigned int zParams[4];
-            zParams[0] = (unsigned int)kvLen;
-            zParams[1] = (unsigned int)numHeads;
-            zParams[2] = (unsigned int)numKvHeads;
-            zParams[3] = (unsigned int)headDim;
-            __mps_set_uints(encoder, zParams, 4UL, 2UL);
-            unsigned long n = numHeads * headDim;
-            tgSize.width = 64UL;
-            numThreadgroups.width = (n + 63UL) / 64UL;
-            dispatchFn(encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
-        }
-
+        if (!__mps_linear_encode(__mps_batch_encoder, bufQ, bufK, bufV, bufOut, bufState, s, MPS_BF16, p)) return 0;
         __mps_pending_add(bufOut, out, outBytes);
         return 1;
     }
@@ -3672,10 +3998,9 @@ int mps_linear_attn_bf16_chained(&void bufQ, &void bufK, &void bufV, &void bufSt
                                    unsigned long seqLen,
                                    unsigned long numHeads, unsigned long numKvHeads, unsigned long headDim) {
     if (!__mps_batch_active) return 0;
-    if (seqLen == 0UL || !__mps_attn_shape_ok(numHeads, numKvHeads, headDim)) return 0;
     unsafe {
-        return __mps_linear_attn_encode(bufQ, bufK, bufV, bufState, (void*)out,
-                                        seqLen, seqLen, numHeads, numKvHeads, headDim, 1);
+        return __mps_linear_tm_encode(bufQ, bufK, bufV, bufState, (void*)out,
+                                      seqLen, seqLen, numHeads, numKvHeads, headDim, 1);
     }
 }
 
@@ -3685,7 +4010,6 @@ int mps_linear_attn_bf16(const &unsigned short q, const &unsigned short k, const
                            unsigned long seqLen, unsigned long kvLen,
                            unsigned long numHeads, unsigned long numKvHeads, unsigned long headDim,
                            int causal) {
-    if (seqLen == 0UL || !__mps_attn_shape_ok(numHeads, numKvHeads, headDim)) return 0;
     if (causal && kvLen != seqLen) return 0;
     unsafe {
         int ownBatch = !__mps_batch_active;
@@ -3699,8 +4023,8 @@ int mps_linear_attn_bf16(const &unsigned short q, const &unsigned short k, const
         void* bufK = __mps_buf_get_with_bytes_batched((const void*)k, kvBytes);
         void* bufV = __mps_buf_get_with_bytes_batched((const void*)v, kvBytes);
         int ok = bufQ != (void*)0 && bufK != (void*)0 && bufV != (void*)0 &&
-                 __mps_linear_attn_encode(bufQ, bufK, bufV, (void*)0, (void*)out,
-                                          seqLen, kvLen, numHeads, numKvHeads, headDim, causal);
+                 __mps_linear_tm_encode(bufQ, bufK, bufV, (void*)0, (void*)out,
+                                        seqLen, kvLen, numHeads, numKvHeads, headDim, causal);
         if (ownBatch) { mps_batch_end(); }
         return ok;
     }
