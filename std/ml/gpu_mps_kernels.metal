@@ -1173,8 +1173,8 @@ struct AttnParams {
 
 // ── Flash attention, simdgroup-matrix kernel (head dim <= 256) ─────────────
 // FlashAttention-2 on Apple's 8x8 simdgroup matrices. One threadgroup of
-// FLASH_SG simdgroups per (block of FLASH_SG*8 query rows, head, batch);
-// each simdgroup owns 8 query rows. The Q block is staged once and kept as
+// SG simdgroups per (block of SG*8 query rows, head, batch); each
+// simdgroup owns 8 query rows. The Q block is staged once and kept as
 // fragments; K/V are walked in tiles of BK keys staged in threadgroup memory
 // (K transposed, rows padded by 4 elements against bank conflicts) and
 // shared by every simdgroup. Per tile: S = Q K^T on the matrix units, an
@@ -1187,14 +1187,21 @@ struct AttnParams {
 // and bf16 (the M1 family has no bf16 matrix units; converting bf16 tiles
 // to float on the way in measured 25-40% faster than bfloat fragments).
 // Tiles fully below the causal diagonal skip the mask. Measured on an M1
-// Pro at 2.4-3.3 TFLOPS -- level with or ahead of MLX's and PyTorch's
-// fused attention in fp32, ~85-90% of them in fp16/bf16 (see the
-// benchmarks page); 16-row simdgroups, 8-simdgroup threadgroups and
-// 32-key tiles at head dim 128 all measured slower.
-#define FLASH_SG 4
+// Pro at 2.6-3.6 TFLOPS (see the benchmarks page). SG = 8 (64 query
+// rows) at head dims 96/128 and for fp16 at 64: every K/V tile staged
+// serves twice the rows of SG = 4, measured 16-24% faster at head dim 128
+// (bf16, fp32) and 4-14% for fp16 at 64 -- the re-staging, not the matrix
+// work, was the limit there (a kernel that stopped re-staging ran ~20%
+// faster, while register prefetch of the next tile and cheaper
+// threadgroup stores gained nothing). bf16/fp32 at head dims 32/64 measured
+// the same or slightly slower at 8 and keep SG = 4, as does head dim 256,
+// whose Q block would not fit in threadgroup memory at 8. 16-row simdgroups, 32-key tiles at head dim
+// 128, fp32 fragments for fp16, and MLX's arrangement (Q re-read from
+// threadgroup memory per tile, K and V sharing one buffer) all measured
+// slower.
 #define FLASH_PAD 4
 
-template <typename T, typename TS, uint D, uint BK>
+template <typename T, typename TS, uint D, uint BK, uint SG>
 kernel void flash_attn_mma_kernel(device const T* q           [[buffer(0)]],
                                    device const T* k           [[buffer(1)]],
                                    device const T* v           [[buffer(2)]],
@@ -1204,7 +1211,7 @@ kernel void flash_attn_mma_kernel(device const T* q           [[buffer(0)]],
                                    uint tid [[thread_index_in_threadgroup]],
                                    uint sg [[simdgroup_index_in_threadgroup]],
                                    uint lane [[thread_index_in_simdgroup]]) {
-    constexpr uint BQ = FLASH_SG * 8, DB = D / 8, KB = BK / 8;
+    constexpr uint BQ = SG * 8, DB = D / 8, KB = BK / 8;
     constexpr uint DP = D + FLASH_PAD;
     constexpr uint BKP = BK + FLASH_PAD;
     constexpr uint TILE = D * BKP + BK * DP;
@@ -1219,7 +1226,7 @@ kernel void flash_attn_mma_kernel(device const T* q           [[buffer(0)]],
     const device T* vh = v + (ulong)b * p.kvBatch + (ulong)kvh * p.kvHead;
     device T* oh = out + (ulong)b * p.qBatch + (ulong)h * p.qHead;
 
-    for (uint e = tid; e < BQ * D / 4; e += FLASH_SG * 32) {
+    for (uint e = tid; e < BQ * D / 4; e += SG * 32) {
         uint r = e / (D / 4), c = (e % (D / 4)) * 4;
         vec<TS, 4> x = q0 + r < p.seqLen ? vec<TS, 4>(*(const device vec<T, 4>*)(qh + (ulong)(q0 + r) * p.qRow + c))
                                          : vec<TS, 4>(0);
@@ -1250,7 +1257,7 @@ kernel void flash_attn_mma_kernel(device const T* q           [[buffer(0)]],
     threadgroup TS* vs = smem + D * BKP;
     for (uint t = kvBegin; t < kvEnd; t += BK) {
         threadgroup_barrier(mem_flags::mem_threadgroup);
-        for (uint e = tid; e < BK * D / 4; e += FLASH_SG * 32) {
+        for (uint e = tid; e < BK * D / 4; e += SG * 32) {
             uint r = e / (D / 4), c = (e % (D / 4)) * 4;
             uint j = t + r;
             vec<TS, 4> kx = vec<TS, 4>(0), vx = vec<TS, 4>(0);
@@ -1325,19 +1332,23 @@ kernel void flash_attn_mma_kernel(device const T* q           [[buffer(0)]],
     }
 }
 
-#define FLASH_MMA(T, TS, NAME, D, BK)                                                              \
-    template [[host_name("flash_attn_mma_" #NAME "_d" #D)]] kernel void flash_attn_mma_kernel<T, TS, D, BK>( \
+// SG must match gpu_mps.sc's __mps_flash_simdgroups; BK is the kernel's
+// own choice (32 for fp16 at 64).
+#define FLASH_MMA(T, TS, NAME, D, BK, SG)                                                          \
+    template [[host_name("flash_attn_mma_" #NAME "_d" #D)]] kernel void flash_attn_mma_kernel<T, TS, D, BK, SG>( \
         device const T*, device const T*, device const T*, device T*, constant AttnParams&,        \
         uint3, uint, uint, uint);
-#define FLASH_MMA_DTYPES(D, BK)                \
-    FLASH_MMA(float, float, f32, D, BK)        \
-    FLASH_MMA(half, half, f16, D, BK)          \
-    FLASH_MMA(bfloat, float, bf16, D, BK)
-FLASH_MMA_DTYPES(32, 16)
-FLASH_MMA_DTYPES(64, 16)
-FLASH_MMA_DTYPES(96, 16)
-FLASH_MMA_DTYPES(128, 16)
-FLASH_MMA_DTYPES(256, 8)
+#define FLASH_MMA_DTYPES(D, BK, SG)                \
+    FLASH_MMA(float, float, f32, D, BK, SG)        \
+    FLASH_MMA(half, half, f16, D, BK, SG)          \
+    FLASH_MMA(bfloat, float, bf16, D, BK, SG)
+FLASH_MMA_DTYPES(32, 16, 4)
+FLASH_MMA(float, float, f32, 64, 16, 4)
+FLASH_MMA(half, half, f16, 64, 32, 8)
+FLASH_MMA(bfloat, float, bf16, 64, 16, 4)
+FLASH_MMA_DTYPES(96, 16, 8)
+FLASH_MMA_DTYPES(128, 16, 8)
+FLASH_MMA_DTYPES(256, 8, 4)
 
 // ── Flash attention, simdgroup-reduction kernel (head dim 512) ──────────────
 // For head dims too wide for the matrix kernel's registers. One FLASH_BQ-
