@@ -50,9 +50,10 @@ Options (build / run / check / test):
                             any LLVM triple. Bare-metal links use -nostdlib
                             -static; supply a linker script/runtime via
                             [build] cflags/libs. WebAssembly links a library
-                            module (no entry; functions exported, unresolved
-                            externs imported from "env"; std/wasm/wasm_rt
-                            supplies malloc & co.).
+                            module (no entry; exports are functions marked
+                            __attribute__((export_name)), unresolved externs
+                            become imports; std/wasm/wasm_rt supplies the
+                            runtime).
                             'test' builds without running; 'run' is refused.
 
 [features] format in Package.toml (Rust-Cargo-style; see advanced/safeguard

@@ -6,15 +6,17 @@
 //
 //   for f in client/counter_client.sc <SafeC>/std/wasm/wasm_rt.sc \
 //            <SafeC>/std/wasm/dom.sc <SafeC>/std/wasm/hydrate.sc \
-//            <SafeC>/std/mem.sc; do
+//            <SafeC>/std/mem.sc <SafeC>/std/panic.sc; do
 //       safec "$f" -I <SafeC repo root> --target=wasm32-unknown-unknown \
 //           --freestanding --emit-llvm -o "build/$(basename "$f" .sc).ll"
 //   done
 //   <llvm-with-wasm-target>/bin/clang --target=wasm32-unknown-unknown \
 //       -nostdlib -fuse-ld=<path-to-wasm-ld> -Wl,--no-entry \
-//       -Wl,--allow-undefined -Wl,--export=hydrate_init \
-//       -Wl,--export=std_dom_dispatch_event -Wl,--export=memory \
-//       build/*.ll -o build/counter_client.wasm
+//       -Wl,--allow-undefined build/*.ll -o build/counter_client.wasm
+//
+// (Exports come from __attribute__((export_name)) — hydrate_init below and
+// std/wasm/dom.h's dom_dispatch_event — plus the linear memory, which
+// wasm-ld always exports.)
 //
 // It lives outside src/ so the hosted safeguard build never compiles it.
 // main.sc serves the resulting build/counter_client.wasm as a static
@@ -35,9 +37,9 @@ static void on_decrement(?&Signal<int> s) {
     match (s) { case some(c): c.set(c.get() - 1); case null: { } }
 }
 
-// Exported (--export=hydrate_init): the page's inline <script> calls this
-// once, right after WebAssembly.instantiate() resolves.
-int hydrate_init() {
+// Exported: the page's inline <script> calls this once, right after
+// WebAssembly.instantiate() resolves.
+__attribute__((export_name)) int hydrate_init() {
     gCounter = std::signal_new(0);
 
     int countHandle = std::dom_get_element("#count");

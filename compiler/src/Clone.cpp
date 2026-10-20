@@ -543,6 +543,9 @@ std::unique_ptr<FunctionDecl> cloneFunctionDecl(const FunctionDecl &fn,
     clone->isPure        = fn.isPure;
     clone->sectionName   = fn.sectionName;
     clone->callingConv   = fn.callingConv;
+    clone->wasmExportName   = fn.wasmExportName;
+    clone->wasmImportModule = fn.wasmImportModule;
+    clone->wasmImportName   = fn.wasmImportName;
     clone->namespaceName = fn.namespaceName;
     // caller clears genericParams and sets mangled name
 

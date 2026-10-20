@@ -139,11 +139,19 @@ private:
         bool        hasMustUse   = false;
         int         alignment    = 0;
         std::string sectionName;
+        // WebAssembly (clang-compatible): export_name("x") / import_module("m")
+        // / import_name("n"). A bare export_name exports under the source name.
+        bool        hasExportName = false;
+        std::string exportName;
+        std::string importModule;
+        std::string importName;
     };
     // Consumes zero or more consecutive '__attribute__((...))' groups,
     // merging recognized attributes into 'out'. Returns true if at least one
     // group was consumed (false, no tokens consumed, if none present).
     bool parseGnuAttributes(GnuAttrs &out);
+    static void mergeWasmAttrs(GnuAttrs &into, const GnuAttrs &from);
+    static void applyWasmAttrs(FunctionDecl &fn, const GnuAttrs &a);
 
     // ── C-style function-pointer declarator: T (*name)(params) ──────────────
     // SafeC's native spelling is 'fn RetType(Params) name' (see the KW_fn

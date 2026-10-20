@@ -720,6 +720,11 @@ struct FunctionDecl : Decl {
     bool        isPure        = false;   // pure — no side effects
     std::string sectionName;             // section("name") — empty = default
     std::string callingConv;             // "stdcall", "cdecl", "fastcall", or "" (default)
+    // WebAssembly export/import names (__attribute__((export_name("x"))),
+    // import_module("m"), import_name("n")) — empty = none.
+    std::string wasmExportName;
+    std::string wasmImportModule;
+    std::string wasmImportName;
     std::string namespaceName;           // enclosing 'namespace X { ... }', e.g. "std"; empty = none
 
     FunctionDecl(std::string n, SourceLocation l)

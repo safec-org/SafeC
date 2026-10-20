@@ -76,13 +76,11 @@ int  dom_on_click(const char* selector, fn void(?&T) handler, ?&T userdata) {
     unsafe { return dom_on_click_raw_(selector, (void*)handler, (void*)userdata); }
 }
 
-// Called BY THE HOST (exported at link time via
-// '-Wl,--export=std_dom_dispatch_event' — note the 'std_' prefix: a
-// function *defined* inside 'namespace std' mangles to 'std_<name>',
-// unlike an 'extern' declaration or a top-level definition, which both
-// keep their bare name — see wasm_rt.sc's header comment for the same
-// distinction applied to malloc/free/etc), never by SafeC code itself:
-// looks up 'callbackId' in the registration table and invokes its handler.
+// Called BY THE HOST (exported as 'std_dom_dispatch_event' — the name a
+// function *defined* inside 'namespace std' mangles to, kept so existing
+// JS glue keeps working), never by SafeC code itself: looks up
+// 'callbackId' in the registration table and invokes its handler.
+__attribute__((export_name("std_dom_dispatch_event")))
 void dom_dispatch_event(int callbackId);
 
 // Minimal signed-decimal integer formatter — no snprintf (see

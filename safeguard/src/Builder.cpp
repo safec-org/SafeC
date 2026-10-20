@@ -453,9 +453,10 @@ bool Builder::linkFinal(const std::vector<std::string>& objFiles,
     if (isCrossTarget()) cmd.push_back("-fuse-ld=lld");
     if (targetIsBareMetal()) { cmd.push_back("-nostdlib"); cmd.push_back("-static"); }
     // WebAssembly: a library module the host instantiates — no _start, its
-    // functions are its exports, unresolved externs become "env" imports.
+    // exports are the __attribute__((export_name)) functions, unresolved
+    // externs become imports.
     if (targetIsWasm())
-        for (const char* f : { "-Wl,--no-entry", "-Wl,--export-dynamic", "-Wl,--allow-undefined" })
+        for (const char* f : { "-Wl,--no-entry", "-Wl,--allow-undefined" })
             cmd.push_back(f);
     if (opts_.release) cmd.push_back("-O2");
     if (!manifest_.build.lto.empty())

@@ -716,6 +716,15 @@ llvm::Function *CodeGen::genFunctionProto(FunctionDecl &fn) {
         }
     }
 
+    // WebAssembly export/import names — the same IR attributes clang emits
+    // for __attribute__((export_name/import_module/import_name)); wasm-ld
+    // exports a 'wasm-export-name' function with no --export flag needed.
+    // Applied from whichever declaration (header prototype or definition)
+    // carries them.
+    if (!fn.wasmExportName.empty())   llvmFn->addFnAttr("wasm-export-name", fn.wasmExportName);
+    if (!fn.wasmImportModule.empty()) llvmFn->addFnAttr("wasm-import-module", fn.wasmImportModule);
+    if (!fn.wasmImportName.empty())   llvmFn->addFnAttr("wasm-import-name", fn.wasmImportName);
+
     if (isNewFunction || fn.body) {
         if (fn.isInline) llvmFn->addFnAttr(llvm::Attribute::InlineHint);
 

@@ -31,3 +31,13 @@ void* memcpy(void* dst, const void* src, size_t n);
 void* memmove(void* dst, const void* src, size_t n);
 void* memset(void* ptr, int val, size_t n);
 int   memcmp(const void* a, const void* b, size_t n);
+
+// The rest of the libc surface std's freestanding paths reference (an
+// allocation-failure diagnostic in std/mem.sc, panic): abort() is wasm's
+// native trap — the host sees a RuntimeError ("unreachable") — and the
+// printf family drops its output, since a C varargs list can't be decoded
+// host-side anyway. With these, a module needs no host imports beyond the
+// ones its own code declares.
+void abort();
+int  fprintf(void* stream, const char* fmt, ...);
+int  printf(const char* fmt, ...);

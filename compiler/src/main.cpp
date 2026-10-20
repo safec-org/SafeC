@@ -474,11 +474,11 @@ static bool linkBinary(const std::vector<std::string> &llPaths, const std::strin
         args.push_back("--target=" + TargetTriple.getValue());
     for (auto &f : gTargetClangFlags) args.push_back(f);
     // WebAssembly: no libc/crt to link, the module is a library the host
-    // instantiates (no _start), its non-hidden functions are its exports,
-    // and unresolved externs become "env" imports (see std/wasm/dom.h).
+    // instantiates (no _start), its exports are the functions marked
+    // __attribute__((export_name)), and unresolved externs become imports
+    // ("env" unless import_module says otherwise; see std/wasm/dom.h).
     if (llvm::Triple(TargetTriple.getValue()).isWasm()) {
-        for (const char *f : {"-nostdlib", "-Wl,--no-entry", "-Wl,--export-dynamic",
-                              "-Wl,--allow-undefined"})
+        for (const char *f : {"-nostdlib", "-Wl,--no-entry", "-Wl,--allow-undefined"})
             args.push_back(f);
     }
     if (!ltoFlag.empty()) args.push_back(ltoFlag);

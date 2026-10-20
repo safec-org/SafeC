@@ -139,3 +139,10 @@ int memcmp(const void* a, const void* b, size_t n) {
     }
     return 0;
 }
+
+void abort() {
+    unsafe { asm volatile ("unreachable"); }
+}
+
+int fprintf(void* stream, const char* fmt, ...) { return 0; }
+int printf(const char* fmt, ...) { return 0; }
