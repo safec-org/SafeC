@@ -90,6 +90,13 @@ int cuda_sum(struct CudaBuf a, struct CudaBuf out1);                   // out1[0
 // Fused MSE gradient: dy = 2 (y - t) and loss1[0] = sum((y - t)^2), in one pass.
 int cuda_mse_grad(struct CudaBuf y, struct CudaBuf t, struct CudaBuf dy, struct CudaBuf loss1);
 
+// dst[dstOff .. dstOff+n) = src[srcOff .. srcOff+n)  (device-to-device copy)
+int cuda_copy(struct CudaBuf src, unsigned long srcOff, struct CudaBuf dst, unsigned long dstOff, unsigned long n);
+// Nearest-neighbour 2x upsample of 'planes' row-major h x w planes into
+// planes x 2h x 2w: out[p][y][x] = in[p][y/2][x/2] (cnn.h's upsample2x_nearest).
+int cuda_upsample2x_nearest(struct CudaBuf in, struct CudaBuf out,
+                            unsigned long planes, unsigned long h, unsigned long w);
+
 // ── Graphs: record queued ops once, replay with one launch ───────────────────
 
 struct CudaGraph {
@@ -102,6 +109,16 @@ int  cuda_capture_begin();
 struct CudaGraph cuda_capture_end();          // exec == 0 on failure
 int  cuda_graph_launch(struct CudaGraph g);   // queued like any other op
 void cuda_graph_free(&CudaGraph g);
+
+// ── Interop: for libraries layered on this backend (gpu_cudnn.h, dsp/fft_cuda.h)
+
+// The CUstream every op above is queued on (a cudaStream_t to the runtime
+// API, cuDNN and cuFFT); (void*)0 if there is no GPU. Work another library
+// queues on it is ordered with this backend's ops and recorded by graph
+// capture.
+void* cuda_stream_handle();
+// 1 if cuda_set_tf32(1) is in effect.
+int cuda_tf32_enabled();
 
 // ── Host-array convenience ops (upload → compute → read back) ────────────────
 // 1 on success, 0 on failure (no GPU, allocation failure).
