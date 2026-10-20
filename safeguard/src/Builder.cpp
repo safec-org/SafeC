@@ -36,6 +36,14 @@ Builder::Builder(std::string projectRoot, Manifest manifest, BuildOptions opts)
 // ── safec / std discovery ─────────────────────────────────────────────────────
 
 std::string Builder::findSafec() const {
+    // 0. $SAFEC — an explicit compiler binary, like SAFEC_CLANG for clang
+    //    and SAFEC=... in the tests/stdlib scripts. Without this, pointing
+    //    SAFEC_HOME at a checkout whose compiler isn't built (a fresh git
+    //    worktree, say) silently fell through to whatever 'safec' is on
+    //    PATH — typically an older install, which then rejected dozens of
+    //    current std sources and got them dropped from libsafec_std.a as
+    //    "does not compile for the current target".
+    if (const char* e = std::getenv("SAFEC"); e && *e) return e;
     const char* home = std::getenv("SAFEC_HOME");
     if (home) {
         // 1. $SAFEC_HOME/bin/safec[.exe] — the installed layout install.sh/
@@ -54,6 +62,15 @@ std::string Builder::findSafec() const {
         fs::path c = fs::path(home) / "compiler" / "build" / "safec";
 #endif
         if (fs::exists(c)) return c.string();
+        // SAFEC_HOME's std/ will still be used (findStdDir), so a PATH
+        // compiler of a different vintage can mismatch it — say so once.
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            std::cerr << "safeguard: warning: no compiler under SAFEC_HOME (" << home
+                      << "/bin/safec or " << home << "/compiler/build/safec); "
+                         "using 'safec' from PATH (set SAFEC to choose one)\n";
+        }
     }
     // 3. PATH fallback
     return "safec";
@@ -873,6 +890,15 @@ std::string Builder::ensureStdLib() {
 
     // Reuse the archive unless a std source or the compiler changed since it
     // was built (an edited std file used to keep linking the old object).
+    // The stamp file records which compiler and std/ built it: switching
+    // either (e.g. SAFEC_HOME/SAFEC now naming a different, possibly older
+    // safec) must rebuild too — an mtime comparison can't see that, and a
+    // PATH-resolved 'safec' has no path to stat at all — or an archive
+    // missing every file the other compiler rejected keeps being reused
+    // with no "skipping" warnings printed.
+    fs::path stampPath = libPath;
+    stampPath += ".stamp";
+    std::string stamp = "safec=" + findSafec() + "\nstd=" + stdDir + "\n";
     if (fs::exists(libPath)) {
         std::error_code ec;
         auto built = fs::last_write_time(libPath, ec);
@@ -884,6 +910,12 @@ std::string Builder::ensureStdLib() {
         }
         fs::path safec = findSafec();
         if (!stale && fs::exists(safec, ec) && fs::last_write_time(safec, ec) > built) stale = true;
+        if (!stale) {
+            std::ifstream in(stampPath);
+            std::stringstream prev;
+            prev << in.rdbuf();
+            if (!in || prev.str() != stamp) stale = true;
+        }
         if (!stale) return libPath.string();
         if (opts_.verbose) std::cout << "safeguard: std library is out of date, rebuilding\n";
         fs::remove(libPath, ec);
@@ -909,6 +941,7 @@ std::string Builder::ensureStdLib() {
                   /*tolerateArchMismatch=*/true, /*foreignIncludeDirs=*/{},
                   /*excludeSubdirNames=*/excluded))
         return "";
+    std::ofstream(stampPath) << stamp;
     return libPath.string();
 }
 
