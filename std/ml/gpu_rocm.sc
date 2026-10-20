@@ -6,6 +6,7 @@
 // library runs on any ROCm GPU. Compilation takes ~0.2 s once per process.
 #pragma once
 #include <std/ml/gpu_rocm.h>
+#include <std/math.h>
 #include <std/mem.h>
 #include <std/time.h>
 
@@ -334,6 +335,191 @@ static const char* rocm_kernel_source_() {
     "        if (i < n1) w1[i] = f2h(h2f(w1[i], bf) - lr * h2f(g1[i], bf), bf);\n"
     "        else w2[i - n1] = f2h(h2f(w2[i - n1], bf) - lr * h2f(g2[i - n1], bf), bf);\n"
     "    }\n"
+    "}\n"
+    "// Flash attention (forward): one block = 64 query rows of one head, 4 lanes\n"
+    "// per row, each lane holding a quarter of the row's q and output (dims\n"
+    "// part, part + 4, ...). K/V tiles of 32 rows are staged in LDS; per tile the\n"
+    "// lanes compute the scores, then rescale the running max / sum / output\n"
+    "// once (Dao et al.'s online softmax). The [seq, kv] score matrix is never\n"
+    "// formed. Q/K/V/O are [heads][rows][d] row-major; q is pre-scaled.\n"
+    "#define FA_BR 64\n"
+    "#define FA_BC 32\n"
+    "#define FA_TPR 4\n"
+    "#define FA_DMAX 128\n"
+    "template <int DM>\n"
+    "__device__ __forceinline__ void flash_impl(const float* __restrict__ Q, const float* __restrict__ K,\n"
+    "                                           const float* __restrict__ V, float* __restrict__ O,\n"
+    "                                           unsigned seq, unsigned kv, unsigned d, float scale, int causal) {\n"
+    "    constexpr int NT = DM / FA_TPR;                // dims per lane\n"
+    "    __shared__ float Ks[FA_BC][DM + 1];\n"
+    "    __shared__ float Vs[FA_BC][DM + 1];\n"
+    "    const unsigned h = blockIdx.y;\n"
+    "    const unsigned row = blockIdx.x * FA_BR + threadIdx.x / FA_TPR;\n"
+    "    const unsigned part = threadIdx.x % FA_TPR;\n"
+    "    const bool active = row < seq;\n"
+    "    const float* Kh = K + (unsigned long long)h * kv * d;\n"
+    "    const float* Vh = V + (unsigned long long)h * kv * d;\n"
+    "    float qr[NT], acc[NT];\n"
+    "#pragma unroll\n"
+    "    for (int t = 0; t < NT; ++t) {\n"
+    "        unsigned c = part + FA_TPR * t;\n"
+    "        qr[t] = (active && c < d) ? Q[((unsigned long long)h * seq + row) * d + c] * scale : 0.0f;\n"
+    "        acc[t] = 0.0f;\n"
+    "    }\n"
+    "    float m = -__builtin_inff(), l = 0.0f;\n"
+    "    const int off = (int)kv - (int)seq;            // causal: key j visible to row i if j <= i + off\n"
+    "    unsigned kvEnd = kv;\n"
+    "    if (causal) {\n"
+    "        int lim = (int)(blockIdx.x * FA_BR + FA_BR - 1) + off + 1;\n"
+    "        kvEnd = lim <= 0 ? 0u : (lim < (int)kv ? (unsigned)lim : kv);\n"
+    "    }\n"
+    "    for (unsigned j0 = 0; j0 < kvEnd; j0 += FA_BC) {\n"
+    "        for (unsigned e = threadIdx.x; e < FA_BC * d; e += blockDim.x) {\n"
+    "            unsigned r = e / d, c = e % d, j = j0 + r;\n"
+    "            Ks[r][c] = j < kv ? Kh[(unsigned long long)j * d + c] : 0.0f;\n"
+    "            Vs[r][c] = j < kv ? Vh[(unsigned long long)j * d + c] : 0.0f;\n"
+    "        }\n"
+    "        __syncthreads();\n"
+    "        const unsigned jn = kv - j0 < FA_BC ? kv - j0 : FA_BC;\n"
+    "        float s[FA_BC];\n"
+    "        float mt = -__builtin_inff();\n"
+    "#pragma unroll\n"
+    "        for (int jj = 0; jj < FA_BC; ++jj) {\n"
+    "            float x = 0.0f;\n"
+    "#pragma unroll\n"
+    "            for (int t = 0; t < NT; ++t) x = fmaf(qr[t], Ks[jj][part + FA_TPR * t], x);\n"
+    "            x += __shfl_xor(x, 1);\n"
+    "            x += __shfl_xor(x, 2);\n"
+    "            bool vis = (unsigned)jj < jn && (!causal || (int)(j0 + jj) <= (int)row + off);\n"
+    "            s[jj] = vis ? x : -__builtin_inff();\n"
+    "            mt = fmaxf(mt, s[jj]);\n"
+    "        }\n"
+    "        if (mt > -__builtin_inff()) {\n"
+    "            float mn = fmaxf(m, mt);\n"
+    "            float corr = __expf(m - mn);\n"
+    "            l *= corr;\n"
+    "#pragma unroll\n"
+    "            for (int t = 0; t < NT; ++t) acc[t] *= corr;\n"
+    "#pragma unroll\n"
+    "            for (int jj = 0; jj < FA_BC; ++jj) {\n"
+    "                float p = __expf(s[jj] - mn);\n"
+    "                l += p;\n"
+    "#pragma unroll\n"
+    "                for (int t = 0; t < NT; ++t) acc[t] = fmaf(p, Vs[jj][part + FA_TPR * t], acc[t]);\n"
+    "            }\n"
+    "            m = mn;\n"
+    "        }\n"
+    "        __syncthreads();\n"
+    "    }\n"
+    "    if (active) {\n"
+    "        float inv = l > 0.0f ? 1.0f / l : 0.0f;\n"
+    "#pragma unroll\n"
+    "        for (int t = 0; t < NT; ++t) {\n"
+    "            unsigned c = part + FA_TPR * t;\n"
+    "            if (c < d) O[((unsigned long long)h * seq + row) * d + c] = acc[t] * inv;\n"
+    "        }\n"
+    "    }\n"
+    "}\n"
+    "extern \"C\" __global__ __launch_bounds__(256) void flash_attn_d64(const float* Q, const float* K, const float* V, float* O,\n"
+    "        unsigned seq, unsigned kv, unsigned d, float scale, int causal) { flash_impl<64>(Q, K, V, O, seq, kv, d, scale, causal); }\n"
+    "extern \"C\" __global__ __launch_bounds__(256) void flash_attn_d128(const float* Q, const float* K, const float* V, float* O,\n"
+    "        unsigned seq, unsigned kv, unsigned d, float scale, int causal) { flash_impl<128>(Q, K, V, O, seq, kv, d, scale, causal); }\n"
+    "\n"
+    "// Linear attention, chunked (32 rows): phi(x) = elu(x) + 1.\n"
+    "//   state: S_c = sum_{j in chunk c} phi(k_j)^T [v_j | 1]      ([d][d+1] per chunk)\n"
+    "//   prefix: causal -> exclusive prefix over chunks; else the total, in chunk 0\n"
+    "//   out: row i of chunk c: (phi(q_i) P + sum_{j<=i in c} (phi(q_i).phi(k_j)) [v_j|1]) split as\n"
+    "//        numerator columns 0..d-1 over the denominator column d\n"
+    "#define LA_C 32\n"
+    "__device__ __forceinline__ float la_phi(float x) { return x > 0.0f ? x + 1.0f : __expf(x); }\n"
+    "extern \"C\" __global__ __launch_bounds__(256) void lin_attn_state(const float* __restrict__ K, const float* __restrict__ V,\n"
+    "        float* __restrict__ S, unsigned kv, unsigned d, unsigned nchunks) {\n"
+    "    __shared__ float pk[LA_C][FA_DMAX];\n"
+    "    __shared__ float vv[LA_C][FA_DMAX + 1];\n"
+    "    const unsigned c = blockIdx.x, h = blockIdx.y, w = d + 1;\n"
+    "    const unsigned j0 = c * LA_C;\n"
+    "    for (unsigned e = threadIdx.x; e < LA_C * w; e += blockDim.x) {\n"
+    "        unsigned r = e / w, col = e % w, j = j0 + r;\n"
+    "        bool in = j < kv;\n"
+    "        if (col < d) {\n"
+    "            pk[r][col] = in ? la_phi(K[((unsigned long long)h * kv + j) * d + col]) : 0.0f;\n"
+    "            vv[r][col] = in ? V[((unsigned long long)h * kv + j) * d + col] : 0.0f;\n"
+    "        } else vv[r][d] = in ? 1.0f : 0.0f;\n"
+    "    }\n"
+    "    __syncthreads();\n"
+    "    float* Sc = S + ((unsigned long long)h * nchunks + c) * d * w;\n"
+    "    for (unsigned e = threadIdx.x; e < d * w; e += blockDim.x) {\n"
+    "        unsigned r = e / w, col = e % w;\n"
+    "        float a = 0.0f;\n"
+    "#pragma unroll 8\n"
+    "        for (int jj = 0; jj < LA_C; ++jj) a = fmaf(pk[jj][r], vv[jj][col], a);\n"
+    "        Sc[e] = a;\n"
+    "    }\n"
+    "}\n"
+    "extern \"C\" __global__ __launch_bounds__(256) void lin_attn_prefix(float* __restrict__ S, unsigned d, unsigned nchunks, int causal) {\n"
+    "    const unsigned w = d + 1, n = d * w, h = blockIdx.y;\n"
+    "    const unsigned e = blockIdx.x * blockDim.x + threadIdx.x;\n"
+    "    if (e >= n) return;\n"
+    "    float* base = S + (unsigned long long)h * nchunks * n + e;\n"
+    "    float run = 0.0f;\n"
+    "    for (unsigned c = 0; c < nchunks; ++c) {\n"
+    "        float t = base[(unsigned long long)c * n];\n"
+    "        if (causal) base[(unsigned long long)c * n] = run;\n"
+    "        run += t;\n"
+    "    }\n"
+    "    if (!causal) base[0] = run;\n"
+    "}\n"
+    "extern \"C\" __global__ __launch_bounds__(256) void lin_attn_out(const float* __restrict__ Q, const float* __restrict__ K,\n"
+    "        const float* __restrict__ V, const float* __restrict__ S, float* __restrict__ O,\n"
+    "        unsigned seq, unsigned kv, unsigned d, unsigned nchunks, int causal) {\n"
+    "    __shared__ float pq[LA_C][FA_DMAX];\n"
+    "    __shared__ float pk[LA_C][FA_DMAX + 1];        // later reused for the [LA_C][d+1] results\n"
+    "    __shared__ float vv[LA_C][FA_DMAX + 1];\n"
+    "    __shared__ float A[LA_C][LA_C + 1];\n"
+    "    const unsigned c = blockIdx.x, h = blockIdx.y, w = d + 1;\n"
+    "    const unsigned i0 = c * LA_C;\n"
+    "    const float* P = S + ((unsigned long long)h * nchunks + (causal ? c : 0u)) * d * w;\n"
+    "    for (unsigned e = threadIdx.x; e < LA_C * w; e += blockDim.x) {\n"
+    "        unsigned r = e / w, col = e % w, i = i0 + r;\n"
+    "        if (col < d) {\n"
+    "            pq[r][col] = i < seq ? la_phi(Q[((unsigned long long)h * seq + i) * d + col]) : 0.0f;\n"
+    "            if (causal) {\n"
+    "                pk[r][col] = i < kv ? la_phi(K[((unsigned long long)h * kv + i) * d + col]) : 0.0f;\n"
+    "                vv[r][col] = i < kv ? V[((unsigned long long)h * kv + i) * d + col] : 0.0f;\n"
+    "            }\n"
+    "        } else if (causal) vv[r][d] = i < kv ? 1.0f : 0.0f;\n"
+    "    }\n"
+    "    __syncthreads();\n"
+    "    if (causal) {\n"
+    "        for (unsigned e = threadIdx.x; e < LA_C * LA_C; e += blockDim.x) {\n"
+    "            unsigned i = e / LA_C, j = e % LA_C;\n"
+    "            float a = 0.0f;\n"
+    "            if (j <= i) for (unsigned r = 0; r < d; ++r) a = fmaf(pq[i][r], pk[j][r], a);\n"
+    "            A[i][j] = a;\n"
+    "        }\n"
+    "        __syncthreads();\n"
+    "    }\n"
+    "    float res[17];\n"
+    "    int nres = 0;\n"
+    "    for (unsigned e = threadIdx.x; e < LA_C * w; e += blockDim.x) {\n"
+    "        unsigned i = e / w, col = e % w;\n"
+    "        float a = 0.0f;\n"
+    "        for (unsigned r = 0; r < d; ++r) a = fmaf(pq[i][r], P[(unsigned long long)r * w + col], a);\n"
+    "        if (causal)\n"
+    "            for (unsigned j = 0; j <= i; ++j) a = fmaf(A[i][j], vv[j][col], a);\n"
+    "        res[nres++] = a;\n"
+    "    }\n"
+    "    __syncthreads();                                // pk no longer needed: results go there\n"
+    "    nres = 0;\n"
+    "    for (unsigned e = threadIdx.x; e < LA_C * w; e += blockDim.x) pk[e / w][e % w] = res[nres++];\n"
+    "    __syncthreads();\n"
+    "    for (unsigned e = threadIdx.x; e < LA_C * d; e += blockDim.x) {\n"
+    "        unsigned i = e / d, col = e % d;\n"
+    "        if (i0 + i < seq) {\n"
+    "            float den = pk[i][d];\n"
+    "            O[((unsigned long long)h * seq + i0 + i) * d + col] = den != 0.0f ? pk[i][col] / den : 0.0f;\n"
+    "        }\n"
+    "    }\n"
     "}\n";
 }
 
@@ -364,7 +550,12 @@ static const char* rocm_kernel_source_() {
 #define K_HALF_RELUG 23
 #define K_HALF_MSE 24
 #define K_HALF_SGD2 25
-#define K_COUNT 26
+#define K_FLASH64 26
+#define K_FLASH128 27
+#define K_LIN_STATE 28
+#define K_LIN_PREFIX 29
+#define K_LIN_OUT 30
+#define K_COUNT 31
 
 static const char* rocm_kernel_name_(int k) {
     if (k == K_ADD) return "ew_add";
@@ -392,6 +583,11 @@ static const char* rocm_kernel_name_(int k) {
     if (k == K_HALF_RELUG) return "half_relu_grad";
     if (k == K_HALF_MSE) return "half_mse";
     if (k == K_HALF_SGD2) return "half_sgd2";
+    if (k == K_FLASH64) return "flash_attn_d64";
+    if (k == K_FLASH128) return "flash_attn_d128";
+    if (k == K_LIN_STATE) return "lin_attn_state";
+    if (k == K_LIN_PREFIX) return "lin_attn_prefix";
+    if (k == K_LIN_OUT) return "lin_attn_out";
     return "mse_grad";
 }
 
@@ -1119,6 +1315,128 @@ int rocm_sum_f32(const &float a, &float out1, unsigned long n) {
     rocm_free(&da);
     rocm_free(&dout);
     return ok;
+}
+
+// ── Attention ────────────────────────────────────────────────────────────────
+
+static int rocm_launch_grid_(int kernel, unsigned long gx, unsigned long gy, &void params) {
+    if (gx == 0UL || gy == 0UL || gx > 2147483647UL || gy > 65535UL) return 0;
+    unsafe {
+        return hipModuleLaunchKernel(g_rocm_fn[kernel], (unsigned int)gx, (unsigned int)gy, 1U,
+                                     ROCM_BLOCK, 1U, 1U, 0U, g_rocm_stream,
+                                     (void**)params, (void**)0) == ROCM_HIP_OK;
+    }
+}
+
+static int rocm_attn_shape_ok_(struct RocmBuf q, struct RocmBuf k, struct RocmBuf v, struct RocmBuf out,
+                               unsigned long heads, unsigned long seqLen, unsigned long kvLen, unsigned long headDim) {
+    if (heads == 0UL || seqLen == 0UL || kvLen == 0UL || headDim == 0UL || headDim > 128UL) return 0;
+    if (heads > 65535UL || seqLen > 2147483647UL || kvLen > 2147483647UL) return 0;
+    return rocm_fits_(q, heads * seqLen * headDim) && rocm_fits_(k, heads * kvLen * headDim) &&
+           rocm_fits_(v, heads * kvLen * headDim) && rocm_fits_(out, heads * seqLen * headDim);
+}
+
+int rocm_flash_attention(struct RocmBuf q, struct RocmBuf k, struct RocmBuf v, struct RocmBuf out,
+                         unsigned long heads, unsigned long seqLen, unsigned long kvLen, unsigned long headDim,
+                         float scale, int causal) {
+    if (!rocm_ensure_() || !rocm_attn_shape_ok_(q, k, v, out, heads, seqLen, kvLen, headDim)) return 0;
+    if (causal && kvLen < seqLen) return 0;
+    unsafe {
+        void* pq = (void*)q.dev;
+        void* pk = (void*)k.dev;
+        void* pv = (void*)v.dev;
+        void* po = (void*)out.dev;
+        unsigned int s = (unsigned int)seqLen;
+        unsigned int kn = (unsigned int)kvLen;
+        unsigned int d = (unsigned int)headDim;
+        float sc = scale > 0.0f ? scale : (float)(1.0 / sqrt_d((double)headDim));
+        int ca = causal ? 1 : 0;
+        void* params[9];
+        params[0] = (void*)&pq; params[1] = (void*)&pk; params[2] = (void*)&pv; params[3] = (void*)&po;
+        params[4] = (void*)&s; params[5] = (void*)&kn; params[6] = (void*)&d; params[7] = (void*)&sc;
+        params[8] = (void*)&ca;
+        return rocm_launch_grid_(headDim <= 64UL ? K_FLASH64 : K_FLASH128, (seqLen + 63UL) / 64UL, heads,
+                                 (&void)&params[0]);
+    }
+}
+
+// Per-chunk states for rocm_linear_attention, kept and grown as needed
+// (not during graph capture: growing would allocate).
+static struct RocmBuf g_rocm_lin_scratch;
+static int g_rocm_lin_init = 0;
+
+int rocm_linear_attention(struct RocmBuf q, struct RocmBuf k, struct RocmBuf v, struct RocmBuf out,
+                          unsigned long heads, unsigned long seqLen, unsigned long kvLen, unsigned long headDim,
+                          int causal) {
+    if (!rocm_ensure_() || !rocm_attn_shape_ok_(q, k, v, out, heads, seqLen, kvLen, headDim)) return 0;
+    if (causal && kvLen != seqLen) return 0;
+    unsigned long nchunks = (kvLen + 31UL) / 32UL;
+    unsigned long need = heads * nchunks * headDim * (headDim + 1UL);
+    if (!g_rocm_lin_init) { g_rocm_lin_scratch.dev = 0UL; g_rocm_lin_scratch.len = 0UL; g_rocm_lin_init = 1; }
+    if (g_rocm_lin_scratch.len < need) {
+        if (g_rocm_capturing) return 0;
+        rocm_free(&g_rocm_lin_scratch);
+        g_rocm_lin_scratch = rocm_alloc(need);
+        if (g_rocm_lin_scratch.dev == 0UL) { g_rocm_lin_scratch.len = 0UL; return 0; }
+    }
+    unsafe {
+        void* pq = (void*)q.dev;
+        void* pk = (void*)k.dev;
+        void* pv = (void*)v.dev;
+        void* po = (void*)out.dev;
+        void* ps = (void*)g_rocm_lin_scratch.dev;
+        unsigned int s = (unsigned int)seqLen;
+        unsigned int kn = (unsigned int)kvLen;
+        unsigned int d = (unsigned int)headDim;
+        unsigned int nc = (unsigned int)nchunks;
+        int ca = causal ? 1 : 0;
+        void* p1[6];
+        p1[0] = (void*)&pk; p1[1] = (void*)&pv; p1[2] = (void*)&ps; p1[3] = (void*)&kn; p1[4] = (void*)&d;
+        p1[5] = (void*)&nc;
+        if (!rocm_launch_grid_(K_LIN_STATE, nchunks, heads, (&void)&p1[0])) return 0;
+        void* p2[4];
+        p2[0] = (void*)&ps; p2[1] = (void*)&d; p2[2] = (void*)&nc; p2[3] = (void*)&ca;
+        unsigned long elems = headDim * (headDim + 1UL);
+        if (!rocm_launch_grid_(K_LIN_PREFIX, (elems + 255UL) / 256UL, heads, (&void)&p2[0])) return 0;
+        void* p3[10];
+        p3[0] = (void*)&pq; p3[1] = (void*)&pk; p3[2] = (void*)&pv; p3[3] = (void*)&ps; p3[4] = (void*)&po;
+        p3[5] = (void*)&s; p3[6] = (void*)&kn; p3[7] = (void*)&d; p3[8] = (void*)&nc; p3[9] = (void*)&ca;
+        return rocm_launch_grid_(K_LIN_OUT, (seqLen + 31UL) / 32UL, heads, (&void)&p3[0]);
+    }
+}
+
+static int rocm_attention_f32_(const &float q, const &float k, const &float v, &float out,
+                               unsigned long heads, unsigned long seqLen, unsigned long kvLen,
+                               unsigned long headDim, float scale, int causal, int linear) {
+    unsigned long nq = heads * seqLen * headDim;
+    unsigned long nk = heads * kvLen * headDim;
+    struct RocmBuf dq = rocm_upload(q, nq);
+    struct RocmBuf dk = rocm_upload(k, nk);
+    struct RocmBuf dv = rocm_upload(v, nk);
+    struct RocmBuf dout = rocm_alloc(nq);
+    int ok = dq.dev != 0UL && dk.dev != 0UL && dv.dev != 0UL && dout.dev != 0UL;
+    if (ok) {
+        ok = linear ? rocm_linear_attention(dq, dk, dv, dout, heads, seqLen, kvLen, headDim, causal)
+                    : rocm_flash_attention(dq, dk, dv, dout, heads, seqLen, kvLen, headDim, scale, causal);
+        ok = ok && rocm_read(dout, out, nq);
+    }
+    rocm_free(&dq);
+    rocm_free(&dk);
+    rocm_free(&dv);
+    rocm_free(&dout);
+    return ok;
+}
+
+int rocm_flash_attention_f32(const &float q, const &float k, const &float v, &float out,
+                             unsigned long heads, unsigned long seqLen, unsigned long kvLen,
+                             unsigned long headDim, float scale, int causal) {
+    return rocm_attention_f32_(q, k, v, out, heads, seqLen, kvLen, headDim, scale, causal, 0);
+}
+
+int rocm_linear_attention_f32(const &float q, const &float k, const &float v, &float out,
+                              unsigned long heads, unsigned long seqLen, unsigned long kvLen,
+                              unsigned long headDim, int causal) {
+    return rocm_attention_f32_(q, k, v, out, heads, seqLen, kvLen, headDim, 0.0f, causal, 1);
 }
 
 int rocm_matmul_f32(const &float a, const &float b, &float out,

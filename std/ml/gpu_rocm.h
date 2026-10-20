@@ -162,6 +162,31 @@ void rocm_graph_free(&RocmGraph g);
 // it is ordered with this backend's ops and recorded by graph capture.
 ?&void rocm_stream_handle();
 
+// ── Attention ────────────────────────────────────────────────────────────────
+// fp32, batched over heads: q and out are [heads][seqLen][headDim], k and v
+// [heads][kvLen][headDim], all row-major; headDim <= 128. 1 on success, 0 on
+// a bad shape or failure. Forward only, queued on the stream like every op.
+//
+// Flash attention: softmax(q k^T * scale) v without forming the score
+// matrix -- K/V tiles in LDS and an online softmax per query row (Dao et
+// al.), the same result as std/ml/attention.h's attention_forward up to
+// rounding. scale <= 0 means 1/sqrt(headDim). causal: query i sees keys
+// j <= i + (kvLen - seqLen) (so kvLen >= seqLen; with a KV cache the new
+// queries are the last seqLen positions).
+int rocm_flash_attention(struct RocmBuf q, struct RocmBuf k, struct RocmBuf v, struct RocmBuf out,
+                         unsigned long heads, unsigned long seqLen, unsigned long kvLen, unsigned long headDim,
+                         float scale, int causal);
+// Linear attention with phi(x) = elu(x) + 1, as attention.h's
+// linear_attention_forward: out_i = phi(q_i) S / phi(q_i) z with S, z the
+// sums of phi(k_j)^T v_j and phi(k_j). Chunked (32 rows): per-chunk states,
+// a prefix over chunks, then each chunk's rows -- so causal (j <= i, which
+// needs kvLen == seqLen) runs in parallel too. Cost O(n d^2) instead of
+// O(n^2 d). The chunk states live in a scratch buffer this library keeps
+// and grows; during graph capture a call that would need to grow it fails.
+int rocm_linear_attention(struct RocmBuf q, struct RocmBuf k, struct RocmBuf v, struct RocmBuf out,
+                          unsigned long heads, unsigned long seqLen, unsigned long kvLen, unsigned long headDim,
+                          int causal);
+
 // ── Host-array convenience ops (upload → compute → read back) ────────────────
 // 1 on success, 0 on failure (no GPU, allocation failure).
 
@@ -176,6 +201,13 @@ int rocm_exp_f32(const &float a, &float out, unsigned long n);
 int rocm_sqrt_f32(const &float a, &float out, unsigned long n);
 int rocm_scale_f32(const &float a, float k, &float out, unsigned long n);
 int rocm_sum_f32(const &float a, &float out1, unsigned long n);
+// The attention ops above on host arrays (same layouts).
+int rocm_flash_attention_f32(const &float q, const &float k, const &float v, &float out,
+                             unsigned long heads, unsigned long seqLen, unsigned long kvLen,
+                             unsigned long headDim, float scale, int causal);
+int rocm_linear_attention_f32(const &float q, const &float k, const &float v, &float out,
+                              unsigned long heads, unsigned long seqLen, unsigned long kvLen,
+                              unsigned long headDim, int causal);
 
 // out[M,N] = a[M,K] * b[K,N] with this library's own tiled HIP kernel
 // (64x64 tiles in LDS, 4x4 per thread). Kept as a dependency-free
