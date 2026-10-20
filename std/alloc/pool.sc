@@ -99,7 +99,8 @@ inline struct PoolAllocator pool_new(unsigned long cap) {
     return (&heap void)0;
 }
 
-void PoolAllocator::dealloc(void* ptr) {
+void PoolAllocator::dealloc(?&heap void ptr_ref) {
+    void* ptr = ptr_ref;
     if (ptr == (void*)0) { return; }
     unsigned long hdr = self.header_size_();
     unsafe {

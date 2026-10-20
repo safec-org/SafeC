@@ -9,9 +9,9 @@ int  errno_get();
 // Set errno explicitly (rarely needed).
 void errno_set(int code);
 // Return a static string describing the error code (wraps strerror).
-const char* errno_str(int code);
+const &char errno_str(int code);
 // Print "prefix: <error description>" to stderr.
-void errno_print(const char* prefix);
+void errno_print(const &char prefix);
 
 // Common POSIX error codes (subset; actual values are platform-defined).
 // Use errno_get() to retrieve the actual numeric code from the OS.

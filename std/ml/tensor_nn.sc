@@ -146,14 +146,14 @@ namespace std {
     unsigned long ndim;
     unsafe { ndim = a->ndim; }
     unsigned long* outShape;
-    unsafe { outShape = (unsigned long*)alloc(checked_mul_size(sizeof(unsigned long), ndim)); }
+    unsafe { outShape = (unsigned long*)alloc_raw_(checked_mul_size(sizeof(unsigned long), ndim)); }
     unsafe {
         unsigned long i = 0UL;
         while (i < ndim) { outShape[i] = a->shape[i]; i = i + 1UL; }
         outShape[ndim - 1UL] = outShape[ndim - 1UL] / 2UL;
     }
     &Tensor out = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
-    unsafe { dealloc((void*)outShape); }
+    unsafe { dealloc_raw_((void*)outShape); }
     unsafe {
         unsigned long outLast = out->shape[out->ndim - 1UL];
         unsigned long inLast = outLast * 2UL;
@@ -182,14 +182,14 @@ namespace std {
     unsigned long ndim;
     unsafe { ndim = a->ndim; }
     unsigned long* outShape;
-    unsafe { outShape = (unsigned long*)alloc(checked_mul_size(sizeof(unsigned long), ndim)); }
+    unsafe { outShape = (unsigned long*)alloc_raw_(checked_mul_size(sizeof(unsigned long), ndim)); }
     unsafe {
         unsigned long i = 0UL;
         while (i < ndim) { outShape[i] = a->shape[i]; i = i + 1UL; }
         outShape[ndim - 1UL] = outShape[ndim - 1UL] / 2UL;
     }
     &Tensor out = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
-    unsafe { dealloc((void*)outShape); }
+    unsafe { dealloc_raw_((void*)outShape); }
     unsafe {
         unsigned long outLast = out->shape[out->ndim - 1UL];
         unsigned long inLast = outLast * 2UL;
@@ -273,7 +273,7 @@ void adam_free(&AdamState state) {
     unsafe { ndim = a->ndim; lastDim = a->shape[ndim - 1UL]; }
     unsigned long outLen = (lastDim - kernel) / stride + 1UL;
     unsigned long* outShape;
-    unsafe { outShape = (unsigned long*)alloc(checked_mul_size(sizeof(unsigned long), ndim)); }
+    unsafe { outShape = (unsigned long*)alloc_raw_(checked_mul_size(sizeof(unsigned long), ndim)); }
     unsafe {
         unsigned long i = 0UL;
         while (i < ndim) { outShape[i] = a->shape[i]; i = i + 1UL; }
@@ -281,7 +281,7 @@ void adam_free(&AdamState state) {
     }
     &Tensor out = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
     &Tensor idxCache = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
-    unsafe { dealloc((void*)outShape); }
+    unsafe { dealloc_raw_((void*)outShape); }
     unsafe {
         unsigned long rows = out->size / outLen;
         unsigned long r = 0UL;
@@ -321,14 +321,14 @@ void adam_free(&AdamState state) {
     unsafe { ndim = a->ndim; lastDim = a->shape[ndim - 1UL]; }
     unsigned long outLen = (lastDim - kernel) / stride + 1UL;
     unsigned long* outShape;
-    unsafe { outShape = (unsigned long*)alloc(checked_mul_size(sizeof(unsigned long), ndim)); }
+    unsafe { outShape = (unsigned long*)alloc_raw_(checked_mul_size(sizeof(unsigned long), ndim)); }
     unsafe {
         unsigned long i = 0UL;
         while (i < ndim) { outShape[i] = a->shape[i]; i = i + 1UL; }
         outShape[ndim - 1UL] = outLen;
     }
     &Tensor out = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
-    unsafe { dealloc((void*)outShape); }
+    unsafe { dealloc_raw_((void*)outShape); }
     unsafe {
         float invK = (float)1.0 / (float)kernel;
         unsigned long rows = out->size / outLen;

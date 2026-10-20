@@ -9,7 +9,7 @@
 
 namespace std {
 
-inline struct GpioPin gpio_init(void* base, int pin, int direction) {
+inline struct GpioPin gpio_init(&volatile unsigned int base, int pin, int direction) {
     struct GpioPin p;
     p.base      = base;
     p.pin_mask  = (unsigned int)1 << pin;

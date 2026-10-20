@@ -82,10 +82,10 @@ static struct OAuth2Token __token_request(const char* tokenHost, unsigned short 
     return t;
 }
 
-struct OAuth2Token oauth2_exchange_code(const char* tokenHost, unsigned short tokenPort,
-                                        const char* tokenPath, const char* clientId,
-                                        const char* clientSecret, const char* code,
-                                        const char* redirectUri, int* ok) {
+struct OAuth2Token oauth2_exchange_code(const &char tokenHost, unsigned short tokenPort,
+                                        const &char tokenPath, const &char clientId,
+                                        const &char clientSecret, const &char code,
+                                        const &char redirectUri, ?&int ok) {
     struct String body = string_new();
     __form_add(&body, "grant_type", "authorization_code");
     __form_add(&body, "code", code);
@@ -97,9 +97,9 @@ struct OAuth2Token oauth2_exchange_code(const char* tokenHost, unsigned short to
     return t;
 }
 
-struct OAuth2Token oauth2_refresh(const char* tokenHost, unsigned short tokenPort,
-                                  const char* tokenPath, const char* clientId,
-                                  const char* clientSecret, const char* refreshToken, int* ok) {
+struct OAuth2Token oauth2_refresh(const &char tokenHost, unsigned short tokenPort,
+                                  const &char tokenPath, const &char clientId,
+                                  const &char clientSecret, const &char refreshToken, ?&int ok) {
     struct String body = string_new();
     __form_add(&body, "grant_type", "refresh_token");
     __form_add(&body, "refresh_token", refreshToken);

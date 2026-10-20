@@ -13,7 +13,7 @@
 
 namespace std {
 
-void scx_append_esc(&String buf, const char* s) {
+void scx_append_esc(&String buf, const &char s) {
     unsigned long i = 0UL;
     unsafe {
         while (s[i] != '\0') {

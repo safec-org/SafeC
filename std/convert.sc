@@ -50,7 +50,7 @@ static unsigned long long conv_parse_u_(const &char s, unsigned long i, unsigned
     return v;
 }
 
-inline long long str_to_int(const char* s, int* ok) {
+inline long long str_to_int(const &char s, ?&int ok) {
     int good = 0;
     long long out = 0LL;
     unsafe {
@@ -64,7 +64,7 @@ inline long long str_to_int(const char* s, int* ok) {
     return out;
 }
 
-inline unsigned long long str_to_uint(const char* s, int* ok) {
+inline unsigned long long str_to_uint(const &char s, ?&int ok) {
     int good = 0;
     unsigned long long v = 0ULL;
     unsafe {
@@ -75,7 +75,7 @@ inline unsigned long long str_to_uint(const char* s, int* ok) {
     return good ? v : 0ULL;
 }
 
-inline unsigned long long str_to_hex(const char* s, int* ok) {
+inline unsigned long long str_to_hex(const &char s, ?&int ok) {
     int good = 0;
     unsigned long long v = 0ULL;
     unsafe {
@@ -86,7 +86,7 @@ inline unsigned long long str_to_hex(const char* s, int* ok) {
     return good ? v : 0ULL;
 }
 
-inline double str_to_float(const char* s, int* ok) {
+inline double str_to_float(const &char s, ?&int ok) {
 #ifndef __SAFEC_FREESTANDING__
     unsafe {
         char* end = (char*)0;
@@ -128,32 +128,32 @@ inline double str_to_float(const char* s, int* ok) {
 #endif
 }
 
-inline char* int_to_str(long long v) {
+inline ?&heap char int_to_str(long long v) {
     unsafe {
         // -9223372036854775808 is 20 digits + sign + NUL = 22 bytes
-        char* buf = (char*)alloc((unsigned long)22);
+        char* buf = (char*)alloc_raw_((unsigned long)22);
         if (buf != (char*)0) fmt_int(buf, (unsigned long)22, v);
         return buf;
     }
 }
 
-inline char* uint_to_str(unsigned long long v) {
+inline ?&heap char uint_to_str(unsigned long long v) {
     unsafe {
-        char* buf = (char*)alloc((unsigned long)21);
+        char* buf = (char*)alloc_raw_((unsigned long)21);
         if (buf != (char*)0) fmt_uint(buf, (unsigned long)21, v);
         return buf;
     }
 }
 
-inline char* float_to_str(double v, int decimals) {
+inline ?&heap char float_to_str(double v, int decimals) {
     unsafe {
-        char* buf = (char*)alloc((unsigned long)64);
+        char* buf = (char*)alloc_raw_((unsigned long)64);
         if (buf != (char*)0) fmt_float(buf, (unsigned long)64, v, decimals);
         return buf;
     }
 }
 
-inline int ll_to_int(long long v, int* out) {
+inline int ll_to_int(long long v, &int out) {
     if (v < (long long)INT_MIN || v > (long long)INT_MAX) return 0;
     unsafe { *out = (int)v; }
     return 1;
@@ -165,13 +165,13 @@ inline const long long float_clamp_to_ll(double v, long long min, long long max)
     return (long long)v;
 }
 
-inline int str_is_int(const char* s) {
+inline int str_is_int(const &char s) {
     int ok = 0;
     unsafe { str_to_int(s, (int*)&ok); }
     return ok;
 }
 
-inline int str_is_float(const char* s) {
+inline int str_is_float(const &char s) {
     int ok = 0;
     unsafe { str_to_float(s, (int*)&ok); }
     return ok;

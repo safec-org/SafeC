@@ -435,7 +435,7 @@ static int __vk_run_kernel(const unsigned int* spirvCode, unsigned long spirvWor
     }
 }
 
-int spirv_add_f32(const float* a, const float* b, float* out, unsigned long n) {
+int spirv_add_f32(const &float a, const &float b, &float out, unsigned long n) {
     const unsigned int* spirvCode = (const unsigned int*)0; // would be add.comp -> glslc -> add.spv's words
     unsafe {
         void* inputs[2]; inputs[0] = (void*)a; inputs[1] = (void*)b;
@@ -446,7 +446,7 @@ int spirv_add_f32(const float* a, const float* b, float* out, unsigned long n) {
     }
 }
 
-int spirv_sub_f32(const float* a, const float* b, float* out, unsigned long n) {
+int spirv_sub_f32(const &float a, const &float b, &float out, unsigned long n) {
     const unsigned int* spirvCode = (const unsigned int*)0; // would be sub.comp's compiled SPIR-V
     unsafe {
         void* inputs[2]; inputs[0] = (void*)a; inputs[1] = (void*)b;
@@ -457,7 +457,7 @@ int spirv_sub_f32(const float* a, const float* b, float* out, unsigned long n) {
     }
 }
 
-int spirv_mul_f32(const float* a, const float* b, float* out, unsigned long n) {
+int spirv_mul_f32(const &float a, const &float b, &float out, unsigned long n) {
     const unsigned int* spirvCode = (const unsigned int*)0; // would be mul.comp's compiled SPIR-V
     unsafe {
         void* inputs[2]; inputs[0] = (void*)a; inputs[1] = (void*)b;
@@ -468,7 +468,7 @@ int spirv_mul_f32(const float* a, const float* b, float* out, unsigned long n) {
     }
 }
 
-int spirv_div_f32(const float* a, const float* b, float* out, unsigned long n) {
+int spirv_div_f32(const &float a, const &float b, &float out, unsigned long n) {
     const unsigned int* spirvCode = (const unsigned int*)0; // would be div.comp's compiled SPIR-V
     unsafe {
         void* inputs[2]; inputs[0] = (void*)a; inputs[1] = (void*)b;
@@ -479,7 +479,7 @@ int spirv_div_f32(const float* a, const float* b, float* out, unsigned long n) {
     }
 }
 
-int spirv_pow_f32(const float* a, const float* b, float* out, unsigned long n) {
+int spirv_pow_f32(const &float a, const &float b, &float out, unsigned long n) {
     const unsigned int* spirvCode = (const unsigned int*)0; // would be pow.comp (GLSL 'pow()' builtin) compiled SPIR-V
     unsafe {
         void* inputs[2]; inputs[0] = (void*)a; inputs[1] = (void*)b;
@@ -490,7 +490,7 @@ int spirv_pow_f32(const float* a, const float* b, float* out, unsigned long n) {
     }
 }
 
-int spirv_relu_f32(const float* a, float* out, unsigned long n) {
+int spirv_relu_f32(const &float a, &float out, unsigned long n) {
     const unsigned int* spirvCode = (const unsigned int*)0; // would be relu.comp (GLSL 'max(x,0.0)') compiled SPIR-V
     unsafe {
         void* inputs[1]; inputs[0] = (void*)a;
@@ -501,7 +501,7 @@ int spirv_relu_f32(const float* a, float* out, unsigned long n) {
     }
 }
 
-int spirv_log_f32(const float* a, float* out, unsigned long n) {
+int spirv_log_f32(const &float a, &float out, unsigned long n) {
     const unsigned int* spirvCode = (const unsigned int*)0; // would be log.comp (GLSL 'log()') compiled SPIR-V
     unsafe {
         void* inputs[1]; inputs[0] = (void*)a;
@@ -512,7 +512,7 @@ int spirv_log_f32(const float* a, float* out, unsigned long n) {
     }
 }
 
-int spirv_exp_f32(const float* a, float* out, unsigned long n) {
+int spirv_exp_f32(const &float a, &float out, unsigned long n) {
     const unsigned int* spirvCode = (const unsigned int*)0; // would be exp.comp (GLSL 'exp()') compiled SPIR-V
     unsafe {
         void* inputs[1]; inputs[0] = (void*)a;
@@ -523,7 +523,7 @@ int spirv_exp_f32(const float* a, float* out, unsigned long n) {
     }
 }
 
-int spirv_sqrt_f32(const float* a, float* out, unsigned long n) {
+int spirv_sqrt_f32(const &float a, &float out, unsigned long n) {
     const unsigned int* spirvCode = (const unsigned int*)0; // would be sqrt.comp (GLSL 'sqrt()') compiled SPIR-V
     unsafe {
         void* inputs[1]; inputs[0] = (void*)a;
@@ -534,7 +534,7 @@ int spirv_sqrt_f32(const float* a, float* out, unsigned long n) {
     }
 }
 
-int spirv_scale_f32(const float* a, float k, float* out, unsigned long n) {
+int spirv_scale_f32(const &float a, float k, &float out, unsigned long n) {
     const unsigned int* spirvCode = (const unsigned int*)0; // would be scale.comp compiled SPIR-V
     unsafe {
         void* inputs[1]; inputs[0] = (void*)a;
@@ -553,7 +553,7 @@ int spirv_scale_f32(const float* a, float k, float* out, unsigned long n) {
 // cuda_sum_f32's "prove the shape works, not a tuned reduction" spirit;
 // a real .comp source would still need an in-shader loop or
 // shared-memory reduction tree since this dispatches groupCount=(1,1,1).
-int spirv_sum_f32(const float* a, float* out, unsigned long n) {
+int spirv_sum_f32(const &float a, &float out, unsigned long n) {
     const unsigned int* spirvCode = (const unsigned int*)0; // would be sum.comp compiled SPIR-V
     unsafe {
         void* inputs[1]; inputs[0] = (void*)a;
@@ -568,7 +568,7 @@ int spirv_sum_f32(const float* a, float* out, unsigned long n) {
 // push-constant layout { uint M; uint K; uint N; } (12 bytes), same
 // naive one-thread-per-output-element shape as every other backend's
 // matmul kernel here.
-int spirv_matmul_f32(const float* a, const float* b, float* out,
+int spirv_matmul_f32(const &float a, const &float b, &float out,
                       unsigned long M, unsigned long K, unsigned long N) {
     const unsigned int* spirvCode = (const unsigned int*)0; // would be matmul.comp compiled SPIR-V
     unsafe {
@@ -657,7 +657,7 @@ int spirv_persistent_available() {
     return __spirv_ensure_device();
 }
 
-void* spirv_upload_persistent(const float* data, unsigned long bytes) {
+?&void spirv_upload_persistent(const &float data, unsigned long bytes) {
     if (!__spirv_ensure_device()) return (void*)0;
     unsafe {
         struct VkBufferCreateInfo bci;
@@ -691,7 +691,7 @@ void* spirv_upload_persistent(const float* data, unsigned long bytes) {
     }
 }
 
-void spirv_release_persistent(void* buf) {
+void spirv_release_persistent(&void buf) {
     if (buf == (void*)0) return;
     unsafe {
         struct __SpirvPersistentBuf* box = (struct __SpirvPersistentBuf*)buf;

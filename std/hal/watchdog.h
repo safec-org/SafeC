@@ -5,7 +5,7 @@
 namespace std {
 
 struct Watchdog {
-    void*        base;     // MMIO base address
+    &volatile unsigned int base; // MMIO base address
     unsigned int timeout;  // timeout period (hardware-specific units)
 
     // Enable the watchdog timer (cannot be disabled on most hardware).
@@ -19,6 +19,6 @@ struct Watchdog {
 };
 
 // Initialize watchdog at `base` with the given timeout period.
-struct Watchdog watchdog_init(void* base, unsigned int timeout);
+struct Watchdog watchdog_init(&volatile unsigned int base, unsigned int timeout);
 
 } // namespace std

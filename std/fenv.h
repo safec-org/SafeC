@@ -35,8 +35,8 @@ int fenv_set_round(int mode);
 
 // Save and restore the complete FP environment.
 // env must point to a 32-byte buffer.
-int fenv_save(void* env);
-int fenv_restore(const void* env);
-int fenv_save_clear(void* env); // save + clear all exceptions
+int fenv_save(&unsigned char env);
+int fenv_restore(const &unsigned char env);
+int fenv_save_clear(&unsigned char env); // save + clear all exceptions
 
 } // namespace std

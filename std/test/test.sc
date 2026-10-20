@@ -30,7 +30,7 @@ static void tc_copy_(char* dst, const char* src, unsigned long n) {
 
 // ── Assertion functions ────────────────────────────────────────────────────────
 
-void test_assert_true(int cond, const char* expr, const char* file, int line) {
+void test_assert_true(int cond, const &char expr, const &char file, int line) {
     if (cond != 0) { return; }
     if (test_current_ == (struct TestCase*)0) { return; }
     unsafe {
@@ -42,18 +42,18 @@ void test_assert_true(int cond, const char* expr, const char* file, int line) {
     }
 }
 
-void test_assert_eq_i(long long a, long long b, const char* desc,
-                      const char* file, int line) {
+void test_assert_eq_i(long long a, long long b, const &char desc,
+                      const &char file, int line) {
     test_assert_true(a == b, desc, file, line);
 }
 
 void test_assert_eq_u(unsigned long long a, unsigned long long b,
-                      const char* desc, const char* file, int line) {
+                      const &char desc, const &char file, int line) {
     test_assert_true(a == b, desc, file, line);
 }
 
-void test_assert_eq_s(const char* a, const char* b, const char* desc,
-                      const char* file, int line) {
+void test_assert_eq_s(const ?&char a, const ?&char b, const &char desc,
+                      const &char file, int line) {
     int ok = 0;
     if (a != (const char*)0 && b != (const char*)0) {
         unsafe { ok = (strcmp(a, b) == 0) ? 1 : 0; }
@@ -71,7 +71,7 @@ struct TestSuite test_suite_init() {
     return s;
 }
 
-void TestSuite::add(const char* name, fn void() func) {
+void TestSuite::add(const &char name, fn void() func) {
     if (self.count >= TEST_MAX) { return; }
     int idx = self.count;
     tc_copy_(self.cases[idx].name, name, (unsigned long)TEST_NAME_MAX);

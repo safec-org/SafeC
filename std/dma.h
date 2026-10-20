@@ -9,7 +9,7 @@
 namespace std {
 
 struct DmaBuffer {
-    void*         virt;       // virtual address (CPU view)
+    &unsigned char virt;      // virtual address (CPU view)
     unsigned long phys;       // physical address (device view, 0 if identity-mapped)
     unsigned long size;       // buffer size in bytes
     int           owner;      // 0 = CPU owns, 1 = device owns
@@ -29,7 +29,7 @@ struct DmaBuffer {
 
 // Initialise a DmaBuffer wrapping an existing allocation.
 // `phys` = 0 means physical == virtual (identity-mapped / non-MMU systems).
-struct DmaBuffer dma_buf_wrap(void* virt, unsigned long phys, unsigned long size);
+struct DmaBuffer dma_buf_wrap(&unsigned char virt, unsigned long phys, unsigned long size);
 
 // A DMA channel descriptor, generic over the driver context type T its
 // callbacks take. One driver owns a channel for its whole lifetime, so the

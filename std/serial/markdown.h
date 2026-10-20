@@ -45,7 +45,7 @@ struct MdNode {
 };
 
 // Parses 'text' into a heap-allocated MD_DOC root node (see md_free()).
-&heap MdNode md_parse(const char* text);
+&heap MdNode md_parse(const &char text);
 
 // Renders 'doc' (or any node) to an HTML fragment (headings become
 // <h1>-<h6>, paragraphs <p>, lists <ul>/<ol><li>, code blocks <pre><code>,

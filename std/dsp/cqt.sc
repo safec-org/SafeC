@@ -8,9 +8,9 @@
 
 namespace std {
 
-void cqt_forward(const double* signal, unsigned long signalLen, double fs,
+void cqt_forward(const &double signal, unsigned long signalLen, double fs,
                   double fmin, unsigned long numBins, unsigned long binsPerOctave,
-                  struct Complex* out) {
+                  &Complex out) {
     double q = 1.0 / (pow_d(2.0, 1.0 / (double)binsPerOctave) - 1.0);
 
     unsigned long k = 0UL;

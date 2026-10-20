@@ -222,7 +222,8 @@ void jit_block_free(&JiTBlock block) {
 }
 
 &Tensor jit_forward(const &Tensor patches, const &Tensor WPatchEmbed, const &Tensor cond,
-                     struct JiTBlock* blocks, unsigned long numBlocks) {
+                     struct Slice<JiTBlock> blocks) {
+    unsigned long numBlocks = blocks.length();
     &Tensor embedRaw = tensor_matmul(patches, WPatchEmbed);
     &Tensor x = __add_broadcast_row(embedRaw, cond);
     embedRaw->free();
@@ -230,9 +231,8 @@ void jit_block_free(&JiTBlock block) {
 
     unsigned long i = 0UL;
     while (i < numBlocks) {
-        // 'blocks' is a raw array: reaching blocks[i] needs 'unsafe'.
+        &JiTBlock blk = blocks.at(i);
         unsafe {
-            &JiTBlock blk = (&JiTBlock)&blocks[i];
             &Tensor next = jit_block_forward(blk, x);
             x->free();
             free((void*)x);

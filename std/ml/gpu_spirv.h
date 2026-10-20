@@ -26,18 +26,18 @@
 // Gated behind the 'spirv' feature (see Package.toml's [features]).
 namespace std {
 
-int spirv_add_f32(const float* a, const float* b, float* out, unsigned long n);
-int spirv_sub_f32(const float* a, const float* b, float* out, unsigned long n);
-int spirv_mul_f32(const float* a, const float* b, float* out, unsigned long n);
-int spirv_div_f32(const float* a, const float* b, float* out, unsigned long n);
-int spirv_pow_f32(const float* a, const float* b, float* out, unsigned long n);
-int spirv_relu_f32(const float* a, float* out, unsigned long n);
-int spirv_log_f32(const float* a, float* out, unsigned long n);
-int spirv_exp_f32(const float* a, float* out, unsigned long n);
-int spirv_sqrt_f32(const float* a, float* out, unsigned long n);
-int spirv_scale_f32(const float* a, float k, float* out, unsigned long n);
-int spirv_sum_f32(const float* a, float* out, unsigned long n);
-int spirv_matmul_f32(const float* a, const float* b, float* out,
+int spirv_add_f32(const &float a, const &float b, &float out, unsigned long n);
+int spirv_sub_f32(const &float a, const &float b, &float out, unsigned long n);
+int spirv_mul_f32(const &float a, const &float b, &float out, unsigned long n);
+int spirv_div_f32(const &float a, const &float b, &float out, unsigned long n);
+int spirv_pow_f32(const &float a, const &float b, &float out, unsigned long n);
+int spirv_relu_f32(const &float a, &float out, unsigned long n);
+int spirv_log_f32(const &float a, &float out, unsigned long n);
+int spirv_exp_f32(const &float a, &float out, unsigned long n);
+int spirv_sqrt_f32(const &float a, &float out, unsigned long n);
+int spirv_scale_f32(const &float a, float k, &float out, unsigned long n);
+int spirv_sum_f32(const &float a, &float out, unsigned long n);
+int spirv_matmul_f32(const &float a, const &float b, &float out,
                       unsigned long M, unsigned long K, unsigned long N);
 
 // True if vkCreateInstance succeeds and at least one physical device
@@ -75,10 +75,10 @@ int spirv_available();
 // internal {VkBuffer, VkDeviceMemory} pair) — pass it only to
 // spirv_release_persistent, not to spirv_*_f32 above (which take raw
 // host float* pointers, not device buffer handles).
-void* spirv_upload_persistent(const float* data, unsigned long bytes);
+?&void spirv_upload_persistent(const &float data, unsigned long bytes);
 
 // Frees a buffer returned by spirv_upload_persistent.
-void spirv_release_persistent(void* buf);
+void spirv_release_persistent(&void buf);
 
 // True if the shared persistent Vulkan instance/device (used by
 // spirv_upload_persistent/spirv_release_persistent) is available.

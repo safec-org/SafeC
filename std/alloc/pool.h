@@ -22,7 +22,7 @@ struct PoolAllocator {
     &heap void    alloc(unsigned long size);
 
     // Free a previously allocated pointer. Coalesces adjacent free blocks.
-    void          dealloc(void* ptr);
+    void          dealloc(?&heap void ptr);
 
     // Return total free bytes (sum of all free blocks).
     unsigned long available() const;
@@ -48,7 +48,7 @@ generic<T>
 
 generic<T>
 void pool_free_t(&PoolAllocator p, &heap T obj) {
-    unsafe { p.dealloc((void*)obj); }
+    unsafe { p.dealloc((&heap void)obj); }
 }
 
 } // namespace std

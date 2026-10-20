@@ -32,22 +32,22 @@ struct LlmClient {
     struct String apiKey;  // sent as 'Authorization: Bearer <apiKey>' when non-empty
 };
 
-struct LlmClient llm_client_new(const char* host, unsigned short port,
-                                 const char* model, const char* apiKey);
+struct LlmClient llm_client_new(const &char host, unsigned short port,
+                                 const &char model, const &char apiKey);
 
 // POSTs 'messages' (Vec<struct LlmMessage>) to
 // '<client.host>:<client.port>/v1/chat/completions' as
 // '{"model":..., "messages":[{"role":...,"content":...}, ...]}' and
 // returns 'choices[0].message.content' from the JSON response.
 // *ok is set to 0 on any transport, HTTP-status, or JSON-shape failure.
-struct String llm_chat(&LlmClient client, &Vec<struct LlmMessage> messages, int* ok);
+struct String llm_chat(&LlmClient client, &Vec<struct LlmMessage> messages, ?&int ok);
 
 // ── PromptTemplate ───────────────────────────────────────────────────────────
 // Replaces every '{name}' occurrence in 'tmpl' with 'vars' object field
 // 'name' (stringified: strings pass through as-is, numbers/bools render
 // via their natural text form). A '{name}' whose key isn't present in
 // 'vars' is left as literal text, unexpanded.
-struct String prompt_template_render(const char* tmpl, const &Value vars);
+struct String prompt_template_render(const &char tmpl, const &Value vars);
 
 // ── Chain ────────────────────────────────────────────────────────────────────
 // A fixed sequence of Value -> Value steps, run in order — the output of
@@ -86,9 +86,9 @@ struct Graph {
     struct String entryNode;
 };
 
-struct Graph graph_new(const char* entryNode);
-void graph_add_node(&Graph g, const char* name, GraphNodeFn nodeFn, const char* nextNode);
-void graph_add_conditional_node(&Graph g, const char* name, GraphNodeFn nodeFn, GraphRouterFn router);
+struct Graph graph_new(const &char entryNode);
+void graph_add_node(&Graph g, const &char name, GraphNodeFn nodeFn, const &char nextNode);
+void graph_add_conditional_node(&Graph g, const &char name, GraphNodeFn nodeFn, GraphRouterFn router);
 struct Value graph_run(&Graph g, struct Value initialState, int maxSteps);
 void graph_free(&Graph g);
 
@@ -105,7 +105,7 @@ struct Tracer {
 };
 
 struct Tracer tracer_new();
-void tracer_record(&Tracer t, const char* name, const &Value input,
+void tracer_record(&Tracer t, const &char name, const &Value input,
                     const &Value output, double durationMs);
 // Dumps every recorded event as a JSON array: '[{"name":...,"input":...,
 // "output":...,"durationMs":...}, ...]'.

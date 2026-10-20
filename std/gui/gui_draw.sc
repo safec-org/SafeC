@@ -191,7 +191,7 @@ static void __gui_draw_glyph(&GuiWindow win, int x, int y, char ch,
     (void)rgbaPacked;
 }
 
-int gui_draw_text(&GuiWindow win, int x, int y, const char* text,
+int gui_draw_text(&GuiWindow win, int x, int y, const &char text,
                    struct GuiColor color, int scale) {
     int cx = x;
     unsigned long i = 0UL;
@@ -205,7 +205,7 @@ int gui_draw_text(&GuiWindow win, int x, int y, const char* text,
     return cx - x;
 }
 
-int gui_text_width(const char* text, int scale) {
+int gui_text_width(const &char text, int scale) {
     unsigned long len = 0UL;
     unsafe {
         while (text[len] != '\0') { len = len + 1UL; }

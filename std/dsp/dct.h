@@ -18,13 +18,13 @@
 namespace std {
 
 // X[k] = sum_{n=0}^{N-1} x[n] * cos(pi/N * (n+0.5) * k), k = 0..N-1.
-void dct2(const double* in, double* out, unsigned long n);
+void dct2(const &double in, &double out, unsigned long n);
 
 // Exact inverse of dct2: x[n] = (1/N) * (X[0] + 2*sum_{k=1}^{N-1} X[k] *
 // cos(pi/N * (n+0.5) * k)).
-void idct3(const double* in, double* out, unsigned long n);
+void idct3(const &double in, &double out, unsigned long n);
 
-void fdct2(const Fixed* in, Fixed* out, unsigned long n);
-void fidct3(const Fixed* in, Fixed* out, unsigned long n);
+void fdct2(const &Fixed in, &Fixed out, unsigned long n);
+void fidct3(const &Fixed in, &Fixed out, unsigned long n);
 
 } // namespace std

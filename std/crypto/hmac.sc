@@ -7,9 +7,9 @@
 
 namespace std {
 
-void hmac_sha256(const unsigned char* key, unsigned long keyLen,
-                  const unsigned char* data, unsigned long dataLen,
-                  unsigned char* out) {
+void hmac_sha256(const &unsigned char key, unsigned long keyLen,
+                  const &unsigned char data, unsigned long dataLen,
+                  &unsigned char out_ref) { unsigned char* out = out_ref;
     unsafe {
         unsigned char keyBlock[SHA256_BLOCK_SIZE];
         unsigned long i = 0UL;

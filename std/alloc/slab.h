@@ -23,7 +23,7 @@ struct SlabAllocator {
 
     // Return an object to the pool. Aborts with a diagnostic on double-free
     // (slab_new-created allocators only — see has_tags above).
-    void          dealloc(void* ptr);
+    void          dealloc(?&heap void ptr);
 
     // Return the number of free slots remaining.
     unsigned long available() const;
@@ -56,7 +56,7 @@ generic<T>
 
 generic<T>
 void slab_free_t(&SlabAllocator s, &heap T obj) {
-    unsafe { s.dealloc((void*)obj); }
+    unsafe { s.dealloc((&heap void)obj); }
 }
 
 } // namespace std

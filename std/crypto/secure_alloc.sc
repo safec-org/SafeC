@@ -18,8 +18,8 @@ struct SecureAllocator secure_alloc_new(unsigned long obj_size,
     return self.slab.alloc();
 }
 
-inline void SecureAllocator::dealloc(void* ptr) {
-    if (ptr == (void*)0) { return; }
+inline void SecureAllocator::dealloc(?&heap void ptr) {
+    if (ptr.is_null()) { return; }
     // Zero the slot before returning it to the free list.
     unsafe { memset(ptr, 0, self.slab.obj_size); }
     self.slab.dealloc(ptr);

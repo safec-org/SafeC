@@ -33,8 +33,8 @@ namespace std {
 // wavelet's own oscillation). 'out' must have room for
 // numScales*signalLen Complex values, row-major by scale (row si covers
 // out[si*signalLen .. si*signalLen+signalLen-1]).
-void cwt_morlet(const double* signal, unsigned long signalLen,
-                 const double* scales, unsigned long numScales,
-                 double w0, struct Complex* out);
+void cwt_morlet(const &double signal, unsigned long signalLen,
+                 const &double scales, unsigned long numScales,
+                 double w0, &Complex out);
 
 } // namespace std

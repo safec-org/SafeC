@@ -34,7 +34,7 @@ static unsigned long dsp_bit_reverse_(unsigned long x, int numBits) {
     return result;
 }
 
-int fft(struct Complex* data, unsigned long n) {
+int fft(&Complex data, unsigned long n) {
     if (dsp_is_pow2(n) == 0) {
         return 0;
     }
@@ -82,7 +82,7 @@ int fft(struct Complex* data, unsigned long n) {
     return 1;
 }
 
-int ifft(struct Complex* data, unsigned long n) {
+int ifft(&Complex data, unsigned long n) {
     if (dsp_is_pow2(n) == 0) {
         return 0;
     }
@@ -108,7 +108,7 @@ int ifft(struct Complex* data, unsigned long n) {
     return 1;
 }
 
-int fft_real(const double* in, struct Complex* out, unsigned long n) {
+int fft_real(const &double in, &Complex out, unsigned long n) {
     if (dsp_is_pow2(n) == 0) {
         return 0;
     }
@@ -120,7 +120,7 @@ int fft_real(const double* in, struct Complex* out, unsigned long n) {
     return fft(out, n);
 }
 
-int ffft(struct FComplex* data, unsigned long n) {
+int ffft(&FComplex data, unsigned long n) {
     if (dsp_is_pow2(n) == 0) {
         return 0;
     }
@@ -166,7 +166,7 @@ int ffft(struct FComplex* data, unsigned long n) {
     return 1;
 }
 
-int fifft(struct FComplex* data, unsigned long n) {
+int fifft(&FComplex data, unsigned long n) {
     if (dsp_is_pow2(n) == 0) {
         return 0;
     }

@@ -4,11 +4,11 @@
 namespace std {
 
 // Returns 1 if every byte in the NUL-terminated string is in [0, 127].
-int ascii_is_valid(const char* s);
+int ascii_is_valid(const &char s);
 
 // Returns 1 if every byte in s[0, len) is in [0, 127] (no NUL terminator
 // required — for validating a raw byte range, e.g. from a socket read).
-int ascii_is_valid_n(const char* s, unsigned long len);
+int ascii_is_valid_n(const &char s, unsigned long len);
 
 int ascii_is_alpha(char c);
 int ascii_is_digit(char c);

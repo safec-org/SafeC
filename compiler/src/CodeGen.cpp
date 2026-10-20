@@ -506,7 +506,8 @@ llvm::Value *CodeGen::genNew(NewExpr &e, FnEnv &env) {
         }
     }
 
-    // Fallback: heap allocation via std::alloc (mangled 'std_alloc'), NOT a
+    // Fallback: heap allocation via std::alloc_raw_ (mangled 'std_alloc_raw_', the
+    // type-erased form behind the generic std::alloc), NOT a
     // raw 'malloc' call — std::alloc prefixes every block with the 16-byte
     // live/freed-magic header std::dealloc() requires (see mem.sc's
     // ALLOC_HDR_SIZE_ doc comment). A plain 'malloc(size)' here would hand
@@ -517,7 +518,7 @@ llvm::Value *CodeGen::genNew(NewExpr &e, FnEnv &env) {
     // must share the same allocator for the compile-time UAF/double-free
     // tracking (see Sema::heapFreeGeneration_) to correspond to anything
     // real at runtime.
-    auto allocFn = mod_->getOrInsertFunction("std_alloc",
+    auto allocFn = mod_->getOrInsertFunction("std_alloc_raw_",
         llvm::FunctionType::get(PtrTy, {Int64Ty}, false));
     return builder_.CreateCall(allocFn, {totalSize}, "heap.alloc");
 }

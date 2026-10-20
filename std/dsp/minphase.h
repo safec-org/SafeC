@@ -23,6 +23,6 @@ namespace std {
 // have room for 'fftLen' samples — the full-length minimum-phase impulse
 // response (its energy concentrates near the start; callers typically
 // keep only the first n-ish samples).
-void minimum_phase(const double* x, unsigned long n, unsigned long fftLen, double* outMinPhase);
+void minimum_phase(const &double x, unsigned long n, unsigned long fftLen, &double outMinPhase);
 
 } // namespace std

@@ -15,17 +15,17 @@
 namespace std {
 
 // out must have space for (len_x + len_h - 1) samples.
-void conv_direct(const double* x, unsigned long len_x,
-                  const double* h, unsigned long len_h, double* out);
+void conv_direct(const &double x, unsigned long len_x,
+                  const &double h, unsigned long len_h, &double out);
 
-void fconv_direct(const Fixed* x, unsigned long len_x,
-                   const Fixed* h, unsigned long len_h, Fixed* out);
+void fconv_direct(const &Fixed x, unsigned long len_x,
+                   const &Fixed h, unsigned long len_h, &Fixed out);
 
 // FFT-accelerated linear convolution — same output as conv_direct (up to
 // floating-point rounding), computed via zero-padded forward FFTs,
 // pointwise complex multiply, and one inverse FFT. out must have space
 // for (len_x + len_h - 1) samples.
-void conv_fft(const double* x, unsigned long len_x,
-              const double* h, unsigned long len_h, double* out);
+void conv_fft(const &double x, unsigned long len_x,
+              const &double h, unsigned long len_h, &double out);
 
 } // namespace std

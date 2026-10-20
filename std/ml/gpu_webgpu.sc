@@ -271,7 +271,7 @@ static int __wgpu_run_kernel(const char* wgslSrc, const char* entryName,
     }
 }
 
-int webgpu_add_f32(const float* a, const float* b, float* out, unsigned long n) {
+int webgpu_add_f32(const &float a, const &float b, &float out_ref, unsigned long n) { float* out = out_ref;
     const char* wgslSrc =
         "@group(0) @binding(0) var<storage, read> a: array<f32>;\n"
         "@group(0) @binding(1) var<storage, read> b: array<f32>;\n"
@@ -289,7 +289,7 @@ int webgpu_add_f32(const float* a, const float* b, float* out, unsigned long n) 
     }
 }
 
-int webgpu_sub_f32(const float* a, const float* b, float* out, unsigned long n) {
+int webgpu_sub_f32(const &float a, const &float b, &float out_ref, unsigned long n) { float* out = out_ref;
     const char* wgslSrc =
         "@group(0) @binding(0) var<storage, read> a: array<f32>;\n"
         "@group(0) @binding(1) var<storage, read> b: array<f32>;\n"
@@ -307,7 +307,7 @@ int webgpu_sub_f32(const float* a, const float* b, float* out, unsigned long n) 
     }
 }
 
-int webgpu_mul_f32(const float* a, const float* b, float* out, unsigned long n) {
+int webgpu_mul_f32(const &float a, const &float b, &float out_ref, unsigned long n) { float* out = out_ref;
     const char* wgslSrc =
         "@group(0) @binding(0) var<storage, read> a: array<f32>;\n"
         "@group(0) @binding(1) var<storage, read> b: array<f32>;\n"
@@ -325,7 +325,7 @@ int webgpu_mul_f32(const float* a, const float* b, float* out, unsigned long n) 
     }
 }
 
-int webgpu_div_f32(const float* a, const float* b, float* out, unsigned long n) {
+int webgpu_div_f32(const &float a, const &float b, &float out_ref, unsigned long n) { float* out = out_ref;
     const char* wgslSrc =
         "@group(0) @binding(0) var<storage, read> a: array<f32>;\n"
         "@group(0) @binding(1) var<storage, read> b: array<f32>;\n"
@@ -343,7 +343,7 @@ int webgpu_div_f32(const float* a, const float* b, float* out, unsigned long n) 
     }
 }
 
-int webgpu_pow_f32(const float* a, const float* b, float* out, unsigned long n) {
+int webgpu_pow_f32(const &float a, const &float b, &float out_ref, unsigned long n) { float* out = out_ref;
     const char* wgslSrc =
         "@group(0) @binding(0) var<storage, read> a: array<f32>;\n"
         "@group(0) @binding(1) var<storage, read> b: array<f32>;\n"
@@ -361,7 +361,7 @@ int webgpu_pow_f32(const float* a, const float* b, float* out, unsigned long n) 
     }
 }
 
-int webgpu_relu_f32(const float* a, float* out, unsigned long n) {
+int webgpu_relu_f32(const &float a, &float out_ref, unsigned long n) { float* out = out_ref;
     const char* wgslSrc =
         "@group(0) @binding(0) var<storage, read> a: array<f32>;\n"
         "@group(0) @binding(1) var<storage, read_write> out: array<f32>;\n"
@@ -378,7 +378,7 @@ int webgpu_relu_f32(const float* a, float* out, unsigned long n) {
     }
 }
 
-int webgpu_log_f32(const float* a, float* out, unsigned long n) {
+int webgpu_log_f32(const &float a, &float out_ref, unsigned long n) { float* out = out_ref;
     const char* wgslSrc =
         "@group(0) @binding(0) var<storage, read> a: array<f32>;\n"
         "@group(0) @binding(1) var<storage, read_write> out: array<f32>;\n"
@@ -395,7 +395,7 @@ int webgpu_log_f32(const float* a, float* out, unsigned long n) {
     }
 }
 
-int webgpu_exp_f32(const float* a, float* out, unsigned long n) {
+int webgpu_exp_f32(const &float a, &float out_ref, unsigned long n) { float* out = out_ref;
     const char* wgslSrc =
         "@group(0) @binding(0) var<storage, read> a: array<f32>;\n"
         "@group(0) @binding(1) var<storage, read_write> out: array<f32>;\n"
@@ -412,7 +412,7 @@ int webgpu_exp_f32(const float* a, float* out, unsigned long n) {
     }
 }
 
-int webgpu_sqrt_f32(const float* a, float* out, unsigned long n) {
+int webgpu_sqrt_f32(const &float a, &float out_ref, unsigned long n) { float* out = out_ref;
     const char* wgslSrc =
         "@group(0) @binding(0) var<storage, read> a: array<f32>;\n"
         "@group(0) @binding(1) var<storage, read_write> out: array<f32>;\n"
@@ -429,7 +429,7 @@ int webgpu_sqrt_f32(const float* a, float* out, unsigned long n) {
     }
 }
 
-int webgpu_scale_f32(const float* a, float k, float* out, unsigned long n) {
+int webgpu_scale_f32(const &float a, float k, &float out_ref, unsigned long n) { float* out = out_ref;
     const char* wgslSrc =
         "struct Scalars { k: f32, n: u32 };\n"
         "@group(0) @binding(0) var<storage, read> a: array<f32>;\n"
@@ -454,7 +454,7 @@ int webgpu_scale_f32(const float* a, float k, float* out, unsigned long n) {
 
 // out[0] = sum(a[0..n)) -- single workgroup of 1 invocation, same
 // "prove the shape works" naive shape as every other backend's sum here.
-int webgpu_sum_f32(const float* a, float* out, unsigned long n) {
+int webgpu_sum_f32(const &float a_ref, &float out, unsigned long n) { const float* a = a_ref;
     const char* wgslSrc =
         "@group(0) @binding(0) var<storage, read> a: array<f32>;\n"
         "@group(0) @binding(1) var<storage, read_write> out: array<f32>;\n"
@@ -478,7 +478,7 @@ int webgpu_sum_f32(const float* a, float* out, unsigned long n) {
 // reasonable, arbitrary choice for a naive, untiled kernel), scalars
 // M/K/N passed via the same storage-buffer-of-scalars mechanism as
 // webgpu_scale_f32's k.
-int webgpu_matmul_f32(const float* a, const float* b, float* out,
+int webgpu_matmul_f32(const &float a, const &float b, &float out,
                        unsigned long M, unsigned long K, unsigned long N) {
     const char* wgslSrc =
         "struct Dims { M: u32, K: u32, N: u32 };\n"
@@ -541,7 +541,7 @@ int webgpu_persistent_available() {
     return __wgpu_ensure_device();
 }
 
-void* webgpu_upload_persistent(const float* data, unsigned long bytes) {
+?&void webgpu_upload_persistent(const &float data, unsigned long bytes) {
     if (!__wgpu_ensure_device()) return (void*)0;
     unsafe {
         struct WGPUBufferDescriptor bd;
@@ -555,12 +555,12 @@ void* webgpu_upload_persistent(const float* data, unsigned long bytes) {
     }
 }
 
-void webgpu_release_persistent(void* buf) {
+void webgpu_release_persistent(&void buf) {
     if (buf == (void*)0) return;
     unsafe { wgpuBufferRelease(buf); }
 }
 
-int webgpu_matmul_f32_persistent(void* bufA, void* bufB, float* out,
+int webgpu_matmul_f32_persistent(&void bufA, &void bufB, &float out,
                                   unsigned long M, unsigned long K, unsigned long N) {
     if (!__wgpu_ensure_device()) return 0;
     unsafe {
@@ -684,7 +684,7 @@ int webgpu_matmul_f32_persistent(void* bufA, void* bufB, float* out,
 // bufW[i] -= lr*bufGrad[i], in place, for i in [0, n) -- no readback, the
 // WebGPU analogue of gpu_mps.sc's sgd_update_kernel /
 // gpu_cuda.sc's cuda_sgd_update_f32's PTX kernel.
-int webgpu_sgd_update_f32(void* bufW, void* bufGrad, float lr, unsigned long n) {
+int webgpu_sgd_update_f32(&void bufW, &void bufGrad, float lr, unsigned long n) {
     if (!__wgpu_ensure_device()) return 0;
     unsafe {
         if (__wgpu_sgd_pipeline_ == (void*)0) {
@@ -757,7 +757,7 @@ int webgpu_sgd_update_f32(void* bufW, void* bufGrad, float lr, unsigned long n) 
 extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
-void* webgpu_upload_f16_persistent(const float* data, unsigned long n) {
+?&void webgpu_upload_f16_persistent(const &float data, unsigned long n) {
     unsafe {
         unsigned short* tmp = (unsigned short*)malloc(n * 2UL);
         if (tmp == (void*)0) return (void*)0;
@@ -771,7 +771,7 @@ void* webgpu_upload_f16_persistent(const float* data, unsigned long n) {
 static void* __wgpu_matmul_f16_pipeline = (void*)0;
 static void* __wgpu_sgd_f16_pipeline = (void*)0;
 
-int webgpu_matmul_f16_persistent(void* bufA, void* bufB, unsigned short* out,
+int webgpu_matmul_f16_persistent(&void bufA, &void bufB, &unsigned short out,
                                   unsigned long M, unsigned long K, unsigned long N) {
     if (!__wgpu_ensure_device()) return 0;
     unsafe {
@@ -893,7 +893,7 @@ int webgpu_matmul_f16_persistent(void* bufA, void* bufB, unsigned short* out,
 // WGSL's f32()/f16() casts, same shape as webgpu_sgd_update_f32 (no
 // f32 twin of this exists; this file's non-persistent tier never had an
 // SGD op at all, that concept only arrived with the persistent tier).
-int webgpu_sgd_update_f16(void* bufW, void* bufGrad, float lr, unsigned long n) {
+int webgpu_sgd_update_f16(&void bufW, &void bufGrad, float lr, unsigned long n) {
     if (!__wgpu_ensure_device()) return 0;
     unsafe {
         if (__wgpu_sgd_f16_pipeline == (void*)0) {

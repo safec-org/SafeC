@@ -96,7 +96,7 @@ inline int sock_would_block() {
     return (e == ERRNO_EAGAIN()) || (e == ERRNO_EWOULDBLOCK());
 }
 
-inline int fd_open_nb(const char* path, int flags, int mode) {
+inline int fd_open_nb(const &char path, int flags, int mode) {
     int fd;
     unsafe { fd = open(path, flags | SCHED_O_NONBLOCK, mode); }
     return fd;

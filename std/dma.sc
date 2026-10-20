@@ -7,7 +7,7 @@
 
 namespace std {
 
-inline struct DmaBuffer dma_buf_wrap(void* virt, unsigned long phys, unsigned long size) {
+inline struct DmaBuffer dma_buf_wrap(&unsigned char virt, unsigned long phys, unsigned long size) {
     struct DmaBuffer buf;
     buf.virt  = virt;
     buf.phys  = (phys != (unsigned long)0) ? phys : (unsigned long)virt;
@@ -22,7 +22,7 @@ void DmaBuffer::to_device() {
         unsigned long p = (unsigned long)self.virt;
         unsigned long end = p + self.size;
         while (p < end) {
-            mem_clflush((const void*)p);
+            mem_clflush_raw_((const void*)p);
             p = p + (unsigned long)MEM_CACHE_LINE_SIZE;
         }
         // Memory barrier to ensure writes are visible before DMA starts.
@@ -54,7 +54,7 @@ void DmaBuffer::to_cpu() {
         unsigned long p = (unsigned long)self.virt;
         unsigned long end = p + self.size;
         while (p < end) {
-            mem_clflush((const void*)p);
+            mem_clflush_raw_((const void*)p);
             p = p + (unsigned long)MEM_CACHE_LINE_SIZE;
         }
         asm volatile ("" : : : "memory");

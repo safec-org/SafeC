@@ -6,7 +6,7 @@
 namespace std {
 
 struct MmioReg {
-    void* addr;  // MMIO register address
+    &volatile unsigned int addr;  // MMIO register address
 
     unsigned int read32() const;
     void         write32(unsigned int val);
@@ -17,18 +17,18 @@ struct MmioReg {
 };
 
 // Create a MmioReg pointing at `addr`.
-struct MmioReg mmio_reg(void* addr);
+struct MmioReg mmio_reg(&volatile unsigned int addr);
 
 // ── Free-function API (backward-compatible) ───────────────────────────────────
-unsigned int mmio_read32(void* addr);
-void         mmio_write32(void* addr, unsigned int val);
-unsigned int mmio_read16(void* addr);
-void         mmio_write16(void* addr, unsigned int val);
-unsigned int mmio_read8(void* addr);
-void         mmio_write8(void* addr, unsigned int val);
-void         mmio_set_bits32(void* addr, unsigned int mask);
-void         mmio_clear_bits32(void* addr, unsigned int mask);
-unsigned int mmio_read_field32(void* addr, int lo, int hi);
-void         mmio_write_field32(void* addr, int lo, int hi, unsigned int val);
+unsigned int mmio_read32(&volatile unsigned int addr);
+void         mmio_write32(&volatile unsigned int addr, unsigned int val);
+unsigned int mmio_read16(&volatile unsigned short addr);
+void         mmio_write16(&volatile unsigned short addr, unsigned int val);
+unsigned int mmio_read8(&volatile unsigned char addr);
+void         mmio_write8(&volatile unsigned char addr, unsigned int val);
+void         mmio_set_bits32(&volatile unsigned int addr, unsigned int mask);
+void         mmio_clear_bits32(&volatile unsigned int addr, unsigned int mask);
+unsigned int mmio_read_field32(&volatile unsigned int addr, int lo, int hi);
+void         mmio_write_field32(&volatile unsigned int addr, int lo, int hi, unsigned int val);
 
 } // namespace std

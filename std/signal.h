@@ -27,7 +27,7 @@ static const int SIG_WINCH(){ return 28; }  // Window size change
 // Install a handler for signal sig.
 // handler: void (*handler)(int) — pass as void*
 // Returns previous handler (as void*), or (void*)-1 on error.
-void* signal_handle(int sig, void* handler);
+?&void signal_handle(int sig, fn void(int) handler);
 
 // Restore default handling for signal sig.
 void signal_default(int sig);

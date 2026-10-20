@@ -27,7 +27,7 @@ extern int close(int fd);
 
 void WsMessage::free() {
     if (self.data != (unsigned char*)0) {
-        unsafe { dealloc((void*)self.data); }
+        unsafe { dealloc_raw_((void*)self.data); }
     }
 }
 
@@ -57,14 +57,14 @@ static struct String ws_compute_accept_(const char* key) {
 // http.sc's request/response-specific internals). ──
 
 static long ws_read_until_(int fd, struct String* out, const char* terminator) {
-    unsigned long termLen = str_len(terminator);
+    unsigned long termLen; unsafe { termLen = str_len(terminator); }
     char chunk[512];
     while (1) {
         long n;
         unsafe { n = read(fd, (void*)chunk, 512UL); }
         if (n <= 0L) { return -1L; }
         unsafe { out->push_n(chunk, (unsigned long)n); }
-        long idx = out->index_of(terminator);
+        long idx; unsafe { idx = out->index_of(terminator); }
         if (idx >= 0L) { return idx + (long)termLen; }
     }
 }
@@ -93,8 +93,8 @@ static int ws_read_n_(int fd, unsigned char* out, unsigned long want) {
 
 // ── Client handshake ───────────────────────────────────────────────────────
 
-struct WsConn ws_connect(const char* host, unsigned short port,
-                          const char* path, int* ok) {
+struct WsConn ws_connect(const &char host, unsigned short port,
+                          const &char path, ?&int ok) {
     struct WsConn conn;
     conn.fd = -1;
     conn.is_server = 0;
@@ -275,7 +275,7 @@ static int ws_write_frame_(struct WsConn* conn, int opcode,
 
         if (len > 0UL) {
             unsigned char* masked;
-            unsafe { masked = (unsigned char*)alloc(len); }
+            unsafe { masked = (unsigned char*)alloc_raw_(len); }
             if (masked == (unsigned char*)0) { return 0; }
             unsigned long i = 0UL;
             while (i < len) {
@@ -287,7 +287,7 @@ static int ws_write_frame_(struct WsConn* conn, int opcode,
             }
             int wrote;
             unsafe { wrote = ws_write_all_(fd, (const char*)masked, len); }
-            unsafe { dealloc((void*)masked); }
+            unsafe { dealloc_raw_((void*)masked); }
             if (!wrote) { return 0; }
         }
     } else {
@@ -300,14 +300,14 @@ static int ws_write_frame_(struct WsConn* conn, int opcode,
     return 1;
 }
 
-int ws_send_text(&WsConn conn, const char* text) {
+int ws_send_text(&WsConn conn, const &char text) {
     unsigned long len = str_len(text);
     const unsigned char* udata;
     unsafe { udata = (const unsigned char*)text; }
     return ws_write_frame_(conn, WS_OPCODE_TEXT, udata, len);
 }
 
-int ws_send_binary(&WsConn conn, const unsigned char* data, unsigned long len) {
+int ws_send_binary(&WsConn conn, const &unsigned char data, unsigned long len) {
     return ws_write_frame_(conn, WS_OPCODE_BINARY, data, len);
 }
 
@@ -364,10 +364,10 @@ int ws_recv(&WsConn conn, &WsMessage out) {
 
     unsigned char* payload = (unsigned char*)0;
     if (payloadLen > 0UL) {
-        unsafe { payload = (unsigned char*)alloc(payloadLen); }
+        unsafe { payload = (unsigned char*)alloc_raw_(payloadLen); }
         if (payload == (unsigned char*)0) { return 0; }
         if (!ws_read_n_(fd, payload, payloadLen)) {
-            unsafe { dealloc((void*)payload); }
+            unsafe { dealloc_raw_((void*)payload); }
             return 0;
         }
         if (maskBit != 0) {

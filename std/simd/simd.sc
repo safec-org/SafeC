@@ -5,7 +5,7 @@
 namespace std {
 
 // ── Load ───────────────────────────────────────────────────────────────────
-f32x4 simd_load_f32x4(const float* p) {
+f32x4 simd_load_f32x4(const &float p) {
     f32x4 v;
     unsafe {
         v[0] = p[0];
@@ -16,7 +16,7 @@ f32x4 simd_load_f32x4(const float* p) {
     return v;
 }
 
-f32x8 simd_load_f32x8(const float* p) {
+f32x8 simd_load_f32x8(const &float p) {
     f32x8 v;
     unsafe {
         v[0] = p[0];
@@ -31,7 +31,7 @@ f32x8 simd_load_f32x8(const float* p) {
     return v;
 }
 
-f64x2 simd_load_f64x2(const double* p) {
+f64x2 simd_load_f64x2(const &double p) {
     f64x2 v;
     unsafe {
         v[0] = p[0];
@@ -40,7 +40,7 @@ f64x2 simd_load_f64x2(const double* p) {
     return v;
 }
 
-f64x4 simd_load_f64x4(const double* p) {
+f64x4 simd_load_f64x4(const &double p) {
     f64x4 v;
     unsafe {
         v[0] = p[0];
@@ -51,7 +51,7 @@ f64x4 simd_load_f64x4(const double* p) {
     return v;
 }
 
-i32x4 simd_load_i32x4(const int* p) {
+i32x4 simd_load_i32x4(const &int p) {
     i32x4 v;
     unsafe {
         v[0] = p[0];
@@ -62,7 +62,7 @@ i32x4 simd_load_i32x4(const int* p) {
     return v;
 }
 
-i32x8 simd_load_i32x8(const int* p) {
+i32x8 simd_load_i32x8(const &int p) {
     i32x8 v;
     unsafe {
         v[0] = p[0];
@@ -77,7 +77,7 @@ i32x8 simd_load_i32x8(const int* p) {
     return v;
 }
 
-u32x4 simd_load_u32x4(const unsigned int* p) {
+u32x4 simd_load_u32x4(const &unsigned int p) {
     u32x4 v;
     unsafe {
         v[0] = p[0];
@@ -88,7 +88,7 @@ u32x4 simd_load_u32x4(const unsigned int* p) {
     return v;
 }
 
-u32x8 simd_load_u32x8(const unsigned int* p) {
+u32x8 simd_load_u32x8(const &unsigned int p) {
     u32x8 v;
     unsafe {
         v[0] = p[0];
@@ -103,7 +103,7 @@ u32x8 simd_load_u32x8(const unsigned int* p) {
     return v;
 }
 
-i8x16 simd_load_i8x16(const signed char* p) {
+i8x16 simd_load_i8x16(const &signed char p) {
     i8x16 v;
     unsafe {
         v[0] = p[0];
@@ -126,7 +126,7 @@ i8x16 simd_load_i8x16(const signed char* p) {
     return v;
 }
 
-u8x16 simd_load_u8x16(const unsigned char* p) {
+u8x16 simd_load_u8x16(const &unsigned char p) {
     u8x16 v;
     unsafe {
         v[0] = p[0];
@@ -150,7 +150,7 @@ u8x16 simd_load_u8x16(const unsigned char* p) {
 }
 
 // ── Store ──────────────────────────────────────────────────────────────────
-void simd_store_f32x4(f32x4 v, float* p) {
+void simd_store_f32x4(f32x4 v, &float p) {
     unsafe {
         p[0] = v[0];
         p[1] = v[1];
@@ -159,45 +159,7 @@ void simd_store_f32x4(f32x4 v, float* p) {
     }
 }
 
-void simd_store_f32x8(f32x8 v, float* p) {
-    unsafe {
-        p[0] = v[0];
-        p[1] = v[1];
-        p[2] = v[2];
-        p[3] = v[3];
-        p[4] = v[4];
-        p[5] = v[5];
-        p[6] = v[6];
-        p[7] = v[7];
-    }
-}
-
-void simd_store_f64x2(f64x2 v, double* p) {
-    unsafe {
-        p[0] = v[0];
-        p[1] = v[1];
-    }
-}
-
-void simd_store_f64x4(f64x4 v, double* p) {
-    unsafe {
-        p[0] = v[0];
-        p[1] = v[1];
-        p[2] = v[2];
-        p[3] = v[3];
-    }
-}
-
-void simd_store_i32x4(i32x4 v, int* p) {
-    unsafe {
-        p[0] = v[0];
-        p[1] = v[1];
-        p[2] = v[2];
-        p[3] = v[3];
-    }
-}
-
-void simd_store_i32x8(i32x8 v, int* p) {
+void simd_store_f32x8(f32x8 v, &float p) {
     unsafe {
         p[0] = v[0];
         p[1] = v[1];
@@ -210,7 +172,14 @@ void simd_store_i32x8(i32x8 v, int* p) {
     }
 }
 
-void simd_store_u32x4(u32x4 v, unsigned int* p) {
+void simd_store_f64x2(f64x2 v, &double p) {
+    unsafe {
+        p[0] = v[0];
+        p[1] = v[1];
+    }
+}
+
+void simd_store_f64x4(f64x4 v, &double p) {
     unsafe {
         p[0] = v[0];
         p[1] = v[1];
@@ -219,7 +188,16 @@ void simd_store_u32x4(u32x4 v, unsigned int* p) {
     }
 }
 
-void simd_store_u32x8(u32x8 v, unsigned int* p) {
+void simd_store_i32x4(i32x4 v, &int p) {
+    unsafe {
+        p[0] = v[0];
+        p[1] = v[1];
+        p[2] = v[2];
+        p[3] = v[3];
+    }
+}
+
+void simd_store_i32x8(i32x8 v, &int p) {
     unsafe {
         p[0] = v[0];
         p[1] = v[1];
@@ -232,7 +210,29 @@ void simd_store_u32x8(u32x8 v, unsigned int* p) {
     }
 }
 
-void simd_store_i8x16(i8x16 v, signed char* p) {
+void simd_store_u32x4(u32x4 v, &unsigned int p) {
+    unsafe {
+        p[0] = v[0];
+        p[1] = v[1];
+        p[2] = v[2];
+        p[3] = v[3];
+    }
+}
+
+void simd_store_u32x8(u32x8 v, &unsigned int p) {
+    unsafe {
+        p[0] = v[0];
+        p[1] = v[1];
+        p[2] = v[2];
+        p[3] = v[3];
+        p[4] = v[4];
+        p[5] = v[5];
+        p[6] = v[6];
+        p[7] = v[7];
+    }
+}
+
+void simd_store_i8x16(i8x16 v, &signed char p) {
     unsafe {
         p[0] = v[0];
         p[1] = v[1];
@@ -253,7 +253,7 @@ void simd_store_i8x16(i8x16 v, signed char* p) {
     }
 }
 
-void simd_store_u8x16(u8x16 v, unsigned char* p) {
+void simd_store_u8x16(u8x16 v, &unsigned char p) {
     unsafe {
         p[0] = v[0];
         p[1] = v[1];

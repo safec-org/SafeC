@@ -51,7 +51,7 @@ inline void sys_abort() {
 
 // Return the value of the environment variable named `name`,
 // or NULL if not set.  The returned pointer is owned by the environment.
-inline const char* sys_getenv(const char* name) {
+inline const ?&char sys_getenv(const &char name) {
     unsafe { return getenv(name); }
 }
 
@@ -95,16 +95,14 @@ inline long long sys_monotonic_ns() {
 // ── Process control ───────────────────────────────────────────────────────────
 
 // Run a shell command and return its exit status.  NULL → check if shell available.
-inline int sys_system(const char* cmd) {
+inline int sys_system(const &char cmd) {
     unsafe { return system(cmd); }
 }
 
 // Register a function to be called at normal process exit.
-// `func` must point to a void(void) function.
-// SafeC does not yet support function pointer cast syntax; func is passed as void*.
 // Returns 0 on success, non-zero if the registration limit is exceeded.
-inline int sys_atexit(void* func) {
-    unsafe { return atexit(func); }
+inline int sys_atexit(fn void() func) {
+    unsafe { return atexit((void*)func); }
 }
 
 // ── PRNG ──────────────────────────────────────────────────────────────────────
@@ -136,38 +134,58 @@ inline long long sys_llabs(long long x) {
 // ── String → number conversions ───────────────────────────────────────────────
 
 // Convert a decimal string to int.  Stops at the first non-digit.
-inline int sys_atoi(const char* s) {
+inline int sys_atoi(const &char s) {
     unsafe { return atoi(s); }
 }
 
 // Convert a decimal string to long long.
-inline long long sys_atoll(const char* s) {
+inline long long sys_atoll(const &char s) {
     unsafe { return atoll(s); }
 }
 
 // Convert a decimal/scientific string to double.
-inline double sys_atof(const char* s) {
+inline double sys_atof(const &char s) {
     unsafe { return atof(s); }
 }
 
 // Convert string to long long with explicit base (0 = auto-detect 0x/0 prefix).
-inline long long sys_strtoll(const char* s, char** end, int base) {
-    unsafe { return strtoll(s, end, base); }
+inline long long sys_strtoll(const &char s, ?&&const char end, int base) {
+    unsafe {
+        char* e = (char*)0;
+        long long v = strtoll(s, &e, base);
+        match (end) { case some(out): { *out = e; } case null: { } }
+        return v;
+    }
 }
 
 // Convert string to unsigned long long.
-inline unsigned long long sys_strtoull(const char* s, char** end, int base) {
-    unsafe { return strtoull(s, end, base); }
+inline unsigned long long sys_strtoull(const &char s, ?&&const char end, int base) {
+    unsafe {
+        char* e = (char*)0;
+        unsigned long long v = strtoull(s, &e, base);
+        match (end) { case some(out): { *out = e; } case null: { } }
+        return v;
+    }
 }
 
 // Convert string to double.
-inline double sys_strtod(const char* s, char** end) {
-    unsafe { return strtod(s, end); }
+inline double sys_strtod(const &char s, ?&&const char end) {
+    unsafe {
+        char* e = (char*)0;
+        double v = strtod(s, &e);
+        match (end) { case some(out): { *out = e; } case null: { } }
+        return v;
+    }
 }
 
 // Convert string to float.
-inline float sys_strtof(const char* s, char** end) {
-    unsafe { return strtof(s, end); }
+inline float sys_strtof(const &char s, ?&&const char end) {
+    unsafe {
+        char* e = (char*)0;
+        float v = strtof(s, &e);
+        match (end) { case some(out): { *out = e; } case null: { } }
+        return v;
+    }
 }
 
 // ── Sorting and searching ─────────────────────────────────────────────────────

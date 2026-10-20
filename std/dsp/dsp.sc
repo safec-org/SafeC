@@ -116,7 +116,7 @@ Fixed dsp_rms(&stack Fixed a, unsigned long n) {
 
 // ── dsp_dot_f64 ──────────────────────────────────────────────────────────────
 // SIMD FMA dot product (see dsp.h for why this stays float64-only).
-double dsp_dot_f64(const double* a, const double* b, unsigned long n) {
+double dsp_dot_f64(const &double a_ref, const &double b_ref, unsigned long n) { const double* a = a_ref; const double* b = b_ref;
     f64x4 vacc = simd_splat_f64x4(0.0);
     unsigned long i = 0UL;
     while (i + 4UL <= n) {

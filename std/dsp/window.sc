@@ -8,7 +8,7 @@
 
 namespace std {
 
-void window_rectangular(double* w, unsigned long n) {
+void window_rectangular(&double w, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         unsafe { w[i] = 1.0; }
@@ -16,7 +16,7 @@ void window_rectangular(double* w, unsigned long n) {
     }
 }
 
-void window_hann(double* w, unsigned long n) {
+void window_hann(&double w, unsigned long n) {
     if (n <= 1UL) {
         unsigned long i = 0UL;
         while (i < n) { unsafe { w[i] = 1.0; } i = i + 1UL; }
@@ -31,7 +31,7 @@ void window_hann(double* w, unsigned long n) {
     }
 }
 
-void window_hamming(double* w, unsigned long n) {
+void window_hamming(&double w, unsigned long n) {
     if (n <= 1UL) {
         unsigned long i = 0UL;
         while (i < n) { unsafe { w[i] = 1.0; } i = i + 1UL; }
@@ -46,7 +46,7 @@ void window_hamming(double* w, unsigned long n) {
     }
 }
 
-void window_blackman(double* w, unsigned long n) {
+void window_blackman(&double w, unsigned long n) {
     if (n <= 1UL) {
         unsigned long i = 0UL;
         while (i < n) { unsafe { w[i] = 1.0; } i = i + 1UL; }
@@ -62,7 +62,7 @@ void window_blackman(double* w, unsigned long n) {
     }
 }
 
-void window_apply(double* x, const double* w, unsigned long n) {
+void window_apply(&double x, const &double w, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         unsafe { x[i] = x[i] * w[i]; }

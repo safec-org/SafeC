@@ -351,8 +351,8 @@ static int parse_san_(const unsigned char* buf, unsigned long buf_len,
 
 // ── Main DER parser ───────────────────────────────────────────────────────────
 
-int x509_parse_der(const unsigned char* der, unsigned long len,
-                   &stack X509Cert cert_out) {
+int x509_parse_der(const &unsigned char der_ref, unsigned long len,
+                   &stack X509Cert cert_out) { const unsigned char* der = der_ref;
     unsafe {
         memset((void*)&cert_out, 0, (unsigned long)sizeof(struct X509Cert));
     }
@@ -602,7 +602,7 @@ static int wildcard_match_(const char* pattern, const char* hostname) {
     }
 }
 
-int X509Cert::matches_hostname(const char* hostname) const {
+int X509Cert::matches_hostname(const &char hostname) const {
     int i = 0;
     while (i < self.san.count) {
         unsafe {

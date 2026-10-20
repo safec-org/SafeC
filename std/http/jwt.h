@@ -15,7 +15,7 @@ namespace std {
 // '{"sub":"alice","exp":1234567890}') as the payload, HMAC-SHA256'd with
 // 'secret' under the fixed HS256 header. Returns the full compact-
 // serialization token string.
-struct String jwt_sign(const &Value claims, const char* secret);
+struct String jwt_sign(const &Value claims, const &char secret);
 
 // Verifies 'token's signature against 'secret' and that its header says
 // HS256. Does NOT check 'exp'/'nbf'/etc. itself (claims validation is
@@ -25,6 +25,6 @@ struct String jwt_sign(const &Value claims, const char* secret);
 // to 0 (result is VAL_NULL) on a malformed token or signature mismatch;
 // on success, returns the decoded payload Value (caller owns it — call
 // value_free()).
-struct Value jwt_verify(const char* token, const char* secret, int* ok);
+struct Value jwt_verify(const &char token, const &char secret, ?&int ok);
 
 } // namespace std

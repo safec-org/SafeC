@@ -21,7 +21,7 @@ extern int            feof(void* stream);
 extern int            ferror(void* stream);
 extern int            fflush(void* stream);
 
-inline ?&File file_open(const char* path, const char* mode) {
+inline ?&File file_open(const &char path, const &char mode) {
     unsafe { return (?&File)fopen(path, mode); }
 }
 
@@ -37,7 +37,7 @@ inline int file_getc(&File f) {
     unsafe { return fgetc((void*)f); }
 }
 
-inline char* file_gets(char* buf, int n, &File f) {
+inline ?&char file_gets(&char buf, int n, &File f) {
     unsafe { return fgets(buf, n, (void*)f); }
 }
 
@@ -49,7 +49,7 @@ inline int file_putc(int c, &File f) {
     unsafe { return fputc(c, (void*)f); }
 }
 
-inline int file_puts(const char* s, &File f) {
+inline int file_puts(const &char s, &File f) {
     unsafe { return fputs(s, (void*)f); }
 }
 

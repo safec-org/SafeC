@@ -174,23 +174,23 @@ static int __gui_x11_keycode(unsigned int kc) {
     return GUI_KEY_UNKNOWN;
 }
 
-struct GuiWindow gui_create_window(const char* title, int width, int height) {
+struct GuiWindow gui_create_window(const &char title, int width, int height) {
     struct GuiWindow win;
-    win.platform = (void*)0;
+    win.platform = null;
     win.width = width;
     win.height = height;
     win.shouldClose = 0;
 
     unsigned long npix = (unsigned long)width * (unsigned long)height * 4UL;
     unsafe {
-        win.pixels = (&heap unsigned char)alloc(npix);
+        win.pixels = (&heap unsigned char)alloc_raw_(npix);
         memset((void*)win.pixels, 0, npix);
     }
 
     unsafe {
         void* display = XOpenDisplay((const char*)0);
         if (display == (void*)0) {
-            win.platform = (void*)0;
+            win.platform = null;
             return win;
         }
 
@@ -212,7 +212,7 @@ struct GuiWindow gui_create_window(const char* title, int width, int height) {
         void* gc = XCreateGC(display, window, 0UL, (void*)0);
         XFlush(display);
 
-        struct GuiX11Platform* p = (struct GuiX11Platform*)alloc((unsigned long)sizeof(struct GuiX11Platform));
+        struct GuiX11Platform* p = (struct GuiX11Platform*)alloc_raw_((unsigned long)sizeof(struct GuiX11Platform));
         p->display = display;
         p->window = window;
         p->gc = gc;
@@ -227,7 +227,7 @@ struct GuiWindow gui_create_window(const char* title, int width, int height) {
 
 void gui_present(&GuiWindow win) {
     int hasPlatform = 0;
-    unsafe { if (win.platform != (void*)0) { hasPlatform = 1; } }
+    unsafe { if (!win.platform.is_null()) { hasPlatform = 1; } }
     if (!hasPlatform) { return; }
     unsafe {
         struct GuiX11Platform* p = (struct GuiX11Platform*)win.platform;
@@ -274,7 +274,7 @@ void gui_set_pixel(&GuiWindow win, int x, int y, unsigned int rgba) {
 int gui_poll_event(&GuiWindow win, &GuiEvent outEvent) {
     unsafe { outEvent.kind = GUI_EVENT_NONE; outEvent.defaultPrevented = 0; }
     int hasPlatform = 0;
-    unsafe { if (win.platform != (void*)0) { hasPlatform = 1; } }
+    unsafe { if (!win.platform.is_null()) { hasPlatform = 1; } }
     if (!hasPlatform) { return 0; }
 
     unsafe {
@@ -335,15 +335,15 @@ int gui_poll_event(&GuiWindow win, &GuiEvent outEvent) {
 
 void gui_destroy_window(&GuiWindow win) {
     unsafe {
-        if (win.platform != (void*)0) {
+        if (!win.platform.is_null()) {
             struct GuiX11Platform* p = (struct GuiX11Platform*)win.platform;
             if (p->gc != (void*)0) { XFreeGC(p->display, p->gc); }
             XDestroyWindow(p->display, p->window);
             XCloseDisplay(p->display);
-            dealloc((void*)p);
+            dealloc_raw_((void*)p);
         }
-        if ((void*)win.pixels != (void*)0) { dealloc((void*)win.pixels); }
-        win.platform = (void*)0;
+        if ((void*)win.pixels != (void*)0) { dealloc_raw_((void*)win.pixels); }
+        win.platform = null;
     }
 }
 

@@ -468,7 +468,7 @@ static void* __mps_exp_pipeline  = (void*)0;
 static void* __mps_sqrt_pipeline = (void*)0;
 static void* __mps_relu_backward_pipeline = (void*)0;
 
-int mps_add_f32(const float* a, const float* b, float* out, unsigned long n) {
+int mps_add_f32(const &float a, const &float b, &float out, unsigned long n) {
     return __mps_run_binary_kernel(&__mps_add_pipeline, "add_kernel", a, b, out, n);
 }
 
@@ -482,27 +482,27 @@ int mps_add_f32(const float* a, const float* b, float* out, unsigned long n) {
 // the batching primitives it needs to reference -- same reasoning as
 // mps_relu_f32/mps_relu_backward_f32 above (see mps_relu_f32's comment).
 
-int mps_mul_f32(const float* a, const float* b, float* out, unsigned long n) {
+int mps_mul_f32(const &float a, const &float b, &float out, unsigned long n) {
     return __mps_run_binary_kernel(&__mps_mul_pipeline, "mul_kernel", a, b, out, n);
 }
 
-int mps_div_f32(const float* a, const float* b, float* out, unsigned long n) {
+int mps_div_f32(const &float a, const &float b, &float out, unsigned long n) {
     return __mps_run_binary_kernel(&__mps_div_pipeline, "div_kernel", a, b, out, n);
 }
 
-int mps_pow_f32(const float* a, const float* b, float* out, unsigned long n) {
+int mps_pow_f32(const &float a, const &float b, &float out, unsigned long n) {
     return __mps_run_binary_kernel(&__mps_pow_pipeline, "pow_kernel", a, b, out, n);
 }
 
-int mps_log_f32(const float* a, float* out, unsigned long n) {
+int mps_log_f32(const &float a, &float out, unsigned long n) {
     return __mps_run_unary_kernel(&__mps_log_pipeline, "log_kernel", a, out, n);
 }
 
-int mps_exp_f32(const float* a, float* out, unsigned long n) {
+int mps_exp_f32(const &float a, &float out, unsigned long n) {
     return __mps_run_unary_kernel(&__mps_exp_pipeline, "exp_kernel", a, out, n);
 }
 
-int mps_sqrt_f32(const float* a, float* out, unsigned long n) {
+int mps_sqrt_f32(const &float a, &float out, unsigned long n) {
     return __mps_run_unary_kernel(&__mps_sqrt_pipeline, "sqrt_kernel", a, out, n);
 }
 
@@ -519,7 +519,7 @@ int mps_sqrt_f32(const float* a, float* out, unsigned long n) {
 static void* __mps_scale_pipeline = (void*)0;
 static void* __mps_gated_gelu_pipeline = (void*)0;
 
-int mps_scale_f32(const float* a, float k, float* out, unsigned long n) {
+int mps_scale_f32(const &float a, float k, &float out, unsigned long n) {
     unsafe {
         if (!__mps_ensure_device_queue()) return 0;
         void* device = __mps_device;
@@ -676,14 +676,14 @@ void mps_batch_begin() {
     }
 }
 
-void mps_batch_register_finalize(MpsFinalizeFn finalizeFn, void* ctx) {
+void mps_batch_register_finalize_raw_(MpsFinalizeFn finalizeFn, void* ctx) {
     if (__mps_finalize_count >= (unsigned long)MPS_BATCH_MAX_FINALIZE) return;
     __mps_finalize_fn[__mps_finalize_count] = finalizeFn;
     __mps_finalize_ctx[__mps_finalize_count] = ctx;
     __mps_finalize_count = __mps_finalize_count + 1UL;
 }
 
-void* mps_batch_last_output_buffer() {
+?&void mps_batch_last_output_buffer() {
     if (!__mps_batch_active || __mps_pending_count == 0UL) return (void*)0;
     return __mps_pending_gpuBuf[__mps_pending_count - 1UL];
 }
@@ -739,7 +739,7 @@ void mps_batch_end() {
 // encode it onto a shared batch's command buffer for the fused
 // forward+loss+backward training-step path instead of forcing its own
 // commit+wait mid-batch.
-int mps_sub_f32(const float* a, const float* b, float* out, unsigned long n) {
+int mps_sub_f32(const &float a, const &float b, &float out, unsigned long n) {
     unsafe {
         if (!__mps_ensure_device_queue()) return 0;
         void* device = __mps_device;
@@ -836,12 +836,12 @@ static void __mps_sum_finalize(void* ctxPtr) {
         unsigned long g = 0UL;
         while (g < ctx->numGroups) { acc = acc + ctx->partials[g]; g = g + 1UL; }
         *(ctx->out) = acc;
-        dealloc((void*)ctx->partials);
-        dealloc((void*)ctx);
+        dealloc_raw_((void*)ctx->partials);
+        dealloc_raw_((void*)ctx);
     }
 }
 
-int mps_sum_f32(const float* a, float* out, unsigned long n) {
+int mps_sum_f32(const &float a, &float out, unsigned long n) {
     unsafe {
         if (!__mps_ensure_device_queue()) return 0;
         void* device = __mps_device;
@@ -893,16 +893,16 @@ int mps_sum_f32(const float* a, float* out, unsigned long n) {
         dispatchFn(encoder, __sel_dispatchThreadgroups, gridSize, tgSize);
 
         if (batched) {
-            float* partials = (float*)alloc(sizeof(float) * numGroups);
+            float* partials = (float*)alloc_raw_(sizeof(float) * numGroups);
             if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
                 __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
                 __mps_pending_cpuOut[__mps_pending_count] = (void*)partials;
                 __mps_pending_bytes[__mps_pending_count] = partialBytes;
                 __mps_pending_count = __mps_pending_count + 1UL;
             }
-            struct __MpsSumFinalizeCtx* ctx = (struct __MpsSumFinalizeCtx*)alloc(sizeof(struct __MpsSumFinalizeCtx));
+            struct __MpsSumFinalizeCtx* ctx = (struct __MpsSumFinalizeCtx*)alloc_raw_(sizeof(struct __MpsSumFinalizeCtx));
             ctx->partials = partials; ctx->out = out; ctx->numGroups = numGroups;
-            mps_batch_register_finalize((MpsFinalizeFn)__mps_sum_finalize, (void*)ctx);
+            mps_batch_register_finalize_raw_((MpsFinalizeFn)__mps_sum_finalize, (void*)ctx);
             return 1;
         }
 
@@ -924,7 +924,7 @@ int mps_sum_f32(const float* a, float* out, unsigned long n) {
     }
 }
 
-int mps_sum_f32_chained(void* bufA, float* out, unsigned long n) {
+int mps_sum_f32_chained(&void bufA, &float out, unsigned long n) {
     if (!__mps_batch_active) return 0;
     unsafe {
         if (__mps_sum_pipeline == (void*)0) {
@@ -957,16 +957,16 @@ int mps_sum_f32_chained(void* bufA, float* out, unsigned long n) {
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
         dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, gridSize, tgSize);
 
-        float* partials = (float*)alloc(sizeof(float) * numGroups);
+        float* partials = (float*)alloc_raw_(sizeof(float) * numGroups);
         if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)partials;
             __mps_pending_bytes[__mps_pending_count] = partialBytes;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
-        struct __MpsSumFinalizeCtx* ctx = (struct __MpsSumFinalizeCtx*)alloc(sizeof(struct __MpsSumFinalizeCtx));
+        struct __MpsSumFinalizeCtx* ctx = (struct __MpsSumFinalizeCtx*)alloc_raw_(sizeof(struct __MpsSumFinalizeCtx));
         ctx->partials = partials; ctx->out = out; ctx->numGroups = numGroups;
-        mps_batch_register_finalize((MpsFinalizeFn)__mps_sum_finalize, (void*)ctx);
+        mps_batch_register_finalize_raw_((MpsFinalizeFn)__mps_sum_finalize, (void*)ctx);
         return 1;
     }
 }
@@ -988,7 +988,7 @@ static void* __mps_matmul_smma_pipeline = (void*)0;
 static void* __mps_matmul_multi_pipeline = (void*)0;
 static void* __mps_relu_pipeline = (void*)0;
 
-int mps_matmul_f32(const float* a, const float* b, float* out,
+int mps_matmul_f32(const &float a, const &float b, &float out,
                     unsigned long M, unsigned long K, unsigned long N) {
     unsafe {
         if (!__mps_ensure_device_queue()) return 0;
@@ -1138,7 +1138,7 @@ static void* __mps_matmul_abt_pipeline = (void*)0;
 static void* __mps_matmul_abt_smma_pipeline = (void*)0;
 static void* __mps_matmul_abt_multi_pipeline = (void*)0;
 
-int mps_matmul_abt_f32(const float* a, const float* b, float* out,
+int mps_matmul_abt_f32(const &float a, const &float b, &float out,
                         unsigned long M, unsigned long N, unsigned long K) {
     unsafe {
         if (!__mps_ensure_device_queue()) return 0;
@@ -1261,7 +1261,7 @@ static void* __mps_matmul_atb_pipeline = (void*)0;
 static void* __mps_matmul_atb_smma_pipeline = (void*)0;
 static void* __mps_matmul_atb_multi_pipeline = (void*)0;
 
-int mps_matmul_atb_f32(const float* a, const float* b, float* out,
+int mps_matmul_atb_f32(const &float a, const &float b, &float out,
                         unsigned long M, unsigned long K, unsigned long N) {
     unsafe {
         if (!__mps_ensure_device_queue()) return 0;
@@ -1381,7 +1381,7 @@ int mps_matmul_atb_f32(const float* a, const float* b, float* out,
 // __mps_run_binary_kernel, same reasoning as mps_relu_f32 above it in the
 // file -- batching needs to skip the always-commit-and-wait path that
 // helper takes). Same 1D-grid dispatch shape as mps_relu_f32/mps_add_f32.
-int mps_relu_backward_f32(const float* a, const float* selfGrad, float* out, unsigned long n) {
+int mps_relu_backward_f32(const &float a, const &float selfGrad, &float out, unsigned long n) {
     unsafe {
         if (!__mps_ensure_device_queue()) return 0;
         void* device = __mps_device;
@@ -1464,7 +1464,7 @@ int mps_relu_backward_f32(const float* a, const float* selfGrad, float* out, uns
 // exactly what a batched relu — encoded onto a matmul's shared command
 // buffer, e.g. for a matmul -> relu -> matmul forward pass with no CPU
 // step in between — needs to skip).
-int mps_relu_f32(const float* a, float* out, unsigned long n) {
+int mps_relu_f32(const &float a, &float out, unsigned long n) {
     unsafe {
         if (!__mps_ensure_device_queue()) return 0;
         void* device = __mps_device;
@@ -1544,7 +1544,7 @@ int mps_relu_f32(const float* a, float* out, unsigned long n) {
 // specifically because Metal executes dispatches encoded on the same
 // encoder in encoding order. 'bufA' itself is never pool-tracked here: it
 // was already tracked by whichever op produced it as its own bufOut.
-int mps_matmul_f32_chained(void* bufA, const float* b, float* out,
+int mps_matmul_f32_chained(&void bufA, const &float b, &float out,
                             unsigned long M, unsigned long K, unsigned long N) {
     if (!__mps_batch_active) return 0;
     unsafe {
@@ -1635,7 +1635,7 @@ int mps_matmul_f32_chained(void* bufA, const float* b, float* out,
 // another persistent buffer or a previous op's still-pending chained
 // output (mps_batch_last_output_buffer()) -- this function doesn't care
 // which, both are just "already a device buffer".
-int mps_matmul_f32_persistent(void* bufA, void* bufB, float* out,
+int mps_matmul_f32_persistent(&void bufA, &void bufB, &float out,
                                unsigned long M, unsigned long K, unsigned long N) {
     if (!__mps_batch_active) return 0;
     unsafe {
@@ -1738,19 +1738,19 @@ int mps_matmul_f32_persistent(void* bufA, void* bufB, float* out,
 // crash) and hand back a nil buffer that reads back as all zeros forever
 // after -- found by a real correctness test that returned exactly zero
 // for every output element, not by inspection.
-void* mps_upload_persistent(const float* data, unsigned long bytes) {
+?&void mps_upload_persistent(const &float data, unsigned long bytes) {
     if (!__mps_ensure_device_queue()) return (void*)0;
-    return __mps_buf_get_with_bytes((const void*)data, bytes);
+    return __mps_buf_get_with_bytes(data, bytes);
 }
 
 // Returns a buffer obtained from mps_upload_persistent to the size-class
 // pool (see __mps_buf_put's own comment) -- call once, after every batch
 // that might still be reading it has completed.
-void mps_release_persistent(void* buf, unsigned long bytes) {
+void mps_release_persistent(&void buf, unsigned long bytes) {
     __mps_buf_put(buf, bytes);
 }
 
-int mps_relu_f32_chained(void* bufA, float* out, unsigned long n) {
+int mps_relu_f32_chained(&void bufA, &float out, unsigned long n) {
     if (!__mps_batch_active) return 0;
     unsafe {
         if (__mps_relu_pipeline == (void*)0) {
@@ -1792,7 +1792,7 @@ int mps_relu_f32_chained(void* bufA, float* out, unsigned long n) {
 }
 
 // out[i] = bufA[i] - b[i] -- see gpu_mps.h's comment.
-int mps_sub_f32_chained(void* bufA, const float* b, float* out, unsigned long n) {
+int mps_sub_f32_chained(&void bufA, const &float b, &float out, unsigned long n) {
     if (!__mps_batch_active) return 0;
     unsafe {
         if (__mps_sub_pipeline == (void*)0) {
@@ -1836,7 +1836,7 @@ int mps_sub_f32_chained(void* bufA, const float* b, float* out, unsigned long n)
 }
 
 // out[i] = bufA[i] * b[i] -- see gpu_mps.h's comment.
-int mps_mul_f32_chained(void* bufA, const float* b, float* out, unsigned long n) {
+int mps_mul_f32_chained(&void bufA, const &float b, &float out, unsigned long n) {
     if (!__mps_batch_active) return 0;
     unsafe {
         if (__mps_mul_pipeline == (void*)0) {
@@ -1883,7 +1883,7 @@ int mps_mul_f32_chained(void* bufA, const float* b, float* out, unsigned long n)
 // mps_mul_f32_chained above, just bound to buffer indices 0 AND 1 with the
 // same buffer -- reading the same device memory location from two bound
 // slots is safe (both reads, no write), so this needs no dedicated kernel.
-int mps_square_f32_chained(void* buf, float* out, unsigned long n) {
+int mps_square_f32_chained(&void buf, &float out, unsigned long n) {
     if (!__mps_batch_active) return 0;
     unsafe {
         if (__mps_mul_pipeline == (void*)0) {
@@ -1926,7 +1926,7 @@ int mps_square_f32_chained(void* buf, float* out, unsigned long n) {
 }
 
 // out[i] = buf[i] * k -- see gpu_mps.h's comment.
-int mps_scale_f32_chained(void* buf, float k, float* out, unsigned long n) {
+int mps_scale_f32_chained(&void buf, float k, &float out, unsigned long n) {
     if (!__mps_batch_active) return 0;
     unsafe {
         if (__mps_scale_pipeline == (void*)0) {
@@ -1975,7 +1975,7 @@ int mps_scale_f32_chained(void* buf, float k, float* out, unsigned long n) {
 // with the scalar as a 4-byte 'uint' (matching the kernel's 'constant
 // uint&') instead of a float, and a fused gate/up-split + GELU + multiply
 // kernel body instead of a plain multiply-by-scalar.
-int mps_gated_gelu_f32_chained(void* bufRaw, float* out, unsigned long rows, unsigned long intermediateSize) {
+int mps_gated_gelu_f32_chained(&void bufRaw, &float out, unsigned long rows, unsigned long intermediateSize) {
     if (!__mps_batch_active) return 0;
     unsafe {
         if (__mps_gated_gelu_pipeline == (void*)0) {
@@ -2024,7 +2024,7 @@ int mps_gated_gelu_f32_chained(void* bufRaw, float* out, unsigned long rows, uns
 // Same "read a previous batched op's still-pending GPU buffer directly,
 // no CPU round trip" idea as mps_matmul_f32_chained/mps_relu_f32_chained
 // above, applied to the backward chain instead of the forward one.
-int mps_matmul_abt_f32_chained(void* bufDC, const float* b, float* out,
+int mps_matmul_abt_f32_chained(&void bufDC, const &float b, &float out,
                                 unsigned long M, unsigned long N, unsigned long K) {
     if (!__mps_batch_active) return 0;
     unsafe {
@@ -2111,7 +2111,7 @@ int mps_matmul_abt_f32_chained(void* bufDC, const float* b, float* out,
 // persistent. Needed for dH = dY . W2^T when W2 stays GPU-resident and
 // is updated in place by sgd_update_kernel every step instead of ever
 // being read back to a CPU array.
-int mps_matmul_abt_f32_persistent(void* bufDC, void* bufB, float* out,
+int mps_matmul_abt_f32_persistent(&void bufDC, &void bufB, &float out,
                                    unsigned long M, unsigned long N, unsigned long K) {
     if (!__mps_batch_active) return 0;
     unsafe {
@@ -2189,7 +2189,7 @@ int mps_matmul_abt_f32_persistent(void* bufDC, void* bufB, float* out,
     }
 }
 
-int mps_matmul_atb_f32_chained(const float* a, void* bufDC, float* out,
+int mps_matmul_atb_f32_chained(const &float a, &void bufDC, &float out,
                                 unsigned long M, unsigned long K, unsigned long N) {
     if (!__mps_batch_active) return 0;
     unsafe {
@@ -2278,7 +2278,7 @@ int mps_matmul_atb_f32_chained(const float* a, void* bufDC, float* out,
 // memory -- mps_matmul_atb_f32_chained's plain-CPU-array 'a' parameter
 // can't express that. (Doesn't arise for matmul1's own backward: its 'a'
 // is X, a real input tensor, always CPU-resident already.)
-int mps_matmul_atb_f32_chained_ab(void* bufA, void* bufDC, float* out,
+int mps_matmul_atb_f32_chained_ab(&void bufA, &void bufDC, &float out,
                                    unsigned long M, unsigned long K, unsigned long N) {
     if (!__mps_batch_active) return 0;
     unsafe {
@@ -2356,7 +2356,7 @@ int mps_matmul_atb_f32_chained_ab(void* bufA, void* bufDC, float* out,
     }
 }
 
-int mps_relu_backward_f32_chained(const float* a, void* bufSelfGrad, float* out, unsigned long n) {
+int mps_relu_backward_f32_chained(const &float a, &void bufSelfGrad, &float out, unsigned long n) {
     if (!__mps_batch_active) return 0;
     unsafe {
         if (__mps_relu_backward_pipeline == (void*)0) {
@@ -2404,7 +2404,7 @@ int mps_relu_backward_f32_chained(const float* a, void* bufSelfGrad, float* out,
 // as mps_matmul_atb_f32_chained_ab (see its comment): in the fused
 // forward+loss+backward training step, relu's own input (Z1, matmul1's
 // output) hasn't been read back to CPU yet either when relu-backward runs.
-int mps_relu_backward_f32_chained_ab(void* bufA, void* bufSelfGrad, float* out, unsigned long n) {
+int mps_relu_backward_f32_chained_ab(&void bufA, &void bufSelfGrad, &float out, unsigned long n) {
     if (!__mps_batch_active) return 0;
     unsafe {
         if (__mps_relu_backward_pipeline == (void*)0) {
@@ -2459,7 +2459,7 @@ int mps_relu_backward_f32_chained_ab(void* bufA, void* bufSelfGrad, float* out, 
 // re-uploading it (mps_matmul_f32/_persistent) every step.
 static void* __mps_sgd_update_pipeline = (void*)0;
 
-int mps_sgd_update_f32_chained(void* bufW, void* bufGrad, float lr, unsigned long n) {
+int mps_sgd_update_f32_chained(&void bufW, &void bufGrad, float lr, unsigned long n) {
     if (!__mps_batch_active) return 0;
     unsafe {
         if (__mps_sgd_update_pipeline == (void*)0) {
@@ -2499,7 +2499,7 @@ static void* __mps_matmul_bf16_pipeline = (void*)0;
 static void* __mps_relu_f16_pipeline = (void*)0;
 static void* __mps_relu_bf16_pipeline = (void*)0;
 
-int mps_matmul_f16(const float* a, const float* b, float* out,
+int mps_matmul_f16(const &float a, const &float b, &float out,
                     unsigned long M, unsigned long K, unsigned long N) {
     unsafe {
         if (!__mps_ensure_device_queue()) return 0;
@@ -2593,7 +2593,7 @@ int mps_matmul_f16(const float* a, const float* b, float* out,
     }
 }
 
-int mps_matmul_bf16(const float* a, const float* b, float* out,
+int mps_matmul_bf16(const &float a, const &float b, &float out,
                      unsigned long M, unsigned long K, unsigned long N) {
     unsafe {
         if (!__mps_ensure_device_queue()) return 0;
@@ -2772,18 +2772,18 @@ static int __mps_relu_reduced_precision(const char* kernelName, void** pipelineS
     }
 }
 
-int mps_relu_f16(const float* a, float* out, unsigned long n) {
+int mps_relu_f16(const &float a, &float out, unsigned long n) {
     return __mps_relu_reduced_precision("relu_kernel_f16", &__mps_relu_f16_pipeline, a, out, n,
                                          f32_to_fp16_bulk, fp16_to_f32_bulk);
 }
 
-int mps_relu_bf16(const float* a, float* out, unsigned long n) {
+int mps_relu_bf16(const &float a, &float out, unsigned long n) {
     return __mps_relu_reduced_precision("relu_kernel_bf16", &__mps_relu_bf16_pipeline, a, out, n,
                                          f32_to_bf16_bulk, bf16_to_f32_bulk);
 }
 
 // ── fp16 / bf16 persistent-buffer / batched tier (see gpu_mps.h) ────────────
-void* mps_upload_f16_persistent(const float* data, unsigned long n) {
+?&void mps_upload_f16_persistent(const &float data, unsigned long n) {
     unsafe {
         unsigned short* tmp = (unsigned short*)malloc(n * 2UL);
         if (tmp == (void*)0) return (void*)0;
@@ -2794,7 +2794,7 @@ void* mps_upload_f16_persistent(const float* data, unsigned long n) {
     }
 }
 
-void* mps_upload_bf16_persistent(const float* data, unsigned long n) {
+?&void mps_upload_bf16_persistent(const &float data, unsigned long n) {
     unsafe {
         unsigned short* tmp = (unsigned short*)malloc(n * 2UL);
         if (tmp == (void*)0) return (void*)0;
@@ -2858,42 +2858,42 @@ static int __mps_matmul3_chained(const char* kernelName, void** pipelineSlot,
 }
 
 static void* __mps_matmul_f16_persistent_pipeline = (void*)0;
-int mps_matmul_f16_persistent(void* bufA, void* bufB, unsigned short* out,
+int mps_matmul_f16_persistent(&void bufA, &void bufB, &unsigned short out,
                                unsigned long M, unsigned long K, unsigned long N) {
     return __mps_matmul3_chained("matmul_kernel_f16", &__mps_matmul_f16_persistent_pipeline,
                                   bufA, bufB, out, (unsigned int)M, (unsigned int)K, (unsigned int)N, M, N);
 }
 
 static void* __mps_matmul_bf16_persistent_pipeline = (void*)0;
-int mps_matmul_bf16_persistent(void* bufA, void* bufB, unsigned short* out,
+int mps_matmul_bf16_persistent(&void bufA, &void bufB, &unsigned short out,
                                 unsigned long M, unsigned long K, unsigned long N) {
     return __mps_matmul3_chained("matmul_kernel_bf16", &__mps_matmul_bf16_persistent_pipeline,
                                   bufA, bufB, out, (unsigned int)M, (unsigned int)K, (unsigned int)N, M, N);
 }
 
 static void* __mps_matmul_atb_f16_pipeline = (void*)0;
-int mps_matmul_atb_f16_chained_ab(void* bufA, void* bufDC, unsigned short* out,
+int mps_matmul_atb_f16_chained_ab(&void bufA, &void bufDC, &unsigned short out,
                                    unsigned long M, unsigned long K, unsigned long N) {
     return __mps_matmul3_chained("matmul_atb_kernel_f16", &__mps_matmul_atb_f16_pipeline,
                                   bufA, bufDC, out, (unsigned int)M, (unsigned int)K, (unsigned int)N, K, N);
 }
 
 static void* __mps_matmul_atb_bf16_pipeline = (void*)0;
-int mps_matmul_atb_bf16_chained_ab(void* bufA, void* bufDC, unsigned short* out,
+int mps_matmul_atb_bf16_chained_ab(&void bufA, &void bufDC, &unsigned short out,
                                     unsigned long M, unsigned long K, unsigned long N) {
     return __mps_matmul3_chained("matmul_atb_kernel_bf16", &__mps_matmul_atb_bf16_pipeline,
                                   bufA, bufDC, out, (unsigned int)M, (unsigned int)K, (unsigned int)N, K, N);
 }
 
 static void* __mps_matmul_abt_f16_pipeline = (void*)0;
-int mps_matmul_abt_f16_persistent(void* bufDC, void* bufB, unsigned short* out,
+int mps_matmul_abt_f16_persistent(&void bufDC, &void bufB, &unsigned short out,
                                    unsigned long M, unsigned long N, unsigned long K) {
     return __mps_matmul3_chained("matmul_abt_kernel_f16", &__mps_matmul_abt_f16_pipeline,
                                   bufDC, bufB, out, (unsigned int)M, (unsigned int)N, (unsigned int)K, M, K);
 }
 
 static void* __mps_matmul_abt_bf16_pipeline = (void*)0;
-int mps_matmul_abt_bf16_persistent(void* bufDC, void* bufB, unsigned short* out,
+int mps_matmul_abt_bf16_persistent(&void bufDC, &void bufB, &unsigned short out,
                                     unsigned long M, unsigned long N, unsigned long K) {
     return __mps_matmul3_chained("matmul_abt_kernel_bf16", &__mps_matmul_abt_bf16_pipeline,
                                   bufDC, bufB, out, (unsigned int)M, (unsigned int)N, (unsigned int)K, M, K);
@@ -2942,12 +2942,12 @@ static int __mps_unary_chained(const char* kernelName, void** pipelineSlot,
 }
 
 static void* __mps_relu_f16_chained_pipeline = (void*)0;
-int mps_relu_f16_chained(void* bufA, unsigned short* out, unsigned long n) {
+int mps_relu_f16_chained(&void bufA, &unsigned short out, unsigned long n) {
     return __mps_unary_chained("relu_kernel_f16", &__mps_relu_f16_chained_pipeline, bufA, out, n);
 }
 
 static void* __mps_relu_bf16_chained_pipeline = (void*)0;
-int mps_relu_bf16_chained(void* bufA, unsigned short* out, unsigned long n) {
+int mps_relu_bf16_chained(&void bufA, &unsigned short out, unsigned long n) {
     return __mps_unary_chained("relu_kernel_bf16", &__mps_relu_bf16_chained_pipeline, bufA, out, n);
 }
 
@@ -2996,12 +2996,12 @@ static int __mps_binary_dev_chained(const char* kernelName, void** pipelineSlot,
 }
 
 static void* __mps_relu_backward_f16_pipeline = (void*)0;
-int mps_relu_backward_f16_chained_ab(void* bufA, void* bufSelfGrad, unsigned short* out, unsigned long n) {
+int mps_relu_backward_f16_chained_ab(&void bufA, &void bufSelfGrad, &unsigned short out, unsigned long n) {
     return __mps_binary_dev_chained("relu_backward_kernel_f16", &__mps_relu_backward_f16_pipeline, bufA, bufSelfGrad, out, n);
 }
 
 static void* __mps_relu_backward_bf16_pipeline = (void*)0;
-int mps_relu_backward_bf16_chained_ab(void* bufA, void* bufSelfGrad, unsigned short* out, unsigned long n) {
+int mps_relu_backward_bf16_chained_ab(&void bufA, &void bufSelfGrad, &unsigned short out, unsigned long n) {
     return __mps_binary_dev_chained("relu_backward_kernel_bf16", &__mps_relu_backward_bf16_pipeline, bufA, bufSelfGrad, out, n);
 }
 
@@ -3051,12 +3051,12 @@ static int __mps_sub_chained(const char* kernelName, void** pipelineSlot,
 }
 
 static void* __mps_sub_f16_pipeline = (void*)0;
-int mps_sub_f16_chained(void* bufA, const unsigned short* bHalf, unsigned short* out, unsigned long n) {
+int mps_sub_f16_chained(&void bufA, const &unsigned short bHalf, &unsigned short out, unsigned long n) {
     return __mps_sub_chained("sub_kernel_f16", &__mps_sub_f16_pipeline, bufA, bHalf, out, n);
 }
 
 static void* __mps_sub_bf16_pipeline = (void*)0;
-int mps_sub_bf16_chained(void* bufA, const unsigned short* bBf, unsigned short* out, unsigned long n) {
+int mps_sub_bf16_chained(&void bufA, const &unsigned short bBf, &unsigned short out, unsigned long n) {
     return __mps_sub_chained("sub_kernel_bf16", &__mps_sub_bf16_pipeline, bufA, bBf, out, n);
 }
 
@@ -3107,12 +3107,12 @@ static int __mps_scale_chained(const char* kernelName, void** pipelineSlot,
 }
 
 static void* __mps_scale_f16_pipeline = (void*)0;
-int mps_scale_f16_chained(void* buf, float k, unsigned short* out, unsigned long n) {
+int mps_scale_f16_chained(&void buf, float k, &unsigned short out, unsigned long n) {
     return __mps_scale_chained("scale_kernel_f16", &__mps_scale_f16_pipeline, buf, k, out, n);
 }
 
 static void* __mps_scale_bf16_pipeline = (void*)0;
-int mps_scale_bf16_chained(void* buf, float k, unsigned short* out, unsigned long n) {
+int mps_scale_bf16_chained(&void buf, float k, &unsigned short out, unsigned long n) {
     return __mps_scale_chained("scale_kernel_bf16", &__mps_scale_bf16_pipeline, buf, k, out, n);
 }
 
@@ -3154,12 +3154,12 @@ static int __mps_sgd_chained(const char* kernelName, void** pipelineSlot,
 }
 
 static void* __mps_sgd_update_f16_pipeline = (void*)0;
-int mps_sgd_update_f16_chained(void* bufW, void* bufGrad, float lr, unsigned long n) {
+int mps_sgd_update_f16_chained(&void bufW, &void bufGrad, float lr, unsigned long n) {
     return __mps_sgd_chained("sgd_update_kernel_f16", &__mps_sgd_update_f16_pipeline, bufW, bufGrad, lr, n);
 }
 
 static void* __mps_sgd_update_bf16_pipeline = (void*)0;
-int mps_sgd_update_bf16_chained(void* bufW, void* bufGrad, float lr, unsigned long n) {
+int mps_sgd_update_bf16_chained(&void bufW, &void bufGrad, float lr, unsigned long n) {
     return __mps_sgd_chained("sgd_update_kernel_bf16", &__mps_sgd_update_bf16_pipeline, bufW, bufGrad, lr, n);
 }
 

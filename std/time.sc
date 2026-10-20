@@ -17,19 +17,19 @@ extern long long mktime(void* tm);
 // out of scope here. Stubbed honestly instead of silently wrong: zeroed
 // output / a real failure return, not fabricated calendar fields.
 #ifdef _WIN32
-inline void time_gmtime(long long t, int* out) {
+inline void time_gmtime(long long t, &int out) {
     unsafe {
         int i = 0;
         while (i < 9) { out[i] = 0; i = i + 1; }
     }
 }
-inline void time_localtime(long long t, int* out) {
+inline void time_localtime(long long t, &int out) {
     unsafe {
         int i = 0;
         while (i < 9) { out[i] = 0; i = i + 1; }
     }
 }
-inline int time_parse(const char* s, const char* fmt, int* tm_fields) {
+inline int time_parse(const &char s, const &char fmt, &int tm_fields) {
     return 0; // not implemented on Windows -- see comment above
 }
 #else
@@ -37,7 +37,7 @@ extern void* gmtime_r(const long long* t, void* tm);
 extern void* localtime_r(const long long* t, void* tm);
 extern char* strptime(const char* s, const char* format, void* tm);
 
-inline void time_gmtime(long long t, int* out) {
+inline void time_gmtime(long long t, &int out) {
     unsafe {
         // struct tm is platform-specific; use a generous 56-byte buffer
         int tm_buf[14]; // 14 ints = 56 bytes, covers struct tm on all platforms
@@ -55,7 +55,7 @@ inline void time_gmtime(long long t, int* out) {
     }
 }
 
-inline void time_localtime(long long t, int* out) {
+inline void time_localtime(long long t, &int out) {
     unsafe {
         int tm_buf[14];
         localtime_r((const long long*)&t, (void*)tm_buf);
@@ -65,7 +65,7 @@ inline void time_localtime(long long t, int* out) {
     }
 }
 
-inline int time_parse(const char* s, const char* fmt, int* tm_fields) {
+inline int time_parse(const &char s, const &char fmt, &int tm_fields) {
     unsafe {
         int tm_buf[14];
         tm_buf[0]=0; tm_buf[1]=0; tm_buf[2]=0; tm_buf[3]=0;
@@ -88,7 +88,7 @@ inline long long time_now() {
     unsafe { return time((long long*)0); }
 }
 
-inline unsigned long time_format(char* buf, unsigned long cap, const char* fmt, int* tm_fields) {
+inline unsigned long time_format(&char buf, unsigned long cap, const &char fmt, &int tm_fields) {
     unsafe {
         int tm_buf[14];
         tm_buf[0] = tm_fields[0]; tm_buf[1] = tm_fields[1]; tm_buf[2] = tm_fields[2];
@@ -99,7 +99,7 @@ inline unsigned long time_format(char* buf, unsigned long cap, const char* fmt, 
     }
 }
 
-inline long long time_mktime(int* tm_fields) {
+inline long long time_mktime(&int tm_fields) {
     unsafe {
         int tm_buf[14];
         tm_buf[0] = tm_fields[0]; tm_buf[1] = tm_fields[1]; tm_buf[2] = tm_fields[2];

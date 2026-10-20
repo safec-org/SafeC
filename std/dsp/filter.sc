@@ -7,7 +7,7 @@ namespace std {
 
 // ── FIR ──────────────────────────────────────────────────────────────────────
 
-inline struct FirFilter fir_init(const double* coeffs, unsigned long numTaps, double* history) {
+inline struct FirFilter fir_init(const &double coeffs, unsigned long numTaps, &double history) {
     struct FirFilter f;
     f.coeffs = coeffs;
     f.numTaps = numTaps;
@@ -38,7 +38,7 @@ void FirFilter::reset() {
     self.pos = 0UL;
 }
 
-void fir_process_block(&FirFilter f, const double* in, double* out, unsigned long n) {
+void fir_process_block(&FirFilter f, const &double in, &double out, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         double xi;
@@ -50,7 +50,7 @@ void fir_process_block(&FirFilter f, const double* in, double* out, unsigned lon
     }
 }
 
-inline struct FFirFilter ffir_init(const Fixed* coeffs, unsigned long numTaps, Fixed* history) {
+inline struct FFirFilter ffir_init(const &Fixed coeffs, unsigned long numTaps, &Fixed history) {
     struct FFirFilter f;
     f.coeffs = coeffs;
     f.numTaps = numTaps;
@@ -81,7 +81,7 @@ void FFirFilter::reset() {
     self.pos = 0UL;
 }
 
-void ffir_process_block(&FFirFilter f, const Fixed* in, Fixed* out, unsigned long n) {
+void ffir_process_block(&FFirFilter f, const &Fixed in, &Fixed out, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         Fixed xi;
@@ -95,9 +95,9 @@ void ffir_process_block(&FFirFilter f, const Fixed* in, Fixed* out, unsigned lon
 
 // ── IIR (general order, direct form I) ────────────────────────────────────────
 
-inline struct IirFilter iir_init(const double* b, unsigned long numB,
-                                  const double* a, unsigned long numA,
-                                  double* xHistory, double* yHistory) {
+inline struct IirFilter iir_init(const &double b, unsigned long numB,
+                                  const &double a, unsigned long numA,
+                                  &double xHistory, &double yHistory) {
     struct IirFilter f;
     f.b = b;
     f.numB = numB;
@@ -142,7 +142,7 @@ void IirFilter::reset() {
     self.yPos = 0UL;
 }
 
-void iir_process_block(&IirFilter f, const double* in, double* out, unsigned long n) {
+void iir_process_block(&IirFilter f, const &double in, &double out, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         double xi;
@@ -154,9 +154,9 @@ void iir_process_block(&IirFilter f, const double* in, double* out, unsigned lon
     }
 }
 
-inline struct FIirFilter fiir_init(const Fixed* b, unsigned long numB,
-                                    const Fixed* a, unsigned long numA,
-                                    Fixed* xHistory, Fixed* yHistory) {
+inline struct FIirFilter fiir_init(const &Fixed b, unsigned long numB,
+                                    const &Fixed a, unsigned long numA,
+                                    &Fixed xHistory, &Fixed yHistory) {
     struct FIirFilter f;
     f.b = b;
     f.numB = numB;
@@ -201,7 +201,7 @@ void FIirFilter::reset() {
     self.yPos = 0UL;
 }
 
-void fiir_process_block(&FIirFilter f, const Fixed* in, Fixed* out, unsigned long n) {
+void fiir_process_block(&FIirFilter f, const &Fixed in, &Fixed out, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         Fixed xi;

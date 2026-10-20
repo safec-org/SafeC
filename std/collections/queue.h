@@ -56,13 +56,13 @@ int Queue::reserve(unsigned long n) {
     unsigned long c = 8UL;
     while (c < n) { c = c * 2UL; }
     ?&heap T grown = null;
-    unsafe { grown = (?&heap T)alloc(checked_mul_size(c, sizeof(T))); }
+    unsafe { grown = (?&heap T)alloc_raw_(checked_mul_size(c, sizeof(T))); }
     if (grown.is_null()) return 0;
     unsafe {
         unsigned long mask = self.cap - 1UL;
         unsigned long i = 0UL;
         while (i < self.len) { grown[i] = self.data[(self.head + i) & mask]; i = i + 1UL; }
-        dealloc((void*)self.data);
+        dealloc_raw_((void*)self.data);
     }
     self.data = grown;
     self.head = 0UL;
@@ -112,7 +112,7 @@ void Queue::clear() { self.head = 0UL; self.len = 0UL; }
 
 generic<T>
 void Queue::free() {
-    unsafe { dealloc((void*)self.data); }
+    unsafe { dealloc_raw_((void*)self.data); }
     self.data = null;
     self.head = 0UL;
     self.len = 0UL;

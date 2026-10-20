@@ -273,7 +273,7 @@ static unsigned long alloc_class_cap_(unsigned long cls) {
 
 // Allocate `size` bytes.  Returns NULL on failure; callers should check.
 // Use inside unsafe{} when storing the result in a raw pointer.
-void* alloc(unsigned long size) {
+void* alloc_raw_(unsigned long size) {
     unsafe {
         long clsSigned = alloc_size_class_(size);
         if (clsSigned >= 0L) {
@@ -304,7 +304,7 @@ void* alloc(unsigned long size) {
 }
 
 // Allocate `size` bytes and zero-initialize them.
-void* alloc_zeroed(unsigned long size) {
+void* alloc_zeroed_raw_(unsigned long size) {
     unsafe {
         long clsSigned = alloc_size_class_(size);
         if (clsSigned >= 0L) {
@@ -338,7 +338,7 @@ void* alloc_zeroed(unsigned long size) {
 }
 
 // Free memory previously returned by alloc / alloc_zeroed / realloc_buf.
-void dealloc(void* ptr) {
+void dealloc_raw_(void* ptr) {
     unsafe {
         if (ptr == (void*)0) { return; }
         void* raw = (void*)((unsigned long)ptr - ALLOC_HDR_SIZE_);
@@ -364,9 +364,9 @@ void dealloc(void* ptr) {
 }
 
 // Resize an allocation.  Returns NULL on failure (old block is NOT freed).
-void* realloc_buf(void* ptr, unsigned long new_size) {
+void* realloc_buf_raw_(void* ptr, unsigned long new_size) {
     unsafe {
-        if (ptr == (void*)0) { return alloc(new_size); }
+        if (ptr == (void*)0) { return alloc_raw_(new_size); }
         void* raw = (void*)((unsigned long)ptr - ALLOC_HDR_SIZE_);
         unsigned long* hdr = (unsigned long*)raw;
         if (hdr[0] == ALLOC_FREED_MAGIC_) {
@@ -416,23 +416,23 @@ unsigned long checked_add_size(unsigned long a, unsigned long b) {
 }
 
 // Copy `n` bytes from `src` to `dst`.  Regions must not overlap.
-inline void safe_memcpy(void* dst, const void* src, unsigned long n) {
+inline void safe_memcpy_raw_(void* dst, const void* src, unsigned long n) {
     unsafe { memcpy(dst, src, n); }
 }
 
 // Copy `n` bytes from `src` to `dst`.  Handles overlapping regions.
-inline void safe_memmove(void* dst, const void* src, unsigned long n) {
+inline void safe_memmove_raw_(void* dst, const void* src, unsigned long n) {
     unsafe { memmove(dst, src, n); }
 }
 
 // Fill `n` bytes starting at `ptr` with byte value `val`.
-inline void safe_memset(void* ptr, int val, unsigned long n) {
+inline void safe_memset_raw_(void* ptr, int val, unsigned long n) {
     unsafe { memset(ptr, val, n); }
 }
 
 // Compare `n` bytes of `a` and `b`.
 // Returns <0, 0, or >0 (same semantics as C memcmp).
-inline int safe_memcmp(const void* a, const void* b, unsigned long n) {
+inline int safe_memcmp_raw_(const void* a, const void* b, unsigned long n) {
     unsafe { return memcmp(a, b, n); }
 }
 
@@ -454,7 +454,7 @@ inline const int mem_is_aligned(unsigned long addr, unsigned long align) {
     return 0;
 }
 
-inline void mem_prefetch(const void* addr, int write, int locality) {
+inline void mem_prefetch_raw_(const void* addr, int write, int locality) {
     unsafe {
 #ifdef __GNUC__
         __builtin_prefetch(addr, write, locality);
@@ -464,7 +464,7 @@ inline void mem_prefetch(const void* addr, int write, int locality) {
     }
 }
 
-inline void mem_zero_secure(void* ptr, unsigned long n) {
+inline void mem_zero_secure_raw_(void* ptr, unsigned long n) {
     // Volatile write-through to prevent compiler elimination — the whole
     // point of a "secure" zero (e.g. wiping a key before it goes out of
     // scope) is that it survives dead-store elimination, so the bulk word
@@ -497,7 +497,7 @@ inline void mem_zero_secure(void* ptr, unsigned long n) {
     }
 }
 
-inline void mem_clflush(const void* addr) {
+inline void mem_clflush_raw_(const void* addr) {
     unsafe {
 #ifdef __x86_64__
         asm volatile ("clflush (%0)" : : "r"(addr) : "memory");
@@ -509,7 +509,7 @@ inline void mem_clflush(const void* addr) {
 
 // ── Alignment utilities ───────────────────────────────────────────────────────
 
-inline void* mem_align_ptr(void* ptr, unsigned long align) {
+inline void* mem_align_ptr_raw_(void* ptr, unsigned long align) {
     unsafe {
         unsigned long p = (unsigned long)ptr;
         unsigned long a = mem_align_up(p, align);

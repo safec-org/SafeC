@@ -288,8 +288,8 @@ inline void AesCtx::set_iv(const &stack unsigned char iv) {
 
 inline void AesCtx::destroy() {
     unsafe {
-        mem_zero_secure((void*)self.ks, (unsigned long)AES_KS_WORDS * (unsigned long)sizeof(unsigned int));
-        mem_zero_secure((void*)self.iv, (unsigned long)AES_BLOCK_SIZE);
+        mem_zero_secure_raw_((void*)self.ks, (unsigned long)AES_KS_WORDS * (unsigned long)sizeof(unsigned int));
+        mem_zero_secure_raw_((void*)self.iv, (unsigned long)AES_BLOCK_SIZE);
     }
     self.rounds = 0;
 }

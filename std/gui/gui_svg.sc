@@ -339,7 +339,7 @@ static unsigned long __svg_find_tag_end(const char* text, unsigned long len, uns
     return len;
 }
 
-int gui_draw_svg(&GuiWindow win, int ox, int oy, const char* svgText) {
+int gui_draw_svg(&GuiWindow win, int ox, int oy, const &char svgText) {
     unsigned long len = 0UL;
     unsafe { while (svgText[len] != '\0') { len = len + 1UL; } }
 

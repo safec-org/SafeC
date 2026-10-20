@@ -49,7 +49,7 @@ struct HttpRequest {
 // address doesn't parse and hostname resolution also failed. Exposed
 // separately (not just used internally by http_request) since
 // std/http/websocket.h's client side needs the same resolution step.
-int http_resolve_host(const char* host, unsigned int* addr_out);
+int http_resolve_host(const &char host, &unsigned int addr_out);
 
 // Case-insensitive header lookup in a raw "Key: value\r\nKey2: value2..."
 // block (as stored in HttpResponse::headers / HttpRequest::headers).
@@ -65,19 +65,19 @@ struct String http_header_get(const &char raw_headers, const &char name);
 // 'body'/'body_len' may be NULL/0 for a bodyless request (GET, etc.).
 // On any failure (DNS resolution, connect, or a response that doesn't
 // parse as HTTP), '*ok' (if non-NULL) is set to 0.
-struct HttpResponse http_request(const char* host, unsigned short port,
-                                  const char* method, const char* path,
-                                  const char* extra_headers,
-                                  const unsigned char* body, unsigned long body_len,
-                                  int* ok);
+struct HttpResponse http_request(const &char host, unsigned short port,
+                                  const &char method, const &char path,
+                                  const ?&char extra_headers,
+                                  const ?&unsigned char body, unsigned long body_len,
+                                  ?&int ok);
 
 // Convenience wrappers over http_request.
-struct HttpResponse http_get(const char* host, unsigned short port,
-                              const char* path, int* ok);
-struct HttpResponse http_post(const char* host, unsigned short port, const char* path,
-                               const char* content_type,
-                               const unsigned char* body, unsigned long body_len,
-                               int* ok);
+struct HttpResponse http_get(const &char host, unsigned short port,
+                              const &char path, ?&int ok);
+struct HttpResponse http_post(const &char host, unsigned short port, const &char path,
+                               const &char content_type,
+                               const ?&unsigned char body, unsigned long body_len,
+                               ?&int ok);
 
 // A request handler: given the parsed request, return the response to
 // send back.
@@ -124,11 +124,11 @@ int http_serve_reactor(unsigned short port, HttpHandler handler, int numThreads)
 // block ready to send to a client. 'status' must be one of the codes
 // http_reason_phrase (below) recognizes (100–599 range; unrecognized
 // codes get the reason phrase "Unknown").
-struct String http_build_response(int status, const char* content_type,
-                                   const unsigned char* body, unsigned long body_len);
+struct String http_build_response(int status, const &char content_type,
+                                   const ?&unsigned char body, unsigned long body_len);
 
 // Standard reason phrase for a status code (e.g. 404 -> "Not Found"),
 // "Unknown" for anything not in the common set.
-const char* http_reason_phrase(int status);
+const &char http_reason_phrase(int status);
 
 } // namespace std

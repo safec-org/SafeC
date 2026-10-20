@@ -13,22 +13,22 @@ namespace std {
 
 // Forward transform, complex input -> complex output. 'out' must have
 // space for 'n' elements; 'out' may not alias 'in'.
-void dft(const struct Complex* in, struct Complex* out, unsigned long n);
+void dft(const &Complex in, &Complex out, unsigned long n);
 
 // Forward transform, real input -> complex output (convenience: treats
 // each sample as Complex(x, 0) internally without requiring the caller
 // to build that array themselves — the common case for analyzing a real
 // audio/sensor signal).
-void dft_real(const double* in, struct Complex* out, unsigned long n);
+void dft_real(const &double in, &Complex out, unsigned long n);
 
 // Inverse transform (includes the 1/N normalization), complex -> complex.
-void idft(const struct Complex* in, struct Complex* out, unsigned long n);
+void idft(const &Complex in, &Complex out, unsigned long n);
 
 // Q8.24 fixed-point forward/inverse transforms. Twiddle factors are
 // computed in double precision and quantized to Fixed once per use (see
 // complex_dsp.h's design-time-float/runtime-fixed note) — the summation
 // itself runs entirely in Q8.24 arithmetic.
-void fdft(const struct FComplex* in, struct FComplex* out, unsigned long n);
-void fidft(const struct FComplex* in, struct FComplex* out, unsigned long n);
+void fdft(const &FComplex in, &FComplex out, unsigned long n);
+void fidft(const &FComplex in, &FComplex out, unsigned long n);
 
 } // namespace std

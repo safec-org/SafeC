@@ -17,7 +17,7 @@ static void html_flush_run_(&String out, const char* s, unsigned long run_start,
     }
 }
 
-void html_escape(&String out, const char* s) {
+void html_escape(&String out, const &char s) {
     unsigned long i = 0UL;
     unsigned long run_start = 0UL;
     while (1) {
@@ -83,7 +83,7 @@ void html_write(const &Value v, &String out) {
             if (v.str_val != (char*)0) { s = (const char*)v.str_val; }
             else { s = (const char*)""; }
         }
-        html_escape(out, s);
+        unsafe { html_escape(out, s); }
     } else if (kind == VAL_ARRAY) {
         unsafe { out.push("<ul>"); }
         unsigned long n;
@@ -111,7 +111,7 @@ void html_write(const &Value v, &String out) {
             &Value val;
             unsafe { val = e->val; }
             unsafe { out.push("<dt>"); }
-            html_escape(out, key);
+            unsafe { html_escape(out, key); }
             unsafe { out.push("</dt><dd>"); }
             html_write(val, out);
             unsafe { out.push("</dd>"); }
@@ -195,7 +195,7 @@ static struct String html_read_name_(struct HtmlCursor_* c) {
 static void html_expect_open_(struct HtmlCursor_* c, const char* name) {
     html_eat_(c, '<');
     struct String tag = html_read_name_(c);
-    if (tag.eq_cstr(name) == 0) { unsafe { c->ok = 0; } }
+    unsafe { if (tag.eq_cstr(name) == 0) { unsafe { c->ok = 0; } } }
     tag.free();
     while (1) {
         char cc = html_peek_(c);
@@ -210,7 +210,7 @@ static void html_expect_close_(struct HtmlCursor_* c, const char* name) {
     html_eat_(c, '<');
     html_eat_(c, '/');
     struct String tag = html_read_name_(c);
-    if (tag.eq_cstr(name) == 0) { unsafe { c->ok = 0; } }
+    unsafe { if (tag.eq_cstr(name) == 0) { unsafe { c->ok = 0; } } }
     tag.free();
     while (1) {
         char cc = html_peek_(c);
@@ -357,7 +357,7 @@ static struct Value html_parse_value_(struct HtmlCursor_* c) {
     return result;
 }
 
-struct Value html_parse(const char* text, int* ok) {
+struct Value html_parse(const &char text, ?&int ok) {
     struct HtmlCursor_ c;
     c.text = text;
     c.pos = 0UL;

@@ -50,12 +50,12 @@ void* __safec_chan_create(int requestedCap) {
     int cap = requestedCap;
     if (cap < 1) { cap = 1; }
     struct SafecChan_* ch;
-    unsafe { ch = (struct SafecChan_*)std::alloc(sizeof(struct SafecChan_)); }
+    unsafe { ch = (struct SafecChan_*)std::alloc_raw_(sizeof(struct SafecChan_)); }
     if (ch == (struct SafecChan_*)0) {
         return (void*)0;
     }
     unsafe {
-        ch->buf = (unsigned long long*)std::alloc(std::checked_mul_size((unsigned long)cap, 8UL));
+        ch->buf = (unsigned long long*)std::alloc_raw_(std::checked_mul_size((unsigned long)cap, 8UL));
         ch->cap = cap;
         ch->head = 0;
         ch->tail = 0;

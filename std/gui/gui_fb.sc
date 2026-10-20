@@ -59,7 +59,7 @@ struct GuiFbPlatform {
 // hands it back out through the normal API, same as every other backend.
 void gui_fb_inject_event(&GuiWindow win, struct GuiEvent ev) {
     int hasPlatform = 0;
-    unsafe { if (win.platform != (void*)0) { hasPlatform = 1; } }
+    unsafe { if (!win.platform.is_null()) { hasPlatform = 1; } }
     if (!hasPlatform) { return; }
     unsafe {
         struct GuiFbPlatform* p = (struct GuiFbPlatform*)win.platform;
@@ -70,10 +70,10 @@ void gui_fb_inject_event(&GuiWindow win, struct GuiEvent ev) {
     }
 }
 
-struct GuiWindow gui_create_window(const char* title, int width, int height) {
+struct GuiWindow gui_create_window(const &char title, int width, int height) {
     (void)title; // no window chrome/titlebar on bare metal
     struct GuiWindow win;
-    win.platform = (void*)0;
+    win.platform = null;
     win.width = width;
     win.height = height;
     win.shouldClose = 0;
@@ -85,10 +85,10 @@ struct GuiWindow gui_create_window(const char* title, int width, int height) {
 
     unsigned long npix = (unsigned long)width * (unsigned long)height * 4UL;
     unsafe {
-        win.pixels = (&heap unsigned char)alloc(npix);
+        win.pixels = (&heap unsigned char)alloc_raw_(npix);
         memset((void*)win.pixels, 0, npix);
 
-        struct GuiFbPlatform* p = (struct GuiFbPlatform*)alloc((unsigned long)sizeof(struct GuiFbPlatform));
+        struct GuiFbPlatform* p = (struct GuiFbPlatform*)alloc_raw_((unsigned long)sizeof(struct GuiFbPlatform));
         p->queueHead = 0;
         p->queueTail = 0;
         win.platform = (void*)p;
@@ -114,7 +114,7 @@ void gui_set_pixel(&GuiWindow win, int x, int y, unsigned int rgba) {
 
 void gui_present(&GuiWindow win) {
     int hasPlatform = 0;
-    unsafe { if (win.platform != (void*)0) { hasPlatform = 1; } }
+    unsafe { if (!win.platform.is_null()) { hasPlatform = 1; } }
     if (!hasPlatform || !gFbConfigured) { return; }
 
     unsafe {
@@ -161,7 +161,7 @@ int gui_poll_event(&GuiWindow win, &GuiEvent outEvent) {
     outEvent.kind = GUI_EVENT_NONE;
     outEvent.defaultPrevented = 0;
     int hasPlatform = 0;
-    unsafe { if (win.platform != (void*)0) { hasPlatform = 1; } }
+    unsafe { if (!win.platform.is_null()) { hasPlatform = 1; } }
     if (!hasPlatform) { return 0; }
     unsafe {
         struct GuiFbPlatform* p = (struct GuiFbPlatform*)win.platform;
@@ -175,9 +175,9 @@ int gui_poll_event(&GuiWindow win, &GuiEvent outEvent) {
 
 void gui_destroy_window(&GuiWindow win) {
     unsafe {
-        if (win.platform != (void*)0) { dealloc(win.platform); }
-        if ((void*)win.pixels != (void*)0) { dealloc((void*)win.pixels); }
-        win.platform = (void*)0;
+        if (!win.platform.is_null()) { dealloc_raw_(win.platform); }
+        if ((void*)win.pixels != (void*)0) { dealloc_raw_((void*)win.pixels); }
+        win.platform = null;
     }
 }
 

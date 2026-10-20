@@ -237,7 +237,7 @@ real MVE vector codegen through `vec<T,N>` on M55/M85.
 
 ```c
 &stack int ref = &x;                      // stack reference (lexical scope)
-&heap float hp = alloc(sizeof(float));    // heap reference (explicit free)
+&heap float hp = new float;               // heap reference (explicit free)
 &arena<AudioPool> Sample s = new<AudioPool> Sample;  // arena reference
 &static Config cfg = &global_config;      // static reference (program lifetime)
 ?&stack Node next;                        // nullable reference
@@ -425,7 +425,7 @@ defer free(buf);
 // both run in LIFO order at function exit
 ```
 
-`auto p = malloc_defer(64);` is sugar for exactly the `alloc()`+`defer dealloc()` pair above in one statement — `malloc_defer` isn't a real callable (nothing to look up or link), it's recognized only as a variable declaration's initializer and expands to those two statements at parse time. Declares as `void*` (like `alloc()` itself), so `auto` or an explicit `void*` are the only valid declared types.
+`?&heap int p = malloc_defer(64UL);` is sugar for an allocation plus a matching `defer` free in one statement — `malloc_defer` isn't a real callable (nothing to look up or link), it's recognized only as a variable declaration's initializer and expands at parse time to `std::alloc_raw_(n)` (the type-erased allocator behind the generic `std::alloc`) and `defer std::dealloc_raw_(p);`. The result is a raw `void*`, so declare it as `auto`/`void*` or as a nullable heap reference (`?&heap T`).
 
 ### Concurrency
 

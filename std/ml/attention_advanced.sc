@@ -27,8 +27,13 @@ extern void  free(void* ptr);
 }
 
 &Tensor eg_mla_forward(const &Tensor X, const &Tensor Wq, const &Tensor Wdkv,
-                        struct Tensor** WukGroups, struct Tensor** WuvGroups,
-                               unsigned long numGroups, unsigned long headsPerGroup) {
+                        struct Slice<&Tensor> WukGroups, struct Slice<&Tensor> WuvGroups,
+                        unsigned long headsPerGroup) {
+    unsigned long numGroups = WukGroups.length();
+    if (numGroups == 0UL || WuvGroups.length() != numGroups) {
+        panic_at("eg_mla_forward: WukGroups/WuvGroups must be non-empty and the same length",
+                 "eg_mla_forward", 0);
+    }
     unsigned long seqLen; unsigned long dModel;
     unsafe { seqLen = X->shape[0]; dModel = Wq->shape[1]; }
     unsigned long groupDim = dModel / numGroups;
@@ -43,7 +48,7 @@ extern void  free(void* ptr);
         &Tensor Qg = tensor_slice_cols(Q, startCol, groupDim);
         &Tensor Kg;
         &Tensor Vg;
-        unsafe { Kg = tensor_matmul(c_kv, WukGroups[g]); Vg = tensor_matmul(c_kv, WuvGroups[g]); }
+        Kg = tensor_matmul(c_kv, *WukGroups.at(g)); Vg = tensor_matmul(c_kv, *WuvGroups.at(g));
         &Tensor groupOut = mha_forward(Qg, Kg, Vg, headsPerGroup);
         tensor_set_cols(out, startCol, groupOut);
 

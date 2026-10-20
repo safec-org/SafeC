@@ -13,11 +13,11 @@ namespace std {
 
 void          sys_exit(int code);
 void          sys_abort();
-int           sys_system(const char* cmd);
-int           sys_atexit(void* func);
+int           sys_system(const &char cmd);
+int           sys_atexit(fn void() func);
 
 // ── Environment ───────────────────────────────────────────────────────────────
-const char*   sys_getenv(const char* name);
+const ?&char  sys_getenv(const &char name);
 
 // ── PRNG ──────────────────────────────────────────────────────────────────────
 int           sys_rand();
@@ -28,16 +28,16 @@ int           sys_abs(int x);
 long long     sys_llabs(long long x);
 
 // ── String → number conversions ───────────────────────────────────────────────
-int           sys_atoi(const char* s);
-long long     sys_atoll(const char* s);
-double        sys_atof(const char* s);
+int           sys_atoi(const &char s);
+long long     sys_atoll(const &char s);
+double        sys_atof(const &char s);
 
 // Strtoll with explicit base (0 = auto-detect 0x/0 prefix).
-// If `end` is non-NULL it is set to the first character not consumed.
-long long     sys_strtoll(const char* s, char** end, int base);
-unsigned long long sys_strtoull(const char* s, char** end, int base);
-double        sys_strtod(const char* s, char** end);
-float         sys_strtof(const char* s, char** end);
+// If `end` is non-null it is set to the first character not consumed.
+long long     sys_strtoll(const &char s, ?&&const char end, int base);
+unsigned long long sys_strtoull(const &char s, ?&&const char end, int base);
+double        sys_strtod(const &char s, ?&&const char end);
+float         sys_strtof(const &char s, ?&&const char end);
 
 // ── Sorting and searching ─────────────────────────────────────────────────────
 // libc-boundary sort/search over untyped elements; use sys_qsort/sys_bsearch.

@@ -49,16 +49,16 @@ int  gui_font_get_bit(const &GuiFont font, int cp, int px, int py);
 void gui_font_set_bit(&GuiFont font, int cp, int px, int py, int value);
 
 // Serialization.
-int gui_font_save(const &GuiFont font, const char* path); // 1 = ok
-int gui_font_load(&GuiFont outFont, const char* path);    // 1 = ok
+int gui_font_save(const &GuiFont font, const &char path); // 1 = ok
+int gui_font_load(&GuiFont outFont, const &char path);    // 1 = ok
 
 void gui_font_free(&GuiFont font);
 
 // Drawing with an explicit font (see gui_draw.h for the built-in-font
 // versions these mirror).
-int gui_draw_text_ex(&GuiWindow win, int x, int y, const char* text,
+int gui_draw_text_ex(&GuiWindow win, int x, int y, const &char text,
                       struct GuiColor color, int scale, const &GuiFont font);
-int gui_text_width_ex(const char* text, int scale, const &GuiFont font);
+int gui_text_width_ex(const &char text, int scale, const &GuiFont font);
 int gui_text_height_ex(int scale, const &GuiFont font);
 
 } // namespace std

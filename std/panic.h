@@ -6,21 +6,21 @@
 // Panic handler function type: fn(message, file, line) → noreturn
 namespace std {
 
-typedef fn void(const char* msg, const char* file, int line) PanicHandler;
+typedef fn void(const &char msg, const &char file, int line) PanicHandler;
 
 // Install a custom panic handler. Pass NULL to reset to default.
 void panic_set_handler(PanicHandler handler);
 
 // Trigger a panic with message, file, line.
 // Never returns.
-void panic_at(const char* msg, const char* file, int line);
+void panic_at(const &char msg, const &char file, int line);
 
 // Checked narrowing of a nullable reference: returns 'r' as '&T', or
 // panics with 'msg' if it is null. The explicit form of "this can't be
 // null here" — a cast '(&T)r' is rejected because it would skip the check.
 // For recoverable absence, 'match (r) { case null: ... case some(x): ... }'.
 generic<T>
-&T expect_ref(?&T r, const char* msg) {
+&T expect_ref(?&T r, const &char msg) {
     match (r) {
         case some(x): return x;
         case null: { panic_at(msg, "expect_ref", 0); }

@@ -89,7 +89,7 @@ struct Widget {
 
     // Callback/hook slots are stored as plain 'void*' — not the typed
     // WidgetCallback/WidgetDrawFn/... aliases below — purely because those
-    // aliases reference 'struct Widget*' themselves and safec requires a
+    // aliases reference '&Widget' themselves and safec requires a
     // struct to be fully defined before it's used as a typedef'd function
     // pointer's parameter type, so the typedefs can only be declared right
     // after this struct closes, not before. Every setter/getter still
@@ -123,19 +123,19 @@ struct Widget {
 };
 
 // onClick/onChange(widget, userData).
-typedef fn void(struct Widget*, void*) WidgetCallback;
+typedef fn void(&Widget, ?&void) WidgetCallback;
 // Custom draw(window, widget) — called instead of the built-in renderer
 // for a WIDGET_CUSTOM node; must draw within [widget->x, widget->x+widget->w) x
 // [widget->y, widget->y+widget->h) using gui_draw.h's primitives.
-typedef fn void(struct GuiWindow*, struct Widget*) WidgetDrawFn;
+typedef fn void(&GuiWindow, &Widget) WidgetDrawFn;
 // Custom layout(widget, x, y, w, h) — called instead of the built-in
 // layout for a WIDGET_CUSTOM node; must set widget->x/y/w/h (typically to
 // the given box) and lay out+recurse into any children itself.
-typedef fn void(struct Widget*, int, int, int, int) WidgetLayoutFn;
+typedef fn void(&Widget, int, int, int, int) WidgetLayoutFn;
 // Custom event(widget, event) -> 1 if handled (stops the event from
 // reaching this widget's parent/siblings), 0 to let normal dispatch
 // (hover/press/click detection) continue.
-typedef fn int(struct Widget*, struct GuiEvent*) WidgetCustomEventFn;
+typedef fn int(&Widget, &GuiEvent) WidgetCustomEventFn;
 
 // ── constructors ─────────────────────────────────────────────────────────────
 // All return a freshly heap-allocated, non-null widget — a region-less
@@ -143,10 +143,10 @@ typedef fn int(struct Widget*, struct GuiEvent*) WidgetCustomEventFn;
 // cares whether the tree it ends up in is heap/stack/static/arena-owned.
 &Widget widget_vstack();
 &Widget widget_hstack();
-&Widget widget_button(const char* text);
-&Widget widget_label(const char* text);
-&Widget widget_checkbox(const char* text, int checked);
-&Widget widget_textinput(const char* placeholder);
+&Widget widget_button(const &char text);
+&Widget widget_label(const &char text);
+&Widget widget_checkbox(const &char text, int checked);
+&Widget widget_textinput(const &char placeholder);
 &Widget widget_spacer();
 &Widget widget_slider(double minValue, double maxValue, double value);
 
@@ -180,7 +180,7 @@ void widget_add_child(&Widget parent, &Widget child);
 &Widget widget_set_font(&Widget w, const ?&GuiFont font);
 &Widget widget_set_visible(&Widget w, int visible);
 &Widget widget_set_enabled(&Widget w, int enabled);
-&Widget widget_set_text(&Widget w, const char* text);
+&Widget widget_set_text(&Widget w, const &char text);
 &Widget widget_on_click_raw_(&Widget w, void* cb, void* userData);
 &Widget widget_on_change_raw_(&Widget w, void* cb, void* userData);
 

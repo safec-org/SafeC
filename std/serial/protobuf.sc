@@ -78,7 +78,7 @@ void pb_write_float_field(&String out, int field_num, float v) {
     }
 }
 
-void pb_write_string_field(&String out, int field_num, const char* s) {
+void pb_write_string_field(&String out, int field_num, const &char s) {
     unsigned long len = str_len(s);
     pb_write_tag(out, field_num, PB_WIRE_LEN);
     pb_write_varint(out, (unsigned long long)len);
@@ -86,7 +86,7 @@ void pb_write_string_field(&String out, int field_num, const char* s) {
 }
 
 void pb_write_bytes_field(&String out, int field_num,
-                           const unsigned char* data, unsigned long len) {
+                           const &unsigned char data, unsigned long len) {
     pb_write_tag(out, field_num, PB_WIRE_LEN);
     pb_write_varint(out, (unsigned long long)len);
     unsafe { out.push_n((const char*)data, len); }
@@ -94,7 +94,7 @@ void pb_write_bytes_field(&String out, int field_num,
 
 // ── Reader ────────────────────────────────────────────────────────────────
 
-struct PbReader pb_reader_new(const unsigned char* data, unsigned long len) {
+struct PbReader pb_reader_new(const &unsigned char data, unsigned long len) {
     struct PbReader r;
     r.data = data;
     r.len  = len;
@@ -109,7 +109,7 @@ int pb_reader_has_more(const &PbReader r) {
     return pos < len;
 }
 
-int pb_read_varint(&PbReader r, unsigned long long* out) {
+int pb_read_varint(&PbReader r, &unsigned long long out) {
     unsigned long long result = 0ULL;
     int shift = 0;
     while (1) {
@@ -129,7 +129,7 @@ int pb_read_varint(&PbReader r, unsigned long long* out) {
     return 1;
 }
 
-int pb_read_tag(&PbReader r, int* field_num, int* wire_type) {
+int pb_read_tag(&PbReader r, &int field_num, &int wire_type) {
     unsigned long long key;
     if (!pb_read_varint(r, &key)) { return 0; }
     unsafe {
@@ -139,18 +139,18 @@ int pb_read_tag(&PbReader r, int* field_num, int* wire_type) {
     return 1;
 }
 
-int pb_read_int64(&PbReader r, long long* out) {
+int pb_read_int64(&PbReader r, &long long out) {
     unsigned long long v;
     if (!pb_read_varint(r, &v)) { return 0; }
     unsafe { *out = (long long)v; }
     return 1;
 }
 
-int pb_read_uint64(&PbReader r, unsigned long long* out) {
+int pb_read_uint64(&PbReader r, &unsigned long long out) {
     return pb_read_varint(r, out);
 }
 
-int pb_read_sint64(&PbReader r, long long* out) {
+int pb_read_sint64(&PbReader r, &long long out) {
     unsigned long long v;
     if (!pb_read_varint(r, &v)) { return 0; }
     long long decoded = (long long)((v >> 1) ^ (0ULL - (v & 1ULL)));
@@ -158,14 +158,14 @@ int pb_read_sint64(&PbReader r, long long* out) {
     return 1;
 }
 
-int pb_read_bool(&PbReader r, int* out) {
+int pb_read_bool(&PbReader r, &int out) {
     unsigned long long v;
     if (!pb_read_varint(r, &v)) { return 0; }
     unsafe { *out = (v != 0ULL) ? 1 : 0; }
     return 1;
 }
 
-int pb_read_double(&PbReader r, double* out) {
+int pb_read_double(&PbReader r, &double out) {
     unsigned long pos;
     unsigned long len;
     unsafe { pos = r.pos; len = r.len; }
@@ -185,7 +185,7 @@ int pb_read_double(&PbReader r, double* out) {
     return 1;
 }
 
-int pb_read_float(&PbReader r, float* out) {
+int pb_read_float(&PbReader r, &float out) {
     unsigned long pos;
     unsigned long len;
     unsafe { pos = r.pos; len = r.len; }
@@ -205,8 +205,8 @@ int pb_read_float(&PbReader r, float* out) {
     return 1;
 }
 
-int pb_read_length_delimited(&PbReader r, const unsigned char** dataOut,
-                              unsigned long* lenOut) {
+int pb_read_length_delimited(&PbReader r, &&const unsigned char dataOut,
+                              &unsigned long lenOut) {
     unsigned long long len64;
     if (!pb_read_varint(r, &len64)) { return 0; }
     unsigned long fieldLen = (unsigned long)len64;
@@ -215,7 +215,7 @@ int pb_read_length_delimited(&PbReader r, const unsigned char** dataOut,
     unsafe { pos = r.pos; bufLen = r.len; }
     if (pos + fieldLen > bufLen) { return 0; } // declared length overruns the buffer
     unsafe {
-        *dataOut = r.data + pos;
+        *dataOut = &r.data[pos];
         *lenOut  = fieldLen;
         r.pos   = pos + fieldLen;
     }
@@ -244,7 +244,8 @@ int pb_skip_field(&PbReader r, int wire_type) {
         return 1;
     }
     if (wire_type == PB_WIRE_LEN) {
-        const unsigned char* d;
+        unsigned char none = (unsigned char)0;
+        &const unsigned char d = &none;
         unsigned long n;
         return pb_read_length_delimited(r, &d, &n);
     }

@@ -12,6 +12,7 @@
 #include <std/ml/tensor.h>
 #include <std/ml/attention.h>
 #include <std/ml/activations.h>
+#include <std/collections/slice.h>
 
 namespace std {
 
@@ -63,9 +64,8 @@ void jit_block_free(&JiTBlock block);
 
 // patches: [seqLen, patchDim], WPatchEmbed: [patchDim, dModel], cond:
 // [1, dModel] (broadcast-added to every token's embedding once, up
-// front). Runs 'blocks' (an array of numBlocks JiTBlock, caller-owned —
-// stays a raw pointer: it's indexed as an array, not a single object).
+// front). Runs each of 'blocks' in order (caller-owned).
 &Tensor jit_forward(const &Tensor patches, const &Tensor WPatchEmbed, const &Tensor cond,
-                     struct JiTBlock* blocks, unsigned long numBlocks);
+                     struct Slice<JiTBlock> blocks);
 
 } // namespace std

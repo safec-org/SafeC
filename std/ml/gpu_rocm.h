@@ -32,7 +32,7 @@ namespace std {
 int rocm_available();
 
 // Name of the selected GPU ("AMD Instinct MI100"), or "" if none.
-const char* rocm_device_name();
+const &char rocm_device_name();
 
 // A float32 buffer in GPU memory. 'dev' is the device address — never
 // dereferenced on the host — and 0 for an invalid (failed or freed)

@@ -15,14 +15,14 @@ namespace std {
 // with k, same direction as x[k] — so the whole inner loop becomes one
 // contiguous-range call into dsp_dot_f64's SIMD FMA accumulation instead
 // of a scalar multiply-add per sample.
-void conv_direct(const double* x, unsigned long len_x,
-                  const double* h, unsigned long len_h, double* out) {
+void conv_direct(const &double x_ref, unsigned long len_x,
+                  const &double h, unsigned long len_h, &double out) { const double* x = x_ref;
     if (len_x == 0UL || len_h == 0UL) {
         return;
     }
 
     double* hrev;
-    unsafe { hrev = (double*)alloc(len_h * (unsigned long)sizeof(double)); }
+    unsafe { hrev = (double*)alloc_raw_(len_h * (unsigned long)sizeof(double)); }
     unsigned long r = 0UL;
     while (r < len_h) {
         unsafe { hrev[r] = h[len_h - 1UL - r]; }
@@ -51,11 +51,11 @@ void conv_direct(const double* x, unsigned long len_x,
         n = n + 1UL;
     }
 
-    unsafe { dealloc((void*)hrev); }
+    unsafe { dealloc_raw_((void*)hrev); }
 }
 
-void fconv_direct(const Fixed* x, unsigned long len_x,
-                   const Fixed* h, unsigned long len_h, Fixed* out) {
+void fconv_direct(const &Fixed x, unsigned long len_x,
+                   const &Fixed h, unsigned long len_h, &Fixed out) {
     if (len_x == 0UL || len_h == 0UL) {
         return;
     }
@@ -81,8 +81,8 @@ void fconv_direct(const Fixed* x, unsigned long len_x,
     }
 }
 
-void conv_fft(const double* x, unsigned long len_x,
-              const double* h, unsigned long len_h, double* out) {
+void conv_fft(const &double x, unsigned long len_x,
+              const &double h, unsigned long len_h, &double out) {
     if (len_x == 0UL || len_h == 0UL) {
         return;
     }
@@ -95,8 +95,8 @@ void conv_fft(const double* x, unsigned long len_x,
     struct Complex* X;
     struct Complex* H;
     unsafe {
-        X = (struct Complex*)alloc(fftLen * (unsigned long)sizeof(struct Complex));
-        H = (struct Complex*)alloc(fftLen * (unsigned long)sizeof(struct Complex));
+        X = (struct Complex*)alloc_raw_(fftLen * (unsigned long)sizeof(struct Complex));
+        H = (struct Complex*)alloc_raw_(fftLen * (unsigned long)sizeof(struct Complex));
     }
 
     unsigned long i = 0UL;
@@ -116,8 +116,8 @@ void conv_fft(const double* x, unsigned long len_x,
         i = i + 1UL;
     }
 
-    fft(X, fftLen);
-    fft(H, fftLen);
+    unsafe { fft(X, fftLen); }
+    unsafe { fft(H, fftLen); }
 
     i = 0UL;
     while (i < fftLen) {
@@ -125,7 +125,7 @@ void conv_fft(const double* x, unsigned long len_x,
         i = i + 1UL;
     }
 
-    ifft(X, fftLen);
+    unsafe { ifft(X, fftLen); }
 
     i = 0UL;
     while (i < outLen) {
@@ -134,8 +134,8 @@ void conv_fft(const double* x, unsigned long len_x,
     }
 
     unsafe {
-        dealloc((void*)X);
-        dealloc((void*)H);
+        dealloc_raw_((void*)X);
+        dealloc_raw_((void*)H);
     }
 }
 

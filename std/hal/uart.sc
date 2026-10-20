@@ -8,7 +8,7 @@
 
 namespace std {
 
-inline struct Uart uart_init(void* base, unsigned int baud) {
+inline struct Uart uart_init(&volatile unsigned int base, unsigned int baud) {
     struct Uart u;
     u.base = base;
     u.baud = baud;
@@ -53,7 +53,7 @@ inline unsigned char Uart::read_byte() {
     }
 }
 
-inline void Uart::write_str(const char* s) {
+inline void Uart::write_str(const &char s) {
     unsafe {
         int i = 0;
         while (s[i] != (char)0) {

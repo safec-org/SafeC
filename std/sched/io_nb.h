@@ -60,7 +60,7 @@ int fd_set_blocking(int fd);
 // open() in non-blocking mode where the platform supports it for regular
 // files (BSD/Linux: O_NONBLOCK; Windows: no equivalent — see
 // io_nb_win32.sc). Returns fd, or -1 on failure.
-int fd_open_nb(const char* path, int flags, int mode);
+int fd_open_nb(const &char path, int flags, int mode);
 
 // socket()+bind()+listen(), non-blocking. Returns listening fd, or -1.
 int tcp_listen_nb(unsigned short port);

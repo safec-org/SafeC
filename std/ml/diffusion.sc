@@ -19,7 +19,7 @@
 namespace std {
 
 void edm_karras_sigmas(unsigned long numSteps, float sigmaMin, float sigmaMax, float rho,
-                        float* outSigmas) {
+                        &float outSigmas) {
     float minInvRho = pow_f(sigmaMin, (float)1.0 / rho);
     float maxInvRho = pow_f(sigmaMax, (float)1.0 / rho);
     unsafe {
@@ -35,7 +35,7 @@ void edm_karras_sigmas(unsigned long numSteps, float sigmaMin, float sigmaMax, f
 }
 
 void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd,
-                           float* outBeta, float* outAlphaBar) {
+                           &float outBeta, &float outAlphaBar) {
     unsafe {
         float alphaBarAcc = (float)1.0;
         unsigned long t = 0UL;
@@ -105,7 +105,7 @@ void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd
     return out;
 }
 
-&Tensor dpm_solver_2_step(EpsModelFn model, void* userData,
+&Tensor dpm_solver_2_step_raw_(EpsModelFn model, void* userData,
                            const &Tensor x_cur, const &Tensor epsPred,
                            float alpha_cur, float sigma_cur,
                            float alpha_next, float sigma_next) {
@@ -154,7 +154,7 @@ void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd
     return out;
 }
 
-&Tensor dpm_solver_pp_2_step(DataModelFn model, void* userData,
+&Tensor dpm_solver_pp_2_step_raw_(EpsModelFn model, void* userData,
                               const &Tensor x_cur, const &Tensor x0Pred,
                               float alpha_cur, float sigma_cur,
                               float alpha_next, float sigma_next) {

@@ -21,8 +21,8 @@ static int near_d(double a, double b, double eps) {
 
 void t_mem() {
     unsafe {
-        ?&char pq = alloc(64UL);
-        ?&char zq = alloc_zeroed(32UL);
+        ?&heap char pq = alloc(64UL);
+        ?&heap char zq = alloc_zeroed(32UL);
         ASSERT_FALSE(pq.is_null());
         ASSERT_FALSE(zq.is_null());
         if (pq.is_null() || zq.is_null()) return;
@@ -34,16 +34,16 @@ void t_mem() {
         ASSERT_EQ(z[31], 0);
         safe_memcpy(z, "hello", 6UL);
         ASSERT_STR_EQ(z, "hello");
-        safe_memmove((void*)&z[1], z, 5UL);
+        safe_memmove(&z[1], z, 5UL);
         ASSERT_EQ(z[1], 'h');
         ASSERT_EQ(safe_memcmp("abc", "abd", 3UL) < 0, 1);
-        ?&char rq = realloc_buf(p, 4096UL);
+        ?&heap char rq = realloc_buf(pq, 4096UL);
         ASSERT_FALSE(rq.is_null());
         if (rq.is_null()) return;
         &char r = std::expect_ref(rq, "rq is null");
         ASSERT_EQ(r[10], 7);
-        dealloc(r);
-        dealloc(z);
+        dealloc(rq);
+        dealloc(zq);
         ASSERT_EQ(mem_align_up(13UL, 8UL), 16);
         ASSERT_EQ(mem_align_down(13UL, 8UL), 8);
         ASSERT_TRUE(mem_is_aligned(64UL, 64UL));
@@ -70,17 +70,17 @@ void t_str() {
         ASSERT_STR_EQ(str_rfind_char("a.b.c", '.'), ".c");
         ASSERT_EQ(str_span("aaab", "a"), 3);
         ASSERT_EQ(str_cspan("abc,d", ","), 3);
-        ?&char d = str_dup("dup");
+        ?&heap char d = str_dup("dup");
         ASSERT_FALSE(d.is_null());
         ASSERT_STR_EQ(d, "dup");
         dealloc(d);
-        ?&char nd = str_ndup("abcdef", 3UL);
+        ?&heap char nd = str_ndup("abcdef", 3UL);
         ASSERT_FALSE(nd.is_null());
         ASSERT_STR_EQ(nd, "abc");
         dealloc(nd);
         char tok[32];
         str_copy(tok, "a,b,,c", 32UL);
-        char* save = (char*)0;   // str_tok's saveptr out-param is typed 'char*' by its API
+        ?&char save = null;
         ?&char t1 = str_tok(tok, ",", &save);
         ?&char t2 = str_tok(null, ",", &save);
         ?&char t3 = str_tok(null, ",", &save);
@@ -127,8 +127,8 @@ void t_convert() {
         ASSERT_EQ(str_to_uint("42", &ok), 42);
         ASSERT_EQ(str_to_hex("ff", &ok), 255);
         ASSERT_TRUE(near_d(str_to_float("2.5", &ok), 2.5, 1e-12));
-        ?&char s = int_to_str(-55LL);
-        ?&char f = float_to_str(1.5, 1);
+        ?&heap char s = int_to_str(-55LL);
+        ?&heap char f = float_to_str(1.5, 1);
         ASSERT_FALSE(s.is_null());
         ASSERT_FALSE(f.is_null());
         ASSERT_STR_EQ(s, "-55");
@@ -244,7 +244,7 @@ void t_sys() {
         sys_srand(42u);
         ASSERT_EQ(sys_rand(), r1);
         ASSERT_EQ(sys_atoi("123"), 123);
-        ASSERT_EQ(sys_strtoll("ff", (char**)0, 16), 255);
+        ASSERT_EQ(sys_strtoll("ff", null, 16), 255);
         int arr[5];
         arr[0] = 5; arr[1] = 1; arr[2] = 4; arr[3] = 2; arr[4] = 3;
         sys_qsort(&arr[0], 5UL, cmp_int);

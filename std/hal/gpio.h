@@ -14,7 +14,7 @@
 namespace std {
 
 struct GpioPin {
-    void*        base;       // MMIO base address of GPIO port
+    &volatile unsigned int base; // MMIO base address of GPIO port
     unsigned int pin_mask;   // bitmask for this pin (1 << pin_number)
     int          direction;  // GPIO_INPUT or GPIO_OUTPUT
 
@@ -35,6 +35,6 @@ struct GpioPin {
 };
 
 // Initialize a GPIO pin. `base` = MMIO port base, `pin` = pin number (0-31).
-struct GpioPin gpio_init(void* base, int pin, int direction);
+struct GpioPin gpio_init(&volatile unsigned int base, int pin, int direction);
 
 } // namespace std

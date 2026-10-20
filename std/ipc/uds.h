@@ -33,7 +33,7 @@ namespace std {
 // fd, or -1 on failure. Fails with EADDRINUSE if 'path' already exists as
 // a socket file from a previous run that didn't clean up — call
 // uds_unlink(path) first if that's a possibility.
-int uds_listen_nb(const char* path);
+int uds_listen_nb(const &char path);
 
 // Non-blocking accept(): returns a connected client fd (itself set
 // non-blocking), or -1 with errno EAGAIN/EWOULDBLOCK if none is pending
@@ -45,13 +45,13 @@ int uds_accept_nb(int listenfd);
 // handshake — the caller should await_fd(fd, SCHED_WRITE) and treat the
 // fd becoming writable as "connect finished". Returns the socket fd, or
 // -1 on immediate failure.
-int uds_connect_nb(const char* path);
+int uds_connect_nb(const &char path);
 
 // Removes a stale socket file at 'path' (unlink(2)) — a Unix domain
 // socket's bind() fails EADDRINUSE if the filesystem path from a
 // previous, uncleanly-terminated run still exists, unlike a TCP port
 // which is simply released by the OS. Returns 0 on success (including
 // "path didn't exist"), -1 on a real failure.
-int uds_unlink(const char* path);
+int uds_unlink(const &char path);
 
 } // namespace std

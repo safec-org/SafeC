@@ -5,7 +5,7 @@
 namespace std {
 
 struct Timer {
-    void*        base;       // MMIO base address
+    &volatile unsigned int base; // MMIO base address
     unsigned int prescaler;  // clock divider
 
     // Set the auto-reload (period) value.
@@ -28,6 +28,6 @@ struct Timer {
 };
 
 // Initialize a hardware timer at `base` with the given prescaler.
-struct Timer timer_init(void* base, unsigned int prescaler);
+struct Timer timer_init(&volatile unsigned int base, unsigned int prescaler);
 
 } // namespace std

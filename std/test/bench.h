@@ -36,7 +36,7 @@ struct BenchSuite bench_suite_init();
 
 // Register a benchmark: func(arg) is called `iters` times per run.
 generic<T>
-void bench_add(&BenchSuite b, const char* name, fn void(?&T) func, ?&T arg, unsigned long iters) {
+void bench_add(&BenchSuite b, const &char name, fn void(?&T) func, ?&T arg, unsigned long iters) {
     unsafe { b.add_raw_(name, (void*)func, (void*)arg, iters); }
 }
 

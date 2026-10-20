@@ -62,7 +62,7 @@ static void xml_append_float_(&String out, double v) {
     }
 }
 
-void xml_write(const &Value v, const char* tag, &String out) {
+void xml_write(const &Value v, const &char tag, &String out) {
     int kind;
     unsafe { kind = v.kind; }
 
@@ -113,7 +113,7 @@ void xml_write(const &Value v, const char* tag, &String out) {
             unsafe { key = (const char*)e->key; }
             &Value val;
             unsafe { val = e->val; }
-            xml_write(val, key, out);
+            unsafe { xml_write(val, key, out); }
             i = i + 1UL;
         }
     }
@@ -121,7 +121,7 @@ void xml_write(const &Value v, const char* tag, &String out) {
     unsafe { out.push("</"); out.push(tag); out.push_char('>'); }
 }
 
-inline struct String value_to_xml(const &Value v, const char* root_tag) {
+inline struct String value_to_xml(const &Value v, const &char root_tag) {
     struct String out = string_new();
     xml_write(v, root_tag, &out);
     return out;
@@ -348,7 +348,7 @@ static struct Value xml_parse_element_(struct XmlCursor_* c) {
     return result;
 }
 
-struct Value xml_parse(const char* text, int* ok) {
+struct Value xml_parse(const &char text, ?&int ok) {
     struct XmlCursor_ c;
     c.text = text;
     c.pos = 0UL;

@@ -31,8 +31,8 @@ static void poly_mul_linear_(const double* poly, unsigned long polyLen, double f
     }
 }
 
-void bilinear_nth_order(const double* B, const double* A, unsigned long order,
-                         double fs, double* bOut, double* aOut) {
+void bilinear_nth_order(const &double B, const &double A, unsigned long order,
+                         double fs, &double bOut, &double aOut) {
     unsigned long m = order;
     double c = 2.0 * fs;
 
@@ -41,10 +41,10 @@ void bilinear_nth_order(const double* B, const double* A, unsigned long order,
     double* bufA;
     double* bufB;
     unsafe {
-        numPoly = (double*)alloc((m + 1UL) * (unsigned long)sizeof(double));
-        denPoly = (double*)alloc((m + 1UL) * (unsigned long)sizeof(double));
-        bufA    = (double*)alloc((m + 1UL) * (unsigned long)sizeof(double));
-        bufB    = (double*)alloc((m + 1UL) * (unsigned long)sizeof(double));
+        numPoly = (double*)alloc_raw_((m + 1UL) * (unsigned long)sizeof(double));
+        denPoly = (double*)alloc_raw_((m + 1UL) * (unsigned long)sizeof(double));
+        bufA    = (double*)alloc_raw_((m + 1UL) * (unsigned long)sizeof(double));
+        bufB    = (double*)alloc_raw_((m + 1UL) * (unsigned long)sizeof(double));
     }
     unsigned long j = 0UL;
     while (j <= m) {
@@ -118,10 +118,10 @@ void bilinear_nth_order(const double* B, const double* A, unsigned long order,
     }
 
     unsafe {
-        dealloc((void*)numPoly);
-        dealloc((void*)denPoly);
-        dealloc((void*)bufA);
-        dealloc((void*)bufB);
+        dealloc_raw_((void*)numPoly);
+        dealloc_raw_((void*)denPoly);
+        dealloc_raw_((void*)bufA);
+        dealloc_raw_((void*)bufB);
     }
 }
 
@@ -154,13 +154,13 @@ static struct Complex ztransform_response_(const double* b, const double* a, uns
     return numAcc / denAcc;
 }
 
-double ztransform_response_mag(const double* b, const double* a, unsigned long order,
+double ztransform_response_mag(const &double b, const &double a, unsigned long order,
                                 double fs, double freqHz) {
     struct Complex h = ztransform_response_(b, a, order, fs, freqHz);
     return h.abs();
 }
 
-double ztransform_response_phase(const double* b, const double* a, unsigned long order,
+double ztransform_response_phase(const &double b, const &double a, unsigned long order,
                                   double fs, double freqHz) {
     struct Complex h = ztransform_response_(b, a, order, fs, freqHz);
     return h.arg();

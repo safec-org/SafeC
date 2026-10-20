@@ -4,7 +4,7 @@
 
 namespace std {
 
-int ascii_is_valid_n(const char* s, unsigned long len) {
+int ascii_is_valid_n(const &char s, unsigned long len) {
     unsigned long i = 0UL;
     while (i < len) {
         char c;
@@ -15,7 +15,7 @@ int ascii_is_valid_n(const char* s, unsigned long len) {
     return 1;
 }
 
-int ascii_is_valid(const char* s) {
+int ascii_is_valid(const &char s) {
     unsigned long i = 0UL;
     while (1) {
         char c;

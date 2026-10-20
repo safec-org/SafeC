@@ -71,7 +71,7 @@ struct GuiEvent {
 };
 
 struct GuiWindow {
-    void*                platform; // backend-private handle
+    ?&void               platform; // backend-private handle; null on failure
     &heap unsigned char  pixels;   // width*height*4 bytes, RGBA8888
     int                  width;
     int                  height;
@@ -81,7 +81,7 @@ struct GuiWindow {
 // Creates and shows a window with a zeroed (transparent black) pixel
 // buffer of 'width'x'height'. On failure, returned window's 'platform' is
 // null and 'width'/'height' are 0 — callers should check before use.
-struct GuiWindow gui_create_window(const char* title, int width, int height);
+struct GuiWindow gui_create_window(const &char title, int width, int height);
 
 // Pumps exactly one pending platform event into 'outEvent' and returns 1,
 // or returns 0 immediately if none is pending (never blocks) — call in a

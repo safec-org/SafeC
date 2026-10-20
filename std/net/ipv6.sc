@@ -62,7 +62,7 @@ static char hex_nibble_(unsigned int v) {
 // Writes 8 groups of 4 hex digits separated by ':'.
 // No :: compression — always 39 printable chars + NUL (40 bytes total).
 
-inline void ipv6_addr_str(const &stack Ipv6Addr addr, char* buf) {
+inline void ipv6_addr_str(const &stack Ipv6Addr addr, &char buf) {
     unsigned long pos = (unsigned long)0;
     int group = 0;
     unsafe {

@@ -35,12 +35,12 @@
 
 namespace std {
 
-typedef fn struct Value(const struct Value* args) ServerFn;
+typedef fn struct Value(const &Value args) ServerFn;
 
 // Registers 'fn', callable as 'name' via server_fn_call()/over the wire.
 // Call before server_fn_serve() — like rpc_register(), no registration
 // after the server starts. Up to 64 server functions per process.
-void server_fn_register(const char* name, ServerFn handler);
+void server_fn_register(const &char name, ServerFn handler);
 
 // Blocking accept loop (see rpc_serve()) serving every function
 // server_fn_register()'d so far.
@@ -49,7 +49,7 @@ int server_fn_serve(unsigned short port);
 // Calls the server function named 'name' at host:port with 'args' (may be
 // NULL for a no-argument function — sent as a JSON null). *ok is set to 0
 // (result is VAL_NULL) on any transport/handler/JSON failure.
-struct Value server_fn_call(const char* host, unsigned short port, const char* name,
-                             const struct Value* args, int* ok);
+struct Value server_fn_call(const &char host, unsigned short port, const &char name,
+                             const ?&Value args, ?&int ok);
 
 } // namespace std

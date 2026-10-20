@@ -11,7 +11,7 @@ namespace std {
 
 struct File { int opaque_; };   // never constructed by SafeC code; only referenced
 
-?&File file_open(const char* path, const char* mode);
+?&File file_open(const &char path, const &char mode);
 
 // Close a file handle opened by file_open.  Returns 0 on success.
 int   file_close(&File f);
@@ -25,7 +25,7 @@ unsigned long file_read(&File f, &unsigned char buf, unsigned long n);
 int  file_getc(&File f);
 
 // Read up to n-1 characters into buf, NUL-terminate.  Returns buf or NULL.
-char* file_gets(char* buf, int n, &File f);
+?&char file_gets(&char buf, int n, &File f);
 
 // ── Write ─────────────────────────────────────────────────────────────────────
 
@@ -36,7 +36,7 @@ unsigned long file_write(&File f, const &unsigned char buf, unsigned long n);
 int  file_putc(int c, &File f);
 
 // Write a string (no newline).  Returns non-negative on success.
-int  file_puts(const char* s, &File f);
+int  file_puts(const &char s, &File f);
 
 // ── Seek / tell ───────────────────────────────────────────────────────────────
 

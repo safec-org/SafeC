@@ -9,7 +9,7 @@
 namespace std {
 
 struct CovSite {
-    const char*   file;
+    const &char   file;
     int           line;
     unsigned long count;
 };
@@ -19,7 +19,7 @@ struct Coverage {
     int            count;
 
     // Register a new site; returns site index (for COV_HIT).
-    int  register_site(const char* file, int line);
+    int  register_site(const &char file, int line);
 
     // Increment hit count for site `idx`.
     void hit(int idx);

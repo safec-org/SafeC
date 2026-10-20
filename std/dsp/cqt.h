@@ -29,8 +29,8 @@ namespace std {
 // not incorrect, result: still valid, just with worse frequency
 // resolution than requested for that bin). 'out' must have room for
 // 'numBins' Complex values.
-void cqt_forward(const double* signal, unsigned long signalLen, double fs,
+void cqt_forward(const &double signal, unsigned long signalLen, double fs,
                   double fmin, unsigned long numBins, unsigned long binsPerOctave,
-                  struct Complex* out);
+                  &Complex out);
 
 } // namespace std

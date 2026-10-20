@@ -285,13 +285,13 @@ static int rocm_ensure_() {
         if (hiprtcCompileProgram(prog, 1, &opts[0]) != 0) { hiprtcDestroyProgram(&prog); return 0; }
         unsigned long codeSize = 0UL;
         hiprtcGetCodeSize(prog, &codeSize);
-        char* code = (char*)alloc(codeSize);
+        char* code = (char*)alloc_raw_(codeSize);
         if (code == (char*)0) { hiprtcDestroyProgram(&prog); return 0; }
         hiprtcGetCode(prog, code);
         hiprtcDestroyProgram(&prog);
         void* module = (void*)0;
         int loaded = hipModuleLoadData(&module, (const void*)code);
-        dealloc((void*)code);
+        dealloc_raw_((void*)code);
         if (loaded != ROCM_HIP_OK) return 0;
         int k = 0;
         while (k < K_COUNT) {
@@ -305,9 +305,9 @@ static int rocm_ensure_() {
 
 int rocm_available() { return rocm_ensure_(); }
 
-const char* rocm_device_name() {
+const &char rocm_device_name() {
     rocm_ensure_();
-    unsafe { return (const char*)&g_rocm_name[0]; }
+    unsafe { return (const &char)&g_rocm_name[0]; }
 }
 
 // ── Buffers ──────────────────────────────────────────────────────────────────

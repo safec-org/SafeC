@@ -14,7 +14,7 @@ void assert_fail_(const char* file, int line, const char* msg);
 // On failure: prints "Assertion failed: <msg> at <file>:<line>" to stderr
 // and calls abort().  Pass a description string as `msg`.
 // Example: runtime_assert(ptr != 0, "pointer must not be null");
-void runtime_assert(int cond, const char* msg);
+void runtime_assert(int cond, const &char msg);
 
 // Assert that `cond` is true; uses a fixed message ("assertion failed").
 // Lighter weight — no message string required.

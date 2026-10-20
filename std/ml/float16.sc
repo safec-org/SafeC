@@ -129,28 +129,28 @@ float bf16_to_f32(unsigned short b) {
     return __bits_f32(bits);
 }
 
-void f32_to_fp16_bulk(const float* src, unsigned short* dst, unsigned long n) {
+void f32_to_fp16_bulk(const &float src, &unsigned short dst, unsigned long n) {
     unsafe {
         unsigned long i = 0UL;
         while (i < n) { dst[i] = f32_to_fp16(src[i]); i = i + 1UL; }
     }
 }
 
-void fp16_to_f32_bulk(const unsigned short* src, float* dst, unsigned long n) {
+void fp16_to_f32_bulk(const &unsigned short src, &float dst, unsigned long n) {
     unsafe {
         unsigned long i = 0UL;
         while (i < n) { dst[i] = fp16_to_f32(src[i]); i = i + 1UL; }
     }
 }
 
-void f32_to_bf16_bulk(const float* src, unsigned short* dst, unsigned long n) {
+void f32_to_bf16_bulk(const &float src, &unsigned short dst, unsigned long n) {
     unsafe {
         unsigned long i = 0UL;
         while (i < n) { dst[i] = f32_to_bf16(src[i]); i = i + 1UL; }
     }
 }
 
-void bf16_to_f32_bulk(const unsigned short* src, float* dst, unsigned long n) {
+void bf16_to_f32_bulk(const &unsigned short src, &float dst, unsigned long n) {
     unsafe {
         unsigned long i = 0UL;
         while (i < n) { dst[i] = bf16_to_f32(src[i]); i = i + 1UL; }

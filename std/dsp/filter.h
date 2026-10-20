@@ -21,9 +21,9 @@ namespace std {
 // ── FIR ──────────────────────────────────────────────────────────────────────
 
 struct FirFilter {
-    const double* coeffs;    // b[0..numTaps-1], caller-owned, must outlive the filter
+    const &double coeffs;    // b[0..numTaps-1], caller-owned, must outlive the filter
     unsigned long numTaps;
-    double*       history;   // caller-provided ring buffer, numTaps elements, zero-initialized
+    &double       history;   // caller-provided ring buffer, numTaps elements, zero-initialized
     unsigned long pos;       // ring buffer write position
 
     // Processes one sample, returns y[n].
@@ -35,33 +35,33 @@ struct FirFilter {
 
 // coeffs/history as in struct FirFilter — 'history' must have numTaps
 // elements (caller-allocated, typically zero-initialized).
-struct FirFilter fir_init(const double* coeffs, unsigned long numTaps, double* history);
+struct FirFilter fir_init(const &double coeffs, unsigned long numTaps, &double history);
 
 // Processes 'n' samples through 'f', writing to 'out' (may alias 'in').
-void fir_process_block(&FirFilter f, const double* in, double* out, unsigned long n);
+void fir_process_block(&FirFilter f, const &double in, &double out, unsigned long n);
 
 struct FFirFilter {
-    const Fixed*  coeffs;
+    const &Fixed  coeffs;
     unsigned long numTaps;
-    Fixed*        history;
+    &Fixed        history;
     unsigned long pos;
 
     Fixed process(Fixed x);
     void  reset();
 };
 
-struct FFirFilter ffir_init(const Fixed* coeffs, unsigned long numTaps, Fixed* history);
-void ffir_process_block(&FFirFilter f, const Fixed* in, Fixed* out, unsigned long n);
+struct FFirFilter ffir_init(const &Fixed coeffs, unsigned long numTaps, &Fixed history);
+void ffir_process_block(&FFirFilter f, const &Fixed in, &Fixed out, unsigned long n);
 
 // ── IIR (general order, direct form I) ────────────────────────────────────────
 
 struct IirFilter {
-    const double* b;         // feedforward coeffs, b[0..numB-1]
+    const &double b;         // feedforward coeffs, b[0..numB-1]
     unsigned long numB;
-    const double* a;         // feedback coeffs, a[1..numA-1] used (a[0] assumed 1 — pass your a[] with a[0]=1 anyway for clarity)
+    const &double a;         // feedback coeffs, a[1..numA-1] used (a[0] assumed 1 — pass your a[] with a[0]=1 anyway for clarity)
     unsigned long numA;
-    double*       xHistory;  // caller-provided, numB elements, zero-initialized
-    double*       yHistory;  // caller-provided, numA elements, zero-initialized
+    &double       xHistory;  // caller-provided, numB elements, zero-initialized
+    &double       yHistory;  // caller-provided, numA elements, zero-initialized
     unsigned long xPos;
     unsigned long yPos;
 
@@ -69,18 +69,18 @@ struct IirFilter {
     void   reset();
 };
 
-struct IirFilter iir_init(const double* b, unsigned long numB,
-                           const double* a, unsigned long numA,
-                           double* xHistory, double* yHistory);
-void iir_process_block(&IirFilter f, const double* in, double* out, unsigned long n);
+struct IirFilter iir_init(const &double b, unsigned long numB,
+                           const &double a, unsigned long numA,
+                           &double xHistory, &double yHistory);
+void iir_process_block(&IirFilter f, const &double in, &double out, unsigned long n);
 
 struct FIirFilter {
-    const Fixed*  b;
+    const &Fixed  b;
     unsigned long numB;
-    const Fixed*  a;
+    const &Fixed  a;
     unsigned long numA;
-    Fixed*        xHistory;
-    Fixed*        yHistory;
+    &Fixed        xHistory;
+    &Fixed        yHistory;
     unsigned long xPos;
     unsigned long yPos;
 
@@ -88,9 +88,9 @@ struct FIirFilter {
     void  reset();
 };
 
-struct FIirFilter fiir_init(const Fixed* b, unsigned long numB,
-                             const Fixed* a, unsigned long numA,
-                             Fixed* xHistory, Fixed* yHistory);
-void fiir_process_block(&FIirFilter f, const Fixed* in, Fixed* out, unsigned long n);
+struct FIirFilter fiir_init(const &Fixed b, unsigned long numB,
+                             const &Fixed a, unsigned long numA,
+                             &Fixed xHistory, &Fixed yHistory);
+void fiir_process_block(&FIirFilter f, const &Fixed in, &Fixed out, unsigned long n);
 
 } // namespace std

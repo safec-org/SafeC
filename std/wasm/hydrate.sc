@@ -29,7 +29,7 @@ static void __hydrate_text_int_listener(?&HydrateTextBinding bq) {
 
 void hydrate_bind_text_int_handle(&Signal<int> signal, int elementHandle) {
     ?&HydrateTextBinding bq = null;
-    unsafe { bq = (?&HydrateTextBinding)alloc(sizeof(struct HydrateTextBinding)); }
+    unsafe { bq = (?&HydrateTextBinding)alloc_raw_(sizeof(struct HydrateTextBinding)); }
     match (bq) {
         case null: return;
         case some(b): {

@@ -97,8 +97,8 @@ struct Tensor {
 &Tensor tensor_new_2d(unsigned long rows, unsigned long cols, int requiresGrad);
 // Copies 'values' (length must equal the tensor's size) into a freshly
 // allocated tensor of the given shape.
-&Tensor tensor_from_1d(const float* values, unsigned long n, int requiresGrad);
-&Tensor tensor_from_2d(const float* values, unsigned long rows, unsigned long cols, int requiresGrad);
+&Tensor tensor_from_1d(const &float values, unsigned long n, int requiresGrad);
+&Tensor tensor_from_2d(const &float values, unsigned long rows, unsigned long cols, int requiresGrad);
 &Tensor tensor_zeros_like(const &Tensor t);
 &Tensor tensor_fill(&Tensor t, float v);
 

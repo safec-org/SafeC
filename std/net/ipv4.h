@@ -25,7 +25,7 @@ struct Ipv4Hdr {
 };
 
 // Compute Internet checksum over `len` bytes starting at `data`.
-unsigned short ip_checksum(const unsigned char* data, unsigned long len);
+unsigned short ip_checksum(const &unsigned char data, unsigned long len);
 
 // Parse IPv4 header from pkt at byte offset `offset`.
 // Returns 0 on success, -1 on truncation or bad version.

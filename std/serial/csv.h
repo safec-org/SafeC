@@ -33,6 +33,6 @@ struct String value_to_csv(const &Value v);
 // optional. On success, '*ok' (if non-NULL) is set to 1; on a malformed
 // quoted field (an opening '"' with no matching close before end of text),
 // '*ok' is set to 0 and the return value is whatever was parsed so far.
-struct Value csv_parse(const char* text, int* ok);
+struct Value csv_parse(const &char text, ?&int ok);
 
 } // namespace std

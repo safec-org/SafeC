@@ -195,7 +195,7 @@ void t_dns() {
         ans[6] = (unsigned char)0; ans[7] = (unsigned char)0; ans[8] = (unsigned char)0x0E; ans[9] = (unsigned char)0x10;
         ans[10] = (unsigned char)0; ans[11] = (unsigned char)4;
         ans[12] = (unsigned char)93; ans[13] = (unsigned char)184; ans[14] = (unsigned char)216; ans[15] = (unsigned char)34;
-        safe_memcpy((void*)&pkt.data[end], (&unsigned char)ans, 16UL);
+        safe_memcpy(&pkt.data[end], &ans[0], 16UL);
         pkt.len = end + 16UL;
         unsigned int got = 0u;
         ASSERT_EQ(dns_parse_reply(&pkt, q, (unsigned short)0xBEEF, &got), 1);
@@ -239,7 +239,7 @@ void t_dhcp() {
         opts[15] = (unsigned char)51; opts[16] = (unsigned char)4;
         opts[17] = (unsigned char)0; opts[18] = (unsigned char)0; opts[19] = (unsigned char)0x0E; opts[20] = (unsigned char)0x10;
         opts[21] = (unsigned char)255;
-        safe_memcpy((void*)&pkt.data[o], (&unsigned char)opts, 22UL);
+        safe_memcpy(&pkt.data[o], &opts[0], 22UL);
         pkt.len = o + 22UL;
         ASSERT_EQ(c.parse_reply(&pkt, d), DHCP_ACK);
         ASSERT_TRUE(c.is_bound());
@@ -272,8 +272,8 @@ void t_tcp() {
         init_macs();
         unsigned int ipA = net_ip4((unsigned char)10, (unsigned char)0, (unsigned char)0, (unsigned char)2);
         unsigned int ipB = net_ip4((unsigned char)10, (unsigned char)0, (unsigned char)0, (unsigned char)3);
-        ?&TcpConn aq = alloc_zeroed(sizeof(struct TcpConn));
-        ?&TcpConn bq = alloc_zeroed(sizeof(struct TcpConn));
+        ?&heap TcpConn aq = alloc_zeroed(sizeof(struct TcpConn));
+        ?&heap TcpConn bq = alloc_zeroed(sizeof(struct TcpConn));
         if (aq.is_null() || bq.is_null()) { ASSERT_TRUE(0); return; }
         &TcpConn a = std::expect_ref(aq, "aq is null");
         &TcpConn b = std::expect_ref(bq, "bq is null");
@@ -300,8 +300,8 @@ void t_tcp() {
         a.close();
         ASSERT_EQ(hop(a, b, MAC_A, MAC_B), 1);    // FIN
         ASSERT_EQ(b.state, TCP_CLOSE_WAIT);
-        dealloc(a);
-        dealloc(b);
+        dealloc(aq);
+        dealloc(bq);
     }
 }
 

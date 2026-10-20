@@ -112,18 +112,18 @@ void __gui_cocoa_init() {
 
 // ── window creation ──────────────────────────────────────────────────────────
 
-struct GuiWindow gui_create_window(const char* title, int width, int height) {
+struct GuiWindow gui_create_window(const &char title, int width, int height) {
     __gui_cocoa_init();
 
     struct GuiWindow win;
-    win.platform = (void*)0;
+    win.platform = null;
     win.width = width;
     win.height = height;
     win.shouldClose = 0;
 
     unsigned long npix = (unsigned long)width * (unsigned long)height * 4UL;
     unsafe {
-        win.pixels = (&heap unsigned char)alloc(npix);
+        win.pixels = (&heap unsigned char)alloc_raw_(npix);
         memset((void*)win.pixels, 0, npix);
 
         void* winCls = objc_getClass("NSWindow");
@@ -172,7 +172,7 @@ struct GuiWindow gui_create_window(const char* title, int width, int height) {
 
 void gui_present(&GuiWindow win) {
     int noPlatform = 0;
-    unsafe { if (win.platform == (void*)0) { noPlatform = 1; } }
+    unsafe { if (win.platform.is_null()) { noPlatform = 1; } }
     if (noPlatform) { return; }
     unsafe {
         MsgSend0 contentView = (MsgSend0)objc_msgSend;
@@ -313,14 +313,14 @@ int gui_poll_event(&GuiWindow win, &GuiEvent outEvent) {
 
 void gui_destroy_window(&GuiWindow win) {
     unsafe {
-        if (win.platform != (void*)0) {
+        if (!win.platform.is_null()) {
             MsgSendVoid0 closeMsg = (MsgSendVoid0)objc_msgSend;
             closeMsg(win.platform, sel_registerName("close"));
         }
         if ((void*)win.pixels != (void*)0) {
-            dealloc((void*)win.pixels);
+            dealloc_raw_((void*)win.pixels);
         }
-        win.platform = (void*)0;
+        win.platform = null;
     }
 }
 
@@ -351,8 +351,8 @@ extern void  CGContextSelectFont(void* ctx, const char* fontName, double size, u
 extern void  CGContextSetTextDrawingMode(void* ctx, unsigned int mode);
 extern void  CGContextShowTextAtPoint(void* ctx, double x, double y, const char* text, unsigned long length);
 
-int gui_draw_text_system(&GuiWindow win, int x, int y, const char* text,
-                          struct GuiColor color, double fontSize, const char* fontName) {
+int gui_draw_text_system(&GuiWindow win, int x, int y, const &char text,
+                          struct GuiColor color, double fontSize, const &char fontName) {
     unsafe {
         void* space = CGColorSpaceCreateDeviceRGB();
         unsigned long rowBytes = (unsigned long)win.width * 4UL;

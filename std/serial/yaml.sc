@@ -40,7 +40,7 @@ static int yaml_scalar_needs_quoting_(const char* s) {
         if (c == ':' || c == '#' || c == '\n') { return 1; }
         i = i + 1UL;
     }
-    struct String trimmed = string_from(s);
+    struct String trimmed; unsafe { trimmed = string_from(s); }
     struct String trimmedCopy = trimmed.trim();
     trimmed.free();
     int looksLikeOther = trimmedCopy.eq_cstr("true") || trimmedCopy.eq_cstr("false") ||
@@ -300,7 +300,7 @@ static void yaml_free_lines_(&Vec<struct YamlLine_> lines) {
 }
 
 static struct Value yaml_parse_scalar_(const char* text) {
-    struct String s = string_from(text);
+    struct String s; unsafe { s = string_from(text); }
     struct String trimmed = s.trim();
     s.free();
     const char* t = trimmed.as_ptr();
@@ -380,9 +380,9 @@ static struct Value yaml_parse_scalar_(const char* text) {
             int pok = 0;
             if (isFloat) { result = value_float(trimmed.parse_float(&pok)); }
             else { result = value_int(trimmed.parse_int(&pok)); }
-            if (pok == 0) { result = value_string(t); }
+            unsafe { if (pok == 0) { result = value_string(t); } }
         } else {
-            result = value_string(t);
+            unsafe { result = value_string(t); }
         }
     }
     (void)handled;
@@ -445,7 +445,7 @@ static struct Value yaml_parse_mapping_(&Vec<struct YamlLine_> lines, unsigned l
         // numeric-looking key stays a string key — same 'stringly-keyed'
         // convention std::Value's VAL_OBJECT already uses for JSON).
         const char* key = keyVal.as_string();
-        struct String keyStr = key ? string_from(key) : string_new();
+        struct String keyStr; unsafe { keyStr = key ? string_from(key) : string_new(); }
         value_free(&keyVal);
 
         unsigned long restStart = (unsigned long)colonPos + 1UL;
@@ -567,7 +567,7 @@ static struct Value yaml_parse_block_(&Vec<struct YamlLine_> lines, unsigned lon
     return v;
 }
 
-struct Value yaml_parse(const char* text, int* ok) {
+struct Value yaml_parse(const &char text, ?&int ok) {
     struct Vec<struct YamlLine_> lines = yaml_split_lines_(text);
     unsigned long idx = 0UL;
     int good = 1;

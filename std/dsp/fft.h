@@ -17,20 +17,20 @@ int dsp_is_pow2(unsigned long n);
 
 // In-place forward FFT. Returns 1 on success, 0 if n isn't a power of two
 // (data is left unmodified in that case).
-int fft(struct Complex* data, unsigned long n);
+int fft(&Complex data, unsigned long n);
 
 // In-place inverse FFT (includes the 1/N normalization). Returns 1 on
 // success, 0 if n isn't a power of two.
-int ifft(struct Complex* data, unsigned long n);
+int ifft(&Complex data, unsigned long n);
 
 // Real input -> complex output convenience wrapper: packs 'in' into 'out'
 // as Complex(x, 0) and FFTs 'out' in place. 'out' must have space for 'n'
 // elements. Returns 1 on success, 0 if n isn't a power of two.
-int fft_real(const double* in, struct Complex* out, unsigned long n);
+int fft_real(const &double in, &Complex out, unsigned long n);
 
 // Q8.24 fixed-point forward/inverse FFT, same in-place/power-of-two
 // contract as the float versions above.
-int ffft(struct FComplex* data, unsigned long n);
-int fifft(struct FComplex* data, unsigned long n);
+int ffft(&FComplex data, unsigned long n);
+int fifft(&FComplex data, unsigned long n);
 
 } // namespace std

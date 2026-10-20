@@ -7,7 +7,7 @@
 
 namespace std {
 
-void dft(const struct Complex* in, struct Complex* out, unsigned long n) {
+void dft(const &Complex in, &Complex out, unsigned long n) {
     unsigned long k = 0UL;
     while (k < n) {
         struct Complex sum = complex_new(0.0, 0.0);
@@ -26,7 +26,7 @@ void dft(const struct Complex* in, struct Complex* out, unsigned long n) {
     }
 }
 
-void dft_real(const double* in, struct Complex* out, unsigned long n) {
+void dft_real(const &double in, &Complex out, unsigned long n) {
     unsigned long k = 0UL;
     while (k < n) {
         struct Complex sum = complex_new(0.0, 0.0);
@@ -44,7 +44,7 @@ void dft_real(const double* in, struct Complex* out, unsigned long n) {
     }
 }
 
-void idft(const struct Complex* in, struct Complex* out, unsigned long n) {
+void idft(const &Complex in, &Complex out, unsigned long n) {
     if (n == 0UL) { return; }
     double invN = 1.0 / (double)n;
     unsigned long k = 0UL;
@@ -65,7 +65,7 @@ void idft(const struct Complex* in, struct Complex* out, unsigned long n) {
     }
 }
 
-void fdft(const struct FComplex* in, struct FComplex* out, unsigned long n) {
+void fdft(const &FComplex in, &FComplex out, unsigned long n) {
     unsigned long k = 0UL;
     while (k < n) {
         struct FComplex sum = fcomplex_new((Fixed)0, (Fixed)0);
@@ -83,7 +83,7 @@ void fdft(const struct FComplex* in, struct FComplex* out, unsigned long n) {
     }
 }
 
-void fidft(const struct FComplex* in, struct FComplex* out, unsigned long n) {
+void fidft(const &FComplex in, &FComplex out, unsigned long n) {
     if (n == 0UL) { return; }
     Fixed invN = fixed_div((Fixed)FIXED_ONE, fixed_from_int((int)n));
     unsigned long k = 0UL;

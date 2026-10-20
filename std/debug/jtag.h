@@ -14,7 +14,7 @@ void  debug_break();
 // ── Semihosting output ────────────────────────────────────────────────────────
 // Write a null-terminated string to the debugger console via semihosting.
 // No-op if running without a debugger (semihosting not enabled).
-void  debug_semihost_puts(const char* s);
+void  debug_semihost_puts(const &char s);
 
 // Write one byte to the debugger console.
 void  debug_semihost_putc(char c);

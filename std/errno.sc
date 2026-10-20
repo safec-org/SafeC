@@ -19,11 +19,11 @@ inline void errno_set(int code) {
     unsafe { errno = code; }
 }
 
-inline const char* errno_str(int code) {
+inline const &char errno_str(int code) {
     unsafe { return strerror(code); }
 }
 
-inline void errno_print(const char* prefix) {
+inline void errno_print(const &char prefix) {
     unsafe {
         fputs(prefix, SAFEC_STDERR_);
         fputs(": ", SAFEC_STDERR_);

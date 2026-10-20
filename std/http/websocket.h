@@ -49,8 +49,8 @@ struct WsMessage {
 // the server's Sec-WebSocket-Accept matches the RFC 6455 formula before
 // returning. On any failure (connect, non-101 response, key mismatch),
 // '*ok' is set to 0.
-struct WsConn ws_connect(const char* host, unsigned short port,
-                          const char* path, int* ok);
+struct WsConn ws_connect(const &char host, unsigned short port,
+                          const &char path, ?&int ok);
 
 // ── Server ────────────────────────────────────────────────────────────────
 
@@ -67,8 +67,8 @@ int ws_accept(int listenFd, &WsConn out);
 
 // ── Framing ───────────────────────────────────────────────────────────────
 
-int ws_send_text(&WsConn conn, const char* text);
-int ws_send_binary(&WsConn conn, const unsigned char* data, unsigned long len);
+int ws_send_text(&WsConn conn, const &char text);
+int ws_send_binary(&WsConn conn, const &unsigned char data, unsigned long len);
 int ws_send_ping(&WsConn conn);
 int ws_send_pong(&WsConn conn);
 // Sends a close frame. Does not close the underlying socket — call

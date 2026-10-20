@@ -59,7 +59,7 @@ struct Value {
     int as_bool() const;
     long long as_int() const;
     double as_float() const;
-    const char* as_string() const;
+    const &char as_string() const;
 
     // Array/Object element access (read-only views — the returned
     // reference aliases storage owned by this Value, don't free it
@@ -70,20 +70,20 @@ struct Value {
     &Value          array_at(unsigned long idx) const;
     unsigned long   object_len() const;
     // Empty (null case) if the key isn't present.
-    ?&Value         object_get(const char* key) const;
+    ?&Value         object_get(const &char key) const;
 };
 
 struct Value value_null();
 struct Value value_bool(int v);
 struct Value value_int(long long v);
 struct Value value_float(double v);
-struct Value value_string(const char* s);   // copies s
+struct Value value_string(const &char s);   // copies s
 struct Value value_array();                 // empty; grow with value_array_push
 struct Value value_object();                // empty; grow with value_object_set
 
 // Both take ownership of 'v' (see the file-level ownership note above).
 void value_array_push(&Value arr, struct Value v);
-void value_object_set(&Value obj, const char* key, struct Value v);
+void value_object_set(&Value obj, const &char key, struct Value v);
 
 struct Value value_clone(const &Value v);
 void value_free(&Value v);

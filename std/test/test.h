@@ -20,28 +20,28 @@
 // Assert that cond is non-zero.
 namespace std {
 
-void test_assert_true(int cond, const char* expr, const char* file, int line);
+void test_assert_true(int cond, const &char expr, const &char file, int line);
 
 // Assert that two long-long integers are equal.
-void test_assert_eq_i(long long a, long long b, const char* desc,
-                      const char* file, int line);
+void test_assert_eq_i(long long a, long long b, const &char desc,
+                      const &char file, int line);
 
 // Assert two unsigned long-long values are equal.
 void test_assert_eq_u(unsigned long long a, unsigned long long b,
-                      const char* desc, const char* file, int line);
+                      const &char desc, const &char file, int line);
 
 // Assert two null-terminated strings are equal.
-void test_assert_eq_s(const char* a, const char* b, const char* desc,
-                      const char* file, int line);
+void test_assert_eq_s(const ?&char a, const ?&char b, const &char desc,
+                      const &char file, int line);
 
 // Assert a nullable reference is null / not null.
 generic<T>
-void test_assert_null(const ?&T p, const char* desc, const char* file, int line) {
+void test_assert_null(const ?&T p, const &char desc, const &char file, int line) {
     test_assert_true(p.is_null(), desc, file, line);
 }
 
 generic<T>
-void test_assert_not_null(const ?&T p, const char* desc, const char* file, int line) {
+void test_assert_not_null(const ?&T p, const &char desc, const &char file, int line) {
     test_assert_true(!p.is_null(), desc, file, line);
 }
 
@@ -89,7 +89,7 @@ struct TestSuite {
     int failed;
 
     // Register a test case.
-    void add(const char* name, fn void() func);
+    void add(const &char name, fn void() func);
 
     // Run all registered tests, print each result, update passed/failed.
     void run();

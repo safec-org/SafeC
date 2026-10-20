@@ -20,8 +20,8 @@ namespace std {
 
 // ── LlmClient ────────────────────────────────────────────────────────────────
 
-struct LlmClient llm_client_new(const char* host, unsigned short port,
-                                 const char* model, const char* apiKey) {
+struct LlmClient llm_client_new(const &char host, unsigned short port,
+                                 const &char model, const &char apiKey) {
     struct LlmClient c;
     c.host = string_from(host);
     c.port = port;
@@ -30,7 +30,7 @@ struct LlmClient llm_client_new(const char* host, unsigned short port,
     return c;
 }
 
-struct String llm_chat(&LlmClient client, &Vec<struct LlmMessage> messages, int* ok) {
+struct String llm_chat(&LlmClient client, &Vec<struct LlmMessage> messages, ?&int ok) {
     struct Value req;
     unsafe {
         req = value_object();
@@ -104,7 +104,7 @@ struct String llm_chat(&LlmClient client, &Vec<struct LlmMessage> messages, int*
 
 // ── PromptTemplate ───────────────────────────────────────────────────────────
 
-struct String prompt_template_render(const char* tmpl, const &Value vars) {
+struct String prompt_template_render(const &char tmpl_ref, const &Value vars) { const char* tmpl = tmpl_ref;
     struct String out = string_new();
     unsafe {
         unsigned long i = 0UL;
@@ -178,7 +178,7 @@ void chain_free(&Chain c) {
 
 // ── Graph executor ───────────────────────────────────────────────────────────
 
-struct Graph graph_new(const char* entryNode) {
+struct Graph graph_new(const &char entryNode) {
     struct Graph g;
     unsafe { g.nodes = vec_new(); }
     g.entryNode = string_from(entryNode);
@@ -188,18 +188,18 @@ struct Graph graph_new(const char* entryNode) {
 static void __graph_add(&Graph g, const char* name, GraphNodeFn nodeFn,
                          GraphRouterFn router, const char* nextNode) {
     struct GraphNode node;
-    node.name = string_from(name);
+    unsafe { node.name = string_from(name); }
     node.nodeFn = nodeFn;
     node.router = router;
-    node.nextNode = string_from(nextNode);
+    unsafe { node.nextNode = string_from(nextNode); }
     unsafe { g.nodes.push(node); }
 }
 
-void graph_add_node(&Graph g, const char* name, GraphNodeFn nodeFn, const char* nextNode) {
+void graph_add_node(&Graph g, const &char name, GraphNodeFn nodeFn, const &char nextNode) {
     __graph_add(g, name, nodeFn, (GraphRouterFn)0, nextNode);
 }
 
-void graph_add_conditional_node(&Graph g, const char* name, GraphNodeFn nodeFn, GraphRouterFn router) {
+void graph_add_conditional_node(&Graph g, const &char name, GraphNodeFn nodeFn, GraphRouterFn router) {
     __graph_add(g, name, nodeFn, router, "__end__");
 }
 
@@ -276,7 +276,7 @@ struct Tracer tracer_new() {
     return t;
 }
 
-void tracer_record(&Tracer t, const char* name, const &Value input,
+void tracer_record(&Tracer t, const &char name, const &Value input,
                     const &Value output, double durationMs) {
     struct TraceEvent ev;
     ev.name = string_from(name);

@@ -54,7 +54,7 @@ struct LFQueue<T> lfq_new(unsigned long cap) {
     struct LFQueue<T> q;
     unsigned long rounded = lfq_ceil_pow2_(cap);
     q.buffer = null;
-    unsafe { q.buffer = (?&heap T)alloc(checked_mul_size(rounded, sizeof(T))); }
+    unsafe { q.buffer = (?&heap T)alloc_raw_(checked_mul_size(rounded, sizeof(T))); }
     q.cap   = q.buffer.is_null() ? 0UL : rounded;
     q.head  = 0LL;
     q.tail  = 0LL;
@@ -104,7 +104,7 @@ unsigned long LFQueue::len() const {
 
 generic<T>
 void LFQueue::destroy() {
-    if (self.owned) { unsafe { dealloc((void*)self.buffer); } }
+    if (self.owned) { unsafe { dealloc_raw_((void*)self.buffer); } }
     self.buffer = null;
     self.cap = 0UL;
 }

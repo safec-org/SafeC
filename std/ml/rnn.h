@@ -57,11 +57,9 @@ struct LSTMCell {
 struct LSTMCell lstm_cell_new(unsigned long inputSize, unsigned long hiddenSize);
 // Writes the new hidden state's *tensor* as the return value; '*c_out'
 // receives the new cell state (caller-owned, like the return value).
-// 'c_out' stays a raw pointer-to-pointer out-param (not a clean single-
-// object '&T' case — it's an output slot for a whole other reference).
 &Tensor lstm_cell_forward(const &LSTMCell cell, const &Tensor x_t,
                            const &Tensor h_prev, const &Tensor c_prev,
-                           struct Tensor** c_out);
+                           &&Tensor c_out);
 void lstm_cell_free(&LSTMCell cell);
 
 // ── xLSTM (sLSTM variant, Beck et al. 2024) ─────────────────────────────────

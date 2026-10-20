@@ -144,7 +144,8 @@ void t_protobuf() {
         ASSERT_EQ(iv, -3);
         pb_read_tag(&r, &fn_, &wt);
         ASSERT_EQ(wt, PB_WIRE_LEN);
-        const unsigned char* sd = (const unsigned char*)0;   // out-param typed by pb_read_length_delimited's API
+        unsigned char none = (unsigned char)0;
+        &const unsigned char sd = &none;
         unsigned long sl = 0UL;
         pb_read_length_delimited(&r, &sd, &sl);
         ASSERT_EQ(sl, 2);

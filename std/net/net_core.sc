@@ -58,7 +58,7 @@ static char net_hex_nibble_(unsigned int v) {
     return (char)('a' + v - (unsigned int)10);
 }
 
-inline void net_ip4_str(unsigned int ip_be, char* buf) {
+inline void net_ip4_str(unsigned int ip_be, &char buf_ref) { char* buf = buf_ref;
     int pos = 0;
     int i = 3;
     while (i >= 0) {
@@ -76,7 +76,7 @@ inline void net_ip4_str(unsigned int ip_be, char* buf) {
     unsafe { buf[pos] = (char)0; }
 }
 
-inline void net_mac_str(const unsigned char mac[NET_MAC_LEN], char* buf) {
+inline void net_mac_str(const unsigned char mac[NET_MAC_LEN], &char buf) {
     int i = 0;
     while (i < NET_MAC_LEN) {
         unsigned int b;

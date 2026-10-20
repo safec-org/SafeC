@@ -16,8 +16,8 @@ inline void log_set_backend(LogBackend backend) {
     unsafe { backend_ = (void*)backend; }
 }
 
-void log_write(int level, const char* tag, const char* msg,
-               const char* file, int line) {
+void log_write(int level, const &char tag, const &char msg,
+               const &char file, int line) {
     // Compile-time threshold: discard messages below LOG_LEVEL.
     if (level > LOG_LEVEL) {
         return;

@@ -47,7 +47,7 @@ void assert_fail_(const char* file, int line, const char* msg) {
 }
 
 // Assert that `cond` is true; on failure call assert_fail_ with message.
-inline void runtime_assert(int cond, const char* msg) {
+inline void runtime_assert(int cond, const &char msg) {
     if (cond == 0) {
         assert_fail_(__FILE__, __LINE__, msg);
     }

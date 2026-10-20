@@ -16,12 +16,12 @@
 // Backend: fn(level, tag, msg, file, line)
 namespace std {
 
-typedef fn void(int level, const char* tag, const char* msg,
-                const char* file, int line) LogBackend;
+typedef fn void(int level, const &char tag, const &char msg,
+                const &char file, int line) LogBackend;
 
 void log_set_backend(LogBackend backend);
-void log_write(int level, const char* tag, const char* msg,
-               const char* file, int line);
+void log_write(int level, const &char tag, const &char msg,
+               const &char file, int line);
 
 // Convenience macros (compile out below threshold)
 #if LOG_LEVEL >= LOG_LEVEL_ERROR

@@ -29,7 +29,7 @@ struct FuzzTarget fuzz_target_init(fn void(const &unsigned char, unsigned long) 
     return t;
 }
 
-void FuzzTarget::run(const unsigned char* corpus, unsigned long corpus_size) {
+void FuzzTarget::run(const &unsigned char corpus, unsigned long corpus_size) {
     if (corpus_size == (unsigned long)0) { return; }
 
     unsigned long state = self.seed;

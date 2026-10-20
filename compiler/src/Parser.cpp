@@ -1882,18 +1882,17 @@ StmtPtr Parser::parseStaticAssertStmt() {
     return std::make_unique<StaticAssertStmt>(std::move(cond), std::move(msg), loc);
 }
 
-// 'T x = malloc_defer(n);' desugars to two statements: 'T x = alloc(n);'
-// followed by 'defer { dealloc(x); }' — malloc_defer isn't a real callable
+// 'T x = malloc_defer(n);' desugars to two statements: 'T x = alloc_raw_(n);'
+// followed by 'defer { dealloc_raw_(x); }' (the type-erased forms behind
+// the generic std::alloc/std::dealloc) — malloc_defer isn't a real callable
 // (no FunctionDecl backs it anywhere), it's pure parser sugar recognized
 // only in this one position (a var-decl initializer), so that a heap
 // allocation and its guaranteed cleanup are written as a single visible
 // statement instead of two easily-desynced ones. Declares the variable's
-// type as whatever alloc() returns (void*) — same as every other alloc()
-// call site in std/, which already all require an explicit unsafe cast at
-// the point of use — so callers write 'auto p = malloc_defer(n);' (auto
-// infers void* automatically) or 'void* p = malloc_defer(n);' explicitly;
-// any other declared type fails the normal type-mismatch check in Sema,
-// with no special-casing needed here for that.
+// type as whatever alloc_raw_() returns (void*) — so callers write 'auto p = malloc_defer(n);' (auto
+// infers void* automatically), 'void* p = malloc_defer(n);', or a nullable
+// reference ('?&heap T p = malloc_defer(n);', the usual raw-to-'?&T'
+// conversion); no special-casing is needed here for any of them.
 static void desugarMallocDefer(ExprPtr &initExpr, const std::string &varName,
                                 SourceLocation loc, StmtPtr &pendingExtraStmt) {
     if (!initExpr || initExpr->kind != ExprKind::Call) return;
@@ -1902,12 +1901,12 @@ static void desugarMallocDefer(ExprPtr &initExpr, const std::string &varName,
     auto &calleeIdent = static_cast<IdentExpr &>(*call.callee);
     if (calleeIdent.name != "malloc_defer" || call.args.size() != 1) return;
 
-    auto allocCallee = std::make_unique<IdentExpr>("alloc", loc);
+    auto allocCallee = std::make_unique<IdentExpr>("alloc_raw_", loc);
     std::vector<ExprPtr> allocArgs;
     allocArgs.push_back(std::move(call.args[0]));
     initExpr = std::make_unique<CallExpr>(std::move(allocCallee), std::move(allocArgs), loc);
 
-    auto deallocCallee = std::make_unique<IdentExpr>("dealloc", loc);
+    auto deallocCallee = std::make_unique<IdentExpr>("dealloc_raw_", loc);
     std::vector<ExprPtr> deallocArgs;
     deallocArgs.push_back(std::make_unique<IdentExpr>(varName, loc));
     auto deallocCall = std::make_unique<CallExpr>(std::move(deallocCallee),

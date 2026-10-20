@@ -49,27 +49,27 @@ typedef vec<unsigned char, 32>  u8x32;
 // Unaligned by construction (element-by-element); safe to use on any
 // pointer. Reads/writes require 'unsafe' at the call site like any other
 // raw-pointer access in SafeC.
-f32x4  simd_load_f32x4(const float* p);
-f32x8  simd_load_f32x8(const float* p);
-f64x2  simd_load_f64x2(const double* p);
-f64x4  simd_load_f64x4(const double* p);
-i32x4  simd_load_i32x4(const int* p);
-i32x8  simd_load_i32x8(const int* p);
-u32x4  simd_load_u32x4(const unsigned int* p);
-u32x8  simd_load_u32x8(const unsigned int* p);
-i8x16  simd_load_i8x16(const signed char* p);
-u8x16  simd_load_u8x16(const unsigned char* p);
+f32x4  simd_load_f32x4(const &float p);
+f32x8  simd_load_f32x8(const &float p);
+f64x2  simd_load_f64x2(const &double p);
+f64x4  simd_load_f64x4(const &double p);
+i32x4  simd_load_i32x4(const &int p);
+i32x8  simd_load_i32x8(const &int p);
+u32x4  simd_load_u32x4(const &unsigned int p);
+u32x8  simd_load_u32x8(const &unsigned int p);
+i8x16  simd_load_i8x16(const &signed char p);
+u8x16  simd_load_u8x16(const &unsigned char p);
 
-void simd_store_f32x4(f32x4 v, float* p);
-void simd_store_f32x8(f32x8 v, float* p);
-void simd_store_f64x2(f64x2 v, double* p);
-void simd_store_f64x4(f64x4 v, double* p);
-void simd_store_i32x4(i32x4 v, int* p);
-void simd_store_i32x8(i32x8 v, int* p);
-void simd_store_u32x4(u32x4 v, unsigned int* p);
-void simd_store_u32x8(u32x8 v, unsigned int* p);
-void simd_store_i8x16(i8x16 v, signed char* p);
-void simd_store_u8x16(u8x16 v, unsigned char* p);
+void simd_store_f32x4(f32x4 v, &float p);
+void simd_store_f32x8(f32x8 v, &float p);
+void simd_store_f64x2(f64x2 v, &double p);
+void simd_store_f64x4(f64x4 v, &double p);
+void simd_store_i32x4(i32x4 v, &int p);
+void simd_store_i32x8(i32x8 v, &int p);
+void simd_store_u32x4(u32x4 v, &unsigned int p);
+void simd_store_u32x8(u32x8 v, &unsigned int p);
+void simd_store_i8x16(i8x16 v, &signed char p);
+void simd_store_u8x16(u8x16 v, &unsigned char p);
 
 // ── Broadcast (splat) ─────────────────────────────────────────────────────────
 f32x4 simd_splat_f32x4(float x);

@@ -164,13 +164,13 @@ int HashMap::rehash_(unsigned long new_cap) {
     ?&heap unsigned int  nh = null;
     ?&heap unsigned char ns = null;
     unsafe {
-        nk = (?&heap K)alloc(checked_mul_size(new_cap, sizeof(K)));
-        nv = (?&heap V)alloc(checked_mul_size(new_cap, sizeof(V)));
-        nh = (?&heap unsigned int)alloc(checked_mul_size(new_cap, sizeof(unsigned int)));
-        ns = (?&heap unsigned char)alloc_zeroed(new_cap);
+        nk = (?&heap K)alloc_raw_(checked_mul_size(new_cap, sizeof(K)));
+        nv = (?&heap V)alloc_raw_(checked_mul_size(new_cap, sizeof(V)));
+        nh = (?&heap unsigned int)alloc_raw_(checked_mul_size(new_cap, sizeof(unsigned int)));
+        ns = (?&heap unsigned char)alloc_zeroed_raw_(new_cap);
     }
     if (nk.is_null() || nv.is_null() || nh.is_null() || ns.is_null()) {
-        unsafe { dealloc((void*)nk); dealloc((void*)nv); dealloc((void*)nh); dealloc((void*)ns); }
+        unsafe { dealloc_raw_((void*)nk); dealloc_raw_((void*)nv); dealloc_raw_((void*)nh); dealloc_raw_((void*)ns); }
         return 0;
     }
     unsigned long mask = new_cap - 1UL;
@@ -188,8 +188,8 @@ int HashMap::rehash_(unsigned long new_cap) {
             }
             i = i + 1UL;
         }
-        dealloc((void*)self.keys); dealloc((void*)self.vals);
-        dealloc((void*)self.hashes); dealloc((void*)self.states);
+        dealloc_raw_((void*)self.keys); dealloc_raw_((void*)self.vals);
+        dealloc_raw_((void*)self.hashes); dealloc_raw_((void*)self.states);
     }
     self.keys = nk; self.vals = nv; self.hashes = nh; self.states = ns;
     self.cap = new_cap;
@@ -270,7 +270,7 @@ generic<K, V>
 generic<K, V>
 void HashMap::clear() {
     if (self.cap != 0UL) {
-        unsafe { safe_memset((void*)self.states, 0, self.cap); }
+        unsafe { safe_memset_raw_((void*)self.states, 0, self.cap); }
     }
     self.len = 0UL;
     self.tombstones = 0UL;
@@ -290,8 +290,8 @@ void HashMap::foreach(fn void(const &K, &V) func) {
 generic<K, V>
 void HashMap::free() {
     unsafe {
-        dealloc((void*)self.keys); dealloc((void*)self.vals);
-        dealloc((void*)self.hashes); dealloc((void*)self.states);
+        dealloc_raw_((void*)self.keys); dealloc_raw_((void*)self.vals);
+        dealloc_raw_((void*)self.hashes); dealloc_raw_((void*)self.states);
     }
     self.keys = null; self.vals = null; self.hashes = null; self.states = null;
     self.cap = 0UL; self.len = 0UL; self.tombstones = 0UL;
@@ -309,14 +309,14 @@ struct StrMap {
     unsigned long        len;
     unsigned long        tombstones;
 
-    int           insert(const char* key, V val);   // copies key; 0 on OOM
-    ?&V           get(const char* key) const;
-    int           contains(const char* key) const;
-    ?V            remove(const char* key);
+    int           insert(const &char key, V val);   // copies key; 0 on OOM
+    ?&V           get(const &char key) const;
+    int           contains(const &char key) const;
+    ?V            remove(const &char key);
     unsigned long length() const;
     int           is_empty() const;
     void          clear();
-    void          foreach(fn void(const char*, &V) func);
+    void          foreach(fn void(const &char, &V) func);
     void          free();
 
     long long     find_(const char* key, unsigned int h) const;
@@ -364,13 +364,13 @@ int StrMap::rehash_(unsigned long new_cap) {
     ?&heap unsigned int  nh = null;
     ?&heap unsigned char ns = null;
     unsafe {
-        nk = (?&heap struct String)alloc(checked_mul_size(new_cap, sizeof(struct String)));
-        nv = (?&heap V)alloc(checked_mul_size(new_cap, sizeof(V)));
-        nh = (?&heap unsigned int)alloc(checked_mul_size(new_cap, sizeof(unsigned int)));
-        ns = (?&heap unsigned char)alloc_zeroed(new_cap);
+        nk = (?&heap struct String)alloc_raw_(checked_mul_size(new_cap, sizeof(struct String)));
+        nv = (?&heap V)alloc_raw_(checked_mul_size(new_cap, sizeof(V)));
+        nh = (?&heap unsigned int)alloc_raw_(checked_mul_size(new_cap, sizeof(unsigned int)));
+        ns = (?&heap unsigned char)alloc_zeroed_raw_(new_cap);
     }
     if (nk.is_null() || nv.is_null() || nh.is_null() || ns.is_null()) {
-        unsafe { dealloc((void*)nk); dealloc((void*)nv); dealloc((void*)nh); dealloc((void*)ns); }
+        unsafe { dealloc_raw_((void*)nk); dealloc_raw_((void*)nv); dealloc_raw_((void*)nh); dealloc_raw_((void*)ns); }
         return 0;
     }
     unsigned long mask = new_cap - 1UL;
@@ -388,8 +388,8 @@ int StrMap::rehash_(unsigned long new_cap) {
             }
             i = i + 1UL;
         }
-        dealloc((void*)self.keys); dealloc((void*)self.vals);
-        dealloc((void*)self.hashes); dealloc((void*)self.states);
+        dealloc_raw_((void*)self.keys); dealloc_raw_((void*)self.vals);
+        dealloc_raw_((void*)self.hashes); dealloc_raw_((void*)self.states);
     }
     self.keys = nk; self.vals = nv; self.hashes = nh; self.states = ns;
     self.cap = new_cap;
@@ -398,7 +398,7 @@ int StrMap::rehash_(unsigned long new_cap) {
 }
 
 generic<V>
-int StrMap::insert(const char* key, V val) {
+int StrMap::insert(const &char key, V val) {
     if ((self.len + self.tombstones + 1UL) * 4UL > self.cap * 3UL) {
         unsigned long next = self.cap == 0UL ? 16UL
                            : ((self.len + 1UL) * 2UL > self.cap ? self.cap * 2UL : self.cap);
@@ -434,19 +434,19 @@ int StrMap::insert(const char* key, V val) {
 }
 
 generic<V>
-?&V StrMap::get(const char* key) const {
+?&V StrMap::get(const &char key) const {
     long long i = self.find_(key, map_hash_str_(key));
     if (i < 0LL) return null;
     unsafe { return (?&V)&self.vals[(unsigned long)i]; }
 }
 
 generic<V>
-int StrMap::contains(const char* key) const {
+int StrMap::contains(const &char key) const {
     return self.find_(key, map_hash_str_(key)) >= 0LL;
 }
 
 generic<V>
-?V StrMap::remove(const char* key) {
+?V StrMap::remove(const &char key) {
     long long i = self.find_(key, map_hash_str_(key));
     if (i < 0LL) return null;
     unsigned long idx = (unsigned long)i;
@@ -474,7 +474,7 @@ void StrMap::clear() {
 }
 
 generic<V>
-void StrMap::foreach(fn void(const char*, &V) func) {
+void StrMap::foreach(fn void(const &char, &V) func) {
     unsafe {
         unsigned long i = 0UL;
         while (i < self.cap) {
@@ -488,8 +488,8 @@ generic<V>
 void StrMap::free() {
     self.clear();
     unsafe {
-        dealloc((void*)self.keys); dealloc((void*)self.vals);
-        dealloc((void*)self.hashes); dealloc((void*)self.states);
+        dealloc_raw_((void*)self.keys); dealloc_raw_((void*)self.vals);
+        dealloc_raw_((void*)self.hashes); dealloc_raw_((void*)self.states);
     }
     self.keys = null; self.vals = null; self.hashes = null; self.states = null;
     self.cap = 0UL;

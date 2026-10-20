@@ -17,7 +17,7 @@
 
 // ── In-memory block device ───────────────────────────────────────────────────
 struct MemDisk {
-    ?&unsigned char data;
+    ?&heap unsigned char data;
     unsigned long   size;
 };
 
@@ -25,7 +25,7 @@ static int memdisk_read(&MemDisk d, unsigned long lba, &unsigned char buf, unsig
     unsigned long off = lba * 512UL;
     unsigned long n = count * 512UL;
     if (off + n > d.size || d.data.is_null()) return -1;
-    unsafe { safe_memcpy(buf, (const void*)&d.data[off], n); }
+    unsafe { safe_memcpy(buf, &d.data[off], n); }
     return 0;
 }
 
@@ -33,7 +33,7 @@ static int memdisk_write(&MemDisk d, unsigned long lba, const &unsigned char buf
     unsigned long off = lba * 512UL;
     unsigned long n = count * 512UL;
     if (off + n > d.size || d.data.is_null()) return -1;
-    unsafe { safe_memcpy((void*)&d.data[off], buf, n); }
+    unsafe { safe_memcpy(&d.data[off], buf, n); }
     return 0;
 }
 
@@ -50,7 +50,7 @@ static struct MemDisk memdisk_load(const &char path) {
     if (fq.is_null()) return d;
     &File f = std::expect_ref(fq, "memdisk file");
     long long sz = file_size(f);
-    ?&unsigned char buf = alloc((unsigned long)sz);
+    ?&heap unsigned char buf = alloc((unsigned long)sz);
     match (buf) {
         case some(b): {
             if (file_read(f, b, (unsigned long)sz) == (unsigned long)sz) {
@@ -84,7 +84,7 @@ static void count_entry(&VfsNode n, &int seen) {
 // ── tmpfs through the VFS ────────────────────────────────────────────────────
 void t_tmpfs_vfs() {
     unsafe {
-        ?&TmpfsCtx cq = alloc(sizeof(struct TmpfsCtx));
+        ?&heap TmpfsCtx cq = alloc(sizeof(struct TmpfsCtx));
         ASSERT_FALSE(cq.is_null());
         if (cq.is_null()) return;
         &TmpfsCtx ctx = std::expect_ref(cq, "cq is null");
@@ -113,14 +113,14 @@ void t_tmpfs_vfs() {
         ASSERT_NE(vfs_root.open("/tmp/dir/hello.txt", VFS_O_READ, &again), 0);
         ASSERT_NE(vfs_root.open("/nowhere/x", VFS_O_READ, &again), 0);
         ASSERT_EQ(vfs_root.unmount("/tmp"), 0);
-        dealloc(ctx);
+        dealloc(cq);
     }
 }
 
 // ── MBR partition table ──────────────────────────────────────────────────────
 void t_partition() {
     unsafe {
-        ?&unsigned char img = alloc_zeroed(4096UL);
+        ?&heap unsigned char img = alloc_zeroed(4096UL);
         ASSERT_FALSE(img.is_null());
         if (img.is_null()) return;
         &unsigned char m = std::expect_ref(img, "img is null");
@@ -148,7 +148,7 @@ void t_partition() {
         ASSERT_EQ(pt.entries[1].lba_start, 200000);
         m[511] = (unsigned char)0;
         ASSERT_NE(partition_read(&dev, &pt), 0);   // bad signature
-        dealloc(m);
+        dealloc(img);
     }
 }
 
@@ -161,7 +161,7 @@ static unsigned long read_all(&VfsNode node, &unsigned char out, unsigned long c
         if (want > 512UL) want = 512UL;
         unsigned long got = node.read(total, chunk, want);
         if (got == 0UL) break;
-        unsafe { safe_memcpy((void*)&out[total], (&unsigned char)chunk, got); }
+        unsafe { safe_memcpy(&out[total], &chunk[0], got); }
         total = total + got;
     }
     return total;
@@ -218,7 +218,7 @@ void t_ext2() {
         ASSERT_FALSE(d.data.is_null());
         if (d.data.is_null()) return;
         struct BlockDevice dev = memdisk_device(&d);
-        ?&Ext2Ctx eq = alloc(sizeof(struct Ext2Ctx));
+        ?&heap Ext2Ctx eq = alloc(sizeof(struct Ext2Ctx));
         if (eq.is_null()) return;
         &Ext2Ctx ec = std::expect_ref(eq, "eq is null");
         ASSERT_EQ(ext2_init(ec, &dev), 0);
@@ -241,7 +241,7 @@ void t_ext2() {
         int seen = 0;
         vfs_readdir(&root, count_entry, (&int)&seen);
         ASSERT_EQ(seen, 5);   // . .. lost+found HELLO.TXT SUB
-        dealloc(ec);
+        dealloc(eq);
         dealloc(d.data);
     }
 }

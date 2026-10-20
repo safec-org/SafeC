@@ -11,7 +11,7 @@
 namespace std {
 
 struct SpiDevice {
-    void*        base;  // MMIO base address
+    &volatile unsigned int base; // MMIO base address
     int          mode;  // SPI mode (0-3)
 
     // Transfer one byte (full-duplex). Returns the received byte.
@@ -24,13 +24,13 @@ struct SpiDevice {
     void          cs_deassert();
 
     // Transfer a buffer of bytes. `rx` receives incoming data (may be NULL).
-    void          write(const unsigned char* tx, unsigned char* rx, unsigned long len);
+    void          write(const &unsigned char tx, &unsigned char rx, unsigned long len);
 
     // Read len bytes (sends 0xFF as dummy TX).
-    void          read(unsigned char* rx, unsigned long len);
+    void          read(&unsigned char rx, unsigned long len);
 };
 
 // Initialize SPI master at `base` with the given mode.
-struct SpiDevice spi_init(void* base, int mode);
+struct SpiDevice spi_init(&volatile unsigned int base, int mode);
 
 } // namespace std

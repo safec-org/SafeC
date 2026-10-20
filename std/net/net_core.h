@@ -16,10 +16,10 @@ unsigned int   net_ntohl(unsigned int v);
 
 // ── IP / MAC utilities ────────────────────────────────────────────────────────
 // Format an IPv4 address into buf as "a.b.c.d\0" (at least 16 bytes).
-void net_ip4_str(unsigned int ip_be, char* buf);
+void net_ip4_str(unsigned int ip_be, &char buf);
 
 // Format a MAC address into buf as "xx:xx:xx:xx:xx:xx\0" (at least 18 bytes).
-void net_mac_str(const unsigned char mac[NET_MAC_LEN], char* buf);
+void net_mac_str(const unsigned char mac[NET_MAC_LEN], &char buf);
 
 // Build an IPv4 address from four octets: a<<24 | b<<16 | c<<8 | d.
 // Every std::net API takes and returns IPv4 addresses (and ports, seq

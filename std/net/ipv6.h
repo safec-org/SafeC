@@ -35,7 +35,7 @@ int  ipv6_addr_is_loopback(const &stack Ipv6Addr a);
 int  ipv6_addr_is_link_local(const &stack Ipv6Addr a);
 
 // Format IPv6 address into buf as "xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx\0" (40 bytes).
-void ipv6_addr_str(const &stack Ipv6Addr addr, char* buf);
+void ipv6_addr_str(const &stack Ipv6Addr addr, &char buf);
 
 // Parse IPv6 header from pkt at byte offset `offset`.
 // Returns 0 on success, -1 on truncation.

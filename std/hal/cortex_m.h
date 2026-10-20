@@ -8,7 +8,7 @@
 namespace std {
 
 struct Nvic {
-    void* base;   // NVIC_BASE cast to void* for MMIO access
+    &volatile unsigned int base; // NVIC_BASE as a volatile register reference
 
     // Enable interrupt `irq` (0–239).
     void enable(unsigned int irq);
@@ -37,7 +37,7 @@ void nvic_init();
 #define SYSTICK_BASE  0xE000E010UL
 
 struct SysTick {
-    void* base;
+    &volatile unsigned int base;
 
     // Configure and enable SysTick with `reload` counts per tick.
     void  start(unsigned int reload, int use_core_clock);
@@ -59,7 +59,7 @@ void systick_init();
 #define SCB_BASE  0xE000ED00UL
 
 struct Scb {
-    void* base;
+    &volatile unsigned int base;
 
     // Software reset.
     void  system_reset();

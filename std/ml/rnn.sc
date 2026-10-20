@@ -161,7 +161,7 @@ struct LSTMCell lstm_cell_new(unsigned long inputSize, unsigned long hiddenSize)
 
 &Tensor lstm_cell_forward(const &LSTMCell cell, const &Tensor x_t,
                            const &Tensor h_prev, const &Tensor c_prev,
-                           struct Tensor** c_out) {
+                           &&Tensor c_out) {
     unsafe {
         &Tensor i_sum = __row_add4(tensor_matmul(x_t, cell->W_ii), tensor_matmul(h_prev, cell->W_hi),
                                            cell->b_ii, cell->b_hi);

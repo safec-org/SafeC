@@ -11,13 +11,13 @@ namespace std {
 
 static void stft_fill_window_(double* w, unsigned long n, int windowType) {
     if (windowType == STFT_WIN_HANN) {
-        window_hann(w, n);
+        unsafe { window_hann(w, n); }
     } else if (windowType == STFT_WIN_HAMMING) {
-        window_hamming(w, n);
+        unsafe { window_hamming(w, n); }
     } else if (windowType == STFT_WIN_BLACKMAN) {
-        window_blackman(w, n);
+        unsafe { window_blackman(w, n); }
     } else {
-        window_rectangular(w, n);
+        unsafe { window_rectangular(w, n); }
     }
 }
 
@@ -26,11 +26,11 @@ unsigned long stft_num_frames(unsigned long signalLen, unsigned long frameSize, 
     return (signalLen - frameSize) / hopSize + 1UL;
 }
 
-void stft_forward(const double* signal, unsigned long signalLen,
+void stft_forward(const &double signal, unsigned long signalLen,
                    unsigned long frameSize, unsigned long hopSize,
-                   int windowType, struct Complex* out) {
+                   int windowType, &Complex out_ref) { struct Complex* out = out_ref;
     double* win;
-    unsafe { win = (double*)alloc(frameSize * (unsigned long)sizeof(double)); }
+    unsafe { win = (double*)alloc_raw_(frameSize * (unsigned long)sizeof(double)); }
     stft_fill_window_(win, frameSize, windowType);
 
     unsigned long numFrames = stft_num_frames(signalLen, frameSize, hopSize);
@@ -52,20 +52,20 @@ void stft_forward(const double* signal, unsigned long signalLen,
         f = f + 1UL;
     }
 
-    unsafe { dealloc((void*)win); }
+    unsafe { dealloc_raw_((void*)win); }
 }
 
-void stft_inverse(const struct Complex* frames, unsigned long numFrames,
+void stft_inverse(const &Complex frames, unsigned long numFrames,
                    unsigned long frameSize, unsigned long hopSize,
-                   int windowType, double* outSignal) {
+                   int windowType, &double outSignal) {
     if (numFrames == 0UL) { return; }
     double* win;
-    unsafe { win = (double*)alloc(frameSize * (unsigned long)sizeof(double)); }
+    unsafe { win = (double*)alloc_raw_(frameSize * (unsigned long)sizeof(double)); }
     stft_fill_window_(win, frameSize, windowType);
 
     unsigned long outLen = (numFrames - 1UL) * hopSize + frameSize;
     double* winSumSq;
-    unsafe { winSumSq = (double*)alloc(outLen * (unsigned long)sizeof(double)); }
+    unsafe { winSumSq = (double*)alloc_raw_(outLen * (unsigned long)sizeof(double)); }
     unsigned long z = 0UL;
     while (z < outLen) {
         unsafe { winSumSq[z] = 0.0; }
@@ -73,7 +73,7 @@ void stft_inverse(const struct Complex* frames, unsigned long numFrames,
     }
 
     struct Complex* frameBuf;
-    unsafe { frameBuf = (struct Complex*)alloc(frameSize * (unsigned long)sizeof(struct Complex)); }
+    unsafe { frameBuf = (struct Complex*)alloc_raw_(frameSize * (unsigned long)sizeof(struct Complex)); }
 
     unsigned long f = 0UL;
     while (f < numFrames) {
@@ -110,14 +110,14 @@ void stft_inverse(const struct Complex* frames, unsigned long numFrames,
     }
 
     unsafe {
-        dealloc((void*)win);
-        dealloc((void*)winSumSq);
-        dealloc((void*)frameBuf);
+        dealloc_raw_((void*)win);
+        dealloc_raw_((void*)winSumSq);
+        dealloc_raw_((void*)frameBuf);
     }
 }
 
-double mr_stft_loss(const double* x, const double* y, unsigned long len,
-                     const unsigned long* frameSizes, unsigned long numResolutions) {
+double mr_stft_loss(const &double x, const &double y, unsigned long len,
+                     const &unsigned long frameSizes, unsigned long numResolutions) {
     if (numResolutions == 0UL) { return 0.0; }
     double totalLoss = 0.0;
     unsigned long validCount = 0UL;
@@ -133,11 +133,11 @@ double mr_stft_loss(const double* x, const double* y, unsigned long len,
             struct Complex* sx;
             struct Complex* sy;
             unsafe {
-                sx = (struct Complex*)alloc(total * (unsigned long)sizeof(struct Complex));
-                sy = (struct Complex*)alloc(total * (unsigned long)sizeof(struct Complex));
+                sx = (struct Complex*)alloc_raw_(total * (unsigned long)sizeof(struct Complex));
+                sy = (struct Complex*)alloc_raw_(total * (unsigned long)sizeof(struct Complex));
             }
-            stft_forward(x, len, frameSize, hop, STFT_WIN_HANN, sx);
-            stft_forward(y, len, frameSize, hop, STFT_WIN_HANN, sy);
+            unsafe { stft_forward(x, len, frameSize, hop, STFT_WIN_HANN, sx); }
+            unsafe { stft_forward(y, len, frameSize, hop, STFT_WIN_HANN, sy); }
 
             double diffSq = 0.0;
             double xSq = 0.0;
@@ -166,8 +166,8 @@ double mr_stft_loss(const double* x, const double* y, unsigned long len,
             validCount = validCount + 1UL;
 
             unsafe {
-                dealloc((void*)sx);
-                dealloc((void*)sy);
+                dealloc_raw_((void*)sx);
+                dealloc_raw_((void*)sy);
             }
         }
         r = r + 1UL;

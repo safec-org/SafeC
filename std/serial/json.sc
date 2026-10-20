@@ -263,7 +263,7 @@ static struct Value json_parse_string_raw_(&JsonCursor_ c) {
                     }
                 }
                 char enc[4];
-                int n = utf8_encode(cp, (char*)enc);
+                int n; unsafe { n = utf8_encode(cp, (char*)enc); }
                 unsafe { out.push_n((const char*)enc, (unsigned long)n); }
             } else {
                 unsafe { c->ok = 0; }
@@ -391,7 +391,7 @@ static struct Value json_parse_value_(&JsonCursor_ c) {
     return value_null();
 }
 
-struct Value json_parse(const char* text, int* ok) {
+struct Value json_parse(const &char text, ?&int ok) {
     struct JsonCursor_ c;
     c.text = text;
     c.pos = 0UL;

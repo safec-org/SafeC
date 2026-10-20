@@ -10,7 +10,7 @@
 namespace std {
 
 struct ClockConfig {
-    void*        base;      // clock control MMIO base
+    &volatile unsigned int base; // clock control MMIO base
     int          source;    // CLK_SRC_HSI, CLK_SRC_HSE, or CLK_SRC_PLL
     unsigned int sys_freq;  // system clock frequency in Hz
     unsigned int ahb_div;   // AHB prescaler divider
@@ -37,6 +37,6 @@ struct ClockConfig {
 };
 
 // Initialize clock configuration at `base`.
-struct ClockConfig clock_init(void* base);
+struct ClockConfig clock_init(&volatile unsigned int base);
 
 } // namespace std

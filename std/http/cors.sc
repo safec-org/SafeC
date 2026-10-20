@@ -20,7 +20,7 @@ int cors_is_preflight(const &HttpRequest req) {
     return isOptions && hasReqMethod;
 }
 
-void cors_apply_headers(&HttpResponse resp, const char* allowedOrigin) {
+void cors_apply_headers(&HttpResponse resp, const &char allowedOrigin) {
     int isWildcard;
     unsafe { isWildcard = str_eq(allowedOrigin, "*"); }
     unsafe {
@@ -34,9 +34,9 @@ void cors_apply_headers(&HttpResponse resp, const char* allowedOrigin) {
     }
 }
 
-struct HttpResponse cors_preflight_response(const char* allowedOrigin,
-                                             const char* allowedMethods,
-                                             const char* allowedHeaders) {
+struct HttpResponse cors_preflight_response(const &char allowedOrigin,
+                                             const &char allowedMethods,
+                                             const &char allowedHeaders) {
     struct HttpResponse resp;
     resp.status = 204;
     resp.headers = string_new();

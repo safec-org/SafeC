@@ -8,11 +8,11 @@
 namespace std {
 
 static char* value_strdup_(const char* s) {
-    unsigned long n = str_len(s);
+    unsigned long n; unsafe { n = str_len(s); }
     char* buf;
-    unsafe { buf = (char*)alloc(n + 1UL); }
+    unsafe { buf = (char*)alloc_raw_(n + 1UL); }
     if (buf == (char*)0) { return (char*)0; }
-    str_copy(buf, s, n + 1UL);
+    unsafe { str_copy(buf, s, n + 1UL); }
     return buf;
 }
 
@@ -49,7 +49,7 @@ inline struct Value value_float(double f) {
     return v;
 }
 
-inline struct Value value_string(const char* s) {
+inline struct Value value_string(const &char s) {
     struct Value v = value_null();
     v.kind = VAL_STRING;
     v.str_val = value_strdup_(s);
@@ -72,14 +72,14 @@ inline void value_array_push(&Value arr, struct Value v) {
     unsafe { arr->arr_val.push(v); }
 }
 
-inline void value_object_set(&Value obj, const char* key, struct Value v) {
+inline void value_object_set(&Value obj, const &char key, struct Value v) {
     struct ObjectEntry e;
     e.key = value_strdup_(key);
     // Store the value on the heap so ObjectEntry::val is a stable pointer
     // (obj_val is a Vec of ObjectEntry *by value* — the Value itself has
     // to live somewhere that survives the Vec growing/reallocating).
     unsafe {
-        struct Value* heapVal = (struct Value*)alloc(sizeof(struct Value));
+        struct Value* heapVal = (struct Value*)alloc_raw_(sizeof(struct Value));
         *heapVal = v;
         e.val = heapVal;
         obj->obj_val.push(e);
@@ -117,7 +117,12 @@ struct Value value_clone(const &Value v) {
         while (i < n) {
             struct ObjectEntry* e;
             unsafe { e = v->obj_val.at(i); }
-            unsafe { value_object_set(&out, e->key, value_clone(e->val)); }
+            unsafe {
+                match (e->key) {
+                    case some(k): { value_object_set(&out, k, value_clone(e->val)); }
+                    case null:    { }
+                }
+            }
             i = i + 1UL;
         }
     }
@@ -128,7 +133,7 @@ void value_free(&Value v) {
     int kind;
     unsafe { kind = v->kind; }
     if (kind == VAL_STRING) {
-        unsafe { if (v->str_val != (char*)0) { dealloc((void*)v->str_val); } }
+        unsafe { if (v->str_val != (char*)0) { dealloc_raw_((void*)v->str_val); } }
     } else if (kind == VAL_ARRAY) {
         unsigned long i = 0UL;
         unsigned long n;
@@ -149,8 +154,8 @@ void value_free(&Value v) {
             unsafe {
                 e = v->obj_val.at(i);
                 value_free(e->val);
-                dealloc((void*)e->val);
-                dealloc((void*)e->key);
+                dealloc_raw_((void*)e->val);
+                dealloc_raw_((void*)e->key);
             }
             i = i + 1UL;
         }
@@ -169,7 +174,7 @@ inline double Value::as_float() const {
     if (self.kind == VAL_INT) { return (double)self.int_val; }
     return self.float_val;
 }
-inline const char* Value::as_string() const {
+inline const &char Value::as_string() const {
     unsafe {
         if (self.str_val == (char*)0) { return ""; }
         return (const char*)self.str_val;
@@ -182,14 +187,20 @@ inline &Value Value::array_at(unsigned long idx) const {
 }
 inline unsigned long Value::object_len() const { return self.obj_val.length(); }
 
-?&Value Value::object_get(const char* key) const {
+?&Value Value::object_get(const &char key) const {
     unsigned long i = 0UL;
     unsigned long n = self.obj_val.length();
     while (i < n) {
         struct ObjectEntry* e;
         unsafe { e = self.obj_val.at(i); }
         int matched;
-        unsafe { matched = str_eq(e->key, key); }
+        matched = 0;
+        unsafe {
+            match (e->key) {
+                case some(k): { matched = str_eq(k, key); }
+                case null:    { }
+            }
+        }
         if (matched != 0) {
             &Value result;
             unsafe { result = e->val; }

@@ -169,7 +169,7 @@ static unsigned long ctx_super_first_data_block_(struct Ext2Ctx ctx) {
 // Only handles the 12 direct blocks (block[0..11]).
 
 unsigned long Ext2Ctx::read_file(unsigned long ino, unsigned long offset,
-                                  unsigned char* buf, unsigned long len) {
+                                  &unsigned char buf, unsigned long len) {
     struct Ext2Inode inode;
     if (self.read_inode(ino, &inode) != 0) { return (unsigned long)0; }
 
@@ -301,8 +301,10 @@ static int ext2_split_path_(const char* path,
 
 // ── VfsOps callbacks ──────────────────────────────────────────────────────────
 
-static int ext2_vfs_open_(void* ctx, const char* path, int flags,
+static int ext2_vfs_open_(?&void ctx_ref, const &char path_ref, int flags,
                            &stack VfsNode node_out) {
+    void* ctx = ctx_ref;
+    const char* path = path_ref;
     struct Ext2Ctx* ec;
     unsafe { ec = (struct Ext2Ctx*)ctx; }
 
@@ -359,16 +361,19 @@ static int ext2_vfs_open_(void* ctx, const char* path, int flags,
     return 0;
 }
 
-static unsigned long ext2_vfs_read_(void* ctx, unsigned long inode,
+static unsigned long ext2_vfs_read_(?&void ctx_ref, unsigned long inode,
                                      unsigned long offset,
-                                     unsigned char* buf, unsigned long len) {
+                                     &unsigned char buf_ref, unsigned long len) {
+    void* ctx = ctx_ref;
+    unsigned char* buf = buf_ref;
     struct Ext2Ctx* ec;
     unsafe { ec = (struct Ext2Ctx*)ctx; }
-    return ec->read_file(inode, offset, buf, len);
+    unsafe { return ec->read_file(inode, offset, buf, len); }
 }
 
-static int ext2_vfs_readdir_(void* ctx, unsigned long dir_ino,
-                              void* cb, void* user) {
+static int ext2_vfs_readdir_(?&void ctx_ref, unsigned long dir_ino,
+                              fn void(&VfsNode, ?&void) cb, ?&void user) {
+    void* ctx = ctx_ref;
     struct Ext2Ctx* ec;
     unsafe { ec = (struct Ext2Ctx*)ctx; }
 
@@ -426,9 +431,7 @@ static int ext2_vfs_readdir_(void* ctx, unsigned long dir_ino,
                         node.size = (unsigned long)0;
                     }
 
-                    fn void(struct VfsNode*, void*) callback =
-                        (fn void(struct VfsNode*, void*))cb;
-                    callback((struct VfsNode*)&node, user);
+                    cb(&node, user);
                     count = count + 1;
                 }
                 pos_in_blk = pos_in_blk + (unsigned long)e_rec;

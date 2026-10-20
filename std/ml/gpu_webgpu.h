@@ -21,18 +21,18 @@
 // Gated behind the 'webgpu' feature (see Package.toml's [features]).
 namespace std {
 
-int webgpu_add_f32(const float* a, const float* b, float* out, unsigned long n);
-int webgpu_sub_f32(const float* a, const float* b, float* out, unsigned long n);
-int webgpu_mul_f32(const float* a, const float* b, float* out, unsigned long n);
-int webgpu_div_f32(const float* a, const float* b, float* out, unsigned long n);
-int webgpu_pow_f32(const float* a, const float* b, float* out, unsigned long n);
-int webgpu_relu_f32(const float* a, float* out, unsigned long n);
-int webgpu_log_f32(const float* a, float* out, unsigned long n);
-int webgpu_exp_f32(const float* a, float* out, unsigned long n);
-int webgpu_sqrt_f32(const float* a, float* out, unsigned long n);
-int webgpu_scale_f32(const float* a, float k, float* out, unsigned long n);
-int webgpu_sum_f32(const float* a, float* out, unsigned long n);
-int webgpu_matmul_f32(const float* a, const float* b, float* out,
+int webgpu_add_f32(const &float a, const &float b, &float out, unsigned long n);
+int webgpu_sub_f32(const &float a, const &float b, &float out, unsigned long n);
+int webgpu_mul_f32(const &float a, const &float b, &float out, unsigned long n);
+int webgpu_div_f32(const &float a, const &float b, &float out, unsigned long n);
+int webgpu_pow_f32(const &float a, const &float b, &float out, unsigned long n);
+int webgpu_relu_f32(const &float a, &float out, unsigned long n);
+int webgpu_log_f32(const &float a, &float out, unsigned long n);
+int webgpu_exp_f32(const &float a, &float out, unsigned long n);
+int webgpu_sqrt_f32(const &float a, &float out, unsigned long n);
+int webgpu_scale_f32(const &float a, float k, &float out, unsigned long n);
+int webgpu_sum_f32(const &float a, &float out, unsigned long n);
+int webgpu_matmul_f32(const &float a, const &float b, &float out,
                        unsigned long M, unsigned long K, unsigned long N);
 
 // True if wgpuCreateInstance succeeds and an adapter request resolves
@@ -75,10 +75,10 @@ int webgpu_available();
 // Uploads 'bytes' from host memory to a new persistent GPU buffer usable
 // as both storage input/output and copy source/destination. Returns
 // (void*)0 on failure.
-void* webgpu_upload_persistent(const float* data, unsigned long bytes);
+?&void webgpu_upload_persistent(const &float data, unsigned long bytes);
 
 // Releases a buffer returned by webgpu_upload_persistent (wgpuBufferRelease).
-void webgpu_release_persistent(void* buf);
+void webgpu_release_persistent(&void buf);
 
 // Same computation as webgpu_matmul_f32, but 'bufA'/'bufB' are already
 // device buffers (e.g. from webgpu_upload_persistent) -- no upload for
@@ -86,14 +86,14 @@ void webgpu_release_persistent(void* buf);
 // are cached/reused instead of being rebuilt on every call. Still copies
 // the MxN result back to host 'out' (see this section's header comment on
 // the batching gap). Returns 1 on success, 0 on failure.
-int webgpu_matmul_f32_persistent(void* bufA, void* bufB, float* out,
+int webgpu_matmul_f32_persistent(&void bufA, &void bufB, &float out,
                                   unsigned long M, unsigned long K, unsigned long N);
 
 // In-place SGD step against a persistent device buffer:
 // bufW[i] -= lr * bufGrad[i] for i in [0, n), computed entirely on-GPU --
 // the result is never copied back to host memory. Returns 1 on success,
 // 0 on failure.
-int webgpu_sgd_update_f32(void* bufW, void* bufGrad, float lr, unsigned long n);
+int webgpu_sgd_update_f32(&void bufW, &void bufGrad, float lr, unsigned long n);
 
 // True if the shared persistent device (used by every function in this
 // tier) is available.
@@ -122,12 +122,12 @@ int webgpu_persistent_available();
 // way to catch a WGSL syntax error here the way the MPS tier's kernels
 // were actually compiled and run.
 
-void* webgpu_upload_f16_persistent(const float* data, unsigned long n);
+?&void webgpu_upload_f16_persistent(const &float data, unsigned long n);
 // Releases through webgpu_release_persistent(buf) above.
 
-int webgpu_matmul_f16_persistent(void* bufA, void* bufB, unsigned short* out,
+int webgpu_matmul_f16_persistent(&void bufA, &void bufB, &unsigned short out,
                                   unsigned long M, unsigned long K, unsigned long N);
 
-int webgpu_sgd_update_f16(void* bufW, void* bufGrad, float lr, unsigned long n);
+int webgpu_sgd_update_f16(&void bufW, &void bufGrad, float lr, unsigned long n);
 
 } // namespace std

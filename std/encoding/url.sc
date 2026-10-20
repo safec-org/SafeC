@@ -17,7 +17,7 @@ static char url_hex_digit_(int v) {
     return (char)((int)'A' + (v - 10));
 }
 
-struct String url_encode(const char* s) {
+struct String url_encode(const &char s) {
     struct String out = string_new();
     unsigned long i = 0UL;
     while (1) {
@@ -48,7 +48,7 @@ static int url_hex_val_(char c, int* ok) {
     return 0;
 }
 
-struct String url_decode(const char* s, int* ok) {
+struct String url_decode(const &char s, ?&int ok) {
     struct String out = string_new();
     int good = 1;
     unsigned long i = 0UL;

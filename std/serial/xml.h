@@ -16,10 +16,10 @@
 namespace std {
 
 // Appends v's XML representation (as a single element named 'tag') to 'out'.
-void xml_write(const &Value v, const char* tag, &String out);
+void xml_write(const &Value v, const &char tag, &String out);
 
 // Convenience wrapper: a fresh String holding just that one element.
-struct String value_to_xml(const &Value v, const char* root_tag);
+struct String value_to_xml(const &Value v, const &char root_tag);
 
 // Parses this module's own output shape back into a Value tree (root tag
 // itself is not returned — only its content, mirroring json_parse). Sets
@@ -28,6 +28,6 @@ struct String value_to_xml(const &Value v, const char* root_tag);
 // entities beyond the 5 xml_append_escaped_ emits) — see xml.sc's parser
 // section for the two structural ambiguities inherent to this grammar
 // (empty string vs. empty object; numeric-looking text vs. string).
-struct Value xml_parse(const char* text, int* ok);
+struct Value xml_parse(const &char text, ?&int ok);
 
 } // namespace std

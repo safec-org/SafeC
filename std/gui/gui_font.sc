@@ -25,7 +25,7 @@ struct GuiFont gui_font_new(int glyphW, int glyphH, int first, int count) {
     f.count = count;
     unsigned long total = (unsigned long)(__gui_font_bytes_per_glyph(glyphW, glyphH) * count);
     unsafe {
-        f.bitmap = (&heap unsigned char)alloc(total);
+        f.bitmap = (&heap unsigned char)alloc_raw_(total);
         memset((void*)f.bitmap, 0, total);
     }
     return f;
@@ -87,12 +87,12 @@ struct GuiFont gui_font_default() {
         // access to gui_draw.sc's private table while still producing a
         // real, correct copy of the exact same built-in glyphs.
         struct GuiWindow tmp;
-        tmp.platform = (void*)0;
+        tmp.platform = null;
         tmp.width = 8;
         tmp.height = 8;
         tmp.shouldClose = 0;
         unsafe {
-            tmp.pixels = (&heap unsigned char)alloc(8UL * 8UL * 4UL);
+            tmp.pixels = (&heap unsigned char)alloc_raw_(8UL * 8UL * 4UL);
             memset((void*)tmp.pixels, 0, 8UL * 8UL * 4UL);
         }
         char one[2];
@@ -114,7 +114,7 @@ struct GuiFont gui_font_default() {
             }
             py = py + 1;
         }
-        unsafe { dealloc((void*)tmp.pixels); }
+        unsafe { dealloc_raw_((void*)tmp.pixels); }
         cp = cp + 1;
     }
     return f;
@@ -122,13 +122,13 @@ struct GuiFont gui_font_default() {
 
 void gui_font_free(&GuiFont font) {
     unsafe {
-        if ((void*)font.bitmap != (void*)0) { dealloc((void*)font.bitmap); }
+        if ((void*)font.bitmap != (void*)0) { dealloc_raw_((void*)font.bitmap); }
         font.bitmap = (&heap unsigned char)0;
         font.count = 0;
     }
 }
 
-int gui_font_save(const &GuiFont font, const char* path) {
+int gui_font_save(const &GuiFont font, const &char path) {
     ?&File fq = file_open(path, "wb");
     if (fq.is_null()) { return 0; }
     &File f = expect_ref(fq, "gui_font_save: file");
@@ -165,7 +165,7 @@ int gui_font_save(const &GuiFont font, const char* path) {
     return (bodyWrote == total) ? 1 : 0;
 }
 
-int gui_font_load(&GuiFont outFont, const char* path) {
+int gui_font_load(&GuiFont outFont, const &char path) {
     ?&File fq = file_open(path, "rb");
     if (fq.is_null()) { return 0; }
     &File f = expect_ref(fq, "gui_font_load: file");
@@ -208,7 +208,7 @@ int gui_font_load(&GuiFont outFont, const char* path) {
     return 1;
 }
 
-int gui_draw_text_ex(&GuiWindow win, int x, int y, const char* text,
+int gui_draw_text_ex(&GuiWindow win, int x, int y, const &char text,
                       struct GuiColor color, int scale, const &GuiFont font) {
     int cx = x;
     unsigned long i = 0UL;
@@ -233,7 +233,7 @@ int gui_draw_text_ex(&GuiWindow win, int x, int y, const char* text,
     return cx - x;
 }
 
-int gui_text_width_ex(const char* text, int scale, const &GuiFont font) {
+int gui_text_width_ex(const &char text, int scale, const &GuiFont font) {
     unsigned long len = 0UL;
     int glyphW;
     unsafe {

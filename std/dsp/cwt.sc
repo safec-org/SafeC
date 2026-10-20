@@ -8,9 +8,9 @@
 
 namespace std {
 
-void cwt_morlet(const double* signal, unsigned long signalLen,
-                 const double* scales, unsigned long numScales,
-                 double w0, struct Complex* out) {
+void cwt_morlet(const &double signal, unsigned long signalLen,
+                 const &double scales, unsigned long numScales,
+                 double w0, &Complex out) {
     double normConst = pow_d(SAFEC_DSP_PI_CWT, 0.0 - 0.25);
 
     unsigned long si = 0UL;

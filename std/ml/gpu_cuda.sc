@@ -165,7 +165,7 @@ static int __cuda_run_unary_kernel(const char* ptxSrc, const char* kernelName,
     }
 }
 
-int cuda_add_f32(const float* a, const float* b, float* out, unsigned long n) {
+int cuda_add_f32(const &float a, const &float b, &float out, unsigned long n) {
     const char* ptxSrc =
         ".version 7.0\n"
         ".target sm_50\n"
@@ -207,7 +207,7 @@ int cuda_add_f32(const float* a, const float* b, float* out, unsigned long n) {
     return __cuda_run_binary_kernel(ptxSrc, "add_kernel", a, b, out, n);
 }
 
-int cuda_sub_f32(const float* a, const float* b, float* out, unsigned long n) {
+int cuda_sub_f32(const &float a, const &float b, &float out, unsigned long n) {
     const char* ptxSrc =
         ".version 7.0\n"
         ".target sm_50\n"
@@ -249,7 +249,7 @@ int cuda_sub_f32(const float* a, const float* b, float* out, unsigned long n) {
     return __cuda_run_binary_kernel(ptxSrc, "sub_kernel", a, b, out, n);
 }
 
-int cuda_mul_f32(const float* a, const float* b, float* out, unsigned long n) {
+int cuda_mul_f32(const &float a, const &float b, &float out, unsigned long n) {
     const char* ptxSrc =
         ".version 7.0\n"
         ".target sm_50\n"
@@ -291,7 +291,7 @@ int cuda_mul_f32(const float* a, const float* b, float* out, unsigned long n) {
     return __cuda_run_binary_kernel(ptxSrc, "mul_kernel", a, b, out, n);
 }
 
-int cuda_div_f32(const float* a, const float* b, float* out, unsigned long n) {
+int cuda_div_f32(const &float a, const &float b, &float out, unsigned long n) {
     const char* ptxSrc =
         ".version 7.0\n"
         ".target sm_50\n"
@@ -341,7 +341,7 @@ int cuda_div_f32(const float* a, const float* b, float* out, unsigned long n) {
 // Metal's native pow() and is more precise -- this one is intentionally
 // the cheaper approximate-instruction version, not a claim of equal
 // accuracy).
-int cuda_pow_f32(const float* a, const float* b, float* out, unsigned long n) {
+int cuda_pow_f32(const &float a, const &float b, &float out, unsigned long n) {
     const char* ptxSrc =
         ".version 7.0\n"
         ".target sm_50\n"
@@ -385,7 +385,7 @@ int cuda_pow_f32(const float* a, const float* b, float* out, unsigned long n) {
     return __cuda_run_binary_kernel(ptxSrc, "pow_kernel", a, b, out, n);
 }
 
-int cuda_relu_f32(const float* a, float* out, unsigned long n) {
+int cuda_relu_f32(const &float a, &float out, unsigned long n) {
     const char* ptxSrc =
         ".version 7.0\n"
         ".target sm_50\n"
@@ -422,7 +422,7 @@ int cuda_relu_f32(const float* a, float* out, unsigned long n) {
     return __cuda_run_unary_kernel(ptxSrc, "relu_kernel", a, out, n);
 }
 
-int cuda_sqrt_f32(const float* a, float* out, unsigned long n) {
+int cuda_sqrt_f32(const &float a, &float out, unsigned long n) {
     const char* ptxSrc =
         ".version 7.0\n"
         ".target sm_50\n"
@@ -464,7 +464,7 @@ int cuda_sqrt_f32(const float* a, float* out, unsigned long n) {
 // ln(2). 0f3F317218 is ln(2) (0.69314718...) as an IEEE-754 float32 hex
 // literal, the standard constant real compilers embed for exactly this
 // decomposition.
-int cuda_log_f32(const float* a, float* out, unsigned long n) {
+int cuda_log_f32(const &float a, &float out, unsigned long n) {
     const char* ptxSrc =
         ".version 7.0\n"
         ".target sm_50\n"
@@ -506,7 +506,7 @@ int cuda_log_f32(const float* a, float* out, unsigned long n) {
 // native PTX 'ex' instruction -- after scaling by log2(e): e^x =
 // 2^(x*log2(e)). 0f3FB8AA3B is log2(e) (1.44269504...) as an IEEE-754
 // float32 hex literal, same standard-constant reasoning as cuda_log_f32.
-int cuda_exp_f32(const float* a, float* out, unsigned long n) {
+int cuda_exp_f32(const &float a, &float out, unsigned long n) {
     const char* ptxSrc =
         ".version 7.0\n"
         ".target sm_50\n"
@@ -547,7 +547,7 @@ int cuda_exp_f32(const float* a, float* out, unsigned long n) {
 // out[i] = a[i] * k for a runtime scalar k -- 4 params like the binary
 // kernels, but the 2nd param is a scalar f32 passed by value (.param .f32)
 // instead of a 2nd input buffer.
-int cuda_scale_f32(const float* a, float k, float* out, unsigned long n) {
+int cuda_scale_f32(const &float a, float k, &float out, unsigned long n) {
     const char* ptxSrc =
         ".version 7.0\n"
         ".target sm_50\n"
@@ -633,7 +633,7 @@ int cuda_scale_f32(const float* a, float k, float* out, unsigned long n) {
 // block 0 only; every other thread returns immediately), same "prove the
 // dispatch shape works, not a tuned parallel reduction" spirit as
 // mps_sum_f32.
-int cuda_sum_f32(const float* a, float* out, unsigned long n) {
+int cuda_sum_f32(const &float a, &float out, unsigned long n) {
     const char* ptxSrc =
         ".version 7.0\n"
         ".target sm_50\n"
@@ -718,7 +718,7 @@ int cuda_sum_f32(const float* a, float* out, unsigned long n) {
 // out[M,N] = a[M,K] . b[K,N] -- naive one-thread-per-output-element kernel
 // over a 2D grid (blockIdx/threadIdx.x -> column, .y -> row), no
 // threadgroup/shared-memory tiling, same tradeoff as mps_matmul_f32.
-int cuda_matmul_f32(const float* a, const float* b, float* out,
+int cuda_matmul_f32(const &float a, const &float b, &float out,
                      unsigned long M, unsigned long K, unsigned long N) {
     const char* ptxSrc =
         ".version 7.0\n"
@@ -857,7 +857,7 @@ int cuda_matmul_f32(const float* a, const float* b, float* out,
 // CUBLAS_OP_N since no operand is actually transposed, only reinterpreted.
 // (Same trick tensor_blas.sc's Accelerate path does NOT need, since
 // Apple's CBLAS accepts an explicit row-major order flag directly.)
-int cuda_matmul_f32_blas(const float* a, const float* b, float* out,
+int cuda_matmul_f32_blas(const &float a, const &float b, &float out,
                           unsigned long M, unsigned long K, unsigned long N) {
     unsafe {
         if (cuInit(0U) != CUDA_SUCCESS) return 0;
@@ -931,7 +931,7 @@ int cuda_persistent_available() {
     return __cuda_ensure_context();
 }
 
-void* cuda_upload_persistent(const float* data, unsigned long bytes) {
+?&void cuda_upload_persistent(const &float data, unsigned long bytes) {
     if (!__cuda_ensure_context()) return (void*)0;
     unsafe {
         unsigned long long devPtr = 0ULL;
@@ -944,11 +944,11 @@ void* cuda_upload_persistent(const float* data, unsigned long bytes) {
     }
 }
 
-void cuda_release_persistent(void* devPtr) {
+void cuda_release_persistent(&void devPtr) {
     unsafe { cuMemFree_v2((unsigned long long)(unsigned long)devPtr); }
 }
 
-int cuda_matmul_f32_persistent(void* devA, void* devB, float* out,
+int cuda_matmul_f32_persistent(&void devA, &void devB, &float out,
                                 unsigned long M, unsigned long K, unsigned long N) {
     if (!__cuda_ensure_context()) return 0;
     // Same naive one-thread-per-output-element kernel as cuda_matmul_f32
@@ -1062,7 +1062,7 @@ int cuda_matmul_f32_persistent(void* devA, void* devB, float* out,
 // w[i] -= lr*grad[i], in place. fma.rn.f32 computes d = a*b+c, so this
 // negates lr once (neg.f32) and folds the update into a single
 // fused-multiply-add: w_new = grad*(-lr) + w.
-int cuda_sgd_update_f32(void* devW, void* devGrad, float lr, unsigned long n) {
+int cuda_sgd_update_f32(&void devW, &void devGrad, float lr, unsigned long n) {
     if (!__cuda_ensure_context()) return 0;
     const char* ptxSrc =
         ".version 7.0\n"
@@ -1133,7 +1133,7 @@ extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
 // ── fp16 / bf16 tier (see gpu_cuda.h) ────────────────────────────────────────
-void* cuda_upload_f16_persistent(const float* data, unsigned long n) {
+?&void cuda_upload_f16_persistent(const &float data, unsigned long n) {
     unsafe {
         unsigned short* tmp = (unsigned short*)malloc(n * 2UL);
         if (tmp == (void*)0) return (void*)0;
@@ -1144,7 +1144,7 @@ void* cuda_upload_f16_persistent(const float* data, unsigned long n) {
     }
 }
 
-void* cuda_upload_bf16_persistent(const float* data, unsigned long n) {
+?&void cuda_upload_bf16_persistent(const &float data, unsigned long n) {
     unsafe {
         unsigned short* tmp = (unsigned short*)malloc(n * 2UL);
         if (tmp == (void*)0) return (void*)0;
@@ -1168,7 +1168,7 @@ static void* __cuda_sgd_bf16_kernel_ = (void*)0;
 // half/compute-float split gpu_mps_kernels.metal's matmul_kernel_f16
 // uses. Targets sm_60 (Pascal+): PTX's f16 storage/cvt instructions need
 // real f16 hardware datapaths, unlike this file's f32 kernels' sm_50.
-int cuda_matmul_f16_persistent(void* devA, void* devB, unsigned short* out,
+int cuda_matmul_f16_persistent(&void devA, &void devB, &unsigned short out,
                                 unsigned long M, unsigned long K, unsigned long N) {
     if (!__cuda_ensure_context()) return 0;
     const char* ptxSrc =
@@ -1285,7 +1285,7 @@ int cuda_matmul_f16_persistent(void* devA, void* devB, unsigned short* out,
 // instructions need PTX ISA 7.8, hence the '.version 7.8' bump too
 // (every other kernel in this file, including matmul_kernel_f16 above,
 // only needs 7.0).
-int cuda_matmul_bf16_persistent(void* devA, void* devB, unsigned short* out,
+int cuda_matmul_bf16_persistent(&void devA, &void devB, &unsigned short out,
                                  unsigned long M, unsigned long K, unsigned long N) {
     if (!__cuda_ensure_context()) return 0;
     const char* ptxSrc =
@@ -1398,7 +1398,7 @@ int cuda_matmul_bf16_persistent(void* devA, void* devB, unsigned short* out,
 // w[i] -= lr*grad[i], in place, fp16 storage -- same cvt.f32.f16/
 // cvt.rn.f16.f32 promote-compute-demote shape as the matmul kernel above,
 // applied to cuda_sgd_update_f32's fused-multiply-add structure.
-int cuda_sgd_update_f16(void* devW, void* devGrad, float lr, unsigned long n) {
+int cuda_sgd_update_f16(&void devW, &void devGrad, float lr, unsigned long n) {
     if (!__cuda_ensure_context()) return 0;
     const char* ptxSrc =
         ".version 7.0\n"
@@ -1471,7 +1471,7 @@ int cuda_sgd_update_f16(void* devW, void* devGrad, float lr, unsigned long n) {
 
 // Same shape as cuda_sgd_update_f16, '.bf16' storage, sm_80/PTX 7.8 (see
 // cuda_matmul_bf16_persistent's comment).
-int cuda_sgd_update_bf16(void* devW, void* devGrad, float lr, unsigned long n) {
+int cuda_sgd_update_bf16(&void devW, &void devGrad, float lr, unsigned long n) {
     if (!__cuda_ensure_context()) return 0;
     const char* ptxSrc =
         ".version 7.8\n"

@@ -8,6 +8,7 @@
 // attention.h's header comment). Scope notes on each section below.
 #include <std/ml/tensor.h>
 #include <std/ml/attention.h>
+#include <std/collections/slice.h>
 
 namespace std {
 
@@ -31,11 +32,11 @@ namespace std {
 // Group g owns WukGroups[g]/WuvGroups[g] ([dLatent, groupDim], groupDim
 // = dModel/numGroups) and runs 'headsPerGroup' ordinary attention heads
 // over its own up-projected K/V slice; results are concatenated back
-// into one [seqLen, dModel] tensor. WukGroups/WuvGroups are numGroups-
-// length C arrays of Tensor pointers (caller-owned).
+// into one [seqLen, dModel] tensor. WukGroups/WuvGroups hold one tensor
+// per group (caller-owned); their length is the group count and must match.
 &Tensor eg_mla_forward(const &Tensor X, const &Tensor Wq, const &Tensor Wdkv,
-                        struct Tensor** WukGroups, struct Tensor** WuvGroups,
-                        unsigned long numGroups, unsigned long headsPerGroup);
+                        struct Slice<&Tensor> WukGroups, struct Slice<&Tensor> WuvGroups,
+                        unsigned long headsPerGroup);
 
 // ── Shifted-Window attention (Swin, adapted to 1D sequences) ────────────────
 // Swin's two core ideas — partition into fixed-size local windows and

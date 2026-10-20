@@ -75,39 +75,39 @@ void pb_write_float_field(&String out, int field_num, float v);
 // Length-delimited: string, bytes, or an embedded/nested message's own
 // already-encoded bytes (encode the submessage with its own to_proto()
 // first, then pass the result here).
-void pb_write_string_field(&String out, int field_num, const char* s);
+void pb_write_string_field(&String out, int field_num, const &char s);
 void pb_write_bytes_field(&String out, int field_num,
-                           const unsigned char* data, unsigned long len);
+                           const &unsigned char data, unsigned long len);
 
 // ── Reader ────────────────────────────────────────────────────────────────
 // A zero-copy cursor over an existing byte buffer — pb_read_length_delimited
 // returns a pointer *into* that same buffer (valid only as long as it is).
 
 struct PbReader {
-    const unsigned char* data;
+    const &unsigned char data;
     unsigned long        len;
     unsigned long        pos;
 };
 
-struct PbReader pb_reader_new(const unsigned char* data, unsigned long len);
+struct PbReader pb_reader_new(const &unsigned char data, unsigned long len);
 int pb_reader_has_more(const &PbReader r);
 
 // Each returns 1 on success, 0 on a truncated/malformed encoding (ran out
 // of bytes mid-varint, length-delimited field's declared length exceeds
 // the remaining buffer, etc.).
-int pb_read_varint(&PbReader r, unsigned long long* out);
-int pb_read_tag(&PbReader r, int* field_num, int* wire_type);
-int pb_read_int64(&PbReader r, long long* out);
-int pb_read_uint64(&PbReader r, unsigned long long* out);
-int pb_read_sint64(&PbReader r, long long* out);
-int pb_read_bool(&PbReader r, int* out);
-int pb_read_double(&PbReader r, double* out);
-int pb_read_float(&PbReader r, float* out);
+int pb_read_varint(&PbReader r, &unsigned long long out);
+int pb_read_tag(&PbReader r, &int field_num, &int wire_type);
+int pb_read_int64(&PbReader r, &long long out);
+int pb_read_uint64(&PbReader r, &unsigned long long out);
+int pb_read_sint64(&PbReader r, &long long out);
+int pb_read_bool(&PbReader r, &int out);
+int pb_read_double(&PbReader r, &double out);
+int pb_read_float(&PbReader r, &float out);
 // '*dataOut' aliases into the reader's own buffer (see the zero-copy note
 // above) — copy it out (e.g. via string_from_n) if it needs to outlive
 // that buffer.
-int pb_read_length_delimited(&PbReader r, const unsigned char** dataOut,
-                              unsigned long* lenOut);
+int pb_read_length_delimited(&PbReader r, &&const unsigned char dataOut,
+                              &unsigned long lenOut);
 
 // Advances past one field's value without decoding it, given its wire
 // type from a just-read tag — the standard "ignore fields I don't

@@ -65,7 +65,7 @@ generic<N>
         if (self.bump_left == 0UL) {
             unsigned long count = self.next_chunk;
             unsigned long bytes = checked_add_size(NODE_POOL_CHUNK_HDR, checked_mul_size(count, sizeof(N)));
-            unsigned char* c = (unsigned char*)alloc(bytes);
+            unsigned char* c = (unsigned char*)alloc_raw_(bytes);
             if (c == (unsigned char*)0) return null;
             void* prevChunk = (void*)self.chunks;
             memcpy((void*)c, (const void*)&prevChunk, (size_t)sizeof(void*));
@@ -98,7 +98,7 @@ void NodePool::free_all() {
             void* nextRaw = (void*)0;
             memcpy((void*)&nextRaw, (const void*)c, (size_t)sizeof(void*));
             unsigned char* next = (unsigned char*)nextRaw;
-            dealloc((void*)c);
+            dealloc_raw_((void*)c);
             c = next;
         }
     }

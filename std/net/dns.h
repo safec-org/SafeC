@@ -17,7 +17,7 @@ unsigned short dns_query(&stack PacketBuf pkt,
                          const unsigned char eth_dst[NET_MAC_LEN],
                          unsigned int ip_src, unsigned int ip_dns,
                          unsigned short src_port,
-                         const char* name,
+                         const &char name,
                          unsigned short txid);
 
 // Parse a DNS reply in pkt (starting at UDP payload offset).

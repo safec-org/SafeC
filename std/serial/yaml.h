@@ -35,6 +35,6 @@ struct String value_to_yaml(const &Value v);
 // a line that's neither a valid sequence/mapping entry nor a bare scalar
 // where one is expected), '*ok' is set to 0 and the return value is
 // whatever was parsed before the error.
-struct Value yaml_parse(const char* text, int* ok);
+struct Value yaml_parse(const &char text, ?&int ok);
 
 } // namespace std

@@ -289,7 +289,7 @@ static void bt_visit(unsigned long k, &int v) {
 }
 
 void t_btree() {
-    ?&BTree<int> tq = alloc(sizeof(struct BTree<int>));
+    ?&heap BTree<int> tq = alloc(sizeof(struct BTree<int>));
     ASSERT_FALSE(tq.is_null());
     if (tq.is_null()) return;
     &BTree<int> t = std::expect_ref(tq, "tq is null");
@@ -323,7 +323,7 @@ void t_btree() {
         round = round + 1;
     }
     ASSERT_EQ(t.get((7UL * 7919UL) % 1000UL).default(-1), 7);
-    unsafe { dealloc((void*)t); }
+    dealloc(tq);
 }
 
 static unsigned char ring_storage[16];

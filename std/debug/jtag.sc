@@ -42,7 +42,7 @@ inline void debug_break() {
 // On AArch64 the semihosting HLT #0xF000 is used.
 // x86-64 and RISC-V have no standard semihosting — no-op.
 
-void debug_semihost_puts(const char* s) {
+void debug_semihost_puts(const &char s) {
 #if defined(__arm__) || defined(__thumb__)
     unsafe {
         // Cortex-M semihosting: r0=4 (SYS_WRITE0), r1=s.

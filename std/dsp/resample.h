@@ -25,9 +25,9 @@
 
 namespace std {
 
-void resample_nearest(const double* in, unsigned long inLen, double* out, unsigned long outLen);
-void resample_linear(const double* in, unsigned long inLen, double* out, unsigned long outLen);
-void resample_sinc(const double* in, unsigned long inLen, double* out, unsigned long outLen,
+void resample_nearest(const &double in, unsigned long inLen, &double out, unsigned long outLen);
+void resample_linear(const &double in, unsigned long inLen, &double out, unsigned long outLen);
+void resample_sinc(const &double in, unsigned long inLen, &double out, unsigned long outLen,
                     unsigned long kernelHalfWidth);
 
 // Fixed-point nearest/linear (straightforward, no transcendentals in the
@@ -38,7 +38,7 @@ void resample_sinc(const double* in, unsigned long inLen, double* out, unsigned 
 // not just fixed design-time coefficients — so there's no fixed sinc
 // variant, matching the same "if available" scoping used for
 // dsp_dot_f64/SIMD in dsp.h.
-void fresample_nearest(const Fixed* in, unsigned long inLen, Fixed* out, unsigned long outLen);
-void fresample_linear(const Fixed* in, unsigned long inLen, Fixed* out, unsigned long outLen);
+void fresample_nearest(const &Fixed in, unsigned long inLen, &Fixed out, unsigned long outLen);
+void fresample_linear(const &Fixed in, unsigned long inLen, &Fixed out, unsigned long outLen);
 
 } // namespace std

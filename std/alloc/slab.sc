@@ -105,7 +105,8 @@ inline struct SlabAllocator slab_new(unsigned long obj_size, unsigned long count
     }
 }
 
-void SlabAllocator::dealloc(void* ptr) {
+void SlabAllocator::dealloc(?&heap void ptr_ref) {
+    void* ptr = ptr_ref;
     if (ptr == (void*)0) { return; }
     unsafe {
         if (self.has_tags) {

@@ -122,7 +122,7 @@ static int parse_dotted_quad_(const char* host, unsigned int* addr_out) {
     return 1;
 }
 
-int http_resolve_host(const char* host, unsigned int* addr_out) {
+int http_resolve_host(const &char host, &unsigned int addr_out) {
     if (parse_dotted_quad_(host, addr_out)) { return 1; }
 
     void* hePtr;
@@ -155,14 +155,14 @@ int http_resolve_host(const char* host, unsigned int* addr_out) {
 // byte offset (into 'out') right after the terminator on success, or -1 if
 // the connection closed before the terminator appeared.
 static long read_until_(int fd, struct String* out, const char* terminator) {
-    unsigned long termLen = str_len(terminator);
+    unsigned long termLen; unsafe { termLen = str_len(terminator); }
     char chunk[512];
     while (1) {
         long n;
         unsafe { n = sock_read_(fd, (void*)chunk, 512UL); }
         if (n <= 0L) { return -1L; }
         unsafe { out->push_n(chunk, (unsigned long)n); }
-        long idx = out->index_of(terminator);
+        long idx; unsafe { idx = out->index_of(terminator); }
         if (idx >= 0L) { return idx + (long)termLen; }
     }
 }
@@ -309,7 +309,7 @@ static struct String http_render_response_(&HttpResponse resp) {
 
 // ── Response building (server side) ───────────────────────────────────────
 
-const char* http_reason_phrase(int status) {
+const &char http_reason_phrase(int status) {
     if (status == 200) { return "OK"; }
     if (status == 201) { return "Created"; }
     if (status == 202) { return "Accepted"; }
@@ -332,8 +332,8 @@ const char* http_reason_phrase(int status) {
     return "Unknown";
 }
 
-struct String http_build_response(int status, const char* content_type,
-                                   const unsigned char* body, unsigned long body_len) {
+struct String http_build_response(int status, const &char content_type,
+                                   const ?&unsigned char body, unsigned long body_len) {
     const char* ctype;
     if (content_type) { ctype = content_type; } else { ctype = "text/plain"; }
     struct String out = string_new();
@@ -354,11 +354,11 @@ struct String http_build_response(int status, const char* content_type,
 
 // ── Client ────────────────────────────────────────────────────────────────
 
-struct HttpResponse http_request(const char* host, unsigned short port,
-                                  const char* method, const char* path,
-                                  const char* extra_headers,
-                                  const unsigned char* body, unsigned long body_len,
-                                  int* ok) {
+struct HttpResponse http_request(const &char host, unsigned short port,
+                                  const &char method, const &char path,
+                                  const ?&char extra_headers,
+                                  const ?&unsigned char body, unsigned long body_len,
+                                  ?&int ok) {
     struct HttpResponse resp;
     resp.status  = 0;
     resp.headers = string_new();
@@ -390,7 +390,7 @@ struct HttpResponse http_request(const char* host, unsigned short port,
             req.push(" HTTP/1.1\r\nHost: ");
             req.push(host);
             req.push("\r\nConnection: close\r\n");
-            if (extra_headers != (const char*)0) { req.push(extra_headers); }
+            match (extra_headers) { case some(h): { req.push(h); } case null: { } }
             if (body_len > 0UL) {
                 req.push("Content-Length: ");
                 req.push_uint((unsigned long long)body_len);
@@ -461,16 +461,16 @@ struct HttpResponse http_request(const char* host, unsigned short port,
     return resp;
 }
 
-struct HttpResponse http_get(const char* host, unsigned short port,
-                              const char* path, int* ok) {
-    return http_request(host, port, "GET", path, (const char*)0,
-                         (const unsigned char*)0, 0UL, ok);
+struct HttpResponse http_get(const &char host, unsigned short port,
+                              const &char path, ?&int ok) {
+    return http_request(host, port, "GET", path, null,
+                         null, 0UL, ok);
 }
 
-struct HttpResponse http_post(const char* host, unsigned short port, const char* path,
-                               const char* content_type,
-                               const unsigned char* body, unsigned long body_len,
-                               int* ok) {
+struct HttpResponse http_post(const &char host, unsigned short port, const &char path,
+                               const &char content_type,
+                               const ?&unsigned char body, unsigned long body_len,
+                               ?&int ok) {
     const char* ctype;
     if (content_type) { ctype = content_type; } else { ctype = "application/octet-stream"; }
     struct String hdr = string_new();

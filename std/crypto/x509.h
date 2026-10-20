@@ -46,7 +46,7 @@ struct X509Cert {
     int  is_valid_at(unsigned long long ts) const;
 
     // Does a Subject Alternative Name match `hostname`?
-    int  matches_hostname(const char* hostname) const;
+    int  matches_hostname(const &char hostname) const;
 
     // Is this a CA certificate?
     int  is_ca_cert() const;
@@ -54,7 +54,7 @@ struct X509Cert {
 
 // Parse a DER-encoded certificate from `der` (len bytes).
 // Fills `cert_out` on success.  Returns 0 on success, negative on error.
-int x509_parse_der(const unsigned char* der, unsigned long len,
+int x509_parse_der(const &unsigned char der, unsigned long len,
                    &stack X509Cert cert_out);
 
 // Verify that `cert` was signed by `issuer_cert` (structural chain check only).

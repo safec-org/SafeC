@@ -35,7 +35,7 @@ static void cm_write32_(unsigned long addr, unsigned int val) {
 
 
 inline void nvic_init() {
-    unsafe { nvic.base = (void*)NVIC_BASE; }
+    unsafe { nvic.base = (&volatile unsigned int)NVIC_BASE; }
 }
 
 inline void Nvic::enable(unsigned int irq) {
@@ -84,7 +84,7 @@ inline unsigned char Nvic::get_priority(unsigned int irq) const {
 
 
 inline void systick_init() {
-    unsafe { systick.base = (void*)SYSTICK_BASE; }
+    unsafe { systick.base = (&volatile unsigned int)SYSTICK_BASE; }
 }
 
 inline void SysTick::start(unsigned int reload, int use_core_clock) {
@@ -116,7 +116,7 @@ inline int SysTick::flag_set() const {
 
 
 inline void scb_init() {
-    unsafe { scb.base = (void*)SCB_BASE; }
+    unsafe { scb.base = (&volatile unsigned int)SCB_BASE; }
 }
 
 inline void Scb::system_reset() {

@@ -10,7 +10,7 @@ namespace std {
 
 static &heap MdNode __md_new(int kind) {
     &heap MdNode n;
-    unsafe { n = (struct MdNode*)alloc((unsigned long)sizeof(struct MdNode)); }
+    unsafe { n = (struct MdNode*)alloc_raw_((unsigned long)sizeof(struct MdNode)); }
     unsafe {
         n->kind = kind;
         n->level = 0;
@@ -233,7 +233,7 @@ static int __md_is_ordered_item(const char* line, unsigned long* markerLen) {
     return 0;
 }
 
-&heap MdNode md_parse(const char* text) {
+&heap MdNode md_parse(const &char text_ref) { const char* text = text_ref;
     &heap MdNode doc = __md_new(MD_DOC);
 
     // Split into lines.
@@ -280,7 +280,7 @@ static int __md_is_ordered_item(const char* line, unsigned long* markerLen) {
                     ci = ci + 1UL;
                 }
                 inline_->children.free();
-                dealloc((void*)inline_);
+                dealloc_raw_((void*)inline_);
             }
             __md_add_child(doc, h);
             li = li + 1UL;
@@ -334,7 +334,7 @@ static int __md_is_ordered_item(const char* line, unsigned long* markerLen) {
                     __md_add_child(para, slotp);
                     ci = ci + 1UL;
                 }
-                inl->children.free(); dealloc((void*)inl);
+                inl->children.free(); dealloc_raw_((void*)inl);
                 quote.free();
             }
             __md_add_child(bq, para);
@@ -367,7 +367,7 @@ static int __md_is_ordered_item(const char* line, unsigned long* markerLen) {
                         __md_add_child(item, slotp);
                         ci = ci + 1UL;
                     }
-                    inl2->children.free(); dealloc((void*)inl2);
+                    inl2->children.free(); dealloc_raw_((void*)inl2);
                 }
                 __md_add_child(list, item);
                 li = li + 1UL;
@@ -402,7 +402,7 @@ static int __md_is_ordered_item(const char* line, unsigned long* markerLen) {
                 __md_add_child(p, slotp);
                 ci = ci + 1UL;
             }
-            inl3->children.free(); dealloc((void*)inl3);
+            inl3->children.free(); dealloc_raw_((void*)inl3);
             para.free();
         }
         __md_add_child(doc, p);
@@ -691,7 +691,7 @@ void md_free(&heap MdNode node) {
     unsafe {
         node->children.free();
         node->text.free();
-        dealloc((void*)node);
+        dealloc_raw_((void*)node);
     }
 }
 

@@ -20,7 +20,7 @@ inline void coverage_init() {
     int i = 0;
     while (i < COV_MAX_SITES) {
         unsafe {
-            coverage.sites[i].file  = (const char*)0;
+            coverage.sites[i].file  = "";
             coverage.sites[i].line  = 0;
             coverage.sites[i].count = (unsigned long)0;
         }
@@ -30,7 +30,7 @@ inline void coverage_init() {
 
 // ── Coverage::register_site ───────────────────────────────────────────────────
 
-inline int Coverage::register_site(const char* file, int line) {
+inline int Coverage::register_site(const &char file, int line) {
     if (self.count >= COV_MAX_SITES) { return -1; }
     int idx = self.count;
     unsafe {

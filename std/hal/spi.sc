@@ -9,7 +9,7 @@
 
 namespace std {
 
-inline struct SpiDevice spi_init(void* base, int mode) {
+inline struct SpiDevice spi_init(&volatile unsigned int base, int mode) {
     struct SpiDevice s;
     s.base = base;
     s.mode = mode;
@@ -54,7 +54,7 @@ inline void SpiDevice::cs_deassert() {
     }
 }
 
-inline void SpiDevice::write(const unsigned char* tx, unsigned char* rx, unsigned long len) {
+inline void SpiDevice::write(const &unsigned char tx, &unsigned char rx, unsigned long len) {
     unsigned long i = (unsigned long)0;
     while (i < len) {
         unsafe {
@@ -65,7 +65,7 @@ inline void SpiDevice::write(const unsigned char* tx, unsigned char* rx, unsigne
     }
 }
 
-inline void SpiDevice::read(unsigned char* rx, unsigned long len) {
+inline void SpiDevice::read(&unsigned char rx, unsigned long len) {
     unsigned long i = (unsigned long)0;
     while (i < len) {
         unsafe { rx[i] = self.transfer((unsigned char)0xFF); }

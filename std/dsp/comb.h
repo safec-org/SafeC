@@ -23,7 +23,7 @@
 namespace std {
 
 struct CombFF {
-    double* history; // ring buffer, length 'delay'
+    &double history; // ring buffer, length 'delay'
     unsigned long delay;
     unsigned long pos;
     double gain;
@@ -33,7 +33,7 @@ struct CombFF {
 };
 
 struct CombFB {
-    double* history;
+    &double history;
     unsigned long delay;
     unsigned long pos;
     double gain;
@@ -43,7 +43,7 @@ struct CombFB {
 };
 
 struct KarplusStrong {
-    double* buffer; // ring buffer, length 'length' — doubles as the delay line and the pitch period
+    &double buffer; // ring buffer, length 'length' — doubles as the delay line and the pitch period
     unsigned long length;
     unsigned long pos;
     double damping; // 0..1; closer to 1 = slower decay (typical: 0.99-0.999)
@@ -52,15 +52,15 @@ struct KarplusStrong {
     // Refill the delay line with a new excitation (n samples copied in;
     // if n < length the remainder is left at its previous contents —
     // callers doing a fresh pluck should size the excitation to 'length').
-    void   reset(const double* excitation, unsigned long n);
+    void   reset(const &double excitation, unsigned long n);
 };
 
-struct CombFF comb_ff_init(double* history, unsigned long delay, double gain);
-struct CombFB comb_fb_init(double* history, unsigned long delay, double gain);
-struct KarplusStrong ks_init(double* buffer, unsigned long length, double damping);
+struct CombFF comb_ff_init(&double history, unsigned long delay, double gain);
+struct CombFB comb_fb_init(&double history, unsigned long delay, double gain);
+struct KarplusStrong ks_init(&double buffer, unsigned long length, double damping);
 
 struct FCombFF {
-    Fixed* history;
+    &Fixed history;
     unsigned long delay;
     unsigned long pos;
     Fixed gain;
@@ -70,7 +70,7 @@ struct FCombFF {
 };
 
 struct FCombFB {
-    Fixed* history;
+    &Fixed history;
     unsigned long delay;
     unsigned long pos;
     Fixed gain;
@@ -80,17 +80,17 @@ struct FCombFB {
 };
 
 struct FKarplusStrong {
-    Fixed* buffer;
+    &Fixed buffer;
     unsigned long length;
     unsigned long pos;
     Fixed damping;
 
     Fixed process();
-    void  reset(const Fixed* excitation, unsigned long n);
+    void  reset(const &Fixed excitation, unsigned long n);
 };
 
-struct FCombFF comb_ff_init_fixed(Fixed* history, unsigned long delay, Fixed gain);
-struct FCombFB comb_fb_init_fixed(Fixed* history, unsigned long delay, Fixed gain);
-struct FKarplusStrong ks_init_fixed(Fixed* buffer, unsigned long length, Fixed damping);
+struct FCombFF comb_ff_init_fixed(&Fixed history, unsigned long delay, Fixed gain);
+struct FCombFB comb_fb_init_fixed(&Fixed history, unsigned long delay, Fixed gain);
+struct FKarplusStrong ks_init_fixed(&Fixed buffer, unsigned long length, Fixed damping);
 
 } // namespace std

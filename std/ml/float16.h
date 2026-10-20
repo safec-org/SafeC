@@ -52,12 +52,12 @@ unsigned short f32_to_bf16(float v);
 float bf16_to_f32(unsigned short b);
 
 // Converts 'n' float32 values to fp16 in bulk -- src/dst may not overlap.
-void f32_to_fp16_bulk(const float* src, unsigned short* dst, unsigned long n);
+void f32_to_fp16_bulk(const &float src, &unsigned short dst, unsigned long n);
 // Converts 'n' fp16 values back to float32 in bulk.
-void fp16_to_f32_bulk(const unsigned short* src, float* dst, unsigned long n);
+void fp16_to_f32_bulk(const &unsigned short src, &float dst, unsigned long n);
 // Converts 'n' float32 values to bf16 in bulk.
-void f32_to_bf16_bulk(const float* src, unsigned short* dst, unsigned long n);
+void f32_to_bf16_bulk(const &float src, &unsigned short dst, unsigned long n);
 // Converts 'n' bf16 values back to float32 in bulk.
-void bf16_to_f32_bulk(const unsigned short* src, float* dst, unsigned long n);
+void bf16_to_f32_bulk(const &unsigned short src, &float dst, unsigned long n);
 
 } // namespace std

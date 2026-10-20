@@ -34,7 +34,7 @@ extern int unlink(const char* path);
 
 static int uds_fill_addr_(struct SockAddrUn* addr, const char* path) {
     unsafe { addr->sun_family = (unsigned short)SAFEC_AF_UNIX; }
-    unsigned long len = str_len(path);
+    unsigned long len; unsafe { len = str_len(path); }
     if (len > SAFEC_SUN_PATH_MAX - 1UL) {
         return -1; // path too long to fit sun_path + NUL
     }
@@ -58,7 +58,7 @@ static int uds_set_nonblocking_(int fd) {
     return rc;
 }
 
-inline int uds_listen_nb(const char* path) {
+inline int uds_listen_nb(const &char path) {
     int fd;
     unsafe { fd = socket(SAFEC_AF_UNIX, SAFEC_SOCK_STREAM, 0); }
     if (fd < 0) {
@@ -98,7 +98,7 @@ inline int uds_accept_nb(int listenfd) {
     return fd;
 }
 
-inline int uds_connect_nb(const char* path) {
+inline int uds_connect_nb(const &char path) {
     int fd;
     unsafe { fd = socket(SAFEC_AF_UNIX, SAFEC_SOCK_STREAM, 0); }
     if (fd < 0) {
@@ -117,7 +117,7 @@ inline int uds_connect_nb(const char* path) {
     return fd;
 }
 
-inline int uds_unlink(const char* path) {
+inline int uds_unlink(const &char path) {
     int rc;
     unsafe { rc = unlink(path); }
     return rc;

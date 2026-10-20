@@ -191,7 +191,7 @@ static struct Value csv_parse_row_(struct CsvCursor_* c) {
     return row;
 }
 
-struct Value csv_parse(const char* text, int* ok) {
+struct Value csv_parse(const &char text, ?&int ok) {
     struct Value rows = value_array();
     struct CsvCursor_ c;
     c.text = text;

@@ -14,7 +14,7 @@ struct SecureAllocator {
     &heap void alloc();
 
     // Zero and free an object slot.
-    void       dealloc(void* ptr);
+    void       dealloc(?&heap void ptr);
 
     // Return number of available slots.
     unsigned long available() const;

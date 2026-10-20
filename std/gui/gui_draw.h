@@ -31,13 +31,13 @@ void gui_draw_line(&GuiWindow win, int x0, int y0, int x1, int y1, struct GuiCol
 // 8*scale pixels (scale=1 -> 8x8, scale=2 -> 16x16, ...). Unsupported
 // codepoints (outside the printable-ASCII range the built-in font covers,
 // 0x20-0x7E) draw as a blank cell. Returns the total pixel width drawn.
-int gui_draw_text(&GuiWindow win, int x, int y, const char* text,
+int gui_draw_text(&GuiWindow win, int x, int y, const &char text,
                    struct GuiColor color, int scale);
 
 // Width/height in pixels 'text' would occupy if drawn at the given scale,
 // without actually drawing it — used by widgets to size themselves to
 // their label/text content.
-int gui_text_width(const char* text, int scale);
+int gui_text_width(const &char text, int scale);
 int gui_text_height(int scale);
 
 } // namespace std

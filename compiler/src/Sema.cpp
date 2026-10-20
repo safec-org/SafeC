@@ -5,6 +5,19 @@
 #include <cstdint>
 #include <algorithm>
 
+// 'dealloc(p)' / 'std::dealloc(p)' (the generic std/mem.h API) and its
+// type-erased 'dealloc_raw_' form (what malloc_defer desugars to) both free
+// a heap block; the UAF/double-free tracking treats them the same.
+static bool isDeallocCallName(const std::string &n) {
+    auto endsWith = [&](const char *suf) {
+        size_t k = std::char_traits<char>::length(suf);
+        return n.size() >= k && n.compare(n.size() - k, k, suf) == 0;
+    };
+    return n == "dealloc" || n == "dealloc_raw_" ||
+           endsWith("::dealloc") || endsWith("::dealloc_raw_");
+}
+
+
 namespace safec {
 
 bool typeMentionsGeneric(const TypePtr &ty);
@@ -1351,7 +1364,20 @@ void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
     }
     case StmtKind::Defer: {
         auto &ds = static_cast<DeferStmt &>(s);
+        // The body runs at scope exit, after every statement that follows
+        // it here — so a free or arena reset inside it must not stale
+        // references used later in the same scope ('defer std::dealloc(p);'
+        // then '*p = 1;' is the intended pattern, not a use-after-free).
+        // Check the body for its own errors, then drop its invalidations.
+        auto savedHeapGen    = heapFreeGeneration_;
+        auto savedRegionGen  = regionGeneration_;
+        auto savedMarkDepth  = regionMarkDepth_;
+        auto savedScratchGen = regionScratchGeneration_;
         if (ds.body) checkStmt(*ds.body, fn);
+        heapFreeGeneration_      = std::move(savedHeapGen);
+        regionGeneration_        = std::move(savedRegionGen);
+        regionMarkDepth_         = std::move(savedMarkDepth);
+        regionScratchGeneration_ = std::move(savedScratchGen);
         break;
     }
     case StmtKind::Match: {
@@ -1594,9 +1620,7 @@ static void collectArenaResetRegions(const Expr *e, ArenaLoopScan &out) {
                 out.resetRegions.insert(ident.name.substr(kDestroyPrefix.size()));
             } else if (ident.name.rfind(kFreeToPrefix, 0) == 0) {
                 out.freeToRegions.insert(ident.name.substr(kFreeToPrefix.size()));
-            } else if ((ident.name == "dealloc" ||
-                        (ident.name.size() > 9 &&
-                         ident.name.compare(ident.name.size() - 9, 9, "::dealloc") == 0)) &&
+            } else if (isDeallocCallName(ident.name) &&
                        ce.args.size() == 1 && ce.args[0] &&
                        ce.args[0]->kind == ExprKind::Ident) {
                 out.heapFreeVarNames.insert(static_cast<const IdentExpr &>(*ce.args[0]).name);
@@ -3095,9 +3119,7 @@ TypePtr Sema::checkCall(CallExpr &e) {
         // normal argument-checking pass's staleness check still fires —
         // this is exactly what turns a second 'dealloc(p)' into a
         // detected double-free instead of a silently-suppressed no-op.
-        if ((ident.name == "dealloc" ||
-             (ident.name.size() > 9 &&
-              ident.name.compare(ident.name.size() - 9, 9, "::dealloc") == 0)) &&
+        if (isDeallocCallName(ident.name) &&
             e.args.size() == 1 && e.args[0] &&
             e.args[0]->kind == ExprKind::Ident) {
             auto &argIdent = static_cast<IdentExpr &>(*e.args[0]);

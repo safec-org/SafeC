@@ -28,7 +28,7 @@ struct VfsNode {
     int           type;             // VFS_TYPE_FILE / VFS_TYPE_DIR
     unsigned long size;             // file size in bytes (0 for dirs)
     unsigned long inode;            // driver-specific inode number
-    void*         fs_ctx;           // pointer back to mounted filesystem
+    ?&void        fs_ctx;           // driver-internal: the owning VfsMount
 
     // Read `len` bytes from file at `offset` into `buf`.  Returns bytes read.
     unsigned long read(unsigned long offset, &stack unsigned char buf, unsigned long len);
@@ -43,16 +43,17 @@ struct VfsNode {
 // Driver interface: filled by each filesystem.
 struct VfsOps {
     // Mount from a raw byte buffer (e.g. RAM disk) or opaque driver handle.
-    fn int(void* ctx, unsigned long size) mount;
-    fn int(void* ctx) unmount;
-    fn int(void* ctx, const char* path, int flags, &stack VfsNode node_out) open;
-    fn int(void* ctx, const char* path) unlink;
-    fn int(void* ctx, const char* path) mkdir;
-    fn unsigned long(void* ctx, unsigned long inode, unsigned long off,
-                      unsigned char* buf, unsigned long len) read;
-    fn unsigned long(void* ctx, unsigned long inode, unsigned long off,
-                      const unsigned char* buf, unsigned long len) write;
-    fn int(void* ctx, unsigned long inode, void* cb, void* user) readdir;
+    fn int(?&void ctx, unsigned long size) mount;
+    fn int(?&void ctx) unmount;
+    fn int(?&void ctx, const &char path, int flags, &stack VfsNode node_out) open;
+    fn int(?&void ctx, const &char path) unlink;
+    fn int(?&void ctx, const &char path) mkdir;
+    fn unsigned long(?&void ctx, unsigned long inode, unsigned long off,
+                      &unsigned char buf, unsigned long len) read;
+    fn unsigned long(?&void ctx, unsigned long inode, unsigned long off,
+                      const &unsigned char buf, unsigned long len) write;
+    fn int(?&void ctx, unsigned long inode,
+           fn void(&VfsNode, ?&void) cb, ?&void user) readdir;
 };
 
 struct VfsMount {
@@ -70,16 +71,16 @@ struct Vfs {
     int  mount_raw_(const char* mountpoint, struct VfsOps ops, void* ctx);
 
     // Unmount filesystem at `mountpoint`.
-    int  unmount(const char* mountpoint);
+    int  unmount(const &char mountpoint);
 
     // Open path; fills `node_out`.  Returns 0 on success.
-    int  open(const char* path, int flags, &stack VfsNode node_out);
+    int  open(const &char path, int flags, &stack VfsNode node_out);
 
     // Remove a file.
-    int  unlink(const char* path);
+    int  unlink(const &char path);
 
     // Create a directory.
-    int  mkdir(const char* path);
+    int  mkdir(const &char path);
 };
 
 // Global VFS instance (single-root for embedded use).
@@ -89,7 +90,7 @@ void vfs_init();
 // Register a filesystem at `mountpoint` (e.g. "/" or "/tmp"); ctx is the
 // driver context its ops expect (TmpFs, FatCtx, Ext2Ctx, ...).
 generic<T>
-int vfs_mount(&Vfs v, const char* mountpoint, struct VfsOps ops, &T ctx) {
+int vfs_mount(&Vfs v, const &char mountpoint, struct VfsOps ops, &T ctx) {
     unsafe { return v.mount_raw_(mountpoint, ops, (void*)ctx); }
 }
 

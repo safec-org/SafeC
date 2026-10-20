@@ -74,7 +74,7 @@ inline void Tensor::free() {
     return t;
 }
 
-&Tensor tensor_from_1d(const float* values, unsigned long n, int requiresGrad) {
+&Tensor tensor_from_1d(const &float values, unsigned long n, int requiresGrad) {
     &Tensor t = tensor_new_1d(n, requiresGrad);
     unsafe {
         unsigned long i = 0UL;
@@ -83,7 +83,7 @@ inline void Tensor::free() {
     return t;
 }
 
-&Tensor tensor_from_2d(const float* values, unsigned long rows, unsigned long cols, int requiresGrad) {
+&Tensor tensor_from_2d(const &float values, unsigned long rows, unsigned long cols, int requiresGrad) {
     &Tensor t = tensor_new_2d(rows, cols, requiresGrad);
     unsigned long total = rows * cols;
     unsafe {

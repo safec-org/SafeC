@@ -8,9 +8,9 @@
 
 namespace std {
 
-void minimum_phase(const double* x, unsigned long n, unsigned long fftLen, double* outMinPhase) {
+void minimum_phase(const &double x, unsigned long n, unsigned long fftLen, &double outMinPhase) {
     struct Complex* spec;
-    unsafe { spec = (struct Complex*)alloc(fftLen * (unsigned long)sizeof(struct Complex)); }
+    unsafe { spec = (struct Complex*)alloc_raw_(fftLen * (unsigned long)sizeof(struct Complex)); }
 
     unsigned long i = 0UL;
     while (i < fftLen) {
@@ -21,7 +21,7 @@ void minimum_phase(const double* x, unsigned long n, unsigned long fftLen, doubl
         unsafe { spec[i] = complex_new(v, 0.0); }
         i = i + 1UL;
     }
-    fft(spec, fftLen);
+    unsafe { fft(spec, fftLen); }
 
     // Log-magnitude spectrum, in place.
     i = 0UL;
@@ -35,7 +35,7 @@ void minimum_phase(const double* x, unsigned long n, unsigned long fftLen, doubl
     }
 
     // Real cepstrum = IFFT(log-magnitude), in place.
-    ifft(spec, fftLen);
+    unsafe { ifft(spec, fftLen); }
 
     // Homomorphic ("minimum-phase") window: fold the anti-causal half of
     // the cepstrum onto the causal half by doubling it, and zero the
@@ -60,7 +60,7 @@ void minimum_phase(const double* x, unsigned long n, unsigned long fftLen, doubl
         i = i + 1UL;
     }
 
-    fft(spec, fftLen);
+    unsafe { fft(spec, fftLen); }
 
     // Exponentiate the (now complex) cepstrum spectrum back into the
     // minimum-phase spectrum: exp(a+bi) = e^a * (cos(b) + i*sin(b)).
@@ -76,7 +76,7 @@ void minimum_phase(const double* x, unsigned long n, unsigned long fftLen, doubl
         i = i + 1UL;
     }
 
-    ifft(spec, fftLen);
+    unsafe { ifft(spec, fftLen); }
     i = 0UL;
     while (i < fftLen) {
         struct Complex wi;
@@ -87,7 +87,7 @@ void minimum_phase(const double* x, unsigned long n, unsigned long fftLen, doubl
         i = i + 1UL;
     }
 
-    unsafe { dealloc((void*)spec); }
+    unsafe { dealloc_raw_((void*)spec); }
 }
 
 } // namespace std

@@ -123,8 +123,8 @@ void t_pool() {
         safe_memset(a, 1, 100UL);
         safe_memset(b, 2, 200UL);
         ASSERT_EQ(a[99], 1);
-        p.dealloc(a);
-        p.dealloc(b);
+        p.dealloc((?&heap void)aq);
+        p.dealloc((?&heap void)bq);
         ASSERT_EQ(p.available(), before);   // coalesced back
         ?&heap void huge = p.alloc(1000000UL);
         ASSERT_TRUE(huge.is_null());
@@ -140,7 +140,7 @@ void t_tlsf() {
         while (i < 64) {
             ptrs[i] = (?&heap unsigned char)t.alloc((unsigned long)(16 + i * 13));
             if (ptrs[i].is_null()) break;
-            safe_memset(ptrs[i], i, (unsigned long)(16 + i * 13));
+            safe_memset(std::expect_ref(ptrs[i], "tlsf"), i, (unsigned long)(16 + i * 13));
             i = i + 1;
         }
         ASSERT_EQ(i, 64);
@@ -363,8 +363,8 @@ static int counting_task(?&int arg, int resume) {
 
 void t_tasks() {
     unsafe {
-        ?&TaskScheduler sq = alloc(sizeof(struct TaskScheduler));
-        ?&ThreadSched tsq = alloc(sizeof(struct ThreadSched));
+        ?&heap TaskScheduler sq = alloc(sizeof(struct TaskScheduler));
+        ?&heap ThreadSched tsq = alloc(sizeof(struct ThreadSched));
         ASSERT_FALSE(sq.is_null());
         ASSERT_FALSE(tsq.is_null());
         if (sq.is_null() || tsq.is_null()) return;
@@ -375,7 +375,7 @@ void t_tasks() {
         s.run_all();
         ASSERT_EQ(g_task_hits, 8);
         ASSERT_EQ(s.active_count(), 0);
-        dealloc(s);
+        dealloc(sq);
 
         g_task_hits = 0;
         &ThreadSched ts = std::expect_ref(tsq, "tsq is null");
@@ -386,7 +386,7 @@ void t_tasks() {
         ASSERT_FALSE(ts.is_active(a));
         ts.run_all();
         ASSERT_EQ(g_task_hits, 8);
-        dealloc(ts);
+        dealloc(tsq);
     }
 }
 
@@ -468,7 +468,7 @@ static void fuzz_fn(const &unsigned char d, unsigned long n) { unsafe { g_fuzz_c
 
 void t_bench_fuzz() {
     unsafe {
-        ?&BenchSuite bq = alloc(sizeof(struct BenchSuite));
+        ?&heap BenchSuite bq = alloc(sizeof(struct BenchSuite));
         ASSERT_FALSE(bq.is_null());
         if (bq.is_null()) return;
         &BenchSuite b = std::expect_ref(bq, "bq is null");
@@ -477,9 +477,10 @@ void t_bench_fuzz() {
         b.run();
         ASSERT_EQ(g_bench_calls, 1000);
         ASSERT_TRUE(b.cases[0].elapsed_s >= 0.0);
-        dealloc(b);
+        dealloc(bq);
         struct FuzzTarget ft = fuzz_target_init(fuzz_fn, 50UL);
-        ft.run("seed", 4UL);
+        unsigned char corpus[4] = { (unsigned char)115, (unsigned char)101, (unsigned char)101, (unsigned char)100 };   // "seed"
+        ft.run(&corpus[0], 4UL);
         ASSERT_EQ(g_fuzz_calls, 51);
     }
 }

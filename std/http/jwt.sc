@@ -20,7 +20,7 @@
 namespace std {
 
 static struct String __b64url_encode(const unsigned char* data, unsigned long len) {
-    struct String s = base64_encode(data, len);
+    struct String s; unsafe { s = base64_encode(data, len); }
     unsafe {
         s.replace_char('+', '-');
         s.replace_char('/', '_');
@@ -32,7 +32,7 @@ static struct String __b64url_encode(const unsigned char* data, unsigned long le
 }
 
 static struct Vec<unsigned char> __b64url_decode(const char* s, int* ok) {
-    struct String padded = string_from(s);
+    struct String padded; unsafe { padded = string_from(s); }
     unsafe {
         padded.replace_char('-', '+');
         padded.replace_char('_', '/');
@@ -44,7 +44,7 @@ static struct Vec<unsigned char> __b64url_decode(const char* s, int* ok) {
     return out;
 }
 
-struct String jwt_sign(const &Value claims, const char* secret) {
+struct String jwt_sign(const &Value claims, const &char secret) {
     struct Value header;
     unsafe {
         header = value_object();
@@ -107,7 +107,7 @@ static long long __nth_char_index(const char* s, char c, int n) {
     return idx;
 }
 
-struct Value jwt_verify(const char* token, const char* secret, int* ok) {
+struct Value jwt_verify(const &char token_ref, const &char secret, ?&int ok) { const char* token = token_ref;
     long long dot1 = __nth_char_index(token, '.', 0);
     long long dot2 = __nth_char_index(token, '.', 1);
     if (dot1 < 0LL || dot2 < 0LL) {
@@ -144,7 +144,7 @@ struct Value jwt_verify(const char* token, const char* secret, int* ok) {
             if (alg != (struct Value*)0) {
                 const char* algStr;
                 unsafe { algStr = alg->as_string(); }
-                headerValid = str_eq(algStr, "HS256");
+                unsafe { headerValid = str_eq(algStr, "HS256"); }
             }
         }
         unsafe { value_free(&header); }

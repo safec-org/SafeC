@@ -10,7 +10,7 @@
 
 namespace std {
 
-inline struct Timer timer_init(void* base, unsigned int prescaler) {
+inline struct Timer timer_init(&volatile unsigned int base, unsigned int prescaler) {
     struct Timer t;
     t.base      = base;
     t.prescaler = prescaler;

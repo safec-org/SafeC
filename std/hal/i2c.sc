@@ -10,7 +10,7 @@
 
 namespace std {
 
-inline struct I2cBus i2c_init(void* base, unsigned int speed) {
+inline struct I2cBus i2c_init(&volatile unsigned int base, unsigned int speed) {
     struct I2cBus bus;
     bus.base  = base;
     bus.speed = speed;
@@ -39,7 +39,7 @@ inline int I2cBus::wait_() {
     return 2; // I2C_ERROR (timeout)
 }
 
-int I2cBus::write(unsigned char addr, const unsigned char* data, unsigned long len) {
+int I2cBus::write(unsigned char addr, const &unsigned char data, unsigned long len) {
     unsafe {
         unsigned int* addr_reg = (unsigned int*)((unsigned long)self.base + (unsigned long)12);
         unsigned int* ctrl     = (unsigned int*)((unsigned long)self.base + (unsigned long)8);
@@ -65,7 +65,7 @@ int I2cBus::write(unsigned char addr, const unsigned char* data, unsigned long l
     return 0;
 }
 
-int I2cBus::read(unsigned char addr, unsigned char* data, unsigned long len) {
+int I2cBus::read(unsigned char addr, &unsigned char data, unsigned long len) {
     unsafe {
         unsigned int* addr_reg = (unsigned int*)((unsigned long)self.base + (unsigned long)12);
         unsigned int* ctrl     = (unsigned int*)((unsigned long)self.base + (unsigned long)8);
@@ -96,8 +96,8 @@ int I2cBus::read(unsigned char addr, unsigned char* data, unsigned long len) {
 }
 
 int I2cBus::write_read(unsigned char addr,
-                       const unsigned char* wr, unsigned long wr_len,
-                       unsigned char* rd,       unsigned long rd_len) {
+                       const &unsigned char wr, unsigned long wr_len,
+                       &unsigned char rd,       unsigned long rd_len) {
     int result = self.write(addr, wr, wr_len);
     if (result != 0) { return result; }
     return self.read(addr, rd, rd_len);

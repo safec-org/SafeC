@@ -14,7 +14,7 @@ inline unsigned int wdt_feed_magic_() {
     return (unsigned int)0x6969;
 }
 
-inline struct Watchdog watchdog_init(void* base, unsigned int timeout) {
+inline struct Watchdog watchdog_init(&volatile unsigned int base, unsigned int timeout) {
     struct Watchdog w;
     w.base    = base;
     w.timeout = timeout;

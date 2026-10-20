@@ -6,7 +6,7 @@
 
 namespace std {
 
-inline struct CombFF comb_ff_init(double* history, unsigned long delay, double gain) {
+inline struct CombFF comb_ff_init(&double history, unsigned long delay, double gain) {
     struct CombFF c;
     c.history = history;
     c.delay = delay;
@@ -33,7 +33,7 @@ void CombFF::reset() {
     self.pos = 0UL;
 }
 
-inline struct CombFB comb_fb_init(double* history, unsigned long delay, double gain) {
+inline struct CombFB comb_fb_init(&double history, unsigned long delay, double gain) {
     struct CombFB c;
     c.history = history;
     c.delay = delay;
@@ -60,7 +60,7 @@ void CombFB::reset() {
     self.pos = 0UL;
 }
 
-inline struct KarplusStrong ks_init(double* buffer, unsigned long length, double damping) {
+inline struct KarplusStrong ks_init(&double buffer, unsigned long length, double damping) {
     struct KarplusStrong ks;
     ks.buffer = buffer;
     ks.length = length;
@@ -81,7 +81,7 @@ inline double KarplusStrong::process() {
     return v0;
 }
 
-void KarplusStrong::reset(const double* excitation, unsigned long n) {
+void KarplusStrong::reset(const &double excitation, unsigned long n) {
     unsigned long copyLen = n;
     if (copyLen > self.length) { copyLen = self.length; }
     unsigned long i = 0UL;
@@ -94,7 +94,7 @@ void KarplusStrong::reset(const double* excitation, unsigned long n) {
     self.pos = 0UL;
 }
 
-inline struct FCombFF comb_ff_init_fixed(Fixed* history, unsigned long delay, Fixed gain) {
+inline struct FCombFF comb_ff_init_fixed(&Fixed history, unsigned long delay, Fixed gain) {
     struct FCombFF c;
     c.history = history;
     c.delay = delay;
@@ -121,7 +121,7 @@ void FCombFF::reset() {
     self.pos = 0UL;
 }
 
-inline struct FCombFB comb_fb_init_fixed(Fixed* history, unsigned long delay, Fixed gain) {
+inline struct FCombFB comb_fb_init_fixed(&Fixed history, unsigned long delay, Fixed gain) {
     struct FCombFB c;
     c.history = history;
     c.delay = delay;
@@ -148,7 +148,7 @@ void FCombFB::reset() {
     self.pos = 0UL;
 }
 
-inline struct FKarplusStrong ks_init_fixed(Fixed* buffer, unsigned long length, Fixed damping) {
+inline struct FKarplusStrong ks_init_fixed(&Fixed buffer, unsigned long length, Fixed damping) {
     struct FKarplusStrong ks;
     ks.buffer = buffer;
     ks.length = length;
@@ -170,7 +170,7 @@ inline Fixed FKarplusStrong::process() {
     return v0;
 }
 
-void FKarplusStrong::reset(const Fixed* excitation, unsigned long n) {
+void FKarplusStrong::reset(const &Fixed excitation, unsigned long n) {
     unsigned long copyLen = n;
     if (copyLen > self.length) { copyLen = self.length; }
     unsigned long i = 0UL;

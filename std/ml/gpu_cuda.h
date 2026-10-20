@@ -24,22 +24,22 @@ namespace std {
 // Elementwise 'out[i] = a[i] + b[i]' for i in [0, n), computed on an
 // NVIDIA GPU. Returns 1 on success, 0 on any failure (no CUDA-capable
 // device, driver/runtime mismatch, PTX load failure, etc.).
-int cuda_add_f32(const float* a, const float* b, float* out, unsigned long n);
+int cuda_add_f32(const &float a, const &float b, &float out, unsigned long n);
 
 // Same shape/caveats as cuda_add_f32 -- all hand-written PTX, all
 // UNVERIFIED (no ptxas, no NVIDIA GPU in this sandbox). See gpu_cuda.sc
 // for each kernel's source and the pow/log/exp approximation notes.
-int cuda_sub_f32(const float* a, const float* b, float* out, unsigned long n);
-int cuda_mul_f32(const float* a, const float* b, float* out, unsigned long n);
-int cuda_div_f32(const float* a, const float* b, float* out, unsigned long n);
-int cuda_pow_f32(const float* a, const float* b, float* out, unsigned long n);
-int cuda_relu_f32(const float* a, float* out, unsigned long n);
-int cuda_log_f32(const float* a, float* out, unsigned long n);
-int cuda_exp_f32(const float* a, float* out, unsigned long n);
-int cuda_sqrt_f32(const float* a, float* out, unsigned long n);
-int cuda_scale_f32(const float* a, float k, float* out, unsigned long n);
-int cuda_sum_f32(const float* a, float* out, unsigned long n);
-int cuda_matmul_f32(const float* a, const float* b, float* out,
+int cuda_sub_f32(const &float a, const &float b, &float out, unsigned long n);
+int cuda_mul_f32(const &float a, const &float b, &float out, unsigned long n);
+int cuda_div_f32(const &float a, const &float b, &float out, unsigned long n);
+int cuda_pow_f32(const &float a, const &float b, &float out, unsigned long n);
+int cuda_relu_f32(const &float a, &float out, unsigned long n);
+int cuda_log_f32(const &float a, &float out, unsigned long n);
+int cuda_exp_f32(const &float a, &float out, unsigned long n);
+int cuda_sqrt_f32(const &float a, &float out, unsigned long n);
+int cuda_scale_f32(const &float a, float k, &float out, unsigned long n);
+int cuda_sum_f32(const &float a, &float out, unsigned long n);
+int cuda_matmul_f32(const &float a, const &float b, &float out,
                      unsigned long M, unsigned long K, unsigned long N);
 
 // Same computation as cuda_matmul_f32, dispatched to cuBLAS's cublasSgemm
@@ -51,7 +51,7 @@ int cuda_matmul_f32(const float* a, const float* b, float* out,
 // is Fortran-convention column-major; SafeC's Tensor is row-major).
 // Same UNVERIFIED caveat as every other function in this file (no NVIDIA
 // GPU, no CUDA toolkit, no cuBLAS library in this sandbox).
-int cuda_matmul_f32_blas(const float* a, const float* b, float* out,
+int cuda_matmul_f32_blas(const &float a, const &float b, &float out,
                           unsigned long M, unsigned long K, unsigned long N);
 
 // True if a CUDA-capable device is present and the driver initializes
@@ -86,10 +86,10 @@ int cuda_available();
 // Uploads 'bytes' from host memory to a new persistent device buffer.
 // Returns (void*)0 on failure (no device, context creation failure, or
 // allocation failure).
-void* cuda_upload_persistent(const float* data, unsigned long bytes);
+?&void cuda_upload_persistent(const &float data, unsigned long bytes);
 
 // Frees a buffer returned by cuda_upload_persistent.
-void cuda_release_persistent(void* devPtr);
+void cuda_release_persistent(&void devPtr);
 
 // Same computation as cuda_matmul_f32, but 'devA'/'devB' are already
 // device buffers (e.g. from cuda_upload_persistent) -- no upload for
@@ -100,7 +100,7 @@ void cuda_release_persistent(void* devPtr);
 // gpu_mps.sc's mps_batch_begin/mps_batch_end) to defer that across
 // multiple chained ops, so each call here still does one cuCtxSynchronize
 // + cuMemcpyDtoH_v2. Returns 1 on success, 0 on failure.
-int cuda_matmul_f32_persistent(void* devA, void* devB, float* out,
+int cuda_matmul_f32_persistent(&void devA, &void devB, &float out,
                                 unsigned long M, unsigned long K, unsigned long N);
 
 // In-place SGD step against a persistent device buffer:
@@ -113,7 +113,7 @@ int cuda_matmul_f32_persistent(void* devA, void* devB, float* out,
 // function, repeat -- with no per-step re-upload the way a CPU-resident
 // weight array read/written by a CPU-side SGD loop would need. Returns 1
 // on success, 0 on failure.
-int cuda_sgd_update_f32(void* devW, void* devGrad, float lr, unsigned long n);
+int cuda_sgd_update_f32(&void devW, &void devGrad, float lr, unsigned long n);
 
 // True if the shared persistent context (used by every function in this
 // tier) is available -- like cuda_available(), but also confirms context
@@ -144,8 +144,8 @@ int cuda_persistent_available();
 // top-of-file UNVERIFIED warning, which applies here at least as much as
 // to the rest of this file.
 
-void* cuda_upload_f16_persistent(const float* data, unsigned long n);
-void* cuda_upload_bf16_persistent(const float* data, unsigned long n);
+?&void cuda_upload_f16_persistent(const &float data, unsigned long n);
+?&void cuda_upload_bf16_persistent(const &float data, unsigned long n);
 // Both release through cuda_release_persistent(devPtr) above -- storage
 // is 2 bytes/element regardless of fp16 vs bf16.
 
@@ -153,15 +153,15 @@ void* cuda_upload_bf16_persistent(const float* data, unsigned long n);
 // cuda_upload_f16_persistent/cuda_upload_bf16_persistent above). 'out' is
 // a host array of raw fp16/bf16 bits (see float16.h's fp16_to_f32_bulk/
 // bf16_to_f32_bulk to convert it back to float32).
-int cuda_matmul_f16_persistent(void* devA, void* devB, unsigned short* out,
+int cuda_matmul_f16_persistent(&void devA, &void devB, &unsigned short out,
                                 unsigned long M, unsigned long K, unsigned long N);
-int cuda_matmul_bf16_persistent(void* devA, void* devB, unsigned short* out,
+int cuda_matmul_bf16_persistent(&void devA, &void devB, &unsigned short out,
                                  unsigned long M, unsigned long K, unsigned long N);
 
 // In-place SGD step against a persistent fp16/bf16 device buffer:
 // devW[i] -= lr*devGrad[i], computed via cvt-to-f32/cvt-back the same
 // way the matmul kernels above do -- mirrors cuda_sgd_update_f32.
-int cuda_sgd_update_f16(void* devW, void* devGrad, float lr, unsigned long n);
-int cuda_sgd_update_bf16(void* devW, void* devGrad, float lr, unsigned long n);
+int cuda_sgd_update_f16(&void devW, &void devGrad, float lr, unsigned long n);
+int cuda_sgd_update_bf16(&void devW, &void devGrad, float lr, unsigned long n);
 
 } // namespace std

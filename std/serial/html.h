@@ -21,7 +21,7 @@ namespace std {
 // Escapes '&', '<', '>', '"' for safe inclusion in HTML text/attribute
 // content — useful on its own, independent of the Value-tree renderer
 // below, for anything that needs to drop untrusted text into HTML.
-void html_escape(&String out, const char* s);
+void html_escape(&String out, const &char s);
 
 // Appends v's rendered HTML fragment to 'out'.
 void html_write(const &Value v, &String out);
@@ -35,6 +35,6 @@ struct String value_to_html(const &Value v);
 // section for the two structural ambiguities inherent to this grammar
 // (same as xml_parse's: empty string vs. empty container; numeric-looking
 // text vs. string).
-struct Value html_parse(const char* text, int* ok);
+struct Value html_parse(const &char text, ?&int ok);
 
 } // namespace std

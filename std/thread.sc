@@ -71,7 +71,7 @@ inline unsigned long long thread_self() {
 
 inline int mutex_init(&unsigned long long m) {
     unsafe {
-        void* cs = alloc(64UL);
+        void* cs = alloc_raw_(64UL);
         if (cs == (void*)0) return -1;
         InitializeCriticalSection(cs);
         *m = (unsigned long long)cs;
@@ -83,7 +83,7 @@ inline int mutex_destroy(&unsigned long long m) {
     unsafe {
         void* cs = (void*)(*m);
         DeleteCriticalSection(cs);
-        dealloc(cs);
+        dealloc_raw_(cs);
         *m = 0ULL;
         return 0;
     }
@@ -95,7 +95,7 @@ int mutex_unlock(&unsigned long long m)  { unsafe { LeaveCriticalSection((void*)
 
 inline int cond_init(&unsigned long long cv) {
     unsafe {
-        void* c = alloc(16UL);
+        void* c = alloc_raw_(16UL);
         if (c == (void*)0) return -1;
         InitializeConditionVariable(c);
         *cv = (unsigned long long)c;
@@ -104,7 +104,7 @@ inline int cond_init(&unsigned long long cv) {
 }
 
 inline int cond_destroy(&unsigned long long cv) {
-    unsafe { dealloc((void*)(*cv)); *cv = 0ULL; return 0; }
+    unsafe { dealloc_raw_((void*)(*cv)); *cv = 0ULL; return 0; }
 }
 
 inline int cond_wait(&unsigned long long cv, &unsigned long long m) {
@@ -124,7 +124,7 @@ int cond_broadcast(&unsigned long long cv) { unsafe { WakeAllConditionVariable((
 
 inline int rwlock_init(&unsigned long long rw) {
     unsafe {
-        void* r = alloc(16UL);
+        void* r = alloc_raw_(16UL);
         if (r == (void*)0) return -1;
         InitializeSRWLock(r);
         *rw = (unsigned long long)r;
@@ -133,7 +133,7 @@ inline int rwlock_init(&unsigned long long rw) {
 }
 
 inline int rwlock_destroy(&unsigned long long rw) {
-    unsafe { dealloc((void*)(*rw)); *rw = 0ULL; return 0; }
+    unsafe { dealloc_raw_((void*)(*rw)); *rw = 0ULL; return 0; }
 }
 
 int rwlock_rdlock(&unsigned long long rw)    { unsafe { AcquireSRWLockShared((void*)(*rw)); return 0; } }
@@ -195,10 +195,10 @@ inline void thread_sleep_ms(unsigned long ms) {
 
 inline int mutex_init(&unsigned long long m) {
     unsafe {
-        void* pm = alloc(128UL); // pthread_mutex_t <= 128 bytes (64 on macOS, 40 on Linux)
+        void* pm = alloc_raw_(128UL); // pthread_mutex_t <= 128 bytes (64 on macOS, 40 on Linux)
         if (pm == (void*)0) return -1;
         int r = pthread_mutex_init(pm, (void*)0);
-        if (r != 0) { dealloc(pm); return r; }
+        if (r != 0) { dealloc_raw_(pm); return r; }
         *m = (unsigned long long)pm;
         return 0;
     }
@@ -208,7 +208,7 @@ inline int mutex_destroy(&unsigned long long m) {
     unsafe {
         void* pm = (void*)(*m);
         int r = pthread_mutex_destroy(pm);
-        dealloc(pm);
+        dealloc_raw_(pm);
         *m = 0ULL;
         return r;
     }
@@ -220,10 +220,10 @@ int mutex_unlock(&unsigned long long m)  { unsafe { return pthread_mutex_unlock(
 
 inline int cond_init(&unsigned long long cv) {
     unsafe {
-        void* pc = alloc(128UL); // pthread_cond_t <= 128 bytes
+        void* pc = alloc_raw_(128UL); // pthread_cond_t <= 128 bytes
         if (pc == (void*)0) return -1;
         int r = pthread_cond_init(pc, (void*)0);
-        if (r != 0) { dealloc(pc); return r; }
+        if (r != 0) { dealloc_raw_(pc); return r; }
         *cv = (unsigned long long)pc;
         return 0;
     }
@@ -233,7 +233,7 @@ inline int cond_destroy(&unsigned long long cv) {
     unsafe {
         void* pc = (void*)(*cv);
         int r = pthread_cond_destroy(pc);
-        dealloc(pc);
+        dealloc_raw_(pc);
         *cv = 0ULL;
         return r;
     }
@@ -262,10 +262,10 @@ int cond_broadcast(&unsigned long long cv) { unsafe { return pthread_cond_broadc
 
 inline int rwlock_init(&unsigned long long rw) {
     unsafe {
-        void* pr = alloc(256UL); // pthread_rwlock_t <= 256 bytes (200 on macOS)
+        void* pr = alloc_raw_(256UL); // pthread_rwlock_t <= 256 bytes (200 on macOS)
         if (pr == (void*)0) return -1;
         int r = pthread_rwlock_init(pr, (void*)0);
-        if (r != 0) { dealloc(pr); return r; }
+        if (r != 0) { dealloc_raw_(pr); return r; }
         *rw = (unsigned long long)pr;
         return 0;
     }
@@ -275,7 +275,7 @@ inline int rwlock_destroy(&unsigned long long rw) {
     unsafe {
         void* pr = (void*)(*rw);
         int r = pthread_rwlock_destroy(pr);
-        dealloc(pr);
+        dealloc_raw_(pr);
         *rw = 0ULL;
         return r;
     }

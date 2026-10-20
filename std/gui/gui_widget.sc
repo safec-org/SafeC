@@ -22,7 +22,7 @@ static struct GuiColor __widget_default_bg(int kind) {
 
 static &Widget __widget_new(int kind) {
     &Widget w;
-    unsafe { w = (struct Widget*)alloc((unsigned long)sizeof(struct Widget)); }
+    unsafe { w = (struct Widget*)alloc_raw_((unsigned long)sizeof(struct Widget)); }
 
     unsafe {
         w->kind = kind;
@@ -79,7 +79,7 @@ static &Widget __widget_new(int kind) {
     &Widget w = __widget_new(WIDGET_SPACER);
     unsafe { w->stretch = 1; return w; }
 }
-&Widget widget_button(const char* text) {
+&Widget widget_button(const &char text) {
     &Widget w = __widget_new(WIDGET_BUTTON);
     unsafe {
         w->text.free();
@@ -87,7 +87,7 @@ static &Widget __widget_new(int kind) {
         return w;
     }
 }
-&Widget widget_label(const char* text) {
+&Widget widget_label(const &char text) {
     &Widget w = __widget_new(WIDGET_LABEL);
     unsafe {
         w->text.free();
@@ -95,7 +95,7 @@ static &Widget __widget_new(int kind) {
         return w;
     }
 }
-&Widget widget_checkbox(const char* text, int checked) {
+&Widget widget_checkbox(const &char text, int checked) {
     &Widget w = __widget_new(WIDGET_CHECKBOX);
     unsafe {
         w->text.free();
@@ -104,7 +104,7 @@ static &Widget __widget_new(int kind) {
         return w;
     }
 }
-&Widget widget_textinput(const char* placeholder) {
+&Widget widget_textinput(const &char placeholder) {
     &Widget w = __widget_new(WIDGET_TEXTINPUT);
     unsafe {
         w->text.free();
@@ -191,7 +191,7 @@ void widget_add_child(&Widget parent, &Widget child) {
     unsafe { w->enabled = enabled; }
     return w;
 }
-&Widget widget_set_text(&Widget w, const char* text) {
+&Widget widget_set_text(&Widget w, const &char text) {
     unsafe {
         w->text.free();
         w->text = string_from(text);
@@ -770,7 +770,7 @@ void widget_free(&Widget w) {
     unsafe {
         w->children.free();
         w->text.free();
-        dealloc((void*)w);
+        dealloc_raw_((void*)w);
     }
 }
 

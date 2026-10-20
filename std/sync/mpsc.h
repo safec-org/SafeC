@@ -53,7 +53,7 @@ generic<T>
 struct MpscQueue<T> mpsc_new(unsigned long cap) {
     struct MpscQueue<T> q;
     q.buffer = null;
-    unsafe { q.buffer = (?&heap T)alloc(checked_mul_size(cap, sizeof(T))); }
+    unsafe { q.buffer = (?&heap T)alloc_raw_(checked_mul_size(cap, sizeof(T))); }
     q.cap   = q.buffer.is_null() ? 0UL : cap;
     q.head  = 0UL;
     q.tail  = 0UL;
@@ -96,7 +96,7 @@ unsigned long MpscQueue::len() const { return self.count; }
 
 generic<T>
 void MpscQueue::destroy() {
-    unsafe { dealloc((void*)self.buffer); }
+    unsafe { dealloc_raw_((void*)self.buffer); }
     self.buffer = null;
     self.cap = 0UL;
 }

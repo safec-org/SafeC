@@ -321,7 +321,7 @@ static unsigned int __be32(const unsigned char* p) {
     return r;
 }
 
-int gui_load_png(const unsigned char* data, unsigned long size, &GuiImage out) {
+int gui_load_png(const &unsigned char data_ref, unsigned long size, &GuiImage out) { const unsigned char* data = data_ref;
     unsafe {
         out.pixels = (&heap unsigned char)0;
         out.width = 0;
@@ -406,7 +406,7 @@ int gui_load_png(const unsigned char* data, unsigned long size, &GuiImage out) {
 
     unsigned long npix = (unsigned long)width * (unsigned long)height * 4UL;
     unsafe {
-        out.pixels = (&heap unsigned char)alloc(npix);
+        out.pixels = (&heap unsigned char)alloc_raw_(npix);
     }
     unsafe { out.width = width; out.height = height; }
 
@@ -414,9 +414,9 @@ int gui_load_png(const unsigned char* data, unsigned long size, &GuiImage out) {
     // Previous-scanline reconstructed bytes (for Up/Average/Paeth), zeroed
     // for the first row per the PNG spec.
     unsigned char* prevRow;
-    unsafe { prevRow = (unsigned char*)alloc(rowBytes); memset((void*)prevRow, 0, rowBytes); }
+    unsafe { prevRow = (unsigned char*)alloc_raw_(rowBytes); memset((void*)prevRow, 0, rowBytes); }
     unsigned char* curRow;
-    unsafe { curRow = (unsigned char*)alloc(rowBytes); }
+    unsafe { curRow = (unsigned char*)alloc_raw_(rowBytes); }
 
     unsigned long srcPos = 0UL;
     int y = 0;
@@ -477,8 +477,8 @@ int gui_load_png(const unsigned char* data, unsigned long size, &GuiImage out) {
     }
 
     unsafe {
-        dealloc((void*)prevRow);
-        dealloc((void*)curRow);
+        dealloc_raw_((void*)prevRow);
+        dealloc_raw_((void*)curRow);
         raw.free();
     }
     return 1;
@@ -508,7 +508,7 @@ void gui_draw_image(&GuiWindow win, int x, int y, const &GuiImage img) {
 
 void gui_image_free(&GuiImage img) {
     unsafe {
-        if ((void*)img.pixels != (void*)0) { dealloc((void*)img.pixels); }
+        if ((void*)img.pixels != (void*)0) { dealloc_raw_((void*)img.pixels); }
         img.pixels = (&heap unsigned char)0;
         img.width = 0;
         img.height = 0;

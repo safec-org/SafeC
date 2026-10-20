@@ -108,8 +108,10 @@ static void tmpfs_split_path_(const char* path,
 
 // ── VfsOps callbacks ──────────────────────────────────────────────────────────
 
-static int tmpfs_vfs_open_(void* ctx, const char* path, int flags,
+static int tmpfs_vfs_open_(?&void ctx_ref, const &char path_ref, int flags,
                             &stack VfsNode node_out) {
+    void* ctx = ctx_ref;
+    const char* path = path_ref;
     struct TmpfsCtx* tc;
     unsafe { tc = (struct TmpfsCtx*)ctx; }
     int idx = tmpfs_resolve_(tc, path);
@@ -151,7 +153,9 @@ static int tmpfs_vfs_open_(void* ctx, const char* path, int flags,
     return 0;
 }
 
-static int tmpfs_vfs_unlink_(void* ctx, const char* path) {
+static int tmpfs_vfs_unlink_(?&void ctx_ref, const &char path_ref) {
+    void* ctx = ctx_ref;
+    const char* path = path_ref;
     struct TmpfsCtx* tc;
     unsafe { tc = (struct TmpfsCtx*)ctx; }
     int idx = tmpfs_resolve_(tc, path);
@@ -163,7 +167,9 @@ static int tmpfs_vfs_unlink_(void* ctx, const char* path) {
     return 0;
 }
 
-static int tmpfs_vfs_mkdir_(void* ctx, const char* path) {
+static int tmpfs_vfs_mkdir_(?&void ctx_ref, const &char path_ref) {
+    void* ctx = ctx_ref;
+    const char* path = path_ref;
     struct TmpfsCtx* tc;
     unsafe { tc = (struct TmpfsCtx*)ctx; }
     char parent[VFS_MAX_PATH];
@@ -186,9 +192,11 @@ static int tmpfs_vfs_mkdir_(void* ctx, const char* path) {
     return 0;
 }
 
-static unsigned long tmpfs_vfs_read_(void* ctx, unsigned long inode,
+static unsigned long tmpfs_vfs_read_(?&void ctx_ref, unsigned long inode,
                                       unsigned long offset,
-                                      unsigned char* buf, unsigned long len) {
+                                      &unsigned char buf_ref, unsigned long len) {
+    void* ctx = ctx_ref;
+    unsigned char* buf = buf_ref;
     struct TmpfsCtx* tc;
     unsafe { tc = (struct TmpfsCtx*)ctx; }
     int idx = (int)inode;
@@ -214,9 +222,11 @@ static unsigned long tmpfs_vfs_read_(void* ctx, unsigned long inode,
     return avail;
 }
 
-static unsigned long tmpfs_vfs_write_(void* ctx, unsigned long inode,
+static unsigned long tmpfs_vfs_write_(?&void ctx_ref, unsigned long inode,
                                        unsigned long offset,
-                                       const unsigned char* buf, unsigned long len) {
+                                       const &unsigned char buf_ref, unsigned long len) {
+    void* ctx = ctx_ref;
+    const unsigned char* buf = buf_ref;
     struct TmpfsCtx* tc;
     unsafe { tc = (struct TmpfsCtx*)ctx; }
     int idx = (int)inode;
@@ -244,8 +254,9 @@ static unsigned long tmpfs_vfs_write_(void* ctx, unsigned long inode,
     return len;
 }
 
-static int tmpfs_vfs_readdir_(void* ctx, unsigned long inode,
-                               void* cb, void* user) {
+static int tmpfs_vfs_readdir_(?&void ctx_ref, unsigned long inode,
+                               fn void(&VfsNode, ?&void) cb, ?&void user) {
+    void* ctx = ctx_ref;
     struct TmpfsCtx* tc;
     unsafe { tc = (struct TmpfsCtx*)ctx; }
     int count = 0;
@@ -271,9 +282,7 @@ static int tmpfs_vfs_readdir_(void* ctx, unsigned long inode,
                 node.size  = tc->inodes[j].size;
                 node.inode = (unsigned long)j;
                 node.fs_ctx = ctx;
-                fn void(struct VfsNode*, void*) callback =
-                    (fn void(struct VfsNode*, void*))cb;
-                callback((struct VfsNode*)&node, user);
+                cb(&node, user);
             }
             count = count + 1;
         }

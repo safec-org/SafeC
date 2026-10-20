@@ -100,34 +100,28 @@ int main() {
     unsafe {
         printf("=== stdckdint ===\n");
 
-        // Use heap-allocated output params to avoid &stack->int* conversion
-        int* r32  = (int*)alloc((unsigned long)4);
-        int* ov   = (int*)alloc((unsigned long)4);
+        int r32 = 0;
+        int ov  = 0;
 
-        *ov = ckd_add_i32(r32, INT32_MAX, 1);
-        printf("INT32_MAX+1:     result=%d  overflow=%d\n", *r32, *ov);
+        ov = ckd_add_i32(&r32, INT32_MAX, 1);
+        printf("INT32_MAX+1:     result=%d  overflow=%d\n", r32, ov);
 
-        *ov = ckd_add_i32(r32, 100, 200);
-        printf("100+200:         result=%d  overflow=%d\n", *r32, *ov);
+        ov = ckd_add_i32(&r32, 100, 200);
+        printf("100+200:         result=%d  overflow=%d\n", r32, ov);
 
-        *ov = ckd_mul_i32(r32, 100000, 100000);
-        printf("100000*100000:   result=%d  overflow=%d\n", *r32, *ov);
+        ov = ckd_mul_i32(&r32, 100000, 100000);
+        printf("100000*100000:   result=%d  overflow=%d\n", r32, ov);
 
-        long long* r64 = (long long*)alloc((unsigned long)8);
-        *ov = ckd_add_i64(r64, INT64_MAX, (long long)1);
-        printf("INT64_MAX+1:     overflow=%d\n", *ov);
+        long long r64 = 0LL;
+        ov = ckd_add_i64(&r64, INT64_MAX, (long long)1);
+        printf("INT64_MAX+1:     overflow=%d\n", ov);
 
-        *ov = ckd_sub_i64(r64, (long long)INT64_MIN, (long long)1);
-        printf("INT64_MIN-1:     overflow=%d\n", *ov);
+        ov = ckd_sub_i64(&r64, (long long)INT64_MIN, (long long)1);
+        printf("INT64_MIN-1:     overflow=%d\n", ov);
 
-        unsigned int* ur32 = (unsigned int*)alloc((unsigned long)4);
-        *ov = ckd_add_u32(ur32, (unsigned int)UINT32_MAX, (unsigned int)1);
-        printf("UINT32_MAX+1:    result=%u  overflow=%d\n", *ur32, *ov);
-
-        dealloc((void*)r32);
-        dealloc((void*)ov);
-        dealloc((void*)r64);
-        dealloc((void*)ur32);
+        unsigned int ur32 = (unsigned int)0;
+        ov = ckd_add_u32(&ur32, (unsigned int)UINT32_MAX, (unsigned int)1);
+        printf("UINT32_MAX+1:    result=%u  overflow=%d\n", ur32, ov);
     }
 
     // ── io: buffer formatting ─────────────────────────────────────────────────
@@ -179,10 +173,10 @@ int main() {
         printf("atoi('123')=%d\n",           sys_atoi("123"));
         printf("atoll('-12345')=%lld\n",      sys_atoll("-12345"));
         printf("atof('3.14')=%g\n",           sys_atof("3.14"));
-        printf("strtoll('0xFF',0)=%lld\n",    sys_strtoll("0xFF", (char**)0, 0));
-        printf("strtoll('0b1010',2)=%lld\n",  sys_strtoll("1010", (char**)0, 2));
-        printf("strtod('6.28e1')=%g\n",       sys_strtod("6.28e1", (char**)0));
-        printf("strtof('2.5')=%g\n", (double) sys_strtof("2.5", (char**)0));
+        printf("strtoll('0xFF',0)=%lld\n",    sys_strtoll("0xFF", null, 0));
+        printf("strtoll('0b1010',2)=%lld\n",  sys_strtoll("1010", null, 2));
+        printf("strtod('6.28e1')=%g\n",       sys_strtod("6.28e1", null));
+        printf("strtof('2.5')=%g\n", (double) sys_strtof("2.5", null));
     }
 
     // ── str: new string functions ─────────────────────────────────────────────
@@ -214,24 +208,23 @@ int main() {
         printf("str_find_any first vowel: '%s'\n", pb);
 
         // Tokenisation (reentrant)
-        char* saveptr = (char*)0;
-        &stack char* sv = &saveptr;
+        ?&char saveptr = null;
         char sentence[64];
-        str_copy((char*)sentence, "one two three", (unsigned long)64);
-        char* t1 = str_tok((char*)sentence, " ", sv);
-        char* t2 = str_tok((char*)0, " ", sv);
-        char* t3 = str_tok((char*)0, " ", sv);
+        str_copy(&sentence[0], "one two three", (unsigned long)64);
+        ?&char t1 = str_tok(&sentence[0], " ", &saveptr);
+        ?&char t2 = str_tok(null, " ", &saveptr);
+        ?&char t3 = str_tok(null, " ", &saveptr);
         printf("str_tok: '%s' '%s' '%s'\n", t1, t2, t3);
 
         // mem_chr
         const char* needle = "find the X here";
-        void* found = mem_chr((void*)needle, (int)'X', (unsigned long)15);
-        printf("mem_chr 'X': '%s'\n", (char*)found);
+        const ?&unsigned char found = mem_chr((const unsigned char*)needle, (int)'X', (unsigned long)15);
+        printf("mem_chr 'X': '%s'\n", (const char*)found);
 
         // str_ndup
-        char* nd = str_ndup("hello world", (unsigned long)5);
+        ?&heap char nd = str_ndup("hello world", (unsigned long)5);
         printf("str_ndup(5): '%s'\n", nd);
-        dealloc((void*)nd);
+        dealloc(nd);
     }
 
     unsafe { printf("\nAll stdlib_complete tests passed.\n"); }

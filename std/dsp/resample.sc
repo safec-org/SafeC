@@ -8,7 +8,7 @@
 
 namespace std {
 
-void resample_nearest(const double* in, unsigned long inLen, double* out, unsigned long outLen) {
+void resample_nearest(const &double in, unsigned long inLen, &double out, unsigned long outLen) {
     if (inLen == 0UL || outLen == 0UL) { return; }
     double scale = (double)inLen / (double)outLen;
     unsigned long i = 0UL;
@@ -25,7 +25,7 @@ void resample_nearest(const double* in, unsigned long inLen, double* out, unsign
     }
 }
 
-void resample_linear(const double* in, unsigned long inLen, double* out, unsigned long outLen) {
+void resample_linear(const &double in, unsigned long inLen, &double out, unsigned long outLen) {
     if (inLen == 0UL || outLen == 0UL) { return; }
     if (inLen == 1UL) {
         double v;
@@ -65,7 +65,7 @@ static double resample_sinc_(double x) {
     return sin_d(px) / px;
 }
 
-void resample_sinc(const double* in, unsigned long inLen, double* out, unsigned long outLen,
+void resample_sinc(const &double in, unsigned long inLen, &double out, unsigned long outLen,
                     unsigned long kernelHalfWidth) {
     if (inLen == 0UL || outLen == 0UL || kernelHalfWidth == 0UL) { return; }
     double ratio = (double)outLen / (double)inLen;
@@ -100,7 +100,7 @@ void resample_sinc(const double* in, unsigned long inLen, double* out, unsigned 
     }
 }
 
-void fresample_nearest(const Fixed* in, unsigned long inLen, Fixed* out, unsigned long outLen) {
+void fresample_nearest(const &Fixed in, unsigned long inLen, &Fixed out, unsigned long outLen) {
     if (inLen == 0UL || outLen == 0UL) { return; }
     double scale = (double)inLen / (double)outLen;
     unsigned long i = 0UL;
@@ -117,7 +117,7 @@ void fresample_nearest(const Fixed* in, unsigned long inLen, Fixed* out, unsigne
     }
 }
 
-void fresample_linear(const Fixed* in, unsigned long inLen, Fixed* out, unsigned long outLen) {
+void fresample_linear(const &Fixed in, unsigned long inLen, &Fixed out, unsigned long outLen) {
     if (inLen == 0UL || outLen == 0UL) { return; }
     if (inLen == 1UL) {
         Fixed v;

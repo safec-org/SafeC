@@ -27,16 +27,16 @@ struct OAuth2Token {
 // 'grant_type=authorization_code&code=...&redirect_uri=...&client_id=...
 // &client_secret=...' to '<tokenHost>:<tokenPort><tokenPath>'.
 // *ok is set to 0 on any transport/HTTP-status/JSON-shape failure.
-struct OAuth2Token oauth2_exchange_code(const char* tokenHost, unsigned short tokenPort,
-                                        const char* tokenPath, const char* clientId,
-                                        const char* clientSecret, const char* code,
-                                        const char* redirectUri, int* ok);
+struct OAuth2Token oauth2_exchange_code(const &char tokenHost, unsigned short tokenPort,
+                                        const &char tokenPath, const &char clientId,
+                                        const &char clientSecret, const &char code,
+                                        const &char redirectUri, ?&int ok);
 
 // Exchanges a refresh token for a fresh access token
 // ('grant_type=refresh_token&refresh_token=...&client_id=...&client_secret=...').
-struct OAuth2Token oauth2_refresh(const char* tokenHost, unsigned short tokenPort,
-                                  const char* tokenPath, const char* clientId,
-                                  const char* clientSecret, const char* refreshToken, int* ok);
+struct OAuth2Token oauth2_refresh(const &char tokenHost, unsigned short tokenPort,
+                                  const &char tokenPath, const &char clientId,
+                                  const &char clientSecret, const &char refreshToken, ?&int ok);
 
 void oauth2_token_free(&OAuth2Token t);
 

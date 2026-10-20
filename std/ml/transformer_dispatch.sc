@@ -73,7 +73,8 @@ static &Tensor __add_broadcast_row_dispatch(&Tensor mat, &Tensor row) {
 }
 
 &Tensor jit_forward_on(const &Tensor patches, const &Tensor WPatchEmbed, const &Tensor cond,
-                        struct JiTBlock* blocks, unsigned long numBlocks, enum Device device) {
+                        struct Slice<JiTBlock> blocks, enum Device device) {
+    unsigned long numBlocks = blocks.length();
     &Tensor embedRaw = tensor_matmul_on(patches, WPatchEmbed, device);
     &Tensor x = __add_broadcast_row_dispatch(embedRaw, cond);
     embedRaw->free();
@@ -81,9 +82,8 @@ static &Tensor __add_broadcast_row_dispatch(&Tensor mat, &Tensor row) {
 
     unsigned long i = 0UL;
     while (i < numBlocks) {
-        // 'blocks' is a raw array: reaching blocks[i] needs 'unsafe'.
+        &JiTBlock blk = blocks.at(i);
         unsafe {
-            &JiTBlock blk = (&JiTBlock)&blocks[i];
             &Tensor next = jit_block_forward_on(blk, x, device);
             x->free();
             free((void*)x);

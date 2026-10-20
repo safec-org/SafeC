@@ -89,7 +89,7 @@ int Vec::reserve(unsigned long new_cap) {
     if (new_cap <= self.cap) return 1;
     unsigned long bytes = checked_mul_size(new_cap, sizeof(T));
     ?&heap T grown = null;
-    unsafe { grown = (?&heap T)realloc_buf((void*)self.data, bytes); }
+    unsafe { grown = (?&heap T)realloc_buf_raw_((void*)self.data, bytes); }
     if (grown.is_null()) return 0;
     self.data = grown;
     self.cap = new_cap;
@@ -100,13 +100,13 @@ generic<T>
 void Vec::shrink() {
     if (self.len == self.cap) return;
     if (self.len == 0UL) {
-        unsafe { dealloc((void*)self.data); }
+        unsafe { dealloc_raw_((void*)self.data); }
         self.data = null;
         self.cap = 0UL;
         return;
     }
     ?&heap T smaller = null;
-    unsafe { smaller = (?&heap T)realloc_buf((void*)self.data, self.len * sizeof(T)); }
+    unsafe { smaller = (?&heap T)realloc_buf_raw_((void*)self.data, self.len * sizeof(T)); }
     if (smaller.is_null()) return;   // keep the larger buffer
     self.data = smaller;
     self.cap = self.len;
@@ -404,7 +404,7 @@ struct Vec<T> Vec::filter(fn int(const &T) pred) const {
 
 generic<T>
 void Vec::free() {
-    unsafe { dealloc((void*)self.data); }
+    unsafe { dealloc_raw_((void*)self.data); }
     self.data = null;
     self.len = 0UL;
     self.cap = 0UL;

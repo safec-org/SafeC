@@ -133,7 +133,7 @@ void t_biquad_filters() {
         double coeffs[4];
         coeffs[0] = 0.1; coeffs[1] = 0.2; coeffs[2] = 0.3; coeffs[3] = 0.4;
         double hist[4];
-        safe_memset((void*)hist, 0, sizeof(double) * 4UL);
+        safe_memset(&hist[0], 0, sizeof(double) * 4UL);
         struct FirFilter fir = fir_init((const double*)coeffs, 4UL, (double*)hist);
         ASSERT_TRUE(near_d(fir.process(1.0), 0.1, 1e-12));
         ASSERT_TRUE(near_d(fir.process(0.0), 0.2, 1e-12));
@@ -149,8 +149,8 @@ void t_biquad_filters() {
         ac[0] = 1.0; ac[1] = ref.a1; ac[2] = ref.a2;
         double xh[3];
         double yh[3];
-        safe_memset((void*)xh, 0, sizeof(double) * 3UL);
-        safe_memset((void*)yh, 0, sizeof(double) * 3UL);
+        safe_memset(&xh[0], 0, sizeof(double) * 3UL);
+        safe_memset(&yh[0], 0, sizeof(double) * 3UL);
         struct IirFilter iir = iir_init((const double*)bc, 3UL, (const double*)ac, 3UL, (double*)xh, (double*)yh);
         double maxErr = 0.0;
         i = 0;
@@ -223,8 +223,8 @@ void t_stft() {
         while (i < 256) { sig[i] = sin_d(0.3 * (double)i) + 0.2 * rnd(); i = i + 1; }
         unsigned long nf = stft_num_frames(256UL, 64UL, 16UL);
         ASSERT_EQ(nf, 13);
-        ?&Complex specq = alloc(sizeof(struct Complex) * nf * 64UL);
-        ?&double outq = alloc_zeroed(sizeof(double) * 256UL);
+        ?&heap Complex specq = alloc(sizeof(struct Complex) * nf * 64UL);
+        ?&heap double outq = alloc_zeroed(sizeof(double) * 256UL);
         ASSERT_FALSE(specq.is_null());
         ASSERT_FALSE(outq.is_null());
         if (specq.is_null() || outq.is_null()) return;
@@ -241,8 +241,8 @@ void t_stft() {
         fs[0] = 32UL; fs[1] = 64UL;
         ASSERT_TRUE(near_d(mr_stft_loss((const double*)sig, (const double*)sig, 256UL, (const unsigned long*)fs, 2UL), 0.0, 1e-9));
         ASSERT_TRUE(mr_stft_loss((const double*)sig, (const double*)out, 256UL, (const unsigned long*)fs, 2UL) >= 0.0);
-        dealloc(spec);
-        dealloc(out);
+        dealloc(specq);
+        dealloc(outq);
     }
 }
 
@@ -252,15 +252,15 @@ static void on_timer(?&int ctx) { unsafe { g_fired = g_fired + 1; } }
 void t_comb_audio_timer() {
     unsafe {
         double hist[3];
-        safe_memset((void*)hist, 0, sizeof(double) * 3UL);
+        safe_memset(&hist[0], 0, sizeof(double) * 3UL);
         struct CombFF ff = comb_ff_init((double*)hist, 3UL, 0.5);
         ASSERT_TRUE(near_d(ff.process(1.0), 1.0, 1e-12));
         ff.process(0.0);
         ff.process(0.0);
         ASSERT_TRUE(near_d(ff.process(0.0), 0.5, 1e-12));
 
-        ?&AudioBuffer abq = alloc(sizeof(struct AudioBuffer));
-        ?&TimerWheel twq = alloc(sizeof(struct TimerWheel));
+        ?&heap AudioBuffer abq = alloc(sizeof(struct AudioBuffer));
+        ?&heap TimerWheel twq = alloc(sizeof(struct TimerWheel));
         ASSERT_FALSE(abq.is_null());
         ASSERT_FALSE(twq.is_null());
         if (abq.is_null() || twq.is_null()) return;
@@ -275,7 +275,7 @@ void t_comb_audio_timer() {
         ASSERT_EQ(ab.read_frames(outf, 2UL), 2);
         ASSERT_EQ(fixed_to_int(outf[3]), 3);
         ASSERT_EQ(ab.readable_frames(), 2);
-        dealloc(ab);
+        dealloc(abq);
 
         &TimerWheel tw = std::expect_ref(twq, "twq is null");
         timer_wheel_init(tw);
@@ -288,7 +288,7 @@ void t_comb_audio_timer() {
         i = 0;
         while (i < 10) { tw.tick(); i = i + 1; }
         ASSERT_EQ(g_fired, 3);
-        dealloc(tw);
+        dealloc(twq);
     }
 }
 
@@ -298,7 +298,7 @@ void t_imaging_cqt_cwt_minphase() {
         int i = 0;
         while (i < 16) { img[i] = (double)i; i = i + 1; }
         double k[9];
-        safe_memset((void*)k, 0, sizeof(double) * 9UL);
+        safe_memset(&k[0], 0, sizeof(double) * 9UL);
         k[4] = 1.0;   // identity
         double out[16];
         conv2d((const double*)img, 4UL, 4UL, (const double*)k, 3UL, 3UL, (double*)out);
@@ -320,8 +320,8 @@ void t_imaging_cqt_cwt_minphase() {
 
         // CQT: a 440 Hz tone peaks in the bin whose centre is 440 Hz.
         double fs = 8000.0;
-        ?&double toneq = alloc(sizeof(double) * 8000UL);
-        ?&Complex cwq = alloc(sizeof(struct Complex) * 3UL * 512UL);
+        ?&heap double toneq = alloc(sizeof(double) * 8000UL);
+        ?&heap Complex cwq = alloc(sizeof(struct Complex) * 3UL * 512UL);
         ASSERT_FALSE(toneq.is_null());
         ASSERT_FALSE(cwq.is_null());
         if (toneq.is_null() || cwq.is_null()) return;
@@ -340,8 +340,8 @@ void t_imaging_cqt_cwt_minphase() {
         &Complex cw = std::expect_ref(cwq, "cwq is null");
         cwt_morlet((const double*)tone, 512UL, (const double*)scales, 3UL, 6.0, cw);
         ASSERT_TRUE(cw[256].abs() >= 0.0);
-        dealloc(cw);
-        dealloc(tone);
+        dealloc(cwq);
+        dealloc(toneq);
 
         // h = [0.2, 1.0] has its zero at z = -5 (outside the unit circle);
         // its minimum-phase equivalent reflects that zero inside: [1.0, 0.2].

@@ -13,7 +13,7 @@ int utf8_encoded_len(unsigned int cp) {
     return 4;
 }
 
-int utf8_encode(unsigned int cp, char* out) {
+int utf8_encode(unsigned int cp, &char out) {
     int n = utf8_encoded_len(cp);
     if (n == 0) { return 0; }
     if (n == 1) {
@@ -55,7 +55,7 @@ static int utf8_cont_(const char* s, unsigned long pos) {
     return (int)((unsigned int)b & 0x3FU);
 }
 
-int utf8_decode(const char* s, unsigned long pos, unsigned int* cp_out) {
+int utf8_decode(const &char s, unsigned long pos, &unsigned int cp_out) {
     unsigned char b0;
     unsafe { b0 = (unsigned char)s[pos]; }
     if (b0 == (unsigned char)0) { return 0; }
@@ -102,7 +102,7 @@ int utf8_decode(const char* s, unsigned long pos, unsigned int* cp_out) {
     return 0; // stray continuation byte or 0xF8..0xFF (never valid lead bytes)
 }
 
-int utf8_is_valid(const char* s) {
+int utf8_is_valid(const &char s) {
     unsigned long pos = 0UL;
     while (1) {
         char c;
@@ -115,7 +115,7 @@ int utf8_is_valid(const char* s) {
     }
 }
 
-unsigned long utf8_len(const char* s) {
+unsigned long utf8_len(const &char s) {
     unsigned long pos = 0UL;
     unsigned long count = 0UL;
     while (1) {

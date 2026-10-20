@@ -31,15 +31,15 @@ namespace std {
 // z^0 term, bOut[order]/aOut[order] is the z^-order term), normalized so
 // aOut[0] = 1 — the same normalization bilinear_2nd_order's a0-divide-out
 // already uses, and what IirFilter expects.
-void bilinear_nth_order(const double* B, const double* A, unsigned long order,
-                         double fs, double* bOut, double* aOut);
+void bilinear_nth_order(const &double B, const &double A, unsigned long order,
+                         double fs, &double bOut, &double aOut);
 
 // Z-domain frequency response of an order-'order' digital filter
 // (b[]/a[] in the negative-power-of-z convention above) at 'freqHz' —
 // the general-order counterpart of biquad_response_mag/phase.
-double ztransform_response_mag(const double* b, const double* a, unsigned long order,
+double ztransform_response_mag(const &double b, const &double a, unsigned long order,
                                 double fs, double freqHz);
-double ztransform_response_phase(const double* b, const double* a, unsigned long order,
+double ztransform_response_phase(const &double b, const &double a, unsigned long order,
                                   double fs, double freqHz);
 
 } // namespace std

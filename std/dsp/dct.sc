@@ -8,7 +8,7 @@
 
 namespace std {
 
-void dct2(const double* in, double* out, unsigned long n) {
+void dct2(const &double in, &double out, unsigned long n) {
     if (n == 0UL) { return; }
     double nD = (double)n;
     unsigned long k = 0UL;
@@ -27,7 +27,7 @@ void dct2(const double* in, double* out, unsigned long n) {
     }
 }
 
-void idct3(const double* in, double* out, unsigned long n) {
+void idct3(const &double in, &double out, unsigned long n) {
     if (n == 0UL) { return; }
     double nD = (double)n;
     double x0;
@@ -48,7 +48,7 @@ void idct3(const double* in, double* out, unsigned long n) {
     }
 }
 
-void fdct2(const Fixed* in, Fixed* out, unsigned long n) {
+void fdct2(const &Fixed in, &Fixed out, unsigned long n) {
     if (n == 0UL) { return; }
     double nD = (double)n;
     unsigned long k = 0UL;
@@ -68,7 +68,7 @@ void fdct2(const Fixed* in, Fixed* out, unsigned long n) {
     }
 }
 
-void fidct3(const Fixed* in, Fixed* out, unsigned long n) {
+void fidct3(const &Fixed in, &Fixed out, unsigned long n) {
     if (n == 0UL) { return; }
     double nD = (double)n;
     Fixed x0F;

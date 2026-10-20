@@ -394,7 +394,7 @@ static void __sub_backward_gpu(void* selfPtr) {
             if (ok) {
                 struct __MpsGradAccumCtx* ctx = (struct __MpsGradAccumCtx*)malloc(sizeof(struct __MpsGradAccumCtx));
                 ctx->scratch = scratch; ctx->target = (float*)b->grad; ctx->count = selfT->size;
-                mps_batch_register_finalize((MpsFinalizeFn)__mps_grad_accum_finalize, (void*)ctx);
+                mps_batch_register_finalize_raw_((MpsFinalizeFn)__mps_grad_accum_finalize, (void*)ctx);
             } else {
                 free((void*)scratch);
                 // Chained dispatch failed with no CPU-side fallback
@@ -430,7 +430,7 @@ static void __square_backward_gpu(void* selfPtr) {
                 if (ok) {
                     struct __MpsGradAccumCtx* ctx = (struct __MpsGradAccumCtx*)malloc(sizeof(struct __MpsGradAccumCtx));
                     ctx->scratch = scratch; ctx->target = (float*)a->grad; ctx->count = selfT->size;
-                    mps_batch_register_finalize((MpsFinalizeFn)__mps_grad_accum_finalize, (void*)ctx);
+                    mps_batch_register_finalize_raw_((MpsFinalizeFn)__mps_grad_accum_finalize, (void*)ctx);
                     __mps_chain_grad_mark(a, mps_batch_last_output_buffer());
                 } else {
                     free((void*)scratch);
@@ -477,7 +477,7 @@ static void __relu_backward_gpu(void* selfPtr) {
             if (ok) {
                 struct __MpsGradAccumCtx* ctx = (struct __MpsGradAccumCtx*)malloc(sizeof(struct __MpsGradAccumCtx));
                 ctx->scratch = scratch; ctx->target = (float*)a->grad; ctx->count = selfT->size;
-                mps_batch_register_finalize((MpsFinalizeFn)__mps_grad_accum_finalize, (void*)ctx);
+                mps_batch_register_finalize_raw_((MpsFinalizeFn)__mps_grad_accum_finalize, (void*)ctx);
                 __mps_chain_grad_mark(a, mps_batch_last_output_buffer());
             } else if (selfGradBuf == (void*)0 && aDataBuf == (void*)0) {
                 free((void*)scratch);
@@ -495,7 +495,7 @@ static void __relu_backward_gpu(void* selfPtr) {
             return;
         }
 
-        float* fout = (float*)alloc(checked_mul_size(sizeof(float), selfT->size));
+        float* fout = (float*)alloc_raw_(checked_mul_size(sizeof(float), selfT->size));
         int ok = mps_relu_backward_f32((const float*)a->data, (const float*)selfT->grad, fout, selfT->size);
         if (ok) {
             unsigned long i = 0UL;
@@ -509,7 +509,7 @@ static void __relu_backward_gpu(void* selfPtr) {
                 i = i + 1UL;
             }
         }
-        dealloc((void*)fout);
+        dealloc_raw_((void*)fout);
     }
 }
 
@@ -537,7 +537,7 @@ static void __matmul_backward_gpu(void* selfPtr) {
                 if (ok) {
                     struct __MpsGradAccumCtx* ctx = (struct __MpsGradAccumCtx*)malloc(sizeof(struct __MpsGradAccumCtx));
                     ctx->scratch = scratch; ctx->target = (float*)a->grad; ctx->count = m * k;
-                    mps_batch_register_finalize((MpsFinalizeFn)__mps_grad_accum_finalize, (void*)ctx);
+                    mps_batch_register_finalize_raw_((MpsFinalizeFn)__mps_grad_accum_finalize, (void*)ctx);
                     __mps_chain_grad_mark(a, mps_batch_last_output_buffer());
                 } else if (dcBuf == (void*)0) {
                     free((void*)scratch);
@@ -557,7 +557,7 @@ static void __matmul_backward_gpu(void* selfPtr) {
                     free((void*)scratch);
                 }
             } else {
-                float* fdA = (float*)alloc(checked_mul_size(sizeof(float), m * k));
+                float* fdA = (float*)alloc_raw_(checked_mul_size(sizeof(float), m * k));
                 int ok = mps_matmul_abt_f32((const float*)selfT->grad, (const float*)b->data, fdA, m, n, k);
                 if (ok) {
                     unsigned long i = 0UL;
@@ -576,7 +576,7 @@ static void __matmul_backward_gpu(void* selfPtr) {
                         ii = ii + 1UL;
                     }
                 }
-                dealloc((void*)fdA);
+                dealloc_raw_((void*)fdA);
             }
         }
         if (b->requiresGrad) {
@@ -603,7 +603,7 @@ static void __matmul_backward_gpu(void* selfPtr) {
                 if (ok) {
                     struct __MpsGradAccumCtx* ctx = (struct __MpsGradAccumCtx*)malloc(sizeof(struct __MpsGradAccumCtx));
                     ctx->scratch = scratch; ctx->target = (float*)b->grad; ctx->count = k * n;
-                    mps_batch_register_finalize((MpsFinalizeFn)__mps_grad_accum_finalize, (void*)ctx);
+                    mps_batch_register_finalize_raw_((MpsFinalizeFn)__mps_grad_accum_finalize, (void*)ctx);
                     // 'b' (a weight matrix) isn't chain-marked -- nothing
                     // downstream reads a parameter's own gradient as an
                     // upstream input the way an intermediate activation's is.
@@ -630,7 +630,7 @@ static void __matmul_backward_gpu(void* selfPtr) {
                     // gap as tensor_relu_gpu's forward chain.
                 }
             } else {
-                float* fdB = (float*)alloc(checked_mul_size(sizeof(float), k * n));
+                float* fdB = (float*)alloc_raw_(checked_mul_size(sizeof(float), k * n));
                 int ok = mps_matmul_atb_f32((const float*)a->data, (const float*)selfT->grad, fdB, m, k, n);
                 if (ok) {
                     unsigned long i = 0UL;
@@ -651,7 +651,7 @@ static void __matmul_backward_gpu(void* selfPtr) {
                         p = p + 1UL;
                     }
                 }
-                dealloc((void*)fdB);
+                dealloc_raw_((void*)fdB);
             }
         }
     }

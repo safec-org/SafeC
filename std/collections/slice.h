@@ -44,7 +44,7 @@ struct Slice<T> slice_alloc(unsigned long len) {
     s.ptr = null;
     s.len = 0UL;
     ?&T p = null;
-    unsafe { p = (?&T)alloc_zeroed(checked_mul_size(len, sizeof(T))); }
+    unsafe { p = (?&T)alloc_zeroed_raw_(checked_mul_size(len, sizeof(T))); }
     if (!p.is_null()) { s.ptr = p; s.len = len; }
     return s;
 }
@@ -96,7 +96,7 @@ int Slice::is_empty() const { return self.len == 0UL; }
 
 generic<T>
 void Slice::free() {
-    unsafe { dealloc((void*)self.ptr); }
+    unsafe { dealloc_raw_((void*)self.ptr); }
     self.ptr = null;
     self.len = 0UL;
 }

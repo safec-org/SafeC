@@ -27,6 +27,17 @@
 
 namespace std {
 
+// Type-erased forms behind dpm_solver_2_step / dpm_solver_pp_2_step.
+typedef fn &Tensor(const &Tensor x, float sigma, void* userData) EpsModelFn;
+&Tensor dpm_solver_2_step_raw_(EpsModelFn model, void* userData,
+                               const &Tensor x_cur, const &Tensor epsPred,
+                               float alpha_cur, float sigma_cur,
+                               float alpha_next, float sigma_next);
+&Tensor dpm_solver_pp_2_step_raw_(EpsModelFn model, void* userData,
+                                  const &Tensor x_cur, const &Tensor x0Pred,
+                                  float alpha_cur, float sigma_cur,
+                                  float alpha_next, float sigma_next);
+
 // ── EDM (Karras et al., "Elucidating the Design Space...") schedule ────────
 // sigma(i) = (sigmaMax^(1/rho) + i/(numSteps-1)*(sigmaMin^(1/rho)-sigmaMax^(1/rho)))^rho
 // for i in [0,numSteps), followed by sigma(numSteps)=0 (the final,
@@ -36,14 +47,14 @@ namespace std {
 // reimplemented here — this schedule alone is the deferred-scope-item
 // std/ml/ROADMAP.md previously listed).
 void edm_karras_sigmas(unsigned long numSteps, float sigmaMin, float sigmaMax, float rho,
-                        float* outSigmas);
+                        &float outSigmas);
 
 // ── DDPM linear beta schedule ────────────────────────────────────────────────
 // beta_t = betaStart + (betaEnd-betaStart)*t/(numSteps-1), alpha_t = 1-beta_t,
 // alphaBar_t = prod_{s<=t} alpha_s. 'outBeta'/'outAlphaBar' must each have
 // numSteps slots (caller-allocated).
 void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd,
-                           float* outBeta, float* outAlphaBar);
+                           &float outBeta, &float outAlphaBar);
 
 // ── DDPM ancestral sampler step ──────────────────────────────────────────────
 // x_{t-1} = (1/sqrt(1-beta_t)) * (x_t - beta_t/sqrt(1-alphaBar_t) * epsPred) + sqrt(beta_t) * noise
@@ -75,17 +86,18 @@ void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd
 // model(x_s, sigma_s, userData) at the midpoint sample/noise-level.
 // 'userData' stays 'void*' — deliberately type-erased caller context,
 // same as std/gui's callback userData (see gui_widget.h's field comment).
-// The callback's own 'x'/return stay raw 'struct Tensor*': SafeC's 'fn'
-// function-pointer-type grammar can't express a reference return type
-// (only parseBaseType()'s primitive/struct/pointer forms), so this is
-// the one spot in this file a reference type genuinely doesn't fit —
-// a real grammar limitation, not a scope choice.
-typedef fn struct Tensor*(struct Tensor* x, float sigma, void* userData) EpsModelFn;
-
-&Tensor dpm_solver_2_step(EpsModelFn model, void* userData,
+// 'userData' is passed through to 'model' unchanged; the callback and its
+// context are checked against each other at compile time.
+generic<T>
+&Tensor dpm_solver_2_step(fn &Tensor(const &Tensor, float, ?&T) model, ?&T userData,
                            const &Tensor x_cur, const &Tensor epsPred,
                            float alpha_cur, float sigma_cur,
-                           float alpha_next, float sigma_next);
+                           float alpha_next, float sigma_next) {
+    unsafe {
+        return dpm_solver_2_step_raw_((EpsModelFn)model, (void*)userData, x_cur, epsPred,
+                                      alpha_cur, sigma_cur, alpha_next, sigma_next);
+    }
+}
 
 // ── DPM-Solver++ (Lu et al. 2022b): data(x0)-prediction parametrization ────
 // Same exponential-integrator idea as DPM-Solver, reformulated around a
@@ -99,11 +111,15 @@ typedef fn struct Tensor*(struct Tensor* x, float sigma, void* userData) EpsMode
 // Order-2 midpoint variant, x0-prediction form. 'model' is called
 // internally as model(x_s, sigma_s, userData) at the log-SNR midpoint,
 // returning a predicted x0 (not eps).
-typedef fn struct Tensor*(struct Tensor* x, float sigma, void* userData) DataModelFn;
-
-&Tensor dpm_solver_pp_2_step(DataModelFn model, void* userData,
+generic<T>
+&Tensor dpm_solver_pp_2_step(fn &Tensor(const &Tensor, float, ?&T) model, ?&T userData,
                               const &Tensor x_cur, const &Tensor x0Pred,
                               float alpha_cur, float sigma_cur,
-                              float alpha_next, float sigma_next);
+                              float alpha_next, float sigma_next) {
+    unsafe {
+        return dpm_solver_pp_2_step_raw_((EpsModelFn)model, (void*)userData, x_cur, x0Pred,
+                                         alpha_cur, sigma_cur, alpha_next, sigma_next);
+    }
+}
 
 } // namespace std

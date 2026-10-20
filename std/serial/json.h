@@ -32,6 +32,6 @@ struct String value_to_json(const &Value v);
 // the parsed tree is returned; on failure, '*ok' is set to 0 and the
 // return value is value_null(). Ignores trailing content after the first
 // complete value (matches most JSON libraries' default leniency).
-struct Value json_parse(const char* text, int* ok);
+struct Value json_parse(const &char text, ?&int ok);
 
 } // namespace std

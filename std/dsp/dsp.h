@@ -38,6 +38,6 @@ Fixed dsp_rms(&stack Fixed a, unsigned long n);
 // by convolution.sc's conv_direct as the core accumulation primitive
 // once the kernel is reversed into a contiguous access pattern, and
 // available directly for any other double-array dot product.
-double dsp_dot_f64(const double* a, const double* b, unsigned long n);
+double dsp_dot_f64(const &double a, const &double b, unsigned long n);
 
 } // namespace std

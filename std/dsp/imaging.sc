@@ -8,8 +8,8 @@
 
 namespace std {
 
-void conv2d(const double* img, unsigned long h, unsigned long w,
-            const double* kernel, unsigned long kh, unsigned long kw, double* out) {
+void conv2d(const &double img, unsigned long h, unsigned long w,
+            const &double kernel, unsigned long kh, unsigned long kw, &double out) {
     unsigned long kcy = kh / 2UL;
     unsigned long kcx = kw / 2UL;
 
@@ -52,7 +52,7 @@ void conv2d(const double* img, unsigned long h, unsigned long w,
     }
 }
 
-void fft2d(struct Complex* img, unsigned long h, unsigned long w) {
+void fft2d(&Complex img_ref, unsigned long h, unsigned long w) { struct Complex* img = img_ref;
     unsigned long y = 0UL;
     while (y < h) {
         unsafe { fft(img + y * w, w); }
@@ -60,7 +60,7 @@ void fft2d(struct Complex* img, unsigned long h, unsigned long w) {
     }
 
     struct Complex* col;
-    unsafe { col = (struct Complex*)alloc(h * (unsigned long)sizeof(struct Complex)); }
+    unsafe { col = (struct Complex*)alloc_raw_(h * (unsigned long)sizeof(struct Complex)); }
     unsigned long x = 0UL;
     while (x < w) {
         unsigned long yy = 0UL;
@@ -68,7 +68,7 @@ void fft2d(struct Complex* img, unsigned long h, unsigned long w) {
             unsafe { col[yy] = img[yy * w + x]; }
             yy = yy + 1UL;
         }
-        fft(col, h);
+        unsafe { fft(col, h); }
         yy = 0UL;
         while (yy < h) {
             unsafe { img[yy * w + x] = col[yy]; }
@@ -76,10 +76,10 @@ void fft2d(struct Complex* img, unsigned long h, unsigned long w) {
         }
         x = x + 1UL;
     }
-    unsafe { dealloc((void*)col); }
+    unsafe { dealloc_raw_((void*)col); }
 }
 
-void ifft2d(struct Complex* img, unsigned long h, unsigned long w) {
+void ifft2d(&Complex img_ref, unsigned long h, unsigned long w) { struct Complex* img = img_ref;
     unsigned long y = 0UL;
     while (y < h) {
         unsafe { ifft(img + y * w, w); }
@@ -87,7 +87,7 @@ void ifft2d(struct Complex* img, unsigned long h, unsigned long w) {
     }
 
     struct Complex* col;
-    unsafe { col = (struct Complex*)alloc(h * (unsigned long)sizeof(struct Complex)); }
+    unsafe { col = (struct Complex*)alloc_raw_(h * (unsigned long)sizeof(struct Complex)); }
     unsigned long x = 0UL;
     while (x < w) {
         unsigned long yy = 0UL;
@@ -95,7 +95,7 @@ void ifft2d(struct Complex* img, unsigned long h, unsigned long w) {
             unsafe { col[yy] = img[yy * w + x]; }
             yy = yy + 1UL;
         }
-        ifft(col, h);
+        unsafe { ifft(col, h); }
         yy = 0UL;
         while (yy < h) {
             unsafe { img[yy * w + x] = col[yy]; }
@@ -103,10 +103,10 @@ void ifft2d(struct Complex* img, unsigned long h, unsigned long w) {
         }
         x = x + 1UL;
     }
-    unsafe { dealloc((void*)col); }
+    unsafe { dealloc_raw_((void*)col); }
 }
 
-void gaussian_kernel(double* kernel, unsigned long size, double sigma) {
+void gaussian_kernel(&double kernel, unsigned long size, double sigma) {
     unsigned long center = size / 2UL;
     double sum = 0.0;
     unsigned long y = 0UL;
@@ -135,7 +135,7 @@ void gaussian_kernel(double* kernel, unsigned long size, double sigma) {
     }
 }
 
-inline void sobel_x_kernel(double* kernel) {
+inline void sobel_x_kernel(&double kernel) {
     unsafe {
         kernel[0] = 0.0 - 1.0; kernel[1] = 0.0; kernel[2] = 1.0;
         kernel[3] = 0.0 - 2.0; kernel[4] = 0.0; kernel[5] = 2.0;
@@ -143,7 +143,7 @@ inline void sobel_x_kernel(double* kernel) {
     }
 }
 
-inline void sobel_y_kernel(double* kernel) {
+inline void sobel_y_kernel(&double kernel) {
     unsafe {
         kernel[0] = 0.0 - 1.0; kernel[1] = 0.0 - 2.0; kernel[2] = 0.0 - 1.0;
         kernel[3] = 0.0;       kernel[4] = 0.0;       kernel[5] = 0.0;

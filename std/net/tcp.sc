@@ -8,7 +8,7 @@
 namespace std {
 
 unsigned short tcp_checksum(unsigned int src_ip, unsigned int dst_ip,
-                             const unsigned char* tcp_seg, unsigned long seg_len) {
+                             const &unsigned char tcp_seg, unsigned long seg_len) {
     unsigned long sum = (unsigned long)0;
     // Pseudo-header: src_ip, dst_ip, 0x00, proto=6, tcp_length
     unsafe {
@@ -217,7 +217,7 @@ int TcpConn::recv(&stack PacketBuf pkt, unsigned long tcp_offset) {
     return 0;
 }
 
-inline unsigned long TcpConn::send(const unsigned char* data, unsigned long len) {
+inline unsigned long TcpConn::send(const &unsigned char data, unsigned long len) {
     unsigned long space = (unsigned long)TCP_TX_BUF - self.tx_len;
     if (len > space) { len = space; }
     unsafe {
@@ -316,7 +316,7 @@ inline int TcpConn::rx_ready() const {
     return 0;
 }
 
-inline unsigned long TcpConn::read(unsigned char* out, unsigned long len) {
+inline unsigned long TcpConn::read(&unsigned char out, unsigned long len) {
     if (len > self.rx_len) { len = self.rx_len; }
     unsafe {
         unsigned long i = (unsigned long)0;

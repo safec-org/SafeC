@@ -17,7 +17,7 @@ namespace std {
 
 void RpcResult::free() {
     if (self.data != (unsigned char*)0) {
-        unsafe { dealloc((void*)self.data); }
+        unsafe { dealloc_raw_((void*)self.data); }
     }
     self.error_message.free();
 }
@@ -56,9 +56,9 @@ static int rpc_unframe_(const char* raw, unsigned long rawLen,
     if (rawLen < 5UL + len) { return 0; }
     unsigned char* copy = (unsigned char*)0;
     if (len > 0UL) {
-        unsafe { copy = (unsigned char*)alloc(len); }
+        unsafe { copy = (unsigned char*)alloc_raw_(len); }
         if (copy == (unsigned char*)0) { return 0; }
-        unsafe { safe_memcpy((void*)copy, (const void*)(raw + 5), len); }
+        unsafe { safe_memcpy_raw_((void*)copy, (const void*)(raw + 5), len); }
     }
     unsafe { *outData = copy; *outLen = len; }
     return 1;
@@ -66,8 +66,8 @@ static int rpc_unframe_(const char* raw, unsigned long rawLen,
 
 // ── Client ────────────────────────────────────────────────────────────────
 
-struct RpcResult rpc_call(const char* host, unsigned short port, const char* path,
-                           const unsigned char* request_data, unsigned long request_len) {
+struct RpcResult rpc_call(const &char host, unsigned short port, const &char path,
+                           const &unsigned char request_data, unsigned long request_len) {
     struct RpcResult result;
     result.ok            = 0;
     result.data           = (unsigned char*)0;
@@ -124,7 +124,7 @@ struct RpcResult rpc_call(const char* host, unsigned short port, const char* pat
 static struct StrMap<RpcMethodHandler> rpc_handlers_;
 static int rpc_handlers_init_ = 0;
 
-void rpc_register(const char* path, RpcMethodHandler handler) {
+void rpc_register(const &char path, RpcMethodHandler handler) {
     if (rpc_handlers_init_ == 0) {
         rpc_handlers_ = str_map_new();
         rpc_handlers_init_ = 1;
@@ -137,7 +137,7 @@ static struct HttpResponse rpc_dispatch_(&HttpRequest req) {
     unsafe { path = req->path.as_ptr(); }
 
     ?&RpcMethodHandler found = null;
-    if (rpc_handlers_init_ != 0) found = rpc_handlers_.get(path);
+    unsafe { if (rpc_handlers_init_ != 0) found = rpc_handlers_.get(path); }
 
     struct HttpResponse resp;
     resp.headers = string_new();
@@ -164,8 +164,15 @@ static struct HttpResponse rpc_dispatch_(&HttpRequest req) {
     }
 
     RpcMethodHandler handlerFn = *expect_ref(found, "rpc handler");
-    struct RpcResult result = handlerFn(reqData, reqLen);
-    if (reqData != (unsigned char*)0) { unsafe { dealloc((void*)reqData); } }
+    // An empty payload has no buffer; hand the handler a zero-length view.
+    unsigned char emptyPayload = (unsigned char)0;
+    struct RpcResult result;
+    if (reqData == (unsigned char*)0) {
+        result = handlerFn(&emptyPayload, 0UL);
+    } else {
+        unsafe { result = handlerFn(reqData, reqLen); }
+    }
+    if (reqData != (unsigned char*)0) { unsafe { dealloc_raw_((void*)reqData); } }
 
     if (!result.ok) {
         resp.status = 500;

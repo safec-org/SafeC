@@ -25,12 +25,12 @@ int cors_is_preflight(const &HttpRequest req);
 // '...-Credentials: true' when 'allowedOrigin' isn't "*") to 'resp's
 // headers — call on every response (not just preflights) so the browser
 // accepts the actual response, not just the preflight.
-void cors_apply_headers(&HttpResponse resp, const char* allowedOrigin);
+void cors_apply_headers(&HttpResponse resp, const &char allowedOrigin);
 
 // Builds a complete 204 response for a preflight OPTIONS request, with
 // Allow-Origin/-Methods/-Headers/-Max-Age all set.
-struct HttpResponse cors_preflight_response(const char* allowedOrigin,
-                                             const char* allowedMethods,
-                                             const char* allowedHeaders);
+struct HttpResponse cors_preflight_response(const &char allowedOrigin,
+                                             const &char allowedMethods,
+                                             const &char allowedHeaders);
 
 } // namespace std

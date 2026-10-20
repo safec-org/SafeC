@@ -31,6 +31,6 @@ namespace std {
 // enumerators (DEVICE_CPU etc.) must be referenced unqualified rather
 // than as std::DEVICE_CPU.
 &Tensor jit_forward_on(const &Tensor patches, const &Tensor WPatchEmbed, const &Tensor cond,
-                        struct JiTBlock* blocks, unsigned long numBlocks, enum Device device);
+                        struct Slice<JiTBlock> blocks, enum Device device);
 
 } // namespace std

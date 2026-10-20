@@ -23,7 +23,7 @@ struct ServerFnEntry {
 static struct ServerFnEntry gServerFns[SERVER_FN_MAX];
 static int gServerFnCount = 0;
 
-void server_fn_register(const char* name, ServerFn handler) {
+void server_fn_register(const &char name, ServerFn handler) {
     if (gServerFnCount >= SERVER_FN_MAX) { return; }
     unsafe {
         gServerFns[gServerFnCount].name = string_from(name);
@@ -93,7 +93,7 @@ static struct RpcResult __server_fn_dispatch(const unsigned char* data, unsigned
     unsigned long respLen; unsafe { respLen = respText.len; }
     unsigned char* respBuf;
     unsafe {
-        respBuf = (unsigned char*)alloc(respLen);
+        respBuf = (unsigned char*)alloc_raw_(respLen);
         unsigned long i = 0UL;
         while (i < respLen) { respBuf[i] = (unsigned char)respText.data[i]; i = i + 1UL; }
         respText.free();
@@ -110,16 +110,15 @@ int server_fn_serve(unsigned short port) {
     return rpc_serve(port);
 }
 
-struct Value server_fn_call(const char* host, unsigned short port, const char* name,
-                             const struct Value* args, int* ok) {
+struct Value server_fn_call(const &char host, unsigned short port, const &char name,
+                             const ?&Value args, ?&int ok) {
     struct Value envelope;
     unsafe {
         envelope = value_object();
         value_object_set(&envelope, "fn", value_string(name));
-        if (args != (const struct Value*)0) {
-            value_object_set(&envelope, "args", value_clone(args));
-        } else {
-            value_object_set(&envelope, "args", value_null());
+        match (args) {
+            case some(a): { value_object_set(&envelope, "args", value_clone(a)); }
+            case null:    { value_object_set(&envelope, "args", value_null()); }
         }
     }
     struct String reqText;

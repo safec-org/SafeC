@@ -88,7 +88,7 @@ struct Ext2Ctx {
 
     // Read file data for inode at byte offset `offset` into `buf` for `len` bytes.
     unsigned long read_file(unsigned long ino, unsigned long offset,
-                             unsigned char* buf, unsigned long len);
+                             &unsigned char buf, unsigned long len);
 };
 
 // Initialise ext2 context from a block device.  Returns 0 on success.

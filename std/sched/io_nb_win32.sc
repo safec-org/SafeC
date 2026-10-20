@@ -122,7 +122,7 @@ inline int fd_set_blocking(int fd) {
 // See file header comment — this is a plain (blocking) file open on this
 // backend; the O_NONBLOCK-style flag argument callers may pass has no
 // effect here.
-inline int fd_open_nb(const char* path, int flags, int mode) {
+inline int fd_open_nb(const &char path, int flags, int mode) {
     int fd;
     unsafe { fd = _open(path, flags, mode); }
     return fd;

@@ -216,8 +216,10 @@ static int fat_split_path_(const char* path, char parts[][VFS_MAX_NAME], int max
 
 // ── VfsOps callbacks ──────────────────────────────────────────────────────────
 
-static int fat_vfs_open_(void* ctx, const char* path, int flags,
+static int fat_vfs_open_(?&void ctx_ref, const &char path_ref, int flags,
                           &stack VfsNode node_out) {
+    void* ctx = ctx_ref;
+    const char* path = path_ref;
     struct FatCtx* fc;
     unsafe { fc = (struct FatCtx*)ctx; }
     // Tokenise path.
@@ -264,9 +266,11 @@ static int fat_vfs_open_(void* ctx, const char* path, int flags,
     return 0;
 }
 
-static unsigned long fat_vfs_read_(void* ctx, unsigned long inode,
+static unsigned long fat_vfs_read_(?&void ctx_ref, unsigned long inode,
                                     unsigned long offset,
-                                    unsigned char* buf, unsigned long len) {
+                                    &unsigned char buf_ref, unsigned long len) {
+    void* ctx = ctx_ref;
+    unsigned char* buf = buf_ref;
     struct FatCtx* fc;
     unsafe { fc = (struct FatCtx*)ctx; }
     unsigned long bpc;
@@ -292,7 +296,8 @@ static unsigned long fat_vfs_read_(void* ctx, unsigned long inode,
     return avail;
 }
 
-static int fat_vfs_readdir_(void* ctx, unsigned long inode, void* cb, void* user) {
+static int fat_vfs_readdir_(?&void ctx_ref, unsigned long inode, fn void(&VfsNode, ?&void) cb, ?&void user) {
+    void* ctx = ctx_ref;
     struct FatCtx* fc;
     unsafe { fc = (struct FatCtx*)ctx; }
     int count = 0;
@@ -329,9 +334,7 @@ static int fat_vfs_readdir_(void* ctx, unsigned long inode, void* cb, void* user
                 unsigned long lo = (unsigned long)fat_read16_(entry + 26);
                 node.inode    = (hi << 16) | lo;
                 node.fs_ctx   = ctx;
-                fn void(struct VfsNode*, void*) callback =
-                    (fn void(struct VfsNode*, void*))cb;
-                callback((struct VfsNode*)&node, user);
+                cb(&node, user);
                 count = count + 1;
             }
             e = e + (unsigned long)1;

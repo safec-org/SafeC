@@ -17,7 +17,7 @@ inline void panic_set_handler(PanicHandler handler) {
     unsafe { current_handler_ = (void*)handler; }
 }
 
-inline noreturn void panic_at(const char* msg, const char* file, int line) {
+inline noreturn void panic_at(const &char msg, const &char file, int line) {
     if (current_handler_ != NULL) {
         unsafe {
             PanicHandler cb = (PanicHandler)current_handler_;

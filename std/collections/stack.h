@@ -48,7 +48,7 @@ generic<T>
 int Stack::reserve(unsigned long n) {
     if (n <= self.cap) return 1;
     ?&heap T grown = null;
-    unsafe { grown = (?&heap T)realloc_buf((void*)self.data, checked_mul_size(n, sizeof(T))); }
+    unsafe { grown = (?&heap T)realloc_buf_raw_((void*)self.data, checked_mul_size(n, sizeof(T))); }
     if (grown.is_null()) return 0;
     self.data = grown;
     self.cap = n;
@@ -89,7 +89,7 @@ void Stack::clear() { self.top = 0UL; }
 
 generic<T>
 void Stack::free() {
-    unsafe { dealloc((void*)self.data); }
+    unsafe { dealloc_raw_((void*)self.data); }
     self.data = null;
     self.top = 0UL;
     self.cap = 0UL;
