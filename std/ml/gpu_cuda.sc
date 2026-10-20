@@ -30,6 +30,7 @@ extern int cuMemFree_v2(unsigned long long dptr);
 extern int cuMemAllocHost_v2(void** pp, size_t bytes);
 extern int cuMemcpyHtoDAsync_v2(unsigned long long dst, const void* src, size_t bytes, void* stream);
 extern int cuMemcpyDtoHAsync_v2(void* dst, unsigned long long src, size_t bytes, void* stream);
+extern int cuMemcpyDtoDAsync_v2(unsigned long long dst, unsigned long long src, size_t bytes, void* stream);
 extern int cuMemsetD32Async(unsigned long long dst, unsigned int value, size_t n, void* stream);
 extern int cuModuleLoadData(void** module, const void* image);
 extern int cuModuleGetFunction(void** func, void* module, const char* name);
@@ -246,6 +247,18 @@ static const char* cuda_kernel_source_() {
     "    }\n"
     "}\n"
     "\n"
+    "// Nearest-neighbour 2x upsample of 'planes' h x w planes: out[p][y][x] = in[p][y/2][x/2]\n"
+    "extern \"C\" __global__ void upsample2x(const float* __restrict__ in, float* __restrict__ out,\n"
+    "                                      unsigned planes, unsigned h, unsigned w) {\n"
+    "    unsigned ow = 2u * w, ohw = 4u * h * w, n = planes * ohw;\n"
+    "    unsigned i = blockIdx.x * blockDim.x + threadIdx.x;\n"
+    "    unsigned stride = gridDim.x * blockDim.x;\n"
+    "    for (; i < n; i += stride) {\n"
+    "        unsigned p = i / ohw, r = i - p * ohw, y = r / ow, x = r - y * ow;\n"
+    "        out[i] = in[(size_t)p * h * w + (y >> 1) * w + (x >> 1)];\n"
+    "    }\n"
+    "}\n"
+    "\n"
     "// ── fp16 / bf16 storage, fp32 arithmetic ───────────────────────────────────\n"
     "__device__ float h2f(unsigned short h) { float f; asm(\"cvt.f32.f16 %0, %1;\" : \"=f\"(f) : \"h\"(h)); return f; }\n"
     "__device__ unsigned short f2h(float f) { unsigned short h; asm(\"cvt.rn.f16.f32 %0, %1;\" : \"=h\"(h) : \"f\"(f)); return h; }\n"
@@ -299,7 +312,8 @@ static const char* cuda_kernel_source_() {
 #define K_MATMUL_BF16 17
 #define K_SGD_F16 18
 #define K_SGD_BF16 19
-#define K_COUNT 20
+#define K_UPSAMPLE2X 20
+#define K_COUNT 21
 
 static const char* cuda_kernel_name_(int k) {
     if (k == K_ADD) return "ew_add";
@@ -321,7 +335,8 @@ static const char* cuda_kernel_name_(int k) {
     if (k == K_MATMUL_F16) return "matmul_f16";
     if (k == K_MATMUL_BF16) return "matmul_bf16";
     if (k == K_SGD_F16) return "sgd_f16";
-    return "sgd_bf16";
+    if (k == K_SGD_BF16) return "sgd_bf16";
+    return "upsample2x";
 }
 
 // ── Backend state (one per process) ──────────────────────────────────────────
@@ -799,6 +814,42 @@ int cuda_mse_grad(struct CudaBuf y, struct CudaBuf t, struct CudaBuf dy, struct 
         return cuda_reduce_launch_(K_MSE, n, loss1.dev, (&void)&params[0]);
     }
 }
+
+int cuda_copy(struct CudaBuf src, unsigned long srcOff, struct CudaBuf dst, unsigned long dstOff, unsigned long n) {
+    if (!cuda_ensure_() || n == 0UL || !cuda_fits_(src, srcOff + n) || !cuda_fits_(dst, dstOff + n)) return 0;
+    unsafe {
+        return cuMemcpyDtoDAsync_v2((unsigned long long)(dst.dev + dstOff * sizeof(float)),
+                                    (unsigned long long)(src.dev + srcOff * sizeof(float)),
+                                    n * sizeof(float), g_cuda_stream) == CUDA_OK;
+    }
+}
+
+int cuda_upsample2x_nearest(struct CudaBuf in, struct CudaBuf out,
+                            unsigned long planes, unsigned long h, unsigned long w) {
+    unsigned long n = planes * h * w * 4UL;
+    if (!cuda_ensure_() || n == 0UL || n > 4294967295UL ||
+        !cuda_fits_(in, planes * h * w) || !cuda_fits_(out, n)) return 0;
+    unsafe {
+        void* pi = (void*)in.dev;
+        void* po = (void*)out.dev;
+        unsigned int np = (unsigned int)planes;
+        unsigned int nh = (unsigned int)h;
+        unsigned int nw = (unsigned int)w;
+        void* params[5];
+        params[0] = (void*)&pi; params[1] = (void*)&po; params[2] = (void*)&np;
+        params[3] = (void*)&nh; params[4] = (void*)&nw;
+        return cuda_launch_(K_UPSAMPLE2X, n, (&void)&params[0]);
+    }
+}
+
+// ── Interop ──────────────────────────────────────────────────────────────────
+
+void* cuda_stream_handle() {
+    if (!cuda_ensure_()) return (void*)0;
+    return g_cuda_stream;
+}
+
+int cuda_tf32_enabled() { return g_cuda_tf32; }
 
 // ── Graphs ───────────────────────────────────────────────────────────────────
 
