@@ -176,6 +176,15 @@ int cuda_half_sgd2(struct CudaHalfBuf w1, struct CudaHalfBuf g1, struct CudaHalf
 ?&void cuda_stream_handle();
 // 1 if cuda_set_tf32(1) is in effect.
 int cuda_tf32_enabled();
+// Compute capability of the selected GPU as major * 10 + minor (80 on an
+// A100, 90 on an H100/H200); 0 if there is no GPU.
+int cuda_compute_capability();
+// Compiles CUDA C++ source with NVRTC for the selected GPU (-arch=sm_<cc>,
+// -std=c++17) and loads it as a CUmodule, for libraries that bring their
+// own kernels (gpu_cuda_attention.h). Null on failure, after printing the
+// compile log. Look kernels up with cuModuleGetFunction and launch them on
+// cuda_stream_handle().
+?&void cuda_load_module(const &char source, const &char name);
 // Byte copies between host memory and a raw device address (e.g. a
 // CudaBuf's dev plus an offset, or memory from cuMemAlloc), through the
 // same path as cuda_write / cuda_read (pinned lanes from 1 MiB up).
