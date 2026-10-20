@@ -51,6 +51,11 @@ struct CudaBuf cuda_alloc(unsigned long n);                       // uninitializ
 struct CudaBuf cuda_upload(const &float host, unsigned long n);  // dev == 0 on failure
 int  cuda_write(struct CudaBuf dst, const &float host, unsigned long n);  // 1 on success
 int  cuda_read(struct CudaBuf src, &float host, unsigned long n);         // waits for queued work
+// cuda_write returns once 'host' may be reused. Copies of 1 MiB and up run
+// as 4 parallel lanes (3 helper threads started on first use plus the
+// caller), each staging its slice through pinned buffers with the DMA of
+// one chunk overlapping the copy of the next: ~2x the driver's own
+// pageable-memory path, which is bounded by one core's memcpy rate.
 void cuda_free(&CudaBuf b);                                       // b.dev := 0
 int  cuda_sync();                                                 // wait for all queued work
 
@@ -92,6 +97,12 @@ int cuda_mse_grad(struct CudaBuf y, struct CudaBuf t, struct CudaBuf dy, struct 
 
 // dst[dstOff .. dstOff+n) = src[srcOff .. srcOff+n)  (device-to-device copy)
 int cuda_copy(struct CudaBuf src, unsigned long srcOff, struct CudaBuf dst, unsigned long dstOff, unsigned long n);
+// Strided 2D copy, one queued kernel: for r < rows, c < rowLen,
+//   dst[dstOff + r*dstStride + c] = src[srcOff + r*srcStride + c].
+// Rows must not overlap (rowLen <= both strides when rows > 1).
+int cuda_copy_rows(struct CudaBuf src, unsigned long srcOff, unsigned long srcStride,
+                   struct CudaBuf dst, unsigned long dstOff, unsigned long dstStride,
+                   unsigned long rowLen, unsigned long rows);
 // Nearest-neighbour 2x upsample of 'planes' row-major h x w planes into
 // planes x 2h x 2w: out[p][y][x] = in[p][y/2][x/2] (cnn.h's upsample2x_nearest).
 int cuda_upsample2x_nearest(struct CudaBuf in, struct CudaBuf out,
@@ -110,6 +121,52 @@ struct CudaGraph cuda_capture_end();          // exec == 0 on failure
 int  cuda_graph_launch(struct CudaGraph g);   // queued like any other op
 void cuda_graph_free(&CudaGraph g);
 
+// ── fp16 / bf16 ──────────────────────────────────────────────────────────────
+// 16-bit storage, fp32 arithmetic (the same API as gpu_rocm.h's RocmHalfBuf):
+// half the memory and bandwidth of a CudaBuf. Every kernel widens on load
+// and rounds to nearest even once per stored value, giving exactly the bits
+// float16.h's f32_to_fp16 / f32_to_bf16 give on the CPU. GEMMs run on
+// tensor cores through cuBLAS / cuBLASLt with fp32 accumulation. All ops are
+// queued and can be recorded into a CudaGraph.
+
+#define CUDA_FP16 1   // same values as tensor_half.h's TENSOR_FP16 / TENSOR_BF16
+#define CUDA_BF16 2
+
+// 'len' fp16 or bf16 values ('dtype') in GPU memory; dev == 0 if invalid.
+struct CudaHalfBuf {
+    unsigned long dev;
+    unsigned long len;
+    int           dtype;
+};
+
+struct CudaHalfBuf cuda_half_alloc(unsigned long n, int dtype);                   // uninitialized
+struct CudaHalfBuf cuda_half_upload(const &float host, unsigned long n, int dtype); // rounded on the GPU
+int  cuda_half_write(struct CudaHalfBuf dst, const &unsigned short bits, unsigned long n);  // raw bits
+int  cuda_half_read(struct CudaHalfBuf src, &unsigned short bits, unsigned long n);         // waits
+void cuda_half_free(&CudaHalfBuf b);
+
+// Conversions over dst.len (to_half) / src.len (from_half) elements.
+int cuda_to_half(struct CudaBuf src, struct CudaHalfBuf dst);     // round to dst.dtype
+int cuda_from_half(struct CudaHalfBuf src, struct CudaBuf dst);   // exact
+
+// c[m,n] = op(a)[m,k] * op(b)[k,n] (ta/tb as in cuda_gemm), a and b of the
+// same dtype; c in that dtype (_relu: then max(0, .) in the epilogue), or
+// fp32 with _f32.
+int cuda_half_gemm(struct CudaHalfBuf a, int ta, struct CudaHalfBuf b, int tb, struct CudaHalfBuf c,
+                   unsigned long m, unsigned long n, unsigned long k);
+int cuda_half_gemm_relu(struct CudaHalfBuf a, int ta, struct CudaHalfBuf b, int tb, struct CudaHalfBuf c,
+                        unsigned long m, unsigned long n, unsigned long k);
+int cuda_half_gemm_f32(struct CudaHalfBuf a, int ta, struct CudaHalfBuf b, int tb, struct CudaBuf c,
+                       unsigned long m, unsigned long n, unsigned long k);
+
+// Training ops, as their CudaBuf versions above (loss stays fp32).
+int cuda_half_relu(struct CudaHalfBuf a, struct CudaHalfBuf out);
+int cuda_half_relu_grad(struct CudaHalfBuf z, struct CudaHalfBuf g, struct CudaHalfBuf out);
+int cuda_half_mse_grad(struct CudaHalfBuf y, struct CudaHalfBuf t, struct CudaHalfBuf dy, struct CudaBuf loss1);
+int cuda_half_sgd(struct CudaHalfBuf w, struct CudaHalfBuf g, float lr);   // w = round(w - lr * g)
+int cuda_half_sgd2(struct CudaHalfBuf w1, struct CudaHalfBuf g1, struct CudaHalfBuf w2, struct CudaHalfBuf g2,
+                   float lr);
+
 // ── Interop: for libraries layered on this backend (gpu_cudnn.h, dsp/fft_cuda.h)
 
 // The CUstream every op above is queued on (a cudaStream_t to the runtime
@@ -119,6 +176,13 @@ void cuda_graph_free(&CudaGraph g);
 ?&void cuda_stream_handle();
 // 1 if cuda_set_tf32(1) is in effect.
 int cuda_tf32_enabled();
+// Byte copies between host memory and a raw device address (e.g. a
+// CudaBuf's dev plus an offset, or memory from cuMemAlloc), through the
+// same path as cuda_write / cuda_read (pinned lanes from 1 MiB up).
+// cuda_copy_to_device returns once 'host' may be reused; cuda_copy_to_host
+// waits for queued work first. 1 on success.
+int cuda_copy_to_device(unsigned long dev, const &void host, unsigned long bytes);
+int cuda_copy_to_host(&void host, unsigned long dev, unsigned long bytes);
 
 // ── Host-array convenience ops (upload → compute → read back) ────────────────
 // 1 on success, 0 on failure (no GPU, allocation failure).

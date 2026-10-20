@@ -2,6 +2,7 @@
 // Needs an NVIDIA GPU; run with tests/stdlib/cuda/run.sh.
 #include <std/ml/gpu_cuda.h>
 #include <std/ml/float16.h>
+#include <std/ml/tensor_half.h>
 #include <std/collections/vec.h>
 #include <std/math.h>
 #include <std/ml/gpu_cudnn.h>
@@ -222,6 +223,63 @@ static void check_cudnn() {
     unsafe { check(fm_err(ya.at(0UL), (const float*)cat.data, 2UL * inN) == 0.0f, "cuda_concat_channels values"); }
     ya.free();
 
+    // batch-2 concat of 4x4 planes (the float4 copy path)
+    struct CudaBuf dc2 = std::cuda_alloc(2UL * 2UL * 4UL * 16UL);
+    check(std::cuda_concat_channels(dx, 2UL, dx, 2UL, dc2, 2UL, 16UL) &&
+          std::cuda_concat_channels(dx, 3UL, dx, 1UL, dc2, 2UL, 16UL), "cuda_concat_channels batch ran");
+    ya = download(dc2);
+    yb = download(dx);
+    unsafe {
+        // out[b] = (a[b] with 3 channels, c[b] with 1 channel), a = c = dx read as [2, 3|1, 16]
+        int same = 1;
+        unsigned long b = 0UL;
+        while (b < 2UL) {
+            unsigned long i = 0UL;
+            while (i < 64UL) {
+                float want = i < 48UL ? *yb.at(b * 48UL + i) : *yb.at(b * 16UL + i - 48UL);
+                if (*ya.at(b * 64UL + i) != want) same = 0;
+                i = i + 1UL;
+            }
+            b = b + 1UL;
+        }
+        check(same, "cuda_concat_channels batch values");
+    }
+    ya.free(); yb.free();
+
+    // strided row copies: float4 and scalar paths, bounds
+    check(std::cuda_copy_rows(dx, 4UL, 12UL, dc2, 8UL, 16UL, 8UL, 5UL) &&
+          std::cuda_copy_rows(dx, 1UL, 7UL, dc2, 100UL, 9UL, 5UL, 3UL), "cuda_copy_rows ran");
+    ya = download(dc2);
+    yb = download(dx);
+    unsafe {
+        int same = 1;
+        unsigned long r = 0UL;
+        while (r < 5UL) {
+            unsigned long c = 0UL;
+            while (c < 8UL) { if (*ya.at(8UL + r * 16UL + c) != *yb.at(4UL + r * 12UL + c)) same = 0; c = c + 1UL; }
+            r = r + 1UL;
+        }
+        r = 0UL;
+        while (r < 3UL) {
+            unsigned long c = 0UL;
+            while (c < 5UL) { if (*ya.at(100UL + r * 9UL + c) != *yb.at(1UL + r * 7UL + c)) same = 0; c = c + 1UL; }
+            r = r + 1UL;
+        }
+        check(same, "cuda_copy_rows values");
+    }
+    ya.free(); yb.free();
+    check(!std::cuda_copy_rows(dx, 0UL, 4UL, dc2, 0UL, 16UL, 8UL, 2UL) &&
+          !std::cuda_copy_rows(dx, 0UL, 8UL, dc2, 250UL, 8UL, 8UL, 2UL), "cuda_copy_rows rejects overlap / overrun");
+    std::cuda_free(&dc2);
+
+    // a cached conv plan run on other buffers (rebinds its variant pack)
+    struct CudaBuf dy2 = std::cuda_alloc(2UL * outN);
+    check(std::cuda_conv2d(&d2, dx, dy2, 2UL, 21UL, 15UL), "cuda_conv2d other buffers ran");
+    yb = fm_download(dy2, 0UL, outN);
+    unsafe { check(fm_err(yb.at(0UL), (const float*)ca.data, outN) < 1e-5f, "cuda_conv2d other buffers values"); }
+    yb.free();
+    std::cuda_free(&dy2);
+
     // whole U-Net
     struct UNet net = std::unet_new(3UL, 8UL, 16UL, 2UL);
     struct FeatureMap ux = std::feature_map_new(3UL, 32UL, 24UL);
@@ -283,6 +341,299 @@ static double cplx_err(const &Complex a, const &Complex b, unsigned long n) {
 static void cplx_copy(&Complex dst, const &Complex src, unsigned long n) {
     unsigned long i = 0UL;
     unsafe { while (i < n) { dst[i] = src[i]; i = i + 1UL; } }
+}
+
+// fp16 / bf16 (CudaHalfBuf): GPU rounding matches float16.h bit for bit;
+// 16-bit gemm against an fp32 CPU gemm of the same rounded inputs; SGD,
+// MSE grad, ReLU (grad) exact on the 16-bit values.
+static void check_half() {
+    unsigned long n = 4096UL;
+    struct Vec<float> v = std::vec_with_cap(n);
+    v.push((float)0.0); v.push((float)-0.0); v.push((float)1.0); v.push((float)-1.0);
+    v.push((float)65504.0);          // largest fp16
+    v.push((float)65520.0);          // rounds to fp16 infinity
+    v.push((float)1.0e-8);           // below the fp16 subnormal range
+    v.push((float)6.0e-5);           // fp16 subnormal
+    v.push((float)1.00048828125);    // 1 + 2^-11: fp16 tie, to even (1.0)
+    v.push((float)1.00146484375);    // 1 + 3 * 2^-11: fp16 tie, up
+    v.push((float)1.00390625);       // 1 + 2^-8: bf16 tie, to even
+    v.push((float)1.01171875);       // 1 + 3 * 2^-8: bf16 tie, up
+    v.push((float)3.0e38);
+    while (v.length() < n) {
+        unsigned long i = v.length();
+        double scale = 1.0;
+        unsigned long c = i % 5UL;
+        if (c == 0UL) scale = 1.0e-6;
+        if (c == 1UL) scale = 1.0e-3;
+        if (c == 3UL) scale = 100.0;
+        if (c == 4UL) scale = 3.0e4;
+        v.push((float)((double)((i * 7919UL) % 20001UL) - 10000.0) * (float)(scale / 10000.0));
+    }
+    struct CudaBuf dv = std::cuda_upload(v.at(0UL), n);
+    int d = CUDA_FP16;
+    while (d <= CUDA_BF16) {
+        int bf = d == CUDA_BF16;
+        // round on the GPU, compare bits with the CPU encoder
+        struct CudaHalfBuf h = std::cuda_half_alloc(n, d);
+        check(h.dev != 0UL && std::cuda_to_half(dv, h), bf ? "bf16 convert ran" : "fp16 convert ran");
+        struct Vec<unsigned short> bits = std::vec_with_cap(n);
+        unsigned long i = 0UL;
+        while (i < n) { bits.push((unsigned short)0); i = i + 1UL; }
+        check(std::cuda_half_read(h, bits.at(0UL), n), "half read");
+        unsigned long bad = 0UL;
+        i = 0UL;
+        while (i < n) { if (*bits.at(i) != std::half_encode(*v.at(i), d)) bad = bad + 1UL; i = i + 1UL; }
+        check(bad == 0UL, bf ? "bf16 rounding matches float16.h" : "fp16 rounding matches float16.h");
+        // decode on the GPU: exact
+        struct CudaBuf back = std::cuda_alloc(n);
+        check(std::cuda_from_half(h, back), "half decode ran");
+        struct Vec<float> fb = download(back);
+        bad = 0UL;
+        i = 0UL;
+        while (i < n) { if (*fb.at(i) != std::half_decode(*bits.at(i), d)) bad = bad + 1UL; i = i + 1UL; }
+        check(bad == 0UL, bf ? "bf16 decode exact" : "fp16 decode exact");
+        // cuda_half_upload rounds the same way
+        struct CudaHalfBuf hu = std::cuda_half_upload(v.at(0UL), n, d);
+        struct Vec<unsigned short> ubits = std::vec_with_cap(n);
+        i = 0UL;
+        while (i < n) { ubits.push((unsigned short)0); i = i + 1UL; }
+        check(hu.dev != 0UL && std::cuda_half_read(hu, ubits.at(0UL), n), "half upload");
+        bad = 0UL;
+        i = 0UL;
+        while (i < n) { if (*ubits.at(i) != *bits.at(i)) bad = bad + 1UL; i = i + 1UL; }
+        check(bad == 0UL, bf ? "bf16 upload bits" : "fp16 upload bits");
+
+        // gemm: 16-bit inputs, fp32 accumulation
+        unsigned long m = 64UL;
+        unsigned long k = 96UL;
+        unsigned long nn = 80UL;
+        struct Vec<float> a = seq(m * k, 0.011f, -0.5f);
+        struct Vec<float> b = seq(k * nn, 0.007f, -0.3f);
+        struct Vec<float> ar = std::vec_with_cap(m * k);
+        struct Vec<float> br = std::vec_with_cap(k * nn);
+        i = 0UL;
+        while (i < m * k) { ar.push(std::half_round(*a.at(i), d)); i = i + 1UL; }
+        i = 0UL;
+        while (i < k * nn) { br.push(std::half_round(*b.at(i), d)); i = i + 1UL; }
+        struct CudaHalfBuf ha = std::cuda_half_upload(a.at(0UL), m * k, d);
+        struct CudaHalfBuf hb = std::cuda_half_upload(b.at(0UL), k * nn, d);
+        struct CudaBuf c32 = std::cuda_alloc(m * nn);
+        struct CudaHalfBuf c16 = std::cuda_half_alloc(m * nn, d);
+        struct Vec<unsigned short> cb = std::vec_with_cap(m * nn);
+        i = 0UL;
+        while (i < m * nn) { cb.push((unsigned short)0); i = i + 1UL; }
+        int t = 0;
+        while (t < 4) {
+            int ta = t & 1;
+            int tb = (t >> 1) & 1;
+            struct Vec<float> ref = cpu_gemm(&ar, ta, &br, tb, m, nn, k);
+            check(std::cuda_half_gemm_f32(ha, ta, hb, tb, c32, m, nn, k), "half gemm f32 ran");
+            struct Vec<float> got = download(c32);
+            check(maxdiff(&got, &ref) < 1e-4f, bf ? "bf16 gemm f32 values" : "fp16 gemm f32 values");
+            got.free();
+            // 16-bit output: within one 16-bit rounding of the fp32 result
+            check(std::cuda_half_gemm(ha, ta, hb, tb, c16, m, nn, k) && std::cuda_half_read(c16, cb.at(0UL), m * nn),
+                  "half gemm ran");
+            bad = 0UL;
+            i = 0UL;
+            while (i < m * nn) {
+                float r = *ref.at(i);
+                float g = std::half_decode(*cb.at(i), d);
+                float e = g - r;
+                if (e < 0.0f) e = -e;
+                float ar_ = r < 0.0f ? -r : r;
+                if (e > ar_ * (bf ? (float)0.0079 : (float)0.00099) + (float)1.0e-6) bad = bad + 1UL;
+                i = i + 1UL;
+            }
+            check(bad == 0UL, bf ? "bf16 gemm values" : "fp16 gemm values");
+            ref.free();
+            t = t + 1;
+        }
+
+        // sgd on 16-bit weights: bit-exact with the CPU computation
+        struct Vec<unsigned short> wb = std::vec_with_cap(m * k);
+        struct Vec<unsigned short> gbits = std::vec_with_cap(m * k);
+        i = 0UL;
+        while (i < m * k) { wb.push((unsigned short)0); gbits.push(std::half_encode(*v.at(i % n), d)); i = i + 1UL; }
+        struct CudaHalfBuf hg = std::cuda_half_alloc(m * k, d);
+        check(std::cuda_half_write(hg, gbits.at(0UL), m * k), "half write");
+        check(std::cuda_half_read(ha, wb.at(0UL), m * k), "half read w");
+        float lr = (float)0.25;
+        check(std::cuda_half_sgd(ha, hg, lr), "half sgd ran");
+        struct Vec<unsigned short> wn = std::vec_with_cap(m * k);
+        i = 0UL;
+        while (i < m * k) { wn.push((unsigned short)0); i = i + 1UL; }
+        check(std::cuda_half_read(ha, wn.at(0UL), m * k), "half read sgd");
+        bad = 0UL;
+        i = 0UL;
+        while (i < m * k) {
+            float wv = std::half_decode(*wb.at(i), d);
+            float gv = std::half_decode(*gbits.at(i), d);
+            float prod = lr * gv;
+            float r = wv - prod;
+            if (*wn.at(i) != std::half_encode(r, d)) bad = bad + 1UL;
+            i = i + 1UL;
+        }
+        check(bad == 0UL, bf ? "bf16 sgd bit-exact" : "fp16 sgd bit-exact");
+
+        // training ops against the CPU on decoded values
+        unsigned long tn = 3000UL;
+        struct Vec<float> y = seq(tn, 0.013f, -0.6f);
+        struct Vec<float> tt = seq(tn, 0.009f, -0.2f);
+        struct CudaHalfBuf hy = std::cuda_half_upload(y.at(0UL), tn, d);
+        struct CudaHalfBuf ht = std::cuda_half_upload(tt.at(0UL), tn, d);
+        struct CudaHalfBuf hd = std::cuda_half_alloc(tn, d);
+        struct CudaHalfBuf hr = std::cuda_half_alloc(tn, d);
+        struct CudaBuf loss = std::cuda_alloc(1UL);
+        struct Vec<unsigned short> yb = std::vec_with_cap(tn);
+        struct Vec<unsigned short> tb_ = std::vec_with_cap(tn);
+        struct Vec<unsigned short> ob = std::vec_with_cap(tn);
+        i = 0UL;
+        while (i < tn) { yb.push((unsigned short)0); tb_.push((unsigned short)0); ob.push((unsigned short)0); i = i + 1UL; }
+        std::cuda_half_read(hy, yb.at(0UL), tn);
+        std::cuda_half_read(ht, tb_.at(0UL), tn);
+        check(std::cuda_half_mse_grad(hy, ht, hd, loss) && std::cuda_half_read(hd, ob.at(0UL), tn), "half mse_grad ran");
+        double lsum = 0.0;
+        bad = 0UL;
+        i = 0UL;
+        while (i < tn) {
+            float dd = std::half_decode(*yb.at(i), d) - std::half_decode(*tb_.at(i), d);
+            lsum = lsum + (double)(dd * dd);
+            if (*ob.at(i) != std::half_encode((float)2.0 * dd, d)) bad = bad + 1UL;
+            i = i + 1UL;
+        }
+        struct Vec<float> lv = download(loss);
+        double lerr = ((double)*lv.at(0UL) - lsum) / lsum;
+        if (lerr < 0.0) lerr = -lerr;
+        check(bad == 0UL && lerr < 1e-5, bf ? "bf16 mse_grad values" : "fp16 mse_grad values");
+        lv.free();
+        check(std::cuda_half_relu(hy, hr) && std::cuda_half_read(hr, ob.at(0UL), tn), "half relu ran");
+        bad = 0UL;
+        i = 0UL;
+        while (i < tn) {
+            unsigned short want = std::half_decode(*yb.at(i), d) > 0.0f ? *yb.at(i) : (unsigned short)0;
+            if (*ob.at(i) != want) bad = bad + 1UL;
+            i = i + 1UL;
+        }
+        check(bad == 0UL, bf ? "bf16 relu values" : "fp16 relu values");
+        check(std::cuda_half_relu_grad(hy, ht, hr) && std::cuda_half_read(hr, ob.at(0UL), tn), "half relu_grad ran");
+        bad = 0UL;
+        i = 0UL;
+        while (i < tn) {
+            unsigned short want = std::half_decode(*yb.at(i), d) > 0.0f ? *tb_.at(i) : (unsigned short)0;
+            if (*ob.at(i) != want) bad = bad + 1UL;
+            i = i + 1UL;
+        }
+        check(bad == 0UL, bf ? "bf16 relu_grad values" : "fp16 relu_grad values");
+        // gemm + relu epilogue vs gemm then relu, both 16-bit
+        struct CudaHalfBuf c16r = std::cuda_half_alloc(m * nn, d);
+        struct Vec<unsigned short> cr = std::vec_with_cap(m * nn);
+        i = 0UL;
+        while (i < m * nn) { cr.push((unsigned short)0); i = i + 1UL; }
+        check(std::cuda_half_gemm(ha, 0, hb, 0, c16, m, nn, k) && std::cuda_half_read(c16, cb.at(0UL), m * nn) &&
+              std::cuda_half_gemm_relu(ha, 0, hb, 0, c16r, m, nn, k) && std::cuda_half_read(c16r, cr.at(0UL), m * nn),
+              "half gemm_relu ran");
+        bad = 0UL;
+        i = 0UL;
+        while (i < m * nn) {
+            float g = std::half_decode(*cb.at(i), d);
+            float want = g > (float)0.0 ? g : (float)0.0;
+            float e = std::half_decode(*cr.at(i), d) - want;
+            if (e < 0.0f) e = -e;
+            float aw = want < 0.0f ? -want : want;
+            if (e > aw * (bf ? (float)0.0079 : (float)0.00099) + (float)1.0e-6) bad = bad + 1UL;
+            i = i + 1UL;
+        }
+        check(bad == 0UL, bf ? "bf16 gemm_relu values" : "fp16 gemm_relu values");
+        // sgd2 = two sgd calls, bit for bit
+        struct CudaHalfBuf w1 = std::cuda_half_upload(y.at(0UL), tn, d);
+        struct CudaHalfBuf w2 = std::cuda_half_upload(tt.at(0UL), 1000UL, d);
+        struct CudaHalfBuf w1b = std::cuda_half_upload(y.at(0UL), tn, d);
+        struct CudaHalfBuf w2b = std::cuda_half_upload(tt.at(0UL), 1000UL, d);
+        struct CudaHalfBuf g2 = std::cuda_half_upload(y.at(0UL), 1000UL, d);
+        check(std::cuda_half_sgd2(w1, ht, w2, g2, 0.125f) && std::cuda_half_sgd(w1b, ht, 0.125f) &&
+              std::cuda_half_sgd(w2b, g2, 0.125f), "half sgd2 ran");
+        struct Vec<unsigned short> o2 = std::vec_with_cap(tn);
+        i = 0UL;
+        while (i < tn) { o2.push((unsigned short)0); i = i + 1UL; }
+        std::cuda_half_read(w1, ob.at(0UL), tn);
+        std::cuda_half_read(w1b, o2.at(0UL), tn);
+        bad = 0UL;
+        i = 0UL;
+        while (i < tn) { if (*ob.at(i) != *o2.at(i)) bad = bad + 1UL; i = i + 1UL; }
+        std::cuda_half_read(w2, ob.at(0UL), 1000UL);
+        std::cuda_half_read(w2b, o2.at(0UL), 1000UL);
+        i = 0UL;
+        while (i < 1000UL) { if (*ob.at(i) != *o2.at(i)) bad = bad + 1UL; i = i + 1UL; }
+        check(bad == 0UL, bf ? "bf16 sgd2 matches sgd" : "fp16 sgd2 matches sgd");
+        std::cuda_half_free(&hy); std::cuda_half_free(&ht); std::cuda_half_free(&hd); std::cuda_half_free(&hr);
+        std::cuda_half_free(&c16r); std::cuda_half_free(&w1); std::cuda_half_free(&w2); std::cuda_half_free(&w1b);
+        std::cuda_half_free(&w2b); std::cuda_half_free(&g2); std::cuda_free(&loss);
+        y.free(); tt.free(); yb.free(); tb_.free(); ob.free(); o2.free(); cr.free();
+
+        // dtype mismatches are rejected
+        struct CudaHalfBuf other = std::cuda_half_alloc(k * nn, bf ? CUDA_FP16 : CUDA_BF16);
+        check(!std::cuda_half_gemm_f32(ha, 0, other, 0, c32, m, nn, k), "half gemm dtype check");
+        std::cuda_half_free(&other);
+
+        std::cuda_half_free(&h); std::cuda_half_free(&hu); std::cuda_half_free(&ha); std::cuda_half_free(&hb);
+        std::cuda_half_free(&c16); std::cuda_half_free(&hg); std::cuda_free(&c32); std::cuda_free(&back);
+        bits.free(); ubits.free(); fb.free(); a.free(); b.free(); ar.free(); br.free(); cb.free();
+        wb.free(); gbits.free(); wn.free();
+        d = d + 1;
+    }
+    std::cuda_free(&dv);
+    v.free();
+}
+
+// Large host <-> device copies (the pinned-lane path), odd sizes, and the
+// ordering of a write after queued kernels that read the old contents.
+static void check_transfers() {
+    unsigned long sizes[3];
+    sizes[0] = 262145UL;     // just over 1 MiB of floats: one lane
+    sizes[1] = 1048577UL;    // ~4 MiB: four lanes, ragged tail
+    sizes[2] = 5000003UL;    // ~20 MiB: several chunks per lane
+    int si = 0;
+    while (si < 3) {
+        unsigned long n;
+        unsafe { n = sizes[si]; }
+        struct Vec<float> h = seq(n, 0.001f, -3.0f);
+        struct CudaBuf d = std::cuda_upload(h.at(0UL), n);
+        struct Vec<float> back = download(d);
+        check(maxdiff(&h, &back) == 0.0f, "large upload/read round trip");
+        back.free();
+        // out = d * 2 queued, then d overwritten: out must see the old d
+        struct CudaBuf out = std::cuda_alloc(n);
+        std::cuda_scale(d, 2.0f, out);
+        struct Vec<float> h2 = seq(n, 0.002f, 1.0f);
+        check(std::cuda_write(d, h2.at(0UL), n), "large write ran");
+        back = download(out);
+        int ok = 1;
+        unsigned long i = 0UL;
+        while (i < n + 7918UL) {
+            unsigned long at = i < n ? i : n - 1UL;   // every 7919th value and the last
+            float got = *back.at(at);
+            float want = *h.at(at);
+            if (got != want + want) ok = 0;
+            i = i + 7919UL;
+        }
+        check(ok, "large write ordered after queued reads");
+        back.free();
+        back = download(d);
+        check(maxdiff(&h2, &back) == 0.0f, "large write values");
+        back.free();
+        // raw byte copies at an offset
+        unsafe { check(std::cuda_copy_to_device(d.dev + 4UL, (const void*)h.at(0UL), (n - 1UL) * 4UL), "cuda_copy_to_device ran"); }
+        struct Vec<float> raw = std::vec_with_cap(n);
+        unsigned long k = 0UL;
+        while (k < n) { unsafe { raw.push(0.0f); } k = k + 1UL; }
+        unsafe { check(std::cuda_copy_to_host((void*)raw.at(0UL), d.dev + 4UL, (n - 1UL) * 4UL), "cuda_copy_to_host ran"); }
+        unsafe { check(*raw.at(0UL) == *h.at(0UL) && *raw.at(n - 2UL) == *h.at(n - 2UL), "raw byte copies at an offset"); }
+        raw.free(); h.free(); h2.free();
+        std::cuda_free(&d);
+        std::cuda_free(&out);
+        si = si + 1;
+    }
 }
 
 static void check_cufft() {
@@ -649,6 +1000,8 @@ int main() {
     check(da.dev == 0UL, "free clears handle");
     a.free(); b.free(); want.free(); ga.free(); gb.free(); ref.free(); hc.free();
 
+    check_half();
+    check_transfers();
     check_cudnn();
     check_cufft();
 

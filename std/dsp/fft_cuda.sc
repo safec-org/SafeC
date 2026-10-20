@@ -23,8 +23,6 @@ extern int cufftExecZ2Z(int plan, void* idata, void* odata, int direction);
 
 extern int cuMemAlloc_v2(unsigned long long* dptr, size_t bytes);
 extern int cuMemFree_v2(unsigned long long dptr);
-extern int cuMemcpyHtoDAsync_v2(unsigned long long dst, const void* src, size_t bytes, void* stream);
-extern int cuMemcpyDtoHAsync_v2(void* dst, unsigned long long src, size_t bytes, void* stream);
 extern int cuStreamSynchronize(void* stream);
 
 #define FFT_R2C      42     // CUFFT_R2C (0x2a)
@@ -123,12 +121,12 @@ static int fft_host_z2z_(struct Complex* data, unsigned long nx, unsigned long n
     unsigned long long d = fft_scratch_(bytes);
     if (d == 0ULL) return 0;
     unsafe {
-        void* stream = cuda_stream_handle();
-        if (cuMemcpyHtoDAsync_v2(d, (const void*)data, bytes, stream) != 0) return 0;
+        // gpu_cuda's transfer path: large copies are staged through pinned
+        // buffers by the thread pool, faster than the driver's pageable path
+        if (!cuda_copy_to_device((unsigned long)d, (const void*)data, bytes)) return 0;
         if (cufftExecZ2Z(plan, (void*)(unsigned long)d, (void*)(unsigned long)d,
                          inverse ? FFT_INVERSE : FFT_FORWARD) != 0) return 0;
-        if (cuMemcpyDtoHAsync_v2((void*)data, d, bytes, stream) != 0) return 0;
-        if (cuStreamSynchronize(stream) != 0) return 0;
+        if (!cuda_copy_to_host((void*)data, (unsigned long)d, bytes)) return 0;
         if (inverse) {
             double inv = 1.0 / (double)len;
             unsigned long i = 0UL;
