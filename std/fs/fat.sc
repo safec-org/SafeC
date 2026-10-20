@@ -73,10 +73,10 @@ static unsigned long fat_cluster_to_lba_(struct FatCtx* ctx, unsigned long clust
     }
 }
 
-inline int FatCtx::read_cluster(unsigned long cluster, unsigned char* buf) {
+inline int FatCtx::read_cluster(unsigned long cluster, &stack unsigned char buf) {
     unsigned long lba;
     unsafe { lba = fat_cluster_to_lba_((struct FatCtx*)self, cluster); }
-    return self.dev.read(lba, (&stack unsigned char)buf,
+    return self.dev.read(lba, buf,
                          (unsigned long)self.bpb.sectors_per_cluster);
 }
 
@@ -151,7 +151,7 @@ static unsigned long fat_walk_component_(struct FatCtx* ctx,
     unsigned char buf[FAT_MAX_CLUSTER];
     unsigned long cluster = dir_cluster;
     while (cluster != (unsigned long)0) {
-        if (ctx->read_cluster(cluster, (unsigned char*)buf) != 0) { break; }
+        if (ctx->read_cluster(cluster, buf) != 0) { break; }
         unsigned long entries;
         unsafe { entries = ctx->bytes_per_cluster / (unsigned long)32; }
         unsigned long e = (unsigned long)0;
@@ -218,7 +218,8 @@ static int fat_split_path_(const char* path, char parts[][VFS_MAX_NAME], int max
 
 static int fat_vfs_open_(void* ctx, const char* path, int flags,
                           &stack VfsNode node_out) {
-    struct FatCtx* fc = (struct FatCtx*)ctx;
+    struct FatCtx* fc;
+    unsafe { fc = (struct FatCtx*)ctx; }
     // Tokenise path.
     char parts[FAT_MAX_DEPTH][VFS_MAX_NAME];
     int n = fat_split_path_(path, parts, FAT_MAX_DEPTH);
@@ -266,7 +267,8 @@ static int fat_vfs_open_(void* ctx, const char* path, int flags,
 static unsigned long fat_vfs_read_(void* ctx, unsigned long inode,
                                     unsigned long offset,
                                     unsigned char* buf, unsigned long len) {
-    struct FatCtx* fc = (struct FatCtx*)ctx;
+    struct FatCtx* fc;
+    unsafe { fc = (struct FatCtx*)ctx; }
     unsigned long bpc;
     unsafe { bpc = fc->bytes_per_cluster; }
     unsigned long cluster_idx = offset / bpc;
@@ -275,7 +277,7 @@ static unsigned long fat_vfs_read_(void* ctx, unsigned long inode,
     if (cluster == (unsigned long)0) { return (unsigned long)0; }
 
     unsigned char cbuf[FAT_MAX_CLUSTER];
-    if (fc->read_cluster(cluster, (unsigned char*)cbuf) != 0) {
+    if (fc->read_cluster(cluster, cbuf) != 0) {
         return (unsigned long)0;
     }
     unsigned long avail = bpc - off_in;
@@ -291,12 +293,13 @@ static unsigned long fat_vfs_read_(void* ctx, unsigned long inode,
 }
 
 static int fat_vfs_readdir_(void* ctx, unsigned long inode, void* cb, void* user) {
-    struct FatCtx* fc = (struct FatCtx*)ctx;
+    struct FatCtx* fc;
+    unsafe { fc = (struct FatCtx*)ctx; }
     int count = 0;
     unsigned long cluster = inode;
     unsigned char buf[FAT_MAX_CLUSTER];
     while (cluster != (unsigned long)0) {
-        if (fc->read_cluster(cluster, (unsigned char*)buf) != 0) { break; }
+        if (fc->read_cluster(cluster, buf) != 0) { break; }
         unsigned long entries;
         unsafe { entries = fc->bytes_per_cluster / (unsigned long)32; }
         unsigned long e = (unsigned long)0;

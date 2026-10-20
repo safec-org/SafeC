@@ -20,8 +20,8 @@ static struct GuiColor __widget_default_bg(int kind) {
     return gui_rgba(0U, 0U, 0U, 0U);
 }
 
-static struct Widget* __widget_new(int kind) {
-    struct Widget* w;
+static &Widget __widget_new(int kind) {
+    &Widget w;
     unsafe { w = (struct Widget*)alloc((unsigned long)sizeof(struct Widget)); }
 
     unsafe {
@@ -76,11 +76,11 @@ static struct Widget* __widget_new(int kind) {
     return __widget_new(WIDGET_HSTACK);
 }
 &Widget widget_spacer() {
-    struct Widget* w = __widget_new(WIDGET_SPACER);
+    &Widget w = __widget_new(WIDGET_SPACER);
     unsafe { w->stretch = 1; return w; }
 }
 &Widget widget_button(const char* text) {
-    struct Widget* w = __widget_new(WIDGET_BUTTON);
+    &Widget w = __widget_new(WIDGET_BUTTON);
     unsafe {
         w->text.free();
         w->text = string_from(text);
@@ -88,7 +88,7 @@ static struct Widget* __widget_new(int kind) {
     }
 }
 &Widget widget_label(const char* text) {
-    struct Widget* w = __widget_new(WIDGET_LABEL);
+    &Widget w = __widget_new(WIDGET_LABEL);
     unsafe {
         w->text.free();
         w->text = string_from(text);
@@ -96,7 +96,7 @@ static struct Widget* __widget_new(int kind) {
     }
 }
 &Widget widget_checkbox(const char* text, int checked) {
-    struct Widget* w = __widget_new(WIDGET_CHECKBOX);
+    &Widget w = __widget_new(WIDGET_CHECKBOX);
     unsafe {
         w->text.free();
         w->text = string_from(text);
@@ -105,7 +105,7 @@ static struct Widget* __widget_new(int kind) {
     }
 }
 &Widget widget_textinput(const char* placeholder) {
-    struct Widget* w = __widget_new(WIDGET_TEXTINPUT);
+    &Widget w = __widget_new(WIDGET_TEXTINPUT);
     unsafe {
         w->text.free();
         w->text = string_from(placeholder);
@@ -113,7 +113,7 @@ static struct Widget* __widget_new(int kind) {
     }
 }
 &Widget widget_slider(double minValue, double maxValue, double value) {
-    struct Widget* w = __widget_new(WIDGET_SLIDER);
+    &Widget w = __widget_new(WIDGET_SLIDER);
     unsafe {
         w->sliderMin = minValue;
         w->sliderMax = maxValue;
@@ -123,7 +123,7 @@ static struct Widget* __widget_new(int kind) {
 }
 &Widget widget_custom_raw_(WidgetDrawFn draw, WidgetLayoutFn layout,
                               WidgetCustomEventFn eventFn, void* userData) {
-    struct Widget* w = __widget_new(WIDGET_CUSTOM);
+    &Widget w = __widget_new(WIDGET_CUSTOM);
     unsafe {
         w->customDraw = (void*)draw;
         w->customLayout = (void*)layout;
@@ -213,7 +213,7 @@ void widget_add_child(&Widget parent, &Widget child) {
 // unless explicitly given via widget_set_pref_size() or a stretch weight
 // — auto-sizing-to-content only applies to leaf (text-bearing) widgets.
 
-static int __widget_text_w(struct Widget* w) {
+static int __widget_text_w(&Widget w) {
     int scale; const struct GuiFont* font; unsigned long len = 0UL;
     unsafe {
         scale = w->style.fontScale;
@@ -226,7 +226,7 @@ static int __widget_text_w(struct Widget* w) {
     unsafe { return gui_text_width((const char*)w->text.data, scale); }
 }
 
-static int __widget_text_h(struct Widget* w) {
+static int __widget_text_h(&Widget w) {
     int scale; const struct GuiFont* font;
     unsafe { scale = w->style.fontScale; font = w->style.font; }
     if (font != (const struct GuiFont*)0) {
@@ -235,7 +235,7 @@ static int __widget_text_h(struct Widget* w) {
     return gui_text_height(scale);
 }
 
-static int __widget_natural_w(struct Widget* w) {
+static int __widget_natural_w(&Widget w) {
     int kind; int prefW; int padding;
     unsafe { kind = w->kind; prefW = w->prefW; padding = w->style.padding; }
     if (prefW > 0) { return prefW; }
@@ -246,7 +246,7 @@ static int __widget_natural_w(struct Widget* w) {
     return 0;
 }
 
-static int __widget_natural_h(struct Widget* w) {
+static int __widget_natural_h(&Widget w) {
     int kind; int prefH; int padding;
     unsafe { kind = w->kind; prefH = w->prefH; padding = w->style.padding; }
     if (prefH > 0) { return prefH; }
@@ -293,9 +293,9 @@ void gui_layout(&Widget root, int x, int y, int w, int h) {
     int totalStretch = 0;
     unsigned long i = 0UL;
     while (i < n) {
-        struct Widget* child;
+        &Widget child;
         unsafe {
-            struct Widget* slotp = *root->children.at(i);
+            &Widget slotp = *root->children.at(i);
             child = slotp;
         }
         int stretch; unsafe { stretch = child->stretch; }
@@ -314,9 +314,9 @@ void gui_layout(&Widget root, int x, int y, int w, int h) {
     int cursor = (kind == WIDGET_VSTACK) ? innerY : innerX;
     i = 0UL;
     while (i < n) {
-        struct Widget* child;
+        &Widget child;
         unsafe {
-            struct Widget* slotp = *root->children.at(i);
+            &Widget slotp = *root->children.at(i);
             child = slotp;
         }
         int stretch; int alignment;
@@ -353,7 +353,7 @@ void gui_layout(&Widget root, int x, int y, int w, int h) {
 
 // ── render ───────────────────────────────────────────────────────────────────
 
-static void __widget_draw_text_centered(struct GuiWindow* win, struct Widget* w, int boxX, int boxY, int boxW, int boxH) {
+static void __widget_draw_text_centered(struct GuiWindow* win, &Widget w, int boxX, int boxY, int boxW, int boxH) {
     int tw = __widget_text_w(w);
     int th = __widget_text_h(w);
     int tx = boxX + (boxW - tw) / 2; if (tx < boxX) { tx = boxX; }
@@ -382,7 +382,7 @@ void gui_render(&GuiWindow win, &Widget root) {
         unsigned long n; unsafe { n = root->children.length(); }
         unsigned long i = 0UL;
         while (i < n) {
-            struct Widget* child;
+            &Widget child;
             unsafe { child = *root->children.at(i); }
             gui_render(win, child);
             i = i + 1UL;
@@ -476,7 +476,7 @@ void gui_render(&GuiWindow win, &Widget root) {
         unsigned long n; unsafe { n = root->children.length(); }
         unsigned long i = 0UL;
         while (i < n) {
-            struct Widget* child;
+            &Widget child;
             unsafe { child = *root->children.at(i); }
             gui_render(win, child);
             i = i + 1UL;
@@ -486,13 +486,13 @@ void gui_render(&GuiWindow win, &Widget root) {
 
 // ── event dispatch ───────────────────────────────────────────────────────────
 
-static int __widget_point_in_box(struct Widget* w, double px, double py) {
+static int __widget_point_in_box(&Widget w, double px, double py) {
     int x; int y; int ww; int hh;
     unsafe { x = w->x; y = w->y; ww = w->w; hh = w->h; }
     return (px >= (double)x && px < (double)(x + ww) && py >= (double)y && py < (double)(y + hh)) ? 1 : 0;
 }
 
-static void __widget_update_hover(struct Widget* w, struct GuiEvent* ev) {
+static void __widget_update_hover(&Widget w, struct GuiEvent* ev) {
     double evx; double evy;
     unsafe { evx = ev->x; evy = ev->y; }
     int inBox = __widget_point_in_box(w, evx, evy);
@@ -500,14 +500,14 @@ static void __widget_update_hover(struct Widget* w, struct GuiEvent* ev) {
     unsigned long n; unsafe { n = w->children.length(); }
     unsigned long i = 0UL;
     while (i < n) {
-        struct Widget* child;
+        &Widget child;
         unsafe { child = *w->children.at(i); }
         __widget_update_hover(child, ev);
         i = i + 1UL;
     }
 }
 
-static int __widget_is_interactive(struct Widget* w) {
+static int __widget_is_interactive(&Widget w) {
     int kind; WidgetCallback onClick;
     unsafe { kind = w->kind; onClick = (WidgetCallback)w->onClick; }
     if (kind == WIDGET_BUTTON || kind == WIDGET_CHECKBOX || kind == WIDGET_TEXTINPUT ||
@@ -517,7 +517,7 @@ static int __widget_is_interactive(struct Widget* w) {
     return (onClick != (WidgetCallback)0) ? 1 : 0;
 }
 
-static int __widget_dispatch_one(struct Widget* w, struct GuiEvent* ev) {
+static int __widget_dispatch_one(&Widget w, struct GuiEvent* ev) {
     int evKind; double evX; double evY; int evKeycode; unsigned int evCodepoint;
     unsafe {
         evKind = ev->kind; evX = ev->x; evY = ev->y;
@@ -528,7 +528,7 @@ static int __widget_dispatch_one(struct Widget* w, struct GuiEvent* ev) {
     unsigned long n; unsafe { n = w->children.length(); }
     unsigned long i = 0UL;
     while (i < n) {
-        struct Widget* child;
+        &Widget child;
         unsafe { child = *w->children.at(i); }
         if (__widget_dispatch_one(child, ev)) { return 1; }
         i = i + 1UL;
@@ -627,54 +627,54 @@ void gui_event_prevent_default(&GuiEvent ev) {
     unsafe { ev->defaultPrevented = 1; }
 }
 
-static int __widget_is_focusable(struct Widget* w) {
+static int __widget_is_focusable(&Widget w) {
     int kind; unsafe { kind = w->kind; }
     return (kind == WIDGET_BUTTON || kind == WIDGET_CHECKBOX ||
             kind == WIDGET_TEXTINPUT || kind == WIDGET_SLIDER) ? 1 : 0;
 }
 
-static void __widget_collect_focusable(struct Widget* w, &Vec<&Widget> out) {
+static void __widget_collect_focusable(&Widget w, &Vec<&Widget> out) {
     if (__widget_is_focusable(w)) {
         out.push(w);
     }
     unsigned long n; unsafe { n = w->children.length(); }
     unsigned long i = 0UL;
     while (i < n) {
-        struct Widget* child;
+        &Widget child;
         unsafe { child = *w->children.at(i); }
         __widget_collect_focusable(child, out);
         i = i + 1UL;
     }
 }
 
-static void __widget_clear_focus(struct Widget* w) {
+static void __widget_clear_focus(&Widget w) {
     unsafe { w->focused = 0; }
     unsigned long n; unsafe { n = w->children.length(); }
     unsigned long i = 0UL;
     while (i < n) {
-        struct Widget* child;
+        &Widget child;
         unsafe { child = *w->children.at(i); }
         __widget_clear_focus(child);
         i = i + 1UL;
     }
 }
 
-static struct Widget* __widget_find_focused(struct Widget* w) {
+static ?&Widget __widget_find_focused(&Widget w) {
     int f; unsafe { f = w->focused; }
     if (f) { return w; }
     unsigned long n; unsafe { n = w->children.length(); }
     unsigned long i = 0UL;
     while (i < n) {
-        struct Widget* child;
+        &Widget child;
         unsafe { child = *w->children.at(i); }
-        struct Widget* found = __widget_find_focused(child);
-        if (found != (struct Widget*)0) { return found; }
+        ?&Widget found = __widget_find_focused(child);
+        match (found) { case some(fw): return fw; case null: { } }
         i = i + 1UL;
     }
-    return (struct Widget*)0;
+    return null;
 }
 
-static void __widget_apply_default_key_action(struct Widget* root, struct GuiEvent* ev) {
+static void __widget_apply_default_key_action(&Widget root, struct GuiEvent* ev) {
     int keycode; unsafe { keycode = ev->keycode; }
 
     if (keycode == GUI_KEY_TAB) {
@@ -685,7 +685,7 @@ static void __widget_apply_default_key_action(struct Widget* root, struct GuiEve
             unsigned long foundAt = n; // sentinel: none focused yet
             unsigned long i = 0UL;
             while (i < n) {
-                struct Widget* w;
+                &Widget w;
                 unsafe { w = *list.at(i); }
                 int f; unsafe { f = w->focused; }
                 if (f) { foundAt = i; }
@@ -693,7 +693,7 @@ static void __widget_apply_default_key_action(struct Widget* root, struct GuiEve
             }
             unsigned long nextIdx = (foundAt == n) ? 0UL : ((foundAt + 1UL) % n);
             __widget_clear_focus(root);
-            struct Widget* nextW;
+            &Widget nextW;
             unsafe { nextW = *list.at(nextIdx); }
             unsafe { nextW->focused = 1; }
         }
@@ -706,8 +706,9 @@ static void __widget_apply_default_key_action(struct Widget* root, struct GuiEve
         return;
     }
 
-    struct Widget* focused = __widget_find_focused(root);
-    if (focused == (struct Widget*)0) { return; }
+    ?&Widget focusedOpt = __widget_find_focused(root);
+    &Widget focused;
+    match (focusedOpt) { case null: return; case some(fw): focused = fw; }
     int fkind; unsafe { fkind = focused->kind; }
 
     if (keycode == GUI_KEY_ENTER) {
@@ -761,7 +762,7 @@ void widget_free(&Widget w) {
     unsigned long n; unsafe { n = w->children.length(); }
     unsigned long i = 0UL;
     while (i < n) {
-        struct Widget* child;
+        &Widget child;
         unsafe { child = *w->children.at(i); }
         widget_free(child);
         i = i + 1UL;

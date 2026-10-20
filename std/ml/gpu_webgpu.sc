@@ -519,7 +519,7 @@ static void* __wgpu_matmul_persistent_pipeline_ = (void*)0;
 static void* __wgpu_sgd_pipeline_ = (void*)0;
 
 // Runs __wgpu_init once and caches the result -- the WebGPU analogue of
-// gpu_cuda.sc's __cuda_ensure_context / gpu_rocm.sc's __rocm_ensure_device
+// gpu_cuda.sc's __cuda_ensure_context / gpu_rocm.sc's rocm_ensure_
 // / gpu_spirv.sc's __spirv_ensure_device. Every webgpu_*_f32 function
 // above pays __wgpu_init's full async instance/adapter/device
 // acquisition (including its bounded poll loops) on every call; this

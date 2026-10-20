@@ -8,8 +8,8 @@
 
 namespace std {
 
-static struct MdNode* __md_new(int kind) {
-    struct MdNode* n;
+static &heap MdNode __md_new(int kind) {
+    &heap MdNode n;
     unsafe { n = (struct MdNode*)alloc((unsigned long)sizeof(struct MdNode)); }
     unsafe {
         n->kind = kind;
@@ -38,8 +38,8 @@ static int __md_is_blank(const char* s) {
 
 // ── inline parsing ───────────────────────────────────────────────────────────
 
-static struct MdNode* __md_parse_inline(const char* text, unsigned long len) {
-    struct MdNode* root = __md_new(MD_TEXT); // reused as a throwaway container; real root below
+static &heap MdNode __md_parse_inline(const char* text, unsigned long len) {
+    &heap MdNode root = __md_new(MD_TEXT); // reused as a throwaway container; real root below
     unsafe { root->text.free(); }
     unsafe { root->kind = -1; } // sentinel: this is just a children-holder, not rendered itself
     unsafe { root->children = vec_new(); }
@@ -68,13 +68,13 @@ static struct MdNode* __md_parse_inline(const char* text, unsigned long len) {
             }
             if (closeAt < len) {
                 if (pending.len > 0UL) {
-                    struct MdNode* t = __md_new(MD_TEXT);
+                    &heap MdNode t = __md_new(MD_TEXT);
                     unsafe { t->text = pending; }
                     __md_add_child(root, t);
                     pending = string_new();
                 }
-                struct MdNode* b = __md_new(MD_BOLD);
-                struct MdNode* inner = __md_new(MD_TEXT);
+                &heap MdNode b = __md_new(MD_BOLD);
+                &heap MdNode inner = __md_new(MD_TEXT);
                 unsafe { inner->text = string_from_n(text + i + 2UL, closeAt - (i + 2UL)); }
                 __md_add_child(b, inner);
                 __md_add_child(root, b);
@@ -91,13 +91,13 @@ static struct MdNode* __md_parse_inline(const char* text, unsigned long len) {
             }
             if (closeAt < len && closeAt > i + 1UL) {
                 if (pending.len > 0UL) {
-                    struct MdNode* t = __md_new(MD_TEXT);
+                    &heap MdNode t = __md_new(MD_TEXT);
                     unsafe { t->text = pending; }
                     __md_add_child(root, t);
                     pending = string_new();
                 }
-                struct MdNode* it = __md_new(MD_ITALIC);
-                struct MdNode* inner = __md_new(MD_TEXT);
+                &heap MdNode it = __md_new(MD_ITALIC);
+                &heap MdNode inner = __md_new(MD_TEXT);
                 unsafe { inner->text = string_from_n(text + i + 1UL, closeAt - (i + 1UL)); }
                 __md_add_child(it, inner);
                 __md_add_child(root, it);
@@ -114,12 +114,12 @@ static struct MdNode* __md_parse_inline(const char* text, unsigned long len) {
             }
             if (closeAt < len) {
                 if (pending.len > 0UL) {
-                    struct MdNode* t = __md_new(MD_TEXT);
+                    &heap MdNode t = __md_new(MD_TEXT);
                     unsafe { t->text = pending; }
                     __md_add_child(root, t);
                     pending = string_new();
                 }
-                struct MdNode* code = __md_new(MD_CODE_SPAN);
+                &heap MdNode code = __md_new(MD_CODE_SPAN);
                 unsafe { code->text = string_from_n(text + i + 1UL, closeAt - (i + 1UL)); }
                 __md_add_child(root, code);
                 i = closeAt + 1UL;
@@ -145,14 +145,14 @@ static struct MdNode* __md_parse_inline(const char* text, unsigned long len) {
             }
             if (hasParen) {
                 if (pending.len > 0UL) {
-                    struct MdNode* t = __md_new(MD_TEXT);
+                    &heap MdNode t = __md_new(MD_TEXT);
                     unsafe { t->text = pending; }
                     __md_add_child(root, t);
                     pending = string_new();
                 }
-                struct MdNode* link = __md_new(MD_LINK);
+                &heap MdNode link = __md_new(MD_LINK);
                 unsafe { link->text = string_from_n(text + closeBracket + 2UL, closeParen - (closeBracket + 2UL)); }
-                struct MdNode* labelNode = __md_new(MD_TEXT);
+                &heap MdNode labelNode = __md_new(MD_TEXT);
                 unsafe { labelNode->text = string_from_n(text + i + 1UL, closeBracket - (i + 1UL)); }
                 __md_add_child(link, labelNode);
                 __md_add_child(root, link);
@@ -165,7 +165,7 @@ static struct MdNode* __md_parse_inline(const char* text, unsigned long len) {
         i = i + 1UL;
     }
     if (pending.len > 0UL) {
-        struct MdNode* t = __md_new(MD_TEXT);
+        &heap MdNode t = __md_new(MD_TEXT);
         unsafe { t->text = pending; }
         __md_add_child(root, t);
     } else {
@@ -234,7 +234,7 @@ static int __md_is_ordered_item(const char* line, unsigned long* markerLen) {
 }
 
 &heap MdNode md_parse(const char* text) {
-    struct MdNode* doc = __md_new(MD_DOC);
+    &heap MdNode doc = __md_new(MD_DOC);
 
     // Split into lines.
     struct Vec<struct String> lines = vec_new();
@@ -266,16 +266,16 @@ static int __md_is_ordered_item(const char* line, unsigned long* markerLen) {
 
         int hlevel = __md_heading_level(line);
         if (hlevel > 0) {
-            struct MdNode* h = __md_new(MD_HEADING);
+            &heap MdNode h = __md_new(MD_HEADING);
             unsafe { h->level = hlevel; }
             const char* rest; unsafe { rest = line + hlevel + 1; }
             unsigned long restLen; unsafe { restLen = 0UL; while (rest[restLen] != '\0') { restLen = restLen + 1UL; } }
-            struct MdNode* inline_ = __md_parse_inline(rest, restLen);
+            &heap MdNode inline_ = __md_parse_inline(rest, restLen);
             unsafe {
                 unsigned long cn = inline_->children.length();
                 unsigned long ci = 0UL;
                 while (ci < cn) {
-                    struct MdNode* slotp = *inline_->children.at(ci);
+                    &heap MdNode slotp = *inline_->children.at(ci);
                     __md_add_child(h, slotp);
                     ci = ci + 1UL;
                 }
@@ -304,7 +304,7 @@ static int __md_is_ordered_item(const char* line, unsigned long* markerLen) {
                 unsafe { code.push((const char*)lp2->data); code.push_char('\n'); }
                 li = li + 1UL;
             }
-            struct MdNode* cb = __md_new(MD_CODE_BLOCK);
+            &heap MdNode cb = __md_new(MD_CODE_BLOCK);
             unsafe { cb->text = code; }
             __md_add_child(doc, cb);
             continue;
@@ -323,14 +323,14 @@ static int __md_is_ordered_item(const char* line, unsigned long* markerLen) {
                 unsafe { quote.push(body); }
                 li = li + 1UL;
             }
-            struct MdNode* bq = __md_new(MD_BLOCKQUOTE);
-            struct MdNode* para = __md_new(MD_PARAGRAPH);
+            &heap MdNode bq = __md_new(MD_BLOCKQUOTE);
+            &heap MdNode para = __md_new(MD_PARAGRAPH);
             unsigned long qlen; unsafe { qlen = quote.len; }
-            struct MdNode* inl; unsafe { inl = __md_parse_inline((const char*)quote.data, qlen); }
+            &heap MdNode inl; unsafe { inl = __md_parse_inline((const char*)quote.data, qlen); }
             unsafe {
                 unsigned long cn = inl->children.length(); unsigned long ci = 0UL;
                 while (ci < cn) {
-                    struct MdNode* slotp = *inl->children.at(ci);
+                    &heap MdNode slotp = *inl->children.at(ci);
                     __md_add_child(para, slotp);
                     ci = ci + 1UL;
                 }
@@ -345,7 +345,7 @@ static int __md_is_ordered_item(const char* line, unsigned long* markerLen) {
         unsigned long orderedMarkerLenProbe = 0UL;
         if (__md_is_unordered_item(line) || __md_is_ordered_item(line, &orderedMarkerLenProbe)) {
             int ordered = __md_is_unordered_item(line) ? 0 : 1;
-            struct MdNode* list = __md_new(MD_LIST);
+            &heap MdNode list = __md_new(MD_LIST);
             unsafe { list->ordered = ordered; }
             while (li < n) {
                 struct String* lp4; unsafe { lp4 = lines.at(li); }
@@ -358,12 +358,12 @@ static int __md_is_ordered_item(const char* line, unsigned long* markerLen) {
                 else if (ordered && __md_is_ordered_item(l4, &markerLen)) { itemOk = 1; unsafe { body = l4 + markerLen; } }
                 if (!itemOk) { break; }
                 unsigned long blen = 0UL; unsafe { while (body[blen] != '\0') { blen = blen + 1UL; } }
-                struct MdNode* item = __md_new(MD_LIST_ITEM);
-                struct MdNode* inl2 = __md_parse_inline(body, blen);
+                &heap MdNode item = __md_new(MD_LIST_ITEM);
+                &heap MdNode inl2 = __md_parse_inline(body, blen);
                 unsafe {
                     unsigned long cn = inl2->children.length(); unsigned long ci = 0UL;
                     while (ci < cn) {
-                        struct MdNode* slotp = *inl2->children.at(ci);
+                        &heap MdNode slotp = *inl2->children.at(ci);
                         __md_add_child(item, slotp);
                         ci = ci + 1UL;
                     }
@@ -392,13 +392,13 @@ static int __md_is_ordered_item(const char* line, unsigned long* markerLen) {
             unsafe { para.push(l5); }
             li = li + 1UL;
         }
-        struct MdNode* p = __md_new(MD_PARAGRAPH);
+        &heap MdNode p = __md_new(MD_PARAGRAPH);
         unsigned long plen; unsafe { plen = para.len; }
-        struct MdNode* inl3; unsafe { inl3 = __md_parse_inline((const char*)para.data, plen); }
+        &heap MdNode inl3; unsafe { inl3 = __md_parse_inline((const char*)para.data, plen); }
         unsafe {
             unsigned long cn = inl3->children.length(); unsigned long ci = 0UL;
             while (ci < cn) {
-                struct MdNode* slotp = *inl3->children.at(ci);
+                &heap MdNode slotp = *inl3->children.at(ci);
                 __md_add_child(p, slotp);
                 ci = ci + 1UL;
             }
@@ -437,7 +437,7 @@ static void __md_escape_html(struct String* out, const char* s) {
     }
 }
 
-static void __md_render_inline_html(const struct MdNode* n, struct String* out) {
+static void __md_render_inline_html(const &heap MdNode n, struct String* out) {
     int kind; unsafe { kind = n->kind; }
     if (kind == MD_TEXT) {
         unsafe { __md_escape_html(out, (const char*)n->text.data); }
@@ -462,7 +462,7 @@ static void __md_render_inline_html(const struct MdNode* n, struct String* out) 
         unsigned long cn; unsafe { cn = n->children.length(); }
         unsigned long ci = 0UL;
         while (ci < cn) {
-            struct MdNode* slotp; unsafe { slotp = *n->children.at(ci); }
+            &heap MdNode slotp; unsafe { slotp = *n->children.at(ci); }
             unsafe { __md_render_inline_html(slotp, out); }
             ci = ci + 1UL;
         }
@@ -470,14 +470,14 @@ static void __md_render_inline_html(const struct MdNode* n, struct String* out) 
     }
 }
 
-static void __md_render_block_html(const struct MdNode* n, struct String* out) {
+static void __md_render_block_html(const &heap MdNode n, struct String* out) {
     int kind; unsafe { kind = n->kind; }
     unsigned long cn; unsafe { cn = n->children.length(); }
 
     if (kind == MD_DOC) {
         unsigned long ci = 0UL;
         while (ci < cn) {
-            struct MdNode* slotp; unsafe { slotp = *n->children.at(ci); }
+            &heap MdNode slotp; unsafe { slotp = *n->children.at(ci); }
             unsafe { __md_render_block_html(slotp, out); }
             ci = ci + 1UL;
         }
@@ -489,7 +489,7 @@ static void __md_render_block_html(const struct MdNode* n, struct String* out) {
         unsafe { out->push("<"); out->push(tag); out->push(">"); }
         unsigned long ci = 0UL;
         while (ci < cn) {
-            struct MdNode* slotp; unsafe { slotp = *n->children.at(ci); }
+            &heap MdNode slotp; unsafe { slotp = *n->children.at(ci); }
             unsafe { __md_render_inline_html(slotp, out); }
             ci = ci + 1UL;
         }
@@ -500,7 +500,7 @@ static void __md_render_block_html(const struct MdNode* n, struct String* out) {
         unsafe { out->push("<p>"); }
         unsigned long ci = 0UL;
         while (ci < cn) {
-            struct MdNode* slotp; unsafe { slotp = *n->children.at(ci); }
+            &heap MdNode slotp; unsafe { slotp = *n->children.at(ci); }
             unsafe { __md_render_inline_html(slotp, out); }
             ci = ci + 1UL;
         }
@@ -512,12 +512,12 @@ static void __md_render_block_html(const struct MdNode* n, struct String* out) {
         unsafe { out->push(ordered ? "<ol>\n" : "<ul>\n"); }
         unsigned long ci = 0UL;
         while (ci < cn) {
-            struct MdNode* slotp; unsafe { slotp = *n->children.at(ci); }
+            &heap MdNode slotp; unsafe { slotp = *n->children.at(ci); }
             unsafe { out->push("<li>"); }
             unsigned long icn; unsafe { icn = slotp->children.length(); }
             unsigned long ii = 0UL;
             while (ii < icn) {
-                struct MdNode* islotp; unsafe { islotp = *slotp->children.at(ii); }
+                &heap MdNode islotp; unsafe { islotp = *slotp->children.at(ii); }
                 unsafe { __md_render_inline_html(islotp, out); }
                 ii = ii + 1UL;
             }
@@ -537,7 +537,7 @@ static void __md_render_block_html(const struct MdNode* n, struct String* out) {
         unsafe { out->push("<blockquote>\n"); }
         unsigned long ci = 0UL;
         while (ci < cn) {
-            struct MdNode* slotp; unsafe { slotp = *n->children.at(ci); }
+            &heap MdNode slotp; unsafe { slotp = *n->children.at(ci); }
             unsafe { __md_render_block_html(slotp, out); }
             ci = ci + 1UL;
         }
@@ -558,7 +558,7 @@ struct String md_render_html(const &heap MdNode doc) {
 
 // ── Markdown round-trip rendering ───────────────────────────────────────────
 
-static void __md_render_inline_md(const struct MdNode* n, struct String* out) {
+static void __md_render_inline_md(const &heap MdNode n, struct String* out) {
     int kind; unsafe { kind = n->kind; }
     if (kind == MD_TEXT) { unsafe { out->push((const char*)n->text.data); } return; }
     if (kind == MD_CODE_SPAN) {
@@ -571,7 +571,7 @@ static void __md_render_inline_md(const struct MdNode* n, struct String* out) {
     else if (kind == MD_LINK) { unsafe { out->push_char('['); } }
     unsigned long ci = 0UL;
     while (ci < cn) {
-        struct MdNode* slotp; unsafe { slotp = *n->children.at(ci); }
+        &heap MdNode slotp; unsafe { slotp = *n->children.at(ci); }
         unsafe { __md_render_inline_md(slotp, out); }
         ci = ci + 1UL;
     }
@@ -582,14 +582,14 @@ static void __md_render_inline_md(const struct MdNode* n, struct String* out) {
     }
 }
 
-static void __md_render_block_md(const struct MdNode* n, struct String* out) {
+static void __md_render_block_md(const &heap MdNode n, struct String* out) {
     int kind; unsafe { kind = n->kind; }
     unsigned long cn; unsafe { cn = n->children.length(); }
 
     if (kind == MD_DOC) {
         unsigned long ci = 0UL;
         while (ci < cn) {
-            struct MdNode* slotp; unsafe { slotp = *n->children.at(ci); }
+            &heap MdNode slotp; unsafe { slotp = *n->children.at(ci); }
             unsafe { __md_render_block_md(slotp, out); }
             ci = ci + 1UL;
         }
@@ -601,7 +601,7 @@ static void __md_render_block_md(const struct MdNode* n, struct String* out) {
         unsafe { out->push_char(' '); }
         unsigned long ci = 0UL;
         while (ci < cn) {
-            struct MdNode* slotp; unsafe { slotp = *n->children.at(ci); }
+            &heap MdNode slotp; unsafe { slotp = *n->children.at(ci); }
             unsafe { __md_render_inline_md(slotp, out); }
             ci = ci + 1UL;
         }
@@ -611,7 +611,7 @@ static void __md_render_block_md(const struct MdNode* n, struct String* out) {
     if (kind == MD_PARAGRAPH) {
         unsigned long ci = 0UL;
         while (ci < cn) {
-            struct MdNode* slotp; unsafe { slotp = *n->children.at(ci); }
+            &heap MdNode slotp; unsafe { slotp = *n->children.at(ci); }
             unsafe { __md_render_inline_md(slotp, out); }
             ci = ci + 1UL;
         }
@@ -623,7 +623,7 @@ static void __md_render_block_md(const struct MdNode* n, struct String* out) {
         unsigned long ci = 0UL;
         int idx = 1;
         while (ci < cn) {
-            struct MdNode* slotp; unsafe { slotp = *n->children.at(ci); }
+            &heap MdNode slotp; unsafe { slotp = *n->children.at(ci); }
             if (ordered) {
                 unsafe { out->push_int((long long)idx); out->push(". "); }
             } else {
@@ -632,7 +632,7 @@ static void __md_render_block_md(const struct MdNode* n, struct String* out) {
             unsigned long icn; unsafe { icn = slotp->children.length(); }
             unsigned long ii = 0UL;
             while (ii < icn) {
-                struct MdNode* islotp; unsafe { islotp = *slotp->children.at(ii); }
+                &heap MdNode islotp; unsafe { islotp = *slotp->children.at(ii); }
                 unsafe { __md_render_inline_md(islotp, out); }
                 ii = ii + 1UL;
             }
@@ -651,12 +651,12 @@ static void __md_render_block_md(const struct MdNode* n, struct String* out) {
         unsafe { out->push("> "); }
         unsigned long ci = 0UL;
         while (ci < cn) {
-            struct MdNode* slotp; unsafe { slotp = *n->children.at(ci); }
-            struct MdNode* para; unsafe { para = slotp; }
+            &heap MdNode slotp; unsafe { slotp = *n->children.at(ci); }
+            &heap MdNode para; unsafe { para = slotp; }
             unsigned long pcn; unsafe { pcn = para->children.length(); }
             unsigned long pi = 0UL;
             while (pi < pcn) {
-                struct MdNode* pslotp; unsafe { pslotp = *para->children.at(pi); }
+                &heap MdNode pslotp; unsafe { pslotp = *para->children.at(pi); }
                 unsafe { __md_render_inline_md(pslotp, out); }
                 pi = pi + 1UL;
             }
@@ -683,8 +683,8 @@ void md_free(&heap MdNode node) {
     unsigned long cn; unsafe { cn = node->children.length(); }
     unsigned long ci = 0UL;
     while (ci < cn) {
-        struct MdNode* slotp; unsafe { slotp = *node->children.at(ci); }
-        struct MdNode* childNode; unsafe { childNode = slotp; }
+        &heap MdNode slotp; unsafe { slotp = *node->children.at(ci); }
+        &heap MdNode childNode; unsafe { childNode = slotp; }
         md_free(childNode);
         ci = ci + 1UL;
     }

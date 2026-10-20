@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Compiler IR regression tests: compiles every tests/**/*.sc at -O2 to LLVM
+# Compiler regression tests: compiles every tests/**/*.sc at -O2 to LLVM
 # IR and checks the output against the '// CHECK:' lines in the source
-# (see filecheck.py). A test with '// EXPECT-ERROR:' lines must instead be
-# rejected with exactly those errors.
+# (see filecheck.py). A test with '// EXPECT-ERROR: <text>' directives must
+# instead fail to compile with exactly those errors (see filecheck.py for
+# line-tied vs. free-floating directives).
 #
 #   SAFEC_BIN=path/to/safec compiler/tests/run.sh
 set -uo pipefail

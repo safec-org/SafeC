@@ -285,13 +285,16 @@ static int ws_write_frame_(struct WsConn* conn, int opcode,
                 unsafe { masked[i] = (unsigned char)((unsigned int)b ^ (unsigned int)mk); }
                 i = i + 1UL;
             }
-            int wrote = ws_write_all_(fd, (const char*)masked, len);
+            int wrote;
+            unsafe { wrote = ws_write_all_(fd, (const char*)masked, len); }
             unsafe { dealloc((void*)masked); }
             if (!wrote) { return 0; }
         }
     } else {
         if (len > 0UL) {
-            if (!ws_write_all_(fd, (const char*)data, len)) { return 0; }
+            int ok;
+            unsafe { ok = ws_write_all_(fd, (const char*)data, len); }
+            if (!ok) { return 0; }
         }
     }
     return 1;

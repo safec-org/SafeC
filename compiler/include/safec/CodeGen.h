@@ -108,6 +108,7 @@ public:
     ~CodeGen();
 
     void setFreestanding(bool v) { freestanding_ = v; }
+    void setStrictAliasing(bool v) { strictAliasing_ = v; }
 
     // Generate all top-level declarations; returns the Module
     std::unique_ptr<llvm::Module> generate(TranslationUnit &tu);
@@ -241,6 +242,13 @@ private:
     // variable, a 'volatile' struct field, anything reached through a
     // 'volatile T*' / 'volatile &T', and elements/fields of any of those.
     bool isVolatileLValue(Expr &e, FnEnv &env);
+    // Type-based alias info. tbaaTag() is the access tag for a value of
+    // SafeC type 'ty' (null when 'ty' gets none: 8-bit and aggregate types,
+    // or with --no-strict-aliasing); tagAccess() attaches it to a source-
+    // level load/store, skipping volatile accesses and union members.
+    llvm::MDNode *tbaaTag(const TypePtr &ty);
+    void tagAccess(llvm::Instruction *inst, const TypePtr &ty, Expr *lvalue = nullptr);
+    bool throughUnion(Expr &e);
     llvm::Value *genCast(CastExpr &e, FnEnv &env);
     llvm::Value *genAssign(AssignExpr &e, FnEnv &env);
     llvm::Value *genTernary(TernaryExpr &e, FnEnv &env);
@@ -320,6 +328,11 @@ private:
 
     // ── Freestanding mode ─────────────────────────────────────────────────────
     bool freestanding_ = false;
+
+    // ── Strict aliasing (TBAA) ────────────────────────────────────────────────
+    bool strictAliasing_ = true;
+    llvm::MDNode *tbaaRoot_ = nullptr;
+    std::unordered_map<std::string, llvm::MDNode *> tbaaTags_;
 
     // Whether the effective target (explicit --target triple, or this
     // safec binary's own host triple when none was given) is a Windows/COFF

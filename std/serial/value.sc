@@ -105,7 +105,7 @@ struct Value value_clone(const &Value v) {
         unsigned long n;
         unsafe { n = v->arr_val.length(); }
         while (i < n) {
-            struct Value* elem;
+            &Value elem;
             unsafe { elem = v->arr_val.at(i); }
             value_array_push(&out, value_clone(elem));
             i = i + 1UL;
@@ -134,7 +134,7 @@ void value_free(&Value v) {
         unsigned long n;
         unsafe { n = v->arr_val.length(); }
         while (i < n) {
-            struct Value* elem;
+            &Value elem;
             unsafe { elem = v->arr_val.at(i); }
             value_free(elem);
             i = i + 1UL;
@@ -191,7 +191,7 @@ inline unsigned long Value::object_len() const { return self.obj_val.length(); }
         int matched;
         unsafe { matched = str_eq(e->key, key); }
         if (matched != 0) {
-            struct Value* result;
+            &Value result;
             unsafe { result = e->val; }
             return result;
         }

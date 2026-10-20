@@ -7,7 +7,10 @@
 // pays). Tensor is float32 (see tensor.h), the same precision every
 // rocm_*_f32 buffer already uses, so these ops read/write a Tensor's
 // 'data'/'grad' directly — no per-call CPU-side conversion pass.
-// UNVERIFIED end to end (see gpu_rocm.h): no AMD GPU/ROCm toolkit in this sandbox, and every rocm_* op currently always returns 0 (missing HSACO binary), so every op here always falls back to CPU.
+// Each op uploads its operands, computes on the GPU and reads the result
+// back, so it pays two PCIe transfers per call: fine for occasional large
+// ops, slow inside a training loop. For that, keep data on the GPU with
+// gpu_rocm.h's RocmBuf API (see the ROCm MLP benchmark).
 #include <std/ml/tensor.h>
 
 namespace std {
@@ -20,10 +23,8 @@ namespace std {
 &Tensor tensor_sum_rocm(const &Tensor a);
 &Tensor tensor_matmul_rocm(const &Tensor a, const &Tensor b);
 
-// Dispatched to rocBLAS (gpu_rocm.h's rocm_matmul_f32_blas) instead of
-// the HSACO-blocked naive kernel tensor_matmul_rocm uses — see that
-// function's comment. This one doesn't hit the HSACO gap, so it's the
-// one actually worth trying on real ROCm hardware.
+// tensor_matmul_rocm uses this library's own tiled HIP kernel;
+// tensor_matmul_rocm_blas uses rocBLAS, which is several times faster.
 &Tensor tensor_matmul_rocm_blas(const &Tensor a, const &Tensor b);
 
 } // namespace std

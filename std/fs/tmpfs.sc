@@ -110,7 +110,8 @@ static void tmpfs_split_path_(const char* path,
 
 static int tmpfs_vfs_open_(void* ctx, const char* path, int flags,
                             &stack VfsNode node_out) {
-    struct TmpfsCtx* tc = (struct TmpfsCtx*)ctx;
+    struct TmpfsCtx* tc;
+    unsafe { tc = (struct TmpfsCtx*)ctx; }
     int idx = tmpfs_resolve_(tc, path);
     if (idx < 0) {
         // Create if VFS_O_CREATE.
@@ -151,7 +152,8 @@ static int tmpfs_vfs_open_(void* ctx, const char* path, int flags,
 }
 
 static int tmpfs_vfs_unlink_(void* ctx, const char* path) {
-    struct TmpfsCtx* tc = (struct TmpfsCtx*)ctx;
+    struct TmpfsCtx* tc;
+    unsafe { tc = (struct TmpfsCtx*)ctx; }
     int idx = tmpfs_resolve_(tc, path);
     if (idx < 0) { return -1; }
     unsafe {
@@ -162,7 +164,8 @@ static int tmpfs_vfs_unlink_(void* ctx, const char* path) {
 }
 
 static int tmpfs_vfs_mkdir_(void* ctx, const char* path) {
-    struct TmpfsCtx* tc = (struct TmpfsCtx*)ctx;
+    struct TmpfsCtx* tc;
+    unsafe { tc = (struct TmpfsCtx*)ctx; }
     char parent[VFS_MAX_PATH];
     char leaf[VFS_MAX_NAME];
     tmpfs_split_path_(path, (char*)parent, (char*)leaf);
@@ -186,7 +189,8 @@ static int tmpfs_vfs_mkdir_(void* ctx, const char* path) {
 static unsigned long tmpfs_vfs_read_(void* ctx, unsigned long inode,
                                       unsigned long offset,
                                       unsigned char* buf, unsigned long len) {
-    struct TmpfsCtx* tc = (struct TmpfsCtx*)ctx;
+    struct TmpfsCtx* tc;
+    unsafe { tc = (struct TmpfsCtx*)ctx; }
     int idx = (int)inode;
     if (idx < 0 || idx >= TMPFS_MAX_FILES) { return (unsigned long)0; }
     unsigned long fsize;
@@ -213,7 +217,8 @@ static unsigned long tmpfs_vfs_read_(void* ctx, unsigned long inode,
 static unsigned long tmpfs_vfs_write_(void* ctx, unsigned long inode,
                                        unsigned long offset,
                                        const unsigned char* buf, unsigned long len) {
-    struct TmpfsCtx* tc = (struct TmpfsCtx*)ctx;
+    struct TmpfsCtx* tc;
+    unsafe { tc = (struct TmpfsCtx*)ctx; }
     int idx = (int)inode;
     if (idx < 0 || idx >= TMPFS_MAX_FILES) { return (unsigned long)0; }
     unsigned long doff;
@@ -241,7 +246,8 @@ static unsigned long tmpfs_vfs_write_(void* ctx, unsigned long inode,
 
 static int tmpfs_vfs_readdir_(void* ctx, unsigned long inode,
                                void* cb, void* user) {
-    struct TmpfsCtx* tc = (struct TmpfsCtx*)ctx;
+    struct TmpfsCtx* tc;
+    unsafe { tc = (struct TmpfsCtx*)ctx; }
     int count = 0;
     int j = 0;
     while (j < TMPFS_MAX_FILES) {

@@ -14,7 +14,7 @@ extern void  free(void* ptr);
 &Tensor softmax_rows(const &Tensor x) {
     unsigned long rows; unsigned long cols;
     unsafe { rows = x->shape[0]; cols = x->shape[1]; }
-    struct Tensor* out = tensor_new_2d(rows, cols, 0);
+    &Tensor out = tensor_new_2d(rows, cols, 0);
     unsigned long r = 0UL;
     while (r < rows) {
         float rowMax;
@@ -49,7 +49,7 @@ extern void  free(void* ptr);
 &Tensor tensor_transpose(const &Tensor in) {
     unsigned long rows; unsigned long cols;
     unsafe { rows = in->shape[0]; cols = in->shape[1]; }
-    struct Tensor* out = tensor_new_2d(cols, rows, 0);
+    &Tensor out = tensor_new_2d(cols, rows, 0);
     unsigned long r = 0UL;
     while (r < rows) {
         unsigned long c = 0UL;
@@ -65,7 +65,7 @@ extern void  free(void* ptr);
 &Tensor tensor_slice_cols(const &Tensor in, unsigned long startCol, unsigned long numCols) {
     unsigned long rows; unsigned long cols;
     unsafe { rows = in->shape[0]; cols = in->shape[1]; }
-    struct Tensor* out = tensor_new_2d(rows, numCols, 0);
+    &Tensor out = tensor_new_2d(rows, numCols, 0);
     unsigned long r = 0UL;
     while (r < rows) {
         unsigned long c = 0UL;
@@ -95,12 +95,12 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src) {
 &Tensor attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V) {
     unsigned long headDim;
     unsafe { headDim = Q->shape[1]; }
-    struct Tensor* Kt = tensor_transpose(K);
-    struct Tensor* scores = tensor_matmul(Q, Kt);
+    &Tensor Kt = tensor_transpose(K);
+    &Tensor scores = tensor_matmul(Q, Kt);
     float scale = (float)1.0 / sqrt_f((float)headDim);
-    struct Tensor* scaled = tensor_scale(scores, scale);
-    struct Tensor* weights = softmax_rows(scaled);
-    struct Tensor* result = tensor_matmul(weights, V);
+    &Tensor scaled = tensor_scale(scores, scale);
+    &Tensor weights = softmax_rows(scaled);
+    &Tensor result = tensor_matmul(weights, V);
 
     Kt->free(); scores->free(); scaled->free(); weights->free();
     unsafe { free((void*)Kt); free((void*)scores); free((void*)scaled); free((void*)weights); }
@@ -112,14 +112,14 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src) {
     unsafe { seqLen = Q->shape[0]; dModel = Q->shape[1]; }
     unsigned long headDim = dModel / numHeads;
 
-    struct Tensor* out = tensor_new_2d(seqLen, dModel, 0);
+    &Tensor out = tensor_new_2d(seqLen, dModel, 0);
     unsigned long h = 0UL;
     while (h < numHeads) {
         unsigned long startCol = h * headDim;
-        struct Tensor* Qh = tensor_slice_cols(Q, startCol, headDim);
-        struct Tensor* Kh = tensor_slice_cols(K, startCol, headDim);
-        struct Tensor* Vh = tensor_slice_cols(V, startCol, headDim);
-        struct Tensor* headOut = attention_forward(Qh, Kh, Vh);
+        &Tensor Qh = tensor_slice_cols(Q, startCol, headDim);
+        &Tensor Kh = tensor_slice_cols(K, startCol, headDim);
+        &Tensor Vh = tensor_slice_cols(V, startCol, headDim);
+        &Tensor headOut = attention_forward(Qh, Kh, Vh);
         tensor_set_cols(out, startCol, headOut);
 
         Qh->free(); Kh->free(); Vh->free(); headOut->free();
@@ -131,9 +131,9 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src) {
 
 &Tensor gated_attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
                                  const &Tensor gateLogits) {
-    struct Tensor* raw = attention_forward(Q, K, V);
-    struct Tensor* gate = tensor_sigmoid_fwd(gateLogits);
-    struct Tensor* out = tensor_mul(raw, gate);
+    &Tensor raw = attention_forward(Q, K, V);
+    &Tensor gate = tensor_sigmoid_fwd(gateLogits);
+    &Tensor out = tensor_mul(raw, gate);
     raw->free(); gate->free();
     unsafe { free((void*)raw); free((void*)gate); }
     return out;
@@ -141,9 +141,9 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src) {
 
 &Tensor gated_mha_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
                            unsigned long numHeads, const &Tensor gateLogits) {
-    struct Tensor* raw = mha_forward(Q, K, V, numHeads);
-    struct Tensor* gate = tensor_sigmoid_fwd(gateLogits);
-    struct Tensor* out = tensor_mul(raw, gate);
+    &Tensor raw = mha_forward(Q, K, V, numHeads);
+    &Tensor gate = tensor_sigmoid_fwd(gateLogits);
+    &Tensor out = tensor_mul(raw, gate);
     raw->free(); gate->free();
     unsafe { free((void*)raw); free((void*)gate); }
     return out;
@@ -151,8 +151,8 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src) {
 
 // phi(x) = elu(x) + 1, elementwise (always > 0, used as linear
 // attention's kernel feature map).
-static struct Tensor* __phi_elu_p1(struct Tensor* x) {
-    struct Tensor* out = tensor_zeros_like(x);
+static &Tensor __phi_elu_p1(&Tensor x) {
+    &Tensor out = tensor_zeros_like(x);
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
@@ -168,9 +168,9 @@ static struct Tensor* __phi_elu_p1(struct Tensor* x) {
     unsigned long seqLen; unsigned long headDim; unsigned long kvLen;
     unsafe { seqLen = Q->shape[0]; headDim = Q->shape[1]; kvLen = K->shape[0]; }
 
-    struct Tensor* phiQ = __phi_elu_p1(Q);
-    struct Tensor* phiK = __phi_elu_p1(K);
-    struct Tensor* out = tensor_new_2d(seqLen, headDim, 0);
+    &Tensor phiQ = __phi_elu_p1(Q);
+    &Tensor phiK = __phi_elu_p1(K);
+    &Tensor out = tensor_new_2d(seqLen, headDim, 0);
 
     unsafe {
         // KV[d1][d2] = sum_j phiK[j][d1] * V[j][d2]   ([headDim, headDim])
@@ -229,7 +229,7 @@ static struct Tensor* __phi_elu_p1(struct Tensor* x) {
     unsafe { seqLen = Q->shape[0]; headDim = Q->shape[1]; kvLen = K->shape[0]; }
     float scale = (float)1.0 / sqrt_f((float)headDim);
 
-    struct Tensor* out = tensor_new_2d(seqLen, headDim, 0); // doubles as the running 'acc' buffer
+    &Tensor out = tensor_new_2d(seqLen, headDim, 0); // doubles as the running 'acc' buffer
 
     unsafe {
         // -1.0e30, not double's -1.0e300 -- float32 only goes to ~3.4e38

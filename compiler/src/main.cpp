@@ -115,6 +115,13 @@ static llvm::cl::opt<bool>
     Freestanding("freestanding",
         llvm::cl::desc("Freestanding mode (no hosted runtime, no C header import)"));
 
+// Type-based alias info (C's strict aliasing) is on by default; this turns
+// it off for code whose 'unsafe' blocks reinterpret memory as another type
+// through casts instead of char* / memcpy.
+static llvm::cl::opt<bool>
+    NoStrictAliasing("no-strict-aliasing",
+        llvm::cl::desc("Don't emit type-based alias info (allow type punning in unsafe code)"));
+
 // Attached-value form (-O2, -Os, -Oz, bare -O = -O2, default O0) rather than
 // a separate '-opt-level <n>' flag, matching clang/rustc's '-O' convention
 // that release-mode invocations already expect.
@@ -304,6 +311,7 @@ static std::string cacheKeyFlags() {
            "|abi=" + TargetAbi.getValue() +
            "|dbg=" + DebugInfoLevel.getValue() +
            "|freestanding=" + (Freestanding ? "1" : "0") +
+           "|strict-aliasing=" + (NoStrictAliasing ? "0" : "1") +
            "|opt=" + OptLevel.getValue() +
            "|release=" + (ReleaseProfile ? "1" : "0");
 }
@@ -785,6 +793,7 @@ static int compileOneFile(const std::string &inputPath, const std::string &outpu
     safec::CodeGen cg(ctx, inputPath, diag, dbgLevel, TargetTriple,
                       TargetCpu, TargetFeatures, TargetAbi);
     if (Freestanding) cg.setFreestanding(true);
+    if (NoStrictAliasing) cg.setStrictAliasing(false);
     auto mod = cg.generate(*tu);
 
     if (diag.hasErrors()) {

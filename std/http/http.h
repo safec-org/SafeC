@@ -55,7 +55,7 @@ int http_resolve_host(const char* host, unsigned int* addr_out);
 // block (as stored in HttpResponse::headers / HttpRequest::headers).
 // Returns an owned copy of the value (leading/trailing whitespace
 // trimmed), or an empty String if the header isn't present.
-struct String http_header_get(const char* raw_headers, const char* name);
+struct String http_header_get(const &char raw_headers, const &char name);
 
 // Performs a blocking HTTP/1.1 request. 'host' may be a hostname (resolved
 // via gethostbyname) or a numeric IPv4 address. 'extra_headers' may be

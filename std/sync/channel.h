@@ -25,6 +25,10 @@ bool  __safec_chan_send(void* chPtr, void* valPtr);
 bool  __safec_chan_recv(void* chPtr, void* outPtr);
 void  __safec_chan_close(void* chPtr);
 
+// A T moves into / out of the runtime's 8-byte slot by memcpy: strict
+// aliasing forbids reading a T through the slot's integer type.
+extern void* memcpy(void* dst, const void* src, unsigned long n);
+
 namespace std {
 
 generic<T>
@@ -51,7 +55,7 @@ int Chan::send(T val) {
     unsigned long long slot = 0ULL;
     bool ok;
     unsafe {
-        *(T*)&slot = val;
+        memcpy((void*)&slot, (const void*)&val, sizeof(T));
         ok = __safec_chan_send((void*)self.raw, (void*)&slot);
     }
     return ok ? 1 : 0;
@@ -64,9 +68,9 @@ generic<T>
     bool ok;
     unsafe { ok = __safec_chan_recv((void*)self.raw, (void*)&slot); }
     if (!ok) return null;
-    T v;
-    unsafe { v = *(T*)&slot; }
-    return v;
+    T v[1];   // filled by memcpy, which definite-init can't see through
+    unsafe { memcpy((void*)&v[0], (const void*)&slot, sizeof(T)); }
+    return v[0];
 }
 
 generic<T>

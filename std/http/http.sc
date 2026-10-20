@@ -11,6 +11,7 @@
 #include <std/sched/reactor.h>
 #include <std/thread.h>
 extern void* malloc(size_t size);
+extern void  free(void* ptr);
 // A backend for io_nb.h's declarations (io_nb_bsd.sc / io_nb_linux.sc /
 // io_nb_win32.sc) must be included by the caller before this file, the
 // same way std/ipc/uds.h's callers pick uds_bsd.sc/uds_linux.sc themselves
@@ -246,8 +247,7 @@ static int http_key_is_(const &char h, unsigned long ks, unsigned long ke, const
 // Single pass over the raw block, no per-line allocation (the previous
 // version split it into up to 256 heap Strings — and leaked one more per
 // line — just to find one header, on every request and response).
-struct String http_header_get(const char* raw_headers, const char* name) {
-    if (raw_headers == (const char*)0) { return string_new(); }
+struct String http_header_get(const &char raw_headers, const &char name) {
     unsigned long len = str_len(raw_headers);
     unsigned long pos = 0UL;
     unsigned long ks = 0UL;
@@ -636,20 +636,6 @@ int http_serve_threaded(unsigned short port, HttpHandler handler, int numThreads
 }
 
 // ── Reactor-based server ─────────────────────────────────────────────────────
-// Gated on SAFEC_REACTOR_BACKEND_INCLUDED_ (defined by reactor_kqueue.sc/
-// reactor_epoll.sc/reactor_win32.sc — see their own comment on this
-// macro): Reactor::add/remove/poll and task_spawn/TaskScheduler::await_fd
-// below are real symbol references, not just declarations, so a caller
-// that includes http.sc *without* a reactor backend (http_serve/
-// http_serve_threaded's ordinary callers, unchanged by any of this) would
-// otherwise fail to link over functions it never calls and code it never
-// asked for — SafeC doesn't dead-strip unused functions before linking.
-// Callers that DO want http_serve_reactor already have to include a
-// reactor backend first for the exact same reason http_serve/
-// http_serve_threaded already require an io_nb backend first (see the
-// file-header comment above); this just extends that same opt-in
-// convention to the reactor dependency specifically.
-#ifdef SAFEC_REACTOR_BACKEND_INCLUDED_
 //
 // http_serve/http_serve_threaded are a small, fixed-size pool of OS
 // threads each blocked on one connection's accept/read/write at a time —
@@ -842,7 +828,7 @@ static int http_conn_task_(?&HttpConnState_ argPtr, int resume_point) {
         // HTTP_CONN_PHASE_WRITE_
         while (st->sent < st->respText.length()) {
             long n = sock_write_(st->fd,
-                (const void*)(st->respText.as_ptr() + st->sent),
+                (const void*)&st->respText.as_ptr()[st->sent],
                 st->respText.length() - st->sent);
             if (n > 0L) {
                 st->sent = st->sent + (unsigned long)n;
@@ -1207,6 +1193,5 @@ int http_serve_reactor(unsigned short port, HttpHandler handler, int numThreads)
     unsafe { thread_join(tid); }
     return 0;
 }
-#endif // SAFEC_REACTOR_BACKEND_INCLUDED_
 
 } // namespace std

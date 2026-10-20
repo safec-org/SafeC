@@ -14,6 +14,12 @@
 // would with dealloc(), they just don't fault.
 #include <std/mem.h>
 
+// Free-list and chunk links live in the first word of memory that is (or
+// will be) a node of type N, so they're read and written with memcpy:
+// under strict aliasing a pointer-typed access there could otherwise be
+// reordered against the node's own fields.
+extern void* memcpy(void* dst, const void* src, unsigned long n);
+
 namespace std {
 
 #define NODE_POOL_FIRST_CHUNK 8UL
@@ -50,7 +56,9 @@ generic<N>
     unsafe {
         if (!self.free_list.is_null()) {
             unsigned char* n = (unsigned char*)self.free_list;
-            self.free_list = (?&heap unsigned char)*(void**)n;
+            void* link = (void*)0;
+            memcpy((void*)&link, (const void*)n, sizeof(void*));
+            self.free_list = (?&heap unsigned char)link;
             return (?&heap N)n;
         }
         if (self.bump_left == 0UL) {
@@ -58,7 +66,8 @@ generic<N>
             unsigned long bytes = checked_add_size(NODE_POOL_CHUNK_HDR, checked_mul_size(count, sizeof(N)));
             unsigned char* c = (unsigned char*)alloc(bytes);
             if (c == (unsigned char*)0) return null;
-            *(void**)c = (void*)self.chunks;
+            void* prevChunk = (void*)self.chunks;
+            memcpy((void*)c, (const void*)&prevChunk, sizeof(void*));
             self.chunks = (?&heap unsigned char)c;
             self.bump = (?&heap unsigned char)(c + NODE_POOL_CHUNK_HDR);
             self.bump_left = count;
@@ -74,7 +83,8 @@ generic<N>
 generic<N>
 void NodePool::give(&heap N node) {
     unsafe {
-        *(void**)node = (void*)self.free_list;
+        void* head = (void*)self.free_list;
+        memcpy((void*)node, (const void*)&head, sizeof(void*));
         self.free_list = (?&heap unsigned char)node;
     }
 }
@@ -84,7 +94,9 @@ void NodePool::free_all() {
     unsafe {
         unsigned char* c = (unsigned char*)self.chunks;
         while (c != (unsigned char*)0) {
-            unsigned char* next = (unsigned char*)*(void**)c;
+            void* nextRaw = (void*)0;
+            memcpy((void*)&nextRaw, (const void*)c, sizeof(void*));
+            unsigned char* next = (unsigned char*)nextRaw;
             dealloc((void*)c);
             c = next;
         }

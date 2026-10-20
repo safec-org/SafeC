@@ -97,10 +97,10 @@ int ext2_init(&Ext2Ctx ctx, &BlockDevice dev) {
 // ── Ext2Ctx::read_block ───────────────────────────────────────────────────────
 // Convert block number to LBA (512-byte sectors) and read block_size bytes.
 
-inline int Ext2Ctx::read_block(unsigned long block_no, unsigned char* buf) {
+inline int Ext2Ctx::read_block(unsigned long block_no, &stack unsigned char buf) {
     unsigned long sectors_per_block = self.block_size / (unsigned long)512;
     unsigned long lba = block_no * sectors_per_block;
-    return self.dev.read(lba, (&stack unsigned char)buf, sectors_per_block);
+    return self.dev.read(lba, buf, sectors_per_block);
 }
 
 // ── Ext2Ctx::read_inode ───────────────────────────────────────────────────────
@@ -116,7 +116,7 @@ int Ext2Ctx::read_inode(unsigned long ino, &stack Ext2Inode inode_out) {
     // BGDT is always in the block immediately after the superblock.
     unsigned long bgdt_block = (unsigned long)self.super.first_data_block + (unsigned long)1;
     unsigned char block_buf[EXT2_MAX_BLOCK_SIZE];
-    if (self.read_block(bgdt_block, (unsigned char*)block_buf) != 0) { return -1; }
+    if (self.read_block(bgdt_block, block_buf) != 0) { return -1; }
 
     // Each group descriptor is 32 bytes.
     unsigned long gd_off = group * (unsigned long)32;
@@ -133,7 +133,7 @@ int Ext2Ctx::read_inode(unsigned long ino, &stack Ext2Inode inode_out) {
     unsigned long inode_off    = (local % inodes_per_blk) * inode_size;
 
     unsigned char ibuf[EXT2_MAX_BLOCK_SIZE];
-    if (self.read_block(inode_blk, (unsigned char*)ibuf) != 0) { return -1; }
+    if (self.read_block(inode_blk, ibuf) != 0) { return -1; }
 
     unsafe {
         unsigned char* p = (unsigned char*)ibuf + inode_off;
@@ -194,7 +194,7 @@ unsigned long Ext2Ctx::read_file(unsigned long ino, unsigned long offset,
         unsafe { blk_no = (unsigned long)inode.block[blk_idx]; }
         if (blk_no == (unsigned long)0) { break; }
 
-        if (self.read_block(blk_no, (unsigned char*)blk_buf) != 0) { break; }
+        if (self.read_block(blk_no, blk_buf) != 0) { break; }
 
         unsigned long chunk = bs - blk_off;
         unsigned long remain = len - total_read;
@@ -236,7 +236,7 @@ static unsigned long ext2_dir_find_(struct Ext2Ctx* ctx, unsigned long dir_ino,
         unsigned long blk_no;
         unsafe { blk_no = (unsigned long)dir_inode.block[blk_idx]; }
         if (blk_no == (unsigned long)0) { break; }
-        if (ctx->read_block(blk_no, (unsigned char*)blk_buf) != 0) { break; }
+        if (ctx->read_block(blk_no, blk_buf) != 0) { break; }
 
         unsigned long blk_limit = bs;
         if (read_pos + bs > dir_size) { blk_limit = dir_size - read_pos; }
@@ -303,7 +303,8 @@ static int ext2_split_path_(const char* path,
 
 static int ext2_vfs_open_(void* ctx, const char* path, int flags,
                            &stack VfsNode node_out) {
-    struct Ext2Ctx* ec = (struct Ext2Ctx*)ctx;
+    struct Ext2Ctx* ec;
+    unsafe { ec = (struct Ext2Ctx*)ctx; }
 
     const char* comp_ptrs[EXT2_MAX_DEPTH];
     unsigned long comp_lens[EXT2_MAX_DEPTH];
@@ -361,13 +362,15 @@ static int ext2_vfs_open_(void* ctx, const char* path, int flags,
 static unsigned long ext2_vfs_read_(void* ctx, unsigned long inode,
                                      unsigned long offset,
                                      unsigned char* buf, unsigned long len) {
-    struct Ext2Ctx* ec = (struct Ext2Ctx*)ctx;
+    struct Ext2Ctx* ec;
+    unsafe { ec = (struct Ext2Ctx*)ctx; }
     return ec->read_file(inode, offset, buf, len);
 }
 
 static int ext2_vfs_readdir_(void* ctx, unsigned long dir_ino,
                               void* cb, void* user) {
-    struct Ext2Ctx* ec = (struct Ext2Ctx*)ctx;
+    struct Ext2Ctx* ec;
+    unsafe { ec = (struct Ext2Ctx*)ctx; }
 
     struct Ext2Inode dir_inode;
     if (ec->read_inode(dir_ino, &dir_inode) != 0) { return -1; }
@@ -384,7 +387,7 @@ static int ext2_vfs_readdir_(void* ctx, unsigned long dir_ino,
         unsigned long blk_no;
         unsafe { blk_no = (unsigned long)dir_inode.block[blk_idx]; }
         if (blk_no == (unsigned long)0) { break; }
-        if (ec->read_block(blk_no, (unsigned char*)blk_buf) != 0) { break; }
+        if (ec->read_block(blk_no, blk_buf) != 0) { break; }
 
         unsigned long blk_limit = bs;
         if (read_pos + bs > dir_size) { blk_limit = dir_size - read_pos; }

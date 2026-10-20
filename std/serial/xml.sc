@@ -97,7 +97,7 @@ void xml_write(const &Value v, const char* tag, &String out) {
         unsafe { n = v.arr_val.length(); }
         unsigned long i = 0UL;
         while (i < n) {
-            struct Value* elem;
+            &Value elem;
             unsafe { elem = v.arr_val.at(i); }
             xml_write(elem, "item", out);
             i = i + 1UL;
@@ -111,7 +111,7 @@ void xml_write(const &Value v, const char* tag, &String out) {
             unsafe { e = v.obj_val.at(i); }
             const char* key;
             unsafe { key = (const char*)e->key; }
-            struct Value* val;
+            &Value val;
             unsafe { val = e->val; }
             xml_write(val, key, out);
             i = i + 1UL;

@@ -121,7 +121,7 @@ void json_write(const &Value v, &String out) {
         unsigned long i = 0UL;
         while (i < n) {
             if (i > 0UL) { unsafe { out.push_char(','); } }
-            struct Value* elem;
+            &Value elem;
             unsafe { elem = v.arr_val.at(i); }
             json_write(elem, out);
             i = i + 1UL;
@@ -140,7 +140,7 @@ void json_write(const &Value v, &String out) {
             unsafe { key = (const char*)e->key; }
             json_append_escaped_(out, key);
             unsafe { out.push_char(':'); }
-            struct Value* val;
+            &Value val;
             unsafe { val = e->val; }
             json_write(val, out);
             i = i + 1UL;
@@ -167,11 +167,11 @@ struct JsonCursor_ {
     int ok;
 };
 
-static char json_peek_(struct JsonCursor_* c) {
+static char json_peek_(&JsonCursor_ c) {
     unsafe { return c->text[c->pos]; }
 }
 
-static void json_skip_ws_(struct JsonCursor_* c) {
+static void json_skip_ws_(&JsonCursor_ c) {
     while (1) {
         char ch = json_peek_(c);
         if (ch != ' ' && ch != '\t' && ch != '\n' && ch != '\r') { break; }
@@ -179,14 +179,14 @@ static void json_skip_ws_(struct JsonCursor_* c) {
     }
 }
 
-static int json_eat_(struct JsonCursor_* c, char expected) {
+static int json_eat_(&JsonCursor_ c, char expected) {
     if (json_peek_(c) != expected) { unsafe { c->ok = 0; } return 0; }
     unsafe { c->pos = c->pos + 1UL; }
     return 1;
 }
 
 // Matches a literal keyword ("true"/"false"/"null") starting at the cursor.
-static int json_eat_literal_(struct JsonCursor_* c, const char* word) {
+static int json_eat_literal_(&JsonCursor_ c, const char* word) {
     unsigned long start;
     unsafe { start = c->pos; }
     unsigned long i = 0UL;
@@ -201,7 +201,7 @@ static int json_eat_literal_(struct JsonCursor_* c, const char* word) {
     return 1;
 }
 
-static struct Value json_parse_value_(struct JsonCursor_* c);
+static struct Value json_parse_value_(&JsonCursor_ c);
 
 static unsigned int json_read_hex4_(&JsonCursor_ c) {
     unsigned int val = 0u;
@@ -220,7 +220,7 @@ static unsigned int json_read_hex4_(&JsonCursor_ c) {
     return val;
 }
 
-static struct Value json_parse_string_raw_(struct JsonCursor_* c) {
+static struct Value json_parse_string_raw_(&JsonCursor_ c) {
     // Caller already confirmed the opening '"'.
     struct String out = string_new();
     json_eat_(c, '"');
@@ -277,7 +277,7 @@ static struct Value json_parse_string_raw_(struct JsonCursor_* c) {
     return v;
 }
 
-static struct Value json_parse_number_(struct JsonCursor_* c) {
+static struct Value json_parse_number_(&JsonCursor_ c) {
     unsigned long start;
     unsafe { start = c->pos; }
     int isFloat = 0;
@@ -315,7 +315,7 @@ static struct Value json_parse_number_(struct JsonCursor_* c) {
     return v;
 }
 
-static struct Value json_parse_array_(struct JsonCursor_* c) {
+static struct Value json_parse_array_(&JsonCursor_ c) {
     struct Value arr = value_array();
     json_eat_(c, '[');
     json_skip_ws_(c);
@@ -337,7 +337,7 @@ static struct Value json_parse_array_(struct JsonCursor_* c) {
     return arr;
 }
 
-static struct Value json_parse_object_(struct JsonCursor_* c) {
+static struct Value json_parse_object_(&JsonCursor_ c) {
     struct Value obj = value_object();
     json_eat_(c, '{');
     json_skip_ws_(c);
@@ -365,7 +365,7 @@ static struct Value json_parse_object_(struct JsonCursor_* c) {
     return obj;
 }
 
-static struct Value json_parse_value_(struct JsonCursor_* c) {
+static struct Value json_parse_value_(&JsonCursor_ c) {
     json_skip_ws_(c);
     int stillOk2;
     unsafe { stillOk2 = c->ok; }

@@ -54,12 +54,12 @@ void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd
                            float beta_t, float alphaBar_t, const &Tensor noise) {
     float invSqrtAlpha = (float)1.0 / sqrt_f((float)1.0 - beta_t);
     float coef = beta_t / sqrt_f((float)1.0 - alphaBar_t);
-    struct Tensor* scaledEps = tensor_scale(epsPred, coef);
-    struct Tensor* diff = tensor_sub(x_t, scaledEps);
-    struct Tensor* mean = tensor_scale(diff, invSqrtAlpha);
+    &Tensor scaledEps = tensor_scale(epsPred, coef);
+    &Tensor diff = tensor_sub(x_t, scaledEps);
+    &Tensor mean = tensor_scale(diff, invSqrtAlpha);
     float sigma_t = sqrt_f(beta_t);
-    struct Tensor* scaledNoise = tensor_scale(noise, sigma_t);
-    struct Tensor* out = tensor_add(mean, scaledNoise);
+    &Tensor scaledNoise = tensor_scale(noise, sigma_t);
+    &Tensor out = tensor_add(mean, scaledNoise);
 
     scaledEps->free(); diff->free(); mean->free(); scaledNoise->free();
     unsafe { free((void*)scaledEps); free((void*)diff); free((void*)mean); free((void*)scaledNoise); }
@@ -70,15 +70,15 @@ void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd
                            float alphaBar_t, float alphaBar_prev) {
     float sqrtAlphaBar_t = sqrt_f(alphaBar_t);
     float sqrtOneMinusAlphaBar_t = sqrt_f((float)1.0 - alphaBar_t);
-    struct Tensor* scaledEps1 = tensor_scale(epsPred, sqrtOneMinusAlphaBar_t);
-    struct Tensor* numer = tensor_sub(x_t, scaledEps1);
-    struct Tensor* x0Pred = tensor_scale(numer, (float)1.0 / sqrtAlphaBar_t);
+    &Tensor scaledEps1 = tensor_scale(epsPred, sqrtOneMinusAlphaBar_t);
+    &Tensor numer = tensor_sub(x_t, scaledEps1);
+    &Tensor x0Pred = tensor_scale(numer, (float)1.0 / sqrtAlphaBar_t);
 
     float sqrtAlphaBarPrev = sqrt_f(alphaBar_prev);
     float sqrtOneMinusAlphaBarPrev = sqrt_f((float)1.0 - alphaBar_prev);
-    struct Tensor* term1 = tensor_scale(x0Pred, sqrtAlphaBarPrev);
-    struct Tensor* term2 = tensor_scale(epsPred, sqrtOneMinusAlphaBarPrev);
-    struct Tensor* out = tensor_add(term1, term2);
+    &Tensor term1 = tensor_scale(x0Pred, sqrtAlphaBarPrev);
+    &Tensor term2 = tensor_scale(epsPred, sqrtOneMinusAlphaBarPrev);
+    &Tensor out = tensor_add(term1, term2);
 
     scaledEps1->free(); numer->free(); x0Pred->free(); term1->free(); term2->free();
     unsafe {
@@ -96,9 +96,9 @@ void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd
     float h = lambda_next - lambda_cur;
     float expm1h = exp_f(h) - (float)1.0;
 
-    struct Tensor* term1 = tensor_scale(x_cur, sigma_next / sigma_cur);
-    struct Tensor* term2 = tensor_scale(epsPred, alpha_next * expm1h);
-    struct Tensor* out = tensor_sub(term1, term2);
+    &Tensor term1 = tensor_scale(x_cur, sigma_next / sigma_cur);
+    &Tensor term2 = tensor_scale(epsPred, alpha_next * expm1h);
+    &Tensor out = tensor_sub(term1, term2);
 
     term1->free(); term2->free();
     unsafe { free((void*)term1); free((void*)term2); }
@@ -117,17 +117,17 @@ void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd
     float alpha_s = exp_f(lambda_s) * sigma_s;
     float expm1Half = exp_f((float)0.5 * h) - (float)1.0;
 
-    struct Tensor* sTerm1 = tensor_scale(x_cur, sigma_s / sigma_cur);
-    struct Tensor* sTerm2 = tensor_scale(epsPred, alpha_s * expm1Half);
-    struct Tensor* x_s = tensor_sub(sTerm1, sTerm2);
+    &Tensor sTerm1 = tensor_scale(x_cur, sigma_s / sigma_cur);
+    &Tensor sTerm2 = tensor_scale(epsPred, alpha_s * expm1Half);
+    &Tensor x_s = tensor_sub(sTerm1, sTerm2);
 
-    struct Tensor* eps_s;
+    &Tensor eps_s;
     unsafe { eps_s = model(x_s, sigma_s, userData); }
 
     float expm1h = exp_f(h) - (float)1.0;
-    struct Tensor* nTerm1 = tensor_scale(x_cur, sigma_next / sigma_cur);
-    struct Tensor* nTerm2 = tensor_scale(eps_s, alpha_next * expm1h);
-    struct Tensor* out = tensor_sub(nTerm1, nTerm2);
+    &Tensor nTerm1 = tensor_scale(x_cur, sigma_next / sigma_cur);
+    &Tensor nTerm2 = tensor_scale(eps_s, alpha_next * expm1h);
+    &Tensor out = tensor_sub(nTerm1, nTerm2);
 
     sTerm1->free(); sTerm2->free(); x_s->free(); eps_s->free(); nTerm1->free(); nTerm2->free();
     unsafe {
@@ -145,9 +145,9 @@ void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd
     float h = lambda_next - lambda_cur;
     float expm1NegH = exp_f(-h) - (float)1.0;
 
-    struct Tensor* term1 = tensor_scale(x_cur, sigma_next / sigma_cur);
-    struct Tensor* term2 = tensor_scale(x0Pred, alpha_next * expm1NegH);
-    struct Tensor* out = tensor_sub(term1, term2);
+    &Tensor term1 = tensor_scale(x_cur, sigma_next / sigma_cur);
+    &Tensor term2 = tensor_scale(x0Pred, alpha_next * expm1NegH);
+    &Tensor out = tensor_sub(term1, term2);
 
     term1->free(); term2->free();
     unsafe { free((void*)term1); free((void*)term2); }
@@ -166,17 +166,17 @@ void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd
     float alpha_s = exp_f(lambda_s) * sigma_s;
     float expm1NegHalf = exp_f((float)-0.5 * h) - (float)1.0;
 
-    struct Tensor* sTerm1 = tensor_scale(x_cur, sigma_s / sigma_cur);
-    struct Tensor* sTerm2 = tensor_scale(x0Pred, alpha_s * expm1NegHalf);
-    struct Tensor* x_s = tensor_sub(sTerm1, sTerm2);
+    &Tensor sTerm1 = tensor_scale(x_cur, sigma_s / sigma_cur);
+    &Tensor sTerm2 = tensor_scale(x0Pred, alpha_s * expm1NegHalf);
+    &Tensor x_s = tensor_sub(sTerm1, sTerm2);
 
-    struct Tensor* x0_s;
+    &Tensor x0_s;
     unsafe { x0_s = model(x_s, sigma_s, userData); }
 
     float expm1NegH = exp_f(-h) - (float)1.0;
-    struct Tensor* nTerm1 = tensor_scale(x_cur, sigma_next / sigma_cur);
-    struct Tensor* nTerm2 = tensor_scale(x0_s, alpha_next * expm1NegH);
-    struct Tensor* out = tensor_sub(nTerm1, nTerm2);
+    &Tensor nTerm1 = tensor_scale(x_cur, sigma_next / sigma_cur);
+    &Tensor nTerm2 = tensor_scale(x0_s, alpha_next * expm1NegH);
+    &Tensor out = tensor_sub(nTerm1, nTerm2);
 
     sTerm1->free(); sTerm2->free(); x_s->free(); x0_s->free(); nTerm1->free(); nTerm2->free();
     unsafe {
