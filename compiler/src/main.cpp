@@ -21,6 +21,7 @@
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Target/TargetMachine.h"
@@ -699,13 +700,19 @@ static int compileOneFile(const std::string &inputPath, const std::string &outpu
         std::string triple = TargetTriple.getValue().empty()
             ? llvm::sys::getDefaultTargetTriple() : TargetTriple.getValue();
         std::string err;
-        const llvm::Target *tgt = llvm::TargetRegistry::lookupTarget(triple, err);
+        llvm::Triple t(triple);
+        const llvm::Target *tgt = llvm::TargetRegistry::lookupTarget(t, err);
         if (tgt) {
-            llvm::Triple t(triple);
             std::string cpu = TargetCpu.getValue();
             if (cpu.empty()) cpu = t.getArch() == llvm::Triple::x86_64 ? "x86-64" : "generic";
+            // LLVM 22 takes the Triple; LLVM 21 its string form.
+#if LLVM_VERSION_MAJOR >= 22
+            std::unique_ptr<llvm::MCSubtargetInfo> sti(
+                tgt->createMCSubtargetInfo(t, cpu, TargetFeatures.getValue()));
+#else
             std::unique_ptr<llvm::MCSubtargetInfo> sti(
                 tgt->createMCSubtargetInfo(triple, cpu, TargetFeatures.getValue()));
+#endif
             auto has = [&](const char *f) { return sti && sti->checkFeatures(std::string("+") + f); };
             auto def = [&](const char *m, const char *v = "1") { ppOpts.cmdlineDefs[m] = v; };
             if (t.isX86()) {
