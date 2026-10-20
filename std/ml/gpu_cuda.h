@@ -1,34 +1,112 @@
 #pragma once
-// SafeC Standard Library — GPU tensor ops via CUDA (NVIDIA).
+// SafeC Standard Library — NVIDIA GPU backend (CUDA).
 //
-// Written carefully against the real CUDA Driver API's C ABI (function
-// names/signatures hand-matched to cuda.h) and type-checked by safec, but
-// — like std/gui/gui_win32.sc and gui_x11.sc earlier in this library —
-// genuinely UNLINKABLE/UNRUNNABLE in this sandbox: no NVIDIA GPU, no CUDA
-// toolkit installed here (confirmed: no nvcc, no nvidia-smi, no
-// /usr/local/cuda). Sanity-check against a real CUDA-capable host before
-// depending on it, same caveat as those two files.
+// Three layers:
 //
-// Uses the Driver API (cu*, not the higher-level cudart cuda*) plus an
-// inline PTX string compiled at runtime via cuModuleLoadData — the CUDA
-// analogue of gpu_mps.sc's runtime-compiled Metal Shading Language kernel
-// (PTX is NVIDIA's stable, textual, forward-compatible IR; embedding it
-// directly avoids needing nvcc/nvrtc as a build-time dependency, the same
-// reasoning that made "compile MSL from a string at runtime" the right
-// choice for Metal). Discrete memory model, unlike MPS's unified memory
-// (see gpu_mps.h) — every buffer needs explicit cuMemcpyHtoD/DtoH.
+//  1. Device-resident buffers (CudaBuf) and queued device ops — the fast
+//     path. Upload once, run any number of ops on the GPU, read back only
+//     what you need. Matmuls go to cuBLAS (cuBLASLt for the fused
+//     GEMM + ReLU); everything else runs this library's own CUDA kernels
+//     (elementwise math, ReLU and its gradient, in-place SGD, sum
+//     reduction, a fused MSE-loss gradient), compiled at first use with
+//     NVRTC for the GPU that is present (sm_80, sm_90, ...) — no offline
+//     build step and no per-architecture binaries.
+//  2. Host-array convenience ops (cuda_*_f32) — upload, compute, read back
+//     in one call. Simple, but each call pays two PCIe transfers; use (1)
+//     inside loops.
+//  3. Raw device pointers (cuda_*_persistent, fp16/bf16) — the older
+//     void*-handle API, kept for existing callers; it runs on the same
+//     context and kernels as (1).
 //
-// Gated behind the 'cuda' feature (see Package.toml's [features]).
+// Ops on layer (1) are queued in order on one CUDA stream and return as
+// soon as they're enqueued; cuda_read() and cuda_sync() wait. A sequence
+// of queued ops can be recorded once into a CudaGraph and replayed with a
+// single launch, which removes per-kernel launch overhead from small,
+// repeated workloads such as a training step.
+//
+// The backend uses the device's primary context (the one the CUDA runtime,
+// and so PyTorch, also uses) on the GPU with the most SMs, and honours
+// CUDA_VISIBLE_DEVICES. fp32 GEMMs run in full fp32 unless TF32 is turned
+// on with cuda_set_tf32 (see below).
+// Link with: -lcuda -lcublas -lcublasLt -lnvrtc (CUDA 12 or newer).
 namespace std {
 
-// Elementwise 'out[i] = a[i] + b[i]' for i in [0, n), computed on an
-// NVIDIA GPU. Returns 1 on success, 0 on any failure (no CUDA-capable
-// device, driver/runtime mismatch, PTX load failure, etc.).
-int cuda_add_f32(const float* a, const float* b, float* out, unsigned long n);
+// ── Device and buffers ───────────────────────────────────────────────────────
 
-// Same shape/caveats as cuda_add_f32 -- all hand-written PTX, all
-// UNVERIFIED (no ptxas, no NVIDIA GPU in this sandbox). See gpu_cuda.sc
-// for each kernel's source and the pow/log/exp approximation notes.
+// 1 if a CUDA GPU is usable (initializes the backend on first call).
+int cuda_available();
+
+// Name of the selected GPU ("NVIDIA H200"), or "" if none.
+const char* cuda_device_name();
+
+// A float32 buffer in GPU memory. 'dev' is the device address — never
+// dereferenced on the host — and 0 for an invalid (failed or freed)
+// buffer; 'len' is the element count every op checks against.
+struct CudaBuf {
+    unsigned long dev;
+    unsigned long len;
+};
+
+struct CudaBuf cuda_alloc(unsigned long n);                       // uninitialized; dev == 0 on failure
+struct CudaBuf cuda_upload(const &float host, unsigned long n);  // dev == 0 on failure
+int  cuda_write(struct CudaBuf dst, const &float host, unsigned long n);  // 1 on success
+int  cuda_read(struct CudaBuf src, &float host, unsigned long n);         // waits for queued work
+void cuda_free(&CudaBuf b);                                       // b.dev := 0
+int  cuda_sync();                                                 // wait for all queued work
+
+// TF32 tensor cores for every later cuda_gemm / cuda_gemm_relu (sm_80 and
+// newer): inputs are rounded to a 10-bit mantissa, accumulation stays fp32.
+// Several times the matmul throughput, ~1e-3 relative error. Off by default.
+// Returns 1 if the setting was applied.
+int  cuda_set_tf32(int on);
+
+// ── Queued device ops (1 = enqueued, 0 = invalid buffer/size or no GPU) ─────
+// Matrices are row-major. 'ta'/'tb' = 1 means that operand is stored
+// transposed (A as k x m, B as n x k).
+
+// c[m,n] = op(a)[m,k] * op(b)[k,n]  (cuBLAS sgemm)
+int cuda_gemm(struct CudaBuf a, int ta, struct CudaBuf b, int tb, struct CudaBuf c,
+              unsigned long m, unsigned long n, unsigned long k);
+// c = relu(op(a) * op(b)) in one kernel (cuBLASLt ReLU epilogue).
+int cuda_gemm_relu(struct CudaBuf a, int ta, struct CudaBuf b, int tb, struct CudaBuf c,
+                   unsigned long m, unsigned long n, unsigned long k);
+
+int cuda_add(struct CudaBuf a, struct CudaBuf b, struct CudaBuf out);   // out = a + b
+int cuda_sub(struct CudaBuf a, struct CudaBuf b, struct CudaBuf out);
+int cuda_mul(struct CudaBuf a, struct CudaBuf b, struct CudaBuf out);
+int cuda_div(struct CudaBuf a, struct CudaBuf b, struct CudaBuf out);
+int cuda_pow(struct CudaBuf a, struct CudaBuf b, struct CudaBuf out);
+int cuda_scale(struct CudaBuf a, float k, struct CudaBuf out);         // out = a * k
+int cuda_relu(struct CudaBuf a, struct CudaBuf out);
+int cuda_exp(struct CudaBuf a, struct CudaBuf out);
+int cuda_log(struct CudaBuf a, struct CudaBuf out);
+int cuda_sqrt(struct CudaBuf a, struct CudaBuf out);
+// out = z > 0 ? g : 0. 'z' may be the ReLU input or its output (same sign test).
+int cuda_relu_grad(struct CudaBuf z, struct CudaBuf g, struct CudaBuf out);
+int cuda_sgd(struct CudaBuf w, struct CudaBuf g, float lr);            // w -= lr * g, in place
+// Both SGD updates of a two-tensor model in one launch: w1 -= lr*g1, w2 -= lr*g2.
+int cuda_sgd2(struct CudaBuf w1, struct CudaBuf g1, struct CudaBuf w2, struct CudaBuf g2, float lr);
+int cuda_sum(struct CudaBuf a, struct CudaBuf out1);                   // out1[0] = sum(a)
+// Fused MSE gradient: dy = 2 (y - t) and loss1[0] = sum((y - t)^2), in one pass.
+int cuda_mse_grad(struct CudaBuf y, struct CudaBuf t, struct CudaBuf dy, struct CudaBuf loss1);
+
+// ── Graphs: record queued ops once, replay with one launch ───────────────────
+
+struct CudaGraph {
+    unsigned long exec;   // 0 = invalid
+};
+
+// Ops issued between begin and end are recorded instead of run. Don't call
+// cuda_read/cuda_write/cuda_sync/cuda_alloc while recording.
+int  cuda_capture_begin();
+struct CudaGraph cuda_capture_end();          // exec == 0 on failure
+int  cuda_graph_launch(struct CudaGraph g);   // queued like any other op
+void cuda_graph_free(&CudaGraph g);
+
+// ── Host-array convenience ops (upload → compute → read back) ────────────────
+// 1 on success, 0 on failure (no GPU, allocation failure).
+
+int cuda_add_f32(const float* a, const float* b, float* out, unsigned long n);
 int cuda_sub_f32(const float* a, const float* b, float* out, unsigned long n);
 int cuda_mul_f32(const float* a, const float* b, float* out, unsigned long n);
 int cuda_div_f32(const float* a, const float* b, float* out, unsigned long n);
@@ -39,128 +117,43 @@ int cuda_exp_f32(const float* a, float* out, unsigned long n);
 int cuda_sqrt_f32(const float* a, float* out, unsigned long n);
 int cuda_scale_f32(const float* a, float k, float* out, unsigned long n);
 int cuda_sum_f32(const float* a, float* out, unsigned long n);
+
+// out[M,N] = a[M,K] * b[K,N] with this library's own tiled CUDA kernel
+// (64x64 tiles in shared memory, 4x4 per thread). Kept as a dependency-free
+// reference; cuda_matmul_f32_blas is faster at every size.
 int cuda_matmul_f32(const float* a, const float* b, float* out,
-                     unsigned long M, unsigned long K, unsigned long N);
-
-// Same computation as cuda_matmul_f32, dispatched to cuBLAS's cublasSgemm
-// instead of the hand-written PTX kernel above — the CUDA-vendor
-// equivalent of tensor_blas.h's Accelerate-backed tensor_matmul_blas.
-// Real vendor GEMMs (cuBLAS included) are tuned per-GPU-architecture in
-// ways a single hand-written PTX kernel isn't; see gpu_cuda.sc's
-// implementation comment for the row-major/column-major handling (cuBLAS
-// is Fortran-convention column-major; SafeC's Tensor is row-major).
-// Same UNVERIFIED caveat as every other function in this file (no NVIDIA
-// GPU, no CUDA toolkit, no cuBLAS library in this sandbox).
+                    unsigned long M, unsigned long K, unsigned long N);
+// Same product through cuBLAS.
 int cuda_matmul_f32_blas(const float* a, const float* b, float* out,
-                          unsigned long M, unsigned long K, unsigned long N);
+                         unsigned long M, unsigned long K, unsigned long N);
 
-// True if a CUDA-capable device is present and the driver initializes
-// successfully (cuInit(0) == CUDA_SUCCESS && cuDeviceGetCount() > 0).
-int cuda_available();
+// ── Raw device pointers (older API) ──────────────────────────────────────────
+// Same context and kernels as the CudaBuf layer; a void* here is a device
+// address. Prefer CudaBuf in new code: it carries its length, so every op
+// can check sizes.
 
-// ── Persistent-context / GPU-resident tier ──────────────────────────────────
-// Applies the same fix the MPS backend's GPU-resident training rewrite
-// used, to a worse version of the same problem: every cuda_*_f32 function
-// above pays a full cuInit/cuCtxCreate_v2/cuCtxDestroy_v2 cycle AND a
-// fresh cuMemAlloc_v2/cuMemcpyHtoD_v2/cuMemFree_v2 round trip on EVERY
-// call -- there is no context or buffer reuse at all above (MPS's
-// pre-session code at least kept one shared MTLDevice/command queue
-// alive). The functions below fix both: a process-lifetime CUcontext
-// (see gpu_cuda.sc's __cuda_ensure_context) created once and reused by
-// every call in this tier, and persistent device buffers uploaded once
-// and reused across many dispatches -- e.g. a training loop's weights,
-// updated in place by cuda_sgd_update_f32 without ever coming back to the
-// host, the same shape as gpu_mps.h's mps_upload_persistent/
-// mps_matmul_f32_persistent/mps_sgd_update_f32_chained family. UNVERIFIED
-// like the rest of this file (no NVIDIA GPU/CUDA toolkit in this
-// sandbox), but the reason for this tier is a real, structural fix, not
-// speculative tuning: the existing per-call functions above are left
-// untouched (still correct, still usable standalone) so this tier is
-// additive, not a rewrite.
-//
-// CUdeviceptr (an unsigned long long) is boxed/unboxed through a plain
-// void* here, the same round-trip cuda_matmul_f32_blas already uses for
-// cuBLAS's pointer-typed arguments -- safe on any platform where
-// sizeof(void*) >= 8, true of every target this compiler supports.
-
-// Uploads 'bytes' from host memory to a new persistent device buffer.
-// Returns (void*)0 on failure (no device, context creation failure, or
-// allocation failure).
+// 1 if the backend initialized (same as cuda_available()).
+int cuda_persistent_available();
+// Uploads 'bytes' of host memory to a new device buffer; (void*)0 on failure.
 void* cuda_upload_persistent(const float* data, unsigned long bytes);
-
-// Frees a buffer returned by cuda_upload_persistent.
+// Frees a buffer from any cuda_upload_*_persistent function.
 void cuda_release_persistent(void* devPtr);
-
-// Same computation as cuda_matmul_f32, but 'devA'/'devB' are already
-// device buffers (e.g. from cuda_upload_persistent) -- no upload for
-// either operand -- and dispatch reuses the shared persistent context and
-// a cached module/kernel instead of reloading PTX and creating/destroying
-// a context on every call. Still copies the MxN result back to host
-// 'out': unlike MPS, this file has no command-buffer batching layer (see
-// gpu_mps.sc's mps_batch_begin/mps_batch_end) to defer that across
-// multiple chained ops, so each call here still does one cuCtxSynchronize
-// + cuMemcpyDtoH_v2. Returns 1 on success, 0 on failure.
+// out[M,N] (host) = devA[M,K] * devB[K,N], both already on the device.
 int cuda_matmul_f32_persistent(void* devA, void* devB, float* out,
                                 unsigned long M, unsigned long K, unsigned long N);
-
-// In-place SGD step against a persistent device buffer:
-// devW[i] -= lr * devGrad[i] for i in [0, n), computed entirely on-GPU --
-// the result is never copied back to host memory, mirroring
-// gpu_mps.h's mps_sgd_update_f32_chained. This is the primitive that lets
-// a training loop keep weights GPU-resident across steps: upload once via
-// cuda_upload_persistent, forward/backward via cuda_matmul_f32_persistent
-// (and this file's other _persistent ops), update in place via this
-// function, repeat -- with no per-step re-upload the way a CPU-resident
-// weight array read/written by a CPU-side SGD loop would need. Returns 1
-// on success, 0 on failure.
+// devW[i] -= lr * devGrad[i], in place on the device; nothing is read back.
 int cuda_sgd_update_f32(void* devW, void* devGrad, float lr, unsigned long n);
 
-// True if the shared persistent context (used by every function in this
-// tier) is available -- like cuda_available(), but also confirms context
-// creation succeeded, not just device enumeration.
-int cuda_persistent_available();
-
-// ── fp16 / bf16 tier ─────────────────────────────────────────────────────
-// Real half/bfloat16 arithmetic in PTX, not just storage: NVIDIA GPUs
-// have native f16 datapaths since Pascal (sm_60, 2016) and native bf16
-// since Ampere (sm_80, 2020) -- this is a real hardware-generation split,
-// not an arbitrary choice, so cuda_matmul_f16_persistent's embedded PTX
-// targets sm_60 and cuda_matmul_bf16_persistent's targets sm_80. Storage
-// is '.f16'/'.bf16' (half the bytes/element of the f32 tier); each PTX
-// kernel converts to f32 at the point of arithmetic ('cvt.f32.f16'/
-// 'cvt.f32.bf16') and back at the point of store ('cvt.rn.f16.f32'/
-// 'cvt.rn.bf16.f32') -- the same storage-half/compute-float mixed-
-// precision approach gpu_mps_kernels.metal's matmul_kernel_f16/bf16 use,
-// just expressed in PTX's cvt instructions instead of MSL's implicit
-// half<->float conversions.
-//
-// Deliberately smaller than gpu_mps.h's fp16/bf16 persistent tier: only
-// upload/release, matmul, and in-place SGD are here, not the full
-// sub/scale/matmul-transposed/relu-backward set needed for a complete
-// backward pass. The MPS tier could be (and was) compiled and run on
-// real Apple Silicon hardware to catch mistakes; this file has no ptxas
-// in this sandbox to catch a register-count or instruction-encoding
-// error before a real CUDA host would -- see gpu_cuda.sc's/gpu_cuda.h's
-// top-of-file UNVERIFIED warning, which applies here at least as much as
-// to the rest of this file.
-
+// fp16 / bf16 storage (2 bytes per element), fp32 arithmetic: each kernel
+// widens on load and rounds to nearest-even on store. The upload functions
+// convert from float32 on the host; 'out' receives raw fp16/bf16 bits (see
+// float16.h's fp16_to_f32_bulk / bf16_to_f32_bulk).
 void* cuda_upload_f16_persistent(const float* data, unsigned long n);
 void* cuda_upload_bf16_persistent(const float* data, unsigned long n);
-// Both release through cuda_release_persistent(devPtr) above -- storage
-// is 2 bytes/element regardless of fp16 vs bf16.
-
-// out = devA[M,K] . devB[K,N], both operands already device buffers (see
-// cuda_upload_f16_persistent/cuda_upload_bf16_persistent above). 'out' is
-// a host array of raw fp16/bf16 bits (see float16.h's fp16_to_f32_bulk/
-// bf16_to_f32_bulk to convert it back to float32).
 int cuda_matmul_f16_persistent(void* devA, void* devB, unsigned short* out,
                                 unsigned long M, unsigned long K, unsigned long N);
 int cuda_matmul_bf16_persistent(void* devA, void* devB, unsigned short* out,
                                  unsigned long M, unsigned long K, unsigned long N);
-
-// In-place SGD step against a persistent fp16/bf16 device buffer:
-// devW[i] -= lr*devGrad[i], computed via cvt-to-f32/cvt-back the same
-// way the matmul kernels above do -- mirrors cuda_sgd_update_f32.
 int cuda_sgd_update_f16(void* devW, void* devGrad, float lr, unsigned long n);
 int cuda_sgd_update_bf16(void* devW, void* devGrad, float lr, unsigned long n);
 
