@@ -72,7 +72,8 @@ bool PrimType::isSigned() const {
 
 // ── PointerType ───────────────────────────────────────────────────────────────
 std::string PointerType::str() const {
-    return (isConst ? "const " : "") + base->str() + "*";
+    return std::string(isConst ? "const " : "") + (pointeeVolatile ? "volatile " : "") +
+           base->str() + "*";
 }
 
 bool PointerType::equals(const Type &o) const {
@@ -92,6 +93,7 @@ std::string ReferenceType::str() const {
         s += regionName(region) + " ";
     }
     if (!mut) s += "const ";
+    if (pointeeVolatile) s += "volatile ";
     s += base->str();
     return s;
 }
@@ -106,8 +108,9 @@ bool ReferenceType::equals(const Type &o) const {
 
 // ── ArrayType ─────────────────────────────────────────────────────────────────
 std::string ArrayType::str() const {
-    if (size < 0) return element->str() + "[]";
-    return element->str() + "[" + std::to_string(size) + "]";
+    std::string q = elementVolatile && element->kind != TypeKind::Array ? "volatile " : "";
+    if (size < 0) return q + element->str() + "[]";
+    return q + element->str() + "[" + std::to_string(size) + "]";
 }
 
 bool ArrayType::equals(const Type &o) const {
@@ -297,7 +300,35 @@ bool pointeeIsVolatile(const TypePtr &ty) {
     if (!ty) return false;
     if (ty->kind == TypeKind::Pointer)   return static_cast<const PointerType &>(*ty).pointeeVolatile;
     if (ty->kind == TypeKind::Reference) return static_cast<const ReferenceType &>(*ty).pointeeVolatile;
+    if (ty->kind == TypeKind::Array)     return static_cast<const ArrayType &>(*ty).elementVolatile;
     return false;
+}
+
+TypePtr withVolatileElements(const TypePtr &ty) {
+    if (!ty || ty->kind != TypeKind::Array) return ty;
+    auto &at = static_cast<const ArrayType &>(*ty);
+    auto copy = std::make_shared<ArrayType>(withVolatileElements(at.element), at.size);
+    copy->sizeExpr = at.sizeExpr;
+    copy->elementVolatile = true;
+    return copy;
+}
+
+static TypePtr pointeeOf(const TypePtr &ty) {
+    if (ty->kind == TypeKind::Pointer)   return static_cast<const PointerType &>(*ty).base;
+    if (ty->kind == TypeKind::Reference) return static_cast<const ReferenceType &>(*ty).base;
+    if (ty->kind == TypeKind::Array)     return static_cast<const ArrayType &>(*ty).element;
+    return nullptr;
+}
+
+bool dropsVolatile(const TypePtr &from, const TypePtr &to) {
+    if (!from || !to) return false;
+    TypePtr fb = pointeeOf(from), tb = pointeeOf(to);
+    if (!fb || !tb) return false;
+    // An array target is a decayed array parameter: same rule as a pointer.
+    if (pointeeIsVolatile(from) && !pointeeIsVolatile(to)) return true;
+    // 'volatile T**' → 'T**' drops it one level down.
+    if (fb->kind == TypeKind::Array || tb->kind == TypeKind::Array) return false;
+    return dropsVolatile(fb, tb);
 }
 
 TypePtr makeArray(TypePtr elem, int64_t sz, void *sizeExpr) {

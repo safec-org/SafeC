@@ -51,7 +51,10 @@ TypePtr substituteType(const TypePtr &ty, const TypeSubst &subs) {
     case TypeKind::Array: {
         auto &at = static_cast<const ArrayType &>(*ty);
         auto ne = substituteType(at.element, subs);
-        return (ne == at.element) ? ty : makeArray(ne, at.size);
+        if (ne == at.element) return ty;
+        auto na = makeArray(ne, at.size);
+        static_cast<ArrayType &>(*na).elementVolatile = at.elementVolatile;
+        return na;
     }
     case TypeKind::Function: {
         auto &ft = static_cast<const FunctionType &>(*ty);
@@ -563,6 +566,7 @@ std::unique_ptr<FunctionDecl> cloneFunctionDecl(const FunctionDecl &fn,
                 pd.name = p.name + std::to_string(i);
                 pd.type = it->second;
                 pd.loc  = p.loc;
+                pd.isVolatile = p.isVolatile;
                 clone->params.push_back(std::move(pd));
                 ++count;
             }
@@ -575,6 +579,7 @@ std::unique_ptr<FunctionDecl> cloneFunctionDecl(const FunctionDecl &fn,
             pd.name = p.name;
             pd.type = substituteType(p.type, bodySubs);
             pd.loc  = p.loc;
+            pd.isVolatile = p.isVolatile;
             clone->params.push_back(std::move(pd));
         }
     }
@@ -618,6 +623,7 @@ std::unique_ptr<StructDecl> cloneStructDecl(const StructDecl &sd,
             pd.name = p.name;
             pd.type = substituteType(p.type, subs);
             pd.loc  = p.loc;
+            pd.isVolatile = p.isVolatile;
             cmd.params.push_back(std::move(pd));
         }
         clone->methodDecls.push_back(std::move(cmd));

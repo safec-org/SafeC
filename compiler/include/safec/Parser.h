@@ -120,6 +120,8 @@ private:
     // after parsing their type, before anything else can clobber it.
     bool baseVolatile_ = false;
     bool typeVolatile_ = false;
+    // Typedef names whose aliased type was declared volatile (see parseTypedef).
+    std::unordered_set<std::string> volatileTypedefs_;
 
     // ── malloc_defer() desugaring ────────────────────────────────────────────
     // 'T x = malloc_defer(n);' expands to two statements ('T x = alloc(n);'

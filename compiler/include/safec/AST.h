@@ -670,6 +670,7 @@ struct ParamDecl {
     TypePtr     type;
     SourceLocation loc;
     bool isPack = false;   // this param uses pack type (T... args)
+    bool isVolatile = false; // 'volatile int x' — every access is volatile
 };
 
 // ── Generic parameter: <T: Constraint1 + Constraint2 + ...> ──────────────────
@@ -856,6 +857,7 @@ struct VarDecl {
     bool        isStatic  = false;
     bool        isGlobal  = false;
     bool        isExtern  = false; // true only for a bodiless 'extern' declaration
+    bool        isVolatile = false; // declared 'volatile' (global, local or param)
     bool        initialized = false;
     // For region safety: if this is a reference, which scope depth it came from
     int         scopeDepth  = 0;

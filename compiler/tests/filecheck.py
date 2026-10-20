@@ -11,6 +11,12 @@ Directives, read from '// ' comments in the test source:
   CHECK-NOT: pat     must not match between the previous match and the next
                      CHECK (or the end of the block).
 'pat' is literal text, except '{{re}}' spans which are regular expressions.
+
+  EXPECT-ERROR: msg  the test must fail to compile with an error containing
+                     msg: on that line when written as a trailing comment,
+                     on any line when it's a comment line of its own (repeat
+                     it once per expected occurrence). Checked with --errors
+                     <stderr-file>; every reported error must be expected.
 """
 import re
 import sys
@@ -26,7 +32,42 @@ def compile_pattern(pat):
     return re.compile("".join(out))
 
 
+def check_errors(src, errfile):
+    # (line or None, msg): a trailing directive is tied to its own line; a
+    # whole-line one ('// EXPECT-ERROR: msg' alone) may match any line.
+    expected = []
+    for n, line in enumerate(open(src), 1):
+        m = re.search(r"//\s*EXPECT-ERROR:\s?(.*)$", line)
+        if m:
+            anchored = line[:m.start()].strip() != ""
+            expected.append((n if anchored else None, m.group(1).strip(), n))
+    reported = []
+    for line in open(errfile):
+        m = re.search(r":(\d+):\d+: error: (.*)$", line)
+        if m:
+            reported.append((int(m.group(1)), m.group(2)))
+    # Each reported error satisfies at most one directive: line-tied ones
+    # first, so a free-floating directive can't steal their match.
+    used = [False] * len(reported)
+    failures = 0
+    for want_line, msg, n in sorted(expected, key=lambda e: e[0] is None):
+        hit = next((i for i, (rn, rmsg) in enumerate(reported)
+                    if not used[i] and msg in rmsg and want_line in (None, rn)), None)
+        if hit is None:
+            print(f"{src}:{n}: expected error not reported: {msg}")
+            failures += 1
+        else:
+            used[hit] = True
+    for i, (rn, rmsg) in enumerate(reported):
+        if not used[i]:
+            print(f"{src}:{rn}: unexpected error: {rmsg}")
+            failures += 1
+    return 1 if failures else 0
+
+
 def main():
+    if sys.argv[1] == "--errors":
+        return check_errors(sys.argv[2], sys.argv[3])
     src, ll = sys.argv[1], sys.argv[2]
     directives = []
     for n, line in enumerate(open(src), 1):

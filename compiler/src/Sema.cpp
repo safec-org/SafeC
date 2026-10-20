@@ -269,8 +269,11 @@ TypePtr Sema::resolveType(TypePtr ty) {
     if (ty->kind == TypeKind::Array) {
         auto &at = static_cast<ArrayType &>(*ty);
         auto resolvedElem = resolveType(at.element);
-        if (resolvedElem != at.element)
-            return makeArray(resolvedElem, at.size);
+        if (resolvedElem != at.element) {
+            auto na = makeArray(resolvedElem, at.size);
+            static_cast<ArrayType &>(*na).elementVolatile = at.elementVolatile;
+            return na;
+        }
     }
     if (ty->kind == TypeKind::Vector) {
         auto &vt = static_cast<VectorType &>(*ty);
@@ -410,7 +413,10 @@ static TypePtr resolveGenericNames(const TypePtr &ty,
     if (ty->kind == TypeKind::Array) {
         auto &at = static_cast<const ArrayType &>(*ty);
         auto ne = resolveGenericNames(at.element, gps);
-        return (ne == at.element) ? ty : makeArray(ne, at.size);
+        if (ne == at.element) return ty;
+        auto na = makeArray(ne, at.size);
+        static_cast<ArrayType &>(*na).elementVolatile = at.elementVolatile;
+        return na;
     }
     if (ty->kind == TypeKind::Struct) {   // 'struct Vec<T>' in a generic signature
         auto &st = static_cast<const StructType &>(*ty);
@@ -669,6 +675,7 @@ void Sema::collectStruct(StructDecl &sd) {
         fd.bitWidth = f.bitWidth;
         fd.isAnonymous = f.isAnonymous;
         fd.isVolatile  = f.isVolatile;
+        if (fd.isVolatile) fd.type = withVolatileElements(fd.type);
         if (fd.bitWidth >= 0) {
             int unitBits = sizeOfType(fd.type) * 8;
             bool canReuse = openUnitIdx >= 0 && typeEqual(openUnitType, fd.type) &&
@@ -1043,8 +1050,10 @@ void Sema::collectGlobalVar(GlobalVarDecl &gv) {
     // symbol (see its 'if (sym->varDecl) ... e.isLValue = true' check) —
     // globals would be permanently unassignable, including through struct
     // field access ('g.field = x'), which just inherits the base's isLValue.
+    if (gv.isVolatile) gv.type = withVolatileElements(gv.type);
     VarDecl *vd = new VarDecl{}; // leaked intentionally, matches param/local pattern
     vd->name        = gv.name;
+    vd->isVolatile  = gv.isVolatile;
     vd->type        = gv.type;
     vd->isConst     = gv.isConst;
     vd->isStatic    = true;
@@ -1139,10 +1148,12 @@ void Sema::checkFunction(FunctionDecl &fn) {
     // Register parameters
     for (auto &p : fn.params) {
         p.type = resolveType(p.type);
+        if (p.isVolatile) p.type = withVolatileElements(p.type);
         VarDecl *vd = new VarDecl{};  // leaked intentionally for demo
         vd->name        = p.name;
         vd->type        = p.type;
         vd->isParam     = true;
+        vd->isVolatile  = p.isVolatile;
         vd->initialized = true;
         vd->scopeDepth  = scopeDepth_;
 
@@ -1903,7 +1914,7 @@ void Sema::checkVarDecl(VarDeclStmt &s, FunctionDecl &fn) {
     if (!s.declType || s.declType->isError()) {
         s.declType = initTy ? initTy : makeError();
     }
-    s.resolvedType = s.declType;
+    s.resolvedType = s.isVolatile ? withVolatileElements(s.declType) : s.declType;
 
     // thread_local local variable must be static
     if (s.isThreadLocal && !s.isStatic) {
@@ -1916,6 +1927,7 @@ void Sema::checkVarDecl(VarDeclStmt &s, FunctionDecl &fn) {
     vd->type        = s.resolvedType;
     vd->isConst     = s.isConst;
     vd->isStatic    = s.isStatic;
+    vd->isVolatile  = s.isVolatile;
     // Struct/array/vector types are considered "initialized" even without an
     // explicit initializer because their fields/lanes can be individually
     // assigned before use (a vec<T,N> local built lane-by-lane via 'v[i] = x'
@@ -2380,7 +2392,49 @@ TypePtr Sema::checkAddrOf(UnaryExpr &e) {
     }
     if (!haveRegion)
         r = (baseVd && (baseVd->isStatic || baseVd->isGlobal)) ? Region::Static : Region::Stack;
-    return makeReference(std::move(operandTy), r, false, resultMut);
+    // '&x' of a volatile lvalue is a reference to volatile, as in C.
+    return makeReference(std::move(operandTy), r, false, resultMut, {},
+                         isVolatileLValue(*e.operand));
+}
+
+bool Sema::isVolatileLValue(const Expr &e) const {
+    switch (e.kind) {
+    case ExprKind::Ident: {
+        auto *vd = static_cast<const IdentExpr &>(e).resolved;
+        return vd && vd->isVolatile;
+    }
+    case ExprKind::Deref:
+        return pointeeIsVolatile(static_cast<const UnaryExpr &>(e).operand->type);
+    case ExprKind::Unary: {
+        auto &ue = static_cast<const UnaryExpr &>(e);
+        return ue.op == UnaryOp::ForceUnwrap && pointeeIsVolatile(ue.operand->type);
+    }
+    case ExprKind::Subscript: {
+        auto &se = static_cast<const SubscriptExpr &>(e);
+        if (!se.base->type) return false;
+        if (pointeeIsVolatile(se.base->type)) return true;
+        return se.base->type->kind == TypeKind::Array && isVolatileLValue(*se.base);
+    }
+    case ExprKind::Member:
+    case ExprKind::Arrow: {
+        auto &me = static_cast<const MemberExpr &>(e);
+        if (!me.base->type) return false;
+        TypePtr bty = me.base->type;
+        bool indirect = me.isArrow || bty->kind == TypeKind::Pointer ||
+                        bty->kind == TypeKind::Reference;
+        if (indirect && pointeeIsVolatile(bty)) return true;
+        if (bty->kind == TypeKind::Pointer)   bty = static_cast<const PointerType &>(*bty).base;
+        if (bty->kind == TypeKind::Reference) bty = static_cast<const ReferenceType &>(*bty).base;
+        if (bty && bty->kind == TypeKind::Struct) {
+            std::vector<int> path;
+            auto *fd = static_cast<const StructType &>(*bty).findFieldPath(me.field, path);
+            if (fd && fd->isVolatile) return true;
+        }
+        return !indirect && isVolatileLValue(*me.base);
+    }
+    default:
+        return false;
+    }
 }
 
 TypePtr Sema::checkDeref(UnaryExpr &e) {
@@ -2463,12 +2517,14 @@ TypePtr Sema::checkBinary(BinaryExpr &e) {
             if (lhsTy->kind == TypeKind::Array && rhsTy->isInteger()) {
                 if (!inUnsafeScope())
                     diag_.error(e.loc, "array pointer arithmetic requires 'unsafe' block");
-                return makePointer(static_cast<ArrayType &>(*lhsTy).element);
+                return makePointer(static_cast<ArrayType &>(*lhsTy).element, false,
+                                   static_cast<ArrayType &>(*lhsTy).elementVolatile);
             }
             if (rhsTy->kind == TypeKind::Array && lhsTy->isInteger()) {
                 if (!inUnsafeScope())
                     diag_.error(e.loc, "array pointer arithmetic requires 'unsafe' block");
-                return makePointer(static_cast<ArrayType &>(*rhsTy).element);
+                return makePointer(static_cast<ArrayType &>(*rhsTy).element, false,
+                                   static_cast<ArrayType &>(*rhsTy).elementVolatile);
             }
             diag_.error(e.loc, "arithmetic requires numeric types");
             return makeError();
@@ -4757,6 +4813,7 @@ bool Sema::floatLitFitsType(const Expr &e, const TypePtr &to) const {
 bool Sema::refToPointerArgCompatible(const TypePtr &from, const TypePtr &to) const {
     if (!from || !to) return false;
     if (from->kind != TypeKind::Reference || to->kind != TypeKind::Pointer) return false;
+    if (dropsVolatile(from, to)) return false;
     auto &fr = static_cast<const ReferenceType &>(*from);
     auto &tp = static_cast<const PointerType &>(*to);
     if (typeEqual(fr.base, tp.base)) return true;
@@ -4779,6 +4836,9 @@ std::string Sema::rawToRefHint(const TypePtr &from, const TypePtr &to) const {
 bool Sema::canImplicitlyConvert(const TypePtr &from, const TypePtr &to) const {
     if (!from || !to) return false;
     if (from->isError() || to->isError()) return true; // suppress cascaded errors
+    // 'volatile T*' → 'T*' (or a volatile array decaying to 'T*') would let
+    // later accesses skip the volatile semantics; that takes an explicit cast.
+    if (dropsVolatile(from, to)) return false;
     if (typeEqual(from, to)) return true;
     // A function whose signature differs from the target function type only
     // by raw 'T*' vs region-less '&T'/'?&T' in some parameter/return slots

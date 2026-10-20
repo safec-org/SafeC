@@ -251,6 +251,9 @@ TypePtr Parser::parseBaseType() {
         break;
     }
     TypePtr t = parseBaseTypeImpl();
+    if (t && t->kind == TypeKind::Struct &&
+        volatileTypedefs_.count(static_cast<StructType &>(*t).name))
+        vol = true;
     // 'int volatile *p' / 'unsigned int const volatile x'
     while (cur().is(TK::KW_volatile) || cur().is(TK::KW_const)) {
         if (cur().is(TK::KW_volatile)) vol = true;
@@ -1218,6 +1221,7 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(
         ParamDecl p;
         p.loc  = cur().loc;
         p.type = parseType();
+        p.isVolatile = typeVolatile_;
         // C-style function-pointer parameter: 'void f(int (*cb)(int))'
         if (tryParseCStyleFuncPtrDeclarator(p.type, p.name, p.type)) {
             fn->params.push_back(std::move(p));
@@ -1346,6 +1350,7 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTr
                     ParamDecl p;
                     p.loc  = cur().loc;
                     p.type = parseType();
+                    p.isVolatile = typeVolatile_;
                     if (cur().is(TK::Ident)) { p.name = cur().text; consume(); }
                     p.type = parseArrayDeclaratorSuffix(std::move(p.type));
                     md.params.push_back(std::move(p));
@@ -1373,6 +1378,7 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTr
                 ParamDecl p;
                 p.loc  = cur().loc;
                 p.type = parseType();
+                p.isVolatile = typeVolatile_;
                 if (cur().is(TK::Ident)) { p.name = cur().text; consume(); }
                 p.type = parseArrayDeclaratorSuffix(std::move(p.type));
                 md.params.push_back(std::move(p));
@@ -1457,6 +1463,7 @@ std::unique_ptr<TraitDecl> Parser::parseTraitDecl() {
                 ParamDecl p;
                 p.loc  = cur().loc;
                 p.type = parseType();
+                p.isVolatile = typeVolatile_;
                 if (cur().is(TK::Ident)) { p.name = cur().text; consume(); }
                 p.type = parseArrayDeclaratorSuffix(std::move(p.type));
                 md.params.push_back(std::move(p));
@@ -1547,6 +1554,7 @@ DeclPtr Parser::parseTypedef() {
     auto loc = cur().loc;
     consume(); // eat 'typedef'
     TypePtr t = parseType();
+    bool aliasVolatile = typeVolatile_;
     // 'typedef RetType (*Name)(Params);' — C-style function-pointer typedef
     // (e.g. 'typedef void (*Callback)(int);'), the classic form real C code
     // uses instead of SafeC's native 'typedef fn RetType(Params) Name;'.
@@ -1561,6 +1569,11 @@ DeclPtr Parser::parseTypedef() {
     }
     expect(TK::Semicolon);
     typeNames_.insert(name);
+    // 'typedef volatile unsigned int reg_t;' — the qualifier lives on the
+    // declared object, not on any type node, so the alias name itself is
+    // remembered and re-applied wherever it's used as a base type.
+    if (aliasVolatile) volatileTypedefs_.insert(name);
+    else volatileTypedefs_.erase(name);
     return std::make_unique<TypeAliasDecl>(std::move(name), std::move(t), loc);
 }
 
