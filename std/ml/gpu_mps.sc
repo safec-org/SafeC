@@ -3522,13 +3522,20 @@ struct MpsAttnParams {
     unsigned int kvBatch;
 };
 
-// FLASH_SG / FLASH_BQ / LIN_SG must match gpu_mps_kernels.metal: the matrix
-// kernel (head dim <= 256) runs FLASH_SG simdgroups of 8 query rows, the
-// head-dim-512 kernel FLASH_BQ simdgroups of one row, linear attention
+// These must match gpu_mps_kernels.metal: the matrix kernel (head dim
+// <= 256) runs __mps_flash_simdgroups(dtype, headDim) simdgroups of 8 query rows,
+// the head-dim-512 kernel FLASH_BQ simdgroups of one row, linear attention
 // LIN_SG simdgroups of LIN_COLS(headDim) output columns.
-#define FLASH_SG ((unsigned long)4)
 #define FLASH_BQ ((unsigned long)16)
 #define LIN_SG   ((unsigned long)4)
+
+// Simdgroups per threadgroup of flash_attn_mma_<dtype>_d<headDim> (its SG
+// template argument in gpu_mps_kernels.metal).
+static unsigned long __mps_flash_simdgroups(int dtype, unsigned long headDim) {
+    if (headDim == 96UL || headDim == 128UL) return 8UL;
+    if (headDim == 64UL && dtype == MPS_FP16) return 8UL;
+    return 4UL;
+}
 
 int mps_attention_head_dim_ok(unsigned long headDim) {
     return headDim == 32UL || headDim == 64UL || headDim == 96UL || headDim == 128UL ||
@@ -3639,9 +3646,10 @@ static int __mps_flash_encode(void* encoder, void* bufQ, void* bufK, void* bufV,
         MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
         setBytesFn(encoder, __sel_setBytes, (void*)&p, sizeof(struct MpsAttnParams), 4UL);
 
-        unsigned long rowsPerGroup = wide ? FLASH_BQ : FLASH_SG * 8UL;
+        unsigned long sgs = wide ? FLASH_BQ : __mps_flash_simdgroups(dtype, s.headDim);
+        unsigned long rowsPerGroup = wide ? FLASH_BQ : sgs * 8UL;
         struct MTLSize tgSize;
-        tgSize.width = (wide ? FLASH_BQ : FLASH_SG) * 32UL; tgSize.height = 1UL; tgSize.depth = 1UL;
+        tgSize.width = sgs * 32UL; tgSize.height = 1UL; tgSize.depth = 1UL;
         struct MTLSize numThreadgroups;
         numThreadgroups.width = (s.seqLen + rowsPerGroup - 1UL) / rowsPerGroup;
         numThreadgroups.height = s.heads;
