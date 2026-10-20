@@ -59,7 +59,7 @@ int ifft_serial(&Complex data, unsigned long n) {
 
 int fft_real(const &double in, &Complex out, unsigned long n) {
     if (dsp_is_pow2(n) == 0) return 0;
-    unsafe { return fft_real_run_((const double*)in, (double*)out, n, FFT_MODE_TOP); }
+    unsafe { return fft_real_run_((const double*)in, (double*)out, n, FFT_MODE_TOP, 1); }
 }
 
 int fft_batch(&Complex data, unsigned long n, unsigned long batch, int inverse) {
@@ -92,13 +92,21 @@ int fft_real_batch(const &double in, &Complex out, unsigned long n, unsigned lon
     j.n = n;
     j.inv = 0;
     j.ok = 1;
-    if (batch == 1UL) { unsafe { return fft_real_run_(j.in, j.d, n, FFT_MODE_TOP); } }
+    if (batch == 1UL) { unsafe { return fft_real_run_(j.in, j.d, n, FFT_MODE_TOP, 1); } }
     parallel_for(batch, 16384UL / n + 1UL, fft_real_batch_job_, &j);
     return j.ok;
 }
 
 int fft_real_batch_inplace(&Complex data, unsigned long n, unsigned long batch) {
     unsafe { return fft_real_inplace_((double*)data, n, batch); }
+}
+
+int fft_real_half(const &double in, &Complex out, unsigned long n) {
+    unsafe { return fft_real_half_batch_((const double*)in, (double*)out, n, 1UL); }
+}
+
+int fft_real_half_batch(const &double in, &Complex out, unsigned long n, unsigned long batch) {
+    unsafe { return fft_real_half_batch_((const double*)in, (double*)out, n, batch); }
 }
 
 int ffft(&FComplex data, unsigned long n) {

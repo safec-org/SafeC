@@ -183,6 +183,19 @@ void t_fft_large() {
             r = r + 1UL;
         }
         ASSERT_TRUE(worst < 1e-10);
+        // the half spectrum is the first n/2 + 1 bins of the full one
+        ASSERT_TRUE(fft_real_half_batch((const double*)g_fx, (struct Complex*)g_fb, n, rows));
+        worst = 0.0;
+        r = 0UL;
+        while (r < rows) {
+            double e = max_diff((const struct Complex*)&g_fa[r * n], (const struct Complex*)&g_fb[r * (n / 2UL + 1UL)], n / 2UL + 1UL);
+            if (e > worst) worst = e;
+            r = r + 1UL;
+        }
+        ASSERT_TRUE(worst < 1e-12);
+        ASSERT_TRUE(fft_real_half((const double*)g_fx, (struct Complex*)g_fb, 8UL));
+        ASSERT_TRUE(fft_real((const double*)g_fx, (struct Complex*)g_fa, 8UL));
+        ASSERT_TRUE(max_diff((const struct Complex*)g_fa, (const struct Complex*)g_fb, 5UL) < 1e-14);
         double two[2];
         two[0] = 3.0; two[1] = -1.0;
         ASSERT_TRUE(fft_real((const double*)two, (struct Complex*)g_fa, 2UL));
@@ -638,6 +651,15 @@ void t_fft_f32() {
             r = r + 1UL;
         }
         ASSERT_TRUE(worst < 1e-4);
+        ASSERT_TRUE(fft_real_half_batch_f32((const float*)g_gx, (struct Complex32*)g_gb, n, rows));
+        r = 0UL;
+        double hw = 0.0;
+        while (r < rows) {
+            double e = max_diff32f((const struct Complex32*)&g_ga[r * n], (const struct Complex32*)&g_gb[r * (n / 2UL + 1UL)], n / 2UL + 1UL);
+            if (e > hw) hw = e;
+            r = r + 1UL;
+        }
+        ASSERT_TRUE(hw < 1e-6);
         float two[2];
         two[0] = 3.0; two[1] = -1.0;
         ASSERT_TRUE(fft_real_f32((const float*)two, (struct Complex32*)g_ga, 2UL));

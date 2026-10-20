@@ -719,6 +719,8 @@ struct FunctionDecl : Decl {
     bool        isInterrupt   = false;   // interrupt — ISR calling convention
     bool        isNoReturn    = false;   // noreturn — function never returns
     bool        isAlwaysInline = false;  // __attribute__((always_inline))
+    bool        isNoInline    = false;   // __attribute__((noinline))
+    bool        isCold        = false;   // __attribute__((cold)): rarely run, keep out of hot paths
     std::string targetAttr;              // __attribute__((target("avx2,fma"))): ISA features added
                                          // for this function only (multiversioned kernels)
     bool        isWeak        = false;   // __attribute__((weak)): a weak definition, or a reference

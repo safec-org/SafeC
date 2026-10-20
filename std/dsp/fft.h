@@ -63,6 +63,11 @@ int fft_real_batch(const &double in, &Complex out, unsigned long n, unsigned lon
 // real inputs packed in its first n/2 slots (as doubles), and gets its full
 // spectrum. No second buffer; the vendor library isn't used for it.
 int fft_real_batch_inplace(&Complex data, unsigned long n, unsigned long batch);
+// Only the n/2 + 1 non-redundant bins (0 .. n/2) of fft_real, the rest being
+// their conjugates: half the output to write. out holds n/2 + 1 values; in
+// the batch, row r's bins start at out[r * (n/2 + 1)].
+int fft_real_half(const &double in, &Complex out, unsigned long n);
+int fft_real_half_batch(const &double in, &Complex out, unsigned long n, unsigned long batch);
 
 // Single precision: the functions above on Complex32 / float, with the same
 // contracts (fft_f32.sc). Same algorithm and threading; about 1e-6 relative
@@ -78,6 +83,8 @@ int fft_real_f32(const &float in, &Complex32 out, unsigned long n);
 int fft_batch_f32(&Complex32 data, unsigned long n, unsigned long batch, int inverse);
 int fft_real_batch_f32(const &float in, &Complex32 out, unsigned long n, unsigned long batch);
 int fft_real_batch_inplace_f32(&Complex32 data, unsigned long n, unsigned long batch);
+int fft_real_half_f32(const &float in, &Complex32 out, unsigned long n);
+int fft_real_half_batch_f32(const &float in, &Complex32 out, unsigned long n, unsigned long batch);
 
 // Q8.24 fixed-point forward/inverse FFT, same in-place/power-of-two
 // contract as the float versions above.

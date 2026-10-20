@@ -56,7 +56,7 @@ int ifft_serial_f32(&Complex32 data, unsigned long n) {
 
 int fft_real_f32(const &float in, &Complex32 out, unsigned long n) {
     if (dsp_is_pow2(n) == 0) return 0;
-    unsafe { return fft_real_run_((const float*)in, (float*)out, n, FFT_MODE_TOP); }
+    unsafe { return fft_real_run_((const float*)in, (float*)out, n, FFT_MODE_TOP, 1); }
 }
 
 int fft_batch_f32(&Complex32 data, unsigned long n, unsigned long batch, int inverse) {
@@ -89,13 +89,21 @@ int fft_real_batch_f32(const &float in, &Complex32 out, unsigned long n, unsigne
     j.n = n;
     j.inv = 0;
     j.ok = 1;
-    if (batch == 1UL) { unsafe { return fft_real_run_(j.in, j.d, n, FFT_MODE_TOP); } }
+    if (batch == 1UL) { unsafe { return fft_real_run_(j.in, j.d, n, FFT_MODE_TOP, 1); } }
     parallel_for(batch, 16384UL / n + 1UL, fft_real_batch_job_, &j);
     return j.ok;
 }
 
 int fft_real_batch_inplace_f32(&Complex32 data, unsigned long n, unsigned long batch) {
     unsafe { return fft_real_inplace_((float*)data, n, batch); }
+}
+
+int fft_real_half_f32(const &float in, &Complex32 out, unsigned long n) {
+    unsafe { return fft_real_half_batch_((const float*)in, (float*)out, n, 1UL); }
+}
+
+int fft_real_half_batch_f32(const &float in, &Complex32 out, unsigned long n, unsigned long batch) {
+    unsafe { return fft_real_half_batch_((const float*)in, (float*)out, n, batch); }
 }
 
 } // namespace std

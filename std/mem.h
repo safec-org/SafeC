@@ -65,6 +65,10 @@ void*         alloc_raw_(unsigned long size);
 void*         alloc_zeroed_raw_(unsigned long size);
 void          dealloc_raw_(void* ptr);
 void*         realloc_buf_raw_(void* ptr, unsigned long new_size);
+// realloc_buf_raw_ to 'count' elements of 'elemSize' bytes (overflow-checked),
+// out of line and cold: containers call it on their growth path so that
+// the inlined fast path (push, enqueue, ...) keeps its state in registers.
+void*         realloc_array_raw_(void* ptr, unsigned long count, unsigned long elemSize);
 void          safe_memcpy_raw_(void* dst, const void* src, unsigned long n);
 void          safe_memmove_raw_(void* dst, const void* src, unsigned long n);
 void          safe_memset_raw_(void* ptr, int val, unsigned long n);
