@@ -60,9 +60,15 @@ jobs:
       - name: Build safec compiler
         run: |
           LLVM_DIR="$(brew --prefix llvm)/lib/cmake/llvm"
+          # Static LLVM: the published safec must not need the exact
+          # libLLVM.dylib this runner's Homebrew happened to have.
           cmake -S SafeC/compiler -B SafeC/compiler/build \
-            -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR"
+            -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR" -DSAFEC_STATIC_LLVM=ON
           cmake --build SafeC/compiler/build -j "$(sysctl -n hw.ncpu)"
+          if otool -L SafeC/compiler/build/safec | grep -i 'libLLVM'; then
+            echo "::error::safec links libLLVM dynamically"; exit 1
+          fi
+          otool -L SafeC/compiler/build/safec
 
       - name: Build safeguard
         run: |
@@ -122,14 +128,21 @@ jobs:
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh ${{ env.LLVM_VERSION }}
-          sudo apt-get install -y "llvm-${{ env.LLVM_VERSION }}-dev" "clang-${{ env.LLVM_VERSION }}"
+          sudo apt-get install -y "llvm-${{ env.LLVM_VERSION }}-dev" "clang-${{ env.LLVM_VERSION }}" \
+            zlib1g-dev libzstd-dev
 
       - name: Build safec compiler
         run: |
           LLVM_DIR="/usr/lib/llvm-${{ env.LLVM_VERSION }}/lib/cmake/llvm"
+          # Static LLVM: the published safec must not need libLLVM.so.N
+          # from apt.llvm.org on the user's machine.
           cmake -S SafeC/compiler -B SafeC/compiler/build \
-            -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR"
+            -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR" -DSAFEC_STATIC_LLVM=ON
           cmake --build SafeC/compiler/build -j "$(nproc)"
+          if ldd SafeC/compiler/build/safec | grep -i 'libLLVM'; then
+            echo "::error::safec links libLLVM dynamically"; exit 1
+          fi
+          ldd SafeC/compiler/build/safec
 
       - name: Build safeguard
         run: |

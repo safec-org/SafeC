@@ -65,7 +65,13 @@ endif()
 # Prefer the monolithic shared library (libLLVM.so / LLVM.dylib) when
 # available — it avoids linking hundreds of individual static archives.
 # Fall back to individual component libraries otherwise.
-if(LLVM_LINK_LLVM_DYLIB)
+#
+# SAFEC_STATIC_LLVM forces the static component libraries even when the
+# LLVM package also ships the shared one. Release builds use it so the
+# published safec doesn't need that exact libLLVM.so/.dylib installed on
+# the user's machine (apt.llvm.org and Homebrew both default to shared).
+option(SAFEC_STATIC_LLVM "Link LLVM's static component libraries, not libLLVM" OFF)
+if(LLVM_LINK_LLVM_DYLIB AND NOT SAFEC_STATIC_LLVM)
   target_link_libraries(safec PRIVATE LLVM)
 else()
   # safec is a multi-target cross-compiler, not host-only: main.cpp calls
@@ -92,10 +98,9 @@ else()
   # CodeGen/AsmParser/Desc/Disassembler/Info set — exactly what
   # InitializeAllTargets() et al. need.
   #
-  # This is only reached on Windows today (LLVM_LINK_LLVM_DYLIB is true on
-  # macOS/Linux, where the monolithic library already contains every target
-  # regardless of what's requested here — this branch was never actually
-  # exercised on those platforms before).
+  # Reached on Windows, with SAFEC_STATIC_LLVM (the macOS/Linux release
+  # builds), and with any LLVM built without the monolithic library (e.g.
+  # LLVM.org's static-only Linux release archives).
   # Diagnostic: the immediately preceding fix (this same ${LLVM_TARGETS_TO_BUILD}
   # expansion) produced byte-for-byte the same unresolved-symbol list as
   # before it was added, on a real Windows CI run — meaning either this

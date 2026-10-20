@@ -10,7 +10,7 @@ SafeC is an evolution of C — preserving C ABI compatibility — while enforcin
 
 ## Quick Start
 
-Installs a prebuilt `safec`/`safeguard`/`sc-lsp` release from GitHub Releases — no LLVM or C++ toolchain needed on the machine you're installing to:
+Installs a prebuilt `safec`/`safeguard`/`sc-lsp` release from GitHub Releases (the newest one, pre-releases included):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/safec-org/SafeC/main/install.sh | bash
@@ -20,11 +20,20 @@ irm https://raw.githubusercontent.com/safec-org/SafeC/main/install.ps1 | iex
 ```
 
 ```bash
-bash install.sh --prefix=/opt/safec   # or specify install directory
-bash install.sh --version=v0.2.0      # or pin a specific release
+bash install.sh --prefix=/opt/safec          # or specify install directory
+bash install.sh --version=v1.0.0-beta-4      # or pin a specific release
 ```
 
-macOS/Linux publish `arm64`/`x86_64` binaries; Windows publishes `x86_64`. See [Releases](https://github.com/safec-org/SafeC/releases) for the full asset list, or `.github/workflows/release.yml` for how they're built. To build the compiler, stdlib, `safeguard`, or `sc-lsp` from source instead (e.g. for a platform the release workflow doesn't publish, or from an unreleased commit), see each component's own `CMakeLists.txt` under `compiler/`, `safeguard/`, and the sibling `sc-language-server` repo.
+**Requirement: clang 21 or newer.** `safec` emits LLVM IR, and `safec --emit-bin` and `safeguard` hand it to clang to compile and link (clang also imports C headers). An older clang can't read that IR. The install scripts find a suitable clang, including versioned names like `clang-21`, apt.llvm.org's `/usr/lib/llvm-21` and Homebrew's `llvm`. If it isn't the plain `clang` on your `PATH`, they set `SAFEC_CLANG`/`SAFEC_CLANGXX` to it; if there's none, they print how to install one:
+
+| Platform | Install clang |
+|---|---|
+| macOS | `brew install llvm` (Apple's Xcode clang is too old) |
+| Debian / Ubuntu | `wget https://apt.llvm.org/llvm.sh && sudo bash llvm.sh 21` |
+| Windows | `winget install LLVM.LLVM` |
+| Other | [LLVM releases](https://github.com/llvm/llvm-project/releases) |
+
+Published binaries: macOS `arm64`, Linux `x86_64`, Windows `x86_64`. See [Releases](https://github.com/safec-org/SafeC/releases) for the full asset list, or `.github/workflows/release.yml` for how they're built. To build the compiler, stdlib, `safeguard`, or `sc-lsp` from source instead (e.g. for a platform the release workflow doesn't publish, or from an unreleased commit), see each component's own `CMakeLists.txt` under `compiler/`, `safeguard/`, and the sibling `sc-language-server` repo.
 
 Then create a project and run:
 
@@ -76,11 +85,12 @@ int main() {
 | **Compile-Time First** | `const fn`/`consteval`/`constinit`, `static_assert`, `if const`, generics via monomorphization. |
 | **`namespace`** | C++-style `namespace std { ... }` blocks — qualified lookup, mangled linkage, unqualified-fallback resolution. Types are not namespaced by design. |
 | **Native SIMD** | `vec<T, N>` — a first-class vector type lowering directly to LLVM vector IR; portable `std::simd` library with per-ISA convenience headers for x86_64 (SSE/AVX), AArch64 (NEON), RISC-V (RVV), WebAssembly (SIMD128), SPIR-V, ARM Cortex-M (MVE + DSP extension), CUDA (NVPTX), and ROCm (AMDGPU). |
-| **Multi-Target Codegen** | `--target <triple>` cross-compiles to any LLVM-supported architecture/OS — see the target matrix below. |
-| **Bare-Metal Ready** | `--freestanding` mode, `naked`/`interrupt` functions, inline assembly, volatile MMIO, atomic built-ins, ARM Cortex-M HAL (NVIC/SysTick/SCB) and DSP-extension intrinsics. |
+| **Multi-Target Codegen** | `--target <triple>` cross-compiles to any LLVM-supported architecture/OS; named aliases (`arm-7em`, `rv32i`, `wasm32`, …) pick the triple, CPU, features and ABI for bare-metal and WebAssembly — see the target matrix below. |
+| **Bare-Metal Ready** | 14 no-OS targets (x86, AArch32/64, Cortex-M0…M33, RV32/RV64 I/E) tested in an emulator, `naked`/`interrupt` functions, inline assembly, `volatile` MMIO (variables, fields, pointees), atomic built-ins, clang-compatible architecture macros, ARM Cortex-M HAL (NVIC/SysTick/SCB) and DSP-extension intrinsics. |
+| **WebAssembly** | `--target=wasm32`/`wasm64` builds library modules; `export_name`/`import_module`/`import_name` attributes define the module's interface, and `std/wasm` supplies a freestanding runtime and DOM interop. |
 | **Modern Language** | Generics, struct methods, operator overloading, pattern matching, optional types, slices, defer, tuples, typed channels. |
 | **Borrow Checker** | Mutable-XOR-shared aliasing discipline with non-lexical lifetimes (NLL). |
-| **Standard Library** | 30+ modules: mem, io, str, math, collections (vec, map, list, bst, ...), thread, atomic, simd, serialization (JSON/XML/HTML), a cooperative task scheduler + real-time I/O reactor, and more. |
+| **Standard Library** | 30+ modules, generic and `void*`-free: mem, io, str, math, collections (vec, map, list, bst, ...), thread, atomic, simd, serialization (JSON/XML/HTML/protobuf), HTTP, crypto, a cooperative task scheduler + real-time I/O reactor, and ML tensors with CPU/BLAS/Metal/CUDA/ROCm backends. |
 | **Package Manager** | `safeguard` — project scaffolding, dependency resolution, build orchestration, mixed SafeC/C/C++ compilation and linking, plus `format` (reindenter), `lint` (static analysis), `check` (fast compile-only), and `test` (build + run `tests/`). |
 | **LSP Support** | Language server sharing the compiler's own frontend (always in sync with the language); diagnostics, hover, completion, go-to-definition; VS Code extension (`.sc` and `.h`), Neovim, Emacs. |
 
@@ -107,10 +117,11 @@ SafeC enforces seven safety properties entirely at compile time:
 | **Aliasing discipline** | One mutable XOR many shared references (borrow checker with NLL) |
 | **Region escape** | References cannot outlive their region; inter-procedural analysis at call sites |
 | **Data race freedom** | `spawn` rejects mutable non-static refs; channels for message passing |
-| **Null safety** | References are non-null by default. Pointers, nullable references (`?&region T`, and the region-less `?&T` outliving reference — see below), and `?T` optionals cannot be dereferenced, member-accessed, or force-unwrapped directly — only `is_null()`/`is_none()`, `.default(fallback)`, `match`, or an explicit `unsafe {}` block can read one |
+| **Null safety** | References are non-null by default. Nullable references (`?&region T`, and the region-less `?&T` outliving reference — see below) and `?T` optionals cannot be dereferenced, member-accessed, or force-unwrapped directly — only `is_null()`/`is_none()`, `.default(fallback)`, `match`, or an explicit `unsafe {}` block can read one |
+| **Raw pointers** | Safe code can hold, compare and pass a raw `T*` to C, but not use it. Accessing through it, pointer arithmetic, making one from an integer, reinterpreting it as another pointer type, and turning it into a non-null `&T` all need `unsafe`. `(?&T)p` is allowed: it gives a nullable reference that must be matched before use |
 | **Determinism** | No hidden allocator, no GC, no implicit nondeterminism in the safe fragment |
 
-Inside `unsafe {}`, all properties become the programmer's responsibility. The boundary is explicit and auditable — raw-pointer aliasing (WAR/RAW/WAW hazards) and raw-pointer subscript bounds are two examples of *not* being tracked in `unsafe` code, by design, the same way real C leaves them to the programmer there.
+Inside `unsafe {}`, all properties become the programmer's responsibility. The boundary is explicit and auditable — raw-pointer aliasing (WAR/RAW/WAW hazards) and raw-pointer subscript bounds are two examples of *not* being tracked in `unsafe` code, by design, the same way real C leaves them to the programmer there. `unsafe` code also follows C's strict aliasing rule: reinterpret memory as another type through `char*` or `memcpy`, not a pointer cast, or build with `--no-strict-aliasing` (see [Safety](https://safec-org.github.io/safec-docs/reference/safety.html#strict-aliasing)).
 
 Heap allocator misuse — double-free, use-after-free, freeing a pointer a different allocator produced, and freeing NULL — sits partly inside and partly outside the table above. The common, single-variable case (`&heap T p = new T; ... std::dealloc(p);`) *is* caught at compile time: `p`'s use-after-free and double-free are tracked with the same flow-sensitive generation-counter analysis as arena references (if/else branches checked independently, loop bodies pre-scanned so a free on one iteration is visible to code textually before it on the next — see [Memory & Regions](https://safec-org.github.io/safec-docs/reference/memory.html#compile-time-use-after-free-and-double-free-checking)). That check is intra-procedural and syntactic, though — it only recognizes `std::dealloc(p)` with a bare identifier argument, and doesn't follow a pointer across aliases or function-call boundaries, so it can't be a general solution (whether two arbitrary pointers alias is undecidable at scale). `std::alloc`/`std::dealloc` catch the rest at runtime instead, for a fixed, small cost: every allocation carries a 16-byte header tagging it live/freed, `dealloc()`/`realloc_buf()` check the tag and abort with a diagnostic on a double-free or a pointer `alloc()` never returned, `dealloc(NULL)` is a safe no-op, and a bounded quarantine (freed blocks aren't handed back to the system allocator for a further ~64 frees) keeps that check reliable even though this platform's allocator overwrites a freed block's first bytes almost immediately. `std/alloc/pool.h`/`slab.h`/`tlsf.h`'s allocators get the equivalent runtime check using their own existing per-block metadata; freeing a pointer through the *wrong* allocator's free function (mismatched free) is also runtime-only, since the compiler doesn't track which allocator produced a given pointer. Memory leaks aren't checked at all, at compile time or runtime — general leak detection needs whole-program ownership/escape analysis; pair every allocation with `defer std::dealloc(...)` to make cleanup structurally hard to forget instead.
 
@@ -123,9 +134,11 @@ drawn from Oxide (Weiss et al., 2019) and Cyclone (Grossman et al., 2002).
 
 | Directory | Description |
 |-----------|-------------|
-| `compiler/` | SafeC → LLVM IR compiler (C++17, ~10K LOC) |
+| `compiler/` | SafeC → LLVM IR compiler (C++17, ~19K LOC), with IR regression tests in `compiler/tests/` |
 | `std/` | Standard library modules (.h declarations + .sc implementations), including `std/simd/` (portable `vec<T,N>`-based SIMD + per-ISA convenience headers) and `std/hal/` (per-architecture bare-metal HAL) |
 | `safeguard/` | Package manager and build system — compiles and links mixed SafeC/C/C++ projects |
+| `tests/stdlib/` | Standard library test suites: hosted (`safeguard test`), bare-metal emulator/WebAssembly (`baremetal/`), and ROCm GPU (`rocm/`) |
+| `examples/` | Example projects, including a full-stack HTTP server + WebAssembly client |
 
 ### Compiler Pipeline
 
@@ -140,17 +153,33 @@ safec <input.sc> [options]
 
 Output:
   -o <file>                Output file
-  --emit-llvm              Emit LLVM IR text
+  --emit-llvm              Emit LLVM IR text (default: bitcode)
+  --emit-bin               Compile and link a binary/library via clang
+                            (-l/-L, --shared, --static-lib, --lto apply here)
   --dump-ast               Dump AST and exit
   --dump-pp                Dump preprocessed source and exit
+
+Optimization:
+  -O0 -O1 -O2 -O3 -Os -Oz  Optimization level (default -O0); --release = -O2
+  --no-strict-aliasing     Don't emit type-based alias info (unsafe code
+                            that type-puns through pointer casts)
 
 Compilation:
   --no-sema                Skip semantic analysis
   --no-consteval           Skip const-eval pass
   --freestanding           Freestanding mode (no hosted headers, warns on stdlib)
+  --provides=<f,g>         Functions defined in another file (no freestanding warning)
   --compat-preprocessor    Enable full C preprocessor
-  --target <triple>        Cross-target LLVM triple (default: host). See
-                            "Target Support" below for the verified matrix.
+  -j <N>                   Parallel jobs for multiple input files
+
+Targets:
+  --target <alias|triple>  Cross-compile (default: host): a bare-metal or
+                            wasm alias (see --list-targets) or any LLVM triple
+  --target-cpu <name>      Refine the CPU
+  --target-features <+a,-b> Refine ISA features (LLVM -mattr syntax)
+  --target-abi <name>      Refine the ABI
+  --list-targets           Print the alias table
+  --print-target-clang-flags  clang flags matching a --target
 
 Preprocessor:
   -I <dir>                 Add include search path
@@ -184,8 +213,9 @@ Verified with real generated machine code (not just accepted input) across:
 | iOS | AArch64 (device + simulator) |
 | Android | AArch64, Aarch32, x86_64, x86 |
 | FreeBSD | x86_64, AArch64 |
-| Bare metal (`--freestanding`) | ARM Cortex-M (Thumb/Thumb2), RV32, RV64, AArch64 |
-| Portable / GPU | WebAssembly, SPIR-V, CUDA (NVPTX), ROCm (AMDGPU) |
+| Bare metal (`--target=<alias>`) | x86, x86_64, AArch32, AArch64, Cortex-M0/M3/M4/M7/M33, RV32I/E, RV64I/E — the whole stdlib builds and a 54-check suite runs in the Unicorn emulator for each |
+| WebAssembly (`--target=wasm32`/`wasm64`) | Library modules with `export_name`/`import_*` attributes; same 54-check suite runs under Node |
+| Portable / GPU | SPIR-V, CUDA (NVPTX), ROCm (AMDGPU; the `std::ml` ROCm backend is tested on an MI100) |
 
 **Metal Shading Language is not supported** — Apple's Metal compiler has no
 LLVM backend upstream (it's a separate, closed toolchain), unlike NVPTX/
@@ -244,9 +274,9 @@ use_outliving(wref);
 c_register_callback(wref);     // ?&T → T*: implicit, no unsafe
 ```
 
-A raw `T*` (from any extern call) converts to `&T`/`?&T` implicitly, a reference of *any* region converts to either implicitly (`&stack Widget` → `&Widget`/`?&Widget`, no cast), and `&T`/`?&T` converts back to `T*`/`void*` implicitly — no `unsafe` in any direction, and no region bookkeeping, because the region-less form doesn't claim a region to check: `Region::Extern` is exempt from every escape/lifetime check by construction (see `Type.h`'s `Region::Extern` for the full rationale). A non-nullable `&T` derefs/member-accesses freely, same as any other non-nullable reference; reading a nullable `?&T` out still goes through the same grammar as `?&stack T`: `match`, `is_null()`, `.default(fallback)`, or an `unsafe`-gated `!`.
+A reference of *any* region converts to either form implicitly (`&stack Widget` → `&Widget`/`?&Widget`, no cast), and `&T`/`?&T` converts back to `T*`/`void*` implicitly. A raw `T*` (from any extern call) converts to `?&T` anywhere, but to a non-null `&T` only inside `unsafe`, since nothing checks it isn't null. There's no region bookkeeping, because the region-less form doesn't claim a region to check: `Region::Extern` is exempt from every escape/lifetime check by construction (see `Type.h`'s `Region::Extern` for the full rationale). A non-nullable `&T` derefs/member-accesses freely, same as any other non-nullable reference; reading a nullable `?&T` out still goes through the same grammar as `?&stack T`: `match`, `is_null()`, `.default(fallback)`, or an `unsafe`-gated `!`.
 
-This is deliberately narrow in one direction: `&T`/`?&T` needs a concrete `T`, so it doesn't help with the (common, and intentionally type-erased) `void* userData` callback-context pattern — that stays `void*` on purpose, since the whole point there is that the caller can stash *any* type, and a single collection instance is expected to hold many unrelated types at once (see `std/gui/gui_widget.h`'s `Widget.userData` for the fuller writeup, and `std/dma.h`'s `generic<T> struct DmaChannel` for the case where a concrete `T` — genericized per instantiation — *does* fit). `&T`/`?&T` is for the case where the pointee's type is known and fixed but its region isn't, either because it came from outside SafeC's tracking or because the function simply doesn't need to care.
+`&T`/`?&T` needs a concrete `T`. Where one container must hold callbacks with *different* context types at once (a widget tree, a timer wheel, a VFS mounting several drivers), the slot stores the pair type-erased, but the only way to fill it is a generic function taking a matching `fn(?&T)` and `?&T` (`widget_on_click`, `timer_add`, `vfs_mount`, `task_spawn`), so every call is still type-checked. Where one `T` per instance fits, the type is simply generic (`std/dma.h`'s `generic<T> struct DmaChannel`).
 
 ### Generics
 
@@ -405,18 +435,21 @@ long long h = spawn(worker, 0);
 join(h);
 ```
 
-Channels — `chan_create`/`chan_send`/`chan_recv`/`chan_close` are compiler built-ins (no `#include` needed), a bounded blocking MPMC channel backed by `std/sync/channel.h`'s runtime; `std/sync/channel.h` itself adds a typed generic wrapper (`chan_send_t<T>`/`chan_recv_t<T>`) over the same untyped `void*` handle:
+Channels — `std/sync/channel.h`'s `Chan<T>` is a typed, bounded, blocking MPMC channel over the compiler's untyped `chan_create`/`chan_send`/`chan_recv`/`chan_close` built-ins (`sizeof(T) <= 8`, checked at compile time; send a `?&T` for anything larger):
 
 ```c
-void* ch = chan_create(4);      // capacity 4
-int v = 42;
-unsafe { chan_send(ch, (void*)&v); }
-int out;
-unsafe { chan_recv(ch, (void*)&out); }  // out == 42
-chan_close(ch);
+#include <std/sync/channel.h>
+
+struct Chan<int> ch = std::chan_new(4);   // capacity 4
+ch.send(42);                              // blocks while full; 0 once closed
+match (ch.recv()) {                       // blocks while empty; null once closed and drained
+    case some(v): printf("got %d\n", v);
+    case none:    printf("closed\n");
+}
+ch.close();
 ```
 
-For single-consumer fan-in from multiple producer threads without the channel runtime's blocking/condvar overhead, `std/sync/mpsc.h` provides a lock-free-ish spinlock-guarded bounded ring buffer (`MpscQueue`/`mpsc_new`/`mpsc_enqueue_t`/`mpsc_dequeue_t`); `std/sync/lockfree.h`'s `LFQueue` is the single-producer/single-consumer case with no locking at all. For communicating with a *different process* rather than another thread, see `std/ipc/pipe.h` (anonymous pipes, typically parent/child after `fork()`) and `std/ipc/uds.h` (named Unix domain sockets, for unrelated processes).
+For single-consumer fan-in from multiple producer threads without the channel runtime's blocking/condvar overhead, `std/sync/mpsc.h` provides a spinlock-guarded bounded ring buffer (`struct MpscQueue<T> q = std::mpsc_new(64UL); q.enqueue(v); q.dequeue()` → `?T`); `std/sync/lockfree.h`'s `LFQueue<T>` (`lfq_new`) is the single-producer/single-consumer case with no locking at all. For communicating with a *different process* rather than another thread, see `std/ipc/pipe.h` (anonymous pipes, typically parent/child after `fork()`) and `std/ipc/uds.h` (named Unix domain sockets, for unrelated processes).
 
 ### Bare-Metal
 
