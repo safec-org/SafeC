@@ -228,6 +228,7 @@ private:
     llvm::Value *genBinary(BinaryExpr &e, FnEnv &env);
     llvm::Value *genCall(CallExpr &e, FnEnv &env);
     llvm::Value *genSubscript(SubscriptExpr &e, FnEnv &env, bool wantAddr = false);
+    void emitBoundsTrap();
     llvm::Value *genSlice(SliceExpr &e, FnEnv &env);
     llvm::Value *genMember(MemberExpr &e, FnEnv &env, bool wantAddr = false);
     // Resolves e.base's type (through pointer/reference) to a struct and

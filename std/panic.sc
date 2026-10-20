@@ -25,7 +25,11 @@ inline noreturn void panic_at(const char* msg, const char* file, int line) {
         }
     }
 
-#ifdef __SAFEC_FREESTANDING__
+#if defined(__wasm__)
+    // WebAssembly: trap (std/wasm/wasm_rt's abort()) — spinning would hang
+    // the host's event loop instead of surfacing a RuntimeError.
+    abort();
+#elif defined(__SAFEC_FREESTANDING__)
     // In freestanding mode: spin forever (no hosted runtime available).
     for (;;) {}
 #else

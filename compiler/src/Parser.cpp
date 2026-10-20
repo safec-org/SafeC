@@ -694,7 +694,26 @@ bool Parser::tryParseCStyleFuncPtrDeclarator(TypePtr retType, std::string &outNa
     return true;
 }
 
+void Parser::mergeWasmAttrs(GnuAttrs &into, const GnuAttrs &from) {
+    if (from.hasExportName) { into.hasExportName = true; into.exportName = from.exportName; }
+    if (!from.importModule.empty()) into.importModule = from.importModule;
+    if (!from.importName.empty())   into.importName   = from.importName;
+}
+
+// Only fills fields the attributes name, so prefix and suffix attribute
+// groups on the same declaration combine.
+void Parser::applyWasmAttrs(FunctionDecl &fn, const GnuAttrs &a) {
+    if (a.hasExportName)
+        fn.wasmExportName = a.exportName.empty() ? fn.name : a.exportName;
+    if (!a.importModule.empty()) fn.wasmImportModule = a.importModule;
+    if (!a.importName.empty())   fn.wasmImportName   = a.importName;
+}
+
 bool Parser::parseGnuAttributes(GnuAttrs &out) {
+    auto unquote = [](std::string s) {
+        if (s.size() >= 2 && s.front() == '"' && s.back() == '"') s = s.substr(1, s.size() - 2);
+        return s;
+    };
     bool any = false;
     while (cur().isIdent("__attribute__") || cur().isIdent("__attribute")) {
         any = true;
@@ -771,12 +790,14 @@ bool Parser::parseGnuAttributes(GnuAttrs &out) {
                                          // target's max useful alignment; 16 is a reasonable default
                 }
             } else if (attrName == "section") {
-                if (!args.empty()) {
-                    std::string s = args[0];
-                    if (s.size() >= 2 && s.front() == '"' && s.back() == '"')
-                        s = s.substr(1, s.size() - 2);
-                    out.sectionName = s;
-                }
+                if (!args.empty()) out.sectionName = unquote(args[0]);
+            } else if (attrName == "export_name") {
+                out.hasExportName = true;
+                if (!args.empty()) out.exportName = unquote(args[0]);
+            } else if (attrName == "import_module") {
+                if (!args.empty()) out.importModule = unquote(args[0]);
+            } else if (attrName == "import_name") {
+                if (!args.empty()) out.importName = unquote(args[0]);
             }
 
             if (cur().is(TK::Comma)) { consume(); continue; }
@@ -1002,6 +1023,7 @@ DeclPtr Parser::parseTopLevelDecl() {
             isPacked    = isPacked    || more.hasPacked;
             if (more.alignment > 0) alignment = more.alignment;
             if (!more.sectionName.empty()) sectionName = more.sectionName;
+            mergeWasmAttrs(gnuAttrs, more);
             continue;
         }
         if (cur().isIdent("align") && peek().is(TK::LParen)) {
@@ -1066,6 +1088,7 @@ DeclPtr Parser::parseTopLevelDecl() {
         fn.isPure      = fn.isPure      || isPure;
         fn.sectionName = fn.sectionName.empty() ? sectionName : fn.sectionName;
         fn.callingConv = callingConv;
+        applyWasmAttrs(fn, gnuAttrs);
     }
     // Propagate volatile/atomic/thread_local/section to GlobalVarDecl
     if (decl && decl->kind == DeclKind::GlobalVar) {
@@ -1256,6 +1279,7 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(
             if (suffixAttrs.hasPure)     fn->isPure     = true;
             if (suffixAttrs.hasMustUse)  fn->isMustUse  = true;
             if (!suffixAttrs.sectionName.empty()) fn->sectionName = suffixAttrs.sectionName;
+            applyWasmAttrs(*fn, suffixAttrs);
         }
     }
 

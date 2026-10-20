@@ -47,12 +47,12 @@ void debug_semihost_puts(const char* s) {
     unsafe {
         // Cortex-M semihosting: r0=4 (SYS_WRITE0), r1=s.
         asm volatile (
-            "mov r0, #4\n"
+            "movs r0, #4\n"   // movs: ARMv6-M has no flag-preserving mov-immediate
             "mov r1, %0\n"
             "bkpt #0xAB"
             :
             : "r"(s)
-            : "r0", "r1"
+            : "r0", "r1", "cc"
         );
     }
 
@@ -84,12 +84,12 @@ void debug_semihost_putc(char c) {
         char buf[1];
         buf[0] = c;
         asm volatile (
-            "mov r0, #3\n"
+            "movs r0, #3\n"   // movs: ARMv6-M has no flag-preserving mov-immediate
             "mov r1, %0\n"
             "bkpt #0xAB"
             :
             : "r"((const char*)buf)
-            : "r0", "r1"
+            : "r0", "r1", "cc"
         );
     }
 

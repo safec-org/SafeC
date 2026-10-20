@@ -19,13 +19,25 @@
 // (Cocoa/Win32/X11/bare-metal GUI, the RPC server, etc.) must keep using
 // real libc malloc/free via std/mem.sc, not this file; including both in
 // the same link would duplicate-symbol on malloc/free/etc.
+#include <std/stddef.h>
+
 #define WASM_RT_POOL_SIZE (4UL * 1024UL * 1024UL) // 4 MiB
 
-void* malloc(unsigned long size);
+void* malloc(size_t size);
 void  free(void* ptr);
-void* calloc(unsigned long count, unsigned long size);
-void* realloc(void* ptr, unsigned long new_size);
-void* memcpy(void* dst, const void* src, unsigned long n);
-void* memmove(void* dst, const void* src, unsigned long n);
-void* memset(void* ptr, int val, unsigned long n);
-int   memcmp(const void* a, const void* b, unsigned long n);
+void* calloc(size_t count, size_t size);
+void* realloc(void* ptr, size_t new_size);
+void* memcpy(void* dst, const void* src, size_t n);
+void* memmove(void* dst, const void* src, size_t n);
+void* memset(void* ptr, int val, size_t n);
+int   memcmp(const void* a, const void* b, size_t n);
+
+// The rest of the libc surface std's freestanding paths reference (an
+// allocation-failure diagnostic in std/mem.sc, panic): abort() is wasm's
+// native trap — the host sees a RuntimeError ("unreachable") — and the
+// printf family drops its output, since a C varargs list can't be decoded
+// host-side anyway. With these, a module needs no host imports beyond the
+// ones its own code declares.
+void abort();
+int  fprintf(void* stream, const char* fmt, ...);
+int  printf(const char* fmt, ...);
