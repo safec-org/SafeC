@@ -439,8 +439,9 @@ llvm::Value *CodeGen::genNew(NewExpr &e, FnEnv &env) {
     // this point goes through 'totalSize' instead so both forms share
     // the same arena-bump / heap-alloc code beneath.
     llvm::Value *totalSize = llvm::ConstantInt::get(Int64Ty, elemSize);
+    llvm::Value *countVal = nullptr;
     if (e.arraySize) {
-        auto *countVal = genExpr(*e.arraySize, env);
+        countVal = genExpr(*e.arraySize, env);
         countVal = builder_.CreateIntCast(countVal, Int64Ty, /*isSigned=*/false, "new.count64");
         totalSize = builder_.CreateMul(
             llvm::ConstantInt::get(Int64Ty, elemSize), countVal, "new.arraysize");
@@ -479,6 +480,27 @@ llvm::Value *CodeGen::genNew(NewExpr &e, FnEnv &env) {
             auto *allocPtr = builder_.CreateGEP(
                 llvm::Type::getInt8Ty(ctx_), bufPhi, used, "arena.ptr");
             auto *newUsed = builder_.CreateAdd(used, totalSize, "arena.newused");
+            // Capacity check: a bump past the region's capacity (a too-large
+            // 'new<R> T[n]', or simply too many allocations) would hand out
+            // memory beyond the backing buffer, so abort instead, the same
+            // way an out-of-bounds subscript does. 'used' never exceeds the
+            // capacity, so 'capacity - used' can't wrap; for the array form
+            // the count is also checked against 'capacity / elemSize' so a
+            // huge count can't wrap 'count * elemSize' back into range.
+            uint64_t capBytes = info.cap > 0 ? info.cap : 65536;
+            auto *room    = builder_.CreateSub(llvm::ConstantInt::get(Int64Ty, capBytes), used, "arena.room");
+            llvm::Value *overCap = builder_.CreateICmpUGT(totalSize, room, "arena.overcap");
+            if (countVal && elemSize > 0) {
+                auto *countTooBig = builder_.CreateICmpUGT(
+                    countVal, llvm::ConstantInt::get(Int64Ty, capBytes / elemSize), "arena.count.over");
+                overCap = builder_.CreateOr(overCap, countTooBig, "arena.overcap.any");
+            }
+            auto *capTrapBB = llvm::BasicBlock::Create(ctx_, "arena.cap.trap", env.fn);
+            auto *capOkBB   = llvm::BasicBlock::Create(ctx_, "arena.cap.ok",   env.fn);
+            builder_.CreateCondBr(overCap, capTrapBB, capOkBB);
+            builder_.SetInsertPoint(capTrapBB);
+            emitBoundsTrap();
+            builder_.SetInsertPoint(capOkBB);
             builder_.CreateStore(newUsed, usedPtr);
             return allocPtr;
         }

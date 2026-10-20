@@ -225,7 +225,7 @@ TypePtr Parser::parseReferenceType(bool nullable, bool leadingConst, bool leadin
     // holding a nullable reference) nests the whole inner reference type.
     TypePtr base;
     bool baseVolatile = false;
-    if (cur().is(TK::Amp) || cur().is(TK::QuestionAmp)) {
+    if (cur().is(TK::Amp) || cur().is(TK::QuestionAmp) || cur().is(TK::AmpAmp)) {
         base = parseType();
     } else {
         base = parseBaseType();
@@ -471,6 +471,16 @@ TypePtr Parser::parseType() {
     if (cur().is(TK::Amp)) {
         consume();
         return parseReferenceType(false);
+    }
+    // && — the lexer reads two adjacent '&' as one token, so '&&T' (a
+    // non-null reference to a non-null reference, e.g. an out-parameter that
+    // always receives a reference) arrives here as AmpAmp rather than two
+    // Amps. The outer reference is region-less, exactly as '& &T' would be.
+    if (cur().is(TK::AmpAmp)) {
+        consume();
+        TypePtr inner = parseReferenceType(false);
+        return makeReference(std::move(inner), Region::Extern, /*nullable=*/false,
+                             /*mutable=*/true, "", /*pointeeVolatile=*/false);
     }
     // ?T (optional type) — '?' not followed by '&'
     if (cur().is(TK::Question)) {
