@@ -7,6 +7,7 @@
 #pragma once
 #include <std/ml/gpu_rocm.h>
 #include <std/mem.h>
+#include <std/time.h>
 
 namespace std {
 
@@ -48,6 +49,12 @@ extern int rocblas_gemm_ex(void* handle, int transA, int transB, int m, int n, i
                            const void* B, int bType, int ldb, const void* beta,
                            const void* C, int cType, int ldc, void* D, int dType, int ldd,
                            int computeType, int algo, int solutionIndex, unsigned int flags);
+extern int rocblas_gemm_ex_get_solutions(void* handle, int transA, int transB, int m, int n, int k,
+                                         const void* alpha, const void* A, int aType, int lda,
+                                         const void* B, int bType, int ldb, const void* beta,
+                                         const void* C, int cType, int ldc, void* D, int dType, int ldd,
+                                         int computeType, int algo, unsigned int flags,
+                                         int* list, int* size);
 extern int rocblas_sgemm(void* handle, int transA, int transB, int m, int n, int k,
                          const float* alpha, const float* A, int lda,
                          const float* B, int ldb,
@@ -66,6 +73,7 @@ extern int rocblas_sgemm(void* handle, int transA, int transB, int m, int n, int
 #define ROCM_BLAS_F32            151  // rocblas_datatype_f32_r
 #define ROCM_BLAS_BF16           168  // rocblas_datatype_bf16_r
 #define ROCM_BLAS_ALGO_STANDARD  0    // rocblas_gemm_algo_standard
+#define ROCM_BLAS_ALGO_INDEX     1    // rocblas_gemm_algo_solution_index
 #define ROCM_BLOCK               256U
 #define ROCM_MAX_BLOCKS          4096UL
 
@@ -286,6 +294,46 @@ static const char* rocm_kernel_source_() {
     "#pragma clang fp contract(off)\n"
     "    for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += gridDim.x * blockDim.x)\n"
     "        w[i] = f2h(h2f(w[i], bf) - lr * h2f(g[i], bf), bf);\n"
+    "}\n"
+    // Training ops on 16-bit buffers: fp32 arithmetic, one rounding per
+    // stored value (relu and relu_grad only copy bits).
+    "extern \"C\" __global__ void half_relu(const unsigned short* a, unsigned short* o, unsigned n, int bf) {\n"
+    "    for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += gridDim.x * blockDim.x)\n"
+    "        o[i] = h2f(a[i], bf) > 0.0f ? a[i] : (unsigned short)0;\n"
+    "}\n"
+    "extern \"C\" __global__ void half_relu_grad(const unsigned short* z, const unsigned short* g,\n"
+    "                                              unsigned short* o, unsigned n, int bf) {\n"
+    "    for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += gridDim.x * blockDim.x)\n"
+    "        o[i] = h2f(z[i], bf) > 0.0f ? g[i] : (unsigned short)0;\n"
+    "}\n"
+    // dy = round(2 (y - t)), loss += sum (y - t)^2 in fp32
+    "extern \"C\" __global__ void half_mse(const unsigned short* y, const unsigned short* t, unsigned short* dy,\n"
+    "                                        float* loss, unsigned n, int bf) {\n"
+    "    float s = 0.0f;\n"
+    "    for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += gridDim.x * blockDim.x) {\n"
+    "        float d = h2f(y[i], bf) - h2f(t[i], bf); dy[i] = f2h(2.0f * d, bf); s += d * d;\n"
+    "    }\n"
+    "    for (int off = warpSize / 2; off > 0; off >>= 1) s += __shfl_down(s, off);\n"
+    "    __shared__ float part[16];\n"
+    "    int lane = threadIdx.x % warpSize, wid = threadIdx.x / warpSize;\n"
+    "    if (lane == 0) part[wid] = s;\n"
+    "    __syncthreads();\n"
+    "    if (wid == 0) {\n"
+    "        s = lane < (int)((blockDim.x + warpSize - 1) / warpSize) ? part[lane] : 0.0f;\n"
+    "        for (int off = warpSize / 2; off > 0; off >>= 1) s += __shfl_down(s, off);\n"
+    "        if (lane == 0) atomicAdd(loss, s);\n"
+    "    }\n"
+    "}\n"
+    // Two SGD updates in one launch: indices [0, n1) update w1, the rest w2.
+    "extern \"C\" __global__ void half_sgd2(unsigned short* w1, const unsigned short* g1, unsigned n1,\n"
+    "                                         unsigned short* w2, const unsigned short* g2, unsigned n2,\n"
+    "                                         float lr, int bf) {\n"
+    "#pragma clang fp contract(off)\n"
+    "    unsigned n = n1 + n2;\n"
+    "    for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += gridDim.x * blockDim.x) {\n"
+    "        if (i < n1) w1[i] = f2h(h2f(w1[i], bf) - lr * h2f(g1[i], bf), bf);\n"
+    "        else w2[i - n1] = f2h(h2f(w2[i - n1], bf) - lr * h2f(g2[i - n1], bf), bf);\n"
+    "    }\n"
     "}\n";
 }
 
@@ -312,7 +360,11 @@ static const char* rocm_kernel_source_() {
 #define K_HALF_SGD 19
 #define K_CONCAT 20
 #define K_UPCAT 21
-#define K_COUNT 22
+#define K_HALF_RELU 22
+#define K_HALF_RELUG 23
+#define K_HALF_MSE 24
+#define K_HALF_SGD2 25
+#define K_COUNT 26
 
 static const char* rocm_kernel_name_(int k) {
     if (k == K_ADD) return "ew_add";
@@ -336,6 +388,10 @@ static const char* rocm_kernel_name_(int k) {
     if (k == K_HALF_SGD) return "half_sgd";
     if (k == K_CONCAT) return "concat_rows";
     if (k == K_UPCAT) return "upcat";
+    if (k == K_HALF_RELU) return "half_relu";
+    if (k == K_HALF_RELUG) return "half_relu_grad";
+    if (k == K_HALF_MSE) return "half_mse";
+    if (k == K_HALF_SGD2) return "half_sgd2";
     return "mse_grad";
 }
 
@@ -519,23 +575,124 @@ static int rocm_unary_(int kernel, struct RocmBuf a, float k, struct RocmBuf out
 
 // ── Queued ops ───────────────────────────────────────────────────────────────
 
+// ── gemm_ex solution choice ──────────────────────────────────────────────────
+// rocBLAS's default solution for a gemm_ex shape can be several times slower
+// than its best on some GPUs (on an MI100: 3.5x for a 128x256x1024 fp16
+// product, 2-3x for small bf16 ones). So the first call for each (types,
+// transposes, size) outside graph capture times every solution rocBLAS
+// offers on that call's own buffers, like MIOpen's Find, and keeps the
+// fastest (0 = the default, if nothing beats it). During capture an untuned
+// shape uses the default. The cache holds ROCM_GEMM_PLANS shapes.
+#define ROCM_GEMM_PLANS     64
+#define ROCM_GEMM_MAX_SOLS  512
+#define ROCM_GEMM_REPS      8
+
+static int g_rocm_capturing = 0;
+static int g_gplan_used[ROCM_GEMM_PLANS];
+static unsigned long g_gplan_key[ROCM_GEMM_PLANS];   // packed types, transposes
+static int g_gplan_m[ROCM_GEMM_PLANS];
+static int g_gplan_n[ROCM_GEMM_PLANS];
+static int g_gplan_k[ROCM_GEMM_PLANS];
+static int g_gplan_sol[ROCM_GEMM_PLANS];
+static int g_gplan_next = 0;
+static int g_gplan_list[ROCM_GEMM_MAX_SOLS];
+
+// One column-major rocBLAS gemm_ex call, D = C = op(A) op(B); 'sol' 0 uses
+// the default solution.
+static int rocm_gemm_ex_call_(int opA, int opB, int m, int n, int k,
+                              unsigned long a, int aType, int lda, unsigned long b, int ldb,
+                              unsigned long c, int cType, int ldc, int sol) {
+    float one = 1.0f;
+    float zero = 0.0f;
+    unsafe {
+        return rocblas_gemm_ex(g_rocm_blas, opA, opB, m, n, k, (const void*)&one,
+                               (const void*)a, aType, lda, (const void*)b, aType, ldb,
+                               (const void*)&zero, (const void*)c, cType, ldc, (void*)c, cType, ldc,
+                               ROCM_BLAS_F32, sol == 0 ? ROCM_BLAS_ALGO_STANDARD : ROCM_BLAS_ALGO_INDEX,
+                               sol, 0U) == 0;
+    }
+}
+
+static double rocm_gemm_time_(int opA, int opB, int m, int n, int k,
+                              unsigned long a, int aType, int lda, unsigned long b, int ldb,
+                              unsigned long c, int cType, int ldc, int sol) {
+    if (!rocm_gemm_ex_call_(opA, opB, m, n, k, a, aType, lda, b, ldb, c, cType, ldc, sol)) return -1.0;
+    unsafe { hipStreamSynchronize(g_rocm_stream); }
+    long long t0 = time_mono_ns();
+    int r = 0;
+    while (r < ROCM_GEMM_REPS) {
+        rocm_gemm_ex_call_(opA, opB, m, n, k, a, aType, lda, b, ldb, c, cType, ldc, sol);
+        r = r + 1;
+    }
+    unsafe { hipStreamSynchronize(g_rocm_stream); }
+    return (double)(time_mono_ns() - t0);
+}
+
+static int rocm_gemm_ex_(int opA, int opB, int m, int n, int k,
+                         unsigned long a, int aType, int lda, unsigned long b, int ldb,
+                         unsigned long c, int cType, int ldc) {
+    unsigned long key = (unsigned long)aType | ((unsigned long)cType << 16) |
+                        ((unsigned long)opA << 32) | ((unsigned long)opB << 48);
+    int i = 0;
+    while (i < ROCM_GEMM_PLANS) {
+        if (g_gplan_used[i] && g_gplan_key[i] == key && g_gplan_m[i] == m && g_gplan_n[i] == n &&
+            g_gplan_k[i] == k)
+            return rocm_gemm_ex_call_(opA, opB, m, n, k, a, aType, lda, b, ldb, c, cType, ldc, g_gplan_sol[i]);
+        i = i + 1;
+    }
+    if (g_rocm_capturing) return rocm_gemm_ex_call_(opA, opB, m, n, k, a, aType, lda, b, ldb, c, cType, ldc, 0);
+
+    int best = 0;
+    double bestT = rocm_gemm_time_(opA, opB, m, n, k, a, aType, lda, b, ldb, c, cType, ldc, 0);
+    if (bestT < 0.0) return 0;
+    int count = ROCM_GEMM_MAX_SOLS;
+    float one = 1.0f;
+    float zero = 0.0f;
+    unsafe {
+        if (rocblas_gemm_ex_get_solutions(g_rocm_blas, opA, opB, m, n, k, (const void*)&one,
+                                          (const void*)a, aType, lda, (const void*)b, aType, ldb,
+                                          (const void*)&zero, (const void*)c, cType, ldc, (void*)c, cType, ldc,
+                                          ROCM_BLAS_F32, ROCM_BLAS_ALGO_INDEX, 0U,
+                                          &g_gplan_list[0], &count) != 0) count = 0;
+    }
+    if (count > ROCM_GEMM_MAX_SOLS) count = ROCM_GEMM_MAX_SOLS;
+    int s = 0;
+    while (s < count) {
+        int sol = g_gplan_list[s];
+        if (sol != 0) {
+            double t = rocm_gemm_time_(opA, opB, m, n, k, a, aType, lda, b, ldb, c, cType, ldc, sol);
+            // Prefer the default unless a solution is clearly faster.
+            if (t >= 0.0 && t < bestT * 0.95) { bestT = t; best = sol; }
+        }
+        s = s + 1;
+    }
+    int slot = -1;
+    i = 0;
+    while (i < ROCM_GEMM_PLANS && slot < 0) { if (!g_gplan_used[i]) slot = i; i = i + 1; }
+    if (slot < 0) { slot = g_gplan_next; g_gplan_next = (g_gplan_next + 1) % ROCM_GEMM_PLANS; }
+    g_gplan_used[slot] = 1;
+    g_gplan_key[slot] = key;
+    g_gplan_m[slot] = m;
+    g_gplan_n[slot] = n;
+    g_gplan_k[slot] = k;
+    g_gplan_sol[slot] = best;
+    // The timing runs already computed C; run the chosen solution once more
+    // so the result comes from the solution later calls will use.
+    return rocm_gemm_ex_call_(opA, opB, m, n, k, a, aType, lda, b, ldb, c, cType, ldc, best);
+}
+
 int rocm_gemm(struct RocmBuf a, int ta, struct RocmBuf b, int tb, struct RocmBuf c,
               unsigned long m, unsigned long n, unsigned long k) {
     if (!rocm_ensure_() || !rocm_fits_(a, m * k) || !rocm_fits_(b, k * n) || !rocm_fits_(c, m * n))
         return 0;
-    float one = 1.0f;
-    float zero = 0.0f;
     // Row-major C = op(A) op(B) is column-major C^T = op(B)^T op(A)^T, so
     // hand rocBLAS the operands swapped; each operand's leading dimension
     // is its stored row length.
-    unsafe {
-        return rocblas_sgemm(g_rocm_blas,
-                             tb ? ROCM_BLAS_T : ROCM_BLAS_N, ta ? ROCM_BLAS_T : ROCM_BLAS_N,
-                             (int)n, (int)m, (int)k, &one,
-                             (const float*)b.dev, tb ? (int)k : (int)n,
-                             (const float*)a.dev, ta ? (int)m : (int)k,
-                             &zero, (float*)c.dev, (int)n) == 0;
-    }
+    return rocm_gemm_ex_(tb ? ROCM_BLAS_T : ROCM_BLAS_N, ta ? ROCM_BLAS_T : ROCM_BLAS_N,
+                         (int)n, (int)m, (int)k,
+                         b.dev, ROCM_BLAS_F32, tb ? (int)k : (int)n,
+                         a.dev, ta ? (int)m : (int)k,
+                         c.dev, ROCM_BLAS_F32, (int)n);
 }
 
 int rocm_add(struct RocmBuf a, struct RocmBuf b, struct RocmBuf out) { return rocm_binary_(K_ADD, a, b, out); }
@@ -635,18 +792,11 @@ struct RocmHalfBuf rocm_half_upload(const &float host, unsigned long n, int dtyp
 static int rocm_half_gemm_(struct RocmHalfBuf a, int ta, struct RocmHalfBuf b, int tb,
                            unsigned long cdev, int outType, unsigned long m, unsigned long n, unsigned long k) {
     int t = a.dtype == ROCM_BF16 ? ROCM_BLAS_BF16 : ROCM_BLAS_F16;
-    float one = 1.0f;
-    float zero = 0.0f;
-    unsafe {
-        return rocblas_gemm_ex(g_rocm_blas,
-                               tb ? ROCM_BLAS_T : ROCM_BLAS_N, ta ? ROCM_BLAS_T : ROCM_BLAS_N,
-                               (int)n, (int)m, (int)k, (const void*)&one,
-                               (const void*)b.dev, t, tb ? (int)k : (int)n,
-                               (const void*)a.dev, t, ta ? (int)m : (int)k,
-                               (const void*)&zero, (const void*)cdev, outType == 0 ? t : outType, (int)n,
-                               (void*)cdev, outType == 0 ? t : outType, (int)n,
-                               ROCM_BLAS_F32, ROCM_BLAS_ALGO_STANDARD, 0, 0U) == 0;
-    }
+    return rocm_gemm_ex_(tb ? ROCM_BLAS_T : ROCM_BLAS_N, ta ? ROCM_BLAS_T : ROCM_BLAS_N,
+                         (int)n, (int)m, (int)k,
+                         b.dev, t, tb ? (int)k : (int)n,
+                         a.dev, ta ? (int)m : (int)k,
+                         cdev, outType == 0 ? t : outType, (int)n);
 }
 
 int rocm_half_gemm(struct RocmHalfBuf a, int ta, struct RocmHalfBuf b, int tb, struct RocmHalfBuf c,
@@ -677,6 +827,90 @@ int rocm_half_sgd(struct RocmHalfBuf w, struct RocmHalfBuf g, float lr) {
         params[0] = (void*)&pw; params[1] = (void*)&pg; params[2] = (void*)&l; params[3] = (void*)&nn;
         params[4] = (void*)&bf;
         return rocm_launch_(K_HALF_SGD, n, (&void)&params[0]);
+    }
+}
+
+int rocm_half_relu(struct RocmHalfBuf a, struct RocmHalfBuf out) {
+    unsigned long n = a.len;
+    if (!rocm_ensure_() || !rocm_half_fits_(a, n) || !rocm_half_fits_(out, n) || a.dtype != out.dtype ||
+        n > 4294967295UL) return 0;
+    unsafe {
+        void* pa = (void*)a.dev;
+        void* po = (void*)out.dev;
+        unsigned int nn = (unsigned int)n;
+        int bf = a.dtype == ROCM_BF16 ? 1 : 0;
+        void* params[4];
+        params[0] = (void*)&pa; params[1] = (void*)&po; params[2] = (void*)&nn; params[3] = (void*)&bf;
+        return rocm_launch_(K_HALF_RELU, n, (&void)&params[0]);
+    }
+}
+
+// rocBLAS has no ReLU epilogue: the GEMM, then ReLU in place.
+int rocm_half_gemm_relu(struct RocmHalfBuf a, int ta, struct RocmHalfBuf b, int tb, struct RocmHalfBuf c,
+                        unsigned long m, unsigned long n, unsigned long k) {
+    if (!rocm_half_gemm(a, ta, b, tb, c, m, n, k)) return 0;
+    struct RocmHalfBuf view = c;
+    view.len = m * n;
+    return rocm_half_relu(view, view);
+}
+
+int rocm_half_relu_grad(struct RocmHalfBuf z, struct RocmHalfBuf g, struct RocmHalfBuf out) {
+    unsigned long n = z.len;
+    if (!rocm_ensure_() || !rocm_half_fits_(z, n) || !rocm_half_fits_(g, n) || !rocm_half_fits_(out, n) ||
+        z.dtype != g.dtype || z.dtype != out.dtype || n > 4294967295UL) return 0;
+    unsafe {
+        void* pz = (void*)z.dev;
+        void* pg = (void*)g.dev;
+        void* po = (void*)out.dev;
+        unsigned int nn = (unsigned int)n;
+        int bf = z.dtype == ROCM_BF16 ? 1 : 0;
+        void* params[5];
+        params[0] = (void*)&pz; params[1] = (void*)&pg; params[2] = (void*)&po; params[3] = (void*)&nn;
+        params[4] = (void*)&bf;
+        return rocm_launch_(K_HALF_RELUG, n, (&void)&params[0]);
+    }
+}
+
+int rocm_half_mse_grad(struct RocmHalfBuf y, struct RocmHalfBuf t, struct RocmHalfBuf dy, struct RocmBuf loss1) {
+    unsigned long n = y.len;
+    if (!rocm_ensure_() || !rocm_half_fits_(y, n) || !rocm_half_fits_(t, n) || !rocm_half_fits_(dy, n) ||
+        y.dtype != t.dtype || y.dtype != dy.dtype || !rocm_fits_(loss1, 1UL) || n > 4294967295UL) return 0;
+    unsafe {
+        if (hipMemsetAsync((void*)loss1.dev, 0, sizeof(float), g_rocm_stream) != ROCM_HIP_OK) return 0;
+        void* py = (void*)y.dev;
+        void* pt = (void*)t.dev;
+        void* pd = (void*)dy.dev;
+        void* pl = (void*)loss1.dev;
+        unsigned int nn = (unsigned int)n;
+        int bf = y.dtype == ROCM_BF16 ? 1 : 0;
+        void* params[6];
+        params[0] = (void*)&py; params[1] = (void*)&pt; params[2] = (void*)&pd;
+        params[3] = (void*)&pl; params[4] = (void*)&nn; params[5] = (void*)&bf;
+        return rocm_launch_(K_HALF_MSE, n, (&void)&params[0]);
+    }
+}
+
+int rocm_half_sgd2(struct RocmHalfBuf w1, struct RocmHalfBuf g1, struct RocmHalfBuf w2, struct RocmHalfBuf g2,
+                   float lr) {
+    unsigned long n1 = w1.len;
+    unsigned long n2 = w2.len;
+    if (!rocm_ensure_() || !rocm_half_fits_(w1, n1) || !rocm_half_fits_(g1, n1) || !rocm_half_fits_(w2, n2) ||
+        !rocm_half_fits_(g2, n2) || w1.dtype != g1.dtype || w1.dtype != w2.dtype || w1.dtype != g2.dtype ||
+        n1 + n2 > 4294967295UL) return 0;
+    unsafe {
+        void* pw1 = (void*)w1.dev;
+        void* pg1 = (void*)g1.dev;
+        void* pw2 = (void*)w2.dev;
+        void* pg2 = (void*)g2.dev;
+        unsigned int nn1 = (unsigned int)n1;
+        unsigned int nn2 = (unsigned int)n2;
+        float rate = lr;
+        int bf = w1.dtype == ROCM_BF16 ? 1 : 0;
+        void* params[8];
+        params[0] = (void*)&pw1; params[1] = (void*)&pg1; params[2] = (void*)&nn1;
+        params[3] = (void*)&pw2; params[4] = (void*)&pg2; params[5] = (void*)&nn2;
+        params[6] = (void*)&rate; params[7] = (void*)&bf;
+        return rocm_launch_(K_HALF_SGD2, n1 + n2, (&void)&params[0]);
     }
 }
 
@@ -810,7 +1044,11 @@ int rocm_mse_grad(struct RocmBuf y, struct RocmBuf t, struct RocmBuf dy, struct 
 
 int rocm_capture_begin() {
     if (!rocm_ensure_()) return 0;
-    unsafe { return hipStreamBeginCapture(g_rocm_stream, ROCM_CAPTURE_GLOBAL) == ROCM_HIP_OK; }
+    unsafe {
+        if (hipStreamBeginCapture(g_rocm_stream, ROCM_CAPTURE_GLOBAL) != ROCM_HIP_OK) return 0;
+    }
+    g_rocm_capturing = 1;
+    return 1;
 }
 
 struct RocmGraph rocm_capture_end() {
@@ -819,6 +1057,7 @@ struct RocmGraph rocm_capture_end() {
     if (!rocm_ensure_()) return g;
     unsafe {
         void* graph = (void*)0;
+        g_rocm_capturing = 0;
         if (hipStreamEndCapture(g_rocm_stream, &graph) != ROCM_HIP_OK) return g;
         void* exec = (void*)0;
         int ok = hipGraphInstantiate(&exec, graph, (void*)0, (char*)0, 0UL) == ROCM_HIP_OK;

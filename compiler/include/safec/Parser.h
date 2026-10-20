@@ -153,6 +153,9 @@ private:
         bool        hasPure      = false;
         bool        hasPacked    = false;
         bool        hasMustUse   = false;
+        bool        hasWeak      = false;
+        bool        hasAlwaysInline = false;
+        std::string targetAttr;  // target("avx2,fma"): extra ISA features for this function
         int         alignment    = 0;
         std::string sectionName;
         // WebAssembly (clang-compatible): export_name("x") / import_module("m")

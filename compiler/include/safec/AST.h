@@ -718,6 +718,11 @@ struct FunctionDecl : Decl {
     bool        isNaked       = false;   // naked — no prologue/epilogue
     bool        isInterrupt   = false;   // interrupt — ISR calling convention
     bool        isNoReturn    = false;   // noreturn — function never returns
+    bool        isAlwaysInline = false;  // __attribute__((always_inline))
+    std::string targetAttr;              // __attribute__((target("avx2,fma"))): ISA features added
+                                         // for this function only (multiversioned kernels)
+    bool        isWeak        = false;   // __attribute__((weak)): a weak definition, or a reference
+                                         // that is null when nothing defines the symbol
     bool        isPure        = false;   // pure — no side effects
     std::string sectionName;             // section("name") — empty = default
     std::string callingConv;             // "stdcall", "cdecl", "fastcall", or "" (default)

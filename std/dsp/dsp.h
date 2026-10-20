@@ -40,4 +40,15 @@ Fixed dsp_rms(&stack Fixed a, unsigned long n);
 // available directly for any other double-array dot product.
 double dsp_dot_f64(const &double a, const &double b, unsigned long n);
 
+// The same in single precision, eight floats per vector (f32x8).
+float dsp_dot_f32(const &float a, const &float b, unsigned long n);
+
+// out[q] = sum_t a[t] * x[q + t] for q < nOut (x holds nOut + n - 1 values):
+// the dot product of a with every n-long window of x, as in an FIR filter
+// (a = reversed taps) or a correlation. Many outputs per vector instead of
+// one horizontal sum each, so for long runs it is several times faster than
+// calling dsp_dot per output.
+void dsp_sliding_dot_f64(const &double a, const &double x, &double out, unsigned long nOut, unsigned long n);
+void dsp_sliding_dot_f32(const &float a, const &float x, &float out, unsigned long nOut, unsigned long n);
+
 } // namespace std

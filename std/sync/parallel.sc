@@ -10,6 +10,7 @@
 #include <std/atomic.h>
 #include <std/thread.h>
 #include <std/sys.h>
+#include <std/time.h>
 
 namespace std {
 
@@ -83,6 +84,51 @@ static unsigned long g_par_chunk = 1UL;
 static long long g_par_next = 0LL;             // next chunk index (atomic)
 static unsigned long g_par_ids[PARALLEL_MAX_THREADS];
 static unsigned long g_par_born[PARALLEL_MAX_THREADS];   // g_par_gen when each worker was started
+// Mirrors of g_par_gen / g_par_pending readable without the mutex, for the
+// spin phase (written under the mutex, read with atomic loads).
+static long long g_par_gen_a = 0LL;
+static long long g_par_pending_a = 0LL;
+static long long g_par_spin_ns = -1LL;   // -1 = not read yet
+
+// Spin-then-park: after a job, workers (and the caller waiting on them) poll
+// for this long before sleeping on the condition variable, so back-to-back
+// calls -- one per op in a training step -- don't pay a futex wake-up each
+// (about 40 us on a 16-thread Zen 4). SAFEC_POOL_SPIN_US overrides the
+// default 50 us; 0 parks at once.
+static long long par_spin_ns_() {
+    long long v = atomic_load_ll(&g_par_spin_ns);
+    if (v >= 0LL) return v;
+    v = 50000LL;
+    match (sys_getenv("SAFEC_POOL_SPIN_US")) {
+        case some(e): { long long u = sys_atoll(e); if (u >= 0LL) v = u * 1000LL; }
+        case null: { }
+    }
+    atomic_store_ll(&g_par_spin_ns, v);
+    return v;
+}
+
+static void par_relax_() {
+#if defined(__x86_64__) || defined(__i386__)
+    unsafe { asm volatile ("pause"); }
+#elif defined(__aarch64__)
+    unsafe { asm volatile ("yield"); }
+#endif
+}
+
+// Polls until *p != value (returns 1) or the spin budget runs out (0).
+static int par_spin_until_change_(&long long p, long long value) {
+    long long budget = par_spin_ns_();
+    if (budget == 0LL) return 0;
+    long long t0 = time_mono_ns();
+    int i = 0;
+    while (1) {
+        if (atomic_load_ll(p) != value) return 1;
+        par_relax_();
+        i = i + 1;
+        if ((i & 63) == 0 && time_mono_ns() - t0 > budget) return 0;
+    }
+    return 0;
+}
 
 static void par_chunks_(void* body, void* ctx, unsigned long n, unsigned long chunk) {
     while (1) {
@@ -102,6 +148,12 @@ static ?&unsigned long par_worker_(?&unsigned long arg) {
     // this thread first gets the mutex, and the worker must take part in it.
     unsigned long seen = g_par_born[id];
     while (1) {
+        if (g_par_gen == seen) {
+            // spin briefly for the next job before parking
+            mutex_unlock(&g_par_mu);
+            par_spin_until_change_(&g_par_gen_a, (long long)seen);
+            mutex_lock(&g_par_mu);
+        }
         while (g_par_gen == seen) cond_wait(&g_par_wake, &g_par_mu);
         seen = g_par_gen;
         int take = id < g_par_active;
@@ -113,6 +165,7 @@ static ?&unsigned long par_worker_(?&unsigned long arg) {
         if (take) par_chunks_(body, ctx, n, chunk);
         mutex_lock(&g_par_mu);
         g_par_pending = g_par_pending - 1UL;
+        atomic_store_ll(&g_par_pending_a, (long long)g_par_pending);
         if (g_par_pending == 0UL) cond_signal(&g_par_done);
     }
     return null;
@@ -177,12 +230,17 @@ void parallel_for_raw_(unsigned long n, unsigned long grain, void* body, void* c
     atomic_store_ll(&g_par_next, 0LL);
     g_par_active = active;
     g_par_pending = workers;
+    atomic_store_ll(&g_par_pending_a, (long long)workers);
     g_par_gen = g_par_gen + 1UL;
+    atomic_store_ll(&g_par_gen_a, (long long)g_par_gen);
     cond_broadcast(&g_par_wake);
     mutex_unlock(&g_par_mu);
 
     par_chunks_(body, ctx, n, chunk);
 
+    // spin for the workers to report, then sleep if they are slow
+    long long left = atomic_load_ll(&g_par_pending_a);
+    while (left != 0LL && par_spin_until_change_(&g_par_pending_a, left)) left = atomic_load_ll(&g_par_pending_a);
     mutex_lock(&g_par_mu);
     while (g_par_pending != 0UL) cond_wait(&g_par_done, &g_par_mu);
     mutex_unlock(&g_par_mu);

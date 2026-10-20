@@ -28,4 +28,10 @@ void fconv_direct(const &Fixed x, unsigned long len_x,
 void conv_fft(const &double x, unsigned long len_x,
               const &double h, unsigned long len_h, &double out);
 
+// Single precision: conv_direct / conv_fft on floats, same contracts.
+void conv_direct_f32(const &float x, unsigned long len_x,
+                     const &float h, unsigned long len_h, &float out);
+void conv_fft_f32(const &float x, unsigned long len_x,
+                  const &float h, unsigned long len_h, &float out);
+
 } // namespace std

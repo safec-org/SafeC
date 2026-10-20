@@ -27,6 +27,9 @@ struct BuildConfig {
     std::vector<std::string> libs;    // external libraries: -l<name> at final link
     std::vector<std::string> libDirs; // library search dirs: -L<dir> at final link
     std::string lto;               // "" (off, default), "thin", or "full"
+    std::string blas;              // CPU BLAS for std's sgemm: "" / "auto" (default: AOCL-BLAS on
+                                   // AMD, oneMKL on Intel, Accelerate on macOS, if found),
+                                   // "aocl", "mkl", "accelerate", "openblas" or "none"
     std::string crateType;         // "bin" (default), "staticlib", or "cdylib"
 };
 

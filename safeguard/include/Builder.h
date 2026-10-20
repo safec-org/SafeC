@@ -270,6 +270,8 @@ private:
     // (-l/-L/-flto). 'shared' produces a dynamic library (-shared) instead
     // of an executable, for build.crate_type = "cdylib". Returns true on
     // success.
+    // Link flags for the CPU BLAS std's sgemm picks up (see [build] blas).
+    std::vector<std::string> blasLinkFlags() const;
     bool linkFinal(const std::vector<std::string>& objFiles,
                     const std::vector<std::string>& archives,
                     const std::string& output,

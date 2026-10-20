@@ -74,6 +74,8 @@ for t in "${TARGETS[@]}"; do
     fi
     "$OBJCOPY" -O binary "$d/image.elf" "$d/image.bin"
     "$NM" "$d/image.elf" > "$d/syms.txt"
+    # Unicorn has no Armv8.1-M (Helium, low-overhead loops): build and link only.
+    if [[ $t == arm-81m ]]; then echo "$t linked (no emulator for Armv8.1-M; not run)"; continue; fi
     python3 "$HERE/run.py" "$t" "$d/image.bin" "$d/syms.txt" || fails=$((fails + 1))
 done
 exit $(( fails > 0 ))

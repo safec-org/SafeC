@@ -37,6 +37,8 @@ void stft_forward(const &double signal, unsigned long signalLen,
     unsigned long f = 0UL;
     while (f < numFrames) {
         unsigned long base = f * hopSize;
+        double* row;
+        unsafe { row = (double*)&out[f * frameSize]; }   // the real frame, packed in the row's first half
         unsigned long i = 0UL;
         while (i < frameSize) {
             double s;
@@ -44,16 +46,17 @@ void stft_forward(const &double signal, unsigned long signalLen,
             unsafe {
                 s = signal[base + i];
                 w = win[i];
-                out[f * frameSize + i] = complex_new(s * w, 0.0);
+                row[i] = s * w;
             }
             i = i + 1UL;
         }
         f = f + 1UL;
     }
-    // All frames at once: spread over the thread pool (stft_forward is an
+    // All frames at once, as real transforms (half the work of complex
+    // ones), spread over the thread pool (stft_forward is an
     // offline analysis; streaming code should window and fft_serial a frame
     // at a time instead).
-    unsafe { fft_batch(out, frameSize, numFrames, 0); }
+    unsafe { fft_real_batch_inplace(out, frameSize, numFrames); }
 
     unsafe { dealloc_raw_((void*)win); }
 }
@@ -107,6 +110,116 @@ void stft_inverse(const &Complex frames, unsigned long numFrames,
         double denom;
         unsafe { denom = winSumSq[n]; }
         if (denom > 1e-8) {
+            unsafe { outSignal[n] = outSignal[n] / denom; }
+        }
+        n = n + 1UL;
+    }
+
+    unsafe {
+        dealloc_raw_((void*)win);
+        dealloc_raw_((void*)winSumSq);
+        dealloc_raw_((void*)frameBuf);
+    }
+}
+
+// ── Single precision ─────────────────────────────────────────────────────────
+
+static void stft_fill_window32_(float* w, unsigned long n, int windowType) {
+    if (windowType == STFT_WIN_HANN) {
+        unsafe { window_hann_f32(w, n); }
+    } else if (windowType == STFT_WIN_HAMMING) {
+        unsafe { window_hamming_f32(w, n); }
+    } else if (windowType == STFT_WIN_BLACKMAN) {
+        unsafe { window_blackman_f32(w, n); }
+    } else {
+        unsafe { window_rectangular_f32(w, n); }
+    }
+}
+
+void stft_forward_f32(const &float signal, unsigned long signalLen,
+                   unsigned long frameSize, unsigned long hopSize,
+                   int windowType, &Complex32 out_ref) { struct Complex32* out = out_ref;
+    float* win;
+    unsafe { win = (float*)alloc_raw_(frameSize * (unsigned long)sizeof(float)); }
+    stft_fill_window32_(win, frameSize, windowType);
+
+    unsigned long numFrames = stft_num_frames(signalLen, frameSize, hopSize);
+    unsigned long f = 0UL;
+    while (f < numFrames) {
+        unsigned long base = f * hopSize;
+        float* row;
+        unsafe { row = (float*)&out[f * frameSize]; }
+        unsigned long i = 0UL;
+        while (i < frameSize) {
+            float s;
+            float w;
+            unsafe {
+                s = signal[base + i];
+                w = win[i];
+                row[i] = s * w;
+            }
+            i = i + 1UL;
+        }
+        f = f + 1UL;
+    }
+    // All frames at once, as real transforms (half the work of complex
+    // ones), spread over the thread pool (stft_forward is an
+    // offline analysis; streaming code should window and fft_serial a frame
+    // at a time instead).
+    unsafe { fft_real_batch_inplace_f32(out, frameSize, numFrames); }
+
+    unsafe { dealloc_raw_((void*)win); }
+}
+
+void stft_inverse_f32(const &Complex32 frames, unsigned long numFrames,
+                   unsigned long frameSize, unsigned long hopSize,
+                   int windowType, &float outSignal) {
+    if (numFrames == 0UL) { return; }
+    float* win;
+    unsafe { win = (float*)alloc_raw_(frameSize * (unsigned long)sizeof(float)); }
+    stft_fill_window32_(win, frameSize, windowType);
+
+    unsigned long outLen = (numFrames - 1UL) * hopSize + frameSize;
+    float* winSumSq;
+    unsafe { winSumSq = (float*)alloc_raw_(outLen * (unsigned long)sizeof(float)); }
+    unsigned long z = 0UL;
+    while (z < outLen) {
+        unsafe { winSumSq[z] = 0.0; }
+        z = z + 1UL;
+    }
+
+    struct Complex32* frameBuf;
+    unsafe { frameBuf = (struct Complex32*)alloc_raw_(frameSize * (unsigned long)sizeof(struct Complex32)); }
+
+    unsigned long f = 0UL;
+    while (f < numFrames) {
+        unsigned long base = f * hopSize;
+        unsigned long i = 0UL;
+        while (i < frameSize) {
+            unsafe { frameBuf[i] = frames[f * frameSize + i]; }
+            i = i + 1UL;
+        }
+        unsafe { ifft_f32(frameBuf, frameSize); }
+        i = 0UL;
+        while (i < frameSize) {
+            float w;
+            struct Complex32 c;
+            unsafe { w = win[i]; c = frameBuf[i]; }
+            float sample = c.re * w;
+            unsafe {
+                outSignal[base + i] = outSignal[base + i] + sample;
+                winSumSq[base + i] = winSumSq[base + i] + w * w;
+            }
+            i = i + 1UL;
+        }
+        f = f + 1UL;
+    }
+
+    unsigned long n = 0UL;
+    while (n < outLen) {
+        float denom;
+        unsafe { denom = winSumSq[n]; }
+        if (denom > (float)1e-8) {
             unsafe { outSignal[n] = outSignal[n] / denom; }
         }
         n = n + 1UL;

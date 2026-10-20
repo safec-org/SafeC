@@ -70,7 +70,7 @@ struct ConstValue {
 // Safety limits (CONST_EVAL.md §10):
 //   - Recursion depth:   kMaxRecursion  = 256
 //   - Loop iterations:   kLoopLimit     = 1,000,000
-//   - Instruction budget:kInstrBudget   = 10,000,000
+//   - Instruction budget:kInstrBudget   = 10,000,000 per top-level evaluation
 class ConstEvalEngine {
 public:
     ConstEvalEngine(TranslationUnit &tu, DiagEngine &diag);

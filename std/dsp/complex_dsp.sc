@@ -55,6 +55,61 @@ inline Complex complex_from_polar(double magnitude, double theta) {
     return complex_new(magnitude * cos_d(theta), magnitude * sin_d(theta));
 }
 
+inline Complex32 complex32_new(float re, float im) {
+    Complex32 c;
+    c.re = re;
+    c.im = im;
+    return c;
+}
+
+inline Complex32 Complex32::operator+(Complex32 other) const {
+    return complex32_new(self.re + other.re, self.im + other.im);
+}
+
+inline Complex32 Complex32::operator-(Complex32 other) const {
+    return complex32_new(self.re - other.re, self.im - other.im);
+}
+
+inline Complex32 Complex32::operator*(Complex32 other) const {
+    return complex32_new(self.re * other.re - self.im * other.im,
+                         self.re * other.im + self.im * other.re);
+}
+
+inline Complex32 Complex32::operator/(Complex32 other) const {
+    float denom = other.re * other.re + other.im * other.im;
+    float nre = self.re * other.re + self.im * other.im;
+    float nim = self.im * other.re - self.re * other.im;
+    return complex32_new(nre / denom, nim / denom);
+}
+
+inline Complex32 Complex32::neg() const {
+    return complex32_new(-self.re, -self.im);
+}
+
+inline float Complex32::abs() const {
+    return sqrt_f(self.re * self.re + self.im * self.im);
+}
+
+inline float Complex32::arg() const {
+    return atan2_f(self.im, self.re);
+}
+
+inline Complex32 Complex32::conj() const {
+    return complex32_new(self.re, -self.im);
+}
+
+inline Complex32 complex32_from_polar(float magnitude, float theta) {
+    return complex32_new(magnitude * cos_f(theta), magnitude * sin_f(theta));
+}
+
+inline Complex32 complex_to_f32(Complex c) {
+    return complex32_new((float)c.re, (float)c.im);
+}
+
+inline Complex complex_from_f32(Complex32 c) {
+    return complex_new((double)c.re, (double)c.im);
+}
+
 inline FComplex fcomplex_new(Fixed re, Fixed im) {
     FComplex c;
     c.re = re;

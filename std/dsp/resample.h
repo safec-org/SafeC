@@ -41,4 +41,10 @@ void resample_sinc(const &double in, unsigned long inLen, &double out, unsigned 
 void fresample_nearest(const &Fixed in, unsigned long inLen, &Fixed out, unsigned long outLen);
 void fresample_linear(const &Fixed in, unsigned long inLen, &Fixed out, unsigned long outLen);
 
+// Float samples, same contracts (positions and sums still in double).
+void resample_nearest_f32(const &float in, unsigned long inLen, &float out, unsigned long outLen);
+void resample_linear_f32(const &float in, unsigned long inLen, &float out, unsigned long outLen);
+void resample_sinc_f32(const &float in, unsigned long inLen, &float out, unsigned long outLen,
+                       unsigned long kernelHalfWidth);
+
 } // namespace std

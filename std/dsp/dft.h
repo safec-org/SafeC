@@ -24,6 +24,11 @@ void dft_real(const &double in, &Complex out, unsigned long n);
 // Inverse transform (includes the 1/N normalization), complex -> complex.
 void idft(const &Complex in, &Complex out, unsigned long n);
 
+// Float in and out (computed in double, rounded once). Same contracts.
+void dft_f32(const &Complex32 in, &Complex32 out, unsigned long n);
+void dft_real_f32(const &float in, &Complex32 out, unsigned long n);
+void idft_f32(const &Complex32 in, &Complex32 out, unsigned long n);
+
 // Q8.24 fixed-point forward/inverse transforms. Twiddle factors are
 // computed in double precision and quantized to Fixed once per use (see
 // complex_dsp.h's design-time-float/runtime-fixed note) — the summation

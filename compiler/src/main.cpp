@@ -22,6 +22,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/IR/PassManager.h"
@@ -195,6 +196,8 @@ static const std::vector<BareMetalTarget> &bareMetalTargets() {
         {"arm-7m",  "thumbv7m-none-eabi",       "cortex-m3",  "",   "",       {"-mcpu=cortex-m3", "-mfloat-abi=soft"}},
         {"arm-7em", "thumbv7em-none-eabi",      "cortex-m4",  "",   "",       {"-mcpu=cortex-m4", "-mfloat-abi=soft"}},
         {"arm-8m",  "thumbv8m.main-none-eabi",  "cortex-m33", "",   "",       {"-mcpu=cortex-m33", "-mfloat-abi=soft"}},
+        // Armv8.1-M with Helium (MVE), e.g. Cortex-M55/M85; soft-float calls.
+        {"arm-81m", "thumbv8.1m.main-none-eabi", "cortex-m55", "",  "",       {"-mcpu=cortex-m55", "-mfloat-abi=softfp"}},
         {"rv32i",   "riscv32-unknown-elf",      "generic-rv32", "",   "ilp32",  {"-march=rv32i", "-mabi=ilp32"}},
         {"rv32e",   "riscv32-unknown-elf",      "generic-rv32", "+e", "ilp32e", {"-march=rv32e", "-mabi=ilp32e"}},
         {"rv64i",   "riscv64-unknown-elf",      "generic-rv64", "",   "lp64",   {"-march=rv64i", "-mabi=lp64"}},
@@ -687,6 +690,53 @@ static int compileOneFile(const std::string &inputPath, const std::string &outpu
             }
         }
     }
+    // SIMD ISA macros, matching clang's (__SSE4_1__, __AVX2__, __AVX512F__,
+    // __ARM_NEON, __ARM_FEATURE_SVE, __ARM_FEATURE_MVE, __ARM_FEATURE_DSP,
+    // ...), from what the target CPU and --target-features guarantee, so std
+    // can pick the widest kernels at compile time when the build allows it
+    // and dispatch at run time otherwise (std/simd/cpu.h).
+    {
+        std::string triple = TargetTriple.getValue().empty()
+            ? llvm::sys::getDefaultTargetTriple() : TargetTriple.getValue();
+        std::string err;
+        const llvm::Target *tgt = llvm::TargetRegistry::lookupTarget(triple, err);
+        if (tgt) {
+            llvm::Triple t(triple);
+            std::string cpu = TargetCpu.getValue();
+            if (cpu.empty()) cpu = t.getArch() == llvm::Triple::x86_64 ? "x86-64" : "generic";
+            std::unique_ptr<llvm::MCSubtargetInfo> sti(
+                tgt->createMCSubtargetInfo(triple, cpu, TargetFeatures.getValue()));
+            auto has = [&](const char *f) { return sti && sti->checkFeatures(std::string("+") + f); };
+            auto def = [&](const char *m, const char *v = "1") { ppOpts.cmdlineDefs[m] = v; };
+            if (t.isX86()) {
+                if (has("sse2"))    def("__SSE2__");
+                if (has("sse3"))    def("__SSE3__");
+                if (has("ssse3"))   def("__SSSE3__");
+                if (has("sse4.1"))  def("__SSE4_1__");
+                if (has("sse4.2"))  def("__SSE4_2__");
+                if (has("avx"))     def("__AVX__");
+                if (has("avx2"))    def("__AVX2__");
+                if (has("fma"))     def("__FMA__");
+                if (has("f16c"))    def("__F16C__");
+                if (has("avx512f")) def("__AVX512F__");
+                if (has("avx512bw")) def("__AVX512BW__");
+                if (has("avx512dq")) def("__AVX512DQ__");
+                if (has("avx512vl")) def("__AVX512VL__");
+            } else if (t.isAArch64()) {
+                if (has("neon")) { def("__ARM_NEON"); def("__ARM_NEON__"); }
+                if (has("sve"))  def("__ARM_FEATURE_SVE");
+                if (has("sve2")) def("__ARM_FEATURE_SVE2");
+                if (has("fullfp16")) def("__ARM_FEATURE_FP16_VECTOR_ARITHMETIC");
+            } else if (t.isARM() || t.isThumb()) {
+                if (has("neon")) { def("__ARM_NEON"); def("__ARM_NEON__"); }
+                if (has("dsp"))  def("__ARM_FEATURE_DSP");
+                if (has("mve.fp")) def("__ARM_FEATURE_MVE", "3");      // Helium, integer + float
+                else if (has("mve")) def("__ARM_FEATURE_MVE", "1");    // Helium, integer
+            } else if (t.isWasm()) {
+                if (has("simd128")) def("__wasm_simd128__");
+            }
+        }
+    }
     // Lets headers offer C-style function-like macros only to translation
     // units that can parse them, instead of being unusable in safe mode.
     if (CompatPreprocessor) ppOpts.cmdlineDefs["__SAFEC_COMPAT_PREPROCESSOR__"] = "1";
@@ -1011,6 +1061,16 @@ int main(int argc, char **argv) {
         if (TargetAbi.getValue().empty()) TargetAbi = std::string(bm->abi);
         gTargetClangFlags = bm->clangFlags;
         Freestanding = true;   // bare metal: no hosted runtime
+    }
+    // --target-cpu=native: the build machine's CPU and every feature it has
+    // (like clang's -march=native), so std's SIMD kernels are chosen at
+    // compile time for that machine.
+    if (TargetCpu.getValue() == "native") {
+        TargetCpu = std::string(llvm::sys::getHostCPUName());
+        std::string feats = TargetFeatures.getValue();
+        for (auto &kv : llvm::sys::getHostCPUFeatures())
+            feats += (feats.empty() ? "" : ",") + std::string(kv.second ? "+" : "-") + kv.first().str();
+        TargetFeatures = feats;
     }
 
     if (!EmitBin) {
