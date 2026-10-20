@@ -167,25 +167,35 @@ void rocm_graph_free(&RocmGraph g);
 // [heads][kvLen][headDim], all row-major; headDim <= 128. 1 on success, 0 on
 // a bad shape or failure. Forward only, queued on the stream like every op.
 //
+// On GPUs with matrix cores (CDNA: MI100 / MI200 / MI300) both ops run on
+// them (fp32 MFMA); elsewhere on CUDA-core kernels with the same results up
+// to rounding.
+//
 // Flash attention: softmax(q k^T * scale) v without forming the score
 // matrix -- K/V tiles in LDS and an online softmax per query row (Dao et
 // al.), the same result as std/ml/attention.h's attention_forward up to
 // rounding. scale <= 0 means 1/sqrt(headDim). causal: query i sees keys
 // j <= i + (kvLen - seqLen) (so kvLen >= seqLen; with a KV cache the new
-// queries are the last seqLen positions).
+// queries are the last seqLen positions). A query with no visible key gets
+// zeros.
 int rocm_flash_attention(struct RocmBuf q, struct RocmBuf k, struct RocmBuf v, struct RocmBuf out,
                          unsigned long heads, unsigned long seqLen, unsigned long kvLen, unsigned long headDim,
                          float scale, int causal);
 // Linear attention with phi(x) = elu(x) + 1, as attention.h's
 // linear_attention_forward: out_i = phi(q_i) S / phi(q_i) z with S, z the
-// sums of phi(k_j)^T v_j and phi(k_j). Chunked (32 rows): per-chunk states,
-// a prefix over chunks, then each chunk's rows -- so causal (j <= i, which
-// needs kvLen == seqLen) runs in parallel too. Cost O(n d^2) instead of
+// sums of phi(k_j)^T v_j and phi(k_j). Chunked (128 rows on matrix cores,
+// 32 otherwise): per-chunk states, a prefix over chunks, then each chunk's
+// rows -- so causal (j <= i, which needs kvLen == seqLen) runs in parallel
+// too. Cost O(n d^2) instead of
 // O(n^2 d). The chunk states live in a scratch buffer this library keeps
 // and grows; during graph capture a call that would need to grow it fails.
 int rocm_linear_attention(struct RocmBuf q, struct RocmBuf k, struct RocmBuf v, struct RocmBuf out,
                           unsigned long heads, unsigned long seqLen, unsigned long kvLen, unsigned long headDim,
                           int causal);
+// on = 0 makes both ops use the CUDA-core kernels even on matrix-core GPUs
+// (for comparison and testing); on = 1 restores the default. Returns 1 if the
+// matrix-core kernels are in use after the call.
+int rocm_attention_use_mfma(int on);
 
 // ── Host-array convenience ops (upload → compute → read back) ────────────────
 // 1 on success, 0 on failure (no GPU, allocation failure).

@@ -393,12 +393,13 @@ static void check_attention() {
     int di = 0;
     while (di < 3) {
         unsigned long d = dims[di];
-        unsigned long cases[3][2];
+        unsigned long cases[4][2];
         cases[0][0] = 70UL; cases[0][1] = 70UL;           // partial tiles and chunks
         cases[1][0] = 33UL; cases[1][1] = 100UL;          // fewer queries than keys (KV cache)
         cases[2][0] = 1UL;  cases[2][1] = 257UL;          // one query
+        cases[3][0] = 300UL; cases[3][1] = 300UL;         // several 128-row chunks and query blocks
         int ci = 0;
-        while (ci < 3) {
+        while (ci < 4) {
             unsigned long sl = cases[ci][0];
             unsigned long kv = cases[ci][1];
             struct Vec<float> q = seq(heads * sl * d, 0.013f, -0.6f);
@@ -443,6 +444,39 @@ static void check_attention() {
             ci = ci + 1;
         }
         di = di + 1;
+    }
+    // causal linear attention over many chunks (the look-back chain)
+    unsigned long ld[2];
+    ld[0] = 64UL; ld[1] = 40UL;
+    int li = 0;
+    while (li < 2) {
+        unsigned long n = 1100UL;
+        struct Vec<float> q = seq(2UL * n * ld[li], 0.013f, -0.6f);
+        struct Vec<float> k = seq(2UL * n * ld[li], 0.011f, -0.55f);
+        struct Vec<float> v = seq(2UL * n * ld[li], 0.02f, -1.0f);
+        struct Vec<float> got = std::vec_with_cap(2UL * n * ld[li]);
+        unsigned long zz = 0UL;
+        while (zz < 2UL * n * ld[li]) { got.push(0.0f); zz = zz + 1UL; }
+        struct Vec<float> ref = attn_ref(&q, &k, &v, 2UL, n, n, ld[li], 1.0f, 1, 1);
+        int ok = std::rocm_linear_attention_f32(q.at(0UL), k.at(0UL), v.at(0UL), got.at(0UL), 2UL, n, n, ld[li], 1);
+        check(ok && relmax(&got, &ref) < 1.0e-4f, "causal linear attention, 1100 rows");
+        // the same call recorded into a graph (its per-call reset is a graph node) and replayed twice
+        struct RocmBuf dq = std::rocm_upload(q.at(0UL), 2UL * n * ld[li]);
+        struct RocmBuf dk = std::rocm_upload(k.at(0UL), 2UL * n * ld[li]);
+        struct RocmBuf dv = std::rocm_upload(v.at(0UL), 2UL * n * ld[li]);
+        struct RocmBuf dout = std::rocm_alloc(2UL * n * ld[li]);
+        check(std::rocm_linear_attention(dq, dk, dv, dout, 2UL, n, n, ld[li], 1), "linear attention before capture");
+        check(std::rocm_capture_begin(), "capture linear attention");
+        std::rocm_linear_attention(dq, dk, dv, dout, 2UL, n, n, ld[li], 1);
+        struct RocmGraph g = std::rocm_capture_end();
+        check(g.exec != 0UL && std::rocm_graph_launch(g) && std::rocm_graph_launch(g), "linear attention graph replay");
+        struct Vec<float> gg = download(dout);
+        check(relmax(&gg, &ref) < 1.0e-4f, "linear attention graph values");
+        gg.free();
+        std::rocm_graph_free(&g);
+        std::rocm_free(&dq); std::rocm_free(&dk); std::rocm_free(&dv); std::rocm_free(&dout);
+        ref.free(); q.free(); k.free(); v.free(); got.free();
+        li = li + 1;
     }
     // same definitions as std/ml/attention.h's CPU functions (one head)
     unsigned long n1 = 50UL;
@@ -615,7 +649,16 @@ int main() {
 
     check_half();
 
+    // matrix-core kernels (when the GPU has them), then the CUDA-core ones
+    int mf = std::rocm_attention_use_mfma(1);
+    unsafe { printf("attention: %s kernels\n", mf ? "matrix-core" : "CUDA-core"); }
     check_attention();
+    if (mf) {
+        check(!std::rocm_attention_use_mfma(0), "matrix-core attention can be switched off");
+        unsafe { printf("attention: CUDA-core kernels\n"); }
+        check_attention();
+        check(std::rocm_attention_use_mfma(1), "matrix-core attention switched back on");
+    }
     unsafe { printf("rocm: %d checks, %d failures\n", g_checks, g_fails); }
     return g_fails == 0 ? 0 : 1;
 }

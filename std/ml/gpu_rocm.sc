@@ -520,6 +520,880 @@ static const char* rocm_kernel_source_() {
     "            O[((unsigned long long)h * seq + i0 + i) * d + col] = den != 0.0f ? pk[i][col] / den : 0.0f;\n"
     "        }\n"
     "    }\n"
+    "}\n"
+    "// ── Attention on matrix cores (CDNA: gfx908 / gfx90a / gfx94x / gfx950) ──────\n"
+    "// fp32 MFMA versions of the flash and linear attention kernels above, used\n"
+    "// when the GPU has matrix cores (mfma_probe). On other GPUs the kernels\n"
+    "// compile to empty bodies and the CUDA-core kernels above run instead.\n"
+    "#if defined(__gfx908__) || defined(__gfx90a__) || defined(__gfx940__) || defined(__gfx941__) || defined(__gfx942__) || defined(__gfx950__)\n"
+    "#define SAFEC_MFMA 1\n"
+    "#else\n"
+    "#define SAFEC_MFMA 0\n"
+    "#endif\n"
+    "extern \"C\" __global__ void mfma_probe(float* o) { if (threadIdx.x == 0 && blockIdx.x == 0) o[0] = (float)SAFEC_MFMA; }\n"
+    "#if SAFEC_MFMA\n"
+    "typedef float fm_v16 __attribute__((ext_vector_type(16)));\n"
+    "typedef float fm_v4 __attribute__((ext_vector_type(4)));\n"
+    "// Flash attention. Grid (heads, query blocks); query blocks run last-first so\n"
+    "// the longest causal blocks start first. Scores are computed transposed\n"
+    "// (S^T = K Q^T), so each lane owns one query row: its q (pre-scaled by\n"
+    "// scale * log2 e) stays in registers as the MFMA B operand, the row max and\n"
+    "// sum need one cross-half shuffle, and P feeds the P V product straight from\n"
+    "// registers. The output is rescaled only when some row's max grew by\n"
+    "// more than 2^8.\n"
+    "//  - head dim <= 64: 32x32x2 MFMA, 4 waves x 32 rows, K/V tiles of 64 keys\n"
+    "//  - head dim <= 128: 16x16x4 MFMA, 4 waves x 16 rows (half the registers)\n"
+    "#define FM_BC 32\n"
+    "#define FM_T 64\n"
+    "#define FM_BR 128\n"
+    "#define FM16_BR 64\n"
+    "template <int DM>\n"
+    "__device__ __forceinline__ void flash_m32_impl(const float* __restrict__ Q, const float* __restrict__ K,\n"
+    "                                                const float* __restrict__ V, float* __restrict__ O,\n"
+    "                                                unsigned seq, unsigned kv, unsigned d, float scale, int causal) {\n"
+    "    constexpr int HD = DM / 2;\n"
+    "    constexpr int NB = DM / 32;\n"
+    "    constexpr int D4 = DM / 4;\n"
+    "    __shared__ float4 Ks[FM_T * D4];\n"
+    "    __shared__ float Vs[FM_T * DM];\n"
+    "    const unsigned h = blockIdx.x;\n"
+    "    const unsigned qb = gridDim.y - 1u - blockIdx.y;\n"
+    "    const unsigned lane = threadIdx.x & 63u, wave = threadIdx.x >> 6;\n"
+    "    const unsigned col = lane & 31u, half = lane >> 5;\n"
+    "    const unsigned q0 = qb * FM_BR + wave * 32u;\n"
+    "    const unsigned qrow = q0 + col;\n"
+    "    const float* Kh = K + (unsigned long long)h * kv * d;\n"
+    "    const float* Vh = V + (unsigned long long)h * kv * d;\n"
+    "    const float qs = scale * 1.4426950408889634f;\n"
+    "    float qr[HD];\n"
+    "#pragma unroll\n"
+    "    for (int s = 0; s < HD; ++s) {\n"
+    "        unsigned c = half * HD + s;\n"
+    "        qr[s] = (qrow < seq && c < d) ? Q[((unsigned long long)h * seq + qrow) * d + c] * qs : 0.0f;\n"
+    "    }\n"
+    "    fm_v16 acc[NB];\n"
+    "#pragma unroll\n"
+    "    for (int b = 0; b < NB; ++b)\n"
+    "#pragma unroll\n"
+    "        for (int r = 0; r < 16; ++r) acc[b][r] = 0.0f;\n"
+    "    float m = -__builtin_inff(), l = 0.0f;\n"
+    "    const int off = (int)kv - (int)seq;\n"
+    "    unsigned kvEnd = kv, wEnd = kv;\n"
+    "    if (causal) {\n"
+    "        int lim = (int)(qb * FM_BR + FM_BR - 1) + off + 1;\n"
+    "        kvEnd = lim <= 0 ? 0u : (lim < (int)kv ? (unsigned)lim : kv);\n"
+    "        int wl = (int)(q0 + 31u) + off + 1;\n"
+    "        wEnd = wl <= 0 ? 0u : (wl < (int)kv ? (unsigned)wl : kv);\n"
+    "    }\n"
+    "    const bool vec = (d & 3u) == 0u;\n"
+    "    for (unsigned jt = 0; jt < kvEnd; jt += FM_T) {\n"
+    "        __syncthreads();\n"
+    "        for (unsigned e = threadIdx.x; e < FM_T * D4; e += blockDim.x) {\n"
+    "            unsigned r = e / D4, c4 = e % D4, j = jt + r, c = c4 * 4u;\n"
+    "            float4 kq = make_float4(0.f, 0.f, 0.f, 0.f), vq = kq;\n"
+    "            if (j < kv && c < d) {\n"
+    "                const float* kp = Kh + (unsigned long long)j * d + c;\n"
+    "                const float* vp = Vh + (unsigned long long)j * d + c;\n"
+    "                if (vec) { kq = *(const float4*)kp; vq = *(const float4*)vp; }\n"
+    "                else {\n"
+    "                    kq.x = kp[0]; vq.x = vp[0];\n"
+    "                    if (c + 1 < d) { kq.y = kp[1]; vq.y = vp[1]; }\n"
+    "                    if (c + 2 < d) { kq.z = kp[2]; vq.z = vp[2]; }\n"
+    "                    if (c + 3 < d) { kq.w = kp[3]; vq.w = vp[3]; }\n"
+    "                }\n"
+    "            }\n"
+    "            Ks[r * D4 + (c4 ^ (r & 7u))] = kq;\n"
+    "            *(float4*)&Vs[r * DM + c] = vq;\n"
+    "        }\n"
+    "        __syncthreads();\n"
+    "        for (unsigned sub = 0; sub < FM_T / FM_BC; ++sub) {\n"
+    "        const unsigned j0 = jt + sub * FM_BC;\n"
+    "        if (j0 >= wEnd || j0 >= kvEnd) break;\n"
+    "        fm_v16 sc;\n"
+    "#pragma unroll\n"
+    "        for (int r = 0; r < 16; ++r) sc[r] = 0.0f;\n"
+    "        const float4* kr = Ks + (sub * FM_BC + col) * D4;\n"
+    "#pragma unroll\n"
+    "        for (int s4 = 0; s4 < HD / 4; ++s4) {\n"
+    "            float4 kk = kr[(half * (HD / 4) + s4) ^ (col & 7u)];\n"
+    "            sc = __builtin_amdgcn_mfma_f32_32x32x2f32(kk.x, qr[4 * s4 + 0], sc, 0, 0, 0);\n"
+    "            sc = __builtin_amdgcn_mfma_f32_32x32x2f32(kk.y, qr[4 * s4 + 1], sc, 0, 0, 0);\n"
+    "            sc = __builtin_amdgcn_mfma_f32_32x32x2f32(kk.z, qr[4 * s4 + 2], sc, 0, 0, 0);\n"
+    "            sc = __builtin_amdgcn_mfma_f32_32x32x2f32(kk.w, qr[4 * s4 + 3], sc, 0, 0, 0);\n"
+    "        }\n"
+    "        float p[16];\n"
+    "        float mt = -__builtin_inff();\n"
+    "        const bool edge = j0 + FM_BC > kv || (causal && (int)(j0 + FM_BC - 1) > (int)q0 + off);\n"
+    "#pragma unroll\n"
+    "        for (int r = 0; r < 16; ++r) {\n"
+    "            float x = sc[r];\n"
+    "            if (edge) {\n"
+    "                unsigned kj = j0 + 8u * (r / 4) + 4u * half + (r % 4);\n"
+    "                bool vis = kj < kv && (!causal || (int)kj <= (int)qrow + off);\n"
+    "                x = vis ? x : -__builtin_inff();\n"
+    "            }\n"
+    "            p[r] = x;\n"
+    "            mt = fmaxf(mt, x);\n"
+    "        }\n"
+    "        mt = fmaxf(mt, __shfl_xor(mt, 32));\n"
+    "        // keep the old max until a row's max grows by more than 2^8 (as\n"
+    "        // FlashAttention-4): p stays <= 256, and most tiles skip the rescale\n"
+    "        const bool grow = mt > m + 8.0f;\n"
+    "        float mn = grow ? mt : m;\n"
+    "        float ms = mn == -__builtin_inff() ? 0.0f : mn;\n"
+    "        float ls = 0.0f;\n"
+    "#pragma unroll\n"
+    "        for (int r = 0; r < 16; ++r) { p[r] = exp2f(p[r] - ms); ls += p[r]; }\n"
+    "        if (__any(grow)) {\n"
+    "            float corr = exp2f(m - ms);\n"
+    "            l *= corr;\n"
+    "#pragma unroll\n"
+    "            for (int b = 0; b < NB; ++b)\n"
+    "#pragma unroll\n"
+    "                for (int r = 0; r < 16; ++r) acc[b][r] *= corr;\n"
+    "        }\n"
+    "        l += ls;\n"
+    "        m = mn;\n"
+    "#pragma unroll\n"
+    "        for (int r = 0; r < 16; ++r) {\n"
+    "            const float* vr = Vs + sub * FM_BC * DM + (8u * (r / 4) + 4u * half + (r % 4)) * DM + col;\n"
+    "#pragma unroll\n"
+    "            for (int b = 0; b < NB; ++b)\n"
+    "                acc[b] = __builtin_amdgcn_mfma_f32_32x32x2f32(vr[32 * b], p[r], acc[b], 0, 0, 0);\n"
+    "        }\n"
+    "        }\n"
+    "    }\n"
+    "    l += __shfl_xor(l, 32);\n"
+    "    if (qrow < seq) {\n"
+    "        float inv = l > 0.0f ? 1.0f / l : 0.0f;\n"
+    "        float* orow = O + ((unsigned long long)h * seq + qrow) * d;\n"
+    "#pragma unroll\n"
+    "        for (int b = 0; b < NB; ++b)\n"
+    "#pragma unroll\n"
+    "            for (int r = 0; r < 16; ++r) {\n"
+    "                unsigned c = 32u * b + 8u * (r / 4) + 4u * half + (r % 4);\n"
+    "                if (c < d) orow[c] = acc[b][r] * inv;\n"
+    "            }\n"
+    "    }\n"
+    "}\n"
+    "template <int DM>\n"
+    "__device__ __forceinline__ void flash_m16_impl(const float* __restrict__ Q, const float* __restrict__ K,\n"
+    "                                                const float* __restrict__ V, float* __restrict__ O,\n"
+    "                                                unsigned seq, unsigned kv, unsigned d, float scale, int causal) {\n"
+    "    constexpr int QD = DM / 4;          // dims per lane group in QK^T\n"
+    "    constexpr int NB = DM / 16;         // 16-dim output blocks\n"
+    "    constexpr int D4 = DM / 4;\n"
+    "    __shared__ float4 Ks[FM_BC * D4];\n"
+    "    __shared__ float4 Vs[FM_BC * D4];\n"
+    "    const unsigned h = blockIdx.x;\n"
+    "    const unsigned qb = gridDim.y - 1u - blockIdx.y;\n"
+    "    const unsigned lane = threadIdx.x & 63u, wave = threadIdx.x >> 6;\n"
+    "    const unsigned col = lane & 15u, grp = lane >> 4;\n"
+    "    const unsigned q0 = qb * FM16_BR + wave * 16u;\n"
+    "    const unsigned qrow = q0 + col;\n"
+    "    const float* Kh = K + (unsigned long long)h * kv * d;\n"
+    "    const float* Vh = V + (unsigned long long)h * kv * d;\n"
+    "    const float qs = scale * 1.4426950408889634f;\n"
+    "    float qr[QD];\n"
+    "#pragma unroll\n"
+    "    for (int s = 0; s < QD; ++s) {\n"
+    "        unsigned c = grp * QD + s;\n"
+    "        qr[s] = (qrow < seq && c < d) ? Q[((unsigned long long)h * seq + qrow) * d + c] * qs : 0.0f;\n"
+    "    }\n"
+    "    fm_v4 acc[NB];\n"
+    "#pragma unroll\n"
+    "    for (int b = 0; b < NB; ++b) acc[b] = (fm_v4){0.f, 0.f, 0.f, 0.f};\n"
+    "    float m = -__builtin_inff(), l = 0.0f;\n"
+    "    const int off = (int)kv - (int)seq;\n"
+    "    unsigned kvEnd = kv, wEnd = kv;\n"
+    "    if (causal) {\n"
+    "        int lim = (int)(qb * FM16_BR + FM16_BR - 1) + off + 1;\n"
+    "        kvEnd = lim <= 0 ? 0u : (lim < (int)kv ? (unsigned)lim : kv);\n"
+    "        int wl = (int)(q0 + 15u) + off + 1;\n"
+    "        wEnd = wl <= 0 ? 0u : (wl < (int)kv ? (unsigned)wl : kv);\n"
+    "    }\n"
+    "    const bool vec = (d & 3u) == 0u;\n"
+    "    for (unsigned j0 = 0; j0 < kvEnd; j0 += FM_BC) {\n"
+    "        __syncthreads();\n"
+    "        for (unsigned e = threadIdx.x; e < FM_BC * D4; e += blockDim.x) {\n"
+    "            unsigned r = e / D4, c4 = e % D4, j = j0 + r, c = c4 * 4u;\n"
+    "            float4 kq = make_float4(0.f, 0.f, 0.f, 0.f), vq = kq;\n"
+    "            if (j < kv && c < d) {\n"
+    "                const float* kp = Kh + (unsigned long long)j * d + c;\n"
+    "                const float* vp = Vh + (unsigned long long)j * d + c;\n"
+    "                if (vec) { kq = *(const float4*)kp; vq = *(const float4*)vp; }\n"
+    "                else {\n"
+    "                    kq.x = kp[0]; vq.x = vp[0];\n"
+    "                    if (c + 1 < d) { kq.y = kp[1]; vq.y = vp[1]; }\n"
+    "                    if (c + 2 < d) { kq.z = kp[2]; vq.z = vp[2]; }\n"
+    "                    if (c + 3 < d) { kq.w = kp[3]; vq.w = vp[3]; }\n"
+    "                }\n"
+    "            }\n"
+    "            Ks[r * D4 + (c4 ^ (r & 7u))] = kq;\n"
+    "            Vs[r * D4 + (c4 ^ (((r >> 2) & 1u) << 2))] = vq;\n"
+    "        }\n"
+    "        __syncthreads();\n"
+    "        if (j0 >= wEnd) continue;\n"
+    "        fm_v4 sc[2];\n"
+    "#pragma unroll\n"
+    "        for (int t = 0; t < 2; ++t) {\n"
+    "            sc[t] = (fm_v4){0.f, 0.f, 0.f, 0.f};\n"
+    "            const unsigned kr = 16u * t + col;\n"
+    "            const float4* krow = Ks + kr * D4;\n"
+    "#pragma unroll\n"
+    "            for (int s4 = 0; s4 < QD / 4; ++s4) {\n"
+    "                float4 kk = krow[(grp * (QD / 4) + s4) ^ (kr & 7u)];\n"
+    "                sc[t] = __builtin_amdgcn_mfma_f32_16x16x4f32(kk.x, qr[4 * s4 + 0], sc[t], 0, 0, 0);\n"
+    "                sc[t] = __builtin_amdgcn_mfma_f32_16x16x4f32(kk.y, qr[4 * s4 + 1], sc[t], 0, 0, 0);\n"
+    "                sc[t] = __builtin_amdgcn_mfma_f32_16x16x4f32(kk.z, qr[4 * s4 + 2], sc[t], 0, 0, 0);\n"
+    "                sc[t] = __builtin_amdgcn_mfma_f32_16x16x4f32(kk.w, qr[4 * s4 + 3], sc[t], 0, 0, 0);\n"
+    "            }\n"
+    "        }\n"
+    "        float p[8];\n"
+    "        float mt = -__builtin_inff();\n"
+    "        const bool edge = j0 + FM_BC > kv || (causal && (int)(j0 + FM_BC - 1) > (int)q0 + off);\n"
+    "#pragma unroll\n"
+    "        for (int t = 0; t < 2; ++t)\n"
+    "#pragma unroll\n"
+    "            for (int r = 0; r < 4; ++r) {\n"
+    "                float x = sc[t][r];\n"
+    "                if (edge) {\n"
+    "                    unsigned kj = j0 + 16u * t + 4u * grp + r;\n"
+    "                    bool vis = kj < kv && (!causal || (int)kj <= (int)qrow + off);\n"
+    "                    x = vis ? x : -__builtin_inff();\n"
+    "                }\n"
+    "                p[4 * t + r] = x;\n"
+    "                mt = fmaxf(mt, x);\n"
+    "            }\n"
+    "        mt = fmaxf(mt, __shfl_xor(mt, 16));\n"
+    "        mt = fmaxf(mt, __shfl_xor(mt, 32));\n"
+    "        // keep the old max until a row's max grows by more than 2^8 (as\n"
+    "        // FlashAttention-4): p stays <= 256, and most tiles skip the rescale\n"
+    "        const bool grow = mt > m + 8.0f;\n"
+    "        float mn = grow ? mt : m;\n"
+    "        float ms = mn == -__builtin_inff() ? 0.0f : mn;\n"
+    "        float ls = 0.0f;\n"
+    "#pragma unroll\n"
+    "        for (int r = 0; r < 8; ++r) { p[r] = exp2f(p[r] - ms); ls += p[r]; }\n"
+    "        if (__any(grow)) {\n"
+    "            float corr = exp2f(m - ms);\n"
+    "            l *= corr;\n"
+    "#pragma unroll\n"
+    "            for (int b = 0; b < NB; ++b) acc[b] *= corr;\n"
+    "        }\n"
+    "        l += ls;\n"
+    "        m = mn;\n"
+    "        const float* vf = (const float*)Vs;\n"
+    "#pragma unroll\n"
+    "        for (int t = 0; t < 2; ++t)\n"
+    "#pragma unroll\n"
+    "            for (int r = 0; r < 4; ++r) {\n"
+    "                const unsigned key = 16u * t + 4u * grp + r;\n"
+    "                const float* vr = vf + key * DM;\n"
+    "                const unsigned sw = ((key >> 2) & 1u) << 4;\n"
+    "#pragma unroll\n"
+    "                for (int b = 0; b < NB; ++b)\n"
+    "                    acc[b] = __builtin_amdgcn_mfma_f32_16x16x4f32(vr[(16u * b + col) ^ sw], p[4 * t + r], acc[b], 0, 0, 0);\n"
+    "            }\n"
+    "    }\n"
+    "    l += __shfl_xor(l, 16);\n"
+    "    l += __shfl_xor(l, 32);\n"
+    "    if (qrow < seq) {\n"
+    "        float inv = l > 0.0f ? 1.0f / l : 0.0f;\n"
+    "        float* orow = O + ((unsigned long long)h * seq + qrow) * d;\n"
+    "#pragma unroll\n"
+    "        for (int b = 0; b < NB; ++b)\n"
+    "#pragma unroll\n"
+    "            for (int r = 0; r < 4; ++r) {\n"
+    "                unsigned c = 16u * b + 4u * grp + r;\n"
+    "                if (c < d) orow[c] = acc[b][r] * inv;\n"
+    "            }\n"
+    "    }\n"
+    "}\n"
+    "// Linear attention, chunk-parallel, three passes (rows in chunks of LA_R):\n"
+    "//   la_state: W[c] = phi(K_c)^T V_c and Z[c] = sum phi(K_c) per chunk (MFMA)\n"
+    "//   la_scan:  causal: exclusive prefix over chunks; else the total, in chunk 0\n"
+    "//   la_out:   out = (phi(Q_c) W + A V_c) / (phi(Q_c) . Z + rowsum A), A the\n"
+    "//             causal intra-chunk scores phi(Q_c) phi(K_c)^T (j <= i); phi(Q)\n"
+    "//             rows sit in registers as the MFMA operand, like flash's q.\n"
+    "#define LA_T 32\n"
+    "#define LA_R 128\n"
+    "// K/V tile staging, split so the next tile's global loads can be issued\n"
+    "// before the current tile is used: la_fetch reads rows [j0, j0 + LA_T) of\n"
+    "// phi(K) (all DM dims) and of V (cols c0 .. c0 + VC) into registers, la_put\n"
+    "// writes them to Ks (swizzled float4, as the flash kernel) and Vs ([LA_T][VC]).\n"
+    "template <int DM, int VC> struct LaTile {\n"
+    "    static constexpr int KE = LA_T * DM / 4 / 256, VE = LA_T * VC / 4 / 256;\n"
+    "    float4 k[KE], v[VE];\n"
+    "};\n"
+    "__device__ __forceinline__ float4 la_ld4(const float* p, unsigned c, unsigned d, bool vec, bool phi) {\n"
+    "    float4 x = make_float4(0.f, 0.f, 0.f, 0.f);\n"
+    "    if (vec) x = *(const float4*)p;\n"
+    "    else {\n"
+    "        x.x = p[0];\n"
+    "        if (c + 1 < d) x.y = p[1];\n"
+    "        if (c + 2 < d) x.z = p[2];\n"
+    "        if (c + 3 < d) x.w = p[3];\n"
+    "    }\n"
+    "    if (phi) {\n"
+    "        x.x = la_phi(x.x); x.y = c + 1 < d ? la_phi(x.y) : 0.f;\n"
+    "        x.z = c + 2 < d ? la_phi(x.z) : 0.f; x.w = c + 3 < d ? la_phi(x.w) : 0.f;\n"
+    "    }\n"
+    "    return x;\n"
+    "}\n"
+    "template <int DM, int VC>\n"
+    "__device__ __forceinline__ void la_fetch(LaTile<DM, VC>& t, const float* __restrict__ Kh, const float* __restrict__ Vh,\n"
+    "                                         unsigned j0, unsigned jend, unsigned d, unsigned c0) {\n"
+    "    constexpr int D4 = DM / 4, V4 = VC / 4;\n"
+    "    const bool vec = (d & 3u) == 0u;\n"
+    "#pragma unroll\n"
+    "    for (int i = 0; i < t.KE; ++i) {\n"
+    "        unsigned e = threadIdx.x + 256u * i, r = e / D4, c = (e % D4) * 4u, j = j0 + r;\n"
+    "        t.k[i] = (j < jend && c < d) ? la_ld4(Kh + (unsigned long long)j * d + c, c, d, vec, true) : make_float4(0.f, 0.f, 0.f, 0.f);\n"
+    "    }\n"
+    "#pragma unroll\n"
+    "    for (int i = 0; i < t.VE; ++i) {\n"
+    "        unsigned e = threadIdx.x + 256u * i, r = e / V4, c = c0 + (e % V4) * 4u, j = j0 + r;\n"
+    "        t.v[i] = (j < jend && c < d) ? la_ld4(Vh + (unsigned long long)j * d + c, c, d, vec, false) : make_float4(0.f, 0.f, 0.f, 0.f);\n"
+    "    }\n"
+    "}\n"
+    "template <int DM, int VC>\n"
+    "__device__ __forceinline__ void la_put(const LaTile<DM, VC>& t, float4* Ks, float* Vs) {\n"
+    "    constexpr int D4 = DM / 4, V4 = VC / 4;\n"
+    "#pragma unroll\n"
+    "    for (int i = 0; i < t.KE; ++i) {\n"
+    "        unsigned e = threadIdx.x + 256u * i, r = e / D4, c4 = e % D4;\n"
+    "        Ks[r * D4 + (c4 ^ (r & 7u))] = t.k[i];\n"
+    "    }\n"
+    "#pragma unroll\n"
+    "    for (int i = 0; i < t.VE; ++i) {\n"
+    "        unsigned e = threadIdx.x + 256u * i, r = e / V4;\n"
+    "        *(float4*)&Vs[r * VC + (e % V4) * 4u] = t.v[i];\n"
+    "    }\n"
+    "}\n"
+    "\n"
+    "// Pass 1: W[h][c] = phi(K_c)^T V_c ([DM][DM]) and Z[h][c] = sum phi(K_c) ([DM])\n"
+    "// over rows [c*rows, (c+1)*rows). Wave w owns the 32x32 blocks w, w+4, ...\n"
+    "template <int DM>\n"
+    "__device__ __forceinline__ void la_state_impl(const float* __restrict__ K, const float* __restrict__ V,\n"
+    "                                              float* __restrict__ W, float* __restrict__ Z,\n"
+    "                                              unsigned kv, unsigned d, unsigned rows, unsigned nc) {\n"
+    "    constexpr int D4 = DM / 4, NBL = (DM / 32) * (DM / 32), PW = (NBL + 3) / 4;\n"
+    "    __shared__ float4 Ks[LA_T * D4];\n"
+    "    __shared__ float Vs[LA_T * DM];\n"
+    "    const unsigned c = blockIdx.x, h = blockIdx.y;\n"
+    "    const unsigned lane = threadIdx.x & 63u, wave = threadIdx.x >> 6, col = lane & 31u, half = lane >> 5;\n"
+    "    const float* Kh = K + (unsigned long long)h * kv * d;\n"
+    "    const float* Vh = V + (unsigned long long)h * kv * d;\n"
+    "    const unsigned r0 = c * rows, r1 = min(kv, r0 + rows);\n"
+    "    fm_v16 acc[PW];\n"
+    "#pragma unroll\n"
+    "    for (int b = 0; b < PW; ++b)\n"
+    "#pragma unroll\n"
+    "        for (int r = 0; r < 16; ++r) acc[b][r] = 0.0f;\n"
+    "    float z = 0.0f;\n"
+    "    const float* kf = (const float*)Ks;\n"
+    "    LaTile<DM, DM> tile;\n"
+    "    if (r0 < r1) la_fetch<DM, DM>(tile, Kh, Vh, r0, r1, d, 0u);\n"
+    "    for (unsigned j0 = r0; j0 < r1; j0 += LA_T) {\n"
+    "        __syncthreads();\n"
+    "        la_put<DM, DM>(tile, Ks, Vs);\n"
+    "        __syncthreads();\n"
+    "        if (j0 + LA_T < r1) la_fetch<DM, DM>(tile, Kh, Vh, j0 + LA_T, r1, d, 0u);\n"
+    "#pragma unroll\n"
+    "        for (int b = 0; b < PW; ++b) {\n"
+    "            const int blk = wave + 4 * b;\n"
+    "            if (blk < NBL) {\n"
+    "                const unsigned bi = blk / (DM / 32), bj = blk % (DM / 32);\n"
+    "                const unsigned dk = 32u * bi + col;\n"
+    "#pragma unroll\n"
+    "                for (int s = 0; s < LA_T / 2; ++s) {\n"
+    "                    const unsigned key = 2u * s + half;\n"
+    "                    float a = kf[key * DM + ((((dk >> 2) ^ (key & 7u)) << 2) | (dk & 3u))];\n"
+    "                    float bb = Vs[key * DM + 32u * bj + col];\n"
+    "                    acc[b] = __builtin_amdgcn_mfma_f32_32x32x2f32(a, bb, acc[b], 0, 0, 0);\n"
+    "                }\n"
+    "            }\n"
+    "        }\n"
+    "        if (threadIdx.x < DM) {\n"
+    "            const unsigned dk = threadIdx.x;\n"
+    "#pragma unroll 8\n"
+    "            for (int key = 0; key < LA_T; ++key) z += kf[key * DM + ((((dk >> 2) ^ (key & 7u)) << 2) | (dk & 3u))];\n"
+    "        }\n"
+    "    }\n"
+    "    float* w = W + ((unsigned long long)h * nc + c) * DM * DM;\n"
+    "#pragma unroll\n"
+    "    for (int b = 0; b < PW; ++b) {\n"
+    "        const int blk = wave + 4 * b;\n"
+    "        if (blk < NBL) {\n"
+    "            const unsigned bi = blk / (DM / 32), bj = blk % (DM / 32);\n"
+    "#pragma unroll\n"
+    "            for (int r = 0; r < 16; ++r)\n"
+    "                w[(32u * bi + 8u * (r / 4) + 4u * half + (r % 4)) * DM + 32u * bj + col] = acc[b][r];\n"
+    "        }\n"
+    "    }\n"
+    "    if (threadIdx.x < DM) Z[((unsigned long long)h * nc + c) * DM + threadIdx.x] = z;\n"
+    "}\n"
+    "\n"
+    "// Pass 2: causal -> exclusive prefix over chunks, in place; else the total, in chunk 0.\n"
+    "template <int DM>\n"
+    "__device__ __forceinline__ void la_scan_impl(float* __restrict__ W, float* __restrict__ Z, unsigned nc, int causal) {\n"
+    "    const unsigned h = blockIdx.y, e = blockIdx.x * blockDim.x + threadIdx.x;\n"
+    "    if (e >= DM * DM + DM) return;\n"
+    "    float* p;\n"
+    "    unsigned long long stride;\n"
+    "    if (e < DM * DM) { p = W + (unsigned long long)h * nc * DM * DM + e; stride = DM * DM; }\n"
+    "    else { p = Z + (unsigned long long)h * nc * DM + (e - DM * DM); stride = DM; }\n"
+    "    float run = 0.0f;\n"
+    "    for (unsigned c0 = 0; c0 < nc; c0 += 8) {\n"
+    "        float v[8];\n"
+    "#pragma unroll\n"
+    "        for (int u = 0; u < 8; ++u) v[u] = c0 + u < nc ? p[(c0 + u) * stride] : 0.0f;\n"
+    "        if (causal) {\n"
+    "#pragma unroll\n"
+    "            for (int u = 0; u < 8; ++u)\n"
+    "                if (c0 + u < nc) { p[(c0 + u) * stride] = run; run += v[u]; }\n"
+    "        } else {\n"
+    "#pragma unroll\n"
+    "            for (int u = 0; u < 8; ++u) run += v[u];\n"
+    "        }\n"
+    "    }\n"
+    "    if (!causal) p[0] = run;\n"
+    "}\n"
+    "\n"
+    "// Pass 3: rows [blk*LA_R, +LA_R) of the output, columns c0 .. c0 + DO\n"
+    "// (c0 = blockIdx.z * DO). Wave w: rows +32w. Lane: row col, phi(q) dims\n"
+    "// half*DM/2 .. in registers.\n"
+    "template <int DM, int DO>\n"
+    "__device__ __forceinline__ void la_out_impl(const float* __restrict__ Q, const float* __restrict__ K,\n"
+    "                                            const float* __restrict__ V, const float* __restrict__ W,\n"
+    "                                            const float* __restrict__ Z, float* __restrict__ O,\n"
+    "                                            unsigned seq, unsigned kv, unsigned d, unsigned nc, int causal) {\n"
+    "    constexpr int HD = DM / 2, NB = DO / 32, D4 = DM / 4;\n"
+    "    constexpr int WR = DM < 64 ? DM : 64;            // state rows per pass (both half-waves)\n"
+    "    constexpr int NP = DM / WR, SP = HD / NP;          // passes, dims per half-wave per pass\n"
+    "    constexpr int P1 = LA_T * DM + LA_T * DO, P2 = WR * DO, P3 = 4 * 32 * DO;\n"
+    "    constexpr int POOL = P1 > P2 ? (P1 > P3 ? P1 : P3) : (P2 > P3 ? P2 : P3);   // floats, phases reuse it\n"
+    "    __shared__ float4 pool[POOL / 4];\n"
+    "    float4* Ks = pool;\n"
+    "    float* Vs = (float*)(pool + LA_T * D4);\n"
+    "    float* Wl = (float*)pool;\n"
+    "    const unsigned blk = blockIdx.x, h = blockIdx.y, c0 = blockIdx.z * DO;\n"
+    "    const unsigned lane = threadIdx.x & 63u, wave = threadIdx.x >> 6, col = lane & 31u, half = lane >> 5;\n"
+    "    const unsigned row = blk * LA_R + wave * 32u + col;\n"
+    "    float qr[HD];\n"
+    "    {\n"
+    "        // phi(Q) for the block's LA_R rows, loaded coalesced through LDS in\n"
+    "        // pieces of 32 x DM per wave-round (rows of all waves together)\n"
+    "        float4* qs = pool;                       // [4 waves][32 rows][D4], col4 ^ (row & 7)\n"
+    "        constexpr int QCH = POOL / (4 * 32 * DM) >= 1 ? 32 : 32 * POOL / (4 * 32 * DM);   // rows per wave per round\n"
+    "        static_assert(4 * QCH * DM <= POOL, \"pool\");\n"
+    "        for (unsigned r0 = 0; r0 < 32u; r0 += QCH) {\n"
+    "            __syncthreads();\n"
+    "            for (unsigned e = threadIdx.x; e < 4u * QCH * D4; e += blockDim.x) {\n"
+    "                unsigned wr = e / (QCH * D4), rr = (e / D4) % QCH, c4 = e % D4;\n"
+    "                unsigned grow = blk * LA_R + wr * 32u + r0 + rr, c = 4u * c4;\n"
+    "                float4 x = make_float4(0.f, 0.f, 0.f, 0.f);\n"
+    "                if (grow < seq && c < d)\n"
+    "                    x = la_ld4(Q + ((unsigned long long)h * seq + grow) * d + c, c, d, (d & 3u) == 0u, true);\n"
+    "                qs[(wr * QCH + rr) * D4 + (c4 ^ (rr & 7u))] = x;\n"
+    "            }\n"
+    "            __syncthreads();\n"
+    "            if (col >= r0 && col < r0 + QCH) {\n"
+    "                const unsigned rr = col - r0;\n"
+    "#pragma unroll\n"
+    "                for (int s4 = 0; s4 < HD / 4; ++s4) {\n"
+    "                    float4 x = qs[(wave * QCH + rr) * D4 + ((half * (HD / 4) + s4) ^ (rr & 7u))];\n"
+    "                    qr[4 * s4] = x.x; qr[4 * s4 + 1] = x.y; qr[4 * s4 + 2] = x.z; qr[4 * s4 + 3] = x.w;\n"
+    "                }\n"
+    "            }\n"
+    "        }\n"
+    "    }\n"
+    "    const float* Ws = W + ((unsigned long long)h * nc + (causal ? blk : 0u)) * DM * DM;\n"
+    "    const float* Zs = Z + ((unsigned long long)h * nc + (causal ? blk : 0u)) * DM;\n"
+    "    fm_v16 acc[NB];\n"
+    "    float den = 0.0f;\n"
+    "#pragma unroll\n"
+    "    for (int b = 0; b < NB; ++b)\n"
+    "#pragma unroll\n"
+    "        for (int r = 0; r < 16; ++r) acc[b][r] = 0.0f;\n"
+    "    if (causal) {\n"
+    "        const float* Kh = K + (unsigned long long)h * kv * d;\n"
+    "        const float* Vh = V + (unsigned long long)h * kv * d;\n"
+    "        const unsigned cs = blk * LA_R;\n"
+    "        LaTile<DM, DO> tile;\n"
+    "        if (cs < kv) la_fetch<DM, DO>(tile, Kh, Vh, cs, kv, d, c0);\n"
+    "        for (unsigned t = 0; t < LA_R / LA_T; ++t) {\n"
+    "            const unsigned j0 = cs + t * LA_T;\n"
+    "            if (j0 >= kv) break;\n"
+    "            __syncthreads();\n"
+    "            la_put<DM, DO>(tile, Ks, Vs);\n"
+    "            __syncthreads();\n"
+    "            if (t + 1 < LA_R / LA_T && j0 + LA_T < kv) la_fetch<DM, DO>(tile, Kh, Vh, j0 + LA_T, kv, d, c0);\n"
+    "            if (t > wave) continue;\n"
+    "            fm_v16 sc;\n"
+    "#pragma unroll\n"
+    "            for (int r = 0; r < 16; ++r) sc[r] = 0.0f;\n"
+    "            const float4* kr = Ks + col * D4;\n"
+    "#pragma unroll\n"
+    "            for (int s4 = 0; s4 < HD / 4; ++s4) {\n"
+    "                float4 kk = kr[(half * (HD / 4) + s4) ^ (col & 7u)];\n"
+    "                sc = __builtin_amdgcn_mfma_f32_32x32x2f32(kk.x, qr[4 * s4 + 0], sc, 0, 0, 0);\n"
+    "                sc = __builtin_amdgcn_mfma_f32_32x32x2f32(kk.y, qr[4 * s4 + 1], sc, 0, 0, 0);\n"
+    "                sc = __builtin_amdgcn_mfma_f32_32x32x2f32(kk.z, qr[4 * s4 + 2], sc, 0, 0, 0);\n"
+    "                sc = __builtin_amdgcn_mfma_f32_32x32x2f32(kk.w, qr[4 * s4 + 3], sc, 0, 0, 0);\n"
+    "            }\n"
+    "            float a[16];\n"
+    "#pragma unroll\n"
+    "            for (int r = 0; r < 16; ++r) {\n"
+    "                unsigned kl = 8u * (r / 4) + 4u * half + (r % 4);\n"
+    "                a[r] = (t < wave || kl <= col) ? sc[r] : 0.0f;\n"
+    "                den += a[r];\n"
+    "            }\n"
+    "#pragma unroll\n"
+    "            for (int r = 0; r < 16; ++r) {\n"
+    "                const float* vr = Vs + (8u * (r / 4) + 4u * half + (r % 4)) * DO + col;\n"
+    "#pragma unroll\n"
+    "                for (int b = 0; b < NB; ++b)\n"
+    "                    acc[b] = __builtin_amdgcn_mfma_f32_32x32x2f32(vr[32 * b], a[r], acc[b], 0, 0, 0);\n"
+    "            }\n"
+    "        }\n"
+    "    }\n"
+    "    // inter-chunk: acc^T += S^T phi(Q)^T, den += phi(q) . z\n"
+    "#pragma unroll\n"
+    "    for (int s = 0; s < HD; ++s) den = fmaf(qr[s], Zs[half * HD + s], den);\n"
+    "#pragma unroll\n"
+    "    for (int p = 0; p < NP; ++p) {\n"
+    "        __syncthreads();\n"
+    "        for (unsigned e = threadIdx.x; e < WR * DO / 4; e += blockDim.x) {\n"
+    "            unsigned rr = e / (DO / 4), c4 = e % (DO / 4);\n"
+    "            unsigned grow = (rr / SP) * HD + p * SP + (rr % SP);\n"
+    "            *(float4*)&Wl[rr * DO + 4u * c4] = *(const float4*)(Ws + (unsigned long long)grow * DM + c0 + 4u * c4);\n"
+    "        }\n"
+    "        __syncthreads();\n"
+    "#pragma unroll\n"
+    "        for (int s = 0; s < SP; ++s) {\n"
+    "            const float* wr = Wl + (half * SP + s) * DO + col;\n"
+    "#pragma unroll\n"
+    "            for (int b = 0; b < NB; ++b)\n"
+    "                acc[b] = __builtin_amdgcn_mfma_f32_32x32x2f32(wr[32 * b], qr[p * SP + s], acc[b], 0, 0, 0);\n"
+    "        }\n"
+    "    }\n"
+    "    den += __shfl_xor(den, 32);\n"
+    "    const float inv = den != 0.0f ? 1.0f / den : 0.0f;\n"
+    "    // stage the wave's 32 x DO tile in LDS (all of Ks/Vs/Wl is free now), then\n"
+    "    // write whole row segments\n"
+    "    __syncthreads();\n"
+    "    float4* st = pool + wave * 32u * (DO / 4);   // [32][DO/4] float4, column index ^ (row & 15)\n"
+    "#pragma unroll\n"
+    "    for (int b = 0; b < NB; ++b)\n"
+    "#pragma unroll\n"
+    "        for (int r4 = 0; r4 < 4; ++r4) {\n"
+    "            unsigned c4 = 8u * b + 2u * r4 + half;\n"
+    "            st[col * (DO / 4) + (c4 ^ (col & 15u))] = make_float4(acc[b][4 * r4] * inv, acc[b][4 * r4 + 1] * inv,\n"
+    "                                                           acc[b][4 * r4 + 2] * inv, acc[b][4 * r4 + 3] * inv);\n"
+    "        }\n"
+    "    __syncthreads();\n"
+    "    const unsigned rbase = blk * LA_R + wave * 32u;\n"
+    "    if ((d & 3u) == 0u) {\n"
+    "        for (unsigned e = lane; e < 32u * (DO / 4); e += 64u) {\n"
+    "            unsigned rr = e / (DO / 4), c = 4u * (e % (DO / 4));\n"
+    "            if (rbase + rr < seq && c0 + c < d)\n"
+    "                *(float4*)(O + ((unsigned long long)h * seq + rbase + rr) * d + c0 + c) = st[rr * (DO / 4) + ((c / 4u) ^ (rr & 15u))];\n"
+    "        }\n"
+    "    } else {\n"
+    "        for (unsigned e = lane; e < 32u * DO; e += 64u) {\n"
+    "            unsigned rr = e / DO, c = e % DO;\n"
+    "            if (rbase + rr < seq && c0 + c < d)\n"
+    "                O[((unsigned long long)h * seq + rbase + rr) * d + c0 + c] = ((const float*)&st[rr * (DO / 4) + ((c / 4u) ^ (rr & 15u))])[c & 3u];\n"
+    "        }\n"
+    "    }\n"
+    "}\n"
+    "\n"
+    "// Causal linear attention in one pass. Block = (chunk c of LA_R rows, head h,\n"
+    "// column slice z), taken in chunk order from an atomic ticket. It loads the\n"
+    "// chunk's K/V tiles once and uses them twice: for the masked intra-chunk term\n"
+    "// and for the chunk's own state S_c = phi(K_c)^T V_c (slice z). The prefix of\n"
+    "// earlier chunks comes from a decoupled look-back (Merrill & Garland): each\n"
+    "// block publishes S_c (flag 1) right away, then sums predecessors' states\n"
+    "// back to the first one that has published an inclusive prefix (flag 2), and\n"
+    "// publishes its own inclusive prefix. Blocks only ever wait on lower tickets,\n"
+    "// which are already running, so the waits always end.\n"
+    "__device__ __forceinline__ float la_ldg(const float* p) {\n"
+    "    return __hip_atomic_load((float*)p, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);\n"
+    "}\n"
+    "template <int DM, int DO>\n"
+    "__device__ __forceinline__ void la_causal_impl(const float* __restrict__ Q, const float* __restrict__ K,\n"
+    "                                               const float* __restrict__ V, float* __restrict__ R,\n"
+    "                                               int* __restrict__ F, float* __restrict__ O,\n"
+    "                                               unsigned seq, unsigned heads, unsigned d, unsigned nc) {\n"
+    "    constexpr int HD = DM / 2, NB = DO / 32, D4 = DM / 4, NZ = DM / DO;\n"
+    "    constexpr int RS = DM * DO + DM;                       // one record: state slice, then z\n"
+    "    constexpr int BJ = DO / 32, NBL = (DM / 32) * BJ, PW = (NBL + 3) / 4;\n"
+    "    constexpr int P1 = LA_T * DM + LA_T * DO, P2 = DM * DO, P3 = 4 * 32 * DO;\n"
+    "    constexpr int PM = P1 > P2 ? (P1 > P3 ? P1 : P3) : (P2 > P3 ? P2 : P3);\n"
+    "    constexpr int POOL = PM >= P2 + DM + 4 ? PM : P2 + DM + 4;   // Pl, then Zp and two flags after it\n"
+    "    __shared__ float4 pool[POOL / 4];\n"
+    "    float* Zp = (float*)pool + P2;\n"
+    "    unsigned& s_tk = *(unsigned*)((float*)pool + P2 + DM);\n"
+    "    int& s_flag = *(int*)((float*)pool + P2 + DM + 1);\n"
+    "    float4* Ks = pool;\n"
+    "    float* Vs = (float*)(pool + LA_T * D4);\n"
+    "    float* Pl = (float*)pool;\n"
+    "    const float* kf = (const float*)Ks;\n"
+    "    if (threadIdx.x == 0) s_tk = atomicAdd((unsigned*)(F + heads * NZ * nc), 1u);\n"
+    "    __syncthreads();\n"
+    "    const unsigned tk = s_tk % (nc * heads * NZ);   // wraps if the kernel is replayed without the reset\n"
+    "    __syncthreads();                         // the pool is reused below\n"
+    "    const unsigned c = tk / (heads * NZ), hz = tk % (heads * NZ), h = hz / NZ, z = hz % NZ, c0 = z * DO;\n"
+    "    const unsigned kv = seq;\n"
+    "    const unsigned lane = threadIdx.x & 63u, wave = threadIdx.x >> 6, col = lane & 31u, half = lane >> 5;\n"
+    "    const unsigned row = c * LA_R + wave * 32u + col;\n"
+    "    float qr[HD];\n"
+    "    {\n"
+    "        float4* qs = pool;\n"
+    "        constexpr int QCH = POOL / (4 * 32 * DM) >= 1 ? 32 : 32 * POOL / (4 * 32 * DM);\n"
+    "        for (unsigned r0 = 0; r0 < 32u; r0 += QCH) {\n"
+    "            __syncthreads();\n"
+    "            for (unsigned e = threadIdx.x; e < 4u * QCH * D4; e += blockDim.x) {\n"
+    "                unsigned wr = e / (QCH * D4), rr = (e / D4) % QCH, c4 = e % D4;\n"
+    "                unsigned grow = c * LA_R + wr * 32u + r0 + rr, cc = 4u * c4;\n"
+    "                float4 x = make_float4(0.f, 0.f, 0.f, 0.f);\n"
+    "                if (grow < seq && cc < d)\n"
+    "                    x = la_ld4(Q + ((unsigned long long)h * seq + grow) * d + cc, cc, d, (d & 3u) == 0u, true);\n"
+    "                qs[(wr * QCH + rr) * D4 + (c4 ^ (rr & 7u))] = x;\n"
+    "            }\n"
+    "            __syncthreads();\n"
+    "            if (col >= r0 && col < r0 + QCH) {\n"
+    "                const unsigned rr = col - r0;\n"
+    "#pragma unroll\n"
+    "                for (int s4 = 0; s4 < HD / 4; ++s4) {\n"
+    "                    float4 x = qs[(wave * QCH + rr) * D4 + ((half * (HD / 4) + s4) ^ (rr & 7u))];\n"
+    "                    qr[4 * s4] = x.x; qr[4 * s4 + 1] = x.y; qr[4 * s4 + 2] = x.z; qr[4 * s4 + 3] = x.w;\n"
+    "                }\n"
+    "            }\n"
+    "        }\n"
+    "    }\n"
+    "    fm_v16 acc[NB], st[PW];\n"
+    "    float den = 0.0f, zl = 0.0f;\n"
+    "#pragma unroll\n"
+    "    for (int b = 0; b < NB; ++b)\n"
+    "#pragma unroll\n"
+    "        for (int r = 0; r < 16; ++r) acc[b][r] = 0.0f;\n"
+    "#pragma unroll\n"
+    "    for (int b = 0; b < PW; ++b)\n"
+    "#pragma unroll\n"
+    "        for (int r = 0; r < 16; ++r) st[b][r] = 0.0f;\n"
+    "    {\n"
+    "        const float* Kh = K + (unsigned long long)h * kv * d;\n"
+    "        const float* Vh = V + (unsigned long long)h * kv * d;\n"
+    "        const unsigned cs = c * LA_R;\n"
+    "        LaTile<DM, DO> tile;\n"
+    "        la_fetch<DM, DO>(tile, Kh, Vh, cs, kv, d, c0);\n"
+    "        for (unsigned t = 0; t < LA_R / LA_T; ++t) {\n"
+    "            const unsigned j0 = cs + t * LA_T;\n"
+    "            if (j0 >= kv) break;\n"
+    "            __syncthreads();\n"
+    "            la_put<DM, DO>(tile, Ks, Vs);\n"
+    "            __syncthreads();\n"
+    "            if (t + 1 < LA_R / LA_T && j0 + LA_T < kv) la_fetch<DM, DO>(tile, Kh, Vh, j0 + LA_T, kv, d, c0);\n"
+    "            // the chunk's state slice: S[dk][dv] += sum_key phi(k)[dk] v[dv]\n"
+    "#pragma unroll\n"
+    "            for (int b = 0; b < PW; ++b) {\n"
+    "                const int bl = wave + 4 * b;\n"
+    "                if (bl < NBL) {\n"
+    "                    const unsigned dk = 32u * (bl / BJ) + col, dv = 32u * (bl % BJ) + col;\n"
+    "#pragma unroll\n"
+    "                    for (int s = 0; s < LA_T / 2; ++s) {\n"
+    "                        const unsigned key = 2u * s + half;\n"
+    "                        float a = kf[key * DM + ((((dk >> 2) ^ (key & 7u)) << 2) | (dk & 3u))];\n"
+    "                        st[b] = __builtin_amdgcn_mfma_f32_32x32x2f32(a, Vs[key * DO + dv], st[b], 0, 0, 0);\n"
+    "                    }\n"
+    "                }\n"
+    "            }\n"
+    "            if (threadIdx.x < DM) {\n"
+    "                const unsigned dk = threadIdx.x;\n"
+    "#pragma unroll 8\n"
+    "                for (int key = 0; key < LA_T; ++key) zl += kf[key * DM + ((((dk >> 2) ^ (key & 7u)) << 2) | (dk & 3u))];\n"
+    "            }\n"
+    "            if (t <= wave) {\n"
+    "                fm_v16 sc;\n"
+    "#pragma unroll\n"
+    "                for (int r = 0; r < 16; ++r) sc[r] = 0.0f;\n"
+    "                const float4* kr = Ks + col * D4;\n"
+    "#pragma unroll\n"
+    "                for (int s4 = 0; s4 < HD / 4; ++s4) {\n"
+    "                    float4 kk = kr[(half * (HD / 4) + s4) ^ (col & 7u)];\n"
+    "                    sc = __builtin_amdgcn_mfma_f32_32x32x2f32(kk.x, qr[4 * s4 + 0], sc, 0, 0, 0);\n"
+    "                    sc = __builtin_amdgcn_mfma_f32_32x32x2f32(kk.y, qr[4 * s4 + 1], sc, 0, 0, 0);\n"
+    "                    sc = __builtin_amdgcn_mfma_f32_32x32x2f32(kk.z, qr[4 * s4 + 2], sc, 0, 0, 0);\n"
+    "                    sc = __builtin_amdgcn_mfma_f32_32x32x2f32(kk.w, qr[4 * s4 + 3], sc, 0, 0, 0);\n"
+    "                }\n"
+    "                float a[16];\n"
+    "#pragma unroll\n"
+    "                for (int r = 0; r < 16; ++r) {\n"
+    "                    unsigned kl = 8u * (r / 4) + 4u * half + (r % 4);\n"
+    "                    a[r] = (t < wave || kl <= col) ? sc[r] : 0.0f;\n"
+    "                    den += a[r];\n"
+    "                }\n"
+    "#pragma unroll\n"
+    "                for (int r = 0; r < 16; ++r) {\n"
+    "                    const float* vr = Vs + (8u * (r / 4) + 4u * half + (r % 4)) * DO + col;\n"
+    "#pragma unroll\n"
+    "                    for (int b = 0; b < NB; ++b)\n"
+    "                        acc[b] = __builtin_amdgcn_mfma_f32_32x32x2f32(vr[32 * b], a[r], acc[b], 0, 0, 0);\n"
+    "                }\n"
+    "            }\n"
+    "        }\n"
+    "    }\n"
+    "    // publish S_c: inclusive already for chunk 0\n"
+    "    float* Rh = R + (unsigned long long)(h * NZ + z) * nc * 2u * RS;\n"
+    "    int* Fh = F + (h * NZ + z) * nc;\n"
+    "    {\n"
+    "        float* rp = Rh + ((unsigned long long)c * 2u + (c == 0 ? 1u : 0u)) * RS;\n"
+    "#pragma unroll\n"
+    "        for (int b = 0; b < PW; ++b) {\n"
+    "            const int bl = wave + 4 * b;\n"
+    "            if (bl < NBL)\n"
+    "#pragma unroll\n"
+    "                for (int r = 0; r < 16; ++r)\n"
+    "                    rp[(32u * (bl / BJ) + 8u * (r / 4) + 4u * half + (r % 4)) * DO + 32u * (bl % BJ) + col] = st[b][r];\n"
+    "        }\n"
+    "        if (threadIdx.x < DM) rp[DM * DO + threadIdx.x] = zl;\n"
+    "        __threadfence();\n"
+    "        __syncthreads();\n"
+    "        if (threadIdx.x == 0) __hip_atomic_store(&Fh[c], c == 0 ? 2 : 1, __ATOMIC_RELEASE, __HIP_MEMORY_SCOPE_AGENT);\n"
+    "    }\n"
+    "    // look back: Pl, Zp = sums over chunks < c\n"
+    "    for (unsigned e = threadIdx.x; e < DM * DO; e += blockDim.x) Pl[e] = 0.0f;\n"
+    "    if (threadIdx.x < DM) Zp[threadIdx.x] = 0.0f;\n"
+    "    __syncthreads();\n"
+    "    for (int u = (int)c - 1; u >= 0; --u) {\n"
+    "        if (threadIdx.x == 0) {\n"
+    "            int f;\n"
+    "            while ((f = __hip_atomic_load(&Fh[u], __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_AGENT)) == 0) __builtin_amdgcn_s_sleep(1);\n"
+    "            s_flag = f;\n"
+    "        }\n"
+    "        __syncthreads();\n"
+    "        const int f = s_flag;\n"
+    "        const float* rp = Rh + ((unsigned long long)u * 2u + (f == 2 ? 1u : 0u)) * RS;\n"
+    "        for (unsigned e = threadIdx.x; e < DM * DO; e += blockDim.x) Pl[e] += la_ldg(rp + e);\n"
+    "        if (threadIdx.x < DM) Zp[threadIdx.x] += la_ldg(rp + DM * DO + threadIdx.x);\n"
+    "        __syncthreads();\n"
+    "        if (f == 2) break;\n"
+    "    }\n"
+    "    if (c > 0) {\n"
+    "        float* rp = Rh + ((unsigned long long)c * 2u + 1u) * RS;\n"
+    "#pragma unroll\n"
+    "        for (int b = 0; b < PW; ++b) {\n"
+    "            const int bl = wave + 4 * b;\n"
+    "            if (bl < NBL)\n"
+    "#pragma unroll\n"
+    "                for (int r = 0; r < 16; ++r) {\n"
+    "                    const unsigned i = (32u * (bl / BJ) + 8u * (r / 4) + 4u * half + (r % 4)) * DO + 32u * (bl % BJ) + col;\n"
+    "                    rp[i] = Pl[i] + st[b][r];\n"
+    "                }\n"
+    "        }\n"
+    "        if (threadIdx.x < DM) rp[DM * DO + threadIdx.x] = Zp[threadIdx.x] + zl;\n"
+    "        __threadfence();\n"
+    "        __syncthreads();\n"
+    "        if (threadIdx.x == 0) __hip_atomic_store(&Fh[c], 2, __ATOMIC_RELEASE, __HIP_MEMORY_SCOPE_AGENT);\n"
+    "    }\n"
+    "    // inter-chunk: acc^T += P^T phi(Q)^T, den += phi(q) . z\n"
+    "#pragma unroll\n"
+    "    for (int s = 0; s < HD; ++s) {\n"
+    "        den = fmaf(qr[s], Zp[half * HD + s], den);\n"
+    "        const float* wr = Pl + (half * HD + s) * DO + col;\n"
+    "#pragma unroll\n"
+    "        for (int b = 0; b < NB; ++b)\n"
+    "            acc[b] = __builtin_amdgcn_mfma_f32_32x32x2f32(wr[32 * b], qr[s], acc[b], 0, 0, 0);\n"
+    "    }\n"
+    "    den += __shfl_xor(den, 32);\n"
+    "    const float inv = den != 0.0f ? 1.0f / den : 0.0f;\n"
+    "    __syncthreads();\n"
+    "    constexpr unsigned SWM = (DO / 4 < 16 ? DO / 4 : 16) - 1;   // swizzle within a staged row\n"
+    "    float4* sto = pool + wave * 32u * (DO / 4);\n"
+    "#pragma unroll\n"
+    "    for (int b = 0; b < NB; ++b)\n"
+    "#pragma unroll\n"
+    "        for (int r4 = 0; r4 < 4; ++r4) {\n"
+    "            unsigned c4 = 8u * b + 2u * r4 + half;\n"
+    "            sto[col * (DO / 4) + (c4 ^ (col & SWM))] = make_float4(acc[b][4 * r4] * inv, acc[b][4 * r4 + 1] * inv,\n"
+    "                                                                  acc[b][4 * r4 + 2] * inv, acc[b][4 * r4 + 3] * inv);\n"
+    "        }\n"
+    "    __syncthreads();\n"
+    "    const unsigned rbase = c * LA_R + wave * 32u;\n"
+    "    if ((d & 3u) == 0u) {\n"
+    "        for (unsigned e = lane; e < 32u * (DO / 4); e += 64u) {\n"
+    "            unsigned rr = e / (DO / 4), cc = 4u * (e % (DO / 4));\n"
+    "            if (rbase + rr < seq && c0 + cc < d)\n"
+    "                *(float4*)(O + ((unsigned long long)h * seq + rbase + rr) * d + c0 + cc) = sto[rr * (DO / 4) + ((cc / 4u) ^ (rr & SWM))];\n"
+    "        }\n"
+    "    } else {\n"
+    "        for (unsigned e = lane; e < 32u * DO; e += 64u) {\n"
+    "            unsigned rr = e / DO, cc = e % DO;\n"
+    "            if (rbase + rr < seq && c0 + cc < d)\n"
+    "                O[((unsigned long long)h * seq + rbase + rr) * d + c0 + cc] = ((const float*)&sto[rr * (DO / 4) + ((cc / 4u) ^ (rr & SWM))])[cc & 3u];\n"
+    "        }\n"
+    "    }\n"
+    "}\n"
+    "#endif\n"
+    "#if SAFEC_MFMA\n"
+    "#define FM_ATTR(minb) __launch_bounds__(256, minb)\n"
+    "#else\n"
+    "#define FM_ATTR(minb) __launch_bounds__(256)\n"
+    "#endif\n"
+    "extern \"C\" __global__ FM_ATTR(2) void flash_mfma_d64(const float* Q, const float* K, const float* V, float* O,\n"
+    "        unsigned seq, unsigned kv, unsigned d, float scale, int causal) {\n"
+    "#if SAFEC_MFMA\n"
+    "    flash_m32_impl<64>(Q, K, V, O, seq, kv, d, scale, causal);\n"
+    "#endif\n"
+    "}\n"
+    "extern \"C\" __global__ FM_ATTR(2) void flash_mfma_d128(const float* Q, const float* K, const float* V, float* O,\n"
+    "        unsigned seq, unsigned kv, unsigned d, float scale, int causal) {\n"
+    "#if SAFEC_MFMA\n"
+    "    flash_m16_impl<128>(Q, K, V, O, seq, kv, d, scale, causal);\n"
+    "#endif\n"
+    "}\n"
+    "extern \"C\" __global__ FM_ATTR(3) void la_state_d64(const float* K, const float* V, float* W, float* Z,\n"
+    "        unsigned kv, unsigned d, unsigned rows, unsigned nc) {\n"
+    "#if SAFEC_MFMA\n"
+    "    la_state_impl<64>(K, V, W, Z, kv, d, rows, nc);\n"
+    "#endif\n"
+    "}\n"
+    "extern \"C\" __global__ FM_ATTR(2) void la_state_d128(const float* K, const float* V, float* W, float* Z,\n"
+    "        unsigned kv, unsigned d, unsigned rows, unsigned nc) {\n"
+    "#if SAFEC_MFMA\n"
+    "    la_state_impl<128>(K, V, W, Z, kv, d, rows, nc);\n"
+    "#endif\n"
+    "}\n"
+    "extern \"C\" __global__ __launch_bounds__(256) void la_scan_d64(float* W, float* Z, unsigned nc, int causal) {\n"
+    "#if SAFEC_MFMA\n"
+    "    la_scan_impl<64>(W, Z, nc, causal);\n"
+    "#endif\n"
+    "}\n"
+    "extern \"C\" __global__ __launch_bounds__(256) void la_scan_d128(float* W, float* Z, unsigned nc, int causal) {\n"
+    "#if SAFEC_MFMA\n"
+    "    la_scan_impl<128>(W, Z, nc, causal);\n"
+    "#endif\n"
+    "}\n"
+    "extern \"C\" __global__ FM_ATTR(2) void la_out_d64(const float* Q, const float* K, const float* V, const float* W,\n"
+    "        const float* Z, float* O, unsigned seq, unsigned kv, unsigned d, unsigned nc, int causal) {\n"
+    "#if SAFEC_MFMA\n"
+    "    la_out_impl<64, 64>(Q, K, V, W, Z, O, seq, kv, d, nc, causal);\n"
+    "#endif\n"
+    "}\n"
+    "extern \"C\" __global__ FM_ATTR(2) void la_out_d128(const float* Q, const float* K, const float* V, const float* W,\n"
+    "        const float* Z, float* O, unsigned seq, unsigned kv, unsigned d, unsigned nc, int causal) {\n"
+    "#if SAFEC_MFMA\n"
+    "    la_out_impl<128, 64>(Q, K, V, W, Z, O, seq, kv, d, nc, causal);\n"
+    "#endif\n"
+    "}\n"
+    "extern \"C\" __global__ FM_ATTR(2) void la_causal_d64(const float* Q, const float* K, const float* V, float* R,\n"
+    "        int* F, float* O, unsigned seq, unsigned heads, unsigned d, unsigned nc) {\n"
+    "#if SAFEC_MFMA\n"
+    "    la_causal_impl<64, 64>(Q, K, V, R, F, O, seq, heads, d, nc);\n"
+    "#endif\n"
     "}\n";
 }
 
@@ -555,7 +1429,17 @@ static const char* rocm_kernel_source_() {
 #define K_LIN_STATE 28
 #define K_LIN_PREFIX 29
 #define K_LIN_OUT 30
-#define K_COUNT 31
+#define K_MFMA_PROBE 31
+#define K_FLASH_M64 32
+#define K_FLASH_M128 33
+#define K_LA_STATE64 34
+#define K_LA_STATE128 35
+#define K_LA_SCAN64 36
+#define K_LA_SCAN128 37
+#define K_LA_OUT64 38
+#define K_LA_OUT128 39
+#define K_LA_CAUSAL64 40
+#define K_COUNT 41
 
 static const char* rocm_kernel_name_(int k) {
     if (k == K_ADD) return "ew_add";
@@ -588,6 +1472,16 @@ static const char* rocm_kernel_name_(int k) {
     if (k == K_LIN_STATE) return "lin_attn_state";
     if (k == K_LIN_PREFIX) return "lin_attn_prefix";
     if (k == K_LIN_OUT) return "lin_attn_out";
+    if (k == K_MFMA_PROBE) return "mfma_probe";
+    if (k == K_FLASH_M64) return "flash_mfma_d64";
+    if (k == K_FLASH_M128) return "flash_mfma_d128";
+    if (k == K_LA_STATE64) return "la_state_d64";
+    if (k == K_LA_STATE128) return "la_state_d128";
+    if (k == K_LA_SCAN64) return "la_scan_d64";
+    if (k == K_LA_SCAN128) return "la_scan_d128";
+    if (k == K_LA_OUT64) return "la_out_d64";
+    if (k == K_LA_OUT128) return "la_out_d128";
+    if (k == K_LA_CAUSAL64) return "la_causal_d64";
     return "mse_grad";
 }
 
@@ -597,6 +1491,8 @@ static void* g_rocm_stream = (void*)0;
 static void* g_rocm_blas = (void*)0;
 static void* g_rocm_fn[K_COUNT];
 static char  g_rocm_name[256];
+static int   g_rocm_mfma = 0;         // 1 = the MFMA attention kernels run (matrix cores, not switched off)
+static int   g_rocm_mfma_has = 0;     // 1 = the GPU has matrix cores (CDNA)
 
 // Initializes everything once: picks the GPU with the most compute units
 // (discrete before integrated), creates the stream and rocBLAS handle, and
@@ -648,12 +1544,33 @@ static int rocm_ensure_() {
             if (hipModuleGetFunction(&g_rocm_fn[k], module, rocm_kernel_name_(k)) != ROCM_HIP_OK) return 0;
             k = k + 1;
         }
+        // Ask the compiled code whether this GPU has matrix cores (the kernel
+        // source knows the target; the host API doesn't say).
+        void* flag = (void*)0;
+        if (hipMalloc(&flag, 4UL) == ROCM_HIP_OK) {
+            void* pp[1];
+            pp[0] = (void*)&flag;
+            float has = 0.0f;
+            if (hipModuleLaunchKernel(g_rocm_fn[K_MFMA_PROBE], 1U, 1U, 1U, 64U, 1U, 1U, 0U, g_rocm_stream,
+                                      &pp[0], (void**)0) == ROCM_HIP_OK &&
+                hipMemcpyAsync((void*)&has, (const void*)flag, 4UL, ROCM_D2H, g_rocm_stream) == ROCM_HIP_OK &&
+                hipStreamSynchronize(g_rocm_stream) == ROCM_HIP_OK)
+                g_rocm_mfma_has = has == 1.0f ? 1 : 0;
+            g_rocm_mfma = g_rocm_mfma_has;
+            hipFree(flag);
+        }
     }
     g_rocm_state = 1;
     return 1;
 }
 
 int rocm_available() { return rocm_ensure_(); }
+
+int rocm_attention_use_mfma(int on) {
+    if (!rocm_ensure_()) return 0;
+    g_rocm_mfma = on && g_rocm_mfma_has ? 1 : 0;
+    return g_rocm_mfma;
+}
 
 const &char rocm_device_name() {
     rocm_ensure_();
@@ -1319,13 +2236,17 @@ int rocm_sum_f32(const &float a, &float out1, unsigned long n) {
 
 // ── Attention ────────────────────────────────────────────────────────────────
 
-static int rocm_launch_grid_(int kernel, unsigned long gx, unsigned long gy, &void params) {
-    if (gx == 0UL || gy == 0UL || gx > 2147483647UL || gy > 65535UL) return 0;
+static int rocm_launch_grid3_(int kernel, unsigned long gx, unsigned long gy, unsigned long gz, &void params) {
+    if (gx == 0UL || gy == 0UL || gz == 0UL || gx > 2147483647UL || gy > 65535UL || gz > 65535UL) return 0;
     unsafe {
-        return hipModuleLaunchKernel(g_rocm_fn[kernel], (unsigned int)gx, (unsigned int)gy, 1U,
+        return hipModuleLaunchKernel(g_rocm_fn[kernel], (unsigned int)gx, (unsigned int)gy, (unsigned int)gz,
                                      ROCM_BLOCK, 1U, 1U, 0U, g_rocm_stream,
                                      (void**)params, (void**)0) == ROCM_HIP_OK;
     }
+}
+
+static int rocm_launch_grid_(int kernel, unsigned long gx, unsigned long gy, &void params) {
+    return rocm_launch_grid3_(kernel, gx, gy, 1UL, params);
 }
 
 static int rocm_attn_shape_ok_(struct RocmBuf q, struct RocmBuf k, struct RocmBuf v, struct RocmBuf out,
@@ -1355,6 +2276,11 @@ int rocm_flash_attention(struct RocmBuf q, struct RocmBuf k, struct RocmBuf v, s
         params[0] = (void*)&pq; params[1] = (void*)&pk; params[2] = (void*)&pv; params[3] = (void*)&po;
         params[4] = (void*)&s; params[5] = (void*)&kn; params[6] = (void*)&d; params[7] = (void*)&sc;
         params[8] = (void*)&ca;
+        if (g_rocm_mfma) {
+            // matrix cores: grid (heads, query blocks of 128 / 64 rows)
+            if (headDim <= 64UL) return rocm_launch_grid_(K_FLASH_M64, heads, (seqLen + 127UL) / 128UL, (&void)&params[0]);
+            return rocm_launch_grid_(K_FLASH_M128, heads, (seqLen + 63UL) / 64UL, (&void)&params[0]);
+        }
         return rocm_launch_grid_(headDim <= 64UL ? K_FLASH64 : K_FLASH128, (seqLen + 63UL) / 64UL, heads,
                                  (&void)&params[0]);
     }
@@ -1365,20 +2291,96 @@ int rocm_flash_attention(struct RocmBuf q, struct RocmBuf k, struct RocmBuf v, s
 static struct RocmBuf g_rocm_lin_scratch;
 static int g_rocm_lin_init = 0;
 
+// Grows the linear-attention scratch to 'need' floats (not during capture).
+static int rocm_lin_scratch_(unsigned long need) {
+    if (!g_rocm_lin_init) { g_rocm_lin_scratch.dev = 0UL; g_rocm_lin_scratch.len = 0UL; g_rocm_lin_init = 1; }
+    if (g_rocm_lin_scratch.len >= need) return 1;
+    if (g_rocm_capturing) return 0;
+    rocm_free(&g_rocm_lin_scratch);
+    g_rocm_lin_scratch = rocm_alloc(need);
+    if (g_rocm_lin_scratch.dev == 0UL) { g_rocm_lin_scratch.len = 0UL; return 0; }
+    return 1;
+}
+
+// Matrix-core linear attention. Causal with head dim <= 64: one fused pass
+// (la_causal_d64, decoupled look-back over 128-row chunks). Otherwise three
+// passes: per-chunk states (128-row chunks; non-causal uses longer row ranges
+// once there would be more than 64 of them), a scan over chunks, then the
+// output pass. Head dims are padded to 64 or 128.
+static int rocm_linear_attention_mfma_(struct RocmBuf q, struct RocmBuf k, struct RocmBuf v, struct RocmBuf out,
+                                       unsigned long heads, unsigned long seqLen, unsigned long kvLen,
+                                       unsigned long headDim, int causal) {
+    unsigned long dm = headDim <= 64UL ? 64UL : 128UL;
+    if (causal && dm == 64UL) {
+        // one pass: per-chunk records (state, then inclusive prefix) and a
+        // flag per chunk plus a ticket counter after them, zeroed per call
+        unsigned long ncc = (seqLen + 127UL) / 128UL;
+        unsigned long rs = 64UL * 64UL + 64UL;
+        unsigned long recs = heads * ncc * 2UL * rs;
+        if (!rocm_lin_scratch_(recs + heads * ncc + 1UL)) return 0;
+        unsafe {
+            void* pq = (void*)q.dev;
+            void* pk = (void*)k.dev;
+            void* pv = (void*)v.dev;
+            void* po = (void*)out.dev;
+            void* pr = (void*)g_rocm_lin_scratch.dev;
+            void* pf = (void*)(g_rocm_lin_scratch.dev + recs * 4UL);
+            if (hipMemsetAsync(pf, 0, (heads * ncc + 1UL) * 4UL, g_rocm_stream) != ROCM_HIP_OK) return 0;
+            unsigned int s = (unsigned int)seqLen;
+            unsigned int hn = (unsigned int)heads;
+            unsigned int d = (unsigned int)headDim;
+            unsigned int nc = (unsigned int)ncc;
+            void* pc[10];
+            pc[0] = (void*)&pq; pc[1] = (void*)&pk; pc[2] = (void*)&pv; pc[3] = (void*)&pr; pc[4] = (void*)&pf;
+            pc[5] = (void*)&po; pc[6] = (void*)&s; pc[7] = (void*)&hn; pc[8] = (void*)&d; pc[9] = (void*)&nc;
+            return rocm_launch_grid_(K_LA_CAUSAL64, ncc * heads, 1UL, (&void)&pc[0]);
+        }
+    }
+    unsigned long rows = 128UL;
+    if (!causal) rows = 128UL * (((kvLen + 127UL) / 128UL + 63UL) / 64UL);
+    unsigned long nchunks = (kvLen + rows - 1UL) / rows;
+    if (!rocm_lin_scratch_(heads * nchunks * dm * (dm + 1UL))) return 0;
+    int big = dm == 128UL;
+    unsafe {
+        void* pq = (void*)q.dev;
+        void* pk = (void*)k.dev;
+        void* pv = (void*)v.dev;
+        void* po = (void*)out.dev;
+        void* pw = (void*)g_rocm_lin_scratch.dev;
+        void* pz = (void*)(g_rocm_lin_scratch.dev + heads * nchunks * dm * dm * 4UL);
+        unsigned int s = (unsigned int)seqLen;
+        unsigned int kn = (unsigned int)kvLen;
+        unsigned int d = (unsigned int)headDim;
+        unsigned int rw = (unsigned int)rows;
+        unsigned int nc = (unsigned int)nchunks;
+        int ca = causal ? 1 : 0;
+        void* p1[8];
+        p1[0] = (void*)&pk; p1[1] = (void*)&pv; p1[2] = (void*)&pw; p1[3] = (void*)&pz; p1[4] = (void*)&kn;
+        p1[5] = (void*)&d; p1[6] = (void*)&rw; p1[7] = (void*)&nc;
+        if (!rocm_launch_grid_(big ? K_LA_STATE128 : K_LA_STATE64, nchunks, heads, (&void)&p1[0])) return 0;
+        if (causal || nchunks > 1UL) {
+            void* p2[4];
+            p2[0] = (void*)&pw; p2[1] = (void*)&pz; p2[2] = (void*)&nc; p2[3] = (void*)&ca;
+            if (!rocm_launch_grid_(big ? K_LA_SCAN128 : K_LA_SCAN64, (dm * dm + dm + 255UL) / 256UL, heads,
+                                   (&void)&p2[0])) return 0;
+        }
+        void* p3[11];
+        p3[0] = (void*)&pq; p3[1] = (void*)&pk; p3[2] = (void*)&pv; p3[3] = (void*)&pw; p3[4] = (void*)&pz;
+        p3[5] = (void*)&po; p3[6] = (void*)&s; p3[7] = (void*)&kn; p3[8] = (void*)&d; p3[9] = (void*)&nc;
+        p3[10] = (void*)&ca;
+        return rocm_launch_grid3_(big ? K_LA_OUT128 : K_LA_OUT64, (seqLen + 127UL) / 128UL, heads, dm / 64UL,
+                                  (&void)&p3[0]);
+    }
+}
+
 int rocm_linear_attention(struct RocmBuf q, struct RocmBuf k, struct RocmBuf v, struct RocmBuf out,
                           unsigned long heads, unsigned long seqLen, unsigned long kvLen, unsigned long headDim,
                           int causal) {
     if (!rocm_ensure_() || !rocm_attn_shape_ok_(q, k, v, out, heads, seqLen, kvLen, headDim)) return 0;
     if (causal && kvLen != seqLen) return 0;
+    if (g_rocm_mfma) return rocm_linear_attention_mfma_(q, k, v, out, heads, seqLen, kvLen, headDim, causal);
     unsigned long nchunks = (kvLen + 31UL) / 32UL;
-    unsigned long need = heads * nchunks * headDim * (headDim + 1UL);
-    if (!g_rocm_lin_init) { g_rocm_lin_scratch.dev = 0UL; g_rocm_lin_scratch.len = 0UL; g_rocm_lin_init = 1; }
-    if (g_rocm_lin_scratch.len < need) {
-        if (g_rocm_capturing) return 0;
-        rocm_free(&g_rocm_lin_scratch);
-        g_rocm_lin_scratch = rocm_alloc(need);
-        if (g_rocm_lin_scratch.dev == 0UL) { g_rocm_lin_scratch.len = 0UL; return 0; }
-    }
+    if (!rocm_lin_scratch_(heads * nchunks * headDim * (headDim + 1UL))) return 0;
     unsafe {
         void* pq = (void*)q.dev;
         void* pk = (void*)k.dev;
