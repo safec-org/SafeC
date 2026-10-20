@@ -1288,6 +1288,7 @@ void CodeGen::genStmt(Stmt &s, FnEnv &env) {
         // Register the defer body to be emitted at return/exit
         auto &ds = static_cast<DeferStmt &>(s);
         env.deferList.push_back(&ds);
+        env.deferLocals.push_back(env.locals);
         break;
     }
     case StmtKind::Match:
@@ -1415,6 +1416,11 @@ void CodeGen::collectGotoLabels(Stmt &s, FnEnv &env) {
 }
 
 void CodeGen::genCompound(CompoundStmt &s, FnEnv &env) {
+    // A declaration in this block shadows an outer one of the same name
+    // only until the block ends: restore the outer bindings on exit
+    // (otherwise '{ int r = 1; } r = r + 1;' after the block would update
+    // the inner 'r').
+    auto outerLocals = env.locals;
     for (auto &stmt : s.body) {
         // Once a statement has terminated the current block (return, or an
         // if/else where both arms already return, etc.), any further
@@ -1427,6 +1433,7 @@ void CodeGen::genCompound(CompoundStmt &s, FnEnv &env) {
             break;
         genStmt(*stmt, env);
     }
+    env.locals = std::move(outerLocals);
 }
 
 void CodeGen::genExprStmt(ExprStmt &s, FnEnv &env) {
@@ -1673,8 +1680,12 @@ void CodeGen::emitDefers(FnEnv &env, bool isErrorPath) {
         // Normal exit: skip errdefers (they're for the error path only).
         // Error exit: run everything — plain defers still owe their
         // cleanup, on top of whatever errdefers add.
-        if (isErrorPath || !ds->isErrDefer)
+        if (isErrorPath || !ds->isErrDefer) {
+            auto here = env.locals;
+            env.locals = env.deferLocals[p - 1];
             genStmt(*ds->body, env);
+            env.locals = std::move(here);
+        }
     }
 }
 

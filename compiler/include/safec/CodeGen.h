@@ -70,6 +70,11 @@ struct FnEnv {
 
     // Defer tracking — LIFO list of deferred stmts
     std::vector<Stmt *> deferList;
+    // The name → storage bindings in effect where each defer was written
+    // (parallel to deferList): defers are emitted at function exit, after
+    // genCompound has already restored the bindings of blocks they were
+    // declared in, so each one is emitted with its own snapshot.
+    std::vector<std::unordered_map<std::string, llvm::AllocaInst *>> deferLocals;
     // spawn_scoped handles awaiting their implicit join: (deferList.size()
     // at registration, alloca holding the i64 handle). Joined by
     // emitDefers in the same LIFO order as the defers around them.
