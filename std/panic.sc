@@ -1,11 +1,11 @@
 #pragma once
 #include <std/panic.h>
+#include <std/stderr_compat.h>
 
 namespace std {
 
 extern void abort();
 extern int fprintf(void* stream, const char* fmt, ...);
-extern void* stderr;
 #define NULL ((void*)0)
 
 // Stored as a raw pointer, not 'PanicHandler' directly: a '&static fn(...)'
@@ -35,7 +35,7 @@ inline noreturn void panic_at(const &char msg, const &char file, int line) {
 #else
     // Hosted mode: print diagnostics to stderr then abort.
     unsafe {
-        fprintf(stderr, "panic at %s:%d: %s\n", file, line, msg);
+        fprintf(SAFEC_STDERR_, "panic at %s:%d: %s\n", file, line, msg);
     }
     abort();
 #endif

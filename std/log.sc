@@ -1,10 +1,10 @@
 #pragma once
 #include <std/log.h>
+#include <std/stderr_compat.h>
 
 namespace std {
 
 extern int fprintf(void* stream, const char* fmt, ...);
-extern void* stderr;
 #define NULL ((void*)0)
 
 // Stored as a raw pointer (not 'LogBackend' directly): a '&static fn(...)'
@@ -50,7 +50,7 @@ void log_write(int level, const &char tag, const &char msg,
         default:              "?",
     };
     unsafe {
-        fprintf(stderr, "[%s] %s (%s:%d): %s\n", prefix, tag, file, line, msg);
+        fprintf(SAFEC_STDERR_, "[%s] %s (%s:%d): %s\n", prefix, tag, file, line, msg);
     }
 #endif
 }
