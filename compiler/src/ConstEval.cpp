@@ -792,6 +792,10 @@ void ConstEvalEngine::checkExprForConstevalCalls(const Expr &e,
 
 std::optional<ConstValue> ConstEvalEngine::evalExpr(const Expr &e) {
     Frame frame;
+    // The budget bounds one top-level evaluation (one global initializer,
+    // static_assert or array size), not the whole translation unit: two
+    // large compile-time tables in one file shouldn't starve each other.
+    instrBudget_ = kInstrBudget;
     return evalExprF(e, frame);
 }
 

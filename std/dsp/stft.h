@@ -52,4 +52,13 @@ void stft_inverse(const &Complex frames, unsigned long numFrames,
 double mr_stft_loss(const &double x, const &double y, unsigned long len,
                      const &unsigned long frameSizes, unsigned long numResolutions);
 
+// Single precision: stft_forward / stft_inverse on float and Complex32,
+// same layout and contracts (fft_batch_f32 / ifft_f32 underneath).
+void stft_forward_f32(const &float signal, unsigned long signalLen,
+                      unsigned long frameSize, unsigned long hopSize,
+                      int windowType, &Complex32 out);
+void stft_inverse_f32(const &Complex32 frames, unsigned long numFrames,
+                      unsigned long frameSize, unsigned long hopSize,
+                      int windowType, &float outSignal);
+
 } // namespace std

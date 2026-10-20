@@ -148,6 +148,7 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
         else if (tok.key == "build.libs")     m.build.libs     = splitList(tok.value);
         else if (tok.key == "build.lib_dirs") m.build.libDirs  = splitList(tok.value);
         else if (tok.key == "build.lto")      m.build.lto      = tok.value;
+        else if (tok.key == "build.blas")     m.build.blas     = tok.value;
         else if (tok.key == "build.crate_type") m.build.crateType = tok.value;
 
         // dependencies.*
@@ -176,6 +177,11 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
         throw std::runtime_error(srcName + ": build.crate_type must be "
                                  "\"bin\", \"staticlib\", or \"cdylib\", got \"" +
                                  m.build.crateType + "\"");
+    if (!m.build.blas.empty() && m.build.blas != "auto" && m.build.blas != "aocl" &&
+        m.build.blas != "mkl" && m.build.blas != "accelerate" && m.build.blas != "openblas" &&
+        m.build.blas != "none")
+        throw std::runtime_error(srcName + ": build.blas must be \"auto\", \"aocl\", \"mkl\", "
+                                 "\"accelerate\", \"openblas\" or \"none\", got \"" + m.build.blas + "\"");
     if (!m.build.lto.empty() && m.build.lto != "thin" && m.build.lto != "full")
         throw std::runtime_error(srcName + ": build.lto must be \"thin\" or "
                                  "\"full\", got \"" + m.build.lto + "\"");
@@ -240,6 +246,8 @@ std::string ManifestParser::serialize(const Manifest& m) {
     }
     if (!m.build.lto.empty())
         o << "lto        = \"" << m.build.lto << "\"\n";
+    if (!m.build.blas.empty())
+        o << "blas       = \"" << m.build.blas << "\"\n";
     if (!m.build.crateType.empty() && m.build.crateType != "bin")
         o << "crate_type = \"" << m.build.crateType << "\"\n";
 

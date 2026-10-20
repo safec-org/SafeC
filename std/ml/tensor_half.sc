@@ -170,9 +170,8 @@ struct HalfTensor half_matmul(const &HalfTensor a, const &HalfTensor b) {
     unsigned long n = b.shape[1];
     struct HalfTensor out = __half_alloc(m, n, 2UL, a.dtype);
     unsafe {
-        // Widen both operands once, accumulate in float32, round each
-        // output element once (p-outer order for sequential access, same
-        // reasoning as tensor_matmul).
+        // Widen both operands once, multiply in float32 with sgemm (SIMD,
+        // threaded, or the vendor BLAS), round each output element once.
         float* fa = (float*)malloc(sizeof(float) * (m * k > 0UL ? m * k : 1UL));
         float* fb = (float*)malloc(sizeof(float) * (k * n > 0UL ? k * n : 1UL));
         float* acc = (float*)malloc(sizeof(float) * (m * n > 0UL ? m * n : 1UL));
@@ -183,21 +182,12 @@ struct HalfTensor half_matmul(const &HalfTensor a, const &HalfTensor b) {
             fp16_to_f32_bulk((const unsigned short*)a.data, fa, m * k);
             fp16_to_f32_bulk((const unsigned short*)b.data, fb, k * n);
         }
-        unsigned long z = 0UL;
-        while (z < m * n) { acc[z] = (float)0.0; z = z + 1UL; }
-        unsigned long i = 0UL;
-        while (i < m) {
-            unsigned long p = 0UL;
-            while (p < k) {
-                float av = fa[i * k + p];
-                unsigned long j = 0UL;
-                while (j < n) {
-                    acc[i * n + j] = acc[i * n + j] + av * fb[p * n + j];
-                    j = j + 1UL;
-                }
-                p = p + 1UL;
-            }
-            i = i + 1UL;
+        if (k == 0UL) {
+            unsigned long z = 0UL;
+            while (z < m * n) { acc[z] = (float)0.0; z = z + 1UL; }
+        } else {
+            sgemm(SGEMM_NO_TRANS, SGEMM_NO_TRANS, m, n, k, (float)1.0, (const &float)fa, k,
+                  (const &float)fb, n, (float)0.0, (&float)acc, n);
         }
         if (a.dtype == TENSOR_BF16) f32_to_bf16_bulk((const float*)acc, (unsigned short*)out.data, m * n);
         else f32_to_fp16_bulk((const float*)acc, (unsigned short*)out.data, m * n);

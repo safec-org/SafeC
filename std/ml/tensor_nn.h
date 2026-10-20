@@ -17,6 +17,7 @@
 // compile as separate translation units and link together at build time
 // instead of textually pasting tensor_nn.sc's whole body into each backend.
 #include <std/ml/tensor.h>
+#include <std/simd/vmath.h>
 #include <std/math.h>
 #include <std/mem.h>
 
@@ -84,13 +85,8 @@ static void __relu_backward(void* selfPtr) {
         struct Tensor* a = __tensor_parent(selfT, 0UL);
         if (!a->requiresGrad) return;
         __tensor_ensure_grad(a);
-        unsigned long i = 0UL;
-        // Branchless, so the loop vectorizes.
-        while (i < selfT->size) {
-            float g = selfT->grad[i];
-            a->grad[i] = a->grad[i] + (a->data[i] > (float)0.0 ? g : (float)0.0);
-            i = i + 1UL;
-        }
+        __tensor_ew(EW_ACC_RELU, (const float*)selfT->grad, (const float*)a->data, (float)0.0,
+                    (float*)a->grad, selfT->size);
     }
 }
 
@@ -100,12 +96,8 @@ static void __sigmoid_backward(void* selfPtr) {
         struct Tensor* a = __tensor_parent(selfT, 0UL);
         if (a->requiresGrad) {
             __tensor_ensure_grad(a);
-            unsigned long i = 0UL;
-            while (i < selfT->size) {
-                float y = selfT->data[i];
-                a->grad[i] = a->grad[i] + selfT->grad[i] * y * ((float)1.0 - y);
-                i = i + 1UL;
-            }
+            __tensor_ew(EW_ACC_SIGB, (const float*)selfT->grad, (const float*)selfT->data, (float)0.0,
+                        (float*)a->grad, selfT->size);
         }
     }
 }
@@ -116,12 +108,8 @@ static void __tanh_t_backward(void* selfPtr) {
         struct Tensor* a = __tensor_parent(selfT, 0UL);
         if (a->requiresGrad) {
             __tensor_ensure_grad(a);
-            unsigned long i = 0UL;
-            while (i < selfT->size) {
-                float y = selfT->data[i];
-                a->grad[i] = a->grad[i] + selfT->grad[i] * ((float)1.0 - y * y);
-                i = i + 1UL;
-            }
+            __tensor_ew(EW_ACC_TANHB, (const float*)selfT->grad, (const float*)selfT->data, (float)0.0,
+                        (float*)a->grad, selfT->size);
         }
     }
 }
@@ -181,16 +169,25 @@ static void __gelu_backward(void* selfPtr) {
         if (a->requiresGrad) {
             __tensor_ensure_grad(a);
             float c = (float)0.7978845608028654; // sqrt(2/pi)
+            unsigned long n = selfT->size;
+            float* tb = (float*)malloc(sizeof(float) * n);
             unsigned long i = 0UL;
-            while (i < selfT->size) {
+            while (i < n) {
                 float x = a->data[i];
-                float u = c * (x + (float)0.044715 * x * x * x);
-                float t = tanh_f(u);
+                tb[i] = c * (x + (float)0.044715 * x * x * x);
+                i = i + 1UL;
+            }
+            vm_tanh_f32((const float*)tb, tb, n);
+            i = 0UL;
+            while (i < n) {
+                float x = a->data[i];
+                float t = tb[i];
                 float dudx = c * ((float)1.0 + (float)0.134145 * x * x);
                 float d = (float)0.5 * ((float)1.0 + t) + (float)0.5 * x * ((float)1.0 - t * t) * dudx;
                 a->grad[i] = a->grad[i] + selfT->grad[i] * d;
                 i = i + 1UL;
             }
+            free((void*)tb);
         }
     }
 }
@@ -201,14 +198,18 @@ static void __silu_backward(void* selfPtr) {
         struct Tensor* a = __tensor_parent(selfT, 0UL);
         if (a->requiresGrad) {
             __tensor_ensure_grad(a);
+            unsigned long n = selfT->size;
+            float* sb = (float*)malloc(sizeof(float) * n);
+            vm_sigmoid_f32((const float*)a->data, sb, n);
             unsigned long i = 0UL;
-            while (i < selfT->size) {
+            while (i < n) {
                 float x = a->data[i];
-                float s = (float)1.0 / ((float)1.0 + exp_f(-x));
+                float s = sb[i];
                 float d = s + x * s * ((float)1.0 - s);
                 a->grad[i] = a->grad[i] + selfT->grad[i] * d;
                 i = i + 1UL;
             }
+            free((void*)sb);
         }
     }
 }

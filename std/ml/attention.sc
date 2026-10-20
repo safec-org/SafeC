@@ -1,5 +1,6 @@
 // SafeC Standard Library — Attention implementation (see attention.h).
 #pragma once
+#include <std/simd/vmath.h>
 #include <std/stddef.h>
 #include <std/ml/attention.h>
 #include <std/ml/tensor.h>
@@ -26,20 +27,18 @@ extern void  free(void* ptr);
             if (v > rowMax) rowMax = v;
             c = c + 1UL;
         }
-        float sum = (float)0.0;
-        c = 0UL;
-        while (c < cols) {
-            float v;
-            unsafe { v = x->data[r * cols + c]; }
-            float e = exp_f(v - rowMax);
-            unsafe { out->data[r * cols + c] = e; }
-            sum = sum + e;
-            c = c + 1UL;
-        }
-        c = 0UL;
-        while (c < cols) {
-            unsafe { out->data[r * cols + c] = out->data[r * cols + c] / sum; }
-            c = c + 1UL;
+        unsafe {
+            float* y = &out->data[r * cols];
+            const float* xr = &x->data[r * cols];
+            c = 0UL;
+            while (c < cols) { y[c] = xr[c] - rowMax; c = c + 1UL; }
+            vm_exp_f32((const float*)y, y, cols);
+            float sum = (float)0.0;
+            c = 0UL;
+            while (c < cols) { sum = sum + y[c]; c = c + 1UL; }
+            float inv = (float)1.0 / sum;
+            c = 0UL;
+            while (c < cols) { y[c] = y[c] * inv; c = c + 1UL; }
         }
         r = r + 1UL;
     }

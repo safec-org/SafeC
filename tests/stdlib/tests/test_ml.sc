@@ -3,6 +3,8 @@
 // (checked against IEEE binary16 / bfloat16 bit patterns).
 #include <std/test/test.h>
 #include <std/ml/tensor_half.h>
+#include <std/ml/tensor_nn.h>
+#include <std/ml/cnn.h>
 
 static int near(float a, float b, float tol) {
     float d = a - b;
@@ -162,6 +164,137 @@ void t_loss_scaler() {
     }
 }
 
+
+// The same training loop on the heap and in a TensorArena: identical
+// losses and weights, parameters' gradients survive resets, and the arena
+// stops growing after the first step.
+static float arena_train(int useArena, &Tensor W, const &Tensor X, unsigned long* chunkBytes) {
+    struct TensorArena a = tensor_arena_new(65536UL);
+    float last = (float)0.0;
+    int step = 0;
+    unsigned long used0 = 0UL;
+    while (step < 20) {
+        if (useArena) tensor_arena_begin(&a);
+        tensor_zero_grad(W);
+        &Tensor y = tensor_matmul(X, W);
+        &Tensor r = tensor_relu(y);
+        &Tensor l = tensor_sum(tensor_mul(r, r));
+        tensor_backward(l);
+        unsafe {
+            last = l->data[0];
+            unsigned long i = 0UL;
+            while (i < W->size) { W->data[i] = W->data[i] - (float)0.01 * W->grad[i]; i = i + 1UL; }
+        }
+        if (useArena) {
+            tensor_arena_end();
+            if (step == 0) used0 = tensor_arena_used(&a);
+            if (step == 19) { unsafe { *chunkBytes = tensor_arena_used(&a) == used0 ? 1UL : 0UL; } }
+            tensor_arena_reset(&a);
+            ASSERT_TRUE(tensor_arena_used(&a) == 0UL);
+        }
+        step = step + 1;
+    }
+    tensor_arena_free(&a);
+    return last;
+}
+
+void t_tensor_arena() {
+    float xs[64];
+    float ws[32];
+    int i = 0;
+    while (i < 64) { xs[i] = (float)((i * 37) % 17 - 8) * (float)0.1; i = i + 1; }
+    i = 0;
+    while (i < 32) { ws[i] = (float)((i * 11) % 7 - 3) * (float)0.05; i = i + 1; }
+    &Tensor X = tensor_from_2d(&xs[0], 8UL, 8UL, 0);
+    &Tensor W1 = tensor_from_2d(&ws[0], 8UL, 4UL, 1);
+    &Tensor W2 = tensor_from_2d(&ws[0], 8UL, 4UL, 1);
+    unsigned long same = 0UL;
+    float a = arena_train(0, W1, X, &same);
+    float b = arena_train(1, W2, X, &same);
+    ASSERT_TRUE(a == b);
+    ASSERT_TRUE(same == 1UL);              // every step used the same bytes
+    int eq = 1;
+    unsigned long k = 0UL;
+    unsafe { while (k < 32UL) { if (W1->data[k] != W2->data[k]) eq = 0; k = k + 1UL; } }
+    ASSERT_TRUE(eq);
+    unsafe { ASSERT_TRUE(W2->grad != (float*)0 && W2->owner.is_null()); }   // parameters stay on the heap
+
+    // a tensor made inside the arena knows its owner, and free() leaves it alone
+    struct TensorArena ar = tensor_arena_new(0UL);
+    tensor_arena_begin(&ar);
+    &Tensor t = tensor_new_2d(3UL, 5UL, 0);
+    tensor_arena_end();
+    ASSERT_FALSE(t->owner.is_null());
+    t.free();
+    ASSERT_TRUE(tensor_arena_used(&ar) > 0UL);
+    tensor_arena_free(&ar);
+}
+
+// conv2d against a direct sum: 3x3 stride 1 (Winograd F(2x2,3x3)) with and
+// without padding, odd sizes so the last tiles hang over the edge, ReLU,
+// and a 5x5 / stride-2 layer (im2col).
+static double conv_ref_err(&Conv2D layer, unsigned long inC, unsigned long H, unsigned long W, int relu) {
+    struct FeatureMap in = feature_map_new(inC, H, W);
+    unsigned long n = inC * H * W;
+    unsigned long i = 0UL;
+    unsafe { while (i < n) { in.data[i] = (float)((double)((i * 7919UL) % 1000UL) / 500.0 - 1.0); i = i + 1UL; } }
+    struct FeatureMap out = relu ? conv2d_relu_forward(layer, &in) : conv2d_forward(layer, &in);
+    double worst = 0.0;
+    unsafe {
+        unsigned long oc = 0UL;
+        while (oc < out.channels) {
+            unsigned long oh = 0UL;
+            while (oh < out.height) {
+                unsigned long ow = 0UL;
+                while (ow < out.width) {
+                    double acc = (double)layer.bias[oc];
+                    unsigned long ic = 0UL;
+                    while (ic < inC) {
+                        unsigned long kh = 0UL;
+                        while (kh < layer.kH) {
+                            unsigned long kw = 0UL;
+                            while (kw < layer.kW) {
+                                long ih = (long)(oh * layer.stride + kh) - (long)layer.padding;
+                                long iw = (long)(ow * layer.stride + kw) - (long)layer.padding;
+                                if (ih >= 0L && ih < (long)H && iw >= 0L && iw < (long)W)
+                                    acc = acc + (double)layer.weight[((oc * inC + ic) * layer.kH + kh) * layer.kW + kw] *
+                                                (double)in.data[(ic * H + (unsigned long)ih) * W + (unsigned long)iw];
+                                kw = kw + 1UL;
+                            }
+                            kh = kh + 1UL;
+                        }
+                        ic = ic + 1UL;
+                    }
+                    if (relu && acc < 0.0) acc = 0.0;
+                    double e = acc - (double)out.data[(oc * out.height + oh) * out.width + ow];
+                    if (e < 0.0) e = -e;
+                    if (e > worst) worst = e;
+                    ow = ow + 1UL;
+                }
+                oh = oh + 1UL;
+            }
+            oc = oc + 1UL;
+        }
+    }
+    feature_map_free(&in);
+    feature_map_free(&out);
+    return worst;
+}
+
+void t_conv2d() {
+    struct Conv2D a = conv2d_new(16UL, 24UL, 3UL, 3UL, 1UL, 1UL);
+    ASSERT_TRUE(conv_ref_err(&a, 16UL, 13UL, 11UL, 0) < 1e-4);
+    ASSERT_TRUE(conv_ref_err(&a, 16UL, 13UL, 11UL, 1) < 1e-4);
+    ASSERT_TRUE(conv_ref_err(&a, 16UL, 40UL, 37UL, 0) < 1e-4);   // several tile blocks
+    conv2d_free(&a);
+    struct Conv2D b = conv2d_new(12UL, 8UL, 3UL, 3UL, 1UL, 0UL);  // no padding
+    ASSERT_TRUE(conv_ref_err(&b, 12UL, 15UL, 10UL, 0) < 1e-4);
+    conv2d_free(&b);
+    struct Conv2D c = conv2d_new(5UL, 7UL, 5UL, 5UL, 2UL, 2UL);   // im2col
+    ASSERT_TRUE(conv_ref_err(&c, 5UL, 17UL, 14UL, 0) < 1e-4);
+    conv2d_free(&c);
+}
+
 int main() {
     struct TestSuite t = test_suite_init();
     unsafe {
@@ -172,6 +305,8 @@ int main() {
         t.add("tensor_cast autograd", t_cast_autograd);
         t.add("tensor_matmul_lowp", t_matmul_lowp);
         t.add("loss scaler", t_loss_scaler);
+        t.add("tensor arena", t_tensor_arena);
+        t.add("conv2d (winograd / im2col)", t_conv2d);
     }
     t.run();
     t.print_summary();

@@ -33,4 +33,11 @@ void gaussian_kernel(&double kernel, unsigned long size, double sigma);
 void sobel_x_kernel(&double kernel);
 void sobel_y_kernel(&double kernel);
 
+// Single precision: conv2d / fft2d / ifft2d on float and Complex32, same
+// contracts (kernels can come from the double helpers above, rounded).
+void conv2d_f32(const &float img, unsigned long h, unsigned long w,
+                const &float kernel, unsigned long kh, unsigned long kw, &float out);
+void fft2d_f32(&Complex32 img, unsigned long h, unsigned long w);
+void ifft2d_f32(&Complex32 img, unsigned long h, unsigned long w);
+
 } // namespace std

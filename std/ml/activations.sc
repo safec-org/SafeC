@@ -4,71 +4,51 @@
 #include <std/ml/activations.h>
 #include <std/ml/tensor.h>
 #include <std/math.h>
+#include <std/simd/vmath.h>
 
 namespace std {
 
+// Uninitialized outputs (every element is written), the shared elementwise
+// kernels and vmath.h's vectorized exp/tanh/sigmoid.
+
 &Tensor tensor_relu_fwd(const &Tensor a) {
-    &Tensor out = tensor_zeros_like(a);
-    unsafe {
-        unsigned long i = 0UL;
-        while (i < out->size) {
-            float v = a->data[i];
-            out->data[i] = (v > (float)0.0) ? v : (float)0.0;
-            i = i + 1UL;
-        }
-    }
+    &Tensor out = __tensor_alloc_uninit_like(a);
+    unsafe { __tensor_ew(EW_RELU, (const float*)a->data, (const float*)0, (float)0.0, (float*)out->data, out->size); }
     return out;
 }
 
 &Tensor tensor_sigmoid_fwd(const &Tensor a) {
-    &Tensor out = tensor_zeros_like(a);
-    unsafe {
-        unsigned long i = 0UL;
-        while (i < out->size) {
-            out->data[i] = (float)1.0 / ((float)1.0 + exp_f(-(a->data[i])));
-            i = i + 1UL;
-        }
-    }
+    &Tensor out = __tensor_alloc_uninit_like(a);
+    unsafe { vm_sigmoid_f32((const float*)a->data, (float*)out->data, out->size); }
     return out;
 }
 
 &Tensor tensor_tanh_fwd(const &Tensor a) {
-    &Tensor out = tensor_zeros_like(a);
-    unsafe {
-        unsigned long i = 0UL;
-        while (i < out->size) {
-            out->data[i] = tanh_f(a->data[i]);
-            i = i + 1UL;
-        }
-    }
+    &Tensor out = __tensor_alloc_uninit_like(a);
+    unsafe { vm_tanh_f32((const float*)a->data, (float*)out->data, out->size); }
     return out;
 }
 
 &Tensor tensor_silu_fwd(const &Tensor a) {
-    &Tensor out = tensor_zeros_like(a);
+    &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
-        unsigned long i = 0UL;
-        while (i < out->size) {
-            float x = a->data[i];
-            float sig = (float)1.0 / ((float)1.0 + exp_f(-x));
-            out->data[i] = x * sig;
-            i = i + 1UL;
-        }
+        vm_sigmoid_f32((const float*)a->data, (float*)out->data, out->size);
+        __tensor_ew(EW_MUL, (const float*)a->data, (const float*)out->data, (float)0.0, (float*)out->data, out->size);
     }
     return out;
 }
 
 &Tensor tensor_gelu_fwd(const &Tensor a) {
-    &Tensor out = tensor_zeros_like(a);
+    &Tensor out = __tensor_alloc_uninit_like(a);
     float c = (float)0.7978845608028654; // sqrt(2/pi)
     unsafe {
+        unsigned long n = out->size;
+        float* y = (float*)out->data;
         unsigned long i = 0UL;
-        while (i < out->size) {
-            float x = a->data[i];
-            float inner = c * (x + (float)0.044715 * x * x * x);
-            out->data[i] = (float)0.5 * x * ((float)1.0 + tanh_f(inner));
-            i = i + 1UL;
-        }
+        while (i < n) { float x = a->data[i]; y[i] = c * (x + (float)0.044715 * x * x * x); i = i + 1UL; }
+        vm_tanh_f32((const float*)y, y, n);
+        i = 0UL;
+        while (i < n) { float x = a->data[i]; y[i] = (float)0.5 * x * ((float)1.0 + y[i]); i = i + 1UL; }
     }
     return out;
 }
@@ -93,7 +73,7 @@ namespace std {
                 c = c + 1UL;
             }
             float variance = varAcc / (float)cols;
-            float invStd = (float)1.0 / sqrt_f(variance + eps);
+            float invStd = (float)1.0 / __builtin_sqrt(variance + eps);
 
             c = 0UL;
             while (c < cols) {

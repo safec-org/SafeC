@@ -13,6 +13,11 @@
 // transforms of 32768 points or more are split across std/sync/parallel.h's
 // thread pool; fft_batch / fft_real_batch spread many transforms over it.
 //
+// With oneMKL linked (on hosted targets other than Windows), its DFTI
+// transforms run instead below 65536 points, for every batch row and for
+// fft2d; see fft.sc. fft_vendor() is 1 when that is the case. No
+// FFTW-based library is used (they are GPL).
+//
 // Real-time code (audio callbacks): call fft_prepare(maxN) once beforehand,
 // then use fft_serial / ifft_serial, which never allocate, lock or touch the
 // thread pool. fft / ifft below 32768 points don't either, once prepared.
@@ -36,6 +41,9 @@ int ifft(&Complex data, unsigned long n);
 int fft_serial(&Complex data, unsigned long n);
 int ifft_serial(&Complex data, unsigned long n);
 
+// 1 if fft/ifft/fft_batch/fft_real use a linked vendor library (oneMKL).
+int fft_vendor();
+
 // Builds the twiddle table for every length up to n (a power of two), so
 // later transforms of those lengths allocate nothing. 1 on success, 0 if n
 // isn't a power of two or memory ran out.
@@ -51,6 +59,25 @@ int fft_real(const &double in, &Complex out, unsigned long n);
 int fft_batch(&Complex data, unsigned long n, unsigned long batch, int inverse);
 // fft_real of 'batch' rows: in[r*n ..] -> out[r*n ..].
 int fft_real_batch(const &double in, &Complex out, unsigned long n, unsigned long batch);
+// fft_real_batch in place: row r (data[r*n], n complex slots) holds its n
+// real inputs packed in its first n/2 slots (as doubles), and gets its full
+// spectrum. No second buffer; the vendor library isn't used for it.
+int fft_real_batch_inplace(&Complex data, unsigned long n, unsigned long batch);
+
+// Single precision: the functions above on Complex32 / float, with the same
+// contracts (fft_f32.sc). Same algorithm and threading; about 1e-6 relative
+// error instead of 1e-15, half the memory traffic. fft_prepare_f32 fills
+// the float twiddle table (fft_prepare doesn't), up to 4096 points it is
+// compile-time like the double one.
+int fft_f32(&Complex32 data, unsigned long n);
+int ifft_f32(&Complex32 data, unsigned long n);
+int fft_serial_f32(&Complex32 data, unsigned long n);
+int ifft_serial_f32(&Complex32 data, unsigned long n);
+int fft_prepare_f32(unsigned long n);
+int fft_real_f32(const &float in, &Complex32 out, unsigned long n);
+int fft_batch_f32(&Complex32 data, unsigned long n, unsigned long batch, int inverse);
+int fft_real_batch_f32(const &float in, &Complex32 out, unsigned long n, unsigned long batch);
+int fft_real_batch_inplace_f32(&Complex32 data, unsigned long n, unsigned long batch);
 
 // Q8.24 fixed-point forward/inverse FFT, same in-place/power-of-two
 // contract as the float versions above.

@@ -436,6 +436,159 @@ bool Builder::packArchive(const std::vector<std::string>& objFiles,
     return true;
 }
 
+// ── CPU BLAS ─────────────────────────────────────────────────────────────────
+// std/simd/gemm.sc calls cblas_sgemm through a weak reference, so a program
+// gets the CPU vendor's BLAS for its matrix products (tensor_matmul,
+// conv2d_forward, ...) just by linking it. [build] blas picks which:
+//   "auto" (default)  AOCL-BLAS on AMD CPUs, oneMKL on Intel, Accelerate on
+//                     macOS -- if the library is found; otherwise none
+//   "aocl" / "mkl" / "accelerate" / "openblas"   that one (error if missing)
+//   "none"            std's built-in SIMD kernel only
+// SAFEC_BLAS overrides the manifest's choice and SAFEC_BLAS_LIBS replaces the
+// whole set of link flags. Libraries are searched in AOCL_ROOT / MKLROOT /
+// OPENBLAS_ROOT (or their lib/, lib_LP64/, lib/intel64/ subdirectories), then
+// the default install locations.
+
+namespace {
+
+// Path to lib<name>.so (or the highest-numbered lib<name>.so.N) in dir.
+std::string findSharedLib(const fs::path& dir, const std::string& name) {
+    std::error_code ec;
+    fs::path plain = dir / ("lib" + name + ".so");
+    if (fs::exists(plain, ec)) return plain.string();
+    std::string best;
+    for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
+        std::string f = it->path().filename().string();
+        std::string pre = "lib" + name + ".so.";
+        if (f.rfind(pre, 0) == 0 && (best.empty() || f > fs::path(best).filename().string()))
+            best = it->path().string();
+    }
+    return best;
+}
+
+// The first directory (root, root/<sub> for each sub, or a default) holding lib<name>.
+std::string findLibDir(const char* envVar, const std::vector<std::string>& subs,
+                       const std::vector<std::string>& defaults, const std::string& name) {
+    std::vector<fs::path> cands;
+    if (const char* r = std::getenv(envVar)) {
+        cands.push_back(r);
+        for (auto& s : subs) cands.push_back(fs::path(r) / s);
+    }
+    for (auto& d : defaults) {
+        // A trailing '*' component globs one directory level (versioned installs).
+        auto star = d.find('*');
+        if (star == std::string::npos) { cands.push_back(d); continue; }
+        fs::path parent = fs::path(d.substr(0, star)).parent_path();
+        std::string rest = d.substr(d.find('/', star) == std::string::npos ? d.size() : d.find('/', star) + 1);
+        std::error_code ec;
+        std::vector<fs::path> hits;
+        for (auto it = fs::directory_iterator(parent, ec); !ec && it != fs::directory_iterator(); it.increment(ec))
+            hits.push_back(rest.empty() ? it->path() : it->path() / rest);
+        std::sort(hits.rbegin(), hits.rend());   // newest version first
+        for (auto& h : hits) cands.push_back(h);
+    }
+    for (auto& c : cands)
+        if (!findSharedLib(c, name).empty()) return c.string();
+    return "";
+}
+
+std::string cpuVendor() {
+    std::ifstream f("/proc/cpuinfo");
+    std::string line;
+    while (std::getline(f, line))
+        if (line.rfind("vendor_id", 0) == 0) {
+            if (line.find("AuthenticAMD") != std::string::npos) return "amd";
+            if (line.find("GenuineIntel") != std::string::npos) return "intel";
+            return "other";
+        }
+    return "other";
+}
+
+} // namespace
+
+std::vector<std::string> Builder::blasLinkFlags() const {
+    std::vector<std::string> out;
+    if (targetIsBareMetal() || targetIsWasm()) return out;
+#ifdef _WIN32
+    return out;   // gemm.sc doesn't use a vendor BLAS on Windows yet
+#else
+    if (isCrossTarget()) return out;
+    if (const char* libs = std::getenv("SAFEC_BLAS_LIBS")) {
+        std::istringstream ss(libs);
+        std::string f;
+        while (ss >> f) out.push_back(f);
+        return out;
+    }
+    std::string mode = manifest_.build.blas.empty() ? "auto" : manifest_.build.blas;
+    if (const char* e = std::getenv("SAFEC_BLAS")) mode = e;
+    bool automatic = mode == "auto";
+#ifdef __APPLE__
+    if (mode == "auto" || mode == "accelerate") {
+        out = { "-framework", "Accelerate" };
+        if (opts_.verbose) std::cout << "safeguard: CPU BLAS: Accelerate\n";
+        return out;
+    }
+    // Mach-O resolves even weak references at link time; let cblas_sgemm
+    // stay undefined (null at run time) when no BLAS is linked.
+    if (mode == "none") return { "-Wl,-U,_cblas_sgemm" };
+#endif
+    if (mode == "none") return out;
+    if (automatic) {
+        std::string v = cpuVendor();
+        mode = v == "amd" ? "aocl" : v == "intel" ? "mkl" : "none";
+        if (mode == "none") return out;
+    }
+    auto rpathLink = [&](const std::string& dir, const std::vector<std::string>& names) -> bool {
+        std::vector<std::string> paths;
+        for (auto& n : names) {
+            std::string p = findSharedLib(dir, n);
+            if (p.empty()) return false;
+            paths.push_back(p);
+        }
+        out.push_back("-Wl,-rpath," + dir);
+        // Only weak references point at these, which --as-needed wouldn't count.
+        out.push_back("-Wl,--push-state,--no-as-needed");
+        for (auto& p : paths) out.push_back(p);
+        out.push_back("-lgomp");
+        out.push_back("-Wl,--pop-state");
+        return true;
+    };
+    std::string dir;
+    bool ok = false;
+    if (mode == "aocl") {
+        dir = findLibDir("AOCL_ROOT", {"lib", "lib_LP64", "gcc/lib_LP64"},
+                         {"/opt/AMD/aocl/aocl-linux-gcc-*/gcc/lib_LP64", "/opt/AMD/aocl/*/lib_LP64",
+                          "/usr/local/lib", "/usr/lib/x86_64-linux-gnu"}, "blis-mt");
+        ok = !dir.empty() && rpathLink(dir, {"blis-mt"});
+    } else if (mode == "mkl") {
+        dir = findLibDir("MKLROOT", {"lib", "lib/intel64"},
+                         {"/opt/intel/oneapi/mkl/latest/lib", "/opt/intel/oneapi/mkl/latest/lib/intel64",
+                          "/opt/intel/mkl/lib/intel64", "/usr/lib/x86_64-linux-gnu"}, "mkl_core");
+        // GNU OpenMP threading layer: the gcc/clang link line, no libiomp5 needed.
+        ok = !dir.empty() && rpathLink(dir, {"mkl_intel_lp64", "mkl_gnu_thread", "mkl_core"});
+    } else if (mode == "openblas") {
+        dir = findLibDir("OPENBLAS_ROOT", {"lib"}, {"/usr/local/lib", "/usr/lib/x86_64-linux-gnu/openblas-pthread",
+                                                    "/usr/lib/x86_64-linux-gnu"}, "openblas");
+        ok = !dir.empty() && rpathLink(dir, {"openblas"});
+    } else if (mode == "accelerate") {
+        std::cerr << "safeguard: warning: build.blas = \"accelerate\" needs macOS; using the built-in kernel\n";
+        return {};
+    }
+    if (!ok) {
+        out.clear();
+        if (!automatic)
+            std::cerr << "safeguard: warning: build.blas = \"" << mode
+                      << "\" but the library wasn't found (set AOCL_ROOT / MKLROOT / OPENBLAS_ROOT); "
+                         "using the built-in kernel\n";
+        else if (opts_.verbose)
+            std::cout << "safeguard: CPU BLAS: " << mode << " not found, using std's built-in kernel\n";
+        return out;
+    }
+    if (opts_.verbose) std::cout << "safeguard: CPU BLAS: " << mode << " (" << dir << ")\n";
+    return out;
+#endif
+}
+
 // ── final link ────────────────────────────────────────────────────────────────
 
 bool Builder::linkFinal(const std::vector<std::string>& objFiles,
@@ -477,6 +630,7 @@ bool Builder::linkFinal(const std::vector<std::string>& objFiles,
 #endif
     for (auto& d : manifest_.build.libDirs) cmd.push_back("-L" + d);
     for (auto& l : manifest_.build.libs)    cmd.push_back("-l" + l);
+    for (auto& f : blasLinkFlags())         cmd.push_back(f);
     // Extra link flags from manifest
     for (auto& f : manifest_.build.cflags) cmd.push_back(f);
     cmd.push_back("-o");

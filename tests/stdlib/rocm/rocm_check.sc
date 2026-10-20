@@ -201,6 +201,105 @@ static void check_half() {
         }
         check(bad == 0UL, bf ? "bf16 sgd bit-exact" : "fp16 sgd bit-exact");
 
+        // training ops: relu / relu_grad copy bits, mse_grad and sgd2 round
+        // once per value, all bit-exact with the CPU computation
+        unsigned long obn = n > m * k ? n : m * k;   // also >= m * nn
+        struct Vec<unsigned short> gb2 = std::vec_with_cap(n);
+        struct Vec<unsigned short> ob = std::vec_with_cap(obn);
+        i = 0UL;
+        while (i < n) { gb2.push(std::half_encode(*v.at((i * 7UL + 3UL) % n), d)); i = i + 1UL; }
+        i = 0UL;
+        while (i < obn) { ob.push((unsigned short)0); i = i + 1UL; }
+        struct RocmHalfBuf hg2 = std::rocm_half_alloc(n, d);
+        struct RocmHalfBuf ho = std::rocm_half_alloc(n, d);
+        check(std::rocm_half_write(hg2, gb2.at(0UL), n), "half write g");
+        check(std::rocm_half_relu(h, ho) && std::rocm_half_read(ho, ob.at(0UL), n), "half relu ran");
+        bad = 0UL;
+        i = 0UL;
+        while (i < n) {
+            unsigned short want = std::half_decode(*bits.at(i), d) > 0.0f ? *bits.at(i) : (unsigned short)0;
+            if (*ob.at(i) != want) bad = bad + 1UL;
+            i = i + 1UL;
+        }
+        check(bad == 0UL, bf ? "bf16 relu bit-exact" : "fp16 relu bit-exact");
+        check(std::rocm_half_relu_grad(h, hg2, ho) && std::rocm_half_read(ho, ob.at(0UL), n), "half relu_grad ran");
+        bad = 0UL;
+        i = 0UL;
+        while (i < n) {
+            unsigned short want = std::half_decode(*bits.at(i), d) > 0.0f ? *gb2.at(i) : (unsigned short)0;
+            if (*ob.at(i) != want) bad = bad + 1UL;
+            i = i + 1UL;
+        }
+        check(bad == 0UL, bf ? "bf16 relu_grad bit-exact" : "fp16 relu_grad bit-exact");
+
+        unsigned long nm = m * k;
+        struct RocmHalfBuf hy = std::rocm_half_upload(a.at(0UL), nm, d);
+        struct RocmHalfBuf ht = std::rocm_half_upload(b.at(0UL), nm, d);
+        struct RocmHalfBuf hdy = std::rocm_half_alloc(nm, d);
+        struct RocmBuf loss = std::rocm_alloc(1UL);
+        float lossHost[1];
+        check(std::rocm_half_mse_grad(hy, ht, hdy, loss) && std::rocm_half_read(hdy, ob.at(0UL), nm) &&
+              std::rocm_read(loss, &lossHost[0], 1UL), "half mse_grad ran");
+        bad = 0UL;
+        double lref = 0.0;
+        i = 0UL;
+        while (i < nm) {
+            float dd = std::half_round(*a.at(i), d) - std::half_round(*b.at(i), d);
+            if (*ob.at(i) != std::half_encode((float)2.0 * dd, d)) bad = bad + 1UL;
+            lref = lref + (double)dd * (double)dd;
+            i = i + 1UL;
+        }
+        check(bad == 0UL, bf ? "bf16 mse_grad dy bit-exact" : "fp16 mse_grad dy bit-exact");
+        double lerr = (double)lossHost[0] - lref;
+        if (lerr < 0.0) lerr = -lerr;
+        check(lerr < lref * 1.0e-5, bf ? "bf16 mse_grad loss" : "fp16 mse_grad loss");
+
+        // sgd2 == two sgd calls
+        struct RocmHalfBuf w1a = std::rocm_half_upload(a.at(0UL), nm, d);
+        struct RocmHalfBuf w2a = std::rocm_half_upload(b.at(0UL), k * nn, d);
+        struct RocmHalfBuf w1b = std::rocm_half_upload(a.at(0UL), nm, d);
+        struct RocmHalfBuf w2b = std::rocm_half_upload(b.at(0UL), k * nn, d);
+        struct RocmHalfBuf g1 = std::rocm_half_upload(b.at(0UL), nm, d);
+        struct RocmHalfBuf g2 = std::rocm_half_upload(b.at(0UL), k * nn, d);
+        check(std::rocm_half_sgd2(w1a, g1, w2a, g2, (float)0.375), "half sgd2 ran");
+        check(std::rocm_half_sgd(w1b, g1, (float)0.375) && std::rocm_half_sgd(w2b, g2, (float)0.375), "half sgd x2 ran");
+        struct Vec<unsigned short> xa = std::vec_with_cap(k * nn);
+        struct Vec<unsigned short> xb = std::vec_with_cap(k * nn);
+        i = 0UL;
+        while (i < k * nn) { xa.push((unsigned short)0); xb.push((unsigned short)0); i = i + 1UL; }
+        bad = 0UL;
+        check(std::rocm_half_read(w1a, xa.at(0UL), nm) && std::rocm_half_read(w1b, xb.at(0UL), nm), "half read w1");
+        i = 0UL;
+        while (i < nm) { if (*xa.at(i) != *xb.at(i)) bad = bad + 1UL; i = i + 1UL; }
+        check(std::rocm_half_read(w2a, xa.at(0UL), k * nn) && std::rocm_half_read(w2b, xb.at(0UL), k * nn), "half read w2");
+        i = 0UL;
+        while (i < k * nn) { if (*xa.at(i) != *xb.at(i)) bad = bad + 1UL; i = i + 1UL; }
+        check(bad == 0UL, bf ? "bf16 sgd2 == two sgd" : "fp16 sgd2 == two sgd");
+
+        // gemm_relu == gemm, then relu on the bits
+        struct RocmHalfBuf hb2 = std::rocm_half_upload(b.at(0UL), k * nn, d);
+        struct RocmHalfBuf ha2 = std::rocm_half_upload(a.at(0UL), m * k, d);
+        struct RocmHalfBuf cr = std::rocm_half_alloc(m * nn, d);
+        check(std::rocm_half_gemm(ha2, 0, hb2, 0, c16, m, nn, k) && std::rocm_half_read(c16, cb.at(0UL), m * nn),
+              "half gemm (for relu) ran");
+        check(std::rocm_half_gemm_relu(ha2, 0, hb2, 0, cr, m, nn, k) && std::rocm_half_read(cr, ob.at(0UL), m * nn),
+              "half gemm_relu ran");
+        bad = 0UL;
+        i = 0UL;
+        while (i < m * nn) {
+            unsigned short want = std::half_decode(*cb.at(i), d) > 0.0f ? *cb.at(i) : (unsigned short)0;
+            if (*ob.at(i) != want) bad = bad + 1UL;
+            i = i + 1UL;
+        }
+        check(bad == 0UL, bf ? "bf16 gemm_relu" : "fp16 gemm_relu");
+        check(!std::rocm_half_relu_grad(hy, h, ho), "half relu_grad size check");   // g shorter than z
+
+        std::rocm_half_free(&hg2); std::rocm_half_free(&ho); std::rocm_half_free(&hy); std::rocm_half_free(&ht);
+        std::rocm_half_free(&hdy); std::rocm_free(&loss); std::rocm_half_free(&w1a); std::rocm_half_free(&w2a);
+        std::rocm_half_free(&w1b); std::rocm_half_free(&w2b); std::rocm_half_free(&g1); std::rocm_half_free(&g2);
+        std::rocm_half_free(&hb2); std::rocm_half_free(&ha2); std::rocm_half_free(&cr);
+        gb2.free(); ob.free(); xa.free(); xb.free();
+
         // dtype mismatches are rejected
         struct RocmHalfBuf other = std::rocm_half_alloc(k * nn, bf ? ROCM_FP16 : ROCM_BF16);
         check(!std::rocm_half_gemm_f32(ha, 0, other, 0, c32, m, nn, k), "half gemm dtype check");

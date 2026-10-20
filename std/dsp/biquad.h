@@ -42,6 +42,10 @@ struct Biquad {
 
 struct Biquad biquad_new(double b0, double b1, double b2, double a1, double a2);
 
+// process() over a block: out[i] = filter(in[i]), keeping the state in
+// registers for the whole block. in == out is allowed. Real-time safe.
+void biquad_process_block(&Biquad bq, const &double in, &double out, unsigned long n);
+
 // fs = sample rate (Hz), f0 = cutoff/center frequency (Hz), q = Q factor
 // (> 0; higher = narrower/more resonant).
 struct Biquad biquad_lowpass(double fs, double f0, double q);
@@ -72,6 +76,26 @@ struct Biquad bilinear_2nd_order(double B0, double B1, double B2,
 // omega = 2*pi*freqHz/fs) — magnitude (linear, not dB) and phase (radians).
 double biquad_response_mag(const &stack Biquad bq, double fs, double freqHz);
 double biquad_response_phase(const &stack Biquad bq, double fs, double freqHz);
+
+// Single precision (float coefficients and state), same contract as Biquad.
+// The design functions above compute in double; biquad_to_f32 rounds their
+// result once (keeping its state).
+struct Biquad32 {
+    float b0;
+    float b1;
+    float b2;
+    float a1;
+    float a2;
+    float z1;
+    float z2;
+
+    float process(float x);
+    void  reset();
+};
+
+struct Biquad32 biquad_new_f32(float b0, float b1, float b2, float a1, float a2);
+struct Biquad32 biquad_to_f32(struct Biquad bq);
+void biquad_process_block_f32(&Biquad32 bq, const &float in, &float out, unsigned long n);
 
 // Q8.24 fixed-point biquad: coefficients are designed in double precision
 // via the functions above, then quantized once with biquad_to_fixed —

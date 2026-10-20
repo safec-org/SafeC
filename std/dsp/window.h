@@ -16,4 +16,11 @@ void window_blackman(&double w, unsigned long n);      // w[i] = 0.42 - 0.5*cos(
 // Applies window 'w' to signal 'x' in place: x[i] *= w[i], for i in [0,n).
 void window_apply(&double x, const &double w, unsigned long n);
 
+// Single precision: the same windows (computed in double, rounded once).
+void window_rectangular_f32(&float w, unsigned long n);
+void window_hann_f32(&float w, unsigned long n);
+void window_hamming_f32(&float w, unsigned long n);
+void window_blackman_f32(&float w, unsigned long n);
+void window_apply_f32(&float x, const &float w, unsigned long n);
+
 } // namespace std

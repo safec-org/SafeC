@@ -40,6 +40,8 @@
 // isn't just for consistency -- it's load-bearing.
 #include <std/collections/vec.h>
 #include <std/simd/gemm.h>
+#include <std/sync/parallel.h>
+#include <std/simd/cpu.h>
 
 namespace std {
 
@@ -54,6 +56,52 @@ extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
 typedef fn void(void* selfTensor) TensorBackwardFn;
+
+// ── Tensor arenas ─────────────────────────────────────────────────────────────
+// Every op allocates its output. In a training loop that is a malloc (and,
+// for fresh memory, page faults) per op per step: on a small MLP that cost
+// more than the arithmetic. A TensorArena is a chunked bump allocator for a
+// step's temporaries: between tensor_arena_begin(&a) and tensor_arena_end()
+// every tensor created on this thread (data, shape, gradient) comes from
+// it, and tensor_arena_reset(&a) drops them all at once while keeping the
+// memory -- already faulted in -- for the next step.
+//
+//   struct TensorArena a = tensor_arena_new(0UL);
+//   while (step < steps) {
+//       tensor_arena_begin(&a);
+//       ... forward, tensor_backward, optimizer update ...
+//       tensor_arena_end();
+//       tensor_arena_reset(&a);     // this step's tensors are gone
+//   }
+//   tensor_arena_free(&a);
+//
+// Tensors created outside the arena (parameters) stay on the heap, and so do
+// their gradients, so they survive resets. Tensor::free() on an arena tensor
+// does nothing. A tensor must not be used after its arena is reset.
+struct TensorArena {
+    unsigned long first;       // chunk list (internal)
+    unsigned long current;
+    unsigned long chunkBytes;
+    unsigned long tracked;     // tensors to release on reset (internal)
+    unsigned long trackedCount;
+    unsigned long trackedCap;
+};
+
+// chunkBytes 0 = 16 MiB chunks (larger requests get their own chunk).
+struct TensorArena tensor_arena_new(unsigned long chunkBytes);
+void tensor_arena_begin(&TensorArena a);   // this thread's new tensors go to a
+void tensor_arena_end();                   // back to the heap
+void tensor_arena_reset(&TensorArena a);   // drop every tensor in it, keep the memory
+void tensor_arena_free(&TensorArena a);
+// Bytes handed out since the last reset.
+unsigned long tensor_arena_used(const &TensorArena a);
+
+// Internal (tensor.h's allocation helpers): the arena new tensors use on this
+// thread, or null; 64-byte-aligned memory from it; and registering a tensor
+// so a reset releases what it holds outside the arena.
+?&TensorArena tensor_arena_current_();
+void* tensor_arena_alloc_raw_(&TensorArena a, unsigned long bytes);
+void tensor_arena_track_(&TensorArena a, void* t);
 
 struct Tensor {
     &heap float   data;       // flat row-major buffer, length == size
@@ -71,6 +119,7 @@ struct Tensor {
     struct Vec<&Tensor> parents; // inputs this tensor was computed from
     int           visited;     // topological-sort scratch flag, used and cleared by tensor_backward()
     float         extraScalar; // op-specific constant (e.g. tensor_scale's k) the gradFn needs
+    ?&TensorArena owner;       // the TensorArena that owns this tensor's memory, or null (heap)
 
     // Element access (row-major; 'idx1D' for a rank-1 tensor,
     // 'row,col' for a rank-2 one).
@@ -150,20 +199,115 @@ void tensor_set_grad_enabled(int enabled);
 // family so a GPU-computed forward result can link into the exact same
 // backward math as the CPU path, without duplicating that math.
 
+// ── Elementwise kernels ───────────────────────────────────────────────────────
+// One loop per op over raw arrays, which the compiler vectorizes; arrays of
+// TENSOR_EW_PAR or more elements are split across std/sync/parallel.h's
+// thread pool. Used by the forward ops in tensor.sc / tensor_nn.sc and by
+// the backward functions below.
+#define TENSOR_EW_PAR 65536UL
+
+#define EW_ADD        0   // out = a + b
+#define EW_SUB        1   // out = a - b
+#define EW_MUL        2   // out = a * b
+#define EW_SCALE      3   // out = a * k
+#define EW_RELU       4   // out = max(a, 0)
+#define EW_FILL       5   // out = k
+#define EW_COPY       6   // out = a
+#define EW_ACC        7   // out += a
+#define EW_DEC        8   // out -= a
+#define EW_ACC_MUL    9   // out += a * b
+#define EW_ACC_SCALE  10  // out += a * k
+#define EW_ACC_RELU   11  // out += b > 0 ? a : 0
+#define EW_ACC_K      12  // out += k
+#define EW_ACC_SIGB   13  // out += a * b * (1 - b)   (sigmoid backward, b = output)
+#define EW_ACC_TANHB  14  // out += a * (1 - b * b)   (tanh backward, b = output)
+
+struct __TensorEwJob {
+    const float* a;
+    const float* b;
+    float*       out;
+    float        k;
+    int          op;
+};
+
+static void __tensor_ew_body(const &__TensorEwJob j, unsigned long lo, unsigned long hi) __attribute__((always_inline)) {
+    unsafe {
+        const float* a = j.a;
+        const float* b = j.b;
+        float* o = j.out;
+        float k = j.k;
+        unsigned long i = lo;
+        int op = j.op;
+        if (op == EW_ADD)            { while (i < hi) { o[i] = a[i] + b[i]; i = i + 1UL; } }
+        else if (op == EW_SUB)       { while (i < hi) { o[i] = a[i] - b[i]; i = i + 1UL; } }
+        else if (op == EW_MUL)       { while (i < hi) { o[i] = a[i] * b[i]; i = i + 1UL; } }
+        else if (op == EW_SCALE)     { while (i < hi) { o[i] = a[i] * k; i = i + 1UL; } }
+        else if (op == EW_RELU)      { while (i < hi) { float v = a[i]; o[i] = v > (float)0.0 ? v : (float)0.0; i = i + 1UL; } }
+        else if (op == EW_FILL)      { while (i < hi) { o[i] = k; i = i + 1UL; } }
+        else if (op == EW_COPY)      { while (i < hi) { o[i] = a[i]; i = i + 1UL; } }
+        else if (op == EW_ACC)       { while (i < hi) { o[i] = o[i] + a[i]; i = i + 1UL; } }
+        else if (op == EW_DEC)       { while (i < hi) { o[i] = o[i] - a[i]; i = i + 1UL; } }
+        else if (op == EW_ACC_MUL)   { while (i < hi) { o[i] = __builtin_fmuladd(a[i], b[i], o[i]); i = i + 1UL; } }
+        else if (op == EW_ACC_SCALE) { while (i < hi) { o[i] = __builtin_fmuladd(a[i], k, o[i]); i = i + 1UL; } }
+        else if (op == EW_ACC_RELU)  { while (i < hi) { o[i] = o[i] + (b[i] > (float)0.0 ? a[i] : (float)0.0); i = i + 1UL; } }
+        else if (op == EW_ACC_K)     { while (i < hi) { o[i] = o[i] + k; i = i + 1UL; } }
+        else if (op == EW_ACC_SIGB)  { while (i < hi) { float y = b[i]; o[i] = __builtin_fmuladd(a[i] * y, (float)1.0 - y, o[i]); i = i + 1UL; } }
+        else if (op == EW_ACC_TANHB) { while (i < hi) { float y = b[i]; o[i] = __builtin_fmuladd(a[i], __builtin_fmuladd(-y, y, (float)1.0), o[i]); i = i + 1UL; } }
+    }
+}
+
+// The loops per ISA level (std/simd/cpu.h): wider vectors and FMA.
+static void __tensor_ew_base(const &__TensorEwJob j, unsigned long lo, unsigned long hi) { __tensor_ew_body(j, lo, hi); }
+#if defined(__x86_64__)
+static void __tensor_ew_avx2(const &__TensorEwJob j, unsigned long lo, unsigned long hi)
+    __attribute__((target("avx2,fma"))) { __tensor_ew_body(j, lo, hi); }
+static void __tensor_ew_avx512(const &__TensorEwJob j, unsigned long lo, unsigned long hi)
+    __attribute__((target("avx512f,avx512bw,avx512dq,avx512vl,avx2,fma"))) { __tensor_ew_body(j, lo, hi); }
+#endif
+
+static void __tensor_ew_range(&__TensorEwJob j, unsigned long lo, unsigned long hi) {
+#if defined(__x86_64__)
+    int l = simd_level();
+    if (l >= SIMD_AVX512) { __tensor_ew_avx512(j, lo, hi); return; }
+    if (l >= SIMD_AVX2) { __tensor_ew_avx2(j, lo, hi); return; }
+#endif
+    __tensor_ew_base(j, lo, hi);
+}
+
+static void __tensor_ew(int op, const float* a, const float* b, float k, float* out, unsigned long n) {
+    struct __TensorEwJob j;
+    j.a = a;
+    j.b = b;
+    j.out = out;
+    j.k = k;
+    j.op = op;
+    if (n >= TENSOR_EW_PAR) parallel_for(n, 16384UL, __tensor_ew_range, &j);
+    else __tensor_ew_range(&j, 0UL, n);
+}
+
 static &Tensor __tensor_alloc(const unsigned long* shape, unsigned long ndim, int requiresGrad) {
     unsafe {
-        struct Tensor* t = (struct Tensor*)malloc(sizeof(struct Tensor));
-
+        ?&TensorArena ar = tensor_arena_current_();
         unsigned long size = 1UL;
-        unsigned long* shapeCopy = (unsigned long*)malloc(sizeof(unsigned long) * ndim);
         unsigned long i = 0UL;
-        while (i < ndim) {
-            shapeCopy[i] = shape[i];
-            size = size * shape[i];
-            i = i + 1UL;
+        while (i < ndim) { size = size * shape[i]; i = i + 1UL; }
+        struct Tensor* t;
+        unsigned long* shapeCopy;
+        float* buf;
+        match (ar) {
+            case some(a): {
+                t = (struct Tensor*)tensor_arena_alloc_raw_(a, sizeof(struct Tensor));
+                shapeCopy = (unsigned long*)tensor_arena_alloc_raw_(a, sizeof(unsigned long) * ndim);
+                buf = (float*)tensor_arena_alloc_raw_(a, sizeof(float) * size);
+            }
+            case null: {
+                t = (struct Tensor*)malloc(sizeof(struct Tensor));
+                shapeCopy = (unsigned long*)malloc(sizeof(unsigned long) * ndim);
+                buf = (float*)malloc(sizeof(float) * size);
+            }
         }
-
-        float* buf = (float*)malloc(sizeof(float) * size);
+        i = 0UL;
+        while (i < ndim) { shapeCopy[i] = shape[i]; i = i + 1UL; }
 
         t->data = (&heap float)buf;
         t->shape = (&heap unsigned long)shapeCopy;
@@ -175,6 +319,11 @@ static &Tensor __tensor_alloc(const unsigned long* shape, unsigned long ndim, in
         t->parents = vec_new();
         t->visited = 0;
         t->extraScalar = (float)0.0;
+        t->owner = ar;
+        match (ar) {
+            case some(a): { tensor_arena_track_(a, (void*)t); }
+            case null: { }
+        }
         return (&Tensor)t;
     }
 }
@@ -182,9 +331,12 @@ static &Tensor __tensor_alloc(const unsigned long* shape, unsigned long ndim, in
 static void __tensor_ensure_grad(struct Tensor* t) {
     unsafe {
         if (t->grad == (float*)0) {
-            float* g = (float*)malloc(sizeof(float) * t->size);
-            unsigned long i = 0UL;
-            while (i < t->size) { g[i] = (float)0.0; i = i + 1UL; }
+            float* g;
+            match (t->owner) {
+                case some(a): { g = (float*)tensor_arena_alloc_raw_(a, sizeof(float) * t->size); }
+                case null: { g = (float*)malloc(sizeof(float) * t->size); }
+            }
+            __tensor_ew(EW_FILL, (const float*)0, (const float*)0, (float)0.0, g, t->size);
             t->grad = (&heap float)g;
         }
     }
@@ -211,8 +363,7 @@ static &Tensor __tensor_parent(struct Tensor* t, unsigned long idx) {
 static void __tensor_accumulate(struct Tensor* dst, const float* delta) {
     __tensor_ensure_grad(dst);
     unsafe {
-        unsigned long i = 0UL;
-        while (i < dst->size) { dst->grad[i] = dst->grad[i] + delta[i]; i = i + 1UL; }
+        __tensor_ew(EW_ACC, delta, (const float*)0, (float)0.0, (float*)dst->grad, dst->size);
     }
 }
 
@@ -264,8 +415,7 @@ static void __sub_backward(void* selfPtr) {
         if (a->requiresGrad) __tensor_accumulate(a, (const float*)selfT->grad);
         if (b->requiresGrad) {
             __tensor_ensure_grad(b);
-            unsigned long i = 0UL;
-            while (i < selfT->size) { b->grad[i] = b->grad[i] - selfT->grad[i]; i = i + 1UL; }
+            __tensor_ew(EW_DEC, (const float*)selfT->grad, (const float*)0, (float)0.0, (float*)b->grad, selfT->size);
         }
     }
 }
@@ -277,13 +427,11 @@ static void __mul_backward(void* selfPtr) {
         struct Tensor* b = __tensor_parent(selfT, 1UL);
         if (a->requiresGrad) {
             __tensor_ensure_grad(a);
-            unsigned long i = 0UL;
-            while (i < selfT->size) { a->grad[i] = a->grad[i] + selfT->grad[i] * b->data[i]; i = i + 1UL; }
+            __tensor_ew(EW_ACC_MUL, (const float*)selfT->grad, (const float*)b->data, (float)0.0, (float*)a->grad, selfT->size);
         }
         if (b->requiresGrad) {
             __tensor_ensure_grad(b);
-            unsigned long i = 0UL;
-            while (i < selfT->size) { b->grad[i] = b->grad[i] + selfT->grad[i] * a->data[i]; i = i + 1UL; }
+            __tensor_ew(EW_ACC_MUL, (const float*)selfT->grad, (const float*)a->data, (float)0.0, (float*)b->grad, selfT->size);
         }
     }
 }
@@ -294,8 +442,7 @@ static void __scale_backward(void* selfPtr) {
         struct Tensor* a = __tensor_parent(selfT, 0UL);
         if (!a->requiresGrad) return;
         __tensor_ensure_grad(a);
-        unsigned long i = 0UL;
-        while (i < selfT->size) { a->grad[i] = a->grad[i] + selfT->grad[i] * selfT->extraScalar; i = i + 1UL; }
+        __tensor_ew(EW_ACC_SCALE, (const float*)selfT->grad, (const float*)0, selfT->extraScalar, (float*)a->grad, selfT->size);
     }
 }
 
@@ -306,8 +453,7 @@ static void __sum_backward(void* selfPtr) {
         if (!a->requiresGrad) return;
         __tensor_ensure_grad(a);
         float seed = selfT->grad[0];
-        unsigned long i = 0UL;
-        while (i < a->size) { a->grad[i] = a->grad[i] + seed; i = i + 1UL; }
+        __tensor_ew(EW_ACC_K, (const float*)0, (const float*)0, seed, (float*)a->grad, a->size);
     }
 }
 

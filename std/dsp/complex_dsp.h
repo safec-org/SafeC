@@ -41,6 +41,29 @@ Complex complex_new(double re, double im);
 // and oscillator/DFT kernels are naturally expressed in.
 Complex complex_from_polar(double magnitude, double theta);
 
+// Single-precision complex: the float counterpart of Complex, with the same
+// layout (re then im). The _f32 DSP functions (fft_f32, stft_forward_f32,
+// ...) take it. Not to be confused with FComplex below, which is fixed point.
+struct Complex32 {
+    float re;
+    float im;
+
+    Complex32 operator+(Complex32 other) const;
+    Complex32 operator-(Complex32 other) const;
+    Complex32 operator*(Complex32 other) const;
+    Complex32 operator/(Complex32 other) const;
+    Complex32 neg() const;
+
+    float     abs() const;
+    float     arg() const;
+    Complex32 conj() const;
+};
+
+Complex32 complex32_new(float re, float im);
+Complex32 complex32_from_polar(float magnitude, float theta);
+Complex32 complex_to_f32(Complex c);     // rounds each part to float
+Complex   complex_from_f32(Complex32 c);
+
 struct FComplex {
     Fixed re;
     Fixed im;

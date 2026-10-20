@@ -94,6 +94,96 @@ void KarplusStrong::reset(const &double excitation, unsigned long n) {
     self.pos = 0UL;
 }
 
+// ── Single precision ─────────────────────────────────────────────────────────
+
+inline struct CombFF32 comb_ff_init_f32(&float history, unsigned long delay, float gain) {
+    struct CombFF32 c;
+    c.history = history;
+    c.delay = delay;
+    c.pos = 0UL;
+    c.gain = gain;
+    return c;
+}
+
+inline float CombFF32::process(float x) {
+    float tapped;
+    unsafe { tapped = self.history[self.pos]; }
+    float out = x + self.gain * tapped;
+    unsafe { self.history[self.pos] = x; }
+    self.pos = (self.pos + 1UL) % self.delay;
+    return out;
+}
+
+void CombFF32::reset() {
+    unsigned long i = 0UL;
+    while (i < self.delay) {
+        unsafe { self.history[i] = 0.0; }
+        i = i + 1UL;
+    }
+    self.pos = 0UL;
+}
+
+inline struct CombFB32 comb_fb_init_f32(&float history, unsigned long delay, float gain) {
+    struct CombFB32 c;
+    c.history = history;
+    c.delay = delay;
+    c.pos = 0UL;
+    c.gain = gain;
+    return c;
+}
+
+inline float CombFB32::process(float x) {
+    float tapped;
+    unsafe { tapped = self.history[self.pos]; }
+    float y = x + self.gain * tapped;
+    unsafe { self.history[self.pos] = y; }
+    self.pos = (self.pos + 1UL) % self.delay;
+    return y;
+}
+
+void CombFB32::reset() {
+    unsigned long i = 0UL;
+    while (i < self.delay) {
+        unsafe { self.history[i] = 0.0; }
+        i = i + 1UL;
+    }
+    self.pos = 0UL;
+}
+
+inline struct KarplusStrong32 ks_init_f32(&float buffer, unsigned long length, float damping) {
+    struct KarplusStrong32 ks;
+    ks.buffer = buffer;
+    ks.length = length;
+    ks.pos = 0UL;
+    ks.damping = damping;
+    return ks;
+}
+
+inline float KarplusStrong32::process() {
+    unsigned long readPos = self.pos;
+    unsigned long nextPos = (self.pos + 1UL) % self.length;
+    float v0;
+    float v1;
+    unsafe { v0 = self.buffer[readPos]; v1 = self.buffer[nextPos]; }
+    float newVal = self.damping * (float)0.5 * (v0 + v1);
+    unsafe { self.buffer[readPos] = newVal; }
+    self.pos = nextPos;
+    return v0;
+}
+
+void KarplusStrong32::reset(const &float excitation, unsigned long n) {
+    unsigned long copyLen = n;
+    if (copyLen > self.length) { copyLen = self.length; }
+    unsigned long i = 0UL;
+    while (i < copyLen) {
+        float v;
+        unsafe { v = excitation[i]; }
+        unsafe { self.buffer[i] = v; }
+        i = i + 1UL;
+    }
+    self.pos = 0UL;
+}
+
 inline struct FCombFF comb_ff_init_fixed(&Fixed history, unsigned long delay, Fixed gain) {
     struct FCombFF c;
     c.history = history;

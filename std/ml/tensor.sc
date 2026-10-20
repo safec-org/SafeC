@@ -8,8 +8,146 @@
 // together at build time, not textually pasted into one another.
 #pragma once
 #include <std/ml/tensor.h>
+#include <std/panic.h>
+#include <std/mem.h>
 
 namespace std {
+
+// ══ Tensor arenas ════════════════════════════════════════════════════════════
+// Chunk layout: [next][size][used] header (3 words), then the data. Chunks
+// are kept across resets; 'current' is where allocation continues.
+
+#define TENSOR_ARENA_DEFAULT_CHUNK 16777216UL
+#define TENSOR_ARENA_HEADER        64UL      // keeps chunk data 64-byte aligned
+
+#if defined(__SAFEC_FREESTANDING__) || defined(__wasm__)
+static ?&TensorArena g_tensor_arena = null;
+#else
+static thread_local ?&TensorArena g_tensor_arena = null;
+#endif
+
+struct TensorArena tensor_arena_new(unsigned long chunkBytes) {
+    struct TensorArena a;
+    a.first = 0UL;
+    a.current = 0UL;
+    a.chunkBytes = chunkBytes == 0UL ? TENSOR_ARENA_DEFAULT_CHUNK : chunkBytes;
+    a.tracked = 0UL;
+    a.trackedCount = 0UL;
+    a.trackedCap = 0UL;
+    return a;
+}
+
+void tensor_arena_begin(&TensorArena a) { g_tensor_arena = (?&TensorArena)a; }
+void tensor_arena_end() { g_tensor_arena = null; }
+?&TensorArena tensor_arena_current_() { return g_tensor_arena; }
+
+static unsigned long* tensor_arena_chunk_new_(unsigned long dataBytes) {
+    unsafe {
+        unsigned long* c = (unsigned long*)alloc_raw_(TENSOR_ARENA_HEADER + dataBytes);
+        if (c == (unsigned long*)0) panic_at("tensor arena: out of memory", "tensor.sc", __LINE__);
+        c[0] = 0UL;          // next
+        c[1] = dataBytes;    // size
+        c[2] = 0UL;          // used
+        return c;
+    }
+}
+
+void* tensor_arena_alloc_raw_(&TensorArena a, unsigned long bytes) {
+    unsigned long need = (bytes + 63UL) / 64UL * 64UL;
+    if (need == 0UL) need = 64UL;
+    unsafe {
+        if (a.first == 0UL) {
+            unsigned long* c = tensor_arena_chunk_new_(need > a.chunkBytes ? need : a.chunkBytes);
+            a.first = (unsigned long)c;
+            a.current = a.first;
+        }
+        unsigned long* cur = (unsigned long*)a.current;
+        while (cur[2] + need > cur[1]) {
+            // next chunk: reuse a kept one if it is big enough, else insert a new one
+            unsigned long* next = (unsigned long*)cur[0];
+            if (next != (unsigned long*)0 && next[1] >= need) {
+                next[2] = 0UL;
+                cur = next;
+            } else {
+                unsigned long* c = tensor_arena_chunk_new_(need > a.chunkBytes ? need : a.chunkBytes);
+                c[0] = (unsigned long)next;
+                cur[0] = (unsigned long)c;
+                cur = c;
+            }
+            a.current = (unsigned long)cur;
+        }
+        char* base = (char*)cur;
+        void* p = (void*)&base[TENSOR_ARENA_HEADER + cur[2]];
+        cur[2] = cur[2] + need;
+        return p;
+    }
+}
+
+void tensor_arena_track_(&TensorArena a, void* t) {
+    unsafe {
+        if (a.trackedCount == a.trackedCap) {
+            unsigned long cap = a.trackedCap == 0UL ? 256UL : a.trackedCap * 2UL;
+            void** list = (void**)alloc_raw_(sizeof(void*) * cap);
+            if (list == (void**)0) panic_at("tensor arena: out of memory", "tensor.sc", __LINE__);
+            void** old = (void**)a.tracked;
+            unsigned long i = 0UL;
+            while (i < a.trackedCount) { list[i] = old[i]; i = i + 1UL; }
+            if (old != (void**)0) dealloc_raw_((void*)old);
+            a.tracked = (unsigned long)list;
+            a.trackedCap = cap;
+        }
+        void** list = (void**)a.tracked;
+        list[a.trackedCount] = t;
+        a.trackedCount = a.trackedCount + 1UL;
+    }
+}
+
+void tensor_arena_reset(&TensorArena a) {
+    unsafe {
+        // the parents vectors live on the heap
+        void** list = (void**)a.tracked;
+        unsigned long i = 0UL;
+        while (i < a.trackedCount) {
+            struct Tensor* t = (struct Tensor*)list[i];
+            t->parents.free();
+            i = i + 1UL;
+        }
+        a.trackedCount = 0UL;
+        unsigned long* c = (unsigned long*)a.first;
+        while (c != (unsigned long*)0) { c[2] = 0UL; c = (unsigned long*)c[0]; }
+        a.current = a.first;
+    }
+}
+
+void tensor_arena_free(&TensorArena a) {
+    tensor_arena_reset(a);
+    unsafe {
+        unsigned long* c = (unsigned long*)a.first;
+        while (c != (unsigned long*)0) {
+            unsigned long* next = (unsigned long*)c[0];
+            dealloc_raw_((void*)c);
+            c = next;
+        }
+        if (a.tracked != 0UL) dealloc_raw_((void*)a.tracked);
+    }
+    a.first = 0UL;
+    a.current = 0UL;
+    a.tracked = 0UL;
+    a.trackedCap = 0UL;
+}
+
+unsigned long tensor_arena_used(const &TensorArena a) {
+    unsigned long used = 0UL;
+    unsafe {
+        unsigned long* c = (unsigned long*)a.first;
+        while (c != (unsigned long*)0) {
+            used = used + c[2];
+            if ((unsigned long)c == a.current) break;
+            c = (unsigned long*)c[0];
+        }
+    }
+    return used;
+}
 
 // ══ Tensor methods ═══════════════════════════════════════════════════════════
 
@@ -30,6 +168,7 @@ inline void Tensor::set2(unsigned long r, unsigned long c, float v) {
 }
 
 inline void Tensor::free() {
+    match (self.owner) { case some(o): { return; } case null: { } }   // its TensorArena owns it
     unsafe {
         if (self.data != (float*)0) { std::free((void*)self.data); self.data = (float*)0; }
         if (self.shape != (unsigned long*)0) { std::free((void*)self.shape); self.shape = (unsigned long*)0; }
@@ -57,21 +196,18 @@ inline void Tensor::free() {
 }
 
 &Tensor tensor_from_1d(const &float values, unsigned long n, int requiresGrad) {
-    &Tensor t = tensor_new_1d(n, requiresGrad);
-    unsafe {
-        unsigned long i = 0UL;
-        while (i < n) { t->data[i] = values[i]; i = i + 1UL; }
-    }
+    unsigned long shape[1];
+    unsafe { shape[0] = n; }
+    &Tensor t = __tensor_alloc(shape, 1UL, requiresGrad);
+    unsafe { __tensor_ew(EW_COPY, (const float*)values, (const float*)0, (float)0.0, (float*)t->data, n); }
     return t;
 }
 
 &Tensor tensor_from_2d(const &float values, unsigned long rows, unsigned long cols, int requiresGrad) {
-    &Tensor t = tensor_new_2d(rows, cols, requiresGrad);
-    unsigned long total = rows * cols;
-    unsafe {
-        unsigned long i = 0UL;
-        while (i < total) { t->data[i] = values[i]; i = i + 1UL; }
-    }
+    unsigned long shape[2];
+    unsafe { shape[0] = rows; shape[1] = cols; }
+    &Tensor t = __tensor_alloc(shape, 2UL, requiresGrad);
+    unsafe { __tensor_ew(EW_COPY, (const float*)values, (const float*)0, (float)0.0, (float*)t->data, rows * cols); }
     return t;
 }
 
@@ -83,10 +219,7 @@ inline void Tensor::free() {
 }
 
 &Tensor tensor_fill(&Tensor t, float v) {
-    unsafe {
-        unsigned long i = 0UL;
-        while (i < t->size) { t->data[i] = v; i = i + 1UL; }
-    }
+    unsafe { __tensor_ew(EW_FILL, (const float*)0, (const float*)0, v, (float*)t->data, t->size); }
     return t;
 }
 
@@ -99,8 +232,7 @@ inline void Tensor::free() {
 &Tensor tensor_add(const &Tensor a, const &Tensor b) {
     &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
-        unsigned long i = 0UL;
-        while (i < out->size) { out->data[i] = a->data[i] + b->data[i]; i = i + 1UL; }
+        __tensor_ew(EW_ADD, (const float*)a->data, (const float*)b->data, (float)0.0, (float*)out->data, out->size);
     }
     __tensor_link2(out, a, b, (void*)__add_backward);
     return out;
@@ -110,8 +242,7 @@ inline void Tensor::free() {
 &Tensor tensor_sub(const &Tensor a, const &Tensor b) {
     &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
-        unsigned long i = 0UL;
-        while (i < out->size) { out->data[i] = a->data[i] - b->data[i]; i = i + 1UL; }
+        __tensor_ew(EW_SUB, (const float*)a->data, (const float*)b->data, (float)0.0, (float*)out->data, out->size);
     }
     __tensor_link2(out, a, b, (void*)__sub_backward);
     return out;
@@ -121,8 +252,7 @@ inline void Tensor::free() {
 &Tensor tensor_mul(const &Tensor a, const &Tensor b) {
     &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
-        unsigned long i = 0UL;
-        while (i < out->size) { out->data[i] = a->data[i] * b->data[i]; i = i + 1UL; }
+        __tensor_ew(EW_MUL, (const float*)a->data, (const float*)b->data, (float)0.0, (float*)out->data, out->size);
     }
     __tensor_link2(out, a, b, (void*)__mul_backward);
     return out;
@@ -132,8 +262,7 @@ inline void Tensor::free() {
 &Tensor tensor_scale(const &Tensor a, float k) {
     &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
-        unsigned long i = 0UL;
-        while (i < out->size) { out->data[i] = a->data[i] * k; i = i + 1UL; }
+        __tensor_ew(EW_SCALE, (const float*)a->data, (const float*)0, k, (float*)out->data, out->size);
     }
     unsafe { out->extraScalar = k; }
     __tensor_link1(out, a, (void*)__scale_backward);
@@ -172,7 +301,9 @@ inline void Tensor::free() {
 &Tensor tensor_matmul(const &Tensor a, const &Tensor b) {
     unsigned long m; unsigned long k; unsigned long n;
     unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
-    &Tensor out = tensor_new_2d(m, n, 0);
+    unsigned long shape[2];
+    unsafe { shape[0] = m; shape[1] = n; }
+    &Tensor out = __tensor_alloc(shape, 2UL, 0);   // sgemm's beta = 0 writes every element
     // Packed SIMD GEMM (std/simd/gemm.h); large products run on the
     // std/sync/parallel.h thread pool.
     unsafe {

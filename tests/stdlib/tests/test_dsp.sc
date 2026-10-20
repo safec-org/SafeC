@@ -24,11 +24,18 @@
 #include <std/dsp/cqt.h>
 #include <std/dsp/cwt.h>
 #include <std/dsp/minphase.h>
+#include <std/dsp/dsp.h>
 
 static int near_d(double a, double b, double eps) {
     double d = a - b;
     if (d < 0.0) d = -d;
     return d <= eps;
+}
+
+static int dsp_log2_t(unsigned long n) {
+    int b = 0;
+    while (n > 1UL) { n = n >> 1; b = b + 1; }
+    return b;
 }
 
 static double rnd_state = 0.123;
@@ -61,6 +68,16 @@ void t_fft() {
         }
         ASSERT_TRUE(maxErr < 1e-9);
         ASSERT_TRUE(ifft((struct Complex*)a, 64UL));
+        maxErr = 0.0;
+        i = 0;
+        while (i < 64) {
+            double e = (a[i] - orig[i]).abs();
+            if (e > maxErr) maxErr = e;
+            i = i + 1;
+        }
+        ASSERT_TRUE(maxErr < 1e-12);
+        // idft undoes dft (complex input, so a sign slip in either shows)
+        idft((const struct Complex*)b, (struct Complex*)a, 64UL);
         maxErr = 0.0;
         i = 0;
         while (i < 64) {
@@ -172,6 +189,73 @@ void t_fft_large() {
         ASSERT_TRUE(near_d(g_fa[0].re, 2.0, 1e-15) && near_d(g_fa[1].re, 4.0, 1e-15));
         ASSERT_TRUE(fft_real((const double*)two, (struct Complex*)g_fa, 1UL));
         ASSERT_TRUE(near_d(g_fa[0].re, 3.0, 1e-15));
+    }
+}
+
+
+// Block paths against their reference: overlap-add conv_fft vs conv_direct,
+// and the windowed FIR block vs one sample at a time (split unevenly, so
+// state carries across calls and chunk edges).
+static double g_cx[20000];
+static double g_ch[300];
+static double g_cy1[20300];
+static double g_cy2[20300];
+
+void t_dsp_blocks() {
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < 20000UL) { g_cx[i] = rnd(); i = i + 1UL; }
+        i = 0UL;
+        while (i < 300UL) { g_ch[i] = rnd(); i = i + 1UL; }
+        conv_direct((const double*)g_cx, 20000UL, (const double*)g_ch, 300UL, (double*)g_cy1);
+        conv_fft((const double*)g_cx, 20000UL, (const double*)g_ch, 300UL, (double*)g_cy2);   // overlap-add
+        double worst = 0.0;
+        i = 0UL;
+        while (i < 20299UL) { double e = g_cy1[i] - g_cy2[i]; if (e < 0.0) e = -e; if (e > worst) worst = e; i = i + 1UL; }
+        ASSERT_TRUE(worst < 1e-9);
+        conv_fft((const double*)g_cx, 2000UL, (const double*)g_ch, 300UL, (double*)g_cy2);    // one packed FFT
+        conv_direct((const double*)g_cx, 2000UL, (const double*)g_ch, 300UL, (double*)g_cy1);
+        worst = 0.0;
+        i = 0UL;
+        while (i < 2299UL) { double e = g_cy1[i] - g_cy2[i]; if (e < 0.0) e = -e; if (e > worst) worst = e; i = i + 1UL; }
+        ASSERT_TRUE(worst < 1e-9);
+
+        unsigned long taps[3];
+        taps[0] = 1UL; taps[1] = 31UL; taps[2] = 300UL;   // 300 > the stack window: per-sample path
+        int c = 0;
+        while (c < 3) {
+            unsigned long T = taps[c];
+            double hist1[300];
+            double hist2[300];
+            struct FirFilter a = fir_init((const double*)g_ch, T, (double*)hist1);
+            struct FirFilter b = fir_init((const double*)g_ch, T, (double*)hist2);
+            a.reset();
+            b.reset();
+            i = 0UL;
+            while (i < 3000UL) { g_cy1[i] = a.process(g_cx[i]); i = i + 1UL; }
+            fir_process_block(&b, (const double*)g_cx, (double*)g_cy2, 7UL);
+            fir_process_block(&b, (const double*)&g_cx[7], (double*)&g_cy2[7], 1100UL);
+            unsigned long k = 1107UL;
+            while (k < 1200UL) { g_cy2[k] = b.process(g_cx[k]); k = k + 1UL; }   // mixed with process()
+            fir_process_block(&b, (const double*)&g_cx[1200], (double*)&g_cy2[1200], 1800UL);
+            worst = 0.0;
+            i = 0UL;
+            while (i < 3000UL) { double e = g_cy1[i] - g_cy2[i]; if (e < 0.0) e = -e; if (e > worst) worst = e; i = i + 1UL; }
+            ASSERT_TRUE(worst < 1e-10);
+            c = c + 1;
+        }
+
+        struct Biquad q1 = biquad_lowpass(48000.0, 1000.0, 0.7071);
+        struct Biquad q2 = biquad_lowpass(48000.0, 1000.0, 0.7071);
+        i = 0UL;
+        while (i < 1000UL) { g_cy1[i] = q1.process(g_cx[i]); i = i + 1UL; }
+        biquad_process_block(&q2, (const double*)g_cx, (double*)g_cy2, 400UL);
+        biquad_process_block(&q2, (const double*)&g_cx[400], (double*)&g_cy2[400], 600UL);
+        // the block form may use FMA, so allow last-bit differences
+        worst = 0.0;
+        i = 0UL;
+        while (i < 1000UL) { double e = g_cy1[i] - g_cy2[i]; if (e < 0.0) e = -e; if (e > worst) worst = e; i = i + 1UL; }
+        ASSERT_TRUE(worst < 1e-12);
     }
 }
 
@@ -441,17 +525,381 @@ void t_imaging_cqt_cwt_minphase() {
     }
 }
 
+// ── Single precision ────────────────────────────────────────────────────────
+// Every _f32 path against the double one on the same input. Float keeps
+// about 7 digits, so tolerances scale with the output's size.
+
+static struct Complex32 g_ga[131072];
+static struct Complex32 g_gb[131072];
+static float g_gx[20300];
+static float g_gy1[20300];
+static float g_gy2[20300];
+
+static double max_diff32(const struct Complex32* a, const struct Complex* b, unsigned long n) {
+    double m = 0.0;
+    unsigned long i = 0UL;
+    unsafe {
+        while (i < n) {
+            double dr = (double)a[i].re - b[i].re;
+            double di = (double)a[i].im - b[i].im;
+            double e = sqrt_d(dr * dr + di * di);
+            if (e > m) m = e;
+            i = i + 1UL;
+        }
+    }
+    return m;
+}
+
+static double max_diff32f(const struct Complex32* a, const struct Complex32* b, unsigned long n) {
+    double m = 0.0;
+    unsigned long i = 0UL;
+    unsafe { while (i < n) { double e = (double)(a[i] - b[i]).abs(); if (e > m) m = e; i = i + 1UL; } }
+    return m;
+}
+
+static double max_abs_diff_fd(const float* a, const double* b, unsigned long n) {
+    double m = 0.0;
+    unsigned long i = 0UL;
+    unsafe { while (i < n) { double e = (double)a[i] - b[i]; if (e < 0.0) e = -e; if (e > m) m = e; i = i + 1UL; } }
+    return m;
+}
+
+static double max_abs_diff_ff(const float* a, const float* b, unsigned long n) {
+    double m = 0.0;
+    unsigned long i = 0UL;
+    unsafe { while (i < n) { double e = (double)(a[i] - b[i]); if (e < 0.0) e = -e; if (e > m) m = e; i = i + 1UL; } }
+    return m;
+}
+
+void t_fft_f32() {
+    unsafe {
+        ASSERT_TRUE(fft_prepare_f32(131072UL));
+        ASSERT_FALSE(fft_prepare_f32(1000UL));
+        // Every size from 2 to 2^17 (codelet, both table kinds, threads)
+        // against the double transform of the same (float) values.
+        unsigned long n = 2UL;
+        while (n <= 131072UL) {
+            unsigned long i = 0UL;
+            while (i < n) {
+                g_ga[i] = complex32_new((float)rnd(), (float)rnd());
+                g_fa[i] = complex_from_f32(g_ga[i]);
+                i = i + 1UL;
+            }
+            ASSERT_TRUE(fft_f32((struct Complex32*)g_ga, n));
+            ASSERT_TRUE(fft((struct Complex*)g_fa, n));
+            ASSERT_TRUE(max_diff32((const struct Complex32*)g_ga, (const struct Complex*)g_fa, n) < 2e-6 * sqrt_d((double)n) * (double)dsp_log2_t(n));
+            ASSERT_TRUE(ifft_f32((struct Complex32*)g_ga, n));
+            ASSERT_TRUE(ifft((struct Complex*)g_fa, n));
+            ASSERT_TRUE(max_diff32((const struct Complex32*)g_ga, (const struct Complex*)g_fa, n) < 1e-6 * (double)dsp_log2_t(n));
+            n = n * 2UL;
+        }
+        // fft_serial_f32 == fft_f32; the tones of t_fft_large land in their bins.
+        n = 131072UL;
+        unsigned long i = 0UL;
+        while (i < n) {
+            double t = (double)i / (double)n;
+            g_ga[i] = complex32_new((float)cos_d(2.0 * PI_D() * 1000.0 * t), (float)(sin_d(2.0 * PI_D() * 1000.0 * t) + 0.5 * cos_d(2.0 * PI_D() * 77.0 * t)));
+            g_gb[i] = g_ga[i];
+            i = i + 1UL;
+        }
+        ASSERT_TRUE(fft_f32((struct Complex32*)g_ga, n));
+        ASSERT_TRUE(near_d((double)g_ga[1000].abs(), (double)n, 1e-6 * (double)n));
+        ASSERT_TRUE(near_d((double)g_ga[77].abs(), 0.25 * (double)n, 1e-6 * (double)n));
+        ASSERT_TRUE((double)g_ga[500].abs() < 1e-6 * (double)n);
+        ASSERT_TRUE(fft_serial_f32((struct Complex32*)g_gb, n));
+        ASSERT_TRUE(max_diff32f((const struct Complex32*)g_ga, (const struct Complex32*)g_gb, n) < 1e-7 * (double)n);
+        ASSERT_TRUE(ifft_serial_f32((struct Complex32*)g_gb, n));
+        ASSERT_TRUE(near_d((double)g_gb[1].re, cos_d(2.0 * PI_D() * 1000.0 / (double)n), 1e-5));
+
+        // batch == row by row; real == complex of (x, 0); real batch.
+        unsigned long len = 256UL;
+        unsigned long rows = 64UL;
+        i = 0UL;
+        while (i < len * rows) { g_ga[i] = complex32_new((float)rnd(), (float)rnd()); g_gb[i] = g_ga[i]; i = i + 1UL; }
+        ASSERT_TRUE(fft_batch_f32((struct Complex32*)g_ga, len, rows, 0));
+        unsigned long r = 0UL;
+        while (r < rows) { fft_serial_f32((struct Complex32*)&g_gb[r * len], len); r = r + 1UL; }
+        ASSERT_TRUE(max_diff32f((const struct Complex32*)g_ga, (const struct Complex32*)g_gb, len * rows) < 1e-5);
+        ASSERT_TRUE(fft_batch_f32((struct Complex32*)g_ga, len, rows, 1));
+        ASSERT_FALSE(fft_batch_f32((struct Complex32*)g_ga, 100UL, rows, 0));
+        n = 1024UL;
+        rows = 16UL;
+        i = 0UL;
+        while (i < n * rows) { g_gx[i] = (float)rnd(); i = i + 1UL; }
+        ASSERT_TRUE(fft_real_batch_f32((const float*)g_gx, (struct Complex32*)g_ga, n, rows));
+        double worst = 0.0;
+        r = 0UL;
+        while (r < rows) {
+            i = 0UL;
+            while (i < n) { g_fb[i] = complex_new((double)g_gx[r * n + i], 0.0); i = i + 1UL; }
+            fft_serial((struct Complex*)g_fb, n);
+            double e = max_diff32((const struct Complex32*)&g_ga[r * n], (const struct Complex*)g_fb, n);
+            if (e > worst) worst = e;
+            r = r + 1UL;
+        }
+        ASSERT_TRUE(worst < 1e-4);
+        float two[2];
+        two[0] = 3.0; two[1] = -1.0;
+        ASSERT_TRUE(fft_real_f32((const float*)two, (struct Complex32*)g_ga, 2UL));
+        ASSERT_TRUE(near_d((double)g_ga[0].re, 2.0, 1e-6) && near_d((double)g_ga[1].re, 4.0, 1e-6));
+    }
+}
+
+void t_dsp_f32() {
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < 20000UL) { g_gx[i] = (float)rnd(); g_cx[i] = (double)g_gx[i]; i = i + 1UL; }
+        float hf[300];
+        i = 0UL;
+        while (i < 300UL) { hf[i] = (float)rnd(); g_ch[i] = (double)hf[i]; i = i + 1UL; }
+
+        // dot
+        double dd = dsp_dot_f64((const double*)g_cx, (const double*)g_ch, 300UL);
+        float df = dsp_dot_f32((const float*)g_gx, (const float*)hf, 300UL);
+        ASSERT_TRUE(near_d((double)df, dd, 1e-4));
+        ASSERT_TRUE(near_d((double)dsp_dot_f32((const float*)g_gx, (const float*)hf, 13UL),
+                           dsp_dot_f64((const double*)g_cx, (const double*)g_ch, 13UL), 1e-5));
+
+        // convolution: direct and both FFT paths against the double direct one
+        conv_direct((const double*)g_cx, 20000UL, (const double*)g_ch, 300UL, (double*)g_cy1);
+        conv_direct_f32((const float*)g_gx, 20000UL, (const float*)hf, 300UL, (float*)g_gy1);
+        conv_fft_f32((const float*)g_gx, 20000UL, (const float*)hf, 300UL, (float*)g_gy2);   // overlap-add
+        ASSERT_TRUE(max_abs_diff_fd((const float*)g_gy1, (const double*)g_cy1, 20299UL) < 1e-4);
+        ASSERT_TRUE(max_abs_diff_fd((const float*)g_gy2, (const double*)g_cy1, 20299UL) < 1e-4);
+        conv_direct((const double*)g_cx, 2000UL, (const double*)g_ch, 300UL, (double*)g_cy1);
+        conv_fft_f32((const float*)g_gx, 2000UL, (const float*)hf, 300UL, (float*)g_gy2);    // one packed FFT
+        ASSERT_TRUE(max_abs_diff_fd((const float*)g_gy2, (const double*)g_cy1, 2299UL) < 1e-4);
+
+        // FIR: block == per sample (mixed, uneven splits), and close to double
+        unsigned long taps[3];
+        taps[0] = 1UL; taps[1] = 31UL; taps[2] = 300UL;
+        int c = 0;
+        while (c < 3) {
+            unsigned long T = taps[c];
+            float hist1[300];
+            float hist2[300];
+            double histd[300];
+            struct FirFilter32 a = fir_init_f32((const float*)hf, T, (float*)hist1);
+            struct FirFilter32 b = fir_init_f32((const float*)hf, T, (float*)hist2);
+            struct FirFilter d = fir_init((const double*)g_ch, T, (double*)histd);
+            a.reset();
+            b.reset();
+            d.reset();
+            i = 0UL;
+            while (i < 3000UL) { g_gy1[i] = a.process(g_gx[i]); g_cy1[i] = d.process(g_cx[i]); i = i + 1UL; }
+            fir_process_block_f32(&b, (const float*)g_gx, (float*)g_gy2, 7UL);
+            fir_process_block_f32(&b, (const float*)&g_gx[7], (float*)&g_gy2[7], 1100UL);
+            unsigned long k = 1107UL;
+            while (k < 1200UL) { g_gy2[k] = b.process(g_gx[k]); k = k + 1UL; }
+            fir_process_block_f32(&b, (const float*)&g_gx[1200], (float*)&g_gy2[1200], 1800UL);
+            ASSERT_TRUE(max_abs_diff_ff((const float*)g_gy1, (const float*)g_gy2, 3000UL) < 1e-5);
+            ASSERT_TRUE(max_abs_diff_fd((const float*)g_gy2, (const double*)g_cy1, 3000UL) < 1e-4);
+            c = c + 1;
+        }
+
+        // Biquad32 from a double design: per sample == block, close to double
+        struct Biquad qd = biquad_lowpass(48000.0, 1000.0, 0.7071);
+        struct Biquad32 q1 = biquad_to_f32(qd);
+        struct Biquad32 q2 = biquad_to_f32(qd);
+        i = 0UL;
+        while (i < 1000UL) { g_gy1[i] = q1.process(g_gx[i]); g_cy1[i] = qd.process(g_cx[i]); i = i + 1UL; }
+        biquad_process_block_f32(&q2, (const float*)g_gx, (float*)g_gy2, 400UL);
+        biquad_process_block_f32(&q2, (const float*)&g_gx[400], (float*)&g_gy2[400], 600UL);
+        ASSERT_TRUE(max_abs_diff_ff((const float*)g_gy1, (const float*)g_gy2, 1000UL) < 1e-5);
+        ASSERT_TRUE(max_abs_diff_fd((const float*)g_gy2, (const double*)g_cy1, 1000UL) < 1e-4);
+        q1.reset();
+        ASSERT_TRUE(q1.z1 == (float)0.0 && q1.z2 == (float)0.0);
+
+        // windows
+        float wf[257];
+        double wd[257];
+        window_hann_f32((float*)wf, 257UL);
+        window_hann((double*)wd, 257UL);
+        ASSERT_TRUE(max_abs_diff_fd((const float*)wf, (const double*)wd, 257UL) < 1e-7);
+        window_hamming_f32((float*)wf, 257UL);
+        window_hamming((double*)wd, 257UL);
+        ASSERT_TRUE(max_abs_diff_fd((const float*)wf, (const double*)wd, 257UL) < 1e-7);
+        window_blackman_f32((float*)wf, 257UL);
+        window_blackman((double*)wd, 257UL);
+        ASSERT_TRUE(max_abs_diff_fd((const float*)wf, (const double*)wd, 257UL) < 1e-7);
+        window_rectangular_f32((float*)wf, 1UL);
+        ASSERT_TRUE(wf[0] == (float)1.0);
+        window_hann_f32((float*)wf, 9UL);
+        float ones[9];
+        i = 0UL;
+        while (i < 9UL) { ones[i] = (float)2.0; i = i + 1UL; }
+        window_apply_f32((float*)ones, (const float*)wf, 9UL);
+        ASSERT_TRUE(near_d((double)ones[4], 2.0, 1e-6) && near_d((double)ones[0], 0.0, 1e-6));
+
+        // resample_sinc against the windowed-sinc sum written out directly
+        resample_sinc((const double*)g_cx, 1000UL, (double*)g_cy1, 1470UL, 16UL);
+        double rworst = 0.0;
+        i = 0UL;
+        while (i < 1470UL) {
+            double scale = 1000.0 / 1470.0;
+            double src = (double)i * scale;
+            unsigned long ctr = (unsigned long)src;
+            unsigned long k0 = ctr >= 16UL ? ctr - 16UL : 0UL;
+            unsigned long k1 = ctr + 16UL < 1000UL ? ctr + 16UL : 999UL;
+            double ref = 0.0;
+            unsigned long k = k0;
+            while (k <= k1) {
+                double d = src - (double)k;
+                double sv = d == 0.0 ? 1.0 : sin_d(PI_D() * d) / (PI_D() * d);   // cutoff 1 (upsampling)
+                ref = ref + g_cx[k] * sv * 0.5 * (1.0 + cos_d(PI_D() * d / 16.0));
+                k = k + 1UL;
+            }
+            double e = ref - g_cy1[i];
+            if (e < 0.0) e = -e;
+            if (e > rworst) rworst = e;
+            i = i + 1UL;
+        }
+        // (resample_sinc carries the kernel's angles from output to output, so
+        // it differs from this per-position evaluation by the rounding of the
+        // positions themselves: ~1e-13 at positions near 1000)
+        ASSERT_TRUE(rworst < 1e-10);
+        resample_sinc((const double*)g_cx, 1470UL, (double*)g_cy2, 1000UL, 16UL);   // downsampling: cutoff < 1
+        resample_sinc_f32((const float*)g_gx, 1470UL, (float*)g_gy2, 1000UL, 16UL);
+        ASSERT_TRUE(max_abs_diff_fd((const float*)g_gy2, (const double*)g_cy2, 1000UL) < 1e-6);
+        // resample: float samples give the double result rounded
+        resample_sinc_f32((const float*)g_gx, 1000UL, (float*)g_gy1, 1470UL, 16UL);
+        ASSERT_TRUE(max_abs_diff_fd((const float*)g_gy1, (const double*)g_cy1, 1470UL) < 1e-6);
+        resample_linear((const double*)g_cx, 1000UL, (double*)g_cy1, 777UL);
+        resample_linear_f32((const float*)g_gx, 1000UL, (float*)g_gy1, 777UL);
+        ASSERT_TRUE(max_abs_diff_fd((const float*)g_gy1, (const double*)g_cy1, 777UL) < 1e-6);
+        resample_nearest((const double*)g_cx, 1000UL, (double*)g_cy1, 333UL);
+        resample_nearest_f32((const float*)g_gx, 1000UL, (float*)g_gy1, 333UL);
+        ASSERT_TRUE(max_abs_diff_fd((const float*)g_gy1, (const double*)g_cy1, 333UL) == 0.0);
+
+        // STFT: forward close to double; inverse reconstructs the interior
+        unsigned long nf = stft_num_frames(1024UL, 128UL, 32UL);
+        stft_forward((const double*)g_cx, 1024UL, 128UL, 32UL, STFT_WIN_HANN, (struct Complex*)g_fa);
+        stft_forward_f32((const float*)g_gx, 1024UL, 128UL, 32UL, STFT_WIN_HANN, (struct Complex32*)g_ga);
+        ASSERT_TRUE(max_diff32((const struct Complex32*)g_ga, (const struct Complex*)g_fa, nf * 128UL) < 1e-5);
+        i = 0UL;
+        while (i < 1024UL) { g_gy1[i] = (float)0.0; i = i + 1UL; }
+        stft_inverse_f32((const struct Complex32*)g_ga, nf, 128UL, 32UL, STFT_WIN_HANN, (float*)g_gy1);
+        ASSERT_TRUE(max_abs_diff_ff((const float*)&g_gy1[128], (const float*)&g_gx[128], 768UL) < 1e-5);
+    }
+}
+
+void t_dsp_f32_more() {
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < 4096UL) { g_gx[i] = (float)rnd(); g_cx[i] = (double)g_gx[i]; i = i + 1UL; }
+
+        // IIR (a biquad's coefficients as a 2nd-order IIR) close to double
+        struct Biquad bq = biquad_lowpass(48000.0, 2000.0, 0.7071);
+        double bd[3]; double ad[3];
+        bd[0] = bq.b0; bd[1] = bq.b1; bd[2] = bq.b2; ad[0] = 1.0; ad[1] = bq.a1; ad[2] = bq.a2;
+        float bf[3]; float af[3];
+        int c = 0;
+        while (c < 3) { bf[c] = (float)bd[c]; af[c] = (float)ad[c]; c = c + 1; }
+        double xd[3]; double yd[3]; float xf[3]; float yf[3];
+        struct IirFilter id = iir_init((const double*)bd, 3UL, (const double*)ad, 3UL, (double*)xd, (double*)yd);
+        struct IirFilter32 iff = iir_init_f32((const float*)bf, 3UL, (const float*)af, 3UL, (float*)xf, (float*)yf);
+        id.reset();
+        iff.reset();
+        iir_process_block(&id, (const double*)g_cx, (double*)g_cy1, 2000UL);
+        iir_process_block_f32(&iff, (const float*)g_gx, (float*)g_gy1, 2000UL);
+        ASSERT_TRUE(max_abs_diff_fd((const float*)g_gy1, (const double*)g_cy1, 2000UL) < 1e-4);
+
+        // comb filters and Karplus-Strong against double
+        float hf1[37]; double hd1[37];
+        struct CombFF32 cf = comb_ff_init_f32((float*)hf1, 37UL, (float)0.6);
+        struct CombFF cd = comb_ff_init((double*)hd1, 37UL, 0.6);
+        struct CombFB32 bf32 = comb_fb_init_f32((float*)hf1, 37UL, (float)0.6);
+        struct CombFB bd64 = comb_fb_init((double*)hd1, 37UL, 0.6);
+        cf.reset();
+        cd.reset();
+        double worst = 0.0;
+        i = 0UL;
+        while (i < 500UL) {
+            double e = (double)cf.process(g_gx[i]) - cd.process(g_cx[i]);
+            if (e < 0.0) e = -e;
+            if (e > worst) worst = e;
+            i = i + 1UL;
+        }
+        ASSERT_TRUE(worst < 1e-6);
+        bf32.reset();
+        bd64.reset();
+        worst = 0.0;
+        i = 0UL;
+        while (i < 500UL) {
+            double e = (double)bf32.process(g_gx[i]) - bd64.process(g_cx[i]);
+            if (e < 0.0) e = -e;
+            if (e > worst) worst = e;
+            i = i + 1UL;
+        }
+        ASSERT_TRUE(worst < 1e-5);
+        float kbf[50]; double kbd[50];
+        struct KarplusStrong32 kf = ks_init_f32((float*)kbf, 50UL, (float)0.996);
+        struct KarplusStrong kd = ks_init((double*)kbd, 50UL, 0.996);
+        kf.reset((const float*)g_gx, 50UL);
+        kd.reset((const double*)g_cx, 50UL);
+        worst = 0.0;
+        i = 0UL;
+        while (i < 1000UL) {
+            double e = (double)kf.process() - kd.process();
+            if (e < 0.0) e = -e;
+            if (e > worst) worst = e;
+            i = i + 1UL;
+        }
+        ASSERT_TRUE(worst < 1e-5);
+
+        // conv2d / fft2d / ifft2d
+        double gk[25];
+        gaussian_kernel((double*)gk, 5UL, 1.0);
+        float gkf[25];
+        c = 0;
+        while (c < 25) { gkf[c] = (float)gk[c]; c = c + 1; }
+        conv2d((const double*)g_cx, 64UL, 64UL, (const double*)gk, 5UL, 5UL, (double*)g_cy1);
+        conv2d_f32((const float*)g_gx, 64UL, 64UL, (const float*)gkf, 5UL, 5UL, (float*)g_gy1);
+        ASSERT_TRUE(max_abs_diff_fd((const float*)g_gy1, (const double*)g_cy1, 4096UL) < 1e-6);
+        i = 0UL;
+        while (i < 4096UL) { g_ga[i] = complex32_new(g_gx[i], (float)0.0); g_fa[i] = complex_new(g_cx[i], 0.0); i = i + 1UL; }
+        fft2d_f32((struct Complex32*)g_ga, 64UL, 64UL);
+        fft2d((struct Complex*)g_fa, 64UL, 64UL);
+        ASSERT_TRUE(max_diff32((const struct Complex32*)g_ga, (const struct Complex*)g_fa, 4096UL) < 1e-4);
+        ifft2d_f32((struct Complex32*)g_ga, 64UL, 64UL);
+        ASSERT_TRUE(near_d((double)g_ga[77].re, g_cx[77], 1e-6) && near_d((double)g_ga[77].im, 0.0, 1e-6));
+
+        // DCT round trip and DFT against the FFT
+        dct2_f32((const float*)g_gx, (float*)g_gy1, 100UL);
+        dct2((const double*)g_cx, (double*)g_cy1, 100UL);
+        ASSERT_TRUE(max_abs_diff_fd((const float*)g_gy1, (const double*)g_cy1, 100UL) < 1e-5);
+        idct3_f32((const float*)g_gy1, (float*)g_gy2, 100UL);
+        ASSERT_TRUE(max_abs_diff_ff((const float*)g_gy2, (const float*)g_gx, 100UL) < 1e-6);
+        i = 0UL;
+        while (i < 64UL) { g_gb[i] = complex32_new(g_gx[i], g_gx[i + 64UL]); i = i + 1UL; }
+        dft_f32((const struct Complex32*)g_gb, (struct Complex32*)g_ga, 64UL);
+        fft_f32((struct Complex32*)g_gb, 64UL);
+        ASSERT_TRUE(max_diff32f((const struct Complex32*)g_ga, (const struct Complex32*)g_gb, 64UL) < 1e-5);
+        idft_f32((const struct Complex32*)g_ga, (struct Complex32*)g_gb, 64UL);
+        ASSERT_TRUE(near_d((double)g_gb[5].re, (double)g_gx[5], 1e-6) && near_d((double)g_gb[5].im, (double)g_gx[69], 1e-6));
+        dft_real_f32((const float*)g_gx, (struct Complex32*)g_ga, 64UL);
+        i = 0UL;
+        while (i < 64UL) { g_gb[i] = complex32_new(g_gx[i], (float)0.0); i = i + 1UL; }
+        fft_f32((struct Complex32*)g_gb, 64UL);
+        ASSERT_TRUE(max_diff32f((const struct Complex32*)g_ga, (const struct Complex32*)g_gb, 64UL) < 1e-5);
+    }
+}
+
 int main() {
     struct TestSuite t = test_suite_init();
     unsafe {
         t.add("fft/dft", t_fft);
         t.add("fft large/batch/real", t_fft_large);
+        t.add("conv_fft/fir/biquad blocks", t_dsp_blocks);
         t.add("window/fixed", t_window_fixed);
         t.add("biquad/fir/iir/ztransform", t_biquad_filters);
         t.add("conv/dct/resample", t_conv_dct_resample);
         t.add("stft", t_stft);
         t.add("comb/audio_buffer/timer_wheel", t_comb_audio_timer);
         t.add("imaging/cqt/cwt/minphase", t_imaging_cqt_cwt_minphase);
+        t.add("fft f32", t_fft_f32);
+        t.add("dsp f32", t_dsp_f32);
+        t.add("iir/comb/imaging/dct/dft f32", t_dsp_f32_more);
     }
     t.run();
     t.print_summary();

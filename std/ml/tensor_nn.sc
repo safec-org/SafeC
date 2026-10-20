@@ -5,6 +5,8 @@
 // tensor_nn.h, and #includes only headers (never another .sc file).
 #pragma once
 #include <std/ml/tensor_nn.h>
+#include <std/simd/vmath.h>
+#include <std/sync/parallel.h>
 
 namespace std {
 
@@ -17,14 +19,7 @@ namespace std {
 // every other one in this section, not core tensor arithmetic.
 &Tensor tensor_relu(const &Tensor a) {
     &Tensor out = __tensor_alloc_uninit_like(a);
-    unsafe {
-        unsigned long i = 0UL;
-        while (i < out->size) {
-            float v = a->data[i];
-            out->data[i] = (v > (float)0.0) ? v : (float)0.0;
-            i = i + 1UL;
-        }
-    }
+    unsafe { __tensor_ew(EW_RELU, (const float*)a->data, (const float*)0, (float)0.0, (float*)out->data, out->size); }
     __tensor_link1(out, a, (void*)__relu_backward);
     return out;
 }
@@ -32,13 +27,7 @@ namespace std {
 // ── Sigmoid ──────────────────────────────────────────────────────────────────
 &Tensor tensor_sigmoid(const &Tensor a) {
     &Tensor out = __tensor_alloc_uninit_like(a);
-    unsafe {
-        unsigned long i = 0UL;
-        while (i < out->size) {
-            out->data[i] = (float)1.0 / ((float)1.0 + exp_f(-a->data[i]));
-            i = i + 1UL;
-        }
-    }
+    unsafe { vm_sigmoid_f32((const float*)a->data, (float*)out->data, out->size); }
     __tensor_link1(out, a, (void*)__sigmoid_backward);
     return out;
 }
@@ -46,47 +35,60 @@ namespace std {
 // ── Tanh ─────────────────────────────────────────────────────────────────────
 &Tensor tensor_tanh_t(const &Tensor a) {
     &Tensor out = __tensor_alloc_uninit_like(a);
-    unsafe {
-        unsigned long i = 0UL;
-        while (i < out->size) {
-            out->data[i] = tanh_f(a->data[i]);
-            i = i + 1UL;
-        }
-    }
+    unsafe { vm_tanh_f32((const float*)a->data, (float*)out->data, out->size); }
     __tensor_link1(out, a, (void*)__tanh_t_backward);
     return out;
 }
 
 // ── Softmax (last axis) ───────────────────────────────────────────────────────
+// Rows are independent; large tensors split them across the thread pool.
+struct SoftmaxJob { const float* in; float* out; unsigned long cols; };
+
+static void softmax_rows_(&SoftmaxJob j, unsigned long lo, unsigned long hi) {
+    unsafe {
+        unsigned long n = j.cols;
+        unsigned long r = lo;
+        while (r < hi) {
+            const float* x = &j.in[r * n];
+            float* y = &j.out[r * n];
+            // max with 8 running lanes, so it vectorizes
+            float m[8];
+            unsigned long q = 0UL;
+            while (q < 8UL) { m[q] = x[0]; q = q + 1UL; }
+            unsigned long i = 0UL;
+            while (i + 8UL <= n) {
+                q = 0UL;
+                while (q < 8UL) { float v = x[i + q]; m[q] = v > m[q] ? v : m[q]; q = q + 1UL; }
+                i = i + 8UL;
+            }
+            float mx = m[0];
+            q = 1UL;
+            while (q < 8UL) { mx = m[q] > mx ? m[q] : mx; q = q + 1UL; }
+            while (i < n) { mx = x[i] > mx ? x[i] : mx; i = i + 1UL; }
+            i = 0UL;
+            while (i < n) { y[i] = x[i] - mx; i = i + 1UL; }
+            vm_exp_f32((const float*)y, y, n);
+            float sum = (float)0.0;
+            i = 0UL;
+            while (i < n) { sum = sum + y[i]; i = i + 1UL; }
+            float inv = (float)1.0 / sum;
+            i = 0UL;
+            while (i < n) { y[i] = y[i] * inv; i = i + 1UL; }
+            r = r + 1UL;
+        }
+    }
+}
+
 &Tensor tensor_softmax(const &Tensor a) {
     &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
-        unsigned long lastDim = a->shape[a->ndim - 1UL];
-        unsigned long rows = a->size / lastDim;
-        unsigned long r = 0UL;
-        while (r < rows) {
-            unsigned long base = r * lastDim;
-            float mx = a->data[base];
-            unsigned long j = 1UL;
-            while (j < lastDim) {
-                if (a->data[base + j] > mx) { mx = a->data[base + j]; }
-                j = j + 1UL;
-            }
-            float sum = (float)0.0;
-            j = 0UL;
-            while (j < lastDim) {
-                float e = exp_f(a->data[base + j] - mx);
-                out->data[base + j] = e;
-                sum = sum + e;
-                j = j + 1UL;
-            }
-            j = 0UL;
-            while (j < lastDim) {
-                out->data[base + j] = out->data[base + j] / sum;
-                j = j + 1UL;
-            }
-            r = r + 1UL;
-        }
+        struct SoftmaxJob j;
+        j.in = (const float*)a->data;
+        j.out = (float*)out->data;
+        j.cols = a->shape[a->ndim - 1UL];
+        unsigned long rows = a->size / j.cols;
+        if (a->size >= TENSOR_EW_PAR && rows > 1UL) parallel_for(rows, 16384UL / j.cols + 1UL, softmax_rows_, &j);
+        else softmax_rows_(&j, 0UL, rows);
     }
     __tensor_link1(out, a, (void*)__softmax_backward);
     return out;
@@ -96,10 +98,15 @@ namespace std {
 &Tensor tensor_elu(const &Tensor a, float alpha) {
     &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
+        unsigned long n = out->size;
+        float* y = (float*)out->data;
         unsigned long i = 0UL;
-        while (i < out->size) {
+        while (i < n) { float x = a->data[i]; y[i] = x < (float)0.0 ? x : (float)0.0; i = i + 1UL; }
+        vm_exp_f32((const float*)y, y, n);
+        i = 0UL;
+        while (i < n) {
             float x = a->data[i];
-            out->data[i] = (x > (float)0.0) ? x : (alpha * (exp_f(x) - (float)1.0));
+            y[i] = (x > (float)0.0) ? x : (alpha * (y[i] - (float)1.0));
             i = i + 1UL;
         }
     }
@@ -113,13 +120,13 @@ namespace std {
     &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         float c = (float)0.7978845608028654;
+        unsigned long n = out->size;
+        float* y = (float*)out->data;
         unsigned long i = 0UL;
-        while (i < out->size) {
-            float x = a->data[i];
-            float u = c * (x + (float)0.044715 * x * x * x);
-            out->data[i] = (float)0.5 * x * ((float)1.0 + tanh_f(u));
-            i = i + 1UL;
-        }
+        while (i < n) { float x = a->data[i]; y[i] = c * (x + (float)0.044715 * x * x * x); i = i + 1UL; }
+        vm_tanh_f32((const float*)y, y, n);
+        i = 0UL;
+        while (i < n) { float x = a->data[i]; y[i] = (float)0.5 * x * ((float)1.0 + y[i]); i = i + 1UL; }
     }
     __tensor_link1(out, a, (void*)__gelu_backward);
     return out;
@@ -129,13 +136,11 @@ namespace std {
 &Tensor tensor_silu(const &Tensor a) {
     &Tensor out = __tensor_alloc_uninit_like(a);
     unsafe {
+        unsigned long n = out->size;
+        float* y = (float*)out->data;
+        vm_sigmoid_f32((const float*)a->data, y, n);
         unsigned long i = 0UL;
-        while (i < out->size) {
-            float x = a->data[i];
-            float s = (float)1.0 / ((float)1.0 + exp_f(-x));
-            out->data[i] = x * s;
-            i = i + 1UL;
-        }
+        while (i < n) { y[i] = a->data[i] * y[i]; i = i + 1UL; }
     }
     __tensor_link1(out, a, (void*)__silu_backward);
     return out;
@@ -162,14 +167,10 @@ namespace std {
         while (r < rows) {
             unsigned long outBase = r * outLast;
             unsigned long inBase = r * inLast;
+            float* y = &out->data[outBase];
+            vm_sigmoid_f32((const float*)&a->data[inBase + outLast], y, outLast);
             unsigned long j = 0UL;
-            while (j < outLast) {
-                float a1 = a->data[inBase + j];
-                float a2 = a->data[inBase + outLast + j];
-                float s = (float)1.0 / ((float)1.0 + exp_f(-a2));
-                out->data[outBase + j] = a1 * s;
-                j = j + 1UL;
-            }
+            while (j < outLast) { y[j] = a->data[inBase + j] * y[j]; j = j + 1UL; }
             r = r + 1UL;
         }
     }
@@ -198,12 +199,12 @@ namespace std {
         while (r < rows) {
             unsigned long outBase = r * outLast;
             unsigned long inBase = r * inLast;
+            float* y = &out->data[outBase];
+            vm_sigmoid_f32((const float*)&a->data[inBase], y, outLast);
             unsigned long j = 0UL;
             while (j < outLast) {
                 float a1 = a->data[inBase + j];
-                float a2 = a->data[inBase + outLast + j];
-                float s1 = (float)1.0 / ((float)1.0 + exp_f(-a1));
-                out->data[outBase + j] = (a1 * s1) * a2;
+                y[j] = (a1 * y[j]) * a->data[inBase + outLast + j];
                 j = j + 1UL;
             }
             r = r + 1UL;

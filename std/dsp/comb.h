@@ -59,6 +59,41 @@ struct CombFF comb_ff_init(&double history, unsigned long delay, double gain);
 struct CombFB comb_fb_init(&double history, unsigned long delay, double gain);
 struct KarplusStrong ks_init(&double buffer, unsigned long length, double damping);
 
+// Single precision: the three filters above on float buffers.
+struct CombFF32 {
+    &float history;
+    unsigned long delay;
+    unsigned long pos;
+    float gain;
+
+    float process(float x);
+    void  reset();
+};
+
+struct CombFB32 {
+    &float history;
+    unsigned long delay;
+    unsigned long pos;
+    float gain;
+
+    float process(float x);
+    void  reset();
+};
+
+struct KarplusStrong32 {
+    &float buffer;
+    unsigned long length;
+    unsigned long pos;
+    float damping;
+
+    float process();
+    void  reset(const &float excitation, unsigned long n);
+};
+
+struct CombFF32 comb_ff_init_f32(&float history, unsigned long delay, float gain);
+struct CombFB32 comb_fb_init_f32(&float history, unsigned long delay, float gain);
+struct KarplusStrong32 ks_init_f32(&float buffer, unsigned long length, float damping);
+
 struct FCombFF {
     &Fixed history;
     unsigned long delay;

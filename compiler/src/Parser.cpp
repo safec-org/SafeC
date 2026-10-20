@@ -775,7 +775,7 @@ bool Parser::parseGnuAttributes(GnuAttrs &out) {
 
             // Map the common, semantically-meaningful attributes onto
             // SafeC's native equivalents; everything else (deprecated,
-            // unused, used, visibility, format, nonnull, cold, hot, weak,
+            // unused, used, visibility, format, nonnull, cold, hot,
             // constructor, destructor, may_alias, vector_size, mode, ...)
             // is accepted syntactically and dropped — there's no SafeC
             // equivalent, and erroring on them would defeat the point of
@@ -783,8 +783,15 @@ bool Parser::parseGnuAttributes(GnuAttrs &out) {
             if (attrName == "always_inline" || attrName == "gnu_inline" ||
                 attrName == "artificial") {
                 out.hasInline = true;
+                if (attrName == "always_inline") out.hasAlwaysInline = true;
+            } else if (attrName == "target") {
+                std::string t = args.empty() ? "" : args[0];
+                if (t.size() >= 2 && t.front() == '"' && t.back() == '"') t = t.substr(1, t.size() - 2);
+                out.targetAttr = t;
             } else if (attrName == "noreturn") {
                 out.hasNoReturn = true;
+            } else if (attrName == "weak") {
+                out.hasWeak = true;
             } else if (attrName == "const" || attrName == "pure") {
                 out.hasPure = true;
             } else if (attrName == "packed") {
@@ -1014,6 +1021,9 @@ DeclPtr Parser::parseTopLevelDecl() {
     bool isInterrupt = false;
     bool isNoReturn  = gnuAttrs.hasNoReturn;
     bool isPure      = gnuAttrs.hasPure;
+    bool isWeak      = gnuAttrs.hasWeak;
+    bool isAlwaysInline = gnuAttrs.hasAlwaysInline;
+    std::string targetAttr = gnuAttrs.targetAttr;
     bool isVolatile    = false;
     bool isAtomic      = false;
     bool isThreadLocal = false;
@@ -1029,6 +1039,9 @@ DeclPtr Parser::parseTopLevelDecl() {
             isInline    = isInline    || more.hasInline;
             isNoReturn  = isNoReturn  || more.hasNoReturn;
             isPure      = isPure      || more.hasPure;
+            isWeak      = isWeak      || more.hasWeak;
+            isAlwaysInline = isAlwaysInline || more.hasAlwaysInline;
+            if (!more.targetAttr.empty()) targetAttr = more.targetAttr;
             isMustUse   = isMustUse   || more.hasMustUse;
             isPacked    = isPacked    || more.hasPacked;
             if (more.alignment > 0) alignment = more.alignment;
@@ -1096,6 +1109,9 @@ DeclPtr Parser::parseTopLevelDecl() {
         // assignment here would silently clobber that back to false/empty.
         fn.isNoReturn  = fn.isNoReturn  || isNoReturn;
         fn.isPure      = fn.isPure      || isPure;
+        fn.isWeak      = fn.isWeak      || isWeak;
+        fn.isAlwaysInline = fn.isAlwaysInline || isAlwaysInline;
+        if (fn.targetAttr.empty()) fn.targetAttr = targetAttr;
         fn.sectionName = fn.sectionName.empty() ? sectionName : fn.sectionName;
         fn.callingConv = callingConv;
         applyWasmAttrs(fn, gnuAttrs);
@@ -1287,6 +1303,9 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(
         if (parseGnuAttributes(suffixAttrs)) {
             if (suffixAttrs.hasNoReturn) fn->isNoReturn = true;
             if (suffixAttrs.hasPure)     fn->isPure     = true;
+            if (suffixAttrs.hasWeak)     fn->isWeak     = true;
+            if (suffixAttrs.hasAlwaysInline) fn->isAlwaysInline = true;
+            if (!suffixAttrs.targetAttr.empty()) fn->targetAttr = suffixAttrs.targetAttr;
             if (suffixAttrs.hasMustUse)  fn->isMustUse  = true;
             if (!suffixAttrs.sectionName.empty()) fn->sectionName = suffixAttrs.sectionName;
             applyWasmAttrs(*fn, suffixAttrs);

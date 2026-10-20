@@ -22,3 +22,16 @@ f8 twice(f8 v) {
     f8 t = v + v;
     return t;
 }
+
+// A local *array* of scalars is element-aligned too: &tab[t] at a variable
+// index is only 4-aligned, though the array itself is a local.
+f8 load_local(const &float x, unsigned long t) {
+    float tab[64];
+    unsigned long i = 0UL;
+    while (i < 64UL) { unsafe { tab[i] = x[i]; } i = i + 1UL; }
+    f8 v;
+    unsafe { v = *(const f8*)&tab[t]; }
+    return v + v;
+}
+// CHECK-LABEL: define {{.*}}@load_local(
+// CHECK: load <8 x float>, ptr {{.*}}, align 4

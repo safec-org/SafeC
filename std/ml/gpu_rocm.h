@@ -131,6 +131,17 @@ int rocm_half_gemm_f32(struct RocmHalfBuf a, int ta, struct RocmHalfBuf b, int t
 // w = round(w - lr * g), computed in fp32, in place.
 int rocm_half_sgd(struct RocmHalfBuf w, struct RocmHalfBuf g, float lr);
 
+// c = relu(op(a) op(b)), all in a's dtype (the GEMM, then ReLU in place).
+int rocm_half_gemm_relu(struct RocmHalfBuf a, int ta, struct RocmHalfBuf b, int tb, struct RocmHalfBuf c,
+                        unsigned long m, unsigned long n, unsigned long k);
+// Training ops, as their RocmBuf versions (loss stays fp32).
+int rocm_half_relu(struct RocmHalfBuf a, struct RocmHalfBuf out);
+int rocm_half_relu_grad(struct RocmHalfBuf z, struct RocmHalfBuf g, struct RocmHalfBuf out);
+int rocm_half_mse_grad(struct RocmHalfBuf y, struct RocmHalfBuf t, struct RocmHalfBuf dy, struct RocmBuf loss1);
+// rocm_half_sgd on two weight/gradient pairs in one launch.
+int rocm_half_sgd2(struct RocmHalfBuf w1, struct RocmHalfBuf g1, struct RocmHalfBuf w2, struct RocmHalfBuf g2,
+                   float lr);
+
 // ── Graphs: record queued ops once, replay with one launch ───────────────────
 
 struct RocmGraph {

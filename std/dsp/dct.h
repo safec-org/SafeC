@@ -24,6 +24,10 @@ void dct2(const &double in, &double out, unsigned long n);
 // cos(pi/N * (n+0.5) * k)).
 void idct3(const &double in, &double out, unsigned long n);
 
+// Float in and out (computed in double, rounded once). Same contracts.
+void dct2_f32(const &float in, &float out, unsigned long n);
+void idct3_f32(const &float in, &float out, unsigned long n);
+
 void fdct2(const &Fixed in, &Fixed out, unsigned long n);
 void fidct3(const &Fixed in, &Fixed out, unsigned long n);
 

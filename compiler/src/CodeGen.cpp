@@ -215,19 +215,22 @@ std::unique_ptr<llvm::Module> CodeGen::generate(TranslationUnit &tu) {
     // Dereferencing a vec<T,N> pointer loads/stores with the vector's ABI
     // alignment (e.g. 32 for vec<float,8>), but such pointers usually come
     // from casting an element address inside an array, which is only
-    // element-aligned. Unless the address is a local or global the
-    // compiler laid out itself, use the element alignment instead, as
-    // clang does for __attribute__((aligned(4))) vector typedefs.
+    // element-aligned. Keep the vector alignment only where the address
+    // provably has it (a vector local or global, or a constant offset into
+    // a suitably aligned one); otherwise use the element alignment, as
+    // clang does for __attribute__((aligned(4))) vector typedefs. (An
+    // element of a local double[] at a variable index is 8-aligned, not
+    // 32, even though the array is a local.)
     {
         const llvm::DataLayout &dl = mod_->getDataLayout();
         auto fix = [&](llvm::Type *ty, llvm::Value *ptr, llvm::Align cur) -> llvm::Align {
             auto *vt = llvm::dyn_cast<llvm::FixedVectorType>(ty);
             if (!vt) return cur;
-            const llvm::Value *base = llvm::getUnderlyingObject(ptr);
-            if (llvm::isa<llvm::AllocaInst>(base) || llvm::isa<llvm::GlobalVariable>(base))
-                return cur;
+            llvm::Align known = ptr->getPointerAlignment(dl);
+            if (known >= cur) return cur;
             llvm::Align elt = dl.getABITypeAlign(vt->getElementType());
-            return elt < cur ? elt : cur;
+            llvm::Align a = known > elt ? known : elt;
+            return a < cur ? a : cur;
         };
         for (auto &f : *mod_)
             for (auto &bb : f)
@@ -773,12 +776,38 @@ llvm::Function *CodeGen::genFunctionProto(FunctionDecl &fn) {
     // exports a 'wasm-export-name' function with no --export flag needed.
     // Applied from whichever declaration (header prototype or definition)
     // carries them.
+    // __attribute__((weak)): a definition another one may override, or an
+    // undefined reference that resolves to null when nothing defines it.
+    if (fn.isWeak && !fn.isStatic)
+        llvmFn->setLinkage(fn.body ? llvm::Function::WeakAnyLinkage : llvm::Function::ExternalWeakLinkage);
     if (!fn.wasmExportName.empty())   llvmFn->addFnAttr("wasm-export-name", fn.wasmExportName);
     if (!fn.wasmImportModule.empty()) llvmFn->addFnAttr("wasm-import-module", fn.wasmImportModule);
     if (!fn.wasmImportName.empty())   llvmFn->addFnAttr("wasm-import-name", fn.wasmImportName);
 
     if (isNewFunction || fn.body) {
         if (fn.isInline) llvmFn->addFnAttr(llvm::Attribute::InlineHint);
+        if (fn.isAlwaysInline) llvmFn->addFnAttr(llvm::Attribute::AlwaysInline);
+        // target("a,b"): this function may use ISA features a and b on top
+        // of the module's (for kernels picked at run time by CPU support).
+        if (!fn.targetAttr.empty()) {
+            std::string feats = targetFeatures_;
+            size_t pos = 0;
+            while (pos <= fn.targetAttr.size()) {
+                size_t comma = fn.targetAttr.find(',', pos);
+                std::string f = fn.targetAttr.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+                while (!f.empty() && f.front() == ' ') f.erase(f.begin());
+                while (!f.empty() && f.back() == ' ') f.pop_back();
+                if (!f.empty()) {
+                    if (f[0] != '+' && f[0] != '-') f = "+" + f;
+                    feats += (feats.empty() ? "" : ",") + f;
+                }
+                if (comma == std::string::npos) break;
+                pos = comma + 1;
+            }
+            llvmFn->addFnAttr("target-features", feats);
+            if (!llvmFn->hasFnAttribute("target-cpu"))
+                llvmFn->addFnAttr("target-cpu", targetCpu_.empty() ? "generic" : targetCpu_);
+        }
 
         // ── Bare-metal / effect system attributes ────────────────────────
         if (fn.isNaked)    llvmFn->addFnAttr(llvm::Attribute::Naked);
