@@ -48,9 +48,12 @@ void stft_forward(const &double signal, unsigned long signalLen,
             }
             i = i + 1UL;
         }
-        unsafe { fft(out + f * frameSize, frameSize); }
         f = f + 1UL;
     }
+    // All frames at once: spread over the thread pool (stft_forward is an
+    // offline analysis; streaming code should window and fft_serial a frame
+    // at a time instead).
+    unsafe { fft_batch(out, frameSize, numFrames, 0); }
 
     unsafe { dealloc_raw_((void*)win); }
 }

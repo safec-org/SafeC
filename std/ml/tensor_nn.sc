@@ -250,7 +250,7 @@ void adam_step(&AdamState state, &Tensor param) {
             state.v[i] = b2 * state.v[i] + ((float)1.0 - b2) * g * g;
             float mHat = state.m[i] / biasCorr1;
             float vHat = state.v[i] / biasCorr2;
-            param->data[i] = param->data[i] - state.lr * mHat / (sqrt_f(vHat) + state.eps);
+            param->data[i] = param->data[i] - state.lr * mHat / (__builtin_sqrt(vHat) + state.eps);
             i = i + 1UL;
         }
     }

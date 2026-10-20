@@ -3,25 +3,9 @@
 #include <std/ml/unet.h>
 #include <std/ml/tensor.h>
 #include <std/ml/cnn.h>
-#include <std/ml/cnn.h>
 #include <std/mem.h>
 
 namespace std {
-
-static struct FeatureMap __fm_relu(const struct FeatureMap* fm) {
-    struct FeatureMap out;
-    unsafe {
-        out = feature_map_new(fm->channels, fm->height, fm->width);
-        unsigned long size = fm->channels * fm->height * fm->width;
-        unsigned long i = 0UL;
-        while (i < size) {
-            float v = fm->data[i];
-            out.data[i] = (v > (float)0.0) ? v : (float)0.0;
-            i = i + 1UL;
-        }
-    }
-    return out;
-}
 
 struct UNet unet_new(unsigned long inChannels, unsigned long c1, unsigned long c2,
                       unsigned long outChannels) {
@@ -46,20 +30,14 @@ void unet_free(&UNet net) {
 
 struct FeatureMap unet_forward(&UNet net, const &FeatureMap input) {
 
-    struct FeatureMap e1c = conv2d_forward(&net->encConv1, input);
-    struct FeatureMap e1 = __fm_relu(&e1c);
-    feature_map_free(&e1c);
+    struct FeatureMap e1 = conv2d_relu_forward(&net->encConv1, input);
     struct FeatureMap p1 = maxpool2d_forward(&e1, 2UL, 2UL);
 
-    struct FeatureMap e2c = conv2d_forward(&net->encConv2, &p1);
-    struct FeatureMap e2 = __fm_relu(&e2c);
-    feature_map_free(&e2c);
+    struct FeatureMap e2 = conv2d_relu_forward(&net->encConv2, &p1);
     feature_map_free(&p1);
     struct FeatureMap p2 = maxpool2d_forward(&e2, 2UL, 2UL);
 
-    struct FeatureMap bc = conv2d_forward(&net->bottleneck, &p2);
-    struct FeatureMap b = __fm_relu(&bc);
-    feature_map_free(&bc);
+    struct FeatureMap b = conv2d_relu_forward(&net->bottleneck, &p2);
     feature_map_free(&p2);
 
     struct FeatureMap u1 = upsample2x_nearest(&b);
@@ -67,10 +45,8 @@ struct FeatureMap unet_forward(&UNet net, const &FeatureMap input) {
     struct FeatureMap cat1 = concat_channels(&u1, &e2);
     feature_map_free(&u1);
     feature_map_free(&e2);
-    struct FeatureMap d1c = conv2d_forward(&net->decConv1, &cat1);
+    struct FeatureMap d1 = conv2d_relu_forward(&net->decConv1, &cat1);
     feature_map_free(&cat1);
-    struct FeatureMap d1 = __fm_relu(&d1c);
-    feature_map_free(&d1c);
 
     struct FeatureMap u2 = upsample2x_nearest(&d1);
     feature_map_free(&d1);

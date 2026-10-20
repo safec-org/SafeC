@@ -24,6 +24,7 @@
 #include <std/sync/channel.h>
 #include <std/sync/task.h>
 #include <std/sync/thread_bare.h>
+#include <std/sync/parallel.h>
 #include <std/simd/simd.h>
 #include <std/reactive/signal.h>
 
@@ -361,6 +362,85 @@ static int counting_task(?&int arg, int resume) {
     return resume + 1;
 }
 
+// ── parallel_for ─────────────────────────────────────────────────────────────
+static int g_par_hits[100000];
+struct ParJob { &int hits; long long sum; int calls; };
+
+static void par_mark(&ParJob j, unsigned long lo, unsigned long hi) {
+    unsigned long i = lo;
+    long long s = 0LL;
+    while (i < hi) {
+        unsafe { j.hits[i] = j.hits[i] + 1; }
+        s = s + (long long)i;
+        i = i + 1UL;
+    }
+    atomic_fetch_add_ll(&j.sum, s);
+    atomic_fetch_add_int(&j.calls, 1);
+}
+
+// A body that itself calls parallel_for: the inner call runs inline.
+static void par_nested(&ParJob j, unsigned long lo, unsigned long hi) {
+    struct ParJob inner;
+    inner.hits = j.hits;
+    inner.sum = 0LL;
+    inner.calls = 0;
+    unsigned long i = lo;
+    while (i < hi) {
+        unsafe { parallel_for(1UL, 1UL, par_mark, &inner); }
+        i = i + 1UL;
+    }
+    atomic_fetch_add_int(&j.calls, inner.calls == (int)(hi - lo) ? 1 : 1000);
+}
+
+void t_parallel() {
+    ASSERT_TRUE(parallel_threads() >= 1UL);
+    unsigned long n = 100000UL;
+    &int hits = &g_par_hits[0];
+    int round = 0;
+    while (round < 50) {           // repeated jobs reuse the parked workers
+        unsigned long i = 0UL;
+        while (i < n) { unsafe { hits[i] = 0; } i = i + 1UL; }
+        struct ParJob j;
+        j.hits = hits;
+        j.sum = 0LL;
+        j.calls = 0;
+        parallel_for(n, 1000UL, par_mark, &j);
+        ASSERT_TRUE(j.sum == (long long)(n * (n - 1UL) / 2UL));
+        int bad = 0;
+        i = 0UL;
+        while (i < n) { unsafe { if (hits[i] != 1) bad = bad + 1; } i = i + 1UL; }
+        ASSERT_EQ(bad, 0);
+        ASSERT_TRUE(j.calls >= 1);
+        round = round + 1;
+    }
+    struct ParJob small;
+    small.hits = hits;
+    small.sum = 0LL;
+    small.calls = 0;
+    parallel_for(10UL, 100UL, par_mark, &small);       // n <= grain: one inline call
+    ASSERT_EQ(small.calls, 1);
+    parallel_for(0UL, 1UL, par_mark, &small);          // empty range: no call
+    ASSERT_EQ(small.calls, 1);
+
+    struct ParJob nest;
+    nest.hits = hits;
+    nest.sum = 0LL;
+    nest.calls = 0;
+    parallel_for(64UL, 4UL, par_nested, &nest);
+    ASSERT_TRUE(nest.calls >= 1 && nest.calls < 1000);
+
+    unsigned long saved = parallel_threads();
+    parallel_set_threads(1UL);
+    ASSERT_EQ(parallel_threads(), 1UL);
+    struct ParJob one;
+    one.hits = hits;
+    one.sum = 0LL;
+    one.calls = 0;
+    parallel_for(n, 10UL, par_mark, &one);
+    ASSERT_EQ(one.calls, 1);
+    parallel_set_threads(saved);
+}
+
 void t_tasks() {
     unsafe {
         ?&heap TaskScheduler sq = alloc(sizeof(struct TaskScheduler));
@@ -523,6 +603,7 @@ int main() {
         t.add("mpsc/lockfree/channel", t_queues);
         t.add("signal", t_signal);
         t.add("task/thread_bare", t_tasks);
+        t.add("parallel_for", t_parallel);
         t.add("time", t_time);
         t.add("io_file", t_file);
         t.add("bench/fuzz", t_bench_fuzz);

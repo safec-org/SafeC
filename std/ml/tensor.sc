@@ -11,24 +11,6 @@
 
 namespace std {
 
-// Multithreading tensor_matmul's row loop (spawn N worker threads, one per
-// row range, join) was tried and measured *slower* on this benchmark, not
-// faster -- reverted. A synthetic isolated measurement (spawn+join a single
-// no-op thread, ~20us; a single 64x128@128x256 matmul, ~550us sequentially)
-// suggested real headroom. The actual training loop calls tensor_matmul
-// ~2,200 times (100 steps x 2 forward matmuls, plus 1000 inference passes x
-// 2), each spawning 3 new threads under that scheme -- ~6,600 real
-// thread_create/join pairs total, not one. At that call frequency, real
-// per-call OS thread-creation cost (stack allocation, kernel scheduling
-// churn) turned out far higher than the isolated single-spawn measurement
-// implied: train_ms went from ~165ms to ~212ms and inference_ms/1000 from
-// ~517ms to ~946ms, both regressions, not the improvement the isolated
-// numbers predicted. A persistent thread pool (spawn once, reuse across
-// every matmul call) would avoid this repeated-spawn cost and might still
-// be a net win -- not implemented here since std/ has no such primitive
-// yet and it's real, standalone infrastructure work, not a one-line
-// change like this was.
-
 // ══ Tensor methods ═══════════════════════════════════════════════════════════
 
 inline float Tensor::at1(unsigned long i) const {
@@ -170,9 +152,15 @@ inline void Tensor::free() {
     unsafe { one[0] = 1UL; }
     &Tensor out = __tensor_alloc(one, 1UL, 0);
     unsafe {
-        float acc = (float)0.0;
+        // Eight running sums (one f32x8), so the loop runs at vector width
+        // and loses less precision than one long serial sum.
+        const float* p = (const float*)a->data;
+        unsigned long n = a->size;
+        f32x8 acc8;
         unsigned long i = 0UL;
-        while (i < a->size) { acc = acc + a->data[i]; i = i + 1UL; }
+        while (i + 8UL <= n) { acc8 = acc8 + *(const f32x8*)&p[i]; i = i + 8UL; }
+        float acc = ((acc8[0] + acc8[1]) + (acc8[2] + acc8[3])) + ((acc8[4] + acc8[5]) + (acc8[6] + acc8[7]));
+        while (i < n) { acc = acc + p[i]; i = i + 1UL; }
         out->data[0] = acc;
     }
     __tensor_link1(out, a, (void*)__sum_backward);
@@ -185,38 +173,11 @@ inline void Tensor::free() {
     unsigned long m; unsigned long k; unsigned long n;
     unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
     &Tensor out = tensor_new_2d(m, n, 0);
-    // i,p,j loop order, not the textbook i,j,p: with i,j,p, the innermost
-    // loop's 'b->data[p*n+j]' access strides by n bytes per step (p is
-    // the loop variable, but n is the stride) -- a cache miss on nearly
-    // every access for any matrix past L1 size, and not something the
-    // backend's auto-vectorizer can turn into packed SIMD loads either,
-    // since consecutive iterations touch non-adjacent memory. Reordering
-    // to i,p,j instead makes the innermost loop a running
-    // 'out[i,j] += a[i,p] * b[p,j]' accumulation over j -- both b's row
-    // and out's row are read/written sequentially, which is both
-    // cache-friendly and exactly the shape LLVM's loop vectorizer
-    // recognizes and turns into packed multiply-add instructions at -O2.
+    // Packed SIMD GEMM (std/simd/gemm.h); large products run on the
+    // std/sync/parallel.h thread pool.
     unsafe {
-        unsigned long i = 0UL;
-        while (i < m) {
-            unsigned long j0 = 0UL;
-            while (j0 < n) { out->data[i * n + j0] = (float)0.0; j0 = j0 + 1UL; }
-            i = i + 1UL;
-        }
-        i = 0UL;
-        while (i < m) {
-            unsigned long p = 0UL;
-            while (p < k) {
-                float aVal = a->data[i * k + p];
-                unsigned long j = 0UL;
-                while (j < n) {
-                    out->data[i * n + j] = out->data[i * n + j] + aVal * b->data[p * n + j];
-                    j = j + 1UL;
-                }
-                p = p + 1UL;
-            }
-            i = i + 1UL;
-        }
+        sgemm(SGEMM_NO_TRANS, SGEMM_NO_TRANS, m, n, k, (float)1.0,
+              (const &float)a->data, k, (const &float)b->data, n, (float)0.0, (&float)out->data, n);
     }
     __tensor_link2(out, a, b, (void*)__matmul_backward);
     return out;

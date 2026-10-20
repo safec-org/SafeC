@@ -85,8 +85,10 @@ static void __relu_backward(void* selfPtr) {
         if (!a->requiresGrad) return;
         __tensor_ensure_grad(a);
         unsigned long i = 0UL;
+        // Branchless, so the loop vectorizes.
         while (i < selfT->size) {
-            if (a->data[i] > (float)0.0) { a->grad[i] = a->grad[i] + selfT->grad[i]; }
+            float g = selfT->grad[i];
+            a->grad[i] = a->grad[i] + (a->data[i] > (float)0.0 ? g : (float)0.0);
             i = i + 1UL;
         }
     }

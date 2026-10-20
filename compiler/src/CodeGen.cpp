@@ -6,6 +6,7 @@
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/GetElementPtrTypeIterator.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/FileSystem.h"
@@ -208,6 +209,34 @@ std::unique_ptr<llvm::Module> CodeGen::generate(TranslationUnit &tu) {
                         gep->setOperand(i, llvm::CastInst::CreateTruncOrBitCast(
                             idx, idxTy, "idx.trunc", gep->getIterator()));
                     }
+                }
+    }
+
+    // Dereferencing a vec<T,N> pointer loads/stores with the vector's ABI
+    // alignment (e.g. 32 for vec<float,8>), but such pointers usually come
+    // from casting an element address inside an array, which is only
+    // element-aligned. Unless the address is a local or global the
+    // compiler laid out itself, use the element alignment instead, as
+    // clang does for __attribute__((aligned(4))) vector typedefs.
+    {
+        const llvm::DataLayout &dl = mod_->getDataLayout();
+        auto fix = [&](llvm::Type *ty, llvm::Value *ptr, llvm::Align cur) -> llvm::Align {
+            auto *vt = llvm::dyn_cast<llvm::FixedVectorType>(ty);
+            if (!vt) return cur;
+            const llvm::Value *base = llvm::getUnderlyingObject(ptr);
+            if (llvm::isa<llvm::AllocaInst>(base) || llvm::isa<llvm::GlobalVariable>(base))
+                return cur;
+            llvm::Align elt = dl.getABITypeAlign(vt->getElementType());
+            return elt < cur ? elt : cur;
+        };
+        for (auto &f : *mod_)
+            for (auto &bb : f)
+                for (auto &inst : bb) {
+                    if (auto *ld = llvm::dyn_cast<llvm::LoadInst>(&inst))
+                        ld->setAlignment(fix(ld->getType(), ld->getPointerOperand(), ld->getAlign()));
+                    else if (auto *st = llvm::dyn_cast<llvm::StoreInst>(&inst))
+                        st->setAlignment(fix(st->getValueOperand()->getType(),
+                                             st->getPointerOperand(), st->getAlign()));
                 }
     }
 
@@ -3340,6 +3369,20 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
             auto *isZeroUndef = llvm::ConstantInt::getTrue(ctx_);
             auto *r = builder_.CreateCall(fn, {val, isZeroUndef}, isClz ? "clz" : "ctz");
             return builder_.CreateIntCast(r, llvm::Type::getInt32Ty(ctx_), false);
+        }
+        if (ident.name == "__builtin_sqrt" && e.args.size() == 1) {
+            auto *x = genExpr(*e.args[0], env);
+            auto *fn = llvm::Intrinsic::getOrInsertDeclaration(
+                mod_.get(), llvm::Intrinsic::sqrt, {x->getType()});
+            return builder_.CreateCall(fn, {x}, "sqrt");
+        }
+        if (ident.name == "__builtin_fmuladd" && e.args.size() == 3) {
+            auto *a = genExpr(*e.args[0], env);
+            auto *b = genExpr(*e.args[1], env);
+            auto *c = genExpr(*e.args[2], env);
+            auto *fn = llvm::Intrinsic::getOrInsertDeclaration(
+                mod_.get(), llvm::Intrinsic::fmuladd, {a->getType()});
+            return builder_.CreateCall(fn, {a, b, c}, "fmuladd");
         }
         if (ident.name == "__builtin_bswap32" || ident.name == "__builtin_bswap64") {
             auto *val = genExpr(*e.args[0], env);

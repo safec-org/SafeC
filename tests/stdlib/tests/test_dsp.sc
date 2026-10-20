@@ -89,6 +89,92 @@ void t_fft() {
     }
 }
 
+
+// Larger transforms: the cache-blocked stages (n > 2048), the threaded
+// path (n >= 32768), batches and the half-length real transform.
+static struct Complex g_fa[131072];
+static struct Complex g_fb[131072];
+static double g_fx[16384];
+
+static double max_diff(const struct Complex* a, const struct Complex* b, unsigned long n) {
+    double m = 0.0;
+    unsigned long i = 0UL;
+    unsafe { while (i < n) { double e = (a[i] - b[i]).abs(); if (e > m) m = e; i = i + 1UL; } }
+    return m;
+}
+
+void t_fft_large() {
+    unsafe {
+        ASSERT_TRUE(fft_prepare(131072UL));
+        ASSERT_FALSE(fft_prepare(1000UL));
+        // n = 4096 against the O(n^2) DFT.
+        unsigned long n = 4096UL;
+        unsigned long i = 0UL;
+        while (i < n) { g_fa[i] = complex_new(rnd(), rnd()); i = i + 1UL; }
+        dft((const struct Complex*)g_fa, (struct Complex*)g_fb, n);
+        ASSERT_TRUE(fft((struct Complex*)g_fa, n));
+        ASSERT_TRUE(max_diff((const struct Complex*)g_fa, (const struct Complex*)g_fb, n) < 1e-9);
+
+        // n = 2^17, threaded: a sum of two tones lands in exactly two bins,
+        // fft_serial agrees, and ifft round-trips.
+        n = 131072UL;
+        i = 0UL;
+        while (i < n) {
+            double t = (double)i / (double)n;
+            g_fa[i] = complex_new(cos_d(2.0 * PI_D() * 1000.0 * t), sin_d(2.0 * PI_D() * 1000.0 * t) + 0.5 * cos_d(2.0 * PI_D() * 77.0 * t));
+            g_fb[i] = g_fa[i];
+            i = i + 1UL;
+        }
+        ASSERT_TRUE(fft((struct Complex*)g_fa, n));
+        ASSERT_TRUE(near_d(g_fa[1000].abs(), (double)n, 1e-6));
+        ASSERT_TRUE(near_d(g_fa[77].abs(), 0.25 * (double)n, 1e-6));
+        ASSERT_TRUE(near_d(g_fa[n - 77UL].abs(), 0.25 * (double)n, 1e-6));
+        ASSERT_TRUE(g_fa[500].abs() < 1e-6);
+        ASSERT_TRUE(fft_serial((struct Complex*)g_fb, n));
+        ASSERT_TRUE(max_diff((const struct Complex*)g_fa, (const struct Complex*)g_fb, n) < 1e-9);
+        ASSERT_TRUE(ifft((struct Complex*)g_fa, n));
+        double t1 = 1.0 / (double)n;
+        ASSERT_TRUE(near_d(g_fa[1].re, cos_d(2.0 * PI_D() * 1000.0 * t1), 1e-12));
+        ASSERT_TRUE(near_d(g_fa[1].im, sin_d(2.0 * PI_D() * 1000.0 * t1) + 0.5 * cos_d(2.0 * PI_D() * 77.0 * t1), 1e-12));
+
+        // fft_batch == row-by-row fft_serial; inverse batch round-trips.
+        unsigned long len = 256UL;
+        unsigned long rows = 64UL;
+        i = 0UL;
+        while (i < len * rows) { g_fa[i] = complex_new(rnd(), rnd()); g_fb[i] = g_fa[i]; i = i + 1UL; }
+        ASSERT_TRUE(fft_batch((struct Complex*)g_fa, len, rows, 0));
+        unsigned long r = 0UL;
+        while (r < rows) { fft_serial((struct Complex*)&g_fb[r * len], len); r = r + 1UL; }
+        ASSERT_TRUE(max_diff((const struct Complex*)g_fa, (const struct Complex*)g_fb, len * rows) < 1e-12);
+        ASSERT_TRUE(fft_batch((struct Complex*)g_fa, len, rows, 1));
+        ASSERT_FALSE(fft_batch((struct Complex*)g_fa, 100UL, rows, 0));
+
+        // fft_real / fft_real_batch == the complex transform of (x, 0).
+        n = 1024UL;
+        rows = 16UL;
+        i = 0UL;
+        while (i < n * rows) { g_fx[i] = rnd(); i = i + 1UL; }
+        ASSERT_TRUE(fft_real_batch((const double*)g_fx, (struct Complex*)g_fa, n, rows));
+        r = 0UL;
+        double worst = 0.0;
+        while (r < rows) {
+            i = 0UL;
+            while (i < n) { g_fb[i] = complex_new(g_fx[r * n + i], 0.0); i = i + 1UL; }
+            fft_serial((struct Complex*)g_fb, n);
+            double e = max_diff((const struct Complex*)&g_fa[r * n], (const struct Complex*)g_fb, n);
+            if (e > worst) worst = e;
+            r = r + 1UL;
+        }
+        ASSERT_TRUE(worst < 1e-10);
+        double two[2];
+        two[0] = 3.0; two[1] = -1.0;
+        ASSERT_TRUE(fft_real((const double*)two, (struct Complex*)g_fa, 2UL));
+        ASSERT_TRUE(near_d(g_fa[0].re, 2.0, 1e-15) && near_d(g_fa[1].re, 4.0, 1e-15));
+        ASSERT_TRUE(fft_real((const double*)two, (struct Complex*)g_fa, 1UL));
+        ASSERT_TRUE(near_d(g_fa[0].re, 3.0, 1e-15));
+    }
+}
+
 void t_window_fixed() {
     unsafe {
         double w[9];
@@ -359,6 +445,7 @@ int main() {
     struct TestSuite t = test_suite_init();
     unsafe {
         t.add("fft/dft", t_fft);
+        t.add("fft large/batch/real", t_fft_large);
         t.add("window/fixed", t_window_fixed);
         t.add("biquad/fir/iir/ztransform", t_biquad_filters);
         t.add("conv/dct/resample", t_conv_dct_resample);

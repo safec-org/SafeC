@@ -3230,6 +3230,48 @@ TypePtr Sema::checkCall(CallExpr &e) {
             e.type = makeInt(32, true);
             return e.type;
         }
+        // __builtin_fmuladd(a, b, c): a*b + c, fused into one FMA where the
+        // target has one and as a separate multiply and add where it doesn't
+        // (llvm.fmuladd). For float, double and vec<float/double, N>.
+        // __builtin_sqrt(x): IEEE square root (llvm.sqrt), one instruction
+        // on targets with a hardware sqrt, and vectorizable in loops. For
+        // float, double and vec<float/double, N>.
+        if (ident.name == "__builtin_sqrt") {
+            for (auto &a : e.args) checkExpr(*a);
+            TypePtr t = e.args.size() == 1 ? e.args[0]->type : nullptr;
+            bool ok = t && (t->isFloat() ||
+                (t->kind == TypeKind::Vector &&
+                 static_cast<VectorType &>(*t).element->isFloat()));
+            if (!ok) {
+                diag_.error(e.loc, "__builtin_sqrt takes one float, double or vec<float/double, N>");
+                e.type = makeError();
+                return e.type;
+            }
+            e.type = t;
+            return t;
+        }
+        if (ident.name == "__builtin_fmuladd") {
+            for (auto &a : e.args) checkExpr(*a);
+            if (e.args.size() != 3) {
+                diag_.error(e.loc, "__builtin_fmuladd takes 3 arguments");
+                e.type = makeError();
+                return e.type;
+            }
+            TypePtr t = e.args[0]->type;
+            bool ok = t && (t->isFloat() ||
+                (t->kind == TypeKind::Vector &&
+                 static_cast<VectorType &>(*t).element->isFloat()));
+            for (int i = 1; ok && i < 3; ++i)
+                ok = e.args[i]->type && e.args[i]->type->equals(*t);
+            if (!ok) {
+                diag_.error(e.loc, "__builtin_fmuladd: arguments must all have one type: "
+                                   "float, double or vec<float/double, N>");
+                e.type = makeError();
+                return e.type;
+            }
+            e.type = t;
+            return t;
+        }
         if (ident.name == "__builtin_bswap32" || ident.name == "__builtin_bswap64") {
             for (auto &a : e.args) checkExpr(*a);
             // Result has the same width as the operand being byte-swapped.

@@ -39,6 +39,7 @@
 // auto-vectorization actually run. Keeping every op as its own function
 // isn't just for consistency -- it's load-bearing.
 #include <std/collections/vec.h>
+#include <std/simd/gemm.h>
 
 namespace std {
 
@@ -242,9 +243,8 @@ static void __tensor_link1(struct Tensor* out, struct Tensor* a, void* backwardF
 // 'delta' buffer and calling __tensor_accumulate -- profiled (via 'sample'
 // on a real training run): the old throwaway-buffer version cost a full
 // extra malloc/free and a full extra pass over the data on every single
-// backward call, for no benefit at this size. __matmul_backward is the one
-// exception that still uses a throwaway buffer, for the opposite reason --
-// see its own comment.
+// backward call, for no benefit at this size. __matmul_backward does the
+// same through sgemm's beta = 1.
 
 static void __add_backward(void* selfPtr) {
     unsafe {
@@ -320,71 +320,18 @@ static void __matmul_backward(void* selfPtr) {
         unsigned long k = a->shape[1];
         unsigned long n = b->shape[1];
 
-        // dA[m,k] = dC[m,n] . B^T[n,k]      dA[i,j] = sum_p dC[i,p]*B[j,p]
-        // dB[k,n] = A^T[k,m] . dC[m,n]      dB[i,j] = sum_p A[p,i]*dC[p,j]
-        //
-        // These DO still build a throwaway dA/dB buffer and copy it in
-        // via __tensor_accumulate, unlike every other backward function
-        // here -- tried fusing the accumulation straight into a->grad/
-        // b->grad here too (the same change that was a clear win for
-        // add/sub/mul/scale/relu/sum), and measured it with 'sample' on a
-        // real training run instead of assuming it was also a win: it
-        // wasn't. a->grad/b->grad are struct-field loads the compiler
-        // can't prove don't alias selfT->grad/a->data/b->data inside this
-        // tight, O(m*k*n) innermost loop, so fusing the write into them
-        // defeats auto-vectorization here specifically -- a cost that
-        // swamps the one extra malloc+pass+free this keeps, because this
-        // loop runs vastly more times than the elementwise ones do. A
-        // fresh local buffer has no such aliasing ambiguity, so it
-        // vectorizes fine.
+        // dA[m,k] += dC[m,n] . B^T[n,k]
+        // dB[k,n] += A^T[k,m] . dC[m,n]
+        // Both accumulate straight into the existing gradient (beta = 1).
         if (a->requiresGrad) {
-            float* dA = (float*)malloc(sizeof(float) * m * k);
-            unsigned long i = 0UL;
-            while (i < m) {
-                unsigned long j = 0UL;
-                while (j < k) {
-                    float acc = (float)0.0;
-                    unsigned long p = 0UL;
-                    while (p < n) {
-                        acc = acc + selfT->grad[i * n + p] * b->data[j * n + p];
-                        p = p + 1UL;
-                    }
-                    dA[i * k + j] = acc;
-                    j = j + 1UL;
-                }
-                i = i + 1UL;
-            }
-            __tensor_accumulate(a, (const float*)dA);
-            free((void*)dA);
+            __tensor_ensure_grad(a);
+            sgemm(SGEMM_NO_TRANS, SGEMM_TRANS, m, k, n, (float)1.0,
+                  (const &float)selfT->grad, n, (const &float)b->data, n, (float)1.0, (&float)a->grad, k);
         }
         if (b->requiresGrad) {
-            // Same i,j,p -> p,i,j reordering as tensor_matmul's forward
-            // pass, for the same reason: 'a->data[p*k+i]' with p as the
-            // innermost loop variable strides by k per step, defeating
-            // both cache locality and auto-vectorization. Looping p
-            // outermost instead makes the innermost loop over j a
-            // sequential 'dB[i,j] += aVal * selfT->grad[p,j]'
-            // accumulation, with aVal ('A[p,i]') loaded once per (p,i)
-            // pair rather than re-derived in the hot loop.
-            float* dB = (float*)malloc(sizeof(float) * k * n);
-            unsigned long z = 0UL;
-            while (z < k * n) { dB[z] = (float)0.0; z = z + 1UL; }
-            unsigned long p = 0UL;
-            while (p < m) {
-                unsigned long i = 0UL;
-                while (i < k) {
-                    float aVal = a->data[p * k + i];
-                    unsigned long j = 0UL;
-                    while (j < n) {
-                        dB[i * n + j] = dB[i * n + j] + aVal * selfT->grad[p * n + j];
-                        j = j + 1UL;
-                    }
-                    i = i + 1UL;
-                }
-                p = p + 1UL;
-            }
-            __tensor_accumulate(b, (const float*)dB);
-            free((void*)dB);
+            __tensor_ensure_grad(b);
+            sgemm(SGEMM_TRANS, SGEMM_NO_TRANS, k, n, m, (float)1.0,
+                  (const &float)a->data, k, (const &float)selfT->grad, n, (float)1.0, (&float)b->grad, n);
         }
     }
 }

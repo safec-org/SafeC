@@ -42,7 +42,12 @@ struct Conv2D {
 struct Conv2D conv2d_new(unsigned long inChannels, unsigned long outChannels,
                           unsigned long kH, unsigned long kW,
                           unsigned long stride, unsigned long padding);
+// Convolution + bias, computed as im2col + sgemm (std/simd/gemm.h): SIMD
+// on any target, and split across std/sync/parallel.h's thread pool when
+// the layer is large enough.
 struct FeatureMap conv2d_forward(const &Conv2D layer, const &FeatureMap input);
+// relu(conv2d_forward(layer, input)), in one pass.
+struct FeatureMap conv2d_relu_forward(const &Conv2D layer, const &FeatureMap input);
 void conv2d_free(&Conv2D layer);
 
 // Max/avg pooling: kernel x kernel window, given stride, no padding.

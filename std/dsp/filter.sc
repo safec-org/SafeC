@@ -18,15 +18,36 @@ inline struct FirFilter fir_init(const &double coeffs, unsigned long numTaps, &d
 
 double FirFilter::process(double x) {
     unsafe { self.history[self.pos] = x; }
-    double y = 0.0;
-    unsigned long k = 0UL;
-    while (k < self.numTaps) {
-        unsigned long idx = (self.pos + self.numTaps - k) % self.numTaps;
-        unsafe { y = y + self.coeffs[k] * self.history[idx]; }
-        k = k + 1UL;
+    // y = sum_k coeffs[k] * history[(pos - k) mod numTaps], as two runs
+    // without the modulo: k = 0..pos walks history down from pos, then
+    // k = pos+1..numTaps-1 walks it down from the end. Four partial sums
+    // keep the multiply-adds independent.
+    double s0 = 0.0; double s1 = 0.0; double s2 = 0.0; double s3 = 0.0;
+    unsafe {
+        const double* c = (const double*)self.coeffs;
+        const double* h = (const double*)self.history;
+        unsigned long k = 0UL;
+        unsigned long last = self.pos;              // first run: k <= pos
+        while (k + 4UL <= last + 1UL) {
+            s0 = s0 + c[k] * h[self.pos - k];
+            s1 = s1 + c[k + 1UL] * h[self.pos - k - 1UL];
+            s2 = s2 + c[k + 2UL] * h[self.pos - k - 2UL];
+            s3 = s3 + c[k + 3UL] * h[self.pos - k - 3UL];
+            k = k + 4UL;
+        }
+        while (k <= last) { s0 = s0 + c[k] * h[self.pos - k]; k = k + 1UL; }
+        unsigned long top = self.pos + self.numTaps;  // second run: index top - k
+        while (k + 4UL <= self.numTaps) {
+            s0 = s0 + c[k] * h[top - k];
+            s1 = s1 + c[k + 1UL] * h[top - k - 1UL];
+            s2 = s2 + c[k + 2UL] * h[top - k - 2UL];
+            s3 = s3 + c[k + 3UL] * h[top - k - 3UL];
+            k = k + 4UL;
+        }
+        while (k < self.numTaps) { s0 = s0 + c[k] * h[top - k]; k = k + 1UL; }
     }
-    self.pos = (self.pos + 1UL) % self.numTaps;
-    return y;
+    self.pos = self.pos + 1UL == self.numTaps ? 0UL : self.pos + 1UL;
+    return (s0 + s1) + (s2 + s3);
 }
 
 void FirFilter::reset() {

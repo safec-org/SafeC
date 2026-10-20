@@ -117,24 +117,28 @@ Fixed dsp_rms(&stack Fixed a, unsigned long n) {
 // ── dsp_dot_f64 ──────────────────────────────────────────────────────────────
 // SIMD FMA dot product (see dsp.h for why this stays float64-only).
 double dsp_dot_f64(const &double a_ref, const &double b_ref, unsigned long n) { const double* a = a_ref; const double* b = b_ref;
-    f64x4 vacc = simd_splat_f64x4(0.0);
+    // Two independent f64x4 accumulators hide the multiply-add latency.
+    f64x4 acc0;
+    f64x4 acc1;
     unsigned long i = 0UL;
-    while (i + 4UL <= n) {
-        f64x4 va;
-        f64x4 vb;
-        unsafe {
-            va = simd_load_f64x4(a + i);
-            vb = simd_load_f64x4(b + i);
+    unsafe {
+        while (i + 8UL <= n) {
+            acc0 = __builtin_fmuladd(*(const f64x4*)&a[i], *(const f64x4*)&b[i], acc0);
+            acc1 = __builtin_fmuladd(*(const f64x4*)&a[i + 4UL], *(const f64x4*)&b[i + 4UL], acc1);
+            i = i + 8UL;
         }
-        vacc = simd_fma_f64x4(va, vb, vacc);
-        i = i + 4UL;
+        if (i + 4UL <= n) {
+            acc0 = __builtin_fmuladd(*(const f64x4*)&a[i], *(const f64x4*)&b[i], acc0);
+            i = i + 4UL;
+        }
     }
-    double acc = simd_hsum_f64x4(vacc);
+    f64x4 acc = acc0 + acc1;
+    double sum = (acc[0] + acc[1]) + (acc[2] + acc[3]);
     while (i < n) {
-        unsafe { acc = acc + a[i] * b[i]; }
+        unsafe { sum = sum + a[i] * b[i]; }
         i = i + 1UL;
     }
-    return acc;
+    return sum;
 }
 
 } // namespace std

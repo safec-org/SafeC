@@ -80,7 +80,7 @@ i32x4 simd_splat_i32x4(int x);
 i32x8 simd_splat_i32x8(int x);
 u32x4 simd_splat_u32x4(unsigned int x);
 
-// ── Fused multiply-add: a*b + c ────────────────────────────────────────────────
+// ── Multiply-add: a*b + c, one fused FMA where the target has one ─────────────
 f32x4 simd_fma_f32x4(f32x4 a, f32x4 b, f32x4 c);
 f32x8 simd_fma_f32x8(f32x8 a, f32x8 b, f32x8 c);
 f64x2 simd_fma_f64x2(f64x2 a, f64x2 b, f64x2 c);
