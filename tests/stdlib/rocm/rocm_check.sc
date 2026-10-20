@@ -3,6 +3,8 @@
 #include <std/ml/gpu_rocm.h>
 #include <std/collections/vec.h>
 #include <std/math.h>
+#include <std/ml/tensor_half.h>
+#include <std/ml/float16.h>
 extern int printf(const char* fmt, ...);
 
 static int g_checks = 0;
@@ -65,6 +67,153 @@ static struct Vec<float> download(struct RocmBuf b) {
     while (i < b.len) { v.push(0.0f); i = i + 1UL; }
     std::rocm_read(b, v.at(0UL), b.len);
     return v;
+}
+
+// fp16 / bf16: GPU rounding matches float16.h bit for bit; 16-bit gemm
+// against an fp32 CPU gemm of the same rounded inputs; 16-bit SGD exact.
+static void check_half() {
+    unsigned long n = 4096UL;
+    struct Vec<float> v = std::vec_with_cap(n);
+    v.push((float)0.0); v.push((float)-0.0); v.push((float)1.0); v.push((float)-1.0);
+    v.push((float)65504.0);          // largest fp16
+    v.push((float)65520.0);          // rounds to fp16 infinity
+    v.push((float)1.0e-8);           // below the fp16 subnormal range
+    v.push((float)6.0e-5);           // fp16 subnormal
+    v.push((float)1.00048828125);    // 1 + 2^-11: fp16 tie, to even (1.0)
+    v.push((float)1.00146484375);    // 1 + 3 * 2^-11: fp16 tie, up
+    v.push((float)1.00390625);       // 1 + 2^-8: bf16 tie, to even
+    v.push((float)1.01171875);       // 1 + 3 * 2^-8: bf16 tie, up
+    v.push((float)3.0e38);
+    while (v.length() < n) {
+        unsigned long i = v.length();
+        double scale = 1.0;
+        unsigned long c = i % 5UL;
+        if (c == 0UL) scale = 1.0e-6;
+        if (c == 1UL) scale = 1.0e-3;
+        if (c == 3UL) scale = 100.0;
+        if (c == 4UL) scale = 3.0e4;
+        v.push((float)((double)((i * 7919UL) % 20001UL) - 10000.0) * (float)(scale / 10000.0));
+    }
+    struct RocmBuf dv = std::rocm_upload(v.at(0UL), n);
+    int d = ROCM_FP16;
+    while (d <= ROCM_BF16) {
+        int bf = d == ROCM_BF16;
+        // round on the GPU, compare bits with the CPU encoder
+        struct RocmHalfBuf h = std::rocm_half_alloc(n, d);
+        check(h.dev != 0UL && std::rocm_to_half(dv, h), bf ? "bf16 convert ran" : "fp16 convert ran");
+        struct Vec<unsigned short> bits = std::vec_with_cap(n);
+        unsigned long i = 0UL;
+        while (i < n) { bits.push((unsigned short)0); i = i + 1UL; }
+        check(std::rocm_half_read(h, bits.at(0UL), n), "half read");
+        unsigned long bad = 0UL;
+        i = 0UL;
+        while (i < n) { if (*bits.at(i) != std::half_encode(*v.at(i), d)) bad = bad + 1UL; i = i + 1UL; }
+        check(bad == 0UL, bf ? "bf16 rounding matches float16.h" : "fp16 rounding matches float16.h");
+        // decode on the GPU: exact
+        struct RocmBuf back = std::rocm_alloc(n);
+        check(std::rocm_from_half(h, back), "half decode ran");
+        struct Vec<float> fb = download(back);
+        bad = 0UL;
+        i = 0UL;
+        while (i < n) { if (*fb.at(i) != std::half_decode(*bits.at(i), d)) bad = bad + 1UL; i = i + 1UL; }
+        check(bad == 0UL, bf ? "bf16 decode exact" : "fp16 decode exact");
+        // rocm_half_upload rounds the same way
+        struct RocmHalfBuf hu = std::rocm_half_upload(v.at(0UL), n, d);
+        struct Vec<unsigned short> ubits = std::vec_with_cap(n);
+        i = 0UL;
+        while (i < n) { ubits.push((unsigned short)0); i = i + 1UL; }
+        check(hu.dev != 0UL && std::rocm_half_read(hu, ubits.at(0UL), n), "half upload");
+        bad = 0UL;
+        i = 0UL;
+        while (i < n) { if (*ubits.at(i) != *bits.at(i)) bad = bad + 1UL; i = i + 1UL; }
+        check(bad == 0UL, bf ? "bf16 upload bits" : "fp16 upload bits");
+
+        // gemm: 16-bit inputs, fp32 accumulation
+        unsigned long m = 64UL;
+        unsigned long k = 96UL;
+        unsigned long nn = 80UL;
+        struct Vec<float> a = seq(m * k, 0.011f, -0.5f);
+        struct Vec<float> b = seq(k * nn, 0.007f, -0.3f);
+        struct Vec<float> ar = std::vec_with_cap(m * k);
+        struct Vec<float> br = std::vec_with_cap(k * nn);
+        i = 0UL;
+        while (i < m * k) { ar.push(std::half_round(*a.at(i), d)); i = i + 1UL; }
+        i = 0UL;
+        while (i < k * nn) { br.push(std::half_round(*b.at(i), d)); i = i + 1UL; }
+        struct RocmHalfBuf ha = std::rocm_half_upload(a.at(0UL), m * k, d);
+        struct RocmHalfBuf hb = std::rocm_half_upload(b.at(0UL), k * nn, d);
+        struct RocmBuf c32 = std::rocm_alloc(m * nn);
+        struct RocmHalfBuf c16 = std::rocm_half_alloc(m * nn, d);
+        struct Vec<unsigned short> cb = std::vec_with_cap(m * nn);
+        i = 0UL;
+        while (i < m * nn) { cb.push((unsigned short)0); i = i + 1UL; }
+        int t = 0;
+        while (t < 4) {
+            int ta = t & 1;
+            int tb = (t >> 1) & 1;
+            struct Vec<float> ref = cpu_gemm(&ar, ta, &br, tb, m, nn, k);
+            check(std::rocm_half_gemm_f32(ha, ta, hb, tb, c32, m, nn, k), "half gemm f32 ran");
+            struct Vec<float> got = download(c32);
+            check(maxdiff(&got, &ref) < 1e-4f, bf ? "bf16 gemm f32 values" : "fp16 gemm f32 values");
+            got.free();
+            // 16-bit output: within one 16-bit rounding of the fp32 result
+            check(std::rocm_half_gemm(ha, ta, hb, tb, c16, m, nn, k) && std::rocm_half_read(c16, cb.at(0UL), m * nn),
+                  "half gemm ran");
+            bad = 0UL;
+            i = 0UL;
+            while (i < m * nn) {
+                float r = *ref.at(i);
+                float g = std::half_decode(*cb.at(i), d);
+                float e = g - r;
+                if (e < 0.0f) e = -e;
+                float ar_ = r < 0.0f ? -r : r;
+                if (e > ar_ * (bf ? (float)0.0079 : (float)0.00099) + (float)1.0e-6) bad = bad + 1UL;
+                i = i + 1UL;
+            }
+            check(bad == 0UL, bf ? "bf16 gemm values" : "fp16 gemm values");
+            ref.free();
+            t = t + 1;
+        }
+
+        // sgd on 16-bit weights: bit-exact with the CPU computation
+        struct Vec<unsigned short> wb = std::vec_with_cap(m * k);
+        struct Vec<unsigned short> gbits = std::vec_with_cap(m * k);
+        i = 0UL;
+        while (i < m * k) { wb.push((unsigned short)0); gbits.push(std::half_encode(*v.at(i % n), d)); i = i + 1UL; }
+        struct RocmHalfBuf hg = std::rocm_half_alloc(m * k, d);
+        check(std::rocm_half_write(hg, gbits.at(0UL), m * k), "half write");
+        check(std::rocm_half_read(ha, wb.at(0UL), m * k), "half read w");
+        float lr = (float)0.25;
+        check(std::rocm_half_sgd(ha, hg, lr), "half sgd ran");
+        struct Vec<unsigned short> wn = std::vec_with_cap(m * k);
+        i = 0UL;
+        while (i < m * k) { wn.push((unsigned short)0); i = i + 1UL; }
+        check(std::rocm_half_read(ha, wn.at(0UL), m * k), "half read sgd");
+        bad = 0UL;
+        i = 0UL;
+        while (i < m * k) {
+            float wv = std::half_decode(*wb.at(i), d);
+            float gv = std::half_decode(*gbits.at(i), d);
+            float prod = lr * gv;
+            float r = wv - prod;
+            if (*wn.at(i) != std::half_encode(r, d)) bad = bad + 1UL;
+            i = i + 1UL;
+        }
+        check(bad == 0UL, bf ? "bf16 sgd bit-exact" : "fp16 sgd bit-exact");
+
+        // dtype mismatches are rejected
+        struct RocmHalfBuf other = std::rocm_half_alloc(k * nn, bf ? ROCM_FP16 : ROCM_BF16);
+        check(!std::rocm_half_gemm_f32(ha, 0, other, 0, c32, m, nn, k), "half gemm dtype check");
+        std::rocm_half_free(&other);
+
+        std::rocm_half_free(&h); std::rocm_half_free(&hu); std::rocm_half_free(&ha); std::rocm_half_free(&hb);
+        std::rocm_half_free(&c16); std::rocm_half_free(&hg); std::rocm_free(&c32); std::rocm_free(&back);
+        bits.free(); ubits.free(); fb.free(); a.free(); b.free(); ar.free(); br.free(); cb.free();
+        wb.free(); gbits.free(); wn.free();
+        d = d + 1;
+    }
+    std::rocm_free(&dv);
+    v.free();
 }
 
 int main() {
@@ -204,6 +353,8 @@ int main() {
     std::rocm_free(&small); std::rocm_free(&dga); std::rocm_free(&dgb); std::rocm_free(&dgc);
     check(da.dev == 0UL, "free clears handle");
     a.free(); b.free(); want.free(); ga.free(); gb.free(); ref.free(); hc.free();
+
+    check_half();
 
     unsafe { printf("rocm: %d checks, %d failures\n", g_checks, g_fails); }
     return g_fails == 0 ? 0 : 1;

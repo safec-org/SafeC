@@ -43,6 +43,11 @@ extern int hiprtcDestroyProgram(void** prog);
 
 extern int rocblas_create_handle(void** handle);
 extern int rocblas_set_stream(void* handle, void* stream);
+extern int rocblas_gemm_ex(void* handle, int transA, int transB, int m, int n, int k,
+                           const void* alpha, const void* A, int aType, int lda,
+                           const void* B, int bType, int ldb, const void* beta,
+                           const void* C, int cType, int ldc, void* D, int dType, int ldd,
+                           int computeType, int algo, int solutionIndex, unsigned int flags);
 extern int rocblas_sgemm(void* handle, int transA, int transB, int m, int n, int k,
                          const float* alpha, const float* A, int lda,
                          const float* B, int ldb,
@@ -53,9 +58,14 @@ extern int rocblas_sgemm(void* handle, int transA, int transB, int m, int n, int
 #define ROCM_ATTR_INTEGRATED     16   // hipDeviceAttributeIntegrated
 #define ROCM_H2D                 1    // hipMemcpyHostToDevice
 #define ROCM_D2H                 2    // hipMemcpyDeviceToHost
+#define ROCM_D2D                 3    // hipMemcpyDeviceToDevice
 #define ROCM_CAPTURE_GLOBAL      0    // hipStreamCaptureModeGlobal
 #define ROCM_BLAS_N              111  // rocblas_operation_none
 #define ROCM_BLAS_T              112  // rocblas_operation_transpose
+#define ROCM_BLAS_F16            150  // rocblas_datatype_f16_r
+#define ROCM_BLAS_F32            151  // rocblas_datatype_f32_r
+#define ROCM_BLAS_BF16           168  // rocblas_datatype_bf16_r
+#define ROCM_BLAS_ALGO_STANDARD  0    // rocblas_gemm_algo_standard
 #define ROCM_BLOCK               256U
 #define ROCM_MAX_BLOCKS          4096UL
 
@@ -202,6 +212,80 @@ static const char* rocm_kernel_source_() {
     "        for (int off = warpSize / 2; off > 0; off >>= 1) s += __shfl_down(s, off);\n"
     "        if (lane == 0) atomicAdd(loss, s);\n"
     "    }\n"
+    "}\n"
+    // planes x h x w -> planes x 2h x 2w, out[p][y][x] = in[p][y/2][x/2]
+    "extern \"C\" __global__ void upsample2x(const float* __restrict__ x, float* __restrict__ y,\n"
+    "                                          unsigned planes, unsigned h, unsigned w) {\n"
+    "    unsigned w2 = 2u * w, h2 = 2u * h, total = planes * h2 * w2;\n"
+    "    for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < total; i += gridDim.x * blockDim.x) {\n"
+    "        unsigned ox = i % w2, t = i / w2, oy = t % h2, p = t / h2;\n"
+    "        y[i] = x[((size_t)p * h + oy / 2u) * w + ox / 2u];\n"
+    "    }\n"
+    "}\n"
+    // NCHW y[b][c][:] += bias[c], then relu if asked: the conv epilogue.
+    "extern \"C\" __global__ void bias_act(float* __restrict__ y, const float* __restrict__ b,\n"
+    "                                        unsigned total, unsigned plane, unsigned channels, int relu) {\n"
+    "    for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < total; i += gridDim.x * blockDim.x) {\n"
+    "        float v = y[i] + b[(i / plane) % channels];\n"
+    "        y[i] = (relu && v < 0.0f) ? 0.0f : v;\n"
+    "    }\n"
+    "}\n"
+    // out[b] = (a[b], c[b]) for 'batch' rows of na and nc elements: channel
+    // concat of NCHW tensors in one launch.
+    "extern \"C\" __global__ void concat_rows(const float* __restrict__ a, const float* __restrict__ c,\n"
+    "                                           float* __restrict__ o, unsigned batch, unsigned na, unsigned nc) {\n"
+    "    unsigned row = na + nc, total = batch * row;\n"
+    "    for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < total; i += gridDim.x * blockDim.x) {\n"
+    "        unsigned b = i / row, r = i % row;\n"
+    "        o[i] = r < na ? a[(size_t)b * na + r] : c[(size_t)b * nc + (r - na)];\n"
+    "    }\n"
+    "}\n"
+    // out[b] = (upsample2x(x[b]), skip[b]) along channels: the U-Net decoder's
+    // upsample and skip concat in one pass, without the upsampled tensor.
+    // x: [batch, cx, h, w]; skip: [batch, cs, 2h, 2w]; out: [batch, cx+cs, 2h, 2w].
+    "extern \"C\" __global__ void upcat(const float* __restrict__ x, const float* __restrict__ s,\n"
+    "                                     float* __restrict__ o, unsigned batch, unsigned cx, unsigned cs,\n"
+    "                                     unsigned h, unsigned w) {\n"
+    "    unsigned w2 = 2u * w, h2 = 2u * h, plane = h2 * w2, row = (cx + cs) * plane, total = batch * row;\n"
+    "    for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < total; i += gridDim.x * blockDim.x) {\n"
+    "        unsigned b = i / row, r = i % row, c = r / plane, p = r % plane;\n"
+    "        if (c < cx) {\n"
+    "            unsigned oy = p / w2, ox = p % w2;\n"
+    "            o[i] = x[(((size_t)b * cx + c) * h + oy / 2u) * w + ox / 2u];\n"
+    "        } else {\n"
+    "            o[i] = s[((size_t)b * cs + (c - cx)) * plane + p];\n"
+    "        }\n"
+    "    }\n"
+    "}\n"
+    // fp16 / bf16 storage. Both conversions round to nearest even and give
+    // the same bits as float16.h: _Float16 for fp16, the integer
+    // round-half-even trick for bf16 (NaN keeps its top bits plus 0x40).
+    "__device__ unsigned short f2h(float x, int bf) {\n"
+    "    if (!bf) return __builtin_bit_cast(unsigned short, (_Float16)x);\n"
+    "    unsigned u = __builtin_bit_cast(unsigned, x);\n"
+    "    if ((u & 0x7fffffffu) > 0x7f800000u) return (unsigned short)((u >> 16) | 0x40u);\n"
+    "    return (unsigned short)((u + 0x7fffu + ((u >> 16) & 1u)) >> 16);\n"
+    "}\n"
+    "__device__ float h2f(unsigned short h, int bf) {\n"
+    "    return bf ? __builtin_bit_cast(float, (unsigned)h << 16) : (float)__builtin_bit_cast(_Float16, h);\n"
+    "}\n"
+    "extern \"C\" __global__ void to_half(const float* __restrict__ a, unsigned short* __restrict__ o,\n"
+    "                                       unsigned n, int bf) {\n"
+    "    for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += gridDim.x * blockDim.x)\n"
+    "        o[i] = f2h(a[i], bf);\n"
+    "}\n"
+    "extern \"C\" __global__ void from_half(const unsigned short* __restrict__ a, float* __restrict__ o,\n"
+    "                                         unsigned n, int bf) {\n"
+    "    for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += gridDim.x * blockDim.x)\n"
+    "        o[i] = h2f(a[i], bf);\n"
+    "}\n"
+    // w = round(w - lr * g), computed in fp32. w == g is allowed.
+    "extern \"C\" __global__ void half_sgd(unsigned short* w, const unsigned short* g, float lr,\n"
+    "                                        unsigned n, int bf) {\n"
+    // no FMA contraction: same rounding as the CPU's separate * and -
+    "#pragma clang fp contract(off)\n"
+    "    for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += gridDim.x * blockDim.x)\n"
+    "        w[i] = f2h(h2f(w[i], bf) - lr * h2f(g[i], bf), bf);\n"
     "}\n";
 }
 
@@ -221,7 +305,14 @@ static const char* rocm_kernel_source_() {
 #define K_SUM 12
 #define K_SGEMM 13
 #define K_MSE 14
-#define K_COUNT 15
+#define K_UPSAMPLE2X 15
+#define K_BIAS_ACT 16
+#define K_TO_HALF 17
+#define K_FROM_HALF 18
+#define K_HALF_SGD 19
+#define K_CONCAT 20
+#define K_UPCAT 21
+#define K_COUNT 22
 
 static const char* rocm_kernel_name_(int k) {
     if (k == K_ADD) return "ew_add";
@@ -238,6 +329,13 @@ static const char* rocm_kernel_name_(int k) {
     if (k == K_SGD) return "sgd_update";
     if (k == K_SUM) return "reduce_sum";
     if (k == K_SGEMM) return "sgemm_nn";
+    if (k == K_UPSAMPLE2X) return "upsample2x";
+    if (k == K_BIAS_ACT) return "bias_act";
+    if (k == K_TO_HALF) return "to_half";
+    if (k == K_FROM_HALF) return "from_half";
+    if (k == K_HALF_SGD) return "half_sgd";
+    if (k == K_CONCAT) return "concat_rows";
+    if (k == K_UPCAT) return "upcat";
     return "mse_grad";
 }
 
@@ -360,6 +458,21 @@ int rocm_sync() {
     unsafe { return hipStreamSynchronize(g_rocm_stream) == ROCM_HIP_OK; }
 }
 
+?&void rocm_stream_handle() {
+    if (!rocm_ensure_()) return null;
+    unsafe { return (?&void)g_rocm_stream; }
+}
+
+int rocm_copy(struct RocmBuf src, unsigned long srcOff, struct RocmBuf dst, unsigned long dstOff, unsigned long n) {
+    if (!rocm_ensure_() || src.dev == 0UL || dst.dev == 0UL || n == 0UL ||
+        srcOff + n > src.len || dstOff + n > dst.len) return 0;
+    unsafe {
+        return hipMemcpyAsync((void*)(dst.dev + dstOff * sizeof(float)),
+                              (const void*)(src.dev + srcOff * sizeof(float)),
+                              n * sizeof(float), ROCM_D2D, g_rocm_stream) == ROCM_HIP_OK;
+    }
+}
+
 // ── Launch helpers ───────────────────────────────────────────────────────────
 
 static int rocm_launch_(int kernel, unsigned long n, &void params) {
@@ -436,6 +549,216 @@ int rocm_relu(struct RocmBuf a, struct RocmBuf out) { return rocm_unary_(K_RELU,
 int rocm_exp(struct RocmBuf a, struct RocmBuf out) { return rocm_unary_(K_EXP, a, 0.0f, out); }
 int rocm_log(struct RocmBuf a, struct RocmBuf out) { return rocm_unary_(K_LOG, a, 0.0f, out); }
 int rocm_sqrt(struct RocmBuf a, struct RocmBuf out) { return rocm_unary_(K_SQRT, a, 0.0f, out); }
+
+// ── fp16 / bf16 ─────────────────────────────────────────────────────────────
+
+static int rocm_half_dtype_ok_(int dtype) { return dtype == ROCM_FP16 || dtype == ROCM_BF16; }
+static int rocm_half_fits_(struct RocmHalfBuf b, unsigned long n) {
+    return b.dev != 0UL && b.len >= n && rocm_half_dtype_ok_(b.dtype);
+}
+
+struct RocmHalfBuf rocm_half_alloc(unsigned long n, int dtype) {
+    struct RocmHalfBuf b;
+    b.dev = 0UL;
+    b.len = 0UL;
+    b.dtype = dtype;
+    if (n == 0UL || !rocm_half_dtype_ok_(dtype) || !rocm_ensure_()) return b;
+    unsafe {
+        void* p = (void*)0;
+        if (hipMalloc(&p, checked_mul_size(n, 2UL)) != ROCM_HIP_OK) return b;
+        b.dev = (unsigned long)p;
+    }
+    b.len = n;
+    return b;
+}
+
+void rocm_half_free(&RocmHalfBuf b) {
+    if (b.dev != 0UL) { unsafe { hipFree((void*)b.dev); } }
+    b.dev = 0UL;
+    b.len = 0UL;
+}
+
+int rocm_half_write(struct RocmHalfBuf dst, const &unsigned short bits, unsigned long n) {
+    if (dst.dev == 0UL || n > dst.len || !rocm_ensure_()) return 0;
+    unsafe {
+        return hipMemcpyAsync((void*)dst.dev, (const void*)bits, n * 2UL, ROCM_H2D, g_rocm_stream) == ROCM_HIP_OK;
+    }
+}
+
+int rocm_half_read(struct RocmHalfBuf src, &unsigned short bits, unsigned long n) {
+    if (src.dev == 0UL || n > src.len || !rocm_ensure_()) return 0;
+    unsafe {
+        if (hipMemcpyAsync((void*)bits, (const void*)src.dev, n * 2UL, ROCM_D2H, g_rocm_stream) != ROCM_HIP_OK)
+            return 0;
+        return hipStreamSynchronize(g_rocm_stream) == ROCM_HIP_OK;
+    }
+}
+
+static int rocm_convert_(int kernel, unsigned long a, unsigned long o, unsigned long n, int bf) {
+    if (n == 0UL || n > 4294967295UL) return 0;
+    unsafe {
+        void* pa = (void*)a;
+        void* po = (void*)o;
+        unsigned int nn = (unsigned int)n;
+        int b = bf;
+        void* params[4];
+        params[0] = (void*)&pa; params[1] = (void*)&po; params[2] = (void*)&nn; params[3] = (void*)&b;
+        return rocm_launch_(kernel, n, (&void)&params[0]);
+    }
+}
+
+int rocm_to_half(struct RocmBuf src, struct RocmHalfBuf dst) {
+    unsigned long n = dst.len;
+    if (!rocm_ensure_() || !rocm_fits_(src, n) || !rocm_half_fits_(dst, n)) return 0;
+    return rocm_convert_(K_TO_HALF, src.dev, dst.dev, n, dst.dtype == ROCM_BF16);
+}
+
+int rocm_from_half(struct RocmHalfBuf src, struct RocmBuf dst) {
+    unsigned long n = dst.len;
+    if (!rocm_ensure_() || !rocm_half_fits_(src, n) || !rocm_fits_(dst, n)) return 0;
+    return rocm_convert_(K_FROM_HALF, src.dev, dst.dev, n, src.dtype == ROCM_BF16);
+}
+
+struct RocmHalfBuf rocm_half_upload(const &float host, unsigned long n, int dtype) {
+    struct RocmHalfBuf h = rocm_half_alloc(n, dtype);
+    if (h.dev == 0UL) return h;
+    struct RocmBuf tmp = rocm_upload(host, n);
+    int ok = tmp.dev != 0UL && rocm_to_half(tmp, h) && rocm_sync();
+    rocm_free(&tmp);
+    if (!ok) rocm_half_free(&h);
+    return h;
+}
+
+// rocBLAS gemm_ex: 16-bit A and B, fp32 accumulation; C/D are 16-bit
+// (outType = the inputs' type) or fp32. Row-major via the same operand swap
+// as rocm_gemm.
+static int rocm_half_gemm_(struct RocmHalfBuf a, int ta, struct RocmHalfBuf b, int tb,
+                           unsigned long cdev, int outType, unsigned long m, unsigned long n, unsigned long k) {
+    int t = a.dtype == ROCM_BF16 ? ROCM_BLAS_BF16 : ROCM_BLAS_F16;
+    float one = 1.0f;
+    float zero = 0.0f;
+    unsafe {
+        return rocblas_gemm_ex(g_rocm_blas,
+                               tb ? ROCM_BLAS_T : ROCM_BLAS_N, ta ? ROCM_BLAS_T : ROCM_BLAS_N,
+                               (int)n, (int)m, (int)k, (const void*)&one,
+                               (const void*)b.dev, t, tb ? (int)k : (int)n,
+                               (const void*)a.dev, t, ta ? (int)m : (int)k,
+                               (const void*)&zero, (const void*)cdev, outType == 0 ? t : outType, (int)n,
+                               (void*)cdev, outType == 0 ? t : outType, (int)n,
+                               ROCM_BLAS_F32, ROCM_BLAS_ALGO_STANDARD, 0, 0U) == 0;
+    }
+}
+
+int rocm_half_gemm(struct RocmHalfBuf a, int ta, struct RocmHalfBuf b, int tb, struct RocmHalfBuf c,
+                   unsigned long m, unsigned long n, unsigned long k) {
+    if (!rocm_ensure_() || !rocm_half_fits_(a, m * k) || !rocm_half_fits_(b, k * n) ||
+        !rocm_half_fits_(c, m * n) || a.dtype != b.dtype || a.dtype != c.dtype) return 0;
+    return rocm_half_gemm_(a, ta, b, tb, c.dev, 0, m, n, k);
+}
+
+int rocm_half_gemm_f32(struct RocmHalfBuf a, int ta, struct RocmHalfBuf b, int tb, struct RocmBuf c,
+                       unsigned long m, unsigned long n, unsigned long k) {
+    if (!rocm_ensure_() || !rocm_half_fits_(a, m * k) || !rocm_half_fits_(b, k * n) ||
+        !rocm_fits_(c, m * n) || a.dtype != b.dtype) return 0;
+    return rocm_half_gemm_(a, ta, b, tb, c.dev, ROCM_BLAS_F32, m, n, k);
+}
+
+int rocm_half_sgd(struct RocmHalfBuf w, struct RocmHalfBuf g, float lr) {
+    unsigned long n = w.len;
+    if (!rocm_ensure_() || !rocm_half_fits_(w, n) || !rocm_half_fits_(g, n) || w.dtype != g.dtype ||
+        n > 4294967295UL) return 0;
+    unsafe {
+        void* pw = (void*)w.dev;
+        void* pg = (void*)g.dev;
+        float l = lr;
+        unsigned int nn = (unsigned int)n;
+        int bf = w.dtype == ROCM_BF16 ? 1 : 0;
+        void* params[5];
+        params[0] = (void*)&pw; params[1] = (void*)&pg; params[2] = (void*)&l; params[3] = (void*)&nn;
+        params[4] = (void*)&bf;
+        return rocm_launch_(K_HALF_SGD, n, (&void)&params[0]);
+    }
+}
+
+int rocm_concat(struct RocmBuf a, unsigned long na, struct RocmBuf c, unsigned long nc,
+                struct RocmBuf out, unsigned long batch) {
+    unsigned long total = batch * (na + nc);
+    if (!rocm_ensure_() || batch == 0UL || na == 0UL || nc == 0UL || total > 4294967295UL ||
+        !rocm_fits_(a, batch * na) || !rocm_fits_(c, batch * nc) || !rocm_fits_(out, total)) return 0;
+    unsafe {
+        void* pa = (void*)a.dev;
+        void* pc = (void*)c.dev;
+        void* po = (void*)out.dev;
+        unsigned int nb = (unsigned int)batch;
+        unsigned int n1 = (unsigned int)na;
+        unsigned int n2 = (unsigned int)nc;
+        void* params[6];
+        params[0] = (void*)&pa; params[1] = (void*)&pc; params[2] = (void*)&po;
+        params[3] = (void*)&nb; params[4] = (void*)&n1; params[5] = (void*)&n2;
+        return rocm_launch_(K_CONCAT, total, (&void)&params[0]);
+    }
+}
+
+int rocm_upsample2x_concat(struct RocmBuf x, unsigned long xChannels, struct RocmBuf skip,
+                           unsigned long skipChannels, struct RocmBuf out,
+                           unsigned long batch, unsigned long h, unsigned long w) {
+    unsigned long plane = 4UL * h * w;
+    unsigned long total = batch * (xChannels + skipChannels) * plane;
+    if (!rocm_ensure_() || total == 0UL || total > 4294967295UL ||
+        !rocm_fits_(x, batch * xChannels * h * w) || !rocm_fits_(skip, batch * skipChannels * plane) ||
+        !rocm_fits_(out, total)) return 0;
+    unsafe {
+        void* px = (void*)x.dev;
+        void* ps = (void*)skip.dev;
+        void* po = (void*)out.dev;
+        unsigned int nb = (unsigned int)batch;
+        unsigned int ncx = (unsigned int)xChannels;
+        unsigned int ncs = (unsigned int)skipChannels;
+        unsigned int nh = (unsigned int)h;
+        unsigned int nw = (unsigned int)w;
+        void* params[8];
+        params[0] = (void*)&px; params[1] = (void*)&ps; params[2] = (void*)&po; params[3] = (void*)&nb;
+        params[4] = (void*)&ncx; params[5] = (void*)&ncs; params[6] = (void*)&nh; params[7] = (void*)&nw;
+        return rocm_launch_(K_UPCAT, total, (&void)&params[0]);
+    }
+}
+
+int rocm_upsample2x_nearest(struct RocmBuf in, struct RocmBuf out,
+                            unsigned long planes, unsigned long h, unsigned long w) {
+    unsigned long total = planes * 4UL * h * w;
+    if (!rocm_ensure_() || total == 0UL || total > 4294967295UL ||
+        !rocm_fits_(in, planes * h * w) || !rocm_fits_(out, total)) return 0;
+    unsafe {
+        void* px = (void*)in.dev;
+        void* py = (void*)out.dev;
+        unsigned int np = (unsigned int)planes;
+        unsigned int nh = (unsigned int)h;
+        unsigned int nw = (unsigned int)w;
+        void* params[5];
+        params[0] = (void*)&px; params[1] = (void*)&py; params[2] = (void*)&np;
+        params[3] = (void*)&nh; params[4] = (void*)&nw;
+        return rocm_launch_(K_UPSAMPLE2X, total, (&void)&params[0]);
+    }
+}
+
+int rocm_bias_channels(struct RocmBuf y, struct RocmBuf bias, unsigned long batch, unsigned long channels,
+                       unsigned long plane, int relu) {
+    unsigned long total = batch * channels * plane;
+    if (!rocm_ensure_() || total == 0UL || total > 4294967295UL ||
+        !rocm_fits_(y, total) || !rocm_fits_(bias, channels)) return 0;
+    unsafe {
+        void* py = (void*)y.dev;
+        void* pb = (void*)bias.dev;
+        unsigned int nt = (unsigned int)total;
+        unsigned int npl = (unsigned int)plane;
+        unsigned int nc = (unsigned int)channels;
+        int r = relu ? 1 : 0;
+        void* params[6];
+        params[0] = (void*)&py; params[1] = (void*)&pb; params[2] = (void*)&nt;
+        params[3] = (void*)&npl; params[4] = (void*)&nc; params[5] = (void*)&r;
+        return rocm_launch_(K_BIAS_ACT, total, (&void)&params[0]);
+    }
+}
 
 int rocm_sgd(struct RocmBuf w, struct RocmBuf g, float lr) {
     unsigned long n = w.len;
