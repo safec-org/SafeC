@@ -11,6 +11,7 @@
 #include <std/ml/gpu_cuda.h>
 #include <std/ml/float16.h>
 #include <std/mem.h>
+#include <std/thread.h>
 
 namespace std {
 
@@ -31,6 +32,10 @@ extern int cuMemAllocHost_v2(void** pp, size_t bytes);
 extern int cuMemcpyHtoDAsync_v2(unsigned long long dst, const void* src, size_t bytes, void* stream);
 extern int cuMemcpyDtoHAsync_v2(void* dst, unsigned long long src, size_t bytes, void* stream);
 extern int cuMemcpyDtoDAsync_v2(unsigned long long dst, unsigned long long src, size_t bytes, void* stream);
+extern int cuEventCreate(void** event, unsigned int flags);
+extern int cuEventRecord(void* event, void* stream);
+extern int cuEventSynchronize(void* event);
+extern int cuStreamWaitEvent(void* stream, void* event, unsigned int flags);
 extern int cuMemsetD32Async(unsigned long long dst, unsigned int value, size_t n, void* stream);
 extern int cuModuleLoadData(void** module, const void* image);
 extern int cuModuleGetFunction(void** func, void* module, const char* name);
@@ -104,6 +109,10 @@ extern int printf(const char* fmt, ...);
 #define CUDA_MAX_BLOCKS          4096UL
 #define CUDA_WORKSPACE_BYTES     33554432UL   // 32 MiB: cuBLAS's recommendation for graph capture on Hopper
 #define CUDA_STAGING_BYTES       65536UL      // pinned bounce buffer for small reads
+#define CUDA_PIPE_MIN            1048576UL    // transfers at least this big go through the lanes
+#define CUDA_PIPE_LANES          4            // parallel copy lanes (more only contend for bandwidth)
+#define CUDA_PIPE_CHUNK          2097152UL    // bytes per pinned buffer (two per lane)
+#define CUDA_EVENT_NO_TIMING     2U           // CU_EVENT_DISABLE_TIMING
 
 // ── Kernel source ────────────────────────────────────────────────────────────
 // Elementwise kernels use grid-stride loops; reduce_sum and mse_grad reduce
@@ -378,6 +387,31 @@ static void* g_cuda_blas = (void*)0;
 static void* g_cuda_lt = (void*)0;
 static unsigned long long g_cuda_ws = 0ULL;
 static void* g_cuda_staging = (void*)0;
+// Pinned transfer lanes (allocated on the first large transfer). Lane k
+// has its own stream, two pinned buffers g_cuda_pipe[2k + b], each with an
+// event recorded after the last copy that used it (g_cuda_pipe_busy = 1
+// while that copy may still be in flight), and an end event.
+static int   g_cuda_pipe_state = 0;   // 0 = not tried, 1 = ready, -1 = unavailable
+static void* g_cuda_pipe[CUDA_PIPE_LANES * 2];
+static void* g_cuda_pipe_ev[CUDA_PIPE_LANES * 2];
+static int   g_cuda_pipe_busy[CUDA_PIPE_LANES * 2];
+static void* g_cuda_lane_stream[CUDA_PIPE_LANES];
+static void* g_cuda_lane_end[CUDA_PIPE_LANES];
+static int   g_cuda_lane_ok[CUDA_PIPE_LANES];
+static void* g_cuda_pipe_start = (void*)0;
+// Lanes 1.. run on their own threads (lane 0 on the caller), parked on
+// g_cuda_lane_wake between copies: waking three threads costs much less
+// than a whole-machine pool would, and they never contend with it.
+static unsigned long long g_cuda_lane_mu = 0ULL;
+static unsigned long long g_cuda_lane_wake = 0ULL;
+static unsigned long long g_cuda_lane_done = 0ULL;
+static unsigned long g_cuda_lane_gen = 0UL;
+static unsigned long g_cuda_lane_pending = 0UL;
+static unsigned long g_cuda_lane_count = 0UL;    // lanes in the current copy
+static unsigned long g_cuda_lane_threads = 0UL;  // helper threads started
+static unsigned long g_cuda_lane_ids[CUDA_PIPE_LANES];
+static unsigned long g_cuda_lane_born[CUDA_PIPE_LANES];   // g_cuda_lane_gen when each was started
+static void* g_cuda_lane_job = (void*)0;
 static void* g_cuda_fn[K_COUNT];
 static char  g_cuda_name[256];
 static int   g_cuda_blocks_cap = 0;   // 0 = use CUDA_MAX_BLOCKS
@@ -522,8 +556,197 @@ static unsigned long long cuda_alloc_bytes_(unsigned long bytes) {
     }
 }
 
+// ── Host <-> device copies ───────────────────────────────────────────────────
+// A copy from pageable memory makes the driver bounce it through its own
+// pinned buffers on one thread, which bounds it at one core's memcpy rate
+// (~16 GB/s here, a third of what PCIe 5 moves). Large copies instead split
+// into CUDA_PIPE_LANES slices that the thread pool runs side by side: each
+// lane copies its slice chunk by chunk between host memory and its two
+// pinned buffers in turn, on its own stream, so the DMA of one chunk
+// overlaps the copy of the next. Events order the lanes after the work
+// already queued on the main stream, and (for writes) the main stream
+// after the lanes.
+
+static int cuda_pipe_ensure_() {
+    if (g_cuda_pipe_state != 0) return g_cuda_pipe_state == 1;
+    g_cuda_pipe_state = -1;
+    unsafe {
+        if (cuEventCreate(&g_cuda_pipe_start, CUDA_EVENT_NO_TIMING) != CUDA_OK) return 0;
+        int i = 0;
+        while (i < CUDA_PIPE_LANES * 2) {
+            g_cuda_pipe_busy[i] = 0;
+            if (cuMemAllocHost_v2(&g_cuda_pipe[i], CUDA_PIPE_CHUNK) != CUDA_OK ||
+                cuEventCreate(&g_cuda_pipe_ev[i], CUDA_EVENT_NO_TIMING) != CUDA_OK) return 0;
+            i = i + 1;
+        }
+        i = 0;
+        while (i < CUDA_PIPE_LANES) {
+            if (cuStreamCreate(&g_cuda_lane_stream[i], CUDA_STREAM_NON_BLOCKING) != CUDA_OK ||
+                cuEventCreate(&g_cuda_lane_end[i], CUDA_EVENT_NO_TIMING) != CUDA_OK) return 0;
+            i = i + 1;
+        }
+    }
+    g_cuda_pipe_state = 1;
+    return 1;
+}
+
+// Waits until no queued copy uses pinned buffer i.
+static int cuda_pipe_wait_(int i) {
+    if (!g_cuda_pipe_busy[i]) return 1;
+    g_cuda_pipe_busy[i] = 0;
+    unsafe { return cuEventSynchronize(g_cuda_pipe_ev[i]) == CUDA_OK; }
+}
+
+struct CudaLaneJob {
+    char*              host;
+    unsigned long long dev;
+    unsigned long      bytes;
+    unsigned long      part;   // bytes per lane
+    int                toDevice;
+};
+
+// Lane k's slice: host -> device (queued; returns once the host bytes are
+// staged) or device -> host (returns once they've landed).
+static int cuda_lane_run_(&CudaLaneJob j, int k) {
+    unsigned long base = (unsigned long)k * j.part;
+    if (base >= j.bytes) return 1;
+    unsigned long len = j.bytes - base < j.part ? j.bytes - base : j.part;
+    unsafe {
+        void* cur = (void*)0;
+        cuCtxGetCurrent(&cur);
+        if (cur != g_cuda_ctx && cuCtxSetCurrent(g_cuda_ctx) != CUDA_OK) return 0;   // pool threads
+        void* st = g_cuda_lane_stream[k];
+        if (cuStreamWaitEvent(st, g_cuda_pipe_start, 0U) != CUDA_OK) return 0;
+        char* host = j.host + base;
+        unsigned long long dev = j.dev + (unsigned long long)base;
+        unsigned long off = 0UL;
+        unsigned long prevOff = 0UL;
+        unsigned long prevLen = 0UL;
+        int b = 0;
+        while (off < len) {
+            unsigned long c = len - off < CUDA_PIPE_CHUNK ? len - off : CUDA_PIPE_CHUNK;
+            int i = 2 * k + b;
+            if (!cuda_pipe_wait_(i)) return 0;
+            if (j.toDevice) {
+                memcpy(g_cuda_pipe[i], (const void*)(host + off), c);
+                if (cuMemcpyHtoDAsync_v2(dev + (unsigned long long)off, (const void*)g_cuda_pipe[i], c, st) != CUDA_OK)
+                    return 0;
+            } else {
+                if (cuMemcpyDtoHAsync_v2(g_cuda_pipe[i], dev + (unsigned long long)off, c, st) != CUDA_OK) return 0;
+            }
+            if (cuEventRecord(g_cuda_pipe_ev[i], st) != CUDA_OK) return 0;
+            g_cuda_pipe_busy[i] = 1;
+            if (!j.toDevice && prevLen > 0UL) {
+                int p = 2 * k + (1 - b);
+                if (!cuda_pipe_wait_(p)) return 0;
+                memcpy((void*)(host + prevOff), (const void*)g_cuda_pipe[p], prevLen);
+            }
+            prevOff = off;
+            prevLen = c;
+            off = off + c;
+            b = 1 - b;
+        }
+        if (!j.toDevice) {
+            int p = 2 * k + (1 - b);
+            if (!cuda_pipe_wait_(p)) return 0;
+            memcpy((void*)(host + prevOff), (const void*)g_cuda_pipe[p], prevLen);
+        }
+        return cuEventRecord(g_cuda_lane_end[k], st) == CUDA_OK;
+    }
+}
+
+static ?&unsigned long cuda_lane_worker_(?&unsigned long arg) {
+    unsigned long k = 0UL;
+    match (arg) { case some(p): { k = *p; } case null: { } }
+    mutex_lock(&g_cuda_lane_mu);
+    unsigned long seen = g_cuda_lane_born[k];   // not g_cuda_lane_gen: a copy may already be posted
+    while (1) {
+        while (g_cuda_lane_gen == seen) cond_wait(&g_cuda_lane_wake, &g_cuda_lane_mu);
+        seen = g_cuda_lane_gen;
+        int take = k < g_cuda_lane_count;
+        void* job = g_cuda_lane_job;
+        mutex_unlock(&g_cuda_lane_mu);
+        if (take) { unsafe { g_cuda_lane_ok[k] = cuda_lane_run_((&CudaLaneJob)job, (int)k); } }
+        mutex_lock(&g_cuda_lane_mu);
+        if (take) {
+            g_cuda_lane_pending = g_cuda_lane_pending - 1UL;
+            if (g_cuda_lane_pending == 0UL) cond_signal(&g_cuda_lane_done);
+        }
+    }
+    return null;
+}
+
+// Starts the helper threads on first use; returns how many lanes can run
+// (1 = only the caller's, if no thread could be started).
+static int g_cuda_lane_inited = 0;
+
+static unsigned long cuda_lanes_start_() {
+    if (!g_cuda_lane_inited) {
+        g_cuda_lane_inited = 1;
+        if (mutex_init(&g_cuda_lane_mu) != 0 || cond_init(&g_cuda_lane_wake) != 0 ||
+            cond_init(&g_cuda_lane_done) != 0) return 1UL;
+        unsigned long k = 1UL;
+        while (k < (unsigned long)CUDA_PIPE_LANES) {
+            g_cuda_lane_ids[k] = k;
+            g_cuda_lane_born[k] = g_cuda_lane_gen;
+            unsigned long long tid = 0ULL;
+            if (thread_create(&tid, cuda_lane_worker_, (?&unsigned long)&g_cuda_lane_ids[k]) != 0) break;
+            thread_detach(tid);
+            g_cuda_lane_threads = k;
+            k = k + 1UL;
+        }
+    }
+    return g_cuda_lane_threads + 1UL;
+}
+
+// Runs a large copy over the lanes; 1 on success.
+static int cuda_lanes_copy_(void* host, unsigned long long dev, unsigned long bytes, int toDevice) {
+    struct CudaLaneJob j;
+    unsafe { j.host = (char*)host; }
+    j.dev = dev;
+    j.bytes = bytes;
+    j.toDevice = toDevice;
+    unsigned long lanes = (bytes + CUDA_PIPE_MIN - 1UL) / CUDA_PIPE_MIN;   // >= 1 MiB per lane
+    unsigned long avail = cuda_lanes_start_();
+    if (lanes > avail) lanes = avail;
+    j.part = (bytes / lanes + 4095UL) & ~4095UL;
+    unsafe {
+        if (cuEventRecord(g_cuda_pipe_start, g_cuda_stream) != CUDA_OK) return 0;
+        if (lanes > 1UL) {
+            mutex_lock(&g_cuda_lane_mu);
+            g_cuda_lane_job = (void*)&j;
+            g_cuda_lane_count = lanes;
+            g_cuda_lane_pending = lanes - 1UL;
+            g_cuda_lane_gen = g_cuda_lane_gen + 1UL;
+            cond_broadcast(&g_cuda_lane_wake);
+            mutex_unlock(&g_cuda_lane_mu);
+        }
+        g_cuda_lane_ok[0] = cuda_lane_run_(&j, 0);
+        if (lanes > 1UL) {
+            mutex_lock(&g_cuda_lane_mu);
+            while (g_cuda_lane_pending != 0UL) cond_wait(&g_cuda_lane_done, &g_cuda_lane_mu);
+            mutex_unlock(&g_cuda_lane_mu);
+        }
+    }
+    int ok = 1;
+    unsigned long k = 0UL;
+    while (k < lanes) {
+        if (!g_cuda_lane_ok[k]) ok = 0;
+        // later work on the main stream waits for this lane's copies
+        unsafe { if (ok && toDevice && cuStreamWaitEvent(g_cuda_stream, g_cuda_lane_end[k], 0U) != CUDA_OK) ok = 0; }
+        k = k + 1UL;
+    }
+    return ok;
+}
+
+// Queues host -> device; returns once 'host' may be reused (the last chunks
+// may still be on their way from pinned memory).
 static int cuda_write_bytes_(unsigned long long dst, const void* host, unsigned long bytes) {
-    unsafe { return cuMemcpyHtoDAsync_v2(dst, host, bytes, g_cuda_stream) == CUDA_OK; }
+    unsafe {
+        if (bytes < CUDA_PIPE_MIN || !cuda_pipe_ensure_())
+            return cuMemcpyHtoDAsync_v2(dst, host, bytes, g_cuda_stream) == CUDA_OK;
+        return cuda_lanes_copy_((void*)host, dst, bytes, 1);
+    }
 }
 
 // Waits for queued work, then copies 'bytes' to 'host'. Small reads (a
@@ -537,9 +760,22 @@ static int cuda_read_bytes_(void* host, unsigned long long src, unsigned long by
             memcpy(host, (const void*)g_cuda_staging, bytes);
             return 1;
         }
-        if (cuMemcpyDtoHAsync_v2(host, src, bytes, g_cuda_stream) != CUDA_OK) return 0;
-        return cuStreamSynchronize(g_cuda_stream) == CUDA_OK;
+        if (bytes < CUDA_PIPE_MIN || !cuda_pipe_ensure_()) {
+            if (cuMemcpyDtoHAsync_v2(host, src, bytes, g_cuda_stream) != CUDA_OK) return 0;
+            return cuStreamSynchronize(g_cuda_stream) == CUDA_OK;
+        }
+        return cuda_lanes_copy_(host, src, bytes, 0);
     }
+}
+
+int cuda_copy_to_device(unsigned long dev, const &void host, unsigned long bytes) {
+    if (dev == 0UL || bytes == 0UL || !cuda_ensure_()) return 0;
+    unsafe { return cuda_write_bytes_((unsigned long long)dev, (const void*)host, bytes); }
+}
+
+int cuda_copy_to_host(&void host, unsigned long dev, unsigned long bytes) {
+    if (dev == 0UL || bytes == 0UL || !cuda_ensure_()) return 0;
+    unsafe { return cuda_read_bytes_((void*)host, (unsigned long long)dev, bytes); }
 }
 
 struct CudaBuf cuda_alloc(unsigned long n) {

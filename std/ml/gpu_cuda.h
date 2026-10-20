@@ -51,6 +51,11 @@ struct CudaBuf cuda_alloc(unsigned long n);                       // uninitializ
 struct CudaBuf cuda_upload(const &float host, unsigned long n);  // dev == 0 on failure
 int  cuda_write(struct CudaBuf dst, const &float host, unsigned long n);  // 1 on success
 int  cuda_read(struct CudaBuf src, &float host, unsigned long n);         // waits for queued work
+// cuda_write returns once 'host' may be reused. Copies of 1 MiB and up run
+// as 4 parallel lanes (3 helper threads started on first use plus the
+// caller), each staging its slice through pinned buffers with the DMA of
+// one chunk overlapping the copy of the next: ~2x the driver's own
+// pageable-memory path, which is bounded by one core's memcpy rate.
 void cuda_free(&CudaBuf b);                                       // b.dev := 0
 int  cuda_sync();                                                 // wait for all queued work
 
@@ -125,6 +130,13 @@ void cuda_graph_free(&CudaGraph g);
 ?&void cuda_stream_handle();
 // 1 if cuda_set_tf32(1) is in effect.
 int cuda_tf32_enabled();
+// Byte copies between host memory and a raw device address (e.g. a
+// CudaBuf's dev plus an offset, or memory from cuMemAlloc), through the
+// same path as cuda_write / cuda_read (pinned lanes from 1 MiB up).
+// cuda_copy_to_device returns once 'host' may be reused; cuda_copy_to_host
+// waits for queued work first. 1 on success.
+int cuda_copy_to_device(unsigned long dev, const &void host, unsigned long bytes);
+int cuda_copy_to_host(&void host, unsigned long dev, unsigned long bytes);
 
 // ── Host-array convenience ops (upload → compute → read back) ────────────────
 // 1 on success, 0 on failure (no GPU, allocation failure).

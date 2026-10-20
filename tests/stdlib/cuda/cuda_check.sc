@@ -342,6 +342,56 @@ static void cplx_copy(&Complex dst, const &Complex src, unsigned long n) {
     unsafe { while (i < n) { dst[i] = src[i]; i = i + 1UL; } }
 }
 
+// Large host <-> device copies (the pinned-lane path), odd sizes, and the
+// ordering of a write after queued kernels that read the old contents.
+static void check_transfers() {
+    unsigned long sizes[3];
+    sizes[0] = 262145UL;     // just over 1 MiB of floats: one lane
+    sizes[1] = 1048577UL;    // ~4 MiB: four lanes, ragged tail
+    sizes[2] = 5000003UL;    // ~20 MiB: several chunks per lane
+    int si = 0;
+    while (si < 3) {
+        unsigned long n;
+        unsafe { n = sizes[si]; }
+        struct Vec<float> h = seq(n, 0.001f, -3.0f);
+        struct CudaBuf d = std::cuda_upload(h.at(0UL), n);
+        struct Vec<float> back = download(d);
+        check(maxdiff(&h, &back) == 0.0f, "large upload/read round trip");
+        back.free();
+        // out = d * 2 queued, then d overwritten: out must see the old d
+        struct CudaBuf out = std::cuda_alloc(n);
+        std::cuda_scale(d, 2.0f, out);
+        struct Vec<float> h2 = seq(n, 0.002f, 1.0f);
+        check(std::cuda_write(d, h2.at(0UL), n), "large write ran");
+        back = download(out);
+        int ok = 1;
+        unsigned long i = 0UL;
+        while (i < n + 7918UL) {
+            unsigned long at = i < n ? i : n - 1UL;   // every 7919th value and the last
+            float got = *back.at(at);
+            float want = *h.at(at);
+            if (got != want + want) ok = 0;
+            i = i + 7919UL;
+        }
+        check(ok, "large write ordered after queued reads");
+        back.free();
+        back = download(d);
+        check(maxdiff(&h2, &back) == 0.0f, "large write values");
+        back.free();
+        // raw byte copies at an offset
+        unsafe { check(std::cuda_copy_to_device(d.dev + 4UL, (const void*)h.at(0UL), (n - 1UL) * 4UL), "cuda_copy_to_device ran"); }
+        struct Vec<float> raw = std::vec_with_cap(n);
+        unsigned long k = 0UL;
+        while (k < n) { unsafe { raw.push(0.0f); } k = k + 1UL; }
+        unsafe { check(std::cuda_copy_to_host((void*)raw.at(0UL), d.dev + 4UL, (n - 1UL) * 4UL), "cuda_copy_to_host ran"); }
+        unsafe { check(*raw.at(0UL) == *h.at(0UL) && *raw.at(n - 2UL) == *h.at(n - 2UL), "raw byte copies at an offset"); }
+        raw.free(); h.free(); h2.free();
+        std::cuda_free(&d);
+        std::cuda_free(&out);
+        si = si + 1;
+    }
+}
+
 static void check_cufft() {
     // 1D double, power of two, against fft.h
     unsigned long n = 1024UL;
@@ -706,6 +756,7 @@ int main() {
     check(da.dev == 0UL, "free clears handle");
     a.free(); b.free(); want.free(); ga.free(); gb.free(); ref.free(); hc.free();
 
+    check_transfers();
     check_cudnn();
     check_cufft();
 

@@ -6,10 +6,13 @@
 // axis), and every op is queued on gpu_cuda's stream, so it orders with the
 // CudaBuf ops there and can be recorded into a CudaGraph.
 //
-// Convolutions run through cuDNN. The first call for each shape asks cuDNN
-// to time its algorithms (cudnnFind…) and keeps the fastest, with its
-// workspace, in a plan cache — so make that first call outside graph
-// capture. fp32 convolutions run in full fp32 unless cuda_set_tf32(1) is in
+// Convolutions run through cuDNN. The first call for each shape (and for
+// plain vs. +relu) builds the fused graph conv -> + bias (-> relu) with
+// cuDNN's graph API, times the engine configs its heuristics suggest and
+// the legacy API's best algorithm (cudnnFind…) on the call's buffers, and
+// keeps the fastest, with its workspace, in a plan cache — so make that
+// first call outside graph capture. Later calls cost a few microseconds of
+// host time. fp32 convolutions run in full fp32 unless cuda_set_tf32(1) is in
 // effect, which also lets cuDNN use TF32 tensor cores (same switch as the
 // cuBLAS GEMMs).
 // Link with: -lcudnn plus gpu_cuda's -lcuda -lcublas -lcublasLt -lnvrtc
@@ -46,7 +49,7 @@ unsigned long cuda_conv_out_dim(unsigned long dim, unsigned long kernel,
 
 int cuda_conv2d(const &CudaConv2D layer, struct CudaBuf x, struct CudaBuf y,
                 unsigned long batch, unsigned long height, unsigned long width);
-// y = relu(conv(x) + bias) in one cuDNN call.
+// y = relu(conv(x) + bias), fused.
 int cuda_conv2d_relu(const &CudaConv2D layer, struct CudaBuf x, struct CudaBuf y,
                      unsigned long batch, unsigned long height, unsigned long width);
 
