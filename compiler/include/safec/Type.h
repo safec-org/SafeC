@@ -168,6 +168,9 @@ struct ReferenceType : Type {
 // ── Array type ────────────────────────────────────────────────────────────────
 struct ArrayType : Type {
     TypePtr  element;
+    // Elements of a 'volatile' array variable/field/parameter: decays to
+    // 'volatile T*'. Like PointerType::pointeeVolatile, ignored by equals().
+    bool     elementVolatile = false;
     int64_t  size = -1;  // -1 = unsized (pointer decay compatible), or unresolved
                          // (see sizeExpr) until the post-parse const-eval pass runs
 
@@ -368,6 +371,13 @@ TypePtr makeReference(TypePtr base, Region r, bool nullable = false,
 // Does an access through a value of pointer/reference type 'ty' touch
 // volatile memory ('volatile T*' / 'volatile &T')? False for anything else.
 bool pointeeIsVolatile(const TypePtr &ty);
+// 'volatile T name[N]': a copy of array type 'ty' (every dimension) with
+// elementVolatile set. Returns 'ty' unchanged if it isn't an array.
+TypePtr withVolatileElements(const TypePtr &ty);
+// Would converting a 'from' value to 'to' silently drop a volatile
+// qualifier ('volatile T*' → 'T*', 'volatile T[N]' → 'T*', at any pointer
+// nesting level)? Such conversions need an explicit cast, as in C.
+bool dropsVolatile(const TypePtr &from, const TypePtr &to);
 // 'sizeExpr' is non-null when the source size wasn't a plain literal (see
 // ArrayType::sizeExpr); it's resolved into a concrete 'size' by
 // resolveArraySizes() before Sema runs.

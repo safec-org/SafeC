@@ -11,6 +11,11 @@ Directives, read from '// ' comments in the test source:
   CHECK-NOT: pat     must not match between the previous match and the next
                      CHECK (or the end of the block).
 'pat' is literal text, except '{{re}}' spans which are regular expressions.
+
+  EXPECT-ERROR: msg  (trailing comment on the offending line) the test must
+                     fail to compile, with an error containing msg reported
+                     on that line. Checked with --errors <stderr-file>; every
+                     reported error must be one of the expected ones.
 """
 import re
 import sys
@@ -26,7 +31,32 @@ def compile_pattern(pat):
     return re.compile("".join(out))
 
 
+def check_errors(src, errfile):
+    expected = []
+    for n, line in enumerate(open(src), 1):
+        m = re.search(r"//\s*EXPECT-ERROR:\s?(.*)$", line)
+        if m:
+            expected.append((n, m.group(1).strip()))
+    reported = []
+    for line in open(errfile):
+        m = re.search(r":(\d+):\d+: error: (.*)$", line)
+        if m:
+            reported.append((int(m.group(1)), m.group(2)))
+    failures = 0
+    for n, msg in expected:
+        if not any(rn == n and msg in rmsg for rn, rmsg in reported):
+            print(f"{src}:{n}: expected error not reported: {msg}")
+            failures += 1
+    for rn, rmsg in reported:
+        if not any(rn == n and msg in rmsg for n, msg in expected):
+            print(f"{src}:{rn}: unexpected error: {rmsg}")
+            failures += 1
+    return 1 if failures else 0
+
+
 def main():
+    if sys.argv[1] == "--errors":
+        return check_errors(sys.argv[2], sys.argv[3])
     src, ll = sys.argv[1], sys.argv[2]
     directives = []
     for n, line in enumerate(open(src), 1):

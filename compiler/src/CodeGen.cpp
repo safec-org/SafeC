@@ -821,6 +821,7 @@ void CodeGen::genFunctionBody(FunctionDecl &fn, llvm::Function *llvmFn) {
         auto *alloca = createEntryAlloca(env, aTy, p.name + ".addr");
         builder_.CreateStore(&arg, alloca);
         env.locals[p.name] = alloca;
+        if (p.isVolatile) volatileStorage_.insert(alloca);
         ++idx;
     }
 
@@ -3836,9 +3837,10 @@ bool CodeGen::isVolatileLValue(Expr &e, FnEnv &env) {
         if (!se.base->type) return false;
         // An element of a volatile array is volatile; an element reached
         // through a pointer is volatile if the pointee is.
+        if (pointeeIsVolatile(se.base->type)) return true;
         if (se.base->type->kind == TypeKind::Array || se.base->type->kind == TypeKind::Vector)
             return isVolatileLValue(*se.base, env);
-        return pointeeIsVolatile(se.base->type);
+        return false;
     }
     case ExprKind::Member:
     case ExprKind::Arrow: {

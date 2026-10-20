@@ -190,6 +190,9 @@ private:
     bool        checkArenaTargetStale(const Expr &e, const std::string &regionName,
                                        SourceLocation loc);
     TypePtr checkAddrOf(UnaryExpr &e);
+    // Is 'e' (an already-checked lvalue) volatile-qualified? See
+    // CodeGen::isVolatileLValue, which mirrors this for code generation.
+    bool isVolatileLValue(const Expr &e) const;
     TypePtr checkDeref(UnaryExpr &e);
     TypePtr checkNew(NewExpr &e);
     TypePtr checkTupleLit(TupleLitExpr &e);
