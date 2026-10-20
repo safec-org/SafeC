@@ -5,6 +5,7 @@
 #include <std/math.h>
 #include <std/ml/tensor_half.h>
 #include <std/ml/float16.h>
+#include <std/ml/attention.h>
 extern int printf(const char* fmt, ...);
 
 static int g_checks = 0;
@@ -315,6 +316,165 @@ static void check_half() {
     v.free();
 }
 
+// ── Attention ────────────────────────────────────────────────────────────────
+// CPU references over [heads][rows][d]: softmax attention (causal: key j is
+// visible to query i when j <= i + kv - seq) and linear attention with
+// phi(x) = elu(x) + 1.
+static float phi_ref(float x) { return x > (float)0.0 ? x + (float)1.0 : (float)std::exp_d((double)x); }
+
+static struct Vec<float> attn_ref(&Vec<float> q, &Vec<float> k, &Vec<float> v, unsigned long heads,
+                                  unsigned long seq, unsigned long kv, unsigned long d, float scale,
+                                  int causal, int linear) {
+    struct Vec<float> o = std::vec_with_cap(heads * seq * d);
+    unsigned long h = 0UL;
+    while (h < heads) {
+        unsigned long i = 0UL;
+        while (i < seq) {
+            struct Vec<double> w = std::vec_with_cap(kv);
+            double mx = -1.0e300;
+            unsigned long j = 0UL;
+            while (j < kv) {
+                double sv = 0.0;
+                unsigned long c = 0UL;
+                if (linear) {
+                    while (c < d) { sv = sv + (double)phi_ref(*q.at((h * seq + i) * d + c)) * (double)phi_ref(*k.at((h * kv + j) * d + c)); c = c + 1UL; }
+                } else {
+                    while (c < d) { sv = sv + (double)*q.at((h * seq + i) * d + c) * (double)*k.at((h * kv + j) * d + c); c = c + 1UL; }
+                    sv = sv * (double)scale;
+                }
+                int vis = !causal || (long)j <= (long)i + (long)kv - (long)seq;
+                w.push(vis ? sv : -1.0e300);
+                if (vis && sv > mx) mx = sv;
+                j = j + 1UL;
+            }
+            double den = 0.0;
+            j = 0UL;
+            while (j < kv) {
+                double x = *w.at(j);
+                double p = x <= -1.0e299 ? 0.0 : (linear ? x : std::exp_d(x - mx));
+                *w.at(j) = p;
+                den = den + p;
+                j = j + 1UL;
+            }
+            unsigned long c = 0UL;
+            while (c < d) {
+                double a = 0.0;
+                j = 0UL;
+                while (j < kv) { a = a + *w.at(j) * (double)*v.at((h * kv + j) * d + c); j = j + 1UL; }
+                o.push(den > 0.0 ? (float)(a / den) : (float)0.0);
+                c = c + 1UL;
+            }
+            w.free();
+            i = i + 1UL;
+        }
+        h = h + 1UL;
+    }
+    return o;
+}
+
+static float relmax(&Vec<float> a, &Vec<float> b) {
+    float m = 0.0f;
+    float big = 0.0f;
+    unsigned long i = 0UL;
+    while (i < a.length()) {
+        float x = *b.at(i);
+        if (x < 0.0f) x = -x;
+        if (x > big) big = x;
+        i = i + 1UL;
+    }
+    m = maxdiff(a, b);
+    return big > 0.0f ? m / big : m;
+}
+
+static void check_attention() {
+    unsigned long heads = 3UL;
+    unsigned long dims[3];
+    dims[0] = 64UL; dims[1] = 40UL; dims[2] = 128UL;      // the 64 and 128 builds, and a masked one
+    int di = 0;
+    while (di < 3) {
+        unsigned long d = dims[di];
+        unsigned long cases[3][2];
+        cases[0][0] = 70UL; cases[0][1] = 70UL;           // partial tiles and chunks
+        cases[1][0] = 33UL; cases[1][1] = 100UL;          // fewer queries than keys (KV cache)
+        cases[2][0] = 1UL;  cases[2][1] = 257UL;          // one query
+        int ci = 0;
+        while (ci < 3) {
+            unsigned long sl = cases[ci][0];
+            unsigned long kv = cases[ci][1];
+            struct Vec<float> q = seq(heads * sl * d, 0.013f, -0.6f);
+            struct Vec<float> k = seq(heads * kv * d, 0.011f, -0.55f);
+            struct Vec<float> v = seq(heads * kv * d, 0.02f, -1.0f);
+            struct Vec<float> got = std::vec_with_cap(heads * sl * d);
+            unsigned long z = 0UL;
+            while (z < heads * sl * d) { got.push(0.0f); z = z + 1UL; }
+            int causal = 0;
+            while (causal < 2) {
+                float scale = (float)(1.0 / std::sqrt_d((double)d));
+                struct Vec<float> ref = attn_ref(&q, &k, &v, heads, sl, kv, d, scale, causal, 0);
+                int ok = std::rocm_flash_attention_f32(q.at(0UL), k.at(0UL), v.at(0UL), got.at(0UL),
+                                                       heads, sl, kv, d, 0.0f, causal);
+                check(ok && relmax(&got, &ref) < 1.0e-4f, "flash attention vs reference");
+                if (!ok || relmax(&got, &ref) >= 1.0e-4f) {
+                    unsafe { printf("    flash d=%lu sl=%lu kv=%lu causal=%d ok=%d err=%g\n", d, sl, kv, causal, ok, (double)relmax(&got, &ref)); }
+                }
+                ref.free();
+                if (!causal || kv == sl) {
+                    ref = attn_ref(&q, &k, &v, heads, sl, kv, d, 1.0f, causal, 1);
+                    ok = std::rocm_linear_attention_f32(q.at(0UL), k.at(0UL), v.at(0UL), got.at(0UL),
+                                                        heads, sl, kv, d, causal);
+                    check(ok && relmax(&got, &ref) < 1.0e-4f, "linear attention vs reference");
+                    if (!ok || relmax(&got, &ref) >= 1.0e-4f) {
+                        unsafe { printf("    linear d=%lu sl=%lu kv=%lu causal=%d ok=%d err=%g\n", d, sl, kv, causal, ok, (double)relmax(&got, &ref)); }
+                    }
+                    ref.free();
+                } else {
+                    // causal linear attention needs kvLen == seqLen
+                    check(!std::rocm_linear_attention_f32(q.at(0UL), k.at(0UL), v.at(0UL), got.at(0UL),
+                                                          heads, sl, kv, d, 1), "causal linear rejects kv != sl");
+                }
+                causal = causal + 1;
+            }
+            // an explicit scale
+            struct Vec<float> ref2 = attn_ref(&q, &k, &v, heads, sl, kv, d, 0.37f, 0, 0);
+            check(std::rocm_flash_attention_f32(q.at(0UL), k.at(0UL), v.at(0UL), got.at(0UL), heads, sl, kv, d, 0.37f, 0) &&
+                  relmax(&got, &ref2) < 1.0e-4f, "flash attention, explicit scale");
+            ref2.free();
+            q.free(); k.free(); v.free(); got.free();
+            ci = ci + 1;
+        }
+        di = di + 1;
+    }
+    // same definitions as std/ml/attention.h's CPU functions (one head)
+    unsigned long n1 = 50UL;
+    unsigned long d1 = 32UL;
+    struct Vec<float> q1 = seq(n1 * d1, 0.017f, -0.8f);
+    struct Vec<float> k1 = seq(n1 * d1, 0.015f, -0.7f);
+    struct Vec<float> v1 = seq(n1 * d1, 0.03f, -1.2f);
+    &Tensor tq = std::tensor_from_2d(q1.at(0UL), n1, d1, 0);
+    &Tensor tk = std::tensor_from_2d(k1.at(0UL), n1, d1, 0);
+    &Tensor tv = std::tensor_from_2d(v1.at(0UL), n1, d1, 0);
+    &Tensor sa = std::attention_forward(tq, tk, tv);
+    &Tensor la = std::linear_attention_forward(tq, tk, tv);
+    struct Vec<float> g1 = std::vec_with_cap(n1 * d1);
+    struct Vec<float> c1 = std::vec_with_cap(n1 * d1);
+    struct Vec<float> c2 = std::vec_with_cap(n1 * d1);
+    unsigned long z = 0UL;
+    while (z < n1 * d1) { g1.push(0.0f); unsafe { c1.push(sa->data[z]); c2.push(la->data[z]); } z = z + 1UL; }
+    check(std::rocm_flash_attention_f32(q1.at(0UL), k1.at(0UL), v1.at(0UL), g1.at(0UL), 1UL, n1, n1, d1, 0.0f, 0) &&
+          relmax(&g1, &c1) < 1.0e-4f, "flash attention == attention_forward");
+    check(std::rocm_linear_attention_f32(q1.at(0UL), k1.at(0UL), v1.at(0UL), g1.at(0UL), 1UL, n1, n1, d1, 0) &&
+          relmax(&g1, &c2) < 1.0e-4f, "linear attention == linear_attention_forward");
+    // bad shapes
+    struct RocmBuf big = std::rocm_alloc(n1 * 129UL);
+    check(big.dev != 0UL && !std::rocm_flash_attention(big, big, big, big, 1UL, n1, n1, 129UL, 0.0f, 0) &&
+          !std::rocm_linear_attention(big, big, big, big, 1UL, n1, n1, 129UL, 0), "headDim > 128 rejected");
+    check(!std::rocm_flash_attention(big, big, big, big, 1UL, n1, n1 - 1UL, 64UL, 0.0f, 1), "causal flash rejects kv < sl");
+    std::rocm_free(&big);
+    sa.free(); la.free(); tq.free(); tk.free(); tv.free();
+    q1.free(); k1.free(); v1.free(); g1.free(); c1.free(); c2.free();
+}
+
+
 int main() {
     if (!std::rocm_available()) { unsafe { printf("no ROCm GPU -- skipped\n"); } return 0; }
     unsafe { printf("device: %s\n", std::rocm_device_name()); }
@@ -455,6 +615,7 @@ int main() {
 
     check_half();
 
+    check_attention();
     unsafe { printf("rocm: %d checks, %d failures\n", g_checks, g_fails); }
     return g_fails == 0 ? 0 : 1;
 }
