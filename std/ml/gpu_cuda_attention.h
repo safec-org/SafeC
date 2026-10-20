@@ -10,13 +10,19 @@
 //    PyTorch's scaled_dot_product_attention uses on Hopper) when cuDNN 9 is
 //    installed; otherwise, and for anything cuDNN rejects, this library's
 //    FlashAttention-2 kernel runs them on tensor cores (mma.sync, fp32
-//    accumulation) on sm_80+ for head dims up to 128. fp32, head dim 256 and
-//    older GPUs use a CUDA-core kernel with the same algorithm.
+//    accumulation) on sm_80+ for head dims up to 128. fp32 runs the same
+//    kernel in 3xTF32 (close to full fp32 accuracy) on sm_80+ up to head dim
+//    128; head dim 256 and older GPUs use a CUDA-core kernel with the same
+//    algorithm.
 //  - Linear attention: Katharopoulos et al.'s kernel-trick attention with
 //    phi(x) = elu(x) + 1, in O((seqLen + kvLen) D^2) instead of
-//    O(seqLen kvLen D). Non-causal runs phi(K)^T V once per kv head; causal
-//    walks the sequence in 32-row chunks with a running state, as a linear
-//    RNN would.
+//    O(seqLen kvLen D), with fp32 accumulation. Up to head dim 128 the keys
+//    are cut into 64-row chunks: a per-head pass walks them with the D x D
+//    state phi(K)^T V in registers (causal: storing the state before each
+//    chunk), and every output chunk then runs in parallel from its state
+//    plus, when causal, the masked phi(Q_c) phi(K_c)^T V_c inside the chunk.
+//    Head dim 256 walks the sequence in 32-row chunks with a running state,
+//    as a linear RNN would.
 //
 // Two calling forms:
 //  - cuda_flash_attention / cuda_linear_attention (and their host-array
