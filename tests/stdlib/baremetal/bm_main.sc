@@ -134,7 +134,7 @@ static void t_collections() {
         CHECK(l.pop_back().default(0) == 9);
         l.free();
 
-        ?&BTree<int> tq = std::alloc(sizeof(struct BTree<int>));
+        ?&heap BTree<int> tq = std::alloc(sizeof(struct BTree<int>));
         if (!tq.is_null()) {
             &BTree<int> t = std::expect_ref(tq, "tq is null");
             std::btree_init(t);
@@ -142,7 +142,7 @@ static void t_collections() {
             while (j < 50UL) { t.insert(j * 37UL % 101UL, (int)j); j = j + 1UL; }
             ?&int bv = t.get(10UL * 37UL % 101UL);
             CHECK(bv.default(-1) == 10);
-            std::dealloc(t);
+            std::dealloc(tq);
         }
     }
 }
