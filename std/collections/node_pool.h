@@ -18,7 +18,8 @@
 // will be) a node of type N, so they're read and written with memcpy:
 // under strict aliasing a pointer-typed access there could otherwise be
 // reordered against the node's own fields.
-extern void* memcpy(void* dst, const void* src, unsigned long n);
+#include <std/stddef.h>
+extern void* memcpy(void* dst, const void* src, size_t n);   // size_t: 32-bit on wasm32 / 32-bit targets
 
 namespace std {
 
@@ -57,7 +58,7 @@ generic<N>
         if (!self.free_list.is_null()) {
             unsigned char* n = (unsigned char*)self.free_list;
             void* link = (void*)0;
-            memcpy((void*)&link, (const void*)n, sizeof(void*));
+            memcpy((void*)&link, (const void*)n, (size_t)sizeof(void*));
             self.free_list = (?&heap unsigned char)link;
             return (?&heap N)n;
         }
@@ -67,7 +68,7 @@ generic<N>
             unsigned char* c = (unsigned char*)alloc(bytes);
             if (c == (unsigned char*)0) return null;
             void* prevChunk = (void*)self.chunks;
-            memcpy((void*)c, (const void*)&prevChunk, sizeof(void*));
+            memcpy((void*)c, (const void*)&prevChunk, (size_t)sizeof(void*));
             self.chunks = (?&heap unsigned char)c;
             self.bump = (?&heap unsigned char)(c + NODE_POOL_CHUNK_HDR);
             self.bump_left = count;
@@ -84,7 +85,7 @@ generic<N>
 void NodePool::give(&heap N node) {
     unsafe {
         void* head = (void*)self.free_list;
-        memcpy((void*)node, (const void*)&head, sizeof(void*));
+        memcpy((void*)node, (const void*)&head, (size_t)sizeof(void*));
         self.free_list = (?&heap unsigned char)node;
     }
 }
@@ -95,7 +96,7 @@ void NodePool::free_all() {
         unsigned char* c = (unsigned char*)self.chunks;
         while (c != (unsigned char*)0) {
             void* nextRaw = (void*)0;
-            memcpy((void*)&nextRaw, (const void*)c, sizeof(void*));
+            memcpy((void*)&nextRaw, (const void*)c, (size_t)sizeof(void*));
             unsigned char* next = (unsigned char*)nextRaw;
             dealloc((void*)c);
             c = next;
