@@ -12,7 +12,7 @@ OUT="${OUT:-$HERE/build}"
 mkdir -p "$OUT"
 STD="$ROOT/tests/stdlib/build/deps/libsafec_std.a"
 [[ -f "$STD" ]] || { echo "missing $STD — run 'safeguard test' in tests/stdlib first"; exit 1; }
-for t in cuda_check; do
+for t in cuda_check cuda_attention_check; do
     "$SAFEC" -I "$ROOT" "$HERE/$t.sc" -O2 -o "$OUT/$t.ll"
     "$CLANG" -O2 -w "$OUT/$t.ll" "$STD" -L"$CUDA/lib64" -Wl,-rpath,"$CUDA/lib64" \
         -lcuda -lcublas -lcublasLt -lnvrtc -lcudnn -lcufft -lm -lpthread -o "$OUT/$t"

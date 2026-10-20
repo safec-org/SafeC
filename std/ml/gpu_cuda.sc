@@ -492,13 +492,16 @@ static void* g_lt_lc[LT_CACHE];
 static unsigned long g_lt_algo[LT_CACHE * LT_RESULT_WORDS];
 
 // Compiles the kernel source for sm_<major><minor> and loads every kernel.
-static int cuda_build_kernels_(int major, int minor) {
+static int g_cuda_cc = 0;   // compute capability, major * 10 + minor (90 on an H100/H200)
+
+// Compiles CUDA C++ 'src' with NVRTC to a cubin for the selected GPU
+// (-arch=sm_<cc>) and loads it; null on failure (the compile log is printed).
+static ?&void cuda_compile_module_(const char* src, const char* name) {
     unsafe {
         void* prog = (void*)0;
-        if (nvrtcCreateProgram(&prog, cuda_kernel_source_(), "safec_cuda.cu", 0,
-                               (const char**)0, (const char**)0) != 0) return 0;
+        if (nvrtcCreateProgram(&prog, src, name, 0, (const char**)0, (const char**)0) != 0) return (void*)0;
         char arch[32];
-        int v = major * 10 + minor;
+        int v = g_cuda_cc;
         // "-arch=sm_" + two or three digits
         const char* prefix = "-arch=sm_";
         int p = 0;
@@ -517,22 +520,31 @@ static int cuda_build_kernels_(int major, int minor) {
             char* log = (char*)alloc_raw_((unsigned long)logSize + 1UL);
             if (log != (char*)0) {
                 nvrtcGetProgramLog(prog, log);
-                printf("std::cuda: kernel compile failed (%s):\n%s\n", (const char*)&arch[0], (const char*)log);
+                printf("std::cuda: kernel compile failed (%s, %s):\n%s\n", name, (const char*)&arch[0], (const char*)log);
                 dealloc_raw_((void*)log);
             }
             nvrtcDestroyProgram(&prog);
-            return 0;
+            return (void*)0;
         }
         size_t size = 0UL;
         nvrtcGetCUBINSize(prog, &size);
         char* cubin = (char*)alloc_raw_(size);
-        if (cubin == (char*)0) { nvrtcDestroyProgram(&prog); return 0; }
+        if (cubin == (char*)0) { nvrtcDestroyProgram(&prog); return (void*)0; }
         nvrtcGetCUBIN(prog, cubin);
         nvrtcDestroyProgram(&prog);
         void* module = (void*)0;
         int loaded = cuModuleLoadData(&module, (const void*)cubin);
         dealloc_raw_((void*)cubin);
-        if (loaded != CUDA_OK) return 0;
+        if (loaded != CUDA_OK) return (void*)0;
+        return module;
+    }
+}
+
+// Compiles + loads this file's kernels for the selected GPU.
+static int cuda_build_kernels_() {
+    unsafe {
+        void* module = cuda_compile_module_(cuda_kernel_source_(), "safec_cuda.cu");
+        if (module == (void*)0) return 0;
         int k = 0;
         while (k < K_COUNT) {
             if (cuModuleGetFunction(&g_cuda_fn[k], module, cuda_kernel_name_(k)) != CUDA_OK) return 0;
@@ -594,7 +606,8 @@ static int cuda_ensure_() {
         if (cublasLtCreate(&g_cuda_lt) != 0) g_cuda_lt = (void*)0;   // optional: gemm_relu falls back
         int s = 0;
         while (s < LT_CACHE) { g_lt_key0[s] = -1L; s = s + 1; }
-        if (!cuda_build_kernels_(major, minor)) return 0;
+        g_cuda_cc = major * 10 + minor;
+        if (!cuda_build_kernels_()) return 0;
     }
     g_cuda_state = 1;
     return 1;
@@ -1209,6 +1222,16 @@ int cuda_copy_rows(struct CudaBuf src, unsigned long srcOff, unsigned long srcSt
 }
 
 int cuda_tf32_enabled() { return g_cuda_tf32; }
+
+int cuda_compute_capability() {
+    if (!cuda_ensure_()) return 0;
+    return g_cuda_cc;
+}
+
+?&void cuda_load_module(const &char source, const &char name) {
+    if (!cuda_ensure_()) return (void*)0;
+    unsafe { return cuda_compile_module_((const char*)source, (const char*)name); }
+}
 
 // ── Graphs ───────────────────────────────────────────────────────────────────
 
