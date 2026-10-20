@@ -222,6 +222,63 @@ static void check_cudnn() {
     unsafe { check(fm_err(ya.at(0UL), (const float*)cat.data, 2UL * inN) == 0.0f, "cuda_concat_channels values"); }
     ya.free();
 
+    // batch-2 concat of 4x4 planes (the float4 copy path)
+    struct CudaBuf dc2 = std::cuda_alloc(2UL * 2UL * 4UL * 16UL);
+    check(std::cuda_concat_channels(dx, 2UL, dx, 2UL, dc2, 2UL, 16UL) &&
+          std::cuda_concat_channels(dx, 3UL, dx, 1UL, dc2, 2UL, 16UL), "cuda_concat_channels batch ran");
+    ya = download(dc2);
+    yb = download(dx);
+    unsafe {
+        // out[b] = (a[b] with 3 channels, c[b] with 1 channel), a = c = dx read as [2, 3|1, 16]
+        int same = 1;
+        unsigned long b = 0UL;
+        while (b < 2UL) {
+            unsigned long i = 0UL;
+            while (i < 64UL) {
+                float want = i < 48UL ? *yb.at(b * 48UL + i) : *yb.at(b * 16UL + i - 48UL);
+                if (*ya.at(b * 64UL + i) != want) same = 0;
+                i = i + 1UL;
+            }
+            b = b + 1UL;
+        }
+        check(same, "cuda_concat_channels batch values");
+    }
+    ya.free(); yb.free();
+
+    // strided row copies: float4 and scalar paths, bounds
+    check(std::cuda_copy_rows(dx, 4UL, 12UL, dc2, 8UL, 16UL, 8UL, 5UL) &&
+          std::cuda_copy_rows(dx, 1UL, 7UL, dc2, 100UL, 9UL, 5UL, 3UL), "cuda_copy_rows ran");
+    ya = download(dc2);
+    yb = download(dx);
+    unsafe {
+        int same = 1;
+        unsigned long r = 0UL;
+        while (r < 5UL) {
+            unsigned long c = 0UL;
+            while (c < 8UL) { if (*ya.at(8UL + r * 16UL + c) != *yb.at(4UL + r * 12UL + c)) same = 0; c = c + 1UL; }
+            r = r + 1UL;
+        }
+        r = 0UL;
+        while (r < 3UL) {
+            unsigned long c = 0UL;
+            while (c < 5UL) { if (*ya.at(100UL + r * 9UL + c) != *yb.at(1UL + r * 7UL + c)) same = 0; c = c + 1UL; }
+            r = r + 1UL;
+        }
+        check(same, "cuda_copy_rows values");
+    }
+    ya.free(); yb.free();
+    check(!std::cuda_copy_rows(dx, 0UL, 4UL, dc2, 0UL, 16UL, 8UL, 2UL) &&
+          !std::cuda_copy_rows(dx, 0UL, 8UL, dc2, 250UL, 8UL, 8UL, 2UL), "cuda_copy_rows rejects overlap / overrun");
+    std::cuda_free(&dc2);
+
+    // a cached conv plan run on other buffers (rebinds its variant pack)
+    struct CudaBuf dy2 = std::cuda_alloc(2UL * outN);
+    check(std::cuda_conv2d(&d2, dx, dy2, 2UL, 21UL, 15UL), "cuda_conv2d other buffers ran");
+    yb = fm_download(dy2, 0UL, outN);
+    unsafe { check(fm_err(yb.at(0UL), (const float*)ca.data, outN) < 1e-5f, "cuda_conv2d other buffers values"); }
+    yb.free();
+    std::cuda_free(&dy2);
+
     // whole U-Net
     struct UNet net = std::unet_new(3UL, 8UL, 16UL, 2UL);
     struct FeatureMap ux = std::feature_map_new(3UL, 32UL, 24UL);

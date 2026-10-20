@@ -247,16 +247,43 @@ static const char* cuda_kernel_source_() {
     "    }\n"
     "}\n"
     "\n"
-    "// Nearest-neighbour 2x upsample of 'planes' h x w planes: out[p][y][x] = in[p][y/2][x/2]\n"
+    "// Nearest-neighbour 2x upsample of 'planes' h x w planes: out[p][y][x] = in[p][y/2][x/2].\n"
+    "// One thread per input value, writing its 2x2 block as two float2 stores.\n"
     "extern \"C\" __global__ void upsample2x(const float* __restrict__ in, float* __restrict__ out,\n"
     "                                      unsigned planes, unsigned h, unsigned w) {\n"
-    "    unsigned ow = 2u * w, ohw = 4u * h * w, n = planes * ohw;\n"
+    "    unsigned hw = h * w, n = planes * hw;\n"
     "    unsigned i = blockIdx.x * blockDim.x + threadIdx.x;\n"
     "    unsigned stride = gridDim.x * blockDim.x;\n"
     "    for (; i < n; i += stride) {\n"
-    "        unsigned p = i / ohw, r = i - p * ohw, y = r / ow, x = r - y * ow;\n"
-    "        out[i] = in[(size_t)p * h * w + (y >> 1) * w + (x >> 1)];\n"
+    "        unsigned p = i / hw, r = i - p * hw, y = r / w, x = r - y * w;\n"
+    "        float v = in[i];\n"
+    "        float2* o = (float2*)(out + (size_t)p * 4u * hw + (size_t)(2u * y) * (2u * w) + 2u * x);\n"
+    "        o[0] = make_float2(v, v);\n"
+    "        o[w] = make_float2(v, v);   // next output row: 2w floats = w float2s on\n"
     "    }\n"
+    "}\n"
+    "\n"
+    "// dst[dOff + r*dStride + c] = src[sOff + r*sStride + c] for r < rows, c < len; T is\n"
+    "// float or float4 (all offsets, strides and len then counted in T).\n"
+    "template <typename T> __device__ void copy_rows_t(const T* __restrict__ src, T* __restrict__ dst,\n"
+    "        unsigned long long sOff, unsigned long long sStride, unsigned long long dOff,\n"
+    "        unsigned long long dStride, unsigned len, unsigned rows) {\n"
+    "    unsigned long long n = (unsigned long long)len * rows;\n"
+    "    for (unsigned long long i = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x; i < n;\n"
+    "         i += (unsigned long long)gridDim.x * blockDim.x) {\n"
+    "        unsigned r = (unsigned)(i / len), c = (unsigned)(i - (unsigned long long)r * len);\n"
+    "        dst[dOff + r * dStride + c] = src[sOff + r * sStride + c];\n"
+    "    }\n"
+    "}\n"
+    "extern \"C\" __global__ void copy_rows(const float* src, float* dst, unsigned long long sOff,\n"
+    "        unsigned long long sStride, unsigned long long dOff, unsigned long long dStride,\n"
+    "        unsigned len, unsigned rows) {\n"
+    "    copy_rows_t<float>(src, dst, sOff, sStride, dOff, dStride, len, rows);\n"
+    "}\n"
+    "extern \"C\" __global__ void copy_rows4(const float4* src, float4* dst, unsigned long long sOff,\n"
+    "        unsigned long long sStride, unsigned long long dOff, unsigned long long dStride,\n"
+    "        unsigned len, unsigned rows) {\n"
+    "    copy_rows_t<float4>(src, dst, sOff, sStride, dOff, dStride, len, rows);\n"
     "}\n"
     "\n"
     "// ── fp16 / bf16 storage, fp32 arithmetic ───────────────────────────────────\n"
@@ -313,7 +340,9 @@ static const char* cuda_kernel_source_() {
 #define K_SGD_F16 18
 #define K_SGD_BF16 19
 #define K_UPSAMPLE2X 20
-#define K_COUNT 21
+#define K_COPY_ROWS 21
+#define K_COPY_ROWS4 22
+#define K_COUNT 23
 
 static const char* cuda_kernel_name_(int k) {
     if (k == K_ADD) return "ew_add";
@@ -336,6 +365,8 @@ static const char* cuda_kernel_name_(int k) {
     if (k == K_MATMUL_BF16) return "matmul_bf16";
     if (k == K_SGD_F16) return "sgd_f16";
     if (k == K_SGD_BF16) return "sgd_bf16";
+    if (k == K_COPY_ROWS) return "copy_rows";
+    if (k == K_COPY_ROWS4) return "copy_rows4";
     return "upsample2x";
 }
 
@@ -838,7 +869,34 @@ int cuda_upsample2x_nearest(struct CudaBuf in, struct CudaBuf out,
         void* params[5];
         params[0] = (void*)&pi; params[1] = (void*)&po; params[2] = (void*)&np;
         params[3] = (void*)&nh; params[4] = (void*)&nw;
-        return cuda_launch_(K_UPSAMPLE2X, n, (&void)&params[0]);
+        return cuda_launch_(K_UPSAMPLE2X, planes * h * w, (&void)&params[0]);   // a thread per input
+    }
+}
+
+int cuda_copy_rows(struct CudaBuf src, unsigned long srcOff, unsigned long srcStride,
+                   struct CudaBuf dst, unsigned long dstOff, unsigned long dstStride,
+                   unsigned long rowLen, unsigned long rows) {
+    if (!cuda_ensure_() || rowLen == 0UL || rows == 0UL || rowLen > 4294967295UL || rows > 4294967295UL ||
+        (rows > 1UL && (rowLen > srcStride || rowLen > dstStride)) ||
+        !cuda_fits_(src, srcOff + (rows - 1UL) * srcStride + rowLen) ||
+        !cuda_fits_(dst, dstOff + (rows - 1UL) * dstStride + rowLen)) return 0;
+    // float4 when every offset, stride and the row length are multiples of 4
+    // (CudaBuf bases are 256-byte aligned)
+    int v4 = ((srcOff | srcStride | dstOff | dstStride | rowLen) & 3UL) == 0UL;
+    unsigned long q = v4 ? 4UL : 1UL;
+    unsafe {
+        void* ps = (void*)src.dev;
+        void* pd = (void*)dst.dev;
+        unsigned long long so = (unsigned long long)(srcOff / q);
+        unsigned long long ss = (unsigned long long)(srcStride / q);
+        unsigned long long dof = (unsigned long long)(dstOff / q);
+        unsigned long long ds = (unsigned long long)(dstStride / q);
+        unsigned int len = (unsigned int)(rowLen / q);
+        unsigned int nr = (unsigned int)rows;
+        void* params[8];
+        params[0] = (void*)&ps; params[1] = (void*)&pd; params[2] = (void*)&so; params[3] = (void*)&ss;
+        params[4] = (void*)&dof; params[5] = (void*)&ds; params[6] = (void*)&len; params[7] = (void*)&nr;
+        return cuda_launch_(v4 ? K_COPY_ROWS4 : K_COPY_ROWS, (rowLen / q) * rows, (&void)&params[0]);
     }
 }
 

@@ -92,6 +92,12 @@ int cuda_mse_grad(struct CudaBuf y, struct CudaBuf t, struct CudaBuf dy, struct 
 
 // dst[dstOff .. dstOff+n) = src[srcOff .. srcOff+n)  (device-to-device copy)
 int cuda_copy(struct CudaBuf src, unsigned long srcOff, struct CudaBuf dst, unsigned long dstOff, unsigned long n);
+// Strided 2D copy, one queued kernel: for r < rows, c < rowLen,
+//   dst[dstOff + r*dstStride + c] = src[srcOff + r*srcStride + c].
+// Rows must not overlap (rowLen <= both strides when rows > 1).
+int cuda_copy_rows(struct CudaBuf src, unsigned long srcOff, unsigned long srcStride,
+                   struct CudaBuf dst, unsigned long dstOff, unsigned long dstStride,
+                   unsigned long rowLen, unsigned long rows);
 // Nearest-neighbour 2x upsample of 'planes' row-major h x w planes into
 // planes x 2h x 2w: out[p][y][x] = in[p][y/2][x/2] (cnn.h's upsample2x_nearest).
 int cuda_upsample2x_nearest(struct CudaBuf in, struct CudaBuf out,
