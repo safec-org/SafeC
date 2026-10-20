@@ -778,8 +778,10 @@ static void fft_pass_(FFT_R* d, const FFT_R* t, unsigned long len, unsigned long
 // committed descriptor per length is made on first use, under a lock, and
 // then computed concurrently from the thread pool, single-threaded per call.
 // fft_serial and ifft_serial never use it: creating descriptors allocates
-// and locks.
-#if FFT_HAS_THREADS && !defined(_WIN32)
+// and locks. Not on Apple targets: oneMKL has no Apple Silicon build, and
+// Apple's linker requires even weak imports to resolve at link time, so
+// the references would break every macOS program that reaches fft.sc.
+#if FFT_HAS_THREADS && !defined(_WIN32) && !defined(__APPLE__)
 #define FFT_VENDOR 1
 extern long FFT_DFTI_CREATE(void** desc, int domain, long length) __attribute__((weak));
 extern long DftiSetValue(void* desc, int param, ...) __attribute__((weak));

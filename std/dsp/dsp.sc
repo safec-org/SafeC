@@ -216,6 +216,29 @@ float dsp_dot_f32(const &float a_ref, const &float b_ref, unsigned long n) {
 // outputs at a time, each tap broadcast once and multiplied into four
 // accumulator vectors of consecutive outputs. No horizontal sums, and one
 // load per multiply-add instead of two; the leftovers use dsp_dot.
+//
+// On Apple targets a program that links Accelerate (safeguard's default
+// there, see std/simd/gemm.h) hands the whole product to vDSP_conv /
+// vDSP_convD instead: on an M1 Pro core they run a 127-tap filter over 2^20
+// samples in 5.6 ms (double) / 3.3 ms (float) against 8.0 / 4.1 ms here,
+// and keep that lead with 8 threads calling at once. This kernel already
+// sits at the NEON ceiling there (about 34 GFLOPS in double whatever the
+// accumulator count, and building the odd-offset windows with shuffles
+// instead of loads gained nothing). The references are weak, as for
+// cblas_sgemm: without Accelerate they are null (safeguard passes -U for
+// them) and the kernel below runs.
+#if defined(__APPLE__) && !defined(__SAFEC_FREESTANDING__)
+#define DSP_VDSP 1
+extern void vDSP_convD(const double* a, long ia, const double* f, long ifs, double* c, long ic,
+                       unsigned long n, unsigned long p) __attribute__((weak));
+extern void vDSP_conv(const float* a, long ia, const float* f, long ifs, float* c, long ic,
+                      unsigned long n, unsigned long p) __attribute__((weak));
+#else
+#define DSP_VDSP 0
+#endif
+// Below this many multiply-adds the call costs more than it saves.
+#define DSP_VDSP_MIN 4096UL
+
 typedef vec<double, 8> dsp_f64x8_;
 typedef vec<float, 16> dsp_f32x16_;
 
@@ -313,6 +336,13 @@ void dsp_sliding_dot_f64(const &double a_ref, const &double x_ref, &double out_r
         const double* x = (const double*)x_ref;
         double* out = (double*)out_ref;
         unsigned long q = 0UL;
+#if DSP_VDSP
+        // vDSP_convD with a positive filter stride is this correlation.
+        if ((void*)vDSP_convD != (void*)0 && nOut * n >= DSP_VDSP_MIN) {
+            vDSP_convD(x, 1L, a, 1L, out, 1L, nOut, n);
+            return;
+        }
+#endif
 #if defined(__x86_64__)
         int l = simd_level();
         if (l >= SIMD_AVX512) q = dsp_sdot64_avx512_(a, x, out, nOut, n);
@@ -330,6 +360,12 @@ void dsp_sliding_dot_f32(const &float a_ref, const &float x_ref, &float out_ref,
         const float* x = (const float*)x_ref;
         float* out = (float*)out_ref;
         unsigned long q = 0UL;
+#if DSP_VDSP
+        if ((void*)vDSP_conv != (void*)0 && nOut * n >= DSP_VDSP_MIN) {
+            vDSP_conv(x, 1L, a, 1L, out, 1L, nOut, n);
+            return;
+        }
+#endif
 #if defined(__x86_64__)
         int l = simd_level();
         if (l >= SIMD_AVX512) q = dsp_sdot32_avx512_(a, x, out, nOut, n);

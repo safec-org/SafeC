@@ -523,6 +523,13 @@ std::string cpuVendor() {
 
 } // namespace
 
+#ifdef __APPLE__
+// -U for each of std's weak references into Accelerate (see blasLinkFlags).
+static std::vector<std::string> appleWeakUndefined() {
+    return { "-Wl,-U,_cblas_sgemm", "-Wl,-U,_vDSP_conv", "-Wl,-U,_vDSP_convD" };
+}
+#endif
+
 std::vector<std::string> Builder::blasLinkFlags() const {
     std::vector<std::string> out;
     if (targetIsBareMetal() || targetIsWasm()) return out;
@@ -545,9 +552,11 @@ std::vector<std::string> Builder::blasLinkFlags() const {
         if (opts_.verbose) std::cout << "safeguard: CPU BLAS: Accelerate\n";
         return out;
     }
-    // Mach-O resolves even weak references at link time; let cblas_sgemm
-    // stay undefined (null at run time) when no BLAS is linked.
-    if (mode == "none") return { "-Wl,-U,_cblas_sgemm" };
+    // Mach-O resolves even weak references at link time; without Accelerate,
+    // let std's weak references into it (cblas_sgemm in std/simd/gemm.sc,
+    // vDSP_conv/vDSP_convD in std/dsp/dsp.sc) stay undefined -- null at run
+    // time, so std's own kernels run.
+    if (mode == "none") return appleWeakUndefined();
 #endif
     if (mode == "none") return out;
     if (automatic) {
@@ -591,8 +600,16 @@ std::vector<std::string> Builder::blasLinkFlags() const {
         std::cerr << "safeguard: warning: build.blas = \"accelerate\" needs macOS; using the built-in kernel\n";
         return {};
     }
+#ifdef __APPLE__
+    // A BLAS other than Accelerate leaves the vDSP references unresolved.
+    for (auto& f : appleWeakUndefined())
+        if (f != "-Wl,-U,_cblas_sgemm" || !ok) out.push_back(f);
+#endif
     if (!ok) {
         out.clear();
+#ifdef __APPLE__
+        out = appleWeakUndefined();
+#endif
         if (!automatic)
             std::cerr << "safeguard: warning: build.blas = \"" << mode
                       << "\" but the library wasn't found (set AOCL_ROOT / MKLROOT / OPENBLAS_ROOT); "
