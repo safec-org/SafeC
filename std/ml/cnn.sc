@@ -2,6 +2,7 @@
 #pragma once
 #include <std/stddef.h>
 #include <std/ml/cnn.h>
+#include <std/ml/tensor.h>
 #include <std/simd/gemm.h>
 #include <std/sync/parallel.h>
 
@@ -10,37 +11,41 @@ namespace std {
 extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
-struct FeatureMap feature_map_new(unsigned long channels, unsigned long height, unsigned long width) {
+// A map's storage: from this thread's TensorArena when one is active (see
+// cnn.h), else malloc.
+static struct FeatureMap fm_uninit_(unsigned long channels, unsigned long height, unsigned long width) {
     struct FeatureMap fm;
-    unsigned long size = channels * height * width;
+    unsigned long bytes = sizeof(float) * (channels * height * width);
     unsafe {
-        float* buf = (float*)malloc(sizeof(float) * size);
-        unsigned long i = 0UL;
-        while (i < size) { buf[i] = (float)0.0; i = i + 1UL; }
+        float* buf = (float*)0;
+        fm.fromArena = 0;
+        match (tensor_arena_current_()) {
+            case some(a): {
+                buf = (float*)tensor_arena_alloc_raw_(a, bytes);
+                fm.fromArena = 1;
+            }
+            case null: { buf = (float*)malloc(bytes); }
+        }
         fm.data = (&heap float)buf;
     }
     fm.channels = channels;
     fm.height = height;
     fm.width = width;
+    return fm;
+}
+
+struct FeatureMap feature_map_new(unsigned long channels, unsigned long height, unsigned long width) {
+    struct FeatureMap fm = fm_uninit_(channels, height, width);
+    unsigned long size = channels * height * width;
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < size) { fm.data[i] = (float)0.0; i = i + 1UL; }
+    }
     return fm;
 }
 
 void feature_map_free(&FeatureMap fm) {
-    unsafe { free((void*)fm->data); }
-}
-
-// A map whose every element the caller is about to write: no zero pass, so
-// the first touch of each page happens in the (possibly threaded) op itself.
-static struct FeatureMap fm_uninit_(unsigned long channels, unsigned long height, unsigned long width) {
-    struct FeatureMap fm;
-    unsafe {
-        float* buf = (float*)malloc(sizeof(float) * (channels * height * width));
-        fm.data = (&heap float)buf;
-    }
-    fm.channels = channels;
-    fm.height = height;
-    fm.width = width;
-    return fm;
+    unsafe { if (!fm->fromArena) free((void*)fm->data); }
 }
 
 static float __cnn_init_weight(unsigned long i, unsigned long seed) {

@@ -5,6 +5,7 @@
 // once conv2d_forward had run, giving a garbage "cached" block and a segfault.
 #include <std/test/test.h>
 #include <std/mem.h>
+#include <std/thread.h>
 #include <std/collections/vec.h>
 #include <std/ml/cnn.h>
 #include <std/sync/parallel.h>
@@ -123,11 +124,128 @@ void t_conv_then_alloc() {
     }
 }
 
+// Slabs (blocks up to 1 KB): every size keeps its data and 16-byte payload
+// alignment, freed blocks are reused, realloc moves slab blocks correctly,
+// and frees from another thread come back to the owner.
+#define SLAB_FLAG 0x4000000000000000UL
+
+static void* g_far[20000];
+
+static ?&int free_all_(?&int arg) {
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < 20000UL) { dealloc_raw_(g_far[i]); i = i + 1UL; }
+    }
+    return null;
+}
+
+static ?&int alloc_all_(?&int arg) {
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < 20000UL) { g_far[i] = alloc_raw_(40UL); ((int*)g_far[i])[0] = (int)i; i = i + 1UL; }
+    }
+    return null;
+}
+
+void t_slabs() {
+    unsafe {
+        unsigned long sizes[12] = { 1UL, 8UL, 16UL, 17UL, 24UL, 33UL, 100UL, 200UL, 384UL, 513UL, 768UL, 1024UL };
+        void* ps[600];
+        unsigned long si = 0UL;
+        while (si < 12UL) {
+            unsigned long sz = sizes[si];
+            unsigned long i = 0UL;
+            while (i < 600UL) {
+                unsigned char* p = (unsigned char*)alloc_raw_(sz);
+                ASSERT_TRUE(p != (unsigned char*)0);
+                ASSERT_EQ((unsigned long)p % 16UL, 0UL);
+                ASSERT_TRUE((block_class((void*)p) & SLAB_FLAG) != 0UL);
+                unsigned long k = 0UL;
+                while (k < sz) { p[k] = (unsigned char)(i + k); k = k + 1UL; }
+                ps[i] = (void*)p;
+                i = i + 1UL;
+            }
+            int bad = 0;
+            i = 0UL;
+            while (i < 600UL) {
+                unsigned char* p = (unsigned char*)ps[i];
+                unsigned long k = 0UL;
+                while (k < sz) { if (p[k] != (unsigned char)(i + k)) bad = 1; k = k + 1UL; }
+                i = i + 1UL;
+            }
+            ASSERT_EQ(bad, 0);
+            // free the even ones, reallocate them: they come from those slots
+            i = 0UL;
+            while (i < 600UL) { dealloc_raw_(ps[i]); i = i + 2UL; }
+            void* again = alloc_raw_(sz);
+            int reused = 0;
+            i = 0UL;
+            while (i < 600UL) { if (ps[i] == again) reused = 1; i = i + 2UL; }
+            ASSERT_EQ(reused, 1);
+            dealloc_raw_(again);
+            i = 1UL;
+            while (i < 600UL) { dealloc_raw_(ps[i]); i = i + 2UL; }
+            si = si + 1UL;
+        }
+
+        // realloc: slab -> larger slab -> uncached-size block, data kept
+        unsigned char* r = (unsigned char*)alloc_raw_(40UL);
+        unsigned long k = 0UL;
+        while (k < 40UL) { r[k] = (unsigned char)(k * 3UL); k = k + 1UL; }
+        r = (unsigned char*)realloc_buf_raw_((void*)r, 700UL);
+        ASSERT_TRUE((block_class((void*)r) & SLAB_FLAG) != 0UL);
+        r = (unsigned char*)realloc_buf_raw_((void*)r, 5000UL);
+        ASSERT_TRUE(r != (unsigned char*)0);
+        int same = 1;
+        k = 0UL;
+        while (k < 40UL) { if (r[k] != (unsigned char)(k * 3UL)) same = 0; k = k + 1UL; }
+        ASSERT_EQ(same, 1);
+        dealloc_raw_((void*)r);
+
+        // blocks made here, freed on another thread, then reused here
+        unsigned long i = 0UL;
+        while (i < 20000UL) { g_far[i] = alloc_raw_(40UL); i = i + 1UL; }
+        unsigned long lo = (unsigned long)g_far[0];
+        unsigned long hi = lo;
+        i = 0UL;
+        while (i < 20000UL) {
+            unsigned long a = (unsigned long)g_far[i];
+            if (a < lo) lo = a;
+            if (a > hi) hi = a;
+            i = i + 1UL;
+        }
+        unsigned long long tid = 0ULL;
+        ASSERT_EQ(thread_create(&tid, free_all_, (?&int)null), 0);
+        thread_join(tid);
+        int inOld = 0;
+        i = 0UL;
+        while (i < 20000UL) {
+            unsigned long a = (unsigned long)alloc_raw_(40UL);
+            ASSERT_TRUE(a != 0UL);
+            if (a >= lo && a <= hi) inOld = inOld + 1;
+            g_far[i] = (void*)a;
+            i = i + 1UL;
+        }
+        ASSERT_TRUE(inOld > 10000);   // most come back from the remotely freed slabs
+        i = 0UL;
+        while (i < 20000UL) { dealloc_raw_(g_far[i]); i = i + 1UL; }
+
+        // blocks made on a thread that has exited, freed here
+        ASSERT_EQ(thread_create(&tid, alloc_all_, (?&int)null), 0);
+        thread_join(tid);
+        int okv = 1;
+        i = 0UL;
+        while (i < 20000UL) { if (((int*)g_far[i])[0] != (int)i) okv = 0; dealloc_raw_(g_far[i]); i = i + 1UL; }
+        ASSERT_EQ(okv, 1);
+    }
+}
+
 int main() {
     struct TestSuite t = test_suite_init();
     unsafe {
         t.add("alloc size classes around 1MB", t_size_classes);
         t.add("conv2d then large allocations", t_conv_then_alloc);
+        t.add("slabs: reuse, alignment, realloc, cross-thread frees", t_slabs);
     }
     t.run();
     t.print_summary();

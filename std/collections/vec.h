@@ -158,11 +158,18 @@ generic<T>
 
 // ── Mutation ──────────────────────────────────────────────────────────────────
 
+// The growth path is one out-of-line, cold call (realloc_array_raw_) that
+// returns the new buffer, so a push loop's hot path is a compare, a store
+// and an increment, with the buffer, length and capacity in registers.
 generic<T>
 int Vec::push(T value) {
     if (self.len == self.cap) {
         unsigned long next = self.cap < 4UL ? 4UL : self.cap * 2UL;
-        if (!self.reserve(next)) return 0;
+        ?&heap T grown = null;
+        unsafe { grown = (?&heap T)realloc_array_raw_((void*)self.data, next, sizeof(T)); }
+        if (grown.is_null()) return 0;
+        self.data = grown;
+        self.cap = next;
     }
     unsafe { self.data[self.len] = value; }
     self.len = self.len + 1UL;
@@ -181,7 +188,11 @@ int Vec::insert(unsigned long idx, T value) {
     if (idx > self.len) return 0;
     if (self.len == self.cap) {
         unsigned long next = self.cap < 4UL ? 4UL : self.cap * 2UL;
-        if (!self.reserve(next)) return 0;
+        ?&heap T grown = null;
+        unsafe { grown = (?&heap T)realloc_array_raw_((void*)self.data, next, sizeof(T)); }
+        if (grown.is_null()) return 0;
+        self.data = grown;
+        self.cap = next;
     }
     unsafe {
         unsigned long i = self.len;

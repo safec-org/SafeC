@@ -290,6 +290,42 @@ void t_conv2d() {
     struct Conv2D b = conv2d_new(12UL, 8UL, 3UL, 3UL, 1UL, 0UL);  // no padding
     ASSERT_TRUE(conv_ref_err(&b, 12UL, 15UL, 10UL, 0) < 1e-4);
     conv2d_free(&b);
+    // Inside a TensorArena the output (and every intermediate) comes from
+    // the arena: same values, feature_map_free leaves it to the reset.
+    struct Conv2D d = conv2d_new(8UL, 8UL, 3UL, 3UL, 1UL, 1UL);
+    struct FeatureMap in = feature_map_new(8UL, 20UL, 20UL);
+    unsafe { unsigned long q = 0UL; while (q < 3200UL) { in.data[q] = (float)((double)(q % 17UL) / 8.0 - 1.0); q = q + 1UL; } }
+    struct FeatureMap heapOut = conv2d_forward(&d, &in);
+    ASSERT_EQ(heapOut.fromArena, 0);
+    struct TensorArena ar = tensor_arena_new(0UL);
+    tensor_arena_begin(&ar);
+    struct FeatureMap arOut = conv2d_relu_forward(&d, &in);
+    struct FeatureMap tmp = feature_map_new(4UL, 4UL, 4UL);
+    tensor_arena_end();
+    ASSERT_EQ(arOut.fromArena, 1);
+    ASSERT_EQ(tmp.fromArena, 1);
+    unsafe { ASSERT_TRUE(tmp.data[63] == (float)0.0); }
+    ASSERT_TRUE(tensor_arena_used(&ar) >= 8UL * 20UL * 20UL * 4UL);
+    double worst = 0.0;
+    unsafe {
+        unsigned long q = 0UL;
+        while (q < 3200UL) {
+            float h = heapOut.data[q] > (float)0.0 ? heapOut.data[q] : (float)0.0;
+            double e = (double)(h - arOut.data[q]);
+            if (e < 0.0) e = -e;
+            if (e > worst) worst = e;
+            q = q + 1UL;
+        }
+    }
+    ASSERT_TRUE(worst == 0.0);
+    feature_map_free(&arOut);   // no-op for an arena map
+    feature_map_free(&tmp);
+    tensor_arena_reset(&ar);
+    ASSERT_EQ(tensor_arena_used(&ar), 0);
+    tensor_arena_free(&ar);
+    feature_map_free(&heapOut);
+    feature_map_free(&in);
+    conv2d_free(&d);
     struct Conv2D c = conv2d_new(5UL, 7UL, 5UL, 5UL, 2UL, 2UL);   // im2col
     ASSERT_TRUE(conv_ref_err(&c, 5UL, 17UL, 14UL, 0) < 1e-4);
     conv2d_free(&c);

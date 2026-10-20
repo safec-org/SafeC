@@ -544,6 +544,12 @@ std::unique_ptr<FunctionDecl> cloneFunctionDecl(const FunctionDecl &fn,
     clone->isInterrupt   = fn.isInterrupt;
     clone->isNoReturn    = fn.isNoReturn;
     clone->isPure        = fn.isPure;
+    // function attributes: generic instantiations keep them too
+    clone->isAlwaysInline = fn.isAlwaysInline;
+    clone->isNoInline    = fn.isNoInline;
+    clone->isCold        = fn.isCold;
+    clone->isWeak        = fn.isWeak;
+    clone->targetAttr    = fn.targetAttr;
     clone->sectionName   = fn.sectionName;
     clone->callingConv   = fn.callingConv;
     clone->wasmExportName   = fn.wasmExportName;

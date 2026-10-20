@@ -908,7 +908,7 @@ static int fft_vendor_c2c_(FFT_R* d, unsigned long n, int inv) {
 }
 
 // Real transform through the library into the full n-point spectrum.
-static int fft_vendor_r2c_(const FFT_R* in, FFT_R* out, unsigned long n) {
+static int fft_vendor_r2c_(const FFT_R* in, FFT_R* out, unsigned long n, int full) {
 #if FFT_VENDOR
     if (!fft_vendor_linked_() || n < 2UL) return 0;
     void* desc = fft_vendor_desc_(FFT_KIND_R2C, n);
@@ -916,7 +916,7 @@ static int fft_vendor_r2c_(const FFT_R* in, FFT_R* out, unsigned long n) {
     unsafe {
         if (DftiComputeForward(desc, (void*)in, (void*)out) != 0L) return 0;   // bins 0 .. n/2
         unsigned long k = 1UL;
-        while (k < n / 2UL) {
+        while (full && k < n / 2UL) {
             out[2UL * (n - k)] = out[2UL * k];
             out[2UL * (n - k) + 1UL] = -out[2UL * k + 1UL];
             k = k + 1UL;
@@ -1385,25 +1385,44 @@ static int fft_run_(FFT_R* d, unsigned long n, int inv, int mode) {
 // z[k] = x[2k] + i*x[2k+1], transform, then split Z into the spectra of the
 // even and odd samples, E and O, and combine X[k] = E[k] + W^k O[k]
 // (W = exp(-2*pi*i/n)). The upper half follows from X[n-k] = conj(X[k]).
-static int fft_real_run_(const FFT_R* in, FFT_R* out, unsigned long n, int mode) {
-    // (the library transform is out of place only, so not when in == out)
-    if (mode != FFT_MODE_RT && in != (const FFT_R*)out && fft_vendor_r2c_(in, out, n)) return 1;
+// The real-input split after the half-length transform, two bins per
+// FFT_V4 from each end: for bins k, k+1 and their partners m-k, m-k-1
+// (loaded as one vector and swapped),
+//   E = (Z[k] + conj Z[m-k]) / 2,  O = -i (Z[k] - conj Z[m-k]) / 2
+//   X[k] = E + W^k O,  X[m-k] = conj(E - W^k O)
+// then the upper half X[n-k] = conj X[k], also two at a time. Built per
+// SIMD level like the passes.
+static FFT_V4 fft_swap_pairs_(FFT_V4 v) __attribute__((always_inline)) {
+    FFT_V4 r; r[0] = v[2]; r[1] = v[3]; r[2] = v[0]; r[3] = v[1];
+    return r;
+}
+
+static FFT_V4 fft_conj4_(FFT_V4 v) __attribute__((always_inline)) {
+    FFT_V4 r; r[0] = v[0]; r[1] = -v[1]; r[2] = v[2]; r[3] = -v[3];
+    return r;
+}
+
+static void fft_real_split_body_(FFT_R* out, const FFT_R* w, unsigned long m, unsigned long n, int full)
+    __attribute__((always_inline)) {
     unsafe {
-        if (n == 1UL) { out[0] = in[0]; out[1] = (FFT_R)0.0; return 1; }
-        unsigned long m = n / 2UL;
-        unsigned long k = 0UL;
-        while (k < m) {
-            out[2UL * k] = in[2UL * k];
-            out[2UL * k + 1UL] = in[2UL * k + 1UL];
-            k = k + 1UL;
-        }
-        if (m >= 2UL && fft_run_(out, m, 0, mode) == 0) return 0;
-        const FFT_R* t = fft_twiddles_(n);
-        if (t == (const FFT_R*)0) return 0;
-        const FFT_R* w = &t[2UL * m];   // w[k] = W^k, k < m
         FFT_R z0r = out[0];
         FFT_R z0i = out[1];
-        k = 1UL;
+        FFT_V4 half; half[0] = (FFT_R)0.5; half[1] = (FFT_R)0.5; half[2] = (FFT_R)0.5; half[3] = (FFT_R)0.5;
+        unsigned long k = 1UL;
+        // vector pairs while (k, k+1) and (m-k-1, m-k) don't meet
+        while (2UL * k + 2UL < m) {
+            unsigned long jj = m - k - 1UL;                     // the pair (jj, jj+1) = (m-k-1, m-k)
+            FFT_V4 a = *(FFT_V4*)&out[2UL * k];                 // Z[k], Z[k+1]
+            FFT_V4 b = fft_swap_pairs_(*(FFT_V4*)&out[2UL * jj]);   // Z[m-k], Z[m-k-1]
+            FFT_V4 cb = fft_conj4_(b);
+            FFT_V4 e = half * (a + cb);
+            FFT_V4 d = half * (a - cb);
+            FFT_V4 o; o[0] = d[1]; o[1] = -d[0]; o[2] = d[3]; o[3] = -d[2];   // -i * d
+            FFT_V4 p = fft_cmul4_(o, *(const FFT_V4*)&w[2UL * k], (FFT_R)1.0);
+            *(FFT_V4*)&out[2UL * k] = e + p;
+            *(FFT_V4*)&out[2UL * jj] = fft_swap_pairs_(fft_conj4_(e - p));
+            k = k + 2UL;
+        }
         while (k <= m / 2UL) {
             unsigned long jj = m - k;
             FFT_R zkr = out[2UL * k];   FFT_R zki = out[2UL * k + 1UL];
@@ -1428,12 +1447,48 @@ static int fft_real_run_(const FFT_R* in, FFT_R* out, unsigned long n, int mode)
         out[1] = (FFT_R)0.0;
         out[2UL * m] = z0r - z0i;
         out[2UL * m + 1UL] = (FFT_R)0.0;
+        if (!full) return;   // the n/2 + 1 bins only
+        // X[n-k] = conj X[k], k = 1 .. m-1: pairs (k, k+1) -> (n-k-1, n-k)
         k = 1UL;
+        while (k + 2UL <= m) {
+            *(FFT_V4*)&out[2UL * (n - k - 1UL)] = fft_swap_pairs_(fft_conj4_(*(FFT_V4*)&out[2UL * k]));
+            k = k + 2UL;
+        }
         while (k < m) {
             out[2UL * (n - k)] = out[2UL * k];
             out[2UL * (n - k) + 1UL] = -out[2UL * k + 1UL];
             k = k + 1UL;
         }
+    }
+}
+
+static void fft_real_split_base_(FFT_R* out, const FFT_R* w, unsigned long m, unsigned long n, int full) {
+    fft_real_split_body_(out, w, m, n, full);
+}
+#if defined(__x86_64__)
+static void fft_real_split_avx2_(FFT_R* out, const FFT_R* w, unsigned long m, unsigned long n, int full)
+    __attribute__((target("avx2,fma"))) { fft_real_split_body_(out, w, m, n, full); }
+#endif
+
+// full = 0: only bins 0 .. n/2 (out holds n/2 + 1 complex values).
+static int fft_real_run_(const FFT_R* in, FFT_R* out, unsigned long n, int mode, int full) {
+    // (the library transform is out of place only, so not when in == out)
+    if (mode != FFT_MODE_RT && in != (const FFT_R*)out && fft_vendor_r2c_(in, out, n, full)) return 1;
+    unsafe {
+        if (n == 1UL) { out[0] = in[0]; out[1] = (FFT_R)0.0; return 1; }
+        unsigned long m = n / 2UL;
+        if (in != (const FFT_R*)out) {
+            unsigned long k = 0UL;
+            while (k < n) { out[k] = in[k]; k = k + 1UL; }
+        }
+        if (m >= 2UL && fft_run_(out, m, 0, mode) == 0) return 0;
+        const FFT_R* t = fft_twiddles_(n);
+        if (t == (const FFT_R*)0) return 0;
+        const FFT_R* w = &t[2UL * m];   // w[k] = W^k, k < m
+#if defined(__x86_64__)
+        if (simd_level() >= SIMD_AVX2) { fft_real_split_avx2_(out, w, m, n, full); return 1; }
+#endif
+        fft_real_split_base_(out, w, m, n, full);
     }
     return 1;
 }
@@ -1462,10 +1517,36 @@ static void fft_real_batch_job_(&FftBatchJob j, unsigned long lo, unsigned long 
     unsigned long r = lo;
     while (r < hi) {
         unsafe {
-            if (fft_real_run_(&j.in[r * j.n], &j.d[2UL * r * j.n], j.n, FFT_MODE_ROW) == 0) atomic_store_int(&j.ok, 0);
+            if (fft_real_run_(&j.in[r * j.n], &j.d[2UL * r * j.n], j.n, FFT_MODE_ROW, 1) == 0) atomic_store_int(&j.ok, 0);
         }
         r = r + 1UL;
     }
+}
+
+// Half spectrum: row r's n/2 + 1 bins at d[r * (n + 2)].
+static void fft_real_half_batch_job_(&FftBatchJob j, unsigned long lo, unsigned long hi) {
+    unsigned long r = lo;
+    while (r < hi) {
+        unsafe {
+            if (fft_real_run_(&j.in[r * j.n], &j.d[r * (j.n + 2UL)], j.n, FFT_MODE_ROW, 0) == 0) atomic_store_int(&j.ok, 0);
+        }
+        r = r + 1UL;
+    }
+}
+
+static int fft_real_half_batch_(const FFT_R* in, FFT_R* out, unsigned long n, unsigned long batch) {
+    if (dsp_is_pow2(n) == 0) return 0;
+    if (batch == 0UL) return 1;
+    if (fft_twiddles_(n) == (const FFT_R*)0) return 0;
+    struct FftBatchJob j;
+    j.in = in;
+    j.d = out;
+    j.n = n;
+    j.inv = 0;
+    j.ok = 1;
+    if (batch == 1UL) return fft_real_run_(in, out, n, FFT_MODE_TOP, 0);
+    parallel_for(batch, 16384UL / n + 1UL, fft_real_half_batch_job_, &j);
+    return j.ok;
 }
 
 // In place: row r's real input is the first n values of its own output row.
@@ -1474,7 +1555,7 @@ static void fft_real_inplace_job_(&FftBatchJob j, unsigned long lo, unsigned lon
     while (r < hi) {
         unsafe {
             FFT_R* row = &j.d[2UL * r * j.n];
-            if (fft_real_run_((const FFT_R*)row, row, j.n, FFT_MODE_ROW) == 0) atomic_store_int(&j.ok, 0);
+            if (fft_real_run_((const FFT_R*)row, row, j.n, FFT_MODE_ROW, 1) == 0) atomic_store_int(&j.ok, 0);
         }
         r = r + 1UL;
     }
@@ -1490,7 +1571,7 @@ static int fft_real_inplace_(FFT_R* d, unsigned long n, unsigned long batch) {
     j.n = n;
     j.inv = 0;
     j.ok = 1;
-    if (batch == 1UL) return fft_real_run_((const FFT_R*)d, d, n, FFT_MODE_TOP);
+    if (batch == 1UL) return fft_real_run_((const FFT_R*)d, d, n, FFT_MODE_TOP, 1);
     parallel_for(batch, 16384UL / n + 1UL, fft_real_inplace_job_, &j);
     return j.ok;
 }

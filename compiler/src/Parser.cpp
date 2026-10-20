@@ -775,7 +775,7 @@ bool Parser::parseGnuAttributes(GnuAttrs &out) {
 
             // Map the common, semantically-meaningful attributes onto
             // SafeC's native equivalents; everything else (deprecated,
-            // unused, used, visibility, format, nonnull, cold, hot,
+            // unused, used, visibility, format, nonnull, hot,
             // constructor, destructor, may_alias, vector_size, mode, ...)
             // is accepted syntactically and dropped — there's no SafeC
             // equivalent, and erroring on them would defeat the point of
@@ -784,6 +784,10 @@ bool Parser::parseGnuAttributes(GnuAttrs &out) {
                 attrName == "artificial") {
                 out.hasInline = true;
                 if (attrName == "always_inline") out.hasAlwaysInline = true;
+            } else if (attrName == "noinline") {
+                out.hasNoInline = true;
+            } else if (attrName == "cold") {
+                out.hasCold = true;
             } else if (attrName == "target") {
                 std::string t = args.empty() ? "" : args[0];
                 if (t.size() >= 2 && t.front() == '"' && t.back() == '"') t = t.substr(1, t.size() - 2);
@@ -1023,6 +1027,8 @@ DeclPtr Parser::parseTopLevelDecl() {
     bool isPure      = gnuAttrs.hasPure;
     bool isWeak      = gnuAttrs.hasWeak;
     bool isAlwaysInline = gnuAttrs.hasAlwaysInline;
+    bool isNoInline = gnuAttrs.hasNoInline;
+    bool isCold = gnuAttrs.hasCold;
     std::string targetAttr = gnuAttrs.targetAttr;
     bool isVolatile    = false;
     bool isAtomic      = false;
@@ -1041,6 +1047,8 @@ DeclPtr Parser::parseTopLevelDecl() {
             isPure      = isPure      || more.hasPure;
             isWeak      = isWeak      || more.hasWeak;
             isAlwaysInline = isAlwaysInline || more.hasAlwaysInline;
+            isNoInline  = isNoInline  || more.hasNoInline;
+            isCold      = isCold      || more.hasCold;
             if (!more.targetAttr.empty()) targetAttr = more.targetAttr;
             isMustUse   = isMustUse   || more.hasMustUse;
             isPacked    = isPacked    || more.hasPacked;
@@ -1111,6 +1119,8 @@ DeclPtr Parser::parseTopLevelDecl() {
         fn.isPure      = fn.isPure      || isPure;
         fn.isWeak      = fn.isWeak      || isWeak;
         fn.isAlwaysInline = fn.isAlwaysInline || isAlwaysInline;
+        fn.isNoInline  = fn.isNoInline  || isNoInline;
+        fn.isCold      = fn.isCold      || isCold;
         if (fn.targetAttr.empty()) fn.targetAttr = targetAttr;
         fn.sectionName = fn.sectionName.empty() ? sectionName : fn.sectionName;
         fn.callingConv = callingConv;
@@ -1298,6 +1308,13 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(
     expect(TK::RParen, "expected ')' closing parameter list");
 
     // GNU/Clang suffix attributes: 'void f(void) __attribute__((noreturn));'
+    // They may also follow a const method's 'const' ('T::m() const
+    // __attribute__((...)) { ... }'), so the qualifier is taken first.
+    if (cur().is(TK::KW_const) && peek(1).is(TK::Ident) &&
+        (peek(1).text == "__attribute__" || peek(1).text == "__attribute")) {
+        consume();
+        fn->isConstMethod = true;
+    }
     {
         GnuAttrs suffixAttrs;
         if (parseGnuAttributes(suffixAttrs)) {
@@ -1305,6 +1322,8 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(
             if (suffixAttrs.hasPure)     fn->isPure     = true;
             if (suffixAttrs.hasWeak)     fn->isWeak     = true;
             if (suffixAttrs.hasAlwaysInline) fn->isAlwaysInline = true;
+            if (suffixAttrs.hasNoInline) fn->isNoInline = true;
+            if (suffixAttrs.hasCold)     fn->isCold = true;
             if (!suffixAttrs.targetAttr.empty()) fn->targetAttr = suffixAttrs.targetAttr;
             if (suffixAttrs.hasMustUse)  fn->isMustUse  = true;
             if (!suffixAttrs.sectionName.empty()) fn->sectionName = suffixAttrs.sectionName;

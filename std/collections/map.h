@@ -135,18 +135,23 @@ unsigned long HashMap::length() const { return self.len; }
 generic<K, V>
 int HashMap::is_empty() const { return self.len == 0UL; }
 
+// The lookup and insert paths are inlined into callers (as a C map's
+// static functions would be); the rehash stays an out-of-line call.
 generic<K, V>
-long long HashMap::find_(const &K key, unsigned int h) const {
+long long HashMap::find_(const &K key, unsigned int h) const __attribute__((always_inline)) {
     if (self.len == 0UL) return -1LL;
-    unsigned long mask = self.cap - 1UL;
+    unsigned long cap = self.cap;
+    unsigned long mask = cap - 1UL;
     unsigned long idx = (unsigned long)h & mask;
     unsigned long n = 0UL;
     unsafe {
-        while (n < self.cap) {
-            unsigned char s = self.states[idx];
+        const unsigned char* st = (const unsigned char*)self.states;
+        const unsigned int* hs = (const unsigned int*)self.hashes;
+        const K* ks = (const K*)self.keys;
+        while (n < cap) {
+            unsigned char s = st[idx];
             if (s == (unsigned char)MAP_EMPTY_) return -1LL;
-            if (s == (unsigned char)MAP_FULL_ && self.hashes[idx] == h
-                && map_key_eq_(&self.keys[idx], key))
+            if (s == (unsigned char)MAP_FULL_ && hs[idx] == h && map_key_eq_(&ks[idx], key))
                 return (long long)idx;
             idx = (idx + 1UL) & mask;
             n = n + 1UL;
@@ -158,7 +163,7 @@ long long HashMap::find_(const &K key, unsigned int h) const {
 // Moves every live entry into fresh arrays of 'new_cap' slots (a power of
 // two), dropping tombstones. Leaves the map untouched on OOM.
 generic<K, V>
-int HashMap::rehash_(unsigned long new_cap) {
+int HashMap::rehash_(unsigned long new_cap) __attribute__((noinline, cold)) {
     ?&heap K             nk = null;
     ?&heap V             nv = null;
     ?&heap unsigned int  nh = null;
@@ -175,16 +180,27 @@ int HashMap::rehash_(unsigned long new_cap) {
     }
     unsigned long mask = new_cap - 1UL;
     unsafe {
+        // The old table in locals: the byte stores into 'ns' may alias
+        // anything, so fields read through self would be reloaded per slot.
+        const K* ok = (const K*)self.keys;
+        const V* ov = (const V*)self.vals;
+        const unsigned int* oh = (const unsigned int*)self.hashes;
+        const unsigned char* os = (const unsigned char*)self.states;
+        K* tk = (K*)nk;
+        V* tv = (V*)nv;
+        unsigned int* th = (unsigned int*)nh;
+        unsigned char* ts = (unsigned char*)ns;
+        unsigned long oc = self.cap;
         unsigned long i = 0UL;
-        while (i < self.cap) {
-            if (self.states[i] == (unsigned char)MAP_FULL_) {
-                unsigned int h = self.hashes[i];
+        while (i < oc) {
+            if (os[i] == (unsigned char)MAP_FULL_) {
+                unsigned int h = oh[i];
                 unsigned long idx = (unsigned long)h & mask;
-                while (ns[idx] != (unsigned char)MAP_EMPTY_) { idx = (idx + 1UL) & mask; }
-                nk[idx] = self.keys[i];
-                nv[idx] = self.vals[i];
-                nh[idx] = h;
-                ns[idx] = (unsigned char)MAP_FULL_;
+                while (ts[idx] != (unsigned char)MAP_EMPTY_) { idx = (idx + 1UL) & mask; }
+                tk[idx] = ok[i];
+                tv[idx] = ov[i];
+                th[idx] = h;
+                ts[idx] = (unsigned char)MAP_FULL_;
             }
             i = i + 1UL;
         }
@@ -206,7 +222,7 @@ int HashMap::reserve(unsigned long n) {
 }
 
 generic<K, V>
-int HashMap::insert(K key, V val) {
+int HashMap::insert(K key, V val) __attribute__((always_inline)) {
     if ((self.len + self.tombstones + 1UL) * 4UL > self.cap * 3UL) {
         // Mostly tombstones: rehash in place; otherwise grow.
         unsigned long next = self.cap == 0UL ? 16UL
@@ -218,14 +234,20 @@ int HashMap::insert(K key, V val) {
     unsigned long idx = (unsigned long)h & mask;
     long long tomb = -1LL;
     unsafe {
+        const unsigned char* st = (const unsigned char*)self.states;
+        const unsigned int* hs = (const unsigned int*)self.hashes;
+        K* ks = (K*)self.keys;
         while (1) {
-            unsigned char s = self.states[idx];
-            if (s == (unsigned char)MAP_EMPTY_) break;
-            if (s == (unsigned char)MAP_TOMB_) {
-                if (tomb < 0LL) tomb = (long long)idx;
-            } else if (self.hashes[idx] == h && map_key_eq_(&self.keys[idx], &key)) {
-                self.vals[idx] = val;
-                return 1;
+            unsigned char s = st[idx];
+            if (s == (unsigned char)MAP_FULL_) {
+                if (hs[idx] == h && map_key_eq_(&ks[idx], &key)) {
+                    self.vals[idx] = val;
+                    return 1;
+                }
+            } else if (s == (unsigned char)MAP_EMPTY_) {
+                break;
+            } else if (tomb < 0LL) {
+                tomb = (long long)idx;
             }
             idx = (idx + 1UL) & mask;
         }
@@ -233,7 +255,7 @@ int HashMap::insert(K key, V val) {
             idx = (unsigned long)tomb;
             self.tombstones = self.tombstones - 1UL;
         }
-        self.keys[idx] = key;
+        ks[idx] = key;
         self.vals[idx] = val;
         self.hashes[idx] = h;
         self.states[idx] = (unsigned char)MAP_FULL_;
@@ -243,14 +265,14 @@ int HashMap::insert(K key, V val) {
 }
 
 generic<K, V>
-?&V HashMap::get(K key) const {
+?&V HashMap::get(K key) const __attribute__((always_inline)) {
     long long i = self.find_(&key, map_key_hash_(&key));
     if (i < 0LL) return null;
     unsafe { return (?&V)&self.vals[(unsigned long)i]; }
 }
 
 generic<K, V>
-int HashMap::contains(K key) const {
+int HashMap::contains(K key) const __attribute__((always_inline)) {
     return self.find_(&key, map_key_hash_(&key)) >= 0LL;
 }
 

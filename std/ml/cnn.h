@@ -17,8 +17,15 @@ struct FeatureMap {
     unsigned long channels;
     unsigned long height;
     unsigned long width;
+    int           fromArena; // 1 if data came from a TensorArena (feature_map_free leaves it)
 };
 
+// Between tensor_arena_begin and tensor_arena_end (std/ml/tensor.h), new
+// feature maps -- the ones these functions return, and every layer's
+// intermediate inside unet_forward and the like -- come from the thread's
+// TensorArena, as tensors do: no malloc (or page faults, for fresh memory)
+// per layer. feature_map_free does nothing for them; tensor_arena_reset
+// releases them all, so don't use one after its arena is reset.
 struct FeatureMap feature_map_new(unsigned long channels, unsigned long height, unsigned long width);
 void feature_map_free(&FeatureMap fm);
 

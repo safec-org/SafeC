@@ -787,6 +787,8 @@ llvm::Function *CodeGen::genFunctionProto(FunctionDecl &fn) {
     if (isNewFunction || fn.body) {
         if (fn.isInline) llvmFn->addFnAttr(llvm::Attribute::InlineHint);
         if (fn.isAlwaysInline) llvmFn->addFnAttr(llvm::Attribute::AlwaysInline);
+        if (fn.isNoInline && !fn.isAlwaysInline) llvmFn->addFnAttr(llvm::Attribute::NoInline);
+        if (fn.isCold) llvmFn->addFnAttr(llvm::Attribute::Cold);
         // target("a,b"): this function may use ISA features a and b on top
         // of the module's (for kernels picked at run time by CPU support).
         if (!fn.targetAttr.empty()) {

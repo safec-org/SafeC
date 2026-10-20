@@ -3,6 +3,7 @@
 #pragma once
 #include <std/stddef.h>
 #include <std/mem.h>
+#include <std/atomic.h>
 #include <std/stderr_compat.h>
 
 // ── Explicit extern declarations for libc memory functions ───────────────────
@@ -133,9 +134,35 @@ static void alloc_abort_(const char* msg) {
     unsafe { abort(); }
 }
 
+// Besides its 64 slots the ring has a byte budget for uncached blocks: once
+// those in it add up to more than ALLOC_QUARANTINE_BYTES_, the oldest are
+// really freed until it fits again (the newest block always stays). Large blocks (over
+// the size-class cache's 1 MB, and every block realloc_buf() has grown, as
+// a growing Vec's is) all land here, and without a budget 64 of them could
+// keep hundreds of MB from reuse: every later large allocation then
+// started on fresh pages (60,000 page faults vs 3,000 for C on the Vec push
+// benchmark). Sizes come from the platform allocator; where there's no way
+// to ask, the ring is bounded by count only.
+#define ALLOC_QUARANTINE_BYTES_  ((unsigned long)8388608)
+#if !defined(__SAFEC_FREESTANDING__) && (defined(__linux__) || defined(__gnu_linux__))
+#define ALLOC_HAS_BLOCK_SIZE_ 1
+extern size_t malloc_usable_size(void* ptr);
+static unsigned long alloc_block_size_(void* p) { unsafe { return (unsigned long)malloc_usable_size(p); } }
+#elif !defined(__SAFEC_FREESTANDING__) && defined(__APPLE__)
+#define ALLOC_HAS_BLOCK_SIZE_ 1
+extern size_t malloc_size(const void* ptr);
+static unsigned long alloc_block_size_(void* p) { unsafe { return (unsigned long)malloc_size((const void*)p); } }
+#elif !defined(__SAFEC_FREESTANDING__) && defined(_WIN32)
+#define ALLOC_HAS_BLOCK_SIZE_ 1
+extern size_t _msize(void* ptr);
+static unsigned long alloc_block_size_(void* p) { unsafe { return (unsigned long)_msize(p); } }
+#endif
+
 #ifndef __SAFEC_FREESTANDING__
 thread_local static unsigned long allocQuarantineRing_[64];
 thread_local static unsigned long allocQuarantineHead_ = (unsigned long)0;
+thread_local static unsigned long allocQuarantineSize_[64];
+thread_local static unsigned long allocQuarantineBytes_ = (unsigned long)0;
 #else
 // Bare metal has no thread-local storage set up (and usually one core):
 // a plain static ring. On a multi-core freestanding system, serialize
@@ -144,18 +171,6 @@ static unsigned long allocQuarantineRing_[64];
 static unsigned long allocQuarantineHead_ = (unsigned long)0;
 #endif
 
-static void alloc_quarantine_push_(void* raw) {
-    unsafe {
-        unsigned long slot = allocQuarantineHead_ & ALLOC_QUARANTINE_MASK_;
-        unsigned long evictedBits = allocQuarantineRing_[slot];
-        allocQuarantineRing_[slot] = (unsigned long)raw;
-        allocQuarantineHead_ = allocQuarantineHead_ + (unsigned long)1;
-
-        if (evictedBits != (unsigned long)0) {
-            free((void*)evictedBits);
-        }
-    }
-}
 
 // ── Size-class free-list cache ───────────────────────────────────────────────
 // PyTorch's CPU/CUDA caching allocators (and MLX's buffer cache on the GPU
@@ -273,6 +288,238 @@ static unsigned long alloc_class_cap_(unsigned long cls) {
     unsafe { return allocClassCap_[cls]; }
 }
 
+// ── Slabs for small blocks ───────────────────────────────────────────────────
+// Blocks of the classes up to 1 KB come from 64 KB slabs instead of one
+// malloc each. A slab is 64 KB-aligned, so a block finds its slab by masking
+// its address, and it belongs to the thread that made it: that thread
+// allocates from it and takes its frees on a plain list; a free from any
+// other thread is pushed onto the slab's lock-free remote stack, which the
+// owner takes whole (one atomic exchange, so no ABA) when it runs short.
+//
+// Safety is the same as the size-class cache's: every block keeps its
+// 16-byte header, and a freed block's magic stays ALLOC_FREED_MAGIC_ until
+// the block is handed out again, so double frees and frees after free are
+// caught. The free-list link lives in the header's second word (which a
+// freed block doesn't otherwise need), not in the payload, so a write
+// through a dangling pointer can't corrupt the free list.
+//
+// The size-class cache (above) sits in front: freed blocks go there first
+// while it has room, and allocations take from it first. A slab whose
+// blocks are all free again goes back to the system, except up to
+// ALLOC_SLAB_SPARE_ empty slabs per class kept to avoid churn. Slabs of a thread that exits
+// with blocks still live stay allocated until those blocks are freed by
+// other threads (they are then reused only if a new thread is handed the
+// same thread-local address); short-lived threads that free their own
+// blocks before exiting leave at most their per-class current and spare
+// slabs behind.
+//
+// Freestanding, Windows and wasm builds keep the per-block path below.
+//
+// Slab header, in words: 0 magic, 1 class, 2 block bytes, 3 local free list,
+// 4 bump offset, 5 live blocks, 6 owner token, 7 remote free stack,
+// 8/9 next/prev in the owner's list, 10 which list (0 none, 1 partial, 2 full).
+#if !defined(__SAFEC_FREESTANDING__) && !defined(_WIN32) && !defined(__wasm__)
+#define ALLOC_SLABS_ 1
+#endif
+
+#ifdef ALLOC_SLABS_
+#define ALLOC_SLAB_BYTES_    ((unsigned long)65536)
+#define ALLOC_SLAB_MASK_     ((unsigned long)0xFFFFFFFFFFFF0000)
+#define ALLOC_SLAB_HDR_      ((unsigned long)128)
+#define ALLOC_SLAB_CLASSES_  ((unsigned long)13)   // classes 0..12: up to 1 KB
+#define ALLOC_SLAB_FLAG_     ((unsigned long)0x4000000000000000)
+#define ALLOC_SLAB_MAGIC_    ((unsigned long)0x51AB51AB51AB51AB)
+#define ALLOC_SLAB_SPARE_    ((unsigned long)16)    // empty slabs kept per class (1 MB)
+
+extern int posix_memalign(void** memptr, size_t alignment, size_t size);
+
+thread_local static unsigned long allocSlabCur_[13];
+thread_local static unsigned long allocSlabPartial_[13];
+thread_local static unsigned long allocSlabFull_[13];
+thread_local static unsigned long allocSlabFullTail_[13];
+thread_local static unsigned long allocSlabSpare_[13];
+thread_local static unsigned long allocSlabToken_ = (unsigned long)0;   // its address names this thread
+
+static unsigned long alloc_slab_token_() {
+    unsafe { return (unsigned long)&allocSlabToken_; }
+}
+
+static void alloc_slab_unlink_(unsigned long* head, unsigned long* sl) {
+    unsafe {
+        unsigned long n = sl[8];
+        unsigned long p = sl[9];
+        if (p != (unsigned long)0) { ((unsigned long*)p)[8] = n; } else { *head = n; }
+        if (n != (unsigned long)0) { ((unsigned long*)n)[9] = p; }
+        sl[8] = (unsigned long)0;
+        sl[9] = (unsigned long)0;
+        sl[10] = (unsigned long)0;
+    }
+}
+
+static void alloc_slab_link_(unsigned long* head, unsigned long* sl, unsigned long kind) {
+    unsafe {
+        sl[8] = *head;
+        sl[9] = (unsigned long)0;
+        if (*head != (unsigned long)0) { ((unsigned long*)*head)[9] = (unsigned long)sl; }
+        *head = (unsigned long)sl;
+        sl[10] = kind;
+    }
+}
+
+// The full list keeps a tail too: filled slabs join at the back, and the
+// search for remote frees takes them from the front, rotating the ones it
+// checked to the back, so over time every full slab gets looked at.
+static void alloc_slab_full_unlink_(unsigned long cls, unsigned long* sl) {
+    unsafe {
+        if (allocSlabFullTail_[cls] == (unsigned long)sl) { allocSlabFullTail_[cls] = sl[9]; }
+        alloc_slab_unlink_(&allocSlabFull_[cls], sl);
+    }
+}
+
+static void alloc_slab_full_append_(unsigned long cls, unsigned long* sl) {
+    unsafe {
+        unsigned long t = allocSlabFullTail_[cls];
+        sl[8] = (unsigned long)0;
+        sl[9] = t;
+        sl[10] = (unsigned long)2;
+        if (t != (unsigned long)0) { ((unsigned long*)t)[8] = (unsigned long)sl; } else { allocSlabFull_[cls] = (unsigned long)sl; }
+        allocSlabFullTail_[cls] = (unsigned long)sl;
+    }
+}
+
+// Moves the remote stack onto the local free list; the number moved.
+static unsigned long alloc_slab_drain_(unsigned long* sl) {
+    unsafe {
+        long long lst = atomic_exchange_ll((&long long)(long long*)&sl[7], 0LL);
+        unsigned long n = (unsigned long)0;
+        while (lst != 0LL) {
+            unsigned long* b = (unsigned long*)lst;
+            long long nx = (long long)b[1];
+            b[1] = sl[3];
+            sl[3] = (unsigned long)b;
+            lst = nx;
+            n = n + (unsigned long)1;
+        }
+        sl[5] = sl[5] - n;
+        return n;
+    }
+}
+
+// A block from this slab (header written), or null if it is full.
+static void* alloc_slab_take_(unsigned long* sl) {
+    unsafe {
+        unsigned long* b = (unsigned long*)0;
+        if (sl[3] != (unsigned long)0) {
+            b = (unsigned long*)sl[3];
+            sl[3] = b[1];
+        } else if (sl[4] + sl[2] <= ALLOC_SLAB_BYTES_) {
+            b = (unsigned long*)((unsigned long)sl + sl[4]);
+            sl[4] = sl[4] + sl[2];
+        } else if (atomic_load_ll((const &long long)(long long*)&sl[7]) != 0LL && alloc_slab_drain_(sl) > (unsigned long)0) {
+            b = (unsigned long*)sl[3];
+            sl[3] = b[1];
+        }
+        if (b == (unsigned long*)0) { return (void*)0; }
+        sl[5] = sl[5] + (unsigned long)1;
+        b[0] = ALLOC_LIVE_MAGIC_;
+        b[1] = sl[1] | ALLOC_SLAB_FLAG_;
+        return (void*)((unsigned long)b + ALLOC_HDR_SIZE_);
+    }
+}
+
+static void* alloc_slab_new_(unsigned long cls) __attribute__((noinline, cold)) {
+    unsafe {
+        // Full slabs that other threads have freed into come first: up to
+        // 16 from the front, each checked one moved to the back.
+        int tries = 0;
+        while (allocSlabFull_[cls] != (unsigned long)0 && tries < 16) {
+            unsigned long* fs = (unsigned long*)allocSlabFull_[cls];
+            alloc_slab_full_unlink_(cls, fs);
+            if (atomic_load_ll((const &long long)(long long*)&fs[7]) != 0LL) {
+                allocSlabCur_[cls] = (unsigned long)fs;
+                alloc_slab_drain_(fs);
+                return alloc_slab_take_(fs);
+            }
+            alloc_slab_full_append_(cls, fs);
+            tries = tries + 1;
+        }
+        void* mem = (void*)0;
+        if (posix_memalign(&mem, ALLOC_SLAB_BYTES_, ALLOC_SLAB_BYTES_) != 0 || mem == (void*)0) { return (void*)0; }
+        unsigned long* sl = (unsigned long*)mem;
+        // block bytes: header + class, rounded to 16 so payloads stay 16-aligned
+        unsigned long bsize = (alloc_class_bytes_(cls) + ALLOC_HDR_SIZE_ + (unsigned long)15) & ~(unsigned long)15;
+        sl[0] = ALLOC_SLAB_MAGIC_;
+        sl[1] = cls;
+        sl[2] = bsize;
+        sl[3] = (unsigned long)0;
+        sl[4] = ALLOC_SLAB_HDR_;
+        sl[5] = (unsigned long)0;
+        sl[6] = alloc_slab_token_();
+        sl[7] = (unsigned long)0;
+        sl[8] = (unsigned long)0;
+        sl[9] = (unsigned long)0;
+        sl[10] = (unsigned long)0;
+        allocSlabCur_[cls] = (unsigned long)sl;
+        return alloc_slab_take_(sl);
+    }
+}
+
+static void* alloc_slab_(unsigned long cls) {
+    unsafe {
+        unsigned long cur = allocSlabCur_[cls];
+        if (cur != (unsigned long)0) {
+            void* p = alloc_slab_take_((unsigned long*)cur);
+            if (p != (void*)0) { return p; }
+            alloc_slab_full_append_(cls, (unsigned long*)cur);
+            allocSlabCur_[cls] = (unsigned long)0;
+        }
+        unsigned long pt = allocSlabPartial_[cls];
+        if (pt != (unsigned long)0) {
+            unsigned long* ps = (unsigned long*)pt;
+            alloc_slab_unlink_(&allocSlabPartial_[cls], ps);
+            if (ps[5] == (unsigned long)0) { allocSlabSpare_[cls] = allocSlabSpare_[cls] - (unsigned long)1; }
+            allocSlabCur_[cls] = pt;
+            return alloc_slab_take_(ps);
+        }
+        return alloc_slab_new_(cls);
+    }
+}
+
+// Frees a slab block whose header is already marked freed.
+static void alloc_slab_free_(unsigned long* raw, unsigned long cls) {
+    unsafe {
+        unsigned long* sl = (unsigned long*)((unsigned long)raw & ALLOC_SLAB_MASK_);
+        if (sl[6] == alloc_slab_token_()) {
+            raw[1] = sl[3];
+            sl[3] = (unsigned long)raw;
+            sl[5] = sl[5] - (unsigned long)1;
+            if ((unsigned long)sl != allocSlabCur_[cls]) {
+                if (sl[10] == (unsigned long)2) {
+                    alloc_slab_full_unlink_(cls, sl);
+                    alloc_slab_link_(&allocSlabPartial_[cls], sl, (unsigned long)1);
+                } else if (sl[10] == (unsigned long)0) {
+                    alloc_slab_link_(&allocSlabPartial_[cls], sl, (unsigned long)1);
+                }
+                if (sl[5] == (unsigned long)0) {
+                    if (allocSlabSpare_[cls] >= ALLOC_SLAB_SPARE_) {
+                        alloc_slab_unlink_(&allocSlabPartial_[cls], sl);
+                        free((void*)sl);
+                    } else {
+                        allocSlabSpare_[cls] = allocSlabSpare_[cls] + (unsigned long)1;
+                    }
+                }
+            }
+            return;
+        }
+        long long old = atomic_load_ll((const &long long)(long long*)&sl[7]);
+        while (1) {
+            raw[1] = (unsigned long)old;
+            if (atomic_cas_ll((&long long)(long long*)&sl[7], (&long long)&old, (long long)raw)) { return; }
+        }
+    }
+}
+#endif
+
 // Allocate `size` bytes.  Returns NULL on failure; callers should check.
 // Use inside unsafe{} when storing the result in a raw pointer.
 void* alloc_raw_(unsigned long size) {
@@ -280,6 +527,9 @@ void* alloc_raw_(unsigned long size) {
         long clsSigned = alloc_size_class_(size);
         if (clsSigned >= 0L) {
             unsigned long cls = (unsigned long)clsSigned;
+#ifdef ALLOC_SLABS_
+            if (cls < ALLOC_SLAB_CLASSES_ && allocCacheCount_[cls] == (unsigned long)0) { return alloc_slab_(cls); }
+#endif
             if (allocCacheCount_[cls] > (unsigned long)0) {
                 allocCacheCount_[cls] = allocCacheCount_[cls] - (unsigned long)1;
                 void* raw = allocCacheSlot_[allocClassOff_[cls] + allocCacheCount_[cls]];
@@ -311,6 +561,13 @@ void* alloc_zeroed_raw_(unsigned long size) {
         long clsSigned = alloc_size_class_(size);
         if (clsSigned >= 0L) {
             unsigned long cls = (unsigned long)clsSigned;
+#ifdef ALLOC_SLABS_
+            if (cls < ALLOC_SLAB_CLASSES_ && allocCacheCount_[cls] == (unsigned long)0) {
+                void* p = alloc_slab_(cls);
+                if (p != (void*)0) { memset(p, 0, alloc_class_bytes_(cls)); }
+                return p;
+            }
+#endif
             if (allocCacheCount_[cls] > (unsigned long)0) {
                 allocCacheCount_[cls] = allocCacheCount_[cls] - (unsigned long)1;
                 void* raw = allocCacheSlot_[allocClassOff_[cls] + allocCacheCount_[cls]];
@@ -340,6 +597,45 @@ void* alloc_zeroed_raw_(unsigned long size) {
 }
 
 // Free memory previously returned by alloc / alloc_zeroed / realloc_buf.
+// Quarantine (see the ring above): defined here, after the size classes it
+// reads block sizes from.
+static void alloc_quarantine_push_(void* raw, unsigned long cls) {
+    unsafe {
+        unsigned long slot = allocQuarantineHead_ & ALLOC_QUARANTINE_MASK_;
+        unsigned long evictedBits = allocQuarantineRing_[slot];
+        allocQuarantineRing_[slot] = (unsigned long)raw;
+        allocQuarantineHead_ = allocQuarantineHead_ + (unsigned long)1;
+
+        if (evictedBits != (unsigned long)0) {
+            free((void*)evictedBits);
+        }
+#ifdef ALLOC_HAS_BLOCK_SIZE_
+        // Only uncached blocks (over 1 MB, or realloc'd) are counted: a
+        // size-class block is at most 1 MB, so 64 of them are already
+        // bounded, and skipping them keeps small frees at one branch.
+        if (cls >= ALLOC_CACHE_NUM_CLASSES_ || allocQuarantineSize_[slot] != (unsigned long)0) {
+            allocQuarantineBytes_ = allocQuarantineBytes_ - allocQuarantineSize_[slot];
+            unsigned long sz = cls >= ALLOC_CACHE_NUM_CLASSES_ ? alloc_block_size_(raw) : (unsigned long)0;
+            allocQuarantineSize_[slot] = sz;
+            allocQuarantineBytes_ = allocQuarantineBytes_ + sz;
+            // Over budget: free the oldest entries (from the slot after this
+            // one, around the ring) until it fits, never this newest one.
+            unsigned long k = (unsigned long)1;
+            while (allocQuarantineBytes_ > ALLOC_QUARANTINE_BYTES_ && k < ALLOC_QUARANTINE_SIZE_) {
+                unsigned long old = (slot + k) & ALLOC_QUARANTINE_MASK_;
+                if (allocQuarantineRing_[old] != (unsigned long)0 && allocQuarantineSize_[old] != (unsigned long)0) {
+                    free((void*)allocQuarantineRing_[old]);
+                    allocQuarantineRing_[old] = (unsigned long)0;
+                    allocQuarantineBytes_ = allocQuarantineBytes_ - allocQuarantineSize_[old];
+                    allocQuarantineSize_[old] = (unsigned long)0;
+                }
+                k = k + (unsigned long)1;
+            }
+        }
+#endif
+    }
+}
+
 void dealloc_raw_(void* ptr) {
     unsafe {
         if (ptr == (void*)0) { return; }
@@ -356,16 +652,37 @@ void dealloc_raw_(void* ptr) {
         }
         hdr[0] = ALLOC_FREED_MAGIC_;
         unsigned long cls = hdr[1];
+#ifdef ALLOC_SLABS_
+        if ((cls & ALLOC_SLAB_FLAG_) != (unsigned long)0 && cls != ALLOC_CLASS_UNCACHED_) {
+            // The size-class cache sits in front of the slabs: a block freed
+            // and soon wanted again skips the slab bookkeeping. Its header
+            // keeps the class and slab flag, so the cache's reuse path hands
+            // it out unchanged; one from another thread's slab goes back to
+            // that slab (remotely) when freed after reuse.
+            unsigned long sc = cls & ~ALLOC_SLAB_FLAG_;
+            if (allocCacheCount_[sc] < alloc_class_cap_(sc)) {
+                allocCacheSlot_[allocClassOff_[sc] + allocCacheCount_[sc]] = raw;
+                allocCacheCount_[sc] = allocCacheCount_[sc] + (unsigned long)1;
+                return;
+            }
+            alloc_slab_free_(hdr, sc);
+            return;
+        }
+#endif
         if (cls < ALLOC_CACHE_NUM_CLASSES_ && allocCacheCount_[cls] < alloc_class_cap_(cls)) {
             allocCacheSlot_[allocClassOff_[cls] + allocCacheCount_[cls]] = raw;
             allocCacheCount_[cls] = allocCacheCount_[cls] + (unsigned long)1;
             return;
         }
-        alloc_quarantine_push_(raw);
+        alloc_quarantine_push_(raw, cls);
     }
 }
 
 // Resize an allocation.  Returns NULL on failure (old block is NOT freed).
+void* realloc_array_raw_(void* ptr, unsigned long count, unsigned long elemSize) __attribute__((noinline, cold)) {
+    unsafe { return realloc_buf_raw_(ptr, checked_mul_size(count, elemSize)); }
+}
+
 void* realloc_buf_raw_(void* ptr, unsigned long new_size) {
     unsafe {
         if (ptr == (void*)0) { return alloc_raw_(new_size); }
@@ -380,6 +697,17 @@ void* realloc_buf_raw_(void* ptr, unsigned long new_size) {
                          "returned (mismatched allocator or corrupted heap)");
             return (void*)0;
         }
+#ifdef ALLOC_SLABS_
+        if ((hdr[1] & ALLOC_SLAB_FLAG_) != (unsigned long)0 && hdr[1] != ALLOC_CLASS_UNCACHED_) {
+            // a slab block: move it (it isn't a platform allocation)
+            unsigned long oldBytes = alloc_class_bytes_(hdr[1] & ~ALLOC_SLAB_FLAG_);
+            void* np = alloc_raw_(new_size);
+            if (np == (void*)0) { return (void*)0; }
+            memcpy(np, ptr, oldBytes < new_size ? oldBytes : new_size);
+            dealloc_raw_(ptr);
+            return np;
+        }
+#endif
         void* newRaw = realloc(raw, new_size + ALLOC_HDR_SIZE_);
         if (newRaw == (void*)0) { return (void*)0; }
         // newHdr[0] is already ALLOC_LIVE_MAGIC_ -- realloc() preserves
