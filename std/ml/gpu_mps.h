@@ -240,6 +240,13 @@ int mps_matmul_f32_persistent(&void bufA, &void bufB, &float out,
 ?&void mps_upload_persistent(const &float data, unsigned long bytes);
 void  mps_release_persistent(&void buf, unsigned long bytes);
 
+// An uninitialized persistent buffer of 'bytes' (e.g. an attention output),
+// released the same way. NULL without a Metal device.
+?&void mps_alloc_persistent(unsigned long bytes);
+// Copies 'bytes' of a persistent buffer into 'dst' -- valid once every
+// batch writing it has ended (buffers are CPU/GPU shared memory). 1 = done.
+int    mps_read_persistent(&void buf, &void dst, unsigned long bytes);
+
 // out[i] = bufA[i] - b[i] -- same chaining shape as mps_matmul_f32_chained/
 // mps_relu_f32_chained above, used by tensor_sub_gpu for the loss
 // computation's diff = pred - target (pred, e.g. a matmul's output, is
@@ -524,27 +531,84 @@ int mps_attn_batch_bf16_chained(&void bufQ, &void bufK, &void bufV, &void bufCac
                                   unsigned long headDim, unsigned long maxKvLen,
                                   int isSliding, unsigned long slidingWindow);
 
-// ── Flash attention (bf16) ──────────────────────────────────────────────────
-// GPU counterpart of std::flash_attention_forward (attention.h) for any
-// number of query rows, multi-head with grouped-query K/V: tiled, online-
-// softmax attention that never materializes the [seqLen, kvLen] score
-// matrix. Use mps_attn_batch_bf16 above for one-query-per-sequence decode
-// steps across a batch; this is the prefill/full-sequence path.
+// ── Flash and linear attention ──────────────────────────────────────────────
+// Batched multi-head versions of attention.h's flash_attention_forward and
+// linear_attention_forward on the GPU, in fp32, fp16 or bf16 (all math in
+// fp32). Two calling forms share the same kernels:
+//  - mps_flash_attention / mps_linear_attention (and the host-array _f32
+//    versions) take the same arguments as gpu_rocm.h's and
+//    gpu_cuda_attention.h's rocm_/cuda_ ops, so code moves between AMD,
+//    NVIDIA and Apple GPUs unchanged: fp32 device buffers (from
+//    mps_upload_persistent), q and out [heads][seqLen][headDim], k and v
+//    [heads][kvLen][headDim] (fold a batch into heads).
+//  - The _ex versions take an MpsAttnShape (a batch, grouped-query K/V
+//    with kvHeads dividing heads -- query head h reads kv head
+//    h / (heads / kvHeads) -- and a sliding window) and a dtype: 0 = fp32,
+//    MPS_FP16, MPS_BF16 (raw 16-bit values, as from
+//    mps_upload_f16/bf16_persistent). Q and out are then
+//    [batch][heads][seqLen][headDim], K and V [batch][kvHeads][kvLen][headDim].
+// All buffers are row-major and contiguous.
 //
-//   q/out: [seqLen, numHeads*headDim] raw bf16 bits.
-//   k/v:   [kvLen, numKvHeads*headDim] raw bf16 bits.
-//   scale: multiplies q.k before the softmax -- 1/sqrt(headDim) matches
-//          flash_attention_forward; pass 1.0 for models that pre-scale q.
-//   causal: query i sits at position kvLen-seqLen+i (the last seqLen keys
-//          are the queries' own tokens) and sees only keys at or before it.
-//   isSliding/slidingWindow: additionally hide keys slidingWindow or more
-//          positions behind the query.
+// Flash attention: softmax(q k^T * scale) v without forming the score matrix
+// -- FlashAttention-2 on the GPU's simdgroup matrix units for head dims up
+// to 256, a simdgroup-reduction kernel for 512. 'scale' <= 0 means
+// 1/sqrt(headDim). Linear attention: phi(x) = elu(x)+1,
+// out_i = phi(q_i) S / phi(q_i) z with S = sum_j phi(k_j) v_j^T and
+// z = sum_j phi(k_j) -- no scale, since the division cancels it.
 //
-// Batch-aware like mps_sub_f32: inside an open batch the result lands in
-// 'out' at mps_batch_end(); otherwise on return. Returns 0 if no Metal
-// device is available, headDim isn't 64/128/256/512, numHeads isn't a
-// multiple of numKvHeads, seqLen is 0, or kvLen < seqLen with masking on
-// -- callers fall back to a CPU path.
+// Masking: query i sits at position pos = i + (kvLen - seqLen) -- the last
+// seqLen keys are the queries' own tokens, any before them a KV cache.
+// causal hides keys j > pos (needs kvLen >= seqLen); a window w > 0 (flash
+// only) also hides keys j <= pos - w, i.e. the query sees its last w
+// positions. A query with no visible key gets zeros.
+//
+// Head dims: 32, 64, 96, 128, 256 or 512 (mps_attention_head_dim_ok). The
+// device-buffer forms encode onto the open batch (results valid after
+// mps_batch_end()) or, outside one, run and wait. 1 = done/encoded, 0 = bad
+// shape or no Metal device -- callers fall back to a CPU path.
+#define MPS_FP16 1   // same values as gpu_cuda.h's CUDA_FP16 / CUDA_BF16
+#define MPS_BF16 2
+
+struct MpsAttnShape {
+    unsigned long batch;
+    unsigned long heads;      // query heads
+    unsigned long kvHeads;    // key/value heads; divides heads
+    unsigned long seqLen;     // query length
+    unsigned long kvLen;      // key/value length
+    unsigned long headDim;    // 32, 64, 96, 128, 256 or 512
+    unsigned long window;     // flash attention sliding window; 0 = none
+};
+
+int mps_attention_head_dim_ok(unsigned long headDim);
+
+int mps_flash_attention(&void q, &void k, &void v, &void out, unsigned long heads, unsigned long seqLen,
+                        unsigned long kvLen, unsigned long headDim, float scale, int causal);
+int mps_flash_attention_ex(&void q, &void k, &void v, &void out, struct MpsAttnShape s, int dtype,
+                           float scale, int causal);
+int mps_linear_attention(&void q, &void k, &void v, &void out, unsigned long heads, unsigned long seqLen,
+                         unsigned long kvLen, unsigned long headDim, int causal);
+int mps_linear_attention_ex(&void q, &void k, &void v, &void out, struct MpsAttnShape s, int dtype, int causal);
+
+// The two fp32 ops on host arrays (upload, compute, read back), with the
+// rocm_*_f32 arguments. Batch-aware like mps_sub_f32.
+int mps_flash_attention_f32(const &float q, const &float k, const &float v, &float out,
+                            unsigned long heads, unsigned long seqLen, unsigned long kvLen,
+                            unsigned long headDim, float scale, int causal);
+int mps_linear_attention_f32(const &float q, const &float k, const &float v, &float out,
+                             unsigned long heads, unsigned long seqLen, unsigned long kvLen,
+                             unsigned long headDim, int causal);
+
+// ── Token-major bf16 attention ──────────────────────────────────────────────
+// The same flash and linear attention on one sequence laid out the way a
+// transformer's projections produce it -- q/out [seqLen, numHeads*headDim],
+// k/v [kvLen, numKvHeads*headDim], raw bf16 bits -- plus a recurrent linear
+// attention whose state stays on the GPU. Use mps_attn_batch_bf16 above for
+// one-query-per-sequence decode steps across a batch.
+//
+// mps_flash_attn_bf16: 'scale' as above (pass 1.0 for models that pre-scale
+// q); isSliding/slidingWindow as the window w. Batch-aware like
+// mps_sub_f32: inside an open batch the result lands in 'out' at
+// mps_batch_end(); otherwise on return. Returns 0 on the conditions above.
 int mps_flash_attn_bf16(const &unsigned short q, const &unsigned short k, const &unsigned short v,
                           &unsigned short out,
                           unsigned long seqLen, unsigned long kvLen,
@@ -560,16 +624,8 @@ int mps_flash_attn_bf16_chained(&void bufQ, &void bufK, &void bufV, &unsigned sh
                                   unsigned long numHeads, unsigned long numKvHeads, unsigned long headDim,
                                   float scale, int causal, int isSliding, unsigned long slidingWindow);
 
-// ── Linear attention (bf16) ─────────────────────────────────────────────────
-// GPU counterpart of std::linear_attention_forward (attention.h), multi-
-// head with grouped-query K/V and the same feature map phi(x) = elu(x)+1:
-//   out_i = phi(q_i) . S / phi(q_i) . z,  S = sum_j phi(k_j) (x) v_j,
-//                                         z = sum_j phi(k_j)
-// over every key (non-causal, as on the CPU) or, with 'causal', keys 0..i
-// (kvLen must equal seqLen). Shapes as for mps_flash_attn_bf16. No scale
-// parameter -- the normalization by phi(q_i) . z makes the output
-// invariant to scaling q. Batch-aware like mps_flash_attn_bf16; same
-// failure conditions, plus causal with kvLen != seqLen.
+// Linear attention on token-major bf16, non-causal or causal (causal needs
+// kvLen == seqLen here). Batch-aware like mps_flash_attn_bf16.
 int mps_linear_attn_bf16(const &unsigned short q, const &unsigned short k, const &unsigned short v,
                            &unsigned short out,
                            unsigned long seqLen, unsigned long kvLen,

@@ -1152,74 +1152,240 @@ ATTN_INSTANTIATE(128)
 ATTN_INSTANTIATE(256)
 ATTN_INSTANTIATE(512)
 
-// ── Flash attention (bf16), multi-query ─────────────────────────────────────
-// GPU counterpart of std::flash_attention_forward (attention.sc), multi-head
-// and for any number of query rows (a prefill), where attn_batch_bf16_kernel
-// above handles exactly one query per sequence:
-//   out[i,h,:] = softmax(scale * q[i,h,:] . K[0:kvLen,kvHead,:]^T) . V
-// q/out are [seqLen, numHeads*D], k/v are [kvLen, numKvHeads*D]. With
-// 'causal', query i sits at position kvLen-seqLen+i (the last seqLen keys
-// are the queries' own tokens, any before them a cache) and sees keys at
-// or before it; 'isSliding' additionally hides keys 'slidingWindow' or
-// more positions behind it.
-//
-// One FLASH_BQ-simdgroup threadgroup per (block of FLASH_BQ query rows,
-// head), one query row per simdgroup with lane i owning head-dim elements
-// [i*D/32, (i+1)*D/32) as in attn_batch_bf16_kernel. The threadgroup walks
-// the K/V rows its queries can see in tiles of FLASH_BK(D), staging each
-// tile in threadgroup memory once for all FLASH_BQ queries (the flash-
-// attention reuse), then every simdgroup scores the tile -- lane jj keeps
-// key jj's score -- and folds it into its running max/sum/accumulator
-// with one rescale per tile rather than per key. The [seqLen, kvLen]
-// score matrix never exists. FLASH_BK(D) keeps the K+V tiles at 16KB.
-// Instantiated for D = 64/128/256/512; gpu_mps.sc refuses others.
+// ── Flash and linear attention: shared parameters ──────────────────────────
+// Every flash/linear attention kernel below reads one AttnParams (matching
+// gpu_mps.sc's struct MpsAttnParams field for field). Layouts are given by
+// element strides, so the same kernels serve gpu_mps.h's head-major API
+// ([batch][heads][seq][dim]: row stride D, head stride seq*D) and its
+// token-major bf16 API ([seq][heads*dim]: row stride heads*D, head stride D).
+// 'out' has q's layout. Query i of a sequence sits at position
+// pos = i + (kvLen - seqLen) -- the last seqLen keys are the queries' own
+// tokens, any before them a KV cache. 'causal' hides keys j > pos; a sliding
+// window w > 0 (flash only) also hides keys j <= pos - w. Query head h reads
+// KV head h / (heads / kvHeads).
+struct AttnParams {
+    uint seqLen, kvLen, heads, kvHeads;
+    uint causal, window, hasState, seg;           // seg: chunked linear attention's rows per state
+    float scale;                                   // flash only; <= 0 means 1/sqrt(D)
+    uint qRow, qHead, qBatch;                      // q/out strides (elements)
+    uint kvRow, kvHead, kvBatch;                   // k/v strides
+};
+
+// ── Flash attention, simdgroup-matrix kernel (head dim <= 256) ─────────────
+// FlashAttention-2 on Apple's 8x8 simdgroup matrices. One threadgroup of
+// FLASH_SG simdgroups per (block of FLASH_SG*8 query rows, head, batch);
+// each simdgroup owns 8 query rows. The Q block is staged once and kept as
+// fragments; K/V are walked in tiles of BK keys staged in threadgroup memory
+// (K transposed, rows padded by 4 elements against bank conflicts) and
+// shared by every simdgroup. Per tile: S = Q K^T on the matrix units, an
+// online softmax in registers (lane L holds row (L/4 & 4) + (L/2 % 4),
+// columns (L/4 & 2)*2 + (L%2)*2 and +1 of each 8x8 fragment, so a row's
+// max/sum is two simd_shuffle_xor steps), then O += P V on the matrix
+// units. Fragment data lives in plain float2 registers between multiplies
+// -- writing through thread_elements() references measured several times
+// slower. TS is the staging/multiply type: half for fp16, float for fp32
+// and bf16 (the M1 family has no bf16 matrix units; converting bf16 tiles
+// to float on the way in measured 25-40% faster than bfloat fragments).
+// Tiles fully below the causal diagonal skip the mask. Measured on an M1
+// Pro at 2.4-3.3 TFLOPS -- level with or ahead of MLX's and PyTorch's
+// fused attention in fp32, ~85-90% of them in fp16/bf16 (see the
+// benchmarks page); 16-row simdgroups, 8-simdgroup threadgroups and
+// 32-key tiles at head dim 128 all measured slower.
+#define FLASH_SG 4
+#define FLASH_PAD 4
+
+template <typename T, typename TS, uint D, uint BK>
+kernel void flash_attn_mma_kernel(device const T* q           [[buffer(0)]],
+                                   device const T* k           [[buffer(1)]],
+                                   device const T* v           [[buffer(2)]],
+                                   device T* out               [[buffer(3)]],
+                                   constant AttnParams& p      [[buffer(4)]],
+                                   uint3 tg [[threadgroup_position_in_grid]],
+                                   uint tid [[thread_index_in_threadgroup]],
+                                   uint sg [[simdgroup_index_in_threadgroup]],
+                                   uint lane [[thread_index_in_simdgroup]]) {
+    constexpr uint BQ = FLASH_SG * 8, DB = D / 8, KB = BK / 8;
+    constexpr uint DP = D + FLASH_PAD;
+    constexpr uint BKP = BK + FLASH_PAD;
+    constexpr uint TILE = D * BKP + BK * DP;
+    // The Q block is staged unpadded when padding would overflow 32KB (D 256, float).
+    constexpr uint QP = BQ * DP * sizeof(TS) > 32768 ? D : DP;
+    threadgroup TS smem[BQ * QP > TILE ? BQ * QP : TILE];
+
+    uint q0 = tg.x * BQ, h = tg.y, b = tg.z;
+    uint kvh = h / (p.heads / p.kvHeads);
+    const device T* qh = q + (ulong)b * p.qBatch + (ulong)h * p.qHead;
+    const device T* kh = k + (ulong)b * p.kvBatch + (ulong)kvh * p.kvHead;
+    const device T* vh = v + (ulong)b * p.kvBatch + (ulong)kvh * p.kvHead;
+    device T* oh = out + (ulong)b * p.qBatch + (ulong)h * p.qHead;
+
+    for (uint e = tid; e < BQ * D / 4; e += FLASH_SG * 32) {
+        uint r = e / (D / 4), c = (e % (D / 4)) * 4;
+        vec<TS, 4> x = q0 + r < p.seqLen ? vec<TS, 4>(*(const device vec<T, 4>*)(qh + (ulong)(q0 + r) * p.qRow + c))
+                                         : vec<TS, 4>(0);
+        *(threadgroup vec<TS, 4>*)(smem + r * QP + c) = x;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    simdgroup_matrix<TS, 8, 8> qf[DB];
+    for (uint dd = 0; dd < DB; dd++) simdgroup_load(qf[dd], smem + sg * 8 * QP + dd * 8, QP);
+
+    const uint qid = lane / 4;
+    const uint fm = (qid & 4) + ((lane / 2) % 4);
+    const uint fn = (qid & 2) * 2 + (lane % 2) * 2;
+    const float sc = (p.scale > 0.0f ? p.scale : rsqrt(float(D))) * 1.4426950408889634f;   // exp2 domain
+    uint posOff = p.kvLen - p.seqLen;
+    uint sgRow0 = q0 + sg * 8;
+    int myPos = int(sgRow0 + fm + posOff);
+
+    float2 o[DB];
+    for (uint dd = 0; dd < DB; dd++) o[dd] = float2(0.0f);
+    float m = -INFINITY, l = 0.0f;
+
+    // Key range any query of this block can see.
+    uint lastPos = min(q0 + BQ, p.seqLen) - 1u + posOff;
+    uint kvEnd = p.causal != 0u ? min(p.kvLen, lastPos + 1u) : p.kvLen;
+    uint kvBegin = (p.window != 0u && q0 + posOff + 1u > p.window) ? q0 + posOff + 1u - p.window : 0u;
+    kvBegin = (kvBegin / BK) * BK;
+    threadgroup TS* ks = smem;
+    threadgroup TS* vs = smem + D * BKP;
+    for (uint t = kvBegin; t < kvEnd; t += BK) {
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint e = tid; e < BK * D / 4; e += FLASH_SG * 32) {
+            uint r = e / (D / 4), c = (e % (D / 4)) * 4;
+            uint j = t + r;
+            vec<TS, 4> kx = vec<TS, 4>(0), vx = vec<TS, 4>(0);
+            if (j < kvEnd) {
+                kx = vec<TS, 4>(*(const device vec<T, 4>*)(kh + (ulong)j * p.kvRow + c));
+                vx = vec<TS, 4>(*(const device vec<T, 4>*)(vh + (ulong)j * p.kvRow + c));
+            }
+            ks[(c + 0) * BKP + r] = kx.x; ks[(c + 1) * BKP + r] = kx.y;
+            ks[(c + 2) * BKP + r] = kx.z; ks[(c + 3) * BKP + r] = kx.w;
+            *(threadgroup vec<TS, 4>*)(vs + r * DP + c) = vx;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        float2 s[KB];
+        for (uint kb = 0; kb < KB; kb++) {
+            simdgroup_float8x8 acc = simdgroup_float8x8(0);
+            for (uint dd = 0; dd < DB; dd++) {
+                simdgroup_matrix<TS, 8, 8> kt;
+                simdgroup_load(kt, ks + dd * 8 * BKP + kb * 8, BKP);
+                simdgroup_multiply_accumulate(acc, qf[dd], kt, acc);
+            }
+            s[kb] = float2(acc.thread_elements()[0], acc.thread_elements()[1]) * sc;
+        }
+        bool needMask = t + BK > kvEnd || (p.causal != 0u && t + BK - 1u > sgRow0 + posOff) ||
+                        (p.window != 0u && t + p.window <= sgRow0 + 7u + posOff);
+        if (needMask) {
+            for (uint kb = 0; kb < KB; kb++) {
+                for (uint i = 0; i < 2; i++) {
+                    int j = int(t + kb * 8 + fn + i);
+                    int dist = myPos - j;
+                    bool hidden = j >= int(kvEnd) || (p.causal != 0u && dist < 0) ||
+                                  (p.window != 0u && dist >= int(p.window));
+                    if (hidden) { if (i == 0) s[kb].x = -INFINITY; else s[kb].y = -INFINITY; }
+                }
+            }
+        }
+        float rowMax = -INFINITY;
+        for (uint kb = 0; kb < KB; kb++) rowMax = max(rowMax, max(s[kb].x, s[kb].y));
+        rowMax = max(rowMax, simd_shuffle_xor(rowMax, 1));
+        rowMax = max(rowMax, simd_shuffle_xor(rowMax, 8));
+        float mNew = max(m, rowMax);
+        float mUse = mNew == -INFINITY ? 0.0f : mNew;   // a fully hidden row so far
+        float corr = exp2(m - mUse);
+        float rowSum = 0.0f;
+        for (uint kb = 0; kb < KB; kb++) { s[kb] = exp2(s[kb] - mUse); rowSum += s[kb].x + s[kb].y; }
+        rowSum += simd_shuffle_xor(rowSum, 1);
+        rowSum += simd_shuffle_xor(rowSum, 8);
+        l = l * corr + rowSum;
+        m = mNew;
+        for (uint dd = 0; dd < DB; dd++) {
+            simdgroup_float8x8 acc;
+            acc.thread_elements()[0] = o[dd].x * corr;
+            acc.thread_elements()[1] = o[dd].y * corr;
+            for (uint kb = 0; kb < KB; kb++) {
+                simdgroup_matrix<TS, 8, 8> pm, vf;
+                pm.thread_elements()[0] = TS(s[kb].x);
+                pm.thread_elements()[1] = TS(s[kb].y);
+                simdgroup_load(vf, vs + kb * 8 * DP + dd * 8, DP);
+                simdgroup_multiply_accumulate(acc, pm, vf, acc);
+            }
+            o[dd] = float2(acc.thread_elements()[0], acc.thread_elements()[1]);
+        }
+    }
+
+    uint row = sgRow0 + fm;
+    if (row < p.seqLen) {
+        float inv = l > 0.0f ? 1.0f / l : 0.0f;   // no visible key: zeros
+        device T* orow = oh + (ulong)row * p.qRow;
+        for (uint dd = 0; dd < DB; dd++) {
+            *(device vec<T, 2>*)(orow + dd * 8 + fn) = vec<T, 2>(T(o[dd].x * inv), T(o[dd].y * inv));
+        }
+    }
+}
+
+#define FLASH_MMA(T, TS, NAME, D, BK)                                                              \
+    template [[host_name("flash_attn_mma_" #NAME "_d" #D)]] kernel void flash_attn_mma_kernel<T, TS, D, BK>( \
+        device const T*, device const T*, device const T*, device T*, constant AttnParams&,        \
+        uint3, uint, uint, uint);
+#define FLASH_MMA_DTYPES(D, BK)                \
+    FLASH_MMA(float, float, f32, D, BK)        \
+    FLASH_MMA(half, half, f16, D, BK)          \
+    FLASH_MMA(bfloat, float, bf16, D, BK)
+FLASH_MMA_DTYPES(32, 16)
+FLASH_MMA_DTYPES(64, 16)
+FLASH_MMA_DTYPES(96, 16)
+FLASH_MMA_DTYPES(128, 16)
+FLASH_MMA_DTYPES(256, 8)
+
+// ── Flash attention, simdgroup-reduction kernel (head dim 512) ──────────────
+// For head dims too wide for the matrix kernel's registers. One FLASH_BQ-
+// simdgroup threadgroup per (block of FLASH_BQ query rows, head, batch), one
+// query row per simdgroup with lane i owning head-dim elements
+// [i*D/32, (i+1)*D/32). K/V tiles of FLASH_BK(D) rows are staged in
+// threadgroup memory for all FLASH_BQ queries; each simdgroup scores the
+// tile (lane jj keeps key jj's score) and folds it into a running
+// max/sum/accumulator with one rescale per tile.
 #define FLASH_BQ 16
 #define FLASH_BK(D) (4096u / (D) < 32u ? 4096u / (D) : 32u)
 
-template <uint D>
-kernel void flash_attn_bf16_kernel(device const bfloat* q        [[buffer(0)]],
-                                    device const bfloat* k        [[buffer(1)]],
-                                    device const bfloat* v        [[buffer(2)]],
-                                    device bfloat* out            [[buffer(3)]],
-                                    constant uint& seqLen         [[buffer(4)]],
-                                    constant uint& kvLen          [[buffer(5)]],
-                                    constant uint& numHeads       [[buffer(6)]],
-                                    constant uint& numKvHeads     [[buffer(7)]],
-                                    constant uint& causal         [[buffer(8)]],
-                                    constant uint& isSliding      [[buffer(9)]],
-                                    constant uint& slidingWindow  [[buffer(10)]],
-                                    constant float& scale         [[buffer(11)]],
-                                    uint2 tg [[threadgroup_position_in_grid]],
+template <typename T, uint D>
+kernel void flash_attn_simd_kernel(device const T* q          [[buffer(0)]],
+                                    device const T* k          [[buffer(1)]],
+                                    device const T* v          [[buffer(2)]],
+                                    device T* out              [[buffer(3)]],
+                                    constant AttnParams& p     [[buffer(4)]],
+                                    uint3 tg [[threadgroup_position_in_grid]],
                                     uint tid [[thread_index_in_threadgroup]],
                                     uint sgid [[simdgroup_index_in_threadgroup]],
                                     uint lane [[thread_index_in_simdgroup]]) {
     constexpr uint DPL = D / 32;
     constexpr uint BK = FLASH_BK(D);
-    threadgroup bfloat kTile[BK * D];
-    threadgroup bfloat vTile[BK * D];
+    threadgroup T kTile[BK * D];
+    threadgroup T vTile[BK * D];
 
-    uint h = tg.y;
-    uint kvHead = h / (numHeads / numKvHeads);
+    uint h = tg.y, b = tg.z;
+    uint kvHead = h / (p.heads / p.kvHeads);
     uint q0 = tg.x * FLASH_BQ;
     uint qi = q0 + sgid;
-    bool active = qi < seqLen;
-    uint posOff = kvLen - seqLen; // the host requires kvLen >= seqLen when masking
+    bool active = qi < p.seqLen;
+    uint posOff = p.kvLen - p.seqLen;
     int qPos = int(qi + posOff);
 
-    ulong qStride = (ulong)numHeads * D;
-    ulong kvStride = (ulong)numKvHeads * D;
+    const device T* qRow = q + (ulong)b * p.qBatch + (ulong)h * p.qHead + (ulong)qi * p.qRow + lane * DPL;
+    const device T* kh = k + (ulong)b * p.kvBatch + (ulong)kvHead * p.kvHead;
+    const device T* vh = v + (ulong)b * p.kvBatch + (ulong)kvHead * p.kvHead;
     float qr[DPL];
     float acc[DPL];
     for (uint i = 0; i < DPL; i++) {
-        qr[i] = active ? float(q[qi * qStride + h * D + lane * DPL + i]) * scale : 0.0f;
+        qr[i] = active ? float(qRow[i]) * (p.scale > 0.0f ? p.scale : rsqrt(float(D))) : 0.0f;
         acc[i] = 0.0f;
     }
 
-    // Key range any query in this block can see -- tiles outside it are
-    // never loaded.
-    uint lastQ = min(q0 + FLASH_BQ, seqLen) - 1u;
-    uint kvEnd = causal != 0u ? min(kvLen, lastQ + posOff + 1u) : kvLen;
-    uint kvBegin = (isSliding != 0u && q0 + posOff + 1u > slidingWindow) ? q0 + posOff + 1u - slidingWindow : 0u;
+    uint lastQ = min(q0 + FLASH_BQ, p.seqLen) - 1u;
+    uint kvEnd = p.causal != 0u ? min(p.kvLen, lastQ + posOff + 1u) : p.kvLen;
+    uint kvBegin = (p.window != 0u && q0 + posOff + 1u > p.window) ? q0 + posOff + 1u - p.window : 0u;
 
     float m = -INFINITY;
     float l = 0.0f;
@@ -1227,9 +1393,9 @@ kernel void flash_attn_bf16_kernel(device const bfloat* q        [[buffer(0)]],
         threadgroup_barrier(mem_flags::mem_threadgroup);
         for (uint e = tid; e < BK * D; e += FLASH_BQ * 32u) {
             uint j = t + e / D;
-            ulong src = (ulong)j * kvStride + kvHead * D + e % D;
-            kTile[e] = j < kvEnd ? k[src] : bfloat(0.0f);
-            vTile[e] = j < kvEnd ? v[src] : bfloat(0.0f);
+            ulong src = (ulong)j * p.kvRow + e % D;
+            kTile[e] = j < kvEnd ? kh[src] : T(0.0f);
+            vTile[e] = j < kvEnd ? vh[src] : T(0.0f);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
         if (!active) { continue; }
@@ -1240,172 +1406,414 @@ kernel void flash_attn_bf16_kernel(device const bfloat* q        [[buffer(0)]],
             for (uint i = 0; i < DPL; i++) { s += qr[i] * float(kTile[jj * D + lane * DPL + i]); }
             s = simd_sum(s);
             int dist = qPos - int(t + jj);
-            bool visible = t + jj < kvEnd && !(causal != 0u && dist < 0) &&
-                           !(isSliding != 0u && dist >= int(slidingWindow));
+            bool visible = t + jj < kvEnd && !(p.causal != 0u && dist < 0) &&
+                           !(p.window != 0u && dist >= int(p.window));
             if (lane == jj) { mine = visible ? s : -INFINITY; }
         }
         float tileMax = simd_max(mine);
         if (tileMax == -INFINITY) { continue; }
         float mNew = max(m, tileMax);
         float corr = exp(m - mNew);
-        float p = exp(mine - mNew);
-        l = l * corr + simd_sum(p);
+        float pr = exp(mine - mNew);
+        l = l * corr + simd_sum(pr);
         m = mNew;
         for (uint i = 0; i < DPL; i++) { acc[i] *= corr; }
         for (uint jj = 0; jj < BK; jj++) {
-            float pj = simd_shuffle(p, (ushort)jj);
+            float pj = simd_shuffle(pr, (ushort)jj);
             for (uint i = 0; i < DPL; i++) { acc[i] += pj * float(vTile[jj * D + lane * DPL + i]); }
         }
     }
 
     if (active) {
         float invL = l > 0.0f ? 1.0f / l : 0.0f;
-        device bfloat* outRow = out + qi * qStride + h * D + lane * DPL;
-        for (uint i = 0; i < DPL; i++) { outRow[i] = bfloat(acc[i] * invL); }
+        device T* outRow = out + (ulong)b * p.qBatch + (ulong)h * p.qHead + (ulong)qi * p.qRow + lane * DPL;
+        for (uint i = 0; i < DPL; i++) { outRow[i] = T(acc[i] * invL); }
     }
 }
 
-#define FLASH_INSTANTIATE(D)                                                                  \
-    template [[host_name("flash_attn_bf16_kernel_d" #D)]] kernel void flash_attn_bf16_kernel<D>( \
-        device const bfloat*, device const bfloat*, device const bfloat*, device bfloat*,     \
-        constant uint&, constant uint&, constant uint&, constant uint&, constant uint&,       \
-        constant uint&, constant uint&, constant float&, uint2, uint, uint, uint);
-FLASH_INSTANTIATE(64)
-FLASH_INSTANTIATE(128)
-FLASH_INSTANTIATE(256)
-FLASH_INSTANTIATE(512)
+#define FLASH_SIMD(T, NAME, D)                                                                       \
+    template [[host_name("flash_attn_simd_" #NAME "_d" #D)]] kernel void flash_attn_simd_kernel<T, D>( \
+        device const T*, device const T*, device const T*, device T*, constant AttnParams&,          \
+        uint3, uint, uint, uint);
+FLASH_SIMD(float, f32, 512)
+FLASH_SIMD(half, f16, 512)
+FLASH_SIMD(bfloat, bf16, 512)
 
-// ── Linear attention (bf16) ─────────────────────────────────────────────────
-// GPU counterpart of std::linear_attention_forward (attention.sc), multi-
-// head, with feature map phi(x) = elu(x)+1:
+// ── Linear attention ────────────────────────────────────────────────────────
+// GPU counterpart of std::linear_attention_forward (attention.sc) with
+// feature map phi(x) = elu(x)+1:
 //   out_i = phi(q_i) . S / phi(q_i) . z,  S = sum_j phi(k_j) (x) v_j,
 //                                         z = sum_j phi(k_j)
-// summed over every key (non-causal, as on the CPU) or, with 'causal',
-// over keys 0..i only -- the recurrent form, where S/z are a running state
-// a decode step extends by one token. q/out are [seqLen, numHeads*D], k/v
-// [kvLen, numKvHeads*D] (kvLen == seqLen when causal).
+// summed over every key (non-causal, as on the CPU) or, with 'causal', over
+// keys j <= pos -- the recurrent form, where S/z are a running state a
+// decode step extends by one token.
 //
 // With 'hasState', S/z start from 'state' and the final values are written
 // back, so a sequence can be fed in pieces (prefill, then one token per
 // decode step) with the state staying on the GPU. Every simdgroup of a
-// head reads z but none owns it, so this kernel writes back only its own
-// S columns and linear_attn_z_update_bf16 below, dispatched after it,
-// advances z. Layout per query head h:
-// S^T as [D][D] floats (row d2 = column d2 of S) then z as [D] floats --
-// see gpu_mps.h's mps_linear_attn_state_bytes. State is per query head,
-// not per KV head, so GQA heads sharing K/V never write the same state.
+// head reads z but none owns it, so this kernel writes back only its own S
+// columns and linear_attn_z_update below, dispatched after it, advances z.
+// Layout per query head h (batch folded in): S^T as [D][D] floats (row d2
+// = column d2 of S) then z as [D] floats -- see gpu_mps.h's
+// mps_linear_attn_state_bytes. State is per query head, not per KV head,
+// so GQA heads sharing K/V never write the same state.
 //
-// One simdgroup per (head, block of LIN_COLS(D) output columns): lane i
-// keeps rows [i*D/32, (i+1)*D/32) of those columns of S, plus that slice
-// of z, in registers, and the numerators/denominator fold with simd_sum.
-// Tokens run sequentially inside a simdgroup; the parallelism is across
-// numHeads*D/LIN_COLS(D) simdgroups. LIN_COLS(D) = 512/D bounds the
-// per-lane state at 16 floats.
+// One simdgroup per (batch, head, block of LIN_COLS(D) output columns):
+// lane i keeps rows [i*D/32, (i+1)*D/32) of those columns of S, plus that
+// slice of z, in registers, and the numerators/denominator fold with
+// simd_sum. Tokens run sequentially inside a simdgroup; the parallelism is
+// across batch*heads*D/LIN_COLS(D) simdgroups. LIN_COLS(D), the largest
+// power of two up to min(16, 512/D), divides every supported D and bounds
+// the per-lane state at 16 floats.
 #define LIN_SG 4
-#define LIN_COLS(D) (512u / (D))
+#define LIN_COLS(D) ((D) <= 32u ? 16u : (D) <= 64u ? 8u : (D) <= 128u ? 4u : (D) <= 256u ? 2u : 1u)
 
 static inline float phi_elu_p1(float x) { return x > 0.0f ? x + 1.0f : exp(x); }
 
-template <uint D>
-kernel void linear_attn_bf16_kernel(device const bfloat* q      [[buffer(0)]],
-                                     device const bfloat* k      [[buffer(1)]],
-                                     device const bfloat* v      [[buffer(2)]],
-                                     device bfloat* out          [[buffer(3)]],
-                                     device float* state         [[buffer(4)]],
-                                     constant uint& seqLen       [[buffer(5)]],
-                                     constant uint& kvLen        [[buffer(6)]],
-                                     constant uint& numHeads     [[buffer(7)]],
-                                     constant uint& numKvHeads   [[buffer(8)]],
-                                     constant uint& causal       [[buffer(9)]],
-                                     constant uint& hasState     [[buffer(10)]],
-                                     uint tgid [[threadgroup_position_in_grid]],
-                                     uint sgid [[simdgroup_index_in_threadgroup]],
-                                     uint lane [[thread_index_in_simdgroup]]) {
+template <typename T, uint D>
+kernel void linear_attn_kernel(device const T* q             [[buffer(0)]],
+                                device const T* k             [[buffer(1)]],
+                                device const T* v             [[buffer(2)]],
+                                device T* out                 [[buffer(3)]],
+                                device float* state           [[buffer(4)]],
+                                constant AttnParams& p        [[buffer(5)]],
+                                uint3 tg [[threadgroup_position_in_grid]],
+                                uint sgid [[simdgroup_index_in_threadgroup]],
+                                uint lane [[thread_index_in_simdgroup]]) {
     constexpr uint DPL = D / 32;
     constexpr uint COLS = LIN_COLS(D);
     constexpr uint GROUPS_PER_HEAD = D / COLS;
-    uint g = tgid * LIN_SG + sgid;
-    if (g >= numHeads * GROUPS_PER_HEAD) { return; }
-    uint h = g / GROUPS_PER_HEAD;
-    uint c0 = (g % GROUPS_PER_HEAD) * COLS;
-    uint kvHead = h / (numHeads / numKvHeads);
-    ulong qStride = (ulong)numHeads * D;
-    ulong kvStride = (ulong)numKvHeads * D;
+    uint g = tg.x * LIN_SG + sgid;
+    if (g >= GROUPS_PER_HEAD) { return; }
+    uint h = tg.y, b = tg.z;
+    uint c0 = g * COLS;
+    uint kvHead = h / (p.heads / p.kvHeads);
+    const device T* qh = q + (ulong)b * p.qBatch + (ulong)h * p.qHead;
+    const device T* kh = k + (ulong)b * p.kvBatch + (ulong)kvHead * p.kvHead;
+    const device T* vh = v + (ulong)b * p.kvBatch + (ulong)kvHead * p.kvHead;
+    device T* oh = out + (ulong)b * p.qBatch + (ulong)h * p.qHead;
     uint d1 = lane * DPL;
 
-    device float* st = state + (ulong)h * (D * D + D);
+    device float* st = state + (ulong)(b * p.heads + h) * (D * D + D);
     float S[COLS][DPL];
     float z[DPL];
     for (uint i = 0; i < DPL; i++) {
-        z[i] = hasState != 0u ? st[D * D + d1 + i] : 0.0f;
-        for (uint c = 0; c < COLS; c++) { S[c][i] = hasState != 0u ? st[(c0 + c) * D + d1 + i] : 0.0f; }
+        z[i] = p.hasState != 0u ? st[D * D + d1 + i] : 0.0f;
+        for (uint c = 0; c < COLS; c++) { S[c][i] = p.hasState != 0u ? st[(c0 + c) * D + d1 + i] : 0.0f; }
     }
 
-    uint nAccum = causal != 0u ? seqLen : kvLen;
-    uint j = 0;
-    for (uint step = 0; step < nAccum + seqLen; step++) {
-        // Causal interleaves (absorb key t, emit query t); non-causal
-        // absorbs every key first, then emits every query.
-        bool absorb = causal != 0u ? (step & 1u) == 0u : step < kvLen;
-        if (causal != 0u) { j = step >> 1; } else { j = absorb ? step : step - kvLen; }
-        if (absorb) {
-            device const bfloat* kRow = k + (ulong)j * kvStride + kvHead * D + d1;
-            device const bfloat* vRow = v + (ulong)j * kvStride + kvHead * D + c0;
+    uint posOff = p.kvLen - p.seqLen;
+    uint nAccum = p.kvLen;
+    uint absorbed = 0;
+    // Causal: absorb every key at or before a query's position, then emit it.
+    // Non-causal: absorb all keys, then emit every query.
+    for (uint i = 0; i < p.seqLen; i++) {
+        uint upTo = p.causal != 0u ? i + posOff + 1u : nAccum;
+        for (; absorbed < upTo; absorbed++) {
+            const device T* kRow = kh + (ulong)absorbed * p.kvRow + d1;
+            const device T* vRow = vh + (ulong)absorbed * p.kvRow + c0;
             float pk[DPL];
-            for (uint i = 0; i < DPL; i++) { pk[i] = phi_elu_p1(float(kRow[i])); z[i] += pk[i]; }
+            for (uint t = 0; t < DPL; t++) { pk[t] = phi_elu_p1(float(kRow[t])); z[t] += pk[t]; }
             for (uint c = 0; c < COLS; c++) {
                 float vc = float(vRow[c]);
-                for (uint i = 0; i < DPL; i++) { S[c][i] += pk[i] * vc; }
+                for (uint t = 0; t < DPL; t++) { S[c][t] += pk[t] * vc; }
             }
-        } else {
-            device const bfloat* qRow = q + (ulong)j * qStride + h * D + d1;
-            float pq[DPL];
-            float den = 0.0f;
-            for (uint i = 0; i < DPL; i++) { pq[i] = phi_elu_p1(float(qRow[i])); den += pq[i] * z[i]; }
-            den = simd_sum(den);
-            float invDen = den > 0.0f ? 1.0f / den : 0.0f;
-            for (uint c = 0; c < COLS; c++) {
-                float num = 0.0f;
-                for (uint i = 0; i < DPL; i++) { num += pq[i] * S[c][i]; }
-                num = simd_sum(num);
-                if (lane == 0) { out[(ulong)j * qStride + h * D + c0 + c] = bfloat(num * invDen); }
-            }
+        }
+        const device T* qRow = qh + (ulong)i * p.qRow + d1;
+        float pq[DPL];
+        float den = 0.0f;
+        for (uint t = 0; t < DPL; t++) { pq[t] = phi_elu_p1(float(qRow[t])); den += pq[t] * z[t]; }
+        den = simd_sum(den);
+        float invDen = den > 0.0f ? 1.0f / den : 0.0f;
+        for (uint c = 0; c < COLS; c++) {
+            float num = 0.0f;
+            for (uint t = 0; t < DPL; t++) { num += pq[t] * S[c][t]; }
+            num = simd_sum(num);
+            if (lane == c) { oh[(ulong)i * p.qRow + c0 + c] = T(num * invDen); }
         }
     }
 
-    if (hasState != 0u) {
+    if (p.hasState != 0u) {
         for (uint i = 0; i < DPL; i++) {
             for (uint c = 0; c < COLS; c++) { st[(c0 + c) * D + d1 + i] = S[c][i]; }
         }
     }
 }
 
-// z[h,d] += sum_j phi(k[j,kvHead,d]) over 'kvLen' keys -- the z half of
-// linear_attn_bf16_kernel's state update (see its comment). One thread per
-// (head, d).
-kernel void linear_attn_z_update_bf16(device const bfloat* k    [[buffer(0)]],
-                                       device float* state      [[buffer(1)]],
-                                       constant uint& kvLen     [[buffer(2)]],
-                                       constant uint& numHeads  [[buffer(3)]],
-                                       constant uint& numKvHeads [[buffer(4)]],
-                                       constant uint& headDim   [[buffer(5)]],
-                                       uint id [[thread_position_in_grid]]) {
-    if (id >= numHeads * headDim) { return; }
+// z[b,h,d] += sum_j phi(k[b,j,kvHead,d]) over kvLen keys -- the z half of
+// linear_attn_kernel's state update (see its comment). One thread per
+// (head, d); grid.z is the batch.
+template <typename T>
+kernel void linear_attn_z_update(device const T* k           [[buffer(0)]],
+                                  device float* state         [[buffer(1)]],
+                                  constant AttnParams& p      [[buffer(2)]],
+                                  constant uint& headDim      [[buffer(3)]],
+                                  uint3 gid [[thread_position_in_grid]]) {
+    uint id = gid.x, b = gid.z;
+    if (id >= p.heads * headDim) { return; }
     uint h = id / headDim;
     uint d = id % headDim;
-    uint kvHead = h / (numHeads / numKvHeads);
-    ulong kvStride = (ulong)numKvHeads * headDim;
+    uint kvHead = h / (p.heads / p.kvHeads);
+    const device T* kh = k + (ulong)b * p.kvBatch + (ulong)kvHead * p.kvHead + d;
     float acc = 0.0f;
-    for (uint j = 0; j < kvLen; j++) { acc += phi_elu_p1(float(k[(ulong)j * kvStride + kvHead * headDim + d])); }
-    state[(ulong)h * (headDim * headDim + headDim) + headDim * headDim + d] += acc;
+    for (uint j = 0; j < p.kvLen; j++) { acc += phi_elu_p1(float(kh[(ulong)j * p.kvRow])); }
+    state[(ulong)(b * p.heads + h) * (headDim * headDim + headDim) + headDim * headDim + d] += acc;
 }
 
-#define LINEAR_INSTANTIATE(D)                                                                   \
-    template [[host_name("linear_attn_bf16_kernel_d" #D)]] kernel void linear_attn_bf16_kernel<D>( \
-        device const bfloat*, device const bfloat*, device const bfloat*, device bfloat*,       \
-        device float*, constant uint&, constant uint&, constant uint&, constant uint&,          \
-        constant uint&, constant uint&, uint, uint, uint);
-LINEAR_INSTANTIATE(64)
-LINEAR_INSTANTIATE(128)
-LINEAR_INSTANTIATE(256)
-LINEAR_INSTANTIATE(512)
+// ── Linear attention, chunk-parallel kernels (head dim 64 / 128) ───────────
+// The sequential kernel above walks every token in order. For a whole
+// sequence (no carried state, and for causal kvLen == seqLen) these three
+// kernels do the same math as matrix products on the simdgroup matrix
+// units, in fp32:
+//  1. linear_chunk_state: per segment of p.seg keys, S_seg = phi(K)^T V
+//     ([D][D]) and z_seg = column sums of phi(K), into 'states'
+//     ([batch*heads][segments][D*D + D] floats). One threadgroup per
+//     (segment, head * 64-column slab, batch) of D/16 simdgroups, each a
+//     32 x 32 block; phi(K) is staged transposed with an odd row stride so
+//     the scattered writes land in distinct banks.
+//  2. linear_chunk_prefix: per state element, an exclusive prefix over
+//     segments (causal: the state before each 64-row chunk) or the total
+//     (non-causal, into segment 0).
+//  3. linear_chunk_out: per 64-row chunk and 64-column slab, num =
+//     phi(Q) S + (causal) (phi(Q) phi(K)^T masked to j <= i) V and den =
+//     phi(Q) z + (causal) the masked row sums; out = num / den. 8
+//     simdgroups of 8 rows; Q/K are staged 32 columns at a time and the
+//     masked scores stay in registers as fragments.
+// Fragment accumulators live in float2 registers with a simdgroup_matrix
+// built around each multiply, and operand fragments are reloaded rather
+// than kept in arrays -- arrays of simdgroup_matrix measured 2-3x slower.
+// Measured 2-4x faster than the sequential kernel and 2-8x faster than
+// PyTorch's vectorized linear attention on an M1 Pro (benchmarks page).
+#define LINC_ROWS 64   // linear_chunk_out rows per threadgroup (= causal segment)
+
+template <typename T, uint D>
+kernel void linear_chunk_state(device const T* k            [[buffer(0)]],
+                               device const T* v            [[buffer(1)]],
+                               device float* states         [[buffer(2)]],
+                               constant AttnParams& p       [[buffer(3)]],
+                               uint3 tg [[threadgroup_position_in_grid]],
+                               uint tid [[thread_index_in_threadgroup]],
+                               uint sg [[simdgroup_index_in_threadgroup]]) {
+    constexpr uint SW = 64, NS = D / SW, NT = D * 2, RT = 32, RTP = RT + 1, SWP = SW + 4, SGR = D / 32;
+    threadgroup float kt[D * RTP];      // phi(K) transposed: [d][row]
+    threadgroup float vt[RT * SWP];
+    uint seg = tg.x, h = tg.y / NS, slab = tg.y % NS, b = tg.z;
+    uint kvHead = h / (p.heads / p.kvHeads);
+    uint rb = (sg % SGR) * 32, cb = (sg / SGR) * 32;
+    const device T* kh = k + (ulong)b * p.kvBatch + (ulong)kvHead * p.kvHead;
+    const device T* vh = v + (ulong)b * p.kvBatch + (ulong)kvHead * p.kvHead;
+    uint rBeg = seg * p.seg, rEnd = min(rBeg + p.seg, p.kvLen);
+    float2 acc[4][4];
+    for (uint i = 0; i < 4; i++) for (uint j = 0; j < 4; j++) acc[i][j] = float2(0.0f);
+    float zs = 0.0f;
+    for (uint r0 = rBeg; r0 < rEnd; r0 += RT) {
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint e = tid; e < RT * D; e += NT) {
+            uint r = e / D, d = e % D;
+            float x = r0 + r < rEnd ? phi_elu_p1(float(kh[(ulong)(r0 + r) * p.kvRow + d])) : 0.0f;
+            kt[d * RTP + r] = x;
+        }
+        for (uint e = tid; e < RT * SW / 4; e += NT) {
+            uint r = e / (SW / 4), c = (e % (SW / 4)) * 4;
+            float4 x = r0 + r < rEnd ? float4(*(const device vec<T, 4>*)(vh + (ulong)(r0 + r) * p.kvRow + slab * SW + c))
+                                     : float4(0);
+            *(threadgroup float4*)(vt + r * SWP + c) = x;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (slab == 0 && tid < D) { for (uint r = 0; r < RT; r++) zs += kt[tid * RTP + r]; }
+        for (uint kk = 0; kk < RT / 8; kk++) {
+            for (uint i = 0; i < 4; i++) {
+                simdgroup_float8x8 a;
+                simdgroup_load(a, kt + (rb + i * 8) * RTP + kk * 8, RTP);
+                for (uint j = 0; j < 4; j++) {
+                    simdgroup_float8x8 bm, m;
+                    simdgroup_load(bm, vt + kk * 8 * SWP + cb + j * 8, SWP);
+                    m.thread_elements()[0] = acc[i][j].x; m.thread_elements()[1] = acc[i][j].y;
+                    simdgroup_multiply_accumulate(m, a, bm, m);
+                    acc[i][j] = float2(m.thread_elements()[0], m.thread_elements()[1]);
+                }
+            }
+        }
+    }
+    uint nSeg = (p.kvLen + p.seg - 1) / p.seg;
+    device float* st = states + ((ulong)(b * p.heads + h) * nSeg + seg) * (D * D + D);
+    for (uint i = 0; i < 4; i++) {
+        for (uint j = 0; j < 4; j++) {
+            simdgroup_float8x8 m;
+            m.thread_elements()[0] = acc[i][j].x; m.thread_elements()[1] = acc[i][j].y;
+            simdgroup_store(m, st + (ulong)(rb + i * 8) * D + slab * SW + cb + j * 8, D);
+        }
+    }
+    if (slab == 0 && tid < D) st[D * D + tid] = zs;
+}
+
+template <uint D>
+kernel void linear_chunk_prefix(device float* states        [[buffer(0)]],
+                                constant AttnParams& p      [[buffer(1)]],
+                                uint2 gid [[thread_position_in_grid]]) {
+    constexpr uint E = D * D + D;
+    uint e = gid.x, bh = gid.y;
+    if (e >= E) return;
+    uint nSeg = (p.kvLen + p.seg - 1) / p.seg;
+    device float* st = states + (ulong)bh * nSeg * E + e;
+    float run = 0.0f;
+    for (uint c = 0; c < nSeg; c++) {
+        float x = st[(ulong)c * E];
+        if (p.causal != 0u) st[(ulong)c * E] = run;
+        run += x;
+    }
+    if (p.causal == 0u) st[0] = run;
+}
+
+template <typename T, uint D, bool CAUSAL>
+kernel void linear_chunk_out(device const T* q               [[buffer(0)]],
+                             device const T* k               [[buffer(1)]],
+                             device const T* v               [[buffer(2)]],
+                             device T* out                   [[buffer(3)]],
+                             device const float* states      [[buffer(4)]],
+                             constant AttnParams& p          [[buffer(5)]],
+                             uint3 tg [[threadgroup_position_in_grid]],
+                             uint tid [[thread_index_in_threadgroup]],
+                             uint sg [[simdgroup_index_in_threadgroup]],
+                             uint lane [[thread_index_in_simdgroup]]) {
+    constexpr uint C = LINC_ROWS, NS = D / 64, DCH = 32, QP = DCH + 4, CP = C + 1, SP = 68, NT = 256;
+    threadgroup float buf[C * QP + DCH * CP > C * SP ? C * QP + DCH * CP : C * SP];
+    threadgroup float den[C];
+    threadgroup float* qt = buf;               // phi(Q) chunk [row][DCH]
+    threadgroup float* kt = buf + C * QP;      // phi(K) chunk transposed [DCH][row]
+    uint c = tg.x, h = tg.y / NS, slab = tg.y % NS, b = tg.z;
+    uint kvHead = h / (p.heads / p.kvHeads);
+    constexpr bool causal = CAUSAL;
+    const device T* qh = q + (ulong)b * p.qBatch + (ulong)h * p.qHead;
+    const device T* kh = k + (ulong)b * p.kvBatch + (ulong)kvHead * p.kvHead;
+    const device T* vh = v + (ulong)b * p.kvBatch + (ulong)kvHead * p.kvHead;
+    device T* oh = out + (ulong)b * p.qBatch + (ulong)h * p.qHead;
+    uint nSeg = (p.kvLen + p.seg - 1) / p.seg;
+    const device float* st = states + ((ulong)(b * p.heads + h) * nSeg + (causal ? c : 0u)) * (D * D + D);
+    const uint qid = lane / 4, fm = (qid & 4) + ((lane / 2) % 4), fn = (qid & 2) * 2 + (lane % 2) * 2;
+    uint r0 = c * C, R0 = sg * 8;
+    float2 num[8], am[8];
+    for (uint j = 0; j < 8; j++) { num[j] = float2(0.0f); am[j] = float2(0.0f); }
+    float dsum = 0.0f;
+    uint dr = tid / 4, dq = tid % 4;
+    for (uint dc = 0; dc < D / DCH; dc++) {
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint e = tid; e < C * DCH / 4; e += NT) {
+            uint r = e / (DCH / 4), cc = (e % (DCH / 4)) * 4;
+            float4 x = float4(0);
+            if (r0 + r < p.seqLen) {
+                x = float4(*(const device vec<T, 4>*)(qh + (ulong)(r0 + r) * p.qRow + dc * DCH + cc));
+                x = select(exp(x), x + 1.0f, x > 0.0f);
+            }
+            *(threadgroup float4*)(qt + r * QP + cc) = x;
+        }
+        if (causal) {
+            for (uint e = tid; e < C * DCH; e += NT) {
+                uint r = e / DCH, d = e % DCH;
+                kt[d * CP + r] = r0 + r < p.kvLen ? phi_elu_p1(float(kh[(ulong)(r0 + r) * p.kvRow + dc * DCH + d])) : 0.0f;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint t = 0; t < DCH / 4; t++) {
+            dsum += qt[dr * QP + dq * (DCH / 4) + t] * st[D * D + dc * DCH + dq * (DCH / 4) + t];
+        }
+        for (uint dd = 0; dd < DCH / 8; dd++) {
+            simdgroup_float8x8 qf;
+            simdgroup_load(qf, qt + R0 * QP + dd * 8, QP);
+            for (uint j = 0; j < 8; j++) {
+                simdgroup_float8x8 sf, m;
+                simdgroup_load(sf, st + (ulong)(dc * DCH + dd * 8) * D + slab * 64 + j * 8, D);
+                m.thread_elements()[0] = num[j].x; m.thread_elements()[1] = num[j].y;
+                simdgroup_multiply_accumulate(m, qf, sf, m);
+                num[j] = float2(m.thread_elements()[0], m.thread_elements()[1]);
+                if (causal) {
+                    simdgroup_float8x8 kf;
+                    simdgroup_load(kf, kt + dd * 8 * CP + j * 8, CP);
+                    m.thread_elements()[0] = am[j].x; m.thread_elements()[1] = am[j].y;
+                    simdgroup_multiply_accumulate(m, qf, kf, m);
+                    am[j] = float2(m.thread_elements()[0], m.thread_elements()[1]);
+                }
+            }
+        }
+    }
+    dsum += simd_shuffle_xor(dsum, 1);
+    dsum += simd_shuffle_xor(dsum, 2);
+    if (dq == 0) den[dr] = dsum;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    uint row = R0 + fm;
+    if (causal) {
+        // Mask the chunk's scores to keys j <= i, add their row sums to den,
+        // stage V's slab, then num += A V.
+        float rs = 0.0f;
+        for (uint j = 0; j < 8; j++) {
+            uint col = j * 8 + fn;
+            if (col > row) am[j].x = 0.0f;
+            if (col + 1 > row) am[j].y = 0.0f;
+            rs += am[j].x + am[j].y;
+        }
+        rs += simd_shuffle_xor(rs, 1);
+        rs += simd_shuffle_xor(rs, 8);
+        if ((lane & 9u) == 0u) den[row] += rs;
+        for (uint e = tid; e < C * 16; e += NT) {
+            uint r = e / 16, cc = (e % 16) * 4;
+            float4 x = r0 + r < p.kvLen ? float4(*(const device vec<T, 4>*)(vh + (ulong)(r0 + r) * p.kvRow + slab * 64 + cc))
+                                        : float4(0);
+            *(threadgroup float4*)(buf + r * SP + cc) = x;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint kk = 0; kk < C / 8; kk++) {
+            simdgroup_float8x8 pm;
+            pm.thread_elements()[0] = am[kk].x;
+            pm.thread_elements()[1] = am[kk].y;
+            for (uint j = 0; j < 8; j++) {
+                simdgroup_float8x8 vf, m;
+                simdgroup_load(vf, buf + kk * 8 * SP + j * 8, SP);
+                m.thread_elements()[0] = num[j].x; m.thread_elements()[1] = num[j].y;
+                simdgroup_multiply_accumulate(m, pm, vf, m);
+                num[j] = float2(m.thread_elements()[0], m.thread_elements()[1]);
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (r0 + row < p.seqLen) {
+        float dv = den[row];
+        float inv = dv > 0.0f ? 1.0f / dv : 0.0f;
+        device T* orow = oh + (ulong)(r0 + row) * p.qRow + slab * 64;
+        for (uint j = 0; j < 8; j++) {
+            float2 x = num[j] * inv;
+            *(device vec<T, 2>*)(orow + j * 8 + fn) = vec<T, 2>(T(x.x), T(x.y));
+        }
+    }
+}
+
+#define LINEAR_CHUNK(T, NAME, D)                                                                         \
+    template [[host_name("linear_chunk_state_" #NAME "_d" #D)]] kernel void linear_chunk_state<T, D>(    \
+        device const T*, device const T*, device float*, constant AttnParams&, uint3, uint, uint);       \
+    template [[host_name("linear_chunk_out_" #NAME "_d" #D)]] kernel void linear_chunk_out<T, D, false>( \
+        device const T*, device const T*, device const T*, device T*, device const float*,               \
+        constant AttnParams&, uint3, uint, uint, uint);                                                  \
+    template [[host_name("linear_chunk_out_causal_" #NAME "_d" #D)]] kernel void linear_chunk_out<T, D, true>( \
+        device const T*, device const T*, device const T*, device T*, device const float*,               \
+        constant AttnParams&, uint3, uint, uint, uint);
+LINEAR_CHUNK(float, f32, 64) LINEAR_CHUNK(half, f16, 64) LINEAR_CHUNK(bfloat, bf16, 64)
+LINEAR_CHUNK(float, f32, 128) LINEAR_CHUNK(half, f16, 128) LINEAR_CHUNK(bfloat, bf16, 128)
+template [[host_name("linear_chunk_prefix_d64")]] kernel void linear_chunk_prefix<64>(device float*, constant AttnParams&, uint2);
+template [[host_name("linear_chunk_prefix_d128")]] kernel void linear_chunk_prefix<128>(device float*, constant AttnParams&, uint2);
+
+#define LINEAR(T, NAME, D)                                                                       \
+    template [[host_name("linear_attn_" #NAME "_d" #D)]] kernel void linear_attn_kernel<T, D>(   \
+        device const T*, device const T*, device const T*, device T*, device float*,             \
+        constant AttnParams&, uint3, uint, uint);
+#define LINEAR_DTYPES(D) LINEAR(float, f32, D) LINEAR(half, f16, D) LINEAR(bfloat, bf16, D)
+LINEAR_DTYPES(32)
+LINEAR_DTYPES(64)
+LINEAR_DTYPES(96)
+LINEAR_DTYPES(128)
+LINEAR_DTYPES(256)
+LINEAR_DTYPES(512)
+#define LINEAR_Z(T, NAME)                                                                            \
+    template [[host_name("linear_attn_z_update_" #NAME)]] kernel void linear_attn_z_update<T>(        \
+        device const T*, device float*, constant AttnParams&, constant uint&, uint3);
+LINEAR_Z(float, f32)
+LINEAR_Z(half, f16)
+LINEAR_Z(bfloat, bf16)
