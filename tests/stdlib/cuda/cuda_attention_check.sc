@@ -82,9 +82,11 @@ static struct Vec<float> ref_attn(&Vec<float> q, &Vec<float> k, &Vec<float> v, s
             while (r < s.seqLen) {
                 long jmax = (long)s.kvLen - 1L;
                 if (causal && (long)r + off < jmax) jmax = (long)r + off;
+                long jmin = 0L;
+                if (s.window > 0UL && (long)r + off - (long)s.window + 1L > 0L) jmin = (long)r + off - (long)s.window + 1L;
                 double mx = -1.0e300;
                 double sum = 0.0;
-                long j = 0L;
+                long j = jmin;
                 while (j <= jmax) {
                     double dot = 0.0;
                     unsigned long d = 0UL;
@@ -100,7 +102,7 @@ static struct Vec<float> ref_attn(&Vec<float> q, &Vec<float> k, &Vec<float> v, s
                     j = j + 1L;
                 }
                 if (!lin) {
-                    j = 0L;
+                    j = jmin;
                     while (j <= jmax) {
                         double e = std::exp_d(*w.at((unsigned long)j) - mx);
                         *w.at((unsigned long)j) = e;
@@ -111,12 +113,12 @@ static struct Vec<float> ref_attn(&Vec<float> q, &Vec<float> k, &Vec<float> v, s
                 unsigned long d = 0UL;
                 while (d < D) {
                     double a = 0.0;
-                    j = 0L;
+                    j = jmin;
                     while (j <= jmax) {
                         a = a + *w.at((unsigned long)j) * (double)*v.at(kb + (unsigned long)j * D + d);
                         j = j + 1L;
                     }
-                    out.push(jmax >= 0L ? (float)(a / sum) : (float)0.0);
+                    out.push(jmax >= jmin ? (float)(a / sum) : (float)0.0);
                     d = d + 1UL;
                 }
                 r = r + 1UL;
@@ -132,7 +134,12 @@ static struct Vec<float> ref_attn(&Vec<float> q, &Vec<float> k, &Vec<float> v, s
 static struct CudaAttnShape shape(unsigned long b, unsigned long h, unsigned long hkv,
                                   unsigned long sq, unsigned long sk, unsigned long d) {
     struct CudaAttnShape s;
-    s.batch = b; s.heads = h; s.kvHeads = hkv; s.seqLen = sq; s.kvLen = sk; s.headDim = d;
+    s.batch = b; s.heads = h; s.kvHeads = hkv; s.seqLen = sq; s.kvLen = sk; s.headDim = d; s.window = 0UL;
+    return s;
+}
+
+static struct CudaAttnShape windowed(struct CudaAttnShape s, unsigned long w) {
+    s.window = w;
     return s;
 }
 
@@ -155,8 +162,8 @@ static void run_case(const char* what, struct CudaAttnShape s, int dtype, int ca
         struct CudaBuf dk = std::cuda_upload(k.at(0UL), kn);
         struct CudaBuf dv = std::cuda_upload(v.at(0UL), kn);
         struct CudaBuf dout = std::cuda_alloc(qn);
-        ok = lin ? std::cuda_linear_attention(dq, dk, dv, dout, s, causal)
-                 : std::cuda_flash_attention(dq, dk, dv, dout, s, 0.0f, causal);
+        ok = lin ? std::cuda_linear_attention_ex(dq, dk, dv, dout, s, causal)
+                 : std::cuda_flash_attention_ex(dq, dk, dv, dout, s, 0.0f, causal);
         ok = ok && std::cuda_read(dout, got.at(0UL), qn);
         std::cuda_free(&dq); std::cuda_free(&dk); std::cuda_free(&dv); std::cuda_free(&dout);
     } else {
@@ -201,6 +208,10 @@ int main() {
         run_case(c ? "linear fp32 D32 causal" : "linear fp32 D32", shape(1UL, 2UL, 2UL, 33UL, 97UL, 32UL), 0, c, 1, 2.0e-5);
         c = c + 1;
     }
+    // Sliding window (flash), with and without causal, narrower and wider than a tile
+    run_case("flash fp32 D64 window 40 causal", windowed(shape(1UL, 2UL, 1UL, 150UL, 200UL, 64UL), 40UL), 0, 1, 0, 2.0e-5);
+    run_case("flash fp16 D64 window 17", windowed(shape(1UL, 2UL, 2UL, 90UL, 90UL, 64UL), 17UL), CUDA_FP16, 0, 0, 4.0e-3);
+    run_case("flash bf16 D128 window 100 causal", windowed(shape(1UL, 2UL, 2UL, 130UL, 130UL, 128UL), 100UL), CUDA_BF16, 1, 0, 2.5e-2);
 
     // Same result as attention.h's CPU flash / linear attention for one head.
     struct CudaAttnShape one = shape(1UL, 1UL, 1UL, 40UL, 56UL, 64UL);
@@ -226,8 +237,9 @@ int main() {
         i = 0UL;
         while (i < qn) { unsafe { *cpu.at(i) = tr->data[i]; } i = i + 1UL; }
         tr.free();
-        int ok = l ? std::cuda_linear_attention(dq, dk, dv, dout, one, 0)
-                   : std::cuda_flash_attention(dq, dk, dv, dout, one, 0.0f, 0);
+        // the rocm_*-compatible argument form
+        int ok = l ? std::cuda_linear_attention(dq, dk, dv, dout, 1UL, 40UL, 56UL, 64UL, 0)
+                   : std::cuda_flash_attention(dq, dk, dv, dout, 1UL, 40UL, 56UL, 64UL, (float)0.0, 0);
         ok = ok && std::cuda_read(dout, got.at(0UL), qn);
         double e = relerr(&got, &cpu);
         check(ok && e <= 1.0e-5, l ? "linear matches attention.h" : "flash matches attention.h");
@@ -236,11 +248,26 @@ int main() {
     }
     tq.free(); tk.free(); tv.free();
 
+    // Host-array fp32 versions, 2 heads, causal
+    struct CudaAttnShape two = shape(1UL, 2UL, 2UL, 20UL, 28UL, 64UL);
+    l = 0;
+    while (l < 2) {
+        struct Vec<float> want2 = ref_attn(&q, &k, &v, two, 1, l);
+        int ok = l ? std::cuda_linear_attention_f32(q.at(0UL), k.at(0UL), v.at(0UL), got.at(0UL), 2UL, 20UL, 28UL, 64UL, 1)
+                   : std::cuda_flash_attention_f32(q.at(0UL), k.at(0UL), v.at(0UL), got.at(0UL), 2UL, 20UL, 28UL, 64UL, (float)0.0, 1);
+        struct Vec<float> got2 = std::vec_with_cap(want2.length());
+        i = 0UL;
+        while (i < want2.length()) { got2.push(*got.at(i)); i = i + 1UL; }
+        check(ok && relerr(&got2, &want2) <= 2.0e-5, l ? "linear _f32 host arrays" : "flash _f32 host arrays");
+        want2.free(); got2.free();
+        l = l + 1;
+    }
+
     // Graph capture: both ops recorded once (their variants are built above) and replayed.
     struct CudaBuf dout2 = std::cuda_alloc(qn);
     check(std::cuda_capture_begin(), "attention capture begin");
-    std::cuda_flash_attention(dq, dk, dv, dout, one, 0.0f, 1);
-    std::cuda_linear_attention(dq, dk, dv, dout2, one, 0);
+    std::cuda_flash_attention_ex(dq, dk, dv, dout, one, (float)0.0, 1);
+    std::cuda_linear_attention_ex(dq, dk, dv, dout2, one, 0);
     struct CudaGraph g = std::cuda_capture_end();
     check(g.exec != 0UL, "attention capture end");
     check(std::cuda_graph_launch(g) && std::cuda_graph_launch(g), "attention graph launch");
@@ -253,10 +280,11 @@ int main() {
     std::cuda_graph_free(&g);
 
     // Rejected shapes
-    check(!std::cuda_flash_attention(dq, dk, dv, dout, shape(1UL, 1UL, 1UL, 40UL, 56UL, 48UL), 0.0f, 0), "head dim 48 rejected");
-    check(!std::cuda_flash_attention(dq, dk, dv, dout, shape(1UL, 3UL, 2UL, 4UL, 4UL, 32UL), 0.0f, 0), "heads % kvHeads rejected");
-    check(!std::cuda_flash_attention(dq, dk, dv, dout, shape(1UL, 1UL, 1UL, 41UL, 56UL, 64UL), 0.0f, 0), "short buffer rejected");
-    check(!std::cuda_linear_attention(dq, dk, dv, dout, shape(1UL, 1UL, 1UL, 40UL, 20UL, 64UL), 1), "causal linear kvLen < seqLen rejected");
+    check(!std::cuda_flash_attention_ex(dq, dk, dv, dout, shape(1UL, 1UL, 1UL, 40UL, 56UL, 48UL), (float)0.0, 0), "head dim 48 rejected");
+    check(!std::cuda_flash_attention_ex(dq, dk, dv, dout, shape(1UL, 3UL, 2UL, 4UL, 4UL, 32UL), (float)0.0, 0), "heads % kvHeads rejected");
+    check(!std::cuda_flash_attention(dq, dk, dv, dout, 1UL, 41UL, 56UL, 64UL, (float)0.0, 0), "short buffer rejected");
+    check(!std::cuda_linear_attention(dq, dk, dv, dout, 1UL, 40UL, 20UL, 64UL, 1), "causal linear kvLen < seqLen rejected");
+    check(!std::cuda_linear_attention_ex(dq, dk, dv, dout, windowed(one, 8UL), 0), "linear with window rejected");
     check(std::cuda_attention_head_dim_ok(128UL) && !std::cuda_attention_head_dim_ok(80UL), "head dim query");
 
     std::cuda_free(&dq); std::cuda_free(&dk); std::cuda_free(&dv); std::cuda_free(&dout); std::cuda_free(&dout2);

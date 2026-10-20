@@ -45,8 +45,9 @@ static const char* attn_kernel_source_() {
     "// defined in front of this source; each variant exports attn_entry.\n"
     "//\n"
     "// Layout: Q/O [batch, heads, seqLen, D], K/V [batch, kvHeads, kvLen, D],\n"
-    "// row-major. Query head h reads kv head h / (heads / kvHeads). Causal mask\n"
-    "// is aligned bottom-right: query i sees keys j <= i + (kvLen - seqLen).\n"
+    "// row-major. Query head h reads kv head h / (heads / kvHeads). Query i sits\n"
+    "// at position pos = i + (kvLen - seqLen): causal hides keys j > pos, and a\n"
+    "// sliding window 'win' > 0 hides keys j <= pos - win.\n"
     "\n"
     "#define FULL 0xffffffffu\n"
     "#define NEG_INF (-__int_as_float(0x7f800000))\n"
@@ -79,7 +80,7 @@ static const char* attn_kernel_source_() {
     "// output columns of P V. Q is pre-scaled by scale * log2(e).\n"
     "template <int T, int D>\n"
     "__device__ void flash_simt(const void* __restrict__ Q, const void* __restrict__ K, const void* __restrict__ V,\n"
-    "                           void* __restrict__ O, int Sq, int Sk, int H, int Hkv, float sl2, int causal) {\n"
+    "                           void* __restrict__ O, int Sq, int Sk, int H, int Hkv, float sl2, int causal, int win) {\n"
     "    constexpr int BM = 32, BN = 32, RW = 8, DP = D + 1, DL = (D + 31) / 32;\n"
     "    extern __shared__ float sm[];\n"
     "    float* Qs = sm;               // BM x D\n"
@@ -106,7 +107,8 @@ static const char* attn_kernel_source_() {
     "        int last = min(m0 + BM, Sq) - 1;\n"
     "        kend = max(0, min(Sk, last + off + 1));\n"
     "    }\n"
-    "    for (int n0 = 0; n0 < kend; n0 += BN) {\n"
+    "    const int kbeg = win > 0 ? max(0, m0 + off - win + 1) : 0;\n"
+    "    for (int n0 = kbeg; n0 < kend; n0 += BN) {\n"
     "        __syncthreads();\n"
     "        for (int i = tid; i < BN * D; i += 128) {\n"
     "            int r = i / D, d = i - r * D, gk = n0 + r;\n"
@@ -124,7 +126,7 @@ static const char* attn_kernel_source_() {
     "            float s = 0.0f;\n"
     "#pragma unroll 8\n"
     "            for (int d = 0; d < D; ++d) s += qr[d] * kr[d];\n"
-    "            bool valid = j < Sk && (!causal || j <= gq + off);\n"
+    "            bool valid = j < Sk && (!causal || j <= gq + off) && (win <= 0 || j > gq + off - win);\n"
     "            s = valid ? s : NEG_INF;\n"
     "            float mx = s;\n"
     "#pragma unroll\n"
@@ -197,7 +199,7 @@ static const char* attn_kernel_source_() {
     "template <int BF, int D>\n"
     "__device__ void flash_mma(const unsigned short* __restrict__ Q, const unsigned short* __restrict__ K,\n"
     "                          const unsigned short* __restrict__ V, unsigned short* __restrict__ O,\n"
-    "                          int Sq, int Sk, int H, int Hkv, float sl2, int causal) {\n"
+    "                          int Sq, int Sk, int H, int Hkv, float sl2, int causal, int win) {\n"
     "    constexpr int BM = 64, BN = 64, KP = D + 8, VP = BN + 8, KS = D / 16, NB = BN / 8, ND = D / 8;\n"
     "    __shared__ __align__(16) unsigned short Ks[BN * KP];\n"
     "    __shared__ __align__(16) unsigned short Vt[D * VP];\n"
@@ -226,7 +228,8 @@ static const char* attn_kernel_source_() {
     "        int last = min(m0 + BM, Sq) - 1;\n"
     "        kend = max(0, min(Sk, last + off + 1));\n"
     "    }\n"
-    "    for (int n0 = 0; n0 < kend; n0 += BN) {\n"
+    "    const int kbeg = win > 0 ? max(0, m0 + off - win + 1) : 0;\n"
+    "    for (int n0 = kbeg; n0 < kend; n0 += BN) {\n"
     "        __syncthreads();\n"
     "        // K tile: 16-byte vectors; V tile transposed into Vt[d][key]\n"
     "        for (int i = tid; i < BN * (D / 8); i += 128) {\n"
@@ -260,7 +263,7 @@ static const char* attn_kernel_source_() {
     "            for (int e = 0; e < 4; ++e) {\n"
     "                int j = n0 + nb * 8 + c * 2 + (e & 1);\n"
     "                int qi = e < 2 ? r0 : r1;\n"
-    "                bool ok = j < Sk && (!causal || j <= qi + off);\n"
+    "                bool ok = j < Sk && (!causal || j <= qi + off) && (win <= 0 || j > qi + off - win);\n"
     "                s[nb][e] = ok ? s[nb][e] * sl2 : NEG_INF;\n"
     "            }\n"
     "            mx0 = fmaxf(mx0, fmaxf(s[nb][0], s[nb][1]));\n"
@@ -492,15 +495,15 @@ static const char* attn_kernel_source_() {
     "// ── Entry point for the variant this source was compiled as ─────────────────\n"
     "#if VK == 1\n"
     "extern \"C\" __global__ __launch_bounds__(128) void attn_entry(const void* q, const void* k, const void* v, void* o,\n"
-    "                                                            int Sq, int Sk, int H, int Hkv, float sl2, int causal) {\n"
-    "    flash_simt<VT, VD>(q, k, v, o, Sq, Sk, H, Hkv, sl2, causal);\n"
+    "                                                            int Sq, int Sk, int H, int Hkv, float sl2, int causal, int win) {\n"
+    "    flash_simt<VT, VD>(q, k, v, o, Sq, Sk, H, Hkv, sl2, causal, win);\n"
     "}\n"
     "#elif VK == 2\n"
     "extern \"C\" __global__ __launch_bounds__(128) void attn_entry(const void* q, const void* k, const void* v, void* o,\n"
-    "                                                            int Sq, int Sk, int H, int Hkv, float sl2, int causal) {\n"
+    "                                                            int Sq, int Sk, int H, int Hkv, float sl2, int causal, int win) {\n"
     "#if __CUDA_ARCH__ >= 800\n"
     "    flash_mma<VT == 2, VD>((const unsigned short*)q, (const unsigned short*)k, (const unsigned short*)v,\n"
-    "                           (unsigned short*)o, Sq, Sk, H, Hkv, sl2, causal);\n"
+    "                           (unsigned short*)o, Sq, Sk, H, Hkv, sl2, causal, win);\n"
     "#endif\n"
     "}\n"
     "#elif VK == 3\n"
@@ -640,6 +643,7 @@ static int attn_bufs_ok_(unsigned long q, unsigned long k, unsigned long v, unsi
 
 static int attn_flash_(unsigned long q, unsigned long k, unsigned long v, unsigned long o, int dtype,
                        struct CudaAttnShape s, float scale, int causal) {
+    if (s.window > 2147483647UL) return 0;
     if (!cuda_available()) return 0;
     float sc = scale;
     if (!(sc > 0.0f)) {
@@ -666,19 +670,35 @@ static int attn_flash_(unsigned long q, unsigned long k, unsigned long v, unsign
         int h = (int)s.heads;
         int hkv = (int)s.kvHeads;
         int c = causal ? 1 : 0;
-        void* params[10];
+        int win = (int)s.window;
+        void* params[11];
         params[0] = (void*)&pq; params[1] = (void*)&pk; params[2] = (void*)&pv; params[3] = (void*)&po;
         params[4] = (void*)&sq; params[5] = (void*)&sk; params[6] = (void*)&h; params[7] = (void*)&hkv;
-        params[8] = (void*)&sl2; params[9] = (void*)&c;
+        params[8] = (void*)&sl2; params[9] = (void*)&c; params[10] = (void*)&win;
         return attn_launch_(func, (unsigned int)((s.seqLen + rows - 1UL) / rows), (unsigned int)(s.batch * s.heads), 1U,
                             128U, attn_smem_(kind, s.headDim), (&void)&params[0]);
     }
 }
 
-int cuda_flash_attention(struct CudaBuf q, struct CudaBuf k, struct CudaBuf v, struct CudaBuf out,
-                         struct CudaAttnShape s, float scale, int causal) {
+// The rocm_flash_attention / rocm_linear_attention form: one batch, kvHeads == heads.
+static struct CudaAttnShape attn_heads_shape_(unsigned long heads, unsigned long seqLen, unsigned long kvLen,
+                                              unsigned long headDim) {
+    struct CudaAttnShape s;
+    s.batch = 1UL; s.heads = heads; s.kvHeads = heads; s.seqLen = seqLen; s.kvLen = kvLen;
+    s.headDim = headDim; s.window = 0UL;
+    return s;
+}
+
+int cuda_flash_attention_ex(struct CudaBuf q, struct CudaBuf k, struct CudaBuf v, struct CudaBuf out,
+                            struct CudaAttnShape s, float scale, int causal) {
     if (!attn_shape_ok_(s) || !attn_bufs_ok_(q.dev, k.dev, v.dev, out.dev, q.len, k.len, v.len, out.len, s)) return 0;
     return attn_flash_(q.dev, k.dev, v.dev, out.dev, 0, s, scale, causal);
+}
+
+int cuda_flash_attention(struct CudaBuf q, struct CudaBuf k, struct CudaBuf v, struct CudaBuf out,
+                         unsigned long heads, unsigned long seqLen, unsigned long kvLen, unsigned long headDim,
+                         float scale, int causal) {
+    return cuda_flash_attention_ex(q, k, v, out, attn_heads_shape_(heads, seqLen, kvLen, headDim), scale, causal);
 }
 
 int cuda_half_flash_attention(struct CudaHalfBuf q, struct CudaHalfBuf k, struct CudaHalfBuf v,
@@ -755,18 +775,60 @@ static int attn_linear_(unsigned long q, unsigned long k, unsigned long v, unsig
     }
 }
 
-int cuda_linear_attention(struct CudaBuf q, struct CudaBuf k, struct CudaBuf v, struct CudaBuf out,
-                          struct CudaAttnShape s, int causal) {
-    if (!attn_shape_ok_(s) || !attn_bufs_ok_(q.dev, k.dev, v.dev, out.dev, q.len, k.len, v.len, out.len, s)) return 0;
+int cuda_linear_attention_ex(struct CudaBuf q, struct CudaBuf k, struct CudaBuf v, struct CudaBuf out,
+                             struct CudaAttnShape s, int causal) {
+    if (s.window != 0UL || !attn_shape_ok_(s) ||
+        !attn_bufs_ok_(q.dev, k.dev, v.dev, out.dev, q.len, k.len, v.len, out.len, s)) return 0;
     return attn_linear_(q.dev, k.dev, v.dev, out.dev, 0, s, causal);
+}
+
+int cuda_linear_attention(struct CudaBuf q, struct CudaBuf k, struct CudaBuf v, struct CudaBuf out,
+                          unsigned long heads, unsigned long seqLen, unsigned long kvLen, unsigned long headDim,
+                          int causal) {
+    return cuda_linear_attention_ex(q, k, v, out, attn_heads_shape_(heads, seqLen, kvLen, headDim), causal);
 }
 
 int cuda_half_linear_attention(struct CudaHalfBuf q, struct CudaHalfBuf k, struct CudaHalfBuf v,
                                struct CudaHalfBuf out, struct CudaAttnShape s, int causal) {
-    if (!attn_shape_ok_(s) || !attn_bufs_ok_(q.dev, k.dev, v.dev, out.dev, q.len, k.len, v.len, out.len, s)) return 0;
+    if (s.window != 0UL || !attn_shape_ok_(s) || !attn_bufs_ok_(q.dev, k.dev, v.dev, out.dev, q.len, k.len, v.len, out.len, s)) return 0;
     if (q.dtype != k.dtype || q.dtype != v.dtype || q.dtype != out.dtype) return 0;
     if (q.dtype != CUDA_FP16 && q.dtype != CUDA_BF16) return 0;
     return attn_linear_(q.dev, k.dev, v.dev, out.dev, q.dtype, s, causal);
+}
+
+// ── Host-array fp32 versions (upload → compute → read back) ──────────────────
+
+static int attn_host_(const &float q, const &float k, const &float v, &float out,
+                      unsigned long heads, unsigned long seqLen, unsigned long kvLen, unsigned long headDim,
+                      float scale, int causal, int linear) {
+    struct CudaAttnShape s = attn_heads_shape_(heads, seqLen, kvLen, headDim);
+    if (!attn_shape_ok_(s)) return 0;
+    unsigned long qn = attn_q_elems_(s);
+    unsigned long kn = attn_kv_elems_(s);
+    struct CudaBuf dq = cuda_upload(q, qn);
+    struct CudaBuf dk = cuda_upload(k, kn);
+    struct CudaBuf dv = cuda_upload(v, kn);
+    struct CudaBuf dout = cuda_alloc(qn);
+    int ok = dq.dev != 0UL && dk.dev != 0UL && dv.dev != 0UL && dout.dev != 0UL;
+    if (ok) {
+        if (linear) ok = cuda_linear_attention_ex(dq, dk, dv, dout, s, causal);
+        else ok = cuda_flash_attention_ex(dq, dk, dv, dout, s, scale, causal);
+    }
+    ok = ok && cuda_read(dout, out, qn);
+    cuda_free(&dq); cuda_free(&dk); cuda_free(&dv); cuda_free(&dout);
+    return ok;
+}
+
+int cuda_flash_attention_f32(const &float q, const &float k, const &float v, &float out,
+                             unsigned long heads, unsigned long seqLen, unsigned long kvLen,
+                             unsigned long headDim, float scale, int causal) {
+    return attn_host_(q, k, v, out, heads, seqLen, kvLen, headDim, scale, causal, 0);
+}
+
+int cuda_linear_attention_f32(const &float q, const &float k, const &float v, &float out,
+                              unsigned long heads, unsigned long seqLen, unsigned long kvLen,
+                              unsigned long headDim, int causal) {
+    return attn_host_(q, k, v, out, heads, seqLen, kvLen, headDim, 0.0f, causal, 1);
 }
 
 } // namespace std
