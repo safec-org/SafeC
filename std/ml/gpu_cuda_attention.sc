@@ -2154,10 +2154,10 @@ static int attn_host_(const &float q, const &float k, const &float v, &float out
     if (!attn_shape_ok_(s)) return 0;
     unsigned long qn = attn_q_elems_(s);
     unsigned long kn = attn_kv_elems_(s);
-    struct CudaBuf dq = cuda_upload(q, qn);
-    struct CudaBuf dk = cuda_upload(k, kn);
-    struct CudaBuf dv = cuda_upload(v, kn);
-    struct CudaBuf dout = cuda_alloc(qn);
+    struct CudaBuf dq = CudaBuf::upload(q, qn);
+    struct CudaBuf dk = CudaBuf::upload(k, kn);
+    struct CudaBuf dv = CudaBuf::upload(v, kn);
+    struct CudaBuf dout = CudaBuf::alloc(qn);
     int ok = dq.dev != 0UL && dk.dev != 0UL && dv.dev != 0UL && dout.dev != 0UL;
     if (ok) {
         if (linear) ok = cuda_linear_attention_ex(dq, dk, dv, dout, s, causal);

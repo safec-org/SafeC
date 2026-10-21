@@ -37,10 +37,9 @@ struct LlmClient {
     // returns 'choices[0].message.content' from the JSON response.
     // *ok is set to 0 on any transport, HTTP-status, or JSON-shape failure.
     struct String chat(&Vec<struct LlmMessage> messages, ?&int ok);
-};
 
-struct LlmClient llm_client_new(const &char host, unsigned short port,
-                                 const &char model, const &char apiKey);
+    static struct LlmClient new(const &char host, unsigned short port, const &char model, const &char apiKey);
+};
 
 // ── PromptTemplate ───────────────────────────────────────────────────────────
 // Replaces every '{name}' occurrence in 'tmpl' with 'vars' object field
@@ -60,9 +59,9 @@ struct Chain {
     void add_step(ChainStepFn step);
     struct Value run(const &Value input);
     void free();
-};
 
-struct Chain chain_new();
+    static struct Chain new();
+};
 
 // ── Graph executor ───────────────────────────────────────────────────────────
 // Named nodes transform a shared Value state; each node either always
@@ -90,9 +89,9 @@ struct Graph {
     void add_conditional_node(const &char name, GraphNodeFn nodeFn, GraphRouterFn router);
     struct Value run(struct Value initialState, int maxSteps);
     void free();
-};
 
-struct Graph graph_new(const &char entryNode);
+    static struct Graph new(const &char entryNode);
+};
 
 // ── Tracer ───────────────────────────────────────────────────────────────────
 struct TraceEvent {
@@ -110,8 +109,8 @@ struct Tracer {
     // "output":...,"durationMs":...}, ...]'.
     struct String to_json() const;
     void free();
-};
 
-struct Tracer tracer_new();
+    static struct Tracer new();
+};
 
 } // namespace std

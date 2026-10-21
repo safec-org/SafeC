@@ -43,10 +43,11 @@ struct RocmBuf {
     unsigned long len;
 
     void free();   // dev := 0
+
+    static struct RocmBuf alloc(unsigned long n);   // uninitialized; dev == 0 on failure
+    static struct RocmBuf upload(const &float host, unsigned long n);   // dev == 0 on failure
 };
 
-struct RocmBuf rocm_alloc(unsigned long n);                       // uninitialized; dev == 0 on failure
-struct RocmBuf rocm_upload(const &float host, unsigned long n);  // dev == 0 on failure
 int  rocm_write(struct RocmBuf dst, const &float host, unsigned long n);  // 1 on success
 int  rocm_read(struct RocmBuf src, &float host, unsigned long n);         // waits for queued work
 int  rocm_sync();                                                 // wait for all queued work
@@ -86,10 +87,10 @@ int rocm_copy(struct RocmBuf src, unsigned long srcOff, struct RocmBuf dst, unsi
 int rocm_concat(struct RocmBuf a, unsigned long na, struct RocmBuf c, unsigned long nc,
                 struct RocmBuf out, unsigned long batch);
 // Nearest-neighbour 2x upsample of 'planes' row-major h x w planes into
-// planes x 2h x 2w: out[p][y][x] = in[p][y/2][x/2] (cnn.h's upsample2x_nearest).
+// planes x 2h x 2w: out[p][y][x] = in[p][y/2][x/2] (cnn.h's FeatureMap::upsample2x_nearest).
 int rocm_upsample2x_nearest(struct RocmBuf in, struct RocmBuf out,
                             unsigned long planes, unsigned long h, unsigned long w);
-// out[b] = (upsample2x_nearest(x[b]), skip[b]) along channels, in one pass:
+// out[b] = (x[b].upsample2x_nearest(), skip[b]) along channels, in one pass:
 // x is [batch, xChannels, h, w], skip [batch, skipChannels, 2h, 2w], out
 // [batch, xChannels + skipChannels, 2h, 2w] (a U-Net decoder step).
 int rocm_upsample2x_concat(struct RocmBuf x, unsigned long xChannels, struct RocmBuf skip,
@@ -118,10 +119,11 @@ struct RocmHalfBuf {
     int           dtype;
 
     void free();
+
+    static struct RocmHalfBuf alloc(unsigned long n, int dtype);   // uninitialized
+    static struct RocmHalfBuf upload(const &float host, unsigned long n, int dtype);   // rounded on the GPU
 };
 
-struct RocmHalfBuf rocm_half_alloc(unsigned long n, int dtype);                   // uninitialized
-struct RocmHalfBuf rocm_half_upload(const &float host, unsigned long n, int dtype); // rounded on the GPU
 int  rocm_half_write(struct RocmHalfBuf dst, const &unsigned short bits, unsigned long n);  // raw bits
 int  rocm_half_read(struct RocmHalfBuf src, &unsigned short bits, unsigned long n);         // waits
 

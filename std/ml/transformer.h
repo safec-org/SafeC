@@ -44,10 +44,10 @@ struct DiTBlock {
     void collect_params(&Vec<&Tensor> out) const;
     void collect_state(&Vec<&Tensor> out) const;
     void free();
-};
 
-struct DiTBlock dit_block_new(unsigned long dModel, unsigned long dHidden,
-                               unsigned long dModelCond, unsigned long numHeads);
+    static struct DiTBlock new(unsigned long dModel, unsigned long dHidden, unsigned long dModelCond,
+                               unsigned long numHeads);
+};
 
 // ── JiT (plain pre-LN transformer, additive conditioning) ───────────────────
 // Conditioning is added directly to the token embeddings once, up front
@@ -68,9 +68,9 @@ struct JiTBlock {
     void collect_params(&Vec<&Tensor> out) const;
     void collect_state(&Vec<&Tensor> out) const;
     void free();
-};
 
-struct JiTBlock jit_block_new(unsigned long dModel, unsigned long dHidden, unsigned long numHeads);
+    static struct JiTBlock new(unsigned long dModel, unsigned long dHidden, unsigned long numHeads);
+};
 
 // A JiT model: the patch embedding and a stack of JiTBlocks.
 // patches: [seqLen, patchDim]; cond: [1, dModel], broadcast-added to every
@@ -84,8 +84,9 @@ struct JiT {
     void collect_params(&Vec<&Tensor> out) const;
     void collect_state(&Vec<&Tensor> out) const;
     void free();
+
+    static struct JiT new(unsigned long patchDim, unsigned long dModel, unsigned long dHidden, unsigned long numHeads,
+                          unsigned long depth);
 };
-struct JiT jit_new(unsigned long patchDim, unsigned long dModel, unsigned long dHidden, unsigned long numHeads,
-                   unsigned long depth);
 
 } // namespace std

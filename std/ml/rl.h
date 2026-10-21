@@ -3,7 +3,7 @@
 //
 // Environments:
 //   Bandit      k-armed Gaussian bandit.
-//   GridWorld   tabular grid with walls, pits and goals; gridworld_cliff()
+//   GridWorld   tabular grid with walls, pits and goals; GridWorld::cliff()
 //               is Sutton & Barto's cliff walk (Example 6.6).
 //   CartPole    the classic pole-balancing control task (Barto et al.
 //               1983, Gym's CartPole-v1 dynamics and limits).
@@ -19,8 +19,8 @@
 //
 // Observations are tensors (an agent reads obs->data[0 .. obsDim)), and
 // states and actions of discrete problems are indices. A typical loop:
-//   struct CartPole env = cartpole_new(1UL);
-//   &Tensor obs = tensor_new_1d(4UL, 0);  &Tensor next = tensor_new_1d(4UL, 0);
+//   struct CartPole env = CartPole::new(1UL);
+//   &Tensor obs = Tensor::new_1d(4UL, 0);  &Tensor next = Tensor::new_1d(4UL, 0);
 //   env.reset(obs);
 //   unsigned long a = agent.act(obs, 1);
 //   struct EnvStep s = env.step(a, next);
@@ -49,8 +49,9 @@ struct Bandit {
     float pull(unsigned long arm);    // N(means[arm], 1)
     unsigned long best_arm() const;
     void free();
+
+    static struct Bandit new(unsigned long k, unsigned long seed);
 };
-struct Bandit  bandit_new(unsigned long k, unsigned long seed);
 
 // ── GridWorld ────────────────────────────────────────────────────────────────
 #define GRID_EMPTY 0
@@ -86,12 +87,13 @@ struct GridWorld {
     // One-hot observation of a state (for neural agents), obs has states() values.
     void one_hot(unsigned long state, &Tensor obs) const;
     void free();
+
+    // An empty w x h grid, start top-left, goal bottom-right.
+    static struct GridWorld new(unsigned long width, unsigned long height, unsigned long seed);
+    // The 12 x 4 cliff walk: start bottom-left, goal bottom-right, the bottom
+    // row between them a cliff (-100, back to start).
+    static struct GridWorld cliff(unsigned long seed);
 };
-// An empty w x h grid, start top-left, goal bottom-right.
-struct GridWorld gridworld_new(unsigned long width, unsigned long height, unsigned long seed);
-// The 12 x 4 cliff walk: start bottom-left, goal bottom-right, the bottom
-// row between them a cliff (-100, back to start).
-struct GridWorld gridworld_cliff(unsigned long seed);
 
 // ── CartPole ─────────────────────────────────────────────────────────────────
 #define CARTPOLE_OBS     4UL   // cart position, cart velocity, pole angle, pole angular velocity
@@ -109,8 +111,9 @@ struct CartPole {
     // Reward 1 per step; terminated when |x| > 2.4 or |theta| > 12 degrees,
     // truncated at maxSteps.
     struct EnvStep step(unsigned long action, &Tensor obs);
+
+    static struct CartPole new(unsigned long seed);
 };
-struct CartPole cartpole_new(unsigned long seed);
 
 // ══ Bandit agents ════════════════════════════════════════════════════════════
 #define BANDIT_EPS_GREEDY 0   // param: epsilon
@@ -131,8 +134,9 @@ struct BanditAgent {
     unsigned long select();
     void update(unsigned long arm, float reward);
     void free();
+
+    static struct BanditAgent new(int kind, unsigned long k, float param, unsigned long seed);
 };
-struct BanditAgent bandit_agent_new(int kind, unsigned long k, float param, unsigned long seed);
 
 // ══ Tabular TD control ═══════════════════════════════════════════════════════
 struct TabularAgent {
@@ -154,9 +158,10 @@ struct TabularAgent {
     // Expected SARSA: target r + gamma E_pi[Q(s', .)] under the epsilon-greedy policy.
     float expected_sarsa_update(unsigned long s, unsigned long act, float r, unsigned long s2, int terminal);
     void free();
+
+    static struct TabularAgent new(unsigned long states, unsigned long actions, float alpha, float gamma,
+                                   float epsilon, unsigned long seed);
 };
-struct TabularAgent tabular_agent_new(unsigned long states, unsigned long actions,
-                                      float alpha, float gamma, float epsilon, unsigned long seed);
 
 // ══ DQN ══════════════════════════════════════════════════════════════════════
 struct ReplayBuffer {
@@ -172,8 +177,9 @@ struct ReplayBuffer {
 
     void push(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminal);
     void free();
+
+    static struct ReplayBuffer new(unsigned long slots, unsigned long obsDim);
 };
-struct ReplayBuffer replay_new(unsigned long slots, unsigned long obsDim);
 
 struct DqnConfig {
     unsigned long hidden;
@@ -193,12 +199,13 @@ struct DqnConfig {
     float huberDelta;
     float clipNorm;                 // gradient norm clip, 0 = off
     unsigned long seed;
+
+    // 2 hidden layers of 64 (ReLU), gamma 0.99, Adam lr 5e-4, batch 64, buffer
+    // 50000, learning after 1000 steps, train every step, soft target updates
+    // (tau 0.005), epsilon 1 -> 0.05 over 10000 steps, Double DQN, Huber 1,
+    // clip 10.
+    static struct DqnConfig default();
 };
-// 2 hidden layers of 64 (ReLU), gamma 0.99, Adam lr 5e-4, batch 64, buffer
-// 50000, learning after 1000 steps, train every step, soft target updates
-// (tau 0.005), epsilon 1 -> 0.05 over 10000 steps, Double DQN, Huber 1,
-// clip 10.
-struct DqnConfig dqn_config_default();
 
 struct Dqn {
     struct Mlp q;
@@ -225,8 +232,9 @@ struct Dqn {
     void collect_params(&Vec<&Tensor> out) const;
     void collect_state(&Vec<&Tensor> out) const;
     void free();
+
+    static struct Dqn new(unsigned long obsDim, unsigned long actions, const &DqnConfig cfg);
 };
-struct Dqn    dqn_new(unsigned long obsDim, unsigned long actions, const &DqnConfig cfg);
 
 // ══ Policy gradient: REINFORCE, A2C, PPO ═════════════════════════════════════
 #define PG_REINFORCE 0
@@ -249,11 +257,12 @@ struct PgConfig {
     float clipNorm;                 // 0 = off
     int   normalizeAdv;
     unsigned long seed;
+
+    // 2 hidden layers of 64 (tanh), gamma 0.99, lambda 0.95, Adam lr 1e-3
+    // (3e-3 for REINFORCE), entropy 0.01, value 0.5, clip 0.2, 4 epochs of 64,
+    // grad clip 0.5, normalized advantages.
+    static struct PgConfig default(int algo);
 };
-// 2 hidden layers of 64 (tanh), gamma 0.99, lambda 0.95, Adam lr 1e-3
-// (3e-3 for REINFORCE), entropy 0.01, value 0.5, clip 0.2, 4 epochs of 64,
-// grad clip 0.5, normalized advantages.
-struct PgConfig pg_config_default(int algo);
 
 // Separate policy (logits) and value networks, one Adam optimizer. The
 // rollout collects transitions until PolicyAgent::update consumes them: call it at
@@ -287,7 +296,8 @@ struct PolicyAgent {
     void collect_params(&Vec<&Tensor> out) const;
     void collect_state(&Vec<&Tensor> out) const;
     void free();
+
+    static struct PolicyAgent new(unsigned long obsDim, unsigned long actions, const &PgConfig cfg);
 };
-struct PolicyAgent pg_new(unsigned long obsDim, unsigned long actions, const &PgConfig cfg);
 
 } // namespace std

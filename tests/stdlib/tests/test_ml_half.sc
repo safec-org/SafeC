@@ -170,8 +170,8 @@ static void tensor_drop_(&Tensor t) {
 // scale divided out, and overflow detection.
 void t_mixed_precision_batch() {
     struct Vec<&Tensor> ps = vec_new();
-    ps.push(tensor_new_2d(3UL, 5UL, 1));
-    ps.push(tensor_new_1d(7UL, 1));
+    ps.push(Tensor::new_2d(3UL, 5UL, 1));
+    ps.push(Tensor::new_1d(7UL, 1));
     unsafe {
         unsigned long t = 0UL;
         while (t < 2UL) {
@@ -196,22 +196,22 @@ void t_mixed_precision_batch() {
 
     // back into fresh tensors
     struct Vec<&Tensor> copies = vec_new();
-    copies.push(tensor_new_2d(3UL, 5UL, 0));
-    copies.push(tensor_new_1d(7UL, 0));
+    copies.push(Tensor::new_2d(3UL, 5UL, 0));
+    copies.push(Tensor::new_1d(7UL, 0));
     ASSERT_TRUE(halves_to_tensors(&w16, &copies));
     unsafe { ASSERT_TRUE((*copies.at(1UL))->data[3] == (float)42.0); }
 
     // bf16 -> fp16
-    struct HalfTensor f16 = half_tensor_new_1d(7UL, TENSOR_FP16);
+    struct HalfTensor f16 = HalfTensor::new_1d(7UL, TENSOR_FP16);
     ASSERT_TRUE(half_convert(h1, &f16));
     ASSERT_TRUE(f16.at1(3UL) == (float)42.0);
-    struct HalfTensor small = half_tensor_new_1d(3UL, TENSOR_FP16);
+    struct HalfTensor small = HalfTensor::new_1d(3UL, TENSOR_FP16);
     ASSERT_TRUE(!half_convert(h1, &small));
 
     // gradients: fp16 values scaled by 1024, divided back out
     struct Vec<struct HalfTensor> g16 = vec_new();
-    struct HalfTensor ga = half_tensor_new_2d(3UL, 5UL, TENSOR_FP16);
-    struct HalfTensor gb = half_tensor_new_1d(7UL, TENSOR_FP16);
+    struct HalfTensor ga = HalfTensor::new_2d(3UL, 5UL, TENSOR_FP16);
+    struct HalfTensor gb = HalfTensor::new_1d(7UL, TENSOR_FP16);
     unsigned long i = 0UL;
     while (i < 15UL) { ga.set1(i, (float)1024.0 * (float)0.25); i = i + 1UL; }
     i = 0UL;
@@ -229,7 +229,7 @@ void t_mixed_precision_batch() {
     ASSERT_TRUE(!half_grads_accumulate(&g16, &ps, (float)1.0));
 
     // LossScaler::unscale_all over the list
-    struct LossScaler sc = loss_scaler_new();
+    struct LossScaler sc = LossScaler::new();
     sc.scale = (float)4.0;
     (*ps.at(0UL)).zero_grad();
     (*ps.at(1UL)).zero_grad();

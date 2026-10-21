@@ -34,7 +34,7 @@ static unsigned long lora_cols_(const &Tensor t) {
     unsafe { return t->shape[t->ndim - 1UL]; }
 }
 
-struct LoraConfig lora_config_default(unsigned long rank) {
+struct LoraConfig LoraConfig::default(unsigned long rank) {
     struct LoraConfig c;
     c.rank = rank;
     c.alpha = (float)rank;
@@ -47,8 +47,8 @@ struct LoraConfig lora_config_default(unsigned long rank) {
 static void lora_make_pair_(unsigned long in, unsigned long out, unsigned long r, &Rng rng,
                             &Vec<&Tensor> As, &Vec<&Tensor> Bs) {
     ?&TensorArena cur = lora_heap_begin_();
-    &Tensor A = tensor_new_2d(in, r, 1);
-    &Tensor B = tensor_new_2d(r, out, 1);
+    &Tensor A = Tensor::new_2d(in, r, 1);
+    &Tensor B = Tensor::new_2d(r, out, 1);
     lora_heap_end_(cur);
     float bound = (float)1.0 / sqrt_f((float)in);
     rng.fill_uniform(A, -bound, bound);
@@ -60,9 +60,9 @@ static void lora_make_pair_(unsigned long in, unsigned long out, unsigned long r
 static &Tensor lora_layer_(const &Tensor x, const &Tensor W, const &Tensor b, const &Tensor A,
                            const &Tensor B, float scale, float dropout, &Rng rng, int act) {
     &Tensor base = tensor_add_bias(tensor_matmul(x, W), b);
-    &Tensor xin = tensor_add_scalar(x, (float)0.0);
-    if (dropout > (float)0.0 && autograd().enabled()) {
-        &Tensor mask = tensor_new_2d(lora_rows_(x), lora_cols_(x), 0);
+    &Tensor xin = x.add_scalar((float)0.0);
+    if (dropout > (float)0.0 && Autograd::get().enabled()) {
+        &Tensor mask = Tensor::new_2d(lora_rows_(x), lora_cols_(x), 0);
         float keep = (float)1.0 / ((float)1.0 - dropout);
         unsafe {
             unsigned long i = 0UL;
@@ -70,20 +70,20 @@ static &Tensor lora_layer_(const &Tensor x, const &Tensor W, const &Tensor b, co
         }
         xin = tensor_mul(x, mask);
     }
-    &Tensor upd = tensor_scale(tensor_matmul(tensor_matmul(xin, A), B), scale);
-    return tensor_activate(tensor_add(base, upd), act);
+    &Tensor upd = tensor_matmul(tensor_matmul(xin, A), B).scale(scale);
+    return tensor_add(base, upd).activate(act);
 }
 
 // ══ LoRA ═════════════════════════════════════════════════════════════════════
 
-struct LoraMlp lora_attach(&Mlp base, const &LoraConfig cfg) {
+struct LoraMlp LoraMlp::attach(&Mlp base, const &LoraConfig cfg) {
     struct LoraMlp l;
     l.base = base;
     l.A = vec_new();
     l.B = vec_new();
     l.cfg = *cfg;
     l.scale = cfg.alpha / (float)cfg.rank;
-    l.rng = rng_new(cfg.seed);
+    l.rng = Rng::new(cfg.seed);
     unsigned long i = 0UL;
     while (i < base.params.length()) {
         &Tensor p = *base.params.at(i);
@@ -143,7 +143,7 @@ void LoraMlp::merge() {
                 i = i + 1UL;
             }
         }
-        tensor_fill(B, (float)0.0);
+        B.fill((float)0.0);
         k = k + 1UL;
     }
 }
@@ -196,7 +196,7 @@ static unsigned long nf4_nearest_(float v) {
     return best;
 }
 
-struct Nf4Tensor nf4_quantize(const &Tensor w, unsigned long blockSize, int doubleQuant) {
+struct Nf4Tensor Nf4Tensor::quantize(const &Tensor w, unsigned long blockSize, int doubleQuant) {
     struct Nf4Tensor q;
     unsigned long n;
     unsafe { n = w->size; }
@@ -281,18 +281,18 @@ static float nf4_block_scale_(const &Nf4Tensor q, unsigned long bl) {
     }
 }
 
-&Tensor nf4_dequantize(const &Nf4Tensor q) {
-    &Tensor w = tensor_new_2d(q.rows, q.cols, 0);
+&Tensor Nf4Tensor::dequantize() const {
+    &Tensor w = Tensor::new_2d(self.rows, self.cols, 0);
     unsafe {
-        unsigned long n = q.rows * q.cols;
+        unsigned long n = self.rows * self.cols;
         unsigned long bl = 0UL;
-        while (bl < q.blocks) {
-            float m = nf4_block_scale_(q, bl);
-            unsigned long lo = bl * q.blockSize;
-            unsigned long hi = lo + q.blockSize < n ? lo + q.blockSize : n;
+        while (bl < self.blocks) {
+            float m = nf4_block_scale_(self, bl);
+            unsigned long lo = bl * self.blockSize;
+            unsigned long hi = lo + self.blockSize < n ? lo + self.blockSize : n;
             unsigned long i = lo;
             while (i < hi) {
-                unsigned long byte = (unsigned long)q.codes[i / 2UL];
+                unsigned long byte = (unsigned long)self.codes[i / 2UL];
                 unsigned long c = i % 2UL == 0UL ? byte & 15UL : byte >> 4UL;
                 w->data[i] = nf4_level_(c) * m;
                 i = i + 1UL;
@@ -324,7 +324,7 @@ void Nf4Tensor::free() {
 
 // ══ QLoRA ════════════════════════════════════════════════════════════════════
 
-struct QLoraMlp qlora_attach(const &Mlp base, const &LoraConfig cfg, unsigned long blockSize, int doubleQuant) {
+struct QLoraMlp QLoraMlp::attach(const &Mlp base, const &LoraConfig cfg, unsigned long blockSize, int doubleQuant) {
     struct QLoraMlp q;
     q.W = vec_new();
     q.bias = vec_new();
@@ -335,14 +335,14 @@ struct QLoraMlp qlora_attach(const &Mlp base, const &LoraConfig cfg, unsigned lo
     q.outAct = base.outAct;
     q.cfg = *cfg;
     q.scale = cfg.alpha / (float)cfg.rank;
-    q.rng = rng_new(cfg.seed);
+    q.rng = Rng::new(cfg.seed);
     unsigned long k = 0UL;
     while (k < base.nLayers) {
         &Tensor W = *base.params.at(2UL * k);
         &Tensor b = *base.params.at(2UL * k + 1UL);
-        q.W.push(nf4_quantize(W, blockSize, doubleQuant));
+        q.W.push(Nf4Tensor::quantize(W, blockSize, doubleQuant));
         ?&TensorArena cur = lora_heap_begin_();
-        &Tensor bc = tensor_detach(b);
+        &Tensor bc = b.detach();
         lora_heap_end_(cur);
         q.bias.push(bc);
         lora_make_pair_(lora_rows_(W), lora_cols_(W), cfg.rank, &q.rng, &q.A, &q.B);
@@ -353,11 +353,11 @@ struct QLoraMlp qlora_attach(const &Mlp base, const &LoraConfig cfg, unsigned lo
 
 &Tensor QLoraMlp::forward(const &Tensor x) {
     // the dequantized weights are temporaries (in the caller's arena, if any)
-    &Tensor h = lora_layer_(x, nf4_dequantize(self.W.at(0UL)), *self.bias.at(0UL), *self.A.at(0UL), *self.B.at(0UL),
+    &Tensor h = lora_layer_(x, self.W.at(0UL).dequantize(), *self.bias.at(0UL), *self.A.at(0UL), *self.B.at(0UL),
                             self.scale, self.cfg.dropout, &self.rng, self.nLayers == 1UL ? self.outAct : self.act);
     unsigned long k = 1UL;
     while (k < self.nLayers) {
-        h = lora_layer_(h, nf4_dequantize(self.W.at(k)), *self.bias.at(k), *self.A.at(k), *self.B.at(k),
+        h = lora_layer_(h, self.W.at(k).dequantize(), *self.bias.at(k), *self.A.at(k), *self.B.at(k),
                         self.scale, self.cfg.dropout, &self.rng, k + 1UL == self.nLayers ? self.outAct : self.act);
         k = k + 1UL;
     }

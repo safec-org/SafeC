@@ -72,11 +72,12 @@ struct GanConfig {
     unsigned long classes;   // 0: unconditional
     float emaDecay;          // generator weight averaging, 0 = off
     unsigned long seed;
+
+    // latent as given, hidden 128, 2 hidden layers, GAN_STANDARD, ReLU in G,
+    // linear output, lr 2e-4 for both, 1 critic step, clip 0.01, gradient-penalty
+    // weight 10, EMA 0.999.
+    static struct GanConfig default(unsigned long latent);
 };
-// latent as given, hidden 128, 2 hidden layers, GAN_STANDARD, ReLU in G,
-// linear output, lr 2e-4 for both, 1 critic step, clip 0.01, gradient-penalty
-// weight 10, EMA 0.999.
-struct GanConfig gan_config_default(unsigned long latent);
 
 struct Gan {
     struct Mlp gen;
@@ -105,6 +106,8 @@ struct Gan {
     void collect_params(&Vec<&Tensor> out) const;
     void collect_state(&Vec<&Tensor> out) const;
     void free();
+
+    static struct Gan new(unsigned long dataDim, const &GanConfig cfg);
 };
 
 struct GanLosses {
@@ -119,7 +122,6 @@ trait GanModel : Parameterized + Generative {
     struct GanLosses train(const &Dataset data, unsigned long epochs, unsigned long batchSize);
 }
 
-struct Gan gan_new(unsigned long dataDim, const &GanConfig cfg);
 // Internal (exposed for tests): GAN_WGAN_GP's penalty term for g's critic
 // at the interpolates xh. Tensor::backward on the result accumulates the
 // penalty's gradient into D's parameters (after it has already added the
@@ -141,18 +143,18 @@ struct Gan gan_new(unsigned long dataDim, const &GanConfig cfg);
 // run the nets in training mode (batch norm on batch statistics);
 // Dcgan::sample and Dcgan::score in inference mode.
 //
-//   struct ConvNet gen = convnet_new(latent, 1UL, 1UL);
+//   struct ConvNet gen = ConvNet::new(latent, 1UL, 1UL);
 //   gen.deconv(64UL, 4UL, 1UL, 0UL, ACT_NONE, &rng);   // 64 x 4 x 4
 //   gen.batchnorm(ACT_RELU);
 //   gen.deconv(32UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);   // 32 x 8 x 8
 //   gen.batchnorm(ACT_RELU);
 //   gen.deconv(1UL, 4UL, 2UL, 1UL, ACT_TANH, &rng);    // 1 x 16 x 16
-//   struct ConvNet disc = convnet_new(1UL, 16UL, 16UL);
+//   struct ConvNet disc = ConvNet::new(1UL, 16UL, 16UL);
 //   disc.conv(32UL, 4UL, 2UL, 1UL, ACT_LEAKY, &rng);   // 32 x 8 x 8
 //   disc.conv(64UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);    // 64 x 4 x 4
 //   disc.batchnorm(ACT_LEAKY);
 //   disc.conv(1UL, 4UL, 1UL, 0UL, ACT_NONE, &rng);     // 1 x 1 x 1
-//   struct Dcgan g = dcgan_new(gen, disc, &cfg);
+//   struct Dcgan g = Dcgan::new(gen, disc, &cfg);
 struct Dcgan {
     struct ConvNet gen;
     struct ConvNet genEma;
@@ -174,8 +176,9 @@ struct Dcgan {
     void collect_params(&Vec<&Tensor> out) const;
     void collect_state(&Vec<&Tensor> out) const;
     void free();
+
+    static struct Dcgan new(struct ConvNet gen, struct ConvNet disc, const &GanConfig cfg);
 };
-struct Dcgan dcgan_new(struct ConvNet gen, struct ConvNet disc, const &GanConfig cfg);
 // Internal (exposed for tests): gan_gradient_penalty_ for a Dcgan's critic.
 &Tensor dcgan_gradient_penalty_(&Dcgan g, const &Tensor xh, ?&Tensor labels, &float value);
 

@@ -7,7 +7,7 @@
 // std::FeatureMap (see cnn.h): each encoder stage is
 // Conv2D(3x3,pad1) -> ReLU -> MaxPool2D(2x2), the bottleneck is one more
 // Conv2D -> ReLU, and each decoder stage is
-// upsample2x_nearest -> concat_channels(skip) -> Conv2D(3x3,pad1) ->
+// FeatureMap::upsample2x_nearest -> concat_channels(skip) -> Conv2D(3x3,pad1) ->
 // ReLU (the final decoder stage skips the trailing ReLU, since this
 // produces the network's raw output — e.g. a predicted noise map, not a
 // bounded activation). Forward-only, like the rest of std/ml.
@@ -28,9 +28,8 @@ struct UNet {
     // since its Conv2D sub-layers are threaded through by address internally.
     struct FeatureMap forward(const &FeatureMap input);
     void free();
-};
 
-struct UNet unet_new(unsigned long inChannels, unsigned long c1, unsigned long c2,
-                      unsigned long outChannels);
+    static struct UNet new(unsigned long inChannels, unsigned long c1, unsigned long c2, unsigned long outChannels);
+};
 
 } // namespace std

@@ -48,10 +48,11 @@ struct CudaBuf {
     unsigned long len;
 
     void free();   // dev := 0
+
+    static struct CudaBuf alloc(unsigned long n);   // uninitialized; dev == 0 on failure
+    static struct CudaBuf upload(const &float host, unsigned long n);   // dev == 0 on failure
 };
 
-struct CudaBuf cuda_alloc(unsigned long n);                       // uninitialized; dev == 0 on failure
-struct CudaBuf cuda_upload(const &float host, unsigned long n);  // dev == 0 on failure
 int  cuda_write(struct CudaBuf dst, const &float host, unsigned long n);  // 1 on success
 int  cuda_read(struct CudaBuf src, &float host, unsigned long n);         // waits for queued work
 // cuda_write returns once 'host' may be reused. Copies of 1 MiB and up run
@@ -110,7 +111,7 @@ int cuda_copy_rows(struct CudaBuf src, unsigned long srcOff, unsigned long srcSt
                    struct CudaBuf dst, unsigned long dstOff, unsigned long dstStride,
                    unsigned long rowLen, unsigned long rows);
 // Nearest-neighbour 2x upsample of 'planes' row-major h x w planes into
-// planes x 2h x 2w: out[p][y][x] = in[p][y/2][x/2] (cnn.h's upsample2x_nearest).
+// planes x 2h x 2w: out[p][y][x] = in[p][y/2][x/2] (cnn.h's FeatureMap::upsample2x_nearest).
 int cuda_upsample2x_nearest(struct CudaBuf in, struct CudaBuf out,
                             unsigned long planes, unsigned long h, unsigned long w);
 
@@ -123,7 +124,7 @@ struct CudaGraph {
 };
 
 // Ops issued between begin and end are recorded instead of run. Don't call
-// cuda_read/cuda_write/cuda_sync/cuda_alloc while recording.
+// cuda_read/cuda_write/cuda_sync/CudaBuf::alloc while recording.
 int  cuda_capture_begin();
 struct CudaGraph cuda_capture_end();          // exec == 0 on failure
 int  cuda_graph_launch(struct CudaGraph g);   // queued like any other op
@@ -146,10 +147,11 @@ struct CudaHalfBuf {
     int           dtype;
 
     void free();
+
+    static struct CudaHalfBuf alloc(unsigned long n, int dtype);   // uninitialized
+    static struct CudaHalfBuf upload(const &float host, unsigned long n, int dtype);   // rounded on the GPU
 };
 
-struct CudaHalfBuf cuda_half_alloc(unsigned long n, int dtype);                   // uninitialized
-struct CudaHalfBuf cuda_half_upload(const &float host, unsigned long n, int dtype); // rounded on the GPU
 int  cuda_half_write(struct CudaHalfBuf dst, const &unsigned short bits, unsigned long n);  // raw bits
 int  cuda_half_read(struct CudaHalfBuf src, &unsigned short bits, unsigned long n);         // waits
 

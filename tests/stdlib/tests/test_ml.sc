@@ -1,4 +1,4 @@
-// std::ml fp16/bf16: HalfTensor storage + ops, mixed-precision autograd,
+// std::ml fp16/bf16: HalfTensor storage + ops, mixed-precision Autograd::get,
 // dynamic loss scaling. Expected values are exact fp16/bf16 roundings
 // (checked against IEEE binary16 / bfloat16 bit patterns).
 #include <std/test/test.h>
@@ -33,20 +33,20 @@ void t_round() {
 void t_convert() {
     unsafe {
         float v[4] = { (float)1.0, (float)-2.5, (float)0.1, (float)1000.0 };
-        &Tensor t = tensor_from_2d((const float*)v, 2UL, 2UL, 0);
-        struct HalfTensor h = tensor_to_half(t, TENSOR_FP16);
+        &Tensor t = Tensor::from_2d((const float*)v, 2UL, 2UL, 0);
+        struct HalfTensor h = t.to_half(TENSOR_FP16);
         ASSERT_EQ(h.ndim, 2);
         ASSERT_EQ(h.size, 4);
         ASSERT_TRUE(h.at2(0UL, 0UL) == (float)1.0);
         ASSERT_TRUE(h.at2(0UL, 1UL) == (float)-2.5);
         ASSERT_TRUE(h.at2(1UL, 0UL) == (float)0.0999755859375);   // 0.1 in fp16
         ASSERT_TRUE(h.at2(1UL, 1UL) == (float)1000.0);
-        &Tensor back = half_to_tensor(&h, 0);
+        &Tensor back = h.to_tensor(0);
         ASSERT_TRUE(back.at2(1UL, 0UL) == (float)0.0999755859375);
         h.set1(3UL, (float)3.0);
         ASSERT_TRUE(h.at1(3UL) == (float)3.0);
 
-        struct HalfTensor b = tensor_to_half(t, TENSOR_BF16);
+        struct HalfTensor b = t.to_half(TENSOR_BF16);
         ASSERT_TRUE(b.at1(2UL) == (float)0.10009765625);            // 0.1 in bf16
         b.free();
         h.free();
@@ -56,8 +56,8 @@ void t_convert() {
 }
 
 void t_half_ops() {
-    struct HalfTensor a = half_tensor_new_2d(2UL, 2UL, TENSOR_FP16);
-    struct HalfTensor b = half_tensor_new_2d(2UL, 2UL, TENSOR_FP16);
+    struct HalfTensor a = HalfTensor::new_2d(2UL, 2UL, TENSOR_FP16);
+    struct HalfTensor b = HalfTensor::new_2d(2UL, 2UL, TENSOR_FP16);
     a.set2(0UL, 0UL, (float)1.0); a.set2(0UL, 1UL, (float)2.0);
     a.set2(1UL, 0UL, (float)3.0); a.set2(1UL, 1UL, (float)-4.0);
     b.set2(0UL, 0UL, (float)0.5); b.set2(0UL, 1UL, (float)1.0);
@@ -69,9 +69,9 @@ void t_half_ops() {
     ASSERT_TRUE(d.at2(0UL, 0UL) == (float)0.5);
     struct HalfTensor m = half_mul(&a, &b);
     ASSERT_TRUE(m.at2(1UL, 0UL) == (float)4.5);
-    struct HalfTensor k = half_scale(&a, (float)0.5);
+    struct HalfTensor k = a.scale((float)0.5);
     ASSERT_TRUE(k.at2(0UL, 1UL) == (float)1.0);
-    struct HalfTensor r = half_relu(&a);
+    struct HalfTensor r = a.relu();
     ASSERT_TRUE(r.at2(1UL, 1UL) == (float)0.0);
     ASSERT_TRUE(r.at2(1UL, 0UL) == (float)3.0);
 
@@ -83,14 +83,14 @@ void t_half_ops() {
     ASSERT_TRUE(p.at2(0UL, 1UL) == (float)5.0);
     ASSERT_TRUE(p.at2(1UL, 0UL) == (float)-4.5);
     ASSERT_TRUE(p.at2(1UL, 1UL) == (float)-5.0);
-    ASSERT_TRUE(half_sum(&a) == (float)2.0);
+    ASSERT_TRUE(a.sum() == (float)2.0);
 
     // Mismatched shape -> empty result.
-    struct HalfTensor v = half_tensor_new_1d(3UL, TENSOR_FP16);
+    struct HalfTensor v = HalfTensor::new_1d(3UL, TENSOR_FP16);
     struct HalfTensor bad = half_add(&a, &v);
     ASSERT_EQ(bad.size, 0);
     // Mismatched dtype -> empty result.
-    struct HalfTensor bf = half_tensor_new_2d(2UL, 2UL, TENSOR_BF16);
+    struct HalfTensor bf = HalfTensor::new_2d(2UL, 2UL, TENSOR_BF16);
     struct HalfTensor bad2 = half_matmul(&a, &bf);
     ASSERT_EQ(bad2.size, 0);
 
@@ -101,8 +101,8 @@ void t_half_ops() {
 void t_matmul_accumulates_f32() {
     // 2048 * (1 * 1): an fp16 running sum would stall at 2048 + 1 == 2048;
     // float32 accumulation gives the exact 4096 (representable in fp16).
-    struct HalfTensor a = half_tensor_new_2d(1UL, 4096UL, TENSOR_FP16);
-    struct HalfTensor b = half_tensor_new_2d(4096UL, 1UL, TENSOR_FP16);
+    struct HalfTensor a = HalfTensor::new_2d(1UL, 4096UL, TENSOR_FP16);
+    struct HalfTensor b = HalfTensor::new_2d(4096UL, 1UL, TENSOR_FP16);
     unsigned long i = 0UL;
     while (i < 4096UL) { a.set1(i, (float)1.0); b.set1(i, (float)1.0); i = i + 1UL; }
     struct HalfTensor p = half_matmul(&a, &b);
@@ -119,7 +119,7 @@ void t_half_gemv() {
     while (di < 2) {
         unsigned long n = 301UL;
         unsigned long k = 1029UL;
-        struct HalfTensor w = half_tensor_new_2d(n, k, dts[di]);
+        struct HalfTensor w = HalfTensor::new_2d(n, k, dts[di]);
         float* x;
         float* y;
         unsafe {
@@ -130,7 +130,7 @@ void t_half_gemv() {
         while (i < n * k) { w.set1(i, (float)((i * 37UL) % 113UL) * (float)0.01 - (float)0.55); i = i + 1UL; }
         unsafe { i = 0UL; while (i < k) { x[i] = (float)((i * 11UL) % 29UL) * (float)0.03 - (float)0.4; i = i + 1UL; } }
         int ok;
-        unsafe { ok = half_gemv(&w, (const &float)x, (&float)y); }
+        unsafe { ok = w.gemv((const &float)x, (&float)y); }
         ASSERT_TRUE(ok);
         float worst = (float)0.0;
         unsigned long r = 0UL;
@@ -145,7 +145,7 @@ void t_half_gemv() {
             r = r + 1UL;
         }
         ASSERT_TRUE(worst < (float)1e-3);
-        // half_gemv_batch: m vectors in one pass equal m half_gemv calls
+        // HalfTensor::gemv_batch: m vectors in one pass equal m HalfTensor::gemv calls
         unsigned long m = 5UL;
         float* xs;
         float* ys;
@@ -153,14 +153,14 @@ void t_half_gemv() {
             xs = (float*)malloc(sizeof(float) * k * m);
             ys = (float*)malloc(sizeof(float) * n * m);
             i = 0UL; while (i < k * m) { xs[i] = (float)((i * 13UL) % 31UL) * (float)0.02 - (float)0.3; i = i + 1UL; }
-            ok = half_gemv_batch(&w, (const &float)xs, m, (&float)ys);
+            ok = w.gemv_batch((const &float)xs, m, (&float)ys);
         }
         ASSERT_TRUE(ok);
         int same = 1;
         unsigned long v = 0UL;
         while (v < m) {
             unsafe {
-                half_gemv(&w, (const &float)&xs[v * k], (&float)y);
+                w.gemv((const &float)&xs[v * k], (&float)y);
                 r = 0UL; while (r < n) { if (y[r] != ys[v * n + r]) same = 0; r = r + 1UL; }
             }
             v = v + 1UL;
@@ -171,7 +171,7 @@ void t_half_gemv() {
         di = di + 1;
     }
     // fp16 widening edge cases: subnormal, negative, +-inf (inf * 1 = inf)
-    struct HalfTensor e = half_tensor_new_2d(4UL, 1UL, TENSOR_FP16);
+    struct HalfTensor e = HalfTensor::new_2d(4UL, 1UL, TENSOR_FP16);
     unsafe {
         e.data[0] = (unsigned short)0x0001;   // smallest subnormal, 2^-24
         e.data[1] = (unsigned short)0xc500;   // -5
@@ -182,25 +182,25 @@ void t_half_gemv() {
     float out[4];
     unsafe {
         one[0] = (float)1.0;
-        ASSERT_TRUE(half_gemv(&e, (const &float)&one[0], (&float)&out[0]));
+        ASSERT_TRUE(e.gemv((const &float)&one[0], (&float)&out[0]));
     }
     ASSERT_TRUE(out[0] == (float)5.960464477539063e-08);
     ASSERT_TRUE(out[1] == (float)-5.0);
     ASSERT_TRUE(out[2] > (float)3.0e38 && out[2] * (float)0.5 == out[2]);
     ASSERT_TRUE(out[3] < (float)-3.0e38 && out[3] * (float)0.5 == out[3]);
     // a 1D tensor is not a matrix
-    struct HalfTensor v = half_tensor_new_1d(4UL, TENSOR_BF16);
-    unsafe { ASSERT_TRUE(!half_gemv(&v, (const &float)&one[0], (&float)&out[0])); }
+    struct HalfTensor v = HalfTensor::new_1d(4UL, TENSOR_BF16);
+    unsafe { ASSERT_TRUE(!v.gemv((const &float)&one[0], (&float)&out[0])); }
     e.free(); v.free();
 }
 
 void t_cast_autograd() {
     unsafe {
         float av[2] = { (float)0.1, (float)0.2 };
-        &Tensor x = tensor_from_1d((const float*)av, 2UL, 1);
-        &Tensor c = tensor_cast(x, TENSOR_FP16);
+        &Tensor x = Tensor::from_1d((const float*)av, 2UL, 1);
+        &Tensor c = x.cast(TENSOR_FP16);
         ASSERT_TRUE(c.at1(0UL) == (float)0.0999755859375);
-        &Tensor y = tensor_sum(tensor_mul(c, c));      // sum(cast(x)^2)
+        &Tensor y = tensor_mul(c, c).sum();      // sum(cast(x)^2)
         y.backward();
         // Straight-through: dy/dx = 2 * cast(x).
         ASSERT_TRUE(near(x.grad[0], (float)2.0 * (float)0.0999755859375, (float)1.0e-6));
@@ -212,13 +212,13 @@ void t_matmul_lowp() {
     unsafe {
         float av[4] = { (float)1.0, (float)2.0, (float)3.0, (float)4.0 };
         float bv[4] = { (float)0.1, (float)0.0, (float)0.0, (float)0.1 };
-        &Tensor a = tensor_from_2d((const float*)av, 2UL, 2UL, 1);
-        &Tensor b = tensor_from_2d((const float*)bv, 2UL, 2UL, 1);
+        &Tensor a = Tensor::from_2d((const float*)av, 2UL, 2UL, 1);
+        &Tensor b = Tensor::from_2d((const float*)bv, 2UL, 2UL, 1);
         &Tensor out = tensor_matmul_lowp(a, b, TENSOR_BF16);
         float b01 = half_round((float)0.1, TENSOR_BF16);          // 0.10009765625
         ASSERT_TRUE(out.at2(0UL, 0UL) == half_round((float)1.0 * b01, TENSOR_BF16));
         ASSERT_TRUE(out.at2(1UL, 1UL) == half_round((float)4.0 * b01, TENSOR_BF16));
-        tensor_sum(out).backward();
+        out.sum().backward();
         // d sum(A B)/dA[i][j] = sum_n B[j][n] (of the rounded B), per row.
         ASSERT_TRUE(near(a.grad[0], b01, (float)1.0e-6));
         ASSERT_TRUE(near(b.grad[0], (float)4.0, (float)1.0e-6));  // A[0][0] + A[1][0]
@@ -227,11 +227,11 @@ void t_matmul_lowp() {
 
 void t_loss_scaler() {
     unsafe {
-        struct LossScaler s = loss_scaler_new();
+        struct LossScaler s = LossScaler::new();
         ASSERT_TRUE(s.scale == (float)65536.0);
         float v[2] = { (float)1.0, (float)2.0 };
-        &Tensor p = tensor_from_1d((const float*)v, 2UL, 1);
-        tensor_sum(tensor_scale(p, s.scale)).backward();    // grads = 65536
+        &Tensor p = Tensor::from_1d((const float*)v, 2UL, 1);
+        p.scale(s.scale).sum().backward();    // grads = 65536
         ASSERT_TRUE(s.unscale(p) == 1);
         ASSERT_TRUE(p.grad[0] == (float)1.0);
         s.update(1);
@@ -258,7 +258,7 @@ void t_loss_scaler() {
 // losses and weights, parameters' gradients survive resets, and the arena
 // stops growing after the first step.
 static float arena_train(int useArena, &Tensor W, const &Tensor X, unsigned long* chunkBytes) {
-    struct TensorArena a = tensor_arena_new(65536UL);
+    struct TensorArena a = TensorArena::new(65536UL);
     float last = (float)0.0;
     int step = 0;
     unsigned long used0 = 0UL;
@@ -266,8 +266,8 @@ static float arena_train(int useArena, &Tensor W, const &Tensor X, unsigned long
         if (useArena) a.begin();
         W.zero_grad();
         &Tensor y = tensor_matmul(X, W);
-        &Tensor r = tensor_relu(y);
-        &Tensor l = tensor_sum(tensor_mul(r, r));
+        &Tensor r = y.relu();
+        &Tensor l = tensor_mul(r, r).sum();
         l.backward();
         unsafe {
             last = l->data[0];
@@ -294,9 +294,9 @@ void t_tensor_arena() {
     while (i < 64) { xs[i] = (float)((i * 37) % 17 - 8) * (float)0.1; i = i + 1; }
     i = 0;
     while (i < 32) { ws[i] = (float)((i * 11) % 7 - 3) * (float)0.05; i = i + 1; }
-    &Tensor X = tensor_from_2d(&xs[0], 8UL, 8UL, 0);
-    &Tensor W1 = tensor_from_2d(&ws[0], 8UL, 4UL, 1);
-    &Tensor W2 = tensor_from_2d(&ws[0], 8UL, 4UL, 1);
+    &Tensor X = Tensor::from_2d(&xs[0], 8UL, 8UL, 0);
+    &Tensor W1 = Tensor::from_2d(&ws[0], 8UL, 4UL, 1);
+    &Tensor W2 = Tensor::from_2d(&ws[0], 8UL, 4UL, 1);
     unsigned long same = 0UL;
     float a = arena_train(0, W1, X, &same);
     float b = arena_train(1, W2, X, &same);
@@ -309,9 +309,9 @@ void t_tensor_arena() {
     unsafe { ASSERT_TRUE(W2->grad != (float*)0 && W2->owner.is_null()); }   // parameters stay on the heap
 
     // a tensor made inside the arena knows its owner, and free() leaves it alone
-    struct TensorArena ar = tensor_arena_new(0UL);
+    struct TensorArena ar = TensorArena::new(0UL);
     ar.begin();
-    &Tensor t = tensor_new_2d(3UL, 5UL, 0);
+    &Tensor t = Tensor::new_2d(3UL, 5UL, 0);
     tensor_arena_end();
     ASSERT_FALSE(t->owner.is_null());
     t.free();
@@ -323,7 +323,7 @@ void t_tensor_arena() {
 // without padding, odd sizes so the last tiles hang over the edge, ReLU,
 // and a 5x5 / stride-2 layer (im2col).
 static double conv_ref_err(&Conv2D layer, unsigned long inC, unsigned long H, unsigned long W, int relu) {
-    struct FeatureMap in = feature_map_new(inC, H, W);
+    struct FeatureMap in = FeatureMap::new(inC, H, W);
     unsigned long n = inC * H * W;
     unsigned long i = 0UL;
     unsafe { while (i < n) { in.data[i] = (float)((double)((i * 7919UL) % 1000UL) / 500.0 - 1.0); i = i + 1UL; } }
@@ -371,25 +371,25 @@ static double conv_ref_err(&Conv2D layer, unsigned long inC, unsigned long H, un
 }
 
 void t_conv2d() {
-    struct Conv2D a = conv2d_new(16UL, 24UL, 3UL, 3UL, 1UL, 1UL);
+    struct Conv2D a = Conv2D::new(16UL, 24UL, 3UL, 3UL, 1UL, 1UL);
     ASSERT_TRUE(conv_ref_err(&a, 16UL, 13UL, 11UL, 0) < 1e-4);
     ASSERT_TRUE(conv_ref_err(&a, 16UL, 13UL, 11UL, 1) < 1e-4);
     ASSERT_TRUE(conv_ref_err(&a, 16UL, 40UL, 37UL, 0) < 1e-4);   // several tile blocks
     a.free();
-    struct Conv2D b = conv2d_new(12UL, 8UL, 3UL, 3UL, 1UL, 0UL);  // no padding
+    struct Conv2D b = Conv2D::new(12UL, 8UL, 3UL, 3UL, 1UL, 0UL);  // no padding
     ASSERT_TRUE(conv_ref_err(&b, 12UL, 15UL, 10UL, 0) < 1e-4);
     b.free();
     // Inside a TensorArena the output (and every intermediate) comes from
     // the arena: same values, FeatureMap::free leaves it to the reset.
-    struct Conv2D d = conv2d_new(8UL, 8UL, 3UL, 3UL, 1UL, 1UL);
-    struct FeatureMap in = feature_map_new(8UL, 20UL, 20UL);
+    struct Conv2D d = Conv2D::new(8UL, 8UL, 3UL, 3UL, 1UL, 1UL);
+    struct FeatureMap in = FeatureMap::new(8UL, 20UL, 20UL);
     unsafe { unsigned long q = 0UL; while (q < 3200UL) { in.data[q] = (float)((double)(q % 17UL) / 8.0 - 1.0); q = q + 1UL; } }
     struct FeatureMap heapOut = d.forward(&in);
     ASSERT_EQ(heapOut.fromArena, 0);
-    struct TensorArena ar = tensor_arena_new(0UL);
+    struct TensorArena ar = TensorArena::new(0UL);
     ar.begin();
     struct FeatureMap arOut = d.relu_forward(&in);
-    struct FeatureMap tmp = feature_map_new(4UL, 4UL, 4UL);
+    struct FeatureMap tmp = FeatureMap::new(4UL, 4UL, 4UL);
     tensor_arena_end();
     ASSERT_EQ(arOut.fromArena, 1);
     ASSERT_EQ(tmp.fromArena, 1);
@@ -415,7 +415,7 @@ void t_conv2d() {
     heapOut.free();
     in.free();
     d.free();
-    struct Conv2D c = conv2d_new(5UL, 7UL, 5UL, 5UL, 2UL, 2UL);   // im2col
+    struct Conv2D c = Conv2D::new(5UL, 7UL, 5UL, 5UL, 2UL, 2UL);   // im2col
     ASSERT_TRUE(conv_ref_err(&c, 5UL, 17UL, 14UL, 0) < 1e-4);
     c.free();
 }
@@ -470,20 +470,20 @@ static void fill_map(&FeatureMap m, unsigned long seed) {
 }
 
 void t_pooling() {
-    struct FeatureMap in = feature_map_new(3UL, 9UL, 7UL);
+    struct FeatureMap in = FeatureMap::new(3UL, 9UL, 7UL);
     fill_map(&in, 0UL);
-    struct FeatureMap mx = maxpool2d_forward_ex(&in, 3UL, 2UL, 1UL);   // ResNet stem pool
+    struct FeatureMap mx = in.maxpool2d_ex(3UL, 2UL, 1UL);   // ResNet stem pool
     ASSERT_EQ(mx.height, 5UL); ASSERT_EQ(mx.width, 4UL);
     ASSERT_TRUE(pool_ref_err(&in, &mx, 3UL, 2UL, 1UL, 1, 0) < 1e-6);
-    struct FeatureMap a1 = avgpool2d_forward_ex(&in, 3UL, 2UL, 1UL, 1);
+    struct FeatureMap a1 = in.avgpool2d_ex(3UL, 2UL, 1UL, 1);
     ASSERT_TRUE(pool_ref_err(&in, &a1, 3UL, 2UL, 1UL, 0, 1) < 1e-6);
-    struct FeatureMap a0 = avgpool2d_forward_ex(&in, 3UL, 2UL, 1UL, 0);
+    struct FeatureMap a0 = in.avgpool2d_ex(3UL, 2UL, 1UL, 0);
     ASSERT_TRUE(pool_ref_err(&in, &a0, 3UL, 2UL, 1UL, 0, 0) < 1e-6);
-    struct FeatureMap np = maxpool2d_forward(&in, 2UL, 2UL);   // unpadded path unchanged
+    struct FeatureMap np = in.maxpool2d(2UL, 2UL);   // unpadded path unchanged
     ASSERT_TRUE(pool_ref_err(&in, &np, 2UL, 2UL, 0UL, 1, 0) < 1e-6);
     // global pooling == a full-plane window
-    struct FeatureMap ga = global_avgpool2d(&in);
-    struct FeatureMap gm = global_maxpool2d(&in);
+    struct FeatureMap ga = in.global_avgpool2d();
+    struct FeatureMap gm = in.global_maxpool2d();
     ASSERT_EQ(ga.height, 1UL); ASSERT_EQ(ga.width, 1UL); ASSERT_EQ(gm.channels, 3UL);
     unsafe {
         unsigned long c = 0UL;
@@ -508,8 +508,8 @@ void t_pooling() {
 // feature_map_add and the ResNet basic block against the composition of
 // its convolutions.
 void t_residual() {
-    struct FeatureMap a = feature_map_new(4UL, 6UL, 5UL);
-    struct FeatureMap b = feature_map_new(4UL, 6UL, 5UL);
+    struct FeatureMap a = FeatureMap::new(4UL, 6UL, 5UL);
+    struct FeatureMap b = FeatureMap::new(4UL, 6UL, 5UL);
     fill_map(&a, 1UL); fill_map(&b, 77UL);
     struct FeatureMap s = feature_map_add(&a, &b, 0);
     struct FeatureMap r = feature_map_add(&a, &b, 1);
@@ -531,7 +531,7 @@ void t_residual() {
     strides[1] = 1UL; outCs[1] = 4UL;
     int k = 0;
     while (k < 2) {
-        struct ResidualBlock blk = residual_block_new(4UL, outCs[k], strides[k]);
+        struct ResidualBlock blk = ResidualBlock::new(4UL, outCs[k], strides[k]);
         ASSERT_EQ(blk.hasProjection, k == 0 ? 1 : 0);
         struct FeatureMap out = blk.forward(&a);
         ASSERT_EQ(out.channels, outCs[k]);
@@ -565,8 +565,8 @@ void t_residual() {
     a.free();
 }
 
-static &Tensor tensor_fill(unsigned long rows, unsigned long cols, unsigned long seed, float scale, float bias) {
-    &Tensor t = tensor_new_2d(rows, cols, 0);
+static &Tensor seeded_tensor_(unsigned long rows, unsigned long cols, unsigned long seed, float scale, float bias) {
+    &Tensor t = Tensor::new_2d(rows, cols, 0);
     unsafe {
         unsigned long i = 0UL;
         while (i < rows * cols) {
@@ -585,12 +585,12 @@ static void tensor_drop(&Tensor t) {
 // The selective scan against a naive double-precision recurrence.
 void t_ssm_scan() {
     unsigned long T = 23UL; unsigned long D = 40UL; unsigned long N = 16UL;
-    &Tensor x = tensor_fill(T, D, 1UL, (float)1.0, (float)0.0);
-    &Tensor dl = tensor_fill(T, D, 2UL, (float)0.04, (float)0.05);   // (0.01, 0.09)
-    &Tensor A = tensor_fill(D, N, 3UL, (float)2.0, (float)-3.0);     // negative
-    &Tensor B = tensor_fill(T, N, 4UL, (float)1.0, (float)0.0);
-    &Tensor C = tensor_fill(T, N, 5UL, (float)1.0, (float)0.0);
-    &Tensor Ds = tensor_fill(1UL, D, 6UL, (float)1.0, (float)0.0);
+    &Tensor x = seeded_tensor_(T, D, 1UL, (float)1.0, (float)0.0);
+    &Tensor dl = seeded_tensor_(T, D, 2UL, (float)0.04, (float)0.05);   // (0.01, 0.09)
+    &Tensor A = seeded_tensor_(D, N, 3UL, (float)2.0, (float)-3.0);     // negative
+    &Tensor B = seeded_tensor_(T, N, 4UL, (float)1.0, (float)0.0);
+    &Tensor C = seeded_tensor_(T, N, 5UL, (float)1.0, (float)0.0);
+    &Tensor Ds = seeded_tensor_(1UL, D, 6UL, (float)1.0, (float)0.0);
     &Tensor y = ssm_selective_scan(x, dl, A, B, C, Ds);
     double worst = 0.0;
     unsafe {
@@ -633,22 +633,22 @@ void t_mamba() {
     while (k < 2) {
         unsigned long dm = dms[k];
         unsigned long T = 19UL;
-        struct Mamba m = mamba_new(dm, 16UL, 4UL, 2UL);
+        struct Mamba m = Mamba::new(dm, 16UL, 4UL, 2UL);
         ASSERT_EQ(m.dInner, 2UL * dm);
         ASSERT_EQ(m.dtRank, (dm + 15UL) / 16UL);
-        &Tensor X = tensor_fill(T, dm, 9UL, (float)1.0, (float)0.0);
+        &Tensor X = seeded_tensor_(T, dm, 9UL, (float)1.0, (float)0.0);
         &Tensor full = m.forward(X);
         unsigned long r0; unsigned long c0;
         unsafe { r0 = full->shape[0]; c0 = full->shape[1]; }
         ASSERT_EQ(r0, T);
         ASSERT_EQ(c0, dm);
-        struct MambaState st = mamba_state_new(&m);
+        struct MambaState st = MambaState::new(&m);
         st.reset();
         float worst = (float)0.0;
         float mag = (float)0.0;
         unsigned long t = 0UL;
         while (t < T) {
-            &Tensor xt = tensor_new_2d(1UL, dm, 0);
+            &Tensor xt = Tensor::new_2d(1UL, dm, 0);
             unsafe {
                 unsigned long i = 0UL;
                 while (i < dm) { xt->data[i] = X->data[t * dm + i]; i = i + 1UL; }
@@ -686,7 +686,7 @@ int main() {
         t.add("half ops", t_half_ops);
         t.add("half matmul f32 accumulate", t_matmul_accumulates_f32);
         t.add("half gemv", t_half_gemv);
-        t.add("tensor_cast autograd", t_cast_autograd);
+        t.add("Tensor::cast autograd", t_cast_autograd);
         t.add("tensor_matmul_lowp", t_matmul_lowp);
         t.add("loss scaler", t_loss_scaler);
         t.add("tensor arena", t_tensor_arena);

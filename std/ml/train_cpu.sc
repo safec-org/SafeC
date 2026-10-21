@@ -8,7 +8,7 @@ namespace std {
 
 // ── DQN ──────────────────────────────────────────────────────────────────────
 
-struct CpuDqnAgent cpu_dqn_agent_new(struct Dqn d) {
+struct CpuDqnAgent CpuDqnAgent::new(struct Dqn d) {
     struct CpuDqnAgent a;
     a.host = d;
     return a;
@@ -34,7 +34,7 @@ void CpuDqnAgent::free() { }
 
 // ── Policy gradient ──────────────────────────────────────────────────────────
 
-struct CpuPgAgent cpu_pg_agent_new(struct PolicyAgent a) {
+struct CpuPgAgent CpuPgAgent::new(struct PolicyAgent a) {
     struct CpuPgAgent p;
     p.host = a;
     return p;

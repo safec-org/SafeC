@@ -61,22 +61,22 @@ void t_backend_name() {
 
 // train_fit over the neutral MlpTrainer = trainer_fit, to the bit.
 void t_fit_matches_trainer_fit() {
-    struct Rng drng = rng_new(1UL);
-    struct Dataset data = dataset_xor(250UL, (float)0.0, &drng);   // 7 full batches + a 26-row tail
-    struct Rng r1 = rng_new(3UL);
-    struct Mlp a = mlp_new(2UL, 16UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &r1);
-    struct Rng r2 = rng_new(3UL);
-    struct Mlp b = mlp_new(2UL, 16UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &r2);
-    struct TrainConfig tc = train_config_default();
+    struct Rng drng = Rng::new(1UL);
+    struct Dataset data = Dataset::xor(250UL, (float)0.0, &drng);   // 7 full batches + a 26-row tail
+    struct Rng r1 = Rng::new(3UL);
+    struct Mlp a = Mlp::new(2UL, 16UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &r1);
+    struct Rng r2 = Rng::new(3UL);
+    struct Mlp b = Mlp::new(2UL, 16UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &r2);
+    struct TrainConfig tc = TrainConfig::default();
     tc.epochs = 6UL;
     tc.clipNorm = (float)1.0;
     tc.lrDecay = (float)0.9;
-    struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.01);
+    struct Optimizer o = Optimizer::new(OPT_ADAM, (float)0.01);
     model_add_params(&a, &o);
     struct TrainReport ra = trainer_fit(&a, clf_loss_, &o, &data, &tc);
 
-    struct Optimizer adam = optimizer_new(OPT_ADAM, (float)0.01);
-    struct TrainerOptions to = trainer_options_default();
+    struct Optimizer adam = Optimizer::new(OPT_ADAM, (float)0.01);
+    struct TrainerOptions to = TrainerOptions::default();
     MlpTrainer t = mlp_trainer_new(b, TRAIN_LOSS_CE, &adam, &to);
     struct TrainReport rb = train_fit(&t, &data, &tc);
     ASSERT_TRUE(same_report_(&ra, &rb));
@@ -100,11 +100,11 @@ void t_fit_matches_trainer_fit() {
 
 // The loss kinds, and train_step on host batches.
 void t_losses_and_train_step() {
-    struct Rng rng = rng_new(5UL);
-    struct Dataset data = dataset_sine(128UL, (float)0.0, &rng);
-    struct Mlp net = mlp_new(1UL, 16UL, 1UL, 1UL, ACT_TANH, ACT_NONE, &rng);
-    struct Optimizer adam = optimizer_new(OPT_ADAM, (float)0.02);
-    struct TrainerOptions to = trainer_options_default();
+    struct Rng rng = Rng::new(5UL);
+    struct Dataset data = Dataset::sine(128UL, (float)0.0, &rng);
+    struct Mlp net = Mlp::new(1UL, 16UL, 1UL, 1UL, ACT_TANH, ACT_NONE, &rng);
+    struct Optimizer adam = Optimizer::new(OPT_ADAM, (float)0.02);
+    struct TrainerOptions to = TrainerOptions::default();
     MlpTrainer t = mlp_trainer_new(net, TRAIN_LOSS_MSE, &adam, &to);
     float first = t.train_step(data.x, data.y);
     float last = first;
@@ -115,10 +115,10 @@ void t_losses_and_train_step() {
     t.host.free();
 
     // BCE on logits: a 0/1 target per row
-    struct Dataset xr = dataset_xor(200UL, (float)0.0, &rng);
-    struct Mlp n2 = mlp_new(2UL, 16UL, 2UL, 1UL, ACT_RELU, ACT_NONE, &rng);
+    struct Dataset xr = Dataset::xor(200UL, (float)0.0, &rng);
+    struct Mlp n2 = Mlp::new(2UL, 16UL, 2UL, 1UL, ACT_RELU, ACT_NONE, &rng);
     MlpTrainer t2 = mlp_trainer_new(n2, TRAIN_LOSS_BCE, &adam, &to);
-    struct TrainConfig tc = train_config_default();
+    struct TrainConfig tc = TrainConfig::default();
     tc.epochs = 40UL;
     struct TrainReport rep = train_fit(&t2, &xr, &tc);
     ASSERT_TRUE(rep.lastEpochLoss < rep.firstEpochLoss * (float)0.5);
@@ -134,8 +134,8 @@ static &Tensor conv_loss_(&ConvNet n, const &Tensor x, const &Tensor y) {
 }
 
 static struct ConvNet small_cnn_(unsigned long seed) {
-    struct Rng rng = rng_new(seed);
-    struct ConvNet n = convnet_new(1UL, 8UL, 8UL);
+    struct Rng rng = Rng::new(seed);
+    struct ConvNet n = ConvNet::new(1UL, 8UL, 8UL);
     n.conv(4UL, 3UL, 1UL, 1UL, ACT_RELU, &rng);
     n.maxpool(2UL, 2UL, 0UL);
     n.dense(4UL, ACT_NONE, &rng);
@@ -143,17 +143,17 @@ static struct ConvNet small_cnn_(unsigned long seed) {
 }
 
 void t_convnet_trainer() {
-    struct Rng drng = rng_new(9UL);
-    struct Dataset data = dataset_shapes(96UL, 8UL, &drng);
+    struct Rng drng = Rng::new(9UL);
+    struct Dataset data = Dataset::shapes(96UL, 8UL, &drng);
     struct ConvNet a = small_cnn_(21UL);
     struct ConvNet b = small_cnn_(21UL);
-    struct TrainConfig tc = train_config_default();
+    struct TrainConfig tc = TrainConfig::default();
     tc.epochs = 3UL;
-    struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.01);
+    struct Optimizer o = Optimizer::new(OPT_ADAM, (float)0.01);
     model_add_params(&a, &o);
     struct TrainReport ra = trainer_fit(&a, conv_loss_, &o, &data, &tc);
-    struct Optimizer adam = optimizer_new(OPT_ADAM, (float)0.01);
-    struct TrainerOptions to = trainer_options_default();
+    struct Optimizer adam = Optimizer::new(OPT_ADAM, (float)0.01);
+    struct TrainerOptions to = TrainerOptions::default();
     ConvNetTrainer t = convnet_trainer_new(b, TRAIN_LOSS_CE, &adam, &to);
     struct TrainReport rb = train_fit(&t, &data, &tc);
     ASSERT_TRUE(same_report_(&ra, &rb));
@@ -167,19 +167,19 @@ void t_convnet_trainer() {
 }
 
 void t_autoencoder_trainers() {
-    struct Rng drng = rng_new(9UL);
-    struct Dataset data = dataset_shapes(128UL, 8UL, &drng);
-    struct VaeConfig cfg = vae_config_default(4UL);
+    struct Rng drng = Rng::new(9UL);
+    struct Dataset data = Dataset::shapes(128UL, 8UL, &drng);
+    struct VaeConfig cfg = VaeConfig::default(4UL);
     cfg.hidden = 32UL;
-    struct Vae a = vae_new(64UL, &cfg);
-    struct Vae b = vae_new(64UL, &cfg);
-    struct TrainConfig tc = train_config_default();
+    struct Vae a = Vae::new(64UL, &cfg);
+    struct Vae b = Vae::new(64UL, &cfg);
+    struct TrainConfig tc = TrainConfig::default();
     tc.epochs = 3UL;
-    struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.003);
+    struct Optimizer o = Optimizer::new(OPT_ADAM, (float)0.003);
     model_add_params(&a, &o);
     struct TrainReport ra = model_fit(&a, &o, &data, &tc);
-    struct Optimizer adam = optimizer_new(OPT_ADAM, (float)0.003);
-    struct TrainerOptions to = trainer_options_default();
+    struct Optimizer adam = Optimizer::new(OPT_ADAM, (float)0.003);
+    struct TrainerOptions to = TrainerOptions::default();
     VaeTrainer t = vae_trainer_new(b, &adam, &to);
     struct TrainReport rb = train_fit(&t, &data, &tc);
     ASSERT_TRUE(same_report_(&ra, &rb));
@@ -191,12 +191,12 @@ void t_autoencoder_trainers() {
     t.host.free();
 
     // convolutional autoencoder
-    struct Rng rng = rng_new(61UL);
-    struct ConvNet enc = convnet_new(1UL, 8UL, 8UL);
+    struct Rng rng = Rng::new(61UL);
+    struct ConvNet enc = ConvNet::new(1UL, 8UL, 8UL);
     enc.conv(4UL, 3UL, 2UL, 1UL, ACT_RELU, &rng);
-    struct ConvNet dec = convnet_new(4UL, 4UL, 4UL);
+    struct ConvNet dec = ConvNet::new(4UL, 4UL, 4UL);
     dec.deconv(1UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);
-    ConvAeTrainer c = conv_ae_trainer_new(conv_autoencoder_new(enc, dec, RECON_BCE), &adam, &to);
+    ConvAeTrainer c = conv_ae_trainer_new(ConvAutoencoder::new(enc, dec, RECON_BCE), &adam, &to);
     tc.epochs = 4UL;
     struct TrainReport rc = train_fit(&c, &data, &tc);
     ASSERT_EQ(rc.epochs, 4UL);
@@ -209,15 +209,15 @@ void t_autoencoder_trainers() {
 
 // ── GanTrainable ─────────────────────────────────────────────────────────────
 void t_gan_trainer() {
-    struct Rng drng = rng_new(4UL);
-    struct Dataset data = dataset_gaussian_ring(128UL, 4UL, (float)2.0, (float)0.1, &drng);
-    struct GanConfig cfg = gan_config_default(4UL);
+    struct Rng drng = Rng::new(4UL);
+    struct Dataset data = Dataset::gaussian_ring(128UL, 4UL, (float)2.0, (float)0.1, &drng);
+    struct GanConfig cfg = GanConfig::default(4UL);
     cfg.hidden = 16UL;
     cfg.emaDecay = (float)0.0;
-    struct Gan a = gan_new(2UL, &cfg);
-    struct Gan b = gan_new(2UL, &cfg);
+    struct Gan a = Gan::new(2UL, &cfg);
+    struct Gan b = Gan::new(2UL, &cfg);
     struct GanLosses la = a.train(&data, 2UL, 32UL);
-    struct TrainerOptions to = trainer_options_default();
+    struct TrainerOptions to = TrainerOptions::default();
     GanTrainer t = gan_trainer_new(b, &to);
     struct GanLosses lb = train_gan(&t, &data, 2UL, 32UL);
     ASSERT_TRUE(la.d == lb.d && la.g == lb.g);
@@ -237,8 +237,8 @@ void t_gan_trainer() {
 // Random observations and rewards from 'env'; returns the actions' sum.
 generic<A: ValueAgent>
 unsigned long value_run_(&A a, &Rng env, unsigned long steps) {
-    &Tensor o = tensor_new_1d(4UL, 0);
-    &Tensor n = tensor_new_1d(4UL, 0);
+    &Tensor o = Tensor::new_1d(4UL, 0);
+    &Tensor n = Tensor::new_1d(4UL, 0);
     unsigned long sum = 0UL;
     unsigned long i = 0UL;
     while (i < steps) {
@@ -258,8 +258,8 @@ unsigned long value_run_(&A a, &Rng env, unsigned long steps) {
 
 generic<P: PolicyLearner>
 float policy_run_(&P p, &Rng env, unsigned long rollout, int updates) {
-    &Tensor o = tensor_new_1d(4UL, 0);
-    &Tensor n = tensor_new_1d(4UL, 0);
+    &Tensor o = Tensor::new_1d(4UL, 0);
+    &Tensor n = Tensor::new_1d(4UL, 0);
     float l = (float)0.0;
     int u = 0;
     while (u < updates) {
@@ -283,18 +283,18 @@ float policy_run_(&P p, &Rng env, unsigned long rollout, int updates) {
 }
 
 void t_rl_agents() {
-    struct DqnConfig cfg = dqn_config_default();
+    struct DqnConfig cfg = DqnConfig::default();
     cfg.hidden = 32UL;
     cfg.batchSize = 32UL;
     cfg.bufferSize = 500UL;
     cfg.learningStarts = 64UL;
     cfg.epsDecaySteps = 100UL;
-    struct Dqn direct = dqn_new(4UL, 3UL, &cfg);
-    DqnLearner d = dqn_learner_new(dqn_new(4UL, 3UL, &cfg));
+    struct Dqn direct = Dqn::new(4UL, 3UL, &cfg);
+    DqnLearner d = dqn_learner_new(Dqn::new(4UL, 3UL, &cfg));
     // the same loop by hand on the direct API
-    struct Rng e1 = rng_new(91UL);
-    &Tensor o = tensor_new_1d(4UL, 0);
-    &Tensor n = tensor_new_1d(4UL, 0);
+    struct Rng e1 = Rng::new(91UL);
+    &Tensor o = Tensor::new_1d(4UL, 0);
+    &Tensor n = Tensor::new_1d(4UL, 0);
     unsigned long sum = 0UL;
     unsigned long i = 0UL;
     while (i < 160UL) {
@@ -307,7 +307,7 @@ void t_rl_agents() {
         direct.observe(o, act, r, n, t);
         i = i + 1UL;
     }
-    struct Rng e2 = rng_new(91UL);
+    struct Rng e2 = Rng::new(91UL);
     unsigned long sum2 = value_run_(&d, &e2, 160UL);
     ASSERT_EQ(sum, sum2);
     ASSERT_EQ(d.updates(), direct.updates);
@@ -319,14 +319,14 @@ void t_rl_agents() {
     d.host.free();
     direct.free();
 
-    struct PgConfig pc = pg_config_default(PG_PPO);
+    struct PgConfig pc = PgConfig::default(PG_PPO);
     pc.hidden = 32UL;
     pc.minibatch = 24UL;
     pc.epochs = 3UL;
-    struct PolicyAgent pd = pg_new(4UL, 3UL, &pc);
-    struct TrainerOptions to = trainer_options_default();
-    PgLearner p = pg_learner_new(pg_new(4UL, 3UL, &pc), &to);
-    struct Rng e3 = rng_new(92UL);
+    struct PolicyAgent pd = PolicyAgent::new(4UL, 3UL, &pc);
+    struct TrainerOptions to = TrainerOptions::default();
+    PgLearner p = pg_learner_new(PolicyAgent::new(4UL, 3UL, &pc), &to);
+    struct Rng e3 = Rng::new(92UL);
     float lc = (float)0.0;
     int u = 0;
     while (u < 2) {
@@ -344,7 +344,7 @@ void t_rl_agents() {
         lc = pd.update();
         u = u + 1;
     }
-    struct Rng e4 = rng_new(92UL);
+    struct Rng e4 = Rng::new(92UL);
     float lp = policy_run_(&p, &e4, 100UL, 2);
     ASSERT_TRUE(lp == lc);
     ASSERT_TRUE(p.sync());

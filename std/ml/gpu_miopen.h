@@ -37,9 +37,9 @@ struct RocmConv2D {
     // y = relu(conv(x) + bias).
     int forward_relu(struct RocmBuf x, struct RocmBuf y, unsigned long batch, unsigned long height,
                      unsigned long width) const;
-};
 
-struct RocmConv2D rocm_conv2d_upload(const &Conv2D layer);
+    static struct RocmConv2D upload(const &Conv2D layer);
+};
 
 // Output side length of a convolution or pooling window: (dim + 2*padding - kernel)/stride + 1.
 unsigned long rocm_conv_out_dim(unsigned long dim, unsigned long kernel,
@@ -49,8 +49,8 @@ unsigned long rocm_conv_out_dim(unsigned long dim, unsigned long kernel,
 // x: [batch, inChannels, height, width]; y: [batch, outChannels, outH, outW]
 // with outH/outW from rocm_conv_out_dim. Same arithmetic as Conv2D::forward.
 
-// kernel x kernel window, given stride, no padding (maxpool2d_forward /
-// avgpool2d_forward). x: [batch, channels, height, width].
+// kernel x kernel window, given stride, no padding (FeatureMap::maxpool2d /
+// FeatureMap::avgpool2d). x: [batch, channels, height, width].
 int rocm_maxpool2d(struct RocmBuf x, struct RocmBuf y, unsigned long batch, unsigned long channels,
                    unsigned long height, unsigned long width, unsigned long kernel, unsigned long stride);
 int rocm_avgpool2d(struct RocmBuf x, struct RocmBuf y, unsigned long batch, unsigned long channels,
@@ -77,8 +77,9 @@ struct RocmHalfConv2D {
                 unsigned long width) const;
     int forward_relu(struct RocmHalfBuf x, struct RocmHalfBuf y, unsigned long batch, unsigned long height,
                      unsigned long width) const;
+
+    static struct RocmHalfConv2D upload(const &Conv2D layer, int dtype);   // ROCM_FP16 / ROCM_BF16
 };
-struct RocmHalfConv2D rocm_half_conv2d_upload(const &Conv2D layer, int dtype);   // ROCM_FP16 / ROCM_BF16
 // 16-bit pooling is gpu_rocm.h's rocm_half_maxpool2d / rocm_half_avgpool2d
 // (a HIP kernel: MIOpen has no bfloat16 pooling solver on every GPU).
 
@@ -113,10 +114,10 @@ struct RocmUNet {
     // y: [batch, outChannels, height, width]. Queued, like the ops above.
     int forward(struct RocmBuf x, struct RocmBuf y) const;
     void free();
-};
 
-// height and width must each be divisible by 4.
-struct RocmUNet rocm_unet_new(const &UNet net, unsigned long batch, unsigned long height, unsigned long width);
+    // height and width must each be divisible by 4.
+    static struct RocmUNet new(const &UNet net, unsigned long batch, unsigned long height, unsigned long width);
+};
 
 // ── Host convenience (upload → compute → read back) ──────────────────────────
 // Same signatures and results as the CPU functions; each falls back to the

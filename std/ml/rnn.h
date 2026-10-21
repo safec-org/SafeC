@@ -27,9 +27,9 @@ struct RNNCell {
     void collect_params(&Vec<&Tensor> out) const;
     void collect_state(&Vec<&Tensor> out) const;
     void free();
-};
 
-struct RNNCell rnn_cell_new(unsigned long inputSize, unsigned long hiddenSize);
+    static struct RNNCell new(unsigned long inputSize, unsigned long hiddenSize);
+};
 
 // ── GRU ──────────────────────────────────────────────────────────────────────
 // r_t = sigmoid(x_t@W_ir + h@W_hr + b_ir + b_hr)          reset gate
@@ -46,9 +46,9 @@ struct GRUCell {
     void collect_params(&Vec<&Tensor> out) const;
     void collect_state(&Vec<&Tensor> out) const;
     void free();
-};
 
-struct GRUCell gru_cell_new(unsigned long inputSize, unsigned long hiddenSize);
+    static struct GRUCell new(unsigned long inputSize, unsigned long hiddenSize);
+};
 
 // ── LSTM ─────────────────────────────────────────────────────────────────────
 // i_t = sigmoid(x_t@W_ii + h@W_hi + b_ii + b_hi)   input gate
@@ -70,9 +70,9 @@ struct LSTMCell {
     void collect_params(&Vec<&Tensor> out) const;
     void collect_state(&Vec<&Tensor> out) const;
     void free();
-};
 
-struct LSTMCell lstm_cell_new(unsigned long inputSize, unsigned long hiddenSize);
+    static struct LSTMCell new(unsigned long inputSize, unsigned long hiddenSize);
+};
 
 // ── xLSTM (sLSTM variant, Beck et al. 2024) ─────────────────────────────────
 // The scalar-memory sLSTM cell — xLSTM's headline idea is *exponential*
@@ -102,6 +102,8 @@ struct XLSTMCell {
     void collect_params(&Vec<&Tensor> out) const;
     void collect_state(&Vec<&Tensor> out) const;
     void free();
+
+    static struct XLSTMCell new(unsigned long inputSize, unsigned long hiddenSize);
 };
 
 struct XLSTMState {
@@ -112,7 +114,5 @@ struct XLSTMState {
 
     void free();
 };
-
-struct XLSTMCell xlstm_cell_new(unsigned long inputSize, unsigned long hiddenSize);
 
 } // namespace std

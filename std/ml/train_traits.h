@@ -2,7 +2,7 @@
 // SafeC Standard Library — one training interface over every backend.
 //
 // std::ml trains the same models on the CPU (nn.h, trainer.h, autoencoder.h,
-// convnet.h, gan.h, rl.h: autograd) and on an AMD GPU (nn_rocm.h: device-
+// convnet.h, gan.h, rl.h: Autograd::get) and on an AMD GPU (nn_rocm.h: device-
 // resident nets, graph replay, optimizer state on the GPU). The traits below
 // are what a backend's trainer provides; the generic loops are written once
 // against them. Traits are structural: a type conforms by having the
@@ -32,7 +32,7 @@
 // and constructors without a backend prefix, so one program trains on either:
 //
 //   #include <std/ml/train.h>
-//   struct Optimizer cfgOpt = optimizer_new(OPT_ADAM, (float)0.01);
+//   struct Optimizer cfgOpt = Optimizer::new(OPT_ADAM, (float)0.01);
 //   MlpTrainer t = mlp_trainer_new(net, TRAIN_LOSS_CE, &cfgOpt, &opts);
 //   struct TrainReport rep = train_fit(&t, &data, &cfg);   // host synced
 //   ... t.host is the trained Mlp ...

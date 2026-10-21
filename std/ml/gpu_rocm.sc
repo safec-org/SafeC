@@ -1749,7 +1749,7 @@ const &char rocm_device_name() {
 
 // ── Buffers ──────────────────────────────────────────────────────────────────
 
-struct RocmBuf rocm_alloc(unsigned long n) {
+struct RocmBuf RocmBuf::alloc(unsigned long n) {
     struct RocmBuf b;
     b.dev = 0UL;
     b.len = 0UL;
@@ -1771,8 +1771,8 @@ int rocm_write(struct RocmBuf dst, const &float host, unsigned long n) {
     }
 }
 
-struct RocmBuf rocm_upload(const &float host, unsigned long n) {
-    struct RocmBuf b = rocm_alloc(n);
+struct RocmBuf RocmBuf::upload(const &float host, unsigned long n) {
+    struct RocmBuf b = RocmBuf::alloc(n);
     if (b.dev != 0UL && !rocm_write(b, host, n)) b.free();
     return b;
 }
@@ -2017,7 +2017,7 @@ static int rocm_half_fits_(struct RocmHalfBuf b, unsigned long n) {
     return b.dev != 0UL && b.len >= n && rocm_half_dtype_ok_(b.dtype);
 }
 
-struct RocmHalfBuf rocm_half_alloc(unsigned long n, int dtype) {
+struct RocmHalfBuf RocmHalfBuf::alloc(unsigned long n, int dtype) {
     struct RocmHalfBuf b;
     b.dev = 0UL;
     b.len = 0UL;
@@ -2079,10 +2079,10 @@ int rocm_from_half(struct RocmHalfBuf src, struct RocmBuf dst) {
     return rocm_convert_(K_FROM_HALF, src.dev, dst.dev, n, src.dtype == ROCM_BF16);
 }
 
-struct RocmHalfBuf rocm_half_upload(const &float host, unsigned long n, int dtype) {
-    struct RocmHalfBuf h = rocm_half_alloc(n, dtype);
+struct RocmHalfBuf RocmHalfBuf::upload(const &float host, unsigned long n, int dtype) {
+    struct RocmHalfBuf h = RocmHalfBuf::alloc(n, dtype);
     if (h.dev == 0UL) return h;
-    struct RocmBuf tmp = rocm_upload(host, n);
+    struct RocmBuf tmp = RocmBuf::upload(host, n);
     int ok = tmp.dev != 0UL && rocm_to_half(tmp, h) && rocm_sync();
     tmp.free();
     if (!ok) h.free();
@@ -2401,9 +2401,9 @@ void RocmGraph::free() {
 // ── Host-array convenience ops ───────────────────────────────────────────────
 
 static int rocm_host_binary_(int kernel, const &float a, const &float b, &float out, unsigned long n) {
-    struct RocmBuf da = rocm_upload(a, n);
-    struct RocmBuf db = rocm_upload(b, n);
-    struct RocmBuf dout = rocm_alloc(n);
+    struct RocmBuf da = RocmBuf::upload(a, n);
+    struct RocmBuf db = RocmBuf::upload(b, n);
+    struct RocmBuf dout = RocmBuf::alloc(n);
     int ok = da.dev != 0UL && db.dev != 0UL && dout.dev != 0UL &&
              rocm_binary_(kernel, da, db, dout) && rocm_read(dout, out, n);
     da.free();
@@ -2413,8 +2413,8 @@ static int rocm_host_binary_(int kernel, const &float a, const &float b, &float 
 }
 
 static int rocm_host_unary_(int kernel, const &float a, float k, &float out, unsigned long n) {
-    struct RocmBuf da = rocm_upload(a, n);
-    struct RocmBuf dout = rocm_alloc(n);
+    struct RocmBuf da = RocmBuf::upload(a, n);
+    struct RocmBuf dout = RocmBuf::alloc(n);
     int ok = da.dev != 0UL && dout.dev != 0UL &&
              rocm_unary_(kernel, da, k, dout) && rocm_read(dout, out, n);
     da.free();
@@ -2434,8 +2434,8 @@ int rocm_sqrt_f32(const &float a, &float out, unsigned long n) { return rocm_hos
 int rocm_scale_f32(const &float a, float k, &float out, unsigned long n) { return rocm_host_unary_(K_SCALE, a, k, out, n); }
 
 int rocm_sum_f32(const &float a, &float out1, unsigned long n) {
-    struct RocmBuf da = rocm_upload(a, n);
-    struct RocmBuf dout = rocm_alloc(1UL);
+    struct RocmBuf da = RocmBuf::upload(a, n);
+    struct RocmBuf dout = RocmBuf::alloc(1UL);
     int ok = da.dev != 0UL && dout.dev != 0UL && rocm_sum(da, dout) && rocm_read(dout, out1, 1UL);
     da.free();
     dout.free();
@@ -2505,7 +2505,7 @@ static int rocm_lin_scratch_(unsigned long need) {
     if (g_rocm_lin_scratch.len >= need) return 1;
     if (g_rocm_capturing) return 0;
     g_rocm_lin_scratch.free();
-    g_rocm_lin_scratch = rocm_alloc(need);
+    g_rocm_lin_scratch = RocmBuf::alloc(need);
     if (g_rocm_lin_scratch.dev == 0UL) { g_rocm_lin_scratch.len = 0UL; return 0; }
     return 1;
 }
@@ -2620,10 +2620,10 @@ static int rocm_attention_f32_(const &float q, const &float k, const &float v, &
                                unsigned long headDim, float scale, int causal, int linear) {
     unsigned long nq = heads * seqLen * headDim;
     unsigned long nk = heads * kvLen * headDim;
-    struct RocmBuf dq = rocm_upload(q, nq);
-    struct RocmBuf dk = rocm_upload(k, nk);
-    struct RocmBuf dv = rocm_upload(v, nk);
-    struct RocmBuf dout = rocm_alloc(nq);
+    struct RocmBuf dq = RocmBuf::upload(q, nq);
+    struct RocmBuf dk = RocmBuf::upload(k, nk);
+    struct RocmBuf dv = RocmBuf::upload(v, nk);
+    struct RocmBuf dout = RocmBuf::alloc(nq);
     int ok = dq.dev != 0UL && dk.dev != 0UL && dv.dev != 0UL && dout.dev != 0UL;
     if (ok) {
         ok = linear ? rocm_linear_attention(dq, dk, dv, dout, heads, seqLen, kvLen, headDim, causal)
@@ -2652,9 +2652,9 @@ int rocm_linear_attention_f32(const &float q, const &float k, const &float v, &f
 int rocm_matmul_f32(const &float a, const &float b, &float out,
                     unsigned long M, unsigned long K, unsigned long N) {
     if (M > 2147483647UL || N > 2147483647UL || K > 2147483647UL) return 0;
-    struct RocmBuf da = rocm_upload(a, M * K);
-    struct RocmBuf db = rocm_upload(b, K * N);
-    struct RocmBuf dc = rocm_alloc(M * N);
+    struct RocmBuf da = RocmBuf::upload(a, M * K);
+    struct RocmBuf db = RocmBuf::upload(b, K * N);
+    struct RocmBuf dc = RocmBuf::alloc(M * N);
     int ok = da.dev != 0UL && db.dev != 0UL && dc.dev != 0UL;
     if (ok) {
         unsafe {
@@ -2682,9 +2682,9 @@ int rocm_matmul_f32(const &float a, const &float b, &float out,
 
 int rocm_matmul_f32_blas(const &float a, const &float b, &float out,
                          unsigned long M, unsigned long K, unsigned long N) {
-    struct RocmBuf da = rocm_upload(a, M * K);
-    struct RocmBuf db = rocm_upload(b, K * N);
-    struct RocmBuf dc = rocm_alloc(M * N);
+    struct RocmBuf da = RocmBuf::upload(a, M * K);
+    struct RocmBuf db = RocmBuf::upload(b, K * N);
+    struct RocmBuf dc = RocmBuf::alloc(M * N);
     int ok = da.dev != 0UL && db.dev != 0UL && dc.dev != 0UL &&
              rocm_gemm(da, 0, db, 0, dc, M, N, K) && rocm_read(dc, out, M * N);
     da.free();

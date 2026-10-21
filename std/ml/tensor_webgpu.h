@@ -15,9 +15,9 @@ namespace std {
 &Tensor tensor_add_webgpu(const &Tensor a, const &Tensor b);
 &Tensor tensor_sub_webgpu(const &Tensor a, const &Tensor b);
 &Tensor tensor_mul_webgpu(const &Tensor a, const &Tensor b);
-&Tensor tensor_scale_webgpu(const &Tensor a, float k);
-&Tensor tensor_relu_webgpu(const &Tensor a);
-&Tensor tensor_sum_webgpu(const &Tensor a);
+&Tensor Tensor::scale_webgpu(float k) const;
+&Tensor Tensor::relu_webgpu() const;
+&Tensor Tensor::sum_webgpu() const;
 &Tensor tensor_matmul_webgpu(const &Tensor a, const &Tensor b);
 
 } // namespace std

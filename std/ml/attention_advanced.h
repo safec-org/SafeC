@@ -38,9 +38,10 @@ struct Mla {
     void collect_params(&Vec<&Tensor> out) const;
     void collect_state(&Vec<&Tensor> out) const;
     void free();
+
+    // Weights U(-1/sqrt(in), 1/sqrt(in)) from rng; numHeads divides dModel.
+    static struct Mla new(unsigned long dModel, unsigned long dLatent, unsigned long numHeads, &Rng rng);
 };
-// Weights U(-1/sqrt(in), 1/sqrt(in)) from rng; numHeads divides dModel.
-struct Mla mla_new(unsigned long dModel, unsigned long dLatent, unsigned long numHeads, &Rng rng);
 
 // EG-MLA (Extended-Group MLA): shares one down-projected latent c_kv
 // across 'numGroups' independent up-projection groups (grouped-query
@@ -62,10 +63,11 @@ struct EgMla {
     void collect_params(&Vec<&Tensor> out) const;
     void collect_state(&Vec<&Tensor> out) const;
     void free();
+
+    // numGroups groups of headsPerGroup heads; numGroups divides dModel.
+    static struct EgMla new(unsigned long dModel, unsigned long dLatent, unsigned long numGroups,
+                            unsigned long headsPerGroup, &Rng rng);
 };
-// numGroups groups of headsPerGroup heads; numGroups divides dModel.
-struct EgMla eg_mla_new(unsigned long dModel, unsigned long dLatent, unsigned long numGroups,
-                        unsigned long headsPerGroup, &Rng rng);
 
 // ── Shifted-Window attention (Swin, adapted to 1D sequences) ────────────────
 // Swin's two core ideas — partition into fixed-size local windows and
@@ -112,8 +114,8 @@ struct GatedDeltaNet {
     void collect_params(&Vec<&Tensor> out) const;
     void collect_state(&Vec<&Tensor> out) const;
     void free();
-};
 
-struct GatedDeltaNet gated_deltanet_new(unsigned long dModel, unsigned long keyDim, unsigned long valueDim);
+    static struct GatedDeltaNet new(unsigned long dModel, unsigned long keyDim, unsigned long valueDim);
+};
 
 } // namespace std

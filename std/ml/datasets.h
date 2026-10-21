@@ -34,40 +34,40 @@ struct Dataset {
     // leakage).
     void standardize_pair(&Dataset test);
     void free();
+
+    // Two interleaved half circles, 2 classes (scikit-learn's make_moons).
+    static struct Dataset moons(unsigned long n, float noise, &Rng rng);
+    // A circle inside a larger one, radius ratio 'factor', 2 classes.
+    static struct Dataset circles(unsigned long n, float noise, float factor, &Rng rng);
+    // 'classes' interleaved spiral arms.
+    static struct Dataset spirals(unsigned long n, unsigned long classes, float noise, &Rng rng);
+    // Isotropic Gaussian clusters in 'features' dimensions, centers in [-5, 5].
+    static struct Dataset blobs(unsigned long n, unsigned long classes, unsigned long features, float spread, &Rng rng);
+    // The four XOR quadrants of [-1, 1]^2, 2 classes.
+    static struct Dataset xor(unsigned long n, float noise, &Rng rng);
+    // Regression: x uniform in [-pi, pi], y = sin(x) + noise.
+    static struct Dataset sine(unsigned long n, float noise, &Rng rng);
+    // 'modes' Gaussians (std 'std') evenly spaced on a circle of 'radius';
+    // the label is the mode.
+    static struct Dataset gaussian_ring(unsigned long n, unsigned long modes, float radius, float std, &Rng rng);
+    // side x side binary images, flattened row-major, pixels 0 or 1. Classes:
+    // 0 square outline, 1 plus sign, 2 filled disc, 3 diagonal cross; random
+    // size and position. side >= 8.
+    static struct Dataset shapes(unsigned long n, unsigned long side, &Rng rng);
+    // MNIST / Fashion-MNIST IDX files (uncompressed): images as [n, 784]
+    // scaled to [0, 1], 10 classes. 'limit' 0 reads every image. On any error
+    // the result has n == 0.
+    static struct Dataset load_mnist(const &char imagesPath, const &char labelsPath, unsigned long limit);
+    // A numeric CSV: one row per line, comma-separated. 'labelColumn' -1 makes
+    // the set unlabeled; otherwise that column becomes y, and with
+    // 'classification' the labels are class indices (classes = max + 1). The
+    // first line is skipped when 'hasHeader'. n == 0 on error.
+    static struct Dataset load_csv(const &char path, long labelColumn, int hasHeader, int classification);
 };
 
 // ── Synthetic data ───────────────────────────────────────────────────────────
-// Two interleaved half circles, 2 classes (scikit-learn's make_moons).
-struct Dataset dataset_moons(unsigned long n, float noise, &Rng rng);
-// A circle inside a larger one, radius ratio 'factor', 2 classes.
-struct Dataset dataset_circles(unsigned long n, float noise, float factor, &Rng rng);
-// 'classes' interleaved spiral arms.
-struct Dataset dataset_spirals(unsigned long n, unsigned long classes, float noise, &Rng rng);
-// Isotropic Gaussian clusters in 'features' dimensions, centers in [-5, 5].
-struct Dataset dataset_blobs(unsigned long n, unsigned long classes, unsigned long features,
-                             float spread, &Rng rng);
-// The four XOR quadrants of [-1, 1]^2, 2 classes.
-struct Dataset dataset_xor(unsigned long n, float noise, &Rng rng);
-// Regression: x uniform in [-pi, pi], y = sin(x) + noise.
-struct Dataset dataset_sine(unsigned long n, float noise, &Rng rng);
-// 'modes' Gaussians (std 'std') evenly spaced on a circle of 'radius';
-// the label is the mode.
-struct Dataset dataset_gaussian_ring(unsigned long n, unsigned long modes, float radius, float std, &Rng rng);
-// side x side binary images, flattened row-major, pixels 0 or 1. Classes:
-// 0 square outline, 1 plus sign, 2 filled disc, 3 diagonal cross; random
-// size and position. side >= 8.
-struct Dataset dataset_shapes(unsigned long n, unsigned long side, &Rng rng);
 
 // ── Files ────────────────────────────────────────────────────────────────────
-// MNIST / Fashion-MNIST IDX files (uncompressed): images as [n, 784]
-// scaled to [0, 1], 10 classes. 'limit' 0 reads every image. On any error
-// the result has n == 0.
-struct Dataset dataset_load_mnist(const &char imagesPath, const &char labelsPath, unsigned long limit);
-// A numeric CSV: one row per line, comma-separated. 'labelColumn' -1 makes
-// the set unlabeled; otherwise that column becomes y, and with
-// 'classification' the labels are class indices (classes = max + 1). The
-// first line is skipped when 'hasHeader'. n == 0 on error.
-struct Dataset dataset_load_csv(const &char path, long labelColumn, int hasHeader, int classification);
 
 // ── Utilities ────────────────────────────────────────────────────────────────
 struct DatasetSplit {
@@ -100,7 +100,8 @@ struct DataLoader {
     int next(&Batch out);
     unsigned long batches() const;   // batches per epoch
     void free();
+
+    static struct DataLoader new(const &Dataset ds, unsigned long batchSize, int shuffle, unsigned long seed);
 };
-struct DataLoader dataloader_new(const &Dataset ds, unsigned long batchSize, int shuffle, unsigned long seed);
 
 } // namespace std

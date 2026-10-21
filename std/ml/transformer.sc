@@ -12,7 +12,7 @@ extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
 static &Tensor __xf_init_weight(unsigned long rows, unsigned long cols, unsigned long seed) {
-    &Tensor t = tensor_new_2d(rows, cols, 0);
+    &Tensor t = Tensor::new_2d(rows, cols, 0);
     unsafe {
         unsigned long i = 0UL;
         while (i < t->size) {
@@ -29,7 +29,7 @@ static &Tensor __xf_init_weight(unsigned long rows, unsigned long cols, unsigned
 static &Tensor __add_broadcast_row(&Tensor mat, &Tensor row) {
     unsigned long rows; unsigned long cols;
     unsafe { rows = mat->shape[0]; cols = mat->shape[1]; }
-    &Tensor out = tensor_new_2d(rows, cols, 0);
+    &Tensor out = Tensor::new_2d(rows, cols, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
@@ -44,7 +44,7 @@ static &Tensor __add_broadcast_row(&Tensor mat, &Tensor row) {
 static &Tensor __mul_broadcast_row(&Tensor mat, &Tensor row) {
     unsigned long rows; unsigned long cols;
     unsafe { rows = mat->shape[0]; cols = mat->shape[1]; }
-    &Tensor out = tensor_new_2d(rows, cols, 0);
+    &Tensor out = Tensor::new_2d(rows, cols, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
@@ -60,7 +60,7 @@ static &Tensor __mul_broadcast_row(&Tensor mat, &Tensor row) {
 static &Tensor __mul_broadcast_row_plus1(&Tensor mat, &Tensor row) {
     unsigned long rows; unsigned long cols;
     unsafe { rows = mat->shape[0]; cols = mat->shape[1]; }
-    &Tensor out = tensor_new_2d(rows, cols, 0);
+    &Tensor out = Tensor::new_2d(rows, cols, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
@@ -76,17 +76,17 @@ static &Tensor __mul_broadcast_row_plus1(&Tensor mat, &Tensor row) {
 }
 
 // ── DiT ───────────────────────────────────────────────────────────────────────
-struct DiTBlock dit_block_new(unsigned long dModel, unsigned long dHidden,
-                               unsigned long dModelCond, unsigned long numHeads) {
+struct DiTBlock DiTBlock::new(unsigned long dModel, unsigned long dHidden, unsigned long dModelCond,
+                              unsigned long numHeads) {
     struct DiTBlock blk;
     blk.Wq = __xf_init_weight(dModel, dModel, 101UL);
     blk.Wk = __xf_init_weight(dModel, dModel, 102UL);
     blk.Wv = __xf_init_weight(dModel, dModel, 103UL);
     blk.Wo = __xf_init_weight(dModel, dModel, 104UL);
     blk.W1 = __xf_init_weight(dModel, dHidden, 105UL);
-    blk.b1 = tensor_new_2d(1UL, dHidden, 0);
+    blk.b1 = Tensor::new_2d(1UL, dHidden, 0);
     blk.W2 = __xf_init_weight(dHidden, dModel, 106UL);
-    blk.b2 = tensor_new_2d(1UL, dModel, 0);
+    blk.b2 = Tensor::new_2d(1UL, dModel, 0);
     blk.WadaLN = __xf_init_weight(dModelCond, 6UL * dModel, 107UL);
     blk.numHeads = numHeads;
     return blk;
@@ -114,14 +114,14 @@ void DiTBlock::free() {
     }
 
     &Tensor mod = tensor_matmul(c, WadaLN);
-    &Tensor shift1 = tensor_slice_cols(mod, 0UL, dModel);
-    &Tensor scale1 = tensor_slice_cols(mod, dModel, dModel);
-    &Tensor gate1 = tensor_slice_cols(mod, 2UL * dModel, dModel);
-    &Tensor shift2 = tensor_slice_cols(mod, 3UL * dModel, dModel);
-    &Tensor scale2 = tensor_slice_cols(mod, 4UL * dModel, dModel);
-    &Tensor gate2 = tensor_slice_cols(mod, 5UL * dModel, dModel);
+    &Tensor shift1 = mod.slice_cols(0UL, dModel);
+    &Tensor scale1 = mod.slice_cols(dModel, dModel);
+    &Tensor gate1 = mod.slice_cols(2UL * dModel, dModel);
+    &Tensor shift2 = mod.slice_cols(3UL * dModel, dModel);
+    &Tensor scale2 = mod.slice_cols(4UL * dModel, dModel);
+    &Tensor gate2 = mod.slice_cols(5UL * dModel, dModel);
 
-    &Tensor h = tensor_layernorm_rows(x, (float)1e-5);
+    &Tensor h = x.layernorm_rows((float)1e-5);
     &Tensor hScaled = __mul_broadcast_row_plus1(h, scale1);
     &Tensor hMod = __add_broadcast_row(hScaled, shift1);
     &Tensor Q = tensor_matmul(hMod, Wq);
@@ -132,12 +132,12 @@ void DiTBlock::free() {
     &Tensor gatedAttn = __mul_broadcast_row(attnOut, gate1);
     &Tensor x1 = tensor_residual_add(x, gatedAttn);
 
-    &Tensor h2 = tensor_layernorm_rows(x1, (float)1e-5);
+    &Tensor h2 = x1.layernorm_rows((float)1e-5);
     &Tensor h2Scaled = __mul_broadcast_row_plus1(h2, scale2);
     &Tensor h2Mod = __add_broadcast_row(h2Scaled, shift2);
     &Tensor ffnHiddenRaw = tensor_matmul(h2Mod, W1);
     &Tensor ffnHiddenBias = __add_broadcast_row(ffnHiddenRaw, b1w);
-    &Tensor ffnHidden = tensor_relu_fwd(ffnHiddenBias);
+    &Tensor ffnHidden = ffnHiddenBias.relu_fwd();
     &Tensor ffnOutRaw = tensor_matmul(ffnHidden, W2);
     &Tensor ffnOut = __add_broadcast_row(ffnOutRaw, b2w);
     &Tensor gatedFfn = __mul_broadcast_row(ffnOut, gate2);
@@ -161,16 +161,16 @@ void DiTBlock::free() {
 }
 
 // ── JiT ───────────────────────────────────────────────────────────────────────
-struct JiTBlock jit_block_new(unsigned long dModel, unsigned long dHidden, unsigned long numHeads) {
+struct JiTBlock JiTBlock::new(unsigned long dModel, unsigned long dHidden, unsigned long numHeads) {
     struct JiTBlock blk;
     blk.Wq = __xf_init_weight(dModel, dModel, 201UL);
     blk.Wk = __xf_init_weight(dModel, dModel, 202UL);
     blk.Wv = __xf_init_weight(dModel, dModel, 203UL);
     blk.Wo = __xf_init_weight(dModel, dModel, 204UL);
     blk.W1 = __xf_init_weight(dModel, dHidden, 205UL);
-    blk.b1 = tensor_new_2d(1UL, dHidden, 0);
+    blk.b1 = Tensor::new_2d(1UL, dHidden, 0);
     blk.W2 = __xf_init_weight(dHidden, dModel, 206UL);
-    blk.b2 = tensor_new_2d(1UL, dModel, 0);
+    blk.b2 = Tensor::new_2d(1UL, dModel, 0);
     blk.numHeads = numHeads;
     return blk;
 }
@@ -194,7 +194,7 @@ void JiTBlock::free() {
         numHeads = self->numHeads;
     }
 
-    &Tensor h = tensor_layernorm_rows(x, (float)1e-5);
+    &Tensor h = x.layernorm_rows((float)1e-5);
     &Tensor Q = tensor_matmul(h, Wq);
     &Tensor K = tensor_matmul(h, Wk);
     &Tensor V = tensor_matmul(h, Wv);
@@ -202,10 +202,10 @@ void JiTBlock::free() {
     &Tensor attnOut = tensor_matmul(attnRaw, Wo);
     &Tensor x1 = tensor_residual_add(x, attnOut);
 
-    &Tensor h2 = tensor_layernorm_rows(x1, (float)1e-5);
+    &Tensor h2 = x1.layernorm_rows((float)1e-5);
     &Tensor ffnHiddenRaw = tensor_matmul(h2, W1);
     &Tensor ffnHiddenBias = __add_broadcast_row(ffnHiddenRaw, b1w);
-    &Tensor ffnHidden = tensor_relu_fwd(ffnHiddenBias);
+    &Tensor ffnHidden = ffnHiddenBias.relu_fwd();
     &Tensor ffnOutRaw = tensor_matmul(ffnHidden, W2);
     &Tensor ffnOut = __add_broadcast_row(ffnOutRaw, b2w);
     &Tensor out = tensor_residual_add(x1, ffnOut);
@@ -221,13 +221,13 @@ void JiTBlock::free() {
     return out;
 }
 
-struct JiT jit_new(unsigned long patchDim, unsigned long dModel, unsigned long dHidden, unsigned long numHeads,
-                   unsigned long depth) {
+struct JiT JiT::new(unsigned long patchDim, unsigned long dModel, unsigned long dHidden, unsigned long numHeads,
+                    unsigned long depth) {
     struct JiT m;
     m.WPatchEmbed = __xf_init_weight(patchDim, dModel, 301UL);
     m.blocks = vec_new();
     unsigned long i = 0UL;
-    while (i < depth) { m.blocks.push(jit_block_new(dModel, dHidden, numHeads)); i = i + 1UL; }
+    while (i < depth) { m.blocks.push(JiTBlock::new(dModel, dHidden, numHeads)); i = i + 1UL; }
     return m;
 }
 

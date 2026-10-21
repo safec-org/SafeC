@@ -15,9 +15,9 @@ namespace std {
 &Tensor tensor_add_spirv(const &Tensor a, const &Tensor b);
 &Tensor tensor_sub_spirv(const &Tensor a, const &Tensor b);
 &Tensor tensor_mul_spirv(const &Tensor a, const &Tensor b);
-&Tensor tensor_scale_spirv(const &Tensor a, float k);
-&Tensor tensor_relu_spirv(const &Tensor a);
-&Tensor tensor_sum_spirv(const &Tensor a);
+&Tensor Tensor::scale_spirv(float k) const;
+&Tensor Tensor::relu_spirv() const;
+&Tensor Tensor::sum_spirv() const;
 &Tensor tensor_matmul_spirv(const &Tensor a, const &Tensor b);
 
 } // namespace std

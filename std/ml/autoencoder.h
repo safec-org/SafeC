@@ -2,12 +2,12 @@
 // SafeC Standard Library — autoencoders: plain, denoising, sparse,
 // variational (VAE, beta-VAE, conditional VAE) and vector-quantized
 // (VQ-VAE). MLP encoders and decoders over flattened rows, trained with
-// autograd -- or convolutional ones (ConvAutoencoder, ConvVae) built from
+// Autograd::get -- or convolutional ones (ConvAutoencoder, ConvVae) built from
 // convnet.h's ConvNet.
 //
 // Each model's loss(x, y) method is its training loss, so each is a
 // LossModel (module.h) and module.h's generic functions train any of them:
-//   struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.001);
+//   struct Optimizer opt = Optimizer::new(OPT_ADAM, (float)0.001);
 //   model_add_params(&vae, &opt);
 //   model_fit(&vae, &opt, &data, &cfg);
 // 'y' is ignored except by a conditional VAE, which reads class indices
@@ -44,9 +44,10 @@ struct AutoencoderConfig {
     float dropProb;
     float sparsity;
     unsigned long seed;
+
+    // hidden 128, 1 hidden layer, ReLU, linear code, MSE, no noise or sparsity.
+    static struct AutoencoderConfig default(unsigned long latent);
 };
-// hidden 128, 1 hidden layer, ReLU, linear code, MSE, no noise or sparsity.
-struct AutoencoderConfig autoencoder_config_default(unsigned long latent);
 
 struct Autoencoder {
     struct Mlp enc;
@@ -65,8 +66,9 @@ struct Autoencoder {
     void free();
 
     &Tensor loss(const &Tensor x, const &Tensor y);
+
+    static struct Autoencoder new(unsigned long inDim, const &AutoencoderConfig cfg);
 };
-struct Autoencoder autoencoder_new(unsigned long inDim, const &AutoencoderConfig cfg);
 
 // ── Variational autoencoder (VAE, beta-VAE, CVAE) ────────────────────────────
 // Kingma & Welling 2014. The encoder outputs mu and log sigma^2 of a
@@ -87,9 +89,10 @@ struct VaeConfig {
     float beta;
     unsigned long classes;        // 0: unconditional
     unsigned long seed;
+
+    // hidden 256, 1 hidden layer, ReLU, BCE, beta 1, unconditional.
+    static struct VaeConfig default(unsigned long latent);
 };
-// hidden 256, 1 hidden layer, ReLU, BCE, beta 1, unconditional.
-struct VaeConfig vae_config_default(unsigned long latent);
 
 struct Vae {
     struct Mlp enc;        // trunk: x (+ label) -> hidden
@@ -114,8 +117,9 @@ struct Vae {
     void free();
 
     &Tensor loss(const &Tensor x, const &Tensor y);
+
+    static struct Vae new(unsigned long inDim, const &VaeConfig cfg);
 };
-struct Vae vae_new(unsigned long inDim, const &VaeConfig cfg);
 
 // ── Vector-quantized VAE ─────────────────────────────────────────────────────
 // van den Oord et al. 2017. The encoder output z_e is replaced by its
@@ -136,10 +140,11 @@ struct VqVaeConfig {
     int   act;
     int   recon;
     unsigned long seed;
+
+    // hidden 128, 1 hidden layer, 32 codes, commitment 0.25, dead codes
+    // restarted after 20 batches, ReLU, MSE.
+    static struct VqVaeConfig default(unsigned long latent);
 };
-// hidden 128, 1 hidden layer, 32 codes, commitment 0.25, dead codes
-// restarted after 20 batches, ReLU, MSE.
-struct VqVaeConfig vqvae_config_default(unsigned long latent);
 
 struct VqVae {
     struct Mlp enc;
@@ -162,8 +167,9 @@ struct VqVae {
     void free();
 
     &Tensor loss(const &Tensor x, const &Tensor y);
+
+    static struct VqVae new(unsigned long inDim, const &VqVaeConfig cfg);
 };
-struct VqVae vqvae_new(unsigned long inDim, const &VqVaeConfig cfg);
 
 // ── Convolutional autoencoder and VAE ────────────────────────────────────────
 // The same models with a ConvNet encoder and decoder you build (convnet.h):
@@ -176,16 +182,16 @@ struct VqVae vqvae_new(unsigned long inDim, const &VqVaeConfig cfg);
 // the nets in training mode (batch norm on batch statistics); encode /
 // decode / reconstruct / sample in inference mode (running statistics).
 //
-//   struct ConvNet enc = convnet_new(1UL, 16UL, 16UL);
+//   struct ConvNet enc = ConvNet::new(1UL, 16UL, 16UL);
 //   enc.conv(16UL, 4UL, 2UL, 1UL, ACT_LEAKY, &rng);   // 16 x 8 x 8
 //   enc.conv(32UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);    // 32 x 4 x 4
 //   enc.batchnorm(ACT_LEAKY);
-//   struct ConvNet dec = convnet_new(latent, 1UL, 1UL);
+//   struct ConvNet dec = ConvNet::new(latent, 1UL, 1UL);
 //   dec.dense(32UL * 16UL, ACT_RELU, &rng);
 //   dec.reshape(32UL, 4UL, 4UL);
 //   dec.deconv(16UL, 4UL, 2UL, 1UL, ACT_RELU, &rng);  // 16 x 8 x 8
 //   dec.deconv(1UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);   // 1 x 16 x 16
-//   struct ConvVae v = conv_vae_new(enc, dec, &cfg);
+//   struct ConvVae v = ConvVae::new(enc, dec, &cfg);
 
 // Plain convolutional autoencoder: the encoder's output is the code (end
 // it with enc.dense(latent, ...) for a vector code).
@@ -204,8 +210,9 @@ struct ConvAutoencoder {
     void free();
 
     &Tensor loss(const &Tensor x, const &Tensor y);
+
+    static struct ConvAutoencoder new(struct ConvNet enc, struct ConvNet dec, int recon);
 };
-struct ConvAutoencoder conv_autoencoder_new(struct ConvNet enc, struct ConvNet dec, int recon);
 
 // Convolutional VAE: linear mu / log sigma^2 heads on the flattened encoder
 // features, the loss of Vae. Reads latent, recon, beta, classes and seed
@@ -238,7 +245,8 @@ struct ConvVae {
     void free();
 
     &Tensor loss(const &Tensor x, const &Tensor y);
+
+    static struct ConvVae new(struct ConvNet enc, struct ConvNet dec, const &VaeConfig cfg);
 };
-struct ConvVae conv_vae_new(struct ConvNet enc, struct ConvNet dec, const &VaeConfig cfg);
 
 } // namespace std

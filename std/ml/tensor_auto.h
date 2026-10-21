@@ -39,12 +39,14 @@
 // and a substantially larger undertaking than everything else in std/ml —
 // not attempted here, and not something this file's Device-enum-style
 // dispatch could grow into incrementally.
+#include <std/ml/tensor.h>
+
 namespace std {
 
 &Tensor tensor_add_auto(const &Tensor a, const &Tensor b);
 &Tensor tensor_sub_auto(const &Tensor a, const &Tensor b);
 &Tensor tensor_mul_auto(const &Tensor a, const &Tensor b);
-&Tensor tensor_sum_auto(const &Tensor a);
+&Tensor Tensor::sum_auto() const;
 &Tensor tensor_matmul_auto(const &Tensor a, const &Tensor b);
 
 } // namespace std

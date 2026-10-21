@@ -48,7 +48,7 @@ unsigned long pool_out_side(unsigned long dim, unsigned long kernel, unsigned lo
     return out;
 }
 
-struct Conv2dSpec conv2d_spec(unsigned long kernel, unsigned long stride, unsigned long padding) {
+struct Conv2dSpec Conv2dSpec::new(unsigned long kernel, unsigned long stride, unsigned long padding) {
     struct Conv2dSpec s;
     s.kH = kernel; s.kW = kernel;
     s.strideH = stride; s.strideW = stride;
@@ -59,7 +59,7 @@ struct Conv2dSpec conv2d_spec(unsigned long kernel, unsigned long stride, unsign
     return s;
 }
 
-struct Pool2dSpec pool2d_spec(unsigned long kernel, unsigned long stride, unsigned long padding) {
+struct Pool2dSpec Pool2dSpec::new(unsigned long kernel, unsigned long stride, unsigned long padding) {
     struct Pool2dSpec s;
     s.kH = kernel; s.kW = kernel;
     s.strideH = stride; s.strideW = stride;
@@ -300,7 +300,7 @@ static void cn_bias_grad_(float* grad, const float* g, unsigned long channels, u
 // Links out to (x, weight, bias, aux), or drops aux when no gradient flows.
 static void cn_link_param_op_(&Tensor out, &Tensor x, &Tensor w, &Tensor b, &Tensor aux, void* backwardFn) {
     unsafe {
-        if (autograd().enabled() && (x->requiresGrad || w->requiresGrad || b->requiresGrad)) {
+        if (Autograd::get().enabled() && (x->requiresGrad || w->requiresGrad || b->requiresGrad)) {
             out->requiresGrad = 1;
             out->parents.push(x);
             out->parents.push(w);
@@ -645,7 +645,7 @@ static void cn_cnn_forward_(const &CnGeom_ g, const float* x, const float* w, co
                       unsigned long inC, unsigned long inH, unsigned long inW,
                       unsigned long kH, unsigned long kW,
                       unsigned long stride, unsigned long padding) {
-    struct Conv2dSpec s = conv2d_spec(kH, stride, padding);
+    struct Conv2dSpec s = Conv2dSpec::new(kH, stride, padding);
     s.kW = kW;
     return tensor_conv2d_ex(x, weight, bias, inC, inH, inW, &s);
 }
@@ -654,7 +654,7 @@ static void cn_cnn_forward_(const &CnGeom_ g, const float* x, const float* w, co
                                 unsigned long inC, unsigned long inH, unsigned long inW,
                                 unsigned long kH, unsigned long kW,
                                 unsigned long stride, unsigned long padding) {
-    struct Conv2dSpec s = conv2d_spec(kH, stride, padding);
+    struct Conv2dSpec s = Conv2dSpec::new(kH, stride, padding);
     s.kW = kW;
     return tensor_conv_transpose2d_ex(x, weight, bias, inC, inH, inW, &s);
 }
@@ -857,27 +857,25 @@ static &Tensor cn_pool_(const &Tensor x, unsigned long channels, unsigned long h
     return out;
 }
 
-&Tensor tensor_maxpool2d_ex(const &Tensor x, unsigned long channels, unsigned long height, unsigned long width,
-                            const &Pool2dSpec spec) {
-    return cn_pool_(x, channels, height, width, spec, CN_POOL_MAX);
+&Tensor Tensor::maxpool2d_ex(unsigned long channels, unsigned long height, unsigned long width, const &Pool2dSpec spec) const {
+    return cn_pool_(self, channels, height, width, spec, CN_POOL_MAX);
 }
 
-&Tensor tensor_avgpool2d_ex(const &Tensor x, unsigned long channels, unsigned long height, unsigned long width,
-                            const &Pool2dSpec spec) {
-    return cn_pool_(x, channels, height, width, spec, spec.countIncludePad ? CN_POOL_AVG : CN_POOL_AVG_EXCL);
+&Tensor Tensor::avgpool2d_ex(unsigned long channels, unsigned long height, unsigned long width, const &Pool2dSpec spec) const {
+    return cn_pool_(self, channels, height, width, spec, spec.countIncludePad ? CN_POOL_AVG : CN_POOL_AVG_EXCL);
 }
 
-&Tensor tensor_maxpool2d(const &Tensor x, unsigned long channels, unsigned long height, unsigned long width,
-                         unsigned long kernel, unsigned long stride, unsigned long padding) {
-    struct Pool2dSpec s = pool2d_spec(kernel, stride, padding);
-    return tensor_maxpool2d_ex(x, channels, height, width, &s);
+&Tensor Tensor::maxpool2d(unsigned long channels, unsigned long height, unsigned long width, unsigned long kernel,
+                          unsigned long stride, unsigned long padding) const {
+    struct Pool2dSpec s = Pool2dSpec::new(kernel, stride, padding);
+    return self.maxpool2d_ex(channels, height, width, &s);
 }
 
-&Tensor tensor_avgpool2d(const &Tensor x, unsigned long channels, unsigned long height, unsigned long width,
-                         unsigned long kernel, unsigned long stride, unsigned long padding, int countIncludePad) {
-    struct Pool2dSpec s = pool2d_spec(kernel, stride, padding);
+&Tensor Tensor::avgpool2d(unsigned long channels, unsigned long height, unsigned long width, unsigned long kernel,
+                          unsigned long stride, unsigned long padding, int countIncludePad) const {
+    struct Pool2dSpec s = Pool2dSpec::new(kernel, stride, padding);
     s.countIncludePad = countIncludePad;
-    return tensor_avgpool2d_ex(x, channels, height, width, &s);
+    return self.avgpool2d_ex(channels, height, width, &s);
 }
 
 // ══ Global pooling ═══════════════════════════════════════════════════════════
@@ -971,12 +969,12 @@ static &Tensor cn_gpool_(const &Tensor x, unsigned long channels, unsigned long 
     return out;
 }
 
-&Tensor tensor_global_avgpool2d(const &Tensor x, unsigned long channels, unsigned long height, unsigned long width) {
-    return cn_gpool_(x, channels, height, width, CN_POOL_AVG);
+&Tensor Tensor::global_avgpool2d(unsigned long channels, unsigned long height, unsigned long width) const {
+    return cn_gpool_(self, channels, height, width, CN_POOL_AVG);
 }
 
-&Tensor tensor_global_maxpool2d(const &Tensor x, unsigned long channels, unsigned long height, unsigned long width) {
-    return cn_gpool_(x, channels, height, width, CN_POOL_MAX);
+&Tensor Tensor::global_maxpool2d(unsigned long channels, unsigned long height, unsigned long width) const {
+    return cn_gpool_(self, channels, height, width, CN_POOL_MAX);
 }
 
 // ══ Nearest upsampling by an integer factor ══════════════════════════════════
@@ -1048,25 +1046,25 @@ static void cn_upsample_backward_(void* selfPtr) {
     }
 }
 
-&Tensor tensor_upsample_nearest(const &Tensor x, unsigned long channels, unsigned long height, unsigned long width,
-                                unsigned long factor) {
+&Tensor Tensor::upsample_nearest(unsigned long channels, unsigned long height, unsigned long width,
+                                 unsigned long factor) const {
     struct CnGeom_ g = cn_geom_blank_();
     g.C = channels; g.H = height; g.W = width;
     g.oC = channels; g.oH = height * factor; g.oW = width * factor;
     g.mode = factor;
-    unsigned long batch = cn_batch_(x, channels * height * width, "tensor_upsample_nearest: x is not [batch, C*H*W]");
-    if (factor == 0UL) panic_at("tensor_upsample_nearest: factor 0", "convnet.sc", __LINE__);
+    unsigned long batch = cn_batch_(self, channels * height * width, "Tensor::upsample_nearest: x is not [batch, C*H*W]");
+    if (factor == 0UL) panic_at("Tensor::upsample_nearest: factor 0", "convnet.sc", __LINE__);
     &Tensor out = cn_alloc2_(batch, channels * g.oH * g.oW);
     struct CnUpJob_ j;
     unsafe {
-        j.src = (const float*)x->data;
+        j.src = (const float*)self->data;
         j.dst = (float*)out->data;
     }
     j.W = width;
     j.f = factor;
     cn_split_(batch * channels * height, width * factor * factor, cn_up_fwd_rows_, &j);
     &Tensor aux = cn_aux_(&g);
-    __tensor_link2(out, x, aux, (void*)cn_upsample_backward_);
+    __tensor_link2(out, self, aux, (void*)cn_upsample_backward_);
     unsafe { if (!out->requiresGrad) cn_drop_(aux); }
     return out;
 }
@@ -1243,11 +1241,11 @@ static void cn_resize_backward_(void* selfPtr) {
     }
 }
 
-&Tensor tensor_resize2d(const &Tensor x, unsigned long channels, unsigned long height, unsigned long width,
-                        unsigned long outH, unsigned long outW, int mode, int alignCorners) {
-    unsigned long batch = cn_batch_(x, channels * height * width, "tensor_resize2d: x is not [batch, C*H*W]");
+&Tensor Tensor::resize2d(unsigned long channels, unsigned long height, unsigned long width, unsigned long outH,
+                         unsigned long outW, int mode, int alignCorners) const {
+    unsigned long batch = cn_batch_(self, channels * height * width, "Tensor::resize2d: x is not [batch, C*H*W]");
     if (outH == 0UL || outW == 0UL || mode < RESIZE_NEAREST || mode > RESIZE_BICUBIC)
-        panic_at("tensor_resize2d: empty output or unknown mode", "convnet.sc", __LINE__);
+        panic_at("Tensor::resize2d: empty output or unknown mode", "convnet.sc", __LINE__);
     &Tensor out = cn_alloc2_(batch, channels * outH * outW);
     &Tensor aux = cn_alloc1_(6UL);
     struct CnResizeJob_ j;
@@ -1258,21 +1256,21 @@ static void cn_resize_backward_(void* selfPtr) {
         aux->data[0] = (float)height; aux->data[1] = (float)width;
         aux->data[2] = (float)outH; aux->data[3] = (float)outW;
         aux->data[4] = (float)j.mode; aux->data[5] = (float)j.align;
-        j.x = (const float*)x->data;
+        j.x = (const float*)self->data;
         j.out = (float*)out->data;
         j.dout = (const float*)0;
         j.dx = (float*)0;
     }
     cn_split_(batch * channels, outH * outW * (mode == RESIZE_BICUBIC ? 16UL : 4UL), cn_resize_fwd_planes_, &j);
-    __tensor_link2(out, x, aux, (void*)cn_resize_backward_);
+    __tensor_link2(out, self, aux, (void*)cn_resize_backward_);
     unsafe { if (!out->requiresGrad) cn_drop_(aux); }
     return out;
 }
 
-&Tensor tensor_upsample_bilinear(const &Tensor x, unsigned long channels, unsigned long height, unsigned long width,
-                                 unsigned long factor) {
-    if (factor == 0UL) panic_at("tensor_upsample_bilinear: factor 0", "convnet.sc", __LINE__);
-    return tensor_resize2d(x, channels, height, width, height * factor, width * factor, RESIZE_BILINEAR, 0);
+&Tensor Tensor::upsample_bilinear(unsigned long channels, unsigned long height, unsigned long width,
+                                  unsigned long factor) const {
+    if (factor == 0UL) panic_at("Tensor::upsample_bilinear: factor 0", "convnet.sc", __LINE__);
+    return self.resize2d(channels, height, width, height * factor, width * factor, RESIZE_BILINEAR, 0);
 }
 
 // ══ Batch normalization ══════════════════════════════════════════════════════
@@ -1809,27 +1807,26 @@ static &Tensor cn_dropout_(const &Tensor x, unsigned long plane, float p, int tr
     return tensor_mul(x, mask);
 }
 
-&Tensor tensor_dropout(const &Tensor x, float p, int training, &Rng rng) {
-    return cn_dropout_(x, 1UL, p, training, rng);
+&Tensor Tensor::dropout(float p, int training, &Rng rng) const {
+    return cn_dropout_(self, 1UL, p, training, rng);
 }
 
-&Tensor tensor_dropout2d(const &Tensor x, unsigned long channels, unsigned long plane, float p,
-                         int training, &Rng rng) {
-    cn_batch_(x, channels * plane, "tensor_dropout2d: x is not [batch, channels*plane]");
-    return cn_dropout_(x, plane == 0UL ? 1UL : plane, p, training, rng);
+&Tensor Tensor::dropout2d(unsigned long channels, unsigned long plane, float p, int training, &Rng rng) const {
+    cn_batch_(self, channels * plane, "Tensor::dropout2d: x is not [batch, channels*plane]");
+    return cn_dropout_(self, plane == 0UL ? 1UL : plane, p, training, rng);
 }
 
 // ══ Conditioning ═════════════════════════════════════════════════════════════
 
-&Tensor tensor_label_planes(const &Tensor labels, unsigned long classes, unsigned long height, unsigned long width) {
+&Tensor Tensor::label_planes(unsigned long classes, unsigned long height, unsigned long width) const {
     unsigned long m;
-    unsafe { m = labels->size; }
+    unsafe { m = self->size; }
     unsigned long plane = height * width;
-    &Tensor out = tensor_new_2d(m, classes * plane, 0);
+    &Tensor out = Tensor::new_2d(m, classes * plane, 0);
     unsafe {
         unsigned long i = 0UL;
         while (i < m) {
-            unsigned long c = (unsigned long)labels->data[i];
+            unsigned long c = (unsigned long)self->data[i];
             if (c < classes) {
                 float* row = (float*)&out->data[(i * classes + c) * plane];
                 unsigned long q = 0UL;
@@ -1843,7 +1840,7 @@ static &Tensor cn_dropout_(const &Tensor x, unsigned long plane, float p, int tr
 
 &Tensor tensor_append_label_channels(const &Tensor x, const &Tensor labels, unsigned long classes,
                                      unsigned long height, unsigned long width) {
-    return tensor_concat_cols(x, tensor_label_planes(labels, classes, height, width));
+    return tensor_concat_cols(x, labels.label_planes(classes, height, width));
 }
 
 // ══ ConvNet ══════════════════════════════════════════════════════════════════
@@ -1862,7 +1859,7 @@ static void cn_heap_end_(?&TensorArena cur) {
     }
 }
 
-struct ConvNet convnet_new(unsigned long channels, unsigned long height, unsigned long width) {
+struct ConvNet ConvNet::new(unsigned long channels, unsigned long height, unsigned long width) {
     struct ConvNet n;
     n.layers = vec_new();
     n.params = vec_new();
@@ -1881,8 +1878,8 @@ static struct ConvLayer cn_layer_(const &ConvNet n, int kind, int act) {
     l.act = act;
     l.inC = n.outC; l.inH = n.outH; l.inW = n.outW;
     l.outC = n.outC; l.outH = n.outH; l.outW = n.outW;
-    l.conv = conv2d_spec(1UL, 1UL, 0UL);
-    l.pool = pool2d_spec(1UL, 1UL, 0UL);
+    l.conv = Conv2dSpec::new(1UL, 1UL, 0UL);
+    l.pool = Pool2dSpec::new(1UL, 1UL, 0UL);
     l.factor = 1UL;
     l.mode = 0;
     l.flag = 0;
@@ -1906,8 +1903,8 @@ static void cn_push_(&ConvNet n, struct ConvLayer l) {
 static unsigned long cn_add_params_(&ConvNet n, unsigned long wRows, unsigned long wCols, unsigned long nBias,
                                     unsigned long fanIn, &Rng rng) {
     ?&TensorArena cur = cn_heap_begin_();
-    &Tensor w = tensor_new_2d(wRows, wCols, 1);
-    &Tensor b = tensor_new_1d(nBias, 1);
+    &Tensor w = Tensor::new_2d(wRows, wCols, 1);
+    &Tensor b = Tensor::new_1d(nBias, 1);
     float bound = (float)1.0 / sqrt_f((float)fanIn);
     rng.fill_uniform(w, -bound, bound);
     rng.fill_uniform(b, -bound, bound);
@@ -1921,9 +1918,9 @@ static unsigned long cn_add_params_(&ConvNet n, unsigned long wRows, unsigned lo
 // gamma 1, beta 0
 static unsigned long cn_add_affine_(&ConvNet n, unsigned long channels) {
     ?&TensorArena cur = cn_heap_begin_();
-    &Tensor gamma = tensor_new_1d(channels, 1);
-    &Tensor beta = tensor_new_1d(channels, 1);
-    tensor_fill(gamma, (float)1.0);
+    &Tensor gamma = Tensor::new_1d(channels, 1);
+    &Tensor beta = Tensor::new_1d(channels, 1);
+    gamma.fill((float)1.0);
     unsigned long at = n.params.length();
     n.params.push(gamma);
     n.params.push(beta);
@@ -1958,13 +1955,13 @@ void ConvNet::deconv_ex(unsigned long outC, const &Conv2dSpec spec, int act, &Rn
 
 void ConvNet::conv(unsigned long outC, unsigned long kernel, unsigned long stride, unsigned long padding, int act,
                    &Rng rng) {
-    struct Conv2dSpec s = conv2d_spec(kernel, stride, padding);
+    struct Conv2dSpec s = Conv2dSpec::new(kernel, stride, padding);
     self.conv_ex(outC, &s, act, rng);
 }
 
 void ConvNet::deconv(unsigned long outC, unsigned long kernel, unsigned long stride, unsigned long padding, int act,
                      &Rng rng) {
-    struct Conv2dSpec s = conv2d_spec(kernel, stride, padding);
+    struct Conv2dSpec s = Conv2dSpec::new(kernel, stride, padding);
     self.deconv_ex(outC, &s, act, rng);
 }
 
@@ -1980,12 +1977,12 @@ void ConvNet::maxpool_ex(const &Pool2dSpec spec) { cn_pool_layer_(self, CONV_LAY
 void ConvNet::avgpool_ex(const &Pool2dSpec spec) { cn_pool_layer_(self, CONV_LAYER_AVGPOOL, spec); }
 
 void ConvNet::maxpool(unsigned long kernel, unsigned long stride, unsigned long padding) {
-    struct Pool2dSpec s = pool2d_spec(kernel, stride, padding);
+    struct Pool2dSpec s = Pool2dSpec::new(kernel, stride, padding);
     cn_pool_layer_(self, CONV_LAYER_MAXPOOL, &s);
 }
 
 void ConvNet::avgpool(unsigned long kernel, unsigned long stride, unsigned long padding, int countIncludePad) {
-    struct Pool2dSpec s = pool2d_spec(kernel, stride, padding);
+    struct Pool2dSpec s = Pool2dSpec::new(kernel, stride, padding);
     s.countIncludePad = countIncludePad;
     cn_pool_layer_(self, CONV_LAYER_AVGPOOL, &s);
 }
@@ -2033,9 +2030,9 @@ void ConvNet::batchnorm(int act) {
     struct ConvLayer l = cn_layer_(self, CONV_LAYER_BATCHNORM, act);
     l.param = cn_add_affine_(self, l.inC);
     ?&TensorArena cur = cn_heap_begin_();
-    &Tensor rm = tensor_new_1d(l.inC, 0);
-    &Tensor rv = tensor_new_1d(l.inC, 0);
-    tensor_fill(rv, (float)1.0);
+    &Tensor rm = Tensor::new_1d(l.inC, 0);
+    &Tensor rv = Tensor::new_1d(l.inC, 0);
+    rv.fill((float)1.0);
     l.buffer = self.buffers.length();
     self.buffers.push(rm);
     self.buffers.push(rv);
@@ -2065,7 +2062,7 @@ void ConvNet::spectral_norm(&Rng rng) {
     unsigned long rows;
     unsafe { rows = w->shape[0]; }
     ?&TensorArena cur = cn_heap_begin_();
-    &Tensor u = tensor_new_1d(rows, 0);
+    &Tensor u = Tensor::new_1d(rows, 0);
     rng.fill_normal(u, (float)0.0, (float)1.0);
     unsafe { cn_normalize_((float*)u->data, rows); }
     last.buffer = self.buffers.length();
@@ -2079,7 +2076,7 @@ void ConvNet::dropout(float p, int byChannel, &Rng rng) {
     l.prob = p;
     l.flag = byChannel;
     l.buffer = self.rngs.length();
-    self.rngs.push(rng_new(rng.u64()));
+    self.rngs.push(Rng::new(rng.u64()));
     cn_push_(self, l);
 }
 
@@ -2124,7 +2121,7 @@ void ConvNet::add_skip(unsigned long slot, int act, &Rng rng) {
             s = s + 1UL;
         if (s > sv.outH) panic_at("ConvNet::add_skip: no 1x1 stride maps the saved size onto the current one", "convnet.sc", __LINE__);
         l.flag = 1;
-        l.conv = conv2d_spec(1UL, s, 0UL);
+        l.conv = Conv2dSpec::new(1UL, s, 0UL);
         l.param = cn_add_params_(self, l.inC, sv.outC, l.inC, sv.outC, rng);
     }
     cn_push_(self, l);
@@ -2188,16 +2185,16 @@ static &Tensor cn_layer_forward_(const &ConvNet n, const &ConvLayer l, const &Te
     if (k == CONV_LAYER_GROUPNORM)
         return tensor_group_norm(x, *n.params.at(l.param), *n.params.at(l.param + 1UL),
                                  l.inC, l.inH * l.inW, l.factor, (float)0.00001);
-    if (k == CONV_LAYER_MAXPOOL) return tensor_maxpool2d_ex(x, l.inC, l.inH, l.inW, &l.pool);
-    if (k == CONV_LAYER_AVGPOOL) return tensor_avgpool2d_ex(x, l.inC, l.inH, l.inW, &l.pool);
-    if (k == CONV_LAYER_GLOBAL_AVGPOOL) return tensor_global_avgpool2d(x, l.inC, l.inH, l.inW);
-    if (k == CONV_LAYER_GLOBAL_MAXPOOL) return tensor_global_maxpool2d(x, l.inC, l.inH, l.inW);
-    if (k == CONV_LAYER_UPSAMPLE) return tensor_upsample_nearest(x, l.inC, l.inH, l.inW, l.factor);
-    if (k == CONV_LAYER_RESIZE) return tensor_resize2d(x, l.inC, l.inH, l.inW, l.outH, l.outW, l.mode, l.flag);
+    if (k == CONV_LAYER_MAXPOOL) return x.maxpool2d_ex(l.inC, l.inH, l.inW, &l.pool);
+    if (k == CONV_LAYER_AVGPOOL) return x.avgpool2d_ex(l.inC, l.inH, l.inW, &l.pool);
+    if (k == CONV_LAYER_GLOBAL_AVGPOOL) return x.global_avgpool2d(l.inC, l.inH, l.inW);
+    if (k == CONV_LAYER_GLOBAL_MAXPOOL) return x.global_maxpool2d(l.inC, l.inH, l.inW);
+    if (k == CONV_LAYER_UPSAMPLE) return x.upsample_nearest(l.inC, l.inH, l.inW, l.factor);
+    if (k == CONV_LAYER_RESIZE) return x.resize2d(l.inC, l.inH, l.inW, l.outH, l.outW, l.mode, l.flag);
     if (k == CONV_LAYER_DROPOUT) {
         &Rng r = n.rngs.at(l.buffer);
-        if (l.flag) return tensor_dropout2d(x, l.inC, l.inH * l.inW, l.prob, n.training, r);
-        return tensor_dropout(x, l.prob, n.training, r);
+        if (l.flag) return x.dropout2d(l.inC, l.inH * l.inW, l.prob, n.training, r);
+        return x.dropout(l.prob, n.training, r);
     }
     if (k == CONV_LAYER_SAVE) { saved.push(x); return x; }
     if (k == CONV_LAYER_ADD) {
@@ -2216,7 +2213,7 @@ static &Tensor cn_layer_forward_(const &ConvNet n, const &ConvLayer l, const &Te
     unsigned long i = 0UL;
     while (i < self.layers.length()) {
         &ConvLayer l = self.layers.at(i);
-        h = tensor_activate(cn_layer_forward_(self, l, h, &saved), l.act);
+        h = cn_layer_forward_(self, l, h, &saved).activate(l.act);
         i = i + 1UL;
     }
     saved.free();
@@ -2295,7 +2292,7 @@ static void cn_clone_list_(&Vec<&Tensor> dst, const &Vec<&Tensor> src, int requi
     unsigned long i = 0UL;
     while (i < src.length()) {
         &Tensor p = *src.at(i);
-        &Tensor q = tensor_zeros_like(p);
+        &Tensor q = p.zeros_like();
         unsafe {
             q->requiresGrad = requiresGrad;
             __tensor_ew(EW_COPY, (const float*)p->data, (const float*)0, (float)0.0, (float*)q->data, p->size);
@@ -2307,7 +2304,7 @@ static void cn_clone_list_(&Vec<&Tensor> dst, const &Vec<&Tensor> src, int requi
 
 struct ConvNet ConvNet::clone() const {
     ?&TensorArena cur = cn_heap_begin_();
-    struct ConvNet c = convnet_new(self.inC, self.inH, self.inW);
+    struct ConvNet c = ConvNet::new(self.inC, self.inH, self.inW);
     c.outC = self.outC; c.outH = self.outH; c.outW = self.outW;
     c.training = self.training;
     c.slots = self.slots;

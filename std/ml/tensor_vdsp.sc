@@ -53,16 +53,16 @@ extern void vDSP_sve(const float* A, long IA, float* result, unsigned long N);
     return out;
 }
 
-&Tensor tensor_sum_vdsp(const &Tensor a) {
+&Tensor Tensor::sum_vdsp() const {
     unsigned long one[1];
     unsafe { one[0] = 1UL; }
     &Tensor out = __tensor_alloc(one, 1UL, 0);
     unsafe {
         float acc = (float)0.0;
-        vDSP_sve((const float*)a->data, 1L, &acc, a->size);
+        vDSP_sve((const float*)self->data, 1L, &acc, self->size);
         out->data[0] = acc;
     }
-    __tensor_link1(out, a, (void*)__sum_backward);
+    __tensor_link1(out, self, (void*)__sum_backward);
     return out;
 }
 
@@ -73,7 +73,7 @@ extern void vDSP_sve(const float* A, long IA, float* result, unsigned long N);
 &Tensor tensor_add_vdsp(const &Tensor a, const &Tensor b) { return tensor_add(a, b); }
 &Tensor tensor_sub_vdsp(const &Tensor a, const &Tensor b) { return tensor_sub(a, b); }
 &Tensor tensor_mul_vdsp(const &Tensor a, const &Tensor b) { return tensor_mul(a, b); }
-&Tensor tensor_sum_vdsp(const &Tensor a) { return tensor_sum(a); }
+&Tensor Tensor::sum_vdsp() const { return self.sum(); }
 #endif
 
 } // namespace std

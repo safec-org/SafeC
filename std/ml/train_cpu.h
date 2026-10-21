@@ -41,12 +41,16 @@ struct CpuTrainer {
     void  set_learning_rate(float lr);
     int   sync();
     void  free();
+    // A trainer for m (moved into host): 'opt' supplies the optimizer's kind
+    // and hyperparameters (Optimizer::from); the trainer adds m's parameters
+    // to its own. loss: TRAIN_LOSS_*.
+    static struct CpuTrainer<M> new(M m, int loss, const &Optimizer opt);
 };
 
 generic<M: Module>
 int CpuTrainer::fit_begin(const &Dataset data, const &TrainConfig cfg) {
     if (self.active) self.dl.free();
-    self.dl = dataloader_new(data, cfg.batchSize, cfg.shuffle, cfg.seed);
+    self.dl = DataLoader::new(data, cfg.batchSize, cfg.shuffle, cfg.seed);
     self.clipNorm = cfg.clipNorm;
     self.active = 1;
     return 1;
@@ -94,16 +98,14 @@ void CpuTrainer::free() {
     self.stepArena.free();
 }
 
-// 'opt' supplies the optimizer's kind and hyperparameters (optimizer_from);
-// the trainer adds the model's parameters to its own. loss: TRAIN_LOSS_*.
 generic<M: Module>
-struct CpuTrainer<M> cpu_module_trainer_new(M m, int loss, const &Optimizer opt) {
+struct CpuTrainer<M> CpuTrainer::new(M m, int loss, const &Optimizer opt) {
     struct CpuTrainer<M> t;
     t.host = m;
-    t.opt = optimizer_from(opt);
+    t.opt = Optimizer::from(opt);
     model_add_params(&t.host, &t.opt);
     t.loss = loss;
-    t.stepArena = tensor_arena_new(0UL);
+    t.stepArena = TensorArena::new(0UL);
     t.clipNorm = (float)0.0;
     t.active = 0;
     return t;
@@ -127,12 +129,14 @@ struct CpuModelTrainer {
     void  set_learning_rate(float lr);
     int   sync();
     void  free();
+    // The trainer for m (moved into host).
+    static struct CpuModelTrainer<M> new(M m, const &Optimizer opt);
 };
 
 generic<M: LossModel>
 int CpuModelTrainer::fit_begin(const &Dataset data, const &TrainConfig cfg) {
     if (self.active) self.dl.free();
-    self.dl = dataloader_new(data, cfg.batchSize, cfg.shuffle, cfg.seed);
+    self.dl = DataLoader::new(data, cfg.batchSize, cfg.shuffle, cfg.seed);
     self.clipNorm = cfg.clipNorm;
     self.active = 1;
     return 1;
@@ -181,12 +185,12 @@ void CpuModelTrainer::free() {
 }
 
 generic<M: LossModel>
-struct CpuModelTrainer<M> cpu_model_trainer_new(M m, const &Optimizer opt) {
+struct CpuModelTrainer<M> CpuModelTrainer::new(M m, const &Optimizer opt) {
     struct CpuModelTrainer<M> t;
     t.host = m;
-    t.opt = optimizer_from(opt);
+    t.opt = Optimizer::from(opt);
     model_add_params(&t.host, &t.opt);
-    t.stepArena = tensor_arena_new(0UL);
+    t.stepArena = TensorArena::new(0UL);
     t.clipNorm = (float)0.0;
     t.active = 0;
     return t;
@@ -201,6 +205,8 @@ struct CpuGanTrainer {
     struct GanLosses train(const &Dataset data, unsigned long epochs, unsigned long batchSize);
     int  sync();
     void free();
+    // The trainer for m (moved into host).
+    static struct CpuGanTrainer<H> new(H g);
 };
 
 generic<H: GanModel>
@@ -220,7 +226,7 @@ generic<H: GanModel>
 void CpuGanTrainer::free() { }
 
 generic<H: GanModel>
-struct CpuGanTrainer<H> cpu_gan_trainer_new(H g) {
+struct CpuGanTrainer<H> CpuGanTrainer::new(H g) {
     struct CpuGanTrainer<H> t;
     t.host = g;
     return t;
@@ -239,8 +245,9 @@ struct CpuDqnAgent {
     unsigned long updates();
     int   sync();
     void  free();
+
+    static struct CpuDqnAgent new(struct Dqn d);
 };
-struct CpuDqnAgent cpu_dqn_agent_new(struct Dqn d);
 
 // PolicyAgent as a PolicyLearner.
 struct CpuPgAgent {
@@ -252,7 +259,8 @@ struct CpuPgAgent {
     float update();
     int   sync();
     void  free();
+
+    static struct CpuPgAgent new(struct PolicyAgent a);
 };
-struct CpuPgAgent cpu_pg_agent_new(struct PolicyAgent a);
 
 } // namespace std

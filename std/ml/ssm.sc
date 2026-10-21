@@ -95,7 +95,7 @@ static void scan_run_(&ScanJob j, unsigned long D) {
                            const &Tensor B, const &Tensor C, const &Tensor Dskip) {
     unsigned long T; unsigned long D; unsigned long N;
     unsafe { T = x->shape[0]; D = x->shape[1]; N = A->shape[1]; }
-    &Tensor y = tensor_new_2d(T, D, 0);
+    &Tensor y = Tensor::new_2d(T, D, 0);
     struct ScanJob j;
     unsafe {
         float* h = (float*)malloc(sizeof(float) * D * N);
@@ -181,7 +181,7 @@ static float ssm_init_(unsigned long i, unsigned long seed) {
 }
 
 static &Tensor ssm_rand_(unsigned long rows, unsigned long cols, unsigned long seed, float scale) {
-    &Tensor t = tensor_new_2d(rows, cols, 0);
+    &Tensor t = Tensor::new_2d(rows, cols, 0);
     unsafe {
         unsigned long i = 0UL;
         while (i < rows * cols) { t->data[i] = ssm_init_(i, seed) * scale; i = i + 1UL; }
@@ -189,7 +189,7 @@ static &Tensor ssm_rand_(unsigned long rows, unsigned long cols, unsigned long s
     return t;
 }
 
-struct Mamba mamba_new(unsigned long dModel, unsigned long dState, unsigned long dConv, unsigned long expand) {
+struct Mamba Mamba::new(unsigned long dModel, unsigned long dState, unsigned long dConv, unsigned long expand) {
     struct Mamba m;
     unsigned long dInner = expand * dModel;
     unsigned long dtRank = (dModel + 15UL) / 16UL;
@@ -200,9 +200,9 @@ struct Mamba mamba_new(unsigned long dModel, unsigned long dState, unsigned long
     m.xProj   = ssm_rand_(dInner, dtRank + 2UL * dState, 34UL, (float)1.0 / sqrt_f((float)dInner));
     m.dtProj  = ssm_rand_(dtRank, dInner, 35UL, (float)1.0 / sqrt_f((float)dtRank));
     m.outProj = ssm_rand_(dInner, dModel, 36UL, (float)1.0 / sqrt_f((float)dInner));
-    m.dtBias  = tensor_new_2d(1UL, dInner, 0);
-    m.Alog    = tensor_new_2d(dInner, dState, 0);
-    m.Dskip   = tensor_new_2d(1UL, dInner, 0);
+    m.dtBias  = Tensor::new_2d(1UL, dInner, 0);
+    m.Alog    = Tensor::new_2d(dInner, dState, 0);
+    m.Dskip   = Tensor::new_2d(1UL, dInner, 0);
     unsafe {
         float lo = log_f((float)0.001);
         float hi = log_f((float)0.1);
@@ -237,7 +237,7 @@ static &Tensor mamba_run_(const &Mamba m, const &Tensor X, &Tensor convState, &T
     unsafe { T = X->size / m->dModel; }
     E = m->dInner; N = m->dState; R = m->dtRank;
 
-    &Tensor X2 = tensor_new_2d(T, m->dModel, 0);
+    &Tensor X2 = Tensor::new_2d(T, m->dModel, 0);
     unsafe {
         unsigned long i = 0UL;
         while (i < T * m->dModel) { X2->data[i] = X->data[i]; i = i + 1UL; }
@@ -245,7 +245,7 @@ static &Tensor mamba_run_(const &Mamba m, const &Tensor X, &Tensor convState, &T
     &Tensor xz = tensor_matmul(X2, m->inProj);          // [T, 2E]: x | z
     ssm_release_(X2);
 
-    &Tensor xc = tensor_new_2d(T, E, 0);
+    &Tensor xc = Tensor::new_2d(T, E, 0);
     struct ConvJob cj;
     unsafe {
         cj.in = (const float*)xz->data; cj.ldin = 2UL * E;
@@ -259,7 +259,7 @@ static &Tensor mamba_run_(const &Mamba m, const &Tensor X, &Tensor convState, &T
 
     &Tensor xdbl = tensor_matmul(xc, m->xProj);         // [T, R + 2N]: dt | B | C
     unsigned long W = R + 2UL * N;
-    &Tensor dtLow = tensor_new_2d(T, R, 0);
+    &Tensor dtLow = Tensor::new_2d(T, R, 0);
     unsafe {
         unsigned long t = 0UL;
         while (t < T) {
@@ -271,7 +271,7 @@ static &Tensor mamba_run_(const &Mamba m, const &Tensor X, &Tensor convState, &T
     &Tensor dt = tensor_matmul(dtLow, m->dtProj);       // [T, E], before bias + softplus
     ssm_release_(dtLow);
 
-    &Tensor y = tensor_new_2d(T, E, 0);
+    &Tensor y = Tensor::new_2d(T, E, 0);
     struct ScanJob j;
     unsafe {
         j.x = (const float*)xc->data; j.ldx = E;
@@ -293,11 +293,11 @@ static &Tensor mamba_run_(const &Mamba m, const &Tensor X, &Tensor convState, &T
     return out;
 }
 
-struct MambaState mamba_state_new(const &Mamba layer) {
+struct MambaState MambaState::new(const &Mamba layer) {
     struct MambaState s;
     unsigned long k1 = layer->dConv > 1UL ? layer->dConv - 1UL : 1UL;
-    s.conv = tensor_new_2d(layer->dInner, k1, 0);
-    s.h = tensor_new_2d(layer->dInner, layer->dState, 0);
+    s.conv = Tensor::new_2d(layer->dInner, k1, 0);
+    s.h = Tensor::new_2d(layer->dInner, layer->dState, 0);
     return s;
 }
 
@@ -316,7 +316,7 @@ void MambaState::free() {
 }
 
 &Tensor Mamba::forward(const &Tensor X) const {
-    struct MambaState s = mamba_state_new(self);
+    struct MambaState s = MambaState::new(self);
     s.reset();
     &Tensor out = mamba_run_(self, X, s.conv, s.h);
     s.free();

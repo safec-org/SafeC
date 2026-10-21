@@ -44,8 +44,8 @@ void t_size_classes() {
 static void conv_then_alloc(unsigned long inC, unsigned long outC, unsigned long k,
                             unsigned long stride, unsigned long pad,
                             unsigned long h, unsigned long w, int relu) {
-    struct Conv2D l = conv2d_new(inC, outC, k, k, stride, pad);
-    struct FeatureMap x = feature_map_new(inC, h, w);
+    struct Conv2D l = Conv2D::new(inC, outC, k, k, stride, pad);
+    struct FeatureMap x = FeatureMap::new(inC, h, w);
     unsafe {
         unsigned long i = 0UL;
         while (i < inC * h * w) { x.data[i] = (float)((i * 7UL) % 11UL) * (float)0.1 - (float)0.5; i = i + 1UL; }

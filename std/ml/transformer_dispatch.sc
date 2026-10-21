@@ -21,7 +21,7 @@ extern void  free(void* ptr);
 static &Tensor __add_broadcast_row_dispatch(&Tensor mat, &Tensor row) {
     unsigned long rows; unsigned long cols;
     unsafe { rows = mat->shape[0]; cols = mat->shape[1]; }
-    &Tensor out = tensor_new_2d(rows, cols, 0);
+    &Tensor out = Tensor::new_2d(rows, cols, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
@@ -43,7 +43,7 @@ static &Tensor __add_broadcast_row_dispatch(&Tensor mat, &Tensor row) {
         numHeads = block->numHeads;
     }
 
-    &Tensor h = tensor_layernorm_rows(x, 1e-5);
+    &Tensor h = x.layernorm_rows(1e-5);
     &Tensor Q = tensor_matmul_on(h, Wq, device);
     &Tensor K = tensor_matmul_on(h, Wk, device);
     &Tensor V = tensor_matmul_on(h, Wv, device);
@@ -53,10 +53,10 @@ static &Tensor __add_broadcast_row_dispatch(&Tensor mat, &Tensor row) {
     &Tensor attnOut = tensor_matmul_on(attnRaw, Wo, device);
     &Tensor x1 = tensor_residual_add(x, attnOut);
 
-    &Tensor h2 = tensor_layernorm_rows(x1, 1e-5);
+    &Tensor h2 = x1.layernorm_rows(1e-5);
     &Tensor ffnHiddenRaw = tensor_matmul_on(h2, W1, device);
     &Tensor ffnHiddenBias = __add_broadcast_row_dispatch(ffnHiddenRaw, b1w);
-    &Tensor ffnHidden = tensor_relu_on(ffnHiddenBias, device);
+    &Tensor ffnHidden = ffnHiddenBias.relu_on(device);
     &Tensor ffnOutRaw = tensor_matmul_on(ffnHidden, W2, device);
     &Tensor ffnOut = __add_broadcast_row_dispatch(ffnOutRaw, b2w);
     &Tensor out = tensor_residual_add(x1, ffnOut);

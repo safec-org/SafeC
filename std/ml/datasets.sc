@@ -29,8 +29,8 @@ static void ds_heap_end_(?&TensorArena cur) {
 static struct Dataset ds_new_(unsigned long n, unsigned long features, unsigned long targets, unsigned long classes) {
     ?&TensorArena cur = ds_heap_begin_();
     struct Dataset d;
-    d.x = tensor_new_2d(n, features, 0);
-    d.y = tensor_new_2d(n, targets, 0);
+    d.x = Tensor::new_2d(n, features, 0);
+    d.y = Tensor::new_2d(n, targets, 0);
     d.n = n;
     d.features = features;
     d.targets = targets;
@@ -47,7 +47,7 @@ static void ds_set_(&Dataset d, unsigned long i, float a, float b, float label) 
     }
 }
 
-struct Dataset dataset_moons(unsigned long n, float noise, &Rng rng) {
+struct Dataset Dataset::moons(unsigned long n, float noise, &Rng rng) {
     struct Dataset d = ds_new_(n, 2UL, 1UL, 2UL);
     unsigned long i = 0UL;
     while (i < n) {
@@ -61,7 +61,7 @@ struct Dataset dataset_moons(unsigned long n, float noise, &Rng rng) {
     return d;
 }
 
-struct Dataset dataset_circles(unsigned long n, float noise, float factor, &Rng rng) {
+struct Dataset Dataset::circles(unsigned long n, float noise, float factor, &Rng rng) {
     struct Dataset d = ds_new_(n, 2UL, 1UL, 2UL);
     unsigned long i = 0UL;
     while (i < n) {
@@ -74,7 +74,7 @@ struct Dataset dataset_circles(unsigned long n, float noise, float factor, &Rng 
     return d;
 }
 
-struct Dataset dataset_spirals(unsigned long n, unsigned long classes, float noise, &Rng rng) {
+struct Dataset Dataset::spirals(unsigned long n, unsigned long classes, float noise, &Rng rng) {
     struct Dataset d = ds_new_(n, 2UL, 1UL, classes);
     unsigned long i = 0UL;
     while (i < n) {
@@ -87,10 +87,9 @@ struct Dataset dataset_spirals(unsigned long n, unsigned long classes, float noi
     return d;
 }
 
-struct Dataset dataset_blobs(unsigned long n, unsigned long classes, unsigned long features,
-                             float spread, &Rng rng) {
+struct Dataset Dataset::blobs(unsigned long n, unsigned long classes, unsigned long features, float spread, &Rng rng) {
     struct Dataset d = ds_new_(n, features, 1UL, classes);
-    &Tensor centers = tensor_new_2d(classes, features, 0);
+    &Tensor centers = Tensor::new_2d(classes, features, 0);
     rng.fill_uniform(centers, (float)-5.0, (float)5.0);
     unsafe {
         unsigned long i = 0UL;
@@ -110,7 +109,7 @@ struct Dataset dataset_blobs(unsigned long n, unsigned long classes, unsigned lo
     return d;
 }
 
-struct Dataset dataset_xor(unsigned long n, float noise, &Rng rng) {
+struct Dataset Dataset::xor(unsigned long n, float noise, &Rng rng) {
     struct Dataset d = ds_new_(n, 2UL, 1UL, 2UL);
     unsigned long i = 0UL;
     while (i < n) {
@@ -123,7 +122,7 @@ struct Dataset dataset_xor(unsigned long n, float noise, &Rng rng) {
     return d;
 }
 
-struct Dataset dataset_sine(unsigned long n, float noise, &Rng rng) {
+struct Dataset Dataset::sine(unsigned long n, float noise, &Rng rng) {
     struct Dataset d = ds_new_(n, 1UL, 1UL, 0UL);
     unsafe {
         unsigned long i = 0UL;
@@ -137,7 +136,7 @@ struct Dataset dataset_sine(unsigned long n, float noise, &Rng rng) {
     return d;
 }
 
-struct Dataset dataset_gaussian_ring(unsigned long n, unsigned long modes, float radius, float std, &Rng rng) {
+struct Dataset Dataset::gaussian_ring(unsigned long n, unsigned long modes, float radius, float std, &Rng rng) {
     struct Dataset d = ds_new_(n, 2UL, 1UL, modes);
     unsigned long i = 0UL;
     while (i < n) {
@@ -149,7 +148,7 @@ struct Dataset dataset_gaussian_ring(unsigned long n, unsigned long modes, float
     return d;
 }
 
-struct Dataset dataset_shapes(unsigned long n, unsigned long side, &Rng rng) {
+struct Dataset Dataset::shapes(unsigned long n, unsigned long side, &Rng rng) {
     struct Dataset d = ds_new_(n, side * side, 1UL, 4UL);
     unsafe {
         unsigned long i = 0UL;
@@ -227,7 +226,7 @@ static unsigned long ds_be32_(const unsigned char* p) {
     }
 }
 
-struct Dataset dataset_load_mnist(const &char imagesPath, const &char labelsPath, unsigned long limit) {
+struct Dataset Dataset::load_mnist(const &char imagesPath, const &char labelsPath, unsigned long limit) {
     &heap unsigned char img;
     &heap unsigned char lab;
     unsafe { img = (&heap unsigned char)0; lab = (&heap unsigned char)0; }
@@ -280,7 +279,7 @@ static float ds_field_(unsigned char* buf, unsigned long lo, unsigned long hi, &
     }
 }
 
-struct Dataset dataset_load_csv(const &char path, long labelColumn, int hasHeader, int classification) {
+struct Dataset Dataset::load_csv(const &char path, long labelColumn, int hasHeader, int classification) {
     &heap unsigned char raw;
     unsafe { raw = (&heap unsigned char)0; }
     unsigned long n = ds_read_all_(path, &raw);
@@ -470,7 +469,7 @@ static void dl_shuffle_(&DataLoader dl) {
     }
 }
 
-struct DataLoader dataloader_new(const &Dataset ds, unsigned long batchSize, int shuffle, unsigned long seed) {
+struct DataLoader DataLoader::new(const &Dataset ds, unsigned long batchSize, int shuffle, unsigned long seed) {
     struct DataLoader dl;
     dl.x = ds.x;
     dl.y = ds.y;
@@ -478,7 +477,7 @@ struct DataLoader dataloader_new(const &Dataset ds, unsigned long batchSize, int
     dl.batchSize = batchSize == 0UL ? 1UL : batchSize;
     dl.pos = 0UL;
     dl.shuffle = shuffle;
-    dl.rng = rng_new(seed);
+    dl.rng = Rng::new(seed);
     unsafe {
         unsigned long* order = (unsigned long*)malloc(sizeof(unsigned long) * (ds.n + 1UL));
         unsigned long i = 0UL;
@@ -499,8 +498,8 @@ int DataLoader::next(&Batch out) {
     if (rows > self.batchSize) rows = self.batchSize;
     unsigned long F; unsigned long T;
     unsafe { F = self.x->shape[1]; T = self.y->shape[1]; }
-    out.x = tensor_new_2d(rows, F, 0);
-    out.y = tensor_new_2d(rows, T, 0);
+    out.x = Tensor::new_2d(rows, F, 0);
+    out.y = Tensor::new_2d(rows, T, 0);
     out.rows = rows;
     unsafe {
         unsigned long r = 0UL;

@@ -1125,7 +1125,7 @@ int cuda_copy_to_host(&void host, unsigned long dev, unsigned long bytes) {
     unsafe { return cuda_read_bytes_((void*)host, (unsigned long long)dev, bytes); }
 }
 
-struct CudaBuf cuda_alloc(unsigned long n) {
+struct CudaBuf CudaBuf::alloc(unsigned long n) {
     struct CudaBuf b;
     b.dev = 0UL;
     b.len = 0UL;
@@ -1142,8 +1142,8 @@ int cuda_write(struct CudaBuf dst, const &float host, unsigned long n) {
     unsafe { return cuda_write_bytes_((unsigned long long)dst.dev, (const void*)host, n * sizeof(float)); }
 }
 
-struct CudaBuf cuda_upload(const &float host, unsigned long n) {
-    struct CudaBuf b = cuda_alloc(n);
+struct CudaBuf CudaBuf::upload(const &float host, unsigned long n) {
+    struct CudaBuf b = CudaBuf::alloc(n);
     if (b.dev != 0UL && !cuda_write(b, host, n)) b.free();
     return b;
 }
@@ -1800,7 +1800,7 @@ static int cuda_k16_(int fp16Kernel, int dtype) { return dtype == CUDA_BF16 ? fp
 
 static int cuda_dtype_type_(int dtype) { return dtype == CUDA_BF16 ? CUDA_R_16BF_ : CUDA_R_16F_; }
 
-struct CudaHalfBuf cuda_half_alloc(unsigned long n, int dtype) {
+struct CudaHalfBuf CudaHalfBuf::alloc(unsigned long n, int dtype) {
     struct CudaHalfBuf b;
     b.dev = 0UL;
     b.len = 0UL;
@@ -1813,10 +1813,10 @@ struct CudaHalfBuf cuda_half_alloc(unsigned long n, int dtype) {
     return b;
 }
 
-struct CudaHalfBuf cuda_half_upload(const &float host, unsigned long n, int dtype) {
-    struct CudaHalfBuf b = cuda_half_alloc(n, dtype);
+struct CudaHalfBuf CudaHalfBuf::upload(const &float host, unsigned long n, int dtype) {
+    struct CudaHalfBuf b = CudaHalfBuf::alloc(n, dtype);
     if (b.dev == 0UL) return b;
-    struct CudaBuf tmp = cuda_upload(host, n);
+    struct CudaBuf tmp = CudaBuf::upload(host, n);
     int ok = tmp.dev != 0UL && cuda_to_half(tmp, b);
     if (ok) ok = cuda_sync();   // tmp is freed next
     tmp.free();

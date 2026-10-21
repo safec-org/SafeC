@@ -148,8 +148,8 @@ static void __matmul_backward_blas(void* selfPtr) {
 &Tensor tensor_matmul_blas(const &Tensor a, const &Tensor b) {
     unsigned long m; unsigned long k; unsigned long n;
     unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
-    // __tensor_alloc (not tensor_new_2d) deliberately: tensor_new_2d's
-    // extra tensor_fill(0.0) zero-pass is dead work here specifically —
+    // __tensor_alloc (not Tensor::new_2d) deliberately: Tensor::new_2d's
+    // extra Tensor::fill(0.0) zero-pass is dead work here specifically —
     // sgemm below runs with beta=0.0, which means "ignore C's
     // incoming contents, write every element fresh", so the zero-fill's
     // result is fully overwritten before anything ever reads it. A real,

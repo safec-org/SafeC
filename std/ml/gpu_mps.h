@@ -254,7 +254,7 @@ int    mps_read_persistent(&void buf, &void dst, unsigned long bytes);
 int mps_sub_f32_chained(&void bufA, const &float b, &float out, unsigned long n);
 
 // out[i] = bufA[i] * b[i] -- generic chained elementwise multiply (one
-// pending GPU input, one plain CPU array), used by tensor_square_gpu's
+// pending GPU input, one plain CPU array), used by Tensor::square_gpu's
 // backward: 2*diff (still GPU-pending from the forward pass) times the
 // incoming gradient (an ordinary CPU array -- see __sum_backward, which
 // writes it eagerly with no GPU involvement at all).
@@ -263,7 +263,7 @@ int mps_mul_f32_chained(&void bufA, const &float b, &float out, unsigned long n)
 // out[i] = buf[i] * buf[i] -- self-multiply of a single still-pending GPU
 // buffer (both mul_kernel operand slots bound to the same buffer; reading
 // the same device memory twice is safe, there's no write). Used by
-// tensor_square_gpu's forward pass for the loss computation's
+// Tensor::square_gpu's forward pass for the loss computation's
 // sq = diff * diff, where 'diff' is itself still GPU-pending -- the
 // generic mps_mul_f32_chained above can't express this shape since its
 // second operand has to already be a plain CPU array.
@@ -286,7 +286,7 @@ int mps_scale_f32_chained(&void buf, float k, &float out, unsigned long n);
 // matmul against a row-concatenated [gateW; upW] weight); computes
 // out[row,col] = gelu(bufRaw[row,col]) * bufRaw[row, intermediateSize+col]
 // for col in [0, intermediateSize), same tanh-approx GELU formula as
-// std::tensor_gelu_fwd (activations.sc), in one dispatch -- see
+// activations.sc.gelu_fwd(), in one dispatch -- see
 // gpu_mps_kernels.metal's gated_gelu_kernel. 'out' has rows*
 // intermediateSize elements, same throwaway-CPU-scratch-until-batch-end
 // contract as every other *_chained function here.

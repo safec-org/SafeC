@@ -11,7 +11,7 @@ namespace std {
 
 // ══ Random numbers ═══════════════════════════════════════════════════════════
 
-struct Rng rng_new(unsigned long seed) {
+struct Rng Rng::new(unsigned long seed) {
     struct Rng r;
     r.state = seed * 6364136223846793005UL + 1442695040888963407UL;
     r.hasSpare = 0;
@@ -62,7 +62,7 @@ void Rng::fill_normal(&Tensor t, float mean, float std) {
 }
 
 &Tensor Rng::normal_tensor(unsigned long rows, unsigned long cols) {
-    &Tensor t = tensor_new_2d(rows, cols, 0);
+    &Tensor t = Tensor::new_2d(rows, cols, 0);
     self.fill_normal(t, (float)0.0, (float)1.0);
     return t;
 }
@@ -211,12 +211,12 @@ static &Tensor nn_unary_(const &Tensor a, int op, float k, float k2) {
     return out;
 }
 
-&Tensor tensor_add_scalar(const &Tensor a, float k) { return nn_unary_(a, NN_U_ADDK, k, (float)0.0); }
-&Tensor tensor_exp(const &Tensor a) { return nn_unary_(a, NN_U_EXP, (float)0.0, (float)0.0); }
-&Tensor tensor_log(const &Tensor a) { return nn_unary_(a, NN_U_LOG, (float)0.0, (float)0.0); }
-&Tensor tensor_abs(const &Tensor a) { return nn_unary_(a, NN_U_ABS, (float)0.0, (float)0.0); }
-&Tensor tensor_leaky_relu(const &Tensor a, float slope) { return nn_unary_(a, NN_U_LEAKY, slope, (float)0.0); }
-&Tensor tensor_clamp(const &Tensor a, float lo, float hi) { return nn_unary_(a, NN_U_CLAMP, lo, hi); }
+&Tensor Tensor::add_scalar(float k) const { return nn_unary_(self, NN_U_ADDK, k, (float)0.0); }
+&Tensor Tensor::exp() const { return nn_unary_(self, NN_U_EXP, (float)0.0, (float)0.0); }
+&Tensor Tensor::log() const { return nn_unary_(self, NN_U_LOG, (float)0.0, (float)0.0); }
+&Tensor Tensor::abs() const { return nn_unary_(self, NN_U_ABS, (float)0.0, (float)0.0); }
+&Tensor Tensor::leaky_relu(float slope) const { return nn_unary_(self, NN_U_LEAKY, slope, (float)0.0); }
+&Tensor Tensor::clamp(float lo, float hi) const { return nn_unary_(self, NN_U_CLAMP, lo, hi); }
 
 // ── Minimum ──────────────────────────────────────────────────────────────────
 static void nn_minimum_backward_(void* selfPtr) {
@@ -249,10 +249,10 @@ static void nn_minimum_backward_(void* selfPtr) {
     return out;
 }
 
-&Tensor tensor_mean(const &Tensor a) {
+&Tensor Tensor::mean() const {
     float n;
-    unsafe { n = (float)a->size; }
-    return tensor_scale(tensor_sum(a), (float)1.0 / n);
+    unsafe { n = (float)self->size; }
+    return self.sum().scale((float)1.0 / n);
 }
 
 // ── Row sums ─────────────────────────────────────────────────────────────────
@@ -274,21 +274,21 @@ static void nn_sum_rows_backward_(void* selfPtr) {
     }
 }
 
-&Tensor tensor_sum_rows(const &Tensor a) {
-    unsigned long rows = nn_rows_(a);
-    unsigned long cols = nn_cols_(a);
+&Tensor Tensor::sum_rows() const {
+    unsigned long rows = nn_rows_(self);
+    unsigned long cols = nn_cols_(self);
     &Tensor out = nn_alloc2_(rows, 1UL);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
             float acc = (float)0.0;
             unsigned long c = 0UL;
-            while (c < cols) { acc = acc + a->data[r * cols + c]; c = c + 1UL; }
+            while (c < cols) { acc = acc + self->data[r * cols + c]; c = c + 1UL; }
             out->data[r] = acc;
             r = r + 1UL;
         }
     }
-    __tensor_link1(out, a, (void*)nn_sum_rows_backward_);
+    __tensor_link1(out, self, (void*)nn_sum_rows_backward_);
     return out;
 }
 
@@ -407,38 +407,38 @@ static float nn_row_logsumexp_(const float* x, unsigned long n) {
     }
 }
 
-&Tensor tensor_log_softmax(const &Tensor a) {
-    &Tensor out = __tensor_alloc_uninit_like(a);
+&Tensor Tensor::log_softmax() const {
+    &Tensor out = __tensor_alloc_uninit_like(self);
     unsafe {
-        unsigned long cols = a->shape[a->ndim - 1UL];
-        unsigned long rows = a->size / cols;
+        unsigned long cols = self->shape[self->ndim - 1UL];
+        unsigned long rows = self->size / cols;
         unsigned long r = 0UL;
         while (r < rows) {
-            const float* x = (const float*)&a->data[r * cols];
+            const float* x = (const float*)&self->data[r * cols];
             float lse = nn_row_logsumexp_(x, cols);
             unsigned long c = 0UL;
             while (c < cols) { out->data[r * cols + c] = x[c] - lse; c = c + 1UL; }
             r = r + 1UL;
         }
     }
-    __tensor_link1(out, a, (void*)nn_log_softmax_backward_);
+    __tensor_link1(out, self, (void*)nn_log_softmax_backward_);
     return out;
 }
 
-&Tensor tensor_detach(const &Tensor a) {
-    &Tensor out = __tensor_alloc_uninit_like(a);
-    unsafe { __tensor_ew(EW_COPY, (const float*)a->data, (const float*)0, (float)0.0, (float*)out->data, a->size); }
+&Tensor Tensor::detach() const {
+    &Tensor out = __tensor_alloc_uninit_like(self);
+    unsafe { __tensor_ew(EW_COPY, (const float*)self->data, (const float*)0, (float)0.0, (float*)out->data, self->size); }
     return out;
 }
 
-&Tensor tensor_one_hot(const &Tensor labels, unsigned long classes) {
+&Tensor Tensor::one_hot(unsigned long classes) const {
     unsigned long m;
-    unsafe { m = labels->size; }
-    &Tensor out = tensor_new_2d(m, classes, 0);
+    unsafe { m = self->size; }
+    &Tensor out = Tensor::new_2d(m, classes, 0);
     unsafe {
         unsigned long i = 0UL;
         while (i < m) {
-            unsigned long c = (unsigned long)labels->data[i];
+            unsigned long c = (unsigned long)self->data[i];
             if (c < classes) out->data[i * classes + c] = (float)1.0;
             i = i + 1UL;
         }
@@ -446,16 +446,16 @@ static float nn_row_logsumexp_(const float* x, unsigned long n) {
     return out;
 }
 
-&Tensor tensor_argmax_rows(const &Tensor a) {
-    unsigned long rows = nn_rows_(a);
-    unsigned long cols = nn_cols_(a);
+&Tensor Tensor::argmax_rows() const {
+    unsigned long rows = nn_rows_(self);
+    unsigned long cols = nn_cols_(self);
     &Tensor out = nn_alloc1_(rows);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
             unsigned long best = 0UL;
             unsigned long c = 1UL;
-            while (c < cols) { if (a->data[r * cols + c] > a->data[r * cols + best]) best = c; c = c + 1UL; }
+            while (c < cols) { if (self->data[r * cols + c] > self->data[r * cols + best]) best = c; c = c + 1UL; }
             out->data[r] = (float)best;
             r = r + 1UL;
         }
@@ -467,7 +467,7 @@ static float nn_row_logsumexp_(const float* x, unsigned long n) {
 
 &Tensor tensor_mse_loss(const &Tensor pred, const &Tensor target) {
     &Tensor d = tensor_sub(pred, target);
-    return tensor_mean(tensor_mul(d, d));
+    return tensor_mul(d, d).mean();
 }
 
 #define NN_L_HUBER  0
@@ -566,7 +566,7 @@ static &Tensor nn_loss_(const &Tensor x, const &Tensor t, int kind, float k) {
             acc = acc / (double)rows;
         }
         out->data[0] = (float)acc;
-        if (autograd().enabled() && x->requiresGrad) {
+        if (Autograd::get().enabled() && x->requiresGrad) {
             out->requiresGrad = 1;
             out->parents.push(x);
             out->parents.push(t);
@@ -610,14 +610,16 @@ float tensor_accuracy(const &Tensor logits, const &Tensor labels) {
 
 // ══ Activations by tag ═══════════════════════════════════════════════════════
 
-&Tensor tensor_activate(const &Tensor x, int act) {
-    if (act == ACT_RELU) return tensor_relu(x);
-    if (act == ACT_LEAKY) return tensor_leaky_relu(x, (float)0.2);
-    if (act == ACT_TANH) return tensor_tanh_t(x);
-    if (act == ACT_SIGMOID) return tensor_sigmoid(x);
-    if (act == ACT_GELU) return tensor_gelu(x);
-    if (act == ACT_SILU) return tensor_silu(x);
-    return x;
+&Tensor Tensor::activate(int act) const {
+    if (act == ACT_RELU) return self.relu();
+    if (act == ACT_LEAKY) return self.leaky_relu((float)0.2);
+    if (act == ACT_TANH) return self.tanh();
+    if (act == ACT_SIGMOID) return self.sigmoid();
+    if (act == ACT_GELU) return self.gelu();
+    if (act == ACT_SILU) return self.silu();
+    // ACT_NONE: the receiver itself (a caller's region-less reference, so it
+    // may leave the method)
+    unsafe { return (&Tensor)(const Tensor*)self; }
 }
 
 // ══ MLP ══════════════════════════════════════════════════════════════════════
@@ -636,8 +638,8 @@ static void nn_heap_end_(?&TensorArena cur) {
     }
 }
 
-struct Mlp mlp_new(unsigned long inDim, unsigned long hidden, unsigned long hiddenLayers,
-                   unsigned long outDim, int act, int outAct, &Rng rng) {
+struct Mlp Mlp::new(unsigned long inDim, unsigned long hidden, unsigned long hiddenLayers, unsigned long outDim,
+                    int act, int outAct, &Rng rng) {
     ?&TensorArena cur = nn_heap_begin_();
     struct Mlp m;
     m.params = vec_new();
@@ -650,8 +652,8 @@ struct Mlp mlp_new(unsigned long inDim, unsigned long hidden, unsigned long hidd
     while (l < m.nLayers) {
         unsigned long fin = l == 0UL ? inDim : hidden;
         unsigned long fout = l + 1UL == m.nLayers ? outDim : hidden;
-        &Tensor W = tensor_new_2d(fin, fout, 1);
-        &Tensor b = tensor_new_1d(fout, 1);
+        &Tensor W = Tensor::new_2d(fin, fout, 1);
+        &Tensor b = Tensor::new_1d(fout, 1);
         float bound = (float)1.0 / sqrt_f((float)fin);
         rng.fill_uniform(W, -bound, bound);
         rng.fill_uniform(b, -bound, bound);
@@ -667,7 +669,7 @@ static &Tensor mlp_layer_(const &Mlp m, unsigned long l, const &Tensor x) {
     &Tensor W = *m.params.at(2UL * l);
     &Tensor b = *m.params.at(2UL * l + 1UL);
     &Tensor y = tensor_add_bias(tensor_matmul(x, W), b);
-    return tensor_activate(y, l + 1UL == m.nLayers ? m.outAct : m.act);
+    return y.activate(l + 1UL == m.nLayers ? m.outAct : m.act);
 }
 
 &Tensor Mlp::forward(const &Tensor x) const {
@@ -700,7 +702,7 @@ void Mlp::free() {
 
 // ══ Optimizers ═══════════════════════════════════════════════════════════════
 
-struct Optimizer optimizer_new(int kind, float lr) {
+struct Optimizer Optimizer::new(int kind, float lr) {
     struct Optimizer o;
     o.params = vec_new();
     o.m = vec_new();
@@ -716,8 +718,8 @@ struct Optimizer optimizer_new(int kind, float lr) {
     return o;
 }
 
-struct Optimizer optimizer_from(const &Optimizer o) {
-    struct Optimizer d = optimizer_new(o.kind, o.lr);
+struct Optimizer Optimizer::from(const &Optimizer o) {
+    struct Optimizer d = Optimizer::new(o.kind, o.lr);
     d.momentum = o.momentum;
     d.beta1 = o.beta1;
     d.beta2 = o.beta2;
@@ -731,8 +733,8 @@ void Optimizer::add(&Tensor param) {
     unsigned long n;
     unsafe { n = param->size; }
     self.params.push(param);
-    self.m.push(tensor_new_1d(n, 0));
-    self.v.push(tensor_new_1d(n, 0));
+    self.m.push(Tensor::new_1d(n, 0));
+    self.v.push(Tensor::new_1d(n, 0));
     nn_heap_end_(cur);
 }
 
