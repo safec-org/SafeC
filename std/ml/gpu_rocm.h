@@ -67,6 +67,10 @@ int rocm_relu(struct RocmBuf a, struct RocmBuf out);
 int rocm_exp(struct RocmBuf a, struct RocmBuf out);
 int rocm_log(struct RocmBuf a, struct RocmBuf out);
 int rocm_sqrt(struct RocmBuf a, struct RocmBuf out);
+int rocm_gelu(struct RocmBuf a, struct RocmBuf out);   // tanh approximation (gelu_pytorch_tanh)
+// RMSNorm per row: y[r] = x[r] / sqrt(mean(x[r]^2) + eps) * w, over 'rows'
+// rows of 'n' values; w has n values, or dev == 0 for no weight. y may be x.
+int rocm_rmsnorm(struct RocmBuf x, struct RocmBuf w, struct RocmBuf y, unsigned long rows, unsigned long n, float eps);
 int rocm_relu_grad(struct RocmBuf z, struct RocmBuf g, struct RocmBuf out);   // out = z > 0 ? g : 0
 int rocm_sgd(struct RocmBuf w, struct RocmBuf g, float lr);            // w -= lr * g, in place
 int rocm_sum(struct RocmBuf a, struct RocmBuf out1);                   // out1[0] = sum(a)
@@ -134,6 +138,13 @@ int rocm_half_sgd(struct RocmHalfBuf w, struct RocmHalfBuf g, float lr);
 // c = relu(op(a) op(b)), all in a's dtype (the GEMM, then ReLU in place).
 int rocm_half_gemm_relu(struct RocmHalfBuf a, int ta, struct RocmHalfBuf b, int tb, struct RocmHalfBuf c,
                         unsigned long m, unsigned long n, unsigned long k);
+// Matrix-vector product for decoding one token at a time: y = w x with w an
+// [n][k] fp16/bf16 matrix (row-major, e.g. a linear layer's weight) and x,
+// y fp32 (x is not rounded to 16 bits). Memory-bound: 0.8-1.07 TB/s of
+// weights on an MI100, 1.04-1.8x faster than a one-row rocm_half_gemm_f32
+// (most on short outputs, e.g. 1536 x 2048: 7.8 vs 13.7 us). Fastest when k
+// is a multiple of 8.
+int rocm_half_gemv(struct RocmHalfBuf w, struct RocmBuf x, struct RocmBuf y, unsigned long n, unsigned long k);
 // Training ops, as their RocmBuf versions (loss stays fp32).
 int rocm_half_relu(struct RocmHalfBuf a, struct RocmHalfBuf out);
 int rocm_half_relu_grad(struct RocmHalfBuf z, struct RocmHalfBuf g, struct RocmHalfBuf out);
