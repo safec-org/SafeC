@@ -1,89 +1,56 @@
-// SafeC Standard Library — GPIO HAL
-// Assumes standard MMIO layout:
-//   base + 0x00 = direction register
-//   base + 0x04 = output data register
-//   base + 0x08 = input data register
-//   base + 0x0C = pull config register
+// SafeC Standard Library — GPIO HAL chips (see gpio.h)
 #pragma once
 #include <std/hal/gpio.h>
+#include <std/hal/reg.h>
 
 namespace std {
 
-inline struct GpioPin gpio_init(&volatile unsigned int base, int pin, int direction) {
-    struct GpioPin p;
-    p.base      = base;
-    p.pin_mask  = (unsigned int)1 << pin;
-    p.direction = direction;
-    unsafe {
-        unsigned int* dir_reg = (unsigned int*)base;
-        unsigned int val = volatile_load(dir_reg);
-        if (direction == 1) {
-            val = val | p.pin_mask;
-        } else {
-            val = val & ~p.pin_mask;
-        }
-        volatile_store(dir_reg, val);
-    }
-    return p;
+// ── GpioGeneric: DIR +0, OUT +4, IN +8, PULL_EN +0xC, PULL_SEL +0x10 ─────────
+void GpioGeneric::set_direction(unsigned long base, int pin, int direction) const {
+    unsigned int m = (unsigned int)1 << pin;
+    if (direction == GPIO_OUTPUT) { hal_set32_(base, 0x00UL, m); } else { hal_clr32_(base, 0x00UL, m); }
+}
+void GpioGeneric::write(unsigned long base, int pin, int value) const {
+    unsigned int m = (unsigned int)1 << pin;
+    if (value != 0) { hal_set32_(base, 0x04UL, m); } else { hal_clr32_(base, 0x04UL, m); }
+}
+int GpioGeneric::read(unsigned long base, int pin) const {
+    return (hal_rd32_(base, 0x08UL) >> pin) & 1u;
+}
+void GpioGeneric::toggle(unsigned long base, int pin) const {
+    hal_wr32_(base, 0x04UL, hal_rd32_(base, 0x04UL) ^ ((unsigned int)1 << pin));
+}
+void GpioGeneric::set_pull(unsigned long base, int pin, int pull) const {
+    unsigned int m = (unsigned int)1 << pin;
+    if (pull == GPIO_PULL_NONE) { hal_clr32_(base, 0x0CUL, m); return; }
+    if (pull == GPIO_PULL_UP) { hal_set32_(base, 0x10UL, m); } else { hal_clr32_(base, 0x10UL, m); }
+    hal_set32_(base, 0x0CUL, m);
 }
 
-inline void GpioPin::set_direction(int direction) {
-    self.direction = direction;
-    unsafe {
-        unsigned int* dir_reg = (unsigned int*)self.base;
-        unsigned int val = volatile_load(dir_reg);
-        if (direction == 1) {
-            val = val | self.pin_mask;
-        } else {
-            val = val & ~self.pin_mask;
-        }
-        volatile_store(dir_reg, val);
-    }
+// ── Stm32F4Gpio: MODER +0, PUPDR +0xC, IDR +0x10, ODR +0x14, BSRR +0x18 ──────
+// Two bits per pin in MODER/PUPDR; BSRR sets (bits 0-15) or resets (16-31)
+// a pin in one write, so write() needs no read-modify-write.
+static void stm32_field2_(unsigned long base, unsigned long off, int pin, unsigned int v) {
+    unsigned int shift = (unsigned int)(pin * 2);
+    unsigned int r = hal_rd32_(base, off) & ~(3u << shift);
+    hal_wr32_(base, off, r | ((v & 3u) << shift));
 }
-
-inline void GpioPin::write(int value) {
-    unsafe {
-        unsigned int* out_reg = (unsigned int*)((unsigned long)self.base + (unsigned long)4);
-        unsigned int val = volatile_load(out_reg);
-        if (value != 0) {
-            val = val | self.pin_mask;
-        } else {
-            val = val & ~self.pin_mask;
-        }
-        volatile_store(out_reg, val);
-    }
+void Stm32F4Gpio::set_direction(unsigned long base, int pin, int direction) const {
+    stm32_field2_(base, 0x00UL, pin, direction == GPIO_OUTPUT ? 1u : 0u);   // 01 output, 00 input
 }
-
-inline int GpioPin::read() const {
-    unsafe {
-        unsigned int* in_reg = (unsigned int*)((unsigned long)self.base + (unsigned long)8);
-        unsigned int val = volatile_load(in_reg);
-        if ((val & self.pin_mask) != (unsigned int)0) {
-            return 1;
-        }
-        return 0;
-    }
+void Stm32F4Gpio::write(unsigned long base, int pin, int value) const {
+    hal_wr32_(base, 0x18UL, value != 0 ? (1u << pin) : (1u << (pin + 16)));
 }
-
-inline void GpioPin::toggle() {
-    unsafe {
-        unsigned int* out_reg = (unsigned int*)((unsigned long)self.base + (unsigned long)4);
-        unsigned int val = volatile_load(out_reg);
-        val = val ^ self.pin_mask;
-        volatile_store(out_reg, val);
-    }
+int Stm32F4Gpio::read(unsigned long base, int pin) const {
+    return (hal_rd32_(base, 0x10UL) >> pin) & 1u;
 }
-
-inline void GpioPin::set_pull(int pull) {
-    unsafe {
-        unsigned int* pull_reg = (unsigned int*)((unsigned long)self.base + (unsigned long)12);
-        unsigned int val = volatile_load(pull_reg);
-        val = val & ~self.pin_mask;
-        if (pull == 1 || pull == 2) {
-            val = val | self.pin_mask;
-        }
-        volatile_store(pull_reg, val);
-    }
+void Stm32F4Gpio::toggle(unsigned long base, int pin) const {
+    int high = (hal_rd32_(base, 0x14UL) >> pin) & 1u;
+    self.write(base, pin, high == 0);
+}
+void Stm32F4Gpio::set_pull(unsigned long base, int pin, int pull) const {
+    unsigned int v = pull == GPIO_PULL_UP ? 1u : (pull == GPIO_PULL_DOWN ? 2u : 0u);
+    stm32_field2_(base, 0x0CUL, pin, v);
 }
 
 } // namespace std

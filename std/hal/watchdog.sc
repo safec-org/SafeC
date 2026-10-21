@@ -1,53 +1,28 @@
-// SafeC Standard Library — Watchdog Timer HAL
-// Generic MMIO layout:
-//   base + 0x00 = control register (bit 0 = enable)
-//   base + 0x04 = timeout/reload register
-//   base + 0x08 = feed register (write magic value to feed)
-//   base + 0x0C = status register (bit 0 = WDT reset occurred)
+// SafeC Standard Library — Watchdog HAL chips (see watchdog.h)
 #pragma once
 #include <std/hal/watchdog.h>
+#include <std/hal/reg.h>
 
-// Magic feed value (common on ARM Cortex-M)
 namespace std {
 
-inline unsigned int wdt_feed_magic_() {
-    return (unsigned int)0x6969;
-}
+// ── WatchdogGeneric: CTRL +0, TIMEOUT +4, FEED +8, STATUS +0xC ───────────────
+void WatchdogGeneric::init(unsigned long base, unsigned int timeout) const { hal_wr32_(base, 0x04UL, timeout); }
+void WatchdogGeneric::enable(unsigned long base) const { hal_set32_(base, 0x00UL, 1u); }
+void WatchdogGeneric::feed(unsigned long base) const { hal_wr32_(base, 0x08UL, 0x6969u); }
+int WatchdogGeneric::caused_reset(unsigned long base) const { return (hal_rd32_(base, 0x0CUL) & 1u) != 0u; }
 
-inline struct Watchdog watchdog_init(&volatile unsigned int base, unsigned int timeout) {
-    struct Watchdog w;
-    w.base    = base;
-    w.timeout = timeout;
-    unsafe {
-        unsigned int* tmo_reg = (unsigned int*)((unsigned long)base + (unsigned long)4);
-        volatile_store(tmo_reg, timeout);
-    }
-    return w;
+// ── STM32 IWDG: KR +0, PR +4, RLR +8, SR +0xC ────────────────────────────────
+void Stm32F4Iwdg::init(unsigned long base, unsigned int timeout) const {
+    hal_wr32_(base, 0x00UL, 0x5555u);                    // unlock PR/RLR
+    hal_wr32_(base, 0x04UL, 6u);                         // LSI / 256
+    hal_wr32_(base, 0x08UL, timeout & 0xFFFu);
+    hal_wait32_(base, 0x0CUL, 3u, 0u, 100000);           // PVU/RVU: values taken
+    hal_wr32_(base, 0x00UL, 0xAAAAu);                    // reload the counter
 }
-
-inline void Watchdog::enable() {
-    unsafe {
-        unsigned int* ctrl = (unsigned int*)self.base;
-        unsigned int val = volatile_load(ctrl);
-        val = val | (unsigned int)1;
-        volatile_store(ctrl, val);
-    }
-}
-
-inline void Watchdog::feed() {
-    unsafe {
-        unsigned int* feed_reg = (unsigned int*)((unsigned long)self.base + (unsigned long)8);
-        volatile_store(feed_reg, wdt_feed_magic_());
-    }
-}
-
-inline int Watchdog::caused_reset() const {
-    unsafe {
-        unsigned int* status = (unsigned int*)((unsigned long)self.base + (unsigned long)12);
-        unsigned int val = volatile_load(status);
-        if ((val & (unsigned int)1) != (unsigned int)0) { return 1; }
-        return 0;
-    }
+void Stm32F4Iwdg::enable(unsigned long base) const { hal_wr32_(base, 0x00UL, 0xCCCCu); }
+void Stm32F4Iwdg::feed(unsigned long base) const { hal_wr32_(base, 0x00UL, 0xAAAAu); }
+int Stm32F4Iwdg::caused_reset(unsigned long base) const {
+    return (hal_rd32_(STM32F4_RCC_CSR, 0UL) & (1u << 29)) != 0u;   // RCC_CSR.IWDGRSTF
 }
 
 } // namespace std
