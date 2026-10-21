@@ -163,6 +163,9 @@ struct MpsBuf {
     // Copies the first 'bytes' (<= this.bytes) into 'dst'. Valid once every
     // batch writing the buffer has ended (shared memory: no transfer). 1 = done.
     int  read(&void dst, unsigned long bytes) const;
+    // Copies 'bytes' (<= this.bytes) from 'src' into the buffer: valid while no
+    // batch that reads or writes it is in flight. 1 = done.
+    int  write(const &void src, unsigned long bytes);
 
     static struct MpsBuf alloc(unsigned long n, int dtype);       // n uninitialized elements
     static struct MpsBuf upload(const &float host, unsigned long n);          // n fp32 values
@@ -232,6 +235,13 @@ struct MpsBuf {
 void mps_batch_begin();
 void mps_batch_end();
 int  mps_batch_is_active();
+// Commits what the open batch has encoded so far without waiting and keeps
+// the batch open: the GPU starts on that work while the caller encodes the
+// next. The command buffers run in order on the one queue, and
+// mps_batch_end() still waits for all of them (nn_mps.h's trainer submits
+// every few steps of an epoch and waits once at its end). No-op without a
+// batch.
+void mps_batch_submit();
 
 // Type-erased form behind mps_batch_register_finalize (below).
 typedef fn void(void* ctx) MpsFinalizeFn;
@@ -552,6 +562,18 @@ int mps_attn_batch_bf16_chained(struct MpsBuf bufQ, struct MpsBuf bufK, struct M
                                   unsigned long headDim, unsigned long maxKvLen,
                                   int isSliding, unsigned long slidingWindow);
 
+// ── Device-buffer GEMM ──────────────────────────────────────────────────────
+// c[m,n] = op(a)[m,k] . op(b)[k,n] on fp32 buffers, row-major, written into
+// the caller's buffer 'c' -- gpu_rocm.h's rocm_gemm. 'ta' / 'tb' = 1 means
+// that operand is stored transposed (a as k x m, b as n x k); at most one of
+// them may be (the three cases are mps_matmul_f32's, mps_matmul_abt_f32's and
+// mps_matmul_atb_f32's kernels, with the same shape-based choice of tier).
+// Like the device-buffer attention ops below: encoded onto the open batch
+// (c valid after mps_batch_end()) or, outside one, run and waited for.
+// 1 = done/encoded, 0 = bad shape, a buffer too small, or no Metal device.
+int mps_gemm(struct MpsBuf a, int ta, struct MpsBuf b, int tb, struct MpsBuf c,
+             unsigned long m, unsigned long n, unsigned long k);
+
 // ── Flash and linear attention ──────────────────────────────────────────────
 // Batched multi-head versions of attention.h's flash_attention_forward and
 // linear_attention_forward on the GPU, in fp32, fp16 or bf16 (all math in
@@ -668,5 +690,18 @@ unsigned long mps_linear_attn_state_bytes(unsigned long numHeads, unsigned long 
 
 // A zeroed state for a new sequence: MpsBuf::linear_attn_state (free() it
 // when the sequence is done).
+
+// ── Interop: for libraries layered on this backend (nn_mps.h) ───────────────
+// Runs kernel 'kernel' of the embedded library (gpu_mps_kernels.metal) on
+// 'groups' threadgroups of 'groupSize' threads (one dimension): buffers
+// bufs[0 .. count) bound at indices 0 .. count-1 and, when paramBytes > 0,
+// 'params' (copied at encode time) at index 'count'. Encoded onto the open
+// batch, or run and waited for outside one, like mps_gemm. The pipeline is
+// built on first use and cached by name (at most 64 names; the cache keeps
+// the 'kernel' pointer, so pass a string literal). 1 = done/encoded,
+// 0 = unknown kernel, an invalid buffer, a group larger than the kernel
+// allows, or no Metal device.
+int mps_dispatch(const &char kernel, const &MpsBuf bufs, unsigned long count, const &void params,
+                 unsigned long paramBytes, unsigned long groups, unsigned long groupSize);
 
 } // namespace std

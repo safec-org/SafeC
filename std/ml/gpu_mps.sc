@@ -743,6 +743,20 @@ void mps_batch_end() {
     }
 }
 
+void mps_batch_submit() {
+    if (!__mps_batch_active) return;
+    unsafe {
+        MMsgVoid0 msgVoid0 = (MMsgVoid0)objc_msgSend;
+        msgVoid0(__mps_batch_encoder, __sel_endEncoding);
+        msgVoid0(__mps_batch_cmdBuf, __sel_commit);
+        // the queue runs its command buffers in order, so mps_batch_end()'s
+        // wait on the last one covers this one too
+        MMsg0 msg0 = (MMsg0)objc_msgSend;
+        __mps_batch_cmdBuf  = msg0(__mps_queue, __sel_commandBuffer);
+        __mps_batch_encoder = msg0(__mps_batch_cmdBuf, __sel_computeCommandEncoder);
+    }
+}
+
 // mps_sub_f32: own dedicated dispatch (not routed through
 // __mps_run_binary_kernel like mul/div/pow) -- same reasoning as
 // mps_relu_f32 below (see its comment): batch-aware, so tensor_sub_gpu can
@@ -1793,6 +1807,17 @@ int MpsBuf::read(&void dst, unsigned long bytes) const {
         void* src = msg0(self.handle, __sel_contents);
         if (src == (void*)0) return 0;
         memcpy((void*)dst, src, bytes);
+        return 1;
+    }
+}
+
+int MpsBuf::write(const &void src, unsigned long bytes) {
+    unsafe {
+        if (self.handle == (void*)0 || bytes > self.bytes) return 0;
+        MMsg0 msg0 = (MMsg0)objc_msgSend;
+        void* dst = msg0(self.handle, __sel_contents);
+        if (dst == (void*)0) return 0;
+        memcpy(dst, (const void*)src, bytes);
         return 1;
     }
 }
@@ -4148,6 +4173,174 @@ int mps_linear_attn_bf16(const &unsigned short q, const &unsigned short k, const
                                         seqLen, kvLen, numHeads, numKvHeads, headDim, causal);
         if (ownBatch) { mps_batch_end(); }
         return ok;
+    }
+}
+
+// ── Device-buffer GEMM (see gpu_mps.h's mps_gemm) ───────────────────────────
+// The three matmul kernel families (ab, abt, atb) with the tier choice every
+// mps_matmul_* entry point above makes, writing a caller-owned buffer instead
+// of a batch-owned one with a CPU readback.
+
+// Opens a one-op batch when none is active; *own says to end it.
+static int __mps_encoder_begin(&int own) {
+    *own = !__mps_batch_active;
+    if (*own) mps_batch_begin();
+    return __mps_batch_active;
+}
+
+static void __mps_encoder_end(int own) {
+    if (own) mps_batch_end();
+}
+
+// variant 0: out[d0,d2] = a[d0,d1] . b[d1,d2]  (matmul_kernel: M K N)
+// variant 1: out[d0,d2] = a[d0,d1] . b^T, b [d2,d1]  (matmul_abt_kernel: M N K)
+// variant 2: out[d1,d2] = a^T . b, a [d0,d1], b [d0,d2]  (matmul_atb_kernel: M K N)
+static int __mps_gemm_encode(int variant, void* a, void* b, void* out, unsigned long d0, unsigned long d1,
+                             unsigned long d2) {
+    unsafe {
+        int useMulti = d0 % 32UL == 0UL && d1 % 32UL == 0UL && d2 % 32UL == 0UL;
+        int useSmma = d0 % 8UL == 0UL && d1 % 8UL == 0UL && d2 % 8UL == 0UL;
+        void** multi = variant == 0 ? &__mps_matmul_multi_pipeline
+                     : (variant == 1 ? &__mps_matmul_abt_multi_pipeline : &__mps_matmul_atb_multi_pipeline);
+        void** smma = variant == 0 ? &__mps_matmul_smma_pipeline
+                    : (variant == 1 ? &__mps_matmul_abt_smma_pipeline : &__mps_matmul_atb_smma_pipeline);
+        void** tiled = variant == 0 ? &__mps_matmul_pipeline
+                     : (variant == 1 ? &__mps_matmul_abt_pipeline : &__mps_matmul_atb_pipeline);
+        const char* base = variant == 0 ? "matmul_kernel" : (variant == 1 ? "matmul_abt_kernel" : "matmul_atb_kernel");
+        const char* multiName = variant == 0 ? "matmul_kernel_smma_multi"
+                              : (variant == 1 ? "matmul_abt_kernel_smma_multi" : "matmul_atb_kernel_smma_multi");
+        const char* smmaName = variant == 0 ? "matmul_kernel_smma"
+                             : (variant == 1 ? "matmul_abt_kernel_smma" : "matmul_atb_kernel_smma");
+        if (useMulti && *multi == (void*)0) *multi = __mps_make_pipeline(multiName);
+        if (useMulti && *multi == (void*)0) useMulti = 0;
+        if (!useMulti && useSmma && *smma == (void*)0) *smma = __mps_make_pipeline(smmaName);
+        if (!useMulti && useSmma && *smma == (void*)0) useSmma = 0;
+        if (!useMulti && !useSmma && *tiled == (void*)0) *tiled = __mps_make_pipeline(base);
+        void* pipeline = useMulti ? *multi : (useSmma ? *smma : *tiled);
+        if (pipeline == (void*)0) return 0;
+
+        // the output's rows and columns
+        unsigned long rows = variant == 2 ? d1 : d0;
+        unsigned long cols = d2;
+        unsigned int c0 = (unsigned int)d0;
+        unsigned int c1 = (unsigned int)d1;
+        unsigned int c2 = (unsigned int)d2;
+        void* enc = __mps_batch_encoder;
+        MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
+        msgVoid1(enc, __sel_setComputePipelineState, pipeline);
+        MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
+        setBufFn(enc, __sel_setBuffer, a, 0UL, 0UL);
+        setBufFn(enc, __sel_setBuffer, b, 0UL, 1UL);
+        setBufFn(enc, __sel_setBuffer, out, 0UL, 2UL);
+        MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
+        setBytesFn(enc, __sel_setBytes, (void*)&c0, 4UL, 3UL);
+        setBytesFn(enc, __sel_setBytes, (void*)&c1, 4UL, 4UL);
+        setBytesFn(enc, __sel_setBytes, (void*)&c2, 4UL, 5UL);
+        struct MTLSize tgSize;
+        struct MTLSize groups;
+        tgSize.depth = 1UL; groups.depth = 1UL;
+        if (useMulti) {
+            tgSize.width = 128UL; tgSize.height = 1UL;
+            groups.width = cols / 32UL; groups.height = rows / 32UL;
+        } else if (useSmma) {
+            tgSize.width = 32UL; tgSize.height = 1UL;
+            groups.width = cols / 8UL; groups.height = rows / 8UL;
+        } else {
+            tgSize.width = 16UL; tgSize.height = 16UL;
+            groups.width = (cols + 15UL) / 16UL; groups.height = (rows + 15UL) / 16UL;
+        }
+        MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
+        dispatchFn(enc, __sel_dispatchThreadgroups, groups, tgSize);
+        return 1;
+    }
+}
+
+int mps_gemm(struct MpsBuf a, int ta, struct MpsBuf b, int tb, struct MpsBuf c,
+             unsigned long m, unsigned long n, unsigned long k) {
+    if (a.handle == (void*)0 || b.handle == (void*)0 || c.handle == (void*)0) return 0;
+    if ((ta && tb) || m == 0UL || n == 0UL || k == 0UL) return 0;
+    if (a.bytes < m * k * 4UL || b.bytes < k * n * 4UL || c.bytes < m * n * 4UL) return 0;
+    int own = 0;
+    if (!__mps_encoder_begin(&own)) return 0;
+    int ok = 0;
+    unsafe {
+        if (ta) ok = __mps_gemm_encode(2, a.handle, b.handle, c.handle, k, m, n);
+        else if (tb) ok = __mps_gemm_encode(1, a.handle, b.handle, c.handle, m, k, n);
+        else ok = __mps_gemm_encode(0, a.handle, b.handle, c.handle, m, k, n);
+    }
+    __mps_encoder_end(own);
+    return ok;
+}
+
+// ── Interop (see gpu_mps.h's mps_dispatch) ──────────────────────────────────
+#define MPS_DISPATCH_MAX_ 64UL
+static const char* __mps_dispatch_names[64];
+static void*       __mps_dispatch_pipes[64];
+static unsigned long __mps_dispatch_limit[64];   // the pipeline's maxTotalThreadsPerThreadgroup
+static unsigned long __mps_dispatch_count = 0UL;
+static void* __sel_maxThreads = (void*)0;
+
+typedef fn unsigned long(void*, void*) MMsgULong;
+
+static int __mps_str_eq(const char* a, const char* b) {
+    unsafe {
+        unsigned long i = 0UL;
+        while (a[i] != (char)0 && a[i] == b[i]) i = i + 1UL;
+        return a[i] == b[i];
+    }
+}
+
+// The cached slot for 'kernel', built on first use; -1 when it can't be.
+static long __mps_dispatch_slot(const char* kernel) {
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < __mps_dispatch_count) {
+            if (__mps_dispatch_names[i] == kernel || __mps_str_eq(__mps_dispatch_names[i], kernel)) return (long)i;
+            i = i + 1UL;
+        }
+        if (__mps_dispatch_count >= MPS_DISPATCH_MAX_) return -1L;
+        void* pipe = __mps_make_pipeline(kernel);
+        if (pipe == (void*)0) return -1L;
+        if (__sel_maxThreads == (void*)0) __sel_maxThreads = sel_registerName("maxTotalThreadsPerThreadgroup");
+        MMsgULong maxFn = (MMsgULong)objc_msgSend;
+        __mps_dispatch_names[i] = kernel;
+        __mps_dispatch_pipes[i] = pipe;
+        __mps_dispatch_limit[i] = maxFn(pipe, __sel_maxThreads);
+        __mps_dispatch_count = i + 1UL;
+        return (long)i;
+    }
+}
+
+int mps_dispatch(const &char kernel, const &MpsBuf bufs, unsigned long count, const &void params,
+                 unsigned long paramBytes, unsigned long groups, unsigned long groupSize) {
+    if (groups == 0UL || groupSize == 0UL || count > 30UL) return 0;
+    if (!__mps_ensure_library()) return 0;
+    unsafe {
+        const struct MpsBuf* b = (const struct MpsBuf*)bufs;
+        unsigned long i = 0UL;
+        while (i < count) { if (b[i].handle == (void*)0) return 0; i = i + 1UL; }
+        long slot = __mps_dispatch_slot((const char*)kernel);
+        if (slot < 0L || groupSize > __mps_dispatch_limit[slot]) return 0;
+        int own = 0;
+        if (!__mps_encoder_begin(&own)) return 0;
+        void* enc = __mps_batch_encoder;
+        MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
+        msgVoid1(enc, __sel_setComputePipelineState, __mps_dispatch_pipes[slot]);
+        MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
+        i = 0UL;
+        while (i < count) { setBufFn(enc, __sel_setBuffer, b[i].handle, 0UL, i); i = i + 1UL; }
+        if (paramBytes > 0UL) {
+            MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
+            setBytesFn(enc, __sel_setBytes, (void*)params, paramBytes, count);
+        }
+        struct MTLSize tgSize;
+        tgSize.width = groupSize; tgSize.height = 1UL; tgSize.depth = 1UL;
+        struct MTLSize grid;
+        grid.width = groups; grid.height = 1UL; grid.depth = 1UL;
+        MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
+        dispatchFn(enc, __sel_dispatchThreadgroups, grid, tgSize);
+        __mps_encoder_end(own);
+        return 1;
     }
 }
 
