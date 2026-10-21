@@ -34,6 +34,13 @@
 // and skip layers, RocmVae / RocmConvAe, RocmGan, the RL agents and 16-bit
 // activations. Under the mps feature train.h trains those models on the CPU.
 //
+// A step is about 20 dispatches for a 3-layer net (gemm and bias each way
+// per layer, the loss, the gather, one optimizer dispatch per parameter
+// tensor), each costing ~5 us on an M1 Pro however small its work, so small
+// nets are bound by them: 2-64-64-2 at batch 64 trains 3x faster on the CPU
+// (nn.h). The GPU pays off from mid-sized layers: 784-512-512-10 at batch
+// 256 trains 2.2x faster than the CPU.
+//
 //   struct Mlp net = Mlp::new(784UL, 256UL, 2UL, 10UL, ACT_RELU, ACT_NONE, &rng);
 //   struct MpsNet dnet = MpsNet::from_mlp(&net, 128UL);
 //   struct MpsOptimizer opt = MpsOptimizer::new(OPT_ADAM, (float)0.001);
