@@ -10,6 +10,9 @@
 #include <std/ml/gan.h>
 #include <std/math.h>
 #include <std/ml/rl.h>
+#include <std/ml/convnet.h>
+#include <std/ml/cnn.h>
+#include <std/sync/parallel.h>
 
 extern void* malloc(unsigned long size);
 extern void free(void* ptr);
@@ -422,6 +425,28 @@ void t_vqvae() {
 }
 
 // ── GANs ─────────────────────────────────────────────────────────────────────
+// Mean |grad_x D| of g's critic at midpoints of real and generated rows.
+static double critic_grad_norm_(&Gan g, const &Tensor real, const &Tensor fake) {
+    &Tensor xh = tensor_new_2d(256UL, 2UL, 1);
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < 512UL) { xh->data[i] = (float)0.5 * (real->data[i] + fake->data[i]); i = i + 1UL; }
+    }
+    tensor_backward(tensor_sum(gan_score(g, xh, null)));
+    double acc = 0.0;
+    unsafe {
+        unsigned long r = 0UL;
+        while (r < 256UL) {
+            double a = (double)xh->grad[r * 2UL];
+            double b = (double)xh->grad[r * 2UL + 1UL];
+            acc = acc + sqrt_d(a * a + b * b);
+            r = r + 1UL;
+        }
+    }
+    tensor_drop(xh);
+    return acc / 256.0;
+}
+
 // Each objective learns a 2D Gaussian at (2, -1) with std (0.5, 0.3):
 // the mean tightly, the spread loosely.
 void t_gans() {
@@ -436,15 +461,16 @@ void t_gans() {
         }
     }
     int k = 0;
-    while (k < 4) {
+    while (k < 5) {
         struct GanConfig cfg = gan_config_default(4UL);
         cfg.hidden = 32UL;
         cfg.loss = k;
         cfg.emaDecay = (float)0.99;
         cfg.lrG = (float)0.0005; cfg.lrD = (float)0.0005;
         if (k == GAN_WGAN) { cfg.nCritic = 5UL; cfg.lrG = (float)0.0005; cfg.lrD = (float)0.0005; cfg.clip = (float)0.05; }
+        if (k == GAN_WGAN_GP) cfg.nCritic = 5UL;
         struct Gan g = gan_new(2UL, &cfg);
-        gan_train(&g, &target, k == GAN_WGAN ? 100UL : 80UL, 64UL);
+        gan_train(&g, &target, k == GAN_WGAN || k == GAN_WGAN_GP ? 100UL : 80UL, 64UL);
         &Tensor s = gan_generate(&g, 2000UL, null);
         unsafe {
             double mx = 0.0; double my = 0.0; double vx = 0.0; double vy = 0.0;
@@ -463,8 +489,13 @@ void t_gans() {
             // GANs tend to under-cover the spread; bound it loosely
             ASSERT_TRUE(sx > 0.2 && sx < 1.0);
             ASSERT_TRUE(sy > 0.08 && sy < 0.6);
-            s->free(); free((void*)s);
         }
+        // the penalty holds the critic's input gradient near 1
+        if (k == GAN_WGAN_GP) {
+            double gn = critic_grad_norm_(&g, target.x, s);
+            ASSERT_TRUE(gn > 0.6 && gn < 1.4);
+        }
+        tensor_drop(s);
         gan_free(&g);
         k = k + 1;
     }
@@ -715,6 +746,1075 @@ void t_reinforce_cartpole() { ASSERT_TRUE(pg_cartpole_(PG_REINFORCE, 0UL) >= (fl
 void t_a2c_cartpole() { ASSERT_TRUE(pg_cartpole_(PG_A2C, 32UL) >= (float)195.0); }
 void t_ppo_cartpole() { ASSERT_TRUE(pg_cartpole_(PG_PPO, 1024UL) >= (float)195.0); }
 
+// ── Convolutional ops ────────────────────────────────────────────────────────
+// Each case: the op, x's geometry (2 images, 2 channels), and whether it
+// has trained parameters (w: weight / gamma, b: bias / beta). rm / rv are
+// batch norm's running statistics. Losses are sum(op(x) * aux) for a fixed
+// random aux.
+#define CG_CASES 32
+
+static unsigned long cg_side_(int which) {
+    int w = which;
+    if (w == 2 || w == 3 || w == 6 || w == 11 || w == 12 || w == 15 || w == 16 || w == 20 || w == 21
+        || w == 24 || w == 25 || w == 27 || w == 28) return 3UL;
+    if (w == 4 || w == 5) return 4UL;
+    if (w == 23) return 6UL;
+    return 5UL;
+}
+
+static int cg_is_norm_(int which) { return which == 11 || which == 12 || which == 27 || which == 28; }
+
+static int cg_has_params_(int which) {
+    return which <= 3 || cg_is_norm_(which) || (which >= 17 && which <= 21);
+}
+
+// Weight rows / columns and bias size of a case with parameters.
+static unsigned long cg_wrows_(int which) {
+    if (which <= 1 || which == 18) return 3UL;
+    if (which == 17) return 4UL;
+    if (cg_is_norm_(which)) return 1UL;
+    return 2UL;
+}
+
+static unsigned long cg_wcols_(int which) {
+    if (which <= 1) return 18UL;
+    if (which == 2) return 48UL;
+    if (which == 17 || which == 19) return 9UL;
+    if (which == 18) return 12UL;
+    if (which == 20) return 18UL;
+    if (cg_is_norm_(which)) return 2UL;
+    return 27UL;
+}
+
+static unsigned long cg_nbias_(int which) {
+    if (which == 17 || which == 20) return 4UL;
+    if (which == 19 || cg_is_norm_(which)) return 2UL;
+    return 3UL;
+}
+
+static &Tensor cg_forward_(int which, const &Tensor x, const &Tensor w, const &Tensor b, &Tensor rm, &Tensor rv) {
+    unsigned long sd = cg_side_(which);
+    if (which == 0) return tensor_conv2d(x, w, b, 2UL, sd, sd, 3UL, 3UL, 1UL, 1UL);
+    if (which == 1) return tensor_conv2d(x, w, b, 2UL, sd, sd, 3UL, 3UL, 2UL, 1UL);
+    if (which == 2) return tensor_conv_transpose2d(x, w, b, 2UL, sd, sd, 4UL, 4UL, 2UL, 1UL);
+    if (which == 3) return tensor_conv_transpose2d(x, w, b, 2UL, sd, sd, 3UL, 3UL, 1UL, 0UL);
+    if (which == 4) return tensor_maxpool2d(x, 2UL, sd, sd, 2UL, 2UL, 0UL);
+    if (which == 5) return tensor_avgpool2d(x, 2UL, sd, sd, 2UL, 2UL, 0UL, 1);
+    if (which == 6) return tensor_upsample_nearest(x, 2UL, sd, sd, 2UL);
+    if (which == 7) return tensor_maxpool2d(x, 2UL, sd, sd, 3UL, 1UL, 0UL);   // overlapping windows
+    if (which == 8) return tensor_maxpool2d(x, 2UL, sd, sd, 3UL, 2UL, 1UL);   // padded
+    if (which == 9) return tensor_avgpool2d(x, 2UL, sd, sd, 3UL, 2UL, 1UL, 1);
+    if (which == 10) return tensor_avgpool2d(x, 2UL, sd, sd, 3UL, 2UL, 1UL, 0);
+    if (which == 11 || which == 12)
+        return tensor_batch_norm(x, w, b, rm, rv, 2UL, sd * sd, which == 11, (float)0.1, (float)0.00001);
+    if (which == 13) return tensor_global_avgpool2d(x, 2UL, sd, sd);
+    if (which == 14) return tensor_global_maxpool2d(x, 2UL, sd, sd);
+    if (which == 15) return tensor_upsample_bilinear(x, 2UL, sd, sd, 2UL);
+    if (which == 16) return tensor_upsample_bilinear(x, 2UL, sd, sd, 3UL);
+    if (which == 17 || which == 19) {
+        // dilated grouped (2 -> 4 channels, 2 groups) / depthwise (2 -> 2, 2 groups)
+        struct Conv2dSpec c = conv2d_spec(3UL, 1UL, which == 17 ? 2UL : 1UL);
+        c.groups = 2UL;
+        if (which == 17) { c.dilationH = 2UL; c.dilationW = 2UL; }
+        return tensor_conv2d_ex(x, w, b, 2UL, sd, sd, &c);
+    }
+    if (which == 18) {
+        struct Conv2dSpec c = conv2d_spec(2UL, 2UL, 1UL);    // 2x3 kernel, strides 2 / 1, padding 1 / 0
+        c.kW = 3UL; c.strideW = 1UL; c.padW = 0UL;
+        return tensor_conv2d_ex(x, w, b, 2UL, sd, sd, &c);
+    }
+    if (which == 20) {
+        struct Conv2dSpec c = conv2d_spec(3UL, 2UL, 1UL);    // grouped, output padding 1
+        c.groups = 2UL; c.outPadH = 1UL; c.outPadW = 1UL;
+        return tensor_conv_transpose2d_ex(x, w, b, 2UL, sd, sd, &c);
+    }
+    if (which == 21) {
+        struct Conv2dSpec c = conv2d_spec(3UL, 1UL, 0UL);    // dilated
+        c.dilationH = 2UL; c.dilationW = 2UL;
+        return tensor_conv_transpose2d_ex(x, w, b, 2UL, sd, sd, &c);
+    }
+    if (which == 22) {
+        struct Pool2dSpec p = pool2d_spec(2UL, 2UL, 0UL);    // 2x3 window, strides 2 / 1, ceil mode
+        p.kW = 3UL; p.strideW = 1UL; p.ceilMode = 1;
+        return tensor_maxpool2d_ex(x, 2UL, sd, sd, &p);
+    }
+    if (which == 23) {
+        struct Pool2dSpec p = pool2d_spec(3UL, 2UL, 1UL);
+        p.ceilMode = 1;
+        return tensor_avgpool2d_ex(x, 2UL, sd, sd, &p);
+    }
+    if (which == 24) return tensor_resize2d(x, 2UL, sd, sd, 5UL, 4UL, RESIZE_BILINEAR, 1);
+    if (which == 25) return tensor_resize2d(x, 2UL, sd, sd, 7UL, 5UL, RESIZE_BICUBIC, 0);
+    if (which == 26) return tensor_resize2d(x, 2UL, sd, sd, 3UL, 2UL, RESIZE_NEAREST, 0);
+    if (which == 27 || which == 28)
+        return tensor_group_norm(x, w, b, 2UL, sd * sd, which == 27 ? 1UL : 2UL, (float)0.00001);
+    if (which == 29) return tensor_spectral_norm(x, rm, 1UL, 0);      // x as a [2, 50] weight
+    struct Rng mask = rng_new(99UL);                                  // the same mask every pass
+    if (which == 30) return tensor_dropout(x, (float)0.3, 1, &mask);
+    return tensor_dropout2d(x, 2UL, sd * sd, (float)0.5, 1, &mask);
+}
+
+static &Tensor cg_loss_(int which, const &Tensor x, const &Tensor w, const &Tensor b, &Tensor rm, &Tensor rv,
+                        const &Tensor aux) {
+    return tensor_sum(tensor_mul(cg_forward_(which, x, w, b, rm, rv), aux));
+}
+
+// Worst relative error of tensor_backward's gradient for t against central
+// differences of the loss.
+static double cg_compare_(int which, &Tensor t, &Tensor x, &Tensor w, &Tensor b, &Tensor rm, &Tensor rv,
+                          const &Tensor aux, &TensorArena stepArena) {
+    double worst = 0.0;
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < t->size) {
+            float keep = t->data[i];
+            float h = (float)0.004;
+            t->data[i] = keep + h;
+            float lp = cg_loss_(which, x, w, b, rm, rv, aux)->data[0];
+            t->data[i] = keep - h;
+            float lm = cg_loss_(which, x, w, b, rm, rv, aux)->data[0];
+            t->data[i] = keep;
+            tensor_arena_reset(stepArena);
+            double num = ((double)lp - (double)lm) / (2.0 * (double)h);
+            double e = num - (double)t->grad[i];
+            if (e < 0.0) e = -e;
+            double sc = num < 0.0 ? -num : num;
+            e = e / (sc > 1.0 ? sc : 1.0);
+            if (e > worst) worst = e;
+            i = i + 1UL;
+        }
+    }
+    return worst;
+}
+
+static double conv_grad_check_(int which) {
+    struct Rng rng = rng_new(31UL + (unsigned long)which);
+    unsigned long sd = cg_side_(which);
+    unsigned long n = 2UL * 2UL * sd * sd;
+    &Tensor x = tensor_new_2d(2UL, n / 2UL, 1);
+    // distinct values 2/n apart, so no max-pool window has a near tie
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < n) { x->data[i] = (float)((i * 37UL) % n) * ((float)2.0 / (float)n) - (float)1.0; i = i + 1UL; }
+    }
+    // conv [outC, (inC/groups)*k*k], deconv [inC, (outC/groups)*k*k], norms gamma [2]
+    &Tensor w = tensor_new_2d(cg_wrows_(which), cg_wcols_(which), cg_has_params_(which));
+    &Tensor b = tensor_new_1d(cg_nbias_(which), cg_has_params_(which));
+    &Tensor rm = tensor_new_1d(2UL, 0);
+    &Tensor rv = tensor_new_1d(2UL, 0);
+    rng_fill_uniform(&rng, w, (float)-0.5, (float)0.5);
+    rng_fill_uniform(&rng, b, (float)-0.5, (float)0.5);
+    rng_fill_uniform(&rng, rm, (float)-0.3, (float)0.3);
+    rng_fill_uniform(&rng, rv, (float)0.5, (float)1.5);
+    struct TensorArena stepArena = tensor_arena_new(0UL);
+    tensor_arena_begin(&stepArena);
+    &Tensor probe = cg_forward_(which, x, w, b, rm, rv);
+    tensor_arena_end();
+    &Tensor aux = tensor_zeros_like(probe);
+    rng_fill_uniform(&rng, aux, (float)-1.0, (float)1.0);
+    tensor_arena_reset(&stepArena);
+    tensor_arena_begin(&stepArena);
+    tensor_backward(cg_loss_(which, x, w, b, rm, rv, aux));
+    tensor_arena_reset(&stepArena);
+    double worst = cg_compare_(which, x, x, w, b, rm, rv, aux, &stepArena);
+    if (cg_has_params_(which)) {
+        double ew = cg_compare_(which, w, x, w, b, rm, rv, aux, &stepArena);
+        double eb = cg_compare_(which, b, x, w, b, rm, rv, aux, &stepArena);
+        if (ew > worst) worst = ew;
+        if (eb > worst) worst = eb;
+    }
+    tensor_arena_end();
+    tensor_arena_free(&stepArena);
+    tensor_drop(x); tensor_drop(w); tensor_drop(b); tensor_drop(rm); tensor_drop(rv); tensor_drop(aux);
+    return worst;
+}
+
+void t_conv_grad_checks() {
+    int w = 0;
+    while (w < CG_CASES) {
+        double e = conv_grad_check_(w);
+        if (e >= 2e-3) { ASSERT_TRUE(w < 0); }   // report which op failed
+        ASSERT_TRUE(e < 2e-3);
+        w = w + 1;
+    }
+}
+
+// Batch norm's running statistics move toward the batch's, and inference
+// mode then normalizes with them.
+void t_batch_norm_stats() {
+    &Tensor x = tensor_new_2d(4UL, 2UL, 0);
+    &Tensor gamma = tensor_new_1d(2UL, 0);
+    &Tensor beta = tensor_new_1d(2UL, 0);
+    &Tensor rm = tensor_new_1d(2UL, 0);
+    &Tensor rv = tensor_new_1d(2UL, 0);
+    tensor_fill(gamma, (float)1.0);
+    tensor_fill(rv, (float)1.0);
+    unsafe {
+        // channel 0: 1, 2, 3, 4 (mean 2.5, unbiased var 5/3); channel 1: all 7
+        unsigned long i = 0UL;
+        while (i < 4UL) { x->data[i * 2UL] = (float)(i + 1UL); x->data[i * 2UL + 1UL] = (float)7.0; i = i + 1UL; }
+    }
+    &Tensor y = tensor_batch_norm(x, gamma, beta, rm, rv, 2UL, 1UL, 1, (float)0.5, (float)0.00001);
+    unsafe {
+        ASSERT_TRUE(abs_f(rm->data[0] - (float)1.25) < (float)1e-5);
+        ASSERT_TRUE(abs_f(rv->data[0] - (float)(0.5 + 0.5 * 5.0 / 3.0)) < (float)1e-5);
+        ASSERT_TRUE(abs_f(y->data[0] + (float)1.3416355) < (float)1e-4);   // (1 - 2.5) / sqrt(1.25)
+        ASSERT_TRUE(abs_f(y->data[1]) < (float)1e-3);                      // constant channel -> 0
+    }
+    &Tensor e = tensor_batch_norm(x, gamma, beta, rm, rv, 2UL, 1UL, 0, (float)0.5, (float)0.00001);
+    unsafe {
+        ASSERT_TRUE(abs_f(rm->data[0] - (float)1.25) < (float)1e-5);     // unchanged in inference
+        float want = ((float)1.0 - (float)1.25) / sqrt_f(rv->data[0] + (float)0.00001);
+        ASSERT_TRUE(abs_f(e->data[0] - want) < (float)1e-5);
+    }
+    tensor_drop(x); tensor_drop(gamma); tensor_drop(beta); tensor_drop(rm); tensor_drop(rv);
+    tensor_drop(y); tensor_drop(e);
+}
+
+// Forward and backward of a batch large enough to run across the thread
+// pool, against the same computation on one thread.
+static void conv_run_(int deconv, const &Tensor x, const &Tensor w, const &Tensor b, const &Tensor aux,
+                      &Tensor outCopy, &Tensor dx, &Tensor dw, &Tensor db) {
+    tensor_zero_grad(x); tensor_zero_grad(w); tensor_zero_grad(b);
+    &Tensor y = deconv ? tensor_conv_transpose2d(x, w, b, 4UL, 16UL, 16UL, 4UL, 4UL, 2UL, 1UL)
+                       : tensor_conv2d(x, w, b, 4UL, 16UL, 16UL, 3UL, 3UL, 1UL, 1UL);
+    tensor_backward(tensor_sum(tensor_mul(y, aux)));
+    unsafe {
+        __tensor_ew(EW_COPY, (const float*)y->data, (const float*)0, (float)0.0, (float*)outCopy->data, y->size);
+        __tensor_ew(EW_COPY, (const float*)x->grad, (const float*)0, (float)0.0, (float*)dx->data, x->size);
+        __tensor_ew(EW_COPY, (const float*)w->grad, (const float*)0, (float)0.0, (float*)dw->data, w->size);
+        __tensor_ew(EW_COPY, (const float*)b->grad, (const float*)0, (float)0.0, (float*)db->data, b->size);
+    }
+}
+
+static float max_rel_diff_(const &Tensor a, const &Tensor b) {
+    float worst = (float)0.0;
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < a->size) {
+            float d = abs_f(a->data[i] - b->data[i]);
+            float s = abs_f(a->data[i]);
+            d = d / (s > (float)1.0 ? s : (float)1.0);
+            if (d > worst) worst = d;
+            i = i + 1UL;
+        }
+    }
+    return worst;
+}
+
+void t_conv_parallel_batch() {
+    struct Rng rng = rng_new(77UL);
+    unsigned long threads = parallel_threads();
+    int deconv = 0;
+    while (deconv < 2) {
+        // conv 4 -> 8 channels on 16x16, deconv 4 -> 8 channels 16x16 -> 32x32
+        unsigned long outSize = deconv ? 8UL * 32UL * 32UL : 8UL * 16UL * 16UL;
+        &Tensor x = tensor_new_2d(8UL, 4UL * 256UL, 1);
+        &Tensor w = deconv ? tensor_new_2d(4UL, 8UL * 16UL, 1) : tensor_new_2d(8UL, 36UL, 1);
+        &Tensor b = tensor_new_1d(8UL, 1);
+        &Tensor aux = tensor_new_2d(8UL, outSize, 0);
+        rng_fill_uniform(&rng, x, (float)-1.0, (float)1.0);
+        rng_fill_uniform(&rng, w, (float)-0.3, (float)0.3);
+        rng_fill_uniform(&rng, b, (float)-0.3, (float)0.3);
+        rng_fill_uniform(&rng, aux, (float)-1.0, (float)1.0);
+        &Tensor y1 = tensor_new_2d(8UL, outSize, 0);
+        &Tensor y2 = tensor_new_2d(8UL, outSize, 0);
+        &Tensor dx1 = tensor_zeros_like(x); &Tensor dx2 = tensor_zeros_like(x);
+        &Tensor dw1 = tensor_zeros_like(w); &Tensor dw2 = tensor_zeros_like(w);
+        &Tensor db1 = tensor_zeros_like(b); &Tensor db2 = tensor_zeros_like(b);
+        struct TensorArena stepArena = tensor_arena_new(0UL);
+        tensor_arena_begin(&stepArena);
+        conv_run_(deconv, x, w, b, aux, y1, dx1, dw1, db1);     // threaded when the pool has threads
+        tensor_arena_reset(&stepArena);
+        parallel_set_threads(1UL);
+        conv_run_(deconv, x, w, b, aux, y2, dx2, dw2, db2);
+        parallel_set_threads(threads);
+        tensor_arena_end();
+        tensor_arena_free(&stepArena);
+        ASSERT_TRUE(max_rel_diff_(y1, y2) < (float)1e-4);
+        ASSERT_TRUE(max_rel_diff_(dx1, dx2) < (float)1e-4);
+        ASSERT_TRUE(max_rel_diff_(dw1, dw2) < (float)1e-4);
+        ASSERT_TRUE(max_rel_diff_(db1, db2) < (float)1e-4);
+        tensor_drop(x); tensor_drop(w); tensor_drop(b); tensor_drop(aux);
+        tensor_drop(y1); tensor_drop(y2); tensor_drop(dx1); tensor_drop(dx2);
+        tensor_drop(dw1); tensor_drop(dw2); tensor_drop(db1); tensor_drop(db2);
+        deconv = deconv + 1;
+    }
+}
+
+// Batch norm, pooling and upsampling on batches large enough to split across
+// the thread pool, against the same chain on one thread.
+static void light_chain_(&Tensor x, &Tensor gamma, &Tensor beta, &Tensor rm, &Tensor rv,
+                         const &Tensor a1, const &Tensor a2, &Tensor snap) {
+    tensor_zero_grad(x); tensor_zero_grad(gamma); tensor_zero_grad(beta);
+    tensor_fill(rm, (float)0.0);
+    tensor_fill(rv, (float)1.0);
+    &Tensor y = tensor_batch_norm(x, gamma, beta, rm, rv, 8UL, 1024UL, 1, (float)0.1, (float)0.00001);
+    &Tensor mp = tensor_maxpool2d(y, 8UL, 32UL, 32UL, 3UL, 2UL, 1UL);          // 8 x 16 x 16
+    &Tensor ap = tensor_avgpool2d(y, 8UL, 32UL, 32UL, 3UL, 2UL, 1UL, 0);
+    &Tensor up = tensor_upsample_nearest(mp, 8UL, 16UL, 16UL, 2UL);             // 8 x 32 x 32
+    &Tensor loss = tensor_add(tensor_sum(tensor_mul(up, a1)), tensor_sum(tensor_mul(ap, a2)));
+    tensor_backward(loss);
+    // snapshot: loss, dx, dgamma, dbeta, running mean, running variance
+    unsafe {
+        unsigned long n = x->size;
+        snap->data[0] = loss->data[0];
+        __tensor_ew(EW_COPY, (const float*)x->grad, (const float*)0, (float)0.0, (float*)&snap->data[1], n);
+        unsigned long c = 0UL;
+        while (c < 8UL) {
+            snap->data[1UL + n + c] = gamma->grad[c];
+            snap->data[9UL + n + c] = beta->grad[c];
+            snap->data[17UL + n + c] = rm->data[c];
+            snap->data[25UL + n + c] = rv->data[c];
+            c = c + 1UL;
+        }
+    }
+}
+
+void t_light_ops_parallel() {
+    struct Rng rng = rng_new(41UL);
+    unsigned long threads = parallel_threads();
+    &Tensor x = tensor_new_2d(16UL, 8UL * 1024UL, 1);
+    &Tensor gamma = tensor_new_1d(8UL, 1);
+    &Tensor beta = tensor_new_1d(8UL, 1);
+    &Tensor rm = tensor_new_1d(8UL, 0);
+    &Tensor rv = tensor_new_1d(8UL, 0);
+    &Tensor a1 = tensor_new_2d(16UL, 8UL * 1024UL, 0);
+    &Tensor a2 = tensor_new_2d(16UL, 8UL * 256UL, 0);
+    rng_fill_uniform(&rng, x, (float)-2.0, (float)2.0);
+    rng_fill_uniform(&rng, gamma, (float)0.5, (float)1.5);
+    rng_fill_uniform(&rng, beta, (float)-0.5, (float)0.5);
+    rng_fill_uniform(&rng, a1, (float)-1.0, (float)1.0);
+    rng_fill_uniform(&rng, a2, (float)-1.0, (float)1.0);
+    unsigned long snapLen = 1UL + 16UL * 8UL * 1024UL + 32UL;
+    &Tensor s1 = tensor_new_1d(snapLen, 0);
+    &Tensor s2 = tensor_new_1d(snapLen, 0);
+    struct TensorArena stepArena = tensor_arena_new(0UL);
+    tensor_arena_begin(&stepArena);
+    light_chain_(x, gamma, beta, rm, rv, a1, a2, s1);    // threaded when the pool has threads
+    tensor_arena_reset(&stepArena);
+    parallel_set_threads(1UL);
+    light_chain_(x, gamma, beta, rm, rv, a1, a2, s2);
+    parallel_set_threads(threads);
+    tensor_arena_end();
+    tensor_arena_free(&stepArena);
+    // per-channel sums are computed the same way on either path: bitwise equal
+    ASSERT_TRUE(max_rel_diff_(s1, s2) == (float)0.0);
+    tensor_drop(x); tensor_drop(gamma); tensor_drop(beta); tensor_drop(rm); tensor_drop(rv);
+    tensor_drop(a1); tensor_drop(a2); tensor_drop(s1); tensor_drop(s2);
+}
+
+// ── Specs, resizing values, Winograd path ────────────────────────────────────
+void t_conv_specs() {
+    // PyTorch's sizes
+    ASSERT_EQ(pool_out_side(6UL, 3UL, 2UL, 0UL, 1), 3UL);
+    ASSERT_EQ(pool_out_side(6UL, 3UL, 2UL, 1UL, 1), 4UL);
+    ASSERT_EQ(pool_out_side(5UL, 2UL, 2UL, 0UL, 1), 3UL);
+    ASSERT_EQ(pool_out_side(5UL, 2UL, 2UL, 0UL, 0), 2UL);
+    ASSERT_EQ(pool_out_side(4UL, 2UL, 2UL, 1UL, 1), 3UL);     // last window would start in the right padding
+    ASSERT_EQ(conv_out_side_ex(10UL, 3UL, 1UL, 0UL, 2UL), 6UL);
+    ASSERT_EQ(conv_transpose_out_side_ex(4UL, 3UL, 2UL, 1UL, 1UL, 1UL), 8UL);
+    ASSERT_EQ(conv_transpose_out_side_ex(4UL, 3UL, 1UL, 0UL, 2UL, 0UL), 8UL);
+
+    // nearest 4 -> 2 picks 0 and 2; bilinear with aligned corners 2 -> 3 is [1, 1.5, 2];
+    // bicubic keeps a constant image constant
+    &Tensor a = tensor_new_1d(4UL, 0);
+    unsafe { a->data[0] = (float)1.0; a->data[1] = (float)2.0; a->data[2] = (float)3.0; a->data[3] = (float)4.0; }
+    &Tensor nn = tensor_resize2d(a, 1UL, 1UL, 4UL, 1UL, 2UL, RESIZE_NEAREST, 0);
+    &Tensor two = tensor_new_1d(2UL, 0);
+    unsafe { two->data[0] = (float)1.0; two->data[1] = (float)2.0; }
+    &Tensor al = tensor_resize2d(two, 1UL, 1UL, 2UL, 1UL, 3UL, RESIZE_BILINEAR, 1);
+    &Tensor flat = tensor_new_1d(9UL, 0);
+    tensor_fill(flat, (float)0.7);
+    &Tensor cub = tensor_resize2d(flat, 1UL, 3UL, 3UL, 7UL, 5UL, RESIZE_BICUBIC, 0);
+    unsafe {
+        ASSERT_TRUE(nn->data[0] == (float)1.0 && nn->data[1] == (float)3.0);
+        ASSERT_TRUE(al->data[0] == (float)1.0 && abs_f(al->data[1] - (float)1.5) < (float)1e-6 && al->data[2] == (float)2.0);
+        unsigned long i = 0UL;
+        while (i < 35UL) { ASSERT_TRUE(abs_f(cub->data[i] - (float)0.7) < (float)1e-5); i = i + 1UL; }
+    }
+    tensor_drop(a); tensor_drop(nn); tensor_drop(two); tensor_drop(al); tensor_drop(flat); tensor_drop(cub);
+
+    // a 3x3 stride-1 layer with 8+ channels goes through cnn.h's Winograd
+    // kernel: same result as the direct sum
+    struct Rng rng = rng_new(12UL);
+    &Tensor x = tensor_new_2d(2UL, 8UL * 100UL, 0);
+    &Tensor w = tensor_new_2d(8UL, 72UL, 0);
+    &Tensor b = tensor_new_1d(8UL, 0);
+    rng_fill_uniform(&rng, x, (float)-1.0, (float)1.0);
+    rng_fill_uniform(&rng, w, (float)-0.3, (float)0.3);
+    rng_fill_uniform(&rng, b, (float)-0.3, (float)0.3);
+    &Tensor y = tensor_conv2d(x, w, b, 8UL, 10UL, 10UL, 3UL, 3UL, 1UL, 1UL);
+    unsafe {
+        float worst = (float)0.0;
+        unsigned long n = 0UL;
+        while (n < 2UL) {
+            unsigned long oc = 0UL;
+            while (oc < 8UL) {
+                unsigned long p = 0UL;
+                while (p < 100UL) {
+                    long oh = (long)(p / 10UL);
+                    long ow = (long)(p % 10UL);
+                    double acc = (double)b->data[oc];
+                    unsigned long ic = 0UL;
+                    while (ic < 8UL) {
+                        long kh = 0L;
+                        while (kh < 3L) {
+                            long kw = 0L;
+                            while (kw < 3L) {
+                                long ih = oh + kh - 1L;
+                                long iw = ow + kw - 1L;
+                                if (ih >= 0L && ih < 10L && iw >= 0L && iw < 10L)
+                                    acc = acc + (double)w->data[oc * 72UL + ic * 9UL + (unsigned long)(kh * 3L + kw)]
+                                              * (double)x->data[n * 800UL + ic * 100UL + (unsigned long)(ih * 10L + iw)];
+                                kw = kw + 1L;
+                            }
+                            kh = kh + 1L;
+                        }
+                        ic = ic + 1UL;
+                    }
+                    float d = abs_f(y->data[n * 800UL + oc * 100UL + p] - (float)acc);
+                    if (d > worst) worst = d;
+                    p = p + 1UL;
+                }
+                oc = oc + 1UL;
+            }
+            n = n + 1UL;
+        }
+        ASSERT_TRUE(worst < (float)1e-4);
+    }
+    tensor_drop(x); tensor_drop(w); tensor_drop(b); tensor_drop(y);
+}
+
+// ── ConvNet with skips: input gradient through add (with projection) and concat ──
+static struct ConvNet skip_net_(&Rng rng) {
+    struct ConvNet n = convnet_new(2UL, 6UL, 6UL);
+    unsigned long s0 = convnet_save(&n);
+    convnet_conv(&n, 4UL, 3UL, 1UL, 1UL, ACT_TANH, rng);
+    convnet_conv(&n, 4UL, 3UL, 2UL, 1UL, ACT_NONE, rng);          // 4 x 3 x 3
+    convnet_add_skip(&n, s0, ACT_TANH, rng);                      // 1x1 stride-2 projection of 2 x 6 x 6
+    convnet_deconv(&n, 4UL, 4UL, 2UL, 1UL, ACT_NONE, rng);        // 4 x 6 x 6
+    convnet_concat_skip(&n, s0);                                  // 6 x 6 x 6
+    convnet_groupnorm(&n, 2UL, ACT_TANH);
+    convnet_dense(&n, 3UL, ACT_NONE, rng);
+    return n;
+}
+
+static float skip_loss_(const &ConvNet n, const &Tensor x, const &Tensor aux) {
+    float v;
+    unsafe { v = tensor_sum(tensor_mul(convnet_forward(n, x), aux))->data[0]; }
+    return v;
+}
+
+void t_convnet_skips() {
+    struct Rng rng = rng_new(23UL);
+    struct ConvNet n = skip_net_(&rng);
+    ASSERT_EQ(n.slots, 1UL);
+    ASSERT_EQ(convnet_out_dim(&n), 3UL);
+    // conv 2->4 (72 + 4), conv 4->4 (144 + 4), projection 2->4 (8 + 4), deconv 4->4 (256 + 4),
+    // group norm (6 + 6), dense 216 -> 3 (648 + 3)
+    ASSERT_EQ(convnet_param_count(&n), 76UL + 148UL + 12UL + 260UL + 12UL + 651UL);
+    &Tensor x = tensor_new_2d(2UL, 72UL, 1);
+    &Tensor aux = tensor_new_2d(2UL, 3UL, 0);
+    rng_fill_uniform(&rng, x, (float)-1.0, (float)1.0);
+    rng_fill_uniform(&rng, aux, (float)-1.0, (float)1.0);
+    struct TensorArena stepArena = tensor_arena_new(0UL);
+    tensor_arena_begin(&stepArena);
+    tensor_backward(tensor_sum(tensor_mul(convnet_forward(&n, x), aux)));
+    tensor_arena_reset(&stepArena);
+    double worst = 0.0;
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < 144UL) {
+            float keep = x->data[i];
+            float h = (float)0.004;
+            x->data[i] = keep + h;
+            float lp = skip_loss_(&n, x, aux);
+            x->data[i] = keep - h;
+            float lm = skip_loss_(&n, x, aux);
+            x->data[i] = keep;
+            tensor_arena_reset(&stepArena);
+            double num = ((double)lp - (double)lm) / (2.0 * (double)h);
+            double e = num - (double)x->grad[i];
+            if (e < 0.0) e = -e;
+            double sc = num < 0.0 ? -num : num;
+            e = e / (sc > 1.0 ? sc : 1.0);
+            if (e > worst) worst = e;
+            i = i + 1UL;
+        }
+    }
+    tensor_arena_end();
+    tensor_arena_free(&stepArena);
+    ASSERT_TRUE(worst < 2e-3);
+    tensor_drop(x); tensor_drop(aux);
+    convnet_free(&n);
+
+    // ResNet basic block: 4 x 8 x 8 -> 8 x 4 x 4 with a projection shortcut
+    struct ConvNet r = convnet_new(4UL, 8UL, 8UL);
+    convnet_residual_block(&r, 8UL, 2UL, 1, ACT_RELU, &rng);
+    ASSERT_EQ(r.outC, 8UL);
+    ASSERT_EQ(r.outH, 4UL);
+    // conv 4->8 (288 + 8), bn (16), conv 8->8 (576 + 8), bn (16), projection 4->8 (32 + 8)
+    ASSERT_EQ(convnet_param_count(&r), 296UL + 16UL + 584UL + 16UL + 40UL);
+    convnet_residual_block(&r, 8UL, 1UL, 0, ACT_RELU, &rng);       // identity shortcut, no batch norm
+    ASSERT_EQ(convnet_param_count(&r), 952UL + 584UL + 584UL);
+    convnet_free(&r);
+}
+
+// ── Batch-norm folding, save / load ──────────────────────────────────────────
+static struct ConvNet fold_net_(&Rng rng) {
+    struct ConvNet n = convnet_new(3UL, 8UL, 8UL);
+    convnet_conv(&n, 6UL, 3UL, 1UL, 1UL, ACT_NONE, rng);
+    convnet_batchnorm(&n, ACT_RELU);
+    struct Conv2dSpec d = conv2d_spec(2UL, 2UL, 0UL);
+    d.groups = 2UL;
+    convnet_deconv_ex(&n, 4UL, &d, ACT_NONE, rng);                // grouped transposed conv, 4 x 16 x 16
+    convnet_batchnorm(&n, ACT_NONE);
+    convnet_global_avgpool(&n);
+    convnet_dense(&n, 5UL, ACT_NONE, rng);
+    convnet_batchnorm(&n, ACT_NONE);
+    return n;
+}
+
+static void randomize_list_(&Vec<&Tensor> v, &Rng rng, float lo, float hi) {
+    unsigned long i = 0UL;
+    while (i < v.length()) { rng_fill_uniform(rng, *v.at(i), lo, hi); i = i + 1UL; }
+}
+
+void t_convnet_fold_and_files() {
+    struct Rng rng = rng_new(31UL);
+    struct ConvNet n = fold_net_(&rng);
+    randomize_list_(&n.buffers, &rng, (float)0.5, (float)1.5);     // running means and variances
+    unsigned long i = 0UL;
+    while (i < n.params.length()) {
+        // gammas / betas of the norms (the 1D parameters after the first two)
+        &Tensor p = *n.params.at(i);
+        unsafe { if (p->ndim == 1UL && i % 4UL == 2UL) rng_fill_uniform(&rng, p, (float)0.5, (float)1.5); }
+        i = i + 1UL;
+    }
+    convnet_set_training(&n, 0);
+    int was = tensor_is_grad_enabled();
+    tensor_set_grad_enabled(0);
+    &Tensor x = tensor_new_2d(3UL, 192UL, 0);
+    rng_fill_uniform(&rng, x, (float)-1.0, (float)1.0);
+    &Tensor before = convnet_forward(&n, x);
+
+    // save, then load into a differently initialized net of the same layers
+    ASSERT_TRUE(convnet_save_file(&n, "build/test_ml_train_convnet.bin"));
+    struct Rng other = rng_new(77UL);
+    struct ConvNet m = fold_net_(&other);
+    convnet_set_training(&m, 0);
+    &Tensor m0 = convnet_forward(&m, x);
+    ASSERT_TRUE(max_rel_diff_(before, m0) > (float)1e-3);
+    ASSERT_TRUE(convnet_load_file(&m, "build/test_ml_train_convnet.bin"));
+    &Tensor m1 = convnet_forward(&m, x);
+    ASSERT_TRUE(max_rel_diff_(before, m1) == (float)0.0);
+    struct ConvNet wrong = convnet_new(3UL, 8UL, 8UL);
+    convnet_conv(&wrong, 5UL, 3UL, 1UL, 1UL, ACT_NONE, &other);
+    ASSERT_TRUE(!convnet_load_file(&wrong, "build/test_ml_train_convnet.bin"));
+    ASSERT_TRUE(!convnet_load_file(&wrong, "build/no_such_file_test_ml_train.bin"));
+    convnet_free(&wrong);
+
+    // folding: three batch norms disappear, inference output unchanged
+    ASSERT_EQ(convnet_fold_batchnorm(&n), 3UL);
+    &Tensor after = convnet_forward(&n, x);
+    ASSERT_TRUE(max_rel_diff_(before, after) < (float)1e-4);
+    ASSERT_EQ(convnet_fold_batchnorm(&n), 0UL);
+
+    // an Mlp round trip
+    struct Mlp a = mlp_new(4UL, 8UL, 1UL, 2UL, ACT_RELU, ACT_NONE, &rng);
+    struct Mlp c = mlp_new(4UL, 8UL, 1UL, 2UL, ACT_RELU, ACT_NONE, &other);
+    &Tensor mx = tensor_new_2d(5UL, 4UL, 0);
+    rng_fill_uniform(&rng, mx, (float)-1.0, (float)1.0);
+    ASSERT_TRUE(mlp_save_file(&a, "build/test_ml_train_mlp.bin"));
+    ASSERT_TRUE(mlp_load_file(&c, "build/test_ml_train_mlp.bin"));
+    &Tensor ya = mlp_forward(&a, mx);
+    &Tensor yc = mlp_forward(&c, mx);
+    ASSERT_TRUE(max_rel_diff_(ya, yc) == (float)0.0);
+    tensor_set_grad_enabled(was);
+    tensor_drop(x); tensor_drop(before); tensor_drop(after); tensor_drop(m0); tensor_drop(m1);
+    tensor_drop(mx); tensor_drop(ya); tensor_drop(yc);
+    mlp_free(&a); mlp_free(&c);
+    convnet_free(&m);
+    convnet_free(&n);
+}
+
+// ── Dropout, spectral norm, group norm ───────────────────────────────────────
+void t_dropout_and_norms() {
+    struct Rng rng = rng_new(55UL);
+    &Tensor ones = tensor_new_2d(64UL, 256UL, 0);
+    tensor_fill(ones, (float)1.0);
+    &Tensor d = tensor_dropout(ones, (float)0.25, 1, &rng);
+    unsafe {
+        unsigned long zeros = 0UL;
+        int ok = 1;
+        unsigned long i = 0UL;
+        while (i < d->size) {
+            if (d->data[i] == (float)0.0) zeros = zeros + 1UL;
+            else if (abs_f(d->data[i] - (float)(1.0 / 0.75)) > (float)1e-6) ok = 0;
+            i = i + 1UL;
+        }
+        ASSERT_TRUE(ok);
+        float frac = (float)zeros / (float)d->size;
+        ASSERT_TRUE(frac > (float)0.23 && frac < (float)0.27);
+    }
+    &Tensor e = tensor_dropout(ones, (float)0.25, 0, &rng);           // inference: unchanged
+    unsafe { ASSERT_TRUE(e->data[0] == (float)1.0 && e->size == ones->size); }
+    &Tensor d2 = tensor_dropout2d(ones, 16UL, 16UL, (float)0.5, 1, &rng);
+    unsafe {
+        int planes = 1;
+        unsigned long p = 0UL;
+        while (p < 64UL * 16UL) {
+            unsigned long q = 1UL;
+            while (q < 16UL) { if (d2->data[p * 16UL + q] != d2->data[p * 16UL]) planes = 0; q = q + 1UL; }
+            p = p + 1UL;
+        }
+        ASSERT_TRUE(planes);
+    }
+
+    // spectral norm: after enough power iterations the result's largest
+    // singular value is 1
+    &Tensor w = tensor_new_2d(6UL, 10UL, 0);
+    &Tensor u = tensor_new_1d(6UL, 0);
+    &Tensor u2 = tensor_new_1d(6UL, 0);
+    rng_fill_uniform(&rng, w, (float)-2.0, (float)2.0);
+    rng_fill_normal(&rng, u, (float)0.0, (float)1.0);
+    rng_fill_normal(&rng, u2, (float)0.0, (float)1.0);
+    &Tensor wsn = tensor_spectral_norm(w, u, 100UL, 1);
+    &Tensor again = tensor_spectral_norm(wsn, u2, 100UL, 1);         // wsn / sigma(wsn)
+    unsafe {
+        float sigma = wsn->data[0] / again->data[0];
+        ASSERT_TRUE(abs_f(sigma - (float)1.0) < (float)1e-3);
+    }
+
+    // group norm doesn't depend on the rest of the batch
+    &Tensor x = tensor_new_2d(3UL, 36UL, 0);
+    &Tensor gamma = tensor_new_1d(4UL, 0);
+    &Tensor beta = tensor_new_1d(4UL, 0);
+    rng_fill_uniform(&rng, x, (float)-2.0, (float)2.0);
+    rng_fill_uniform(&rng, gamma, (float)0.5, (float)1.5);
+    rng_fill_uniform(&rng, beta, (float)-0.5, (float)0.5);
+    &Tensor all = tensor_group_norm(x, gamma, beta, 4UL, 9UL, 2UL, (float)0.00001);
+    &Tensor one = tensor_new_1d(36UL, 0);
+    unsafe { __tensor_ew(EW_COPY, (const float*)&x->data[36], (const float*)0, (float)0.0, (float*)one->data, 36UL); }
+    &Tensor alone = tensor_group_norm(one, gamma, beta, 4UL, 9UL, 2UL, (float)0.00001);
+    unsafe {
+        float worst = (float)0.0;
+        unsigned long i = 0UL;
+        while (i < 36UL) { float df = abs_f(all->data[36UL + i] - alone->data[i]); if (df > worst) worst = df; i = i + 1UL; }
+        ASSERT_TRUE(worst < (float)1e-6);
+    }
+    tensor_drop(ones); tensor_drop(d); tensor_drop(d2);
+    tensor_drop(w); tensor_drop(u); tensor_drop(u2); tensor_drop(wsn); tensor_drop(again);
+    tensor_drop(x); tensor_drop(gamma); tensor_drop(beta); tensor_drop(all); tensor_drop(one); tensor_drop(alone);
+}
+
+// ── WGAN-GP: the penalty's parameter gradient against finite differences ───
+static float gp_value_(&Dcgan g, const &Tensor xh, &TensorArena stepArena) {
+    float v = (float)0.0;
+    dcgan_gradient_penalty_(g, xh, null, &v);
+    tensor_arena_reset(stepArena);
+    return v;
+}
+
+void t_wgan_gp_gradient() {
+    struct Rng rng = rng_new(61UL);
+    struct GanConfig cfg = gan_config_default(4UL);
+    cfg.loss = GAN_WGAN_GP;
+    struct ConvNet gen = convnet_new(4UL, 1UL, 1UL);
+    convnet_dense(&gen, 2UL, ACT_NONE, &rng);
+    struct ConvNet disc = convnet_new(2UL, 1UL, 1UL);              // a smooth critic
+    convnet_dense(&disc, 16UL, ACT_TANH, &rng);
+    convnet_dense(&disc, 1UL, ACT_NONE, &rng);
+    struct Dcgan g = dcgan_new(gen, disc, &cfg);
+    &Tensor xh = tensor_new_2d(6UL, 2UL, 0);
+    rng_fill_uniform(&rng, xh, (float)-1.5, (float)1.5);
+    &Tensor w = *g.disc.params.at(0UL);                            // [2, 16]
+    &Tensor ana = tensor_new_1d(32UL, 0);                          // on the heap
+    struct TensorArena stepArena = tensor_arena_new(0UL);
+    tensor_arena_begin(&stepArena);
+    float v = (float)0.0;
+    &Tensor term = dcgan_gradient_penalty_(&g, xh, null, &v);
+    ASSERT_TRUE(v > (float)0.0);
+    optimizer_zero_grad(&g.optD);
+    tensor_backward(term);
+    tensor_arena_reset(&stepArena);
+    // snapshot: every penalty evaluation below runs its own input-gradient
+    // backward pass, which adds into w's gradient
+    unsafe { __tensor_ew(EW_COPY, (const float*)w->grad, (const float*)0, (float)0.0, (float*)ana->data, 32UL); }
+    double worst = 0.0;
+    double scale = 0.0;
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < w->size) {
+            float keep = w->data[i];
+            float h = (float)0.001;
+            w->data[i] = keep + h;
+            float pp = gp_value_(&g, xh, &stepArena);
+            w->data[i] = keep - h;
+            float pm = gp_value_(&g, xh, &stepArena);
+            w->data[i] = keep;
+            double num = ((double)pp - (double)pm) / (2.0 * (double)h);
+            double e = num - (double)ana->data[i];
+            if (e < 0.0) e = -e;
+            if (e > worst) worst = e;
+            double a = num < 0.0 ? -num : num;
+            if (a > scale) scale = a;
+            i = i + 1UL;
+        }
+    }
+    tensor_arena_end();
+    tensor_arena_free(&stepArena);
+    ASSERT_TRUE(scale > 1e-2);
+    ASSERT_TRUE(worst < 2e-2 * scale);
+    tensor_drop(ana);
+    tensor_drop(xh);
+    dcgan_free(&g);
+}
+
+// ── End to end: a small residual CNN classifies 12x12 shapes ─────────────────
+static &Tensor cnn_clf_loss_(&ConvNet m, const &Tensor x, const &Tensor y) {
+    return tensor_cross_entropy_loss(convnet_forward(m, x), y);
+}
+
+static &Tensor cnn_clf_logits_(&ConvNet m, const &Tensor x) {
+    int was = convnet_set_training(m, 0);
+    &Tensor l = convnet_forward(m, x);
+    convnet_set_training(m, was);
+    return l;
+}
+
+void t_cnn_classifier() {
+    struct Rng rng = rng_new(71UL);
+    struct Dataset shapes = dataset_shapes(768UL, 12UL, &rng);
+    struct DatasetSplit sp = dataset_split(&shapes, (float)0.25, &rng);
+    struct ConvNet net = convnet_new(1UL, 12UL, 12UL);
+    convnet_conv(&net, 8UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);
+    convnet_batchnorm(&net, ACT_RELU);
+    convnet_residual_block(&net, 8UL, 1UL, 1, ACT_RELU, &rng);     // 8 x 12 x 12
+    convnet_residual_block(&net, 16UL, 2UL, 1, ACT_RELU, &rng);    // 16 x 6 x 6
+    convnet_dropout(&net, (float)0.1, 1, &rng);
+    convnet_global_avgpool(&net);
+    convnet_dense(&net, 4UL, ACT_NONE, &rng);
+    struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.003);
+    optimizer_add_convnet(&opt, &net);
+    struct TrainConfig tc = train_config_default();
+    tc.epochs = 6UL;
+    struct TrainReport rep = trainer_fit(&net, cnn_clf_loss_, &opt, &sp.train, &tc);
+    ASSERT_TRUE(rep.lastEpochLoss < rep.firstEpochLoss * (float)0.5);
+    float acc = trainer_accuracy(&net, cnn_clf_logits_, &sp.test, 64UL);
+    ASSERT_TRUE(acc > (float)0.9);
+    optimizer_free(&opt);
+    convnet_free(&net);
+    dataset_free(&sp.train);
+    dataset_free(&sp.test);
+    dataset_free(&shapes);
+}
+
+// tensor_conv2d agrees with cnn.h's forward-only Conv2D on the same weights,
+// padded pooling with cnn.h's, and the ConvNet builder tracks output geometry.
+void t_conv_matches_cnn() {
+    struct Conv2D layer = conv2d_new(3UL, 4UL, 3UL, 3UL, 2UL, 1UL);
+    struct FeatureMap fm = feature_map_new(3UL, 7UL, 7UL);
+    &Tensor x = tensor_new_2d(1UL, 147UL, 0);
+    &Tensor w = tensor_new_2d(4UL, 27UL, 0);
+    &Tensor b = tensor_new_1d(4UL, 0);
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < 147UL) { float v = sin_f((float)i * (float)0.37); fm.data[i] = v; x->data[i] = v; i = i + 1UL; }
+        i = 0UL;
+        while (i < 108UL) { w->data[i] = layer.weight[i]; i = i + 1UL; }
+        i = 0UL;
+        while (i < 4UL) { layer.bias[i] = (float)i * (float)0.1; b->data[i] = layer.bias[i]; i = i + 1UL; }
+    }
+    struct FeatureMap ref = conv2d_forward(&layer, &fm);
+    &Tensor y = tensor_conv2d(x, w, b, 3UL, 7UL, 7UL, 3UL, 3UL, 2UL, 1UL);
+    ASSERT_EQ(ref.height, 4UL);
+    unsafe {
+        ASSERT_EQ(y->size, 64UL);
+        float worst = (float)0.0;
+        unsigned long i = 0UL;
+        while (i < 64UL) {
+            float d = abs_f(y->data[i] - ref.data[i]);
+            if (d > worst) worst = d;
+            i = i + 1UL;
+        }
+        ASSERT_TRUE(worst < (float)1e-4);
+    }
+    // padded pooling, against cnn.h's *_forward_ex
+    int kind = 0;
+    while (kind < 3) {
+        struct FeatureMap pr = kind == 0 ? maxpool2d_forward_ex(&fm, 3UL, 2UL, 1UL)
+                                         : avgpool2d_forward_ex(&fm, 3UL, 2UL, 1UL, kind == 1);
+        &Tensor pt = kind == 0 ? tensor_maxpool2d(x, 3UL, 7UL, 7UL, 3UL, 2UL, 1UL)
+                               : tensor_avgpool2d(x, 3UL, 7UL, 7UL, 3UL, 2UL, 1UL, kind == 1);
+        unsafe {
+            ASSERT_EQ(pt->size, pr.channels * pr.height * pr.width);
+            float worst = (float)0.0;
+            unsigned long i = 0UL;
+            while (i < pt->size) { float d = abs_f(pt->data[i] - pr.data[i]); if (d > worst) worst = d; i = i + 1UL; }
+            ASSERT_TRUE(worst < (float)1e-5);
+        }
+        feature_map_free(&pr);
+        tensor_drop(pt);
+        kind = kind + 1;
+    }
+    // global pooling, against cnn.h's
+    struct FeatureMap gref = global_avgpool2d(&fm);
+    struct FeatureMap mref = global_maxpool2d(&fm);
+    &Tensor ga = tensor_global_avgpool2d(x, 3UL, 7UL, 7UL);
+    &Tensor gm = tensor_global_maxpool2d(x, 3UL, 7UL, 7UL);
+    unsafe {
+        ASSERT_EQ(ga->size, 3UL);
+        unsigned long c = 0UL;
+        while (c < 3UL) {
+            ASSERT_TRUE(abs_f(ga->data[c] - gref.data[c]) < (float)1e-5);
+            ASSERT_TRUE(gm->data[c] == mref.data[c]);
+            c = c + 1UL;
+        }
+    }
+    feature_map_free(&gref);
+    feature_map_free(&mref);
+    tensor_drop(ga);
+    tensor_drop(gm);
+    // bilinear 2x of [[1, 2], [3, 4]], as PyTorch's Upsample(align_corners=False) gives it
+    &Tensor small = tensor_new_1d(4UL, 0);
+    unsafe { small->data[0] = (float)1.0; small->data[1] = (float)2.0; small->data[2] = (float)3.0; small->data[3] = (float)4.0; }
+    &Tensor big = tensor_upsample_bilinear(small, 1UL, 2UL, 2UL, 2UL);
+    float want[16];
+    unsafe {
+        want[0] = (float)1.0;  want[1] = (float)1.25; want[2] = (float)1.75; want[3] = (float)2.0;
+        want[4] = (float)1.5;  want[5] = (float)1.75; want[6] = (float)2.25; want[7] = (float)2.5;
+        want[8] = (float)2.5;  want[9] = (float)2.75; want[10] = (float)3.25; want[11] = (float)3.5;
+        want[12] = (float)3.0; want[13] = (float)3.25; want[14] = (float)3.75; want[15] = (float)4.0;
+        ASSERT_EQ(big->size, 16UL);
+        unsigned long i = 0UL;
+        while (i < 16UL) { ASSERT_TRUE(abs_f(big->data[i] - want[i]) < (float)1e-6); i = i + 1UL; }
+    }
+    tensor_drop(small);
+    tensor_drop(big);
+    feature_map_free(&ref);
+    feature_map_free(&fm);
+    conv2d_free(&layer);
+    tensor_drop(x); tensor_drop(w); tensor_drop(b); tensor_drop(y);
+
+    struct Rng rng = rng_new(3UL);
+    struct ConvNet net = convnet_new(1UL, 16UL, 16UL);
+    convnet_conv(&net, 8UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);
+    convnet_batchnorm(&net, ACT_RELU);
+    convnet_maxpool(&net, 2UL, 2UL, 0UL);
+    ASSERT_EQ(net.outH, 8UL);
+    convnet_deconv(&net, 4UL, 4UL, 2UL, 1UL, ACT_RELU, &rng);
+    ASSERT_EQ(net.outH, 16UL);
+    convnet_avgpool(&net, 3UL, 2UL, 1UL, 0);
+    convnet_upsample(&net, 2UL);
+    ASSERT_EQ(convnet_out_dim(&net), 4UL * 16UL * 16UL);
+    convnet_dense(&net, 5UL, ACT_NONE, &rng);
+    ASSERT_EQ(convnet_out_dim(&net), 5UL);
+    ASSERT_EQ(convnet_param_count(&net), 8UL * 9UL + 8UL + 16UL + 8UL * 64UL + 4UL + 1024UL * 5UL + 5UL);
+    ASSERT_EQ(net.buffers.length(), 2UL);
+    &Tensor in = tensor_new_2d(3UL, 256UL, 0);
+    &Tensor out = convnet_forward(&net, in);
+    unsafe { ASSERT_EQ(out->shape[0], 3UL); ASSERT_EQ(out->shape[1], 5UL); }
+    struct ConvNet head = convnet_new(4UL, 8UL, 8UL);
+    convnet_upsample_bilinear(&head, 2UL);
+    ASSERT_EQ(head.outH, 16UL);
+    convnet_global_maxpool(&head);
+    ASSERT_EQ(convnet_out_dim(&head), 4UL);
+    &Tensor hin = tensor_new_2d(2UL, 256UL, 0);
+    &Tensor hout = convnet_forward(&head, hin);
+    unsafe { ASSERT_EQ(hout->shape[1], 4UL); }
+    struct ConvNet head2 = convnet_new(4UL, 8UL, 8UL);
+    convnet_global_avgpool(&head2);
+    ASSERT_EQ(convnet_out_dim(&head2), 4UL);
+    tensor_drop(hin);
+    tensor_drop(hout);
+    convnet_free(&head);
+    convnet_free(&head2);
+    struct ConvNet twin = convnet_clone(&net);
+    ASSERT_EQ(twin.buffers.length(), 2UL);
+    convnet_free(&twin);
+    tensor_drop(in);
+    convnet_free(&net);
+}
+
+// Convolutional encoder (1 + extra) x 8 x 8 -> 16 x 2 x 2 with batch norm,
+// and a decoder back to 1 x 8 x 8, for the shapes images.
+static struct ConvNet shapes_encoder_(unsigned long extraChannels, &Rng rng) {
+    struct ConvNet enc = convnet_new(1UL + extraChannels, 8UL, 8UL);
+    convnet_conv(&enc, 8UL, 4UL, 2UL, 1UL, ACT_LEAKY, rng);    // 8 x 4 x 4
+    convnet_conv(&enc, 16UL, 4UL, 2UL, 1UL, ACT_NONE, rng);    // 16 x 2 x 2
+    convnet_batchnorm(&enc, ACT_LEAKY);
+    return enc;
+}
+
+static struct ConvNet shapes_decoder_(unsigned long inputs, &Rng rng) {
+    struct ConvNet dec = convnet_new(inputs, 1UL, 1UL);
+    convnet_dense(&dec, 64UL, ACT_RELU, rng);
+    convnet_reshape(&dec, 16UL, 2UL, 2UL);
+    convnet_deconv(&dec, 8UL, 4UL, 2UL, 1UL, ACT_NONE, rng);   // 8 x 4 x 4
+    convnet_batchnorm(&dec, ACT_RELU);
+    convnet_deconv(&dec, 1UL, 4UL, 2UL, 1UL, ACT_NONE, rng);   // 1 x 8 x 8 logits
+    return dec;
+}
+
+static float conv_recon_err_(&ConvAutoencoder ae, const &Dataset d) {
+    int was = tensor_is_grad_enabled();
+    tensor_set_grad_enabled(0);
+    &Tensor r = conv_autoencoder_reconstruct(ae, d.x);
+    float e;
+    unsafe { e = tensor_mse_loss(r, d.x)->data[0]; }
+    tensor_set_grad_enabled(was);
+    return e;
+}
+
+static &Tensor shapes8_logits_(&Mlp m, const &Tensor x) { return mlp_forward(m, x); }
+
+// A classifier for the 8x8 shapes that judges conditional samples.
+static struct Mlp shapes8_judge_(const &Dataset shapes, &Rng rng) {
+    struct Mlp judge = mlp_new(64UL, 64UL, 1UL, 4UL, ACT_RELU, ACT_NONE, rng);
+    struct Optimizer jo = optimizer_new(OPT_ADAM, (float)0.003);
+    optimizer_add_mlp(&jo, &judge);
+    struct TrainConfig tc = train_config_default();
+    tc.epochs = 30UL;
+    trainer_fit(&judge, clf_loss_, &jo, shapes, &tc);
+    // 8x8 is coarse: the shapes are told apart about 85% of the time
+    ASSERT_TRUE(trainer_accuracy(&judge, shapes8_logits_, shapes, 128UL) > (float)0.75);
+    optimizer_free(&jo);
+    return judge;
+}
+
+static &Tensor cycle_labels_(unsigned long n) {
+    &Tensor labels = tensor_new_1d(n, 0);
+    unsafe { unsigned long i = 0UL; while (i < n) { labels->data[i] = (float)(i % 4UL); i = i + 1UL; } }
+    return labels;
+}
+
+void t_conv_autoencoders() {
+    struct Rng rng = rng_new(5UL);
+    struct Dataset shapes = dataset_shapes(512UL, 8UL, &rng);
+    struct TrainConfig tc = train_config_default();
+    tc.epochs = 25UL;
+
+    // plain: the 16x2x2 feature map is the code
+    struct ConvNet dec0 = convnet_new(16UL, 2UL, 2UL);
+    convnet_deconv(&dec0, 8UL, 4UL, 2UL, 1UL, ACT_RELU, &rng);
+    convnet_deconv(&dec0, 1UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);
+    struct ConvAutoencoder ae = conv_autoencoder_new(shapes_encoder_(0UL, &rng), dec0, RECON_BCE);
+    float before = conv_recon_err_(&ae, &shapes);
+    struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.003);
+    conv_autoencoder_add_params(&opt, &ae);
+    trainer_fit(&ae, conv_autoencoder_loss, &opt, &shapes, &tc);
+    float after = conv_recon_err_(&ae, &shapes);
+    ASSERT_TRUE(after < before * (float)0.3);
+    ASSERT_EQ(ae.enc.training, 1);
+    optimizer_free(&opt);
+    conv_autoencoder_free(&ae);
+
+    // VAE, then conditional VAE judged by a classifier
+    struct Mlp judge = shapes8_judge_(&shapes, &rng);
+    &Tensor labels = cycle_labels_(64UL);
+    int cond = 0;
+    while (cond < 2) {
+        struct VaeConfig cfg = vae_config_default(4UL);
+        cfg.classes = cond ? 4UL : 0UL;
+        struct ConvVae v = conv_vae_new(shapes_encoder_(cfg.classes, &rng),
+                                        shapes_decoder_(4UL + cfg.classes, &rng), &cfg);
+        struct Optimizer vo = optimizer_new(OPT_ADAM, (float)0.003);
+        conv_vae_add_params(&vo, &v);
+        tc.epochs = cond ? 40UL : 25UL;
+        struct TrainReport rep = trainer_fit(&v, conv_vae_loss, &vo, &shapes, &tc);
+        ASSERT_TRUE(rep.lastEpochLoss < rep.firstEpochLoss * (float)0.6);
+        ASSERT_TRUE(v.lastKl > (float)0.1);
+        int was = tensor_is_grad_enabled();
+        tensor_set_grad_enabled(0);
+        &Tensor s = cond ? conv_vae_sample(&v, 64UL, (?&Tensor)labels) : conv_vae_sample(&v, 64UL, null);
+        &Tensor r = conv_vae_reconstruct(&v, shapes.x, shapes.y);
+        unsafe {
+            ASSERT_EQ(s->shape[0], 64UL);
+            ASSERT_EQ(s->shape[1], 64UL);
+            ASSERT_TRUE(s->data[0] > (float)0.0 && s->data[0] < (float)1.0);
+            ASSERT_TRUE(tensor_mse_loss(r, shapes.x)->data[0] < (float)0.1);
+        }
+        if (cond) ASSERT_TRUE(tensor_accuracy(mlp_forward(&judge, s), labels) > (float)0.7);
+        tensor_set_grad_enabled(was);
+        tensor_drop(s);
+        tensor_drop(r);
+        optimizer_free(&vo);
+        conv_vae_free(&v);
+        cond = cond + 1;
+    }
+    tensor_drop(labels);
+    mlp_free(&judge);
+    dataset_free(&shapes);
+}
+
+static struct Dcgan shapes_dcgan_(unsigned long classes, &Rng rng) {
+    struct GanConfig cfg = gan_config_default(8UL);
+    cfg.lrG = (float)0.001; cfg.lrD = (float)0.001;
+    cfg.emaDecay = (float)0.9;
+    cfg.classes = classes;
+    unsigned long w = classes > 0UL ? 2UL : 1UL;   // conditional: twice the channels
+    struct ConvNet gen = convnet_new(8UL + classes, 1UL, 1UL);
+    convnet_deconv(&gen, 16UL * w, 2UL, 1UL, 0UL, ACT_NONE, rng);    // 16w x 2 x 2
+    convnet_batchnorm(&gen, ACT_RELU);
+    convnet_deconv(&gen, 8UL * w, 4UL, 2UL, 1UL, ACT_NONE, rng);     // 8w x 4 x 4
+    convnet_batchnorm(&gen, ACT_RELU);
+    convnet_deconv(&gen, 1UL, 4UL, 2UL, 1UL, ACT_SIGMOID, rng);  // 1 x 8 x 8
+    struct ConvNet disc = convnet_new(1UL + classes, 8UL, 8UL);
+    convnet_conv(&disc, 8UL * w, 4UL, 2UL, 1UL, ACT_LEAKY, rng);
+    convnet_conv(&disc, 16UL * w, 4UL, 2UL, 1UL, ACT_NONE, rng);
+    convnet_batchnorm(&disc, ACT_LEAKY);
+    convnet_conv(&disc, 1UL, 2UL, 1UL, 0UL, ACT_NONE, rng);      // one score
+    return dcgan_new(gen, disc, &cfg);
+}
+
+static double tensor_mean_value_(const &Tensor t) {
+    double acc = 0.0;
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < t->size) { acc = acc + (double)t->data[i]; i = i + 1UL; }
+        return acc / (double)t->size;
+    }
+}
+
+// A DCGAN on the shapes images moves its samples' mean intensity from the
+// sigmoid's 0.5 to the data's; a conditional one draws the requested class
+// (as judged by a classifier trained on the real images).
+void t_dcgan() {
+    struct Rng rng = rng_new(9UL);
+    struct Dataset shapes = dataset_shapes(512UL, 8UL, &rng);
+    struct Dcgan g = shapes_dcgan_(0UL, &rng);
+    struct GanLosses l = dcgan_train(&g, &shapes, 15UL, 64UL);
+    ASSERT_TRUE(l.d == l.d && l.g == l.g);   // finite, not NaN
+    &Tensor s = dcgan_generate(&g, 256UL, null);
+    unsafe { ASSERT_EQ(s->shape[1], 64UL); }
+    double d = tensor_mean_value_(s) - tensor_mean_value_(shapes.x);
+    if (d < 0.0) d = -d;
+    ASSERT_TRUE(d < 0.1);
+    &Tensor sc = dcgan_score(&g, shapes.x, null);
+    unsafe { ASSERT_EQ(sc->size, 512UL); }
+    tensor_drop(sc);
+    tensor_drop(s);
+    dcgan_free(&g);
+
+    struct Mlp judge = shapes8_judge_(&shapes, &rng);
+    struct Dcgan cg = shapes_dcgan_(4UL, &rng);
+    dcgan_train(&cg, &shapes, 60UL, 64UL);
+    &Tensor labels = cycle_labels_(256UL);
+    &Tensor cs = dcgan_generate(&cg, 256UL, (?&Tensor)labels);
+    int was = tensor_is_grad_enabled();
+    tensor_set_grad_enabled(0);
+    float acc = tensor_accuracy(mlp_forward(&judge, cs), labels);
+    tensor_set_grad_enabled(was);
+    ASSERT_TRUE(acc > (float)0.55);   // chance is 0.25
+    tensor_drop(cs);
+    tensor_drop(labels);
+    dcgan_free(&cg);
+    mlp_free(&judge);
+    dataset_free(&shapes);
+}
+
 int main() {
     struct TestSuite t = test_suite_init();
     unsafe {
@@ -728,8 +1828,21 @@ int main() {
         t.add("autoencoders (plain / denoising / sparse)", t_autoencoders);
         t.add("VAE + conditional VAE", t_vae);
         t.add("VQ-VAE", t_vqvae);
-        t.add("GAN objectives", t_gans);
+        t.add("GAN objectives (incl. WGAN-GP)", t_gans);
         t.add("conditional GAN", t_cgan);
+        t.add("gradient checks (conv / pool / resize / norms / dropout)", t_conv_grad_checks);
+        t.add("batch norm running statistics", t_batch_norm_stats);
+        t.add("conv batch across threads = one thread", t_conv_parallel_batch);
+        t.add("pool / upsample / batch norm across threads = one thread", t_light_ops_parallel);
+        t.add("conv / pool / resize specs, Winograd path", t_conv_specs);
+        t.add("ConvNet skips and residual blocks", t_convnet_skips);
+        t.add("ConvNet batch-norm folding, save / load", t_convnet_fold_and_files);
+        t.add("dropout, spectral norm, group norm", t_dropout_and_norms);
+        t.add("WGAN-GP penalty gradient", t_wgan_gp_gradient);
+        t.add("residual CNN classifier", t_cnn_classifier);
+        t.add("conv2d / pooling match cnn.h + ConvNet geometry", t_conv_matches_cnn);
+        t.add("conv autoencoder + conv VAE / CVAE", t_conv_autoencoders);
+        t.add("DCGAN + conditional DCGAN", t_dcgan);
         t.add("bandit agents", t_bandits);
         t.add("Q-learning / SARSA / expected SARSA on the cliff", t_tabular_cliff);
         t.add("gridworld walls and pits", t_gridworld_env);

@@ -115,6 +115,18 @@ void mlp_copy(&Mlp dst, const &Mlp src);
 void mlp_soft_update(&Mlp dst, const &Mlp src, float tau);
 void mlp_free(&Mlp m);
 
+// ── Saving and loading tensors ───────────────────────────────────────────────
+// A list of tensors' shapes and values to a file and back: the magic
+// "SCTN", the count, then per tensor its rank, shape and float32 values
+// (all little-endian, 64-bit counts). Loading fills existing tensors and
+// requires the same count and shapes. Return 1 on success, 0 when the file
+// can't be opened, is truncated or doesn't match.
+int tensors_save(const &Vec<&Tensor> ts, const &char path);
+int tensors_load(&Vec<&Tensor> ts, const &char path);
+// An Mlp's parameters (load into an Mlp built with the same sizes).
+int mlp_save_file(const &Mlp m, const &char path);
+int mlp_load_file(&Mlp m, const &char path);
+
 // ── Optimizers ───────────────────────────────────────────────────────────────
 #define OPT_SGD       0
 #define OPT_MOMENTUM  1   // heavy ball, 'momentum' 0.9
