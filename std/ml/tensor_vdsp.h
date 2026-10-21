@@ -9,9 +9,9 @@
 
 namespace std {
 
-&Tensor tensor_add_vdsp(const &Tensor a, const &Tensor b);
-&Tensor tensor_sub_vdsp(const &Tensor a, const &Tensor b);
-&Tensor tensor_mul_vdsp(const &Tensor a, const &Tensor b);
-&Tensor Tensor::sum_vdsp() const;
+&FloatTensor tensor_add_vdsp(const &FloatTensor a, const &FloatTensor b);
+&FloatTensor tensor_sub_vdsp(const &FloatTensor a, const &FloatTensor b);
+&FloatTensor tensor_mul_vdsp(const &FloatTensor a, const &FloatTensor b);
+&FloatTensor FloatTensor::sum_vdsp() const;
 
 } // namespace std

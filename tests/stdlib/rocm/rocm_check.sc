@@ -592,11 +592,11 @@ static void check_attention() {
     struct Vec<float> q1 = seq(n1 * d1, 0.017f, -0.8f);
     struct Vec<float> k1 = seq(n1 * d1, 0.015f, -0.7f);
     struct Vec<float> v1 = seq(n1 * d1, 0.03f, -1.2f);
-    &Tensor tq = Tensor::from_2d(q1.at(0UL), n1, d1, 0);
-    &Tensor tk = Tensor::from_2d(k1.at(0UL), n1, d1, 0);
-    &Tensor tv = Tensor::from_2d(v1.at(0UL), n1, d1, 0);
-    &Tensor sa = std::attention_forward(tq, tk, tv);
-    &Tensor la = std::linear_attention_forward(tq, tk, tv);
+    &FloatTensor tq = FloatTensor::from_2d(q1.at(0UL), n1, d1, 0);
+    &FloatTensor tk = FloatTensor::from_2d(k1.at(0UL), n1, d1, 0);
+    &FloatTensor tv = FloatTensor::from_2d(v1.at(0UL), n1, d1, 0);
+    &FloatTensor sa = std::attention_forward(tq, tk, tv);
+    &FloatTensor la = std::linear_attention_forward(tq, tk, tv);
     struct Vec<float> g1 = std::vec_with_cap(n1 * d1);
     struct Vec<float> c1 = std::vec_with_cap(n1 * d1);
     struct Vec<float> c2 = std::vec_with_cap(n1 * d1);

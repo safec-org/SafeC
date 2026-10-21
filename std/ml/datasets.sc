@@ -29,8 +29,8 @@ static void ds_heap_end_(?&TensorArena cur) {
 static struct Dataset ds_new_(unsigned long n, unsigned long features, unsigned long targets, unsigned long classes) {
     ?&TensorArena cur = ds_heap_begin_();
     struct Dataset d;
-    d.x = Tensor::new_2d(n, features, 0);
-    d.y = Tensor::new_2d(n, targets, 0);
+    d.x = FloatTensor::new_2d(n, features, 0);
+    d.y = FloatTensor::new_2d(n, targets, 0);
     d.n = n;
     d.features = features;
     d.targets = targets;
@@ -89,7 +89,7 @@ struct Dataset Dataset::spirals(unsigned long n, unsigned long classes, float no
 
 struct Dataset Dataset::blobs(unsigned long n, unsigned long classes, unsigned long features, float spread, &Rng rng) {
     struct Dataset d = ds_new_(n, features, 1UL, classes);
-    &Tensor centers = Tensor::new_2d(classes, features, 0);
+    &FloatTensor centers = FloatTensor::new_2d(classes, features, 0);
     rng.fill_uniform(centers, (float)-5.0, (float)5.0);
     unsafe {
         unsigned long i = 0UL;
@@ -498,8 +498,8 @@ int DataLoader::next(&Batch out) {
     if (rows > self.batchSize) rows = self.batchSize;
     unsigned long F; unsigned long T;
     unsafe { F = self.x->shape[1]; T = self.y->shape[1]; }
-    out.x = Tensor::new_2d(rows, F, 0);
-    out.y = Tensor::new_2d(rows, T, 0);
+    out.x = FloatTensor::new_2d(rows, F, 0);
+    out.y = FloatTensor::new_2d(rows, T, 0);
     out.rows = rows;
     unsafe {
         unsigned long r = 0UL;

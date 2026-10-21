@@ -92,19 +92,19 @@ struct Gan {
 
     // One generator step after cfg.nCritic discriminator steps on 'real'
     // ([m, dataDim]); 'labels' (m class indices) for a conditional GAN, else null.
-    struct GanLosses train_step(const &Tensor real, ?&Tensor labels);
+    struct GanLosses train_step(const &FloatTensor real, ?&FloatTensor labels);
     // Epochs over a dataset in shuffled batches (labels taken from the dataset
     // when the GAN is conditional). Returns the last step's losses.
     struct GanLosses train(const &Dataset data, unsigned long epochs, unsigned long batchSize);
     // n generated rows from the averaged generator (heap tensor, caller
     // frees); 'labels' as above.
-    &Tensor sample(unsigned long n, ?&Tensor labels);
+    &FloatTensor sample(unsigned long n, ?&FloatTensor labels);
     // D's raw score for rows (higher = more real).
-    &Tensor score(const &Tensor x, ?&Tensor labels);
+    &FloatTensor score(const &FloatTensor x, ?&FloatTensor labels);
     // Parameterized (module.h): G's and D's parameters; the state adds the
     // averaged generator (and a Dcgan's buffers).
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
     static struct Gan new(unsigned long dataDim, const &GanConfig cfg);
@@ -118,7 +118,7 @@ struct GanLosses {
 // What a trainable GAN offers (Gan and Dcgan; CpuGanTrainer is generic over
 // it): its two training entry points, its tensors and sampling.
 trait GanModel : Parameterized + Generative {
-    struct GanLosses train_step(const &Tensor real, ?&Tensor labels);
+    struct GanLosses train_step(const &FloatTensor real, ?&FloatTensor labels);
     struct GanLosses train(const &Dataset data, unsigned long epochs, unsigned long batchSize);
 }
 
@@ -127,7 +127,7 @@ trait GanModel : Parameterized + Generative {
 // penalty's gradient into D's parameters (after it has already added the
 // input-gradient pass's, so zero them in between, as Gan::train_step does);
 // 'value' receives gpWeight * mean (||grad_x D|| - 1)^2.
-&Tensor gan_gradient_penalty_(&Gan g, const &Tensor xh, ?&Tensor labels, &float value);
+&FloatTensor gan_gradient_penalty_(&Gan g, const &FloatTensor xh, ?&FloatTensor labels, &float value);
 
 // ── DCGAN ────────────────────────────────────────────────────────────────────
 // Gan with a ConvNet generator and discriminator you build (convnet.h). G
@@ -167,19 +167,19 @@ struct Dcgan {
     unsigned long steps;
 
     // 'labels' (m class indices) for a conditional DCGAN, else null -- as for Gan.
-    struct GanLosses train_step(const &Tensor real, ?&Tensor labels);
+    struct GanLosses train_step(const &FloatTensor real, ?&FloatTensor labels);
     struct GanLosses train(const &Dataset data, unsigned long epochs, unsigned long batchSize);
-    &Tensor sample(unsigned long n, ?&Tensor labels);   // heap tensor, caller frees
-    &Tensor score(const &Tensor x, ?&Tensor labels);
+    &FloatTensor sample(unsigned long n, ?&FloatTensor labels);   // heap tensor, caller frees
+    &FloatTensor score(const &FloatTensor x, ?&FloatTensor labels);
     // Parameterized (module.h): G's and D's parameters; the state adds the
     // averaged generator (and a Dcgan's buffers).
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
     static struct Dcgan new(struct ConvNet gen, struct ConvNet disc, const &GanConfig cfg);
 };
 // Internal (exposed for tests): gan_gradient_penalty_ for a Dcgan's critic.
-&Tensor dcgan_gradient_penalty_(&Dcgan g, const &Tensor xh, ?&Tensor labels, &float value);
+&FloatTensor dcgan_gradient_penalty_(&Dcgan g, const &FloatTensor xh, ?&FloatTensor labels, &float value);
 
 } // namespace std

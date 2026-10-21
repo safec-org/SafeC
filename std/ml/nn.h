@@ -35,11 +35,11 @@ struct Rng {
     float uniform();                                      // [0, 1)
     float normal();                                       // mean 0, std 1
     unsigned long below(unsigned long n);                 // [0, n)
-    void fill_uniform(&Tensor t, float lo, float hi);
-    void fill_normal(&Tensor t, float mean, float std);
+    void fill_uniform(&FloatTensor t, float lo, float hi);
+    void fill_normal(&FloatTensor t, float mean, float std);
     // A tensor of the given shape filled from N(0, 1) (a VAE's epsilon, a
     // GAN's latent batch). Not part of any graph.
-    &Tensor normal_tensor(unsigned long rows, unsigned long cols);
+    &FloatTensor normal_tensor(unsigned long rows, unsigned long cols);
 
     static struct Rng new(unsigned long seed);
 };
@@ -47,40 +47,40 @@ struct Rng {
 // ── More differentiable ops ──────────────────────────────────────────────────
 // Shapes are [rows, cols] unless noted; every op records its backward
 // edge like tensor_add does.
-&Tensor tensor_add_bias(const &Tensor x, const &Tensor b);     // x [m,n] + b [n] on every row
-&Tensor Tensor::add_scalar(float k) const;
-&Tensor Tensor::exp() const;
-&Tensor Tensor::log() const;   // natural log; a must be > 0
-&Tensor Tensor::abs() const;
-&Tensor Tensor::leaky_relu(float slope) const;
-&Tensor Tensor::clamp(float lo, float hi) const;   // gradient 0 where clamped
-&Tensor tensor_minimum(const &Tensor a, const &Tensor b);      // elementwise min
-&Tensor Tensor::mean() const;   // -> 1 element
-&Tensor Tensor::sum_rows() const;   // [m,n] -> [m,1]
-&Tensor tensor_concat_cols(const &Tensor a, const &Tensor b);  // [m,p] ++ [m,q] -> [m,p+q]
+&FloatTensor tensor_add_bias(const &FloatTensor x, const &FloatTensor b);     // x [m,n] + b [n] on every row
+&FloatTensor FloatTensor::add_scalar(float k) const;
+&FloatTensor FloatTensor::exp() const;
+&FloatTensor FloatTensor::log() const;   // natural log; a must be > 0
+&FloatTensor FloatTensor::abs() const;
+&FloatTensor FloatTensor::leaky_relu(float slope) const;
+&FloatTensor FloatTensor::clamp(float lo, float hi) const;   // gradient 0 where clamped
+&FloatTensor tensor_minimum(const &FloatTensor a, const &FloatTensor b);      // elementwise min
+&FloatTensor FloatTensor::mean() const;   // -> 1 element
+&FloatTensor FloatTensor::sum_rows() const;   // [m,n] -> [m,1]
+&FloatTensor tensor_concat_cols(const &FloatTensor a, const &FloatTensor b);  // [m,p] ++ [m,q] -> [m,p+q]
 // out[i] = table[idx[i]]: [K,d] and m indices -> [m,d]. Gradients
 // scatter-add back into the table's rows (embeddings, VQ codebooks).
-&Tensor tensor_gather_rows(const &Tensor table, const &Tensor idx);
-&Tensor Tensor::log_softmax() const;   // last axis, numerically stable
+&FloatTensor tensor_gather_rows(const &FloatTensor table, const &FloatTensor idx);
+&FloatTensor FloatTensor::log_softmax() const;   // last axis, numerically stable
 // A copy that is not part of the graph: gradients stop here.
-&Tensor Tensor::detach() const;
+&FloatTensor FloatTensor::detach() const;
 
 // Constant helpers (no gradient).
-&Tensor Tensor::one_hot(unsigned long classes) const;   // m labels -> [m, classes]
-&Tensor Tensor::argmax_rows() const;   // [m,n] -> [m] indices
+&FloatTensor FloatTensor::one_hot(unsigned long classes) const;   // m labels -> [m, classes]
+&FloatTensor FloatTensor::argmax_rows() const;   // [m,n] -> [m] indices
 
 // ── Losses (each returns a 1-element tensor, averaged over elements) ─────────
-&Tensor tensor_mse_loss(const &Tensor pred, const &Tensor target);
+&FloatTensor tensor_mse_loss(const &FloatTensor pred, const &FloatTensor target);
 // 0.5 d^2 for |d| <= delta, else delta (|d| - delta/2). Gradient to pred only.
-&Tensor tensor_huber_loss(const &Tensor pred, const &Tensor target, float delta);
+&FloatTensor tensor_huber_loss(const &FloatTensor pred, const &FloatTensor target, float delta);
 // Binary cross-entropy of sigmoid(logits) against targets in [0, 1],
 // computed from the logits so it never takes log(0). Gradient to logits only.
-&Tensor tensor_bce_logits_loss(const &Tensor logits, const &Tensor target);
+&FloatTensor tensor_bce_logits_loss(const &FloatTensor logits, const &FloatTensor target);
 // Softmax cross-entropy of logits [m, classes] against m class indices,
 // averaged over rows. Gradient to logits only.
-&Tensor tensor_cross_entropy_loss(const &Tensor logits, const &Tensor labels);
+&FloatTensor tensor_cross_entropy_loss(const &FloatTensor logits, const &FloatTensor labels);
 // Fraction of rows whose argmax equals the label.
-float   tensor_accuracy(const &Tensor logits, const &Tensor labels);
+float   tensor_accuracy(const &FloatTensor logits, const &FloatTensor labels);
 
 // ── Activations by tag ───────────────────────────────────────────────────────
 #define ACT_NONE     0
@@ -90,7 +90,7 @@ float   tensor_accuracy(const &Tensor logits, const &Tensor labels);
 #define ACT_SIGMOID  4
 #define ACT_GELU     5
 #define ACT_SILU     6
-&Tensor Tensor::activate(int act) const;
+&FloatTensor FloatTensor::activate(int act) const;
 
 // ── Multi-layer perceptron ───────────────────────────────────────────────────
 // inDim -> hidden (x hiddenLayers) -> outDim, 'act' after every hidden
@@ -99,17 +99,17 @@ float   tensor_accuracy(const &Tensor logits, const &Tensor labels);
 // [out], initialized like PyTorch's nn.Linear: U(-1/sqrt(in), 1/sqrt(in)).
 // params holds W0, b0, W1, b1, ... and every one requires grad.
 struct Mlp {
-    struct Vec<&Tensor> params;
+    struct Vec<&FloatTensor> params;
     unsigned long nLayers;
     unsigned long inDim;
     unsigned long outDim;
     int act;
     int outAct;
 
-    &Tensor forward(const &Tensor x) const;   // [batch, inDim] -> [batch, outDim]
+    &FloatTensor forward(const &FloatTensor x) const;   // [batch, inDim] -> [batch, outDim]
     // Parameterized (module.h): the trained tensors, and what a copy or a file carries.
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
     static struct Mlp new(unsigned long inDim, unsigned long hidden, unsigned long hiddenLayers, unsigned long outDim,
@@ -122,8 +122,8 @@ struct Mlp {
 // (all little-endian, 64-bit counts). Loading fills existing tensors and
 // requires the same count and shapes. Return 1 on success, 0 when the file
 // can't be opened, is truncated or doesn't match.
-int tensors_save(const &Vec<&Tensor> ts, const &char path);
-int tensors_load(&Vec<&Tensor> ts, const &char path);
+int tensors_save(const &Vec<&FloatTensor> ts, const &char path);
+int tensors_load(&Vec<&FloatTensor> ts, const &char path);
 
 // ── Optimizers ───────────────────────────────────────────────────────────────
 #define OPT_SGD       0
@@ -140,9 +140,9 @@ int tensors_load(&Vec<&Tensor> ts, const &char path);
 // between steps. State buffers are created when a parameter is added,
 // always on the heap even inside a tensor arena.
 struct Optimizer {
-    struct Vec<&Tensor> params;
-    struct Vec<&Tensor> m;   // first moment / velocity, one per parameter
-    struct Vec<&Tensor> v;   // second moment, one per parameter
+    struct Vec<&FloatTensor> params;
+    struct Vec<&FloatTensor> m;   // first moment / velocity, one per parameter
+    struct Vec<&FloatTensor> v;   // second moment, one per parameter
     int   kind;
     float lr;
     float momentum;
@@ -152,7 +152,7 @@ struct Optimizer {
     float weightDecay;       // L2 for SGD / momentum / RMSProp / Adagrad / Adam, decoupled for AdamW / Lion
     unsigned long t;         // steps taken
 
-    void add(&Tensor param);
+    void add(&FloatTensor param);
     void zero_grad();
     // Scales every gradient so their global L2 norm is at most maxNorm and
     // returns the norm before scaling.

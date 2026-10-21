@@ -282,7 +282,13 @@ TypePtr Sema::resolveType(TypePtr ty) {
             // template) counts too, at any depth: 'Pool<Node<T>>' must stay
             // symbolic, not instantiate 'Pool' over a half-resolved 'Node'.
             auto mentionsPlaceholder = [&](const auto &self, const TypePtr &a) -> bool {
-                if (!a || a->kind != TypeKind::Struct) return false;
+                if (!a) return false;
+                // through '&Node<T>', 'Node<T>*', '?&Node<T>', 'Node<T>[4]'
+                if (a->kind == TypeKind::Reference) return self(self, static_cast<ReferenceType &>(*a).base);
+                if (a->kind == TypeKind::Pointer) return self(self, static_cast<PointerType &>(*a).base);
+                if (a->kind == TypeKind::Optional) return self(self, static_cast<OptionalType &>(*a).inner);
+                if (a->kind == TypeKind::Array) return self(self, static_cast<ArrayType &>(*a).element);
+                if (a->kind != TypeKind::Struct) return false;
                 auto &as = static_cast<StructType &>(*a);
                 if (as.typeArgs.empty())
                     return !as.isDefined && !typeRegistry_.count(as.name) &&
@@ -360,6 +366,7 @@ bool Sema::run() {
     pushScope();
     collectDecls(tu_);
     checkTraitSupertraits();
+    completeGenericStructInstances();
     for (auto &d : tu_.decls) checkDecl(*d);
 
     // Append monomorphized generic struct instances (before the function
@@ -551,6 +558,15 @@ void Sema::collectFunction(FunctionDecl &fn) {
     if (fn.body && fn.namespaceName.empty()) providedFns_.insert(fn.name);
     // Method support (OBJECT.md §4): T::m(P...) → T_m(T* self, P...)
     if (fn.isMethod) {
+        // 'Alias::m' with Alias a typedef of a struct (or of one instance of
+        // a generic struct): a method of that struct (or of that instance only).
+        if (!genericStructTemplates_.count(fn.methodOwner)) {
+            auto tit = typeRegistry_.find(fn.methodOwner);
+            if (tit != typeRegistry_.end() && tit->second && tit->second->kind == TypeKind::Struct) {
+                const std::string &sname = static_cast<StructType &>(*tit->second).name;
+                if (sname != fn.methodOwner) fn.methodOwner = sname;
+            }
+        }
         if (fn.body) {
             auto ait = methodOwnGenericArity_.find(fn.methodOwner + "::" + fn.name);
             if (ait != methodOwnGenericArity_.end() &&
@@ -794,6 +810,9 @@ void Sema::collectStruct(StructDecl &sd) {
         // generic function template's own param/return types. Once done,
         // substituteType (used by cloneStructDecl at instantiation time)
         // can find the GenericType nodes it needs to replace.
+        // Registered first: a field or method may name the template itself
+        // ('struct Vec<&Node<T>> children;' inside 'Node').
+        genericStructTemplates_[sd.name] = &sd;
         for (auto &f : sd.fields)
             f.type = resolveGenericNames(resolveType(f.type), sd.genericParams);
         for (auto &md : sd.methodDecls) {
@@ -801,7 +820,6 @@ void Sema::collectStruct(StructDecl &sd) {
             for (auto &p : md.params)
                 p.type = resolveGenericNames(resolveType(p.type), sd.genericParams);
         }
-        genericStructTemplates_[sd.name] = &sd;
         return;
     }
 
@@ -1010,51 +1028,80 @@ TypePtr Sema::instantiateGenericStruct(const std::string &name,
     // body via checkFunction() exactly like a monomorphized generic
     // *function* already does (see the CallExpr generic-instantiation
     // code below).
+    genericStructInstances_[name].push_back({clonePtr, subs});
     auto methodsIt = genericStructMethodTemplates_.find(name);
-    if (methodsIt != genericStructMethodTemplates_.end()) {
-        for (FunctionDecl *methodTpl : methodsIt->second) {
-            auto methodClone = cloneFunctionDecl(*methodTpl, subs);
-            std::string originalName = methodTpl->name;
-            methodClone->methodOwner = clonePtr->name;
-            methodClone->isMonomorphized = true;
-            if (methodClone->returnType) methodClone->returnType = resolveType(methodClone->returnType);
-            for (auto &p : methodClone->params) if (p.type) p.type = resolveType(p.type);
-
-            TypePtr selfTy = makeReference(clonePtr->type, Region::Stack,
-                                            /*nullable=*/false, /*mut=*/!methodClone->isConstMethod);
-            ParamDecl selfParam;
-            selfParam.name = "self";
-            selfParam.type = selfTy;
-            selfParam.loc  = methodClone->loc;
-            methodClone->params.insert(methodClone->params.begin(), std::move(selfParam));
-
-            methodClone->name = clonePtr->name + "_" + originalName;
-            methodRegistry_[clonePtr->name + "::" + originalName] = methodClone.get();
-
-            std::vector<TypePtr> paramTys;
-            for (auto &p : methodClone->params) paramTys.push_back(p.type);
-            auto monoFT = makeFunction(methodClone->returnType, paramTys, methodClone->isVariadic);
-            Symbol sym;
-            sym.kind        = SymKind::Function;
-            sym.name        = methodClone->name;
-            sym.type        = makeReference(monoFT, Region::Static);
-            sym.fnDecl      = methodClone.get();
-            sym.initialized = true;
-            if (!scopes_.empty()) scopes_[0].define(std::move(sym));
-
-            bool savedPure = checkingPure_;
-            int savedLoopDepth = loopDepth_;
-            auto savedLabels = functionLabels_;
-            checkFunction(*methodClone);
-            checkingPure_ = savedPure;
-            loopDepth_ = savedLoopDepth;
-            functionLabels_ = savedLabels;
-
-            monoFunctions_.push_back(std::move(methodClone));
-        }
-    }
+    if (methodsIt != genericStructMethodTemplates_.end())
+        for (FunctionDecl *methodTpl : methodsIt->second)
+            instantiateStructMethod(methodTpl, clonePtr, subs);
 
     return clonePtr->type;
+}
+
+// One method template of a generic struct for one instance: clone,
+// substitute, add self, mangle, register and type-check — what
+// collectFunction does for an ordinary method. Each (instance, template)
+// pair is done once; a bodyless declaration is skipped when the same
+// method also has a definition.
+void Sema::instantiateStructMethod(FunctionDecl *methodTpl, StructDecl *clonePtr, const TypeSubst &subs) {
+    if (!instantiatedStructMethods_.insert({clonePtr, methodTpl}).second) return;
+    if (!methodTpl->body) {
+        auto it = genericStructMethodTemplates_.find(methodTpl->methodOwner);
+        if (it != genericStructMethodTemplates_.end())
+            for (FunctionDecl *other : it->second)
+                if (other != methodTpl && other->body && other->name == methodTpl->name) return;
+    }
+    auto methodClone = cloneFunctionDecl(*methodTpl, subs);
+    std::string originalName = methodTpl->name;
+    methodClone->methodOwner = clonePtr->name;
+    methodClone->isMonomorphized = true;
+    if (methodClone->returnType) methodClone->returnType = resolveType(methodClone->returnType);
+    for (auto &p : methodClone->params) if (p.type) p.type = resolveType(p.type);
+
+    TypePtr selfTy = makeReference(clonePtr->type, Region::Stack,
+                                    /*nullable=*/false, /*mut=*/!methodClone->isConstMethod);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfTy;
+    selfParam.loc  = methodClone->loc;
+    methodClone->params.insert(methodClone->params.begin(), std::move(selfParam));
+
+    methodClone->name = clonePtr->name + "_" + originalName;
+    methodRegistry_[clonePtr->name + "::" + originalName] = methodClone.get();
+
+    std::vector<TypePtr> paramTys;
+    for (auto &p : methodClone->params) paramTys.push_back(p.type);
+    auto monoFT = makeFunction(methodClone->returnType, paramTys, methodClone->isVariadic);
+    Symbol sym;
+    sym.kind        = SymKind::Function;
+    sym.name        = methodClone->name;
+    sym.type        = makeReference(monoFT, Region::Static);
+    sym.fnDecl      = methodClone.get();
+    sym.initialized = true;
+    if (!scopes_.empty()) scopes_[0].define(std::move(sym));
+
+    bool savedPure = checkingPure_;
+    int savedLoopDepth = loopDepth_;
+    auto savedLabels = functionLabels_;
+    checkFunction(*methodClone);
+    checkingPure_ = savedPure;
+    loopDepth_ = savedLoopDepth;
+    functionLabels_ = savedLabels;
+
+    monoFunctions_.push_back(std::move(methodClone));
+}
+
+// Methods of a generic struct can be declared or defined after one of its
+// instances was created (an instance named by a typedef in one header, a
+// method added in another): give every instance the templates it missed.
+void Sema::completeGenericStructInstances() {
+    for (auto &[name, instances] : genericStructInstances_) {
+        auto methodsIt = genericStructMethodTemplates_.find(name);
+        if (methodsIt == genericStructMethodTemplates_.end()) continue;
+        auto tpls = methodsIt->second;
+        auto insts = instances;
+        for (auto &[inst, subs] : insts)
+            for (FunctionDecl *tpl : tpls) instantiateStructMethod(tpl, inst, subs);
+    }
 }
 
 void Sema::collectEnum(EnumDecl &ed) {
@@ -1653,9 +1700,22 @@ void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
     case StmtKind::Unsafe:       checkUnsafe(static_cast<UnsafeStmt &>(s), fn);       break;
     case StmtKind::StaticAssert: checkStaticAssertStmt(static_cast<StaticAssertStmt &>(s)); break;
     case StmtKind::IfConst: {
-        // Treat like a regular if for type-checking; ConstEvalEngine evaluates condition later
+        // A condition Sema can evaluate now (literals, sizeof, comparisons,
+        // logic) selects its branch here, and only that branch is checked:
+        // in a generic body the other one may not type-check for this
+        // instantiation ('if const (sizeof(E) == 4UL) { float path } else
+        // { E::load(...) }'). Otherwise both are checked and
+        // ConstEvalEngine decides later.
         auto &ics = static_cast<IfConstStmt &>(s);
         if (ics.cond) checkExpr(*ics.cond);
+        std::optional<int64_t> v;
+        if (ics.cond) v = tryConstInt(*ics.cond);
+        if (v) {
+            ics.constResult = *v != 0;
+            if (*v) { if (ics.then) checkStmt(*ics.then, fn); }
+            else if (ics.else_) checkStmt(*ics.else_, fn);
+            break;
+        }
         if (ics.then)  checkStmt(*ics.then, fn);
         if (ics.else_) checkStmt(*ics.else_, fn);
         break;
@@ -1681,6 +1741,54 @@ void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
         checkAsmStmt(s, fn);
         break;
     default: break;
+    }
+}
+
+// The value of an integer constant expression Sema can evaluate on its own:
+// literals, sizeof(type), unary - and !, arithmetic, comparisons and logic.
+std::optional<int64_t> Sema::tryConstInt(const Expr &e) {
+    switch (e.kind) {
+    case ExprKind::IntLit: return static_cast<const IntLitExpr &>(e).value;
+    case ExprKind::SizeofType: {
+        auto &se = static_cast<const SizeofTypeExpr &>(e);
+        TypePtr t = resolveType(se.ofType);
+        if (!t || t->isError() || t->kind == TypeKind::Generic) return std::nullopt;
+        return (int64_t)sizeOfType(t);
+    }
+    case ExprKind::Unary: {
+        auto &ue = static_cast<const UnaryExpr &>(e);
+        auto v = tryConstInt(*ue.operand);
+        if (!v) return std::nullopt;
+        if (ue.op == UnaryOp::Neg) return -*v;
+        if (ue.op == UnaryOp::Not) return (int64_t)(*v == 0);
+        return std::nullopt;
+    }
+    case ExprKind::Binary: {
+        auto &be = static_cast<const BinaryExpr &>(e);
+        auto a = tryConstInt(*be.left);
+        if (!a) return std::nullopt;
+        if (be.op == BinaryOp::LogAnd && !*a) return (int64_t)0;
+        if (be.op == BinaryOp::LogOr && *a) return (int64_t)1;
+        auto b = tryConstInt(*be.right);
+        if (!b) return std::nullopt;
+        switch (be.op) {
+        case BinaryOp::Add: return *a + *b;
+        case BinaryOp::Sub: return *a - *b;
+        case BinaryOp::Mul: return *a * *b;
+        case BinaryOp::Div: if (*b == 0) return std::nullopt; return *a / *b;
+        case BinaryOp::Mod: if (*b == 0) return std::nullopt; return *a % *b;
+        case BinaryOp::Eq:  return (int64_t)(*a == *b);
+        case BinaryOp::NEq: return (int64_t)(*a != *b);
+        case BinaryOp::Lt:  return (int64_t)(*a < *b);
+        case BinaryOp::Gt:  return (int64_t)(*a > *b);
+        case BinaryOp::LEq: return (int64_t)(*a <= *b);
+        case BinaryOp::GEq: return (int64_t)(*a >= *b);
+        case BinaryOp::LogAnd: return (int64_t)(*b != 0);
+        case BinaryOp::LogOr:  return (int64_t)(*b != 0);
+        default: return std::nullopt;
+        }
+    }
+    default: return std::nullopt;
     }
 }
 
@@ -2478,6 +2586,43 @@ TypePtr Sema::checkIdent(IdentExpr &e) {
             size_t last = key.rfind("::");
             size_t prev = last == 0 ? std::string::npos : key.rfind("::", last - 1);
             if (prev != std::string::npos) key = key.substr(prev + 2);
+            // 'Alias::m' where Alias is a typedef: of a plain struct, the
+            // struct's static method; of a generic struct's instance
+            // ('typedef struct Box<F32> FloatBox;'), the template's static
+            // method instantiated with the instance's type arguments.
+            {
+                size_t sep = key.find("::");
+                std::string prefix = key.substr(0, sep);
+                std::string sname;
+                auto tit = typeRegistry_.find(prefix);
+                if (tit != typeRegistry_.end() && tit->second && tit->second->kind == TypeKind::Struct)
+                    sname = static_cast<StructType &>(*tit->second).name;
+                else if (structInstanceOrigin_.count(prefix))
+                    sname = prefix;   // 'T::m' in a generic body, T bound to an instance
+                if (!sname.empty()) {
+                    std::string mname = key.substr(sep + 2);
+                    auto oit = structInstanceOrigin_.find(sname);
+                    auto gtit = oit != structInstanceOrigin_.end() ? genericStructTemplates_.find(oit->second.first)
+                                                                   : genericStructTemplates_.end();
+                    if (gtit != genericStructTemplates_.end()) {
+                        auto sit2 = staticMethodRegistry_.find(oit->second.first + "::" + mname);
+                        const auto &gps = gtit->second->genericParams;
+                        if (sit2 != staticMethodRegistry_.end() &&
+                            sit2->second->genericParams.size() == gps.size() &&
+                            gps.size() == oit->second.second.size()) {
+                            TypeSubst subs;
+                            for (size_t i = 0; i < gps.size(); ++i) subs[gps[i].name] = oit->second.second[i];
+                            FunctionDecl *mono = instantiateGeneric(sit2->second, subs);
+                            e.name = mono->name;
+                            e.resolvedFn = mono;
+                            auto *sym = lookup(e.name);
+                            return sym && sym->type ? sym->type : makeError();
+                        }
+                    } else if (sname != key.substr(0, sep)) {
+                        key = sname + "::" + mname;
+                    }
+                }
+            }
             auto sit = staticMethodRegistry_.find(key);
             if (sit != staticMethodRegistry_.end()) {
                 e.name = sit->second->name;

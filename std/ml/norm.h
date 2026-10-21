@@ -21,45 +21,45 @@
 namespace std {
 
 // LN(x) without the affine part, row by row, with Autograd::get.
-&Tensor Tensor::layer_norm(float eps) const;
+&FloatTensor FloatTensor::layer_norm(float eps) const;
 // x [m,n] * g [n] on every row, with Autograd::get.
-&Tensor tensor_mul_row(const &Tensor x, const &Tensor g);
+&FloatTensor tensor_mul_row(const &FloatTensor x, const &FloatTensor g);
 
 struct LayerNorm {
-    &Tensor gamma;   // [dim], init 1
-    &Tensor beta;    // [dim], init 0
+    &FloatTensor gamma;   // [dim], init 1
+    &FloatTensor beta;    // [dim], init 0
     unsigned long dim;
     float eps;       // 1e-5
 
-    &Tensor forward(const &Tensor x) const;
+    &FloatTensor forward(const &FloatTensor x) const;
     // Parameterized (module.h): the trained tensors, and what a copy or a file carries.
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
     static struct LayerNorm new(unsigned long dim);
 };
 
 struct AdaLN {
-    &Tensor W;       // [condDim, chunks * dim], init 0
-    &Tensor b;       // [chunks * dim], init 0
+    &FloatTensor W;       // [condDim, chunks * dim], init 0
+    &FloatTensor b;       // [chunks * dim], init 0
     unsigned long dim;
     unsigned long condDim;
     int   gated;     // 1: a third chunk, the residual gate
     float eps;
 
     // x [m, dim], cond [m, condDim] (one conditioning row per sample).
-    struct AdaLNOut forward(const &Tensor x, const &Tensor cond) const;
+    struct AdaLNOut forward(const &FloatTensor x, const &FloatTensor cond) const;
     // Parameterized (module.h): the trained tensors, and what a copy or a file carries.
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
     static struct AdaLN new(unsigned long dim, unsigned long condDim, int gated);
 };
 struct AdaLNOut {
-    &Tensor out;     // LN(x) * (1 + scale) + shift, [m, dim]
-    &Tensor gate;    // [m, dim]; all ones when not gated
+    &FloatTensor out;     // LN(x) * (1 + scale) + shift, [m, dim]
+    &FloatTensor gate;    // [m, dim]; all ones when not gated
 };
 
 } // namespace std

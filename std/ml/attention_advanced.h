@@ -27,16 +27,16 @@ namespace std {
 //   out  = mha_forward(Q, K, V, numHeads)
 // (Mla::forward; forward only, like attention.h).
 struct Mla {
-    &Tensor Wq;     // [dModel, dModel]
-    &Tensor Wdkv;   // [dModel, dLatent]
-    &Tensor Wuk;    // [dLatent, dModel]
-    &Tensor Wuv;    // [dLatent, dModel]
+    &FloatTensor Wq;     // [dModel, dModel]
+    &FloatTensor Wdkv;   // [dModel, dLatent]
+    &FloatTensor Wuk;    // [dLatent, dModel]
+    &FloatTensor Wuv;    // [dLatent, dModel]
     unsigned long numHeads;
 
-    &Tensor forward(const &Tensor X) const;   // [seqLen, dModel] -> [seqLen, dModel]
+    &FloatTensor forward(const &FloatTensor X) const;   // [seqLen, dModel] -> [seqLen, dModel]
     // Parameterized (module.h): Wq, Wdkv, Wuk, Wuv.
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
     // Weights U(-1/sqrt(in), 1/sqrt(in)) from rng; numHeads divides dModel.
@@ -52,16 +52,16 @@ struct Mla {
 // into one [seqLen, dModel] tensor. WukGroups/WuvGroups hold one tensor
 // per group; their length is the group count.
 struct EgMla {
-    &Tensor Wq;                   // [dModel, dModel]
-    &Tensor Wdkv;                 // [dModel, dLatent]
-    struct Vec<&Tensor> Wuk;      // per group [dLatent, groupDim]
-    struct Vec<&Tensor> Wuv;
+    &FloatTensor Wq;                   // [dModel, dModel]
+    &FloatTensor Wdkv;                 // [dModel, dLatent]
+    struct Vec<&FloatTensor> Wuk;      // per group [dLatent, groupDim]
+    struct Vec<&FloatTensor> Wuv;
     unsigned long headsPerGroup;
 
-    &Tensor forward(const &Tensor X) const;   // [seqLen, dModel] -> [seqLen, dModel]
+    &FloatTensor forward(const &FloatTensor X) const;   // [seqLen, dModel] -> [seqLen, dModel]
     // Parameterized (module.h): Wq, Wdkv, then each group's Wuk, Wuv.
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
     // numGroups groups of headsPerGroup heads; numGroups divides dModel.
@@ -81,7 +81,7 @@ struct EgMla {
 // cyclically rotates rows before windowing and rotates the result back
 // after, so windows at the boundary contain rows from both original
 // neighbors on the next layer.
-&Tensor windowed_attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
+&FloatTensor windowed_attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V,
                                     unsigned long windowSize, unsigned long shift);
 
 // ── Gated DeltaNet ────────────────────────────────────────────────────────────
@@ -102,17 +102,17 @@ struct EgMla {
 // full paper — documented simplification, same spirit as this file's
 // other scope cuts.
 struct GatedDeltaNet {
-    &Tensor Walpha; // [dModel, 1]
-    &Tensor Wbeta;  // [dModel, 1]
+    &FloatTensor Walpha; // [dModel, 1]
+    &FloatTensor Wbeta;  // [dModel, 1]
     unsigned long  keyDim;
     unsigned long  valueDim;
 
     // X: [seqLen, dModel] (gate input only), Q/K: [seqLen, keyDim], V: [seqLen, valueDim]
     // -> result: [seqLen, valueDim], computed via a sequential scan over time.
-    &Tensor forward(const &Tensor X, const &Tensor Q, const &Tensor K, const &Tensor V) const;
+    &FloatTensor forward(const &FloatTensor X, const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V) const;
     // Parameterized (module.h): every weight tensor.
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
     static struct GatedDeltaNet new(unsigned long dModel, unsigned long keyDim, unsigned long valueDim);

@@ -31,25 +31,25 @@ namespace std {
 // Row-wise softmax: for a [rows, cols] tensor, each output row sums to 1.
 // Numerically stable (subtracts each row's max before exponentiating).
 // Forward-only — see this header's note above.
-&Tensor Tensor::softmax_rows() const;
+&FloatTensor FloatTensor::softmax_rows() const;
 
 // out[r][c] = in[r][c] transposed -> [cols, rows].
-&Tensor Tensor::transpose() const;
+&FloatTensor FloatTensor::transpose() const;
 
 // Copies out the column range [startCol, startCol+numCols) of every row.
 // Records a backward edge (gradients go back into those columns) when the
 // input requires grad.
-&Tensor Tensor::slice_cols(unsigned long startCol, unsigned long numCols) const;
+&FloatTensor FloatTensor::slice_cols(unsigned long startCol, unsigned long numCols) const;
 
 // Writes 'src' into 'dst's column range [startCol, startCol+numCols)
 // (numCols == src's own column count), row by row. Used to reassemble
 // per-head outputs into one [seqLen, dModel] tensor after mha_forward's
 // per-head loop.
-void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src);
+void tensor_set_cols(&FloatTensor dst, unsigned long startCol, const &FloatTensor src);
 
 // Single-head scaled dot-product attention: softmax(Q @ K^T / sqrt(headDim)) @ V.
 // Q: [seqLen, headDim], K/V: [kvLen, headDim] -> result: [seqLen, headDim].
-&Tensor attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V);
+&FloatTensor attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V);
 
 // Multi-head attention: splits Q/K/V's dModel columns into 'numHeads'
 // equal headDim-wide slices (dModel must be divisible by numHeads), runs
@@ -57,7 +57,7 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src);
 // back into one [seqLen, dModel] result — the standard MHA shape from
 // "Attention Is All You Need", without a separate output-projection
 // matrix (apply your own W_O via tensor_matmul on the result if needed).
-&Tensor mha_forward(const &Tensor Q, const &Tensor K, const &Tensor V, unsigned long numHeads);
+&FloatTensor mha_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V, unsigned long numHeads);
 
 // ── Gated attention ──────────────────────────────────────────────────────────
 // Output gating: sigmoid(gateLogits) elementwise-multiplied into the
@@ -65,10 +65,10 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src);
 // modulate an attention block's contribution to the residual stream).
 // 'gateLogits' must match the output shape: [seqLen, headDim] for
 // gated_attention_forward, [seqLen, dModel] for gated_mha_forward.
-&Tensor gated_attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
-                                 const &Tensor gateLogits);
-&Tensor gated_mha_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
-                           unsigned long numHeads, const &Tensor gateLogits);
+&FloatTensor gated_attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V,
+                                 const &FloatTensor gateLogits);
+&FloatTensor gated_mha_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V,
+                           unsigned long numHeads, const &FloatTensor gateLogits);
 
 // ── Linear attention ─────────────────────────────────────────────────────────
 // Kernel-trick reformulation (Katharopoulos et al., "Transformers are
@@ -78,7 +78,7 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src);
 // ([headDim,headDim]) instead of the full [seqLen,kvLen] score matrix:
 //   out_i = (phi(Q_i) . sum_j phi(K_j) (x) V_j) / (phi(Q_i) . sum_j phi(K_j))
 // Q: [seqLen,headDim], K/V: [kvLen,headDim] -> result: [seqLen,headDim].
-&Tensor linear_attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V);
+&FloatTensor linear_attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V);
 
 // ── Flash attention ──────────────────────────────────────────────────────────
 // Tiled, online-softmax attention (Dao et al.): processes K/V in blocks
@@ -88,7 +88,7 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src);
 // the same result as attention_forward() (up to floating-point rounding)
 // — the point is the memory-access pattern, not a different answer.
 // Q: [seqLen,headDim], K/V: [kvLen,headDim] -> result: [seqLen,headDim].
-&Tensor flash_attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
+&FloatTensor flash_attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V,
                                  unsigned long kvBlockSize);
 
 // ── Multi-head self-attention layer ──────────────────────────────────────────
@@ -96,16 +96,16 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src);
 // ops above):
 //   out = mha_forward(X Wq, X Wk, X Wv, numHeads) Wo      X: [seqLen, dModel]
 struct MultiHeadAttention {
-    &Tensor Wq;   // [dModel, dModel]
-    &Tensor Wk;
-    &Tensor Wv;
-    &Tensor Wo;
+    &FloatTensor Wq;   // [dModel, dModel]
+    &FloatTensor Wk;
+    &FloatTensor Wv;
+    &FloatTensor Wo;
     unsigned long numHeads;
 
-    &Tensor forward(const &Tensor X) const;   // [seqLen, dModel] -> [seqLen, dModel]
+    &FloatTensor forward(const &FloatTensor X) const;   // [seqLen, dModel] -> [seqLen, dModel]
     // Parameterized (module.h): Wq, Wk, Wv, Wo.
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
     // Weights U(-1/sqrt(dModel), 1/sqrt(dModel)) from rng; numHeads divides dModel.
@@ -113,6 +113,6 @@ struct MultiHeadAttention {
 };
 
 // Internal: a [rows, cols] weight, U(-1/sqrt(rows), 1/sqrt(rows)) from rng.
-&Tensor attn_weight_(unsigned long rows, unsigned long cols, &Rng rng);
+&FloatTensor attn_weight_(unsigned long rows, unsigned long cols, &Rng rng);
 
 } // namespace std

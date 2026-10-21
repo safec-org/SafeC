@@ -18,10 +18,10 @@ extern void  free(void* ptr);
 // copies — bias gradients aren't computed through this path in either
 // version, a pre-existing property of JiTBlock's design, not something
 // introduced here.
-static &Tensor __add_broadcast_row_dispatch(&Tensor mat, &Tensor row) {
+static &FloatTensor __add_broadcast_row_dispatch(&FloatTensor mat, &FloatTensor row) {
     unsigned long rows; unsigned long cols;
     unsafe { rows = mat->shape[0]; cols = mat->shape[1]; }
-    &Tensor out = Tensor::new_2d(rows, cols, 0);
+    &FloatTensor out = FloatTensor::new_2d(rows, cols, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
@@ -33,9 +33,9 @@ static &Tensor __add_broadcast_row_dispatch(&Tensor mat, &Tensor row) {
     return out;
 }
 
-&Tensor jit_block_forward_on(const &JiTBlock block, const &Tensor x, enum Device device) {
-    &Tensor Wq; &Tensor Wk; &Tensor Wv; &Tensor Wo;
-    &Tensor W1; &Tensor b1w; &Tensor W2; &Tensor b2w;
+&FloatTensor jit_block_forward_on(const &JiTBlock block, const &FloatTensor x, enum Device device) {
+    &FloatTensor Wq; &FloatTensor Wk; &FloatTensor Wv; &FloatTensor Wo;
+    &FloatTensor W1; &FloatTensor b1w; &FloatTensor W2; &FloatTensor b2w;
     unsigned long numHeads;
     unsafe {
         Wq = block->Wq; Wk = block->Wk; Wv = block->Wv; Wo = block->Wo;
@@ -43,23 +43,23 @@ static &Tensor __add_broadcast_row_dispatch(&Tensor mat, &Tensor row) {
         numHeads = block->numHeads;
     }
 
-    &Tensor h = x.layernorm_rows(1e-5);
-    &Tensor Q = tensor_matmul_on(h, Wq, device);
-    &Tensor K = tensor_matmul_on(h, Wk, device);
-    &Tensor V = tensor_matmul_on(h, Wv, device);
+    &FloatTensor h = x.layernorm_rows(1e-5);
+    &FloatTensor Q = tensor_matmul_on(h, Wq, device);
+    &FloatTensor K = tensor_matmul_on(h, Wk, device);
+    &FloatTensor V = tensor_matmul_on(h, Wv, device);
     // Attention itself stays on the CPU regardless of 'device' -- see
     // this file's header comment's scope boundary.
-    &Tensor attnRaw = mha_forward(Q, K, V, numHeads);
-    &Tensor attnOut = tensor_matmul_on(attnRaw, Wo, device);
-    &Tensor x1 = tensor_residual_add(x, attnOut);
+    &FloatTensor attnRaw = mha_forward(Q, K, V, numHeads);
+    &FloatTensor attnOut = tensor_matmul_on(attnRaw, Wo, device);
+    &FloatTensor x1 = tensor_residual_add(x, attnOut);
 
-    &Tensor h2 = x1.layernorm_rows(1e-5);
-    &Tensor ffnHiddenRaw = tensor_matmul_on(h2, W1, device);
-    &Tensor ffnHiddenBias = __add_broadcast_row_dispatch(ffnHiddenRaw, b1w);
-    &Tensor ffnHidden = ffnHiddenBias.relu_on(device);
-    &Tensor ffnOutRaw = tensor_matmul_on(ffnHidden, W2, device);
-    &Tensor ffnOut = __add_broadcast_row_dispatch(ffnOutRaw, b2w);
-    &Tensor out = tensor_residual_add(x1, ffnOut);
+    &FloatTensor h2 = x1.layernorm_rows(1e-5);
+    &FloatTensor ffnHiddenRaw = tensor_matmul_on(h2, W1, device);
+    &FloatTensor ffnHiddenBias = __add_broadcast_row_dispatch(ffnHiddenRaw, b1w);
+    &FloatTensor ffnHidden = ffnHiddenBias.relu_on(device);
+    &FloatTensor ffnOutRaw = tensor_matmul_on(ffnHidden, W2, device);
+    &FloatTensor ffnOut = __add_broadcast_row_dispatch(ffnOutRaw, b2w);
+    &FloatTensor out = tensor_residual_add(x1, ffnOut);
 
     h->free(); Q->free(); K->free(); V->free(); attnRaw->free(); attnOut->free(); x1->free();
     h2->free(); ffnHiddenRaw->free(); ffnHiddenBias->free(); ffnHidden->free(); ffnOutRaw->free(); ffnOut->free();
@@ -72,10 +72,10 @@ static &Tensor __add_broadcast_row_dispatch(&Tensor mat, &Tensor row) {
     return out;
 }
 
-&Tensor jit_forward_on(const &JiT model, const &Tensor patches, const &Tensor cond, enum Device device) {
+&FloatTensor jit_forward_on(const &JiT model, const &FloatTensor patches, const &FloatTensor cond, enum Device device) {
     unsigned long numBlocks = model.blocks.length();
-    &Tensor embedRaw = tensor_matmul_on(patches, model.WPatchEmbed, device);
-    &Tensor x = __add_broadcast_row_dispatch(embedRaw, cond);
+    &FloatTensor embedRaw = tensor_matmul_on(patches, model.WPatchEmbed, device);
+    &FloatTensor x = __add_broadcast_row_dispatch(embedRaw, cond);
     embedRaw->free();
     unsafe { free((void*)embedRaw); }
 
@@ -83,7 +83,7 @@ static &Tensor __add_broadcast_row_dispatch(&Tensor mat, &Tensor row) {
     while (i < numBlocks) {
         &JiTBlock blk = model.blocks.at(i);
         unsafe {
-            &Tensor next = jit_block_forward_on(blk, x, device);
+            &FloatTensor next = jit_block_forward_on(blk, x, device);
             x->free();
             free((void*)x);
             x = next;

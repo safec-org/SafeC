@@ -16,9 +16,9 @@ struct CpuDqnAgent CpuDqnAgent::new(struct Dqn d) {
 
 float CpuDqnAgent::epsilon() { return self.host.epsilon(); }
 
-unsigned long CpuDqnAgent::act(const &Tensor obs, int explore) { return self.host.act(obs, explore); }
+unsigned long CpuDqnAgent::act(const &FloatTensor obs, int explore) { return self.host.act(obs, explore); }
 
-int CpuDqnAgent::observe(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminal) {
+int CpuDqnAgent::observe(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminal) {
     unsigned long before = self.host.updates;
     self.host.observe(obs, action, reward, next, terminal);
     return self.host.updates > before ? 1 : 0;
@@ -40,9 +40,9 @@ struct CpuPgAgent CpuPgAgent::new(struct PolicyAgent a) {
     return p;
 }
 
-unsigned long CpuPgAgent::act(const &Tensor obs, int sample) { return self.host.act(obs, sample); }
+unsigned long CpuPgAgent::act(const &FloatTensor obs, int sample) { return self.host.act(obs, sample); }
 
-void CpuPgAgent::record(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminated,
+void CpuPgAgent::record(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminated,
                         int truncated) {
     self.host.record(obs, action, reward, next, terminated, truncated);
 }

@@ -47,35 +47,35 @@ unsigned long Rng::below(unsigned long n) {
     return self.u64() % n;
 }
 
-void Rng::fill_uniform(&Tensor t, float lo, float hi) {
+void Rng::fill_uniform(&FloatTensor t, float lo, float hi) {
     unsafe {
         unsigned long i = 0UL;
         while (i < t->size) { t->data[i] = lo + (hi - lo) * self.uniform(); i = i + 1UL; }
     }
 }
 
-void Rng::fill_normal(&Tensor t, float mean, float std) {
+void Rng::fill_normal(&FloatTensor t, float mean, float std) {
     unsafe {
         unsigned long i = 0UL;
         while (i < t->size) { t->data[i] = mean + std * self.normal(); i = i + 1UL; }
     }
 }
 
-&Tensor Rng::normal_tensor(unsigned long rows, unsigned long cols) {
-    &Tensor t = Tensor::new_2d(rows, cols, 0);
+&FloatTensor Rng::normal_tensor(unsigned long rows, unsigned long cols) {
+    &FloatTensor t = FloatTensor::new_2d(rows, cols, 0);
     self.fill_normal(t, (float)0.0, (float)1.0);
     return t;
 }
 
 // ══ Ops ══════════════════════════════════════════════════════════════════════
 
-static &Tensor nn_alloc2_(unsigned long rows, unsigned long cols) {
+static &FloatTensor nn_alloc2_(unsigned long rows, unsigned long cols) {
     unsigned long shape[2];
     unsafe { shape[0] = rows; shape[1] = cols; }
     return __tensor_alloc(shape, 2UL, 0);
 }
 
-static &Tensor nn_alloc1_(unsigned long n) {
+static &FloatTensor nn_alloc1_(unsigned long n) {
     unsigned long shape[1];
     unsafe { shape[0] = n; }
     return __tensor_alloc(shape, 1UL, 0);
@@ -83,7 +83,7 @@ static &Tensor nn_alloc1_(unsigned long n) {
 
 // Frees a tensor that is not part of any graph (heap tensors only; an
 // arena tensor goes with its arena's reset).
-static void nn_drop_(&Tensor t) {
+static void nn_drop_(&FloatTensor t) {
     unsafe {
         match (t->owner) {
             case some(a): { }
@@ -92,20 +92,20 @@ static void nn_drop_(&Tensor t) {
     }
 }
 
-static unsigned long nn_rows_(const &Tensor t) {
+static unsigned long nn_rows_(const &FloatTensor t) {
     unsafe { return t->ndim >= 2UL ? t->shape[0] : 1UL; }
 }
 
-static unsigned long nn_cols_(const &Tensor t) {
+static unsigned long nn_cols_(const &FloatTensor t) {
     unsafe { return t->shape[t->ndim - 1UL]; }
 }
 
 // ── Bias add ─────────────────────────────────────────────────────────────────
 static void nn_add_bias_backward_(void* selfPtr) {
     unsafe {
-        struct Tensor* s = (struct Tensor*)selfPtr;
-        struct Tensor* x = __tensor_parent(s, 0UL);
-        struct Tensor* b = __tensor_parent(s, 1UL);
+        FloatTensor* s = (FloatTensor*)selfPtr;
+        FloatTensor* x = __tensor_parent(s, 0UL);
+        FloatTensor* b = __tensor_parent(s, 1UL);
         if (x->requiresGrad) __tensor_accumulate(x, (const float*)s->grad);
         if (b->requiresGrad) {
             __tensor_ensure_grad(b);
@@ -121,8 +121,8 @@ static void nn_add_bias_backward_(void* selfPtr) {
     }
 }
 
-&Tensor tensor_add_bias(const &Tensor x, const &Tensor b) {
-    &Tensor out = __tensor_alloc_uninit_like(x);
+&FloatTensor tensor_add_bias(const &FloatTensor x, const &FloatTensor b) {
+    &FloatTensor out = __tensor_alloc_uninit_like(x);
     unsafe {
         unsigned long n = b->size;
         unsigned long rows = x->size / n;
@@ -149,9 +149,9 @@ static void nn_add_bias_backward_(void* selfPtr) {
 // plus a second constant for clamp; the aux tensor never needs a gradient.
 static void nn_unary_backward_(void* selfPtr) {
     unsafe {
-        struct Tensor* s = (struct Tensor*)selfPtr;
-        struct Tensor* a = __tensor_parent(s, 0UL);
-        struct Tensor* aux = __tensor_parent(s, 1UL);
+        FloatTensor* s = (FloatTensor*)selfPtr;
+        FloatTensor* a = __tensor_parent(s, 0UL);
+        FloatTensor* aux = __tensor_parent(s, 1UL);
         if (!a->requiresGrad) return;
         __tensor_ensure_grad(a);
         int op = (int)aux->data[0];
@@ -180,9 +180,9 @@ static void nn_unary_backward_(void* selfPtr) {
     }
 }
 
-static &Tensor nn_unary_(const &Tensor a, int op, float k, float k2) {
-    &Tensor out = __tensor_alloc_uninit_like(a);
-    &Tensor aux = nn_alloc1_(2UL);
+static &FloatTensor nn_unary_(const &FloatTensor a, int op, float k, float k2) {
+    &FloatTensor out = __tensor_alloc_uninit_like(a);
+    &FloatTensor aux = nn_alloc1_(2UL);
     unsafe {
         aux->data[0] = (float)op;
         aux->data[1] = k;
@@ -211,19 +211,19 @@ static &Tensor nn_unary_(const &Tensor a, int op, float k, float k2) {
     return out;
 }
 
-&Tensor Tensor::add_scalar(float k) const { return nn_unary_(self, NN_U_ADDK, k, (float)0.0); }
-&Tensor Tensor::exp() const { return nn_unary_(self, NN_U_EXP, (float)0.0, (float)0.0); }
-&Tensor Tensor::log() const { return nn_unary_(self, NN_U_LOG, (float)0.0, (float)0.0); }
-&Tensor Tensor::abs() const { return nn_unary_(self, NN_U_ABS, (float)0.0, (float)0.0); }
-&Tensor Tensor::leaky_relu(float slope) const { return nn_unary_(self, NN_U_LEAKY, slope, (float)0.0); }
-&Tensor Tensor::clamp(float lo, float hi) const { return nn_unary_(self, NN_U_CLAMP, lo, hi); }
+&FloatTensor FloatTensor::add_scalar(float k) const { return nn_unary_(self, NN_U_ADDK, k, (float)0.0); }
+&FloatTensor FloatTensor::exp() const { return nn_unary_(self, NN_U_EXP, (float)0.0, (float)0.0); }
+&FloatTensor FloatTensor::log() const { return nn_unary_(self, NN_U_LOG, (float)0.0, (float)0.0); }
+&FloatTensor FloatTensor::abs() const { return nn_unary_(self, NN_U_ABS, (float)0.0, (float)0.0); }
+&FloatTensor FloatTensor::leaky_relu(float slope) const { return nn_unary_(self, NN_U_LEAKY, slope, (float)0.0); }
+&FloatTensor FloatTensor::clamp(float lo, float hi) const { return nn_unary_(self, NN_U_CLAMP, lo, hi); }
 
 // ── Minimum ──────────────────────────────────────────────────────────────────
 static void nn_minimum_backward_(void* selfPtr) {
     unsafe {
-        struct Tensor* s = (struct Tensor*)selfPtr;
-        struct Tensor* a = __tensor_parent(s, 0UL);
-        struct Tensor* b = __tensor_parent(s, 1UL);
+        FloatTensor* s = (FloatTensor*)selfPtr;
+        FloatTensor* a = __tensor_parent(s, 0UL);
+        FloatTensor* b = __tensor_parent(s, 1UL);
         if (a->requiresGrad) __tensor_ensure_grad(a);
         if (b->requiresGrad) __tensor_ensure_grad(b);
         unsigned long i = 0UL;
@@ -235,8 +235,8 @@ static void nn_minimum_backward_(void* selfPtr) {
     }
 }
 
-&Tensor tensor_minimum(const &Tensor a, const &Tensor b) {
-    &Tensor out = __tensor_alloc_uninit_like(a);
+&FloatTensor tensor_minimum(const &FloatTensor a, const &FloatTensor b) {
+    &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         unsigned long i = 0UL;
         while (i < a->size) {
@@ -249,7 +249,7 @@ static void nn_minimum_backward_(void* selfPtr) {
     return out;
 }
 
-&Tensor Tensor::mean() const {
+&FloatTensor FloatTensor::mean() const {
     float n;
     unsafe { n = (float)self->size; }
     return self.sum().scale((float)1.0 / n);
@@ -258,8 +258,8 @@ static void nn_minimum_backward_(void* selfPtr) {
 // ── Row sums ─────────────────────────────────────────────────────────────────
 static void nn_sum_rows_backward_(void* selfPtr) {
     unsafe {
-        struct Tensor* s = (struct Tensor*)selfPtr;
-        struct Tensor* a = __tensor_parent(s, 0UL);
+        FloatTensor* s = (FloatTensor*)selfPtr;
+        FloatTensor* a = __tensor_parent(s, 0UL);
         if (!a->requiresGrad) return;
         __tensor_ensure_grad(a);
         unsigned long rows = s->size;
@@ -274,10 +274,10 @@ static void nn_sum_rows_backward_(void* selfPtr) {
     }
 }
 
-&Tensor Tensor::sum_rows() const {
+&FloatTensor FloatTensor::sum_rows() const {
     unsigned long rows = nn_rows_(self);
     unsigned long cols = nn_cols_(self);
-    &Tensor out = nn_alloc2_(rows, 1UL);
+    &FloatTensor out = nn_alloc2_(rows, 1UL);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
@@ -295,9 +295,9 @@ static void nn_sum_rows_backward_(void* selfPtr) {
 // ── Column concatenation ─────────────────────────────────────────────────────
 static void nn_concat_backward_(void* selfPtr) {
     unsafe {
-        struct Tensor* s = (struct Tensor*)selfPtr;
-        struct Tensor* a = __tensor_parent(s, 0UL);
-        struct Tensor* b = __tensor_parent(s, 1UL);
+        FloatTensor* s = (FloatTensor*)selfPtr;
+        FloatTensor* a = __tensor_parent(s, 0UL);
+        FloatTensor* b = __tensor_parent(s, 1UL);
         unsigned long rows = s->shape[0];
         unsigned long p = a->size / rows;
         unsigned long q = b->size / rows;
@@ -314,11 +314,11 @@ static void nn_concat_backward_(void* selfPtr) {
     }
 }
 
-&Tensor tensor_concat_cols(const &Tensor a, const &Tensor b) {
+&FloatTensor tensor_concat_cols(const &FloatTensor a, const &FloatTensor b) {
     unsigned long rows = nn_rows_(a);
     unsigned long p = nn_cols_(a);
     unsigned long q = nn_cols_(b);
-    &Tensor out = nn_alloc2_(rows, p + q);
+    &FloatTensor out = nn_alloc2_(rows, p + q);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
@@ -336,9 +336,9 @@ static void nn_concat_backward_(void* selfPtr) {
 // ── Row gather ───────────────────────────────────────────────────────────────
 static void nn_gather_backward_(void* selfPtr) {
     unsafe {
-        struct Tensor* s = (struct Tensor*)selfPtr;
-        struct Tensor* table = __tensor_parent(s, 0UL);
-        struct Tensor* idx = __tensor_parent(s, 1UL);
+        FloatTensor* s = (FloatTensor*)selfPtr;
+        FloatTensor* table = __tensor_parent(s, 0UL);
+        FloatTensor* idx = __tensor_parent(s, 1UL);
         if (!table->requiresGrad) return;
         __tensor_ensure_grad(table);
         unsigned long d = table->shape[1];
@@ -352,11 +352,11 @@ static void nn_gather_backward_(void* selfPtr) {
     }
 }
 
-&Tensor tensor_gather_rows(const &Tensor table, const &Tensor idx) {
+&FloatTensor tensor_gather_rows(const &FloatTensor table, const &FloatTensor idx) {
     unsigned long d = nn_cols_(table);
     unsigned long m;
     unsafe { m = idx->size; }
-    &Tensor out = nn_alloc2_(m, d);
+    &FloatTensor out = nn_alloc2_(m, d);
     unsafe {
         unsigned long i = 0UL;
         while (i < m) {
@@ -373,8 +373,8 @@ static void nn_gather_backward_(void* selfPtr) {
 // ── Log-softmax ──────────────────────────────────────────────────────────────
 static void nn_log_softmax_backward_(void* selfPtr) {
     unsafe {
-        struct Tensor* s = (struct Tensor*)selfPtr;
-        struct Tensor* a = __tensor_parent(s, 0UL);
+        FloatTensor* s = (FloatTensor*)selfPtr;
+        FloatTensor* a = __tensor_parent(s, 0UL);
         if (!a->requiresGrad) return;
         __tensor_ensure_grad(a);
         unsigned long cols = s->shape[s->ndim - 1UL];
@@ -407,8 +407,8 @@ static float nn_row_logsumexp_(const float* x, unsigned long n) {
     }
 }
 
-&Tensor Tensor::log_softmax() const {
-    &Tensor out = __tensor_alloc_uninit_like(self);
+&FloatTensor FloatTensor::log_softmax() const {
+    &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe {
         unsigned long cols = self->shape[self->ndim - 1UL];
         unsigned long rows = self->size / cols;
@@ -425,16 +425,16 @@ static float nn_row_logsumexp_(const float* x, unsigned long n) {
     return out;
 }
 
-&Tensor Tensor::detach() const {
-    &Tensor out = __tensor_alloc_uninit_like(self);
+&FloatTensor FloatTensor::detach() const {
+    &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe { __tensor_ew(EW_COPY, (const float*)self->data, (const float*)0, (float)0.0, (float*)out->data, self->size); }
     return out;
 }
 
-&Tensor Tensor::one_hot(unsigned long classes) const {
+&FloatTensor FloatTensor::one_hot(unsigned long classes) const {
     unsigned long m;
     unsafe { m = self->size; }
-    &Tensor out = Tensor::new_2d(m, classes, 0);
+    &FloatTensor out = FloatTensor::new_2d(m, classes, 0);
     unsafe {
         unsigned long i = 0UL;
         while (i < m) {
@@ -446,10 +446,10 @@ static float nn_row_logsumexp_(const float* x, unsigned long n) {
     return out;
 }
 
-&Tensor Tensor::argmax_rows() const {
+&FloatTensor FloatTensor::argmax_rows() const {
     unsigned long rows = nn_rows_(self);
     unsigned long cols = nn_cols_(self);
-    &Tensor out = nn_alloc1_(rows);
+    &FloatTensor out = nn_alloc1_(rows);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
@@ -465,8 +465,8 @@ static float nn_row_logsumexp_(const float* x, unsigned long n) {
 
 // ══ Losses ═══════════════════════════════════════════════════════════════════
 
-&Tensor tensor_mse_loss(const &Tensor pred, const &Tensor target) {
-    &Tensor d = tensor_sub(pred, target);
+&FloatTensor tensor_mse_loss(const &FloatTensor pred, const &FloatTensor target) {
+    &FloatTensor d = tensor_sub(pred, target);
     return tensor_mul(d, d).mean();
 }
 
@@ -478,10 +478,10 @@ static float nn_row_logsumexp_(const float* x, unsigned long n) {
 // an aux parent (parent 2); the target / labels are parent 1.
 static void nn_loss_backward_(void* selfPtr) {
     unsafe {
-        struct Tensor* s = (struct Tensor*)selfPtr;
-        struct Tensor* x = __tensor_parent(s, 0UL);
-        struct Tensor* t = __tensor_parent(s, 1UL);
-        struct Tensor* aux = __tensor_parent(s, 2UL);
+        FloatTensor* s = (FloatTensor*)selfPtr;
+        FloatTensor* x = __tensor_parent(s, 0UL);
+        FloatTensor* t = __tensor_parent(s, 1UL);
+        FloatTensor* aux = __tensor_parent(s, 2UL);
         if (!x->requiresGrad) return;
         __tensor_ensure_grad(x);
         int kind = (int)aux->data[0];
@@ -527,9 +527,9 @@ static void nn_loss_backward_(void* selfPtr) {
     }
 }
 
-static &Tensor nn_loss_(const &Tensor x, const &Tensor t, int kind, float k) {
-    &Tensor out = nn_alloc1_(1UL);
-    &Tensor aux = nn_alloc1_(2UL);
+static &FloatTensor nn_loss_(const &FloatTensor x, const &FloatTensor t, int kind, float k) {
+    &FloatTensor out = nn_alloc1_(1UL);
+    &FloatTensor aux = nn_alloc1_(2UL);
     unsafe {
         aux->data[0] = (float)kind;
         aux->data[1] = k;
@@ -579,19 +579,19 @@ static &Tensor nn_loss_(const &Tensor x, const &Tensor t, int kind, float k) {
     return out;
 }
 
-&Tensor tensor_huber_loss(const &Tensor pred, const &Tensor target, float delta) {
+&FloatTensor tensor_huber_loss(const &FloatTensor pred, const &FloatTensor target, float delta) {
     return nn_loss_(pred, target, NN_L_HUBER, delta);
 }
 
-&Tensor tensor_bce_logits_loss(const &Tensor logits, const &Tensor target) {
+&FloatTensor tensor_bce_logits_loss(const &FloatTensor logits, const &FloatTensor target) {
     return nn_loss_(logits, target, NN_L_BCE, (float)0.0);
 }
 
-&Tensor tensor_cross_entropy_loss(const &Tensor logits, const &Tensor labels) {
+&FloatTensor tensor_cross_entropy_loss(const &FloatTensor logits, const &FloatTensor labels) {
     return nn_loss_(logits, labels, NN_L_CE, (float)0.0);
 }
 
-float tensor_accuracy(const &Tensor logits, const &Tensor labels) {
+float tensor_accuracy(const &FloatTensor logits, const &FloatTensor labels) {
     unsigned long rows = nn_rows_(logits);
     unsigned long cols = nn_cols_(logits);
     unsigned long hit = 0UL;
@@ -610,7 +610,7 @@ float tensor_accuracy(const &Tensor logits, const &Tensor labels) {
 
 // ══ Activations by tag ═══════════════════════════════════════════════════════
 
-&Tensor Tensor::activate(int act) const {
+&FloatTensor FloatTensor::activate(int act) const {
     if (act == ACT_RELU) return self.relu();
     if (act == ACT_LEAKY) return self.leaky_relu((float)0.2);
     if (act == ACT_TANH) return self.tanh();
@@ -619,7 +619,7 @@ float tensor_accuracy(const &Tensor logits, const &Tensor labels) {
     if (act == ACT_SILU) return self.silu();
     // ACT_NONE: the receiver itself (a caller's region-less reference, so it
     // may leave the method)
-    unsafe { return (&Tensor)(const Tensor*)self; }
+    unsafe { return (&FloatTensor)(const FloatTensor*)self; }
 }
 
 // ══ MLP ══════════════════════════════════════════════════════════════════════
@@ -652,8 +652,8 @@ struct Mlp Mlp::new(unsigned long inDim, unsigned long hidden, unsigned long hid
     while (l < m.nLayers) {
         unsigned long fin = l == 0UL ? inDim : hidden;
         unsigned long fout = l + 1UL == m.nLayers ? outDim : hidden;
-        &Tensor W = Tensor::new_2d(fin, fout, 1);
-        &Tensor b = Tensor::new_1d(fout, 1);
+        &FloatTensor W = FloatTensor::new_2d(fin, fout, 1);
+        &FloatTensor b = FloatTensor::new_1d(fout, 1);
         float bound = (float)1.0 / sqrt_f((float)fin);
         rng.fill_uniform(W, -bound, bound);
         rng.fill_uniform(b, -bound, bound);
@@ -665,15 +665,15 @@ struct Mlp Mlp::new(unsigned long inDim, unsigned long hidden, unsigned long hid
     return m;
 }
 
-static &Tensor mlp_layer_(const &Mlp m, unsigned long l, const &Tensor x) {
-    &Tensor W = *m.params.at(2UL * l);
-    &Tensor b = *m.params.at(2UL * l + 1UL);
-    &Tensor y = tensor_add_bias(tensor_matmul(x, W), b);
+static &FloatTensor mlp_layer_(const &Mlp m, unsigned long l, const &FloatTensor x) {
+    &FloatTensor W = *m.params.at(2UL * l);
+    &FloatTensor b = *m.params.at(2UL * l + 1UL);
+    &FloatTensor y = tensor_add_bias(tensor_matmul(x, W), b);
     return y.activate(l + 1UL == m.nLayers ? m.outAct : m.act);
 }
 
-&Tensor Mlp::forward(const &Tensor x) const {
-    &Tensor h = mlp_layer_(self, 0UL, x);
+&FloatTensor Mlp::forward(const &FloatTensor x) const {
+    &FloatTensor h = mlp_layer_(self, 0UL, x);
     unsigned long l = 1UL;
     while (l < self.nLayers) {
         h = mlp_layer_(self, l, h);
@@ -682,17 +682,17 @@ static &Tensor mlp_layer_(const &Mlp m, unsigned long l, const &Tensor x) {
     return h;
 }
 
-void Mlp::collect_params(&Vec<&Tensor> out) const {
+void Mlp::collect_params(&Vec<&FloatTensor> out) const {
     unsigned long i = 0UL;
     while (i < self.params.length()) { out.push(*self.params.at(i)); i = i + 1UL; }
 }
 
-void Mlp::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+void Mlp::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
 void Mlp::free() {
     unsigned long i = 0UL;
     while (i < self.params.length()) {
-        &Tensor p = *self.params.at(i);
+        &FloatTensor p = *self.params.at(i);
         p->free();
         unsafe { free((void*)p); }
         i = i + 1UL;
@@ -728,13 +728,13 @@ struct Optimizer Optimizer::from(const &Optimizer o) {
     return d;
 }
 
-void Optimizer::add(&Tensor param) {
+void Optimizer::add(&FloatTensor param) {
     ?&TensorArena cur = nn_heap_begin_();
     unsigned long n;
     unsafe { n = param->size; }
     self.params.push(param);
-    self.m.push(Tensor::new_1d(n, 0));
-    self.v.push(Tensor::new_1d(n, 0));
+    self.m.push(FloatTensor::new_1d(n, 0));
+    self.v.push(FloatTensor::new_1d(n, 0));
     nn_heap_end_(cur);
 }
 
@@ -747,7 +747,7 @@ float Optimizer::clip_grad_norm(float maxNorm) {
     double sq = 0.0;
     unsigned long i = 0UL;
     while (i < self.params.length()) {
-        &Tensor p = *self.params.at(i);
+        &FloatTensor p = *self.params.at(i);
         unsafe {
             if (p->grad != (float*)0) {
                 unsigned long j = 0UL;
@@ -761,7 +761,7 @@ float Optimizer::clip_grad_norm(float maxNorm) {
         float sc = maxNorm / norm;
         i = 0UL;
         while (i < self.params.length()) {
-            &Tensor p = *self.params.at(i);
+            &FloatTensor p = *self.params.at(i);
             unsafe {
                 if (p->grad != (float*)0) {
                     unsigned long j = 0UL;
@@ -911,9 +911,9 @@ void Optimizer::step() {
     j.isbc2 = (float)1.0 / sqrt_f(bc2);
     unsigned long i = 0UL;
     while (i < self.params.length()) {
-        &Tensor p = *self.params.at(i);
-        &Tensor mt = *self.m.at(i);
-        &Tensor vt = *self.v.at(i);
+        &FloatTensor p = *self.params.at(i);
+        &FloatTensor mt = *self.m.at(i);
+        &FloatTensor vt = *self.v.at(i);
         unsafe {
             if (p->grad != (float*)0) {
                 j.w = (float*)p->data;
@@ -932,8 +932,8 @@ void Optimizer::step() {
 void Optimizer::free() {
     unsigned long i = 0UL;
     while (i < self.m.length()) {
-        &Tensor a = *self.m.at(i);
-        &Tensor b = *self.v.at(i);
+        &FloatTensor a = *self.m.at(i);
+        &FloatTensor b = *self.v.at(i);
         a->free(); b->free();
         unsafe { free((void*)a); free((void*)b); }
         i = i + 1UL;
@@ -951,7 +951,7 @@ static int nn_read_(&File f, void* p, unsigned long bytes) {
     unsafe { return file_read(f, (&unsigned char)(unsigned char*)p, bytes) == bytes; }
 }
 
-int tensors_save(const &Vec<&Tensor> ts, const &char path) {
+int tensors_save(const &Vec<&FloatTensor> ts, const &char path) {
     ?&File fo = file_open(path, "wb");
     match (fo) {
         case null: { return 0; }
@@ -966,7 +966,7 @@ int tensors_save(const &Vec<&Tensor> ts, const &char path) {
                 ok = ok && nn_write_(f, (const void*)&count, sizeof(unsigned long));
                 unsigned long i = 0UL;
                 while (ok && i < count) {
-                    &Tensor t = *ts.at(i);
+                    &FloatTensor t = *ts.at(i);
                     unsigned long nd = t->ndim;
                     ok = nn_write_(f, (const void*)&nd, sizeof(unsigned long));
                     ok = ok && nn_write_(f, (const void*)t->shape, sizeof(unsigned long) * nd);
@@ -981,7 +981,7 @@ int tensors_save(const &Vec<&Tensor> ts, const &char path) {
     return 0;
 }
 
-int tensors_load(&Vec<&Tensor> ts, const &char path) {
+int tensors_load(&Vec<&FloatTensor> ts, const &char path) {
     ?&File fo = file_open(path, "rb");
     match (fo) {
         case null: { return 0; }
@@ -998,7 +998,7 @@ int tensors_load(&Vec<&Tensor> ts, const &char path) {
                 long long start = file_tell(f);
                 unsigned long i = 0UL;
                 while (ok && i < count) {
-                    &Tensor t = *ts.at(i);
+                    &FloatTensor t = *ts.at(i);
                     unsigned long nd = 0UL;
                     ok = nn_read_(f, (void*)&nd, sizeof(unsigned long)) && nd == t->ndim;
                     unsigned long d = 0UL;
@@ -1013,7 +1013,7 @@ int tensors_load(&Vec<&Tensor> ts, const &char path) {
                 ok = ok && file_seek(f, start, 0) == 0;
                 i = 0UL;
                 while (ok && i < count) {
-                    &Tensor t = *ts.at(i);
+                    &FloatTensor t = *ts.at(i);
                     unsigned long skip = sizeof(unsigned long) * (1UL + t->ndim);
                     ok = file_seek(f, (long long)skip, 1) == 0;
                     ok = ok && nn_read_(f, (void*)t->data, sizeof(float) * t->size);

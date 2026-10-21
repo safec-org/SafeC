@@ -13,9 +13,9 @@ namespace std {
 // kept in an aux parent ([rows]).
 static void norm_ln_backward_(void* selfPtr) {
     unsafe {
-        struct Tensor* s = (struct Tensor*)selfPtr;
-        struct Tensor* x = __tensor_parent(s, 0UL);
-        struct Tensor* inv = __tensor_parent(s, 1UL);
+        FloatTensor* s = (FloatTensor*)selfPtr;
+        FloatTensor* x = __tensor_parent(s, 0UL);
+        FloatTensor* inv = __tensor_parent(s, 1UL);
         if (!x->requiresGrad) return;
         __tensor_ensure_grad(x);
         unsigned long rows = inv->size;
@@ -45,11 +45,11 @@ static void norm_ln_backward_(void* selfPtr) {
     }
 }
 
-&Tensor Tensor::layer_norm(float eps) const {
+&FloatTensor FloatTensor::layer_norm(float eps) const {
     unsigned long n; unsigned long rows;
     unsafe { n = self->shape[self->ndim - 1UL]; rows = self->size / n; }
-    &Tensor out = __tensor_alloc_uninit_like(self);
-    &Tensor inv = Tensor::new_1d(rows, 0);
+    &FloatTensor out = __tensor_alloc_uninit_like(self);
+    &FloatTensor inv = FloatTensor::new_1d(rows, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
@@ -84,9 +84,9 @@ static void norm_ln_backward_(void* selfPtr) {
 // ── Row-broadcast multiply ───────────────────────────────────────────────────
 static void norm_mul_row_backward_(void* selfPtr) {
     unsafe {
-        struct Tensor* s = (struct Tensor*)selfPtr;
-        struct Tensor* x = __tensor_parent(s, 0UL);
-        struct Tensor* g = __tensor_parent(s, 1UL);
+        FloatTensor* s = (FloatTensor*)selfPtr;
+        FloatTensor* x = __tensor_parent(s, 0UL);
+        FloatTensor* g = __tensor_parent(s, 1UL);
         unsigned long n = g->size;
         unsigned long rows = s->size / n;
         if (x->requiresGrad) __tensor_ensure_grad(x);
@@ -105,8 +105,8 @@ static void norm_mul_row_backward_(void* selfPtr) {
     }
 }
 
-&Tensor tensor_mul_row(const &Tensor x, const &Tensor g) {
-    &Tensor out = __tensor_alloc_uninit_like(x);
+&FloatTensor tensor_mul_row(const &FloatTensor x, const &FloatTensor g) {
+    &FloatTensor out = __tensor_alloc_uninit_like(x);
     unsafe {
         unsigned long n = g->size;
         unsigned long i = 0UL;
@@ -131,7 +131,7 @@ static void norm_heap_end_(?&TensorArena cur) {
     }
 }
 
-static void norm_drop_(&Tensor t) {
+static void norm_drop_(&FloatTensor t) {
     t->free();
     unsafe { free((void*)t); }
 }
@@ -139,8 +139,8 @@ static void norm_drop_(&Tensor t) {
 struct LayerNorm LayerNorm::new(unsigned long dim) {
     struct LayerNorm ln;
     ?&TensorArena cur = norm_heap_begin_();
-    ln.gamma = Tensor::new_1d(dim, 1);
-    ln.beta = Tensor::new_1d(dim, 1);
+    ln.gamma = FloatTensor::new_1d(dim, 1);
+    ln.beta = FloatTensor::new_1d(dim, 1);
     norm_heap_end_(cur);
     ln.gamma.fill((float)1.0);
     ln.dim = dim;
@@ -148,16 +148,16 @@ struct LayerNorm LayerNorm::new(unsigned long dim) {
     return ln;
 }
 
-&Tensor LayerNorm::forward(const &Tensor x) const {
+&FloatTensor LayerNorm::forward(const &FloatTensor x) const {
     return tensor_add_bias(tensor_mul_row(x.layer_norm(self.eps), self.gamma), self.beta);
 }
 
-void LayerNorm::collect_params(&Vec<&Tensor> out) const {
+void LayerNorm::collect_params(&Vec<&FloatTensor> out) const {
     out.push(self.gamma);
     out.push(self.beta);
 }
 
-void LayerNorm::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+void LayerNorm::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
 void LayerNorm::free() {
     norm_drop_(self.gamma);
@@ -170,8 +170,8 @@ struct AdaLN AdaLN::new(unsigned long dim, unsigned long condDim, int gated) {
     struct AdaLN a;
     unsigned long chunks = gated ? 3UL : 2UL;
     ?&TensorArena cur = norm_heap_begin_();
-    a.W = Tensor::new_2d(condDim, chunks * dim, 1);
-    a.b = Tensor::new_1d(chunks * dim, 1);
+    a.W = FloatTensor::new_2d(condDim, chunks * dim, 1);
+    a.b = FloatTensor::new_1d(chunks * dim, 1);
     norm_heap_end_(cur);
     a.dim = dim;
     a.condDim = condDim;
@@ -180,12 +180,12 @@ struct AdaLN AdaLN::new(unsigned long dim, unsigned long condDim, int gated) {
     return a;
 }
 
-struct AdaLNOut AdaLN::forward(const &Tensor x, const &Tensor cond) const {
+struct AdaLNOut AdaLN::forward(const &FloatTensor x, const &FloatTensor cond) const {
     unsigned long n = self.dim;
-    &Tensor mod = tensor_add_bias(tensor_matmul(cond, self.W), self.b);
-    &Tensor shift = mod.slice_cols(0UL, n);
-    &Tensor scale = mod.slice_cols(n, n);
-    &Tensor xh = x.layer_norm(self.eps);
+    &FloatTensor mod = tensor_add_bias(tensor_matmul(cond, self.W), self.b);
+    &FloatTensor shift = mod.slice_cols(0UL, n);
+    &FloatTensor scale = mod.slice_cols(n, n);
+    &FloatTensor xh = x.layer_norm(self.eps);
     struct AdaLNOut o;
     o.out = tensor_add(tensor_mul(xh, scale.add_scalar((float)1.0)), shift);
     if (self.gated) {
@@ -193,18 +193,18 @@ struct AdaLNOut AdaLN::forward(const &Tensor x, const &Tensor cond) const {
     } else {
         unsigned long m;
         unsafe { m = x->shape[0]; }
-        o.gate = Tensor::new_2d(m, n, 0);
+        o.gate = FloatTensor::new_2d(m, n, 0);
         o.gate.fill((float)1.0);
     }
     return o;
 }
 
-void AdaLN::collect_params(&Vec<&Tensor> out) const {
+void AdaLN::collect_params(&Vec<&FloatTensor> out) const {
     out.push(self.W);
     out.push(self.b);
 }
 
-void AdaLN::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+void AdaLN::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
 void AdaLN::free() {
     norm_drop_(self.W);

@@ -60,10 +60,10 @@ extern void  free(void* ptr);
 // reflects the CURRENTLY open batch (reset at the top of both, whenever
 // no batch is active).
 #define MPS_CHAIN_MAX 512
-static &Tensor __mps_chain_data_tensor[MPS_CHAIN_MAX];
+static &FloatTensor __mps_chain_data_tensor[MPS_CHAIN_MAX];
 static void*          __mps_chain_data_buf[MPS_CHAIN_MAX];
 static unsigned long  __mps_chain_data_count = 0UL;
-static &Tensor __mps_chain_grad_tensor[MPS_CHAIN_MAX];
+static &FloatTensor __mps_chain_grad_tensor[MPS_CHAIN_MAX];
 static void*          __mps_chain_grad_buf[MPS_CHAIN_MAX];
 static unsigned long  __mps_chain_grad_count = 0UL;
 
@@ -81,7 +81,7 @@ void tensor_gpu_batch_end() {
     mps_batch_end();
 }
 
-static void __mps_chain_data_mark(&Tensor t, void* buf) {
+static void __mps_chain_data_mark(&FloatTensor t, void* buf) {
     if (__mps_chain_data_count < (unsigned long)MPS_CHAIN_MAX) {
         __mps_chain_data_tensor[__mps_chain_data_count] = t;
         __mps_chain_data_buf[__mps_chain_data_count] = buf;
@@ -104,11 +104,11 @@ static void __mps_chain_data_mark(&Tensor t, void* buf) {
 // not a weight matrix SGD rewrites every step) — nothing here re-uploads
 // on a data change, since nothing here is told one happened.
 #define MPS_PERSISTENT_MAX 16
-static &Tensor __mps_persistent_tensor[MPS_PERSISTENT_MAX];
+static &FloatTensor __mps_persistent_tensor[MPS_PERSISTENT_MAX];
 static void*          __mps_persistent_buf[MPS_PERSISTENT_MAX];
 static unsigned long  __mps_persistent_count = 0UL;
 
-static void* __mps_persistent_lookup(&Tensor t) {
+static void* __mps_persistent_lookup(&FloatTensor t) {
     unsigned long i = 0UL;
     while (i < __mps_persistent_count) {
         if (__mps_persistent_tensor[i] == t) return __mps_persistent_buf[i];
@@ -117,11 +117,11 @@ static void* __mps_persistent_lookup(&Tensor t) {
     return (void*)0;
 }
 
-void Tensor::gpu_mark_persistent() const {
+void FloatTensor::gpu_mark_persistent() const {
     unsafe {
         if (__mps_persistent_count >= (unsigned long)MPS_PERSISTENT_MAX) return;
         if (!mps_available()) return;
-        struct Tensor* tp = (struct Tensor*)self;
+        FloatTensor* tp = (FloatTensor*)self;
         void* buf = mps_upload_persistent((const float*)tp->data, tp->size * sizeof(float));
         if (buf == (void*)0) return;
         __mps_persistent_tensor[__mps_persistent_count] = tp;
@@ -149,7 +149,7 @@ void tensor_gpu_release_all_persistent() {
 // batched-pending (an ordinary, already-populated tensor — the common
 // case, e.g. a persistent weight matrix) AND isn't cross-batch-persistent
 // either (see Tensor::gpu_mark_persistent above).
-static void* __mps_chain_data_lookup(&Tensor t) {
+static void* __mps_chain_data_lookup(&FloatTensor t) {
     unsigned long i = __mps_chain_data_count;
     // Walk backwards: if the same Tensor* were ever marked more than
     // once (not expected in practice — a fresh Tensor* per op), the most
@@ -161,7 +161,7 @@ static void* __mps_chain_data_lookup(&Tensor t) {
     return __mps_persistent_lookup(t);
 }
 
-static void __mps_chain_grad_mark(&Tensor t, void* buf) {
+static void __mps_chain_grad_mark(&FloatTensor t, void* buf) {
     if (__mps_chain_grad_count < (unsigned long)MPS_CHAIN_MAX) {
         __mps_chain_grad_tensor[__mps_chain_grad_count] = t;
         __mps_chain_grad_buf[__mps_chain_grad_count] = buf;
@@ -173,7 +173,7 @@ static void __mps_chain_grad_mark(&Tensor t, void* buf) {
 // gradient isn't batched-pending (e.g. a leaf tensor like a weight matrix,
 // whose ->grad is only ever accumulated into via a deferred finalize, not
 // chained further).
-static void* __mps_chain_grad_lookup(&Tensor t) {
+static void* __mps_chain_grad_lookup(&FloatTensor t) {
     unsigned long i = __mps_chain_grad_count;
     while (i > 0UL) {
         i = i - 1UL;
@@ -182,9 +182,9 @@ static void* __mps_chain_grad_lookup(&Tensor t) {
     return (void*)0;
 }
 
-&Tensor tensor_add_gpu(const &Tensor a, const &Tensor b) {
+&FloatTensor tensor_add_gpu(const &FloatTensor a, const &FloatTensor b) {
     if (!mps_available()) { return tensor_add(a, b); }
-    &Tensor out = __tensor_alloc_uninit_like(a);
+    &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         int ok = mps_add_f32((const float*)a->data, (const float*)b->data, (float*)out->data, out->size);
         if (!ok) {
@@ -196,12 +196,12 @@ static void* __mps_chain_grad_lookup(&Tensor t) {
     return out;
 }
 
-&Tensor tensor_sub_gpu(const &Tensor a, const &Tensor b) {
+&FloatTensor tensor_sub_gpu(const &FloatTensor a, const &FloatTensor b) {
     if (!mps_available()) { return tensor_sub(a, b); }
-    &Tensor out = __tensor_alloc_uninit_like(a);
+    &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         if (mps_batch_is_active()) {
-            void* chainedBuf = __mps_chain_data_lookup((struct Tensor*)a);
+            void* chainedBuf = __mps_chain_data_lookup((FloatTensor*)a);
             int ok;
             if (chainedBuf != (void*)0) {
                 // 'a' is itself still-pending output from an earlier op in
@@ -237,12 +237,12 @@ static void* __mps_chain_grad_lookup(&Tensor t) {
 // the case where 'a' is itself still GPU-pending (see tensor_gpu.h's
 // comment on why tensor_mul_gpu's generic two-CPU-array signature can't
 // express that).
-&Tensor Tensor::square_gpu() const {
+&FloatTensor FloatTensor::square_gpu() const {
     if (!mps_available()) { return tensor_mul(self, self); }
-    &Tensor out = __tensor_alloc_uninit_like(self);
+    &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe {
         if (mps_batch_is_active()) {
-            void* chainedBuf = __mps_chain_data_lookup((struct Tensor*)self);
+            void* chainedBuf = __mps_chain_data_lookup((FloatTensor*)self);
             int ok;
             if (chainedBuf != (void*)0) {
                 ok = mps_square_f32_chained(chainedBuf, (float*)out->data, out->size);
@@ -267,9 +267,9 @@ static void* __mps_chain_grad_lookup(&Tensor t) {
     return out;
 }
 
-&Tensor tensor_mul_gpu(const &Tensor a, const &Tensor b) {
+&FloatTensor tensor_mul_gpu(const &FloatTensor a, const &FloatTensor b) {
     if (!mps_available()) { return tensor_mul(a, b); }
-    &Tensor out = __tensor_alloc_uninit_like(a);
+    &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         int ok = mps_mul_f32((const float*)a->data, (const float*)b->data, (float*)out->data, out->size);
         if (!ok) {
@@ -281,9 +281,9 @@ static void* __mps_chain_grad_lookup(&Tensor t) {
     return out;
 }
 
-&Tensor Tensor::scale_gpu(float k) const {
+&FloatTensor FloatTensor::scale_gpu(float k) const {
     if (!mps_available()) { return self.scale(k); }
-    &Tensor out = __tensor_alloc_uninit_like(self);
+    &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe {
         int ok = mps_scale_f32((const float*)self->data, k, (float*)out->data, out->size);
         if (!ok) {
@@ -368,9 +368,9 @@ static void __mps_grad_accum_finalize(void* ctxPtr) {
 // chain-pending (not batched at all, or 'a' was an ordinary tensor).
 static void __sub_backward_gpu(void* selfPtr) {
     unsafe {
-        struct Tensor* selfT = (struct Tensor*)selfPtr;
-        &Tensor a = __tensor_parent(selfT, 0UL);
-        &Tensor b = __tensor_parent(selfT, 1UL);
+        FloatTensor* selfT = (FloatTensor*)selfPtr;
+        &FloatTensor a = __tensor_parent(selfT, 0UL);
+        &FloatTensor b = __tensor_parent(selfT, 1UL);
 
         if (!mps_batch_is_active()) { __sub_backward(selfPtr); return; }
 
@@ -412,8 +412,8 @@ static void __sub_backward_gpu(void* selfPtr) {
 // all), so only 'a's DATA needs the chained path here.
 static void __square_backward_gpu(void* selfPtr) {
     unsafe {
-        struct Tensor* selfT = (struct Tensor*)selfPtr;
-        &Tensor a = __tensor_parent(selfT, 0UL);
+        FloatTensor* selfT = (FloatTensor*)selfPtr;
+        &FloatTensor a = __tensor_parent(selfT, 0UL);
         if (!a->requiresGrad) return;
         __tensor_ensure_grad(a);
 
@@ -451,8 +451,8 @@ static void __square_backward_gpu(void* selfPtr) {
 
 static void __relu_backward_gpu(void* selfPtr) {
     unsafe {
-        struct Tensor* selfT = (struct Tensor*)selfPtr;
-        &Tensor a = __tensor_parent(selfT, 0UL);
+        FloatTensor* selfT = (FloatTensor*)selfPtr;
+        &FloatTensor a = __tensor_parent(selfT, 0UL);
         if (!a->requiresGrad) return;
         __tensor_ensure_grad(a);
         if (!mps_available()) { __relu_backward(selfPtr); return; }
@@ -515,9 +515,9 @@ static void __relu_backward_gpu(void* selfPtr) {
 
 static void __matmul_backward_gpu(void* selfPtr) {
     unsafe {
-        struct Tensor* selfT = (struct Tensor*)selfPtr;
-        &Tensor a = __tensor_parent(selfT, 0UL);
-        &Tensor b = __tensor_parent(selfT, 1UL);
+        FloatTensor* selfT = (FloatTensor*)selfPtr;
+        &FloatTensor a = __tensor_parent(selfT, 0UL);
+        &FloatTensor b = __tensor_parent(selfT, 1UL);
         unsigned long m = a->shape[0];
         unsigned long k = a->shape[1];
         unsigned long n = b->shape[1];
@@ -657,12 +657,12 @@ static void __matmul_backward_gpu(void* selfPtr) {
     }
 }
 
-&Tensor Tensor::relu_gpu() const {
+&FloatTensor FloatTensor::relu_gpu() const {
     if (!mps_available()) { return self.relu(); }
-    &Tensor out = __tensor_alloc_uninit_like(self);
+    &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe {
         if (mps_batch_is_active()) {
-            void* chainedBuf = __mps_chain_data_lookup((struct Tensor*)self);
+            void* chainedBuf = __mps_chain_data_lookup((FloatTensor*)self);
             int ok;
             if (chainedBuf != (void*)0) {
                 // 'a' is itself still-pending output from an earlier op
@@ -710,14 +710,14 @@ static void __matmul_backward_gpu(void* selfPtr) {
     return out;
 }
 
-&Tensor Tensor::sum_gpu() const {
+&FloatTensor FloatTensor::sum_gpu() const {
     if (!mps_available()) { return self.sum(); }
     unsigned long one[1];
     unsafe { one[0] = 1UL; }
-    &Tensor out = __tensor_alloc(one, 1UL, 0);
+    &FloatTensor out = __tensor_alloc(one, 1UL, 0);
     unsafe {
         if (mps_batch_is_active()) {
-            void* chainedBuf = __mps_chain_data_lookup((struct Tensor*)self);
+            void* chainedBuf = __mps_chain_data_lookup((FloatTensor*)self);
             int ok;
             if (chainedBuf != (void*)0) {
                 // out->data[0] isn't valid until mps_batch_end()'s deferred
@@ -755,7 +755,7 @@ static void __matmul_backward_gpu(void* selfPtr) {
 // Shared by tensor_matmul_gpu's batched and non-batched CPU-fallback
 // paths (dispatch failed despite a device being present) -- same i,p,j
 // loop as tensor_matmul's CPU path (see its comment for why that order).
-static void __tensor_matmul_cpu_into(&Tensor out, &Tensor a, &Tensor b,
+static void __tensor_matmul_cpu_into(&FloatTensor out, &FloatTensor a, &FloatTensor b,
                                       unsigned long m, unsigned long k, unsigned long n) {
     unsafe {
         unsigned long i = 0UL;
@@ -781,15 +781,15 @@ static void __tensor_matmul_cpu_into(&Tensor out, &Tensor a, &Tensor b,
     }
 }
 
-&Tensor tensor_matmul_gpu(const &Tensor a, const &Tensor b) {
+&FloatTensor tensor_matmul_gpu(const &FloatTensor a, const &FloatTensor b) {
     if (!mps_available()) { return tensor_matmul(a, b); }
 
     unsigned long m; unsigned long k; unsigned long n;
     unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
-    &Tensor out = Tensor::new_2d(m, n, 0);
+    &FloatTensor out = FloatTensor::new_2d(m, n, 0);
     unsafe {
         if (mps_batch_is_active()) {
-            void* chainedBuf = __mps_chain_data_lookup((struct Tensor*)a);
+            void* chainedBuf = __mps_chain_data_lookup((FloatTensor*)a);
             int ok;
             if (chainedBuf != (void*)0) {
                 ok = mps_matmul_f32_chained(chainedBuf, (const float*)b->data, (float*)out->data, m, k, n);

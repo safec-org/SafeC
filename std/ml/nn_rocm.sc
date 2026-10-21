@@ -2060,11 +2060,11 @@ static int nr_alloc_(&RocmBuf b, unsigned long n) {
     return b.dev != 0UL;
 }
 
-static int nr_tensor_ok_(const &Tensor t, unsigned long size) {
+static int nr_tensor_ok_(const &FloatTensor t, unsigned long size) {
     unsafe { return t->size == size; }
 }
 
-static int nr_upload_(&RocmBuf b, const &Tensor t, unsigned long size) {
+static int nr_upload_(&RocmBuf b, const &FloatTensor t, unsigned long size) {
     if (!nr_tensor_ok_(t, size) || !nr_alloc_(b, size)) return 0;
     unsafe { return rocm_write(*b, (const &float)(const float*)t->data, size); }
 }
@@ -2174,7 +2174,7 @@ static int nr_push_(&RocmNet n, struct RocmLayer L) {
     return 1;
 }
 
-int RocmNet::add_linear(const &Tensor w, const &Tensor b, int act) {
+int RocmNet::add_linear(const &FloatTensor w, const &FloatTensor b, int act) {
     unsigned long in;
     unsigned long out;
     unsafe {
@@ -2201,7 +2201,7 @@ static int nr_add_linear_raw_(&RocmNet n, const &float w, const &float b, unsign
     return nr_push_(n, L);
 }
 
-static int nr_add_conv_(&RocmNet n, int kind, const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH,
+static int nr_add_conv_(&RocmNet n, int kind, const &FloatTensor w, const &FloatTensor b, unsigned long inC, unsigned long inH,
                         unsigned long inW, const &Conv2dSpec spec, int act) {
     struct RocmLayer L = nr_layer_(kind, act, inC, inH, inW);
     L.conv = *spec;
@@ -2229,23 +2229,23 @@ static int nr_add_conv_(&RocmNet n, int kind, const &Tensor w, const &Tensor b, 
     return nr_push_(n, L);
 }
 
-int RocmNet::add_conv2d_ex(const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH, unsigned long inW,
+int RocmNet::add_conv2d_ex(const &FloatTensor w, const &FloatTensor b, unsigned long inC, unsigned long inH, unsigned long inW,
                            const &Conv2dSpec spec, int act) {
     return nr_add_conv_(self, ROCM_LAYER_CONV, w, b, inC, inH, inW, spec, act);
 }
 
-int RocmNet::add_conv_transpose2d_ex(const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH,
+int RocmNet::add_conv_transpose2d_ex(const &FloatTensor w, const &FloatTensor b, unsigned long inC, unsigned long inH,
                                      unsigned long inW, const &Conv2dSpec spec, int act) {
     return nr_add_conv_(self, ROCM_LAYER_CONVT, w, b, inC, inH, inW, spec, act);
 }
 
-int RocmNet::add_conv2d(const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH, unsigned long inW,
+int RocmNet::add_conv2d(const &FloatTensor w, const &FloatTensor b, unsigned long inC, unsigned long inH, unsigned long inW,
                         unsigned long kernel, unsigned long stride, unsigned long padding, int act) {
     struct Conv2dSpec s = Conv2dSpec::new(kernel, stride, padding);
     return nr_add_conv_(self, ROCM_LAYER_CONV, w, b, inC, inH, inW, &s, act);
 }
 
-int RocmNet::add_conv_transpose2d(const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH,
+int RocmNet::add_conv_transpose2d(const &FloatTensor w, const &FloatTensor b, unsigned long inC, unsigned long inH,
                                   unsigned long inW, unsigned long kernel, unsigned long stride,
                                   unsigned long padding, int act) {
     struct Conv2dSpec s = Conv2dSpec::new(kernel, stride, padding);
@@ -2307,7 +2307,7 @@ int RocmNet::add_reshape(unsigned long channels, unsigned long height, unsigned 
     return nr_add_reshape_(self, channels, height, width, ACT_NONE);
 }
 
-int RocmNet::add_batchnorm(const &Tensor gamma, const &Tensor beta, const &Tensor runMean, const &Tensor runVar,
+int RocmNet::add_batchnorm(const &FloatTensor gamma, const &FloatTensor beta, const &FloatTensor runMean, const &FloatTensor runVar,
                            float momentum, float eps, int act) {
     struct RocmLayer L;
     if (!nr_geom_layer_(self, ROCM_LAYER_BATCHNORM, act, &L)) return 0;
@@ -2319,7 +2319,7 @@ int RocmNet::add_batchnorm(const &Tensor gamma, const &Tensor beta, const &Tenso
     return nr_push_(self, L);
 }
 
-int RocmNet::add_groupnorm(const &Tensor gamma, const &Tensor beta, unsigned long groups, float eps, int act) {
+int RocmNet::add_groupnorm(const &FloatTensor gamma, const &FloatTensor beta, unsigned long groups, float eps, int act) {
     struct RocmLayer L;
     if (!nr_geom_layer_(self, ROCM_LAYER_GROUPNORM, act, &L)) return 0;
     if (groups == 0UL || L.inC % groups != 0UL) { self.ok = 0; return 0; }
@@ -2348,7 +2348,7 @@ unsigned long RocmNet::add_save() {
     return self.layers.length() - 1UL;
 }
 
-int RocmNet::add_skip(unsigned long slot, ?&Tensor projW, ?&Tensor projB, int act) {
+int RocmNet::add_skip(unsigned long slot, ?&FloatTensor projW, ?&FloatTensor projB, int act) {
     struct RocmLayer L;
     if (!nr_geom_layer_(self, ROCM_LAYER_ADD, act, &L)) return 0;
     if (slot >= self.layers.length() || self.layers.at(slot).kind != ROCM_LAYER_SAVE) { self.ok = 0; return 0; }
@@ -2539,7 +2539,7 @@ static unsigned long nr_w_rows_(const &RocmLayer L) {
     return L.kind == ROCM_LAYER_CONV ? L.outC : L.inC;
 }
 
-int RocmNet::spectral_norm(const &Tensor u) {
+int RocmNet::spectral_norm(const &FloatTensor u) {
     unsigned long c = self.layers.length();
     if (!self.ok || c == 0UL) { self.ok = 0; return 0; }
     &RocmLayer L = self.layers.at(c - 1UL);
@@ -2601,7 +2601,7 @@ struct RocmNet RocmNet::from_convnet(const &ConvNet c, unsigned long maxBatch) {
             if (l.slot >= slots.length()) { n.ok = 0; }
             else if (k == CONV_LAYER_CONCAT) { n.add_concat(*slots.at(l.slot)); }
             else if (l.flag) {
-                n.add_skip(*slots.at(l.slot), (?&Tensor)*c.params.at(l.param), (?&Tensor)*c.params.at(l.param + 1UL), l.act);
+                n.add_skip(*slots.at(l.slot), (?&FloatTensor)*c.params.at(l.param), (?&FloatTensor)*c.params.at(l.param + 1UL), l.act);
             } else {
                 n.add_skip(*slots.at(l.slot), null, null, l.act);
             }
@@ -2631,7 +2631,7 @@ unsigned long RocmNet::out_dim() const {
 
 // Copies every (w, b) pair (stats 0) or batch norm's (runMean, runVar)
 // (stats 1) between the net and host tensors.
-static int nr_transfer_(&RocmNet n, &Vec<&Tensor> ts, int stats, int download) {
+static int nr_transfer_(&RocmNet n, &Vec<&FloatTensor> ts, int stats, int download) {
     if (!n.ok) return 0;
     unsigned long k = 0UL;
     unsigned long i = 0UL;
@@ -2641,7 +2641,7 @@ static int nr_transfer_(&RocmNet n, &Vec<&Tensor> ts, int stats, int download) {
             // a spectral norm's u
             unsigned long rows = nr_w_rows_(L);
             if (k + 1UL > ts.length()) return 0;
-            &Tensor tu = *ts.at(k);
+            &FloatTensor tu = *ts.at(k);
             if (!nr_tensor_ok_(tu, rows)) return 0;
             unsafe {
                 if (download) { if (!rocm_read(nr_at_(L.aux, 0UL, rows), (&float)(float*)tu->data, rows)) return 0; }
@@ -2654,8 +2654,8 @@ static int nr_transfer_(&RocmNet n, &Vec<&Tensor> ts, int stats, int download) {
             if (k + 2UL > ts.length()) return 0;
             struct RocmBuf a = stats ? L.runMean : L.w;
             struct RocmBuf b = stats ? L.runVar : L.b;
-            &Tensor ta = *ts.at(k);
-            &Tensor tb = *ts.at(k + 1UL);
+            &FloatTensor ta = *ts.at(k);
+            &FloatTensor tb = *ts.at(k + 1UL);
             if (!nr_tensor_ok_(ta, a.len) || !nr_tensor_ok_(tb, b.len)) return 0;
             unsafe {
                 if (download) {
@@ -2673,20 +2673,20 @@ static int nr_transfer_(&RocmNet n, &Vec<&Tensor> ts, int stats, int download) {
     return k == ts.length() && (download || rocm_sync());
 }
 
-int RocmNet::download(&Vec<&Tensor> params) const {
+int RocmNet::download(&Vec<&FloatTensor> params) const {
     unsafe { return nr_transfer_((&RocmNet)self, params, 0, 1); }
 }
 
-int RocmNet::upload(const &Vec<&Tensor> params) {
-    unsafe { return nr_transfer_(self, (&Vec<&Tensor>)params, 0, 0); }
+int RocmNet::upload(const &Vec<&FloatTensor> params) {
+    unsafe { return nr_transfer_(self, (&Vec<&FloatTensor>)params, 0, 0); }
 }
 
-int RocmNet::download_stats(&Vec<&Tensor> buffers) const {
+int RocmNet::download_stats(&Vec<&FloatTensor> buffers) const {
     unsafe { return nr_transfer_((&RocmNet)self, buffers, 1, 1); }
 }
 
-int RocmNet::upload_stats(const &Vec<&Tensor> buffers) {
-    unsafe { return nr_transfer_(self, (&Vec<&Tensor>)buffers, 1, 0); }
+int RocmNet::upload_stats(const &Vec<&FloatTensor> buffers) {
+    unsafe { return nr_transfer_(self, (&Vec<&FloatTensor>)buffers, 1, 0); }
 }
 
 int RocmNet::download_convnet(&ConvNet c) const {
@@ -4007,10 +4007,10 @@ static void nr_vae_finish_(&RocmVae d, const &Mlp muHead, const &Mlp logvarHead)
     unsigned long H = muHead.inDim;
     unsigned long L = d.latent;
     unsafe {
-        &Tensor wm = *muHead.params.at(0UL);
-        &Tensor bm = *muHead.params.at(1UL);
-        &Tensor wl = *logvarHead.params.at(0UL);
-        &Tensor bl = *logvarHead.params.at(1UL);
+        &FloatTensor wm = *muHead.params.at(0UL);
+        &FloatTensor bm = *muHead.params.at(1UL);
+        &FloatTensor wl = *logvarHead.params.at(0UL);
+        &FloatTensor bl = *logvarHead.params.at(1UL);
         float* w = (float*)malloc(sizeof(float) * H * 2UL * L);
         float* b = (float*)malloc(sizeof(float) * 2UL * L);
         if (w == (float*)0 || b == (float*)0) { free((void*)w); free((void*)b); d.ok = 0; return; }
@@ -4085,10 +4085,10 @@ static int nr_vae_head_download_(const &RocmVae d, &Mlp muHead, &Mlp logvarHead)
         float* b = (float*)malloc(sizeof(float) * 2UL * L);
         if (w != (float*)0 && b != (float*)0 && rocm_read(hl.w, (&float)w, H * 2UL * L) &&
             rocm_read(hl.b, (&float)b, 2UL * L)) {
-            &Tensor wm = *muHead.params.at(0UL);
-            &Tensor bm = *muHead.params.at(1UL);
-            &Tensor wl = *logvarHead.params.at(0UL);
-            &Tensor bl = *logvarHead.params.at(1UL);
+            &FloatTensor wm = *muHead.params.at(0UL);
+            &FloatTensor bm = *muHead.params.at(1UL);
+            &FloatTensor wl = *logvarHead.params.at(0UL);
+            &FloatTensor bl = *logvarHead.params.at(1UL);
             unsigned long r = 0UL;
             while (r < H) {
                 unsigned long j = 0UL;
@@ -4336,8 +4336,8 @@ static unsigned long nr_gan_t_(const &RocmGan g, unsigned long c) {
 
 // Shared by both constructors once gen / disc are built: optimizers,
 // averaged-generator buffers (uploaded from emaParams / emaStats), scratch.
-static void nr_gan_finish_(&RocmGan d, const &Optimizer optG, const &Optimizer optD, const &Vec<&Tensor> emaParams,
-                           const &Vec<&Tensor> emaStats) {
+static void nr_gan_finish_(&RocmGan d, const &Optimizer optG, const &Optimizer optD, const &Vec<&FloatTensor> emaParams,
+                           const &Vec<&FloatTensor> emaStats) {
     d.ema = vec_new();
     d.emaSrc = vec_new();
     d.ok = d.ok && d.gen.ok && d.disc.ok;
@@ -4592,12 +4592,12 @@ struct GanLosses RocmGan::train(const &Dataset data, unsigned long epochs, unsig
     return last;
 }
 
-static int nr_download_list_(const &Vec<struct RocmBuf> bufs, unsigned long from, &Vec<&Tensor> ts) {
+static int nr_download_list_(const &Vec<struct RocmBuf> bufs, unsigned long from, &Vec<&FloatTensor> ts) {
     unsigned long i = 0UL;
     while (i < ts.length()) {
         if (from + i >= bufs.length()) return 0;
         struct RocmBuf b = *bufs.at(from + i);
-        &Tensor t = *ts.at(i);
+        &FloatTensor t = *ts.at(i);
         if (!nr_tensor_ok_(t, b.len)) return 0;
         unsafe { if (!rocm_read(b, (&float)(float*)t->data, b.len)) return 0; }
         i = i + 1UL;
@@ -4666,7 +4666,7 @@ static void nr_param_list_(const &RocmNet n, &Vec<struct RocmBuf> out) {
 
 // One row through a net: obs (dim values) uploaded through 'stage' into
 // obs1, the n outputs read back into stage.
-static int nr_forward1_(&RocmNet net, struct RocmBuf obs1, const &Tensor obs, unsigned long dim, &heap float stage,
+static int nr_forward1_(&RocmNet net, struct RocmBuf obs1, const &FloatTensor obs, unsigned long dim, &heap float stage,
                         unsigned long n) {
     unsafe {
         if (!rocm_write(obs1, (const &float)(const float*)obs->data, dim)) return 0;
@@ -4738,7 +4738,7 @@ float RocmDqn::epsilon() const {
     return self.cfg.epsStart + f * (self.cfg.epsEnd - self.cfg.epsStart);
 }
 
-unsigned long RocmDqn::act(const &Tensor obs, int explore) {
+unsigned long RocmDqn::act(const &FloatTensor obs, int explore) {
     if (explore && self.rng.uniform() < self.epsilon()) return self.rng.below(self.actions);
     if (!self.ok || !nr_forward1_(&self.q, self.obs1, obs, self.obsDim, self.stage, self.actions)) return 0UL;
     unsafe { return nr_argmax_((const &float)(const float*)self.stage, self.actions, &self.rng); }
@@ -4791,7 +4791,7 @@ static int nr_dqn_update_(&RocmDqn d) {
     return d.cfg.targetEvery > 0UL || nr_soft_update_(&d.tParams, &d.qParams, d.state, d.cfg.tau, 2);
 }
 
-int RocmDqn::observe(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminal) {
+int RocmDqn::observe(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminal) {
     if (!self.ok) return -1;
     unsigned long D = self.obsDim;
     unsigned long W = 2UL * D + 3UL;
@@ -4897,7 +4897,7 @@ struct RocmPolicy RocmPolicy::new(const &PolicyAgent a, unsigned long maxRollout
     return r;
 }
 
-unsigned long RocmPolicy::act(const &Tensor obs, int sample) {
+unsigned long RocmPolicy::act(const &FloatTensor obs, int sample) {
     if (!self.ok || !nr_forward1_(&self.policy, self.obs1, obs, self.obsDim, self.stage, self.actions)) return 0UL;
     unsigned long A = self.actions;
     unsigned long choice = 0UL;
@@ -4919,7 +4919,7 @@ unsigned long RocmPolicy::act(const &Tensor obs, int sample) {
     return choice;
 }
 
-void RocmPolicy::record(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminated,
+void RocmPolicy::record(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminated,
                         int truncated) {
     unsafe {
         unsigned long i = 0UL;
@@ -5375,9 +5375,9 @@ struct RocmDqnAgent RocmDqnAgent::new(struct Dqn d) {
 
 float RocmDqnAgent::epsilon() { return self.dev.epsilon(); }
 
-unsigned long RocmDqnAgent::act(const &Tensor obs, int explore) { return self.dev.act(obs, explore); }
+unsigned long RocmDqnAgent::act(const &FloatTensor obs, int explore) { return self.dev.act(obs, explore); }
 
-int RocmDqnAgent::observe(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminal) {
+int RocmDqnAgent::observe(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminal) {
     return self.dev.observe(obs, action, reward, next, terminal);
 }
 
@@ -5396,9 +5396,9 @@ struct RocmPgAgent RocmPgAgent::new(struct PolicyAgent a, const &TrainerOptions 
     return p;
 }
 
-unsigned long RocmPgAgent::act(const &Tensor obs, int sample) { return self.dev.act(obs, sample); }
+unsigned long RocmPgAgent::act(const &FloatTensor obs, int sample) { return self.dev.act(obs, sample); }
 
-void RocmPgAgent::record(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminated,
+void RocmPgAgent::record(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminated,
                          int truncated) {
     self.dev.record(obs, action, reward, next, terminated, truncated);
 }

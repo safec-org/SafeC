@@ -12,7 +12,7 @@
 extern void* malloc(unsigned long size);
 extern void free(void* ptr);
 
-static void drop_(&Tensor t) {
+static void drop_(&FloatTensor t) {
     t->free();
     unsafe { free((void*)t); }
 }
@@ -23,8 +23,8 @@ void t_adagrad_lion() {
     kinds[0] = OPT_ADAGRAD; kinds[1] = OPT_LION;
     int k = 0;
     while (k < 2) {
-        &Tensor w = Tensor::new_2d(1UL, 3UL, 1);
-        &Tensor target = Tensor::new_2d(1UL, 3UL, 0);
+        &FloatTensor w = FloatTensor::new_2d(1UL, 3UL, 1);
+        &FloatTensor target = FloatTensor::new_2d(1UL, 3UL, 0);
         unsafe { target->data[0] = (float)1.0; target->data[1] = (float)-2.0; target->data[2] = (float)0.5; }
         struct Optimizer opt = Optimizer::new(kinds[k], kinds[k] == OPT_ADAGRAD ? (float)0.5 : (float)0.01);
         opt.weightDecay = (float)0.0;
@@ -52,7 +52,7 @@ void t_adagrad_lion() {
 }
 
 // ── Gradient checks ──────────────────────────────────────────────────────────
-static &Tensor gc_loss_(int which, &Tensor x, const &Tensor aux, const &AdaLN ad, const &Tensor cond) {
+static &FloatTensor gc_loss_(int which, &FloatTensor x, const &FloatTensor aux, const &AdaLN ad, const &FloatTensor cond) {
     if (which == 0) return (tensor_mul(x.layer_norm((float)0.00001), aux)).sum();
     if (which == 1) return (tensor_mul(tensor_mul_row(x, aux.slice_cols(0UL, 1UL)), aux)).sum();
     if (which == 2) return tensor_mul(x.slice_cols(1UL, 2UL), aux.slice_cols(0UL, 2UL)).sum();
@@ -62,9 +62,9 @@ static &Tensor gc_loss_(int which, &Tensor x, const &Tensor aux, const &AdaLN ad
 
 static double grad_check_(int which) {
     struct Rng rng = Rng::new(3UL + (unsigned long)which);
-    &Tensor x = Tensor::new_2d(4UL, 4UL, 1);
-    &Tensor aux = Tensor::new_2d(4UL, 4UL, 0);
-    &Tensor cond = Tensor::new_2d(4UL, 3UL, 0);
+    &FloatTensor x = FloatTensor::new_2d(4UL, 4UL, 1);
+    &FloatTensor aux = FloatTensor::new_2d(4UL, 4UL, 0);
+    &FloatTensor cond = FloatTensor::new_2d(4UL, 3UL, 0);
     rng.fill_uniform(x, (float)-1.0, (float)1.0);
     rng.fill_uniform(aux, (float)-1.0, (float)1.0);
     rng.fill_uniform(cond, (float)-1.0, (float)1.0);
@@ -135,14 +135,14 @@ void t_norm_grad_checks() {
 
 void t_mul_row_grad() {
     // tensor_mul_row's gradient for the row vector itself
-    &Tensor x = Tensor::new_2d(3UL, 2UL, 0);
-    &Tensor g = Tensor::new_1d(2UL, 1);
+    &FloatTensor x = FloatTensor::new_2d(3UL, 2UL, 0);
+    &FloatTensor g = FloatTensor::new_1d(2UL, 1);
     unsafe {
         unsigned long i = 0UL;
         while (i < 6UL) { x->data[i] = (float)(i + 1UL); i = i + 1UL; }
         g->data[0] = (float)2.0; g->data[1] = (float)-1.0;
     }
-    &Tensor y = tensor_mul_row(x, g);
+    &FloatTensor y = tensor_mul_row(x, g);
     unsafe { ASSERT_TRUE(y->data[0] == (float)2.0 && y->data[1] == (float)-2.0 && y->data[5] == (float)-6.0); }
     y.sum().backward();
     unsafe { ASSERT_TRUE(g->grad[0] == (float)9.0 && g->grad[1] == (float)12.0); }   // column sums
@@ -151,10 +151,10 @@ void t_mul_row_grad() {
 // ── LayerNorm / AdaLN ────────────────────────────────────────────────────────
 void t_layer_norm() {
     struct Rng rng = Rng::new(9UL);
-    &Tensor x = Tensor::new_2d(5UL, 16UL, 0);
+    &FloatTensor x = FloatTensor::new_2d(5UL, 16UL, 0);
     rng.fill_normal(x, (float)3.0, (float)2.0);
     struct LayerNorm ln = LayerNorm::new(16UL);
-    &Tensor y = ln.forward(x);
+    &FloatTensor y = ln.forward(x);
     unsafe {
         unsigned long r = 0UL;
         while (r < 5UL) {
@@ -168,7 +168,7 @@ void t_layer_norm() {
     }
     // a fresh AdaLN is a plain LayerNorm with a zero gate
     struct AdaLN ad = AdaLN::new(16UL, 4UL, 1);
-    &Tensor cond = Tensor::new_2d(5UL, 4UL, 0);
+    &FloatTensor cond = FloatTensor::new_2d(5UL, 4UL, 0);
     rng.fill_normal(cond, (float)0.0, (float)1.0);
     struct AdaLNOut o = ad.forward(x, cond);
     unsafe {
@@ -191,10 +191,10 @@ struct CondModel {
     unsigned long classes;
 };
 
-static &Tensor cond_loss_(&CondModel m, const &Tensor xy, const &Tensor labels) {
+static &FloatTensor cond_loss_(&CondModel m, const &FloatTensor xy, const &FloatTensor labels) {
     unsigned long n = 8UL;
-    &Tensor x = xy.slice_cols(0UL, n);
-    &Tensor target = xy.slice_cols(n, n);
+    &FloatTensor x = xy.slice_cols(0UL, n);
+    &FloatTensor target = xy.slice_cols(n, n);
     struct AdaLNOut o = m.ad.forward(x, labels.one_hot(m.classes));
     return tensor_mse_loss(o.out, target);
 }
@@ -242,18 +242,18 @@ void t_adaln_conditioning() {
 }
 
 // ── LoRA ─────────────────────────────────────────────────────────────────────
-static &Tensor base_loss_(&Mlp m, const &Tensor x, const &Tensor y) {
+static &FloatTensor base_loss_(&Mlp m, const &FloatTensor x, const &FloatTensor y) {
     return tensor_cross_entropy_loss(m.forward(x), y);
 }
-static &Tensor base_logits_(&Mlp m, const &Tensor x) { return m.forward(x); }
-static &Tensor lora_loss_(&LoraMlp l, const &Tensor x, const &Tensor y) {
+static &FloatTensor base_logits_(&Mlp m, const &FloatTensor x) { return m.forward(x); }
+static &FloatTensor lora_loss_(&LoraMlp l, const &FloatTensor x, const &FloatTensor y) {
     return tensor_cross_entropy_loss(l.forward(x), y);
 }
-static &Tensor lora_logits_(&LoraMlp l, const &Tensor x) { return l.forward(x); }
-static &Tensor qlora_loss_(&QLoraMlp q, const &Tensor x, const &Tensor y) {
+static &FloatTensor lora_logits_(&LoraMlp l, const &FloatTensor x) { return l.forward(x); }
+static &FloatTensor qlora_loss_(&QLoraMlp q, const &FloatTensor x, const &FloatTensor y) {
     return tensor_cross_entropy_loss(q.forward(x), y);
 }
-static &Tensor qlora_logits_(&QLoraMlp q, const &Tensor x) { return q.forward(x); }
+static &FloatTensor qlora_logits_(&QLoraMlp q, const &FloatTensor x) { return q.forward(x); }
 
 // Task A: moons. Task B: the same points, rotated 90 degrees, with the
 // labels swapped -- a new task the frozen base gets wrong.
@@ -278,7 +278,7 @@ static float checksum_(const &Mlp m) {
     double s = 0.0;
     unsigned long i = 0UL;
     while (i < m.params.length()) {
-        &Tensor p = *m.params.at(i);
+        &FloatTensor p = *m.params.at(i);
         unsafe { unsigned long j = 0UL; while (j < p->size) { s = s + (double)p->data[j] * (double)(j % 7UL + 1UL); j = j + 1UL; } }
         i = i + 1UL;
     }
@@ -311,8 +311,8 @@ void t_lora() {
     struct LoraMlp ft = LoraMlp::attach(&base, &cfg);
     // B starts at zero: the adapted network equals the base
     Autograd::get().set_enabled(0);
-    &Tensor y0 = base.forward(b.x);
-    &Tensor y1 = ft.forward(b.x);
+    &FloatTensor y0 = base.forward(b.x);
+    &FloatTensor y1 = ft.forward(b.x);
     unsafe { unsigned long i = 0UL; while (i < y0->size) { ASSERT_TRUE(y0->data[i] == y1->data[i]); i = i + 1UL; } }
     Autograd::get().set_enabled(1);
     // trainable: r * (in + out) per layer (1040 here, 23% of this small base;
@@ -330,9 +330,9 @@ void t_lora() {
 
     // merging folds the update into the base weights
     Autograd::get().set_enabled(0);
-    &Tensor ya = ft.forward(b.x);
+    &FloatTensor ya = ft.forward(b.x);
     ft.merge();
-    &Tensor yb = base.forward(b.x);
+    &FloatTensor yb = base.forward(b.x);
     unsafe {
         unsigned long i = 0UL;
         while (i < ya->size) { float d = ya->data[i] - yb->data[i]; ASSERT_TRUE(d < (float)1e-3 && d > (float)-1e-3); i = i + 1UL; }
@@ -348,7 +348,7 @@ void t_lora() {
 // ── NF4 / QLoRA ──────────────────────────────────────────────────────────────
 void t_nf4() {
     // values on the NF4 grid come back exactly
-    &Tensor g = Tensor::new_2d(2UL, 8UL, 0);
+    &FloatTensor g = FloatTensor::new_2d(2UL, 8UL, 0);
     unsafe {
         float lv[16];
         lv[0] = (float)-1.0; lv[1] = (float)-0.6961928009986877; lv[2] = (float)-0.5250730514526367;
@@ -361,20 +361,20 @@ void t_nf4() {
         while (i < 16UL) { g->data[i] = lv[i] * (float)0.5; i = i + 1UL; }
     }
     struct Nf4Tensor qg = Nf4Tensor::quantize(g, 16UL, 0);
-    &Tensor gd = qg.dequantize();
+    &FloatTensor gd = qg.dequantize();
     unsafe { unsigned long i = 0UL; while (i < 16UL) { ASSERT_TRUE(gd->data[i] == g->data[i]); i = i + 1UL; } }
     qg.free();
 
     // Gaussian weights: small relative error at ~4.5 bits (4.1 with double quantization)
     struct Rng rng = Rng::new(1UL);
     unsigned long rows = 256UL; unsigned long cols = 256UL;
-    &Tensor w = Tensor::new_2d(rows, cols, 0);
+    &FloatTensor w = FloatTensor::new_2d(rows, cols, 0);
     rng.fill_normal(w, (float)0.0, (float)0.02);
     int dq = 0;
     double errs[2];
     while (dq < 2) {
         struct Nf4Tensor q = Nf4Tensor::quantize(w, NF4_BLOCK, dq);
-        &Tensor wd = q.dequantize();
+        &FloatTensor wd = q.dequantize();
         double se = 0.0; double s2 = 0.0;
         unsafe {
             unsigned long i = 0UL;

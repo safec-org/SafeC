@@ -44,19 +44,19 @@ namespace std {
 
 trait Parameterized {
     // Appends every trained tensor, always in the same order.
-    void collect_params(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
     // Appends what a copy or a file carries: the trained tensors, then the
     // non-trained buffers (batch norm running statistics, spectral norms' u).
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
 }
 
 trait Forward {
-    &Tensor forward(const &Tensor x);
+    &FloatTensor forward(const &FloatTensor x);
 }
 
 trait Objective {
     // The model's own training loss on a batch (1 element).
-    &Tensor loss(const &Tensor x, const &Tensor y);
+    &FloatTensor loss(const &FloatTensor x, const &FloatTensor y);
 }
 
 trait Module : Parameterized + Forward {}
@@ -64,16 +64,16 @@ trait Module : Parameterized + Forward {}
 trait LossModel : Parameterized + Objective {}
 
 trait CondModule : Parameterized {
-    &Tensor forward(const &Tensor x, const &Tensor c);   // c: the conditioning
+    &FloatTensor forward(const &FloatTensor x, const &FloatTensor c);   // c: the conditioning
 }
 
 trait Recurrent : Parameterized {
-    &Tensor forward(const &Tensor x_t, const &Tensor h_prev);   // -> h_t
+    &FloatTensor forward(const &FloatTensor x_t, const &FloatTensor h_prev);   // -> h_t
 }
 
 trait Generative {
     // n new samples; labels (n class indices) for a conditional model, else null.
-    &Tensor sample(unsigned long n, ?&Tensor labels);
+    &FloatTensor sample(unsigned long n, ?&FloatTensor labels);
 }
 
 // ── Parameters, files, copies: any Parameterized ────────────────────────────
@@ -81,7 +81,7 @@ trait Generative {
 // Every trained tensor into o.
 generic<M: Parameterized>
 void model_add_params(const &M m, &Optimizer o) {
-    struct Vec<&Tensor> ps = vec_new();
+    struct Vec<&FloatTensor> ps = vec_new();
     m.collect_params(&ps);
     unsigned long i = 0UL;
     while (i < ps.length()) { o.add(*ps.at(i)); i = i + 1UL; }
@@ -91,12 +91,12 @@ void model_add_params(const &M m, &Optimizer o) {
 // Trained values.
 generic<M: Parameterized>
 unsigned long model_param_count(const &M m) {
-    struct Vec<&Tensor> ps = vec_new();
+    struct Vec<&FloatTensor> ps = vec_new();
     m.collect_params(&ps);
     unsigned long n = 0UL;
     unsigned long i = 0UL;
     while (i < ps.length()) {
-        &Tensor p = *ps.at(i);
+        &FloatTensor p = *ps.at(i);
         unsafe { n = n + p->size; }
         i = i + 1UL;
     }
@@ -108,7 +108,7 @@ unsigned long model_param_count(const &M m) {
 // into a model built with the same shapes. 1 on success.
 generic<M: Parameterized>
 int model_save_file(const &M m, const &char path) {
-    struct Vec<&Tensor> ts = vec_new();
+    struct Vec<&FloatTensor> ts = vec_new();
     m.collect_state(&ts);
     int ok = tensors_save(&ts, path);
     ts.free();
@@ -117,7 +117,7 @@ int model_save_file(const &M m, const &char path) {
 
 generic<M: Parameterized>
 int model_load_file(&M m, const &char path) {
-    struct Vec<&Tensor> ts = vec_new();
+    struct Vec<&FloatTensor> ts = vec_new();
     m.collect_state(&ts);
     int ok = tensors_load(&ts, path);
     ts.free();
@@ -128,15 +128,15 @@ int model_load_file(&M m, const &char path) {
 // target networks, averaged generators. Returns 0 on a shape mismatch.
 generic<M: Parameterized>
 int model_soft_update(&M dst, const &M src, float tau) {
-    struct Vec<&Tensor> d = vec_new();
-    struct Vec<&Tensor> s = vec_new();
+    struct Vec<&FloatTensor> d = vec_new();
+    struct Vec<&FloatTensor> s = vec_new();
     dst.collect_state(&d);
     src.collect_state(&s);
     int ok = d.length() == s.length();
     unsigned long i = 0UL;
     while (ok && i < d.length()) {
-        &Tensor a = *d.at(i);
-        &Tensor b = *s.at(i);
+        &FloatTensor a = *d.at(i);
+        &FloatTensor b = *s.at(i);
         unsafe {
             if (a->size != b->size) { ok = 0; }
             else {
@@ -158,8 +158,8 @@ int model_copy(&M dst, const &M src) { return model_soft_update(dst, src, (float
 
 // A built-in loss (TRAIN_LOSS_*) of m's output against y.
 generic<M: Module>
-&Tensor module_loss(&M m, int loss, const &Tensor x, const &Tensor y) {
-    &Tensor out = m.forward(x);
+&FloatTensor module_loss(&M m, int loss, const &FloatTensor x, const &FloatTensor y) {
+    &FloatTensor out = m.forward(x);
     if (loss == TRAIN_LOSS_MSE) return tensor_mse_loss(out, y);
     if (loss == TRAIN_LOSS_BCE) return tensor_bce_logits_loss(out, y);
     return tensor_cross_entropy_loss(out, y);
@@ -167,9 +167,9 @@ generic<M: Module>
 
 // forward(x) without recording gradients.
 generic<M: Module>
-&Tensor module_predict(&M m, const &Tensor x) {
+&FloatTensor module_predict(&M m, const &FloatTensor x) {
     struct GradGuard noGrad = Autograd::get().no_grad();
-    &Tensor y = m.forward(x);
+    &FloatTensor y = m.forward(x);
     noGrad.restore();
     return y;
 }
@@ -224,7 +224,7 @@ float module_evaluate(&M m, int loss, const &Dataset data, unsigned long batchSi
     unsigned long rows = 0UL;
     stepArena.begin();
     while (dl.next(&b)) {
-        &Tensor l = module_loss(m, loss, b.x, b.y);
+        &FloatTensor l = module_loss(m, loss, b.x, b.y);
         unsafe { sum = sum + (double)l->data[0] * (double)b.rows; }
         rows = rows + b.rows;
         stepArena.reset();
@@ -310,7 +310,7 @@ float model_evaluate(&M m, const &Dataset data, unsigned long batchSize) {
     unsigned long rows = 0UL;
     stepArena.begin();
     while (dl.next(&b)) {
-        &Tensor l = m.loss(b.x, b.y);
+        &FloatTensor l = m.loss(b.x, b.y);
         unsafe { sum = sum + (double)l->data[0] * (double)b.rows; }
         rows = rows + b.rows;
         stepArena.reset();
@@ -326,17 +326,17 @@ float model_evaluate(&M m, const &Dataset data, unsigned long batchSize) {
 
 // Internal: row t of xs as [1, cols] (its own index tensor: the gather's
 // backward pass reads it).
-&Tensor recurrent_row_(const &Tensor xs, unsigned long t);
+&FloatTensor recurrent_row_(const &FloatTensor xs, unsigned long t);
 
 // Runs a cell over a sequence xs [T, inputSize] from h0 [1, hiddenSize] and
 // returns the last hidden state [1, hiddenSize] (differentiable through every
 // step).
 generic<C: Recurrent>
-&Tensor recurrent_run(&C cell, const &Tensor xs, const &Tensor h0) {
+&FloatTensor recurrent_run(&C cell, const &FloatTensor xs, const &FloatTensor h0) {
     unsigned long T = 0UL;
     unsafe { T = xs->shape[0]; }
     if (T == 0UL) return h0.add_scalar((float)0.0);
-    &Tensor h = cell.forward(recurrent_row_(xs, 0UL), h0);
+    &FloatTensor h = cell.forward(recurrent_row_(xs, 0UL), h0);
     unsigned long t = 1UL;
     while (t < T) {
         h = cell.forward(recurrent_row_(xs, t), h);

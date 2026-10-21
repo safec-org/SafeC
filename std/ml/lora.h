@@ -44,17 +44,17 @@ struct LoraConfig {
 // LoraMlp::detach; the base must outlive the adapter.
 struct LoraMlp {
     &Mlp base;
-    struct Vec<&Tensor> A;    // per layer [in, r]
-    struct Vec<&Tensor> B;    // per layer [r, out]
+    struct Vec<&FloatTensor> A;    // per layer [in, r]
+    struct Vec<&FloatTensor> B;    // per layer [r, out]
     struct LoraConfig cfg;
     float scale;              // alpha / r
     struct Rng rng;
 
-    &Tensor forward(const &Tensor x);
+    &FloatTensor forward(const &FloatTensor x);
     // Parameterized (module.h): the adapters (A_0, B_0, A_1, B_1, ...), which
     // are all that trains and all a LoRA file holds.
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     // W += scale * A B in the base for every layer, then B = 0: the base alone
     // now computes what the adapted network did.
     void merge();
@@ -83,8 +83,8 @@ struct Nf4Tensor {
     unsigned long bytes() const;   // storage, all parts
     void free();
 
-    static struct Nf4Tensor quantize(const &Tensor w, unsigned long blockSize, int doubleQuant);
-    &Tensor dequantize() const;   // [rows, cols], no grad
+    static struct Nf4Tensor quantize(const &FloatTensor w, unsigned long blockSize, int doubleQuant);
+    &FloatTensor dequantize() const;   // [rows, cols], no grad
 };
 
 // ── QLoRA ────────────────────────────────────────────────────────────────────
@@ -92,9 +92,9 @@ struct Nf4Tensor {
 // Mlp may be freed afterwards.
 struct QLoraMlp {
     struct Vec<struct Nf4Tensor> W;
-    struct Vec<&Tensor> bias;
-    struct Vec<&Tensor> A;
-    struct Vec<&Tensor> B;
+    struct Vec<&FloatTensor> bias;
+    struct Vec<&FloatTensor> A;
+    struct Vec<&FloatTensor> B;
     unsigned long nLayers;
     int act;
     int outAct;
@@ -102,10 +102,10 @@ struct QLoraMlp {
     float scale;
     struct Rng rng;
 
-    &Tensor forward(const &Tensor x);
+    &FloatTensor forward(const &FloatTensor x);
     // Parameterized (module.h): the adapters, as for LoraMlp.
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     unsigned long base_bytes() const;        // the frozen base at rest
     void free();
 

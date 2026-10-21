@@ -7,9 +7,9 @@
 
 namespace std {
 
-&Tensor tensor_add_cuda(const &Tensor a, const &Tensor b) {
+&FloatTensor tensor_add_cuda(const &FloatTensor a, const &FloatTensor b) {
     if (!cuda_available()) { return tensor_add(a, b); }
-    &Tensor out = __tensor_alloc_uninit_like(a);
+    &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         int ok = cuda_add_f32((const float*)a->data, (const float*)b->data, (float*)out->data, out->size);
         if (!ok) {
@@ -21,9 +21,9 @@ namespace std {
     return out;
 }
 
-&Tensor tensor_sub_cuda(const &Tensor a, const &Tensor b) {
+&FloatTensor tensor_sub_cuda(const &FloatTensor a, const &FloatTensor b) {
     if (!cuda_available()) { return tensor_sub(a, b); }
-    &Tensor out = __tensor_alloc_uninit_like(a);
+    &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         int ok = cuda_sub_f32((const float*)a->data, (const float*)b->data, (float*)out->data, out->size);
         if (!ok) {
@@ -35,9 +35,9 @@ namespace std {
     return out;
 }
 
-&Tensor tensor_mul_cuda(const &Tensor a, const &Tensor b) {
+&FloatTensor tensor_mul_cuda(const &FloatTensor a, const &FloatTensor b) {
     if (!cuda_available()) { return tensor_mul(a, b); }
-    &Tensor out = __tensor_alloc_uninit_like(a);
+    &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         int ok = cuda_mul_f32((const float*)a->data, (const float*)b->data, (float*)out->data, out->size);
         if (!ok) {
@@ -49,9 +49,9 @@ namespace std {
     return out;
 }
 
-&Tensor Tensor::scale_cuda(float k) const {
+&FloatTensor FloatTensor::scale_cuda(float k) const {
     if (!cuda_available()) { return self.scale(k); }
-    &Tensor out = __tensor_alloc_uninit_like(self);
+    &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe {
         int ok = cuda_scale_f32((const float*)self->data, k, (float*)out->data, out->size);
         if (!ok) {
@@ -64,9 +64,9 @@ namespace std {
     return out;
 }
 
-&Tensor Tensor::relu_cuda() const {
+&FloatTensor FloatTensor::relu_cuda() const {
     if (!cuda_available()) { return self.relu(); }
-    &Tensor out = __tensor_alloc_uninit_like(self);
+    &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe {
         int ok = cuda_relu_f32((const float*)self->data, (float*)out->data, out->size);
         if (!ok) {
@@ -82,11 +82,11 @@ namespace std {
     return out;
 }
 
-&Tensor Tensor::sum_cuda() const {
+&FloatTensor FloatTensor::sum_cuda() const {
     if (!cuda_available()) { return self.sum(); }
     unsigned long one[1];
     unsafe { one[0] = 1UL; }
-    &Tensor out = __tensor_alloc(one, 1UL, 0);
+    &FloatTensor out = __tensor_alloc(one, 1UL, 0);
     unsafe {
         float fout[1];
         int ok = cuda_sum_f32((const float*)self->data, (float*)fout, self->size);
@@ -103,12 +103,12 @@ namespace std {
     return out;
 }
 
-&Tensor tensor_matmul_cuda(const &Tensor a, const &Tensor b) {
+&FloatTensor tensor_matmul_cuda(const &FloatTensor a, const &FloatTensor b) {
     if (!cuda_available()) { return tensor_matmul(a, b); }
 
     unsigned long m; unsigned long k; unsigned long n;
     unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
-    &Tensor out = Tensor::new_2d(m, n, 0);
+    &FloatTensor out = FloatTensor::new_2d(m, n, 0);
     unsafe {
         int ok = cuda_matmul_f32((const float*)a->data, (const float*)b->data, (float*)out->data, m, k, n);
         if (!ok) {
@@ -138,12 +138,12 @@ namespace std {
     return out;
 }
 
-&Tensor tensor_matmul_cuda_blas(const &Tensor a, const &Tensor b) {
+&FloatTensor tensor_matmul_cuda_blas(const &FloatTensor a, const &FloatTensor b) {
     if (!cuda_available()) { return tensor_matmul(a, b); }
 
     unsigned long m; unsigned long k; unsigned long n;
     unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
-    &Tensor out = Tensor::new_2d(m, n, 0);
+    &FloatTensor out = FloatTensor::new_2d(m, n, 0);
     unsafe {
         int ok = cuda_matmul_f32_blas((const float*)a->data, (const float*)b->data, (float*)out->data, m, k, n);
         if (!ok) {

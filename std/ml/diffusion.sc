@@ -50,35 +50,35 @@ void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd
     }
 }
 
-&Tensor ddpm_sampler_step(const &Tensor x_t, const &Tensor epsPred,
-                           float beta_t, float alphaBar_t, const &Tensor noise) {
+&FloatTensor ddpm_sampler_step(const &FloatTensor x_t, const &FloatTensor epsPred,
+                           float beta_t, float alphaBar_t, const &FloatTensor noise) {
     float invSqrtAlpha = (float)1.0 / sqrt_f((float)1.0 - beta_t);
     float coef = beta_t / sqrt_f((float)1.0 - alphaBar_t);
-    &Tensor scaledEps = epsPred.scale(coef);
-    &Tensor diff = tensor_sub(x_t, scaledEps);
-    &Tensor mean = diff.scale(invSqrtAlpha);
+    &FloatTensor scaledEps = epsPred.scale(coef);
+    &FloatTensor diff = tensor_sub(x_t, scaledEps);
+    &FloatTensor mean = diff.scale(invSqrtAlpha);
     float sigma_t = sqrt_f(beta_t);
-    &Tensor scaledNoise = noise.scale(sigma_t);
-    &Tensor out = tensor_add(mean, scaledNoise);
+    &FloatTensor scaledNoise = noise.scale(sigma_t);
+    &FloatTensor out = tensor_add(mean, scaledNoise);
 
     scaledEps->free(); diff->free(); mean->free(); scaledNoise->free();
     unsafe { free((void*)scaledEps); free((void*)diff); free((void*)mean); free((void*)scaledNoise); }
     return out;
 }
 
-&Tensor ddim_sampler_step(const &Tensor x_t, const &Tensor epsPred,
+&FloatTensor ddim_sampler_step(const &FloatTensor x_t, const &FloatTensor epsPred,
                            float alphaBar_t, float alphaBar_prev) {
     float sqrtAlphaBar_t = sqrt_f(alphaBar_t);
     float sqrtOneMinusAlphaBar_t = sqrt_f((float)1.0 - alphaBar_t);
-    &Tensor scaledEps1 = epsPred.scale(sqrtOneMinusAlphaBar_t);
-    &Tensor numer = tensor_sub(x_t, scaledEps1);
-    &Tensor x0Pred = numer.scale((float)1.0 / sqrtAlphaBar_t);
+    &FloatTensor scaledEps1 = epsPred.scale(sqrtOneMinusAlphaBar_t);
+    &FloatTensor numer = tensor_sub(x_t, scaledEps1);
+    &FloatTensor x0Pred = numer.scale((float)1.0 / sqrtAlphaBar_t);
 
     float sqrtAlphaBarPrev = sqrt_f(alphaBar_prev);
     float sqrtOneMinusAlphaBarPrev = sqrt_f((float)1.0 - alphaBar_prev);
-    &Tensor term1 = x0Pred.scale(sqrtAlphaBarPrev);
-    &Tensor term2 = epsPred.scale(sqrtOneMinusAlphaBarPrev);
-    &Tensor out = tensor_add(term1, term2);
+    &FloatTensor term1 = x0Pred.scale(sqrtAlphaBarPrev);
+    &FloatTensor term2 = epsPred.scale(sqrtOneMinusAlphaBarPrev);
+    &FloatTensor out = tensor_add(term1, term2);
 
     scaledEps1->free(); numer->free(); x0Pred->free(); term1->free(); term2->free();
     unsafe {
@@ -88,7 +88,7 @@ void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd
     return out;
 }
 
-&Tensor dpm_solver_1_step(const &Tensor x_cur, const &Tensor epsPred,
+&FloatTensor dpm_solver_1_step(const &FloatTensor x_cur, const &FloatTensor epsPred,
                            float alpha_cur, float sigma_cur,
                            float alpha_next, float sigma_next) {
     float lambda_cur = log_f(alpha_cur / sigma_cur);
@@ -96,16 +96,16 @@ void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd
     float h = lambda_next - lambda_cur;
     float expm1h = exp_f(h) - (float)1.0;
 
-    &Tensor term1 = x_cur.scale(sigma_next / sigma_cur);
-    &Tensor term2 = epsPred.scale(alpha_next * expm1h);
-    &Tensor out = tensor_sub(term1, term2);
+    &FloatTensor term1 = x_cur.scale(sigma_next / sigma_cur);
+    &FloatTensor term2 = epsPred.scale(alpha_next * expm1h);
+    &FloatTensor out = tensor_sub(term1, term2);
 
     term1->free(); term2->free();
     unsafe { free((void*)term1); free((void*)term2); }
     return out;
 }
 
-struct DpmMidpoint dpm_midpoint_(const &Tensor x_cur, const &Tensor pred, float alpha_cur, float sigma_cur,
+struct DpmMidpoint dpm_midpoint_(const &FloatTensor x_cur, const &FloatTensor pred, float alpha_cur, float sigma_cur,
                                  float alpha_next, float sigma_next, int pp) {
     float lambda_cur = log_f(alpha_cur / sigma_cur);
     float lambda_next = log_f(alpha_next / sigma_next);
@@ -116,8 +116,8 @@ struct DpmMidpoint dpm_midpoint_(const &Tensor x_cur, const &Tensor pred, float 
     // eps form: x_s = (sigma_s/sigma) x - alpha_s (e^{h/2} - 1) eps
     // x0 form:  x_s = (sigma_s/sigma) x - alpha_s (e^{-h/2} - 1) x0
     float expm1Half = pp ? exp_f((float)-0.5 * h) - (float)1.0 : exp_f((float)0.5 * h) - (float)1.0;
-    &Tensor sTerm1 = x_cur.scale(sigma_s / sigma_cur);
-    &Tensor sTerm2 = pred.scale(alpha_s * expm1Half);
+    &FloatTensor sTerm1 = x_cur.scale(sigma_s / sigma_cur);
+    &FloatTensor sTerm2 = pred.scale(alpha_s * expm1Half);
     struct DpmMidpoint mp;
     mp.x_s = tensor_sub(sTerm1, sTerm2);
     mp.sigma_s = sigma_s;
@@ -127,23 +127,23 @@ struct DpmMidpoint dpm_midpoint_(const &Tensor x_cur, const &Tensor pred, float 
     return mp;
 }
 
-&Tensor dpm_finish_(const &Tensor x_cur, const &Tensor predMid, float sigma_cur, float alpha_next,
+&FloatTensor dpm_finish_(const &FloatTensor x_cur, const &FloatTensor predMid, float sigma_cur, float alpha_next,
                     float sigma_next, float h, int pp) {
     float expm1 = pp ? exp_f(-h) - (float)1.0 : exp_f(h) - (float)1.0;
-    &Tensor nTerm1 = x_cur.scale(sigma_next / sigma_cur);
-    &Tensor nTerm2 = predMid.scale(alpha_next * expm1);
-    &Tensor out = tensor_sub(nTerm1, nTerm2);
+    &FloatTensor nTerm1 = x_cur.scale(sigma_next / sigma_cur);
+    &FloatTensor nTerm2 = predMid.scale(alpha_next * expm1);
+    &FloatTensor out = tensor_sub(nTerm1, nTerm2);
     dpm_drop_(nTerm1);
     dpm_drop_(nTerm2);
     return out;
 }
 
-void dpm_drop_(&Tensor t) {
+void dpm_drop_(&FloatTensor t) {
     t->free();
     unsafe { free((void*)t); }
 }
 
-&Tensor dpm_solver_pp_1_step(const &Tensor x_cur, const &Tensor x0Pred,
+&FloatTensor dpm_solver_pp_1_step(const &FloatTensor x_cur, const &FloatTensor x0Pred,
                               float alpha_cur, float sigma_cur,
                               float alpha_next, float sigma_next) {
     float lambda_cur = log_f(alpha_cur / sigma_cur);
@@ -151,9 +151,9 @@ void dpm_drop_(&Tensor t) {
     float h = lambda_next - lambda_cur;
     float expm1NegH = exp_f(-h) - (float)1.0;
 
-    &Tensor term1 = x_cur.scale(sigma_next / sigma_cur);
-    &Tensor term2 = x0Pred.scale(alpha_next * expm1NegH);
-    &Tensor out = tensor_sub(term1, term2);
+    &FloatTensor term1 = x_cur.scale(sigma_next / sigma_cur);
+    &FloatTensor term2 = x0Pred.scale(alpha_next * expm1NegH);
+    &FloatTensor out = tensor_sub(term1, term2);
 
     term1->free(); term2->free();
     unsafe { free((void*)term1); free((void*)term2); }

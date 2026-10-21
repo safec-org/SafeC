@@ -759,12 +759,15 @@ llvm::Function *CodeGen::genFunctionProto(FunctionDecl &fn) {
         // unit that instantiates Vec<int>::push emits its own identical copy,
         // and the linker keeps one (linkonce_odr, in a COMDAT where the object
         // format has them) instead of reporting duplicate symbols.
+        // A bodyless instance (a generic struct's method declared outside the
+        // body, defined in another file) is a plain external declaration.
+        bool linkOnce = fn.isMonomorphized && fn.body;
         auto linkage = fn.isStatic
             ? llvm::Function::InternalLinkage
-            : fn.isMonomorphized ? llvm::Function::LinkOnceODRLinkage
-                                 : llvm::Function::ExternalLinkage;
+            : linkOnce ? llvm::Function::LinkOnceODRLinkage
+                       : llvm::Function::ExternalLinkage;
         llvmFn = llvm::Function::Create(fnType, linkage, fn.name, *mod_);
-        if (fn.isMonomorphized && !fn.isStatic) {
+        if (linkOnce && !fn.isStatic) {
             llvm::Triple t(mod_->getTargetTriple().empty()
                 ? llvm::Triple(llvm::sys::getDefaultTargetTriple()) : mod_->getTargetTriple());
             if (t.supportsCOMDAT()) llvmFn->setComdat(mod_->getOrInsertComdat(fn.name));

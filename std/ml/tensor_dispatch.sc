@@ -5,7 +5,7 @@
 
 namespace std {
 
-&Tensor tensor_matmul_on(const &Tensor a, const &Tensor b, enum Device device) {
+&FloatTensor tensor_matmul_on(const &FloatTensor a, const &FloatTensor b, enum Device device) {
     if (device == DEVICE_CPU_BLAS) { return tensor_matmul_blas(a, b); }
     if (device == DEVICE_MPS) { return tensor_matmul_gpu(a, b); }
     if (device == DEVICE_CUDA) { return tensor_matmul_cuda(a, b); }
@@ -17,7 +17,7 @@ namespace std {
     return tensor_matmul(a, b); // DEVICE_CPU, and the default for any future enum value
 }
 
-&Tensor Tensor::relu_on(enum Device device) const {
+&FloatTensor FloatTensor::relu_on(enum Device device) const {
     if (device == DEVICE_MPS) { return self.relu_gpu(); }
     if (device == DEVICE_CUDA || device == DEVICE_CUDA_BLAS) { return self.relu_cuda(); }
     if (device == DEVICE_ROCM || device == DEVICE_ROCM_BLAS) { return self.relu_rocm(); }

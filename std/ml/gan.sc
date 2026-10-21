@@ -57,7 +57,7 @@ struct Gan Gan::new(unsigned long dataDim, const &GanConfig cfg) {
     return g;
 }
 
-static &Tensor gan_cond_(const &Gan g, const &Tensor x, ?&Tensor labels) {
+static &FloatTensor gan_cond_(const &Gan g, const &FloatTensor x, ?&FloatTensor labels) {
     if (g.cfg.classes > 0UL) {
         match (labels) {
             case some(l): { return tensor_concat_cols(x, l.one_hot(g.cfg.classes)); }
@@ -65,50 +65,50 @@ static &Tensor gan_cond_(const &Gan g, const &Tensor x, ?&Tensor labels) {
         }
         unsigned long m;
         unsafe { m = x->shape[0]; }
-        return tensor_concat_cols(x, Tensor::new_1d(m, 0).one_hot(g.cfg.classes));
+        return tensor_concat_cols(x, FloatTensor::new_1d(m, 0).one_hot(g.cfg.classes));
     }
     return x.add_scalar((float)0.0);
 }
 
-static &Tensor gan_fake_(&Gan g, unsigned long m, ?&Tensor labels, int averaged) {
-    &Tensor z = g.rng.normal_tensor(m, g.cfg.latent);
+static &FloatTensor gan_fake_(&Gan g, unsigned long m, ?&FloatTensor labels, int averaged) {
+    &FloatTensor z = g.rng.normal_tensor(m, g.cfg.latent);
     if (averaged) return g.genEma.forward(gan_cond_(g, z, labels));
     return g.gen.forward(gan_cond_(g, z, labels));
 }
 
-static &Tensor gan_full_(unsigned long m, float v) {
-    &Tensor t = Tensor::new_2d(m, 1UL, 0);
+static &FloatTensor gan_full_(unsigned long m, float v) {
+    &FloatTensor t = FloatTensor::new_2d(m, 1UL, 0);
     t.fill(v);
     return t;
 }
 
-static &Tensor gan_d_loss_(int k, &Tensor dReal, &Tensor dFake, unsigned long m) {
+static &FloatTensor gan_d_loss_(int k, &FloatTensor dReal, &FloatTensor dFake, unsigned long m) {
     if (k == GAN_LSGAN) {
-        &Tensor a = tensor_mse_loss(dReal, gan_full_(m, (float)1.0));
-        &Tensor b = tensor_mse_loss(dFake, gan_full_(m, (float)0.0));
+        &FloatTensor a = tensor_mse_loss(dReal, gan_full_(m, (float)1.0));
+        &FloatTensor b = tensor_mse_loss(dFake, gan_full_(m, (float)0.0));
         return tensor_add(a, b).scale((float)0.5);
     }
     if (k == GAN_WGAN || k == GAN_WGAN_GP) return tensor_sub(dFake.mean(), dReal.mean());
     if (k == GAN_HINGE) {
-        &Tensor a = dReal.scale((float)-1.0).add_scalar((float)1.0).relu().mean();
-        &Tensor b = dFake.add_scalar((float)1.0).relu().mean();
+        &FloatTensor a = dReal.scale((float)-1.0).add_scalar((float)1.0).relu().mean();
+        &FloatTensor b = dFake.add_scalar((float)1.0).relu().mean();
         return tensor_add(a, b);
     }
-    &Tensor a = tensor_bce_logits_loss(dReal, gan_full_(m, (float)1.0));
-    &Tensor b = tensor_bce_logits_loss(dFake, gan_full_(m, (float)0.0));
+    &FloatTensor a = tensor_bce_logits_loss(dReal, gan_full_(m, (float)1.0));
+    &FloatTensor b = tensor_bce_logits_loss(dFake, gan_full_(m, (float)0.0));
     return tensor_add(a, b);
 }
 
-static &Tensor gan_g_loss_(int k, &Tensor dFake, unsigned long m) {
+static &FloatTensor gan_g_loss_(int k, &FloatTensor dFake, unsigned long m) {
     if (k == GAN_LSGAN) return (tensor_mse_loss(dFake, gan_full_(m, (float)1.0))).scale((float)0.5);
     if (k == GAN_WGAN || k == GAN_WGAN_GP || k == GAN_HINGE) return dFake.mean().scale((float)-1.0);
     return tensor_bce_logits_loss(dFake, gan_full_(m, (float)1.0));
 }
 
-static void gan_clip_(const &Vec<&Tensor> params, float c) {
+static void gan_clip_(const &Vec<&FloatTensor> params, float c) {
     unsigned long i = 0UL;
     while (i < params.length()) {
-        &Tensor p = *params.at(i);
+        &FloatTensor p = *params.at(i);
         unsafe {
             unsigned long j = 0UL;
             while (j < p->size) {
@@ -121,7 +121,7 @@ static void gan_clip_(const &Vec<&Tensor> params, float c) {
     }
 }
 
-static float gan_value_(const &Tensor t) {
+static float gan_value_(const &FloatTensor t) {
     unsafe { return t->data[0]; }
 }
 
@@ -151,17 +151,17 @@ static void gan_arena_restore_(?&TensorArena outer) {
 #define GAN_GP_EPS 0.01
 
 generic<T>
-static &Tensor gan_gp_core_(&T g, fn &Tensor(&T, const &Tensor, ?&Tensor) disc, const &Tensor xh,
-                            ?&Tensor labels, float weight, &float value) {
+static &FloatTensor gan_gp_core_(&T g, fn &FloatTensor(&T, const &FloatTensor, ?&FloatTensor) disc, const &FloatTensor xh,
+                            ?&FloatTensor labels, float weight, &float value) {
     unsigned long m;
     unsigned long d;
     unsafe { m = xh->shape[0]; d = xh->size / m; }
-    &Tensor xg = xh.detach();
+    &FloatTensor xg = xh.detach();
     unsafe { xg->requiresGrad = 1; }
     disc(g, xg, labels).sum().backward();
-    &Tensor xp = xh.detach();
-    &Tensor xm = xh.detach();
-    &Tensor coef = Tensor::new_2d(m, 1UL, 0);
+    &FloatTensor xp = xh.detach();
+    &FloatTensor xm = xh.detach();
+    &FloatTensor coef = FloatTensor::new_2d(m, 1UL, 0);
     double pen = 0.0;
     float eps = (float)GAN_GP_EPS;
     unsafe {
@@ -186,13 +186,13 @@ static &Tensor gan_gp_core_(&T g, fn &Tensor(&T, const &Tensor, ?&Tensor) disc, 
         }
     }
     *value = (float)((double)weight * pen / (double)m);
-    &Tensor diff = tensor_sub(disc(g, xp, labels), disc(g, xm, labels));
+    &FloatTensor diff = tensor_sub(disc(g, xp, labels), disc(g, xm, labels));
     return tensor_mul(diff, coef).sum();
 }
 
 // Rows t*real + (1 - t)*fake, t ~ U(0, 1) per row.
-static &Tensor gan_interpolates_(&Rng rng, const &Tensor real, const &Tensor fake) {
-    &Tensor xh = real.detach();
+static &FloatTensor gan_interpolates_(&Rng rng, const &FloatTensor real, const &FloatTensor fake) {
+    &FloatTensor xh = real.detach();
     unsafe {
         unsigned long m = real->shape[0];
         unsigned long d = real->size / m;
@@ -211,15 +211,15 @@ static &Tensor gan_interpolates_(&Rng rng, const &Tensor real, const &Tensor fak
     return xh;
 }
 
-static &Tensor gan_disc_mlp_(&Gan g, const &Tensor x, ?&Tensor labels) {
+static &FloatTensor gan_disc_mlp_(&Gan g, const &FloatTensor x, ?&FloatTensor labels) {
     return g.disc.forward(gan_cond_(g, x, labels));
 }
 
-&Tensor gan_gradient_penalty_(&Gan g, const &Tensor xh, ?&Tensor labels, &float value) {
+&FloatTensor gan_gradient_penalty_(&Gan g, const &FloatTensor xh, ?&FloatTensor labels, &float value) {
     return gan_gp_core_(g, gan_disc_mlp_, xh, labels, g.cfg.gpWeight, value);
 }
 
-struct GanLosses Gan::train_step(const &Tensor real, ?&Tensor labels) {
+struct GanLosses Gan::train_step(const &FloatTensor real, ?&FloatTensor labels) {
     struct GanLosses out;
     out.d = (float)0.0;
     out.g = (float)0.0;
@@ -230,14 +230,14 @@ struct GanLosses Gan::train_step(const &Tensor real, ?&Tensor labels) {
     unsigned long c = 0UL;
     unsigned long nc = self.cfg.nCritic == 0UL ? 1UL : self.cfg.nCritic;
     while (c < nc) {
-        &Tensor fake = gan_fake_(self, m, labels, 0).detach();
-        &Tensor dReal = self.disc.forward(gan_cond_(self, real, labels));
-        &Tensor dFake = self.disc.forward(gan_cond_(self, fake, labels));
-        &Tensor dl = gan_d_loss_(self.cfg.loss, dReal, dFake, m);
+        &FloatTensor fake = gan_fake_(self, m, labels, 0).detach();
+        &FloatTensor dReal = self.disc.forward(gan_cond_(self, real, labels));
+        &FloatTensor dFake = self.disc.forward(gan_cond_(self, fake, labels));
+        &FloatTensor dl = gan_d_loss_(self.cfg.loss, dReal, dFake, m);
         out.d = gan_value_(dl);
         if (self.cfg.loss == GAN_WGAN_GP) {
             float gp = (float)0.0;
-            &Tensor term = gan_gp_core_(self, gan_disc_mlp_, gan_interpolates_(&self.rng, real, fake), labels,
+            &FloatTensor term = gan_gp_core_(self, gan_disc_mlp_, gan_interpolates_(&self.rng, real, fake), labels,
                                         self.cfg.gpWeight, &gp);
             dl = tensor_add(dl, term);
             out.d = out.d + gp;
@@ -249,9 +249,9 @@ struct GanLosses Gan::train_step(const &Tensor real, ?&Tensor labels) {
         self.stepArena.reset();
         c = c + 1UL;
     }
-    &Tensor fake2 = gan_fake_(self, m, labels, 0);
-    &Tensor dFake2 = self.disc.forward(gan_cond_(self, fake2, labels));
-    &Tensor gl = gan_g_loss_(self.cfg.loss, dFake2, m);
+    &FloatTensor fake2 = gan_fake_(self, m, labels, 0);
+    &FloatTensor dFake2 = self.disc.forward(gan_cond_(self, fake2, labels));
+    &FloatTensor gl = gan_g_loss_(self.cfg.loss, dFake2, m);
     self.optG.zero_grad();
     gl.backward();
     self.optG.step();
@@ -280,7 +280,7 @@ struct GanLosses Gan::train(const &Dataset data, unsigned long epochs, unsigned 
         batchArena.begin();
         while (dl.next(&b)) {
             tensor_arena_end();
-            if (self.cfg.classes > 0UL) last = self.train_step(b.x, (?&Tensor)b.y);
+            if (self.cfg.classes > 0UL) last = self.train_step(b.x, (?&FloatTensor)b.y);
             else last = self.train_step(b.x, null);
             batchArena.reset();
             batchArena.begin();
@@ -294,20 +294,20 @@ struct GanLosses Gan::train(const &Dataset data, unsigned long epochs, unsigned 
     return last;
 }
 
-&Tensor Gan::sample(unsigned long n, ?&Tensor labels) {
+&FloatTensor Gan::sample(unsigned long n, ?&FloatTensor labels) {
     ?&TensorArena outer = tensor_arena_current_();
     struct GradGuard noGrad = Autograd::get().no_grad();
     self.stepArena.begin();
-    &Tensor fake = gan_fake_(self, n, labels, 1);
+    &FloatTensor fake = gan_fake_(self, n, labels, 1);
     tensor_arena_end();
-    &Tensor out = fake.detach();      // no arena active: on the heap
+    &FloatTensor out = fake.detach();      // no arena active: on the heap
     self.stepArena.reset();
     gan_arena_restore_(outer);
     noGrad.restore();
     return out;
 }
 
-&Tensor Gan::score(const &Tensor x, ?&Tensor labels) {
+&FloatTensor Gan::score(const &FloatTensor x, ?&FloatTensor labels) {
     return self.disc.forward(gan_cond_(self, x, labels));
 }
 
@@ -345,30 +345,30 @@ struct Dcgan Dcgan::new(struct ConvNet gen, struct ConvNet disc, const &GanConfi
 }
 
 // Labels for a conditional DCGAN: the given ones, or class 0.
-static &Tensor dcgan_labels_(unsigned long m, ?&Tensor labels) {
+static &FloatTensor dcgan_labels_(unsigned long m, ?&FloatTensor labels) {
     match (labels) {
         case some(l): { return l; }
         case null: { }
     }
-    return Tensor::new_1d(m, 0);
+    return FloatTensor::new_1d(m, 0);
 }
 
-static &Tensor dcgan_disc_(&Dcgan g, const &Tensor x, ?&Tensor labels) {
+static &FloatTensor dcgan_disc_(&Dcgan g, const &FloatTensor x, ?&FloatTensor labels) {
     if (g.cfg.classes == 0UL) return g.disc.forward(x);
     unsigned long m;
     unsafe { m = x->ndim >= 2UL ? x->shape[0] : 1UL; }
-    &Tensor in = tensor_append_label_channels(x, dcgan_labels_(m, labels), g.cfg.classes, g.disc.inH, g.disc.inW);
+    &FloatTensor in = tensor_append_label_channels(x, dcgan_labels_(m, labels), g.cfg.classes, g.disc.inH, g.disc.inW);
     return g.disc.forward(in);
 }
 
-static &Tensor dcgan_fake_(&Dcgan g, unsigned long m, ?&Tensor labels, int averaged) {
-    &Tensor z = g.rng.normal_tensor(m, g.cfg.latent);
+static &FloatTensor dcgan_fake_(&Dcgan g, unsigned long m, ?&FloatTensor labels, int averaged) {
+    &FloatTensor z = g.rng.normal_tensor(m, g.cfg.latent);
     if (g.cfg.classes > 0UL) z = tensor_concat_cols(z, dcgan_labels_(m, labels).one_hot(g.cfg.classes));
     if (averaged) return g.genEma.forward(z);
     return g.gen.forward(z);
 }
 
-struct GanLosses Dcgan::train_step(const &Tensor real, ?&Tensor labels) {
+struct GanLosses Dcgan::train_step(const &FloatTensor real, ?&FloatTensor labels) {
     struct GanLosses out;
     out.d = (float)0.0;
     out.g = (float)0.0;
@@ -379,14 +379,14 @@ struct GanLosses Dcgan::train_step(const &Tensor real, ?&Tensor labels) {
     unsigned long c = 0UL;
     unsigned long nc = self.cfg.nCritic == 0UL ? 1UL : self.cfg.nCritic;
     while (c < nc) {
-        &Tensor fake = dcgan_fake_(self, m, labels, 0).detach();
-        &Tensor dReal = dcgan_disc_(self, real, labels);
-        &Tensor dFake = dcgan_disc_(self, fake, labels);
-        &Tensor dl = gan_d_loss_(self.cfg.loss, dReal, dFake, m);
+        &FloatTensor fake = dcgan_fake_(self, m, labels, 0).detach();
+        &FloatTensor dReal = dcgan_disc_(self, real, labels);
+        &FloatTensor dFake = dcgan_disc_(self, fake, labels);
+        &FloatTensor dl = gan_d_loss_(self.cfg.loss, dReal, dFake, m);
         out.d = gan_value_(dl);
         if (self.cfg.loss == GAN_WGAN_GP) {
             float gp = (float)0.0;
-            &Tensor term = gan_gp_core_(self, dcgan_disc_, gan_interpolates_(&self.rng, real, fake), labels,
+            &FloatTensor term = gan_gp_core_(self, dcgan_disc_, gan_interpolates_(&self.rng, real, fake), labels,
                                         self.cfg.gpWeight, &gp);
             dl = tensor_add(dl, term);
             out.d = out.d + gp;
@@ -398,7 +398,7 @@ struct GanLosses Dcgan::train_step(const &Tensor real, ?&Tensor labels) {
         self.stepArena.reset();
         c = c + 1UL;
     }
-    &Tensor gl = gan_g_loss_(self.cfg.loss, dcgan_disc_(self, dcgan_fake_(self, m, labels, 0), labels), m);
+    &FloatTensor gl = gan_g_loss_(self.cfg.loss, dcgan_disc_(self, dcgan_fake_(self, m, labels, 0), labels), m);
     self.optG.zero_grad();
     gl.backward();
     self.optG.step();
@@ -424,7 +424,7 @@ struct GanLosses Dcgan::train(const &Dataset data, unsigned long epochs, unsigne
         batchArena.begin();
         while (dl.next(&b)) {
             tensor_arena_end();
-            if (self.cfg.classes > 0UL) last = self.train_step(b.x, (?&Tensor)b.y);
+            if (self.cfg.classes > 0UL) last = self.train_step(b.x, (?&FloatTensor)b.y);
             else last = self.train_step(b.x, null);
             batchArena.reset();
             batchArena.begin();
@@ -438,14 +438,14 @@ struct GanLosses Dcgan::train(const &Dataset data, unsigned long epochs, unsigne
     return last;
 }
 
-&Tensor Dcgan::sample(unsigned long n, ?&Tensor labels) {
+&FloatTensor Dcgan::sample(unsigned long n, ?&FloatTensor labels) {
     ?&TensorArena outer = tensor_arena_current_();
     struct GradGuard noGrad = Autograd::get().no_grad();
     int mode = self.genEma.set_training(0);
     self.stepArena.begin();
-    &Tensor fake = dcgan_fake_(self, n, labels, 1);
+    &FloatTensor fake = dcgan_fake_(self, n, labels, 1);
     tensor_arena_end();
-    &Tensor out = fake.detach();      // no arena active: on the heap
+    &FloatTensor out = fake.detach();      // no arena active: on the heap
     self.stepArena.reset();
     self.genEma.set_training(mode);
     gan_arena_restore_(outer);
@@ -453,14 +453,14 @@ struct GanLosses Dcgan::train(const &Dataset data, unsigned long epochs, unsigne
     return out;
 }
 
-&Tensor Dcgan::score(const &Tensor x, ?&Tensor labels) {
+&FloatTensor Dcgan::score(const &FloatTensor x, ?&FloatTensor labels) {
     int mode = self.disc.set_training(0);
-    &Tensor s = dcgan_disc_(self, x, labels);
+    &FloatTensor s = dcgan_disc_(self, x, labels);
     self.disc.set_training(mode);
     return s;
 }
 
-&Tensor dcgan_gradient_penalty_(&Dcgan g, const &Tensor xh, ?&Tensor labels, &float value) {
+&FloatTensor dcgan_gradient_penalty_(&Dcgan g, const &FloatTensor xh, ?&FloatTensor labels, &float value) {
     return gan_gp_core_(g, dcgan_disc_, xh, labels, g.cfg.gpWeight, value);
 }
 
@@ -473,23 +473,23 @@ void Dcgan::free() {
     self.stepArena.free();
 }
 
-void Gan::collect_params(&Vec<&Tensor> out) const {
+void Gan::collect_params(&Vec<&FloatTensor> out) const {
     self.gen.collect_params(out);
     self.disc.collect_params(out);
 }
 
-void Gan::collect_state(&Vec<&Tensor> out) const {
+void Gan::collect_state(&Vec<&FloatTensor> out) const {
     self.gen.collect_state(out);
     self.genEma.collect_state(out);
     self.disc.collect_state(out);
 }
 
-void Dcgan::collect_params(&Vec<&Tensor> out) const {
+void Dcgan::collect_params(&Vec<&FloatTensor> out) const {
     self.gen.collect_params(out);
     self.disc.collect_params(out);
 }
 
-void Dcgan::collect_state(&Vec<&Tensor> out) const {
+void Dcgan::collect_state(&Vec<&FloatTensor> out) const {
     self.gen.collect_state(out);
     self.genEma.collect_state(out);
     self.disc.collect_state(out);

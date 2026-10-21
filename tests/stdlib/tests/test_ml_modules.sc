@@ -23,14 +23,14 @@
 
 extern void free(void* ptr);
 
-static void tensor_drop(&Tensor t) {
+static void tensor_drop(&FloatTensor t) {
     t->free();
     unsafe { free((void*)t); }
 }
 
 static float absf_(float x) { return x < (float)0.0 ? -x : x; }
 
-static float max_diff_(const &Tensor a, const &Tensor b) {
+static float max_diff_(const &FloatTensor a, const &FloatTensor b) {
     float m = (float)0.0;
     unsafe {
         if (a->size != b->size) return (float)1.0e30;
@@ -40,8 +40,8 @@ static float max_diff_(const &Tensor a, const &Tensor b) {
     return m;
 }
 
-static &Tensor randn_(unsigned long r, unsigned long c, &Rng rng) {
-    &Tensor t = Tensor::new_2d(r, c, 0);
+static &FloatTensor randn_(unsigned long r, unsigned long c, &Rng rng) {
+    &FloatTensor t = FloatTensor::new_2d(r, c, 0);
     rng.fill_normal(t, (float)0.0, (float)1.0);
     return t;
 }
@@ -51,28 +51,28 @@ static &Tensor randn_(unsigned long r, unsigned long c, &Rng rng) {
 // tensors' size; save -> perturb -> load restores the output; a soft update
 // toward a copy with tau 1 is a copy.
 generic<M: Module>
-int module_contract_(&M m, const &Tensor x, unsigned long outCols, const &char path) {
+int module_contract_(&M m, const &FloatTensor x, unsigned long outCols, const &char path) {
     int ok = 1;
-    &Tensor y0 = module_predict(m, x);
+    &FloatTensor y0 = module_predict(m, x);
     unsafe { ok = ok && y0->shape[0] == x->shape[0] && y0->shape[1] == outCols; }
-    struct Vec<&Tensor> ps = vec_new();
+    struct Vec<&FloatTensor> ps = vec_new();
     m.collect_params(&ps);
     unsigned long n = 0UL;
     unsigned long i = 0UL;
-    while (i < ps.length()) { &Tensor p = *ps.at(i); unsafe { n = n + p->size; } i = i + 1UL; }
+    while (i < ps.length()) { &FloatTensor p = *ps.at(i); unsafe { n = n + p->size; } i = i + 1UL; }
     ok = ok && ps.length() > 0UL && n == model_param_count(m);
     ok = ok && model_save_file(m, path);
     // perturb every state tensor, then load it back
-    struct Vec<&Tensor> st = vec_new();
+    struct Vec<&FloatTensor> st = vec_new();
     m.collect_state(&st);
     i = 0UL;
     while (i < st.length()) {
-        &Tensor p = *st.at(i);
+        &FloatTensor p = *st.at(i);
         unsafe { if (p->size > 0UL) p->data[0] = p->data[0] + (float)1.0; }
         i = i + 1UL;
     }
     ok = ok && model_load_file(m, path);
-    &Tensor y1 = module_predict(m, x);
+    &FloatTensor y1 = module_predict(m, x);
     ok = ok && max_diff_(y0, y1) == (float)0.0;
     tensor_drop(y0);
     tensor_drop(y1);
@@ -83,7 +83,7 @@ int module_contract_(&M m, const &Tensor x, unsigned long outCols, const &char p
 
 void t_every_module() {
     struct Rng rng = Rng::new(7UL);
-    &Tensor x8 = randn_(5UL, 8UL, &rng);
+    &FloatTensor x8 = randn_(5UL, 8UL, &rng);
 
     struct Mlp mlp = Mlp::new(8UL, 16UL, 1UL, 3UL, ACT_RELU, ACT_NONE, &rng);
     ASSERT_TRUE(module_contract_(&mlp, x8, 3UL, "build/test_ml_modules_mlp.bin"));
@@ -107,9 +107,9 @@ void t_every_module() {
     struct MultiHeadAttention mha = MultiHeadAttention::new(8UL, 2UL, &rng);
     ASSERT_TRUE(module_contract_(&mha, x8, 8UL, "build/test_ml_modules_mha.bin"));
     // the layer is mha_forward between its projections
-    &Tensor h = mha_forward(tensor_matmul(x8, mha.Wq), tensor_matmul(x8, mha.Wk), tensor_matmul(x8, mha.Wv), 2UL);
-    &Tensor want = tensor_matmul(h, mha.Wo);
-    &Tensor got = mha.forward(x8);
+    &FloatTensor h = mha_forward(tensor_matmul(x8, mha.Wq), tensor_matmul(x8, mha.Wk), tensor_matmul(x8, mha.Wv), 2UL);
+    &FloatTensor want = tensor_matmul(h, mha.Wo);
+    &FloatTensor got = mha.forward(x8);
     ASSERT_TRUE(max_diff_(want, got) < (float)0.000001);
 
     struct Mla mla = Mla::new(8UL, 4UL, 2UL, &rng);
@@ -130,7 +130,7 @@ void t_every_module() {
 }
 
 // ── module_fit / model_fit match the paths they replace ──────────────────────
-static &Tensor clf_loss_(&Mlp m, const &Tensor x, const &Tensor y) {
+static &FloatTensor clf_loss_(&Mlp m, const &FloatTensor x, const &FloatTensor y) {
     return tensor_cross_entropy_loss(m.forward(x), y);
 }
 
@@ -159,8 +159,8 @@ void t_module_fit_matches_trainer_fit() {
     struct Rng r3 = Rng::new(9UL);
     struct Mlp c = Mlp::new(2UL, 16UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &r3);
     ASSERT_TRUE(model_copy(&c, &b));
-    &Tensor yb = module_predict(&b, data.x);
-    &Tensor yc = module_predict(&c, data.x);
+    &FloatTensor yb = module_predict(&b, data.x);
+    &FloatTensor yc = module_predict(&c, data.x);
     ASSERT_TRUE(max_diff_(yb, yc) == (float)0.0);
     tensor_drop(yb);
     tensor_drop(yc);
@@ -186,8 +186,8 @@ void t_model_fit_autoencoders() {
     ASSERT_TRUE(model_save_file(&v, "build/test_ml_modules_vae.bin"));
     struct Vae w = Vae::new(64UL, &cfg);
     ASSERT_TRUE(model_load_file(&w, "build/test_ml_modules_vae.bin"));
-    struct Vec<&Tensor> a = vec_new();
-    struct Vec<&Tensor> b = vec_new();
+    struct Vec<&FloatTensor> a = vec_new();
+    struct Vec<&FloatTensor> b = vec_new();
     v.collect_state(&a);
     w.collect_state(&b);
     float worst = (float)0.0;
@@ -207,18 +207,18 @@ generic<M: Module>
 struct Avg2 {
     M a;
     M b;
-    &Tensor forward(const &Tensor x);
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    &FloatTensor forward(const &FloatTensor x);
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
 };
 generic<M: Module>
-&Tensor Avg2::forward(const &Tensor x) {
+&FloatTensor Avg2::forward(const &FloatTensor x) {
     return tensor_add(self.a.forward(x), self.b.forward(x)).scale((float)0.5);
 }
 generic<M: Module>
-void Avg2::collect_params(&Vec<&Tensor> out) const { self.a.collect_params(out); self.b.collect_params(out); }
+void Avg2::collect_params(&Vec<&FloatTensor> out) const { self.a.collect_params(out); self.b.collect_params(out); }
 generic<M: Module>
-void Avg2::collect_state(&Vec<&Tensor> out) const { self.a.collect_state(out); self.b.collect_state(out); }
+void Avg2::collect_state(&Vec<&FloatTensor> out) const { self.a.collect_state(out); self.b.collect_state(out); }
 
 void t_generic_struct_is_a_module() {
     struct Rng rng = Rng::new(4UL);
@@ -241,8 +241,8 @@ void t_generic_struct_is_a_module() {
 
 // ── Recurrent, Generative, DenoiseModel, CondModule ──────────────────────────
 generic<C: Recurrent>
-float unroll_by_hand_diff_(&C cell, const &Tensor xs, const &Tensor h0) {
-    &Tensor h = cell.forward(recurrent_row_(xs, 0UL), h0);
+float unroll_by_hand_diff_(&C cell, const &FloatTensor xs, const &FloatTensor h0) {
+    &FloatTensor h = cell.forward(recurrent_row_(xs, 0UL), h0);
     unsigned long t = 1UL;
     unsigned long T = 0UL;
     unsafe { T = xs->shape[0]; }
@@ -252,13 +252,13 @@ float unroll_by_hand_diff_(&C cell, const &Tensor xs, const &Tensor h0) {
 
 void t_recurrent_cells() {
     struct Rng rng = Rng::new(5UL);
-    &Tensor xs = randn_(6UL, 3UL, &rng);
-    &Tensor h0 = randn_(1UL, 4UL, &rng);
+    &FloatTensor xs = randn_(6UL, 3UL, &rng);
+    &FloatTensor h0 = randn_(1UL, 4UL, &rng);
     struct RNNCell rc = RNNCell::new(3UL, 4UL);
     struct GRUCell gc = GRUCell::new(3UL, 4UL);
     ASSERT_TRUE(unroll_by_hand_diff_(&rc, xs, h0) == (float)0.0);
     ASSERT_TRUE(unroll_by_hand_diff_(&gc, xs, h0) == (float)0.0);
-    &Tensor last = recurrent_run(&gc, xs, h0);
+    &FloatTensor last = recurrent_run(&gc, xs, h0);
     unsafe { ASSERT_TRUE(last->shape[0] == 1UL && last->shape[1] == 4UL); }
     ASSERT_EQ(model_param_count(&gc), 3UL * (3UL * 4UL + 4UL * 4UL + 4UL + 4UL));
     rc.free(); gc.free();
@@ -266,7 +266,7 @@ void t_recurrent_cells() {
 
 generic<G: Generative>
 unsigned long sample_rows_(&G g, unsigned long n) {
-    &Tensor s = g.sample(n, null);
+    &FloatTensor s = g.sample(n, null);
     unsigned long r = 0UL;
     unsafe { r = s->shape[0]; }
     tensor_drop(s);
@@ -288,27 +288,27 @@ void t_generative_models() {
 // A denoiser whose prediction ignores x: the order-2 solvers then reduce to
 // the order-1 updates with the same prediction.
 struct ConstPredict {
-    &Tensor value;
-    &Tensor predict(const &Tensor x, float sigma);
+    &FloatTensor value;
+    &FloatTensor predict(const &FloatTensor x, float sigma);
 };
-&Tensor ConstPredict::predict(const &Tensor x, float sigma) { return self.value.scale((float)1.0); }
+&FloatTensor ConstPredict::predict(const &FloatTensor x, float sigma) { return self.value.scale((float)1.0); }
 
 void t_denoise_model_solvers() {
     struct Rng rng = Rng::new(6UL);
-    &Tensor x = randn_(3UL, 4UL, &rng);
+    &FloatTensor x = randn_(3UL, 4UL, &rng);
     struct ConstPredict m;
     m.value = randn_(3UL, 4UL, &rng);
-    &Tensor a = dpm_solver_2_step(&m, x, m.value, (float)0.8, (float)0.6, (float)0.95, (float)0.3122);
-    &Tensor b = dpm_solver_1_step(x, m.value, (float)0.8, (float)0.6, (float)0.95, (float)0.3122);
+    &FloatTensor a = dpm_solver_2_step(&m, x, m.value, (float)0.8, (float)0.6, (float)0.95, (float)0.3122);
+    &FloatTensor b = dpm_solver_1_step(x, m.value, (float)0.8, (float)0.6, (float)0.95, (float)0.3122);
     ASSERT_TRUE(max_diff_(a, b) < (float)0.0001);
-    &Tensor c = dpm_solver_pp_2_step(&m, x, m.value, (float)0.8, (float)0.6, (float)0.95, (float)0.3122);
-    &Tensor d = dpm_solver_pp_1_step(x, m.value, (float)0.8, (float)0.6, (float)0.95, (float)0.3122);
+    &FloatTensor c = dpm_solver_pp_2_step(&m, x, m.value, (float)0.8, (float)0.6, (float)0.95, (float)0.3122);
+    &FloatTensor d = dpm_solver_pp_1_step(x, m.value, (float)0.8, (float)0.6, (float)0.95, (float)0.3122);
     ASSERT_TRUE(max_diff_(c, d) < (float)0.0001);
 }
 
 generic<C: CondModule>
-unsigned long cond_rows_(&C m, const &Tensor x, const &Tensor c) {
-    &Tensor y = m.forward(x, c);
+unsigned long cond_rows_(&C m, const &FloatTensor x, const &FloatTensor c) {
+    &FloatTensor y = m.forward(x, c);
     unsigned long r = 0UL;
     unsafe { r = y->shape[0] * 1000UL + y->shape[1]; }
     return r;
@@ -318,10 +318,10 @@ void t_cond_modules() {
     struct Rng rng = Rng::new(8UL);
     struct DiTBlock dit = DiTBlock::new(8UL, 16UL, 4UL, 2UL);
     struct JiT jit = JiT::new(6UL, 8UL, 16UL, 2UL, 2UL);
-    &Tensor x = randn_(5UL, 8UL, &rng);
-    &Tensor c = randn_(1UL, 4UL, &rng);
-    &Tensor patches = randn_(5UL, 6UL, &rng);
-    &Tensor cond = randn_(1UL, 8UL, &rng);
+    &FloatTensor x = randn_(5UL, 8UL, &rng);
+    &FloatTensor c = randn_(1UL, 4UL, &rng);
+    &FloatTensor patches = randn_(5UL, 6UL, &rng);
+    &FloatTensor cond = randn_(1UL, 8UL, &rng);
     ASSERT_EQ(cond_rows_(&dit, x, c), 5008UL);
     ASSERT_EQ(cond_rows_(&jit, patches, cond), 5008UL);
     ASSERT_EQ(model_param_count(&jit), 6UL * 8UL + 2UL * (4UL * 64UL + 8UL * 16UL + 16UL + 16UL * 8UL + 8UL));

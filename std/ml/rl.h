@@ -42,7 +42,7 @@ struct EnvStep {
 
 // ── Bandit ───────────────────────────────────────────────────────────────────
 struct Bandit {
-    &Tensor means;           // [k], drawn from N(0, 1)
+    &FloatTensor means;           // [k], drawn from N(0, 1)
     unsigned long k;
     struct Rng rng;
 
@@ -65,7 +65,7 @@ struct Bandit {
 #define GRID_LEFT  3
 
 struct GridWorld {
-    &Tensor cells;           // [height * width] GRID_* tags, row 0 at the top
+    &FloatTensor cells;           // [height * width] GRID_* tags, row 0 at the top
     unsigned long width;
     unsigned long height;
     unsigned long start;     // state index y * width + x
@@ -85,7 +85,7 @@ struct GridWorld {
     unsigned long reset();                                            // -> start state
     struct EnvStep step(unsigned long action, &unsigned long next);
     // One-hot observation of a state (for neural agents), obs has states() values.
-    void one_hot(unsigned long state, &Tensor obs) const;
+    void one_hot(unsigned long state, &FloatTensor obs) const;
     void free();
 
     // An empty w x h grid, start top-left, goal bottom-right.
@@ -107,10 +107,10 @@ struct CartPole {
     unsigned long maxSteps;  // 500 (CartPole-v1)
     struct Rng rng;
 
-    void reset(&Tensor obs);
+    void reset(&FloatTensor obs);
     // Reward 1 per step; terminated when |x| > 2.4 or |theta| > 12 degrees,
     // truncated at maxSteps.
-    struct EnvStep step(unsigned long action, &Tensor obs);
+    struct EnvStep step(unsigned long action, &FloatTensor obs);
 
     static struct CartPole new(unsigned long seed);
 };
@@ -124,8 +124,8 @@ struct CartPole {
 struct BanditAgent {
     int kind;
     unsigned long k;
-    &Tensor counts;          // pulls per arm
-    &Tensor values;          // sample means (preferences for BANDIT_GRADIENT)
+    &FloatTensor counts;          // pulls per arm
+    &FloatTensor values;          // sample means (preferences for BANDIT_GRADIENT)
     float param;
     float baseline;          // mean reward so far
     unsigned long t;
@@ -140,7 +140,7 @@ struct BanditAgent {
 
 // ══ Tabular TD control ═══════════════════════════════════════════════════════
 struct TabularAgent {
-    &Tensor q;               // [states, actions]
+    &FloatTensor q;               // [states, actions]
     unsigned long states;
     unsigned long actions;
     float alpha;             // step size
@@ -165,17 +165,17 @@ struct TabularAgent {
 
 // ══ DQN ══════════════════════════════════════════════════════════════════════
 struct ReplayBuffer {
-    &Tensor obs;             // [slots, obsDim]
-    &Tensor next;            // [slots, obsDim]
-    &Tensor action;          // [slots]
-    &Tensor reward;          // [slots]
-    &Tensor terminal;        // [slots]
+    &FloatTensor obs;             // [slots, obsDim]
+    &FloatTensor next;            // [slots, obsDim]
+    &FloatTensor action;          // [slots]
+    &FloatTensor reward;          // [slots]
+    &FloatTensor terminal;        // [slots]
     unsigned long slots;
     unsigned long size;
     unsigned long pos;
     unsigned long obsDim;
 
-    void push(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminal);
+    void push(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminal);
     void free();
 
     static struct ReplayBuffer new(unsigned long slots, unsigned long obsDim);
@@ -223,14 +223,14 @@ struct Dqn {
 
     float epsilon() const;
     // explore 1: epsilon-greedy with the current epsilon; 0: greedy.
-    unsigned long act(const &Tensor obs, int explore);
+    unsigned long act(const &FloatTensor obs, int explore);
     // Stores the transition and trains when due; returns the loss, or -1 when
     // no gradient step ran.
-    float observe(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminal);
+    float observe(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminal);
     // Parameterized (module.h): the Q network's parameters; the state adds
     // the target network.
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
     static struct Dqn new(unsigned long obsDim, unsigned long actions, const &DqnConfig cfg);
@@ -286,15 +286,15 @@ struct PolicyAgent {
     float lastEntropy;
 
     // sample 1: draw from the policy; 0: the most likely action.
-    unsigned long act(const &Tensor obs, int sample);
-    void record(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminated,
+    unsigned long act(const &FloatTensor obs, int sample);
+    void record(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminated,
                 int truncated);
     // Trains on the stored rollout with the configured algorithm, clears it,
     // and returns the last loss.
     float update();
     // Parameterized (module.h): the policy and value networks.
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
     static struct PolicyAgent new(unsigned long obsDim, unsigned long actions, const &PgConfig cfg);

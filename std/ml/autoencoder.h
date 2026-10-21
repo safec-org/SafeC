@@ -57,15 +57,15 @@ struct Autoencoder {
     float lastRecon;     // last loss call's reconstruction term
     float lastPenalty;   // ... and its sparsity term
 
-    &Tensor encode(const &Tensor x);         // [m, latent]
-    &Tensor decode(const &Tensor z);         // [m, inDim]
-    &Tensor reconstruct(const &Tensor x);
+    &FloatTensor encode(const &FloatTensor x);         // [m, latent]
+    &FloatTensor decode(const &FloatTensor z);         // [m, inDim]
+    &FloatTensor reconstruct(const &FloatTensor x);
     // Parameterized (module.h).
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
-    &Tensor loss(const &Tensor x, const &Tensor y);
+    &FloatTensor loss(const &FloatTensor x, const &FloatTensor y);
 
     static struct Autoencoder new(unsigned long inDim, const &AutoencoderConfig cfg);
 };
@@ -105,18 +105,18 @@ struct Vae {
     float lastKl;
 
     // mu of q(z|x) (y: class indices, read only by a CVAE).
-    &Tensor encode(const &Tensor x, const &Tensor y);
-    &Tensor decode(const &Tensor z, const &Tensor y);
-    &Tensor reconstruct(const &Tensor x, const &Tensor y);   // decode(mu)
+    &FloatTensor encode(const &FloatTensor x, const &FloatTensor y);
+    &FloatTensor decode(const &FloatTensor z, const &FloatTensor y);
+    &FloatTensor reconstruct(const &FloatTensor x, const &FloatTensor y);   // decode(mu)
     // n new samples from the prior; 'labels' (n class indices) for a CVAE,
     // null for an unconditional VAE.
-    &Tensor sample(unsigned long n, ?&Tensor labels);
+    &FloatTensor sample(unsigned long n, ?&FloatTensor labels);
     // Parameterized (module.h).
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
-    &Tensor loss(const &Tensor x, const &Tensor y);
+    &FloatTensor loss(const &FloatTensor x, const &FloatTensor y);
 
     static struct Vae new(unsigned long inDim, const &VaeConfig cfg);
 };
@@ -149,8 +149,8 @@ struct VqVaeConfig {
 struct VqVae {
     struct Mlp enc;
     struct Mlp dec;
-    &Tensor codebook;             // [codes, latent]
-    &Tensor idle;                 // [codes] batches since each code was last used
+    &FloatTensor codebook;             // [codes, latent]
+    &FloatTensor idle;                 // [codes] batches since each code was last used
     int     initialized;          // codebook set from encoder outputs yet
     struct Rng rng;
     struct VqVaeConfig cfg;
@@ -158,15 +158,15 @@ struct VqVae {
     float lastVq;                 // codebook + commitment terms
     float lastPerplexity;         // exp(entropy) of code use in the last batch
 
-    &Tensor encode(const &Tensor x);         // [m] code indices
-    &Tensor decode(const &Tensor codes);     // indices -> [m, inDim]
-    &Tensor reconstruct(const &Tensor x);
+    &FloatTensor encode(const &FloatTensor x);         // [m] code indices
+    &FloatTensor decode(const &FloatTensor codes);     // indices -> [m, inDim]
+    &FloatTensor reconstruct(const &FloatTensor x);
     // Parameterized (module.h).
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
-    &Tensor loss(const &Tensor x, const &Tensor y);
+    &FloatTensor loss(const &FloatTensor x, const &FloatTensor y);
 
     static struct VqVae new(unsigned long inDim, const &VqVaeConfig cfg);
 };
@@ -201,15 +201,15 @@ struct ConvAutoencoder {
     int   recon;           // RECON_MSE / RECON_BCE
     float lastRecon;
 
-    &Tensor encode(const &Tensor x);
-    &Tensor decode(const &Tensor z);
-    &Tensor reconstruct(const &Tensor x);
+    &FloatTensor encode(const &FloatTensor x);
+    &FloatTensor decode(const &FloatTensor z);
+    &FloatTensor reconstruct(const &FloatTensor x);
     // Parameterized (module.h).
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
-    &Tensor loss(const &Tensor x, const &Tensor y);
+    &FloatTensor loss(const &FloatTensor x, const &FloatTensor y);
 
     static struct ConvAutoencoder new(struct ConvNet enc, struct ConvNet dec, int recon);
 };
@@ -233,18 +233,18 @@ struct ConvVae {
     float lastRecon;
     float lastKl;
 
-    &Tensor encode(const &Tensor x, const &Tensor y);        // mu
-    &Tensor decode(const &Tensor z, const &Tensor y);
-    &Tensor reconstruct(const &Tensor x, const &Tensor y);
+    &FloatTensor encode(const &FloatTensor x, const &FloatTensor y);        // mu
+    &FloatTensor decode(const &FloatTensor z, const &FloatTensor y);
+    &FloatTensor reconstruct(const &FloatTensor x, const &FloatTensor y);
     // n samples from the prior; 'labels' (n class indices) for a conditional
     // VAE, null otherwise.
-    &Tensor sample(unsigned long n, ?&Tensor labels);
+    &FloatTensor sample(unsigned long n, ?&FloatTensor labels);
     // Parameterized (module.h).
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
-    &Tensor loss(const &Tensor x, const &Tensor y);
+    &FloatTensor loss(const &FloatTensor x, const &FloatTensor y);
 
     static struct ConvVae new(struct ConvNet enc, struct ConvNet dec, const &VaeConfig cfg);
 };

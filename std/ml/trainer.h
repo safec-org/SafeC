@@ -71,7 +71,7 @@ struct TrainerOptions {
 };
 
 // Internal: one optimizer step from a loss tensor.
-float trainer_step_(&Optimizer opt, &Tensor loss, float clipNorm);
+float trainer_step_(&Optimizer opt, &FloatTensor loss, float clipNorm);
 
 // Internal: a fresh report, and one epoch's mean loss and step count added.
 struct TrainReport train_report_new_();
@@ -80,14 +80,14 @@ void train_report_epoch_(&TrainReport rep, unsigned long epoch, float mean, unsi
 // Internal: one epoch of trainer_fit over dl (its next pass), the step
 // tensors in stepArena. Returns the mean batch loss and sets *batches.
 generic<T>
-float trainer_epoch_(&T model, fn &Tensor(&T, const &Tensor, const &Tensor) lossFn, &Optimizer opt,
+float trainer_epoch_(&T model, fn &FloatTensor(&T, const &FloatTensor, const &FloatTensor) lossFn, &Optimizer opt,
                      &DataLoader dl, &TensorArena stepArena, float clipNorm, &unsigned long batches) {
     double sum = 0.0;
     unsigned long n = 0UL;
     struct Batch b;
     stepArena.begin();
     while (dl.next(&b)) {
-        &Tensor loss = lossFn(model, b.x, b.y);
+        &FloatTensor loss = lossFn(model, b.x, b.y);
         sum = sum + (double)trainer_step_(opt, loss, clipNorm);
         n = n + 1UL;
         stepArena.reset();
@@ -99,7 +99,7 @@ float trainer_epoch_(&T model, fn &Tensor(&T, const &Tensor, const &Tensor) loss
 }
 
 generic<T>
-struct TrainReport trainer_fit(&T model, fn &Tensor(&T, const &Tensor, const &Tensor) lossFn,
+struct TrainReport trainer_fit(&T model, fn &FloatTensor(&T, const &FloatTensor, const &FloatTensor) lossFn,
                                &Optimizer opt, const &Dataset data, const &TrainConfig cfg) {
     struct TrainReport rep = train_report_new_();
     struct DataLoader dl = DataLoader::new(data, cfg.batchSize, cfg.shuffle, cfg.seed);
@@ -119,7 +119,7 @@ struct TrainReport trainer_fit(&T model, fn &Tensor(&T, const &Tensor, const &Te
 
 // Mean loss over a dataset without gradients (validation).
 generic<T>
-float trainer_evaluate(&T model, fn &Tensor(&T, const &Tensor, const &Tensor) lossFn,
+float trainer_evaluate(&T model, fn &FloatTensor(&T, const &FloatTensor, const &FloatTensor) lossFn,
                        const &Dataset data, unsigned long batchSize) {
     struct DataLoader dl = DataLoader::new(data, batchSize, 0, 0UL);
     struct TensorArena stepArena = TensorArena::new(0UL);
@@ -129,7 +129,7 @@ float trainer_evaluate(&T model, fn &Tensor(&T, const &Tensor, const &Tensor) lo
     unsigned long rows = 0UL;
     stepArena.begin();
     while (dl.next(&b)) {
-        &Tensor loss = lossFn(model, b.x, b.y);
+        &FloatTensor loss = lossFn(model, b.x, b.y);
         unsafe { sum = sum + (double)loss->data[0] * (double)b.rows; }
         rows = rows + b.rows;
         stepArena.reset();
@@ -144,7 +144,7 @@ float trainer_evaluate(&T model, fn &Tensor(&T, const &Tensor, const &Tensor) lo
 // Classification accuracy over a dataset: 'logitsFn' maps a batch to
 // [rows, classes] logits.
 generic<T>
-float trainer_accuracy(&T model, fn &Tensor(&T, const &Tensor) logitsFn,
+float trainer_accuracy(&T model, fn &FloatTensor(&T, const &FloatTensor) logitsFn,
                        const &Dataset data, unsigned long batchSize) {
     struct DataLoader dl = DataLoader::new(data, batchSize, 0, 0UL);
     struct TensorArena stepArena = TensorArena::new(0UL);
@@ -154,7 +154,7 @@ float trainer_accuracy(&T model, fn &Tensor(&T, const &Tensor) logitsFn,
     unsigned long rows = 0UL;
     stepArena.begin();
     while (dl.next(&b)) {
-        &Tensor logits = logitsFn(model, b.x);
+        &FloatTensor logits = logitsFn(model, b.x);
         hits = hits + (double)tensor_accuracy(logits, b.y) * (double)b.rows;
         rows = rows + b.rows;
         stepArena.reset();

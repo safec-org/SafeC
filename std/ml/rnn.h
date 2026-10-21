@@ -17,15 +17,15 @@ namespace std {
 // ── Plain RNN ────────────────────────────────────────────────────────────────
 // h_t = tanh(x_t @ W_ih + h_{t-1} @ W_hh + b_ih + b_hh)
 struct RNNCell {
-    &Tensor W_ih; // [inputSize, hiddenSize]
-    &Tensor W_hh; // [hiddenSize, hiddenSize]
-    &Tensor b_ih; // [1, hiddenSize]
-    &Tensor b_hh; // [1, hiddenSize]
+    &FloatTensor W_ih; // [inputSize, hiddenSize]
+    &FloatTensor W_hh; // [hiddenSize, hiddenSize]
+    &FloatTensor b_ih; // [1, hiddenSize]
+    &FloatTensor b_hh; // [1, hiddenSize]
 
-    &Tensor forward(const &Tensor x_t, const &Tensor h_prev) const;
+    &FloatTensor forward(const &FloatTensor x_t, const &FloatTensor h_prev) const;
     // Parameterized (module.h): every weight tensor.
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
     static struct RNNCell new(unsigned long inputSize, unsigned long hiddenSize);
@@ -37,14 +37,14 @@ struct RNNCell {
 // n_t = tanh(x_t@W_in + b_in + r_t * (h@W_hn + b_hn))     candidate
 // h_t = (1 - z_t) * n_t + z_t * h_{t-1}
 struct GRUCell {
-    &Tensor W_ir; &Tensor W_hr; &Tensor b_ir; &Tensor b_hr;
-    &Tensor W_iz; &Tensor W_hz; &Tensor b_iz; &Tensor b_hz;
-    &Tensor W_in; &Tensor W_hn; &Tensor b_in; &Tensor b_hn;
+    &FloatTensor W_ir; &FloatTensor W_hr; &FloatTensor b_ir; &FloatTensor b_hr;
+    &FloatTensor W_iz; &FloatTensor W_hz; &FloatTensor b_iz; &FloatTensor b_hz;
+    &FloatTensor W_in; &FloatTensor W_hn; &FloatTensor b_in; &FloatTensor b_hn;
 
-    &Tensor forward(const &Tensor x_t, const &Tensor h_prev) const;
+    &FloatTensor forward(const &FloatTensor x_t, const &FloatTensor h_prev) const;
     // Parameterized (module.h): every weight tensor.
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
     static struct GRUCell new(unsigned long inputSize, unsigned long hiddenSize);
@@ -58,17 +58,17 @@ struct GRUCell {
 // c_t = f_t * c_{t-1} + i_t * g_t
 // h_t = o_t * tanh(c_t)
 struct LSTMCell {
-    &Tensor W_ii; &Tensor W_hi; &Tensor b_ii; &Tensor b_hi;
-    &Tensor W_if; &Tensor W_hf; &Tensor b_if; &Tensor b_hf;
-    &Tensor W_ig; &Tensor W_hg; &Tensor b_ig; &Tensor b_hg;
-    &Tensor W_io; &Tensor W_ho; &Tensor b_io; &Tensor b_ho;
+    &FloatTensor W_ii; &FloatTensor W_hi; &FloatTensor b_ii; &FloatTensor b_hi;
+    &FloatTensor W_if; &FloatTensor W_hf; &FloatTensor b_if; &FloatTensor b_hf;
+    &FloatTensor W_ig; &FloatTensor W_hg; &FloatTensor b_ig; &FloatTensor b_hg;
+    &FloatTensor W_io; &FloatTensor W_ho; &FloatTensor b_io; &FloatTensor b_ho;
 
     // Writes the new hidden state's *tensor* as the return value; '*c_out'
     // receives the new cell state (caller-owned, like the return value).
-    &Tensor forward(const &Tensor x_t, const &Tensor h_prev, const &Tensor c_prev, &&Tensor c_out) const;
+    &FloatTensor forward(const &FloatTensor x_t, const &FloatTensor h_prev, const &FloatTensor c_prev, &&FloatTensor c_out) const;
     // Parameterized (module.h): every weight tensor.
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
     static struct LSTMCell new(unsigned long inputSize, unsigned long hiddenSize);
@@ -92,25 +92,25 @@ struct LSTMCell {
 //   n_t = f_t * n_{t-1} + i_t
 //   h_t = o_t * (c_t / n_t)
 struct XLSTMCell {
-    &Tensor Wz; &Tensor Rz; &Tensor bz;
-    &Tensor Wi; &Tensor Ri; &Tensor bi;
-    &Tensor Wf; &Tensor Rf; &Tensor bf;
-    &Tensor Wo; &Tensor Ro; &Tensor bo;
+    &FloatTensor Wz; &FloatTensor Rz; &FloatTensor bz;
+    &FloatTensor Wi; &FloatTensor Ri; &FloatTensor bi;
+    &FloatTensor Wf; &FloatTensor Rf; &FloatTensor bf;
+    &FloatTensor Wo; &FloatTensor Ro; &FloatTensor bo;
 
-    struct XLSTMState forward(const &Tensor x_t, const &XLSTMState prev) const;
+    struct XLSTMState forward(const &FloatTensor x_t, const &XLSTMState prev) const;
     // Parameterized (module.h): every weight tensor.
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
     static struct XLSTMCell new(unsigned long inputSize, unsigned long hiddenSize);
 };
 
 struct XLSTMState {
-    &Tensor h;
-    &Tensor c;
-    &Tensor n;
-    &Tensor m; // [1,1] scalar stabilizer (broadcast across hidden dim)
+    &FloatTensor h;
+    &FloatTensor c;
+    &FloatTensor n;
+    &FloatTensor m; // [1,1] scalar stabilizer (broadcast across hidden dim)
 
     void free();
 };

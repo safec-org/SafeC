@@ -25,7 +25,7 @@ static void rl_heap_end_(?&TensorArena cur) {
     }
 }
 
-static void rl_drop_(&Tensor t) {
+static void rl_drop_(&FloatTensor t) {
     t->free();
     unsafe { free((void*)t); }
 }
@@ -49,8 +49,8 @@ static unsigned long rl_argmax_(const float* v, unsigned long n, &Rng rng) {
 }
 
 // obs (any shape, obsDim values) as a [1, obsDim] row.
-static &Tensor rl_row_(const &Tensor obs, unsigned long dim) {
-    &Tensor r = Tensor::new_2d(1UL, dim, 0);
+static &FloatTensor rl_row_(const &FloatTensor obs, unsigned long dim) {
+    &FloatTensor r = FloatTensor::new_2d(1UL, dim, 0);
     unsafe {
         unsigned long i = 0UL;
         while (i < dim) { r->data[i] = obs->data[i]; i = i + 1UL; }
@@ -65,7 +65,7 @@ struct Bandit Bandit::new(unsigned long k, unsigned long seed) {
     b.k = k;
     b.rng = Rng::new(seed);
     ?&TensorArena cur = rl_heap_begin_();
-    b.means = Tensor::new_1d(k, 0);
+    b.means = FloatTensor::new_1d(k, 0);
     rl_heap_end_(cur);
     b.rng.fill_normal(b.means, (float)0.0, (float)1.0);
     return b;
@@ -93,7 +93,7 @@ struct GridWorld GridWorld::new(unsigned long width, unsigned long height, unsig
     g.width = width;
     g.height = height;
     ?&TensorArena cur = rl_heap_begin_();
-    g.cells = Tensor::new_1d(width * height, 0);
+    g.cells = FloatTensor::new_1d(width * height, 0);
     rl_heap_end_(cur);
     g.start = 0UL;
     g.state = 0UL;
@@ -166,7 +166,7 @@ struct EnvStep GridWorld::step(unsigned long action, &unsigned long next) {
     return r;
 }
 
-void GridWorld::one_hot(unsigned long state, &Tensor obs) const {
+void GridWorld::one_hot(unsigned long state, &FloatTensor obs) const {
     unsafe {
         unsigned long n = self.width * self.height;
         unsigned long i = 0UL;
@@ -178,7 +178,7 @@ void GridWorld::free() { rl_drop_(self.cells); }
 
 // ══ CartPole ═════════════════════════════════════════════════════════════════
 
-static void cartpole_obs_(const &CartPole env, &Tensor obs) {
+static void cartpole_obs_(const &CartPole env, &FloatTensor obs) {
     unsafe {
         obs->data[0] = env.x;
         obs->data[1] = env.xDot;
@@ -196,7 +196,7 @@ struct CartPole CartPole::new(unsigned long seed) {
     return env;
 }
 
-void CartPole::reset(&Tensor obs) {
+void CartPole::reset(&FloatTensor obs) {
     self.x = (float)0.1 * self.rng.uniform() - (float)0.05;
     self.xDot = (float)0.1 * self.rng.uniform() - (float)0.05;
     self.theta = (float)0.1 * self.rng.uniform() - (float)0.05;
@@ -205,7 +205,7 @@ void CartPole::reset(&Tensor obs) {
     cartpole_obs_(self, obs);
 }
 
-struct EnvStep CartPole::step(unsigned long action, &Tensor obs) {
+struct EnvStep CartPole::step(unsigned long action, &FloatTensor obs) {
     float gravity = (float)9.8;
     float massPole = (float)0.1;
     float totalMass = (float)1.1;
@@ -240,8 +240,8 @@ struct BanditAgent BanditAgent::new(int kind, unsigned long k, float param, unsi
     a.kind = kind;
     a.k = k;
     ?&TensorArena cur = rl_heap_begin_();
-    a.counts = Tensor::new_1d(k, 0);
-    a.values = Tensor::new_1d(k, 0);
+    a.counts = FloatTensor::new_1d(k, 0);
+    a.values = FloatTensor::new_1d(k, 0);
     rl_heap_end_(cur);
     a.param = param;
     a.baseline = (float)0.0;
@@ -338,7 +338,7 @@ struct TabularAgent TabularAgent::new(unsigned long states, unsigned long action
                                       float epsilon, unsigned long seed) {
     struct TabularAgent a;
     ?&TensorArena cur = rl_heap_begin_();
-    a.q = Tensor::new_2d(states, actions, 0);
+    a.q = FloatTensor::new_2d(states, actions, 0);
     rl_heap_end_(cur);
     a.states = states;
     a.actions = actions;
@@ -409,11 +409,11 @@ void TabularAgent::free() { rl_drop_(self.q); }
 struct ReplayBuffer ReplayBuffer::new(unsigned long slots, unsigned long obsDim) {
     struct ReplayBuffer rb;
     ?&TensorArena cur = rl_heap_begin_();
-    rb.obs = Tensor::new_2d(slots, obsDim, 0);
-    rb.next = Tensor::new_2d(slots, obsDim, 0);
-    rb.action = Tensor::new_1d(slots, 0);
-    rb.reward = Tensor::new_1d(slots, 0);
-    rb.terminal = Tensor::new_1d(slots, 0);
+    rb.obs = FloatTensor::new_2d(slots, obsDim, 0);
+    rb.next = FloatTensor::new_2d(slots, obsDim, 0);
+    rb.action = FloatTensor::new_1d(slots, 0);
+    rb.reward = FloatTensor::new_1d(slots, 0);
+    rb.terminal = FloatTensor::new_1d(slots, 0);
     rl_heap_end_(cur);
     rb.slots = slots;
     rb.size = 0UL;
@@ -422,7 +422,7 @@ struct ReplayBuffer ReplayBuffer::new(unsigned long slots, unsigned long obsDim)
     return rb;
 }
 
-void ReplayBuffer::push(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminal) {
+void ReplayBuffer::push(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminal) {
     unsigned long p = self.pos;
     unsigned long d = self.obsDim;
     unsafe {
@@ -491,12 +491,12 @@ float Dqn::epsilon() const {
     return self.cfg.epsStart + f * (self.cfg.epsEnd - self.cfg.epsStart);
 }
 
-unsigned long Dqn::act(const &Tensor obs, int explore) {
+unsigned long Dqn::act(const &FloatTensor obs, int explore) {
     if (explore && self.rng.uniform() < self.epsilon()) return self.rng.below(self.actions);
     ?&TensorArena outer = tensor_arena_current_();
     struct GradGuard noGrad = Autograd::get().no_grad();
     self.stepArena.begin();
-    &Tensor q = self.q.forward(rl_row_(obs, self.obsDim));
+    &FloatTensor q = self.q.forward(rl_row_(obs, self.obsDim));
     unsigned long a;
     unsafe { a = rl_argmax_((const float*)q->data, self.actions, &self.rng); }
     tensor_arena_end();
@@ -510,11 +510,11 @@ static float dqn_train_(&Dqn d) {
     unsigned long B = d.cfg.batchSize;
     unsigned long D = d.obsDim;
     unsigned long A = d.actions;
-    &Tensor ob = Tensor::new_2d(B, D, 0);
-    &Tensor nx = Tensor::new_2d(B, D, 0);
-    &Tensor act = Tensor::new_1d(B, 0);
-    &Tensor y = Tensor::new_2d(B, 1UL, 0);
-    &Tensor term = Tensor::new_1d(B, 0);
+    &FloatTensor ob = FloatTensor::new_2d(B, D, 0);
+    &FloatTensor nx = FloatTensor::new_2d(B, D, 0);
+    &FloatTensor act = FloatTensor::new_1d(B, 0);
+    &FloatTensor y = FloatTensor::new_2d(B, 1UL, 0);
+    &FloatTensor term = FloatTensor::new_1d(B, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < B) {
@@ -533,8 +533,8 @@ static float dqn_train_(&Dqn d) {
     }
     // targets without gradient: r + gamma * (1 - terminal) * Q_target(s', a*)
     Autograd::get().set_enabled(0);
-    &Tensor qt = d.target.forward(nx);
-    &Tensor qo = d.cfg.doubleDqn ? d.q.forward(nx) : qt;
+    &FloatTensor qt = d.target.forward(nx);
+    &FloatTensor qo = d.cfg.doubleDqn ? d.q.forward(nx) : qt;
     unsafe {
         unsigned long r = 0UL;
         while (r < B) {
@@ -547,8 +547,8 @@ static float dqn_train_(&Dqn d) {
         }
     }
     Autograd::get().set_enabled(1);
-    &Tensor qsa = tensor_mul(d.q.forward(ob), act.one_hot(A)).sum_rows();
-    &Tensor loss = tensor_huber_loss(qsa, y, d.cfg.huberDelta);
+    &FloatTensor qsa = tensor_mul(d.q.forward(ob), act.one_hot(A)).sum_rows();
+    &FloatTensor loss = tensor_huber_loss(qsa, y, d.cfg.huberDelta);
     d.opt.zero_grad();
     loss.backward();
     if (d.cfg.clipNorm > (float)0.0) d.opt.clip_grad_norm(d.cfg.clipNorm);
@@ -562,7 +562,7 @@ static float dqn_train_(&Dqn d) {
     unsafe { return loss->data[0]; }
 }
 
-float Dqn::observe(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminal) {
+float Dqn::observe(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminal) {
     self.buffer.push(obs, action, reward, next, terminal);
     self.steps = self.steps + 1UL;
     if (self.buffer.size < self.cfg.learningStarts || self.buffer.size < self.cfg.batchSize) return (float)-1.0;
@@ -616,7 +616,7 @@ struct PolicyAgent PolicyAgent::new(unsigned long obsDim, unsigned long actions,
     a.policy = Mlp::new(obsDim, cfg.hidden, cfg.hiddenLayers, actions, cfg.act, ACT_NONE, &a.rng);
     a.value = Mlp::new(obsDim, cfg.hidden, cfg.hiddenLayers, 1UL, cfg.act, ACT_NONE, &a.rng);
     // small final policy layer: near-uniform initial policy
-    &Tensor wl = *a.policy.params.at(2UL * (a.policy.nLayers - 1UL));
+    &FloatTensor wl = *a.policy.params.at(2UL * (a.policy.nLayers - 1UL));
     unsafe {
         unsigned long i = 0UL;
         while (i < wl->size) { wl->data[i] = wl->data[i] * (float)0.01; i = i + 1UL; }
@@ -634,11 +634,11 @@ struct PolicyAgent PolicyAgent::new(unsigned long obsDim, unsigned long actions,
     return a;
 }
 
-unsigned long PolicyAgent::act(const &Tensor obs, int sample) {
+unsigned long PolicyAgent::act(const &FloatTensor obs, int sample) {
     ?&TensorArena outer = tensor_arena_current_();
     struct GradGuard noGrad = Autograd::get().no_grad();
     self.stepArena.begin();
-    &Tensor logits = self.policy.forward(rl_row_(obs, self.obsDim));
+    &FloatTensor logits = self.policy.forward(rl_row_(obs, self.obsDim));
     unsigned long choice = 0UL;
     unsafe {
         const float* l = (const float*)logits->data;
@@ -666,7 +666,7 @@ unsigned long PolicyAgent::act(const &Tensor obs, int sample) {
     return choice;
 }
 
-void PolicyAgent::record(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminated,
+void PolicyAgent::record(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminated,
                          int truncated) {
     unsafe {
         unsigned long i = 0UL;
@@ -680,8 +680,8 @@ void PolicyAgent::record(const &Tensor obs, unsigned long action, float reward, 
 }
 
 // Rows 'idx[0..m)' of a flat [N, w] float array as an [m, w] tensor.
-static &Tensor pg_rows_(const float* src, unsigned long w, const unsigned long* idx, unsigned long m) {
-    &Tensor t = Tensor::new_2d(m, w, 0);
+static &FloatTensor pg_rows_(const float* src, unsigned long w, const unsigned long* idx, unsigned long m) {
+    &FloatTensor t = FloatTensor::new_2d(m, w, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < m) {
@@ -701,25 +701,25 @@ static float* pg_vec_ptr_(&Vec<float> v) {
 static float pg_step_(&PolicyAgent a, const float* obs, const float* act, const float* adv,
                       const float* ret, const float* logpOld, const unsigned long* idx, unsigned long m) {
     unsigned long A = a.actions;
-    &Tensor O = pg_rows_(obs, a.obsDim, idx, m);
-    &Tensor Ac = pg_rows_(act, 1UL, idx, m);
-    &Tensor Adv = pg_rows_(adv, 1UL, idx, m);
-    &Tensor Ret = pg_rows_(ret, 1UL, idx, m);
-    &Tensor logpAll = a.policy.forward(O).log_softmax();
-    &Tensor logp = tensor_mul(logpAll, Ac.one_hot(A)).sum_rows();
-    &Tensor ent = tensor_mul(logpAll.exp(), logpAll).sum_rows().mean().scale((float)-1.0);
-    &Tensor pol = logp;
+    &FloatTensor O = pg_rows_(obs, a.obsDim, idx, m);
+    &FloatTensor Ac = pg_rows_(act, 1UL, idx, m);
+    &FloatTensor Adv = pg_rows_(adv, 1UL, idx, m);
+    &FloatTensor Ret = pg_rows_(ret, 1UL, idx, m);
+    &FloatTensor logpAll = a.policy.forward(O).log_softmax();
+    &FloatTensor logp = tensor_mul(logpAll, Ac.one_hot(A)).sum_rows();
+    &FloatTensor ent = tensor_mul(logpAll.exp(), logpAll).sum_rows().mean().scale((float)-1.0);
+    &FloatTensor pol = logp;
     if (a.cfg.algo == PG_PPO) {
-        &Tensor Old = pg_rows_(logpOld, 1UL, idx, m);
-        &Tensor ratio = tensor_sub(logp, Old).exp();
-        &Tensor s1 = tensor_mul(ratio, Adv);
-        &Tensor s2 = tensor_mul(ratio.clamp((float)1.0 - a.cfg.clipEps, (float)1.0 + a.cfg.clipEps), Adv);
+        &FloatTensor Old = pg_rows_(logpOld, 1UL, idx, m);
+        &FloatTensor ratio = tensor_sub(logp, Old).exp();
+        &FloatTensor s1 = tensor_mul(ratio, Adv);
+        &FloatTensor s2 = tensor_mul(ratio.clamp((float)1.0 - a.cfg.clipEps, (float)1.0 + a.cfg.clipEps), Adv);
         pol = tensor_minimum(s1, s2).mean().scale((float)-1.0);
     } else {
         pol = tensor_mul(logp, Adv).mean().scale((float)-1.0);
     }
-    &Tensor vl = tensor_mse_loss(a.value.forward(O), Ret);
-    &Tensor loss = tensor_sub(tensor_add(pol, vl.scale(a.cfg.valueCoef)),
+    &FloatTensor vl = tensor_mse_loss(a.value.forward(O), Ret);
+    &FloatTensor loss = tensor_sub(tensor_add(pol, vl.scale(a.cfg.valueCoef)),
                               ent.scale(a.cfg.entropyCoef));
     a.opt.zero_grad();
     loss.backward();
@@ -757,12 +757,12 @@ float PolicyAgent::update() {
 
         // values, next values and old log-probabilities, without gradient
         Autograd::get().set_enabled(0);
-        &Tensor O = pg_rows_(obs, D, (const unsigned long*)idx, N);
-        &Tensor Nx = pg_rows_(nxt, D, (const unsigned long*)idx, N);
-        &Tensor Ac = pg_rows_(act, 1UL, (const unsigned long*)idx, N);
-        &Tensor Vt = self.value.forward(O);
-        &Tensor Vn = self.value.forward(Nx);
-        &Tensor Lp = tensor_mul(self.policy.forward(O).log_softmax(), Ac.one_hot(self.actions)).sum_rows();
+        &FloatTensor O = pg_rows_(obs, D, (const unsigned long*)idx, N);
+        &FloatTensor Nx = pg_rows_(nxt, D, (const unsigned long*)idx, N);
+        &FloatTensor Ac = pg_rows_(act, 1UL, (const unsigned long*)idx, N);
+        &FloatTensor Vt = self.value.forward(O);
+        &FloatTensor Vn = self.value.forward(Nx);
+        &FloatTensor Lp = tensor_mul(self.policy.forward(O).log_softmax(), Ac.one_hot(self.actions)).sum_rows();
         i = 0UL;
         while (i < N) { v[i] = Vt->data[i]; vn[i] = Vn->data[i]; logpOld[i] = Lp->data[i]; i = i + 1UL; }
         self.stepArena.reset();
@@ -855,18 +855,18 @@ void PolicyAgent::free() {
     self.rReward.free(); self.rTerminal.free(); self.rDone.free();
 }
 
-void Dqn::collect_params(&Vec<&Tensor> out) const { self.q.collect_params(out); }
+void Dqn::collect_params(&Vec<&FloatTensor> out) const { self.q.collect_params(out); }
 
-void Dqn::collect_state(&Vec<&Tensor> out) const {
+void Dqn::collect_state(&Vec<&FloatTensor> out) const {
     self.q.collect_state(out);
     self.target.collect_state(out);
 }
 
-void PolicyAgent::collect_params(&Vec<&Tensor> out) const {
+void PolicyAgent::collect_params(&Vec<&FloatTensor> out) const {
     self.policy.collect_params(out);
     self.value.collect_params(out);
 }
 
-void PolicyAgent::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+void PolicyAgent::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
 } // namespace std
