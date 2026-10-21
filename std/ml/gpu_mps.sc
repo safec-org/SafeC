@@ -118,6 +118,12 @@ static void* __sel_setComputePipelineState = (void*)0;
 static void* __sel_setBuffer = (void*)0;
 static void* __sel_setBytes = (void*)0;
 static void* __sel_dispatchThreadgroups = (void*)0;
+// Exact-grid dispatch for the one-thread-per-element kernels: their bodies
+// have no bounds check, so rounding the grid up to whole threadgroups would
+// run threads past 'n' (out-of-bounds writes when n isn't a multiple of the
+// threadgroup width). Non-uniform threadgroups are supported on every Apple
+// GPU this backend runs on.
+static void* __sel_dispatchThreads = (void*)0;
 static void* __sel_endEncoding = (void*)0;
 static void* __sel_commit = (void*)0;
 static void* __sel_waitUntilCompleted = (void*)0;
@@ -139,6 +145,7 @@ static void __mps_init_selectors() {
         __sel_setBuffer = sel_registerName("setBuffer:offset:atIndex:");
         __sel_setBytes = sel_registerName("setBytes:length:atIndex:");
         __sel_dispatchThreadgroups = sel_registerName("dispatchThreadgroups:threadsPerThreadgroup:");
+        __sel_dispatchThreads = sel_registerName("dispatchThreads:threadsPerThreadgroup:");
         __sel_endEncoding = sel_registerName("endEncoding");
         __sel_commit = sel_registerName("commit");
         __sel_waitUntilCompleted = sel_registerName("waitUntilCompleted");
@@ -397,11 +404,8 @@ static int __mps_run_binary_kernel(void** pipelineCache, const char* kernelName,
         if (tgWidth == 0UL) tgWidth = 1UL;
         struct MTLSize tgSize;
         tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
-        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
-        struct MTLSize numThreadgroups;
-        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
-        dispatchFn(encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        dispatchFn(encoder, __sel_dispatchThreads, gridSize, tgSize);
         MMsgVoid0 msgVoid0 = (MMsgVoid0)objc_msgSend;
         msgVoid0(encoder, __sel_endEncoding);
         msgVoid0(cmdBuf, __sel_commit);
@@ -455,11 +459,8 @@ static int __mps_run_unary_kernel(void** pipelineCache, const char* kernelName,
         if (tgWidth == 0UL) tgWidth = 1UL;
         struct MTLSize tgSize;
         tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
-        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
-        struct MTLSize numThreadgroups;
-        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
-        dispatchFn(encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        dispatchFn(encoder, __sel_dispatchThreads, gridSize, tgSize);
         MMsgVoid0 msgVoid0 = (MMsgVoid0)objc_msgSend;
         msgVoid0(encoder, __sel_endEncoding);
         msgVoid0(cmdBuf, __sel_commit);
@@ -579,11 +580,8 @@ int mps_scale_f32(const &float a, float k, &float out, unsigned long n) {
         if (tgWidth == 0UL) tgWidth = 1UL;
         struct MTLSize tgSize;
         tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
-        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
-        struct MTLSize numThreadgroups;
-        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
-        dispatchFn(encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        dispatchFn(encoder, __sel_dispatchThreads, gridSize, tgSize);
         MMsgVoid0 msgVoid0 = (MMsgVoid0)objc_msgSend;
         msgVoid0(encoder, __sel_endEncoding);
         msgVoid0(cmdBuf, __sel_commit);
@@ -824,11 +822,8 @@ int mps_sub_f32(const &float a, const &float b, &float out, unsigned long n) {
         if (tgWidth == 0UL) tgWidth = 1UL;
         struct MTLSize tgSize;
         tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
-        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
-        struct MTLSize numThreadgroups;
-        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
-        dispatchFn(encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        dispatchFn(encoder, __sel_dispatchThreads, gridSize, tgSize);
 
         if (batched) {
             if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
@@ -1473,11 +1468,8 @@ int mps_relu_backward_f32(const &float a, const &float selfGrad, &float out, uns
         if (tgWidth == 0UL) tgWidth = 1UL;
         struct MTLSize tgSize;
         tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
-        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
-        struct MTLSize numThreadgroups;
-        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
-        dispatchFn(encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        dispatchFn(encoder, __sel_dispatchThreads, gridSize, tgSize);
 
         if (batched) {
             if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
@@ -1554,11 +1546,8 @@ int mps_relu_f32(const &float a, &float out, unsigned long n) {
         if (tgWidth == 0UL) tgWidth = 1UL;
         struct MTLSize tgSize;
         tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
-        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
-        struct MTLSize numThreadgroups;
-        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
-        dispatchFn(encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        dispatchFn(encoder, __sel_dispatchThreads, gridSize, tgSize);
 
         if (batched) {
             if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
@@ -1885,11 +1874,8 @@ int mps_relu_f32_chained(struct MpsBuf bufA, &float out, unsigned long n) {
         if (tgWidth == 0UL) tgWidth = 1UL;
         struct MTLSize tgSize;
         tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
-        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
-        struct MTLSize numThreadgroups;
-        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
-        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreads, gridSize, tgSize);
 
         if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
@@ -1931,11 +1917,8 @@ int mps_sub_f32_chained(struct MpsBuf bufA, const &float b, &float out, unsigned
         if (tgWidth == 0UL) tgWidth = 1UL;
         struct MTLSize tgSize;
         tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
-        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
-        struct MTLSize numThreadgroups;
-        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
-        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreads, gridSize, tgSize);
 
         if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
@@ -1977,11 +1960,8 @@ int mps_mul_f32_chained(struct MpsBuf bufA, const &float b, &float out, unsigned
         if (tgWidth == 0UL) tgWidth = 1UL;
         struct MTLSize tgSize;
         tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
-        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
-        struct MTLSize numThreadgroups;
-        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
-        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreads, gridSize, tgSize);
 
         if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
@@ -2025,11 +2005,8 @@ int mps_square_f32_chained(struct MpsBuf buf, &float out, unsigned long n) {
         if (tgWidth == 0UL) tgWidth = 1UL;
         struct MTLSize tgSize;
         tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
-        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
-        struct MTLSize numThreadgroups;
-        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
-        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreads, gridSize, tgSize);
 
         if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
@@ -2072,11 +2049,8 @@ int mps_scale_f32_chained(struct MpsBuf buf, float k, &float out, unsigned long 
         if (tgWidth == 0UL) tgWidth = 1UL;
         struct MTLSize tgSize;
         tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
-        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
-        struct MTLSize numThreadgroups;
-        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
-        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreads, gridSize, tgSize);
 
         if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
@@ -2126,11 +2100,8 @@ static int __mps_gated_gelu_chained(const char* kernelName, void** pipelineSlot,
         if (tgWidth == 0UL) tgWidth = 1UL;
         struct MTLSize tgSize;
         tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
-        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
-        struct MTLSize numThreadgroups;
-        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
-        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreads, gridSize, tgSize);
 
         if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
@@ -2532,11 +2503,8 @@ int mps_relu_backward_f32_chained(const &float a, struct MpsBuf bufSelfGrad, &fl
         if (tgWidth == 0UL) tgWidth = 1UL;
         struct MTLSize tgSize;
         tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
-        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
-        struct MTLSize numThreadgroups;
-        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
-        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreads, gridSize, tgSize);
 
         if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
@@ -2581,11 +2549,8 @@ int mps_relu_backward_f32_chained_ab(struct MpsBuf bufA, struct MpsBuf bufSelfGr
         if (tgWidth == 0UL) tgWidth = 1UL;
         struct MTLSize tgSize;
         tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
-        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
-        struct MTLSize numThreadgroups;
-        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
-        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreads, gridSize, tgSize);
 
         if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
@@ -2636,11 +2601,8 @@ int mps_sgd_update_f32_chained(struct MpsBuf bufW, struct MpsBuf bufGrad, float 
         if (tgWidth == 0UL) tgWidth = 1UL;
         struct MTLSize tgSize;
         tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
-        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
-        struct MTLSize numThreadgroups;
-        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
-        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreads, gridSize, tgSize);
 
         return 1;
     }
@@ -3143,11 +3105,8 @@ static int __mps_unary_chained(const char* kernelName, void** pipelineSlot, int 
         if (tgWidth == 0UL) tgWidth = 1UL;
         struct MTLSize tgSize;
         tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
-        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
-        struct MTLSize numThreadgroups;
-        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
-        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreads, gridSize, tgSize);
 
         if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
@@ -3200,11 +3159,8 @@ static int __mps_binary_dev_chained(const char* kernelName, void** pipelineSlot,
         if (tgWidth == 0UL) tgWidth = 1UL;
         struct MTLSize tgSize;
         tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
-        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
-        struct MTLSize numThreadgroups;
-        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
-        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreads, gridSize, tgSize);
 
         if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
@@ -3258,11 +3214,8 @@ static int __mps_sub_chained(const char* kernelName, void** pipelineSlot, int dt
         if (tgWidth == 0UL) tgWidth = 1UL;
         struct MTLSize tgSize;
         tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
-        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
-        struct MTLSize numThreadgroups;
-        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
-        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreads, gridSize, tgSize);
 
         if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
@@ -3317,11 +3270,8 @@ static int __mps_scale_chained(const char* kernelName, void** pipelineSlot, int 
         if (tgWidth == 0UL) tgWidth = 1UL;
         struct MTLSize tgSize;
         tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
-        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
-        struct MTLSize numThreadgroups;
-        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
-        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreads, gridSize, tgSize);
 
         if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
@@ -3436,11 +3386,8 @@ static int __mps_sgd_chained(const char* kernelName, void** pipelineSlot,
         if (tgWidth == 0UL) tgWidth = 1UL;
         struct MTLSize tgSize;
         tgSize.width = tgWidth; tgSize.height = 1UL; tgSize.depth = 1UL;
-        unsigned long numGroups = (n + tgWidth - 1UL) / tgWidth;
-        struct MTLSize numThreadgroups;
-        numThreadgroups.width = numGroups; numThreadgroups.height = 1UL; numThreadgroups.depth = 1UL;
         MMsgDispatch dispatchFn = (MMsgDispatch)objc_msgSend;
-        dispatchFn(__mps_batch_encoder, __sel_dispatchThreadgroups, numThreadgroups, tgSize);
+        dispatchFn(__mps_batch_encoder, __sel_dispatchThreads, gridSize, tgSize);
 
         return 1;
     }

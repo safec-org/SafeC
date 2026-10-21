@@ -564,6 +564,28 @@ static void fit_checks() {
     spir.free(); sine.free(); circ.free();
 }
 
+// The one-thread-per-element kernels have no bounds check, so their
+// dispatch must cover exactly n threads: an SGD step over the first 100 of
+// 128 weights (not a multiple of the 64-wide threadgroup) leaves the last
+// 28 untouched.
+static void elementwise_tail_case() {
+    float w[128]; float g[128]; float got[128];
+    for (int i = 0; i < 128; i = i + 1) { w[i] = 1.0f; g[i] = 1.0f; }
+    struct MpsBuf bw = MpsBuf::upload(&w[0], 128UL);
+    struct MpsBuf bg = MpsBuf::upload(&g[0], 128UL);
+    mps_batch_begin();
+    int ok = mps_sgd_update_f32_chained(bw, bg, 0.5f, 100UL);
+    mps_batch_end();
+    unsafe { ok = ok && bw.read((void*)&got[0], 128UL * sizeof(float)); }
+    int head = 1; int tail = 1;
+    for (int i = 0; i < 100; i = i + 1) if (got[i] != 0.5f) head = 0;
+    for (int i = 100; i < 128; i = i + 1) if (got[i] != 1.0f) tail = 0;
+    check(ok && head, "sgd step updates the first n weights");
+    check(ok && tail, "sgd step leaves weights past n untouched");
+    bw.free();
+    bg.free();
+}
+
 int main() {
     if (!mps_available()) {
         unsafe { printf("nn_mps_check: no Metal device, skipped\n"); }
@@ -578,6 +600,7 @@ int main() {
     unsafe { printf("fits (per-epoch loss vs CpuTrainer):\n"); }
     fit_checks();
     step_case();
+    elementwise_tail_case();
     unsafe { printf("nn_mps: %d checks, %d failures\n", g_checks, g_fails); }
     return g_fails == 0 ? 0 : 1;
 }
