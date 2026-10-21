@@ -240,17 +240,17 @@ struct ConvLayer {
 // norms' running statistics, spectral norms' u). 'training' (1 from
 // convnet_new) picks batch statistics in batch norm and updates the running
 // ones, iterates spectral norms and applies dropout; set it to 0 for
-// inference with convnet_set_training. The models in autoencoder.h and
+// inference with ConvNet::set_training. The models in autoencoder.h and
 // gan.h do that in their inference functions (encode / decode / sample /
 // generate / score).
 //
 //   struct ConvNet net = convnet_new(1UL, 28UL, 28UL);
-//   convnet_conv(&net, 32UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);    // 32 x 28 x 28
-//   convnet_batchnorm(&net, ACT_RELU);
-//   convnet_residual_block(&net, 64UL, 2UL, 1, ACT_RELU, &rng); // 64 x 14 x 14
-//   convnet_global_avgpool(&net);                               // 64 x 1 x 1
-//   convnet_dense(&net, 10UL, ACT_NONE, &rng);                  // logits
-//   &Tensor logits = convnet_forward(&net, batch);              // [m, 784] -> [m, 10]
+//   net.conv(32UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);      // 32 x 28 x 28
+//   net.batchnorm(ACT_RELU);
+//   net.residual_block(64UL, 2UL, 1, ACT_RELU, &rng);   // 64 x 14 x 14
+//   net.global_avgpool();                               // 64 x 1 x 1
+//   net.dense(10UL, ACT_NONE, &rng);                    // logits
+//   &Tensor logits = net.forward(batch);                // [m, 784] -> [m, 10]
 struct ConvNet {
     struct Vec<struct ConvLayer> layers;
     struct Vec<&Tensor> params;
@@ -264,84 +264,81 @@ struct ConvNet {
     unsigned long outC;           // the last layer's output geometry
     unsigned long outH;
     unsigned long outW;
+
+    void conv(unsigned long outC, unsigned long kernel, unsigned long stride, unsigned long padding, int act, &Rng rng);
+    void conv_ex(unsigned long outC, const &Conv2dSpec spec, int act, &Rng rng);
+    void deconv(unsigned long outC, unsigned long kernel, unsigned long stride, unsigned long padding, int act,
+                &Rng rng);
+    void deconv_ex(unsigned long outC, const &Conv2dSpec spec, int act, &Rng rng);
+    void maxpool(unsigned long kernel, unsigned long stride, unsigned long padding);
+    void avgpool(unsigned long kernel, unsigned long stride, unsigned long padding, int countIncludePad);
+    void maxpool_ex(const &Pool2dSpec spec);
+    void avgpool_ex(const &Pool2dSpec spec);
+    void global_avgpool();   // -> C x 1 x 1
+    void global_maxpool();
+    void upsample(unsigned long factor);   // nearest, integer factor
+    void upsample_bilinear(unsigned long factor);
+    void resize(unsigned long outH, unsigned long outW, int mode, int alignCorners);
+    // Norms over the current output's channels, then 'act': place them between
+    // a convolution (ACT_NONE) and its activation. Batch norm: momentum 0.1,
+    // eps 1e-5. Group norm: eps 1e-5; layer norm is 1 group, instance norm one
+    // group per channel.
+    void batchnorm(int act);
+    void groupnorm(unsigned long groups, int act);
+    void layernorm(int act);
+    void instancenorm(int act);
+    // Spectral normalization of the last CONV / DECONV / DENSE layer's weight
+    // (one power iteration per training forward pass): the usual way to keep a
+    // GAN critic Lipschitz.
+    void spectral_norm(&Rng rng);
+    // Dropout with probability p (byChannel: whole planes); its random stream
+    // is seeded from rng.
+    void dropout(float p, int byChannel, &Rng rng);
+    void dense(unsigned long outDim, int act, &Rng rng);
+    // channels*height*width must equal the current output size.
+    void reshape(unsigned long channels, unsigned long height, unsigned long width);
+    // Skips. ConvNet::save keeps the current activation and returns its slot.
+    // ConvNet::add_skip adds a slot to the current output, then 'act': through a
+    // learned 1x1 convolution (stride = the size ratio) when the channels or
+    // size differ -- ResNet's projection shortcut. ConvNet::concat_skip appends
+    // a slot's channels (same height and width) to the current output -- a
+    // U-Net skip. ConvNet::residual_block is ResNet's basic block: conv 3x3
+    // (stride) -> [batch norm] -> act -> conv 3x3 -> [batch norm] -> + shortcut
+    // -> act. Output side (dim - 1)/stride + 1.
+    unsigned long save();
+    void add_skip(unsigned long slot, int act, &Rng rng);
+    void concat_skip(unsigned long slot);
+    void residual_block(unsigned long outC, unsigned long stride, int batchNorm, int act, &Rng rng);
+    // An activation on the last layer's output (replaces the one it had).
+    void set_out_act(int act);
+    // Training (1) or inference (0) mode; returns the previous mode.
+    int set_training(int training);
+    // For inference: folds every batch norm that directly follows a CONV /
+    // DECONV / DENSE layer (no activation or spectral norm between) into that
+    // layer's weight and bias, using the running statistics, and turns the
+    // batch norm into a no-op. Inference output is unchanged; do not train the
+    // net afterwards. Returns how many were folded.
+    unsigned long fold_batchnorm();
+    unsigned long in_dim() const;             // inC*inH*inW
+    unsigned long out_dim() const;            // outC*outH*outW
+    &Tensor forward(const &Tensor x) const;   // [batch, in_dim] -> [batch, out_dim]
+    unsigned long param_count() const;
+    // Same layers, a copy of the parameters and buffers (e.g. a GAN's averaged
+    // generator).
+    struct ConvNet clone() const;
+    // self = src and self = tau * src + (1 - tau) * self, as for Mlp (buffers
+    // included).
+    void copy(const &ConvNet src);
+    void soft_update(const &ConvNet src, float tau);
+    // Every trained parameter into o (not the buffers).
+    void add_params(&Optimizer o) const;
+    // Parameters and buffers to / from a file (tensors_save's format, nn.h).
+    // Loading needs a net built with the same layers; returns 1 on success, 0
+    // when the file is missing, unreadable or doesn't match.
+    int save_file(const &char path) const;
+    int load_file(const &char path);
+    void free();
 };
 struct ConvNet convnet_new(unsigned long channels, unsigned long height, unsigned long width);
-void convnet_conv(&ConvNet n, unsigned long outC, unsigned long kernel, unsigned long stride,
-                  unsigned long padding, int act, &Rng rng);
-void convnet_conv_ex(&ConvNet n, unsigned long outC, const &Conv2dSpec spec, int act, &Rng rng);
-void convnet_deconv(&ConvNet n, unsigned long outC, unsigned long kernel, unsigned long stride,
-                    unsigned long padding, int act, &Rng rng);
-void convnet_deconv_ex(&ConvNet n, unsigned long outC, const &Conv2dSpec spec, int act, &Rng rng);
-void convnet_maxpool(&ConvNet n, unsigned long kernel, unsigned long stride, unsigned long padding);
-void convnet_avgpool(&ConvNet n, unsigned long kernel, unsigned long stride, unsigned long padding,
-                     int countIncludePad);
-void convnet_maxpool_ex(&ConvNet n, const &Pool2dSpec spec);
-void convnet_avgpool_ex(&ConvNet n, const &Pool2dSpec spec);
-void convnet_global_avgpool(&ConvNet n);                             // -> C x 1 x 1
-void convnet_global_maxpool(&ConvNet n);
-void convnet_upsample(&ConvNet n, unsigned long factor);            // nearest, integer factor
-void convnet_upsample_bilinear(&ConvNet n, unsigned long factor);
-void convnet_resize(&ConvNet n, unsigned long outH, unsigned long outW, int mode, int alignCorners);
-// Norms over the current output's channels, then 'act': place them between
-// a convolution (ACT_NONE) and its activation. Batch norm: momentum 0.1,
-// eps 1e-5. Group norm: eps 1e-5; layer norm is 1 group, instance norm one
-// group per channel.
-void convnet_batchnorm(&ConvNet n, int act);
-void convnet_groupnorm(&ConvNet n, unsigned long groups, int act);
-void convnet_layernorm(&ConvNet n, int act);
-void convnet_instancenorm(&ConvNet n, int act);
-// Spectral normalization of the last CONV / DECONV / DENSE layer's weight
-// (one power iteration per training forward pass): the usual way to keep a
-// GAN critic Lipschitz.
-void convnet_spectral_norm(&ConvNet n, &Rng rng);
-// Dropout with probability p (byChannel: whole planes); its random stream
-// is seeded from rng.
-void convnet_dropout(&ConvNet n, float p, int byChannel, &Rng rng);
-void convnet_dense(&ConvNet n, unsigned long outDim, int act, &Rng rng);
-// channels*height*width must equal the current output size.
-void convnet_reshape(&ConvNet n, unsigned long channels, unsigned long height, unsigned long width);
-
-// Skips. convnet_save keeps the current activation and returns its slot.
-// convnet_add_skip adds a slot to the current output, then 'act': through a
-// learned 1x1 convolution (stride = the size ratio) when the channels or
-// size differ -- ResNet's projection shortcut. convnet_concat_skip appends
-// a slot's channels (same height and width) to the current output -- a
-// U-Net skip. convnet_residual_block is ResNet's basic block: conv 3x3
-// (stride) -> [batch norm] -> act -> conv 3x3 -> [batch norm] -> + shortcut
-// -> act. Output side (dim - 1)/stride + 1.
-unsigned long convnet_save(&ConvNet n);
-void convnet_add_skip(&ConvNet n, unsigned long slot, int act, &Rng rng);
-void convnet_concat_skip(&ConvNet n, unsigned long slot);
-void convnet_residual_block(&ConvNet n, unsigned long outC, unsigned long stride, int batchNorm, int act, &Rng rng);
-
-// An activation on the last layer's output (replaces the one it had).
-void convnet_set_out_act(&ConvNet n, int act);
-// Training (1) or inference (0) mode; returns the previous mode.
-int  convnet_set_training(&ConvNet n, int training);
-// For inference: folds every batch norm that directly follows a CONV /
-// DECONV / DENSE layer (no activation or spectral norm between) into that
-// layer's weight and bias, using the running statistics, and turns the
-// batch norm into a no-op. Inference output is unchanged; do not train the
-// net afterwards. Returns how many were folded.
-unsigned long convnet_fold_batchnorm(&ConvNet n);
-
-unsigned long convnet_in_dim(const &ConvNet n);    // inC*inH*inW
-unsigned long convnet_out_dim(const &ConvNet n);   // outC*outH*outW
-&Tensor convnet_forward(const &ConvNet n, const &Tensor x);   // [batch, in_dim] -> [batch, out_dim]
-unsigned long convnet_param_count(const &ConvNet n);
-// Same layers, a copy of the parameters and buffers (e.g. a GAN's averaged
-// generator).
-struct ConvNet convnet_clone(const &ConvNet n);
-// dst = src and dst = tau * src + (1 - tau) * dst, as for Mlp (buffers
-// included).
-void convnet_copy(&ConvNet dst, const &ConvNet src);
-void convnet_soft_update(&ConvNet dst, const &ConvNet src, float tau);
-void optimizer_add_convnet(&Optimizer o, const &ConvNet n);
-// Parameters and buffers to / from a file (tensors_save's format, nn.h).
-// Loading needs a net built with the same layers; returns 1 on success, 0
-// when the file is missing, unreadable or doesn't match.
-int  convnet_save_file(const &ConvNet n, const &char path);
-int  convnet_load_file(&ConvNet n, const &char path);
-void convnet_free(&ConvNet n);
 
 } // namespace std

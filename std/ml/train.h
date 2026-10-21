@@ -24,13 +24,13 @@
 // function forwarding to the backend's, and the generic loops
 // (train_fit, train_gan) are monomorphized for the chosen type.
 //
-//   struct Optimizer adam = optimizer_new(OPT_ADAM, (float)0.01);   // kind + hyperparameters
+//   struct Optimizer adam = optimizer_new(OPT_ADAM, (float)0.01);    // kind + hyperparameters
 //   struct TrainerOptions to = trainer_options_default();
 //   MlpTrainer t = mlp_trainer_new(net, TRAIN_LOSS_CE, &adam, &to);
 //   struct TrainReport rep = train_fit(&t, &data, &cfg);
 //   float acc = trainer_accuracy(&t.host, logits_fn, &test, 64UL);   // the trained Mlp
 //   t.free();
-//   mlp_free(&t.host);
+//   t.host.free();
 //
 // The names: MlpTrainer, ConvNetTrainer, VaeTrainer, ConvVaeTrainer and
 // ConvAeTrainer (Trainable), GanTrainer and DcganTrainer (GanTrainable),
@@ -79,7 +79,7 @@ static ConvAeTrainer conv_ae_trainer_new(struct ConvAutoencoder ae, const &Optim
 static GanTrainer gan_trainer_new(struct Gan g, const &TrainerOptions o) { return rocm_gan_trainer_new(g, o); }
 static DcganTrainer dcgan_trainer_new(struct Dcgan g, const &TrainerOptions o) { return rocm_dcgan_trainer_new(g, o); }
 static DqnLearner dqn_learner_new(struct Dqn d) { return rocm_dqn_agent_new(d); }
-// o.maxBatch: the longest rollout pg_update will see.
+// o.maxBatch: the longest rollout PolicyAgent::update will see.
 static PgLearner pg_learner_new(struct PolicyAgent a, const &TrainerOptions o) { return rocm_pg_agent_new(a, o); }
 
 #else
@@ -113,7 +113,7 @@ static ConvAeTrainer conv_ae_trainer_new(struct ConvAutoencoder ae, const &Optim
 static GanTrainer gan_trainer_new(struct Gan g, const &TrainerOptions o) { return cpu_gan_trainer_new(g); }
 static DcganTrainer dcgan_trainer_new(struct Dcgan g, const &TrainerOptions o) { return cpu_dcgan_trainer_new(g); }
 static DqnLearner dqn_learner_new(struct Dqn d) { return cpu_dqn_agent_new(d); }
-// o.maxBatch: the longest rollout pg_update will see (a device's limit).
+// o.maxBatch: the longest rollout PolicyAgent::update will see (a device's limit).
 static PgLearner pg_learner_new(struct PolicyAgent a, const &TrainerOptions o) { return cpu_pg_agent_new(a); }
 
 #endif

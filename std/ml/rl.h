@@ -21,10 +21,10 @@
 // states and actions of discrete problems are indices. A typical loop:
 //   struct CartPole env = cartpole_new(1UL);
 //   &Tensor obs = tensor_new_1d(4UL, 0);  &Tensor next = tensor_new_1d(4UL, 0);
-//   cartpole_reset(&env, obs);
-//   unsigned long a = dqn_act(&agent, obs, 1);
-//   struct EnvStep s = cartpole_step(&env, a, next);
-//   dqn_observe(&agent, obs, a, s.reward, next, s.terminated);
+//   env.reset(obs);
+//   unsigned long a = agent.act(obs, 1);
+//   struct EnvStep s = env.step(a, next);
+//   agent.observe(obs, a, s.reward, next, s.terminated);
 #include <std/ml/tensor.h>
 #include <std/ml/nn.h>
 #include <std/collections/vec.h>
@@ -45,11 +45,12 @@ struct Bandit {
     &Tensor means;           // [k], drawn from N(0, 1)
     unsigned long k;
     struct Rng rng;
+
+    float pull(unsigned long arm);    // N(means[arm], 1)
+    unsigned long best_arm() const;
+    void free();
 };
 struct Bandit  bandit_new(unsigned long k, unsigned long seed);
-float          bandit_pull(&Bandit b, unsigned long arm);     // N(means[arm], 1)
-unsigned long  bandit_best_arm(const &Bandit b);
-void           bandit_free(&Bandit b);
 
 // ── GridWorld ────────────────────────────────────────────────────────────────
 #define GRID_EMPTY 0
@@ -76,20 +77,21 @@ struct GridWorld {
     unsigned long steps;
     unsigned long maxSteps;  // truncation (default 1000)
     struct Rng rng;
+
+    void set(unsigned long x, unsigned long y, int cell);
+    void set_start(unsigned long x, unsigned long y);
+    unsigned long states() const;
+    unsigned long reset();                                            // -> start state
+    struct EnvStep step(unsigned long action, &unsigned long next);
+    // One-hot observation of a state (for neural agents), obs has states() values.
+    void one_hot(unsigned long state, &Tensor obs) const;
+    void free();
 };
 // An empty w x h grid, start top-left, goal bottom-right.
 struct GridWorld gridworld_new(unsigned long width, unsigned long height, unsigned long seed);
 // The 12 x 4 cliff walk: start bottom-left, goal bottom-right, the bottom
 // row between them a cliff (-100, back to start).
 struct GridWorld gridworld_cliff(unsigned long seed);
-void gridworld_set(&GridWorld g, unsigned long x, unsigned long y, int cell);
-void gridworld_set_start(&GridWorld g, unsigned long x, unsigned long y);
-unsigned long gridworld_states(const &GridWorld g);
-unsigned long gridworld_reset(&GridWorld g);                        // -> start state
-struct EnvStep gridworld_step(&GridWorld g, unsigned long action, &unsigned long next);
-// One-hot observation of a state (for neural agents), obs has states() values.
-void gridworld_one_hot(const &GridWorld g, unsigned long state, &Tensor obs);
-void gridworld_free(&GridWorld g);
 
 // ── CartPole ─────────────────────────────────────────────────────────────────
 #define CARTPOLE_OBS     4UL   // cart position, cart velocity, pole angle, pole angular velocity
@@ -102,12 +104,13 @@ struct CartPole {
     unsigned long steps;
     unsigned long maxSteps;  // 500 (CartPole-v1)
     struct Rng rng;
+
+    void reset(&Tensor obs);
+    // Reward 1 per step; terminated when |x| > 2.4 or |theta| > 12 degrees,
+    // truncated at maxSteps.
+    struct EnvStep step(unsigned long action, &Tensor obs);
 };
 struct CartPole cartpole_new(unsigned long seed);
-void            cartpole_reset(&CartPole env, &Tensor obs);
-// Reward 1 per step; terminated when |x| > 2.4 or |theta| > 12 degrees,
-// truncated at maxSteps.
-struct EnvStep  cartpole_step(&CartPole env, unsigned long action, &Tensor obs);
 
 // ══ Bandit agents ════════════════════════════════════════════════════════════
 #define BANDIT_EPS_GREEDY 0   // param: epsilon
@@ -124,11 +127,12 @@ struct BanditAgent {
     float baseline;          // mean reward so far
     unsigned long t;
     struct Rng rng;
+
+    unsigned long select();
+    void update(unsigned long arm, float reward);
+    void free();
 };
 struct BanditAgent bandit_agent_new(int kind, unsigned long k, float param, unsigned long seed);
-unsigned long      bandit_agent_select(&BanditAgent a);
-void               bandit_agent_update(&BanditAgent a, unsigned long arm, float reward);
-void               bandit_agent_free(&BanditAgent a);
 
 // ══ Tabular TD control ═══════════════════════════════════════════════════════
 struct TabularAgent {
@@ -139,22 +143,20 @@ struct TabularAgent {
     float gamma;             // discount
     float epsilon;           // exploration (change it to decay)
     struct Rng rng;
+
+    unsigned long act(unsigned long state);            // epsilon-greedy
+    unsigned long greedy(unsigned long state) const;
+    // Each returns the TD error. 'terminal' drops the bootstrap term.
+    // Q-learning (off-policy): target r + gamma max_a' Q(s', a').
+    float q_learning_update(unsigned long s, unsigned long act, float r, unsigned long s2, int terminal);
+    // SARSA (on-policy): target r + gamma Q(s', a') for the a' actually taken next.
+    float sarsa_update(unsigned long s, unsigned long act, float r, unsigned long s2, unsigned long a2, int terminal);
+    // Expected SARSA: target r + gamma E_pi[Q(s', .)] under the epsilon-greedy policy.
+    float expected_sarsa_update(unsigned long s, unsigned long act, float r, unsigned long s2, int terminal);
+    void free();
 };
 struct TabularAgent tabular_agent_new(unsigned long states, unsigned long actions,
                                       float alpha, float gamma, float epsilon, unsigned long seed);
-unsigned long tabular_act(&TabularAgent a, unsigned long state);       // epsilon-greedy
-unsigned long tabular_greedy(const &TabularAgent a, unsigned long state);
-// Each returns the TD error. 'terminal' drops the bootstrap term.
-// Q-learning (off-policy): target r + gamma max_a' Q(s', a').
-float q_learning_update(&TabularAgent a, unsigned long s, unsigned long act, float r,
-                        unsigned long s2, int terminal);
-// SARSA (on-policy): target r + gamma Q(s', a') for the a' actually taken next.
-float sarsa_update(&TabularAgent a, unsigned long s, unsigned long act, float r,
-                   unsigned long s2, unsigned long a2, int terminal);
-// Expected SARSA: target r + gamma E_pi[Q(s', .)] under the epsilon-greedy policy.
-float expected_sarsa_update(&TabularAgent a, unsigned long s, unsigned long act, float r,
-                            unsigned long s2, int terminal);
-void tabular_agent_free(&TabularAgent a);
 
 // ══ DQN ══════════════════════════════════════════════════════════════════════
 struct ReplayBuffer {
@@ -167,11 +169,11 @@ struct ReplayBuffer {
     unsigned long size;
     unsigned long pos;
     unsigned long obsDim;
+
+    void push(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminal);
+    void free();
 };
 struct ReplayBuffer replay_new(unsigned long slots, unsigned long obsDim);
-void replay_push(&ReplayBuffer rb, const &Tensor obs, unsigned long action, float reward,
-                 const &Tensor next, int terminal);
-void replay_free(&ReplayBuffer rb);
 
 struct DqnConfig {
     unsigned long hidden;
@@ -211,16 +213,16 @@ struct Dqn {
     unsigned long steps;            // environment steps observed
     unsigned long updates;          // gradient steps taken
     float lastLoss;
+
+    float epsilon() const;
+    // explore 1: epsilon-greedy with the current epsilon; 0: greedy.
+    unsigned long act(const &Tensor obs, int explore);
+    // Stores the transition and trains when due; returns the loss, or -1 when
+    // no gradient step ran.
+    float observe(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminal);
+    void free();
 };
 struct Dqn    dqn_new(unsigned long obsDim, unsigned long actions, const &DqnConfig cfg);
-float         dqn_epsilon(const &Dqn d);
-// explore 1: epsilon-greedy with the current epsilon; 0: greedy.
-unsigned long dqn_act(&Dqn d, const &Tensor obs, int explore);
-// Stores the transition and trains when due; returns the loss, or -1 when
-// no gradient step ran.
-float         dqn_observe(&Dqn d, const &Tensor obs, unsigned long action, float reward,
-                          const &Tensor next, int terminal);
-void          dqn_free(&Dqn d);
 
 // ══ Policy gradient: REINFORCE, A2C, PPO ═════════════════════════════════════
 #define PG_REINFORCE 0
@@ -250,7 +252,7 @@ struct PgConfig {
 struct PgConfig pg_config_default(int algo);
 
 // Separate policy (logits) and value networks, one Adam optimizer. The
-// rollout collects transitions until pg_update consumes them: call it at
+// rollout collects transitions until PolicyAgent::update consumes them: call it at
 // episode ends (REINFORCE) or every N steps (A2C / PPO).
 struct PolicyAgent {
     struct Mlp policy;
@@ -269,15 +271,16 @@ struct PolicyAgent {
     struct Vec<float> rDone;        // terminated or truncated
     unsigned long rollout;          // transitions stored
     float lastEntropy;
+
+    // sample 1: draw from the policy; 0: the most likely action.
+    unsigned long act(const &Tensor obs, int sample);
+    void record(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminated,
+                int truncated);
+    // Trains on the stored rollout with the configured algorithm, clears it,
+    // and returns the last loss.
+    float update();
+    void free();
 };
 struct PolicyAgent pg_new(unsigned long obsDim, unsigned long actions, const &PgConfig cfg);
-// sample 1: draw from the policy; 0: the most likely action.
-unsigned long pg_act(&PolicyAgent a, const &Tensor obs, int sample);
-void  pg_record(&PolicyAgent a, const &Tensor obs, unsigned long action, float reward,
-                const &Tensor next, int terminated, int truncated);
-// Trains on the stored rollout with the configured algorithm, clears it,
-// and returns the last loss.
-float pg_update(&PolicyAgent a);
-void  pg_free(&PolicyAgent a);
 
 } // namespace std

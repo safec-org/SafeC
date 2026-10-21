@@ -375,11 +375,11 @@ static int __is_finite(float x) {
     return d == (float)0.0;
 }
 
-int loss_scaler_unscale(&LossScaler s, &Tensor p) {
+int LossScaler::unscale(&Tensor p) {
     int finite = 1;
     unsafe {
         if (p->grad == (float*)0) return 1;
-        float inv = (float)1.0 / s.scale;
+        float inv = (float)1.0 / self.scale;
         unsigned long i = 0UL;
         while (i < p->size) {
             float g = p->grad[i] * inv;
@@ -391,27 +391,27 @@ int loss_scaler_unscale(&LossScaler s, &Tensor p) {
     return finite;
 }
 
-int loss_scaler_unscale_all(&LossScaler s, &Vec<&Tensor> params) {
+int LossScaler::unscale_all(&Vec<&Tensor> params) {
     int finite = 1;
     unsigned long i = 0UL;
     while (i < params.length()) {
-        if (!loss_scaler_unscale(s, *params.at(i))) finite = 0;
+        if (!self.unscale(*params.at(i))) finite = 0;
         i = i + 1UL;
     }
     return finite;
 }
 
-void loss_scaler_update(&LossScaler s, int allFinite) {
+void LossScaler::update(int allFinite) {
     if (!allFinite) {
-        s.scale = s.scale * s.backoffFactor;
-        if (s.scale < (float)1.0) s.scale = (float)1.0;
-        s.goodSteps = 0;
+        self.scale = self.scale * self.backoffFactor;
+        if (self.scale < (float)1.0) self.scale = (float)1.0;
+        self.goodSteps = 0;
         return;
     }
-    s.goodSteps = s.goodSteps + 1;
-    if (s.goodSteps >= s.growthInterval) {
-        s.scale = s.scale * s.growthFactor;
-        s.goodSteps = 0;
+    self.goodSteps = self.goodSteps + 1;
+    if (self.goodSteps >= self.growthInterval) {
+        self.scale = self.scale * self.growthFactor;
+        self.goodSteps = 0;
     }
 }
 

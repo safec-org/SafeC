@@ -333,7 +333,7 @@ static const char* nr_kernel_source_() {
     "    }\n"
     "    if (blockIdx.x == 0 && threadIdx.x == 0) ctr[0] += 1.0f;\n"
     "}\n"
-    // Optimizer, as nn.h's optimizer_step. st: 0 lr, 1 momentum, 2 beta1,
+    // Optimizer, as nn.h's Optimizer::step. st: 0 lr, 1 momentum, 2 beta1,
     // 3 beta2, 4 eps, 5 weight decay, 6 clip norm, 7 steps taken, 11 sum of
     // squared gradients (clipping), 12 finished-block count. Every block reads
     // st[7] and st[11] first; the last block of the step's last launch to
@@ -1004,7 +1004,7 @@ static const char* nr_kernel_source_() {
     "    }\n"
     "}\n"
     // Returns and advantages, backwards over the rollout (one thread; rl.sc's
-    // pg_update). algo 0: Monte Carlo returns (an episode cut short bootstraps
+    // PolicyAgent::update). algo 0: Monte Carlo returns (an episode cut short bootstraps
     // from V(next)); else GAE(lambda).
     "extern \"C\" __global__ void pg_gae(const float* v, const float* vn, const float* rew, const float* term,\n"
     "                                  const float* done, float* adv, float* ret, unsigned N, float gamma, float lam,\n"
@@ -2034,25 +2034,25 @@ struct RocmNet rocm_net_new(unsigned long maxBatch) {
     return n;
 }
 
-int rocm_net_set_input(&RocmNet n, unsigned long channels, unsigned long height, unsigned long width) {
-    if (n.layers.length() != 0UL || channels * height * width == 0UL) { n.ok = 0; return 0; }
-    n.inC = channels; n.inH = height; n.inW = width;
+int RocmNet::set_input(unsigned long channels, unsigned long height, unsigned long width) {
+    if (self.layers.length() != 0UL || channels * height * width == 0UL) { self.ok = 0; return 0; }
+    self.inC = channels; self.inH = height; self.inW = width;
     return 1;
 }
 
-int rocm_net_set_training(&RocmNet n, int training) {
-    int was = n.training;
-    n.training = training ? 1 : 0;
+int RocmNet::set_training(int training) {
+    int was = self.training;
+    self.training = training ? 1 : 0;
     return was;
 }
 
 static void nr_layer_free_(&RocmLayer L) {
-    rocm_free(&L.w); rocm_free(&L.b); rocm_free(&L.gw); rocm_free(&L.gb);
-    rocm_free(&L.runMean); rocm_free(&L.runVar); rocm_free(&L.stats);
-    rocm_free(&L.z); rocm_free(&L.col); rocm_free(&L.cm); rocm_free(&L.part);
-    if ((L.alias & 1) == 0) rocm_free(&L.h);
-    if ((L.alias & 2) == 0) rocm_free(&L.dh);
-    rocm_free(&L.wsn); rocm_free(&L.aux); rocm_free(&L.wh);
+    L.w.free(); L.b.free(); L.gw.free(); L.gb.free();
+    L.runMean.free(); L.runVar.free(); L.stats.free();
+    L.z.free(); L.col.free(); L.cm.free(); L.part.free();
+    if ((L.alias & 1) == 0) L.h.free();
+    if ((L.alias & 2) == 0) L.dh.free();
+    L.wsn.free(); L.aux.free(); L.wh.free();
 }
 
 static int nr_alloc_(&RocmBuf b, unsigned long n) {
@@ -2154,7 +2154,7 @@ static int nr_push_(&RocmNet n, struct RocmLayer L) {
         // an ADD's input gradient is its own output gradient: the previous layer
         // reads it from the ADD's buffer instead of a copy
         if (L.kind == ROCM_LAYER_ADD && prev.alias == 0 && prev.kind != ROCM_LAYER_SAVE) {
-            rocm_free(&prev.dh);
+            prev.dh.free();
             prev.dh = L.dh;
             prev.alias = 2;
         }
@@ -2174,22 +2174,22 @@ static int nr_push_(&RocmNet n, struct RocmLayer L) {
     return 1;
 }
 
-int rocm_net_add_linear(&RocmNet n, const &Tensor w, const &Tensor b, int act) {
+int RocmNet::add_linear(const &Tensor w, const &Tensor b, int act) {
     unsigned long in;
     unsigned long out;
     unsafe {
-        if (w->ndim != 2UL) { n.ok = 0; return 0; }
+        if (w->ndim != 2UL) { self.ok = 0; return 0; }
         in = w->shape[0];
         out = w->shape[1];
     }
     // the input keeps the producer's geometry (for the layout conversion)
     unsigned long c = in; unsigned long h = 1UL; unsigned long wd = 1UL;
     unsigned long pc = 0UL; unsigned long ph = 0UL; unsigned long pw = 0UL;
-    if (nr_cur_geom_(n, &pc, &ph, &pw) && pc * ph * pw == in) { c = pc; h = ph; wd = pw; }
+    if (nr_cur_geom_(self, &pc, &ph, &pw) && pc * ph * pw == in) { c = pc; h = ph; wd = pw; }
     struct RocmLayer L = nr_layer_(ROCM_LAYER_LINEAR, act, c, h, wd);
     L.outC = out; L.outH = 1UL; L.outW = 1UL;
-    if (!nr_upload_(&L.w, w, in * out) || !nr_upload_(&L.b, b, out)) { nr_layer_free_(&L); n.ok = 0; return 0; }
-    return nr_push_(n, L);
+    if (!nr_upload_(&L.w, w, in * out) || !nr_upload_(&L.b, b, out)) { nr_layer_free_(&L); self.ok = 0; return 0; }
+    return nr_push_(self, L);
 }
 
 // A fully connected layer from host arrays w [in, out] and b [out].
@@ -2229,27 +2229,27 @@ static int nr_add_conv_(&RocmNet n, int kind, const &Tensor w, const &Tensor b, 
     return nr_push_(n, L);
 }
 
-int rocm_net_add_conv2d_ex(&RocmNet n, const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH,
-                           unsigned long inW, const &Conv2dSpec spec, int act) {
-    return nr_add_conv_(n, ROCM_LAYER_CONV, w, b, inC, inH, inW, spec, act);
+int RocmNet::add_conv2d_ex(const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH, unsigned long inW,
+                           const &Conv2dSpec spec, int act) {
+    return nr_add_conv_(self, ROCM_LAYER_CONV, w, b, inC, inH, inW, spec, act);
 }
 
-int rocm_net_add_conv_transpose2d_ex(&RocmNet n, const &Tensor w, const &Tensor b, unsigned long inC,
-                                     unsigned long inH, unsigned long inW, const &Conv2dSpec spec, int act) {
-    return nr_add_conv_(n, ROCM_LAYER_CONVT, w, b, inC, inH, inW, spec, act);
+int RocmNet::add_conv_transpose2d_ex(const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH,
+                                     unsigned long inW, const &Conv2dSpec spec, int act) {
+    return nr_add_conv_(self, ROCM_LAYER_CONVT, w, b, inC, inH, inW, spec, act);
 }
 
-int rocm_net_add_conv2d(&RocmNet n, const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH,
-                        unsigned long inW, unsigned long kernel, unsigned long stride, unsigned long padding, int act) {
+int RocmNet::add_conv2d(const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH, unsigned long inW,
+                        unsigned long kernel, unsigned long stride, unsigned long padding, int act) {
     struct Conv2dSpec s = conv2d_spec(kernel, stride, padding);
-    return nr_add_conv_(n, ROCM_LAYER_CONV, w, b, inC, inH, inW, &s, act);
+    return nr_add_conv_(self, ROCM_LAYER_CONV, w, b, inC, inH, inW, &s, act);
 }
 
-int rocm_net_add_conv_transpose2d(&RocmNet n, const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH,
+int RocmNet::add_conv_transpose2d(const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH,
                                   unsigned long inW, unsigned long kernel, unsigned long stride,
                                   unsigned long padding, int act) {
     struct Conv2dSpec s = conv2d_spec(kernel, stride, padding);
-    return nr_add_conv_(n, ROCM_LAYER_CONVT, w, b, inC, inH, inW, &s, act);
+    return nr_add_conv_(self, ROCM_LAYER_CONVT, w, b, inC, inH, inW, &s, act);
 }
 
 // A layer that takes the current output's geometry.
@@ -2272,27 +2272,27 @@ static int nr_add_pool_(&RocmNet n, int kind, const &Pool2dSpec spec, int act) {
     return nr_push_(n, L);
 }
 
-int rocm_net_add_maxpool(&RocmNet n, const &Pool2dSpec spec, int act) {
-    return nr_add_pool_(n, ROCM_LAYER_MAXPOOL, spec, act);
+int RocmNet::add_maxpool(const &Pool2dSpec spec, int act) {
+    return nr_add_pool_(self, ROCM_LAYER_MAXPOOL, spec, act);
 }
 
-int rocm_net_add_avgpool(&RocmNet n, const &Pool2dSpec spec, int act) {
-    return nr_add_pool_(n, ROCM_LAYER_AVGPOOL, spec, act);
+int RocmNet::add_avgpool(const &Pool2dSpec spec, int act) {
+    return nr_add_pool_(self, ROCM_LAYER_AVGPOOL, spec, act);
 }
 
-int rocm_net_add_global_pool(&RocmNet n, int max, int act) {
+int RocmNet::add_global_pool(int max, int act) {
     struct RocmLayer L;
-    if (!nr_geom_layer_(n, max ? ROCM_LAYER_GLOBAL_MAXPOOL : ROCM_LAYER_GLOBAL_AVGPOOL, act, &L)) return 0;
+    if (!nr_geom_layer_(self, max ? ROCM_LAYER_GLOBAL_MAXPOOL : ROCM_LAYER_GLOBAL_AVGPOOL, act, &L)) return 0;
     L.outH = 1UL; L.outW = 1UL;
-    return nr_push_(n, L);
+    return nr_push_(self, L);
 }
 
-int rocm_net_add_upsample(&RocmNet n, unsigned long factor, int act) {
+int RocmNet::add_upsample(unsigned long factor, int act) {
     struct RocmLayer L;
-    if (factor == 0UL || !nr_geom_layer_(n, ROCM_LAYER_UPSAMPLE, act, &L)) { n.ok = 0; return 0; }
+    if (factor == 0UL || !nr_geom_layer_(self, ROCM_LAYER_UPSAMPLE, act, &L)) { self.ok = 0; return 0; }
     L.factor = factor;
     L.outH = L.inH * factor; L.outW = L.inW * factor;
-    return nr_push_(n, L);
+    return nr_push_(self, L);
 }
 
 static int nr_add_reshape_(&RocmNet n, unsigned long channels, unsigned long height, unsigned long width, int act) {
@@ -2303,57 +2303,56 @@ static int nr_add_reshape_(&RocmNet n, unsigned long channels, unsigned long hei
     return nr_push_(n, L);
 }
 
-int rocm_net_add_reshape(&RocmNet n, unsigned long channels, unsigned long height, unsigned long width) {
-    return nr_add_reshape_(n, channels, height, width, ACT_NONE);
+int RocmNet::add_reshape(unsigned long channels, unsigned long height, unsigned long width) {
+    return nr_add_reshape_(self, channels, height, width, ACT_NONE);
 }
 
-int rocm_net_add_batchnorm(&RocmNet n, const &Tensor gamma, const &Tensor beta, const &Tensor runMean,
-                           const &Tensor runVar, float momentum, float eps, int act) {
+int RocmNet::add_batchnorm(const &Tensor gamma, const &Tensor beta, const &Tensor runMean, const &Tensor runVar,
+                           float momentum, float eps, int act) {
     struct RocmLayer L;
-    if (!nr_geom_layer_(n, ROCM_LAYER_BATCHNORM, act, &L)) return 0;
+    if (!nr_geom_layer_(self, ROCM_LAYER_BATCHNORM, act, &L)) return 0;
     L.momentum = momentum;
     L.eps = eps;
     unsigned long C = L.inC;
     if (!nr_upload_(&L.w, gamma, C) || !nr_upload_(&L.b, beta, C) || !nr_upload_(&L.runMean, runMean, C) ||
-        !nr_upload_(&L.runVar, runVar, C)) { nr_layer_free_(&L); n.ok = 0; return 0; }
-    return nr_push_(n, L);
+        !nr_upload_(&L.runVar, runVar, C)) { nr_layer_free_(&L); self.ok = 0; return 0; }
+    return nr_push_(self, L);
 }
 
-int rocm_net_add_groupnorm(&RocmNet n, const &Tensor gamma, const &Tensor beta, unsigned long groups, float eps,
-                           int act) {
+int RocmNet::add_groupnorm(const &Tensor gamma, const &Tensor beta, unsigned long groups, float eps, int act) {
     struct RocmLayer L;
-    if (!nr_geom_layer_(n, ROCM_LAYER_GROUPNORM, act, &L)) return 0;
-    if (groups == 0UL || L.inC % groups != 0UL) { n.ok = 0; return 0; }
+    if (!nr_geom_layer_(self, ROCM_LAYER_GROUPNORM, act, &L)) return 0;
+    if (groups == 0UL || L.inC % groups != 0UL) { self.ok = 0; return 0; }
     L.factor = groups;
     L.eps = eps;
-    if (!nr_upload_(&L.w, gamma, L.inC) || !nr_upload_(&L.b, beta, L.inC)) { nr_layer_free_(&L); n.ok = 0; return 0; }
-    return nr_push_(n, L);
+    if (!nr_upload_(&L.w, gamma, L.inC) || !nr_upload_(&L.b, beta, L.inC)) { nr_layer_free_(&L); self.ok = 0; return 0; }
+    return nr_push_(self, L);
 }
 
 
 // ── Skips, resize, dropout, spectral norm ──
 
-unsigned long rocm_net_add_save(&RocmNet n) {
+unsigned long RocmNet::add_save() {
     struct RocmLayer L;
-    if (!nr_geom_layer_(n, ROCM_LAYER_SAVE, ACT_NONE, &L)) return 0UL;
-    unsigned long count = n.layers.length();
+    if (!nr_geom_layer_(self, ROCM_LAYER_SAVE, ACT_NONE, &L)) return 0UL;
+    unsigned long count = self.layers.length();
     if (count > 0UL) {
         // the saved activation is the previous layer's output itself, and its
         // gradient goes straight into the previous layer's (no copies)
-        &RocmLayer prev = n.layers.at(count - 1UL);
+        &RocmLayer prev = self.layers.at(count - 1UL);
         L.h = prev.h;
         L.dh = prev.dh;
         L.alias = 3;
     }
-    if (!nr_push_(n, L)) return 0UL;
-    return n.layers.length() - 1UL;
+    if (!nr_push_(self, L)) return 0UL;
+    return self.layers.length() - 1UL;
 }
 
-int rocm_net_add_skip(&RocmNet n, unsigned long slot, ?&Tensor projW, ?&Tensor projB, int act) {
+int RocmNet::add_skip(unsigned long slot, ?&Tensor projW, ?&Tensor projB, int act) {
     struct RocmLayer L;
-    if (!nr_geom_layer_(n, ROCM_LAYER_ADD, act, &L)) return 0;
-    if (slot >= n.layers.length() || n.layers.at(slot).kind != ROCM_LAYER_SAVE) { n.ok = 0; return 0; }
-    &RocmLayer sv = n.layers.at(slot);
+    if (!nr_geom_layer_(self, ROCM_LAYER_ADD, act, &L)) return 0;
+    if (slot >= self.layers.length() || self.layers.at(slot).kind != ROCM_LAYER_SAVE) { self.ok = 0; return 0; }
+    &RocmLayer sv = self.layers.at(slot);
     L.slot = slot;
     L.skipC = sv.outC; L.skipH = sv.outH; L.skipW = sv.outW;
     int same = sv.outC == L.inC && sv.outH == L.inH && sv.outW == L.inW;
@@ -2362,7 +2361,7 @@ int rocm_net_add_skip(&RocmNet n, unsigned long slot, ?&Tensor projW, ?&Tensor p
         unsigned long st = 1UL;
         while (st <= sv.outH && (conv_out_side(sv.outH, 1UL, st, 0UL) != L.inH || conv_out_side(sv.outW, 1UL, st, 0UL) != L.inW))
             st = st + 1UL;
-        if (st > sv.outH) { n.ok = 0; return 0; }
+        if (st > sv.outH) { self.ok = 0; return 0; }
         L.flag = 1;
         L.conv = conv2d_spec(1UL, st, 0UL);
         int up = 0;
@@ -2375,21 +2374,21 @@ int rocm_net_add_skip(&RocmNet n, unsigned long slot, ?&Tensor projW, ?&Tensor p
             }
             case null: { }
         }
-        if (!up) { nr_layer_free_(&L); n.ok = 0; return 0; }
+        if (!up) { nr_layer_free_(&L); self.ok = 0; return 0; }
     }
-    return nr_push_(n, L);
+    return nr_push_(self, L);
 }
 
-int rocm_net_add_concat(&RocmNet n, unsigned long slot) {
+int RocmNet::add_concat(unsigned long slot) {
     struct RocmLayer L;
-    if (!nr_geom_layer_(n, ROCM_LAYER_CONCAT, ACT_NONE, &L)) return 0;
-    if (slot >= n.layers.length() || n.layers.at(slot).kind != ROCM_LAYER_SAVE) { n.ok = 0; return 0; }
-    &RocmLayer sv = n.layers.at(slot);
-    if (sv.outH != L.inH || sv.outW != L.inW) { n.ok = 0; return 0; }
+    if (!nr_geom_layer_(self, ROCM_LAYER_CONCAT, ACT_NONE, &L)) return 0;
+    if (slot >= self.layers.length() || self.layers.at(slot).kind != ROCM_LAYER_SAVE) { self.ok = 0; return 0; }
+    &RocmLayer sv = self.layers.at(slot);
+    if (sv.outH != L.inH || sv.outW != L.inW) { self.ok = 0; return 0; }
     L.slot = slot;
     L.skipC = sv.outC; L.skipH = sv.outH; L.skipW = sv.outW;
     L.outC = L.inC + sv.outC;
-    return nr_push_(n, L);
+    return nr_push_(self, L);
 }
 
 // Resampling taps along one axis, exactly as convnet.sc's cn_taps_.
@@ -2501,10 +2500,10 @@ static void nr_axis_tables_(&float dst, unsigned long in, unsigned long out, int
 
 static unsigned long nr_resize_taps_(int mode) { return mode == RESIZE_NEAREST ? 1UL : (mode == RESIZE_BILINEAR ? 2UL : 4UL); }
 
-int rocm_net_add_resize(&RocmNet n, unsigned long outH, unsigned long outW, int mode, int alignCorners) {
+int RocmNet::add_resize(unsigned long outH, unsigned long outW, int mode, int alignCorners) {
     struct RocmLayer L;
     if (outH == 0UL || outW == 0UL || mode < RESIZE_NEAREST || mode > RESIZE_BICUBIC ||
-        !nr_geom_layer_(n, ROCM_LAYER_RESIZE, ACT_NONE, &L)) { n.ok = 0; return 0; }
+        !nr_geom_layer_(self, ROCM_LAYER_RESIZE, ACT_NONE, &L)) { self.ok = 0; return 0; }
     L.outH = outH; L.outW = outW;
     L.mode = mode;
     L.flag = mode == RESIZE_NEAREST ? 0 : alignCorners;
@@ -2521,17 +2520,17 @@ int rocm_net_add_resize(&RocmNet n, unsigned long outH, unsigned long outW, int 
             free((void*)t);
         }
     }
-    if (!ok) { nr_layer_free_(&L); n.ok = 0; return 0; }
-    return nr_push_(n, L);
+    if (!ok) { nr_layer_free_(&L); self.ok = 0; return 0; }
+    return nr_push_(self, L);
 }
 
-int rocm_net_add_dropout(&RocmNet n, float p, int byChannel, unsigned long seed) {
+int RocmNet::add_dropout(float p, int byChannel, unsigned long seed) {
     struct RocmLayer L;
-    if (!nr_geom_layer_(n, ROCM_LAYER_DROPOUT, ACT_NONE, &L)) return 0;
+    if (!nr_geom_layer_(self, ROCM_LAYER_DROPOUT, ACT_NONE, &L)) return 0;
     L.prob = p;
     L.flag = byChannel ? 1 : 0;
     L.seed = seed;
-    return nr_push_(n, L);
+    return nr_push_(self, L);
 }
 
 // Rows / columns of a layer's weight as a matrix (shape[0] of its tensor).
@@ -2540,17 +2539,17 @@ static unsigned long nr_w_rows_(const &RocmLayer L) {
     return L.kind == ROCM_LAYER_CONV ? L.outC : L.inC;
 }
 
-int rocm_net_spectral_norm(&RocmNet n, const &Tensor u) {
-    unsigned long c = n.layers.length();
-    if (!n.ok || c == 0UL) { n.ok = 0; return 0; }
-    &RocmLayer L = n.layers.at(c - 1UL);
-    if (L.kind != ROCM_LAYER_LINEAR && L.kind != ROCM_LAYER_CONV && L.kind != ROCM_LAYER_CONVT) { n.ok = 0; return 0; }
+int RocmNet::spectral_norm(const &Tensor u) {
+    unsigned long c = self.layers.length();
+    if (!self.ok || c == 0UL) { self.ok = 0; return 0; }
+    &RocmLayer L = self.layers.at(c - 1UL);
+    if (L.kind != ROCM_LAYER_LINEAR && L.kind != ROCM_LAYER_CONV && L.kind != ROCM_LAYER_CONVT) { self.ok = 0; return 0; }
     unsigned long rows = nr_w_rows_(L);
     unsigned long cols = L.w.len / rows;
     // aux: u [rows] | v [cols] | W v [rows] | sigma, dot, -, counter | partial sums [64]
     if (!nr_tensor_ok_(u, rows) || !nr_alloc_(&L.wsn, L.w.len) || !nr_alloc_(&L.aux, 2UL * rows + cols + 4UL + 64UL) ||
-        !rocm_zero(L.aux)) { n.ok = 0; return 0; }
-    unsafe { if (!rocm_write(L.aux, (const &float)(const float*)u->data, rows) || !rocm_sync()) { n.ok = 0; return 0; } }
+        !rocm_zero(L.aux)) { self.ok = 0; return 0; }
+    unsafe { if (!rocm_write(L.aux, (const &float)(const float*)u->data, rows) || !rocm_sync()) { self.ok = 0; return 0; } }
     L.spectral = 1;
     return 1;
 }
@@ -2560,7 +2559,7 @@ struct RocmNet rocm_net_from_mlp(const &Mlp m, unsigned long maxBatch) {
     unsigned long l = 0UL;
     while (n.ok && l < m.nLayers) {
         int act = l + 1UL == m.nLayers ? m.outAct : m.act;
-        rocm_net_add_linear(&n, *m.params.at(2UL * l), *m.params.at(2UL * l + 1UL), act);
+        n.add_linear(*m.params.at(2UL * l), *m.params.at(2UL * l + 1UL), act);
         l = l + 1UL;
     }
     return n;
@@ -2568,7 +2567,7 @@ struct RocmNet rocm_net_from_mlp(const &Mlp m, unsigned long maxBatch) {
 
 struct RocmNet rocm_net_from_convnet(const &ConvNet c, unsigned long maxBatch) {
     struct RocmNet n = rocm_net_new(maxBatch);
-    rocm_net_set_input(&n, c.inC, c.inH, c.inW);
+    n.set_input(c.inC, c.inH, c.inW);
     n.training = c.training ? 1 : 0;
     struct Vec<unsigned long> slots = vec_new();   // ConvNet slot -> SAVE layer index
     unsigned long i = 0UL;
@@ -2576,63 +2575,58 @@ struct RocmNet rocm_net_from_convnet(const &ConvNet c, unsigned long maxBatch) {
         &ConvLayer l = c.layers.at(i);
         int k = l.kind;
         if (k == CONV_LAYER_CONV) {
-            rocm_net_add_conv2d_ex(&n, *c.params.at(l.param), *c.params.at(l.param + 1UL), l.inC, l.inH, l.inW,
-                                   &l.conv, l.act);
+            n.add_conv2d_ex(*c.params.at(l.param), *c.params.at(l.param + 1UL), l.inC, l.inH, l.inW, &l.conv, l.act);
         } else if (k == CONV_LAYER_DECONV) {
-            rocm_net_add_conv_transpose2d_ex(&n, *c.params.at(l.param), *c.params.at(l.param + 1UL), l.inC, l.inH,
-                                             l.inW, &l.conv, l.act);
+            n.add_conv_transpose2d_ex(*c.params.at(l.param), *c.params.at(l.param + 1UL), l.inC, l.inH, l.inW, &l.conv, l.act);
         } else if (k == CONV_LAYER_DENSE) {
-            rocm_net_add_linear(&n, *c.params.at(l.param), *c.params.at(l.param + 1UL), l.act);
+            n.add_linear(*c.params.at(l.param), *c.params.at(l.param + 1UL), l.act);
         } else if (k == CONV_LAYER_MAXPOOL) {
-            rocm_net_add_maxpool(&n, &l.pool, l.act);
+            n.add_maxpool(&l.pool, l.act);
         } else if (k == CONV_LAYER_AVGPOOL) {
-            rocm_net_add_avgpool(&n, &l.pool, l.act);
+            n.add_avgpool(&l.pool, l.act);
         } else if (k == CONV_LAYER_GLOBAL_AVGPOOL || k == CONV_LAYER_GLOBAL_MAXPOOL) {
-            rocm_net_add_global_pool(&n, k == CONV_LAYER_GLOBAL_MAXPOOL, l.act);
+            n.add_global_pool(k == CONV_LAYER_GLOBAL_MAXPOOL, l.act);
         } else if (k == CONV_LAYER_UPSAMPLE) {
-            rocm_net_add_upsample(&n, l.factor, l.act);
+            n.add_upsample(l.factor, l.act);
         } else if (k == CONV_LAYER_BATCHNORM) {
-            rocm_net_add_batchnorm(&n, *c.params.at(l.param), *c.params.at(l.param + 1UL), *c.buffers.at(l.buffer),
-                                   *c.buffers.at(l.buffer + 1UL), (float)0.1, (float)0.00001, l.act);
+            n.add_batchnorm(*c.params.at(l.param), *c.params.at(l.param + 1UL), *c.buffers.at(l.buffer), *c.buffers.at(l.buffer + 1UL), (float)0.1, (float)0.00001, l.act);
         } else if (k == CONV_LAYER_GROUPNORM) {
-            rocm_net_add_groupnorm(&n, *c.params.at(l.param), *c.params.at(l.param + 1UL), l.factor,
-                                   (float)0.00001, l.act);
+            n.add_groupnorm(*c.params.at(l.param), *c.params.at(l.param + 1UL), l.factor, (float)0.00001, l.act);
         } else if (k == CONV_LAYER_RESHAPE || k == CONV_LAYER_IDENTITY) {
             if (k == CONV_LAYER_RESHAPE || l.act != ACT_NONE) nr_add_reshape_(&n, l.outC, l.outH, l.outW, l.act);
         } else if (k == CONV_LAYER_SAVE) {
             while (slots.length() <= l.slot) slots.push(0UL);
-            *slots.at(l.slot) = rocm_net_add_save(&n);
+            *slots.at(l.slot) = n.add_save();
         } else if (k == CONV_LAYER_ADD || k == CONV_LAYER_CONCAT) {
             if (l.slot >= slots.length()) { n.ok = 0; }
-            else if (k == CONV_LAYER_CONCAT) { rocm_net_add_concat(&n, *slots.at(l.slot)); }
+            else if (k == CONV_LAYER_CONCAT) { n.add_concat(*slots.at(l.slot)); }
             else if (l.flag) {
-                rocm_net_add_skip(&n, *slots.at(l.slot), (?&Tensor)*c.params.at(l.param),
-                                  (?&Tensor)*c.params.at(l.param + 1UL), l.act);
+                n.add_skip(*slots.at(l.slot), (?&Tensor)*c.params.at(l.param), (?&Tensor)*c.params.at(l.param + 1UL), l.act);
             } else {
-                rocm_net_add_skip(&n, *slots.at(l.slot), null, null, l.act);
+                n.add_skip(*slots.at(l.slot), null, null, l.act);
             }
         } else if (k == CONV_LAYER_RESIZE) {
-            rocm_net_add_resize(&n, l.outH, l.outW, l.mode, l.flag);
+            n.add_resize(l.outH, l.outW, l.mode, l.flag);
         } else if (k == CONV_LAYER_DROPOUT) {
             struct Rng r = *c.rngs.at(l.buffer);
-            rocm_net_add_dropout(&n, l.prob, l.flag, rng_u64(&r));
+            n.add_dropout(l.prob, l.flag, r.u64());
         } else {
             n.ok = 0;
         }
         if (n.ok && l.spectral && (k == CONV_LAYER_CONV || k == CONV_LAYER_DECONV || k == CONV_LAYER_DENSE))
-            rocm_net_spectral_norm(&n, *c.buffers.at(l.buffer));
+            n.spectral_norm(*c.buffers.at(l.buffer));
         i = i + 1UL;
     }
     slots.free();
     return n;
 }
 
-unsigned long rocm_net_in_dim(const &RocmNet n) { return n.inC * n.inH * n.inW; }
+unsigned long RocmNet::in_dim() const { return self.inC * self.inH * self.inW; }
 
-unsigned long rocm_net_out_dim(const &RocmNet n) {
-    unsigned long c = n.layers.length();
+unsigned long RocmNet::out_dim() const {
+    unsigned long c = self.layers.length();
     if (c == 0UL) return 0UL;
-    return nr_out_size_(n.layers.at(c - 1UL));
+    return nr_out_size_(self.layers.at(c - 1UL));
 }
 
 // Copies every (w, b) pair (stats 0) or batch norm's (runMean, runVar)
@@ -2679,33 +2673,33 @@ static int nr_transfer_(&RocmNet n, &Vec<&Tensor> ts, int stats, int download) {
     return k == ts.length() && (download || rocm_sync());
 }
 
-int rocm_net_download(const &RocmNet n, &Vec<&Tensor> params) {
-    unsafe { return nr_transfer_((&RocmNet)n, params, 0, 1); }
+int RocmNet::download(&Vec<&Tensor> params) const {
+    unsafe { return nr_transfer_((&RocmNet)self, params, 0, 1); }
 }
 
-int rocm_net_upload(&RocmNet n, const &Vec<&Tensor> params) {
-    unsafe { return nr_transfer_(n, (&Vec<&Tensor>)params, 0, 0); }
+int RocmNet::upload(const &Vec<&Tensor> params) {
+    unsafe { return nr_transfer_(self, (&Vec<&Tensor>)params, 0, 0); }
 }
 
-int rocm_net_download_stats(const &RocmNet n, &Vec<&Tensor> buffers) {
-    unsafe { return nr_transfer_((&RocmNet)n, buffers, 1, 1); }
+int RocmNet::download_stats(&Vec<&Tensor> buffers) const {
+    unsafe { return nr_transfer_((&RocmNet)self, buffers, 1, 1); }
 }
 
-int rocm_net_upload_stats(&RocmNet n, const &Vec<&Tensor> buffers) {
-    unsafe { return nr_transfer_(n, (&Vec<&Tensor>)buffers, 1, 0); }
+int RocmNet::upload_stats(const &Vec<&Tensor> buffers) {
+    unsafe { return nr_transfer_(self, (&Vec<&Tensor>)buffers, 1, 0); }
 }
 
-int rocm_net_download_convnet(const &RocmNet n, &ConvNet c) {
-    return rocm_net_download(n, &c.params) && rocm_net_download_stats(n, &c.buffers);
+int RocmNet::download_convnet(&ConvNet c) const {
+    return self.download(&c.params) && self.download_stats(&c.buffers);
 }
 
-void rocm_net_free(&RocmNet n) {
+void RocmNet::free() {
     unsigned long i = 0UL;
-    while (i < n.layers.length()) { nr_layer_free_(n.layers.at(i)); i = i + 1UL; }
-    n.layers.free();
-    rocm_free(&n.scale); rocm_free(&n.xh); rocm_free(&n.dxh); rocm_free(&n.out32); rocm_free(&n.dout32);
-    n.precision = 0;
-    n.ok = 0;
+    while (i < self.layers.length()) { nr_layer_free_(self.layers.at(i)); i = i + 1UL; }
+    self.layers.free();
+    self.scale.free(); self.xh.free(); self.dxh.free(); self.out32.free(); self.dout32.free();
+    self.precision = 0;
+    self.ok = 0;
 }
 
 // ── Batch norm passes (bn_stats / bn_grads / bn_finish / bn_apply) ──
@@ -2784,7 +2778,7 @@ static int nr_splitk_reserve_(unsigned long m, unsigned long n, unsigned long k)
     if (!g_nr_splitk_init) { g_nr_splitk = nr_none_(); g_nr_splitk_init = 1; }
     if (g_nr_splitk.len >= need) return 1;
     rocm_sync();
-    rocm_free(&g_nr_splitk);
+    g_nr_splitk.free();
     g_nr_splitk = rocm_alloc(need);
     return g_nr_splitk.dev != 0UL;
 }
@@ -2926,7 +2920,7 @@ static int nr_mio_grow_(&RocmBuf b, unsigned long bytes) {
     if (n == 0UL) n = 1UL;
     if (b.len >= n) return 1;
     rocm_sync();
-    rocm_free(b);
+    b.free();
     *b = rocm_alloc(n);
     return b.dev != 0UL;
 }
@@ -3577,15 +3571,15 @@ static void nr_engine_pick_(&RocmNet n, &RocmLayer L, struct RocmBuf x, unsigned
         g_mio_good[plan] = 0;
         nr_layer_fwd_(n, L, x, B);   // the scratch the backward pass reads (the timed one overwrote it)
     } else {
-        rocm_free(&L.col);
-        rocm_free(&L.cm);
+        L.col.free();
+        L.cm.free();
     }
 }
 
 static int nr_forward_(&RocmNet n, struct RocmBuf x, unsigned long batch) {
     struct RocmBuf cur = x;
     if (n.precision != 0) {
-        if (!nr_cvt_(1, x, n.xh, batch * rocm_net_in_dim(n), nr_none_(), 0) || !nr_round_weights_(n)) return 0;
+        if (!nr_cvt_(1, x, n.xh, batch * n.in_dim(), nr_none_(), 0) || !nr_round_weights_(n)) return 0;
         cur = n.xh;
     }
     unsigned long c = n.layers.length();
@@ -3599,27 +3593,27 @@ static int nr_forward_(&RocmNet n, struct RocmBuf x, unsigned long batch) {
         cur = L.h;
         i = i + 1UL;
     }
-    return n.precision == 0 || nr_cvt_(0, cur, n.out32, batch * rocm_net_out_dim(n), nr_none_(), 0);
+    return n.precision == 0 || nr_cvt_(0, cur, n.out32, batch * n.out_dim(), nr_none_(), 0);
 }
 
-struct RocmBuf rocm_net_forward(&RocmNet n, struct RocmBuf x, unsigned long batch) {
-    unsigned long c = n.layers.length();
-    if (!n.ok || c == 0UL || batch == 0UL || batch > n.maxBatch || !nr_fits_(x, batch * rocm_net_in_dim(n)))
+struct RocmBuf RocmNet::forward(struct RocmBuf x, unsigned long batch) {
+    unsigned long c = self.layers.length();
+    if (!self.ok || c == 0UL || batch == 0UL || batch > self.maxBatch || !nr_fits_(x, batch * self.in_dim()))
         return nr_none_();
-    g_nr_prec = n.precision;
-    int ok = nr_forward_(n, x, batch);
+    g_nr_prec = self.precision;
+    int ok = nr_forward_(self, x, batch);
     g_nr_prec = 0;
     if (!ok) return nr_none_();
-    &RocmLayer last = n.layers.at(c - 1UL);
-    if (n.precision != 0) return nr_view_(n.out32, batch * nr_out_size_(last));
+    &RocmLayer last = self.layers.at(c - 1UL);
+    if (self.precision != 0) return nr_view_(self.out32, batch * nr_out_size_(last));
     return nr_view_(last.h, batch * nr_out_size_(last));
 }
 
-struct RocmBuf rocm_net_grad_output(const &RocmNet n) {
-    unsigned long c = n.layers.length();
+struct RocmBuf RocmNet::grad_output() const {
+    unsigned long c = self.layers.length();
     if (c == 0UL) return nr_none_();
-    if (n.precision != 0) return n.dout32;
-    return n.layers.at(c - 1UL).dh;
+    if (self.precision != 0) return self.dout32;
+    return self.layers.at(c - 1UL).dh;
 }
 
 static int nr_backward_(&RocmNet n, struct RocmBuf x, unsigned long batch, struct RocmBuf dx) {
@@ -3651,57 +3645,57 @@ static int nr_backward_(&RocmNet n, struct RocmBuf x, unsigned long batch, struc
         if (needDx && i == 0UL && !nr_fits_(dx, batch * nr_in_size_(L))) return 0;
         if (!nr_layer_bwd_(n, L, in, batch, needDx, target)) return 0;
     }
-    return n.precision == 0 || dx.dev == 0UL || nr_cvt_(0, n.dxh, dx, batch * rocm_net_in_dim(n), ls, 1);
+    return n.precision == 0 || dx.dev == 0UL || nr_cvt_(0, n.dxh, dx, batch * n.in_dim(), ls, 1);
 }
 
-int rocm_net_backward(&RocmNet n, struct RocmBuf x, unsigned long batch, struct RocmBuf dx) {
-    unsigned long c = n.layers.length();
-    if (!n.ok || c == 0UL || batch == 0UL || batch > n.maxBatch) return 0;
-    g_nr_prec = n.precision;
-    int ok = nr_backward_(n, x, batch, dx);
+int RocmNet::backward(struct RocmBuf x, unsigned long batch, struct RocmBuf dx) {
+    unsigned long c = self.layers.length();
+    if (!self.ok || c == 0UL || batch == 0UL || batch > self.maxBatch) return 0;
+    g_nr_prec = self.precision;
+    int ok = nr_backward_(self, x, batch, dx);
     g_nr_prec = 0;
     return ok;
 }
 
-int rocm_net_set_loss_scale(&RocmNet n, float scale) {
-    if (n.scale.dev == 0UL || !(scale > (float)0.0)) return 0;
+int RocmNet::set_loss_scale(float scale) {
+    if (self.scale.dev == 0UL || !(scale > (float)0.0)) return 0;
     float v[2];
     v[0] = scale; v[1] = (float)0.0;
-    return nr_write_(n.scale, &v[0], 2UL);
+    return nr_write_(self.scale, &v[0], 2UL);
 }
 
-float rocm_net_loss_scale(const &RocmNet n) {
-    if (n.precision != ROCM_FP16 || n.scale.dev == 0UL) return (float)1.0;
+float RocmNet::loss_scale() const {
+    if (self.precision != ROCM_FP16 || self.scale.dev == 0UL) return (float)1.0;
     float v[2];
     v[0] = (float)1.0;
-    if (!rocm_read(n.scale, &v[0], 2UL)) return (float)0.0;
+    if (!rocm_read(self.scale, &v[0], 2UL)) return (float)0.0;
     return v[0];
 }
 
-int rocm_net_set_precision(&RocmNet n, int dtype) {
-    if (!n.ok || n.layers.length() == 0UL || (dtype != 0 && dtype != ROCM_FP16 && dtype != ROCM_BF16)) return 0;
-    if (dtype == 0) { n.precision = 0; return 1; }
+int RocmNet::set_precision(int dtype) {
+    if (!self.ok || self.layers.length() == 0UL || (dtype != 0 && dtype != ROCM_FP16 && dtype != ROCM_BF16)) return 0;
+    if (dtype == 0) { self.precision = 0; return 1; }
     if (!nr_ensure_prec_(dtype)) return 0;
     unsigned long i = 0UL;
-    while (i < n.layers.length()) {
-        &RocmLayer L = n.layers.at(i);
+    while (i < self.layers.length()) {
+        &RocmLayer L = self.layers.at(i);
         int k = L.kind;
         int conv = k == ROCM_LAYER_CONV || k == ROCM_LAYER_CONVT || (k == ROCM_LAYER_ADD && L.flag);
         if (conv && !nr_mio_on_()) return 0;
         if (nr_has_wh_(L) && L.wh.dev == 0UL && !nr_alloc_(&L.wh, (L.w.len + 1UL) / 2UL)) return 0;
         i = i + 1UL;
     }
-    unsigned long B = n.maxBatch;
-    unsigned long in = rocm_net_in_dim(n);
-    unsigned long out = rocm_net_out_dim(n);
-    if (n.scale.dev == 0UL &&
-        (!nr_alloc_(&n.scale, 2UL) || !nr_alloc_(&n.xh, (B * in + 1UL) / 2UL) || !nr_alloc_(&n.dxh, (B * in + 1UL) / 2UL) ||
-         !nr_alloc_(&n.out32, B * out) || !nr_alloc_(&n.dout32, B * out))) {
-        n.ok = 0;
+    unsigned long B = self.maxBatch;
+    unsigned long in = self.in_dim();
+    unsigned long out = self.out_dim();
+    if (self.scale.dev == 0UL &&
+        (!nr_alloc_(&self.scale, 2UL) || !nr_alloc_(&self.xh, (B * in + 1UL) / 2UL) || !nr_alloc_(&self.dxh, (B * in + 1UL) / 2UL) ||
+         !nr_alloc_(&self.out32, B * out) || !nr_alloc_(&self.dout32, B * out))) {
+        self.ok = 0;
         return 0;
     }
-    n.precision = dtype;
-    return rocm_net_set_loss_scale(n, dtype == ROCM_FP16 ? (float)65536.0 : (float)1.0);
+    self.precision = dtype;
+    return self.set_loss_scale(dtype == ROCM_FP16 ? (float)65536.0 : (float)1.0);
 }
 
 // ── Training steps ───────────────────────────────────────────────────────────
@@ -3755,8 +3749,8 @@ static int nr_small_(const &RocmNet n, unsigned long rows) {
 static int nr_small_step_(&RocmNet n, struct RocmBuf x, struct RocmBuf y, unsigned long rows, struct RocmBuf loss1,
                           int kind) {
     unsigned long c = n.layers.length();
-    unsigned long outDim = rocm_net_out_dim(n);
-    if (!n.ok || rows == 0UL || rows > n.maxBatch || !nr_fits_(x, rows * rocm_net_in_dim(n)) ||
+    unsigned long outDim = n.out_dim();
+    if (!n.ok || rows == 0UL || rows > n.maxBatch || !nr_fits_(x, rows * n.in_dim()) ||
         !nr_fits_(y, kind == 0 ? rows : rows * outDim) || !nr_fits_(loss1, 1UL)) return 0;
     struct NrNetTab_ t;
     unsigned long i = 0UL;
@@ -3786,19 +3780,19 @@ static int nr_small_step_(&RocmNet n, struct RocmBuf x, struct RocmBuf y, unsign
 
 int rocm_net_ce_step(&RocmNet n, struct RocmBuf x, struct RocmBuf y, unsigned long rows, struct RocmBuf loss1) {
     if (nr_small_(n, rows)) return nr_small_step_(n, x, y, rows, loss1, 0);
-    struct RocmBuf out = rocm_net_forward(n, x, rows);
+    struct RocmBuf out = n.forward(x, rows);
     if (out.dev == 0UL) return 0;
-    return rocm_cross_entropy(out, y, rocm_net_grad_output(n), loss1, rows, rocm_net_out_dim(n)) &&
-           rocm_net_backward(n, x, rows, nr_none_());
+    return rocm_cross_entropy(out, y, n.grad_output(), loss1, rows, n.out_dim()) &&
+           n.backward(x, rows, nr_none_());
 }
 
 static int nr_pointwise_step_(&RocmNet n, int kernel, struct RocmBuf x, struct RocmBuf t, unsigned long rows,
                               struct RocmBuf loss1) {
     if (nr_small_(n, rows)) return nr_small_step_(n, x, t, rows, loss1, kernel == NR_BCE ? 1 : 2);
-    struct RocmBuf out = rocm_net_forward(n, x, rows);
+    struct RocmBuf out = n.forward(x, rows);
     if (out.dev == 0UL) return 0;
-    return nr_pointwise_loss_(kernel, out, t, rocm_net_grad_output(n), loss1, rows * rocm_net_out_dim(n), (float)1.0) &&
-           rocm_net_backward(n, x, rows, nr_none_());
+    return nr_pointwise_loss_(kernel, out, t, n.grad_output(), loss1, rows * n.out_dim(), (float)1.0) &&
+           n.backward(x, rows, nr_none_());
 }
 
 int rocm_net_mse_step(&RocmNet n, struct RocmBuf x, struct RocmBuf y, unsigned long rows, struct RocmBuf loss1) {
@@ -3855,41 +3849,41 @@ struct RocmOptimizer rocm_optimizer_new(int kind, float lr) {
     return o;
 }
 
-int rocm_optimizer_sync(&RocmOptimizer o) {
-    if (!o.ok) return 0;
+int RocmOptimizer::sync() {
+    if (!self.ok) return 0;
     float f[7];
-    nr_opt_fields_(o, &f[0]);
+    nr_opt_fields_(self, &f[0]);
     int same = 1;
     unsigned long i = 0UL;
-    while (i < 7UL) { if (f[i] != o.sent[i]) same = 0; i = i + 1UL; }
+    while (i < 7UL) { if (f[i] != self.sent[i]) same = 0; i = i + 1UL; }
     if (same) return 1;
-    if (!nr_write_(o.state, &f[0], 7UL)) return 0;
+    if (!nr_write_(self.state, &f[0], 7UL)) return 0;
     i = 0UL;
-    while (i < 7UL) { o.sent[i] = f[i]; i = i + 1UL; }
+    while (i < 7UL) { self.sent[i] = f[i]; i = i + 1UL; }
     return 1;
 }
 
-int rocm_optimizer_add(&RocmOptimizer o, struct RocmBuf w, struct RocmBuf g) {
-    if (!o.ok || w.dev == 0UL || !nr_fits_(g, w.len)) return 0;
+int RocmOptimizer::add(struct RocmBuf w, struct RocmBuf g) {
+    if (!self.ok || w.dev == 0UL || !nr_fits_(g, w.len)) return 0;
     struct RocmBuf m = rocm_alloc(w.len);
     struct RocmBuf v = rocm_alloc(w.len);
     if (m.dev == 0UL || v.dev == 0UL || !rocm_zero(m) || !rocm_zero(v)) {
-        rocm_free(&m); rocm_free(&v);
-        o.ok = 0;
+        m.free(); v.free();
+        self.ok = 0;
         return 0;
     }
-    o.w.push(w); o.g.push(g); o.m.push(m); o.v.push(v);
+    self.w.push(w); self.g.push(g); self.m.push(m); self.v.push(v);
     return 1;
 }
 
-int rocm_optimizer_add_net(&RocmOptimizer o, const &RocmNet n) {
-    if (!n.ok) { o.ok = 0; return 0; }
-    if (n.precision == ROCM_FP16) o.lossScale = n.scale;
+int RocmNet::add_params(&RocmOptimizer o) const {
+    if (!self.ok) { o.ok = 0; return 0; }
+    if (self.precision == ROCM_FP16) o.lossScale = self.scale;
     unsigned long i = 0UL;
-    while (i < n.layers.length()) {
-        &RocmLayer L = n.layers.at(i);
+    while (i < self.layers.length()) {
+        &RocmLayer L = self.layers.at(i);
         // layers without parameters (pooling, resize, skips without a projection, ...) have none to add
-        if (L.w.dev != 0UL && (!rocm_optimizer_add(o, L.w, L.gw) || !rocm_optimizer_add(o, L.b, L.gb))) return 0;
+        if (L.w.dev != 0UL && (!o.add(L.w, L.gw) || !o.add(L.b, L.gb))) return 0;
         i = i + 1UL;
     }
     return 1;
@@ -3947,23 +3941,23 @@ static int nr_opt_launch_(const &RocmOptimizer o, int kernel, int clip) {
     return 1;
 }
 
-int rocm_optimizer_step(&RocmOptimizer o) {
-    if (!o.ok) return 0;
-    if (!nr_capturing_() && !rocm_optimizer_sync(o)) return 0;
-    if (o.w.length() == 0UL) return 1;
-    int clip = o.clipNorm > (float)0.0 ? 1 : 0;
-    if ((clip || o.lossScale.dev != 0UL) && !nr_opt_launch_(o, NR_SUMSQ, clip)) return 0;
-    if (!nr_opt_launch_(o, NR_OPT, clip)) return 0;
-    o.t = o.t + 1UL;
+int RocmOptimizer::step() {
+    if (!self.ok) return 0;
+    if (!nr_capturing_() && !self.sync()) return 0;
+    if (self.w.length() == 0UL) return 1;
+    int clip = self.clipNorm > (float)0.0 ? 1 : 0;
+    if ((clip || self.lossScale.dev != 0UL) && !nr_opt_launch_(self, NR_SUMSQ, clip)) return 0;
+    if (!nr_opt_launch_(self, NR_OPT, clip)) return 0;
+    self.t = self.t + 1UL;
     return 1;
 }
 
-void rocm_optimizer_free(&RocmOptimizer o) {
+void RocmOptimizer::free() {
     unsigned long i = 0UL;
-    while (i < o.m.length()) { rocm_free(o.m.at(i)); rocm_free(o.v.at(i)); i = i + 1UL; }
-    o.w.free(); o.g.free(); o.m.free(); o.v.free();
-    rocm_free(&o.state);
-    o.ok = 0;
+    while (i < self.m.length()) { self.m.at(i).free(); self.v.at(i).free(); i = i + 1UL; }
+    self.w.free(); self.g.free(); self.m.free(); self.v.free();
+    self.state.free();
+    self.ok = 0;
 }
 
 // ── Row ops ──────────────────────────────────────────────────────────────────
@@ -4069,7 +4063,7 @@ struct RocmVae rocm_vae_new(const &Vae v, unsigned long maxBatch) {
 
 struct RocmVae rocm_conv_vae_new(const &ConvVae v, unsigned long maxBatch) {
     struct RocmVae d = nr_vae_blank_(&v.cfg, maxBatch);
-    d.inDim = convnet_out_dim(&v.dec);
+    d.inDim = v.dec.out_dim();
     d.encChannels = v.enc.inC - v.cfg.classes;
     d.encPlane = v.enc.inH * v.enc.inW;
     d.enc = rocm_net_from_convnet(&v.enc, d.maxBatch);
@@ -4115,14 +4109,14 @@ static int nr_vae_head_download_(const &RocmVae d, &Mlp muHead, &Mlp logvarHead)
     return ok;
 }
 
-int rocm_vae_download(const &RocmVae d, &Vae v) {
-    return d.ok && rocm_net_download(&d.enc, &v.enc.params) && rocm_net_download(&d.dec, &v.dec.params) &&
-           nr_vae_head_download_(d, &v.muHead, &v.logvarHead);
+int RocmVae::download(&Vae v) const {
+    return self.ok && self.enc.download(&v.enc.params) && self.dec.download(&v.dec.params) &&
+           nr_vae_head_download_(self, &v.muHead, &v.logvarHead);
 }
 
-int rocm_conv_vae_download(const &RocmVae d, &ConvVae v) {
-    return d.ok && rocm_net_download_convnet(&d.enc, &v.enc) && rocm_net_download_convnet(&d.dec, &v.dec) &&
-           nr_vae_head_download_(d, &v.muHead, &v.logvarHead);
+int RocmVae::download_conv_vae(&ConvVae v) const {
+    return self.ok && self.enc.download_convnet(&v.enc) && self.dec.download_convnet(&v.dec) &&
+           nr_vae_head_download_(self, &v.muHead, &v.logvarHead);
 }
 
 int rocm_vae_step(&RocmVae v, struct RocmBuf x, struct RocmBuf y, unsigned long rows, struct RocmBuf loss1) {
@@ -4134,9 +4128,9 @@ int rocm_vae_step(&RocmVae v, struct RocmBuf x, struct RocmBuf y, unsigned long 
         if (!rocm_append_labels(x, y, v.encIn, rows, v.encChannels, v.encPlane, c)) return 0;
         encX = v.encIn;
     }
-    struct RocmBuf h = rocm_net_forward(&v.enc, encX, rows);
+    struct RocmBuf h = v.enc.forward(encX, rows);
     if (h.dev == 0UL) return 0;
-    struct RocmBuf hd = rocm_net_forward(&v.head, h, rows);
+    struct RocmBuf hd = v.head.forward(h, rows);
     if (hd.dev == 0UL) return 0;
     unsigned long n = rows * L;
     unsafe {
@@ -4155,18 +4149,18 @@ int rocm_vae_step(&RocmVae v, struct RocmBuf x, struct RocmBuf y, unsigned long 
         if (!rocm_append_labels(v.zbuf, y, v.decIn, rows, L, 1UL, c)) return 0;
         decX = v.decIn;
     }
-    struct RocmBuf out = rocm_net_forward(&v.dec, decX, rows);
+    struct RocmBuf out = v.dec.forward(decX, rows);
     if (out.dev == 0UL) return 0;
     // reconstruction summed over features, averaged over rows
-    if (!nr_pointwise_loss_(v.recon == RECON_BCE ? NR_BCE : NR_MSE, out, x, rocm_net_grad_output(&v.dec), loss1,
+    if (!nr_pointwise_loss_(v.recon == RECON_BCE ? NR_BCE : NR_MSE, out, x, v.dec.grad_output(), loss1,
                             rows * v.inDim, (float)v.inDim)) return 0;
     if (c > 0UL) {
-        if (!rocm_net_backward(&v.dec, decX, rows, v.decGrad) || !rocm_slice_cols(v.decGrad, v.dz, rows, L + c, L, 0UL))
+        if (!v.dec.backward(decX, rows, v.decGrad) || !rocm_slice_cols(v.decGrad, v.dz, rows, L + c, L, 0UL))
             return 0;
-    } else if (!rocm_net_backward(&v.dec, decX, rows, v.dz)) {
+    } else if (!v.dec.backward(decX, rows, v.dz)) {
         return 0;
     }
-    struct RocmBuf dhd = rocm_net_grad_output(&v.head);
+    struct RocmBuf dhd = v.head.grad_output();
     unsafe {
         void* ph = (void*)hd.dev; void* pe = (void*)v.eps.dev; void* pd = (void*)v.dz.dev;
         void* po = (void*)dhd.dev; void* pc = (void*)v.counter.dev;
@@ -4177,21 +4171,21 @@ int rocm_vae_step(&RocmVae v, struct RocmBuf x, struct RocmBuf y, unsigned long 
         p[5] = (void*)&r; p[6] = (void*)&LL; p[7] = (void*)&beta;
         if (!nr_launch_(NR_VAE_BWD, n, (&void)&p[0])) return 0;
     }
-    return rocm_net_backward(&v.head, h, rows, rocm_net_grad_output(&v.enc)) &&
-           rocm_net_backward(&v.enc, encX, rows, nr_none_());
+    return v.head.backward(h, rows, v.enc.grad_output()) &&
+           v.enc.backward(encX, rows, nr_none_());
 }
 
-int rocm_optimizer_add_vae(&RocmOptimizer o, const &RocmVae v) {
-    if (!v.ok) { o.ok = 0; return 0; }
-    return rocm_optimizer_add_net(o, &v.enc) && rocm_optimizer_add_net(o, &v.head) &&
-           rocm_optimizer_add_net(o, &v.dec);
+int RocmVae::add_params(&RocmOptimizer o) const {
+    if (!self.ok) { o.ok = 0; return 0; }
+    return self.enc.add_params(o) && self.head.add_params(o) &&
+           self.dec.add_params(o);
 }
 
-void rocm_vae_free(&RocmVae v) {
-    rocm_net_free(&v.enc); rocm_net_free(&v.head); rocm_net_free(&v.dec);
-    rocm_free(&v.eps); rocm_free(&v.zbuf); rocm_free(&v.dz); rocm_free(&v.counter);
-    rocm_free(&v.encIn); rocm_free(&v.decIn); rocm_free(&v.decGrad);
-    v.ok = 0;
+void RocmVae::free() {
+    self.enc.free(); self.head.free(); self.dec.free();
+    self.eps.free(); self.zbuf.free(); self.dz.free(); self.counter.free();
+    self.encIn.free(); self.decIn.free(); self.decGrad.free();
+    self.ok = 0;
 }
 
 // ── Convolutional autoencoder ────────────────────────────────────────────────
@@ -4203,35 +4197,35 @@ struct RocmConvAe rocm_conv_autoencoder_new(const &ConvAutoencoder ae, unsigned 
     a.enc.training = 1;   // conv_autoencoder_loss runs both nets in training mode
     a.dec.training = 1;
     a.recon = ae.recon;
-    a.ok = a.enc.ok && a.dec.ok && rocm_net_out_dim(&a.enc) == rocm_net_in_dim(&a.dec);
+    a.ok = a.enc.ok && a.dec.ok && a.enc.out_dim() == a.dec.in_dim();
     return a;
 }
 
 int rocm_conv_autoencoder_step(&RocmConvAe a, struct RocmBuf x, struct RocmBuf y, unsigned long rows,
                                struct RocmBuf loss1) {
     if (!a.ok) return 0;
-    struct RocmBuf z = rocm_net_forward(&a.enc, x, rows);
+    struct RocmBuf z = a.enc.forward(x, rows);
     if (z.dev == 0UL) return 0;
-    struct RocmBuf out = rocm_net_forward(&a.dec, z, rows);
+    struct RocmBuf out = a.dec.forward(z, rows);
     if (out.dev == 0UL) return 0;
-    return nr_pointwise_loss_(a.recon == RECON_BCE ? NR_BCE : NR_MSE, out, x, rocm_net_grad_output(&a.dec), loss1,
-                              rows * rocm_net_out_dim(&a.dec), (float)1.0) &&
-           rocm_net_backward(&a.dec, z, rows, rocm_net_grad_output(&a.enc)) &&
-           rocm_net_backward(&a.enc, x, rows, nr_none_());
+    return nr_pointwise_loss_(a.recon == RECON_BCE ? NR_BCE : NR_MSE, out, x, a.dec.grad_output(), loss1,
+                              rows * a.dec.out_dim(), (float)1.0) &&
+           a.dec.backward(z, rows, a.enc.grad_output()) &&
+           a.enc.backward(x, rows, nr_none_());
 }
 
-int rocm_optimizer_add_conv_autoencoder(&RocmOptimizer o, const &RocmConvAe a) {
-    return rocm_optimizer_add_net(o, &a.enc) && rocm_optimizer_add_net(o, &a.dec);
+int RocmConvAe::add_params(&RocmOptimizer o) const {
+    return self.enc.add_params(o) && self.dec.add_params(o);
 }
 
-int rocm_conv_autoencoder_download(const &RocmConvAe a, &ConvAutoencoder ae) {
-    return a.ok && rocm_net_download_convnet(&a.enc, &ae.enc) && rocm_net_download_convnet(&a.dec, &ae.dec);
+int RocmConvAe::download(&ConvAutoencoder ae) const {
+    return self.ok && self.enc.download_convnet(&ae.enc) && self.dec.download_convnet(&ae.dec);
 }
 
-void rocm_conv_autoencoder_free(&RocmConvAe a) {
-    rocm_net_free(&a.enc);
-    rocm_net_free(&a.dec);
-    a.ok = 0;
+void RocmConvAe::free() {
+    self.enc.free();
+    self.dec.free();
+    self.ok = 0;
 }
 
 // ── GANs ─────────────────────────────────────────────────────────────────────
@@ -4328,7 +4322,7 @@ struct RocmOptimizer rocm_optimizer_from(const &Optimizer o) {
     d.beta2 = o.beta2;
     d.eps = o.eps;
     d.weightDecay = o.weightDecay;
-    rocm_optimizer_sync(&d);
+    d.sync();
     return d;
 }
 
@@ -4350,7 +4344,7 @@ static void nr_gan_finish_(&RocmGan d, const &Optimizer optG, const &Optimizer o
     d.optG = rocm_optimizer_from(optG);
     d.optD = rocm_optimizer_from(optD);
     if (d.cfg.loss == GAN_WGAN) d.optD.clampWeights = d.cfg.clip;
-    d.ok = d.ok && rocm_optimizer_add_net(&d.optG, &d.gen) && rocm_optimizer_add_net(&d.optD, &d.disc);
+    d.ok = d.ok && d.gen.add_params(&d.optG) && d.disc.add_params(&d.optD);
     // averaged generator: (w, b) of every parameterized layer, then (mean, var) of every batch norm
     unsigned long k = 0UL;
     unsigned long s = 0UL;
@@ -4423,10 +4417,10 @@ struct RocmGan rocm_dcgan_new(const &Dcgan g, unsigned long maxBatch) {
     unsigned long rowsD = g.cfg.loss == GAN_WGAN_GP ? 4UL * d.maxBatch : 2UL * d.maxBatch;
     d.gen = rocm_net_from_convnet(&g.gen, d.maxBatch);
     d.disc = rocm_net_from_convnet(&g.disc, rowsD);
-    // training steps run both nets in training mode, as dcgan_train_step
+    // training steps run both nets in training mode, as Dcgan::train_step
     d.gen.training = 1;
     d.disc.training = 1;
-    d.dataDim = convnet_out_dim(&g.gen);
+    d.dataDim = g.gen.out_dim();
     d.channels = g.disc.inC - g.cfg.classes;
     d.plane = g.disc.inH * g.disc.inW;
     d.steps = g.steps;
@@ -4471,7 +4465,7 @@ int rocm_gan_step_(&RocmGan g, struct RocmBuf real, struct RocmBuf labels, unsig
         struct RocmBuf t = nr_at_(g.noise, nr_gan_t_(g, ci), m);
         if (drawNoise && !nr_noise_(z, m * Z, g.cfg.seed, g.state, (unsigned int)ci, 1)) return 0;
         if (drawNoise && gp && !nr_noise_(t, m, g.cfg.seed, g.state, 100U + (unsigned int)ci, 0)) return 0;
-        struct RocmBuf fake = rocm_net_forward(&g.gen, nr_gan_cond_(g, z, labels, m, Z, 1UL, m, g.gIn), m);
+        struct RocmBuf fake = g.gen.forward(nr_gan_cond_(g, z, labels, m, Z, 1UL, m, g.gIn), m);
         if (fake.dev == 0UL) return 0;
         if (!rocm_copy(real, 0UL, g.dData, 0UL, m * D) || !rocm_copy(fake, 0UL, g.dData, m * D, m * D)) return 0;
         unsigned long rowsD = 2UL * m;
@@ -4488,12 +4482,12 @@ int rocm_gan_step_(&RocmGan g, struct RocmBuf real, struct RocmBuf labels, unsig
             }
             g.disc.segments = 1UL;
             struct RocmBuf xin = nr_gan_cond_(g, g.xh, labels, m, g.channels, g.plane, m, g.xhIn);
-            if (rocm_net_forward(&g.disc, xin, m).dev == 0UL) return 0;
-            if (!nr_fill_(rocm_net_grad_output(&g.disc), m, (float)1.0)) return 0;
+            if (g.disc.forward(xin, m).dev == 0UL) return 0;
+            if (!nr_fill_(g.disc.grad_output(), m, (float)1.0)) return 0;
             if (c > 0UL) {
-                if (!rocm_net_backward(&g.disc, xin, m, g.dGrad) || !rocm_slice_cols(g.dGrad, g.gData, m, dCols, D, 0UL))
+                if (!g.disc.backward(xin, m, g.dGrad) || !rocm_slice_cols(g.dGrad, g.gData, m, dCols, D, 0UL))
                     return 0;
-            } else if (!rocm_net_backward(&g.disc, xin, m, g.gData)) {
+            } else if (!g.disc.backward(xin, m, g.gData)) {
                 return 0;
             }
             unsafe {
@@ -4509,29 +4503,29 @@ int rocm_gan_step_(&RocmGan g, struct RocmBuf real, struct RocmBuf labels, unsig
             rowsD = 4UL * m;
         }
         struct RocmBuf din = nr_gan_cond_(g, g.dData, labels, rowsD, g.channels, g.plane, m, g.dIn);
-        struct RocmBuf s = rocm_net_forward(&g.disc, din, rowsD);
+        struct RocmBuf s = g.disc.forward(din, rowsD);
         if (s.dev == 0UL) return 0;
-        if (!nr_gan_loss_(g, s, rocm_net_grad_output(&g.disc), m, 0)) return 0;
-        if (!rocm_net_backward(&g.disc, din, rowsD, nr_none_()) || !rocm_optimizer_step(&g.optD)) return 0;
+        if (!nr_gan_loss_(g, s, g.disc.grad_output(), m, 0)) return 0;
+        if (!g.disc.backward(din, rowsD, nr_none_()) || !g.optD.step()) return 0;
         ci = ci + 1UL;
     }
     // generator step through D
     struct RocmBuf zg = nr_at_(g.noise, nr_gan_z_(g, nc), m * Z);
     if (drawNoise && !nr_noise_(zg, m * Z, g.cfg.seed, g.state, (unsigned int)nc, 1)) return 0;
     struct RocmBuf gx = nr_gan_cond_(g, zg, labels, m, Z, 1UL, m, g.gIn);
-    struct RocmBuf fake = rocm_net_forward(&g.gen, gx, m);
+    struct RocmBuf fake = g.gen.forward(gx, m);
     if (fake.dev == 0UL) return 0;
     g.disc.segments = 1UL;
     struct RocmBuf din = nr_gan_cond_(g, fake, labels, m, g.channels, g.plane, m, g.dIn);
-    struct RocmBuf s = rocm_net_forward(&g.disc, din, m);
-    if (s.dev == 0UL || !nr_gan_loss_(g, s, rocm_net_grad_output(&g.disc), m, 1)) return 0;
+    struct RocmBuf s = g.disc.forward(din, m);
+    if (s.dev == 0UL || !nr_gan_loss_(g, s, g.disc.grad_output(), m, 1)) return 0;
     if (c > 0UL) {
-        if (!rocm_net_backward(&g.disc, din, m, g.dGrad) ||
-            !rocm_slice_cols(g.dGrad, rocm_net_grad_output(&g.gen), m, dCols, D, 0UL)) return 0;
-    } else if (!rocm_net_backward(&g.disc, din, m, rocm_net_grad_output(&g.gen))) {
+        if (!g.disc.backward(din, m, g.dGrad) ||
+            !rocm_slice_cols(g.dGrad, g.gen.grad_output(), m, dCols, D, 0UL)) return 0;
+    } else if (!g.disc.backward(din, m, g.gen.grad_output())) {
         return 0;
     }
-    if (!rocm_net_backward(&g.gen, gx, m, nr_none_()) || !rocm_optimizer_step(&g.optG)) return 0;
+    if (!g.gen.backward(gx, m, nr_none_()) || !g.optG.step()) return 0;
     // averaged generator (a copy when emaDecay is 0); advances the noise counter and step count
     if (!nr_soft_update_(&g.ema, &g.emaSrc, g.state, g.cfg.emaDecay > (float)0.0 ? g.cfg.emaDecay : (float)0.0,
                          g.cfg.emaDecay > (float)0.0 ? 1 : 0)) return 0;
@@ -4539,62 +4533,62 @@ int rocm_gan_step_(&RocmGan g, struct RocmBuf real, struct RocmBuf labels, unsig
     return 1;
 }
 
-int rocm_gan_step(&RocmGan g, struct RocmBuf real, struct RocmBuf labels, unsigned long rows) {
-    return rocm_gan_step_(g, real, labels, rows, 1);
+int RocmGan::step(struct RocmBuf real, struct RocmBuf labels, unsigned long rows) {
+    return rocm_gan_step_(self, real, labels, rows, 1);
 }
 
-struct GanLosses rocm_gan_losses(const &RocmGan g) {
+struct GanLosses RocmGan::losses() const {
     struct GanLosses l;
     l.d = (float)0.0;
     l.g = (float)0.0;
     float st[8];
-    if (g.ok && rocm_read(g.state, &st[0], 8UL)) { l.d = st[2]; l.g = st[3]; }
+    if (self.ok && rocm_read(self.state, &st[0], 8UL)) { l.d = st[2]; l.g = st[3]; }
     return l;
 }
 
-struct GanLosses rocm_gan_train(&RocmGan g, const &Dataset data, unsigned long epochs, unsigned long batchSize) {
+struct GanLosses RocmGan::train(const &Dataset data, unsigned long epochs, unsigned long batchSize) {
     struct GanLosses last;
     last.d = (float)0.0;
     last.g = (float)0.0;
-    struct RocmBatches bt = rocm_batches_new(data, batchSize, 1, g.cfg.seed + 101UL);
+    struct RocmBatches bt = rocm_batches_new(data, batchSize, 1, self.cfg.seed + 101UL);
     struct RocmGraph graphs[2];
     graphs[0].exec = 0UL;
     graphs[1].exec = 0UL;
     int seen[2];
     seen[0] = 0; seen[1] = 0;
-    int ok = bt.ok && g.ok && bt.batchSize <= g.maxBatch;
+    int ok = bt.ok && self.ok && bt.batchSize <= self.maxBatch;
     unsigned long e = 0UL;
     while (ok && e < epochs) {
-        ok = rocm_batches_epoch(&bt) && rocm_optimizer_sync(&g.optG) && rocm_optimizer_sync(&g.optD);
+        ok = bt.epoch() && self.optG.sync() && self.optD.sync();
         unsigned long pos = 0UL;
         while (ok && pos < bt.n) {
             unsigned long rows = bt.n - pos < bt.batchSize ? bt.n - pos : bt.batchSize;
             int k = rows == bt.batchSize ? 0 : 1;
-            unsigned long s0 = g.steps;
-            unsigned long tG = g.optG.t;
-            unsigned long tD = g.optD.t;
+            unsigned long s0 = self.steps;
+            unsigned long tG = self.optG.t;
+            unsigned long tD = self.optD.t;
             if (graphs[k].exec != 0UL) {
                 ok = rocm_graph_launch(graphs[k]);
             } else if (seen[k] && rocm_capture_begin()) {
-                int rec = rocm_batches_gather(&bt, rows) && rocm_gan_step(g, bt.xb, bt.yb, rows);
+                int rec = bt.gather(rows) && self.step(bt.xb, bt.yb, rows);
                 graphs[k] = rocm_capture_end();
                 ok = rec && graphs[k].exec != 0UL && rocm_graph_launch(graphs[k]);
             } else {
-                ok = rocm_batches_gather(&bt, rows) && rocm_gan_step(g, bt.xb, bt.yb, rows);
+                ok = bt.gather(rows) && self.step(bt.xb, bt.yb, rows);
                 seen[k] = 1;
             }
             // a replayed step advances these only on the GPU
-            g.steps = s0 + 1UL;
-            g.optG.t = tG + 1UL;
-            g.optD.t = tD + nr_gan_critics_(g);
+            self.steps = s0 + 1UL;
+            self.optG.t = tG + 1UL;
+            self.optD.t = tD + nr_gan_critics_(self);
             pos = pos + rows;
         }
         e = e + 1UL;
     }
-    if (ok) last = rocm_gan_losses(g);
-    rocm_graph_free(&graphs[0]);
-    rocm_graph_free(&graphs[1]);
-    rocm_batches_free(&bt);
+    if (ok) last = self.losses();
+    graphs[0].free();
+    graphs[1].free();
+    bt.free();
     return last;
 }
 
@@ -4611,33 +4605,33 @@ static int nr_download_list_(const &Vec<struct RocmBuf> bufs, unsigned long from
     return 1;
 }
 
-int rocm_gan_download(const &RocmGan d, &Gan g) {
-    if (!d.ok || !rocm_net_download(&d.gen, &g.gen.params) || !rocm_net_download(&d.disc, &g.disc.params) ||
-        !nr_download_list_(&d.ema, 0UL, &g.genEma.params)) return 0;
-    g.steps = d.steps;
+int RocmGan::download(&Gan g) const {
+    if (!self.ok || !self.gen.download(&g.gen.params) || !self.disc.download(&g.disc.params) ||
+        !nr_download_list_(&self.ema, 0UL, &g.genEma.params)) return 0;
+    g.steps = self.steps;
     return 1;
 }
 
-int rocm_dcgan_download(const &RocmGan d, &Dcgan g) {
-    if (!d.ok || !rocm_net_download_convnet(&d.gen, &g.gen) || !rocm_net_download_convnet(&d.disc, &g.disc) ||
-        !nr_download_list_(&d.ema, 0UL, &g.genEma.params) ||
-        !nr_download_list_(&d.ema, g.genEma.params.length(), &g.genEma.buffers)) return 0;
-    g.steps = d.steps;
+int RocmGan::download_dcgan(&Dcgan g) const {
+    if (!self.ok || !self.gen.download_convnet(&g.gen) || !self.disc.download_convnet(&g.disc) ||
+        !nr_download_list_(&self.ema, 0UL, &g.genEma.params) ||
+        !nr_download_list_(&self.ema, g.genEma.params.length(), &g.genEma.buffers)) return 0;
+    g.steps = self.steps;
     return 1;
 }
 
-void rocm_gan_free(&RocmGan g) {
-    rocm_optimizer_free(&g.optG);
-    rocm_optimizer_free(&g.optD);
+void RocmGan::free() {
+    self.optG.free();
+    self.optD.free();
     unsigned long i = 0UL;
-    while (i < g.ema.length()) { rocm_free(g.ema.at(i)); i = i + 1UL; }
-    g.ema.free();
-    g.emaSrc.free();
-    rocm_net_free(&g.gen);
-    rocm_net_free(&g.disc);
-    rocm_free(&g.noise); rocm_free(&g.gIn); rocm_free(&g.dData); rocm_free(&g.dIn); rocm_free(&g.dGrad);
-    rocm_free(&g.xh); rocm_free(&g.xhIn); rocm_free(&g.gData); rocm_free(&g.coef); rocm_free(&g.state);
-    g.ok = 0;
+    while (i < self.ema.length()) { self.ema.at(i).free(); i = i + 1UL; }
+    self.ema.free();
+    self.emaSrc.free();
+    self.gen.free();
+    self.disc.free();
+    self.noise.free(); self.gIn.free(); self.dData.free(); self.dIn.free(); self.dGrad.free();
+    self.xh.free(); self.xhIn.free(); self.gData.free(); self.coef.free(); self.state.free();
+    self.ok = 0;
 }
 
 // ── Reinforcement learning ───────────────────────────────────────────────────
@@ -4653,7 +4647,7 @@ static unsigned long nr_argmax_(const &float v, unsigned long n, &Rng rng) {
             if (p[i] > p[best]) { best = i; ties = 1UL; }
             else if (p[i] == p[best]) {
                 ties = ties + 1UL;
-                if (rng_below(rng, ties) == 0UL) best = i;
+                if (rng.below(ties) == 0UL) best = i;
             }
             i = i + 1UL;
         }
@@ -4676,7 +4670,7 @@ static int nr_forward1_(&RocmNet net, struct RocmBuf obs1, const &Tensor obs, un
                         unsigned long n) {
     unsafe {
         if (!rocm_write(obs1, (const &float)(const float*)obs->data, dim)) return 0;
-        struct RocmBuf out = rocm_net_forward(net, obs1, 1UL);
+        struct RocmBuf out = net.forward(obs1, 1UL);
         return out.dev != 0UL && rocm_read(out, (&float)(float*)stage, n);
     }
 }
@@ -4694,7 +4688,7 @@ struct RocmDqn rocm_dqn_new(const &Dqn d) {
     r.size = d.buffer.size;
     r.pos = d.buffer.pos;
     r.graph.exec = 0UL;
-    r.replay = nr_none_(); r.idx = nr_none_(); r.ob = nr_none_(); r.nx = nr_none_(); r.act = nr_none_();
+    r.replay = nr_none_(); r.idx = nr_none_(); r.ob = nr_none_(); r.nx = nr_none_(); r.acts = nr_none_();
     r.rew = nr_none_(); r.term = nr_none_(); r.y = nr_none_(); r.state = nr_none_(); r.obs1 = nr_none_();
     r.qParams = vec_new();
     r.tParams = vec_new();
@@ -4709,11 +4703,11 @@ struct RocmDqn rocm_dqn_new(const &Dqn d) {
     r.target = rocm_net_from_mlp(&d.target, B);
     r.opt = rocm_optimizer_from(&d.opt);
     r.opt.clipNorm = d.cfg.clipNorm;
-    r.ok = r.q.ok && r.target.ok && rocm_optimizer_add_net(&r.opt, &r.q);
+    r.ok = r.q.ok && r.target.ok && r.q.add_params(&r.opt);
     nr_param_list_(&r.q, &r.qParams);
     nr_param_list_(&r.target, &r.tParams);
     r.ok = r.ok && nr_alloc_(&r.replay, slots * W) && nr_alloc_(&r.idx, B) && nr_alloc_(&r.ob, B * D) &&
-           nr_alloc_(&r.nx, B * D) && nr_alloc_(&r.act, B) && nr_alloc_(&r.rew, B) && nr_alloc_(&r.term, B) &&
+           nr_alloc_(&r.nx, B * D) && nr_alloc_(&r.acts, B) && nr_alloc_(&r.rew, B) && nr_alloc_(&r.term, B) &&
            nr_alloc_(&r.y, B) && nr_alloc_(&r.state, 8UL) && rocm_zero(r.state) && nr_alloc_(&r.obs1, D);
     // the replay buffer's contents, as rows
     if (r.ok) {
@@ -4738,16 +4732,16 @@ struct RocmDqn rocm_dqn_new(const &Dqn d) {
     return r;
 }
 
-float rocm_dqn_epsilon(const &RocmDqn d) {
-    if (d.steps >= d.cfg.epsDecaySteps) return d.cfg.epsEnd;
-    float f = (float)d.steps / (float)d.cfg.epsDecaySteps;
-    return d.cfg.epsStart + f * (d.cfg.epsEnd - d.cfg.epsStart);
+float RocmDqn::epsilon() const {
+    if (self.steps >= self.cfg.epsDecaySteps) return self.cfg.epsEnd;
+    float f = (float)self.steps / (float)self.cfg.epsDecaySteps;
+    return self.cfg.epsStart + f * (self.cfg.epsEnd - self.cfg.epsStart);
 }
 
-unsigned long rocm_dqn_act(&RocmDqn d, const &Tensor obs, int explore) {
-    if (explore && rng_uniform(&d.rng) < rocm_dqn_epsilon(d)) return rng_below(&d.rng, d.actions);
-    if (!d.ok || !nr_forward1_(&d.q, d.obs1, obs, d.obsDim, d.stage, d.actions)) return 0UL;
-    unsafe { return nr_argmax_((const &float)(const float*)d.stage, d.actions, &d.rng); }
+unsigned long RocmDqn::act(const &Tensor obs, int explore) {
+    if (explore && self.rng.uniform() < self.epsilon()) return self.rng.below(self.actions);
+    if (!self.ok || !nr_forward1_(&self.q, self.obs1, obs, self.obsDim, self.stage, self.actions)) return 0UL;
+    unsafe { return nr_argmax_((const &float)(const float*)self.stage, self.actions, &self.rng); }
 }
 
 // One update on the sampled slots in d.idx (dqn_train_).
@@ -4757,18 +4751,18 @@ static int nr_dqn_update_(&RocmDqn d) {
     unsigned long A = d.actions;
     unsafe {
         void* pr = (void*)d.replay.dev; void* pi = (void*)d.idx.dev; void* po = (void*)d.ob.dev; void* pn = (void*)d.nx.dev;
-        void* pa = (void*)d.act.dev; void* pw = (void*)d.rew.dev; void* pt = (void*)d.term.dev;
+        void* pa = (void*)d.acts.dev; void* pw = (void*)d.rew.dev; void* pt = (void*)d.term.dev;
         unsigned int bb = (unsigned int)B; unsigned int dd = (unsigned int)D;
         void* p[9];
         p[0] = (void*)&pr; p[1] = (void*)&pi; p[2] = (void*)&po; p[3] = (void*)&pn; p[4] = (void*)&pa;
         p[5] = (void*)&pw; p[6] = (void*)&pt; p[7] = (void*)&bb; p[8] = (void*)&dd;
         if (!nr_launch_(NR_REPLAY_GATHER, B * (2UL * D + 3UL), (&void)&p[0])) return 0;
     }
-    struct RocmBuf qt = rocm_net_forward(&d.target, d.nx, B);
+    struct RocmBuf qt = d.target.forward(d.nx, B);
     if (qt.dev == 0UL) return 0;
     struct RocmBuf qo = qt;
     if (d.cfg.doubleDqn) {
-        qo = rocm_net_forward(&d.q, d.nx, B);
+        qo = d.q.forward(d.nx, B);
         if (qo.dev == 0UL) return 0;
     }
     unsafe {
@@ -4780,11 +4774,11 @@ static int nr_dqn_update_(&RocmDqn d) {
         p[5] = (void*)&bb; p[6] = (void*)&aa; p[7] = (void*)&g;
         if (!nr_launch_(NR_DQN_TARGET, B, (&void)&p[0])) return 0;
     }
-    struct RocmBuf q = rocm_net_forward(&d.q, d.ob, B);
+    struct RocmBuf q = d.q.forward(d.ob, B);
     if (q.dev == 0UL) return 0;
-    struct RocmBuf dq = rocm_net_grad_output(&d.q);
+    struct RocmBuf dq = d.q.grad_output();
     unsafe {
-        void* pq = (void*)q.dev; void* pa = (void*)d.act.dev; void* py = (void*)d.y.dev; void* pd = (void*)dq.dev;
+        void* pq = (void*)q.dev; void* pa = (void*)d.acts.dev; void* py = (void*)d.y.dev; void* pd = (void*)dq.dev;
         void* ps = (void*)d.state.dev;
         unsigned int bb = (unsigned int)B; unsigned int aa = (unsigned int)A; float dl = d.cfg.huberDelta;
         void* p[8];
@@ -4792,82 +4786,81 @@ static int nr_dqn_update_(&RocmDqn d) {
         p[5] = (void*)&bb; p[6] = (void*)&aa; p[7] = (void*)&dl;
         if (!nr_launch1_(NR_DQN_LOSS, (&void)&p[0])) return 0;
     }
-    if (!rocm_net_backward(&d.q, d.ob, B, nr_none_()) || !rocm_optimizer_step(&d.opt)) return 0;
+    if (!d.q.backward(d.ob, B, nr_none_()) || !d.opt.step()) return 0;
     // soft target update (tau as given: schedule 2)
     return d.cfg.targetEvery > 0UL || nr_soft_update_(&d.tParams, &d.qParams, d.state, d.cfg.tau, 2);
 }
 
-int rocm_dqn_observe(&RocmDqn d, const &Tensor obs, unsigned long action, float reward, const &Tensor next,
-                     int terminal) {
-    if (!d.ok) return -1;
-    unsigned long D = d.obsDim;
+int RocmDqn::observe(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminal) {
+    if (!self.ok) return -1;
+    unsigned long D = self.obsDim;
     unsigned long W = 2UL * D + 3UL;
-    unsigned long slots = d.cfg.bufferSize;
+    unsigned long slots = self.cfg.bufferSize;
     unsafe {
-        float* s = (float*)d.stage;
+        float* s = (float*)self.stage;
         unsigned long c = 0UL;
         while (c < D) { s[c] = obs->data[c]; s[D + c] = next->data[c]; c = c + 1UL; }
         s[2UL * D] = (float)action;
         s[2UL * D + 1UL] = reward;
         s[2UL * D + 2UL] = terminal ? (float)1.0 : (float)0.0;
-        if (!rocm_write(nr_at_(d.replay, d.pos * W, W), (const &float)(const float*)s, W)) return -1;
+        if (!rocm_write(nr_at_(self.replay, self.pos * W, W), (const &float)(const float*)s, W)) return -1;
     }
-    d.pos = (d.pos + 1UL) % slots;
-    if (d.size < slots) d.size = d.size + 1UL;
-    d.steps = d.steps + 1UL;
-    if (d.size < d.cfg.learningStarts || d.size < d.cfg.batchSize) return 0;
-    if (d.steps % d.cfg.trainEvery != 0UL) return 0;
+    self.pos = (self.pos + 1UL) % slots;
+    if (self.size < slots) self.size = self.size + 1UL;
+    self.steps = self.steps + 1UL;
+    if (self.size < self.cfg.learningStarts || self.size < self.cfg.batchSize) return 0;
+    if (self.steps % self.cfg.trainEvery != 0UL) return 0;
     // sample on the host, from the agent's own stream (as dqn_train_)
-    unsigned long B = d.cfg.batchSize;
+    unsigned long B = self.cfg.batchSize;
     unsafe {
-        float* s = (float*)d.stage;
+        float* s = (float*)self.stage;
         unsigned long r = 0UL;
-        while (r < B) { s[r] = (float)rng_below(&d.rng, d.size); r = r + 1UL; }
-        if (!rocm_write(d.idx, (const &float)(const float*)s, B)) return -1;
+        while (r < B) { s[r] = (float)self.rng.below(self.size); r = r + 1UL; }
+        if (!rocm_write(self.idx, (const &float)(const float*)s, B)) return -1;
     }
-    unsigned long t0 = d.opt.t;
+    unsigned long t0 = self.opt.t;
     int ok = 1;
-    if (d.graph.exec != 0UL) {
-        ok = rocm_graph_launch(d.graph);
-    } else if (d.updates > 0UL && rocm_optimizer_sync(&d.opt) && rocm_capture_begin()) {
-        int rec = nr_dqn_update_(d);
-        d.graph = rocm_capture_end();
-        ok = rec && d.graph.exec != 0UL && rocm_graph_launch(d.graph);
+    if (self.graph.exec != 0UL) {
+        ok = rocm_graph_launch(self.graph);
+    } else if (self.updates > 0UL && self.opt.sync() && rocm_capture_begin()) {
+        int rec = nr_dqn_update_(self);
+        self.graph = rocm_capture_end();
+        ok = rec && self.graph.exec != 0UL && rocm_graph_launch(self.graph);
     } else {
-        ok = nr_dqn_update_(d);
+        ok = nr_dqn_update_(self);
     }
-    d.opt.t = t0 + 1UL;
-    d.updates = d.updates + 1UL;
-    if (ok && d.cfg.targetEvery > 0UL && d.updates % d.cfg.targetEvery == 0UL)
-        ok = nr_soft_update_(&d.tParams, &d.qParams, d.state, (float)1.0, 2);   // hard copy
+    self.opt.t = t0 + 1UL;
+    self.updates = self.updates + 1UL;
+    if (ok && self.cfg.targetEvery > 0UL && self.updates % self.cfg.targetEvery == 0UL)
+        ok = nr_soft_update_(&self.tParams, &self.qParams, self.state, (float)1.0, 2);   // hard copy
     return ok ? 1 : -1;
 }
 
-float rocm_dqn_loss(const &RocmDqn d) {
+float RocmDqn::loss() const {
     float st[8];
-    if (!d.ok || !rocm_read(d.state, &st[0], 8UL)) return (float)-1.0;
+    if (!self.ok || !rocm_read(self.state, &st[0], 8UL)) return (float)-1.0;
     return st[2];
 }
 
-int rocm_dqn_download(const &RocmDqn d, &Dqn h) {
-    if (!d.ok || !rocm_net_download(&d.q, &h.q.params) || !rocm_net_download(&d.target, &h.target.params)) return 0;
-    h.rng = d.rng;
-    h.steps = d.steps;
-    h.updates = d.updates;
+int RocmDqn::download(&Dqn h) const {
+    if (!self.ok || !self.q.download(&h.q.params) || !self.target.download(&h.target.params)) return 0;
+    h.rng = self.rng;
+    h.steps = self.steps;
+    h.updates = self.updates;
     return 1;
 }
 
-void rocm_dqn_free(&RocmDqn d) {
-    rocm_graph_free(&d.graph);
-    rocm_optimizer_free(&d.opt);
-    rocm_net_free(&d.q);
-    rocm_net_free(&d.target);
-    d.qParams.free();
-    d.tParams.free();
-    rocm_free(&d.replay); rocm_free(&d.idx); rocm_free(&d.ob); rocm_free(&d.nx); rocm_free(&d.act);
-    rocm_free(&d.rew); rocm_free(&d.term); rocm_free(&d.y); rocm_free(&d.state); rocm_free(&d.obs1);
-    unsafe { free((void*)d.stage); }
-    d.ok = 0;
+void RocmDqn::free() {
+    self.graph.free();
+    self.opt.free();
+    self.q.free();
+    self.target.free();
+    self.qParams.free();
+    self.tParams.free();
+    self.replay.free(); self.idx.free(); self.ob.free(); self.nx.free(); self.acts.free();
+    self.rew.free(); self.term.free(); self.y.free(); self.state.free(); self.obs1.free();
+    unsafe { free((void*)self.stage); }
+    self.ok = 0;
 }
 
 // ── Policy gradient ──
@@ -4895,8 +4888,8 @@ struct RocmPolicy rocm_pg_new(const &PolicyAgent a, unsigned long maxRollout) {
     r.value = rocm_net_from_mlp(&a.value, N);
     r.opt = rocm_optimizer_from(&a.opt);
     r.opt.clipNorm = a.cfg.clipNorm;
-    r.ok = r.policy.ok && r.value.ok && rocm_optimizer_add_net(&r.opt, &r.policy) &&
-           rocm_optimizer_add_net(&r.opt, &r.value) &&
+    r.ok = r.policy.ok && r.value.ok && r.policy.add_params(&r.opt) &&
+           r.value.add_params(&r.opt) &&
            nr_alloc_(&r.data, N * W) && nr_alloc_(&r.v, N) && nr_alloc_(&r.vn, N) && nr_alloc_(&r.logpOld, N) &&
            nr_alloc_(&r.adv, N) && nr_alloc_(&r.ret, N) && nr_alloc_(&r.order, N) && nr_alloc_(&r.cursor, 2UL) &&
            nr_alloc_(&r.mObs, N * D) && nr_alloc_(&r.mAct, N) && nr_alloc_(&r.mAdv, N) && nr_alloc_(&r.mRet, N) &&
@@ -4904,20 +4897,20 @@ struct RocmPolicy rocm_pg_new(const &PolicyAgent a, unsigned long maxRollout) {
     return r;
 }
 
-unsigned long rocm_pg_act(&RocmPolicy a, const &Tensor obs, int sample) {
-    if (!a.ok || !nr_forward1_(&a.policy, a.obs1, obs, a.obsDim, a.stage, a.actions)) return 0UL;
-    unsigned long A = a.actions;
+unsigned long RocmPolicy::act(const &Tensor obs, int sample) {
+    if (!self.ok || !nr_forward1_(&self.policy, self.obs1, obs, self.obsDim, self.stage, self.actions)) return 0UL;
+    unsigned long A = self.actions;
     unsigned long choice = 0UL;
     unsafe {
-        const float* l = (const float*)a.stage;
-        if (!sample) return nr_argmax_((const &float)l, A, &a.rng);
+        const float* l = (const float*)self.stage;
+        if (!sample) return nr_argmax_((const &float)l, A, &self.rng);
         float mx = l[0];
         unsigned long i = 1UL;
         while (i < A) { if (l[i] > mx) mx = l[i]; i = i + 1UL; }
         float s = (float)0.0;
         i = 0UL;
         while (i < A) { s = s + exp_f(l[i] - mx); i = i + 1UL; }
-        float u = rng_uniform(&a.rng) * s;
+        float u = self.rng.uniform() * s;
         float acc = (float)0.0;
         choice = A - 1UL;
         i = 0UL;
@@ -4926,19 +4919,19 @@ unsigned long rocm_pg_act(&RocmPolicy a, const &Tensor obs, int sample) {
     return choice;
 }
 
-void rocm_pg_record(&RocmPolicy a, const &Tensor obs, unsigned long action, float reward, const &Tensor next,
-                    int terminated, int truncated) {
+void RocmPolicy::record(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminated,
+                        int truncated) {
     unsafe {
         unsigned long i = 0UL;
-        while (i < a.obsDim) { a.roll.push(obs->data[i]); i = i + 1UL; }
+        while (i < self.obsDim) { self.roll.push(obs->data[i]); i = i + 1UL; }
         i = 0UL;
-        while (i < a.obsDim) { a.roll.push(next->data[i]); i = i + 1UL; }
+        while (i < self.obsDim) { self.roll.push(next->data[i]); i = i + 1UL; }
     }
-    a.roll.push((float)action);
-    a.roll.push(reward);
-    a.roll.push(terminated ? (float)1.0 : (float)0.0);
-    a.roll.push(terminated || truncated ? (float)1.0 : (float)0.0);
-    a.rollout = a.rollout + 1UL;
+    self.roll.push((float)action);
+    self.roll.push(reward);
+    self.roll.push(terminated ? (float)1.0 : (float)0.0);
+    self.roll.push(terminated || truncated ? (float)1.0 : (float)0.0);
+    self.rollout = self.rollout + 1UL;
 }
 
 // One gradient step on the next m rows of the minibatch order (pg_step_).
@@ -4960,11 +4953,11 @@ static int nr_pg_step_(&RocmPolicy a, unsigned long m) {
         if (blocks > 64UL) blocks = 64UL;
         if (!nr_launch_grid_(NR_PG_GATHER, blocks, 1UL, (&void)&p[0])) return 0;
     }
-    struct RocmBuf lg = rocm_net_forward(&a.policy, a.mObs, m);
-    struct RocmBuf vv = rocm_net_forward(&a.value, a.mObs, m);
+    struct RocmBuf lg = a.policy.forward(a.mObs, m);
+    struct RocmBuf vv = a.value.forward(a.mObs, m);
     if (lg.dev == 0UL || vv.dev == 0UL) return 0;
-    struct RocmBuf dl = rocm_net_grad_output(&a.policy);
-    struct RocmBuf dv = rocm_net_grad_output(&a.value);
+    struct RocmBuf dl = a.policy.grad_output();
+    struct RocmBuf dv = a.value.grad_output();
     unsafe {
         void* pl = (void*)lg.dev; void* pv = (void*)vv.dev; void* pa = (void*)a.mAct.dev; void* pd = (void*)a.mAdv.dev;
         void* pr = (void*)a.mRet.dev; void* po = (void*)a.mLpo.dev; void* gl = (void*)dl.dev; void* gv = (void*)dv.dev;
@@ -4977,8 +4970,8 @@ static int nr_pg_step_(&RocmPolicy a, unsigned long m) {
         p[10] = (void*)&aa; p[11] = (void*)&al; p[12] = (void*)&ce; p[13] = (void*)&vc; p[14] = (void*)&ec;
         if (!nr_launch1_(NR_PG_LOSS, (&void)&p[0])) return 0;
     }
-    return rocm_net_backward(&a.policy, a.mObs, m, nr_none_()) &&
-           rocm_net_backward(&a.value, a.mObs, m, nr_none_()) && rocm_optimizer_step(&a.opt);
+    return a.policy.backward(a.mObs, m, nr_none_()) &&
+           a.value.backward(a.mObs, m, nr_none_()) && a.opt.step();
 }
 
 // Runs nr_pg_step_ for m rows: eagerly the first time a size is seen, then
@@ -4995,7 +4988,7 @@ static int nr_pg_run_(&RocmPolicy a, unsigned long m) {
         ok = rec && a.graphs[k].exec != 0UL && rocm_graph_launch(a.graphs[k]);
     } else {
         // a new size: run it, and record it next time (a second short size replaces the first)
-        if (a.graphs[k].exec != 0UL) rocm_graph_free(&a.graphs[k]);
+        if (a.graphs[k].exec != 0UL) a.graphs[k].free();
         a.graphRows[k] = m;
         ok = nr_pg_step_(a, m);
     }
@@ -5014,17 +5007,17 @@ static int nr_pg_order_(&RocmPolicy a, const &unsigned long idx, unsigned long N
     }
 }
 
-float rocm_pg_update(&RocmPolicy a) {
-    unsigned long N = a.rollout;
+float RocmPolicy::update() {
+    unsigned long N = self.rollout;
     if (N == 0UL) return (float)0.0;
-    if (!a.ok || N > a.maxRollout) return (float)-1.0;
-    unsigned long D = a.obsDim;
+    if (!self.ok || N > self.maxRollout) return (float)-1.0;
+    unsigned long D = self.obsDim;
     unsigned long W = 2UL * D + 4UL;
     int ok = 1;
     // the rollout as SoA, one upload
     unsafe {
-        float* s = (float*)a.stage;
-        const float* rr = (const float*)a.roll.at(0UL);
+        float* s = (float*)self.stage;
+        const float* rr = (const float*)self.roll.at(0UL);
         unsigned long t = 0UL;
         while (t < N) {
             const float* row = &rr[t * W];
@@ -5036,42 +5029,42 @@ float rocm_pg_update(&RocmPolicy a) {
             s[2UL * N * D + 3UL * N + t] = row[2UL * D + 3UL];
             t = t + 1UL;
         }
-        ok = rocm_write(a.data, (const &float)(const float*)s, N * W) && rocm_sync();
+        ok = rocm_write(self.data, (const &float)(const float*)s, N * W) && rocm_sync();
     }
-    struct RocmBuf obs = nr_at_(a.data, 0UL, N * D);
-    struct RocmBuf nxt = nr_at_(a.data, N * D, N * D);
-    struct RocmBuf act = nr_at_(a.data, 2UL * N * D, N);
-    struct RocmBuf rew = nr_at_(a.data, 2UL * N * D + N, N);
-    struct RocmBuf term = nr_at_(a.data, 2UL * N * D + 2UL * N, N);
-    struct RocmBuf done = nr_at_(a.data, 2UL * N * D + 3UL * N, N);
+    struct RocmBuf obs = nr_at_(self.data, 0UL, N * D);
+    struct RocmBuf nxt = nr_at_(self.data, N * D, N * D);
+    struct RocmBuf act = nr_at_(self.data, 2UL * N * D, N);
+    struct RocmBuf rew = nr_at_(self.data, 2UL * N * D + N, N);
+    struct RocmBuf term = nr_at_(self.data, 2UL * N * D + 2UL * N, N);
+    struct RocmBuf done = nr_at_(self.data, 2UL * N * D + 3UL * N, N);
     // values, next values, old log-probabilities
-    struct RocmBuf vt = ok ? rocm_net_forward(&a.value, obs, N) : nr_none_();
-    ok = vt.dev != 0UL && rocm_copy(vt, 0UL, a.v, 0UL, N);
-    struct RocmBuf vn = ok ? rocm_net_forward(&a.value, nxt, N) : nr_none_();
-    ok = ok && vn.dev != 0UL && rocm_copy(vn, 0UL, a.vn, 0UL, N);
-    struct RocmBuf lg = ok ? rocm_net_forward(&a.policy, obs, N) : nr_none_();
+    struct RocmBuf vt = ok ? self.value.forward(obs, N) : nr_none_();
+    ok = vt.dev != 0UL && rocm_copy(vt, 0UL, self.v, 0UL, N);
+    struct RocmBuf vn = ok ? self.value.forward(nxt, N) : nr_none_();
+    ok = ok && vn.dev != 0UL && rocm_copy(vn, 0UL, self.vn, 0UL, N);
+    struct RocmBuf lg = ok ? self.policy.forward(obs, N) : nr_none_();
     ok = ok && lg.dev != 0UL;
     unsafe {
         if (ok) {
-            void* pl = (void*)lg.dev; void* pa = (void*)act.dev; void* po = (void*)a.logpOld.dev;
-            unsigned int nn = (unsigned int)N; unsigned int aa = (unsigned int)a.actions;
+            void* pl = (void*)lg.dev; void* pa = (void*)act.dev; void* po = (void*)self.logpOld.dev;
+            unsigned int nn = (unsigned int)N; unsigned int aa = (unsigned int)self.actions;
             void* p[5];
             p[0] = (void*)&pl; p[1] = (void*)&pa; p[2] = (void*)&po; p[3] = (void*)&nn; p[4] = (void*)&aa;
             ok = nr_launch_(NR_PG_LOGP, N, (&void)&p[0]);
         }
         if (ok) {
-            void* pv = (void*)a.v.dev; void* pn = (void*)a.vn.dev; void* pr = (void*)rew.dev; void* pt = (void*)term.dev;
-            void* pd = (void*)done.dev; void* pa = (void*)a.adv.dev; void* pe = (void*)a.ret.dev;
-            unsigned int nn = (unsigned int)N; float g = a.cfg.gamma; float lam = a.cfg.gaeLambda;
-            int al = a.cfg.algo == PG_REINFORCE ? 0 : 1;
+            void* pv = (void*)self.v.dev; void* pn = (void*)self.vn.dev; void* pr = (void*)rew.dev; void* pt = (void*)term.dev;
+            void* pd = (void*)done.dev; void* pa = (void*)self.adv.dev; void* pe = (void*)self.ret.dev;
+            unsigned int nn = (unsigned int)N; float g = self.cfg.gamma; float lam = self.cfg.gaeLambda;
+            int al = self.cfg.algo == PG_REINFORCE ? 0 : 1;
             void* p[11];
             p[0] = (void*)&pv; p[1] = (void*)&pn; p[2] = (void*)&pr; p[3] = (void*)&pt; p[4] = (void*)&pd;
             p[5] = (void*)&pa; p[6] = (void*)&pe; p[7] = (void*)&nn; p[8] = (void*)&g; p[9] = (void*)&lam;
             p[10] = (void*)&al;
             ok = nr_launch1_(NR_PG_GAE, (&void)&p[0]);
         }
-        if (ok && a.cfg.normalizeAdv && N > 1UL) {
-            void* pa = (void*)a.adv.dev; unsigned int nn = (unsigned int)N;
+        if (ok && self.cfg.normalizeAdv && N > 1UL) {
+            void* pa = (void*)self.adv.dev; unsigned int nn = (unsigned int)N;
             void* p[2];
             p[0] = (void*)&pa; p[1] = (void*)&nn;
             ok = nr_launch1_(NR_PG_NORM, (&void)&p[0]);
@@ -5083,59 +5076,59 @@ float rocm_pg_update(&RocmPolicy a) {
         unsigned long i = 0UL;
         while (i < N) { idx[i] = i; i = i + 1UL; }
     }
-    if (a.cfg.algo == PG_PPO) {
-        unsigned long mb = a.cfg.minibatch == 0UL ? N : a.cfg.minibatch;
+    if (self.cfg.algo == PG_PPO) {
+        unsigned long mb = self.cfg.minibatch == 0UL ? N : self.cfg.minibatch;
         unsigned long e = 0UL;
-        while (ok && e < a.cfg.epochs) {
+        while (ok && e < self.cfg.epochs) {
             unsafe {
                 unsigned long i = N;
                 while (i > 1UL) {
-                    unsigned long j = rng_below(&a.rng, i);
+                    unsigned long j = self.rng.below(i);
                     unsigned long tmp = idx[i - 1UL]; idx[i - 1UL] = idx[j]; idx[j] = tmp;
                     i = i - 1UL;
                 }
-                ok = nr_pg_order_(a, (const &unsigned long)idx, N);
+                ok = nr_pg_order_(self, (const &unsigned long)idx, N);
             }
             unsigned long start = 0UL;
             while (ok && start < N) {
                 unsigned long m = N - start < mb ? N - start : mb;
-                ok = nr_pg_run_(a, m);
+                ok = nr_pg_run_(self, m);
                 start = start + m;
             }
             e = e + 1UL;
         }
     } else {
-        unsafe { ok = ok && nr_pg_order_(a, (const &unsigned long)idx, N) && nr_pg_step_(a, N); }
+        unsafe { ok = ok && nr_pg_order_(self, (const &unsigned long)idx, N) && nr_pg_step_(self, N); }
     }
     unsafe { free((void*)idx); }
     float st[4];
     float last = (float)-1.0;
-    if (ok && rocm_read(a.state, &st[0], 4UL)) { last = st[2]; a.lastEntropy = st[3]; }
-    a.roll.clear();
-    a.rollout = 0UL;
+    if (ok && rocm_read(self.state, &st[0], 4UL)) { last = st[2]; self.lastEntropy = st[3]; }
+    self.roll.clear();
+    self.rollout = 0UL;
     return last;
 }
 
-int rocm_pg_download(const &RocmPolicy d, &PolicyAgent a) {
-    if (!d.ok || !rocm_net_download(&d.policy, &a.policy.params) || !rocm_net_download(&d.value, &a.value.params))
+int RocmPolicy::download(&PolicyAgent a) const {
+    if (!self.ok || !self.policy.download(&a.policy.params) || !self.value.download(&a.value.params))
         return 0;
-    a.rng = d.rng;
-    a.lastEntropy = d.lastEntropy;
+    a.rng = self.rng;
+    a.lastEntropy = self.lastEntropy;
     return 1;
 }
 
-void rocm_pg_free(&RocmPolicy a) {
-    rocm_graph_free(&a.graphs[0]);
-    rocm_graph_free(&a.graphs[1]);
-    rocm_optimizer_free(&a.opt);
-    rocm_net_free(&a.policy);
-    rocm_net_free(&a.value);
-    a.roll.free();
-    rocm_free(&a.data); rocm_free(&a.v); rocm_free(&a.vn); rocm_free(&a.logpOld); rocm_free(&a.adv);
-    rocm_free(&a.ret); rocm_free(&a.order); rocm_free(&a.cursor); rocm_free(&a.mObs); rocm_free(&a.mAct);
-    rocm_free(&a.mAdv); rocm_free(&a.mRet); rocm_free(&a.mLpo); rocm_free(&a.state); rocm_free(&a.obs1);
-    unsafe { free((void*)a.stage); }
-    a.ok = 0;
+void RocmPolicy::free() {
+    self.graphs[0].free();
+    self.graphs[1].free();
+    self.opt.free();
+    self.policy.free();
+    self.value.free();
+    self.roll.free();
+    self.data.free(); self.v.free(); self.vn.free(); self.logpOld.free(); self.adv.free();
+    self.ret.free(); self.order.free(); self.cursor.free(); self.mObs.free(); self.mAct.free();
+    self.mAdv.free(); self.mRet.free(); self.mLpo.free(); self.state.free(); self.obs1.free();
+    unsafe { free((void*)self.stage); }
+    self.ok = 0;
 }
 
 // ── Batches ──────────────────────────────────────────────────────────────────
@@ -5145,7 +5138,7 @@ static void nr_shuffle_(&RocmBatches b) {
     unsafe {
         unsigned long i = b.n;
         while (i > 1UL) {
-            unsigned long j = rng_below(&b.rng, i);
+            unsigned long j = b.rng.below(i);
             unsigned long t = b.perm[i - 1UL]; b.perm[i - 1UL] = b.perm[j]; b.perm[j] = t;
             i = i - 1UL;
         }
@@ -5183,48 +5176,48 @@ struct RocmBatches rocm_batches_new(const &Dataset d, unsigned long batchSize, i
     return b;
 }
 
-int rocm_batches_epoch(&RocmBatches b) {
-    if (!b.ok) return 0;
+int RocmBatches::epoch() {
+    if (!self.ok) return 0;
     // the previous epoch's reads of permf are done once its loss was read
     if (!rocm_sync()) return 0;
     unsafe {
         unsigned long i = 0UL;
-        while (i < b.n) { b.permf[i] = (float)b.perm[i]; i = i + 1UL; }
-        if (!nr_write_(b.order, (const &float)(const float*)b.permf, b.n)) return 0;
+        while (i < self.n) { self.permf[i] = (float)self.perm[i]; i = i + 1UL; }
+        if (!nr_write_(self.order, (const &float)(const float*)self.permf, self.n)) return 0;
     }
     // DataLoader reshuffles at the end of each epoch for the next
-    if (b.shuffle) nr_shuffle_(b);
-    return rocm_zero(b.cursor) && rocm_zero(b.loss);
+    if (self.shuffle) nr_shuffle_(self);
+    return rocm_zero(self.cursor) && rocm_zero(self.loss);
 }
 
-int rocm_batches_gather(&RocmBatches b, unsigned long rows) {
-    if (!b.ok || rows == 0UL || rows > b.batchSize) return 0;
+int RocmBatches::gather(unsigned long rows) {
+    if (!self.ok || rows == 0UL || rows > self.batchSize) return 0;
     unsafe {
-        void* sx = (void*)b.x.dev; void* dx = (void*)b.xb.dev; void* sy = (void*)b.y.dev; void* dy = (void*)b.yb.dev;
-        void* po = (void*)b.order.dev; void* pc = (void*)b.cursor.dev;
-        unsigned int fx = (unsigned int)b.features; unsigned int fy = (unsigned int)b.targets;
+        void* sx = (void*)self.x.dev; void* dx = (void*)self.xb.dev; void* sy = (void*)self.y.dev; void* dy = (void*)self.yb.dev;
+        void* po = (void*)self.order.dev; void* pc = (void*)self.cursor.dev;
+        unsigned int fx = (unsigned int)self.features; unsigned int fy = (unsigned int)self.targets;
         unsigned int r = (unsigned int)rows;
         void* p[9];
         p[0] = (void*)&sx; p[1] = (void*)&dx; p[2] = (void*)&fx; p[3] = (void*)&sy; p[4] = (void*)&dy;
         p[5] = (void*)&fy; p[6] = (void*)&po; p[7] = (void*)&pc; p[8] = (void*)&r;
-        unsigned long n = rows * (b.features + b.targets);
+        unsigned long n = rows * (self.features + self.targets);
         unsigned long blocks = (n + 4UL * (unsigned long)NR_BLOCK - 1UL) / (4UL * (unsigned long)NR_BLOCK);
         if (blocks > 128UL) blocks = 128UL;   // each block takes a turn on the cursor's counter
         return nr_launch_grid_(NR_GATHER, blocks, 1UL, (&void)&p[0]);
     }
 }
 
-float rocm_batches_loss(&RocmBatches b) {
+float RocmBatches::loss_sum() {
     float v = (float)0.0;
-    if (!b.ok || !rocm_read(b.loss, &v, 1UL)) return (float)0.0;
+    if (!self.ok || !rocm_read(self.loss, &v, 1UL)) return (float)0.0;
     return v;
 }
 
-void rocm_batches_free(&RocmBatches b) {
-    rocm_free(&b.x); rocm_free(&b.y); rocm_free(&b.order); rocm_free(&b.cursor);
-    rocm_free(&b.xb); rocm_free(&b.yb); rocm_free(&b.loss);
-    unsafe { free((void*)b.perm); free((void*)b.permf); }
-    b.ok = 0;
+void RocmBatches::free() {
+    self.x.free(); self.y.free(); self.order.free(); self.cursor.free();
+    self.xb.free(); self.yb.free(); self.loss.free();
+    unsafe { free((void*)self.perm); free((void*)self.permf); }
+    self.ok = 0;
 }
 
 // ── The training traits ──────────────────────────────────────────────────────
@@ -5240,20 +5233,20 @@ struct RocmFitGraphs rocm_fit_graphs_new_() {
 }
 
 void rocm_fit_graphs_free_(&RocmFitGraphs g) {
-    rocm_graph_free(&g.full);
-    rocm_graph_free(&g.tail);
-    rocm_graph_free(&g.chunk);
+    g.full.free();
+    g.tail.free();
+    g.chunk.free();
     g.seenFull = 0;
     g.seenTail = 0;
 }
 
 int rocm_trainer_reserve_(&RocmBuf b, unsigned long n) {
     if (b.dev != 0UL && b.len >= n) return 1;
-    rocm_free(b);
+    b.free();
     return nr_alloc_(b, n);
 }
 
-int rocm_net_download_mlp(const &RocmNet n, &Mlp m) { return rocm_net_download(n, &m.params); }
+int RocmNet::download_mlp(&Mlp m) const { return self.download(&m.params); }
 
 static fn int(&RocmNet, struct RocmBuf, struct RocmBuf, unsigned long, struct RocmBuf) nr_loss_step_(int loss) {
     if (loss == TRAIN_LOSS_MSE) return rocm_net_mse_step;
@@ -5272,17 +5265,29 @@ static void nr_trainer_finish_(&RocmTrainer<H, D> t, const &Optimizer opt, const
     t.active = 0;
 }
 
+// RocmTrainer / RocmGanTrainer call these through their fn fields.
+static int  nr_download_mlp_(const &RocmNet n, &Mlp m) { return n.download_mlp(m); }
+static int  nr_download_convnet_(const &RocmNet n, &ConvNet c) { return n.download_convnet(c); }
+static void nr_free_net_(&RocmNet n) { n.free(); }
+static int  nr_download_vae_(const &RocmVae d, &Vae v) { return d.download(v); }
+static int  nr_download_conv_vae_(const &RocmVae d, &ConvVae v) { return d.download_conv_vae(v); }
+static void nr_free_vae_(&RocmVae v) { v.free(); }
+static int  nr_download_cae_(const &RocmConvAe a, &ConvAutoencoder ae) { return a.download(ae); }
+static void nr_free_cae_(&RocmConvAe a) { a.free(); }
+static int  nr_download_gan_(const &RocmGan d, &Gan g) { return d.download(g); }
+static int  nr_download_dcgan_(const &RocmGan d, &Dcgan g) { return d.download_dcgan(g); }
+
 struct RocmTrainer<struct Mlp, struct RocmNet> rocm_mlp_trainer_new(struct Mlp m, int loss, const &Optimizer opt,
                                                                     const &TrainerOptions o) {
     struct RocmTrainer<struct Mlp, struct RocmNet> t;
     t.host = m;
     t.dev = rocm_net_from_mlp(&t.host, o.maxBatch);
     nr_trainer_finish_(&t, opt, o);
-    t.ok = t.dev.ok && (o.precision == 0 || rocm_net_set_precision(&t.dev, o.precision)) &&
-           rocm_optimizer_add_net(&t.opt, &t.dev) && t.opt.ok;
+    t.ok = t.dev.ok && (o.precision == 0 || t.dev.set_precision(o.precision)) &&
+           t.dev.add_params(&t.opt) && t.opt.ok;
     t.stepFn = nr_loss_step_(loss);
-    t.downloadFn = rocm_net_download_mlp;
-    t.freeFn = rocm_net_free;
+    t.downloadFn = nr_download_mlp_;
+    t.freeFn = nr_free_net_;
     return t;
 }
 
@@ -5293,11 +5298,11 @@ struct RocmTrainer<struct ConvNet, struct RocmNet> rocm_convnet_trainer_new(stru
     t.host = n;
     t.dev = rocm_net_from_convnet(&t.host, o.maxBatch);
     nr_trainer_finish_(&t, opt, o);
-    t.ok = t.dev.ok && (o.precision == 0 || rocm_net_set_precision(&t.dev, o.precision)) &&
-           rocm_optimizer_add_net(&t.opt, &t.dev) && t.opt.ok;
+    t.ok = t.dev.ok && (o.precision == 0 || t.dev.set_precision(o.precision)) &&
+           t.dev.add_params(&t.opt) && t.opt.ok;
     t.stepFn = nr_loss_step_(loss);
-    t.downloadFn = rocm_net_download_convnet;
-    t.freeFn = rocm_net_free;
+    t.downloadFn = nr_download_convnet_;
+    t.freeFn = nr_free_net_;
     return t;
 }
 
@@ -5307,10 +5312,10 @@ struct RocmTrainer<struct Vae, struct RocmVae> rocm_vae_trainer_new(struct Vae v
     t.host = v;
     t.dev = rocm_vae_new(&t.host, o.maxBatch);
     nr_trainer_finish_(&t, opt, o);
-    t.ok = t.dev.ok && o.precision == 0 && rocm_optimizer_add_vae(&t.opt, &t.dev) && t.opt.ok;
+    t.ok = t.dev.ok && o.precision == 0 && t.dev.add_params(&t.opt) && t.opt.ok;
     t.stepFn = rocm_vae_step;
-    t.downloadFn = rocm_vae_download;
-    t.freeFn = rocm_vae_free;
+    t.downloadFn = nr_download_vae_;
+    t.freeFn = nr_free_vae_;
     return t;
 }
 
@@ -5320,10 +5325,10 @@ struct RocmTrainer<struct ConvVae, struct RocmVae> rocm_conv_vae_trainer_new(str
     t.host = v;
     t.dev = rocm_conv_vae_new(&t.host, o.maxBatch);
     nr_trainer_finish_(&t, opt, o);
-    t.ok = t.dev.ok && o.precision == 0 && rocm_optimizer_add_vae(&t.opt, &t.dev) && t.opt.ok;
+    t.ok = t.dev.ok && o.precision == 0 && t.dev.add_params(&t.opt) && t.opt.ok;
     t.stepFn = rocm_vae_step;
-    t.downloadFn = rocm_conv_vae_download;
-    t.freeFn = rocm_vae_free;
+    t.downloadFn = nr_download_conv_vae_;
+    t.freeFn = nr_free_vae_;
     return t;
 }
 
@@ -5334,10 +5339,10 @@ struct RocmTrainer<struct ConvAutoencoder, struct RocmConvAe> rocm_conv_ae_train
     t.host = ae;
     t.dev = rocm_conv_autoencoder_new(&t.host, o.maxBatch);
     nr_trainer_finish_(&t, opt, o);
-    t.ok = t.dev.ok && o.precision == 0 && rocm_optimizer_add_conv_autoencoder(&t.opt, &t.dev) && t.opt.ok;
+    t.ok = t.dev.ok && o.precision == 0 && t.dev.add_params(&t.opt) && t.opt.ok;
     t.stepFn = rocm_conv_autoencoder_step;
-    t.downloadFn = rocm_conv_autoencoder_download;
-    t.freeFn = rocm_conv_autoencoder_free;
+    t.downloadFn = nr_download_cae_;
+    t.freeFn = nr_free_cae_;
     return t;
 }
 
@@ -5345,7 +5350,7 @@ struct RocmGanTrainer<struct Gan> rocm_gan_trainer_new(struct Gan g, const &Trai
     struct RocmGanTrainer<struct Gan> t;
     t.host = g;
     t.dev = rocm_gan_new(&t.host, o.maxBatch);
-    t.downloadFn = rocm_gan_download;
+    t.downloadFn = nr_download_gan_;
     t.xs = nr_none_();
     t.ls = nr_none_();
     return t;
@@ -5355,7 +5360,7 @@ struct RocmGanTrainer<struct Dcgan> rocm_dcgan_trainer_new(struct Dcgan g, const
     struct RocmGanTrainer<struct Dcgan> t;
     t.host = g;
     t.dev = rocm_dcgan_new(&t.host, o.maxBatch);
-    t.downloadFn = rocm_dcgan_download;
+    t.downloadFn = nr_download_dcgan_;
     t.xs = nr_none_();
     t.ls = nr_none_();
     return t;
@@ -5368,21 +5373,21 @@ struct RocmDqnAgent rocm_dqn_agent_new(struct Dqn d) {
     return a;
 }
 
-float RocmDqnAgent::epsilon() { return rocm_dqn_epsilon(&self.dev); }
+float RocmDqnAgent::epsilon() { return self.dev.epsilon(); }
 
-unsigned long RocmDqnAgent::act(const &Tensor obs, int explore) { return rocm_dqn_act(&self.dev, obs, explore); }
+unsigned long RocmDqnAgent::act(const &Tensor obs, int explore) { return self.dev.act(obs, explore); }
 
 int RocmDqnAgent::observe(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminal) {
-    return rocm_dqn_observe(&self.dev, obs, action, reward, next, terminal);
+    return self.dev.observe(obs, action, reward, next, terminal);
 }
 
-float RocmDqnAgent::last_loss() { return rocm_dqn_loss(&self.dev); }
+float RocmDqnAgent::last_loss() { return self.dev.loss(); }
 
 unsigned long RocmDqnAgent::updates() { return self.dev.updates; }
 
-int RocmDqnAgent::sync() { return rocm_dqn_download(&self.dev, &self.host); }
+int RocmDqnAgent::sync() { return self.dev.download(&self.host); }
 
-void RocmDqnAgent::free() { rocm_dqn_free(&self.dev); }
+void RocmDqnAgent::free() { self.dev.free(); }
 
 struct RocmPgAgent rocm_pg_agent_new(struct PolicyAgent a, const &TrainerOptions o) {
     struct RocmPgAgent p;
@@ -5391,17 +5396,17 @@ struct RocmPgAgent rocm_pg_agent_new(struct PolicyAgent a, const &TrainerOptions
     return p;
 }
 
-unsigned long RocmPgAgent::act(const &Tensor obs, int sample) { return rocm_pg_act(&self.dev, obs, sample); }
+unsigned long RocmPgAgent::act(const &Tensor obs, int sample) { return self.dev.act(obs, sample); }
 
 void RocmPgAgent::record(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminated,
                          int truncated) {
-    rocm_pg_record(&self.dev, obs, action, reward, next, terminated, truncated);
+    self.dev.record(obs, action, reward, next, terminated, truncated);
 }
 
-float RocmPgAgent::update() { return rocm_pg_update(&self.dev); }
+float RocmPgAgent::update() { return self.dev.update(); }
 
-int RocmPgAgent::sync() { return rocm_pg_download(&self.dev, &self.host); }
+int RocmPgAgent::sync() { return self.dev.download(&self.host); }
 
-void RocmPgAgent::free() { rocm_pg_free(&self.dev); }
+void RocmPgAgent::free() { self.dev.free(); }
 
 } // namespace std

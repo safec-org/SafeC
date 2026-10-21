@@ -89,16 +89,16 @@ static struct Vec<float> fm_download(struct RocmBuf b, unsigned long off, unsign
 }
 
 static void check_miopen() {
-    // conv2d_forward_rocm vs conv2d_forward: 3x3, stride 1, pad 1, odd sizes
+    // conv2d_forward_rocm vs Conv2D::forward: 3x3, stride 1, pad 1, odd sizes
     struct Conv2D l1 = std::conv2d_new(3UL, 8UL, 3UL, 3UL, 1UL, 1UL);
     conv_bias(&l1);
     struct FeatureMap x1 = std::feature_map_new(3UL, 17UL, 13UL);
     fm_fill(&x1, 0UL);
-    struct FeatureMap c1 = std::conv2d_forward(&l1, &x1);
+    struct FeatureMap c1 = l1.forward(&x1);
     struct FeatureMap g1 = std::conv2d_forward_rocm(&l1, &x1);
     check(g1.channels == 8UL && g1.height == 17UL && g1.width == 13UL, "conv2d_forward_rocm shape");
     unsafe { check(fm_err((const float*)g1.data, (const float*)c1.data, fm_size(&c1)) < 1e-5f, "conv2d_forward_rocm values"); }
-    std::feature_map_free(&g1);
+    g1.free();
 
     // queued conv on a batch of two images: 5x5, stride 2, pad 0; then + relu
     struct Conv2D l2 = std::conv2d_new(4UL, 6UL, 5UL, 5UL, 2UL, 0UL);
@@ -107,8 +107,8 @@ static void check_miopen() {
     struct FeatureMap xb = std::feature_map_new(4UL, 21UL, 15UL);
     fm_fill(&xa, 3UL);
     fm_fill(&xb, 50UL);
-    struct FeatureMap ca = std::conv2d_forward(&l2, &xa);
-    struct FeatureMap cb = std::conv2d_forward(&l2, &xb);
+    struct FeatureMap ca = l2.forward(&xa);
+    struct FeatureMap cb = l2.forward(&xb);
     unsigned long inN = fm_size(&xa);
     unsigned long outN = fm_size(&ca);
     check(std::rocm_conv_out_dim(21UL, 5UL, 2UL, 0UL) == ca.height && std::rocm_conv_out_dim(15UL, 5UL, 2UL, 0UL) == ca.width,
@@ -124,27 +124,27 @@ static void check_miopen() {
         dx2.len = inN;
         std::rocm_write(dx2, xb.data, inN);
     }
-    check(std::rocm_conv2d(&d2, dx, dy, 2UL, 21UL, 15UL), "rocm_conv2d batch ran");
+    check(d2.forward(dx, dy, 2UL, 21UL, 15UL), "RocmConv2D::forward batch ran");
     struct Vec<float> ya = fm_download(dy, 0UL, outN);
     struct Vec<float> yb = fm_download(dy, outN, outN);
     unsafe {
         check(fm_err(ya.at(0UL), (const float*)ca.data, outN) < 1e-5f &&
-              fm_err(yb.at(0UL), (const float*)cb.data, outN) < 1e-5f, "rocm_conv2d batch values");
+              fm_err(yb.at(0UL), (const float*)cb.data, outN) < 1e-5f, "RocmConv2D::forward batch values");
     }
     ya.free(); yb.free();
-    check(std::rocm_conv2d_relu(&d2, dx, dy, 2UL, 21UL, 15UL), "rocm_conv2d_relu ran");
+    check(d2.forward_relu(dx, dy, 2UL, 21UL, 15UL), "RocmConv2D::forward_relu ran");
     ya = fm_download(dy, outN, outN);
     unsafe {
         unsigned long i = 0UL;
         while (i < outN) { if (cb.data[i] < 0.0f) cb.data[i] = 0.0f; i = i + 1UL; }
-        check(fm_err(ya.at(0UL), (const float*)cb.data, outN) < 1e-5f, "rocm_conv2d_relu values");
+        check(fm_err(ya.at(0UL), (const float*)cb.data, outN) < 1e-5f, "RocmConv2D::forward_relu values");
     }
     ya.free();
-    check(!std::rocm_conv2d(&d2, dx, dy, 3UL, 21UL, 15UL), "rocm_conv2d rejects short buffers");
+    check(!d2.forward(dx, dy, 3UL, 21UL, 15UL), "RocmConv2D::forward rejects short buffers");
 
     // the cached plan replays inside a graph
     check(std::rocm_capture_begin(), "conv capture begin");
-    std::rocm_conv2d(&d2, dx, dy, 2UL, 21UL, 15UL);
+    d2.forward(dx, dy, 2UL, 21UL, 15UL);
     struct RocmGraph cg = std::rocm_capture_end();
     check(cg.exec != 0UL, "conv capture end");
     std::rocm_scale(dy, 0.0f, dy);
@@ -152,7 +152,7 @@ static void check_miopen() {
     ya = fm_download(dy, 0UL, outN);
     unsafe { check(fm_err(ya.at(0UL), (const float*)ca.data, outN) < 1e-5f, "conv graph values"); }
     ya.free();
-    std::rocm_graph_free(&cg);
+    cg.free();
 
 
     // pooling, upsample and concat against cnn.sc
@@ -189,20 +189,20 @@ static void check_miopen() {
     struct UNet net = std::unet_new(3UL, 8UL, 16UL, 2UL);
     struct FeatureMap ux = std::feature_map_new(3UL, 32UL, 24UL);
     fm_fill(&ux, 7UL);
-    struct FeatureMap uc = std::unet_forward(&net, &ux);
+    struct FeatureMap uc = net.forward(&ux);
     struct FeatureMap ug = std::unet_forward_rocm(&net, &ux);
     check(ug.channels == 2UL && ug.height == 32UL && ug.width == 24UL, "unet_forward_rocm shape");
     unsafe { check(fm_err((const float*)ug.data, (const float*)uc.data, fm_size(&uc)) < 1e-4f, "unet_forward_rocm values"); }
 
-    std::feature_map_free(&ug); std::feature_map_free(&uc); std::feature_map_free(&ux);
-    std::unet_free(&net);
-    std::feature_map_free(&cat); std::feature_map_free(&up); std::feature_map_free(&mp); std::feature_map_free(&ap);
-    std::rocm_free(&dxa); std::rocm_free(&dxb); std::rocm_free(&dc); std::rocm_free(&du); std::rocm_free(&dp);
-    std::rocm_free(&dx); std::rocm_free(&dy);
-    std::rocm_conv2d_free(&d2);
-    std::feature_map_free(&ca); std::feature_map_free(&cb); std::feature_map_free(&xa); std::feature_map_free(&xb);
-    std::feature_map_free(&c1); std::feature_map_free(&x1);
-    std::conv2d_free(&l1); std::conv2d_free(&l2);
+    ug.free(); uc.free(); ux.free();
+    net.free();
+    cat.free(); up.free(); mp.free(); ap.free();
+    dxa.free(); dxb.free(); dc.free(); du.free(); dp.free();
+    dx.free(); dy.free();
+    d2.free();
+    ca.free(); cb.free(); xa.free(); xb.free();
+    c1.free(); x1.free();
+    l1.free(); l2.free();
 }
 
 static &heap Complex cplx_new(unsigned long n, unsigned long salt) {
@@ -334,7 +334,7 @@ static void check_hipfft() {
     check(maxdiff(&gf, &re) < 1e-5f, "rocm_fft_c2r round trip");
     gf.free();
 
-    std::rocm_free(&din); std::rocm_free(&dfreq); std::rocm_free(&dre); std::rocm_free(&dhalf); std::rocm_free(&dback);
+    din.free(); dfreq.free(); dre.free(); dhalf.free(); dback.free();
     hf.free(); re.free();
     unsafe {
         std::dealloc(x); std::dealloc(ref); std::dealloc(got);
@@ -398,8 +398,8 @@ static void check_miopen_half() {
             fm_fill(&xb, 50UL);
             fm_round_(&xa, d);
             fm_round_(&xb, d);
-            struct FeatureMap ca = std::conv2d_forward(&lr, &xa);
-            struct FeatureMap cb = std::conv2d_forward(&lr, &xb);
+            struct FeatureMap ca = lr.forward(&xa);
+            struct FeatureMap cb = lr.forward(&xb);
             unsigned long inN = fm_size(&xa);
             unsigned long outN = fm_size(&ca);
             struct Vec<float> both = std::vec_with_cap(2UL * inN);
@@ -413,7 +413,7 @@ static void check_miopen_half() {
             struct RocmHalfBuf hx = std::rocm_half_upload(both.at(0UL), 2UL * inN, d);
             struct RocmHalfBuf hy = std::rocm_half_alloc(2UL * outN, d);
             check(hl.weight.dev != 0UL && hx.dev != 0UL && hy.dev != 0UL, "half conv upload");
-            check(std::rocm_half_conv2d(&hl, hx, hy, 2UL, 21UL, 15UL), d == ROCM_FP16 ? "fp16 conv ran" : "bf16 conv ran");
+            check(hl.forward(hx, hy, 2UL, 21UL, 15UL), d == ROCM_FP16 ? "fp16 conv ran" : "bf16 conv ran");
             struct Vec<float> ya = half_download_(hy, 0UL, outN);
             struct Vec<float> yb = half_download_(hy, outN, outN);
             unsafe {
@@ -421,7 +421,7 @@ static void check_miopen_half() {
                       d == ROCM_FP16 ? "fp16 conv values" : "bf16 conv values");
             }
             ya.free(); yb.free();
-            check(std::rocm_half_conv2d_relu(&hl, hx, hy, 2UL, 21UL, 15UL), "half conv relu ran");
+            check(hl.forward_relu(hx, hy, 2UL, 21UL, 15UL), "half conv relu ran");
             yb = half_download_(hy, outN, outN);
             unsafe {
                 unsigned long i = 0UL;
@@ -445,15 +445,15 @@ static void check_miopen_half() {
                 pa.free();
                 struct RocmHalfBuf other = std::rocm_half_alloc(2UL * pn, d == ROCM_FP16 ? ROCM_BF16 : ROCM_FP16);
                 check(!std::rocm_half_maxpool2d(hx, other, 2UL, inC, 21UL, 15UL, 3UL, 2UL), "half pool rejects mixed dtypes");
-                std::rocm_half_free(&other);
-                std::rocm_half_free(&hp);
-                std::feature_map_free(&mp); std::feature_map_free(&ap);
+                other.free();
+                hp.free();
+                mp.free(); ap.free();
             }
-            std::rocm_half_free(&hx); std::rocm_half_free(&hy);
-            std::rocm_half_conv2d_free(&hl);
+            hx.free(); hy.free();
+            hl.free();
             both.free();
-            std::feature_map_free(&ca); std::feature_map_free(&cb); std::feature_map_free(&xa); std::feature_map_free(&xb);
-            std::conv2d_free(&l); std::conv2d_free(&lr);
+            ca.free(); cb.free(); xa.free(); xb.free();
+            l.free(); lr.free();
             shape = shape + 1;
         }
         d = d + 1;

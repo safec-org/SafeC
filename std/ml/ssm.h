@@ -51,6 +51,12 @@ struct Mamba {
     unsigned long dState;   // N
     unsigned long dConv;
     unsigned long dtRank;   // ceil(dModel / 16)
+
+    // X: [T, dModel] -> [T, dModel], the whole sequence at once (prefill).
+    &Tensor forward(const &Tensor X) const;
+    void free();
+    // x: [1, dModel] (or [dModel]) -> [1, dModel]; advances 'state'.
+    &Tensor step(&MambaState state, const &Tensor x) const;
 };
 
 // Deterministic initialization following the paper (and HF transformers'
@@ -58,21 +64,17 @@ struct Mamba {
 // softplus(dtBias) spans [0.001, 0.1] log-uniformly, other weights small
 // and pseudo-random. Typical: dState 16, dConv 4, expand 2.
 struct Mamba mamba_new(unsigned long dModel, unsigned long dState, unsigned long dConv, unsigned long expand);
-// X: [T, dModel] -> [T, dModel], the whole sequence at once (prefill).
-&Tensor mamba_forward(const &Mamba layer, const &Tensor X);
-void mamba_free(&Mamba layer);
 
 // Recurrent decoding, one token at a time with a fixed-size state.
-// Feeding tokens 0..T-1 through mamba_step gives the same rows as
-// mamba_forward on the whole sequence.
+// Feeding tokens 0..T-1 through Mamba::step gives the same rows as
+// Mamba::forward on the whole sequence.
 struct MambaState {
     &Tensor conv;  // [dInner, dConv - 1], the last inputs to the convolution, oldest first
     &Tensor h;     // [dInner, dState], the SSM state
+
+    void reset();
+    void free();
 };
 struct MambaState mamba_state_new(const &Mamba layer);  // zero state
-// x: [1, dModel] (or [dModel]) -> [1, dModel]; advances 'state'.
-&Tensor mamba_step(const &Mamba layer, &MambaState state, const &Tensor x);
-void mamba_state_reset(&MambaState state);
-void mamba_state_free(&MambaState state);
 
 } // namespace std

@@ -228,13 +228,13 @@ void t_mixed_precision_batch() {
     gbr.set1(5UL, (float)1.0e9);              // rounds to +inf in fp16
     ASSERT_TRUE(!half_grads_accumulate(&g16, &ps, (float)1.0));
 
-    // loss_scaler_unscale_all over the list
+    // LossScaler::unscale_all over the list
     struct LossScaler sc = loss_scaler_new();
     sc.scale = (float)4.0;
     tensor_zero_grad(*ps.at(0UL));
     tensor_zero_grad(*ps.at(1UL));
     unsafe { (*ps.at(0UL))->grad[0] = (float)8.0; }
-    ASSERT_TRUE(loss_scaler_unscale_all(&sc, &ps));
+    ASSERT_TRUE(sc.unscale_all(&ps));
     unsafe { ASSERT_TRUE((*ps.at(0UL))->grad[0] == (float)2.0); }
 
     half_tensors_free(&g16);

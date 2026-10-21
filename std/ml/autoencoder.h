@@ -7,7 +7,7 @@
 //
 // Every *_loss function has trainer_fit's loss signature (model, x, y), so
 //   struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.001);
-//   vae_add_params(&opt, &vae);
+//   vae.add_params(&opt);
 //   trainer_fit(&vae, vae_loss, &opt, &data, &cfg);
 // trains any of them. 'y' is ignored except by a conditional VAE, which
 // reads class indices from it.
@@ -54,14 +54,15 @@ struct Autoencoder {
     struct Rng rng;
     float lastRecon;     // last loss call's reconstruction term
     float lastPenalty;   // ... and its sparsity term
+
+    &Tensor encode(const &Tensor x);         // [m, latent]
+    &Tensor decode(const &Tensor z);         // [m, inDim]
+    &Tensor reconstruct(const &Tensor x);
+    void add_params(&Optimizer opt) const;
+    void free();
 };
 struct Autoencoder autoencoder_new(unsigned long inDim, const &AutoencoderConfig cfg);
-&Tensor autoencoder_encode(&Autoencoder ae, const &Tensor x);           // [m, latent]
-&Tensor autoencoder_decode(&Autoencoder ae, const &Tensor z);           // [m, inDim]
-&Tensor autoencoder_reconstruct(&Autoencoder ae, const &Tensor x);
 &Tensor autoencoder_loss(&Autoencoder ae, const &Tensor x, const &Tensor y);
-void    autoencoder_add_params(&Optimizer opt, const &Autoencoder ae);
-void    autoencoder_free(&Autoencoder ae);
 
 // ── Variational autoencoder (VAE, beta-VAE, CVAE) ────────────────────────────
 // Kingma & Welling 2014. The encoder outputs mu and log sigma^2 of a
@@ -95,18 +96,19 @@ struct Vae {
     struct Rng rng;
     float lastRecon;
     float lastKl;
+
+    // mu of q(z|x) (y: class indices, read only by a CVAE).
+    &Tensor encode(const &Tensor x, const &Tensor y);
+    &Tensor decode(const &Tensor z, const &Tensor y);
+    &Tensor reconstruct(const &Tensor x, const &Tensor y);   // decode(mu)
+    // n new samples from the prior; 'labels' (n class indices) for a CVAE,
+    // null for an unconditional VAE.
+    &Tensor sample(unsigned long n, ?&Tensor labels);
+    void add_params(&Optimizer opt) const;
+    void free();
 };
 struct Vae vae_new(unsigned long inDim, const &VaeConfig cfg);
 &Tensor vae_loss(&Vae v, const &Tensor x, const &Tensor y);
-// mu of q(z|x) (y: class indices, read only by a CVAE).
-&Tensor vae_encode(&Vae v, const &Tensor x, const &Tensor y);
-&Tensor vae_decode(&Vae v, const &Tensor z, const &Tensor y);
-&Tensor vae_reconstruct(&Vae v, const &Tensor x, const &Tensor y);    // decode(mu)
-// n new samples from the prior; 'labels' (n class indices) for a CVAE,
-// null for an unconditional VAE.
-&Tensor vae_sample(&Vae v, unsigned long n, ?&Tensor labels);
-void    vae_add_params(&Optimizer opt, const &Vae v);
-void    vae_free(&Vae v);
 
 // ── Vector-quantized VAE ─────────────────────────────────────────────────────
 // van den Oord et al. 2017. The encoder output z_e is replaced by its
@@ -143,52 +145,54 @@ struct VqVae {
     float lastRecon;
     float lastVq;                 // codebook + commitment terms
     float lastPerplexity;         // exp(entropy) of code use in the last batch
+
+    &Tensor encode(const &Tensor x);         // [m] code indices
+    &Tensor decode(const &Tensor codes);     // indices -> [m, inDim]
+    &Tensor reconstruct(const &Tensor x);
+    void add_params(&Optimizer opt) const;
+    void free();
 };
 struct VqVae vqvae_new(unsigned long inDim, const &VqVaeConfig cfg);
 &Tensor vqvae_loss(&VqVae v, const &Tensor x, const &Tensor y);
-&Tensor vqvae_encode(&VqVae v, const &Tensor x);                // [m] code indices
-&Tensor vqvae_decode(&VqVae v, const &Tensor codes);            // indices -> [m, inDim]
-&Tensor vqvae_reconstruct(&VqVae v, const &Tensor x);
-void    vqvae_add_params(&Optimizer opt, const &VqVae v);
-void    vqvae_free(&VqVae v);
 
 // ── Convolutional autoencoder and VAE ────────────────────────────────────────
 // The same models with a ConvNet encoder and decoder you build (convnet.h):
 // images stay [batch, C*H*W] rows, as datasets.h loads them. The encoder
 // maps the image to features; the decoder takes the code as a
-// latent x 1 x 1 input (start it with convnet_dense + convnet_reshape, or
-// a 1x1-input convnet_deconv) and must output the image's size. With
+// latent x 1 x 1 input (start it with ConvNet::dense + ConvNet::reshape, or
+// a 1x1-input ConvNet::deconv) and must output the image's size. With
 // RECON_BCE the decoder outputs logits, as above. The model takes
 // ownership of both nets: free the model, not the nets. Loss functions run
 // the nets in training mode (batch norm on batch statistics); encode /
 // decode / reconstruct / sample in inference mode (running statistics).
 //
 //   struct ConvNet enc = convnet_new(1UL, 16UL, 16UL);
-//   convnet_conv(&enc, 16UL, 4UL, 2UL, 1UL, ACT_LEAKY, &rng);   // 16 x 8 x 8
-//   convnet_conv(&enc, 32UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);    // 32 x 4 x 4
-//   convnet_batchnorm(&enc, ACT_LEAKY);
+//   enc.conv(16UL, 4UL, 2UL, 1UL, ACT_LEAKY, &rng);   // 16 x 8 x 8
+//   enc.conv(32UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);    // 32 x 4 x 4
+//   enc.batchnorm(ACT_LEAKY);
 //   struct ConvNet dec = convnet_new(latent, 1UL, 1UL);
-//   convnet_dense(&dec, 32UL * 16UL, ACT_RELU, &rng);
-//   convnet_reshape(&dec, 32UL, 4UL, 4UL);
-//   convnet_deconv(&dec, 16UL, 4UL, 2UL, 1UL, ACT_RELU, &rng);  // 16 x 8 x 8
-//   convnet_deconv(&dec, 1UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);   // 1 x 16 x 16
+//   dec.dense(32UL * 16UL, ACT_RELU, &rng);
+//   dec.reshape(32UL, 4UL, 4UL);
+//   dec.deconv(16UL, 4UL, 2UL, 1UL, ACT_RELU, &rng);  // 16 x 8 x 8
+//   dec.deconv(1UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);   // 1 x 16 x 16
 //   struct ConvVae v = conv_vae_new(enc, dec, &cfg);
 
 // Plain convolutional autoencoder: the encoder's output is the code (end
-// it with convnet_dense(&enc, latent, ...) for a vector code).
+// it with enc.dense(latent, ...) for a vector code).
 struct ConvAutoencoder {
     struct ConvNet enc;
     struct ConvNet dec;
     int   recon;           // RECON_MSE / RECON_BCE
     float lastRecon;
+
+    &Tensor encode(const &Tensor x);
+    &Tensor decode(const &Tensor z);
+    &Tensor reconstruct(const &Tensor x);
+    void add_params(&Optimizer opt) const;
+    void free();
 };
 struct ConvAutoencoder conv_autoencoder_new(struct ConvNet enc, struct ConvNet dec, int recon);
-&Tensor conv_autoencoder_encode(&ConvAutoencoder ae, const &Tensor x);
-&Tensor conv_autoencoder_decode(&ConvAutoencoder ae, const &Tensor z);
-&Tensor conv_autoencoder_reconstruct(&ConvAutoencoder ae, const &Tensor x);
 &Tensor conv_autoencoder_loss(&ConvAutoencoder ae, const &Tensor x, const &Tensor y);
-void    conv_autoencoder_add_params(&Optimizer opt, const &ConvAutoencoder ae);
-void    conv_autoencoder_free(&ConvAutoencoder ae);
 
 // Convolutional VAE: linear mu / log sigma^2 heads on the flattened encoder
 // features, the loss of Vae. Reads latent, recon, beta, classes and seed
@@ -208,16 +212,17 @@ struct ConvVae {
     struct Rng rng;
     float lastRecon;
     float lastKl;
+
+    &Tensor encode(const &Tensor x, const &Tensor y);        // mu
+    &Tensor decode(const &Tensor z, const &Tensor y);
+    &Tensor reconstruct(const &Tensor x, const &Tensor y);
+    // n samples from the prior; 'labels' (n class indices) for a conditional
+    // VAE, null otherwise.
+    &Tensor sample(unsigned long n, ?&Tensor labels);
+    void add_params(&Optimizer opt) const;
+    void free();
 };
 struct ConvVae conv_vae_new(struct ConvNet enc, struct ConvNet dec, const &VaeConfig cfg);
 &Tensor conv_vae_loss(&ConvVae v, const &Tensor x, const &Tensor y);
-&Tensor conv_vae_encode(&ConvVae v, const &Tensor x, const &Tensor y);        // mu
-&Tensor conv_vae_decode(&ConvVae v, const &Tensor z, const &Tensor y);
-&Tensor conv_vae_reconstruct(&ConvVae v, const &Tensor x, const &Tensor y);
-// n samples from the prior; 'labels' (n class indices) for a conditional
-// VAE, null otherwise.
-&Tensor conv_vae_sample(&ConvVae v, unsigned long n, ?&Tensor labels);
-void    conv_vae_add_params(&Optimizer opt, const &ConvVae v);
-void    conv_vae_free(&ConvVae v);
 
 } // namespace std

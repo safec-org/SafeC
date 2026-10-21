@@ -75,13 +75,13 @@ struct GatedDeltaNet {
     &Tensor Wbeta;  // [dModel, 1]
     unsigned long  keyDim;
     unsigned long  valueDim;
+
+    // X: [seqLen, dModel] (gate input only), Q/K: [seqLen, keyDim], V: [seqLen, valueDim]
+    // -> result: [seqLen, valueDim], computed via a sequential scan over time.
+    &Tensor forward(const &Tensor X, const &Tensor Q, const &Tensor K, const &Tensor V) const;
+    void free();
 };
 
 struct GatedDeltaNet gated_deltanet_new(unsigned long dModel, unsigned long keyDim, unsigned long valueDim);
-// X: [seqLen, dModel] (gate input only), Q/K: [seqLen, keyDim], V: [seqLen, valueDim]
-// -> result: [seqLen, valueDim], computed via a sequential scan over time.
-&Tensor gated_deltanet_forward(const &GatedDeltaNet layer, const &Tensor X,
-                                const &Tensor Q, const &Tensor K, const &Tensor V);
-void gated_deltanet_free(&GatedDeltaNet layer);
 
 } // namespace std

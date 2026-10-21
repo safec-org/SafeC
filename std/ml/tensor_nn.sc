@@ -237,32 +237,32 @@ struct AdamState adam_new_default(unsigned long size, float lr) {
     return adam_new(size, lr, (float)0.9, (float)0.999, (float)0.00000001);
 }
 
-void adam_step(&AdamState state, &Tensor param) {
+void AdamState::step(&Tensor param) {
     unsafe {
-        state.t = state.t + 1UL;
-        float b1 = state.beta1;
-        float b2 = state.beta2;
-        float biasCorr1 = (float)1.0 - pow_f(b1, (float)state.t);
-        float biasCorr2 = (float)1.0 - pow_f(b2, (float)state.t);
+        self.t = self.t + 1UL;
+        float b1 = self.beta1;
+        float b2 = self.beta2;
+        float biasCorr1 = (float)1.0 - pow_f(b1, (float)self.t);
+        float biasCorr2 = (float)1.0 - pow_f(b2, (float)self.t);
         unsigned long i = 0UL;
-        while (i < state.size) {
+        while (i < self.size) {
             float g = param->grad[i];
-            state.m[i] = b1 * state.m[i] + ((float)1.0 - b1) * g;
-            state.v[i] = b2 * state.v[i] + ((float)1.0 - b2) * g * g;
-            float mHat = state.m[i] / biasCorr1;
-            float vHat = state.v[i] / biasCorr2;
-            param->data[i] = param->data[i] - state.lr * mHat / (__builtin_sqrt(vHat) + state.eps);
+            self.m[i] = b1 * self.m[i] + ((float)1.0 - b1) * g;
+            self.v[i] = b2 * self.v[i] + ((float)1.0 - b2) * g * g;
+            float mHat = self.m[i] / biasCorr1;
+            float vHat = self.v[i] / biasCorr2;
+            param->data[i] = param->data[i] - self.lr * mHat / (__builtin_sqrt(vHat) + self.eps);
             i = i + 1UL;
         }
     }
 }
 
-void adam_free(&AdamState state) {
+void AdamState::free() {
     unsafe {
-        if (state.m != (float*)0) { free((void*)state.m); }
-        if (state.v != (float*)0) { free((void*)state.v); }
-        state.m = (&heap float)0;
-        state.v = (&heap float)0;
+        if (self.m != (float*)0) { free((void*)self.m); }
+        if (self.v != (float*)0) { free((void*)self.v); }
+        self.m = (&heap float)0;
+        self.v = (&heap float)0;
     }
 }
 

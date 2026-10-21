@@ -165,7 +165,7 @@ static void run_case(const char* what, struct CudaAttnShape s, int dtype, int ca
         ok = lin ? std::cuda_linear_attention_ex(dq, dk, dv, dout, s, causal)
                  : std::cuda_flash_attention_ex(dq, dk, dv, dout, s, 0.0f, causal);
         ok = ok && std::cuda_read(dout, got.at(0UL), qn);
-        std::cuda_free(&dq); std::cuda_free(&dk); std::cuda_free(&dv); std::cuda_free(&dout);
+        dq.free(); dk.free(); dv.free(); dout.free();
     } else {
         struct CudaHalfBuf hq = std::cuda_half_upload(q.at(0UL), qn, dtype);
         struct CudaHalfBuf hk = std::cuda_half_upload(k.at(0UL), kn, dtype);
@@ -175,8 +175,8 @@ static void run_case(const char* what, struct CudaAttnShape s, int dtype, int ca
         ok = lin ? std::cuda_half_linear_attention(hq, hk, hv, hout, s, causal)
                  : std::cuda_half_flash_attention(hq, hk, hv, hout, s, 0.0f, causal);
         ok = ok && std::cuda_from_half(hout, dout) && std::cuda_read(dout, got.at(0UL), qn);
-        std::cuda_half_free(&hq); std::cuda_half_free(&hk); std::cuda_half_free(&hv); std::cuda_half_free(&hout);
-        std::cuda_free(&dout);
+        hq.free(); hk.free(); hv.free(); hout.free();
+        dout.free();
     }
     check(ok, what);
     double e = relerr(&got, &want);
@@ -310,7 +310,7 @@ int main() {
     want = ref_attn(&q, &k, &v, one, 0, 1);
     check(std::cuda_read(dout2, got.at(0UL), qn) && relerr(&got, &want) <= 2.0e-5, "graph replay linear");
     want.free();
-    std::cuda_graph_free(&g);
+    g.free();
 
     // Rejected shapes
     check(!std::cuda_flash_attention_ex(dq, dk, dv, dout, shape(1UL, 1UL, 1UL, 40UL, 56UL, 48UL), (float)0.0, 0), "head dim 48 rejected");
@@ -320,7 +320,7 @@ int main() {
     check(!std::cuda_linear_attention_ex(dq, dk, dv, dout, windowed(one, 8UL), 0), "linear with window rejected");
     check(std::cuda_attention_head_dim_ok(128UL) && !std::cuda_attention_head_dim_ok(80UL), "head dim query");
 
-    std::cuda_free(&dq); std::cuda_free(&dk); std::cuda_free(&dv); std::cuda_free(&dout); std::cuda_free(&dout2);
+    dq.free(); dk.free(); dv.free(); dout.free(); dout2.free();
     q.free(); k.free(); v.free(); got.free(); cpu.free();
     unsafe { printf("cuda attention: %d checks, %d failures\n", g_checks, g_fails); }
     return g_fails == 0 ? 0 : 1;

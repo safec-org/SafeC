@@ -30,18 +30,19 @@ struct Rng {
     unsigned long state;
     int           hasSpare;   // Box-Muller's second value is cached
     float         spare;
+
+    unsigned long u64();
+    float uniform();                                      // [0, 1)
+    float normal();                                       // mean 0, std 1
+    unsigned long below(unsigned long n);                 // [0, n)
+    void fill_uniform(&Tensor t, float lo, float hi);
+    void fill_normal(&Tensor t, float mean, float std);
+    // A tensor of the given shape filled from N(0, 1) (a VAE's epsilon, a
+    // GAN's latent batch). Not part of any graph.
+    &Tensor normal_tensor(unsigned long rows, unsigned long cols);
 };
 
 struct Rng    rng_new(unsigned long seed);
-unsigned long rng_u64(&Rng r);
-float         rng_uniform(&Rng r);                    // [0, 1)
-float         rng_normal(&Rng r);                     // mean 0, std 1
-unsigned long rng_below(&Rng r, unsigned long n);     // [0, n)
-void          rng_fill_uniform(&Rng r, &Tensor t, float lo, float hi);
-void          rng_fill_normal(&Rng r, &Tensor t, float mean, float std);
-// A tensor of the given shape filled from N(0, 1) (a VAE's epsilon, a
-// GAN's latent batch). Not part of any graph.
-&Tensor       rng_normal_tensor(&Rng r, unsigned long rows, unsigned long cols);
 
 // ── More differentiable ops ──────────────────────────────────────────────────
 // Shapes are [rows, cols] unless noted; every op records its backward
@@ -104,16 +105,22 @@ struct Mlp {
     unsigned long outDim;
     int act;
     int outAct;
+
+    &Tensor forward(const &Tensor x) const;   // [batch, inDim] -> [batch, outDim]
+    unsigned long param_count() const;
+    // self = src (same shapes), and self = tau * src + (1 - tau) * self: target
+    // networks in DQN and other off-policy RL.
+    void copy(const &Mlp src);
+    void soft_update(const &Mlp src, float tau);
+    void free();
+    // An Mlp's parameters (load into an Mlp built with the same sizes).
+    int save_file(const &char path) const;
+    int load_file(const &char path);
+    // Every parameter into o (Optimizer::add).
+    void add_params(&Optimizer o) const;
 };
 struct Mlp mlp_new(unsigned long inDim, unsigned long hidden, unsigned long hiddenLayers,
                    unsigned long outDim, int act, int outAct, &Rng rng);
-&Tensor mlp_forward(const &Mlp m, const &Tensor x);           // [batch, inDim] -> [batch, outDim]
-unsigned long mlp_param_count(const &Mlp m);
-// dst = src (same shapes), and dst = tau * src + (1 - tau) * dst: target
-// networks in DQN and other off-policy RL.
-void mlp_copy(&Mlp dst, const &Mlp src);
-void mlp_soft_update(&Mlp dst, const &Mlp src, float tau);
-void mlp_free(&Mlp m);
 
 // ── Saving and loading tensors ───────────────────────────────────────────────
 // A list of tensors' shapes and values to a file and back: the magic
@@ -123,9 +130,6 @@ void mlp_free(&Mlp m);
 // can't be opened, is truncated or doesn't match.
 int tensors_save(const &Vec<&Tensor> ts, const &char path);
 int tensors_load(&Vec<&Tensor> ts, const &char path);
-// An Mlp's parameters (load into an Mlp built with the same sizes).
-int mlp_save_file(const &Mlp m, const &char path);
-int mlp_load_file(&Mlp m, const &char path);
 
 // ── Optimizers ───────────────────────────────────────────────────────────────
 #define OPT_SGD       0
@@ -153,18 +157,18 @@ struct Optimizer {
     float eps;
     float weightDecay;       // L2 for SGD / momentum / RMSProp / Adagrad / Adam, decoupled for AdamW / Lion
     unsigned long t;         // steps taken
+
+    void add(&Tensor param);
+    void zero_grad();
+    // Scales every gradient so their global L2 norm is at most maxNorm and
+    // returns the norm before scaling.
+    float clip_grad_norm(float maxNorm);
+    void step();
+    void free();                           // frees the state, not the parameters
 };
 struct Optimizer optimizer_new(int kind, float lr);
 // An empty optimizer with o's kind and hyperparameters (not its parameters
 // or state), as nn_rocm.h's rocm_optimizer_from.
 struct Optimizer optimizer_from(const &Optimizer o);
-void  optimizer_add(&Optimizer o, &Tensor param);
-void  optimizer_add_mlp(&Optimizer o, const &Mlp m);
-void  optimizer_zero_grad(&Optimizer o);
-// Scales every gradient so their global L2 norm is at most maxNorm and
-// returns the norm before scaling.
-float optimizer_clip_grad_norm(&Optimizer o, float maxNorm);
-void  optimizer_step(&Optimizer o);
-void  optimizer_free(&Optimizer o);   // frees the state, not the parameters
 
 } // namespace std

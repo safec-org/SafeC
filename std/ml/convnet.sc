@@ -559,10 +559,10 @@ static void cn_cnn_forward_(const &CnGeom_ g, const float* x, const float* w, co
             in.channels = g.C;
             in.height = g.H;
             in.width = g.W;
-            in.fromArena = 1;   // a view: feature_map_free must leave it
-            struct FeatureMap o = conv2d_forward(&layer, &in);
+            in.fromArena = 1;   // a view: FeatureMap::free must leave it
+            struct FeatureMap o = layer.forward(&in);
             __tensor_ew(EW_COPY, (const float*)o.data, (const float*)0, (float)0.0, &out[n * outSize], outSize);
-            feature_map_free(&o);
+            o.free();
             n = n + 1UL;
         }
     }
@@ -1801,7 +1801,7 @@ static &Tensor cn_dropout_(const &Tensor x, unsigned long plane, float p, int tr
         unsigned long units = x->size / plane;
         unsigned long u = 0UL;
         while (u < units) {
-            float m = rng_uniform(rng) < p ? (float)0.0 : keep;
+            float m = rng.uniform() < p ? (float)0.0 : keep;
             __tensor_ew(EW_FILL, (const float*)0, (const float*)0, m, (float*)&mask->data[u * plane], plane);
             u = u + 1UL;
         }
@@ -1857,7 +1857,7 @@ static ?&TensorArena cn_heap_begin_() {
 
 static void cn_heap_end_(?&TensorArena cur) {
     match (cur) {
-        case some(a): { tensor_arena_begin(a); }
+        case some(a): { a.begin(); }
         case null: { }
     }
 }
@@ -1909,8 +1909,8 @@ static unsigned long cn_add_params_(&ConvNet n, unsigned long wRows, unsigned lo
     &Tensor w = tensor_new_2d(wRows, wCols, 1);
     &Tensor b = tensor_new_1d(nBias, 1);
     float bound = (float)1.0 / sqrt_f((float)fanIn);
-    rng_fill_uniform(rng, w, -bound, bound);
-    rng_fill_uniform(rng, b, -bound, bound);
+    rng.fill_uniform(w, -bound, bound);
+    rng.fill_uniform(b, -bound, bound);
     unsigned long at = n.params.length();
     n.params.push(w);
     n.params.push(b);
@@ -1931,41 +1931,41 @@ static unsigned long cn_add_affine_(&ConvNet n, unsigned long channels) {
     return at;
 }
 
-void convnet_conv_ex(&ConvNet n, unsigned long outC, const &Conv2dSpec spec, int act, &Rng rng) {
-    struct ConvLayer l = cn_layer_(n, CONV_LAYER_CONV, act);
-    cn_check_spec_(spec, l.inC, outC, "convnet_conv: kernel / stride / dilation 0, or channels not divisible by groups");
+void ConvNet::conv_ex(unsigned long outC, const &Conv2dSpec spec, int act, &Rng rng) {
+    struct ConvLayer l = cn_layer_(self, CONV_LAYER_CONV, act);
+    cn_check_spec_(spec, l.inC, outC, "ConvNet::conv: kernel / stride / dilation 0, or channels not divisible by groups");
     l.conv = *spec;
     l.outC = outC;
     l.outH = conv_out_side_ex(l.inH, spec.kH, spec.strideH, spec.padH, spec.dilationH);
     l.outW = conv_out_side_ex(l.inW, spec.kW, spec.strideW, spec.padW, spec.dilationW);
     unsigned long K = (l.inC / spec.groups) * spec.kH * spec.kW;
-    l.param = cn_add_params_(n, outC, K, outC, K, rng);
-    cn_push_(n, l);
+    l.param = cn_add_params_(self, outC, K, outC, K, rng);
+    cn_push_(self, l);
 }
 
-void convnet_deconv_ex(&ConvNet n, unsigned long outC, const &Conv2dSpec spec, int act, &Rng rng) {
-    struct ConvLayer l = cn_layer_(n, CONV_LAYER_DECONV, act);
-    cn_check_spec_(spec, l.inC, outC, "convnet_deconv: kernel / stride / dilation 0, or channels not divisible by groups");
+void ConvNet::deconv_ex(unsigned long outC, const &Conv2dSpec spec, int act, &Rng rng) {
+    struct ConvLayer l = cn_layer_(self, CONV_LAYER_DECONV, act);
+    cn_check_spec_(spec, l.inC, outC, "ConvNet::deconv: kernel / stride / dilation 0, or channels not divisible by groups");
     l.conv = *spec;
     l.outC = outC;
     l.outH = conv_transpose_out_side_ex(l.inH, spec.kH, spec.strideH, spec.padH, spec.dilationH, spec.outPadH);
     l.outW = conv_transpose_out_side_ex(l.inW, spec.kW, spec.strideW, spec.padW, spec.dilationW, spec.outPadW);
     unsigned long K = (outC / spec.groups) * spec.kH * spec.kW;
     // PyTorch's ConvTranspose2d fan-in: weight.size(1) * kernel area
-    l.param = cn_add_params_(n, l.inC, K, outC, K, rng);
-    cn_push_(n, l);
+    l.param = cn_add_params_(self, l.inC, K, outC, K, rng);
+    cn_push_(self, l);
 }
 
-void convnet_conv(&ConvNet n, unsigned long outC, unsigned long kernel, unsigned long stride,
-                  unsigned long padding, int act, &Rng rng) {
+void ConvNet::conv(unsigned long outC, unsigned long kernel, unsigned long stride, unsigned long padding, int act,
+                   &Rng rng) {
     struct Conv2dSpec s = conv2d_spec(kernel, stride, padding);
-    convnet_conv_ex(n, outC, &s, act, rng);
+    self.conv_ex(outC, &s, act, rng);
 }
 
-void convnet_deconv(&ConvNet n, unsigned long outC, unsigned long kernel, unsigned long stride,
-                    unsigned long padding, int act, &Rng rng) {
+void ConvNet::deconv(unsigned long outC, unsigned long kernel, unsigned long stride, unsigned long padding, int act,
+                     &Rng rng) {
     struct Conv2dSpec s = conv2d_spec(kernel, stride, padding);
-    convnet_deconv_ex(n, outC, &s, act, rng);
+    self.deconv_ex(outC, &s, act, rng);
 }
 
 static void cn_pool_layer_(&ConvNet n, int kind, const &Pool2dSpec spec) {
@@ -1976,19 +1976,18 @@ static void cn_pool_layer_(&ConvNet n, int kind, const &Pool2dSpec spec) {
     cn_push_(n, l);
 }
 
-void convnet_maxpool_ex(&ConvNet n, const &Pool2dSpec spec) { cn_pool_layer_(n, CONV_LAYER_MAXPOOL, spec); }
-void convnet_avgpool_ex(&ConvNet n, const &Pool2dSpec spec) { cn_pool_layer_(n, CONV_LAYER_AVGPOOL, spec); }
+void ConvNet::maxpool_ex(const &Pool2dSpec spec) { cn_pool_layer_(self, CONV_LAYER_MAXPOOL, spec); }
+void ConvNet::avgpool_ex(const &Pool2dSpec spec) { cn_pool_layer_(self, CONV_LAYER_AVGPOOL, spec); }
 
-void convnet_maxpool(&ConvNet n, unsigned long kernel, unsigned long stride, unsigned long padding) {
+void ConvNet::maxpool(unsigned long kernel, unsigned long stride, unsigned long padding) {
     struct Pool2dSpec s = pool2d_spec(kernel, stride, padding);
-    cn_pool_layer_(n, CONV_LAYER_MAXPOOL, &s);
+    cn_pool_layer_(self, CONV_LAYER_MAXPOOL, &s);
 }
 
-void convnet_avgpool(&ConvNet n, unsigned long kernel, unsigned long stride, unsigned long padding,
-                     int countIncludePad) {
+void ConvNet::avgpool(unsigned long kernel, unsigned long stride, unsigned long padding, int countIncludePad) {
     struct Pool2dSpec s = pool2d_spec(kernel, stride, padding);
     s.countIncludePad = countIncludePad;
-    cn_pool_layer_(n, CONV_LAYER_AVGPOOL, &s);
+    cn_pool_layer_(self, CONV_LAYER_AVGPOOL, &s);
 }
 
 static void cn_global_layer_(&ConvNet n, int kind) {
@@ -1998,105 +1997,105 @@ static void cn_global_layer_(&ConvNet n, int kind) {
     cn_push_(n, l);
 }
 
-void convnet_global_avgpool(&ConvNet n) { cn_global_layer_(n, CONV_LAYER_GLOBAL_AVGPOOL); }
-void convnet_global_maxpool(&ConvNet n) { cn_global_layer_(n, CONV_LAYER_GLOBAL_MAXPOOL); }
+void ConvNet::global_avgpool() { cn_global_layer_(self, CONV_LAYER_GLOBAL_AVGPOOL); }
+void ConvNet::global_maxpool() { cn_global_layer_(self, CONV_LAYER_GLOBAL_MAXPOOL); }
 
-void convnet_upsample(&ConvNet n, unsigned long factor) {
-    struct ConvLayer l = cn_layer_(n, CONV_LAYER_UPSAMPLE, ACT_NONE);
+void ConvNet::upsample(unsigned long factor) {
+    struct ConvLayer l = cn_layer_(self, CONV_LAYER_UPSAMPLE, ACT_NONE);
     l.factor = factor;
     l.outH = l.inH * factor;
     l.outW = l.inW * factor;
-    cn_push_(n, l);
+    cn_push_(self, l);
 }
 
-void convnet_resize(&ConvNet n, unsigned long outH, unsigned long outW, int mode, int alignCorners) {
-    struct ConvLayer l = cn_layer_(n, CONV_LAYER_RESIZE, ACT_NONE);
+void ConvNet::resize(unsigned long outH, unsigned long outW, int mode, int alignCorners) {
+    struct ConvLayer l = cn_layer_(self, CONV_LAYER_RESIZE, ACT_NONE);
     l.mode = mode;
     l.flag = alignCorners;
     l.outH = outH;
     l.outW = outW;
-    cn_push_(n, l);
+    cn_push_(self, l);
 }
 
-void convnet_upsample_bilinear(&ConvNet n, unsigned long factor) {
-    convnet_resize(n, n.outH * factor, n.outW * factor, RESIZE_BILINEAR, 0);
+void ConvNet::upsample_bilinear(unsigned long factor) {
+    self.resize(self.outH * factor, self.outW * factor, RESIZE_BILINEAR, 0);
 }
 
-void convnet_dense(&ConvNet n, unsigned long outDim, int act, &Rng rng) {
-    struct ConvLayer l = cn_layer_(n, CONV_LAYER_DENSE, act);
+void ConvNet::dense(unsigned long outDim, int act, &Rng rng) {
+    struct ConvLayer l = cn_layer_(self, CONV_LAYER_DENSE, act);
     unsigned long inDim = l.inC * l.inH * l.inW;
     l.outC = outDim; l.outH = 1UL; l.outW = 1UL;
-    l.param = cn_add_params_(n, inDim, outDim, outDim, inDim, rng);
-    cn_push_(n, l);
+    l.param = cn_add_params_(self, inDim, outDim, outDim, inDim, rng);
+    cn_push_(self, l);
 }
 
-void convnet_batchnorm(&ConvNet n, int act) {
-    struct ConvLayer l = cn_layer_(n, CONV_LAYER_BATCHNORM, act);
-    l.param = cn_add_affine_(n, l.inC);
+void ConvNet::batchnorm(int act) {
+    struct ConvLayer l = cn_layer_(self, CONV_LAYER_BATCHNORM, act);
+    l.param = cn_add_affine_(self, l.inC);
     ?&TensorArena cur = cn_heap_begin_();
     &Tensor rm = tensor_new_1d(l.inC, 0);
     &Tensor rv = tensor_new_1d(l.inC, 0);
     tensor_fill(rv, (float)1.0);
-    l.buffer = n.buffers.length();
-    n.buffers.push(rm);
-    n.buffers.push(rv);
+    l.buffer = self.buffers.length();
+    self.buffers.push(rm);
+    self.buffers.push(rv);
     cn_heap_end_(cur);
-    cn_push_(n, l);
+    cn_push_(self, l);
 }
 
-void convnet_groupnorm(&ConvNet n, unsigned long groups, int act) {
-    struct ConvLayer l = cn_layer_(n, CONV_LAYER_GROUPNORM, act);
+void ConvNet::groupnorm(unsigned long groups, int act) {
+    struct ConvLayer l = cn_layer_(self, CONV_LAYER_GROUPNORM, act);
     if (groups == 0UL || l.inC % groups != 0UL)
-        panic_at("convnet_groupnorm: channels must divide into the groups", "convnet.sc", __LINE__);
+        panic_at("ConvNet::groupnorm: channels must divide into the groups", "convnet.sc", __LINE__);
     l.factor = groups;
-    l.param = cn_add_affine_(n, l.inC);
-    cn_push_(n, l);
+    l.param = cn_add_affine_(self, l.inC);
+    cn_push_(self, l);
 }
 
-void convnet_layernorm(&ConvNet n, int act) { convnet_groupnorm(n, 1UL, act); }
-void convnet_instancenorm(&ConvNet n, int act) { convnet_groupnorm(n, n.outC, act); }
+void ConvNet::layernorm(int act) { self.groupnorm(1UL, act); }
+void ConvNet::instancenorm(int act) { self.groupnorm(self.outC, act); }
 
-void convnet_spectral_norm(&ConvNet n, &Rng rng) {
-    unsigned long len = n.layers.length();
-    if (len == 0UL) panic_at("convnet_spectral_norm: no layer", "convnet.sc", __LINE__);
-    &ConvLayer last = n.layers.at(len - 1UL);
+void ConvNet::spectral_norm(&Rng rng) {
+    unsigned long len = self.layers.length();
+    if (len == 0UL) panic_at("ConvNet::spectral_norm: no layer", "convnet.sc", __LINE__);
+    &ConvLayer last = self.layers.at(len - 1UL);
     if (last.kind != CONV_LAYER_CONV && last.kind != CONV_LAYER_DECONV && last.kind != CONV_LAYER_DENSE)
-        panic_at("convnet_spectral_norm: the last layer has no weight", "convnet.sc", __LINE__);
-    &Tensor w = *n.params.at(last.param);
+        panic_at("ConvNet::spectral_norm: the last layer has no weight", "convnet.sc", __LINE__);
+    &Tensor w = *self.params.at(last.param);
     unsigned long rows;
     unsafe { rows = w->shape[0]; }
     ?&TensorArena cur = cn_heap_begin_();
     &Tensor u = tensor_new_1d(rows, 0);
-    rng_fill_normal(rng, u, (float)0.0, (float)1.0);
+    rng.fill_normal(u, (float)0.0, (float)1.0);
     unsafe { cn_normalize_((float*)u->data, rows); }
-    last.buffer = n.buffers.length();
+    last.buffer = self.buffers.length();
     last.spectral = 1;
-    n.buffers.push(u);
+    self.buffers.push(u);
     cn_heap_end_(cur);
 }
 
-void convnet_dropout(&ConvNet n, float p, int byChannel, &Rng rng) {
-    struct ConvLayer l = cn_layer_(n, CONV_LAYER_DROPOUT, ACT_NONE);
+void ConvNet::dropout(float p, int byChannel, &Rng rng) {
+    struct ConvLayer l = cn_layer_(self, CONV_LAYER_DROPOUT, ACT_NONE);
     l.prob = p;
     l.flag = byChannel;
-    l.buffer = n.rngs.length();
-    n.rngs.push(rng_new(rng_u64(rng)));
-    cn_push_(n, l);
+    l.buffer = self.rngs.length();
+    self.rngs.push(rng_new(rng.u64()));
+    cn_push_(self, l);
 }
 
-void convnet_reshape(&ConvNet n, unsigned long channels, unsigned long height, unsigned long width) {
-    if (channels * height * width != n.outC * n.outH * n.outW)
-        panic_at("convnet_reshape: size differs from the current output", "convnet.sc", __LINE__);
-    struct ConvLayer l = cn_layer_(n, CONV_LAYER_RESHAPE, ACT_NONE);
+void ConvNet::reshape(unsigned long channels, unsigned long height, unsigned long width) {
+    if (channels * height * width != self.outC * self.outH * self.outW)
+        panic_at("ConvNet::reshape: size differs from the current output", "convnet.sc", __LINE__);
+    struct ConvLayer l = cn_layer_(self, CONV_LAYER_RESHAPE, ACT_NONE);
     l.outC = channels; l.outH = height; l.outW = width;
-    cn_push_(n, l);
+    cn_push_(self, l);
 }
 
-unsigned long convnet_save(&ConvNet n) {
-    struct ConvLayer l = cn_layer_(n, CONV_LAYER_SAVE, ACT_NONE);
-    l.slot = n.slots;
-    n.slots = n.slots + 1UL;
-    cn_push_(n, l);
+unsigned long ConvNet::save() {
+    struct ConvLayer l = cn_layer_(self, CONV_LAYER_SAVE, ACT_NONE);
+    l.slot = self.slots;
+    self.slots = self.slots + 1UL;
+    cn_push_(self, l);
     return l.slot;
 }
 
@@ -2112,9 +2111,9 @@ static struct ConvLayer cn_saved_layer_(const &ConvNet n, unsigned long slot) {
     return cn_layer_(n, CONV_LAYER_SAVE, ACT_NONE);
 }
 
-void convnet_add_skip(&ConvNet n, unsigned long slot, int act, &Rng rng) {
-    struct ConvLayer sv = cn_saved_layer_(n, slot);
-    struct ConvLayer l = cn_layer_(n, CONV_LAYER_ADD, act);
+void ConvNet::add_skip(unsigned long slot, int act, &Rng rng) {
+    struct ConvLayer sv = cn_saved_layer_(self, slot);
+    struct ConvLayer l = cn_layer_(self, CONV_LAYER_ADD, act);
     l.slot = slot;
     l.skipC = sv.outC; l.skipH = sv.outH; l.skipW = sv.outW;
     if (sv.outC != l.inC || sv.outH != l.inH || sv.outW != l.inW) {
@@ -2123,49 +2122,49 @@ void convnet_add_skip(&ConvNet n, unsigned long slot, int act, &Rng rng) {
         unsigned long s = 1UL;
         while (s <= sv.outH && (conv_out_side(sv.outH, 1UL, s, 0UL) != l.inH || conv_out_side(sv.outW, 1UL, s, 0UL) != l.inW))
             s = s + 1UL;
-        if (s > sv.outH) panic_at("convnet_add_skip: no 1x1 stride maps the saved size onto the current one", "convnet.sc", __LINE__);
+        if (s > sv.outH) panic_at("ConvNet::add_skip: no 1x1 stride maps the saved size onto the current one", "convnet.sc", __LINE__);
         l.flag = 1;
         l.conv = conv2d_spec(1UL, s, 0UL);
-        l.param = cn_add_params_(n, l.inC, sv.outC, l.inC, sv.outC, rng);
+        l.param = cn_add_params_(self, l.inC, sv.outC, l.inC, sv.outC, rng);
     }
-    cn_push_(n, l);
+    cn_push_(self, l);
 }
 
-void convnet_concat_skip(&ConvNet n, unsigned long slot) {
-    struct ConvLayer sv = cn_saved_layer_(n, slot);
-    struct ConvLayer l = cn_layer_(n, CONV_LAYER_CONCAT, ACT_NONE);
+void ConvNet::concat_skip(unsigned long slot) {
+    struct ConvLayer sv = cn_saved_layer_(self, slot);
+    struct ConvLayer l = cn_layer_(self, CONV_LAYER_CONCAT, ACT_NONE);
     if (sv.outH != l.inH || sv.outW != l.inW)
-        panic_at("convnet_concat_skip: the saved activation's height and width differ", "convnet.sc", __LINE__);
+        panic_at("ConvNet::concat_skip: the saved activation's height and width differ", "convnet.sc", __LINE__);
     l.slot = slot;
     l.skipC = sv.outC; l.skipH = sv.outH; l.skipW = sv.outW;
     l.outC = l.inC + sv.outC;
-    cn_push_(n, l);
+    cn_push_(self, l);
 }
 
-void convnet_residual_block(&ConvNet n, unsigned long outC, unsigned long stride, int batchNorm, int act, &Rng rng) {
-    unsigned long slot = convnet_save(n);
-    convnet_conv(n, outC, 3UL, stride, 1UL, batchNorm ? ACT_NONE : act, rng);
-    if (batchNorm) convnet_batchnorm(n, act);
-    convnet_conv(n, outC, 3UL, 1UL, 1UL, ACT_NONE, rng);
-    if (batchNorm) convnet_batchnorm(n, ACT_NONE);
-    convnet_add_skip(n, slot, act, rng);
+void ConvNet::residual_block(unsigned long outC, unsigned long stride, int batchNorm, int act, &Rng rng) {
+    unsigned long slot = self.save();
+    self.conv(outC, 3UL, stride, 1UL, batchNorm ? ACT_NONE : act, rng);
+    if (batchNorm) self.batchnorm(act);
+    self.conv(outC, 3UL, 1UL, 1UL, ACT_NONE, rng);
+    if (batchNorm) self.batchnorm(ACT_NONE);
+    self.add_skip(slot, act, rng);
 }
 
-void convnet_set_out_act(&ConvNet n, int act) {
-    unsigned long len = n.layers.length();
+void ConvNet::set_out_act(int act) {
+    unsigned long len = self.layers.length();
     if (len == 0UL) return;
-    &ConvLayer last = n.layers.at(len - 1UL);
+    &ConvLayer last = self.layers.at(len - 1UL);
     last.act = act;
 }
 
-int convnet_set_training(&ConvNet n, int training) {
-    int was = n.training;
-    n.training = training;
+int ConvNet::set_training(int training) {
+    int was = self.training;
+    self.training = training;
     return was;
 }
 
-unsigned long convnet_in_dim(const &ConvNet n) { return n.inC * n.inH * n.inW; }
-unsigned long convnet_out_dim(const &ConvNet n) { return n.outC * n.outH * n.outW; }
+unsigned long ConvNet::in_dim() const { return self.inC * self.inH * self.inW; }
+unsigned long ConvNet::out_dim() const { return self.outC * self.outH * self.outW; }
 
 // The layer's weight, spectrally normalized when the layer asks for it.
 static &Tensor cn_weight_(const &ConvNet n, const &ConvLayer l) {
@@ -2211,24 +2210,24 @@ static &Tensor cn_layer_forward_(const &ConvNet n, const &ConvLayer l, const &Te
     return x;   // reshape / identity: rows already hold the data in CHW order
 }
 
-&Tensor convnet_forward(const &ConvNet n, const &Tensor x) {
+&Tensor ConvNet::forward(const &Tensor x) const {
     struct Vec<&Tensor> saved = vec_new();
     &Tensor h = x;
     unsigned long i = 0UL;
-    while (i < n.layers.length()) {
-        &ConvLayer l = n.layers.at(i);
-        h = tensor_activate(cn_layer_forward_(n, l, h, &saved), l.act);
+    while (i < self.layers.length()) {
+        &ConvLayer l = self.layers.at(i);
+        h = tensor_activate(cn_layer_forward_(self, l, h, &saved), l.act);
         i = i + 1UL;
     }
     saved.free();
     return h;
 }
 
-unsigned long convnet_param_count(const &ConvNet n) {
+unsigned long ConvNet::param_count() const {
     unsigned long c = 0UL;
     unsigned long i = 0UL;
-    while (i < n.params.length()) {
-        &Tensor p = *n.params.at(i);
+    while (i < self.params.length()) {
+        &Tensor p = *self.params.at(i);
         unsafe { c = c + p->size; }
         i = i + 1UL;
     }
@@ -2264,21 +2263,21 @@ static void cn_fold_weight_(const &ConvLayer l, &Tensor w, const float* sc) {
     }
 }
 
-unsigned long convnet_fold_batchnorm(&ConvNet n) {
+unsigned long ConvNet::fold_batchnorm() {
     unsigned long folded = 0UL;
     unsigned long i = 1UL;
-    while (i < n.layers.length()) {
-        &ConvLayer bn = n.layers.at(i);
-        &ConvLayer prev = n.layers.at(i - 1UL);
+    while (i < self.layers.length()) {
+        &ConvLayer bn = self.layers.at(i);
+        &ConvLayer prev = self.layers.at(i - 1UL);
         int pk = prev.kind;
         if (bn.kind == CONV_LAYER_BATCHNORM && prev.act == ACT_NONE && !prev.spectral
             && (pk == CONV_LAYER_CONV || pk == CONV_LAYER_DECONV || pk == CONV_LAYER_DENSE)) {
-            &Tensor gamma = *n.params.at(bn.param);
-            &Tensor beta = *n.params.at(bn.param + 1UL);
-            &Tensor rm = *n.buffers.at(bn.buffer);
-            &Tensor rv = *n.buffers.at(bn.buffer + 1UL);
-            &Tensor w = *n.params.at(prev.param);
-            &Tensor b = *n.params.at(prev.param + 1UL);
+            &Tensor gamma = *self.params.at(bn.param);
+            &Tensor beta = *self.params.at(bn.param + 1UL);
+            &Tensor rm = *self.buffers.at(bn.buffer);
+            &Tensor rv = *self.buffers.at(bn.buffer + 1UL);
+            &Tensor w = *self.params.at(prev.param);
+            &Tensor b = *self.params.at(prev.param + 1UL);
             unsigned long C = bn.inC;
             float* sc = cn_scratch_(C);
             unsafe {
@@ -2317,18 +2316,18 @@ static void cn_clone_list_(&Vec<&Tensor> dst, const &Vec<&Tensor> src, int requi
     }
 }
 
-struct ConvNet convnet_clone(const &ConvNet n) {
+struct ConvNet ConvNet::clone() const {
     ?&TensorArena cur = cn_heap_begin_();
-    struct ConvNet c = convnet_new(n.inC, n.inH, n.inW);
-    c.outC = n.outC; c.outH = n.outH; c.outW = n.outW;
-    c.training = n.training;
-    c.slots = n.slots;
+    struct ConvNet c = convnet_new(self.inC, self.inH, self.inW);
+    c.outC = self.outC; c.outH = self.outH; c.outW = self.outW;
+    c.training = self.training;
+    c.slots = self.slots;
     unsigned long i = 0UL;
-    while (i < n.layers.length()) { c.layers.push(*n.layers.at(i)); i = i + 1UL; }
+    while (i < self.layers.length()) { c.layers.push(*self.layers.at(i)); i = i + 1UL; }
     i = 0UL;
-    while (i < n.rngs.length()) { c.rngs.push(*n.rngs.at(i)); i = i + 1UL; }
-    cn_clone_list_(&c.params, &n.params, 1);
-    cn_clone_list_(&c.buffers, &n.buffers, 0);
+    while (i < self.rngs.length()) { c.rngs.push(*self.rngs.at(i)); i = i + 1UL; }
+    cn_clone_list_(&c.params, &self.params, 1);
+    cn_clone_list_(&c.buffers, &self.buffers, 0);
     cn_heap_end_(cur);
     return c;
 }
@@ -2346,16 +2345,16 @@ static void cn_blend_list_(&Vec<&Tensor> dst, const &Vec<&Tensor> src, float tau
     }
 }
 
-void convnet_soft_update(&ConvNet dst, const &ConvNet src, float tau) {
-    cn_blend_list_(&dst.params, &src.params, tau);
-    cn_blend_list_(&dst.buffers, &src.buffers, tau);
+void ConvNet::soft_update(const &ConvNet src, float tau) {
+    cn_blend_list_(&self.params, &src.params, tau);
+    cn_blend_list_(&self.buffers, &src.buffers, tau);
 }
 
-void convnet_copy(&ConvNet dst, const &ConvNet src) { convnet_soft_update(dst, src, (float)1.0); }
+void ConvNet::copy(const &ConvNet src) { self.soft_update(src, (float)1.0); }
 
-void optimizer_add_convnet(&Optimizer o, const &ConvNet n) {
+void ConvNet::add_params(&Optimizer o) const {
     unsigned long i = 0UL;
-    while (i < n.params.length()) { optimizer_add(o, *n.params.at(i)); i = i + 1UL; }
+    while (i < self.params.length()) { o.add(*self.params.at(i)); i = i + 1UL; }
 }
 
 // params, then buffers
@@ -2368,15 +2367,15 @@ static struct Vec<&Tensor> cn_all_tensors_(const &ConvNet n) {
     return all;
 }
 
-int convnet_save_file(const &ConvNet n, const &char path) {
-    struct Vec<&Tensor> all = cn_all_tensors_(n);
+int ConvNet::save_file(const &char path) const {
+    struct Vec<&Tensor> all = cn_all_tensors_(self);
     int ok = tensors_save(&all, path);
     all.free();
     return ok;
 }
 
-int convnet_load_file(&ConvNet n, const &char path) {
-    struct Vec<&Tensor> all = cn_all_tensors_(n);
+int ConvNet::load_file(const &char path) {
+    struct Vec<&Tensor> all = cn_all_tensors_(self);
     int ok = tensors_load(&all, path);
     all.free();
     return ok;
@@ -2393,11 +2392,11 @@ static void cn_free_list_(&Vec<&Tensor> v) {
     v.free();
 }
 
-void convnet_free(&ConvNet n) {
-    cn_free_list_(&n.params);
-    cn_free_list_(&n.buffers);
-    n.rngs.free();
-    n.layers.free();
+void ConvNet::free() {
+    cn_free_list_(&self.params);
+    cn_free_list_(&self.buffers);
+    self.rngs.free();
+    self.layers.free();
 }
 
 } // namespace std

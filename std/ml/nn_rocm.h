@@ -20,7 +20,7 @@
 //     program links it, else as im2col / col2im + rocBLAS (rocm_conv_engine);
 //     bias, activations, norms and their gradients are HIP kernels.
 //     Activations can be fp16 or bf16, with fp32 weights, gradients and
-//     optimizer state (rocm_net_set_precision).
+//     optimizer state (RocmNet::set_precision).
 //   * Losses that write their gradient and add to a device loss sum:
 //     softmax cross-entropy on class indices, binary cross-entropy on
 //     logits, MSE.
@@ -59,9 +59,9 @@
 //   struct Mlp net = mlp_new(784UL, 256UL, 2UL, 10UL, ACT_RELU, ACT_NONE, &rng);
 //   struct RocmNet dnet = rocm_net_from_mlp(&net, 128UL);
 //   struct RocmOptimizer opt = rocm_optimizer_new(OPT_ADAM, (float)0.001);
-//   rocm_optimizer_add_net(&opt, &dnet);
+//   dnet.add_params(&opt);
 //   struct TrainReport rep = rocm_trainer_fit(&dnet, rocm_net_ce_step, &opt, &train, &cfg);
-//   rocm_net_download(&dnet, &net.params);   // back into the host Mlp
+//   dnet.download(&net.params);   // back into the host Mlp
 //
 // Layout. Every buffer is row-major with one row per sample: a batch of
 // images is [batch, C*H*W] with CHW rows (convnet.h's layout, i.e. NCHW), at
@@ -154,7 +154,7 @@ struct RocmLayer {
 struct RocmNet {
     struct Vec<struct RocmLayer> layers;
     unsigned long maxBatch;   // every buffer is sized for this many rows
-    unsigned long inC;        // input geometry (set by the first layer, or rocm_net_set_input)
+    unsigned long inC;        // input geometry (set by the first layer, or RocmNet::set_input)
     unsigned long inH;
     unsigned long inW;
     int training;             // batch norms: batch statistics (1, the default) or running ones (0)
@@ -163,55 +163,101 @@ struct RocmNet {
                               // passes would have normalized separately, e.g. a GAN
                               // discriminator's real and generated rows
     int ok;                   // 0 once an upload, allocation or shape check failed
-    int precision;            // activations: 0 fp32, ROCM_FP16 or ROCM_BF16 (rocm_net_set_precision)
+    int precision;            // activations: 0 fp32, ROCM_FP16 or ROCM_BF16 (RocmNet::set_precision)
     struct RocmBuf scale;     // 16-bit nets: the loss scale and its count of good steps
     struct RocmBuf xh;        // ... the input, its gradient, the output and its gradient
     struct RocmBuf dxh;       //     (16-bit; the output's are fp32)
     struct RocmBuf out32;
     struct RocmBuf dout32;
+
+    // The input geometry for a net whose first layer takes it from the
+    // previous one (pooling, upsampling, reshape, norms). Before any layer.
+    int set_input(unsigned long channels, unsigned long height, unsigned long width);
+    // Appends a layer, uploading its parameters from host tensors (shapes as
+    // nn.h's Mlp / convnet.h). A layer's input must match the previous layer's
+    // output (conv: inC*inH*inW). Return 1, or 0 (and ok = 0).
+    int add_linear(const &Tensor w, const &Tensor b, int act);
+    int add_conv2d(const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH, unsigned long inW,
+                   unsigned long kernel, unsigned long stride, unsigned long padding, int act);
+    int add_conv_transpose2d(const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH,
+                             unsigned long inW, unsigned long kernel, unsigned long stride, unsigned long padding,
+                             int act);
+    int add_conv2d_ex(const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH, unsigned long inW,
+                      const &Conv2dSpec spec, int act);
+    int add_conv_transpose2d_ex(const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH,
+                                unsigned long inW, const &Conv2dSpec spec, int act);
+    // These take their input geometry from the previous layer (or RocmNet::set_input).
+    // RocmNet::add_save returns the SAVE layer's index, the slot that ADD /
+    // CONCAT name; ADD's projection weight is [C, skipC] (a 1x1 convolution
+    // with the stride that maps the saved size onto the current one).
+    unsigned long add_save();
+    int add_skip(unsigned long slot, ?&Tensor projW, ?&Tensor projB, int act);
+    int add_concat(unsigned long slot);
+    int add_resize(unsigned long outH, unsigned long outW, int mode, int alignCorners);
+    // p: drop probability; the mask is drawn on the GPU from 'seed' (not rng.h's stream).
+    int add_dropout(float p, int byChannel, unsigned long seed);
+    // Spectral normalization of the last layer's weight (CONV / CONVT / LINEAR),
+    // u [weight rows] the power iteration's vector (one iteration per training
+    // forward pass, as convnet.h).
+    int spectral_norm(const &Tensor u);
+    int add_maxpool(const &Pool2dSpec spec, int act);
+    int add_avgpool(const &Pool2dSpec spec, int act);
+    int add_global_pool(int max, int act);
+    int add_upsample(unsigned long factor, int act);
+    int add_reshape(unsigned long channels, unsigned long height, unsigned long width);
+    // gamma, beta [C]; runMean, runVar [C] (the starting running statistics).
+    int add_batchnorm(const &Tensor gamma, const &Tensor beta, const &Tensor runMean, const &Tensor runVar,
+                      float momentum, float eps, int act);
+    int add_groupnorm(const &Tensor gamma, const &Tensor beta, unsigned long groups, float eps, int act);
+    unsigned long in_dim() const;
+    unsigned long out_dim() const;
+    int set_training(int training);   // returns the previous mode
+    // Mixed precision (after the last layer, before RocmNet::add_params):
+    // activations and their gradients in ROCM_FP16 or ROCM_BF16 (0: fp32),
+    // the arithmetic in fp32. Weights, gradients and optimizer state stay fp32
+    // and are rounded to 16 bits for each forward pass; the input, the output
+    // (RocmNet::forward) and their gradients stay fp32, so losses and steps are
+    // unchanged. Convolutions need MIOpen (rocm_conv_engine) and linear layers
+    // run on 16-bit GEMMs. fp16 adds a dynamic loss scale, as torch's
+    // GradScaler: the output gradient is multiplied by it, the optimizer
+    // divides it out, skips a step whose gradients overflowed and halves it,
+    // and doubles it after 2000 good steps (from 65536). 0 when this net can't
+    // run in that precision. On an MI100 fp16 is the fast one (matrix cores
+    // for MIOpen's fp16 kernels); its bf16 convolutions run at about fp32's
+    // speed. loss_scale / set_loss_scale read and set the scale (1
+    // for bf16).
+    int set_precision(int dtype);
+    int set_loss_scale(float scale);
+    float loss_scale() const;          // waits
+    // Every parameterized layer's weight and bias (gamma and beta for norms),
+    // in order (W0, b0, W1, b1, ...: an Mlp's or a ConvNet's params), from or
+    // to host tensors of the same sizes. Download waits.
+    int download(&Vec<&Tensor> params) const;
+    int upload(const &Vec<&Tensor> params);
+    // The non-trained buffers in a ConvNet's order: each batch norm's running
+    // mean and variance, each spectral norm's u.
+    int download_stats(&Vec<&Tensor> buffers) const;
+    int upload_stats(const &Vec<&Tensor> buffers);
+    // Parameters and running statistics back into the ConvNet it was built from.
+    int download_convnet(&ConvNet c) const;
+    void free();
+    // Forward pass on x [batch, inDim]. Returns the output [batch, outDim] (a
+    // view of the net's own buffer, valid until the next forward), dev == 0 on
+    // failure.
+    struct RocmBuf forward(struct RocmBuf x, unsigned long batch);
+    // Where a loss writes d(loss)/d(output) before RocmNet::backward.
+    struct RocmBuf grad_output() const;
+    // Backward pass after forward(x, batch): every layer's gw / gb,
+    // and d(loss)/d(x) into dx when dx.dev != 0 (a generator trained through a
+    // discriminator, or a VAE's decoder).
+    int backward(struct RocmBuf x, unsigned long batch, struct RocmBuf dx);
+    // Every parameter and its gradient into o (RocmOptimizer::add).
+    int add_params(&RocmOptimizer o) const;
+    // An Mlp's parameters from its device net (RocmNet::download into m.params).
+    int download_mlp(&Mlp m) const;
 };
 
 struct RocmNet rocm_net_new(unsigned long maxBatch);
-// The input geometry for a net whose first layer takes it from the
-// previous one (pooling, upsampling, reshape, norms). Before any layer.
-int rocm_net_set_input(&RocmNet n, unsigned long channels, unsigned long height, unsigned long width);
-// Appends a layer, uploading its parameters from host tensors (shapes as
-// nn.h's Mlp / convnet.h). A layer's input must match the previous layer's
-// output (conv: inC*inH*inW). Return 1, or 0 (and n.ok = 0).
-int rocm_net_add_linear(&RocmNet n, const &Tensor w, const &Tensor b, int act);
-int rocm_net_add_conv2d(&RocmNet n, const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH,
-                        unsigned long inW, unsigned long kernel, unsigned long stride, unsigned long padding, int act);
-int rocm_net_add_conv_transpose2d(&RocmNet n, const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH,
-                                  unsigned long inW, unsigned long kernel, unsigned long stride,
-                                  unsigned long padding, int act);
-int rocm_net_add_conv2d_ex(&RocmNet n, const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH,
-                           unsigned long inW, const &Conv2dSpec spec, int act);
-int rocm_net_add_conv_transpose2d_ex(&RocmNet n, const &Tensor w, const &Tensor b, unsigned long inC,
-                                     unsigned long inH, unsigned long inW, const &Conv2dSpec spec, int act);
-// These take their input geometry from the previous layer (or rocm_net_set_input).
-// rocm_net_add_save returns the SAVE layer's index, the slot that ADD /
-// CONCAT name; ADD's projection weight is [C, skipC] (a 1x1 convolution
-// with the stride that maps the saved size onto the current one).
-unsigned long rocm_net_add_save(&RocmNet n);
-int rocm_net_add_skip(&RocmNet n, unsigned long slot, ?&Tensor projW, ?&Tensor projB, int act);
-int rocm_net_add_concat(&RocmNet n, unsigned long slot);
-int rocm_net_add_resize(&RocmNet n, unsigned long outH, unsigned long outW, int mode, int alignCorners);
-// p: drop probability; the mask is drawn on the GPU from 'seed' (not rng.h's stream).
-int rocm_net_add_dropout(&RocmNet n, float p, int byChannel, unsigned long seed);
-// Spectral normalization of the last layer's weight (CONV / CONVT / LINEAR),
-// u [weight rows] the power iteration's vector (one iteration per training
-// forward pass, as convnet.h).
-int rocm_net_spectral_norm(&RocmNet n, const &Tensor u);
-int rocm_net_add_maxpool(&RocmNet n, const &Pool2dSpec spec, int act);
-int rocm_net_add_avgpool(&RocmNet n, const &Pool2dSpec spec, int act);
-int rocm_net_add_global_pool(&RocmNet n, int max, int act);
-int rocm_net_add_upsample(&RocmNet n, unsigned long factor, int act);
-int rocm_net_add_reshape(&RocmNet n, unsigned long channels, unsigned long height, unsigned long width);
-// gamma, beta [C]; runMean, runVar [C] (the starting running statistics).
-int rocm_net_add_batchnorm(&RocmNet n, const &Tensor gamma, const &Tensor beta, const &Tensor runMean,
-                           const &Tensor runVar, float momentum, float eps, int act);
-int rocm_net_add_groupnorm(&RocmNet n, const &Tensor gamma, const &Tensor beta, unsigned long groups, float eps,
-                           int act);
 // Convolution engine for CONV / CONVT layers. ROCM_CONV_AUTO (the default)
 // runs them on MIOpen when the program links it (-lMIOpen: implicit GEMM,
 // Winograd, matrix cores), else on the im2col engine (im2col / col2im +
@@ -232,49 +278,6 @@ struct RocmNet rocm_net_from_mlp(const &Mlp m, unsigned long maxBatch);
 // drawn on the GPU (seeded from the layer's Rng), so they differ from the
 // CPU's.
 struct RocmNet rocm_net_from_convnet(const &ConvNet c, unsigned long maxBatch);
-unsigned long rocm_net_in_dim(const &RocmNet n);
-unsigned long rocm_net_out_dim(const &RocmNet n);
-int  rocm_net_set_training(&RocmNet n, int training);   // returns the previous mode
-// Mixed precision (after the last layer, before rocm_optimizer_add_net):
-// activations and their gradients in ROCM_FP16 or ROCM_BF16 (0: fp32),
-// the arithmetic in fp32. Weights, gradients and optimizer state stay fp32
-// and are rounded to 16 bits for each forward pass; the input, the output
-// (rocm_net_forward) and their gradients stay fp32, so losses and steps are
-// unchanged. Convolutions need MIOpen (rocm_conv_engine) and linear layers
-// run on 16-bit GEMMs. fp16 adds a dynamic loss scale, as torch's
-// GradScaler: the output gradient is multiplied by it, the optimizer
-// divides it out, skips a step whose gradients overflowed and halves it,
-// and doubles it after 2000 good steps (from 65536). 0 when this net can't
-// run in that precision. On an MI100 fp16 is the fast one (matrix cores
-// for MIOpen's fp16 kernels); its bf16 convolutions run at about fp32's
-// speed. rocm_net_loss_scale / _set_loss_scale read and set the scale (1
-// for bf16).
-int   rocm_net_set_precision(&RocmNet n, int dtype);
-int   rocm_net_set_loss_scale(&RocmNet n, float scale);
-float rocm_net_loss_scale(const &RocmNet n);   // waits
-// Every parameterized layer's weight and bias (gamma and beta for norms),
-// in order (W0, b0, W1, b1, ...: an Mlp's or a ConvNet's params), from or
-// to host tensors of the same sizes. Download waits.
-int rocm_net_download(const &RocmNet n, &Vec<&Tensor> params);
-int rocm_net_upload(&RocmNet n, const &Vec<&Tensor> params);
-// The non-trained buffers in a ConvNet's order: each batch norm's running
-// mean and variance, each spectral norm's u.
-int rocm_net_download_stats(const &RocmNet n, &Vec<&Tensor> buffers);
-int rocm_net_upload_stats(&RocmNet n, const &Vec<&Tensor> buffers);
-// Parameters and running statistics back into the ConvNet it was built from.
-int rocm_net_download_convnet(const &RocmNet n, &ConvNet c);
-void rocm_net_free(&RocmNet n);
-
-// Forward pass on x [batch, inDim]. Returns the output [batch, outDim] (a
-// view of the net's own buffer, valid until the next forward), dev == 0 on
-// failure.
-struct RocmBuf rocm_net_forward(&RocmNet n, struct RocmBuf x, unsigned long batch);
-// Where a loss writes d(loss)/d(output) before rocm_net_backward.
-struct RocmBuf rocm_net_grad_output(const &RocmNet n);
-// Backward pass after rocm_net_forward(n, x, batch): every layer's gw / gb,
-// and d(loss)/d(x) into dx when dx.dev != 0 (a generator trained through a
-// discriminator, or a VAE's decoder).
-int rocm_net_backward(&RocmNet n, struct RocmBuf x, unsigned long batch, struct RocmBuf dx);
 
 // ── Losses ───────────────────────────────────────────────────────────────────
 // Each writes d(loss)/d(input) into d and ADDS the loss to loss1[0] (zero
@@ -306,9 +309,9 @@ int rocm_net_recon_mse_step(&RocmNet n, struct RocmBuf x, struct RocmBuf y, unsi
 
 // ── Optimizer ────────────────────────────────────────────────────────────────
 // nn.h's Optimizer on the GPU. Change lr, betas, weightDecay or clipNorm
-// between steps like the host fields of an Optimizer: rocm_optimizer_step
+// between steps like the host fields of an Optimizer: RocmOptimizer::step
 // copies changed values to the GPU when it runs outside graph capture, and
-// rocm_optimizer_sync does so explicitly (before replaying a recorded step).
+// RocmOptimizer::sync does so explicitly (before replaying a recorded step).
 struct RocmOptimizer {
     struct Vec<struct RocmBuf> w;   // parameters
     struct Vec<struct RocmBuf> g;   // their gradients
@@ -326,20 +329,20 @@ struct RocmOptimizer {
     unsigned long t;                // steps taken (the GPU counts its own for the bias correction)
     struct RocmBuf state;           // GPU copy of the hyperparameters, step count, clip scale
     float sent[7];                  // the values last copied to 'state'
-    struct RocmBuf lossScale;       // an fp16 net's loss scale (rocm_optimizer_add_net), or none
+    struct RocmBuf lossScale;       // an fp16 net's loss scale (RocmNet::add_params), or none
     int   ok;
+
+    int add(struct RocmBuf w, struct RocmBuf g);
+    // One step over every parameter: one launch per 32 parameter tensors, plus
+    // as many for the gradient norm when clipping. Queued.
+    int step();
+    int sync();
+    void free();   // frees the state, not the parameters
 };
 // Same defaults as optimizer_new.
 struct RocmOptimizer rocm_optimizer_new(int kind, float lr);
 // An empty optimizer with o's kind and hyperparameters (not its state).
 struct RocmOptimizer rocm_optimizer_from(const &Optimizer o);
-int  rocm_optimizer_add(&RocmOptimizer o, struct RocmBuf w, struct RocmBuf g);
-int  rocm_optimizer_add_net(&RocmOptimizer o, const &RocmNet n);
-// One step over every parameter: one launch per 32 parameter tensors, plus
-// as many for the gradient norm when clipping. Queued.
-int  rocm_optimizer_step(&RocmOptimizer o);
-int  rocm_optimizer_sync(&RocmOptimizer o);
-void rocm_optimizer_free(&RocmOptimizer o);   // frees the state, not the parameters
 
 // ── Row ops ──────────────────────────────────────────────────────────────────
 // out[r] = (x[r], one constant plane of 'plane' values per class, 1 in the
@@ -379,15 +382,16 @@ struct RocmVae {
     float beta;
     unsigned long seed;
     int   ok;
+
+    int download(&Vae v) const;
+    int download_conv_vae(&ConvVae v) const;
+    int add_params(&RocmOptimizer o) const;
+    void free();
 };
 struct RocmVae rocm_vae_new(const &Vae v, unsigned long maxBatch);
-int  rocm_vae_download(const &RocmVae d, &Vae v);
 // autoencoder.h's ConvVae (ConvNet encoder and decoder) as a RocmVae.
 struct RocmVae rocm_conv_vae_new(const &ConvVae v, unsigned long maxBatch);
-int  rocm_conv_vae_download(const &RocmVae d, &ConvVae v);
 int  rocm_vae_step(&RocmVae v, struct RocmBuf x, struct RocmBuf y, unsigned long rows, struct RocmBuf loss1);
-int  rocm_optimizer_add_vae(&RocmOptimizer o, const &RocmVae v);
-void rocm_vae_free(&RocmVae v);
 
 // ── Convolutional autoencoder ────────────────────────────────────────────────
 // autoencoder.h's ConvAutoencoder: conv_autoencoder_loss's reconstruction
@@ -397,19 +401,20 @@ struct RocmConvAe {
     struct RocmNet dec;
     int recon;
     int ok;
+
+    int add_params(&RocmOptimizer o) const;
+    int download(&ConvAutoencoder ae) const;
+    void free();
 };
 struct RocmConvAe rocm_conv_autoencoder_new(const &ConvAutoencoder ae, unsigned long maxBatch);
 int  rocm_conv_autoencoder_step(&RocmConvAe a, struct RocmBuf x, struct RocmBuf y, unsigned long rows,
                                 struct RocmBuf loss1);
-int  rocm_optimizer_add_conv_autoencoder(&RocmOptimizer o, const &RocmConvAe a);
-int  rocm_conv_autoencoder_download(const &RocmConvAe a, &ConvAutoencoder ae);
-void rocm_conv_autoencoder_free(&RocmConvAe a);
 
 // ── GANs ─────────────────────────────────────────────────────────────────────
 // gan.h's Gan (MLP) and Dcgan (ConvNet) on the GPU: every loss (GAN_*),
 // nCritic critic steps per generator step, WGAN weight clipping, the
 // gradient penalty (as gan.sc computes it), conditional models and the
-// averaged generator, with the same arithmetic as gan_train_step. The
+// averaged generator, with the same arithmetic as Gan::train_step. The
 // discriminator step runs D once on the real and generated rows stacked,
 // its batch norms normalizing the two halves separately (as two passes
 // would). Noise is drawn on the GPU, so a step records into a graph.
@@ -438,20 +443,21 @@ struct RocmGan {
     struct RocmBuf state;    // noise counter, steps, D loss, G loss, penalty, block count
     unsigned long steps;     // generator steps taken
     int ok;
+
+    // One Gan::train_step on real [rows, dataDim]; labels: rows class indices
+    // for a conditional GAN (else ignored). Queued.
+    int step(struct RocmBuf real, struct RocmBuf labels, unsigned long rows);
+    struct GanLosses losses() const;                                            // the last step's (waits)
+    // Gan::train on the GPU: the same batches, steps recorded into a graph.
+    struct GanLosses train(const &Dataset data, unsigned long epochs, unsigned long batchSize);
+    // The parameters (and batch norm statistics) of G, D and the averaged G
+    // back into the host model; the optimizers' moments stay on the GPU.
+    int download(&Gan g) const;
+    int download_dcgan(&Dcgan g) const;
+    void free();
 };
 struct RocmGan rocm_gan_new(const &Gan g, unsigned long maxBatch);
 struct RocmGan rocm_dcgan_new(const &Dcgan g, unsigned long maxBatch);
-// One gan_train_step on real [rows, dataDim]; labels: rows class indices
-// for a conditional GAN (else ignored). Queued.
-int rocm_gan_step(&RocmGan g, struct RocmBuf real, struct RocmBuf labels, unsigned long rows);
-struct GanLosses rocm_gan_losses(const &RocmGan g);   // the last step's (waits)
-// gan_train on the GPU: the same batches, steps recorded into a graph.
-struct GanLosses rocm_gan_train(&RocmGan g, const &Dataset data, unsigned long epochs, unsigned long batchSize);
-// The parameters (and batch norm statistics) of G, D and the averaged G
-// back into the host model; the optimizers' moments stay on the GPU.
-int rocm_gan_download(const &RocmGan d, &Gan g);
-int rocm_dcgan_download(const &RocmGan d, &Dcgan g);
-void rocm_gan_free(&RocmGan g);
 // Internal (exposed for tests): the step with drawNoise 0 uses the values
 // already in g.noise (rows-sized batches at strides of maxBatch, in the
 // layout above).
@@ -486,7 +492,7 @@ struct RocmDqn {
     struct RocmBuf idx;             // [batchSize] sampled slots
     struct RocmBuf ob;              // the sampled batch
     struct RocmBuf nx;
-    struct RocmBuf act;
+    struct RocmBuf acts;
     struct RocmBuf rew;
     struct RocmBuf term;
     struct RocmBuf y;               // targets
@@ -495,19 +501,19 @@ struct RocmDqn {
     &heap float   stage;            // host staging (a transition, the sampled slots, action values)
     struct RocmGraph graph;         // one update, recorded after the first
     int   ok;
+
+    float epsilon() const;
+    unsigned long act(const &Tensor obs, int explore);   // waits for the action values
+    // Dqn::observe: stores the transition and queues an update when due. Returns
+    // 1 when an update was queued, 0 when none was due, -1 on failure (no
+    // read-back: RocmDqn::loss gives the last update's loss).
+    int observe(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminal);
+    float loss() const;   // waits
+    int download(&Dqn h) const;   // networks, counters, Rng (not the replay buffer)
+    void free();
 };
 // A device copy of d (networks, replay contents, counters and Rng state).
 struct RocmDqn rocm_dqn_new(const &Dqn d);
-float         rocm_dqn_epsilon(const &RocmDqn d);
-unsigned long rocm_dqn_act(&RocmDqn d, const &Tensor obs, int explore);   // waits for the action values
-// dqn_observe: stores the transition and queues an update when due. Returns
-// 1 when an update was queued, 0 when none was due, -1 on failure (no
-// read-back: rocm_dqn_loss gives the last update's loss).
-int           rocm_dqn_observe(&RocmDqn d, const &Tensor obs, unsigned long action, float reward,
-                               const &Tensor next, int terminal);
-float         rocm_dqn_loss(const &RocmDqn d);   // waits
-int           rocm_dqn_download(const &RocmDqn d, &Dqn h);   // networks, counters, Rng (not the replay buffer)
-void          rocm_dqn_free(&RocmDqn d);
 
 struct RocmPolicy {
     struct RocmNet policy;          // sized for maxRollout rows
@@ -540,17 +546,19 @@ struct RocmPolicy {
     unsigned long graphRows[2];
     float lastEntropy;
     int   ok;
+
+    unsigned long act(const &Tensor obs, int sample);   // waits for the logits
+    void record(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminated,
+                int truncated);
+    // PolicyAgent::update on the GPU; returns the last minibatch's loss (one
+    // read-back at the end), or -1 on failure (e.g. a rollout longer than
+    // maxRollout).
+    float update();
+    int download(&PolicyAgent a) const;   // networks and Rng state
+    void free();
 };
 // A device copy of a (networks, Rng state) taking rollouts of up to maxRollout steps.
 struct RocmPolicy rocm_pg_new(const &PolicyAgent a, unsigned long maxRollout);
-unsigned long rocm_pg_act(&RocmPolicy a, const &Tensor obs, int sample);   // waits for the logits
-void  rocm_pg_record(&RocmPolicy a, const &Tensor obs, unsigned long action, float reward, const &Tensor next,
-                     int terminated, int truncated);
-// pg_update on the GPU; returns the last minibatch's loss (one read-back at
-// the end), or -1 on failure (e.g. a rollout longer than maxRollout).
-float rocm_pg_update(&RocmPolicy a);
-int   rocm_pg_download(const &RocmPolicy d, &PolicyAgent a);   // networks and Rng state
-void  rocm_pg_free(&RocmPolicy a);
 
 // ── The training loop ────────────────────────────────────────────────────────
 // A dataset in GPU memory and its batch cursor (rocm_trainer_fit's
@@ -572,22 +580,23 @@ struct RocmBatches {
     &heap unsigned long perm;
     &heap float permf;
     int   ok;
+
+    // Starts an epoch: uploads the row order, rewinds the cursor, zeroes the loss.
+    int epoch();
+    // Queued: xb, yb = the next 'rows' rows, and the cursor moves past them.
+    int gather(unsigned long rows);
+    float loss_sum();                 // waits; the epoch's loss sum
+    void free();
 };
 struct RocmBatches rocm_batches_new(const &Dataset d, unsigned long batchSize, int shuffle, unsigned long seed);
-// Starts an epoch: uploads the row order, rewinds the cursor, zeroes the loss.
-int   rocm_batches_epoch(&RocmBatches b);
-// Queued: xb, yb = the next 'rows' rows, and the cursor moves past them.
-int   rocm_batches_gather(&RocmBatches b, unsigned long rows);
-float rocm_batches_loss(&RocmBatches b);                          // waits; the epoch's loss sum
-void  rocm_batches_free(&RocmBatches b);
 
 // Internal: one queued step (gather, model step, optimizer).
 generic<T>
 int rocm_trainer_step_(&T model, fn int(&T, struct RocmBuf, struct RocmBuf, unsigned long, struct RocmBuf) stepFn,
                        &RocmOptimizer opt, &RocmBatches bt, unsigned long rows) {
-    if (!rocm_batches_gather(bt, rows)) return 0;
+    if (!bt.gather(rows)) return 0;
     if (!stepFn(model, bt.xb, bt.yb, rows, bt.loss)) return 0;
-    return rocm_optimizer_step(opt);
+    return opt.step();
 }
 
 // Internal: runs 'count' steps of 'rows' rows each: eagerly the first time
@@ -604,7 +613,7 @@ int rocm_trainer_run_(&T model, fn int(&T, struct RocmBuf, struct RocmBuf, unsig
     if (g.exec != 0UL) {
         ok = rocm_graph_launch(*g);
     } else if (*seen) {
-        rocm_optimizer_sync(opt);
+        opt.sync();
         if (rocm_capture_begin()) {
             int rec = 1;
             while (rec && i < count) { rec = rocm_trainer_step_(model, stepFn, opt, bt, rows); i = i + 1UL; }
@@ -645,7 +654,7 @@ void rocm_fit_graphs_free_(&RocmFitGraphs g);
 generic<T>
 int rocm_trainer_epoch_(&T model, fn int(&T, struct RocmBuf, struct RocmBuf, unsigned long, struct RocmBuf) stepFn,
                         &RocmOptimizer opt, &RocmBatches bt, &RocmFitGraphs gs, &unsigned long batches) {
-    int ok = rocm_batches_epoch(bt) && rocm_optimizer_sync(opt);
+    int ok = bt.epoch() && opt.sync();
     unsigned long pos = 0UL;
     unsigned long n = 0UL;
     while (ok && pos < bt.n) {
@@ -680,7 +689,7 @@ struct TrainReport rocm_trainer_fit(&T model,
                                     &RocmOptimizer opt, const &Dataset data, const &TrainConfig cfg) {
     struct TrainReport rep = train_report_new_();
     struct RocmBatches bt = rocm_batches_new(data, cfg.batchSize, cfg.shuffle, cfg.seed);
-    if (!bt.ok || !opt.ok) { rocm_batches_free(&bt); return rep; }
+    if (!bt.ok || !opt.ok) { bt.free(); return rep; }
     opt.clipNorm = cfg.clipNorm;
     struct RocmFitGraphs gs = rocm_fit_graphs_new_();
     int ok = 1;
@@ -689,7 +698,7 @@ struct TrainReport rocm_trainer_fit(&T model,
     while (ok && e < cfg.epochs) {
         unsigned long batches = 0UL;
         ok = rocm_trainer_epoch_(model, stepFn, opt, &bt, &gs, &batches);
-        float sum = rocm_batches_loss(&bt);
+        float sum = bt.loss_sum();
         train_report_epoch_(&rep, e, batches > 0UL ? sum / (float)batches : (float)0.0, batches);
         steps = steps + batches;
         opt.lr = opt.lr * cfg.lrDecay;
@@ -697,7 +706,7 @@ struct TrainReport rocm_trainer_fit(&T model,
     }
     rep.steps = ok ? steps : 0UL;
     rocm_fit_graphs_free_(&gs);
-    rocm_batches_free(&bt);
+    bt.free();
     return rep;
 }
 
@@ -707,7 +716,7 @@ struct TrainReport rocm_trainer_fit(&T model,
 // feature. Each owns its host model in 'host' and a device copy in 'dev';
 // sync() downloads 'dev' into 'host' (train_fit and train_gan do so at the
 // end). Graph replay, the GPU-side optimizer state and the device-resident
-// dataset are those of rocm_trainer_fit, rocm_gan_train and the RL agents.
+// dataset are those of rocm_trainer_fit, RocmGan::train and the RL agents.
 
 // A host model H trained as a device model D (RocmNet, RocmVae, RocmConvAe):
 // Trainable. 'ok' is 0 once building or uploading failed.
@@ -731,7 +740,7 @@ struct RocmTrainer {
     int   fit_begin(const &Dataset data, const &TrainConfig cfg);
     struct EpochLoss fit_epoch();
     void  fit_end();
-    float train_step(const &Tensor x, const &Tensor y);   // -1 on failure
+    float train_step(const &Tensor x, const &Tensor y);             // -1 on failure
     float learning_rate();
     void  set_learning_rate(float lr);
     int   sync();
@@ -761,7 +770,7 @@ struct EpochLoss RocmTrainer::fit_epoch() {
     el.ok = 0;
     if (!self.active) return el;
     el.ok = rocm_trainer_epoch_(&self.dev, self.stepFn, &self.opt, &self.bt, &self.graphs, &el.steps);
-    float sum = rocm_batches_loss(&self.bt);
+    float sum = self.bt.loss_sum();
     if (el.steps > 0UL) el.loss = sum / (float)el.steps;
     return el;
 }
@@ -770,7 +779,7 @@ generic<H, D>
 void RocmTrainer::fit_end() {
     if (!self.active) return;
     rocm_fit_graphs_free_(&self.graphs);
-    rocm_batches_free(&self.bt);
+    self.bt.free();
     self.active = 0;
 }
 
@@ -788,7 +797,7 @@ float RocmTrainer::train_step(const &Tensor x, const &Tensor y) {
              rocm_write(self.ys, (const &float)(const float*)y->data, ny);
     }
     ok = ok && rocm_zero(self.loss1) && self.stepFn(&self.dev, self.xs, self.ys, rows, self.loss1) &&
-         rocm_optimizer_step(&self.opt);
+         self.opt.step();
     float l = (float)-1.0;
     if (ok && !rocm_read(self.loss1, &l, 1UL)) l = (float)-1.0;
     return l;
@@ -806,18 +815,18 @@ int RocmTrainer::sync() { return self.ok && self.downloadFn(&self.dev, &self.hos
 generic<H, D>
 void RocmTrainer::free() {
     self.fit_end();
-    rocm_optimizer_free(&self.opt);
+    self.opt.free();
     self.freeFn(&self.dev);
-    rocm_free(&self.xs);
-    rocm_free(&self.ys);
-    rocm_free(&self.loss1);
+    self.xs.free();
+    self.ys.free();
+    self.loss1.free();
     self.ok = 0;
 }
 
 // 'opt' supplies the optimizer's kind and hyperparameters
 // (rocm_optimizer_from); o.maxBatch sizes the device buffers. loss:
 // TRAIN_LOSS_* (rocm_net_ce_step, _mse_step, _bce_step). o.precision
-// (rocm_net_set_precision) applies to Mlp and ConvNet trainers; the others
+// (RocmNet::set_precision) applies to Mlp and ConvNet trainers; the others
 // fail to build (ok = 0) when it is set.
 struct RocmTrainer<struct Mlp, struct RocmNet> rocm_mlp_trainer_new(struct Mlp m, int loss, const &Optimizer opt,
                                                                     const &TrainerOptions o);
@@ -831,11 +840,9 @@ struct RocmTrainer<struct ConvVae, struct RocmVae> rocm_conv_vae_trainer_new(str
 struct RocmTrainer<struct ConvAutoencoder, struct RocmConvAe> rocm_conv_ae_trainer_new(struct ConvAutoencoder ae,
                                                                                        const &Optimizer opt,
                                                                                        const &TrainerOptions o);
-// An Mlp's parameters from its device net (rocm_net_download into m.params).
-int rocm_net_download_mlp(const &RocmNet n, &Mlp m);
 
-// A Gan or Dcgan (H) as a RocmGan: GanTrainable. train is rocm_gan_train;
-// train_step uploads the batch, runs rocm_gan_step and reads the losses.
+// A Gan or Dcgan (H) as a RocmGan: GanTrainable. train is RocmGan::train;
+// train_step uploads the batch, runs RocmGan::step and reads the losses.
 generic<H>
 struct RocmGanTrainer {
     H host;
@@ -865,13 +872,13 @@ struct GanLosses RocmGanTrainer::train_step(const &Tensor real, ?&Tensor labels)
         case some(y): { unsafe { ok = ok && rocm_write(self.ls, (const &float)(const float*)y->data, rows); } }
         case null: { ok = ok && rocm_zero(self.ls); }
     }
-    if (ok && rocm_gan_step(&self.dev, self.xs, self.ls, rows)) l = rocm_gan_losses(&self.dev);
+    if (ok && self.dev.step(self.xs, self.ls, rows)) l = self.dev.losses();
     return l;
 }
 
 generic<H>
 struct GanLosses RocmGanTrainer::train(const &Dataset data, unsigned long epochs, unsigned long batchSize) {
-    return rocm_gan_train(&self.dev, data, epochs, batchSize);
+    return self.dev.train(data, epochs, batchSize);
 }
 
 generic<H>
@@ -879,9 +886,9 @@ int RocmGanTrainer::sync() { return self.downloadFn(&self.dev, &self.host); }
 
 generic<H>
 void RocmGanTrainer::free() {
-    rocm_gan_free(&self.dev);
-    rocm_free(&self.xs);
-    rocm_free(&self.ls);
+    self.dev.free();
+    self.xs.free();
+    self.ls.free();
 }
 
 // o.maxBatch: the largest batch train / train_step will see.

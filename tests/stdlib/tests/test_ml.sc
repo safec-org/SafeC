@@ -232,23 +232,23 @@ void t_loss_scaler() {
         float v[2] = { (float)1.0, (float)2.0 };
         &Tensor p = tensor_from_1d((const float*)v, 2UL, 1);
         tensor_backward(tensor_sum(tensor_scale(p, s.scale)));    // grads = 65536
-        ASSERT_TRUE(loss_scaler_unscale(&s, p) == 1);
+        ASSERT_TRUE(s.unscale(p) == 1);
         ASSERT_TRUE(p.grad[0] == (float)1.0);
-        loss_scaler_update(&s, 1);
+        s.update(1);
         ASSERT_EQ(s.goodSteps, 1);
 
         // Overflowed gradient -> 0, scale halves, counter resets.
         float big = (float)3.0e38;
         p.grad[0] = big * (float)10.0;                             // +inf
-        ASSERT_TRUE(loss_scaler_unscale(&s, p) == 0);
-        loss_scaler_update(&s, 0);
+        ASSERT_TRUE(s.unscale(p) == 0);
+        s.update(0);
         ASSERT_TRUE(s.scale == (float)32768.0);
         ASSERT_EQ(s.goodSteps, 0);
 
         // Growth after growthInterval clean steps.
         s.growthInterval = 2;
-        loss_scaler_update(&s, 1);
-        loss_scaler_update(&s, 1);
+        s.update(1);
+        s.update(1);
         ASSERT_TRUE(s.scale == (float)65536.0);
     }
 }
@@ -263,7 +263,7 @@ static float arena_train(int useArena, &Tensor W, const &Tensor X, unsigned long
     int step = 0;
     unsigned long used0 = 0UL;
     while (step < 20) {
-        if (useArena) tensor_arena_begin(&a);
+        if (useArena) a.begin();
         tensor_zero_grad(W);
         &Tensor y = tensor_matmul(X, W);
         &Tensor r = tensor_relu(y);
@@ -276,14 +276,14 @@ static float arena_train(int useArena, &Tensor W, const &Tensor X, unsigned long
         }
         if (useArena) {
             tensor_arena_end();
-            if (step == 0) used0 = tensor_arena_used(&a);
-            if (step == 19) { unsafe { *chunkBytes = tensor_arena_used(&a) == used0 ? 1UL : 0UL; } }
-            tensor_arena_reset(&a);
-            ASSERT_TRUE(tensor_arena_used(&a) == 0UL);
+            if (step == 0) used0 = a.used();
+            if (step == 19) { unsafe { *chunkBytes = a.used() == used0 ? 1UL : 0UL; } }
+            a.reset();
+            ASSERT_TRUE(a.used() == 0UL);
         }
         step = step + 1;
     }
-    tensor_arena_free(&a);
+    a.free();
     return last;
 }
 
@@ -310,13 +310,13 @@ void t_tensor_arena() {
 
     // a tensor made inside the arena knows its owner, and free() leaves it alone
     struct TensorArena ar = tensor_arena_new(0UL);
-    tensor_arena_begin(&ar);
+    ar.begin();
     &Tensor t = tensor_new_2d(3UL, 5UL, 0);
     tensor_arena_end();
     ASSERT_FALSE(t->owner.is_null());
     t.free();
-    ASSERT_TRUE(tensor_arena_used(&ar) > 0UL);
-    tensor_arena_free(&ar);
+    ASSERT_TRUE(ar.used() > 0UL);
+    ar.free();
 }
 
 // conv2d against a direct sum: 3x3 stride 1 (Winograd F(2x2,3x3)) with and
@@ -327,7 +327,7 @@ static double conv_ref_err(&Conv2D layer, unsigned long inC, unsigned long H, un
     unsigned long n = inC * H * W;
     unsigned long i = 0UL;
     unsafe { while (i < n) { in.data[i] = (float)((double)((i * 7919UL) % 1000UL) / 500.0 - 1.0); i = i + 1UL; } }
-    struct FeatureMap out = relu ? conv2d_relu_forward(layer, &in) : conv2d_forward(layer, &in);
+    struct FeatureMap out = relu ? layer.relu_forward(&in) : layer.forward(&in);
     double worst = 0.0;
     unsafe {
         unsigned long oc = 0UL;
@@ -365,8 +365,8 @@ static double conv_ref_err(&Conv2D layer, unsigned long inC, unsigned long H, un
             oc = oc + 1UL;
         }
     }
-    feature_map_free(&in);
-    feature_map_free(&out);
+    in.free();
+    out.free();
     return worst;
 }
 
@@ -375,26 +375,26 @@ void t_conv2d() {
     ASSERT_TRUE(conv_ref_err(&a, 16UL, 13UL, 11UL, 0) < 1e-4);
     ASSERT_TRUE(conv_ref_err(&a, 16UL, 13UL, 11UL, 1) < 1e-4);
     ASSERT_TRUE(conv_ref_err(&a, 16UL, 40UL, 37UL, 0) < 1e-4);   // several tile blocks
-    conv2d_free(&a);
+    a.free();
     struct Conv2D b = conv2d_new(12UL, 8UL, 3UL, 3UL, 1UL, 0UL);  // no padding
     ASSERT_TRUE(conv_ref_err(&b, 12UL, 15UL, 10UL, 0) < 1e-4);
-    conv2d_free(&b);
+    b.free();
     // Inside a TensorArena the output (and every intermediate) comes from
-    // the arena: same values, feature_map_free leaves it to the reset.
+    // the arena: same values, FeatureMap::free leaves it to the reset.
     struct Conv2D d = conv2d_new(8UL, 8UL, 3UL, 3UL, 1UL, 1UL);
     struct FeatureMap in = feature_map_new(8UL, 20UL, 20UL);
     unsafe { unsigned long q = 0UL; while (q < 3200UL) { in.data[q] = (float)((double)(q % 17UL) / 8.0 - 1.0); q = q + 1UL; } }
-    struct FeatureMap heapOut = conv2d_forward(&d, &in);
+    struct FeatureMap heapOut = d.forward(&in);
     ASSERT_EQ(heapOut.fromArena, 0);
     struct TensorArena ar = tensor_arena_new(0UL);
-    tensor_arena_begin(&ar);
-    struct FeatureMap arOut = conv2d_relu_forward(&d, &in);
+    ar.begin();
+    struct FeatureMap arOut = d.relu_forward(&in);
     struct FeatureMap tmp = feature_map_new(4UL, 4UL, 4UL);
     tensor_arena_end();
     ASSERT_EQ(arOut.fromArena, 1);
     ASSERT_EQ(tmp.fromArena, 1);
     unsafe { ASSERT_TRUE(tmp.data[63] == (float)0.0); }
-    ASSERT_TRUE(tensor_arena_used(&ar) >= 8UL * 20UL * 20UL * 4UL);
+    ASSERT_TRUE(ar.used() >= 8UL * 20UL * 20UL * 4UL);
     double worst = 0.0;
     unsafe {
         unsigned long q = 0UL;
@@ -407,17 +407,17 @@ void t_conv2d() {
         }
     }
     ASSERT_TRUE(worst == 0.0);
-    feature_map_free(&arOut);   // no-op for an arena map
-    feature_map_free(&tmp);
-    tensor_arena_reset(&ar);
-    ASSERT_EQ(tensor_arena_used(&ar), 0);
-    tensor_arena_free(&ar);
-    feature_map_free(&heapOut);
-    feature_map_free(&in);
-    conv2d_free(&d);
+    arOut.free();   // no-op for an arena map
+    tmp.free();
+    ar.reset();
+    ASSERT_EQ(ar.used(), 0);
+    ar.free();
+    heapOut.free();
+    in.free();
+    d.free();
     struct Conv2D c = conv2d_new(5UL, 7UL, 5UL, 5UL, 2UL, 2UL);   // im2col
     ASSERT_TRUE(conv_ref_err(&c, 5UL, 17UL, 14UL, 0) < 1e-4);
-    conv2d_free(&c);
+    c.free();
 }
 
 // Pooling with padding (PyTorch semantics) and global pooling, against a
@@ -501,8 +501,8 @@ void t_pooling() {
             c = c + 1UL;
         }
     }
-    feature_map_free(&ga); feature_map_free(&gm); feature_map_free(&np);
-    feature_map_free(&a0); feature_map_free(&a1); feature_map_free(&mx); feature_map_free(&in);
+    ga.free(); gm.free(); np.free();
+    a0.free(); a1.free(); mx.free(); in.free();
 }
 
 // feature_map_add and the ResNet basic block against the composition of
@@ -522,7 +522,7 @@ void t_residual() {
             i = i + 1UL;
         }
     }
-    feature_map_free(&s); feature_map_free(&r); feature_map_free(&b);
+    s.free(); r.free(); b.free();
 
     // stride 2 + channel change -> projection shortcut; stride 1 -> identity
     unsigned long strides[2];
@@ -533,23 +533,23 @@ void t_residual() {
     while (k < 2) {
         struct ResidualBlock blk = residual_block_new(4UL, outCs[k], strides[k]);
         ASSERT_EQ(blk.hasProjection, k == 0 ? 1 : 0);
-        struct FeatureMap out = residual_block_forward(&blk, &a);
+        struct FeatureMap out = blk.forward(&a);
         ASSERT_EQ(out.channels, outCs[k]);
         ASSERT_EQ(out.height, (6UL - 1UL) / strides[k] + 1UL);
         ASSERT_EQ(out.width, (5UL - 1UL) / strides[k] + 1UL);
-        struct FeatureMap h1 = conv2d_relu_forward(&blk.conv1, &a);
-        struct FeatureMap h2 = conv2d_forward(&blk.conv2, &h1);
+        struct FeatureMap h1 = blk.conv1.relu_forward(&a);
+        struct FeatureMap h2 = blk.conv2.forward(&h1);
         unsigned long n = out.channels * out.height * out.width;
         unsafe {
             unsigned long i = 0UL;
             if (k == 0) {
-                struct FeatureMap sc = conv2d_forward(&blk.projection, &a);
+                struct FeatureMap sc = blk.projection.forward(&a);
                 while (i < n) {
                     float v = h2.data[i] + sc.data[i];
                     ASSERT_TRUE(out.data[i] == (v > (float)0.0 ? v : (float)0.0));
                     i = i + 1UL;
                 }
-                feature_map_free(&sc);
+                sc.free();
             } else {
                 while (i < n) {
                     float v = h2.data[i] + a.data[i];
@@ -558,11 +558,11 @@ void t_residual() {
                 }
             }
         }
-        feature_map_free(&h1); feature_map_free(&h2); feature_map_free(&out);
-        residual_block_free(&blk);
+        h1.free(); h2.free(); out.free();
+        blk.free();
         k = k + 1;
     }
-    feature_map_free(&a);
+    a.free();
 }
 
 static &Tensor tensor_fill(unsigned long rows, unsigned long cols, unsigned long seed, float scale, float bias) {
@@ -637,13 +637,13 @@ void t_mamba() {
         ASSERT_EQ(m.dInner, 2UL * dm);
         ASSERT_EQ(m.dtRank, (dm + 15UL) / 16UL);
         &Tensor X = tensor_fill(T, dm, 9UL, (float)1.0, (float)0.0);
-        &Tensor full = mamba_forward(&m, X);
+        &Tensor full = m.forward(X);
         unsigned long r0; unsigned long c0;
         unsafe { r0 = full->shape[0]; c0 = full->shape[1]; }
         ASSERT_EQ(r0, T);
         ASSERT_EQ(c0, dm);
         struct MambaState st = mamba_state_new(&m);
-        mamba_state_reset(&st);
+        st.reset();
         float worst = (float)0.0;
         float mag = (float)0.0;
         unsigned long t = 0UL;
@@ -653,7 +653,7 @@ void t_mamba() {
                 unsigned long i = 0UL;
                 while (i < dm) { xt->data[i] = X->data[t * dm + i]; i = i + 1UL; }
             }
-            &Tensor yt = mamba_step(&m, &st, xt);
+            &Tensor yt = m.step(&st, xt);
             unsafe {
                 unsigned long i = 0UL;
                 while (i < dm) {
@@ -671,9 +671,9 @@ void t_mamba() {
         }
         ASSERT_TRUE(mag > (float)1e-3);                 // not trivially zero
         ASSERT_TRUE(worst <= (float)1e-4 * mag + (float)1e-6);
-        mamba_state_free(&st);
+        st.free();
         tensor_drop(X); tensor_drop(full);
-        mamba_free(&m);
+        m.free();
         k = k + 1;
     }
 }

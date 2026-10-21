@@ -92,24 +92,24 @@ struct DiTBlock dit_block_new(unsigned long dModel, unsigned long dHidden,
     return blk;
 }
 
-void dit_block_free(&DiTBlock block) {
+void DiTBlock::free() {
     unsafe {
-        block->Wq->free(); block->Wk->free(); block->Wv->free(); block->Wo->free();
-        block->W1->free(); block->b1->free(); block->W2->free(); block->b2->free(); block->WadaLN->free();
-        free((void*)block->Wq); free((void*)block->Wk); free((void*)block->Wv); free((void*)block->Wo);
-        free((void*)block->W1); free((void*)block->b1); free((void*)block->W2); free((void*)block->b2);
-        free((void*)block->WadaLN);
+        self->Wq->free(); self->Wk->free(); self->Wv->free(); self->Wo->free();
+        self->W1->free(); self->b1->free(); self->W2->free(); self->b2->free(); self->WadaLN->free();
+        free((void*)self->Wq); free((void*)self->Wk); free((void*)self->Wv); free((void*)self->Wo);
+        free((void*)self->W1); free((void*)self->b1); free((void*)self->W2); free((void*)self->b2);
+        free((void*)self->WadaLN);
     }
 }
 
-&Tensor dit_block_forward(const &DiTBlock block, const &Tensor x, const &Tensor c) {
+&Tensor DiTBlock::forward(const &Tensor x, const &Tensor c) const {
     &Tensor Wq; &Tensor Wk; &Tensor Wv; &Tensor Wo;
     &Tensor W1; &Tensor b1w; &Tensor W2; &Tensor b2w; &Tensor WadaLN;
     unsigned long numHeads; unsigned long dModel;
     unsafe {
-        Wq = block->Wq; Wk = block->Wk; Wv = block->Wv; Wo = block->Wo;
-        W1 = block->W1; b1w = block->b1; W2 = block->W2; b2w = block->b2; WadaLN = block->WadaLN;
-        numHeads = block->numHeads;
+        Wq = self->Wq; Wk = self->Wk; Wv = self->Wv; Wo = self->Wo;
+        W1 = self->W1; b1w = self->b1; W2 = self->W2; b2w = self->b2; WadaLN = self->WadaLN;
+        numHeads = self->numHeads;
         dModel = x->shape[1];
     }
 
@@ -175,23 +175,23 @@ struct JiTBlock jit_block_new(unsigned long dModel, unsigned long dHidden, unsig
     return blk;
 }
 
-void jit_block_free(&JiTBlock block) {
+void JiTBlock::free() {
     unsafe {
-        block->Wq->free(); block->Wk->free(); block->Wv->free(); block->Wo->free();
-        block->W1->free(); block->b1->free(); block->W2->free(); block->b2->free();
-        free((void*)block->Wq); free((void*)block->Wk); free((void*)block->Wv); free((void*)block->Wo);
-        free((void*)block->W1); free((void*)block->b1); free((void*)block->W2); free((void*)block->b2);
+        self->Wq->free(); self->Wk->free(); self->Wv->free(); self->Wo->free();
+        self->W1->free(); self->b1->free(); self->W2->free(); self->b2->free();
+        free((void*)self->Wq); free((void*)self->Wk); free((void*)self->Wv); free((void*)self->Wo);
+        free((void*)self->W1); free((void*)self->b1); free((void*)self->W2); free((void*)self->b2);
     }
 }
 
-&Tensor jit_block_forward(const &JiTBlock block, const &Tensor x) {
+&Tensor JiTBlock::forward(const &Tensor x) const {
     &Tensor Wq; &Tensor Wk; &Tensor Wv; &Tensor Wo;
     &Tensor W1; &Tensor b1w; &Tensor W2; &Tensor b2w;
     unsigned long numHeads;
     unsafe {
-        Wq = block->Wq; Wk = block->Wk; Wv = block->Wv; Wo = block->Wo;
-        W1 = block->W1; b1w = block->b1; W2 = block->W2; b2w = block->b2;
-        numHeads = block->numHeads;
+        Wq = self->Wq; Wk = self->Wk; Wv = self->Wv; Wo = self->Wo;
+        W1 = self->W1; b1w = self->b1; W2 = self->W2; b2w = self->b2;
+        numHeads = self->numHeads;
     }
 
     &Tensor h = tensor_layernorm_rows(x, (float)1e-5);
@@ -233,7 +233,7 @@ void jit_block_free(&JiTBlock block) {
     while (i < numBlocks) {
         &JiTBlock blk = blocks.at(i);
         unsafe {
-            &Tensor next = jit_block_forward(blk, x);
+            &Tensor next = blk.forward(x);
             x->free();
             free((void*)x);
             x = next;

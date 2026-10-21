@@ -19,11 +19,12 @@ struct RNNCell {
     &Tensor W_hh; // [hiddenSize, hiddenSize]
     &Tensor b_ih; // [1, hiddenSize]
     &Tensor b_hh; // [1, hiddenSize]
+
+    &Tensor forward(const &Tensor x_t, const &Tensor h_prev) const;
+    void free();
 };
 
 struct RNNCell rnn_cell_new(unsigned long inputSize, unsigned long hiddenSize);
-&Tensor rnn_cell_forward(const &RNNCell cell, const &Tensor x_t, const &Tensor h_prev);
-void rnn_cell_free(&RNNCell cell);
 
 // ── GRU ──────────────────────────────────────────────────────────────────────
 // r_t = sigmoid(x_t@W_ir + h@W_hr + b_ir + b_hr)          reset gate
@@ -34,11 +35,12 @@ struct GRUCell {
     &Tensor W_ir; &Tensor W_hr; &Tensor b_ir; &Tensor b_hr;
     &Tensor W_iz; &Tensor W_hz; &Tensor b_iz; &Tensor b_hz;
     &Tensor W_in; &Tensor W_hn; &Tensor b_in; &Tensor b_hn;
+
+    &Tensor forward(const &Tensor x_t, const &Tensor h_prev) const;
+    void free();
 };
 
 struct GRUCell gru_cell_new(unsigned long inputSize, unsigned long hiddenSize);
-&Tensor gru_cell_forward(const &GRUCell cell, const &Tensor x_t, const &Tensor h_prev);
-void gru_cell_free(&GRUCell cell);
 
 // ── LSTM ─────────────────────────────────────────────────────────────────────
 // i_t = sigmoid(x_t@W_ii + h@W_hi + b_ii + b_hi)   input gate
@@ -52,15 +54,14 @@ struct LSTMCell {
     &Tensor W_if; &Tensor W_hf; &Tensor b_if; &Tensor b_hf;
     &Tensor W_ig; &Tensor W_hg; &Tensor b_ig; &Tensor b_hg;
     &Tensor W_io; &Tensor W_ho; &Tensor b_io; &Tensor b_ho;
+
+    // Writes the new hidden state's *tensor* as the return value; '*c_out'
+    // receives the new cell state (caller-owned, like the return value).
+    &Tensor forward(const &Tensor x_t, const &Tensor h_prev, const &Tensor c_prev, &&Tensor c_out) const;
+    void free();
 };
 
 struct LSTMCell lstm_cell_new(unsigned long inputSize, unsigned long hiddenSize);
-// Writes the new hidden state's *tensor* as the return value; '*c_out'
-// receives the new cell state (caller-owned, like the return value).
-&Tensor lstm_cell_forward(const &LSTMCell cell, const &Tensor x_t,
-                           const &Tensor h_prev, const &Tensor c_prev,
-                           &&Tensor c_out);
-void lstm_cell_free(&LSTMCell cell);
 
 // ── xLSTM (sLSTM variant, Beck et al. 2024) ─────────────────────────────────
 // The scalar-memory sLSTM cell — xLSTM's headline idea is *exponential*
@@ -84,6 +85,9 @@ struct XLSTMCell {
     &Tensor Wi; &Tensor Ri; &Tensor bi;
     &Tensor Wf; &Tensor Rf; &Tensor bf;
     &Tensor Wo; &Tensor Ro; &Tensor bo;
+
+    struct XLSTMState forward(const &Tensor x_t, const &XLSTMState prev) const;
+    void free();
 };
 
 struct XLSTMState {
@@ -91,12 +95,10 @@ struct XLSTMState {
     &Tensor c;
     &Tensor n;
     &Tensor m; // [1,1] scalar stabilizer (broadcast across hidden dim)
+
+    void free();
 };
 
 struct XLSTMCell xlstm_cell_new(unsigned long inputSize, unsigned long hiddenSize);
-struct XLSTMState xlstm_cell_forward(const &XLSTMCell cell, const &Tensor x_t,
-                                      const &XLSTMState prev);
-void xlstm_cell_free(&XLSTMCell cell);
-void xlstm_state_free(&XLSTMState s);
 
 } // namespace std

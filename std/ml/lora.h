@@ -6,7 +6,7 @@
 //   y = x W + b + (alpha / r) * (dropout(x) A) B
 // with A [in, r] random (Kaiming-uniform) and B [r, out] zero, so the
 // adapted network starts exactly equal to the base. Only A and B train:
-// r * (in + out) values per layer instead of in * out. lora_merge folds
+// r * (in + out) values per layer instead of in * out. LoraMlp::merge folds
 // the update into W for deployment (no extra cost at inference).
 //
 // QLoRA (Dettmers et al. 2023) does the same on top of a base whose
@@ -20,7 +20,7 @@
 //
 // Both wrap an Mlp (nn.h). Train them with trainer.h like any model:
 //   struct LoraMlp ft = lora_attach(&pretrained, &cfg);
-//   lora_add_params(&opt, &ft);                // adapters only
+//   ft.add_params(&opt);                // adapters only
 //   trainer_fit(&ft, my_loss, &opt, &data, &tc);
 #include <std/ml/tensor.h>
 #include <std/ml/nn.h>
@@ -39,7 +39,7 @@ struct LoraConfig lora_config_default(unsigned long rank);
 
 // ── LoRA ─────────────────────────────────────────────────────────────────────
 // Borrows the base Mlp and freezes its parameters (requiresGrad = 0) until
-// lora_detach; the base must outlive the adapter.
+// LoraMlp::detach; the base must outlive the adapter.
 struct LoraMlp {
     &Mlp base;
     struct Vec<&Tensor> A;    // per layer [in, r]
@@ -47,16 +47,17 @@ struct LoraMlp {
     struct LoraConfig cfg;
     float scale;              // alpha / r
     struct Rng rng;
+
+    &Tensor forward(const &Tensor x);
+    void add_params(&Optimizer opt) const;
+    unsigned long param_count() const;       // trainable values
+    // W += scale * A B in the base for every layer, then B = 0: the base alone
+    // now computes what the adapted network did.
+    void merge();
+    // Frees the adapters and unfreezes the base.
+    void detach();
 };
 struct LoraMlp lora_attach(&Mlp base, const &LoraConfig cfg);
-&Tensor        lora_forward(&LoraMlp l, const &Tensor x);
-void           lora_add_params(&Optimizer opt, const &LoraMlp l);
-unsigned long  lora_param_count(const &LoraMlp l);   // trainable values
-// W += scale * A B in the base for every layer, then B = 0: the base alone
-// now computes what the adapted network did.
-void           lora_merge(&LoraMlp l);
-// Frees the adapters and unfreezes the base.
-void           lora_detach(&LoraMlp l);
 
 // ── NF4 quantization ─────────────────────────────────────────────────────────
 #define NF4_BLOCK        64UL    // weights per absmax scale
@@ -73,11 +74,12 @@ struct Nf4Tensor {
     unsigned long blockSize;
     unsigned long blocks;
     int doubleQuant;
+
+    unsigned long bytes() const;   // storage, all parts
+    void free();
 };
 struct Nf4Tensor nf4_quantize(const &Tensor w, unsigned long blockSize, int doubleQuant);
 &Tensor          nf4_dequantize(const &Nf4Tensor q);     // [rows, cols], no grad
-unsigned long    nf4_bytes(const &Nf4Tensor q);          // storage, all parts
-void             nf4_free(&Nf4Tensor q);
 
 // ── QLoRA ────────────────────────────────────────────────────────────────────
 // Copies the base: weights to NF4, biases as float32, all frozen. The base
@@ -93,12 +95,13 @@ struct QLoraMlp {
     struct LoraConfig cfg;
     float scale;
     struct Rng rng;
+
+    &Tensor forward(const &Tensor x);
+    void add_params(&Optimizer opt) const;
+    unsigned long param_count() const;       // trainable values
+    unsigned long base_bytes() const;        // the frozen base at rest
+    void free();
 };
 struct QLoraMlp qlora_attach(const &Mlp base, const &LoraConfig cfg, unsigned long blockSize, int doubleQuant);
-&Tensor         qlora_forward(&QLoraMlp q, const &Tensor x);
-void            qlora_add_params(&Optimizer opt, const &QLoraMlp q);
-unsigned long   qlora_param_count(const &QLoraMlp q);   // trainable values
-unsigned long   qlora_base_bytes(const &QLoraMlp q);    // the frozen base at rest
-void            qlora_free(&QLoraMlp q);
 
 } // namespace std

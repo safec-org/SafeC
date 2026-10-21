@@ -44,8 +44,8 @@ static double grad_check_(int which) {
     struct Rng rng = rng_new(7UL + (unsigned long)which);
     &Tensor x = tensor_new_2d(4UL, 4UL, 1);
     &Tensor aux = tensor_new_2d(4UL, 4UL, 0);
-    rng_fill_uniform(&rng, x, (float)-1.0, (float)1.0);
-    rng_fill_uniform(&rng, aux, (float)-1.0, (float)1.0);
+    rng.fill_uniform(x, (float)-1.0, (float)1.0);
+    rng.fill_uniform(aux, (float)-1.0, (float)1.0);
     // keep finite differences away from the kinks of abs / leaky / min / clamp
     unsafe {
         unsigned long i = 0UL;
@@ -60,10 +60,10 @@ static double grad_check_(int which) {
         }
     }
     struct TensorArena stepArena = tensor_arena_new(0UL);
-    tensor_arena_begin(&stepArena);
+    stepArena.begin();
     &Tensor l = gc_loss_(which, x, aux);
     tensor_backward(l);
-    tensor_arena_reset(&stepArena);
+    stepArena.reset();
     double worst = 0.0;
     unsafe {
         unsigned long i = 0UL;
@@ -75,7 +75,7 @@ static double grad_check_(int which) {
             x->data[i] = keep - h;
             float lm = gc_loss_(which, x, aux)->data[0];
             x->data[i] = keep;
-            tensor_arena_reset(&stepArena);
+            stepArena.reset();
             double num = ((double)lp - (double)lm) / (2.0 * (double)h);
             double e = num - (double)x->grad[i];
             if (e < 0.0) e = -e;
@@ -86,7 +86,7 @@ static double grad_check_(int which) {
         }
     }
     tensor_arena_end();
-    tensor_arena_free(&stepArena);
+    stepArena.free();
     x->free(); aux->free();
     unsafe { free((void*)x); free((void*)aux); }
     return worst;
@@ -134,15 +134,15 @@ void t_optimizers() {
         unsafe { target->data[0] = (float)1.0; target->data[1] = (float)-2.0; target->data[2] = (float)0.5; }
         struct Optimizer opt = optimizer_new(kinds[k], kinds[k] == OPT_SGD ? (float)0.5 : (float)0.05);
         opt.weightDecay = (float)0.0;
-        optimizer_add(&opt, w);
+        opt.add(w);
         struct TensorArena stepArena = tensor_arena_new(0UL);
         unsigned long s = 0UL;
         while (s < 400UL) {
-            tensor_arena_begin(&stepArena);
+            stepArena.begin();
             &Tensor l = tensor_mse_loss(w, target);
             trainer_step_(&opt, l, (float)0.0);
             tensor_arena_end();
-            tensor_arena_reset(&stepArena);
+            stepArena.reset();
             s = s + 1UL;
         }
         unsafe {
@@ -151,8 +151,8 @@ void t_optimizers() {
             while (i < 3UL) { float d = w->data[i] - target->data[i]; e = e + d * d; i = i + 1UL; }
             ASSERT_TRUE(e < (float)1e-3);
         }
-        tensor_arena_free(&stepArena);
-        optimizer_free(&opt);
+        stepArena.free();
+        opt.free();
         k = k + 1;
     }
 }
@@ -162,9 +162,9 @@ void t_datasets() {
     struct Rng rng = rng_new(3UL);
     struct Dataset m = dataset_moons(200UL, (float)0.05, &rng);
     ASSERT_EQ(m.n, 200UL); ASSERT_EQ(m.features, 2UL); ASSERT_EQ(m.classes, 2UL);
-    struct DatasetSplit sp = dataset_split(&m, (float)0.25, &rng);
+    struct DatasetSplit sp = m.split((float)0.25, &rng);
     ASSERT_EQ(sp.test.n, 50UL); ASSERT_EQ(sp.train.n, 150UL);
-    dataset_standardize_pair(&sp.train, &sp.test);
+    sp.train.standardize_pair(&sp.test);
     unsafe {
         double s = 0.0;
         unsigned long i = 0UL;
@@ -173,13 +173,13 @@ void t_datasets() {
     }
     // every row comes out once per epoch, in batches of 32 and a tail of 22
     struct DataLoader dl = dataloader_new(&sp.train, 32UL, 1, 9UL);
-    ASSERT_EQ(dataloader_batches(&dl), 5UL);
+    ASSERT_EQ(dl.batches(), 5UL);
     struct Batch b;
     unsigned long rows = 0UL;
     unsigned long batches = 0UL;
-    while (dataloader_next(&dl, &b)) { rows = rows + b.rows; batches = batches + 1UL; }
+    while (dl.next(&b)) { rows = rows + b.rows; batches = batches + 1UL; }
     ASSERT_EQ(rows, 150UL); ASSERT_EQ(batches, 5UL);
-    dataloader_free(&dl);
+    dl.free();
 
     struct Dataset sh = dataset_shapes(8UL, 12UL, &rng);
     ASSERT_EQ(sh.features, 144UL);
@@ -201,8 +201,8 @@ void t_datasets() {
         float r = x * x + y * y;
         ASSERT_TRUE(r > (float)3.5 && r < (float)4.5);
     }
-    dataset_free(&gr); dataset_free(&bl); dataset_free(&sh);
-    dataset_free(&sp.train); dataset_free(&sp.test); dataset_free(&m);
+    gr.free(); bl.free(); sh.free();
+    sp.train.free(); sp.test.free(); m.free();
 }
 
 void t_dataset_csv() {
@@ -219,7 +219,7 @@ void t_dataset_csv() {
         ASSERT_TRUE(d.x->data[0] == (float)1.5 && d.x->data[1] == (float)2.0);
         ASSERT_TRUE(d.x->data[3] == (float)3.25 && d.y->data[1] == (float)2.0);
     }
-    dataset_free(&d);
+    d.free();
     // two 2x2 images and their labels in IDX format (big-endian headers)
     unsigned char img[24];
     unsigned char lab[10];
@@ -248,25 +248,25 @@ void t_dataset_csv() {
         ASSERT_TRUE(mn.x->data[0] == (float)1.0 && mn.x->data[3] == (float)0.2 && mn.x->data[7] == (float)0.4);
         ASSERT_TRUE(mn.y->data[0] == (float)7.0 && mn.y->data[1] == (float)3.0);
     }
-    dataset_free(&mn);
+    mn.free();
     struct Dataset none = dataset_load_mnist("build/no-such-images", "build/no-such-labels", 0UL);
     ASSERT_EQ(none.n, 0UL);
-    dataset_free(&none);
+    none.free();
 }
 
 // ── Trainer ──────────────────────────────────────────────────────────────────
 static &Tensor clf_loss_(&Mlp m, const &Tensor x, const &Tensor y) {
-    return tensor_cross_entropy_loss(mlp_forward(m, x), y);
+    return tensor_cross_entropy_loss(m.forward(x), y);
 }
-static &Tensor clf_logits_(&Mlp m, const &Tensor x) { return mlp_forward(m, x); }
+static &Tensor clf_logits_(&Mlp m, const &Tensor x) { return m.forward(x); }
 
 void t_trainer_moons() {
     struct Rng rng = rng_new(11UL);
     struct Dataset data = dataset_moons(400UL, (float)0.1, &rng);
-    struct DatasetSplit sp = dataset_split(&data, (float)0.25, &rng);
+    struct DatasetSplit sp = data.split((float)0.25, &rng);
     struct Mlp net = mlp_new(2UL, 32UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &rng);
     struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.01);
-    optimizer_add_mlp(&opt, &net);
+    net.add_params(&opt);
     struct TrainConfig cfg = train_config_default();
     cfg.epochs = 60UL;
     struct TrainReport rep = trainer_fit(&net, clf_loss_, &opt, &sp.train, &cfg);
@@ -276,13 +276,13 @@ void t_trainer_moons() {
     ASSERT_TRUE(acc > (float)0.95);
     float val = trainer_evaluate(&net, clf_loss_, &sp.test, 64UL);
     ASSERT_TRUE(val < (float)0.2);
-    optimizer_free(&opt);
-    mlp_free(&net);
-    dataset_free(&sp.train); dataset_free(&sp.test); dataset_free(&data);
+    opt.free();
+    net.free();
+    sp.train.free(); sp.test.free(); data.free();
 }
 
 static &Tensor reg_loss_(&Mlp m, const &Tensor x, const &Tensor y) {
-    return tensor_mse_loss(mlp_forward(m, x), y);
+    return tensor_mse_loss(m.forward(x), y);
 }
 
 void t_trainer_sine() {
@@ -291,23 +291,23 @@ void t_trainer_sine() {
     struct Mlp net = mlp_new(1UL, 32UL, 2UL, 1UL, ACT_TANH, ACT_NONE, &rng);
     struct Optimizer opt = optimizer_new(OPT_ADAMW, (float)0.01);
     opt.weightDecay = (float)0.0001;
-    optimizer_add_mlp(&opt, &net);
+    net.add_params(&opt);
     struct TrainConfig cfg = train_config_default();
     cfg.epochs = 80UL;
     cfg.clipNorm = (float)1.0;
     cfg.lrDecay = (float)0.98;
     struct TrainReport rep = trainer_fit(&net, reg_loss_, &opt, &data, &cfg);
     ASSERT_TRUE(rep.lastEpochLoss < (float)0.01);
-    optimizer_free(&opt);
-    mlp_free(&net);
-    dataset_free(&data);
+    opt.free();
+    net.free();
+    data.free();
 }
 
 // ── Autoencoders ─────────────────────────────────────────────────────────────
 static float recon_err_(&Autoencoder ae, const &Dataset d) {
     int was = tensor_is_grad_enabled();
     tensor_set_grad_enabled(0);
-    &Tensor r = autoencoder_reconstruct(ae, d.x);
+    &Tensor r = ae.reconstruct(d.x);
     float e;
     unsafe { e = tensor_mse_loss(r, d.x)->data[0]; }
     tensor_set_grad_enabled(was);
@@ -331,20 +331,20 @@ void t_autoencoders() {
         struct Autoencoder ae = autoencoder_new(d.features, &cfg);
         float before = recon_err_(&ae, d);
         struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.003);
-        autoencoder_add_params(&opt, &ae);
+        ae.add_params(&opt);
         trainer_fit(&ae, autoencoder_loss, &opt, d, &tc);
         float after = recon_err_(&ae, d);
         ASSERT_TRUE(after < before * (float)0.3);
         if (variant == 2) ASSERT_TRUE(ae.lastPenalty > (float)0.0);
-        optimizer_free(&opt);
-        autoencoder_free(&ae);
+        opt.free();
+        ae.free();
         variant = variant + 1;
     }
-    dataset_free(&blobs);
-    dataset_free(&shapes);
+    blobs.free();
+    shapes.free();
 }
 
-static &Tensor shapes_logits_(&Mlp m, const &Tensor x) { return mlp_forward(m, x); }
+static &Tensor shapes_logits_(&Mlp m, const &Tensor x) { return m.forward(x); }
 
 void t_vae() {
     struct Rng rng = rng_new(4UL);
@@ -352,7 +352,7 @@ void t_vae() {
     // a classifier that later judges the CVAE's samples
     struct Mlp judge = mlp_new(100UL, 64UL, 1UL, 4UL, ACT_RELU, ACT_NONE, &rng);
     struct Optimizer jo = optimizer_new(OPT_ADAM, (float)0.003);
-    optimizer_add_mlp(&jo, &judge);
+    judge.add_params(&jo);
     struct TrainConfig tc = train_config_default();
     tc.epochs = 30UL;
     trainer_fit(&judge, clf_loss_, &jo, &shapes, &tc);
@@ -365,7 +365,7 @@ void t_vae() {
         cfg.classes = cond ? 4UL : 0UL;
         struct Vae v = vae_new(100UL, &cfg);
         struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.002);
-        vae_add_params(&opt, &v);
+        v.add_params(&opt);
         tc.epochs = 60UL;
         struct TrainReport rep = trainer_fit(&v, vae_loss, &opt, &shapes, &tc);
         ASSERT_TRUE(rep.lastEpochLoss < rep.firstEpochLoss * (float)0.6);
@@ -374,7 +374,7 @@ void t_vae() {
         unsafe { unsigned long i = 0UL; while (i < 64UL) { labels->data[i] = (float)(i % 4UL); i = i + 1UL; } }
         int was = tensor_is_grad_enabled();
         tensor_set_grad_enabled(0);
-        &Tensor s = cond ? vae_sample(&v, 64UL, (?&Tensor)labels) : vae_sample(&v, 64UL, null);
+        &Tensor s = cond ? v.sample(64UL, (?&Tensor)labels) : v.sample(64UL, null);
         unsafe {
             ASSERT_EQ(s->shape[0], 64UL);
             ASSERT_EQ(s->shape[1], 100UL);
@@ -382,17 +382,17 @@ void t_vae() {
         }
         if (cond) {
             // conditioned samples are recognized as their class
-            float acc = tensor_accuracy(mlp_forward(&judge, s), labels);
+            float acc = tensor_accuracy(judge.forward(s), labels);
             ASSERT_TRUE(acc > (float)0.7);
         }
         tensor_set_grad_enabled(was);
-        optimizer_free(&opt);
-        vae_free(&v);
+        opt.free();
+        v.free();
         cond = cond + 1;
     }
-    optimizer_free(&jo);
-    mlp_free(&judge);
-    dataset_free(&shapes);
+    jo.free();
+    judge.free();
+    shapes.free();
 }
 
 void t_vqvae() {
@@ -403,7 +403,7 @@ void t_vqvae() {
     cfg.codes = 16UL;
     struct VqVae v = vqvae_new(6UL, &cfg);
     struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.003);
-    vqvae_add_params(&opt, &v);
+    v.add_params(&opt);
     struct TrainConfig tc = train_config_default();
     tc.epochs = 60UL;
     struct TrainReport rep = trainer_fit(&v, vqvae_loss, &opt, &blobs, &tc);
@@ -411,17 +411,17 @@ void t_vqvae() {
     ASSERT_TRUE(v.lastPerplexity > (float)4.0);     // codes in use, not collapsed to one
     int was = tensor_is_grad_enabled();
     tensor_set_grad_enabled(0);
-    &Tensor codes = vqvae_encode(&v, blobs.x);
-    &Tensor a = vqvae_decode(&v, codes);
-    &Tensor b = vqvae_reconstruct(&v, blobs.x);
+    &Tensor codes = v.encode(blobs.x);
+    &Tensor a = v.decode(codes);
+    &Tensor b = v.reconstruct(blobs.x);
     unsafe {
         ASSERT_TRUE(a->data[5] == b->data[5]);
         ASSERT_TRUE(tensor_mse_loss(b, blobs.x)->data[0] < (float)1.0);
     }
     tensor_set_grad_enabled(was);
-    optimizer_free(&opt);
-    vqvae_free(&v);
-    dataset_free(&blobs);
+    opt.free();
+    v.free();
+    blobs.free();
 }
 
 // ── GANs ─────────────────────────────────────────────────────────────────────
@@ -432,7 +432,7 @@ static double critic_grad_norm_(&Gan g, const &Tensor real, const &Tensor fake) 
         unsigned long i = 0UL;
         while (i < 512UL) { xh->data[i] = (float)0.5 * (real->data[i] + fake->data[i]); i = i + 1UL; }
     }
-    tensor_backward(tensor_sum(gan_score(g, xh, null)));
+    tensor_backward(tensor_sum(g.score(xh, null)));
     double acc = 0.0;
     unsafe {
         unsigned long r = 0UL;
@@ -455,8 +455,8 @@ void t_gans() {
     unsafe {
         unsigned long i = 0UL;
         while (i < 1024UL) {
-            target.x->data[i * 2UL] = (float)2.0 + (float)0.5 * rng_normal(&rng);
-            target.x->data[i * 2UL + 1UL] = (float)-1.0 + (float)0.3 * rng_normal(&rng);
+            target.x->data[i * 2UL] = (float)2.0 + (float)0.5 * rng.normal();
+            target.x->data[i * 2UL + 1UL] = (float)-1.0 + (float)0.3 * rng.normal();
             i = i + 1UL;
         }
     }
@@ -470,8 +470,8 @@ void t_gans() {
         if (k == GAN_WGAN) { cfg.nCritic = 5UL; cfg.lrG = (float)0.0005; cfg.lrD = (float)0.0005; cfg.clip = (float)0.05; }
         if (k == GAN_WGAN_GP) cfg.nCritic = 5UL;
         struct Gan g = gan_new(2UL, &cfg);
-        gan_train(&g, &target, k == GAN_WGAN || k == GAN_WGAN_GP ? 100UL : 80UL, 64UL);
-        &Tensor s = gan_generate(&g, 2000UL, null);
+        g.train(&target, k == GAN_WGAN || k == GAN_WGAN_GP ? 100UL : 80UL, 64UL);
+        &Tensor s = g.generate(2000UL, null);
         unsafe {
             double mx = 0.0; double my = 0.0; double vx = 0.0; double vy = 0.0;
             unsigned long i = 0UL;
@@ -496,10 +496,10 @@ void t_gans() {
             ASSERT_TRUE(gn > 0.6 && gn < 1.4);
         }
         tensor_drop(s);
-        gan_free(&g);
+        g.free();
         k = k + 1;
     }
-    dataset_free(&target);
+    target.free();
 }
 
 // A conditional GAN puts each label's samples on its own mode of a ring.
@@ -511,10 +511,10 @@ void t_cgan() {
     cfg.classes = 4UL;
     cfg.lrG = (float)0.001; cfg.lrD = (float)0.001;
     struct Gan g = gan_new(2UL, &cfg);
-    gan_train(&g, &ring, 30UL, 64UL);
+    g.train(&ring, 30UL, 64UL);
     &Tensor labels = tensor_new_1d(400UL, 0);
     unsafe { unsigned long i = 0UL; while (i < 400UL) { labels->data[i] = (float)(i % 4UL); i = i + 1UL; } }
-    &Tensor s = gan_generate(&g, 400UL, (?&Tensor)labels);
+    &Tensor s = g.generate(400UL, (?&Tensor)labels);
     unsigned long hit = 0UL;
     unsafe {
         unsigned long i = 0UL;
@@ -528,8 +528,8 @@ void t_cgan() {
         s->free(); free((void*)s);
     }
     ASSERT_TRUE(hit > 300UL);
-    gan_free(&g);
-    dataset_free(&ring);
+    g.free();
+    ring.free();
 }
 
 // ── Reinforcement learning ───────────────────────────────────────────────────
@@ -540,18 +540,18 @@ void t_bandits() {
         float param = kind == BANDIT_EPS_GREEDY ? (float)0.1 :
                       (kind == BANDIT_UCB1 ? (float)1.414 : (kind == BANDIT_THOMPSON ? (float)1.0 : (float)0.1));
         struct BanditAgent ag = bandit_agent_new(kind, 10UL, param, 5UL);
-        unsigned long best = bandit_best_arm(&b);
+        unsigned long best = b.best_arm();
         unsigned long hits = 0UL;
         unsigned long t = 0UL;
         while (t < 2000UL) {
-            unsigned long a = bandit_agent_select(&ag);
-            bandit_agent_update(&ag, a, bandit_pull(&b, a));
+            unsigned long a = ag.select();
+            ag.update(a, b.pull(a));
             if (t >= 1000UL && a == best) hits = hits + 1UL;
             t = t + 1UL;
         }
         ASSERT_TRUE(hits > 850UL);
-        bandit_agent_free(&ag);
-        bandit_free(&b);
+        ag.free();
+        b.free();
         kind = kind + 1;
     }
 }
@@ -559,37 +559,37 @@ void t_bandits() {
 // Greedy return on the cliff walk after training with one of the TD rules.
 static float cliff_return_(int algo) {
     struct GridWorld g = gridworld_cliff(1UL);
-    struct TabularAgent ag = tabular_agent_new(gridworld_states(&g), 4UL, (float)0.5, (float)1.0, (float)0.1, 2UL);
+    struct TabularAgent ag = tabular_agent_new(g.states(), 4UL, (float)0.5, (float)1.0, (float)0.1, 2UL);
     int ep = 0;
     while (ep < 500) {
-        unsigned long s = gridworld_reset(&g);
-        unsigned long a = tabular_act(&ag, s);
+        unsigned long s = g.reset();
+        unsigned long a = ag.act(s);
         while (1) {
             unsigned long s2 = 0UL;
-            struct EnvStep st = gridworld_step(&g, a, &s2);
-            unsigned long a2 = tabular_act(&ag, s2);
-            if (algo == 0) q_learning_update(&ag, s, a, st.reward, s2, st.terminated);
-            else if (algo == 1) sarsa_update(&ag, s, a, st.reward, s2, a2, st.terminated);
-            else expected_sarsa_update(&ag, s, a, st.reward, s2, st.terminated);
+            struct EnvStep st = g.step(a, &s2);
+            unsigned long a2 = ag.act(s2);
+            if (algo == 0) ag.q_learning_update(s, a, st.reward, s2, st.terminated);
+            else if (algo == 1) ag.sarsa_update(s, a, st.reward, s2, a2, st.terminated);
+            else ag.expected_sarsa_update(s, a, st.reward, s2, st.terminated);
             s = s2;
             a = a2;
             if (st.terminated || st.truncated) break;
         }
         ep = ep + 1;
     }
-    unsigned long s = gridworld_reset(&g);
+    unsigned long s = g.reset();
     float ret = (float)0.0;
     unsigned long n = 0UL;
     while (n < 100UL) {
         unsigned long s2 = 0UL;
-        struct EnvStep st = gridworld_step(&g, tabular_greedy(&ag, s), &s2);
+        struct EnvStep st = g.step(ag.greedy(s), &s2);
         ret = ret + st.reward;
         s = s2;
         n = n + 1UL;
         if (st.terminated) break;
     }
-    tabular_agent_free(&ag);
-    gridworld_free(&g);
+    ag.free();
+    g.free();
     return ret;
 }
 
@@ -606,22 +606,22 @@ void t_tabular_cliff() {
 
 void t_gridworld_env() {
     struct GridWorld g = gridworld_new(3UL, 3UL, 1UL);
-    gridworld_set(&g, 1UL, 0UL, GRID_WALL);
-    gridworld_set(&g, 0UL, 2UL, GRID_PIT);
+    g.set(1UL, 0UL, GRID_WALL);
+    g.set(0UL, 2UL, GRID_PIT);
     g.pitTerminal = 1;
-    unsigned long s = gridworld_reset(&g);
+    unsigned long s = g.reset();
     ASSERT_EQ(s, 0UL);
     unsigned long n = 0UL;
-    struct EnvStep st = gridworld_step(&g, GRID_RIGHT, &n);   // into the wall: stays
+    struct EnvStep st = g.step(GRID_RIGHT, &n);   // into the wall: stays
     ASSERT_EQ(n, 0UL);
     ASSERT_TRUE(st.reward == (float)-1.0 && !st.terminated);
-    gridworld_step(&g, GRID_DOWN, &n);
-    st = gridworld_step(&g, GRID_DOWN, &n);                    // into the pit
+    g.step(GRID_DOWN, &n);
+    st = g.step(GRID_DOWN, &n);                    // into the pit
     ASSERT_TRUE(st.terminated && st.reward == (float)-100.0);
     &Tensor oh = tensor_new_1d(9UL, 0);
-    gridworld_one_hot(&g, 4UL, oh);
+    g.one_hot(4UL, oh);
     unsafe { ASSERT_TRUE(oh->data[4] == (float)1.0 && oh->data[3] == (float)0.0); }
-    gridworld_free(&g);
+    g.free();
 }
 
 void t_replay_buffer() {
@@ -630,13 +630,13 @@ void t_replay_buffer() {
     unsigned long i = 0UL;
     while (i < 5UL) {
         unsafe { o->data[0] = (float)i; }
-        replay_push(&rb, o, i, (float)i, o, 0);
+        rb.push(o, i, (float)i, o, 0);
         i = i + 1UL;
     }
     ASSERT_EQ(rb.size, 3UL);
     ASSERT_EQ(rb.pos, 2UL);
     unsafe { ASSERT_TRUE(rb.obs->data[0] == (float)3.0 && rb.reward->data[1] == (float)4.0); }
-    replay_free(&rb);
+    rb.free();
 }
 
 static void rl_copy4_(&Tensor dst, const &Tensor src) {
@@ -651,9 +651,9 @@ static float eval_dqn_(&Dqn d) {
     float total = (float)0.0;
     int ep = 0;
     while (ep < 5) {
-        cartpole_reset(&env, obs);
+        env.reset(obs);
         while (1) {
-            struct EnvStep s = cartpole_step(&env, dqn_act(d, obs, 0), nx);
+            struct EnvStep s = env.step(d.act(obs, 0), nx);
             total = total + s.reward;
             rl_copy4_(obs, nx);
             if (s.terminated || s.truncated) break;
@@ -671,9 +671,9 @@ static float eval_pg_(&PolicyAgent p) {
     float total = (float)0.0;
     int ep = 0;
     while (ep < 5) {
-        cartpole_reset(&env, obs);
+        env.reset(obs);
         while (1) {
-            struct EnvStep s = cartpole_step(&env, pg_act(p, obs, 0), nx);
+            struct EnvStep s = env.step(p.act(obs, 0), nx);
             total = total + s.reward;
             rl_copy4_(obs, nx);
             if (s.terminated || s.truncated) break;
@@ -695,11 +695,11 @@ void t_dqn_cartpole() {
     int ep = 0;
     float best = (float)0.0;
     while (steps < 40000UL && best < (float)195.0) {
-        cartpole_reset(&env, obs);
+        env.reset(obs);
         while (1) {
-            unsigned long a = dqn_act(&d, obs, 1);
-            struct EnvStep s = cartpole_step(&env, a, nx);
-            dqn_observe(&d, obs, a, s.reward, nx, s.terminated);
+            unsigned long a = d.act(obs, 1);
+            struct EnvStep s = env.step(a, nx);
+            d.observe(obs, a, s.reward, nx, s.terminated);
             steps = steps + 1UL;
             rl_copy4_(obs, nx);
             if (s.terminated || s.truncated) break;
@@ -710,7 +710,7 @@ void t_dqn_cartpole() {
     ASSERT_TRUE(best >= (float)195.0);
     ASSERT_TRUE(d.updates > 0UL);
     tensor_drop(obs); tensor_drop(nx);
-    dqn_free(&d);
+    d.free();
 }
 
 static float pg_cartpole_(int algo, unsigned long rolloutLen) {
@@ -722,23 +722,23 @@ static float pg_cartpole_(int algo, unsigned long rolloutLen) {
     unsigned long steps = 0UL;
     int ep = 0;
     float best = (float)0.0;
-    cartpole_reset(&env, obs);
+    env.reset(obs);
     while (steps < 60000UL && best < (float)195.0) {
-        unsigned long a = pg_act(&p, obs, 1);
-        struct EnvStep s = cartpole_step(&env, a, nx);
-        pg_record(&p, obs, a, s.reward, nx, s.terminated, s.truncated);
+        unsigned long a = p.act(obs, 1);
+        struct EnvStep s = env.step(a, nx);
+        p.record(obs, a, s.reward, nx, s.terminated, s.truncated);
         steps = steps + 1UL;
         rl_copy4_(obs, nx);
         int done = s.terminated || s.truncated;
-        if ((algo == PG_REINFORCE && done) || (algo != PG_REINFORCE && p.rollout >= rolloutLen)) pg_update(&p);
+        if ((algo == PG_REINFORCE && done) || (algo != PG_REINFORCE && p.rollout >= rolloutLen)) p.update();
         if (done) {
             ep = ep + 1;
-            cartpole_reset(&env, obs);
+            env.reset(obs);
             if (ep % 25 == 0) { float e = eval_pg_(&p); if (e > best) best = e; }
         }
     }
     tensor_drop(obs); tensor_drop(nx);
-    pg_free(&p);
+    p.free();
     return best;
 }
 
@@ -874,7 +874,7 @@ static double cg_compare_(int which, &Tensor t, &Tensor x, &Tensor w, &Tensor b,
             t->data[i] = keep - h;
             float lm = cg_loss_(which, x, w, b, rm, rv, aux)->data[0];
             t->data[i] = keep;
-            tensor_arena_reset(stepArena);
+            stepArena.reset();
             double num = ((double)lp - (double)lm) / (2.0 * (double)h);
             double e = num - (double)t->grad[i];
             if (e < 0.0) e = -e;
@@ -902,20 +902,20 @@ static double conv_grad_check_(int which) {
     &Tensor b = tensor_new_1d(cg_nbias_(which), cg_has_params_(which));
     &Tensor rm = tensor_new_1d(2UL, 0);
     &Tensor rv = tensor_new_1d(2UL, 0);
-    rng_fill_uniform(&rng, w, (float)-0.5, (float)0.5);
-    rng_fill_uniform(&rng, b, (float)-0.5, (float)0.5);
-    rng_fill_uniform(&rng, rm, (float)-0.3, (float)0.3);
-    rng_fill_uniform(&rng, rv, (float)0.5, (float)1.5);
+    rng.fill_uniform(w, (float)-0.5, (float)0.5);
+    rng.fill_uniform(b, (float)-0.5, (float)0.5);
+    rng.fill_uniform(rm, (float)-0.3, (float)0.3);
+    rng.fill_uniform(rv, (float)0.5, (float)1.5);
     struct TensorArena stepArena = tensor_arena_new(0UL);
-    tensor_arena_begin(&stepArena);
+    stepArena.begin();
     &Tensor probe = cg_forward_(which, x, w, b, rm, rv);
     tensor_arena_end();
     &Tensor aux = tensor_zeros_like(probe);
-    rng_fill_uniform(&rng, aux, (float)-1.0, (float)1.0);
-    tensor_arena_reset(&stepArena);
-    tensor_arena_begin(&stepArena);
+    rng.fill_uniform(aux, (float)-1.0, (float)1.0);
+    stepArena.reset();
+    stepArena.begin();
     tensor_backward(cg_loss_(which, x, w, b, rm, rv, aux));
-    tensor_arena_reset(&stepArena);
+    stepArena.reset();
     double worst = cg_compare_(which, x, x, w, b, rm, rv, aux, &stepArena);
     if (cg_has_params_(which)) {
         double ew = cg_compare_(which, w, x, w, b, rm, rv, aux, &stepArena);
@@ -924,7 +924,7 @@ static double conv_grad_check_(int which) {
         if (eb > worst) worst = eb;
     }
     tensor_arena_end();
-    tensor_arena_free(&stepArena);
+    stepArena.free();
     tensor_drop(x); tensor_drop(w); tensor_drop(b); tensor_drop(rm); tensor_drop(rv); tensor_drop(aux);
     return worst;
 }
@@ -1013,24 +1013,24 @@ void t_conv_parallel_batch() {
         &Tensor w = deconv ? tensor_new_2d(4UL, 8UL * 16UL, 1) : tensor_new_2d(8UL, 36UL, 1);
         &Tensor b = tensor_new_1d(8UL, 1);
         &Tensor aux = tensor_new_2d(8UL, outSize, 0);
-        rng_fill_uniform(&rng, x, (float)-1.0, (float)1.0);
-        rng_fill_uniform(&rng, w, (float)-0.3, (float)0.3);
-        rng_fill_uniform(&rng, b, (float)-0.3, (float)0.3);
-        rng_fill_uniform(&rng, aux, (float)-1.0, (float)1.0);
+        rng.fill_uniform(x, (float)-1.0, (float)1.0);
+        rng.fill_uniform(w, (float)-0.3, (float)0.3);
+        rng.fill_uniform(b, (float)-0.3, (float)0.3);
+        rng.fill_uniform(aux, (float)-1.0, (float)1.0);
         &Tensor y1 = tensor_new_2d(8UL, outSize, 0);
         &Tensor y2 = tensor_new_2d(8UL, outSize, 0);
         &Tensor dx1 = tensor_zeros_like(x); &Tensor dx2 = tensor_zeros_like(x);
         &Tensor dw1 = tensor_zeros_like(w); &Tensor dw2 = tensor_zeros_like(w);
         &Tensor db1 = tensor_zeros_like(b); &Tensor db2 = tensor_zeros_like(b);
         struct TensorArena stepArena = tensor_arena_new(0UL);
-        tensor_arena_begin(&stepArena);
+        stepArena.begin();
         conv_run_(deconv, x, w, b, aux, y1, dx1, dw1, db1);     // threaded when the pool has threads
-        tensor_arena_reset(&stepArena);
+        stepArena.reset();
         parallel_set_threads(1UL);
         conv_run_(deconv, x, w, b, aux, y2, dx2, dw2, db2);
         parallel_set_threads(threads);
         tensor_arena_end();
-        tensor_arena_free(&stepArena);
+        stepArena.free();
         ASSERT_TRUE(max_rel_diff_(y1, y2) < (float)1e-4);
         ASSERT_TRUE(max_rel_diff_(dx1, dx2) < (float)1e-4);
         ASSERT_TRUE(max_rel_diff_(dw1, dw2) < (float)1e-4);
@@ -1081,23 +1081,23 @@ void t_light_ops_parallel() {
     &Tensor rv = tensor_new_1d(8UL, 0);
     &Tensor a1 = tensor_new_2d(16UL, 8UL * 1024UL, 0);
     &Tensor a2 = tensor_new_2d(16UL, 8UL * 256UL, 0);
-    rng_fill_uniform(&rng, x, (float)-2.0, (float)2.0);
-    rng_fill_uniform(&rng, gamma, (float)0.5, (float)1.5);
-    rng_fill_uniform(&rng, beta, (float)-0.5, (float)0.5);
-    rng_fill_uniform(&rng, a1, (float)-1.0, (float)1.0);
-    rng_fill_uniform(&rng, a2, (float)-1.0, (float)1.0);
+    rng.fill_uniform(x, (float)-2.0, (float)2.0);
+    rng.fill_uniform(gamma, (float)0.5, (float)1.5);
+    rng.fill_uniform(beta, (float)-0.5, (float)0.5);
+    rng.fill_uniform(a1, (float)-1.0, (float)1.0);
+    rng.fill_uniform(a2, (float)-1.0, (float)1.0);
     unsigned long snapLen = 1UL + 16UL * 8UL * 1024UL + 32UL;
     &Tensor s1 = tensor_new_1d(snapLen, 0);
     &Tensor s2 = tensor_new_1d(snapLen, 0);
     struct TensorArena stepArena = tensor_arena_new(0UL);
-    tensor_arena_begin(&stepArena);
+    stepArena.begin();
     light_chain_(x, gamma, beta, rm, rv, a1, a2, s1);    // threaded when the pool has threads
-    tensor_arena_reset(&stepArena);
+    stepArena.reset();
     parallel_set_threads(1UL);
     light_chain_(x, gamma, beta, rm, rv, a1, a2, s2);
     parallel_set_threads(threads);
     tensor_arena_end();
-    tensor_arena_free(&stepArena);
+    stepArena.free();
     // per-channel sums are computed the same way on either path: bitwise equal
     ASSERT_TRUE(max_rel_diff_(s1, s2) == (float)0.0);
     tensor_drop(x); tensor_drop(gamma); tensor_drop(beta); tensor_drop(rm); tensor_drop(rv);
@@ -1141,9 +1141,9 @@ void t_conv_specs() {
     &Tensor x = tensor_new_2d(2UL, 8UL * 100UL, 0);
     &Tensor w = tensor_new_2d(8UL, 72UL, 0);
     &Tensor b = tensor_new_1d(8UL, 0);
-    rng_fill_uniform(&rng, x, (float)-1.0, (float)1.0);
-    rng_fill_uniform(&rng, w, (float)-0.3, (float)0.3);
-    rng_fill_uniform(&rng, b, (float)-0.3, (float)0.3);
+    rng.fill_uniform(x, (float)-1.0, (float)1.0);
+    rng.fill_uniform(w, (float)-0.3, (float)0.3);
+    rng.fill_uniform(b, (float)-0.3, (float)0.3);
     &Tensor y = tensor_conv2d(x, w, b, 8UL, 10UL, 10UL, 3UL, 3UL, 1UL, 1UL);
     unsafe {
         float worst = (float)0.0;
@@ -1189,20 +1189,20 @@ void t_conv_specs() {
 // ── ConvNet with skips: input gradient through add (with projection) and concat ──
 static struct ConvNet skip_net_(&Rng rng) {
     struct ConvNet n = convnet_new(2UL, 6UL, 6UL);
-    unsigned long s0 = convnet_save(&n);
-    convnet_conv(&n, 4UL, 3UL, 1UL, 1UL, ACT_TANH, rng);
-    convnet_conv(&n, 4UL, 3UL, 2UL, 1UL, ACT_NONE, rng);          // 4 x 3 x 3
-    convnet_add_skip(&n, s0, ACT_TANH, rng);                      // 1x1 stride-2 projection of 2 x 6 x 6
-    convnet_deconv(&n, 4UL, 4UL, 2UL, 1UL, ACT_NONE, rng);        // 4 x 6 x 6
-    convnet_concat_skip(&n, s0);                                  // 6 x 6 x 6
-    convnet_groupnorm(&n, 2UL, ACT_TANH);
-    convnet_dense(&n, 3UL, ACT_NONE, rng);
+    unsigned long s0 = n.save();
+    n.conv(4UL, 3UL, 1UL, 1UL, ACT_TANH, rng);
+    n.conv(4UL, 3UL, 2UL, 1UL, ACT_NONE, rng);          // 4 x 3 x 3
+    n.add_skip(s0, ACT_TANH, rng);                      // 1x1 stride-2 projection of 2 x 6 x 6
+    n.deconv(4UL, 4UL, 2UL, 1UL, ACT_NONE, rng);        // 4 x 6 x 6
+    n.concat_skip(s0);                                  // 6 x 6 x 6
+    n.groupnorm(2UL, ACT_TANH);
+    n.dense(3UL, ACT_NONE, rng);
     return n;
 }
 
 static float skip_loss_(const &ConvNet n, const &Tensor x, const &Tensor aux) {
     float v;
-    unsafe { v = tensor_sum(tensor_mul(convnet_forward(n, x), aux))->data[0]; }
+    unsafe { v = tensor_sum(tensor_mul(n.forward(x), aux))->data[0]; }
     return v;
 }
 
@@ -1210,18 +1210,18 @@ void t_convnet_skips() {
     struct Rng rng = rng_new(23UL);
     struct ConvNet n = skip_net_(&rng);
     ASSERT_EQ(n.slots, 1UL);
-    ASSERT_EQ(convnet_out_dim(&n), 3UL);
+    ASSERT_EQ(n.out_dim(), 3UL);
     // conv 2->4 (72 + 4), conv 4->4 (144 + 4), projection 2->4 (8 + 4), deconv 4->4 (256 + 4),
     // group norm (6 + 6), dense 216 -> 3 (648 + 3)
-    ASSERT_EQ(convnet_param_count(&n), 76UL + 148UL + 12UL + 260UL + 12UL + 651UL);
+    ASSERT_EQ(n.param_count(), 76UL + 148UL + 12UL + 260UL + 12UL + 651UL);
     &Tensor x = tensor_new_2d(2UL, 72UL, 1);
     &Tensor aux = tensor_new_2d(2UL, 3UL, 0);
-    rng_fill_uniform(&rng, x, (float)-1.0, (float)1.0);
-    rng_fill_uniform(&rng, aux, (float)-1.0, (float)1.0);
+    rng.fill_uniform(x, (float)-1.0, (float)1.0);
+    rng.fill_uniform(aux, (float)-1.0, (float)1.0);
     struct TensorArena stepArena = tensor_arena_new(0UL);
-    tensor_arena_begin(&stepArena);
-    tensor_backward(tensor_sum(tensor_mul(convnet_forward(&n, x), aux)));
-    tensor_arena_reset(&stepArena);
+    stepArena.begin();
+    tensor_backward(tensor_sum(tensor_mul(n.forward(x), aux)));
+    stepArena.reset();
     double worst = 0.0;
     unsafe {
         unsigned long i = 0UL;
@@ -1233,7 +1233,7 @@ void t_convnet_skips() {
             x->data[i] = keep - h;
             float lm = skip_loss_(&n, x, aux);
             x->data[i] = keep;
-            tensor_arena_reset(&stepArena);
+            stepArena.reset();
             double num = ((double)lp - (double)lm) / (2.0 * (double)h);
             double e = num - (double)x->grad[i];
             if (e < 0.0) e = -e;
@@ -1244,41 +1244,41 @@ void t_convnet_skips() {
         }
     }
     tensor_arena_end();
-    tensor_arena_free(&stepArena);
+    stepArena.free();
     ASSERT_TRUE(worst < 2e-3);
     tensor_drop(x); tensor_drop(aux);
-    convnet_free(&n);
+    n.free();
 
     // ResNet basic block: 4 x 8 x 8 -> 8 x 4 x 4 with a projection shortcut
     struct ConvNet r = convnet_new(4UL, 8UL, 8UL);
-    convnet_residual_block(&r, 8UL, 2UL, 1, ACT_RELU, &rng);
+    r.residual_block(8UL, 2UL, 1, ACT_RELU, &rng);
     ASSERT_EQ(r.outC, 8UL);
     ASSERT_EQ(r.outH, 4UL);
     // conv 4->8 (288 + 8), bn (16), conv 8->8 (576 + 8), bn (16), projection 4->8 (32 + 8)
-    ASSERT_EQ(convnet_param_count(&r), 296UL + 16UL + 584UL + 16UL + 40UL);
-    convnet_residual_block(&r, 8UL, 1UL, 0, ACT_RELU, &rng);       // identity shortcut, no batch norm
-    ASSERT_EQ(convnet_param_count(&r), 952UL + 584UL + 584UL);
-    convnet_free(&r);
+    ASSERT_EQ(r.param_count(), 296UL + 16UL + 584UL + 16UL + 40UL);
+    r.residual_block(8UL, 1UL, 0, ACT_RELU, &rng);       // identity shortcut, no batch norm
+    ASSERT_EQ(r.param_count(), 952UL + 584UL + 584UL);
+    r.free();
 }
 
 // ── Batch-norm folding, save / load ──────────────────────────────────────────
 static struct ConvNet fold_net_(&Rng rng) {
     struct ConvNet n = convnet_new(3UL, 8UL, 8UL);
-    convnet_conv(&n, 6UL, 3UL, 1UL, 1UL, ACT_NONE, rng);
-    convnet_batchnorm(&n, ACT_RELU);
+    n.conv(6UL, 3UL, 1UL, 1UL, ACT_NONE, rng);
+    n.batchnorm(ACT_RELU);
     struct Conv2dSpec d = conv2d_spec(2UL, 2UL, 0UL);
     d.groups = 2UL;
-    convnet_deconv_ex(&n, 4UL, &d, ACT_NONE, rng);                // grouped transposed conv, 4 x 16 x 16
-    convnet_batchnorm(&n, ACT_NONE);
-    convnet_global_avgpool(&n);
-    convnet_dense(&n, 5UL, ACT_NONE, rng);
-    convnet_batchnorm(&n, ACT_NONE);
+    n.deconv_ex(4UL, &d, ACT_NONE, rng);                // grouped transposed conv, 4 x 16 x 16
+    n.batchnorm(ACT_NONE);
+    n.global_avgpool();
+    n.dense(5UL, ACT_NONE, rng);
+    n.batchnorm(ACT_NONE);
     return n;
 }
 
 static void randomize_list_(&Vec<&Tensor> v, &Rng rng, float lo, float hi) {
     unsigned long i = 0UL;
-    while (i < v.length()) { rng_fill_uniform(rng, *v.at(i), lo, hi); i = i + 1UL; }
+    while (i < v.length()) { rng.fill_uniform(*v.at(i), lo, hi); i = i + 1UL; }
 }
 
 void t_convnet_fold_and_files() {
@@ -1289,54 +1289,54 @@ void t_convnet_fold_and_files() {
     while (i < n.params.length()) {
         // gammas / betas of the norms (the 1D parameters after the first two)
         &Tensor p = *n.params.at(i);
-        unsafe { if (p->ndim == 1UL && i % 4UL == 2UL) rng_fill_uniform(&rng, p, (float)0.5, (float)1.5); }
+        unsafe { if (p->ndim == 1UL && i % 4UL == 2UL) rng.fill_uniform(p, (float)0.5, (float)1.5); }
         i = i + 1UL;
     }
-    convnet_set_training(&n, 0);
+    n.set_training(0);
     int was = tensor_is_grad_enabled();
     tensor_set_grad_enabled(0);
     &Tensor x = tensor_new_2d(3UL, 192UL, 0);
-    rng_fill_uniform(&rng, x, (float)-1.0, (float)1.0);
-    &Tensor before = convnet_forward(&n, x);
+    rng.fill_uniform(x, (float)-1.0, (float)1.0);
+    &Tensor before = n.forward(x);
 
     // save, then load into a differently initialized net of the same layers
-    ASSERT_TRUE(convnet_save_file(&n, "build/test_ml_train_convnet.bin"));
+    ASSERT_TRUE(n.save_file("build/test_ml_train_convnet.bin"));
     struct Rng other = rng_new(77UL);
     struct ConvNet m = fold_net_(&other);
-    convnet_set_training(&m, 0);
-    &Tensor m0 = convnet_forward(&m, x);
+    m.set_training(0);
+    &Tensor m0 = m.forward(x);
     ASSERT_TRUE(max_rel_diff_(before, m0) > (float)1e-3);
-    ASSERT_TRUE(convnet_load_file(&m, "build/test_ml_train_convnet.bin"));
-    &Tensor m1 = convnet_forward(&m, x);
+    ASSERT_TRUE(m.load_file("build/test_ml_train_convnet.bin"));
+    &Tensor m1 = m.forward(x);
     ASSERT_TRUE(max_rel_diff_(before, m1) == (float)0.0);
     struct ConvNet wrong = convnet_new(3UL, 8UL, 8UL);
-    convnet_conv(&wrong, 5UL, 3UL, 1UL, 1UL, ACT_NONE, &other);
-    ASSERT_TRUE(!convnet_load_file(&wrong, "build/test_ml_train_convnet.bin"));
-    ASSERT_TRUE(!convnet_load_file(&wrong, "build/no_such_file_test_ml_train.bin"));
-    convnet_free(&wrong);
+    wrong.conv(5UL, 3UL, 1UL, 1UL, ACT_NONE, &other);
+    ASSERT_TRUE(!wrong.load_file("build/test_ml_train_convnet.bin"));
+    ASSERT_TRUE(!wrong.load_file("build/no_such_file_test_ml_train.bin"));
+    wrong.free();
 
     // folding: three batch norms disappear, inference output unchanged
-    ASSERT_EQ(convnet_fold_batchnorm(&n), 3UL);
-    &Tensor after = convnet_forward(&n, x);
+    ASSERT_EQ(n.fold_batchnorm(), 3UL);
+    &Tensor after = n.forward(x);
     ASSERT_TRUE(max_rel_diff_(before, after) < (float)1e-4);
-    ASSERT_EQ(convnet_fold_batchnorm(&n), 0UL);
+    ASSERT_EQ(n.fold_batchnorm(), 0UL);
 
     // an Mlp round trip
     struct Mlp a = mlp_new(4UL, 8UL, 1UL, 2UL, ACT_RELU, ACT_NONE, &rng);
     struct Mlp c = mlp_new(4UL, 8UL, 1UL, 2UL, ACT_RELU, ACT_NONE, &other);
     &Tensor mx = tensor_new_2d(5UL, 4UL, 0);
-    rng_fill_uniform(&rng, mx, (float)-1.0, (float)1.0);
-    ASSERT_TRUE(mlp_save_file(&a, "build/test_ml_train_mlp.bin"));
-    ASSERT_TRUE(mlp_load_file(&c, "build/test_ml_train_mlp.bin"));
-    &Tensor ya = mlp_forward(&a, mx);
-    &Tensor yc = mlp_forward(&c, mx);
+    rng.fill_uniform(mx, (float)-1.0, (float)1.0);
+    ASSERT_TRUE(a.save_file("build/test_ml_train_mlp.bin"));
+    ASSERT_TRUE(c.load_file("build/test_ml_train_mlp.bin"));
+    &Tensor ya = a.forward(mx);
+    &Tensor yc = c.forward(mx);
     ASSERT_TRUE(max_rel_diff_(ya, yc) == (float)0.0);
     tensor_set_grad_enabled(was);
     tensor_drop(x); tensor_drop(before); tensor_drop(after); tensor_drop(m0); tensor_drop(m1);
     tensor_drop(mx); tensor_drop(ya); tensor_drop(yc);
-    mlp_free(&a); mlp_free(&c);
-    convnet_free(&m);
-    convnet_free(&n);
+    a.free(); c.free();
+    m.free();
+    n.free();
 }
 
 // ── Dropout, spectral norm, group norm ───────────────────────────────────────
@@ -1377,9 +1377,9 @@ void t_dropout_and_norms() {
     &Tensor w = tensor_new_2d(6UL, 10UL, 0);
     &Tensor u = tensor_new_1d(6UL, 0);
     &Tensor u2 = tensor_new_1d(6UL, 0);
-    rng_fill_uniform(&rng, w, (float)-2.0, (float)2.0);
-    rng_fill_normal(&rng, u, (float)0.0, (float)1.0);
-    rng_fill_normal(&rng, u2, (float)0.0, (float)1.0);
+    rng.fill_uniform(w, (float)-2.0, (float)2.0);
+    rng.fill_normal(u, (float)0.0, (float)1.0);
+    rng.fill_normal(u2, (float)0.0, (float)1.0);
     &Tensor wsn = tensor_spectral_norm(w, u, 100UL, 1);
     &Tensor again = tensor_spectral_norm(wsn, u2, 100UL, 1);         // wsn / sigma(wsn)
     unsafe {
@@ -1391,9 +1391,9 @@ void t_dropout_and_norms() {
     &Tensor x = tensor_new_2d(3UL, 36UL, 0);
     &Tensor gamma = tensor_new_1d(4UL, 0);
     &Tensor beta = tensor_new_1d(4UL, 0);
-    rng_fill_uniform(&rng, x, (float)-2.0, (float)2.0);
-    rng_fill_uniform(&rng, gamma, (float)0.5, (float)1.5);
-    rng_fill_uniform(&rng, beta, (float)-0.5, (float)0.5);
+    rng.fill_uniform(x, (float)-2.0, (float)2.0);
+    rng.fill_uniform(gamma, (float)0.5, (float)1.5);
+    rng.fill_uniform(beta, (float)-0.5, (float)0.5);
     &Tensor all = tensor_group_norm(x, gamma, beta, 4UL, 9UL, 2UL, (float)0.00001);
     &Tensor one = tensor_new_1d(36UL, 0);
     unsafe { __tensor_ew(EW_COPY, (const float*)&x->data[36], (const float*)0, (float)0.0, (float*)one->data, 36UL); }
@@ -1413,7 +1413,7 @@ void t_dropout_and_norms() {
 static float gp_value_(&Dcgan g, const &Tensor xh, &TensorArena stepArena) {
     float v = (float)0.0;
     dcgan_gradient_penalty_(g, xh, null, &v);
-    tensor_arena_reset(stepArena);
+    stepArena.reset();
     return v;
 }
 
@@ -1422,23 +1422,23 @@ void t_wgan_gp_gradient() {
     struct GanConfig cfg = gan_config_default(4UL);
     cfg.loss = GAN_WGAN_GP;
     struct ConvNet gen = convnet_new(4UL, 1UL, 1UL);
-    convnet_dense(&gen, 2UL, ACT_NONE, &rng);
+    gen.dense(2UL, ACT_NONE, &rng);
     struct ConvNet disc = convnet_new(2UL, 1UL, 1UL);              // a smooth critic
-    convnet_dense(&disc, 16UL, ACT_TANH, &rng);
-    convnet_dense(&disc, 1UL, ACT_NONE, &rng);
+    disc.dense(16UL, ACT_TANH, &rng);
+    disc.dense(1UL, ACT_NONE, &rng);
     struct Dcgan g = dcgan_new(gen, disc, &cfg);
     &Tensor xh = tensor_new_2d(6UL, 2UL, 0);
-    rng_fill_uniform(&rng, xh, (float)-1.5, (float)1.5);
+    rng.fill_uniform(xh, (float)-1.5, (float)1.5);
     &Tensor w = *g.disc.params.at(0UL);                            // [2, 16]
     &Tensor ana = tensor_new_1d(32UL, 0);                          // on the heap
     struct TensorArena stepArena = tensor_arena_new(0UL);
-    tensor_arena_begin(&stepArena);
+    stepArena.begin();
     float v = (float)0.0;
     &Tensor term = dcgan_gradient_penalty_(&g, xh, null, &v);
     ASSERT_TRUE(v > (float)0.0);
-    optimizer_zero_grad(&g.optD);
+    g.optD.zero_grad();
     tensor_backward(term);
-    tensor_arena_reset(&stepArena);
+    stepArena.reset();
     // snapshot: every penalty evaluation below runs its own input-gradient
     // backward pass, which adds into w's gradient
     unsafe { __tensor_ew(EW_COPY, (const float*)w->grad, (const float*)0, (float)0.0, (float*)ana->data, 32UL); }
@@ -1464,51 +1464,51 @@ void t_wgan_gp_gradient() {
         }
     }
     tensor_arena_end();
-    tensor_arena_free(&stepArena);
+    stepArena.free();
     ASSERT_TRUE(scale > 1e-2);
     ASSERT_TRUE(worst < 2e-2 * scale);
     tensor_drop(ana);
     tensor_drop(xh);
-    dcgan_free(&g);
+    g.free();
 }
 
 // ── End to end: a small residual CNN classifies 12x12 shapes ─────────────────
 static &Tensor cnn_clf_loss_(&ConvNet m, const &Tensor x, const &Tensor y) {
-    return tensor_cross_entropy_loss(convnet_forward(m, x), y);
+    return tensor_cross_entropy_loss(m.forward(x), y);
 }
 
 static &Tensor cnn_clf_logits_(&ConvNet m, const &Tensor x) {
-    int was = convnet_set_training(m, 0);
-    &Tensor l = convnet_forward(m, x);
-    convnet_set_training(m, was);
+    int was = m.set_training(0);
+    &Tensor l = m.forward(x);
+    m.set_training(was);
     return l;
 }
 
 void t_cnn_classifier() {
     struct Rng rng = rng_new(71UL);
     struct Dataset shapes = dataset_shapes(768UL, 12UL, &rng);
-    struct DatasetSplit sp = dataset_split(&shapes, (float)0.25, &rng);
+    struct DatasetSplit sp = shapes.split((float)0.25, &rng);
     struct ConvNet net = convnet_new(1UL, 12UL, 12UL);
-    convnet_conv(&net, 8UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);
-    convnet_batchnorm(&net, ACT_RELU);
-    convnet_residual_block(&net, 8UL, 1UL, 1, ACT_RELU, &rng);     // 8 x 12 x 12
-    convnet_residual_block(&net, 16UL, 2UL, 1, ACT_RELU, &rng);    // 16 x 6 x 6
-    convnet_dropout(&net, (float)0.1, 1, &rng);
-    convnet_global_avgpool(&net);
-    convnet_dense(&net, 4UL, ACT_NONE, &rng);
+    net.conv(8UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);
+    net.batchnorm(ACT_RELU);
+    net.residual_block(8UL, 1UL, 1, ACT_RELU, &rng);     // 8 x 12 x 12
+    net.residual_block(16UL, 2UL, 1, ACT_RELU, &rng);    // 16 x 6 x 6
+    net.dropout((float)0.1, 1, &rng);
+    net.global_avgpool();
+    net.dense(4UL, ACT_NONE, &rng);
     struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.003);
-    optimizer_add_convnet(&opt, &net);
+    net.add_params(&opt);
     struct TrainConfig tc = train_config_default();
     tc.epochs = 6UL;
     struct TrainReport rep = trainer_fit(&net, cnn_clf_loss_, &opt, &sp.train, &tc);
     ASSERT_TRUE(rep.lastEpochLoss < rep.firstEpochLoss * (float)0.5);
     float acc = trainer_accuracy(&net, cnn_clf_logits_, &sp.test, 64UL);
     ASSERT_TRUE(acc > (float)0.9);
-    optimizer_free(&opt);
-    convnet_free(&net);
-    dataset_free(&sp.train);
-    dataset_free(&sp.test);
-    dataset_free(&shapes);
+    opt.free();
+    net.free();
+    sp.train.free();
+    sp.test.free();
+    shapes.free();
 }
 
 // tensor_conv2d agrees with cnn.h's forward-only Conv2D on the same weights,
@@ -1527,7 +1527,7 @@ void t_conv_matches_cnn() {
         i = 0UL;
         while (i < 4UL) { layer.bias[i] = (float)i * (float)0.1; b->data[i] = layer.bias[i]; i = i + 1UL; }
     }
-    struct FeatureMap ref = conv2d_forward(&layer, &fm);
+    struct FeatureMap ref = layer.forward(&fm);
     &Tensor y = tensor_conv2d(x, w, b, 3UL, 7UL, 7UL, 3UL, 3UL, 2UL, 1UL);
     ASSERT_EQ(ref.height, 4UL);
     unsafe {
@@ -1555,7 +1555,7 @@ void t_conv_matches_cnn() {
             while (i < pt->size) { float d = abs_f(pt->data[i] - pr.data[i]); if (d > worst) worst = d; i = i + 1UL; }
             ASSERT_TRUE(worst < (float)1e-5);
         }
-        feature_map_free(&pr);
+        pr.free();
         tensor_drop(pt);
         kind = kind + 1;
     }
@@ -1573,8 +1573,8 @@ void t_conv_matches_cnn() {
             c = c + 1UL;
         }
     }
-    feature_map_free(&gref);
-    feature_map_free(&mref);
+    gref.free();
+    mref.free();
     tensor_drop(ga);
     tensor_drop(gm);
     // bilinear 2x of [[1, 2], [3, 4]], as PyTorch's Upsample(align_corners=False) gives it
@@ -1593,94 +1593,94 @@ void t_conv_matches_cnn() {
     }
     tensor_drop(small);
     tensor_drop(big);
-    feature_map_free(&ref);
-    feature_map_free(&fm);
-    conv2d_free(&layer);
+    ref.free();
+    fm.free();
+    layer.free();
     tensor_drop(x); tensor_drop(w); tensor_drop(b); tensor_drop(y);
 
     struct Rng rng = rng_new(3UL);
     struct ConvNet net = convnet_new(1UL, 16UL, 16UL);
-    convnet_conv(&net, 8UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);
-    convnet_batchnorm(&net, ACT_RELU);
-    convnet_maxpool(&net, 2UL, 2UL, 0UL);
+    net.conv(8UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);
+    net.batchnorm(ACT_RELU);
+    net.maxpool(2UL, 2UL, 0UL);
     ASSERT_EQ(net.outH, 8UL);
-    convnet_deconv(&net, 4UL, 4UL, 2UL, 1UL, ACT_RELU, &rng);
+    net.deconv(4UL, 4UL, 2UL, 1UL, ACT_RELU, &rng);
     ASSERT_EQ(net.outH, 16UL);
-    convnet_avgpool(&net, 3UL, 2UL, 1UL, 0);
-    convnet_upsample(&net, 2UL);
-    ASSERT_EQ(convnet_out_dim(&net), 4UL * 16UL * 16UL);
-    convnet_dense(&net, 5UL, ACT_NONE, &rng);
-    ASSERT_EQ(convnet_out_dim(&net), 5UL);
-    ASSERT_EQ(convnet_param_count(&net), 8UL * 9UL + 8UL + 16UL + 8UL * 64UL + 4UL + 1024UL * 5UL + 5UL);
+    net.avgpool(3UL, 2UL, 1UL, 0);
+    net.upsample(2UL);
+    ASSERT_EQ(net.out_dim(), 4UL * 16UL * 16UL);
+    net.dense(5UL, ACT_NONE, &rng);
+    ASSERT_EQ(net.out_dim(), 5UL);
+    ASSERT_EQ(net.param_count(), 8UL * 9UL + 8UL + 16UL + 8UL * 64UL + 4UL + 1024UL * 5UL + 5UL);
     ASSERT_EQ(net.buffers.length(), 2UL);
     &Tensor in = tensor_new_2d(3UL, 256UL, 0);
-    &Tensor out = convnet_forward(&net, in);
+    &Tensor out = net.forward(in);
     unsafe { ASSERT_EQ(out->shape[0], 3UL); ASSERT_EQ(out->shape[1], 5UL); }
     struct ConvNet head = convnet_new(4UL, 8UL, 8UL);
-    convnet_upsample_bilinear(&head, 2UL);
+    head.upsample_bilinear(2UL);
     ASSERT_EQ(head.outH, 16UL);
-    convnet_global_maxpool(&head);
-    ASSERT_EQ(convnet_out_dim(&head), 4UL);
+    head.global_maxpool();
+    ASSERT_EQ(head.out_dim(), 4UL);
     &Tensor hin = tensor_new_2d(2UL, 256UL, 0);
-    &Tensor hout = convnet_forward(&head, hin);
+    &Tensor hout = head.forward(hin);
     unsafe { ASSERT_EQ(hout->shape[1], 4UL); }
     struct ConvNet head2 = convnet_new(4UL, 8UL, 8UL);
-    convnet_global_avgpool(&head2);
-    ASSERT_EQ(convnet_out_dim(&head2), 4UL);
+    head2.global_avgpool();
+    ASSERT_EQ(head2.out_dim(), 4UL);
     tensor_drop(hin);
     tensor_drop(hout);
-    convnet_free(&head);
-    convnet_free(&head2);
-    struct ConvNet twin = convnet_clone(&net);
+    head.free();
+    head2.free();
+    struct ConvNet twin = net.clone();
     ASSERT_EQ(twin.buffers.length(), 2UL);
-    convnet_free(&twin);
+    twin.free();
     tensor_drop(in);
-    convnet_free(&net);
+    net.free();
 }
 
 // Convolutional encoder (1 + extra) x 8 x 8 -> 16 x 2 x 2 with batch norm,
 // and a decoder back to 1 x 8 x 8, for the shapes images.
 static struct ConvNet shapes_encoder_(unsigned long extraChannels, &Rng rng) {
     struct ConvNet enc = convnet_new(1UL + extraChannels, 8UL, 8UL);
-    convnet_conv(&enc, 8UL, 4UL, 2UL, 1UL, ACT_LEAKY, rng);    // 8 x 4 x 4
-    convnet_conv(&enc, 16UL, 4UL, 2UL, 1UL, ACT_NONE, rng);    // 16 x 2 x 2
-    convnet_batchnorm(&enc, ACT_LEAKY);
+    enc.conv(8UL, 4UL, 2UL, 1UL, ACT_LEAKY, rng);    // 8 x 4 x 4
+    enc.conv(16UL, 4UL, 2UL, 1UL, ACT_NONE, rng);    // 16 x 2 x 2
+    enc.batchnorm(ACT_LEAKY);
     return enc;
 }
 
 static struct ConvNet shapes_decoder_(unsigned long inputs, &Rng rng) {
     struct ConvNet dec = convnet_new(inputs, 1UL, 1UL);
-    convnet_dense(&dec, 64UL, ACT_RELU, rng);
-    convnet_reshape(&dec, 16UL, 2UL, 2UL);
-    convnet_deconv(&dec, 8UL, 4UL, 2UL, 1UL, ACT_NONE, rng);   // 8 x 4 x 4
-    convnet_batchnorm(&dec, ACT_RELU);
-    convnet_deconv(&dec, 1UL, 4UL, 2UL, 1UL, ACT_NONE, rng);   // 1 x 8 x 8 logits
+    dec.dense(64UL, ACT_RELU, rng);
+    dec.reshape(16UL, 2UL, 2UL);
+    dec.deconv(8UL, 4UL, 2UL, 1UL, ACT_NONE, rng);   // 8 x 4 x 4
+    dec.batchnorm(ACT_RELU);
+    dec.deconv(1UL, 4UL, 2UL, 1UL, ACT_NONE, rng);   // 1 x 8 x 8 logits
     return dec;
 }
 
 static float conv_recon_err_(&ConvAutoencoder ae, const &Dataset d) {
     int was = tensor_is_grad_enabled();
     tensor_set_grad_enabled(0);
-    &Tensor r = conv_autoencoder_reconstruct(ae, d.x);
+    &Tensor r = ae.reconstruct(d.x);
     float e;
     unsafe { e = tensor_mse_loss(r, d.x)->data[0]; }
     tensor_set_grad_enabled(was);
     return e;
 }
 
-static &Tensor shapes8_logits_(&Mlp m, const &Tensor x) { return mlp_forward(m, x); }
+static &Tensor shapes8_logits_(&Mlp m, const &Tensor x) { return m.forward(x); }
 
 // A classifier for the 8x8 shapes that judges conditional samples.
 static struct Mlp shapes8_judge_(const &Dataset shapes, &Rng rng) {
     struct Mlp judge = mlp_new(64UL, 64UL, 1UL, 4UL, ACT_RELU, ACT_NONE, rng);
     struct Optimizer jo = optimizer_new(OPT_ADAM, (float)0.003);
-    optimizer_add_mlp(&jo, &judge);
+    judge.add_params(&jo);
     struct TrainConfig tc = train_config_default();
     tc.epochs = 30UL;
     trainer_fit(&judge, clf_loss_, &jo, shapes, &tc);
     // 8x8 is coarse: the shapes are told apart about 85% of the time
     ASSERT_TRUE(trainer_accuracy(&judge, shapes8_logits_, shapes, 128UL) > (float)0.75);
-    optimizer_free(&jo);
+    jo.free();
     return judge;
 }
 
@@ -1698,18 +1698,18 @@ void t_conv_autoencoders() {
 
     // plain: the 16x2x2 feature map is the code
     struct ConvNet dec0 = convnet_new(16UL, 2UL, 2UL);
-    convnet_deconv(&dec0, 8UL, 4UL, 2UL, 1UL, ACT_RELU, &rng);
-    convnet_deconv(&dec0, 1UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);
+    dec0.deconv(8UL, 4UL, 2UL, 1UL, ACT_RELU, &rng);
+    dec0.deconv(1UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);
     struct ConvAutoencoder ae = conv_autoencoder_new(shapes_encoder_(0UL, &rng), dec0, RECON_BCE);
     float before = conv_recon_err_(&ae, &shapes);
     struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.003);
-    conv_autoencoder_add_params(&opt, &ae);
+    ae.add_params(&opt);
     trainer_fit(&ae, conv_autoencoder_loss, &opt, &shapes, &tc);
     float after = conv_recon_err_(&ae, &shapes);
     ASSERT_TRUE(after < before * (float)0.3);
     ASSERT_EQ(ae.enc.training, 1);
-    optimizer_free(&opt);
-    conv_autoencoder_free(&ae);
+    opt.free();
+    ae.free();
 
     // VAE, then conditional VAE judged by a classifier
     struct Mlp judge = shapes8_judge_(&shapes, &rng);
@@ -1721,32 +1721,32 @@ void t_conv_autoencoders() {
         struct ConvVae v = conv_vae_new(shapes_encoder_(cfg.classes, &rng),
                                         shapes_decoder_(4UL + cfg.classes, &rng), &cfg);
         struct Optimizer vo = optimizer_new(OPT_ADAM, (float)0.003);
-        conv_vae_add_params(&vo, &v);
+        v.add_params(&vo);
         tc.epochs = cond ? 40UL : 25UL;
         struct TrainReport rep = trainer_fit(&v, conv_vae_loss, &vo, &shapes, &tc);
         ASSERT_TRUE(rep.lastEpochLoss < rep.firstEpochLoss * (float)0.6);
         ASSERT_TRUE(v.lastKl > (float)0.1);
         int was = tensor_is_grad_enabled();
         tensor_set_grad_enabled(0);
-        &Tensor s = cond ? conv_vae_sample(&v, 64UL, (?&Tensor)labels) : conv_vae_sample(&v, 64UL, null);
-        &Tensor r = conv_vae_reconstruct(&v, shapes.x, shapes.y);
+        &Tensor s = cond ? v.sample(64UL, (?&Tensor)labels) : v.sample(64UL, null);
+        &Tensor r = v.reconstruct(shapes.x, shapes.y);
         unsafe {
             ASSERT_EQ(s->shape[0], 64UL);
             ASSERT_EQ(s->shape[1], 64UL);
             ASSERT_TRUE(s->data[0] > (float)0.0 && s->data[0] < (float)1.0);
             ASSERT_TRUE(tensor_mse_loss(r, shapes.x)->data[0] < (float)0.1);
         }
-        if (cond) ASSERT_TRUE(tensor_accuracy(mlp_forward(&judge, s), labels) > (float)0.7);
+        if (cond) ASSERT_TRUE(tensor_accuracy(judge.forward(s), labels) > (float)0.7);
         tensor_set_grad_enabled(was);
         tensor_drop(s);
         tensor_drop(r);
-        optimizer_free(&vo);
-        conv_vae_free(&v);
+        vo.free();
+        v.free();
         cond = cond + 1;
     }
     tensor_drop(labels);
-    mlp_free(&judge);
-    dataset_free(&shapes);
+    judge.free();
+    shapes.free();
 }
 
 static struct Dcgan shapes_dcgan_(unsigned long classes, &Rng rng) {
@@ -1756,16 +1756,16 @@ static struct Dcgan shapes_dcgan_(unsigned long classes, &Rng rng) {
     cfg.classes = classes;
     unsigned long w = classes > 0UL ? 2UL : 1UL;   // conditional: twice the channels
     struct ConvNet gen = convnet_new(8UL + classes, 1UL, 1UL);
-    convnet_deconv(&gen, 16UL * w, 2UL, 1UL, 0UL, ACT_NONE, rng);    // 16w x 2 x 2
-    convnet_batchnorm(&gen, ACT_RELU);
-    convnet_deconv(&gen, 8UL * w, 4UL, 2UL, 1UL, ACT_NONE, rng);     // 8w x 4 x 4
-    convnet_batchnorm(&gen, ACT_RELU);
-    convnet_deconv(&gen, 1UL, 4UL, 2UL, 1UL, ACT_SIGMOID, rng);  // 1 x 8 x 8
+    gen.deconv(16UL * w, 2UL, 1UL, 0UL, ACT_NONE, rng);    // 16w x 2 x 2
+    gen.batchnorm(ACT_RELU);
+    gen.deconv(8UL * w, 4UL, 2UL, 1UL, ACT_NONE, rng);     // 8w x 4 x 4
+    gen.batchnorm(ACT_RELU);
+    gen.deconv(1UL, 4UL, 2UL, 1UL, ACT_SIGMOID, rng);  // 1 x 8 x 8
     struct ConvNet disc = convnet_new(1UL + classes, 8UL, 8UL);
-    convnet_conv(&disc, 8UL * w, 4UL, 2UL, 1UL, ACT_LEAKY, rng);
-    convnet_conv(&disc, 16UL * w, 4UL, 2UL, 1UL, ACT_NONE, rng);
-    convnet_batchnorm(&disc, ACT_LEAKY);
-    convnet_conv(&disc, 1UL, 2UL, 1UL, 0UL, ACT_NONE, rng);      // one score
+    disc.conv(8UL * w, 4UL, 2UL, 1UL, ACT_LEAKY, rng);
+    disc.conv(16UL * w, 4UL, 2UL, 1UL, ACT_NONE, rng);
+    disc.batchnorm(ACT_LEAKY);
+    disc.conv(1UL, 2UL, 1UL, 0UL, ACT_NONE, rng);      // one score
     return dcgan_new(gen, disc, &cfg);
 }
 
@@ -1785,34 +1785,34 @@ void t_dcgan() {
     struct Rng rng = rng_new(9UL);
     struct Dataset shapes = dataset_shapes(512UL, 8UL, &rng);
     struct Dcgan g = shapes_dcgan_(0UL, &rng);
-    struct GanLosses l = dcgan_train(&g, &shapes, 15UL, 64UL);
+    struct GanLosses l = g.train(&shapes, 15UL, 64UL);
     ASSERT_TRUE(l.d == l.d && l.g == l.g);   // finite, not NaN
-    &Tensor s = dcgan_generate(&g, 256UL, null);
+    &Tensor s = g.generate(256UL, null);
     unsafe { ASSERT_EQ(s->shape[1], 64UL); }
     double d = tensor_mean_value_(s) - tensor_mean_value_(shapes.x);
     if (d < 0.0) d = -d;
     ASSERT_TRUE(d < 0.1);
-    &Tensor sc = dcgan_score(&g, shapes.x, null);
+    &Tensor sc = g.score(shapes.x, null);
     unsafe { ASSERT_EQ(sc->size, 512UL); }
     tensor_drop(sc);
     tensor_drop(s);
-    dcgan_free(&g);
+    g.free();
 
     struct Mlp judge = shapes8_judge_(&shapes, &rng);
     struct Dcgan cg = shapes_dcgan_(4UL, &rng);
-    dcgan_train(&cg, &shapes, 60UL, 64UL);
+    cg.train(&shapes, 60UL, 64UL);
     &Tensor labels = cycle_labels_(256UL);
-    &Tensor cs = dcgan_generate(&cg, 256UL, (?&Tensor)labels);
+    &Tensor cs = cg.generate(256UL, (?&Tensor)labels);
     int was = tensor_is_grad_enabled();
     tensor_set_grad_enabled(0);
-    float acc = tensor_accuracy(mlp_forward(&judge, cs), labels);
+    float acc = tensor_accuracy(judge.forward(cs), labels);
     tensor_set_grad_enabled(was);
     ASSERT_TRUE(acc > (float)0.55);   // chance is 0.25
     tensor_drop(cs);
     tensor_drop(labels);
-    dcgan_free(&cg);
-    mlp_free(&judge);
-    dataset_free(&shapes);
+    cg.free();
+    judge.free();
+    shapes.free();
 }
 
 int main() {

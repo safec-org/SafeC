@@ -758,14 +758,14 @@ static int dnn_conv_(const &CudaConv2D layer, struct CudaBuf x, struct CudaBuf y
     return dnn_run_(p, g_dp_used[p], layer, x.dev, y.dev, relu);
 }
 
-int cuda_conv2d(const &CudaConv2D layer, struct CudaBuf x, struct CudaBuf y,
-                unsigned long batch, unsigned long height, unsigned long width) {
-    return dnn_conv_(layer, x, y, batch, height, width, 0);
+int CudaConv2D::forward(struct CudaBuf x, struct CudaBuf y, unsigned long batch, unsigned long height,
+                        unsigned long width) const {
+    return dnn_conv_(self, x, y, batch, height, width, 0);
 }
 
-int cuda_conv2d_relu(const &CudaConv2D layer, struct CudaBuf x, struct CudaBuf y,
-                     unsigned long batch, unsigned long height, unsigned long width) {
-    return dnn_conv_(layer, x, y, batch, height, width, 1);
+int CudaConv2D::forward_relu(struct CudaBuf x, struct CudaBuf y, unsigned long batch, unsigned long height,
+                             unsigned long width) const {
+    return dnn_conv_(self, x, y, batch, height, width, 1);
 }
 
 static int dnn_pool_(int mode, struct CudaBuf x, struct CudaBuf y, unsigned long batch, unsigned long channels,
@@ -979,14 +979,14 @@ static int dnn_half_conv_(const &CudaHalfConv2D layer, struct CudaHalfBuf x, str
     return cuda_half_bias(y, layer.bias, batch, layer.outChannels, outH * outW, relu);
 }
 
-int cuda_half_conv2d(const &CudaHalfConv2D layer, struct CudaHalfBuf x, struct CudaHalfBuf y,
-                     unsigned long batch, unsigned long height, unsigned long width) {
-    return dnn_half_conv_(layer, x, y, batch, height, width, 0);
+int CudaHalfConv2D::forward(struct CudaHalfBuf x, struct CudaHalfBuf y, unsigned long batch, unsigned long height,
+                            unsigned long width) const {
+    return dnn_half_conv_(self, x, y, batch, height, width, 0);
 }
 
-int cuda_half_conv2d_relu(const &CudaHalfConv2D layer, struct CudaHalfBuf x, struct CudaHalfBuf y,
-                          unsigned long batch, unsigned long height, unsigned long width) {
-    return dnn_half_conv_(layer, x, y, batch, height, width, 1);
+int CudaHalfConv2D::forward_relu(struct CudaHalfBuf x, struct CudaHalfBuf y, unsigned long batch,
+                                 unsigned long height, unsigned long width) const {
+    return dnn_half_conv_(self, x, y, batch, height, width, 1);
 }
 
 struct CudaHalfConv2D cuda_half_conv2d_upload(const &Conv2D layer, int dtype) {
@@ -1001,15 +1001,15 @@ struct CudaHalfConv2D cuda_half_conv2d_upload(const &Conv2D layer, int dtype) {
     d.weight = cuda_half_upload(layer.weight, wn, dtype);
     d.bias = cuda_half_upload(layer.bias, layer.outChannels, dtype);
     if (d.weight.dev == 0UL || d.bias.dev == 0UL) {
-        cuda_half_free(&d.weight);
-        cuda_half_free(&d.bias);
+        d.weight.free();
+        d.bias.free();
     }
     return d;
 }
 
-void cuda_half_conv2d_free(&CudaHalfConv2D layer) {
-    cuda_half_free(&layer.weight);
-    cuda_half_free(&layer.bias);
+void CudaHalfConv2D::free() {
+    self.weight.free();
+    self.bias.free();
 }
 
 // ── Layers ───────────────────────────────────────────────────────────────────
@@ -1026,15 +1026,15 @@ struct CudaConv2D cuda_conv2d_upload(const &Conv2D layer) {
     d.weight = cuda_upload(layer.weight, wn);
     d.bias = cuda_upload(layer.bias, layer.outChannels);
     if (d.weight.dev == 0UL || d.bias.dev == 0UL) {
-        cuda_free(&d.weight);
-        cuda_free(&d.bias);
+        d.weight.free();
+        d.bias.free();
     }
     return d;
 }
 
-void cuda_conv2d_free(&CudaConv2D layer) {
-    cuda_free(&layer.weight);
-    cuda_free(&layer.bias);
+void CudaConv2D::free() {
+    self.weight.free();
+    self.bias.free();
 }
 
 // ── U-Net ────────────────────────────────────────────────────────────────────
@@ -1072,44 +1072,44 @@ struct CudaUNet cuda_unet_new(const &UNet net, unsigned long batch, unsigned lon
     return g;
 }
 
-int cuda_unet_forward(const &CudaUNet net, struct CudaBuf x, struct CudaBuf y) {
-    if (!net.ok) return 0;
-    unsigned long B = net.batch;
-    unsigned long H = net.height;
-    unsigned long W = net.width;
-    unsigned long c1 = net.encConv1.outChannels;
-    unsigned long c2 = net.encConv2.outChannels;
+int CudaUNet::forward(struct CudaBuf x, struct CudaBuf y) const {
+    if (!self.ok) return 0;
+    unsigned long B = self.batch;
+    unsigned long H = self.height;
+    unsigned long W = self.width;
+    unsigned long c1 = self.encConv1.outChannels;
+    unsigned long c2 = self.encConv2.outChannels;
     // Encoder: conv+relu (one cuDNN call) -> 2x2 max pool, twice.
-    return cuda_conv2d_relu(&net.encConv1, x, net.e1, B, H, W) &&
-           cuda_maxpool2d(net.e1, net.p1, B, c1, H, W, 2UL, 2UL) &&
-           cuda_conv2d_relu(&net.encConv2, net.p1, net.e2, B, H / 2UL, W / 2UL) &&
-           cuda_maxpool2d(net.e2, net.p2, B, c2, H / 2UL, W / 2UL, 2UL, 2UL) &&
-           cuda_conv2d_relu(&net.bottleneck, net.p2, net.mid, B, H / 4UL, W / 4UL) &&
+    return self.encConv1.forward_relu(x, self.e1, B, H, W) &&
+           cuda_maxpool2d(self.e1, self.p1, B, c1, H, W, 2UL, 2UL) &&
+           self.encConv2.forward_relu(self.p1, self.e2, B, H / 2UL, W / 2UL) &&
+           cuda_maxpool2d(self.e2, self.p2, B, c2, H / 2UL, W / 2UL, 2UL, 2UL) &&
+           self.bottleneck.forward_relu(self.p2, self.mid, B, H / 4UL, W / 4UL) &&
            // Decoder: upsample, concat the skip, conv(+relu).
-           cuda_upsample2x_nearest(net.mid, net.up, B * c2, H / 4UL, W / 4UL) &&
-           cuda_concat_channels(net.up, c2, net.e2, c2, net.cat1, B, (H / 2UL) * (W / 2UL)) &&
-           cuda_conv2d_relu(&net.decConv1, net.cat1, net.d1, B, H / 2UL, W / 2UL) &&
-           cuda_upsample2x_nearest(net.d1, net.up, B * c1, H / 2UL, W / 2UL) &&
-           cuda_concat_channels(net.up, c1, net.e1, c1, net.cat2, B, H * W) &&
-           cuda_conv2d(&net.decConv2, net.cat2, y, B, H, W);
+           cuda_upsample2x_nearest(self.mid, self.up, B * c2, H / 4UL, W / 4UL) &&
+           cuda_concat_channels(self.up, c2, self.e2, c2, self.cat1, B, (H / 2UL) * (W / 2UL)) &&
+           self.decConv1.forward_relu(self.cat1, self.d1, B, H / 2UL, W / 2UL) &&
+           cuda_upsample2x_nearest(self.d1, self.up, B * c1, H / 2UL, W / 2UL) &&
+           cuda_concat_channels(self.up, c1, self.e1, c1, self.cat2, B, H * W) &&
+           self.decConv2.forward(self.cat2, y, B, H, W);
 }
 
-void cuda_unet_free(&CudaUNet net) {
-    cuda_conv2d_free(&net.encConv1);
-    cuda_conv2d_free(&net.encConv2);
-    cuda_conv2d_free(&net.bottleneck);
-    cuda_conv2d_free(&net.decConv1);
-    cuda_conv2d_free(&net.decConv2);
-    cuda_free(&net.e1);
-    cuda_free(&net.p1);
-    cuda_free(&net.e2);
-    cuda_free(&net.p2);
-    cuda_free(&net.mid);
-    cuda_free(&net.up);
-    cuda_free(&net.cat1);
-    cuda_free(&net.d1);
-    cuda_free(&net.cat2);
-    net.ok = 0;
+void CudaUNet::free() {
+    self.encConv1.free();
+    self.encConv2.free();
+    self.bottleneck.free();
+    self.decConv1.free();
+    self.decConv2.free();
+    self.e1.free();
+    self.p1.free();
+    self.e2.free();
+    self.p2.free();
+    self.mid.free();
+    self.up.free();
+    self.cat1.free();
+    self.d1.free();
+    self.cat2.free();
+    self.ok = 0;
 }
 
 // ── Host convenience ─────────────────────────────────────────────────────────
@@ -1126,14 +1126,14 @@ struct FeatureMap conv2d_forward_cuda(const &Conv2D layer, const &FeatureMap inp
         struct CudaBuf y = cuda_alloc(layer.outChannels * outH * outW);
         struct FeatureMap out = feature_map_new(layer.outChannels, outH, outW);
         int ok = d.weight.dev != 0UL && x.dev != 0UL && y.dev != 0UL &&
-                 cuda_conv2d(&d, x, y, 1UL, h, w) && cuda_read(y, out.data, y.len);
-        cuda_conv2d_free(&d);
-        cuda_free(&x);
-        cuda_free(&y);
+                 d.forward(x, y, 1UL, h, w) && cuda_read(y, out.data, y.len);
+        d.free();
+        x.free();
+        y.free();
         if (ok) return out;
-        feature_map_free(&out);
+        out.free();
     }
-    return conv2d_forward(layer, input);
+    return layer.forward(input);
 }
 
 struct FeatureMap unet_forward_cuda(&UNet net, const &FeatureMap input) {
@@ -1146,14 +1146,14 @@ struct FeatureMap unet_forward_cuda(&UNet net, const &FeatureMap input) {
         struct CudaBuf y = cuda_alloc(outC * h * w);
         struct FeatureMap out = feature_map_new(outC, h, w);
         int ok = g.ok && x.dev != 0UL && y.dev != 0UL &&
-                 cuda_unet_forward(&g, x, y) && cuda_read(y, out.data, y.len);
-        cuda_unet_free(&g);
-        cuda_free(&x);
-        cuda_free(&y);
+                 g.forward(x, y) && cuda_read(y, out.data, y.len);
+        g.free();
+        x.free();
+        y.free();
         if (ok) return out;
-        feature_map_free(&out);
+        out.free();
     }
-    return unet_forward(net, input);
+    return net.forward(input);
 }
 
 } // namespace std
