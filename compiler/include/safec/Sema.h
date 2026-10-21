@@ -270,7 +270,10 @@ private:
     // (instance, method template) pairs have been instantiated.
     std::unordered_map<std::string, std::vector<std::pair<StructDecl *, TypeSubst>>> genericStructInstances_;
     std::set<std::pair<StructDecl *, FunctionDecl *>> instantiatedStructMethods_;
-    void instantiateStructMethod(FunctionDecl *methodTpl, StructDecl *inst, const TypeSubst &subs);
+    // checkBody false after a failed bound: the body would only repeat the
+    // missing methods as errors.
+    void instantiateStructMethod(FunctionDecl *methodTpl, StructDecl *inst, const TypeSubst &subs,
+                                 bool checkBody = true);
     void completeGenericStructInstances();
 
     // Monomorphizes 'name<typeArgs...>' (a generic struct template
@@ -513,13 +516,21 @@ private:
     // through them always terminates.
     std::unordered_map<std::string, std::vector<std::string>> userTraitSupers_;
     std::unordered_map<std::string, SourceLocation> userTraitLocs_;
+    std::unordered_map<std::string, TraitDecl*> userTraitDecls_;
     // Where the declaration or statement being checked starts: resolveType()
     // has no location of its own, so a generic struct instantiated there
     // (and a constraint it fails) is reported here.
     SourceLocation typeUseLoc_;
     void checkTraitSupertraits();
     bool isBuiltinTrait(const std::string &trait) const;
-    bool satisfiesTrait(const TypePtr &ty, const std::string &trait) const;
+    bool satisfiesTrait(const TypePtr &ty, const std::string &trait) const {
+        return traitMismatch(ty, trait).empty();
+    }
+    // Why 'ty' doesn't satisfy 'trait' ("" when it does): a missing method,
+    // or one whose parameter count or static-ness differs from the trait's.
+    std::string traitMismatch(const TypePtr &ty, const std::string &trait) const;
+    // "type 'X' does not satisfy constraint 'T' <where> (<reason>)"
+    std::string constraintError(const TypePtr &ty, const std::string &trait, const std::string &where) const;
     static std::string binaryOpToMethodName(BinaryOp op);
 
 };
