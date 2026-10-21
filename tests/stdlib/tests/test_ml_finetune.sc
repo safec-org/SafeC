@@ -2,6 +2,7 @@
 // AdaLN (norm.h), LoRA, NF4 and QLoRA (lora.h).
 #include <std/test/test.h>
 #include <std/ml/nn.h>
+#include <std/ml/module.h>
 #include <std/ml/norm.h>
 #include <std/ml/lora.h>
 #include <std/ml/datasets.h>
@@ -229,7 +230,7 @@ void t_adaln_conditioning() {
     m.ad = adaln_new(n, 3UL, 0);
     m.classes = 3UL;
     struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.05);
-    m.ad.add_params(&opt);
+    model_add_params(&m.ad, &opt);
     struct TrainConfig tc = train_config_default();
     tc.epochs = 40UL;
     struct TrainReport rep = trainer_fit(&m, cond_loss_, &opt, &d, &tc);
@@ -288,7 +289,7 @@ static struct Mlp pretrain_(&Dataset a) {
     struct Rng rng = rng_new(6UL);
     struct Mlp base = mlp_new(2UL, 64UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &rng);
     struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.01);
-    base.add_params(&opt);
+    model_add_params(&base, &opt);
     struct TrainConfig tc = train_config_default();
     tc.epochs = 60UL;
     trainer_fit(&base, base_loss_, &opt, a, &tc);
@@ -316,11 +317,11 @@ void t_lora() {
     tensor_set_grad_enabled(1);
     // trainable: r * (in + out) per layer (1040 here, 23% of this small base;
     // the fraction r (in + out) / (in out) shrinks with layer width)
-    ASSERT_EQ(ft.param_count(), 4UL * (2UL + 64UL) + 4UL * (64UL + 64UL) + 4UL * (64UL + 2UL));
-    ASSERT_TRUE(ft.param_count() * 4UL < base.param_count());
+    ASSERT_EQ(model_param_count(&ft), 4UL * (2UL + 64UL) + 4UL * (64UL + 64UL) + 4UL * (64UL + 2UL));
+    ASSERT_TRUE(model_param_count(&ft) * 4UL < model_param_count(&base));
 
     struct Optimizer opt = optimizer_new(OPT_ADAMW, (float)0.01);
-    ft.add_params(&opt);
+    model_add_params(&ft, &opt);
     struct TrainConfig tc = train_config_default();
     tc.epochs = 60UL;
     trainer_fit(&ft, lora_loss_, &opt, &b, &tc);
@@ -402,7 +403,7 @@ void t_qlora() {
     struct Dataset a = dataset_moons(512UL, (float)0.08, &rng);
     struct Dataset b = task_b_(&a);
     struct Mlp base = pretrain_(&a);
-    unsigned long fp32Bytes = 4UL * base.param_count();
+    unsigned long fp32Bytes = 4UL * model_param_count(&base);
     struct LoraConfig cfg = lora_config_default(4UL);
     cfg.alpha = (float)8.0;
     struct QLoraMlp q = qlora_attach(&base, &cfg, NF4_BLOCK, 1);
@@ -411,12 +412,12 @@ void t_qlora() {
     // the 4-bit base still solves task A
     ASSERT_TRUE(trainer_accuracy(&q, qlora_logits_, &a, 128UL) > (float)0.95);
     struct Optimizer opt = optimizer_new(OPT_ADAMW, (float)0.01);
-    q.add_params(&opt);
+    model_add_params(&q, &opt);
     struct TrainConfig tc = train_config_default();
     tc.epochs = 60UL;
     trainer_fit(&q, qlora_loss_, &opt, &b, &tc);
     ASSERT_TRUE(trainer_accuracy(&q, qlora_logits_, &b, 128UL) > (float)0.95);
-    ASSERT_EQ(q.param_count(), 4UL * (2UL + 64UL) + 4UL * (64UL + 64UL) + 4UL * (64UL + 2UL));
+    ASSERT_EQ(model_param_count(&q), 4UL * (2UL + 64UL) + 4UL * (64UL + 64UL) + 4UL * (64UL + 2UL));
     opt.free();
     q.free();
     a.free(); b.free();

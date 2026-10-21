@@ -8,6 +8,7 @@
 // batches, initial weights and random streams except where it draws its own
 // noise: VAEs, GANs).
 #include <std/ml/train.h>
+#include <std/ml/module.h>
 #include <std/ml/nn.h>
 #include <std/ml/datasets.h>
 #include <std/ml/convnet.h>
@@ -158,7 +159,7 @@ static void gan_case_(const &TrainerOptions to) {
     unsafe { printf("  %-12s d %.4f g %.4f, one more step d %.4f g %.4f\n", "gan", (double)l.d, (double)l.g,
                     (double)s.d, (double)s.g); }
     check(l.d == l.d && l.g == l.g && l.d != (float)0.0 && s.d == s.d && s.g == s.g, "gan");
-    &Tensor sample = g.host.generate(8UL, null);
+    &Tensor sample = g.host.sample(8UL, null);
     unsigned long rows = 0UL;
     unsafe { rows = sample->shape[0]; }
     check(rows == 8UL, "gan host generates");

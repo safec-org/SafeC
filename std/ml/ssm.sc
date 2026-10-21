@@ -327,4 +327,18 @@ void MambaState::free() {
     return mamba_run_(self, x, state->conv, state->h);
 }
 
+void Mamba::collect_params(&Vec<&Tensor> out) const {
+    out.push(self.inProj);
+    out.push(self.convW);
+    out.push(self.convB);
+    out.push(self.xProj);
+    out.push(self.dtProj);
+    out.push(self.dtBias);
+    out.push(self.Alog);
+    out.push(self.Dskip);
+    out.push(self.outProj);
+}
+
+void Mamba::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+
 } // namespace std

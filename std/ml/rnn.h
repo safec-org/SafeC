@@ -10,6 +10,8 @@
 // per step). Forward-only, like the rest of std/ml (see attention.h).
 #include <std/ml/tensor.h>
 
+#include <std/collections/vec.h>
+
 namespace std {
 
 // ── Plain RNN ────────────────────────────────────────────────────────────────
@@ -21,6 +23,9 @@ struct RNNCell {
     &Tensor b_hh; // [1, hiddenSize]
 
     &Tensor forward(const &Tensor x_t, const &Tensor h_prev) const;
+    // Parameterized (module.h): every weight tensor.
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     void free();
 };
 
@@ -37,6 +42,9 @@ struct GRUCell {
     &Tensor W_in; &Tensor W_hn; &Tensor b_in; &Tensor b_hn;
 
     &Tensor forward(const &Tensor x_t, const &Tensor h_prev) const;
+    // Parameterized (module.h): every weight tensor.
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     void free();
 };
 
@@ -58,6 +66,9 @@ struct LSTMCell {
     // Writes the new hidden state's *tensor* as the return value; '*c_out'
     // receives the new cell state (caller-owned, like the return value).
     &Tensor forward(const &Tensor x_t, const &Tensor h_prev, const &Tensor c_prev, &&Tensor c_out) const;
+    // Parameterized (module.h): every weight tensor.
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     void free();
 };
 
@@ -87,6 +98,9 @@ struct XLSTMCell {
     &Tensor Wo; &Tensor Ro; &Tensor bo;
 
     struct XLSTMState forward(const &Tensor x_t, const &XLSTMState prev) const;
+    // Parameterized (module.h): every weight tensor.
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     void free();
 };
 

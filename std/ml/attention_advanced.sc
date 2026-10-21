@@ -13,53 +13,105 @@ extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
 // ── MLA / EG-MLA ─────────────────────────────────────────────────────────────
-&Tensor mla_forward(const &Tensor X, const &Tensor Wq, const &Tensor Wdkv,
-                     const &Tensor Wuk, const &Tensor Wuv, unsigned long numHeads) {
-    &Tensor Q = tensor_matmul(X, Wq);
-    &Tensor c_kv = tensor_matmul(X, Wdkv);
-    &Tensor K = tensor_matmul(c_kv, Wuk);
-    &Tensor V = tensor_matmul(c_kv, Wuv);
-    &Tensor out = mha_forward(Q, K, V, numHeads);
+static void aa_drop_(&Tensor t) {
+    t->free();
+    unsafe { free((void*)t); }
+}
 
-    Q->free(); c_kv->free(); K->free(); V->free();
-    unsafe { free((void*)Q); free((void*)c_kv); free((void*)K); free((void*)V); }
+struct Mla mla_new(unsigned long dModel, unsigned long dLatent, unsigned long numHeads, &Rng rng) {
+    if (numHeads == 0UL || dModel % numHeads != 0UL) panic_at("mla_new: numHeads must divide dModel", "attention_advanced.sc", __LINE__);
+    struct Mla m;
+    m.Wq = attn_weight_(dModel, dModel, rng);
+    m.Wdkv = attn_weight_(dModel, dLatent, rng);
+    m.Wuk = attn_weight_(dLatent, dModel, rng);
+    m.Wuv = attn_weight_(dLatent, dModel, rng);
+    m.numHeads = numHeads;
+    return m;
+}
+
+&Tensor Mla::forward(const &Tensor X) const {
+    &Tensor Q = tensor_matmul(X, self.Wq);
+    &Tensor c_kv = tensor_matmul(X, self.Wdkv);
+    &Tensor K = tensor_matmul(c_kv, self.Wuk);
+    &Tensor V = tensor_matmul(c_kv, self.Wuv);
+    &Tensor out = mha_forward(Q, K, V, self.numHeads);
+    aa_drop_(Q); aa_drop_(c_kv); aa_drop_(K); aa_drop_(V);
     return out;
 }
 
-&Tensor eg_mla_forward(const &Tensor X, const &Tensor Wq, const &Tensor Wdkv,
-                        struct Slice<&Tensor> WukGroups, struct Slice<&Tensor> WuvGroups,
-                        unsigned long headsPerGroup) {
-    unsigned long numGroups = WukGroups.length();
-    if (numGroups == 0UL || WuvGroups.length() != numGroups) {
-        panic_at("eg_mla_forward: WukGroups/WuvGroups must be non-empty and the same length",
-                 "eg_mla_forward", 0);
+void Mla::collect_params(&Vec<&Tensor> out) const {
+    out.push(self.Wq); out.push(self.Wdkv); out.push(self.Wuk); out.push(self.Wuv);
+}
+
+void Mla::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+
+void Mla::free() { aa_drop_(self.Wq); aa_drop_(self.Wdkv); aa_drop_(self.Wuk); aa_drop_(self.Wuv); }
+
+struct EgMla eg_mla_new(unsigned long dModel, unsigned long dLatent, unsigned long numGroups,
+                        unsigned long headsPerGroup, &Rng rng) {
+    if (numGroups == 0UL || dModel % numGroups != 0UL || headsPerGroup == 0UL ||
+        (dModel / numGroups) % headsPerGroup != 0UL)
+        panic_at("eg_mla_new: numGroups must divide dModel and headsPerGroup the group width",
+                 "attention_advanced.sc", __LINE__);
+    struct EgMla m;
+    m.Wq = attn_weight_(dModel, dModel, rng);
+    m.Wdkv = attn_weight_(dModel, dLatent, rng);
+    m.Wuk = vec_new();
+    m.Wuv = vec_new();
+    unsigned long g = 0UL;
+    while (g < numGroups) {
+        m.Wuk.push(attn_weight_(dLatent, dModel / numGroups, rng));
+        m.Wuv.push(attn_weight_(dLatent, dModel / numGroups, rng));
+        g = g + 1UL;
+    }
+    m.headsPerGroup = headsPerGroup;
+    return m;
+}
+
+&Tensor EgMla::forward(const &Tensor X) const {
+    unsigned long numGroups = self.Wuk.length();
+    if (numGroups == 0UL || self.Wuv.length() != numGroups) {
+        panic_at("EgMla::forward: Wuk / Wuv must be non-empty and the same length", "attention_advanced.sc", __LINE__);
     }
     unsigned long seqLen; unsigned long dModel;
-    unsafe { seqLen = X->shape[0]; dModel = Wq->shape[1]; }
+    unsafe { seqLen = X->shape[0]; dModel = self.Wq->shape[1]; }
     unsigned long groupDim = dModel / numGroups;
 
-    &Tensor Q = tensor_matmul(X, Wq);
-    &Tensor c_kv = tensor_matmul(X, Wdkv);
+    &Tensor Q = tensor_matmul(X, self.Wq);
+    &Tensor c_kv = tensor_matmul(X, self.Wdkv);
     &Tensor out = tensor_new_2d(seqLen, dModel, 0);
 
     unsigned long g = 0UL;
     while (g < numGroups) {
         unsigned long startCol = g * groupDim;
         &Tensor Qg = tensor_slice_cols(Q, startCol, groupDim);
-        &Tensor Kg;
-        &Tensor Vg;
-        Kg = tensor_matmul(c_kv, *WukGroups.at(g)); Vg = tensor_matmul(c_kv, *WuvGroups.at(g));
-        &Tensor groupOut = mha_forward(Qg, Kg, Vg, headsPerGroup);
+        &Tensor Kg = tensor_matmul(c_kv, *self.Wuk.at(g));
+        &Tensor Vg = tensor_matmul(c_kv, *self.Wuv.at(g));
+        &Tensor groupOut = mha_forward(Qg, Kg, Vg, self.headsPerGroup);
         tensor_set_cols(out, startCol, groupOut);
-
-        Qg->free(); Kg->free(); Vg->free(); groupOut->free();
-        unsafe { free((void*)Qg); free((void*)Kg); free((void*)Vg); free((void*)groupOut); }
+        aa_drop_(Qg); aa_drop_(Kg); aa_drop_(Vg); aa_drop_(groupOut);
         g = g + 1UL;
     }
-
-    Q->free(); c_kv->free();
-    unsafe { free((void*)Q); free((void*)c_kv); }
+    aa_drop_(Q); aa_drop_(c_kv);
     return out;
+}
+
+void EgMla::collect_params(&Vec<&Tensor> out) const {
+    out.push(self.Wq);
+    out.push(self.Wdkv);
+    unsigned long g = 0UL;
+    while (g < self.Wuk.length()) { out.push(*self.Wuk.at(g)); out.push(*self.Wuv.at(g)); g = g + 1UL; }
+}
+
+void EgMla::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+
+void EgMla::free() {
+    aa_drop_(self.Wq);
+    aa_drop_(self.Wdkv);
+    unsigned long g = 0UL;
+    while (g < self.Wuk.length()) { aa_drop_(*self.Wuk.at(g)); aa_drop_(*self.Wuv.at(g)); g = g + 1UL; }
+    self.Wuk.free();
+    self.Wuv.free();
 }
 
 // ── Shifted-window attention ─────────────────────────────────────────────────
@@ -263,5 +315,12 @@ void GatedDeltaNet::free() {
 
     return out;
 }
+
+void GatedDeltaNet::collect_params(&Vec<&Tensor> out) const {
+    out.push(self.Walpha);
+    out.push(self.Wbeta);
+}
+
+void GatedDeltaNet::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
 
 } // namespace std

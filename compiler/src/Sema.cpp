@@ -51,6 +51,44 @@ const Sema::TraitDef Sema::builtinTraits_[] = {
     { "", {} }  // sentinel
 };
 
+bool Sema::isBuiltinTrait(const std::string &trait) const {
+    for (auto *td = builtinTraits_; !td->name.empty(); ++td)
+        if (td->name == trait) return true;
+    return false;
+}
+
+// Supertraits must name a trait (user or builtin) and must not lead back to
+// the trait itself. An offending edge is reported and dropped, so the
+// remaining graph is acyclic.
+void Sema::checkTraitSupertraits() {
+    std::unordered_map<std::string, int> state;   // 0 unvisited, 1 on the path, 2 done
+    std::function<void(const std::string &)> visit = [&](const std::string &t) {
+        state[t] = 1;
+        auto &supers = userTraitSupers_[t];
+        for (size_t i = 0; i < supers.size();) {
+            const std::string &s = supers[i];
+            bool known = userTraits_.count(s) || isBuiltinTrait(s) || s == "Indexed" || s == "Pointer";
+            if (!known) {
+                diag_.error(userTraitLocs_[t], "unknown supertrait '" + s + "' of trait '" + t + "'");
+                supers.erase(supers.begin() + (long)i);
+                continue;
+            }
+            if (userTraits_.count(s)) {
+                if (state[s] == 1) {
+                    diag_.error(userTraitLocs_[t], "trait '" + t + "' is its own supertrait (through '" + s + "')");
+                    supers.erase(supers.begin() + (long)i);
+                    continue;
+                }
+                if (state[s] == 0) visit(s);
+            }
+            ++i;
+        }
+        state[t] = 2;
+    };
+    for (auto &[name, _] : userTraits_)
+        if (state[name] == 0) visit(name);
+}
+
 bool Sema::satisfiesTrait(const TypePtr &ty, const std::string &trait) const {
     if (trait.empty()) return true;
     if (!ty) return false;
@@ -71,8 +109,9 @@ bool Sema::satisfiesTrait(const TypePtr &ty, const std::string &trait) const {
         return ty->kind == TypeKind::Pointer || ty->kind == TypeKind::Reference;
     }
 
-    // Primitive numeric types satisfy Numeric/Ord/Eq/Add/Sub/Mul/Div
-    if (ty->isArithmetic()) return true;
+    // Primitive numeric types satisfy Numeric/Ord/Eq/Add/Sub/Mul/Div — not
+    // user traits, which name methods a primitive doesn't have.
+    if (ty->isArithmetic()) return isBuiltinTrait(trait);
     // Struct types: check if they have the required operator/method names —
     // whether 'trait' names a builtin trait or a user 'trait Name { ... }'
     // declaration, both are just a list of required method names.
@@ -95,6 +134,10 @@ bool Sema::satisfiesTrait(const TypePtr &ty, const std::string &trait) const {
                 if (methodRegistry_.find(key) == methodRegistry_.end())
                     return false;
             }
+            auto sit = userTraitSupers_.find(trait);
+            if (sit != userTraitSupers_.end())
+                for (auto &super : sit->second)
+                    if (!satisfiesTrait(ty, super)) return false;
             return true;
         }
     }
@@ -253,7 +296,7 @@ TypePtr Sema::resolveType(TypePtr ty) {
                     nt->typeArgs = resolvedArgs;
                     return nt;
                 }
-            return instantiateGenericStruct(st.name, resolvedArgs, SourceLocation{});
+            return instantiateGenericStruct(st.name, resolvedArgs, typeUseLoc_);
         }
         if (!st.isDefined) {
             auto it = typeRegistry_.find(st.name);
@@ -302,6 +345,7 @@ bool Sema::run() {
     // Global scope
     pushScope();
     collectDecls(tu_);
+    checkTraitSupertraits();
     for (auto &d : tu_.decls) checkDecl(*d);
 
     // Append monomorphized generic struct instances (before the function
@@ -363,6 +407,8 @@ void Sema::collectDecls(TranslationUnit &tu) {
             std::vector<std::string> methodNames;
             for (auto &m : td.methods) methodNames.push_back(m.name);
             userTraits_[td.name] = std::move(methodNames);
+            userTraitSupers_[td.name] = td.supertraits;
+            userTraitLocs_[td.name] = td.loc;
             break;
         }
         default: break;
@@ -1085,6 +1131,7 @@ void Sema::collectGlobalVar(GlobalVarDecl &gv) {
 
 // ── Pass 2: Check bodies ──────────────────────────────────────────────────────
 void Sema::checkDecl(Decl &d) {
+    if (d.loc.line) typeUseLoc_ = d.loc;
     switch (d.kind) {
     case DeclKind::Function:
         checkFunction(static_cast<FunctionDecl &>(d));
@@ -1345,6 +1392,7 @@ static void resolveMatchArmPatterns(std::vector<MatchPattern> &patterns,
 
 // ── Statement checking ────────────────────────────────────────────────────────
 void Sema::checkStmt(Stmt &s, FunctionDecl &fn) {
+    if (s.loc.line) typeUseLoc_ = s.loc;
     switch (s.kind) {
     case StmtKind::Compound:     checkCompound(static_cast<CompoundStmt &>(s), fn);    break;
     case StmtKind::If:           checkIf(static_cast<IfStmt &>(s), fn);                break;

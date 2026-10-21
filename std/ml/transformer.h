@@ -14,6 +14,8 @@
 #include <std/ml/activations.h>
 #include <std/collections/slice.h>
 
+#include <std/collections/vec.h>
+
 namespace std {
 
 // ── DiT (adaLN conditioning) ─────────────────────────────────────────────────
@@ -38,6 +40,9 @@ struct DiTBlock {
     unsigned long numHeads;
 
     &Tensor forward(const &Tensor x, const &Tensor c) const;
+    // Parameterized (module.h): every weight tensor.
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     void free();
 };
 
@@ -46,7 +51,7 @@ struct DiTBlock dit_block_new(unsigned long dModel, unsigned long dHidden,
 
 // ── JiT (plain pre-LN transformer, additive conditioning) ───────────────────
 // Conditioning is added directly to the token embeddings once, up front
-// (jit_forward), rather than modulating every block's normalization the
+// (JiT::forward), rather than modulating every block's normalization the
 // way DiT's adaLN does — the architectural distinction this
 // implementation draws between the two. Each block is an ordinary
 // pre-LN transformer sublayer pair:
@@ -59,15 +64,28 @@ struct JiTBlock {
     unsigned long numHeads;
 
     &Tensor forward(const &Tensor x) const;
+    // Parameterized (module.h): every weight tensor.
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     void free();
 };
 
 struct JiTBlock jit_block_new(unsigned long dModel, unsigned long dHidden, unsigned long numHeads);
 
-// patches: [seqLen, patchDim], WPatchEmbed: [patchDim, dModel], cond:
-// [1, dModel] (broadcast-added to every token's embedding once, up
-// front). Runs each of 'blocks' in order (caller-owned).
-&Tensor jit_forward(const &Tensor patches, const &Tensor WPatchEmbed, const &Tensor cond,
-                     struct Slice<JiTBlock> blocks);
+// A JiT model: the patch embedding and a stack of JiTBlocks.
+// patches: [seqLen, patchDim]; cond: [1, dModel], broadcast-added to every
+// token's embedding once, up front.
+struct JiT {
+    &Tensor WPatchEmbed;               // [patchDim, dModel]
+    struct Vec<struct JiTBlock> blocks;
+
+    &Tensor forward(const &Tensor patches, const &Tensor cond) const;   // -> [seqLen, dModel]
+    // Parameterized (module.h): the embedding, then each block's weights.
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
+    void free();
+};
+struct JiT jit_new(unsigned long patchDim, unsigned long dModel, unsigned long dHidden, unsigned long numHeads,
+                   unsigned long depth);
 
 } // namespace std

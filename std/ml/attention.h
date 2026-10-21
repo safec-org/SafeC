@@ -23,6 +23,8 @@
 // fp32/fp16/bf16, with the same argument forms -- and gpu_rocm.h's
 // rocm_flash_attention / rocm_linear_attention (AMD, fp32).
 #include <std/ml/tensor.h>
+#include <std/ml/nn.h>
+#include <std/collections/vec.h>
 
 namespace std {
 
@@ -88,5 +90,28 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src);
 // Q: [seqLen,headDim], K/V: [kvLen,headDim] -> result: [seqLen,headDim].
 &Tensor flash_attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
                                  unsigned long kvBlockSize);
+
+// ── Multi-head self-attention layer ──────────────────────────────────────────
+// The projections around mha_forward as one layer (forward only, like the
+// ops above):
+//   out = mha_forward(X Wq, X Wk, X Wv, numHeads) Wo      X: [seqLen, dModel]
+struct MultiHeadAttention {
+    &Tensor Wq;   // [dModel, dModel]
+    &Tensor Wk;
+    &Tensor Wv;
+    &Tensor Wo;
+    unsigned long numHeads;
+
+    &Tensor forward(const &Tensor X) const;   // [seqLen, dModel] -> [seqLen, dModel]
+    // Parameterized (module.h): Wq, Wk, Wv, Wo.
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
+    void free();
+};
+// Weights U(-1/sqrt(dModel), 1/sqrt(dModel)) from rng; numHeads divides dModel.
+struct MultiHeadAttention mha_new(unsigned long dModel, unsigned long numHeads, &Rng rng);
+
+// Internal: a [rows, cols] weight, U(-1/sqrt(rows), 1/sqrt(rows)) from rng.
+&Tensor attn_weight_(unsigned long rows, unsigned long cols, &Rng rng);
 
 } // namespace std

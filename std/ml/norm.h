@@ -32,7 +32,9 @@ struct LayerNorm {
     float eps;       // 1e-5
 
     &Tensor forward(const &Tensor x) const;
-    void add_params(&Optimizer opt) const;
+    // Parameterized (module.h): the trained tensors, and what a copy or a file carries.
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     void free();
 };
 struct LayerNorm layer_norm_new(unsigned long dim);
@@ -47,7 +49,9 @@ struct AdaLN {
 
     // x [m, dim], cond [m, condDim] (one conditioning row per sample).
     struct AdaLNOut forward(const &Tensor x, const &Tensor cond) const;
-    void add_params(&Optimizer opt) const;
+    // Parameterized (module.h): the trained tensors, and what a copy or a file carries.
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     void free();
 };
 struct AdaLNOut {

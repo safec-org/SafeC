@@ -774,16 +774,20 @@ struct EnumDecl : Decl {
         : Decl(DeclKind::Enum, std::move(n), l) {}
 };
 
-// ── Trait declaration: trait Name { RetType method(Params); ... } ────────────
+// ── Trait declaration: trait Name [: Super + ...] { RetType method(Params); ... }
 // A user-definable generic constraint: 'generic<T: Name>' is satisfied by any
 // type that has a method matching each required name (checked by name only,
 // same fidelity as the builtin traits in Sema::builtinTraits_ — neither
 // verifies full signature compatibility, just that a same-named method
-// exists). 'methods' reuses MethodDecl's (name, returnType, params, isConst)
-// shape purely for the declared signature's documentation/hover value; only
-// '.name' is currently enforced.
+// exists) and that satisfies every supertrait. 'methods' reuses MethodDecl's
+// (name, returnType, params, isConst) shape purely for the declared
+// signature's documentation/hover value; only '.name' is currently enforced.
+// 'supertraits' composes traits: 'trait Module : Parameterized { ... }'
+// requires Parameterized's methods too, and 'trait Both : A + B {}' is the
+// conjunction of A and B. A supertrait is a user trait or a builtin one.
 struct TraitDecl : Decl {
     std::vector<MethodDecl> methods;
+    std::vector<std::string> supertraits;
     TraitDecl(std::string n, SourceLocation l)
         : Decl(DeclKind::Trait, std::move(n), l) {}
 };

@@ -72,17 +72,16 @@ static &Tensor __add_broadcast_row_dispatch(&Tensor mat, &Tensor row) {
     return out;
 }
 
-&Tensor jit_forward_on(const &Tensor patches, const &Tensor WPatchEmbed, const &Tensor cond,
-                        struct Slice<JiTBlock> blocks, enum Device device) {
-    unsigned long numBlocks = blocks.length();
-    &Tensor embedRaw = tensor_matmul_on(patches, WPatchEmbed, device);
+&Tensor jit_forward_on(const &JiT model, const &Tensor patches, const &Tensor cond, enum Device device) {
+    unsigned long numBlocks = model.blocks.length();
+    &Tensor embedRaw = tensor_matmul_on(patches, model.WPatchEmbed, device);
     &Tensor x = __add_broadcast_row_dispatch(embedRaw, cond);
     embedRaw->free();
     unsafe { free((void*)embedRaw); }
 
     unsigned long i = 0UL;
     while (i < numBlocks) {
-        &JiTBlock blk = blocks.at(i);
+        &JiTBlock blk = model.blocks.at(i);
         unsafe {
             &Tensor next = jit_block_forward_on(blk, x, device);
             x->free();

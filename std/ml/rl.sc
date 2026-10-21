@@ -2,6 +2,7 @@
 #pragma once
 #include <std/stddef.h>
 #include <std/ml/rl.h>
+#include <std/ml/module.h>
 #include <std/ml/tensor.h>
 #include <std/ml/tensor_nn.h>
 #include <std/ml/nn.h>
@@ -471,9 +472,9 @@ struct Dqn dqn_new(unsigned long obsDim, unsigned long actions, const &DqnConfig
     d.rng = rng_new(cfg.seed);
     d.q = mlp_new(obsDim, cfg.hidden, cfg.hiddenLayers, actions, ACT_RELU, ACT_NONE, &d.rng);
     d.target = mlp_new(obsDim, cfg.hidden, cfg.hiddenLayers, actions, ACT_RELU, ACT_NONE, &d.rng);
-    d.target.copy(&d.q);
+    model_copy(&d.target, &d.q);
     d.opt = optimizer_new(OPT_ADAM, cfg.lr);
-    d.q.add_params(&d.opt);
+    model_add_params(&d.q, &d.opt);
     d.buffer = replay_new(cfg.bufferSize, obsDim);
     d.stepArena = tensor_arena_new(0UL);
     d.obsDim = obsDim;
@@ -555,9 +556,9 @@ static float dqn_train_(&Dqn d) {
     d.opt.step();
     d.updates = d.updates + 1UL;
     if (d.cfg.targetEvery > 0UL) {
-        if (d.updates % d.cfg.targetEvery == 0UL) d.target.copy(&d.q);
+        if (d.updates % d.cfg.targetEvery == 0UL) model_copy(&d.target, &d.q);
     } else {
-        d.target.soft_update(&d.q, d.cfg.tau);
+        model_soft_update(&d.target, &d.q, d.cfg.tau);
     }
     unsafe { return loss->data[0]; }
 }
@@ -622,8 +623,8 @@ struct PolicyAgent pg_new(unsigned long obsDim, unsigned long actions, const &Pg
         while (i < wl->size) { wl->data[i] = wl->data[i] * (float)0.01; i = i + 1UL; }
     }
     a.opt = optimizer_new(OPT_ADAM, cfg.lr);
-    a.policy.add_params(&a.opt);
-    a.value.add_params(&a.opt);
+    model_add_params(&a.policy, &a.opt);
+    model_add_params(&a.value, &a.opt);
     a.stepArena = tensor_arena_new(0UL);
     a.obsDim = obsDim;
     a.actions = actions;
@@ -855,5 +856,19 @@ void PolicyAgent::free() {
     self.rObs.free(); self.rNext.free(); self.rAction.free();
     self.rReward.free(); self.rTerminal.free(); self.rDone.free();
 }
+
+void Dqn::collect_params(&Vec<&Tensor> out) const { self.q.collect_params(out); }
+
+void Dqn::collect_state(&Vec<&Tensor> out) const {
+    self.q.collect_state(out);
+    self.target.collect_state(out);
+}
+
+void PolicyAgent::collect_params(&Vec<&Tensor> out) const {
+    self.policy.collect_params(out);
+    self.value.collect_params(out);
+}
+
+void PolicyAgent::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
 
 } // namespace std

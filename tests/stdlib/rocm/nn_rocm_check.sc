@@ -1,6 +1,7 @@
 // Correctness check for std/ml/nn_rocm (device-resident training) against
 // std::ml's CPU autograd. Needs a ROCm GPU; run with tests/stdlib/rocm/run.sh.
 #include <std/ml/nn_rocm.h>
+#include <std/ml/module.h>
 #include <std/ml/convnet.h>
 #include <std/collections/vec.h>
 #include <std/math.h>
@@ -696,7 +697,7 @@ static void trainer_test_() {
     tc.clipNorm = (float)1.0;
     tc.lrDecay = (float)0.9;
     struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.01);
-    cpu.add_params(&o);
+    model_add_params(&cpu, &o);
     struct TrainReport rc = trainer_fit(&cpu, clf_loss_, &o, &data, &tc);
     struct RocmNet net = rocm_net_from_mlp(&host, 32UL);
     struct RocmOptimizer d = rocm_optimizer_new(OPT_ADAM, (float)0.01);
@@ -741,8 +742,8 @@ static void vae_case_(unsigned long classes) {
     struct TrainConfig tc = train_config_default();
     tc.epochs = 15UL;
     struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.003);
-    cpu.add_params(&o);
-    struct TrainReport rc = trainer_fit(&cpu, vae_loss, &o, &data, &tc);
+    model_add_params(&cpu, &o);
+    struct TrainReport rc = model_fit(&cpu, &o, &data, &tc);
     struct RocmVae dv = rocm_vae_new(&host, 32UL);
     check(dv.ok, "rocm_vae_new");
     struct RocmOptimizer d = rocm_optimizer_new(OPT_ADAM, (float)0.003);
@@ -764,7 +765,7 @@ static void vae_case_(unsigned long classes) {
 }
 
 // ── Convolutional autoencoders ───────────────────────────────────────────────
-static &Tensor cae_loss_(&ConvAutoencoder a, const &Tensor x, const &Tensor y) { return conv_autoencoder_loss(a, x, y); }
+static &Tensor cae_loss_(&ConvAutoencoder a, const &Tensor x, const &Tensor y) { return a.loss(x, y); }
 
 static struct ConvAutoencoder cae_build_() {
     struct Rng rng = rng_new(61UL);
@@ -786,7 +787,7 @@ static void conv_ae_test_() {
     struct TrainConfig tc = train_config_default();
     tc.epochs = 4UL;
     struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.003);
-    cpu.add_params(&o);
+    model_add_params(&cpu, &o);
     struct TrainReport rc = trainer_fit(&cpu, cae_loss_, &o, &data, &tc);
     struct RocmConvAe dev = rocm_conv_autoencoder_new(&host, 32UL);
     check(dev.ok, "rocm_conv_autoencoder_new");
@@ -833,8 +834,8 @@ static void conv_vae_case_(unsigned long classes) {
     struct TrainConfig tc = train_config_default();
     tc.epochs = 15UL;
     struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.003);
-    cpu.add_params(&o);
-    struct TrainReport rc = trainer_fit(&cpu, conv_vae_loss, &o, &data, &tc);
+    model_add_params(&cpu, &o);
+    struct TrainReport rc = model_fit(&cpu, &o, &data, &tc);
     struct RocmVae dv = rocm_conv_vae_new(&host, 32UL);
     check(dv.ok, "rocm_conv_vae_new");
     struct RocmOptimizer d = rocm_optimizer_new(OPT_ADAM, (float)0.003);

@@ -34,7 +34,9 @@
 //
 // The names: MlpTrainer, ConvNetTrainer, VaeTrainer, ConvVaeTrainer and
 // ConvAeTrainer (Trainable), GanTrainer and DcganTrainer (GanTrainable),
-// DqnLearner (ValueAgent), PgLearner (PolicyLearner). ML_TRAIN_BACKEND is
+// DqnLearner (ValueAgent), PgLearner (PolicyLearner). On the CPU any other
+// Module trains the same way with cpu_module_trainer_new, and any LossModel
+// with cpu_model_trainer_new. ML_TRAIN_BACKEND is
 // the backend's name as a string.
 #include <std/ml/train_traits.h>
 
@@ -87,31 +89,31 @@ static PgLearner pg_learner_new(struct PolicyAgent a, const &TrainerOptions o) {
 #define ML_TRAIN_BACKEND "cpu"
 typedef struct CpuTrainer<struct Mlp> MlpTrainer;
 typedef struct CpuTrainer<struct ConvNet> ConvNetTrainer;
-typedef struct CpuTrainer<struct Vae> VaeTrainer;
-typedef struct CpuTrainer<struct ConvVae> ConvVaeTrainer;
-typedef struct CpuTrainer<struct ConvAutoencoder> ConvAeTrainer;
+typedef struct CpuModelTrainer<struct Vae> VaeTrainer;
+typedef struct CpuModelTrainer<struct ConvVae> ConvVaeTrainer;
+typedef struct CpuModelTrainer<struct ConvAutoencoder> ConvAeTrainer;
 typedef struct CpuGanTrainer<struct Gan> GanTrainer;
 typedef struct CpuGanTrainer<struct Dcgan> DcganTrainer;
 typedef struct CpuDqnAgent DqnLearner;
 typedef struct CpuPgAgent PgLearner;
 
 static MlpTrainer mlp_trainer_new(struct Mlp m, int loss, const &Optimizer opt, const &TrainerOptions o) {
-    return cpu_mlp_trainer_new(m, loss, opt);
+    return cpu_module_trainer_new(m, loss, opt);
 }
 static ConvNetTrainer convnet_trainer_new(struct ConvNet n, int loss, const &Optimizer opt, const &TrainerOptions o) {
-    return cpu_convnet_trainer_new(n, loss, opt);
+    return cpu_module_trainer_new(n, loss, opt);
 }
 static VaeTrainer vae_trainer_new(struct Vae v, const &Optimizer opt, const &TrainerOptions o) {
-    return cpu_vae_trainer_new(v, opt);
+    return cpu_model_trainer_new(v, opt);
 }
 static ConvVaeTrainer conv_vae_trainer_new(struct ConvVae v, const &Optimizer opt, const &TrainerOptions o) {
-    return cpu_conv_vae_trainer_new(v, opt);
+    return cpu_model_trainer_new(v, opt);
 }
 static ConvAeTrainer conv_ae_trainer_new(struct ConvAutoencoder ae, const &Optimizer opt, const &TrainerOptions o) {
-    return cpu_conv_ae_trainer_new(ae, opt);
+    return cpu_model_trainer_new(ae, opt);
 }
 static GanTrainer gan_trainer_new(struct Gan g, const &TrainerOptions o) { return cpu_gan_trainer_new(g); }
-static DcganTrainer dcgan_trainer_new(struct Dcgan g, const &TrainerOptions o) { return cpu_dcgan_trainer_new(g); }
+static DcganTrainer dcgan_trainer_new(struct Dcgan g, const &TrainerOptions o) { return cpu_gan_trainer_new(g); }
 static DqnLearner dqn_learner_new(struct Dqn d) { return cpu_dqn_agent_new(d); }
 // o.maxBatch: the longest rollout PolicyAgent::update will see (a device's limit).
 static PgLearner pg_learner_new(struct PolicyAgent a, const &TrainerOptions o) { return cpu_pg_agent_new(a); }

@@ -107,17 +107,10 @@ struct Mlp {
     int outAct;
 
     &Tensor forward(const &Tensor x) const;   // [batch, inDim] -> [batch, outDim]
-    unsigned long param_count() const;
-    // self = src (same shapes), and self = tau * src + (1 - tau) * self: target
-    // networks in DQN and other off-policy RL.
-    void copy(const &Mlp src);
-    void soft_update(const &Mlp src, float tau);
+    // Parameterized (module.h): the trained tensors, and what a copy or a file carries.
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     void free();
-    // An Mlp's parameters (load into an Mlp built with the same sizes).
-    int save_file(const &char path) const;
-    int load_file(const &char path);
-    // Every parameter into o (Optimizer::add).
-    void add_params(&Optimizer o) const;
 };
 struct Mlp mlp_new(unsigned long inDim, unsigned long hidden, unsigned long hiddenLayers,
                    unsigned long outDim, int act, int outAct, &Rng rng);

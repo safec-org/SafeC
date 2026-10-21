@@ -680,31 +680,12 @@ static &Tensor mlp_layer_(const &Mlp m, unsigned long l, const &Tensor x) {
     return h;
 }
 
-unsigned long Mlp::param_count() const {
-    unsigned long n = 0UL;
+void Mlp::collect_params(&Vec<&Tensor> out) const {
     unsigned long i = 0UL;
-    while (i < self.params.length()) {
-        &Tensor p = *self.params.at(i);
-        unsafe { n = n + p->size; }
-        i = i + 1UL;
-    }
-    return n;
+    while (i < self.params.length()) { out.push(*self.params.at(i)); i = i + 1UL; }
 }
 
-void Mlp::soft_update(const &Mlp src, float tau) {
-    unsigned long i = 0UL;
-    while (i < self.params.length()) {
-        &Tensor d = *self.params.at(i);
-        &Tensor s = *src.params.at(i);
-        unsafe {
-            unsigned long j = 0UL;
-            while (j < d->size) { d->data[j] = tau * s->data[j] + ((float)1.0 - tau) * d->data[j]; j = j + 1UL; }
-        }
-        i = i + 1UL;
-    }
-}
-
-void Mlp::copy(const &Mlp src) { self.soft_update(src, (float)1.0); }
+void Mlp::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
 
 void Mlp::free() {
     unsigned long i = 0UL;
@@ -753,11 +734,6 @@ void Optimizer::add(&Tensor param) {
     self.m.push(tensor_new_1d(n, 0));
     self.v.push(tensor_new_1d(n, 0));
     nn_heap_end_(cur);
-}
-
-void Mlp::add_params(&Optimizer o) const {
-    unsigned long i = 0UL;
-    while (i < self.params.length()) { o.add(*self.params.at(i)); i = i + 1UL; }
 }
 
 void Optimizer::zero_grad() {
@@ -1049,7 +1025,5 @@ int tensors_load(&Vec<&Tensor> ts, const &char path) {
     return 0;
 }
 
-int Mlp::save_file(const &char path) const { return tensors_save(&self.params, path); }
-int Mlp::load_file(const &char path) { return tensors_load(&self.params, path); }
 
 } // namespace std

@@ -2223,17 +2223,6 @@ static &Tensor cn_layer_forward_(const &ConvNet n, const &ConvLayer l, const &Te
     return h;
 }
 
-unsigned long ConvNet::param_count() const {
-    unsigned long c = 0UL;
-    unsigned long i = 0UL;
-    while (i < self.params.length()) {
-        &Tensor p = *self.params.at(i);
-        unsafe { c = c + p->size; }
-        i = i + 1UL;
-    }
-    return c;
-}
-
 // ── Folding batch norms into the preceding layer ─────────────────────────────
 // y = gamma (z - mean) / sqrt(var + eps) + beta with z = W x + b is
 // (s W) x + (s (b - mean) + beta), s = gamma / sqrt(var + eps) per output
@@ -2345,42 +2334,18 @@ static void cn_blend_list_(&Vec<&Tensor> dst, const &Vec<&Tensor> src, float tau
     }
 }
 
-void ConvNet::soft_update(const &ConvNet src, float tau) {
-    cn_blend_list_(&self.params, &src.params, tau);
-    cn_blend_list_(&self.buffers, &src.buffers, tau);
+void ConvNet::collect_params(&Vec<&Tensor> out) const {
+    unsigned long i = 0UL;
+    while (i < self.params.length()) { out.push(*self.params.at(i)); i = i + 1UL; }
 }
 
-void ConvNet::copy(const &ConvNet src) { self.soft_update(src, (float)1.0); }
-
-void ConvNet::add_params(&Optimizer o) const {
+void ConvNet::collect_state(&Vec<&Tensor> out) const {
+    self.collect_params(out);
     unsigned long i = 0UL;
-    while (i < self.params.length()) { o.add(*self.params.at(i)); i = i + 1UL; }
+    while (i < self.buffers.length()) { out.push(*self.buffers.at(i)); i = i + 1UL; }
 }
 
 // params, then buffers
-static struct Vec<&Tensor> cn_all_tensors_(const &ConvNet n) {
-    struct Vec<&Tensor> all = vec_new();
-    unsigned long i = 0UL;
-    while (i < n.params.length()) { all.push(*n.params.at(i)); i = i + 1UL; }
-    i = 0UL;
-    while (i < n.buffers.length()) { all.push(*n.buffers.at(i)); i = i + 1UL; }
-    return all;
-}
-
-int ConvNet::save_file(const &char path) const {
-    struct Vec<&Tensor> all = cn_all_tensors_(self);
-    int ok = tensors_save(&all, path);
-    all.free();
-    return ok;
-}
-
-int ConvNet::load_file(const &char path) {
-    struct Vec<&Tensor> all = cn_all_tensors_(self);
-    int ok = tensors_load(&all, path);
-    all.free();
-    return ok;
-}
-
 static void cn_free_list_(&Vec<&Tensor> v) {
     unsigned long i = 0UL;
     while (i < v.length()) {

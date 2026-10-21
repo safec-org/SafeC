@@ -152,10 +152,12 @@ struct LayerNorm layer_norm_new(unsigned long dim) {
     return tensor_add_bias(tensor_mul_row(tensor_layer_norm(x, self.eps), self.gamma), self.beta);
 }
 
-void LayerNorm::add_params(&Optimizer opt) const {
-    opt.add(self.gamma);
-    opt.add(self.beta);
+void LayerNorm::collect_params(&Vec<&Tensor> out) const {
+    out.push(self.gamma);
+    out.push(self.beta);
 }
+
+void LayerNorm::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
 
 void LayerNorm::free() {
     norm_drop_(self.gamma);
@@ -196,10 +198,12 @@ struct AdaLNOut AdaLN::forward(const &Tensor x, const &Tensor cond) const {
     return o;
 }
 
-void AdaLN::add_params(&Optimizer opt) const {
-    opt.add(self.W);
-    opt.add(self.b);
+void AdaLN::collect_params(&Vec<&Tensor> out) const {
+    out.push(self.W);
+    out.push(self.b);
 }
+
+void AdaLN::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
 
 void AdaLN::free() {
     norm_drop_(self.W);

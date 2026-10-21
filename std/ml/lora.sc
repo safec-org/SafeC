@@ -112,24 +112,13 @@ struct LoraMlp lora_attach(&Mlp base, const &LoraConfig cfg) {
     return h;
 }
 
-void LoraMlp::add_params(&Optimizer opt) const {
+static void lora_collect_(const &Vec<&Tensor> As, const &Vec<&Tensor> Bs, &Vec<&Tensor> out) {
     unsigned long k = 0UL;
-    while (k < self.A.length()) { opt.add(*self.A.at(k)); opt.add(*self.B.at(k)); k = k + 1UL; }
+    while (k < As.length()) { out.push(*As.at(k)); out.push(*Bs.at(k)); k = k + 1UL; }
 }
 
-static unsigned long lora_count_(const &Vec<&Tensor> As, const &Vec<&Tensor> Bs) {
-    unsigned long n = 0UL;
-    unsigned long k = 0UL;
-    while (k < As.length()) {
-        &Tensor a = *As.at(k);
-        &Tensor b = *Bs.at(k);
-        unsafe { n = n + a->size + b->size; }
-        k = k + 1UL;
-    }
-    return n;
-}
-
-unsigned long LoraMlp::param_count() const { return lora_count_(&self.A, &self.B); }
+void LoraMlp::collect_params(&Vec<&Tensor> out) const { lora_collect_(&self.A, &self.B, out); }
+void LoraMlp::collect_state(&Vec<&Tensor> out) const { lora_collect_(&self.A, &self.B, out); }
 
 void LoraMlp::merge() {
     unsigned long k = 0UL;
@@ -375,12 +364,8 @@ struct QLoraMlp qlora_attach(const &Mlp base, const &LoraConfig cfg, unsigned lo
     return h;
 }
 
-void QLoraMlp::add_params(&Optimizer opt) const {
-    unsigned long k = 0UL;
-    while (k < self.A.length()) { opt.add(*self.A.at(k)); opt.add(*self.B.at(k)); k = k + 1UL; }
-}
-
-unsigned long QLoraMlp::param_count() const { return lora_count_(&self.A, &self.B); }
+void QLoraMlp::collect_params(&Vec<&Tensor> out) const { lora_collect_(&self.A, &self.B, out); }
+void QLoraMlp::collect_state(&Vec<&Tensor> out) const { lora_collect_(&self.A, &self.B, out); }
 
 unsigned long QLoraMlp::base_bytes() const {
     unsigned long n = 0UL;

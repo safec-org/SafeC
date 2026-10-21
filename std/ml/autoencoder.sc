@@ -73,37 +73,32 @@ struct Autoencoder autoencoder_new(unsigned long inDim, const &AutoencoderConfig
     return self.decode(self.encode(x));
 }
 
-&Tensor autoencoder_loss(&Autoencoder ae, const &Tensor x, const &Tensor y) {
+&Tensor Autoencoder::loss(const &Tensor x, const &Tensor y) {
     // the encoder's input: a copy of x, corrupted for a denoising AE
     &Tensor noisy = tensor_detach(x);
-    int corrupt = ae.cfg.noiseStd > (float)0.0 || ae.cfg.dropProb > (float)0.0;
+    int corrupt = self.cfg.noiseStd > (float)0.0 || self.cfg.dropProb > (float)0.0;
     if (corrupt) {
         unsafe {
             unsigned long i = 0UL;
             while (i < noisy->size) {
-                float v = noisy->data[i] + ae.cfg.noiseStd * ae.rng.normal();
-                if (ae.cfg.dropProb > (float)0.0 && ae.rng.uniform() < ae.cfg.dropProb) v = (float)0.0;
+                float v = noisy->data[i] + self.cfg.noiseStd * self.rng.normal();
+                if (self.cfg.dropProb > (float)0.0 && self.rng.uniform() < self.cfg.dropProb) v = (float)0.0;
                 noisy->data[i] = v;
                 i = i + 1UL;
             }
         }
     }
-    &Tensor z = ae.enc.forward(noisy);
-    &Tensor out = ae.dec.forward(z);
-    &Tensor loss = ae_recon_mean_(out, x, ae.cfg.recon);
-    ae.lastRecon = ae_value_(loss);
-    ae.lastPenalty = (float)0.0;
-    if (ae.cfg.sparsity > (float)0.0) {
-        &Tensor pen = tensor_scale(tensor_mean(tensor_abs(z)), ae.cfg.sparsity);
-        ae.lastPenalty = ae_value_(pen);
+    &Tensor z = self.enc.forward(noisy);
+    &Tensor out = self.dec.forward(z);
+    &Tensor loss = ae_recon_mean_(out, x, self.cfg.recon);
+    self.lastRecon = ae_value_(loss);
+    self.lastPenalty = (float)0.0;
+    if (self.cfg.sparsity > (float)0.0) {
+        &Tensor pen = tensor_scale(tensor_mean(tensor_abs(z)), self.cfg.sparsity);
+        self.lastPenalty = ae_value_(pen);
         loss = tensor_add(loss, pen);
     }
     return loss;
-}
-
-void Autoencoder::add_params(&Optimizer opt) const {
-    self.enc.add_params(opt);
-    self.dec.add_params(opt);
 }
 
 void Autoencoder::free() {
@@ -161,20 +156,20 @@ static &Tensor vae_kl_(const &Tensor mu, const &Tensor logvar, float rows) {
     return tensor_scale(tensor_sum(inner), (float)-0.5 / rows);
 }
 
-&Tensor vae_loss(&Vae v, const &Tensor x, const &Tensor y) {
-    &Tensor h = v.enc.forward(vae_cond_(v, x, y));
-    &Tensor mu = v.muHead.forward(h);
-    &Tensor logvar = v.logvarHead.forward(h);
+&Tensor Vae::loss(const &Tensor x, const &Tensor y) {
+    &Tensor h = self.enc.forward(vae_cond_(self, x, y));
+    &Tensor mu = self.muHead.forward(h);
+    &Tensor logvar = self.logvarHead.forward(h);
     unsigned long m = ae_rows_(x);
     float rows = (float)m;
-    &Tensor z = vae_reparam_(&v.rng, mu, logvar, m, v.cfg.latent);
-    &Tensor out = v.dec.forward(vae_cond_(v, z, y));
+    &Tensor z = vae_reparam_(&self.rng, mu, logvar, m, self.cfg.latent);
+    &Tensor out = self.dec.forward(vae_cond_(self, z, y));
     // reconstruction summed over features, averaged over the batch
-    &Tensor recon = tensor_scale(ae_recon_mean_(out, x, v.cfg.recon), ae_cols_(x));
+    &Tensor recon = tensor_scale(ae_recon_mean_(out, x, self.cfg.recon), ae_cols_(x));
     &Tensor kl = vae_kl_(mu, logvar, rows);
-    v.lastRecon = ae_value_(recon);
-    v.lastKl = ae_value_(kl);
-    return tensor_add(recon, tensor_scale(kl, v.cfg.beta));
+    self.lastRecon = ae_value_(recon);
+    self.lastKl = ae_value_(kl);
+    return tensor_add(recon, tensor_scale(kl, self.cfg.beta));
 }
 
 &Tensor Vae::encode(const &Tensor x, const &Tensor y) {
@@ -197,13 +192,6 @@ static &Tensor vae_kl_(const &Tensor mu, const &Tensor logvar, float rows) {
     }
     &Tensor none = tensor_new_1d(n, 0);   // class 0 if a CVAE is sampled without labels
     return self.decode(z, none);
-}
-
-void Vae::add_params(&Optimizer opt) const {
-    self.enc.add_params(opt);
-    self.muHead.add_params(opt);
-    self.logvarHead.add_params(opt);
-    self.dec.add_params(opt);
 }
 
 void Vae::free() {
@@ -338,22 +326,22 @@ static void vq_count_use_(&VqVae v, const &Tensor idx) {
     }
 }
 
-&Tensor vqvae_loss(&VqVae v, const &Tensor x, const &Tensor y) {
-    &Tensor ze = v.enc.forward(x);
-    vq_maintain_(v, ze);
-    &Tensor idx = vq_nearest_(v, ze);
-    vq_count_use_(v, idx);
-    &Tensor zq = tensor_gather_rows(v.codebook, idx);
+&Tensor VqVae::loss(const &Tensor x, const &Tensor y) {
+    &Tensor ze = self.enc.forward(x);
+    vq_maintain_(self, ze);
+    &Tensor idx = vq_nearest_(self, ze);
+    vq_count_use_(self, idx);
+    &Tensor zq = tensor_gather_rows(self.codebook, idx);
     // straight-through: forward zq, backward d/dze = identity
     &Tensor st = tensor_add(ze, tensor_detach(tensor_sub(zq, ze)));
-    &Tensor out = v.dec.forward(st);
-    &Tensor recon = ae_recon_mean_(out, x, v.cfg.recon);
+    &Tensor out = self.dec.forward(st);
+    &Tensor recon = ae_recon_mean_(out, x, self.cfg.recon);
     &Tensor book = tensor_mse_loss(zq, tensor_detach(ze));
     &Tensor commit = tensor_mse_loss(ze, tensor_detach(zq));
-    &Tensor vq = tensor_add(book, tensor_scale(commit, v.cfg.commitment));
-    v.lastRecon = ae_value_(recon);
-    v.lastVq = ae_value_(vq);
-    v.lastPerplexity = vq_perplexity_(idx, v.cfg.codes);
+    &Tensor vq = tensor_add(book, tensor_scale(commit, self.cfg.commitment));
+    self.lastRecon = ae_value_(recon);
+    self.lastVq = ae_value_(vq);
+    self.lastPerplexity = vq_perplexity_(idx, self.cfg.codes);
     return tensor_add(recon, vq);
 }
 
@@ -364,12 +352,6 @@ static void vq_count_use_(&VqVae v, const &Tensor idx) {
 }
 
 &Tensor VqVae::reconstruct(const &Tensor x) { return self.decode(self.encode(x)); }
-
-void VqVae::add_params(&Optimizer opt) const {
-    self.enc.add_params(opt);
-    self.dec.add_params(opt);
-    opt.add(self.codebook);
-}
 
 void VqVae::free() {
     self.enc.free();
@@ -415,16 +397,11 @@ struct ConvAutoencoder conv_autoencoder_new(struct ConvNet enc, struct ConvNet d
     return self.decode(self.encode(x));
 }
 
-&Tensor conv_autoencoder_loss(&ConvAutoencoder ae, const &Tensor x, const &Tensor y) {
-    &Tensor out = ae.dec.forward(ae.enc.forward(x));
-    &Tensor loss = ae_recon_mean_(out, x, ae.recon);
-    ae.lastRecon = ae_value_(loss);
+&Tensor ConvAutoencoder::loss(const &Tensor x, const &Tensor y) {
+    &Tensor out = self.dec.forward(self.enc.forward(x));
+    &Tensor loss = ae_recon_mean_(out, x, self.recon);
+    self.lastRecon = ae_value_(loss);
     return loss;
-}
-
-void ConvAutoencoder::add_params(&Optimizer opt) const {
-    self.enc.add_params(opt);
-    self.dec.add_params(opt);
 }
 
 void ConvAutoencoder::free() {
@@ -463,18 +440,18 @@ static &Tensor cvae_dec_in_(const &ConvVae v, const &Tensor z, const &Tensor y) 
     return tensor_concat_cols(z, tensor_one_hot(y, v.cfg.classes));
 }
 
-&Tensor conv_vae_loss(&ConvVae v, const &Tensor x, const &Tensor y) {
-    &Tensor h = v.enc.forward(cvae_enc_in_(v, x, y));
-    &Tensor mu = v.muHead.forward(h);
-    &Tensor logvar = v.logvarHead.forward(h);
+&Tensor ConvVae::loss(const &Tensor x, const &Tensor y) {
+    &Tensor h = self.enc.forward(cvae_enc_in_(self, x, y));
+    &Tensor mu = self.muHead.forward(h);
+    &Tensor logvar = self.logvarHead.forward(h);
     unsigned long m = ae_rows_(x);
-    &Tensor z = vae_reparam_(&v.rng, mu, logvar, m, v.cfg.latent);
-    &Tensor out = v.dec.forward(cvae_dec_in_(v, z, y));
-    &Tensor recon = tensor_scale(ae_recon_mean_(out, x, v.cfg.recon), ae_cols_(x));
+    &Tensor z = vae_reparam_(&self.rng, mu, logvar, m, self.cfg.latent);
+    &Tensor out = self.dec.forward(cvae_dec_in_(self, z, y));
+    &Tensor recon = tensor_scale(ae_recon_mean_(out, x, self.cfg.recon), ae_cols_(x));
     &Tensor kl = vae_kl_(mu, logvar, (float)m);
-    v.lastRecon = ae_value_(recon);
-    v.lastKl = ae_value_(kl);
-    return tensor_add(recon, tensor_scale(kl, v.cfg.beta));
+    self.lastRecon = ae_value_(recon);
+    self.lastKl = ae_value_(kl);
+    return tensor_add(recon, tensor_scale(kl, self.cfg.beta));
 }
 
 &Tensor ConvVae::encode(const &Tensor x, const &Tensor y) {
@@ -499,15 +476,68 @@ static &Tensor cvae_dec_in_(const &ConvVae v, const &Tensor z, const &Tensor y) 
     return self.decode(z, none);
 }
 
-void ConvVae::add_params(&Optimizer opt) const {
-    self.enc.add_params(opt);
-    self.muHead.add_params(opt);
-    self.logvarHead.add_params(opt);
-    self.dec.add_params(opt);
-}
-
 void ConvVae::free() {
     self.enc.free(); self.muHead.free(); self.logvarHead.free(); self.dec.free();
+}
+
+void Autoencoder::collect_params(&Vec<&Tensor> out) const {
+    self.enc.collect_params(out);
+    self.dec.collect_params(out);
+}
+
+void Autoencoder::collect_state(&Vec<&Tensor> out) const {
+    self.enc.collect_state(out);
+    self.dec.collect_state(out);
+}
+
+void Vae::collect_params(&Vec<&Tensor> out) const {
+    self.enc.collect_params(out);
+    self.muHead.collect_params(out);
+    self.logvarHead.collect_params(out);
+    self.dec.collect_params(out);
+}
+
+void Vae::collect_state(&Vec<&Tensor> out) const {
+    self.enc.collect_state(out);
+    self.muHead.collect_state(out);
+    self.logvarHead.collect_state(out);
+    self.dec.collect_state(out);
+}
+
+void VqVae::collect_params(&Vec<&Tensor> out) const {
+    self.enc.collect_params(out);
+    self.dec.collect_params(out);
+    out.push(self.codebook);
+}
+
+void VqVae::collect_state(&Vec<&Tensor> out) const {
+    self.enc.collect_state(out);
+    self.dec.collect_state(out);
+    out.push(self.codebook);
+}
+
+void ConvAutoencoder::collect_params(&Vec<&Tensor> out) const {
+    self.enc.collect_params(out);
+    self.dec.collect_params(out);
+}
+
+void ConvAutoencoder::collect_state(&Vec<&Tensor> out) const {
+    self.enc.collect_state(out);
+    self.dec.collect_state(out);
+}
+
+void ConvVae::collect_params(&Vec<&Tensor> out) const {
+    self.enc.collect_params(out);
+    self.muHead.collect_params(out);
+    self.logvarHead.collect_params(out);
+    self.dec.collect_params(out);
+}
+
+void ConvVae::collect_state(&Vec<&Tensor> out) const {
+    self.enc.collect_state(out);
+    self.muHead.collect_state(out);
+    self.logvarHead.collect_state(out);
+    self.dec.collect_state(out);
 }
 
 } // namespace std

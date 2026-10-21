@@ -2,6 +2,7 @@
 #pragma once
 #include <std/stddef.h>
 #include <std/ml/gan.h>
+#include <std/ml/module.h>
 #include <std/ml/tensor.h>
 #include <std/ml/tensor_nn.h>
 #include <std/ml/nn.h>
@@ -45,12 +46,12 @@ struct Gan gan_new(unsigned long dataDim, const &GanConfig cfg) {
     unsigned long c = cfg.classes;
     g.gen = mlp_new(cfg.latent + c, cfg.hidden, cfg.hiddenLayers, dataDim, cfg.genAct, cfg.outAct, &g.rng);
     g.genEma = mlp_new(cfg.latent + c, cfg.hidden, cfg.hiddenLayers, dataDim, cfg.genAct, cfg.outAct, &g.rng);
-    g.genEma.copy(&g.gen);
+    model_copy(&g.genEma, &g.gen);
     g.disc = mlp_new(dataDim + c, cfg.hidden, cfg.hiddenLayers, 1UL, ACT_LEAKY, ACT_NONE, &g.rng);
     g.optG = gan_opt_(cfg.loss, cfg.lrG);
     g.optD = gan_opt_(cfg.loss, cfg.lrD);
-    g.gen.add_params(&g.optG);
-    g.disc.add_params(&g.optD);
+    model_add_params(&g.gen, &g.optG);
+    model_add_params(&g.disc, &g.optD);
     g.stepArena = tensor_arena_new(0UL);
     g.steps = 0UL;
     return g;
@@ -255,9 +256,9 @@ struct GanLosses Gan::train_step(const &Tensor real, ?&Tensor labels) {
     self.optG.step();
     out.g = gan_value_(gl);
     if (self.cfg.emaDecay > (float)0.0) {
-        self.genEma.soft_update(&self.gen, (float)1.0 - gan_ema_decay_(&self.cfg, self.steps));
+        model_soft_update(&self.genEma, &self.gen, (float)1.0 - gan_ema_decay_(&self.cfg, self.steps));
     } else {
-        self.genEma.copy(&self.gen);
+        model_copy(&self.genEma, &self.gen);
     }
     self.stepArena.reset();
     tensor_arena_end();
@@ -292,7 +293,7 @@ struct GanLosses Gan::train(const &Dataset data, unsigned long epochs, unsigned 
     return last;
 }
 
-&Tensor Gan::generate(unsigned long n, ?&Tensor labels) {
+&Tensor Gan::sample(unsigned long n, ?&Tensor labels) {
     ?&TensorArena outer = tensor_arena_current_();
     int was = tensor_is_grad_enabled();
     tensor_set_grad_enabled(0);
@@ -336,8 +337,8 @@ struct Dcgan dcgan_new(struct ConvNet gen, struct ConvNet disc, const &GanConfig
     g.genEma = g.gen.clone();
     g.optG = gan_opt_(cfg.loss, cfg.lrG);
     g.optD = gan_opt_(cfg.loss, cfg.lrD);
-    g.gen.add_params(&g.optG);
-    g.disc.add_params(&g.optD);
+    model_add_params(&g.gen, &g.optG);
+    model_add_params(&g.disc, &g.optD);
     g.stepArena = tensor_arena_new(0UL);
     g.steps = 0UL;
     return g;
@@ -402,8 +403,8 @@ struct GanLosses Dcgan::train_step(const &Tensor real, ?&Tensor labels) {
     tensor_backward(gl);
     self.optG.step();
     out.g = gan_value_(gl);
-    if (self.cfg.emaDecay > (float)0.0) self.genEma.soft_update(&self.gen, (float)1.0 - gan_ema_decay_(&self.cfg, self.steps));
-    else self.genEma.copy(&self.gen);
+    if (self.cfg.emaDecay > (float)0.0) model_soft_update(&self.genEma, &self.gen, (float)1.0 - gan_ema_decay_(&self.cfg, self.steps));
+    else model_copy(&self.genEma, &self.gen);
     self.stepArena.reset();
     tensor_arena_end();
     gan_arena_restore_(outer);
@@ -437,7 +438,7 @@ struct GanLosses Dcgan::train(const &Dataset data, unsigned long epochs, unsigne
     return last;
 }
 
-&Tensor Dcgan::generate(unsigned long n, ?&Tensor labels) {
+&Tensor Dcgan::sample(unsigned long n, ?&Tensor labels) {
     ?&TensorArena outer = tensor_arena_current_();
     int was = tensor_is_grad_enabled();
     tensor_set_grad_enabled(0);
@@ -471,6 +472,28 @@ void Dcgan::free() {
     self.genEma.free();
     self.disc.free();
     self.stepArena.free();
+}
+
+void Gan::collect_params(&Vec<&Tensor> out) const {
+    self.gen.collect_params(out);
+    self.disc.collect_params(out);
+}
+
+void Gan::collect_state(&Vec<&Tensor> out) const {
+    self.gen.collect_state(out);
+    self.genEma.collect_state(out);
+    self.disc.collect_state(out);
+}
+
+void Dcgan::collect_params(&Vec<&Tensor> out) const {
+    self.gen.collect_params(out);
+    self.disc.collect_params(out);
+}
+
+void Dcgan::collect_state(&Vec<&Tensor> out) const {
+    self.gen.collect_state(out);
+    self.genEma.collect_state(out);
+    self.disc.collect_state(out);
 }
 
 } // namespace std
