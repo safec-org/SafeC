@@ -16,6 +16,12 @@ extern size_t strlen(const char* s);
 extern void* strncpy(char* d, const char* s, size_t n);
 
 
+inline struct VfsOps vfs_ops_none_() {
+    struct VfsOps ops;
+    unsafe { memset((void*)&ops, 0, sizeof(struct VfsOps)); }
+    return ops;
+}
+
 inline void vfs_init() {
     unsafe { memset((void*)&vfs_root, 0, sizeof(struct Vfs)); }
     vfs_root.mount_count = 0;
@@ -45,13 +51,35 @@ inline unsigned long VfsNode::write(unsigned long offset, const &unsigned char b
     return (unsigned long)0;
 }
 
+// Hands each entry to the caller's callback with fs_ctx set to the mount,
+// so the entry can be read or listed like a node from Vfs::open.
+struct VfsListing_ {
+    void* cb;     // the caller's fn void(&VfsNode, ?&void)
+    void* user;
+    void* mount;  // struct VfsMount*
+};
+
+static void vfs_listing_entry_(&VfsNode node, ?&void raw) {
+    struct VfsListing_* l;
+    unsafe {
+        l = (struct VfsListing_*)raw;
+        node.fs_ctx = l->mount;
+        fn void(&VfsNode, ?&void) cb = (fn void(&VfsNode, ?&void))l->cb;
+        cb(node, l->user);
+    }
+}
+
 inline int VfsNode::readdir_raw_(void* cb, void* user) {
     if (self.fs_ctx.is_null()) { return -1; }
     struct VfsMount* m;
     unsafe { m = (struct VfsMount*)self.fs_ctx; }
+    struct VfsListing_ l;
     unsafe {
         if (m->ops.readdir == (void*)0) { return -1; }
-        return m->ops.readdir(m->ctx, self.inode, (fn void(&VfsNode, ?&void))cb, user);
+        l.cb = cb;
+        l.user = user;
+        l.mount = (void*)m;
+        return m->ops.readdir(m->ctx, self.inode, vfs_listing_entry_, (?&void)&l);
     }
     return -1;
 }
@@ -116,9 +144,6 @@ int Vfs::mount_raw_(const char* mountpoint, struct VfsOps ops, void* ctx) {
             self.mounts[i].ctx    = ctx;
             self.mounts[i].active = 1;
             self.mount_count      = self.mount_count + 1;
-            if (ops.mount != (void*)0) {
-                unsafe { ops.mount(ctx, (unsigned long)0); }
-            }
             return 0;
         }
         i = i + 1;
@@ -133,9 +158,6 @@ inline int Vfs::unmount(const &char mountpoint) {
             int eq = 0;
             unsafe { eq = (strcmp(self.mounts[i].mountpoint, mountpoint) == 0); }
             if (eq != 0) {
-                if (self.mounts[i].ops.unmount != (void*)0) {
-                    unsafe { self.mounts[i].ops.unmount(self.mounts[i].ctx); }
-                }
                 self.mounts[i].active = 0;
                 self.mount_count = self.mount_count - 1;
                 return 0;

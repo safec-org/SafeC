@@ -6,7 +6,7 @@
 
 namespace std {
 
-inline struct CombFF comb_ff_init(&double history, unsigned long delay, double gain) {
+inline struct CombFF CombFF::new(&double history, unsigned long delay, double gain) {
     struct CombFF c;
     c.history = history;
     c.delay = delay;
@@ -33,7 +33,11 @@ void CombFF::reset() {
     self.pos = 0UL;
 }
 
-inline struct CombFB comb_fb_init(&double history, unsigned long delay, double gain) {
+void CombFF::process_block(const &double in, &double out, unsigned long n) {
+    filter_process_each(self, in, out, n);
+}
+
+inline struct CombFB CombFB::new(&double history, unsigned long delay, double gain) {
     struct CombFB c;
     c.history = history;
     c.delay = delay;
@@ -60,7 +64,11 @@ void CombFB::reset() {
     self.pos = 0UL;
 }
 
-inline struct KarplusStrong ks_init(&double buffer, unsigned long length, double damping) {
+void CombFB::process_block(const &double in, &double out, unsigned long n) {
+    filter_process_each(self, in, out, n);
+}
+
+inline struct KarplusStrong KarplusStrong::new(&double buffer, unsigned long length, double damping) {
     struct KarplusStrong ks;
     ks.buffer = buffer;
     ks.length = length;
@@ -69,7 +77,7 @@ inline struct KarplusStrong ks_init(&double buffer, unsigned long length, double
     return ks;
 }
 
-inline double KarplusStrong::process() {
+inline double KarplusStrong::next() {
     unsigned long readPos = self.pos;
     unsigned long nextPos = (self.pos + 1UL) % self.length;
     double v0;
@@ -81,7 +89,7 @@ inline double KarplusStrong::process() {
     return v0;
 }
 
-void KarplusStrong::reset(const &double excitation, unsigned long n) {
+void KarplusStrong::pluck(const &double excitation, unsigned long n) {
     unsigned long copyLen = n;
     if (copyLen > self.length) { copyLen = self.length; }
     unsigned long i = 0UL;
@@ -96,7 +104,7 @@ void KarplusStrong::reset(const &double excitation, unsigned long n) {
 
 // ── Single precision ─────────────────────────────────────────────────────────
 
-inline struct CombFF32 comb_ff_init_f32(&float history, unsigned long delay, float gain) {
+inline struct CombFF32 CombFF32::new(&float history, unsigned long delay, float gain) {
     struct CombFF32 c;
     c.history = history;
     c.delay = delay;
@@ -123,7 +131,11 @@ void CombFF32::reset() {
     self.pos = 0UL;
 }
 
-inline struct CombFB32 comb_fb_init_f32(&float history, unsigned long delay, float gain) {
+void CombFF32::process_block(const &float in, &float out, unsigned long n) {
+    filter_process_each(self, in, out, n);
+}
+
+inline struct CombFB32 CombFB32::new(&float history, unsigned long delay, float gain) {
     struct CombFB32 c;
     c.history = history;
     c.delay = delay;
@@ -150,7 +162,11 @@ void CombFB32::reset() {
     self.pos = 0UL;
 }
 
-inline struct KarplusStrong32 ks_init_f32(&float buffer, unsigned long length, float damping) {
+void CombFB32::process_block(const &float in, &float out, unsigned long n) {
+    filter_process_each(self, in, out, n);
+}
+
+inline struct KarplusStrong32 KarplusStrong32::new(&float buffer, unsigned long length, float damping) {
     struct KarplusStrong32 ks;
     ks.buffer = buffer;
     ks.length = length;
@@ -159,7 +175,7 @@ inline struct KarplusStrong32 ks_init_f32(&float buffer, unsigned long length, f
     return ks;
 }
 
-inline float KarplusStrong32::process() {
+inline float KarplusStrong32::next() {
     unsigned long readPos = self.pos;
     unsigned long nextPos = (self.pos + 1UL) % self.length;
     float v0;
@@ -171,7 +187,7 @@ inline float KarplusStrong32::process() {
     return v0;
 }
 
-void KarplusStrong32::reset(const &float excitation, unsigned long n) {
+void KarplusStrong32::pluck(const &float excitation, unsigned long n) {
     unsigned long copyLen = n;
     if (copyLen > self.length) { copyLen = self.length; }
     unsigned long i = 0UL;
@@ -184,7 +200,7 @@ void KarplusStrong32::reset(const &float excitation, unsigned long n) {
     self.pos = 0UL;
 }
 
-inline struct FCombFF comb_ff_init_fixed(&Fixed history, unsigned long delay, Fixed gain) {
+inline struct FCombFF FCombFF::new(&Fixed history, unsigned long delay, Fixed gain) {
     struct FCombFF c;
     c.history = history;
     c.delay = delay;
@@ -211,7 +227,11 @@ void FCombFF::reset() {
     self.pos = 0UL;
 }
 
-inline struct FCombFB comb_fb_init_fixed(&Fixed history, unsigned long delay, Fixed gain) {
+void FCombFF::process_block(const &Fixed in, &Fixed out, unsigned long n) {
+    filter_process_each(self, in, out, n);
+}
+
+inline struct FCombFB FCombFB::new(&Fixed history, unsigned long delay, Fixed gain) {
     struct FCombFB c;
     c.history = history;
     c.delay = delay;
@@ -238,7 +258,11 @@ void FCombFB::reset() {
     self.pos = 0UL;
 }
 
-inline struct FKarplusStrong ks_init_fixed(&Fixed buffer, unsigned long length, Fixed damping) {
+void FCombFB::process_block(const &Fixed in, &Fixed out, unsigned long n) {
+    filter_process_each(self, in, out, n);
+}
+
+inline struct FKarplusStrong FKarplusStrong::new(&Fixed buffer, unsigned long length, Fixed damping) {
     struct FKarplusStrong ks;
     ks.buffer = buffer;
     ks.length = length;
@@ -247,7 +271,7 @@ inline struct FKarplusStrong ks_init_fixed(&Fixed buffer, unsigned long length, 
     return ks;
 }
 
-inline Fixed FKarplusStrong::process() {
+inline Fixed FKarplusStrong::next() {
     unsigned long readPos = self.pos;
     unsigned long nextPos = (self.pos + 1UL) % self.length;
     Fixed v0;
@@ -260,7 +284,7 @@ inline Fixed FKarplusStrong::process() {
     return v0;
 }
 
-void FKarplusStrong::reset(const &Fixed excitation, unsigned long n) {
+void FKarplusStrong::pluck(const &Fixed excitation, unsigned long n) {
     unsigned long copyLen = n;
     if (copyLen > self.length) { copyLen = self.length; }
     unsigned long i = 0UL;

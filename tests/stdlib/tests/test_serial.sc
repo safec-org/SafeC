@@ -13,17 +13,17 @@
 #include <std/scx/scx.h>
 
 static struct Value sample() {
-    struct Value o = value_object();
-    value_object_set(&o, "name", value_string("Ada \"L\""));
-    value_object_set(&o, "age", value_int(36LL));
-    value_object_set(&o, "pi", value_float(3.5));
-    value_object_set(&o, "ok", value_bool(1));
-    value_object_set(&o, "nil", value_null());
-    struct Value arr = value_array();
-    value_array_push(&arr, value_int(1LL));
-    value_array_push(&arr, value_int(2LL));
-    value_array_push(&arr, value_string("three"));
-    value_object_set(&o, "list", arr);
+    struct Value o = Value::object();
+    o.object_set("name", Value::from_str("Ada \"L\""));
+    o.object_set("age", Value::from_int(36LL));
+    o.object_set("pi", Value::from_float(3.5));
+    o.object_set("ok", Value::from_bool(1));
+    o.object_set("nil", Value::null());
+    struct Value arr = Value::array();
+    arr.array_push(Value::from_int(1LL));
+    arr.array_push(Value::from_int(2LL));
+    arr.array_push(Value::from_str("three"));
+    o.object_set("list", arr);
     return o;
 }
 
@@ -37,10 +37,10 @@ void t_value() {
         ?&Value missing = o.object_get("nope");
         ASSERT_TRUE(missing == null);
     }
-    struct Value c = value_clone(&o);
+    struct Value c = o.clone();
     ASSERT_EQ(c.object_len(), 6);
-    value_free(&c);
-    value_free(&o);
+    c.free();
+    o.free();
 }
 
 void t_json() {
@@ -65,11 +65,11 @@ void t_json() {
         ASSERT_STR_EQ(u->as_string(), "é\n");
         struct Value bad = json_parse("{\"a\":", &ok);
         ASSERT_FALSE(ok);
-        value_free(&bad);
-        value_free(&nested);
+        bad.free();
+        nested.free();
         js.free(); js2.free();
-        value_free(&back);
-        value_free(&o);
+        back.free();
+        o.free();
     }
 }
 
@@ -86,42 +86,50 @@ void t_csv() {
         struct String out2 = value_to_csv(&rows2);
         ASSERT_STR_EQ(out.as_ptr(), out2.as_ptr());
         out.free(); out2.free();
-        value_free(&rows); value_free(&rows2);
+        rows.free(); rows2.free();
     }
 }
 
+// Any Format (value.h): encode, parse back, encode again — the two texts
+// match. 1 on success.
+generic<F: Format>
+int round_trips(F f, const &Value v) {
+    int ok = 0;
+    struct String text = v.encode(f);
+    struct Value back = Value::decode(f, text.as_ptr(), &ok);
+    struct String again = back.encode(f);
+    int same = 0;
+    unsafe { same = str_eq(text.as_ptr(), again.as_ptr()); }
+    int good = ok && same && text.length() > 0UL;
+    text.free(); again.free(); back.free();
+    return good;
+}
+
 void t_xml_yaml_html() {
-    unsafe {
-        struct Value o = sample();
-        int ok = 0;
-        struct String x = value_to_xml(&o, "root");
-        struct Value xb = xml_parse(x.as_ptr(), &ok);
-        ASSERT_TRUE(ok);
-        struct String x2 = value_to_xml(&xb, "root");
-        ASSERT_STR_EQ(x.as_ptr(), x2.as_ptr());
-        struct String y = value_to_yaml(&o);
-        struct Value yb = yaml_parse(y.as_ptr(), &ok);
-        ASSERT_TRUE(ok);
-        struct String y2 = value_to_yaml(&yb);
-        ASSERT_STR_EQ(y.as_ptr(), y2.as_ptr());
-        struct String h = value_to_html(&o);
-        struct Value hb = html_parse(h.as_ptr(), &ok);
-        ASSERT_TRUE(ok);
-        struct String h2 = value_to_html(&hb);
-        ASSERT_STR_EQ(h.as_ptr(), h2.as_ptr());
-        struct String esc = string_new();
-        html_escape(&esc, "<a href=\"x\">&</a>");
-        ASSERT_TRUE(esc.contains("&lt;a"));
-        ASSERT_TRUE(esc.contains("&amp;"));
-        esc.free();
-        x.free(); x2.free(); y.free(); y2.free(); h.free(); h2.free();
-        value_free(&xb); value_free(&yb); value_free(&hb); value_free(&o);
-    }
+    struct Value o = sample();
+    ASSERT_TRUE(round_trips(Json::new(), &o));
+    ASSERT_TRUE(round_trips(Yaml::new(), &o));
+    ASSERT_TRUE(round_trips(Xml::new("root"), &o));
+    ASSERT_TRUE(round_trips(Html::new(), &o));
+    int ok = 0;
+    struct Value rows = Value::decode(Csv::new(), "a,b\n1,\"x,y\"\n", &ok);   // CSV: rows of fields
+    ASSERT_TRUE(ok);
+    ASSERT_TRUE(round_trips(Csv::new(), &rows));
+    struct String x = o.encode(Xml::new("doc"));
+    ASSERT_TRUE(x.starts_with("<doc>"));
+    struct Value bad = Value::decode(Json::new(), "[1,", &ok);
+    ASSERT_FALSE(ok);
+    struct String esc = String::new();
+    html_escape(&esc, "<a href=\"x\">&</a>");
+    ASSERT_TRUE(esc.contains("&lt;a"));
+    ASSERT_TRUE(esc.contains("&amp;"));
+    esc.free(); x.free();
+    bad.free(); rows.free(); o.free();
 }
 
 void t_protobuf() {
     unsafe {
-        struct String buf = string_new();
+        struct String buf = String::new();
         pb_write_int64_field(&buf, 1, 150LL);
         // Canonical example from the protobuf encoding guide: field 1 = 150 → 08 96 01
         ASSERT_EQ(buf.length(), 3);
@@ -132,52 +140,52 @@ void t_protobuf() {
         pb_write_string_field(&buf, 3, "hi");
         pb_write_double_field(&buf, 4, 2.25);
         pb_write_bool_field(&buf, 5, 1);
-        struct PbReader r = pb_reader_new((const unsigned char*)buf.as_ptr(), buf.length());
+        struct PbReader r = PbReader::new((const unsigned char*)buf.as_ptr(), buf.length());
         int fn_ = 0;
         int wt = 0;
         long long iv = 0LL;
-        ASSERT_TRUE(pb_read_tag(&r, &fn_, &wt));
+        ASSERT_TRUE(r.read_tag(&fn_, &wt));
         ASSERT_EQ(fn_, 1);
-        pb_read_int64(&r, &iv);
+        r.read_int64(&iv);
         ASSERT_EQ(iv, 150);
-        pb_read_tag(&r, &fn_, &wt);
-        pb_read_sint64(&r, &iv);
+        r.read_tag(&fn_, &wt);
+        r.read_sint64(&iv);
         ASSERT_EQ(iv, -3);
-        pb_read_tag(&r, &fn_, &wt);
+        r.read_tag(&fn_, &wt);
         ASSERT_EQ(wt, PB_WIRE_LEN);
         unsigned char none = (unsigned char)0;
         &const unsigned char sd = &none;
         unsigned long sl = 0UL;
-        pb_read_length_delimited(&r, &sd, &sl);
+        r.read_length_delimited(&sd, &sl);
         ASSERT_EQ(sl, 2);
         ASSERT_EQ(sd[0], 'h');
-        pb_read_tag(&r, &fn_, &wt);
+        r.read_tag(&fn_, &wt);
         double dv = 0.0;
-        pb_read_double(&r, &dv);
+        r.read_double(&dv);
         ASSERT_TRUE(dv == 2.25);
-        pb_read_tag(&r, &fn_, &wt);
-        ASSERT_TRUE(pb_skip_field(&r, wt));
-        ASSERT_FALSE(pb_reader_has_more(&r));
+        r.read_tag(&fn_, &wt);
+        ASSERT_TRUE(r.skip_field(wt));
+        ASSERT_FALSE(r.has_more());
         buf.free();
     }
 }
 
 void t_markdown() {
     unsafe {
-        &heap MdNode doc = md_parse("# Title\n\nSome **bold** and *it* with `code` and [link](http://x).\n\n- a\n- b\n\n```\nfn()\n```\n");
-        struct String html = md_render_html(doc);
+        &heap MdNode doc = MdNode::parse("# Title\n\nSome **bold** and *it* with `code` and [link](http://x).\n\n- a\n- b\n\n```\nfn()\n```\n");
+        struct String html = doc.render_html();
         ASSERT_TRUE(html.contains("<h1>Title</h1>"));
         ASSERT_TRUE(html.contains("<strong>bold</strong>"));
         ASSERT_TRUE(html.contains("<em>it</em>"));
         ASSERT_TRUE(html.contains("<code>code</code>"));
         ASSERT_TRUE(html.contains("<a href=\"http://x\">link</a>"));
         ASSERT_TRUE(html.contains("<li>"));
-        struct String md = md_render_markdown(doc);
-        &heap MdNode doc2 = md_parse(md.as_ptr());
-        struct String html2 = md_render_html(doc2);
+        struct String md = doc.render_markdown();
+        &heap MdNode doc2 = MdNode::parse(md.as_ptr());
+        struct String html2 = doc2.render_html();
         ASSERT_STR_EQ(html.as_ptr(), html2.as_ptr());
         html.free(); html2.free(); md.free();
-        md_free(doc); md_free(doc2);
+        doc.free(); doc2.free();
     }
 }
 
@@ -191,7 +199,7 @@ void t_writers_varint() {
         ASSERT_EQ(okv->as_bool(), 1);
         ASSERT_EQ(okv->kind_of(), VAL_BOOL);
 
-        struct String a = string_from("prefix:");
+        struct String a = String::from("prefix:");
         json_write(&o, &a);
         struct String j = value_to_json(&o);
         ASSERT_TRUE(a.starts_with("prefix:"));
@@ -215,33 +223,33 @@ void t_writers_varint() {
         struct String c = value_to_csv(&rows);
         ASSERT_STR_EQ(a.as_ptr(), c.as_ptr());
         j.free(); y.free(); x.free(); h.free(); c.free(); a.free();
-        value_free(&rows);
-        value_free(&o);
+        rows.free();
+        o.free();
 
         unsigned long long vals[6];
         vals[0] = 0ULL; vals[1] = 127ULL; vals[2] = 128ULL; vals[3] = 300ULL;
         vals[4] = 9223372036854775808ULL; vals[5] = 18446744073709551615ULL;
-        struct String buf = string_new();
+        struct String buf = String::new();
         int i = 0;
         while (i < 6) { pb_write_varint(&buf, vals[i]); i = i + 1; }
         ASSERT_EQ(buf.length(), 1 + 1 + 2 + 2 + 10 + 10);
-        struct PbReader r = pb_reader_new((const unsigned char*)buf.as_ptr(), buf.length());
+        struct PbReader r = PbReader::new((const unsigned char*)buf.as_ptr(), buf.length());
         int good = 1;
         i = 0;
         while (i < 6) {
             unsigned long long v = 0ULL;
-            if (!pb_read_varint(&r, &v) || v != vals[i]) good = 0;
+            if (!r.read_varint(&v) || v != vals[i]) good = 0;
             i = i + 1;
         }
         ASSERT_TRUE(good);
-        ASSERT_FALSE(pb_reader_has_more(&r));
+        ASSERT_FALSE(r.has_more());
         unsigned long long v = 0ULL;
-        ASSERT_FALSE(pb_read_varint(&r, &v));                 // nothing left
-        struct PbReader trunc = pb_reader_new((const unsigned char*)"\x80\x80", 2UL);
-        ASSERT_FALSE(pb_read_varint(&trunc, &v));             // unterminated
+        ASSERT_FALSE(r.read_varint(&v));                      // nothing left
+        struct PbReader trunc = PbReader::new((const unsigned char*)"\x80\x80", 2UL);
+        ASSERT_FALSE(trunc.read_varint(&v));                  // unterminated
         buf.free();
 
-        struct String e = string_new();
+        struct String e = String::new();
         scx_append_esc(&e, "<a href='x'>\"&\"</a>");
         ASSERT_STR_EQ(e.as_ptr(), "&lt;a href=&#39;x&#39;&gt;&quot;&amp;&quot;&lt;/a&gt;");
         e.free();
@@ -249,7 +257,7 @@ void t_writers_varint() {
 }
 
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("value", t_value);
         t.add("json", t_json);

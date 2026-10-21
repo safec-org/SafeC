@@ -1,7 +1,7 @@
 // SafeC Standard Library — Reactor backend: epoll (Linux / Android)
 //
 // See reactor.h for the portable API, usage shape, and the full backend
-// file list. Implements the same std::Reactor/reactor_init/reactor_run
+// file list. Implements the same std::Reactor (Reactor::new)/reactor_run
 // surface as reactor_kqueue.sc, against epoll_create1/epoll_ctl/
 // epoll_wait instead of kqueue/kevent.
 //
@@ -102,15 +102,15 @@ static int reactor_signum_for_fd_(const &Vec<struct SigFdEntry> sigfds, int fd) 
     return -1;
 }
 
-inline struct Reactor reactor_init() {
+inline struct Reactor Reactor::new() {
     struct Reactor r;
     r.kq = -1;
-    r.sigfds = vec_new();
+    r.sigfds = Vec::new();
     // Unused on this backend (epoll has persistent kernel-side
     // registration) — only initialized to satisfy definite-initialization
     // for this shared struct Reactor field; see reactor.h's comment on
     // watched.
-    r.watched = vec_new();
+    r.watched = Vec::new();
     return r;
 }
 

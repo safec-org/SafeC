@@ -2,7 +2,7 @@
 //
 //   ?&BTree<int> tq = std::alloc(sizeof(struct BTree<int>));  // ~pool-sized; keep it off the stack
 //   &BTree<int> t = std::expect_ref(tq, "oom");
-//   std::btree_init(t);
+//   t.init();
 //   t.insert(42UL, 7);
 //   int v = t.get(42UL).default(0);
 //
@@ -37,11 +37,16 @@ struct BTree {
     unsigned long       root;       // pool index + 1 (0 = empty tree)
     unsigned long       count;      // key-value pairs
 
-    int           insert(unsigned long key, V val);  // 0 on success, -1 if the pool is full
+    // Initialise (or reset) an empty tree in place. Only the scalar fields
+    // are touched — pool nodes are claimed lazily, so a ~pool-sized memset
+    // (or a by-value constructor copying the whole pool) would be pure waste.
+    void          init();
+    int           insert(unsigned long key, V val);  // insert or overwrite; 0 if the pool is full
     ?&V           get(unsigned long key) const;      // null if missing
     int           contains(unsigned long key) const;
     ?V            remove(unsigned long key);         // the removed value, or null
-    unsigned long len() const;
+    unsigned long length() const;
+    int           is_empty() const;
     void          foreach(fn void(unsigned long, &V) cb);  // ascending key order
     void          clear();
 
@@ -58,15 +63,12 @@ struct BTree {
     void          foreach_(unsigned long node_idx, fn void(unsigned long, &V) cb);
 };
 
-// Initialise (or reset) an empty tree in place. Only the scalar fields are
-// touched — pool nodes are claimed lazily, so a ~pool-sized memset (or a
-// by-value constructor copying the whole pool) would be pure waste.
 generic<V>
-void btree_init(&BTree<V> t) {
-    t.pool_used = 0;
-    t.free_head = 0UL;
-    t.root      = 0UL;
-    t.count     = 0UL;
+void BTree::init() {
+    self.pool_used = 0;
+    self.free_head = 0UL;
+    self.root      = 0UL;
+    self.count     = 0UL;
 }
 
 generic<V>
@@ -103,7 +105,10 @@ void BTree::free_node_(unsigned long idx) {
 }
 
 generic<V>
-unsigned long BTree::len() const { return self.count; }
+unsigned long BTree::length() const { return self.count; }
+
+generic<V>
+int BTree::is_empty() const { return self.count == 0UL; }
 
 // ── Search ────────────────────────────────────────────────────────────────────
 
@@ -174,21 +179,21 @@ generic<V>
 int BTree::insert(unsigned long key, V val) {
     // Overwrite in place first: no splits for a key that's already present.
     match (self.get(key)) {
-        case some(slot): { *slot = val; return 0; }
+        case some(slot): { *slot = val; return 1; }
         case null: { }
     }
     if (self.root == 0UL) {
         unsigned long r = self.alloc_node_();
-        if (r == 0UL) return -1;
+        if (r == 0UL) return 0;
         self.root = r;
     }
     if (self.node_(self.root).n == BTREE_MAX_KEYS) {
         unsigned long nr = self.alloc_node_();
-        if (nr == 0UL) return -1;
+        if (nr == 0UL) return 0;
         &BTreeNode<V> top = self.node_(nr);
         top.leaf = 0;
         unsafe { top.children[0] = self.root; }
-        if (!self.split_child_(nr, 0)) { self.free_node_(nr); return -1; }
+        if (!self.split_child_(nr, 0)) { self.free_node_(nr); return 0; }
         self.root = nr;
     }
     // Descend, splitting full children before entering them.
@@ -208,14 +213,14 @@ int BTree::insert(unsigned long key, V val) {
             }
             n.n = n.n + 1;
             self.count = self.count + 1UL;
-            return 0;
+            return 1;
         }
         unsafe { while (i >= 0 && key < n.keys[i]) { i = i - 1; } }
         i = i + 1;
         unsigned long child = 0UL;
         unsafe { child = n.children[i]; }
         if (self.node_(child).n == BTREE_MAX_KEYS) {
-            if (!self.split_child_(cur, i)) return -1;
+            if (!self.split_child_(cur, i)) return 0;
             unsafe {
                 if (key > n.keys[i]) i = i + 1;
                 child = n.children[i];
@@ -223,7 +228,7 @@ int BTree::insert(unsigned long key, V val) {
         }
         cur = child;
     }
-    return -1;
+    return 0;
 }
 
 // ── Traversal ─────────────────────────────────────────────────────────────────

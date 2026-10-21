@@ -26,7 +26,7 @@ static float absf_(float x) { return x < (float)0.0 ? -x : x; }
 
 // max |gpu - host| / (1 + max |host|) over n values
 static float rel_diff_(struct RocmBuf d, const float* host, unsigned long n) {
-    struct Vec<float> g = std::vec_with_cap(n);
+    struct Vec<float> g = std::Vec::with_cap(n);
     unsigned long i = 0UL;
     while (i < n) { g.push((float)0.0); i = i + 1UL; }
     float m = (float)0.0;
@@ -192,7 +192,7 @@ static void grad_case_(const char* name, &Vec<struct Spec> specs, unsigned long 
 
 static void grad_tests_() {
     struct Rng rng = Rng::new(11UL);
-    struct Vec<struct Spec> a = std::vec_new();
+    struct Vec<struct Spec> a = std::Vec::new();
     a.push(lin_(6UL, 16UL, ACT_TANH, &rng));
     a.push(lin_(16UL, 16UL, ACT_RELU, &rng));
     a.push(lin_(16UL, 4UL, ACT_NONE, &rng));
@@ -200,7 +200,7 @@ static void grad_tests_() {
     grad_case_("mlp tanh/relu, cross-entropy", &a, 9UL, 6UL, 4UL, LOSS_CE, 1UL, 1);
     a.free();
 
-    struct Vec<struct Spec> b = std::vec_new();
+    struct Vec<struct Spec> b = std::Vec::new();
     b.push(lin_(5UL, 12UL, ACT_GELU, &rng));
     b.push(lin_(12UL, 12UL, ACT_SILU, &rng));
     b.push(lin_(12UL, 7UL, ACT_SIGMOID, &rng));
@@ -209,7 +209,7 @@ static void grad_tests_() {
     b.free();
 
     // multi-channel input and output: both layout conversions at the edges
-    struct Vec<struct Spec> c = std::vec_new();
+    struct Vec<struct Spec> c = std::Vec::new();
     c.push(conv_(ROCM_LAYER_CONV, 2UL, 6UL, 4UL, 3UL, 2UL, 1UL, ACT_RELU, &rng));            // 6x6 -> 3x3
     c.push(conv_(ROCM_LAYER_CONVT, 4UL, 3UL, 3UL, 4UL, 2UL, 1UL, ACT_LEAKY, &rng));          // 3x3 -> 6x6
     grad_case_("conv -> convT, mse", &c, 5UL, 72UL, 108UL, LOSS_MSE, 3UL, 0);
@@ -217,7 +217,7 @@ static void grad_tests_() {
     c.free();
 
     // fully connected -> convolution -> transposed convolution
-    struct Vec<struct Spec> d = std::vec_new();
+    struct Vec<struct Spec> d = std::Vec::new();
     d.push(lin_(10UL, 32UL, ACT_RELU, &rng));
     d.push(conv_(ROCM_LAYER_CONV, 2UL, 4UL, 3UL, 3UL, 1UL, 1UL, ACT_GELU, &rng));            // 4x4 -> 4x4
     d.push(conv_(ROCM_LAYER_CONVT, 3UL, 4UL, 2UL, 2UL, 2UL, 0UL, ACT_NONE, &rng));           // 4x4 -> 8x8
@@ -226,7 +226,7 @@ static void grad_tests_() {
     d.free();
 
     // convolution -> fully connected (a classifier)
-    struct Vec<struct Spec> e = std::vec_new();
+    struct Vec<struct Spec> e = std::Vec::new();
     e.push(conv_(ROCM_LAYER_CONV, 3UL, 7UL, 4UL, 3UL, 2UL, 1UL, ACT_TANH, &rng));            // 7x7 -> 4x4
     e.push(conv_(ROCM_LAYER_CONV, 4UL, 4UL, 5UL, 3UL, 1UL, 0UL, ACT_SILU, &rng));            // 4x4 -> 2x2
     e.push(lin_(20UL, 3UL, ACT_NONE, &rng));
@@ -235,7 +235,7 @@ static void grad_tests_() {
     e.free();
 
     // single-channel convolutions (no layout conversion): conv_ae's shape
-    struct Vec<struct Spec> f = std::vec_new();
+    struct Vec<struct Spec> f = std::Vec::new();
     f.push(conv_(ROCM_LAYER_CONV, 1UL, 8UL, 4UL, 3UL, 2UL, 1UL, ACT_RELU, &rng));            // 8x8 -> 4x4
     f.push(conv_(ROCM_LAYER_CONVT, 4UL, 4UL, 1UL, 4UL, 2UL, 1UL, ACT_NONE, &rng));           // 4x4 -> 8x8
     grad_case_("1-channel conv -> convT, bce", &f, 40UL, 64UL, 64UL, LOSS_BCE, 6UL, 0);
@@ -243,7 +243,7 @@ static void grad_tests_() {
     f.free();
 
     // a weight gradient over batch x plane = 20 x 1024 values: split across blocks (split-K)
-    struct Vec<struct Spec> g2 = std::vec_new();
+    struct Vec<struct Spec> g2 = std::Vec::new();
     g2.push(conv_(ROCM_LAYER_CONV, 1UL, 32UL, 4UL, 3UL, 1UL, 1UL, ACT_RELU, &rng));           // 32x32 -> 32x32
     g2.push(conv_(ROCM_LAYER_CONV, 4UL, 32UL, 2UL, 3UL, 2UL, 1UL, ACT_NONE, &rng));           // -> 16x16
     grad_case_("conv 32x32, split-K weight gradient", &g2, 20UL, 1024UL, 512UL, LOSS_MSE, 7UL, 0);
@@ -263,7 +263,7 @@ static float max_rel_tensor_(struct RocmBuf d, const &FloatTensor t) {
 
 // The net's buffers (RocmNet::download_stats) against a ConvNet's.
 static float buffers_diff_(&RocmNet n, const &Vec<&FloatTensor> cpu) {
-    struct Vec<&FloatTensor> copy = std::vec_new();
+    struct Vec<&FloatTensor> copy = std::Vec::new();
     unsigned long i = 0UL;
     while (i < cpu.length()) {
         unsigned long sz;
@@ -397,7 +397,7 @@ static void convnet_case_(const char* name, &ConvNet c, unsigned long rows, int 
 }
 
 static int nr_fill_test_(struct RocmBuf b, unsigned long n) {
-    struct Vec<float> ones = std::vec_with_cap(n);
+    struct Vec<float> ones = std::Vec::with_cap(n);
     unsigned long i = 0UL;
     while (i < n) { ones.push((float)1.0); i = i + 1UL; }
     int ok = std::rocm_write(b, ones.at(0UL), n) && std::rocm_sync();
@@ -423,8 +423,8 @@ static void dropout_props_(int byChannel) {
     struct RocmBuf o = n.forward(dx, rows);
     int ok = o.dev != 0UL && nr_fill_test_(n.grad_output(), rows * C * P) &&
              n.backward(dx, rows, ddx);
-    struct Vec<float> out = std::vec_with_cap(rows * C * P);
-    struct Vec<float> grad = std::vec_with_cap(rows * C * P);
+    struct Vec<float> out = std::Vec::with_cap(rows * C * P);
+    struct Vec<float> grad = std::Vec::with_cap(rows * C * P);
     unsigned long i = 0UL;
     while (i < rows * C * P) { out.push((float)0.0); grad.push((float)0.0); i = i + 1UL; }
     ok = ok && std::rocm_read(o, out.at(0UL), rows * C * P) && std::rocm_read(ddx, grad.at(0UL), rows * C * P);

@@ -101,7 +101,7 @@ static int cmp_int(const &int a, const &int b) { return *a - *b; }
 
 static void t_collections() {
     unsafe {
-        struct Vec<int> v = std::vec_new();
+        struct Vec<int> v = std::Vec::new();
         int i = 0;
         while (i < 500) { v.push((i * 7919) % 500); i = i + 1; }
         v.sort(cmp_int);
@@ -109,7 +109,7 @@ static void t_collections() {
         CHECK(*v.at(499UL) == 499);
         v.free();
 
-        struct HashMap<int, int> m = std::map_new();
+        struct HashMap<int, int> m = std::HashMap::new();
         i = 0;
         while (i < 300) { m.insert(i, i * i); i = i + 1; }
         CHECK(m.get(17).default(-1) == 289);
@@ -119,7 +119,7 @@ static void t_collections() {
         CHECK(m.length() == 300UL);
         m.free();
 
-        struct String s = std::string_from("bare metal");
+        struct String s = std::String::from("bare metal");
         s.push(" safec");
         struct String up = s.to_upper();
         CHECK(up.eq_cstr("BARE METAL SAFEC"));
@@ -127,7 +127,7 @@ static void t_collections() {
         up.free();
         s.free();
 
-        struct List<int> l = std::list_new();
+        struct List<int> l = std::List::new();
         i = 0;
         while (i < 10) { l.push_back(i); i = i + 1; }
         CHECK(l.length() == 10UL);
@@ -137,7 +137,7 @@ static void t_collections() {
         ?&heap BTree<int> tq = std::alloc(sizeof(struct BTree<int>));
         if (!tq.is_null()) {
             &BTree<int> t = std::expect_ref(tq, "tq is null");
-            std::btree_init(t);
+            t.init();
             unsigned long j = 0UL;
             while (j < 50UL) { t.insert(j * 37UL % 101UL, (int)j); j = j + 1UL; }
             ?&int bv = t.get(10UL * 37UL % 101UL);
@@ -151,7 +151,7 @@ static unsigned char g_ring_store[64];
 
 static void t_ring_alloc() {
     unsafe {
-        struct RingBuffer r = std::ring_init((&static unsigned char)g_ring_store, 64UL);
+        struct RingBuffer r = std::RingBuffer::over((&static unsigned char)g_ring_store, 64UL);
         unsigned char in[40];
         unsigned char out[40];
         int i = 0;
@@ -159,29 +159,29 @@ static void t_ring_alloc() {
         r.write(in, 40UL);
         r.read(out, 30UL);
         r.write(in, 40UL);                       // wraps
-        CHECK(r.readable() == 50UL);
+        CHECK(r.length() == 50UL);
         r.read(out, 10UL);
         CHECK(out[9] == 39);
 
-        struct TlsfAllocator t = std::tlsf_new(32768UL);
-        ?&heap void a = t.alloc(100UL);
-        ?&heap void b = t.alloc(3000UL);
+        struct TlsfAllocator t = std::TlsfAllocator::new(32768UL);
+        ?&heap void a = t.alloc(100UL, 8UL);
+        ?&heap void b = t.alloc(3000UL, 8UL);
         CHECK(!a.is_null() && !b.is_null());
-        match (a) { case null: { } case some(x): { t.free(x); } }
-        match (b) { case null: { } case some(x): { t.free(x); } }
-        ?&heap void c = t.alloc(30000UL);        // fits only if freed blocks coalesced
+        match (a) { case null: { } case some(x): { t.dealloc(x); } }
+        match (b) { case null: { } case some(x): { t.dealloc(x); } }
+        ?&heap void c = t.alloc(30000UL, 8UL);   // fits only if freed blocks coalesced
         CHECK(!c.is_null());
         t.destroy();
 
-        struct SlabAllocator sl = std::slab_new(24UL, 8UL);
-        ?&heap void s1 = sl.alloc();
+        struct SlabAllocator sl = std::SlabAllocator::new(24UL, 8UL);
+        ?&heap unsigned long s1 = std::alloc_t(&sl);   // through the Allocator trait
         CHECK(!s1.is_null());
         CHECK(sl.available() == 7UL);
         sl.destroy();
 
-        struct PoolAllocator p = std::pool_new(2048UL);
+        struct PoolAllocator p = std::PoolAllocator::new(2048UL);
         unsigned long before = p.available();
-        ?&heap void pa = p.alloc(200UL);
+        ?&heap void pa = p.alloc(200UL, 8UL);
         CHECK(!pa.is_null());
         match (pa) { case null: { } case some(x): { p.dealloc(x); } }
         CHECK(p.available() == before);
@@ -207,7 +207,7 @@ static void t_crypto() {
         unsigned char blk[16];
         int i = 0;
         while (i < 16) { key[i] = (unsigned char)i; blk[i] = (unsigned char)(i * 17); i = i + 1; }
-        struct AesCtx c = std::aes128_init(key);
+        struct AesCtx c = std::AesCtx::new_128(key);
         c.encrypt_block(blk);
         hex(blk, 16UL, h);
         CHECK(str_is(h, "69c4e0d86a7b0430d8cdb78070b4c55a"));
@@ -243,9 +243,9 @@ static void t_fixed_net() {
 
 static void t_serial_sync() {
     unsafe {
-        struct Value o = std::value_object();
-        std::value_object_set(&o, "n", std::value_int(-42LL));
-        std::value_object_set(&o, "s", std::value_string("bm"));
+        struct Value o = std::Value::object();
+        o.object_set("n", std::Value::from_int(-42LL));
+        o.object_set("s", std::Value::from_str("bm"));
         struct String js = std::value_to_json(&o);
         int ok = 0;
         struct Value back = std::json_parse(js.as_ptr(), &ok);
@@ -254,10 +254,10 @@ static void t_serial_sync() {
         CHECK(!n.is_null());
         if (!n.is_null()) CHECK(n->as_int() == -42LL);
         js.free();
-        std::value_free(&back);
-        std::value_free(&o);
+        back.free();
+        o.free();
 
-        struct Spinlock sp = std::spinlock_init();
+        struct Spinlock sp = std::Spinlock::new();
         sp.lock();
         CHECK(sp.is_locked());
         CHECK(!sp.trylock());

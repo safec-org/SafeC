@@ -7,6 +7,9 @@ namespace std {
 struct Spinlock {
     int locked;    // 0 = unlocked, 1 = locked (accessed atomically)
 
+    // An unlocked spinlock.
+    static struct Spinlock new();
+
     // Acquire the lock. Spins until successful.
     void lock();
 
@@ -19,8 +22,5 @@ struct Spinlock {
     // Check if the lock is currently held (non-atomic peek).
     int  is_locked() const;
 };
-
-// Initialize a spinlock (unlocked).
-struct Spinlock spinlock_init();
 
 } // namespace std

@@ -9,14 +9,18 @@
 namespace std {
 
 struct RingBuffer {
-    &static unsigned char buf;   // backing store (set by ring_init)
+    &static unsigned char buf;   // backing store (set by RingBuffer::over)
     unsigned long     cap;    // capacity in bytes (must be power of two)
     unsigned long     mask;   // cap - 1
     volatile unsigned long head;   // write position (producer)
     volatile unsigned long tail;   // read position (consumer)
 
+    // Initialise over an existing backing store of `cap` bytes; `cap` is
+    // rounded down to a power of two.
+    static struct RingBuffer over(&static unsigned char buf, unsigned long cap);
+
     // Return number of bytes currently readable.
-    unsigned long readable() const;
+    unsigned long length() const;
 
     // Return number of bytes that can be written without blocking.
     unsigned long writable() const;
@@ -36,16 +40,17 @@ struct RingBuffer {
     // Peek at `len` bytes without consuming them.  Returns bytes copied.
     unsigned long peek(&unsigned char out, unsigned long len) const;
 
+    // One byte at a time (the Fifo protocol, std/collections/traits.h):
+    // enqueue returns 1, or 0 if full; dequeue returns null if empty.
+    int   enqueue(unsigned char b);
+    ?unsigned char dequeue();
+
     // Discard `len` bytes.  Returns bytes discarded.
     unsigned long discard(unsigned long len);
 
     // Reset (empty) the buffer.  Safe only when no concurrent access.
     void  clear();
 };
-
-// Initialise a RingBuffer with an existing backing store.
-// `cap` must be a power of two.
-struct RingBuffer ring_init(&static unsigned char buf, unsigned long cap);
 
 // Static-capacity helper: declares a RingBuffer backed by a static array of `N` bytes.
 // Usage: RING_STATIC(my_ring, 1024);

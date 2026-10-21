@@ -9,16 +9,20 @@
 // transparent). No viewBox/transform/gradient/clip-path/text/use support,
 // no CSS — this is a scoped renderer for simple vector icon/shape assets,
 // not a browser-grade SVG engine. Parses and rasterizes directly into a
-// GuiWindow in one pass (no retained SVG DOM) via gui_draw.h's primitives
+// GuiWindow in one pass (no retained SVG DOM) via GuiWindow's drawing methods
 // plus a scanline polygon fill for <polygon>/filled <path>.
 
-namespace std {
+#include <std/gui/gui.h>
 
-// Parses 'svgText' (a complete <svg>...</svg> document) and draws it with
-// its top-left at (ox, oy) in 'win'. Returns 1 if at least the <svg> root
-// was found and parsed, 0 on malformed/unsupported input (some shapes may
-// already have been drawn before a later parse failure — this is a direct
-// parse-and-draw pass, not transactional).
-int gui_draw_svg(&GuiWindow win, int ox, int oy, const &char svgText);
-
-} // namespace std
+// The entry point is a GuiWindow method, declared in gui.h and defined in
+// gui_svg.sc (there is no retained SVG object to hang it on — the
+// document is parsed and drawn in one pass):
+//
+//   int GuiWindow::draw_svg(int ox, int oy, const &char svgText);
+//
+// It parses 'svgText' (a complete <svg>...</svg> document) and draws it
+// with its top-left at (ox, oy). Returns 1 if at least the <svg> root was
+// found and parsed, 0 on malformed/unsupported input (some shapes may
+// already have been drawn before a later parse failure — this is a
+// direct parse-and-draw pass, not transactional). Include this header (or
+// just gui.h) and link gui_svg.sc to use it.

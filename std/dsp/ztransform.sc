@@ -128,18 +128,18 @@ void bilinear_nth_order(const &double B, const &double A, unsigned long order,
 static struct Complex ztransform_response_(const double* b, const double* a, unsigned long order,
                                             double fs, double freqHz) {
     double omega = SAFEC_DSP_TWO_PI_ZT * freqHz / fs;
-    struct Complex zInv = complex_new(cos_d(-omega), sin_d(-omega));
-    struct Complex numAcc = complex_new(0.0, 0.0);
-    struct Complex denAcc = complex_new(0.0, 0.0);
-    struct Complex zPow = complex_new(1.0, 0.0);
+    struct Complex zInv = Complex::new(cos_d(-omega), sin_d(-omega));
+    struct Complex numAcc = Complex::new(0.0, 0.0);
+    struct Complex denAcc = Complex::new(0.0, 0.0);
+    struct Complex zPow = Complex::new(1.0, 0.0);
 
     unsigned long i = 0UL;
     while (i <= order) {
         double bi;
         double ai;
         unsafe { bi = b[i]; ai = a[i]; }
-        struct Complex bCoef = complex_new(bi, 0.0);
-        struct Complex aCoef = complex_new(ai, 0.0);
+        struct Complex bCoef = Complex::new(bi, 0.0);
+        struct Complex aCoef = Complex::new(ai, 0.0);
         struct Complex bTerm = bCoef * zPow;
         struct Complex aTerm = aCoef * zPow;
         struct Complex newNum = numAcc + bTerm;

@@ -13,12 +13,13 @@
 // revisit that if reflection ever grows field names.
 //
 // Ownership: every Value that holds heap data (String, Array, Object) OWNS
-// it — value_free() recursively releases the whole tree, and
-// value_array_push()/value_object_set() take ownership of the Value they're
-// given (don't free it yourself afterward; do call value_clone() first if
-// you still need your own copy).
+// it — v.free() recursively releases the whole tree, and
+// v.array_push()/v.object_set() take ownership of the Value they're given
+// (don't free it yourself afterward; do call x.clone() first if you still
+// need your own copy).
 #pragma once
 #include <std/collections/vec.h>
+#include <std/collections/string.h>
 
 namespace std {
 
@@ -37,10 +38,23 @@ namespace std {
 #define VAL_ARRAY  5
 #define VAL_OBJECT 6
 
+// A text format for Value trees. Each backend is a small struct whose
+// methods are the format's writer and parser: Json (json.h), Yaml (yaml.h),
+// Csv (csv.h), Xml (xml.h; carries the root element's tag) and Html
+// (html.h). Value::encode / Value::decode take any of them, and so does
+// generic code bounded by Format:
+//
+//   struct String text = v.encode(Json::new());
+//   struct Value back = Value::decode(Xml::new("doc"), text.as_ptr(), &ok);
+trait Format {
+    void         write(const &Value v, &String out) const;   // appends v's text to out
+    struct Value parse(const &char text, ?&int ok) const;    // *ok: 1, or 0 on malformed input
+}
+
 // One key/value pair inside a VAL_OBJECT's obj_val Vec.
 struct ObjectEntry {
     ?&heap char  key;  // heap-allocated, NUL-terminated, owned — empty (null)
-                        // only on an allocation failure inside value_object_set()
+                        // only on an allocation failure inside Value::object_set()
     &Value       val;  // heap-allocated, owned, always present once inserted
 };
 
@@ -53,6 +67,15 @@ struct Value {
                              // empty (null) for every other 'kind'
     struct Vec<struct Value>       arr_val;   // VAL_ARRAY  — elements by value
     struct Vec<struct ObjectEntry> obj_val;   // VAL_OBJECT — key/value entries by value
+
+    // ── Construction ────────────────────────────────────────────────────────
+    static struct Value null();
+    static struct Value from_bool(int v);
+    static struct Value from_int(long long v);
+    static struct Value from_float(double v);
+    static struct Value from_str(const &char s);   // copies s
+    static struct Value array();                   // empty; grow with v.array_push
+    static struct Value object();                  // empty; grow with v.object_set
 
     int kind_of() const;
     int is_null() const;
@@ -71,20 +94,41 @@ struct Value {
     unsigned long   object_len() const;
     // Empty (null case) if the key isn't present.
     ?&Value         object_get(const &char key) const;
+
+    // Array/Object building. Both take ownership of 'v' (see the
+    // file-level ownership note above).
+    void            array_push(struct Value v);
+    void            object_set(const &char key, struct Value v);
+
+    // Deep copy / recursive release of the whole tree.
+    struct Value    clone() const;
+    void            free();
+
+    // ── Text formats (any Format) ───────────────────────────────────────────
+    // A fresh String holding this tree in format f.
+    generic<F: Format> struct String encode(F f) const;
+    // Parses text in format f; *ok (if non-null) is 1 on success, else 0.
+    generic<F: Format> static struct Value decode(F f, const &char text, ?&int ok);
 };
 
-struct Value value_null();
-struct Value value_bool(int v);
-struct Value value_int(long long v);
-struct Value value_float(double v);
-struct Value value_string(const &char s);   // copies s
-struct Value value_array();                 // empty; grow with value_array_push
-struct Value value_object();                // empty; grow with value_object_set
+generic<F: Format>
+struct String Value::encode(F f) const {
+    struct String out = String::new();
+    f.write(self, &out);
+    return out;
+}
 
-// Both take ownership of 'v' (see the file-level ownership note above).
+generic<F: Format>
+struct Value Value::decode(F f, const &char text, ?&int ok) { return f.parse(text, ok); }
+
+// Kept for std/ml until its refactor moves to the methods above; forward to
+// Value::array() / Value::object() / Value::from_str(s) /
+// arr.array_push(v) / obj.object_set(key, v) / v.clone() / v.free().
+struct Value value_array();
+struct Value value_object();
+struct Value value_string(const &char s);
 void value_array_push(&Value arr, struct Value v);
 void value_object_set(&Value obj, const &char key, struct Value v);
-
 struct Value value_clone(const &Value v);
 void value_free(&Value v);
 

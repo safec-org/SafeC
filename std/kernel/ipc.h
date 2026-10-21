@@ -38,9 +38,9 @@ struct Mailbox {
 
     // Clear all messages.
     void           clear();
-};
 
-// Initialize a mailbox for the given process.
-struct Mailbox mailbox_init(int owner_pid);
+    // Initialize a mailbox for the given process.
+    static struct Mailbox new(int owner_pid);
+};
 
 } // namespace std

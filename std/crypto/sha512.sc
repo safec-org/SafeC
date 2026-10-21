@@ -2,6 +2,7 @@
 #pragma once
 #include <std/stddef.h>
 #include <std/crypto/sha512.h>
+#include <std/crypto/hash.h>
 
 namespace std {
 
@@ -99,7 +100,7 @@ static void sha512_compress_(unsigned long long* h, const unsigned char* block) 
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-inline struct Sha512Ctx sha512_init() {
+inline struct Sha512Ctx Sha512Ctx::new() {
     struct Sha512Ctx ctx;
     int i = 0;
     while (i < 8) { ctx.h[i] = sha512_H0_[i]; i = i + 1; }
@@ -109,8 +110,8 @@ inline struct Sha512Ctx sha512_init() {
     return ctx;
 }
 
-inline struct Sha512Ctx sha384_init() {
-    struct Sha512Ctx ctx = sha512_init();
+inline struct Sha512Ctx Sha512Ctx::new_384() {
+    struct Sha512Ctx ctx = Sha512Ctx::new();
     int i = 0;
     while (i < 8) { ctx.h[i] = sha384_H0_[i]; i = i + 1; }
     ctx.is384 = 1;
@@ -185,18 +186,18 @@ void Sha512Ctx::finish(&unsigned char digest) {
     }
 }
 
+inline unsigned long Sha512Ctx::digest_size() const { return self.is384 ? (unsigned long)SHA384_DIGEST_SIZE : (unsigned long)SHA512_DIGEST_SIZE; }
+
+inline unsigned long Sha512Ctx::block_size() const { return (unsigned long)SHA512_BLOCK_SIZE; }
+
 void sha512(const &unsigned char data, unsigned long len,
             &unsigned char digest) {
-    struct Sha512Ctx ctx = sha512_init();
-    ctx.update(data, len);
-    ctx.finish(digest);
+    hash_bytes(Sha512Ctx::new(), data, len, digest);
 }
 
 void sha384(const &unsigned char data, unsigned long len,
             &unsigned char digest) {
-    struct Sha512Ctx ctx = sha384_init();
-    ctx.update(data, len);
-    ctx.finish(digest);
+    hash_bytes(Sha512Ctx::new_384(), data, len, digest);
 }
 
 } // namespace std

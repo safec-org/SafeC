@@ -35,4 +35,13 @@ struct String value_to_csv(const &Value v);
 // '*ok' is set to 0 and the return value is whatever was parsed so far.
 struct Value csv_parse(const &char text, ?&int ok);
 
+// The CSV backend as a Format (see value.h): v.encode(Csv::new()),
+// Value::decode(Csv::new(), text, &ok) — the same as csv_write / csv_parse.
+struct Csv {
+    int unused_;
+    static struct Csv new();
+    void         write(const &Value v, &String out) const;
+    struct Value parse(const &char text, ?&int ok) const;
+};
+
 } // namespace std

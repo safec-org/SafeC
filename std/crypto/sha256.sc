@@ -2,6 +2,7 @@
 #pragma once
 #include <std/stddef.h>
 #include <std/crypto/sha256.h>
+#include <std/crypto/hash.h>
 
 namespace std {
 
@@ -94,7 +95,7 @@ static void sha256_compress_(unsigned int* h, const unsigned char* block) {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-inline struct Sha256Ctx sha256_init() {
+inline struct Sha256Ctx Sha256Ctx::new() {
     struct Sha256Ctx ctx;
     int i = 0;
     while (i < 8) { ctx.h[i] = sha256_H0_[i]; i = i + 1; }
@@ -104,8 +105,8 @@ inline struct Sha256Ctx sha256_init() {
     return ctx;
 }
 
-inline struct Sha256Ctx sha224_init() {
-    struct Sha256Ctx ctx = sha256_init();
+inline struct Sha256Ctx Sha256Ctx::new_224() {
+    struct Sha256Ctx ctx = Sha256Ctx::new();
     int i = 0;
     while (i < 8) { ctx.h[i] = sha224_H0_[i]; i = i + 1; }
     ctx.is224 = 1;
@@ -173,11 +174,13 @@ void Sha256Ctx::finish(&unsigned char digest) {
     }
 }
 
+inline unsigned long Sha256Ctx::digest_size() const { return self.is224 ? (unsigned long)SHA224_DIGEST_SIZE : (unsigned long)SHA256_DIGEST_SIZE; }
+
+inline unsigned long Sha256Ctx::block_size() const { return (unsigned long)SHA256_BLOCK_SIZE; }
+
 void sha256(const &unsigned char data, unsigned long len,
             &unsigned char digest) {
-    struct Sha256Ctx ctx = sha256_init();
-    ctx.update(data, len);
-    ctx.finish(digest);
+    hash_bytes(Sha256Ctx::new(), data, len, digest);
 }
 
 } // namespace std

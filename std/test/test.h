@@ -2,7 +2,7 @@
 // Freestanding-safe (uses only io.h for output).
 //
 // SafeC usage (no function-like macros needed):
-//   struct TestSuite t = test_suite_init();
+//   struct TestSuite t = TestSuite::new();   // std::TestSuite::new() outside namespace std
 //   t.add("addition works", my_test);
 //   t.run();
 //   return t.all_passed() ? 0 : 1;
@@ -88,6 +88,9 @@ struct TestSuite {
     int passed;
     int failed;
 
+    // An empty suite.
+    static struct TestSuite new();
+
     // Register a test case.
     void add(const &char name, fn void() func);
 
@@ -100,9 +103,6 @@ struct TestSuite {
     // Return 1 if every registered test passed, 0 otherwise.
     int  all_passed() const;
 };
-
-// Initialise a TestSuite.
-struct TestSuite test_suite_init();
 
 // Run all tests in `suite`, print summary, then call exit(1) on any failure.
 // Useful as the last line of a test main().

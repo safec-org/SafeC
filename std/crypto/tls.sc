@@ -51,12 +51,12 @@ inline void TlsTranscript::finish(unsigned char out[32]) {
     snap.finish(out);
 }
 
-// ── tls_session_init ──────────────────────────────────────────────────────────
+// ── TlsSession::new ───────────────────────────────────────────────────────────
 
-inline struct TlsSession tls_session_init() {
+inline struct TlsSession TlsSession::new() {
     struct TlsSession s;
     unsafe { memset((void*)&s, 0, (unsigned long)sizeof(struct TlsSession)); }
-    s.transcript.hash = sha256_init();
+    s.transcript.hash = Sha256Ctx::new();
     return s;
 }
 
@@ -149,7 +149,7 @@ unsigned long TlsSession::encode_record(unsigned char content_type,
 
     unsigned char nonce[TLS_IV_LEN];
     self.compute_nonce((unsigned char*)nonce, 1);
-    struct AesCtx aes = aes256_init(self.write_key);
+    struct AesCtx aes = AesCtx::new_256(self.write_key);
     unsafe {
         tls_header_(out, (unsigned char)TLS_APPLICATION_DATA, rec_len);
         memmove((void*)(out + 5), (const void*)payload, payload_len);
@@ -202,7 +202,7 @@ unsigned long TlsSession::decode_record(const &unsigned char data_ref,
     unsigned char plain[16640];   // TLS_MAX_RECORD_LEN + 256
     unsigned char nonce[TLS_IV_LEN];
     self.compute_nonce((unsigned char*)nonce, 0);
-    struct AesCtx aes = aes256_init(self.read_key);
+    struct AesCtx aes = AesCtx::new_256(self.read_key);
     int ok = 0;
     unsafe {
         memcpy((void*)plain, (const void*)(data + 5), inner_len);

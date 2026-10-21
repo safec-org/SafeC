@@ -22,9 +22,9 @@ struct SyscallTable {
 
     // Check if a syscall number is registered.
     int       is_registered(int num) const;
-};
 
-// Initialize syscall table (all entries NULL).
-struct SyscallTable syscall_init();
+    // Initialize syscall table (all entries NULL).
+    static struct SyscallTable new();
+};
 
 } // namespace std

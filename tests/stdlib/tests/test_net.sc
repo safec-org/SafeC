@@ -305,10 +305,15 @@ void t_tcp() {
     }
 }
 
-struct LoopDrv { int frames; unsigned long bytes; };
-static int loop_tx(&LoopDrv d, const &unsigned char buf, unsigned long len) {
-    d.frames = d.frames + 1;
-    d.bytes = d.bytes + len;
+// A NetDriver: anything with transmit(frame, len).
+struct LoopDrv {
+    int frames;
+    unsigned long bytes;
+    int transmit(const &unsigned char frame, unsigned long len);
+};
+int LoopDrv::transmit(const &unsigned char frame, unsigned long len) {
+    self.frames = self.frames + 1;
+    self.bytes = self.bytes + len;
     return 0;
 }
 
@@ -326,7 +331,7 @@ void t_drivers() {
     struct LoopDrv drv;
     drv.frames = 0;
     drv.bytes = 0UL;
-    struct NetIf nif = netif_new(&drv, loop_tx);
+    struct NetIf nif = NetIf::new(&drv);
     struct PacketBuf pkt;
     pkt.reset();
     pkt.len = 60UL;
@@ -339,7 +344,7 @@ void t_drivers() {
     struct DmaEngine eng;
     eng.polls = 0;
     eng.moved = 0UL;
-    struct DmaChannel<DmaEngine> ch = dma_channel_new(1U, dma_start, dma_poll, (?&DmaEngine)&eng);
+    struct DmaChannel<DmaEngine> ch = DmaChannel::new(1U, dma_start, dma_poll, (?&DmaEngine)&eng);
     ASSERT_EQ(ch.start(0x1000UL, 0x2000UL, 256UL), 0);
     ASSERT_TRUE(ch.is_busy());
     ASSERT_EQ(ch.start(0UL, 0UL, 1UL), -1);   // busy
@@ -412,7 +417,7 @@ void t_build_parse() {
 }
 
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("net_core/ethernet", t_core_eth);
         t.add("ipv4/udp", t_ipv4_udp);

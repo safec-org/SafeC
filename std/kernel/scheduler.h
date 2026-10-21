@@ -35,9 +35,9 @@ struct Scheduler {
 
     // Return the number of READY processes.
     int           ready_count() const;
-};
 
-// Initialize the scheduler.
-struct Scheduler sched_init();
+    // Initialize the scheduler.
+    static struct Scheduler new();
+};
 
 } // namespace std

@@ -13,11 +13,11 @@
 namespace std {
 
 static struct GuiColor __widget_default_bg(int kind) {
-    if (kind == WIDGET_BUTTON) { return gui_rgba(70U, 70U, 78U, 255U); }
-    if (kind == WIDGET_TEXTINPUT) { return gui_rgba(30U, 30U, 34U, 255U); }
-    if (kind == WIDGET_CHECKBOX) { return gui_rgba(0U, 0U, 0U, 0U); }
-    if (kind == WIDGET_SLIDER) { return gui_rgba(50U, 50U, 56U, 255U); }
-    return gui_rgba(0U, 0U, 0U, 0U);
+    if (kind == WIDGET_BUTTON) { return GuiColor::rgba(70U, 70U, 78U, 255U); }
+    if (kind == WIDGET_TEXTINPUT) { return GuiColor::rgba(30U, 30U, 34U, 255U); }
+    if (kind == WIDGET_CHECKBOX) { return GuiColor::rgba(0U, 0U, 0U, 0U); }
+    if (kind == WIDGET_SLIDER) { return GuiColor::rgba(50U, 50U, 56U, 255U); }
+    return GuiColor::rgba(0U, 0U, 0U, 0U);
 }
 
 static &Widget __widget_new(int kind) {
@@ -32,15 +32,15 @@ static &Widget __widget_new(int kind) {
         w->alignment = WIDGET_ALIGN_START;
 
         w->style.bg = __widget_default_bg(kind);
-        w->style.fg = gui_rgba(230U, 230U, 235U, 255U);
-        w->style.border = gui_rgba(110U, 110U, 120U, 255U);
+        w->style.fg = GuiColor::rgba(230U, 230U, 235U, 255U);
+        w->style.border = GuiColor::rgba(110U, 110U, 120U, 255U);
         w->style.borderWidth = 0;
         w->style.padding = 6;
         w->style.spacing = 6;
         w->style.fontScale = 1;
         w->style.font = (const struct GuiFont*)0;
 
-        w->text = string_new();
+        w->text = String::new();
         w->visible = 1;
         w->enabled = 1;
         w->checked = 0;
@@ -63,56 +63,56 @@ static &Widget __widget_new(int kind) {
         w->customEvent = (void*)0;
         w->userData = (void*)0;
 
-        w->children = vec_new();
+        w->children = Vec::new();
         w->parent = (struct Widget*)0;
     }
     return w;
 }
 
-&Widget widget_vstack() {
+&Widget Widget::vstack() {
     return __widget_new(WIDGET_VSTACK);
 }
-&Widget widget_hstack() {
+&Widget Widget::hstack() {
     return __widget_new(WIDGET_HSTACK);
 }
-&Widget widget_spacer() {
+&Widget Widget::spacer() {
     &Widget w = __widget_new(WIDGET_SPACER);
     unsafe { w->stretch = 1; return w; }
 }
-&Widget widget_button(const &char text) {
+&Widget Widget::button(const &char text) {
     &Widget w = __widget_new(WIDGET_BUTTON);
     unsafe {
         w->text.free();
-        w->text = string_from(text);
+        w->text = String::from(text);
         return w;
     }
 }
-&Widget widget_label(const &char text) {
+&Widget Widget::label(const &char text) {
     &Widget w = __widget_new(WIDGET_LABEL);
     unsafe {
         w->text.free();
-        w->text = string_from(text);
+        w->text = String::from(text);
         return w;
     }
 }
-&Widget widget_checkbox(const &char text, int checked) {
+&Widget Widget::checkbox(const &char text, int checked) {
     &Widget w = __widget_new(WIDGET_CHECKBOX);
     unsafe {
         w->text.free();
-        w->text = string_from(text);
+        w->text = String::from(text);
         w->checked = checked;
         return w;
     }
 }
-&Widget widget_textinput(const &char placeholder) {
+&Widget Widget::textinput(const &char placeholder) {
     &Widget w = __widget_new(WIDGET_TEXTINPUT);
     unsafe {
         w->text.free();
-        w->text = string_from(placeholder);
+        w->text = String::from(placeholder);
         return w;
     }
 }
-&Widget widget_slider(double minValue, double maxValue, double value) {
+&Widget Widget::slider(double minValue, double maxValue, double value) {
     &Widget w = __widget_new(WIDGET_SLIDER);
     unsafe {
         w->sliderMin = minValue;
@@ -121,8 +121,8 @@ static &Widget __widget_new(int kind) {
         return w;
     }
 }
-&Widget widget_custom_raw_(WidgetDrawFn draw, WidgetLayoutFn layout,
-                              WidgetCustomEventFn eventFn, void* userData) {
+&Widget Widget::custom_raw_(WidgetDrawFn draw, WidgetLayoutFn layout,
+                            WidgetCustomEventFn eventFn, void* userData) {
     &Widget w = __widget_new(WIDGET_CUSTOM);
     unsafe {
         w->customDraw = (void*)draw;
@@ -133,84 +133,84 @@ static &Widget __widget_new(int kind) {
     }
 }
 
-void widget_add_child(&Widget parent, &Widget child) {
+void Widget::add_child(&Widget child) {
     unsafe {
-        child->parent = parent;
-        parent->children.push(child);
+        child->parent = (struct Widget*)self;
+        self.children.push(child);
     }
 }
 
 // ── customization ────────────────────────────────────────────────────────────
 
-&Widget widget_set_bg(&Widget w, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-    unsafe { w->style.bg = gui_rgba(r, g, b, a); }
-    return w;
+&Widget Widget::set_bg(unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+    unsafe { self.style.bg = GuiColor::rgba(r, g, b, a); }
+    unsafe { return (struct Widget*)self; }
 }
-&Widget widget_set_fg(&Widget w, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-    unsafe { w->style.fg = gui_rgba(r, g, b, a); }
-    return w;
+&Widget Widget::set_fg(unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+    unsafe { self.style.fg = GuiColor::rgba(r, g, b, a); }
+    unsafe { return (struct Widget*)self; }
 }
-&Widget widget_set_border(&Widget w, unsigned char r, unsigned char g, unsigned char b,
+&Widget Widget::set_border(unsigned char r, unsigned char g, unsigned char b,
                                   unsigned char a, int width) {
-    unsafe { w->style.border = gui_rgba(r, g, b, a); w->style.borderWidth = width; }
-    return w;
+    unsafe { self.style.border = GuiColor::rgba(r, g, b, a); self.style.borderWidth = width; }
+    unsafe { return (struct Widget*)self; }
 }
-&Widget widget_set_padding(&Widget w, int padding) {
-    unsafe { w->style.padding = padding; }
-    return w;
+&Widget Widget::set_padding(int padding) {
+    unsafe { self.style.padding = padding; }
+    unsafe { return (struct Widget*)self; }
 }
-&Widget widget_set_spacing(&Widget w, int spacing) {
-    unsafe { w->style.spacing = spacing; }
-    return w;
+&Widget Widget::set_spacing(int spacing) {
+    unsafe { self.style.spacing = spacing; }
+    unsafe { return (struct Widget*)self; }
 }
-&Widget widget_set_pref_size(&Widget w, int prefW, int prefH) {
-    unsafe { w->prefW = prefW; w->prefH = prefH; }
-    return w;
+&Widget Widget::set_pref_size(int prefW, int prefH) {
+    unsafe { self.prefW = prefW; self.prefH = prefH; }
+    unsafe { return (struct Widget*)self; }
 }
-&Widget widget_set_stretch(&Widget w, int stretch) {
-    unsafe { w->stretch = stretch; }
-    return w;
+&Widget Widget::set_stretch(int stretch) {
+    unsafe { self.stretch = stretch; }
+    unsafe { return (struct Widget*)self; }
 }
-&Widget widget_set_alignment(&Widget w, int alignment) {
-    unsafe { w->alignment = alignment; }
-    return w;
+&Widget Widget::set_alignment(int alignment) {
+    unsafe { self.alignment = alignment; }
+    unsafe { return (struct Widget*)self; }
 }
-&Widget widget_set_font_scale(&Widget w, int scale) {
-    unsafe { w->style.fontScale = scale; }
-    return w;
+&Widget Widget::set_font_scale(int scale) {
+    unsafe { self.style.fontScale = scale; }
+    unsafe { return (struct Widget*)self; }
 }
-&Widget widget_set_font(&Widget w, const ?&GuiFont font) {
-    unsafe { w->style.font = font; }
-    return w;
+&Widget Widget::set_font(const ?&GuiFont font) {
+    unsafe { self.style.font = font; }
+    unsafe { return (struct Widget*)self; }
 }
-&Widget widget_set_visible(&Widget w, int visible) {
-    unsafe { w->visible = visible; }
-    return w;
+&Widget Widget::set_visible(int visible) {
+    unsafe { self.visible = visible; }
+    unsafe { return (struct Widget*)self; }
 }
-&Widget widget_set_enabled(&Widget w, int enabled) {
-    unsafe { w->enabled = enabled; }
-    return w;
+&Widget Widget::set_enabled(int enabled) {
+    unsafe { self.enabled = enabled; }
+    unsafe { return (struct Widget*)self; }
 }
-&Widget widget_set_text(&Widget w, const &char text) {
+&Widget Widget::set_text(const &char text) {
     unsafe {
-        w->text.free();
-        w->text = string_from(text);
+        self.text.free();
+        self.text = String::from(text);
     }
-    return w;
+    unsafe { return (struct Widget*)self; }
 }
-&Widget widget_on_click_raw_(&Widget w, void* cb, void* userData) {
-    unsafe { w->onClick = cb; w->onClickData = userData; }
-    return w;
+&Widget Widget::on_click_raw_(void* cb, void* userData) {
+    unsafe { self.onClick = cb; self.onClickData = userData; }
+    unsafe { return (struct Widget*)self; }
 }
-&Widget widget_on_change_raw_(&Widget w, void* cb, void* userData) {
-    unsafe { w->onChange = cb; w->onChangeData = userData; }
-    return w;
+&Widget Widget::on_change_raw_(void* cb, void* userData) {
+    unsafe { self.onChange = cb; self.onChangeData = userData; }
+    unsafe { return (struct Widget*)self; }
 }
 
 // ── measurement ───────────────────────────────────────────────────────────────
 // See gui_widget.h's WidgetLayoutFn doc comment on the single-pass
 // simplification this implements: a container's own natural size is 0
-// unless explicitly given via widget_set_pref_size() or a stretch weight
+// unless explicitly given via set_pref_size() or a stretch weight
 // — auto-sizing-to-content only applies to leaf (text-bearing) widgets.
 
 static int __widget_text_w(&Widget w) {
@@ -221,7 +221,7 @@ static int __widget_text_w(&Widget w) {
         while (w->text.data[len] != '\0') { len = len + 1UL; }
     }
     if (font != (const struct GuiFont*)0) {
-        unsafe { return gui_text_width_ex((const char*)w->text.data, scale, font); }
+        unsafe { return font->text_width((const char*)w->text.data, scale); }
     }
     unsafe { return gui_text_width((const char*)w->text.data, scale); }
 }
@@ -230,7 +230,7 @@ static int __widget_text_h(&Widget w) {
     int scale; const struct GuiFont* font;
     unsafe { scale = w->style.fontScale; font = w->style.font; }
     if (font != (const struct GuiFont*)0) {
-        unsafe { return gui_text_height_ex(scale, font); }
+        unsafe { return font->text_height(scale); }
     }
     return gui_text_height(scale);
 }
@@ -260,25 +260,25 @@ static int __widget_natural_h(&Widget w) {
 
 // ── layout ───────────────────────────────────────────────────────────────────
 
-void gui_layout(&Widget root, int x, int y, int w, int h) {
+void Widget::layout(int x, int y, int w, int h) {
     int kind;
-    unsafe { kind = root->kind; }
+    unsafe { kind = self.kind; }
 
     if (kind == WIDGET_CUSTOM) {
         WidgetLayoutFn layoutFn;
-        unsafe { layoutFn = (WidgetLayoutFn)root->customLayout; }
+        unsafe { layoutFn = (WidgetLayoutFn)self.customLayout; }
         if (layoutFn != (WidgetLayoutFn)0) {
-            unsafe { layoutFn(root, x, y, w, h); }
+            unsafe { layoutFn(self, x, y, w, h); }
             return;
         }
     }
 
-    unsafe { root->x = x; root->y = y; root->w = w; root->h = h; }
+    unsafe { self.x = x; self.y = y; self.w = w; self.h = h; }
 
     if (kind != WIDGET_VSTACK && kind != WIDGET_HSTACK) { return; }
 
     int padding; int spacing;
-    unsafe { padding = root->style.padding; spacing = root->style.spacing; }
+    unsafe { padding = self.style.padding; spacing = self.style.spacing; }
     int innerX = x + padding;
     int innerY = y + padding;
     int innerW = w - 2 * padding; if (innerW < 0) { innerW = 0; }
@@ -286,7 +286,7 @@ void gui_layout(&Widget root, int x, int y, int w, int h) {
     int mainSize = (kind == WIDGET_VSTACK) ? innerH : innerW;
 
     unsigned long n;
-    unsafe { n = root->children.length(); }
+    unsafe { n = self.children.length(); }
 
     // Pass 1: natural/preferred main-axis size per child, total stretch weight.
     int usedFixed = 0;
@@ -295,7 +295,7 @@ void gui_layout(&Widget root, int x, int y, int w, int h) {
     while (i < n) {
         &Widget child;
         unsafe {
-            &Widget slotp = *root->children.at(i);
+            &Widget slotp = *self.children.at(i);
             child = slotp;
         }
         int stretch; unsafe { stretch = child->stretch; }
@@ -316,7 +316,7 @@ void gui_layout(&Widget root, int x, int y, int w, int h) {
     while (i < n) {
         &Widget child;
         unsafe {
-            &Widget slotp = *root->children.at(i);
+            &Widget slotp = *self.children.at(i);
             child = slotp;
         }
         int stretch; int alignment;
@@ -341,9 +341,9 @@ void gui_layout(&Widget root, int x, int y, int w, int h) {
         if (crossPos < 0) { crossPos = 0; }
 
         if (kind == WIDGET_VSTACK) {
-            gui_layout(child, innerX + crossPos, cursor, crossLen, mainLen);
+            child.layout(innerX + crossPos, cursor, crossLen, mainLen);
         } else {
-            gui_layout(child, cursor, innerY + crossPos, mainLen, crossLen);
+            child.layout(cursor, innerY + crossPos, mainLen, crossLen);
         }
 
         cursor = cursor + mainLen + spacing;
@@ -362,29 +362,29 @@ static void __widget_draw_text_centered(struct GuiWindow* win, &Widget w, int bo
     unsafe { scale = w->style.fontScale; fg = w->style.fg; font = w->style.font; }
     unsafe {
         if (font != (const struct GuiFont*)0) {
-            gui_draw_text_ex(win, tx, ty, (const char*)w->text.data, fg, scale, font);
+            font->draw_text(win, tx, ty, (const char*)w->text.data, fg, scale);
         } else {
-            gui_draw_text(win, tx, ty, (const char*)w->text.data, fg, scale);
+            win->draw_text(tx, ty, (const char*)w->text.data, fg, scale);
         }
     }
 }
 
-void gui_render(&GuiWindow win, &Widget root) {
-    int visible; unsafe { visible = root->visible; }
+void Widget::render(&GuiWindow win) {
+    int visible; unsafe { visible = self.visible; }
     if (!visible) { return; }
 
     int kind; int x; int y; int w; int h;
-    unsafe { kind = root->kind; x = root->x; y = root->y; w = root->w; h = root->h; }
+    unsafe { kind = self.kind; x = self.x; y = self.y; w = self.w; h = self.h; }
 
     if (kind == WIDGET_CUSTOM) {
-        WidgetDrawFn drawFn; unsafe { drawFn = (WidgetDrawFn)root->customDraw; }
-        if (drawFn != (WidgetDrawFn)0) { unsafe { drawFn(win, root); } }
-        unsigned long n; unsafe { n = root->children.length(); }
+        WidgetDrawFn drawFn; unsafe { drawFn = (WidgetDrawFn)self.customDraw; }
+        if (drawFn != (WidgetDrawFn)0) { unsafe { drawFn(win, self); } }
+        unsigned long n; unsafe { n = self.children.length(); }
         unsigned long i = 0UL;
         while (i < n) {
             &Widget child;
-            unsafe { child = *root->children.at(i); }
-            gui_render(win, child);
+            unsafe { child = *self.children.at(i); }
+            child.render(win);
             i = i + 1UL;
         }
         return;
@@ -392,93 +392,93 @@ void gui_render(&GuiWindow win, &Widget root) {
 
     struct GuiColor bg; int borderWidth; struct GuiColor border; int enabled; int pressed; int hover;
     unsafe {
-        bg = root->style.bg; borderWidth = root->style.borderWidth; border = root->style.border;
-        enabled = root->enabled; pressed = root->pressed; hover = root->hover;
+        bg = self.style.bg; borderWidth = self.style.borderWidth; border = self.style.border;
+        enabled = self.enabled; pressed = self.pressed; hover = self.hover;
     }
 
     if (kind == WIDGET_VSTACK || kind == WIDGET_HSTACK) {
-        if (bg.a > 0U) { gui_fill_rect(win, x, y, w, h, bg); }
-        if (borderWidth > 0) { gui_draw_rect_border(win, x, y, w, h, border, borderWidth); }
+        if (bg.a > 0U) { win.fill_rect(x, y, w, h, bg); }
+        if (borderWidth > 0) { win.draw_rect_border(x, y, w, h, border, borderWidth); }
     } else if (kind == WIDGET_BUTTON) {
         struct GuiColor fill = bg;
-        if (!enabled) { fill = gui_rgba(50U, 50U, 54U, 255U); }
+        if (!enabled) { fill = GuiColor::rgba(50U, 50U, 54U, 255U); }
         else if (pressed) {
             unsigned char pr = (unsigned char)(bg.r > 30U ? bg.r - 30U : 0U);
             unsigned char pg = (unsigned char)(bg.g > 30U ? bg.g - 30U : 0U);
             unsigned char pb = (unsigned char)(bg.b > 30U ? bg.b - 30U : 0U);
-            fill = gui_rgba(pr, pg, pb, bg.a);
+            fill = GuiColor::rgba(pr, pg, pb, bg.a);
         }
         else if (hover) {
             unsigned char hr = (unsigned char)(bg.r + 15U > 255U ? 255U : bg.r + 15U);
             unsigned char hg = (unsigned char)(bg.g + 15U > 255U ? 255U : bg.g + 15U);
             unsigned char hb = (unsigned char)(bg.b + 15U > 255U ? 255U : bg.b + 15U);
-            fill = gui_rgba(hr, hg, hb, bg.a);
+            fill = GuiColor::rgba(hr, hg, hb, bg.a);
         }
-        gui_fill_rect(win, x, y, w, h, fill);
-        gui_draw_rect_border(win, x, y, w, h, border, borderWidth > 0 ? borderWidth : 1);
-        __widget_draw_text_centered(win, root, x, y, w, h);
+        win.fill_rect(x, y, w, h, fill);
+        win.draw_rect_border(x, y, w, h, border, borderWidth > 0 ? borderWidth : 1);
+        __widget_draw_text_centered(win, self, x, y, w, h);
     } else if (kind == WIDGET_LABEL) {
         struct GuiColor fg; int scale; const struct GuiFont* font;
-        unsafe { fg = root->style.fg; scale = root->style.fontScale; font = root->style.font; }
+        unsafe { fg = self.style.fg; scale = self.style.fontScale; font = self.style.font; }
         unsafe {
             if (font != (const struct GuiFont*)0) {
-                gui_draw_text_ex(win, x, y, (const char*)root->text.data, fg, scale, font);
+                font->draw_text(win, x, y, (const char*)self.text.data, fg, scale);
             } else {
-                gui_draw_text(win, x, y, (const char*)root->text.data, fg, scale);
+                win.draw_text(x, y, (const char*)self.text.data, fg, scale);
             }
         }
     } else if (kind == WIDGET_CHECKBOX) {
         int boxSize = 16;
         int boxY = y + (h - boxSize) / 2;
-        struct GuiColor boxFill = enabled ? gui_rgba(30U, 30U, 34U, 255U) : gui_rgba(45U, 45U, 48U, 255U);
-        gui_fill_rect(win, x, boxY, boxSize, boxSize, boxFill);
-        gui_draw_rect_border(win, x, boxY, boxSize, boxSize, border, 1);
-        int checked; unsafe { checked = root->checked; }
+        struct GuiColor boxFill = enabled ? GuiColor::rgba(30U, 30U, 34U, 255U) : GuiColor::rgba(45U, 45U, 48U, 255U);
+        win.fill_rect(x, boxY, boxSize, boxSize, boxFill);
+        win.draw_rect_border(x, boxY, boxSize, boxSize, border, 1);
+        int checked; unsafe { checked = self.checked; }
         if (checked) {
-            gui_fill_rect(win, x + 3, boxY + 3, boxSize - 6, boxSize - 6, gui_rgba(90U, 170U, 255U, 255U));
+            win.fill_rect(x + 3, boxY + 3, boxSize - 6, boxSize - 6, GuiColor::rgba(90U, 170U, 255U, 255U));
         }
         struct GuiColor fg; int scale; const struct GuiFont* font;
-        unsafe { fg = root->style.fg; scale = root->style.fontScale; font = root->style.font; }
-        int textY = y + (h - __widget_text_h(root)) / 2;
+        unsafe { fg = self.style.fg; scale = self.style.fontScale; font = self.style.font; }
+        int textY = y + (h - __widget_text_h(self)) / 2;
         unsafe {
             if (font != (const struct GuiFont*)0) {
-                gui_draw_text_ex(win, x + boxSize + 6, textY, (const char*)root->text.data, fg, scale, font);
+                font->draw_text(win, x + boxSize + 6, textY, (const char*)self.text.data, fg, scale);
             } else {
-                gui_draw_text(win, x + boxSize + 6, textY, (const char*)root->text.data, fg, scale);
+                win.draw_text(x + boxSize + 6, textY, (const char*)self.text.data, fg, scale);
             }
         }
     } else if (kind == WIDGET_TEXTINPUT) {
-        int focused; unsafe { focused = root->focused; }
-        gui_fill_rect(win, x, y, w, h, bg);
-        gui_draw_rect_border(win, x, y, w, h, focused ? gui_rgba(90U, 170U, 255U, 255U) : border, borderWidth > 0 ? borderWidth : 1);
-        int padding; unsafe { padding = root->style.padding; }
+        int focused; unsafe { focused = self.focused; }
+        win.fill_rect(x, y, w, h, bg);
+        win.draw_rect_border(x, y, w, h, focused ? GuiColor::rgba(90U, 170U, 255U, 255U) : border, borderWidth > 0 ? borderWidth : 1);
+        int padding; unsafe { padding = self.style.padding; }
         struct GuiColor fg; int scale; const struct GuiFont* font;
-        unsafe { fg = root->style.fg; scale = root->style.fontScale; font = root->style.font; }
-        int textY = y + (h - __widget_text_h(root)) / 2;
+        unsafe { fg = self.style.fg; scale = self.style.fontScale; font = self.style.font; }
+        int textY = y + (h - __widget_text_h(self)) / 2;
         unsafe {
             if (font != (const struct GuiFont*)0) {
-                gui_draw_text_ex(win, x + padding, textY, (const char*)root->text.data, fg, scale, font);
+                font->draw_text(win, x + padding, textY, (const char*)self.text.data, fg, scale);
             } else {
-                gui_draw_text(win, x + padding, textY, (const char*)root->text.data, fg, scale);
+                win.draw_text(x + padding, textY, (const char*)self.text.data, fg, scale);
             }
         }
     } else if (kind == WIDGET_SLIDER) {
-        gui_fill_rect(win, x, y + h / 2 - 3, w, 6, bg);
+        win.fill_rect(x, y + h / 2 - 3, w, 6, bg);
         double val; double minV; double maxV;
-        unsafe { val = root->sliderValue; minV = root->sliderMin; maxV = root->sliderMax; }
+        unsafe { val = self.sliderValue; minV = self.sliderMin; maxV = self.sliderMax; }
         double frac = (maxV > minV) ? (val - minV) / (maxV - minV) : 0.0;
         if (frac < 0.0) { frac = 0.0; } if (frac > 1.0) { frac = 1.0; }
         int handleX = x + (int)(frac * (double)(w - 12));
-        gui_fill_rect(win, handleX, y, 12, h, gui_rgba(90U, 170U, 255U, 255U));
+        win.fill_rect(handleX, y, 12, h, GuiColor::rgba(90U, 170U, 255U, 255U));
     }
 
     if (kind == WIDGET_VSTACK || kind == WIDGET_HSTACK) {
-        unsigned long n; unsafe { n = root->children.length(); }
+        unsigned long n; unsafe { n = self.children.length(); }
         unsigned long i = 0UL;
         while (i < n) {
             &Widget child;
-            unsafe { child = *root->children.at(i); }
-            gui_render(win, child);
+            unsafe { child = *self.children.at(i); }
+            child.render(win);
             i = i + 1UL;
         }
     }
@@ -623,8 +623,8 @@ static int __widget_dispatch_one(&Widget w, struct GuiEvent* ev) {
 
 // ── default key actions + prevent_default ───────────────────────────────────
 
-void gui_event_prevent_default(&GuiEvent ev) {
-    unsafe { ev->defaultPrevented = 1; }
+void GuiEvent::prevent_default() {
+    unsafe { self.defaultPrevented = 1; }
 }
 
 static int __widget_is_focusable(&Widget w) {
@@ -678,7 +678,7 @@ static void __widget_apply_default_key_action(&Widget root, struct GuiEvent* ev)
     int keycode; unsafe { keycode = ev->keycode; }
 
     if (keycode == GUI_KEY_TAB) {
-        struct Vec<&Widget> list = vec_new();
+        struct Vec<&Widget> list = Vec::new();
         __widget_collect_focusable(root, &list);
         unsigned long n; unsafe { n = list.length(); }
         if (n > 0UL) {
@@ -739,38 +739,38 @@ static void __widget_apply_default_key_action(&Widget root, struct GuiEvent* ev)
     }
 }
 
-int gui_dispatch_event(&Widget root, &GuiEvent ev) {
+int Widget::dispatch_event(&GuiEvent ev) {
     int evKind; unsafe { evKind = ev->kind; }
     if (evKind == GUI_EVENT_MOUSE_MOVE) {
         // Hover state always updates on move, but the event must still
         // reach __widget_dispatch_one() too — a pressed slider needs
         // MOUSE_MOVE while dragging, not just MOUSE_DOWN/UP.
-        __widget_update_hover(root, ev);
+        __widget_update_hover(self, ev);
     }
-    int handled = __widget_dispatch_one(root, ev);
+    int handled = __widget_dispatch_one(self, ev);
 
     int prevented; unsafe { prevented = ev->defaultPrevented; }
     if (!prevented && evKind == GUI_EVENT_KEY_DOWN) {
-        __widget_apply_default_key_action(root, ev);
+        __widget_apply_default_key_action(self, ev);
     }
     return handled;
 }
 
 // ── lifecycle ─────────────────────────────────────────────────────────────────
 
-void widget_free(&Widget w) {
-    unsigned long n; unsafe { n = w->children.length(); }
+void Widget::free() {
+    unsigned long n; unsafe { n = self.children.length(); }
     unsigned long i = 0UL;
     while (i < n) {
         &Widget child;
-        unsafe { child = *w->children.at(i); }
-        widget_free(child);
+        unsafe { child = *self.children.at(i); }
+        child.free();
         i = i + 1UL;
     }
     unsafe {
-        w->children.free();
-        w->text.free();
-        dealloc_raw_((void*)w);
+        self.children.free();
+        self.text.free();
+        dealloc_raw_((void*)self);
     }
 }
 

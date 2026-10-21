@@ -48,12 +48,12 @@ static struct String __svg_attr(const char* text, unsigned long pos, unsigned lo
                 unsigned long vstart = q + 1UL;
                 unsigned long vend = vstart;
                 while (vend < tagEnd && text[vend] != '"') { vend = vend + 1UL; }
-                return string_from_n(text + vstart, vend - vstart);
+                return String::from_n(text + vstart, vend - vstart);
             }
         }
         i = i + 1UL;
     }
-    return string_new();
+    return String::new();
   }
 }
 
@@ -71,9 +71,9 @@ static double __svg_attr_num(const char* text, unsigned long pos, unsigned long 
 static struct GuiColor __svg_color(struct String v, int* has) {
     unsafe { *has = 1; }
     unsigned long len; unsafe { len = v.len; }
-    if (len == 0UL) { unsafe { *has = 0; } return gui_rgba(0U, 0U, 0U, 255U); }
+    if (len == 0UL) { unsafe { *has = 0; } return GuiColor::rgba(0U, 0U, 0U, 255U); }
     int eqNone; unsafe { eqNone = v.eq_cstr("none"); }
-    if (eqNone) { unsafe { *has = 0; } return gui_rgba(0U, 0U, 0U, 0U); }
+    if (eqNone) { unsafe { *has = 0; } return GuiColor::rgba(0U, 0U, 0U, 0U); }
     unsafe {
         if (v.data[0] == '#' && v.len >= 7UL) {
             unsigned char comp[3];
@@ -100,31 +100,31 @@ static struct GuiColor __svg_color(struct String v, int* has) {
                 comp[ci] = (unsigned char)(h0 * 16 + h1);
                 ci = ci + 1;
             }
-            return gui_rgba(comp[0], comp[1], comp[2], 255U);
+            return GuiColor::rgba(comp[0], comp[1], comp[2], 255U);
         }
     }
     int eqBlack; unsafe { eqBlack = v.eq_cstr("black"); }
-    if (eqBlack) { return gui_rgba(0U, 0U, 0U, 255U); }
+    if (eqBlack) { return GuiColor::rgba(0U, 0U, 0U, 255U); }
     int eqWhite; unsafe { eqWhite = v.eq_cstr("white"); }
-    if (eqWhite) { return gui_rgba(255U, 255U, 255U, 255U); }
+    if (eqWhite) { return GuiColor::rgba(255U, 255U, 255U, 255U); }
     int eqRed; unsafe { eqRed = v.eq_cstr("red"); }
-    if (eqRed) { return gui_rgba(255U, 0U, 0U, 255U); }
+    if (eqRed) { return GuiColor::rgba(255U, 0U, 0U, 255U); }
     int eqGreen; unsafe { eqGreen = v.eq_cstr("green"); }
-    if (eqGreen) { return gui_rgba(0U, 128U, 0U, 255U); }
+    if (eqGreen) { return GuiColor::rgba(0U, 128U, 0U, 255U); }
     int eqBlue; unsafe { eqBlue = v.eq_cstr("blue"); }
-    if (eqBlue) { return gui_rgba(0U, 0U, 255U, 255U); }
+    if (eqBlue) { return GuiColor::rgba(0U, 0U, 255U, 255U); }
     int eqYellow; unsafe { eqYellow = v.eq_cstr("yellow"); }
-    if (eqYellow) { return gui_rgba(255U, 255U, 0U, 255U); }
+    if (eqYellow) { return GuiColor::rgba(255U, 255U, 0U, 255U); }
     int eqCyan; unsafe { eqCyan = v.eq_cstr("cyan"); }
-    if (eqCyan) { return gui_rgba(0U, 255U, 255U, 255U); }
+    if (eqCyan) { return GuiColor::rgba(0U, 255U, 255U, 255U); }
     int eqMagenta; unsafe { eqMagenta = v.eq_cstr("magenta"); }
-    if (eqMagenta) { return gui_rgba(255U, 0U, 255U, 255U); }
+    if (eqMagenta) { return GuiColor::rgba(255U, 0U, 255U, 255U); }
     int eqGray; unsafe { eqGray = v.eq_cstr("gray"); }
-    if (eqGray) { return gui_rgba(128U, 128U, 128U, 255U); }
+    if (eqGray) { return GuiColor::rgba(128U, 128U, 128U, 255U); }
     int eqTransparent; unsafe { eqTransparent = v.eq_cstr("transparent"); }
-    if (eqTransparent) { unsafe { *has = 0; } return gui_rgba(0U, 0U, 0U, 0U); }
+    if (eqTransparent) { unsafe { *has = 0; } return GuiColor::rgba(0U, 0U, 0U, 0U); }
     unsafe { *has = 0; }
-    return gui_rgba(0U, 0U, 0U, 255U);
+    return GuiColor::rgba(0U, 0U, 0U, 255U);
 }
 
 #define GUI_SVG_MAX_POINTS 512
@@ -174,7 +174,7 @@ static void __svg_fill_polygon(&GuiWindow win, int ox, int oy,
             while (p + 1 < count) {
                 int xStart = (int)xints[p];
                 int xEnd = (int)xints[p + 1];
-                gui_fill_rect(win, ox + xStart, oy + y, xEnd - xStart + 1, 1, color);
+                win.fill_rect(ox + xStart, oy + y, xEnd - xStart + 1, 1, color);
                 p = p + 2;
             }
             y = y + 1;
@@ -189,11 +189,11 @@ static void __svg_stroke_polyline(&GuiWindow win, int ox, int oy,
     unsafe {
         int i = 0;
         while (i < n - 1) {
-            gui_draw_line(win, ox + (int)xs[i], oy + (int)ys[i], ox + (int)xs[i + 1], oy + (int)ys[i + 1], color);
+            win.draw_line(ox + (int)xs[i], oy + (int)ys[i], ox + (int)xs[i + 1], oy + (int)ys[i + 1], color);
             i = i + 1;
         }
         if (closed) {
-            gui_draw_line(win, ox + (int)xs[n - 1], oy + (int)ys[n - 1], ox + (int)xs[0], oy + (int)ys[0], color);
+            win.draw_line(ox + (int)xs[n - 1], oy + (int)ys[n - 1], ox + (int)xs[0], oy + (int)ys[0], color);
         }
     }
 }
@@ -217,12 +217,12 @@ static int __svg_parse_points(struct String pts, double* xs, double* ys, int max
             if (i >= len) { break; }
             unsigned long start = i;
             while (i < len && pts.data[i] != ',' && !__svg_is_ws(pts.data[i])) { i = i + 1UL; }
-            struct String xsStr = string_from_n((const char*)pts.data + start, i - start);
+            struct String xsStr = String::from_n((const char*)pts.data + start, i - start);
             int ok1; double xv; xv = xsStr.parse_float(&ok1); xsStr.free();
             while (i < len && (pts.data[i] == ',' || __svg_is_ws(pts.data[i]))) { i = i + 1UL; }
             start = i;
             while (i < len && !__svg_is_ws(pts.data[i]) && pts.data[i] != ',') { i = i + 1UL; }
-            struct String ysStr = string_from_n((const char*)pts.data + start, i - start);
+            struct String ysStr = String::from_n((const char*)pts.data + start, i - start);
             int ok2; double yv; yv = ysStr.parse_float(&ok2); ysStr.free();
             if (ok1 && ok2) { xs[n] = xv; ys[n] = yv; n = n + 1; }
         }
@@ -293,7 +293,7 @@ static void __svg_draw_path(&GuiWindow win, int ox, int oy, struct String d,
             unsigned long numLen; unsafe { numLen = i - start2; }
             if (numLen == 0UL) { break; }
             struct String numStr;
-            unsafe { numStr = string_from_n((const char*)d.data + start2, numLen); }
+            unsafe { numStr = String::from_n((const char*)d.data + start2, numLen); }
             int ok; double val;
             unsafe { val = numStr.parse_float(&ok); numStr.free(); }
             nums[got] = ok ? val : 0.0;
@@ -339,7 +339,7 @@ static unsigned long __svg_find_tag_end(const char* text, unsigned long len, uns
     return len;
 }
 
-int gui_draw_svg(&GuiWindow win, int ox, int oy, const &char svgText) {
+int GuiWindow::draw_svg(int ox, int oy, const &char svgText) {
     unsigned long len = 0UL;
     unsafe { while (svgText[len] != '\0') { len = len + 1UL; } }
 
@@ -370,8 +370,8 @@ int gui_draw_svg(&GuiWindow win, int ox, int oy, const &char svgText) {
             struct String fillStr = __svg_attr(svgText, nameEnd, tagEnd, "fill");
             int hasFill; struct GuiColor fill = __svg_color(fillStr, &hasFill);
             unsafe { fillStr.free(); }
-            if (!hasFill && fillStr.len == 0UL) { hasFill = 1; fill = gui_rgba(0U,0U,0U,255U); }
-            if (hasFill) { gui_fill_rect(win, ox + (int)x, oy + (int)y, (int)w, (int)h, fill); }
+            if (!hasFill && fillStr.len == 0UL) { hasFill = 1; fill = GuiColor::rgba(0U,0U,0U,255U); }
+            if (hasFill) { self.fill_rect(ox + (int)x, oy + (int)y, (int)w, (int)h, fill); }
         }
         else if (__svg_tag_is(svgText, nameStart, nameLen, "circle", 6UL)) {
             double cx = __svg_attr_num(svgText, nameEnd, tagEnd, "cx", 0.0);
@@ -386,7 +386,7 @@ int gui_draw_svg(&GuiWindow win, int ox, int oy, const &char svgText) {
                     int xx = -(int)r;
                     while (xx <= (int)r) {
                         if ((double)(xx*xx + yy*yy) <= r*r) {
-                            gui_set_pixel(win, ox + (int)cx + xx, oy + (int)cy + yy,
+                            self.set_pixel(ox + (int)cx + xx, oy + (int)cy + yy,
                                           ((unsigned int)fill.r << 24) | ((unsigned int)fill.g << 16) |
                                           ((unsigned int)fill.b << 8) | (unsigned int)fill.a);
                         }
@@ -404,7 +404,7 @@ int gui_draw_svg(&GuiWindow win, int ox, int oy, const &char svgText) {
             struct String strokeStr = __svg_attr(svgText, nameEnd, tagEnd, "stroke");
             int hasStroke; struct GuiColor stroke = __svg_color(strokeStr, &hasStroke);
             unsafe { hasStroke = (strokeStr.len == 0UL) ? 1 : hasStroke; strokeStr.free(); }
-            if (hasStroke) { gui_draw_line(win, ox + (int)x1, oy + (int)y1, ox + (int)x2, oy + (int)y2, stroke); }
+            if (hasStroke) { self.draw_line(ox + (int)x1, oy + (int)y1, ox + (int)x2, oy + (int)y2, stroke); }
         }
         else if ((__svg_tag_is(svgText, nameStart, nameLen, "polygon", 7UL)) ||
                  (__svg_tag_is(svgText, nameStart, nameLen, "polyline", 8UL))) {
@@ -415,22 +415,22 @@ int gui_draw_svg(&GuiWindow win, int ox, int oy, const &char svgText) {
             unsafe { ptsStr.free(); }
             struct String fillStr = __svg_attr(svgText, nameEnd, tagEnd, "fill");
             int hasFill; struct GuiColor fill = __svg_color(fillStr, &hasFill);
-            unsafe { if (isPolygon && fillStr.len == 0UL) { hasFill = 1; fill = gui_rgba(0U,0U,0U,255U); } fillStr.free(); }
+            unsafe { if (isPolygon && fillStr.len == 0UL) { hasFill = 1; fill = GuiColor::rgba(0U,0U,0U,255U); } fillStr.free(); }
             struct String strokeStr = __svg_attr(svgText, nameEnd, tagEnd, "stroke");
             int hasStroke; struct GuiColor stroke = __svg_color(strokeStr, &hasStroke);
             unsafe { strokeStr.free(); }
-            if (isPolygon) { __svg_draw_shape(win, ox, oy, xs, ys, n, fill, hasFill, stroke, hasStroke); }
-            else { __svg_stroke_polyline(win, ox, oy, xs, ys, n, 0, hasStroke ? stroke : gui_rgba(0U,0U,0U,255U)); }
+            if (isPolygon) { __svg_draw_shape(self, ox, oy, xs, ys, n, fill, hasFill, stroke, hasStroke); }
+            else { __svg_stroke_polyline(self, ox, oy, xs, ys, n, 0, hasStroke ? stroke : GuiColor::rgba(0U,0U,0U,255U)); }
         }
         else if (__svg_tag_is(svgText, nameStart, nameLen, "path", 4UL)) {
             struct String dStr = __svg_attr(svgText, nameEnd, tagEnd, "d");
             struct String fillStr = __svg_attr(svgText, nameEnd, tagEnd, "fill");
             int hasFill; struct GuiColor fill = __svg_color(fillStr, &hasFill);
-            unsafe { if (fillStr.len == 0UL) { hasFill = 1; fill = gui_rgba(0U,0U,0U,255U); } fillStr.free(); }
+            unsafe { if (fillStr.len == 0UL) { hasFill = 1; fill = GuiColor::rgba(0U,0U,0U,255U); } fillStr.free(); }
             struct String strokeStr = __svg_attr(svgText, nameEnd, tagEnd, "stroke");
             int hasStroke; struct GuiColor stroke = __svg_color(strokeStr, &hasStroke);
             unsafe { strokeStr.free(); }
-            __svg_draw_path(win, ox, oy, dStr, fill, hasFill, stroke, hasStroke);
+            __svg_draw_path(self, ox, oy, dStr, fill, hasFill, stroke, hasStroke);
             unsafe { dStr.free(); }
         }
 

@@ -22,7 +22,7 @@ static void bench_copy_(char* dst, const char* src, unsigned long n) {
     }
 }
 
-struct BenchSuite bench_suite_init() {
+struct BenchSuite BenchSuite::new() {
     struct BenchSuite s;
     s.count = 0;
     return s;

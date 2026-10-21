@@ -65,7 +65,7 @@ static unsigned long slab_slot_size_(unsigned long obj_size) {
 // The caller's buffer is taken to be obj_size * count bytes. Rounding the
 // slot size (and aligning the buffer's start) can fit fewer slots than
 // 'count'; cap says how many there are.
-inline struct SlabAllocator slab_init(&unsigned char buffer, unsigned long obj_size, unsigned long count) {
+inline struct SlabAllocator SlabAllocator::over(&unsigned char buffer, unsigned long obj_size, unsigned long count) {
     struct SlabAllocator a;
     unsigned long bytes = checked_mul_size(obj_size, count);
     unsigned long addr;
@@ -82,7 +82,7 @@ inline struct SlabAllocator slab_init(&unsigned char buffer, unsigned long obj_s
     return a;
 }
 
-inline struct SlabAllocator slab_new(unsigned long obj_size, unsigned long count) {
+inline struct SlabAllocator SlabAllocator::new(unsigned long obj_size, unsigned long count) {
     struct SlabAllocator a;
     a.obj_size = slab_slot_size_(obj_size);
     a.cap      = count;
@@ -95,9 +95,19 @@ inline struct SlabAllocator slab_new(unsigned long obj_size, unsigned long count
     return a;
 }
 
-&heap void SlabAllocator::alloc() {
+inline unsigned long SlabAllocator::max_align() const {
+    // Slot payloads sit at base + i*stride (+ the 8-byte tag), and the tag
+    // doesn't change the low bits below 8: obj_size's lowest set bit, capped.
+    unsigned long low = self.obj_size & (~self.obj_size + 1UL);
+    if (low == 0UL || low > 8UL) { return 8UL; }
+    return low;
+}
+
+?&heap void SlabAllocator::alloc(unsigned long size, unsigned long align) {
+    if ((align & (align - 1UL)) != 0UL || align > self.max_align()) { return null; }
+    if (size > self.obj_size) { return null; }
     if (self.free_head == (void*)0) {
-        return (&heap void)0;
+        return null;
     }
     unsafe {
         void* obj    = self.free_head;
@@ -107,7 +117,7 @@ inline struct SlabAllocator slab_new(unsigned long obj_size, unsigned long count
             unsigned long* tag = (unsigned long*)((unsigned long)obj - SLAB_TAG_SIZE_);
             *tag = SLAB_LIVE_MAGIC_;
         }
-        return (&heap void)obj;
+        return (?&heap void)obj;
     }
 }
 
@@ -136,6 +146,11 @@ void SlabAllocator::dealloc(?&heap void ptr_ref) {
 
 inline unsigned long SlabAllocator::available() const {
     return self.cap - self.used;
+}
+
+inline void SlabAllocator::reset() {
+    self.used = (unsigned long)0;
+    self.build_freelist_();
 }
 
 inline void SlabAllocator::destroy() {

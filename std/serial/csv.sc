@@ -123,7 +123,7 @@ void csv_write(const &Value v, &String out) {
 }
 
 inline struct String value_to_csv(const &Value v) {
-    struct String out = string_new();
+    struct String out = String::new();
     csv_write(v, &out);
     return out;
 }
@@ -143,7 +143,7 @@ static char csv_peek_(struct CsvCursor_* c) {
 // Parses one field starting at the cursor, stopping at (but not consuming)
 // the following ',' / '\n' / '\r' / end-of-text.
 static struct Value csv_parse_field_(struct CsvCursor_* c) {
-    struct String out = string_new();
+    struct String out = String::new();
     if (csv_peek_(c) == '"') {
         unsafe { c->pos = c->pos + 1UL; } // consume opening quote
         while (1) {
@@ -171,16 +171,16 @@ static struct Value csv_parse_field_(struct CsvCursor_* c) {
             unsafe { out.push_char(ch); c->pos = c->pos + 1UL; }
         }
     }
-    struct Value v = value_string(out.as_ptr());
+    struct Value v = Value::from_str(out.as_ptr());
     out.free();
     return v;
 }
 
 static struct Value csv_parse_row_(struct CsvCursor_* c) {
-    struct Value row = value_array();
+    struct Value row = Value::array();
     while (1) {
         struct Value field = csv_parse_field_(c);
-        value_array_push(&row, field);
+        row.array_push(field);
         int stillOk;
         unsafe { stillOk = c->ok; }
         if (stillOk == 0) { break; }
@@ -192,7 +192,7 @@ static struct Value csv_parse_row_(struct CsvCursor_* c) {
 }
 
 struct Value csv_parse(const &char text, ?&int ok) {
-    struct Value rows = value_array();
+    struct Value rows = Value::array();
     struct CsvCursor_ c;
     c.text = text;
     c.pos = 0UL;
@@ -201,7 +201,7 @@ struct Value csv_parse(const &char text, ?&int ok) {
         char first = csv_peek_(&c);
         if (first == (char)0) { break; } // no trailing phantom row after EOF
         struct Value row = csv_parse_row_(&c);
-        value_array_push(&rows, row);
+        rows.array_push(row);
         if (c.ok == 0) { break; }
         char ch = csv_peek_(&c);
         if (ch == '\r') { unsafe { c.pos = c.pos + 1UL; } ch = csv_peek_(&c); }
@@ -210,5 +210,15 @@ struct Value csv_parse(const &char text, ?&int ok) {
     if (ok != (int*)0) { unsafe { *ok = c.ok; } }
     return rows;
 }
+
+struct Csv Csv::new() {
+    struct Csv f;
+    f.unused_ = 0;
+    return f;
+}
+
+void Csv::write(const &Value v, &String out) const { csv_write(v, out); }
+
+struct Value Csv::parse(const &char text, ?&int ok) const { return csv_parse(text, ok); }
 
 } // namespace std

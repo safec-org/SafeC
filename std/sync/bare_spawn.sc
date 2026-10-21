@@ -36,7 +36,7 @@ static int __safec_bare_sched_ready_ = 0;
 
 long long __safec_thread_create(void* func, void* arg) {
     if (__safec_bare_sched_ready_ == 0) {
-        __safec_bare_sched_ = std::task_sched_init();
+        __safec_bare_sched_ = std::TaskScheduler::new();
         __safec_bare_sched_ready_ = 1;
     }
     int idx = __safec_bare_sched_.spawn_raw_(func, arg);

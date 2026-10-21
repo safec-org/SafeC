@@ -2,6 +2,7 @@
 #pragma once
 #include <std/stddef.h>
 #include <std/crypto/sha1.h>
+#include <std/crypto/hash.h>
 
 namespace std {
 
@@ -68,7 +69,7 @@ static void sha1_compress_(unsigned int* h, const unsigned char* block) {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-inline struct Sha1Ctx sha1_init() {
+inline struct Sha1Ctx Sha1Ctx::new() {
     struct Sha1Ctx ctx;
     int i = 0;
     while (i < 5) { ctx.h[i] = sha1_H0_[i]; i = i + 1; }
@@ -135,11 +136,13 @@ void Sha1Ctx::finish(&unsigned char digest) {
     }
 }
 
+inline unsigned long Sha1Ctx::digest_size() const { return (unsigned long)SHA1_DIGEST_SIZE; }
+
+inline unsigned long Sha1Ctx::block_size() const { return (unsigned long)SHA1_BLOCK_SIZE; }
+
 void sha1(const &unsigned char data, unsigned long len,
           &unsigned char digest) {
-    struct Sha1Ctx ctx = sha1_init();
-    ctx.update(data, len);
-    ctx.finish(digest);
+    hash_bytes(Sha1Ctx::new(), data, len, digest);
 }
 
 } // namespace std

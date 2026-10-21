@@ -15,8 +15,8 @@ static &heap MdNode __md_new(int kind) {
         n->kind = kind;
         n->level = 0;
         n->ordered = 0;
-        n->text = string_new();
-        n->children = vec_new();
+        n->text = String::new();
+        n->children = Vec::new();
     }
     return n;
 }
@@ -42,9 +42,9 @@ static &heap MdNode __md_parse_inline(const char* text, unsigned long len) {
     &heap MdNode root = __md_new(MD_TEXT); // reused as a throwaway container; real root below
     unsafe { root->text.free(); }
     unsafe { root->kind = -1; } // sentinel: this is just a children-holder, not rendered itself
-    unsafe { root->children = vec_new(); }
+    unsafe { root->children = Vec::new(); }
 
-    struct String pending = string_new();
+    struct String pending = String::new();
     unsigned long i = 0UL;
 
     while (i < len) {
@@ -71,11 +71,11 @@ static &heap MdNode __md_parse_inline(const char* text, unsigned long len) {
                     &heap MdNode t = __md_new(MD_TEXT);
                     unsafe { t->text = pending; }
                     __md_add_child(root, t);
-                    pending = string_new();
+                    pending = String::new();
                 }
                 &heap MdNode b = __md_new(MD_BOLD);
                 &heap MdNode inner = __md_new(MD_TEXT);
-                unsafe { inner->text = string_from_n(text + i + 2UL, closeAt - (i + 2UL)); }
+                unsafe { inner->text = String::from_n(text + i + 2UL, closeAt - (i + 2UL)); }
                 __md_add_child(b, inner);
                 __md_add_child(root, b);
                 i = closeAt + 2UL;
@@ -94,11 +94,11 @@ static &heap MdNode __md_parse_inline(const char* text, unsigned long len) {
                     &heap MdNode t = __md_new(MD_TEXT);
                     unsafe { t->text = pending; }
                     __md_add_child(root, t);
-                    pending = string_new();
+                    pending = String::new();
                 }
                 &heap MdNode it = __md_new(MD_ITALIC);
                 &heap MdNode inner = __md_new(MD_TEXT);
-                unsafe { inner->text = string_from_n(text + i + 1UL, closeAt - (i + 1UL)); }
+                unsafe { inner->text = String::from_n(text + i + 1UL, closeAt - (i + 1UL)); }
                 __md_add_child(it, inner);
                 __md_add_child(root, it);
                 i = closeAt + 1UL;
@@ -117,10 +117,10 @@ static &heap MdNode __md_parse_inline(const char* text, unsigned long len) {
                     &heap MdNode t = __md_new(MD_TEXT);
                     unsafe { t->text = pending; }
                     __md_add_child(root, t);
-                    pending = string_new();
+                    pending = String::new();
                 }
                 &heap MdNode code = __md_new(MD_CODE_SPAN);
-                unsafe { code->text = string_from_n(text + i + 1UL, closeAt - (i + 1UL)); }
+                unsafe { code->text = String::from_n(text + i + 1UL, closeAt - (i + 1UL)); }
                 __md_add_child(root, code);
                 i = closeAt + 1UL;
                 continue;
@@ -148,12 +148,12 @@ static &heap MdNode __md_parse_inline(const char* text, unsigned long len) {
                     &heap MdNode t = __md_new(MD_TEXT);
                     unsafe { t->text = pending; }
                     __md_add_child(root, t);
-                    pending = string_new();
+                    pending = String::new();
                 }
                 &heap MdNode link = __md_new(MD_LINK);
-                unsafe { link->text = string_from_n(text + closeBracket + 2UL, closeParen - (closeBracket + 2UL)); }
+                unsafe { link->text = String::from_n(text + closeBracket + 2UL, closeParen - (closeBracket + 2UL)); }
                 &heap MdNode labelNode = __md_new(MD_TEXT);
-                unsafe { labelNode->text = string_from_n(text + i + 1UL, closeBracket - (i + 1UL)); }
+                unsafe { labelNode->text = String::from_n(text + i + 1UL, closeBracket - (i + 1UL)); }
                 __md_add_child(link, labelNode);
                 __md_add_child(root, link);
                 i = closeParen + 1UL;
@@ -233,11 +233,11 @@ static int __md_is_ordered_item(const char* line, unsigned long* markerLen) {
     return 0;
 }
 
-&heap MdNode md_parse(const &char text_ref) { const char* text = text_ref;
+&heap MdNode MdNode::parse(const &char text_ref) { const char* text = text_ref;
     &heap MdNode doc = __md_new(MD_DOC);
 
     // Split into lines.
-    struct Vec<struct String> lines = vec_new();
+    struct Vec<struct String> lines = Vec::new();
     unsigned long len = 0UL;
     unsafe { while (text[len] != '\0') { len = len + 1UL; } }
     unsigned long lineStart = 0UL;
@@ -247,7 +247,7 @@ static int __md_is_ordered_item(const char* line, unsigned long* markerLen) {
         char c; unsafe { c = atEnd ? '\n' : text[i]; }
         if (c == '\n') {
             struct String line;
-            unsafe { line = string_from_n(text + lineStart, i - lineStart); }
+            unsafe { line = String::from_n(text + lineStart, i - lineStart); }
             unsafe { lines.push(line); }
             lineStart = i + 1UL;
         }
@@ -295,7 +295,7 @@ static int __md_is_ordered_item(const char* line, unsigned long* markerLen) {
 
         int isFence; unsafe { isFence = __md_starts_with(line, "```"); }
         if (isFence) {
-            struct String code = string_new();
+            struct String code = String::new();
             li = li + 1UL;
             while (li < n) {
                 struct String* lp2; unsafe { lp2 = lines.at(li); }
@@ -312,7 +312,7 @@ static int __md_is_ordered_item(const char* line, unsigned long* markerLen) {
 
         int lineIsQuote; unsafe { lineIsQuote = (line[0] == '>') ? 1 : 0; }
         if (lineIsQuote) {
-            struct String quote = string_new();
+            struct String quote = String::new();
             while (li < n) {
                 struct String* lp3; unsafe { lp3 = lines.at(li); }
                 const char* l3; unsafe { l3 = (const char*)lp3->data; }
@@ -377,7 +377,7 @@ static int __md_is_ordered_item(const char* line, unsigned long* markerLen) {
         }
 
         // Paragraph: join consecutive non-blank, non-special lines.
-        struct String para = string_new();
+        struct String para = String::new();
         while (li < n) {
             struct String* lp5; unsafe { lp5 = lines.at(li); }
             const char* l5; unsafe { l5 = (const char*)lp5->data; }
@@ -550,9 +550,9 @@ static void __md_render_block_html(const &heap MdNode n, struct String* out) {
     }
 }
 
-struct String md_render_html(const &heap MdNode doc) {
-    struct String out = string_new();
-    __md_render_block_html(doc, &out);
+struct String MdNode::render_html() const {
+    struct String out = String::new();
+    unsafe { __md_render_block_html((const MdNode*)self, &out); }
     return out;
 }
 
@@ -671,28 +671,27 @@ static void __md_render_block_md(const &heap MdNode n, struct String* out) {
     }
 }
 
-struct String md_render_markdown(const &heap MdNode doc) {
-    struct String out = string_new();
-    __md_render_block_md(doc, &out);
+struct String MdNode::render_markdown() const {
+    struct String out = String::new();
+    unsafe { __md_render_block_md((const MdNode*)self, &out); }
     return out;
 }
 
 // ── lifecycle ─────────────────────────────────────────────────────────────────
 
-void md_free(&heap MdNode node) {
-    unsigned long cn; unsafe { cn = node->children.length(); }
+// Every MdNode lives in its own heap allocation (MdNode::parse builds the tree
+// that way), so free() releases the node itself after its subtree.
+void MdNode::free() {
+    unsigned long cn = self.children.length();
     unsigned long ci = 0UL;
     while (ci < cn) {
-        &heap MdNode slotp; unsafe { slotp = *node->children.at(ci); }
-        &heap MdNode childNode; unsafe { childNode = slotp; }
-        md_free(childNode);
+        &heap MdNode childNode; unsafe { childNode = *self.children.at(ci); }
+        childNode.free();
         ci = ci + 1UL;
     }
-    unsafe {
-        node->children.free();
-        node->text.free();
-        dealloc_raw_((void*)node);
-    }
+    self.children.free();
+    self.text.free();
+    unsafe { dealloc_raw_((void*)self); }
 }
 
 } // namespace std

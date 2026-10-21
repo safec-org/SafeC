@@ -43,7 +43,13 @@ struct PacketBuf {
 };
 
 // ── NetIf — abstract network interface ───────────────────────────────────────
-// Implementors fill in the function pointers and the mac[] field.
+// Over any driver type with a transmit method (NetDriver); the caller then
+// fills in mac[] and the addresses.
+
+trait NetDriver {
+    // Sends one frame of len bytes. 0 on success.
+    int transmit(const &unsigned char frame, unsigned long len);
+}
 
 struct NetIf {
     unsigned char mac[NET_MAC_LEN];    // hardware MAC address
@@ -51,28 +57,38 @@ struct NetIf {
     unsigned int  gateway;             // default gateway IPv4 (numeric form, see net_ip4)
     unsigned int  netmask;             // subnet mask (numeric form, see net_ip4)
 
-    // Driver transmit callback and context, stored type-erased (one stack
-    // may run interfaces from different drivers); netif_new<T> is the
-    // only writer and always pairs fn int(&T, ...) with a &T.
+    // The driver's transmit and context, stored type-erased (one stack
+    // may run interfaces from different drivers); NetIf::new<T> is the
+    // only writer and always pairs T's thunk with a &T.
     void*         tx_fn;               // fn int(&T, const &unsigned char buf, unsigned long len)
     void*         iface_ctx;           // &T
+
+    // An interface whose tx() calls drv.transmit(frame, len). drv must
+    // outlive it.
+    generic<T: NetDriver>
+    static struct NetIf new(&T drv);
 
     // Transmit a packet.  Returns 0 on success.
     int  tx(&PacketBuf pkt);
 };
 
-// An interface whose tx() calls tx(ctx, frame, len) (0 on success).
-generic<T>
-struct NetIf netif_new(&T ctx, fn int(&T, const &unsigned char, unsigned long) tx) {
+generic<T: NetDriver>
+int netif_tx_thunk_(&T drv, const &unsigned char frame, unsigned long len) {
+    return drv.transmit(frame, len);
+}
+
+generic<T: NetDriver>
+struct NetIf NetIf::new(&T drv) {
     struct NetIf nif;
     unsigned long i = 0UL;
     while (i < (unsigned long)NET_MAC_LEN) { unsafe { nif.mac[i] = (unsigned char)0; } i = i + 1UL; }
     nif.ip4 = 0U;
     nif.gateway = 0U;
     nif.netmask = 0U;
+    fn int(&T, const &unsigned char, unsigned long) tx = netif_tx_thunk_;
     unsafe {
         nif.tx_fn = (void*)tx;
-        nif.iface_ctx = (void*)ctx;
+        nif.iface_ctx = (void*)drv;
     }
     return nif;
 }

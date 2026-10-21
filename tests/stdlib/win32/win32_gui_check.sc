@@ -1,6 +1,6 @@
 // The Win32 GUI backend (std/gui/gui_win32.sc): client size, pixels read
-// back with GetPixel after gui_present, and posted key, text, mouse, wheel,
-// resize and close messages coming out of gui_poll_event.
+// back with GetPixel after present(), and posted key, text, mouse, wheel,
+// resize and close messages coming out of poll_event().
 #include <std/test/test.h>
 #include <std/gui/gui.h>
 #include <std/gui/gui_draw.h>
@@ -31,7 +31,7 @@ static unsigned int pixel_at(int x, int y) {
 static int wait_event(&GuiWindow win, int kind, &GuiEvent out) {
     int tries = 0;
     while (tries < 200) {
-        if (gui_poll_event(win, out) && out.kind == kind) { return 1; }
+        if (win.poll_event(out) && out.kind == kind) { return 1; }
         tries = tries + 1;
     }
     return 0;
@@ -41,7 +41,7 @@ static long lp(int x, int y) { return (long)(((y & 0xFFFF) << 16) | (x & 0xFFFF)
 
 void t_win32_gui() {
     unsafe {
-        struct GuiWindow win = gui_create_window("win32 check", 160, 100);
+        struct GuiWindow win = GuiWindow::create("win32 check", 160, 100);
         ASSERT_FALSE(win.platform.is_null());
         if (win.platform.is_null()) return;
         g_hwnd = ((struct Win32PlatformHead*)win.platform)->hwnd;
@@ -52,12 +52,12 @@ void t_win32_gui() {
         // at creation resizes the buffer to the real client area.)
         ASSERT_EQ(rc[3] - rc[1], 100);
         struct GuiEvent ev;
-        while (gui_poll_event(&win, &ev)) { }          // creation-time messages
+        while (win.poll_event(&ev)) { }          // creation-time messages
 
-        gui_fill_rect(&win, 0, 0, 160, 100, gui_rgb((unsigned char)0, (unsigned char)0, (unsigned char)0));
-        gui_fill_rect(&win, 10, 10, 20, 10, gui_rgb((unsigned char)255, (unsigned char)0, (unsigned char)0));
-        gui_fill_rect(&win, 40, 30, 5, 5, gui_rgb((unsigned char)0, (unsigned char)128, (unsigned char)255));
-        gui_present(&win);
+        win.fill_rect(0, 0, 160, 100, GuiColor::rgb((unsigned char)0, (unsigned char)0, (unsigned char)0));
+        win.fill_rect(10, 10, 20, 10, GuiColor::rgb((unsigned char)255, (unsigned char)0, (unsigned char)0));
+        win.fill_rect(40, 30, 5, 5, GuiColor::rgb((unsigned char)0, (unsigned char)128, (unsigned char)255));
+        win.present();
         test_assert_eq_u(pixel_at(15, 15), 0xFF0000ULL, "red rectangle on screen", __FILE__, __LINE__);
         test_assert_eq_u(pixel_at(42, 32), 0x0080FFULL, "R/G/B order", __FILE__, __LINE__);
         test_assert_eq_u(pixel_at(2, 2), 0x000000ULL, "background", __FILE__, __LINE__);
@@ -91,19 +91,19 @@ void t_win32_gui() {
         ASSERT_EQ(ev.width, 180);
         ASSERT_EQ(win.width, 180);
         ASSERT_EQ(win.height, 120);
-        gui_fill_rect(&win, 0, 0, 180, 120, gui_rgb((unsigned char)0, (unsigned char)255, (unsigned char)0));
-        gui_present(&win);                             // the buffer matches the new size
+        win.fill_rect(0, 0, 180, 120, GuiColor::rgb((unsigned char)0, (unsigned char)255, (unsigned char)0));
+        win.present();                             // the buffer matches the new size
 
         PostMessageA(g_hwnd, 0x0010u, 0UL, 0L);                          // WM_CLOSE
         ASSERT_TRUE(wait_event(&win, GUI_EVENT_CLOSE, &ev));
         ASSERT_EQ(win.shouldClose, 1);
-        gui_destroy_window(&win);
+        win.destroy();
         ASSERT_TRUE(win.platform.is_null());
     }
 }
 
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe { t.add("win32 gui backend: present/events", t_win32_gui); }
     t.run();
     t.print_summary();

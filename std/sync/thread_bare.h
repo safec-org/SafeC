@@ -22,7 +22,16 @@ struct ThreadSched {
     struct TaskScheduler inner;             // underlying round-robin scheduler
     int                  priority[THREAD_MAX];  // per-thread priority (higher = first)
 
-    // Type-erased spawn behind thread_spawn() (below).
+    // An empty thread scheduler (all slots empty, no threads running).
+    static struct ThreadSched new();
+
+    // Spawn a thread running func(arg, resume_point) (same protocol as
+    // TaskScheduler::spawn). priority >= 0; higher values run earlier in
+    // each tick. Returns the Thread id (>= 0) or THREAD_NONE if the table
+    // is full.
+    generic<T> Thread spawn(fn int(?&T, int) func, ?&T arg, int priority);
+
+    // Type-erased spawn behind spawn().
     Thread  spawn_raw_(void* func, void* arg, int priority);
 
     // Run one scheduling pass: threads are served in descending priority order.
@@ -42,15 +51,9 @@ struct ThreadSched {
     int     active_count() const;
 };
 
-// Initialize a thread scheduler (all slots empty, no threads running).
-struct ThreadSched thread_sched_init();
-
-// Spawn a thread running func(arg, resume_point) (same protocol as
-// task_spawn). priority >= 0; higher values run earlier in each tick.
-// Returns the Thread id (>= 0) or THREAD_NONE if the table is full.
 generic<T>
-Thread thread_spawn(&ThreadSched s, fn int(?&T, int) func, ?&T arg, int priority) {
-    unsafe { return s.spawn_raw_((void*)func, (void*)arg, priority); }
+Thread ThreadSched::spawn(fn int(?&T, int) func, ?&T arg, int priority) {
+    unsafe { return self.spawn_raw_((void*)func, (void*)arg, priority); }
 }
 
 } // namespace std

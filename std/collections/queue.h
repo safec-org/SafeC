@@ -1,7 +1,7 @@
 #pragma once
 // SafeC Standard Library — Queue<T> (FIFO, circular buffer)
 //
-//   struct Queue<int> q = std::queue_new();
+//   struct Queue<int> q = std::Queue::new();
 //   q.enqueue(1); q.enqueue(2);
 //   ?int first = q.dequeue();   // 1
 //   q.free();
@@ -20,6 +20,9 @@ struct Queue {
     unsigned long len;       // element count
     unsigned long cap;       // 0 or a power of two
 
+    static struct Queue<T> new();                     // empty, no allocation
+    static struct Queue<T> with_cap(unsigned long cap); // room for cap elements
+
     int           enqueue(T value);   // 0 on OOM
     ?T            dequeue();          // null if empty
     ?&T           front() const;      // null if empty
@@ -32,7 +35,7 @@ struct Queue {
 };
 
 generic<T>
-struct Queue<T> queue_new() {
+struct Queue<T> Queue::new() {
     struct Queue<T> q;
     q.data = null;
     q.head = 0UL;
@@ -42,8 +45,8 @@ struct Queue<T> queue_new() {
 }
 
 generic<T>
-struct Queue<T> queue_with_cap(unsigned long cap) {
-    struct Queue<T> q = queue_new();
+struct Queue<T> Queue::with_cap(unsigned long cap) {
+    struct Queue<T> q = Queue::new();
     q.reserve(cap);
     return q;
 }

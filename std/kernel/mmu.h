@@ -54,6 +54,21 @@ namespace std {
 //   load_root(root)     install root on this CPU (CR3/satp/TTBR0/TTBR0)
 //   flush_all()/flush_page(v)  TLB maintenance
 // load_root/flush_* return 1 if they ran, 0 if this isn't the running CPU.
+// MmuFormat names that set; MmuContext<F> requires it of F.
+trait MmuFormat {
+    int                levels() const;
+    int                shift(int level) const;
+    unsigned long      entries(int level) const;
+    unsigned long      esize() const;
+    unsigned long long table_desc(unsigned long phys) const;
+    unsigned long long leaf_desc(unsigned long phys, unsigned int flags) const;
+    int                valid(unsigned long long e) const;
+    int                is_leaf(unsigned long long e, int level) const;
+    unsigned long      addr(unsigned long long e, int level) const;
+    int                load_root(unsigned long root) const;
+    int                flush_all() const;
+    int                flush_page(unsigned long virt) const;
+}
 
 // Non-leaf entries carry P|RW|US so the leaf alone decides access; non-exec
 // pages set NX (bit 63), which needs EFER.NXE enabled.
@@ -171,12 +186,21 @@ typedef struct MmuArmV7 MmuNative;
 
 // ── Context ──────────────────────────────────────────────────────────────────
 
-generic<F>
+generic<F: MmuFormat>
 struct MmuContext {
     unsigned long          root;         // physical address of the root table
     unsigned long          phys_offset;  // tables live at phys + phys_offset
     &static FrameAllocator frames;       // source of new intermediate tables
     F                      fmt;
+
+    // A context over an existing root table at physical 'root' — zeroed, and
+    // aligned as the format needs (4 KiB; 16 KiB for MmuArmV7). 'frames' must be
+    // a live, &static-lifetime FrameAllocator (the kernel's own, usually);
+    // frame f's table memory is at frames.frame_addr(f) + phys_offset.
+    // F comes from the target type:
+    //   struct MmuContext<MmuNative> mmu = std::MmuContext::new(root, &g_frames, 0UL);
+    static struct MmuContext<F> new(unsigned long root, &static FrameAllocator frames,
+                                    unsigned long phys_offset);
 
     // Map the 4 KiB page at 'virt' to 'phys' (both 4 KiB aligned; low bits
     // ignored) with MMU_* flags, allocating intermediate tables as needed.
@@ -211,15 +235,9 @@ struct MmuContext {
     unsigned long index_(unsigned long virt, int level) const;
 };
 
-// A context over an existing root table at physical 'root' — zeroed, and
-// aligned as the format needs (4 KiB; 16 KiB for MmuArmV7). 'frames' must be
-// a live, &static-lifetime FrameAllocator (the kernel's own, usually);
-// frame f's table memory is at frames.frame_addr(f) + phys_offset.
-// F comes from the target type:
-//   struct MmuContext<MmuNative> mmu = std::mmu_init(root, &g_frames, 0UL);
-generic<F>
-struct MmuContext<F> mmu_init(unsigned long root, &static FrameAllocator frames,
-                              unsigned long phys_offset) {
+generic<F: MmuFormat>
+struct MmuContext<F> MmuContext::new(unsigned long root, &static FrameAllocator frames,
+                                     unsigned long phys_offset) {
     struct MmuContext<F> m;
     m.root = root;
     m.phys_offset = phys_offset;
@@ -227,12 +245,12 @@ struct MmuContext<F> mmu_init(unsigned long root, &static FrameAllocator frames,
     return m;
 }
 
-generic<F>
+generic<F: MmuFormat>
 unsigned long MmuContext::table_(unsigned long phys) const {
     return phys + self.phys_offset;
 }
 
-generic<F>
+generic<F: MmuFormat>
 unsigned long long MmuContext::read_(unsigned long table, unsigned long idx) const {
     unsafe {
         if (self.fmt.esize() == 8UL) { return ((unsigned long long*)table)[idx]; }
@@ -240,7 +258,7 @@ unsigned long long MmuContext::read_(unsigned long table, unsigned long idx) con
     }
 }
 
-generic<F>
+generic<F: MmuFormat>
 void MmuContext::write_(unsigned long table, unsigned long idx, unsigned long long e) {
     unsafe {
         if (self.fmt.esize() == 8UL) { ((unsigned long long*)table)[idx] = e; }
@@ -248,14 +266,14 @@ void MmuContext::write_(unsigned long table, unsigned long idx, unsigned long lo
     }
 }
 
-generic<F>
+generic<F: MmuFormat>
 unsigned long MmuContext::index_(unsigned long virt, int level) const {
     unsigned long sh = (unsigned long)self.fmt.shift(level);
     if (sh >= 8UL * sizeof(unsigned long)) { return 0UL; }   // 64-bit format on a 32-bit build
     return (virt >> sh) & (self.fmt.entries(level) - 1UL);
 }
 
-generic<F>
+generic<F: MmuFormat>
 int MmuContext::map(unsigned long virt, unsigned long phys, unsigned int flags) {
     unsigned long table = self.table_(self.root);
     int last = self.fmt.levels() - 1;
@@ -284,7 +302,7 @@ int MmuContext::map(unsigned long virt, unsigned long phys, unsigned int flags) 
     return 1;
 }
 
-generic<F>
+generic<F: MmuFormat>
 void MmuContext::unmap(unsigned long virt) {
     unsigned long table = self.table_(self.root);
     int last = self.fmt.levels() - 1;
@@ -298,7 +316,7 @@ void MmuContext::unmap(unsigned long virt) {
     self.write_(table, self.index_(virt, last), 0ULL);
 }
 
-generic<F>
+generic<F: MmuFormat>
 int MmuContext::entry(unsigned long virt, &unsigned long long entry_out) const {
     unsigned long table = self.table_(self.root);
     int last = self.fmt.levels() - 1;
@@ -316,7 +334,7 @@ int MmuContext::entry(unsigned long virt, &unsigned long long entry_out) const {
     return 0;
 }
 
-generic<F>
+generic<F: MmuFormat>
 int MmuContext::walk(unsigned long virt, &unsigned long phys_out) const {
     unsigned long table = self.table_(self.root);
     int last = self.fmt.levels() - 1;
@@ -336,13 +354,13 @@ int MmuContext::walk(unsigned long virt, &unsigned long phys_out) const {
     return 0;
 }
 
-generic<F>
+generic<F: MmuFormat>
 int MmuContext::tlb_flush_all() { return self.fmt.flush_all(); }
 
-generic<F>
+generic<F: MmuFormat>
 int MmuContext::tlb_flush_page(unsigned long virt) { return self.fmt.flush_page(virt); }
 
-generic<F>
+generic<F: MmuFormat>
 int MmuContext::activate() { return self.fmt.load_root(self.root); }
 
 } // namespace std

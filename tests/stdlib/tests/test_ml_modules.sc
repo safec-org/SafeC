@@ -55,7 +55,7 @@ int module_contract_(&M m, const &FloatTensor x, unsigned long outCols, const &c
     int ok = 1;
     &FloatTensor y0 = module_predict(m, x);
     unsafe { ok = ok && y0->shape[0] == x->shape[0] && y0->shape[1] == outCols; }
-    struct Vec<&FloatTensor> ps = vec_new();
+    struct Vec<&FloatTensor> ps = Vec::new();
     m.collect_params(&ps);
     unsigned long n = 0UL;
     unsigned long i = 0UL;
@@ -63,7 +63,7 @@ int module_contract_(&M m, const &FloatTensor x, unsigned long outCols, const &c
     ok = ok && ps.length() > 0UL && n == model_param_count(m);
     ok = ok && model_save_file(m, path);
     // perturb every state tensor, then load it back
-    struct Vec<&FloatTensor> st = vec_new();
+    struct Vec<&FloatTensor> st = Vec::new();
     m.collect_state(&st);
     i = 0UL;
     while (i < st.length()) {
@@ -186,8 +186,8 @@ void t_model_fit_autoencoders() {
     ASSERT_TRUE(model_save_file(&v, "build/test_ml_modules_vae.bin"));
     struct Vae w = Vae::new(64UL, &cfg);
     ASSERT_TRUE(model_load_file(&w, "build/test_ml_modules_vae.bin"));
-    struct Vec<&FloatTensor> a = vec_new();
-    struct Vec<&FloatTensor> b = vec_new();
+    struct Vec<&FloatTensor> a = Vec::new();
+    struct Vec<&FloatTensor> b = Vec::new();
     v.collect_state(&a);
     w.collect_state(&b);
     float worst = (float)0.0;
@@ -329,7 +329,7 @@ void t_cond_modules() {
 }
 
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("one generic check over ten Modules", t_every_module);
         t.add("module_fit = trainer_fit; model_copy", t_module_fit_matches_trainer_fit);

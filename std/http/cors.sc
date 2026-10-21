@@ -39,7 +39,7 @@ struct HttpResponse cors_preflight_response(const &char allowedOrigin,
                                              const &char allowedHeaders) {
     struct HttpResponse resp;
     resp.status = 204;
-    resp.headers = string_new();
+    resp.headers = String::new();
     unsafe {
         resp.headers.push("Access-Control-Allow-Methods: ");
         resp.headers.push(allowedMethods);
@@ -49,7 +49,7 @@ struct HttpResponse cors_preflight_response(const &char allowedOrigin,
         resp.headers.push("\r\n");
         resp.headers.push("Access-Control-Max-Age: 86400\r\n");
     }
-    resp.body = string_new();
+    resp.body = String::new();
     cors_apply_headers(&resp, allowedOrigin);
     return resp;
 }

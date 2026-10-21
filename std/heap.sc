@@ -26,27 +26,33 @@ inline unsigned long heap_hdr_() {
 inline void heap_init() {
     if (heap_ready_ != 0) { return; }
     unsafe {
-        heap_tlsf_ = tlsf_init((&unsigned char)(void*)heap_buf_, (unsigned long)HEAP_SIZE);
+        heap_tlsf_ = TlsfAllocator::over((&unsigned char)(void*)heap_buf_, (unsigned long)HEAP_SIZE);
     }
     heap_ready_ = 1;
 }
 
+// TLSF block, 8-aligned (all TLSF guarantees); a null address when it can't.
+static &heap void heap_tlsf_alloc_(unsigned long size) {
+    void* p = heap_tlsf_.alloc(size, 8UL);
+    unsafe { return (&heap void)p; }
+}
+
 &heap void heap_alloc(unsigned long size) {
     if (heap_ready_ == 0) { return (&heap void)0; }
-    return heap_tlsf_.alloc(size);
+    return heap_tlsf_alloc_(size);
 }
 
 inline void heap_free(&heap void ptr) {
     if (heap_ready_ == 0) { return; }
     unsafe { if ((void*)ptr == (void*)0) { return; } }
-    heap_tlsf_.free(ptr);
+    heap_tlsf_.dealloc(ptr);
 }
 
 &heap void heap_realloc(&heap void ptr, unsigned long new_size) {
     if (heap_ready_ == 0) { return (&heap void)0; }
-    unsafe { if ((void*)ptr == (void*)0) { return heap_tlsf_.alloc(new_size); } }
+    unsafe { if ((void*)ptr == (void*)0) { return heap_tlsf_alloc_(new_size); } }
 
-    &heap void new_ptr = heap_tlsf_.alloc(new_size);
+    &heap void new_ptr = heap_tlsf_alloc_(new_size);
     unsafe { if ((void*)new_ptr == (void*)0) { return (&heap void)0; } }
 
     unsafe {
@@ -56,7 +62,7 @@ inline void heap_free(&heap void ptr) {
         unsigned long copy_n   = old_size < new_size ? old_size : new_size;
         memcpy((void*)new_ptr, (void*)ptr, copy_n);
     }
-    heap_tlsf_.free(ptr);
+    heap_tlsf_.dealloc(ptr);
     return new_ptr;
 }
 

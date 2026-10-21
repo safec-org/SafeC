@@ -2,19 +2,12 @@
 #pragma once
 #include <std/http/jwt.h>
 #include <std/crypto/hmac.h>
-#include <std/crypto/hmac.h>
-#include <std/encoding/base64.h>
 #include <std/encoding/base64.h>
 #include <std/serial/value.h>
-#include <std/serial/value.h>
-#include <std/serial/json.h>
 #include <std/serial/json.h>
 #include <std/collections/string.h>
-#include <std/collections/string.h>
-#include <std/collections/vec.h>
 #include <std/collections/vec.h>
 #include <std/mem.h>
-#include <std/str.h>
 #include <std/str.h>
 
 namespace std {
@@ -32,7 +25,7 @@ static struct String __b64url_encode(const unsigned char* data, unsigned long le
 }
 
 static struct Vec<unsigned char> __b64url_decode(const char* s, int* ok) {
-    struct String padded; unsafe { padded = string_from(s); }
+    struct String padded; unsafe { padded = String::from(s); }
     unsafe {
         padded.replace_char('-', '+');
         padded.replace_char('_', '/');
@@ -47,15 +40,15 @@ static struct Vec<unsigned char> __b64url_decode(const char* s, int* ok) {
 struct String jwt_sign(const &Value claims, const &char secret) {
     struct Value header;
     unsafe {
-        header = value_object();
-        value_object_set(&header, "alg", value_string("HS256"));
-        value_object_set(&header, "typ", value_string("JWT"));
+        header = Value::object();
+        header.object_set("alg", Value::from_str("HS256"));
+        header.object_set("typ", Value::from_str("JWT"));
     }
     struct String headerJson; struct String payloadJson;
     unsafe {
         headerJson = value_to_json(&header);
         payloadJson = value_to_json(claims);
-        value_free(&header);
+        header.free();
     }
 
     struct String headerB64;
@@ -66,7 +59,7 @@ struct String jwt_sign(const &Value claims, const &char secret) {
         headerJson.free(); payloadJson.free();
     }
 
-    struct String signingInput = string_new();
+    struct String signingInput = String::new();
     unsafe {
         signingInput.push_str(&headerB64);
         signingInput.push_char('.');
@@ -80,7 +73,7 @@ struct String jwt_sign(const &Value claims, const &char secret) {
     }
     struct String sigB64 = __b64url_encode((const unsigned char*)sig, (unsigned long)HMAC_SHA256_SIZE);
 
-    struct String token = string_new();
+    struct String token = String::new();
     unsafe {
         token.push_str(&signingInput);
         token.push_char('.');
@@ -112,7 +105,7 @@ struct Value jwt_verify(const &char token_ref, const &char secret, ?&int ok) { c
     long long dot2 = __nth_char_index(token, '.', 1);
     if (dot1 < 0LL || dot2 < 0LL) {
         unsafe { *ok = 0; }
-        return value_null();
+        return Value::null();
     }
 
     struct String headerB64;
@@ -120,10 +113,10 @@ struct Value jwt_verify(const &char token_ref, const &char secret, ?&int ok) { c
     struct String sigB64;
     struct String signingInput;
     unsafe {
-        headerB64 = string_from_n(token, (unsigned long)dot1);
-        payloadB64 = string_from_n((const char*)token + dot1 + 1LL, (unsigned long)(dot2 - dot1 - 1LL));
-        sigB64 = string_from((const char*)token + dot2 + 1LL);
-        signingInput = string_from_n(token, (unsigned long)dot2);
+        headerB64 = String::from_n(token, (unsigned long)dot1);
+        payloadB64 = String::from_n((const char*)token + dot1 + 1LL, (unsigned long)(dot2 - dot1 - 1LL));
+        sigB64 = String::from((const char*)token + dot2 + 1LL);
+        signingInput = String::from_n(token, (unsigned long)dot2);
     }
 
     // Header must decode to alg="HS256" — the only algorithm this file
@@ -134,7 +127,7 @@ struct Value jwt_verify(const &char token_ref, const &char secret, ?&int ok) { c
     int headerValid = 0;
     if (headerOk) {
         struct String headerJson;
-        unsafe { headerJson = string_from_n((const char*)headerBytes.data, headerBytes.len); }
+        unsafe { headerJson = String::from_n((const char*)headerBytes.data, headerBytes.len); }
         int parseOk;
         struct Value header;
         unsafe { header = json_parse(headerJson.as_ptr(), &parseOk); headerJson.free(); }
@@ -147,7 +140,7 @@ struct Value jwt_verify(const &char token_ref, const &char secret, ?&int ok) { c
                 unsafe { headerValid = str_eq(algStr, "HS256"); }
             }
         }
-        unsafe { value_free(&header); }
+        unsafe { header.free(); }
     }
     unsafe { headerBytes.free(); }
 
@@ -161,13 +154,13 @@ struct Value jwt_verify(const &char token_ref, const &char secret, ?&int ok) { c
     int sigMatch;
     unsafe { sigMatch = sigB64.eq_cstr(expectedSigB64.as_ptr()); }
 
-    struct Value result = value_null();
+    struct Value result = Value::null();
     if (headerValid && sigMatch) {
         int payloadOk;
         struct Vec<unsigned char> payloadBytes = __b64url_decode(payloadB64.as_ptr(), &payloadOk);
         if (payloadOk) {
             struct String payloadJson;
-            unsafe { payloadJson = string_from_n((const char*)payloadBytes.data, payloadBytes.len); }
+            unsafe { payloadJson = String::from_n((const char*)payloadBytes.data, payloadBytes.len); }
             int parseOk;
             unsafe { result = json_parse(payloadJson.as_ptr(), &parseOk); payloadJson.free(); }
             unsafe { *ok = parseOk; }

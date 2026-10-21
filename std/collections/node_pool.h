@@ -38,10 +38,12 @@ struct NodePool {
     ?&heap N take();                  // uninitialised node; null on OOM
     void     give(&heap N node);      // return a node for reuse
     void     free_all();              // release every chunk (all nodes)
+
+    static struct NodePool<N> new();  // empty; first chunk allocated on the first take()
 };
 
 generic<N>
-struct NodePool<N> node_pool_new() {
+struct NodePool<N> NodePool::new() {
     struct NodePool<N> p;
     p.chunks = null;
     p.bump = null;

@@ -15,8 +15,9 @@
 //
 // Every backend presents the exact same model: a window owns a CPU-side
 // RGBA8888 pixel buffer (top-left origin, row-major, 4 bytes/pixel) that
-// the application draws into directly (or via std/gui/widget.h's retained-
-// mode layer, built on top of this); gui_present() blits it to the screen.
+// the application draws into directly (or via std/gui/gui_widget.h's
+// retained-mode layer, built on top of this); win.present() blits it to the
+// screen.
 // There is no GPU-accelerated rendering path — this is a software
 // framebuffer, the same scope as Rust's minifb/softbuffer crates, chosen
 // so all four backends (three OS-native windowing systems plus bare metal,
@@ -56,6 +57,20 @@
 
 namespace std {
 
+// An RGBA color for the drawing methods below. Lives here (rather than in
+// gui_draw.h) so GuiWindow can declare its drawing methods without the
+// core header depending on any add-on header.
+struct GuiColor {
+    unsigned char r;
+    unsigned char g;
+    unsigned char b;
+    unsigned char a;
+
+    // Defined in gui_draw.sc. rgb() is opaque (a = 255).
+    static struct GuiColor rgba(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    static struct GuiColor rgb(unsigned char r, unsigned char g, unsigned char b);
+};
+
 struct GuiEvent {
     int          kind;       // GuiEventKind
     double       x;          // mouse position, window-local, top-left origin
@@ -67,7 +82,14 @@ struct GuiEvent {
     double       scrollDy;
     int          width;      // new size (GUI_EVENT_RESIZE)
     int          height;
-    int          defaultPrevented; // see gui_widget.h's gui_event_prevent_default()
+    int          defaultPrevented; // see prevent_default() below
+
+    // Suppresses Widget::dispatch_event()'s default key action for this
+    // event (see gui_widget.h) — call from a WIDGET_CUSTOM node's
+    // WidgetCustomEventFn when you're handling a key yourself and don't
+    // want e.g. Tab/Enter's default behavior on top. Defined in
+    // gui_widget.sc.
+    void prevent_default();
 };
 
 struct GuiWindow {
@@ -76,27 +98,50 @@ struct GuiWindow {
     int                  width;
     int                  height;
     int                  shouldClose;
+
+    // Creates and shows a window with a zeroed (transparent black) pixel
+    // buffer of 'width'x'height'. On failure, returned window's 'platform' is
+    // null and 'width'/'height' are 0 — callers should check before use.
+    static struct GuiWindow create(const &char title, int width, int height);
+
+    // Each backend (gui_cocoa/gui_win32/gui_x11/gui_fb.sc) defines these.
+
+    // Pumps exactly one pending platform event into 'outEvent' and returns
+    // 1, or returns 0 immediately if none is pending (never blocks) — call
+    // in a loop ("while (win.poll_event(&ev)) { ... }") once per frame to
+    // drain everything queued since the last call. Also updates
+    // shouldClose when the platform's own close control is used.
+    int  poll_event(&GuiEvent outEvent);
+
+    // Uploads 'pixels' to the screen. Call once per frame after drawing.
+    void present();
+
+    // Sets pixel (x,y) to 'rgba' (0xRRGGBBAA), no-op if out of bounds.
+    void set_pixel(int x, int y, unsigned int rgba);
+
+    // Releases the window and its pixel buffer.
+    void destroy();
+
+    // ── drawing (software rasterizer; defined in gui_draw.sc / gui_svg.sc)
+    // All of these write through set_pixel(), so they work on every
+    // backend; out-of-bounds pixels are clipped.
+    void fill_rect(int x, int y, int w, int h, struct GuiColor color);
+    void draw_rect_border(int x, int y, int w, int h, struct GuiColor color, int thickness);
+    void draw_line(int x0, int y0, int x1, int y1, struct GuiColor color);
+
+    // Draws 'text' in the built-in 8x8 font with its top-left at (x,y),
+    // each glyph cell 8*scale by 8*scale pixels. Codepoints outside
+    // printable ASCII (0x20-0x7E) draw as a blank cell. Returns the total
+    // pixel width drawn. For a loaded/custom font use GuiFont::draw_text()
+    // (gui_font.h); for its metrics see gui_draw.h's gui_text_width().
+    int  draw_text(int x, int y, const &char text, struct GuiColor color, int scale);
+
+    // Parses 'svgText' (a complete <svg>...</svg> document, see gui_svg.h
+    // for the supported subset) and draws it with its top-left at
+    // (ox, oy). Returns 1 if the <svg> root parsed, 0 on malformed or
+    // unsupported input (shapes before a parse error are already drawn).
+    // Defined in gui_svg.sc.
+    int  draw_svg(int ox, int oy, const &char svgText);
 };
-
-// Creates and shows a window with a zeroed (transparent black) pixel
-// buffer of 'width'x'height'. On failure, returned window's 'platform' is
-// null and 'width'/'height' are 0 — callers should check before use.
-struct GuiWindow gui_create_window(const &char title, int width, int height);
-
-// Pumps exactly one pending platform event into 'outEvent' and returns 1,
-// or returns 0 immediately if none is pending (never blocks) — call in a
-// loop ("while (gui_poll_event(&win, &ev)) { ... }") once per frame to
-// drain everything queued since the last call. Also updates
-// win.shouldClose when the platform's own close control is used.
-int gui_poll_event(&GuiWindow win, &GuiEvent outEvent);
-
-// Uploads win.pixels to the screen. Call once per frame after drawing.
-void gui_present(&GuiWindow win);
-
-// Sets pixel (x,y) to 'rgba' (0xRRGGBBAA), no-op if out of bounds.
-void gui_set_pixel(&GuiWindow win, int x, int y, unsigned int rgba);
-
-// Releases the window and its pixel buffer.
-void gui_destroy_window(&GuiWindow win);
 
 } // namespace std

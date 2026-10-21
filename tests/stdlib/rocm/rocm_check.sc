@@ -32,7 +32,7 @@ static float maxdiff(&Vec<float> a, &Vec<float> b) {
 }
 
 static struct Vec<float> seq(unsigned long n, float scale, float offset) {
-    struct Vec<float> v = std::vec_with_cap(n);
+    struct Vec<float> v = std::Vec::with_cap(n);
     unsigned long i = 0UL;
     while (i < n) { v.push((float)((i * 37UL) % 101UL) * scale + offset); i = i + 1UL; }
     return v;
@@ -41,7 +41,7 @@ static struct Vec<float> seq(unsigned long n, float scale, float offset) {
 // CPU reference: c[m,n] = op(a) op(b), row-major, ta/tb = stored transposed.
 static struct Vec<float> cpu_gemm(&Vec<float> a, int ta, &Vec<float> b, int tb,
                                   unsigned long m, unsigned long n, unsigned long k) {
-    struct Vec<float> c = std::vec_with_cap(m * n);
+    struct Vec<float> c = std::Vec::with_cap(m * n);
     unsigned long i = 0UL;
     while (i < m) {
         unsigned long j = 0UL;
@@ -63,7 +63,7 @@ static struct Vec<float> cpu_gemm(&Vec<float> a, int ta, &Vec<float> b, int tb,
 }
 
 static struct Vec<float> download(struct RocmBuf b) {
-    struct Vec<float> v = std::vec_with_cap(b.len);
+    struct Vec<float> v = std::Vec::with_cap(b.len);
     unsigned long i = 0UL;
     while (i < b.len) { v.push(0.0f); i = i + 1UL; }
     std::rocm_read(b, v.at(0UL), b.len);
@@ -74,7 +74,7 @@ static struct Vec<float> download(struct RocmBuf b) {
 // against an fp32 CPU gemm of the same rounded inputs; 16-bit SGD exact.
 static void check_half() {
     unsigned long n = 4096UL;
-    struct Vec<float> v = std::vec_with_cap(n);
+    struct Vec<float> v = std::Vec::with_cap(n);
     v.push((float)0.0); v.push((float)-0.0); v.push((float)1.0); v.push((float)-1.0);
     v.push((float)65504.0);          // largest fp16
     v.push((float)65520.0);          // rounds to fp16 infinity
@@ -102,7 +102,7 @@ static void check_half() {
         // round on the GPU, compare bits with the CPU encoder
         struct RocmHalfBuf h = RocmHalfBuf::alloc(n, d);
         check(h.dev != 0UL && std::rocm_to_half(dv, h), bf ? "bf16 convert ran" : "fp16 convert ran");
-        struct Vec<unsigned short> bits = std::vec_with_cap(n);
+        struct Vec<unsigned short> bits = std::Vec::with_cap(n);
         unsigned long i = 0UL;
         while (i < n) { bits.push((unsigned short)0); i = i + 1UL; }
         check(std::rocm_half_read(h, bits.at(0UL), n), "half read");
@@ -120,7 +120,7 @@ static void check_half() {
         check(bad == 0UL, bf ? "bf16 decode exact" : "fp16 decode exact");
         // RocmHalfBuf::upload rounds the same way
         struct RocmHalfBuf hu = RocmHalfBuf::upload(v.at(0UL), n, d);
-        struct Vec<unsigned short> ubits = std::vec_with_cap(n);
+        struct Vec<unsigned short> ubits = std::Vec::with_cap(n);
         i = 0UL;
         while (i < n) { ubits.push((unsigned short)0); i = i + 1UL; }
         check(hu.dev != 0UL && std::rocm_half_read(hu, ubits.at(0UL), n), "half upload");
@@ -135,8 +135,8 @@ static void check_half() {
         unsigned long nn = 80UL;
         struct Vec<float> a = seq(m * k, 0.011f, -0.5f);
         struct Vec<float> b = seq(k * nn, 0.007f, -0.3f);
-        struct Vec<float> ar = std::vec_with_cap(m * k);
-        struct Vec<float> br = std::vec_with_cap(k * nn);
+        struct Vec<float> ar = std::Vec::with_cap(m * k);
+        struct Vec<float> br = std::Vec::with_cap(k * nn);
         i = 0UL;
         while (i < m * k) { ar.push(std::half_round(*a.at(i), d)); i = i + 1UL; }
         i = 0UL;
@@ -145,7 +145,7 @@ static void check_half() {
         struct RocmHalfBuf hb = RocmHalfBuf::upload(b.at(0UL), k * nn, d);
         struct RocmBuf c32 = RocmBuf::alloc(m * nn);
         struct RocmHalfBuf c16 = RocmHalfBuf::alloc(m * nn, d);
-        struct Vec<unsigned short> cb = std::vec_with_cap(m * nn);
+        struct Vec<unsigned short> cb = std::Vec::with_cap(m * nn);
         i = 0UL;
         while (i < m * nn) { cb.push((unsigned short)0); i = i + 1UL; }
         int t = 0;
@@ -177,8 +177,8 @@ static void check_half() {
         }
 
         // sgd on 16-bit weights: bit-exact with the CPU computation
-        struct Vec<unsigned short> wb = std::vec_with_cap(m * k);
-        struct Vec<unsigned short> gbits = std::vec_with_cap(m * k);
+        struct Vec<unsigned short> wb = std::Vec::with_cap(m * k);
+        struct Vec<unsigned short> gbits = std::Vec::with_cap(m * k);
         i = 0UL;
         while (i < m * k) { wb.push((unsigned short)0); gbits.push(std::half_encode(*v.at(i % n), d)); i = i + 1UL; }
         struct RocmHalfBuf hg = RocmHalfBuf::alloc(m * k, d);
@@ -186,7 +186,7 @@ static void check_half() {
         check(std::rocm_half_read(ha, wb.at(0UL), m * k), "half read w");
         float lr = (float)0.25;
         check(std::rocm_half_sgd(ha, hg, lr), "half sgd ran");
-        struct Vec<unsigned short> wn = std::vec_with_cap(m * k);
+        struct Vec<unsigned short> wn = std::Vec::with_cap(m * k);
         i = 0UL;
         while (i < m * k) { wn.push((unsigned short)0); i = i + 1UL; }
         check(std::rocm_half_read(ha, wn.at(0UL), m * k), "half read sgd");
@@ -205,8 +205,8 @@ static void check_half() {
         // training ops: relu / relu_grad copy bits, mse_grad and sgd2 round
         // once per value, all bit-exact with the CPU computation
         unsigned long obn = n > m * k ? n : m * k;   // also >= m * nn
-        struct Vec<unsigned short> gb2 = std::vec_with_cap(n);
-        struct Vec<unsigned short> ob = std::vec_with_cap(obn);
+        struct Vec<unsigned short> gb2 = std::Vec::with_cap(n);
+        struct Vec<unsigned short> ob = std::Vec::with_cap(obn);
         i = 0UL;
         while (i < n) { gb2.push(std::half_encode(*v.at((i * 7UL + 3UL) % n), d)); i = i + 1UL; }
         i = 0UL;
@@ -264,8 +264,8 @@ static void check_half() {
         struct RocmHalfBuf g2 = RocmHalfBuf::upload(b.at(0UL), k * nn, d);
         check(std::rocm_half_sgd2(w1a, g1, w2a, g2, (float)0.375), "half sgd2 ran");
         check(std::rocm_half_sgd(w1b, g1, (float)0.375) && std::rocm_half_sgd(w2b, g2, (float)0.375), "half sgd x2 ran");
-        struct Vec<unsigned short> xa = std::vec_with_cap(k * nn);
-        struct Vec<unsigned short> xb = std::vec_with_cap(k * nn);
+        struct Vec<unsigned short> xa = std::Vec::with_cap(k * nn);
+        struct Vec<unsigned short> xb = std::Vec::with_cap(k * nn);
         i = 0UL;
         while (i < k * nn) { xa.push((unsigned short)0); xb.push((unsigned short)0); i = i + 1UL; }
         bad = 0UL;
@@ -325,12 +325,12 @@ static float phi_ref(float x) { return x > (float)0.0 ? x + (float)1.0 : (float)
 static struct Vec<float> attn_ref(&Vec<float> q, &Vec<float> k, &Vec<float> v, unsigned long heads,
                                   unsigned long seq, unsigned long kv, unsigned long d, float scale,
                                   int causal, int linear) {
-    struct Vec<float> o = std::vec_with_cap(heads * seq * d);
+    struct Vec<float> o = std::Vec::with_cap(heads * seq * d);
     unsigned long h = 0UL;
     while (h < heads) {
         unsigned long i = 0UL;
         while (i < seq) {
-            struct Vec<double> w = std::vec_with_cap(kv);
+            struct Vec<double> w = std::Vec::with_cap(kv);
             double mx = -1.0e300;
             unsigned long j = 0UL;
             while (j < kv) {
@@ -402,7 +402,7 @@ static void check_decode_ops() {
             struct Vec<float> w = seq(n * k, 0.0013f, -0.9f);
             struct Vec<float> x = seq(k, 0.017f, -0.7f);
             struct RocmHalfBuf dw = RocmHalfBuf::upload(w.at(0UL), n * k, dts[di]);
-            struct Vec<unsigned short> bits = std::vec_with_cap(n * k);
+            struct Vec<unsigned short> bits = std::Vec::with_cap(n * k);
             unsigned long z = 0UL;
             while (z < n * k) { bits.push((unsigned short)0); z = z + 1UL; }
             std::rocm_half_read(dw, bits.at(0UL), n * k);   // the rounded weights the GPU uses
@@ -513,7 +513,7 @@ static void check_attention() {
             struct Vec<float> q = seq(heads * sl * d, 0.013f, -0.6f);
             struct Vec<float> k = seq(heads * kv * d, 0.011f, -0.55f);
             struct Vec<float> v = seq(heads * kv * d, 0.02f, -1.0f);
-            struct Vec<float> got = std::vec_with_cap(heads * sl * d);
+            struct Vec<float> got = std::Vec::with_cap(heads * sl * d);
             unsigned long z = 0UL;
             while (z < heads * sl * d) { got.push(0.0f); z = z + 1UL; }
             int causal = 0;
@@ -562,7 +562,7 @@ static void check_attention() {
         struct Vec<float> q = seq(2UL * n * ld[li], 0.013f, -0.6f);
         struct Vec<float> k = seq(2UL * n * ld[li], 0.011f, -0.55f);
         struct Vec<float> v = seq(2UL * n * ld[li], 0.02f, -1.0f);
-        struct Vec<float> got = std::vec_with_cap(2UL * n * ld[li]);
+        struct Vec<float> got = std::Vec::with_cap(2UL * n * ld[li]);
         unsigned long zz = 0UL;
         while (zz < 2UL * n * ld[li]) { got.push(0.0f); zz = zz + 1UL; }
         struct Vec<float> ref = attn_ref(&q, &k, &v, 2UL, n, n, ld[li], 1.0f, 1, 1);
@@ -597,9 +597,9 @@ static void check_attention() {
     &FloatTensor tv = FloatTensor::from_2d(v1.at(0UL), n1, d1, 0);
     &FloatTensor sa = std::attention_forward(tq, tk, tv);
     &FloatTensor la = std::linear_attention_forward(tq, tk, tv);
-    struct Vec<float> g1 = std::vec_with_cap(n1 * d1);
-    struct Vec<float> c1 = std::vec_with_cap(n1 * d1);
-    struct Vec<float> c2 = std::vec_with_cap(n1 * d1);
+    struct Vec<float> g1 = std::Vec::with_cap(n1 * d1);
+    struct Vec<float> c1 = std::Vec::with_cap(n1 * d1);
+    struct Vec<float> c2 = std::Vec::with_cap(n1 * d1);
     unsigned long z = 0UL;
     while (z < n1 * d1) { g1.push(0.0f); unsafe { c1.push(sa->data[z]); c2.push(la->data[z]); } z = z + 1UL; }
     check(std::rocm_flash_attention_f32(q1.at(0UL), k1.at(0UL), v1.at(0UL), g1.at(0UL), 1UL, n1, n1, d1, 0.0f, 0) &&
@@ -621,7 +621,7 @@ static void check_attention() {
 // the overflow flag, master-weight SGD / Adam (against the CPU arithmetic,
 // skipped when flagged), 16-bit elementwise ops and bias.
 static struct Vec<unsigned short> read_half(struct RocmHalfBuf h) {
-    struct Vec<unsigned short> v = std::vec_with_cap(h.len);
+    struct Vec<unsigned short> v = std::Vec::with_cap(h.len);
     unsigned long i = 0UL;
     while (i < h.len) { v.push((unsigned short)0); i = i + 1UL; }
     std::rocm_half_read(h, v.at(0UL), h.len);
@@ -636,8 +636,8 @@ static int half_nan_(unsigned short h, int d) {
 static void check_mixed_precision() {
     // fp16 <-> bf16 over every 16-bit pattern, against float16.h's bulk conversions
     unsigned long n = 65536UL;
-    struct Vec<unsigned short> pat = std::vec_with_cap(n);
-    struct Vec<unsigned short> cpu = std::vec_with_cap(n);
+    struct Vec<unsigned short> pat = std::Vec::with_cap(n);
+    struct Vec<unsigned short> cpu = std::Vec::with_cap(n);
     unsigned long i = 0UL;
     while (i < n) { pat.push((unsigned short)i); cpu.push((unsigned short)0); i = i + 1UL; }
     int d = ROCM_FP16;
@@ -664,9 +664,9 @@ static void check_mixed_precision() {
     }
 
     // 40 buffers (two launches) to bf16 and back, lengths 1 .. 2000
-    struct Vec<struct RocmBuf> f32s = std::vec_new();
-    struct Vec<struct RocmHalfBuf> h16s = std::vec_new();
-    struct Vec<struct RocmBuf> backs = std::vec_new();
+    struct Vec<struct RocmBuf> f32s = std::Vec::new();
+    struct Vec<struct RocmHalfBuf> h16s = std::Vec::new();
+    struct Vec<struct RocmBuf> backs = std::Vec::new();
     struct Vec<float> host = seq(2000UL, (float)0.37, -(float)17.0);
     unsigned long b = 0UL;
     while (b < 40UL) {
@@ -693,10 +693,10 @@ static void check_mixed_precision() {
     check(bad == 0UL, "40 buffers round-trip through bf16");
     // a list mixing fp16 and bf16 is refused
     struct RocmHalfBuf odd = RocmHalfBuf::alloc(5UL, ROCM_FP16);
-    struct Vec<struct RocmHalfBuf> mixed = std::vec_new();
+    struct Vec<struct RocmHalfBuf> mixed = std::Vec::new();
     mixed.push(*h16s.at(0UL));
     mixed.push(odd);
-    struct Vec<struct RocmBuf> two = std::vec_new();
+    struct Vec<struct RocmBuf> two = std::Vec::new();
     two.push(*backs.at(0UL));
     two.push(*backs.at(1UL));
     check(!std::rocm_from_half_many(&mixed, &two), "mixed dtypes refused");
@@ -704,16 +704,16 @@ static void check_mixed_precision() {
     // unscaling: fp16 gradients holding 512 x the value; then one overflow
     struct RocmBuf flag = RocmBuf::alloc(1UL);
     struct Vec<float> gv = seq(3000UL, (float)0.01, -(float)0.5);
-    struct Vec<float> scaled = std::vec_with_cap(3000UL);
+    struct Vec<float> scaled = std::Vec::with_cap(3000UL);
     i = 0UL;
     while (i < 3000UL) { scaled.push(*gv.at(i) * (float)512.0); i = i + 1UL; }
     struct RocmHalfBuf g16a = RocmHalfBuf::upload(scaled.at(0UL), 3000UL, ROCM_FP16);
     struct RocmHalfBuf g16b = RocmHalfBuf::upload(scaled.at(0UL), 1000UL, ROCM_FP16);
     struct RocmBuf g32a = RocmBuf::alloc(3000UL);
     struct RocmBuf g32b = RocmBuf::alloc(1000UL);
-    struct Vec<struct RocmHalfBuf> gs = std::vec_new();
+    struct Vec<struct RocmHalfBuf> gs = std::Vec::new();
     gs.push(g16a); gs.push(g16b);
-    struct Vec<struct RocmBuf> g32s = std::vec_new();
+    struct Vec<struct RocmBuf> g32s = std::Vec::new();
     g32s.push(g32a); g32s.push(g32b);
     check(std::rocm_zero(flag) && std::rocm_half_unscale_many(&gs, &g32s, (float)1.0 / (float)512.0, flag), "unscale ran");
     struct Vec<float> fl = download(flag);
@@ -734,7 +734,7 @@ static void check_mixed_precision() {
     check(*fl.at(0UL) == (float)1.0, "overflow flagged");
     fl.free();
     // fp32 gradients in place
-    struct Vec<struct RocmBuf> one = std::vec_new();
+    struct Vec<struct RocmBuf> one = std::Vec::new();
     one.push(g32a);
     check(std::rocm_zero(flag) && std::rocm_unscale_many(&one, &one, (float)4.0, flag), "fp32 unscale in place");
     u = download(g32a);
@@ -755,9 +755,9 @@ static void check_mixed_precision() {
         struct RocmBuf dvv = RocmBuf::alloc(m);
         struct RocmHalfBuf wh = RocmHalfBuf::alloc(m, ROCM_BF16);
         std::rocm_zero(dm); std::rocm_zero(dvv); std::rocm_zero(flag);
-        struct Vec<float> cw = std::vec_with_cap(m);
-        struct Vec<float> cm = std::vec_with_cap(m);
-        struct Vec<float> cv = std::vec_with_cap(m);
+        struct Vec<float> cw = std::Vec::with_cap(m);
+        struct Vec<float> cm = std::Vec::with_cap(m);
+        struct Vec<float> cv = std::Vec::with_cap(m);
         i = 0UL;
         while (i < m) { cw.push(*w0.at(i)); cm.push((float)0.0); cv.push((float)0.0); i = i + 1UL; }
         float lr = (float)0.01; float b1 = (float)0.9; float b2 = (float)0.999; float eps = (float)1.0e-8; float wd = (float)0.05; float mu = (float)0.9;
@@ -904,7 +904,7 @@ int main() {
     check(da.dev != 0UL && db.dev != 0UL && dout.dev != 0UL, "upload/alloc");
 
     // elementwise vs CPU
-    struct Vec<float> want = std::vec_with_cap(n);
+    struct Vec<float> want = std::Vec::with_cap(n);
     unsigned long i = 0UL;
     while (i < n) { want.push(*a.at(i) + *b.at(i)); i = i + 1UL; }
     check(std::rocm_add(da, db, dout), "add enqueued");
@@ -1002,7 +1002,7 @@ int main() {
 
     // host-array API: custom kernel and rocBLAS agree with CPU
     struct Vec<float> ref = cpu_gemm(&ga, 0, &gb, 0, m, nn, k);
-    struct Vec<float> hc = std::vec_with_cap(m * nn);
+    struct Vec<float> hc = std::Vec::with_cap(m * nn);
     i = 0UL;
     while (i < m * nn) { hc.push(0.0f); i = i + 1UL; }
     check(std::rocm_matmul_f32(ga.at(0UL), gb.at(0UL), hc.at(0UL), m, k, nn), "custom matmul ran");

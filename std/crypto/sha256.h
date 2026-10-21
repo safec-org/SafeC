@@ -1,5 +1,6 @@
 // SafeC Standard Library — SHA-256 / SHA-224 Hash
 // Freestanding-safe.  No dynamic allocation.
+// Sha256Ctx conforms to hash.h's Hasher and BlockHash (generic hashing, Hmac).
 #pragma once
 
 #define SHA256_DIGEST_SIZE  32   // bytes
@@ -14,6 +15,12 @@ struct Sha256Ctx {
     unsigned long total_bytes;   // total bytes processed
     int           is224;         // 1 = SHA-224 variant
 
+    // A fresh SHA-256 context.
+    static struct Sha256Ctx new();
+
+    // A fresh SHA-224 context (same struct, is224 = 1).
+    static struct Sha256Ctx new_224();
+
     // Feed `len` bytes of data into the hash.
     void update(const &unsigned char data, unsigned long len);
 
@@ -21,13 +28,11 @@ struct Sha256Ctx {
     // For SHA-256: digest must be at least 32 bytes.
     // For SHA-224: digest must be at least 28 bytes.
     void finish(&unsigned char digest);
+
+    // 32 (SHA-256) or 28 (SHA-224) / SHA256_BLOCK_SIZE (hash.h's BlockHash).
+    unsigned long digest_size() const;
+    unsigned long block_size() const;
 };
-
-// Initialise a SHA-256 context.
-struct Sha256Ctx sha256_init();
-
-// Initialise a SHA-224 context.
-struct Sha256Ctx sha224_init();
 
 // Convenience: hash `len` bytes and write 32-byte digest.
 void sha256(const &unsigned char data, unsigned long len,

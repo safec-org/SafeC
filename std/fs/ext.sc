@@ -30,11 +30,11 @@ static unsigned short ext2_read16_(const unsigned char* p) {
     return (unsigned short)0;
 }
 
-// ── ext2_init ─────────────────────────────────────────────────────────────────
+// ── Ext2Ctx::init ─────────────────────────────────────────────────────────────
 // Superblock lives at byte offset 1024 = sector 2 on a 512-byte device.
 
-int ext2_init(&Ext2Ctx ctx, &BlockDevice dev) {
-    ctx.dev = *dev;
+int Ext2Ctx::init(&BlockDevice dev) {
+    self.dev = *dev;
 
     // Read two sectors starting at LBA 2 to get the 1024-byte superblock.
     unsigned char sb_buf[1024];
@@ -44,52 +44,52 @@ int ext2_init(&Ext2Ctx ctx, &BlockDevice dev) {
 
     // Parse superblock fields.
     unsafe {
-        ctx.super.inodes_count     = ext2_read32_(sb_buf + 0);
-        ctx.super.blocks_count     = ext2_read32_(sb_buf + 4);
-        ctx.super.reserved_blocks  = ext2_read32_(sb_buf + 8);
-        ctx.super.free_blocks      = ext2_read32_(sb_buf + 12);
-        ctx.super.free_inodes      = ext2_read32_(sb_buf + 16);
-        ctx.super.first_data_block = ext2_read32_(sb_buf + 20);
-        ctx.super.log_block_size   = ext2_read32_(sb_buf + 24);
-        ctx.super.log_frag_size    = ext2_read32_(sb_buf + 28);
-        ctx.super.blocks_per_group = ext2_read32_(sb_buf + 32);
-        ctx.super.frags_per_group  = ext2_read32_(sb_buf + 36);
-        ctx.super.inodes_per_group = ext2_read32_(sb_buf + 40);
-        ctx.super.mtime            = ext2_read32_(sb_buf + 44);
-        ctx.super.wtime            = ext2_read32_(sb_buf + 48);
-        ctx.super.mnt_count        = ext2_read16_(sb_buf + 52);
-        ctx.super.max_mnt_count    = ext2_read16_(sb_buf + 54);
-        ctx.super.magic            = ext2_read16_(sb_buf + 56);
-        ctx.super.state            = ext2_read16_(sb_buf + 58);
-        ctx.super.errors           = ext2_read16_(sb_buf + 60);
-        ctx.super.minor_rev        = ext2_read16_(sb_buf + 62);
-        ctx.super.lastcheck        = ext2_read32_(sb_buf + 64);
-        ctx.super.checkinterval    = ext2_read32_(sb_buf + 68);
-        ctx.super.creator_os       = ext2_read32_(sb_buf + 72);
-        ctx.super.rev_level        = ext2_read32_(sb_buf + 76);
+        self.super.inodes_count     = ext2_read32_(sb_buf + 0);
+        self.super.blocks_count     = ext2_read32_(sb_buf + 4);
+        self.super.reserved_blocks  = ext2_read32_(sb_buf + 8);
+        self.super.free_blocks      = ext2_read32_(sb_buf + 12);
+        self.super.free_inodes      = ext2_read32_(sb_buf + 16);
+        self.super.first_data_block = ext2_read32_(sb_buf + 20);
+        self.super.log_block_size   = ext2_read32_(sb_buf + 24);
+        self.super.log_frag_size    = ext2_read32_(sb_buf + 28);
+        self.super.blocks_per_group = ext2_read32_(sb_buf + 32);
+        self.super.frags_per_group  = ext2_read32_(sb_buf + 36);
+        self.super.inodes_per_group = ext2_read32_(sb_buf + 40);
+        self.super.mtime            = ext2_read32_(sb_buf + 44);
+        self.super.wtime            = ext2_read32_(sb_buf + 48);
+        self.super.mnt_count        = ext2_read16_(sb_buf + 52);
+        self.super.max_mnt_count    = ext2_read16_(sb_buf + 54);
+        self.super.magic            = ext2_read16_(sb_buf + 56);
+        self.super.state            = ext2_read16_(sb_buf + 58);
+        self.super.errors           = ext2_read16_(sb_buf + 60);
+        self.super.minor_rev        = ext2_read16_(sb_buf + 62);
+        self.super.lastcheck        = ext2_read32_(sb_buf + 64);
+        self.super.checkinterval    = ext2_read32_(sb_buf + 68);
+        self.super.creator_os       = ext2_read32_(sb_buf + 72);
+        self.super.rev_level        = ext2_read32_(sb_buf + 76);
         // Revision 0 has fixed 128-byte inodes; dynamic-revision (>= 1)
         // filesystems — everything mke2fs creates — record the size here.
-        ctx.super.inode_size = (ctx.super.rev_level == (unsigned int)0)
+        self.super.inode_size = (self.super.rev_level == (unsigned int)0)
             ? (unsigned short)128 : ext2_read16_(sb_buf + 88);
     }
 
     // Validate magic.
-    if ((unsigned int)ctx.super.magic != (unsigned int)EXT2_SUPER_MAGIC) { return -1; }
+    if ((unsigned int)self.super.magic != (unsigned int)EXT2_SUPER_MAGIC) { return -1; }
 
     // Compute derived values.
-    ctx.block_size        = (unsigned long)EXT2_BLOCK_SIZE_BASE
-                            << (unsigned long)ctx.super.log_block_size;
+    self.block_size        = (unsigned long)EXT2_BLOCK_SIZE_BASE
+                            << (unsigned long)self.super.log_block_size;
     // Blocks are staged in EXT2_MAX_BLOCK_SIZE-byte stack buffers.
-    if (ctx.block_size > (unsigned long)EXT2_MAX_BLOCK_SIZE) { return -1; }
-    if (ctx.super.inode_size < (unsigned short)128 ||
-        (unsigned long)ctx.super.inode_size > ctx.block_size) { return -1; }
-    ctx.inodes_per_group  = (unsigned long)ctx.super.inodes_per_group;
-    ctx.blocks_per_group  = (unsigned long)ctx.super.blocks_per_group;
+    if (self.block_size > (unsigned long)EXT2_MAX_BLOCK_SIZE) { return -1; }
+    if (self.super.inode_size < (unsigned short)128 ||
+        (unsigned long)self.super.inode_size > self.block_size) { return -1; }
+    self.inodes_per_group  = (unsigned long)self.super.inodes_per_group;
+    self.blocks_per_group  = (unsigned long)self.super.blocks_per_group;
 
     // group_count = ceil(blocks_count / blocks_per_group)
-    unsigned long bc  = (unsigned long)ctx.super.blocks_count;
-    unsigned long bpg = ctx.blocks_per_group;
-    ctx.group_count = (bc + bpg - (unsigned long)1) / bpg;
+    unsigned long bc  = (unsigned long)self.super.blocks_count;
+    unsigned long bpg = self.blocks_per_group;
+    self.group_count = (bc + bpg - (unsigned long)1) / bpg;
 
     return 0;
 }
@@ -299,11 +299,11 @@ static int ext2_split_path_(const char* path,
     return count;
 }
 
-// ── VfsOps callbacks ──────────────────────────────────────────────────────────
+// ── FileSystem methods (see vfs.h) ────────────────────────────────────────────
 
-static int ext2_vfs_open_(?&void ctx_ref, const &char path_ref, int flags,
-                           &VfsNode node_out) {
-    void* ctx = ctx_ref;
+int Ext2Ctx::open(const &char path_ref, int flags, &VfsNode node_out) {
+    void* ctx;
+    unsafe { ctx = (void*)self; }
     const char* path = path_ref;
     struct Ext2Ctx* ec;
     unsafe { ec = (struct Ext2Ctx*)ctx; }
@@ -320,7 +320,7 @@ static int ext2_vfs_open_(?&void ctx_ref, const &char path_ref, int flags,
             node_out.size     = (unsigned long)0;
             node_out.name[0]  = '/';
             node_out.name[1]  = (char)0;
-            node_out.fs_ctx   = ctx;
+            node_out.fs_ctx   = null;
         }
         return 0;
     }
@@ -348,7 +348,7 @@ static int ext2_vfs_open_(?&void ctx_ref, const &char path_ref, int flags,
         node_out.inode  = cur_ino;
         node_out.type   = (is_dir != 0) ? VFS_TYPE_DIR : VFS_TYPE_FILE;
         node_out.size   = (unsigned long)inode.size_lo;
-        node_out.fs_ctx = ctx;
+        node_out.fs_ctx = null;
         // Copy last component as name.
         unsigned long nlen = comp_lens[n - 1];
         unsigned long k = (unsigned long)0;
@@ -361,19 +361,18 @@ static int ext2_vfs_open_(?&void ctx_ref, const &char path_ref, int flags,
     return 0;
 }
 
-static unsigned long ext2_vfs_read_(?&void ctx_ref, unsigned long inode,
-                                     unsigned long offset,
-                                     &unsigned char buf_ref, unsigned long len) {
-    void* ctx = ctx_ref;
+unsigned long Ext2Ctx::read(unsigned long inode, unsigned long offset, &unsigned char buf_ref, unsigned long len) {
+    void* ctx;
+    unsafe { ctx = (void*)self; }
     unsigned char* buf = buf_ref;
     struct Ext2Ctx* ec;
     unsafe { ec = (struct Ext2Ctx*)ctx; }
     unsafe { return ec->read_file(inode, offset, buf, len); }
 }
 
-static int ext2_vfs_readdir_(?&void ctx_ref, unsigned long dir_ino,
-                              fn void(&VfsNode, ?&void) cb, ?&void user) {
-    void* ctx = ctx_ref;
+int Ext2Ctx::readdir(unsigned long dir_ino, fn void(&VfsNode, ?&void) cb, ?&void user) {
+    void* ctx;
+    unsafe { ctx = (void*)self; }
     struct Ext2Ctx* ec;
     unsafe { ec = (struct Ext2Ctx*)ctx; }
 
@@ -421,7 +420,7 @@ static int ext2_vfs_readdir_(?&void ctx_ref, unsigned long dir_ino,
                     node.type     = (e_ftype == (unsigned char)2) ? VFS_TYPE_DIR
                                                                    : VFS_TYPE_FILE;
                     node.inode    = (unsigned long)e_ino;
-                    node.fs_ctx   = ctx;
+                    node.fs_ctx   = null;
 
                     // Stat to get size for files.
                     struct Ext2Inode child_inode;
@@ -442,19 +441,6 @@ static int ext2_vfs_readdir_(?&void ctx_ref, unsigned long dir_ino,
         blk_idx  = blk_idx + (unsigned long)1;
     }
     return count;
-}
-
-// ── ext2_ops ──────────────────────────────────────────────────────────────────
-
-inline struct VfsOps ext2_ops() {
-    struct VfsOps ops;
-    unsafe {
-        memset((void*)&ops, 0, sizeof(struct VfsOps));
-        ops.open    = ext2_vfs_open_;
-        ops.read    = ext2_vfs_read_;
-        ops.readdir = ext2_vfs_readdir_;
-    }
-    return ops;
 }
 
 } // namespace std

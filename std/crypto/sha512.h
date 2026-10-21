@@ -1,5 +1,6 @@
 // SafeC Standard Library — SHA-512 / SHA-384 Hash (FIPS 180-4)
 // Freestanding-safe. No dynamic allocation.
+// Sha512Ctx conforms to hash.h's Hasher and BlockHash (generic hashing, Hmac).
 #pragma once
 
 #define SHA512_DIGEST_SIZE  64   // bytes
@@ -18,6 +19,12 @@ struct Sha512Ctx {
     unsigned long long  total_bytes;
     int                 is384;             // 1 = SHA-384 variant
 
+    // A fresh SHA-512 context.
+    static struct Sha512Ctx new();
+
+    // A fresh SHA-384 context (same struct, is384 = 1).
+    static struct Sha512Ctx new_384();
+
     // Feed `len` bytes of data into the hash.
     void update(const &unsigned char data, unsigned long len);
 
@@ -25,13 +32,11 @@ struct Sha512Ctx {
     // For SHA-512: digest must be at least 64 bytes.
     // For SHA-384: digest must be at least 48 bytes.
     void finish(&unsigned char digest);
+
+    // 64 (SHA-512) or 48 (SHA-384) / SHA512_BLOCK_SIZE (hash.h's BlockHash).
+    unsigned long digest_size() const;
+    unsigned long block_size() const;
 };
-
-// Initialise a SHA-512 context.
-struct Sha512Ctx sha512_init();
-
-// Initialise a SHA-384 context.
-struct Sha512Ctx sha384_init();
 
 // Convenience: hash `len` bytes and write the 64-byte digest.
 void sha512(const &unsigned char data, unsigned long len,

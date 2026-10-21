@@ -276,7 +276,7 @@ c_register_callback(wref);     // ?&T → T*: implicit, no unsafe
 
 A reference of *any* region converts to either form implicitly (`&stack Widget` → `&Widget`/`?&Widget`, no cast), and `&T`/`?&T` converts back to `T*`/`void*` implicitly. A raw `T*` (from any extern call) converts to `?&T` anywhere, but to a non-null `&T` only inside `unsafe`, since nothing checks it isn't null. There's no region bookkeeping, because the region-less form doesn't claim a region to check: `Region::Extern` is exempt from every escape/lifetime check by construction (see `Type.h`'s `Region::Extern` for the full rationale). A non-nullable `&T` derefs/member-accesses freely, same as any other non-nullable reference; reading a nullable `?&T` out still goes through the same grammar as `?&stack T`: `match`, `is_null()`, `.default(fallback)`, or an `unsafe`-gated `!`.
 
-`&T`/`?&T` needs a concrete `T`. Where one container must hold callbacks with *different* context types at once (a widget tree, a timer wheel, a VFS mounting several drivers), the slot stores the pair type-erased, but the only way to fill it is a generic function taking a matching `fn(?&T)` and `?&T` (`widget_on_click`, `timer_add`, `vfs_mount`, `task_spawn`), so every call is still type-checked. Where one `T` per instance fits, the type is simply generic (`std/dma.h`'s `generic<T> struct DmaChannel`).
+`&T`/`?&T` needs a concrete `T`. Where one container must hold callbacks with *different* context types at once (a widget tree, a timer wheel, a VFS mounting several drivers), the slot stores the pair type-erased, but the only way to fill it is a generic method taking a matching `fn(?&T)` and `?&T` (`Widget::on_click`, `TimerWheel::add`, `Vfs::mount`, `TaskScheduler::spawn`), so every call is still type-checked. Where one `T` per instance fits, the type is simply generic (`std/dma.h`'s `generic<T> struct DmaChannel`).
 
 ### Generics
 
@@ -440,7 +440,7 @@ Channels — `std/sync/channel.h`'s `Chan<T>` is a typed, bounded, blocking MPMC
 ```c
 #include <std/sync/channel.h>
 
-struct Chan<int> ch = std::chan_new(4);   // capacity 4
+struct Chan<int> ch = std::Chan::new(4);  // capacity 4
 ch.send(42);                              // blocks while full; 0 once closed
 match (ch.recv()) {                       // blocks while empty; null once closed and drained
     case some(v): printf("got %d\n", v);
@@ -449,7 +449,7 @@ match (ch.recv()) {                       // blocks while empty; null once close
 ch.close();
 ```
 
-For single-consumer fan-in from multiple producer threads without the channel runtime's blocking/condvar overhead, `std/sync/mpsc.h` provides a spinlock-guarded bounded ring buffer (`struct MpscQueue<T> q = std::mpsc_new(64UL); q.enqueue(v); q.dequeue()` → `?T`); `std/sync/lockfree.h`'s `LFQueue<T>` (`lfq_new`) is the single-producer/single-consumer case with no locking at all. For communicating with a *different process* rather than another thread, see `std/ipc/pipe.h` (anonymous pipes, typically parent/child after `fork()`) and `std/ipc/uds.h` (named Unix domain sockets, for unrelated processes).
+For single-consumer fan-in from multiple producer threads without the channel runtime's blocking/condvar overhead, `std/sync/mpsc.h` provides a spinlock-guarded bounded ring buffer (`struct MpscQueue<T> q = std::MpscQueue::new(64UL); q.enqueue(v); q.dequeue()` → `?T`); `std/sync/lockfree.h`'s `LFQueue<T>` (`LFQueue::new`) is the single-producer/single-consumer case with no locking at all. For communicating with a *different process* rather than another thread, see `std/ipc/pipe.h` (anonymous pipes, typically parent/child after `fork()`) and `std/ipc/uds.h` (named Unix domain sockets, for unrelated processes).
 
 ### Bare-Metal
 

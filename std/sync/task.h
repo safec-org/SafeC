@@ -9,7 +9,7 @@
 
 // Was 64 -- too low for a reactor thread under real concurrent load: once
 // more than TASK_MAX connections are simultaneously in flight on one
-// TaskScheduler, task_spawn() returns -1 and the caller (see
+// TaskScheduler, TaskScheduler::spawn() returns -1 and the caller (see
 // std/http/http.sc's http_accept_task_) closes the freshly-accepted fd
 // before reading its pending request bytes, which the kernel turns into
 // a TCP RST to the client. Verified: `ab -c 128` against a single
@@ -23,9 +23,21 @@
 
 namespace std {
 
+// What a cooperative scheduler offers to the code driving it: one round,
+// run to completion, and how many tasks are left. TaskScheduler and
+// ThreadSched (thread_bare.h, priority-ordered) both conform, so a driver
+// loop written once against TaskRunner runs either. Spawning isn't part of
+// it: ThreadSched::spawn takes a priority that TaskScheduler::spawn has no
+// place for. (Not called Scheduler: that's kernel/scheduler.h's struct.)
+trait TaskRunner {
+    int  tick();                 // one round; returns the still-active count
+    void run_all();              // until every task is done
+    int  active_count() const;
+}
+
 struct Task {
     void*  func;          // type-erased task function: int(?&T arg, int resume_point);
-    void*  arg;           // type-erased ?&T argument — both set only by task_spawn
+    void*  arg;           // type-erased ?&T argument — both set only by TaskScheduler::spawn
     int    state;         // TASK_READY, TASK_RUNNING, or TASK_DONE
     int    resume_point;  // where to resume (0 = start)
     // I/O-readiness blocking (std/sched/reactor.h drives these): a task
@@ -45,8 +57,19 @@ struct TaskScheduler {
     int           count;     // number of registered tasks
     int           current;   // index of currently running task
 
-    // Type-erased spawn behind task_spawn() (below) and the compiler's
-    // bare-metal spawn runtime. Returns task index, or -1 if full.
+    // An empty scheduler (no tasks).
+    static struct TaskScheduler new();
+
+    // Spawn a task running func(arg, resume_point):
+    //   - func returns >0 to yield, with that value as the next resume_point
+    //   - func returns 0 when done
+    // Returns the task index, or -1 if the scheduler is full.
+    //   static int blink(?&Led led, int step) { ...; return step < 3 ? step + 1 : 0; }
+    //   sched.spawn(blink, (?&Led)&led);
+    generic<T> int spawn(fn int(?&T, int) func, ?&T arg);
+
+    // Type-erased spawn behind spawn() and the compiler's bare-metal spawn
+    // runtime. Returns task index, or -1 if full.
     int           spawn_raw_(void* func, void* arg);
 
     // Run one scheduling round: every non-blocked, non-done task gets one
@@ -83,18 +106,19 @@ struct TaskScheduler {
     int           has_ready() const;
 };
 
-// Initialize a task scheduler.
-struct TaskScheduler task_sched_init();
-
-// Spawn a task running func(arg, resume_point):
-//   - func returns >0 to yield, with that value as the next resume_point
-//   - func returns 0 when done
-// Returns the task index, or -1 if the scheduler is full.
-//   static int blink(?&Led led, int step) { ...; return step < 3 ? step + 1 : 0; }
-//   std::task_spawn(&sched, blink, (?&Led)&led);
 generic<T>
-int task_spawn(&TaskScheduler s, fn int(?&T, int) func, ?&T arg) {
-    unsafe { return s.spawn_raw_((void*)func, (void*)arg); }
+int TaskScheduler::spawn(fn int(?&T, int) func, ?&T arg) {
+    unsafe { return self.spawn_raw_((void*)func, (void*)arg); }
+}
+
+// Runs at most max_rounds rounds of s (a bounded run_all, e.g. for a
+// watchdog-fed main loop). Returns the tasks still active afterwards.
+generic<S: TaskRunner>
+int run_rounds(&S s, int max_rounds) {
+    int left = s.active_count();
+    int r = 0;
+    while (r < max_rounds && left > 0) { left = s.tick(); r = r + 1; }
+    return left;
 }
 
 } // namespace std

@@ -1,7 +1,7 @@
 #pragma once
 // SafeC Standard Library — Vec<T> (dynamic array)
 //
-//   struct Vec<int> v = std::vec_new();        // T inferred from the target
+//   struct Vec<int> v = std::Vec::new();       // T inferred from the target
 //   v.push(3);
 //   match (v.get(0UL)) { case null: ... case some(x): *x = 4; }
 //   ?int last = v.pop();
@@ -23,6 +23,11 @@ struct Vec {
     ?&heap T      data;  // element buffer; null while cap == 0
     unsigned long len;   // element count
     unsigned long cap;   // allocated capacity, in elements
+
+    // ── Construction ────────────────────────────────────────────────────────
+    static struct Vec<T> new();                                   // empty, no allocation
+    static struct Vec<T> with_cap(unsigned long cap);             // empty, room for cap elements
+    static struct Vec<T> from_arr(const &T items, unsigned long len); // copies len elements
 
     // ── Capacity ────────────────────────────────────────────────────────────
     int           reserve(unsigned long new_cap);   // ensure cap >= new_cap; 0 on OOM
@@ -59,7 +64,7 @@ struct Vec {
 };
 
 generic<T>
-struct Vec<T> vec_new() {
+struct Vec<T> Vec::new() {
     struct Vec<T> v;
     v.data = null;
     v.len = 0UL;
@@ -68,19 +73,23 @@ struct Vec<T> vec_new() {
 }
 
 generic<T>
-struct Vec<T> vec_with_cap(unsigned long cap) {
-    struct Vec<T> v = vec_new();
+struct Vec<T> Vec::with_cap(unsigned long cap) {
+    struct Vec<T> v = Vec::new();
     v.reserve(cap);
     return v;
 }
 
 // Copies 'len' elements starting at 'items'.
 generic<T>
-struct Vec<T> vec_from_arr(const &T items, unsigned long len) {
-    struct Vec<T> v = vec_with_cap(len);
+struct Vec<T> Vec::from_arr(const &T items, unsigned long len) {
+    struct Vec<T> v = Vec::with_cap(len);
     v.extend(items, len);
     return v;
 }
+
+// kept for std/ml until its refactor moves to the static method
+generic<T>
+struct Vec<T> vec_new() { struct Vec<T> v = Vec::new(); return v; }
 
 // ── Capacity ──────────────────────────────────────────────────────────────────
 
@@ -255,7 +264,7 @@ void Vec::reverse() {
 // Introsort over [lo, hi): median-of-three quicksort, insertion sort below 16
 // elements, heapsort once recursion gets too deep (O(n log n) worst case).
 // Element moves are whole-T copies, not byte loops, and no libc is needed.
-generic<T, C>
+generic<T, C: Order>
 void vec_insertion_sort_(&T a, long long lo, long long hi, const &C ord) {
     unsafe {
         long long i = lo + 1LL;
@@ -269,7 +278,7 @@ void vec_insertion_sort_(&T a, long long lo, long long hi, const &C ord) {
     }
 }
 
-generic<T, C>
+generic<T, C: Order>
 void vec_sift_down_(&T a, long long lo, long long root, long long n, const &C ord) {
     unsafe {
         while (1) {
@@ -285,7 +294,7 @@ void vec_sift_down_(&T a, long long lo, long long root, long long n, const &C or
     }
 }
 
-generic<T, C>
+generic<T, C: Order>
 void vec_heap_sort_(&T a, long long lo, long long hi, const &C ord) {
     long long n = hi - lo;
     long long i = n / 2LL;
@@ -302,7 +311,7 @@ void vec_heap_sort_(&T a, long long lo, long long hi, const &C ord) {
     }
 }
 
-generic<T, C>
+generic<T, C: Order>
 void vec_introsort_(&T a, long long lo, long long hi, int depth, const &C ord) {
     while (hi - lo > 16LL) {
         if (depth == 0) { vec_heap_sort_(a, lo, hi, ord); return; }
@@ -337,10 +346,10 @@ void vec_introsort_(&T a, long long lo, long long hi, int depth, const &C ord) {
     vec_insertion_sort_(a, lo, hi, ord);
 }
 
-// Sorts by a compile-time ordering type (Less<T>, Greater<T>, or your own
+// Sorts by a compile-time ordering (an Order: Less<T>, Greater<T>, or your own
 // struct with 'int cmp(const &T, const &T) const'): every comparison is a
 // direct call the optimizer inlines, unlike sort()'s function pointer.
-generic<T, C>
+generic<T, C: Order>
 void vec_sort_by(&Vec<T> v, C ord) {
     if (v.len < 2UL) return;
     int depth = 0;
@@ -355,13 +364,13 @@ void vec_sort_by(&Vec<T> v, C ord) {
 // Ascending natural order ('<'), comparisons inlined.
 generic<T>
 void vec_sort(&Vec<T> v) {
-    struct Less<T> ord = order_less();
+    struct Less<T> ord = Less::new();
     vec_sort_by(v, ord);
 }
 
 generic<T>
 void Vec::sort(fn int(const &T, const &T) cmp) {
-    struct FnOrder<T> ord = order_fn(cmp);
+    struct FnOrder<T> ord = FnOrder::of(cmp);
     vec_sort_by(self, ord);
 }
 
@@ -384,7 +393,7 @@ int Vec::contains(const &T key, fn int(const &T, const &T) cmp) const {
 
 generic<T>
 struct Vec<T> Vec::clone() const {
-    struct Vec<T> out = vec_with_cap(self.len);
+    struct Vec<T> out = Vec::with_cap(self.len);
     match (self.data) {
         case null: { }
         case some(buf): out.extend(buf, self.len);
@@ -402,7 +411,7 @@ void Vec::foreach(fn void(&T, unsigned long) func) {
 
 generic<T>
 struct Vec<T> Vec::filter(fn int(const &T) pred) const {
-    struct Vec<T> out = vec_new();
+    struct Vec<T> out = Vec::new();
     unsafe {
         unsigned long i = 0UL;
         while (i < self.len) {
@@ -424,7 +433,7 @@ void Vec::free() {
 // Maps every element through 'f' into a new Vec<U>.
 generic<T, U>
 struct Vec<U> vec_map(const &Vec<T> v, fn U(const &T) f) {
-    struct Vec<U> out = vec_with_cap(v.len);
+    struct Vec<U> out = Vec::with_cap(v.len);
     unsafe {
         unsigned long i = 0UL;
         while (i < v.len) { out.push(f(&v.data[i])); i = i + 1UL; }

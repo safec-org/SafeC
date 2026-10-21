@@ -6,7 +6,7 @@
 
 // Maximum path components parsed
 #define FAT_MAX_DEPTH  8
-#define FAT_MAX_CLUSTER 4096   // largest supported cluster size in bytes (fat_init rejects bigger)
+#define FAT_MAX_CLUSTER 4096   // largest supported cluster size in bytes (FatCtx::init rejects bigger)
 
 namespace std {
 
@@ -42,18 +42,21 @@ struct FatCtx {
     unsigned long  root_cluster;       // cluster of root directory
     unsigned long  bytes_per_cluster;
 
+    // Initialise this context in place from a block device partition
+    // starting at `lba` (the device is copied into `dev`).
+    // Returns 0 on success.
+    int init(&BlockDevice dev, unsigned long lba);
+
     // Read a cluster into `buf` (must be >= bytes_per_cluster bytes).
     int read_cluster(unsigned long cluster, &unsigned char buf);
 
     // Follow FAT chain to find cluster at position `idx` from `start_cluster`.
     unsigned long follow_fat(unsigned long start_cluster, unsigned long idx);
+
+    // ── FsRead (vfs.h): mount with vfs.mount_ro(mountpoint, &ctx) ──────────
+    int           open(const &char path, int flags, &VfsNode node_out);
+    unsigned long read(unsigned long inode, unsigned long offset, &unsigned char buf, unsigned long len);
+    int           readdir(unsigned long inode, fn void(&VfsNode, ?&void) cb, ?&void user);
 };
-
-// Initialise FAT32 context from a block device partition starting at `lba`.
-// Returns 0 on success.
-int fat_init(&FatCtx ctx, &BlockDevice dev, unsigned long lba);
-
-// Return VfsOps for the FAT32 driver (ctx must be a FatCtx*).
-struct VfsOps fat_ops();
 
 } // namespace std

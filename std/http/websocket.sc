@@ -9,6 +9,8 @@
 #include <std/convert.h>
 #include <std/str.h>
 #include <std/sched/io_nb.h>
+#include <std/io_traits.h>
+#include <std/io_buf.h>
 #include <std/crypto/sha1.h>
 #include <std/crypto/sha1.h>
 #include <std/crypto/rng.h>
@@ -20,46 +22,6 @@
 // file (http.sc supplies http_resolve_host/http_header_get, reused below).
 
 namespace std {
-
-// Same platform split as http.sc's sock_read_/sock_write_/sock_close_
-// (file-local there, so repeated here): Winsock sockets only support
-// recv/send/closesocket, and on Linux writes go through send() with
-// MSG_NOSIGNAL so a peer that has gone away can't kill the process with
-// SIGPIPE (io_nb_bsd.sc sets SO_NOSIGPIPE on BSD/macOS sockets instead).
-#ifdef _WIN32
-extern int recv(unsigned long long fd, void* buf, int count, int flags);
-extern int send(unsigned long long fd, const void* buf, int count, int flags);
-extern int closesocket(unsigned long long fd);
-static long ws_sock_read_(int fd, void* buf, unsigned long count) {
-    unsafe { return (long)recv((unsigned long long)fd, buf, (int)count, 0); }
-}
-static long ws_sock_write_(int fd, const void* buf, unsigned long count) {
-    unsafe { return (long)send((unsigned long long)fd, buf, (int)count, 0); }
-}
-static int ws_sock_close_(int fd) {
-    unsafe { return closesocket((unsigned long long)fd); }
-}
-#else
-extern ssize_t read(int fd, void* buf, size_t count);
-extern int close(int fd);
-static long ws_sock_read_(int fd, void* buf, unsigned long count) {
-    unsafe { return read(fd, buf, count); }
-}
-#ifdef __linux__
-extern ssize_t send(int fd, const void* buf, size_t count, int flags);
-static long ws_sock_write_(int fd, const void* buf, unsigned long count) {
-    unsafe { return send(fd, buf, count, 0x4000); } // MSG_NOSIGNAL
-}
-#else
-extern ssize_t write(int fd, const void* buf, size_t count);
-static long ws_sock_write_(int fd, const void* buf, unsigned long count) {
-    unsafe { return write(fd, buf, count); }
-}
-#endif
-static int ws_sock_close_(int fd) {
-    unsafe { return close(fd); }
-}
-#endif
 
 void WsMessage::free() {
     if (self.data != (unsigned char*)0) {
@@ -74,7 +36,7 @@ static const char* ws_guid_() {
 }
 
 static struct String ws_compute_accept_(const char* key) {
-    struct String combined = string_new();
+    struct String combined = String::new();
     unsafe {
         combined.push(key);
         combined.push(ws_guid_());
@@ -87,58 +49,21 @@ static struct String ws_compute_accept_(const char* key) {
     return base64_encode(digest, 20UL);
 }
 
-// ── Shared blocking I/O helpers (see http.sc's identically-shaped, but
-// file-local, versions — duplicated here rather than exposed from http.h
-// since these are small and this module shouldn't need to reach into
-// http.sc's request/response-specific internals). ──
-
-static long ws_read_until_(int fd, struct String* out, const char* terminator) {
-    unsigned long termLen; unsafe { termLen = str_len(terminator); }
-    char chunk[512];
-    while (1) {
-        long n;
-        unsafe { n = ws_sock_read_(fd, (void*)chunk, 512UL); }
-        if (n <= 0L) { return -1L; }
-        unsafe { out->push_n(chunk, (unsigned long)n); }
-        long idx; unsafe { idx = out->index_of(terminator); }
-        if (idx >= 0L) { return idx + (long)termLen; }
-    }
-}
-
-static int ws_write_all_(int fd, const char* data, unsigned long len) {
-    unsigned long sent = 0UL;
-    while (sent < len) {
-        long n;
-        unsafe { n = ws_sock_write_(fd, (const void*)(data + sent), len - sent); }
-        if (n <= 0L) { return 0; }
-        sent = sent + (unsigned long)n;
-    }
-    return 1;
-}
-
-static int ws_read_n_(int fd, unsigned char* out, unsigned long want) {
-    unsigned long got = 0UL;
-    while (got < want) {
-        long n;
-        unsafe { n = ws_sock_read_(fd, (void*)(out + got), want - got); }
-        if (n <= 0L) { return 0; }
-        got = got + (unsigned long)n;
-    }
-    return 1;
-}
-
 // ── Client handshake ───────────────────────────────────────────────────────
 
-struct WsConn ws_connect(const &char host, unsigned short port,
-                          const &char path, ?&int ok) {
-    return ws_connect_timeout(host, port, path, WS_DEFAULT_TIMEOUT_MS, ok);
+struct WsConn WsConn::connect(const &char host, unsigned short port,
+                              const &char path, ?&int ok) {
+    return WsConn::connect_timeout(host, port, path, WS_DEFAULT_TIMEOUT_MS, ok);
 }
 
-struct WsConn ws_connect_timeout(const &char host, unsigned short port,
-                                  const &char path, int timeout_ms, ?&int ok) {
+struct WsConn WsConn::connect_timeout(const &char host, unsigned short port,
+                                      const &char path, int timeout_ms, ?&int ok) {
     struct WsConn conn;
     conn.fd = -1;
     conn.is_server = 0;
+    conn.early = null;
+    conn.earlyLen = 0UL;
+    conn.earlyPos = 0UL;
     int good = 1;
 
     unsigned int addr = 0U;
@@ -153,12 +78,12 @@ struct WsConn ws_connect_timeout(const &char host, unsigned short port,
         if (sock_set_io_timeout(fd, timeout_ms) != 0) { good = 0; }
     }
 
-    struct String keyB64 = string_new();
+    struct String keyB64 = String::new();
     if (good) {
         unsigned char keyRaw[16];
         struct RngCtx rng;
         int rngOk;
-        unsafe { rngOk = rng_init(&rng); }
+        unsafe { rngOk = rng.init(); }
         if (!rngOk) {
             good = 0;
         } else {
@@ -170,7 +95,7 @@ struct WsConn ws_connect_timeout(const &char host, unsigned short port,
     }
 
     if (good) {
-        struct String req = string_new();
+        struct String req = String::new();
         unsafe {
             req.push("GET ");
             req.push(path);
@@ -181,31 +106,34 @@ struct WsConn ws_connect_timeout(const &char host, unsigned short port,
             req.push(keyB64.as_ptr());
             req.push("\r\nSec-WebSocket-Version: 13\r\n\r\n");
         }
-        if (!ws_write_all_(fd, req.as_ptr(), req.length())) { good = 0; }
+        struct TcpStream s = TcpStream::from_fd(fd);
+        int sent;
+        unsafe { sent = write_all(&s, (const &unsigned char)req.as_ptr(), req.length()); }
+        if (!sent) { good = 0; }
         req.free();
     }
 
     if (good) {
-        struct String buf = string_new();
-        long headerEnd = ws_read_until_(fd, &buf, "\r\n\r\n");
-        if (headerEnd < 0L) {
+        struct TcpStream s = TcpStream::from_fd(fd);
+        struct BufReader<TcpStream> in = BufReader::over(&s);
+        struct String headerBlock = String::new();
+        if (!in.read_until(&headerBlock, "\r\n\r\n")) {
             good = 0;
         } else {
-            struct String headerBlock = buf.substr(0UL, (unsigned long)headerEnd);
             if (headerBlock.index_of("101") < 0L) { good = 0; }
             struct String accept = http_header_get(headerBlock.as_ptr(), "Sec-WebSocket-Accept");
             struct String expected = ws_compute_accept_(keyB64.as_ptr());
             if (!accept.eq_cstr(expected.as_ptr())) { good = 0; }
             accept.free();
             expected.free();
-            headerBlock.free();
         }
-        buf.free();
+        headerBlock.free();
+        if (good && !ws_keep_early_(&conn, &in)) { good = 0; }
     }
     keyB64.free();
 
     // The handshake timeout must not outlive it: an open WebSocket can sit
-    // idle between messages indefinitely, and ws_recv blocks until one
+    // idle between messages indefinitely, and recv() blocks until one
     // arrives.
     if (good && timeout_ms > 0) {
         if (sock_set_io_timeout(fd, 0) != 0) { good = 0; }
@@ -213,10 +141,62 @@ struct WsConn ws_connect_timeout(const &char host, unsigned short port,
     if (good) {
         conn.fd = fd;
     } else if (fd >= 0) {
-        unsafe { ws_sock_close_(fd); }
+        struct TcpStream s = TcpStream::from_fd(fd);
+        s.close();
     }
     if (ok != (int*)0) { unsafe { *ok = good; } }
     return conn;
+}
+
+// ── Bytes that arrived with the handshake ─────────────────────────────────
+
+// Keeps what 'in' read past the handshake (the start of the first frame,
+// when the peer sent it in the same segment) so recv() doesn't lose it.
+static int ws_keep_early_(&WsConn c, &BufReader<TcpStream> in) {
+    c.early = null;
+    c.earlyLen = 0UL;
+    c.earlyPos = 0UL;
+    unsigned long n = in.buffered();
+    if (n == 0UL) return 1;
+    ?&heap unsigned char buf = (?&heap unsigned char)alloc_raw_(n);
+    match (buf) {
+        case null: { return 0; }
+        case some(b): {
+            long long got = in.read(b, n);
+            if (got != (long long)n) { unsafe { dealloc_raw_((void*)b); } return 0; }
+            c.early = b;
+            c.earlyLen = n;
+        }
+    }
+    return 1;
+}
+
+// A Reader over a connection: the early bytes first, then the socket.
+struct WsSource_ {
+    &WsConn conn;
+    long long read(&unsigned char out, unsigned long n);
+};
+
+long long WsSource_::read(&unsigned char out, unsigned long n) {
+    &WsConn c = self.conn;
+    if (c.earlyPos < c.earlyLen) {
+        unsigned long left = c.earlyLen - c.earlyPos;
+        unsigned long k = n < left ? n : left;
+        match (c.early) {
+            case some(b): { unsafe { safe_memcpy_raw_((void*)out, (const void*)&b[c.earlyPos], k); } }
+            case null: { return -1LL; }
+        }
+        c.earlyPos = c.earlyPos + k;
+        if (c.earlyPos == c.earlyLen) {
+            match (c.early) { case some(b): { unsafe { dealloc_raw_((void*)b); } } case null: { } }
+            c.early = null;
+            c.earlyLen = 0UL;
+            c.earlyPos = 0UL;
+        }
+        return (long long)k;
+    }
+    struct TcpStream s = TcpStream::from_fd(c.fd);
+    return s.read(out, n);
 }
 
 // ── Server handshake ───────────────────────────────────────────────────────
@@ -229,22 +209,21 @@ int ws_listen(unsigned short port) {
     return fd;
 }
 
-int ws_accept(int listenFd, &WsConn out) {
+int WsConn::accept(int listenFd) {
     int fd;
     unsafe { fd = tcp_accept_nb(listenFd); }
     if (fd < 0) { return 0; }
     unsafe { fd_set_blocking(fd); }
 
     int good = 1;
-    struct String buf = string_new();
-    long headerEnd = ws_read_until_(fd, &buf, "\r\n\r\n");
-    struct String key = string_new();
-    if (headerEnd < 0L) {
+    struct TcpStream s = TcpStream::from_fd(fd);
+    struct BufReader<TcpStream> in = BufReader::over(&s);
+    struct String headerBlock = String::new();
+    struct String key = String::new();
+    if (!in.read_until(&headerBlock, "\r\n\r\n")) {
         good = 0;
     } else {
-        struct String headerBlock = buf.substr(0UL, (unsigned long)headerEnd);
         struct String foundKey = http_header_get(headerBlock.as_ptr(), "Sec-WebSocket-Key");
-        headerBlock.free();
         if (foundKey.is_empty()) {
             good = 0;
         } else {
@@ -253,41 +232,47 @@ int ws_accept(int listenFd, &WsConn out) {
         }
         if (good == 0) { foundKey.free(); }
     }
-    buf.free();
+    headerBlock.free();
 
     if (good) {
         struct String accept = ws_compute_accept_(key.as_ptr());
-        struct String resp = string_new();
+        struct String resp = String::new();
         unsafe {
             resp.push("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
                        "Connection: Upgrade\r\nSec-WebSocket-Accept: ");
             resp.push(accept.as_ptr());
             resp.push("\r\n\r\n");
         }
-        if (!ws_write_all_(fd, resp.as_ptr(), resp.length())) { good = 0; }
+        int sent;
+        unsafe { sent = write_all(&s, (const &unsigned char)resp.as_ptr(), resp.length()); }
+        if (!sent) { good = 0; }
         resp.free();
         accept.free();
     }
     key.free();
 
     if (!good) {
-        unsafe { ws_sock_close_(fd); }
+        s.close();
         return 0;
     }
     unsafe {
-        out->fd = fd;
-        out->is_server = 1;
+        self.fd = fd;
+        self.is_server = 1;
     }
+    if (!ws_keep_early_(self, &in)) { s.close(); self.fd = -1; return 0; }
     return 1;
 }
 
 // ── Framing ───────────────────────────────────────────────────────────────
+
+#define WS_MASK_CHUNK_ 16384
 
 static int ws_write_frame_(struct WsConn* conn, int opcode,
                             const unsigned char* data, unsigned long len) {
     int fd;
     int mustMask;
     unsafe { fd = conn->fd; mustMask = (conn->is_server != 0) ? 0 : 1; }
+    struct TcpStream s = TcpStream::from_fd(fd);
 
     unsigned char head[10];
     unsigned long headLen = 0UL;
@@ -311,73 +296,73 @@ static int ws_write_frame_(struct WsConn* conn, int opcode,
             headLen = 10UL;
         }
     }
-    if (!ws_write_all_(fd, (const char*)head, headLen)) { return 0; }
+    // Header, mask key and a small payload leave in one write; a large
+    // payload streams through without a copy of the whole of it.
+    struct BufWriter<TcpStream> out = BufWriter::over(&s);
+    if (!write_all(&out, &head[0], headLen)) { return 0; }
 
     if (mustMask) {
         unsigned char maskKey[4];
         struct RngCtx rng;
         int rngOk;
-        unsafe { rngOk = rng_init(&rng); }
+        unsafe { rngOk = rng.init(); }
         if (!rngOk) { return 0; }
         unsafe { rng.fill(&maskKey[0], 4UL); }
-        if (!ws_write_all_(fd, (const char*)maskKey, 4UL)) { return 0; }
+        if (!write_all(&out, &maskKey[0], 4UL)) { return 0; }
 
-        if (len > 0UL) {
-            unsigned char* masked;
-            unsafe { masked = (unsigned char*)alloc_raw_(len); }
-            if (masked == (unsigned char*)0) { return 0; }
-            unsigned long i = 0UL;
-            while (i < len) {
-                unsigned char b;
-                unsigned char mk;
-                unsafe { b = data[i]; mk = maskKey[i % 4UL]; }
-                unsafe { masked[i] = (unsigned char)((unsigned int)b ^ (unsigned int)mk); }
-                i = i + 1UL;
+        // Masked a chunk at a time (a multiple of 4, so the key lines up).
+        unsigned char chunk[WS_MASK_CHUNK_];
+        unsigned long i = 0UL;
+        while (i < len) {
+            unsigned long n = len - i;
+            if (n > (unsigned long)WS_MASK_CHUNK_) { n = (unsigned long)WS_MASK_CHUNK_; }
+            unsigned long k = 0UL;
+            unsafe {
+                while (k < n) {
+                    chunk[k] = (unsigned char)((unsigned int)data[i + k] ^ (unsigned int)maskKey[k & 3UL]);
+                    k = k + 1UL;
+                }
             }
-            int wrote;
-            unsafe { wrote = ws_write_all_(fd, (const char*)masked, len); }
-            unsafe { dealloc_raw_((void*)masked); }
-            if (!wrote) { return 0; }
+            if (!write_all(&out, &chunk[0], n)) { return 0; }
+            i = i + n;
         }
-    } else {
-        if (len > 0UL) {
-            int ok;
-            unsafe { ok = ws_write_all_(fd, (const char*)data, len); }
-            if (!ok) { return 0; }
-        }
+    } else if (len > 0UL) {
+        int ok;
+        unsafe { ok = write_all(&out, (const &unsigned char)data, len); }
+        if (!ok) { return 0; }
     }
-    return 1;
+    return out.flush() == 0;
 }
 
-int ws_send_text(&WsConn conn, const &char text) {
+int WsConn::send_text(const &char text) {
     unsigned long len = str_len(text);
     const unsigned char* udata;
     unsafe { udata = (const unsigned char*)text; }
-    return ws_write_frame_(conn, WS_OPCODE_TEXT, udata, len);
+    return ws_write_frame_(self, WS_OPCODE_TEXT, udata, len);
 }
 
-int ws_send_binary(&WsConn conn, const &unsigned char data, unsigned long len) {
-    return ws_write_frame_(conn, WS_OPCODE_BINARY, data, len);
+int WsConn::send_binary(const &unsigned char data, unsigned long len) {
+    return ws_write_frame_(self, WS_OPCODE_BINARY, data, len);
 }
 
-int ws_send_ping(&WsConn conn) {
-    return ws_write_frame_(conn, WS_OPCODE_PING, (const unsigned char*)0, 0UL);
+int WsConn::send_ping() {
+    return ws_write_frame_(self, WS_OPCODE_PING, (const unsigned char*)0, 0UL);
 }
 
-int ws_send_pong(&WsConn conn) {
-    return ws_write_frame_(conn, WS_OPCODE_PONG, (const unsigned char*)0, 0UL);
+int WsConn::send_pong() {
+    return ws_write_frame_(self, WS_OPCODE_PONG, (const unsigned char*)0, 0UL);
 }
 
-int ws_send_close(&WsConn conn) {
-    return ws_write_frame_(conn, WS_OPCODE_CLOSE, (const unsigned char*)0, 0UL);
+int WsConn::send_close() {
+    return ws_write_frame_(self, WS_OPCODE_CLOSE, (const unsigned char*)0, 0UL);
 }
 
-int ws_recv(&WsConn conn, &WsMessage out) {
-    int fd;
-    unsafe { fd = conn->fd; }
+int WsConn::recv(&WsMessage out) {
+    struct WsSource_ s;
+    s.conn = self;
 
     unsigned char head[2];
-    if (!ws_read_n_(fd, head, 2UL)) { return 0; }
+    if (!read_exact(&s, &head[0], 2UL)) { return 0; }
     int opcode;
     int maskBit;
     unsigned long len7;
@@ -390,11 +375,11 @@ int ws_recv(&WsConn conn, &WsMessage out) {
     unsigned long payloadLen = len7;
     if (len7 == 126UL) {
         unsigned char ext[2];
-        if (!ws_read_n_(fd, ext, 2UL)) { return 0; }
+        if (!read_exact(&s, &ext[0], 2UL)) { return 0; }
         unsafe { payloadLen = ((unsigned long)ext[0] << 8) | (unsigned long)ext[1]; }
     } else if (len7 == 127UL) {
         unsigned char ext[8];
-        if (!ws_read_n_(fd, ext, 8UL)) { return 0; }
+        if (!read_exact(&s, &ext[0], 8UL)) { return 0; }
         unsigned long v = 0UL;
         int i = 0;
         while (i < 8) {
@@ -408,14 +393,16 @@ int ws_recv(&WsConn conn, &WsMessage out) {
 
     unsigned char maskKey[4];
     if (maskBit != 0) {
-        if (!ws_read_n_(fd, maskKey, 4UL)) { return 0; }
+        if (!read_exact(&s, &maskKey[0], 4UL)) { return 0; }
     }
 
     unsigned char* payload = (unsigned char*)0;
     if (payloadLen > 0UL) {
         unsafe { payload = (unsigned char*)alloc_raw_(payloadLen); }
         if (payload == (unsigned char*)0) { return 0; }
-        if (!ws_read_n_(fd, payload, payloadLen)) {
+        int got;
+        unsafe { got = read_exact(&s, (&unsigned char)payload, payloadLen); }
+        if (!got) {
             unsafe { dealloc_raw_((void*)payload); }
             return 0;
         }
@@ -439,11 +426,16 @@ int ws_recv(&WsConn conn, &WsMessage out) {
     return 1;
 }
 
-void ws_close(&WsConn conn) {
-    ws_send_close(conn);
-    int fd;
-    unsafe { fd = conn->fd; }
-    if (fd >= 0) { unsafe { ws_sock_close_(fd); } }
+void WsConn::close() {
+    self.send_close();
+    if (self.fd >= 0) {
+        struct TcpStream s = TcpStream::from_fd(self.fd);
+        s.close();
+    }
+    match (self.early) { case some(b): { unsafe { dealloc_raw_((void*)b); } } case null: { } }
+    self.early = null;
+    self.earlyLen = 0UL;
+    self.earlyPos = 0UL;
 }
 
 } // namespace std

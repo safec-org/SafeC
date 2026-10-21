@@ -45,7 +45,7 @@ void qemu_main() {
 
     // 32-bit paging (no PAE).
     unsigned long root = fresh_root_(POOL32);
-    struct MmuContext<MmuX86_32> m = mmu_init(root, &g_frames, 0UL);
+    struct MmuContext<MmuX86_32> m = MmuContext::new(root, &g_frames, 0UL);
     int ok = 1;
     unsigned long a = IMAGE;
     while (a < POOL64 + 32UL * 4096UL) { ok = ok & m.map(a, a, (unsigned int)(MMU_WRITE | MMU_EXEC)); a = a + 4096UL; }
@@ -63,7 +63,7 @@ void qemu_main() {
 
     // 4-level paging, entered from the 64-bit stub.
     root = fresh_root_(POOL64);
-    struct MmuContext<MmuX86_64> l = mmu_init(root, &g_frames, 0UL);
+    struct MmuContext<MmuX86_64> l = MmuContext::new(root, &g_frames, 0UL);
     a = IMAGE;
     while (a < POOL64 + 32UL * 4096UL) { ok = ok & l.map(a, a, (unsigned int)(MMU_WRITE | MMU_EXEC)); a = a + 4096UL; }
     ok = ok & l.map(DATA, DATA, (unsigned int)MMU_WRITE);

@@ -20,7 +20,7 @@
 // contract is documented rather than mechanically checked.
 #pragma once
 //
-//   struct MpscQueue<int> q = std::mpsc_new(64UL);
+//   struct MpscQueue<int> q = std::MpscQueue::new(64UL);
 //   q.enqueue(7);              // any thread; 0 if full
 //   ?int v = q.dequeue();      // consumer; null if empty
 //   q.destroy();
@@ -38,19 +38,21 @@ struct MpscQueue {
     unsigned long count;      // pending element count
     struct Spinlock lock;     // guards head/tail/count and the buffer contents
 
+    // Heap-allocates its own buffer. 'cap' need not be a power of two (unlike
+    // LFQueue) — the spinlock already serializes index updates. A failed
+    // allocation yields a queue with cap 0 (every enqueue reports full).
+    static struct MpscQueue<T> new(unsigned long cap);
+
     int           enqueue(T val);   // 1 on success, 0 if full
     ?T            dequeue();        // null if empty
     int           is_empty() const;
     int           is_full() const;
-    unsigned long len() const;
+    unsigned long length() const;
     void          destroy();        // frees the buffer
 };
 
-// Heap-allocates its own buffer. 'cap' need not be a power of two (unlike
-// LFQueue) — the spinlock already serializes index updates. A failed
-// allocation yields a queue with cap 0 (every enqueue reports full).
 generic<T>
-struct MpscQueue<T> mpsc_new(unsigned long cap) {
+struct MpscQueue<T> MpscQueue::new(unsigned long cap) {
     struct MpscQueue<T> q;
     q.buffer = null;
     unsafe { q.buffer = (?&heap T)alloc_raw_(checked_mul_size(cap, sizeof(T))); }
@@ -58,7 +60,7 @@ struct MpscQueue<T> mpsc_new(unsigned long cap) {
     q.head  = 0UL;
     q.tail  = 0UL;
     q.count = 0UL;
-    q.lock  = spinlock_init();
+    q.lock  = Spinlock::new();
     return q;
 }
 
@@ -92,7 +94,7 @@ generic<T>
 int MpscQueue::is_full() const { return self.count == self.cap; }
 
 generic<T>
-unsigned long MpscQueue::len() const { return self.count; }
+unsigned long MpscQueue::length() const { return self.count; }
 
 generic<T>
 void MpscQueue::destroy() {

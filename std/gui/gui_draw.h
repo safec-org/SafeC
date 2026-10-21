@@ -10,33 +10,21 @@
 // this — application code can also call these directly for fully custom
 // drawing (see gui_widget.h's WidgetDrawFn hook).
 
+#include <std/gui/gui.h>
+
 namespace std {
 
-struct GuiColor {
-    unsigned char r;
-    unsigned char g;
-    unsigned char b;
-    unsigned char a;
-};
+// The drawing primitives themselves are GuiWindow methods, declared in
+// gui.h next to the GuiColor type they take and defined in gui_draw.sc:
+//   win.fill_rect(x, y, w, h, color)
+//   win.draw_rect_border(x, y, w, h, color, thickness)
+//   win.draw_line(x0, y0, x1, y1, color)
+//   win.draw_text(x, y, text, color, scale)   // built-in 8x8 font
+// GuiColor::rgb()/GuiColor::rgba() are declared there too.
 
-struct GuiColor gui_rgba(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
-struct GuiColor gui_rgb(unsigned char r, unsigned char g, unsigned char b);
-
-void gui_fill_rect(&GuiWindow win, int x, int y, int w, int h, struct GuiColor color);
-void gui_draw_rect_border(&GuiWindow win, int x, int y, int w, int h,
-                           struct GuiColor color, int thickness);
-void gui_draw_line(&GuiWindow win, int x0, int y0, int x1, int y1, struct GuiColor color);
-
-// Draws 'text' with its top-left at (x,y), each glyph cell 8*scale by
-// 8*scale pixels (scale=1 -> 8x8, scale=2 -> 16x16, ...). Unsupported
-// codepoints (outside the printable-ASCII range the built-in font covers,
-// 0x20-0x7E) draw as a blank cell. Returns the total pixel width drawn.
-int gui_draw_text(&GuiWindow win, int x, int y, const &char text,
-                   struct GuiColor color, int scale);
-
-// Width/height in pixels 'text' would occupy if drawn at the given scale,
-// without actually drawing it — used by widgets to size themselves to
-// their label/text content.
+// Width/height in pixels 'text' would occupy if drawn with the built-in
+// font at the given scale, without actually drawing it — used by widgets
+// to size themselves to their label/text content.
 int gui_text_width(const &char text, int scale);
 int gui_text_height(int scale);
 

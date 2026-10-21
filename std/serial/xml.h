@@ -30,4 +30,14 @@ struct String value_to_xml(const &Value v, const &char root_tag);
 // (empty string vs. empty object; numeric-looking text vs. string).
 struct Value xml_parse(const &char text, ?&int ok);
 
+// The XML backend as a Format (see value.h): v.encode(Xml::new("doc")),
+// Value::decode(Xml::new("doc"), text, &ok). write emits one element named
+// root; parse returns the root element's content (as xml_parse).
+struct Xml {
+    const &char root;   // the root element's tag; must outlive the Xml
+    static struct Xml new(const &char root_tag);
+    void         write(const &Value v, &String out) const;
+    struct Value parse(const &char text, ?&int ok) const;
+};
+
 } // namespace std

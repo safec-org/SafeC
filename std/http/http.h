@@ -43,6 +43,28 @@ struct HttpRequest {
     void free();
 };
 
+// A connected, blocking TCP socket: the connection http_request and
+// WsConn talk over, for your own protocols on a socket from
+// tcp_connect_timeout / tcp_accept_nb (flipped to blocking with
+// fd_set_blocking — see std/sched/io_nb.h). It conforms to io_traits.h's
+// Stream (Reader + Writer), so read_exact / write_all / copy_stream and
+// io_buf.h's BufReader / BufWriter work on it (http and WsConn read their
+// header blocks through a BufReader<TcpStream>).
+// Writes never raise SIGPIPE: a peer that has gone away is a -1 result.
+struct TcpStream {
+    int fd;
+
+    // Wraps an open socket fd (owned by the stream from then on: close()).
+    static struct TcpStream from_fd(int fd);
+
+    // At most n bytes; the count read, 0 once the peer closed, -1 on error.
+    long long read(&unsigned char buf, unsigned long n);
+    // At most n bytes; the count written, -1 on error.
+    long long write(const &unsigned char buf, unsigned long n);
+    // Closes the socket. 0 on success.
+    int close();
+};
+
 // Resolves 'host' (a numeric IPv4 address or a hostname, via
 // getaddrinfo — safe to call from several threads at once) to a network-byte-order IPv4 address suitable for
 // tcp_connect_nb (see std/sched/io_nb.h). Returns 1 on success, 0 if the

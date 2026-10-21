@@ -1,6 +1,6 @@
 // SafeC Standard Library — LFQueue<T>: lock-free SPSC ring buffer queue
 //
-//   struct LFQueue<long long> q = std::lfq_new(8UL);   // cap rounded up to a power of two
+//   struct LFQueue<long long> q = std::LFQueue::new(8UL);   // cap rounded up to a power of two
 //   q.enqueue(5LL);              // producer thread; 0 if full
 //   ?long long v = q.dequeue();  // consumer thread; null if empty
 //   q.destroy();
@@ -21,23 +21,29 @@ struct LFQueue {
     unsigned long cap;        // power of two
     long long     head;       // elements ever enqueued (producer, atomic)
     long long     tail;       // elements ever dequeued (consumer, atomic)
-    int           owned;      // 1 if lfq_new allocated the buffer
+    int           owned;      // 1 if LFQueue::new allocated the buffer
+
+    // Uses a caller-provided buffer of at least 'cap' elements; cap is rounded
+    // DOWN to a power of two so the queue never touches past the buffer.
+    static struct LFQueue<T> over(&heap T buffer, unsigned long cap);
+
+    // Allocates its own buffer; cap is rounded UP to a power of two. A failed
+    // allocation yields a queue with cap 0 (every enqueue reports full).
+    static struct LFQueue<T> new(unsigned long cap);
 
     int           enqueue(T val);   // 1 on success, 0 if full
     ?T            dequeue();        // null if empty
     int           is_empty() const;
     int           is_full() const;
-    unsigned long len() const;
-    void          destroy();        // frees the buffer if lfq_new allocated it
+    unsigned long length() const;
+    void          destroy();        // frees the buffer if LFQueue::new allocated it
 };
 
 unsigned long lfq_floor_pow2_(unsigned long n);   // lockfree.sc
 unsigned long lfq_ceil_pow2_(unsigned long n);
 
-// Uses a caller-provided buffer of at least 'cap' elements; cap is rounded
-// DOWN to a power of two so the queue never touches past the buffer.
 generic<T>
-struct LFQueue<T> lfq_init(&heap T buffer, unsigned long cap) {
+struct LFQueue<T> LFQueue::over(&heap T buffer, unsigned long cap) {
     struct LFQueue<T> q;
     q.buffer = buffer;
     q.cap    = lfq_floor_pow2_(cap);
@@ -47,10 +53,8 @@ struct LFQueue<T> lfq_init(&heap T buffer, unsigned long cap) {
     return q;
 }
 
-// Allocates its own buffer; cap is rounded UP to a power of two. A failed
-// allocation yields a queue with cap 0 (every enqueue reports full).
 generic<T>
-struct LFQueue<T> lfq_new(unsigned long cap) {
+struct LFQueue<T> LFQueue::new(unsigned long cap) {
     struct LFQueue<T> q;
     unsigned long rounded = lfq_ceil_pow2_(cap);
     q.buffer = null;
@@ -98,7 +102,7 @@ int LFQueue::is_full() const {
 }
 
 generic<T>
-unsigned long LFQueue::len() const {
+unsigned long LFQueue::length() const {
     unsafe { return (unsigned long)(atomic_load(&self.head) - atomic_load(&self.tail)); }
 }
 

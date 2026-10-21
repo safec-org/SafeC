@@ -75,7 +75,7 @@ void t_mmio() {
         ASSERT_EQ(regs[0], 0xBEEFAA44);
         ASSERT_EQ(regs[1], 0x55667788);
 
-        struct MmioReg reg = mmio_reg((&volatile unsigned int)&regs[1]);
+        struct MmioReg reg = MmioReg::at((&volatile unsigned int)&regs[1]);
         reg.write32(0u);
         reg.set_bits(0x30u);
         reg.write_field(0, 3, 0x9u);
@@ -93,7 +93,7 @@ static void irq_b() { gIrqHits = gIrqHits + 10; }
 static void irq_default() { gDefaultHits = gDefaultHits + 1; }
 
 void t_isr_vtable() {
-    struct IsrTable t = isr_init();
+    struct IsrTable t = IsrTable::new();
     ASSERT_EQ(t.count, 0);
     ASSERT_TRUE(t.register_(5, irq_a));
     ASSERT_FALSE(t.register_(ISR_MAX, irq_a));
@@ -130,7 +130,7 @@ void t_clock() {
     regs[0] = 0u; regs[1] = 0u; regs[2] = 0u;
     regs[3] = (2u << 2) | (1u << 25);   // status: PLL selected + PLL locked
     unsafe {
-        struct ClockConfig c = clock_init((&volatile unsigned int)&regs[0]);
+        struct ClockConfig c = ClockConfig::new((&volatile unsigned int)&regs[0]);
         ASSERT_EQ(c.get_freq(), 8000000);
         c.set_source(CLK_SRC_PLL);
         ASSERT_EQ(regs[0] & 3u, 2);
@@ -196,10 +196,10 @@ void t_scheduler() {
         ?&heap Scheduler sq = (?&heap Scheduler)alloc_raw_(sizeof(struct Scheduler));
         if (sq.is_null()) { ASSERT_TRUE(0); return; }
         &Scheduler s = std::expect_ref(sq, "sched");
-        *s = sched_init();
-        struct PCB hi = pcb_init(1, 0x1000UL, 0x8000UL, 0UL);
+        *s = Scheduler::new();
+        struct PCB hi = PCB::new(1, 0x1000UL, 0x8000UL, 0UL);
         hi.set_priority(10);
-        struct PCB lo = pcb_init(2, 0x2000UL, 0x9000UL, 0UL);
+        struct PCB lo = PCB::new(2, 0x2000UL, 0x9000UL, 0UL);
         lo.set_priority(1);
         ASSERT_EQ(s.spawn_proc(&hi), 0);
         ASSERT_EQ(s.spawn_proc(&lo), 1);
@@ -207,7 +207,7 @@ void t_scheduler() {
         ASSERT_EQ(s.next(), 0);
         ASSERT_EQ(s.procs[0].state, PROC_RUNNING);
         ASSERT_EQ(s.yield(), 0);        // the higher priority keeps winning
-        struct PCB hi2 = pcb_init(3, 0x3000UL, 0xA000UL, 0UL);
+        struct PCB hi2 = PCB::new(3, 0x3000UL, 0xA000UL, 0UL);
         hi2.set_priority(10);
         ASSERT_EQ(s.spawn_proc(&hi2), 2);
         ASSERT_EQ(s.yield(), 2);        // equal priorities round-robin
@@ -278,7 +278,7 @@ void t_mmu() {
         unsigned long long e = 0ULL;
 
         mmu_reset_();
-        struct MmuContext<MmuX86_64> x = mmu_init(0UL, &g_mmu_frames, g_mmu_base);
+        struct MmuContext<MmuX86_64> x = MmuContext::new(0UL, &g_mmu_frames, g_mmu_base);
         ASSERT_EQ(mmu_roundtrip_(&x, 0x00007F1234567000UL, 0x0000000ABCDE0000UL), 3);   // PDPT, PD, PT
         ASSERT_EQ(x.entry(0x00007F1234567000UL, &e), 4);
         test_assert_eq_u(e, 0x0000000ABCDE0000ULL | 0x67ULL | 0x8000000000000000ULL,
@@ -299,7 +299,7 @@ void t_mmu() {
         ASSERT_FALSE(x.map(0xA01000UL, 0x1000UL, 0u));
 
         mmu_reset_();
-        struct MmuContext<MmuX86_32> x32 = mmu_init(0UL, &g_mmu_frames, g_mmu_base);
+        struct MmuContext<MmuX86_32> x32 = MmuContext::new(0UL, &g_mmu_frames, g_mmu_base);
         ASSERT_EQ(mmu_roundtrip_(&x32, 0xC0401000UL, 0x00800000UL), 1);
         x32.entry(0xC0401000UL, &e);
         test_assert_eq_u(e, 0x00800000ULL | 0x67ULL, "x86 32-bit leaf", __FILE__, __LINE__);
@@ -307,7 +307,7 @@ void t_mmu() {
         ASSERT_EQ(pde[0xC0401000UL >> 22], (unsigned int)(g_mmu_frames.is_used(4UL) ? 4UL * 4096UL : 0UL) | 7u);
 
         mmu_reset_();
-        struct MmuContext<MmuSv39> sv = mmu_init(0UL, &g_mmu_frames, g_mmu_base);
+        struct MmuContext<MmuSv39> sv = MmuContext::new(0UL, &g_mmu_frames, g_mmu_base);
         ASSERT_EQ(mmu_roundtrip_(&sv, 0x0000003F80201000UL, 0x0000000080400000UL), 2);
         sv.entry(0x0000003F80201000UL, &e);
         test_assert_eq_u(e, ((0x80400000ULL >> 12ULL) << 10ULL) | 0xD7ULL, "Sv39 leaf: V R W U A D", __FILE__, __LINE__);
@@ -320,13 +320,13 @@ void t_mmu() {
         ASSERT_EQ(got, 0xC0054321UL);
 
         mmu_reset_();
-        struct MmuContext<MmuSv32> s32 = mmu_init(0UL, &g_mmu_frames, g_mmu_base);
+        struct MmuContext<MmuSv32> s32 = MmuContext::new(0UL, &g_mmu_frames, g_mmu_base);
         ASSERT_EQ(mmu_roundtrip_(&s32, 0x80401000UL, 0x81000000UL), 1);
         s32.entry(0x80401000UL, &e);
         test_assert_eq_u(e, ((0x81000000ULL >> 12ULL) << 10ULL) | 0xD7ULL, "Sv32 leaf", __FILE__, __LINE__);
 
         mmu_reset_();
-        struct MmuContext<MmuAArch64> a64 = mmu_init(0UL, &g_mmu_frames, g_mmu_base);
+        struct MmuContext<MmuAArch64> a64 = MmuContext::new(0UL, &g_mmu_frames, g_mmu_base);
         ASSERT_EQ(mmu_roundtrip_(&a64, 0x0000FFFF40201000UL, 0x0000000040000000UL), 3);
         a64.entry(0x0000FFFF40201000UL, &e);
         test_assert_eq_u(e, 0x40000000ULL | 0x3ULL | 0x400ULL | 0x300ULL | 0x40ULL | 0x0060000000000000ULL,
@@ -338,7 +338,7 @@ void t_mmu() {
         test_assert_eq_u(e & 0x1CULL, 0x4ULL, "AArch64 device: AttrIndx 1", __FILE__, __LINE__);
 
         mmu_reset_();
-        struct MmuContext<MmuArmV7> v7 = mmu_init(0UL, &g_mmu_frames, g_mmu_base);
+        struct MmuContext<MmuArmV7> v7 = MmuContext::new(0UL, &g_mmu_frames, g_mmu_base);
         ASSERT_EQ(mmu_roundtrip_(&v7, 0xC0101000UL, 0x60000000UL), 1);
         v7.entry(0xC0101000UL, &e);
         test_assert_eq_u(e, 0x60000000ULL | 0x2ULL | 0x1ULL | 0x44CULL | 0x30ULL, "ARMv7 small page: XN, WB S, AP=011", __FILE__, __LINE__);
@@ -352,7 +352,7 @@ void t_mmu() {
         // Out of frames: map fails cleanly.
         mmu_reset_();
         g_mmu_frames.mark_range(4UL, MMU_TEST_FRAMES - 4UL);
-        struct MmuContext<MmuSv39> full = mmu_init(0UL, &g_mmu_frames, g_mmu_base);
+        struct MmuContext<MmuSv39> full = MmuContext::new(0UL, &g_mmu_frames, g_mmu_base);
         ASSERT_FALSE(full.map(0x1000UL, 0x2000UL, 0u));
     }
 }
@@ -361,7 +361,7 @@ static long long sys_add(long long a, long long b, long long c) { return a + b +
 
 void t_syscall_mailbox() {
     unsafe {
-        struct SyscallTable t = syscall_init();
+        struct SyscallTable t = SyscallTable::new();
         ASSERT_TRUE(t.register_(4, sys_add));
         ASSERT_FALSE(t.register_(SYSCALL_MAX, sys_add));
         ASSERT_TRUE(t.is_registered(4));
@@ -374,7 +374,7 @@ void t_syscall_mailbox() {
         ?&heap Mailbox mq = (?&heap Mailbox)alloc_raw_(sizeof(struct Mailbox));
         if (mq.is_null()) { ASSERT_TRUE(0); return; }
         &Mailbox mb = std::expect_ref(mq, "mailbox");
-        *mb = mailbox_init(9);
+        *mb = Mailbox::new(9);
         ASSERT_FALSE(mb.has_msg());
         ASSERT_TRUE(mb.send(1, 42, (const ?&unsigned char)"hi", 3UL));
         ASSERT_TRUE(mb.send(2, 43, null, 0UL));
@@ -412,7 +412,7 @@ void t_hal() {
         &volatile unsigned int base = (&volatile unsigned int)&r[0];
 
         // ── generic chips ──
-        struct GpioPin<GpioGeneric> p = gpio_init(base, 3, GPIO_OUTPUT);
+        struct GpioPin<GpioGeneric> p = GpioPin::new(base, 3, GPIO_OUTPUT);
         ASSERT_EQ(r[0], 8);
         p.write(1);
         ASSERT_EQ(r[1], 8);
@@ -433,7 +433,7 @@ void t_hal() {
 
         zero_regs_(&r[0], 16);
         r[1] = 2u;                                     // TX ready
-        struct Uart<UartGeneric> u = uart_init(base, 115200u, 0u);
+        struct Uart<UartGeneric> u = Uart::new(base, 115200u, 0u);
         ASSERT_EQ(r[2], 115200);
         ASSERT_TRUE(u.tx_ready());
         u.write_str("ok");
@@ -443,7 +443,7 @@ void t_hal() {
 
         zero_regs_(&r[0], 16);
         r[1] = 2u;                                     // TX ready, not busy
-        struct SpiDevice<SpiGeneric> s = spi_init(base, SPI_MODE_3);
+        struct SpiDevice<SpiGeneric> s = SpiDevice::new(base, SPI_MODE_3);
         ASSERT_EQ(r[2], 0x83);
         ASSERT_EQ(s.transfer((unsigned char)0x5A), 0x5A);   // the data register echoes
         unsigned char tx[3];
@@ -461,7 +461,7 @@ void t_hal() {
 
         zero_regs_(&r[0], 16);
         r[1] = 2u;                                     // idle + ACK
-        struct I2cBus<I2cGeneric> bus = i2c_init(base, 400000u, 0u);
+        struct I2cBus<I2cGeneric> bus = I2cBus::new(base, 400000u, 0u);
         ASSERT_EQ(r[4], 400000);
         unsigned char data[2];
         data[0] = (unsigned char)0x10; data[1] = (unsigned char)0x20;
@@ -479,7 +479,7 @@ void t_hal() {
         ASSERT_EQ(r[2], 2);
 
         zero_regs_(&r[0], 16);
-        struct Timer<TimerGeneric> tm = timer_init(base, 99u);
+        struct Timer<TimerGeneric> tm = Timer::new(base, 99u);
         ASSERT_EQ(r[1], 99);
         tm.set_period(1000u);
         ASSERT_EQ(r[2], 1000);
@@ -495,7 +495,7 @@ void t_hal() {
         ASSERT_EQ(r[0] & 1u, 0);
 
         zero_regs_(&r[0], 16);
-        struct Watchdog<WatchdogGeneric> w = watchdog_init(base, 500u);
+        struct Watchdog<WatchdogGeneric> w = Watchdog::new(base, 500u);
         ASSERT_EQ(r[1], 500);
         w.enable();
         ASSERT_EQ(r[0] & 1u, 1);
@@ -504,6 +504,29 @@ void t_hal() {
         r[3] = 1u;
         ASSERT_TRUE(w.caused_reset());
     }
+}
+
+// A chip of our own: anything with UartChip's methods drives Uart<C>.
+static unsigned char g_loop_byte = (unsigned char)0;
+struct LoopUart {
+    int           unused_;
+    void          init(unsigned long base, unsigned int baud, unsigned int clock_hz) const;
+    int           tx_ready(unsigned long base) const;
+    int           rx_ready(unsigned long base) const;
+    void          put(unsigned long base, unsigned char c) const;
+    unsigned char get(unsigned long base) const;
+};
+void LoopUart::init(unsigned long base, unsigned int baud, unsigned int clock_hz) const { g_loop_byte = (unsigned char)0; }
+int LoopUart::tx_ready(unsigned long base) const { return 1; }
+int LoopUart::rx_ready(unsigned long base) const { return g_loop_byte != (unsigned char)0; }
+void LoopUart::put(unsigned long base, unsigned char c) const { g_loop_byte = c; }
+unsigned char LoopUart::get(unsigned long base) const { unsigned char c = g_loop_byte; g_loop_byte = (unsigned char)0; return c; }
+
+// Generic over the chip: works on every Uart<C: UartChip>.
+generic<C: UartChip>
+int uart_echo(&Uart<C> u, unsigned char c) {
+    u.write_byte(c);
+    return u.rx_ready() ? (int)u.read_byte() : -1;
 }
 
 // The real-chip layouts write the documented registers (offsets in bytes).
@@ -515,7 +538,7 @@ void t_hal_chips() {
         // STM32 GPIO: MODER +0, PUPDR +0xC, IDR +0x10, ODR +0x14, BSRR +0x18
         zero_regs_(&r[0], 16);
         r[0] = 0xFFFFFFFFu;
-        struct GpioPin<Stm32F4Gpio> led = gpio_init(base, 5, GPIO_OUTPUT);
+        struct GpioPin<Stm32F4Gpio> led = GpioPin::new(base, 5, GPIO_OUTPUT);
         ASSERT_EQ(r[0], 0xFFFFF7FFu);                  // MODER5 = 01
         led.write(1);
         ASSERT_EQ(r[6], 1u << 5);                      // BSRR set
@@ -531,7 +554,7 @@ void t_hal_chips() {
 
         // PL011: DR +0, FR +0x18, IBRD +0x24, FBRD +0x28, LCR_H +0x2C, CR +0x30
         zero_regs_(&r[0], 16);
-        struct Uart<Pl011> pl = uart_init(base, 115200u, 24000000u);
+        struct Uart<Pl011> pl = Uart::new(base, 115200u, 24000000u);
         ASSERT_EQ(r[9], 13);                           // 24 MHz / (16 * 115200) = 13.02
         ASSERT_EQ(r[10], 1);                           // fraction 0.02 * 64, rounded
         ASSERT_EQ(r[11], 0x70);
@@ -548,7 +571,7 @@ void t_hal_chips() {
         // 16550: byte registers THR +0, IER +1, FCR +2, LCR +3, LSR +5
         zero_regs_(&r[0], 16);
         unsigned char* b = (unsigned char*)&r[0];
-        struct Uart<Ns16550> ns = uart_init(base, 115200u, 1843200u);
+        struct Uart<Ns16550> ns = Uart::new(base, 115200u, 1843200u);
         ASSERT_EQ(b[0], 1);                            // divisor latch low (DLAB set at the time)
         ASSERT_EQ(b[3], 0x03);                         // 8N1, DLAB cleared
         ASSERT_EQ(b[2], 0x07);
@@ -559,23 +582,27 @@ void t_hal_chips() {
 
         // STM32 USART: SR +0, DR +4, BRR +8, CR1 +0xC
         zero_regs_(&r[0], 16);
-        struct Uart<Stm32F4Usart> su = uart_init(base, 115200u, 42000000u);
+        struct Uart<Stm32F4Usart> su = Uart::new(base, 115200u, 42000000u);
         ASSERT_EQ(r[2], 365);                          // 42 MHz / 115200 = 364.6
         ASSERT_EQ(r[3], 0x200C);
         r[0] = 0x80u;
         su.write_byte((unsigned char)'S');
         ASSERT_EQ(r[1], 'S');
+        ASSERT_EQ(uart_echo(&su, (unsigned char)'T'), -1);   // sent; RXNE clear
+        ASSERT_EQ(r[1], 'T');
+        struct Uart<LoopUart> lu = Uart::new(base, 9600u, 0u);
+        ASSERT_EQ(uart_echo(&lu, (unsigned char)'L'), 'L');
 
         // STM32 SPI: CR1 +0, SR +8, DR +0xC
         zero_regs_(&r[0], 16);
         r[2] = 3u;                                     // TXE | RXNE
-        struct SpiDevice<Stm32F4Spi> sp = spi_init(base, SPI_MODE_1);
+        struct SpiDevice<Stm32F4Spi> sp = SpiDevice::new(base, SPI_MODE_1);
         ASSERT_EQ(r[0], 0x1u | 0x4u | 0x18u | 0x300u | 0x40u);
         ASSERT_EQ(sp.transfer((unsigned char)0xA5), 0xA5);
 
         // STM32 I2C: SR1 +0x14 with SB|ADDR|BTF|RXNE|TXE all set; DR +0x10
         zero_regs_(&r[0], 16);
-        struct I2cBus<Stm32F4I2c> si = i2c_init(base, 100000u, 42000000u);
+        struct I2cBus<Stm32F4I2c> si = I2cBus::new(base, 100000u, 42000000u);
         ASSERT_EQ(r[1], 42);                           // CR2.FREQ
         ASSERT_EQ(r[7], 210);                          // CCR = 42 MHz / 200 kHz
         ASSERT_EQ(r[8], 43);                           // TRISE
@@ -595,7 +622,7 @@ void t_hal_chips() {
 
         // STM32 TIM: CR1 +0, SR +0x10, EGR +0x14, CNT +0x24, PSC +0x28, ARR +0x2C
         zero_regs_(&r[0], 16);
-        struct Timer<Stm32F4Tim> st = timer_init(base, 8399u);
+        struct Timer<Stm32F4Tim> st = Timer::new(base, 8399u);
         ASSERT_EQ(r[10], 8399);
         ASSERT_EQ(r[5], 1);                            // UG
         st.set_period(999u);
@@ -611,7 +638,7 @@ void t_hal_chips() {
 
         // STM32 IWDG: KR +0, PR +4, RLR +8, SR +0xC
         zero_regs_(&r[0], 16);
-        struct Watchdog<Stm32F4Iwdg> wd = watchdog_init(base, 0x1FFFu);
+        struct Watchdog<Stm32F4Iwdg> wd = Watchdog::new(base, 0x1FFFu);
         ASSERT_EQ(r[1], 6);
         ASSERT_EQ(r[2], 0xFFF);                        // 12-bit reload
         ASSERT_EQ(r[0], 0xAAAA);
@@ -639,7 +666,7 @@ void t_debug() {
         ASSERT_EQ(coverage.covered_count(), 0);
     }
     unsigned long long t0 = perf_read_ns();
-    struct PerfCounter c = perf_counter_init();
+    struct PerfCounter c = PerfCounter::new();
     c.start();
     volatile int spin = 0;
     while (spin < 100000) { spin = spin + 1; }
@@ -652,7 +679,7 @@ void t_debug() {
 void t_dma() {
     unsigned char buf[200];
     unsafe {
-        struct DmaBuffer d = dma_buf_wrap(&buf[3], 0UL, 130UL);   // unaligned start
+        struct DmaBuffer d = DmaBuffer::wrap(&buf[3], 0UL, 130UL);   // unaligned start
         ASSERT_EQ(d.phys, (unsigned long)&buf[3]);
         ASSERT_TRUE(d.cpu_accessible());
         d.to_device();
@@ -660,7 +687,7 @@ void t_dma() {
         d.to_cpu();
         ASSERT_TRUE(d.cpu_accessible());
         ASSERT_EQ(d.phys_at(10UL), (unsigned long)&buf[13]);
-        struct DmaBuffer e = dma_buf_wrap(&buf[0], 0x8000UL, 64UL);
+        struct DmaBuffer e = DmaBuffer::wrap(&buf[0], 0x8000UL, 64UL);
         ASSERT_EQ(e.phys_at(4UL), 0x8004);
     }
     struct DmaSgList sg;
@@ -679,7 +706,7 @@ struct PoolNode {
 };
 
 void t_node_pool() {
-    struct NodePool<PoolNode> p = node_pool_new();
+    struct NodePool<PoolNode> p = NodePool::new();
     ?&heap PoolNode first = p.take();
     ASSERT_FALSE(first.is_null());
     int i = 0;
@@ -710,21 +737,21 @@ void t_alloc_edges() {
     unsafe {
         // TLSF: a block that exactly fits the request's size class is found
         // (the search used to skip that class and report OOM).
-        struct TlsfAllocator t = tlsf_new(4096UL);
+        struct TlsfAllocator t = TlsfAllocator::new(4096UL);
         ?&heap unsigned char blocks[64];
         int n = 0;
         while (n < 64) {
-            blocks[n] = (?&heap unsigned char)t.alloc(64UL);
+            blocks[n] = (?&heap unsigned char)t.alloc(64UL, 8UL);
             if (blocks[n].is_null()) break;
             n = n + 1;
         }
         ASSERT_TRUE(n > 4);
-        ASSERT_TRUE((void*)t.alloc(64UL) == (void*)0);      // full
+        ASSERT_TRUE(t.alloc(64UL, 8UL).is_null());          // full
         match (blocks[2]) {                                  // neighbours stay used
             case null: { ASSERT_TRUE(0); }
-            case some(blk): { t.free((&heap void)blk); }
+            case some(blk): { t.dealloc((?&heap void)blk); }
         }
-        void* again = (void*)t.alloc(64UL);
+        void* again = (void*)t.alloc(64UL, 8UL);
         ASSERT_TRUE(again != (void*)0);
         ASSERT_TRUE(again == (void*)blocks[2]);
         t.destroy();
@@ -733,8 +760,8 @@ void t_alloc_edges() {
         unsigned char tiny[32];
         int i = 0;
         while (i < 32) { tiny[i] = (unsigned char)0xEE; i = i + 1; }
-        struct PoolAllocator p = pool_init(&tiny[0], 10UL);
-        ASSERT_TRUE((void*)p.alloc(1UL) == (void*)0);
+        struct PoolAllocator p = PoolAllocator::over(&tiny[0], 10UL);
+        ASSERT_TRUE(p.alloc(1UL, 1UL).is_null());
         ASSERT_EQ(p.available(), 0);
         int untouched = 1;
         i = 0;
@@ -743,8 +770,8 @@ void t_alloc_edges() {
 
         // Slab with zero slots.
         unsigned char sbuf[16];
-        struct SlabAllocator s = slab_init(&sbuf[0], 16UL, 0UL);
-        ASSERT_TRUE((void*)s.alloc() == (void*)0);
+        struct SlabAllocator s = SlabAllocator::over(&sbuf[0], 16UL, 0UL);
+        ASSERT_TRUE(s.alloc(16UL, 1UL).is_null());
         ASSERT_EQ(s.available(), 0);
 
         // Sizes whose header would wrap around fail instead of returning a tiny block.
@@ -754,7 +781,7 @@ void t_alloc_edges() {
 }
 
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("bitfield", t_bitfield);
         t.add("mmio", t_mmio);

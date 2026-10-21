@@ -10,6 +10,10 @@ struct PerfCounter {
     unsigned long long end_val;
     unsigned long long freq_hz;    // counter frequency (0 = unknown)
 
+    // A zeroed counter with freq_hz detected from arch-specific sources
+    // (calibrated against clock() when hosted; 0 when freestanding).
+    static struct PerfCounter new();
+
     // Start measurement.
     void  start();
 
@@ -22,9 +26,6 @@ struct PerfCounter {
     // Return elapsed nanoseconds (0 if freq unknown).
     unsigned long long ns() const;
 };
-
-// Initialise a PerfCounter (detect frequency from arch-specific sources).
-struct PerfCounter perf_counter_init();
 
 // Read the raw cycle counter for the current arch.
 unsigned long long perf_read_cycle();

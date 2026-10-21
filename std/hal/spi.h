@@ -18,6 +18,13 @@
 
 namespace std {
 
+// What an SPI controller type provides; SpiDevice<C> requires it.
+trait SpiChip {
+    void          init(unsigned long base, int mode) const;
+    unsigned char transfer(unsigned long base, unsigned char tx) const;
+    void          cs(unsigned long base, int asserted) const;
+}
+
 struct SpiGeneric {
     int           unused_;
     void          init(unsigned long base, int mode) const;
@@ -31,11 +38,15 @@ struct Stm32F4Spi {
     void          cs(unsigned long base, int asserted) const;
 };
 
-generic<C>
+generic<C: SpiChip>
 struct SpiDevice {
     &volatile unsigned int base; // MMIO base address
     int          mode;  // SPI mode (0-3)
     C            chip;
+
+    // Initialize an SPI master at `base` with the given mode; the chip type
+    // comes from the target.
+    static struct SpiDevice<C> new(&volatile unsigned int base, int mode);
 
     // Transfer one byte (full-duplex). Returns the received byte.
     unsigned char transfer(unsigned char tx);
@@ -50,10 +61,8 @@ struct SpiDevice {
     unsigned long addr_() const;
 };
 
-// Initialize an SPI master at `base` with the given mode; the chip type
-// comes from the target.
-generic<C>
-struct SpiDevice<C> spi_init(&volatile unsigned int base, int mode) {
+generic<C: SpiChip>
+struct SpiDevice<C> SpiDevice::new(&volatile unsigned int base, int mode) {
     struct SpiDevice<C> s;
     s.base = base;
     s.mode = mode;
@@ -61,15 +70,15 @@ struct SpiDevice<C> spi_init(&volatile unsigned int base, int mode) {
     return s;
 }
 
-generic<C>
+generic<C: SpiChip>
 unsigned long SpiDevice::addr_() const { unsafe { return (unsigned long)self.base; } }
-generic<C>
+generic<C: SpiChip>
 unsigned char SpiDevice::transfer(unsigned char tx) { return self.chip.transfer(self.addr_(), tx); }
-generic<C>
+generic<C: SpiChip>
 void SpiDevice::cs_assert() { self.chip.cs(self.addr_(), 1); }
-generic<C>
+generic<C: SpiChip>
 void SpiDevice::cs_deassert() { self.chip.cs(self.addr_(), 0); }
-generic<C>
+generic<C: SpiChip>
 void SpiDevice::write(const &unsigned char tx, ?&unsigned char rx, unsigned long len) {
     unsigned long i = 0UL;
     while (i < len) {
@@ -82,7 +91,7 @@ void SpiDevice::write(const &unsigned char tx, ?&unsigned char rx, unsigned long
         i = i + 1UL;
     }
 }
-generic<C>
+generic<C: SpiChip>
 void SpiDevice::read(&unsigned char rx, unsigned long len) {
     unsigned long i = 0UL;
     while (i < len) {

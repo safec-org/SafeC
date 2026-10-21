@@ -24,7 +24,7 @@ struct String jwt_sign(const &Value claims, const &char secret);
 // JWT structure (three base64url segments) are checked here. *ok is set
 // to 0 (result is VAL_NULL) on a malformed token or signature mismatch;
 // on success, returns the decoded payload Value (caller owns it — call
-// value_free()).
+// .free() on it).
 struct Value jwt_verify(const &char token, const &char secret, ?&int ok);
 
 } // namespace std

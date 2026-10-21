@@ -14,15 +14,15 @@
 //   struct Value add_fn(const struct Value* args) {
 //       long long a = args->object_get("a")->as_int();
 //       long long b = args->object_get("b")->as_int();
-//       return value_int(a + b);
+//       return Value::from_int(a + b);
 //   }
 //   server_fn_register("add", add_fn);
 //   server_fn_serve(8080);   // on the server
 //
 //   int ok;
-//   struct Value args = value_object();
-//   value_object_set(&args, "a", value_int(2));
-//   value_object_set(&args, "b", value_int(3));
+//   struct Value args = Value::object();
+//   args.object_set("a", Value::from_int(2));
+//   args.object_set("b", Value::from_int(3));
 //   struct Value result = server_fn_call("localhost", 8080, "add", &args, &ok);
 //   // result.as_int() == 5
 //

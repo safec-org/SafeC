@@ -9,6 +9,15 @@ struct String {
     unsigned long len;  // byte length (not including NUL)
     unsigned long cap;  // allocated buffer size (including NUL slot)
 
+    // ── Construction ────────────────────────────────────────────────────────
+    static struct String new();                                  // empty
+    static struct String from(const &char s);                    // copy of a C string
+    static struct String from_n(const &char s, unsigned long n); // copy of n raw bytes
+    static struct String with_cap(unsigned long cap);            // empty, room for cap bytes
+    static struct String repeat_str(const &char s, unsigned long n); // s repeated n times
+    // parts[0..count) concatenated, `sep` between each (null sep: none)
+    static struct String join(const &char sep, &String parts, unsigned long count);
+
     // ── Access ──────────────────────────────────────────────────────────────
     unsigned long  length() const;
     int            is_empty() const;
@@ -99,12 +108,9 @@ struct String {
     int            reserve_(unsigned long need);
 };
 
-// ── Constructor free functions ────────────────────────────────────────────────
+// kept for std/ml until its refactor moves to the static method
 struct String string_new();
 struct String string_from(const &char s);
 struct String string_from_n(const &char s, unsigned long n);
-struct String string_with_cap(unsigned long cap);
-struct String string_repeat(const &char s, unsigned long n);
-struct String string_join(const &char sep, &String parts, unsigned long count);
 
 } // namespace std

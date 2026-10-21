@@ -30,38 +30,38 @@ static unsigned short fat_read16_(const unsigned char* p) {
     return (unsigned short)0;
 }
 
-int fat_init(&FatCtx ctx, &BlockDevice dev, unsigned long lba) {
-    ctx.dev = *dev;
-    ctx.partition_lba = lba;
+int FatCtx::init(&BlockDevice dev, unsigned long lba) {
+    self.dev = *dev;
+    self.partition_lba = lba;
     unsigned char boot[512];
     if (dev.read(lba, (&unsigned char)boot, (unsigned long)1) != 0) { return -1; }
     // BPB parsing
     unsafe {
-        ctx.bpb.bytes_per_sector     = fat_read16_(boot + 11);
-        ctx.bpb.sectors_per_cluster  = boot[13];
-        ctx.bpb.reserved_sectors     = fat_read16_(boot + 14);
-        ctx.bpb.num_fats             = boot[16];
-        ctx.bpb.root_entry_count     = fat_read16_(boot + 17);
-        ctx.bpb.fat_size_16          = fat_read16_(boot + 22);
-        ctx.bpb.fat_size_32          = fat_read32_(boot + 36);
-        ctx.bpb.root_cluster         = fat_read32_(boot + 44);
+        self.bpb.bytes_per_sector     = fat_read16_(boot + 11);
+        self.bpb.sectors_per_cluster  = boot[13];
+        self.bpb.reserved_sectors     = fat_read16_(boot + 14);
+        self.bpb.num_fats             = boot[16];
+        self.bpb.root_entry_count     = fat_read16_(boot + 17);
+        self.bpb.fat_size_16          = fat_read16_(boot + 22);
+        self.bpb.fat_size_32          = fat_read32_(boot + 36);
+        self.bpb.root_cluster         = fat_read32_(boot + 44);
     }
     // Validate FAT32 signature
     unsigned char sig0; unsigned char sig1;
     unsafe { sig0 = boot[510]; sig1 = boot[511]; }
     if (sig0 != (unsigned char)0x55 || sig1 != (unsigned char)0xAA) { return -1; }
 
-    unsigned long fat_size = (unsigned long)ctx.bpb.fat_size_32;
-    ctx.fat_lba  = lba + (unsigned long)ctx.bpb.reserved_sectors;
-    ctx.data_lba = ctx.fat_lba + (unsigned long)ctx.bpb.num_fats * fat_size;
-    ctx.root_cluster = (unsigned long)ctx.bpb.root_cluster;
-    ctx.bytes_per_cluster = (unsigned long)ctx.bpb.bytes_per_sector
-                          * (unsigned long)ctx.bpb.sectors_per_cluster;
+    unsigned long fat_size = (unsigned long)self.bpb.fat_size_32;
+    self.fat_lba  = lba + (unsigned long)self.bpb.reserved_sectors;
+    self.data_lba = self.fat_lba + (unsigned long)self.bpb.num_fats * fat_size;
+    self.root_cluster = (unsigned long)self.bpb.root_cluster;
+    self.bytes_per_cluster = (unsigned long)self.bpb.bytes_per_sector
+                          * (unsigned long)self.bpb.sectors_per_cluster;
     // Directory walks and reads stage one whole cluster in a fixed
     // FAT_MAX_CLUSTER-byte stack buffer; refuse larger clusters (64-sector
     // clusters are common on big FAT32 volumes) rather than overflow it.
-    if (ctx.bytes_per_cluster == (unsigned long)0 ||
-        ctx.bytes_per_cluster > (unsigned long)FAT_MAX_CLUSTER) { return -1; }
+    if (self.bytes_per_cluster == (unsigned long)0 ||
+        self.bytes_per_cluster > (unsigned long)FAT_MAX_CLUSTER) { return -1; }
     return 0;
 }
 
@@ -214,11 +214,11 @@ static int fat_split_path_(const char* path, char parts[][VFS_MAX_NAME], int max
     return count;
 }
 
-// ── VfsOps callbacks ──────────────────────────────────────────────────────────
+// ── FileSystem methods (see vfs.h) ────────────────────────────────────────────
 
-static int fat_vfs_open_(?&void ctx_ref, const &char path_ref, int flags,
-                          &VfsNode node_out) {
-    void* ctx = ctx_ref;
+int FatCtx::open(const &char path_ref, int flags, &VfsNode node_out) {
+    void* ctx;
+    unsafe { ctx = (void*)self; }
     const char* path = path_ref;
     struct FatCtx* fc;
     unsafe { fc = (struct FatCtx*)ctx; }
@@ -266,10 +266,9 @@ static int fat_vfs_open_(?&void ctx_ref, const &char path_ref, int flags,
     return 0;
 }
 
-static unsigned long fat_vfs_read_(?&void ctx_ref, unsigned long inode,
-                                    unsigned long offset,
-                                    &unsigned char buf_ref, unsigned long len) {
-    void* ctx = ctx_ref;
+unsigned long FatCtx::read(unsigned long inode, unsigned long offset, &unsigned char buf_ref, unsigned long len) {
+    void* ctx;
+    unsafe { ctx = (void*)self; }
     unsigned char* buf = buf_ref;
     struct FatCtx* fc;
     unsafe { fc = (struct FatCtx*)ctx; }
@@ -296,8 +295,9 @@ static unsigned long fat_vfs_read_(?&void ctx_ref, unsigned long inode,
     return avail;
 }
 
-static int fat_vfs_readdir_(?&void ctx_ref, unsigned long inode, fn void(&VfsNode, ?&void) cb, ?&void user) {
-    void* ctx = ctx_ref;
+int FatCtx::readdir(unsigned long inode, fn void(&VfsNode, ?&void) cb, ?&void user) {
+    void* ctx;
+    unsafe { ctx = (void*)self; }
     struct FatCtx* fc;
     unsafe { fc = (struct FatCtx*)ctx; }
     int count = 0;
@@ -333,7 +333,7 @@ static int fat_vfs_readdir_(?&void ctx_ref, unsigned long inode, fn void(&VfsNod
                 unsigned long hi = (unsigned long)fat_read16_(entry + 20);
                 unsigned long lo = (unsigned long)fat_read16_(entry + 26);
                 node.inode    = (hi << 16) | lo;
-                node.fs_ctx   = ctx;
+                node.fs_ctx   = null;
                 cb(&node, user);
                 count = count + 1;
             }
@@ -343,17 +343,6 @@ static int fat_vfs_readdir_(?&void ctx_ref, unsigned long inode, fn void(&VfsNod
     }
     done_:
     return count;
-}
-
-inline struct VfsOps fat_ops() {
-    struct VfsOps ops;
-    unsafe {
-        memset((void*)&ops, 0, sizeof(struct VfsOps));
-        ops.open    = fat_vfs_open_;
-        ops.read    = fat_vfs_read_;
-        ops.readdir = fat_vfs_readdir_;
-    }
-    return ops;
 }
 
 } // namespace std

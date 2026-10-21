@@ -13,7 +13,7 @@ namespace std {
 // The shared core (conv_core.h) in double; convolution_f32.sc builds it in float.
 #define CV_R          double
 #define CV_C          struct Complex
-#define CV_CNEW       complex_new
+#define CV_CNEW       Complex::new
 #define CV_DOT        dsp_dot_f64
 #define CV_SDOT       dsp_sliding_dot_f64
 #define CV_FFT        fft

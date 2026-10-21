@@ -9,7 +9,7 @@
 #define EXT2_SUPER_MAGIC   0xEF53
 #define EXT2_ROOT_INODE    2
 #define EXT2_BLOCK_SIZE_BASE 1024
-#define EXT2_MAX_BLOCK_SIZE  4096   // largest supported block size (ext2_init rejects bigger)
+#define EXT2_MAX_BLOCK_SIZE  4096   // largest supported block size (Ext2Ctx::init rejects bigger)
 
 // Inode type masks
 #define EXT2_S_IFREG  0x8000
@@ -80,6 +80,10 @@ struct Ext2Ctx {
     unsigned long      blocks_per_group;
     unsigned long      group_count;
 
+    // Initialise this context in place from a block device (copied into
+    // `dev`).  Returns 0 on success.
+    int  init(&BlockDevice dev);
+
     // Read block `block_no` into `buf` (must be >= block_size bytes).
     int  read_block(unsigned long block_no, &unsigned char buf);
 
@@ -89,12 +93,11 @@ struct Ext2Ctx {
     // Read file data for inode at byte offset `offset` into `buf` for `len` bytes.
     unsigned long read_file(unsigned long ino, unsigned long offset,
                              &unsigned char buf, unsigned long len);
+
+    // ── FsRead (vfs.h): mount with vfs.mount_ro(mountpoint, &ctx) ──────────
+    int           open(const &char path, int flags, &VfsNode node_out);
+    unsigned long read(unsigned long inode, unsigned long offset, &unsigned char buf, unsigned long len);
+    int           readdir(unsigned long inode, fn void(&VfsNode, ?&void) cb, ?&void user);
 };
-
-// Initialise ext2 context from a block device.  Returns 0 on success.
-int  ext2_init(&Ext2Ctx ctx, &BlockDevice dev);
-
-// Return VfsOps for the ext2 driver.
-struct VfsOps ext2_ops();
 
 } // namespace std

@@ -109,14 +109,14 @@ static const unsigned char gFont8x8[GUI_FONT_COUNT * 8] = {
     0x00U, 0x00U, 0x10U, 0x3CU, 0x00U, 0x00U, 0x00U, 0x00U, // 126 '~'
 };
 
-struct GuiColor gui_rgba(unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+struct GuiColor GuiColor::rgba(unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
     struct GuiColor c;
     c.r = r; c.g = g; c.b = b; c.a = a;
     return c;
 }
 
-struct GuiColor gui_rgb(unsigned char r, unsigned char g, unsigned char b) {
-    return gui_rgba(r, g, b, 255U);
+struct GuiColor GuiColor::rgb(unsigned char r, unsigned char g, unsigned char b) {
+    return GuiColor::rgba(r, g, b, 255U);
 }
 
 static unsigned int __gui_pack(struct GuiColor c) {
@@ -127,28 +127,28 @@ static unsigned int __gui_pack(struct GuiColor c) {
     return (r << 24) | (g << 16) | (b << 8) | a;
 }
 
-void gui_fill_rect(&GuiWindow win, int x, int y, int w, int h, struct GuiColor color) {
+void GuiWindow::fill_rect(int x, int y, int w, int h, struct GuiColor color) {
     unsigned int rgbaPacked = __gui_pack(color);
     int yy = y;
     while (yy < y + h) {
         int xx = x;
         while (xx < x + w) {
-            gui_set_pixel(win, xx, yy, rgbaPacked);
+            self.set_pixel(xx, yy, rgbaPacked);
             xx = xx + 1;
         }
         yy = yy + 1;
     }
 }
 
-void gui_draw_rect_border(&GuiWindow win, int x, int y, int w, int h,
-                           struct GuiColor color, int thickness) {
-    gui_fill_rect(win, x, y, w, thickness, color);
-    gui_fill_rect(win, x, y + h - thickness, w, thickness, color);
-    gui_fill_rect(win, x, y, thickness, h, color);
-    gui_fill_rect(win, x + w - thickness, y, thickness, h, color);
+void GuiWindow::draw_rect_border(int x, int y, int w, int h,
+                                  struct GuiColor color, int thickness) {
+    self.fill_rect(x, y, w, thickness, color);
+    self.fill_rect(x, y + h - thickness, w, thickness, color);
+    self.fill_rect(x, y, thickness, h, color);
+    self.fill_rect(x + w - thickness, y, thickness, h, color);
 }
 
-void gui_draw_line(&GuiWindow win, int x0, int y0, int x1, int y1, struct GuiColor color) {
+void GuiWindow::draw_line(int x0, int y0, int x1, int y1, struct GuiColor color) {
     unsigned int rgbaPacked = __gui_pack(color);
     int dx = x1 - x0; if (dx < 0) { dx = -dx; }
     int dy = y1 - y0; if (dy < 0) { dy = -dy; }
@@ -158,7 +158,7 @@ void gui_draw_line(&GuiWindow win, int x0, int y0, int x1, int y1, struct GuiCol
     int cx = x0; int cy = y0;
     int guard = 0;
     while (1) {
-        gui_set_pixel(win, cx, cy, rgbaPacked);
+        self.set_pixel(cx, cy, rgbaPacked);
         if (cx == x1 && cy == y1) { break; }
         int e2 = 2 * err;
         if (e2 > -dy) { err = err - dy; cx = cx + sx; }
@@ -182,7 +182,7 @@ static void __gui_draw_glyph(&GuiWindow win, int x, int y, char ch,
         while (col < 8) {
             int bit = (int)((bits >> (7 - col)) & 1U);
             if (bit) {
-                gui_fill_rect(win, x + col * scale, y + row * scale, scale, scale, color);
+                win.fill_rect(x + col * scale, y + row * scale, scale, scale, color);
             }
             col = col + 1;
         }
@@ -191,13 +191,13 @@ static void __gui_draw_glyph(&GuiWindow win, int x, int y, char ch,
     (void)rgbaPacked;
 }
 
-int gui_draw_text(&GuiWindow win, int x, int y, const &char text,
-                   struct GuiColor color, int scale) {
+int GuiWindow::draw_text(int x, int y, const &char text,
+                          struct GuiColor color, int scale) {
     int cx = x;
     unsigned long i = 0UL;
     unsafe {
         while (text[i] != '\0') {
-            __gui_draw_glyph(win, cx, y, text[i], color, scale);
+            __gui_draw_glyph(self, cx, y, text[i], color, scale);
             cx = cx + 8 * scale;
             i = i + 1UL;
         }

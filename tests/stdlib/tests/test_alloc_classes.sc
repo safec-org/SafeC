@@ -9,6 +9,10 @@
 #include <std/collections/vec.h>
 #include <std/ml/cnn.h>
 #include <std/sync/parallel.h>
+#include <std/alloc/bump.h>
+#include <std/alloc/pool.h>
+#include <std/alloc/slab.h>
+#include <std/alloc/tlsf.h>
 
 static int near(float a, float b) {
     float d = a - b;
@@ -92,7 +96,7 @@ static void conv_then_alloc(unsigned long inC, unsigned long outC, unsigned long
     // each twice so the second round can come from the size-class cache.
     int round = 0;
     while (round < 2) {
-        struct Vec<float> v = vec_with_cap(262145UL);
+        struct Vec<float> v = Vec::with_cap(262145UL);
         unsigned long i = 0UL;
         while (i < 262145UL) { v.push((float)i); i = i + 1UL; }
         ASSERT_EQ(v.length(), 262145);
@@ -240,12 +244,214 @@ void t_slabs() {
     }
 }
 
+// ── std/alloc's Allocator trait ──────────────────────────────────────────────
+// One generic routine run over bump, pool, slab and tlsf, and over an
+// allocator defined here, which conforms just by having alloc and dealloc.
+
+struct Rec { long long id; double v; int tag; };
+
+// alloc_t / alloc_array_t / dealloc_t and the raw methods through the trait.
+// n: how many Recs one array allocation asks for. 1 when all went well.
+generic<A: Allocator>
+int exercise_allocator(&A a, unsigned long n) {
+    int ok = 1;
+    ?&heap Rec r = alloc_t(a);
+    ?&heap Rec arr = alloc_array_t(a, n);
+    match (r) {
+        case null: { ok = 0; }
+        case some(x): {
+            x.id = 42LL; x.v = 1.5; x.tag = 7;
+            unsafe { if ((unsigned long)x % alignof(struct Rec) != 0UL) ok = 0; }
+        }
+    }
+    match (arr) {
+        case null: { ok = 0; }
+        case some(xs): {
+            unsafe {
+                if ((unsigned long)xs % alignof(struct Rec) != 0UL) ok = 0;
+                unsigned long i = 0UL;
+                while (i < n) { xs[i].id = (long long)i; xs[i].tag = (int)i * 3; i = i + 1UL; }
+                i = 0UL;
+                while (i < n) { if (xs[i].id != (long long)i || xs[i].tag != (int)i * 3) ok = 0; i = i + 1UL; }
+            }
+        }
+    }
+    match (r) { case null: { } case some(x): { if (x.id != 42LL || x.tag != 7) ok = 0; dealloc_t(a, x); } }
+    match (arr) { case null: { } case some(xs): { dealloc_t(a, xs); } }
+    if (!a.alloc(8UL, 3UL).is_null()) ok = 0;        // align not a power of two
+    a.dealloc((?&heap void)null);                      // null: a no-op everywhere
+    // The raw method: 8 bytes, 8-aligned (every allocator here honours 8).
+    ?&heap void raw = a.alloc(8UL, 8UL);
+    match (raw) {
+        case null: { ok = 0; }
+        case some(p): { unsafe { if ((unsigned long)p % 8UL != 0UL) ok = 0; } a.dealloc(p); }
+    }
+    return ok;
+}
+
+// A user's allocator: std::alloc's heap, counting live blocks. Conforms to
+// Allocator by defining alloc and dealloc with the trait's signatures.
+struct CountingHeap {
+    unsigned long live;
+    unsigned long total;
+    ?&heap void alloc(unsigned long size, unsigned long align);
+    void        dealloc(?&heap void ptr);
+};
+
+?&heap void CountingHeap::alloc(unsigned long size, unsigned long align) {
+    // std::alloc's blocks are 16-aligned.
+    if ((align & (align - 1UL)) != 0UL || align > 16UL) return null;
+    void* p;
+    unsafe { p = alloc_raw_(size); }
+    if (p == (void*)0) return null;
+    self.live = self.live + 1UL;
+    self.total = self.total + 1UL;
+    unsafe { return (?&heap void)p; }
+}
+
+void CountingHeap::dealloc(?&heap void ptr) {
+    void* p = ptr;
+    if (p == (void*)0) return;
+    unsafe { dealloc_raw_(p); }
+    self.live = self.live - 1UL;
+}
+
+void t_allocator_trait() {
+    struct BumpAllocator b = BumpAllocator::new(4096UL);
+    ASSERT_EQ(exercise_allocator(&b, 16UL), 1);
+    b.destroy();
+
+    struct PoolAllocator p = PoolAllocator::new(4096UL);
+    unsigned long poolFree = p.available();
+    ASSERT_EQ(exercise_allocator(&p, 16UL), 1);
+    ASSERT_EQ(p.available(), poolFree);              // every block came back
+    p.destroy();
+
+    // A slab hands out one object size: the array is one Rec, a second won't fit.
+    struct SlabAllocator s = SlabAllocator::new(sizeof(struct Rec), 4UL);
+    ASSERT_EQ(exercise_allocator(&s, 1UL), 1);
+    ASSERT_EQ(s.available(), 4UL);
+    ?&heap Rec two = alloc_array_t(&s, 2UL);
+    ASSERT_TRUE(two.is_null());
+    s.destroy();
+
+    struct TlsfAllocator t = TlsfAllocator::new(65536UL);
+    ASSERT_EQ(exercise_allocator(&t, 16UL), 1);
+    ?&heap Rec big = alloc_array_t(&t, 2000UL);      // fits again: all coalesced
+    ASSERT_FALSE(big.is_null());
+    match (big) { case null: { } case some(x): { dealloc_t(&t, x); } }
+    t.destroy();
+
+    struct CountingHeap h;
+    h.live = 0UL;
+    h.total = 0UL;
+    ASSERT_EQ(exercise_allocator(&h, 16UL), 1);
+    ASSERT_EQ(h.live, 0UL);
+    ASSERT_EQ(h.total, 3UL);
+}
+
+// ── Single-capability traits, the ArenaAllocator role, CountingAllocator ─────
+
+// alloc_t / alloc_array_t ask only for Allocate: a type with alloc and no
+// dealloc (one fixed 64-byte block, handed out once) is enough.
+struct OneShot {
+    unsigned long long slot[8];
+    int taken;
+    ?&heap void alloc(unsigned long size, unsigned long align);
+};
+
+?&heap void OneShot::alloc(unsigned long size, unsigned long align) {
+    if (self.taken || size > 64UL || align > 8UL) return null;
+    self.taken = 1;
+    unsafe { return (?&heap void)(void*)&self.slot[0]; }
+}
+
+// Fill with 'size'-byte blocks, reset, fill again: an ArenaAllocator gives
+// the same count both times. Returns that count (0 if they differ).
+generic<A: ArenaAllocator>
+unsigned long fill_reset_fill(&A a, unsigned long size) {
+    unsigned long n = 0UL;
+    while (n < 100000UL && !a.alloc(size, 8UL).is_null()) { n = n + 1UL; }
+    a.reset();
+    unsigned long m = 0UL;
+    while (m < 100000UL && !a.alloc(size, 8UL).is_null()) { m = m + 1UL; }
+    a.reset();
+    return n == m ? n : 0UL;
+}
+
+// exercise_allocator through a CountingAllocator: what it counted.
+generic<A: Allocator>
+int counted_exercise(&A a, unsigned long n) {
+    struct CountingAllocator<A> c = CountingAllocator::over(a);
+    int ok = exercise_allocator(&c, n);
+    // alloc_t, alloc_array_t and the raw 8 bytes succeed; align 3 fails.
+    if (c.allocs != 3UL || c.failures != 1UL || c.live() != 0UL) ok = 0;
+    if (c.bytes != sizeof(struct Rec) * (n + 1UL) + 8UL) ok = 0;
+    return ok;
+}
+
+void t_allocator_roles() {
+    struct OneShot one;
+    one.taken = 0;
+    ?&heap Rec r = alloc_t(&one);
+    ASSERT_FALSE(r.is_null());
+    ?&heap Rec r2 = alloc_array_t(&one, 1UL);
+    ASSERT_TRUE(r2.is_null());                       // its one block is taken
+
+    struct BumpAllocator b = BumpAllocator::new(4096UL);
+    struct PoolAllocator p = PoolAllocator::new(4096UL);
+    struct SlabAllocator s = SlabAllocator::new(sizeof(struct Rec), 8UL);
+    struct TlsfAllocator t = TlsfAllocator::new(65536UL);
+    unsigned long poolFree = p.available();
+    ASSERT_EQ(fill_reset_fill(&b, 32UL), 128UL);     // 4096 / 32
+    ASSERT_TRUE(fill_reset_fill(&p, 32UL) > 50UL);
+    ASSERT_EQ(p.available(), poolFree);              // reset: one free block again
+    ASSERT_EQ(fill_reset_fill(&s, sizeof(struct Rec)), 8UL);
+    ASSERT_EQ(s.available(), 8UL);
+    ASSERT_TRUE(fill_reset_fill(&t, 32UL) > 1000UL);
+    ?&heap Rec big = alloc_array_t(&t, 2000UL);      // reset left one big block
+    ASSERT_FALSE(big.is_null());
+    t.reset();
+
+    // CountingAllocator<A> over every allocator, and over itself.
+    ASSERT_EQ(counted_exercise(&b, 16UL), 1);
+    ASSERT_EQ(counted_exercise(&p, 16UL), 1);
+    ASSERT_EQ(p.available(), poolFree);
+    ASSERT_EQ(counted_exercise(&s, 1UL), 1);
+    ASSERT_EQ(counted_exercise(&t, 16UL), 1);
+    struct CountingHeap h;
+    h.live = 0UL;
+    h.total = 0UL;
+    ASSERT_EQ(counted_exercise(&h, 16UL), 1);
+    ASSERT_EQ(h.live, 0UL);
+    struct CountingAllocator<TlsfAllocator> outer = CountingAllocator::over(&t);
+    ASSERT_EQ(counted_exercise(&outer, 16UL), 1);
+    ASSERT_EQ(outer.allocs, 3UL);                    // seen through both layers
+    ASSERT_EQ(outer.live(), 0UL);
+
+    // A leak shows up as live().
+    struct CountingAllocator<PoolAllocator> c = CountingAllocator::over(&p);
+    ?&heap Rec kept = alloc_t(&c);
+    ?&heap Rec gone = alloc_t(&c);
+    match (gone) { case null: { } case some(x): { dealloc_t(&c, x); } }
+    ASSERT_FALSE(kept.is_null());
+    ASSERT_EQ(c.live(), 1UL);
+    ASSERT_EQ(c.frees, 1UL);
+
+    b.destroy();
+    p.destroy();
+    s.destroy();
+    t.destroy();
+}
+
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("alloc size classes around 1MB", t_size_classes);
         t.add("conv2d then large allocations", t_conv_then_alloc);
         t.add("slabs: reuse, alignment, realloc, cross-thread frees", t_slabs);
+        t.add("std/alloc: one generic routine over every Allocator", t_allocator_trait);
+        t.add("std/alloc: Allocate-only, ArenaAllocator reset, CountingAllocator", t_allocator_roles);
     }
     t.run();
     t.print_summary();

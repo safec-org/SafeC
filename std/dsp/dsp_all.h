@@ -11,6 +11,7 @@
 #include <std/dsp/window.h>
 #include <std/dsp/filter.h>
 #include <std/dsp/biquad.h>
+#include <std/dsp/sample_filter.h>
 #include <std/dsp/dct.h>
 #include <std/dsp/stft.h>
 #include <std/dsp/resample.h>

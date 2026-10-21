@@ -1,7 +1,7 @@
 // SafeC Standard Library — Reactor backend: Win32 (WSAPoll)
 //
 // See reactor.h for the portable API, usage shape, and the full backend
-// file list. Implements the same std::Reactor/reactor_init/reactor_run
+// file list. Implements the same std::Reactor (Reactor::new)/reactor_run
 // surface as reactor_kqueue.sc/reactor_epoll.sc, against WSAPoll instead
 // of kqueue/kevent or epoll.
 //
@@ -98,15 +98,15 @@ static short reactor_wsapoll_events_(int portableFilter) {
     return (short)SAFEC_POLLIN; // SCHED_READ, and the default
 }
 
-inline struct Reactor reactor_init() {
+inline struct Reactor Reactor::new() {
     struct Reactor r;
     r.kq = -1;
     // Unused on this backend — only initialized to satisfy definite-
     // initialization for this shared struct Reactor field; see
     // reactor.h's comment on sigfds. SCHED_SIGNAL is a no-op here (see
     // this file's header comment), so nothing ever populates it.
-    r.sigfds = vec_new();
-    r.watched = vec_new();
+    r.sigfds = Vec::new();
+    r.watched = Vec::new();
     return r;
 }
 

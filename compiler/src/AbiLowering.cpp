@@ -9,7 +9,7 @@
 //      char arrays) makes SelectionDAG materialize one node per scalar leaf
 //      on both sides of the call; clang 21's X86 DAGCombiner segfaults in
 //      ReplaceAllUsesWith on '@main' for every program that calls
-//      test_suite_init(). Every 'safeguard test' target hit this.
+//      TestSuite::new(). Every 'safeguard test' target hit this.
 //   2. It is not the C ABI. SysV x86-64 and AAPCS64 return aggregates over
 //      16 bytes through a caller-provided buffer (the 'sret' pointer, in
 //      %rdi / x8), Win64 does so for anything that isn't 1/2/4/8 bytes. A

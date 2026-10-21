@@ -16,63 +16,63 @@ static char* value_strdup_(const char* s) {
     return buf;
 }
 
-inline struct Value value_null() {
+inline struct Value Value::null() {
     struct Value v;
     v.kind = VAL_NULL;
     v.int_val = 0LL;
     v.float_val = 0.0;
     v.bool_val = 0;
     unsafe { v.str_val = (char*)0; }
-    v.arr_val = vec_new();
-    v.obj_val = vec_new();
+    v.arr_val = Vec::new();
+    v.obj_val = Vec::new();
     return v;
 }
 
-inline struct Value value_bool(int b) {
-    struct Value v = value_null();
+inline struct Value Value::from_bool(int b) {
+    struct Value v = Value::null();
     v.kind = VAL_BOOL;
     v.bool_val = b;
     return v;
 }
 
-inline struct Value value_int(long long n) {
-    struct Value v = value_null();
+inline struct Value Value::from_int(long long n) {
+    struct Value v = Value::null();
     v.kind = VAL_INT;
     v.int_val = n;
     return v;
 }
 
-inline struct Value value_float(double f) {
-    struct Value v = value_null();
+inline struct Value Value::from_float(double f) {
+    struct Value v = Value::null();
     v.kind = VAL_FLOAT;
     v.float_val = f;
     return v;
 }
 
-inline struct Value value_string(const &char s) {
-    struct Value v = value_null();
+inline struct Value Value::from_str(const &char s) {
+    struct Value v = Value::null();
     v.kind = VAL_STRING;
     v.str_val = value_strdup_(s);
     return v;
 }
 
-inline struct Value value_array() {
-    struct Value v = value_null();
+inline struct Value Value::array() {
+    struct Value v = Value::null();
     v.kind = VAL_ARRAY;
     return v;
 }
 
-inline struct Value value_object() {
-    struct Value v = value_null();
+inline struct Value Value::object() {
+    struct Value v = Value::null();
     v.kind = VAL_OBJECT;
     return v;
 }
 
-inline void value_array_push(&Value arr, struct Value v) {
-    unsafe { arr->arr_val.push(v); }
+inline void Value::array_push(struct Value v) {
+    self.arr_val.push(v);
 }
 
-inline void value_object_set(&Value obj, const &char key, struct Value v) {
+inline void Value::object_set(const &char key, struct Value v) {
     struct ObjectEntry e;
     e.key = value_strdup_(key);
     // Store the value on the heap so ObjectEntry::val is a stable pointer
@@ -82,44 +82,39 @@ inline void value_object_set(&Value obj, const &char key, struct Value v) {
         struct Value* heapVal = (struct Value*)alloc_raw_(sizeof(struct Value));
         *heapVal = v;
         e.val = heapVal;
-        obj->obj_val.push(e);
+        self.obj_val.push(e);
     }
 }
 
-struct Value value_clone(const &Value v) {
-    struct Value out = value_null();
-    int kind;
-    unsafe { kind = v->kind; }
+struct Value Value::clone() const {
+    struct Value out = Value::null();
+    int kind = self.kind;
     out.kind = kind;
-    unsafe {
-        out.int_val   = v->int_val;
-        out.float_val = v->float_val;
-        out.bool_val  = v->bool_val;
-    }
+    out.int_val   = self.int_val;
+    out.float_val = self.float_val;
+    out.bool_val  = self.bool_val;
     if (kind == VAL_STRING) {
         unsafe {
-            if (v->str_val != (char*)0) { out.str_val = value_strdup_(v->str_val); }
+            if (self.str_val != (char*)0) { out.str_val = value_strdup_(self.str_val); }
         }
     } else if (kind == VAL_ARRAY) {
         unsigned long i = 0UL;
-        unsigned long n;
-        unsafe { n = v->arr_val.length(); }
+        unsigned long n = self.arr_val.length();
         while (i < n) {
             &Value elem;
-            unsafe { elem = v->arr_val.at(i); }
-            value_array_push(&out, value_clone(elem));
+            unsafe { elem = self.arr_val.at(i); }
+            out.array_push(elem.clone());
             i = i + 1UL;
         }
     } else if (kind == VAL_OBJECT) {
         unsigned long i = 0UL;
-        unsigned long n;
-        unsafe { n = v->obj_val.length(); }
+        unsigned long n = self.obj_val.length();
         while (i < n) {
             struct ObjectEntry* e;
-            unsafe { e = v->obj_val.at(i); }
+            unsafe { e = self.obj_val.at(i); }
             unsafe {
                 match (e->key) {
-                    case some(k): { value_object_set(&out, k, value_clone(e->val)); }
+                    case some(k): { out.object_set(k, e->val.clone()); }
                     case null:    { }
                 }
             }
@@ -129,39 +124,48 @@ struct Value value_clone(const &Value v) {
     return out;
 }
 
-void value_free(&Value v) {
-    int kind;
-    unsafe { kind = v->kind; }
+void Value::free() {
+    int kind = self.kind;
     if (kind == VAL_STRING) {
-        unsafe { if (v->str_val != (char*)0) { dealloc_raw_((void*)v->str_val); } }
+        unsafe { if (self.str_val != (char*)0) { dealloc_raw_((void*)self.str_val); } }
     } else if (kind == VAL_ARRAY) {
         unsigned long i = 0UL;
-        unsigned long n;
-        unsafe { n = v->arr_val.length(); }
+        unsigned long n = self.arr_val.length();
         while (i < n) {
             &Value elem;
-            unsafe { elem = v->arr_val.at(i); }
-            value_free(elem);
+            unsafe { elem = self.arr_val.at(i); }
+            elem.free();
             i = i + 1UL;
         }
-        unsafe { v->arr_val.free(); }
+        self.arr_val.free();
     } else if (kind == VAL_OBJECT) {
         unsigned long i = 0UL;
-        unsigned long n;
-        unsafe { n = v->obj_val.length(); }
+        unsigned long n = self.obj_val.length();
         while (i < n) {
             struct ObjectEntry* e;
             unsafe {
-                e = v->obj_val.at(i);
-                value_free(e->val);
+                e = self.obj_val.at(i);
+                e->val.free();
                 dealloc_raw_((void*)e->val);
                 dealloc_raw_((void*)e->key);
             }
             i = i + 1UL;
         }
-        unsafe { v->obj_val.free(); }
+        self.obj_val.free();
     }
 }
+
+// Forwarding wrappers kept for std/ml (see value.h).
+// kept for std/ml until its refactor moves to the static method
+inline struct Value value_array() { return Value::array(); }
+// kept for std/ml until its refactor moves to the static method
+inline struct Value value_object() { return Value::object(); }
+// kept for std/ml until its refactor moves to the static method
+inline struct Value value_string(const &char s) { return Value::from_str(s); }
+inline void value_array_push(&Value arr, struct Value v) { arr.array_push(v); }
+inline void value_object_set(&Value obj, const &char key, struct Value v) { obj.object_set(key, v); }
+inline struct Value value_clone(const &Value v) { return v.clone(); }
+inline void value_free(&Value v) { v.free(); }
 
 inline int Value::kind_of() const { return self.kind; }
 inline int Value::is_null() const { return self.kind == VAL_NULL; }

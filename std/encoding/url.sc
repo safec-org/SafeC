@@ -18,7 +18,7 @@ static char url_hex_digit_(int v) {
 }
 
 struct String url_encode(const &char s) {
-    struct String out = string_new();
+    struct String out = String::new();
     unsigned long i = 0UL;
     while (1) {
         char c;
@@ -49,7 +49,7 @@ static int url_hex_val_(char c, int* ok) {
 }
 
 struct String url_decode(const &char s, ?&int ok) {
-    struct String out = string_new();
+    struct String out = String::new();
     int good = 1;
     unsigned long i = 0UL;
     while (1) {

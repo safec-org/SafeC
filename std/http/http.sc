@@ -8,6 +8,8 @@
 #include <std/convert.h>
 #include <std/str.h>
 #include <std/sched/io_nb.h>
+#include <std/io_traits.h>
+#include <std/io_buf.h>
 #include <std/sched/reactor.h>
 #include <std/thread.h>
 extern void* malloc(size_t size);
@@ -193,48 +195,48 @@ int http_resolve_host(const &char host, &unsigned int addr_out) {
 
 // ── Blocking socket I/O helpers ───────────────────────────────────────────
 
-// Reads bytes into 'out' until 'terminator' (e.g. "\r\n\r\n") is found
-// within what's been read so far, or the connection closes. Returns the
-// byte offset (into 'out') right after the terminator on success, or -1 if
-// the connection closed before the terminator appeared.
-static long read_until_(int fd, struct String* out, const char* terminator) {
-    unsigned long termLen; unsafe { termLen = str_len(terminator); }
-    char chunk[512];
-    while (1) {
-        long n;
-        unsafe { n = sock_read_(fd, (void*)chunk, 512UL); }
-        if (n <= 0L) { return -1L; }
-        unsafe { out->push_n(chunk, (unsigned long)n); }
-        long idx; unsafe { idx = out->index_of(terminator); }
-        if (idx >= 0L) { return idx + (long)termLen; }
-    }
-}
-
-// Reads exactly 'want' more bytes, appending to 'out'. Returns 1 on
-// success, 0 if the connection closed early.
-static int read_n_(int fd, struct String* out, unsigned long want) {
+// Reads exactly 'want' more bytes from 'r' (a BufReader over the
+// connection: bytes that arrived with the header block come first),
+// appending to 'out'. Returns 1 on success, 0 if the connection closed
+// early.
+generic<R: Reader>
+static int read_n_(&R r, struct String* out, unsigned long want) {
     unsigned long remaining = want;
-    char chunk[4096];
+    unsigned char chunk[4096];
     while (remaining > 0UL) {
         unsigned long ask = (remaining < 4096UL) ? remaining : 4096UL;
-        long n;
-        unsafe { n = sock_read_(fd, (void*)chunk, ask); }
-        if (n <= 0L) { return 0; }
-        unsafe { out->push_n(chunk, (unsigned long)n); }
+        long long n = r.read(&chunk[0], ask);
+        if (n <= 0LL) { return 0; }
+        unsafe { out->push_n((const char*)&chunk[0], (unsigned long)n); }
         remaining = remaining - (unsigned long)n;
     }
     return 1;
 }
 
-static int write_all_(int fd, const char* data, unsigned long len) {
-    unsigned long sent = 0UL;
-    while (sent < len) {
-        long n;
-        unsafe { n = sock_write_(fd, (const void*)(data + sent), len - sent); }
-        if (n <= 0L) { return 0; }
-        sent = sent + (unsigned long)n;
-    }
-    return 1;
+// ── TcpStream ─────────────────────────────────────────────────────────────
+
+struct TcpStream TcpStream::from_fd(int fd) {
+    struct TcpStream s;
+    s.fd = fd;
+    return s;
+}
+
+long long TcpStream::read(&unsigned char buf, unsigned long n) {
+    unsafe { return (long long)sock_read_(self.fd, (void*)buf, n); }
+}
+
+long long TcpStream::write(const &unsigned char buf, unsigned long n) {
+    unsafe { return (long long)sock_write_(self.fd, (const void*)buf, n); }
+}
+
+int TcpStream::close() {
+    unsafe { return sock_close_(self.fd); }
+}
+
+// The whole of 'text' to the socket; 1 on success.
+static int write_text_(int fd, const &String text) {
+    struct TcpStream s = TcpStream::from_fd(fd);
+    unsafe { return write_all(&s, (const &unsigned char)text.as_ptr(), text.length()); }
 }
 
 // ── Header parsing ────────────────────────────────────────────────────────
@@ -300,12 +302,12 @@ struct String http_header_get(const &char raw_headers, const &char name) {
     while (1) {
         unsigned long next = http_next_header_(raw_headers, len, pos, &ks, &ke, &vs, &ve);
         if (ke > ks && http_key_is_(raw_headers, ks, ke, name)) {
-            unsafe { return string_from_n(&raw_headers[vs], ve - vs); }
+            unsafe { return String::from_n(&raw_headers[vs], ve - vs); }
         }
         if (next == 0UL) { break; }
         pos = next;
     }
-    return string_new();
+    return String::new();
 }
 
 // Serializes a handler's HttpResponse: status line, every header the
@@ -313,7 +315,7 @@ struct String http_header_get(const &char raw_headers, const &char name) {
 // server loops used to forward Content-Type only), a default Content-Type
 // if it set none, then the Content-Length/Connection this server owns.
 static struct String http_render_response_(&HttpResponse resp) {
-    struct String out = string_with_cap(160UL + resp.headers.length() + resp.body.length());
+    struct String out = String::with_cap(160UL + resp.headers.length() + resp.body.length());
     unsafe {
         out.push("HTTP/1.1 ");
         out.push_int((long long)resp.status);
@@ -379,7 +381,7 @@ struct String http_build_response(int status, const &char content_type,
                                    const ?&unsigned char body, unsigned long body_len) {
     const char* ctype;
     if (content_type) { ctype = content_type; } else { ctype = "text/plain"; }
-    struct String out = string_new();
+    struct String out = String::new();
     unsafe {
         out.push("HTTP/1.1 ");
         out.push_int((long long)status);
@@ -414,8 +416,8 @@ struct HttpResponse http_request_timeout(const &char host, unsigned short port,
                                           ?&int ok) {
     struct HttpResponse resp;
     resp.status  = 0;
-    resp.headers = string_new();
-    resp.body    = string_new();
+    resp.headers = String::new();
+    resp.body    = String::new();
     int good = 1;
 
     unsigned int addr = 0U;
@@ -436,7 +438,7 @@ struct HttpResponse http_request_timeout(const &char host, unsigned short port,
     }
 
     if (good) {
-        struct String req = string_new();
+        struct String req = String::new();
         unsafe {
             req.push(method);
             req.push_char(' ');
@@ -453,24 +455,25 @@ struct HttpResponse http_request_timeout(const &char host, unsigned short port,
             req.push("\r\n");
             if (body_len > 0UL) { req.push_n((const char*)body, body_len); }
         }
-        if (!write_all_(fd, req.as_ptr(), req.length())) { good = 0; }
+        if (!write_text_(fd, &req)) { good = 0; }
         req.free();
     }
 
     if (good) {
-        struct String buf = string_new();
-        long headerEnd = read_until_(fd, &buf, "\r\n\r\n");
-        if (headerEnd < 0L) {
+        struct TcpStream s = TcpStream::from_fd(fd);
+        struct BufReader<TcpStream> in = BufReader::over(&s);
+        struct String headerBlock = String::new();
+        if (!in.read_until(&headerBlock, "\r\n\r\n")) {
             good = 0;
+            headerBlock.free();
         } else {
-            struct String headerBlock = buf.substr(0UL, (unsigned long)headerEnd);
             long firstLineEnd = headerBlock.index_of("\r\n");
             struct String statusLine = (firstLineEnd >= 0L)
                 ? headerBlock.substr(0UL, (unsigned long)firstLineEnd)
                 : headerBlock.clone();
             struct String restHeaders = (firstLineEnd >= 0L)
                 ? headerBlock.substr((unsigned long)firstLineEnd + 2UL, headerBlock.length())
-                : string_new();
+                : String::new();
             headerBlock.free();
 
             // Status line: "HTTP/1.1 200 OK"
@@ -497,17 +500,11 @@ struct HttpResponse http_request_timeout(const &char host, unsigned short port,
             }
             clStr.free();
 
-            unsigned long already = buf.length() - (unsigned long)headerEnd;
-            struct String alreadyBody = buf.substr((unsigned long)headerEnd, buf.length());
-            resp.body.free();
-            resp.body = alreadyBody;
-            if (contentLen > already) {
-                if (!read_n_(fd, &resp.body, contentLen - already)) {
-                    good = 0;
-                }
-            }
+            // Without a Content-Length, the body is what arrived with the
+            // header block.
+            unsigned long want = (contentLen > 0UL) ? contentLen : in.buffered();
+            if (!read_n_(&in, &resp.body, want)) { good = 0; }
         }
-        buf.free();
     }
 
     if (fd >= 0) { unsafe { sock_close_(fd); } }
@@ -527,7 +524,7 @@ struct HttpResponse http_post(const &char host, unsigned short port, const &char
                                ?&int ok) {
     const char* ctype;
     if (content_type) { ctype = content_type; } else { ctype = "application/octet-stream"; }
-    struct String hdr = string_new();
+    struct String hdr = String::new();
     unsafe {
         hdr.push("Content-Type: ");
         hdr.push(ctype);
@@ -543,25 +540,26 @@ struct HttpResponse http_post(const &char host, unsigned short port, const &char
 
 static struct HttpRequest http_parse_request_(int fd, int* ok) {
     struct HttpRequest req;
-    req.method  = string_new();
-    req.path    = string_new();
-    req.headers = string_new();
-    req.body    = string_new();
+    req.method  = String::new();
+    req.path    = String::new();
+    req.headers = String::new();
+    req.body    = String::new();
     int good = 1;
 
-    struct String buf = string_new();
-    long headerEnd = read_until_(fd, &buf, "\r\n\r\n");
-    if (headerEnd < 0L) {
+    struct TcpStream s = TcpStream::from_fd(fd);
+    struct BufReader<TcpStream> in = BufReader::over(&s);
+    struct String headerBlock = String::new();
+    if (!in.read_until(&headerBlock, "\r\n\r\n")) {
         good = 0;
+        headerBlock.free();
     } else {
-        struct String headerBlock = buf.substr(0UL, (unsigned long)headerEnd);
         long firstLineEnd = headerBlock.index_of("\r\n");
         struct String requestLine = (firstLineEnd >= 0L)
             ? headerBlock.substr(0UL, (unsigned long)firstLineEnd)
             : headerBlock.clone();
         struct String restHeaders = (firstLineEnd >= 0L)
             ? headerBlock.substr((unsigned long)firstLineEnd + 2UL, headerBlock.length())
-            : string_new();
+            : String::new();
         headerBlock.free();
 
         // Request line: "GET /path HTTP/1.1"
@@ -591,15 +589,12 @@ static struct HttpRequest http_parse_request_(int fd, int* ok) {
             }
             clStr.free();
 
-            unsigned long already = buf.length() - (unsigned long)headerEnd;
-            req.body.free();
-            req.body = buf.substr((unsigned long)headerEnd, buf.length());
-            if (contentLen > already) {
-                if (!read_n_(fd, &req.body, contentLen - already)) { good = 0; }
-            }
+            // Without a Content-Length, the body is what arrived with the
+            // header block.
+            unsigned long want = (contentLen > 0UL) ? contentLen : in.buffered();
+            if (!read_n_(&in, &req.body, want)) { good = 0; }
         }
     }
-    buf.free();
     if (ok != (int*)0) { unsafe { *ok = good; } }
     return req;
 }
@@ -621,7 +616,7 @@ int http_serve(unsigned short port, HttpHandler handler) {
         if (reqOk) {
             struct HttpResponse resp = handler(&req);
             struct String respText = http_render_response_(&resp);
-            write_all_(clientFd, respText.as_ptr(), respText.length());
+            write_text_(clientFd, &respText);
             respText.free();
             resp.free();
         }
@@ -653,7 +648,7 @@ static ?&__HttpThreadCtx __http_worker_main(?&__HttpThreadCtx argPtr) {
             struct HttpResponse resp;
             unsafe { resp = ctx->handler(&req); }
             struct String respText = http_render_response_(&resp);
-            write_all_(clientFd, respText.as_ptr(), respText.length());
+            write_text_(clientFd, &respText);
             respText.free();
             resp.free();
         }
@@ -711,10 +706,10 @@ int http_serve_threaded(unsigned short port, HttpHandler handler, int numThreads
 
 static struct HttpRequest http_parse_request_from_buf_(struct String* buf, long headerEnd, int* ok) {
     struct HttpRequest req;
-    req.method  = string_new();
-    req.path    = string_new();
-    req.headers = string_new();
-    req.body    = string_new();
+    req.method  = String::new();
+    req.path    = String::new();
+    req.headers = String::new();
+    req.body    = String::new();
     int good = 1;
 
     unsafe {
@@ -725,7 +720,7 @@ static struct HttpRequest http_parse_request_from_buf_(struct String* buf, long 
             : headerBlock.clone();
         struct String restHeaders = (firstLineEnd >= 0L)
             ? headerBlock.substr((unsigned long)firstLineEnd + 2UL, headerBlock.length())
-            : string_new();
+            : String::new();
         headerBlock.free();
 
         struct String parts[8];
@@ -747,9 +742,19 @@ static struct HttpRequest http_parse_request_from_buf_(struct String* buf, long 
 
         // By the time this is called, the task's read phases have already
         // accumulated the full body (Content-Length bytes past headerEnd) —
-        // no I/O needed here, pure parsing.
+        // no I/O needed here, pure parsing. Bytes past Content-Length that
+        // came in the same read aren't part of this body (the same cut the
+        // blocking servers make).
+        unsigned long bodyEnd = buf->length();
+        struct String clStr = http_header_get(req.headers.as_ptr(), "Content-Length");
+        if (!clStr.is_empty()) {
+            int clok = 0;
+            unsigned long cl = (unsigned long)clStr.parse_int(&clok);
+            if (clok && (unsigned long)headerEnd + cl < bodyEnd) bodyEnd = (unsigned long)headerEnd + cl;
+        }
+        clStr.free();
         req.body.free();
-        req.body = buf->substr((unsigned long)headerEnd, buf->length());
+        req.body = buf->substr((unsigned long)headerEnd, bodyEnd);
 
         if (ok != (int*)0) { *ok = good; }
     }
@@ -926,12 +931,12 @@ static void http_spawn_conn_(struct TaskScheduler* sched, struct Reactor* reacto
         st->reactor = reactor;
         st->phase = HTTP_CONN_PHASE_READ_HEADERS_;
         st->registeredFilter = 0;
-        st->readBuf = string_new();
+        st->readBuf = String::new();
         st->headerEnd = -1L;
         st->bodyWant = 0UL;
-        st->respText = string_new();
+        st->respText = String::new();
         st->sent = 0UL;
-        int idx = task_spawn((&TaskScheduler)sched, http_conn_task_, (?&HttpConnState_)st);
+        int idx = sched->spawn(http_conn_task_, (?&HttpConnState_)st);
         if (idx < 0) {
             // Scheduler at capacity (TASK_MAX concurrent connections on
             // this thread already) — drop this one rather than leak the
@@ -1148,9 +1153,9 @@ static ?&HttpReactorThreadCtx_ http_reactor_worker_(?&HttpReactorThreadCtx_ argP
         struct HttpReactorThreadCtx_* ctx = (struct HttpReactorThreadCtx_*)argPtr;
         struct HttpReactorShared_* shared = ctx->shared;
 
-        struct Reactor reactor = reactor_init();
+        struct Reactor reactor = Reactor::new();
         if (reactor.init() != 0) { return null; }
-        struct TaskScheduler sched = task_sched_init();
+        struct TaskScheduler sched = TaskScheduler::new();
 
         struct HttpDispatchQ_* myQueue = shared->queues + ctx->selfIndex;
 
@@ -1170,7 +1175,7 @@ static ?&HttpReactorThreadCtx_ http_reactor_worker_(?&HttpReactorThreadCtx_ argP
             ac->reactor = (struct Reactor*)&reactor;
             ac->registered = 0;
             ac->shared = shared;
-            task_spawn(&sched, http_accept_task_, (?&HttpAcceptState_)ac);
+            sched.spawn(http_accept_task_, (?&HttpAcceptState_)ac);
         }
 
         http_worker_loop_(&sched, &reactor, myQueue, shared->handler);

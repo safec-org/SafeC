@@ -8,7 +8,7 @@ namespace std {
 
 // ── FIR ──────────────────────────────────────────────────────────────────────
 
-inline struct FirFilter fir_init(const &double coeffs, unsigned long numTaps, &double history) {
+inline struct FirFilter FirFilter::new(const &double coeffs, unsigned long numTaps, &double history) {
     struct FirFilter f;
     f.coeffs = coeffs;
     f.numTaps = numTaps;
@@ -74,30 +74,23 @@ void FirFilter::reset() {
 #define FIR_CHUNK      512UL
 #endif
 
-void fir_process_block(&FirFilter f, const &double in, &double out, unsigned long n) {
-    unsigned long T = f.numTaps;
+void FirFilter::process_block(const &double in, &double out, unsigned long n) {
+    unsigned long T = self.numTaps;
     if (T == 0UL || T > FIR_STACK_TAPS) {
-        unsigned long i = 0UL;
-        while (i < n) {
-            double xi;
-            unsafe { xi = in[i]; }
-            double yi = f.process(xi);
-            unsafe { out[i] = yi; }
-            i = i + 1UL;
-        }
+        filter_process_each(self, in, out, n);
         return;
     }
     double crev[FIR_STACK_TAPS];
     double win[FIR_STACK_TAPS + FIR_CHUNK];
     unsafe {
         unsigned long t = 0UL;
-        while (t < T) { crev[t] = f.coeffs[T - 1UL - t]; t = t + 1UL; }
+        while (t < T) { crev[t] = self.coeffs[T - 1UL - t]; t = t + 1UL; }
         // win[0 .. T-1) = x[n-(T-1)] .. x[n-1], from the ring (the sample at
         // ring index pos - j is x[n-j]).
         unsigned long j = 0UL;
         while (j + 1UL < T) {
             unsigned long back = T - 1UL - j;                 // x[n - back]
-            win[j] = f.history[(f.pos + T - back) % T];
+            win[j] = self.history[(self.pos + T - back) % T];
             j = j + 1UL;
         }
         unsigned long done = 0UL;
@@ -113,14 +106,14 @@ void fir_process_block(&FirFilter f, const &double in, &double out, unsigned lon
         }
         // Back into the ring with pos = 0: x[n-j] at index T - j.
         j = 1UL;
-        while (j < T) { f.history[T - j] = win[T - 1UL - j]; j = j + 1UL; }
+        while (j < T) { self.history[T - j] = win[T - 1UL - j]; j = j + 1UL; }
     }
-    f.pos = 0UL;
+    self.pos = 0UL;
 }
 
 // The float FIR: the same code on floats (dsp_dot_f32 for blocks).
 
-inline struct FirFilter32 fir_init_f32(const &float coeffs, unsigned long numTaps, &float history) {
+inline struct FirFilter32 FirFilter32::new(const &float coeffs, unsigned long numTaps, &float history) {
     struct FirFilter32 f;
     f.coeffs = coeffs;
     f.numTaps = numTaps;
@@ -172,30 +165,23 @@ void FirFilter32::reset() {
     self.pos = 0UL;
 }
 
-void fir_process_block_f32(&FirFilter32 f, const &float in, &float out, unsigned long n) {
-    unsigned long T = f.numTaps;
+void FirFilter32::process_block(const &float in, &float out, unsigned long n) {
+    unsigned long T = self.numTaps;
     if (T == 0UL || T > FIR_STACK_TAPS) {
-        unsigned long i = 0UL;
-        while (i < n) {
-            float xi;
-            unsafe { xi = in[i]; }
-            float yi = f.process(xi);
-            unsafe { out[i] = yi; }
-            i = i + 1UL;
-        }
+        filter_process_each(self, in, out, n);
         return;
     }
     float crev[FIR_STACK_TAPS];
     float win[FIR_STACK_TAPS + FIR_CHUNK];
     unsafe {
         unsigned long t = 0UL;
-        while (t < T) { crev[t] = f.coeffs[T - 1UL - t]; t = t + 1UL; }
+        while (t < T) { crev[t] = self.coeffs[T - 1UL - t]; t = t + 1UL; }
         // win[0 .. T-1) = x[n-(T-1)] .. x[n-1], from the ring (the sample at
         // ring index pos - j is x[n-j]).
         unsigned long j = 0UL;
         while (j + 1UL < T) {
             unsigned long back = T - 1UL - j;                 // x[n - back]
-            win[j] = f.history[(f.pos + T - back) % T];
+            win[j] = self.history[(self.pos + T - back) % T];
             j = j + 1UL;
         }
         unsigned long done = 0UL;
@@ -211,12 +197,12 @@ void fir_process_block_f32(&FirFilter32 f, const &float in, &float out, unsigned
         }
         // Back into the ring with pos = 0: x[n-j] at index T - j.
         j = 1UL;
-        while (j < T) { f.history[T - j] = win[T - 1UL - j]; j = j + 1UL; }
+        while (j < T) { self.history[T - j] = win[T - 1UL - j]; j = j + 1UL; }
     }
-    f.pos = 0UL;
+    self.pos = 0UL;
 }
 
-inline struct FFirFilter ffir_init(const &Fixed coeffs, unsigned long numTaps, &Fixed history) {
+inline struct FFirFilter FFirFilter::new(const &Fixed coeffs, unsigned long numTaps, &Fixed history) {
     struct FFirFilter f;
     f.coeffs = coeffs;
     f.numTaps = numTaps;
@@ -247,23 +233,15 @@ void FFirFilter::reset() {
     self.pos = 0UL;
 }
 
-void ffir_process_block(&FFirFilter f, const &Fixed in, &Fixed out, unsigned long n) {
-    unsigned long i = 0UL;
-    while (i < n) {
-        Fixed xi;
-        unsafe { xi = in[i]; }
-        Fixed yi;
-        unsafe { yi = f->process(xi); }
-        unsafe { out[i] = yi; }
-        i = i + 1UL;
-    }
+void FFirFilter::process_block(const &Fixed in, &Fixed out, unsigned long n) {
+    filter_process_each(self, in, out, n);
 }
 
 // ── IIR (general order, direct form I) ────────────────────────────────────────
 
-inline struct IirFilter iir_init(const &double b, unsigned long numB,
-                                  const &double a, unsigned long numA,
-                                  &double xHistory, &double yHistory) {
+inline struct IirFilter IirFilter::new(const &double b, unsigned long numB,
+                                       const &double a, unsigned long numA,
+                                       &double xHistory, &double yHistory) {
     struct IirFilter f;
     f.b = b;
     f.numB = numB;
@@ -308,24 +286,16 @@ void IirFilter::reset() {
     self.yPos = 0UL;
 }
 
-void iir_process_block(&IirFilter f, const &double in, &double out, unsigned long n) {
-    unsigned long i = 0UL;
-    while (i < n) {
-        double xi;
-        unsafe { xi = in[i]; }
-        double yi;
-        unsafe { yi = f->process(xi); }
-        unsafe { out[i] = yi; }
-        i = i + 1UL;
-    }
+void IirFilter::process_block(const &double in, &double out, unsigned long n) {
+    filter_process_each(self, in, out, n);
 }
 
 // The float IIR (high orders lose precision in float: prefer Biquad32
 // sections for those).
 
-inline struct IirFilter32 iir_init_f32(const &float b, unsigned long numB,
-                                  const &float a, unsigned long numA,
-                                  &float xHistory, &float yHistory) {
+inline struct IirFilter32 IirFilter32::new(const &float b, unsigned long numB,
+                                           const &float a, unsigned long numA,
+                                           &float xHistory, &float yHistory) {
     struct IirFilter32 f;
     f.b = b;
     f.numB = numB;
@@ -370,21 +340,13 @@ void IirFilter32::reset() {
     self.yPos = 0UL;
 }
 
-void iir_process_block_f32(&IirFilter32 f, const &float in, &float out, unsigned long n) {
-    unsigned long i = 0UL;
-    while (i < n) {
-        float xi;
-        unsafe { xi = in[i]; }
-        float yi;
-        unsafe { yi = f->process(xi); }
-        unsafe { out[i] = yi; }
-        i = i + 1UL;
-    }
+void IirFilter32::process_block(const &float in, &float out, unsigned long n) {
+    filter_process_each(self, in, out, n);
 }
 
-inline struct FIirFilter fiir_init(const &Fixed b, unsigned long numB,
-                                    const &Fixed a, unsigned long numA,
-                                    &Fixed xHistory, &Fixed yHistory) {
+inline struct FIirFilter FIirFilter::new(const &Fixed b, unsigned long numB,
+                                         const &Fixed a, unsigned long numA,
+                                         &Fixed xHistory, &Fixed yHistory) {
     struct FIirFilter f;
     f.b = b;
     f.numB = numB;
@@ -429,16 +391,8 @@ void FIirFilter::reset() {
     self.yPos = 0UL;
 }
 
-void fiir_process_block(&FIirFilter f, const &Fixed in, &Fixed out, unsigned long n) {
-    unsigned long i = 0UL;
-    while (i < n) {
-        Fixed xi;
-        unsafe { xi = in[i]; }
-        Fixed yi;
-        unsafe { yi = f->process(xi); }
-        unsafe { out[i] = yi; }
-        i = i + 1UL;
-    }
+void FIirFilter::process_block(const &Fixed in, &Fixed out, unsigned long n) {
+    filter_process_each(self, in, out, n);
 }
 
 } // namespace std

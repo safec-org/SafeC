@@ -94,6 +94,9 @@ struct Reactor {
     // instead.
     struct Vec<struct WatchedFd> watched;
 
+    // A reactor with no OS event queue yet (kq = -1): call init() next.
+    static struct Reactor new();
+
     // Opens the underlying OS event queue. Returns 0 on success, -1 on
     // failure (check errno).
     int  init();
@@ -114,8 +117,6 @@ struct Reactor {
 
     void close_();
 };
-
-struct Reactor reactor_init();
 
 // Drives 'sched' to completion: repeatedly ticks every runnable task, and
 // whenever none are immediately runnable, polls the reactor — with a

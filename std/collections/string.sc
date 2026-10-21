@@ -24,7 +24,7 @@ inline int String::reserve_(unsigned long need) {
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
-inline struct String string_new() {
+inline struct String String::new() {
     struct String s;
     s.len = 0UL;
     unsafe {
@@ -41,13 +41,13 @@ inline struct String string_new() {
     return s;
 }
 
-inline struct String string_from(const &char cstr) {
-    struct String s = string_new();
+inline struct String String::from(const &char cstr) {
+    struct String s = String::new();
     if (cstr != (const char*)0) { s.push(cstr); }
     return s;
 }
 
-inline struct String string_from_n(const &char cstr, unsigned long n) {
+inline struct String String::from_n(const &char cstr, unsigned long n) {
     struct String s;
     s.len = 0UL;
     unsafe {
@@ -66,7 +66,7 @@ inline struct String string_from_n(const &char cstr, unsigned long n) {
     return s;
 }
 
-inline struct String string_with_cap(unsigned long cap) {
+inline struct String String::with_cap(unsigned long cap) {
     struct String s;
     s.len = 0UL;
     s.cap = cap + 1UL;
@@ -83,17 +83,17 @@ inline struct String string_with_cap(unsigned long cap) {
     return s;
 }
 
-inline struct String string_repeat(const &char cstr, unsigned long n) {
+inline struct String String::repeat_str(const &char cstr, unsigned long n) {
     unsigned long slen  = str_len(cstr);
     unsigned long total = slen * n;
-    struct String s = string_with_cap(total);
+    struct String s = String::with_cap(total);
     unsigned long i = 0UL;
     while (i < n) { s.push(cstr); i = i + 1UL; }
     return s;
 }
 
-inline struct String string_join(const &char sep, &String parts, unsigned long count) {
-    struct String out = string_new();
+inline struct String String::join(const &char sep, &String parts, unsigned long count) {
+    struct String out = String::new();
     unsigned long i = 0UL;
     while (i < count) {
         if (i > 0UL && sep != (const char*)0) { out.push(sep); }
@@ -106,8 +106,13 @@ inline struct String string_join(const &char sep, &String parts, unsigned long c
     return out;
 }
 
+// kept for std/ml until its refactor moves to the static method
+inline struct String string_new() { return String::new(); }
+inline struct String string_from(const &char cstr) { return String::from(cstr); }
+inline struct String string_from_n(const &char cstr, unsigned long n) { return String::from_n(cstr, n); }
+
 inline struct String String::clone() const {
-    unsafe { return string_from_n((const char*)self.data, self.len); }
+    unsafe { return String::from_n((const char*)self.data, self.len); }
 }
 
 inline void String::free() {
@@ -427,10 +432,10 @@ inline long long String::rfind_char(char c) const {
 
 // ── Transformation ────────────────────────────────────────────────────────────
 inline struct String String::substr(unsigned long start, unsigned long end) const {
-    if (start >= self.len) { return string_new(); }
+    if (start >= self.len) { return String::new(); }
     if (end > self.len) { end = self.len; }
-    if (start >= end) { return string_new(); }
-    unsafe { return string_from_n((const char*)((char*)self.data + start), end - start); }
+    if (start >= end) { return String::new(); }
+    unsafe { return String::from_n((const char*)((char*)self.data + start), end - start); }
 }
 
 inline struct String String::to_upper() const {
@@ -467,7 +472,7 @@ inline struct String String::trim_left() const {
         if (c == ' ' || c == '\t' || c == '\n' || c == '\r') { start = start + 1UL; }
         else { break; }
     }
-    unsafe { return string_from_n((const char*)((char*)self.data + start), self.len - start); }
+    unsafe { return String::from_n((const char*)((char*)self.data + start), self.len - start); }
 }
 
 inline struct String String::trim_right() const {
@@ -478,7 +483,7 @@ inline struct String String::trim_right() const {
         if (c == ' ' || c == '\t' || c == '\n' || c == '\r') { end = end - 1UL; }
         else { break; }
     }
-    unsafe { return string_from_n((const char*)self.data, end); }
+    unsafe { return String::from_n((const char*)self.data, end); }
 }
 
 inline struct String String::trim() const {
@@ -491,7 +496,7 @@ inline struct String String::trim() const {
 inline struct String String::pad_left(unsigned long width, char fill) const {
     if (self.len >= width) { return self.clone(); }
     unsigned long pad = width - self.len;
-    struct String out = string_with_cap(width);
+    struct String out = String::with_cap(width);
     unsigned long i = 0UL;
     while (i < pad) { out.push_char(fill); i = i + 1UL; }
     unsafe { out.push((const char*)self.data); }
@@ -501,7 +506,7 @@ inline struct String String::pad_left(unsigned long width, char fill) const {
 inline struct String String::pad_right(unsigned long width, char fill) const {
     if (self.len >= width) { return self.clone(); }
     unsigned long pad = width - self.len;
-    struct String out = string_with_cap(width);
+    struct String out = String::with_cap(width);
     unsafe { out.push((const char*)self.data); }
     unsigned long i = 0UL;
     while (i < pad) { out.push_char(fill); i = i + 1UL; }
@@ -515,7 +520,7 @@ inline struct String String::strip_prefix(const &char prefix) const {
         if (safe_memcmp_raw_((const void*)self.data, (const void*)prefix, plen) != 0) {
             return self.clone();
         }
-        return string_from_n((const char*)((char*)self.data + plen), self.len - plen);
+        return String::from_n((const char*)((char*)self.data + plen), self.len - plen);
     }
 }
 
@@ -526,13 +531,13 @@ inline struct String String::strip_suffix(const &char suffix) const {
         if (safe_memcmp_raw_((const void*)((char*)self.data + self.len - slen), (const void*)suffix, slen) != 0) {
             return self.clone();
         }
-        return string_from_n((const char*)self.data, self.len - slen);
+        return String::from_n((const char*)self.data, self.len - slen);
     }
 }
 
 inline struct String String::repeat(unsigned long n) const {
-    if (n == 0UL) { return string_new(); }
-    struct String out = string_with_cap(self.len * n);
+    if (n == 0UL) { return String::new(); }
+    struct String out = String::with_cap(self.len * n);
     unsigned long i = 0UL;
     while (i < n) {
         unsafe { out.push((const char*)self.data); }
@@ -542,7 +547,7 @@ inline struct String String::repeat(unsigned long n) const {
 }
 
 inline struct String String::capitalize() const {
-    if (self.len == 0UL) { return string_new(); }
+    if (self.len == 0UL) { return String::new(); }
     struct String out = self.clone();
     unsafe {
         char first = out.data[0];
@@ -579,7 +584,7 @@ unsigned long String::split(const &char delim, &String out, unsigned long max) c
         if (cnt == max - 1UL) {
             unsafe {
                 struct String* arr = (struct String*)out;
-                arr[cnt] = string_from_n((const char*)((char*)self.data + start), self.len - start);
+                arr[cnt] = String::from_n((const char*)((char*)self.data + start), self.len - start);
             }
             cnt = cnt + 1UL;
             break;
@@ -602,7 +607,7 @@ unsigned long String::split(const &char delim, &String out, unsigned long max) c
             // No more delimiters — take the rest
             unsafe {
                 struct String* arr = (struct String*)out;
-                arr[cnt] = string_from_n((const char*)((char*)self.data + start), self.len - start);
+                arr[cnt] = String::from_n((const char*)((char*)self.data + start), self.len - start);
             }
             cnt = cnt + 1UL;
             break;
@@ -610,7 +615,7 @@ unsigned long String::split(const &char delim, &String out, unsigned long max) c
         // Extract segment before delimiter
         unsafe {
             struct String* arr = (struct String*)out;
-            arr[cnt] = string_from_n((const char*)((char*)self.data + start), (unsigned long)pos - start);
+            arr[cnt] = String::from_n((const char*)((char*)self.data + start), (unsigned long)pos - start);
         }
         cnt = cnt + 1UL;
         start = (unsigned long)pos + dlen;
@@ -619,7 +624,7 @@ unsigned long String::split(const &char delim, &String out, unsigned long max) c
     if (start == self.len && cnt < max && cnt > 0UL) {
         unsafe {
             struct String* arr = (struct String*)out;
-            arr[cnt] = string_new();
+            arr[cnt] = String::new();
         }
         cnt = cnt + 1UL;
     }
@@ -634,7 +639,7 @@ unsigned long String::split_lines(&String out, unsigned long max) const {
         if (cnt == max - 1UL) {
             unsafe {
                 struct String* arr = (struct String*)out;
-                arr[cnt] = string_from_n((const char*)((char*)self.data + start), self.len - start);
+                arr[cnt] = String::from_n((const char*)((char*)self.data + start), self.len - start);
             }
             cnt = cnt + 1UL;
             break;
@@ -665,14 +670,14 @@ unsigned long String::split_lines(&String out, unsigned long max) const {
         if (pos < 0LL) {
             unsafe {
                 struct String* arr = (struct String*)out;
-                arr[cnt] = string_from_n((const char*)((char*)self.data + start), self.len - start);
+                arr[cnt] = String::from_n((const char*)((char*)self.data + start), self.len - start);
             }
             cnt = cnt + 1UL;
             break;
         }
         unsafe {
             struct String* arr = (struct String*)out;
-            arr[cnt] = string_from_n((const char*)((char*)self.data + start), (unsigned long)pos - start);
+            arr[cnt] = String::from_n((const char*)((char*)self.data + start), (unsigned long)pos - start);
         }
         cnt = cnt + 1UL;
         start = (unsigned long)pos + skip;
@@ -703,7 +708,7 @@ unsigned long String::split_whitespace(&String out, unsigned long max) const {
             }
             unsafe {
                 struct String* arr = (struct String*)out;
-                arr[cnt] = string_from_n((const char*)((char*)self.data + i), end - i);
+                arr[cnt] = String::from_n((const char*)((char*)self.data + i), end - i);
             }
             cnt = cnt + 1UL;
             break;
@@ -718,7 +723,7 @@ unsigned long String::split_whitespace(&String out, unsigned long max) const {
         }
         unsafe {
             struct String* arr = (struct String*)out;
-            arr[cnt] = string_from_n((const char*)((char*)self.data + start), i - start);
+            arr[cnt] = String::from_n((const char*)((char*)self.data + start), i - start);
         }
         cnt = cnt + 1UL;
         // Skip whitespace between tokens

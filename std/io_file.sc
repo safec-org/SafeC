@@ -3,6 +3,7 @@
 #pragma once
 #include <std/stddef.h>
 #include <std/io_file.h>
+#include <std/io_traits.h>
 
 namespace std {
 
@@ -21,71 +22,86 @@ extern int            feof(void* stream);
 extern int            ferror(void* stream);
 extern int            fflush(void* stream);
 
-inline ?&File file_open(const &char path, const &char mode) {
+inline ?&File File::open(const &char path, const &char mode) {
     unsafe { return (?&File)fopen(path, mode); }
 }
 
-inline int file_close(&File f) {
-    unsafe { return fclose((void*)f); }
+inline int File::close() {
+    unsafe { return fclose((void*)self); }
 }
 
-inline unsigned long file_read(&File f, &unsigned char buf, unsigned long n) {
-    unsafe { return fread((void*)buf, (unsigned long)1, n, (void*)f); }
-}
-
-inline int file_getc(&File f) {
-    unsafe { return fgetc((void*)f); }
-}
-
-inline ?&char file_gets(&char buf, int n, &File f) {
-    unsafe { return fgets(buf, n, (void*)f); }
-}
-
-inline unsigned long file_write(&File f, const &unsigned char buf, unsigned long n) {
-    unsafe { return fwrite((const void*)buf, (unsigned long)1, n, (void*)f); }
-}
-
-inline int file_putc(int c, &File f) {
-    unsafe { return fputc(c, (void*)f); }
-}
-
-inline int file_puts(const &char s, &File f) {
-    unsafe { return fputs(s, (void*)f); }
-}
-
-inline int file_seek(&File f, long long offset, int whence) {
-    unsafe { return fseek((void*)f, (long)offset, whence); }
-}
-
-inline long long file_tell(&File f) {
-    unsafe { return (long long)ftell((void*)f); }
-}
-
-inline void file_rewind(&File f) {
-    unsafe { rewind((void*)f); }
-}
-
-inline int file_eof(&File f) {
-    unsafe { return feof((void*)f); }
-}
-
-inline int file_error(&File f) {
-    unsafe { return ferror((void*)f); }
-}
-
-inline int file_flush(&File f) {
-    unsafe { return fflush((void*)f); }
-}
-
-inline long long file_size(&File f) {
+inline long long File::read(&unsigned char buf, unsigned long n) {
     unsafe {
-        long cur = ftell((void*)f);
-        if (cur < 0) return (long long)-1;
-        if (fseek((void*)f, 0, 2) != 0) return (long long)-1;  // SEEK_END = 2
-        long long end = (long long)ftell((void*)f);
-        fseek((void*)f, cur, 0);                                 // SEEK_SET = 0
-        return end;
+        unsigned long got = fread((void*)buf, (unsigned long)1, n, (void*)self);
+        if (got == 0UL && n > 0UL && ferror((void*)self) != 0) { return -1LL; }
+        return (long long)got;
     }
 }
+
+inline int File::getc() {
+    unsafe { return fgetc((void*)self); }
+}
+
+inline ?&char File::gets(&char buf, int n) {
+    unsafe { return fgets(buf, n, (void*)self); }
+}
+
+inline long long File::write(const &unsigned char buf, unsigned long n) {
+    unsafe {
+        unsigned long put = fwrite((const void*)buf, (unsigned long)1, n, (void*)self);
+        if (put == 0UL && n > 0UL) { return -1LL; }
+        return (long long)put;
+    }
+}
+
+inline int File::putc(int c) {
+    unsafe { return fputc(c, (void*)self); }
+}
+
+inline int File::puts(const &char s) {
+    unsafe { return fputs(s, (void*)self); }
+}
+
+inline int File::seek(long long offset, int whence) {
+    unsafe { return fseek((void*)self, (long)offset, whence); }
+}
+
+inline long long File::tell() {
+    unsafe { return (long long)ftell((void*)self); }
+}
+
+inline void File::rewind() {
+    unsafe { rewind((void*)self); }
+}
+
+inline int File::eof() {
+    unsafe { return feof((void*)self); }
+}
+
+inline int File::error() {
+    unsafe { return ferror((void*)self); }
+}
+
+inline int File::flush() {
+    unsafe { return fflush((void*)self); }
+}
+
+inline long long File::size() {
+    return stream_size(self);
+}
+
+// Forwarding wrappers kept for std/ml (see io_file.h).
+// kept for std/ml until its refactor moves to the static method
+inline ?&File        file_open(const &char path, const &char mode) { return File::open(path, mode); }
+inline int           file_close(&File f) { return f.close(); }
+inline unsigned long file_read(&File f, &unsigned char buf, unsigned long n) {
+    long long r = f.read(buf, n); return r < 0LL ? 0UL : (unsigned long)r;
+}
+inline unsigned long file_write(&File f, const &unsigned char buf, unsigned long n) {
+    long long r = f.write(buf, n); return r < 0LL ? 0UL : (unsigned long)r;
+}
+inline int           file_seek(&File f, long long offset, int whence) { return f.seek(offset, whence); }
+inline long long     file_tell(&File f) { return f.tell(); }
+inline long long     file_size(&File f) { return f.size(); }
 
 } // namespace std

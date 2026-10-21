@@ -53,7 +53,7 @@ void t_fft() {
         struct Complex orig[64];
         int i = 0;
         while (i < 64) {
-            a[i] = complex_new(rnd(), rnd());
+            a[i] = Complex::new(rnd(), rnd());
             orig[i] = a[i];
             i = i + 1;
         }
@@ -99,9 +99,9 @@ void t_fft() {
         // Fixed-point FFT approximates the float one.
         struct FComplex f[16];
         i = 0;
-        while (i < 16) { f[i] = fcomplex_new(fixed_from_float(x[i * 2] * 0.25), fixed_from_int(0)); i = i + 1; }
+        while (i < 16) { f[i] = FComplex::new(fixed_from_float(x[i * 2] * 0.25), fixed_from_int(0)); i = i + 1; }
         ASSERT_TRUE(ffft((struct FComplex*)f, 16UL));
-        struct Complex fc = fcomplex_to_float(f[4]);
+        struct Complex fc = f[4].to_complex();
         ASSERT_TRUE(near_d(fc.abs(), 2.0, 1e-3));
     }
 }
@@ -127,7 +127,7 @@ void t_fft_large() {
         // n = 4096 against the O(n^2) DFT.
         unsigned long n = 4096UL;
         unsigned long i = 0UL;
-        while (i < n) { g_fa[i] = complex_new(rnd(), rnd()); i = i + 1UL; }
+        while (i < n) { g_fa[i] = Complex::new(rnd(), rnd()); i = i + 1UL; }
         dft((const struct Complex*)g_fa, (struct Complex*)g_fb, n);
         ASSERT_TRUE(fft((struct Complex*)g_fa, n));
         ASSERT_TRUE(max_diff((const struct Complex*)g_fa, (const struct Complex*)g_fb, n) < 1e-9);
@@ -138,7 +138,7 @@ void t_fft_large() {
         i = 0UL;
         while (i < n) {
             double t = (double)i / (double)n;
-            g_fa[i] = complex_new(cos_d(2.0 * PI_D() * 1000.0 * t), sin_d(2.0 * PI_D() * 1000.0 * t) + 0.5 * cos_d(2.0 * PI_D() * 77.0 * t));
+            g_fa[i] = Complex::new(cos_d(2.0 * PI_D() * 1000.0 * t), sin_d(2.0 * PI_D() * 1000.0 * t) + 0.5 * cos_d(2.0 * PI_D() * 77.0 * t));
             g_fb[i] = g_fa[i];
             i = i + 1UL;
         }
@@ -158,7 +158,7 @@ void t_fft_large() {
         unsigned long len = 256UL;
         unsigned long rows = 64UL;
         i = 0UL;
-        while (i < len * rows) { g_fa[i] = complex_new(rnd(), rnd()); g_fb[i] = g_fa[i]; i = i + 1UL; }
+        while (i < len * rows) { g_fa[i] = Complex::new(rnd(), rnd()); g_fb[i] = g_fa[i]; i = i + 1UL; }
         ASSERT_TRUE(fft_batch((struct Complex*)g_fa, len, rows, 0));
         unsigned long r = 0UL;
         while (r < rows) { fft_serial((struct Complex*)&g_fb[r * len], len); r = r + 1UL; }
@@ -176,7 +176,7 @@ void t_fft_large() {
         double worst = 0.0;
         while (r < rows) {
             i = 0UL;
-            while (i < n) { g_fb[i] = complex_new(g_fx[r * n + i], 0.0); i = i + 1UL; }
+            while (i < n) { g_fb[i] = Complex::new(g_fx[r * n + i], 0.0); i = i + 1UL; }
             fft_serial((struct Complex*)g_fb, n);
             double e = max_diff((const struct Complex*)&g_fa[r * n], (const struct Complex*)g_fb, n);
             if (e > worst) worst = e;
@@ -240,17 +240,17 @@ void t_dsp_blocks() {
             unsigned long T = taps[c];
             double hist1[300];
             double hist2[300];
-            struct FirFilter a = fir_init((const double*)g_ch, T, (double*)hist1);
-            struct FirFilter b = fir_init((const double*)g_ch, T, (double*)hist2);
+            struct FirFilter a = FirFilter::new((const double*)g_ch, T, (double*)hist1);
+            struct FirFilter b = FirFilter::new((const double*)g_ch, T, (double*)hist2);
             a.reset();
             b.reset();
             i = 0UL;
             while (i < 3000UL) { g_cy1[i] = a.process(g_cx[i]); i = i + 1UL; }
-            fir_process_block(&b, (const double*)g_cx, (double*)g_cy2, 7UL);
-            fir_process_block(&b, (const double*)&g_cx[7], (double*)&g_cy2[7], 1100UL);
+            b.process_block((const double*)g_cx, (double*)g_cy2, 7UL);
+            b.process_block((const double*)&g_cx[7], (double*)&g_cy2[7], 1100UL);
             unsigned long k = 1107UL;
             while (k < 1200UL) { g_cy2[k] = b.process(g_cx[k]); k = k + 1UL; }   // mixed with process()
-            fir_process_block(&b, (const double*)&g_cx[1200], (double*)&g_cy2[1200], 1800UL);
+            b.process_block((const double*)&g_cx[1200], (double*)&g_cy2[1200], 1800UL);
             worst = 0.0;
             i = 0UL;
             while (i < 3000UL) { double e = g_cy1[i] - g_cy2[i]; if (e < 0.0) e = -e; if (e > worst) worst = e; i = i + 1UL; }
@@ -258,12 +258,12 @@ void t_dsp_blocks() {
             c = c + 1;
         }
 
-        struct Biquad q1 = biquad_lowpass(48000.0, 1000.0, 0.7071);
-        struct Biquad q2 = biquad_lowpass(48000.0, 1000.0, 0.7071);
+        struct Biquad q1 = Biquad::lowpass(48000.0, 1000.0, 0.7071);
+        struct Biquad q2 = Biquad::lowpass(48000.0, 1000.0, 0.7071);
         i = 0UL;
         while (i < 1000UL) { g_cy1[i] = q1.process(g_cx[i]); i = i + 1UL; }
-        biquad_process_block(&q2, (const double*)g_cx, (double*)g_cy2, 400UL);
-        biquad_process_block(&q2, (const double*)&g_cx[400], (double*)&g_cy2[400], 600UL);
+        q2.process_block((const double*)g_cx, (double*)g_cy2, 400UL);
+        q2.process_block((const double*)&g_cx[400], (double*)&g_cy2[400], 600UL);
         // the block form may use FMA, so allow last-bit differences
         worst = 0.0;
         i = 0UL;
@@ -297,27 +297,27 @@ void t_window_fixed() {
 
 void t_biquad_filters() {
     unsafe {
-        struct Biquad lp = biquad_lowpass(48000.0, 1000.0, 0.70710678);
-        ASSERT_TRUE(near_d(biquad_response_mag(&lp, 48000.0, 1.0), 1.0, 1e-4));
-        ASSERT_TRUE(near_d(biquad_response_mag(&lp, 48000.0, 1000.0), 0.70710678, 1e-3));
-        ASSERT_TRUE(biquad_response_mag(&lp, 48000.0, 10000.0) < 0.05);
+        struct Biquad lp = Biquad::lowpass(48000.0, 1000.0, 0.70710678);
+        ASSERT_TRUE(near_d(lp.response_mag(48000.0, 1.0), 1.0, 1e-4));
+        ASSERT_TRUE(near_d(lp.response_mag(48000.0, 1000.0), 0.70710678, 1e-3));
+        ASSERT_TRUE(lp.response_mag(48000.0, 10000.0) < 0.05);
         double y = 0.0;
         int i = 0;
         while (i < 2000) { y = lp.process(1.0); i = i + 1; }
         ASSERT_TRUE(near_d(y, 1.0, 1e-6));
-        struct Biquad hp = biquad_highpass(48000.0, 1000.0, 0.70710678);
-        ASSERT_TRUE(biquad_response_mag(&hp, 48000.0, 10.0) < 0.01);
-        struct Biquad nt = biquad_notch(48000.0, 1000.0, 2.0);
-        ASSERT_TRUE(biquad_response_mag(&nt, 48000.0, 1000.0) < 1e-6);
-        struct Biquad pk = biquad_peaking(48000.0, 1000.0, 1.0, 6.0);
-        ASSERT_TRUE(near_d(20.0 * log10_d(biquad_response_mag(&pk, 48000.0, 1000.0)), 6.0, 1e-3));
+        struct Biquad hp = Biquad::highpass(48000.0, 1000.0, 0.70710678);
+        ASSERT_TRUE(hp.response_mag(48000.0, 10.0) < 0.01);
+        struct Biquad nt = Biquad::notch(48000.0, 1000.0, 2.0);
+        ASSERT_TRUE(nt.response_mag(48000.0, 1000.0) < 1e-6);
+        struct Biquad pk = Biquad::peaking(48000.0, 1000.0, 1.0, 6.0);
+        ASSERT_TRUE(near_d(20.0 * log10_d(pk.response_mag(48000.0, 1000.0)), 6.0, 1e-3));
 
         // FIR impulse response == coefficients.
         double coeffs[4];
         coeffs[0] = 0.1; coeffs[1] = 0.2; coeffs[2] = 0.3; coeffs[3] = 0.4;
         double hist[4];
         safe_memset(&hist[0], 0, sizeof(double) * 4UL);
-        struct FirFilter fir = fir_init((const double*)coeffs, 4UL, (double*)hist);
+        struct FirFilter fir = FirFilter::new((const double*)coeffs, 4UL, (double*)hist);
         ASSERT_TRUE(near_d(fir.process(1.0), 0.1, 1e-12));
         ASSERT_TRUE(near_d(fir.process(0.0), 0.2, 1e-12));
         ASSERT_TRUE(near_d(fir.process(0.0), 0.3, 1e-12));
@@ -325,7 +325,7 @@ void t_biquad_filters() {
         ASSERT_TRUE(near_d(fir.process(0.0), 0.0, 1e-12));
 
         // IIR with the biquad's coefficients matches the biquad sample-for-sample.
-        struct Biquad ref = biquad_lowpass(48000.0, 2000.0, 1.0);
+        struct Biquad ref = Biquad::lowpass(48000.0, 2000.0, 1.0);
         double bc[3];
         double ac[3];
         bc[0] = ref.b0; bc[1] = ref.b1; bc[2] = ref.b2;
@@ -334,7 +334,7 @@ void t_biquad_filters() {
         double yh[3];
         safe_memset(&xh[0], 0, sizeof(double) * 3UL);
         safe_memset(&yh[0], 0, sizeof(double) * 3UL);
-        struct IirFilter iir = iir_init((const double*)bc, 3UL, (const double*)ac, 3UL, (double*)xh, (double*)yh);
+        struct IirFilter iir = IirFilter::new((const double*)bc, 3UL, (const double*)ac, 3UL, (double*)xh, (double*)yh);
         double maxErr = 0.0;
         i = 0;
         while (i < 200) {
@@ -354,11 +354,11 @@ void t_biquad_filters() {
         double bo[3];
         double ao[3];
         bilinear_nth_order((const double*)B, (const double*)A, 2UL, 48000.0, (double*)bo, (double*)ao);
-        struct Biquad b2 = bilinear_2nd_order(B[0], B[1], B[2], A[0], A[1], A[2], 48000.0);
+        struct Biquad b2 = Biquad::bilinear(B[0], B[1], B[2], A[0], A[1], A[2], 48000.0);
         ASSERT_TRUE(near_d(bo[0], b2.b0, 1e-12));
         ASSERT_TRUE(near_d(ao[2], b2.a2, 1e-12));
         ASSERT_TRUE(near_d(ztransform_response_mag((const double*)bo, (const double*)ao, 2UL, 48000.0, 500.0),
-                           biquad_response_mag(&b2, 48000.0, 500.0), 1e-9));
+                           b2.response_mag(48000.0, 500.0), 1e-9));
     }
 }
 
@@ -436,7 +436,7 @@ void t_comb_audio_timer() {
     unsafe {
         double hist[3];
         safe_memset(&hist[0], 0, sizeof(double) * 3UL);
-        struct CombFF ff = comb_ff_init((double*)hist, 3UL, 0.5);
+        struct CombFF ff = CombFF::new((double*)hist, 3UL, 0.5);
         ASSERT_TRUE(near_d(ff.process(1.0), 1.0, 1e-12));
         ff.process(0.0);
         ff.process(0.0);
@@ -448,7 +448,7 @@ void t_comb_audio_timer() {
         ASSERT_FALSE(twq.is_null());
         if (abq.is_null() || twq.is_null()) return;
         &AudioBuffer ab = std::expect_ref(abq, "abq is null");
-        *ab = audio_buf_init(2UL);
+        *ab = AudioBuffer::new(2UL);
         Fixed frames[8];
         int i = 0;
         while (i < 8) { frames[i] = fixed_from_int(i); i = i + 1; }
@@ -461,9 +461,9 @@ void t_comb_audio_timer() {
         dealloc(abq);
 
         &TimerWheel tw = std::expect_ref(twq, "twq is null");
-        timer_wheel_init(tw);
-        timer_add(tw, 3UL, on_timer, null);
-        int pid = timer_add_periodic(tw, 5UL, on_timer, null);
+        tw.init();
+        tw.add(3UL, on_timer, null);
+        int pid = tw.add_periodic(5UL, on_timer, null);
         i = 0;
         while (i < 12) { tw.tick(); i = i + 1; }
         ASSERT_EQ(g_fired, 3);   // one-shot at 3, periodic at 5 and 10
@@ -495,7 +495,7 @@ void t_imaging_cqt_cwt_minphase() {
 
         struct Complex c2[16];
         i = 0;
-        while (i < 16) { c2[i] = complex_new(img[i], 0.0); i = i + 1; }
+        while (i < 16) { c2[i] = Complex::new(img[i], 0.0); i = i + 1; }
         fft2d((struct Complex*)c2, 4UL, 4UL);
         ASSERT_TRUE(near_d(c2[0].re, 120.0, 1e-9));
         ifft2d((struct Complex*)c2, 4UL, 4UL);
@@ -594,8 +594,8 @@ void t_fft_f32() {
         while (n <= 131072UL) {
             unsigned long i = 0UL;
             while (i < n) {
-                g_ga[i] = complex32_new((float)rnd(), (float)rnd());
-                g_fa[i] = complex_from_f32(g_ga[i]);
+                g_ga[i] = Complex32::new((float)rnd(), (float)rnd());
+                g_fa[i] = g_ga[i].to_complex();
                 i = i + 1UL;
             }
             ASSERT_TRUE(fft_f32((struct Complex32*)g_ga, n));
@@ -611,7 +611,7 @@ void t_fft_f32() {
         unsigned long i = 0UL;
         while (i < n) {
             double t = (double)i / (double)n;
-            g_ga[i] = complex32_new((float)cos_d(2.0 * PI_D() * 1000.0 * t), (float)(sin_d(2.0 * PI_D() * 1000.0 * t) + 0.5 * cos_d(2.0 * PI_D() * 77.0 * t)));
+            g_ga[i] = Complex32::new((float)cos_d(2.0 * PI_D() * 1000.0 * t), (float)(sin_d(2.0 * PI_D() * 1000.0 * t) + 0.5 * cos_d(2.0 * PI_D() * 77.0 * t)));
             g_gb[i] = g_ga[i];
             i = i + 1UL;
         }
@@ -628,7 +628,7 @@ void t_fft_f32() {
         unsigned long len = 256UL;
         unsigned long rows = 64UL;
         i = 0UL;
-        while (i < len * rows) { g_ga[i] = complex32_new((float)rnd(), (float)rnd()); g_gb[i] = g_ga[i]; i = i + 1UL; }
+        while (i < len * rows) { g_ga[i] = Complex32::new((float)rnd(), (float)rnd()); g_gb[i] = g_ga[i]; i = i + 1UL; }
         ASSERT_TRUE(fft_batch_f32((struct Complex32*)g_ga, len, rows, 0));
         unsigned long r = 0UL;
         while (r < rows) { fft_serial_f32((struct Complex32*)&g_gb[r * len], len); r = r + 1UL; }
@@ -644,7 +644,7 @@ void t_fft_f32() {
         r = 0UL;
         while (r < rows) {
             i = 0UL;
-            while (i < n) { g_fb[i] = complex_new((double)g_gx[r * n + i], 0.0); i = i + 1UL; }
+            while (i < n) { g_fb[i] = Complex::new((double)g_gx[r * n + i], 0.0); i = i + 1UL; }
             fft_serial((struct Complex*)g_fb, n);
             double e = max_diff32((const struct Complex32*)&g_ga[r * n], (const struct Complex*)g_fb, n);
             if (e > worst) worst = e;
@@ -701,32 +701,32 @@ void t_dsp_f32() {
             float hist1[300];
             float hist2[300];
             double histd[300];
-            struct FirFilter32 a = fir_init_f32((const float*)hf, T, (float*)hist1);
-            struct FirFilter32 b = fir_init_f32((const float*)hf, T, (float*)hist2);
-            struct FirFilter d = fir_init((const double*)g_ch, T, (double*)histd);
+            struct FirFilter32 a = FirFilter32::new((const float*)hf, T, (float*)hist1);
+            struct FirFilter32 b = FirFilter32::new((const float*)hf, T, (float*)hist2);
+            struct FirFilter d = FirFilter::new((const double*)g_ch, T, (double*)histd);
             a.reset();
             b.reset();
             d.reset();
             i = 0UL;
             while (i < 3000UL) { g_gy1[i] = a.process(g_gx[i]); g_cy1[i] = d.process(g_cx[i]); i = i + 1UL; }
-            fir_process_block_f32(&b, (const float*)g_gx, (float*)g_gy2, 7UL);
-            fir_process_block_f32(&b, (const float*)&g_gx[7], (float*)&g_gy2[7], 1100UL);
+            b.process_block((const float*)g_gx, (float*)g_gy2, 7UL);
+            b.process_block((const float*)&g_gx[7], (float*)&g_gy2[7], 1100UL);
             unsigned long k = 1107UL;
             while (k < 1200UL) { g_gy2[k] = b.process(g_gx[k]); k = k + 1UL; }
-            fir_process_block_f32(&b, (const float*)&g_gx[1200], (float*)&g_gy2[1200], 1800UL);
+            b.process_block((const float*)&g_gx[1200], (float*)&g_gy2[1200], 1800UL);
             ASSERT_TRUE(max_abs_diff_ff((const float*)g_gy1, (const float*)g_gy2, 3000UL) < 1e-5);
             ASSERT_TRUE(max_abs_diff_fd((const float*)g_gy2, (const double*)g_cy1, 3000UL) < 1e-4);
             c = c + 1;
         }
 
         // Biquad32 from a double design: per sample == block, close to double
-        struct Biquad qd = biquad_lowpass(48000.0, 1000.0, 0.7071);
-        struct Biquad32 q1 = biquad_to_f32(qd);
-        struct Biquad32 q2 = biquad_to_f32(qd);
+        struct Biquad qd = Biquad::lowpass(48000.0, 1000.0, 0.7071);
+        struct Biquad32 q1 = Biquad32::from(qd);
+        struct Biquad32 q2 = Biquad32::from(qd);
         i = 0UL;
         while (i < 1000UL) { g_gy1[i] = q1.process(g_gx[i]); g_cy1[i] = qd.process(g_cx[i]); i = i + 1UL; }
-        biquad_process_block_f32(&q2, (const float*)g_gx, (float*)g_gy2, 400UL);
-        biquad_process_block_f32(&q2, (const float*)&g_gx[400], (float*)&g_gy2[400], 600UL);
+        q2.process_block((const float*)g_gx, (float*)g_gy2, 400UL);
+        q2.process_block((const float*)&g_gx[400], (float*)&g_gy2[400], 600UL);
         ASSERT_TRUE(max_abs_diff_ff((const float*)g_gy1, (const float*)g_gy2, 1000UL) < 1e-5);
         ASSERT_TRUE(max_abs_diff_fd((const float*)g_gy2, (const double*)g_cy1, 1000UL) < 1e-4);
         q1.reset();
@@ -811,27 +811,27 @@ void t_dsp_f32_more() {
         while (i < 4096UL) { g_gx[i] = (float)rnd(); g_cx[i] = (double)g_gx[i]; i = i + 1UL; }
 
         // IIR (a biquad's coefficients as a 2nd-order IIR) close to double
-        struct Biquad bq = biquad_lowpass(48000.0, 2000.0, 0.7071);
+        struct Biquad bq = Biquad::lowpass(48000.0, 2000.0, 0.7071);
         double bd[3]; double ad[3];
         bd[0] = bq.b0; bd[1] = bq.b1; bd[2] = bq.b2; ad[0] = 1.0; ad[1] = bq.a1; ad[2] = bq.a2;
         float bf[3]; float af[3];
         int c = 0;
         while (c < 3) { bf[c] = (float)bd[c]; af[c] = (float)ad[c]; c = c + 1; }
         double xd[3]; double yd[3]; float xf[3]; float yf[3];
-        struct IirFilter id = iir_init((const double*)bd, 3UL, (const double*)ad, 3UL, (double*)xd, (double*)yd);
-        struct IirFilter32 iff = iir_init_f32((const float*)bf, 3UL, (const float*)af, 3UL, (float*)xf, (float*)yf);
+        struct IirFilter id = IirFilter::new((const double*)bd, 3UL, (const double*)ad, 3UL, (double*)xd, (double*)yd);
+        struct IirFilter32 iff = IirFilter32::new((const float*)bf, 3UL, (const float*)af, 3UL, (float*)xf, (float*)yf);
         id.reset();
         iff.reset();
-        iir_process_block(&id, (const double*)g_cx, (double*)g_cy1, 2000UL);
-        iir_process_block_f32(&iff, (const float*)g_gx, (float*)g_gy1, 2000UL);
+        id.process_block((const double*)g_cx, (double*)g_cy1, 2000UL);
+        iff.process_block((const float*)g_gx, (float*)g_gy1, 2000UL);
         ASSERT_TRUE(max_abs_diff_fd((const float*)g_gy1, (const double*)g_cy1, 2000UL) < 1e-4);
 
         // comb filters and Karplus-Strong against double
         float hf1[37]; double hd1[37];
-        struct CombFF32 cf = comb_ff_init_f32((float*)hf1, 37UL, (float)0.6);
-        struct CombFF cd = comb_ff_init((double*)hd1, 37UL, 0.6);
-        struct CombFB32 bf32 = comb_fb_init_f32((float*)hf1, 37UL, (float)0.6);
-        struct CombFB bd64 = comb_fb_init((double*)hd1, 37UL, 0.6);
+        struct CombFF32 cf = CombFF32::new((float*)hf1, 37UL, (float)0.6);
+        struct CombFF cd = CombFF::new((double*)hd1, 37UL, 0.6);
+        struct CombFB32 bf32 = CombFB32::new((float*)hf1, 37UL, (float)0.6);
+        struct CombFB bd64 = CombFB::new((double*)hd1, 37UL, 0.6);
         cf.reset();
         cd.reset();
         double worst = 0.0;
@@ -855,14 +855,14 @@ void t_dsp_f32_more() {
         }
         ASSERT_TRUE(worst < 1e-5);
         float kbf[50]; double kbd[50];
-        struct KarplusStrong32 kf = ks_init_f32((float*)kbf, 50UL, (float)0.996);
-        struct KarplusStrong kd = ks_init((double*)kbd, 50UL, 0.996);
-        kf.reset((const float*)g_gx, 50UL);
-        kd.reset((const double*)g_cx, 50UL);
+        struct KarplusStrong32 kf = KarplusStrong32::new((float*)kbf, 50UL, (float)0.996);
+        struct KarplusStrong kd = KarplusStrong::new((double*)kbd, 50UL, 0.996);
+        kf.pluck((const float*)g_gx, 50UL);
+        kd.pluck((const double*)g_cx, 50UL);
         worst = 0.0;
         i = 0UL;
         while (i < 1000UL) {
-            double e = (double)kf.process() - kd.process();
+            double e = (double)kf.next() - kd.next();
             if (e < 0.0) e = -e;
             if (e > worst) worst = e;
             i = i + 1UL;
@@ -879,7 +879,7 @@ void t_dsp_f32_more() {
         conv2d_f32((const float*)g_gx, 64UL, 64UL, (const float*)gkf, 5UL, 5UL, (float*)g_gy1);
         ASSERT_TRUE(max_abs_diff_fd((const float*)g_gy1, (const double*)g_cy1, 4096UL) < 1e-6);
         i = 0UL;
-        while (i < 4096UL) { g_ga[i] = complex32_new(g_gx[i], (float)0.0); g_fa[i] = complex_new(g_cx[i], 0.0); i = i + 1UL; }
+        while (i < 4096UL) { g_ga[i] = Complex32::new(g_gx[i], (float)0.0); g_fa[i] = Complex::new(g_cx[i], 0.0); i = i + 1UL; }
         fft2d_f32((struct Complex32*)g_ga, 64UL, 64UL);
         fft2d((struct Complex*)g_fa, 64UL, 64UL);
         ASSERT_TRUE(max_diff32((const struct Complex32*)g_ga, (const struct Complex*)g_fa, 4096UL) < 1e-4);
@@ -893,7 +893,7 @@ void t_dsp_f32_more() {
         idct3_f32((const float*)g_gy1, (float*)g_gy2, 100UL);
         ASSERT_TRUE(max_abs_diff_ff((const float*)g_gy2, (const float*)g_gx, 100UL) < 1e-6);
         i = 0UL;
-        while (i < 64UL) { g_gb[i] = complex32_new(g_gx[i], g_gx[i + 64UL]); i = i + 1UL; }
+        while (i < 64UL) { g_gb[i] = Complex32::new(g_gx[i], g_gx[i + 64UL]); i = i + 1UL; }
         dft_f32((const struct Complex32*)g_gb, (struct Complex32*)g_ga, 64UL);
         fft_f32((struct Complex32*)g_gb, 64UL);
         ASSERT_TRUE(max_diff32f((const struct Complex32*)g_ga, (const struct Complex32*)g_gb, 64UL) < 1e-5);
@@ -901,7 +901,7 @@ void t_dsp_f32_more() {
         ASSERT_TRUE(near_d((double)g_gb[5].re, (double)g_gx[5], 1e-6) && near_d((double)g_gb[5].im, (double)g_gx[69], 1e-6));
         dft_real_f32((const float*)g_gx, (struct Complex32*)g_ga, 64UL);
         i = 0UL;
-        while (i < 64UL) { g_gb[i] = complex32_new(g_gx[i], (float)0.0); i = i + 1UL; }
+        while (i < 64UL) { g_gb[i] = Complex32::new(g_gx[i], (float)0.0); i = i + 1UL; }
         fft_f32((struct Complex32*)g_gb, 64UL);
         ASSERT_TRUE(max_diff32f((const struct Complex32*)g_ga, (const struct Complex32*)g_gb, 64UL) < 1e-5);
     }
@@ -911,29 +911,29 @@ void t_dsp_f32_more() {
 // block ops and filters, window helpers, resampling, z-transform phase.
 void t_dsp_extras() {
     unsafe {
-        struct Biquad id = biquad_new(1.0, 0.0, 0.0, 0.0, 0.0);
+        struct Biquad id = Biquad::new(1.0, 0.0, 0.0, 0.0, 0.0);
         ASSERT_TRUE(near_d(id.process(0.75), 0.75, 0.0));
-        struct Biquad bp = biquad_bandpass(48000.0, 1000.0, 2.0);
-        ASSERT_TRUE(near_d(biquad_response_mag(&bp, 48000.0, 1000.0), 1.0, 1e-6));   // 0 dB at f0
-        ASSERT_TRUE(biquad_response_mag(&bp, 48000.0, 100.0) < 0.2);
-        ASSERT_TRUE(near_d(biquad_response_phase(&bp, 48000.0, 1000.0), 0.0, 1e-6));
-        struct Biquad ap = biquad_allpass(48000.0, 2000.0, 0.7);
-        ASSERT_TRUE(near_d(biquad_response_mag(&ap, 48000.0, 500.0), 1.0, 1e-9));
-        ASSERT_TRUE(near_d(biquad_response_mag(&ap, 48000.0, 9000.0), 1.0, 1e-9));
-        ASSERT_TRUE(near_d(abs_d(biquad_response_phase(&ap, 48000.0, 2000.0)), PI_D(), 1e-6));
-        struct Biquad ls = biquad_lowshelf(48000.0, 300.0, 1.0, 6.0);
-        ASSERT_TRUE(near_d(biquad_response_mag(&ls, 48000.0, 1.0), pow_d(10.0, 6.0 / 20.0), 1e-3));
-        ASSERT_TRUE(near_d(biquad_response_mag(&ls, 48000.0, 20000.0), 1.0, 1e-2));
-        struct FBiquad fb = biquad_to_fixed(id);
+        struct Biquad bp = Biquad::bandpass(48000.0, 1000.0, 2.0);
+        ASSERT_TRUE(near_d(bp.response_mag(48000.0, 1000.0), 1.0, 1e-6));   // 0 dB at f0
+        ASSERT_TRUE(bp.response_mag(48000.0, 100.0) < 0.2);
+        ASSERT_TRUE(near_d(bp.response_phase(48000.0, 1000.0), 0.0, 1e-6));
+        struct Biquad ap = Biquad::allpass(48000.0, 2000.0, 0.7);
+        ASSERT_TRUE(near_d(ap.response_mag(48000.0, 500.0), 1.0, 1e-9));
+        ASSERT_TRUE(near_d(ap.response_mag(48000.0, 9000.0), 1.0, 1e-9));
+        ASSERT_TRUE(near_d(abs_d(ap.response_phase(48000.0, 2000.0)), PI_D(), 1e-6));
+        struct Biquad ls = Biquad::lowshelf(48000.0, 300.0, 1.0, 6.0);
+        ASSERT_TRUE(near_d(ls.response_mag(48000.0, 1.0), pow_d(10.0, 6.0 / 20.0), 1e-3));
+        ASSERT_TRUE(near_d(ls.response_mag(48000.0, 20000.0), 1.0, 1e-2));
+        struct FBiquad fb = FBiquad::from(id);
         ASSERT_TRUE(near_d(fixed_to_float(fb.process(fixed_from_float(0.5))), 0.5, 1e-6));
-        struct Biquad32 b32 = biquad_new_f32((float)0.5, (float)0.0, (float)0.0, (float)0.0, (float)0.0);
+        struct Biquad32 b32 = Biquad32::new((float)0.5, (float)0.0, (float)0.0, (float)0.0, (float)0.0);
         ASSERT_TRUE(b32.process((float)3.0) == (float)1.5);
 
-        Complex z = complex_new(3.0, -4.0);
+        Complex z = Complex::new(3.0, -4.0);
         ASSERT_TRUE(near_d(z.conj().im, 4.0, 0.0));
         ASSERT_TRUE(near_d(z.neg().re, -3.0, 0.0));
-        ASSERT_TRUE(near_d(complex_new(0.0, 1.0).arg(), PI_D() / 2.0, 1e-12));
-        Complex32 z32 = complex_to_f32(z);
+        ASSERT_TRUE(near_d(Complex::new(0.0, 1.0).arg(), PI_D() / 2.0, 1e-12));
+        Complex32 z32 = Complex32::from(z);
         ASSERT_TRUE(z32.re == (float)3.0 && z32.im == (float)-4.0);
         ASSERT_TRUE(near_d((double)z32.conj().im, 4.0, 0.0));
         ASSERT_TRUE(near_d((double)z32.neg().re, -3.0, 0.0));
@@ -994,7 +994,7 @@ void t_dsp_extras() {
         ASSERT_FALSE(dsp_is_pow2(48UL));
         Complex sig[8];
         i = 0;
-        while (i < 8) { sig[i] = complex_new((double)i, 0.0); i = i + 1; }
+        while (i < 8) { sig[i] = Complex::new((double)i, 0.0); i = i + 1; }
         ASSERT_EQ(fft_serial(&sig[0], 8UL), 1);
         ASSERT_EQ(ifft_serial(&sig[0], 8UL), 1);
         ASSERT_TRUE(near_d(sig[5].re, 5.0, 1e-9));
@@ -1004,7 +1004,7 @@ void t_dsp_extras() {
         coeffs[0] = fixed_from_float(0.5);
         coeffs[1] = fixed_from_float(0.5);
         hist[0] = (Fixed)0; hist[1] = (Fixed)0;
-        struct FFirFilter ff = ffir_init(&coeffs[0], 2UL, &hist[0]);
+        struct FFirFilter ff = FFirFilter::new(&coeffs[0], 2UL, &hist[0]);
         ff.process(fixed_from_int(2));
         ASSERT_TRUE(near_d(fixed_to_float(ff.process(fixed_from_int(4))), 3.0, 1e-5));   // average
         Fixed ib[1];
@@ -1015,23 +1015,23 @@ void t_dsp_extras() {
         ia[0] = fixed_from_float(1.0);
         ia[1] = fixed_from_float(-0.5);             // y = 0.5 x + 0.5 y[-1]
         xh[0] = (Fixed)0; yh[0] = (Fixed)0; yh[1] = (Fixed)0;
-        struct FIirFilter fi = fiir_init(&ib[0], 1UL, &ia[0], 2UL, &xh[0], &yh[0]);
+        struct FIirFilter fi = FIirFilter::new(&ib[0], 1UL, &ia[0], 2UL, &xh[0], &yh[0]);
         ASSERT_TRUE(near_d(fixed_to_float(fi.process(fixed_from_int(1))), 0.5, 1e-5));
         ASSERT_TRUE(near_d(fixed_to_float(fi.process(fixed_from_int(1))), 0.75, 1e-5));
         Fixed ch[3];
         i = 0;
         while (i < 3) { ch[i] = (Fixed)0; i = i + 1; }
-        struct FCombFF cf = comb_ff_init_fixed(&ch[0], 2UL, fixed_from_float(0.5));
+        struct FCombFF cf = FCombFF::new(&ch[0], 2UL, fixed_from_float(0.5));
         ASSERT_TRUE(near_d(fixed_to_float(cf.process(fixed_from_int(1))), 1.0, 1e-5));
         cf.process((Fixed)0);
         ASSERT_TRUE(near_d(fixed_to_float(cf.process((Fixed)0)), 0.5, 1e-5));   // the echo
         Fixed kb[4];
         i = 0;
         while (i < 4) { kb[i] = fixed_from_float(0.25 * (double)(i + 1)); i = i + 1; }
-        struct FKarplusStrong ks = ks_init_fixed(&kb[0], 4UL, fixed_from_float(0.99));
-        ASSERT_TRUE(ks.process() != (Fixed)0);
+        struct FKarplusStrong ks = FKarplusStrong::new(&kb[0], 4UL, fixed_from_float(0.99));
+        ASSERT_TRUE(ks.next() != (Fixed)0);
 
-        struct AudioBuffer ab = audio_buf_init(1UL);
+        struct AudioBuffer ab = AudioBuffer::new(1UL);
         Fixed frames[3];
         frames[0] = fixed_from_int(1); frames[1] = fixed_from_int(2); frames[2] = fixed_from_int(3);
         ASSERT_EQ(ab.write_frames(&frames[0], 3UL), 3);
@@ -1044,8 +1044,271 @@ void t_dsp_extras() {
     }
 }
 
+// ── Streaming traits (sample_filter.h) ───────────────────────────────────────
+// Each check is written once against a role and run on every conforming type
+// in all three sample types (double, float, Q8.24). Samples are compared as
+// doubles; a Q8.24 value converts exactly, so fixed point must match exactly.
+
+#define TR_N 300UL
+
+// A sample as a double (Q8.24 scaled to its value), like sample_one's test.
+generic<S>
+double tr_val(S x) {
+    if ((S)0.5 == (S)0) { return (double)x / 16777216.0; }
+    return (double)x;
+}
+
+// The largest |a[i] - b[i]|, i < n.
+generic<S>
+double tr_diff(const &S a, const &S b, unsigned long n) {
+    double worst = 0.0;
+    unsigned long i = 0UL;
+    while (i < n) {
+        double e;
+        unsafe { e = tr_val(a[i]) - tr_val(b[i]); }
+        if (e < 0.0) e = -e;
+        if (e > worst) worst = e;
+        i = i + 1UL;
+    }
+    return worst;
+}
+
+// SampleFilter: the impulse response is repeatable (reset works), and
+// process_block (in place) matches process() sample by sample from a reset
+// state. Returns the worst difference.
+generic<F: SampleFilter, S>
+double tr_check(&F f, const &S x) {
+    S h1[16];
+    S h2[16];
+    S y1[TR_N];
+    S y2[TR_N];
+    filter_impulse_response(f, &h1[0], 16UL);
+    filter_impulse_response(f, &h2[0], 16UL);
+    double worst = 0.0;
+    unsafe {
+        worst = tr_diff(&h1[0], &h2[0], 16UL);
+        f.reset();
+        unsigned long i = 0UL;
+        while (i < TR_N) { y1[i] = f.process(x[i]); y2[i] = x[i]; i = i + 1UL; }
+        f.reset();
+        f.process_block(&y2[0], &y2[0], TR_N);
+        double e = tr_diff(&y1[0], &y2[0], TR_N);
+        if (e > worst) worst = e;
+    }
+    return worst;
+}
+
+// FilterChain: chains of chains, ((a b) c) and (a (b c)), equal the three
+// stages one after the other, by process() and by process_block(); each
+// chain is itself a SampleFilter (tr_check). Stages are copied into the
+// chains but share their caller-owned history, so everything runs in turn
+// from a reset.
+generic<S, A: SampleFilter, B: SampleFilter, C: SampleFilter>
+double tr_chain_check(A a, B b, C c, const &S x) {
+    S ref[TR_N];
+    S y[TR_N];
+    a.reset();
+    b.reset();
+    c.reset();
+    unsigned long i = 0UL;
+    unsafe {
+        while (i < TR_N) { ref[i] = c.process(b.process(a.process(x[i]))); i = i + 1UL; }
+    }
+    struct FilterChain<S, A, B> ab = FilterChain::of(a, b);
+    struct FilterChain<S, struct FilterChain<S, A, B>, C> ab_c = FilterChain::of(ab, c);
+    struct FilterChain<S, B, C> bc = FilterChain::of(b, c);
+    struct FilterChain<S, A, struct FilterChain<S, B, C>> a_bc = FilterChain::of(a, bc);
+    double worst = 0.0;
+    unsafe {
+        ab_c.reset();
+        ab_c.process_block(x, &y[0], TR_N);
+        double e = tr_diff(&ref[0], &y[0], TR_N);
+        if (e > worst) worst = e;
+        a_bc.reset();
+        i = 0UL;
+        while (i < TR_N) { y[i] = a_bc.process(x[i]); i = i + 1UL; }
+        e = tr_diff(&ref[0], &y[0], TR_N);
+        if (e > worst) worst = e;
+        a_bc.reset();
+        a_bc.process_block(x, &y[0], TR_N);
+        e = tr_diff(&ref[0], &y[0], TR_N);
+        if (e > worst) worst = e;
+    }
+    double e2 = tr_check(&ab_c, x);
+    if (e2 > worst) worst = e2;
+    e2 = tr_check(&a_bc, x);
+    if (e2 > worst) worst = e2;
+    return worst;
+}
+
+// SampleGenerator: generate_block matches next() called n times. g1 and g2
+// are the same generator on two delay lines plucked alike; y1 and y2 hold
+// TR_N samples. Returns the worst difference, or -1 if the output is silent.
+generic<G: SampleGenerator, S>
+double tr_gen_check(&G g1, &G g2, &S y1, &S y2) {
+    generate_block(g1, y1, TR_N);
+    double peak = 0.0;
+    unsigned long i = 0UL;
+    while (i < TR_N) {
+        S v = g2.next();
+        unsafe { y2[i] = v; }
+        double m = tr_val(v);
+        if (m < 0.0) m = -m;
+        if (m > peak) peak = m;
+        i = i + 1UL;
+    }
+    if (peak == 0.0) return -1.0;
+    return tr_diff(y1, y2, TR_N);
+}
+
+void t_sample_filter_traits() {
+    unsafe {
+        double x[TR_N];
+        float xf[TR_N];
+        Fixed xq[TR_N];
+        unsigned long i = 0UL;
+        while (i < TR_N) {
+            x[i] = rnd() * 2.0 - 1.0;
+            xf[i] = (float)x[i];
+            xq[i] = fixed_from_float(x[i] * 0.25);
+            i = i + 1UL;
+        }
+
+        // double: FIR, IIR, Biquad, CombFF, CombFB
+        double taps[5];
+        taps[0] = 0.1; taps[1] = -0.2; taps[2] = 0.4; taps[3] = 0.25; taps[4] = 0.05;
+        double fh[5];
+        struct FirFilter fir = FirFilter::new((const double*)taps, 5UL, (double*)fh);
+        struct Biquad bq = Biquad::lowpass(48000.0, 2000.0, 0.7071);
+        double bc[3]; double ac[3];
+        bc[0] = bq.b0; bc[1] = bq.b1; bc[2] = bq.b2; ac[0] = 1.0; ac[1] = bq.a1; ac[2] = bq.a2;
+        double xh[3]; double yh[3];
+        struct IirFilter iir = IirFilter::new((const double*)bc, 3UL, (const double*)ac, 3UL, (double*)xh, (double*)yh);
+        double ch1[7]; double ch2[7];
+        struct CombFF cff = CombFF::new((double*)ch1, 7UL, 0.5);
+        struct CombFB cfb = CombFB::new((double*)ch2, 7UL, 0.5);
+        ASSERT_TRUE(tr_check(&fir, &x[0]) < 1e-12);
+        ASSERT_TRUE(tr_check(&iir, &x[0]) < 1e-12);
+        ASSERT_TRUE(tr_check(&bq, &x[0]) < 1e-12);   // block form may use FMA
+        ASSERT_TRUE(tr_check(&cff, &x[0]) < 1e-15);
+        ASSERT_TRUE(tr_check(&cfb, &x[0]) < 1e-15);
+
+        // impulse responses: a FIR's is its taps, a feedback comb's decays by
+        // 'gain' every 'delay' samples, an IIR with a biquad's coefficients is
+        // that biquad
+        double h[16];
+        filter_impulse_response(&fir, &h[0], 16UL);
+        ASSERT_TRUE(near_d(h[2], 0.4, 1e-15));
+        ASSERT_TRUE(near_d(h[4], 0.05, 1e-15));
+        ASSERT_TRUE(near_d(h[5], 0.0, 1e-15));
+        filter_impulse_response(&cfb, &h[0], 16UL);
+        ASSERT_TRUE(near_d(h[0], 1.0, 1e-15));
+        ASSERT_TRUE(near_d(h[7], 0.5, 1e-15));
+        ASSERT_TRUE(near_d(h[14], 0.25, 1e-15));
+        ASSERT_TRUE(near_d(h[8], 0.0, 1e-15));
+        double hb[16];
+        filter_impulse_response(&iir, &h[0], 16UL);
+        filter_impulse_response(&bq, &hb[0], 16UL);
+        double worst = 0.0;
+        i = 0UL;
+        while (i < 16UL) { double e = h[i] - hb[i]; if (e < 0.0) e = -e; if (e > worst) worst = e; i = i + 1UL; }
+        ASSERT_TRUE(worst < 1e-12);
+        // step response of a low-pass settles at its DC gain (1)
+        double s[400];
+        filter_step_response(&bq, &s[0], 400UL);
+        ASSERT_TRUE(near_d(s[399], 1.0, 1e-6));
+
+        // chains of chains == the stages one after the other
+        struct Biquad hp = Biquad::highpass(48000.0, 200.0, 0.7071);
+        ASSERT_TRUE(tr_chain_check(hp, fir, cfb, &x[0]) < 1e-12);
+        ASSERT_TRUE(tr_chain_check(iir, cff, bq, &x[0]) < 1e-12);
+
+        // float
+        float tapsf[5];
+        i = 0UL;
+        while (i < 5UL) { tapsf[i] = (float)taps[i]; i = i + 1UL; }
+        float fhf[5];
+        struct FirFilter32 fir32 = FirFilter32::new((const float*)tapsf, 5UL, (float*)fhf);
+        struct Biquad32 bq32 = Biquad32::from(bq);
+        float bcf[3]; float acf[3];
+        i = 0UL;
+        while (i < 3UL) { bcf[i] = (float)bc[i]; acf[i] = (float)ac[i]; i = i + 1UL; }
+        float xhf[3]; float yhf[3];
+        struct IirFilter32 iir32 = IirFilter32::new((const float*)bcf, 3UL, (const float*)acf, 3UL, (float*)xhf, (float*)yhf);
+        float cf1[7]; float cf2[7];
+        struct CombFF32 cff32 = CombFF32::new((float*)cf1, 7UL, (float)0.5);
+        struct CombFB32 cfb32 = CombFB32::new((float*)cf2, 7UL, (float)0.5);
+        ASSERT_TRUE(tr_check(&fir32, &xf[0]) < 1e-5);
+        ASSERT_TRUE(tr_check(&iir32, &xf[0]) < 1e-5);
+        ASSERT_TRUE(tr_check(&bq32, &xf[0]) < 1e-4);
+        ASSERT_TRUE(tr_check(&cff32, &xf[0]) < 1e-6);
+        ASSERT_TRUE(tr_check(&cfb32, &xf[0]) < 1e-6);
+        float hf[16];
+        filter_impulse_response(&fir32, &hf[0], 16UL);
+        ASSERT_TRUE(near_d((double)hf[3], 0.25, 1e-7));
+        float yf1[TR_N];
+        filter_step_response(&bq32, &yf1[0], TR_N);
+        ASSERT_TRUE(near_d((double)yf1[TR_N - 1UL], 1.0, 1e-3));
+        ASSERT_TRUE(tr_chain_check(cff32, cfb32, fir32, &xf[0]) < 1e-5);
+        ASSERT_TRUE(tr_chain_check(bq32, iir32, cff32, &xf[0]) < 1e-4);
+
+        // fixed point
+        Fixed tq[5];
+        i = 0UL;
+        while (i < 5UL) { tq[i] = fixed_from_float(taps[i]); i = i + 1UL; }
+        Fixed fq[5];
+        struct FFirFilter firq = FFirFilter::new(&tq[0], 5UL, &fq[0]);
+        struct FBiquad bqq = FBiquad::from(bq);
+        Fixed bq3[3]; Fixed aq3[3];
+        i = 0UL;
+        while (i < 3UL) { bq3[i] = fixed_from_float(bc[i]); aq3[i] = fixed_from_float(ac[i]); i = i + 1UL; }
+        Fixed xhq[3]; Fixed yhq[3];
+        struct FIirFilter iirq = FIirFilter::new(&bq3[0], 3UL, &aq3[0], 3UL, &xhq[0], &yhq[0]);
+        Fixed cq1[7]; Fixed cq2[7];
+        struct FCombFF cffq = FCombFF::new(&cq1[0], 7UL, fixed_from_float(0.5));
+        struct FCombFB cfbq = FCombFB::new(&cq2[0], 7UL, fixed_from_float(0.5));
+        // fixed point is exact: block == per sample, chains == stages
+        ASSERT_TRUE(tr_check(&firq, &xq[0]) == 0.0);
+        ASSERT_TRUE(tr_check(&bqq, &xq[0]) == 0.0);
+        ASSERT_TRUE(tr_check(&iirq, &xq[0]) == 0.0);
+        ASSERT_TRUE(tr_check(&cffq, &xq[0]) == 0.0);
+        ASSERT_TRUE(tr_check(&cfbq, &xq[0]) == 0.0);
+        Fixed hq[16];
+        filter_impulse_response(&firq, &hq[0], 16UL);
+        ASSERT_TRUE(near_d(fixed_to_float(hq[2]), 0.4, 1e-6));
+        Fixed sq[TR_N];
+        filter_step_response(&bqq, &sq[0], TR_N);
+        ASSERT_TRUE(near_d(fixed_to_float(sq[TR_N - 1UL]), 1.0, 1e-3));
+        ASSERT_TRUE(tr_chain_check(iirq, firq, cfbq, &xq[0]) == 0.0);
+        ASSERT_TRUE(tr_chain_check(cffq, bqq, firq, &xq[0]) == 0.0);
+
+        // generators: the Karplus-Strong strings, two of each plucked alike
+        double kd1[37]; double kd2[37];
+        float kf1[37]; float kf2[37];
+        Fixed kq1[37]; Fixed kq2[37];
+        struct KarplusStrong ksd1 = KarplusStrong::new((double*)kd1, 37UL, 0.995);
+        struct KarplusStrong ksd2 = KarplusStrong::new((double*)kd2, 37UL, 0.995);
+        struct KarplusStrong32 ksf1 = KarplusStrong32::new((float*)kf1, 37UL, (float)0.995);
+        struct KarplusStrong32 ksf2 = KarplusStrong32::new((float*)kf2, 37UL, (float)0.995);
+        struct FKarplusStrong ksq1 = FKarplusStrong::new(&kq1[0], 37UL, fixed_from_float(0.995));
+        struct FKarplusStrong ksq2 = FKarplusStrong::new(&kq2[0], 37UL, fixed_from_float(0.995));
+        ksd1.pluck((const double*)x, 37UL);
+        ksd2.pluck((const double*)x, 37UL);
+        ksf1.pluck((const float*)xf, 37UL);
+        ksf2.pluck((const float*)xf, 37UL);
+        ksq1.pluck((const Fixed*)xq, 37UL);
+        ksq2.pluck((const Fixed*)xq, 37UL);
+        double gd1[TR_N]; double gd2[TR_N];
+        float gf1[TR_N]; float gf2[TR_N];
+        Fixed gq1[TR_N]; Fixed gq2[TR_N];
+        ASSERT_TRUE(tr_gen_check(&ksd1, &ksd2, &gd1[0], &gd2[0]) == 0.0);
+        ASSERT_TRUE(tr_gen_check(&ksf1, &ksf2, &gf1[0], &gf2[0]) == 0.0);
+        ASSERT_TRUE(tr_gen_check(&ksq1, &ksq2, &gq1[0], &gq2[0]) == 0.0);
+    }
+}
+
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("fft/dft", t_fft);
         t.add("fft large/batch/real", t_fft_large);
@@ -1060,6 +1323,7 @@ int main() {
         t.add("dsp f32", t_dsp_f32);
         t.add("iir/comb/imaging/dct/dft f32", t_dsp_f32_more);
         t.add("dsp extras (biquad designs, fixed ops, resample)", t_dsp_extras);
+        t.add("streaming traits (filters, chains, generators, impulse/step)", t_sample_filter_traits);
     }
     t.run();
     t.print_summary();

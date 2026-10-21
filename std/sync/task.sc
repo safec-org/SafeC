@@ -4,7 +4,7 @@
 
 namespace std {
 
-inline struct TaskScheduler task_sched_init() {
+inline struct TaskScheduler TaskScheduler::new() {
     struct TaskScheduler s;
     s.count   = 0;
     s.current = 0;

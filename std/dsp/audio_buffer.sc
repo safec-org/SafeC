@@ -4,7 +4,7 @@
 
 namespace std {
 
-inline struct AudioBuffer audio_buf_init(unsigned long channels) {
+inline struct AudioBuffer AudioBuffer::new(unsigned long channels) {
     struct AudioBuffer ab;
     ab.cap_frames = (unsigned long)AUDIO_BUF_FRAMES;
     ab.channels   = channels;

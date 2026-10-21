@@ -8,9 +8,11 @@
 // 8-bit-per-channel, non-interlaced PNGs with color type 0 (grayscale), 2
 // (RGB), or 6 (RGBA) — the overwhelming majority of PNGs in practice.
 // Palette (color type 3), 16-bit depth, interlacing (Adam7), and ancillary
-// chunks (gAMA, tRNS, etc.) are not implemented; gui_load_png() fails
+// chunks (gAMA, tRNS, etc.) are not implemented; GuiImage::load_png() fails
 // cleanly (returns 0) rather than misdecoding them. Chunk CRCs are not
 // verified (decoding, not validating, is the goal here).
+
+#include <std/gui/gui.h>
 
 namespace std {
 
@@ -18,17 +20,19 @@ struct GuiImage {
     &heap unsigned char pixels; // width*height*4 bytes, RGBA8888 (matches GuiWindow's own buffer format)
     int width;
     int height;
+
+    // Decodes a PNG file's bytes (already read into memory) into this
+    // image in place ('struct GuiImage img; img.load_png(data, size)').
+    // Returns 1 on success, 0 on failure (unsupported feature or malformed
+    // input) — the image is left zeroed on failure.
+    int  load_png(const &unsigned char data, unsigned long size);
+
+    // Draws this image with its top-left at (x, y) into 'win' (straight
+    // copy through GuiWindow::set_pixel(), no blending) — works with any
+    // GuiImage, PNG-decoded or otherwise constructed.
+    void draw(&GuiWindow win, int x, int y) const;
+
+    void free();
 };
-
-// Decodes a PNG file's bytes (already read into memory) into 'out'.
-// Returns 1 on success, 0 on failure (unsupported feature or malformed
-// input) — 'out' is left zeroed on failure.
-int gui_load_png(const &unsigned char data, unsigned long size, &GuiImage out);
-
-// Draws 'img' with its top-left at (x, y) into 'win' (see gui_draw.h) —
-// works with any GuiImage, PNG-decoded or otherwise constructed.
-void gui_draw_image(&GuiWindow win, int x, int y, const &GuiImage img);
-
-void gui_image_free(&GuiImage img);
 
 } // namespace std

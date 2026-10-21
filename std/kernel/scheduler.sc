@@ -4,7 +4,7 @@
 
 namespace std {
 
-inline struct Scheduler sched_init() {
+inline struct Scheduler Scheduler::new() {
     struct Scheduler s;
     s.count   = 0;
     s.current = -1;

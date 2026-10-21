@@ -12,7 +12,7 @@ static unsigned int mmio_field_mask_(int lo, int hi) {
     return ((unsigned int)1 << width) - (unsigned int)1;
 }
 
-inline struct MmioReg mmio_reg(&volatile unsigned int addr) {
+inline struct MmioReg MmioReg::at(&volatile unsigned int addr) {
     struct MmioReg r;
     r.addr = addr;
     return r;

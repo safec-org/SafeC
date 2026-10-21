@@ -23,12 +23,17 @@ struct TmpfsCtx {
     unsigned char     data[TMPFS_MAX_DATA];
     unsigned long     data_used;
     int               inode_count;
+
+    // Initialise this context in place (zero-fills, creates the root).
+    void init();
+
+    // ── FileSystem (vfs.h): mount with vfs.mount(mountpoint, &ctx) ─────────
+    int           open(const &char path, int flags, &VfsNode node_out);
+    unsigned long read(unsigned long inode, unsigned long offset, &unsigned char buf, unsigned long len);
+    int           readdir(unsigned long inode, fn void(&VfsNode, ?&void) cb, ?&void user);
+    unsigned long write(unsigned long inode, unsigned long offset, const &unsigned char buf, unsigned long len);
+    int           unlink(const &char path);
+    int           mkdir(const &char path);
 };
-
-// Initialise a tmpfs context (zero-fills).
-void tmpfs_init(&TmpfsCtx ctx);
-
-// Return VfsOps for the tmpfs driver (ctx must be a TmpfsCtx*).
-struct VfsOps tmpfs_ops();
 
 } // namespace std

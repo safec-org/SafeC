@@ -37,4 +37,13 @@ struct String value_to_yaml(const &Value v);
 // whatever was parsed before the error.
 struct Value yaml_parse(const &char text, ?&int ok);
 
+// The YAML backend as a Format (see value.h): v.encode(Yaml::new()),
+// Value::decode(Yaml::new(), text, &ok) — the same as yaml_write / yaml_parse.
+struct Yaml {
+    int unused_;
+    static struct Yaml new();
+    void         write(const &Value v, &String out) const;
+    struct Value parse(const &char text, ?&int ok) const;
+};
+
 } // namespace std

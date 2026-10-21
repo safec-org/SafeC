@@ -7,7 +7,7 @@ namespace std {
 
 extern void* memcpy(void* dst, const void* src, size_t n);
 
-inline struct Mailbox mailbox_init(int owner_pid) {
+inline struct Mailbox Mailbox::new(int owner_pid) {
     struct Mailbox mb;
     mb.head      = 0;
     mb.tail      = 0;

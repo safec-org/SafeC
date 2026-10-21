@@ -8,7 +8,7 @@
 
 namespace std {
 
-#define GUI_FB_QUEUE_CAP 32   // injected events waiting for gui_poll_event()
+#define GUI_FB_QUEUE_CAP 32   // injected events waiting for GuiWindow::poll_event()
 
 struct GuiFbConfig {
     &volatile unsigned char base;  // linear framebuffer memory (physical/virtual base address)
@@ -19,13 +19,13 @@ struct GuiFbConfig {
     int redShift; int greenShift; int blueShift; // bit position of each channel's LSB (32bpp only; ignored for 16bpp RGB565)
 };
 
-// Must be called once, before gui_create_window(), with the real
+// Must be called once, before GuiWindow::create(), with the real
 // framebuffer's parameters (see struct GuiFbConfig's field comments).
-// Without it gui_create_window() fails (its 'platform' is null).
+// Without it GuiWindow::create() fails (its 'platform' is null).
 void gui_fb_configure(struct GuiFbConfig cfg);
 
 // Called by a target's own input driver/ISR with whatever it decodes (e.g.
-// a PS/2 scancode translated to a GuiEvent); gui_poll_event() hands it back
+// a PS/2 scancode translated to a GuiEvent); GuiWindow::poll_event() hands it back
 // out. Dropped when GUI_FB_QUEUE_CAP events are already waiting.
 void gui_fb_inject_event(&GuiWindow win, struct GuiEvent ev);
 

@@ -19,6 +19,12 @@ struct AesCtx {
     int           rounds;            // 10 (AES-128) or 14 (AES-256)
     unsigned char iv[AES_BLOCK_SIZE]; // CBC initialisation vector
 
+    // An AES-128 context from a 16-byte key (IV zeroed).
+    static struct AesCtx new_128(const &unsigned char key);
+
+    // An AES-256 context from a 32-byte key (IV zeroed).
+    static struct AesCtx new_256(const &unsigned char key);
+
     // Encrypt one 16-byte block in-place (ECB).
     void encrypt_block(&unsigned char block);
 
@@ -57,11 +63,5 @@ struct AesCtx {
     // reused by a later, unrelated function, or in a crash dump).
     void destroy();
 };
-
-// Initialise AES-128 context from a 16-byte key.
-struct AesCtx aes128_init(const &unsigned char key);
-
-// Initialise AES-256 context from a 32-byte key.
-struct AesCtx aes256_init(const &unsigned char key);
 
 } // namespace std

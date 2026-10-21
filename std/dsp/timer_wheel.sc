@@ -1,21 +1,21 @@
 #pragma once
 #include <std/dsp/timer_wheel.h>
 
-// ── timer_wheel_init ──────────────────────────────────────────────────────────
+// ── TimerWheel::init ──────────────────────────────────────────────────────────
 // Zero-initialise the wheel.  Must be called before any other operation.
 namespace std {
 
-inline void timer_wheel_init(&TimerWheel tw) {
-    tw.current_tick = 0;
+inline void TimerWheel::init() {
+    self.current_tick = 0;
     int i = 0;
     while (i < WHEEL_TIMERS) {
         unsafe {
-            tw.timers[i].used     = 0;
-            tw.timers[i].periodic = 0;
-            tw.timers[i].period   = 0;
-            tw.timers[i].expires  = 0;
-            tw.timers[i].callback = (void*)0;
-            tw.timers[i].ctx      = (void*)0;
+            self.timers[i].used     = 0;
+            self.timers[i].periodic = 0;
+            self.timers[i].period   = 0;
+            self.timers[i].expires  = 0;
+            self.timers[i].callback = (void*)0;
+            self.timers[i].ctx      = (void*)0;
         }
         i = i + 1;
     }

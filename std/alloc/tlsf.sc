@@ -79,7 +79,7 @@ void tlsf_mapping_(unsigned long size, &int fl, &int sl) {
 
 // Physical successor of 'blk' inside the allocator's buffer, or null for
 // the last block. Every split/merge must re-point the successor's
-// prev_phys, or a later free() coalesces through a stale header.
+// prev_phys, or a later dealloc() coalesces through a stale header.
 static ?&TlsfBlock tlsf_next_phys_(&TlsfBlock blk, &TlsfAllocator a) {
     unsigned long end;
     unsigned long limit;
@@ -197,55 +197,51 @@ void* TlsfAllocator::find_(unsigned long size) {
     }
 }
 
-struct TlsfAllocator tlsf_init(&unsigned char buffer, unsigned long cap) {
-    struct TlsfAllocator a;
-    unsafe { a.base = (&heap void)buffer; }
-    a.owned     = 0;
-    a.cap       = cap;
-    a.fl_bitmap = (unsigned int)0;
+// Empty free lists, then the whole buffer as one free block (none when
+// cap can't hold a header).
+void TlsfAllocator::reset() {
+    self.fl_bitmap = (unsigned int)0;
     unsafe {
-        memset((void*)a.sl_bitmap, 0, sizeof(a.sl_bitmap));
-        memset((void*)a.blocks, 0, sizeof(a.blocks));
+        memset((void*)self.sl_bitmap, 0, sizeof(self.sl_bitmap));
+        memset((void*)self.blocks, 0, sizeof(self.blocks));
     }
     unsigned long hdr = tlsf_hdr_size_();
-    if (cap > hdr) {
+    if (self.cap > hdr) {
         unsafe {
-            struct TlsfBlock* blk = (struct TlsfBlock*)buffer;
-            blk->size      = cap - hdr;
+            struct TlsfBlock* blk = (struct TlsfBlock*)self.base;
+            blk->size      = self.cap - hdr;
             blk->prev_phys = (void*)0;
             blk->next_free = (void*)0;
             blk->prev_free = (void*)0;
-            a.insert_(&(*blk));
+            self.insert_(&(*blk));
         }
     }
+}
+
+struct TlsfAllocator TlsfAllocator::over(&unsigned char buffer, unsigned long cap) {
+    struct TlsfAllocator a;
+    unsafe { a.base = (&heap void)buffer; }
+    a.owned = 0;
+    a.cap   = cap;
+    a.reset();
     return a;
 }
 
-struct TlsfAllocator tlsf_new(unsigned long cap) {
+struct TlsfAllocator TlsfAllocator::new(unsigned long cap) {
     struct TlsfAllocator a;
     unsafe { a.base = (&heap void)malloc(cap); }
     a.owned = 1;
-    a.cap       = cap;
-    a.fl_bitmap = (unsigned int)0;
-    unsafe {
-        memset((void*)a.sl_bitmap, 0, sizeof(a.sl_bitmap));
-        memset((void*)a.blocks, 0, sizeof(a.blocks));
-    }
-    unsigned long hdr = tlsf_hdr_size_();
-    if (cap > hdr) {
-        unsafe {
-            struct TlsfBlock* blk = (struct TlsfBlock*)a.base;
-            blk->size      = cap - hdr;
-            blk->prev_phys = (void*)0;
-            blk->next_free = (void*)0;
-            blk->prev_free = (void*)0;
-            a.insert_(&(*blk));
-        }
-    }
+    a.cap   = cap;
+    a.reset();
     return a;
 }
 
-&heap void TlsfAllocator::alloc(unsigned long size) {
+?&heap void TlsfAllocator::alloc(unsigned long size, unsigned long align) {
+    // Headers are 32 bytes and block sizes multiples of 8, so every block
+    // starts at an 8-aligned offset and payloads are 8-aligned: alignments
+    // up to 8 come free; above that would need padding blocks, so null.
+    if ((align & (align - 1UL)) != 0UL || align > 8UL) { return null; }
+    if (size > self.cap) { return null; }   // also keeps the rounding below from wrapping
     unsigned long hdr  = tlsf_hdr_size_();
     unsigned long min  = tlsf_min_block_();
     unsigned long aligned = (size + (unsigned long)7) & ~(unsigned long)7;
@@ -253,7 +249,7 @@ struct TlsfAllocator tlsf_new(unsigned long cap) {
 
     void* found = self.find_(aligned);
     if (found == (void*)0) {
-        return (&heap void)0;
+        return null;
     }
 
     unsafe {
@@ -273,14 +269,13 @@ struct TlsfAllocator tlsf_new(unsigned long cap) {
         }
 
         blk->set_used_();
-        return (&heap void)((unsigned long)blk + hdr);
+        return (?&heap void)((unsigned long)blk + hdr);
     }
 }
 
-void TlsfAllocator::free(&heap void ptr) {
-    unsafe {
-        if ((void*)ptr == (void*)0) { return; }
-    }
+void TlsfAllocator::dealloc(?&heap void ptr_ref) {
+    void* ptr = ptr_ref;
+    if (ptr == (void*)0) { return; }
     unsigned long hdr = tlsf_hdr_size_();
     unsafe {
         struct TlsfBlock* blk = (struct TlsfBlock*)((unsigned long)ptr - hdr);
@@ -288,10 +283,10 @@ void TlsfAllocator::free(&heap void ptr) {
         // blk's header lives in this allocator's own backing buffer for
         // the buffer's whole lifetime — freeing it never hands memory to
         // a system allocator that could clobber the free/used bit before
-        // a second free() reads it, so (unlike mem.sc's alloc()/dealloc())
+        // a second dealloc() reads it, so (unlike mem.sc's alloc()/dealloc())
         // this check is reliable without a quarantine.
         if (blk->is_free_() == 1) {
-            tlsf_abort_("free() called twice on the same pointer (double free)");
+            tlsf_abort_("dealloc() called twice on the same pointer (double free)");
             return;
         }
 

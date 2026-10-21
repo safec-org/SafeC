@@ -26,30 +26,34 @@ inline unsigned long PoolAllocator::header_size_() const {
     return (unsigned long)24;
 }
 
-inline struct PoolAllocator pool_init(&unsigned char buffer, unsigned long cap) {
+// The whole buffer as one free block. cap < hdr means the buffer can't even
+// hold one block header: writing one would overrun it, and 'cap - hdr'
+// would underflow. The pool is left empty (permanently exhausted) instead.
+inline void PoolAllocator::reset() {
+    unsigned long hdr = (unsigned long)24;
+    if (self.cap < hdr) {
+        self.head = (void*)0;
+        return;
+    }
+    unsafe {
+        struct PoolBlock* first = (struct PoolBlock*)self.base;
+        first->size    = self.cap - hdr;
+        first->is_free = 1;
+        first->next    = (void*)0;
+        self.head = (void*)first;
+    }
+}
+
+inline struct PoolAllocator PoolAllocator::over(&unsigned char buffer, unsigned long cap) {
     struct PoolAllocator a;
     unsafe { a.base = (&heap void)buffer; }
     a.owned = 0;
     a.cap  = cap;
-    unsigned long hdr = (unsigned long)24;
-    // cap < hdr means the caller's buffer can't even hold one block
-    // header: writing one would overrun it, and 'cap - hdr' would
-    // underflow. Leave the pool empty (permanently exhausted) instead.
-    if (cap < hdr) {
-        a.head = (void*)0;
-        return a;
-    }
-    unsafe {
-        struct PoolBlock* first = (struct PoolBlock*)buffer;
-        first->size = cap - hdr;
-        first->is_free = 1;
-        first->next    = (void*)0;
-        a.head = (void*)first;
-    }
+    a.reset();
     return a;
 }
 
-inline struct PoolAllocator pool_new(unsigned long cap) {
+inline struct PoolAllocator PoolAllocator::new(unsigned long cap) {
     struct PoolAllocator a;
     unsigned long hdr = (unsigned long)24;
     // Always malloc at least enough room for one block header, regardless
@@ -61,17 +65,16 @@ inline struct PoolAllocator pool_new(unsigned long cap) {
     unsafe { a.base = (&heap void)malloc(allocCap); }
     a.owned = 1;
     a.cap = allocCap;
-    unsafe {
-        struct PoolBlock* first = (struct PoolBlock*)a.base;
-        first->size    = allocCap - hdr;
-        first->is_free = 1;
-        first->next    = (void*)0;
-        a.head = (void*)first;
-    }
+    a.reset();
     return a;
 }
 
-&heap void PoolAllocator::alloc(unsigned long size) {
+?&heap void PoolAllocator::alloc(unsigned long size, unsigned long align) {
+    // Every block header sits at an 8-aligned offset (24-byte headers,
+    // sizes rounded to 8), so payloads are 8-aligned: alignments up to 8
+    // come free; above that would need padding blocks, so null instead.
+    if ((align & (align - 1UL)) != 0UL || align > 8UL) { return null; }
+    if (size > self.cap) { return null; }   // also keeps the rounding below from wrapping
     // Align size to 8 bytes
     unsigned long aligned = (size + (unsigned long)7) & ~(unsigned long)7;
     unsigned long hdr     = self.header_size_();
@@ -90,12 +93,12 @@ inline struct PoolAllocator pool_new(unsigned long cap) {
                     cur->next = (void*)split;
                 }
                 cur->is_free = 0;
-                return (&heap void)((unsigned long)cur + hdr);
+                return (?&heap void)((unsigned long)cur + hdr);
             }
             cur = (struct PoolBlock*)cur->next;
         }
     }
-    return (&heap void)0;
+    return null;
 }
 
 void PoolAllocator::dealloc(?&heap void ptr_ref) {

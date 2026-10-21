@@ -150,7 +150,7 @@ void json_write(const &Value v, &String out) {
 }
 
 inline struct String value_to_json(const &Value v) {
-    struct String out = string_new();
+    struct String out = String::new();
     json_write(v, &out);
     return out;
 }
@@ -159,7 +159,7 @@ inline struct String value_to_json(const &Value v) {
 // Plain recursive descent over a NUL-terminated C string. No exceptions in
 // this language, so failure propagates via a shared 'ok' flag every
 // sub-parser checks before doing any work — once it's 0, every remaining
-// call in the current parse becomes a cheap no-op that returns value_null().
+// call in the current parse becomes a cheap no-op that returns Value::null().
 
 struct JsonCursor_ {
     const char* text;
@@ -222,7 +222,7 @@ static unsigned int json_read_hex4_(&JsonCursor_ c) {
 
 static struct Value json_parse_string_raw_(&JsonCursor_ c) {
     // Caller already confirmed the opening '"'.
-    struct String out = string_new();
+    struct String out = String::new();
     json_eat_(c, '"');
     while (1) {
         int stillOk;
@@ -272,7 +272,7 @@ static struct Value json_parse_string_raw_(&JsonCursor_ c) {
             unsafe { out.push_char(ch); c->pos = c->pos + 1UL; }
         }
     }
-    struct Value v = value_string(out.as_ptr());
+    struct Value v = Value::from_str(out.as_ptr());
     out.free();
     return v;
 }
@@ -294,21 +294,21 @@ static struct Value json_parse_number_(&JsonCursor_ c) {
     }
     unsigned long len;
     unsafe { len = c->pos - start; }
-    if (len == 0UL) { unsafe { c->ok = 0; } return value_null(); }
+    if (len == 0UL) { unsafe { c->ok = 0; } return Value::null(); }
 
-    struct String tok = string_new();
+    struct String tok = String::new();
     struct String numStr;
-    unsafe { numStr = string_from_n(c->text + start, len); }
+    unsafe { numStr = String::from_n(c->text + start, len); }
     tok.push_str(&numStr);
     numStr.free();
     int ok = 0;
     struct Value v;
     if (isFloat) {
         double f = tok.parse_float(&ok);
-        v = value_float(f);
+        v = Value::from_float(f);
     } else {
         long long n = tok.parse_int(&ok);
-        v = value_int(n);
+        v = Value::from_int(n);
     }
     tok.free();
     if (ok == 0) { unsafe { c->ok = 0; } }
@@ -316,7 +316,7 @@ static struct Value json_parse_number_(&JsonCursor_ c) {
 }
 
 static struct Value json_parse_array_(&JsonCursor_ c) {
-    struct Value arr = value_array();
+    struct Value arr = Value::array();
     json_eat_(c, '[');
     json_skip_ws_(c);
     if (json_peek_(c) == ']') { unsafe { c->pos = c->pos + 1UL; } return arr; }
@@ -326,7 +326,7 @@ static struct Value json_parse_array_(&JsonCursor_ c) {
         if (stillOk == 0) { break; }
         json_skip_ws_(c);
         struct Value elem = json_parse_value_(c);
-        value_array_push(&arr, elem);
+        arr.array_push(elem);
         json_skip_ws_(c);
         char ch = json_peek_(c);
         if (ch == ',') { unsafe { c->pos = c->pos + 1UL; continue; } }
@@ -338,7 +338,7 @@ static struct Value json_parse_array_(&JsonCursor_ c) {
 }
 
 static struct Value json_parse_object_(&JsonCursor_ c) {
-    struct Value obj = value_object();
+    struct Value obj = Value::object();
     json_eat_(c, '{');
     json_skip_ws_(c);
     if (json_peek_(c) == '}') { unsafe { c->pos = c->pos + 1UL; } return obj; }
@@ -353,8 +353,8 @@ static struct Value json_parse_object_(&JsonCursor_ c) {
         json_eat_(c, ':');
         json_skip_ws_(c);
         struct Value val = json_parse_value_(c);
-        unsafe { value_object_set(&obj, keyVal.as_string(), val); }
-        value_free(&keyVal);
+        unsafe { obj.object_set(keyVal.as_string(), val); }
+        keyVal.free();
         json_skip_ws_(c);
         char ch = json_peek_(c);
         if (ch == ',') { unsafe { c->pos = c->pos + 1UL; continue; } }
@@ -369,26 +369,26 @@ static struct Value json_parse_value_(&JsonCursor_ c) {
     json_skip_ws_(c);
     int stillOk2;
     unsafe { stillOk2 = c->ok; }
-    if (stillOk2 == 0) { return value_null(); }
+    if (stillOk2 == 0) { return Value::null(); }
     char ch = json_peek_(c);
     if (ch == '{') { return json_parse_object_(c); }
     if (ch == '[') { return json_parse_array_(c); }
     if (ch == '"') { return json_parse_string_raw_(c); }
     if (ch == 't') {
-        if (json_eat_literal_(c, "true")) { return value_bool(1); }
-        unsafe { c->ok = 0; } return value_null();
+        if (json_eat_literal_(c, "true")) { return Value::from_bool(1); }
+        unsafe { c->ok = 0; } return Value::null();
     }
     if (ch == 'f') {
-        if (json_eat_literal_(c, "false")) { return value_bool(0); }
-        unsafe { c->ok = 0; } return value_null();
+        if (json_eat_literal_(c, "false")) { return Value::from_bool(0); }
+        unsafe { c->ok = 0; } return Value::null();
     }
     if (ch == 'n') {
-        if (json_eat_literal_(c, "null")) { return value_null(); }
-        unsafe { c->ok = 0; } return value_null();
+        if (json_eat_literal_(c, "null")) { return Value::null(); }
+        unsafe { c->ok = 0; } return Value::null();
     }
     if (ch == '-' || (ch >= '0' && ch <= '9')) { return json_parse_number_(c); }
     unsafe { c->ok = 0; }
-    return value_null();
+    return Value::null();
 }
 
 struct Value json_parse(const &char text, ?&int ok) {
@@ -399,10 +399,20 @@ struct Value json_parse(const &char text, ?&int ok) {
     struct Value v = json_parse_value_(&c);
     if (ok != (int*)0) { unsafe { *ok = c.ok; } }
     if (c.ok == 0) {
-        value_free(&v);
-        return value_null();
+        v.free();
+        return Value::null();
     }
     return v;
 }
+
+struct Json Json::new() {
+    struct Json f;
+    f.unused_ = 0;
+    return f;
+}
+
+void Json::write(const &Value v, &String out) const { json_write(v, out); }
+
+struct Value Json::parse(const &char text, ?&int ok) const { return json_parse(text, ok); }
 
 } // namespace std

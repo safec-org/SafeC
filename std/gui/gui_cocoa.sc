@@ -15,7 +15,7 @@
 // return types at the call site, not on how the symbol itself is declared.
 //
 // Rendering model: a window is layer-backed (NSView.wantsLayer = YES);
-// each gui_present() wraps the app's raw RGBA8888 buffer in a CGImage
+// each GuiWindow::present() wraps the app's raw RGBA8888 buffer in a CGImage
 // (CGDataProviderCreateWithData over the existing buffer — no extra copy)
 // and sets it as the CALayer's 'contents', which AppKit composites to the
 // screen on the next display pass. No Metal/OpenGL context, no GPU
@@ -112,7 +112,7 @@ void __gui_cocoa_init() {
 
 // ── window creation ──────────────────────────────────────────────────────────
 
-struct GuiWindow gui_create_window(const &char title, int width, int height) {
+struct GuiWindow GuiWindow::create(const &char title, int width, int height) {
     __gui_cocoa_init();
 
     struct GuiWindow win;
@@ -170,22 +170,22 @@ struct GuiWindow gui_create_window(const &char title, int width, int height) {
 
 // ── presentation ─────────────────────────────────────────────────────────────
 
-void gui_present(&GuiWindow win) {
+void GuiWindow::present() {
     int noPlatform = 0;
-    unsafe { if (win.platform.is_null()) { noPlatform = 1; } }
+    unsafe { if (self.platform.is_null()) { noPlatform = 1; } }
     if (noPlatform) { return; }
     unsafe {
         MsgSend0 contentView = (MsgSend0)objc_msgSend;
-        void* view = contentView(win.platform, sel_registerName("contentView"));
+        void* view = contentView(self.platform, sel_registerName("contentView"));
         MsgSend0 layerMsg = (MsgSend0)objc_msgSend;
         void* layer = layerMsg(view, sel_registerName("layer"));
 
         void* space = CGColorSpaceCreateDeviceRGB();
-        unsigned long rowBytes = (unsigned long)win.width * 4UL;
-        unsigned long total = rowBytes * (unsigned long)win.height;
-        void* provider = CGDataProviderCreateWithData((void*)0, (const void*)win.pixels, total, (void*)0);
+        unsigned long rowBytes = (unsigned long)self.width * 4UL;
+        unsigned long total = rowBytes * (unsigned long)self.height;
+        void* provider = CGDataProviderCreateWithData((void*)0, (const void*)self.pixels, total, (void*)0);
         // bitmapInfo = kCGImageAlphaPremultipliedLast (1)
-        void* image = CGImageCreate((unsigned long)win.width, (unsigned long)win.height, 8UL, 32UL,
+        void* image = CGImageCreate((unsigned long)self.width, (unsigned long)self.height, 8UL, 32UL,
                                      rowBytes, space, 1U, provider, (const double*)0, 0, 0);
 
         MsgSendVoid1 setContents = (MsgSendVoid1)objc_msgSend;
@@ -197,16 +197,16 @@ void gui_present(&GuiWindow win) {
     }
 }
 
-void gui_set_pixel(&GuiWindow win, int x, int y, unsigned int rgba) {
+void GuiWindow::set_pixel(int x, int y, unsigned int rgba) {
     int oob = 0;
-    unsafe { if (x < 0 || y < 0 || x >= win.width || y >= win.height) { oob = 1; } }
+    unsafe { if (x < 0 || y < 0 || x >= self.width || y >= self.height) { oob = 1; } }
     if (oob) { return; }
     unsafe {
-        unsigned long idx = ((unsigned long)y * (unsigned long)win.width + (unsigned long)x) * 4UL;
-        win.pixels[idx + 0UL] = (unsigned char)((rgba >> 24) & 0xFFU);
-        win.pixels[idx + 1UL] = (unsigned char)((rgba >> 16) & 0xFFU);
-        win.pixels[idx + 2UL] = (unsigned char)((rgba >> 8)  & 0xFFU);
-        win.pixels[idx + 3UL] = (unsigned char)(rgba & 0xFFU);
+        unsigned long idx = ((unsigned long)y * (unsigned long)self.width + (unsigned long)x) * 4UL;
+        self.pixels[idx + 0UL] = (unsigned char)((rgba >> 24) & 0xFFU);
+        self.pixels[idx + 1UL] = (unsigned char)((rgba >> 16) & 0xFFU);
+        self.pixels[idx + 2UL] = (unsigned char)((rgba >> 8)  & 0xFFU);
+        self.pixels[idx + 3UL] = (unsigned char)(rgba & 0xFFU);
     }
 }
 
@@ -226,13 +226,13 @@ static int __gui_cocoa_keycode(unsigned short native) {
     return GUI_KEY_UNKNOWN;
 }
 
-int gui_poll_event(&GuiWindow win, &GuiEvent outEvent) {
+int GuiWindow::poll_event(&GuiEvent outEvent) {
     unsafe { outEvent.kind = GUI_EVENT_NONE; outEvent.defaultPrevented = 0; }
 
     if (gCloseRequested) {
         gCloseRequested = 0;
         unsafe {
-            win.shouldClose = 1;
+            self.shouldClose = 1;
             outEvent.kind = GUI_EVENT_CLOSE;
         }
         return 1;
@@ -261,7 +261,7 @@ int gui_poll_event(&GuiWindow win, &GuiEvent outEvent) {
             MsgSendPoint locMsg = (MsgSendPoint)objc_msgSend;
             struct NSPoint loc = locMsg(ev, sel_registerName("locationInWindow"));
             outEvent.x = loc.x;
-            outEvent.y = (double)win.height - loc.y; // flip to top-left origin
+            outEvent.y = (double)self.height - loc.y; // flip to top-left origin
 
             if (etype == 1UL) { outEvent.kind = GUI_EVENT_MOUSE_DOWN; outEvent.button = 0; handled = 1; }
             else if (etype == 2UL) { outEvent.kind = GUI_EVENT_MOUSE_UP; outEvent.button = 0; handled = 1; }
@@ -311,21 +311,21 @@ int gui_poll_event(&GuiWindow win, &GuiEvent outEvent) {
     return handled;
 }
 
-void gui_destroy_window(&GuiWindow win) {
+void GuiWindow::destroy() {
     unsafe {
-        if (!win.platform.is_null()) {
+        if (!self.platform.is_null()) {
             MsgSendVoid0 closeMsg = (MsgSendVoid0)objc_msgSend;
-            closeMsg(win.platform, sel_registerName("close"));
+            closeMsg(self.platform, sel_registerName("close"));
         }
-        if ((void*)win.pixels != (void*)0) {
-            dealloc_raw_((void*)win.pixels);
+        if ((void*)self.pixels != (void*)0) {
+            dealloc_raw_((void*)self.pixels);
         }
-        win.platform = null;
+        self.platform = null;
     }
 }
 
 // ── system-font text (Cocoa-only) ───────────────────────────────────────────
-// gui_draw.h's gui_draw_text() always uses the one built-in 8x8 bitmap
+// GuiWindow::draw_text() always uses the one built-in 8x8 bitmap
 // font, portable across all four backends. This is the platform-specific
 // alternative for Cocoa specifically: real anti-aliased system-font text,
 // via Core Graphics' CGContextShowTextAtPoint (a plain-C, no-Objective-C-
@@ -339,9 +339,12 @@ void gui_destroy_window(&GuiWindow win) {
 // system-font rendering there needs GDI (Win32) or Xft/fontconfig (X11),
 // and bare metal has no OS font service to call into at all (see
 // gui_font.h's SCXF format for that case: convert any open-licensed font
-// you like to SCXF and gui_font_load() it — the "open fonts for bare
+// you like to SCXF and GuiFont::load() it — the "open fonts for bare
 // metal" story is that loader, not a font this library bundles). Call
 // this only from code that already branches on '#ifdef __APPLE__'.
+// It stays a free function rather than a GuiWindow method: only this
+// backend defines it, and a method would have to be declared on the
+// portable GuiWindow in gui.h while existing on one platform only.
 extern void* CGBitmapContextCreate(void* data, unsigned long width, unsigned long height,
                                     unsigned long bitsPerComponent, unsigned long bytesPerRow,
                                     void* colorSpace, unsigned int bitmapInfo);
@@ -357,7 +360,7 @@ int gui_draw_text_system(&GuiWindow win, int x, int y, const &char text,
         void* space = CGColorSpaceCreateDeviceRGB();
         unsigned long rowBytes = (unsigned long)win.width * 4UL;
         // Draws directly into win.pixels (no separate blit) — same
-        // buffer gui_present() reads every frame.
+        // buffer GuiWindow::present() reads every frame.
         void* ctx = CGBitmapContextCreate((void*)win.pixels, (unsigned long)win.width,
                                            (unsigned long)win.height, 8UL, rowBytes, space, 1U);
         if (ctx == (void*)0) { CGColorSpaceRelease(space); return 0; }
@@ -371,7 +374,7 @@ int gui_draw_text_system(&GuiWindow win, int x, int y, const &char text,
         while (text[textLen] != '\0') { textLen = textLen + 1UL; }
         // CGBitmapContextCreate's coordinate origin is bottom-left; flip
         // Y (and nudge up by the font size so 'y' means "top of the text"
-        // like gui_draw_text(), not the Quartz baseline).
+        // like GuiWindow::draw_text(), not the Quartz baseline).
         double cgY = (double)win.height - (double)y - fontSize;
         CGContextShowTextAtPoint(ctx, (double)x, cgY, text, textLen);
 

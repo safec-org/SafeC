@@ -122,7 +122,7 @@ void xml_write(const &Value v, const &char tag, &String out) {
 }
 
 inline struct String value_to_xml(const &Value v, const &char root_tag) {
-    struct String out = string_new();
+    struct String out = String::new();
     xml_write(v, root_tag, &out);
     return out;
 }
@@ -193,7 +193,7 @@ static struct String xml_read_name_(struct XmlCursor_* c) {
     }
     unsigned long end;
     unsafe { end = c->pos; }
-    struct String out = string_new();
+    struct String out = String::new();
     if (end > start) { unsafe { out.push_n(c->text + start, end - start); } }
     return out;
 }
@@ -213,7 +213,7 @@ static struct String xml_peek_tag_name_(struct XmlCursor_* c) {
 // Reads raw text up to (not including) the next '<' or end of input,
 // decoding the 5 entities xml_append_escaped_ emits.
 static struct String xml_decode_text_(struct XmlCursor_* c) {
-    struct String out = string_new();
+    struct String out = String::new();
     unsigned long run_start;
     unsafe { run_start = c->pos; }
     while (1) {
@@ -245,8 +245,8 @@ static struct String xml_decode_text_(struct XmlCursor_* c) {
 // "true"/"false" -> bool, an all-digit (optional leading '-') span -> int,
 // a digit span containing '.'/'e'/'E' -> float, everything else -> string.
 static struct Value xml_infer_scalar_(struct String* text) {
-    if (text->eq_cstr("true")) { return value_bool(1); }
-    if (text->eq_cstr("false")) { return value_bool(0); }
+    if (text->eq_cstr("true")) { return Value::from_bool(1); }
+    if (text->eq_cstr("false")) { return Value::from_bool(0); }
     unsigned long len = text->length();
     if (len > 0UL) {
         int allInt = 1;
@@ -268,15 +268,15 @@ static struct Value xml_infer_scalar_(struct String* text) {
         if (allInt && hasDigit) {
             int ok = 0;
             long long n = text->parse_int(&ok);
-            if (ok) { return value_int(n); }
+            if (ok) { return Value::from_int(n); }
         }
         if (allFloatChars && hasDigit && hasDotOrExp) {
             int ok = 0;
             double f = text->parse_float(&ok);
-            if (ok) { return value_float(f); }
+            if (ok) { return Value::from_float(f); }
         }
     }
-    return value_string(text->as_ptr());
+    return Value::from_str(text->as_ptr());
 }
 
 static struct Value xml_parse_element_(struct XmlCursor_* c) {
@@ -296,14 +296,14 @@ static struct Value xml_parse_element_(struct XmlCursor_* c) {
     int okNow;
     unsafe { okNow = c->ok; }
     if (selfClose || !okNow) {
-        result = value_null();
+        result = Value::null();
     } else if (xml_at_close_(c)) {
         // No children, no text: could be an empty string or empty object —
         // see the file-level ambiguity note above.
-        result = value_string("");
+        result = Value::from_str("");
     } else if (xml_peek_(c) == '<') {
-        struct Value arr = value_array();
-        struct Value obj = value_object();
+        struct Value arr = Value::array();
+        struct Value obj = Value::object();
         int isArray = 1;
         int first = 1;
         while (xml_at_close_(c) == 0) {
@@ -316,14 +316,14 @@ static struct Value xml_parse_element_(struct XmlCursor_* c) {
             int childIsItem = childTag.eq_cstr("item");
             if (first) { isArray = childIsItem; first = 0; }
             if (isArray) {
-                value_array_push(&arr, childVal);
+                arr.array_push(childVal);
             } else {
-                unsafe { value_object_set(&obj, childTag.as_ptr(), childVal); }
+                unsafe { obj.object_set(childTag.as_ptr(), childVal); }
             }
             childTag.free();
         }
-        if (isArray) { value_free(&obj); result = arr; }
-        else { value_free(&arr); result = obj; }
+        if (isArray) { obj.free(); result = arr; }
+        else { arr.free(); result = obj; }
     } else {
         struct String text = xml_decode_text_(c);
         result = xml_infer_scalar_(&text);
@@ -356,16 +356,26 @@ struct Value xml_parse(const &char text, ?&int ok) {
     struct Value v;
     if (xml_peek_(&c) != '<') {
         c.ok = 0;
-        v = value_null();
+        v = Value::null();
     } else {
         v = xml_parse_element_(&c);
     }
     if (ok != (int*)0) { unsafe { *ok = c.ok; } }
     if (c.ok == 0) {
-        value_free(&v);
-        return value_null();
+        v.free();
+        return Value::null();
     }
     return v;
 }
+
+struct Xml Xml::new(const &char root_tag) {
+    struct Xml x;
+    x.root = root_tag;
+    return x;
+}
+
+void Xml::write(const &Value v, &String out) const { xml_write(v, self.root, out); }
+
+struct Value Xml::parse(const &char text, ?&int ok) const { return xml_parse(text, ok); }
 
 } // namespace std

@@ -18,7 +18,7 @@ extern ssize_t  write(int fd, const void* buf, size_t count);
 extern int   close(int fd);
 extern int   fcntl(int fd, int cmd, ...);   // variadic: arm64 Apple passes the 3rd arg on the stack
 
-inline int pipe_create(&Pipe out) {
+inline int Pipe::init() {
     int fds[2];
     int rc;
     unsafe { rc = pipe((void*)&fds[0]); }
@@ -26,21 +26,21 @@ inline int pipe_create(&Pipe out) {
         return -1;
     }
     unsafe {
-        out->read_fd  = (long long)fds[0];
-        out->write_fd = (long long)fds[1];
+        self.read_fd  = (long long)fds[0];
+        self.write_fd = (long long)fds[1];
     }
     return 0;
 }
 
-inline long long pipe_read(&Pipe p, &unsigned char buf, unsigned long count) {
+inline long long Pipe::read(&unsigned char buf, unsigned long count) {
     long n;
-    unsafe { n = read((int)p->read_fd, (void*)buf, count); }
+    unsafe { n = read((int)self.read_fd, (void*)buf, count); }
     return (long long)n;
 }
 
-inline long long pipe_write(&Pipe p, const &unsigned char buf, unsigned long count) {
+inline long long Pipe::write(const &unsigned char buf, unsigned long count) {
     long n;
-    unsafe { n = write((int)p->write_fd, (const void*)buf, count); }
+    unsafe { n = write((int)self.write_fd, (const void*)buf, count); }
     return (long long)n;
 }
 
@@ -65,29 +65,29 @@ static int pipe_set_nonblocking_(int fd) {
     return rc;
 }
 
-inline int pipe_set_read_nonblocking(&Pipe p) {
+inline int Pipe::set_read_nonblocking() {
     int fd;
-    unsafe { fd = (int)p->read_fd; }
+    unsafe { fd = (int)self.read_fd; }
     return pipe_set_nonblocking_(fd);
 }
 
-inline int pipe_set_write_nonblocking(&Pipe p) {
+inline int Pipe::set_write_nonblocking() {
     int fd;
-    unsafe { fd = (int)p->write_fd; }
+    unsafe { fd = (int)self.write_fd; }
     return pipe_set_nonblocking_(fd);
 }
 
-inline int pipe_close_read(&Pipe p) {
+inline int Pipe::close_read() {
     int fd;
-    unsafe { fd = (int)p->read_fd; }
+    unsafe { fd = (int)self.read_fd; }
     int rc;
     unsafe { rc = close(fd); }
     return rc;
 }
 
-inline int pipe_close_write(&Pipe p) {
+inline int Pipe::close_write() {
     int fd;
-    unsafe { fd = (int)p->write_fd; }
+    unsafe { fd = (int)self.write_fd; }
     int rc;
     unsafe { rc = close(fd); }
     return rc;

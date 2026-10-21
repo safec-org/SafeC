@@ -7,7 +7,7 @@
 // that set() both updates the value and pushes the change straight to the
 // DOM node(s) that depend on it — SolidJS-style signals, no virtual DOM.
 //
-//   struct Signal<int> count = std::signal_new(0);
+//   struct Signal<int> count = std::Signal::new(0);
 //   std::signal_subscribe(&count, on_count_changed, (?&Label)&label);
 //   count.set(count.get() + 1);      // updates, bumps version, notifies
 //   count.free();
@@ -29,12 +29,14 @@ struct Signal {
     unsigned long version;   // bumped on every set()
     struct Vec<struct SignalSub> subs;
 
+    static struct Signal<T> new(T val);   // holds val, version 0, no subscribers
+
     T             get() const;
     &T            get_ref();            // in-place access; call notify() after mutating
     void          set(T val);           // stores val, bumps version, notifies
     unsigned long get_version() const;
     // 1 (and updates *last_seen) if the version moved since *last_seen —
-    // polling-style change detection instead of subscribe()'s push style.
+    // polling-style change detection instead of signal_subscribe()'s push style.
     int           changed(&unsigned long last_seen) const;
     void          notify();             // calls every subscriber in registration order
     void          unsubscribe_all();
@@ -42,16 +44,18 @@ struct Signal {
 };
 
 generic<T>
-struct Signal<T> signal_new(T val) {
+struct Signal<T> Signal::new(T val) {
     struct Signal<T> s;
     s.value = val;
     s.version = 0UL;
-    s.subs = vec_new();
+    s.subs = Vec::new();
     return s;
 }
 
 // Registers listener(userdata) to run on every future set()/notify(). Not
 // called for the initial value — read it directly after subscribing.
+// A free function: U is its own type parameter, and an instance method of
+// a generic struct can't add type parameters of its own yet.
 generic<T, U>
 void signal_subscribe(&Signal<T> s, fn void(?&U) listener, ?&U userdata) {
     struct SignalSub sub;

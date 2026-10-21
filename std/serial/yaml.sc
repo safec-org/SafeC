@@ -40,7 +40,7 @@ static int yaml_scalar_needs_quoting_(const char* s) {
         if (c == ':' || c == '#' || c == '\n') { return 1; }
         i = i + 1UL;
     }
-    struct String trimmed; unsafe { trimmed = string_from(s); }
+    struct String trimmed; unsafe { trimmed = String::from(s); }
     struct String trimmedCopy = trimmed.trim();
     trimmed.free();
     int looksLikeOther = trimmedCopy.eq_cstr("true") || trimmedCopy.eq_cstr("false") ||
@@ -193,7 +193,7 @@ void yaml_write(const &Value v, &String out) {
 }
 
 inline struct String value_to_yaml(const &Value v) {
-    struct String out = string_new();
+    struct String out = String::new();
     yaml_write(v, &out);
     return out;
 }
@@ -208,7 +208,7 @@ struct YamlLine_ {
 // Strips a trailing '#...' comment (only when the '#' is outside any
 // quoted scalar on the line) and trailing whitespace.
 static struct String yaml_strip_comment_(const char* line) {
-    struct String out = string_new();
+    struct String out = String::new();
     unsigned long i = 0UL;
     char quote = (char)0; // 0 = not in a quote, else the active quote char
     while (1) {
@@ -243,7 +243,7 @@ static struct String yaml_strip_comment_(const char* line) {
 // indent that won't line up with anything and surfacing as a structural
 // mismatch rather than being silently misinterpreted.
 static struct Vec<struct YamlLine_> yaml_split_lines_(const char* text) {
-    struct Vec<struct YamlLine_> lines = vec_new();
+    struct Vec<struct YamlLine_> lines = Vec::new();
     unsigned long i = 0UL;
     while (1) {
         char c0;
@@ -271,7 +271,7 @@ static struct Vec<struct YamlLine_> yaml_split_lines_(const char* text) {
             p = p + 1UL;
         }
         struct String rawLine;
-        unsafe { rawLine = string_from_n(text + p, lineEnd - p); }
+        unsafe { rawLine = String::from_n(text + p, lineEnd - p); }
         struct String content = yaml_strip_comment_(rawLine.as_ptr());
         rawLine.free();
         if (!content.is_empty()) {
@@ -300,7 +300,7 @@ static void yaml_free_lines_(&Vec<struct YamlLine_> lines) {
 }
 
 static struct Value yaml_parse_scalar_(const char* text) {
-    struct String s; unsafe { s = string_from(text); }
+    struct String s; unsafe { s = String::from(text); }
     struct String trimmed = s.trim();
     s.free();
     const char* t = trimmed.as_ptr();
@@ -310,13 +310,13 @@ static struct Value yaml_parse_scalar_(const char* text) {
     struct Value result;
     int handled = 1;
     if (trimmed.is_empty() || trimmed.eq_cstr("~") || trimmed.eq_cstr_ignore_case("null")) {
-        result = value_null();
+        result = Value::null();
     } else if (trimmed.eq_cstr_ignore_case("true")) {
-        result = value_bool(1);
+        result = Value::from_bool(1);
     } else if (trimmed.eq_cstr_ignore_case("false")) {
-        result = value_bool(0);
+        result = Value::from_bool(0);
     } else if (c0 == '"') {
-        struct String out = string_new();
+        struct String out = String::new();
         unsigned long i = 1UL;
         while (1) {
             char c;
@@ -337,10 +337,10 @@ static struct Value yaml_parse_scalar_(const char* text) {
                 i = i + 1UL;
             }
         }
-        result = value_string(out.as_ptr());
+        result = Value::from_str(out.as_ptr());
         out.free();
     } else if (c0 == '\'') {
-        struct String out = string_new();
+        struct String out = String::new();
         unsigned long i = 1UL;
         while (1) {
             char c;
@@ -355,7 +355,7 @@ static struct Value yaml_parse_scalar_(const char* text) {
             unsafe { out.push_char(c); }
             i = i + 1UL;
         }
-        result = value_string(out.as_ptr());
+        result = Value::from_str(out.as_ptr());
         out.free();
     } else {
         // Plain scalar: number if it looks like one, else a bare string.
@@ -378,11 +378,11 @@ static struct Value yaml_parse_scalar_(const char* text) {
         }
         if (isNumeric) {
             int pok = 0;
-            if (isFloat) { result = value_float(trimmed.parse_float(&pok)); }
-            else { result = value_int(trimmed.parse_int(&pok)); }
-            unsafe { if (pok == 0) { result = value_string(t); } }
+            if (isFloat) { result = Value::from_float(trimmed.parse_float(&pok)); }
+            else { result = Value::from_int(trimmed.parse_int(&pok)); }
+            unsafe { if (pok == 0) { result = Value::from_str(t); } }
         } else {
-            unsafe { result = value_string(t); }
+            unsafe { result = Value::from_str(t); }
         }
     }
     (void)handled;
@@ -421,7 +421,7 @@ static long long yaml_find_colon_(const char* s) {
 
 static struct Value yaml_parse_mapping_(&Vec<struct YamlLine_> lines, unsigned long* idx,
                                          unsigned long indent, int* ok) {
-    struct Value obj = value_object();
+    struct Value obj = Value::object();
     unsigned long n;
     unsafe { n = lines->length(); }
     while (1) {
@@ -438,15 +438,15 @@ static struct Value yaml_parse_mapping_(&Vec<struct YamlLine_> lines, unsigned l
         long long colonPos = yaml_find_colon_(content);
         if (colonPos < 0) { unsafe { *ok = 0; } break; }
         struct String keyRaw;
-        unsafe { keyRaw = string_from_n(content, (unsigned long)colonPos); }
+        unsafe { keyRaw = String::from_n(content, (unsigned long)colonPos); }
         struct Value keyVal = yaml_parse_scalar_(keyRaw.as_ptr());
         keyRaw.free();
         // Only string-shaped keys make sense as object keys here (a
         // numeric-looking key stays a string key — same 'stringly-keyed'
         // convention std::Value's VAL_OBJECT already uses for JSON).
         const char* key = keyVal.as_string();
-        struct String keyStr; unsafe { keyStr = key ? string_from(key) : string_new(); }
-        value_free(&keyVal);
+        struct String keyStr; unsafe { keyStr = key ? String::from(key) : String::new(); }
+        keyVal.free();
 
         unsigned long restStart = (unsigned long)colonPos + 1UL;
         unsigned long contentLen;
@@ -455,7 +455,7 @@ static struct Value yaml_parse_mapping_(&Vec<struct YamlLine_> lines, unsigned l
         unsafe {
             restRaw = (restStart <= contentLen)
                 ? yl->content.substr(restStart, contentLen)
-                : string_new();
+                : String::new();
         }
         struct String restTrimmed = restRaw.trim();
         restRaw.free();
@@ -463,10 +463,10 @@ static struct Value yaml_parse_mapping_(&Vec<struct YamlLine_> lines, unsigned l
         unsafe { *idx = *idx + 1UL; }
         if (restTrimmed.is_empty()) {
             struct Value child = yaml_parse_block_(lines, idx, indent + 1UL, ok);
-            unsafe { value_object_set(&obj, keyStr.as_ptr(), child); }
+            unsafe { obj.object_set(keyStr.as_ptr(), child); }
         } else {
             struct Value scalar = yaml_parse_scalar_(restTrimmed.as_ptr());
-            unsafe { value_object_set(&obj, keyStr.as_ptr(), scalar); }
+            unsafe { obj.object_set(keyStr.as_ptr(), scalar); }
         }
         restTrimmed.free();
         keyStr.free();
@@ -479,7 +479,7 @@ static struct Value yaml_parse_mapping_(&Vec<struct YamlLine_> lines, unsigned l
 
 static struct Value yaml_parse_sequence_(&Vec<struct YamlLine_> lines, unsigned long* idx,
                                           unsigned long indent, int* ok) {
-    struct Value arr = value_array();
+    struct Value arr = Value::array();
     unsigned long n;
     unsafe { n = lines->length(); }
     while (1) {
@@ -508,7 +508,7 @@ static struct Value yaml_parse_sequence_(&Vec<struct YamlLine_> lines, unsigned 
         if (rest.is_empty()) {
             unsafe { *idx = *idx + 1UL; }
             struct Value child = yaml_parse_block_(lines, idx, indent + 1UL, ok);
-            value_array_push(&arr, child);
+            arr.array_push(child);
         } else if (yaml_find_colon_(rest.as_ptr()) >= 0) {
             // "- key: value" compact list-of-mappings shorthand: rewrite
             // this line in place as a mapping key at the column right
@@ -522,10 +522,10 @@ static struct Value yaml_parse_sequence_(&Vec<struct YamlLine_> lines, unsigned 
                 yl->indent  = dashIndent + 2UL;
             }
             struct Value child = yaml_parse_mapping_(lines, idx, dashIndent + 2UL, ok);
-            value_array_push(&arr, child);
+            arr.array_push(child);
         } else {
             struct Value scalar = yaml_parse_scalar_(rest.as_ptr());
-            value_array_push(&arr, scalar);
+            arr.array_push(scalar);
             unsafe { *idx = *idx + 1UL; }
         }
         rest.free();
@@ -542,12 +542,12 @@ static struct Value yaml_parse_block_(&Vec<struct YamlLine_> lines, unsigned lon
     unsafe { n = lines->length(); }
     unsigned long curIdx;
     unsafe { curIdx = *idx; }
-    if (curIdx >= n) { return value_null(); }
+    if (curIdx >= n) { return Value::null(); }
     struct YamlLine_* yl;
     unsafe { yl = lines->at(curIdx); }
     unsigned long ylIndent;
     unsafe { ylIndent = yl->indent; }
-    if (ylIndent < minIndent) { return value_null(); }
+    if (ylIndent < minIndent) { return Value::null(); }
     unsigned long indent = ylIndent;
     const char* content;
     unsafe { content = yl->content.as_ptr(); }
@@ -580,10 +580,20 @@ struct Value yaml_parse(const &char text, ?&int ok) {
     yaml_free_lines_(&lines);
     if (ok != (int*)0) { unsafe { *ok = good; } }
     if (good == 0) {
-        value_free(&result);
-        return value_null();
+        result.free();
+        return Value::null();
     }
     return result;
 }
+
+struct Yaml Yaml::new() {
+    struct Yaml f;
+    f.unused_ = 0;
+    return f;
+}
+
+void Yaml::write(const &Value v, &String out) const { yaml_write(v, out); }
+
+struct Value Yaml::parse(const &char text, ?&int ok) const { return yaml_parse(text, ok); }
 
 } // namespace std

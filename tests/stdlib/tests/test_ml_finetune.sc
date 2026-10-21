@@ -424,7 +424,7 @@ void t_qlora() {
 }
 
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("Adagrad and Lion converge", t_adagrad_lion);
         t.add("gradient checks (layer norm, slices, AdaLN)", t_norm_grad_checks);

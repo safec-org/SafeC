@@ -19,11 +19,11 @@ static void finish(int ok) {
 }
 
 void qemu_main() {
-    unsafe { g_uart = uart_init((&volatile unsigned int)USART1, 115200u, 84000000u); }
+    unsafe { g_uart = Uart::new((&volatile unsigned int)USART1, 115200u, 84000000u); }
     say("uart: Stm32F4Usart ok\n");
 
     struct Timer<Stm32F4Tim> t;
-    unsafe { t = timer_init((&volatile unsigned int)TIM2, 0u); }
+    unsafe { t = Timer::new((&volatile unsigned int)TIM2, 0u); }
     t.set_period(0xFFFFFFFFu);
     t.start();
     unsigned int c0 = t.read();
@@ -48,7 +48,7 @@ void qemu_main() {
     say("tim: Stm32F4Tim counts, overflows and clears\n");
 
     struct SpiDevice<Stm32F4Spi> s;
-    unsafe { s = spi_init((&volatile unsigned int)SPI1, SPI_MODE_0); }
+    unsafe { s = SpiDevice::new((&volatile unsigned int)SPI1, SPI_MODE_0); }
     unsigned char got = s.transfer((unsigned char)0xA5);   // no slave attached: completes, reads 0
     say(got == (unsigned char)0 ? "spi: Stm32F4Spi transfer completes\n" : "spi: unexpected byte\n");
     finish(got == (unsigned char)0);

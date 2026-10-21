@@ -18,6 +18,9 @@
 #include <std/http/websocket.h>
 #include <std/rpc/rpc.h>
 #include <std/rpc/server_fn.h>
+#include <std/io_traits.h>
+#include <std/io_buf.h>
+#include <std/ipc/pipe.h>
 
 static unsigned short g_http_port = (unsigned short)0;
 static unsigned short g_rpc_port = (unsigned short)0;
@@ -42,27 +45,27 @@ static struct HttpResponse handler(&HttpRequest req) {
         if (req.path.eq_cstr("/token") && req.method.eq_cstr("POST")) {
             const &char tok = "{\"access_token\":\"abc123\",\"refresh_token\":\"r1\",\"token_type\":\"Bearer\",\"expires_in\":3600}";
             r.status = 200;
-            r.headers = string_from("Content-Type: application/json");
-            r.body = string_from(tok);
+            r.headers = String::from("Content-Type: application/json");
+            r.body = String::from(tok);
             return r;
         }
         if (req.path.eq_cstr("/echo")) {
             r.status = 200;
-            r.headers = string_from("Content-Type: text/plain\r\nX-Method: ");
+            r.headers = String::from("Content-Type: text/plain\r\nX-Method: ");
             r.headers.push(req.method.as_ptr());
             r.body = req.body.clone();
             return r;
         }
         if (req.path.eq_cstr("/cors")) {
             r.status = 200;
-            r.headers = string_new();
-            r.body = string_from("ok");
+            r.headers = String::new();
+            r.body = String::from("ok");
             cors_apply_headers(&r, "https://a.example");
             return r;
         }
         r.status = 404;
-        r.headers = string_new();
-        r.body = string_from("nope");
+        r.headers = String::new();
+        r.body = String::from("nope");
     }
     return r;
 }
@@ -78,7 +81,7 @@ static struct RpcResult rpc_upper(const &unsigned char data, unsigned long len) 
         ?&heap unsigned char out = (?&heap unsigned char)alloc(len);
         r.ok = 1;
         r.len = len;
-        r.error_message = string_new();
+        r.error_message = String::new();
         if (out.is_null()) { r.ok = 0; r.len = 0UL; r.data = null; return r; }
         &unsigned char o = std::expect_ref(out, "out is null");
         unsigned long i = 0UL;
@@ -110,7 +113,7 @@ static struct Value fn_add(const &Value args) {
         if (!av.is_null()) a = av->as_int();
         if (!bv.is_null()) b = bv->as_int();
     }
-    return value_int(a + b);
+    return Value::from_int(a + b);
 }
 
 static ?&int run_fn(?&int arg) {
@@ -125,24 +128,26 @@ static ?&int run_ws(?&int arg) {
     unsafe {
         int lfd = ws_listen(g_ws_port);
         if (lfd < 0) return null;
+        while (1) {   // one client at a time, for as long as tests connect
         struct WsConn c;
-        if (ws_accept(lfd, &c) != 1) return null;   // 1 = handshake completed
+        if (c.accept(lfd) != 1) continue;   // 1 = handshake completed
         struct WsMessage m;
-        while (ws_recv(&c, &m) == 1) {
+        while (c.recv(&m) == 1) {
             if (m.opcode == WS_OPCODE_TEXT) {
-                struct String echo = string_from("echo:");
+                struct String echo = String::from("echo:");
                 echo.push_n((const char*)m.data, m.len);
-                ws_send_text(&c, echo.as_ptr());
+                c.send_text(echo.as_ptr());
                 echo.free();
             } else if (m.opcode == WS_OPCODE_PING) {
-                ws_send_pong(&c);
+                c.send_pong();
             } else if (m.opcode == WS_OPCODE_CLOSE) {
                 m.free();
                 break;
             }
             m.free();
         }
-        ws_close(&c);
+        c.close();
+        }
     }
     return null;
 }
@@ -194,6 +199,17 @@ void t_http_roundtrip() {
         ASSERT_STR_EQ(r.body.as_ptr(), "posted payload");
         r.free();
 
+        // A body many reads long, both ways (server and client read it
+        // after the header block through a BufReader<TcpStream>).
+        struct String large = String::repeat_str("0123456789abcdef", 6250UL);   // 100000 bytes
+        r = http_post("127.0.0.1", g_http_port, "/echo", "text/plain",
+                      (const unsigned char*)large.as_ptr(), large.length(), &ok);
+        ASSERT_TRUE(ok);
+        ASSERT_EQ(r.body.length(), 100000);
+        ASSERT_TRUE(r.body.eq_cstr(large.as_ptr()));
+        r.free();
+        large.free();
+
         r = http_get("127.0.0.1", g_http_port, "/cors", &ok);
         ASSERT_TRUE(ok);
         struct String acao = http_header_get(r.headers.as_ptr(), "Access-Control-Allow-Origin");
@@ -217,16 +233,115 @@ void t_http_roundtrip() {
     }
 }
 
+// TcpStream through io_traits.h: a hand-written request with write_all,
+// the status line with read_exact, the rest with copy_stream into a Pipe.
+void t_tcp_stream() {
+    start_servers();
+    unsafe {
+        int ok = 0;
+        struct HttpResponse warm = get_retry("/echo", &ok);   // server is up
+        warm.free();
+        unsigned int lo = sched_ipv4((unsigned char)127, (unsigned char)0,
+                                     (unsigned char)0, (unsigned char)1);
+        int fd = tcp_connect_timeout(lo, g_http_port, 2000);
+        ASSERT_TRUE(fd >= 0);
+        if (fd < 0) return;
+        struct TcpStream s = TcpStream::from_fd(fd);
+        const &char req = "POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello";
+        ASSERT_EQ(write_all(&s, (const &unsigned char)req, str_len(req)), 1);
+        unsigned char status[12];
+        ASSERT_EQ(read_exact(&s, &status[0], 12UL), 1);
+        ASSERT_EQ(status[9], '2');
+        ASSERT_EQ(status[11], '0');
+        struct Pipe p;
+        ASSERT_EQ(p.init(), 0);
+        long long rest = copy_stream(&s, &p);       // until the server closes
+        ASSERT_TRUE(rest > 5LL);
+        ASSERT_EQ(s.close(), 0);
+        p.close_write();
+        unsigned char tail[4096];
+        long long n = p.read(&tail[0], 4096UL);
+        ASSERT_EQ(n, rest);
+        if (n >= 5LL) { ASSERT_EQ(tail[n - 1LL], 'o'); }   // body "hello" last
+        p.close_read();
+    }
+}
+
+// A request/response exchange over any Stream, buffered both ways: the
+// request goes out in pieces through a BufWriter<S> (one write on flush),
+// the response's header block comes back with BufReader<S>::read_until and
+// its Content-Length body with read_exact on the same BufReader. Returns
+// the HTTP status (0 on failure); the body goes to 'body'.
+generic<S: Stream>
+int buffered_exchange(&S s, const &char path, const &char payload, &String body) {
+    struct BufWriter<S> out = BufWriter::over(s);
+    struct String hdr = String::new();
+    hdr.push("POST ");
+    hdr.push(path);
+    hdr.push(" HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Length: ");
+    hdr.push_uint((unsigned long long)str_len(payload));
+    hdr.push("\r\n\r\n");
+    int ok = 1;
+    unsafe {
+        ok = write_all(&out, (const &unsigned char)hdr.as_ptr(), hdr.length())
+          && write_all(&out, (const &unsigned char)payload, str_len(payload))
+          && out.flush() == 0;
+    }
+    hdr.free();
+    if (!ok) return 0;
+
+    struct BufReader<S> in = BufReader::over(s);
+    struct String head = String::new();
+    int status = 0;
+    if (in.read_until(&head, "\r\n\r\n") && head.starts_with("HTTP/1.1 ")) {
+        int pok = 0;
+        struct String code = head.substr(9UL, 12UL);
+        status = (int)code.parse_int(&pok);
+        code.free();
+        struct String cl = http_header_get(head.as_ptr(), "Content-Length");
+        unsigned long n = (unsigned long)cl.parse_int(&pok);
+        cl.free();
+        unsigned char buf[256];
+        if (n > 256UL || !read_exact(&in, &buf[0], n)) {
+            status = 0;
+        } else {
+            unsafe { body.push_n((const &char)(const char*)&buf[0], n); }
+        }
+    }
+    head.free();
+    return status;
+}
+
+void t_tcp_buffered() {
+    start_servers();
+    unsafe {
+        int ok = 0;
+        struct HttpResponse warm = get_retry("/echo", &ok);
+        warm.free();
+        unsigned int lo = sched_ipv4((unsigned char)127, (unsigned char)0,
+                                     (unsigned char)0, (unsigned char)1);
+        int fd = tcp_connect_timeout(lo, g_http_port, 2000);
+        ASSERT_TRUE(fd >= 0);
+        if (fd < 0) return;
+        struct TcpStream s = TcpStream::from_fd(fd);
+        struct String body = String::new();
+        ASSERT_EQ(buffered_exchange(&s, "/echo", "buffered hello", &body), 200);
+        ASSERT_TRUE(body.eq_cstr("buffered hello"));
+        body.free();
+        ASSERT_EQ(s.close(), 0);
+    }
+}
+
 void t_cors() {
     unsafe {
         struct HttpRequest req;
-        req.method = string_from("OPTIONS");
-        req.path = string_from("/api");
-        req.headers = string_from("Origin: https://a.example\r\nAccess-Control-Request-Method: POST");
-        req.body = string_new();
+        req.method = String::from("OPTIONS");
+        req.path = String::from("/api");
+        req.headers = String::from("Origin: https://a.example\r\nAccess-Control-Request-Method: POST");
+        req.body = String::new();
         ASSERT_TRUE(cors_is_preflight(&req));
         req.method.free();
-        req.method = string_from("GET");
+        req.method = String::from("GET");
         ASSERT_FALSE(cors_is_preflight(&req));
         req.free();
         struct HttpResponse p = cors_preflight_response("https://a.example", "GET, POST", "Content-Type");
@@ -239,9 +354,9 @@ void t_cors() {
 
 void t_jwt() {
     unsafe {
-        struct Value claims = value_object();
-        value_object_set(&claims, "sub", value_string("1234567890"));
-        value_object_set(&claims, "admin", value_bool(1));
+        struct Value claims = Value::object();
+        claims.object_set("sub", Value::from_str("1234567890"));
+        claims.object_set("admin", Value::from_bool(1));
         struct String tok = jwt_sign(&claims, "secret");
         ASSERT_EQ(tok.count("."), 2);
         ASSERT_TRUE(tok.starts_with("eyJ"));   // base64url of '{"'
@@ -251,17 +366,17 @@ void t_jwt() {
         ?&Value sub = back.object_get("sub");
         ASSERT_FALSE(sub.is_null());
         ASSERT_STR_EQ(sub->as_string(), "1234567890");
-        value_free(&back);
+        back.free();
         struct Value bad = jwt_verify(tok.as_ptr(), "wrong", &ok);
         ASSERT_FALSE(ok);
-        value_free(&bad);
+        bad.free();
         // Tamper with the payload: signature must no longer verify.
         tok.set_char((unsigned long)tok.index_of(".") + 2UL, 'A');
         struct Value bad2 = jwt_verify(tok.as_ptr(), "secret", &ok);
         ASSERT_FALSE(ok);
-        value_free(&bad2);
+        bad2.free();
         tok.free();
-        value_free(&claims);
+        claims.free();
     }
 }
 
@@ -271,13 +386,13 @@ void t_oauth2() {
         int ok = 0;
         struct HttpResponse warm = get_retry("/echo", &ok);
         warm.free();
-        struct OAuth2Token t = oauth2_exchange_code("127.0.0.1", g_http_port, "/token", "cid", "csecret",
-                                                    "code42", "http://localhost/cb", &ok);
+        struct OAuth2Token t = OAuth2Token::exchange_code("127.0.0.1", g_http_port, "/token", "cid", "csecret",
+                                                          "code42", "http://localhost/cb", &ok);
         ASSERT_TRUE(ok);
         ASSERT_STR_EQ(t.accessToken.as_ptr(), "abc123");
         ASSERT_STR_EQ(t.refreshToken.as_ptr(), "r1");
         ASSERT_EQ(t.expiresIn, 3600);
-        oauth2_token_free(&t);
+        t.free();
     }
 }
 
@@ -307,23 +422,71 @@ void t_rpc() {
         ASSERT_FALSE(miss.ok);
         miss.free();
 
-        struct Value args = value_object();
-        value_object_set(&args, "a", value_int(40LL));
-        value_object_set(&args, "b", value_int(2LL));
+        struct Value args = Value::object();
+        args.object_set("a", Value::from_int(40LL));
+        args.object_set("b", Value::from_int(2LL));
         int ok = 0;
         struct Value res;
         tries = 0;
         while (1) {
             res = server_fn_call("127.0.0.1", g_fn_port, "add", &args, &ok);
             if (ok || tries >= 50) break;
-            value_free(&res);
+            res.free();
             thread_sleep_ms(20UL);
             tries = tries + 1;
         }
         ASSERT_TRUE(ok);
         ASSERT_EQ(res.as_int(), 42);
-        value_free(&res);
-        value_free(&args);
+        res.free();
+        args.free();
+    }
+}
+
+// The client's first frame in the same write as its Upgrade request: the
+// server reads both in one go, and the frame must still reach recv() (it
+// used to be dropped with the handshake's read buffer).
+void t_ws_frame_with_handshake() {
+    start_servers();
+    unsafe {
+        int fd = -1;
+        int tries = 0;
+        while (tries < 50) {
+            fd = tcp_connect_nb(sched_ipv4((unsigned char)127, (unsigned char)0, (unsigned char)0, (unsigned char)1),
+                                g_ws_port);
+            if (fd >= 0 && tcp_wait_connected(fd) == 0) break;
+            if (fd >= 0) { struct TcpStream bad = TcpStream::from_fd(fd); bad.close(); fd = -1; }
+            thread_sleep_ms(20UL);
+            tries = tries + 1;
+        }
+        ASSERT_TRUE(fd >= 0);
+        if (fd < 0) return;
+        fd_set_blocking(fd);
+        struct TcpStream s = TcpStream::from_fd(fd);
+        struct String out = String::from("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\n"
+                                         "Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                                         "Sec-WebSocket-Version: 13\r\n\r\n");
+        // FIN + text, masked, length 2, mask key 0 (payload unchanged), "hi"
+        unsigned char frame[8];
+        frame[0] = (unsigned char)0x81; frame[1] = (unsigned char)0x82;
+        frame[2] = (unsigned char)0; frame[3] = (unsigned char)0; frame[4] = (unsigned char)0; frame[5] = (unsigned char)0;
+        frame[6] = (unsigned char)'h'; frame[7] = (unsigned char)'i';
+        out.push_n((const char*)&frame[0], 8UL);
+        ASSERT_TRUE(write_all(&s, (const &unsigned char)out.as_ptr(), out.length()));
+        out.free();
+
+        struct BufReader<TcpStream> in = BufReader::over(&s);
+        struct String head = String::new();
+        ASSERT_TRUE(in.read_until(&head, "\r\n\r\n"));
+        ASSERT_TRUE(head.index_of("101") >= 0L);
+        head.free();
+        unsigned char reply[9];   // unmasked text frame "echo:hi"
+        ASSERT_TRUE(read_exact(&in, &reply[0], 9UL));
+        ASSERT_EQ(reply[0], (unsigned char)0x81);
+        ASSERT_EQ(reply[1], (unsigned char)7);
+        ASSERT_EQ(reply[2], (unsigned char)'e');
+        ASSERT_EQ(reply[7], (unsigned char)'h');
+        ASSERT_EQ(reply[8], (unsigned char)'i');
+        s.close();
     }
 }
 
@@ -334,16 +497,16 @@ void t_websocket() {
         struct WsConn c;
         int tries = 0;
         while (1) {
-            c = ws_connect("127.0.0.1", g_ws_port, "/", &ok);
+            c = WsConn::connect("127.0.0.1", g_ws_port, "/", &ok);
             if (ok || tries >= 50) break;
             thread_sleep_ms(20UL);
             tries = tries + 1;
         }
         ASSERT_TRUE(ok);
         if (!ok) return;
-        ASSERT_EQ(ws_send_text(&c, "hi there"), 1);
+        ASSERT_EQ(c.send_text("hi there"), 1);
         struct WsMessage m;
-        ASSERT_EQ(ws_recv(&c, &m), 1);
+        ASSERT_EQ(c.recv(&m), 1);
         ASSERT_EQ(m.opcode, WS_OPCODE_TEXT);
         ASSERT_EQ(m.len, 13);
         match (m.data) {
@@ -355,18 +518,34 @@ void t_websocket() {
         }
         m.free();
         // A payload over 125 bytes exercises the 16-bit extended length.
-        struct String big = string_repeat("x", 300UL);
-        ASSERT_EQ(ws_send_text(&c, big.as_ptr()), 1);
-        ASSERT_EQ(ws_recv(&c, &m), 1);
+        struct String big = String::repeat_str("x", 300UL);
+        ASSERT_EQ(c.send_text(big.as_ptr()), 1);
+        ASSERT_EQ(c.recv(&m), 1);
         ASSERT_EQ(m.len, 305);
         m.free();
         big.free();
-        ASSERT_EQ(ws_send_ping(&c), 1);
-        ASSERT_EQ(ws_recv(&c, &m), 1);
+        // Over 64 KB: the 64-bit length, and a masked payload several
+        // mask chunks long.
+        struct String huge = String::repeat_str("0123456789", 7000UL);
+        ASSERT_EQ(c.send_text(huge.as_ptr()), 1);
+        ASSERT_EQ(c.recv(&m), 1);
+        ASSERT_EQ(m.len, 70005);
+        match (m.data) {
+            case null: { ASSERT_TRUE(0); }
+            case some(d): {
+                ASSERT_EQ(d[5], '0');
+                ASSERT_EQ(d[5 + 16389], '9');
+                ASSERT_EQ(d[70004], '9');
+            }
+        }
+        m.free();
+        huge.free();
+        ASSERT_EQ(c.send_ping(), 1);
+        ASSERT_EQ(c.recv(&m), 1);
         ASSERT_EQ(m.opcode, WS_OPCODE_PONG);
         m.free();
-        ws_send_close(&c);
-        ws_close(&c);
+        c.send_close();
+        c.close();
     }
 }
 
@@ -432,7 +611,7 @@ void t_connect_timeout() {
         r.free();
 
         t0 = time_mono_ns();
-        struct WsConn c = ws_connect_timeout("127.0.0.1", silentPort, "/", 300, &ok);
+        struct WsConn c = WsConn::connect_timeout("127.0.0.1", silentPort, "/", 300, &ok);
         ASSERT_FALSE(ok);
         ASSERT_EQ(c.fd, -1);
         ASSERT_TRUE(ms_since(t0) < 2000LL);
@@ -472,7 +651,7 @@ void t_write_to_closed_peer() {
         unsigned long long t = 0ULL;
         thread_create(&t, run_closer, null); thread_detach(t);
         unsigned long n = 4UL * 1024UL * 1024UL;
-        struct String body = string_repeat("x", n);
+        struct String body = String::repeat_str("x", n);
         int ok = 1;
         int tries = 0;
         // Retry while the closer thread comes up (connect refused until then).
@@ -541,14 +720,17 @@ int main() {
     // Watchdog: a networking regression should fail this test, not hang
     // the whole 'safeguard test' run (SIGALRM's default action terminates).
     unsafe { alarm(60u); }
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("http client/server", t_http_roundtrip);
+        t.add("tcp stream (io traits)", t_tcp_stream);
+        t.add("tcp stream through BufReader/BufWriter", t_tcp_buffered);
         t.add("cors", t_cors);
         t.add("jwt hs256", t_jwt);
         t.add("oauth2 code exchange", t_oauth2);
         t.add("rpc + server_fn", t_rpc);
         t.add("websocket", t_websocket);
+        t.add("websocket frame sent with the handshake", t_ws_frame_with_handshake);
         t.add("connect/handshake timeouts", t_connect_timeout);
         t.add("write to closed peer", t_write_to_closed_peer);
         t.add("host resolution", t_resolve);

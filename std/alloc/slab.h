@@ -1,34 +1,56 @@
 // SafeC Standard Library — Slab Allocator
 // Fixed-size object pool. O(1) alloc/free via embedded free-list.
+// Conforms to Allocator and ArenaAllocator (allocator.h): typed allocation
+// is alloc_t / dealloc_t there.
 #pragma once
+#include <std/alloc/allocator.h>
 
 namespace std {
 
 struct SlabAllocator {
     &heap void    base;       // heap-backed backing buffer
-    int           owned;   // 1 if slab_new allocated base (destroy() frees it)
+    int           owned;   // 1 if SlabAllocator::new allocated base (destroy() frees it)
     void*         free_head;  // head of embedded free-list (raw — unsafe arithmetic)
     unsigned long obj_size;   // slot size: the requested size rounded up to a multiple of 8
     unsigned long cap;        // max number of objects
     unsigned long used;       // currently allocated count
     // 1 if each slot has an extra 8-byte double-free-detection tag ahead
-    // of it (slab_new, where this allocator sized+owns 'base' itself, so
-    // growing the per-slot stride is safe) — 0 if not (slab_init, where
+    // of it (SlabAllocator::new, where this allocator sized+owns 'base' itself, so
+    // growing the per-slot stride is safe) — 0 if not (SlabAllocator::over, where
     // 'base' is caller-provided and sized to the documented obj_size*count
     // contract, which adding a tag would silently overrun).
     int           has_tags;
 
-    // Allocate one object. Returns NULL if pool is exhausted.
-    &heap void    alloc();
+    // A slab over a user-provided buffer of obj_size*count bytes. Slots are
+    // obj_size rounded up to a multiple of 8 (at least 8, to hold the
+    // free-list link) and start 8-byte aligned, so 'cap' can come out below
+    // 'count' when that rounding doesn't fit. No double-free detection (see
+    // has_tags) — the buffer size contract can't grow to fit a tag.
+    static struct SlabAllocator over(&unsigned char buffer, unsigned long obj_size, unsigned long count);
 
-    // Return an object to the pool. Aborts with a diagnostic on double-free
-    // (slab_new-created allocators only — see has_tags above).
+    // A heap-backed slab of `count` objects (double-free-detecting).
+    static struct SlabAllocator new(unsigned long obj_size, unsigned long count);
+
+    // Allocate one object (all `obj_size` bytes of it) for `size` bytes
+    // aligned to `align`. null if the slab is full, size > obj_size, or
+    // `align` is above max_align() or not a power of two (0 is taken as 1).
+    ?&heap void   alloc(unsigned long size, unsigned long align);
+
+    // Return an object to the pool (null: no-op). Aborts with a diagnostic
+    // on double-free (SlabAllocator::new-created allocators only — see has_tags above).
     void          dealloc(?&heap void ptr);
+
+    // Free every slot at once (slots handed out before become invalid).
+    void          reset();
 
     // Return the number of free slots remaining.
     unsigned long available() const;
 
-    // Free the backing buffer (only valid for heap-backed allocators from slab_new).
+    // The largest alignment alloc honours: the largest power of two dividing
+    // obj_size, at most 8 (given an 8-aligned buffer: always for SlabAllocator::new).
+    unsigned long max_align() const;
+
+    // Free the backing buffer (only valid for heap-backed allocators from SlabAllocator::new).
     void          destroy();
 
     // Internal: build embedded free-list through the buffer.
@@ -37,28 +59,5 @@ struct SlabAllocator {
     // Internal: bytes between consecutive slots' payload pointers.
     unsigned long slot_stride_() const;
 };
-
-// Initialize over a user-provided buffer of obj_size*count bytes. Slots are
-// obj_size rounded up to a multiple of 8 (at least 8, to hold the free-list
-// link) and start 8-byte aligned, so 'cap' can come out below 'count' when
-// that rounding doesn't fit. No double-free detection (see has_tags) — the
-// buffer size contract can't grow to fit a tag.
-struct SlabAllocator slab_init(&unsigned char buffer, unsigned long obj_size, unsigned long count);
-
-// Create a heap-backed slab allocator (double-free-detecting).
-struct SlabAllocator slab_new(unsigned long obj_size, unsigned long count);
-
-// ── Typed allocation (recommended) ───────────────────────────────────────────
-// null if the slab is full or T doesn't fit in one slab object.
-generic<T>
-?&heap T slab_alloc_t(&SlabAllocator s) {
-    if (sizeof(T) > s.obj_size) return null;
-    unsafe { return (?&heap T)s.alloc(); }
-}
-
-generic<T>
-void slab_free_t(&SlabAllocator s, &heap T obj) {
-    unsafe { s.dealloc((&heap void)obj); }
-}
 
 } // namespace std

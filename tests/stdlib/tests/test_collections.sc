@@ -14,6 +14,7 @@
 #include <std/collections/ringbuffer.h>
 #include <std/collections/slice.h>
 #include <std/collections/static_vec.h>
+#include <std/collections/traits.h>
 
 static int cmp_int(const &int a, const &int b) {
     return *a - *b;
@@ -26,7 +27,7 @@ static long long triple(const &int a) { return (long long)(*a) * 3LL; }
 struct Pair { int a; int b; };
 
 void t_vec() {
-    struct Vec<int> v = vec_new();
+    struct Vec<int> v = Vec::new();
     int i = 0;
     while (i < 1000) { v.push(i); i = i + 1; }
     ASSERT_EQ(v.length(), 1000);
@@ -45,7 +46,7 @@ void t_vec() {
     ASSERT_EQ(v.front().default(-1), 998);
     v.sort(cmp_int);
     ASSERT_EQ(v.front().default(-1), 0);
-    struct Greater<int> desc = order_greater();
+    struct Greater<int> desc = Greater::new();
     vec_sort_by(&v, desc);
     ASSERT_EQ(v.front().default(-1), 998);
     vec_sort(&v);
@@ -65,7 +66,7 @@ void t_vec() {
     c.extend(&extra[0], 3UL);
     ASSERT_EQ(c.back().default(0), 9);
     // Large random input exercises the introsort partitioning paths.
-    struct Vec<int> big = vec_with_cap(20000UL);
+    struct Vec<int> big = Vec::with_cap(20000UL);
     unsigned int seed = 12345u;
     i = 0;
     while (i < 20000) { seed = seed * 1103515245u + 12345u; big.push((int)(seed >> 8) % 1000); i = i + 1; }
@@ -75,7 +76,7 @@ void t_vec() {
     while (k < big.length()) { if (*big.at(k - 1UL) > *big.at(k)) sorted = 0; k = k + 1UL; }
     ASSERT_TRUE(sorted);
     // Struct elements, mutated in place through match.
-    struct Vec<struct Pair> ps = vec_new();
+    struct Vec<struct Pair> ps = Vec::new();
     struct Pair p;
     p.a = 1; p.b = 2;
     ps.push(p);
@@ -92,7 +93,7 @@ void t_vec() {
 
 void t_string() {
     unsafe {
-        struct String s = string_from("  Hello, World  ");
+        struct String s = String::from("  Hello, World  ");
         struct String t = s.trim();
         ASSERT_TRUE(t.eq_cstr("Hello, World"));
         ASSERT_TRUE(t.starts_with("Hello"));
@@ -105,23 +106,23 @@ void t_string() {
         t.push_int(-42LL);
         ASSERT_TRUE(t.ends_with("-42"));
         struct String parts[4];
-        struct String csv = string_from("a,b,c");
+        struct String csv = String::from("a,b,c");
         unsigned long n = csv.split(",", &parts[0], 4UL);
         ASSERT_EQ(n, 3);
         ASSERT_TRUE(parts[2].eq_cstr("c"));
-        struct String joined = string_join("-", &parts[0], n);
+        struct String joined = String::join("-", &parts[0], n);
         ASSERT_STR_EQ(joined.as_ptr(), "a-b-c");
         int ok = 0;
-        struct String num = string_from("12345");
+        struct String num = String::from("12345");
         ASSERT_EQ(num.parse_int(&ok), 12345);
         ASSERT_TRUE(ok);
-        struct String big = string_new();
+        struct String big = String::new();
         int i = 0;
         while (i < 10000) { big.push_char('x'); i = i + 1; }
         ASSERT_EQ(big.length(), 10000);
         struct String sub = big.substr(10UL, 20UL);
         ASSERT_EQ(sub.length(), 10);
-        ASSERT_EQ(string_from("abcabc").count("bc"), 2);
+        ASSERT_EQ(String::from("abcabc").count("bc"), 2);
         sub.free(); big.free(); num.free(); joined.free(); csv.free();
         unsigned long k = 0UL;
         while (k < n) { parts[k].free(); k = k + 1UL; }
@@ -130,7 +131,7 @@ void t_string() {
 }
 
 void t_stack_queue() {
-    struct Stack<int> st = stack_new();
+    struct Stack<int> st = Stack::new();
     int i = 0;
     while (i < 100) { st.push(i); i = i + 1; }
     ASSERT_EQ(st.pop().default(-1), 99);
@@ -141,7 +142,7 @@ void t_stack_queue() {
     ASSERT_TRUE(st.peek().is_null());
     st.free();
 
-    struct Queue<int> q = queue_with_cap(4UL);
+    struct Queue<int> q = Queue::with_cap(4UL);
     i = 0;
     while (i < 100) { q.enqueue(i); i = i + 1; }
     ASSERT_EQ(q.dequeue().default(-1), 0);
@@ -156,7 +157,7 @@ void t_stack_queue() {
     ASSERT_EQ(q.dequeue().default(-1), 51);
     ASSERT_EQ(q.back().default(-1), 149);
     q.free();
-    struct Queue<long long> e = queue_new();
+    struct Queue<long long> e = Queue::new();
     ASSERT_TRUE(e.dequeue().is_none());
     e.enqueue(5LL);
     ASSERT_EQ(e.dequeue().default(0LL), 5);
@@ -164,7 +165,7 @@ void t_stack_queue() {
 }
 
 void t_list() {
-    struct List<int> l = list_new();
+    struct List<int> l = List::new();
     int i = 0;
     while (i < 10) { l.push_back(i); i = i + 1; }
     l.push_front(-1);
@@ -191,7 +192,7 @@ void t_list() {
 }
 
 void t_map() {
-    struct HashMap<int, long long> m = map_new();
+    struct HashMap<int, long long> m = HashMap::new();
     int i = 0;
     while (i < 20000) { m.insert(i, (long long)i * 3LL); i = i + 1; }
     ASSERT_EQ(m.length(), 20000);
@@ -215,7 +216,7 @@ void t_map() {
     ASSERT_TRUE(m.get(-3).is_null());
     m.free();
 
-    struct StrMap<int> sm = str_map_new();
+    struct StrMap<int> sm = StrMap::new();
     sm.insert("one", 1);
     sm.insert("two", 2);
     ASSERT_EQ(sm.get("two").default(-1), 2);
@@ -225,7 +226,7 @@ void t_map() {
     ASSERT_TRUE(sm.get("three").is_null());
     i = 0;
     while (i < 500) {
-        struct String k = string_from("k");
+        struct String k = String::from("k");
         k.push_int((long long)i);
         sm.insert(k.as_ptr(), i);
         k.free();
@@ -248,7 +249,7 @@ static void bst_visit(const &int k, &int v) {
 }
 
 void t_bst() {
-    struct BST<int, int, Less<int>> t = bst_new();
+    struct BST<int, int, Less<int>> t = BST::new();
     int keys[7];
     unsafe { keys[0] = 50; keys[1] = 30; keys[2] = 70; keys[3] = 20; keys[4] = 40; keys[5] = 60; keys[6] = 80; }
     int i = 0;
@@ -272,7 +273,7 @@ void t_bst() {
     ASSERT_TRUE(t.min_key().is_null());
 
     // degenerate (sorted) inserts: iterative ops, no recursion
-    struct BST<long long, int, FnOrder<long long>> d = bst_new_with(order_fn(cmp_ll));
+    struct BST<long long, int, FnOrder<long long>> d = BST::new_with(FnOrder::of(cmp_ll));
     long long j = 0LL;
     while (j < 3000LL) { d.insert(j, (int)j); j = j + 1LL; }
     ASSERT_EQ(d.get(2999LL).default(-1), 2999);
@@ -293,12 +294,12 @@ void t_btree() {
     ASSERT_FALSE(tq.is_null());
     if (tq.is_null()) return;
     &BTree<int> t = std::expect_ref(tq, "tq is null");
-    btree_init(t);
+    t.init();
     unsigned long i = 0UL;
     while (i < 200UL) { t.insert((i * 7919UL) % 1000UL, (int)i * 10); i = i + 1UL; }
-    ASSERT_EQ(t.len(), 200);
+    ASSERT_EQ(t.length(),200);
     t.insert((3UL * 7919UL) % 1000UL, 30);          // overwrite keeps the count
-    ASSERT_EQ(t.len(), 200);
+    ASSERT_EQ(t.length(),200);
     i = 0UL;
     int okc = 1;
     while (i < 200UL) {
@@ -309,7 +310,7 @@ void t_btree() {
     ASSERT_EQ(t.remove((5UL * 7919UL) % 1000UL).default(-1), 50);
     ASSERT_FALSE(t.contains((5UL * 7919UL) % 1000UL));
     ASSERT_TRUE(t.remove(5000UL).is_none());
-    ASSERT_EQ(t.len(), 199);
+    ASSERT_EQ(t.length(),199);
     t.foreach(bt_visit);
     ASSERT_TRUE(g_bt_sorted);
     // churn: remove everything and refill; merged nodes are recycled
@@ -317,9 +318,9 @@ void t_btree() {
     while (round < 5) {
         i = 0UL;
         while (i < 200UL) { t.remove((i * 7919UL) % 1000UL); i = i + 1UL; }
-        ASSERT_EQ(t.len(), 0);
+        ASSERT_EQ(t.length(),0);
         i = 0UL;
-        while (i < 200UL) { ASSERT_EQ(t.insert((i * 7919UL) % 1000UL, (int)i), 0); i = i + 1UL; }
+        while (i < 200UL) { ASSERT_TRUE(t.insert((i * 7919UL) % 1000UL, (int)i)); i = i + 1UL; }
         round = round + 1;
     }
     ASSERT_EQ(t.get((7UL * 7919UL) % 1000UL).default(-1), 7);
@@ -332,7 +333,7 @@ static int g_sv_buf[4];
 static struct StaticMapSlot<long long> g_sm_slots[8];
 
 void t_static() {
-    struct StaticVec<int> v = static_vec_init(&g_sv_buf[0], 4UL);
+    struct StaticVec<int> v = StaticVec::over(&g_sv_buf[0], 4UL);
     int i = 0;
     while (i < 4) { ASSERT_TRUE(v.push(i * 10)); i = i + 1; }
     ASSERT_FALSE(v.push(99));
@@ -342,7 +343,7 @@ void t_static() {
     ASSERT_EQ(v.get(1UL).default(-1), 10);
     ASSERT_TRUE(v.get(3UL).is_null());
 
-    struct StaticMap<long long> m = static_map_init(&g_sm_slots[0], 8UL);
+    struct StaticMap<long long> m = StaticMap::over(&g_sm_slots[0], 8UL);
     unsigned long k = 0UL;
     while (k < 8UL) { ASSERT_TRUE(m.insert(k * 7UL, (long long)k)); k = k + 1UL; }
     ASSERT_FALSE(m.insert(1000UL, 1LL));    // full
@@ -354,17 +355,17 @@ void t_static() {
 
 void t_ring() {
     unsafe {
-        struct RingBuffer r = ring_init((&static unsigned char)ring_storage, 16UL);
+        struct RingBuffer r = RingBuffer::over((&static unsigned char)ring_storage, 16UL);
         unsigned char data[10];
         int i = 0;
         while (i < 10) { data[i] = (unsigned char)i; i = i + 1; }
         ASSERT_EQ(r.write(data, 10UL), 10);
-        ASSERT_EQ(r.readable(), 10);
+        ASSERT_EQ(r.length(),10);
         unsigned char out[16];
         ASSERT_EQ(r.read(out, 6UL), 6);
         ASSERT_EQ(out[5], 5);
         ASSERT_EQ(r.write(data, 10UL), 10);   // wraps
-        ASSERT_EQ(r.readable(), 14);
+        ASSERT_EQ(r.length(),14);
         ASSERT_EQ(r.write(data, 10UL), 2);    // only 2 bytes free
         ASSERT_TRUE(r.is_full());
         r.read(out, 4UL);
@@ -377,7 +378,7 @@ void t_slice() {
     int arr[8];
     int i = 0;
     while (i < 8) { unsafe { arr[i] = i * i; } i = i + 1; }
-    struct Slice<int> s = slice_of(&arr[0], 8UL);
+    struct Slice<int> s = Slice::of(&arr[0], 8UL);
     ASSERT_TRUE(s.in_bounds(7UL));
     ASSERT_FALSE(s.in_bounds(8UL));
     ASSERT_TRUE(s.get(8UL).is_null());
@@ -394,7 +395,7 @@ void t_slice() {
     arr_reverse(&arr[0], 8UL);
     unsafe { ASSERT_EQ(arr[0], 49); }
     ASSERT_TRUE(arr_at(&arr[0], 8UL, 8UL).is_null());
-    struct Slice<long long> h = slice_alloc(16UL);
+    struct Slice<long long> h = Slice::alloc(16UL);
     ASSERT_EQ(h.length(), 16);
     ASSERT_EQ(h.get(15UL).default(-1LL), 0);
     h.free();
@@ -403,14 +404,14 @@ void t_slice() {
 // String methods and capacity APIs the main cases don't reach.
 void t_string_more() {
     unsafe {
-        struct String s = string_from_n("abcdefgh", 5UL);
+        struct String s = String::from_n("abcdefgh", 5UL);
         ASSERT_STR_EQ(s.as_ptr(), "abcde");
         ASSERT_TRUE(s.reserve(100UL));
         ASSERT_TRUE(s.cap >= 106UL);
         s.shrink_to_fit();
         ASSERT_EQ(s.cap, 6);
         ASSERT_STR_EQ(s.as_ptr(), "abcde");
-        struct String t = string_from("-x");
+        struct String t = String::from("-x");
         s.push_str(&t);
         s.push_uint(18446744073709551615ULL);
         s.push_bool(0);
@@ -436,25 +437,25 @@ void t_string_more() {
         ASSERT_STR_EQ(pad.as_ptr(), "***axyz-x");
         struct String sp = pad.strip_prefix("***");
         ASSERT_STR_EQ(sp.as_ptr(), "axyz-x");
-        struct String rep = string_from("ab").repeat(3UL);
+        struct String rep = String::from("ab").repeat(3UL);
         ASSERT_STR_EQ(rep.as_ptr(), "ababab");
-        struct String ws = string_from("  \t lead");
+        struct String ws = String::from("  \t lead");
         struct String tl = ws.trim_left();
         ASSERT_STR_EQ(tl.as_ptr(), "lead");
         ASSERT_TRUE(tl.is_ascii());
         ASSERT_TRUE(tl.is_alphanumeric());
-        struct String ne = string_from("caf\xC3\xA9");
+        struct String ne = String::from("caf\xC3\xA9");
         ASSERT_FALSE(ne.is_ascii());
-        struct String words = string_from("  one two\tthree  four ");
+        struct String words = String::from("  one two\tthree  four ");
         struct String parts[3];
         ASSERT_EQ(words.split_whitespace(&parts[0], 3UL), 3);
         ASSERT_STR_EQ(parts[0].as_ptr(), "one");
         ASSERT_STR_EQ(parts[2].as_ptr(), "three  four");   // last slot takes the rest
         int ok = 0;
-        struct String fl = string_from("-2.5e2");
+        struct String fl = String::from("-2.5e2");
         ASSERT_TRUE(fl.parse_float(&ok) == -250.0);
         ASSERT_TRUE(ok);
-        struct String bad = string_from("2.5x");
+        struct String bad = String::from("2.5x");
         bad.parse_float(&ok);
         ASSERT_FALSE(ok);
         int i = 0;
@@ -465,7 +466,7 @@ void t_string_more() {
         // reserve / with_cap variants
         int arr[4];
         arr[0] = 4; arr[1] = 3; arr[2] = 2; arr[3] = 1;
-        struct Vec<int> v = vec_from_arr(&arr[0], 4UL);
+        struct Vec<int> v = Vec::from_arr(&arr[0], 4UL);
         ASSERT_EQ(v.length(), 4);
         ASSERT_EQ(*v.at(3UL), 1);
         ASSERT_TRUE(v.reserve(64UL));
@@ -473,17 +474,17 @@ void t_string_more() {
         v.shrink();
         ASSERT_EQ(v.total_capacity(), 4);
         v.free();
-        struct Stack<int> st = stack_with_cap(16UL);
+        struct Stack<int> st = Stack::with_cap(16UL);
         ASSERT_TRUE(st.reserve(32UL));
         st.push(5);
         ASSERT_EQ(st.pop().default(0), 5);
         st.free();
-        struct Queue<int> q = queue_new();
+        struct Queue<int> q = Queue::new();
         ASSERT_TRUE(q.reserve(10UL));
         q.enqueue(9);
         ASSERT_EQ(q.dequeue().default(0), 9);
         q.free();
-        struct HashMap<int, int> m = map_with_cap(100UL);
+        struct HashMap<int, int> m = HashMap::with_cap(100UL);
         ASSERT_TRUE(m.reserve(500UL));
         m.insert(3, 30);
         ASSERT_EQ(m.get(3).default(0), 30);
@@ -501,8 +502,185 @@ void t_string_more() {
     }
 }
 
+// ── Container traits (traits.h): one generic body per role, run over every
+// conforming container ──────────────────────────────────────────────────────
+
+// Len + Clear: non-empty before, empty after clear().
+generic<C: Len + Clear>
+int clears(&C c) {
+    int had = !c.is_empty() && c.length() > 0UL;
+    c.clear();
+    return had && c.is_empty() && c.length() == 0UL;
+}
+
+// Lifo: pushes 1..n, pops them back newest first.
+generic<S: Lifo>
+int lifo_ok(&S s, int n) {
+    int i = 1;
+    while (i <= n) { if (!s.push(i)) return 0; i = i + 1; }
+    if (s.length() != (unsigned long)n) return 0;
+    while (i > 1) {
+        i = i - 1;
+        if (s.pop().default(-1) != i) return 0;
+    }
+    return s.is_empty() && s.pop().is_none();
+}
+
+// Sequence: push_all, then index every element back.
+generic<S: Sequence, T>
+int sequence_ok(&S s, const &T items, unsigned long n) {
+    if (push_all(s, items, n) != n || s.length() != n) return 0;
+    unsigned long i = 0UL;
+    while (i < n) {
+        int same = 0;
+        match (s.get(i)) {
+            case some(p): unsafe { same = *p == items[i]; }
+            case null: same = 0;
+        }
+        if (!same) return 0;
+        i = i + 1UL;
+    }
+    return s.get(n).is_null();
+}
+
+// CountedFifo: in through enqueue_all, out in the same order through
+// drain_into.
+generic<Q: CountedFifo, T>
+int fifo_ok(&Q q, const &T items, unsigned long n) {
+    if (enqueue_all(q, items, n) != n || q.length() != n) return 0;
+    struct Vec<T> out = Vec::new();
+    int ok = drain_into(q, &out) == n && q.is_empty() && q.dequeue().is_none();
+    unsigned long i = 0UL;
+    while (ok && i < n) {
+        unsafe { ok = *out.at(i) == items[i]; }
+        i = i + 1UL;
+    }
+    out.free();
+    return ok;
+}
+
+// Map: insert, overwrite, look up, remove.
+generic<M: Map, K, V>
+int map_ok(&M m, K a, K b, V va, V vb) {
+    if (!m.is_empty()) return 0;
+    m.insert(a, vb);
+    m.insert(a, va);                          // overwrite
+    m.insert(b, vb);
+    if (m.length() != 2UL || !m.contains(a) || !m.contains(b)) return 0;
+    int got = 0;
+    match (m.get(b)) { case some(p): got = *p == vb; case null: got = 0; }
+    if (!got) return 0;
+    if (m.remove(a).default(vb) != va) return 0;
+    return !m.contains(a) && m.remove(a).is_none() && m.length() == 1UL;
+}
+
+// An Order of our own: by last decimal digit, then by value.
+struct ByLastDigit {
+    int unused_;
+    int cmp(const &int a, const &int b) const;
+};
+int ByLastDigit::cmp(const &int a, const &int b) const {
+    int da = *a % 10;
+    int db = *b % 10;
+    if (da != db) return da < db ? -1 : 1;
+    return *a < *b ? -1 : (*a > *b ? 1 : 0);
+}
+
+static unsigned char g_trait_ring[8];
+static int g_trait_sv[8];
+static struct StaticMapSlot<int> g_trait_sm[4];
+
+void t_traits() {
+    int xs[5];
+    unsafe { xs[0] = 3; xs[1] = 1; xs[2] = 4; xs[3] = 1; xs[4] = 5; }
+
+    // Lifo: Vec, Stack, StaticVec
+    struct Vec<int> v = Vec::new();
+    struct Stack<int> st = Stack::new();
+    struct StaticVec<int> sv = StaticVec::over(&g_trait_sv[0], 8UL);
+    ASSERT_TRUE(lifo_ok(&v, 100));
+    ASSERT_TRUE(lifo_ok(&st, 100));
+    ASSERT_TRUE(lifo_ok(&sv, 8));
+    ASSERT_FALSE(lifo_ok(&sv, 9));                 // the 9th push is refused
+    sv.clear();
+
+    // Sequence: Vec, StaticVec
+    ASSERT_TRUE(sequence_ok(&v, &xs[0], 5UL));
+    ASSERT_TRUE(sequence_ok(&sv, &xs[0], 5UL));
+    sv.clear();
+    unsafe { ASSERT_EQ(push_all(&sv, &xs[0], 5UL) + push_all(&sv, &xs[0], 5UL), 8); }   // stops when full
+
+    // CountedFifo: Queue, RingBuffer (bytes); MpscQueue, LFQueue and Chan
+    // are in test_runtime
+    struct Queue<int> q = Queue::with_cap(2UL);
+    ASSERT_TRUE(fifo_ok(&q, &xs[0], 5UL));
+    unsigned char bytes[6];
+    unsafe {
+        bytes[0] = (unsigned char)'f'; bytes[1] = (unsigned char)'i'; bytes[2] = (unsigned char)'f';
+        bytes[3] = (unsigned char)'o'; bytes[4] = (unsigned char)'!'; bytes[5] = (unsigned char)'?';
+        struct RingBuffer r = RingBuffer::over((&static unsigned char)g_trait_ring, 8UL);
+        ASSERT_TRUE(fifo_ok(&r, &bytes[0], 6UL));
+        ASSERT_EQ(enqueue_all(&r, &bytes[0], 6UL) + enqueue_all(&r, &bytes[0], 6UL), 8);  // full at 8
+        ASSERT_TRUE(clears(&r));
+    }
+
+    // Map: HashMap, StrMap, BST, BTree
+    struct HashMap<int, long long> hm = HashMap::new();
+    ASSERT_TRUE(map_ok(&hm, 7, -7, 70LL, -70LL));
+    struct StrMap<int> sm = StrMap::new();
+    ASSERT_TRUE(map_ok(&sm, "seven", "minus seven", 7, -7));
+    struct BST<int, int, Less<int>> bt = BST::new();
+    ASSERT_TRUE(map_ok(&bt, 7, -7, 70, -70));
+    ?&heap BTree<int> btq = alloc(sizeof(struct BTree<int>));
+    ASSERT_FALSE(btq.is_null());
+    if (btq.is_null()) return;
+    &BTree<int> b = std::expect_ref(btq, "btq is null");
+    b.init();
+    ASSERT_TRUE(map_ok(b, 7UL, 9UL, 70, 90));
+
+    // Len + Clear: every container above, plus String, List and StaticMap
+    struct String s = String::from("abc");
+    struct List<int> l = List::new();
+    l.push_back(1);
+    struct StaticMap<int> smap = StaticMap::over(&g_trait_sm[0], 4UL);
+    smap.insert(1UL, 1);
+    v.push(1); st.push(1); sv.push(1); q.enqueue(1);
+    ASSERT_TRUE(clears(&v));
+    ASSERT_TRUE(clears(&st));
+    ASSERT_TRUE(clears(&sv));
+    ASSERT_TRUE(clears(&q));
+    ASSERT_TRUE(clears(&hm));
+    ASSERT_TRUE(clears(&sm));
+    ASSERT_TRUE(clears(&bt));
+    ASSERT_TRUE(clears(b));
+    ASSERT_TRUE(clears(&s));
+    ASSERT_TRUE(clears(&l));
+    ASSERT_TRUE(clears(&smap));
+
+    // Order: Less, Greater, FnOrder and a struct of our own, through
+    // vec_sort_by and BST's ordering parameter
+    push_all(&v, &xs[0], 5UL);
+    v.push(20); v.push(11);
+    struct ByLastDigit by_digit;
+    by_digit.unused_ = 0;
+    vec_sort_by(&v, by_digit);                     // 20 1 1 11 3 4 5
+    ASSERT_EQ(*v.at(0UL), 20);
+    ASSERT_EQ(*v.at(3UL), 11);
+    ASSERT_EQ(*v.at(6UL), 5);
+    vec_sort_by(&v, FnOrder::of(cmp_int));
+    ASSERT_EQ(*v.at(6UL), 20);
+    struct BST<int, int, ByLastDigit> bd = BST::new_with(by_digit);
+    bd.insert(15, 0); bd.insert(21, 0); bd.insert(30, 0);
+    ASSERT_EQ(bd.min_key().default(0), 30);
+    ASSERT_EQ(bd.max_key().default(0), 15);
+
+    v.free(); st.free(); q.free(); hm.free(); sm.free(); bt.free(); bd.free();
+    s.free(); l.free();
+    dealloc(btq);
+}
+
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("vec", t_vec);
         t.add("string", t_string);
@@ -515,6 +693,7 @@ int main() {
         t.add("static_vec/static_map", t_static);
         t.add("slice", t_slice);
         t.add("string/capacity extras", t_string_more);
+        t.add("container traits", t_traits);
     }
     t.run();
     t.print_summary();
