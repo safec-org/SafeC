@@ -359,6 +359,16 @@ struct HttpResponse http_request(const &char host, unsigned short port,
                                   const ?&char extra_headers,
                                   const ?&unsigned char body, unsigned long body_len,
                                   ?&int ok) {
+    return http_request_timeout(host, port, method, path, extra_headers, body, body_len,
+                                HTTP_DEFAULT_CONNECT_TIMEOUT_MS, 0, ok);
+}
+
+struct HttpResponse http_request_timeout(const &char host, unsigned short port,
+                                          const &char method, const &char path,
+                                          const ?&char extra_headers,
+                                          const ?&unsigned char body, unsigned long body_len,
+                                          int connect_timeout_ms, int io_timeout_ms,
+                                          ?&int ok) {
     struct HttpResponse resp;
     resp.status  = 0;
     resp.headers = string_new();
@@ -370,15 +380,16 @@ struct HttpResponse http_request(const &char host, unsigned short port,
 
     int fd = -1;
     if (good) {
-        unsafe { fd = tcp_connect_nb(addr, port); }
+        // Waits for the handshake itself rather than relying on the first
+        // blocking write to do it: Linux's write() does wait on a
+        // still-connecting socket, but BSD and Winsock fail it with
+        // ENOTCONN, and none of them bound the wait below the kernel's own
+        // SYN-retry limit (~130s on Linux).
+        unsafe { fd = tcp_connect_timeout(addr, port, connect_timeout_ms); }
         if (fd < 0) { good = 0; }
     }
-    if (good) {
-        // A blocking-mode I/O call on a socket with connect() still in
-        // flight waits for the connection to finish (POSIX-guaranteed —
-        // see fd_set_blocking's doc comment in io_nb.h), so no separate
-        // "wait for connect to complete" step is needed here.
-        unsafe { fd_set_blocking(fd); }
+    if (good && io_timeout_ms > 0) {
+        if (sock_set_io_timeout(fd, io_timeout_ms) != 0) { good = 0; }
     }
 
     if (good) {

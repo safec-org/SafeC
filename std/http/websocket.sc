@@ -95,6 +95,11 @@ static int ws_read_n_(int fd, unsigned char* out, unsigned long want) {
 
 struct WsConn ws_connect(const &char host, unsigned short port,
                           const &char path, ?&int ok) {
+    return ws_connect_timeout(host, port, path, WS_DEFAULT_TIMEOUT_MS, ok);
+}
+
+struct WsConn ws_connect_timeout(const &char host, unsigned short port,
+                                  const &char path, int timeout_ms, ?&int ok) {
     struct WsConn conn;
     conn.fd = -1;
     conn.is_server = 0;
@@ -105,10 +110,12 @@ struct WsConn ws_connect(const &char host, unsigned short port,
 
     int fd = -1;
     if (good) {
-        unsafe { fd = tcp_connect_nb(addr, port); }
+        unsafe { fd = tcp_connect_timeout(addr, port, timeout_ms); }
         if (fd < 0) { good = 0; }
     }
-    if (good) { unsafe { fd_set_blocking(fd); } }
+    if (good && timeout_ms > 0) {
+        if (sock_set_io_timeout(fd, timeout_ms) != 0) { good = 0; }
+    }
 
     struct String keyB64 = string_new();
     if (good) {
@@ -161,6 +168,12 @@ struct WsConn ws_connect(const &char host, unsigned short port,
     }
     keyB64.free();
 
+    // The handshake timeout must not outlive it: an open WebSocket can sit
+    // idle between messages indefinitely, and ws_recv blocks until one
+    // arrives.
+    if (good && timeout_ms > 0) {
+        if (sock_set_io_timeout(fd, 0) != 0) { good = 0; }
+    }
     if (good) {
         conn.fd = fd;
     } else if (fd >= 0) {

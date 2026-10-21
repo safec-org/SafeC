@@ -64,12 +64,31 @@ struct String http_header_get(const &char raw_headers, const &char name);
 // Connection: close are added automatically and don't need to be included.
 // 'body'/'body_len' may be NULL/0 for a bodyless request (GET, etc.).
 // On any failure (DNS resolution, connect, or a response that doesn't
-// parse as HTTP), '*ok' (if non-NULL) is set to 0.
+// parse as HTTP), '*ok' (if non-NULL) is set to 0. The TCP connect gives
+// up after HTTP_DEFAULT_CONNECT_TIMEOUT_MS; reading the response has no
+// time limit (use http_request_timeout to bound it).
 struct HttpResponse http_request(const &char host, unsigned short port,
                                   const &char method, const &char path,
                                   const ?&char extra_headers,
                                   const ?&unsigned char body, unsigned long body_len,
                                   ?&int ok);
+
+#define HTTP_DEFAULT_CONNECT_TIMEOUT_MS 30000
+
+// http_request with explicit limits. 'connect_timeout_ms' bounds the TCP
+// connect (see std::tcp_connect_timeout); 'io_timeout_ms' bounds each
+// individual send/receive on the socket (SO_SNDTIMEO/SO_RCVTIMEO), so a
+// server that accepts but never answers fails the request after that long
+// rather than hanging; it is not a limit on the whole transfer. Either
+// value <= 0 means no limit. DNS resolution (gethostbyname) is not
+// covered by either: it is bounded only by the system resolver's own
+// timeout/attempts settings.
+struct HttpResponse http_request_timeout(const &char host, unsigned short port,
+                                          const &char method, const &char path,
+                                          const ?&char extra_headers,
+                                          const ?&unsigned char body, unsigned long body_len,
+                                          int connect_timeout_ms, int io_timeout_ms,
+                                          ?&int ok);
 
 // Convenience wrappers over http_request.
 struct HttpResponse http_get(const &char host, unsigned short port,

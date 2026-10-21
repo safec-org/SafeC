@@ -6,6 +6,8 @@
 #include <std/panic.h>
 #include <std/str.h>
 #include <std/thread.h>
+#include <std/time.h>
+#include <std/sched/io_nb.h>
 #include <std/collections/string.h>
 #include <std/serial/value.h>
 #include <std/serial/json.h>
@@ -368,6 +370,74 @@ void t_websocket() {
     }
 }
 
+extern int close(int fd);
+
+static long long ms_since(long long t0) {
+    return (time_mono_ns() - t0) / 1000000LL;
+}
+
+// connect()/handshake timeouts: none of these may take anywhere near the
+// kernel's ~130s SYN-retry limit or block forever on a silent server.
+void t_connect_timeout() {
+    start_servers();
+    unsafe {
+        unsigned int lo = sched_ipv4((unsigned char)127, (unsigned char)0,
+                                     (unsigned char)0, (unsigned char)1);
+        unsigned short closedPort = (unsigned short)(g_http_port + (unsigned short)10);
+        unsigned short silentPort = (unsigned short)(g_http_port + (unsigned short)11);
+
+        // Refused: reported as a failure right away.
+        long long t0 = time_mono_ns();
+        int fd = tcp_connect_timeout(lo, closedPort, 2000);
+        ASSERT_EQ(fd, -1);
+        ASSERT_TRUE(ms_since(t0) < 1000LL);
+
+        // Unanswered SYN (10.255.255.1 is normally blackholed; where it is
+        // unroutable or rejected instead, connect fails even sooner).
+        t0 = time_mono_ns();
+        fd = tcp_connect_timeout(sched_ipv4((unsigned char)10, (unsigned char)255,
+                                            (unsigned char)255, (unsigned char)1),
+                                 (unsigned short)80, 300);
+        ASSERT_EQ(fd, -1);
+        ASSERT_TRUE(ms_since(t0) < 2000LL);
+
+        // Success path returns a usable blocking socket.
+        int ok = 0;
+        struct HttpResponse warm = get_retry("/echo", &ok);   // server is up
+        warm.free();
+        fd = tcp_connect_timeout(lo, g_http_port, 2000);
+        ASSERT_TRUE(fd >= 0);
+        if (fd >= 0) close(fd);
+
+        // A listener that never accept()s: the kernel completes the TCP
+        // handshake, then nothing ever answers the request.
+        int lfd = tcp_listen_nb(silentPort);
+        ASSERT_TRUE(lfd >= 0);
+        if (lfd < 0) return;
+
+        t0 = time_mono_ns();
+        struct HttpResponse r = http_request_timeout("127.0.0.1", silentPort, "GET", "/",
+                                                     null, null, 0UL, 2000, 300, &ok);
+        ASSERT_FALSE(ok);
+        ASSERT_TRUE(ms_since(t0) < 2000LL);
+        r.free();
+
+        t0 = time_mono_ns();
+        struct WsConn c = ws_connect_timeout("127.0.0.1", silentPort, "/", 300, &ok);
+        ASSERT_FALSE(ok);
+        ASSERT_EQ(c.fd, -1);
+        ASSERT_TRUE(ms_since(t0) < 2000LL);
+        close(lfd);
+
+        // The same limits don't get in the way of a server that answers.
+        r = http_request_timeout("127.0.0.1", g_http_port, "GET", "/echo",
+                                 null, null, 0UL, 2000, 2000, &ok);
+        ASSERT_TRUE(ok);
+        ASSERT_EQ(r.status, 200);
+        r.free();
+    }
+}
+
 extern unsigned int alarm(unsigned int seconds);
 
 int main() {
@@ -382,6 +452,7 @@ int main() {
         t.add("oauth2 code exchange", t_oauth2);
         t.add("rpc + server_fn", t_rpc);
         t.add("websocket", t_websocket);
+        t.add("connect/handshake timeouts", t_connect_timeout);
     }
     t.run();
     t.print_summary();

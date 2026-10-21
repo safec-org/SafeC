@@ -78,6 +78,24 @@ int tcp_accept_nb(int listenfd);
 // immediate failure.
 int tcp_connect_nb(unsigned int addr_network_order, unsigned short port);
 
+// socket()+connect() that waits at most 'timeout_ms' (<= 0: no limit
+// beyond the kernel's own SYN retries, ~2 minutes on Linux) for the TCP
+// handshake: non-blocking connect(), poll()/select() for writability,
+// then SO_ERROR. Returns a connected socket already switched back to
+// blocking mode, or -1 with the socket closed and the error left in
+// errno (BSD/Linux) or WSAGetLastError() (Windows): ETIMEDOUT/
+// WSAETIMEDOUT on timeout, otherwise the connect error itself
+// (ECONNREFUSED, ENETUNREACH, ...).
+int tcp_connect_timeout(unsigned int addr_network_order, unsigned short port,
+                        int timeout_ms);
+
+// Sets SO_RCVTIMEO and SO_SNDTIMEO on a blocking socket, so that a single
+// read/write that makes no progress for 'timeout_ms' fails (-1, EAGAIN/
+// EWOULDBLOCK, or WSAETIMEDOUT on Windows) instead of blocking forever.
+// It bounds each call, not a whole request. 'timeout_ms' <= 0 clears both
+// timeouts. Returns 0 on success.
+int sock_set_io_timeout(int fd, int timeout_ms);
+
 // True if the most recent non-blocking socket call (accept/recv/send/
 // connect/...) failed only because it would have blocked — i.e. "not
 // ready yet, try again after await_fd()", not a real error. Checking this
