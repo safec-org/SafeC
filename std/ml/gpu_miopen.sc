@@ -47,7 +47,9 @@ extern int hipMalloc(void** ptr, unsigned long size);
 extern int hipFree(void* ptr);
 extern int hipStreamSynchronize(void* stream);
 
+#define MIO_HALF           0    // miopenHalf
 #define MIO_FLOAT          1    // miopenFloat
+#define MIO_BFLOAT16       5    // miopenBFloat16
 #define MIO_CONVOLUTION    0    // miopenConvolution (cross-correlation, like cnn.sc)
 #define MIO_POOL_MAX       0    // miopenPoolingMax
 #define MIO_POOL_AVG       1    // miopenPoolingAverage (padding excluded; there is none)
@@ -124,18 +126,36 @@ static void mio_plan_release_(int s) {
 
 // Finds or builds the plan for this convolution shape; -1 on failure.
 // x, the weights and y are the buffers MIOpen's Find times its candidates on.
-static int mio_plan_(const &RocmConv2D layer, struct RocmBuf x, struct RocmBuf y,
+// The layer geometry the plans are built from (fp32 and 16-bit layers alike).
+struct MioGeom_ {
+    unsigned long inC;
+    unsigned long outC;
+    unsigned long kH;
+    unsigned long kW;
+    unsigned long stride;
+    unsigned long padding;
+    unsigned long wdev;     // the weights MIOpen's Find times on
+};
+
+static struct MioGeom_ mio_geom_(const &RocmConv2D layer) {
+    struct MioGeom_ g;
+    g.inC = layer.inChannels; g.outC = layer.outChannels; g.kH = layer.kH; g.kW = layer.kW;
+    g.stride = layer.stride; g.padding = layer.padding; g.wdev = layer.weight.dev;
+    return g;
+}
+
+static int mio_plan_(const &MioGeom_ layer, int dt, unsigned long xdev, unsigned long ydev,
                      unsigned long batch, unsigned long height, unsigned long width) {
     unsigned long outH = rocm_conv_out_dim(height, layer.kH, layer.stride, layer.padding);
     unsigned long outW = rocm_conv_out_dim(width, layer.kW, layer.stride, layer.padding);
     if (!mio_int_ok_(batch) || !mio_int_ok_(height) || !mio_int_ok_(width) || !mio_int_ok_(outH) ||
-        !mio_int_ok_(outW) || !mio_int_ok_(layer.inChannels) || !mio_int_ok_(layer.outChannels) ||
+        !mio_int_ok_(outW) || !mio_int_ok_(layer.inC) || !mio_int_ok_(layer.outC) ||
         !mio_int_ok_(layer.kH) || !mio_int_ok_(layer.kW) || layer.stride > 65535UL || layer.padding > 65535UL)
         return -1;
     unsigned long key[8];
-    key[0] = batch; key[1] = layer.inChannels; key[2] = height; key[3] = width;
-    key[4] = layer.outChannels; key[5] = layer.kH; key[6] = layer.kW;
-    key[7] = layer.stride | (layer.padding << 16);
+    key[0] = batch; key[1] = layer.inC; key[2] = height; key[3] = width;
+    key[4] = layer.outC; key[5] = layer.kH; key[6] = layer.kW;
+    key[7] = layer.stride | (layer.padding << 16) | ((unsigned long)dt << 32);
     int slot = -1;
     int s = 0;
     while (s < MIO_PLANS) {
@@ -161,13 +181,13 @@ static int mio_plan_(const &RocmConv2D layer, struct RocmBuf x, struct RocmBuf y
         void* yd = (void*)0;
         int ok = miopenCreateTensorDescriptor(&xd) == 0 && miopenCreateTensorDescriptor(&wd) == 0 &&
                  miopenCreateConvolutionDescriptor(&cd) == 0 && miopenCreateTensorDescriptor(&yd) == 0;
-        ok = ok && miopenSet4dTensorDescriptor(xd, MIO_FLOAT, (int)batch, (int)layer.inChannels,
+        ok = ok && miopenSet4dTensorDescriptor(xd, dt, (int)batch, (int)layer.inC,
                                                (int)height, (int)width) == 0;
-        ok = ok && miopenSet4dTensorDescriptor(wd, MIO_FLOAT, (int)layer.outChannels, (int)layer.inChannels,
+        ok = ok && miopenSet4dTensorDescriptor(wd, dt, (int)layer.outC, (int)layer.inC,
                                                (int)layer.kH, (int)layer.kW) == 0;
         ok = ok && miopenInitConvolutionDescriptor(cd, MIO_CONVOLUTION, (int)layer.padding, (int)layer.padding,
                                                    (int)layer.stride, (int)layer.stride, 1, 1) == 0;
-        ok = ok && miopenSet4dTensorDescriptor(yd, MIO_FLOAT, (int)batch, (int)layer.outChannels,
+        ok = ok && miopenSet4dTensorDescriptor(yd, dt, (int)batch, (int)layer.outC,
                                                (int)outH, (int)outW) == 0;
         // Find needs a workspace big enough for every candidate it may try;
         // the winner's own (usually smaller) workspace is allocated after.
@@ -180,8 +200,8 @@ static int mio_plan_(const &RocmConv2D layer, struct RocmBuf x, struct RocmBuf y
         // fastest first.
         unsigned long perf[2 * MIO_PERF_COUNT];
         int returned = 0;
-        ok = ok && miopenFindConvolutionForwardAlgorithm(g_mio, xd, (const void*)x.dev, wd,
-                       (const void*)layer.weight.dev, cd, yd, (void*)y.dev, MIO_PERF_COUNT, &returned,
+        ok = ok && miopenFindConvolutionForwardAlgorithm(g_mio, xd, (const void*)xdev, wd,
+                       (const void*)layer.wdev, cd, yd, (void*)ydev, MIO_PERF_COUNT, &returned,
                        (void*)&perf[0], findWs, findBytes, false) == 0;
         if (findWs != (void*)0) hipFree(findWs);
         int algo = -1;
@@ -228,7 +248,8 @@ static int mio_conv_(const &RocmConv2D layer, struct RocmBuf x, struct RocmBuf y
     if (x.dev == 0UL || y.dev == 0UL ||
         x.len < batch * layer.inChannels * height * width ||
         y.len < batch * layer.outChannels * outH * outW) return 0;
-    int p = mio_plan_(layer, x, y, batch, height, width);
+    struct MioGeom_ geom = mio_geom_(layer);
+    int p = mio_plan_(&geom, MIO_FLOAT, x.dev, y.dev, batch, height, width);
     if (p < 0) return 0;
     float one = 1.0f;
     float zero = 0.0f;
@@ -255,29 +276,35 @@ int rocm_conv2d_relu(const &RocmConv2D layer, struct RocmBuf x, struct RocmBuf y
     return mio_conv_(layer, x, y, batch, height, width, 1);
 }
 
-static int mio_pool_(int mode, struct RocmBuf x, struct RocmBuf y, unsigned long batch, unsigned long channels,
-                     unsigned long height, unsigned long width, unsigned long kernel, unsigned long stride) {
+static int mio_pool_dt_(int mode, int dt, unsigned long xdev, unsigned long xlen, unsigned long ydev, unsigned long ylen,
+                        unsigned long batch, unsigned long channels,
+                        unsigned long height, unsigned long width, unsigned long kernel, unsigned long stride) {
     if (!miopen_ensure_()) return 0;
     unsigned long outH = rocm_conv_out_dim(height, kernel, stride, 0UL);
     unsigned long outW = rocm_conv_out_dim(width, kernel, stride, 0UL);
     if (!mio_int_ok_(batch) || !mio_int_ok_(channels) || !mio_int_ok_(height) || !mio_int_ok_(width) ||
         !mio_int_ok_(kernel) || !mio_int_ok_(stride) || outH == 0UL || outW == 0UL ||
-        x.dev == 0UL || y.dev == 0UL ||
-        x.len < batch * channels * height * width || y.len < batch * channels * outH * outW) return 0;
+        xdev == 0UL || ydev == 0UL ||
+        xlen < batch * channels * height * width || ylen < batch * channels * outH * outW) return 0;
     float one = 1.0f;
     float zero = 0.0f;
     unsafe {
         if (miopenSet2dPoolingDescriptor(g_mio_pool, mode, (int)kernel, (int)kernel, 0, 0,
                                          (int)stride, (int)stride) != 0 ||
-            miopenSet4dTensorDescriptor(g_mio_pool_x, MIO_FLOAT, (int)batch, (int)channels,
+            miopenSet4dTensorDescriptor(g_mio_pool_x, dt, (int)batch, (int)channels,
                                         (int)height, (int)width) != 0 ||
-            miopenSet4dTensorDescriptor(g_mio_pool_y, MIO_FLOAT, (int)batch, (int)channels,
+            miopenSet4dTensorDescriptor(g_mio_pool_y, dt, (int)batch, (int)channels,
                                         (int)outH, (int)outW) != 0) return 0;
         // Forward only: no index workspace.
-        return miopenPoolingForward(g_mio, g_mio_pool, (const void*)&one, g_mio_pool_x, (const void*)x.dev,
-                                    (const void*)&zero, g_mio_pool_y, (void*)y.dev, false,
+        return miopenPoolingForward(g_mio, g_mio_pool, (const void*)&one, g_mio_pool_x, (const void*)xdev,
+                                    (const void*)&zero, g_mio_pool_y, (void*)ydev, false,
                                     (void*)0, (size_t)0) == 0;
     }
+}
+
+static int mio_pool_(int mode, struct RocmBuf x, struct RocmBuf y, unsigned long batch, unsigned long channels,
+                     unsigned long height, unsigned long width, unsigned long kernel, unsigned long stride) {
+    return mio_pool_dt_(mode, MIO_FLOAT, x.dev, x.len, y.dev, y.len, batch, channels, height, width, kernel, stride);
 }
 
 int rocm_maxpool2d(struct RocmBuf x, struct RocmBuf y, unsigned long batch, unsigned long channels,
@@ -319,6 +346,68 @@ struct RocmConv2D rocm_conv2d_upload(const &Conv2D layer) {
 void rocm_conv2d_free(&RocmConv2D layer) {
     rocm_free(&layer.weight);
     rocm_free(&layer.bias);
+}
+
+// ── fp16 / bf16 ──────────────────────────────────────────────────────────────
+
+static int mio_dt_(int dtype) { return dtype == ROCM_BF16 ? MIO_BFLOAT16 : MIO_HALF; }
+
+struct RocmHalfConv2D rocm_half_conv2d_upload(const &Conv2D layer, int dtype) {
+    struct RocmHalfConv2D d;
+    d.inChannels = layer.inChannels;
+    d.outChannels = layer.outChannels;
+    d.kH = layer.kH;
+    d.kW = layer.kW;
+    d.stride = layer.stride;
+    d.padding = layer.padding;
+    unsigned long wn = layer.outChannels * layer.inChannels * layer.kH * layer.kW;
+    d.weight = rocm_half_upload(layer.weight, wn, dtype);
+    d.bias = rocm_half_upload(layer.bias, layer.outChannels, dtype);
+    if (d.weight.dev == 0UL || d.bias.dev == 0UL) {
+        rocm_half_free(&d.weight);
+        rocm_half_free(&d.bias);
+    }
+    return d;
+}
+
+void rocm_half_conv2d_free(&RocmHalfConv2D layer) {
+    rocm_half_free(&layer.weight);
+    rocm_half_free(&layer.bias);
+}
+
+static int mio_half_conv_(const &RocmHalfConv2D layer, struct RocmHalfBuf x, struct RocmHalfBuf y,
+                          unsigned long batch, unsigned long height, unsigned long width, int relu) {
+    if (!miopen_ensure_() || layer.weight.dev == 0UL || layer.bias.dev == 0UL) return 0;
+    if (x.dtype != layer.weight.dtype || y.dtype != layer.weight.dtype) return 0;
+    unsigned long outH = rocm_conv_out_dim(height, layer.kH, layer.stride, layer.padding);
+    unsigned long outW = rocm_conv_out_dim(width, layer.kW, layer.stride, layer.padding);
+    if (x.dev == 0UL || y.dev == 0UL ||
+        x.len < batch * layer.inChannels * height * width ||
+        y.len < batch * layer.outChannels * outH * outW) return 0;
+    struct MioGeom_ geom;
+    geom.inC = layer.inChannels; geom.outC = layer.outChannels; geom.kH = layer.kH; geom.kW = layer.kW;
+    geom.stride = layer.stride; geom.padding = layer.padding; geom.wdev = layer.weight.dev;
+    int p = mio_plan_(&geom, mio_dt_(x.dtype), x.dev, y.dev, batch, height, width);
+    if (p < 0) return 0;
+    float one = 1.0f;
+    float zero = 0.0f;
+    unsafe {
+        if (miopenConvolutionForward(g_mio, (const void*)&one, g_mp_x[p], (const void*)x.dev,
+                g_mp_w[p], (const void*)layer.weight.dev, g_mp_conv[p], g_mp_algo[p],
+                (const void*)&zero, g_mp_y[p], (void*)y.dev, g_mp_ws[p], (size_t)g_mp_wsBytes[p]) != 0)
+            return 0;
+    }
+    return rocm_half_bias(y, layer.bias, batch, layer.outChannels, outH * outW, relu);
+}
+
+int rocm_half_conv2d(const &RocmHalfConv2D layer, struct RocmHalfBuf x, struct RocmHalfBuf y,
+                     unsigned long batch, unsigned long height, unsigned long width) {
+    return mio_half_conv_(layer, x, y, batch, height, width, 0);
+}
+
+int rocm_half_conv2d_relu(const &RocmHalfConv2D layer, struct RocmHalfBuf x, struct RocmHalfBuf y,
+                          unsigned long batch, unsigned long height, unsigned long width) {
+    return mio_half_conv_(layer, x, y, batch, height, width, 1);
 }
 
 // ── U-Net ────────────────────────────────────────────────────────────────────

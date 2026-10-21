@@ -1,4 +1,5 @@
 #pragma once
+#include <std/collections/vec.h>
 // SafeC Standard Library — NVIDIA GPU backend (CUDA).
 //
 // Three layers:
@@ -177,6 +178,65 @@ int cuda_half_mse_grad(struct CudaHalfBuf y, struct CudaHalfBuf t, struct CudaHa
 int cuda_half_sgd(struct CudaHalfBuf w, struct CudaHalfBuf g, float lr);   // w = round(w - lr * g)
 int cuda_half_sgd2(struct CudaHalfBuf w1, struct CudaHalfBuf g1, struct CudaHalfBuf w2, struct CudaHalfBuf g2,
                    float lr);
+
+// ── Mixed precision ──────────────────────────────────────────────────────────
+// The usual layout: fp32 master weights and optimizer state, a 16-bit copy
+// of the weights for the forward / backward passes, 16-bit or fp32
+// gradients with the loss scale in them. One step:
+//   cuda_half_gemm ... (forward / backward in fp16 or bf16)
+//   zero the flag; cuda_half_unscale_many(grads16, grads32, 1 / scale, flag)
+//   cuda_mp_adam(w32, m, v, g32, w16, ..., flag)       // skipped on the GPU if flag != 0
+//   read the flag (4 bytes) to back the loss scale off or grow it
+// so an overflowed step costs no host round trip before the update. All of
+// these are queued and can be recorded into a CudaGraph.
+//
+// dst = src converted between fp16 and bf16 (src.len elements).
+int cuda_half_convert(struct CudaHalfBuf src, struct CudaHalfBuf dst);
+// Every src[i] -> dst[i] (lengths dst[i].len / src[i].len as in
+// cuda_to_half / cuda_from_half), 32 buffers per launch: a model's
+// parameters in one or a few launches instead of one per tensor.
+int cuda_to_half_many(const &Vec<struct CudaBuf> src, const &Vec<struct CudaHalfBuf> dst);
+int cuda_from_half_many(const &Vec<struct CudaHalfBuf> src, const &Vec<struct CudaBuf> dst);
+// Gradient unscaling: dst[i] = src[i] * scale in fp32 (16-bit or fp32
+// sources; the fp32 form may work in place, dst == src), and flag[0] = 1
+// when any result is inf or NaN. The flag is only ever set: zero it
+// (cuda_zero) before the step.
+int cuda_half_unscale_many(const &Vec<struct CudaHalfBuf> src, const &Vec<struct CudaBuf> dst, float scale,
+                           struct CudaBuf flag);
+int cuda_unscale_many(const &Vec<struct CudaBuf> src, const &Vec<struct CudaBuf> dst, float scale,
+                      struct CudaBuf flag);
+int cuda_zero(struct CudaBuf b);                     // b = 0 (all of b.len)
+// Optimizer steps on fp32 master weights w with gradient g, as nn.h's
+// optimizer_step (OPT_SGD / OPT_MOMENTUM when vel is valid, OPT_ADAM /
+// OPT_ADAMW when decoupled; 'step' is the 1-based step count for the bias
+// correction). The updated weights are also written, rounded, to wHalf when
+// it is valid. Skipped entirely when skip is valid and skip[0] != 0. Pass an
+// invalid buffer (dev == 0) for any optional argument.
+int cuda_mp_sgd(struct CudaBuf w, struct CudaBuf g, struct CudaBuf vel, struct CudaHalfBuf wHalf,
+                float lr, float momentum, float weightDecay, struct CudaBuf skip);
+int cuda_mp_adam(struct CudaBuf w, struct CudaBuf m, struct CudaBuf v, struct CudaBuf g, struct CudaHalfBuf wHalf,
+                 float lr, float beta1, float beta2, float eps, float weightDecay, int decoupled,
+                 unsigned long step, struct CudaBuf skip);
+// 16-bit elementwise ops (fp32 arithmetic, one rounding per value; a, b and
+// out of one dtype and a.len elements).
+int cuda_half_add(struct CudaHalfBuf a, struct CudaHalfBuf b, struct CudaHalfBuf out);
+int cuda_half_sub(struct CudaHalfBuf a, struct CudaHalfBuf b, struct CudaHalfBuf out);
+int cuda_half_mul(struct CudaHalfBuf a, struct CudaHalfBuf b, struct CudaHalfBuf out);
+int cuda_half_scale(struct CudaHalfBuf a, float k, struct CudaHalfBuf out);
+int cuda_half_axpy(struct CudaHalfBuf a, float k, struct CudaHalfBuf b, struct CudaHalfBuf out);   // a + k b
+// y[r][c][p] += bias[c] (rows x channels x plane, row-major), then ReLU when
+// relu: a linear layer's bias (plane 1) or an NCHW convolution's.
+int cuda_half_bias(struct CudaHalfBuf y, struct CudaHalfBuf bias, unsigned long rows, unsigned long channels,
+                   unsigned long plane, int relu);
+
+// 16-bit max / avg pooling on NCHW (x: [batch, channels, height, width]),
+// kernel x kernel window, given stride, no padding: the same windows as
+// gpu_cudnn.h's cuda_maxpool2d. fp32 accumulation, one rounding; max
+// pooling copies the largest value's bits.
+int cuda_half_maxpool2d(struct CudaHalfBuf x, struct CudaHalfBuf y, unsigned long batch, unsigned long channels,
+                        unsigned long height, unsigned long width, unsigned long kernel, unsigned long stride);
+int cuda_half_avgpool2d(struct CudaHalfBuf x, struct CudaHalfBuf y, unsigned long batch, unsigned long channels,
+                        unsigned long height, unsigned long width, unsigned long kernel, unsigned long stride);
 
 // ── Interop: for libraries layered on this backend (gpu_cudnn.h, dsp/fft_cuda.h)
 

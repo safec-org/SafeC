@@ -33,6 +33,7 @@
 // buffer is exactly the bit layout those functions read and write.
 #include <std/ml/tensor.h>
 #include <std/ml/float16.h>
+#include <std/collections/vec.h>
 
 #define TENSOR_FP16 1
 #define TENSOR_BF16 2
@@ -67,6 +68,39 @@ struct HalfTensor half_tensor_new_1d(unsigned long n, int dtype);          // ze
 struct HalfTensor half_tensor_new_2d(unsigned long rows, unsigned long cols, int dtype);
 struct HalfTensor tensor_to_half(const &Tensor t, int dtype);               // round-to-nearest-even
 &Tensor           half_to_tensor(const &HalfTensor h, int requiresGrad);    // exact widening
+
+// ── Batch conversion for mixed precision ────────────────────────────────────
+// The usual layout: float32 master weights (what the optimizer updates), a
+// 16-bit copy refreshed after every step for the low-precision forward pass
+// or for uploading to a GPU, and 16-bit gradients brought back into the
+// masters' float32 gradients with the loss scale divided out. All of these
+// go through float16.h's bulk conversions (hardware where the CPU has it,
+// split across the thread pool on large tensors).
+//
+//   struct Vec<struct HalfTensor> w16 = tensors_to_half(&net.params, TENSOR_BF16);
+//   ... optimizer_step(&opt);
+//   tensors_to_half_into(&net.params, &w16);            // refresh the copy
+//   ... after a GPU backward that produced fp16 gradients g16:
+//   int ok = half_grads_accumulate(&g16, &net.params, (float)1.0 / scaler.scale);
+//   loss_scaler_update(&scaler, ok);
+
+// Into an existing tensor of the same size (dst keeps its dtype / shape);
+// 0 on a size mismatch.
+int tensor_to_half_into(const &Tensor t, &HalfTensor dst);
+int half_to_tensor_into(const &HalfTensor h, &Tensor dst);
+// dst = src in dst's dtype (fp16 <-> bf16, or a copy when they match).
+int half_convert(const &HalfTensor src, &HalfTensor dst);
+// One 16-bit copy per tensor (heap; free with half_tensors_free).
+struct Vec<struct HalfTensor> tensors_to_half(const &Vec<&Tensor> ts, int dtype);
+// Refresh copies made by tensors_to_half / write them back; 0 if the lists
+// differ in length or any pair in size.
+int  tensors_to_half_into(const &Vec<&Tensor> ts, &Vec<struct HalfTensor> dst);
+int  halves_to_tensors(const &Vec<struct HalfTensor> hs, &Vec<&Tensor> dst);
+void half_tensors_free(&Vec<struct HalfTensor> hs);
+// params[i].grad += decode(grads[i]) * invScale (allocating the gradient
+// if needed). Returns 1 if every resulting gradient value is finite -- the
+// loss_scaler_update argument -- and 0 on an overflow or a size mismatch.
+int  half_grads_accumulate(const &Vec<struct HalfTensor> grads, &Vec<&Tensor> params, float invScale);
 
 // ── HalfTensor ops (float32 compute, result rounded to a's dtype) ───────────
 // Binary ops require matching shapes and dtypes; on a mismatch the result
@@ -117,6 +151,8 @@ struct LossScaler loss_scaler_new();
 // scale in place and returns 1 if every gradient is finite, or 0 if any
 // gradient overflowed (inf/NaN) — skip the optimizer step in that case.
 int  loss_scaler_unscale(&LossScaler s, &Tensor p);
+// loss_scaler_unscale over every tensor in a list; 1 if all are finite.
+int  loss_scaler_unscale_all(&LossScaler s, &Vec<&Tensor> params);
 // Call once per step with the combined result of loss_scaler_unscale over
 // all parameters (1 = all finite). Grows or backs off the scale.
 void loss_scaler_update(&LossScaler s, int allFinite);

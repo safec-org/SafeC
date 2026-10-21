@@ -77,6 +77,9 @@ extern int cuEventDestroy_v2(void* event);
 
 #define DNN_TENSOR_NCHW        0    // CUDNN_TENSOR_NCHW
 #define DNN_DATA_FLOAT         0    // CUDNN_DATA_FLOAT
+#define DNN_DATA_HALF          2    // CUDNN_DATA_HALF
+#define DNN_DATA_BFLOAT16      9    // CUDNN_DATA_BFLOAT16
+#define DNN_TENSOR_OP_MATH     1    // CUDNN_TENSOR_OP_MATH
 #define DNN_CROSS_CORRELATION  1    // CUDNN_CROSS_CORRELATION (no filter flip, like cnn.sc)
 #define DNN_DEFAULT_MATH       0    // CUDNN_DEFAULT_MATH (fp32 data may use TF32 tensor cores)
 #define DNN_FMA_MATH           3    // CUDNN_FMA_MATH (plain fp32 FMA)
@@ -791,6 +794,185 @@ int cuda_concat_channels(struct CudaBuf a, unsigned long aChannels, struct CudaB
     // two strided copies (one kernel each), not one memcpy per image and input
     return cuda_copy_rows(a, 0UL, na, out, 0UL, na + nc, na, batch) &&
            cuda_copy_rows(c, 0UL, nc, out, na, na + nc, nc, batch);
+}
+
+// ── fp16 / bf16 ──────────────────────────────────────────────────────────────
+// Legacy-API plans for 16-bit data with fp32 compute, kept apart from the
+// fp32 plans above (keyed by shape and dtype; fastest algorithm cuDNN finds
+// that fits the workspace limit). The bias and ReLU are gpu_cuda's fused
+// 16-bit kernel.
+
+static unsigned long g_dh_key[DNN_PLANS * 8];
+static int   g_dh_used[DNN_PLANS];
+static void* g_dh_x[DNN_PLANS];
+static void* g_dh_w[DNN_PLANS];
+static void* g_dh_conv[DNN_PLANS];
+static void* g_dh_y[DNN_PLANS];
+static int   g_dh_algo[DNN_PLANS];
+static unsigned long long g_dh_ws[DNN_PLANS];
+static unsigned long g_dh_wsBytes[DNN_PLANS];
+static int   g_dh_evict = 0;
+
+static void dnn_half_release_(int s) {
+    unsafe {
+        if (g_dh_used[s] == 0) return;
+        cudnnDestroyTensorDescriptor(g_dh_x[s]);
+        cudnnDestroyFilterDescriptor(g_dh_w[s]);
+        cudnnDestroyConvolutionDescriptor(g_dh_conv[s]);
+        cudnnDestroyTensorDescriptor(g_dh_y[s]);
+        if (g_dh_ws[s] != 0ULL) {
+            cuStreamSynchronize(cuda_stream_handle());
+            cuMemFree_v2(g_dh_ws[s]);
+        }
+        g_dh_ws[s] = 0ULL;
+        g_dh_used[s] = 0;
+    }
+}
+
+static int dnn_half_plan_(const &CudaHalfConv2D layer, int dt, unsigned long batch, unsigned long height,
+                          unsigned long width) {
+    unsigned long outH = cuda_conv_out_dim(height, layer.kH, layer.stride, layer.padding);
+    unsigned long outW = cuda_conv_out_dim(width, layer.kW, layer.stride, layer.padding);
+    if (!dnn_int_ok_(batch) || !dnn_int_ok_(height) || !dnn_int_ok_(width) || !dnn_int_ok_(outH) ||
+        !dnn_int_ok_(outW) || !dnn_int_ok_(layer.inChannels) || !dnn_int_ok_(layer.outChannels) ||
+        !dnn_int_ok_(layer.kH) || !dnn_int_ok_(layer.kW) || layer.stride > 65535UL || layer.padding > 65535UL)
+        return -1;
+    unsigned long key[8];
+    key[0] = batch; key[1] = layer.inChannels; key[2] = height; key[3] = width;
+    key[4] = layer.outChannels; key[5] = layer.kH; key[6] = layer.kW;
+    key[7] = layer.stride | (layer.padding << 16) | ((unsigned long)dt << 32);
+    int slot = -1;
+    int s = 0;
+    while (s < DNN_PLANS) {
+        if (g_dh_used[s] != 0) {
+            int same = 1;
+            int i = 0;
+            while (i < 8) { if (g_dh_key[s * 8 + i] != key[i]) same = 0; i = i + 1; }
+            if (same) return s;
+        } else if (slot < 0) {
+            slot = s;
+        }
+        s = s + 1;
+    }
+    if (slot < 0) {
+        slot = g_dh_evict;
+        g_dh_evict = (g_dh_evict + 1) % DNN_PLANS;
+        dnn_half_release_(slot);
+    }
+    unsafe {
+        void* xd = (void*)0;
+        void* wd = (void*)0;
+        void* cd = (void*)0;
+        void* yd = (void*)0;
+        int ok = cudnnCreateTensorDescriptor(&xd) == 0 && cudnnCreateFilterDescriptor(&wd) == 0 &&
+                 cudnnCreateConvolutionDescriptor(&cd) == 0 && cudnnCreateTensorDescriptor(&yd) == 0;
+        ok = ok && cudnnSetTensor4dDescriptor(xd, DNN_TENSOR_NCHW, dt, (int)batch, (int)layer.inChannels,
+                                              (int)height, (int)width) == 0;
+        ok = ok && cudnnSetFilter4dDescriptor(wd, dt, DNN_TENSOR_NCHW, (int)layer.outChannels,
+                                              (int)layer.inChannels, (int)layer.kH, (int)layer.kW) == 0;
+        // 16-bit tensors, fp32 accumulation, tensor cores allowed
+        ok = ok && cudnnSetConvolution2dDescriptor(cd, (int)layer.padding, (int)layer.padding,
+                                                   (int)layer.stride, (int)layer.stride, 1, 1,
+                                                   DNN_CROSS_CORRELATION, DNN_DATA_FLOAT) == 0;
+        ok = ok && cudnnSetConvolutionMathType(cd, DNN_TENSOR_OP_MATH) == 0;
+        ok = ok && cudnnSetTensor4dDescriptor(yd, DNN_TENSOR_NCHW, dt, (int)batch, (int)layer.outChannels,
+                                              (int)outH, (int)outW) == 0;
+        int perf[DNN_PERF_INTS * DNN_PERF_COUNT];
+        int returned = 0;
+        int algo = -1;
+        int algoMath = DNN_TENSOR_OP_MATH;
+        unsigned long wsBytes = 0UL;
+        ok = ok && cudnnFindConvolutionForwardAlgorithm(g_dnn, xd, wd, cd, yd, DNN_PERF_COUNT, &returned,
+                                                        (void*)&perf[0]) == 0;
+        int r = 0;
+        while (ok && algo < 0 && r < returned) {
+            int* p = (int*)&perf[r * DNN_PERF_INTS];
+            unsigned long mem = *(unsigned long*)(void*)&p[4];
+            if (p[1] == 0 && mem <= DNN_MAX_WORKSPACE) {
+                algo = p[0];
+                wsBytes = mem;
+                algoMath = p[7];
+            }
+            r = r + 1;
+        }
+        ok = ok && algo >= 0 && cudnnSetConvolutionMathType(cd, algoMath) == 0;
+        unsigned long long ws = 0ULL;
+        if (ok && wsBytes > 0UL) ok = cuMemAlloc_v2(&ws, wsBytes) == 0;
+        if (!ok) {
+            if (xd != (void*)0) cudnnDestroyTensorDescriptor(xd);
+            if (wd != (void*)0) cudnnDestroyFilterDescriptor(wd);
+            if (cd != (void*)0) cudnnDestroyConvolutionDescriptor(cd);
+            if (yd != (void*)0) cudnnDestroyTensorDescriptor(yd);
+            return -1;
+        }
+        g_dh_x[slot] = xd;
+        g_dh_w[slot] = wd;
+        g_dh_conv[slot] = cd;
+        g_dh_y[slot] = yd;
+        g_dh_algo[slot] = algo;
+        g_dh_ws[slot] = ws;
+        g_dh_wsBytes[slot] = wsBytes;
+        int i = 0;
+        while (i < 8) { g_dh_key[slot * 8 + i] = key[i]; i = i + 1; }
+        g_dh_used[slot] = 1;
+    }
+    return slot;
+}
+
+static int dnn_half_conv_(const &CudaHalfConv2D layer, struct CudaHalfBuf x, struct CudaHalfBuf y,
+                          unsigned long batch, unsigned long height, unsigned long width, int relu) {
+    if (!cudnn_ensure_() || layer.weight.dev == 0UL || layer.bias.dev == 0UL) return 0;
+    if (x.dtype != layer.weight.dtype || y.dtype != layer.weight.dtype) return 0;
+    unsigned long outH = cuda_conv_out_dim(height, layer.kH, layer.stride, layer.padding);
+    unsigned long outW = cuda_conv_out_dim(width, layer.kW, layer.stride, layer.padding);
+    if (x.dev == 0UL || y.dev == 0UL ||
+        x.len < batch * layer.inChannels * height * width ||
+        y.len < batch * layer.outChannels * outH * outW) return 0;
+    int dt = x.dtype == CUDA_BF16 ? DNN_DATA_BFLOAT16 : DNN_DATA_HALF;
+    int p = dnn_half_plan_(layer, dt, batch, height, width);
+    if (p < 0) return 0;
+    float one = 1.0f;
+    float zero = 0.0f;
+    unsafe {
+        if (cudnnConvolutionForward(g_dnn, (const void*)&one, g_dh_x[p], (const void*)x.dev,
+                g_dh_w[p], (const void*)layer.weight.dev, g_dh_conv[p], g_dh_algo[p],
+                (void*)(unsigned long)g_dh_ws[p], g_dh_wsBytes[p],
+                (const void*)&zero, g_dh_y[p], (void*)y.dev) != 0) return 0;
+    }
+    return cuda_half_bias(y, layer.bias, batch, layer.outChannels, outH * outW, relu);
+}
+
+int cuda_half_conv2d(const &CudaHalfConv2D layer, struct CudaHalfBuf x, struct CudaHalfBuf y,
+                     unsigned long batch, unsigned long height, unsigned long width) {
+    return dnn_half_conv_(layer, x, y, batch, height, width, 0);
+}
+
+int cuda_half_conv2d_relu(const &CudaHalfConv2D layer, struct CudaHalfBuf x, struct CudaHalfBuf y,
+                          unsigned long batch, unsigned long height, unsigned long width) {
+    return dnn_half_conv_(layer, x, y, batch, height, width, 1);
+}
+
+struct CudaHalfConv2D cuda_half_conv2d_upload(const &Conv2D layer, int dtype) {
+    struct CudaHalfConv2D d;
+    d.inChannels = layer.inChannels;
+    d.outChannels = layer.outChannels;
+    d.kH = layer.kH;
+    d.kW = layer.kW;
+    d.stride = layer.stride;
+    d.padding = layer.padding;
+    unsigned long wn = layer.outChannels * layer.inChannels * layer.kH * layer.kW;
+    d.weight = cuda_half_upload(layer.weight, wn, dtype);
+    d.bias = cuda_half_upload(layer.bias, layer.outChannels, dtype);
+    if (d.weight.dev == 0UL || d.bias.dev == 0UL) {
+        cuda_half_free(&d.weight);
+        cuda_half_free(&d.bias);
+    }
+    return d;
+}
+
+void cuda_half_conv2d_free(&CudaHalfConv2D layer) {
+    cuda_half_free(&layer.weight);
+    cuda_half_free(&layer.bias);
 }
 
 // ── Layers ───────────────────────────────────────────────────────────────────

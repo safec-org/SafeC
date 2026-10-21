@@ -14,6 +14,7 @@
 #include <std/dsp/imaging.h>
 #include <std/mem.h>
 #include <std/panic.h>
+#include <std/ml/tensor_half.h>
 extern int printf(const char* fmt, ...);
 
 static int g_checks = 0;
@@ -344,10 +345,126 @@ static void check_hipfft() {
     }
 }
 
+
+// 16-bit MIOpen convolution and pooling against cnn.sc on the same rounded
+// inputs (fp32 accumulation, so within a couple of 16-bit roundings).
+static struct Conv2D conv_rounded_(const &Conv2D l, int d) {
+    struct Conv2D r = std::conv2d_new(l.inChannels, l.outChannels, l.kH, l.kW, l.stride, l.padding);
+    unsigned long wn = l.outChannels * l.inChannels * l.kH * l.kW;
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < wn) { r.weight[i] = std::half_round(l.weight[i], d); i = i + 1UL; }
+        i = 0UL;
+        while (i < l.outChannels) { r.bias[i] = std::half_round(l.bias[i], d); i = i + 1UL; }
+    }
+    return r;
+}
+
+static void fm_round_(&FeatureMap fm, int d) {
+    unsigned long n = fm_size(fm);
+    unsafe { unsigned long i = 0UL; while (i < n) { fm.data[i] = std::half_round(fm.data[i], d); i = i + 1UL; } }
+}
+
+static struct Vec<float> half_download_(struct RocmHalfBuf h, unsigned long off, unsigned long n) {
+    struct Vec<unsigned short> bits = std::vec_with_cap(h.len);
+    unsigned long i = 0UL;
+    while (i < h.len) { bits.push((unsigned short)0); i = i + 1UL; }
+    std::rocm_half_read(h, bits.at(0UL), h.len);
+    struct Vec<float> v = std::vec_with_cap(n);
+    i = 0UL;
+    while (i < n) { v.push(std::half_decode(*bits.at(off + i), h.dtype)); i = i + 1UL; }
+    bits.free();
+    return v;
+}
+
+static void check_miopen_half() {
+    int d = ROCM_FP16;
+    while (d <= ROCM_BF16) {
+        float tol = d == ROCM_FP16 ? (float)3.0e-3 : (float)2.0e-2;
+        // 4 -> 6 channels, 5x5, stride 2, two images; 8 -> 8, 3x3, stride 1, pad 1
+        int shape = 0;
+        while (shape < 2) {
+            unsigned long inC = shape == 0 ? 4UL : 8UL;
+            unsigned long outC = shape == 0 ? 6UL : 8UL;
+            unsigned long k = shape == 0 ? 5UL : 3UL;
+            unsigned long st = shape == 0 ? 2UL : 1UL;
+            unsigned long pd = shape == 0 ? 0UL : 1UL;
+            struct Conv2D l = std::conv2d_new(inC, outC, k, k, st, pd);
+            conv_bias(&l);
+            struct Conv2D lr = conv_rounded_(&l, d);
+            struct FeatureMap xa = std::feature_map_new(inC, 21UL, 15UL);
+            struct FeatureMap xb = std::feature_map_new(inC, 21UL, 15UL);
+            fm_fill(&xa, 3UL);
+            fm_fill(&xb, 50UL);
+            fm_round_(&xa, d);
+            fm_round_(&xb, d);
+            struct FeatureMap ca = std::conv2d_forward(&lr, &xa);
+            struct FeatureMap cb = std::conv2d_forward(&lr, &xb);
+            unsigned long inN = fm_size(&xa);
+            unsigned long outN = fm_size(&ca);
+            struct Vec<float> both = std::vec_with_cap(2UL * inN);
+            unsafe {
+                unsigned long i = 0UL;
+                while (i < inN) { both.push(xa.data[i]); i = i + 1UL; }
+                i = 0UL;
+                while (i < inN) { both.push(xb.data[i]); i = i + 1UL; }
+            }
+            struct RocmHalfConv2D hl = std::rocm_half_conv2d_upload(&l, d);
+            struct RocmHalfBuf hx = std::rocm_half_upload(both.at(0UL), 2UL * inN, d);
+            struct RocmHalfBuf hy = std::rocm_half_alloc(2UL * outN, d);
+            check(hl.weight.dev != 0UL && hx.dev != 0UL && hy.dev != 0UL, "half conv upload");
+            check(std::rocm_half_conv2d(&hl, hx, hy, 2UL, 21UL, 15UL), d == ROCM_FP16 ? "fp16 conv ran" : "bf16 conv ran");
+            struct Vec<float> ya = half_download_(hy, 0UL, outN);
+            struct Vec<float> yb = half_download_(hy, outN, outN);
+            unsafe {
+                check(fm_err(ya.at(0UL), (const float*)ca.data, outN) < tol && fm_err(yb.at(0UL), (const float*)cb.data, outN) < tol,
+                      d == ROCM_FP16 ? "fp16 conv values" : "bf16 conv values");
+            }
+            ya.free(); yb.free();
+            check(std::rocm_half_conv2d_relu(&hl, hx, hy, 2UL, 21UL, 15UL), "half conv relu ran");
+            yb = half_download_(hy, outN, outN);
+            unsafe {
+                unsigned long i = 0UL;
+                while (i < outN) { if (cb.data[i] < (float)0.0) cb.data[i] = (float)0.0; i = i + 1UL; }
+                check(fm_err(yb.at(0UL), (const float*)cb.data, outN) < tol, "half conv relu values");
+            }
+            yb.free();
+            if (shape == 0) {
+                // pooling: max is exact on rounded values, avg within one rounding
+                struct FeatureMap mp = std::maxpool2d_forward(&xa, 3UL, 2UL);
+                struct FeatureMap ap = std::avgpool2d_forward(&xa, 3UL, 2UL);
+                unsigned long pn = fm_size(&mp);
+                struct RocmHalfBuf hp = std::rocm_half_alloc(2UL * pn, d);
+                check(std::rocm_half_maxpool2d(hx, hp, 2UL, inC, 21UL, 15UL, 3UL, 2UL), "half maxpool ran");
+                struct Vec<float> pa = half_download_(hp, 0UL, pn);
+                unsafe { check(fm_err(pa.at(0UL), (const float*)mp.data, pn) == (float)0.0, "half maxpool values"); }
+                pa.free();
+                check(std::rocm_half_avgpool2d(hx, hp, 2UL, inC, 21UL, 15UL, 3UL, 2UL), "half avgpool ran");
+                pa = half_download_(hp, 0UL, pn);
+                unsafe { check(fm_err(pa.at(0UL), (const float*)ap.data, pn) < tol, "half avgpool values"); }
+                pa.free();
+                struct RocmHalfBuf other = std::rocm_half_alloc(2UL * pn, d == ROCM_FP16 ? ROCM_BF16 : ROCM_FP16);
+                check(!std::rocm_half_maxpool2d(hx, other, 2UL, inC, 21UL, 15UL, 3UL, 2UL), "half pool rejects mixed dtypes");
+                std::rocm_half_free(&other);
+                std::rocm_half_free(&hp);
+                std::feature_map_free(&mp); std::feature_map_free(&ap);
+            }
+            std::rocm_half_free(&hx); std::rocm_half_free(&hy);
+            std::rocm_half_conv2d_free(&hl);
+            both.free();
+            std::feature_map_free(&ca); std::feature_map_free(&cb); std::feature_map_free(&xa); std::feature_map_free(&xb);
+            std::conv2d_free(&l); std::conv2d_free(&lr);
+            shape = shape + 1;
+        }
+        d = d + 1;
+    }
+}
+
 int main() {
     if (!std::rocm_available()) { unsafe { printf("no ROCm GPU -- skipping\n"); } return 0; }
     unsafe { printf("device: %s\n", std::rocm_device_name()); }
     check_miopen();
+    check_miopen_half();
     check_hipfft();
     unsafe { printf("rocm dnn/fft: %d checks, %d failures\n", g_checks, g_fails); }
     return g_fails == 0 ? 0 : 1;

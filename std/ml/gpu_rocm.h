@@ -1,4 +1,5 @@
 #pragma once
+#include <std/collections/vec.h>
 // SafeC Standard Library — AMD GPU backend (ROCm / HIP).
 //
 // Two layers:
@@ -152,6 +153,64 @@ int rocm_half_mse_grad(struct RocmHalfBuf y, struct RocmHalfBuf t, struct RocmHa
 // rocm_half_sgd on two weight/gradient pairs in one launch.
 int rocm_half_sgd2(struct RocmHalfBuf w1, struct RocmHalfBuf g1, struct RocmHalfBuf w2, struct RocmHalfBuf g2,
                    float lr);
+
+// ── Mixed precision ──────────────────────────────────────────────────────────
+// The usual layout: fp32 master weights and optimizer state, a 16-bit copy
+// of the weights for the forward / backward passes, 16-bit or fp32
+// gradients with the loss scale in them. One step:
+//   rocm_half_gemm ... (forward / backward in fp16 or bf16)
+//   zero the flag; rocm_half_unscale_many(grads16, grads32, 1 / scale, flag)
+//   rocm_mp_adam(w32, m, v, g32, w16, ..., flag)       // skipped on the GPU if flag != 0
+//   read the flag (4 bytes) to back the loss scale off or grow it
+// so an overflowed step costs no host round trip before the update.
+//
+// dst = src converted between fp16 and bf16 (src.len elements).
+int rocm_half_convert(struct RocmHalfBuf src, struct RocmHalfBuf dst);
+// Every src[i] -> dst[i] (lengths dst[i].len / src[i].len as in
+// rocm_to_half / rocm_from_half), 32 buffers per launch: a model's
+// parameters in one or a few launches instead of one per tensor.
+int rocm_to_half_many(const &Vec<struct RocmBuf> src, const &Vec<struct RocmHalfBuf> dst);
+int rocm_from_half_many(const &Vec<struct RocmHalfBuf> src, const &Vec<struct RocmBuf> dst);
+// Gradient unscaling: dst[i] = src[i] * scale in fp32 (16-bit or fp32
+// sources; the fp32 form may work in place, dst == src), and flag[0] = 1
+// when any result is inf or NaN. The flag is only ever set: zero it
+// (rocm_zero) before the step.
+int rocm_half_unscale_many(const &Vec<struct RocmHalfBuf> src, const &Vec<struct RocmBuf> dst, float scale,
+                           struct RocmBuf flag);
+int rocm_unscale_many(const &Vec<struct RocmBuf> src, const &Vec<struct RocmBuf> dst, float scale,
+                      struct RocmBuf flag);
+int rocm_zero(struct RocmBuf b);                     // b = 0 (all of b.len)
+// Optimizer steps on fp32 master weights w with gradient g, as nn.h's
+// optimizer_step (OPT_SGD / OPT_MOMENTUM when vel is valid, OPT_ADAM /
+// OPT_ADAMW when decoupled; 'step' is the 1-based step count for the bias
+// correction). The updated weights are also written, rounded, to wHalf when
+// it is valid. Skipped entirely when skip is valid and skip[0] != 0. Pass an
+// invalid buffer (dev == 0) for any optional argument.
+int rocm_mp_sgd(struct RocmBuf w, struct RocmBuf g, struct RocmBuf vel, struct RocmHalfBuf wHalf,
+                float lr, float momentum, float weightDecay, struct RocmBuf skip);
+int rocm_mp_adam(struct RocmBuf w, struct RocmBuf m, struct RocmBuf v, struct RocmBuf g, struct RocmHalfBuf wHalf,
+                 float lr, float beta1, float beta2, float eps, float weightDecay, int decoupled,
+                 unsigned long step, struct RocmBuf skip);
+// 16-bit elementwise ops (fp32 arithmetic, one rounding per value; a, b and
+// out of one dtype and a.len elements).
+int rocm_half_add(struct RocmHalfBuf a, struct RocmHalfBuf b, struct RocmHalfBuf out);
+int rocm_half_sub(struct RocmHalfBuf a, struct RocmHalfBuf b, struct RocmHalfBuf out);
+int rocm_half_mul(struct RocmHalfBuf a, struct RocmHalfBuf b, struct RocmHalfBuf out);
+int rocm_half_scale(struct RocmHalfBuf a, float k, struct RocmHalfBuf out);
+int rocm_half_axpy(struct RocmHalfBuf a, float k, struct RocmHalfBuf b, struct RocmHalfBuf out);   // a + k b
+// y[r][c][p] += bias[c] (rows x channels x plane, row-major), then ReLU when
+// relu: a linear layer's bias (plane 1) or an NCHW convolution's.
+int rocm_half_bias(struct RocmHalfBuf y, struct RocmHalfBuf bias, unsigned long rows, unsigned long channels,
+                   unsigned long plane, int relu);
+
+// 16-bit max / avg pooling on NCHW (x: [batch, channels, height, width]),
+// kernel x kernel window, given stride, no padding: the same windows as
+// gpu_miopen.h's rocm_maxpool2d. fp32 accumulation, one rounding; max
+// pooling copies the largest value's bits.
+int rocm_half_maxpool2d(struct RocmHalfBuf x, struct RocmHalfBuf y, unsigned long batch, unsigned long channels,
+                        unsigned long height, unsigned long width, unsigned long kernel, unsigned long stride);
+int rocm_half_avgpool2d(struct RocmHalfBuf x, struct RocmHalfBuf y, unsigned long batch, unsigned long channels,
+                        unsigned long height, unsigned long width, unsigned long kernel, unsigned long stride);
 
 // ── Graphs: record queued ops once, replay with one launch ───────────────────
 

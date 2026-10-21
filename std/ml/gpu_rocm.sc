@@ -337,6 +337,102 @@ static const char* rocm_kernel_source_() {
     "        else w2[i - n1] = f2h(h2f(w2[i - n1], bf) - lr * h2f(g2[i - n1], bf), bf);\n"
     "    }\n"
     "}\n"
+    // fp16 <-> bf16, through fp32 (one rounding).
+    "extern \"C\" __global__ void half_to_half(const unsigned short* a, unsigned short* o, unsigned n, int toBf) {\n"
+    "    for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += gridDim.x * blockDim.x)\n"
+    "        o[i] = f2h(h2f(a[i], !toBf), toBf);\n"
+    "}\n"
+    // Up to 32 buffers per launch, blockIdx.y picking one. mode 0: fp32 ->
+    // 16-bit; 1: 16-bit -> fp32 times scale; 2: fp32 -> fp32 times scale (in
+    // place allowed). Modes 1 and 2 set *flag = 1 when a result is not finite.
+    "struct CvtTab { const void* src[32]; void* dst[32]; unsigned n[32]; };\n"
+    "extern \"C\" __global__ void cvt_many(CvtTab t, int mode, int bf, float scale, float* flag) {\n"
+    "    unsigned b = blockIdx.y, n = t.n[b];\n"
+    "    int bad = 0;\n"
+    "    for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += gridDim.x * blockDim.x) {\n"
+    "        if (mode == 0) { ((unsigned short*)t.dst[b])[i] = f2h(((const float*)t.src[b])[i], bf); continue; }\n"
+    "        float v = mode == 1 ? h2f(((const unsigned short*)t.src[b])[i], bf) : ((const float*)t.src[b])[i];\n"
+    "        v = v * scale;\n"
+    "        if (!__builtin_isfinite(v)) bad = 1;\n"
+    "        ((float*)t.dst[b])[i] = v;\n"
+    "    }\n"
+    "    if (bad && flag) *flag = 1.0f;\n"
+    "}\n"
+    // Mixed-precision optimizer steps on fp32 master weights, also writing
+    // the 16-bit copy wh (when not null); nothing happens when *skip != 0
+    // (a gradient overflowed). Same arithmetic as nn.h's optimizer_step.
+    "extern \"C\" __global__ void mp_sgd(float* w, const float* g, float* vel, unsigned short* wh, float lr,\n"
+    "                                      float mom, float wd, unsigned n, int bf, const float* skip) {\n"
+    "#pragma clang fp contract(off)\n"
+    "    if (skip && *skip != 0.0f) return;\n"
+    "    for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += gridDim.x * blockDim.x) {\n"
+    "        float gi = g[i] + wd * w[i];\n"
+    "        if (vel) { float v = mom * vel[i] + gi; vel[i] = v; gi = v; }\n"
+    "        float nw = w[i] - lr * gi;\n"
+    "        w[i] = nw;\n"
+    "        if (wh) wh[i] = f2h(nw, bf);\n"
+    "    }\n"
+    "}\n"
+    "extern \"C\" __global__ void mp_adam(float* w, float* m, float* v, const float* g, unsigned short* wh,\n"
+    "                                       float lr, float b1, float b2, float eps, float wd, float bc1, float bc2,\n"
+    "                                       int decoupled, unsigned n, int bf, const float* skip) {\n"
+    "#pragma clang fp contract(off)\n"
+    "    if (skip && *skip != 0.0f) return;\n"
+    "    for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += gridDim.x * blockDim.x) {\n"
+    "        float gi = g[i];\n"
+    "        if (!decoupled) gi = gi + wd * w[i];\n"
+    "        float mi = b1 * m[i] + (1.0f - b1) * gi;\n"
+    "        float vi = b2 * v[i] + (1.0f - b2) * gi * gi;\n"
+    "        m[i] = mi; v[i] = vi;\n"
+    "        float upd = (mi / bc1) / (sqrtf(vi / bc2) + eps);\n"
+    "        if (decoupled) upd = upd + wd * w[i];\n"
+    "        float nw = w[i] - lr * upd;\n"
+    "        w[i] = nw;\n"
+    "        if (wh) wh[i] = f2h(nw, bf);\n"
+    "    }\n"
+    "}\n"
+    // 16-bit elementwise: 0 a+b, 1 a-b, 2 a*b, 3 a*k, 4 a + k*b; fp32 arithmetic.
+    "extern \"C\" __global__ void half_ew(const unsigned short* a, const unsigned short* b, unsigned short* o,\n"
+    "                                       float k, unsigned n, int op, int bf) {\n"
+    "#pragma clang fp contract(off)\n"
+    "    for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += gridDim.x * blockDim.x) {\n"
+    "        float x = h2f(a[i], bf), y = op == 3 ? 0.0f : h2f(b[i], bf);\n"
+    "        float r = op == 0 ? x + y : op == 1 ? x - y : op == 2 ? x * y : op == 3 ? x * k : x + k * y;\n"
+    "        o[i] = f2h(r, bf);\n"
+    "    }\n"
+    "}\n"
+    // y[i] += bias[(i / plane) % channels], then max(0, .) if relu: row bias
+    // (plane 1) or NCHW channel bias.
+    "extern \"C\" __global__ void half_bias(unsigned short* y, const unsigned short* bias, unsigned total,\n"
+    "                                         unsigned channels, unsigned plane, int relu, int bf) {\n"
+    "    for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < total; i += gridDim.x * blockDim.x) {\n"
+    "        float r = h2f(y[i], bf) + h2f(bias[(i / plane) % channels], bf);\n"
+    "        if (relu && r < 0.0f) r = 0.0f;\n"
+    "        y[i] = f2h(r, bf);\n"
+    "    }\n"
+    "}\n"
+    // 16-bit max / avg pooling, kernel x kernel window, no padding, over
+    // planes [rows][h][w]; fp32 accumulation, one rounding (max copies bits).
+    "extern \"C\" __global__ void half_pool(const unsigned short* x, unsigned short* y, unsigned rows,\n"
+    "                                         unsigned h, unsigned w, unsigned oh, unsigned ow, unsigned k,\n"
+    "                                         unsigned s, int avg, int bf) {\n"
+    "    unsigned plane = oh * ow, total = rows * plane;\n"
+    "    for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < total; i += gridDim.x * blockDim.x) {\n"
+    "        unsigned p = i / plane, r = i % plane, oy = r / ow, ox = r % ow;\n"
+    "        const unsigned short* src = x + (size_t)p * h * w + (size_t)(oy * s) * w + ox * s;\n"
+    "        float acc = 0.0f;\n"
+    "        unsigned short best = src[0];\n"
+    "        float bv = h2f(best, bf);\n"
+    "        for (unsigned ky = 0; ky < k; ++ky)\n"
+    "            for (unsigned kx = 0; kx < k; ++kx) {\n"
+    "                unsigned short b = src[ky * w + kx];\n"
+    "                float v = h2f(b, bf);\n"
+    "                acc += v;\n"
+    "                if (v > bv) { bv = v; best = b; }\n"
+    "            }\n"
+    "        y[i] = avg ? f2h(acc / (float)(k * k), bf) : best;\n"
+    "    }\n"
+    "}\n"
     "// Flash attention (forward): one block = 64 query rows of one head, 4 lanes\n"
     "// per row, each lane holding a quarter of the row's q and output (dims\n"
     "// part, part + 4, ...). K/V tiles of 32 rows are staged in LDS; per tile the\n"
@@ -1496,7 +1592,14 @@ static const char* rocm_kernel_source_() {
 #define K_GEMV_HALF 41
 #define K_RMSNORM 42
 #define K_GELU 43
-#define K_COUNT 44
+#define K_HALF_CVT 44
+#define K_CVT_MANY 45
+#define K_MP_SGD 46
+#define K_MP_ADAM 47
+#define K_HALF_EW 48
+#define K_HALF_BIAS 49
+#define K_HALF_POOL 50
+#define K_COUNT 51
 
 static const char* rocm_kernel_name_(int k) {
     if (k == K_ADD) return "ew_add";
@@ -1542,6 +1645,13 @@ static const char* rocm_kernel_name_(int k) {
     if (k == K_GEMV_HALF) return "gemv_half";
     if (k == K_RMSNORM) return "rmsnorm_rows";
     if (k == K_GELU) return "ew_gelu";
+    if (k == K_HALF_CVT) return "half_to_half";
+    if (k == K_CVT_MANY) return "cvt_many";
+    if (k == K_MP_SGD) return "mp_sgd";
+    if (k == K_MP_ADAM) return "mp_adam";
+    if (k == K_HALF_EW) return "half_ew";
+    if (k == K_HALF_BIAS) return "half_bias";
+    if (k == K_HALF_POOL) return "half_pool";
     return "mse_grad";
 }
 
@@ -2579,6 +2689,331 @@ int rocm_matmul_f32_blas(const &float a, const &float b, &float out,
     rocm_free(&db);
     rocm_free(&dc);
     return ok;
+}
+
+// ── Mixed precision ──────────────────────────────────────────────────────────
+
+extern void* malloc(unsigned long size);
+extern void  free(void* ptr);
+
+int rocm_zero(struct RocmBuf b) {
+    if (!rocm_ensure_() || b.dev == 0UL) return 0;
+    unsafe { return hipMemsetAsync((void*)b.dev, 0, b.len * sizeof(float), g_rocm_stream) == ROCM_HIP_OK; }
+}
+
+int rocm_half_convert(struct RocmHalfBuf src, struct RocmHalfBuf dst) {
+    unsigned long n = src.len;
+    if (!rocm_ensure_() || !rocm_half_fits_(src, n) || !rocm_half_fits_(dst, n) || n > 4294967295UL) return 0;
+    if (src.dtype == dst.dtype) {
+        unsafe {
+            return hipMemcpyAsync((void*)dst.dev, (const void*)src.dev, n * 2UL, ROCM_D2D, g_rocm_stream) == ROCM_HIP_OK;
+        }
+    }
+    return rocm_convert_(K_HALF_CVT, src.dev, dst.dev, n, dst.dtype == ROCM_BF16);
+}
+
+// The kernel's CvtTab: 32 source / destination pointers and lengths.
+#define ROCM_CVT_TAB 32UL
+struct RocmCvtTab_ {
+    unsigned long src[32];
+    unsigned long dst[32];
+    unsigned int  n[32];
+};
+
+// One launch per 32 entries; mode as in the cvt_many kernel.
+static int rocm_cvt_many_(const unsigned long* src, const unsigned long* dst, const unsigned long* len,
+                          unsigned long count, int mode, int bf, float scale, unsigned long flag) {
+    unsigned long base = 0UL;
+    while (base < count) {
+        struct RocmCvtTab_ t;
+        unsigned long c = count - base < ROCM_CVT_TAB ? count - base : ROCM_CVT_TAB;
+        unsigned long most = 1UL;
+        unsafe {
+            unsigned long i = 0UL;
+            while (i < ROCM_CVT_TAB) {
+                t.src[i] = i < c ? src[base + i] : 0UL;
+                t.dst[i] = i < c ? dst[base + i] : 0UL;
+                t.n[i] = i < c ? (unsigned int)len[base + i] : 0U;
+                if (i < c && len[base + i] > most) most = len[base + i];
+                i = i + 1UL;
+            }
+            unsigned long blocks = (most + (unsigned long)ROCM_BLOCK - 1UL) / (unsigned long)ROCM_BLOCK;
+            if (blocks > 1024UL) blocks = 1024UL;
+            int m = mode;
+            int b = bf;
+            float sc = scale;
+            void* pf = (void*)flag;
+            void* params[5];
+            params[0] = (void*)&t; params[1] = (void*)&m; params[2] = (void*)&b; params[3] = (void*)&sc;
+            params[4] = (void*)&pf;
+            if (hipModuleLaunchKernel(g_rocm_fn[K_CVT_MANY], (unsigned int)blocks, (unsigned int)c, 1U, ROCM_BLOCK, 1U, 1U,
+                                      0U, g_rocm_stream, &params[0], (void**)0) != ROCM_HIP_OK) return 0;
+        }
+        base = base + c;
+    }
+    return 1;
+}
+
+// Pointer / length tables for rocm_cvt_many_ (heap, freed by the caller).
+struct RocmCvtLists_ {
+    unsigned long* src;
+    unsigned long* dst;
+    unsigned long* len;
+    int            ok;
+    int            bf;
+};
+
+static struct RocmCvtLists_ rocm_cvt_lists_(unsigned long count) {
+    struct RocmCvtLists_ l;
+    unsafe {
+        unsigned long bytes = sizeof(unsigned long) * (count == 0UL ? 1UL : count);
+        l.src = (unsigned long*)malloc(bytes);
+        l.dst = (unsigned long*)malloc(bytes);
+        l.len = (unsigned long*)malloc(bytes);
+    }
+    l.ok = 1;
+    l.bf = -1;
+    return l;
+}
+
+static void rocm_cvt_lists_free_(&RocmCvtLists_ l) {
+    unsafe { free((void*)l.src); free((void*)l.dst); free((void*)l.len); }
+}
+
+// One 16-bit dtype per call (the kernel's bf flag); mixed lists are refused.
+static void rocm_cvt_dtype_(&RocmCvtLists_ l, int dtype) {
+    int bf = dtype == ROCM_BF16 ? 1 : 0;
+    if (l.bf < 0) l.bf = bf;
+    else if (l.bf != bf) l.ok = 0;
+}
+
+int rocm_to_half_many(const &Vec<struct RocmBuf> src, const &Vec<struct RocmHalfBuf> dst) {
+    unsigned long n = src.length();
+    if (!rocm_ensure_() || n != dst.length()) return 0;
+    if (n == 0UL) return 1;
+    struct RocmCvtLists_ l = rocm_cvt_lists_(n);
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < n) {
+            struct RocmBuf s = *src.at(i);
+            struct RocmHalfBuf d = *dst.at(i);
+            if (!rocm_fits_(s, d.len) || !rocm_half_fits_(d, d.len) || d.len > 4294967295UL) l.ok = 0;
+            rocm_cvt_dtype_(&l, d.dtype);
+            l.src[i] = s.dev; l.dst[i] = d.dev; l.len[i] = d.len;
+            i = i + 1UL;
+        }
+    }
+    int ok = l.ok && rocm_cvt_many_((const unsigned long*)l.src, (const unsigned long*)l.dst, (const unsigned long*)l.len,
+                                    n, 0, l.bf, (float)1.0, 0UL);
+    rocm_cvt_lists_free_(&l);
+    return ok;
+}
+
+int rocm_from_half_many(const &Vec<struct RocmHalfBuf> src, const &Vec<struct RocmBuf> dst) {
+    unsigned long n = src.length();
+    if (!rocm_ensure_() || n != dst.length()) return 0;
+    if (n == 0UL) return 1;
+    struct RocmCvtLists_ l = rocm_cvt_lists_(n);
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < n) {
+            struct RocmHalfBuf s = *src.at(i);
+            struct RocmBuf d = *dst.at(i);
+            if (!rocm_half_fits_(s, d.len) || !rocm_fits_(d, d.len) || d.len > 4294967295UL) l.ok = 0;
+            rocm_cvt_dtype_(&l, s.dtype);
+            l.src[i] = s.dev; l.dst[i] = d.dev; l.len[i] = d.len;
+            i = i + 1UL;
+        }
+    }
+    int ok = l.ok && rocm_cvt_many_((const unsigned long*)l.src, (const unsigned long*)l.dst, (const unsigned long*)l.len,
+                                    n, 1, l.bf, (float)1.0, 0UL);
+    rocm_cvt_lists_free_(&l);
+    return ok;
+}
+
+int rocm_half_unscale_many(const &Vec<struct RocmHalfBuf> src, const &Vec<struct RocmBuf> dst, float scale,
+                           struct RocmBuf flag) {
+    unsigned long n = src.length();
+    if (!rocm_ensure_() || n != dst.length() || !rocm_fits_(flag, 1UL)) return 0;
+    if (n == 0UL) return 1;
+    struct RocmCvtLists_ l = rocm_cvt_lists_(n);
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < n) {
+            struct RocmHalfBuf s = *src.at(i);
+            struct RocmBuf d = *dst.at(i);
+            if (!rocm_half_fits_(s, s.len) || !rocm_fits_(d, s.len) || s.len > 4294967295UL) l.ok = 0;
+            rocm_cvt_dtype_(&l, s.dtype);
+            l.src[i] = s.dev; l.dst[i] = d.dev; l.len[i] = s.len;
+            i = i + 1UL;
+        }
+    }
+    int ok = l.ok && rocm_cvt_many_((const unsigned long*)l.src, (const unsigned long*)l.dst, (const unsigned long*)l.len,
+                                    n, 1, l.bf, scale, flag.dev);
+    rocm_cvt_lists_free_(&l);
+    return ok;
+}
+
+int rocm_unscale_many(const &Vec<struct RocmBuf> src, const &Vec<struct RocmBuf> dst, float scale,
+                      struct RocmBuf flag) {
+    unsigned long n = src.length();
+    if (!rocm_ensure_() || n != dst.length() || !rocm_fits_(flag, 1UL)) return 0;
+    if (n == 0UL) return 1;
+    struct RocmCvtLists_ l = rocm_cvt_lists_(n);
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < n) {
+            struct RocmBuf s = *src.at(i);
+            struct RocmBuf d = *dst.at(i);
+            if (!rocm_fits_(s, s.len) || !rocm_fits_(d, s.len) || s.len > 4294967295UL) l.ok = 0;
+            l.src[i] = s.dev; l.dst[i] = d.dev; l.len[i] = s.len;
+            i = i + 1UL;
+        }
+    }
+    int ok = l.ok && rocm_cvt_many_((const unsigned long*)l.src, (const unsigned long*)l.dst, (const unsigned long*)l.len,
+                                    n, 2, 0, scale, flag.dev);
+    rocm_cvt_lists_free_(&l);
+    return ok;
+}
+
+int rocm_mp_sgd(struct RocmBuf w, struct RocmBuf g, struct RocmBuf vel, struct RocmHalfBuf wHalf,
+                float lr, float momentum, float weightDecay, struct RocmBuf skip) {
+    unsigned long n = w.len;
+    if (!rocm_ensure_() || !rocm_fits_(w, n) || !rocm_fits_(g, n) || n > 4294967295UL) return 0;
+    if (vel.dev != 0UL && !rocm_fits_(vel, n)) return 0;
+    if (wHalf.dev != 0UL && !rocm_half_fits_(wHalf, n)) return 0;
+    unsafe {
+        void* pw = (void*)w.dev;
+        void* pg = (void*)g.dev;
+        void* pv = (void*)vel.dev;
+        void* ph = (void*)wHalf.dev;
+        void* ps = (void*)skip.dev;
+        float l = lr;
+        float mo = momentum;
+        float wd = weightDecay;
+        unsigned int nn = (unsigned int)n;
+        int bf = wHalf.dtype == ROCM_BF16 ? 1 : 0;
+        void* params[10];
+        params[0] = (void*)&pw; params[1] = (void*)&pg; params[2] = (void*)&pv; params[3] = (void*)&ph;
+        params[4] = (void*)&l; params[5] = (void*)&mo; params[6] = (void*)&wd; params[7] = (void*)&nn;
+        params[8] = (void*)&bf; params[9] = (void*)&ps;
+        return rocm_launch_(K_MP_SGD, n, (&void)&params[0]);
+    }
+}
+
+int rocm_mp_adam(struct RocmBuf w, struct RocmBuf m, struct RocmBuf v, struct RocmBuf g, struct RocmHalfBuf wHalf,
+                 float lr, float beta1, float beta2, float eps, float weightDecay, int decoupled,
+                 unsigned long step, struct RocmBuf skip) {
+    unsigned long n = w.len;
+    if (!rocm_ensure_() || !rocm_fits_(w, n) || !rocm_fits_(m, n) || !rocm_fits_(v, n) || !rocm_fits_(g, n) ||
+        n > 4294967295UL || step == 0UL) return 0;
+    if (wHalf.dev != 0UL && !rocm_half_fits_(wHalf, n)) return 0;
+    float bc1 = (float)1.0 - pow_f(beta1, (float)step);
+    float bc2 = (float)1.0 - pow_f(beta2, (float)step);
+    unsafe {
+        void* pw = (void*)w.dev;
+        void* pm = (void*)m.dev;
+        void* pv = (void*)v.dev;
+        void* pg = (void*)g.dev;
+        void* ph = (void*)wHalf.dev;
+        void* ps = (void*)skip.dev;
+        float l = lr; float b1 = beta1; float b2 = beta2; float e = eps; float wd = weightDecay;
+        float c1 = bc1; float c2 = bc2;
+        int dec = decoupled ? 1 : 0;
+        unsigned int nn = (unsigned int)n;
+        int bf = wHalf.dtype == ROCM_BF16 ? 1 : 0;
+        void* params[16];
+        params[0] = (void*)&pw; params[1] = (void*)&pm; params[2] = (void*)&pv; params[3] = (void*)&pg;
+        params[4] = (void*)&ph; params[5] = (void*)&l; params[6] = (void*)&b1; params[7] = (void*)&b2;
+        params[8] = (void*)&e; params[9] = (void*)&wd; params[10] = (void*)&c1; params[11] = (void*)&c2;
+        params[12] = (void*)&dec; params[13] = (void*)&nn; params[14] = (void*)&bf; params[15] = (void*)&ps;
+        return rocm_launch_(K_MP_ADAM, n, (&void)&params[0]);
+    }
+}
+
+static int rocm_half_ew_(struct RocmHalfBuf a, struct RocmHalfBuf b, struct RocmHalfBuf out, float k, int op) {
+    unsigned long n = a.len;
+    if (!rocm_ensure_() || !rocm_half_fits_(a, n) || !rocm_half_fits_(out, n) || a.dtype != out.dtype ||
+        n > 4294967295UL) return 0;
+    if (op != 3 && (!rocm_half_fits_(b, n) || b.dtype != a.dtype)) return 0;
+    unsafe {
+        void* pa = (void*)a.dev;
+        void* pb = (void*)b.dev;
+        void* po = (void*)out.dev;
+        float kk = k;
+        unsigned int nn = (unsigned int)n;
+        int o = op;
+        int bf = a.dtype == ROCM_BF16 ? 1 : 0;
+        void* params[7];
+        params[0] = (void*)&pa; params[1] = (void*)&pb; params[2] = (void*)&po; params[3] = (void*)&kk;
+        params[4] = (void*)&nn; params[5] = (void*)&o; params[6] = (void*)&bf;
+        return rocm_launch_(K_HALF_EW, n, (&void)&params[0]);
+    }
+}
+
+int rocm_half_add(struct RocmHalfBuf a, struct RocmHalfBuf b, struct RocmHalfBuf out) { return rocm_half_ew_(a, b, out, (float)0.0, 0); }
+int rocm_half_sub(struct RocmHalfBuf a, struct RocmHalfBuf b, struct RocmHalfBuf out) { return rocm_half_ew_(a, b, out, (float)0.0, 1); }
+int rocm_half_mul(struct RocmHalfBuf a, struct RocmHalfBuf b, struct RocmHalfBuf out) { return rocm_half_ew_(a, b, out, (float)0.0, 2); }
+int rocm_half_scale(struct RocmHalfBuf a, float k, struct RocmHalfBuf out) { return rocm_half_ew_(a, a, out, k, 3); }
+int rocm_half_axpy(struct RocmHalfBuf a, float k, struct RocmHalfBuf b, struct RocmHalfBuf out) {
+    return rocm_half_ew_(a, b, out, k, 4);
+}
+
+int rocm_half_bias(struct RocmHalfBuf y, struct RocmHalfBuf bias, unsigned long rows, unsigned long channels,
+                   unsigned long plane, int relu) {
+    unsigned long total = rows * channels * plane;
+    if (!rocm_ensure_() || total == 0UL || total > 4294967295UL || !rocm_half_fits_(y, total) ||
+        !rocm_half_fits_(bias, channels) || y.dtype != bias.dtype) return 0;
+    unsafe {
+        void* py = (void*)y.dev;
+        void* pb = (void*)bias.dev;
+        unsigned int t = (unsigned int)total;
+        unsigned int c = (unsigned int)channels;
+        unsigned int p = (unsigned int)plane;
+        int r = relu ? 1 : 0;
+        int bf = y.dtype == ROCM_BF16 ? 1 : 0;
+        void* params[7];
+        params[0] = (void*)&py; params[1] = (void*)&pb; params[2] = (void*)&t; params[3] = (void*)&c;
+        params[4] = (void*)&p; params[5] = (void*)&r; params[6] = (void*)&bf;
+        return rocm_launch_(K_HALF_BIAS, total, (&void)&params[0]);
+    }
+}
+
+static int rocm_half_pool_(struct RocmHalfBuf x, struct RocmHalfBuf y, unsigned long batch, unsigned long channels,
+                           unsigned long height, unsigned long width, unsigned long kernel, unsigned long stride, int avg) {
+    if (!rocm_ensure_() || kernel == 0UL || stride == 0UL || height < kernel || width < kernel || x.dtype != y.dtype)
+        return 0;
+    unsigned long oh = (height - kernel) / stride + 1UL;
+    unsigned long ow = (width - kernel) / stride + 1UL;
+    unsigned long rows = batch * channels;
+    unsigned long total = rows * oh * ow;
+    if (total == 0UL || total > 4294967295UL || height * width > 4294967295UL ||
+        !rocm_half_fits_(x, rows * height * width) || !rocm_half_fits_(y, total)) return 0;
+    unsafe {
+        void* px = (void*)x.dev;
+        void* py = (void*)y.dev;
+        unsigned int r = (unsigned int)rows;
+        unsigned int hh = (unsigned int)height; unsigned int ww = (unsigned int)width;
+        unsigned int ohh = (unsigned int)oh; unsigned int oww = (unsigned int)ow;
+        unsigned int kk = (unsigned int)kernel; unsigned int ss = (unsigned int)stride;
+        int a = avg;
+        int bf = x.dtype == ROCM_BF16 ? 1 : 0;
+        void* params[11];
+        params[0] = (void*)&px; params[1] = (void*)&py; params[2] = (void*)&r; params[3] = (void*)&hh;
+        params[4] = (void*)&ww; params[5] = (void*)&ohh; params[6] = (void*)&oww; params[7] = (void*)&kk;
+        params[8] = (void*)&ss; params[9] = (void*)&a; params[10] = (void*)&bf;
+        return rocm_launch_(K_HALF_POOL, total, (&void)&params[0]);
+    }
+}
+
+int rocm_half_maxpool2d(struct RocmHalfBuf x, struct RocmHalfBuf y, unsigned long batch, unsigned long channels,
+                        unsigned long height, unsigned long width, unsigned long kernel, unsigned long stride) {
+    return rocm_half_pool_(x, y, batch, channels, height, width, kernel, stride, 0);
+}
+
+int rocm_half_avgpool2d(struct RocmHalfBuf x, struct RocmHalfBuf y, unsigned long batch, unsigned long channels,
+                        unsigned long height, unsigned long width, unsigned long kernel, unsigned long stride) {
+    return rocm_half_pool_(x, y, batch, channels, height, width, kernel, stride, 1);
 }
 
 } // namespace std

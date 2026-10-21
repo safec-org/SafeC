@@ -51,13 +51,40 @@ unsigned short f32_to_bf16(float v);
 // exactly representable in float32 by construction.
 float bf16_to_f32(unsigned short b);
 
-// Converts 'n' float32 values to fp16 in bulk -- src/dst may not overlap.
+// ── What the CPU does natively ───────────────────────────────────────────────
+// fp16 conversion is in every x86-64 CPU since 2012 (F16C) and in every
+// AArch64 core; bf16 is newer and optional -- x86 AVX512-BF16 (Cooper Lake,
+// Sapphire Rapids, Zen 4 and later) and Arm FEAT_BF16 (Armv8.6: Neoverse
+// V1 / N2, Apple M2 and later) -- and so is fp16 arithmetic (AVX512-FP16;
+// Arm FEAT_FP16). Detected once at run time (cpuid + xgetbv on x86-64,
+// getauxval on Linux AArch64, sysctl on Apple). SAFEC_HALF=soft reports
+// none and makes the bulk conversions below use the portable code.
+#define HALF_CPU_F16_CONVERT   1   // fp16 <-> float32 instructions (F16C / AArch64 FCVTL, FCVTN)
+#define HALF_CPU_F16_ARITH     2   // fp16 arithmetic (AVX512-FP16 / FEAT_FP16)
+#define HALF_CPU_BF16_CONVERT  4   // float32 -> bf16 instructions (AVX512-BF16 / FEAT_BF16)
+#define HALF_CPU_BF16_DOT      8   // bf16 dot products (VDPBF16PS / BFDOT)
+int half_cpu_features();
+// "F16C, AVX512-BF16" and the like; "none" for none.
+const char* half_cpu_features_name();
+
+// ── Bulk conversions (src and dst must not overlap) ─────────────────────────
+// Bit-identical to the scalar functions above for every input except NaN
+// payloads (the hardware keeps more of a NaN's payload; a NaN stays a NaN).
+// x86-64 uses F16C for fp16 and, where present, AVX512-BF16 for
+// float32 -> bf16 (16 values per instruction; a block holding a float32
+// subnormal, which that instruction flushes to zero, is converted in
+// software instead). AArch64 uses FCVTL / FCVTN for fp16. bf16 -> float32
+// is a shift and float32 -> bf16 an integer rounding everywhere else, both
+// in loops the compiler vectorizes. Arrays of 256K values or more are
+// split across std/sync/parallel.h's thread pool.
 void f32_to_fp16_bulk(const &float src, &unsigned short dst, unsigned long n);
-// Converts 'n' fp16 values back to float32 in bulk.
 void fp16_to_f32_bulk(const &unsigned short src, &float dst, unsigned long n);
-// Converts 'n' float32 values to bf16 in bulk.
 void f32_to_bf16_bulk(const &float src, &unsigned short dst, unsigned long n);
-// Converts 'n' bf16 values back to float32 in bulk.
 void bf16_to_f32_bulk(const &unsigned short src, &float dst, unsigned long n);
+// Between the two 16-bit formats (through float32, rounded to nearest even):
+// fp16 -> bf16 loses 3 mantissa bits, bf16 -> fp16 rounds to fp16's range
+// (overflow to infinity, small values to subnormals or zero).
+void fp16_to_bf16_bulk(const &unsigned short src, &unsigned short dst, unsigned long n);
+void bf16_to_fp16_bulk(const &unsigned short src, &unsigned short dst, unsigned long n);
 
 } // namespace std
