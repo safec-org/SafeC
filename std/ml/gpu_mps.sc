@@ -67,6 +67,10 @@ extern void* MTLCreateSystemDefaultDevice();
 // invoked — safe to call from a language with no Objective-C block
 // literal support.
 extern void* dispatch_data_create(const void* buffer, unsigned long size, void* queue, void* destructor);
+// libobjc's autorelease pools (what @autoreleasepool compiles to): each batch
+// runs inside one, see mps_batch_begin.
+extern void* objc_autoreleasePoolPush();
+extern void  objc_autoreleasePoolPop(void* pool);
 #else
 // No Metal outside Apple platforms: null stand-ins for the Objective-C /
 // Metal / libdispatch entry points, so this file still compiles and links
@@ -78,6 +82,8 @@ static void* sel_registerName(const char* name) { return (void*)0; }
 static void* objc_msgSend(void* recv, void* op) { return (void*)0; }
 static void* MTLCreateSystemDefaultDevice() { return (void*)0; }
 static void* dispatch_data_create(const void* buffer, unsigned long size, void* queue, void* destructor) { return (void*)0; }
+static void* objc_autoreleasePoolPush() { return (void*)0; }
+static void  objc_autoreleasePoolPop(void* pool) { }
 #endif
 
 struct MTLSize {
@@ -639,6 +645,7 @@ static void* __mps_sum_pipeline = (void*)0;
 #define MPS_BATCH_MAX_POOLBUFS 1024
 
 static int           __mps_batch_active = 0;
+static void*         __mps_batch_pool = (void*)0;
 static void*         __mps_batch_cmdBuf = (void*)0;
 static void*         __mps_batch_encoder = (void*)0;
 static void*         __mps_pending_gpuBuf[MPS_BATCH_MAX_PENDING];
@@ -681,6 +688,11 @@ int mps_batch_is_active() { return __mps_batch_active; }
 void mps_batch_begin() {
     unsafe {
         if (!__mps_ensure_device_queue()) return;
+        // The command buffers and encoders below come back autoreleased, and
+        // a plain C program has no pool to drain them: without this one they
+        // were never freed (nn_mps.h's trainer grew ~30 KB per epoch).
+        // mps_batch_end drains it once the GPU is done with them.
+        __mps_batch_pool = objc_autoreleasePoolPush();
         MMsg0 msg0 = (MMsg0)objc_msgSend;
         __mps_batch_cmdBuf  = msg0(__mps_queue, __sel_commandBuffer);
         __mps_batch_encoder = msg0(__mps_batch_cmdBuf, __sel_computeCommandEncoder);
@@ -740,6 +752,10 @@ void mps_batch_end() {
             i = i + 1UL;
         }
         __mps_finalize_count = 0UL;
+
+        void* pool = __mps_batch_pool;
+        __mps_batch_pool = (void*)0;
+        if (pool != (void*)0) objc_autoreleasePoolPop(pool);
     }
 }
 
@@ -4274,7 +4290,9 @@ int mps_gemm(struct MpsBuf a, int ta, struct MpsBuf b, int tb, struct MpsBuf c,
 
 // ── Interop (see gpu_mps.h's mps_dispatch) ──────────────────────────────────
 #define MPS_DISPATCH_MAX_ 64UL
-static const char* __mps_dispatch_names[64];
+// void*, not const char*: safec emits a static array of pointers to const as
+// an LLVM constant, so the optimizer drops the stores into it.
+static void*       __mps_dispatch_names[64];
 static void*       __mps_dispatch_pipes[64];
 static unsigned long __mps_dispatch_limit[64];   // the pipeline's maxTotalThreadsPerThreadgroup
 static unsigned long __mps_dispatch_count = 0UL;
@@ -4295,7 +4313,8 @@ static long __mps_dispatch_slot(const char* kernel) {
     unsafe {
         unsigned long i = 0UL;
         while (i < __mps_dispatch_count) {
-            if (__mps_dispatch_names[i] == kernel || __mps_str_eq(__mps_dispatch_names[i], kernel)) return (long)i;
+            const char* name = (const char*)__mps_dispatch_names[i];
+            if (name == kernel || __mps_str_eq(name, kernel)) return (long)i;
             i = i + 1UL;
         }
         if (__mps_dispatch_count >= MPS_DISPATCH_MAX_) return -1L;
@@ -4303,7 +4322,7 @@ static long __mps_dispatch_slot(const char* kernel) {
         if (pipe == (void*)0) return -1L;
         if (__sel_maxThreads == (void*)0) __sel_maxThreads = sel_registerName("maxTotalThreadsPerThreadgroup");
         MMsgULong maxFn = (MMsgULong)objc_msgSend;
-        __mps_dispatch_names[i] = kernel;
+        __mps_dispatch_names[i] = (void*)kernel;
         __mps_dispatch_pipes[i] = pipe;
         __mps_dispatch_limit[i] = maxFn(pipe, __sel_maxThreads);
         __mps_dispatch_count = i + 1UL;
