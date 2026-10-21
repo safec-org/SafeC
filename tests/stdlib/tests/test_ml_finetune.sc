@@ -74,7 +74,7 @@ static double grad_check_(int which) {
     rng.fill_uniform(ad.b, (float)-0.5, (float)0.5);
     struct TensorArena ar = tensor_arena_new(0UL);
     ar.begin();
-    tensor_backward(gc_loss_(which, x, aux, &ad, cond));
+    gc_loss_(which, x, aux, &ad, cond).backward();
     ar.reset();
     double worst = 0.0;
     unsafe {
@@ -144,7 +144,7 @@ void t_mul_row_grad() {
     }
     &Tensor y = tensor_mul_row(x, g);
     unsafe { ASSERT_TRUE(y->data[0] == (float)2.0 && y->data[1] == (float)-2.0 && y->data[5] == (float)-6.0); }
-    tensor_backward(tensor_sum(y));
+    tensor_sum(y).backward();
     unsafe { ASSERT_TRUE(g->grad[0] == (float)9.0 && g->grad[1] == (float)12.0); }   // column sums
 }
 
@@ -310,11 +310,11 @@ void t_lora() {
     cfg.alpha = (float)8.0;
     struct LoraMlp ft = lora_attach(&base, &cfg);
     // B starts at zero: the adapted network equals the base
-    tensor_set_grad_enabled(0);
+    autograd().set_enabled(0);
     &Tensor y0 = base.forward(b.x);
     &Tensor y1 = ft.forward(b.x);
     unsafe { unsigned long i = 0UL; while (i < y0->size) { ASSERT_TRUE(y0->data[i] == y1->data[i]); i = i + 1UL; } }
-    tensor_set_grad_enabled(1);
+    autograd().set_enabled(1);
     // trainable: r * (in + out) per layer (1040 here, 23% of this small base;
     // the fraction r (in + out) / (in out) shrinks with layer width)
     ASSERT_EQ(model_param_count(&ft), 4UL * (2UL + 64UL) + 4UL * (64UL + 64UL) + 4UL * (64UL + 2UL));
@@ -329,7 +329,7 @@ void t_lora() {
     ASSERT_TRUE(checksum_(&base) == before);          // the base never moved
 
     // merging folds the update into the base weights
-    tensor_set_grad_enabled(0);
+    autograd().set_enabled(0);
     &Tensor ya = ft.forward(b.x);
     ft.merge();
     &Tensor yb = base.forward(b.x);
@@ -337,7 +337,7 @@ void t_lora() {
         unsigned long i = 0UL;
         while (i < ya->size) { float d = ya->data[i] - yb->data[i]; ASSERT_TRUE(d < (float)1e-3 && d > (float)-1e-3); i = i + 1UL; }
     }
-    tensor_set_grad_enabled(1);
+    autograd().set_enabled(1);
     ASSERT_TRUE(trainer_accuracy(&base, base_logits_, &b, 128UL) > (float)0.95);
     ft.detach();
     opt.free();

@@ -231,8 +231,8 @@ void t_mixed_precision_batch() {
     // LossScaler::unscale_all over the list
     struct LossScaler sc = loss_scaler_new();
     sc.scale = (float)4.0;
-    tensor_zero_grad(*ps.at(0UL));
-    tensor_zero_grad(*ps.at(1UL));
+    (*ps.at(0UL)).zero_grad();
+    (*ps.at(1UL)).zero_grad();
     unsafe { (*ps.at(0UL))->grad[0] = (float)8.0; }
     ASSERT_TRUE(sc.unscale_all(&ps));
     unsafe { ASSERT_TRUE((*ps.at(0UL))->grad[0] == (float)2.0); }

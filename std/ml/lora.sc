@@ -61,7 +61,7 @@ static &Tensor lora_layer_(const &Tensor x, const &Tensor W, const &Tensor b, co
                            const &Tensor B, float scale, float dropout, &Rng rng, int act) {
     &Tensor base = tensor_add_bias(tensor_matmul(x, W), b);
     &Tensor xin = tensor_add_scalar(x, (float)0.0);
-    if (dropout > (float)0.0 && tensor_is_grad_enabled()) {
+    if (dropout > (float)0.0 && autograd().enabled()) {
         &Tensor mask = tensor_new_2d(lora_rows_(x), lora_cols_(x), 0);
         float keep = (float)1.0 / ((float)1.0 - dropout);
         unsafe {

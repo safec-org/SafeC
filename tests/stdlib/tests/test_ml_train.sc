@@ -24,7 +24,7 @@ static void tensor_drop(&Tensor t) {
 }
 
 // ── Gradient checks ──────────────────────────────────────────────────────────
-// loss(x) for a family of ops; compares tensor_backward's gradient for x
+// loss(x) for a family of ops; compares Tensor::backward's gradient for x
 // with central differences.
 static &Tensor gc_loss_(int which, &Tensor x, const &Tensor aux) {
     if (which == 0) return tensor_sum(tensor_mul(tensor_exp(x), aux));
@@ -63,7 +63,7 @@ static double grad_check_(int which) {
     struct TensorArena stepArena = tensor_arena_new(0UL);
     stepArena.begin();
     &Tensor l = gc_loss_(which, x, aux);
-    tensor_backward(l);
+    l.backward();
     stepArena.reset();
     double worst = 0.0;
     unsafe {
@@ -115,7 +115,7 @@ void t_gather_rows_grad() {
     unsafe {
         ASSERT_TRUE(g->data[0] == (float)4.0 && g->data[1] == (float)5.0 && g->data[2] == (float)0.0);
     }
-    tensor_backward(tensor_sum(g));
+    tensor_sum(g).backward();
     unsafe {
         ASSERT_TRUE(table->grad[4] == (float)2.0);   // row 2 gathered twice
         ASSERT_TRUE(table->grad[0] == (float)1.0);
@@ -306,12 +306,11 @@ void t_trainer_sine() {
 
 // ── Autoencoders ─────────────────────────────────────────────────────────────
 static float recon_err_(&Autoencoder ae, const &Dataset d) {
-    int was = tensor_is_grad_enabled();
-    tensor_set_grad_enabled(0);
+    struct GradGuard noGrad = autograd().no_grad();
     &Tensor r = ae.reconstruct(d.x);
     float e;
     unsafe { e = tensor_mse_loss(r, d.x)->data[0]; }
-    tensor_set_grad_enabled(was);
+    noGrad.restore();
     return e;
 }
 
@@ -373,8 +372,7 @@ void t_vae() {
         ASSERT_TRUE(v.lastKl > (float)0.1);
         &Tensor labels = tensor_new_1d(64UL, 0);
         unsafe { unsigned long i = 0UL; while (i < 64UL) { labels->data[i] = (float)(i % 4UL); i = i + 1UL; } }
-        int was = tensor_is_grad_enabled();
-        tensor_set_grad_enabled(0);
+        struct GradGuard noGrad = autograd().no_grad();
         &Tensor s = cond ? v.sample(64UL, (?&Tensor)labels) : v.sample(64UL, null);
         unsafe {
             ASSERT_EQ(s->shape[0], 64UL);
@@ -386,7 +384,7 @@ void t_vae() {
             float acc = tensor_accuracy(judge.forward(s), labels);
             ASSERT_TRUE(acc > (float)0.7);
         }
-        tensor_set_grad_enabled(was);
+        noGrad.restore();
         opt.free();
         v.free();
         cond = cond + 1;
@@ -410,8 +408,7 @@ void t_vqvae() {
     struct TrainReport rep = model_fit(&v, &opt, &blobs, &tc);
     ASSERT_TRUE(rep.lastEpochLoss < rep.firstEpochLoss * (float)0.2);
     ASSERT_TRUE(v.lastPerplexity > (float)4.0);     // codes in use, not collapsed to one
-    int was = tensor_is_grad_enabled();
-    tensor_set_grad_enabled(0);
+    struct GradGuard noGrad = autograd().no_grad();
     &Tensor codes = v.encode(blobs.x);
     &Tensor a = v.decode(codes);
     &Tensor b = v.reconstruct(blobs.x);
@@ -419,7 +416,7 @@ void t_vqvae() {
         ASSERT_TRUE(a->data[5] == b->data[5]);
         ASSERT_TRUE(tensor_mse_loss(b, blobs.x)->data[0] < (float)1.0);
     }
-    tensor_set_grad_enabled(was);
+    noGrad.restore();
     opt.free();
     v.free();
     blobs.free();
@@ -433,7 +430,7 @@ static double critic_grad_norm_(&Gan g, const &Tensor real, const &Tensor fake) 
         unsigned long i = 0UL;
         while (i < 512UL) { xh->data[i] = (float)0.5 * (real->data[i] + fake->data[i]); i = i + 1UL; }
     }
-    tensor_backward(tensor_sum(g.score(xh, null)));
+    tensor_sum(g.score(xh, null)).backward();
     double acc = 0.0;
     unsafe {
         unsigned long r = 0UL;
@@ -860,7 +857,7 @@ static &Tensor cg_loss_(int which, const &Tensor x, const &Tensor w, const &Tens
     return tensor_sum(tensor_mul(cg_forward_(which, x, w, b, rm, rv), aux));
 }
 
-// Worst relative error of tensor_backward's gradient for t against central
+// Worst relative error of Tensor::backward's gradient for t against central
 // differences of the loss.
 static double cg_compare_(int which, &Tensor t, &Tensor x, &Tensor w, &Tensor b, &Tensor rm, &Tensor rv,
                           const &Tensor aux, &TensorArena stepArena) {
@@ -915,7 +912,7 @@ static double conv_grad_check_(int which) {
     rng.fill_uniform(aux, (float)-1.0, (float)1.0);
     stepArena.reset();
     stepArena.begin();
-    tensor_backward(cg_loss_(which, x, w, b, rm, rv, aux));
+    cg_loss_(which, x, w, b, rm, rv, aux).backward();
     stepArena.reset();
     double worst = cg_compare_(which, x, x, w, b, rm, rv, aux, &stepArena);
     if (cg_has_params_(which)) {
@@ -976,10 +973,10 @@ void t_batch_norm_stats() {
 // pool, against the same computation on one thread.
 static void conv_run_(int deconv, const &Tensor x, const &Tensor w, const &Tensor b, const &Tensor aux,
                       &Tensor outCopy, &Tensor dx, &Tensor dw, &Tensor db) {
-    tensor_zero_grad(x); tensor_zero_grad(w); tensor_zero_grad(b);
+    x.zero_grad(); w.zero_grad(); b.zero_grad();
     &Tensor y = deconv ? tensor_conv_transpose2d(x, w, b, 4UL, 16UL, 16UL, 4UL, 4UL, 2UL, 1UL)
                        : tensor_conv2d(x, w, b, 4UL, 16UL, 16UL, 3UL, 3UL, 1UL, 1UL);
-    tensor_backward(tensor_sum(tensor_mul(y, aux)));
+    tensor_sum(tensor_mul(y, aux)).backward();
     unsafe {
         __tensor_ew(EW_COPY, (const float*)y->data, (const float*)0, (float)0.0, (float*)outCopy->data, y->size);
         __tensor_ew(EW_COPY, (const float*)x->grad, (const float*)0, (float)0.0, (float*)dx->data, x->size);
@@ -1047,7 +1044,7 @@ void t_conv_parallel_batch() {
 // the thread pool, against the same chain on one thread.
 static void light_chain_(&Tensor x, &Tensor gamma, &Tensor beta, &Tensor rm, &Tensor rv,
                          const &Tensor a1, const &Tensor a2, &Tensor snap) {
-    tensor_zero_grad(x); tensor_zero_grad(gamma); tensor_zero_grad(beta);
+    x.zero_grad(); gamma.zero_grad(); beta.zero_grad();
     tensor_fill(rm, (float)0.0);
     tensor_fill(rv, (float)1.0);
     &Tensor y = tensor_batch_norm(x, gamma, beta, rm, rv, 8UL, 1024UL, 1, (float)0.1, (float)0.00001);
@@ -1055,7 +1052,7 @@ static void light_chain_(&Tensor x, &Tensor gamma, &Tensor beta, &Tensor rm, &Te
     &Tensor ap = tensor_avgpool2d(y, 8UL, 32UL, 32UL, 3UL, 2UL, 1UL, 0);
     &Tensor up = tensor_upsample_nearest(mp, 8UL, 16UL, 16UL, 2UL);             // 8 x 32 x 32
     &Tensor loss = tensor_add(tensor_sum(tensor_mul(up, a1)), tensor_sum(tensor_mul(ap, a2)));
-    tensor_backward(loss);
+    loss.backward();
     // snapshot: loss, dx, dgamma, dbeta, running mean, running variance
     unsafe {
         unsigned long n = x->size;
@@ -1221,7 +1218,7 @@ void t_convnet_skips() {
     rng.fill_uniform(aux, (float)-1.0, (float)1.0);
     struct TensorArena stepArena = tensor_arena_new(0UL);
     stepArena.begin();
-    tensor_backward(tensor_sum(tensor_mul(n.forward(x), aux)));
+    (tensor_sum(tensor_mul(n.forward(x), aux))).backward();
     stepArena.reset();
     double worst = 0.0;
     unsafe {
@@ -1294,8 +1291,7 @@ void t_convnet_fold_and_files() {
         i = i + 1UL;
     }
     n.set_training(0);
-    int was = tensor_is_grad_enabled();
-    tensor_set_grad_enabled(0);
+    struct GradGuard noGrad = autograd().no_grad();
     &Tensor x = tensor_new_2d(3UL, 192UL, 0);
     rng.fill_uniform(x, (float)-1.0, (float)1.0);
     &Tensor before = n.forward(x);
@@ -1332,7 +1328,7 @@ void t_convnet_fold_and_files() {
     &Tensor ya = a.forward(mx);
     &Tensor yc = c.forward(mx);
     ASSERT_TRUE(max_rel_diff_(ya, yc) == (float)0.0);
-    tensor_set_grad_enabled(was);
+    noGrad.restore();
     tensor_drop(x); tensor_drop(before); tensor_drop(after); tensor_drop(m0); tensor_drop(m1);
     tensor_drop(mx); tensor_drop(ya); tensor_drop(yc);
     a.free(); c.free();
@@ -1438,7 +1434,7 @@ void t_wgan_gp_gradient() {
     &Tensor term = dcgan_gradient_penalty_(&g, xh, null, &v);
     ASSERT_TRUE(v > (float)0.0);
     g.optD.zero_grad();
-    tensor_backward(term);
+    term.backward();
     stepArena.reset();
     // snapshot: every penalty evaluation below runs its own input-gradient
     // backward pass, which adds into w's gradient
@@ -1660,12 +1656,11 @@ static struct ConvNet shapes_decoder_(unsigned long inputs, &Rng rng) {
 }
 
 static float conv_recon_err_(&ConvAutoencoder ae, const &Dataset d) {
-    int was = tensor_is_grad_enabled();
-    tensor_set_grad_enabled(0);
+    struct GradGuard noGrad = autograd().no_grad();
     &Tensor r = ae.reconstruct(d.x);
     float e;
     unsafe { e = tensor_mse_loss(r, d.x)->data[0]; }
-    tensor_set_grad_enabled(was);
+    noGrad.restore();
     return e;
 }
 
@@ -1727,8 +1722,7 @@ void t_conv_autoencoders() {
         struct TrainReport rep = model_fit(&v, &vo, &shapes, &tc);
         ASSERT_TRUE(rep.lastEpochLoss < rep.firstEpochLoss * (float)0.6);
         ASSERT_TRUE(v.lastKl > (float)0.1);
-        int was = tensor_is_grad_enabled();
-        tensor_set_grad_enabled(0);
+        struct GradGuard noGrad = autograd().no_grad();
         &Tensor s = cond ? v.sample(64UL, (?&Tensor)labels) : v.sample(64UL, null);
         &Tensor r = v.reconstruct(shapes.x, shapes.y);
         unsafe {
@@ -1738,7 +1732,7 @@ void t_conv_autoencoders() {
             ASSERT_TRUE(tensor_mse_loss(r, shapes.x)->data[0] < (float)0.1);
         }
         if (cond) ASSERT_TRUE(tensor_accuracy(judge.forward(s), labels) > (float)0.7);
-        tensor_set_grad_enabled(was);
+        noGrad.restore();
         tensor_drop(s);
         tensor_drop(r);
         vo.free();
@@ -1804,10 +1798,9 @@ void t_dcgan() {
     cg.train(&shapes, 60UL, 64UL);
     &Tensor labels = cycle_labels_(256UL);
     &Tensor cs = cg.sample(256UL, (?&Tensor)labels);
-    int was = tensor_is_grad_enabled();
-    tensor_set_grad_enabled(0);
+    struct GradGuard noGrad = autograd().no_grad();
     float acc = tensor_accuracy(judge.forward(cs), labels);
-    tensor_set_grad_enabled(was);
+    noGrad.restore();
     ASSERT_TRUE(acc > (float)0.55);   // chance is 0.25
     tensor_drop(cs);
     tensor_drop(labels);

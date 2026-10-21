@@ -566,7 +566,7 @@ static &Tensor nn_loss_(const &Tensor x, const &Tensor t, int kind, float k) {
             acc = acc / (double)rows;
         }
         out->data[0] = (float)acc;
-        if (tensor_is_grad_enabled() && x->requiresGrad) {
+        if (autograd().enabled() && x->requiresGrad) {
             out->requiresGrad = 1;
             out->parents.push(x);
             out->parents.push(t);
@@ -738,7 +738,7 @@ void Optimizer::add(&Tensor param) {
 
 void Optimizer::zero_grad() {
     unsigned long i = 0UL;
-    while (i < self.params.length()) { tensor_zero_grad(*self.params.at(i)); i = i + 1UL; }
+    while (i < self.params.length()) { (*self.params.at(i)).zero_grad(); i = i + 1UL; }
 }
 
 float Optimizer::clip_grad_norm(float maxNorm) {

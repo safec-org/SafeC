@@ -121,7 +121,7 @@ trait GanModel : Parameterized + Generative {
 
 struct Gan gan_new(unsigned long dataDim, const &GanConfig cfg);
 // Internal (exposed for tests): GAN_WGAN_GP's penalty term for g's critic
-// at the interpolates xh. tensor_backward of the result accumulates the
+// at the interpolates xh. Tensor::backward on the result accumulates the
 // penalty's gradient into D's parameters (after it has already added the
 // input-gradient pass's, so zero them in between, as Gan::train_step does);
 // 'value' receives gpWeight * mean (||grad_x D|| - 1)^2.

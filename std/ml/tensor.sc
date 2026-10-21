@@ -314,7 +314,7 @@ inline void Tensor::free() {
     return out;
 }
 
-// ══ Graph traversal & tensor_backward() ══════════════════════════════════════
+// ══ Graph traversal & Tensor::backward() ══════════════════════════════════════
 
 static void __tensor_toposort(&Tensor t, &Vec<&Tensor> order) {
     unsafe { if (t->visited) return; }
@@ -329,15 +329,15 @@ static void __tensor_toposort(&Tensor t, &Vec<&Tensor> order) {
     order.push(t);
 }
 
-void tensor_backward(&Tensor t) {
-    __tensor_ensure_grad(t);
+void Tensor::backward() {
+    __tensor_ensure_grad(self);
     unsafe {
         unsigned long i = 0UL;
-        while (i < t->size) { t->grad[i] = (float)1.0; i = i + 1UL; }
+        while (i < self->size) { self->grad[i] = (float)1.0; i = i + 1UL; }
     }
 
     struct Vec<&Tensor> order = vec_new();
-    __tensor_toposort(t, &order);
+    __tensor_toposort(self, &order);
 
     unsafe {
         unsigned long n = order.length();
@@ -361,24 +361,36 @@ void tensor_backward(&Tensor t) {
     }
 }
 
-void tensor_zero_grad(&Tensor t) {
+void Tensor::zero_grad() {
     unsafe {
-        if (t->grad != (float*)0) {
+        if (self->grad != (float*)0) {
             unsigned long i = 0UL;
-            while (i < t->size) { t->grad[i] = (float)0.0; i = i + 1UL; }
+            while (i < self->size) { self->grad[i] = (float)0.0; i = i + 1UL; }
         }
     }
 }
 
 // ── Gradient mode (no_grad) ──────────────────────────────────────────────────
 // Backing storage stays a private 'static' in this one TU -- every other
-// file only ever touches it through the two externally-linked accessor
-// functions below, so there's exactly one copy of the flag no matter how
-// many files get linked together (see tensor.h's comment on why that
-// matters here, unlike the header's own per-TU-private static helpers).
-static int __gradEnabled = 1;
+// file only ever reaches it through autograd(), so there's exactly one copy
+// of the flag no matter how many files get linked together (see tensor.h's
+// comment on why that matters here, unlike the header's own per-TU-private
+// static helpers).
+static struct Autograd g_autograd = { 1 };
 
-int tensor_is_grad_enabled() { return __gradEnabled; }
-void tensor_set_grad_enabled(int enabled) { __gradEnabled = enabled; }
+&Autograd autograd() { unsafe { return (&Autograd)&g_autograd; } }
+
+int Autograd::enabled() const { return self.gradEnabled; }
+
+void Autograd::set_enabled(int enabled) { self.gradEnabled = enabled; }
+
+struct GradGuard Autograd::no_grad() {
+    struct GradGuard g;
+    g.was = self.gradEnabled;
+    self.gradEnabled = 0;
+    return g;
+}
+
+void GradGuard::restore() { autograd().set_enabled(self.was); }
 
 } // namespace std

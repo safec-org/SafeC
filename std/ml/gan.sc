@@ -157,7 +157,7 @@ static &Tensor gan_gp_core_(&T g, fn &Tensor(&T, const &Tensor, ?&Tensor) disc, 
     unsafe { m = xh->shape[0]; d = xh->size / m; }
     &Tensor xg = tensor_detach(xh);
     unsafe { xg->requiresGrad = 1; }
-    tensor_backward(tensor_sum(disc(g, xg, labels)));
+    tensor_sum(disc(g, xg, labels)).backward();
     &Tensor xp = tensor_detach(xh);
     &Tensor xm = tensor_detach(xh);
     &Tensor coef = tensor_new_2d(m, 1UL, 0);
@@ -242,7 +242,7 @@ struct GanLosses Gan::train_step(const &Tensor real, ?&Tensor labels) {
             out.d = out.d + gp;
         }
         self.optD.zero_grad();
-        tensor_backward(dl);
+        dl.backward();
         self.optD.step();
         if (self.cfg.loss == GAN_WGAN) gan_clip_(&self.disc.params, self.cfg.clip);
         self.stepArena.reset();
@@ -252,7 +252,7 @@ struct GanLosses Gan::train_step(const &Tensor real, ?&Tensor labels) {
     &Tensor dFake2 = self.disc.forward(gan_cond_(self, fake2, labels));
     &Tensor gl = gan_g_loss_(self.cfg.loss, dFake2, m);
     self.optG.zero_grad();
-    tensor_backward(gl);
+    gl.backward();
     self.optG.step();
     out.g = gan_value_(gl);
     if (self.cfg.emaDecay > (float)0.0) {
@@ -295,15 +295,14 @@ struct GanLosses Gan::train(const &Dataset data, unsigned long epochs, unsigned 
 
 &Tensor Gan::sample(unsigned long n, ?&Tensor labels) {
     ?&TensorArena outer = tensor_arena_current_();
-    int was = tensor_is_grad_enabled();
-    tensor_set_grad_enabled(0);
+    struct GradGuard noGrad = autograd().no_grad();
     self.stepArena.begin();
     &Tensor fake = gan_fake_(self, n, labels, 1);
     tensor_arena_end();
     &Tensor out = tensor_detach(fake);      // no arena active: on the heap
     self.stepArena.reset();
     gan_arena_restore_(outer);
-    tensor_set_grad_enabled(was);
+    noGrad.restore();
     return out;
 }
 
@@ -392,7 +391,7 @@ struct GanLosses Dcgan::train_step(const &Tensor real, ?&Tensor labels) {
             out.d = out.d + gp;
         }
         self.optD.zero_grad();
-        tensor_backward(dl);
+        dl.backward();
         self.optD.step();
         if (self.cfg.loss == GAN_WGAN) gan_clip_(&self.disc.params, self.cfg.clip);
         self.stepArena.reset();
@@ -400,7 +399,7 @@ struct GanLosses Dcgan::train_step(const &Tensor real, ?&Tensor labels) {
     }
     &Tensor gl = gan_g_loss_(self.cfg.loss, dcgan_disc_(self, dcgan_fake_(self, m, labels, 0), labels), m);
     self.optG.zero_grad();
-    tensor_backward(gl);
+    gl.backward();
     self.optG.step();
     out.g = gan_value_(gl);
     if (self.cfg.emaDecay > (float)0.0) model_soft_update(&self.genEma, &self.gen, (float)1.0 - gan_ema_decay_(&self.cfg, self.steps));
@@ -440,8 +439,7 @@ struct GanLosses Dcgan::train(const &Dataset data, unsigned long epochs, unsigne
 
 &Tensor Dcgan::sample(unsigned long n, ?&Tensor labels) {
     ?&TensorArena outer = tensor_arena_current_();
-    int was = tensor_is_grad_enabled();
-    tensor_set_grad_enabled(0);
+    struct GradGuard noGrad = autograd().no_grad();
     int mode = self.genEma.set_training(0);
     self.stepArena.begin();
     &Tensor fake = dcgan_fake_(self, n, labels, 1);
@@ -450,7 +448,7 @@ struct GanLosses Dcgan::train(const &Dataset data, unsigned long epochs, unsigne
     self.stepArena.reset();
     self.genEma.set_training(mode);
     gan_arena_restore_(outer);
-    tensor_set_grad_enabled(was);
+    noGrad.restore();
     return out;
 }
 

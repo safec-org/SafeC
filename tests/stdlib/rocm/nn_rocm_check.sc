@@ -128,13 +128,13 @@ static void grad_case_(const char* name, &Vec<struct Spec> specs, unsigned long 
     }
     // CPU
     unsigned long i = 0UL;
-    while (i < specs.length()) { tensor_zero_grad(specs.at(i).w); tensor_zero_grad(specs.at(i).b); i = i + 1UL; }
+    while (i < specs.length()) { specs.at(i).w.zero_grad(); specs.at(i).b.zero_grad(); i = i + 1UL; }
     &Tensor h = x;
     i = 0UL;
     while (i < specs.length()) { h = cpu_layer_(specs.at(i), h); i = i + 1UL; }
     &Tensor l = loss == LOSS_CE ? tensor_cross_entropy_loss(h, y)
               : (loss == LOSS_MSE ? tensor_mse_loss(h, y) : tensor_bce_logits_loss(h, y));
-    tensor_backward(l);
+    l.backward();
     // GPU
     struct RocmNet n = rocm_net_new(rows + 3UL);
     i = 0UL;
@@ -312,7 +312,7 @@ static void convnet_case_(const char* name, &ConvNet c, unsigned long rows, int 
     check(n.ok && n.in_dim() == inDim && n.out_dim() == outDim, name);
     if (g_prec != 0) check(n.set_precision(g_prec) && n.set_loss_scale(g_scale), name);
     unsigned long i = 0UL;
-    while (i < c.params.length()) { tensor_zero_grad(*c.params.at(i)); i = i + 1UL; }
+    while (i < c.params.length()) { (*c.params.at(i)).zero_grad(); i = i + 1UL; }
     &Tensor out = tensor_new_2d(total, outDim, 0);  // the CPU output
     &Tensor gx = tensor_new_2d(total, inDim, 0);    // d(loss)/dx on the CPU
     float lval = (float)0.0;
@@ -331,7 +331,7 @@ static void convnet_case_(const char* name, &ConvNet c, unsigned long rows, int 
         &Tensor o1 = c.forward(x1);
         &Tensor o2 = c.forward(x2);
         &Tensor l2 = tensor_add(tensor_mse_loss(o1, y1), tensor_mse_loss(o2, y2));
-        tensor_backward(l2);
+        l2.backward();
         unsafe {
             lval = l2->data[0];
             unsigned long k = 0UL;
@@ -343,7 +343,7 @@ static void convnet_case_(const char* name, &ConvNet c, unsigned long rows, int 
     } else {
         &Tensor oc = c.forward(x);
         &Tensor l1 = loss == LOSS_CE ? tensor_cross_entropy_loss(oc, y) : tensor_mse_loss(oc, y);
-        tensor_backward(l1);
+        l1.backward();
         unsafe {
             lval = l1->data[0];
             unsigned long k = 0UL;
@@ -628,7 +628,7 @@ static void opt_case_(int kind, float clip, int graph) {
     struct Rng rng = rng_new(20UL + (unsigned long)kind);
     &Tensor w = tensor_new_1d(n, 1);
     rng.fill_normal(w, (float)0.0, (float)1.0);
-    tensor_backward(tensor_sum(w));   // allocates w's gradient, overwritten below
+    tensor_sum(w).backward();   // allocates w's gradient, overwritten below
     &Tensor g = tensor_new_1d(n, 0);
     rng.fill_normal(g, (float)0.0, (float)1.0);
     struct RocmBuf dw = upload_(w);

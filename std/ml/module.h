@@ -168,10 +168,9 @@ generic<M: Module>
 // forward(x) without recording gradients.
 generic<M: Module>
 &Tensor module_predict(&M m, const &Tensor x) {
-    int was = tensor_is_grad_enabled();
-    tensor_set_grad_enabled(0);
+    struct GradGuard noGrad = autograd().no_grad();
     &Tensor y = m.forward(x);
-    tensor_set_grad_enabled(was);
+    noGrad.restore();
     return y;
 }
 
@@ -219,8 +218,7 @@ generic<M: Module>
 float module_evaluate(&M m, int loss, const &Dataset data, unsigned long batchSize) {
     struct DataLoader dl = dataloader_new(data, batchSize, 0, 0UL);
     struct TensorArena stepArena = tensor_arena_new(0UL);
-    int was = tensor_is_grad_enabled();
-    tensor_set_grad_enabled(0);
+    struct GradGuard noGrad = autograd().no_grad();
     struct Batch b;
     double sum = 0.0;
     unsigned long rows = 0UL;
@@ -232,7 +230,7 @@ float module_evaluate(&M m, int loss, const &Dataset data, unsigned long batchSi
         stepArena.reset();
     }
     tensor_arena_end();
-    tensor_set_grad_enabled(was);
+    noGrad.restore();
     stepArena.free();
     dl.free();
     return rows > 0UL ? (float)(sum / (double)rows) : (float)0.0;
@@ -243,8 +241,7 @@ generic<M: Module>
 float module_accuracy(&M m, const &Dataset data, unsigned long batchSize) {
     struct DataLoader dl = dataloader_new(data, batchSize, 0, 0UL);
     struct TensorArena stepArena = tensor_arena_new(0UL);
-    int was = tensor_is_grad_enabled();
-    tensor_set_grad_enabled(0);
+    struct GradGuard noGrad = autograd().no_grad();
     struct Batch b;
     double hits = 0.0;
     unsigned long rows = 0UL;
@@ -255,7 +252,7 @@ float module_accuracy(&M m, const &Dataset data, unsigned long batchSize) {
         stepArena.reset();
     }
     tensor_arena_end();
-    tensor_set_grad_enabled(was);
+    noGrad.restore();
     stepArena.free();
     dl.free();
     return rows > 0UL ? (float)(hits / (double)rows) : (float)0.0;
@@ -307,8 +304,7 @@ generic<M: LossModel>
 float model_evaluate(&M m, const &Dataset data, unsigned long batchSize) {
     struct DataLoader dl = dataloader_new(data, batchSize, 0, 0UL);
     struct TensorArena stepArena = tensor_arena_new(0UL);
-    int was = tensor_is_grad_enabled();
-    tensor_set_grad_enabled(0);
+    struct GradGuard noGrad = autograd().no_grad();
     struct Batch b;
     double sum = 0.0;
     unsigned long rows = 0UL;
@@ -320,7 +316,7 @@ float model_evaluate(&M m, const &Dataset data, unsigned long batchSize) {
         stepArena.reset();
     }
     tensor_arena_end();
-    tensor_set_grad_enabled(was);
+    noGrad.restore();
     stepArena.free();
     dl.free();
     return rows > 0UL ? (float)(sum / (double)rows) : (float)0.0;

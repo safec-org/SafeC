@@ -300,7 +300,7 @@ static void cn_bias_grad_(float* grad, const float* g, unsigned long channels, u
 // Links out to (x, weight, bias, aux), or drops aux when no gradient flows.
 static void cn_link_param_op_(&Tensor out, &Tensor x, &Tensor w, &Tensor b, &Tensor aux, void* backwardFn) {
     unsafe {
-        if (tensor_is_grad_enabled() && (x->requiresGrad || w->requiresGrad || b->requiresGrad)) {
+        if (autograd().enabled() && (x->requiresGrad || w->requiresGrad || b->requiresGrad)) {
             out->requiresGrad = 1;
             out->parents.push(x);
             out->parents.push(w);

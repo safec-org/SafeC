@@ -122,8 +122,7 @@ float trainer_evaluate(&T model, fn &Tensor(&T, const &Tensor, const &Tensor) lo
                        const &Dataset data, unsigned long batchSize) {
     struct DataLoader dl = dataloader_new(data, batchSize, 0, 0UL);
     struct TensorArena stepArena = tensor_arena_new(0UL);
-    int was = tensor_is_grad_enabled();
-    tensor_set_grad_enabled(0);
+    struct GradGuard noGrad = autograd().no_grad();
     struct Batch b;
     double sum = 0.0;
     unsigned long rows = 0UL;
@@ -135,7 +134,7 @@ float trainer_evaluate(&T model, fn &Tensor(&T, const &Tensor, const &Tensor) lo
         stepArena.reset();
     }
     tensor_arena_end();
-    tensor_set_grad_enabled(was);
+    noGrad.restore();
     stepArena.free();
     dl.free();
     return rows > 0UL ? (float)(sum / (double)rows) : (float)0.0;
@@ -148,8 +147,7 @@ float trainer_accuracy(&T model, fn &Tensor(&T, const &Tensor) logitsFn,
                        const &Dataset data, unsigned long batchSize) {
     struct DataLoader dl = dataloader_new(data, batchSize, 0, 0UL);
     struct TensorArena stepArena = tensor_arena_new(0UL);
-    int was = tensor_is_grad_enabled();
-    tensor_set_grad_enabled(0);
+    struct GradGuard noGrad = autograd().no_grad();
     struct Batch b;
     double hits = 0.0;
     unsigned long rows = 0UL;
@@ -161,7 +159,7 @@ float trainer_accuracy(&T model, fn &Tensor(&T, const &Tensor) logitsFn,
         stepArena.reset();
     }
     tensor_arena_end();
-    tensor_set_grad_enabled(was);
+    noGrad.restore();
     stepArena.free();
     dl.free();
     return rows > 0UL ? (float)(hits / (double)rows) : (float)0.0;

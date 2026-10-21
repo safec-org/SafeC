@@ -494,15 +494,14 @@ float Dqn::epsilon() const {
 unsigned long Dqn::act(const &Tensor obs, int explore) {
     if (explore && self.rng.uniform() < self.epsilon()) return self.rng.below(self.actions);
     ?&TensorArena outer = tensor_arena_current_();
-    int was = tensor_is_grad_enabled();
-    tensor_set_grad_enabled(0);
+    struct GradGuard noGrad = autograd().no_grad();
     self.stepArena.begin();
     &Tensor q = self.q.forward(rl_row_(obs, self.obsDim));
     unsigned long a;
     unsafe { a = rl_argmax_((const float*)q->data, self.actions, &self.rng); }
     tensor_arena_end();
     self.stepArena.reset();
-    tensor_set_grad_enabled(was);
+    noGrad.restore();
     rl_heap_end_(outer);
     return a;
 }
@@ -533,7 +532,7 @@ static float dqn_train_(&Dqn d) {
         }
     }
     // targets without gradient: r + gamma * (1 - terminal) * Q_target(s', a*)
-    tensor_set_grad_enabled(0);
+    autograd().set_enabled(0);
     &Tensor qt = d.target.forward(nx);
     &Tensor qo = d.cfg.doubleDqn ? d.q.forward(nx) : qt;
     unsafe {
@@ -547,11 +546,11 @@ static float dqn_train_(&Dqn d) {
             r = r + 1UL;
         }
     }
-    tensor_set_grad_enabled(1);
+    autograd().set_enabled(1);
     &Tensor qsa = tensor_sum_rows(tensor_mul(d.q.forward(ob), tensor_one_hot(act, A)));
     &Tensor loss = tensor_huber_loss(qsa, y, d.cfg.huberDelta);
     d.opt.zero_grad();
-    tensor_backward(loss);
+    loss.backward();
     if (d.cfg.clipNorm > (float)0.0) d.opt.clip_grad_norm(d.cfg.clipNorm);
     d.opt.step();
     d.updates = d.updates + 1UL;
@@ -569,12 +568,12 @@ float Dqn::observe(const &Tensor obs, unsigned long action, float reward, const 
     if (self.buffer.size < self.cfg.learningStarts || self.buffer.size < self.cfg.batchSize) return (float)-1.0;
     if (self.steps % self.cfg.trainEvery != 0UL) return (float)-1.0;
     ?&TensorArena outer = tensor_arena_current_();
-    int was = tensor_is_grad_enabled();
+    int was = autograd().enabled();
     self.stepArena.begin();
     float l = dqn_train_(self);
     tensor_arena_end();
     self.stepArena.reset();
-    tensor_set_grad_enabled(was);
+    autograd().set_enabled(was);
     rl_heap_end_(outer);
     self.lastLoss = l;
     return l;
@@ -637,8 +636,7 @@ struct PolicyAgent pg_new(unsigned long obsDim, unsigned long actions, const &Pg
 
 unsigned long PolicyAgent::act(const &Tensor obs, int sample) {
     ?&TensorArena outer = tensor_arena_current_();
-    int was = tensor_is_grad_enabled();
-    tensor_set_grad_enabled(0);
+    struct GradGuard noGrad = autograd().no_grad();
     self.stepArena.begin();
     &Tensor logits = self.policy.forward(rl_row_(obs, self.obsDim));
     unsigned long choice = 0UL;
@@ -663,7 +661,7 @@ unsigned long PolicyAgent::act(const &Tensor obs, int sample) {
     }
     tensor_arena_end();
     self.stepArena.reset();
-    tensor_set_grad_enabled(was);
+    noGrad.restore();
     rl_heap_end_(outer);
     return choice;
 }
@@ -724,7 +722,7 @@ static float pg_step_(&PolicyAgent a, const float* obs, const float* act, const 
     &Tensor loss = tensor_sub(tensor_add(pol, tensor_scale(vl, a.cfg.valueCoef)),
                               tensor_scale(ent, a.cfg.entropyCoef));
     a.opt.zero_grad();
-    tensor_backward(loss);
+    loss.backward();
     if (a.cfg.clipNorm > (float)0.0) a.opt.clip_grad_norm(a.cfg.clipNorm);
     a.opt.step();
     unsafe {
@@ -739,7 +737,7 @@ float PolicyAgent::update() {
     unsigned long D = self.obsDim;
     float last = (float)0.0;
     ?&TensorArena outer = tensor_arena_current_();
-    int was = tensor_is_grad_enabled();
+    int was = autograd().enabled();
     self.stepArena.begin();
     unsafe {
         const float* obs = (const float*)pg_vec_ptr_(&self.rObs);
@@ -758,7 +756,7 @@ float PolicyAgent::update() {
         while (i < N) { idx[i] = i; i = i + 1UL; }
 
         // values, next values and old log-probabilities, without gradient
-        tensor_set_grad_enabled(0);
+        autograd().set_enabled(0);
         &Tensor O = pg_rows_(obs, D, (const unsigned long*)idx, N);
         &Tensor Nx = pg_rows_(nxt, D, (const unsigned long*)idx, N);
         &Tensor Ac = pg_rows_(act, 1UL, (const unsigned long*)idx, N);
@@ -768,7 +766,7 @@ float PolicyAgent::update() {
         i = 0UL;
         while (i < N) { v[i] = Vt->data[i]; vn[i] = Vn->data[i]; logpOld[i] = Lp->data[i]; i = i + 1UL; }
         self.stepArena.reset();
-        tensor_set_grad_enabled(1);
+        autograd().set_enabled(1);
 
         float g = self.cfg.gamma;
         if (self.cfg.algo == PG_REINFORCE) {
@@ -840,7 +838,7 @@ float PolicyAgent::update() {
         free((void*)v); free((void*)vn); free((void*)idx);
     }
     tensor_arena_end();
-    tensor_set_grad_enabled(was);
+    autograd().set_enabled(was);
     rl_heap_end_(outer);
     self.rObs.clear(); self.rNext.clear(); self.rAction.clear();
     self.rReward.clear(); self.rTerminal.clear(); self.rDone.clear();
