@@ -446,7 +446,7 @@ static struct Value yaml_parse_mapping_(&Vec<struct YamlLine_> lines, unsigned l
         // convention std::Value's VAL_OBJECT already uses for JSON).
         const char* key = keyVal.as_string();
         struct String keyStr; unsafe { keyStr = key ? string_from(key) : string_new(); }
-        value_free(&keyVal);
+        keyVal.free();
 
         unsigned long restStart = (unsigned long)colonPos + 1UL;
         unsigned long contentLen;
@@ -463,10 +463,10 @@ static struct Value yaml_parse_mapping_(&Vec<struct YamlLine_> lines, unsigned l
         unsafe { *idx = *idx + 1UL; }
         if (restTrimmed.is_empty()) {
             struct Value child = yaml_parse_block_(lines, idx, indent + 1UL, ok);
-            unsafe { value_object_set(&obj, keyStr.as_ptr(), child); }
+            unsafe { obj.object_set(keyStr.as_ptr(), child); }
         } else {
             struct Value scalar = yaml_parse_scalar_(restTrimmed.as_ptr());
-            unsafe { value_object_set(&obj, keyStr.as_ptr(), scalar); }
+            unsafe { obj.object_set(keyStr.as_ptr(), scalar); }
         }
         restTrimmed.free();
         keyStr.free();
@@ -508,7 +508,7 @@ static struct Value yaml_parse_sequence_(&Vec<struct YamlLine_> lines, unsigned 
         if (rest.is_empty()) {
             unsafe { *idx = *idx + 1UL; }
             struct Value child = yaml_parse_block_(lines, idx, indent + 1UL, ok);
-            value_array_push(&arr, child);
+            arr.array_push(child);
         } else if (yaml_find_colon_(rest.as_ptr()) >= 0) {
             // "- key: value" compact list-of-mappings shorthand: rewrite
             // this line in place as a mapping key at the column right
@@ -522,10 +522,10 @@ static struct Value yaml_parse_sequence_(&Vec<struct YamlLine_> lines, unsigned 
                 yl->indent  = dashIndent + 2UL;
             }
             struct Value child = yaml_parse_mapping_(lines, idx, dashIndent + 2UL, ok);
-            value_array_push(&arr, child);
+            arr.array_push(child);
         } else {
             struct Value scalar = yaml_parse_scalar_(rest.as_ptr());
-            value_array_push(&arr, scalar);
+            arr.array_push(scalar);
             unsafe { *idx = *idx + 1UL; }
         }
         rest.free();
@@ -580,7 +580,7 @@ struct Value yaml_parse(const &char text, ?&int ok) {
     yaml_free_lines_(&lines);
     if (ok != (int*)0) { unsafe { *ok = good; } }
     if (good == 0) {
-        value_free(&result);
+        result.free();
         return value_null();
     }
     return result;

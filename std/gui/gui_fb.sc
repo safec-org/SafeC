@@ -6,11 +6,11 @@
 // Unlike the OS-native backends (Cocoa/Win32/X11), there is no windowing
 // system here — 'gui_create_window()' doesn't open anything, it just
 // validates that gui_fb_configure() was called first and allocates the
-// same CPU-side RGBA8888 draw buffer every backend uses; gui_present()
+// same CPU-side RGBA8888 draw buffer every backend uses; GuiWindow::present()
 // copies (and, if needed, pixel-format-converts) that buffer into the
 // real framebuffer memory. There is also no OS input stack — a bare-metal
 // target's own keyboard/mouse/touch ISR is responsible for calling
-// gui_fb_inject_event() with whatever it decodes; gui_poll_event() just
+// gui_fb_inject_event() with whatever it decodes; GuiWindow::poll_event() just
 // drains the small queue that fills. Wire up your own PS/2/USB-HID/etc.
 // driver to call gui_fb_inject_event() — this file has no opinion on
 // which one you use.
@@ -43,7 +43,7 @@ struct GuiFbPlatform {
 };
 
 // A target's own input driver/ISR calls this with whatever it decodes
-// (e.g. a PS/2 scancode translated to a GuiEvent) — gui_poll_event() then
+// (e.g. a PS/2 scancode translated to a GuiEvent) — GuiWindow::poll_event() then
 // hands it back out through the normal API, same as every other backend.
 void gui_fb_inject_event(&GuiWindow win, struct GuiEvent ev) {
     int hasPlatform = 0;
@@ -84,41 +84,41 @@ struct GuiWindow gui_create_window(const &char title, int width, int height) {
     return win;
 }
 
-// gui_draw.h always writes RGBA8888 into win.pixels via gui_set_pixel();
+// gui_draw.h always writes RGBA8888 into win.pixels via GuiWindow::set_pixel();
 // this backend's job is turning that into whatever the real hardware
 // framebuffer's pixel format is when presenting.
-void gui_set_pixel(&GuiWindow win, int x, int y, unsigned int rgba) {
+void GuiWindow::set_pixel(int x, int y, unsigned int rgba) {
     int oob = 0;
-    if (x < 0 || y < 0 || x >= win.width || y >= win.height) { oob = 1; }
+    if (x < 0 || y < 0 || x >= self.width || y >= self.height) { oob = 1; }
     if (oob) { return; }
     unsafe {
-        unsigned long idx = ((unsigned long)y * (unsigned long)win.width + (unsigned long)x) * 4UL;
-        win.pixels[idx + 0UL] = (unsigned char)((rgba >> 24) & 0xFFU); // R
-        win.pixels[idx + 1UL] = (unsigned char)((rgba >> 16) & 0xFFU); // G
-        win.pixels[idx + 2UL] = (unsigned char)((rgba >> 8)  & 0xFFU); // B
-        win.pixels[idx + 3UL] = (unsigned char)(rgba & 0xFFU);          // A
+        unsigned long idx = ((unsigned long)y * (unsigned long)self.width + (unsigned long)x) * 4UL;
+        self.pixels[idx + 0UL] = (unsigned char)((rgba >> 24) & 0xFFU); // R
+        self.pixels[idx + 1UL] = (unsigned char)((rgba >> 16) & 0xFFU); // G
+        self.pixels[idx + 2UL] = (unsigned char)((rgba >> 8)  & 0xFFU); // B
+        self.pixels[idx + 3UL] = (unsigned char)(rgba & 0xFFU);          // A
     }
 }
 
-void gui_present(&GuiWindow win) {
+void GuiWindow::present() {
     int hasPlatform = 0;
-    unsafe { if (!win.platform.is_null()) { hasPlatform = 1; } }
+    unsafe { if (!self.platform.is_null()) { hasPlatform = 1; } }
     if (!hasPlatform || !gFbConfigured) { return; }
 
     unsafe {
         unsigned char* fb = (unsigned char*)gFbConfig.base;
-        int rowLimit = win.height < gFbConfig.height ? win.height : gFbConfig.height;
-        int colLimit = win.width < gFbConfig.width ? win.width : gFbConfig.width;
+        int rowLimit = self.height < gFbConfig.height ? self.height : gFbConfig.height;
+        int colLimit = self.width < gFbConfig.width ? self.width : gFbConfig.width;
         int y = 0;
         while (y < rowLimit) {
-            unsigned long srcRow = (unsigned long)y * (unsigned long)win.width * 4UL;
+            unsigned long srcRow = (unsigned long)y * (unsigned long)self.width * 4UL;
             unsigned long dstRow = (unsigned long)y * gFbConfig.pitch;
             int x = 0;
             while (x < colLimit) {
                 unsigned long si = srcRow + (unsigned long)x * 4UL;
-                unsigned char r = win.pixels[si + 0UL];
-                unsigned char g = win.pixels[si + 1UL];
-                unsigned char b = win.pixels[si + 2UL];
+                unsigned char r = self.pixels[si + 0UL];
+                unsigned char g = self.pixels[si + 1UL];
+                unsigned char b = self.pixels[si + 2UL];
                 if (gFbConfig.bpp == 32) {
                     unsigned int packedColor = ((unsigned int)r << gFbConfig.redShift) |
                                            ((unsigned int)g << gFbConfig.greenShift) |
@@ -145,14 +145,14 @@ void gui_present(&GuiWindow win) {
     }
 }
 
-int gui_poll_event(&GuiWindow win, &GuiEvent outEvent) {
+int GuiWindow::poll_event(&GuiEvent outEvent) {
     outEvent.kind = GUI_EVENT_NONE;
     outEvent.defaultPrevented = 0;
     int hasPlatform = 0;
-    unsafe { if (!win.platform.is_null()) { hasPlatform = 1; } }
+    unsafe { if (!self.platform.is_null()) { hasPlatform = 1; } }
     if (!hasPlatform) { return 0; }
     unsafe {
-        struct GuiFbPlatform* p = (struct GuiFbPlatform*)win.platform;
+        struct GuiFbPlatform* p = (struct GuiFbPlatform*)self.platform;
         if (p->queueHead == p->queueTail) { return 0; }
         struct GuiEvent* dst = (struct GuiEvent*)outEvent;
         *dst = p->queue[p->queueHead];
@@ -161,11 +161,11 @@ int gui_poll_event(&GuiWindow win, &GuiEvent outEvent) {
     }
 }
 
-void gui_destroy_window(&GuiWindow win) {
+void GuiWindow::destroy() {
     unsafe {
-        if (!win.platform.is_null()) { dealloc_raw_(win.platform); }
-        if ((void*)win.pixels != (void*)0) { dealloc_raw_((void*)win.pixels); }
-        win.platform = null;
+        if (!self.platform.is_null()) { dealloc_raw_(self.platform); }
+        if ((void*)self.pixels != (void*)0) { dealloc_raw_((void*)self.pixels); }
+        self.platform = null;
     }
 }
 

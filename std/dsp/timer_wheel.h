@@ -29,6 +29,10 @@ struct TimerWheel {
     // simplicity and correctness within the WHEEL_TIMERS limit.
     unsigned long     current_tick;
 
+    // Initialise the wheel in place to a clean state (all slots free,
+    // tick = 0). Must be called before any other operation.
+    void init();
+
     // Type-erased registration behind timer_add/timer_add_periodic.
     int  add_raw_(unsigned long tick, void* callback, void* ctx);
     int  add_periodic_raw_(unsigned long period, void* callback, void* ctx);
@@ -45,8 +49,9 @@ struct TimerWheel {
     unsigned long now() const;
 };
 
-// Initialise a TimerWheel to a clean state (all slots free, tick = 0).
-void timer_wheel_init(&TimerWheel tw);
+// timer_add / timer_add_periodic stay free functions: their type parameter
+// T is the callback's context type, not part of TimerWheel, and methods
+// cannot carry their own type parameters.
 
 // One-shot timer calling cb(ctx) at absolute tick `tick`.
 // Returns the timer ID (1-based) or 0 if the wheel is full.

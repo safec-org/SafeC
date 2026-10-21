@@ -30,38 +30,38 @@ static unsigned short fat_read16_(const unsigned char* p) {
     return (unsigned short)0;
 }
 
-int fat_init(&FatCtx ctx, &BlockDevice dev, unsigned long lba) {
-    ctx.dev = *dev;
-    ctx.partition_lba = lba;
+int FatCtx::init(&BlockDevice dev, unsigned long lba) {
+    self.dev = *dev;
+    self.partition_lba = lba;
     unsigned char boot[512];
     if (dev.read(lba, (&unsigned char)boot, (unsigned long)1) != 0) { return -1; }
     // BPB parsing
     unsafe {
-        ctx.bpb.bytes_per_sector     = fat_read16_(boot + 11);
-        ctx.bpb.sectors_per_cluster  = boot[13];
-        ctx.bpb.reserved_sectors     = fat_read16_(boot + 14);
-        ctx.bpb.num_fats             = boot[16];
-        ctx.bpb.root_entry_count     = fat_read16_(boot + 17);
-        ctx.bpb.fat_size_16          = fat_read16_(boot + 22);
-        ctx.bpb.fat_size_32          = fat_read32_(boot + 36);
-        ctx.bpb.root_cluster         = fat_read32_(boot + 44);
+        self.bpb.bytes_per_sector     = fat_read16_(boot + 11);
+        self.bpb.sectors_per_cluster  = boot[13];
+        self.bpb.reserved_sectors     = fat_read16_(boot + 14);
+        self.bpb.num_fats             = boot[16];
+        self.bpb.root_entry_count     = fat_read16_(boot + 17);
+        self.bpb.fat_size_16          = fat_read16_(boot + 22);
+        self.bpb.fat_size_32          = fat_read32_(boot + 36);
+        self.bpb.root_cluster         = fat_read32_(boot + 44);
     }
     // Validate FAT32 signature
     unsigned char sig0; unsigned char sig1;
     unsafe { sig0 = boot[510]; sig1 = boot[511]; }
     if (sig0 != (unsigned char)0x55 || sig1 != (unsigned char)0xAA) { return -1; }
 
-    unsigned long fat_size = (unsigned long)ctx.bpb.fat_size_32;
-    ctx.fat_lba  = lba + (unsigned long)ctx.bpb.reserved_sectors;
-    ctx.data_lba = ctx.fat_lba + (unsigned long)ctx.bpb.num_fats * fat_size;
-    ctx.root_cluster = (unsigned long)ctx.bpb.root_cluster;
-    ctx.bytes_per_cluster = (unsigned long)ctx.bpb.bytes_per_sector
-                          * (unsigned long)ctx.bpb.sectors_per_cluster;
+    unsigned long fat_size = (unsigned long)self.bpb.fat_size_32;
+    self.fat_lba  = lba + (unsigned long)self.bpb.reserved_sectors;
+    self.data_lba = self.fat_lba + (unsigned long)self.bpb.num_fats * fat_size;
+    self.root_cluster = (unsigned long)self.bpb.root_cluster;
+    self.bytes_per_cluster = (unsigned long)self.bpb.bytes_per_sector
+                          * (unsigned long)self.bpb.sectors_per_cluster;
     // Directory walks and reads stage one whole cluster in a fixed
     // FAT_MAX_CLUSTER-byte stack buffer; refuse larger clusters (64-sector
     // clusters are common on big FAT32 volumes) rather than overflow it.
-    if (ctx.bytes_per_cluster == (unsigned long)0 ||
-        ctx.bytes_per_cluster > (unsigned long)FAT_MAX_CLUSTER) { return -1; }
+    if (self.bytes_per_cluster == (unsigned long)0 ||
+        self.bytes_per_cluster > (unsigned long)FAT_MAX_CLUSTER) { return -1; }
     return 0;
 }
 

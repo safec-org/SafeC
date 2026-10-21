@@ -354,10 +354,10 @@ static int parse_san_(const unsigned char* buf, unsigned long buf_len,
 
 // ── Main DER parser ───────────────────────────────────────────────────────────
 
-int x509_parse_der(const &unsigned char der_ref, unsigned long len,
-                   &X509Cert cert_out) { const unsigned char* der = der_ref;
+int X509Cert::init(const &unsigned char der_ref, unsigned long len) {
+    const unsigned char* der = der_ref;
     unsafe {
-        memset((void*)cert_out, 0, (unsigned long)sizeof(struct X509Cert));   // the struct, not the reference
+        memset((void*)self, 0, (unsigned long)sizeof(struct X509Cert));   // the struct, not the reference
     }
 
     unsigned long pos = (unsigned long)0;
@@ -395,8 +395,8 @@ int x509_parse_der(const &unsigned char der_ref, unsigned long len,
     unsafe {
         unsigned long serial_copy = sn_len;
         if (serial_copy > (unsigned long)20) { serial_copy = (unsigned long)20; }
-        memcpy((void*)cert_out.serial, (const void*)(der + sn_start), serial_copy);
-        cert_out.serial_len = serial_copy;
+        memcpy((void*)self.serial, (const void*)(der + sn_start), serial_copy);
+        self.serial_len = serial_copy;
     }
     pos = sn_start + sn_len;
 
@@ -408,7 +408,7 @@ int x509_parse_der(const &unsigned char der_ref, unsigned long len,
     unsigned long iss_start;
     unsigned long iss_len;
     if (asn1_tag_len_(der, len, &pos, &iss_tag, &iss_start, &iss_len) != 0) { return -1; }
-    if (parse_name_(der, len, iss_start, iss_len, &cert_out.issuer) != 0) { return -1; }
+    if (parse_name_(der, len, iss_start, iss_len, &self.issuer) != 0) { return -1; }
     pos = iss_start + iss_len;
 
     // validity SEQUENCE
@@ -426,9 +426,9 @@ int x509_parse_der(const &unsigned char der_ref, unsigned long len,
         if (asn1_tag_len_(der, len, &vpos, &nb_tag, &nb_start, &nb_len) != 0) { return -1; }
         unsafe {
             if (nb_tag == (unsigned char)ASN1_UTCTIME) {
-                cert_out.validity.not_before = utctime_to_epoch_(der + nb_start, nb_len);
+                self.validity.not_before = utctime_to_epoch_(der + nb_start, nb_len);
             } else {
-                cert_out.validity.not_before = gentime_to_epoch_(der + nb_start, nb_len);
+                self.validity.not_before = gentime_to_epoch_(der + nb_start, nb_len);
             }
         }
         vpos = nb_start + nb_len;
@@ -440,9 +440,9 @@ int x509_parse_der(const &unsigned char der_ref, unsigned long len,
         if (asn1_tag_len_(der, len, &vpos, &na_tag, &na_start, &na_len) != 0) { return -1; }
         unsafe {
             if (na_tag == (unsigned char)ASN1_UTCTIME) {
-                cert_out.validity.not_after = utctime_to_epoch_(der + na_start, na_len);
+                self.validity.not_after = utctime_to_epoch_(der + na_start, na_len);
             } else {
-                cert_out.validity.not_after = gentime_to_epoch_(der + na_start, na_len);
+                self.validity.not_after = gentime_to_epoch_(der + na_start, na_len);
             }
         }
     }
@@ -453,7 +453,7 @@ int x509_parse_der(const &unsigned char der_ref, unsigned long len,
     unsigned long subj_start;
     unsigned long subj_len;
     if (asn1_tag_len_(der, len, &pos, &subj_tag, &subj_start, &subj_len) != 0) { return -1; }
-    if (parse_name_(der, len, subj_start, subj_len, &cert_out.subject) != 0) { return -1; }
+    if (parse_name_(der, len, subj_start, subj_len, &self.subject) != 0) { return -1; }
     pos = subj_start + subj_len;
 
     // subjectPublicKeyInfo SEQUENCE
@@ -464,8 +464,8 @@ int x509_parse_der(const &unsigned char der_ref, unsigned long len,
     unsafe {
         unsigned long pk_copy = spki_len;
         if (pk_copy > (unsigned long)X509_KEY_LEN) { pk_copy = (unsigned long)X509_KEY_LEN; }
-        memcpy((void*)cert_out.pubkey, (const void*)(der + spki_start), pk_copy);
-        cert_out.pubkey_len = pk_copy;
+        memcpy((void*)self.pubkey, (const void*)(der + spki_start), pk_copy);
+        self.pubkey_len = pk_copy;
     }
     pos = spki_start + spki_len;
 
@@ -533,7 +533,7 @@ int x509_parse_der(const &unsigned char der_ref, unsigned long len,
 
                 if (oid_eq_(oid_bytes, oid_len2,
                              (const unsigned char*)oid_san_, (unsigned long)3) != 0) {
-                    parse_san_(der, len, ev_start, ev_len, &cert_out.san);
+                    parse_san_(der, len, ev_start, ev_len, &self.san);
                 } else if (oid_eq_(oid_bytes, oid_len2,
                                     (const unsigned char*)oid_bc_, (unsigned long)3) != 0) {
                     // BasicConstraints: SEQUENCE { cA BOOLEAN OPTIONAL, ... }
@@ -551,7 +551,7 @@ int x509_parse_der(const &unsigned char der_ref, unsigned long len,
                             unsigned long bl;
                             if (asn1_tag_len_(der, len, &bcpos, &bt, &bs, &bl) == 0
                                 && bl >= (unsigned long)1) {
-                                cert_out.is_ca = (der[bs] != (unsigned char)0) ? 1 : 0;
+                                self.is_ca = (der[bs] != (unsigned char)0) ? 1 : 0;
                             }
                         }
                     }
@@ -566,7 +566,7 @@ int x509_parse_der(const &unsigned char der_ref, unsigned long len,
                                        &ks_start, &ks_len) == 0
                         && ks_len >= (unsigned long)2) {
                         // First byte = unused bits count; second byte = usage bits
-                        cert_out.key_usage = (int)der[ks_start + 1UL];
+                        self.key_usage = (int)der[ks_start + 1UL];
                     }
                 }
 
@@ -650,15 +650,14 @@ int X509Cert::matches_hostname(const &char hostname) const {
 
 // ── Chain verification (structural only) ──────────────────────────────────────
 
-int x509_verify_chain(const &X509Cert cert,
-                       const &X509Cert issuer_cert) {
-    // Check that cert.issuer CN/O/C match issuer_cert.subject CN/O/C
+int X509Cert::verify_chain(const &X509Cert issuer_cert) const {
+    // Check that self.issuer CN/O/C match issuer_cert.subject CN/O/C
     unsafe {
-        if (str_eq_((const char*)cert.issuer.cn,
+        if (str_eq_((const char*)self.issuer.cn,
                     (const char*)issuer_cert.subject.cn) == 0) { return 0; }
-        if (str_eq_((const char*)cert.issuer.o,
+        if (str_eq_((const char*)self.issuer.o,
                     (const char*)issuer_cert.subject.o) == 0) { return 0; }
-        if (str_eq_((const char*)cert.issuer.c,
+        if (str_eq_((const char*)self.issuer.c,
                     (const char*)issuer_cert.subject.c) == 0) { return 0; }
     }
     return 1;

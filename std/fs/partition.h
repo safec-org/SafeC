@@ -29,10 +29,10 @@ struct PartTable {
     // range — check entry.type != PART_TYPE_EMPTY too, for a valid index
     // that just has no partition recorded there.
     const ?&PartEntry get(int idx) const;
-};
 
-// Read and parse the MBR from sector 0 of `dev`.
-// Returns 0 on success, -1 on read error or bad signature.
-int partition_read(&BlockDevice dev, &PartTable table_out);
+    // Read and parse the MBR from sector 0 of `dev` into this table.
+    // Returns 0 on success, -1 on read error or bad signature.
+    int read(&BlockDevice dev);
+};
 
 } // namespace std

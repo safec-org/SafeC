@@ -246,11 +246,11 @@ void t_dsp_blocks() {
             b.reset();
             i = 0UL;
             while (i < 3000UL) { g_cy1[i] = a.process(g_cx[i]); i = i + 1UL; }
-            fir_process_block(&b, (const double*)g_cx, (double*)g_cy2, 7UL);
-            fir_process_block(&b, (const double*)&g_cx[7], (double*)&g_cy2[7], 1100UL);
+            b.process_block((const double*)g_cx, (double*)g_cy2, 7UL);
+            b.process_block((const double*)&g_cx[7], (double*)&g_cy2[7], 1100UL);
             unsigned long k = 1107UL;
             while (k < 1200UL) { g_cy2[k] = b.process(g_cx[k]); k = k + 1UL; }   // mixed with process()
-            fir_process_block(&b, (const double*)&g_cx[1200], (double*)&g_cy2[1200], 1800UL);
+            b.process_block((const double*)&g_cx[1200], (double*)&g_cy2[1200], 1800UL);
             worst = 0.0;
             i = 0UL;
             while (i < 3000UL) { double e = g_cy1[i] - g_cy2[i]; if (e < 0.0) e = -e; if (e > worst) worst = e; i = i + 1UL; }
@@ -262,8 +262,8 @@ void t_dsp_blocks() {
         struct Biquad q2 = biquad_lowpass(48000.0, 1000.0, 0.7071);
         i = 0UL;
         while (i < 1000UL) { g_cy1[i] = q1.process(g_cx[i]); i = i + 1UL; }
-        biquad_process_block(&q2, (const double*)g_cx, (double*)g_cy2, 400UL);
-        biquad_process_block(&q2, (const double*)&g_cx[400], (double*)&g_cy2[400], 600UL);
+        q2.process_block((const double*)g_cx, (double*)g_cy2, 400UL);
+        q2.process_block((const double*)&g_cx[400], (double*)&g_cy2[400], 600UL);
         // the block form may use FMA, so allow last-bit differences
         worst = 0.0;
         i = 0UL;
@@ -298,19 +298,19 @@ void t_window_fixed() {
 void t_biquad_filters() {
     unsafe {
         struct Biquad lp = biquad_lowpass(48000.0, 1000.0, 0.70710678);
-        ASSERT_TRUE(near_d(biquad_response_mag(&lp, 48000.0, 1.0), 1.0, 1e-4));
-        ASSERT_TRUE(near_d(biquad_response_mag(&lp, 48000.0, 1000.0), 0.70710678, 1e-3));
-        ASSERT_TRUE(biquad_response_mag(&lp, 48000.0, 10000.0) < 0.05);
+        ASSERT_TRUE(near_d(lp.response_mag(48000.0, 1.0), 1.0, 1e-4));
+        ASSERT_TRUE(near_d(lp.response_mag(48000.0, 1000.0), 0.70710678, 1e-3));
+        ASSERT_TRUE(lp.response_mag(48000.0, 10000.0) < 0.05);
         double y = 0.0;
         int i = 0;
         while (i < 2000) { y = lp.process(1.0); i = i + 1; }
         ASSERT_TRUE(near_d(y, 1.0, 1e-6));
         struct Biquad hp = biquad_highpass(48000.0, 1000.0, 0.70710678);
-        ASSERT_TRUE(biquad_response_mag(&hp, 48000.0, 10.0) < 0.01);
+        ASSERT_TRUE(hp.response_mag(48000.0, 10.0) < 0.01);
         struct Biquad nt = biquad_notch(48000.0, 1000.0, 2.0);
-        ASSERT_TRUE(biquad_response_mag(&nt, 48000.0, 1000.0) < 1e-6);
+        ASSERT_TRUE(nt.response_mag(48000.0, 1000.0) < 1e-6);
         struct Biquad pk = biquad_peaking(48000.0, 1000.0, 1.0, 6.0);
-        ASSERT_TRUE(near_d(20.0 * log10_d(biquad_response_mag(&pk, 48000.0, 1000.0)), 6.0, 1e-3));
+        ASSERT_TRUE(near_d(20.0 * log10_d(pk.response_mag(48000.0, 1000.0)), 6.0, 1e-3));
 
         // FIR impulse response == coefficients.
         double coeffs[4];
@@ -358,7 +358,7 @@ void t_biquad_filters() {
         ASSERT_TRUE(near_d(bo[0], b2.b0, 1e-12));
         ASSERT_TRUE(near_d(ao[2], b2.a2, 1e-12));
         ASSERT_TRUE(near_d(ztransform_response_mag((const double*)bo, (const double*)ao, 2UL, 48000.0, 500.0),
-                           biquad_response_mag(&b2, 48000.0, 500.0), 1e-9));
+                           b2.response_mag(48000.0, 500.0), 1e-9));
     }
 }
 
@@ -461,7 +461,7 @@ void t_comb_audio_timer() {
         dealloc(abq);
 
         &TimerWheel tw = std::expect_ref(twq, "twq is null");
-        timer_wheel_init(tw);
+        tw.init();
         timer_add(tw, 3UL, on_timer, null);
         int pid = timer_add_periodic(tw, 5UL, on_timer, null);
         i = 0;
@@ -709,11 +709,11 @@ void t_dsp_f32() {
             d.reset();
             i = 0UL;
             while (i < 3000UL) { g_gy1[i] = a.process(g_gx[i]); g_cy1[i] = d.process(g_cx[i]); i = i + 1UL; }
-            fir_process_block_f32(&b, (const float*)g_gx, (float*)g_gy2, 7UL);
-            fir_process_block_f32(&b, (const float*)&g_gx[7], (float*)&g_gy2[7], 1100UL);
+            b.process_block((const float*)g_gx, (float*)g_gy2, 7UL);
+            b.process_block((const float*)&g_gx[7], (float*)&g_gy2[7], 1100UL);
             unsigned long k = 1107UL;
             while (k < 1200UL) { g_gy2[k] = b.process(g_gx[k]); k = k + 1UL; }
-            fir_process_block_f32(&b, (const float*)&g_gx[1200], (float*)&g_gy2[1200], 1800UL);
+            b.process_block((const float*)&g_gx[1200], (float*)&g_gy2[1200], 1800UL);
             ASSERT_TRUE(max_abs_diff_ff((const float*)g_gy1, (const float*)g_gy2, 3000UL) < 1e-5);
             ASSERT_TRUE(max_abs_diff_fd((const float*)g_gy2, (const double*)g_cy1, 3000UL) < 1e-4);
             c = c + 1;
@@ -725,8 +725,8 @@ void t_dsp_f32() {
         struct Biquad32 q2 = biquad_to_f32(qd);
         i = 0UL;
         while (i < 1000UL) { g_gy1[i] = q1.process(g_gx[i]); g_cy1[i] = qd.process(g_cx[i]); i = i + 1UL; }
-        biquad_process_block_f32(&q2, (const float*)g_gx, (float*)g_gy2, 400UL);
-        biquad_process_block_f32(&q2, (const float*)&g_gx[400], (float*)&g_gy2[400], 600UL);
+        q2.process_block((const float*)g_gx, (float*)g_gy2, 400UL);
+        q2.process_block((const float*)&g_gx[400], (float*)&g_gy2[400], 600UL);
         ASSERT_TRUE(max_abs_diff_ff((const float*)g_gy1, (const float*)g_gy2, 1000UL) < 1e-5);
         ASSERT_TRUE(max_abs_diff_fd((const float*)g_gy2, (const double*)g_cy1, 1000UL) < 1e-4);
         q1.reset();
@@ -822,8 +822,8 @@ void t_dsp_f32_more() {
         struct IirFilter32 iff = iir_init_f32((const float*)bf, 3UL, (const float*)af, 3UL, (float*)xf, (float*)yf);
         id.reset();
         iff.reset();
-        iir_process_block(&id, (const double*)g_cx, (double*)g_cy1, 2000UL);
-        iir_process_block_f32(&iff, (const float*)g_gx, (float*)g_gy1, 2000UL);
+        id.process_block((const double*)g_cx, (double*)g_cy1, 2000UL);
+        iff.process_block((const float*)g_gx, (float*)g_gy1, 2000UL);
         ASSERT_TRUE(max_abs_diff_fd((const float*)g_gy1, (const double*)g_cy1, 2000UL) < 1e-4);
 
         // comb filters and Karplus-Strong against double
@@ -914,16 +914,16 @@ void t_dsp_extras() {
         struct Biquad id = biquad_new(1.0, 0.0, 0.0, 0.0, 0.0);
         ASSERT_TRUE(near_d(id.process(0.75), 0.75, 0.0));
         struct Biquad bp = biquad_bandpass(48000.0, 1000.0, 2.0);
-        ASSERT_TRUE(near_d(biquad_response_mag(&bp, 48000.0, 1000.0), 1.0, 1e-6));   // 0 dB at f0
-        ASSERT_TRUE(biquad_response_mag(&bp, 48000.0, 100.0) < 0.2);
-        ASSERT_TRUE(near_d(biquad_response_phase(&bp, 48000.0, 1000.0), 0.0, 1e-6));
+        ASSERT_TRUE(near_d(bp.response_mag(48000.0, 1000.0), 1.0, 1e-6));   // 0 dB at f0
+        ASSERT_TRUE(bp.response_mag(48000.0, 100.0) < 0.2);
+        ASSERT_TRUE(near_d(bp.response_phase(48000.0, 1000.0), 0.0, 1e-6));
         struct Biquad ap = biquad_allpass(48000.0, 2000.0, 0.7);
-        ASSERT_TRUE(near_d(biquad_response_mag(&ap, 48000.0, 500.0), 1.0, 1e-9));
-        ASSERT_TRUE(near_d(biquad_response_mag(&ap, 48000.0, 9000.0), 1.0, 1e-9));
-        ASSERT_TRUE(near_d(abs_d(biquad_response_phase(&ap, 48000.0, 2000.0)), PI_D(), 1e-6));
+        ASSERT_TRUE(near_d(ap.response_mag(48000.0, 500.0), 1.0, 1e-9));
+        ASSERT_TRUE(near_d(ap.response_mag(48000.0, 9000.0), 1.0, 1e-9));
+        ASSERT_TRUE(near_d(abs_d(ap.response_phase(48000.0, 2000.0)), PI_D(), 1e-6));
         struct Biquad ls = biquad_lowshelf(48000.0, 300.0, 1.0, 6.0);
-        ASSERT_TRUE(near_d(biquad_response_mag(&ls, 48000.0, 1.0), pow_d(10.0, 6.0 / 20.0), 1e-3));
-        ASSERT_TRUE(near_d(biquad_response_mag(&ls, 48000.0, 20000.0), 1.0, 1e-2));
+        ASSERT_TRUE(near_d(ls.response_mag(48000.0, 1.0), pow_d(10.0, 6.0 / 20.0), 1e-3));
+        ASSERT_TRUE(near_d(ls.response_mag(48000.0, 20000.0), 1.0, 1e-2));
         struct FBiquad fb = biquad_to_fixed(id);
         ASSERT_TRUE(near_d(fixed_to_float(fb.process(fixed_from_float(0.5))), 0.5, 1e-6));
         struct Biquad32 b32 = biquad_new_f32((float)0.5, (float)0.0, (float)0.0, (float)0.0, (float)0.0);

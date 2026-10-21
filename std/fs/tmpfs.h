@@ -23,10 +23,10 @@ struct TmpfsCtx {
     unsigned char     data[TMPFS_MAX_DATA];
     unsigned long     data_used;
     int               inode_count;
-};
 
-// Initialise a tmpfs context (zero-fills).
-void tmpfs_init(&TmpfsCtx ctx);
+    // Initialise this context in place (zero-fills, creates the root).
+    void init();
+};
 
 // Return VfsOps for the tmpfs driver (ctx must be a TmpfsCtx*).
 struct VfsOps tmpfs_ops();

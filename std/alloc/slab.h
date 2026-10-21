@@ -1,6 +1,9 @@
 // SafeC Standard Library — Slab Allocator
 // Fixed-size object pool. O(1) alloc/free via embedded free-list.
+// Conforms to Allocator (allocator.h): typed allocation is alloc_t /
+// dealloc_t there.
 #pragma once
+#include <std/alloc/allocator.h>
 
 namespace std {
 
@@ -18,15 +21,21 @@ struct SlabAllocator {
     // contract, which adding a tag would silently overrun).
     int           has_tags;
 
-    // Allocate one object. Returns NULL if pool is exhausted.
-    &heap void    alloc();
+    // Allocate one object (all `obj_size` bytes of it) for `size` bytes
+    // aligned to `align`. null if the slab is full, size > obj_size, or
+    // `align` is above max_align() or not a power of two (0 is taken as 1).
+    ?&heap void   alloc(unsigned long size, unsigned long align);
 
-    // Return an object to the pool. Aborts with a diagnostic on double-free
-    // (slab_new-created allocators only — see has_tags above).
+    // Return an object to the pool (null: no-op). Aborts with a diagnostic
+    // on double-free (slab_new-created allocators only — see has_tags above).
     void          dealloc(?&heap void ptr);
 
     // Return the number of free slots remaining.
     unsigned long available() const;
+
+    // The largest alignment alloc honours: the largest power of two dividing
+    // obj_size, at most 8 (given an 8-aligned buffer: always for slab_new).
+    unsigned long max_align() const;
 
     // Free the backing buffer (only valid for heap-backed allocators from slab_new).
     void          destroy();
@@ -47,18 +56,5 @@ struct SlabAllocator slab_init(&unsigned char buffer, unsigned long obj_size, un
 
 // Create a heap-backed slab allocator (double-free-detecting).
 struct SlabAllocator slab_new(unsigned long obj_size, unsigned long count);
-
-// ── Typed allocation (recommended) ───────────────────────────────────────────
-// null if the slab is full or T doesn't fit in one slab object.
-generic<T>
-?&heap T slab_alloc_t(&SlabAllocator s) {
-    if (sizeof(T) > s.obj_size) return null;
-    unsafe { return (?&heap T)s.alloc(); }
-}
-
-generic<T>
-void slab_free_t(&SlabAllocator s, &heap T obj) {
-    unsafe { s.dealloc((&heap void)obj); }
-}
 
 } // namespace std

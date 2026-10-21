@@ -137,7 +137,7 @@ static void t_collections() {
         ?&heap BTree<int> tq = std::alloc(sizeof(struct BTree<int>));
         if (!tq.is_null()) {
             &BTree<int> t = std::expect_ref(tq, "tq is null");
-            std::btree_init(t);
+            t.init();
             unsigned long j = 0UL;
             while (j < 50UL) { t.insert(j * 37UL % 101UL, (int)j); j = j + 1UL; }
             ?&int bv = t.get(10UL * 37UL % 101UL);
@@ -164,24 +164,24 @@ static void t_ring_alloc() {
         CHECK(out[9] == 39);
 
         struct TlsfAllocator t = std::tlsf_new(32768UL);
-        ?&heap void a = t.alloc(100UL);
-        ?&heap void b = t.alloc(3000UL);
+        ?&heap void a = t.alloc(100UL, 8UL);
+        ?&heap void b = t.alloc(3000UL, 8UL);
         CHECK(!a.is_null() && !b.is_null());
-        match (a) { case null: { } case some(x): { t.free(x); } }
-        match (b) { case null: { } case some(x): { t.free(x); } }
-        ?&heap void c = t.alloc(30000UL);        // fits only if freed blocks coalesced
+        match (a) { case null: { } case some(x): { t.dealloc(x); } }
+        match (b) { case null: { } case some(x): { t.dealloc(x); } }
+        ?&heap void c = t.alloc(30000UL, 8UL);   // fits only if freed blocks coalesced
         CHECK(!c.is_null());
         t.destroy();
 
         struct SlabAllocator sl = std::slab_new(24UL, 8UL);
-        ?&heap void s1 = sl.alloc();
+        ?&heap unsigned long s1 = std::alloc_t(&sl);   // through the Allocator trait
         CHECK(!s1.is_null());
         CHECK(sl.available() == 7UL);
         sl.destroy();
 
         struct PoolAllocator p = std::pool_new(2048UL);
         unsigned long before = p.available();
-        ?&heap void pa = p.alloc(200UL);
+        ?&heap void pa = p.alloc(200UL, 8UL);
         CHECK(!pa.is_null());
         match (pa) { case null: { } case some(x): { p.dealloc(x); } }
         CHECK(p.available() == before);
@@ -244,8 +244,8 @@ static void t_fixed_net() {
 static void t_serial_sync() {
     unsafe {
         struct Value o = std::value_object();
-        std::value_object_set(&o, "n", std::value_int(-42LL));
-        std::value_object_set(&o, "s", std::value_string("bm"));
+        o.object_set("n", std::value_int(-42LL));
+        o.object_set("s", std::value_string("bm"));
         struct String js = std::value_to_json(&o);
         int ok = 0;
         struct Value back = std::json_parse(js.as_ptr(), &ok);
@@ -254,8 +254,8 @@ static void t_serial_sync() {
         CHECK(!n.is_null());
         if (!n.is_null()) CHECK(n->as_int() == -42LL);
         js.free();
-        std::value_free(&back);
-        std::value_free(&o);
+        back.free();
+        o.free();
 
         struct Spinlock sp = std::spinlock_init();
         sp.lock();

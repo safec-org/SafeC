@@ -71,11 +71,11 @@ static struct OAuth2Token __token_request(const char* tokenHost, unsigned short 
     struct Value root;
     unsafe { root = json_parse(resp.body.as_ptr(), &parseOk); resp.free(); }
     if (!parseOk) {
-        unsafe { *ok = 0; value_free(&root); }
+        unsafe { *ok = 0; root.free(); }
         return __empty_token();
     }
     struct OAuth2Token t = __token_from_json(&root);
-    unsafe { value_free(&root); }
+    unsafe { root.free(); }
     int hasAccess;
     unsafe { hasAccess = t.accessToken.length() > 0UL; }
     unsafe { *ok = hasAccess; }
@@ -110,12 +110,10 @@ struct OAuth2Token oauth2_refresh(const &char tokenHost, unsigned short tokenPor
     return t;
 }
 
-void oauth2_token_free(&OAuth2Token t) {
-    unsafe {
-        t.accessToken.free();
-        t.refreshToken.free();
-        t.tokenType.free();
-    }
+void OAuth2Token::free() {
+    self.accessToken.free();
+    self.refreshToken.free();
+    self.tokenType.free();
 }
 
 } // namespace std

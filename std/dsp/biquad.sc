@@ -131,11 +131,11 @@ static void biquad_block_fma_(double* st, const double* c, const double* x, doub
 }
 #endif
 
-void biquad_process_block(&Biquad bq, const &double in, &double out, unsigned long n) {
+void Biquad::process_block(const &double in, &double out, unsigned long n) {
     double c[5];
-    c[0] = bq.b0; c[1] = bq.b1; c[2] = bq.b2; c[3] = bq.a1; c[4] = bq.a2;
+    c[0] = self.b0; c[1] = self.b1; c[2] = self.b2; c[3] = self.a1; c[4] = self.a2;
     double st[2];
-    st[0] = bq.z1; st[1] = bq.z2;
+    st[0] = self.z1; st[1] = self.z2;
     unsafe {
 #if defined(__x86_64__)
         if (simd_level() >= SIMD_AVX2) biquad_block_fma_(&st[0], (const double*)&c[0], (const double*)in, (double*)out, n);
@@ -143,8 +143,8 @@ void biquad_process_block(&Biquad bq, const &double in, &double out, unsigned lo
 #endif
         biquad_block_base_(&st[0], (const double*)&c[0], (const double*)in, (double*)out, n);
     }
-    bq.z1 = st[0];
-    bq.z2 = st[1];
+    self.z1 = st[0];
+    self.z2 = st[1];
 }
 
 inline void Biquad::reset() {
@@ -259,11 +259,11 @@ static void biquad32_block_fma_(float* st, const float* c, const float* x, float
 }
 #endif
 
-void biquad_process_block_f32(&Biquad32 bq, const &float in, &float out, unsigned long n) {
+void Biquad32::process_block(const &float in, &float out, unsigned long n) {
     float c[5];
-    c[0] = bq.b0; c[1] = bq.b1; c[2] = bq.b2; c[3] = bq.a1; c[4] = bq.a2;
+    c[0] = self.b0; c[1] = self.b1; c[2] = self.b2; c[3] = self.a1; c[4] = self.a2;
     float st[2];
-    st[0] = bq.z1; st[1] = bq.z2;
+    st[0] = self.z1; st[1] = self.z2;
     unsafe {
 #if defined(__x86_64__)
         if (simd_level() >= SIMD_AVX2) biquad32_block_fma_(&st[0], (const float*)&c[0], (const float*)in, (float*)out, n);
@@ -271,8 +271,8 @@ void biquad_process_block_f32(&Biquad32 bq, const &float in, &float out, unsigne
 #endif
         biquad32_block_base_(&st[0], (const float*)&c[0], (const float*)in, (float*)out, n);
     }
-    bq.z1 = st[0];
-    bq.z2 = st[1];
+    self.z1 = st[0];
+    self.z2 = st[1];
 }
 
 inline void Biquad32::reset() {
@@ -418,7 +418,7 @@ struct Biquad bilinear_2nd_order(double B0, double B1, double B2,
     return biquad_new(nz2 / dz2, nz1 / dz2, nz0 / dz2, dz1 / dz2, dz0 / dz2);
 }
 
-// H(e^{j*omega}) itself — shared by biquad_response_mag/phase below so the
+// H(e^{j*omega}) itself — shared by Biquad::response_mag/response_phase below so the
 // num/den evaluation (and the addressable-temporary decomposition it needs;
 // SafeC operator calls require an lvalue receiver, so each intermediate
 // product/sum is bound to a named local rather than chained inline) exists
@@ -448,13 +448,13 @@ static struct Complex biquad_freq_response_(const &Biquad bq, double fs, double 
     return num / den;
 }
 
-double biquad_response_mag(const &Biquad bq, double fs, double freqHz) {
-    struct Complex h = biquad_freq_response_(bq, fs, freqHz);
+double Biquad::response_mag(double fs, double freqHz) const {
+    struct Complex h = biquad_freq_response_(self, fs, freqHz);
     return h.abs();
 }
 
-double biquad_response_phase(const &Biquad bq, double fs, double freqHz) {
-    struct Complex h = biquad_freq_response_(bq, fs, freqHz);
+double Biquad::response_phase(double fs, double freqHz) const {
+    struct Complex h = biquad_freq_response_(self, fs, freqHz);
     return h.arg();
 }
 

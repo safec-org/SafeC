@@ -14,16 +14,16 @@
 
 static struct Value sample() {
     struct Value o = value_object();
-    value_object_set(&o, "name", value_string("Ada \"L\""));
-    value_object_set(&o, "age", value_int(36LL));
-    value_object_set(&o, "pi", value_float(3.5));
-    value_object_set(&o, "ok", value_bool(1));
-    value_object_set(&o, "nil", value_null());
+    o.object_set("name", value_string("Ada \"L\""));
+    o.object_set("age", value_int(36LL));
+    o.object_set("pi", value_float(3.5));
+    o.object_set("ok", value_bool(1));
+    o.object_set("nil", value_null());
     struct Value arr = value_array();
-    value_array_push(&arr, value_int(1LL));
-    value_array_push(&arr, value_int(2LL));
-    value_array_push(&arr, value_string("three"));
-    value_object_set(&o, "list", arr);
+    arr.array_push(value_int(1LL));
+    arr.array_push(value_int(2LL));
+    arr.array_push(value_string("three"));
+    o.object_set("list", arr);
     return o;
 }
 
@@ -37,10 +37,10 @@ void t_value() {
         ?&Value missing = o.object_get("nope");
         ASSERT_TRUE(missing == null);
     }
-    struct Value c = value_clone(&o);
+    struct Value c = o.clone();
     ASSERT_EQ(c.object_len(), 6);
-    value_free(&c);
-    value_free(&o);
+    c.free();
+    o.free();
 }
 
 void t_json() {
@@ -65,11 +65,11 @@ void t_json() {
         ASSERT_STR_EQ(u->as_string(), "é\n");
         struct Value bad = json_parse("{\"a\":", &ok);
         ASSERT_FALSE(ok);
-        value_free(&bad);
-        value_free(&nested);
+        bad.free();
+        nested.free();
         js.free(); js2.free();
-        value_free(&back);
-        value_free(&o);
+        back.free();
+        o.free();
     }
 }
 
@@ -86,7 +86,7 @@ void t_csv() {
         struct String out2 = value_to_csv(&rows2);
         ASSERT_STR_EQ(out.as_ptr(), out2.as_ptr());
         out.free(); out2.free();
-        value_free(&rows); value_free(&rows2);
+        rows.free(); rows2.free();
     }
 }
 
@@ -115,7 +115,7 @@ void t_xml_yaml_html() {
         ASSERT_TRUE(esc.contains("&amp;"));
         esc.free();
         x.free(); x2.free(); y.free(); y2.free(); h.free(); h2.free();
-        value_free(&xb); value_free(&yb); value_free(&hb); value_free(&o);
+        xb.free(); yb.free(); hb.free(); o.free();
     }
 }
 
@@ -136,28 +136,28 @@ void t_protobuf() {
         int fn_ = 0;
         int wt = 0;
         long long iv = 0LL;
-        ASSERT_TRUE(pb_read_tag(&r, &fn_, &wt));
+        ASSERT_TRUE(r.read_tag(&fn_, &wt));
         ASSERT_EQ(fn_, 1);
-        pb_read_int64(&r, &iv);
+        r.read_int64(&iv);
         ASSERT_EQ(iv, 150);
-        pb_read_tag(&r, &fn_, &wt);
-        pb_read_sint64(&r, &iv);
+        r.read_tag(&fn_, &wt);
+        r.read_sint64(&iv);
         ASSERT_EQ(iv, -3);
-        pb_read_tag(&r, &fn_, &wt);
+        r.read_tag(&fn_, &wt);
         ASSERT_EQ(wt, PB_WIRE_LEN);
         unsigned char none = (unsigned char)0;
         &const unsigned char sd = &none;
         unsigned long sl = 0UL;
-        pb_read_length_delimited(&r, &sd, &sl);
+        r.read_length_delimited(&sd, &sl);
         ASSERT_EQ(sl, 2);
         ASSERT_EQ(sd[0], 'h');
-        pb_read_tag(&r, &fn_, &wt);
+        r.read_tag(&fn_, &wt);
         double dv = 0.0;
-        pb_read_double(&r, &dv);
+        r.read_double(&dv);
         ASSERT_TRUE(dv == 2.25);
-        pb_read_tag(&r, &fn_, &wt);
-        ASSERT_TRUE(pb_skip_field(&r, wt));
-        ASSERT_FALSE(pb_reader_has_more(&r));
+        r.read_tag(&fn_, &wt);
+        ASSERT_TRUE(r.skip_field(wt));
+        ASSERT_FALSE(r.has_more());
         buf.free();
     }
 }
@@ -165,19 +165,19 @@ void t_protobuf() {
 void t_markdown() {
     unsafe {
         &heap MdNode doc = md_parse("# Title\n\nSome **bold** and *it* with `code` and [link](http://x).\n\n- a\n- b\n\n```\nfn()\n```\n");
-        struct String html = md_render_html(doc);
+        struct String html = doc.render_html();
         ASSERT_TRUE(html.contains("<h1>Title</h1>"));
         ASSERT_TRUE(html.contains("<strong>bold</strong>"));
         ASSERT_TRUE(html.contains("<em>it</em>"));
         ASSERT_TRUE(html.contains("<code>code</code>"));
         ASSERT_TRUE(html.contains("<a href=\"http://x\">link</a>"));
         ASSERT_TRUE(html.contains("<li>"));
-        struct String md = md_render_markdown(doc);
+        struct String md = doc.render_markdown();
         &heap MdNode doc2 = md_parse(md.as_ptr());
-        struct String html2 = md_render_html(doc2);
+        struct String html2 = doc2.render_html();
         ASSERT_STR_EQ(html.as_ptr(), html2.as_ptr());
         html.free(); html2.free(); md.free();
-        md_free(doc); md_free(doc2);
+        doc.free(); doc2.free();
     }
 }
 
@@ -215,8 +215,8 @@ void t_writers_varint() {
         struct String c = value_to_csv(&rows);
         ASSERT_STR_EQ(a.as_ptr(), c.as_ptr());
         j.free(); y.free(); x.free(); h.free(); c.free(); a.free();
-        value_free(&rows);
-        value_free(&o);
+        rows.free();
+        o.free();
 
         unsigned long long vals[6];
         vals[0] = 0ULL; vals[1] = 127ULL; vals[2] = 128ULL; vals[3] = 300ULL;
@@ -230,15 +230,15 @@ void t_writers_varint() {
         i = 0;
         while (i < 6) {
             unsigned long long v = 0ULL;
-            if (!pb_read_varint(&r, &v) || v != vals[i]) good = 0;
+            if (!r.read_varint(&v) || v != vals[i]) good = 0;
             i = i + 1;
         }
         ASSERT_TRUE(good);
-        ASSERT_FALSE(pb_reader_has_more(&r));
+        ASSERT_FALSE(r.has_more());
         unsigned long long v = 0ULL;
-        ASSERT_FALSE(pb_read_varint(&r, &v));                 // nothing left
+        ASSERT_FALSE(r.read_varint(&v));                      // nothing left
         struct PbReader trunc = pb_reader_new((const unsigned char*)"\x80\x80", 2UL);
-        ASSERT_FALSE(pb_read_varint(&trunc, &v));             // unterminated
+        ASSERT_FALSE(trunc.read_varint(&v));                  // unterminated
         buf.free();
 
         struct String e = string_new();

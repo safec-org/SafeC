@@ -21,6 +21,9 @@ struct OAuth2Token {
     struct String refreshToken; // empty if the provider didn't return one
     struct String tokenType;    // usually "Bearer"
     long long     expiresIn;    // seconds; 0 if not returned
+
+    // Releases the three owned strings.
+    void free();
 };
 
 // Exchanges an authorization code for tokens: POSTs
@@ -37,7 +40,5 @@ struct OAuth2Token oauth2_exchange_code(const &char tokenHost, unsigned short to
 struct OAuth2Token oauth2_refresh(const &char tokenHost, unsigned short tokenPort,
                                   const &char tokenPath, const &char clientId,
                                   const &char clientSecret, const &char refreshToken, ?&int ok);
-
-void oauth2_token_free(&OAuth2Token t);
 
 } // namespace std

@@ -1,7 +1,7 @@
 // SafeC Standard Library — General N-th order Laplace-to-Z (bilinear)
 // transform + Z-domain frequency response evaluator
 //
-// biquad.h's bilinear_2nd_order and biquad_response_mag/phase cover the
+// biquad.h's bilinear_2nd_order and Biquad::response_mag/phase cover the
 // 2nd-order case (the common one — cascaded biquads build any even order
 // in practice). This file generalizes both to arbitrary order M, for the
 // less common case of designing/analyzing a single higher-order IIR
@@ -36,7 +36,7 @@ void bilinear_nth_order(const &double B, const &double A, unsigned long order,
 
 // Z-domain frequency response of an order-'order' digital filter
 // (b[]/a[] in the negative-power-of-z convention above) at 'freqHz' —
-// the general-order counterpart of biquad_response_mag/phase.
+// the general-order counterpart of Biquad::response_mag/phase.
 double ztransform_response_mag(const &double b, const &double a, unsigned long order,
                                 double fs, double freqHz);
 double ztransform_response_phase(const &double b, const &double a, unsigned long order,

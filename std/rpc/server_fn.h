@@ -21,8 +21,8 @@
 //
 //   int ok;
 //   struct Value args = value_object();
-//   value_object_set(&args, "a", value_int(2));
-//   value_object_set(&args, "b", value_int(3));
+//   args.object_set("a", value_int(2));
+//   args.object_set("b", value_int(3));
 //   struct Value result = server_fn_call("localhost", 8080, "add", &args, &ok);
 //   // result.as_int() == 5
 //

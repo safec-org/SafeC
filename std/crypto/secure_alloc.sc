@@ -15,7 +15,8 @@ struct SecureAllocator secure_alloc_new(unsigned long obj_size,
 }
 
 &heap void SecureAllocator::alloc() {
-    return self.slab.alloc();
+    void* p = self.slab.alloc(self.slab.obj_size, 1UL);
+    unsafe { return (&heap void)p; }
 }
 
 inline void SecureAllocator::dealloc(?&heap void ptr) {

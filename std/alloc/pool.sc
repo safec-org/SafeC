@@ -71,7 +71,12 @@ inline struct PoolAllocator pool_new(unsigned long cap) {
     return a;
 }
 
-&heap void PoolAllocator::alloc(unsigned long size) {
+?&heap void PoolAllocator::alloc(unsigned long size, unsigned long align) {
+    // Every block header sits at an 8-aligned offset (24-byte headers,
+    // sizes rounded to 8), so payloads are 8-aligned: alignments up to 8
+    // come free; above that would need padding blocks, so null instead.
+    if ((align & (align - 1UL)) != 0UL || align > 8UL) { return null; }
+    if (size > self.cap) { return null; }   // also keeps the rounding below from wrapping
     // Align size to 8 bytes
     unsigned long aligned = (size + (unsigned long)7) & ~(unsigned long)7;
     unsigned long hdr     = self.header_size_();
@@ -90,12 +95,12 @@ inline struct PoolAllocator pool_new(unsigned long cap) {
                     cur->next = (void*)split;
                 }
                 cur->is_free = 0;
-                return (&heap void)((unsigned long)cur + hdr);
+                return (?&heap void)((unsigned long)cur + hdr);
             }
             cur = (struct PoolBlock*)cur->next;
         }
     }
-    return (&heap void)0;
+    return null;
 }
 
 void PoolAllocator::dealloc(?&heap void ptr_ref) {

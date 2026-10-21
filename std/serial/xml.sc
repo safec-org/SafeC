@@ -316,14 +316,14 @@ static struct Value xml_parse_element_(struct XmlCursor_* c) {
             int childIsItem = childTag.eq_cstr("item");
             if (first) { isArray = childIsItem; first = 0; }
             if (isArray) {
-                value_array_push(&arr, childVal);
+                arr.array_push(childVal);
             } else {
-                unsafe { value_object_set(&obj, childTag.as_ptr(), childVal); }
+                unsafe { obj.object_set(childTag.as_ptr(), childVal); }
             }
             childTag.free();
         }
-        if (isArray) { value_free(&obj); result = arr; }
-        else { value_free(&arr); result = obj; }
+        if (isArray) { obj.free(); result = arr; }
+        else { arr.free(); result = obj; }
     } else {
         struct String text = xml_decode_text_(c);
         result = xml_infer_scalar_(&text);
@@ -362,7 +362,7 @@ struct Value xml_parse(const &char text, ?&int ok) {
     }
     if (ok != (int*)0) { unsafe { *ok = c.ok; } }
     if (c.ok == 0) {
-        value_free(&v);
+        v.free();
         return value_null();
     }
     return v;

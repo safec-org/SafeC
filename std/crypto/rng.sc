@@ -107,14 +107,14 @@ static void rng_setup_(unsigned int* state, const unsigned char* key32,
     }
 }
 
-inline void rng_init_seed(&RngCtx ctx, const unsigned char seed[32]) {
-    rng_setup_(ctx.state, seed, (unsigned int)0, (unsigned int)1);
-    chacha20_block_(ctx.state, (unsigned char*)ctx.buf);
-    ctx.state[12] = ctx.state[12] + (unsigned int)1;
-    ctx.buf_pos = (unsigned long)0;
+inline void RngCtx::init_seed(const unsigned char seed[32]) {
+    rng_setup_(self.state, seed, (unsigned int)0, (unsigned int)1);
+    chacha20_block_(self.state, (unsigned char*)self.buf);
+    self.state[12] = self.state[12] + (unsigned int)1;
+    self.buf_pos = (unsigned long)0;
 }
 
-int rng_init(&RngCtx ctx) {
+int RngCtx::init() {
 #ifdef __x86_64__
     // Try rdrand for seeding
     unsigned int seed_words[8];
@@ -140,10 +140,10 @@ int rng_init(&RngCtx ctx) {
         }
     }
     if (ok != 0) {
-        rng_setup_(ctx.state, (const unsigned char*)seed_words, (unsigned int)0, (unsigned int)1);
-        chacha20_block_(ctx.state, (unsigned char*)ctx.buf);
-        ctx.state[12] = ctx.state[12] + (unsigned int)1;
-        ctx.buf_pos = (unsigned long)0;
+        rng_setup_(self.state, (const unsigned char*)seed_words, (unsigned int)0, (unsigned int)1);
+        chacha20_block_(self.state, (unsigned char*)self.buf);
+        self.state[12] = self.state[12] + (unsigned int)1;
+        self.buf_pos = (unsigned long)0;
         return 1;
     }
 #endif
@@ -157,7 +157,7 @@ int rng_init(&RngCtx ctx) {
             unsigned long got = fread((void*)seed, (unsigned long)1, (unsigned long)32, f);
             fclose(f);
             if (got == (unsigned long)32) {      // a short read would seed from stack garbage
-                rng_init_seed(ctx, seed);
+                self.init_seed(seed);
                 return 1;
             }
         }
@@ -169,14 +169,14 @@ int rng_init(&RngCtx ctx) {
     // fell back to a fixed, fully-predictable seed and returned 0, trusting
     // every caller to check that return value before treating the "random"
     // stream as safe to use for keys/nonces — nothing enforced that, so a
-    // caller that (reasonably) assumed rng_init() always produces usable
+    // caller that (reasonably) assumed init() always produces usable
     // randomness would get deterministic output with no warning. Aborting
     // here instead makes the failure impossible to miss. Callers that
     // genuinely have their own entropy source (e.g. a hardware TRNG driver
     // on a microcontroller with no rdrand/urandom) should call
-    // rng_init_seed() directly with that source instead of rng_init().
-    rng_abort_("rng_init() found no entropy source (no rdrand, no /dev/urandom) — "
-               "refusing to seed with a predictable fallback; call rng_init_seed() "
+    // init_seed() directly with that source instead of init().
+    rng_abort_("RngCtx::init() found no entropy source (no rdrand, no /dev/urandom) — "
+               "refusing to seed with a predictable fallback; call RngCtx::init_seed() "
                "with your own entropy source instead");
     return 0;
 }

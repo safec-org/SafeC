@@ -17,7 +17,7 @@ inline const ?&PartEntry PartTable::get(int idx) const {
     return (const ?&PartEntry)(const struct PartEntry*)0;
 }
 
-int partition_read(&BlockDevice dev, &PartTable table_out) {
+int PartTable::read(&BlockDevice dev) {
     unsigned char mbr[512];
     if (dev.read((unsigned long)0, (&unsigned char)mbr, (unsigned long)1) != 0) {
         return -1;
@@ -29,27 +29,27 @@ int partition_read(&BlockDevice dev, &PartTable table_out) {
             return -1;
         }
     }
-    table_out.count = 0;
+    self.count = 0;
     int i = 0;
     while (i < PART_MAX) {
         unsafe {
             unsigned char* e = (unsigned char*)mbr + MBR_ENTRY_OFFSET + i * 16;
-            table_out.entries[i].status = e[0];
-            table_out.entries[i].type   = e[4];
+            self.entries[i].status = e[0];
+            self.entries[i].type   = e[4];
             // LBA start at bytes 8-11 (little-endian)
-            table_out.entries[i].lba_start =
+            self.entries[i].lba_start =
                 (unsigned long)e[8]  |
                 ((unsigned long)e[9]  << 8) |
                 ((unsigned long)e[10] << 16) |
                 ((unsigned long)e[11] << 24);
             // sector count at bytes 12-15 (little-endian)
-            table_out.entries[i].sector_count =
+            self.entries[i].sector_count =
                 (unsigned long)e[12] |
                 ((unsigned long)e[13] << 8) |
                 ((unsigned long)e[14] << 16) |
                 ((unsigned long)e[15] << 24);
-            if (table_out.entries[i].type != (unsigned char)PART_TYPE_EMPTY) {
-                table_out.count = table_out.count + 1;
+            if (self.entries[i].type != (unsigned char)PART_TYPE_EMPTY) {
+                self.count = self.count + 1;
             }
         }
         i = i + 1;

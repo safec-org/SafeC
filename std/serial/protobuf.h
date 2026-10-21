@@ -21,14 +21,14 @@
 //       p.x = 0; p.y = 0;
 //       struct PbReader r = pb_reader_new(data, len);
 //       int good = 1;
-//       while (pb_reader_has_more(&r)) {
+//       while (r.has_more()) {
 //           int field; int wireType;
-//           if (!pb_read_tag(&r, &field, &wireType)) { good = 0; break; }
+//           if (!r.read_tag(&field, &wireType)) { good = 0; break; }
 //           if (field == 1 && wireType == PB_WIRE_VARINT) {
-//               long long v; pb_read_int64(&r, &v); p.x = (int)v;
+//               long long v; r.read_int64(&v); p.x = (int)v;
 //           } else if (field == 2 && wireType == PB_WIRE_VARINT) {
-//               long long v; pb_read_int64(&r, &v); p.y = (int)v;
-//           } else if (!pb_skip_field(&r, wireType)) { good = 0; break; }
+//               long long v; r.read_int64(&v); p.y = (int)v;
+//           } else if (!r.skip_field(wireType)) { good = 0; break; }
 //       }
 //       if (ok != (int*)0) { *ok = good; }
 //       return p;
@@ -80,41 +80,41 @@ void pb_write_bytes_field(&String out, int field_num,
                            const &unsigned char data, unsigned long len);
 
 // ── Reader ────────────────────────────────────────────────────────────────
-// A zero-copy cursor over an existing byte buffer — pb_read_length_delimited
+// A zero-copy cursor over an existing byte buffer — read_length_delimited
 // returns a pointer *into* that same buffer (valid only as long as it is).
 
 struct PbReader {
     const &unsigned char data;
     unsigned long        len;
     unsigned long        pos;
+
+    int has_more() const;
+
+    // Each returns 1 on success, 0 on a truncated/malformed encoding (ran
+    // out of bytes mid-varint, length-delimited field's declared length
+    // exceeds the remaining buffer, etc.).
+    int read_varint(&unsigned long long out);
+    int read_tag(&int field_num, &int wire_type);
+    int read_int64(&long long out);
+    int read_uint64(&unsigned long long out);
+    int read_sint64(&long long out);
+    int read_bool(&int out);
+    int read_double(&double out);
+    int read_float(&float out);
+    // '*dataOut' aliases into the reader's own buffer (see the zero-copy
+    // note above) — copy it out (e.g. via string_from_n) if it needs to
+    // outlive that buffer.
+    int read_length_delimited(&&const unsigned char dataOut, &unsigned long lenOut);
+
+    // Advances past one field's value without decoding it, given its wire
+    // type from a just-read tag — the standard "ignore fields I don't
+    // recognize" behavior every protobuf reader needs for forward
+    // compatibility with schemas that gained fields since this code was
+    // written. Returns 0 for wire type 3/4 (unsupported group markers) or
+    // a truncated encoding.
+    int skip_field(int wire_type);
 };
 
 struct PbReader pb_reader_new(const &unsigned char data, unsigned long len);
-int pb_reader_has_more(const &PbReader r);
-
-// Each returns 1 on success, 0 on a truncated/malformed encoding (ran out
-// of bytes mid-varint, length-delimited field's declared length exceeds
-// the remaining buffer, etc.).
-int pb_read_varint(&PbReader r, &unsigned long long out);
-int pb_read_tag(&PbReader r, &int field_num, &int wire_type);
-int pb_read_int64(&PbReader r, &long long out);
-int pb_read_uint64(&PbReader r, &unsigned long long out);
-int pb_read_sint64(&PbReader r, &long long out);
-int pb_read_bool(&PbReader r, &int out);
-int pb_read_double(&PbReader r, &double out);
-int pb_read_float(&PbReader r, &float out);
-// '*dataOut' aliases into the reader's own buffer (see the zero-copy note
-// above) — copy it out (e.g. via string_from_n) if it needs to outlive
-// that buffer.
-int pb_read_length_delimited(&PbReader r, &&const unsigned char dataOut,
-                              &unsigned long lenOut);
-
-// Advances past one field's value without decoding it, given its wire
-// type from a just-read tag — the standard "ignore fields I don't
-// recognize" behavior every protobuf reader needs for forward
-// compatibility with schemas that gained fields since this code was
-// written. Returns 0 for wire type 3/4 (unsupported group markers) or a
-// truncated encoding.
-int pb_skip_field(&PbReader r, int wire_type);
 
 } // namespace std

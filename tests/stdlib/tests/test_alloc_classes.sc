@@ -9,6 +9,10 @@
 #include <std/collections/vec.h>
 #include <std/ml/cnn.h>
 #include <std/sync/parallel.h>
+#include <std/alloc/bump.h>
+#include <std/alloc/pool.h>
+#include <std/alloc/slab.h>
+#include <std/alloc/tlsf.h>
 
 static int near(float a, float b) {
     float d = a - b;
@@ -240,12 +244,119 @@ void t_slabs() {
     }
 }
 
+// ── std/alloc's Allocator trait ──────────────────────────────────────────────
+// One generic routine run over bump, pool, slab and tlsf, and over an
+// allocator defined here, which conforms just by having alloc and dealloc.
+
+struct Rec { long long id; double v; int tag; };
+
+// alloc_t / alloc_array_t / dealloc_t and the raw methods through the trait.
+// n: how many Recs one array allocation asks for. 1 when all went well.
+generic<A: Allocator>
+int exercise_allocator(&A a, unsigned long n) {
+    int ok = 1;
+    ?&heap Rec r = alloc_t(a);
+    ?&heap Rec arr = alloc_array_t(a, n);
+    match (r) {
+        case null: { ok = 0; }
+        case some(x): {
+            x.id = 42LL; x.v = 1.5; x.tag = 7;
+            unsafe { if ((unsigned long)x % alignof(struct Rec) != 0UL) ok = 0; }
+        }
+    }
+    match (arr) {
+        case null: { ok = 0; }
+        case some(xs): {
+            unsafe {
+                if ((unsigned long)xs % alignof(struct Rec) != 0UL) ok = 0;
+                unsigned long i = 0UL;
+                while (i < n) { xs[i].id = (long long)i; xs[i].tag = (int)i * 3; i = i + 1UL; }
+                i = 0UL;
+                while (i < n) { if (xs[i].id != (long long)i || xs[i].tag != (int)i * 3) ok = 0; i = i + 1UL; }
+            }
+        }
+    }
+    match (r) { case null: { } case some(x): { if (x.id != 42LL || x.tag != 7) ok = 0; dealloc_t(a, x); } }
+    match (arr) { case null: { } case some(xs): { dealloc_t(a, xs); } }
+    if (!a.alloc(8UL, 3UL).is_null()) ok = 0;        // align not a power of two
+    a.dealloc((?&heap void)null);                      // null: a no-op everywhere
+    // The raw method: 8 bytes, 8-aligned (every allocator here honours 8).
+    ?&heap void raw = a.alloc(8UL, 8UL);
+    match (raw) {
+        case null: { ok = 0; }
+        case some(p): { unsafe { if ((unsigned long)p % 8UL != 0UL) ok = 0; } a.dealloc(p); }
+    }
+    return ok;
+}
+
+// A user's allocator: std::alloc's heap, counting live blocks. Conforms to
+// Allocator by defining alloc and dealloc with the trait's signatures.
+struct CountingHeap {
+    unsigned long live;
+    unsigned long total;
+    ?&heap void alloc(unsigned long size, unsigned long align);
+    void        dealloc(?&heap void ptr);
+};
+
+?&heap void CountingHeap::alloc(unsigned long size, unsigned long align) {
+    // std::alloc's blocks are 16-aligned.
+    if ((align & (align - 1UL)) != 0UL || align > 16UL) return null;
+    void* p;
+    unsafe { p = alloc_raw_(size); }
+    if (p == (void*)0) return null;
+    self.live = self.live + 1UL;
+    self.total = self.total + 1UL;
+    unsafe { return (?&heap void)p; }
+}
+
+void CountingHeap::dealloc(?&heap void ptr) {
+    void* p = ptr;
+    if (p == (void*)0) return;
+    unsafe { dealloc_raw_(p); }
+    self.live = self.live - 1UL;
+}
+
+void t_allocator_trait() {
+    struct BumpAllocator b = bump_new(4096UL);
+    ASSERT_EQ(exercise_allocator(&b, 16UL), 1);
+    b.destroy();
+
+    struct PoolAllocator p = pool_new(4096UL);
+    unsigned long poolFree = p.available();
+    ASSERT_EQ(exercise_allocator(&p, 16UL), 1);
+    ASSERT_EQ(p.available(), poolFree);              // every block came back
+    p.destroy();
+
+    // A slab hands out one object size: the array is one Rec, a second won't fit.
+    struct SlabAllocator s = slab_new(sizeof(struct Rec), 4UL);
+    ASSERT_EQ(exercise_allocator(&s, 1UL), 1);
+    ASSERT_EQ(s.available(), 4UL);
+    ?&heap Rec two = alloc_array_t(&s, 2UL);
+    ASSERT_TRUE(two.is_null());
+    s.destroy();
+
+    struct TlsfAllocator t = tlsf_new(65536UL);
+    ASSERT_EQ(exercise_allocator(&t, 16UL), 1);
+    ?&heap Rec big = alloc_array_t(&t, 2000UL);      // fits again: all coalesced
+    ASSERT_FALSE(big.is_null());
+    match (big) { case null: { } case some(x): { dealloc_t(&t, x); } }
+    t.destroy();
+
+    struct CountingHeap h;
+    h.live = 0UL;
+    h.total = 0UL;
+    ASSERT_EQ(exercise_allocator(&h, 16UL), 1);
+    ASSERT_EQ(h.live, 0UL);
+    ASSERT_EQ(h.total, 3UL);
+}
+
 int main() {
     struct TestSuite t = test_suite_init();
     unsafe {
         t.add("alloc size classes around 1MB", t_size_classes);
         t.add("conv2d then large allocations", t_conv_then_alloc);
         t.add("slabs: reuse, alignment, realloc, cross-thread frees", t_slabs);
+        t.add("std/alloc: one generic routine over every Allocator", t_allocator_trait);
     }
     t.run();
     t.print_summary();

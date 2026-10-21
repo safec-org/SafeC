@@ -1,8 +1,11 @@
 // SafeC Standard Library — Pool Allocator
 // Variable-size first-fit allocator with coalescing on free.
 // Each allocation is preceded by a PoolBlock header.
+// Conforms to Allocator (allocator.h): typed allocation is alloc_t /
+// alloc_array_t / dealloc_t there.
 #pragma once
 #include <std/mem.h>
+#include <std/alloc/allocator.h>
 
 namespace std {
 
@@ -18,10 +21,14 @@ struct PoolAllocator {
     unsigned long cap;        // total buffer size
     void*         head;       // first PoolBlock* in the list (raw — unsafe only)
 
-    // Allocate `size` bytes. Returns NULL if no suitable block found.
-    &heap void    alloc(unsigned long size);
+    // Allocate `size` bytes aligned to `align`. Every block is 8-aligned
+    // (given an 8-aligned buffer: always for pool_new), so align is honoured
+    // up to 8 (0 is taken as 1). null if no free block fits, or `align` is
+    // above 8 or not a power of two.
+    ?&heap void   alloc(unsigned long size, unsigned long align);
 
-    // Free a previously allocated pointer. Coalesces adjacent free blocks.
+    // Free a previously allocated pointer (null: no-op). Coalesces adjacent
+    // free blocks. Aborts with a diagnostic on a double free.
     void          dealloc(?&heap void ptr);
 
     // Return total free bytes (sum of all free blocks).
@@ -34,21 +41,10 @@ struct PoolAllocator {
     unsigned long header_size_() const;
 };
 
-// Initialize over a user-provided heap buffer.
+// Initialize over a user-provided heap buffer (8-aligned).
 struct PoolAllocator pool_init(&unsigned char buffer, unsigned long cap);
 
 // Create a heap-backed pool allocator.
 struct PoolAllocator pool_new(unsigned long cap);
-
-// ── Typed allocation (recommended) ───────────────────────────────────────────
-generic<T>
-?&heap T pool_alloc_t(&PoolAllocator p) {
-    unsafe { return (?&heap T)p.alloc(sizeof(T)); }
-}
-
-generic<T>
-void pool_free_t(&PoolAllocator p, &heap T obj) {
-    unsafe { p.dealloc((&heap void)obj); }
-}
 
 } // namespace std

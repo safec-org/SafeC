@@ -209,8 +209,8 @@ void t_datasets() {
 void t_dataset_csv() {
     match (file_open("build/test_ml_train.csv", "w")) {
         case some(f): {
-            file_puts("a,b,label\n1.5, 2,0\n-1,3.25,2\n\n4,5,1\n", f);
-            file_close(f);
+            f.puts("a,b,label\n1.5, 2,0\n-1,3.25,2\n\n4,5,1\n");
+            f.close();
         }
         case null: { ASSERT_TRUE(0); }
     }
@@ -236,11 +236,11 @@ void t_dataset_csv() {
         lab[7] = (unsigned char)2; lab[8] = (unsigned char)7; lab[9] = (unsigned char)3;
     }
     match (file_open("build/test_ml_train.idx3", "wb")) {
-        case some(f): { unsafe { file_write(f, (const &unsigned char)&img[0], 24UL); } file_close(f); }
+        case some(f): { unsafe { f.write((const &unsigned char)&img[0], 24UL); } f.close(); }
         case null: { ASSERT_TRUE(0); }
     }
     match (file_open("build/test_ml_train.idx1", "wb")) {
-        case some(f): { unsafe { file_write(f, (const &unsigned char)&lab[0], 10UL); } file_close(f); }
+        case some(f): { unsafe { f.write((const &unsigned char)&lab[0], 10UL); } f.close(); }
         case null: { ASSERT_TRUE(0); }
     }
     struct Dataset mn = Dataset::load_mnist("build/test_ml_train.idx3", "build/test_ml_train.idx1", 0UL);

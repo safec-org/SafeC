@@ -39,39 +39,39 @@ struct Pkt { long long id; int len; };
 
 void t_typed_alloc() {
     struct BumpAllocator b = bump_new(256UL);
-    ?&heap Pkt p = bump_alloc_t(&b);
+    ?&heap Pkt p = alloc_t(&b);
     match (p) { case some(x): { x.id = 7LL; x.len = 3; } case null: ASSERT_TRUE(0); }
-    ?&heap long long arr = bump_alloc_array_t(&b, 8UL);
+    ?&heap long long arr = alloc_array_t(&b, 8UL);
     ASSERT_FALSE(arr.is_null());
     unsafe { ASSERT_EQ((unsigned long)arr % 8UL, 0); }
-    ?&heap long long tooMany = bump_alloc_array_t(&b, 1000UL);
+    ?&heap long long tooMany = alloc_array_t(&b, 1000UL);
     ASSERT_TRUE(tooMany.is_null());
     b.destroy();
 
     struct SlabAllocator s = slab_new(sizeof(struct Pkt), 2UL);
-    ?&heap Pkt s1 = slab_alloc_t(&s);
-    ?&heap Pkt s2 = slab_alloc_t(&s);
-    ?&heap Pkt s3 = slab_alloc_t(&s);
+    ?&heap Pkt s1 = alloc_t(&s);
+    ?&heap Pkt s2 = alloc_t(&s);
+    ?&heap Pkt s3 = alloc_t(&s);
     ASSERT_TRUE(s3.is_null());
-    match (s1) { case some(x): slab_free_t(&s, x); case null: ASSERT_TRUE(0); }
-    match (s2) { case some(x): slab_free_t(&s, x); case null: ASSERT_TRUE(0); }
+    match (s1) { case some(x): dealloc_t(&s, x); case null: ASSERT_TRUE(0); }
+    match (s2) { case some(x): dealloc_t(&s, x); case null: ASSERT_TRUE(0); }
     ASSERT_EQ(s.available(), 2);
     s.destroy();
 
     struct PoolAllocator pl = pool_new(4096UL);
     unsigned long before = pl.available();
-    ?&heap Pkt pp = pool_alloc_t(&pl);
+    ?&heap Pkt pp = alloc_t(&pl);
     match (pp) {
-        case some(x): pool_free_t(&pl, x);
+        case some(x): dealloc_t(&pl, x);
         case null: ASSERT_TRUE(0);
     }
     ASSERT_EQ(pl.available(), before);
     pl.destroy();
 
     struct TlsfAllocator t = tlsf_new(65536UL);
-    ?&heap int ints = tlsf_alloc_array_t(&t, 100UL);
+    ?&heap int ints = alloc_array_t(&t, 100UL);
     match (ints) {
-        case some(x): { unsafe { x[99] = 5; ASSERT_EQ(x[99], 5); } tlsf_free_t(&t, x); }
+        case some(x): { unsafe { x[99] = 5; ASSERT_EQ(x[99], 5); } dealloc_t(&t, x); }
         case null: ASSERT_TRUE(0);
     }
     t.destroy();
@@ -90,6 +90,14 @@ void t_bump() {
         ASSERT_TRUE(a2 >= a1 + 10UL);
         ?&heap char tooBig = (?&heap char)b.alloc(4096UL, 1UL);
         ASSERT_TRUE(tooBig.is_null());
+        // The address is aligned, past the 16 malloc gives the buffer.
+        ?&heap char p3 = (?&heap char)b.alloc(8UL, 256UL);
+        ASSERT_FALSE(p3.is_null());
+        ASSERT_EQ((unsigned long)p3 % 256UL, 0);
+        ASSERT_TRUE(b.alloc(8UL, 24UL).is_null());   // not a power of two
+        unsigned long left = b.remaining();
+        b.dealloc((?&heap void)p3);                  // a no-op on an arena
+        ASSERT_EQ(b.remaining(), left);
         b.reset();
         ASSERT_EQ(b.remaining(), 1024);
         b.destroy();
@@ -99,17 +107,20 @@ void t_bump() {
 void t_slab() {
     unsafe {
         struct SlabAllocator s = slab_new(32UL, 4UL);
-        ?&heap void a = s.alloc();
-        ?&heap void b = s.alloc();
-        ?&heap void c = s.alloc();
-        ?&heap void d = s.alloc();
+        ?&heap void a = s.alloc(32UL, 8UL);
+        ?&heap void b = s.alloc(32UL, 8UL);
+        ?&heap void c = s.alloc(32UL, 8UL);
+        ?&heap void d = s.alloc(32UL, 8UL);
         ASSERT_FALSE(d.is_null());
-        ?&heap void none = s.alloc();
+        ?&heap void none = s.alloc(32UL, 8UL);
         ASSERT_TRUE(none.is_null());
         ASSERT_EQ(s.available(), 0);
         s.dealloc(b);
         ASSERT_EQ(s.available(), 1);
-        ?&heap void e = s.alloc();
+        ASSERT_TRUE(s.alloc(33UL, 1UL).is_null());   // bigger than one object
+        ASSERT_TRUE(s.alloc(8UL, 16UL).is_null());   // beyond max_align() (8)
+        ASSERT_EQ(s.available(), 1);
+        ?&heap void e = s.alloc(32UL, 8UL);
         ASSERT_TRUE((unsigned long)e == (unsigned long)b);
         s.dealloc(a); s.dealloc(c); s.dealloc(d); s.dealloc(e);
         ASSERT_EQ(s.available(), 4);
@@ -121,8 +132,8 @@ void t_pool() {
     unsafe {
         struct PoolAllocator p = pool_new(4096UL);
         unsigned long before = p.available();
-        ?&heap char aq = (?&heap char)p.alloc(100UL);
-        ?&heap char bq = (?&heap char)p.alloc(200UL);
+        ?&heap char aq = (?&heap char)p.alloc(100UL, 1UL);
+        ?&heap char bq = (?&heap char)p.alloc(200UL, 8UL);
         ASSERT_FALSE(aq.is_null());
         ASSERT_FALSE(bq.is_null());
         if (aq.is_null() || bq.is_null()) return;
@@ -134,8 +145,11 @@ void t_pool() {
         p.dealloc((?&heap void)aq);
         p.dealloc((?&heap void)bq);
         ASSERT_EQ(p.available(), before);   // coalesced back
-        ?&heap void huge = p.alloc(1000000UL);
+        ?&heap void huge = p.alloc(1000000UL, 1UL);
         ASSERT_TRUE(huge.is_null());
+        ASSERT_TRUE(p.alloc(~0UL - 3UL, 1UL).is_null());   // size rounding mustn't wrap
+        ASSERT_TRUE(p.alloc(16UL, 16UL).is_null());       // beyond the 8 it guarantees
+        ASSERT_EQ(p.available(), before);
         p.destroy();
     }
 }
@@ -146,7 +160,7 @@ void t_tlsf() {
         ?&heap unsigned char ptrs[64];
         int i = 0;
         while (i < 64) {
-            ptrs[i] = (?&heap unsigned char)t.alloc((unsigned long)(16 + i * 13));
+            ptrs[i] = (?&heap unsigned char)t.alloc((unsigned long)(16 + i * 13), 1UL);
             if (ptrs[i].is_null()) break;
             safe_memset(std::expect_ref(ptrs[i], "tlsf"), i, (unsigned long)(16 + i * 13));
             i = i + 1;
@@ -167,16 +181,18 @@ void t_tlsf() {
         while (i < 64) {
             match (ptrs[i]) {
                 case null: { }
-                case some(blk): { t.free((&heap void)blk); }
+                case some(blk): { t.dealloc((?&heap void)blk); }
             }
             i = i + 1;
         }
         // After freeing everything a large block must fit again (coalescing).
-        ?&heap void bigq = t.alloc(50000UL);
+        ?&heap void bigq = t.alloc(50000UL, 8UL);
         match (bigq) {
             case null: { ASSERT_TRUE(0); }
-            case some(big): { t.free(big); }
+            case some(big): { t.dealloc(big); }
         }
+        ASSERT_TRUE(t.alloc(~0UL - 3UL, 1UL).is_null());   // size rounding mustn't wrap
+        ASSERT_TRUE(t.alloc(64UL, 32UL).is_null());       // beyond the 8 it guarantees
         t.destroy();
     }
 }
@@ -532,18 +548,18 @@ void t_file() {
         ASSERT_FALSE(wq.is_null());
         if (wq.is_null()) return;
         &File w = std::expect_ref(wq, "write handle");
-        file_puts("line1\n", w);
-        file_write(w, (const &unsigned char)"abc", 3UL);
-        file_close(w);
+        w.puts("line1\n");
+        w.write((const &unsigned char)"abc", 3UL);
+        w.close();
         &File f = std::expect_ref(file_open(path, "rb"), "read handle");
-        ASSERT_EQ(file_size(f), 9);
+        ASSERT_EQ(f.size(), 9);
         char buf[32];
-        file_gets(buf, 32, f);
+        f.gets(buf, 32);
         ASSERT_STR_EQ(buf, "line1\n");
-        ASSERT_EQ(file_getc(f), 'a');
-        file_seek(f, 0LL, 0);
-        ASSERT_EQ(file_tell(f), 0);
-        file_close(f);
+        ASSERT_EQ(f.getc(), 'a');
+        f.seek(0LL, 0);
+        ASSERT_EQ(f.tell(), 0);
+        f.close();
         ASSERT_EQ(io_remove(path), 0);
     }
 }
@@ -720,19 +736,19 @@ void t_simd_more() {
 void t_ipc() {
     unsafe {
         struct Pipe p;
-        ASSERT_EQ(pipe_create(&p), 0);
-        ASSERT_EQ(pipe_set_read_nonblocking(&p), 0);
+        ASSERT_EQ(p.init(), 0);
+        ASSERT_EQ(p.set_read_nonblocking(), 0);
         unsigned char buf[16];
         // Empty non-blocking pipe: returns at once instead of blocking.
-        ASSERT_EQ(pipe_read(&p, &buf[0], 16UL), -1);
+        ASSERT_EQ(p.read(&buf[0], 16UL), -1);
         ASSERT_TRUE(sock_would_block());
-        ASSERT_EQ(pipe_set_write_nonblocking(&p), 0);
-        ASSERT_EQ(pipe_write(&p, (const unsigned char*)"ping", 4UL), 4);
-        ASSERT_EQ(pipe_read(&p, &buf[0], 16UL), 4);
+        ASSERT_EQ(p.set_write_nonblocking(), 0);
+        ASSERT_EQ(p.write((const unsigned char*)"ping", 4UL), 4);
+        ASSERT_EQ(p.read(&buf[0], 16UL), 4);
         ASSERT_EQ(buf[3], 'g');
-        ASSERT_EQ(pipe_close_write(&p), 0);
-        ASSERT_EQ(pipe_read(&p, &buf[0], 16UL), 0);          // EOF
-        ASSERT_EQ(pipe_close_read(&p), 0);
+        ASSERT_EQ(p.close_write(), 0);
+        ASSERT_EQ(p.read(&buf[0], 16UL), 0);          // EOF
+        ASSERT_EQ(p.close_read(), 0);
 
         const &char path = "/tmp/safec_std_test_uds.sock";
         ASSERT_EQ(uds_unlink(path), 0);                      // missing is fine

@@ -2,7 +2,7 @@
 //
 //   ?&BTree<int> tq = std::alloc(sizeof(struct BTree<int>));  // ~pool-sized; keep it off the stack
 //   &BTree<int> t = std::expect_ref(tq, "oom");
-//   std::btree_init(t);
+//   t.init();
 //   t.insert(42UL, 7);
 //   int v = t.get(42UL).default(0);
 //
@@ -37,6 +37,10 @@ struct BTree {
     unsigned long       root;       // pool index + 1 (0 = empty tree)
     unsigned long       count;      // key-value pairs
 
+    // Initialise (or reset) an empty tree in place. Only the scalar fields
+    // are touched — pool nodes are claimed lazily, so a ~pool-sized memset
+    // (or a by-value constructor copying the whole pool) would be pure waste.
+    void          init();
     int           insert(unsigned long key, V val);  // 0 on success, -1 if the pool is full
     ?&V           get(unsigned long key) const;      // null if missing
     int           contains(unsigned long key) const;
@@ -58,15 +62,12 @@ struct BTree {
     void          foreach_(unsigned long node_idx, fn void(unsigned long, &V) cb);
 };
 
-// Initialise (or reset) an empty tree in place. Only the scalar fields are
-// touched — pool nodes are claimed lazily, so a ~pool-sized memset (or a
-// by-value constructor copying the whole pool) would be pure waste.
 generic<V>
-void btree_init(&BTree<V> t) {
-    t.pool_used = 0;
-    t.free_head = 0UL;
-    t.root      = 0UL;
-    t.count     = 0UL;
+void BTree::init() {
+    self.pool_used = 0;
+    self.free_head = 0UL;
+    self.root      = 0UL;
+    self.count     = 0UL;
 }
 
 generic<V>

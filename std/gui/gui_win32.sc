@@ -8,7 +8,7 @@
 // Event model translation: Win32 delivers input via window-procedure
 // callbacks (WndProc), not a poll-a-queue-yourself model like Cocoa/X11 —
 // so WndProc here just pushes a GuiEvent into a small fixed-size ring
-// buffer per window, and gui_poll_event() pops from that ring (pumping
+// buffer per window, and GuiWindow::poll_event() pops from that ring (pumping
 // PeekMessage/DispatchMessage first so WndProc actually gets called).
 #pragma once
 #include <std/stddef.h>
@@ -129,7 +129,7 @@ static int __gui_win32_keycode(unsigned long vk) {
 // WndProc: pulls the per-window GuiWin32Platform back out of GWLP_USERDATA
 // (set right after CreateWindowExW in gui_create_window), translates the
 // message into a GuiEvent, and queues it — actual application logic never
-// runs inside this callback, only gui_poll_event()'s caller sees events.
+// runs inside this callback, only GuiWindow::poll_event()'s caller sees events.
 void* __gui_win32_wndproc(void* hwnd, unsigned int msg, unsigned long wparam, long lparam) {
     unsafe {
         // GWLP_USERDATA round-trips a 'struct GuiWin32Platform*' through
@@ -309,52 +309,52 @@ struct GuiWindow gui_create_window(const &char title, int width, int height) {
     return win;
 }
 
-void gui_present(&GuiWindow win) {
+void GuiWindow::present() {
     int hasPlatform = 0;
-    unsafe { if (!win.platform.is_null()) { hasPlatform = 1; } }
+    unsafe { if (!self.platform.is_null()) { hasPlatform = 1; } }
     if (!hasPlatform) { return; }
     unsafe {
-        struct GuiWin32Platform* p = (struct GuiWin32Platform*)win.platform;
+        struct GuiWin32Platform* p = (struct GuiWin32Platform*)self.platform;
         void* dc = GetDC(p->hwnd);
         // BITMAPINFOHEADER, biHeight negative = top-down DIB (matches our
         // top-left-origin row-major buffer directly, no vertical flip).
         int bmi[10];
         bmi[0] = 40;                 // biSize
-        bmi[1] = win.width;         // biWidth
-        bmi[2] = -win.height;       // biHeight (top-down)
+        bmi[1] = self.width;         // biWidth
+        bmi[2] = -self.height;       // biHeight (top-down)
         bmi[3] = (32 << 16) | 1;     // biPlanes = 1 (low word), biBitCount = 32 (high word)
         bmi[4] = 0;                  // biCompression = BI_RGB
         bmi[5] = 0; bmi[6] = 0; bmi[7] = 0; bmi[8] = 0; bmi[9] = 0;
-        StretchDIBits(dc, 0, 0, win.width, win.height, 0, 0, win.width, win.height,
-                       (const void*)win.pixels, (const void*)bmi, 0U, 0x00CC0020U /* SRCCOPY */);
+        StretchDIBits(dc, 0, 0, self.width, self.height, 0, 0, self.width, self.height,
+                       (const void*)self.pixels, (const void*)bmi, 0U, 0x00CC0020U /* SRCCOPY */);
         ReleaseDC(p->hwnd, dc);
     }
 }
 
-void gui_set_pixel(&GuiWindow win, int x, int y, unsigned int rgba) {
+void GuiWindow::set_pixel(int x, int y, unsigned int rgba) {
     int oob = 0;
-    unsafe { if (x < 0 || y < 0 || x >= win.width || y >= win.height) { oob = 1; } }
+    unsafe { if (x < 0 || y < 0 || x >= self.width || y >= self.height) { oob = 1; } }
     if (oob) { return; }
     unsafe {
-        unsigned long idx = ((unsigned long)y * (unsigned long)win.width + (unsigned long)x) * 4UL;
+        unsigned long idx = ((unsigned long)y * (unsigned long)self.width + (unsigned long)x) * 4UL;
         // Win32's DIB is BGRA byte order for BI_RGB 32bpp, unlike Cocoa's
         // RGBA CGImage — swap R/B here so gui_draw.h's gui_rgba(r,g,b,a)
         // still means the same visual color on both backends.
-        win.pixels[idx + 0UL] = (unsigned char)((rgba >> 8)  & 0xFFU); // B
-        win.pixels[idx + 1UL] = (unsigned char)((rgba >> 16) & 0xFFU); // G
-        win.pixels[idx + 2UL] = (unsigned char)((rgba >> 24) & 0xFFU); // R
-        win.pixels[idx + 3UL] = (unsigned char)(rgba & 0xFFU);          // A
+        self.pixels[idx + 0UL] = (unsigned char)((rgba >> 8)  & 0xFFU); // B
+        self.pixels[idx + 1UL] = (unsigned char)((rgba >> 16) & 0xFFU); // G
+        self.pixels[idx + 2UL] = (unsigned char)((rgba >> 24) & 0xFFU); // R
+        self.pixels[idx + 3UL] = (unsigned char)(rgba & 0xFFU);          // A
     }
 }
 
-int gui_poll_event(&GuiWindow win, &GuiEvent outEvent) {
+int GuiWindow::poll_event(&GuiEvent outEvent) {
     unsafe { outEvent.kind = GUI_EVENT_NONE; outEvent.defaultPrevented = 0; }
     int hasPlatform = 0;
-    unsafe { if (!win.platform.is_null()) { hasPlatform = 1; } }
+    unsafe { if (!self.platform.is_null()) { hasPlatform = 1; } }
     if (!hasPlatform) { return 0; }
 
     unsafe {
-        struct GuiWin32Platform* p = (struct GuiWin32Platform*)win.platform;
+        struct GuiWin32Platform* p = (struct GuiWin32Platform*)self.platform;
 
         // Pump the Win32 message loop (non-blocking) so WndProc runs and
         // fills the queue.
@@ -366,7 +366,7 @@ int gui_poll_event(&GuiWindow win, &GuiEvent outEvent) {
 
         if (p->closeRequested) {
             p->closeRequested = 0;
-            win.shouldClose = 1;
+            self.shouldClose = 1;
             outEvent.kind = GUI_EVENT_CLOSE;
             return 1;
         }
@@ -377,30 +377,30 @@ int gui_poll_event(&GuiWindow win, &GuiEvent outEvent) {
         if (outEvent.kind == GUI_EVENT_RESIZE) {
             int w = outEvent.width;
             int h = outEvent.height;
-            if (w <= 0 || h <= 0 || (w == win.width && h == win.height)) { return 0; }   // minimized / unchanged
+            if (w <= 0 || h <= 0 || (w == self.width && h == self.height)) { return 0; }   // minimized / unchanged
             // New size: a new zeroed pixel buffer to match.
             unsigned long npix = (unsigned long)w * (unsigned long)h * 4UL;
             void* px = alloc_raw_(npix);
             if (px == (void*)0) { return 0; }
             memset(px, 0, npix);
-            dealloc_raw_((void*)win.pixels);
-            win.pixels = (&heap unsigned char)px;
-            win.width = w;
-            win.height = h;
+            dealloc_raw_((void*)self.pixels);
+            self.pixels = (&heap unsigned char)px;
+            self.width = w;
+            self.height = h;
         }
         return 1;
     }
 }
 
-void gui_destroy_window(&GuiWindow win) {
+void GuiWindow::destroy() {
     unsafe {
-        if (!win.platform.is_null()) {
-            struct GuiWin32Platform* p = (struct GuiWin32Platform*)win.platform;
+        if (!self.platform.is_null()) {
+            struct GuiWin32Platform* p = (struct GuiWin32Platform*)self.platform;
             if (p->hwnd != (void*)0) { DestroyWindow(p->hwnd); }
             dealloc_raw_((void*)p);
         }
-        if ((void*)win.pixels != (void*)0) { dealloc_raw_((void*)win.pixels); }
-        win.platform = null;
+        if ((void*)self.pixels != (void*)0) { dealloc_raw_((void*)self.pixels); }
+        self.platform = null;
     }
 }
 

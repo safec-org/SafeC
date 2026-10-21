@@ -48,14 +48,14 @@ struct String jwt_sign(const &Value claims, const &char secret) {
     struct Value header;
     unsafe {
         header = value_object();
-        value_object_set(&header, "alg", value_string("HS256"));
-        value_object_set(&header, "typ", value_string("JWT"));
+        header.object_set("alg", value_string("HS256"));
+        header.object_set("typ", value_string("JWT"));
     }
     struct String headerJson; struct String payloadJson;
     unsafe {
         headerJson = value_to_json(&header);
         payloadJson = value_to_json(claims);
-        value_free(&header);
+        header.free();
     }
 
     struct String headerB64;
@@ -147,7 +147,7 @@ struct Value jwt_verify(const &char token_ref, const &char secret, ?&int ok) { c
                 unsafe { headerValid = str_eq(algStr, "HS256"); }
             }
         }
-        unsafe { value_free(&header); }
+        unsafe { header.free(); }
     }
     unsafe { headerBytes.free(); }
 

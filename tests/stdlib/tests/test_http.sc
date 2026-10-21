@@ -126,23 +126,23 @@ static ?&int run_ws(?&int arg) {
         int lfd = ws_listen(g_ws_port);
         if (lfd < 0) return null;
         struct WsConn c;
-        if (ws_accept(lfd, &c) != 1) return null;   // 1 = handshake completed
+        if (c.accept(lfd) != 1) return null;   // 1 = handshake completed
         struct WsMessage m;
-        while (ws_recv(&c, &m) == 1) {
+        while (c.recv(&m) == 1) {
             if (m.opcode == WS_OPCODE_TEXT) {
                 struct String echo = string_from("echo:");
                 echo.push_n((const char*)m.data, m.len);
-                ws_send_text(&c, echo.as_ptr());
+                c.send_text(echo.as_ptr());
                 echo.free();
             } else if (m.opcode == WS_OPCODE_PING) {
-                ws_send_pong(&c);
+                c.send_pong();
             } else if (m.opcode == WS_OPCODE_CLOSE) {
                 m.free();
                 break;
             }
             m.free();
         }
-        ws_close(&c);
+        c.close();
     }
     return null;
 }
@@ -240,8 +240,8 @@ void t_cors() {
 void t_jwt() {
     unsafe {
         struct Value claims = value_object();
-        value_object_set(&claims, "sub", value_string("1234567890"));
-        value_object_set(&claims, "admin", value_bool(1));
+        claims.object_set("sub", value_string("1234567890"));
+        claims.object_set("admin", value_bool(1));
         struct String tok = jwt_sign(&claims, "secret");
         ASSERT_EQ(tok.count("."), 2);
         ASSERT_TRUE(tok.starts_with("eyJ"));   // base64url of '{"'
@@ -251,17 +251,17 @@ void t_jwt() {
         ?&Value sub = back.object_get("sub");
         ASSERT_FALSE(sub.is_null());
         ASSERT_STR_EQ(sub->as_string(), "1234567890");
-        value_free(&back);
+        back.free();
         struct Value bad = jwt_verify(tok.as_ptr(), "wrong", &ok);
         ASSERT_FALSE(ok);
-        value_free(&bad);
+        bad.free();
         // Tamper with the payload: signature must no longer verify.
         tok.set_char((unsigned long)tok.index_of(".") + 2UL, 'A');
         struct Value bad2 = jwt_verify(tok.as_ptr(), "secret", &ok);
         ASSERT_FALSE(ok);
-        value_free(&bad2);
+        bad2.free();
         tok.free();
-        value_free(&claims);
+        claims.free();
     }
 }
 
@@ -277,7 +277,7 @@ void t_oauth2() {
         ASSERT_STR_EQ(t.accessToken.as_ptr(), "abc123");
         ASSERT_STR_EQ(t.refreshToken.as_ptr(), "r1");
         ASSERT_EQ(t.expiresIn, 3600);
-        oauth2_token_free(&t);
+        t.free();
     }
 }
 
@@ -308,22 +308,22 @@ void t_rpc() {
         miss.free();
 
         struct Value args = value_object();
-        value_object_set(&args, "a", value_int(40LL));
-        value_object_set(&args, "b", value_int(2LL));
+        args.object_set("a", value_int(40LL));
+        args.object_set("b", value_int(2LL));
         int ok = 0;
         struct Value res;
         tries = 0;
         while (1) {
             res = server_fn_call("127.0.0.1", g_fn_port, "add", &args, &ok);
             if (ok || tries >= 50) break;
-            value_free(&res);
+            res.free();
             thread_sleep_ms(20UL);
             tries = tries + 1;
         }
         ASSERT_TRUE(ok);
         ASSERT_EQ(res.as_int(), 42);
-        value_free(&res);
-        value_free(&args);
+        res.free();
+        args.free();
     }
 }
 
@@ -341,9 +341,9 @@ void t_websocket() {
         }
         ASSERT_TRUE(ok);
         if (!ok) return;
-        ASSERT_EQ(ws_send_text(&c, "hi there"), 1);
+        ASSERT_EQ(c.send_text("hi there"), 1);
         struct WsMessage m;
-        ASSERT_EQ(ws_recv(&c, &m), 1);
+        ASSERT_EQ(c.recv(&m), 1);
         ASSERT_EQ(m.opcode, WS_OPCODE_TEXT);
         ASSERT_EQ(m.len, 13);
         match (m.data) {
@@ -356,17 +356,17 @@ void t_websocket() {
         m.free();
         // A payload over 125 bytes exercises the 16-bit extended length.
         struct String big = string_repeat("x", 300UL);
-        ASSERT_EQ(ws_send_text(&c, big.as_ptr()), 1);
-        ASSERT_EQ(ws_recv(&c, &m), 1);
+        ASSERT_EQ(c.send_text(big.as_ptr()), 1);
+        ASSERT_EQ(c.recv(&m), 1);
         ASSERT_EQ(m.len, 305);
         m.free();
         big.free();
-        ASSERT_EQ(ws_send_ping(&c), 1);
-        ASSERT_EQ(ws_recv(&c, &m), 1);
+        ASSERT_EQ(c.send_ping(), 1);
+        ASSERT_EQ(c.recv(&m), 1);
         ASSERT_EQ(m.opcode, WS_OPCODE_PONG);
         m.free();
-        ws_send_close(&c);
-        ws_close(&c);
+        c.send_close();
+        c.close();
     }
 }
 

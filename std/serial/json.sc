@@ -326,7 +326,7 @@ static struct Value json_parse_array_(&JsonCursor_ c) {
         if (stillOk == 0) { break; }
         json_skip_ws_(c);
         struct Value elem = json_parse_value_(c);
-        value_array_push(&arr, elem);
+        arr.array_push(elem);
         json_skip_ws_(c);
         char ch = json_peek_(c);
         if (ch == ',') { unsafe { c->pos = c->pos + 1UL; continue; } }
@@ -353,8 +353,8 @@ static struct Value json_parse_object_(&JsonCursor_ c) {
         json_eat_(c, ':');
         json_skip_ws_(c);
         struct Value val = json_parse_value_(c);
-        unsafe { value_object_set(&obj, keyVal.as_string(), val); }
-        value_free(&keyVal);
+        unsafe { obj.object_set(keyVal.as_string(), val); }
+        keyVal.free();
         json_skip_ws_(c);
         char ch = json_peek_(c);
         if (ch == ',') { unsafe { c->pos = c->pos + 1UL; continue; } }
@@ -399,7 +399,7 @@ struct Value json_parse(const &char text, ?&int ok) {
     struct Value v = json_parse_value_(&c);
     if (ok != (int*)0) { unsafe { *ok = c.ok; } }
     if (c.ok == 0) {
-        value_free(&v);
+        v.free();
         return value_null();
     }
     return v;

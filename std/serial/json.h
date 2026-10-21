@@ -7,8 +7,8 @@
 //   struct Point { double x; double y; };
 //   struct Value Point::to_value() const {
 //       struct Value v = value_object();
-//       value_object_set(&v, "x", value_float(self.x));
-//       value_object_set(&v, "y", value_float(self.y));
+//       v.object_set("x", value_float(self.x));
+//       v.object_set("y", value_float(self.y));
 //       return v;
 //   }
 //   ...

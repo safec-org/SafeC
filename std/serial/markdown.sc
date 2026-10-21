@@ -550,9 +550,9 @@ static void __md_render_block_html(const &heap MdNode n, struct String* out) {
     }
 }
 
-struct String md_render_html(const &heap MdNode doc) {
+struct String MdNode::render_html() const {
     struct String out = string_new();
-    __md_render_block_html(doc, &out);
+    unsafe { __md_render_block_html((const MdNode*)self, &out); }
     return out;
 }
 
@@ -671,28 +671,27 @@ static void __md_render_block_md(const &heap MdNode n, struct String* out) {
     }
 }
 
-struct String md_render_markdown(const &heap MdNode doc) {
+struct String MdNode::render_markdown() const {
     struct String out = string_new();
-    __md_render_block_md(doc, &out);
+    unsafe { __md_render_block_md((const MdNode*)self, &out); }
     return out;
 }
 
 // ── lifecycle ─────────────────────────────────────────────────────────────────
 
-void md_free(&heap MdNode node) {
-    unsigned long cn; unsafe { cn = node->children.length(); }
+// Every MdNode lives in its own heap allocation (md_parse builds the tree
+// that way), so free() releases the node itself after its subtree.
+void MdNode::free() {
+    unsigned long cn = self.children.length();
     unsigned long ci = 0UL;
     while (ci < cn) {
-        &heap MdNode slotp; unsafe { slotp = *node->children.at(ci); }
-        &heap MdNode childNode; unsafe { childNode = slotp; }
-        md_free(childNode);
+        &heap MdNode childNode; unsafe { childNode = *self.children.at(ci); }
+        childNode.free();
         ci = ci + 1UL;
     }
-    unsafe {
-        node->children.free();
-        node->text.free();
-        dealloc_raw_((void*)node);
-    }
+    self.children.free();
+    self.text.free();
+    unsafe { dealloc_raw_((void*)self); }
 }
 
 } // namespace std

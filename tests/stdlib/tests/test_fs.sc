@@ -49,18 +49,18 @@ static struct MemDisk memdisk_load(const &char path) {
     ?&File fq = file_open(path, "rb");
     if (fq.is_null()) return d;
     &File f = std::expect_ref(fq, "memdisk file");
-    long long sz = file_size(f);
+    long long sz = f.size();
     ?&heap unsigned char buf = alloc((unsigned long)sz);
     match (buf) {
         case some(b): {
-            if (file_read(f, b, (unsigned long)sz) == (unsigned long)sz) {
+            if (f.read(b, (unsigned long)sz) == (unsigned long)sz) {
                 d.data = buf;
                 d.size = (unsigned long)sz;
             }
         }
         case null: { }
     }
-    file_close(f);
+    f.close();
     return d;
 }
 
@@ -88,7 +88,7 @@ void t_tmpfs_vfs() {
         ASSERT_FALSE(cq.is_null());
         if (cq.is_null()) return;
         &TmpfsCtx ctx = std::expect_ref(cq, "cq is null");
-        tmpfs_init(ctx);
+        ctx.init();
         vfs_init();
         ASSERT_EQ(vfs_mount(&vfs_root, "/tmp", tmpfs_ops(), ctx), 0);
         ASSERT_EQ(vfs_root.mkdir("/tmp/dir"), 0);
@@ -140,14 +140,14 @@ void t_partition() {
         struct BlockDevice dev = memdisk_device(&d);
         ASSERT_TRUE(dev.valid());
         struct PartTable pt;
-        ASSERT_EQ(partition_read(&dev, &pt), 0);
+        ASSERT_EQ(pt.read(&dev), 0);
         ASSERT_EQ(pt.count, 2);
         ASSERT_EQ(pt.entries[0].lba_start, 2048);
         ASSERT_EQ(pt.entries[0].sector_count, 100000);
         ASSERT_EQ(pt.entries[0].type, PART_TYPE_FAT32X);
         ASSERT_EQ(pt.entries[1].lba_start, 200000);
         m[511] = (unsigned char)0;
-        ASSERT_NE(partition_read(&dev, &pt), 0);   // bad signature
+        ASSERT_NE(pt.read(&dev), 0);   // bad signature
         dealloc(img);
     }
 }
@@ -185,7 +185,7 @@ void t_fat32() {
         if (d.data.is_null()) return;
         struct BlockDevice dev = memdisk_device(&d);
         struct FatCtx fc;
-        ASSERT_EQ(fat_init(&fc, &dev, 0UL), 0);
+        ASSERT_EQ(fc.init(&dev, 0UL), 0);
         ASSERT_EQ(fc.bytes_per_cluster, 512);
         vfs_init();
         ASSERT_EQ(vfs_mount(&vfs_root, "/fat", fat_ops(), (&FatCtx)&fc), 0);
@@ -221,7 +221,7 @@ void t_ext2() {
         ?&heap Ext2Ctx eq = alloc(sizeof(struct Ext2Ctx));
         if (eq.is_null()) return;
         &Ext2Ctx ec = std::expect_ref(eq, "eq is null");
-        ASSERT_EQ(ext2_init(ec, &dev), 0);
+        ASSERT_EQ(ec.init(&dev), 0);
         ASSERT_EQ(ec.block_size, 1024);
         vfs_init();
         ASSERT_EQ(vfs_mount(&vfs_root, "/ext", ext2_ops(), ec), 0);

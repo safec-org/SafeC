@@ -8,7 +8,7 @@
 
 namespace std {
 
-#define GUI_FB_QUEUE_CAP 32   // injected events waiting for gui_poll_event()
+#define GUI_FB_QUEUE_CAP 32   // injected events waiting for GuiWindow::poll_event()
 
 struct GuiFbConfig {
     &volatile unsigned char base;  // linear framebuffer memory (physical/virtual base address)
@@ -25,7 +25,7 @@ struct GuiFbConfig {
 void gui_fb_configure(struct GuiFbConfig cfg);
 
 // Called by a target's own input driver/ISR with whatever it decodes (e.g.
-// a PS/2 scancode translated to a GuiEvent); gui_poll_event() hands it back
+// a PS/2 scancode translated to a GuiEvent); GuiWindow::poll_event() hands it back
 // out. Dropped when GUI_FB_QUEUE_CAP events are already waiting.
 void gui_fb_inject_event(&GuiWindow win, struct GuiEvent ev);
 

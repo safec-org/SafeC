@@ -23,36 +23,37 @@ namespace std {
 struct Pipe {
     long long read_fd;
     long long write_fd;
+
+    // Creates a new pipe in place (fills read_fd/write_fd). Returns 0 on
+    // success, -1 on failure.
+    int init();
+
+    // Reads up to 'count' bytes from the pipe's read end into 'buf'.
+    // Returns the number of bytes read (0 means the write end was closed
+    // and the pipe is drained — EOF), or -1 on error.
+    long long read(&unsigned char buf, unsigned long count);
+
+    // Writes up to 'count' bytes from 'buf' to the pipe's write end.
+    // Returns the number of bytes written, or -1 on error.
+    long long write(const &unsigned char buf, unsigned long count);
+
+    // Puts the read end into non-blocking mode (pairs with std::Reactor —
+    // await_fd(p.read_fd, SCHED_READ) once this returns 0). Returns 0 on
+    // success, -1 on failure.
+    int set_read_nonblocking();
+
+    // Puts the write end into non-blocking mode. Returns 0 on success, -1
+    // on failure.
+    int set_write_nonblocking();
+
+    // Closes the read end. Safe to call once; closing twice is undefined
+    // the same way double-close(2) is on any platform.
+    int close_read();
+
+    // Closes the write end. A reader blocked in read() (or awaiting
+    // SCHED_READ on read_fd) sees EOF (read() returns 0) once this runs
+    // and the pipe is drained.
+    int close_write();
 };
-
-// Creates a new pipe. Returns 0 on success, -1 on failure.
-int pipe_create(&Pipe out);
-
-// Reads up to 'count' bytes from the pipe's read end into 'buf'. Returns
-// the number of bytes read (0 means the write end was closed and the
-// pipe is drained — EOF), or -1 on error.
-long long pipe_read(&Pipe p, &unsigned char buf, unsigned long count);
-
-// Writes up to 'count' bytes from 'buf' to the pipe's write end. Returns
-// the number of bytes written, or -1 on error.
-long long pipe_write(&Pipe p, const &unsigned char buf, unsigned long count);
-
-// Puts the read end into non-blocking mode (pairs with std::Reactor —
-// await_fd(p->read_fd, SCHED_READ) once this returns 0). Returns 0 on
-// success, -1 on failure.
-int pipe_set_read_nonblocking(&Pipe p);
-
-// Puts the write end into non-blocking mode. Returns 0 on success, -1 on
-// failure.
-int pipe_set_write_nonblocking(&Pipe p);
-
-// Closes the read end. Safe to call once; closing twice is undefined the
-// same way double-close(2) is on any platform.
-int pipe_close_read(&Pipe p);
-
-// Closes the write end. A reader blocked in pipe_read (or awaiting
-// SCHED_READ on read_fd) sees EOF (pipe_read returns 0) once this runs
-// and the pipe is drained.
-int pipe_close_write(&Pipe p);
 
 } // namespace std

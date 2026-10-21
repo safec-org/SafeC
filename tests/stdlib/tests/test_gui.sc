@@ -1,7 +1,7 @@
 // std::gui, headless: drawing primitives, PNG decode, SVG, bitmap fonts and
 // the widget pipeline (layout/render/dispatch), all into a RAM-backed
 // GuiWindow. No windowing backend is linked: this file supplies
-// gui_set_pixel itself (straight RGBA, like the framebuffer backend).
+// GuiWindow::set_pixel itself (straight RGBA, like the framebuffer backend).
 #include <std/test/test.h>
 #include <std/mem.h>
 #include <std/panic.h>
@@ -14,14 +14,14 @@
 #include <std/gui/gui_widget.h>
 
 namespace std {
-void gui_set_pixel(&GuiWindow win, int x, int y, unsigned int rgba) {
-    if (x < 0 || y < 0 || x >= win.width || y >= win.height) { return; }
+void GuiWindow::set_pixel(int x, int y, unsigned int rgba) {
+    if (x < 0 || y < 0 || x >= self.width || y >= self.height) { return; }
     unsafe {
-        unsigned long i = ((unsigned long)y * (unsigned long)win.width + (unsigned long)x) * 4UL;
-        win.pixels[i + 0UL] = (unsigned char)((rgba >> 24) & 0xFFU);
-        win.pixels[i + 1UL] = (unsigned char)((rgba >> 16) & 0xFFU);
-        win.pixels[i + 2UL] = (unsigned char)((rgba >> 8) & 0xFFU);
-        win.pixels[i + 3UL] = (unsigned char)(rgba & 0xFFU);
+        unsigned long i = ((unsigned long)y * (unsigned long)self.width + (unsigned long)x) * 4UL;
+        self.pixels[i + 0UL] = (unsigned char)((rgba >> 24) & 0xFFU);
+        self.pixels[i + 1UL] = (unsigned char)((rgba >> 16) & 0xFFU);
+        self.pixels[i + 2UL] = (unsigned char)((rgba >> 8) & 0xFFU);
+        self.pixels[i + 3UL] = (unsigned char)(rgba & 0xFFU);
     }
 }
 }
@@ -253,22 +253,22 @@ void t_draw() {
     struct GuiWindow win = make_win(32, 24);
     struct GuiColor red = gui_rgb((unsigned char)255, (unsigned char)0, (unsigned char)0);
     ASSERT_EQ(red.a, 255);
-    gui_fill_rect(&win, 2, 3, 4, 5, red);
+    win.fill_rect(2, 3, 4, 5, red);
     ASSERT_EQ(count_red(&win), 20);
     ASSERT_EQ(px(&win, 2, 3, 0), 255);
     ASSERT_EQ(px(&win, 6, 3, 0), 0);
-    gui_fill_rect(&win, 30, 22, 10, 10, red);        // clipped at the edge
+    win.fill_rect(30, 22, 10, 10, red);              // clipped at the edge
     ASSERT_EQ(count_red(&win), 24);
     struct GuiColor blue = gui_rgba((unsigned char)0, (unsigned char)0, (unsigned char)255, (unsigned char)128);
-    gui_draw_line(&win, 0, 0, 9, 9, blue);
+    win.draw_line(0, 0, 9, 9, blue);
     ASSERT_EQ(px(&win, 5, 5, 2), 255);
     ASSERT_EQ(px(&win, 5, 5, 3), 128);
-    gui_draw_rect_border(&win, 10, 10, 6, 6, blue, 1);
+    win.draw_rect_border(10, 10, 6, 6, blue, 1);
     ASSERT_EQ(px(&win, 10, 12, 2), 255);
     ASSERT_EQ(px(&win, 12, 12, 2), 0);              // inside stays empty
     ASSERT_EQ(gui_text_width("abc", 2), 48);
     ASSERT_EQ(gui_text_height(3), 24);
-    gui_draw_text(&win, 0, 14, "H", red, 1);
+    win.draw_text(0, 14, "H", red, 1);
     int lit = 0;
     int y = 14;
     while (y < 22) { int x = 0; while (x < 8) { if (px(&win, x, y, 0) == 255) lit = lit + 1; x = x + 1; } y = y + 1; }
@@ -279,7 +279,7 @@ void t_draw() {
 void t_png() {
     unsafe {
         struct GuiImage img;
-        ASSERT_TRUE(gui_load_png(&kPngRgba[0], 131UL, &img));   // filters None/Sub/Up/Average/Paeth
+        ASSERT_TRUE(img.load_png(&kPngRgba[0], 131UL));   // filters None/Sub/Up/Average/Paeth
         ASSERT_EQ(img.width, 4);
         ASSERT_EQ(img.height, 5);
         unsigned long o = (3UL * 4UL + 2UL) * 4UL;              // pixel (2, 3)
@@ -288,72 +288,72 @@ void t_png() {
         ASSERT_EQ(img.pixels[o + 2UL], 66);
         ASSERT_EQ(img.pixels[o + 3UL], 235);
         struct GuiWindow win = make_win(8, 8);
-        gui_draw_image(&win, 1, 1, &img);
+        img.draw(&win, 1, 1);
         ASSERT_EQ(px(&win, 3, 4, 1), 156);
-        gui_image_free(&img);
+        img.free();
         free_win(&win);
 
-        ASSERT_TRUE(gui_load_png(&kPngRgb[0], 81UL, &img));
+        ASSERT_TRUE(img.load_png(&kPngRgb[0], 81UL));
         ASSERT_EQ(img.pixels[(1UL * 3UL + 1UL) * 4UL + 1UL], 50);   // (1, 1) = 40,50,60
         ASSERT_EQ(img.pixels[(1UL * 3UL + 1UL) * 4UL + 3UL], 255);  // opaque
-        gui_image_free(&img);
-        ASSERT_TRUE(gui_load_png(&kPngGray[0], 71UL, &img));
+        img.free();
+        ASSERT_TRUE(img.load_png(&kPngGray[0], 71UL));
         ASSERT_EQ(img.pixels[(1UL * 2UL + 0UL) * 4UL + 2UL], 200);
-        gui_image_free(&img);
-        ASSERT_TRUE(gui_load_png(&kPngBig[0], 2399UL, &img));       // dynamic-Huffman block
+        img.free();
+        ASSERT_TRUE(img.load_png(&kPngBig[0], 2399UL));       // dynamic-Huffman block
         unsigned long b = (9UL * 32UL + 5UL) * 4UL;
         ASSERT_EQ(img.pixels[b], 40);
         ASSERT_EQ(img.pixels[b + 1UL], 72);
         ASSERT_EQ(img.pixels[b + 2UL], 60);
-        gui_image_free(&img);
-        ASSERT_TRUE(gui_load_png(&kPngStored[0], 70UL, &img));      // stored block
+        img.free();
+        ASSERT_TRUE(img.load_png(&kPngStored[0], 70UL));      // stored block
         ASSERT_EQ(img.pixels[4UL], 4);
-        gui_image_free(&img);
-        ASSERT_FALSE(gui_load_png(&kPngPal[0], 67UL, &img));        // palette: unsupported
-        ASSERT_FALSE(gui_load_png(&kPngRgb[0], 30UL, &img));        // truncated
+        img.free();
+        ASSERT_FALSE(img.load_png(&kPngPal[0], 67UL));        // palette: unsupported
+        ASSERT_FALSE(img.load_png(&kPngRgb[0], 30UL));        // truncated
     }
 }
 
 void t_svg() {
     struct GuiWindow win = make_win(20, 20);
-    ASSERT_TRUE(gui_draw_svg(&win, 2, 2, "<svg width=\"10\" height=\"10\"><rect x=\"1\" y=\"1\" width=\"3\" height=\"2\" fill=\"#ff0000\"/></svg>"));
+    ASSERT_TRUE(win.draw_svg(2, 2, "<svg width=\"10\" height=\"10\"><rect x=\"1\" y=\"1\" width=\"3\" height=\"2\" fill=\"#ff0000\"/></svg>"));
     ASSERT_EQ(count_red(&win), 6);
     ASSERT_EQ(px(&win, 3, 3, 0), 255);
-    ASSERT_TRUE(gui_draw_svg(&win, 0, 0, "<svg><g><circle cx=\"14\" cy=\"14\" r=\"3\" fill=\"blue\"/><polygon points=\"0,15 5,15 0,19\" fill=\"red\"/></g></svg>"));
+    ASSERT_TRUE(win.draw_svg(0, 0, "<svg><g><circle cx=\"14\" cy=\"14\" r=\"3\" fill=\"blue\"/><polygon points=\"0,15 5,15 0,19\" fill=\"red\"/></g></svg>"));
     ASSERT_EQ(px(&win, 14, 14, 2), 255);
     ASSERT_TRUE(count_red(&win) > 6);
-    ASSERT_FALSE(gui_draw_svg(&win, 0, 0, "<html>no svg here</html>"));
+    ASSERT_FALSE(win.draw_svg(0, 0, "<html>no svg here</html>"));
     free_win(&win);
 }
 
 void t_font() {
     struct GuiFont f = gui_font_new(5, 7, 65, 3);
-    ASSERT_EQ(gui_font_get_bit(&f, 65, 2, 3), 0);
-    gui_font_set_bit(&f, 65, 2, 3, 1);
-    gui_font_set_bit(&f, 67, 4, 6, 1);
-    gui_font_set_bit(&f, 90, 0, 0, 1);                 // out of range: ignored
-    ASSERT_EQ(gui_font_get_bit(&f, 65, 2, 3), 1);
-    ASSERT_EQ(gui_font_get_bit(&f, 66, 2, 3), 0);
-    ASSERT_EQ(gui_text_width_ex("AB", 2, &f), 20);
-    ASSERT_EQ(gui_text_height_ex(2, &f), 14);
+    ASSERT_EQ(f.get_bit(65, 2, 3), 0);
+    f.set_bit(65, 2, 3, 1);
+    f.set_bit(67, 4, 6, 1);
+    f.set_bit(90, 0, 0, 1);                            // out of range: ignored
+    ASSERT_EQ(f.get_bit(65, 2, 3), 1);
+    ASSERT_EQ(f.get_bit(66, 2, 3), 0);
+    ASSERT_EQ(f.text_width("AB", 2), 20);
+    ASSERT_EQ(f.text_height(2), 14);
     const &char path = "/tmp/safec_std_test_font.scxf";
-    ASSERT_TRUE(gui_font_save(&f, path));
+    ASSERT_TRUE(f.save(path));
     struct GuiFont g;
-    ASSERT_TRUE(gui_font_load(&g, path));
+    ASSERT_TRUE(g.load(path));
     ASSERT_EQ(g.glyphW, 5);
     ASSERT_EQ(g.first, 65);
-    ASSERT_EQ(gui_font_get_bit(&g, 67, 4, 6), 1);
-    ASSERT_EQ(gui_font_get_bit(&g, 67, 3, 6), 0);
+    ASSERT_EQ(g.get_bit(67, 4, 6), 1);
+    ASSERT_EQ(g.get_bit(67, 3, 6), 0);
     struct GuiWindow win = make_win(16, 8);
-    gui_draw_text_ex(&win, 0, 0, "A", gui_rgb((unsigned char)255, (unsigned char)0, (unsigned char)0), 1, &g);
+    g.draw_text(&win, 0, 0, "A", gui_rgb((unsigned char)255, (unsigned char)0, (unsigned char)0), 1);
     ASSERT_EQ(count_red(&win), 1);
     ASSERT_EQ(px(&win, 2, 3, 0), 255);
     struct GuiFont d = gui_font_default();
     ASSERT_EQ(d.glyphW, 8);
-    ASSERT_EQ(gui_font_get_bit(&d, (int)'!', 3, 2), 1);
-    gui_font_free(&f);
-    gui_font_free(&g);
-    gui_font_free(&d);
+    ASSERT_EQ(d.get_bit((int)'!', 3, 2), 1);
+    f.free();
+    g.free();
+    d.free();
     free_win(&win);
 }
 
@@ -377,18 +377,17 @@ static struct GuiEvent mouse(int kind, double x, double y) {
 
 void t_widgets() {
     &Widget root = widget_vstack();
-    widget_set_padding(root, 4);
-    widget_set_spacing(root, 2);
-    &Widget btn = widget_set_pref_size(widget_button("Go"), 40, 20);
+    root.set_padding(4).set_spacing(2);
+    &Widget btn = widget_button("Go").set_pref_size(40, 20);
     widget_on_click(btn, on_click, (?&int)&gClicks);
     &Widget box = widget_checkbox("opt", 0);
     widget_on_change(box, on_change, (?&int)&gChanges);
     &Widget lbl = widget_label("hello");
-    widget_add_child(root, btn);
-    widget_add_child(root, box);
-    widget_add_child(root, widget_spacer());
-    widget_add_child(root, lbl);
-    gui_layout(root, 0, 0, 100, 100);
+    root.add_child(btn);
+    root.add_child(box);
+    root.add_child(widget_spacer());
+    root.add_child(lbl);
+    root.layout(0, 0, 100, 100);
     ASSERT_EQ(btn.x, 4);
     ASSERT_EQ(btn.y, 4);
     ASSERT_EQ(btn.h, 20);
@@ -397,27 +396,36 @@ void t_widgets() {
 
     struct GuiEvent down = mouse(GUI_EVENT_MOUSE_DOWN, 10.0, 10.0);
     struct GuiEvent up = mouse(GUI_EVENT_MOUSE_UP, 10.0, 10.0);
-    gui_dispatch_event(root, &down);
-    gui_dispatch_event(root, &up);
+    root.dispatch_event(&down);
+    root.dispatch_event(&up);
     ASSERT_EQ(gClicks, 1);
     struct GuiEvent cdown = mouse(GUI_EVENT_MOUSE_DOWN, (double)(box.x + 2), (double)(box.y + 2));
     struct GuiEvent cup = mouse(GUI_EVENT_MOUSE_UP, (double)(box.x + 2), (double)(box.y + 2));
-    gui_dispatch_event(root, &cdown);
-    gui_dispatch_event(root, &cup);
+    root.dispatch_event(&cdown);
+    root.dispatch_event(&cup);
     ASSERT_EQ(box.checked, 1);
     ASSERT_EQ(gChanges, 1);
-    widget_set_enabled(btn, 0);                         // disabled: no click
-    gui_dispatch_event(root, &down);
-    gui_dispatch_event(root, &up);
+    btn.set_enabled(0);                                 // disabled: no click
+    root.dispatch_event(&down);
+    root.dispatch_event(&up);
     ASSERT_EQ(gClicks, 1);
 
+    struct GuiEvent tab = mouse(GUI_EVENT_KEY_DOWN, 0.0, 0.0);
+    tab.keycode = GUI_KEY_TAB;
+    tab.prevent_default();                              // suppresses Tab's focus move
+    root.dispatch_event(&tab);
+    ASSERT_EQ(btn.focused, 0);
+    tab.defaultPrevented = 0;
+    root.dispatch_event(&tab);                          // default action: focus the first focusable
+    ASSERT_EQ(btn.focused, 1);
+
     struct GuiWindow win = make_win(100, 100);
-    widget_set_bg(root, (unsigned char)255, (unsigned char)0, (unsigned char)0, (unsigned char)255);
-    gui_render(&win, root);
+    root.set_bg((unsigned char)255, (unsigned char)0, (unsigned char)0, (unsigned char)255);
+    root.render(&win);
     ASSERT_EQ(px(&win, 1, 99, 0), 255);                 // container background drawn
-    widget_set_text(lbl, "bye");
+    lbl.set_text("bye");
     ASSERT_TRUE(lbl.text.eq_cstr("bye"));
-    widget_free(root);
+    root.free();
     free_win(&win);
 }
 

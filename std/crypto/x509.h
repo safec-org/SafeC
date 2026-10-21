@@ -52,18 +52,18 @@ struct X509Cert {
 
     // Is this a CA certificate?
     int  is_ca_cert() const;
+
+    // Parse a DER-encoded certificate from `der` (len bytes) into this
+    // struct in place (zeroed first).  Returns 0 on success, negative on
+    // error.
+    int  init(const &unsigned char der, unsigned long len);
+
+    // Verify that this certificate was signed by `issuer_cert` (structural
+    // chain check only).  Returns 1 if the issuer name matches, 0 otherwise.
+    // NOTE: Full crypto verification requires std/crypto/rsa.h (not yet
+    //       implemented); this checks only the structural chain (issuer
+    //       name match).
+    int  verify_chain(const &X509Cert issuer_cert) const;
 };
-
-// Parse a DER-encoded certificate from `der` (len bytes).
-// Fills `cert_out` on success.  Returns 0 on success, negative on error.
-int x509_parse_der(const &unsigned char der, unsigned long len,
-                   &X509Cert cert_out);
-
-// Verify that `cert` was signed by `issuer_cert` (structural chain check only).
-// Returns 1 if issuer name matches, 0 otherwise.
-// NOTE: Full crypto verification requires std/crypto/rsa.h (not yet implemented);
-//       this function checks only the structural chain (issuer name match).
-int x509_verify_chain(const &X509Cert cert,
-                       const &X509Cert issuer_cert);
 
 } // namespace std

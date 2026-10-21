@@ -180,7 +180,7 @@ static struct Value csv_parse_row_(struct CsvCursor_* c) {
     struct Value row = value_array();
     while (1) {
         struct Value field = csv_parse_field_(c);
-        value_array_push(&row, field);
+        row.array_push(field);
         int stillOk;
         unsafe { stillOk = c->ok; }
         if (stillOk == 0) { break; }
@@ -201,7 +201,7 @@ struct Value csv_parse(const &char text, ?&int ok) {
         char first = csv_peek_(&c);
         if (first == (char)0) { break; } // no trailing phantom row after EOF
         struct Value row = csv_parse_row_(&c);
-        value_array_push(&rows, row);
+        rows.array_push(row);
         if (c.ok == 0) { break; }
         char ch = csv_peek_(&c);
         if (ch == '\r') { unsafe { c.pos = c.pos + 1UL; } ch = csv_peek_(&c); }

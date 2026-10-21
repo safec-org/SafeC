@@ -158,7 +158,7 @@ struct WsConn ws_connect_timeout(const &char host, unsigned short port,
         unsigned char keyRaw[16];
         struct RngCtx rng;
         int rngOk;
-        unsafe { rngOk = rng_init(&rng); }
+        unsafe { rngOk = rng.init(); }
         if (!rngOk) {
             good = 0;
         } else {
@@ -205,7 +205,7 @@ struct WsConn ws_connect_timeout(const &char host, unsigned short port,
     keyB64.free();
 
     // The handshake timeout must not outlive it: an open WebSocket can sit
-    // idle between messages indefinitely, and ws_recv blocks until one
+    // idle between messages indefinitely, and recv() blocks until one
     // arrives.
     if (good && timeout_ms > 0) {
         if (sock_set_io_timeout(fd, 0) != 0) { good = 0; }
@@ -229,7 +229,7 @@ int ws_listen(unsigned short port) {
     return fd;
 }
 
-int ws_accept(int listenFd, &WsConn out) {
+int WsConn::accept(int listenFd) {
     int fd;
     unsafe { fd = tcp_accept_nb(listenFd); }
     if (fd < 0) { return 0; }
@@ -275,8 +275,8 @@ int ws_accept(int listenFd, &WsConn out) {
         return 0;
     }
     unsafe {
-        out->fd = fd;
-        out->is_server = 1;
+        self.fd = fd;
+        self.is_server = 1;
     }
     return 1;
 }
@@ -317,7 +317,7 @@ static int ws_write_frame_(struct WsConn* conn, int opcode,
         unsigned char maskKey[4];
         struct RngCtx rng;
         int rngOk;
-        unsafe { rngOk = rng_init(&rng); }
+        unsafe { rngOk = rng.init(); }
         if (!rngOk) { return 0; }
         unsafe { rng.fill(&maskKey[0], 4UL); }
         if (!ws_write_all_(fd, (const char*)maskKey, 4UL)) { return 0; }
@@ -349,32 +349,31 @@ static int ws_write_frame_(struct WsConn* conn, int opcode,
     return 1;
 }
 
-int ws_send_text(&WsConn conn, const &char text) {
+int WsConn::send_text(const &char text) {
     unsigned long len = str_len(text);
     const unsigned char* udata;
     unsafe { udata = (const unsigned char*)text; }
-    return ws_write_frame_(conn, WS_OPCODE_TEXT, udata, len);
+    return ws_write_frame_(self, WS_OPCODE_TEXT, udata, len);
 }
 
-int ws_send_binary(&WsConn conn, const &unsigned char data, unsigned long len) {
-    return ws_write_frame_(conn, WS_OPCODE_BINARY, data, len);
+int WsConn::send_binary(const &unsigned char data, unsigned long len) {
+    return ws_write_frame_(self, WS_OPCODE_BINARY, data, len);
 }
 
-int ws_send_ping(&WsConn conn) {
-    return ws_write_frame_(conn, WS_OPCODE_PING, (const unsigned char*)0, 0UL);
+int WsConn::send_ping() {
+    return ws_write_frame_(self, WS_OPCODE_PING, (const unsigned char*)0, 0UL);
 }
 
-int ws_send_pong(&WsConn conn) {
-    return ws_write_frame_(conn, WS_OPCODE_PONG, (const unsigned char*)0, 0UL);
+int WsConn::send_pong() {
+    return ws_write_frame_(self, WS_OPCODE_PONG, (const unsigned char*)0, 0UL);
 }
 
-int ws_send_close(&WsConn conn) {
-    return ws_write_frame_(conn, WS_OPCODE_CLOSE, (const unsigned char*)0, 0UL);
+int WsConn::send_close() {
+    return ws_write_frame_(self, WS_OPCODE_CLOSE, (const unsigned char*)0, 0UL);
 }
 
-int ws_recv(&WsConn conn, &WsMessage out) {
-    int fd;
-    unsafe { fd = conn->fd; }
+int WsConn::recv(&WsMessage out) {
+    int fd = self.fd;
 
     unsigned char head[2];
     if (!ws_read_n_(fd, head, 2UL)) { return 0; }
@@ -439,10 +438,9 @@ int ws_recv(&WsConn conn, &WsMessage out) {
     return 1;
 }
 
-void ws_close(&WsConn conn) {
-    ws_send_close(conn);
-    int fd;
-    unsafe { fd = conn->fd; }
+void WsConn::close() {
+    self.send_close();
+    int fd = self.fd;
     if (fd >= 0) { unsafe { ws_sock_close_(fd); } }
 }
 

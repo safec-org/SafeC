@@ -293,7 +293,7 @@ void t_btree() {
     ASSERT_FALSE(tq.is_null());
     if (tq.is_null()) return;
     &BTree<int> t = std::expect_ref(tq, "tq is null");
-    btree_init(t);
+    t.init();
     unsigned long i = 0UL;
     while (i < 200UL) { t.insert((i * 7919UL) % 1000UL, (int)i * 10); i = i + 1UL; }
     ASSERT_EQ(t.len(), 200);

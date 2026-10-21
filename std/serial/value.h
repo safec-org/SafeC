@@ -13,10 +13,10 @@
 // revisit that if reflection ever grows field names.
 //
 // Ownership: every Value that holds heap data (String, Array, Object) OWNS
-// it — value_free() recursively releases the whole tree, and
-// value_array_push()/value_object_set() take ownership of the Value they're
-// given (don't free it yourself afterward; do call value_clone() first if
-// you still need your own copy).
+// it — v.free() recursively releases the whole tree, and
+// v.array_push()/v.object_set() take ownership of the Value they're given
+// (don't free it yourself afterward; do call x.clone() first if you still
+// need your own copy).
 #pragma once
 #include <std/collections/vec.h>
 
@@ -40,7 +40,7 @@ namespace std {
 // One key/value pair inside a VAL_OBJECT's obj_val Vec.
 struct ObjectEntry {
     ?&heap char  key;  // heap-allocated, NUL-terminated, owned — empty (null)
-                        // only on an allocation failure inside value_object_set()
+                        // only on an allocation failure inside Value::object_set()
     &Value       val;  // heap-allocated, owned, always present once inserted
 };
 
@@ -71,6 +71,15 @@ struct Value {
     unsigned long   object_len() const;
     // Empty (null case) if the key isn't present.
     ?&Value         object_get(const &char key) const;
+
+    // Array/Object building. Both take ownership of 'v' (see the
+    // file-level ownership note above).
+    void            array_push(struct Value v);
+    void            object_set(const &char key, struct Value v);
+
+    // Deep copy / recursive release of the whole tree.
+    struct Value    clone() const;
+    void            free();
 };
 
 struct Value value_null();
@@ -78,13 +87,13 @@ struct Value value_bool(int v);
 struct Value value_int(long long v);
 struct Value value_float(double v);
 struct Value value_string(const &char s);   // copies s
-struct Value value_array();                 // empty; grow with value_array_push
-struct Value value_object();                // empty; grow with value_object_set
+struct Value value_array();                 // empty; grow with v.array_push
+struct Value value_object();                // empty; grow with v.object_set
 
-// Both take ownership of 'v' (see the file-level ownership note above).
+// Kept for std/ml until its refactor moves to the methods above; forward to
+// arr.array_push(v) / obj.object_set(key, v) / v.clone() / v.free().
 void value_array_push(&Value arr, struct Value v);
 void value_object_set(&Value obj, const &char key, struct Value v);
-
 struct Value value_clone(const &Value v);
 void value_free(&Value v);
 

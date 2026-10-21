@@ -326,7 +326,7 @@ static struct Value html_parse_value_(struct HtmlCursor_* c) {
             if (html_peek_(c) != '<') { unsafe { c->ok = 0; } break; }
             html_expect_open_(c, "li");
             struct Value elem = html_parse_value_(c);
-            value_array_push(&arr, elem);
+            arr.array_push(elem);
             html_expect_close_(c, "li");
         }
         result = arr;
@@ -343,7 +343,7 @@ static struct Value html_parse_value_(struct HtmlCursor_* c) {
             html_expect_open_(c, "dd");
             struct Value val = html_parse_value_(c);
             html_expect_close_(c, "dd");
-            unsafe { value_object_set(&obj, key.as_ptr(), val); }
+            unsafe { obj.object_set(key.as_ptr(), val); }
             key.free();
         }
         result = obj;
@@ -365,7 +365,7 @@ struct Value html_parse(const &char text, ?&int ok) {
     struct Value v = html_parse_value_(&c);
     if (ok != (int*)0) { unsafe { *ok = c.ok; } }
     if (c.ok == 0) {
-        value_free(&v);
+        v.free();
         return value_null();
     }
     return v;

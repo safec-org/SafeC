@@ -12,19 +12,19 @@ extern int   strncmp(const char* a, const char* b, size_t n);
 extern size_t strlen(const char* s);
 extern void* strncpy(char* d, const char* s, size_t n);
 
-inline void tmpfs_init(&TmpfsCtx ctx) {
-    unsafe { memset((void*)ctx, 0, sizeof(struct TmpfsCtx)); }
+inline void TmpfsCtx::init() {
+    unsafe { memset((void*)self, 0, sizeof(struct TmpfsCtx)); }
     // Create root inode at index 0.
-    ctx.inodes[0].used   = 1;
-    ctx.inodes[0].type   = VFS_TYPE_DIR;
-    ctx.inodes[0].parent = (unsigned long)0;
-    ctx.inodes[0].size   = (unsigned long)0;
+    self.inodes[0].used   = 1;
+    self.inodes[0].type   = VFS_TYPE_DIR;
+    self.inodes[0].parent = (unsigned long)0;
+    self.inodes[0].size   = (unsigned long)0;
     unsafe {
-        ctx.inodes[0].name[0] = '/';
-        ctx.inodes[0].name[1] = (char)0;
+        self.inodes[0].name[0] = '/';
+        self.inodes[0].name[1] = (char)0;
     }
-    ctx.inode_count = 1;
-    ctx.data_used   = (unsigned long)0;
+    self.inode_count = 1;
+    self.data_used   = (unsigned long)0;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

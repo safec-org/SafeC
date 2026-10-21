@@ -149,15 +149,15 @@ void t_rng() {
         while (i < 32) { seed[i] = (unsigned char)i; i = i + 1; }
         struct RngCtx a;
         struct RngCtx b;
-        rng_init_seed(&a, seed);
-        rng_init_seed(&b, seed);
+        a.init_seed(seed);
+        b.init_seed(seed);
         ASSERT_EQ(a.rand32(), b.rand32());
         i = 0;
         int inrange = 1;
         while (i < 1000) { if (a.rand_range(10UL) >= 10UL) inrange = 0; i = i + 1; }
         ASSERT_TRUE(inrange);
         struct RngCtx sys;
-        ASSERT_TRUE(rng_init(&sys) == 0 || rng_init(&sys) == 1);
+        ASSERT_TRUE(sys.init() == 0 || sys.init() == 1);
     }
 }
 
@@ -219,14 +219,14 @@ void t_rng_kat() {
         int i = 0;
         while (i < 32) { seed[i] = (unsigned char)i; i = i + 1; }
         struct RngCtx r;
-        rng_init_seed(&r, seed);
+        r.init_seed(seed);
         test_assert_eq_u(r.rand32(), 0x02F1A42FULL, "chacha20 word 0", __FILE__, __LINE__);
         test_assert_eq_u(r.rand32(), 0x898E8050ULL, "chacha20 word 1", __FILE__, __LINE__);
         test_assert_eq_u(r.rand64(), 0xE06EDF0FE53152A2ULL, "chacha20 words 2-3", __FILE__, __LINE__);
         unsigned char buf[100];
         r.fill(&buf[0], 100UL);            // crosses into the second block
         struct RngCtx q;
-        rng_init_seed(&q, seed);
+        q.init_seed(seed);
         unsigned char all[116];
         q.fill(&all[0], 116UL);
         ASSERT_EQ(safe_memcmp(&buf[0], &all[16], 100UL), 0);
@@ -274,7 +274,7 @@ static const unsigned char kCertDer[485] = {
 void t_x509() {
     unsafe {
         struct X509Cert c;
-        ASSERT_EQ(x509_parse_der(&kCertDer[0], 485UL, &c), 0);
+        ASSERT_EQ(c.init(&kCertDer[0], 485UL), 0);
         ASSERT_STR_EQ((const char*)c.subject.cn, "www.Example.com");
         ASSERT_STR_EQ((const char*)c.subject.o, "SafeC Test");
         ASSERT_STR_EQ((const char*)c.subject.c, "KR");
@@ -296,8 +296,8 @@ void t_x509() {
         ASSERT_TRUE(c.matches_hostname("api.example.org"));
         ASSERT_FALSE(c.matches_hostname("a.b.example.org"));
         ASSERT_FALSE(c.matches_hostname("www.example.com"));
-        ASSERT_TRUE(x509_verify_chain(&c, &c));
-        ASSERT_TRUE(x509_parse_der(&kCertDer[0], 40UL, &c) != 0);   // truncated
+        ASSERT_TRUE(c.verify_chain(&c));
+        ASSERT_TRUE(c.init(&kCertDer[0], 40UL) != 0);   // truncated
     }
 }
 

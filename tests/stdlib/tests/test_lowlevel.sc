@@ -714,17 +714,17 @@ void t_alloc_edges() {
         ?&heap unsigned char blocks[64];
         int n = 0;
         while (n < 64) {
-            blocks[n] = (?&heap unsigned char)t.alloc(64UL);
+            blocks[n] = (?&heap unsigned char)t.alloc(64UL, 8UL);
             if (blocks[n].is_null()) break;
             n = n + 1;
         }
         ASSERT_TRUE(n > 4);
-        ASSERT_TRUE((void*)t.alloc(64UL) == (void*)0);      // full
+        ASSERT_TRUE(t.alloc(64UL, 8UL).is_null());          // full
         match (blocks[2]) {                                  // neighbours stay used
             case null: { ASSERT_TRUE(0); }
-            case some(blk): { t.free((&heap void)blk); }
+            case some(blk): { t.dealloc((?&heap void)blk); }
         }
-        void* again = (void*)t.alloc(64UL);
+        void* again = (void*)t.alloc(64UL, 8UL);
         ASSERT_TRUE(again != (void*)0);
         ASSERT_TRUE(again == (void*)blocks[2]);
         t.destroy();
@@ -734,7 +734,7 @@ void t_alloc_edges() {
         int i = 0;
         while (i < 32) { tiny[i] = (unsigned char)0xEE; i = i + 1; }
         struct PoolAllocator p = pool_init(&tiny[0], 10UL);
-        ASSERT_TRUE((void*)p.alloc(1UL) == (void*)0);
+        ASSERT_TRUE(p.alloc(1UL, 1UL).is_null());
         ASSERT_EQ(p.available(), 0);
         int untouched = 1;
         i = 0;
@@ -744,7 +744,7 @@ void t_alloc_edges() {
         // Slab with zero slots.
         unsigned char sbuf[16];
         struct SlabAllocator s = slab_init(&sbuf[0], 16UL, 0UL);
-        ASSERT_TRUE((void*)s.alloc() == (void*)0);
+        ASSERT_TRUE(s.alloc(16UL, 1UL).is_null());
         ASSERT_EQ(s.available(), 0);
 
         // Sizes whose header would wrap around fail instead of returning a tiny block.
