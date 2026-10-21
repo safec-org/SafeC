@@ -55,6 +55,10 @@ int tcp_parse(&stack PacketBuf pkt, unsigned long offset,
         hdr_out.checksum = (unsigned short)0;
         hdr_out.urgent   = (unsigned short)0;
     }
+    // The data offset counts 32-bit words: at least the 5-word fixed header,
+    // and the options it implies must lie inside the packet.
+    unsigned long hdrBytes = (unsigned long)hdr_out.data_off * 4UL;
+    if (hdrBytes < (unsigned long)TCP_HDR_MIN_LEN || pkt.len < offset + hdrBytes) { return -1; }
     return 0;
 }
 

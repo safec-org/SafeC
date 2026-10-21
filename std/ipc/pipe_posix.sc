@@ -45,11 +45,15 @@ inline long long pipe_write(&Pipe p, const &unsigned char buf, unsigned long cou
 }
 
 // macOS/BSD and Linux disagree on O_NONBLOCK's numeric value (see
-// std/sched/io_nb_bsd.sc vs io_nb_linux.sc for the same split) — since
-// this one file covers both, try the BSD value first and fall back to
-// the Linux value if fcntl rejects it outright, rather than requiring a
-// third pipe_posix_bsd.sc/pipe_posix_linux.sc split for a single flag
-// bit. (F_GETFL/F_SETFL themselves are the same value, 3/4, on both.)
+// std/sched/io_nb_bsd.sc vs io_nb_linux.sc for the same split), so pick it
+// by platform. (Trying one value and falling back on failure doesn't work:
+// Linux's F_SETFL silently ignores unknown bits and returns 0.)
+// F_GETFL/F_SETFL themselves are the same value, 3/4, on both.
+#if defined(__linux__)
+#define SAFEC_PIPE_O_NONBLOCK_ SAFEC_PIPE_O_NONBLOCK_LINUX
+#else
+#define SAFEC_PIPE_O_NONBLOCK_ SAFEC_PIPE_O_NONBLOCK_BSD
+#endif
 static int pipe_set_nonblocking_(int fd) {
     int flags;
     unsafe { flags = fcntl(fd, SAFEC_PIPE_F_GETFL, 0); }
@@ -57,11 +61,7 @@ static int pipe_set_nonblocking_(int fd) {
         return -1;
     }
     int rc;
-    unsafe { rc = fcntl(fd, SAFEC_PIPE_F_SETFL, flags | SAFEC_PIPE_O_NONBLOCK_BSD); }
-    if (rc == 0) {
-        return 0;
-    }
-    unsafe { rc = fcntl(fd, SAFEC_PIPE_F_SETFL, flags | SAFEC_PIPE_O_NONBLOCK_LINUX); }
+    unsafe { rc = fcntl(fd, SAFEC_PIPE_F_SETFL, flags | SAFEC_PIPE_O_NONBLOCK_); }
     return rc;
 }
 

@@ -45,7 +45,9 @@ struct X509Cert {
     // Is the certificate currently valid for the given Unix timestamp?
     int  is_valid_at(unsigned long long ts) const;
 
-    // Does a Subject Alternative Name match `hostname`?
+    // Does `hostname` match a DNS Subject Alternative Name (or, only when the
+    // certificate has none, the subject CN)? Case-insensitive; '*.' wildcards
+    // match one leftmost label.
     int  matches_hostname(const &char hostname) const;
 
     // Is this a CA certificate?

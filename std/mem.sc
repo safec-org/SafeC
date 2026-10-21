@@ -546,6 +546,7 @@ void* alloc_raw_(unsigned long size) {
             hdr[1] = cls;
             return (void*)((unsigned long)raw + ALLOC_HDR_SIZE_);
         }
+        if (size > ~(unsigned long)0 - ALLOC_HDR_SIZE_) { return (void*)0; }  // header would wrap
         void* raw = malloc(size + ALLOC_HDR_SIZE_);
         if (raw == (void*)0) { return (void*)0; }
         unsigned long* hdr = (unsigned long*)raw;
@@ -587,6 +588,7 @@ void* alloc_zeroed_raw_(unsigned long size) {
             hdr[1] = cls;
             return (void*)((unsigned long)raw + ALLOC_HDR_SIZE_);
         }
+        if (size > ~(unsigned long)0 - ALLOC_HDR_SIZE_) { return (void*)0; }
         void* raw = calloc((unsigned long)1, size + ALLOC_HDR_SIZE_);
         if (raw == (void*)0) { return (void*)0; }
         unsigned long* hdr = (unsigned long*)raw;
@@ -708,6 +710,7 @@ void* realloc_buf_raw_(void* ptr, unsigned long new_size) {
             return np;
         }
 #endif
+        if (new_size > ~(unsigned long)0 - ALLOC_HDR_SIZE_) { return (void*)0; }
         void* newRaw = realloc(raw, new_size + ALLOC_HDR_SIZE_);
         if (newRaw == (void*)0) { return (void*)0; }
         // newHdr[0] is already ALLOC_LIVE_MAGIC_ -- realloc() preserves
@@ -831,6 +834,8 @@ inline void mem_clflush_raw_(const void* addr) {
     unsafe {
 #ifdef __x86_64__
         asm volatile ("clflush (%0)" : : "r"(addr) : "memory");
+#elif defined(__aarch64__)
+        asm volatile ("dc civac, %0" : : "r"(addr) : "memory");   // clean + invalidate to PoC
 #else
         (void)addr;
 #endif

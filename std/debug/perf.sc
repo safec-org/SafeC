@@ -1,13 +1,14 @@
 // SafeC Standard Library — Performance Counter Implementation
 #pragma once
 #include <std/debug/perf.h>
+#ifndef __SAFEC_FREESTANDING__
+#include <std/time.h>
+#endif
 
 // ── Hosted-mode extern declarations ──────────────────────────────────────────
-// clock_gettime and clock are used only in hosted mode.
-// CLOCK_MONOTONIC = 1 on Linux/macOS.
+// clock() is used only in hosted mode (perf_counter_init calibration).
 namespace std {
 
-extern int   clock_gettime(int clk, void* ts);
 extern long  clock();    // POSIX clock() returns long; CLOCKS_PER_SEC = 1000000
 
 // ── perf_read_cycle ───────────────────────────────────────────────────────────
@@ -47,20 +48,16 @@ unsigned long long perf_read_cycle() {
 }
 
 // ── perf_read_ns ──────────────────────────────────────────────────────────────
-// Hosted: use CLOCK_MONOTONIC for nanosecond accuracy.
+// Hosted: time.h's monotonic clock (the right clock id per OS).
 // Freestanding: return 0 (caller should use ticks + known freq).
-
 inline unsigned long long perf_read_ns() {
 #ifndef __SAFEC_FREESTANDING__
-    unsafe {
-        // struct timespec { time_t tv_sec; long tv_nsec; } — 16 bytes on 64-bit.
-        long long ts[2];
-        if (clock_gettime(1, (void*)ts) != 0) { return (unsigned long long)0; }
-        return (unsigned long long)ts[0] * (unsigned long long)1000000000
-             + (unsigned long long)ts[1];
-    }
-#endif
+    long long t = time_mono_ns();
+    if (t < 0LL) { return (unsigned long long)0; }
+    return (unsigned long long)t;
+#else
     return (unsigned long long)0;
+#endif
 }
 
 // ── PerfCounter methods ───────────────────────────────────────────────────────

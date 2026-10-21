@@ -212,7 +212,7 @@ inline int io_read_line(&char buf, int n) {
 // Read one whitespace-delimited token from stdin into buf[0..n-1].
 // Returns number of chars read, 0 = EOF before any token, -1 = buffer too small.
 inline int io_read_token(&char buf, int n) {
-    if (n <= 0) { return -1; }
+    if (n <= 1) { return -1; }   // needs room for a char + NUL ("%0s" is invalid)
     unsafe {
         int c = getchar();
         // Skip leading whitespace

@@ -12,19 +12,19 @@
 // Dot product of two Fixed arrays of length n.
 namespace std {
 
-Fixed dsp_dot(&stack Fixed a, &stack Fixed b, unsigned long n);
+Fixed dsp_dot(const &Fixed a, const &Fixed b, unsigned long n);
 
 // Scale array in-place: a[i] *= scale.
 void  dsp_scale(&stack Fixed a, Fixed scale, unsigned long n);
 
 // Add arrays element-wise: out[i] = a[i] + b[i].
-void  dsp_add(&stack Fixed a, &stack Fixed b, &stack Fixed out, unsigned long n);
+void  dsp_add(const &Fixed a, const &Fixed b, &Fixed out, unsigned long n);
 
 // Clip all values to [lo, hi].
 void  dsp_clip(&stack Fixed a, Fixed lo, Fixed hi, unsigned long n);
 
 // Peak magnitude (maximum absolute value) in array.
-Fixed dsp_peak(&stack Fixed a, unsigned long n);
+Fixed dsp_peak(const &Fixed a, unsigned long n);
 
 // Root mean square value of array.
 Fixed dsp_rms(&stack Fixed a, unsigned long n);

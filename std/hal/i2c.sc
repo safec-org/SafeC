@@ -49,14 +49,14 @@ int I2cBus::write(unsigned char addr, const &unsigned char data, unsigned long l
         volatile_store(ctrl, (unsigned int)1); // START
 
         int result = self.wait_();
-        if (result != 0) { return result; }
+        if (result != 0) { volatile_store(ctrl, (unsigned int)2); return result; } // STOP: release the bus
 
         unsigned long i = (unsigned long)0;
         while (i < len) {
             volatile_store(data_reg, (unsigned int)data[i]);
             volatile_store(ctrl, (unsigned int)4); // SEND
             result = self.wait_();
-            if (result != 0) { return result; }
+            if (result != 0) { volatile_store(ctrl, (unsigned int)2); return result; } // STOP: release the bus
             i = i + (unsigned long)1;
         }
 
@@ -75,7 +75,7 @@ int I2cBus::read(unsigned char addr, &unsigned char data, unsigned long len) {
         volatile_store(ctrl, (unsigned int)1); // START
 
         int result = self.wait_();
-        if (result != 0) { return result; }
+        if (result != 0) { volatile_store(ctrl, (unsigned int)2); return result; } // STOP: release the bus
 
         unsigned long i = (unsigned long)0;
         while (i < len) {
@@ -85,7 +85,7 @@ int I2cBus::read(unsigned char addr, &unsigned char data, unsigned long len) {
                 volatile_store(ctrl, (unsigned int)16); // READ + NACK
             }
             result = self.wait_();
-            if (result != 0) { return result; }
+            if (result != 0) { volatile_store(ctrl, (unsigned int)2); return result; } // STOP: release the bus
             data[i] = (unsigned char)volatile_load(data_reg);
             i = i + (unsigned long)1;
         }

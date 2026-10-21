@@ -35,6 +35,7 @@ inline void SlabAllocator::build_freelist_() {
     if (self.has_tags) { payloadOff = SLAB_TAG_SIZE_; }
 
     unsigned long i = (unsigned long)0;
+    if (self.cap == (unsigned long)0) { self.free_head = (void*)0; return; }  // cap - 1 would wrap
     unsafe {
         while (i < self.cap - (unsigned long)1) {
             void* slotBase = (void*)((unsigned long)self.base + i * stride);

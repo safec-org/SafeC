@@ -12,7 +12,7 @@ inline struct Scheduler sched_init() {
 }
 
 inline int Scheduler::spawn_proc(&stack PCB proc) {
-    if (self.count >= 256) { return -1; }
+    if (self.count >= SCHED_MAX_PROCS) { return -1; }
     int idx = self.count;
     self.procs[idx] = *proc;
     self.count = self.count + 1;
@@ -20,45 +20,25 @@ inline int Scheduler::spawn_proc(&stack PCB proc) {
 }
 
 int Scheduler::next() {
+    // Highest READY priority wins; among equals, round-robin starting just
+    // after the current process.
     int best     = -1;
-    int best_pri = -1;
+    int best_pri = 0;
     int start    = 0;
-
     if (self.current >= 0) { start = self.current + 1; }
-
-    // Two passes: from start→end, then 0→start (round-robin fairness)
-    int pass = 0;
-    while (pass < 2) {
-        int begin = 0;
-        int end   = 0;
-        if (pass == 0) {
-            begin = start;
-            end   = self.count;
-        } else {
-            begin = 0;
-            end   = start;
+    int k = 0;
+    while (k < self.count) {
+        int i = (start + k) % self.count;
+        if (self.procs[i].state == PROC_READY &&
+            (best < 0 || self.procs[i].priority > best_pri)) {
+            best_pri = self.procs[i].priority;
+            best = i;
         }
-        int i = begin;
-        while (i < end) {
-            if (self.procs[i].state == 0) { // PROC_READY
-                if (self.procs[i].priority > best_pri) {
-                    best_pri = self.procs[i].priority;
-                    best = i;
-                }
-            }
-            i = i + 1;
-        }
-        if (best >= 0 && pass == 0) {
-            self.current = best;
-            self.procs[best].state = 1; // PROC_RUNNING
-            return best;
-        }
-        pass = pass + 1;
+        k = k + 1;
     }
-
     if (best >= 0) {
         self.current = best;
-        self.procs[best].state = 1; // PROC_RUNNING
+        self.procs[best].state = PROC_RUNNING;
     }
     return best;
 }
@@ -92,7 +72,10 @@ inline void Scheduler::remove(int idx) {
         i = i + 1;
     }
     self.count = self.count - 1;
-    if (self.current >= self.count) { self.current = self.count - 1; }
+    // Keep 'current' on the same process: it shifted down if it was after
+    // idx, and there is none if it was the one removed.
+    if (self.current == idx) { self.current = -1; }
+    else if (self.current > idx) { self.current = self.current - 1; }
 }
 
 inline int Scheduler::ready_count() const {

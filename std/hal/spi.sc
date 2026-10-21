@@ -54,12 +54,14 @@ inline void SpiDevice::cs_deassert() {
     }
 }
 
-inline void SpiDevice::write(const &unsigned char tx, &unsigned char rx, unsigned long len) {
+inline void SpiDevice::write(const &unsigned char tx, ?&unsigned char rx, unsigned long len) {
     unsigned long i = (unsigned long)0;
     while (i < len) {
-        unsafe {
-            unsigned char b = self.transfer(tx[i]);
-            if (rx != (unsigned char*)0) { rx[i] = b; }
+        unsigned char b;
+        unsafe { b = self.transfer(tx[i]); }
+        match (rx) {
+            case null: { }
+            case some(r): { unsafe { r[i] = b; } }
         }
         i = i + (unsigned long)1;
     }

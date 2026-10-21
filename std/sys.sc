@@ -3,6 +3,7 @@
 #pragma once
 #include <std/stddef.h>
 #include <std/sys.h>
+#include <std/time.h>
 
 // ── Explicit extern declarations (avoid complex C header parsing) ─────────────
 namespace std {
@@ -28,14 +29,6 @@ extern int   atexit(void* func);
 extern void  qsort(void* base, size_t n, size_t size, void* cmp);
 extern void* bsearch(const void* key, const void* base, size_t n,
                      size_t size, void* cmp);
-// clock_gettime / POSIX time
-extern int   clock_gettime(int clk_id, void* ts);
-
-// ── POSIX clock IDs ──────────────────────────────────────────────────────────
-// CLOCK_REALTIME=0, CLOCK_MONOTONIC=6, CLOCK_PROCESS_CPUTIME_ID=12 on macOS
-#define SC_CLOCK_REALTIME         0
-#define SC_CLOCK_MONOTONIC        6
-#define SC_CLOCK_PROCESS_CPUTIME  12
 
 // ── Process control ───────────────────────────────────────────────────────────
 
@@ -56,40 +49,21 @@ inline const ?&char sys_getenv(const &char name) {
 }
 
 // Return processor time consumed by the program in nanoseconds.
-// Uses CLOCK_PROCESS_CPUTIME_ID on POSIX.  Returns -1 on error.
+// Same clock as time_cpu_ns() (time.h).  Returns -1 on error.
 inline long long sys_cpu_time_ns() {
-    unsafe {
-        // timespec layout: { long tv_sec; long tv_nsec; } — 16 bytes on 64-bit
-        long long ts[2];
-        if (clock_gettime(SC_CLOCK_PROCESS_CPUTIME, (void*)ts) != 0) {
-            return -1LL;
-        }
-        return ts[0] * 1000000000LL + ts[1];
-    }
+    return time_cpu_ns();
 }
 
 // Return wall-clock time in nanoseconds since the Unix epoch.
-// Uses CLOCK_REALTIME.  Returns -1 on error.
+// Same clock as time_wall_ns() (time.h).  Returns -1 on error.
 inline long long sys_time_now_ns() {
-    unsafe {
-        long long ts[2];
-        if (clock_gettime(SC_CLOCK_REALTIME, (void*)ts) != 0) {
-            return -1LL;
-        }
-        return ts[0] * 1000000000LL + ts[1];
-    }
+    return time_wall_ns();
 }
 
 // Return a monotonic timestamp in nanoseconds (suitable for elapsed-time
 // measurement; epoch is unspecified).  Returns -1 on error.
 inline long long sys_monotonic_ns() {
-    unsafe {
-        long long ts[2];
-        if (clock_gettime(SC_CLOCK_MONOTONIC, (void*)ts) != 0) {
-            return -1LL;
-        }
-        return ts[0] * 1000000000LL + ts[1];
-    }
+    return time_mono_ns();
 }
 
 // ── Process control ───────────────────────────────────────────────────────────

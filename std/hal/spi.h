@@ -24,7 +24,7 @@ struct SpiDevice {
     void          cs_deassert();
 
     // Transfer a buffer of bytes. `rx` receives incoming data (may be NULL).
-    void          write(const &unsigned char tx, &unsigned char rx, unsigned long len);
+    void          write(const &unsigned char tx, ?&unsigned char rx, unsigned long len);
 
     // Read len bytes (sends 0xFF as dummy TX).
     void          read(&unsigned char rx, unsigned long len);

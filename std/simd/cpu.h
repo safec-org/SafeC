@@ -32,6 +32,6 @@ namespace std {
 // The best level available (detected once, then cached).
 int simd_level();
 // "AVX-512", "AVX2", ..., "scalar".
-const char* simd_level_name(int level);
+const &char simd_level_name(int level);
 
 } // namespace std

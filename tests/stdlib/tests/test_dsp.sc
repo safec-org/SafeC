@@ -907,6 +907,143 @@ void t_dsp_f32_more() {
     }
 }
 
+// The less common DSP entry points: biquad designs/responses, fixed-point
+// block ops and filters, window helpers, resampling, z-transform phase.
+void t_dsp_extras() {
+    unsafe {
+        struct Biquad id = biquad_new(1.0, 0.0, 0.0, 0.0, 0.0);
+        ASSERT_TRUE(near_d(id.process(0.75), 0.75, 0.0));
+        struct Biquad bp = biquad_bandpass(48000.0, 1000.0, 2.0);
+        ASSERT_TRUE(near_d(biquad_response_mag(&bp, 48000.0, 1000.0), 1.0, 1e-6));   // 0 dB at f0
+        ASSERT_TRUE(biquad_response_mag(&bp, 48000.0, 100.0) < 0.2);
+        ASSERT_TRUE(near_d(biquad_response_phase(&bp, 48000.0, 1000.0), 0.0, 1e-6));
+        struct Biquad ap = biquad_allpass(48000.0, 2000.0, 0.7);
+        ASSERT_TRUE(near_d(biquad_response_mag(&ap, 48000.0, 500.0), 1.0, 1e-9));
+        ASSERT_TRUE(near_d(biquad_response_mag(&ap, 48000.0, 9000.0), 1.0, 1e-9));
+        ASSERT_TRUE(near_d(abs_d(biquad_response_phase(&ap, 48000.0, 2000.0)), PI_D(), 1e-6));
+        struct Biquad ls = biquad_lowshelf(48000.0, 300.0, 1.0, 6.0);
+        ASSERT_TRUE(near_d(biquad_response_mag(&ls, 48000.0, 1.0), pow_d(10.0, 6.0 / 20.0), 1e-3));
+        ASSERT_TRUE(near_d(biquad_response_mag(&ls, 48000.0, 20000.0), 1.0, 1e-2));
+        struct FBiquad fb = biquad_to_fixed(id);
+        ASSERT_TRUE(near_d(fixed_to_float(fb.process(fixed_from_float(0.5))), 0.5, 1e-6));
+        struct Biquad32 b32 = biquad_new_f32((float)0.5, (float)0.0, (float)0.0, (float)0.0, (float)0.0);
+        ASSERT_TRUE(b32.process((float)3.0) == (float)1.5);
+
+        Complex z = complex_new(3.0, -4.0);
+        ASSERT_TRUE(near_d(z.conj().im, 4.0, 0.0));
+        ASSERT_TRUE(near_d(z.neg().re, -3.0, 0.0));
+        ASSERT_TRUE(near_d(complex_new(0.0, 1.0).arg(), PI_D() / 2.0, 1e-12));
+        Complex32 z32 = complex_to_f32(z);
+        ASSERT_TRUE(z32.re == (float)3.0 && z32.im == (float)-4.0);
+        ASSERT_TRUE(near_d((double)z32.conj().im, 4.0, 0.0));
+        ASSERT_TRUE(near_d((double)z32.neg().re, -3.0, 0.0));
+        ASSERT_TRUE(near_d((double)z32.arg(), atan2_d(-4.0, 3.0), 1e-6));
+
+        Fixed fa[4];
+        Fixed fbv[4];
+        Fixed fo[4];
+        int i = 0;
+        while (i < 4) {
+            fa[i] = fixed_from_float((double)i * 0.5);
+            fbv[i] = fixed_from_float(-1.0);
+            i = i + 1;
+        }
+        ASSERT_TRUE(near_d(fixed_to_float(dsp_dot(&fa[0], &fbv[0], 4UL)), -3.0, 1e-5));
+        dsp_add(&fa[0], &fbv[0], &fo[0], 4UL);
+        ASSERT_TRUE(near_d(fixed_to_float(fo[3]), 0.5, 1e-6));
+        ASSERT_TRUE(near_d(fixed_to_float(dsp_peak(&fbv[0], 4UL)), 1.0, 1e-6));
+        ASSERT_TRUE(near_d(fixed_to_float(fixed_add(fa[1], fa[2])), 1.5, 1e-6));
+        double sa[3];
+        double sx[6];
+        double so[4];
+        sa[0] = 1.0; sa[1] = 2.0; sa[2] = 3.0;
+        i = 0;
+        while (i < 6) { sx[i] = (double)i; i = i + 1; }
+        dsp_sliding_dot_f64(&sa[0], &sx[0], &so[0], 4UL, 3UL);
+        ASSERT_TRUE(near_d(so[0], 8.0, 1e-12));     // 0 + 2 + 6
+        ASSERT_TRUE(near_d(so[3], 26.0, 1e-12));    // 3 + 8 + 15
+
+        double w[5];
+        double x[5];
+        window_rectangular(&w[0], 5UL);
+        i = 0;
+        while (i < 5) { x[i] = (double)(i + 1); i = i + 1; }
+        window_apply(&x[0], &w[0], 5UL);
+        ASSERT_TRUE(near_d(x[4], 5.0, 0.0));
+        double k[9];
+        sobel_x_kernel(&k[0]);
+        ASSERT_TRUE(near_d(k[0], -k[2], 0.0) && near_d(k[4], 0.0, 0.0) && near_d(abs_d(k[3]), 2.0, 0.0));
+
+        Fixed fin[4];
+        Fixed fout[7];
+        i = 0;
+        while (i < 4) { fin[i] = fixed_from_int(i * 2); i = i + 1; }
+        fresample_linear(&fin[0], 4UL, &fout[0], 7UL);
+        ASSERT_TRUE(near_d(fixed_to_float(fout[0]), 0.0, 1e-6));
+        ASSERT_TRUE(near_d(fixed_to_float(fout[6]), 6.0, 1e-5));
+        ASSERT_TRUE(near_d(fixed_to_float(fout[3]), 3.0, 1e-5));
+
+        double zb[2];
+        double za[2];
+        zb[0] = 0.0; zb[1] = 1.0;                  // pure one-sample delay
+        za[0] = 1.0; za[1] = 0.0;
+        double fq = 3000.0;
+        ASSERT_TRUE(near_d(ztransform_response_phase(&zb[0], &za[0], 1UL, 48000.0, fq), -2.0 * PI_D() * fq / 48000.0, 1e-9));
+
+        ASSERT_TRUE(dsp_is_pow2(64UL));
+        ASSERT_FALSE(dsp_is_pow2(48UL));
+        Complex sig[8];
+        i = 0;
+        while (i < 8) { sig[i] = complex_new((double)i, 0.0); i = i + 1; }
+        ASSERT_EQ(fft_serial(&sig[0], 8UL), 1);
+        ASSERT_EQ(ifft_serial(&sig[0], 8UL), 1);
+        ASSERT_TRUE(near_d(sig[5].re, 5.0, 1e-9));
+
+        Fixed coeffs[2];
+        Fixed hist[2];
+        coeffs[0] = fixed_from_float(0.5);
+        coeffs[1] = fixed_from_float(0.5);
+        hist[0] = (Fixed)0; hist[1] = (Fixed)0;
+        struct FFirFilter ff = ffir_init(&coeffs[0], 2UL, &hist[0]);
+        ff.process(fixed_from_int(2));
+        ASSERT_TRUE(near_d(fixed_to_float(ff.process(fixed_from_int(4))), 3.0, 1e-5));   // average
+        Fixed ib[1];
+        Fixed ia[2];
+        Fixed xh[1];
+        Fixed yh[2];
+        ib[0] = fixed_from_float(0.5);
+        ia[0] = fixed_from_float(1.0);
+        ia[1] = fixed_from_float(-0.5);             // y = 0.5 x + 0.5 y[-1]
+        xh[0] = (Fixed)0; yh[0] = (Fixed)0; yh[1] = (Fixed)0;
+        struct FIirFilter fi = fiir_init(&ib[0], 1UL, &ia[0], 2UL, &xh[0], &yh[0]);
+        ASSERT_TRUE(near_d(fixed_to_float(fi.process(fixed_from_int(1))), 0.5, 1e-5));
+        ASSERT_TRUE(near_d(fixed_to_float(fi.process(fixed_from_int(1))), 0.75, 1e-5));
+        Fixed ch[3];
+        i = 0;
+        while (i < 3) { ch[i] = (Fixed)0; i = i + 1; }
+        struct FCombFF cf = comb_ff_init_fixed(&ch[0], 2UL, fixed_from_float(0.5));
+        ASSERT_TRUE(near_d(fixed_to_float(cf.process(fixed_from_int(1))), 1.0, 1e-5));
+        cf.process((Fixed)0);
+        ASSERT_TRUE(near_d(fixed_to_float(cf.process((Fixed)0)), 0.5, 1e-5));   // the echo
+        Fixed kb[4];
+        i = 0;
+        while (i < 4) { kb[i] = fixed_from_float(0.25 * (double)(i + 1)); i = i + 1; }
+        struct FKarplusStrong ks = ks_init_fixed(&kb[0], 4UL, fixed_from_float(0.99));
+        ASSERT_TRUE(ks.process() != (Fixed)0);
+
+        struct AudioBuffer ab = audio_buf_init(1UL);
+        Fixed frames[3];
+        frames[0] = fixed_from_int(1); frames[1] = fixed_from_int(2); frames[2] = fixed_from_int(3);
+        ASSERT_EQ(ab.write_frames(&frames[0], 3UL), 3);
+        Fixed peek[2];
+        ASSERT_EQ(ab.peek_frames(&peek[0], 2UL), 2);
+        ASSERT_EQ(fixed_to_int(peek[1]), 2);
+        Fixed rd[3];
+        ASSERT_EQ(ab.read_frames(&rd[0], 3UL), 3);   // peek didn't consume
+        ASSERT_EQ(fixed_to_int(rd[0]), 1);
+    }
+}
+
 int main() {
     struct TestSuite t = test_suite_init();
     unsafe {
@@ -922,6 +1059,7 @@ int main() {
         t.add("fft f32", t_fft_f32);
         t.add("dsp f32", t_dsp_f32);
         t.add("iir/comb/imaging/dct/dft f32", t_dsp_f32_more);
+        t.add("dsp extras (biquad designs, fixed ops, resample)", t_dsp_extras);
     }
     t.run();
     t.print_summary();

@@ -11,7 +11,8 @@ inline int ckd_add_i32(&int result, int a, int b) {
     int overflow = 0;
     if (b > 0 && a > 2147483647 - b)         { overflow = 1; }
     if (b < 0 && a < (-2147483647 - 1) - b) { overflow = 1; }
-    unsafe { *result = a + b; }
+    // Wrapped result computed unsigned: signed overflow is undefined.
+    unsafe { *result = (int)((unsigned int)a + (unsigned int)b); }
     return overflow;
 }
 
@@ -19,7 +20,7 @@ inline int ckd_sub_i32(&int result, int a, int b) {
     int overflow = 0;
     if (b < 0 && a > 2147483647 + b)         { overflow = 1; }
     if (b > 0 && a < (-2147483647 - 1) + b) { overflow = 1; }
-    unsafe { *result = a - b; }
+    unsafe { *result = (int)((unsigned int)a - (unsigned int)b); }
     return overflow;
 }
 
@@ -39,7 +40,7 @@ inline int ckd_add_i64(&long long result, long long a, long long b) {
     int overflow = 0;
     if (b > 0LL && a > 9223372036854775807LL - b)                          { overflow = 1; }
     if (b < 0LL && a < (-9223372036854775807LL - (long long)1) - b)       { overflow = 1; }
-    unsafe { *result = a + b; }
+    unsafe { *result = (long long)((unsigned long long)a + (unsigned long long)b); }
     return overflow;
 }
 
@@ -47,7 +48,7 @@ inline int ckd_sub_i64(&long long result, long long a, long long b) {
     int overflow = 0;
     if (b < 0LL && a > 9223372036854775807LL + b)                          { overflow = 1; }
     if (b > 0LL && a < (-9223372036854775807LL - (long long)1) + b)       { overflow = 1; }
-    unsafe { *result = a - b; }
+    unsafe { *result = (long long)((unsigned long long)a - (unsigned long long)b); }
     return overflow;
 }
 
@@ -61,7 +62,7 @@ inline int ckd_mul_i64(&long long result, long long a, long long b) {
         if (a > 0LL && b < 0LL && b < llong_min / a)             { overflow = 1; }
         if (a < 0LL && b > 0LL && a < llong_min / b)             { overflow = 1; }
     }
-    unsafe { *result = a * b; }
+    unsafe { *result = (long long)((unsigned long long)a * (unsigned long long)b); }
     return overflow;
 }
 

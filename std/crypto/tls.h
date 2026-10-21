@@ -1,9 +1,15 @@
 // SafeC Standard Library — TLS 1.3 Record Layer
 // Implements the TLS 1.3 record protocol (RFC 8446 §5).
 // Crypto operations are delegated to std/crypto/aes.h and std/crypto/sha256.h.
-// Key exchange and handshake are stubbed (requires EC DH, beyond scope).
-// This module handles: record framing, content type, fragment assembly,
-// and AEAD encryption/decryption stubs.
+// This module handles record framing, the inner content type and alerts.
+// There is no handshake or key exchange (it needs ECDH, not in std): keys
+// come from install_keys().
+//
+// WARNING: record protection is AES-256-CBC + PKCS#7 padding with no MAC,
+// in place of TLS 1.3's AES-GCM AEAD. Records are not authenticated (an
+// active attacker can alter them, and padding errors are observable), and
+// the wire format does not interoperate with real TLS 1.3 peers. Use it for
+// framing experiments, not to protect traffic.
 // Freestanding-safe.
 #pragma once
 #include <std/crypto/aes.h>
@@ -85,7 +91,9 @@ struct TlsSession {
     // `is_write` != 0 selects write_iv; 0 selects read_iv.
     void  compute_nonce(unsigned char nonce[TLS_IV_LEN], int is_write) const;
 
-    // Install traffic keys (called after key derivation in the handshake).
+    // Install traffic keys (called after key derivation in the handshake):
+    // resets both sequence numbers and switches to protected records
+    // (is_established() becomes 1).
     void  install_keys(const unsigned char write_key[TLS_KEY_LEN],
                        const unsigned char write_iv[TLS_IV_LEN],
                        const unsigned char read_key[TLS_KEY_LEN],

@@ -31,21 +31,21 @@ extern void js_set_attr(int handle, const char* namePtr, unsigned long nameLen,
 extern int  js_add_click_listener(int handle, int callbackId);
 extern void js_console_log(const char* ptr, unsigned long len);
 
-// ── Ergonomic (NUL-terminated const char*) wrappers ─────────────────────────
+// ── Ergonomic (NUL-terminated string) wrappers ─────────────────────────
 
 // Length of a NUL-terminated string. No libc 'strlen' on a freestanding
 // wasm32 build (see wasm_rt.h) — this is the whole reason dom.sc carries
 // its own tiny copy rather than declaring 'extern unsigned long strlen(...)'.
-unsigned long wasm_strlen(const char* s);
+unsigned long wasm_strlen(const &char s);
 
 // Looks up the first element matching the CSS-selector-shaped string
 // 'selector' (interpretation is entirely host-side — see the JS glue).
 // Returns an opaque handle, or -1 if nothing matched.
-int  dom_get_element(const char* selector);
+int  dom_get_element(const &char selector);
 
-void dom_set_text(int handle, const char* text);
-void dom_set_attr(int handle, const char* name, const char* value);
-void dom_console_log(const char* text);
+void dom_set_text(int handle, const &char text);
+void dom_set_attr(int handle, const &char name, const &char value);
+void dom_console_log(const &char text);
 
 // Stored type-erased (the table holds handlers with unrelated context
 // types); the generic dom_register_callback/dom_on_click below are the only
@@ -70,9 +70,9 @@ int  dom_register_callback(fn void(?&T) handler, ?&T userdata) {
 // via dom_register_callback() + js_add_click_listener(). Returns the
 // element handle (as dom_get_element() would), or -1 if not found (no
 // listener registered in that case).
-int  dom_on_click_raw_(const char* selector, void* handler, void* userdata);
+int  dom_on_click_raw_(const &char selector, void* handler, void* userdata);
 generic<T>
-int  dom_on_click(const char* selector, fn void(?&T) handler, ?&T userdata) {
+int  dom_on_click(const &char selector, fn void(?&T) handler, ?&T userdata) {
     unsafe { return dom_on_click_raw_(selector, (void*)handler, (void*)userdata); }
 }
 
@@ -86,6 +86,6 @@ void dom_dispatch_event(int callbackId);
 // Minimal signed-decimal integer formatter — no snprintf (see
 // wasm_strlen's comment; same reason). 'buf' must be at least 24 bytes
 // (fits any 64-bit value's sign + digits + NUL). Always NUL-terminates.
-void wasm_itoa(long long v, char* buf, unsigned long cap);
+void wasm_itoa(long long v, &char buf, unsigned long cap);
 
 } // namespace std

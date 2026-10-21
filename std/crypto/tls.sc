@@ -115,6 +115,7 @@ void TlsSession::install_keys(const unsigned char write_key[TLS_KEY_LEN],
     }
     self.write_seq = (unsigned long long)0;
     self.read_seq  = (unsigned long long)0;
+    self.handshake_done = 1;   // records are protected from here on
 }
 
 inline void TlsSession::compute_nonce(unsigned char nonce[TLS_IV_LEN], int is_write) const {
@@ -210,15 +211,17 @@ unsigned long TlsSession::encode_record(unsigned char content_type,
         }
     }
 
+    // Check room before consuming a sequence number: a record that isn't
+    // emitted must not advance write_seq (the peer's read_seq wouldn't).
+    unsigned long total = (unsigned long)5 + padded_len;
+    if (total > out_cap) { return (unsigned long)0; }
+
     // Encrypt in-place
     struct AesCtx aes = aes256_init(self.write_key);
     aes.set_iv(iv16);
     aes.cbc_encrypt(inner, padded_len);
 
     self.write_seq = self.write_seq + (unsigned long long)1;
-
-    unsigned long total = (unsigned long)5 + padded_len;
-    if (total > out_cap) { return (unsigned long)0; }
     unsafe {
         out[0] = (unsigned char)TLS_APPLICATION_DATA;
         out[1] = (unsigned char)0x03;
@@ -309,16 +312,15 @@ unsigned long TlsSession::decode_record(const &unsigned char data_ref,
                                            (unsigned long)16);
     if (unpadded == (unsigned long)0) { return (unsigned long)0; }
 
-    self.read_seq = self.read_seq + (unsigned long long)1;
-
-    // Last byte of TLSInnerPlaintext is the real content type; strip trailing zeros
-    // per RFC 8446 §5.4 (content type byte is the rightmost non-zero byte).
+    // Last byte of TLSInnerPlaintext is the real content type (this layer
+    // adds no zero padding before it, so there is none to strip).
     unsigned long payload_end = unpadded - (unsigned long)1;
+    if (payload_end > out_cap) { return (unsigned long)0; }
     unsafe {
         *content_type_out = plain[payload_end];
     }
+    self.read_seq = self.read_seq + (unsigned long long)1;
 
-    if (payload_end > out_cap) { return (unsigned long)0; }
     unsafe {
         memcpy((void*)out, (const void*)plain, payload_end);
     }

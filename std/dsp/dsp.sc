@@ -7,13 +7,13 @@
 // Accumulate fixed-point dot product.
 namespace std {
 
-Fixed dsp_dot(&stack Fixed a, &stack Fixed b, unsigned long n) {
+Fixed dsp_dot(const &Fixed a, const &Fixed b, unsigned long n) {
     Fixed acc = (Fixed)0;
     unsigned long i = 0UL;
     while (i < n) {
         unsafe {
-            Fixed* pa = (Fixed*)a;
-            Fixed* pb = (Fixed*)b;
+            const Fixed* pa = (const Fixed*)a;
+            const Fixed* pb = (const Fixed*)b;
             acc = fixed_add(acc, fixed_mul(pa[i], pb[i]));
         }
         i = i + 1UL;
@@ -27,7 +27,7 @@ void dsp_scale(&stack Fixed a, Fixed scale, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         unsafe {
-            Fixed* pa = (Fixed*)a;
+            const Fixed* pa = (const Fixed*)a;
             pa[i] = fixed_mul(pa[i], scale);
         }
         i = i + 1UL;
@@ -36,12 +36,12 @@ void dsp_scale(&stack Fixed a, Fixed scale, unsigned long n) {
 
 // ── dsp_add ───────────────────────────────────────────────────────────────────
 // Element-wise addition: out[i] = a[i] + b[i].
-void dsp_add(&stack Fixed a, &stack Fixed b, &stack Fixed out, unsigned long n) {
+void dsp_add(const &Fixed a, const &Fixed b, &Fixed out, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         unsafe {
-            Fixed* pa = (Fixed*)a;
-            Fixed* pb = (Fixed*)b;
+            const Fixed* pa = (const Fixed*)a;
+            const Fixed* pb = (const Fixed*)b;
             Fixed* po = (Fixed*)out;
             po[i] = fixed_add(pa[i], pb[i]);
         }
@@ -56,7 +56,7 @@ void dsp_clip(&stack Fixed a, Fixed lo, Fixed hi, unsigned long n) {
     while (i < n) {
         Fixed v;
         unsafe {
-            Fixed* pa = (Fixed*)a;
+            const Fixed* pa = (const Fixed*)a;
             v = pa[i];
         }
         if ((int)v < (int)lo) {
@@ -65,7 +65,7 @@ void dsp_clip(&stack Fixed a, Fixed lo, Fixed hi, unsigned long n) {
             v = hi;
         }
         unsafe {
-            Fixed* pa = (Fixed*)a;
+            const Fixed* pa = (const Fixed*)a;
             pa[i] = v;
         }
         i = i + 1UL;
@@ -74,13 +74,13 @@ void dsp_clip(&stack Fixed a, Fixed lo, Fixed hi, unsigned long n) {
 
 // ── dsp_peak ──────────────────────────────────────────────────────────────────
 // Return maximum absolute value in array.
-Fixed dsp_peak(&stack Fixed a, unsigned long n) {
+Fixed dsp_peak(const &Fixed a, unsigned long n) {
     Fixed peak = (Fixed)0;
     unsigned long i = 0UL;
     while (i < n) {
         Fixed v;
         unsafe {
-            Fixed* pa = (Fixed*)a;
+            const Fixed* pa = (const Fixed*)a;
             v = pa[i];
         }
         Fixed av = fixed_abs(v);
@@ -103,7 +103,7 @@ Fixed dsp_rms(&stack Fixed a, unsigned long n) {
     while (i < n) {
         Fixed v;
         unsafe {
-            Fixed* pa = (Fixed*)a;
+            const Fixed* pa = (const Fixed*)a;
             v = pa[i];
         }
         sum = fixed_add(sum, fixed_mul(v, v));

@@ -26,17 +26,17 @@ static void rng_abort_(const char* msg) {
 
 // ── ChaCha20 core ─────────────────────────────────────────────────────────────
 
-static unsigned int chacha_rotr_(unsigned int v, int n) {
+static unsigned int chacha_rotl_(unsigned int v, int n) {
     return (v << n) | (v >> (32 - n));
 }
 
 static void chacha_qr_(unsigned int* a, unsigned int* b,
                         unsigned int* c, unsigned int* d) {
     unsafe {
-        *a = *a + *b; *d = chacha_rotr_(*d ^ *a, 16);
-        *c = *c + *d; *b = chacha_rotr_(*b ^ *c, 12);
-        *a = *a + *b; *d = chacha_rotr_(*d ^ *a,  8);
-        *c = *c + *d; *b = chacha_rotr_(*b ^ *c,  7);
+        *a = *a + *b; *d = chacha_rotl_(*d ^ *a, 16);
+        *c = *c + *d; *b = chacha_rotl_(*b ^ *c, 12);
+        *a = *a + *b; *d = chacha_rotl_(*d ^ *a,  8);
+        *c = *c + *d; *b = chacha_rotl_(*b ^ *c,  7);
     }
 }
 
@@ -154,10 +154,12 @@ int rng_init(&RngCtx ctx) {
         void* f = fopen("/dev/urandom", "rb");
         if (f != (void*)0) {
             unsigned char seed[32];
-            fread((void*)seed, (unsigned long)1, (unsigned long)32, f);
+            unsigned long got = fread((void*)seed, (unsigned long)1, (unsigned long)32, f);
             fclose(f);
-            rng_init_seed(ctx, seed);
-            return 1;
+            if (got == (unsigned long)32) {      // a short read would seed from stack garbage
+                rng_init_seed(ctx, seed);
+                return 1;
+            }
         }
     }
 #endif
@@ -206,10 +208,10 @@ inline unsigned int RngCtx::rand32() {
     }
 }
 
-inline unsigned long RngCtx::rand64() {
-    unsigned long lo = (unsigned long)self.rand32();
-    unsigned long hi = (unsigned long)self.rand32();
-    return (hi << (unsigned long)32) | lo;
+inline unsigned long long RngCtx::rand64() {
+    unsigned long long lo = (unsigned long long)self.rand32();
+    unsigned long long hi = (unsigned long long)self.rand32();
+    return (hi << 32ULL) | lo;
 }
 
 inline unsigned long RngCtx::rand_range(unsigned long bound) {
@@ -218,7 +220,7 @@ inline unsigned long RngCtx::rand_range(unsigned long bound) {
     unsigned long threshold = (~bound + (unsigned long)1) % bound;
     unsafe {
         while (1) {
-            unsigned long r = self.rand64();
+            unsigned long r = (unsigned long)self.rand64();   // 32 bits on 32-bit targets: threshold matches
             if (r >= threshold) { return r % bound; }
         }
     }

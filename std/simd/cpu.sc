@@ -114,7 +114,7 @@ int simd_level() {
     return l;
 }
 
-const char* simd_level_name(int level) {
+const &char simd_level_name(int level) {
     if (level == SIMD_AVX512) return "AVX-512";
     if (level == SIMD_AVX2) return "AVX2";
     if (level == SIMD_AVX) return "AVX";

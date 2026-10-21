@@ -271,6 +271,10 @@ inline const ?&unsigned char mem_chr(const &unsigned char s, int c, unsigned lon
 // Return heap copy of first `n` bytes of `s`, NUL-terminated.
 inline ?&heap char str_ndup(const &char s, unsigned long n) {
     unsafe {
+        // Stop at the terminator: s may be shorter than n.
+        unsigned long len = 0UL;
+        while (len < n && s[len] != (char)0) { len = len + 1UL; }
+        n = len;
         char* buf = (char*)alloc_raw_(n + (unsigned long)1);
         if (buf != (char*)0) {
             memcpy((void*)buf, (const void*)s, n);

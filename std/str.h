@@ -56,7 +56,8 @@ const ?&unsigned char mem_chr(const &unsigned char s, int c, unsigned long n);
 // Return a heap-allocated NUL-terminated copy of `s`.  Caller must call dealloc().
 ?&heap char   str_dup(const &char s);
 
-// Return a heap-allocated copy of the first `n` bytes of `s`, NUL-terminated.
+// Return a heap-allocated copy of at most the first `n` bytes of `s` (stopping
+// at its terminator), NUL-terminated.
 ?&heap char   str_ndup(const &char s, unsigned long n);
 
 } // namespace std

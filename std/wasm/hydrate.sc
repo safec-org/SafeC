@@ -21,7 +21,7 @@ static void __hydrate_text_int_listener(?&HydrateTextBinding bq) {
             char buf[24];
             unsafe {
                 wasm_itoa((long long)b.signal.get(), buf, 24UL);
-                dom_set_text(b.elementHandle, (const char*)buf);
+                dom_set_text(b.elementHandle, buf);
             }
         }
     }
@@ -40,7 +40,7 @@ void hydrate_bind_text_int_handle(&Signal<int> signal, int elementHandle) {
     signal_subscribe(signal, __hydrate_text_int_listener, bq);
 }
 
-int hydrate_bind_text_int(&Signal<int> signal, const char* selector) {
+int hydrate_bind_text_int(&Signal<int> signal, const &char selector) {
     int handle = dom_get_element(selector);
     if (handle < 0) {
         return -1;

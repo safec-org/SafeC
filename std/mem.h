@@ -43,10 +43,11 @@ int           mem_is_aligned(unsigned long addr, unsigned long align);
 // locality: 0=no temporal, 1=low, 2=moderate, 3=high
 generic<T> void mem_prefetch(const &T addr, int write, int locality);
 
-// Zero a cache-line-aligned region (flushes after zero for security).
+// Zero `n` bytes with volatile stores the optimizer can't remove (for secrets).
 generic<T> void mem_zero_secure(&T ptr, unsigned long n);
 
-// Flush cache line containing `addr` to memory (no-op on non-x86 without CLFLUSH).
+// Write back and invalidate the cache line containing `addr` (x86 CLFLUSH,
+// AArch64 DC CIVAC; a no-op on other targets).
 generic<T> void mem_clflush(const &T addr);
 
 // ── Alignment utilities ───────────────────────────────────────────────────────
