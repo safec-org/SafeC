@@ -1,7 +1,7 @@
 #pragma once
 // SafeC Standard Library — Stack<T> (LIFO)
 //
-//   struct Stack<int> s = std::stack_new();
+//   struct Stack<int> s = std::Stack::new();
 //   s.push(1); s.push(2);
 //   ?int top = s.pop();      // 2
 //   s.free();
@@ -18,6 +18,9 @@ struct Stack {
     unsigned long top;       // number of elements
     unsigned long cap;
 
+    static struct Stack<T> new();                     // empty, no allocation
+    static struct Stack<T> with_cap(unsigned long cap); // room for cap elements
+
     int           push(T value);   // 0 on OOM
     ?T            pop();           // null if empty
     ?&T           peek() const;    // null if empty
@@ -29,7 +32,7 @@ struct Stack {
 };
 
 generic<T>
-struct Stack<T> stack_new() {
+struct Stack<T> Stack::new() {
     struct Stack<T> s;
     s.data = null;
     s.top = 0UL;
@@ -38,8 +41,8 @@ struct Stack<T> stack_new() {
 }
 
 generic<T>
-struct Stack<T> stack_with_cap(unsigned long cap) {
-    struct Stack<T> s = stack_new();
+struct Stack<T> Stack::with_cap(unsigned long cap) {
+    struct Stack<T> s = Stack::new();
     s.reserve(cap);
     return s;
 }

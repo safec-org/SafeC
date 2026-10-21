@@ -150,7 +150,7 @@ void json_write(const &Value v, &String out) {
 }
 
 inline struct String value_to_json(const &Value v) {
-    struct String out = string_new();
+    struct String out = String::new();
     json_write(v, &out);
     return out;
 }
@@ -222,7 +222,7 @@ static unsigned int json_read_hex4_(&JsonCursor_ c) {
 
 static struct Value json_parse_string_raw_(&JsonCursor_ c) {
     // Caller already confirmed the opening '"'.
-    struct String out = string_new();
+    struct String out = String::new();
     json_eat_(c, '"');
     while (1) {
         int stillOk;
@@ -296,9 +296,9 @@ static struct Value json_parse_number_(&JsonCursor_ c) {
     unsafe { len = c->pos - start; }
     if (len == 0UL) { unsafe { c->ok = 0; } return value_null(); }
 
-    struct String tok = string_new();
+    struct String tok = String::new();
     struct String numStr;
-    unsafe { numStr = string_from_n(c->text + start, len); }
+    unsafe { numStr = String::from_n(c->text + start, len); }
     tok.push_str(&numStr);
     numStr.free();
     int ok = 0;

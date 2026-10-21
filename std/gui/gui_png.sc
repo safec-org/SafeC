@@ -246,7 +246,7 @@ static int __inflate_raw(const unsigned char* data, unsigned long size, struct S
     s.bytePos = 0UL;
     s.bitBuf = 0U;
     s.bitCount = 0;
-    unsafe { s.out = string_new(); }
+    unsafe { s.out = String::new(); }
     s.error = 0;
 
     int bfinal = 0;
@@ -337,7 +337,7 @@ int GuiImage::load_png(const &unsigned char data_ref, unsigned long size) { cons
     }
 
     int width = 0; int height = 0; int bitDepth = 0; int colorType = -1; int interlace = 0;
-    struct String idat = string_new();
+    struct String idat = String::new();
     int haveIhdr = 0;
 
     unsigned long pos = 8UL;

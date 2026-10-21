@@ -6,12 +6,12 @@
 // Freestanding-safe.
 //
 //   static int g_buf[32];
-//   struct StaticVec<int> v = std::static_vec_init(&g_buf[0], 32UL);
+//   struct StaticVec<int> v = std::StaticVec::over(&g_buf[0], 32UL);
 //   v.push(42);
 //   ?int top = v.pop();
 //
 //   static struct StaticMapSlot<int> g_slots[64];
-//   struct StaticMap<int> m = std::static_map_init(&g_slots[0], 64UL);
+//   struct StaticMap<int> m = std::StaticMap::over(&g_slots[0], 64UL);
 //   m.insert(5UL, 100);
 //   int x = m.get(5UL).default(0);
 //
@@ -29,6 +29,8 @@ struct StaticVec {
     unsigned long len;
     unsigned long cap;
 
+    static struct StaticVec<T> over(&T storage, unsigned long cap);  // empty, over cap elements
+
     int           push(T val);                  // 0 if full
     ?T            pop();                        // null if empty
     ?&T           top() const;
@@ -40,7 +42,7 @@ struct StaticVec {
 };
 
 generic<T>
-struct StaticVec<T> static_vec_init(&T storage, unsigned long cap) {
+struct StaticVec<T> StaticVec::over(&T storage, unsigned long cap) {
     struct StaticVec<T> v;
     v.data = storage;
     v.len = 0UL;
@@ -102,6 +104,8 @@ struct StaticMap {
     unsigned long     cap;
     unsigned long     count;
 
+    static struct StaticMap<V> over(&StaticMapSlot<V> storage, unsigned long cap);  // empty, over cap slots
+
     int           insert(unsigned long key, V val);   // insert or update; 0 if full
     ?&V           get(unsigned long key) const;       // null if missing
     int           contains(unsigned long key) const;
@@ -110,7 +114,7 @@ struct StaticMap {
 };
 
 generic<V>
-struct StaticMap<V> static_map_init(&StaticMapSlot<V> storage, unsigned long cap) {
+struct StaticMap<V> StaticMap::over(&StaticMapSlot<V> storage, unsigned long cap) {
     struct StaticMap<V> m;
     m.slots = storage;
     m.cap = cap;

@@ -300,12 +300,12 @@ struct String http_header_get(const &char raw_headers, const &char name) {
     while (1) {
         unsigned long next = http_next_header_(raw_headers, len, pos, &ks, &ke, &vs, &ve);
         if (ke > ks && http_key_is_(raw_headers, ks, ke, name)) {
-            unsafe { return string_from_n(&raw_headers[vs], ve - vs); }
+            unsafe { return String::from_n(&raw_headers[vs], ve - vs); }
         }
         if (next == 0UL) { break; }
         pos = next;
     }
-    return string_new();
+    return String::new();
 }
 
 // Serializes a handler's HttpResponse: status line, every header the
@@ -313,7 +313,7 @@ struct String http_header_get(const &char raw_headers, const &char name) {
 // server loops used to forward Content-Type only), a default Content-Type
 // if it set none, then the Content-Length/Connection this server owns.
 static struct String http_render_response_(&HttpResponse resp) {
-    struct String out = string_with_cap(160UL + resp.headers.length() + resp.body.length());
+    struct String out = String::with_cap(160UL + resp.headers.length() + resp.body.length());
     unsafe {
         out.push("HTTP/1.1 ");
         out.push_int((long long)resp.status);
@@ -379,7 +379,7 @@ struct String http_build_response(int status, const &char content_type,
                                    const ?&unsigned char body, unsigned long body_len) {
     const char* ctype;
     if (content_type) { ctype = content_type; } else { ctype = "text/plain"; }
-    struct String out = string_new();
+    struct String out = String::new();
     unsafe {
         out.push("HTTP/1.1 ");
         out.push_int((long long)status);
@@ -414,8 +414,8 @@ struct HttpResponse http_request_timeout(const &char host, unsigned short port,
                                           ?&int ok) {
     struct HttpResponse resp;
     resp.status  = 0;
-    resp.headers = string_new();
-    resp.body    = string_new();
+    resp.headers = String::new();
+    resp.body    = String::new();
     int good = 1;
 
     unsigned int addr = 0U;
@@ -436,7 +436,7 @@ struct HttpResponse http_request_timeout(const &char host, unsigned short port,
     }
 
     if (good) {
-        struct String req = string_new();
+        struct String req = String::new();
         unsafe {
             req.push(method);
             req.push_char(' ');
@@ -458,7 +458,7 @@ struct HttpResponse http_request_timeout(const &char host, unsigned short port,
     }
 
     if (good) {
-        struct String buf = string_new();
+        struct String buf = String::new();
         long headerEnd = read_until_(fd, &buf, "\r\n\r\n");
         if (headerEnd < 0L) {
             good = 0;
@@ -470,7 +470,7 @@ struct HttpResponse http_request_timeout(const &char host, unsigned short port,
                 : headerBlock.clone();
             struct String restHeaders = (firstLineEnd >= 0L)
                 ? headerBlock.substr((unsigned long)firstLineEnd + 2UL, headerBlock.length())
-                : string_new();
+                : String::new();
             headerBlock.free();
 
             // Status line: "HTTP/1.1 200 OK"
@@ -527,7 +527,7 @@ struct HttpResponse http_post(const &char host, unsigned short port, const &char
                                ?&int ok) {
     const char* ctype;
     if (content_type) { ctype = content_type; } else { ctype = "application/octet-stream"; }
-    struct String hdr = string_new();
+    struct String hdr = String::new();
     unsafe {
         hdr.push("Content-Type: ");
         hdr.push(ctype);
@@ -543,13 +543,13 @@ struct HttpResponse http_post(const &char host, unsigned short port, const &char
 
 static struct HttpRequest http_parse_request_(int fd, int* ok) {
     struct HttpRequest req;
-    req.method  = string_new();
-    req.path    = string_new();
-    req.headers = string_new();
-    req.body    = string_new();
+    req.method  = String::new();
+    req.path    = String::new();
+    req.headers = String::new();
+    req.body    = String::new();
     int good = 1;
 
-    struct String buf = string_new();
+    struct String buf = String::new();
     long headerEnd = read_until_(fd, &buf, "\r\n\r\n");
     if (headerEnd < 0L) {
         good = 0;
@@ -561,7 +561,7 @@ static struct HttpRequest http_parse_request_(int fd, int* ok) {
             : headerBlock.clone();
         struct String restHeaders = (firstLineEnd >= 0L)
             ? headerBlock.substr((unsigned long)firstLineEnd + 2UL, headerBlock.length())
-            : string_new();
+            : String::new();
         headerBlock.free();
 
         // Request line: "GET /path HTTP/1.1"
@@ -711,10 +711,10 @@ int http_serve_threaded(unsigned short port, HttpHandler handler, int numThreads
 
 static struct HttpRequest http_parse_request_from_buf_(struct String* buf, long headerEnd, int* ok) {
     struct HttpRequest req;
-    req.method  = string_new();
-    req.path    = string_new();
-    req.headers = string_new();
-    req.body    = string_new();
+    req.method  = String::new();
+    req.path    = String::new();
+    req.headers = String::new();
+    req.body    = String::new();
     int good = 1;
 
     unsafe {
@@ -725,7 +725,7 @@ static struct HttpRequest http_parse_request_from_buf_(struct String* buf, long 
             : headerBlock.clone();
         struct String restHeaders = (firstLineEnd >= 0L)
             ? headerBlock.substr((unsigned long)firstLineEnd + 2UL, headerBlock.length())
-            : string_new();
+            : String::new();
         headerBlock.free();
 
         struct String parts[8];
@@ -926,10 +926,10 @@ static void http_spawn_conn_(struct TaskScheduler* sched, struct Reactor* reacto
         st->reactor = reactor;
         st->phase = HTTP_CONN_PHASE_READ_HEADERS_;
         st->registeredFilter = 0;
-        st->readBuf = string_new();
+        st->readBuf = String::new();
         st->headerEnd = -1L;
         st->bodyWant = 0UL;
-        st->respText = string_new();
+        st->respText = String::new();
         st->sent = 0UL;
         int idx = task_spawn((&TaskScheduler)sched, http_conn_task_, (?&HttpConnState_)st);
         if (idx < 0) {

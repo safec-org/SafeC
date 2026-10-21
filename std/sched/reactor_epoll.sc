@@ -105,12 +105,12 @@ static int reactor_signum_for_fd_(const &Vec<struct SigFdEntry> sigfds, int fd) 
 inline struct Reactor reactor_init() {
     struct Reactor r;
     r.kq = -1;
-    r.sigfds = vec_new();
+    r.sigfds = Vec::new();
     // Unused on this backend (epoll has persistent kernel-side
     // registration) — only initialized to satisfy definite-initialization
     // for this shared struct Reactor field; see reactor.h's comment on
     // watched.
-    r.watched = vec_new();
+    r.watched = Vec::new();
     return r;
 }
 

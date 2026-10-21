@@ -105,8 +105,8 @@ inline struct Reactor reactor_init() {
     // initialization for this shared struct Reactor field; see
     // reactor.h's comment on sigfds. SCHED_SIGNAL is a no-op here (see
     // this file's header comment), so nothing ever populates it.
-    r.sigfds = vec_new();
-    r.watched = vec_new();
+    r.sigfds = Vec::new();
+    r.watched = Vec::new();
     return r;
 }
 

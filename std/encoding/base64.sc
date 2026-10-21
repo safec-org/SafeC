@@ -19,7 +19,7 @@ static char base64_char_(int sextet) {
 }
 
 struct String base64_encode(const &unsigned char data, unsigned long len) {
-    struct String out = string_new();
+    struct String out = String::new();
     unsigned long i = 0UL;
     while (i + 3UL <= len) {
         unsigned char b0;
@@ -86,7 +86,7 @@ static int base64_val_(char c) {
 }
 
 struct Vec<unsigned char> base64_decode(const &char s, ?&int ok) {
-    struct Vec<unsigned char> out = vec_new();
+    struct Vec<unsigned char> out = Vec::new();
     int good = 1;
     int group[4];
     int groupLen = 0;

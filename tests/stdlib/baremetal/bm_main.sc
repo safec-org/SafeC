@@ -101,7 +101,7 @@ static int cmp_int(const &int a, const &int b) { return *a - *b; }
 
 static void t_collections() {
     unsafe {
-        struct Vec<int> v = std::vec_new();
+        struct Vec<int> v = std::Vec::new();
         int i = 0;
         while (i < 500) { v.push((i * 7919) % 500); i = i + 1; }
         v.sort(cmp_int);
@@ -109,7 +109,7 @@ static void t_collections() {
         CHECK(*v.at(499UL) == 499);
         v.free();
 
-        struct HashMap<int, int> m = std::map_new();
+        struct HashMap<int, int> m = std::HashMap::new();
         i = 0;
         while (i < 300) { m.insert(i, i * i); i = i + 1; }
         CHECK(m.get(17).default(-1) == 289);
@@ -119,7 +119,7 @@ static void t_collections() {
         CHECK(m.length() == 300UL);
         m.free();
 
-        struct String s = std::string_from("bare metal");
+        struct String s = std::String::from("bare metal");
         s.push(" safec");
         struct String up = s.to_upper();
         CHECK(up.eq_cstr("BARE METAL SAFEC"));
@@ -127,7 +127,7 @@ static void t_collections() {
         up.free();
         s.free();
 
-        struct List<int> l = std::list_new();
+        struct List<int> l = std::List::new();
         i = 0;
         while (i < 10) { l.push_back(i); i = i + 1; }
         CHECK(l.length() == 10UL);
@@ -151,7 +151,7 @@ static unsigned char g_ring_store[64];
 
 static void t_ring_alloc() {
     unsafe {
-        struct RingBuffer r = std::ring_init((&static unsigned char)g_ring_store, 64UL);
+        struct RingBuffer r = std::RingBuffer::over((&static unsigned char)g_ring_store, 64UL);
         unsigned char in[40];
         unsigned char out[40];
         int i = 0;

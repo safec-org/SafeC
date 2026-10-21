@@ -40,7 +40,7 @@ static &Widget __widget_new(int kind) {
         w->style.fontScale = 1;
         w->style.font = (const struct GuiFont*)0;
 
-        w->text = string_new();
+        w->text = String::new();
         w->visible = 1;
         w->enabled = 1;
         w->checked = 0;
@@ -63,7 +63,7 @@ static &Widget __widget_new(int kind) {
         w->customEvent = (void*)0;
         w->userData = (void*)0;
 
-        w->children = vec_new();
+        w->children = Vec::new();
         w->parent = (struct Widget*)0;
     }
     return w;
@@ -83,7 +83,7 @@ static &Widget __widget_new(int kind) {
     &Widget w = __widget_new(WIDGET_BUTTON);
     unsafe {
         w->text.free();
-        w->text = string_from(text);
+        w->text = String::from(text);
         return w;
     }
 }
@@ -91,7 +91,7 @@ static &Widget __widget_new(int kind) {
     &Widget w = __widget_new(WIDGET_LABEL);
     unsafe {
         w->text.free();
-        w->text = string_from(text);
+        w->text = String::from(text);
         return w;
     }
 }
@@ -99,7 +99,7 @@ static &Widget __widget_new(int kind) {
     &Widget w = __widget_new(WIDGET_CHECKBOX);
     unsafe {
         w->text.free();
-        w->text = string_from(text);
+        w->text = String::from(text);
         w->checked = checked;
         return w;
     }
@@ -108,7 +108,7 @@ static &Widget __widget_new(int kind) {
     &Widget w = __widget_new(WIDGET_TEXTINPUT);
     unsafe {
         w->text.free();
-        w->text = string_from(placeholder);
+        w->text = String::from(placeholder);
         return w;
     }
 }
@@ -194,7 +194,7 @@ void Widget::add_child(&Widget child) {
 &Widget Widget::set_text(const &char text) {
     unsafe {
         self.text.free();
-        self.text = string_from(text);
+        self.text = String::from(text);
     }
     unsafe { return (struct Widget*)self; }
 }
@@ -678,7 +678,7 @@ static void __widget_apply_default_key_action(&Widget root, struct GuiEvent* ev)
     int keycode; unsafe { keycode = ev->keycode; }
 
     if (keycode == GUI_KEY_TAB) {
-        struct Vec<&Widget> list = vec_new();
+        struct Vec<&Widget> list = Vec::new();
         __widget_collect_focusable(root, &list);
         unsigned long n; unsafe { n = list.length(); }
         if (n > 0UL) {

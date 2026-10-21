@@ -679,7 +679,7 @@ struct PoolNode {
 };
 
 void t_node_pool() {
-    struct NodePool<PoolNode> p = node_pool_new();
+    struct NodePool<PoolNode> p = NodePool::new();
     ?&heap PoolNode first = p.take();
     ASSERT_FALSE(first.is_null());
     int i = 0;

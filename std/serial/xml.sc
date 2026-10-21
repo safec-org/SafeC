@@ -122,7 +122,7 @@ void xml_write(const &Value v, const &char tag, &String out) {
 }
 
 inline struct String value_to_xml(const &Value v, const &char root_tag) {
-    struct String out = string_new();
+    struct String out = String::new();
     xml_write(v, root_tag, &out);
     return out;
 }
@@ -193,7 +193,7 @@ static struct String xml_read_name_(struct XmlCursor_* c) {
     }
     unsigned long end;
     unsafe { end = c->pos; }
-    struct String out = string_new();
+    struct String out = String::new();
     if (end > start) { unsafe { out.push_n(c->text + start, end - start); } }
     return out;
 }
@@ -213,7 +213,7 @@ static struct String xml_peek_tag_name_(struct XmlCursor_* c) {
 // Reads raw text up to (not including) the next '<' or end of input,
 // decoding the 5 entities xml_append_escaped_ emits.
 static struct String xml_decode_text_(struct XmlCursor_* c) {
-    struct String out = string_new();
+    struct String out = String::new();
     unsigned long run_start;
     unsafe { run_start = c->pos; }
     while (1) {

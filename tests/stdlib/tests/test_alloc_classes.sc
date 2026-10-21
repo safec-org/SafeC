@@ -96,7 +96,7 @@ static void conv_then_alloc(unsigned long inC, unsigned long outC, unsigned long
     // each twice so the second round can come from the size-class cache.
     int round = 0;
     while (round < 2) {
-        struct Vec<float> v = vec_with_cap(262145UL);
+        struct Vec<float> v = Vec::with_cap(262145UL);
         unsigned long i = 0UL;
         while (i < 262145UL) { v.push((float)i); i = i + 1UL; }
         ASSERT_EQ(v.length(), 262145);

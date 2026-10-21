@@ -1,7 +1,7 @@
 #pragma once
 // SafeC Standard Library — List<T> (doubly linked list)
 //
-//   struct List<int> l = std::list_new();
+//   struct List<int> l = std::List::new();
 //   l.push_back(1); l.push_front(0);
 //   ?int first = l.pop_front();     // 0
 //   l.free();
@@ -29,6 +29,8 @@ struct List {
     unsigned long                   len;
     struct NodePool<struct ListNode<T>> pool;
 
+    static struct List<T> new();          // empty, no allocation
+
     int           push_front(T value);   // 0 on OOM
     int           push_back(T value);    // 0 on OOM
     ?T            pop_front();           // null if empty
@@ -52,12 +54,12 @@ struct List {
 };
 
 generic<T>
-struct List<T> list_new() {
+struct List<T> List::new() {
     struct List<T> l;
     l.head = null;
     l.tail = null;
     l.len = 0UL;
-    l.pool = node_pool_new();
+    l.pool = NodePool::new();
     return l;
 }
 

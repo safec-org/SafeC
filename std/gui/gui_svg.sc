@@ -48,12 +48,12 @@ static struct String __svg_attr(const char* text, unsigned long pos, unsigned lo
                 unsigned long vstart = q + 1UL;
                 unsigned long vend = vstart;
                 while (vend < tagEnd && text[vend] != '"') { vend = vend + 1UL; }
-                return string_from_n(text + vstart, vend - vstart);
+                return String::from_n(text + vstart, vend - vstart);
             }
         }
         i = i + 1UL;
     }
-    return string_new();
+    return String::new();
   }
 }
 
@@ -217,12 +217,12 @@ static int __svg_parse_points(struct String pts, double* xs, double* ys, int max
             if (i >= len) { break; }
             unsigned long start = i;
             while (i < len && pts.data[i] != ',' && !__svg_is_ws(pts.data[i])) { i = i + 1UL; }
-            struct String xsStr = string_from_n((const char*)pts.data + start, i - start);
+            struct String xsStr = String::from_n((const char*)pts.data + start, i - start);
             int ok1; double xv; xv = xsStr.parse_float(&ok1); xsStr.free();
             while (i < len && (pts.data[i] == ',' || __svg_is_ws(pts.data[i]))) { i = i + 1UL; }
             start = i;
             while (i < len && !__svg_is_ws(pts.data[i]) && pts.data[i] != ',') { i = i + 1UL; }
-            struct String ysStr = string_from_n((const char*)pts.data + start, i - start);
+            struct String ysStr = String::from_n((const char*)pts.data + start, i - start);
             int ok2; double yv; yv = ysStr.parse_float(&ok2); ysStr.free();
             if (ok1 && ok2) { xs[n] = xv; ys[n] = yv; n = n + 1; }
         }
@@ -293,7 +293,7 @@ static void __svg_draw_path(&GuiWindow win, int ox, int oy, struct String d,
             unsigned long numLen; unsafe { numLen = i - start2; }
             if (numLen == 0UL) { break; }
             struct String numStr;
-            unsafe { numStr = string_from_n((const char*)d.data + start2, numLen); }
+            unsafe { numStr = String::from_n((const char*)d.data + start2, numLen); }
             int ok; double val;
             unsafe { val = numStr.parse_float(&ok); numStr.free(); }
             nums[got] = ok ? val : 0.0;

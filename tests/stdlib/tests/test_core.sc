@@ -418,8 +418,8 @@ void t_core_extra() {
         atomic_thread_fence();
         int x = 3;
         int y = 8;
-        struct Less<int> lt = order_less();
-        struct Greater<int> gt = order_greater();
+        struct Less<int> lt = Less::new();
+        struct Greater<int> gt = Greater::new();
         ASSERT_TRUE(lt.cmp(&x, &y) < 0);
         ASSERT_TRUE(gt.cmp(&x, &y) > 0);
         ASSERT_EQ(lt.cmp(&x, &x), 0);

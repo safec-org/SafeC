@@ -109,7 +109,7 @@ void t_xml_yaml_html() {
         ASSERT_TRUE(ok);
         struct String h2 = value_to_html(&hb);
         ASSERT_STR_EQ(h.as_ptr(), h2.as_ptr());
-        struct String esc = string_new();
+        struct String esc = String::new();
         html_escape(&esc, "<a href=\"x\">&</a>");
         ASSERT_TRUE(esc.contains("&lt;a"));
         ASSERT_TRUE(esc.contains("&amp;"));
@@ -121,7 +121,7 @@ void t_xml_yaml_html() {
 
 void t_protobuf() {
     unsafe {
-        struct String buf = string_new();
+        struct String buf = String::new();
         pb_write_int64_field(&buf, 1, 150LL);
         // Canonical example from the protobuf encoding guide: field 1 = 150 → 08 96 01
         ASSERT_EQ(buf.length(), 3);
@@ -191,7 +191,7 @@ void t_writers_varint() {
         ASSERT_EQ(okv->as_bool(), 1);
         ASSERT_EQ(okv->kind_of(), VAL_BOOL);
 
-        struct String a = string_from("prefix:");
+        struct String a = String::from("prefix:");
         json_write(&o, &a);
         struct String j = value_to_json(&o);
         ASSERT_TRUE(a.starts_with("prefix:"));
@@ -221,7 +221,7 @@ void t_writers_varint() {
         unsigned long long vals[6];
         vals[0] = 0ULL; vals[1] = 127ULL; vals[2] = 128ULL; vals[3] = 300ULL;
         vals[4] = 9223372036854775808ULL; vals[5] = 18446744073709551615ULL;
-        struct String buf = string_new();
+        struct String buf = String::new();
         int i = 0;
         while (i < 6) { pb_write_varint(&buf, vals[i]); i = i + 1; }
         ASSERT_EQ(buf.length(), 1 + 1 + 2 + 2 + 10 + 10);
@@ -241,7 +241,7 @@ void t_writers_varint() {
         ASSERT_FALSE(trunc.read_varint(&v));                  // unterminated
         buf.free();
 
-        struct String e = string_new();
+        struct String e = String::new();
         scx_append_esc(&e, "<a href='x'>\"&\"</a>");
         ASSERT_STR_EQ(e.as_ptr(), "&lt;a href=&#39;x&#39;&gt;&quot;&amp;&quot;&lt;/a&gt;");
         e.free();

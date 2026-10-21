@@ -26,7 +26,7 @@ void RpcResult::free() {
 // no compression support) + 4-byte big-endian length + message bytes. ──
 
 static struct String rpc_frame_(const unsigned char* data, unsigned long len) {
-    struct String out = string_new();
+    struct String out = String::new();
     unsafe {
         out.push_char((char)0); // compression flag: uncompressed
         out.push_char((char)((len >> 24) & 0xFFUL));
@@ -72,7 +72,7 @@ struct RpcResult rpc_call(const &char host, unsigned short port, const &char pat
     result.ok            = 0;
     result.data           = (unsigned char*)0;
     result.len            = 0UL;
-    result.error_message  = string_new();
+    result.error_message  = String::new();
 
     struct String frame = rpc_frame_(request_data, request_len);
     int httpOk = 0;
@@ -126,7 +126,7 @@ static int rpc_handlers_init_ = 0;
 
 void rpc_register(const &char path, RpcMethodHandler handler) {
     if (rpc_handlers_init_ == 0) {
-        rpc_handlers_ = str_map_new();
+        rpc_handlers_ = StrMap::new();
         rpc_handlers_init_ = 1;
     }
     rpc_handlers_.insert(path, handler);
@@ -140,12 +140,12 @@ static struct HttpResponse rpc_dispatch_(&HttpRequest req) {
     unsafe { if (rpc_handlers_init_ != 0) found = rpc_handlers_.get(path); }
 
     struct HttpResponse resp;
-    resp.headers = string_new();
+    resp.headers = String::new();
     unsafe { resp.headers.push("Content-Type: application/grpc+safec\r\n"); }
 
     if (found.is_null()) {
         resp.status = 404;
-        unsafe { resp.body = string_from("no RPC method registered for this path"); }
+        unsafe { resp.body = String::from("no RPC method registered for this path"); }
         return resp;
     }
 
@@ -159,7 +159,7 @@ static struct HttpResponse rpc_dispatch_(&HttpRequest req) {
     }
     if (!rpc_unframe_(bodyPtr, bodyLen, &reqData, &reqLen)) {
         resp.status = 400;
-        unsafe { resp.body = string_from("malformed request framing"); }
+        unsafe { resp.body = String::from("malformed request framing"); }
         return resp;
     }
 

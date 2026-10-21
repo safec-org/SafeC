@@ -215,11 +215,11 @@ void t_heap_result() {
         }
         ASSERT_EQ(heap_capacity(), 0);   // hosted: unbounded (malloc-backed)
 
-        struct Result<int, long long> r = result_ok(42);
+        struct Result<int, long long> r = Result::new_ok(42);
         ASSERT_TRUE(r.ok());
         ASSERT_EQ(r.get_ok().default(0), 42);
         ASSERT_TRUE(r.get_err().is_null());
-        struct Result<int, long long> e = result_err(7LL);
+        struct Result<int, long long> e = Result::new_err(7LL);
         ASSERT_TRUE(e.err());
         ASSERT_EQ(e.get_err().default(0LL), 7);
         ASSERT_EQ(e.unwrap_or(-1), -1);

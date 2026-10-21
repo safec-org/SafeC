@@ -11,7 +11,7 @@
 //   // .proto: message Point { int32 x = 1; int32 y = 2; }
 //   struct Point { int x; int y; };
 //   struct String Point::to_proto() const {
-//       struct String out = string_new();
+//       struct String out = String::new();
 //       pb_write_int64_field(&out, 1, (long long)self.x);
 //       pb_write_int64_field(&out, 2, (long long)self.y);
 //       return out;
@@ -102,7 +102,7 @@ struct PbReader {
     int read_double(&double out);
     int read_float(&float out);
     // '*dataOut' aliases into the reader's own buffer (see the zero-copy
-    // note above) — copy it out (e.g. via string_from_n) if it needs to
+    // note above) — copy it out (e.g. via String::from_n) if it needs to
     // outlive that buffer.
     int read_length_delimited(&&const unsigned char dataOut, &unsigned long lenOut);
 

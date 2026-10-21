@@ -42,7 +42,7 @@ static float maxdiff(&Vec<float> a, &Vec<float> b) {
 }
 
 static struct Vec<float> download(struct RocmBuf b) {
-    struct Vec<float> v = std::vec_with_cap(b.len);
+    struct Vec<float> v = std::Vec::with_cap(b.len);
     unsigned long i = 0UL;
     while (i < b.len) { v.push(0.0f); i = i + 1UL; }
     std::rocm_read(b, v.at(0UL), b.len);
@@ -81,7 +81,7 @@ static unsigned long fm_size(const &FeatureMap fm) { return fm.channels * fm.hei
 
 static struct Vec<float> fm_download(struct RocmBuf b, unsigned long off, unsigned long n) {
     struct Vec<float> all = download(b);
-    struct Vec<float> v = std::vec_with_cap(n);
+    struct Vec<float> v = std::Vec::with_cap(n);
     unsigned long i = 0UL;
     while (i < n) { v.push(*all.at(off + i)); i = i + 1UL; }
     all.free();
@@ -294,7 +294,7 @@ static void check_hipfft() {
     &heap Complex fref = cplx_new(fb * n, 21UL);
     r = 0UL;
     unsafe { while (r < fb) { std::fft(&fref[r * n], n); r = r + 1UL; } }
-    struct Vec<float> hf = std::vec_with_cap(2UL * fb * n);
+    struct Vec<float> hf = std::Vec::with_cap(2UL * fb * n);
     unsigned long i = 0UL;
     unsafe { while (i < fb * n) { hf.push((float)fx[i].re); hf.push((float)fx[i].im); i = i + 1UL; } }
     struct RocmBuf din = RocmBuf::upload(hf.at(0UL), 2UL * fb * n);
@@ -312,7 +312,7 @@ static void check_hipfft() {
     gf.free();
 
     // r2c on the real parts of row 0, compared with fft_real
-    struct Vec<float> re = std::vec_with_cap(n);
+    struct Vec<float> re = std::Vec::with_cap(n);
     ?&heap double redq = std::alloc(n * sizeof(double));
     double* red;
     unsafe { red = (double*)redq; }
@@ -366,11 +366,11 @@ static void fm_round_(&FeatureMap fm, int d) {
 }
 
 static struct Vec<float> half_download_(struct RocmHalfBuf h, unsigned long off, unsigned long n) {
-    struct Vec<unsigned short> bits = std::vec_with_cap(h.len);
+    struct Vec<unsigned short> bits = std::Vec::with_cap(h.len);
     unsigned long i = 0UL;
     while (i < h.len) { bits.push((unsigned short)0); i = i + 1UL; }
     std::rocm_half_read(h, bits.at(0UL), h.len);
-    struct Vec<float> v = std::vec_with_cap(n);
+    struct Vec<float> v = std::Vec::with_cap(n);
     i = 0UL;
     while (i < n) { v.push(std::half_decode(*bits.at(off + i), h.dtype)); i = i + 1UL; }
     bits.free();
@@ -402,7 +402,7 @@ static void check_miopen_half() {
             struct FeatureMap cb = lr.forward(&xb);
             unsigned long inN = fm_size(&xa);
             unsigned long outN = fm_size(&ca);
-            struct Vec<float> both = std::vec_with_cap(2UL * inN);
+            struct Vec<float> both = std::Vec::with_cap(2UL * inN);
             unsafe {
                 unsigned long i = 0UL;
                 while (i < inN) { both.push(xa.data[i]); i = i + 1UL; }

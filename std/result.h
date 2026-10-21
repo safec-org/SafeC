@@ -1,8 +1,8 @@
 // SafeC Standard Library — Result<T,E>: a value or an error, stored inline
 //
-//   struct Result<int, long long> r = std::result_ok(42);   // E taken from the target type
+//   struct Result<int, long long> r = std::Result::new_ok(42);   // E taken from the target type
 //   if (r.ok()) { int v = r.get_ok().default(0); }
-//   struct Result<int, long long> e = std::result_err(7LL);
+//   struct Result<int, long long> e = std::Result::new_err(7LL);
 //   match (e.get_err()) { case some(code): ...; case null: ... }
 //
 // No heap allocation: both slots live in the struct and only the one named
@@ -17,6 +17,9 @@ struct Result {
     E   error;   // valid when is_ok == 0
     int is_ok;
 
+    static struct Result<T, E> new_ok(T val);    // (ok/err are the queries below)
+    static struct Result<T, E> new_err(E err);
+
     int ok() const;
     int err() const;
     ?&T get_ok();             // null for an error result
@@ -25,7 +28,7 @@ struct Result {
 };
 
 generic<T, E>
-struct Result<T, E> result_ok(T val) {
+struct Result<T, E> Result::new_ok(T val) {
     struct Result<T, E> r;
     r.value = val;
     r.is_ok = 1;
@@ -33,7 +36,7 @@ struct Result<T, E> result_ok(T val) {
 }
 
 generic<T, E>
-struct Result<T, E> result_err(E err) {
+struct Result<T, E> Result::new_err(E err) {
     struct Result<T, E> r;
     r.error = err;
     r.is_ok = 0;

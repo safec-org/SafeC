@@ -28,17 +28,17 @@ static void __form_add(struct String* body, const char* key, const char* val) {
 
 static struct OAuth2Token __token_from_json(const struct Value* root) {
     struct OAuth2Token t;
-    t.accessToken = string_new();
-    t.refreshToken = string_new();
-    t.tokenType = string_new();
+    t.accessToken = String::new();
+    t.refreshToken = String::new();
+    t.tokenType = String::new();
     t.expiresIn = 0LL;
     unsafe {
         struct Value* at = root->object_get("access_token");
-        if (at != (struct Value*)0) { t.accessToken = string_from(at->as_string()); }
+        if (at != (struct Value*)0) { t.accessToken = String::from(at->as_string()); }
         struct Value* rt = root->object_get("refresh_token");
-        if (rt != (struct Value*)0) { t.refreshToken = string_from(rt->as_string()); }
+        if (rt != (struct Value*)0) { t.refreshToken = String::from(rt->as_string()); }
         struct Value* tt = root->object_get("token_type");
-        if (tt != (struct Value*)0) { t.tokenType = string_from(tt->as_string()); }
+        if (tt != (struct Value*)0) { t.tokenType = String::from(tt->as_string()); }
         struct Value* ei = root->object_get("expires_in");
         if (ei != (struct Value*)0) { t.expiresIn = ei->as_int(); }
     }
@@ -47,9 +47,9 @@ static struct OAuth2Token __token_from_json(const struct Value* root) {
 
 static struct OAuth2Token __empty_token() {
     struct OAuth2Token t;
-    t.accessToken = string_new();
-    t.refreshToken = string_new();
-    t.tokenType = string_new();
+    t.accessToken = String::new();
+    t.refreshToken = String::new();
+    t.tokenType = String::new();
     t.expiresIn = 0LL;
     return t;
 }
@@ -86,7 +86,7 @@ struct OAuth2Token oauth2_exchange_code(const &char tokenHost, unsigned short to
                                         const &char tokenPath, const &char clientId,
                                         const &char clientSecret, const &char code,
                                         const &char redirectUri, ?&int ok) {
-    struct String body = string_new();
+    struct String body = String::new();
     __form_add(&body, "grant_type", "authorization_code");
     __form_add(&body, "code", code);
     __form_add(&body, "redirect_uri", redirectUri);
@@ -100,7 +100,7 @@ struct OAuth2Token oauth2_exchange_code(const &char tokenHost, unsigned short to
 struct OAuth2Token oauth2_refresh(const &char tokenHost, unsigned short tokenPort,
                                   const &char tokenPath, const &char clientId,
                                   const &char clientSecret, const &char refreshToken, ?&int ok) {
-    struct String body = string_new();
+    struct String body = String::new();
     __form_add(&body, "grant_type", "refresh_token");
     __form_add(&body, "refresh_token", refreshToken);
     __form_add(&body, "client_id", clientId);

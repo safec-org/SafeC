@@ -40,7 +40,7 @@ static int yaml_scalar_needs_quoting_(const char* s) {
         if (c == ':' || c == '#' || c == '\n') { return 1; }
         i = i + 1UL;
     }
-    struct String trimmed; unsafe { trimmed = string_from(s); }
+    struct String trimmed; unsafe { trimmed = String::from(s); }
     struct String trimmedCopy = trimmed.trim();
     trimmed.free();
     int looksLikeOther = trimmedCopy.eq_cstr("true") || trimmedCopy.eq_cstr("false") ||
@@ -193,7 +193,7 @@ void yaml_write(const &Value v, &String out) {
 }
 
 inline struct String value_to_yaml(const &Value v) {
-    struct String out = string_new();
+    struct String out = String::new();
     yaml_write(v, &out);
     return out;
 }
@@ -208,7 +208,7 @@ struct YamlLine_ {
 // Strips a trailing '#...' comment (only when the '#' is outside any
 // quoted scalar on the line) and trailing whitespace.
 static struct String yaml_strip_comment_(const char* line) {
-    struct String out = string_new();
+    struct String out = String::new();
     unsigned long i = 0UL;
     char quote = (char)0; // 0 = not in a quote, else the active quote char
     while (1) {
@@ -243,7 +243,7 @@ static struct String yaml_strip_comment_(const char* line) {
 // indent that won't line up with anything and surfacing as a structural
 // mismatch rather than being silently misinterpreted.
 static struct Vec<struct YamlLine_> yaml_split_lines_(const char* text) {
-    struct Vec<struct YamlLine_> lines = vec_new();
+    struct Vec<struct YamlLine_> lines = Vec::new();
     unsigned long i = 0UL;
     while (1) {
         char c0;
@@ -271,7 +271,7 @@ static struct Vec<struct YamlLine_> yaml_split_lines_(const char* text) {
             p = p + 1UL;
         }
         struct String rawLine;
-        unsafe { rawLine = string_from_n(text + p, lineEnd - p); }
+        unsafe { rawLine = String::from_n(text + p, lineEnd - p); }
         struct String content = yaml_strip_comment_(rawLine.as_ptr());
         rawLine.free();
         if (!content.is_empty()) {
@@ -300,7 +300,7 @@ static void yaml_free_lines_(&Vec<struct YamlLine_> lines) {
 }
 
 static struct Value yaml_parse_scalar_(const char* text) {
-    struct String s; unsafe { s = string_from(text); }
+    struct String s; unsafe { s = String::from(text); }
     struct String trimmed = s.trim();
     s.free();
     const char* t = trimmed.as_ptr();
@@ -316,7 +316,7 @@ static struct Value yaml_parse_scalar_(const char* text) {
     } else if (trimmed.eq_cstr_ignore_case("false")) {
         result = value_bool(0);
     } else if (c0 == '"') {
-        struct String out = string_new();
+        struct String out = String::new();
         unsigned long i = 1UL;
         while (1) {
             char c;
@@ -340,7 +340,7 @@ static struct Value yaml_parse_scalar_(const char* text) {
         result = value_string(out.as_ptr());
         out.free();
     } else if (c0 == '\'') {
-        struct String out = string_new();
+        struct String out = String::new();
         unsigned long i = 1UL;
         while (1) {
             char c;
@@ -438,14 +438,14 @@ static struct Value yaml_parse_mapping_(&Vec<struct YamlLine_> lines, unsigned l
         long long colonPos = yaml_find_colon_(content);
         if (colonPos < 0) { unsafe { *ok = 0; } break; }
         struct String keyRaw;
-        unsafe { keyRaw = string_from_n(content, (unsigned long)colonPos); }
+        unsafe { keyRaw = String::from_n(content, (unsigned long)colonPos); }
         struct Value keyVal = yaml_parse_scalar_(keyRaw.as_ptr());
         keyRaw.free();
         // Only string-shaped keys make sense as object keys here (a
         // numeric-looking key stays a string key — same 'stringly-keyed'
         // convention std::Value's VAL_OBJECT already uses for JSON).
         const char* key = keyVal.as_string();
-        struct String keyStr; unsafe { keyStr = key ? string_from(key) : string_new(); }
+        struct String keyStr; unsafe { keyStr = key ? String::from(key) : String::new(); }
         keyVal.free();
 
         unsigned long restStart = (unsigned long)colonPos + 1UL;
@@ -455,7 +455,7 @@ static struct Value yaml_parse_mapping_(&Vec<struct YamlLine_> lines, unsigned l
         unsafe {
             restRaw = (restStart <= contentLen)
                 ? yl->content.substr(restStart, contentLen)
-                : string_new();
+                : String::new();
         }
         struct String restTrimmed = restRaw.trim();
         restRaw.free();

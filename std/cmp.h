@@ -8,8 +8,8 @@
 // no function pointer, no per-compare indirect call. FnOrder<T> wraps a
 // runtime function pointer for orderings only known at run time.
 //
-//   struct BST<int, int, Less<int>> t = std::bst_new();     // natural order, inlined
-//   std::vec_sort_by(&v, std::order_fn(by_name));            // runtime comparator
+//   struct BST<int, int, Less<int>> t = std::BST::new();     // natural order, inlined
+//   std::vec_sort_by(&v, std::FnOrder::of(by_name));         // runtime comparator
 
 namespace std {
 
@@ -17,6 +17,7 @@ namespace std {
 generic<T>
 struct Less {
     int unused_;
+    static struct Less<T> new();
     int cmp(const &T a, const &T b) const;
 };
 
@@ -27,6 +28,7 @@ int Less::cmp(const &T a, const &T b) const { return *a < *b ? -1 : (*a > *b ? 1
 generic<T>
 struct Greater {
     int unused_;
+    static struct Greater<T> new();
     int cmp(const &T a, const &T b) const;
 };
 
@@ -37,6 +39,7 @@ int Greater::cmp(const &T a, const &T b) const { return *a > *b ? -1 : (*a < *b 
 generic<T>
 struct FnOrder {
     fn int(const &T, const &T) f;
+    static struct FnOrder<T> of(fn int(const &T, const &T) f);
     int cmp(const &T a, const &T b) const;
 };
 
@@ -44,12 +47,12 @@ generic<T>
 int FnOrder::cmp(const &T a, const &T b) const { return self.f(a, b); }
 
 generic<T>
-struct Less<T> order_less() { struct Less<T> o; o.unused_ = 0; return o; }
+struct Less<T> Less::new() { struct Less<T> o; o.unused_ = 0; return o; }
 
 generic<T>
-struct Greater<T> order_greater() { struct Greater<T> o; o.unused_ = 0; return o; }
+struct Greater<T> Greater::new() { struct Greater<T> o; o.unused_ = 0; return o; }
 
 generic<T>
-struct FnOrder<T> order_fn(fn int(const &T, const &T) f) { struct FnOrder<T> o; o.f = f; return o; }
+struct FnOrder<T> FnOrder::of(fn int(const &T, const &T) f) { struct FnOrder<T> o; o.f = f; return o; }
 
 } // namespace std

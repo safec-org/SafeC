@@ -42,27 +42,27 @@ static struct HttpResponse handler(&HttpRequest req) {
         if (req.path.eq_cstr("/token") && req.method.eq_cstr("POST")) {
             const &char tok = "{\"access_token\":\"abc123\",\"refresh_token\":\"r1\",\"token_type\":\"Bearer\",\"expires_in\":3600}";
             r.status = 200;
-            r.headers = string_from("Content-Type: application/json");
-            r.body = string_from(tok);
+            r.headers = String::from("Content-Type: application/json");
+            r.body = String::from(tok);
             return r;
         }
         if (req.path.eq_cstr("/echo")) {
             r.status = 200;
-            r.headers = string_from("Content-Type: text/plain\r\nX-Method: ");
+            r.headers = String::from("Content-Type: text/plain\r\nX-Method: ");
             r.headers.push(req.method.as_ptr());
             r.body = req.body.clone();
             return r;
         }
         if (req.path.eq_cstr("/cors")) {
             r.status = 200;
-            r.headers = string_new();
-            r.body = string_from("ok");
+            r.headers = String::new();
+            r.body = String::from("ok");
             cors_apply_headers(&r, "https://a.example");
             return r;
         }
         r.status = 404;
-        r.headers = string_new();
-        r.body = string_from("nope");
+        r.headers = String::new();
+        r.body = String::from("nope");
     }
     return r;
 }
@@ -78,7 +78,7 @@ static struct RpcResult rpc_upper(const &unsigned char data, unsigned long len) 
         ?&heap unsigned char out = (?&heap unsigned char)alloc(len);
         r.ok = 1;
         r.len = len;
-        r.error_message = string_new();
+        r.error_message = String::new();
         if (out.is_null()) { r.ok = 0; r.len = 0UL; r.data = null; return r; }
         &unsigned char o = std::expect_ref(out, "out is null");
         unsigned long i = 0UL;
@@ -130,7 +130,7 @@ static ?&int run_ws(?&int arg) {
         struct WsMessage m;
         while (c.recv(&m) == 1) {
             if (m.opcode == WS_OPCODE_TEXT) {
-                struct String echo = string_from("echo:");
+                struct String echo = String::from("echo:");
                 echo.push_n((const char*)m.data, m.len);
                 c.send_text(echo.as_ptr());
                 echo.free();
@@ -220,13 +220,13 @@ void t_http_roundtrip() {
 void t_cors() {
     unsafe {
         struct HttpRequest req;
-        req.method = string_from("OPTIONS");
-        req.path = string_from("/api");
-        req.headers = string_from("Origin: https://a.example\r\nAccess-Control-Request-Method: POST");
-        req.body = string_new();
+        req.method = String::from("OPTIONS");
+        req.path = String::from("/api");
+        req.headers = String::from("Origin: https://a.example\r\nAccess-Control-Request-Method: POST");
+        req.body = String::new();
         ASSERT_TRUE(cors_is_preflight(&req));
         req.method.free();
-        req.method = string_from("GET");
+        req.method = String::from("GET");
         ASSERT_FALSE(cors_is_preflight(&req));
         req.free();
         struct HttpResponse p = cors_preflight_response("https://a.example", "GET, POST", "Content-Type");
@@ -355,7 +355,7 @@ void t_websocket() {
         }
         m.free();
         // A payload over 125 bytes exercises the 16-bit extended length.
-        struct String big = string_repeat("x", 300UL);
+        struct String big = String::repeat_str("x", 300UL);
         ASSERT_EQ(c.send_text(big.as_ptr()), 1);
         ASSERT_EQ(c.recv(&m), 1);
         ASSERT_EQ(m.len, 305);
@@ -472,7 +472,7 @@ void t_write_to_closed_peer() {
         unsigned long long t = 0ULL;
         thread_create(&t, run_closer, null); thread_detach(t);
         unsigned long n = 4UL * 1024UL * 1024UL;
-        struct String body = string_repeat("x", n);
+        struct String body = String::repeat_str("x", n);
         int ok = 1;
         int tries = 0;
         // Retry while the closer thread comes up (connect refused until then).

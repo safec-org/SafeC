@@ -47,14 +47,14 @@ struct HttpResponse handle(&HttpRequest req) {
     }
     contentType = "text/html";
 #else
-    body = std::string_from(
+    body = std::String::from(
         "{\"status\":\"ok\",\"service\":\"fullstack_demo\",\"mode\":\"backend-only\"}");
     contentType = "application/json";
 #endif
 
     struct HttpResponse resp;
     resp.status = 200;
-    resp.headers = std::string_new();
+    resp.headers = std::String::new();
     unsafe {
         resp.headers.push("Content-Type: ");
         resp.headers.push(contentType);

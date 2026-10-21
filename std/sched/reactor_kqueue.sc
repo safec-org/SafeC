@@ -77,8 +77,8 @@ inline struct Reactor reactor_init() {
     // persistent kernel-side registration) — only initialized to satisfy
     // definite-initialization for these shared struct Reactor fields; see
     // reactor.h's comments on sigfds/watched.
-    r.sigfds = vec_new();
-    r.watched = vec_new();
+    r.sigfds = Vec::new();
+    r.watched = Vec::new();
     return r;
 }
 

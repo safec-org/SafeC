@@ -122,7 +122,7 @@ void html_write(const &Value v, &String out) {
 }
 
 inline struct String value_to_html(const &Value v) {
-    struct String out = string_new();
+    struct String out = String::new();
     html_write(v, &out);
     return out;
 }
@@ -186,7 +186,7 @@ static struct String html_read_name_(struct HtmlCursor_* c) {
     }
     unsigned long end;
     unsafe { end = c->pos; }
-    struct String out = string_new();
+    struct String out = String::new();
     if (end > start) { unsafe { out.push_n(c->text + start, end - start); } }
     return out;
 }
@@ -223,7 +223,7 @@ static void html_expect_close_(struct HtmlCursor_* c, const char* name) {
 // Reads raw text up to the next '<' or end of input, decoding the 4
 // entities html_escape emits.
 static struct String html_decode_text_(struct HtmlCursor_* c) {
-    struct String out = string_new();
+    struct String out = String::new();
     unsigned long run_start;
     unsafe { run_start = c->pos; }
     while (1) {

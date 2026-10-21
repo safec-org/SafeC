@@ -74,7 +74,7 @@ static const char* ws_guid_() {
 }
 
 static struct String ws_compute_accept_(const char* key) {
-    struct String combined = string_new();
+    struct String combined = String::new();
     unsafe {
         combined.push(key);
         combined.push(ws_guid_());
@@ -153,7 +153,7 @@ struct WsConn ws_connect_timeout(const &char host, unsigned short port,
         if (sock_set_io_timeout(fd, timeout_ms) != 0) { good = 0; }
     }
 
-    struct String keyB64 = string_new();
+    struct String keyB64 = String::new();
     if (good) {
         unsigned char keyRaw[16];
         struct RngCtx rng;
@@ -170,7 +170,7 @@ struct WsConn ws_connect_timeout(const &char host, unsigned short port,
     }
 
     if (good) {
-        struct String req = string_new();
+        struct String req = String::new();
         unsafe {
             req.push("GET ");
             req.push(path);
@@ -186,7 +186,7 @@ struct WsConn ws_connect_timeout(const &char host, unsigned short port,
     }
 
     if (good) {
-        struct String buf = string_new();
+        struct String buf = String::new();
         long headerEnd = ws_read_until_(fd, &buf, "\r\n\r\n");
         if (headerEnd < 0L) {
             good = 0;
@@ -236,9 +236,9 @@ int WsConn::accept(int listenFd) {
     unsafe { fd_set_blocking(fd); }
 
     int good = 1;
-    struct String buf = string_new();
+    struct String buf = String::new();
     long headerEnd = ws_read_until_(fd, &buf, "\r\n\r\n");
-    struct String key = string_new();
+    struct String key = String::new();
     if (headerEnd < 0L) {
         good = 0;
     } else {
@@ -257,7 +257,7 @@ int WsConn::accept(int listenFd) {
 
     if (good) {
         struct String accept = ws_compute_accept_(key.as_ptr());
-        struct String resp = string_new();
+        struct String resp = String::new();
         unsafe {
             resp.push("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
                        "Connection: Upgrade\r\nSec-WebSocket-Accept: ");

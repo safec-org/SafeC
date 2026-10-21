@@ -443,7 +443,7 @@ std::string transpileScx(const std::string& src, const std::string& filename,
 
                 std::string bufVar = "__scx" + std::to_string(tmpCounter++);
                 std::ostringstream gen;
-                gen << "struct String " << bufVar << " = std::string_new();\n";
+                gen << "struct String " << bufVar << " = std::String::new();\n";
                 gen << "unsafe {\n";
                 std::ostringstream body;
                 CodeGen(bufVar).emit(*root, body);

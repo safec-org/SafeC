@@ -123,7 +123,7 @@ void csv_write(const &Value v, &String out) {
 }
 
 inline struct String value_to_csv(const &Value v) {
-    struct String out = string_new();
+    struct String out = String::new();
     csv_write(v, &out);
     return out;
 }
@@ -143,7 +143,7 @@ static char csv_peek_(struct CsvCursor_* c) {
 // Parses one field starting at the cursor, stopping at (but not consuming)
 // the following ',' / '\n' / '\r' / end-of-text.
 static struct Value csv_parse_field_(struct CsvCursor_* c) {
-    struct String out = string_new();
+    struct String out = String::new();
     if (csv_peek_(c) == '"') {
         unsafe { c->pos = c->pos + 1UL; } // consume opening quote
         while (1) {

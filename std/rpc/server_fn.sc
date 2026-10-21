@@ -26,7 +26,7 @@ static int gServerFnCount = 0;
 void server_fn_register(const &char name, ServerFn handler) {
     if (gServerFnCount >= SERVER_FN_MAX) { return; }
     unsafe {
-        gServerFns[gServerFnCount].name = string_from(name);
+        gServerFns[gServerFnCount].name = String::from(name);
         gServerFns[gServerFnCount].handler = handler;
     }
     gServerFnCount = gServerFnCount + 1;
@@ -47,29 +47,29 @@ static struct RpcResult __server_fn_dispatch(const unsigned char* data, unsigned
     result.ok = 0;
     result.data = (unsigned char*)0;
     result.len = 0UL;
-    result.error_message = string_new();
+    result.error_message = String::new();
 
     struct String reqText;
-    unsafe { reqText = string_from_n((const char*)data, len); }
+    unsafe { reqText = String::from_n((const char*)data, len); }
 
     int parseOk;
     struct Value root;
     unsafe { root = json_parse((const char*)reqText.data, &parseOk); }
     unsafe { reqText.free(); }
     if (!parseOk) {
-        unsafe { result.error_message = string_from("malformed JSON request"); root.free(); }
+        unsafe { result.error_message = String::from("malformed JSON request"); root.free(); }
         return result;
     }
 
     struct Value* nameVal; unsafe { nameVal = root.object_get("fn"); }
     if (nameVal == (struct Value*)0) {
-        unsafe { result.error_message = string_from("missing 'fn' field"); root.free(); }
+        unsafe { result.error_message = String::from("missing 'fn' field"); root.free(); }
         return result;
     }
     const char* fnName; unsafe { fnName = nameVal->as_string(); }
     ServerFn handler = __server_fn_lookup(fnName);
     if (handler == (ServerFn)0) {
-        unsafe { result.error_message = string_from("unknown server function"); root.free(); }
+        unsafe { result.error_message = String::from("unknown server function"); root.free(); }
         return result;
     }
 
@@ -136,7 +136,7 @@ struct Value server_fn_call(const &char host, unsigned short port, const &char n
     }
 
     struct String respText;
-    unsafe { respText = string_from_n((const char*)rr.data, rr.len); }
+    unsafe { respText = String::from_n((const char*)rr.data, rr.len); }
     unsafe { rr.free(); }
 
     int parseOk;

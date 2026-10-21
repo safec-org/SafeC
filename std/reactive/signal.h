@@ -46,7 +46,7 @@ struct Signal<T> signal_new(T val) {
     struct Signal<T> s;
     s.value = val;
     s.version = 0UL;
-    s.subs = vec_new();
+    s.subs = Vec::new();
     return s;
 }
 

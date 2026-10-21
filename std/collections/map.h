@@ -1,13 +1,13 @@
 #pragma once
 // SafeC Standard Library — HashMap<K,V> / StrMap<V> (open addressing, linear probing)
 //
-//   struct HashMap<int, long long> m = std::map_new();   // K,V inferred from the target
+//   struct HashMap<int, long long> m = std::HashMap::new();   // K,V inferred from the target
 //   m.insert(7, 49LL);
 //   match (m.get(7)) { case null: ... case some(v): *v = 50LL; }
 //   ?long long gone = m.remove(7);
 //   m.free();
 //
-//   struct StrMap<int> sm = std::str_map_new();          // C-string keys (copied)
+//   struct StrMap<int> sm = std::StrMap::new();           // C-string keys (copied)
 //   sm.insert("one", 1);
 //
 // HashMap keys are hashed and compared by their bytes, so K must be a type
@@ -95,6 +95,10 @@ struct HashMap {
     unsigned long        len;        // live entries
     unsigned long        tombstones; // removed slots not yet reclaimed
 
+    // ── Construction ─────────────────────────────────────────────────────────
+    static struct HashMap<K, V> new();                       // empty, no allocation
+    static struct HashMap<K, V> with_cap(unsigned long cap); // room for cap entries
+
     // ── Core operations ──────────────────────────────────────────────────────
     int           insert(K key, V val);       // insert or overwrite; 0 on OOM
     ?&V           get(K key) const;           // null if missing
@@ -115,7 +119,7 @@ struct HashMap {
 };
 
 generic<K, V>
-struct HashMap<K, V> map_new() {
+struct HashMap<K, V> HashMap::new() {
     struct HashMap<K, V> m;
     m.keys = null; m.vals = null; m.hashes = null; m.states = null;
     m.cap = 0UL; m.len = 0UL; m.tombstones = 0UL;
@@ -123,8 +127,8 @@ struct HashMap<K, V> map_new() {
 }
 
 generic<K, V>
-struct HashMap<K, V> map_with_cap(unsigned long cap) {
-    struct HashMap<K, V> m = map_new();
+struct HashMap<K, V> HashMap::with_cap(unsigned long cap) {
+    struct HashMap<K, V> m = HashMap::new();
     m.reserve(cap);
     return m;
 }
@@ -331,6 +335,8 @@ struct StrMap {
     unsigned long        len;
     unsigned long        tombstones;
 
+    static struct StrMap<V> new();                 // empty, no allocation
+
     int           insert(const &char key, V val);   // copies key; 0 on OOM
     ?&V           get(const &char key) const;
     int           contains(const &char key) const;
@@ -346,7 +352,7 @@ struct StrMap {
 };
 
 generic<V>
-struct StrMap<V> str_map_new() {
+struct StrMap<V> StrMap::new() {
     struct StrMap<V> m;
     m.keys = null; m.vals = null; m.hashes = null; m.states = null;
     m.cap = 0UL; m.len = 0UL; m.tombstones = 0UL;
@@ -446,7 +452,7 @@ int StrMap::insert(const &char key, V val) {
             idx = (unsigned long)tomb;
             self.tombstones = self.tombstones - 1UL;
         }
-        self.keys[idx] = string_from(key);
+        self.keys[idx] = String::from(key);
         self.vals[idx] = val;
         self.hashes[idx] = h;
         self.states[idx] = (unsigned char)MAP_FULL_;

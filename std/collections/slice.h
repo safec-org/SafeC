@@ -1,11 +1,11 @@
 // SafeC Standard Library — Slice<T>: a bounds-checked view of T elements
 //
 //   int arr[8];
-//   struct Slice<int> s = std::slice_of(&arr[0], 8UL);
+//   struct Slice<int> s = std::Slice::of(&arr[0], 8UL);
 //   int third = s.get(2UL).default(0);
 //   struct Slice<int> mid = s.sub(2UL, 5UL);   // elements 2,3,4
 //
-// A Slice doesn't own its elements unless it came from slice_alloc() (then
+// A Slice doesn't own its elements unless it came from Slice::alloc() (then
 // free() releases them). The arr_* helpers do the same bounds-checked work on
 // a bare (reference, length) pair.
 #pragma once
@@ -19,6 +19,9 @@ struct Slice {
     ?&T           ptr;   // first element; null for an empty slice
     unsigned long len;   // element count
 
+    static struct Slice<T> of(&T first, unsigned long len);  // view of len elements at first
+    static struct Slice<T> alloc(unsigned long len);         // zeroed heap slice; empty on OOM
+
     int             in_bounds(unsigned long idx) const;
     ?&T             get(unsigned long idx) const;     // null if out of range
     &T              at(unsigned long idx) const;      // panics if out of range
@@ -26,11 +29,11 @@ struct Slice {
     struct Slice<T> sub(unsigned long start, unsigned long end) const; // [start, end); empty if invalid
     unsigned long   length() const;
     int             is_empty() const;
-    void            free();                            // only for slice_alloc() slices
+    void            free();                            // only for Slice::alloc() slices
 };
 
 generic<T>
-struct Slice<T> slice_of(&T first, unsigned long len) {
+struct Slice<T> Slice::of(&T first, unsigned long len) {
     struct Slice<T> s;
     s.ptr = first;
     s.len = len;
@@ -39,7 +42,7 @@ struct Slice<T> slice_of(&T first, unsigned long len) {
 
 // Zero-initialised heap slice of 'len' elements; empty (null) on OOM.
 generic<T>
-struct Slice<T> slice_alloc(unsigned long len) {
+struct Slice<T> Slice::alloc(unsigned long len) {
     struct Slice<T> s;
     s.ptr = null;
     s.len = 0UL;

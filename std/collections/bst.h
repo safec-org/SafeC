@@ -1,8 +1,8 @@
 #pragma once
 // SafeC Standard Library — BST<K,V> (unbalanced binary search tree)
 //
-//   struct BST<int, int, Less<int>> t = std::bst_new();   // natural order
-//   struct BST<Name, int, FnOrder<Name>> u = std::bst_new_with(std::order_fn(cmp_name));
+//   struct BST<int, int, Less<int>> t = std::BST::new();   // natural order
+//   struct BST<Name, int, FnOrder<Name>> u = std::BST::new_with(std::FnOrder::of(cmp_name));
 //   t.insert(50, 500);
 //   match (t.get(50)) { case some(v): *v = 501; case null: ... }
 //   t.foreach_inorder(print_pair);   // ascending key order
@@ -36,6 +36,9 @@ struct BST {
     unsigned long                     len;
     struct NodePool<struct BSTNode<K, V>> pool;
 
+    static struct BST<K, V, C> new();            // stateless C (Less, Greater): C from the target
+    static struct BST<K, V, C> new_with(C ord);  // ordering value (FnOrder, ...)
+
     int           insert(K key, V val);    // insert or overwrite; 0 on OOM
     ?&V           get(K key) const;        // null if missing
     int           contains(K key) const;
@@ -54,22 +57,22 @@ struct BST {
 };
 
 generic<K, V, C>
-struct BST<K, V, C> bst_new_with(C ord) {
+struct BST<K, V, C> BST::new_with(C ord) {
     struct BST<K, V, C> t;
     t.root = null;
     t.ord = ord;
     t.len = 0UL;
-    t.pool = node_pool_new();
+    t.pool = NodePool::new();
     return t;
 }
 
 // Stateless orderings (Less, Greater) need no value: C comes from the target.
 generic<K, V, C>
-struct BST<K, V, C> bst_new() {
+struct BST<K, V, C> BST::new() {
     struct BST<K, V, C> t;
     t.root = null;
     t.len = 0UL;
-    t.pool = node_pool_new();
+    t.pool = NodePool::new();
     return t;
 }
 

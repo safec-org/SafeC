@@ -23,8 +23,8 @@ inline struct Value value_null() {
     v.float_val = 0.0;
     v.bool_val = 0;
     unsafe { v.str_val = (char*)0; }
-    v.arr_val = vec_new();
-    v.obj_val = vec_new();
+    v.arr_val = Vec::new();
+    v.obj_val = Vec::new();
     return v;
 }
 

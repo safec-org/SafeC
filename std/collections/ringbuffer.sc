@@ -16,7 +16,7 @@ static unsigned long ringbuf_floor_pow2_(unsigned long n) {
     return p;
 }
 
-inline struct RingBuffer ring_init(&static unsigned char buf, unsigned long cap) {
+inline struct RingBuffer RingBuffer::over(&static unsigned char buf, unsigned long cap) {
     struct RingBuffer rb;
     unsigned long roundedCap = ringbuf_floor_pow2_(cap);
     rb.buf  = buf;

@@ -42,7 +42,7 @@ static double relerr(&Vec<float> a, &Vec<float> b) {
 // Deterministic values in [-amp, amp), rounded to 'dtype' (0 = fp32) so the
 // CPU reference sees exactly what the GPU reads.
 static struct Vec<float> data(unsigned long n, unsigned long seed, float amp, int dtype) {
-    struct Vec<float> v = std::vec_with_cap(n);
+    struct Vec<float> v = std::Vec::with_cap(n);
     unsigned long i = 0UL;
     while (i < n) {
         float x = ((float)((i * 7919UL + seed * 104729UL) % 2003UL) / (float)1001.5 - (float)1.0) * amp;
@@ -64,8 +64,8 @@ static double phi_d(double x) {
 static struct Vec<float> ref_attn(&Vec<float> q, &Vec<float> k, &Vec<float> v, struct MpsAttnShape s,
                                   int causal, int lin) {
     unsigned long D = s.headDim;
-    struct Vec<float> out = std::vec_with_cap(s.batch * s.heads * s.seqLen * D);
-    struct Vec<double> w = std::vec_with_cap(s.kvLen);
+    struct Vec<float> out = std::Vec::with_cap(s.batch * s.heads * s.seqLen * D);
+    struct Vec<double> w = std::Vec::with_cap(s.kvLen);
     unsigned long i = 0UL;
     while (i < s.kvLen) { w.push(0.0); i = i + 1UL; }
     double scale = 1.0 / std::sqrt_d((double)D);
@@ -156,7 +156,7 @@ static unsigned long esize(int dtype) { return dtype == 0 ? 4UL : 2UL; }
 // Reads n values of 'dtype' from 'buf' into 'out' as floats.
 static int download(void* buf, &Vec<float> out, unsigned long n, int dtype) {
     if (dtype == 0) { unsafe { return std::mps_read_persistent(buf, (void*)out.at(0UL), n * 4UL); } }
-    struct Vec<unsigned short> bits = std::vec_with_cap(n);
+    struct Vec<unsigned short> bits = std::Vec::with_cap(n);
     unsigned long i = 0UL;
     while (i < n) { bits.push((unsigned short)0); i = i + 1UL; }
     int ok = 0;
@@ -181,7 +181,7 @@ static void run_case(const char* what, struct MpsAttnShape s, int dtype, int cau
     struct Vec<float> k = data(kn, 2UL, amp, dtype);
     struct Vec<float> v = data(kn, 3UL, (float)1.0, dtype);
     struct Vec<float> want = ref_attn(&q, &k, &v, s, causal, lin);
-    struct Vec<float> got = std::vec_with_cap(qn);
+    struct Vec<float> got = std::Vec::with_cap(qn);
     unsigned long i = 0UL;
     while (i < qn) { got.push(0.0f); i = i + 1UL; }
     void* dq = upload(&q, dtype);
@@ -259,8 +259,8 @@ int main() {
     void* dv = upload(&v, 0);
     void* dout = (void*)0;
     unsafe { dout = (void*)std::mps_alloc_persistent(qn * 4UL); }
-    struct Vec<float> got = std::vec_with_cap(qn);
-    struct Vec<float> cpu = std::vec_with_cap(qn);
+    struct Vec<float> got = std::Vec::with_cap(qn);
+    struct Vec<float> cpu = std::Vec::with_cap(qn);
     unsigned long i = 0UL;
     while (i < qn) { got.push(0.0f); cpu.push(0.0f); i = i + 1UL; }
     &FloatTensor tq = FloatTensor::from_2d(q.at(0UL), 40UL, 64UL, 0);
@@ -292,7 +292,7 @@ int main() {
         struct Vec<float> want2 = ref_attn(&q, &k, &v, two, 1, l);
         int ok = l ? std::mps_linear_attention_f32(q.at(0UL), k.at(0UL), v.at(0UL), got.at(0UL), 2UL, 20UL, 28UL, 64UL, 1)
                    : std::mps_flash_attention_f32(q.at(0UL), k.at(0UL), v.at(0UL), got.at(0UL), 2UL, 20UL, 28UL, 64UL, (float)0.0, 1);
-        struct Vec<float> got2 = std::vec_with_cap(want2.length());
+        struct Vec<float> got2 = std::Vec::with_cap(want2.length());
         i = 0UL;
         while (i < want2.length()) { got2.push(*got.at(i)); i = i + 1UL; }
         check(ok && relerr(&got2, &want2) <= 2.0e-5, l ? "linear _f32 host arrays" : "flash _f32 host arrays");
