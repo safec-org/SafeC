@@ -337,6 +337,20 @@ TypePtr Sema::resolveType(TypePtr ty) {
         if (resolvedElem != vt.element)
             return makeVector(resolvedElem, vt.width);
     }
+    // 'fn void(&Node<F16>)': resolve the parameter and return types too, so a
+    // generic struct named there is the same instance as everywhere else.
+    if (ty->kind == TypeKind::Function) {
+        auto &ft = static_cast<FunctionType &>(*ty);
+        bool changed = false;
+        TypePtr ret = ft.returnType ? resolveType(ft.returnType) : ft.returnType;
+        changed = ret != ft.returnType;
+        std::vector<TypePtr> ps;
+        for (auto &p : ft.paramTypes) {
+            ps.push_back(p ? resolveType(p) : p);
+            if (ps.back() != p) changed = true;
+        }
+        if (changed) return makeFunction(ret, ps, ft.variadic);
+    }
     return ty;
 }
 
@@ -1978,6 +1992,7 @@ void Sema::checkReturn(ReturnStmt &s, FunctionDecl &fn) {
             expectedType_ = fn.returnType;
         TypePtr valTy = checkExpr(*s.value);
         expectedType_ = savedExpectedType;
+        if (fn.returnType) valTy = coerceGenericFnValue(*s.value, valTy, fn.returnType);
 
         // Region escape check: a returned '&stack T' refers to a local that's
         // gone the moment the function returns, so it can never be valid.
@@ -2080,6 +2095,7 @@ void Sema::checkVarDecl(VarDeclStmt &s, FunctionDecl &fn) {
             }
         }
 
+        if (s.declType) initTy = coerceGenericFnValue(*s.init, initTy, s.declType);
         if (s.declType && !s.declType->isError() && !initTy->isError()) {
             if (!canImplicitlyConvert(initTy, s.declType) &&
                 !intLiteralFitsType(*s.init, s.declType) &&
@@ -2335,6 +2351,106 @@ TypePtr Sema::checkBoolLit(BoolLitExpr &) { return makeBool(); }
 TypePtr Sema::checkStringLit(StringLitExpr &e) {
     // String literal → &static const char (zero-terminated C string)
     return makeReference(makeChar(), Region::Static, false, false);
+}
+
+// Instantiates a generic function for 'subs' (cached), registering and
+// type-checking the clone the first time.
+FunctionDecl *Sema::instantiateGeneric(FunctionDecl *fnDecl, TypeSubst &subs) {
+        MonoKey key = makeMonoKey(fnDecl->name, subs, fnDecl->genericParams);
+    if (!monoCache_.count(key)) {
+        // Create a concrete clone
+        auto clone  = cloneFunctionDecl(*fnDecl, subs);
+        clone->name = mangleName(fnDecl->name, subs, fnDecl->genericParams);
+        clone->genericParams.clear();
+        clone->isMonomorphized = true;
+        // Substitution can leave generic-struct references symbolic
+        // ('struct Vec<int>'): resolve them to the concrete instance now.
+        if (clone->returnType) clone->returnType = resolveType(clone->returnType);
+        for (auto &p : clone->params) if (p.type) p.type = resolveType(p.type);
+
+        // Register the monomorphized name in the global scope
+        std::vector<TypePtr> paramTys;
+        for (auto &p : clone->params) paramTys.push_back(p.type);
+        auto monoFT = makeFunction(clone->returnType, paramTys, clone->isVariadic);
+        Symbol sym;
+        sym.kind        = SymKind::Function;
+        sym.name        = clone->name;
+        sym.type        = makeReference(monoFT, Region::Static);
+        sym.fnDecl      = clone.get();
+        sym.initialized = true;
+        if (!scopes_.empty()) scopes_[0].define(std::move(sym));
+
+        // Type-check the instantiation. checkFunction() unconditionally
+        // resets loopDepth_/functionLabels_/checkingPure_ at its start
+        // (correct when it's called once per function from the top of
+        // the TU) — but monomorphization happens lazily, on the first
+        // call site actually reached, which is frequently *inside*
+        // another function's own body currently being checked (e.g. a
+        // generic<T> call inside a loop). Without saving/restoring
+        // here, checking the monomorphized clone would clobber the
+        // enclosing function's in-progress state — observed as, e.g.,
+        // a 'break' later in that same enclosing loop wrongly
+        // reported as "not inside a loop or match", because
+        // loopDepth_ got reset to 0 by the nested checkFunction call
+        // and never recovered its outer value.
+        // Cache the instantiation *before* checking its body: a
+        // recursive call inside it (directly or through another
+        // generic) must resolve to this same clone instead of
+        // instantiating it again, forever.
+        FunctionDecl *cloneRaw = clone.get();
+        monoCache_[key] = cloneRaw;
+        monoFunctions_.push_back(std::move(clone));
+
+        bool savedPure = checkingPure_;
+        int savedLoopDepth = loopDepth_;
+        auto savedLabels = functionLabels_;
+        checkFunction(*cloneRaw);
+        checkingPure_ = savedPure;
+        loopDepth_ = savedLoopDepth;
+        functionLabels_ = savedLabels;
+    }
+    return monoCache_[key];
+}
+
+// A generic function used as a value where a function type is expected
+// ('fn void(&Box<F16>) f = drop_box;', an argument, a return value, a
+// field): its type arguments come from that function type and 'e' is
+// redirected to the instantiation. Returns e's (possibly new) type.
+TypePtr Sema::coerceGenericFnValue(Expr &e, TypePtr exprTy, const TypePtr &target) {
+    if (!target || e.kind != ExprKind::Ident) return exprTy;
+    auto &ident = static_cast<IdentExpr &>(e);
+    FunctionDecl *fnDecl = ident.resolvedFn;
+    if (!fnDecl || fnDecl->genericParams.empty()) return exprTy;
+    TypePtr t = target;
+    if (t->kind == TypeKind::Optional) t = static_cast<OptionalType &>(*t).inner;
+    if (t->kind == TypeKind::Reference) t = static_cast<ReferenceType &>(*t).base;
+    if (t->kind == TypeKind::Pointer) t = static_cast<PointerType &>(*t).base;
+    if (t->kind != TypeKind::Function) return exprTy;
+    auto &ft = static_cast<FunctionType &>(*t);
+    if (ft.paramTypes.size() != fnDecl->params.size()) return exprTy;
+    TypeSubst subs;
+    for (size_t i = 0; i < ft.paramTypes.size(); ++i)
+        if (!matchType(fnDecl->params[i].type, ft.paramTypes[i], subs)) return exprTy;
+    if (fnDecl->returnType && ft.returnType) matchType(fnDecl->returnType, ft.returnType, subs);
+    for (auto &gp : fnDecl->genericParams) {
+        auto it = subs.find(gp.name);
+        if (it == subs.end()) {
+            diag_.error(e.loc, "cannot infer type arguments for generic function '" + fnDecl->name +
+                        "' from '" + target->str() + "'");
+            return makeError();
+        }
+        for (auto &constraint : gp.constraints)
+            if (!satisfiesTrait(it->second, constraint))
+                diag_.error(e.loc, "type '" + it->second->str() + "' does not satisfy constraint '" +
+                            constraint + "' for generic parameter '" + gp.name + "'");
+    }
+    FunctionDecl *monoFn = instantiateGeneric(fnDecl, subs);
+    ident.resolvedFn = monoFn;
+    ident.name = monoFn->name;
+    auto *sym = lookup(monoFn->name);
+    TypePtr ty = sym && sym->type ? sym->type : exprTy;
+    e.type = ty;
+    return ty;
 }
 
 TypePtr Sema::checkIdent(IdentExpr &e) {
@@ -2998,6 +3114,7 @@ TypePtr Sema::checkCompoundInit(CompoundInitExpr &e, const TypePtr &targetTy) {
                 continue;
             }
             const TypePtr &fieldTy = st.fields[slot].type;
+            if (fieldTy) initTy = coerceGenericFnValue(*e.inits[i], initTy, fieldTy);
             if (fieldTy && !initTy->isError() && !fieldTy->isError() &&
                 !canImplicitlyConvert(initTy, fieldTy) &&
                 !intLiteralFitsType(*e.inits[i], fieldTy) &&
@@ -3770,13 +3887,25 @@ TypePtr Sema::checkCall(CallExpr &e) {
         // Collect argument types for inference
         std::vector<TypePtr> argTypes;
         for (auto &a : e.args) argTypes.push_back(checkExpr(*a));
+        // A generic function passed as a value ('link_(&n, back_relu_)') has
+        // no concrete type yet: infer from the other arguments, then
+        // instantiate it for its parameter's type (below).
+        std::vector<TypePtr> inferTypes = argTypes;
+        for (size_t i = 0; i < e.args.size(); ++i)
+            if (e.args[i]->kind == ExprKind::Ident) {
+                auto *rf = static_cast<IdentExpr &>(*e.args[i]).resolvedFn;
+                if (rf && !rf->genericParams.empty()) inferTypes[i] = nullptr;
+            }
 
         TypeSubst subs;
         // x.m(args) on a generic method: self comes from the base, not args
         std::vector<ParamDecl> inferParams = fnDecl->params;
-        if (e.methodBase && !fnDecl->isStaticMethod && !inferParams.empty())
+        size_t selfSkip = 0;
+        if (e.methodBase && !fnDecl->isStaticMethod && !inferParams.empty()) {
             inferParams.erase(inferParams.begin());
-        if (!inferTypeArgs(inferParams, argTypes, fnDecl->genericParams, subs,
+            selfSkip = 1;
+        }
+        if (!inferTypeArgs(inferParams, inferTypes, fnDecl->genericParams, subs,
                            fnDecl->returnType, callExpectedType)) {
             diag_.error(e.loc,
                 "cannot infer type arguments for generic function '" +
@@ -3802,61 +3931,10 @@ TypePtr Sema::checkCall(CallExpr &e) {
             }
         }
 
-        MonoKey key = makeMonoKey(fnDecl->name, subs, fnDecl->genericParams);
-        if (!monoCache_.count(key)) {
-            // Create a concrete clone
-            auto clone  = cloneFunctionDecl(*fnDecl, subs);
-            clone->name = mangleName(fnDecl->name, subs, fnDecl->genericParams);
-            clone->genericParams.clear();
-            clone->isMonomorphized = true;
-            // Substitution can leave generic-struct references symbolic
-            // ('struct Vec<int>'): resolve them to the concrete instance now.
-            if (clone->returnType) clone->returnType = resolveType(clone->returnType);
-            for (auto &p : clone->params) if (p.type) p.type = resolveType(p.type);
-
-            // Register the monomorphized name in the global scope
-            std::vector<TypePtr> paramTys;
-            for (auto &p : clone->params) paramTys.push_back(p.type);
-            auto monoFT = makeFunction(clone->returnType, paramTys, clone->isVariadic);
-            Symbol sym;
-            sym.kind        = SymKind::Function;
-            sym.name        = clone->name;
-            sym.type        = makeReference(monoFT, Region::Static);
-            sym.fnDecl      = clone.get();
-            sym.initialized = true;
-            if (!scopes_.empty()) scopes_[0].define(std::move(sym));
-
-            // Type-check the instantiation. checkFunction() unconditionally
-            // resets loopDepth_/functionLabels_/checkingPure_ at its start
-            // (correct when it's called once per function from the top of
-            // the TU) — but monomorphization happens lazily, on the first
-            // call site actually reached, which is frequently *inside*
-            // another function's own body currently being checked (e.g. a
-            // generic<T> call inside a loop). Without saving/restoring
-            // here, checking the monomorphized clone would clobber the
-            // enclosing function's in-progress state — observed as, e.g.,
-            // a 'break' later in that same enclosing loop wrongly
-            // reported as "not inside a loop or match", because
-            // loopDepth_ got reset to 0 by the nested checkFunction call
-            // and never recovered its outer value.
-            // Cache the instantiation *before* checking its body: a
-            // recursive call inside it (directly or through another
-            // generic) must resolve to this same clone instead of
-            // instantiating it again, forever.
-            FunctionDecl *cloneRaw = clone.get();
-            monoCache_[key] = cloneRaw;
-            monoFunctions_.push_back(std::move(clone));
-
-            bool savedPure = checkingPure_;
-            int savedLoopDepth = loopDepth_;
-            auto savedLabels = functionLabels_;
-            checkFunction(*cloneRaw);
-            checkingPure_ = savedPure;
-            loopDepth_ = savedLoopDepth;
-            functionLabels_ = savedLabels;
-        }
-
-        FunctionDecl *monoFn = monoCache_[key];
+        FunctionDecl *monoFn = instantiateGeneric(fnDecl, subs);
+        for (size_t i = 0; i < e.args.size() && i + selfSkip < monoFn->params.size(); ++i)
+            if (!inferTypes[i])
+                argTypes[i] = coerceGenericFnValue(*e.args[i], argTypes[i], monoFn->params[i + selfSkip].type);
         // Redirect the call to the monomorphized version
         if (e.callee->kind == ExprKind::Ident) {
             auto &ident    = static_cast<IdentExpr &>(*e.callee);
@@ -3951,6 +4029,7 @@ TypePtr Sema::checkCall(CallExpr &e) {
         size_t  paramIdx = i + selfOffset;
         if (paramIdx < expected) adoptTupleLiteral(e.args[i], ft->paramTypes[paramIdx]);
         TypePtr argTy = checkExpr(*e.args[i]);
+        if (paramIdx < expected) argTy = coerceGenericFnValue(*e.args[i], argTy, ft->paramTypes[paramIdx]);
         if (paramIdx < expected &&
                 !argTy->isError() && !ft->paramTypes[paramIdx]->isError()) {
             if (!canImplicitlyConvert(argTy, ft->paramTypes[paramIdx]) &&
@@ -4459,6 +4538,7 @@ TypePtr Sema::checkAssign(AssignExpr &e) {
     if (e.op == AssignOp::Assign) adoptTupleLiteral(e.rhs, lhsTy);
     TypePtr rhsTy = checkExpr(*e.rhs);
     expectedType_ = savedExpectedType;
+    rhsTy = coerceGenericFnValue(*e.rhs, rhsTy, lhsTy);
 
     // Rebind arena tracking: 'p = <arena-ref-value>;' establishes a fresh
     // binding, so p's staleness is judged against the region's generation
@@ -4926,6 +5006,7 @@ bool Sema::inferTypeArgs(const std::vector<ParamDecl>   &params,
                    static_cast<const ReferenceType &>(*paramTy).nullable;
         };
         for (size_t i = 0; i < params.size() && i < argTypes.size(); ++i) {
+            if (!argTypes[i]) continue;   // a generic function value: bound after inference
             if (hasGeneric(hasGeneric, params[i].type)) {
                 if (isNullArg(params[i].type, argTypes[i])) continue;
                 if (!matchType(params[i].type, argTypes[i], subs))

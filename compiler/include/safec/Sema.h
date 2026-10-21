@@ -299,6 +299,8 @@ private:
                        const TypePtr                       &returnType = nullptr,
                        const TypePtr                       &expectedType = nullptr);
     bool matchType(const TypePtr &paramTy, const TypePtr &argTy, TypeSubst &subs);
+    FunctionDecl *instantiateGeneric(FunctionDecl *fnDecl, TypeSubst &subs);
+    TypePtr coerceGenericFnValue(Expr &e, TypePtr exprTy, const TypePtr &target);
 
     MonoKey   makeMonoKey(const std::string &name, const TypeSubst &subs,
                            const std::vector<GenericParam> &params);
