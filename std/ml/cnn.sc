@@ -657,6 +657,9 @@ struct FeatureMap conv2d_relu_forward(const &Conv2D layer, const &FeatureMap inp
 #define MAP_AVG     1
 #define MAP_UP2     2
 #define MAP_COPY    3
+#define MAP_ADD     4   // out = in + in2 (relu when 'relu')
+#define MAP_GMAX    5   // global max over the plane
+#define MAP_GAVG    6   // global average over the plane
 
 struct MapJob {
     const float*  in;
@@ -668,6 +671,10 @@ struct MapJob {
     unsigned long kernel;
     unsigned long stride;
     int           op;
+    unsigned long padding;     // pooling: zero padding on every side
+    int           includePad;  // avg pooling: padded positions count in the divisor
+    const float*  in2;         // MAP_ADD: second operand
+    int           relu;        // MAP_ADD: relu after the add
 };
 
 static void map_channels_(&MapJob j, unsigned long lo, unsigned long hi) {
@@ -695,7 +702,27 @@ static void map_channels_(&MapJob j, unsigned long lo, unsigned long hi) {
                     }
                     y = y + 1UL;
                 }
-            } else {
+            } else if (j.op == MAP_ADD) {
+                const float* src2 = &j.in2[ch * j.h * j.w];
+                unsigned long n = j.h * j.w;
+                unsigned long i = 0UL;
+                if (j.relu) {
+                    while (i < n) { float v = src[i] + src2[i]; dst[i] = v > (float)0.0 ? v : (float)0.0; i = i + 1UL; }
+                } else {
+                    while (i < n) { dst[i] = src[i] + src2[i]; i = i + 1UL; }
+                }
+            } else if (j.op == MAP_GMAX || j.op == MAP_GAVG) {
+                unsigned long n = j.h * j.w;
+                float acc = j.op == MAP_GMAX ? src[0] : (float)0.0;
+                unsigned long i = 0UL;
+                if (j.op == MAP_GMAX) {
+                    while (i < n) { if (src[i] > acc) acc = src[i]; i = i + 1UL; }
+                } else {
+                    while (i < n) { acc = acc + src[i]; i = i + 1UL; }
+                    acc = acc / (float)n;
+                }
+                dst[0] = acc;
+            } else if (j.padding == 0UL) {
                 float count = (float)(j.kernel * j.kernel);
                 unsigned long oh = 0UL;
                 while (oh < j.outH) {
@@ -719,6 +746,47 @@ static void map_channels_(&MapJob j, unsigned long lo, unsigned long hi) {
                     }
                     oh = oh + 1UL;
                 }
+            } else {
+                // padded window: positions outside the plane are skipped for
+                // max and count as zeros for avg only with includePad
+                long ph = (long)j.padding;
+                unsigned long oh = 0UL;
+                while (oh < j.outH) {
+                    unsigned long ow = 0UL;
+                    while (ow < j.outW) {
+                        long y0 = (long)(oh * j.stride) - ph;
+                        long x0 = (long)(ow * j.stride) - ph;
+                        float acc = (float)0.0;
+                        int any = 0;
+                        unsigned long inside = 0UL;
+                        long kh = 0L;
+                        while (kh < (long)j.kernel) {
+                            long y = y0 + kh;
+                            if (y >= 0L && y < (long)j.h) {
+                                long kw = 0L;
+                                while (kw < (long)j.kernel) {
+                                    long x = x0 + kw;
+                                    if (x >= 0L && x < (long)j.w) {
+                                        float v = src[(unsigned long)y * j.w + (unsigned long)x];
+                                        if (j.op == MAP_MAX) { if (!any || v > acc) acc = v; }
+                                        else acc = acc + v;
+                                        any = 1;
+                                        inside = inside + 1UL;
+                                    }
+                                    kw = kw + 1L;
+                                }
+                            }
+                            kh = kh + 1L;
+                        }
+                        if (j.op == MAP_AVG) {
+                            unsigned long div = j.includePad ? j.kernel * j.kernel : inside;
+                            acc = div > 0UL ? acc / (float)div : (float)0.0;
+                        }
+                        dst[oh * j.outW + ow] = acc;
+                        ow = ow + 1UL;
+                    }
+                    oh = oh + 1UL;
+                }
             }
             ch = ch + 1UL;
         }
@@ -734,29 +802,111 @@ static void map_run_(&MapJob j, unsigned long channels) {
     else map_channels_(j, 0UL, channels);
 }
 
-static struct FeatureMap pool_(const &FeatureMap input, unsigned long kernel, unsigned long stride, int op) {
+static struct FeatureMap pool_(const &FeatureMap input, unsigned long kernel, unsigned long stride,
+                               unsigned long padding, int includePad, int op) {
     unsigned long c; unsigned long h; unsigned long w;
     unsafe { c = input->channels; h = input->height; w = input->width; }
-    unsigned long outH = (h - kernel) / stride + 1UL;
-    unsigned long outW = (w - kernel) / stride + 1UL;
+    unsigned long outH = (h + 2UL * padding - kernel) / stride + 1UL;
+    unsigned long outW = (w + 2UL * padding - kernel) / stride + 1UL;
     struct FeatureMap out = fm_uninit_(c, outH, outW);
     struct MapJob j;
     unsafe {
         j.in = (const float*)input->data;
         j.out = (float*)out.data;
+        j.in2 = (const float*)0;
     }
     j.h = h; j.w = w; j.outH = outH; j.outW = outW;
     j.kernel = kernel; j.stride = stride; j.op = op;
+    j.padding = padding; j.includePad = includePad; j.relu = 0;
     map_run_(&j, c);
     return out;
 }
 
 struct FeatureMap maxpool2d_forward(const &FeatureMap input, unsigned long kernel, unsigned long stride) {
-    return pool_(input, kernel, stride, MAP_MAX);
+    return pool_(input, kernel, stride, 0UL, 0, MAP_MAX);
 }
 
 struct FeatureMap avgpool2d_forward(const &FeatureMap input, unsigned long kernel, unsigned long stride) {
-    return pool_(input, kernel, stride, MAP_AVG);
+    return pool_(input, kernel, stride, 0UL, 1, MAP_AVG);
+}
+
+struct FeatureMap maxpool2d_forward_ex(const &FeatureMap input, unsigned long kernel, unsigned long stride,
+                                       unsigned long padding) {
+    return pool_(input, kernel, stride, padding, 0, MAP_MAX);
+}
+
+struct FeatureMap avgpool2d_forward_ex(const &FeatureMap input, unsigned long kernel, unsigned long stride,
+                                       unsigned long padding, int countIncludePad) {
+    return pool_(input, kernel, stride, padding, countIncludePad, MAP_AVG);
+}
+
+static struct FeatureMap global_pool_(const &FeatureMap input, int op) {
+    unsigned long c; unsigned long h; unsigned long w;
+    unsafe { c = input->channels; h = input->height; w = input->width; }
+    struct FeatureMap out = fm_uninit_(c, 1UL, 1UL);
+    struct MapJob j;
+    unsafe {
+        j.in = (const float*)input->data;
+        j.out = (float*)out.data;
+        j.in2 = (const float*)0;
+    }
+    j.h = h; j.w = w; j.outH = 1UL; j.outW = 1UL;
+    j.kernel = 0UL; j.stride = 0UL; j.op = op; j.padding = 0UL; j.includePad = 0; j.relu = 0;
+    map_run_(&j, c);
+    return out;
+}
+
+struct FeatureMap global_avgpool2d(const &FeatureMap input) { return global_pool_(input, MAP_GAVG); }
+struct FeatureMap global_maxpool2d(const &FeatureMap input) { return global_pool_(input, MAP_GMAX); }
+
+struct FeatureMap feature_map_add(const &FeatureMap a, const &FeatureMap b, int relu) {
+    unsigned long c; unsigned long h; unsigned long w;
+    unsafe { c = a->channels; h = a->height; w = a->width; }
+    struct FeatureMap out = fm_uninit_(c, h, w);
+    struct MapJob j;
+    unsafe {
+        j.in = (const float*)a->data;
+        j.in2 = (const float*)b->data;
+        j.out = (float*)out.data;
+    }
+    j.h = h; j.w = w; j.outH = h; j.outW = w;
+    j.kernel = 0UL; j.stride = 0UL; j.op = MAP_ADD; j.padding = 0UL; j.includePad = 0; j.relu = relu ? 1 : 0;
+    map_run_(&j, c);
+    return out;
+}
+
+// ── Residual block (ResNet basic block) ──────────────────────────────────────
+
+struct ResidualBlock residual_block_new(unsigned long inChannels, unsigned long outChannels, unsigned long stride) {
+    struct ResidualBlock b;
+    b.conv1 = conv2d_new(inChannels, outChannels, 3UL, 3UL, stride, 1UL);
+    b.conv2 = conv2d_new(outChannels, outChannels, 3UL, 3UL, 1UL, 1UL);
+    b.hasProjection = (stride != 1UL || inChannels != outChannels) ? 1 : 0;
+    if (b.hasProjection) b.projection = conv2d_new(inChannels, outChannels, 1UL, 1UL, stride, 0UL);
+    else b.projection = conv2d_new(1UL, 1UL, 1UL, 1UL, 1UL, 0UL);   // unused placeholder, freed with the block
+    return b;
+}
+
+struct FeatureMap residual_block_forward(const &ResidualBlock block, const &FeatureMap input) {
+    struct FeatureMap h1 = conv2d_relu_forward(&block->conv1, input);
+    struct FeatureMap h2 = conv2d_forward(&block->conv2, &h1);
+    feature_map_free(&h1);
+    struct FeatureMap out;
+    if (block->hasProjection) {
+        struct FeatureMap sc = conv2d_forward(&block->projection, input);
+        out = feature_map_add(&h2, &sc, 1);
+        feature_map_free(&sc);
+    } else {
+        out = feature_map_add(&h2, input, 1);
+    }
+    feature_map_free(&h2);
+    return out;
+}
+
+void residual_block_free(&ResidualBlock block) {
+    conv2d_free(&block->conv1);
+    conv2d_free(&block->conv2);
+    conv2d_free(&block->projection);
 }
 
 struct FeatureMap upsample2x_nearest(const &FeatureMap input) {
@@ -769,7 +919,8 @@ struct FeatureMap upsample2x_nearest(const &FeatureMap input) {
         j.out = (float*)out.data;
     }
     j.h = h; j.w = w; j.outH = h * 2UL; j.outW = w * 2UL;
-    j.kernel = 0UL; j.stride = 0UL; j.op = MAP_UP2;
+    j.kernel = 0UL; j.stride = 0UL; j.op = MAP_UP2; j.padding = 0UL; j.includePad = 0; j.relu = 0;
+    unsafe { j.in2 = (const float*)0; }
     map_run_(&j, c);
     return out;
 }
@@ -780,7 +931,8 @@ struct FeatureMap concat_channels(const &FeatureMap a, const &FeatureMap b) {
     struct FeatureMap out = fm_uninit_(ca + cb, h, w);
     struct MapJob j;
     j.h = h; j.w = w; j.outH = h; j.outW = w;
-    j.kernel = 0UL; j.stride = 0UL; j.op = MAP_COPY;
+    j.kernel = 0UL; j.stride = 0UL; j.op = MAP_COPY; j.padding = 0UL; j.includePad = 0; j.relu = 0;
+    unsafe { j.in2 = (const float*)0; }
     unsafe {
         j.in = (const float*)a->data;
         j.out = (float*)out.data;

@@ -5,6 +5,8 @@
 #include <std/ml/tensor_half.h>
 #include <std/ml/tensor_nn.h>
 #include <std/ml/cnn.h>
+#include <std/ml/ssm.h>
+#include <std/math.h>
 
 extern void* malloc(unsigned long size);
 extern void free(void* ptr);
@@ -418,6 +420,264 @@ void t_conv2d() {
     conv2d_free(&c);
 }
 
+// Pooling with padding (PyTorch semantics) and global pooling, against a
+// direct double-precision reference.
+static double pool_ref_err(&FeatureMap in, &FeatureMap out, unsigned long k, unsigned long s,
+                           unsigned long p, int isMax, int includePad) {
+    double worst = 0.0;
+    unsafe {
+        unsigned long c = 0UL;
+        while (c < out.channels) {
+            unsigned long oh = 0UL;
+            while (oh < out.height) {
+                unsigned long ow = 0UL;
+                while (ow < out.width) {
+                    double acc = isMax ? -1.0e30 : 0.0;
+                    unsigned long cnt = 0UL;
+                    unsigned long kh = 0UL;
+                    while (kh < k) {
+                        unsigned long kw = 0UL;
+                        while (kw < k) {
+                            long y = (long)(oh * s + kh) - (long)p;
+                            long x = (long)(ow * s + kw) - (long)p;
+                            if (y >= 0L && y < (long)in.height && x >= 0L && x < (long)in.width) {
+                                double v = (double)in.data[(c * in.height + (unsigned long)y) * in.width + (unsigned long)x];
+                                if (isMax) { if (v > acc) acc = v; } else acc = acc + v;
+                                cnt = cnt + 1UL;
+                            }
+                            kw = kw + 1UL;
+                        }
+                        kh = kh + 1UL;
+                    }
+                    if (!isMax) acc = acc / (double)(includePad ? k * k : cnt);
+                    double e = acc - (double)out.data[(c * out.height + oh) * out.width + ow];
+                    if (e < 0.0) e = -e;
+                    if (e > worst) worst = e;
+                    ow = ow + 1UL;
+                }
+                oh = oh + 1UL;
+            }
+            c = c + 1UL;
+        }
+    }
+    return worst;
+}
+
+static void fill_map(&FeatureMap m, unsigned long seed) {
+    unsigned long n = m.channels * m.height * m.width;
+    unsigned long i = 0UL;
+    unsafe { while (i < n) { m.data[i] = (float)((double)(((i + seed) * 7919UL) % 1000UL) / 500.0 - 1.0); i = i + 1UL; } }
+}
+
+void t_pooling() {
+    struct FeatureMap in = feature_map_new(3UL, 9UL, 7UL);
+    fill_map(&in, 0UL);
+    struct FeatureMap mx = maxpool2d_forward_ex(&in, 3UL, 2UL, 1UL);   // ResNet stem pool
+    ASSERT_EQ(mx.height, 5UL); ASSERT_EQ(mx.width, 4UL);
+    ASSERT_TRUE(pool_ref_err(&in, &mx, 3UL, 2UL, 1UL, 1, 0) < 1e-6);
+    struct FeatureMap a1 = avgpool2d_forward_ex(&in, 3UL, 2UL, 1UL, 1);
+    ASSERT_TRUE(pool_ref_err(&in, &a1, 3UL, 2UL, 1UL, 0, 1) < 1e-6);
+    struct FeatureMap a0 = avgpool2d_forward_ex(&in, 3UL, 2UL, 1UL, 0);
+    ASSERT_TRUE(pool_ref_err(&in, &a0, 3UL, 2UL, 1UL, 0, 0) < 1e-6);
+    struct FeatureMap np = maxpool2d_forward(&in, 2UL, 2UL);   // unpadded path unchanged
+    ASSERT_TRUE(pool_ref_err(&in, &np, 2UL, 2UL, 0UL, 1, 0) < 1e-6);
+    // global pooling == a full-plane window
+    struct FeatureMap ga = global_avgpool2d(&in);
+    struct FeatureMap gm = global_maxpool2d(&in);
+    ASSERT_EQ(ga.height, 1UL); ASSERT_EQ(ga.width, 1UL); ASSERT_EQ(gm.channels, 3UL);
+    unsafe {
+        unsigned long c = 0UL;
+        while (c < 3UL) {
+            double sum = 0.0; double best = -1.0e30;
+            unsigned long i = 0UL;
+            while (i < 63UL) {
+                double v = (double)in.data[c * 63UL + i];
+                sum = sum + v; if (v > best) best = v;
+                i = i + 1UL;
+            }
+            double e = sum / 63.0 - (double)ga.data[c];
+            ASSERT_TRUE(e < 1e-5 && e > -1e-5);
+            ASSERT_TRUE((double)gm.data[c] == best);
+            c = c + 1UL;
+        }
+    }
+    feature_map_free(&ga); feature_map_free(&gm); feature_map_free(&np);
+    feature_map_free(&a0); feature_map_free(&a1); feature_map_free(&mx); feature_map_free(&in);
+}
+
+// feature_map_add and the ResNet basic block against the composition of
+// its convolutions.
+void t_residual() {
+    struct FeatureMap a = feature_map_new(4UL, 6UL, 5UL);
+    struct FeatureMap b = feature_map_new(4UL, 6UL, 5UL);
+    fill_map(&a, 1UL); fill_map(&b, 77UL);
+    struct FeatureMap s = feature_map_add(&a, &b, 0);
+    struct FeatureMap r = feature_map_add(&a, &b, 1);
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < 120UL) {
+            float v = a.data[i] + b.data[i];
+            ASSERT_TRUE(s.data[i] == v);
+            ASSERT_TRUE(r.data[i] == (v > (float)0.0 ? v : (float)0.0));
+            i = i + 1UL;
+        }
+    }
+    feature_map_free(&s); feature_map_free(&r); feature_map_free(&b);
+
+    // stride 2 + channel change -> projection shortcut; stride 1 -> identity
+    unsigned long strides[2];
+    unsigned long outCs[2];
+    strides[0] = 2UL; outCs[0] = 8UL;
+    strides[1] = 1UL; outCs[1] = 4UL;
+    int k = 0;
+    while (k < 2) {
+        struct ResidualBlock blk = residual_block_new(4UL, outCs[k], strides[k]);
+        ASSERT_EQ(blk.hasProjection, k == 0 ? 1 : 0);
+        struct FeatureMap out = residual_block_forward(&blk, &a);
+        ASSERT_EQ(out.channels, outCs[k]);
+        ASSERT_EQ(out.height, (6UL - 1UL) / strides[k] + 1UL);
+        ASSERT_EQ(out.width, (5UL - 1UL) / strides[k] + 1UL);
+        struct FeatureMap h1 = conv2d_relu_forward(&blk.conv1, &a);
+        struct FeatureMap h2 = conv2d_forward(&blk.conv2, &h1);
+        unsigned long n = out.channels * out.height * out.width;
+        unsafe {
+            unsigned long i = 0UL;
+            if (k == 0) {
+                struct FeatureMap sc = conv2d_forward(&blk.projection, &a);
+                while (i < n) {
+                    float v = h2.data[i] + sc.data[i];
+                    ASSERT_TRUE(out.data[i] == (v > (float)0.0 ? v : (float)0.0));
+                    i = i + 1UL;
+                }
+                feature_map_free(&sc);
+            } else {
+                while (i < n) {
+                    float v = h2.data[i] + a.data[i];
+                    ASSERT_TRUE(out.data[i] == (v > (float)0.0 ? v : (float)0.0));
+                    i = i + 1UL;
+                }
+            }
+        }
+        feature_map_free(&h1); feature_map_free(&h2); feature_map_free(&out);
+        residual_block_free(&blk);
+        k = k + 1;
+    }
+    feature_map_free(&a);
+}
+
+static &Tensor tensor_fill(unsigned long rows, unsigned long cols, unsigned long seed, float scale, float bias) {
+    &Tensor t = tensor_new_2d(rows, cols, 0);
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < rows * cols) {
+            t->data[i] = (float)((double)(((i + seed) * 2654435761UL >> 7UL) % 1000UL) / 500.0 - 1.0) * scale + bias;
+            i = i + 1UL;
+        }
+    }
+    return t;
+}
+
+static void tensor_drop(&Tensor t) {
+    t->free();
+    unsafe { free((void*)t); }
+}
+
+// The selective scan against a naive double-precision recurrence.
+void t_ssm_scan() {
+    unsigned long T = 23UL; unsigned long D = 40UL; unsigned long N = 16UL;
+    &Tensor x = tensor_fill(T, D, 1UL, (float)1.0, (float)0.0);
+    &Tensor dl = tensor_fill(T, D, 2UL, (float)0.04, (float)0.05);   // (0.01, 0.09)
+    &Tensor A = tensor_fill(D, N, 3UL, (float)2.0, (float)-3.0);     // negative
+    &Tensor B = tensor_fill(T, N, 4UL, (float)1.0, (float)0.0);
+    &Tensor C = tensor_fill(T, N, 5UL, (float)1.0, (float)0.0);
+    &Tensor Ds = tensor_fill(1UL, D, 6UL, (float)1.0, (float)0.0);
+    &Tensor y = ssm_selective_scan(x, dl, A, B, C, Ds);
+    double worst = 0.0;
+    unsafe {
+        double* h = (double*)malloc(sizeof(double) * N);
+        unsigned long d = 0UL;
+        while (d < D) {
+            unsigned long n = 0UL;
+            while (n < N) { h[n] = 0.0; n = n + 1UL; }
+            unsigned long t = 0UL;
+            while (t < T) {
+                double dt = (double)dl->data[t * D + d];
+                double xv = (double)x->data[t * D + d];
+                double acc = 0.0;
+                n = 0UL;
+                while (n < N) {
+                    h[n] = exp_d(dt * (double)A->data[d * N + n]) * h[n] + dt * (double)B->data[t * N + n] * xv;
+                    acc = acc + (double)C->data[t * N + n] * h[n];
+                    n = n + 1UL;
+                }
+                acc = acc + (double)Ds->data[d] * xv;
+                double e = acc - (double)y->data[t * D + d];
+                if (e < 0.0) e = -e;
+                if (e > worst) worst = e;
+                t = t + 1UL;
+            }
+            d = d + 1UL;
+        }
+        free((void*)h);
+    }
+    ASSERT_TRUE(worst < 1e-5);
+    tensor_drop(x); tensor_drop(dl); tensor_drop(A); tensor_drop(B); tensor_drop(C); tensor_drop(Ds); tensor_drop(y);
+}
+
+// Mamba: the parallel forward equals token-by-token recurrent decoding,
+// on both the serial and the threaded scan path.
+void t_mamba() {
+    unsigned long dms[2];
+    dms[0] = 24UL; dms[1] = 160UL;
+    int k = 0;
+    while (k < 2) {
+        unsigned long dm = dms[k];
+        unsigned long T = 19UL;
+        struct Mamba m = mamba_new(dm, 16UL, 4UL, 2UL);
+        ASSERT_EQ(m.dInner, 2UL * dm);
+        ASSERT_EQ(m.dtRank, (dm + 15UL) / 16UL);
+        &Tensor X = tensor_fill(T, dm, 9UL, (float)1.0, (float)0.0);
+        &Tensor full = mamba_forward(&m, X);
+        unsigned long r0; unsigned long c0;
+        unsafe { r0 = full->shape[0]; c0 = full->shape[1]; }
+        ASSERT_EQ(r0, T);
+        ASSERT_EQ(c0, dm);
+        struct MambaState st = mamba_state_new(&m);
+        mamba_state_reset(&st);
+        float worst = (float)0.0;
+        float mag = (float)0.0;
+        unsigned long t = 0UL;
+        while (t < T) {
+            &Tensor xt = tensor_new_2d(1UL, dm, 0);
+            unsafe {
+                unsigned long i = 0UL;
+                while (i < dm) { xt->data[i] = X->data[t * dm + i]; i = i + 1UL; }
+            }
+            &Tensor yt = mamba_step(&m, &st, xt);
+            unsafe {
+                unsigned long i = 0UL;
+                while (i < dm) {
+                    float a = full->data[t * dm + i];
+                    float e = yt->data[i] - a;
+                    if (e < (float)0.0) e = -e;
+                    if (e > worst) worst = e;
+                    if (a < (float)0.0) a = -a;
+                    if (a > mag) mag = a;
+                    i = i + 1UL;
+                }
+            }
+            tensor_drop(xt); tensor_drop(yt);
+            t = t + 1UL;
+        }
+        ASSERT_TRUE(mag > (float)1e-3);                 // not trivially zero
+        ASSERT_TRUE(worst <= (float)1e-4 * mag + (float)1e-6);
+        mamba_state_free(&st);
+        tensor_drop(X); tensor_drop(full);
+        mamba_free(&m);
+        k = k + 1;
+    }
+}
+
 int main() {
     struct TestSuite t = test_suite_init();
     unsafe {
@@ -431,6 +691,10 @@ int main() {
         t.add("loss scaler", t_loss_scaler);
         t.add("tensor arena", t_tensor_arena);
         t.add("conv2d (winograd / im2col)", t_conv2d);
+        t.add("pooling (padded / global)", t_pooling);
+        t.add("residual add + ResNet block", t_residual);
+        t.add("selective scan", t_ssm_scan);
+        t.add("mamba forward == recurrent steps", t_mamba);
     }
     t.run();
     t.print_summary();
