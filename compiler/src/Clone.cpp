@@ -147,8 +147,17 @@ static ExprPtr cloneExprImpl(const Expr *ep, const TypeSubst &subs) {
         return fix(std::make_unique<NullLitExpr>(e.loc));
     case ExprKind::Ident: {
         auto &ie = static_cast<const IdentExpr &>(e);
+        // 'E::f' where E is a type parameter bound to a struct: the static
+        // method of the concrete type ('F16::f' when E = F16).
+        std::string name = ie.name;
+        size_t sep = name.find("::");
+        if (sep != std::string::npos) {
+            auto it = subs.find(name.substr(0, sep));
+            if (it != subs.end() && it->second && it->second->kind == TypeKind::Struct)
+                name = static_cast<const StructType &>(*it->second).name + name.substr(sep);
+        }
         // resolved/resolvedFn left null: sema will re-resolve in the clone body
-        return fix(std::make_unique<IdentExpr>(ie.name, ie.loc));
+        return fix(std::make_unique<IdentExpr>(name, ie.loc));
     }
     case ExprKind::Unary:
     case ExprKind::AddrOf:
