@@ -31,7 +31,7 @@ extern int bind(int fd, const void* addr, unsigned int addrlen);
 extern int listen(int fd, int backlog);
 extern int accept(int fd, void* addr, void* addrlen);
 extern int connect(int fd, const void* addr, unsigned int addrlen);
-extern int fcntl(int fd, int cmd, int arg);
+extern int fcntl(int fd, int cmd, ...);   // variadic: arm64 Apple passes the 3rd arg on the stack
 extern int unlink(const char* path);
 extern int close(int fd);
 

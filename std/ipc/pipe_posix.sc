@@ -16,7 +16,7 @@ extern int   pipe(void* pipefd);       // int pipefd[2]
 extern ssize_t  read(int fd, void* buf, size_t count);
 extern ssize_t  write(int fd, const void* buf, size_t count);
 extern int   close(int fd);
-extern int   fcntl(int fd, int cmd, int arg);
+extern int   fcntl(int fd, int cmd, ...);   // variadic: arm64 Apple passes the 3rd arg on the stack
 
 inline int pipe_create(&Pipe out) {
     int fds[2];
