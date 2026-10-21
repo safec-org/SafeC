@@ -1055,6 +1055,102 @@ static void check_mixed_precision() {
         variant = variant + 1;
     }
 
+    // cuda_mp_adam_many == cuda_mp_adam per tensor, bit for bit: 30 tensors
+    // (two launches), odd and tiny lengths, an unaligned view, with and
+    // without 16-bit copies, and a flagged step.
+    unsigned long nt = 30UL;
+    int pass = 0;
+    while (pass < 2) {
+        struct Vec<struct CudaBuf> aw = std::vec_new();
+        struct Vec<struct CudaBuf> am = std::vec_new();
+        struct Vec<struct CudaBuf> av = std::vec_new();
+        struct Vec<struct CudaBuf> ag = std::vec_new();
+        struct Vec<struct CudaHalfBuf> ah = std::vec_new();
+        struct Vec<struct CudaBuf> bw = std::vec_new();
+        struct Vec<struct CudaBuf> bm = std::vec_new();
+        struct Vec<struct CudaBuf> bv = std::vec_new();
+        struct Vec<struct CudaHalfBuf> bh = std::vec_new();
+        struct Vec<struct CudaBuf> keep = std::vec_new();   // allocations behind views
+        unsigned long k = 0UL;
+        while (k < nt) {
+            unsigned long n = 1UL + (k * 397UL) % 5003UL;
+            struct Vec<float> wv = seq(n + 1UL, (float)0.003, -(float)0.2);
+            struct Vec<float> gv = seq(n + 1UL, (float)0.017, -(float)0.5);
+            struct CudaBuf w1 = std::cuda_upload(wv.at(0UL), n + 1UL);
+            struct CudaBuf w2 = std::cuda_upload(wv.at(0UL), n + 1UL);
+            struct CudaBuf gg = std::cuda_upload(gv.at(0UL), n + 1UL);
+            keep.push(w1); keep.push(w2); keep.push(gg);
+            struct CudaBuf vw1 = w1; struct CudaBuf vw2 = w2; struct CudaBuf vg = gg;
+            if (k == 7UL) { vw1.dev = vw1.dev + 4UL; vw2.dev = vw2.dev + 4UL; vg.dev = vg.dev + 4UL; }   // unaligned
+            vw1.len = n; vw2.len = n; vg.len = n;
+            struct CudaBuf m1 = std::cuda_alloc(n); struct CudaBuf v1 = std::cuda_alloc(n);
+            struct CudaBuf m2 = std::cuda_alloc(n); struct CudaBuf v2 = std::cuda_alloc(n);
+            std::cuda_zero(m1); std::cuda_zero(v1); std::cuda_zero(m2); std::cuda_zero(v2);
+            aw.push(vw1); am.push(m1); av.push(v1); ag.push(vg);
+            bw.push(vw2); bm.push(m2); bv.push(v2);
+            if (pass == 0) { ah.push(std::cuda_half_alloc(n, CUDA_BF16)); bh.push(std::cuda_half_alloc(n, CUDA_BF16)); }
+            wv.free(); gv.free();
+            k = k + 1UL;
+        }
+        std::cuda_zero(flag);
+        struct CudaHalfBuf noHalf;
+        noHalf.dev = 0UL; noHalf.len = 0UL; noHalf.dtype = CUDA_BF16;
+        int okAll = 1;
+        unsigned long t = 1UL;
+        while (t <= 2UL) {
+            k = 0UL;
+            while (k < nt) {
+                okAll = okAll && std::cuda_mp_adam(*aw.at(k), *am.at(k), *av.at(k), *ag.at(k), pass == 0 ? *ah.at(k) : noHalf,
+                                                   (float)0.01, (float)0.9, (float)0.999, (float)1.0e-8, (float)0.05, 1, t, flag);
+                k = k + 1UL;
+            }
+            okAll = okAll && std::cuda_mp_adam_many(&bw, &bm, &bv, &ag, &bh, (float)0.01, (float)0.9, (float)0.999,
+                                                    (float)1.0e-8, (float)0.05, 1, t, flag);
+            t = t + 1UL;
+        }
+        // a flagged step changes nothing
+        float one2 = (float)1.0;
+        std::cuda_write(flag, &one2, 1UL);
+        okAll = okAll && std::cuda_mp_adam_many(&bw, &bm, &bv, &ag, &bh, (float)0.01, (float)0.9, (float)0.999,
+                                                (float)1.0e-8, (float)0.05, 1, 3UL, flag);
+        unsigned long diff = 0UL;
+        k = 0UL;
+        while (k < nt) {
+            struct Vec<float> x1 = download(*aw.at(k));
+            struct Vec<float> x2 = download(*bw.at(k));
+            struct Vec<float> y1 = download(*av.at(k));
+            struct Vec<float> y2 = download(*bv.at(k));
+            if (maxdiff(&x1, &x2) != (float)0.0 || maxdiff(&y1, &y2) != (float)0.0) diff = diff + 1UL;
+            if (pass == 0) {
+                struct Vec<unsigned short> h1 = read_half(*ah.at(k));
+                struct Vec<unsigned short> h2 = read_half(*bh.at(k));
+                unsigned long q = 0UL;
+                while (q < h1.length()) { if (*h1.at(q) != *h2.at(q)) { diff = diff + 1UL; q = h1.length(); } q = q + 1UL; }
+                h1.free(); h2.free();
+                std::cuda_half_free(ah.at(k)); std::cuda_half_free(bh.at(k));
+            }
+            x1.free(); x2.free(); y1.free(); y2.free();
+            std::cuda_free(am.at(k)); std::cuda_free(av.at(k)); std::cuda_free(bm.at(k)); std::cuda_free(bv.at(k));
+            k = k + 1UL;
+        }
+        check(okAll && diff == 0UL, pass == 0 ? "mp adam many == per tensor (bf16 copies, flagged step skipped)"
+                                              : "mp adam many == per tensor (no 16-bit copies)");
+        k = 0UL;
+        while (k < keep.length()) { std::cuda_free(keep.at(k)); k = k + 1UL; }
+        aw.free(); am.free(); av.free(); ag.free(); ah.free(); bw.free(); bm.free(); bv.free(); bh.free(); keep.free();
+        pass = pass + 1;
+    }
+    // mismatched lists are refused
+    struct Vec<struct CudaBuf> e1 = std::vec_new();
+    struct Vec<struct CudaBuf> e2 = std::vec_new();
+    struct Vec<struct CudaHalfBuf> e3 = std::vec_new();
+    struct CudaBuf lone = std::cuda_alloc(8UL);
+    e1.push(lone);
+    check(!std::cuda_mp_adam_many(&e1, &e2, &e2, &e2, &e3, (float)0.01, (float)0.9, (float)0.999, (float)1.0e-8,
+                                  (float)0.0, 1, 1UL, flag), "mp adam many rejects mismatched lists");
+    std::cuda_free(&lone);
+    e1.free(); e2.free(); e3.free();
+
     // 16-bit elementwise and bias, against CPU arithmetic on the decoded values
     unsigned long e = 4099UL;
     struct Vec<float> xa = seq(e, (float)0.13, -(float)6.0);
@@ -1160,14 +1256,15 @@ static void check_cudnn_half() {
     int d = CUDA_FP16;
     while (d <= CUDA_BF16) {
         float tol = d == CUDA_FP16 ? (float)3.0e-3 : (float)2.0e-2;
-        // 4 -> 6 channels, 5x5, stride 2, two images; 8 -> 8, 3x3, stride 1, pad 1
+        // 4 -> 6 channels, 5x5, stride 2, two images; 8 -> 8, 3x3, stride 1, pad 1;
+        // 8 -> 5, 1x1 (the strided-batched GEMM path)
         int shape = 0;
-        while (shape < 2) {
+        while (shape < 3) {
             unsigned long inC = shape == 0 ? 4UL : 8UL;
-            unsigned long outC = shape == 0 ? 6UL : 8UL;
-            unsigned long k = shape == 0 ? 5UL : 3UL;
+            unsigned long outC = shape == 0 ? 6UL : (shape == 1 ? 8UL : 5UL);
+            unsigned long k = shape == 0 ? 5UL : (shape == 1 ? 3UL : 1UL);
             unsigned long st = shape == 0 ? 2UL : 1UL;
-            unsigned long pd = shape == 0 ? 0UL : 1UL;
+            unsigned long pd = shape == 1 ? 1UL : 0UL;
             struct Conv2D l = std::conv2d_new(inC, outC, k, k, st, pd);
             conv_bias(&l);
             struct Conv2D lr = conv_rounded_(&l, d);

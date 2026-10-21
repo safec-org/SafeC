@@ -163,6 +163,12 @@ int cuda_half_gemm_relu(struct CudaHalfBuf a, int ta, struct CudaHalfBuf b, int 
                         unsigned long m, unsigned long n, unsigned long k);
 int cuda_half_gemm_f32(struct CudaHalfBuf a, int ta, struct CudaHalfBuf b, int tb, struct CudaBuf c,
                        unsigned long m, unsigned long n, unsigned long k);
+// 'batch' products c_i = op(a_i) op(b_i) in one cuBLAS call, a_i starting
+// at element i * strideA of a (likewise b, c); a stride of 0 reuses one
+// matrix for every product (e.g. a weight shared by a batch). One dtype.
+int cuda_half_gemm_strided(struct CudaHalfBuf a, int ta, unsigned long strideA, struct CudaHalfBuf b, int tb,
+                           unsigned long strideB, struct CudaHalfBuf c, unsigned long strideC,
+                           unsigned long m, unsigned long n, unsigned long k, unsigned long batch);
 // Matrix-vector product for decoding one token at a time: y = w x with w an
 // [n][k] fp16/bf16 matrix (row-major, e.g. a linear layer's weight) and x,
 // y fp32 (x is not rounded to 16 bits). Memory-bound: on an H200 1.3-2.2x
@@ -217,6 +223,16 @@ int cuda_mp_sgd(struct CudaBuf w, struct CudaBuf g, struct CudaBuf vel, struct C
 int cuda_mp_adam(struct CudaBuf w, struct CudaBuf m, struct CudaBuf v, struct CudaBuf g, struct CudaHalfBuf wHalf,
                  float lr, float beta1, float beta2, float eps, float weightDecay, int decoupled,
                  unsigned long step, struct CudaBuf skip);
+// cuda_mp_adam on every tensor of a model, 24 tensors per launch (w[i], m[i],
+// v[i], g[i] of w[i].len values; wHalf empty for no 16-bit copies, else one
+// per tensor, all of one dtype). The same arithmetic per value; one launch
+// instead of one per tensor matters for models with many small tensors
+// (biases, norms): GPT-2 small's 148 tensors take 1.11 instead of 1.84 ms
+// on an H200 (fused torch.optim.AdamW: 1.37 ms, 1.61 with the bf16 copy).
+int cuda_mp_adam_many(const &Vec<struct CudaBuf> w, const &Vec<struct CudaBuf> m, const &Vec<struct CudaBuf> v,
+                      const &Vec<struct CudaBuf> g, const &Vec<struct CudaHalfBuf> wHalf, float lr, float beta1,
+                      float beta2, float eps, float weightDecay, int decoupled, unsigned long step,
+                      struct CudaBuf skip);
 // 16-bit elementwise ops (fp32 arithmetic, one rounding per value; a, b and
 // out of one dtype and a.len elements).
 int cuda_half_add(struct CudaHalfBuf a, struct CudaHalfBuf b, struct CudaHalfBuf out);

@@ -190,6 +190,10 @@ static int   g_dp_algo[DNN_PLANS];
 static unsigned long long g_dp_ws[DNN_PLANS];
 static unsigned long g_dp_wsBytes[DNN_PLANS];
 static int   g_dp_evict = 0;
+// Data type of a graph plan's input / output tensors while one is built:
+// DNN_DATA_FLOAT, or DNN_DATA_HALF / DNN_DATA_BFLOAT16 for the 16-bit
+// convolutions (virtual tensors and compute stay fp32).
+static int   g_dnb_io = 0;
 
 static int cudnn_ensure_() {
     if (g_dnn_state == 1) return cuda_available();
@@ -312,7 +316,7 @@ static double dnn_time_(int s, int kind, const &CudaConv2D layer, unsigned long 
 
 // ── Graph (backend) plans ────────────────────────────────────────────────────
 
-// Finalized NCHW fp32 tensor descriptor, or null.
+// Finalized NCHW tensor descriptor (fp32 if virtual, else g_dnb_io), or null.
 static void* dnb_tensor_(long uid, unsigned long n, unsigned long c, unsigned long h, unsigned long w, int isVirtual) {
     unsafe {
         void* d = (void*)0;
@@ -321,8 +325,8 @@ static void* dnb_tensor_(long uid, unsigned long n, unsigned long c, unsigned lo
         long strides[4];
         dims[0] = (long)n; dims[1] = (long)c; dims[2] = (long)h; dims[3] = (long)w;
         strides[0] = (long)(c * h * w); strides[1] = (long)(h * w); strides[2] = (long)w; strides[3] = 1L;
-        int dt = DNN_DATA_FLOAT;
-        long align = 4L;
+        int dt = isVirtual ? DNN_DATA_FLOAT : g_dnb_io;
+        long align = dt == DNN_DATA_FLOAT ? 4L : 16L;
         unsigned char virt = isVirtual ? (unsigned char)1 : (unsigned char)0;
         int ok = cudnnBackendSetAttribute(d, DNB_A_TENSOR_TYPE, DNB_T_DATA_TYPE, 1L, (const void*)&dt) == 0 &&
                  cudnnBackendSetAttribute(d, DNB_A_TENSOR_DIMS, DNB_T_INT64, 4L, (const void*)&dims[0]) == 0 &&
@@ -385,7 +389,7 @@ static void* dnb_variant_pack_(unsigned long x, unsigned long w, unsigned long b
 // 1 if the engine behind 'cfg' is allowed in the current precision mode:
 // without TF32, no tensor-core / down-converting / reduced-precision engines.
 static int dnb_cfg_allowed_(void* cfg) {
-    if (cuda_tf32_enabled()) return 1;
+    if (cuda_tf32_enabled() || g_dnb_io != DNN_DATA_FLOAT) return 1;   // 16-bit data: tensor cores are the point
     unsafe {
         void* eng = (void*)0;
         if (cudnnBackendCreateDescriptor(DNB_ENGINE, &eng) != 0) return 0;
@@ -642,9 +646,12 @@ static int dnn_legacy_build_(int slot, const &CudaConv2D layer, unsigned long ba
 
 // Finds or builds the plan for this convolution shape (relu: the fused
 // conv + bias + relu graph); x and y are the buffers a new plan is timed
-// on. -1 on failure.
+// on. dt is the tensors' data type: fp32 builds a graph and a legacy plan
+// and keeps the faster; 16-bit builds only a graph plan, and a shape no
+// graph engine takes is remembered as g_dp_used = 3 (the caller then uses
+// its own legacy path). -1 on failure.
 static int dnn_plan_(const &CudaConv2D layer, unsigned long batch, unsigned long height, unsigned long width,
-                     int relu, unsigned long x, unsigned long y) {
+                     int relu, unsigned long x, unsigned long y, int dt) {
     unsigned long outH = cuda_conv_out_dim(height, layer.kH, layer.stride, layer.padding);
     unsigned long outW = cuda_conv_out_dim(width, layer.kW, layer.stride, layer.padding);
     if (!dnn_int_ok_(batch) || !dnn_int_ok_(height) || !dnn_int_ok_(width) || !dnn_int_ok_(outH) ||
@@ -655,7 +662,7 @@ static int dnn_plan_(const &CudaConv2D layer, unsigned long batch, unsigned long
     key[0] = batch; key[1] = layer.inChannels; key[2] = height; key[3] = width;
     key[4] = layer.outChannels; key[5] = layer.kH; key[6] = layer.kW;
     key[7] = layer.stride | (layer.padding << 16) | ((unsigned long)cuda_tf32_enabled() << 32) |
-             ((unsigned long)(relu ? 1 : 0) << 33);
+             ((unsigned long)(relu ? 1 : 0) << 33) | ((unsigned long)dt << 34);
     int slot = -1;
     int s = 0;
     while (s < DNN_PLANS) {
@@ -673,6 +680,15 @@ static int dnn_plan_(const &CudaConv2D layer, unsigned long batch, unsigned long
         slot = g_dp_evict;
         g_dp_evict = (g_dp_evict + 1) % DNN_PLANS;
         dnn_plan_release_(slot);
+    }
+    if (dt != DNN_DATA_FLOAT) {
+        g_dnb_io = dt;
+        double ms = dnb_build_(slot, layer, batch, height, width, outH, outW, relu, x, y);
+        g_dnb_io = DNN_DATA_FLOAT;
+        g_dp_used[slot] = ms >= 0.0 ? 2 : 3;
+        int k = 0;
+        while (k < 8) { g_dp_key[slot * 8 + k] = key[k]; k = k + 1; }
+        return slot;
     }
     // Build both kinds, time them on these buffers, keep the faster.
     double graphMs = dnb_build_(slot, layer, batch, height, width, outH, outW, relu, x, y);
@@ -737,7 +753,7 @@ static int dnn_conv_(const &CudaConv2D layer, struct CudaBuf x, struct CudaBuf y
     if (x.dev == 0UL || y.dev == 0UL ||
         x.len < batch * layer.inChannels * height * width ||
         y.len < batch * layer.outChannels * outH * outW) return 0;
-    int p = dnn_plan_(layer, batch, height, width, relu, x.dev, y.dev);
+    int p = dnn_plan_(layer, batch, height, width, relu, x.dev, y.dev, DNN_DATA_FLOAT);
     if (p < 0) return 0;
     return dnn_run_(p, g_dp_used[p], layer, x.dev, y.dev, relu);
 }
@@ -928,7 +944,28 @@ static int dnn_half_conv_(const &CudaHalfConv2D layer, struct CudaHalfBuf x, str
     if (x.dev == 0UL || y.dev == 0UL ||
         x.len < batch * layer.inChannels * height * width ||
         y.len < batch * layer.outChannels * outH * outW) return 0;
+    // A 1x1, stride-1, unpadded convolution is y[b] = W x[b] for each image
+    // ([outC, inC] times [inC, H*W]): one strided-batched cuBLAS GEMM with W
+    // shared, then the fused bias (+ relu). cuDNN's engines for this shape
+    // were about half as fast on an H200.
+    if (layer.kH == 1UL && layer.kW == 1UL && layer.stride == 1UL && layer.padding == 0UL) {
+        unsigned long plane = height * width;
+        return cuda_half_gemm_strided(layer.weight, 0, 0UL, x, 0, layer.inChannels * plane, y,
+                                      layer.outChannels * plane, layer.outChannels, plane, layer.inChannels, batch) &&
+               cuda_half_bias(y, layer.bias, batch, layer.outChannels, plane, relu);
+    }
     int dt = x.dtype == CUDA_BF16 ? DNN_DATA_BFLOAT16 : DNN_DATA_HALF;
+    // The fused conv + bias (+ relu) graph, as for fp32, when the buffers
+    // meet its 16-byte alignment.
+    if ((x.dev | y.dev | layer.weight.dev | layer.bias.dev) % 16UL == 0UL) {
+        struct CudaConv2D view;
+        view.weight.dev = layer.weight.dev; view.weight.len = layer.weight.len;
+        view.bias.dev = layer.bias.dev; view.bias.len = layer.bias.len;
+        view.inChannels = layer.inChannels; view.outChannels = layer.outChannels;
+        view.kH = layer.kH; view.kW = layer.kW; view.stride = layer.stride; view.padding = layer.padding;
+        int g = dnn_plan_(&view, batch, height, width, relu, x.dev, y.dev, dt);
+        if (g >= 0 && g_dp_used[g] == 2) return dnn_run_(g, 2, &view, x.dev, y.dev, relu);
+    }
     int p = dnn_half_plan_(layer, dt, batch, height, width);
     if (p < 0) return 0;
     float one = 1.0f;
