@@ -47,6 +47,9 @@ int mutex_unlock(&unsigned long long m);
 int cond_init(&unsigned long long cv);
 int cond_destroy(&unsigned long long cv);
 int cond_wait(&unsigned long long cv, &unsigned long long m);
+// Waits at most 'ms' milliseconds: 0 if woken, THREAD_TIMEDOUT if the time
+// ran out, -1 on another error (the same codes on every platform).
+#define THREAD_TIMEDOUT 1
 int cond_timedwait_ms(&unsigned long long cv, &unsigned long long m, unsigned long ms);
 int cond_signal(&unsigned long long cv);
 int cond_broadcast(&unsigned long long cv);

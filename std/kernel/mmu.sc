@@ -74,7 +74,7 @@ inline void MmuContext::unmap(unsigned long virt) {
     }
 }
 
-inline int MmuContext::walk(unsigned long virt, &stack unsigned long phys_out) const {
+inline int MmuContext::walk(unsigned long virt, &unsigned long phys_out) const {
     unsigned long l1_idx = mmu_l1_idx_(virt);
     unsigned long l2_idx = mmu_l2_idx_(virt);
 

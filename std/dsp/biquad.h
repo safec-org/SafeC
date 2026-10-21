@@ -74,8 +74,8 @@ struct Biquad bilinear_2nd_order(double B0, double B1, double B2,
 
 // Z-domain frequency response of 'bq' at 'freqHz' (evaluates H(e^{j*omega}),
 // omega = 2*pi*freqHz/fs) — magnitude (linear, not dB) and phase (radians).
-double biquad_response_mag(const &stack Biquad bq, double fs, double freqHz);
-double biquad_response_phase(const &stack Biquad bq, double fs, double freqHz);
+double biquad_response_mag(const &Biquad bq, double fs, double freqHz);
+double biquad_response_phase(const &Biquad bq, double fs, double freqHz);
 
 // Single precision (float coefficients and state), same contract as Biquad.
 // The design functions above compute in double; biquad_to_f32 rounds their

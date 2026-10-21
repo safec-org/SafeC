@@ -34,7 +34,7 @@ struct MmuContext {
 
     // Walk the page tables and resolve `virt` to a physical address.
     // Returns 1 and writes *phys_out on success; returns 0 if not mapped.
-    int           walk(unsigned long virt, &stack unsigned long phys_out) const;
+    int           walk(unsigned long virt, &unsigned long phys_out) const;
 
     // Flush the entire TLB.
     // x86-64: reload CR3.  RISC-V: sfence.vma x0,x0.  ARM64: TLBI VMALLE1.

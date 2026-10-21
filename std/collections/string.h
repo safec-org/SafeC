@@ -24,7 +24,7 @@ struct String {
     int            push_char(char c);
     int            push(const &char cstr);
     int            push_n(const &char data, unsigned long n); // append n raw bytes (source need not be NUL-terminated)
-    int            push_str(&stack String other);
+    int            push_str(&String other);
     int            push_int(long long v);
     int            push_uint(unsigned long long v);
     int            push_float(double v, int decimals);
@@ -69,17 +69,17 @@ struct String {
     // All split methods write into caller-provided `out` array (max slots).
     // Return value = number of items written.
     // If splits exceed max, the last slot receives the remainder.
-    unsigned long  split(const &char delim, &stack String out, unsigned long max) const;
-    unsigned long  split_lines(&stack String out, unsigned long max) const;
-    unsigned long  split_whitespace(&stack String out, unsigned long max) const;
+    unsigned long  split(const &char delim, &String out, unsigned long max) const;
+    unsigned long  split_lines(&String out, unsigned long max) const;
+    unsigned long  split_whitespace(&String out, unsigned long max) const;
 
     // ── Comparison ──────────────────────────────────────────────────────────
-    int            eq(&stack String other) const;
+    int            eq(&String other) const;
     int            eq_cstr(const &char other) const;
-    int            cmp(&stack String other) const;     // <0, 0, >0
-    int            lt(&stack String other) const;
-    int            gt(&stack String other) const;
-    int            eq_ignore_case(&stack String other) const;
+    int            cmp(&String other) const;     // <0, 0, >0
+    int            lt(&String other) const;
+    int            gt(&String other) const;
+    int            eq_ignore_case(&String other) const;
     int            eq_cstr_ignore_case(const &char other) const;
 
     // ── Query ───────────────────────────────────────────────────────────────
@@ -105,6 +105,6 @@ struct String string_from(const &char s);
 struct String string_from_n(const &char s, unsigned long n);
 struct String string_with_cap(unsigned long cap);
 struct String string_repeat(const &char s, unsigned long n);
-struct String string_join(const &char sep, &stack String parts, unsigned long count);
+struct String string_join(const &char sep, &String parts, unsigned long count);
 
 } // namespace std

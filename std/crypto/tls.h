@@ -5,11 +5,9 @@
 // There is no handshake or key exchange (it needs ECDH, not in std): keys
 // come from install_keys().
 //
-// WARNING: record protection is AES-256-CBC + PKCS#7 padding with no MAC,
-// in place of TLS 1.3's AES-GCM AEAD. Records are not authenticated (an
-// active attacker can alter them, and padding errors are observable), and
-// the wire format does not interoperate with real TLS 1.3 peers. Use it for
-// framing experiments, not to protect traffic.
+// Record protection is the AES-256-GCM AEAD of RFC 8446 §5.2 (the
+// TLS_AES_256_GCM_SHA384 cipher suite's record layer), so protected records
+// are wire-compatible with other TLS 1.3 stacks given the same traffic keys.
 // Freestanding-safe.
 #pragma once
 #include <std/crypto/aes.h>
@@ -49,9 +47,10 @@ struct TlsTranscript {
     void  finish(unsigned char out[32]);
 };
 
-// Traffic key sizes (AES-256-CBC used here; real TLS 1.3 uses AES-256-GCM).
+// Record protection is TLS_AES_256_GCM_SHA384's AEAD: AES-256-GCM.
 #define TLS_KEY_LEN   32   // AES-256
-#define TLS_IV_LEN    12   // GCM-style IV (per RFC 8446 §5.3)
+#define TLS_IV_LEN    12   // per RFC 8446 §5.3
+#define TLS_TAG_LEN   16   // GCM authentication tag
 
 // TLS session — holds traffic keys and sequence numbers.
 struct TlsSession {
@@ -64,19 +63,23 @@ struct TlsSession {
     int            handshake_done;
     struct TlsTranscript transcript;
 
-    // Encode a plaintext record into `out`.  Returns bytes written (0 on error).
+    // Encode one record into `out`: plaintext before install_keys, then
+    // AES-256-GCM sealed (outer type application_data, 16-byte tag).
+    // Returns bytes written; 0 if it doesn't fit out_cap (no sequence
+    // number is consumed then) or payload_len > TLS_MAX_RECORD_LEN.
     unsigned long encode_record(unsigned char content_type,
                                  const &unsigned char payload,
                                  unsigned long payload_len,
                                  &unsigned char out,
                                  unsigned long out_cap);
 
-    // Decode a record from `data` (raw bytes from network).
-    // Sets *content_type_out and writes decrypted payload into `out`.
-    // Returns payload length, or 0 on error / insufficient data.
+    // Decode one record from `data` (raw bytes from network). Sets
+    // *content_type_out and writes the payload into `out`. Protected
+    // records are authenticated first: a forged or corrupted record, like
+    // insufficient data, returns 0 without advancing read_seq.
     unsigned long decode_record(const &unsigned char data,
                                  unsigned long data_len,
-                                 &stack unsigned char content_type_out,
+                                 &unsigned char content_type_out,
                                  &unsigned char out,
                                  unsigned long out_cap);
 

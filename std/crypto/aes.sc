@@ -206,7 +206,7 @@ static void inv_mix_columns_(unsigned char* s) {
 
 // ── Core encrypt / decrypt ────────────────────────────────────────────────────
 
-void AesCtx::encrypt_block(&stack unsigned char block) {
+void AesCtx::encrypt_block(&unsigned char block) {
     // Copy input into the column-major state (byte order is already column-major)
     unsigned char state[16];
     int i = 0;
@@ -245,7 +245,7 @@ void AesCtx::encrypt_block(&stack unsigned char block) {
     }
 }
 
-void AesCtx::decrypt_block(&stack unsigned char block) {
+void AesCtx::decrypt_block(&unsigned char block) {
     unsigned char state[16];
     int i = 0;
     while (i < 4) {
@@ -282,7 +282,7 @@ void AesCtx::decrypt_block(&stack unsigned char block) {
     }
 }
 
-inline void AesCtx::set_iv(const &stack unsigned char iv) {
+inline void AesCtx::set_iv(const &unsigned char iv) {
     unsafe { memcpy((void*)self.iv, (const void*)iv, (unsigned long)AES_BLOCK_SIZE); }
 }
 
@@ -294,7 +294,7 @@ inline void AesCtx::destroy() {
     self.rounds = 0;
 }
 
-inline void AesCtx::cbc_encrypt(&stack unsigned char data, unsigned long len) {
+inline void AesCtx::cbc_encrypt(&unsigned char data, unsigned long len) {
     unsigned long blocks = len / (unsigned long)AES_BLOCK_SIZE;
     unsigned long b = (unsigned long)0;
     while (b < blocks) {
@@ -305,14 +305,14 @@ inline void AesCtx::cbc_encrypt(&stack unsigned char data, unsigned long len) {
                 blk[k] = blk[k] ^ self.iv[k];
                 k = k + 1;
             }
-            self.encrypt_block((&stack unsigned char)blk);
+            self.encrypt_block((&unsigned char)blk);
             memcpy((void*)self.iv, (const void*)blk, (unsigned long)AES_BLOCK_SIZE);
         }
         b = b + (unsigned long)1;
     }
 }
 
-inline void AesCtx::cbc_decrypt(&stack unsigned char data, unsigned long len) {
+inline void AesCtx::cbc_decrypt(&unsigned char data, unsigned long len) {
     unsigned long blocks = len / (unsigned long)AES_BLOCK_SIZE;
     unsigned long b = (unsigned long)0;
     while (b < blocks) {
@@ -320,7 +320,7 @@ inline void AesCtx::cbc_decrypt(&stack unsigned char data, unsigned long len) {
             unsigned char* blk = (unsigned char*)data + b * (unsigned long)AES_BLOCK_SIZE;
             unsigned char prev[16];
             memcpy((void*)prev, (const void*)blk, (unsigned long)AES_BLOCK_SIZE);
-            self.decrypt_block((&stack unsigned char)blk);
+            self.decrypt_block((&unsigned char)blk);
             int k = 0;
             while (k < AES_BLOCK_SIZE) {
                 blk[k] = blk[k] ^ self.iv[k];
@@ -332,9 +332,159 @@ inline void AesCtx::cbc_decrypt(&stack unsigned char data, unsigned long len) {
     }
 }
 
+
+// ── GCM (NIST SP 800-38D) ─────────────────────────────────────────────────────
+// GHASH multiplies in GF(2^128) with the bit-reflected convention of the
+// spec (bit 0 = the MSB of byte 0). Blocks are held as two big-endian
+// 64-bit halves. The multiply is branch-free in the data (masks, not ifs),
+// so its timing doesn't depend on H or the message.
+
+static unsigned long long gcm_load64_(const unsigned char* p) {
+    unsigned long long v = 0ULL;
+    int i = 0;
+    unsafe { while (i < 8) { v = (v << 8ULL) | (unsigned long long)p[i]; i = i + 1; } }
+    return v;
+}
+
+static void gcm_store64_(unsigned char* p, unsigned long long v) {
+    int i = 7;
+    unsafe { while (i >= 0) { p[i] = (unsigned char)(v & 0xFFULL); v = v >> 8ULL; i = i - 1; } }
+}
+
+// x := x * h in GF(2^128).
+static void gcm_mul_(unsigned long long* x, unsigned long long hh, unsigned long long hl) {
+    unsigned long long zh = 0ULL;
+    unsigned long long zl = 0ULL;
+    unsigned long long vh = hh;
+    unsigned long long vl = hl;
+    unsafe {
+        int i = 0;
+        while (i < 128) {
+            unsigned long long word = i < 64 ? x[0] : x[1];
+            unsigned long long bit = (word >> (unsigned long long)(63 - (i & 63))) & 1ULL;
+            unsigned long long m = 0ULL - bit;
+            zh = zh ^ (vh & m);
+            zl = zl ^ (vl & m);
+            unsigned long long lsb = 0ULL - (vl & 1ULL);
+            vl = (vl >> 1ULL) | (vh << 63ULL);
+            vh = (vh >> 1ULL) ^ (0xE100000000000000ULL & lsb);
+            i = i + 1;
+        }
+        x[0] = zh;
+        x[1] = zl;
+    }
+}
+
+// Absorb len bytes (zero-padded to whole blocks) into the GHASH state y.
+static void gcm_ghash_(unsigned long long* y, unsigned long long hh, unsigned long long hl,
+                       const unsigned char* p, unsigned long len) {
+    unsigned long off = 0UL;
+    unsafe {
+        while (off < len) {
+            unsigned char blk[16];
+            unsigned long n = len - off < 16UL ? len - off : 16UL;
+            unsigned long k = 0UL;
+            while (k < 16UL) { blk[k] = k < n ? p[off + k] : (unsigned char)0; k = k + 1UL; }
+            y[0] = y[0] ^ gcm_load64_((const unsigned char*)&blk[0]);
+            y[1] = y[1] ^ gcm_load64_((const unsigned char*)&blk[8]);
+            gcm_mul_(y, hh, hl);
+            off = off + n;
+        }
+    }
+}
+
+// CTR mode starting at counter block 'ctr' (its last 32 bits incremented
+// before each block, as GCM's inc32 does), XORed into data in place.
+static void gcm_ctr_(&AesCtx ctx, const unsigned char* j0, unsigned char* data, unsigned long len) {
+    unsafe {
+        unsigned char ctr[16];
+        memcpy((void*)ctr, (const void*)j0, 16UL);
+        unsigned long off = 0UL;
+        while (off < len) {
+            unsigned int c = ((unsigned int)ctr[12] << 24) | ((unsigned int)ctr[13] << 16)
+                           | ((unsigned int)ctr[14] << 8) | (unsigned int)ctr[15];
+            c = c + 1u;
+            ctr[12] = (unsigned char)(c >> 24); ctr[13] = (unsigned char)(c >> 16);
+            ctr[14] = (unsigned char)(c >> 8);  ctr[15] = (unsigned char)c;
+            unsigned char ks[16];
+            memcpy((void*)ks, (const void*)ctr, 16UL);
+            ctx.encrypt_block((&unsigned char)&ks[0]);
+            unsigned long k = 0UL;
+            while (k < 16UL && off + k < len) { data[off + k] = data[off + k] ^ ks[k]; k = k + 1UL; }
+            off = off + 16UL;
+        }
+    }
+}
+
+static void gcm_j0_(const unsigned char* iv, unsigned char* j0) {
+    unsafe {
+        memcpy((void*)j0, (const void*)iv, 12UL);
+        j0[12] = (unsigned char)0; j0[13] = (unsigned char)0; j0[14] = (unsigned char)0; j0[15] = (unsigned char)1;
+    }
+}
+
+// The tag over (aad, ciphertext): GHASH, then XOR with E(K, J0).
+static void gcm_tag_(&AesCtx ctx, const unsigned char* iv, const unsigned char* aad, unsigned long aad_len,
+                     const unsigned char* ct, unsigned long len, unsigned char* tag) {
+    unsafe {
+        unsigned char h[16];
+        int i = 0;
+        while (i < 16) { h[i] = (unsigned char)0; i = i + 1; }
+        ctx.encrypt_block((&unsigned char)&h[0]);
+        unsigned long long hh = gcm_load64_((const unsigned char*)&h[0]);
+        unsigned long long hl = gcm_load64_((const unsigned char*)&h[8]);
+        unsigned long long y[2];
+        y[0] = 0ULL;
+        y[1] = 0ULL;
+        if (aad_len > 0UL) { gcm_ghash_((unsigned long long*)y, hh, hl, aad, aad_len); }
+        gcm_ghash_((unsigned long long*)y, hh, hl, ct, len);
+        y[0] = y[0] ^ ((unsigned long long)aad_len * 8ULL);
+        y[1] = y[1] ^ ((unsigned long long)len * 8ULL);
+        gcm_mul_((unsigned long long*)y, hh, hl);
+        unsigned char j0[16];
+        gcm_j0_(iv, (unsigned char*)j0);
+        ctx.encrypt_block((&unsigned char)&j0[0]);
+        gcm_store64_(tag, y[0]);
+        gcm_store64_(tag + 8, y[1]);
+        i = 0;
+        while (i < 16) { tag[i] = tag[i] ^ j0[i]; i = i + 1; }
+        mem_zero_secure_raw_((void*)h, 16UL);
+    }
+}
+
+void AesCtx::gcm_encrypt(const &unsigned char iv, const ?&unsigned char aad, unsigned long aad_len,
+                         &unsigned char data, unsigned long len, &unsigned char tag) {
+    unsafe {
+        unsigned char j0[16];
+        gcm_j0_((const unsigned char*)iv, (unsigned char*)j0);
+        gcm_ctr_(self, (const unsigned char*)j0, (unsigned char*)data, len);
+        gcm_tag_(self, (const unsigned char*)iv, (const unsigned char*)aad, aad_len,
+                 (const unsigned char*)data, len, (unsigned char*)tag);
+    }
+}
+
+int AesCtx::gcm_decrypt(const &unsigned char iv, const ?&unsigned char aad, unsigned long aad_len,
+                        &unsigned char data, unsigned long len, const &unsigned char tag) {
+    unsigned char want[16];
+    unsigned int diff = 0u;
+    unsafe {
+        gcm_tag_(self, (const unsigned char*)iv, (const unsigned char*)aad, aad_len,
+                 (const unsigned char*)data, len, (unsigned char*)want);
+        int i = 0;
+        while (i < 16) { diff = diff | (unsigned int)(want[i] ^ tag[i]); i = i + 1; }
+    }
+    if (diff != 0u) { return 0; }
+    unsafe {
+        unsigned char j0[16];
+        gcm_j0_((const unsigned char*)iv, (unsigned char*)j0);
+        gcm_ctr_(self, (const unsigned char*)j0, (unsigned char*)data, len);
+    }
+    return 1;
+}
+
 // ── Constructors ──────────────────────────────────────────────────────────────
 
-inline struct AesCtx aes128_init(const &stack unsigned char key) {
+inline struct AesCtx aes128_init(const &unsigned char key) {
     struct AesCtx ctx;
     ctx.rounds = AES128_ROUNDS;
     unsafe { expand_key_((const unsigned char*)key, 4, AES128_ROUNDS, ctx.ks); }
@@ -342,7 +492,7 @@ inline struct AesCtx aes128_init(const &stack unsigned char key) {
     return ctx;
 }
 
-inline struct AesCtx aes256_init(const &stack unsigned char key) {
+inline struct AesCtx aes256_init(const &unsigned char key) {
     struct AesCtx ctx;
     ctx.rounds = AES256_ROUNDS;
     unsafe { expand_key_((const unsigned char*)key, 8, AES256_ROUNDS, ctx.ks); }

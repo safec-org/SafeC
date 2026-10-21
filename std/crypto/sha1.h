@@ -21,17 +21,17 @@ struct Sha1Ctx {
     unsigned long total_bytes;         // total bytes processed
 
     // Feed `len` bytes of data into the hash.
-    void update(const &stack unsigned char data, unsigned long len);
+    void update(const &unsigned char data, unsigned long len);
 
     // Finalise and write the 20-byte digest.
-    void finish(&stack unsigned char digest);
+    void finish(&unsigned char digest);
 };
 
 // Initialise a SHA-1 context.
 struct Sha1Ctx sha1_init();
 
 // Convenience: hash `len` bytes and write the 20-byte digest.
-void sha1(const &stack unsigned char data, unsigned long len,
-          &stack unsigned char digest);
+void sha1(const &unsigned char data, unsigned long len,
+          &unsigned char digest);
 
 } // namespace std

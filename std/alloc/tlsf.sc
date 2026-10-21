@@ -48,7 +48,7 @@ inline void TlsfBlock::set_used_() {
 
 // ── Utility free function ────────────────────────────────────────────────────
 
-void tlsf_mapping_(unsigned long size, &stack int fl, &stack int sl) {
+void tlsf_mapping_(unsigned long size, &int fl, &int sl) {
     if (size < (unsigned long)256) {
         *fl = 0;
         *sl = (int)(size / (unsigned long)16);
@@ -99,7 +99,7 @@ static void tlsf_link_next_(&TlsfBlock blk, &TlsfAllocator a) {
     }
 }
 
-inline void TlsfAllocator::insert_(&stack TlsfBlock blk) {
+inline void TlsfAllocator::insert_(&TlsfBlock blk) {
     int fl = 0;
     int sl = 0;
     unsigned long sz = blk.block_size_();
@@ -121,7 +121,7 @@ inline void TlsfAllocator::insert_(&stack TlsfBlock blk) {
     }
 }
 
-void TlsfAllocator::remove_(&stack TlsfBlock blk) {
+void TlsfAllocator::remove_(&TlsfBlock blk) {
     int fl = 0;
     int sl = 0;
     unsigned long sz = blk.block_size_();

@@ -33,16 +33,16 @@ struct ArpTable {
 
 // Build an ARP request/reply packet into pkt (starting after Ethernet header).
 // pkt.len must already include the Ethernet header length (ETH_HDR_LEN).
-void arp_build_packet(&stack PacketBuf pkt,
+void arp_build_packet(&PacketBuf pkt,
                       unsigned short op,
                       const unsigned char sha[NET_MAC_LEN], unsigned int spa,
                       const unsigned char tha[NET_MAC_LEN], unsigned int tpa);
 
 // Parse an ARP packet starting at pkt.data + offset.
 // Fills op, sha, spa, tha, tpa on success (returns 0), -1 on bad length.
-int  arp_parse_packet(&stack PacketBuf pkt, unsigned long offset,
-                      &stack unsigned short op,
-                      unsigned char sha[NET_MAC_LEN], &stack unsigned int spa,
-                      unsigned char tha[NET_MAC_LEN], &stack unsigned int tpa);
+int  arp_parse_packet(&PacketBuf pkt, unsigned long offset,
+                      &unsigned short op,
+                      unsigned char sha[NET_MAC_LEN], &unsigned int spa,
+                      unsigned char tha[NET_MAC_LEN], &unsigned int tpa);
 
 } // namespace std

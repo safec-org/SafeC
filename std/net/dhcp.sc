@@ -68,7 +68,7 @@ static void dhcp_write_fixed_(unsigned char* d, unsigned char op,
     }
 }
 
-void DhcpClient::discover(&stack PacketBuf pkt,
+void DhcpClient::discover(&PacketBuf pkt,
                            const unsigned char eth_dst[NET_MAC_LEN]) {
     unsigned short opts_len = (unsigned short)7; // type(3)+end(1) + pad
     unsigned short dhcp_payload = (unsigned short)((unsigned short)DHCP_HDR_LEN
@@ -95,7 +95,7 @@ void DhcpClient::discover(&stack PacketBuf pkt,
     self.state = DHCP_STATE_SELECTING;
 }
 
-void DhcpClient::request(&stack PacketBuf pkt,
+void DhcpClient::request(&PacketBuf pkt,
                           const unsigned char eth_dst[NET_MAC_LEN],
                           unsigned int offered_ip, unsigned int server_ip) {
     unsigned short opts_len = (unsigned short)13; // type(3)+reqip(6)+serverid(6)+end(1)
@@ -129,7 +129,7 @@ void DhcpClient::request(&stack PacketBuf pkt,
     self.state = DHCP_STATE_REQUESTING;
 }
 
-int DhcpClient::parse_reply(&stack PacketBuf pkt, unsigned long udp_payload_offset) {
+int DhcpClient::parse_reply(&PacketBuf pkt, unsigned long udp_payload_offset) {
     if (pkt.len < udp_payload_offset + (unsigned long)DHCP_HDR_LEN) { return 0; }
     int msg_type = 0;
     unsafe {

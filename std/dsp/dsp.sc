@@ -23,7 +23,7 @@ Fixed dsp_dot(const &Fixed a, const &Fixed b, unsigned long n) {
 
 // ── dsp_scale ─────────────────────────────────────────────────────────────────
 // Multiply every element by scale in-place.
-void dsp_scale(&stack Fixed a, Fixed scale, unsigned long n) {
+void dsp_scale(&Fixed a, Fixed scale, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         unsafe {
@@ -51,7 +51,7 @@ void dsp_add(const &Fixed a, const &Fixed b, &Fixed out, unsigned long n) {
 
 // ── dsp_clip ──────────────────────────────────────────────────────────────────
 // Clamp every element to [lo, hi].
-void dsp_clip(&stack Fixed a, Fixed lo, Fixed hi, unsigned long n) {
+void dsp_clip(&Fixed a, Fixed lo, Fixed hi, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         Fixed v;
@@ -94,7 +94,7 @@ Fixed dsp_peak(const &Fixed a, unsigned long n) {
 
 // ── dsp_rms ───────────────────────────────────────────────────────────────────
 // Root mean square: sqrt( sum(x[i]^2) / n ).
-Fixed dsp_rms(&stack Fixed a, unsigned long n) {
+Fixed dsp_rms(&Fixed a, unsigned long n) {
     if (n == 0UL) {
         return (Fixed)0;
     }

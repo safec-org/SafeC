@@ -35,8 +35,8 @@ unsigned short tcp_checksum(unsigned int src_ip, unsigned int dst_ip,
     return (unsigned short)(~sum & (unsigned long)0xFFFF);
 }
 
-int tcp_parse(&stack PacketBuf pkt, unsigned long offset,
-              &stack TcpHdr hdr_out) {
+int tcp_parse(&PacketBuf pkt, unsigned long offset,
+              &TcpHdr hdr_out) {
     if (pkt.len < offset + (unsigned long)TCP_HDR_MIN_LEN) { return -1; }
     unsafe {
         unsigned char* d = (unsigned char*)pkt.data + offset;
@@ -139,7 +139,7 @@ inline void TcpConn::close() {
     }
 }
 
-int TcpConn::recv(&stack PacketBuf pkt, unsigned long tcp_offset) {
+int TcpConn::recv(&PacketBuf pkt, unsigned long tcp_offset) {
     struct TcpHdr hdr;
     if (tcp_parse(pkt, tcp_offset, &hdr) != 0) { return 0; }
     if (hdr.dst_port != self.local_port) { return 0; }
@@ -235,7 +235,7 @@ inline unsigned long TcpConn::send(const &unsigned char data, unsigned long len)
     return len;
 }
 
-int TcpConn::build_segment(&stack PacketBuf pkt,
+int TcpConn::build_segment(&PacketBuf pkt,
                             const unsigned char eth_src[NET_MAC_LEN],
                             const unsigned char eth_dst[NET_MAC_LEN]) {
     if (self.state == TCP_CLOSED) { return 0; }

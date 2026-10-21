@@ -15,19 +15,19 @@ namespace std {
 Fixed dsp_dot(const &Fixed a, const &Fixed b, unsigned long n);
 
 // Scale array in-place: a[i] *= scale.
-void  dsp_scale(&stack Fixed a, Fixed scale, unsigned long n);
+void  dsp_scale(&Fixed a, Fixed scale, unsigned long n);
 
 // Add arrays element-wise: out[i] = a[i] + b[i].
 void  dsp_add(const &Fixed a, const &Fixed b, &Fixed out, unsigned long n);
 
 // Clip all values to [lo, hi].
-void  dsp_clip(&stack Fixed a, Fixed lo, Fixed hi, unsigned long n);
+void  dsp_clip(&Fixed a, Fixed lo, Fixed hi, unsigned long n);
 
 // Peak magnitude (maximum absolute value) in array.
 Fixed dsp_peak(const &Fixed a, unsigned long n);
 
 // Root mean square value of array.
-Fixed dsp_rms(&stack Fixed a, unsigned long n);
+Fixed dsp_rms(&Fixed a, unsigned long n);
 
 // SIMD FMA-accelerated dot product of two raw double arrays (see
 // std/simd/simd.h) — processes 4 elements/iteration via simd_fma_f64x4,

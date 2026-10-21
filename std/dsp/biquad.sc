@@ -423,7 +423,7 @@ struct Biquad bilinear_2nd_order(double B0, double B1, double B2,
 // SafeC operator calls require an lvalue receiver, so each intermediate
 // product/sum is bound to a named local rather than chained inline) exists
 // in exactly one place.
-static struct Complex biquad_freq_response_(const &stack Biquad bq, double fs, double freqHz) {
+static struct Complex biquad_freq_response_(const &Biquad bq, double fs, double freqHz) {
     double omega = SAFEC_DSP_TWO_PI_B * freqHz / fs;
     struct Complex zInv = complex_new(cos_d(-omega), sin_d(-omega));
     struct Complex zInv2 = zInv * zInv;
@@ -448,12 +448,12 @@ static struct Complex biquad_freq_response_(const &stack Biquad bq, double fs, d
     return num / den;
 }
 
-double biquad_response_mag(const &stack Biquad bq, double fs, double freqHz) {
+double biquad_response_mag(const &Biquad bq, double fs, double freqHz) {
     struct Complex h = biquad_freq_response_(bq, fs, freqHz);
     return h.abs();
 }
 
-double biquad_response_phase(const &stack Biquad bq, double fs, double freqHz) {
+double biquad_response_phase(const &Biquad bq, double fs, double freqHz) {
     struct Complex h = biquad_freq_response_(bq, fs, freqHz);
     return h.arg();
 }

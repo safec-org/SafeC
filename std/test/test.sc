@@ -120,7 +120,7 @@ int TestSuite::all_passed() const {
     return self.failed == 0 ? 1 : 0;
 }
 
-void test_run_and_exit(&stack TestSuite suite) {
+void test_run_and_exit(&TestSuite suite) {
     suite.run();
     suite.print_summary();
     if (suite.all_passed() == 0) {

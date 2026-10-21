@@ -783,7 +783,7 @@ void t_cond_trylock() {
         mutex_unlock(&g_cmtx);
         // timed wait with nobody signalling times out
         mutex_lock(&g_cmtx);
-        ASSERT_TRUE(cond_timedwait_ms(&g_cond, &g_cmtx, 5UL) != 0);
+        ASSERT_EQ(cond_timedwait_ms(&g_cond, &g_cmtx, 5UL), THREAD_TIMEDOUT);
         mutex_unlock(&g_cmtx);
         cond_destroy(&g_cond);
         mutex_destroy(&g_cmtx);

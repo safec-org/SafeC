@@ -30,6 +30,7 @@ extern void InitializeConditionVariable(void* cv);
 extern int  SleepConditionVariableCS(void* cv, void* cs, unsigned long ms);
 extern void WakeConditionVariable(void* cv);
 extern void WakeAllConditionVariable(void* cv);
+extern unsigned long GetLastError();
 
 // SRWLOCK (8 bytes; we alloc 16)
 extern void InitializeSRWLock(void* rw);
@@ -115,7 +116,8 @@ inline int cond_wait(&unsigned long long cv, &unsigned long long m) {
 
 inline int cond_timedwait_ms(&unsigned long long cv, &unsigned long long m, unsigned long ms) {
     unsafe {
-        return SleepConditionVariableCS((void*)(*cv), (void*)(*m), (unsigned long)ms) ? 0 : -1;
+        if (SleepConditionVariableCS((void*)(*cv), (void*)(*m), (unsigned long)ms)) return 0;
+        return GetLastError() == 1460UL ? THREAD_TIMEDOUT : -1;   // ERROR_TIMEOUT
     }
 }
 
@@ -151,6 +153,20 @@ extern int pthread_join(unsigned long long tid, void** retval);
 extern int pthread_detach(unsigned long long tid);
 extern unsigned long long pthread_self();
 extern int sched_yield();
+// struct timespec { time_t tv_sec; long tv_nsec; }: time_t is 'long' on the
+// hosted ABIs here (LP64 and ILP32 Linux/BSD/macOS), so a 32-bit host gets
+// two 4-byte fields, not two long longs.
+// pthread_cond_timedwait's timeout code differs per OS.
+#if defined(__APPLE__) || defined(__FreeBSD__)
+#define SAFEC_ETIMEDOUT_ 60
+#else
+#define SAFEC_ETIMEDOUT_ 110
+#endif
+
+struct SafecTimespec_ {
+    long tv_sec;
+    long tv_nsec;
+};
 extern int nanosleep(void* req, void* rem);
 extern int clock_gettime(int clk, void* ts);
 
@@ -185,11 +201,10 @@ unsigned long long thread_self()           { unsafe { return pthread_self(); } }
 
 inline void thread_sleep_ms(unsigned long ms) {
     unsafe {
-        // struct timespec { time_t tv_sec; long tv_nsec; } = 16 bytes on 64-bit
-        long long ts[2];
-        ts[0] = (long long)(ms / 1000UL);
-        ts[1] = (long long)((ms % 1000UL) * 1000000UL);
-        nanosleep((void*)ts, (void*)0);
+        struct SafecTimespec_ ts;
+        ts.tv_sec = (long)(ms / 1000UL);
+        ts.tv_nsec = (long)((ms % 1000UL) * 1000000UL);
+        nanosleep((void*)&ts, (void*)0);
     }
 }
 
@@ -245,15 +260,15 @@ inline int cond_wait(&unsigned long long cv, &unsigned long long m) {
 
 inline int cond_timedwait_ms(&unsigned long long cv, &unsigned long long m, unsigned long ms) {
     unsafe {
-        long long ts[2];
-        clock_gettime(0, (void*)ts); // CLOCK_REALTIME = 0
+        struct SafecTimespec_ ts;
+        clock_gettime(0, (void*)&ts); // CLOCK_REALTIME = 0
         long long ns_add = (long long)ms * 1000000LL;
-        ts[1] = ts[1] + ns_add;
-        if (ts[1] >= 1000000000LL) {
-            ts[0] = ts[0] + ts[1] / 1000000000LL;
-            ts[1] = ts[1] % 1000000000LL;
-        }
-        return pthread_cond_timedwait((void*)(*cv), (void*)(*m), (void*)ts);
+        long long nsec = (long long)ts.tv_nsec + ns_add;
+        ts.tv_sec = ts.tv_sec + (long)(nsec / 1000000000LL);
+        ts.tv_nsec = (long)(nsec % 1000000000LL);
+        int r = pthread_cond_timedwait((void*)(*cv), (void*)(*m), (void*)&ts);
+        if (r == 0) return 0;
+        return r == SAFEC_ETIMEDOUT_ ? THREAD_TIMEDOUT : -1;
     }
 }
 

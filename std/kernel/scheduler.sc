@@ -11,7 +11,7 @@ inline struct Scheduler sched_init() {
     return s;
 }
 
-inline int Scheduler::spawn_proc(&stack PCB proc) {
+inline int Scheduler::spawn_proc(&PCB proc) {
     if (self.count >= SCHED_MAX_PROCS) { return -1; }
     int idx = self.count;
     self.procs[idx] = *proc;

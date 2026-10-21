@@ -20,10 +20,10 @@ struct BlockDevice {
     void*          ctx;            // &T
 
     // Read `count` sectors starting at `lba` into `buf`.
-    int  read(unsigned long lba, &stack unsigned char buf, unsigned long count);
+    int  read(unsigned long lba, &unsigned char buf, unsigned long count);
 
     // Write `count` sectors from `buf` to `lba`.
-    int  write(unsigned long lba, const &stack unsigned char buf, unsigned long count);
+    int  write(unsigned long lba, const &unsigned char buf, unsigned long count);
 
     // Is the device valid / initialised?
     int  valid() const;

@@ -23,7 +23,7 @@ inline void vfs_init() {
 
 // ── VfsNode forwarding methods ────────────────────────────────────────────────
 
-inline unsigned long VfsNode::read(unsigned long offset, &stack unsigned char buf, unsigned long len) {
+inline unsigned long VfsNode::read(unsigned long offset, &unsigned char buf, unsigned long len) {
     if (self.fs_ctx.is_null()) { return (unsigned long)0; }
     struct VfsMount* m;
     unsafe { m = (struct VfsMount*)self.fs_ctx; }
@@ -34,7 +34,7 @@ inline unsigned long VfsNode::read(unsigned long offset, &stack unsigned char bu
     return (unsigned long)0;
 }
 
-inline unsigned long VfsNode::write(unsigned long offset, const &stack unsigned char buf, unsigned long len) {
+inline unsigned long VfsNode::write(unsigned long offset, const &unsigned char buf, unsigned long len) {
     if (self.fs_ctx.is_null()) { return (unsigned long)0; }
     struct VfsMount* m;
     unsafe { m = (struct VfsMount*)self.fs_ctx; }
@@ -146,7 +146,7 @@ inline int Vfs::unmount(const &char mountpoint) {
     return -1;
 }
 
-inline int Vfs::open(const &char path, int flags, &stack VfsNode node_out) {
+inline int Vfs::open(const &char path, int flags, &VfsNode node_out) {
     struct VfsMount* m;
     unsafe { m = vfs_find_mount_((struct Vfs*)self, path); }
     if (m == (struct VfsMount*)0) { return -1; }

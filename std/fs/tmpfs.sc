@@ -109,7 +109,7 @@ static void tmpfs_split_path_(const char* path,
 // ── VfsOps callbacks ──────────────────────────────────────────────────────────
 
 static int tmpfs_vfs_open_(?&void ctx_ref, const &char path_ref, int flags,
-                            &stack VfsNode node_out) {
+                            &VfsNode node_out) {
     void* ctx = ctx_ref;
     const char* path = path_ref;
     struct TmpfsCtx* tc;

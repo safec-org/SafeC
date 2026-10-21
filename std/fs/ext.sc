@@ -38,7 +38,7 @@ int ext2_init(&Ext2Ctx ctx, &BlockDevice dev) {
 
     // Read two sectors starting at LBA 2 to get the 1024-byte superblock.
     unsigned char sb_buf[1024];
-    if (dev.read((unsigned long)2, (&stack unsigned char)sb_buf, (unsigned long)2) != 0) {
+    if (dev.read((unsigned long)2, (&unsigned char)sb_buf, (unsigned long)2) != 0) {
         return -1;
     }
 
@@ -97,7 +97,7 @@ int ext2_init(&Ext2Ctx ctx, &BlockDevice dev) {
 // ── Ext2Ctx::read_block ───────────────────────────────────────────────────────
 // Convert block number to LBA (512-byte sectors) and read block_size bytes.
 
-inline int Ext2Ctx::read_block(unsigned long block_no, &stack unsigned char buf) {
+inline int Ext2Ctx::read_block(unsigned long block_no, &unsigned char buf) {
     unsigned long sectors_per_block = self.block_size / (unsigned long)512;
     unsigned long lba = block_no * sectors_per_block;
     return self.dev.read(lba, buf, sectors_per_block);
@@ -106,7 +106,7 @@ inline int Ext2Ctx::read_block(unsigned long block_no, &stack unsigned char buf)
 // ── Ext2Ctx::read_inode ───────────────────────────────────────────────────────
 // Locate the group, read the inode table block, extract the 128-byte inode.
 
-int Ext2Ctx::read_inode(unsigned long ino, &stack Ext2Inode inode_out) {
+int Ext2Ctx::read_inode(unsigned long ino, &Ext2Inode inode_out) {
     if (ino < (unsigned long)1) { return -1; }
     unsigned long idx     = ino - (unsigned long)1;
     unsigned long group   = idx / self.inodes_per_group;
@@ -302,7 +302,7 @@ static int ext2_split_path_(const char* path,
 // ── VfsOps callbacks ──────────────────────────────────────────────────────────
 
 static int ext2_vfs_open_(?&void ctx_ref, const &char path_ref, int flags,
-                           &stack VfsNode node_out) {
+                           &VfsNode node_out) {
     void* ctx = ctx_ref;
     const char* path = path_ref;
     struct Ext2Ctx* ec;

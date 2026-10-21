@@ -23,7 +23,7 @@ inline void timer_wheel_init(&TimerWheel tw) {
 
 // ── Internal helper: allocate a free timer slot ───────────────────────────────
 // Returns 0-based index or -1 if full.
-static int alloc_slot(&stack TimerWheel tw) {
+static int alloc_slot(&TimerWheel tw) {
     int i = 0;
     while (i < WHEEL_TIMERS) {
         unsafe {

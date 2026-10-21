@@ -34,7 +34,7 @@ int fat_init(&FatCtx ctx, &BlockDevice dev, unsigned long lba) {
     ctx.dev = *dev;
     ctx.partition_lba = lba;
     unsigned char boot[512];
-    if (dev.read(lba, (&stack unsigned char)boot, (unsigned long)1) != 0) { return -1; }
+    if (dev.read(lba, (&unsigned char)boot, (unsigned long)1) != 0) { return -1; }
     // BPB parsing
     unsafe {
         ctx.bpb.bytes_per_sector     = fat_read16_(boot + 11);
@@ -73,7 +73,7 @@ static unsigned long fat_cluster_to_lba_(struct FatCtx* ctx, unsigned long clust
     }
 }
 
-inline int FatCtx::read_cluster(unsigned long cluster, &stack unsigned char buf) {
+inline int FatCtx::read_cluster(unsigned long cluster, &unsigned char buf) {
     unsigned long lba;
     unsafe { lba = fat_cluster_to_lba_((struct FatCtx*)self, cluster); }
     return self.dev.read(lba, buf,
@@ -89,7 +89,7 @@ inline unsigned long FatCtx::follow_fat(unsigned long start_cluster, unsigned lo
         unsigned long fat_sector   = fat_byte_off / (unsigned long)512;
         unsigned long fat_off_in   = fat_byte_off % (unsigned long)512;
         if (self.dev.read(self.fat_lba + fat_sector,
-                          (&stack unsigned char)fat_sect, (unsigned long)1) != 0) {
+                          (&unsigned char)fat_sect, (unsigned long)1) != 0) {
             return (unsigned long)0;
         }
         unsigned int next;
@@ -217,7 +217,7 @@ static int fat_split_path_(const char* path, char parts[][VFS_MAX_NAME], int max
 // ── VfsOps callbacks ──────────────────────────────────────────────────────────
 
 static int fat_vfs_open_(?&void ctx_ref, const &char path_ref, int flags,
-                          &stack VfsNode node_out) {
+                          &VfsNode node_out) {
     void* ctx = ctx_ref;
     const char* path = path_ref;
     struct FatCtx* fc;

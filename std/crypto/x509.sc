@@ -164,6 +164,9 @@ static int is_leap_(int y) {
 // Very simplified epoch conversion (ignores sub-second, assumes UTC Z suffix).
 static unsigned long long date_to_epoch_(int year, int month, int day,
                                           int hour, int min, int sec) {
+    // Validity is unsigned seconds since 1970: an earlier date clamps to 0
+    // (still "before" every timestamp is_valid_at can be asked about).
+    if (year < 1970) { return (unsigned long long)0; }
     // Days from 1970-01-01 to year-01-01
     int y = 1970;
     unsigned long long days = (unsigned long long)0;
@@ -234,7 +237,7 @@ static unsigned char oid_c_[3]  = { 0x55, 0x04, 0x06 };
 // Parse a SEQUENCE OF SET OF { OID, string } name structure into X509Name.
 static int parse_name_(const unsigned char* buf, unsigned long buf_len,
                         unsigned long name_start, unsigned long name_len,
-                        &stack X509Name name) {
+                        &X509Name name) {
     unsigned long pos = name_start;
     unsigned long end = name_start + name_len;
 
@@ -312,7 +315,7 @@ static int parse_name_(const unsigned char* buf, unsigned long buf_len,
 
 static int parse_san_(const unsigned char* buf, unsigned long buf_len,
                        unsigned long ext_val_start, unsigned long ext_val_len,
-                       &stack X509San san) {
+                       &X509San san) {
     // ext_val is OCTET STRING wrapping a SEQUENCE OF GeneralName
     unsigned long pos = ext_val_start;
     unsigned long end = ext_val_start + ext_val_len;
@@ -352,7 +355,7 @@ static int parse_san_(const unsigned char* buf, unsigned long buf_len,
 // ── Main DER parser ───────────────────────────────────────────────────────────
 
 int x509_parse_der(const &unsigned char der_ref, unsigned long len,
-                   &stack X509Cert cert_out) { const unsigned char* der = der_ref;
+                   &X509Cert cert_out) { const unsigned char* der = der_ref;
     unsafe {
         memset((void*)cert_out, 0, (unsigned long)sizeof(struct X509Cert));   // the struct, not the reference
     }
@@ -647,8 +650,8 @@ int X509Cert::matches_hostname(const &char hostname) const {
 
 // ── Chain verification (structural only) ──────────────────────────────────────
 
-int x509_verify_chain(const &stack X509Cert cert,
-                       const &stack X509Cert issuer_cert) {
+int x509_verify_chain(const &X509Cert cert,
+                       const &X509Cert issuer_cert) {
     // Check that cert.issuer CN/O/C match issuer_cert.subject CN/O/C
     unsafe {
         if (str_eq_((const char*)cert.issuer.cn,

@@ -41,17 +41,17 @@ struct DhcpClient {
     unsigned char mac[NET_MAC_LEN];
 
     // Build a DHCPDISCOVER packet.
-    void discover(&stack PacketBuf pkt,
+    void discover(&PacketBuf pkt,
                   const unsigned char eth_dst[NET_MAC_LEN]);
 
     // Build a DHCPREQUEST for `offered_ip` from `server_ip`.
-    void request(&stack PacketBuf pkt,
+    void request(&PacketBuf pkt,
                  const unsigned char eth_dst[NET_MAC_LEN],
                  unsigned int offered_ip, unsigned int server_ip);
 
     // Parse an incoming DHCP reply; fills lease on ACK/OFFER.
     // Returns DHCP_OFFER, DHCP_ACK, DHCP_NAK, or 0 on unrecognised.
-    int  parse_reply(&stack PacketBuf pkt, unsigned long udp_payload_offset);
+    int  parse_reply(&PacketBuf pkt, unsigned long udp_payload_offset);
 
     // Is the client bound (has a valid lease)?
     int  is_bound() const;
