@@ -8,6 +8,10 @@ extern int printf(const char* fmt, ...);
 
 static int g_checks = 0;
 static int g_fails = 0;
+static int   g_prec = 0;                   // the nets' activations (rocm_net_set_precision)
+static float g_tol = (float)0.0005;        // the gradient checks' tolerance at that precision
+static float g_scale = (float)1.0;         // the fp16 loss scale (in the parameter gradients)
+static float g_div = (float)1.0;           // rel_diff_ divides the GPU's values by this
 
 static void check(int ok, const char* what) {
     g_checks = g_checks + 1;
@@ -30,7 +34,7 @@ static float rel_diff_(struct RocmBuf d, const float* host, unsigned long n) {
     unsafe {
         i = 0UL;
         while (i < n) {
-            float df = absf_(*g.at(i) - host[i]);
+            float df = absf_(*g.at(i) / g_div - host[i]);
             if (df > m) m = df;
             if (absf_(host[i]) > scale) scale = absf_(host[i]);
             i = i + 1UL;
@@ -135,18 +139,18 @@ static void grad_case_(const char* name, &Vec<struct Spec> specs, unsigned long 
     i = 0UL;
     while (i < specs.length()) { gpu_add_(&n, specs.at(i)); i = i + 1UL; }
     check(n.ok && rocm_net_in_dim(&n) == inDim && rocm_net_out_dim(&n) == outDim, name);
+    if (g_prec != 0) check(rocm_net_set_precision(&n, g_prec) && rocm_net_set_loss_scale(&n, g_scale), name);
     struct RocmBuf dx = upload_(x);
     struct RocmBuf dy = upload_(y);
     struct RocmBuf ddx = std::rocm_alloc(rows * inDim);
     struct RocmBuf lb = std::rocm_alloc(1UL);
     std::rocm_zero(lb);
     int ok = 1;
-    struct RocmBuf out = n.layers.at(n.layers.length() - 1UL).h;
+    struct RocmBuf out = g_prec != 0 ? n.out32 : n.layers.at(n.layers.length() - 1UL).h;
     if (step) {
         if (loss == LOSS_CE) ok = rocm_net_ce_step(&n, dx, dy, rows, lb);
         else if (loss == LOSS_MSE) ok = rocm_net_mse_step(&n, dx, dy, rows, lb);
         else ok = rocm_net_bce_step(&n, dx, dy, rows, lb);
-        if (n.out.dev != 0UL) out = n.out;   // the row-major copy of a multi-channel output
     } else {
         out = rocm_net_forward(&n, dx, rows);
         ok = out.dev != 0UL;
@@ -162,6 +166,7 @@ static void grad_case_(const char* name, &Vec<struct Spec> specs, unsigned long 
         if (lossErr > worst) worst = lossErr;
         float e = rel_diff_(out, (const float*)h->data, rows * outDim);
         if (e > worst) worst = e;
+        g_div = g_scale;
         i = 0UL;
         while (i < specs.length()) {
             &RocmLayer L = n.layers.at(i);
@@ -172,13 +177,14 @@ static void grad_case_(const char* name, &Vec<struct Spec> specs, unsigned long 
             if (e > worst) worst = e;
             i = i + 1UL;
         }
+        g_div = (float)1.0;
         if (!step) {
             e = rel_diff_(ddx, (const float*)x->grad, rows * inDim);
             if (e > worst) worst = e;
         }
         printf("  %-38s%s max rel err %.2e\n", name, step ? " (step)" : "       ", (double)worst);
     }
-    check(worst < (float)0.0005, name);
+    check(worst < g_tol, name);
     rocm_net_free(&n);
     std::rocm_free(&dx); std::rocm_free(&dy); std::rocm_free(&ddx); std::rocm_free(&lb);
 }
@@ -303,6 +309,7 @@ static void convnet_case_(const char* name, &ConvNet c, unsigned long rows, int 
     // the GPU copy first: the CPU pass moves the running statistics
     struct RocmNet n = rocm_net_from_convnet(c, total);
     check(n.ok && rocm_net_in_dim(&n) == inDim && rocm_net_out_dim(&n) == outDim, name);
+    if (g_prec != 0) check(rocm_net_set_precision(&n, g_prec) && rocm_net_set_loss_scale(&n, g_scale), name);
     unsigned long i = 0UL;
     while (i < c.params.length()) { tensor_zero_grad(*c.params.at(i)); i = i + 1UL; }
     &Tensor out = tensor_new_2d(total, outDim, 0);  // the CPU output
@@ -362,6 +369,7 @@ static void convnet_case_(const char* name, &ConvNet c, unsigned long rows, int 
         e = rel_diff_(o, (const float*)out->data, total * outDim);
         if (e > worst) worst = e;
         unsigned long k = 0UL;
+        g_div = g_scale;
         i = 0UL;
         while (i < n.layers.length()) {
             &RocmLayer L = n.layers.at(i);
@@ -374,6 +382,7 @@ static void convnet_case_(const char* name, &ConvNet c, unsigned long rows, int 
             }
             i = i + 1UL;
         }
+        g_div = (float)1.0;
         // every buffer (batch norm statistics, spectral norms' u), in order
         e = buffers_diff_(&n, &c.buffers);
         if (e > worst) worst = e;
@@ -381,7 +390,7 @@ static void convnet_case_(const char* name, &ConvNet c, unsigned long rows, int 
         if (e > worst) worst = e;
         printf("  %-45s max rel err %.2e\n", name, (double)worst);
     }
-    check(worst < (float)0.0005, name);
+    check(worst < g_tol, name);
     rocm_net_free(&n);
     std::rocm_free(&dx); std::rocm_free(&dy); std::rocm_free(&ddx); std::rocm_free(&lb);
 }
@@ -479,7 +488,9 @@ static void convnet_tests_() {
     convnet_conv(&b, 5UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);
     convnet_layernorm(&b, ACT_GELU);
     convnet_instancenorm(&b, ACT_SIGMOID);
-    convnet_global_maxpool(&b);
+    // (at 16 bits a max over near-equal values can pick another element)
+    if (g_prec == 0) convnet_global_maxpool(&b);
+    else convnet_global_avgpool(&b);
     convnet_dense(&b, 3UL, ACT_NONE, &rng);
     convnet_case_("convnet: dense/reshape/upsample/norms", &b, 7UL, LOSS_MSE, 42UL, 0);
     convnet_free(&b);
@@ -547,6 +558,67 @@ static void convnet_tests_() {
     convnet_free(&dr);
     dropout_props_(0);
     dropout_props_(1);
+}
+
+// ── Mixed precision: a small ResNet trained in fp32 and in 16 bits ──────────
+static struct ConvNet half_net_(unsigned long seed) {
+    struct Rng rng = rng_new(seed);
+    struct ConvNet c = convnet_new(1UL, 16UL, 16UL);
+    convnet_conv(&c, 8UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);
+    convnet_batchnorm(&c, ACT_RELU);
+    convnet_residual_block(&c, 8UL, 1UL, 1, ACT_RELU, &rng);
+    convnet_residual_block(&c, 16UL, 2UL, 1, ACT_RELU, &rng);
+    convnet_global_avgpool(&c);
+    convnet_dense(&c, 4UL, ACT_NONE, &rng);
+    return c;
+}
+
+// The 16-bit run's losses track the fp32 run's. scale0 > 0: an fp16 loss
+// scale that overflows at first (steps skipped, the scale backs off).
+static void half_train_case_(const char* name, int prec, float scale0) {
+    struct Rng drng = rng_new(5UL);
+    struct Dataset data = dataset_shapes(512UL, 16UL, &drng);
+    struct ConvNet c1 = half_net_(9UL);
+    struct ConvNet c2 = half_net_(9UL);
+    struct RocmNet a = rocm_net_from_convnet(&c1, 64UL);
+    struct RocmNet b = rocm_net_from_convnet(&c2, 64UL);
+    int ok = rocm_net_set_precision(&b, prec);
+    if (scale0 > (float)0.0) ok = ok && rocm_net_set_loss_scale(&b, scale0);
+    struct RocmOptimizer oa = rocm_optimizer_new(OPT_ADAM, (float)0.003);
+    struct RocmOptimizer ob = rocm_optimizer_new(OPT_ADAM, (float)0.003);
+    ok = ok && rocm_optimizer_add_net(&oa, &a) && rocm_optimizer_add_net(&ob, &b);
+    struct TrainConfig tc = train_config_default();
+    tc.epochs = 5UL;
+    tc.batchSize = 64UL;
+    struct TrainReport ra = rocm_trainer_fit(&a, rocm_net_ce_step, &oa, &data, &tc);
+    struct TrainReport rb = rocm_trainer_fit(&b, rocm_net_ce_step, &ob, &data, &tc);
+    float s = rocm_net_loss_scale(&b);
+    unsafe { printf("  %-38s loss fp32 %.4f -> %.4f, 16-bit %.4f -> %.4f, loss scale %g\n", name,
+                    (double)ra.firstEpochLoss, (double)ra.lastEpochLoss, (double)rb.firstEpochLoss,
+                    (double)rb.lastEpochLoss, (double)s); }
+    ok = ok && rb.steps == ra.steps && rb.lastEpochLoss < (float)0.5 * rb.firstEpochLoss;
+    // (the overflowing run skips its first steps)
+    if (scale0 == (float)0.0) ok = ok && absf_(rb.lastEpochLoss - ra.lastEpochLoss) < (float)0.1 * ra.firstEpochLoss;
+    if (prec == ROCM_FP16) ok = ok && (scale0 > (float)0.0 ? s < scale0 : s == (float)65536.0);
+    check(ok, name);
+    rocm_optimizer_free(&oa); rocm_optimizer_free(&ob);
+    rocm_net_free(&a); rocm_net_free(&b);
+    convnet_free(&c1); convnet_free(&c2);
+    dataset_free(&data);
+}
+
+static void half_tests_(int prec) {
+    g_prec = prec;
+    g_tol = prec == ROCM_FP16 ? (float)0.02 : (float)0.1;
+    g_scale = prec == ROCM_FP16 ? (float)1024.0 : (float)1.0;   // fp16: keeps small gradients out of the subnormals
+    unsafe { printf("activations: %s\n", prec == ROCM_FP16 ? "fp16" : "bf16"); }
+    grad_tests_();
+    convnet_tests_();
+    g_prec = 0;
+    g_tol = (float)0.0005;
+    g_scale = (float)1.0;
+    half_train_case_(prec == ROCM_FP16 ? "train fp16" : "train bf16", prec, (float)0.0);
+    if (prec == ROCM_FP16) half_train_case_("train fp16, overflowing loss scale", prec, (float)16777216.0);
 }
 
 // ── Optimizers: every kind against optimizer_step, eager and replayed ───────
@@ -1113,8 +1185,21 @@ static void rl_tests_() {
 int main() {
     if (!std::rocm_available()) { unsafe { printf("no ROCm GPU -- skipping\n"); } return 0; }
     unsafe { printf("nn_rocm on %s\n", std::rocm_device_name()); }
+    // the convolution layers on MIOpen (when linked) and on the im2col engine
+    int mio = rocm_conv_engine(ROCM_CONV_AUTO);
+    unsafe { printf("conv engine: %s\n", mio ? "MIOpen" : "im2col"); }
     grad_tests_();
     convnet_tests_();
+    if (mio) {
+        rocm_conv_engine(ROCM_CONV_IM2COL);
+        unsafe { printf("conv engine: im2col\n"); }
+        grad_tests_();
+        convnet_tests_();
+        rocm_conv_engine(ROCM_CONV_AUTO);
+        // 16-bit activations (convolutions on MIOpen only)
+        half_tests_(ROCM_FP16);
+        half_tests_(ROCM_BF16);
+    }
     opt_tests_();
     trainer_test_();
     vae_test_();

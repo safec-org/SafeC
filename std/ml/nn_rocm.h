@@ -56,11 +56,9 @@
 //   struct TrainReport rep = rocm_trainer_fit(&dnet, rocm_net_ce_step, &opt, &train, &cfg);
 //   rocm_net_download(&dnet, &net.params);   // back into the host Mlp
 //
-// Layouts. Every buffer at the API is row-major with one row per sample
-// (a batch of images is [batch, C*H*W], CHW per row: convnet.h's layout).
-// Inside a run of convolution layers activations are kept channel-major
-// ([C, batch, H*W]) so no layer needs a transpose; the net converts at its
-// edges and between a convolution and a fully connected layer.
+// Layout. Every buffer is row-major with one row per sample: a batch of
+// images is [batch, C*H*W] with CHW rows (convnet.h's layout, i.e. NCHW), at
+// the API and between layers alike.
 //
 // Every op is queued on gpu_rocm.h's stream and returns 1 when enqueued, 0
 // on a bad shape or when there is no GPU. Gradients are overwritten (not
@@ -123,6 +121,8 @@ struct RocmLayer {
     int   flag;               // RESIZE alignCorners, ADD projection, DROPOUT by channel
     float prob;               // DROPOUT
     unsigned long seed;       // DROPOUT: the mask's random stream
+    int   foldBias;           // CONV / CONVT: the batch norm after it applies its bias (and its gradient)
+    int   alias;              // 1: h, 2: dh are another layer's buffers (a SAVE's input, an ADD's gradient)
     int   spectral;           // CONV / CONVT / LINEAR: the weight is spectrally normalized
     struct RocmBuf wsn;       // ... the normalized weight the layer computes with
     float momentum;           // BATCHNORM
@@ -130,15 +130,15 @@ struct RocmLayer {
     struct RocmBuf runMean;   // BATCHNORM running statistics
     struct RocmBuf runVar;
     struct RocmBuf stats;     // norms: saved mean / inverse std; max pools: each window's argmax
-    int convIn;               // 1: the input arrives in the other layout and is converted into xin
     struct RocmBuf z;         // pre-activation, only for GELU / SiLU (their gradient needs it)
     struct RocmBuf h;         // output
     struct RocmBuf dh;        // gradient of the output (made the pre-activation's in place)
-    struct RocmBuf col;       // convolutions: im2col / col2im scratch
-    struct RocmBuf xin;       // the converted input when convIn
+    struct RocmBuf col;       // convolutions (im2col engine): im2col / col2im scratch
+    struct RocmBuf cm;        // ... and the channel-major side of its GEMMs
     struct RocmBuf part;      // bias-gradient partial sums
     struct RocmBuf aux;       // SAVE: the skip gradient; ADD: the projection's input gradient;
                               // RESIZE: tap tables; DROPOUT: draw counter; spectral norm: u, v, sigma
+    struct RocmBuf wh;        // 16-bit nets: the weight rounded to their type, each forward pass
 };
 
 #define ROCM_MAX_SEGMENTS 8UL
@@ -154,9 +154,13 @@ struct RocmNet {
                               // (1..ROCM_MAX_SEGMENTS): stacked batches that two separate
                               // passes would have normalized separately, e.g. a GAN
                               // discriminator's real and generated rows
-    struct RocmBuf out;       // row-major output when the last layer is channel-major with outC > 1
-    struct RocmBuf dout;      // ... and its gradient
     int ok;                   // 0 once an upload, allocation or shape check failed
+    int precision;            // activations: 0 fp32, ROCM_FP16 or ROCM_BF16 (rocm_net_set_precision)
+    struct RocmBuf scale;     // 16-bit nets: the loss scale and its count of good steps
+    struct RocmBuf xh;        // ... the input, its gradient, the output and its gradient
+    struct RocmBuf dxh;       //     (16-bit; the output's are fp32)
+    struct RocmBuf out32;
+    struct RocmBuf dout32;
 };
 
 struct RocmNet rocm_net_new(unsigned long maxBatch);
@@ -200,6 +204,19 @@ int rocm_net_add_batchnorm(&RocmNet n, const &Tensor gamma, const &Tensor beta, 
                            const &Tensor runVar, float momentum, float eps, int act);
 int rocm_net_add_groupnorm(&RocmNet n, const &Tensor gamma, const &Tensor beta, unsigned long groups, float eps,
                            int act);
+// Convolution engine for CONV / CONVT layers. ROCM_CONV_AUTO (the default)
+// runs them on MIOpen when the program links it (-lMIOpen: implicit GEMM,
+// Winograd, matrix cores), else on the im2col engine (im2col / col2im +
+// rocBLAS); ROCM_CONV_IM2COL always uses the latter. MIOpen picks its
+// kernels for each shape and batch size on the first forward pass, which
+// must run outside graph capture (rocm_trainer_fit's first step does);
+// that pass also times an fp32 shape's forward and backward on both
+// engines and keeps the im2col engine for it when that is clearly faster
+// (small convolutions, where MIOpen's cost per call dominates).
+// Returns 1 if MIOpen is in use. Applies to layers added afterwards.
+#define ROCM_CONV_AUTO   0
+#define ROCM_CONV_IM2COL 1
+int rocm_conv_engine(int engine);
 // An Mlp's layers (its act / outAct), for batches of up to maxBatch rows.
 struct RocmNet rocm_net_from_mlp(const &Mlp m, unsigned long maxBatch);
 // A ConvNet's layers, parameters, buffers (running statistics, spectral
@@ -210,6 +227,23 @@ struct RocmNet rocm_net_from_convnet(const &ConvNet c, unsigned long maxBatch);
 unsigned long rocm_net_in_dim(const &RocmNet n);
 unsigned long rocm_net_out_dim(const &RocmNet n);
 int  rocm_net_set_training(&RocmNet n, int training);   // returns the previous mode
+// Mixed precision (after the last layer, before rocm_optimizer_add_net):
+// activations and their gradients in ROCM_FP16 or ROCM_BF16 (0: fp32),
+// the arithmetic in fp32. Weights, gradients and optimizer state stay fp32
+// and are rounded to 16 bits for each forward pass; the input, the output
+// (rocm_net_forward) and their gradients stay fp32, so losses and steps are
+// unchanged. Convolutions need MIOpen (rocm_conv_engine) and linear layers
+// run on 16-bit GEMMs. fp16 adds a dynamic loss scale, as torch's
+// GradScaler: the output gradient is multiplied by it, the optimizer
+// divides it out, skips a step whose gradients overflowed and halves it,
+// and doubles it after 2000 good steps (from 65536). 0 when this net can't
+// run in that precision. On an MI100 fp16 is the fast one (matrix cores
+// for MIOpen's fp16 kernels); its bf16 convolutions run at about fp32's
+// speed. rocm_net_loss_scale / _set_loss_scale read and set the scale (1
+// for bf16).
+int   rocm_net_set_precision(&RocmNet n, int dtype);
+int   rocm_net_set_loss_scale(&RocmNet n, float scale);
+float rocm_net_loss_scale(const &RocmNet n);   // waits
 // Every parameterized layer's weight and bias (gamma and beta for norms),
 // in order (W0, b0, W1, b1, ...: an Mlp's or a ConvNet's params), from or
 // to host tensors of the same sizes. Download waits.
@@ -284,6 +318,7 @@ struct RocmOptimizer {
     unsigned long t;                // steps taken (the GPU counts its own for the bias correction)
     struct RocmBuf state;           // GPU copy of the hyperparameters, step count, clip scale
     float sent[7];                  // the values last copied to 'state'
+    struct RocmBuf lossScale;       // an fp16 net's loss scale (rocm_optimizer_add_net), or none
     int   ok;
 };
 // Same defaults as optimizer_new.
