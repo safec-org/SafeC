@@ -87,6 +87,10 @@ float             half_sum(const &HalfTensor a);                          // f32
 // float32, vectorized for the CPU's SIMD tier and split over rows on
 // std/sync/parallel.h's pool. 1 on success, 0 if 'w' isn't 2D.
 int half_gemv(const &HalfTensor w, const &float x, &float y);
+// The same for m vectors: x is [m][k] and y is [m][n], row-major. The
+// weights are read from memory once for all m (a short prompt's prefill,
+// speculative verification), not once per vector.
+int half_gemv_batch(const &HalfTensor w, const &float x, unsigned long m, &float y);
 
 // ── Mixed precision with autograd (float32 Tensors) ─────────────────────────
 // Forward: each element rounded to 'dtype' precision. Backward: gradient

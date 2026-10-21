@@ -38,6 +38,9 @@ void parallel_for_raw_(unsigned long n, unsigned long grain, void* body, void* c
 #ifdef _WIN32
 extern unsigned long GetActiveProcessorCount(unsigned short group);
 #else
+#if defined(__APPLE__)
+extern int sysctlbyname(const char* name, void* oldp, void* oldlenp, void* newp, unsigned long newlen);
+#endif
 extern long sysconf(int name);
 #endif
 
@@ -54,7 +57,15 @@ static unsigned long par_cpus_() {
 #ifdef _WIN32
         c = (long)GetActiveProcessorCount((unsigned short)0xFFFF);   // ALL_PROCESSOR_GROUPS
 #elif defined(__APPLE__)
-        c = sysconf(58);                                             // _SC_NPROCESSORS_ONLN
+        // Performance cores only: the efficiency cores run a chunk several
+        // times slower, so the job's tail waits on them, and memory-bound
+        // kernels already saturate bandwidth on the performance cluster.
+        int perf = 0;
+        unsigned long len = 4UL;
+        if (sysctlbyname("hw.perflevel0.logicalcpu", (void*)&perf, (void*)&len, (void*)0, 0UL) == 0 && perf > 0)
+            c = (long)perf;
+        else
+            c = sysconf(58);                                         // _SC_NPROCESSORS_ONLN
 #else
         c = sysconf(84);                                             // _SC_NPROCESSORS_ONLN
 #endif

@@ -49,6 +49,21 @@ extern int setsockopt(int fd, int level, int optname, const void* optval, unsign
 
 #define SCHED_SOL_SOCKET    0xffff
 #define SCHED_SO_REUSEADDR  0x0004
+// A write to a socket whose peer has closed raises SIGPIPE, which kills the
+// process by default; BSD sockets opt out per socket (Linux does it per
+// send with MSG_NOSIGNAL). Accepted sockets don't reliably inherit it.
+#if defined(__APPLE__)
+#define SCHED_SO_NOSIGPIPE  0x1022
+#else
+#define SCHED_SO_NOSIGPIPE  0x0800   // FreeBSD
+#endif
+
+static void sched_no_sigpipe_(int fd) {
+    unsafe {
+        int on = 1;
+        setsockopt(fd, SCHED_SOL_SOCKET, SCHED_SO_NOSIGPIPE, (const void*)&on, 4U);
+    }
+}
 #define SCHED_IPPROTO_TCP   6
 #define SCHED_TCP_NODELAY   1
 
@@ -176,6 +191,7 @@ inline int tcp_accept_nb(int listenfd) {
         setsockopt(fd, SCHED_IPPROTO_TCP, SCHED_TCP_NODELAY,
                    (const void*)&nodelayOpt, 4U);
     }
+    sched_no_sigpipe_(fd);
     return fd;
 }
 
@@ -185,6 +201,7 @@ inline int tcp_connect_nb(unsigned int addr_network_order, unsigned short port) 
     if (fd < 0) {
         return -1;
     }
+    sched_no_sigpipe_(fd);
     if (fd_set_nonblocking(fd) != 0) {
         return -1;
     }
