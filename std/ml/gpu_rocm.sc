@@ -1865,8 +1865,10 @@ static int rocm_unary_(int kernel, struct RocmBuf a, float k, struct RocmBuf out
 // transposes, size) outside graph capture times every solution rocBLAS
 // offers on that call's own buffers, like MIOpen's Find, and keeps the
 // fastest (0 = the default, if nothing beats it). During capture an untuned
-// shape uses the default. The cache holds ROCM_GEMM_PLANS shapes.
-#define ROCM_GEMM_PLANS     64
+// shape uses the default. The cache holds ROCM_GEMM_PLANS shapes (a deep
+// convolutional net uses a few hundred: each layer's forward and both gradients,
+// per batch size).
+#define ROCM_GEMM_PLANS     1024
 #define ROCM_GEMM_MAX_SOLS  512
 #define ROCM_GEMM_REPS      8
 
