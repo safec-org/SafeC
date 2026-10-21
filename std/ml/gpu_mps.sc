@@ -1146,7 +1146,7 @@ int mps_matmul_f32(const &float a, const &float b, &float out,
 // buffers) but against matmul_abt_kernel/matmul_atb_kernel instead of
 // matmul_kernel -- not routed through mps_matmul_f32 itself since the
 // output shape and which operand reads transposed differ between the two,
-// and neither needs batching (tensor_backward() always runs after any
+// and neither needs batching (Tensor::backward() always runs after any
 // forward-pass batch has already ended).
 static void* __mps_matmul_abt_pipeline = (void*)0;
 static void* __mps_matmul_abt_smma_pipeline = (void*)0;

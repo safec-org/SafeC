@@ -3,7 +3,7 @@
 // autograd core.
 //
 // cnn.h runs convolutions forward on FeatureMaps; this file makes them
-// differentiable on Tensors so they train with tensor_backward and the
+// differentiable on Tensors so they train with Tensor::backward and the
 // optimizers in nn.h, alongside Mlp. Images travel as rows, the same as
 // every other model in std::ml: a batch is a [batch, C*H*W] tensor, each
 // row one image in CHW order (row[c*H*W + h*W + w]). The geometry (C, H,

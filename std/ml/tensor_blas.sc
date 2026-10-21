@@ -100,7 +100,7 @@ static void vDSP_vadd(const float* A, long IA, const float* B, long IB,
 //     a real win, kept below.
 // __blas_scratch_ is safe to share across both branches and across calls:
 // dA is fully consumed (accumulated into a->grad) before dB's computation
-// begins, and tensor_backward()'s toposort walk finishes one node's
+// begins, and Tensor::backward()'s toposort walk finishes one node's
 // backward function before the next, so no two live users ever overlap.
 static float*         __blas_scratch_ = (float*)0;
 static unsigned long __blas_scratch_cap_ = 0UL;

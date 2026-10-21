@@ -3,7 +3,7 @@
 // SafeC Standard Library — Tensor: CPU tensors with reverse-mode autograd.
 //
 // PyTorch-style ergonomics (build a graph implicitly by calling ops;
-// tensor_backward() walks it) over a plain flat f32 buffer — no unified-
+// Tensor::backward() walks it) over a plain flat f32 buffer — no unified-
 // memory story here (that's MPS's job; see gpu_mps.h), just row-major
 // single-precision arrays with a recorded computation graph. Scope: 1D
 // and 2D tensors (vectors and matrices — everything a small MLP/attention
@@ -69,7 +69,7 @@ typedef fn void(void* selfTensor) TensorBackwardFn;
 //   struct TensorArena a = tensor_arena_new(0UL);
 //   while (step < steps) {
 //       a.begin();
-//       ... forward, tensor_backward, optimizer update ...
+//       ... forward, Tensor::backward, optimizer update ...
 //       tensor_arena_end();
 //       a.reset();     // this step's tensors are gone
 //   }
@@ -118,7 +118,7 @@ struct Tensor {
     // of call sites that read/write it.
     void*         gradFn;
     struct Vec<&Tensor> parents; // inputs this tensor was computed from
-    int           visited;     // topological-sort scratch flag, used and cleared by tensor_backward()
+    int           visited;     // topological-sort scratch flag, used and cleared by Tensor::backward()
     float         extraScalar; // op-specific constant (e.g. tensor_scale's k) the gradFn needs
     ?&TensorArena owner;       // the TensorArena that owns this tensor's memory, or null (heap)
 
@@ -130,6 +130,15 @@ struct Tensor {
     void    set2(unsigned long r, unsigned long c, float v);
 
     void    free();
+
+    // 't' must be a scalar (size == 1, e.g. a loss). Seeds t->grad = 1, walks
+    // the graph in reverse topological order, and accumulates gradients into
+    // every requiresGrad ancestor's 'grad' buffer (allocating it on first
+    // write). Safe to call multiple times — gradients accumulate across
+    // calls, matching PyTorch's default (call Tensor::zero_grad() between
+    // optimizer steps if that's not what you want).
+    void backward();
+    void zero_grad();
 };
 
 // Every function below takes/returns 'Tensor' by a region-less reference
@@ -166,14 +175,6 @@ struct Tensor {
 // header too wherever relu is needed.
 
 // ── Autograd ─────────────────────────────────────────────────────────────────
-// 't' must be a scalar (size == 1, e.g. a loss). Seeds t->grad = 1, walks
-// the graph in reverse topological order, and accumulates gradients into
-// every requiresGrad ancestor's 'grad' buffer (allocating it on first
-// write). Safe to call multiple times — gradients accumulate across
-// calls, matching PyTorch's default (call tensor_zero_grad() between
-// optimizer steps if that's not what you want).
-void tensor_backward(&Tensor t);
-void tensor_zero_grad(&Tensor t);
 
 // ── Gradient mode (no_grad) ──────────────────────────────────────────────────
 // Global, not per-TU: every tensor_<op> across every separately-compiled
@@ -190,8 +191,29 @@ void tensor_zero_grad(&Tensor t);
 // a real std::alloc from every op call during inference). Doesn't affect
 // LEAF tensors' own requiresGrad (tensor_new_2d's explicit argument is
 // unaffected) — only what happens when ops COMPOSE tensors.
-int  tensor_is_grad_enabled();
-void tensor_set_grad_enabled(int enabled);
+//
+// The flag lives in the program's one Autograd state, reached through
+// autograd():
+//   struct GradGuard g = autograd().no_grad();   // inference from here
+//   ... forward passes record nothing ...
+//   g.restore();                                 // back to the previous mode
+struct GradGuard {
+    int was;                  // the mode no_grad() found
+    // Puts the mode back as no_grad() found it (guards nest).
+    void restore();
+};
+
+struct Autograd {
+    int gradEnabled;          // 1: ops record their backward graph
+
+    int  enabled() const;
+    void set_enabled(int enabled);
+    // Disables recording and returns a guard that restores the previous mode.
+    struct GradGuard no_grad();
+};
+
+// The program's autograd state (one for all threads).
+&Autograd autograd();
 
 // ══ Internal helpers (static — each including file gets its own copy) ═══════
 // Not part of the public API; used by tensor.sc's own op implementations
@@ -370,7 +392,7 @@ static void __tensor_accumulate(struct Tensor* dst, const float* delta) {
 
 static void __tensor_link2(struct Tensor* out, struct Tensor* a, struct Tensor* b, void* backwardFn) {
     unsafe {
-        if (!tensor_is_grad_enabled()) { out->requiresGrad = 0; return; }
+        if (!autograd().enabled()) { out->requiresGrad = 0; return; }
         out->requiresGrad = a->requiresGrad || b->requiresGrad;
         if (!out->requiresGrad) return;
         out->parents.push(a);
@@ -381,7 +403,7 @@ static void __tensor_link2(struct Tensor* out, struct Tensor* a, struct Tensor* 
 
 static void __tensor_link1(struct Tensor* out, struct Tensor* a, void* backwardFn) {
     unsafe {
-        if (!tensor_is_grad_enabled()) { out->requiresGrad = 0; return; }
+        if (!autograd().enabled()) { out->requiresGrad = 0; return; }
         out->requiresGrad = a->requiresGrad;
         if (!out->requiresGrad) return;
         out->parents.push(a);

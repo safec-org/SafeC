@@ -201,7 +201,7 @@ void t_cast_autograd() {
         &Tensor c = tensor_cast(x, TENSOR_FP16);
         ASSERT_TRUE(c.at1(0UL) == (float)0.0999755859375);
         &Tensor y = tensor_sum(tensor_mul(c, c));      // sum(cast(x)^2)
-        tensor_backward(y);
+        y.backward();
         // Straight-through: dy/dx = 2 * cast(x).
         ASSERT_TRUE(near(x.grad[0], (float)2.0 * (float)0.0999755859375, (float)1.0e-6));
         ASSERT_TRUE(near(x.grad[1], (float)2.0 * c.at1(1UL), (float)1.0e-6));
@@ -218,7 +218,7 @@ void t_matmul_lowp() {
         float b01 = half_round((float)0.1, TENSOR_BF16);          // 0.10009765625
         ASSERT_TRUE(out.at2(0UL, 0UL) == half_round((float)1.0 * b01, TENSOR_BF16));
         ASSERT_TRUE(out.at2(1UL, 1UL) == half_round((float)4.0 * b01, TENSOR_BF16));
-        tensor_backward(tensor_sum(out));
+        tensor_sum(out).backward();
         // d sum(A B)/dA[i][j] = sum_n B[j][n] (of the rounded B), per row.
         ASSERT_TRUE(near(a.grad[0], b01, (float)1.0e-6));
         ASSERT_TRUE(near(b.grad[0], (float)4.0, (float)1.0e-6));  // A[0][0] + A[1][0]
@@ -231,7 +231,7 @@ void t_loss_scaler() {
         ASSERT_TRUE(s.scale == (float)65536.0);
         float v[2] = { (float)1.0, (float)2.0 };
         &Tensor p = tensor_from_1d((const float*)v, 2UL, 1);
-        tensor_backward(tensor_sum(tensor_scale(p, s.scale)));    // grads = 65536
+        tensor_sum(tensor_scale(p, s.scale)).backward();    // grads = 65536
         ASSERT_TRUE(s.unscale(p) == 1);
         ASSERT_TRUE(p.grad[0] == (float)1.0);
         s.update(1);
@@ -264,11 +264,11 @@ static float arena_train(int useArena, &Tensor W, const &Tensor X, unsigned long
     unsigned long used0 = 0UL;
     while (step < 20) {
         if (useArena) a.begin();
-        tensor_zero_grad(W);
+        W.zero_grad();
         &Tensor y = tensor_matmul(X, W);
         &Tensor r = tensor_relu(y);
         &Tensor l = tensor_sum(tensor_mul(r, r));
-        tensor_backward(l);
+        l.backward();
         unsafe {
             last = l->data[0];
             unsigned long i = 0UL;

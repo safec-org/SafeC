@@ -136,13 +136,13 @@ int half_gemv_batch(const &HalfTensor w, const &float x, unsigned long m, &float
 
 // ── Dynamic loss scaling (fp16 training) ────────────────────────────────────
 struct LossScaler {
-    float scale;           // multiply the loss by this before tensor_backward()
+    float scale;           // multiply the loss by this before Tensor::backward()
     float growthFactor;    // scale *= growthFactor after growthInterval clean steps
     float backoffFactor;   // scale *= backoffFactor after an overflow
     int   growthInterval;
     int   goodSteps;       // clean steps since the last change
 
-    // Call after tensor_backward() on (loss * scale): divides p.grad by the
+    // Call after Tensor::backward() on (loss * scale): divides p.grad by the
     // scale in place and returns 1 if every gradient is finite, or 0 if any
     // gradient overflowed (inf/NaN) — skip the optimizer step in that case.
     int unscale(&Tensor p);
