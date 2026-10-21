@@ -537,6 +537,15 @@ void Sema::collectFunction(FunctionDecl &fn) {
     if (fn.body && fn.namespaceName.empty()) providedFns_.insert(fn.name);
     // Method support (OBJECT.md §4): T::m(P...) → T_m(T* self, P...)
     if (fn.isMethod) {
+        if (fn.body) {
+            auto ait = methodOwnGenericArity_.find(fn.methodOwner + "::" + fn.name);
+            if (ait != methodOwnGenericArity_.end() &&
+                genericStructTemplates_.find(fn.methodOwner) == genericStructTemplates_.end() &&
+                ait->second != fn.genericParams.size())
+                diag_.error(fn.loc, "'" + fn.methodOwner + "::" + fn.name + "' is declared with " +
+                            std::to_string(ait->second) + " type parameter(s) in the struct body but defined with " +
+                            std::to_string(fn.genericParams.size()));
+        }
         {
             auto sit = staticMethodNames_.find(fn.methodOwner);
             if (sit != staticMethodNames_.end() && sit->second.count(fn.name))
@@ -556,8 +565,15 @@ void Sema::collectFunction(FunctionDecl &fn) {
                 diag_.error(fn.loc, "method owner struct '" + fn.methodOwner + "' not declared");
             std::string originalName = fn.name;
             fn.name = fn.methodOwner + "_" + fn.name;
-            staticMethodRegistry_[fn.methodOwner + "::" + originalName] = &fn;
-            methodRegistry_[fn.methodOwner + "::" + originalName] = &fn;
+            std::string key = fn.methodOwner + "::" + originalName;
+            // A bodyless declaration never replaces a generic template's
+            // definition: instantiation needs the body.
+            auto prev = staticMethodRegistry_.find(key);
+            if (prev == staticMethodRegistry_.end() || fn.body || !prev->second->body ||
+                prev->second->genericParams.empty()) {
+                staticMethodRegistry_[key] = &fn;
+                methodRegistry_[key] = &fn;
+            }
         } else {
         // 'inline int Box::get() const {...}' where "Box" names a
         // generic<T> struct template (see collectStruct's early-return
@@ -608,8 +624,15 @@ void Sema::collectFunction(FunctionDecl &fn) {
         // Mangle name: T_m
         std::string originalName = fn.name;
         fn.name = fn.methodOwner + "_" + fn.name;
-        // Register in method registry under original qualified name
-        methodRegistry_[fn.methodOwner + "::" + originalName] = &fn;
+        // Register in method registry under original qualified name (a
+        // bodyless declaration never replaces a generic template's body)
+        {
+            std::string key = fn.methodOwner + "::" + originalName;
+            auto prev = methodRegistry_.find(key);
+            if (prev == methodRegistry_.end() || fn.body || !prev->second->body ||
+                prev->second->genericParams.empty())
+                methodRegistry_[key] = &fn;
+        }
         }
     }
 
@@ -698,8 +721,12 @@ void Sema::collectStruct(StructDecl &sd) {
     // concrete layout to register yet. Record the template and stop;
     // instantiateGenericStruct clones+substitutes+collectStruct()s a
     // concrete copy the first time 'Box<SomeType>' is actually resolved.
-    for (auto &md : sd.methodDecls)
+    for (auto &md : sd.methodDecls) {
         if (md.isStatic) staticMethodNames_[sd.name].insert(md.name);
+        methodOwnGenericArity_[sd.name + "::" + md.name] = md.genericParams.size();
+        if (!sd.genericParams.empty() && !md.genericParams.empty() && !md.isStatic)
+            diag_.error(md.loc, "a method of a generic struct can't have type parameters of its own yet");
+    }
     if (!sd.genericParams.empty()) {
         // Resolve each field's raw parsed type (the parser has no notion
         // of generics — 'T value;' parses its type as an ordinary
@@ -837,6 +864,7 @@ void Sema::collectStruct(StructDecl &sd) {
         synth->methodOwner   = sd.name;
         synth->isConstMethod = md.isConst;
         synth->isStaticMethod = md.isStatic;
+        synth->genericParams = md.genericParams;
         synth->isExtern      = true; // no body here; defined elsewhere and linked
         collectFunction(*synth);
         synthesizedMethods_.push_back(std::move(synth));
@@ -3699,7 +3727,11 @@ TypePtr Sema::checkCall(CallExpr &e) {
         for (auto &a : e.args) argTypes.push_back(checkExpr(*a));
 
         TypeSubst subs;
-        if (!inferTypeArgs(fnDecl->params, argTypes, fnDecl->genericParams, subs,
+        // x.m(args) on a generic method: self comes from the base, not args
+        std::vector<ParamDecl> inferParams = fnDecl->params;
+        if (e.methodBase && !fnDecl->isStaticMethod && !inferParams.empty())
+            inferParams.erase(inferParams.begin());
+        if (!inferTypeArgs(inferParams, argTypes, fnDecl->genericParams, subs,
                            fnDecl->returnType, callExpectedType)) {
             diag_.error(e.loc,
                 "cannot infer type arguments for generic function '" +

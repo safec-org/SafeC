@@ -464,6 +464,10 @@ private:
     // out-of-line definition is recognized as one.
     std::unordered_map<std::string, FunctionDecl*> staticMethodRegistry_;
     std::unordered_map<std::string, std::unordered_set<std::string>> staticMethodNames_;
+    // "StructName::method" → how many type parameters of its own the struct
+    // body declares for it ('generic<T> void m(...);'), so an out-of-line
+    // definition with a different count is an error.
+    std::unordered_map<std::string, size_t> methodOwnGenericArity_;
     // Namespace registries: "ns::name" (as written at the call site) →
     // decl* (already mangled, e.g. FunctionDecl::name == "ns_name"). See
     // collectFunction/collectGlobalVar for population and checkIdent for
