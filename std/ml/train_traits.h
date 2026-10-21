@@ -2,8 +2,9 @@
 // SafeC Standard Library — one training interface over every backend.
 //
 // std::ml trains the same models on the CPU (nn.h, trainer.h, autoencoder.h,
-// convnet.h, gan.h, rl.h: Autograd::get) and on an AMD GPU (nn_rocm.h: device-
-// resident nets, graph replay, optimizer state on the GPU). The traits below
+// convnet.h, gan.h, rl.h: Autograd::get), on an AMD GPU (nn_rocm.h: device-
+// resident nets, graph replay, optimizer state on the GPU) and, for fully
+// connected nets, on an Apple GPU (nn_mps.h). The traits below
 // are what a backend's trainer provides; the generic loops are written once
 // against them. Traits are structural: a type conforms by having the
 // methods, and each call is resolved at compile time (no dispatch at run
@@ -20,8 +21,8 @@
 //   PolicyLearner  Actor + HostSynced + record / update: REINFORCE, A2C, PPO.
 //
 // The conforming types: train_cpu.h's CpuTrainer, CpuGanTrainer,
-// CpuDqnAgent, CpuPgAgent and nn_rocm.h's RocmTrainer, RocmGanTrainer,
-// RocmDqnAgent, RocmPgAgent. Each owns its host model by value in a field
+// CpuDqnAgent, CpuPgAgent, nn_rocm.h's RocmTrainer, RocmGanTrainer,
+// RocmDqnAgent, RocmPgAgent and nn_mps.h's MpsTrainer. Each owns its host model by value in a field
 // named 'host' (moved in by its constructor: the model's tensors are shared
 // with the struct you passed, its other fields are not, so use 'host' from
 // then on). sync() makes 'host' current: a no-op on the CPU, a download from

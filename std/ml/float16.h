@@ -11,7 +11,7 @@
 // for storage, with explicit conversion to/from 'float' for any CPU-side
 // arithmetic. This is a real, useful, and correctly-rounded (round-to-
 // nearest-even) implementation, not a stub -- see gpu_mps.h's
-// mps_upload_f16/mps_upload_bf16 family for where this actually pays off:
+// MpsBuf::upload_f16/upload_bf16 family for where this actually pays off:
 // Apple GPUs have native 'half'/'bfloat' hardware types (confirmed by
 // compiling both through this machine's real Metal toolchain), so a
 // tensor converted to fp16/bf16 here and uploaded there gets real

@@ -1828,3 +1828,286 @@ LINEAR_DTYPES(512)
 LINEAR_Z(float, f32)
 LINEAR_Z(half, f16)
 LINEAR_Z(bfloat, bf16)
+
+// ── Training (nn_mps.h) ─────────────────────────────────────────────────────
+// The layer, loss, optimizer and batch kernels of nn_mps.h's MpsNet /
+// MpsOptimizer / mps_trainer_fit, dispatched from nn_mps.sc through
+// mps_dispatch. They follow nn_rocm.sc's HIP kernels (and through them
+// nn.h's CPU arithmetic) operation for operation. This file builds with
+// Metal's default fast math, so the transcendental functions here are the
+// precise:: ones: fast tanh turns large inputs into NaN (see gelu_tanh
+// above) and fast exp / log / sqrt / divide are a few ulp off the CPU's.
+// Each kernel's scalars arrive as one constant struct after its buffers;
+// the matching structs are in nn_mps.sc. Sums are taken in a fixed order
+// (no atomics), so a run is deterministic.
+
+// nn.h's ACT_* tags: 1 ReLU, 2 leaky ReLU (0.2), 3 tanh, 4 sigmoid, 5 GELU
+// (tanh approximation), 6 SiLU.
+#define NN_GELU_C 0.7978845608028654f
+static inline float nn_sigmoid(float x) { return precise::divide(1.0f, 1.0f + precise::exp(-x)); }
+
+static inline float nn_act_f(float x, int a) {
+    switch (a) {
+    case 1: return x > 0.0f ? x : 0.0f;
+    case 2: return x > 0.0f ? x : 0.2f * x;
+    case 3: return precise::tanh(x);
+    case 4: return nn_sigmoid(x);
+    case 5: return 0.5f * x * (1.0f + precise::tanh(NN_GELU_C * (x + 0.044715f * x * x * x)));
+    case 6: return x * nn_sigmoid(x);
+    default: return x;
+    }
+}
+
+// act'(.) from v: the activation's output for tags 1-4, its input for 5-6.
+static inline float nn_act_d(float v, int a) {
+    switch (a) {
+    case 1: return v > 0.0f ? 1.0f : 0.0f;
+    case 2: return v > 0.0f ? 1.0f : 0.2f;
+    case 3: return 1.0f - v * v;
+    case 4: return v * (1.0f - v);
+    case 5: { float t = precise::tanh(NN_GELU_C * (v + 0.044715f * v * v * v));
+              return 0.5f * (1.0f + t) + 0.5f * v * (1.0f - t * t) * NN_GELU_C * (1.0f + 3.0f * 0.044715f * v * v); }
+    case 6: { float s = nn_sigmoid(v); return s * (1.0f + v * (1.0f - s)); }
+    default: return 1.0f;
+    }
+}
+
+// The threadgroup's sum of every thread's s, valid in thread 0. Every
+// thread must call it; part holds one float per simdgroup.
+static inline float nn_group_sum(float s, threadgroup float* part, uint lane, uint sg, uint nsg) {
+    s = simd_sum(s);
+    if (lane == 0) part[sg] = s;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float t = 0.0f;
+    if (sg == 0 && lane == 0) for (uint k = 0; k < nsg; ++k) t += part[k];
+    return t;
+}
+
+// A fully connected layer's output: z = z + b[column], h = act(z), over n
+// values of rows of 'cols'. z and h may be one buffer (activations whose
+// gradient needs only h).
+struct NnBiasAct { uint n; uint cols; int act; };
+kernel void nn_bias_act(device float* z [[buffer(0)]],
+                        device float* h [[buffer(1)]],
+                        device const float* b [[buffer(2)]],
+                        constant NnBiasAct& p [[buffer(3)]],
+                        uint i [[thread_position_in_grid]]) {
+    if (i >= p.n) return;
+    float v = z[i] + b[i % p.cols];
+    z[i] = v;
+    h[i] = nn_act_f(v, p.act);
+}
+
+// Backward through the activation of a [rows][C] layer: d *= act'(src) in
+// place and gb[c] = the column sums of the result (the bias gradient). 16
+// columns per threadgroup, 16 threads down each column, then a fixed-order
+// sum of the 16 partial sums (nn_rocm.sc's act_grad_rows).
+struct NnActGrad { uint rows; uint cols; int act; };
+kernel void nn_act_grad_rows(device float* d [[buffer(0)]],
+                             device const float* src [[buffer(1)]],
+                             device float* gb [[buffer(2)]],
+                             constant NnActGrad& p [[buffer(3)]],
+                             uint tid [[thread_index_in_threadgroup]],
+                             uint tg [[threadgroup_position_in_grid]]) {
+    threadgroup float part[16][17];
+    uint tx = tid % 16, ty = tid / 16, c = tg * 16 + tx;
+    float s = 0.0f;
+    if (c < p.cols) {
+        for (uint r = ty; r < p.rows; r += 16) {
+            uint i = r * p.cols + c;
+            float g = d[i];
+            if (p.act != 0) { g *= nn_act_d(src[i], p.act); d[i] = g; }
+            s += g;
+        }
+    }
+    part[ty][tx] = s;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (ty == 0 && c < p.cols) {
+        float t = 0.0f;
+        for (uint k = 0; k < 16; ++k) t += part[k][tx];
+        gb[c] = t;
+    }
+}
+
+// Losses (one threadgroup): d = scale * d(mean loss)/d(input) and
+// loss[0] += scale * the mean loss, as nn.h's tensor_cross_entropy_loss /
+// tensor_bce_logits_loss / tensor_mse_loss and their gradients.
+// Cross-entropy: logits [rows][cols] against class indices (floats); one
+// thread per row.
+struct NnLoss { uint n; uint cols; float scale; };
+kernel void nn_ce_loss(device const float* lg [[buffer(0)]],
+                       device const float* lab [[buffer(1)]],
+                       device float* d [[buffer(2)]],
+                       device float* loss [[buffer(3)]],
+                       constant NnLoss& p [[buffer(4)]],
+                       uint tid [[thread_index_in_threadgroup]],
+                       uint ntg [[threads_per_threadgroup]],
+                       uint lane [[thread_index_in_simdgroup]],
+                       uint sg [[simdgroup_index_in_threadgroup]],
+                       uint nsg [[simdgroups_per_threadgroup]]) {
+    threadgroup float part[32];
+    uint C = p.cols;
+    float k = p.scale / (float)p.n;
+    float s = 0.0f;
+    for (uint r = tid; r < p.n; r += ntg) {
+        device const float* x = lg + (ulong)r * C;
+        float mx = x[0];
+        for (uint c = 1; c < C; ++c) mx = max(mx, x[c]);
+        float se = 0.0f;
+        for (uint c = 0; c < C; ++c) se += precise::exp(x[c] - mx);
+        float lse = mx + precise::log(se);
+        uint y = (uint)lab[r];
+        for (uint c = 0; c < C; ++c)
+            d[(ulong)r * C + c] = (precise::exp(x[c] - lse) - (c == y ? 1.0f : 0.0f)) * k;
+        s += lse - x[y < C ? y : 0];
+    }
+    s = nn_group_sum(s, part, lane, sg, nsg);
+    if (tid == 0) loss[0] += s * k;
+}
+
+// Binary cross-entropy of sigmoid(logits) against targets in [0, 1] over n values.
+kernel void nn_bce_loss(device const float* x [[buffer(0)]],
+                        device const float* t [[buffer(1)]],
+                        device float* d [[buffer(2)]],
+                        device float* loss [[buffer(3)]],
+                        constant NnLoss& p [[buffer(4)]],
+                        uint tid [[thread_index_in_threadgroup]],
+                        uint ntg [[threads_per_threadgroup]],
+                        uint lane [[thread_index_in_simdgroup]],
+                        uint sg [[simdgroup_index_in_threadgroup]],
+                        uint nsg [[simdgroups_per_threadgroup]]) {
+    threadgroup float part[32];
+    float k = p.scale / (float)p.n;
+    float s = 0.0f;
+    for (uint i = tid; i < p.n; i += ntg) {
+        float v = x[i], y = t[i];
+        s += max(v, 0.0f) - v * y + precise::log(1.0f + precise::exp(-fabs(v)));
+        d[i] = (nn_sigmoid(v) - y) * k;
+    }
+    s = nn_group_sum(s, part, lane, sg, nsg);
+    if (tid == 0) loss[0] += s * k;
+}
+
+// Mean squared error over n values.
+kernel void nn_mse_loss(device const float* x [[buffer(0)]],
+                        device const float* t [[buffer(1)]],
+                        device float* d [[buffer(2)]],
+                        device float* loss [[buffer(3)]],
+                        constant NnLoss& p [[buffer(4)]],
+                        uint tid [[thread_index_in_threadgroup]],
+                        uint ntg [[threads_per_threadgroup]],
+                        uint lane [[thread_index_in_simdgroup]],
+                        uint sg [[simdgroup_index_in_threadgroup]],
+                        uint nsg [[simdgroups_per_threadgroup]]) {
+    threadgroup float part[32];
+    float k = p.scale / (float)p.n;
+    float s = 0.0f;
+    for (uint i = tid; i < p.n; i += ntg) {
+        float e = x[i] - t[i];
+        s += e * e;
+        d[i] = 2.0f * e * k;
+    }
+    s = nn_group_sum(s, part, lane, sg, nsg);
+    if (tid == 0) loss[0] += s * k;
+}
+
+// Gradient clipping, first pass (one threadgroup per tensor): out[slot] =
+// the sum of g's squares.
+struct NnSumSq { uint n; uint slot; };
+kernel void nn_sumsq(device const float* g [[buffer(0)]],
+                     device float* out [[buffer(1)]],
+                     constant NnSumSq& p [[buffer(2)]],
+                     uint tid [[thread_index_in_threadgroup]],
+                     uint ntg [[threads_per_threadgroup]],
+                     uint lane [[thread_index_in_simdgroup]],
+                     uint sg [[simdgroup_index_in_threadgroup]],
+                     uint nsg [[simdgroups_per_threadgroup]]) {
+    threadgroup float part[32];
+    float s = 0.0f;
+    for (uint i = tid; i < p.n; i += ntg) s += g[i] * g[i];
+    s = nn_group_sum(s, part, lane, sg, nsg);
+    if (tid == 0) out[p.slot] = s;
+}
+
+// One optimizer step on one parameter tensor, as nn.h's Optimizer::step
+// (opt_body_), kinds OPT_SGD 0 ... OPT_LION 7. The host computes the bias
+// corrections ibc1 = 1/(1-beta1^t) and isbc2 = 1/sqrt(1-beta2^t) the way
+// Optimizer::step does. With clip > 0 the gradient is first scaled to a
+// global L2 norm of at most clip, the norm taken over the nTensors squared
+// sums nn_sumsq left in sumsq (Optimizer::clip_grad_norm); clampW > 0
+// clamps the result to [-clampW, clampW].
+struct NnOpt {
+    uint n; int kind; uint nTensors;
+    float lr; float mu; float b1; float b2; float eps; float wd;
+    float ibc1; float isbc2; float clip; float clampW;
+};
+kernel void nn_opt_step(device float* w [[buffer(0)]],
+                        device const float* gr [[buffer(1)]],
+                        device float* m [[buffer(2)]],
+                        device float* v [[buffer(3)]],
+                        device const float* sumsq [[buffer(4)]],
+                        constant NnOpt& p [[buffer(5)]],
+                        uint i [[thread_position_in_grid]]) {
+    if (i >= p.n) return;
+    float gs = 1.0f;
+    if (p.clip > 0.0f) {
+        float sq = 0.0f;
+        for (uint k = 0; k < p.nTensors; ++k) sq += sumsq[k];
+        float nrm = precise::sqrt(sq);
+        if (nrm > p.clip && nrm > 0.0f) gs = precise::divide(p.clip, nrm);
+    }
+    float g = gr[i] * gs, wi = w[i];
+    float lr = p.lr, wd = p.wd;
+    int kind = p.kind;
+    if (kind == 0) {
+        w[i] = wi - lr * (g + wd * wi);
+    } else if (kind == 1 || kind == 2) {
+        g = g + wd * wi;
+        float mi = p.mu * m[i] + g;
+        m[i] = mi;
+        w[i] = wi - lr * (kind == 1 ? mi : g + p.mu * mi);
+    } else if (kind == 6) {
+        g = g + wd * wi;
+        float vi = v[i] + g * g;
+        v[i] = vi;
+        w[i] = wi - precise::divide(lr * g, precise::sqrt(vi) + p.eps);
+    } else if (kind == 7) {
+        float c = p.b1 * m[i] + (1.0f - p.b1) * g;
+        float sgn = c > 0.0f ? 1.0f : (c < 0.0f ? -1.0f : 0.0f);
+        w[i] = wi - lr * (sgn + wd * wi);
+        m[i] = p.b2 * m[i] + (1.0f - p.b2) * g;
+    } else if (kind == 3) {
+        g = g + wd * wi;
+        float vi = p.b2 * v[i] + (1.0f - p.b2) * g * g;
+        v[i] = vi;
+        w[i] = wi - precise::divide(lr * g, precise::sqrt(vi) + p.eps);
+    } else {
+        float l2 = kind == 5 ? 0.0f : wd, dec = kind == 5 ? wd : 0.0f;
+        g = g + l2 * wi;
+        float mi = p.b1 * m[i] + (1.0f - p.b1) * g;
+        float vi = p.b2 * v[i] + (1.0f - p.b2) * g * g;
+        m[i] = mi;
+        v[i] = vi;
+        float upd = precise::divide(mi * p.ibc1, precise::sqrt(vi) * p.isbc2 + p.eps) + dec * wi;
+        w[i] = wi - lr * upd;
+    }
+    if (p.clampW > 0.0f) { float c = w[i]; w[i] = c > p.clampW ? p.clampW : (c < -p.clampW ? -p.clampW : c); }
+}
+
+// A batch: rows order[base .. base+rows) of x [n][fx] and y [n][fy] into
+// dx [rows][fx] and dy [rows][fy].
+struct NnGather { uint base; uint rows; uint fx; uint fy; };
+kernel void nn_gather(device const float* sx [[buffer(0)]],
+                      device float* dx [[buffer(1)]],
+                      device const float* sy [[buffer(2)]],
+                      device float* dy [[buffer(3)]],
+                      device const uint* order [[buffer(4)]],
+                      constant NnGather& p [[buffer(5)]],
+                      uint t [[thread_position_in_grid]]) {
+    uint f = p.fx + p.fy;
+    if (t >= p.rows * f) return;
+    uint r = t / f, c = t % f;
+    ulong src = order[p.base + r];
+    if (c < p.fx) dx[r * p.fx + c] = sx[src * p.fx + c];
+    else dy[r * p.fy + c - p.fx] = sy[src * p.fy + c - p.fx];
+}
