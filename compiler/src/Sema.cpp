@@ -672,6 +672,50 @@ void Sema::collectFunction(FunctionDecl &fn) {
         paramTys.push_back(p.type);
     }
     fn.returnType = resolveGenericNames(resolveType(fn.returnType), fn.genericParams);
+
+    // An out-of-line method definition must match its declaration in the
+    // struct body (same parameters, return type, const-ness, static-ness).
+    if (fn.isMethod && fn.body) {
+        std::string owner = fn.methodOwner;
+        std::string mname = fn.name.substr(owner.size() + 1);   // mangled Owner_name
+        auto dit = methodBodyDecl_.find(owner + "::" + mname);
+        if (dit != methodBodyDecl_.end() && dit->second != &fn &&
+            dit->second->genericParams.size() == fn.genericParams.size()) {   // else reported above
+            const FunctionDecl &d = *dit->second;
+            // Compared without const qualifiers: a leading 'const' on an
+            // out-of-line definition ('inline const &char S::f() const') is
+            // parsed as the function's const flag, not part of the type.
+            auto bare = [](const TypePtr &t) {
+                std::string s = t->str();
+                for (size_t p; (p = s.find("const ")) != std::string::npos;) s.erase(p, 6);
+                return s;
+            };
+            std::string what;
+            if (d.isStaticMethod != fn.isStaticMethod)
+                what = d.isStaticMethod ? "it is declared static" : "it is declared as an instance method";
+            else if (d.isConstMethod != fn.isConstMethod)
+                what = d.isConstMethod ? "it is declared const" : "it is not declared const";
+            else if (d.params.size() != fn.params.size())
+                what = "it is declared with " + std::to_string(d.params.size() - (d.isStaticMethod ? 0 : 1)) +
+                       " parameter(s)";
+            else if (d.returnType && fn.returnType && bare(d.returnType) != bare(fn.returnType))
+                what = "it is declared to return '" + d.returnType->str() + "'";
+            else {
+                for (size_t i = 0; i < d.params.size(); ++i) {
+                    if (!d.params[i].type || !fn.params[i].type) continue;
+                    if (bare(d.params[i].type) != bare(fn.params[i].type)) {
+                        size_t n = d.isStaticMethod ? i + 1 : i;
+                        what = "parameter " + std::to_string(n) + " is declared '" + d.params[i].type->str() +
+                               "', defined '" + fn.params[i].type->str() + "'";
+                        break;
+                    }
+                }
+            }
+            if (!what.empty())
+                diag_.error(fn.loc, "definition of '" + owner + "::" + mname +
+                            "' doesn't match its declaration in the struct body: " + what);
+        }
+    }
     auto ft = makeFunction(fn.returnType, std::move(paramTys), fn.isVariadic);
     // Function names are &static references to their function type
     auto refTy = makeReference(ft, Region::Static);
@@ -867,6 +911,7 @@ void Sema::collectStruct(StructDecl &sd) {
         synth->genericParams = md.genericParams;
         synth->isExtern      = true; // no body here; defined elsewhere and linked
         collectFunction(*synth);
+        methodBodyDecl_[sd.name + "::" + md.name] = synth.get();
         synthesizedMethods_.push_back(std::move(synth));
     }
 }
