@@ -36,7 +36,7 @@ struct Signal {
     void          set(T val);           // stores val, bumps version, notifies
     unsigned long get_version() const;
     // 1 (and updates *last_seen) if the version moved since *last_seen —
-    // polling-style change detection instead of subscribe()'s push style.
+    // polling-style change detection instead of signal_subscribe()'s push style.
     int           changed(&unsigned long last_seen) const;
     void          notify();             // calls every subscriber in registration order
     void          unsubscribe_all();

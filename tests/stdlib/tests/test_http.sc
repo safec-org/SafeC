@@ -128,8 +128,9 @@ static ?&int run_ws(?&int arg) {
     unsafe {
         int lfd = ws_listen(g_ws_port);
         if (lfd < 0) return null;
+        while (1) {   // one client at a time, for as long as tests connect
         struct WsConn c;
-        if (c.accept(lfd) != 1) return null;   // 1 = handshake completed
+        if (c.accept(lfd) != 1) continue;   // 1 = handshake completed
         struct WsMessage m;
         while (c.recv(&m) == 1) {
             if (m.opcode == WS_OPCODE_TEXT) {
@@ -146,6 +147,7 @@ static ?&int run_ws(?&int arg) {
             m.free();
         }
         c.close();
+        }
     }
     return null;
 }
@@ -440,6 +442,54 @@ void t_rpc() {
     }
 }
 
+// The client's first frame in the same write as its Upgrade request: the
+// server reads both in one go, and the frame must still reach recv() (it
+// used to be dropped with the handshake's read buffer).
+void t_ws_frame_with_handshake() {
+    start_servers();
+    unsafe {
+        int fd = -1;
+        int tries = 0;
+        while (tries < 50) {
+            fd = tcp_connect_nb(sched_ipv4((unsigned char)127, (unsigned char)0, (unsigned char)0, (unsigned char)1),
+                                g_ws_port);
+            if (fd >= 0 && tcp_wait_connected(fd) == 0) break;
+            if (fd >= 0) { struct TcpStream bad = TcpStream::from_fd(fd); bad.close(); fd = -1; }
+            thread_sleep_ms(20UL);
+            tries = tries + 1;
+        }
+        ASSERT_TRUE(fd >= 0);
+        if (fd < 0) return;
+        fd_set_blocking(fd);
+        struct TcpStream s = TcpStream::from_fd(fd);
+        struct String out = String::from("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\n"
+                                         "Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                                         "Sec-WebSocket-Version: 13\r\n\r\n");
+        // FIN + text, masked, length 2, mask key 0 (payload unchanged), "hi"
+        unsigned char frame[8];
+        frame[0] = (unsigned char)0x81; frame[1] = (unsigned char)0x82;
+        frame[2] = (unsigned char)0; frame[3] = (unsigned char)0; frame[4] = (unsigned char)0; frame[5] = (unsigned char)0;
+        frame[6] = (unsigned char)'h'; frame[7] = (unsigned char)'i';
+        out.push_n((const char*)&frame[0], 8UL);
+        ASSERT_TRUE(write_all(&s, (const &unsigned char)out.as_ptr(), out.length()));
+        out.free();
+
+        struct BufReader<TcpStream> in = BufReader::over(&s);
+        struct String head = String::new();
+        ASSERT_TRUE(in.read_until(&head, "\r\n\r\n"));
+        ASSERT_TRUE(head.index_of("101") >= 0L);
+        head.free();
+        unsigned char reply[9];   // unmasked text frame "echo:hi"
+        ASSERT_TRUE(read_exact(&in, &reply[0], 9UL));
+        ASSERT_EQ(reply[0], (unsigned char)0x81);
+        ASSERT_EQ(reply[1], (unsigned char)7);
+        ASSERT_EQ(reply[2], (unsigned char)'e');
+        ASSERT_EQ(reply[7], (unsigned char)'h');
+        ASSERT_EQ(reply[8], (unsigned char)'i');
+        s.close();
+    }
+}
+
 void t_websocket() {
     start_servers();
     unsafe {
@@ -680,6 +730,7 @@ int main() {
         t.add("oauth2 code exchange", t_oauth2);
         t.add("rpc + server_fn", t_rpc);
         t.add("websocket", t_websocket);
+        t.add("websocket frame sent with the handshake", t_ws_frame_with_handshake);
         t.add("connect/handshake timeouts", t_connect_timeout);
         t.add("write to closed peer", t_write_to_closed_peer);
         t.add("host resolution", t_resolve);

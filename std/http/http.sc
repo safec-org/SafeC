@@ -742,9 +742,19 @@ static struct HttpRequest http_parse_request_from_buf_(struct String* buf, long 
 
         // By the time this is called, the task's read phases have already
         // accumulated the full body (Content-Length bytes past headerEnd) —
-        // no I/O needed here, pure parsing.
+        // no I/O needed here, pure parsing. Bytes past Content-Length that
+        // came in the same read aren't part of this body (the same cut the
+        // blocking servers make).
+        unsigned long bodyEnd = buf->length();
+        struct String clStr = http_header_get(req.headers.as_ptr(), "Content-Length");
+        if (!clStr.is_empty()) {
+            int clok = 0;
+            unsigned long cl = (unsigned long)clStr.parse_int(&clok);
+            if (clok && (unsigned long)headerEnd + cl < bodyEnd) bodyEnd = (unsigned long)headerEnd + cl;
+        }
+        clStr.free();
         req.body.free();
-        req.body = buf->substr((unsigned long)headerEnd, buf->length());
+        req.body = buf->substr((unsigned long)headerEnd, bodyEnd);
 
         if (ok != (int*)0) { *ok = good; }
     }

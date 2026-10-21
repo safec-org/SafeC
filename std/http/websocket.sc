@@ -61,6 +61,9 @@ struct WsConn WsConn::connect_timeout(const &char host, unsigned short port,
     struct WsConn conn;
     conn.fd = -1;
     conn.is_server = 0;
+    conn.early = null;
+    conn.earlyLen = 0UL;
+    conn.earlyPos = 0UL;
     int good = 1;
 
     unsigned int addr = 0U;
@@ -125,6 +128,7 @@ struct WsConn WsConn::connect_timeout(const &char host, unsigned short port,
             expected.free();
         }
         headerBlock.free();
+        if (good && !ws_keep_early_(&conn, &in)) { good = 0; }
     }
     keyB64.free();
 
@@ -142,6 +146,57 @@ struct WsConn WsConn::connect_timeout(const &char host, unsigned short port,
     }
     if (ok != (int*)0) { unsafe { *ok = good; } }
     return conn;
+}
+
+// ── Bytes that arrived with the handshake ─────────────────────────────────
+
+// Keeps what 'in' read past the handshake (the start of the first frame,
+// when the peer sent it in the same segment) so recv() doesn't lose it.
+static int ws_keep_early_(&WsConn c, &BufReader<TcpStream> in) {
+    c.early = null;
+    c.earlyLen = 0UL;
+    c.earlyPos = 0UL;
+    unsigned long n = in.buffered();
+    if (n == 0UL) return 1;
+    ?&heap unsigned char buf = (?&heap unsigned char)alloc_raw_(n);
+    match (buf) {
+        case null: { return 0; }
+        case some(b): {
+            long long got = in.read(b, n);
+            if (got != (long long)n) { unsafe { dealloc_raw_((void*)b); } return 0; }
+            c.early = b;
+            c.earlyLen = n;
+        }
+    }
+    return 1;
+}
+
+// A Reader over a connection: the early bytes first, then the socket.
+struct WsSource_ {
+    &WsConn conn;
+    long long read(&unsigned char out, unsigned long n);
+};
+
+long long WsSource_::read(&unsigned char out, unsigned long n) {
+    &WsConn c = self.conn;
+    if (c.earlyPos < c.earlyLen) {
+        unsigned long left = c.earlyLen - c.earlyPos;
+        unsigned long k = n < left ? n : left;
+        match (c.early) {
+            case some(b): { unsafe { safe_memcpy_raw_((void*)out, (const void*)&b[c.earlyPos], k); } }
+            case null: { return -1LL; }
+        }
+        c.earlyPos = c.earlyPos + k;
+        if (c.earlyPos == c.earlyLen) {
+            match (c.early) { case some(b): { unsafe { dealloc_raw_((void*)b); } } case null: { } }
+            c.early = null;
+            c.earlyLen = 0UL;
+            c.earlyPos = 0UL;
+        }
+        return (long long)k;
+    }
+    struct TcpStream s = TcpStream::from_fd(c.fd);
+    return s.read(out, n);
 }
 
 // ── Server handshake ───────────────────────────────────────────────────────
@@ -204,6 +259,7 @@ int WsConn::accept(int listenFd) {
         self.fd = fd;
         self.is_server = 1;
     }
+    if (!ws_keep_early_(self, &in)) { s.close(); self.fd = -1; return 0; }
     return 1;
 }
 
@@ -302,7 +358,8 @@ int WsConn::send_close() {
 }
 
 int WsConn::recv(&WsMessage out) {
-    struct TcpStream s = TcpStream::from_fd(self.fd);
+    struct WsSource_ s;
+    s.conn = self;
 
     unsigned char head[2];
     if (!read_exact(&s, &head[0], 2UL)) { return 0; }
@@ -375,6 +432,10 @@ void WsConn::close() {
         struct TcpStream s = TcpStream::from_fd(self.fd);
         s.close();
     }
+    match (self.early) { case some(b): { unsafe { dealloc_raw_((void*)b); } } case null: { } }
+    self.early = null;
+    self.earlyLen = 0UL;
+    self.earlyPos = 0UL;
 }
 
 } // namespace std

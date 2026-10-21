@@ -43,6 +43,13 @@ struct WsConn {
     int is_server; // 1 = accepted server-side (frames we send are unmasked,
                    // frames we receive must be masked); 0 = client-side
                    // (the reverse)
+    // Bytes the peer sent right behind its handshake (in the same read as
+    // the handshake's last line): the start of its first frame, which
+    // recv() consumes before reading the socket. Heap-owned; null when
+    // nothing came early. close() frees it.
+    ?&heap unsigned char early;
+    unsigned long        earlyLen;
+    unsigned long        earlyPos;
 
     // ── Client ────────────────────────────────────────────────────────────
     // Connects to ws://host:port/path — performs the TCP connect, sends the

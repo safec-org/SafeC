@@ -16,7 +16,7 @@
 //   win.present();
 //
 // Every built-in widget constructor returns a heap-allocated
-// 'struct Widget*' with sensible defaults already set — customize it with
+// '&Widget' with sensible defaults already set — customize it with
 // its set_*() and on_*() methods (each returns the same widget pointer, so
 // calls chain: Widget::button("Go").set_padding(8).set_bg(r,g,b,a)). Every widget is fully independently
 // customizable: colors, border, padding, spacing, preferred size, stretch
@@ -91,7 +91,8 @@ struct Widget {
     // aliases reference '&Widget' themselves and safec requires a
     // struct to be fully defined before it's used as a typedef'd function
     // pointer's parameter type, so the typedefs can only be declared right
-    // after this struct closes, not before. Every setter/getter still
+    // after this struct closes, not before. (Method declarations in the
+    // body can name them; a field's type can't.) Every setter/getter still
     // takes/returns the properly typed alias — the void* storage is an
     // implementation detail, cast at the few call sites inside gui_widget.sc.
     void* onClick;      // WidgetCallback
