@@ -62,6 +62,39 @@ void conv2d_free(&Conv2D layer);
 // the kernel/stride combination.
 struct FeatureMap maxpool2d_forward(const &FeatureMap input, unsigned long kernel, unsigned long stride);
 struct FeatureMap avgpool2d_forward(const &FeatureMap input, unsigned long kernel, unsigned long stride);
+// The same with 'padding' on every side; output side (dim + 2*padding -
+// kernel)/stride + 1. Max pooling ignores the padded positions (as
+// PyTorch's MaxPool2d does); avg pooling counts them as zeros in the
+// divisor when 'countIncludePad' (PyTorch's AvgPool2d default) and
+// divides by the positions inside the plane otherwise.
+struct FeatureMap maxpool2d_forward_ex(const &FeatureMap input, unsigned long kernel, unsigned long stride,
+                                       unsigned long padding);
+struct FeatureMap avgpool2d_forward_ex(const &FeatureMap input, unsigned long kernel, unsigned long stride,
+                                       unsigned long padding, int countIncludePad);
+// Global pooling over each channel's whole plane: channels x 1 x 1 (the
+// classifier head of ResNet-style networks).
+struct FeatureMap global_avgpool2d(const &FeatureMap input);
+struct FeatureMap global_maxpool2d(const &FeatureMap input);
+
+// Residual connection: out = a + b, element by element (relu(a + b) when
+// 'relu'); a and b must have the same shape.
+struct FeatureMap feature_map_add(const &FeatureMap a, const &FeatureMap b, int relu);
+
+// ResNet basic block (He et al. 2016): out = relu(conv2(relu(conv1(x))) + shortcut(x)),
+// conv1 3x3 with 'stride', conv2 3x3 stride 1, both padding 1. The shortcut
+// is x itself, or a 1x1 convolution with 'stride' when the stride is not 1
+// or the channel count changes (the "projection" shortcut). Output side
+// (dim - 1)/stride + 1. No batch norm: fold a trained model's batch norms
+// into the convolutions' weights and biases.
+struct ResidualBlock {
+    struct Conv2D conv1;
+    struct Conv2D conv2;
+    struct Conv2D projection;  // used only when hasProjection
+    int           hasProjection;
+};
+struct ResidualBlock residual_block_new(unsigned long inChannels, unsigned long outChannels, unsigned long stride);
+struct FeatureMap residual_block_forward(const &ResidualBlock block, const &FeatureMap input);
+void residual_block_free(&ResidualBlock block);
 
 // Nearest-neighbor 2x spatial upsample: out[c][2h+dh][2w+dw] = in[c][h][w]
 // for dh,dw in {0,1}. Used by U-Net's decoder path (see unet.h) in place
