@@ -374,12 +374,9 @@ struct HttpResponse http_request(const &char host, unsigned short port,
         if (fd < 0) { good = 0; }
     }
     if (good) {
-        // A blocking-mode I/O call on a socket with connect() still in
-        // flight waits for the connection to finish (POSIX-guaranteed —
-        // see fd_set_blocking's doc comment in io_nb.h), so no separate
-        // "wait for connect to complete" step is needed here.
-        unsafe { fd_set_blocking(fd); }
+        unsafe { if (tcp_wait_connected(fd) != 0) good = 0; }
     }
+    if (good) { unsafe { fd_set_blocking(fd); } }
 
     if (good) {
         struct String req = string_new();
