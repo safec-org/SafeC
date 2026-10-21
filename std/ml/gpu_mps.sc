@@ -644,6 +644,7 @@ static void*         __mps_batch_encoder = (void*)0;
 static void*         __mps_pending_gpuBuf[MPS_BATCH_MAX_PENDING];
 static void*         __mps_pending_cpuOut[MPS_BATCH_MAX_PENDING];
 static unsigned long __mps_pending_bytes[MPS_BATCH_MAX_PENDING];
+static int           __mps_pending_dtype[MPS_BATCH_MAX_PENDING];   // MpsBuf::batch_last_output's dtype
 static unsigned long __mps_pending_count = 0UL;
 static MpsFinalizeFn __mps_finalize_fn[MPS_BATCH_MAX_FINALIZE];
 static void*         __mps_finalize_ctx[MPS_BATCH_MAX_FINALIZE];
@@ -695,11 +696,6 @@ void mps_batch_register_finalize_raw_(MpsFinalizeFn finalizeFn, void* ctx) {
     __mps_finalize_fn[__mps_finalize_count] = finalizeFn;
     __mps_finalize_ctx[__mps_finalize_count] = ctx;
     __mps_finalize_count = __mps_finalize_count + 1UL;
-}
-
-?&void mps_batch_last_output_buffer() {
-    if (!__mps_batch_active || __mps_pending_count == 0UL) return (void*)0;
-    return __mps_pending_gpuBuf[__mps_pending_count - 1UL];
 }
 
 void mps_batch_end() {
@@ -809,6 +805,7 @@ int mps_sub_f32(const &float a, const &float b, &float out, unsigned long n) {
                 __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
                 __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
                 __mps_pending_bytes[__mps_pending_count] = bytes;
+                __mps_pending_dtype[__mps_pending_count] = 0;
                 __mps_pending_count = __mps_pending_count + 1UL;
             }
             return 1;
@@ -912,6 +909,7 @@ int mps_sum_f32(const &float a, &float out, unsigned long n) {
                 __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
                 __mps_pending_cpuOut[__mps_pending_count] = (void*)partials;
                 __mps_pending_bytes[__mps_pending_count] = partialBytes;
+                __mps_pending_dtype[__mps_pending_count] = 0;
                 __mps_pending_count = __mps_pending_count + 1UL;
             }
             struct __MpsSumFinalizeCtx* ctx = (struct __MpsSumFinalizeCtx*)alloc_raw_(sizeof(struct __MpsSumFinalizeCtx));
@@ -938,7 +936,8 @@ int mps_sum_f32(const &float a, &float out, unsigned long n) {
     }
 }
 
-int mps_sum_f32_chained(&void bufA, &float out, unsigned long n) {
+int mps_sum_f32_chained(struct MpsBuf bufA, &float out, unsigned long n) {
+    if (bufA.handle == (void*)0) return 0;
     if (!__mps_batch_active) return 0;
     unsafe {
         if (__mps_sum_pipeline == (void*)0) {
@@ -958,7 +957,7 @@ int mps_sum_f32_chained(&void bufA, &float out, unsigned long n) {
         MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
         msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, __mps_sum_pipeline);
         MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA.handle, 0UL, 0UL);
         setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 1UL);
         unsigned int nu = (unsigned int)n;
         MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
@@ -976,6 +975,7 @@ int mps_sum_f32_chained(&void bufA, &float out, unsigned long n) {
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)partials;
             __mps_pending_bytes[__mps_pending_count] = partialBytes;
+            __mps_pending_dtype[__mps_pending_count] = 0;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         struct __MpsSumFinalizeCtx* ctx = (struct __MpsSumFinalizeCtx*)alloc_raw_(sizeof(struct __MpsSumFinalizeCtx));
@@ -1121,6 +1121,7 @@ int mps_matmul_f32(const &float a, const &float b, &float out,
                 __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
                 __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
                 __mps_pending_bytes[__mps_pending_count] = bytesOut;
+                __mps_pending_dtype[__mps_pending_count] = 0;
                 __mps_pending_count = __mps_pending_count + 1UL;
             }
             return 1; // deferred success -- 'out' not valid until mps_batch_end()
@@ -1251,6 +1252,7 @@ int mps_matmul_abt_f32(const &float a, const &float b, &float out,
                 __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
                 __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
                 __mps_pending_bytes[__mps_pending_count] = bytesOut;
+                __mps_pending_dtype[__mps_pending_count] = 0;
                 __mps_pending_count = __mps_pending_count + 1UL;
             }
             return 1;
@@ -1371,6 +1373,7 @@ int mps_matmul_atb_f32(const &float a, const &float b, &float out,
                 __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
                 __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
                 __mps_pending_bytes[__mps_pending_count] = bytesOut;
+                __mps_pending_dtype[__mps_pending_count] = 0;
                 __mps_pending_count = __mps_pending_count + 1UL;
             }
             return 1;
@@ -1451,6 +1454,7 @@ int mps_relu_backward_f32(const &float a, const &float selfGrad, &float out, uns
                 __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
                 __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
                 __mps_pending_bytes[__mps_pending_count] = bytes;
+                __mps_pending_dtype[__mps_pending_count] = 0;
                 __mps_pending_count = __mps_pending_count + 1UL;
             }
             return 1;
@@ -1531,6 +1535,7 @@ int mps_relu_f32(const &float a, &float out, unsigned long n) {
                 __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
                 __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
                 __mps_pending_bytes[__mps_pending_count] = bytes;
+                __mps_pending_dtype[__mps_pending_count] = 0;
                 __mps_pending_count = __mps_pending_count + 1UL;
             }
             return 1;
@@ -1558,8 +1563,9 @@ int mps_relu_f32(const &float a, &float out, unsigned long n) {
 // specifically because Metal executes dispatches encoded on the same
 // encoder in encoding order. 'bufA' itself is never pool-tracked here: it
 // was already tracked by whichever op produced it as its own bufOut.
-int mps_matmul_f32_chained(&void bufA, const &float b, &float out,
+int mps_matmul_f32_chained(struct MpsBuf bufA, const &float b, &float out,
                             unsigned long M, unsigned long K, unsigned long N) {
+    if (bufA.handle == (void*)0) return 0;
     if (!__mps_batch_active) return 0;
     unsafe {
         // See mps_matmul_f32's comment on the smma/tiled choice.
@@ -1602,7 +1608,7 @@ int mps_matmul_f32_chained(&void bufA, const &float b, &float out,
         MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
         msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, pipeline);
         MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA.handle, 0UL, 0UL);
         setBufFn(__mps_batch_encoder, __sel_setBuffer, bufB, 0UL, 1UL);
         setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
         MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
@@ -1633,6 +1639,7 @@ int mps_matmul_f32_chained(&void bufA, const &float b, &float out,
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
             __mps_pending_bytes[__mps_pending_count] = bytesOut;
+            __mps_pending_dtype[__mps_pending_count] = 0;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         return 1;
@@ -1641,16 +1648,17 @@ int mps_matmul_f32_chained(&void bufA, const &float b, &float out,
 
 // out[M,N] = bufA[M,K] . bufB[K,N] -- same computation as mps_matmul_f32_
 // chained, but 'bufB' is ALSO a pre-existing device buffer (typically from
-// mps_upload_persistent below) instead of a plain CPU array to upload
+// MpsBuf::upload below) instead of a plain CPU array to upload
 // fresh. Needed for e.g. an inference loop that runs the same matmul
 // against the same weight matrix hundreds of times: mps_matmul_f32_chained
 // would re-upload (memcpy) that weight matrix from CPU on every single
 // call, even though it never changes between calls. 'bufA' can be either
 // another persistent buffer or a previous op's still-pending chained
-// output (mps_batch_last_output_buffer()) -- this function doesn't care
+// output (MpsBuf::batch_last_output()) -- this function doesn't care
 // which, both are just "already a device buffer".
-int mps_matmul_f32_persistent(&void bufA, &void bufB, &float out,
+int mps_matmul_f32_persistent(struct MpsBuf bufA, struct MpsBuf bufB, &float out,
                                unsigned long M, unsigned long K, unsigned long N) {
+    if (bufA.handle == (void*)0 || bufB.handle == (void*)0) return 0;
     if (!__mps_batch_active) return 0;
     unsafe {
         int useMulti = (M % 32UL == 0UL) && (K % 32UL == 0UL) && (N % 32UL == 0UL);
@@ -1690,8 +1698,8 @@ int mps_matmul_f32_persistent(&void bufA, &void bufB, &float out,
         MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
         msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, pipeline);
         MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA, 0UL, 0UL);
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufB, 0UL, 1UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA.handle, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufB.handle, 0UL, 1UL);
         setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
         MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
         setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&Mu, 4UL, 3UL);
@@ -1721,65 +1729,97 @@ int mps_matmul_f32_persistent(&void bufA, &void bufB, &float out,
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
             __mps_pending_bytes[__mps_pending_count] = bytesOut;
+            __mps_pending_dtype[__mps_pending_count] = 0;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         return 1;
     }
 }
 
-// Uploads 'data' to a device buffer ONCE and hands back a handle the
-// caller keeps and reuses directly (as 'bufA'/'bufB' above) across as many
-// dispatches and batches as it wants, instead of it being re-uploaded
-// fresh on every single call the way an ordinary (non-persistent) Tensor
-// operand is. Safe to call whether or not a batch is currently open (it's
-// just a pool allocation + memcpy, no command buffer involved) -- but only
-// safe to call when no GPU work that might still be reading the reused
-// pool slot's previous contents is in flight, i.e. after any previous
-// batch's mps_batch_end() has already returned. NOT tracked by the
-// batching machinery the way __mps_buf_get_with_bytes_batched's return
-// value is -- the caller owns this buffer's lifetime and must release it
-// with mps_release_persistent below when done, exactly once.
+// ── MpsBuf: persistent device buffers (see gpu_mps.h) ────────────────────────
+// A persistent buffer is a pool buffer (__mps_buf_get) the caller owns: it
+// is NOT tracked by the batching machinery the way __mps_buf_get_batched's
+// return value is, so it survives across dispatches and batches until
+// MpsBuf::free returns it to the size-class pool (see __mps_buf_put's
+// comment) -- which must only happen once every batch that might still
+// read it has completed. A constructor may reuse a pool slot, so it is only
+// safe while no GPU work that might still read that slot's previous
+// contents is in flight (i.e. after any earlier batch's mps_batch_end()).
 //
-// __mps_ensure_device_queue() first, unlike a bare __mps_buf_get_with_
-// bytes call: every OTHER public entry point in this file only ever runs
-// after mps_matmul_f32 or similar has already lazily initialized __mps_
-// device as a side effect of an earlier call, so nothing else needed this
-// check explicitly. This one doesn't get that for free -- it's meant to
-// be usable as the FIRST GPU call in a whole program (e.g. uploading a
-// training loop's weights before any forward pass has run at all), and
-// without this, __mps_buf_get would silently newBufferWithLength: a nil
-// device (Objective-C's "message to nil returns nil" behavior, not a
-// crash) and hand back a nil buffer that reads back as all zeros forever
-// after -- found by a real correctness test that returned exactly zero
-// for every output element, not by inspection.
-?&void mps_upload_persistent(const &float data, unsigned long bytes) {
-    if (!__mps_ensure_device_queue()) return (void*)0;
-    return __mps_buf_get_with_bytes(data, bytes);
+// Every constructor calls __mps_ensure_device_queue() first: one is
+// typically the FIRST GPU call in a program (uploading a training loop's
+// weights before any forward pass has run), and without the check
+// __mps_buf_get would message a nil device (Objective-C's "message to nil
+// returns nil", not a crash) and hand back a nil buffer that reads back as
+// all zeros forever after -- found by a real correctness test, not by
+// inspection.
+
+static unsigned long __mps_dtype_bytes(int dtype) {
+    if (dtype == 0) return 4UL;
+    if (dtype == MPS_FP16 || dtype == MPS_BF16) return 2UL;
+    return 0UL;
 }
 
-// Returns a buffer obtained from mps_upload_persistent to the size-class
-// pool (see __mps_buf_put's own comment) -- call once, after every batch
-// that might still be reading it has completed.
-void mps_release_persistent(&void buf, unsigned long bytes) {
-    __mps_buf_put(buf, bytes);
+static struct MpsBuf __mps_buf_make(void* handle, unsigned long bytes, int dtype) {
+    struct MpsBuf b;
+    b.handle = handle;
+    b.bytes = bytes;
+    b.dtype = dtype;
+    unsafe { if (handle == (void*)0) { b.bytes = 0UL; } }
+    return b;
 }
 
-?&void mps_alloc_persistent(unsigned long bytes) {
-    if (!__mps_ensure_device_queue()) return (void*)0;
-    return __mps_buf_get(bytes);
+static struct MpsBuf __mps_buf_upload(const void* src, unsigned long bytes, int dtype) {
+    if (!__mps_ensure_device_queue()) return __mps_buf_make((void*)0, 0UL, dtype);
+    unsafe { return __mps_buf_make(__mps_buf_get_with_bytes(src, bytes), bytes, dtype); }
 }
 
-int mps_read_persistent(&void buf, &void dst, unsigned long bytes) {
+int MpsBuf::valid() const {
+    unsafe { return self.handle != (void*)0; }
+}
+
+void MpsBuf::free() {
     unsafe {
+        if (self.handle != (void*)0) { __mps_buf_put(self.handle, self.bytes); }
+        self.handle = (void*)0;
+    }
+    self.bytes = 0UL;
+}
+
+int MpsBuf::read(&void dst, unsigned long bytes) const {
+    unsafe {
+        if (self.handle == (void*)0 || bytes > self.bytes) return 0;
         MMsg0 msg0 = (MMsg0)objc_msgSend;
-        void* src = msg0((void*)buf, __sel_contents);
+        void* src = msg0(self.handle, __sel_contents);
         if (src == (void*)0) return 0;
         memcpy((void*)dst, src, bytes);
         return 1;
     }
 }
 
-int mps_relu_f32_chained(&void bufA, &float out, unsigned long n) {
+struct MpsBuf MpsBuf::alloc(unsigned long n, int dtype) {
+    unsigned long esize = __mps_dtype_bytes(dtype);
+    if (esize == 0UL || !__mps_ensure_device_queue()) return __mps_buf_make((void*)0, 0UL, dtype);
+    unsafe { return __mps_buf_make(__mps_buf_get(n * esize), n * esize, dtype); }
+}
+
+struct MpsBuf MpsBuf::upload(const &float host, unsigned long n) {
+    unsafe { return __mps_buf_upload((const void*)host, n * 4UL, 0); }
+}
+
+struct MpsBuf MpsBuf::upload_bits(const &unsigned short bits, unsigned long n, int dtype) {
+    if (dtype != MPS_FP16 && dtype != MPS_BF16) return __mps_buf_make((void*)0, 0UL, dtype);
+    unsafe { return __mps_buf_upload((const void*)bits, n * 2UL, dtype); }
+}
+
+struct MpsBuf MpsBuf::batch_last_output() {
+    if (!__mps_batch_active || __mps_pending_count == 0UL) return __mps_buf_make((void*)0, 0UL, 0);
+    unsigned long i = __mps_pending_count - 1UL;
+    unsafe { return __mps_buf_make(__mps_pending_gpuBuf[i], __mps_pending_bytes[i], __mps_pending_dtype[i]); }
+}
+
+int mps_relu_f32_chained(struct MpsBuf bufA, &float out, unsigned long n) {
+    if (bufA.handle == (void*)0) return 0;
     if (!__mps_batch_active) return 0;
     unsafe {
         if (__mps_relu_pipeline == (void*)0) {
@@ -1795,7 +1835,7 @@ int mps_relu_f32_chained(&void bufA, &float out, unsigned long n) {
         MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
         msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, __mps_relu_pipeline);
         MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA.handle, 0UL, 0UL);
         setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 1UL);
 
         struct MTLSize gridSize;
@@ -1814,6 +1854,7 @@ int mps_relu_f32_chained(&void bufA, &float out, unsigned long n) {
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
             __mps_pending_bytes[__mps_pending_count] = bytes;
+            __mps_pending_dtype[__mps_pending_count] = 0;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         return 1;
@@ -1821,7 +1862,8 @@ int mps_relu_f32_chained(&void bufA, &float out, unsigned long n) {
 }
 
 // out[i] = bufA[i] - b[i] -- see gpu_mps.h's comment.
-int mps_sub_f32_chained(&void bufA, const &float b, &float out, unsigned long n) {
+int mps_sub_f32_chained(struct MpsBuf bufA, const &float b, &float out, unsigned long n) {
+    if (bufA.handle == (void*)0) return 0;
     if (!__mps_batch_active) return 0;
     unsafe {
         if (__mps_sub_pipeline == (void*)0) {
@@ -1838,7 +1880,7 @@ int mps_sub_f32_chained(&void bufA, const &float b, &float out, unsigned long n)
         MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
         msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, __mps_sub_pipeline);
         MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA.handle, 0UL, 0UL);
         setBufFn(__mps_batch_encoder, __sel_setBuffer, bufB, 0UL, 1UL);
         setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
 
@@ -1858,6 +1900,7 @@ int mps_sub_f32_chained(&void bufA, const &float b, &float out, unsigned long n)
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
             __mps_pending_bytes[__mps_pending_count] = bytes;
+            __mps_pending_dtype[__mps_pending_count] = 0;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         return 1;
@@ -1865,7 +1908,8 @@ int mps_sub_f32_chained(&void bufA, const &float b, &float out, unsigned long n)
 }
 
 // out[i] = bufA[i] * b[i] -- see gpu_mps.h's comment.
-int mps_mul_f32_chained(&void bufA, const &float b, &float out, unsigned long n) {
+int mps_mul_f32_chained(struct MpsBuf bufA, const &float b, &float out, unsigned long n) {
+    if (bufA.handle == (void*)0) return 0;
     if (!__mps_batch_active) return 0;
     unsafe {
         if (__mps_mul_pipeline == (void*)0) {
@@ -1882,7 +1926,7 @@ int mps_mul_f32_chained(&void bufA, const &float b, &float out, unsigned long n)
         MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
         msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, __mps_mul_pipeline);
         MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA.handle, 0UL, 0UL);
         setBufFn(__mps_batch_encoder, __sel_setBuffer, bufB, 0UL, 1UL);
         setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
 
@@ -1902,6 +1946,7 @@ int mps_mul_f32_chained(&void bufA, const &float b, &float out, unsigned long n)
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
             __mps_pending_bytes[__mps_pending_count] = bytes;
+            __mps_pending_dtype[__mps_pending_count] = 0;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         return 1;
@@ -1912,7 +1957,8 @@ int mps_mul_f32_chained(&void bufA, const &float b, &float out, unsigned long n)
 // mps_mul_f32_chained above, just bound to buffer indices 0 AND 1 with the
 // same buffer -- reading the same device memory location from two bound
 // slots is safe (both reads, no write), so this needs no dedicated kernel.
-int mps_square_f32_chained(&void buf, &float out, unsigned long n) {
+int mps_square_f32_chained(struct MpsBuf buf, &float out, unsigned long n) {
+    if (buf.handle == (void*)0) return 0;
     if (!__mps_batch_active) return 0;
     unsafe {
         if (__mps_mul_pipeline == (void*)0) {
@@ -1928,8 +1974,8 @@ int mps_square_f32_chained(&void buf, &float out, unsigned long n) {
         MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
         msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, __mps_mul_pipeline);
         MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, buf, 0UL, 0UL);
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, buf, 0UL, 1UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, buf.handle, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, buf.handle, 0UL, 1UL);
         setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
 
         struct MTLSize gridSize;
@@ -1948,6 +1994,7 @@ int mps_square_f32_chained(&void buf, &float out, unsigned long n) {
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
             __mps_pending_bytes[__mps_pending_count] = bytes;
+            __mps_pending_dtype[__mps_pending_count] = 0;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         return 1;
@@ -1955,7 +2002,8 @@ int mps_square_f32_chained(&void buf, &float out, unsigned long n) {
 }
 
 // out[i] = buf[i] * k -- see gpu_mps.h's comment.
-int mps_scale_f32_chained(&void buf, float k, &float out, unsigned long n) {
+int mps_scale_f32_chained(struct MpsBuf buf, float k, &float out, unsigned long n) {
+    if (buf.handle == (void*)0) return 0;
     if (!__mps_batch_active) return 0;
     unsafe {
         if (__mps_scale_pipeline == (void*)0) {
@@ -1971,7 +2019,7 @@ int mps_scale_f32_chained(&void buf, float k, &float out, unsigned long n) {
         MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
         msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, __mps_scale_pipeline);
         MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, buf, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, buf.handle, 0UL, 0UL);
         MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
         float kVal = k;
         setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&kVal, 4UL, 1UL);
@@ -1993,6 +2041,7 @@ int mps_scale_f32_chained(&void buf, float k, &float out, unsigned long n) {
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
             __mps_pending_bytes[__mps_pending_count] = bytes;
+            __mps_pending_dtype[__mps_pending_count] = 0;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         return 1;
@@ -2046,24 +2095,27 @@ static int __mps_gated_gelu_chained(const char* kernelName, void** pipelineSlot,
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = out;
             __mps_pending_bytes[__mps_pending_count] = bytes;
+            __mps_pending_dtype[__mps_pending_count] = elemBytes == 2UL ? MPS_BF16 : 0;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         return 1;
     }
 }
 
-int mps_gated_gelu_f32_chained(&void bufRaw, &float out, unsigned long rows, unsigned long intermediateSize) {
+int mps_gated_gelu_f32_chained(struct MpsBuf bufRaw, &float out, unsigned long rows, unsigned long intermediateSize) {
+    if (bufRaw.handle == (void*)0) return 0;
     unsafe {
         return __mps_gated_gelu_chained("gated_gelu_kernel", &__mps_gated_gelu_pipeline,
-                                        bufRaw, (void*)out, rows, intermediateSize, sizeof(float));
+                                        bufRaw.handle, (void*)out, rows, intermediateSize, sizeof(float));
     }
 }
 
 static void* __mps_gated_gelu_bf16_pipeline = (void*)0;
-int mps_gated_gelu_bf16_chained(&void bufRaw, &unsigned short out, unsigned long rows, unsigned long intermediateSize) {
+int mps_gated_gelu_bf16_chained(struct MpsBuf bufRaw, &unsigned short out, unsigned long rows, unsigned long intermediateSize) {
+    if (bufRaw.handle == (void*)0) return 0;
     unsafe {
         return __mps_gated_gelu_chained("gated_gelu_kernel_bf16", &__mps_gated_gelu_bf16_pipeline,
-                                        bufRaw, (void*)out, rows, intermediateSize, 2UL);
+                                        bufRaw.handle, (void*)out, rows, intermediateSize, 2UL);
     }
 }
 
@@ -2071,8 +2123,9 @@ int mps_gated_gelu_bf16_chained(&void bufRaw, &unsigned short out, unsigned long
 // Same "read a previous batched op's still-pending GPU buffer directly,
 // no CPU round trip" idea as mps_matmul_f32_chained/mps_relu_f32_chained
 // above, applied to the backward chain instead of the forward one.
-int mps_matmul_abt_f32_chained(&void bufDC, const &float b, &float out,
+int mps_matmul_abt_f32_chained(struct MpsBuf bufDC, const &float b, &float out,
                                 unsigned long M, unsigned long N, unsigned long K) {
+    if (bufDC.handle == (void*)0) return 0;
     if (!__mps_batch_active) return 0;
     unsafe {
         int useMulti = (M % 32UL == 0UL) && (N % 32UL == 0UL) && (K % 32UL == 0UL);
@@ -2114,7 +2167,7 @@ int mps_matmul_abt_f32_chained(&void bufDC, const &float b, &float out,
         MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
         msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, pipeline);
         MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufDC, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufDC.handle, 0UL, 0UL);
         setBufFn(__mps_batch_encoder, __sel_setBuffer, bufB, 0UL, 1UL);
         setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
         MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
@@ -2145,6 +2198,7 @@ int mps_matmul_abt_f32_chained(&void bufDC, const &float b, &float out,
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
             __mps_pending_bytes[__mps_pending_count] = bytesOut;
+            __mps_pending_dtype[__mps_pending_count] = 0;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         return 1;
@@ -2152,14 +2206,15 @@ int mps_matmul_abt_f32_chained(&void bufDC, const &float b, &float out,
 }
 
 // Same as mps_matmul_abt_f32_chained above, but 'b' is ALSO a pre-existing
-// device buffer (typically mps_upload_persistent, e.g. a weight matrix
+// device buffer (typically MpsBuf::upload, e.g. a weight matrix
 // that never leaves the GPU across a whole training run) instead of a
 // plain CPU array to upload fresh -- same reasoning as mps_matmul_f32_
 // persistent. Needed for dH = dY . W2^T when W2 stays GPU-resident and
 // is updated in place by sgd_update_kernel every step instead of ever
 // being read back to a CPU array.
-int mps_matmul_abt_f32_persistent(&void bufDC, &void bufB, &float out,
+int mps_matmul_abt_f32_persistent(struct MpsBuf bufDC, struct MpsBuf bufB, &float out,
                                    unsigned long M, unsigned long N, unsigned long K) {
+    if (bufDC.handle == (void*)0 || bufB.handle == (void*)0) return 0;
     if (!__mps_batch_active) return 0;
     unsafe {
         int useMulti = (M % 32UL == 0UL) && (N % 32UL == 0UL) && (K % 32UL == 0UL);
@@ -2199,8 +2254,8 @@ int mps_matmul_abt_f32_persistent(&void bufDC, &void bufB, &float out,
         MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
         msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, pipeline);
         MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufDC, 0UL, 0UL);
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufB, 0UL, 1UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufDC.handle, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufB.handle, 0UL, 1UL);
         setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
         MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
         setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&Mu, 4UL, 3UL);
@@ -2230,14 +2285,16 @@ int mps_matmul_abt_f32_persistent(&void bufDC, &void bufB, &float out,
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
             __mps_pending_bytes[__mps_pending_count] = bytesOut;
+            __mps_pending_dtype[__mps_pending_count] = 0;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         return 1;
     }
 }
 
-int mps_matmul_atb_f32_chained(const &float a, &void bufDC, &float out,
+int mps_matmul_atb_f32_chained(const &float a, struct MpsBuf bufDC, &float out,
                                 unsigned long M, unsigned long K, unsigned long N) {
+    if (bufDC.handle == (void*)0) return 0;
     if (!__mps_batch_active) return 0;
     unsafe {
         int useMulti = (M % 32UL == 0UL) && (K % 32UL == 0UL) && (N % 32UL == 0UL);
@@ -2280,7 +2337,7 @@ int mps_matmul_atb_f32_chained(const &float a, &void bufDC, &float out,
         msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, pipeline);
         MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
         setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA, 0UL, 0UL);
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufDC, 0UL, 1UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufDC.handle, 0UL, 1UL);
         setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
         MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
         setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&Mu, 4UL, 3UL);
@@ -2310,6 +2367,7 @@ int mps_matmul_atb_f32_chained(const &float a, &void bufDC, &float out,
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
             __mps_pending_bytes[__mps_pending_count] = bytesOut;
+            __mps_pending_dtype[__mps_pending_count] = 0;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         return 1;
@@ -2325,8 +2383,9 @@ int mps_matmul_atb_f32_chained(const &float a, &void bufDC, &float out,
 // memory -- mps_matmul_atb_f32_chained's plain-CPU-array 'a' parameter
 // can't express that. (Doesn't arise for matmul1's own backward: its 'a'
 // is X, a real input tensor, always CPU-resident already.)
-int mps_matmul_atb_f32_chained_ab(&void bufA, &void bufDC, &float out,
+int mps_matmul_atb_f32_chained_ab(struct MpsBuf bufA, struct MpsBuf bufDC, &float out,
                                    unsigned long M, unsigned long K, unsigned long N) {
+    if (bufA.handle == (void*)0 || bufDC.handle == (void*)0) return 0;
     if (!__mps_batch_active) return 0;
     unsafe {
         int useMulti = (M % 32UL == 0UL) && (K % 32UL == 0UL) && (N % 32UL == 0UL);
@@ -2366,8 +2425,8 @@ int mps_matmul_atb_f32_chained_ab(&void bufA, &void bufDC, &float out,
         MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
         msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, pipeline);
         MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA, 0UL, 0UL);
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufDC, 0UL, 1UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA.handle, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufDC.handle, 0UL, 1UL);
         setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
         MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
         setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&Mu, 4UL, 3UL);
@@ -2397,13 +2456,15 @@ int mps_matmul_atb_f32_chained_ab(&void bufA, &void bufDC, &float out,
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
             __mps_pending_bytes[__mps_pending_count] = bytesOut;
+            __mps_pending_dtype[__mps_pending_count] = 0;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         return 1;
     }
 }
 
-int mps_relu_backward_f32_chained(const &float a, &void bufSelfGrad, &float out, unsigned long n) {
+int mps_relu_backward_f32_chained(const &float a, struct MpsBuf bufSelfGrad, &float out, unsigned long n) {
+    if (bufSelfGrad.handle == (void*)0) return 0;
     if (!__mps_batch_active) return 0;
     unsafe {
         if (__mps_relu_backward_pipeline == (void*)0) {
@@ -2421,7 +2482,7 @@ int mps_relu_backward_f32_chained(const &float a, &void bufSelfGrad, &float out,
         msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, __mps_relu_backward_pipeline);
         MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
         setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA, 0UL, 0UL);
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufSelfGrad, 0UL, 1UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufSelfGrad.handle, 0UL, 1UL);
         setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
 
         struct MTLSize gridSize;
@@ -2440,6 +2501,7 @@ int mps_relu_backward_f32_chained(const &float a, &void bufSelfGrad, &float out,
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
             __mps_pending_bytes[__mps_pending_count] = bytes;
+            __mps_pending_dtype[__mps_pending_count] = 0;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         return 1;
@@ -2451,7 +2513,8 @@ int mps_relu_backward_f32_chained(const &float a, &void bufSelfGrad, &float out,
 // as mps_matmul_atb_f32_chained_ab (see its comment): in the fused
 // forward+loss+backward training step, relu's own input (Z1, matmul1's
 // output) hasn't been read back to CPU yet either when relu-backward runs.
-int mps_relu_backward_f32_chained_ab(&void bufA, &void bufSelfGrad, &float out, unsigned long n) {
+int mps_relu_backward_f32_chained_ab(struct MpsBuf bufA, struct MpsBuf bufSelfGrad, &float out, unsigned long n) {
+    if (bufA.handle == (void*)0 || bufSelfGrad.handle == (void*)0) return 0;
     if (!__mps_batch_active) return 0;
     unsafe {
         if (__mps_relu_backward_pipeline == (void*)0) {
@@ -2467,8 +2530,8 @@ int mps_relu_backward_f32_chained_ab(&void bufA, &void bufSelfGrad, &float out, 
         MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
         msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, __mps_relu_backward_pipeline);
         MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA, 0UL, 0UL);
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufSelfGrad, 0UL, 1UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufA.handle, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufSelfGrad.handle, 0UL, 1UL);
         setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
 
         struct MTLSize gridSize;
@@ -2487,6 +2550,7 @@ int mps_relu_backward_f32_chained_ab(&void bufA, &void bufSelfGrad, &float out, 
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
             __mps_pending_bytes[__mps_pending_count] = bytes;
+            __mps_pending_dtype[__mps_pending_count] = 0;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         return 1;
@@ -2495,7 +2559,7 @@ int mps_relu_backward_f32_chained_ab(&void bufA, &void bufSelfGrad, &float out, 
 
 // In-place SGD step against a persistent device buffer (see gpu_mps_
 // kernels.metal's sgd_update_kernel): w[i] -= lr*grad[i], both already
-// device buffers -- 'bufW' typically from mps_upload_persistent (a weight
+// device buffers -- 'bufW' typically from MpsBuf::upload (a weight
 // matrix uploaded once at the start of training and never read back to a
 // CPU array until the caller is actually done with it), 'bufGrad'
 // typically another op's still-pending chained output from the SAME
@@ -2506,7 +2570,8 @@ int mps_relu_backward_f32_chained_ab(&void bufA, &void bufSelfGrad, &float out, 
 // re-uploading it (mps_matmul_f32/_persistent) every step.
 static void* __mps_sgd_update_pipeline = (void*)0;
 
-int mps_sgd_update_f32_chained(&void bufW, &void bufGrad, float lr, unsigned long n) {
+int mps_sgd_update_f32_chained(struct MpsBuf bufW, struct MpsBuf bufGrad, float lr, unsigned long n) {
+    if (bufW.handle == (void*)0 || bufGrad.handle == (void*)0) return 0;
     if (!__mps_batch_active) return 0;
     unsafe {
         if (__mps_sgd_update_pipeline == (void*)0) {
@@ -2518,8 +2583,8 @@ int mps_sgd_update_f32_chained(&void bufW, &void bufGrad, float lr, unsigned lon
         MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
         msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, __mps_sgd_update_pipeline);
         MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufW, 0UL, 0UL);
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufGrad, 0UL, 1UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufW.handle, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufGrad.handle, 0UL, 1UL);
         MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
         float lrVal = lr;
         setBytesFn(__mps_batch_encoder, __sel_setBytes, (void*)&lrVal, 4UL, 2UL);
@@ -2830,25 +2895,25 @@ int mps_relu_bf16(const &float a, &float out, unsigned long n) {
 }
 
 // ── fp16 / bf16 persistent-buffer / batched tier (see gpu_mps.h) ────────────
-?&void mps_upload_f16_persistent(const &float data, unsigned long n) {
+struct MpsBuf MpsBuf::upload_f16(const &float host, unsigned long n) {
     unsafe {
         unsigned short* tmp = (unsigned short*)malloc(n * 2UL);
-        if (tmp == (void*)0) return (void*)0;
-        f32_to_fp16_bulk(data, tmp, n);
-        void* buf = mps_upload_persistent((const float*)tmp, n * 2UL);
+        if (tmp == (void*)0) return __mps_buf_make((void*)0, 0UL, MPS_FP16);
+        f32_to_fp16_bulk(host, tmp, n);
+        struct MpsBuf b = __mps_buf_upload((const void*)tmp, n * 2UL, MPS_FP16);
         free((void*)tmp);
-        return buf;
+        return b;
     }
 }
 
-?&void mps_upload_bf16_persistent(const &float data, unsigned long n) {
+struct MpsBuf MpsBuf::upload_bf16(const &float host, unsigned long n) {
     unsafe {
         unsigned short* tmp = (unsigned short*)malloc(n * 2UL);
-        if (tmp == (void*)0) return (void*)0;
-        f32_to_bf16_bulk(data, tmp, n);
-        void* buf = mps_upload_persistent((const float*)tmp, n * 2UL);
+        if (tmp == (void*)0) return __mps_buf_make((void*)0, 0UL, MPS_BF16);
+        f32_to_bf16_bulk(host, tmp, n);
+        struct MpsBuf b = __mps_buf_upload((const void*)tmp, n * 2UL, MPS_BF16);
         free((void*)tmp);
-        return buf;
+        return b;
     }
 }
 
@@ -2857,7 +2922,7 @@ int mps_relu_bf16(const &float a, &float out, unsigned long n) {
 // f16/bf16 all take the same (bufA, bufB, bufOut, uint, uint, uint)
 // binding shape from the host side -- only the kernel name and what the
 // three uint constants/output shape mean differ between the three ops).
-static int __mps_matmul3_chained(const char* kernelName, void** pipelineSlot,
+static int __mps_matmul3_chained(const char* kernelName, void** pipelineSlot, int dtype,
                                   void* bufA, void* bufB, unsigned short* out,
                                   unsigned int p0, unsigned int p1, unsigned int p2,
                                   unsigned long outRows, unsigned long outCols) {
@@ -2898,6 +2963,7 @@ static int __mps_matmul3_chained(const char* kernelName, void** pipelineSlot,
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
             __mps_pending_bytes[__mps_pending_count] = bytesOut;
+            __mps_pending_dtype[__mps_pending_count] = dtype;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         return 1;
@@ -2905,38 +2971,43 @@ static int __mps_matmul3_chained(const char* kernelName, void** pipelineSlot,
 }
 
 static void* __mps_matmul_f16_persistent_pipeline = (void*)0;
-int mps_matmul_f16_persistent(&void bufA, &void bufB, &unsigned short out,
+int mps_matmul_f16_persistent(struct MpsBuf bufA, struct MpsBuf bufB, &unsigned short out,
                                unsigned long M, unsigned long K, unsigned long N) {
-    return __mps_matmul3_chained("matmul_kernel_f16", &__mps_matmul_f16_persistent_pipeline,
-                                  bufA, bufB, out, (unsigned int)M, (unsigned int)K, (unsigned int)N, M, N);
+    if (bufA.handle == (void*)0 || bufB.handle == (void*)0) return 0;
+    return __mps_matmul3_chained("matmul_kernel_f16", &__mps_matmul_f16_persistent_pipeline, MPS_FP16,
+                                  bufA.handle, bufB.handle, out, (unsigned int)M, (unsigned int)K, (unsigned int)N, M, N);
 }
 
 static void* __mps_matmul_bf16_persistent_pipeline = (void*)0;
-int mps_matmul_bf16_persistent(&void bufA, &void bufB, &unsigned short out,
+int mps_matmul_bf16_persistent(struct MpsBuf bufA, struct MpsBuf bufB, &unsigned short out,
                                 unsigned long M, unsigned long K, unsigned long N) {
-    return __mps_matmul3_chained("matmul_kernel_bf16", &__mps_matmul_bf16_persistent_pipeline,
-                                  bufA, bufB, out, (unsigned int)M, (unsigned int)K, (unsigned int)N, M, N);
+    if (bufA.handle == (void*)0 || bufB.handle == (void*)0) return 0;
+    return __mps_matmul3_chained("matmul_kernel_bf16", &__mps_matmul_bf16_persistent_pipeline, MPS_BF16,
+                                  bufA.handle, bufB.handle, out, (unsigned int)M, (unsigned int)K, (unsigned int)N, M, N);
 }
 
 static void* __mps_matmul_atb_f16_pipeline = (void*)0;
-int mps_matmul_atb_f16_chained_ab(&void bufA, &void bufDC, &unsigned short out,
+int mps_matmul_atb_f16_chained_ab(struct MpsBuf bufA, struct MpsBuf bufDC, &unsigned short out,
                                    unsigned long M, unsigned long K, unsigned long N) {
-    return __mps_matmul3_chained("matmul_atb_kernel_f16", &__mps_matmul_atb_f16_pipeline,
-                                  bufA, bufDC, out, (unsigned int)M, (unsigned int)K, (unsigned int)N, K, N);
+    if (bufA.handle == (void*)0 || bufDC.handle == (void*)0) return 0;
+    return __mps_matmul3_chained("matmul_atb_kernel_f16", &__mps_matmul_atb_f16_pipeline, MPS_FP16,
+                                  bufA.handle, bufDC.handle, out, (unsigned int)M, (unsigned int)K, (unsigned int)N, K, N);
 }
 
 static void* __mps_matmul_atb_bf16_pipeline = (void*)0;
-int mps_matmul_atb_bf16_chained_ab(&void bufA, &void bufDC, &unsigned short out,
+int mps_matmul_atb_bf16_chained_ab(struct MpsBuf bufA, struct MpsBuf bufDC, &unsigned short out,
                                     unsigned long M, unsigned long K, unsigned long N) {
-    return __mps_matmul3_chained("matmul_atb_kernel_bf16", &__mps_matmul_atb_bf16_pipeline,
-                                  bufA, bufDC, out, (unsigned int)M, (unsigned int)K, (unsigned int)N, K, N);
+    if (bufA.handle == (void*)0 || bufDC.handle == (void*)0) return 0;
+    return __mps_matmul3_chained("matmul_atb_kernel_bf16", &__mps_matmul_atb_bf16_pipeline, MPS_BF16,
+                                  bufA.handle, bufDC.handle, out, (unsigned int)M, (unsigned int)K, (unsigned int)N, K, N);
 }
 
 static void* __mps_matmul_abt_f16_pipeline = (void*)0;
-int mps_matmul_abt_f16_persistent(&void bufDC, &void bufB, &unsigned short out,
+int mps_matmul_abt_f16_persistent(struct MpsBuf bufDC, struct MpsBuf bufB, &unsigned short out,
                                    unsigned long M, unsigned long N, unsigned long K) {
-    return __mps_matmul3_chained("matmul_abt_kernel_f16", &__mps_matmul_abt_f16_pipeline,
-                                  bufDC, bufB, out, (unsigned int)M, (unsigned int)N, (unsigned int)K, M, K);
+    if (bufDC.handle == (void*)0 || bufB.handle == (void*)0) return 0;
+    return __mps_matmul3_chained("matmul_abt_kernel_f16", &__mps_matmul_abt_f16_pipeline, MPS_FP16,
+                                  bufDC.handle, bufB.handle, out, (unsigned int)M, (unsigned int)N, (unsigned int)K, M, K);
 }
 
 // M==1 GEMV path for mps_matmul_abt_bf16_persistent -- see matmul_abt_
@@ -2982,6 +3053,7 @@ static int __mps_matmul_abt_bf16_gemv_chained(void* bufA, void* bufB, unsigned s
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
             __mps_pending_bytes[__mps_pending_count] = bytesOut;
+            __mps_pending_dtype[__mps_pending_count] = MPS_BF16;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         return 1;
@@ -2989,22 +3061,23 @@ static int __mps_matmul_abt_bf16_gemv_chained(void* bufA, void* bufB, unsigned s
 }
 
 static void* __mps_matmul_abt_bf16_pipeline = (void*)0;
-int mps_matmul_abt_bf16_persistent(&void bufDC, &void bufB, &unsigned short out,
+int mps_matmul_abt_bf16_persistent(struct MpsBuf bufDC, struct MpsBuf bufB, &unsigned short out,
                                     unsigned long M, unsigned long N, unsigned long K) {
+    if (bufDC.handle == (void*)0 || bufB.handle == (void*)0) return 0;
     // M==1 (a decode step's projections) routes to the dedicated GEMV
     // kernel; the tiled kernel would compute and discard 15 of every 16
     // rows. See gpu_mps_kernels.metal for why a simdgroup_matrix bf16 tier
     // isn't used for M>1 either.
     if (M == 1UL) {
-        int rc = __mps_matmul_abt_bf16_gemv_chained(bufDC, bufB, out, (unsigned int)N, (unsigned int)K);
+        int rc = __mps_matmul_abt_bf16_gemv_chained(bufDC.handle, bufB.handle, out, (unsigned int)N, (unsigned int)K);
         if (rc) { return rc; }
     }
-    return __mps_matmul3_chained("matmul_abt_kernel_bf16", &__mps_matmul_abt_bf16_pipeline,
-                                  bufDC, bufB, out, (unsigned int)M, (unsigned int)N, (unsigned int)K, M, K);
+    return __mps_matmul3_chained("matmul_abt_kernel_bf16", &__mps_matmul_abt_bf16_pipeline, MPS_BF16,
+                                  bufDC.handle, bufB.handle, out, (unsigned int)M, (unsigned int)N, (unsigned int)K, M, K);
 }
 
 // Shared dispatch body for a single-device-input elementwise op (relu).
-static int __mps_unary_chained(const char* kernelName, void** pipelineSlot,
+static int __mps_unary_chained(const char* kernelName, void** pipelineSlot, int dtype,
                                 void* bufA, unsigned short* out, unsigned long n) {
     if (!__mps_batch_active) return 0;
     unsafe {
@@ -3039,6 +3112,7 @@ static int __mps_unary_chained(const char* kernelName, void** pipelineSlot,
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
             __mps_pending_bytes[__mps_pending_count] = bytes;
+            __mps_pending_dtype[__mps_pending_count] = dtype;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         return 1;
@@ -3046,18 +3120,20 @@ static int __mps_unary_chained(const char* kernelName, void** pipelineSlot,
 }
 
 static void* __mps_relu_f16_chained_pipeline = (void*)0;
-int mps_relu_f16_chained(&void bufA, &unsigned short out, unsigned long n) {
-    return __mps_unary_chained("relu_kernel_f16", &__mps_relu_f16_chained_pipeline, bufA, out, n);
+int mps_relu_f16_chained(struct MpsBuf bufA, &unsigned short out, unsigned long n) {
+    if (bufA.handle == (void*)0) return 0;
+    return __mps_unary_chained("relu_kernel_f16", &__mps_relu_f16_chained_pipeline, MPS_FP16, bufA.handle, out, n);
 }
 
 static void* __mps_relu_bf16_chained_pipeline = (void*)0;
-int mps_relu_bf16_chained(&void bufA, &unsigned short out, unsigned long n) {
-    return __mps_unary_chained("relu_kernel_bf16", &__mps_relu_bf16_chained_pipeline, bufA, out, n);
+int mps_relu_bf16_chained(struct MpsBuf bufA, &unsigned short out, unsigned long n) {
+    if (bufA.handle == (void*)0) return 0;
+    return __mps_unary_chained("relu_kernel_bf16", &__mps_relu_bf16_chained_pipeline, MPS_BF16, bufA.handle, out, n);
 }
 
 // Shared dispatch body for a two-device-input elementwise op (relu
 // backward: dZ1 = relu'(Z1) * dH, both operands already GPU-pending).
-static int __mps_binary_dev_chained(const char* kernelName, void** pipelineSlot,
+static int __mps_binary_dev_chained(const char* kernelName, void** pipelineSlot, int dtype,
                                      void* bufA, void* bufB, unsigned short* out, unsigned long n) {
     if (!__mps_batch_active) return 0;
     unsafe {
@@ -3093,6 +3169,7 @@ static int __mps_binary_dev_chained(const char* kernelName, void** pipelineSlot,
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
             __mps_pending_bytes[__mps_pending_count] = bytes;
+            __mps_pending_dtype[__mps_pending_count] = dtype;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         return 1;
@@ -3100,18 +3177,20 @@ static int __mps_binary_dev_chained(const char* kernelName, void** pipelineSlot,
 }
 
 static void* __mps_relu_backward_f16_pipeline = (void*)0;
-int mps_relu_backward_f16_chained_ab(&void bufA, &void bufSelfGrad, &unsigned short out, unsigned long n) {
-    return __mps_binary_dev_chained("relu_backward_kernel_f16", &__mps_relu_backward_f16_pipeline, bufA, bufSelfGrad, out, n);
+int mps_relu_backward_f16_chained_ab(struct MpsBuf bufA, struct MpsBuf bufSelfGrad, &unsigned short out, unsigned long n) {
+    if (bufA.handle == (void*)0 || bufSelfGrad.handle == (void*)0) return 0;
+    return __mps_binary_dev_chained("relu_backward_kernel_f16", &__mps_relu_backward_f16_pipeline, MPS_FP16, bufA.handle, bufSelfGrad.handle, out, n);
 }
 
 static void* __mps_relu_backward_bf16_pipeline = (void*)0;
-int mps_relu_backward_bf16_chained_ab(&void bufA, &void bufSelfGrad, &unsigned short out, unsigned long n) {
-    return __mps_binary_dev_chained("relu_backward_kernel_bf16", &__mps_relu_backward_bf16_pipeline, bufA, bufSelfGrad, out, n);
+int mps_relu_backward_bf16_chained_ab(struct MpsBuf bufA, struct MpsBuf bufSelfGrad, &unsigned short out, unsigned long n) {
+    if (bufA.handle == (void*)0 || bufSelfGrad.handle == (void*)0) return 0;
+    return __mps_binary_dev_chained("relu_backward_kernel_bf16", &__mps_relu_backward_bf16_pipeline, MPS_BF16, bufA.handle, bufSelfGrad.handle, out, n);
 }
 
 // out[i] = bufA[i] - bHost[i] -- 'bHost' is a plain CPU array of raw
 // fp16/bf16 bits, uploaded fresh each call (see gpu_mps.h's comment).
-static int __mps_sub_chained(const char* kernelName, void** pipelineSlot,
+static int __mps_sub_chained(const char* kernelName, void** pipelineSlot, int dtype,
                               void* bufA, const unsigned short* bHost, unsigned short* out, unsigned long n) {
     if (!__mps_batch_active) return 0;
     unsafe {
@@ -3148,6 +3227,7 @@ static int __mps_sub_chained(const char* kernelName, void** pipelineSlot,
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
             __mps_pending_bytes[__mps_pending_count] = bytes;
+            __mps_pending_dtype[__mps_pending_count] = dtype;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         return 1;
@@ -3155,18 +3235,20 @@ static int __mps_sub_chained(const char* kernelName, void** pipelineSlot,
 }
 
 static void* __mps_sub_f16_pipeline = (void*)0;
-int mps_sub_f16_chained(&void bufA, const &unsigned short bHalf, &unsigned short out, unsigned long n) {
-    return __mps_sub_chained("sub_kernel_f16", &__mps_sub_f16_pipeline, bufA, bHalf, out, n);
+int mps_sub_f16_chained(struct MpsBuf bufA, const &unsigned short bHalf, &unsigned short out, unsigned long n) {
+    if (bufA.handle == (void*)0) return 0;
+    return __mps_sub_chained("sub_kernel_f16", &__mps_sub_f16_pipeline, MPS_FP16, bufA.handle, bHalf, out, n);
 }
 
 static void* __mps_sub_bf16_pipeline = (void*)0;
-int mps_sub_bf16_chained(&void bufA, const &unsigned short bBf, &unsigned short out, unsigned long n) {
-    return __mps_sub_chained("sub_kernel_bf16", &__mps_sub_bf16_pipeline, bufA, bBf, out, n);
+int mps_sub_bf16_chained(struct MpsBuf bufA, const &unsigned short bBf, &unsigned short out, unsigned long n) {
+    if (bufA.handle == (void*)0) return 0;
+    return __mps_sub_chained("sub_kernel_bf16", &__mps_sub_bf16_pipeline, MPS_BF16, bufA.handle, bBf, out, n);
 }
 
 // out[i] = buf[i] * k -- 'k' stays a plain float scalar (see gpu_mps_
 // kernels.metal's scale_kernel_f16/bf16 comment).
-static int __mps_scale_chained(const char* kernelName, void** pipelineSlot,
+static int __mps_scale_chained(const char* kernelName, void** pipelineSlot, int dtype,
                                 void* buf, float k, unsigned short* out, unsigned long n) {
     if (!__mps_batch_active) return 0;
     unsafe {
@@ -3204,6 +3286,7 @@ static int __mps_scale_chained(const char* kernelName, void** pipelineSlot,
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
             __mps_pending_bytes[__mps_pending_count] = bytes;
+            __mps_pending_dtype[__mps_pending_count] = dtype;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         return 1;
@@ -3211,25 +3294,29 @@ static int __mps_scale_chained(const char* kernelName, void** pipelineSlot,
 }
 
 static void* __mps_scale_f16_pipeline = (void*)0;
-int mps_scale_f16_chained(&void buf, float k, &unsigned short out, unsigned long n) {
-    return __mps_scale_chained("scale_kernel_f16", &__mps_scale_f16_pipeline, buf, k, out, n);
+int mps_scale_f16_chained(struct MpsBuf buf, float k, &unsigned short out, unsigned long n) {
+    if (buf.handle == (void*)0) return 0;
+    return __mps_scale_chained("scale_kernel_f16", &__mps_scale_f16_pipeline, MPS_FP16, buf.handle, k, out, n);
 }
 
 static void* __mps_scale_bf16_pipeline = (void*)0;
-int mps_scale_bf16_chained(&void buf, float k, &unsigned short out, unsigned long n) {
-    return __mps_scale_chained("scale_kernel_bf16", &__mps_scale_bf16_pipeline, buf, k, out, n);
+int mps_scale_bf16_chained(struct MpsBuf buf, float k, &unsigned short out, unsigned long n) {
+    if (buf.handle == (void*)0) return 0;
+    return __mps_scale_chained("scale_kernel_bf16", &__mps_scale_bf16_pipeline, MPS_BF16, buf.handle, k, out, n);
 }
 
 // Both operands device buffers -- same binding shape as relu-backward's
 // __mps_binary_dev_chained above.
 static void* __mps_add_bf16_pipeline = (void*)0;
-int mps_add_bf16_chained(&void bufA, &void bufB, &unsigned short out, unsigned long n) {
-    return __mps_binary_dev_chained("add_kernel_bf16", &__mps_add_bf16_pipeline, bufA, bufB, out, n);
+int mps_add_bf16_chained(struct MpsBuf bufA, struct MpsBuf bufB, &unsigned short out, unsigned long n) {
+    if (bufA.handle == (void*)0 || bufB.handle == (void*)0) return 0;
+    return __mps_binary_dev_chained("add_kernel_bf16", &__mps_add_bf16_pipeline, MPS_BF16, bufA.handle, bufB.handle, out, n);
 }
 
 static void* __mps_gelu_mul_bf16_pipeline = (void*)0;
-int mps_gelu_mul_bf16_chained(&void bufA, &void bufB, &unsigned short out, unsigned long n) {
-    return __mps_binary_dev_chained("gelu_mul_kernel_bf16", &__mps_gelu_mul_bf16_pipeline, bufA, bufB, out, n);
+int mps_gelu_mul_bf16_chained(struct MpsBuf bufA, struct MpsBuf bufB, &unsigned short out, unsigned long n) {
+    if (bufA.handle == (void*)0 || bufB.handle == (void*)0) return 0;
+    return __mps_binary_dev_chained("gelu_mul_kernel_bf16", &__mps_gelu_mul_bf16_pipeline, MPS_BF16, bufA.handle, bufB.handle, out, n);
 }
 
 // Row-wise RMSNorm -- see rmsnorm_kernel_bf16's comment in gpu_mps_
@@ -3237,8 +3324,9 @@ int mps_gelu_mul_bf16_chained(&void bufA, &void bufB, &unsigned short out, unsig
 // must match the kernel's.
 #define RMSNORM_TG ((unsigned long)256)
 static void* __mps_rmsnorm_bf16_pipeline = (void*)0;
-int mps_rmsnorm_bf16_chained(&void bufX, &void weightBuf, &unsigned short out,
+int mps_rmsnorm_bf16_chained(struct MpsBuf bufX, struct MpsBuf weightBuf, &unsigned short out,
                               unsigned long rows, unsigned long cols, float eps) {
+    if (bufX.handle == (void*)0 || weightBuf.handle == (void*)0) return 0;
     if (!__mps_batch_active) return 0;
     unsafe {
         if (__mps_rmsnorm_bf16_pipeline == (void*)0) {
@@ -3253,8 +3341,8 @@ int mps_rmsnorm_bf16_chained(&void bufX, &void weightBuf, &unsigned short out,
         MMsgVoid1 msgVoid1 = (MMsgVoid1)objc_msgSend;
         msgVoid1(__mps_batch_encoder, __sel_setComputePipelineState, __mps_rmsnorm_bf16_pipeline);
         MMsgSetBuffer setBufFn = (MMsgSetBuffer)objc_msgSend;
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufX, 0UL, 0UL);
-        setBufFn(__mps_batch_encoder, __sel_setBuffer, weightBuf, 0UL, 1UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, bufX.handle, 0UL, 0UL);
+        setBufFn(__mps_batch_encoder, __sel_setBuffer, weightBuf.handle, 0UL, 1UL);
         setBufFn(__mps_batch_encoder, __sel_setBuffer, bufOut, 0UL, 2UL);
         MMsgSetBuffer setBytesFn = (MMsgSetBuffer)objc_msgSend;
         unsigned int colsVal = (unsigned int)cols;
@@ -3273,6 +3361,7 @@ int mps_rmsnorm_bf16_chained(&void bufX, &void weightBuf, &unsigned short out,
             __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
             __mps_pending_cpuOut[__mps_pending_count] = (void*)out;
             __mps_pending_bytes[__mps_pending_count] = bytes;
+            __mps_pending_dtype[__mps_pending_count] = MPS_BF16;
             __mps_pending_count = __mps_pending_count + 1UL;
         }
         return 1;
@@ -3317,13 +3406,15 @@ static int __mps_sgd_chained(const char* kernelName, void** pipelineSlot,
 }
 
 static void* __mps_sgd_update_f16_pipeline = (void*)0;
-int mps_sgd_update_f16_chained(&void bufW, &void bufGrad, float lr, unsigned long n) {
-    return __mps_sgd_chained("sgd_update_kernel_f16", &__mps_sgd_update_f16_pipeline, bufW, bufGrad, lr, n);
+int mps_sgd_update_f16_chained(struct MpsBuf bufW, struct MpsBuf bufGrad, float lr, unsigned long n) {
+    if (bufW.handle == (void*)0 || bufGrad.handle == (void*)0) return 0;
+    return __mps_sgd_chained("sgd_update_kernel_f16", &__mps_sgd_update_f16_pipeline, bufW.handle, bufGrad.handle, lr, n);
 }
 
 static void* __mps_sgd_update_bf16_pipeline = (void*)0;
-int mps_sgd_update_bf16_chained(&void bufW, &void bufGrad, float lr, unsigned long n) {
-    return __mps_sgd_chained("sgd_update_kernel_bf16", &__mps_sgd_update_bf16_pipeline, bufW, bufGrad, lr, n);
+int mps_sgd_update_bf16_chained(struct MpsBuf bufW, struct MpsBuf bufGrad, float lr, unsigned long n) {
+    if (bufW.handle == (void*)0 || bufGrad.handle == (void*)0) return 0;
+    return __mps_sgd_chained("sgd_update_kernel_bf16", &__mps_sgd_update_bf16_pipeline, bufW.handle, bufGrad.handle, lr, n);
 }
 
 // ── Batched multi-head attention (bf16) ─────────────────────────────────────
@@ -3387,11 +3478,12 @@ static void __mps_set_uints(void* encoder, unsigned int* params, unsigned long c
 
 // Registers 'bufOut' as a chained op's pending readback into 'out' -- the
 // same bookkeeping every *_chained op above does inline.
-static void __mps_pending_add(void* bufOut, void* out, unsigned long bytes) {
+static void __mps_pending_add(void* bufOut, void* out, unsigned long bytes, int dtype) {
     if (__mps_pending_count < (unsigned long)MPS_BATCH_MAX_PENDING) {
         __mps_pending_gpuBuf[__mps_pending_count] = bufOut;
         __mps_pending_cpuOut[__mps_pending_count] = out;
         __mps_pending_bytes[__mps_pending_count] = bytes;
+        __mps_pending_dtype[__mps_pending_count] = dtype;
         __mps_pending_count = __mps_pending_count + 1UL;
     }
 }
@@ -3491,22 +3583,23 @@ int mps_attn_batch_bf16(const &unsigned short q, const &unsigned short kAll, con
 
 // Chained variant -- see gpu_mps.h's comment. Encodes onto the shared batch
 // encoder and registers 'out' as the pending readback target like every
-// other *_chained op, leaving the result as mps_batch_last_output_buffer().
-int mps_attn_batch_bf16_chained(&void bufQ, &void bufK, &void bufV, &void bufCacheLens,
+// other *_chained op, leaving the result as MpsBuf::batch_last_output().
+int mps_attn_batch_bf16_chained(struct MpsBuf bufQ, struct MpsBuf bufK, struct MpsBuf bufV, struct MpsBuf bufCacheLens,
                                   &unsigned short out,
                                   unsigned long batchSize, unsigned long numHeads, unsigned long numKvHeads,
                                   unsigned long headDim, unsigned long maxKvLen,
                                   int isSliding, unsigned long slidingWindow) {
+    if (bufQ.handle == (void*)0 || bufK.handle == (void*)0 || bufV.handle == (void*)0 || bufCacheLens.handle == (void*)0) return 0;
     if (!__mps_batch_active) return 0;
     if (!__mps_attn_shape_ok(numHeads, numKvHeads, headDim)) return 0;
     unsafe {
         unsigned long outBytes = batchSize * numHeads * headDim * 2UL;
         void* bufOut = __mps_buf_get_batched(outBytes);
         if (bufOut == (void*)0) return 0;
-        if (!__mps_attn_batch_encode(__mps_batch_encoder, bufQ, bufK, bufV, bufCacheLens, bufOut,
+        if (!__mps_attn_batch_encode(__mps_batch_encoder, bufQ.handle, bufK.handle, bufV.handle, bufCacheLens.handle, bufOut,
                                      batchSize, numHeads, numKvHeads, headDim, maxKvLen,
                                      isSliding, slidingWindow)) return 0;
-        __mps_pending_add(bufOut, (void*)out, outBytes);
+        __mps_pending_add(bufOut, (void*)out, outBytes, MPS_BF16);
         return 1;
     }
 }
@@ -3844,18 +3937,20 @@ static int __mps_attn_run(int lin, void* bufQ, void* bufK, void* bufV, void* buf
     return ok;
 }
 
-int mps_flash_attention_ex(&void q, &void k, &void v, &void out, struct MpsAttnShape s, int dtype,
+int mps_flash_attention_ex(struct MpsBuf q, struct MpsBuf k, struct MpsBuf v, struct MpsBuf out, struct MpsAttnShape s, int dtype,
                            float scale, int causal) {
+    if (q.handle == (void*)0 || k.handle == (void*)0 || v.handle == (void*)0 || out.handle == (void*)0) return 0;
     if (!__mps_attn_check(s, dtype, causal)) return 0;
     struct MpsAttnParams p = __mps_attn_params_head_major(s, causal);
     p.scale = scale;
-    unsafe { return __mps_attn_run(0, (void*)q, (void*)k, (void*)v, (void*)out, s, dtype, p); }
+    unsafe { return __mps_attn_run(0, q.handle, k.handle, v.handle, out.handle, s, dtype, p); }
 }
 
-int mps_linear_attention_ex(&void q, &void k, &void v, &void out, struct MpsAttnShape s, int dtype, int causal) {
+int mps_linear_attention_ex(struct MpsBuf q, struct MpsBuf k, struct MpsBuf v, struct MpsBuf out, struct MpsAttnShape s, int dtype, int causal) {
+    if (q.handle == (void*)0 || k.handle == (void*)0 || v.handle == (void*)0 || out.handle == (void*)0) return 0;
     if (s.window != 0UL || !__mps_attn_check(s, dtype, causal)) return 0;
     struct MpsAttnParams p = __mps_attn_params_head_major(s, causal);
-    unsafe { return __mps_attn_run(1, (void*)q, (void*)k, (void*)v, (void*)out, s, dtype, p); }
+    unsafe { return __mps_attn_run(1, q.handle, k.handle, v.handle, out.handle, s, dtype, p); }
 }
 
 static struct MpsAttnShape __mps_attn_shape_flat(unsigned long heads, unsigned long seqLen, unsigned long kvLen,
@@ -3866,12 +3961,12 @@ static struct MpsAttnShape __mps_attn_shape_flat(unsigned long heads, unsigned l
     return s;
 }
 
-int mps_flash_attention(&void q, &void k, &void v, &void out, unsigned long heads, unsigned long seqLen,
+int mps_flash_attention(struct MpsBuf q, struct MpsBuf k, struct MpsBuf v, struct MpsBuf out, unsigned long heads, unsigned long seqLen,
                         unsigned long kvLen, unsigned long headDim, float scale, int causal) {
     return mps_flash_attention_ex(q, k, v, out, __mps_attn_shape_flat(heads, seqLen, kvLen, headDim), 0, scale, causal);
 }
 
-int mps_linear_attention(&void q, &void k, &void v, &void out, unsigned long heads, unsigned long seqLen,
+int mps_linear_attention(struct MpsBuf q, struct MpsBuf k, struct MpsBuf v, struct MpsBuf out, unsigned long heads, unsigned long seqLen,
                          unsigned long kvLen, unsigned long headDim, int causal) {
     return mps_linear_attention_ex(q, k, v, out, __mps_attn_shape_flat(heads, seqLen, kvLen, headDim), 0, causal);
 }
@@ -3902,7 +3997,7 @@ static int __mps_attn_host_f32(int lin, const &float q, const &float k, const &f
             ok = lin ? __mps_linear_encode(__mps_batch_encoder, bufQ, bufK, bufV, bufOut, (void*)0, s, 0, p)
                      : __mps_flash_encode(__mps_batch_encoder, bufQ, bufK, bufV, bufOut, s, 0, p);
         }
-        if (ok) { __mps_pending_add(bufOut, (void*)out, qBytes); }
+        if (ok) { __mps_pending_add(bufOut, (void*)out, qBytes, 0); }
         if (ownBatch) { mps_batch_end(); }
         return ok;
     }
@@ -3930,10 +4025,11 @@ static struct MpsAttnShape __mps_attn_shape_tm(unsigned long seqLen, unsigned lo
     return s;
 }
 
-int mps_flash_attn_bf16_chained(&void bufQ, &void bufK, &void bufV, &unsigned short out,
+int mps_flash_attn_bf16_chained(struct MpsBuf bufQ, struct MpsBuf bufK, struct MpsBuf bufV, &unsigned short out,
                                   unsigned long seqLen, unsigned long kvLen,
                                   unsigned long numHeads, unsigned long numKvHeads, unsigned long headDim,
                                   float scale, int causal, int isSliding, unsigned long slidingWindow) {
+    if (bufQ.handle == (void*)0 || bufK.handle == (void*)0 || bufV.handle == (void*)0) return 0;
     if (!__mps_batch_active) return 0;
     struct MpsAttnShape s = __mps_attn_shape_tm(seqLen, kvLen, numHeads, numKvHeads, headDim,
                                                 isSliding ? slidingWindow : 0UL);
@@ -3944,8 +4040,8 @@ int mps_flash_attn_bf16_chained(&void bufQ, &void bufK, &void bufV, &unsigned sh
         unsigned long outBytes = seqLen * numHeads * headDim * 2UL;
         void* bufOut = __mps_buf_get_batched(outBytes);
         if (bufOut == (void*)0) return 0;
-        if (!__mps_flash_encode(__mps_batch_encoder, bufQ, bufK, bufV, bufOut, s, MPS_BF16, p)) return 0;
-        __mps_pending_add(bufOut, (void*)out, outBytes);
+        if (!__mps_flash_encode(__mps_batch_encoder, bufQ.handle, bufK.handle, bufV.handle, bufOut, s, MPS_BF16, p)) return 0;
+        __mps_pending_add(bufOut, (void*)out, outBytes, MPS_BF16);
         return 1;
     }
 }
@@ -3970,8 +4066,11 @@ int mps_flash_attn_bf16(const &unsigned short q, const &unsigned short k, const 
         void* bufK = __mps_buf_get_with_bytes_batched((const void*)k, kvBytes);
         void* bufV = __mps_buf_get_with_bytes_batched((const void*)v, kvBytes);
         int ok = bufQ != (void*)0 && bufK != (void*)0 && bufV != (void*)0 &&
-                 mps_flash_attn_bf16_chained(bufQ, bufK, bufV, out, seqLen, kvLen, numHeads, numKvHeads,
-                                             headDim, scale, causal, isSliding, slidingWindow);
+                 mps_flash_attn_bf16_chained(__mps_buf_make(bufQ, qBytes, MPS_BF16),
+                                             __mps_buf_make(bufK, kvBytes, MPS_BF16),
+                                             __mps_buf_make(bufV, kvBytes, MPS_BF16), out, seqLen, kvLen,
+                                             numHeads, numKvHeads, headDim, scale, causal, isSliding,
+                                             slidingWindow);
         if (ownBatch) { mps_batch_end(); }
         return ok;
     }
@@ -3982,17 +4081,17 @@ unsigned long mps_linear_attn_state_bytes(unsigned long numHeads, unsigned long 
     return numHeads * (headDim * headDim + headDim) * 4UL;
 }
 
-?&void mps_linear_attn_state_new(unsigned long numHeads, unsigned long headDim) {
+struct MpsBuf MpsBuf::linear_attn_state(unsigned long numHeads, unsigned long headDim) {
     unsafe {
-        if (!__mps_ensure_device_queue()) return (void*)0;
+        if (!__mps_ensure_device_queue()) return __mps_buf_make((void*)0, 0UL, 0);
         unsigned long bytes = mps_linear_attn_state_bytes(numHeads, headDim);
         void* buf = __mps_buf_get(bytes);
-        if (buf == (void*)0) return (void*)0;
+        if (buf == (void*)0) return __mps_buf_make((void*)0, 0UL, 0);
         MMsg0 msg0 = (MMsg0)objc_msgSend;
         void* ptr = msg0(buf, __sel_contents);
-        if (ptr == (void*)0) { __mps_buf_put(buf, bytes); return (void*)0; }
+        if (ptr == (void*)0) { __mps_buf_put(buf, bytes); return __mps_buf_make((void*)0, 0UL, 0); }
         memset(ptr, 0, bytes);
-        return buf;
+        return __mps_buf_make(buf, bytes, 0);
     }
 }
 
@@ -4010,17 +4109,18 @@ static int __mps_linear_tm_encode(void* bufQ, void* bufK, void* bufV, void* bufS
         void* bufOut = __mps_buf_get_batched(outBytes);
         if (bufOut == (void*)0) return 0;
         if (!__mps_linear_encode(__mps_batch_encoder, bufQ, bufK, bufV, bufOut, bufState, s, MPS_BF16, p)) return 0;
-        __mps_pending_add(bufOut, out, outBytes);
+        __mps_pending_add(bufOut, out, outBytes, MPS_BF16);
         return 1;
     }
 }
 
-int mps_linear_attn_bf16_chained(&void bufQ, &void bufK, &void bufV, &void bufState, &unsigned short out,
+int mps_linear_attn_bf16_chained(struct MpsBuf bufQ, struct MpsBuf bufK, struct MpsBuf bufV, struct MpsBuf bufState, &unsigned short out,
                                    unsigned long seqLen,
                                    unsigned long numHeads, unsigned long numKvHeads, unsigned long headDim) {
+    if (bufQ.handle == (void*)0 || bufK.handle == (void*)0 || bufV.handle == (void*)0 || bufState.handle == (void*)0) return 0;
     if (!__mps_batch_active) return 0;
     unsafe {
-        return __mps_linear_tm_encode(bufQ, bufK, bufV, bufState, (void*)out,
+        return __mps_linear_tm_encode(bufQ.handle, bufK.handle, bufV.handle, bufState.handle, (void*)out,
                                       seqLen, seqLen, numHeads, numKvHeads, headDim, 1);
     }
 }

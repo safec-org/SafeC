@@ -131,6 +131,59 @@ int mps_relu_backward_f32(const &float a, const &float selfGrad, &float out, uns
 // attempt an mps_* call first just to find out.
 int mps_available();
 
+// ── Device buffers ────────────────────────────────────────────────────────────
+// Element types of a buffer (MpsBuf.dtype) and of the attention ops' dtype
+// argument: 0 = fp32, or raw 16-bit values.
+#define MPS_FP16 1   // same values as gpu_cuda.h's CUDA_FP16 / CUDA_BF16
+#define MPS_BF16 2
+
+// A Metal buffer the GPU ops below read and write directly -- the MPS twin
+// of gpu_rocm.h's RocmBuf / RocmHalfBuf. 'handle' is the MTLBuffer (CPU/GPU
+// shared memory, never dereferenced by callers) and null for an invalid
+// (failed or freed) buffer; every op returns 0 for one. 'bytes' is the size
+// it was created with -- what free() returns to the buffer pool and the
+// most read() copies. 'dtype' is its element type: 0 = fp32, MPS_FP16 or
+// MPS_BF16 (informational: ops don't check it, so a buffer can hold any
+// 4- or 2-byte data, e.g. a uint32 length table uploaded through upload()).
+//
+// Persistent buffers (alloc / upload* / linear_attn_state) are owned by the
+// caller: upload once, then pass the same buffer to as many dispatches and
+// batches as you like, instead of re-uploading a CPU array on every call.
+// Construct only while no batch that might still be reading a freed buffer
+// is in flight (constructors reuse pool slots); free() exactly once, after
+// every batch reading it has ended. All constructors return an invalid
+// buffer without a Metal device.
+struct MpsBuf {
+    void*         handle;
+    unsigned long bytes;
+    int           dtype;
+
+    int  valid() const;   // handle != null
+    void free();          // back to the buffer pool; handle := null
+    // Copies the first 'bytes' (<= this.bytes) into 'dst'. Valid once every
+    // batch writing the buffer has ended (shared memory: no transfer). 1 = done.
+    int  read(&void dst, unsigned long bytes) const;
+
+    static struct MpsBuf alloc(unsigned long n, int dtype);       // n uninitialized elements
+    static struct MpsBuf upload(const &float host, unsigned long n);          // n fp32 values
+    // n fp32 values rounded on the CPU (float16.h's f32_to_fp16_bulk /
+    // f32_to_bf16_bulk) and stored as fp16 / bf16.
+    static struct MpsBuf upload_f16(const &float host, unsigned long n);
+    static struct MpsBuf upload_bf16(const &float host, unsigned long n);
+    // n raw fp16 or bf16 values (dtype MPS_FP16 / MPS_BF16), copied as is.
+    static struct MpsBuf upload_bits(const &unsigned short bits, unsigned long n, int dtype);
+    // A zeroed recurrent linear-attention state (mps_linear_attn_bf16_chained):
+    // mps_linear_attn_state_bytes(numHeads, headDim) bytes of fp32.
+    static struct MpsBuf linear_attn_state(unsigned long numHeads, unsigned long headDim);
+    // The output of the op most recently encoded into the open batch (its
+    // bytes and dtype), invalid if no batch is active or nothing has been
+    // encoded yet. Call right after a batched op returns to chain its
+    // still-pending result into a following op without waiting for
+    // mps_batch_end(). The batch owns it: don't free() it; it returns to the
+    // pool when the batch ends.
+    static struct MpsBuf batch_last_output();
+};
+
 // ── Batched dispatch ──────────────────────────────────────────────────────────
 // Every mps_*_f32 call above independently creates its own command
 // buffer, dispatches, and blocks on waitUntilCompleted before returning
@@ -173,8 +226,9 @@ int mps_available();
 // caught by inspection: a naive matmul -> relu chain like this computed
 // 0 instead of the real value). Use mps_matmul_f32_chained/
 // mps_relu_f32_chained (below) instead for that case — they take the
-// *GPU buffer* a previous batched op already wrote to directly, skipping
-// the CPU round trip entirely rather than reading stale CPU data.
+// device buffer a previous batched op already wrote to
+// (MpsBuf::batch_last_output()) directly, skipping the CPU round trip
+// entirely rather than reading stale CPU data.
 void mps_batch_begin();
 void mps_batch_end();
 int  mps_batch_is_active();
@@ -196,27 +250,19 @@ void mps_batch_register_finalize(fn void(?&T) finalizeFn, ?&T ctx) {
     unsafe { mps_batch_register_finalize_raw_((MpsFinalizeFn)finalizeFn, (void*)ctx); }
 }
 
-// The GPU buffer handle mps_matmul_f32/mps_relu_f32 most recently wrote
-// their (still-pending) output to, while a batch is active — NULL if no
-// batch is active or nothing's been dispatched into this batch yet. Call
-// right after a batched op returns to capture its output buffer for
-// chaining into the *_chained entry points below, instead of waiting for
-// mps_batch_end() and reading CPU floats.
-?&void mps_batch_last_output_buffer();
-
 // Same computation as mps_matmul_f32/mps_relu_f32, but the primary input
-// ('bufA') is a GPU buffer handle — typically mps_batch_last_output_
-// buffer()'s return from a previous batched op in the same still-open
-// batch — instead of a CPU float array, so no CPU<->GPU round trip
-// happens for that input at all. Only usable while a batch is active
+// ('bufA') is a device buffer — typically MpsBuf::batch_last_output()'s
+// return from a previous batched op in the same still-open batch —
+// instead of a CPU float array, so no CPU<->GPU round trip happens for
+// that input at all. Only usable while a batch is active
 // (mps_batch_is_active()); the secondary input 'b' (matmul's second
 // operand) is still an ordinary CPU float array here — see
 // mps_matmul_f32_persistent below for the case where BOTH operands are
-// already device buffers (e.g. a weight matrix uploaded once via
-// mps_upload_persistent instead of fresh every call).
-int mps_matmul_f32_chained(&void bufA, const &float b, &float out,
+// already device buffers (e.g. a weight matrix uploaded once with
+// MpsBuf::upload instead of fresh every call).
+int mps_matmul_f32_chained(struct MpsBuf bufA, const &float b, &float out,
                             unsigned long M, unsigned long K, unsigned long N);
-int mps_relu_f32_chained(&void bufA, &float out, unsigned long n);
+int mps_relu_f32_chained(struct MpsBuf bufA, &float out, unsigned long n);
 
 // out[M,N] = bufA[M,K] . bufB[K,N] -- like mps_matmul_f32_chained, but
 // 'bufB' is ALSO a pre-existing device buffer instead of a plain CPU
@@ -225,40 +271,21 @@ int mps_relu_f32_chained(&void bufA, &float out, unsigned long n);
 // hundreds of times), mps_matmul_f32_chained would re-upload (memcpy)
 // that weight matrix from CPU on every single call even though it never
 // changes — this skips that entirely for both operands.
-int mps_matmul_f32_persistent(&void bufA, &void bufB, &float out,
+int mps_matmul_f32_persistent(struct MpsBuf bufA, struct MpsBuf bufB, &float out,
                                unsigned long M, unsigned long K, unsigned long N);
-
-// Uploads 'data' to a device buffer ONCE; the caller keeps the returned
-// handle and reuses it directly (as an argument to mps_matmul_f32_
-// persistent/_chained above) across as many dispatches and batches as it
-// wants, instead of re-uploading fresh every call. Safe to call whether
-// or not a batch is open, but only once no GPU work that might still be
-// reading the reused pool slot's previous contents is in flight (i.e.
-// after any earlier batch's mps_batch_end() has already returned). The
-// caller owns the returned buffer's lifetime and must release it with
-// mps_release_persistent below exactly once, when truly done with it.
-?&void mps_upload_persistent(const &float data, unsigned long bytes);
-void  mps_release_persistent(&void buf, unsigned long bytes);
-
-// An uninitialized persistent buffer of 'bytes' (e.g. an attention output),
-// released the same way. NULL without a Metal device.
-?&void mps_alloc_persistent(unsigned long bytes);
-// Copies 'bytes' of a persistent buffer into 'dst' -- valid once every
-// batch writing it has ended (buffers are CPU/GPU shared memory). 1 = done.
-int    mps_read_persistent(&void buf, &void dst, unsigned long bytes);
 
 // out[i] = bufA[i] - b[i] -- same chaining shape as mps_matmul_f32_chained/
 // mps_relu_f32_chained above, used by tensor_sub_gpu for the loss
 // computation's diff = pred - target (pred, e.g. a matmul's output, is
 // still GPU-pending; target is an ordinary already-populated Tensor).
-int mps_sub_f32_chained(&void bufA, const &float b, &float out, unsigned long n);
+int mps_sub_f32_chained(struct MpsBuf bufA, const &float b, &float out, unsigned long n);
 
 // out[i] = bufA[i] * b[i] -- generic chained elementwise multiply (one
 // pending GPU input, one plain CPU array), used by Tensor::square_gpu's
 // backward: 2*diff (still GPU-pending from the forward pass) times the
 // incoming gradient (an ordinary CPU array -- see __sum_backward, which
 // writes it eagerly with no GPU involvement at all).
-int mps_mul_f32_chained(&void bufA, const &float b, &float out, unsigned long n);
+int mps_mul_f32_chained(struct MpsBuf bufA, const &float b, &float out, unsigned long n);
 
 // out[i] = buf[i] * buf[i] -- self-multiply of a single still-pending GPU
 // buffer (both mul_kernel operand slots bound to the same buffer; reading
@@ -267,18 +294,18 @@ int mps_mul_f32_chained(&void bufA, const &float b, &float out, unsigned long n)
 // sq = diff * diff, where 'diff' is itself still GPU-pending -- the
 // generic mps_mul_f32_chained above can't express this shape since its
 // second operand has to already be a plain CPU array.
-int mps_square_f32_chained(&void buf, &float out, unsigned long n);
+int mps_square_f32_chained(struct MpsBuf buf, &float out, unsigned long n);
 
 // out[0] = sum(bufA[0..n)) -- chained version of mps_sum_f32 above, input
 // already a still-pending GPU buffer. Same deferred-partial-sum-combine
 // finalize as the non-chained batched path.
-int mps_sum_f32_chained(&void bufA, &float out, unsigned long n);
+int mps_sum_f32_chained(struct MpsBuf bufA, &float out, unsigned long n);
 
 // out[i] = buf[i] * k -- chained version of mps_scale_f32, input already a
 // still-pending GPU buffer. Used by tensor_sub_gpu's backward for
 // dTarget = -1 * (incoming gradient), when that incoming gradient is
 // itself still GPU-pending.
-int mps_scale_f32_chained(&void buf, float k, &float out, unsigned long n);
+int mps_scale_f32_chained(struct MpsBuf buf, float k, &float out, unsigned long n);
 
 // Fused gated-activation (GeGLU/tanh-GELU) step: 'bufRaw' is a still-
 // pending GPU buffer holding one row-major [rows, 2*intermediateSize]
@@ -290,12 +317,12 @@ int mps_scale_f32_chained(&void buf, float k, &float out, unsigned long n);
 // gpu_mps_kernels.metal's gated_gelu_kernel. 'out' has rows*
 // intermediateSize elements, same throwaway-CPU-scratch-until-batch-end
 // contract as every other *_chained function here.
-int mps_gated_gelu_f32_chained(&void bufRaw, &float out, unsigned long rows, unsigned long intermediateSize);
+int mps_gated_gelu_f32_chained(struct MpsBuf bufRaw, &float out, unsigned long rows, unsigned long intermediateSize);
 
 // bf16 counterpart of mps_gated_gelu_f32_chained above -- 'bufRaw'/'out'
 // are raw bf16 bits, same fused GeGLU step. Lets a whole bf16
 // matmul -> gated-GELU -> matmul FFN run as one GPU round trip.
-int mps_gated_gelu_bf16_chained(&void bufRaw, &unsigned short out, unsigned long rows, unsigned long intermediateSize);
+int mps_gated_gelu_bf16_chained(struct MpsBuf bufRaw, &unsigned short out, unsigned long rows, unsigned long intermediateSize);
 
 // ── Backward chained variants ─────────────────────────────────────────────────
 // Same idea as mps_matmul_f32_chained/mps_relu_f32_chained above, for the
@@ -315,17 +342,17 @@ int mps_gated_gelu_bf16_chained(&void bufRaw, &unsigned short out, unsigned long
 //   mps_relu_backward_f32_chained: 'bufSelfGrad' replaces 'selfGrad' --
 //     this library's own MLP needs this one too, for dH_pre = relu'(H) *
 //     dH where dH is matmul2-backward's pending dA output.
-int mps_matmul_abt_f32_chained(&void bufDC, const &float b, &float out,
+int mps_matmul_abt_f32_chained(struct MpsBuf bufDC, const &float b, &float out,
                                 unsigned long M, unsigned long N, unsigned long K);
-int mps_matmul_atb_f32_chained(const &float a, &void bufDC, &float out,
+int mps_matmul_atb_f32_chained(const &float a, struct MpsBuf bufDC, &float out,
                                 unsigned long M, unsigned long K, unsigned long N);
-int mps_relu_backward_f32_chained(const &float a, &void bufSelfGrad, &float out, unsigned long n);
+int mps_relu_backward_f32_chained(const &float a, struct MpsBuf bufSelfGrad, &float out, unsigned long n);
 
 // Same as mps_relu_backward_f32_chained, but 'a' is ALSO a still-pending
 // GPU buffer -- needed when relu's own input is itself an activation
 // computed earlier in the SAME still-open batch (the fused
 // forward+loss+backward training step). See gpu_mps.sc's comment.
-int mps_relu_backward_f32_chained_ab(&void bufA, &void bufSelfGrad, &float out, unsigned long n);
+int mps_relu_backward_f32_chained_ab(struct MpsBuf bufA, struct MpsBuf bufSelfGrad, &float out, unsigned long n);
 
 // Same as mps_matmul_atb_f32_chained, but 'a' is ALSO a still-pending GPU
 // buffer (not a plain CPU array) -- needed when the matmul's first operand
@@ -333,25 +360,25 @@ int mps_relu_backward_f32_chained_ab(&void bufA, &void bufSelfGrad, &float out, 
 // (e.g. dW2 = H^T . dY in the fused forward+loss+backward training step,
 // where H hasn't been read back to CPU yet either). See gpu_mps.sc's
 // comment on the implementation.
-int mps_matmul_atb_f32_chained_ab(&void bufA, &void bufDC, &float out,
+int mps_matmul_atb_f32_chained_ab(struct MpsBuf bufA, struct MpsBuf bufDC, &float out,
                                    unsigned long M, unsigned long K, unsigned long N);
 
 // Same as mps_matmul_abt_f32_chained, but 'b' is ALSO a pre-existing
-// device buffer (typically mps_upload_persistent, e.g. a weight matrix
+// device buffer (typically MpsBuf::upload, e.g. a weight matrix
 // that stays GPU-resident across a whole training run) instead of a
 // plain CPU array. Needed for dH = dY . W2^T when W2 is never read back
 // to a CPU array between steps (see mps_sgd_update_f32_chained below).
-int mps_matmul_abt_f32_persistent(&void bufDC, &void bufB, &float out,
+int mps_matmul_abt_f32_persistent(struct MpsBuf bufDC, struct MpsBuf bufB, &float out,
                                    unsigned long M, unsigned long N, unsigned long K);
 
 // In-place SGD step against a persistent device buffer: w[i] -= lr*
 // grad[i]. Both 'bufW' and 'bufGrad' are already device buffers (bufW
-// typically from mps_upload_persistent, bufGrad typically another op's
+// typically from MpsBuf::upload, bufGrad typically another op's
 // still-pending output from the same batch's backward pass) -- no 'out'
 // parameter, since the whole point is that the updated weight never
 // leaves the GPU. See gpu_mps.sc's comment and gpu_mps_kernels.metal's
 // sgd_update_kernel.
-int mps_sgd_update_f32_chained(&void bufW, &void bufGrad, float lr, unsigned long n);
+int mps_sgd_update_f32_chained(struct MpsBuf bufW, struct MpsBuf bufGrad, float lr, unsigned long n);
 
 // ── fp16 / bf16 tier ─────────────────────────────────────────────────────
 // Real half/bfloat compute on the GPU, not just storage: gpu_mps_kernels.metal's
@@ -388,7 +415,7 @@ int mps_relu_f16(const &float a, &float out, unsigned long n);
 int mps_relu_bf16(const &float a, &float out, unsigned long n);
 
 // ── fp16 / bf16 persistent-buffer / batched tier ────────────────────────
-// Mirrors mps_upload_persistent/mps_matmul_f32_persistent/mps_relu_f32_
+// Mirrors MpsBuf::upload/mps_matmul_f32_persistent/mps_relu_f32_
 // chained/mps_sub_f32_chained/mps_scale_f32_chained/mps_matmul_atb_f32_
 // chained_ab/mps_matmul_abt_f32_persistent/mps_relu_backward_f32_chained_
 // ab/mps_sgd_update_f32_chained's whole family, in fp16/bf16 — enough ops
@@ -409,86 +436,80 @@ int mps_relu_bf16(const &float a, &float out, unsigned long n);
 // converted back to float32 at all, only read once as raw bits into a
 // scratch array mps_batch_end() overwrites into, matching the float32
 // version's "throwaway CPU scratch, GPU buffer is what actually chains"
-// design. A caller converts host-side f32 data to fp16/bf16 bits with
-// float16.h's f32_to_fp16_bulk/f32_to_bf16_bulk before calling
-// mps_upload_f16_persistent/mps_upload_bf16_persistent, and converts
-// back with fp16_to_f32_bulk/bf16_to_f32_bulk only for values it
-// actually needs on the CPU (e.g. a loss scalar for monitoring).
+// design. A caller uploads host-side f32 data with MpsBuf::upload_f16/
+// upload_bf16 (rounded with float16.h's f32_to_fp16_bulk/f32_to_bf16_bulk
+// on the way up), or data already in 16-bit form with MpsBuf::upload_bits,
+// and converts back with fp16_to_f32_bulk/bf16_to_f32_bulk only for values
+// it actually needs on the CPU (e.g. a loss scalar for monitoring).
 //
 // Same naive (TILE_SIZE=16 tiled) kernel tier as mps_matmul_f16/
 // mps_matmul_bf16 above for every matmul-shaped op here -- no smma/
 // multi-simdgroup fast path (see that comment).
 
-?&void mps_upload_f16_persistent(const &float data, unsigned long n);
-?&void mps_upload_bf16_persistent(const &float data, unsigned long n);
-// Both release through mps_release_persistent(buf, n * 2UL) above --
-// storage is 2 bytes/element regardless of fp16 vs bf16, and
-// mps_release_persistent only ever needed the byte count, not the dtype.
-
 // out = bufA[M,K] . bufB[K,N] -- both operands already device buffers
-// (e.g. from mps_upload_f16_persistent). Must be called within an open
+// (e.g. from MpsBuf::upload_f16). Must be called within an open
 // batch (mps_batch_begin()); 'out' is throwaway scratch (raw fp16/bf16
 // bits, not valid until mps_batch_end()) -- read the real result via
-// mps_batch_last_output_buffer() and chain it into the next op, same
+// MpsBuf::batch_last_output() and chain it into the next op, same
 // pattern as mps_matmul_f32_persistent.
-int mps_matmul_f16_persistent(&void bufA, &void bufB, &unsigned short out,
+int mps_matmul_f16_persistent(struct MpsBuf bufA, struct MpsBuf bufB, &unsigned short out,
                                unsigned long M, unsigned long K, unsigned long N);
-int mps_matmul_bf16_persistent(&void bufA, &void bufB, &unsigned short out,
+int mps_matmul_bf16_persistent(struct MpsBuf bufA, struct MpsBuf bufB, &unsigned short out,
                                 unsigned long M, unsigned long K, unsigned long N);
 
-int mps_relu_f16_chained(&void bufA, &unsigned short out, unsigned long n);
-int mps_relu_bf16_chained(&void bufA, &unsigned short out, unsigned long n);
+int mps_relu_f16_chained(struct MpsBuf bufA, &unsigned short out, unsigned long n);
+int mps_relu_bf16_chained(struct MpsBuf bufA, &unsigned short out, unsigned long n);
 
 // out[i] = bufA[i] - bHalf[i]/bBf[i] -- 'bHalf'/'bBf' is a plain CPU
 // array of raw fp16/bf16 bits (e.g. a training target, pre-converted
 // once with f32_to_fp16_bulk/f32_to_bf16_bulk before the loop), uploaded
 // fresh each call, same shape as mps_sub_f32_chained.
-int mps_sub_f16_chained(&void bufA, const &unsigned short bHalf, &unsigned short out, unsigned long n);
-int mps_sub_bf16_chained(&void bufA, const &unsigned short bBf, &unsigned short out, unsigned long n);
+int mps_sub_f16_chained(struct MpsBuf bufA, const &unsigned short bHalf, &unsigned short out, unsigned long n);
+int mps_sub_bf16_chained(struct MpsBuf bufA, const &unsigned short bBf, &unsigned short out, unsigned long n);
 
 // out[i] = buf[i] * k -- 'k' is a plain float scalar (see gpu_mps_
 // kernels.metal's scale_kernel_f16/bf16 comment on why the scalar itself
 // stays float-precision).
-int mps_scale_f16_chained(&void buf, float k, &unsigned short out, unsigned long n);
-int mps_scale_bf16_chained(&void buf, float k, &unsigned short out, unsigned long n);
+int mps_scale_f16_chained(struct MpsBuf buf, float k, &unsigned short out, unsigned long n);
+int mps_scale_bf16_chained(struct MpsBuf buf, float k, &unsigned short out, unsigned long n);
 
 // out[i] = bufA[i] + bufB[i] with BOTH operands device buffers (pending
 // or persistent) -- unlike mps_sub_bf16_chained above, whose second
 // operand is a CPU array. For residual connections between chained ops.
-int mps_add_bf16_chained(&void bufA, &void bufB, &unsigned short out, unsigned long n);
+int mps_add_bf16_chained(struct MpsBuf bufA, struct MpsBuf bufB, &unsigned short out, unsigned long n);
 
 // out[i] = gelu(bufA[i]) * bufB[i] -- mps_gated_gelu_bf16_chained with the
 // gate and up operands in two separate device buffers.
-int mps_gelu_mul_bf16_chained(&void bufA, &void bufB, &unsigned short out, unsigned long n);
+int mps_gelu_mul_bf16_chained(struct MpsBuf bufA, struct MpsBuf bufB, &unsigned short out, unsigned long n);
 
 // Row-wise RMSNorm: out[row,c] = x[row,c] * weight[c] /
 // sqrt(mean(x[row,:]^2) + eps). 'bufX' is a pending or persistent device
 // buffer of [rows, cols] bf16; 'weightBuf' is the [cols] weight, typically
-// uploaded once via mps_upload_persistent and cached by the caller.
-int mps_rmsnorm_bf16_chained(&void bufX, &void weightBuf, &unsigned short out,
+// uploaded once via MpsBuf::upload and cached by the caller.
+int mps_rmsnorm_bf16_chained(struct MpsBuf bufX, struct MpsBuf weightBuf, &unsigned short out,
                               unsigned long rows, unsigned long cols, float eps);
 
 // dB[K,N] = A^T[K,M] . dC[M,N], A stored [M,K] -- both operands already
 // device buffers, same shape as mps_matmul_atb_f32_chained_ab.
-int mps_matmul_atb_f16_chained_ab(&void bufA, &void bufDC, &unsigned short out,
+int mps_matmul_atb_f16_chained_ab(struct MpsBuf bufA, struct MpsBuf bufDC, &unsigned short out,
                                    unsigned long M, unsigned long K, unsigned long N);
-int mps_matmul_atb_bf16_chained_ab(&void bufA, &void bufDC, &unsigned short out,
+int mps_matmul_atb_bf16_chained_ab(struct MpsBuf bufA, struct MpsBuf bufDC, &unsigned short out,
                                     unsigned long M, unsigned long K, unsigned long N);
 
 // dA[M,K] = dC[M,N] . B^T[N,K], B stored [K,N] -- same shape as
 // mps_matmul_abt_f32_persistent.
-int mps_matmul_abt_f16_persistent(&void bufDC, &void bufB, &unsigned short out,
+int mps_matmul_abt_f16_persistent(struct MpsBuf bufDC, struct MpsBuf bufB, &unsigned short out,
                                    unsigned long M, unsigned long N, unsigned long K);
-int mps_matmul_abt_bf16_persistent(&void bufDC, &void bufB, &unsigned short out,
+int mps_matmul_abt_bf16_persistent(struct MpsBuf bufDC, struct MpsBuf bufB, &unsigned short out,
                                     unsigned long M, unsigned long N, unsigned long K);
 
-int mps_relu_backward_f16_chained_ab(&void bufA, &void bufSelfGrad, &unsigned short out, unsigned long n);
-int mps_relu_backward_bf16_chained_ab(&void bufA, &void bufSelfGrad, &unsigned short out, unsigned long n);
+int mps_relu_backward_f16_chained_ab(struct MpsBuf bufA, struct MpsBuf bufSelfGrad, &unsigned short out, unsigned long n);
+int mps_relu_backward_bf16_chained_ab(struct MpsBuf bufA, struct MpsBuf bufSelfGrad, &unsigned short out, unsigned long n);
 
 // In-place SGD step against a persistent fp16/bf16 device buffer --
 // same shape as mps_sgd_update_f32_chained, weights never leave the GPU.
-int mps_sgd_update_f16_chained(&void bufW, &void bufGrad, float lr, unsigned long n);
-int mps_sgd_update_bf16_chained(&void bufW, &void bufGrad, float lr, unsigned long n);
+int mps_sgd_update_f16_chained(struct MpsBuf bufW, struct MpsBuf bufGrad, float lr, unsigned long n);
+int mps_sgd_update_bf16_chained(struct MpsBuf bufW, struct MpsBuf bufGrad, float lr, unsigned long n);
 
 // ── Batched multi-head attention (bf16) ─────────────────────────────────────
 // Scaled-dot-product attention for one new query token per sequence (a
@@ -518,14 +539,14 @@ int mps_attn_batch_bf16(const &unsigned short q, const &unsigned short kAll, con
                           int isSliding, unsigned long slidingWindow);
 
 // Chained variant of mps_attn_batch_bf16: 'bufQ'/'bufK'/'bufV'/
-// 'bufCacheLens' are device buffers (e.g. from mps_upload_persistent) and
+// 'bufCacheLens' are device buffers (e.g. from MpsBuf::upload) and
 // this MUST run inside an open batch (mps_batch_begin()). The output stays
-// a pending GPU buffer (mps_batch_last_output_buffer()) so it can feed a
+// a pending GPU buffer (MpsBuf::batch_last_output()) so it can feed a
 // following op -- e.g. o_proj via mps_matmul_abt_bf16_persistent -- in the
 // same commit+wait. 'out' is throwaway CPU scratch, same contract as every
 // other chained op. Same failure conditions as the one-shot variant, plus
 // returning 0 outside a batch.
-int mps_attn_batch_bf16_chained(&void bufQ, &void bufK, &void bufV, &void bufCacheLens,
+int mps_attn_batch_bf16_chained(struct MpsBuf bufQ, struct MpsBuf bufK, struct MpsBuf bufV, struct MpsBuf bufCacheLens,
                                   &unsigned short out,
                                   unsigned long batchSize, unsigned long numHeads, unsigned long numKvHeads,
                                   unsigned long headDim, unsigned long maxKvLen,
@@ -539,13 +560,13 @@ int mps_attn_batch_bf16_chained(&void bufQ, &void bufK, &void bufV, &void bufCac
 //    versions) take the same arguments as gpu_rocm.h's and
 //    gpu_cuda_attention.h's rocm_/cuda_ ops, so code moves between AMD,
 //    NVIDIA and Apple GPUs unchanged: fp32 device buffers (from
-//    mps_upload_persistent), q and out [heads][seqLen][headDim], k and v
+//    MpsBuf::upload), q and out [heads][seqLen][headDim], k and v
 //    [heads][kvLen][headDim] (fold a batch into heads).
 //  - The _ex versions take an MpsAttnShape (a batch, grouped-query K/V
 //    with kvHeads dividing heads -- query head h reads kv head
 //    h / (heads / kvHeads) -- and a sliding window) and a dtype: 0 = fp32,
 //    MPS_FP16, MPS_BF16 (raw 16-bit values, as from
-//    mps_upload_f16/bf16_persistent). Q and out are then
+//    MpsBuf::upload_f16/upload_bf16). Q and out are then
 //    [batch][heads][seqLen][headDim], K and V [batch][kvHeads][kvLen][headDim].
 // All buffers are row-major and contiguous.
 //
@@ -566,9 +587,6 @@ int mps_attn_batch_bf16_chained(&void bufQ, &void bufK, &void bufV, &void bufCac
 // device-buffer forms encode onto the open batch (results valid after
 // mps_batch_end()) or, outside one, run and wait. 1 = done/encoded, 0 = bad
 // shape or no Metal device -- callers fall back to a CPU path.
-#define MPS_FP16 1   // same values as gpu_cuda.h's CUDA_FP16 / CUDA_BF16
-#define MPS_BF16 2
-
 struct MpsAttnShape {
     unsigned long batch;
     unsigned long heads;      // query heads
@@ -581,13 +599,13 @@ struct MpsAttnShape {
 
 int mps_attention_head_dim_ok(unsigned long headDim);
 
-int mps_flash_attention(&void q, &void k, &void v, &void out, unsigned long heads, unsigned long seqLen,
+int mps_flash_attention(struct MpsBuf q, struct MpsBuf k, struct MpsBuf v, struct MpsBuf out, unsigned long heads, unsigned long seqLen,
                         unsigned long kvLen, unsigned long headDim, float scale, int causal);
-int mps_flash_attention_ex(&void q, &void k, &void v, &void out, struct MpsAttnShape s, int dtype,
+int mps_flash_attention_ex(struct MpsBuf q, struct MpsBuf k, struct MpsBuf v, struct MpsBuf out, struct MpsAttnShape s, int dtype,
                            float scale, int causal);
-int mps_linear_attention(&void q, &void k, &void v, &void out, unsigned long heads, unsigned long seqLen,
+int mps_linear_attention(struct MpsBuf q, struct MpsBuf k, struct MpsBuf v, struct MpsBuf out, unsigned long heads, unsigned long seqLen,
                          unsigned long kvLen, unsigned long headDim, int causal);
-int mps_linear_attention_ex(&void q, &void k, &void v, &void out, struct MpsAttnShape s, int dtype, int causal);
+int mps_linear_attention_ex(struct MpsBuf q, struct MpsBuf k, struct MpsBuf v, struct MpsBuf out, struct MpsAttnShape s, int dtype, int causal);
 
 // The two fp32 ops on host arrays (upload, compute, read back), with the
 // rocm_*_f32 arguments. Batch-aware like mps_sub_f32.
@@ -617,9 +635,9 @@ int mps_flash_attn_bf16(const &unsigned short q, const &unsigned short k, const 
 
 // Chained variant: 'bufQ'/'bufK'/'bufV' are device buffers (pending or
 // persistent), must run inside an open batch, and leaves its output as
-// mps_batch_last_output_buffer() -- 'out' is throwaway scratch, same
+// MpsBuf::batch_last_output() -- 'out' is throwaway scratch, same
 // contract as every other chained op.
-int mps_flash_attn_bf16_chained(&void bufQ, &void bufK, &void bufV, &unsigned short out,
+int mps_flash_attn_bf16_chained(struct MpsBuf bufQ, struct MpsBuf bufK, struct MpsBuf bufV, &unsigned short out,
                                   unsigned long seqLen, unsigned long kvLen,
                                   unsigned long numHeads, unsigned long numKvHeads, unsigned long headDim,
                                   float scale, int causal, int isSliding, unsigned long slidingWindow);
@@ -640,7 +658,7 @@ int mps_linear_attn_bf16(const &unsigned short q, const &unsigned short k, const
 // sequence already is. Must run inside an open batch; output as for
 // mps_flash_attn_bf16_chained. Calls on the same state must stay in
 // order, which a single batch (or batches ended in sequence) guarantees.
-int mps_linear_attn_bf16_chained(&void bufQ, &void bufK, &void bufV, &void bufState, &unsigned short out,
+int mps_linear_attn_bf16_chained(struct MpsBuf bufQ, struct MpsBuf bufK, struct MpsBuf bufV, struct MpsBuf bufState, &unsigned short out,
                                    unsigned long seqLen,
                                    unsigned long numHeads, unsigned long numKvHeads, unsigned long headDim);
 
@@ -648,8 +666,7 @@ int mps_linear_attn_bf16_chained(&void bufQ, &void bufK, &void bufV, &void bufSt
 // floats (per head, S^T as [headDim][headDim] then z).
 unsigned long mps_linear_attn_state_bytes(unsigned long numHeads, unsigned long headDim);
 
-// A zeroed state for a new sequence (NULL without a Metal device). Release
-// with mps_release_persistent(buf, mps_linear_attn_state_bytes(...)).
-?&void mps_linear_attn_state_new(unsigned long numHeads, unsigned long headDim);
+// A zeroed state for a new sequence: MpsBuf::linear_attn_state (free() it
+// when the sequence is done).
 
 } // namespace std

@@ -29,7 +29,7 @@
 //     overflowed. (bf16 shares float32's exponent range and doesn't need it.)
 //
 // GPU half-precision compute lives in gpu_mps.h / gpu_cuda.h /
-// gpu_webgpu.h (mps_upload_f16_persistent etc.); a HalfTensor's or
+// gpu_webgpu.h (MpsBuf::upload_bits / upload_f16 etc.); a HalfTensor's or
 // BF16Tensor's 'data' buffer is exactly the bit layout those functions read
 // and write.
 #include <std/ml/tensor.h>

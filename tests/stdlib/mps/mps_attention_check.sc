@@ -143,24 +143,20 @@ static struct MpsAttnShape windowed(struct MpsAttnShape s, unsigned long w) {
 }
 
 // A persistent buffer holding 'v' in 'dtype' (0 = fp32).
-static void* upload(&Vec<float> v, int dtype) {
-    unsafe {
-        if (dtype == MPS_FP16) return (void*)std::mps_upload_f16_persistent(v.at(0UL), v.length());
-        if (dtype == MPS_BF16) return (void*)std::mps_upload_bf16_persistent(v.at(0UL), v.length());
-        return (void*)std::mps_upload_persistent(v.at(0UL), v.length() * 4UL);
-    }
+static struct MpsBuf upload(&Vec<float> v, int dtype) {
+    if (dtype == MPS_FP16) return MpsBuf::upload_f16(v.at(0UL), v.length());
+    if (dtype == MPS_BF16) return MpsBuf::upload_bf16(v.at(0UL), v.length());
+    return MpsBuf::upload(v.at(0UL), v.length());
 }
 
-static unsigned long esize(int dtype) { return dtype == 0 ? 4UL : 2UL; }
-
 // Reads n values of 'dtype' from 'buf' into 'out' as floats.
-static int download(void* buf, &Vec<float> out, unsigned long n, int dtype) {
-    if (dtype == 0) { unsafe { return std::mps_read_persistent(buf, (void*)out.at(0UL), n * 4UL); } }
+static int download(struct MpsBuf buf, &Vec<float> out, unsigned long n, int dtype) {
+    if (dtype == 0) { unsafe { return buf.read((void*)out.at(0UL), n * 4UL); } }
     struct Vec<unsigned short> bits = std::Vec::with_cap(n);
     unsigned long i = 0UL;
     while (i < n) { bits.push((unsigned short)0); i = i + 1UL; }
     int ok = 0;
-    unsafe { ok = std::mps_read_persistent(buf, (void*)bits.at(0UL), n * 2UL); }
+    unsafe { ok = buf.read((void*)bits.at(0UL), n * 2UL); }
     i = 0UL;
     while (i < n) {
         unsigned short b = *bits.at(i);
@@ -184,25 +180,17 @@ static void run_case(const char* what, struct MpsAttnShape s, int dtype, int cau
     struct Vec<float> got = std::Vec::with_cap(qn);
     unsigned long i = 0UL;
     while (i < qn) { got.push(0.0f); i = i + 1UL; }
-    void* dq = upload(&q, dtype);
-    void* dk = upload(&k, dtype);
-    void* dv = upload(&v, dtype);
-    void* dout = (void*)0;
-    unsafe { dout = (void*)std::mps_alloc_persistent(qn * esize(dtype)); }
-    int ok = dq != (void*)0 && dk != (void*)0 && dv != (void*)0 && dout != (void*)0;
-    unsafe {
-        if (ok) {
-            ok = lin ? std::mps_linear_attention_ex(dq, dk, dv, dout, s, dtype, causal)
-                     : std::mps_flash_attention_ex(dq, dk, dv, dout, s, dtype, 0.0f, causal);
-        }
+    struct MpsBuf dq = upload(&q, dtype);
+    struct MpsBuf dk = upload(&k, dtype);
+    struct MpsBuf dv = upload(&v, dtype);
+    struct MpsBuf dout = MpsBuf::alloc(qn, dtype);
+    int ok = dq.valid() && dk.valid() && dv.valid() && dout.valid();
+    if (ok) {
+        ok = lin ? std::mps_linear_attention_ex(dq, dk, dv, dout, s, dtype, causal)
+                 : std::mps_flash_attention_ex(dq, dk, dv, dout, s, dtype, 0.0f, causal);
     }
     ok = ok && download(dout, &got, qn, dtype);
-    unsafe {
-        if (dq != (void*)0) std::mps_release_persistent(dq, qn * esize(dtype));
-        if (dk != (void*)0) std::mps_release_persistent(dk, kn * esize(dtype));
-        if (dv != (void*)0) std::mps_release_persistent(dv, kn * esize(dtype));
-        if (dout != (void*)0) std::mps_release_persistent(dout, qn * esize(dtype));
-    }
+    dq.free(); dk.free(); dv.free(); dout.free();
     check(ok, what);
     double e = relerr(&got, &want);
     check(ok && e <= tol, what);
@@ -254,11 +242,10 @@ int main() {
     struct Vec<float> q = data(qn, 4UL, (float)0.5, 0);
     struct Vec<float> k = data(kn, 5UL, (float)0.5, 0);
     struct Vec<float> v = data(kn, 6UL, (float)1.0, 0);
-    void* dq = upload(&q, 0);
-    void* dk = upload(&k, 0);
-    void* dv = upload(&v, 0);
-    void* dout = (void*)0;
-    unsafe { dout = (void*)std::mps_alloc_persistent(qn * 4UL); }
+    struct MpsBuf dq = upload(&q, 0);
+    struct MpsBuf dk = upload(&k, 0);
+    struct MpsBuf dv = upload(&v, 0);
+    struct MpsBuf dout = MpsBuf::alloc(qn, 0);
     struct Vec<float> got = std::Vec::with_cap(qn);
     struct Vec<float> cpu = std::Vec::with_cap(qn);
     unsigned long i = 0UL;
@@ -276,7 +263,7 @@ int main() {
         unsafe {
             ok = l ? std::mps_linear_attention(dq, dk, dv, dout, 1UL, 40UL, 56UL, 64UL, 0)
                    : std::mps_flash_attention(dq, dk, dv, dout, 1UL, 40UL, 56UL, 64UL, (float)0.0, 0);
-            ok = ok && std::mps_read_persistent(dout, (void*)got.at(0UL), qn * 4UL);
+            ok = ok && dout.read((void*)got.at(0UL), qn * 4UL);
         }
         double e = relerr(&got, &cpu);
         check(ok && e <= 1.0e-5, l ? "linear matches attention.h" : "flash matches attention.h");
@@ -302,8 +289,7 @@ int main() {
 
     // Both ops queued in one batch: results valid after mps_batch_end().
     struct MpsAttnShape one = shape(1UL, 1UL, 1UL, 40UL, 56UL, 64UL);
-    void* dout2 = (void*)0;
-    unsafe { dout2 = (void*)std::mps_alloc_persistent(qn * 4UL); }
+    struct MpsBuf dout2 = MpsBuf::alloc(qn, 0);
     std::mps_batch_begin();
     int okb = 0;
     unsafe {
@@ -313,10 +299,10 @@ int main() {
     std::mps_batch_end();
     check(okb, "batched attention encoded");
     struct Vec<float> want = ref_attn(&q, &k, &v, one, 1, 0);
-    unsafe { check(std::mps_read_persistent(dout, (void*)got.at(0UL), qn * 4UL) && relerr(&got, &want) <= 2.0e-5, "batched flash"); }
+    unsafe { check(dout.read((void*)got.at(0UL), qn * 4UL) && relerr(&got, &want) <= 2.0e-5, "batched flash"); }
     want.free();
     want = ref_attn(&q, &k, &v, one, 0, 1);
-    unsafe { check(std::mps_read_persistent(dout2, (void*)got.at(0UL), qn * 4UL) && relerr(&got, &want) <= 2.0e-5, "batched linear"); }
+    unsafe { check(dout2.read((void*)got.at(0UL), qn * 4UL) && relerr(&got, &want) <= 2.0e-5, "batched linear"); }
     want.free();
 
     // Rejected shapes
@@ -327,10 +313,8 @@ int main() {
         check(!std::mps_linear_attention(dq, dk, dv, dout, 1UL, 40UL, 20UL, 64UL, 1), "causal linear kvLen < seqLen rejected");
         check(!std::mps_linear_attention_ex(dq, dk, dv, dout, windowed(one, 8UL), 0, 0), "linear with window rejected");
         check(std::mps_attention_head_dim_ok(512UL) && !std::mps_attention_head_dim_ok(80UL), "head dim query");
-        std::mps_release_persistent(dq, qn * 4UL); std::mps_release_persistent(dk, kn * 4UL);
-        std::mps_release_persistent(dv, kn * 4UL); std::mps_release_persistent(dout, qn * 4UL);
-        std::mps_release_persistent(dout2, qn * 4UL);
     }
+    dq.free(); dk.free(); dv.free(); dout.free(); dout2.free();
     q.free(); k.free(); v.free(); got.free(); cpu.free();
     unsafe { printf("mps attention: %d checks, %d failures\n", g_checks, g_fails); }
     return g_fails == 0 ? 0 : 1;
