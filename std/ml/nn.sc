@@ -727,8 +727,8 @@ struct Optimizer optimizer_new(int kind, float lr) {
     o.lr = lr;
     o.momentum = (float)0.9;
     o.beta1 = (float)0.9;
-    o.beta2 = kind == OPT_RMSPROP ? (float)0.99 : (float)0.999;
-    o.eps = (float)0.00000001;
+    o.beta2 = kind == OPT_RMSPROP || kind == OPT_LION ? (float)0.99 : (float)0.999;
+    o.eps = kind == OPT_ADAGRAD ? (float)0.0000000001 : (float)0.00000001;
     o.weightDecay = kind == OPT_ADAMW ? (float)0.01 : (float)0.0;
     o.t = 0UL;
     return o;
@@ -813,6 +813,25 @@ void optimizer_step(&Optimizer o) {
                         float g = gr[j] + wd * w[j];
                         m[j] = mu * m[j] + g;
                         w[j] = w[j] - lr * (nest ? g + mu * m[j] : m[j]);
+                        j = j + 1UL;
+                    }
+                } else if (o.kind == OPT_ADAGRAD) {
+                    while (j < n) {
+                        float g = gr[j] + wd * w[j];
+                        v[j] = v[j] + g * g;
+                        w[j] = w[j] - lr * g / (sqrt_f(v[j]) + o.eps);
+                        j = j + 1UL;
+                    }
+                } else if (o.kind == OPT_LION) {
+                    // update = sign(b1 m + (1 - b1) g); m = b2 m + (1 - b2) g
+                    float b1 = o.beta1;
+                    float b2 = o.beta2;
+                    while (j < n) {
+                        float g = gr[j];
+                        float c = b1 * m[j] + ((float)1.0 - b1) * g;
+                        float sg = c > (float)0.0 ? (float)1.0 : (c < (float)0.0 ? (float)-1.0 : (float)0.0);
+                        w[j] = w[j] - lr * (sg + wd * w[j]);
+                        m[j] = b2 * m[j] + ((float)1.0 - b2) * g;
                         j = j + 1UL;
                     }
                 } else if (o.kind == OPT_RMSPROP) {
