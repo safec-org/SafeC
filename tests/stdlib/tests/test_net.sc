@@ -326,7 +326,7 @@ void t_drivers() {
     struct LoopDrv drv;
     drv.frames = 0;
     drv.bytes = 0UL;
-    struct NetIf nif = netif_new(&drv, loop_tx);
+    struct NetIf nif = NetIf::new(&drv, loop_tx);
     struct PacketBuf pkt;
     pkt.reset();
     pkt.len = 60UL;

@@ -68,7 +68,7 @@ static void sha1_compress_(unsigned int* h, const unsigned char* block) {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-inline struct Sha1Ctx sha1_init() {
+inline struct Sha1Ctx Sha1Ctx::new() {
     struct Sha1Ctx ctx;
     int i = 0;
     while (i < 5) { ctx.h[i] = sha1_H0_[i]; i = i + 1; }
@@ -137,7 +137,7 @@ void Sha1Ctx::finish(&unsigned char digest) {
 
 void sha1(const &unsigned char data, unsigned long len,
           &unsigned char digest) {
-    struct Sha1Ctx ctx = sha1_init();
+    struct Sha1Ctx ctx = Sha1Ctx::new();
     ctx.update(data, len);
     ctx.finish(digest);
 }

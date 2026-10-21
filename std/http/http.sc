@@ -947,7 +947,7 @@ static void http_spawn_conn_(struct TaskScheduler* sched, struct Reactor* reacto
         st->bodyWant = 0UL;
         st->respText = String::new();
         st->sent = 0UL;
-        int idx = task_spawn((&TaskScheduler)sched, http_conn_task_, (?&HttpConnState_)st);
+        int idx = sched->spawn(http_conn_task_, (?&HttpConnState_)st);
         if (idx < 0) {
             // Scheduler at capacity (TASK_MAX concurrent connections on
             // this thread already) — drop this one rather than leak the
@@ -1186,7 +1186,7 @@ static ?&HttpReactorThreadCtx_ http_reactor_worker_(?&HttpReactorThreadCtx_ argP
             ac->reactor = (struct Reactor*)&reactor;
             ac->registered = 0;
             ac->shared = shared;
-            task_spawn(&sched, http_accept_task_, (?&HttpAcceptState_)ac);
+            sched.spawn(http_accept_task_, (?&HttpAcceptState_)ac);
         }
 
         http_worker_loop_(&sched, &reactor, myQueue, shared->handler);

@@ -9,7 +9,7 @@
 //                  addresses (QEMU RISC-V virt, many SoCs)
 //   Stm32F4Usart   STM32F1/F2/F4 USART (SR/DR/BRR/CR1)
 //
-//   struct Uart<Pl011> u = std::uart_init(uart0, 115200u, 24000000u);
+//   struct Uart<Pl011> u = std::Uart::new(uart0, 115200u, 24000000u);
 //   u.write_str("hello\n");
 #pragma once
 
@@ -57,6 +57,10 @@ struct Uart {
     unsigned int baud;  // configured baud rate
     C            chip;
 
+    // Initialize the UART at `base`: 8N1 at `baud` from a `clock_hz` input clock
+    // (0 = leave the rate the firmware set). The chip type comes from the target.
+    static struct Uart<C> new(&volatile unsigned int base, unsigned int baud, unsigned int clock_hz);
+
     // Send a single byte (blocks until TX ready).
     void          write_byte(unsigned char c);
     // Read a single byte (blocks until RX available).
@@ -70,10 +74,8 @@ struct Uart {
     unsigned long addr_() const;
 };
 
-// Initialize the UART at `base`: 8N1 at `baud` from a `clock_hz` input clock
-// (0 = leave the rate the firmware set). The chip type comes from the target.
 generic<C>
-struct Uart<C> uart_init(&volatile unsigned int base, unsigned int baud, unsigned int clock_hz) {
+struct Uart<C> Uart::new(&volatile unsigned int base, unsigned int baud, unsigned int clock_hz) {
     struct Uart<C> u;
     u.base = base;
     u.baud = baud;

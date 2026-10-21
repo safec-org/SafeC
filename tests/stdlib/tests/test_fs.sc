@@ -38,7 +38,7 @@ static int memdisk_write(&MemDisk d, unsigned long lba, const &unsigned char buf
 }
 
 static struct BlockDevice memdisk_device(&MemDisk d) {
-    return block_device_new(d, d.size / 512UL, 512UL, memdisk_read, memdisk_write);
+    return BlockDevice::new(d, d.size / 512UL, 512UL, memdisk_read, memdisk_write);
 }
 
 // Loads a whole file into a MemDisk; data stays null if it can't be read.
@@ -90,7 +90,7 @@ void t_tmpfs_vfs() {
         &TmpfsCtx ctx = std::expect_ref(cq, "cq is null");
         ctx.init();
         vfs_init();
-        ASSERT_EQ(vfs_mount(&vfs_root, "/tmp", tmpfs_ops(), ctx), 0);
+        ASSERT_EQ(vfs_root.mount("/tmp", tmpfs_ops(), ctx), 0);
         ASSERT_EQ(vfs_root.mkdir("/tmp/dir"), 0);
         struct VfsNode node;
         ASSERT_EQ(vfs_root.open("/tmp/dir/hello.txt", VFS_O_CREATE | VFS_O_WRITE, &node), 0);
@@ -107,7 +107,7 @@ void t_tmpfs_vfs() {
         struct VfsNode dir;
         ASSERT_EQ(vfs_root.open("/tmp/dir", VFS_O_READ, &dir), 0);
         int seen = 0;
-        vfs_readdir(&dir, count_entry, (&int)&seen);
+        dir.readdir(count_entry, (&int)&seen);
         ASSERT_EQ(seen, 1);
         ASSERT_EQ(vfs_root.unlink("/tmp/dir/hello.txt"), 0);
         ASSERT_NE(vfs_root.open("/tmp/dir/hello.txt", VFS_O_READ, &again), 0);
@@ -188,7 +188,7 @@ void t_fat32() {
         ASSERT_EQ(fc.init(&dev, 0UL), 0);
         ASSERT_EQ(fc.bytes_per_cluster, 512);
         vfs_init();
-        ASSERT_EQ(vfs_mount(&vfs_root, "/fat", fat_ops(), (&FatCtx)&fc), 0);
+        ASSERT_EQ(vfs_root.mount("/fat", fat_ops(), (&FatCtx)&fc), 0);
         struct VfsNode f;
         ASSERT_EQ(vfs_root.open("/fat/hello.txt", VFS_O_READ, &f), 0);   // 8.3 names match case-insensitively
         ASSERT_EQ(f.type, VFS_TYPE_FILE);
@@ -204,7 +204,7 @@ void t_fat32() {
         struct VfsNode root;
         ASSERT_EQ(vfs_root.open("/fat", VFS_O_READ, &root), 0);
         int seen = 0;
-        vfs_readdir(&root, count_entry, (&int)&seen);
+        root.readdir(count_entry, (&int)&seen);
         ASSERT_EQ(seen, 3);   // volume label + HELLO.TXT + SUB
         ASSERT_NE(vfs_root.open("/fat/missing.txt", VFS_O_READ, &a), 0);
         dealloc(d.data);
@@ -224,7 +224,7 @@ void t_ext2() {
         ASSERT_EQ(ec.init(&dev), 0);
         ASSERT_EQ(ec.block_size, 1024);
         vfs_init();
-        ASSERT_EQ(vfs_mount(&vfs_root, "/ext", ext2_ops(), ec), 0);
+        ASSERT_EQ(vfs_root.mount("/ext", ext2_ops(), ec), 0);
         struct VfsNode f;
         ASSERT_EQ(vfs_root.open("/ext/HELLO.TXT", VFS_O_READ, &f), 0);
         ASSERT_EQ(f.size, 1300);
@@ -239,7 +239,7 @@ void t_ext2() {
         struct VfsNode root;
         ASSERT_EQ(vfs_root.open("/ext", VFS_O_READ, &root), 0);
         int seen = 0;
-        vfs_readdir(&root, count_entry, (&int)&seen);
+        root.readdir(count_entry, (&int)&seen);
         ASSERT_EQ(seen, 5);   // . .. lost+found HELLO.TXT SUB
         dealloc(eq);
         dealloc(d.data);

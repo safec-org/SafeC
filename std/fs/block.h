@@ -13,11 +13,18 @@ struct BlockDevice {
 
     // Driver callbacks and context, stored type-erased: one VFS can mount
     // devices from different drivers at once, so BlockDevice itself isn't
-    // generic. block_device_new<T> (below) is the only writer and always
+    // generic. BlockDevice::new<T> is the only writer and always
     // pairs fn(&T, ...) callbacks with a &T context.
     void*          read_fn;        // fn int(&T, lba, &unsigned char buf, count) → 0 on success
     void*          write_fn;       // fn int(&T, lba, const &unsigned char buf, count)
     void*          ctx;            // &T
+
+    // A device of `sector_count` sectors of `sector_size` bytes whose
+    // read()/write() call read(ctx, ...)/write(ctx, ...) (0 on success).
+    generic<T>
+    static struct BlockDevice new(&T ctx, unsigned long sector_count, unsigned long sector_size,
+                                  fn int(&T, unsigned long, &unsigned char, unsigned long) read,
+                                  fn int(&T, unsigned long, const &unsigned char, unsigned long) write);
 
     // Read `count` sectors starting at `lba` into `buf`.
     int  read(unsigned long lba, &unsigned char buf, unsigned long count);
@@ -30,7 +37,7 @@ struct BlockDevice {
 };
 
 generic<T>
-struct BlockDevice block_device_new(&T ctx, unsigned long sector_count, unsigned long sector_size,
+struct BlockDevice BlockDevice::new(&T ctx, unsigned long sector_count, unsigned long sector_size,
                                     fn int(&T, unsigned long, &unsigned char, unsigned long) read,
                                     fn int(&T, unsigned long, const &unsigned char, unsigned long) write) {
     struct BlockDevice dev;

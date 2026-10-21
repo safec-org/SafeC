@@ -58,7 +58,7 @@ void s_main() {
 }
 
 void qemu_main() {
-    unsafe { g_uart = uart_init((&volatile unsigned int)UART0, 115200u, 3686400u); }
+    unsafe { g_uart = Uart::new((&volatile unsigned int)UART0, 115200u, 3686400u); }
     say("uart: Ns16550 ok\n");
 
     g_frames.init_at(POOL, 64UL);
@@ -69,7 +69,7 @@ void qemu_main() {
         unsigned long k = 0UL;
         while (k < 4096UL) { r[k] = (unsigned char)0; k = k + 1UL; }
     }
-    struct MmuContext<MmuNative> m = mmu_init(root, &g_frames, 0UL);
+    struct MmuContext<MmuNative> m = MmuContext::new(root, &g_frames, 0UL);
     int ok = 1;
     unsigned long a = IMAGE;
     while (a < POOL + 64UL * 4096UL) {             // image, stack and the table pool

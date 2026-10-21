@@ -15,6 +15,8 @@ struct String {
     static struct String from_n(const &char s, unsigned long n); // copy of n raw bytes
     static struct String with_cap(unsigned long cap);            // empty, room for cap bytes
     static struct String repeat_str(const &char s, unsigned long n); // s repeated n times
+    // parts[0..count) concatenated, `sep` between each (null sep: none)
+    static struct String join(const &char sep, &String parts, unsigned long count);
 
     // ── Access ──────────────────────────────────────────────────────────────
     unsigned long  length() const;
@@ -110,8 +112,5 @@ struct String {
 struct String string_new();
 struct String string_from(const &char s);
 struct String string_from_n(const &char s, unsigned long n);
-
-// Free function: 'join' is a keyword, so it can't be a static method name yet.
-struct String string_join(const &char sep, &String parts, unsigned long count);
 
 } // namespace std

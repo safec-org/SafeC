@@ -36,6 +36,10 @@ struct Watchdog {
     unsigned int timeout;  // timeout period (chip-specific units, see above)
     C            chip;
 
+    // Initialize the watchdog at `base` with the given timeout; the chip type
+    // comes from the target.
+    static struct Watchdog<C> new(&volatile unsigned int base, unsigned int timeout);
+
     // Enable the watchdog timer (cannot be disabled on most hardware).
     void         enable();
     // Feed (kick) the watchdog to prevent reset.
@@ -45,10 +49,8 @@ struct Watchdog {
     unsigned long addr_() const;
 };
 
-// Initialize the watchdog at `base` with the given timeout; the chip type
-// comes from the target.
 generic<C>
-struct Watchdog<C> watchdog_init(&volatile unsigned int base, unsigned int timeout) {
+struct Watchdog<C> Watchdog::new(&volatile unsigned int base, unsigned int timeout) {
     struct Watchdog<C> w;
     w.base = base;
     w.timeout = timeout;

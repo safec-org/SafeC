@@ -379,9 +379,9 @@ void t_widgets() {
     &Widget root = Widget::vstack();
     root.set_padding(4).set_spacing(2);
     &Widget btn = Widget::button("Go").set_pref_size(40, 20);
-    widget_on_click(btn, on_click, (?&int)&gClicks);
+    btn.on_click(on_click, (?&int)&gClicks);
     &Widget box = Widget::checkbox("opt", 0);
-    widget_on_change(box, on_change, (?&int)&gChanges);
+    box.on_change(on_change, (?&int)&gChanges);
     &Widget lbl = Widget::label("hello");
     root.add_child(btn);
     root.add_child(box);

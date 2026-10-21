@@ -38,6 +38,11 @@ struct I2cBus {
     unsigned int speed;  // bus speed in Hz
     C            chip;
 
+    // Initialize an I2C master at `base` for `speed` Hz, from a `clock_hz`
+    // peripheral clock (STM32: the APB1 clock; ignored by I2cGeneric). The chip
+    // type comes from the target.
+    static struct I2cBus<C> new(&volatile unsigned int base, unsigned int speed, unsigned int clock_hz);
+
     // Write `len` bytes from `data` to the 7-bit address `addr`. Returns I2C_OK on success.
     int          write(unsigned char addr, const &unsigned char data, unsigned long len);
     // Read `len` bytes into `data` from device at `addr`. Returns I2C_OK on success.
@@ -51,11 +56,8 @@ struct I2cBus {
     unsigned long addr_() const;
 };
 
-// Initialize an I2C master at `base` for `speed` Hz, from a `clock_hz`
-// peripheral clock (STM32: the APB1 clock; ignored by I2cGeneric). The chip
-// type comes from the target.
 generic<C>
-struct I2cBus<C> i2c_init(&volatile unsigned int base, unsigned int speed, unsigned int clock_hz) {
+struct I2cBus<C> I2cBus::new(&volatile unsigned int base, unsigned int speed, unsigned int clock_hz) {
     struct I2cBus<C> bus;
     bus.base = base;
     bus.speed = speed;

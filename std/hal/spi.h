@@ -37,6 +37,10 @@ struct SpiDevice {
     int          mode;  // SPI mode (0-3)
     C            chip;
 
+    // Initialize an SPI master at `base` with the given mode; the chip type
+    // comes from the target.
+    static struct SpiDevice<C> new(&volatile unsigned int base, int mode);
+
     // Transfer one byte (full-duplex). Returns the received byte.
     unsigned char transfer(unsigned char tx);
     // Assert chip select (drive low).
@@ -50,10 +54,8 @@ struct SpiDevice {
     unsigned long addr_() const;
 };
 
-// Initialize an SPI master at `base` with the given mode; the chip type
-// comes from the target.
 generic<C>
-struct SpiDevice<C> spi_init(&volatile unsigned int base, int mode) {
+struct SpiDevice<C> SpiDevice::new(&volatile unsigned int base, int mode) {
     struct SpiDevice<C> s;
     s.base = base;
     s.mode = mode;

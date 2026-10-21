@@ -35,6 +35,10 @@ struct Timer {
     unsigned int prescaler;  // clock divider
     C            chip;
 
+    // Initialize a hardware timer at `base` with the given prescaler (STM32: the
+    // counter runs at clock / (prescaler + 1)). The chip type comes from the target.
+    static struct Timer<C> new(&volatile unsigned int base, unsigned int prescaler);
+
     // Set the auto-reload (period) value.
     void         set_period(unsigned int period);
     // Start the timer.
@@ -50,10 +54,8 @@ struct Timer {
     unsigned long addr_() const;
 };
 
-// Initialize a hardware timer at `base` with the given prescaler (STM32: the
-// counter runs at clock / (prescaler + 1)). The chip type comes from the target.
 generic<C>
-struct Timer<C> timer_init(&volatile unsigned int base, unsigned int prescaler) {
+struct Timer<C> Timer::new(&volatile unsigned int base, unsigned int prescaler) {
     struct Timer<C> t;
     t.base = base;
     t.prescaler = prescaler;

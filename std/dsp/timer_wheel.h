@@ -12,7 +12,7 @@ struct WheelTimer {
     // One TimerWheel is a multi-tenant scheduler: its slots host timers
     // with unrelated context types at once, so each slot stores its
     // callback and context type-erased. They are only ever written by
-    // timer_add/timer_add_periodic below, which take a matching
+    // TimerWheel::add/add_periodic below, which take a matching
     // fn void(?&T) / ?&T pair, so the erased call is always well-typed.
     void*         callback;  // fn void(?&T)
     void*         ctx;       // ?&T
@@ -33,7 +33,15 @@ struct TimerWheel {
     // tick = 0). Must be called before any other operation.
     void init();
 
-    // Type-erased registration behind timer_add/timer_add_periodic.
+    // One-shot timer calling cb(ctx) at absolute tick `tick`.
+    // Returns the timer ID (1-based) or 0 if the wheel is full.
+    generic<T> int add(unsigned long tick, fn void(?&T) cb, ?&T ctx);
+
+    // Periodic timer calling cb(ctx) every `period` ticks, first at
+    // current_tick + period. Returns the timer ID (1-based) or 0 if full.
+    generic<T> int add_periodic(unsigned long period, fn void(?&T) cb, ?&T ctx);
+
+    // Type-erased registration behind add/add_periodic.
     int  add_raw_(unsigned long tick, void* callback, void* ctx);
     int  add_periodic_raw_(unsigned long period, void* callback, void* ctx);
 
@@ -49,22 +57,14 @@ struct TimerWheel {
     unsigned long now() const;
 };
 
-// timer_add / timer_add_periodic stay free functions: their type parameter
-// T is the callback's context type, not part of TimerWheel, and methods
-// cannot carry their own type parameters.
-
-// One-shot timer calling cb(ctx) at absolute tick `tick`.
-// Returns the timer ID (1-based) or 0 if the wheel is full.
 generic<T>
-int timer_add(&TimerWheel tw, unsigned long tick, fn void(?&T) cb, ?&T ctx) {
-    unsafe { return tw.add_raw_(tick, (void*)cb, (void*)ctx); }
+int TimerWheel::add(unsigned long tick, fn void(?&T) cb, ?&T ctx) {
+    unsafe { return self.add_raw_(tick, (void*)cb, (void*)ctx); }
 }
 
-// Periodic timer calling cb(ctx) every `period` ticks, first at
-// current_tick + period. Returns the timer ID (1-based) or 0 if full.
 generic<T>
-int timer_add_periodic(&TimerWheel tw, unsigned long period, fn void(?&T) cb, ?&T ctx) {
-    unsafe { return tw.add_periodic_raw_(period, (void*)cb, (void*)ctx); }
+int TimerWheel::add_periodic(unsigned long period, fn void(?&T) cb, ?&T ctx) {
+    unsafe { return self.add_periodic_raw_(period, (void*)cb, (void*)ctx); }
 }
 
 } // namespace std

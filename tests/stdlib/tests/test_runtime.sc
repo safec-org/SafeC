@@ -474,8 +474,8 @@ void t_tasks() {
         if (sq.is_null() || tsq.is_null()) return;
         &TaskScheduler s = std::expect_ref(sq, "sq is null");
         *s = TaskScheduler::new();
-        ASSERT_TRUE(task_spawn(s, counting_task, null) >= 0);
-        task_spawn(s, counting_task, null);
+        ASSERT_TRUE(s.spawn(counting_task, null) >= 0);
+        s.spawn(counting_task, null);
         s.run_all();
         ASSERT_EQ(g_task_hits, 8);
         ASSERT_EQ(s.active_count(), 0);
@@ -484,8 +484,8 @@ void t_tasks() {
         g_task_hits = 0;
         &ThreadSched ts = std::expect_ref(tsq, "tsq is null");
         *ts = ThreadSched::new();
-        Thread a = thread_spawn(ts, counting_task, null, 1);
-        thread_spawn(ts, counting_task, null, 5);
+        Thread a = ts.spawn(counting_task, null, 1);
+        ts.spawn(counting_task, null, 5);
         ts.join_thread(a);
         ASSERT_FALSE(ts.is_active(a));
         ts.run_all();
@@ -639,7 +639,7 @@ void t_bench_fuzz() {
         if (bq.is_null()) return;
         &BenchSuite b = std::expect_ref(bq, "bq is null");
         *b = BenchSuite::new();
-        bench_add(b, "noop", bench_fn, null, 1000UL);
+        b.add("noop", bench_fn, null, 1000UL);
         b.run();
         ASSERT_EQ(g_bench_calls, 1000);
         ASSERT_TRUE(b.cases[0].elapsed_s >= 0.0);

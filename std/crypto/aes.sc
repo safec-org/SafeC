@@ -484,7 +484,7 @@ int AesCtx::gcm_decrypt(const &unsigned char iv, const ?&unsigned char aad, unsi
 
 // ── Constructors ──────────────────────────────────────────────────────────────
 
-inline struct AesCtx aes128_init(const &unsigned char key) {
+inline struct AesCtx AesCtx::new_128(const &unsigned char key) {
     struct AesCtx ctx;
     ctx.rounds = AES128_ROUNDS;
     unsafe { expand_key_((const unsigned char*)key, 4, AES128_ROUNDS, ctx.ks); }
@@ -492,7 +492,7 @@ inline struct AesCtx aes128_init(const &unsigned char key) {
     return ctx;
 }
 
-inline struct AesCtx aes256_init(const &unsigned char key) {
+inline struct AesCtx AesCtx::new_256(const &unsigned char key) {
     struct AesCtx ctx;
     ctx.rounds = AES256_ROUNDS;
     unsafe { expand_key_((const unsigned char*)key, 8, AES256_ROUNDS, ctx.ks); }

@@ -462,8 +462,8 @@ void t_comb_audio_timer() {
 
         &TimerWheel tw = std::expect_ref(twq, "twq is null");
         tw.init();
-        timer_add(tw, 3UL, on_timer, null);
-        int pid = timer_add_periodic(tw, 5UL, on_timer, null);
+        tw.add(3UL, on_timer, null);
+        int pid = tw.add_periodic(5UL, on_timer, null);
         i = 0;
         while (i < 12) { tw.tick(); i = i + 1; }
         ASSERT_EQ(g_fired, 3);   // one-shot at 3, periodic at 5 and 10

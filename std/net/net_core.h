@@ -52,18 +52,21 @@ struct NetIf {
     unsigned int  netmask;             // subnet mask (numeric form, see net_ip4)
 
     // Driver transmit callback and context, stored type-erased (one stack
-    // may run interfaces from different drivers); netif_new<T> is the
+    // may run interfaces from different drivers); NetIf::new<T> is the
     // only writer and always pairs fn int(&T, ...) with a &T.
     void*         tx_fn;               // fn int(&T, const &unsigned char buf, unsigned long len)
     void*         iface_ctx;           // &T
+
+    // An interface whose tx() calls tx(ctx, frame, len) (0 on success).
+    generic<T>
+    static struct NetIf new(&T ctx, fn int(&T, const &unsigned char, unsigned long) tx);
 
     // Transmit a packet.  Returns 0 on success.
     int  tx(&PacketBuf pkt);
 };
 
-// An interface whose tx() calls tx(ctx, frame, len) (0 on success).
 generic<T>
-struct NetIf netif_new(&T ctx, fn int(&T, const &unsigned char, unsigned long) tx) {
+struct NetIf NetIf::new(&T ctx, fn int(&T, const &unsigned char, unsigned long) tx) {
     struct NetIf nif;
     unsigned long i = 0UL;
     while (i < (unsigned long)NET_MAC_LEN) { unsafe { nif.mac[i] = (unsigned char)0; } i = i + 1UL; }

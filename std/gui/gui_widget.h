@@ -17,14 +17,13 @@
 //
 // Every built-in widget constructor returns a heap-allocated
 // 'struct Widget*' with sensible defaults already set — customize it with
-// its set_*() methods and the widget_on_*() calls below (each returns the same
-// widget pointer, so calls chain: Widget::button("Go").set_padding(8)
-// .set_bg(r,g,b,a)). Every widget is fully independently
+// its set_*() and on_*() methods (each returns the same widget pointer, so
+// calls chain: Widget::button("Go").set_padding(8).set_bg(r,g,b,a)). Every widget is fully independently
 // customizable: colors, border, padding, spacing, preferred size, stretch
 // weight, cross-axis alignment, font (and font scale), visibility, and
 // enabled state.
 //
-// For anything the built-ins don't cover, widget_custom() takes your own
+// For anything the built-ins don't cover, Widget::custom() takes your own
 // draw/layout functions (and optionally an event hook) plus a userData
 // pointer, and participates in the same tree/layout/event pipeline as any
 // built-in widget — see the "Custom widgets" section below.
@@ -125,8 +124,6 @@ struct Widget {
     // All return a freshly heap-allocated, non-null widget — a region-less
     // '&Widget' (see README's "Outliving references"), since nothing here
     // cares whether the tree it ends up in is heap/stack/static/arena-owned.
-    // (widget_custom, below, stays a free function: it is generic over the
-    // caller's userData type.)
     static &Widget vstack();
     static &Widget hstack();
     static &Widget button(const &char text);
@@ -135,6 +132,18 @@ struct Widget {
     static &Widget textinput(const &char placeholder);
     static &Widget spacer();
     static &Widget slider(double minValue, double maxValue, double value);
+
+    // A WIDGET_CUSTOM node drawn and laid out by your own functions (see
+    // "Custom widgets" below); userData is the caller's type, stored erased.
+    // The parameters are WidgetDrawFn, WidgetLayoutFn and
+    // WidgetCustomEventFn, spelled out: those typedefs follow this struct.
+    generic<T>
+    static &Widget custom(fn void(&GuiWindow, &Widget) draw,
+                          fn void(&Widget, int, int, int, int) layout,
+                          fn int(&Widget, &GuiEvent) eventFn, ?&T userData);
+    static &Widget custom_raw_(fn void(&GuiWindow, &Widget) draw,
+                               fn void(&Widget, int, int, int, int) layout,
+                               fn int(&Widget, &GuiEvent) eventFn, void* userData);
 
     // ── tree ─────────────────────────────────────────────────────────────
     void add_child(&Widget child);
@@ -154,6 +163,14 @@ struct Widget {
     &Widget set_visible(int visible);
     &Widget set_enabled(int enabled);
     &Widget set_text(const &char text);
+
+    // ── callbacks (each returns this widget, so calls chain) ─────────────
+    // cb(widget, userData) on click / value change. userData's type is the
+    // caller's; the widget stores it erased (see the field comment above).
+    generic<T> &Widget on_click(fn void(&Widget, ?&T) cb, ?&T userData);
+    generic<T> &Widget on_change(fn void(&Widget, ?&T) cb, ?&T userData);
+    &Widget on_click_raw_(void* cb, void* userData);
+    &Widget on_change_raw_(void* cb, void* userData);
 
     // ── per-frame pipeline ───────────────────────────────────────────────
 
@@ -217,31 +234,20 @@ typedef fn int(&Widget, &GuiEvent) WidgetCustomEventFn;
 // button would, with onClick/onChange still firing normally — set eventFn
 // only when you need to intercept raw events yourself, e.g. for a custom
 // slider/canvas that tracks drag deltas).
-&Widget widget_custom_raw_(WidgetDrawFn draw, WidgetLayoutFn layout,
-                            WidgetCustomEventFn eventFn, void* userData);
 generic<T>
-&Widget widget_custom(WidgetDrawFn draw, WidgetLayoutFn layout,
-                      WidgetCustomEventFn eventFn, ?&T userData) {
-    unsafe { return widget_custom_raw_(draw, layout, eventFn, (void*)userData); }
-}
-
-// ── callbacks ────────────────────────────────────────────────────────────────
-// Free functions rather than methods: each has its own type parameter T
-// (the caller's userData type), and a method can only use its struct's
-// type parameters.
-&Widget widget_on_click_raw_(&Widget w, void* cb, void* userData);
-&Widget widget_on_change_raw_(&Widget w, void* cb, void* userData);
-
-// cb(widget, userData) on click / value change. userData's type is the
-// caller's; the widget stores it erased (see the field comment above).
-generic<T>
-&Widget widget_on_click(&Widget w, fn void(&Widget, ?&T) cb, ?&T userData) {
-    unsafe { return widget_on_click_raw_(w, (void*)cb, (void*)userData); }
+&Widget Widget::custom(WidgetDrawFn draw, WidgetLayoutFn layout,
+                       WidgetCustomEventFn eventFn, ?&T userData) {
+    unsafe { return Widget::custom_raw_(draw, layout, eventFn, (void*)userData); }
 }
 
 generic<T>
-&Widget widget_on_change(&Widget w, fn void(&Widget, ?&T) cb, ?&T userData) {
-    unsafe { return widget_on_change_raw_(w, (void*)cb, (void*)userData); }
+&Widget Widget::on_click(fn void(&Widget, ?&T) cb, ?&T userData) {
+    unsafe { return self.on_click_raw_((void*)cb, (void*)userData); }
+}
+
+generic<T>
+&Widget Widget::on_change(fn void(&Widget, ?&T) cb, ?&T userData) {
+    unsafe { return self.on_change_raw_((void*)cb, (void*)userData); }
 }
 
 } // namespace std

@@ -92,7 +92,7 @@ inline struct String String::repeat_str(const &char cstr, unsigned long n) {
     return s;
 }
 
-inline struct String string_join(const &char sep, &String parts, unsigned long count) {
+inline struct String String::join(const &char sep, &String parts, unsigned long count) {
     struct String out = String::new();
     unsigned long i = 0UL;
     while (i < count) {

@@ -314,7 +314,7 @@ void t_aes_gcm() {
         hex_to_bytes("cafebabefacedbaddecaf888", &iv[0]);
         hex_to_bytes("feedfacedeadbeeffeedfacedeadbeefabaddad2", &aad[0]);
         hex_to_bytes("d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39", &msg[0]);
-        struct AesCtx aes = aes256_init(&key[0]);
+        struct AesCtx aes = AesCtx::new_256(&key[0]);
         aes.gcm_encrypt(&iv[0], (const ?&unsigned char)&aad[0], 20UL, &msg[0], 60UL, &tag[0]);
         to_hex(msg, 60UL, hex);
         ASSERT_STR_EQ(hex, "522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f662");
@@ -332,7 +332,7 @@ void t_aes_gcm() {
         unsigned char zk[32];
         int i = 0;
         while (i < 32) { zk[i] = (unsigned char)0; i = i + 1; }
-        z = aes256_init(&zk[0]);
+        z = AesCtx::new_256(&zk[0]);
         z.gcm_encrypt(&zk[0], null, 0UL, &msg[0], 0UL, &tag[0]);
         to_hex(tag, 16UL, hex);
         ASSERT_STR_EQ(hex, "530f8afbc74536b9a963b4f1c4cb738b");

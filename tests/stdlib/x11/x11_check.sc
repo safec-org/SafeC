@@ -64,7 +64,7 @@ static void send_input(int type, long mask, int x, int y, unsigned int state, un
 static int wait_event(&GuiWindow win, int kind, &GuiEvent out) {
     int tries = 0;
     while (tries < 2000) {
-        if (gui_poll_event(win, out) && out.kind == kind) { return 1; }
+        if (win.poll_event(out) && out.kind == kind) { return 1; }
         unsafe { XSync(g_dpy, 0); }
         tries = tries + 1;
     }
@@ -73,7 +73,7 @@ static int wait_event(&GuiWindow win, int kind, &GuiEvent out) {
 
 void t_x11() {
     unsafe {
-        struct GuiWindow win = gui_create_window("x11 check", 64, 48);
+        struct GuiWindow win = GuiWindow::create("x11 check", 64, 48);
         ASSERT_FALSE(win.platform.is_null());
         if (win.platform.is_null()) return;
         g_dpy = XOpenDisplay((const char*)0);
@@ -81,16 +81,16 @@ void t_x11() {
         g_win = ((struct X11PlatformHead*)win.platform)->window;
         XSync(((struct X11PlatformHead*)win.platform)->display, 0);
 
-        gui_fill_rect(&win, 0, 0, 64, 48, gui_rgb((unsigned char)0, (unsigned char)0, (unsigned char)0));
-        gui_fill_rect(&win, 10, 10, 20, 10, gui_rgb((unsigned char)255, (unsigned char)0, (unsigned char)0));
-        gui_fill_rect(&win, 40, 30, 5, 5, gui_rgb((unsigned char)0, (unsigned char)128, (unsigned char)255));
-        gui_present(&win);
+        win.fill_rect(0, 0, 64, 48, GuiColor::rgb((unsigned char)0, (unsigned char)0, (unsigned char)0));
+        win.fill_rect(10, 10, 20, 10, GuiColor::rgb((unsigned char)255, (unsigned char)0, (unsigned char)0));
+        win.fill_rect(40, 30, 5, 5, GuiColor::rgb((unsigned char)0, (unsigned char)128, (unsigned char)255));
+        win.present();
         XSync(((struct X11PlatformHead*)win.platform)->display, 0);
         test_assert_eq_u(read_pixel(15, 15, 64, 48), 0xFF0000ULL, "red rectangle on screen", __FILE__, __LINE__);
         test_assert_eq_u(read_pixel(42, 32, 64, 48), 0x0080FFULL, "R/G/B order", __FILE__, __LINE__);
         test_assert_eq_u(read_pixel(2, 2, 64, 48), 0x000000ULL, "background", __FILE__, __LINE__);
         int frame = 0;
-        while (frame < 100) { gui_present(&win); frame = frame + 1; }   // no per-frame allocation
+        while (frame < 100) { win.present(); frame = frame + 1; }   // no per-frame allocation
 
         struct GuiEvent ev;
         send_input(2, 1L, 0, 0, 0u, (unsigned int)XKeysymToKeycode(g_dpy, 0xFF51UL));   // KeyPress Left
@@ -126,8 +126,8 @@ void t_x11() {
         ASSERT_EQ(ev.width, 80);
         ASSERT_EQ(win.width, 80);
         ASSERT_EQ(win.height, 50);
-        gui_fill_rect(&win, 70, 40, 5, 5, gui_rgb((unsigned char)0, (unsigned char)255, (unsigned char)0));
-        gui_present(&win);
+        win.fill_rect(70, 40, 5, 5, GuiColor::rgb((unsigned char)0, (unsigned char)255, (unsigned char)0));
+        win.present();
         XSync(((struct X11PlatformHead*)win.platform)->display, 0);
         test_assert_eq_u(read_pixel(72, 42, 80, 50), 0x00FF00ULL, "drawn after resize", __FILE__, __LINE__);
 
@@ -145,14 +145,14 @@ void t_x11() {
         ASSERT_TRUE(wait_event(&win, GUI_EVENT_CLOSE, &ev));
         ASSERT_EQ(win.shouldClose, 1);
 
-        gui_destroy_window(&win);
+        win.destroy();
         ASSERT_TRUE(win.platform.is_null());
         XCloseDisplay(g_dpy);
     }
 }
 
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe { t.add("x11 backend: draw/present/events", t_x11); }
     t.run();
     t.print_summary();

@@ -99,7 +99,7 @@ static void sha512_compress_(unsigned long long* h, const unsigned char* block) 
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-inline struct Sha512Ctx sha512_init() {
+inline struct Sha512Ctx Sha512Ctx::new() {
     struct Sha512Ctx ctx;
     int i = 0;
     while (i < 8) { ctx.h[i] = sha512_H0_[i]; i = i + 1; }
@@ -109,8 +109,8 @@ inline struct Sha512Ctx sha512_init() {
     return ctx;
 }
 
-inline struct Sha512Ctx sha384_init() {
-    struct Sha512Ctx ctx = sha512_init();
+inline struct Sha512Ctx Sha512Ctx::new_384() {
+    struct Sha512Ctx ctx = Sha512Ctx::new();
     int i = 0;
     while (i < 8) { ctx.h[i] = sha384_H0_[i]; i = i + 1; }
     ctx.is384 = 1;
@@ -187,14 +187,14 @@ void Sha512Ctx::finish(&unsigned char digest) {
 
 void sha512(const &unsigned char data, unsigned long len,
             &unsigned char digest) {
-    struct Sha512Ctx ctx = sha512_init();
+    struct Sha512Ctx ctx = Sha512Ctx::new();
     ctx.update(data, len);
     ctx.finish(digest);
 }
 
 void sha384(const &unsigned char data, unsigned long len,
             &unsigned char digest) {
-    struct Sha512Ctx ctx = sha384_init();
+    struct Sha512Ctx ctx = Sha512Ctx::new_384();
     ctx.update(data, len);
     ctx.finish(digest);
 }

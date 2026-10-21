@@ -63,6 +63,9 @@ struct TlsSession {
     int            handshake_done;
     struct TlsTranscript transcript;
 
+    // A fresh session: zero keys, seq = 0, handshake_done = 0.
+    static struct TlsSession new();
+
     // Encode one record into `out`: plaintext before install_keys, then
     // AES-256-GCM sealed (outer type application_data, 16-byte tag).
     // Returns bytes written; 0 if it doesn't fit out_cap (no sequence
@@ -105,8 +108,5 @@ struct TlsSession {
     // Is the session post-handshake (application data mode)?
     int   is_established() const;
 };
-
-// Initialise a TLS session (zero keys, seq=0, handshake_done=0).
-struct TlsSession tls_session_init();
 
 } // namespace std

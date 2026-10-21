@@ -121,8 +121,8 @@ static &Widget __widget_new(int kind) {
         return w;
     }
 }
-&Widget widget_custom_raw_(WidgetDrawFn draw, WidgetLayoutFn layout,
-                              WidgetCustomEventFn eventFn, void* userData) {
+&Widget Widget::custom_raw_(WidgetDrawFn draw, WidgetLayoutFn layout,
+                            WidgetCustomEventFn eventFn, void* userData) {
     &Widget w = __widget_new(WIDGET_CUSTOM);
     unsafe {
         w->customDraw = (void*)draw;
@@ -198,13 +198,13 @@ void Widget::add_child(&Widget child) {
     }
     unsafe { return (struct Widget*)self; }
 }
-&Widget widget_on_click_raw_(&Widget w, void* cb, void* userData) {
-    unsafe { w->onClick = cb; w->onClickData = userData; }
-    return w;
+&Widget Widget::on_click_raw_(void* cb, void* userData) {
+    unsafe { self.onClick = cb; self.onClickData = userData; }
+    unsafe { return (struct Widget*)self; }
 }
-&Widget widget_on_change_raw_(&Widget w, void* cb, void* userData) {
-    unsafe { w->onChange = cb; w->onChangeData = userData; }
-    return w;
+&Widget Widget::on_change_raw_(void* cb, void* userData) {
+    unsafe { self.onChange = cb; self.onChangeData = userData; }
+    unsafe { return (struct Widget*)self; }
 }
 
 // ── measurement ───────────────────────────────────────────────────────────────

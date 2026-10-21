@@ -36,14 +36,14 @@ void hmac_sha256(const &unsigned char key, unsigned long keyLen,
         }
 
         // inner = SHA256(ipad || data)
-        struct Sha256Ctx innerCtx = sha256_init();
+        struct Sha256Ctx innerCtx = Sha256Ctx::new();
         innerCtx.update((const &unsigned char)ipad, (unsigned long)SHA256_BLOCK_SIZE);
         innerCtx.update((const &unsigned char)data, dataLen);
         unsigned char innerDigest[SHA256_DIGEST_SIZE];
         innerCtx.finish((&unsigned char)innerDigest);
 
         // out = SHA256(opad || inner)
-        struct Sha256Ctx outerCtx = sha256_init();
+        struct Sha256Ctx outerCtx = Sha256Ctx::new();
         outerCtx.update((const &unsigned char)opad, (unsigned long)SHA256_BLOCK_SIZE);
         outerCtx.update((const &unsigned char)innerDigest, (unsigned long)SHA256_DIGEST_SIZE);
         outerCtx.finish((&unsigned char)out);

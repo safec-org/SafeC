@@ -54,6 +54,8 @@ struct Signal<T> Signal::new(T val) {
 
 // Registers listener(userdata) to run on every future set()/notify(). Not
 // called for the initial value — read it directly after subscribing.
+// A free function: U is its own type parameter, and an instance method of
+// a generic struct can't add type parameters of its own yet.
 generic<T, U>
 void signal_subscribe(&Signal<T> s, fn void(?&U) listener, ?&U userdata) {
     struct SignalSub sub;

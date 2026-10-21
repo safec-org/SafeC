@@ -329,7 +329,7 @@ void t_cond_modules() {
 }
 
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("one generic check over ten Modules", t_every_module);
         t.add("module_fit = trainer_fit; model_copy", t_module_fit_matches_trainer_fit);

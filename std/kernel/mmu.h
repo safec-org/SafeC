@@ -178,6 +178,15 @@ struct MmuContext {
     &static FrameAllocator frames;       // source of new intermediate tables
     F                      fmt;
 
+    // A context over an existing root table at physical 'root' — zeroed, and
+    // aligned as the format needs (4 KiB; 16 KiB for MmuArmV7). 'frames' must be
+    // a live, &static-lifetime FrameAllocator (the kernel's own, usually);
+    // frame f's table memory is at frames.frame_addr(f) + phys_offset.
+    // F comes from the target type:
+    //   struct MmuContext<MmuNative> mmu = std::MmuContext::new(root, &g_frames, 0UL);
+    static struct MmuContext<F> new(unsigned long root, &static FrameAllocator frames,
+                                    unsigned long phys_offset);
+
     // Map the 4 KiB page at 'virt' to 'phys' (both 4 KiB aligned; low bits
     // ignored) with MMU_* flags, allocating intermediate tables as needed.
     // Returns 1, or 0 if a table frame couldn't be allocated or a larger
@@ -211,15 +220,9 @@ struct MmuContext {
     unsigned long index_(unsigned long virt, int level) const;
 };
 
-// A context over an existing root table at physical 'root' — zeroed, and
-// aligned as the format needs (4 KiB; 16 KiB for MmuArmV7). 'frames' must be
-// a live, &static-lifetime FrameAllocator (the kernel's own, usually);
-// frame f's table memory is at frames.frame_addr(f) + phys_offset.
-// F comes from the target type:
-//   struct MmuContext<MmuNative> mmu = std::mmu_init(root, &g_frames, 0UL);
 generic<F>
-struct MmuContext<F> mmu_init(unsigned long root, &static FrameAllocator frames,
-                              unsigned long phys_offset) {
+struct MmuContext<F> MmuContext::new(unsigned long root, &static FrameAllocator frames,
+                                     unsigned long phys_offset) {
     struct MmuContext<F> m;
     m.root = root;
     m.phys_offset = phys_offset;

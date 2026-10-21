@@ -52,7 +52,7 @@ void t_win32_thread_time() {
 }
 
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe { t.add("win32 thread/time backends", t_win32_thread_time); }
     t.run();
     t.print_summary();
