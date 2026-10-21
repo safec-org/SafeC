@@ -230,6 +230,21 @@ int main() {
     run_case("flash fp32 D64 window 40 causal", windowed(shape(1UL, 2UL, 1UL, 150UL, 200UL, 64UL), 40UL), 0, 1, 0, 2.0e-5);
     run_case("flash fp16 D64 window 17", windowed(shape(1UL, 2UL, 2UL, 90UL, 90UL, 64UL), 17UL), CUDA_FP16, 0, 0, 4.0e-3);
     run_case("flash bf16 D128 window 100 causal", windowed(shape(1UL, 2UL, 2UL, 130UL, 130UL, 128UL), 100UL), CUDA_BF16, 1, 0, 2.5e-2);
+    // Decode (split-KV) path: (heads / kvHeads) * seqLen <= 16 query rows per kv head,
+    // 1, 2, 4, 8 and 16 row builds, one-tile and many-split key ranges, masks.
+    int dc = 0;
+    while (dc < 2) {
+        run_case(dc ? "decode bf16 D256 GQA 8/1 causal" : "decode bf16 D256 GQA 8/1", shape(1UL, 8UL, 1UL, 1UL, 3000UL, 256UL), CUDA_BF16, dc, 0, 2.5e-2);
+        run_case(dc ? "decode fp16 D128 GQA 32/8 batch 2 causal" : "decode fp16 D128 GQA 32/8 batch 2", shape(2UL, 32UL, 8UL, 1UL, 1000UL, 128UL), CUDA_FP16, dc, 0, 4.0e-3);
+        run_case(dc ? "decode fp32 D64 causal" : "decode fp32 D64", shape(1UL, 4UL, 4UL, 1UL, 5000UL, 64UL), 0, dc, 0, 2.0e-5);
+        run_case(dc ? "decode fp32 D96 3 tokens GQA 8/2 causal" : "decode fp32 D96 3 tokens GQA 8/2", shape(1UL, 8UL, 2UL, 3UL, 700UL, 96UL), 0, dc, 0, 2.0e-5);
+        run_case(dc ? "decode bf16 D32 2 tokens causal" : "decode bf16 D32 2 tokens", shape(1UL, 2UL, 1UL, 2UL, 129UL, 32UL), CUDA_BF16, dc, 0, 2.5e-2);
+        run_case(dc ? "decode fp32 D64 one tile causal" : "decode fp32 D64 one tile", shape(1UL, 4UL, 2UL, 1UL, 5UL, 64UL), 0, dc, 0, 2.0e-5);
+        dc = dc + 1;
+    }
+    run_case("decode fp32 D64 70000 keys causal", shape(1UL, 1UL, 1UL, 1UL, 70000UL, 64UL), 0, 1, 0, 2.0e-5);
+    run_case("decode fp16 D128 window 50 causal", windowed(shape(1UL, 4UL, 1UL, 2UL, 600UL, 128UL), 50UL), CUDA_FP16, 1, 0, 4.0e-3);
+    run_case("decode fp32 D64 window 64", windowed(shape(1UL, 2UL, 2UL, 1UL, 300UL, 64UL), 64UL), 0, 0, 0, 2.0e-5);
 
     // Same result as attention.h's CPU flash / linear attention for one head.
     struct CudaAttnShape one = shape(1UL, 1UL, 1UL, 40UL, 56UL, 64UL);

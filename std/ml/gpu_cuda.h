@@ -86,6 +86,10 @@ int cuda_relu(struct CudaBuf a, struct CudaBuf out);
 int cuda_exp(struct CudaBuf a, struct CudaBuf out);
 int cuda_log(struct CudaBuf a, struct CudaBuf out);
 int cuda_sqrt(struct CudaBuf a, struct CudaBuf out);
+int cuda_gelu(struct CudaBuf a, struct CudaBuf out);   // tanh approximation (gelu_pytorch_tanh)
+// RMSNorm per row: y[r] = x[r] / sqrt(mean(x[r]^2) + eps) * w, over 'rows'
+// rows of 'n' values; w has n values, or dev == 0 for no weight. y may be x.
+int cuda_rmsnorm(struct CudaBuf x, struct CudaBuf w, struct CudaBuf y, unsigned long rows, unsigned long n, float eps);
 // out = z > 0 ? g : 0. 'z' may be the ReLU input or its output (same sign test).
 int cuda_relu_grad(struct CudaBuf z, struct CudaBuf g, struct CudaBuf out);
 int cuda_sgd(struct CudaBuf w, struct CudaBuf g, float lr);            // w -= lr * g, in place
@@ -158,6 +162,13 @@ int cuda_half_gemm_relu(struct CudaHalfBuf a, int ta, struct CudaHalfBuf b, int 
                         unsigned long m, unsigned long n, unsigned long k);
 int cuda_half_gemm_f32(struct CudaHalfBuf a, int ta, struct CudaHalfBuf b, int tb, struct CudaBuf c,
                        unsigned long m, unsigned long n, unsigned long k);
+// Matrix-vector product for decoding one token at a time: y = w x with w an
+// [n][k] fp16/bf16 matrix (row-major, e.g. a linear layer's weight) and x,
+// y fp32 (x is not rounded to 16 bits). Memory-bound: on an H200 1.3-2.2x
+// faster than a one-row cuda_half_gemm_f32 on 1536-6144-wide projections
+// (e.g. 1536 x 2048: 3.2 vs 7.0 us), 4.47 TB/s on a 262144 x 1536 LM head.
+// Fastest when k is a multiple of 8 (16-byte loads; scalar otherwise).
+int cuda_half_gemv(struct CudaHalfBuf w, struct CudaBuf x, struct CudaBuf y, unsigned long n, unsigned long k);
 
 // Training ops, as their CudaBuf versions above (loss stays fp32).
 int cuda_half_relu(struct CudaHalfBuf a, struct CudaHalfBuf out);
@@ -179,6 +190,8 @@ int cuda_tf32_enabled();
 // Compute capability of the selected GPU as major * 10 + minor (80 on an
 // A100, 90 on an H100/H200); 0 if there is no GPU.
 int cuda_compute_capability();
+// Streaming multiprocessors on the selected GPU (132 on an H100/H200 SXM); 0 if none.
+int cuda_sm_count();
 // Compiles CUDA C++ source with NVRTC for the selected GPU (-arch=sm_<cc>,
 // -std=c++17) and loads it as a CUmodule, for libraries that bring their
 // own kernels (gpu_cuda_attention.h). Null on failure, after printing the
