@@ -299,11 +299,11 @@ static int ext2_split_path_(const char* path,
     return count;
 }
 
-// ── VfsOps callbacks ──────────────────────────────────────────────────────────
+// ── FileSystem methods (see vfs.h) ────────────────────────────────────────────
 
-static int ext2_vfs_open_(?&void ctx_ref, const &char path_ref, int flags,
-                           &VfsNode node_out) {
-    void* ctx = ctx_ref;
+int Ext2Ctx::open(const &char path_ref, int flags, &VfsNode node_out) {
+    void* ctx;
+    unsafe { ctx = (void*)self; }
     const char* path = path_ref;
     struct Ext2Ctx* ec;
     unsafe { ec = (struct Ext2Ctx*)ctx; }
@@ -320,7 +320,7 @@ static int ext2_vfs_open_(?&void ctx_ref, const &char path_ref, int flags,
             node_out.size     = (unsigned long)0;
             node_out.name[0]  = '/';
             node_out.name[1]  = (char)0;
-            node_out.fs_ctx   = ctx;
+            node_out.fs_ctx   = null;
         }
         return 0;
     }
@@ -348,7 +348,7 @@ static int ext2_vfs_open_(?&void ctx_ref, const &char path_ref, int flags,
         node_out.inode  = cur_ino;
         node_out.type   = (is_dir != 0) ? VFS_TYPE_DIR : VFS_TYPE_FILE;
         node_out.size   = (unsigned long)inode.size_lo;
-        node_out.fs_ctx = ctx;
+        node_out.fs_ctx = null;
         // Copy last component as name.
         unsigned long nlen = comp_lens[n - 1];
         unsigned long k = (unsigned long)0;
@@ -361,19 +361,18 @@ static int ext2_vfs_open_(?&void ctx_ref, const &char path_ref, int flags,
     return 0;
 }
 
-static unsigned long ext2_vfs_read_(?&void ctx_ref, unsigned long inode,
-                                     unsigned long offset,
-                                     &unsigned char buf_ref, unsigned long len) {
-    void* ctx = ctx_ref;
+unsigned long Ext2Ctx::read(unsigned long inode, unsigned long offset, &unsigned char buf_ref, unsigned long len) {
+    void* ctx;
+    unsafe { ctx = (void*)self; }
     unsigned char* buf = buf_ref;
     struct Ext2Ctx* ec;
     unsafe { ec = (struct Ext2Ctx*)ctx; }
     unsafe { return ec->read_file(inode, offset, buf, len); }
 }
 
-static int ext2_vfs_readdir_(?&void ctx_ref, unsigned long dir_ino,
-                              fn void(&VfsNode, ?&void) cb, ?&void user) {
-    void* ctx = ctx_ref;
+int Ext2Ctx::readdir(unsigned long dir_ino, fn void(&VfsNode, ?&void) cb, ?&void user) {
+    void* ctx;
+    unsafe { ctx = (void*)self; }
     struct Ext2Ctx* ec;
     unsafe { ec = (struct Ext2Ctx*)ctx; }
 
@@ -421,7 +420,7 @@ static int ext2_vfs_readdir_(?&void ctx_ref, unsigned long dir_ino,
                     node.type     = (e_ftype == (unsigned char)2) ? VFS_TYPE_DIR
                                                                    : VFS_TYPE_FILE;
                     node.inode    = (unsigned long)e_ino;
-                    node.fs_ctx   = ctx;
+                    node.fs_ctx   = null;
 
                     // Stat to get size for files.
                     struct Ext2Inode child_inode;
@@ -442,19 +441,6 @@ static int ext2_vfs_readdir_(?&void ctx_ref, unsigned long dir_ino,
         blk_idx  = blk_idx + (unsigned long)1;
     }
     return count;
-}
-
-// ── ext2_ops ──────────────────────────────────────────────────────────────────
-
-inline struct VfsOps ext2_ops() {
-    struct VfsOps ops;
-    unsafe {
-        memset((void*)&ops, 0, sizeof(struct VfsOps));
-        ops.open    = ext2_vfs_open_;
-        ops.read    = ext2_vfs_read_;
-        ops.readdir = ext2_vfs_readdir_;
-    }
-    return ops;
 }
 
 } // namespace std

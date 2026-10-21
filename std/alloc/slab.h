@@ -1,7 +1,7 @@
 // SafeC Standard Library — Slab Allocator
 // Fixed-size object pool. O(1) alloc/free via embedded free-list.
-// Conforms to Allocator (allocator.h): typed allocation is alloc_t /
-// dealloc_t there.
+// Conforms to Allocator and ArenaAllocator (allocator.h): typed allocation
+// is alloc_t / dealloc_t there.
 #pragma once
 #include <std/alloc/allocator.h>
 
@@ -39,6 +39,9 @@ struct SlabAllocator {
     // Return an object to the pool (null: no-op). Aborts with a diagnostic
     // on double-free (SlabAllocator::new-created allocators only — see has_tags above).
     void          dealloc(?&heap void ptr);
+
+    // Free every slot at once (slots handed out before become invalid).
+    void          reset();
 
     // Return the number of free slots remaining.
     unsigned long available() const;

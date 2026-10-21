@@ -168,7 +168,7 @@ void FirFilter32::reset() {
 void FirFilter32::process_block(const &float in, &float out, unsigned long n) {
     unsigned long T = self.numTaps;
     if (T == 0UL || T > FIR_STACK_TAPS) {
-        filter_process_each_f32(self, in, out, n);
+        filter_process_each(self, in, out, n);
         return;
     }
     float crev[FIR_STACK_TAPS];
@@ -234,7 +234,7 @@ void FFirFilter::reset() {
 }
 
 void FFirFilter::process_block(const &Fixed in, &Fixed out, unsigned long n) {
-    filter_process_each_fixed(self, in, out, n);
+    filter_process_each(self, in, out, n);
 }
 
 // ── IIR (general order, direct form I) ────────────────────────────────────────
@@ -341,7 +341,7 @@ void IirFilter32::reset() {
 }
 
 void IirFilter32::process_block(const &float in, &float out, unsigned long n) {
-    filter_process_each_f32(self, in, out, n);
+    filter_process_each(self, in, out, n);
 }
 
 inline struct FIirFilter FIirFilter::new(const &Fixed b, unsigned long numB,
@@ -392,7 +392,7 @@ void FIirFilter::reset() {
 }
 
 void FIirFilter::process_block(const &Fixed in, &Fixed out, unsigned long n) {
-    filter_process_each_fixed(self, in, out, n);
+    filter_process_each(self, in, out, n);
 }
 
 } // namespace std

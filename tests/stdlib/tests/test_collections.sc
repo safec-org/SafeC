@@ -14,6 +14,7 @@
 #include <std/collections/ringbuffer.h>
 #include <std/collections/slice.h>
 #include <std/collections/static_vec.h>
+#include <std/collections/traits.h>
 
 static int cmp_int(const &int a, const &int b) {
     return *a - *b;
@@ -296,9 +297,9 @@ void t_btree() {
     t.init();
     unsigned long i = 0UL;
     while (i < 200UL) { t.insert((i * 7919UL) % 1000UL, (int)i * 10); i = i + 1UL; }
-    ASSERT_EQ(t.len(), 200);
+    ASSERT_EQ(t.length(),200);
     t.insert((3UL * 7919UL) % 1000UL, 30);          // overwrite keeps the count
-    ASSERT_EQ(t.len(), 200);
+    ASSERT_EQ(t.length(),200);
     i = 0UL;
     int okc = 1;
     while (i < 200UL) {
@@ -309,7 +310,7 @@ void t_btree() {
     ASSERT_EQ(t.remove((5UL * 7919UL) % 1000UL).default(-1), 50);
     ASSERT_FALSE(t.contains((5UL * 7919UL) % 1000UL));
     ASSERT_TRUE(t.remove(5000UL).is_none());
-    ASSERT_EQ(t.len(), 199);
+    ASSERT_EQ(t.length(),199);
     t.foreach(bt_visit);
     ASSERT_TRUE(g_bt_sorted);
     // churn: remove everything and refill; merged nodes are recycled
@@ -317,7 +318,7 @@ void t_btree() {
     while (round < 5) {
         i = 0UL;
         while (i < 200UL) { t.remove((i * 7919UL) % 1000UL); i = i + 1UL; }
-        ASSERT_EQ(t.len(), 0);
+        ASSERT_EQ(t.length(),0);
         i = 0UL;
         while (i < 200UL) { ASSERT_EQ(t.insert((i * 7919UL) % 1000UL, (int)i), 0); i = i + 1UL; }
         round = round + 1;
@@ -359,12 +360,12 @@ void t_ring() {
         int i = 0;
         while (i < 10) { data[i] = (unsigned char)i; i = i + 1; }
         ASSERT_EQ(r.write(data, 10UL), 10);
-        ASSERT_EQ(r.readable(), 10);
+        ASSERT_EQ(r.length(),10);
         unsigned char out[16];
         ASSERT_EQ(r.read(out, 6UL), 6);
         ASSERT_EQ(out[5], 5);
         ASSERT_EQ(r.write(data, 10UL), 10);   // wraps
-        ASSERT_EQ(r.readable(), 14);
+        ASSERT_EQ(r.length(),14);
         ASSERT_EQ(r.write(data, 10UL), 2);    // only 2 bytes free
         ASSERT_TRUE(r.is_full());
         r.read(out, 4UL);
@@ -501,6 +502,183 @@ void t_string_more() {
     }
 }
 
+// ── Container traits (traits.h): one generic body per role, run over every
+// conforming container ──────────────────────────────────────────────────────
+
+// Len + Clear: non-empty before, empty after clear().
+generic<C: Len + Clear>
+int clears(&C c) {
+    int had = !c.is_empty() && c.length() > 0UL;
+    c.clear();
+    return had && c.is_empty() && c.length() == 0UL;
+}
+
+// Lifo: pushes 1..n, pops them back newest first.
+generic<S: Lifo>
+int lifo_ok(&S s, int n) {
+    int i = 1;
+    while (i <= n) { if (!s.push(i)) return 0; i = i + 1; }
+    if (s.length() != (unsigned long)n) return 0;
+    while (i > 1) {
+        i = i - 1;
+        if (s.pop().default(-1) != i) return 0;
+    }
+    return s.is_empty() && s.pop().is_none();
+}
+
+// Sequence: push_all, then index every element back.
+generic<S: Sequence, T>
+int sequence_ok(&S s, const &T items, unsigned long n) {
+    if (push_all(s, items, n) != n || s.length() != n) return 0;
+    unsigned long i = 0UL;
+    while (i < n) {
+        int same = 0;
+        match (s.get(i)) {
+            case some(p): unsafe { same = *p == items[i]; }
+            case null: same = 0;
+        }
+        if (!same) return 0;
+        i = i + 1UL;
+    }
+    return s.get(n).is_null();
+}
+
+// CountedFifo: in through enqueue_all, out in the same order through
+// drain_into.
+generic<Q: CountedFifo, T>
+int fifo_ok(&Q q, const &T items, unsigned long n) {
+    if (enqueue_all(q, items, n) != n || q.length() != n) return 0;
+    struct Vec<T> out = Vec::new();
+    int ok = drain_into(q, &out) == n && q.is_empty() && q.dequeue().is_none();
+    unsigned long i = 0UL;
+    while (ok && i < n) {
+        unsafe { ok = *out.at(i) == items[i]; }
+        i = i + 1UL;
+    }
+    out.free();
+    return ok;
+}
+
+// Map: insert, overwrite, look up, remove.
+generic<M: Map, K, V>
+int map_ok(&M m, K a, K b, V va, V vb) {
+    if (!m.is_empty()) return 0;
+    m.insert(a, vb);
+    m.insert(a, va);                          // overwrite
+    m.insert(b, vb);
+    if (m.length() != 2UL || !m.contains(a) || !m.contains(b)) return 0;
+    int got = 0;
+    match (m.get(b)) { case some(p): got = *p == vb; case null: got = 0; }
+    if (!got) return 0;
+    if (m.remove(a).default(vb) != va) return 0;
+    return !m.contains(a) && m.remove(a).is_none() && m.length() == 1UL;
+}
+
+// An Order of our own: by last decimal digit, then by value.
+struct ByLastDigit {
+    int unused_;
+    int cmp(const &int a, const &int b) const;
+};
+int ByLastDigit::cmp(const &int a, const &int b) const {
+    int da = *a % 10;
+    int db = *b % 10;
+    if (da != db) return da < db ? -1 : 1;
+    return *a < *b ? -1 : (*a > *b ? 1 : 0);
+}
+
+static unsigned char g_trait_ring[8];
+static int g_trait_sv[8];
+static struct StaticMapSlot<int> g_trait_sm[4];
+
+void t_traits() {
+    int xs[5];
+    unsafe { xs[0] = 3; xs[1] = 1; xs[2] = 4; xs[3] = 1; xs[4] = 5; }
+
+    // Lifo: Vec, Stack, StaticVec
+    struct Vec<int> v = Vec::new();
+    struct Stack<int> st = Stack::new();
+    struct StaticVec<int> sv = StaticVec::over(&g_trait_sv[0], 8UL);
+    ASSERT_TRUE(lifo_ok(&v, 100));
+    ASSERT_TRUE(lifo_ok(&st, 100));
+    ASSERT_TRUE(lifo_ok(&sv, 8));
+    ASSERT_FALSE(lifo_ok(&sv, 9));                 // the 9th push is refused
+    sv.clear();
+
+    // Sequence: Vec, StaticVec
+    ASSERT_TRUE(sequence_ok(&v, &xs[0], 5UL));
+    ASSERT_TRUE(sequence_ok(&sv, &xs[0], 5UL));
+    sv.clear();
+    unsafe { ASSERT_EQ(push_all(&sv, &xs[0], 5UL) + push_all(&sv, &xs[0], 5UL), 8); }   // stops when full
+
+    // CountedFifo: Queue, RingBuffer (bytes); MpscQueue, LFQueue and Chan
+    // are in test_runtime
+    struct Queue<int> q = Queue::with_cap(2UL);
+    ASSERT_TRUE(fifo_ok(&q, &xs[0], 5UL));
+    unsigned char bytes[6];
+    unsafe {
+        bytes[0] = (unsigned char)'f'; bytes[1] = (unsigned char)'i'; bytes[2] = (unsigned char)'f';
+        bytes[3] = (unsigned char)'o'; bytes[4] = (unsigned char)'!'; bytes[5] = (unsigned char)'?';
+        struct RingBuffer r = RingBuffer::over((&static unsigned char)g_trait_ring, 8UL);
+        ASSERT_TRUE(fifo_ok(&r, &bytes[0], 6UL));
+        ASSERT_EQ(enqueue_all(&r, &bytes[0], 6UL) + enqueue_all(&r, &bytes[0], 6UL), 8);  // full at 8
+        ASSERT_TRUE(clears(&r));
+    }
+
+    // Map: HashMap, StrMap, BST, BTree
+    struct HashMap<int, long long> hm = HashMap::new();
+    ASSERT_TRUE(map_ok(&hm, 7, -7, 70LL, -70LL));
+    struct StrMap<int> sm = StrMap::new();
+    ASSERT_TRUE(map_ok(&sm, "seven", "minus seven", 7, -7));
+    struct BST<int, int, Less<int>> bt = BST::new();
+    ASSERT_TRUE(map_ok(&bt, 7, -7, 70, -70));
+    ?&heap BTree<int> btq = alloc(sizeof(struct BTree<int>));
+    ASSERT_FALSE(btq.is_null());
+    if (btq.is_null()) return;
+    &BTree<int> b = std::expect_ref(btq, "btq is null");
+    b.init();
+    ASSERT_TRUE(map_ok(b, 7UL, 9UL, 70, 90));
+
+    // Len + Clear: every container above, plus String, List and StaticMap
+    struct String s = String::from("abc");
+    struct List<int> l = List::new();
+    l.push_back(1);
+    struct StaticMap<int> smap = StaticMap::over(&g_trait_sm[0], 4UL);
+    smap.insert(1UL, 1);
+    v.push(1); st.push(1); sv.push(1); q.enqueue(1);
+    ASSERT_TRUE(clears(&v));
+    ASSERT_TRUE(clears(&st));
+    ASSERT_TRUE(clears(&sv));
+    ASSERT_TRUE(clears(&q));
+    ASSERT_TRUE(clears(&hm));
+    ASSERT_TRUE(clears(&sm));
+    ASSERT_TRUE(clears(&bt));
+    ASSERT_TRUE(clears(b));
+    ASSERT_TRUE(clears(&s));
+    ASSERT_TRUE(clears(&l));
+    ASSERT_TRUE(clears(&smap));
+
+    // Order: Less, Greater, FnOrder and a struct of our own, through
+    // vec_sort_by and BST's ordering parameter
+    push_all(&v, &xs[0], 5UL);
+    v.push(20); v.push(11);
+    struct ByLastDigit by_digit;
+    by_digit.unused_ = 0;
+    vec_sort_by(&v, by_digit);                     // 20 1 1 11 3 4 5
+    ASSERT_EQ(*v.at(0UL), 20);
+    ASSERT_EQ(*v.at(3UL), 11);
+    ASSERT_EQ(*v.at(6UL), 5);
+    vec_sort_by(&v, FnOrder::of(cmp_int));
+    ASSERT_EQ(*v.at(6UL), 20);
+    struct BST<int, int, ByLastDigit> bd = BST::new_with(by_digit);
+    bd.insert(15, 0); bd.insert(21, 0); bd.insert(30, 0);
+    ASSERT_EQ(bd.min_key().default(0), 30);
+    ASSERT_EQ(bd.max_key().default(0), 15);
+
+    v.free(); st.free(); q.free(); hm.free(); sm.free(); bt.free(); bd.free();
+    s.free(); l.free();
+    dealloc(btq);
+}
+
 int main() {
     struct TestSuite t = TestSuite::new();
     unsafe {
@@ -515,6 +693,7 @@ int main() {
         t.add("static_vec/static_map", t_static);
         t.add("slice", t_slice);
         t.add("string/capacity extras", t_string_more);
+        t.add("container traits", t_traits);
     }
     t.run();
     t.print_summary();

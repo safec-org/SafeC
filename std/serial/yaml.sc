@@ -586,4 +586,14 @@ struct Value yaml_parse(const &char text, ?&int ok) {
     return result;
 }
 
+struct Yaml Yaml::new() {
+    struct Yaml f;
+    f.unused_ = 0;
+    return f;
+}
+
+void Yaml::write(const &Value v, &String out) const { yaml_write(v, out); }
+
+struct Value Yaml::parse(const &char text, ?&int ok) const { return yaml_parse(text, ok); }
+
 } // namespace std

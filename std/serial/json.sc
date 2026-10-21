@@ -405,4 +405,14 @@ struct Value json_parse(const &char text, ?&int ok) {
     return v;
 }
 
+struct Json Json::new() {
+    struct Json f;
+    f.unused_ = 0;
+    return f;
+}
+
+void Json::write(const &Value v, &String out) const { json_write(v, out); }
+
+struct Value Json::parse(const &char text, ?&int ok) const { return json_parse(text, ok); }
+
 } // namespace std

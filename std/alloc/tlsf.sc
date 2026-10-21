@@ -197,27 +197,33 @@ void* TlsfAllocator::find_(unsigned long size) {
     }
 }
 
-struct TlsfAllocator TlsfAllocator::over(&unsigned char buffer, unsigned long cap) {
-    struct TlsfAllocator a;
-    unsafe { a.base = (&heap void)buffer; }
-    a.owned     = 0;
-    a.cap       = cap;
-    a.fl_bitmap = (unsigned int)0;
+// Empty free lists, then the whole buffer as one free block (none when
+// cap can't hold a header).
+void TlsfAllocator::reset() {
+    self.fl_bitmap = (unsigned int)0;
     unsafe {
-        memset((void*)a.sl_bitmap, 0, sizeof(a.sl_bitmap));
-        memset((void*)a.blocks, 0, sizeof(a.blocks));
+        memset((void*)self.sl_bitmap, 0, sizeof(self.sl_bitmap));
+        memset((void*)self.blocks, 0, sizeof(self.blocks));
     }
     unsigned long hdr = tlsf_hdr_size_();
-    if (cap > hdr) {
+    if (self.cap > hdr) {
         unsafe {
-            struct TlsfBlock* blk = (struct TlsfBlock*)buffer;
-            blk->size      = cap - hdr;
+            struct TlsfBlock* blk = (struct TlsfBlock*)self.base;
+            blk->size      = self.cap - hdr;
             blk->prev_phys = (void*)0;
             blk->next_free = (void*)0;
             blk->prev_free = (void*)0;
-            a.insert_(&(*blk));
+            self.insert_(&(*blk));
         }
     }
+}
+
+struct TlsfAllocator TlsfAllocator::over(&unsigned char buffer, unsigned long cap) {
+    struct TlsfAllocator a;
+    unsafe { a.base = (&heap void)buffer; }
+    a.owned = 0;
+    a.cap   = cap;
+    a.reset();
     return a;
 }
 
@@ -225,23 +231,8 @@ struct TlsfAllocator TlsfAllocator::new(unsigned long cap) {
     struct TlsfAllocator a;
     unsafe { a.base = (&heap void)malloc(cap); }
     a.owned = 1;
-    a.cap       = cap;
-    a.fl_bitmap = (unsigned int)0;
-    unsafe {
-        memset((void*)a.sl_bitmap, 0, sizeof(a.sl_bitmap));
-        memset((void*)a.blocks, 0, sizeof(a.blocks));
-    }
-    unsigned long hdr = tlsf_hdr_size_();
-    if (cap > hdr) {
-        unsafe {
-            struct TlsfBlock* blk = (struct TlsfBlock*)a.base;
-            blk->size      = cap - hdr;
-            blk->prev_phys = (void*)0;
-            blk->next_free = (void*)0;
-            blk->prev_free = (void*)0;
-            a.insert_(&(*blk));
-        }
-    }
+    a.cap   = cap;
+    a.reset();
     return a;
 }
 

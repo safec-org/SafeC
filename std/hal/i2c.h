@@ -17,6 +17,14 @@
 
 namespace std {
 
+// What an I2C controller type provides; I2cBus<C> requires it.
+trait I2cChip {
+    void init(unsigned long base, unsigned int speed, unsigned int clock_hz) const;
+    int  write(unsigned long base, unsigned char addr, const &unsigned char data, unsigned long len) const;
+    int  read(unsigned long base, unsigned char addr, &unsigned char data, unsigned long len) const;
+    int  probe(unsigned long base, unsigned char addr) const;
+}
+
 struct I2cGeneric {
     int unused_;
     void init(unsigned long base, unsigned int speed, unsigned int clock_hz) const;
@@ -32,7 +40,7 @@ struct Stm32F4I2c {
     int  probe(unsigned long base, unsigned char addr) const;
 };
 
-generic<C>
+generic<C: I2cChip>
 struct I2cBus {
     &volatile unsigned int base; // MMIO base address
     unsigned int speed;  // bus speed in Hz
@@ -56,7 +64,7 @@ struct I2cBus {
     unsigned long addr_() const;
 };
 
-generic<C>
+generic<C: I2cChip>
 struct I2cBus<C> I2cBus::new(&volatile unsigned int base, unsigned int speed, unsigned int clock_hz) {
     struct I2cBus<C> bus;
     bus.base = base;
@@ -65,24 +73,24 @@ struct I2cBus<C> I2cBus::new(&volatile unsigned int base, unsigned int speed, un
     return bus;
 }
 
-generic<C>
+generic<C: I2cChip>
 unsigned long I2cBus::addr_() const { unsafe { return (unsigned long)self.base; } }
-generic<C>
+generic<C: I2cChip>
 int I2cBus::write(unsigned char addr, const &unsigned char data, unsigned long len) {
     return self.chip.write(self.addr_(), addr, data, len);
 }
-generic<C>
+generic<C: I2cChip>
 int I2cBus::read(unsigned char addr, &unsigned char data, unsigned long len) {
     return self.chip.read(self.addr_(), addr, data, len);
 }
-generic<C>
+generic<C: I2cChip>
 int I2cBus::write_read(unsigned char addr, const &unsigned char wr, unsigned long wr_len,
                        &unsigned char rd, unsigned long rd_len) {
     int r = self.chip.write(self.addr_(), addr, wr, wr_len);
     if (r != I2C_OK) { return r; }
     return self.chip.read(self.addr_(), addr, rd, rd_len);
 }
-generic<C>
+generic<C: I2cChip>
 int I2cBus::probe(unsigned char addr) { return self.chip.probe(self.addr_(), addr); }
 
 } // namespace std

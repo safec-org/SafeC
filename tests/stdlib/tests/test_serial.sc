@@ -90,33 +90,41 @@ void t_csv() {
     }
 }
 
+// Any Format (value.h): encode, parse back, encode again — the two texts
+// match. 1 on success.
+generic<F: Format>
+int round_trips(F f, const &Value v) {
+    int ok = 0;
+    struct String text = v.encode(f);
+    struct Value back = Value::decode(f, text.as_ptr(), &ok);
+    struct String again = back.encode(f);
+    int same = 0;
+    unsafe { same = str_eq(text.as_ptr(), again.as_ptr()); }
+    int good = ok && same && text.length() > 0UL;
+    text.free(); again.free(); back.free();
+    return good;
+}
+
 void t_xml_yaml_html() {
-    unsafe {
-        struct Value o = sample();
-        int ok = 0;
-        struct String x = value_to_xml(&o, "root");
-        struct Value xb = xml_parse(x.as_ptr(), &ok);
-        ASSERT_TRUE(ok);
-        struct String x2 = value_to_xml(&xb, "root");
-        ASSERT_STR_EQ(x.as_ptr(), x2.as_ptr());
-        struct String y = value_to_yaml(&o);
-        struct Value yb = yaml_parse(y.as_ptr(), &ok);
-        ASSERT_TRUE(ok);
-        struct String y2 = value_to_yaml(&yb);
-        ASSERT_STR_EQ(y.as_ptr(), y2.as_ptr());
-        struct String h = value_to_html(&o);
-        struct Value hb = html_parse(h.as_ptr(), &ok);
-        ASSERT_TRUE(ok);
-        struct String h2 = value_to_html(&hb);
-        ASSERT_STR_EQ(h.as_ptr(), h2.as_ptr());
-        struct String esc = String::new();
-        html_escape(&esc, "<a href=\"x\">&</a>");
-        ASSERT_TRUE(esc.contains("&lt;a"));
-        ASSERT_TRUE(esc.contains("&amp;"));
-        esc.free();
-        x.free(); x2.free(); y.free(); y2.free(); h.free(); h2.free();
-        xb.free(); yb.free(); hb.free(); o.free();
-    }
+    struct Value o = sample();
+    ASSERT_TRUE(round_trips(Json::new(), &o));
+    ASSERT_TRUE(round_trips(Yaml::new(), &o));
+    ASSERT_TRUE(round_trips(Xml::new("root"), &o));
+    ASSERT_TRUE(round_trips(Html::new(), &o));
+    int ok = 0;
+    struct Value rows = Value::decode(Csv::new(), "a,b\n1,\"x,y\"\n", &ok);   // CSV: rows of fields
+    ASSERT_TRUE(ok);
+    ASSERT_TRUE(round_trips(Csv::new(), &rows));
+    struct String x = o.encode(Xml::new("doc"));
+    ASSERT_TRUE(x.starts_with("<doc>"));
+    struct Value bad = Value::decode(Json::new(), "[1,", &ok);
+    ASSERT_FALSE(ok);
+    struct String esc = String::new();
+    html_escape(&esc, "<a href=\"x\">&</a>");
+    ASSERT_TRUE(esc.contains("&lt;a"));
+    ASSERT_TRUE(esc.contains("&amp;"));
+    esc.free(); x.free();
+    bad.free(); rows.free(); o.free();
 }
 
 void t_protobuf() {

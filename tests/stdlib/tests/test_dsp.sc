@@ -857,12 +857,12 @@ void t_dsp_f32_more() {
         float kbf[50]; double kbd[50];
         struct KarplusStrong32 kf = KarplusStrong32::new((float*)kbf, 50UL, (float)0.996);
         struct KarplusStrong kd = KarplusStrong::new((double*)kbd, 50UL, 0.996);
-        kf.reset((const float*)g_gx, 50UL);
-        kd.reset((const double*)g_cx, 50UL);
+        kf.pluck((const float*)g_gx, 50UL);
+        kd.pluck((const double*)g_cx, 50UL);
         worst = 0.0;
         i = 0UL;
         while (i < 1000UL) {
-            double e = (double)kf.process() - kd.process();
+            double e = (double)kf.next() - kd.next();
             if (e < 0.0) e = -e;
             if (e > worst) worst = e;
             i = i + 1UL;
@@ -1029,7 +1029,7 @@ void t_dsp_extras() {
         i = 0;
         while (i < 4) { kb[i] = fixed_from_float(0.25 * (double)(i + 1)); i = i + 1; }
         struct FKarplusStrong ks = FKarplusStrong::new(&kb[0], 4UL, fixed_from_float(0.99));
-        ASSERT_TRUE(ks.process() != (Fixed)0);
+        ASSERT_TRUE(ks.next() != (Fixed)0);
 
         struct AudioBuffer ab = AudioBuffer::new(1UL);
         Fixed frames[3];
@@ -1044,81 +1044,121 @@ void t_dsp_extras() {
     }
 }
 
-// ── SampleFilter traits (sample_filter.h) ────────────────────────────────────
-// One generic check per sample type, run on every conforming filter: the
-// impulse response is repeatable (reset works), and process_block (in place)
-// matches process() sample by sample from a reset state. Returns the worst
-// difference.
+// ── Streaming traits (sample_filter.h) ───────────────────────────────────────
+// Each check is written once against a role and run on every conforming type
+// in all three sample types (double, float, Q8.24). Samples are compared as
+// doubles; a Q8.24 value converts exactly, so fixed point must match exactly.
 
 #define TR_N 300UL
 
-generic<F: SampleFilter>
-double tr_check(&F f, const &double x) {
-    double h1[16];
-    double h2[16];
-    double y1[TR_N];
-    double y2[TR_N];
+// A sample as a double (Q8.24 scaled to its value), like sample_one's test.
+generic<S>
+double tr_val(S x) {
+    if ((S)0.5 == (S)0) { return (double)x / 16777216.0; }
+    return (double)x;
+}
+
+// The largest |a[i] - b[i]|, i < n.
+generic<S>
+double tr_diff(const &S a, const &S b, unsigned long n) {
+    double worst = 0.0;
+    unsigned long i = 0UL;
+    while (i < n) {
+        double e;
+        unsafe { e = tr_val(a[i]) - tr_val(b[i]); }
+        if (e < 0.0) e = -e;
+        if (e > worst) worst = e;
+        i = i + 1UL;
+    }
+    return worst;
+}
+
+// SampleFilter: the impulse response is repeatable (reset works), and
+// process_block (in place) matches process() sample by sample from a reset
+// state. Returns the worst difference.
+generic<F: SampleFilter, S>
+double tr_check(&F f, const &S x) {
+    S h1[16];
+    S h2[16];
+    S y1[TR_N];
+    S y2[TR_N];
     filter_impulse_response(f, &h1[0], 16UL);
     filter_impulse_response(f, &h2[0], 16UL);
     double worst = 0.0;
-    unsigned long i = 0UL;
     unsafe {
-        while (i < 16UL) { double e = h1[i] - h2[i]; if (e < 0.0) e = -e; if (e > worst) worst = e; i = i + 1UL; }
+        worst = tr_diff(&h1[0], &h2[0], 16UL);
         f.reset();
-        i = 0UL;
+        unsigned long i = 0UL;
         while (i < TR_N) { y1[i] = f.process(x[i]); y2[i] = x[i]; i = i + 1UL; }
         f.reset();
-        f.process_block((const double*)&y2[0], &y2[0], TR_N);
-        i = 0UL;
-        while (i < TR_N) { double e = y1[i] - y2[i]; if (e < 0.0) e = -e; if (e > worst) worst = e; i = i + 1UL; }
+        f.process_block(&y2[0], &y2[0], TR_N);
+        double e = tr_diff(&y1[0], &y2[0], TR_N);
+        if (e > worst) worst = e;
     }
     return worst;
 }
 
-generic<F: SampleFilter32>
-double tr_check_f32(&F f, const &float x) {
-    float h1[16];
-    float h2[16];
-    float y1[TR_N];
-    float y2[TR_N];
-    filter_impulse_response_f32(f, &h1[0], 16UL);
-    filter_impulse_response_f32(f, &h2[0], 16UL);
+// FilterChain: chains of chains, ((a b) c) and (a (b c)), equal the three
+// stages one after the other, by process() and by process_block(); each
+// chain is itself a SampleFilter (tr_check). Stages are copied into the
+// chains but share their caller-owned history, so everything runs in turn
+// from a reset.
+generic<S, A: SampleFilter, B: SampleFilter, C: SampleFilter>
+double tr_chain_check(A a, B b, C c, const &S x) {
+    S ref[TR_N];
+    S y[TR_N];
+    a.reset();
+    b.reset();
+    c.reset();
+    unsigned long i = 0UL;
+    unsafe {
+        while (i < TR_N) { ref[i] = c.process(b.process(a.process(x[i]))); i = i + 1UL; }
+    }
+    struct FilterChain<S, A, B> ab = FilterChain::of(a, b);
+    struct FilterChain<S, struct FilterChain<S, A, B>, C> ab_c = FilterChain::of(ab, c);
+    struct FilterChain<S, B, C> bc = FilterChain::of(b, c);
+    struct FilterChain<S, A, struct FilterChain<S, B, C>> a_bc = FilterChain::of(a, bc);
     double worst = 0.0;
-    unsigned long i = 0UL;
     unsafe {
-        while (i < 16UL) { double e = (double)(h1[i] - h2[i]); if (e < 0.0) e = -e; if (e > worst) worst = e; i = i + 1UL; }
-        f.reset();
+        ab_c.reset();
+        ab_c.process_block(x, &y[0], TR_N);
+        double e = tr_diff(&ref[0], &y[0], TR_N);
+        if (e > worst) worst = e;
+        a_bc.reset();
         i = 0UL;
-        while (i < TR_N) { y1[i] = f.process(x[i]); y2[i] = x[i]; i = i + 1UL; }
-        f.reset();
-        f.process_block((const float*)&y2[0], &y2[0], TR_N);
-        i = 0UL;
-        while (i < TR_N) { double e = (double)(y1[i] - y2[i]); if (e < 0.0) e = -e; if (e > worst) worst = e; i = i + 1UL; }
+        while (i < TR_N) { y[i] = a_bc.process(x[i]); i = i + 1UL; }
+        e = tr_diff(&ref[0], &y[0], TR_N);
+        if (e > worst) worst = e;
+        a_bc.reset();
+        a_bc.process_block(x, &y[0], TR_N);
+        e = tr_diff(&ref[0], &y[0], TR_N);
+        if (e > worst) worst = e;
     }
+    double e2 = tr_check(&ab_c, x);
+    if (e2 > worst) worst = e2;
+    e2 = tr_check(&a_bc, x);
+    if (e2 > worst) worst = e2;
     return worst;
 }
 
-generic<F: SampleFilterFixed>
-int tr_check_fixed(&F f, const &Fixed x) {
-    Fixed h1[16];
-    Fixed h2[16];
-    Fixed y1[TR_N];
-    Fixed y2[TR_N];
-    filter_impulse_response_fixed(f, &h1[0], 16UL);
-    filter_impulse_response_fixed(f, &h2[0], 16UL);
-    int same = 1;
+// SampleGenerator: generate_block matches next() called n times. g1 and g2
+// are the same generator on two delay lines plucked alike; y1 and y2 hold
+// TR_N samples. Returns the worst difference, or -1 if the output is silent.
+generic<G: SampleGenerator, S>
+double tr_gen_check(&G g1, &G g2, &S y1, &S y2) {
+    generate_block(g1, y1, TR_N);
+    double peak = 0.0;
     unsigned long i = 0UL;
-    unsafe {
-        while (i < 16UL) { if (h1[i] != h2[i]) same = 0; i = i + 1UL; }
-        f.reset();
-        i = 0UL;
-        while (i < TR_N) { y1[i] = f.process(x[i]); y2[i] = x[i]; i = i + 1UL; }
-        f.reset();
-        f.process_block((const Fixed*)&y2[0], &y2[0], TR_N);
-        i = 0UL;
-        while (i < TR_N) { if (y1[i] != y2[i]) same = 0; i = i + 1UL; }   // fixed point: exact
+    while (i < TR_N) {
+        S v = g2.next();
+        unsafe { y2[i] = v; }
+        double m = tr_val(v);
+        if (m < 0.0) m = -m;
+        if (m > peak) peak = m;
+        i = i + 1UL;
     }
-    return same;
+    if (peak == 0.0) return -1.0;
+    return tr_diff(y1, y2, TR_N);
 }
 
 void t_sample_filter_traits() {
@@ -1147,11 +1187,11 @@ void t_sample_filter_traits() {
         double ch1[7]; double ch2[7];
         struct CombFF cff = CombFF::new((double*)ch1, 7UL, 0.5);
         struct CombFB cfb = CombFB::new((double*)ch2, 7UL, 0.5);
-        ASSERT_TRUE(tr_check(&fir, (const double*)x) < 1e-12);
-        ASSERT_TRUE(tr_check(&iir, (const double*)x) < 1e-12);
-        ASSERT_TRUE(tr_check(&bq, (const double*)x) < 1e-12);   // block form may use FMA
-        ASSERT_TRUE(tr_check(&cff, (const double*)x) < 1e-15);
-        ASSERT_TRUE(tr_check(&cfb, (const double*)x) < 1e-15);
+        ASSERT_TRUE(tr_check(&fir, &x[0]) < 1e-12);
+        ASSERT_TRUE(tr_check(&iir, &x[0]) < 1e-12);
+        ASSERT_TRUE(tr_check(&bq, &x[0]) < 1e-12);   // block form may use FMA
+        ASSERT_TRUE(tr_check(&cff, &x[0]) < 1e-15);
+        ASSERT_TRUE(tr_check(&cfb, &x[0]) < 1e-15);
 
         // impulse responses: a FIR's is its taps, a feedback comb's decays by
         // 'gain' every 'delay' samples, an IIR with a biquad's coefficients is
@@ -1178,21 +1218,10 @@ void t_sample_filter_traits() {
         filter_step_response(&bq, &s[0], 400UL);
         ASSERT_TRUE(near_d(s[399], 1.0, 1e-6));
 
-        // two-stage cascade == the two filters one after the other
+        // chains of chains == the stages one after the other
         struct Biquad hp = Biquad::highpass(48000.0, 200.0, 0.7071);
-        double y1[TR_N];
-        double y2[TR_N];
-        hp.reset();
-        fir.reset();
-        i = 0UL;
-        while (i < TR_N) { y1[i] = fir.process(hp.process(x[i])); i = i + 1UL; }
-        hp.reset();
-        fir.reset();
-        filter_cascade_block(&hp, &fir, (const double*)x, &y2[0], TR_N);
-        worst = 0.0;
-        i = 0UL;
-        while (i < TR_N) { double e = y1[i] - y2[i]; if (e < 0.0) e = -e; if (e > worst) worst = e; i = i + 1UL; }
-        ASSERT_TRUE(worst < 1e-12);
+        ASSERT_TRUE(tr_chain_check(hp, fir, cfb, &x[0]) < 1e-12);
+        ASSERT_TRUE(tr_chain_check(iir, cff, bq, &x[0]) < 1e-12);
 
         // float
         float tapsf[5];
@@ -1209,27 +1238,19 @@ void t_sample_filter_traits() {
         float cf1[7]; float cf2[7];
         struct CombFF32 cff32 = CombFF32::new((float*)cf1, 7UL, (float)0.5);
         struct CombFB32 cfb32 = CombFB32::new((float*)cf2, 7UL, (float)0.5);
-        ASSERT_TRUE(tr_check_f32(&fir32, (const float*)xf) < 1e-5);
-        ASSERT_TRUE(tr_check_f32(&iir32, (const float*)xf) < 1e-5);
-        ASSERT_TRUE(tr_check_f32(&bq32, (const float*)xf) < 1e-4);
-        ASSERT_TRUE(tr_check_f32(&cff32, (const float*)xf) < 1e-6);
-        ASSERT_TRUE(tr_check_f32(&cfb32, (const float*)xf) < 1e-6);
+        ASSERT_TRUE(tr_check(&fir32, &xf[0]) < 1e-5);
+        ASSERT_TRUE(tr_check(&iir32, &xf[0]) < 1e-5);
+        ASSERT_TRUE(tr_check(&bq32, &xf[0]) < 1e-4);
+        ASSERT_TRUE(tr_check(&cff32, &xf[0]) < 1e-6);
+        ASSERT_TRUE(tr_check(&cfb32, &xf[0]) < 1e-6);
         float hf[16];
-        filter_impulse_response_f32(&fir32, &hf[0], 16UL);
+        filter_impulse_response(&fir32, &hf[0], 16UL);
         ASSERT_TRUE(near_d((double)hf[3], 0.25, 1e-7));
         float yf1[TR_N];
-        float yf2[TR_N];
-        filter_step_response_f32(&bq32, &yf1[0], TR_N);
+        filter_step_response(&bq32, &yf1[0], TR_N);
         ASSERT_TRUE(near_d((double)yf1[TR_N - 1UL], 1.0, 1e-3));
-        cff32.reset();
-        cfb32.reset();
-        filter_cascade_block_f32(&cff32, &cfb32, (const float*)xf, &yf2[0], TR_N);
-        cff32.reset();
-        cfb32.reset();
-        worst = 0.0;
-        i = 0UL;
-        while (i < TR_N) { double e = (double)(cfb32.process(cff32.process(xf[i])) - yf2[i]); if (e < 0.0) e = -e; if (e > worst) worst = e; i = i + 1UL; }
-        ASSERT_TRUE(worst < 1e-6);
+        ASSERT_TRUE(tr_chain_check(cff32, cfb32, fir32, &xf[0]) < 1e-5);
+        ASSERT_TRUE(tr_chain_check(bq32, iir32, cff32, &xf[0]) < 1e-4);
 
         // fixed point
         Fixed tq[5];
@@ -1246,27 +1267,43 @@ void t_sample_filter_traits() {
         Fixed cq1[7]; Fixed cq2[7];
         struct FCombFF cffq = FCombFF::new(&cq1[0], 7UL, fixed_from_float(0.5));
         struct FCombFB cfbq = FCombFB::new(&cq2[0], 7UL, fixed_from_float(0.5));
-        ASSERT_TRUE(tr_check_fixed(&firq, &xq[0]));
-        ASSERT_TRUE(tr_check_fixed(&bqq, &xq[0]));
-        ASSERT_TRUE(tr_check_fixed(&iirq, &xq[0]));
-        ASSERT_TRUE(tr_check_fixed(&cffq, &xq[0]));
-        ASSERT_TRUE(tr_check_fixed(&cfbq, &xq[0]));
+        // fixed point is exact: block == per sample, chains == stages
+        ASSERT_TRUE(tr_check(&firq, &xq[0]) == 0.0);
+        ASSERT_TRUE(tr_check(&bqq, &xq[0]) == 0.0);
+        ASSERT_TRUE(tr_check(&iirq, &xq[0]) == 0.0);
+        ASSERT_TRUE(tr_check(&cffq, &xq[0]) == 0.0);
+        ASSERT_TRUE(tr_check(&cfbq, &xq[0]) == 0.0);
         Fixed hq[16];
-        filter_impulse_response_fixed(&firq, &hq[0], 16UL);
+        filter_impulse_response(&firq, &hq[0], 16UL);
         ASSERT_TRUE(near_d(fixed_to_float(hq[2]), 0.4, 1e-6));
         Fixed sq[TR_N];
-        filter_step_response_fixed(&bqq, &sq[0], TR_N);
+        filter_step_response(&bqq, &sq[0], TR_N);
         ASSERT_TRUE(near_d(fixed_to_float(sq[TR_N - 1UL]), 1.0, 1e-3));
-        Fixed yq[TR_N];
-        iirq.reset();
-        firq.reset();
-        filter_cascade_block_fixed(&iirq, &firq, &xq[0], &yq[0], TR_N);
-        iirq.reset();
-        firq.reset();
-        int same = 1;
-        i = 0UL;
-        while (i < TR_N) { if (firq.process(iirq.process(xq[i])) != yq[i]) same = 0; i = i + 1UL; }
-        ASSERT_TRUE(same);
+        ASSERT_TRUE(tr_chain_check(iirq, firq, cfbq, &xq[0]) == 0.0);
+        ASSERT_TRUE(tr_chain_check(cffq, bqq, firq, &xq[0]) == 0.0);
+
+        // generators: the Karplus-Strong strings, two of each plucked alike
+        double kd1[37]; double kd2[37];
+        float kf1[37]; float kf2[37];
+        Fixed kq1[37]; Fixed kq2[37];
+        struct KarplusStrong ksd1 = KarplusStrong::new((double*)kd1, 37UL, 0.995);
+        struct KarplusStrong ksd2 = KarplusStrong::new((double*)kd2, 37UL, 0.995);
+        struct KarplusStrong32 ksf1 = KarplusStrong32::new((float*)kf1, 37UL, (float)0.995);
+        struct KarplusStrong32 ksf2 = KarplusStrong32::new((float*)kf2, 37UL, (float)0.995);
+        struct FKarplusStrong ksq1 = FKarplusStrong::new(&kq1[0], 37UL, fixed_from_float(0.995));
+        struct FKarplusStrong ksq2 = FKarplusStrong::new(&kq2[0], 37UL, fixed_from_float(0.995));
+        ksd1.pluck((const double*)x, 37UL);
+        ksd2.pluck((const double*)x, 37UL);
+        ksf1.pluck((const float*)xf, 37UL);
+        ksf2.pluck((const float*)xf, 37UL);
+        ksq1.pluck((const Fixed*)xq, 37UL);
+        ksq2.pluck((const Fixed*)xq, 37UL);
+        double gd1[TR_N]; double gd2[TR_N];
+        float gf1[TR_N]; float gf2[TR_N];
+        Fixed gq1[TR_N]; Fixed gq2[TR_N];
+        ASSERT_TRUE(tr_gen_check(&ksd1, &ksd2, &gd1[0], &gd2[0]) == 0.0);
+        ASSERT_TRUE(tr_gen_check(&ksf1, &ksf2, &gf1[0], &gf2[0]) == 0.0);
+        ASSERT_TRUE(tr_gen_check(&ksq1, &ksq2, &gq1[0], &gq2[0]) == 0.0);
     }
 }
 
@@ -1286,7 +1323,7 @@ int main() {
         t.add("dsp f32", t_dsp_f32);
         t.add("iir/comb/imaging/dct/dft f32", t_dsp_f32_more);
         t.add("dsp extras (biquad designs, fixed ops, resample)", t_dsp_extras);
-        t.add("SampleFilter traits (all filters, cascade, impulse/step)", t_sample_filter_traits);
+        t.add("streaming traits (filters, chains, generators, impulse/step)", t_sample_filter_traits);
     }
     t.run();
     t.print_summary();

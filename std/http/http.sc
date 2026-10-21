@@ -9,6 +9,7 @@
 #include <std/str.h>
 #include <std/sched/io_nb.h>
 #include <std/io_traits.h>
+#include <std/io_buf.h>
 #include <std/sched/reactor.h>
 #include <std/thread.h>
 extern void* malloc(size_t size);
@@ -194,34 +195,19 @@ int http_resolve_host(const &char host, &unsigned int addr_out) {
 
 // ── Blocking socket I/O helpers ───────────────────────────────────────────
 
-// Reads bytes into 'out' until 'terminator' (e.g. "\r\n\r\n") is found
-// within what's been read so far, or the connection closes. Returns the
-// byte offset (into 'out') right after the terminator on success, or -1 if
-// the connection closed before the terminator appeared.
-static long read_until_(int fd, struct String* out, const char* terminator) {
-    unsigned long termLen; unsafe { termLen = str_len(terminator); }
-    char chunk[512];
-    while (1) {
-        long n;
-        unsafe { n = sock_read_(fd, (void*)chunk, 512UL); }
-        if (n <= 0L) { return -1L; }
-        unsafe { out->push_n(chunk, (unsigned long)n); }
-        long idx; unsafe { idx = out->index_of(terminator); }
-        if (idx >= 0L) { return idx + (long)termLen; }
-    }
-}
-
-// Reads exactly 'want' more bytes, appending to 'out'. Returns 1 on
-// success, 0 if the connection closed early.
-static int read_n_(int fd, struct String* out, unsigned long want) {
+// Reads exactly 'want' more bytes from 'r' (a BufReader over the
+// connection: bytes that arrived with the header block come first),
+// appending to 'out'. Returns 1 on success, 0 if the connection closed
+// early.
+generic<R: Reader>
+static int read_n_(&R r, struct String* out, unsigned long want) {
     unsigned long remaining = want;
-    char chunk[4096];
+    unsigned char chunk[4096];
     while (remaining > 0UL) {
         unsigned long ask = (remaining < 4096UL) ? remaining : 4096UL;
-        long n;
-        unsafe { n = sock_read_(fd, (void*)chunk, ask); }
-        if (n <= 0L) { return 0; }
-        unsafe { out->push_n(chunk, (unsigned long)n); }
+        long long n = r.read(&chunk[0], ask);
+        if (n <= 0LL) { return 0; }
+        unsafe { out->push_n((const char*)&chunk[0], (unsigned long)n); }
         remaining = remaining - (unsigned long)n;
     }
     return 1;
@@ -474,12 +460,13 @@ struct HttpResponse http_request_timeout(const &char host, unsigned short port,
     }
 
     if (good) {
-        struct String buf = String::new();
-        long headerEnd = read_until_(fd, &buf, "\r\n\r\n");
-        if (headerEnd < 0L) {
+        struct TcpStream s = TcpStream::from_fd(fd);
+        struct BufReader<TcpStream> in = BufReader::over(&s);
+        struct String headerBlock = String::new();
+        if (!in.read_until(&headerBlock, "\r\n\r\n")) {
             good = 0;
+            headerBlock.free();
         } else {
-            struct String headerBlock = buf.substr(0UL, (unsigned long)headerEnd);
             long firstLineEnd = headerBlock.index_of("\r\n");
             struct String statusLine = (firstLineEnd >= 0L)
                 ? headerBlock.substr(0UL, (unsigned long)firstLineEnd)
@@ -513,17 +500,11 @@ struct HttpResponse http_request_timeout(const &char host, unsigned short port,
             }
             clStr.free();
 
-            unsigned long already = buf.length() - (unsigned long)headerEnd;
-            struct String alreadyBody = buf.substr((unsigned long)headerEnd, buf.length());
-            resp.body.free();
-            resp.body = alreadyBody;
-            if (contentLen > already) {
-                if (!read_n_(fd, &resp.body, contentLen - already)) {
-                    good = 0;
-                }
-            }
+            // Without a Content-Length, the body is what arrived with the
+            // header block.
+            unsigned long want = (contentLen > 0UL) ? contentLen : in.buffered();
+            if (!read_n_(&in, &resp.body, want)) { good = 0; }
         }
-        buf.free();
     }
 
     if (fd >= 0) { unsafe { sock_close_(fd); } }
@@ -565,12 +546,13 @@ static struct HttpRequest http_parse_request_(int fd, int* ok) {
     req.body    = String::new();
     int good = 1;
 
-    struct String buf = String::new();
-    long headerEnd = read_until_(fd, &buf, "\r\n\r\n");
-    if (headerEnd < 0L) {
+    struct TcpStream s = TcpStream::from_fd(fd);
+    struct BufReader<TcpStream> in = BufReader::over(&s);
+    struct String headerBlock = String::new();
+    if (!in.read_until(&headerBlock, "\r\n\r\n")) {
         good = 0;
+        headerBlock.free();
     } else {
-        struct String headerBlock = buf.substr(0UL, (unsigned long)headerEnd);
         long firstLineEnd = headerBlock.index_of("\r\n");
         struct String requestLine = (firstLineEnd >= 0L)
             ? headerBlock.substr(0UL, (unsigned long)firstLineEnd)
@@ -607,15 +589,12 @@ static struct HttpRequest http_parse_request_(int fd, int* ok) {
             }
             clStr.free();
 
-            unsigned long already = buf.length() - (unsigned long)headerEnd;
-            req.body.free();
-            req.body = buf.substr((unsigned long)headerEnd, buf.length());
-            if (contentLen > already) {
-                if (!read_n_(fd, &req.body, contentLen - already)) { good = 0; }
-            }
+            // Without a Content-Length, the body is what arrived with the
+            // header block.
+            unsigned long want = (contentLen > 0UL) ? contentLen : in.buffered();
+            if (!read_n_(&in, &req.body, want)) { good = 0; }
         }
     }
-    buf.free();
     if (ok != (int*)0) { unsafe { *ok = good; } }
     return req;
 }

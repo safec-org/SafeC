@@ -37,4 +37,13 @@ struct String value_to_html(const &Value v);
 // text vs. string).
 struct Value html_parse(const &char text, ?&int ok);
 
+// The HTML fragment backend as a Format (see value.h): v.encode(Html::new()),
+// Value::decode(Html::new(), text, &ok) — the same as html_write / html_parse.
+struct Html {
+    int unused_;
+    static struct Html new();
+    void         write(const &Value v, &String out) const;
+    struct Value parse(const &char text, ?&int ok) const;
+};
+
 } // namespace std

@@ -148,6 +148,11 @@ inline unsigned long SlabAllocator::available() const {
     return self.cap - self.used;
 }
 
+inline void SlabAllocator::reset() {
+    self.used = (unsigned long)0;
+    self.build_freelist_();
+}
+
 inline void SlabAllocator::destroy() {
     if (self.owned) { unsafe { free((void*)self.base); } }
     self.free_head = (void*)0;

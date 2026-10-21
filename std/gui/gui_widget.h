@@ -135,15 +135,11 @@ struct Widget {
 
     // A WIDGET_CUSTOM node drawn and laid out by your own functions (see
     // "Custom widgets" below); userData is the caller's type, stored erased.
-    // The parameters are WidgetDrawFn, WidgetLayoutFn and
-    // WidgetCustomEventFn, spelled out: those typedefs follow this struct.
     generic<T>
-    static &Widget custom(fn void(&GuiWindow, &Widget) draw,
-                          fn void(&Widget, int, int, int, int) layout,
-                          fn int(&Widget, &GuiEvent) eventFn, ?&T userData);
-    static &Widget custom_raw_(fn void(&GuiWindow, &Widget) draw,
-                               fn void(&Widget, int, int, int, int) layout,
-                               fn int(&Widget, &GuiEvent) eventFn, void* userData);
+    static &Widget custom(WidgetDrawFn draw, WidgetLayoutFn layout,
+                          WidgetCustomEventFn eventFn, ?&T userData);
+    static &Widget custom_raw_(WidgetDrawFn draw, WidgetLayoutFn layout,
+                               WidgetCustomEventFn eventFn, void* userData);
 
     // ── tree ─────────────────────────────────────────────────────────────
     void add_child(&Widget child);

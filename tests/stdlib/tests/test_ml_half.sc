@@ -170,7 +170,7 @@ static void tensor_drop_(&DenseTensor<E> t) {
 // Masters -> 16-bit copies -> back; fp16 <-> bf16; gradients with the loss
 // scale divided out, and overflow detection.
 void t_mixed_precision_batch() {
-    struct Vec<&FloatTensor> ps = vec_new();
+    struct Vec<&FloatTensor> ps = Vec::new();
     ps.push(FloatTensor::new_2d(3UL, 5UL, 1));
     ps.push(FloatTensor::new_1d(7UL, 1));
     unsafe {
@@ -182,7 +182,7 @@ void t_mixed_precision_batch() {
             t = t + 1UL;
         }
     }
-    struct Vec<&BF16Tensor> w16 = vec_new();
+    struct Vec<&BF16Tensor> w16 = Vec::new();
     tensors_convert(&ps, &w16);
     ASSERT_EQ(w16.length(), 2UL);
     &BF16Tensor h0 = *w16.at(0UL);
@@ -198,7 +198,7 @@ void t_mixed_precision_batch() {
     ASSERT_TRUE(h1.at1(3UL) == (float)42.0);
 
     // back into fresh tensors
-    struct Vec<&FloatTensor> copies = vec_new();
+    struct Vec<&FloatTensor> copies = Vec::new();
     copies.push(FloatTensor::new_2d(3UL, 5UL, 0));
     copies.push(FloatTensor::new_1d(7UL, 0));
     ASSERT_TRUE(tensors_convert_into(&w16, &copies));
@@ -212,7 +212,7 @@ void t_mixed_precision_batch() {
     ASSERT_TRUE(!tensor_convert_into(h1, small));
 
     // gradients: fp16 values scaled by 1024, divided back out
-    struct Vec<&HalfTensor> g16 = vec_new();
+    struct Vec<&HalfTensor> g16 = Vec::new();
     g16.push(HalfTensor::new_2d(3UL, 5UL, 0));
     g16.push(HalfTensor::new_1d(7UL, 0));
     (*g16.at(0UL)).fill((float)1024.0 * (float)0.25);

@@ -1,5 +1,5 @@
 #pragma once
-// SafeC Standard Library — one allocation interface over every allocator.
+// SafeC Standard Library — allocation traits shared by every allocator.
 //
 // std/alloc has four allocators over a buffer of their own (or one you
 // hand them); each suits a different allocation pattern:
@@ -11,12 +11,26 @@
 //   TlsfAllocator  (tlsf.h)  variable sizes, O(1) alloc and free with
 //                            bounded fragmentation (real-time use).
 //
-// Each one conforms to the trait below, and the typed helpers are written
-// once against it. Traits are structural: a type conforms by having the
-// methods, so your own allocator works with alloc_t / alloc_array_t /
-// dealloc_t (and with any generic<A: Allocator> code) as soon as it defines
-// alloc and dealloc with these signatures. Each call is resolved at compile
-// time (no dispatch at run time).
+// The interface is split into one trait per capability, composed into the
+// two roles generic code asks for, and the typed helpers are written once
+// against the smallest trait they need:
+//
+//   Allocate        alloc(size, align)
+//   Deallocate      dealloc(ptr)
+//   Resettable      reset(): frees every block at once
+//   Allocator       Allocate + Deallocate: BumpAllocator (no-op dealloc),
+//                   PoolAllocator, SlabAllocator, TlsfAllocator,
+//                   SecureAllocator (crypto/secure_alloc.h),
+//                   CountingAllocator<A> (below)
+//   ArenaAllocator  Allocate + Resettable: allocate freely, then reset() —
+//                   BumpAllocator, PoolAllocator, SlabAllocator,
+//                   TlsfAllocator
+//
+// Traits are structural: a type conforms by having the methods, so your own
+// allocator works with alloc_t / alloc_array_t / dealloc_t (and with any
+// generic<A: Allocator> code) as soon as it defines alloc and dealloc with
+// these signatures. Each call is resolved at compile time (no dispatch at
+// run time).
 //
 //   struct BumpAllocator arena = BumpAllocator::new(4096UL);
 //   ?&heap Packet p = alloc_t(&arena);              // T = Packet, from the target
@@ -37,35 +51,104 @@
 
 namespace std {
 
-trait Allocator {
+trait Allocate {
     // 'size' bytes aligned to 'align' (a power of two), uninitialised; null
     // when the allocator can't (out of space, or an alignment or size it
     // doesn't provide).
     ?&heap void alloc(unsigned long size, unsigned long align);
+}
+
+trait Deallocate {
     // Gives back a block alloc returned; null is a no-op. A no-op on an
     // allocator that can't free one block (bump: reset() frees them all).
-    void        dealloc(?&heap void ptr);
+    void dealloc(?&heap void ptr);
 }
+
+trait Resettable {
+    // Frees every block at once; blocks handed out before become invalid.
+    void reset();
+}
+
+trait Allocator : Allocate + Deallocate {}
+
+trait ArenaAllocator : Allocate + Resettable {}
 
 // ── Typed allocation (recommended) ───────────────────────────────────────────
 // One T / n Ts, aligned for T; null when the allocator can't. The memory is
 // uninitialised. T is inferred from the target ('?&heap Packet p =
 // alloc_t(&pool);'). alloc_array_t aborts with a diagnostic if n * sizeof(T)
 // overflows (checked_mul_size).
-generic<T, A: Allocator>
+generic<T, A: Allocate>
 ?&heap T alloc_t(&A a) {
     unsafe { return (?&heap T)a.alloc(sizeof(T), alignof(T)); }
 }
 
-generic<T, A: Allocator>
+generic<T, A: Allocate>
 ?&heap T alloc_array_t(&A a, unsigned long n) {
     unsafe { return (?&heap T)a.alloc(checked_mul_size(n, sizeof(T)), alignof(T)); }
 }
 
 // Gives back a block from alloc_t / alloc_array_t on the same allocator.
-generic<T, A: Allocator>
+generic<T, A: Deallocate>
 void dealloc_t(&A a, &heap T obj) {
     unsafe { a.dealloc((?&heap void)obj); }
 }
+
+// ── CountingAllocator: usage statistics over any Allocator ──────────────────
+// Forwards every call to the allocator it borrows and counts them: blocks
+// handed out and given back, failed requests, bytes requested. It is an
+// Allocator itself, so it slots in wherever the allocator it wraps would
+// (leak checks in tests, sizing an arena or pool from a real workload).
+//
+//   struct PoolAllocator pool = PoolAllocator::new(65536UL);
+//   struct CountingAllocator<PoolAllocator> c = CountingAllocator::over(&pool);
+//   run_workload(&c);                       // any generic<A: Allocator> code
+//   if (c.live() != 0UL) { ... }            // blocks never given back
+generic<A: Allocator>
+struct CountingAllocator {
+    &A            inner;      // the allocator doing the work (not owned)
+    unsigned long allocs;     // alloc calls that returned a block
+    unsigned long frees;      // dealloc calls with a non-null block
+    unsigned long failures;   // alloc calls that returned null
+    unsigned long bytes;      // bytes requested by the successful allocs
+
+    static struct CountingAllocator<A> over(&A inner);
+    ?&heap void   alloc(unsigned long size, unsigned long align);
+    void          dealloc(?&heap void ptr);
+    // Blocks handed out and not given back yet.
+    unsigned long live() const;
+};
+
+generic<A: Allocator>
+struct CountingAllocator<A> CountingAllocator::over(&A inner) {
+    struct CountingAllocator<A> c;
+    c.inner = inner;
+    c.allocs = 0UL;
+    c.frees = 0UL;
+    c.failures = 0UL;
+    c.bytes = 0UL;
+    return c;
+}
+
+generic<A: Allocator>
+?&heap void CountingAllocator::alloc(unsigned long size, unsigned long align) {
+    ?&heap void p = self.inner.alloc(size, align);
+    if (p.is_null()) {
+        self.failures = self.failures + 1UL;
+    } else {
+        self.allocs = self.allocs + 1UL;
+        self.bytes = self.bytes + size;
+    }
+    return p;
+}
+
+generic<A: Allocator>
+void CountingAllocator::dealloc(?&heap void ptr) {
+    if (!ptr.is_null()) { self.frees = self.frees + 1UL; }
+    self.inner.dealloc(ptr);
+}
+
+generic<A: Allocator>
+unsigned long CountingAllocator::live() const { return self.allocs - self.frees; }
 
 } // namespace std

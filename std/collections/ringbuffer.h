@@ -20,7 +20,7 @@ struct RingBuffer {
     static struct RingBuffer over(&static unsigned char buf, unsigned long cap);
 
     // Return number of bytes currently readable.
-    unsigned long readable() const;
+    unsigned long length() const;
 
     // Return number of bytes that can be written without blocking.
     unsigned long writable() const;
@@ -39,6 +39,11 @@ struct RingBuffer {
 
     // Peek at `len` bytes without consuming them.  Returns bytes copied.
     unsigned long peek(&unsigned char out, unsigned long len) const;
+
+    // One byte at a time (the Fifo protocol, std/collections/traits.h):
+    // enqueue returns 1, or 0 if full; dequeue returns null if empty.
+    int   enqueue(unsigned char b);
+    ?unsigned char dequeue();
 
     // Discard `len` bytes.  Returns bytes discarded.
     unsigned long discard(unsigned long len);

@@ -2,6 +2,7 @@
 #pragma once
 #include <std/stddef.h>
 #include <std/crypto/sha1.h>
+#include <std/crypto/hash.h>
 
 namespace std {
 
@@ -135,11 +136,13 @@ void Sha1Ctx::finish(&unsigned char digest) {
     }
 }
 
+inline unsigned long Sha1Ctx::digest_size() const { return (unsigned long)SHA1_DIGEST_SIZE; }
+
+inline unsigned long Sha1Ctx::block_size() const { return (unsigned long)SHA1_BLOCK_SIZE; }
+
 void sha1(const &unsigned char data, unsigned long len,
           &unsigned char digest) {
-    struct Sha1Ctx ctx = Sha1Ctx::new();
-    ctx.update(data, len);
-    ctx.finish(digest);
+    hash_bytes(Sha1Ctx::new(), data, len, digest);
 }
 
 } // namespace std

@@ -15,6 +15,15 @@
 
 namespace std {
 
+// What a UART block type provides; Uart<C> requires it.
+trait UartChip {
+    void          init(unsigned long base, unsigned int baud, unsigned int clock_hz) const;
+    int           tx_ready(unsigned long base) const;
+    int           rx_ready(unsigned long base) const;
+    void          put(unsigned long base, unsigned char c) const;
+    unsigned char get(unsigned long base) const;
+}
+
 // Each chip: init (set the baud rate from the input clock and enable TX/RX;
 // clock_hz == 0 keeps whatever the boot firmware configured), the two
 // ready flags, and one-byte data access. The driver does the waiting.
@@ -51,7 +60,7 @@ struct Stm32F4Usart {
     unsigned char get(unsigned long base) const;
 };
 
-generic<C>
+generic<C: UartChip>
 struct Uart {
     &volatile unsigned int base; // MMIO base address
     unsigned int baud;  // configured baud rate
@@ -74,7 +83,7 @@ struct Uart {
     unsigned long addr_() const;
 };
 
-generic<C>
+generic<C: UartChip>
 struct Uart<C> Uart::new(&volatile unsigned int base, unsigned int baud, unsigned int clock_hz) {
     struct Uart<C> u;
     u.base = base;
@@ -83,23 +92,23 @@ struct Uart<C> Uart::new(&volatile unsigned int base, unsigned int baud, unsigne
     return u;
 }
 
-generic<C>
+generic<C: UartChip>
 unsigned long Uart::addr_() const { unsafe { return (unsigned long)self.base; } }
-generic<C>
+generic<C: UartChip>
 int Uart::tx_ready() const { return self.chip.tx_ready(self.addr_()); }
-generic<C>
+generic<C: UartChip>
 int Uart::rx_ready() const { return self.chip.rx_ready(self.addr_()); }
-generic<C>
+generic<C: UartChip>
 void Uart::write_byte(unsigned char c) {
     while (self.tx_ready() == 0) { }
     self.chip.put(self.addr_(), c);
 }
-generic<C>
+generic<C: UartChip>
 unsigned char Uart::read_byte() {
     while (self.rx_ready() == 0) { }
     return self.chip.get(self.addr_());
 }
-generic<C>
+generic<C: UartChip>
 void Uart::write_str(const &char s) {
     unsigned long i = 0UL;
     unsafe {

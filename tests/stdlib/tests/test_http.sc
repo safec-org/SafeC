@@ -19,6 +19,7 @@
 #include <std/rpc/rpc.h>
 #include <std/rpc/server_fn.h>
 #include <std/io_traits.h>
+#include <std/io_buf.h>
 #include <std/ipc/pipe.h>
 
 static unsigned short g_http_port = (unsigned short)0;
@@ -196,6 +197,17 @@ void t_http_roundtrip() {
         ASSERT_STR_EQ(r.body.as_ptr(), "posted payload");
         r.free();
 
+        // A body many reads long, both ways (server and client read it
+        // after the header block through a BufReader<TcpStream>).
+        struct String large = String::repeat_str("0123456789abcdef", 6250UL);   // 100000 bytes
+        r = http_post("127.0.0.1", g_http_port, "/echo", "text/plain",
+                      (const unsigned char*)large.as_ptr(), large.length(), &ok);
+        ASSERT_TRUE(ok);
+        ASSERT_EQ(r.body.length(), 100000);
+        ASSERT_TRUE(r.body.eq_cstr(large.as_ptr()));
+        r.free();
+        large.free();
+
         r = http_get("127.0.0.1", g_http_port, "/cors", &ok);
         ASSERT_TRUE(ok);
         struct String acao = http_header_get(r.headers.as_ptr(), "Access-Control-Allow-Origin");
@@ -250,6 +262,71 @@ void t_tcp_stream() {
         ASSERT_EQ(n, rest);
         if (n >= 5LL) { ASSERT_EQ(tail[n - 1LL], 'o'); }   // body "hello" last
         p.close_read();
+    }
+}
+
+// A request/response exchange over any Stream, buffered both ways: the
+// request goes out in pieces through a BufWriter<S> (one write on flush),
+// the response's header block comes back with BufReader<S>::read_until and
+// its Content-Length body with read_exact on the same BufReader. Returns
+// the HTTP status (0 on failure); the body goes to 'body'.
+generic<S: Stream>
+int buffered_exchange(&S s, const &char path, const &char payload, &String body) {
+    struct BufWriter<S> out = BufWriter::over(s);
+    struct String hdr = String::new();
+    hdr.push("POST ");
+    hdr.push(path);
+    hdr.push(" HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Length: ");
+    hdr.push_uint((unsigned long long)str_len(payload));
+    hdr.push("\r\n\r\n");
+    int ok = 1;
+    unsafe {
+        ok = write_all(&out, (const &unsigned char)hdr.as_ptr(), hdr.length())
+          && write_all(&out, (const &unsigned char)payload, str_len(payload))
+          && out.flush() == 0;
+    }
+    hdr.free();
+    if (!ok) return 0;
+
+    struct BufReader<S> in = BufReader::over(s);
+    struct String head = String::new();
+    int status = 0;
+    if (in.read_until(&head, "\r\n\r\n") && head.starts_with("HTTP/1.1 ")) {
+        int pok = 0;
+        struct String code = head.substr(9UL, 12UL);
+        status = (int)code.parse_int(&pok);
+        code.free();
+        struct String cl = http_header_get(head.as_ptr(), "Content-Length");
+        unsigned long n = (unsigned long)cl.parse_int(&pok);
+        cl.free();
+        unsigned char buf[256];
+        if (n > 256UL || !read_exact(&in, &buf[0], n)) {
+            status = 0;
+        } else {
+            unsafe { body.push_n((const &char)(const char*)&buf[0], n); }
+        }
+    }
+    head.free();
+    return status;
+}
+
+void t_tcp_buffered() {
+    start_servers();
+    unsafe {
+        int ok = 0;
+        struct HttpResponse warm = get_retry("/echo", &ok);
+        warm.free();
+        unsigned int lo = sched_ipv4((unsigned char)127, (unsigned char)0,
+                                     (unsigned char)0, (unsigned char)1);
+        int fd = tcp_connect_timeout(lo, g_http_port, 2000);
+        ASSERT_TRUE(fd >= 0);
+        if (fd < 0) return;
+        struct TcpStream s = TcpStream::from_fd(fd);
+        struct String body = String::new();
+        ASSERT_EQ(buffered_exchange(&s, "/echo", "buffered hello", &body), 200);
+        ASSERT_TRUE(body.eq_cstr("buffered hello"));
+        body.free();
+        ASSERT_EQ(s.close(), 0);
     }
 }
 
@@ -397,6 +474,22 @@ void t_websocket() {
         ASSERT_EQ(m.len, 305);
         m.free();
         big.free();
+        // Over 64 KB: the 64-bit length, and a masked payload several
+        // mask chunks long.
+        struct String huge = String::repeat_str("0123456789", 7000UL);
+        ASSERT_EQ(c.send_text(huge.as_ptr()), 1);
+        ASSERT_EQ(c.recv(&m), 1);
+        ASSERT_EQ(m.len, 70005);
+        match (m.data) {
+            case null: { ASSERT_TRUE(0); }
+            case some(d): {
+                ASSERT_EQ(d[5], '0');
+                ASSERT_EQ(d[5 + 16389], '9');
+                ASSERT_EQ(d[70004], '9');
+            }
+        }
+        m.free();
+        huge.free();
         ASSERT_EQ(c.send_ping(), 1);
         ASSERT_EQ(c.recv(&m), 1);
         ASSERT_EQ(m.opcode, WS_OPCODE_PONG);
@@ -581,6 +674,7 @@ int main() {
     unsafe {
         t.add("http client/server", t_http_roundtrip);
         t.add("tcp stream (io traits)", t_tcp_stream);
+        t.add("tcp stream through BufReader/BufWriter", t_tcp_buffered);
         t.add("cors", t_cors);
         t.add("jwt hs256", t_jwt);
         t.add("oauth2 code exchange", t_oauth2);

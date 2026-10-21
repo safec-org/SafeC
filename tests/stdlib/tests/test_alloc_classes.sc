@@ -350,6 +350,100 @@ void t_allocator_trait() {
     ASSERT_EQ(h.total, 3UL);
 }
 
+// ── Single-capability traits, the ArenaAllocator role, CountingAllocator ─────
+
+// alloc_t / alloc_array_t ask only for Allocate: a type with alloc and no
+// dealloc (one fixed 64-byte block, handed out once) is enough.
+struct OneShot {
+    unsigned long long slot[8];
+    int taken;
+    ?&heap void alloc(unsigned long size, unsigned long align);
+};
+
+?&heap void OneShot::alloc(unsigned long size, unsigned long align) {
+    if (self.taken || size > 64UL || align > 8UL) return null;
+    self.taken = 1;
+    unsafe { return (?&heap void)(void*)&self.slot[0]; }
+}
+
+// Fill with 'size'-byte blocks, reset, fill again: an ArenaAllocator gives
+// the same count both times. Returns that count (0 if they differ).
+generic<A: ArenaAllocator>
+unsigned long fill_reset_fill(&A a, unsigned long size) {
+    unsigned long n = 0UL;
+    while (n < 100000UL && !a.alloc(size, 8UL).is_null()) { n = n + 1UL; }
+    a.reset();
+    unsigned long m = 0UL;
+    while (m < 100000UL && !a.alloc(size, 8UL).is_null()) { m = m + 1UL; }
+    a.reset();
+    return n == m ? n : 0UL;
+}
+
+// exercise_allocator through a CountingAllocator: what it counted.
+generic<A: Allocator>
+int counted_exercise(&A a, unsigned long n) {
+    struct CountingAllocator<A> c = CountingAllocator::over(a);
+    int ok = exercise_allocator(&c, n);
+    // alloc_t, alloc_array_t and the raw 8 bytes succeed; align 3 fails.
+    if (c.allocs != 3UL || c.failures != 1UL || c.live() != 0UL) ok = 0;
+    if (c.bytes != sizeof(struct Rec) * (n + 1UL) + 8UL) ok = 0;
+    return ok;
+}
+
+void t_allocator_roles() {
+    struct OneShot one;
+    one.taken = 0;
+    ?&heap Rec r = alloc_t(&one);
+    ASSERT_FALSE(r.is_null());
+    ?&heap Rec r2 = alloc_array_t(&one, 1UL);
+    ASSERT_TRUE(r2.is_null());                       // its one block is taken
+
+    struct BumpAllocator b = BumpAllocator::new(4096UL);
+    struct PoolAllocator p = PoolAllocator::new(4096UL);
+    struct SlabAllocator s = SlabAllocator::new(sizeof(struct Rec), 8UL);
+    struct TlsfAllocator t = TlsfAllocator::new(65536UL);
+    unsigned long poolFree = p.available();
+    ASSERT_EQ(fill_reset_fill(&b, 32UL), 128UL);     // 4096 / 32
+    ASSERT_TRUE(fill_reset_fill(&p, 32UL) > 50UL);
+    ASSERT_EQ(p.available(), poolFree);              // reset: one free block again
+    ASSERT_EQ(fill_reset_fill(&s, sizeof(struct Rec)), 8UL);
+    ASSERT_EQ(s.available(), 8UL);
+    ASSERT_TRUE(fill_reset_fill(&t, 32UL) > 1000UL);
+    ?&heap Rec big = alloc_array_t(&t, 2000UL);      // reset left one big block
+    ASSERT_FALSE(big.is_null());
+    t.reset();
+
+    // CountingAllocator<A> over every allocator, and over itself.
+    ASSERT_EQ(counted_exercise(&b, 16UL), 1);
+    ASSERT_EQ(counted_exercise(&p, 16UL), 1);
+    ASSERT_EQ(p.available(), poolFree);
+    ASSERT_EQ(counted_exercise(&s, 1UL), 1);
+    ASSERT_EQ(counted_exercise(&t, 16UL), 1);
+    struct CountingHeap h;
+    h.live = 0UL;
+    h.total = 0UL;
+    ASSERT_EQ(counted_exercise(&h, 16UL), 1);
+    ASSERT_EQ(h.live, 0UL);
+    struct CountingAllocator<TlsfAllocator> outer = CountingAllocator::over(&t);
+    ASSERT_EQ(counted_exercise(&outer, 16UL), 1);
+    ASSERT_EQ(outer.allocs, 3UL);                    // seen through both layers
+    ASSERT_EQ(outer.live(), 0UL);
+
+    // A leak shows up as live().
+    struct CountingAllocator<PoolAllocator> c = CountingAllocator::over(&p);
+    ?&heap Rec kept = alloc_t(&c);
+    ?&heap Rec gone = alloc_t(&c);
+    match (gone) { case null: { } case some(x): { dealloc_t(&c, x); } }
+    ASSERT_FALSE(kept.is_null());
+    ASSERT_EQ(c.live(), 1UL);
+    ASSERT_EQ(c.frees, 1UL);
+
+    b.destroy();
+    p.destroy();
+    s.destroy();
+    t.destroy();
+}
+
 int main() {
     struct TestSuite t = TestSuite::new();
     unsafe {
@@ -357,6 +451,7 @@ int main() {
         t.add("conv2d then large allocations", t_conv_then_alloc);
         t.add("slabs: reuse, alignment, realloc, cross-thread frees", t_slabs);
         t.add("std/alloc: one generic routine over every Allocator", t_allocator_trait);
+        t.add("std/alloc: Allocate-only, ArenaAllocator reset, CountingAllocator", t_allocator_roles);
     }
     t.run();
     t.print_summary();

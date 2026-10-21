@@ -471,7 +471,7 @@ inline void FBiquad::reset() {
 }
 
 void FBiquad::process_block(const &Fixed in, &Fixed out, unsigned long n) {
-    filter_process_each_fixed(self, in, out, n);
+    filter_process_each(self, in, out, n);
 }
 
 struct FBiquad FBiquad::from(struct Biquad bq) {

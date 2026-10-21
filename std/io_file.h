@@ -3,8 +3,9 @@
 // never exposed); File::open returns '?&File', null on failure.
 // Operations are methods on the handle: f.read(buf, n), f.write(buf, n),
 // f.seek(off, whence), f.close(), ...
-// File conforms to io_traits.h's Reader and Writer, so read_exact,
-// write_all and copy_stream work on it.
+// File conforms to io_traits.h's SeekableStream (Reader, Writer, Seekable)
+// and Flusher, so read_exact, write_all, copy_stream, stream_size and
+// io_buf.h's BufReader / BufWriter work on it.
 #pragma once
 
 namespace std {

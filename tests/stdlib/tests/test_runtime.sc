@@ -18,11 +18,13 @@
 #include <std/time.h>
 #include <std/io_file.h>
 #include <std/io_traits.h>
+#include <std/io_buf.h>
 #include <std/io.h>
 #include <std/sync/spinlock.h>
 #include <std/sync/mpsc.h>
 #include <std/sync/lockfree.h>
 #include <std/sync/channel.h>
+#include <std/collections/traits.h>
 #include <std/sync/task.h>
 #include <std/sync/thread_bare.h>
 #include <std/sync/parallel.h>
@@ -320,6 +322,31 @@ static ?&int chan_producer(?&int arg) {
     return null;
 }
 
+// Fifo: four in, the same four out in order (fits every queue's capacity,
+// so a Chan never blocks).
+generic<Q: Fifo>
+int fifo_in_order(&Q q) {
+    int i = 1;
+    while (i <= 4) { if (!q.enqueue(i * 11)) return 0; i = i + 1; }
+    i = 1;
+    while (i <= 4) {
+        if (q.dequeue().default(-1) != i * 11) return 0;
+        i = i + 1;
+    }
+    return 1;
+}
+
+// CountedFifo: length tracks every enqueue and dequeue.
+generic<Q: CountedFifo>
+int fifo_counted(&Q q) {
+    if (!q.is_empty()) return 0;
+    q.enqueue(1);
+    q.enqueue(2);
+    if (q.length() != 2UL) return 0;
+    q.dequeue();
+    return q.length() == 1UL && q.dequeue().default(0) == 2 && q.is_empty();
+}
+
 void t_queues() {
     g_mq = MpscQueue::new(64UL);
     unsigned long long t1 = 0ULL;
@@ -350,7 +377,7 @@ void t_queues() {
     ASSERT_TRUE(q.is_full());
     ASSERT_FALSE(q.enqueue(i));
     ASSERT_EQ(q.dequeue().default(-1LL), 0);
-    ASSERT_EQ(q.len(), 7);
+    ASSERT_EQ(q.length(), 7);
     q.destroy();
 
     struct Chan<int> ch = Chan::new(4);
@@ -376,6 +403,28 @@ void t_queues() {
     }
     thread_join(tp);
     ASSERT_EQ(total, 5050);
+
+    // The Fifo role (std/collections/traits.h) over all three
+    struct MpscQueue<int> mq = MpscQueue::new(4UL);
+    struct LFQueue<int> lq = LFQueue::new(4UL);
+    struct Chan<int> fc = Chan::new(4);
+    ASSERT_TRUE(fifo_in_order(&mq));
+    ASSERT_TRUE(fifo_in_order(&lq));
+    ASSERT_TRUE(fifo_in_order(&fc));
+    ASSERT_TRUE(fifo_counted(&mq));                 // CountedFifo: not Chan
+    ASSERT_TRUE(fifo_counted(&lq));
+    // drain_into on a Chan runs until it is closed and drained
+    int ys[3];
+    unsafe { ys[0] = 7; ys[1] = 8; ys[2] = 9; }
+    ASSERT_EQ(enqueue_all(&fc, &ys[0], 3UL), 3);
+    fc.close();
+    struct Vec<int> drained = Vec::new();
+    ASSERT_EQ(drain_into(&fc, &drained), 3);
+    ASSERT_EQ(*drained.at(2UL), 9);
+    ASSERT_EQ(enqueue_all(&fc, &ys[0], 3UL), 0);    // closed
+    drained.free();
+    mq.destroy();
+    lq.destroy();
 }
 
 // Cooperative task: counts to 3 across three resumptions.
@@ -490,7 +539,26 @@ void t_tasks() {
         ASSERT_FALSE(ts.is_active(a));
         ts.run_all();
         ASSERT_EQ(g_task_hits, 8);
+
+        // The Scheduler role: the same bounded driver over both
+        g_task_hits = 0;
+        *ts = ThreadSched::new();
+        ts.spawn(counting_task, null, 2);
+        ts.spawn(counting_task, null, 0);
+        ASSERT_EQ(run_rounds(ts, 2), 2);            // each task runs 4 turns
+        ASSERT_EQ(run_rounds(ts, 100), 0);
+        ASSERT_EQ(g_task_hits, 8);
         dealloc(tsq);
+
+        ?&heap TaskScheduler s2q = alloc(sizeof(struct TaskScheduler));
+        if (s2q.is_null()) return;
+        &TaskScheduler s2 = std::expect_ref(s2q, "s2q is null");
+        *s2 = TaskScheduler::new();
+        s2.spawn(counting_task, null);
+        ASSERT_EQ(run_rounds(s2, 3), 1);
+        ASSERT_EQ(run_rounds(s2, 3), 0);
+        ASSERT_EQ(g_task_hits, 12);
+        dealloc(s2q);
     }
 }
 
@@ -624,6 +692,216 @@ void t_io_traits() {
 
         ASSERT_EQ(io_remove(path), 0);
         ASSERT_EQ(io_remove(path2), 0);
+    }
+}
+
+// ── io_traits.h's roles and io_buf.h's BufReader / BufWriter ─────────────────
+
+// An in-memory SeekableStream: write appends, read and seek/tell move a read
+// cursor, and each read returns at most 'step' bytes (short reads, to split
+// what BufReader sees at awkward places).
+struct MemStream {
+    unsigned char data[20000];
+    unsigned long len;
+    unsigned long rd;
+    unsigned long step;
+    long long read(&unsigned char buf, unsigned long n);
+    long long write(const &unsigned char buf, unsigned long n);
+    int seek(long long offset, int whence);
+    long long tell();
+};
+
+long long MemStream::read(&unsigned char buf, unsigned long n) {
+    unsigned long k = self.len - self.rd;
+    if (k > n) k = n;
+    if (k > self.step) k = self.step;
+    unsafe { safe_memcpy_raw_((void*)buf, (const void*)&self.data[self.rd], k); }
+    self.rd = self.rd + k;
+    return (long long)k;
+}
+
+long long MemStream::write(const &unsigned char buf, unsigned long n) {
+    unsigned long k = 20000UL - self.len;
+    if (k > n) k = n;
+    if (k == 0UL && n > 0UL) return -1LL;
+    unsafe { safe_memcpy_raw_((void*)&self.data[self.len], (const void*)buf, k); }
+    self.len = self.len + k;
+    return (long long)k;
+}
+
+int MemStream::seek(long long offset, int whence) {
+    long long base = whence == 0 ? 0LL : (whence == 1 ? (long long)self.rd : (long long)self.len);
+    if (base + offset < 0LL || base + offset > (long long)self.len) return -1;
+    self.rd = (unsigned long)(base + offset);
+    return 0;
+}
+
+long long MemStream::tell() { return (long long)self.rd; }
+
+static void mem_init(&MemStream m, unsigned long step) {
+    m.len = 0UL;
+    m.rd = 0UL;
+    m.step = step;
+}
+
+// Any Stream: n bytes in, the same n bytes back out (a FIFO: Pipe, or a
+// MemStream read from its start).
+generic<S: Stream>
+int stream_echo(&S s, const &unsigned char src, unsigned long n) {
+    unsigned char back[3000];
+    if (!write_all(s, src, n)) return 0;
+    if (!read_exact(s, &back[0], n)) return 0;
+    int same;
+    unsafe { same = safe_memcmp_raw_((const void*)&back[0], (const void*)src, n) == 0; }
+    return same;
+}
+
+// Any SeekableStream: write, seek back, size, read back from the middle.
+generic<S: SeekableStream>
+int seek_roundtrip(&S s, const &unsigned char src, unsigned long n) {
+    if (!write_all(s, src, n)) return 0;
+    if (stream_size(s) != (long long)n) return 0;
+    if (s.seek(100LL, 0) != 0 || s.tell() != 100LL) return 0;
+    unsigned char back[3000];
+    if (!read_exact(s, &back[0], n - 100UL)) return 0;
+    if (s.tell() != (long long)n) return 0;
+    int same;
+    unsafe { same = safe_memcmp_raw_((const void*)&back[0], (const void*)((const unsigned char*)src + 100), n - 100UL) == 0; }
+    return same;
+}
+
+// Any Writer + Flusher: all of it written, then flushed.
+generic<W: Writer + Flusher>
+int write_flushed(&W w, const &unsigned char src, unsigned long n) {
+    return write_all(w, src, n) && w.flush() == 0;
+}
+
+// Lines through BufReader<R>::read_until over any Reader: "line <i>\n" for
+// i < count, then a tail with no newline. 1 when every line came back.
+generic<R: Reader>
+int read_lines(&R r, int count) {
+    struct BufReader<R> in = BufReader::over(r);
+    int i = 0;
+    int ok = 1;
+    while (i < count) {
+        struct String line = String::new();
+        if (!in.read_until(&line, "\n")) ok = 0;
+        struct String want = String::new();
+        want.push("line ");
+        want.push_int((long long)i);
+        want.push("\n");
+        if (!line.eq_cstr(want.as_ptr())) ok = 0;
+        want.free();
+        line.free();
+        i = i + 1;
+    }
+    struct String tail = String::new();
+    if (in.read_until(&tail, "\n")) ok = 0;            // the stream ends first
+    if (!tail.eq_cstr("tail")) ok = 0;
+    tail.free();
+    return ok;
+}
+
+void t_io_roles() {
+    unsafe {
+        unsigned char data[3000];
+        unsigned long i = 0UL;
+        while (i < 3000UL) { data[i] = (unsigned char)(i * 13UL + 5UL); i = i + 1UL; }
+        const &unsigned char src = &data[0];
+
+        // Stream: Pipe, MemStream.
+        struct Pipe p;
+        ASSERT_EQ(p.init(), 0);
+        ASSERT_EQ(stream_echo(&p, src, 3000UL), 1);
+        struct MemStream m;
+        mem_init(&m, 7UL);
+        ASSERT_EQ(stream_echo(&m, src, 3000UL), 1);
+
+        // SeekableStream: File, MemStream; stream_size is File::size too.
+        const &char path = "/tmp/safec_stdlib_test_roles.bin";
+        &File f = std::expect_ref(File::open(path, "w+b"), "w+b handle");
+        ASSERT_EQ(seek_roundtrip(f, src, 3000UL), 1);
+        ASSERT_EQ(f.size(), 3000);
+        f.close();
+        mem_init(&m, 4096UL);
+        ASSERT_EQ(seek_roundtrip(&m, src, 3000UL), 1);
+
+        // BufWriter<W> is a Writer + Flusher like File: nothing reaches the
+        // pipe until flush (or a full buffer).
+        struct BufWriter<Pipe> bw = BufWriter::over(&p);
+        ASSERT_EQ(write_all(&bw, src, 100UL), 1);
+        ASSERT_EQ(bw.len, 100UL);
+        ASSERT_EQ(write_flushed(&bw, (const &unsigned char)&data[100], 2900UL), 1);
+        ASSERT_EQ(bw.len, 0UL);
+        unsigned char back[3000];
+        ASSERT_EQ(read_exact(&p, &back[0], 3000UL), 1);
+        ASSERT_EQ(safe_memcmp_raw_((const void*)&back[0], (const void*)&data[0], 3000UL), 0);
+        &File g = std::expect_ref(File::open(path, "wb"), "wb handle");
+        ASSERT_EQ(write_flushed(g, src, 3000UL), 1);
+        g.close();
+
+        // BufReader<R> is a Reader: read_exact and copy_stream through it,
+        // buffered (small reads) and straight through (one large read).
+        &File h = std::expect_ref(File::open(path, "rb"), "rb handle");
+        struct BufReader<File> br = BufReader::over(h);
+        ASSERT_EQ(read_exact(&br, &back[0], 10UL), 1);
+        ASSERT_EQ(br.buffered(), 2990UL);               // the rest came with the first read
+        ASSERT_EQ(read_exact(&br, &back[10], 2990UL), 1);
+        ASSERT_EQ(safe_memcmp_raw_((const void*)&back[0], (const void*)&data[0], 3000UL), 0);
+        ASSERT_EQ(br.read(&back[0], 16UL), 0);           // EOF
+        h.close();
+        h = std::expect_ref(File::open(path, "rb"), "rb handle");
+        struct BufReader<File> br2 = BufReader::over(h);
+        struct BufWriter<Pipe> bw2 = BufWriter::over(&p);
+        ASSERT_EQ(copy_stream(&br2, &bw2), 3000);        // BufReader -> BufWriter
+        ASSERT_EQ(bw2.flush(), 0);
+        h.close();
+        ASSERT_EQ(read_exact(&p, &back[0], 3000UL), 1);
+        ASSERT_EQ(back[2999], data[2999]);
+
+        // read_until over Pipe, MemStream with 1-byte and 3-byte reads, and
+        // a BufReader of a BufReader.
+        mem_init(&m, 1UL);
+        int li = 0;
+        while (li < 300) {
+            struct String l = String::new();
+            l.push("line ");
+            l.push_int((long long)li);
+            l.push("\n");
+            ASSERT_EQ(write_all(&m, (const &unsigned char)l.as_ptr(), l.length()), 1);
+            ASSERT_EQ(write_all(&p, (const &unsigned char)l.as_ptr(), l.length()), 1);
+            l.free();
+            li = li + 1;
+        }
+        ASSERT_EQ(write_all(&m, (const &unsigned char)"tail", 4UL), 1);
+        ASSERT_EQ(write_all(&p, (const &unsigned char)"tail", 4UL), 1);
+        ASSERT_EQ(p.close_write(), 0);
+        ASSERT_EQ(read_lines(&p, 300), 1);
+        ASSERT_EQ(read_lines(&m, 300), 1);
+        m.rd = 0UL;
+        m.step = 3UL;
+        struct BufReader<MemStream> inner = BufReader::over(&m);
+        ASSERT_EQ(read_lines(&inner, 300), 1);
+        ASSERT_EQ(p.close_read(), 0);
+
+        // A terminator that overlaps itself: "aab" first ends at offset 8
+        // of "xaaaaaabaab", wherever the reads split it.
+        unsigned long st = 1UL;
+        while (st <= 4UL) {
+            mem_init(&m, st);
+            ASSERT_EQ(write_all(&m, (const &unsigned char)"xaaaaaabaab", 11UL), 1);
+            struct BufReader<MemStream> ar = BufReader::over(&m);
+            struct String got = String::new();
+            ASSERT_EQ(ar.read_until(&got, "aab"), 1);
+            ASSERT_TRUE(got.eq_cstr("xaaaaaab"));
+            got.free();
+            struct String rest = String::new();
+            ASSERT_EQ(ar.read_until(&rest, "aab"), 1);
+            ASSERT_TRUE(rest.eq_cstr("aab"));
+            rest.free();
+            st = st + 1UL;
+        }
+        ASSERT_EQ(io_remove(path), 0);
     }
 }
 
@@ -897,6 +1175,7 @@ int main() {
         t.add("time", t_time);
         t.add("io_file", t_file);
         t.add("io_traits over File/Pipe", t_io_traits);
+        t.add("io roles (Stream/SeekableStream/Flusher), BufReader/BufWriter", t_io_roles);
         t.add("bench/fuzz", t_bench_fuzz);
         t.add("simd", t_simd);
         t.add("simd ops/vmath/sgemm/cpu", t_simd_more);

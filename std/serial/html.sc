@@ -371,4 +371,14 @@ struct Value html_parse(const &char text, ?&int ok) {
     return v;
 }
 
+struct Html Html::new() {
+    struct Html f;
+    f.unused_ = 0;
+    return f;
+}
+
+void Html::write(const &Value v, &String out) const { html_write(v, out); }
+
+struct Value Html::parse(const &char text, ?&int ok) const { return html_parse(text, ok); }
+
 } // namespace std

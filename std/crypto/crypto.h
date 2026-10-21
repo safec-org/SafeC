@@ -4,6 +4,8 @@
 #include <std/crypto/sha1.h>
 #include <std/crypto/sha256.h>
 #include <std/crypto/sha512.h>
+#include <std/crypto/hash.h>
+#include <std/crypto/hmac.h>
 #include <std/crypto/rng.h>
 #include <std/crypto/secure_alloc.h>
 #include <std/crypto/tls.h>

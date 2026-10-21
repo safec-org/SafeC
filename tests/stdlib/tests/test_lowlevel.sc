@@ -506,6 +506,29 @@ void t_hal() {
     }
 }
 
+// A chip of our own: anything with UartChip's methods drives Uart<C>.
+static unsigned char g_loop_byte = (unsigned char)0;
+struct LoopUart {
+    int           unused_;
+    void          init(unsigned long base, unsigned int baud, unsigned int clock_hz) const;
+    int           tx_ready(unsigned long base) const;
+    int           rx_ready(unsigned long base) const;
+    void          put(unsigned long base, unsigned char c) const;
+    unsigned char get(unsigned long base) const;
+};
+void LoopUart::init(unsigned long base, unsigned int baud, unsigned int clock_hz) const { g_loop_byte = (unsigned char)0; }
+int LoopUart::tx_ready(unsigned long base) const { return 1; }
+int LoopUart::rx_ready(unsigned long base) const { return g_loop_byte != (unsigned char)0; }
+void LoopUart::put(unsigned long base, unsigned char c) const { g_loop_byte = c; }
+unsigned char LoopUart::get(unsigned long base) const { unsigned char c = g_loop_byte; g_loop_byte = (unsigned char)0; return c; }
+
+// Generic over the chip: works on every Uart<C: UartChip>.
+generic<C: UartChip>
+int uart_echo(&Uart<C> u, unsigned char c) {
+    u.write_byte(c);
+    return u.rx_ready() ? (int)u.read_byte() : -1;
+}
+
 // The real-chip layouts write the documented registers (offsets in bytes).
 void t_hal_chips() {
     unsigned int r[16];
@@ -565,6 +588,10 @@ void t_hal_chips() {
         r[0] = 0x80u;
         su.write_byte((unsigned char)'S');
         ASSERT_EQ(r[1], 'S');
+        ASSERT_EQ(uart_echo(&su, (unsigned char)'T'), -1);   // sent; RXNE clear
+        ASSERT_EQ(r[1], 'T');
+        struct Uart<LoopUart> lu = Uart::new(base, 9600u, 0u);
+        ASSERT_EQ(uart_echo(&lu, (unsigned char)'L'), 'L');
 
         // STM32 SPI: CR1 +0, SR +8, DR +0xC
         zero_regs_(&r[0], 16);

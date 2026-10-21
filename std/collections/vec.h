@@ -264,7 +264,7 @@ void Vec::reverse() {
 // Introsort over [lo, hi): median-of-three quicksort, insertion sort below 16
 // elements, heapsort once recursion gets too deep (O(n log n) worst case).
 // Element moves are whole-T copies, not byte loops, and no libc is needed.
-generic<T, C>
+generic<T, C: Order>
 void vec_insertion_sort_(&T a, long long lo, long long hi, const &C ord) {
     unsafe {
         long long i = lo + 1LL;
@@ -278,7 +278,7 @@ void vec_insertion_sort_(&T a, long long lo, long long hi, const &C ord) {
     }
 }
 
-generic<T, C>
+generic<T, C: Order>
 void vec_sift_down_(&T a, long long lo, long long root, long long n, const &C ord) {
     unsafe {
         while (1) {
@@ -294,7 +294,7 @@ void vec_sift_down_(&T a, long long lo, long long root, long long n, const &C or
     }
 }
 
-generic<T, C>
+generic<T, C: Order>
 void vec_heap_sort_(&T a, long long lo, long long hi, const &C ord) {
     long long n = hi - lo;
     long long i = n / 2LL;
@@ -311,7 +311,7 @@ void vec_heap_sort_(&T a, long long lo, long long hi, const &C ord) {
     }
 }
 
-generic<T, C>
+generic<T, C: Order>
 void vec_introsort_(&T a, long long lo, long long hi, int depth, const &C ord) {
     while (hi - lo > 16LL) {
         if (depth == 0) { vec_heap_sort_(a, lo, hi, ord); return; }
@@ -346,10 +346,10 @@ void vec_introsort_(&T a, long long lo, long long hi, int depth, const &C ord) {
     vec_insertion_sort_(a, lo, hi, ord);
 }
 
-// Sorts by a compile-time ordering type (Less<T>, Greater<T>, or your own
+// Sorts by a compile-time ordering (an Order: Less<T>, Greater<T>, or your own
 // struct with 'int cmp(const &T, const &T) const'): every comparison is a
 // direct call the optimizer inlines, unlike sort()'s function pointer.
-generic<T, C>
+generic<T, C: Order>
 void vec_sort_by(&Vec<T> v, C ord) {
     if (v.len < 2UL) return;
     int depth = 0;

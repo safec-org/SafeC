@@ -8,9 +8,8 @@
 // divided out.) DF2T is the conventional choice for a single biquad: only
 // two state variables, and better numerical behavior under coefficient
 // quantization than Direct Form I. Cascade several for a higher-order
-// filter (e.g. two biquads for a 4th-order response) — that composition
-// isn't provided as a separate type here since it's just "call process()
-// on each in sequence."
+// filter (e.g. two biquads for a 4th-order response) with FilterChain
+// (sample_filter.h): a chain of SampleFilters is itself one, so chains nest.
 //
 // Biquad::lowpass/highpass/bandpass/notch/allpass/peaking/lowshelf/
 // highshelf compute coefficients using Robert Bristow-Johnson's "Audio EQ

@@ -35,7 +35,7 @@ struct LFQueue {
     ?T            dequeue();        // null if empty
     int           is_empty() const;
     int           is_full() const;
-    unsigned long len() const;
+    unsigned long length() const;
     void          destroy();        // frees the buffer if LFQueue::new allocated it
 };
 
@@ -102,7 +102,7 @@ int LFQueue::is_full() const {
 }
 
 generic<T>
-unsigned long LFQueue::len() const {
+unsigned long LFQueue::length() const {
     unsafe { return (unsigned long)(atomic_load(&self.head) - atomic_load(&self.tail)); }
 }
 

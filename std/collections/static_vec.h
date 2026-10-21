@@ -110,6 +110,7 @@ struct StaticMap {
     ?&V           get(unsigned long key) const;       // null if missing
     int           contains(unsigned long key) const;
     unsigned long length() const;
+    int           is_empty() const;
     void          clear();
 };
 
@@ -160,6 +161,9 @@ int StaticMap::contains(unsigned long key) const { return !self.get(key).is_null
 
 generic<V>
 unsigned long StaticMap::length() const { return self.count; }
+
+generic<V>
+int StaticMap::is_empty() const { return self.count == 0UL; }
 
 generic<V>
 void StaticMap::clear() {

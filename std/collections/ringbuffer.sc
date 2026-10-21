@@ -4,7 +4,7 @@
 
 namespace std {
 
-// RingBuffer's '& self.mask' indexing (readable()/write()/etc. below) only
+// RingBuffer's '& self.mask' indexing (length()/write()/etc. below) only
 // gives correct results when cap is a power of two; nothing previously
 // checked that. Rounds DOWN (never up) since 'buf' is caller-provided and
 // sized for the caller's original 'cap' — this may only ever use less of
@@ -27,7 +27,7 @@ inline struct RingBuffer RingBuffer::over(&static unsigned char buf, unsigned lo
     return rb;
 }
 
-inline unsigned long RingBuffer::readable() const {
+inline unsigned long RingBuffer::length() const {
     return self.head - self.tail;
 }
 
@@ -82,7 +82,7 @@ inline unsigned long RingBuffer::write(const &unsigned char data, unsigned long 
 }
 
 inline unsigned long RingBuffer::read(&unsigned char out, unsigned long len) {
-    unsigned long avail = self.readable();
+    unsigned long avail = self.length();
     if (len > avail) { len = avail; }
     unsigned long tail = self.tail;
     unsafe {
@@ -107,7 +107,7 @@ inline unsigned long RingBuffer::read(&unsigned char out, unsigned long len) {
 }
 
 inline unsigned long RingBuffer::peek(&unsigned char out, unsigned long len) const {
-    unsigned long avail = self.readable();
+    unsigned long avail = self.length();
     if (len > avail) { len = avail; }
     unsigned long tail = self.tail;
     unsafe {
@@ -130,10 +130,23 @@ inline unsigned long RingBuffer::peek(&unsigned char out, unsigned long len) con
 }
 
 inline unsigned long RingBuffer::discard(unsigned long len) {
-    unsigned long avail = self.readable();
+    unsigned long avail = self.length();
     if (len > avail) { len = avail; }
     self.tail = self.tail + len;
     return len;
+}
+
+inline int RingBuffer::enqueue(unsigned char b) {
+    unsigned char one[1];
+    one[0] = b;
+    return self.write(one, (unsigned long)1) == (unsigned long)1 ? 1 : 0;
+}
+
+inline ?unsigned char RingBuffer::dequeue() {
+    unsigned char one[1];
+    one[0] = (unsigned char)0;
+    if (self.read(one, (unsigned long)1) == (unsigned long)0) { return null; }
+    return one[0];
 }
 
 inline void RingBuffer::clear() {

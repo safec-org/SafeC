@@ -45,7 +45,8 @@ struct BTree {
     ?&V           get(unsigned long key) const;      // null if missing
     int           contains(unsigned long key) const;
     ?V            remove(unsigned long key);         // the removed value, or null
-    unsigned long len() const;
+    unsigned long length() const;
+    int           is_empty() const;
     void          foreach(fn void(unsigned long, &V) cb);  // ascending key order
     void          clear();
 
@@ -104,7 +105,10 @@ void BTree::free_node_(unsigned long idx) {
 }
 
 generic<V>
-unsigned long BTree::len() const { return self.count; }
+unsigned long BTree::length() const { return self.count; }
+
+generic<V>
+int BTree::is_empty() const { return self.count == 0UL; }
 
 // ── Search ────────────────────────────────────────────────────────────────────
 

@@ -15,30 +15,52 @@
 #include <std/fs/fat.h>
 #include <std/fs/ext.h>
 
-// ── In-memory block device ───────────────────────────────────────────────────
+// ── In-memory block device: a BlockDriver ────────────────────────────────────
 struct MemDisk {
     ?&heap unsigned char data;
     unsigned long   size;
+
+    int read(unsigned long lba, &unsigned char buf, unsigned long count);
+    int write(unsigned long lba, const &unsigned char buf, unsigned long count);
 };
 
-static int memdisk_read(&MemDisk d, unsigned long lba, &unsigned char buf, unsigned long count) {
+int MemDisk::read(unsigned long lba, &unsigned char buf, unsigned long count) {
     unsigned long off = lba * 512UL;
     unsigned long n = count * 512UL;
-    if (off + n > d.size || d.data.is_null()) return -1;
-    unsafe { safe_memcpy(buf, &d.data[off], n); }
+    if (off + n > self.size || self.data.is_null()) return -1;
+    unsafe { safe_memcpy(buf, &self.data[off], n); }
     return 0;
 }
 
-static int memdisk_write(&MemDisk d, unsigned long lba, const &unsigned char buf, unsigned long count) {
+int MemDisk::write(unsigned long lba, const &unsigned char buf, unsigned long count) {
     unsigned long off = lba * 512UL;
     unsigned long n = count * 512UL;
-    if (off + n > d.size || d.data.is_null()) return -1;
-    unsafe { safe_memcpy(&d.data[off], buf, n); }
+    if (off + n > self.size || self.data.is_null()) return -1;
+    unsafe { safe_memcpy(&self.data[off], buf, n); }
     return 0;
 }
 
 static struct BlockDevice memdisk_device(&MemDisk d) {
-    return BlockDevice::new(d, d.size / 512UL, 512UL, memdisk_read, memdisk_write);
+    return BlockDevice::new(d, d.size / 512UL, 512UL);
+}
+
+// FsRead, straight on a driver (no VFS): the root directory's entry count.
+static void count_any(&VfsNode n, ?&void seen) {
+    unsafe { *(int*)seen = *(int*)seen + 1; }
+}
+generic<F: FsRead>
+int root_entries(&F fs) {
+    struct VfsNode root;
+    if (fs.open("/", VFS_O_READ, &root) != 0) return -1;
+    int seen = 0;
+    unsafe { fs.readdir(root.inode, count_any, (?&void)&seen); }
+    return seen;
+}
+
+// A directory entry handed to a readdir callback reads like an opened node.
+static void read_entry(&VfsNode n, &int bytes) {
+    unsigned char buf[16];
+    unsafe { *bytes = *bytes + (int)n.read(0UL, buf, 16UL); }
 }
 
 // Loads a whole file into a MemDisk; data stays null if it can't be read.
@@ -90,7 +112,7 @@ void t_tmpfs_vfs() {
         &TmpfsCtx ctx = std::expect_ref(cq, "cq is null");
         ctx.init();
         vfs_init();
-        ASSERT_EQ(vfs_root.mount("/tmp", tmpfs_ops(), ctx), 0);
+        ASSERT_EQ(vfs_root.mount("/tmp", ctx), 0);
         ASSERT_EQ(vfs_root.mkdir("/tmp/dir"), 0);
         struct VfsNode node;
         ASSERT_EQ(vfs_root.open("/tmp/dir/hello.txt", VFS_O_CREATE | VFS_O_WRITE, &node), 0);
@@ -109,6 +131,17 @@ void t_tmpfs_vfs() {
         int seen = 0;
         dir.readdir(count_entry, (&int)&seen);
         ASSERT_EQ(seen, 1);
+        int bytes = 0;
+        dir.readdir(read_entry, (&int)&bytes);      // entries carry their mount
+        ASSERT_EQ(bytes, 11);
+        ASSERT_EQ(root_entries(ctx), 1);            // FsRead without the VFS: "dir"
+        // read-only mount of the same driver: writes are refused
+        ASSERT_EQ(vfs_root.mount_ro("/ro", ctx), 0);
+        ASSERT_NE(vfs_root.mkdir("/ro/other"), 0);
+        struct VfsNode ro;
+        ASSERT_EQ(vfs_root.open("/ro/dir/hello.txt", VFS_O_READ, &ro), 0);
+        ASSERT_EQ(ro.write(0UL, msg, 1UL), 0);
+        ASSERT_EQ(vfs_root.unmount("/ro"), 0);
         ASSERT_EQ(vfs_root.unlink("/tmp/dir/hello.txt"), 0);
         ASSERT_NE(vfs_root.open("/tmp/dir/hello.txt", VFS_O_READ, &again), 0);
         ASSERT_NE(vfs_root.open("/nowhere/x", VFS_O_READ, &again), 0);
@@ -188,7 +221,7 @@ void t_fat32() {
         ASSERT_EQ(fc.init(&dev, 0UL), 0);
         ASSERT_EQ(fc.bytes_per_cluster, 512);
         vfs_init();
-        ASSERT_EQ(vfs_root.mount("/fat", fat_ops(), (&FatCtx)&fc), 0);
+        ASSERT_EQ(vfs_root.mount_ro("/fat", (&FatCtx)&fc), 0);
         struct VfsNode f;
         ASSERT_EQ(vfs_root.open("/fat/hello.txt", VFS_O_READ, &f), 0);   // 8.3 names match case-insensitively
         ASSERT_EQ(f.type, VFS_TYPE_FILE);
@@ -206,6 +239,7 @@ void t_fat32() {
         int seen = 0;
         root.readdir(count_entry, (&int)&seen);
         ASSERT_EQ(seen, 3);   // volume label + HELLO.TXT + SUB
+        ASSERT_EQ(root_entries((&FatCtx)&fc), 3);
         ASSERT_NE(vfs_root.open("/fat/missing.txt", VFS_O_READ, &a), 0);
         dealloc(d.data);
     }
@@ -224,7 +258,7 @@ void t_ext2() {
         ASSERT_EQ(ec.init(&dev), 0);
         ASSERT_EQ(ec.block_size, 1024);
         vfs_init();
-        ASSERT_EQ(vfs_root.mount("/ext", ext2_ops(), ec), 0);
+        ASSERT_EQ(vfs_root.mount_ro("/ext", ec), 0);
         struct VfsNode f;
         ASSERT_EQ(vfs_root.open("/ext/HELLO.TXT", VFS_O_READ, &f), 0);
         ASSERT_EQ(f.size, 1300);
@@ -241,6 +275,7 @@ void t_ext2() {
         int seen = 0;
         root.readdir(count_entry, (&int)&seen);
         ASSERT_EQ(seen, 5);   // . .. lost+found HELLO.TXT SUB
+        ASSERT_EQ(root_entries(ec), 5);
         dealloc(eq);
         dealloc(d.data);
     }

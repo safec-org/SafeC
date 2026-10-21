@@ -211,4 +211,14 @@ struct Value csv_parse(const &char text, ?&int ok) {
     return rows;
 }
 
+struct Csv Csv::new() {
+    struct Csv f;
+    f.unused_ = 0;
+    return f;
+}
+
+void Csv::write(const &Value v, &String out) const { csv_write(v, out); }
+
+struct Value Csv::parse(const &char text, ?&int ok) const { return csv_parse(text, ok); }
+
 } // namespace std

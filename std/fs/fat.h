@@ -52,9 +52,11 @@ struct FatCtx {
 
     // Follow FAT chain to find cluster at position `idx` from `start_cluster`.
     unsigned long follow_fat(unsigned long start_cluster, unsigned long idx);
-};
 
-// Return VfsOps for the FAT32 driver (ctx must be a FatCtx*).
-struct VfsOps fat_ops();
+    // ── FsRead (vfs.h): mount with vfs.mount_ro(mountpoint, &ctx) ──────────
+    int           open(const &char path, int flags, &VfsNode node_out);
+    unsigned long read(unsigned long inode, unsigned long offset, &unsigned char buf, unsigned long len);
+    int           readdir(unsigned long inode, fn void(&VfsNode, ?&void) cb, ?&void user);
+};
 
 } // namespace std

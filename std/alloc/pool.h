@@ -1,8 +1,8 @@
 // SafeC Standard Library — Pool Allocator
 // Variable-size first-fit allocator with coalescing on free.
 // Each allocation is preceded by a PoolBlock header.
-// Conforms to Allocator (allocator.h): typed allocation is alloc_t /
-// alloc_array_t / dealloc_t there.
+// Conforms to Allocator and ArenaAllocator (allocator.h): typed allocation
+// is alloc_t / alloc_array_t / dealloc_t there.
 #pragma once
 #include <std/mem.h>
 #include <std/alloc/allocator.h>
@@ -36,6 +36,10 @@ struct PoolAllocator {
     // Free a previously allocated pointer (null: no-op). Coalesces adjacent
     // free blocks. Aborts with a diagnostic on a double free.
     void          dealloc(?&heap void ptr);
+
+    // Free every block at once: the whole buffer is one free block again
+    // (blocks handed out before become invalid).
+    void          reset();
 
     // Return total free bytes (sum of all free blocks).
     unsigned long available() const;

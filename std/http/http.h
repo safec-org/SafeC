@@ -47,7 +47,9 @@ struct HttpRequest {
 // WsConn talk over, for your own protocols on a socket from
 // tcp_connect_timeout / tcp_accept_nb (flipped to blocking with
 // fd_set_blocking — see std/sched/io_nb.h). It conforms to io_traits.h's
-// Reader and Writer, so read_exact / write_all / copy_stream work on it.
+// Stream (Reader + Writer), so read_exact / write_all / copy_stream and
+// io_buf.h's BufReader / BufWriter work on it (http and WsConn read their
+// header blocks through a BufReader<TcpStream>).
 // Writes never raise SIGPIPE: a peer that has gone away is a -1 result.
 struct TcpStream {
     int fd;

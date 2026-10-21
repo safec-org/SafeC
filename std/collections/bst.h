@@ -8,7 +8,7 @@
 //   t.foreach_inorder(print_pair);   // ascending key order
 //   t.free();
 //
-// C is a compile-time ordering type (see std/cmp.h): every key comparison
+// C is a compile-time ordering, an Order (see std/cmp.h): every key comparison
 // is a direct, inlinable call to C::cmp — no function pointer per compare.
 // Keys and values are stored by value, one node per entry, drawn from the
 // tree's own NodePool (see node_pool.h). Every operation is iterative — no recursion — so a
@@ -29,7 +29,7 @@ struct BSTNode {
     ?&heap struct BSTNode<K, V>       right;
 };
 
-generic<K, V, C>
+generic<K, V, C: Order>
 struct BST {
     ?&heap struct BSTNode<K, V>       root;
     C                                 ord;
@@ -56,7 +56,7 @@ struct BST {
                           ?&heap struct BSTNode<K, V> child);
 };
 
-generic<K, V, C>
+generic<K, V, C: Order>
 struct BST<K, V, C> BST::new_with(C ord) {
     struct BST<K, V, C> t;
     t.root = null;
@@ -67,7 +67,7 @@ struct BST<K, V, C> BST::new_with(C ord) {
 }
 
 // Stateless orderings (Less, Greater) need no value: C comes from the target.
-generic<K, V, C>
+generic<K, V, C: Order>
 struct BST<K, V, C> BST::new() {
     struct BST<K, V, C> t;
     t.root = null;
@@ -76,13 +76,13 @@ struct BST<K, V, C> BST::new() {
     return t;
 }
 
-generic<K, V, C>
+generic<K, V, C: Order>
 unsigned long BST::length() const { return self.len; }
 
-generic<K, V, C>
+generic<K, V, C: Order>
 int BST::is_empty() const { return self.len == 0UL; }
 
-generic<K, V, C>
+generic<K, V, C: Order>
 ?&heap struct BSTNode<K, V> BST::find_(const &K key) const {
     ?&heap struct BSTNode<K, V> cur = self.root;
     while (!cur.is_null()) {
@@ -99,7 +99,7 @@ generic<K, V, C>
 }
 
 // Points parent's 'dir' link (-1 left, 1 right; 0 = the root) at child.
-generic<K, V, C>
+generic<K, V, C: Order>
 void BST::relink_(?&heap struct BSTNode<K, V> parent, int dir,
                   ?&heap struct BSTNode<K, V> child) {
     match (parent) {
@@ -111,7 +111,7 @@ void BST::relink_(?&heap struct BSTNode<K, V> parent, int dir,
     }
 }
 
-generic<K, V, C>
+generic<K, V, C: Order>
 int BST::insert(K key, V val) {
     ?&heap struct BSTNode<K, V> parent = null;
     ?&heap struct BSTNode<K, V> cur = self.root;
@@ -138,7 +138,7 @@ int BST::insert(K key, V val) {
     return 1;
 }
 
-generic<K, V, C>
+generic<K, V, C: Order>
 ?&V BST::get(K key) const {
     match (self.find_(&key)) {
         case some(n): unsafe { return (?&V)&n.val; }
@@ -147,10 +147,10 @@ generic<K, V, C>
     return null;
 }
 
-generic<K, V, C>
+generic<K, V, C: Order>
 int BST::contains(K key) const { return !self.find_(&key).is_null(); }
 
-generic<K, V, C>
+generic<K, V, C: Order>
 ?V BST::remove(K key) {
     ?&heap struct BSTNode<K, V> parent = null;
     ?&heap struct BSTNode<K, V> cur = self.root;
@@ -210,7 +210,7 @@ generic<K, V, C>
     return null;
 }
 
-generic<K, V, C>
+generic<K, V, C: Order>
 ?&K BST::min_key() const {
     ?&heap struct BSTNode<K, V> cur = self.root;
     while (!cur.is_null()) {
@@ -225,7 +225,7 @@ generic<K, V, C>
     return null;
 }
 
-generic<K, V, C>
+generic<K, V, C: Order>
 ?&K BST::max_key() const {
     ?&heap struct BSTNode<K, V> cur = self.root;
     while (!cur.is_null()) {
@@ -243,7 +243,7 @@ generic<K, V, C>
 // Morris in-order traversal: O(n) time, O(1) extra space. Threads each
 // predecessor's empty right link back to its successor while descending and
 // removes the thread on the way back, so the tree is unchanged afterwards.
-generic<K, V, C>
+generic<K, V, C: Order>
 void BST::foreach_inorder(fn void(const &K, &V) func) {
     ?&heap struct BSTNode<K, V> cur = self.root;
     while (!cur.is_null()) {
@@ -294,14 +294,14 @@ void BST::foreach_inorder(fn void(const &K, &V) func) {
     }
 }
 
-generic<K, V, C>
+generic<K, V, C: Order>
 void BST::free() {
     self.pool.free_all();
     self.root = null;
     self.len = 0UL;
 }
 
-generic<K, V, C>
+generic<K, V, C: Order>
 void BST::clear() { self.free(); }
 
 } // namespace std

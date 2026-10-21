@@ -3,6 +3,7 @@
 #pragma once
 #include <std/stddef.h>
 #include <std/io_file.h>
+#include <std/io_traits.h>
 
 namespace std {
 
@@ -86,14 +87,7 @@ inline int File::flush() {
 }
 
 inline long long File::size() {
-    unsafe {
-        long cur = ftell((void*)self);
-        if (cur < 0) return (long long)-1;
-        if (fseek((void*)self, 0, 2) != 0) return (long long)-1;  // SEEK_END = 2
-        long long end = (long long)ftell((void*)self);
-        fseek((void*)self, cur, 0);                                 // SEEK_SET = 0
-        return end;
-    }
+    return stream_size(self);
 }
 
 // Forwarding wrappers kept for std/ml (see io_file.h).

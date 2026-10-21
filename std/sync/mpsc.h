@@ -47,7 +47,7 @@ struct MpscQueue {
     ?T            dequeue();        // null if empty
     int           is_empty() const;
     int           is_full() const;
-    unsigned long len() const;
+    unsigned long length() const;
     void          destroy();        // frees the buffer
 };
 
@@ -94,7 +94,7 @@ generic<T>
 int MpscQueue::is_full() const { return self.count == self.cap; }
 
 generic<T>
-unsigned long MpscQueue::len() const { return self.count; }
+unsigned long MpscQueue::length() const { return self.count; }
 
 generic<T>
 void MpscQueue::destroy() {

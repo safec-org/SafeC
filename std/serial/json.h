@@ -34,4 +34,13 @@ struct String value_to_json(const &Value v);
 // complete value (matches most JSON libraries' default leniency).
 struct Value json_parse(const &char text, ?&int ok);
 
+// The JSON backend as a Format (see value.h): v.encode(Json::new()),
+// Value::decode(Json::new(), text, &ok) — the same as json_write / json_parse.
+struct Json {
+    int unused_;
+    static struct Json new();
+    void         write(const &Value v, &String out) const;
+    struct Value parse(const &char text, ?&int ok) const;
+};
+
 } // namespace std

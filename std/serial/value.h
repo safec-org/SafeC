@@ -19,6 +19,7 @@
 // need your own copy).
 #pragma once
 #include <std/collections/vec.h>
+#include <std/collections/string.h>
 
 namespace std {
 
@@ -36,6 +37,19 @@ namespace std {
 #define VAL_STRING 4
 #define VAL_ARRAY  5
 #define VAL_OBJECT 6
+
+// A text format for Value trees. Each backend is a small struct whose
+// methods are the format's writer and parser: Json (json.h), Yaml (yaml.h),
+// Csv (csv.h), Xml (xml.h; carries the root element's tag) and Html
+// (html.h). Value::encode / Value::decode take any of them, and so does
+// generic code bounded by Format:
+//
+//   struct String text = v.encode(Json::new());
+//   struct Value back = Value::decode(Xml::new("doc"), text.as_ptr(), &ok);
+trait Format {
+    void         write(const &Value v, &String out) const;   // appends v's text to out
+    struct Value parse(const &char text, ?&int ok) const;    // *ok: 1, or 0 on malformed input
+}
 
 // One key/value pair inside a VAL_OBJECT's obj_val Vec.
 struct ObjectEntry {
@@ -89,7 +103,23 @@ struct Value {
     // Deep copy / recursive release of the whole tree.
     struct Value    clone() const;
     void            free();
+
+    // ── Text formats (any Format) ───────────────────────────────────────────
+    // A fresh String holding this tree in format f.
+    generic<F: Format> struct String encode(F f) const;
+    // Parses text in format f; *ok (if non-null) is 1 on success, else 0.
+    generic<F: Format> static struct Value decode(F f, const &char text, ?&int ok);
 };
+
+generic<F: Format>
+struct String Value::encode(F f) const {
+    struct String out = String::new();
+    f.write(self, &out);
+    return out;
+}
+
+generic<F: Format>
+struct Value Value::decode(F f, const &char text, ?&int ok) { return f.parse(text, ok); }
 
 // Kept for std/ml until its refactor moves to the methods above; forward to
 // Value::array() / Value::object() / Value::from_str(s) /

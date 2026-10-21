@@ -214,11 +214,11 @@ static int fat_split_path_(const char* path, char parts[][VFS_MAX_NAME], int max
     return count;
 }
 
-// ── VfsOps callbacks ──────────────────────────────────────────────────────────
+// ── FileSystem methods (see vfs.h) ────────────────────────────────────────────
 
-static int fat_vfs_open_(?&void ctx_ref, const &char path_ref, int flags,
-                          &VfsNode node_out) {
-    void* ctx = ctx_ref;
+int FatCtx::open(const &char path_ref, int flags, &VfsNode node_out) {
+    void* ctx;
+    unsafe { ctx = (void*)self; }
     const char* path = path_ref;
     struct FatCtx* fc;
     unsafe { fc = (struct FatCtx*)ctx; }
@@ -266,10 +266,9 @@ static int fat_vfs_open_(?&void ctx_ref, const &char path_ref, int flags,
     return 0;
 }
 
-static unsigned long fat_vfs_read_(?&void ctx_ref, unsigned long inode,
-                                    unsigned long offset,
-                                    &unsigned char buf_ref, unsigned long len) {
-    void* ctx = ctx_ref;
+unsigned long FatCtx::read(unsigned long inode, unsigned long offset, &unsigned char buf_ref, unsigned long len) {
+    void* ctx;
+    unsafe { ctx = (void*)self; }
     unsigned char* buf = buf_ref;
     struct FatCtx* fc;
     unsafe { fc = (struct FatCtx*)ctx; }
@@ -296,8 +295,9 @@ static unsigned long fat_vfs_read_(?&void ctx_ref, unsigned long inode,
     return avail;
 }
 
-static int fat_vfs_readdir_(?&void ctx_ref, unsigned long inode, fn void(&VfsNode, ?&void) cb, ?&void user) {
-    void* ctx = ctx_ref;
+int FatCtx::readdir(unsigned long inode, fn void(&VfsNode, ?&void) cb, ?&void user) {
+    void* ctx;
+    unsafe { ctx = (void*)self; }
     struct FatCtx* fc;
     unsafe { fc = (struct FatCtx*)ctx; }
     int count = 0;
@@ -333,7 +333,7 @@ static int fat_vfs_readdir_(?&void ctx_ref, unsigned long inode, fn void(&VfsNod
                 unsigned long hi = (unsigned long)fat_read16_(entry + 20);
                 unsigned long lo = (unsigned long)fat_read16_(entry + 26);
                 node.inode    = (hi << 16) | lo;
-                node.fs_ctx   = ctx;
+                node.fs_ctx   = null;
                 cb(&node, user);
                 count = count + 1;
             }
@@ -343,17 +343,6 @@ static int fat_vfs_readdir_(?&void ctx_ref, unsigned long inode, fn void(&VfsNod
     }
     done_:
     return count;
-}
-
-inline struct VfsOps fat_ops() {
-    struct VfsOps ops;
-    unsafe {
-        memset((void*)&ops, 0, sizeof(struct VfsOps));
-        ops.open    = fat_vfs_open_;
-        ops.read    = fat_vfs_read_;
-        ops.readdir = fat_vfs_readdir_;
-    }
-    return ops;
 }
 
 } // namespace std

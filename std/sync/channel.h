@@ -41,6 +41,11 @@ struct Chan {
     int  send(T val);     // 1 on success, 0 if closed (or never created)
     ?T   recv();          // null once closed and drained
     void close();         // wakes every blocked sender/receiver
+
+    // send/recv under the Fifo names (std/collections/traits.h), so generic
+    // producer/consumer code takes a Chan like any queue. Both block.
+    int  enqueue(T val);
+    ?T   dequeue();
 };
 
 generic<T>
@@ -75,6 +80,12 @@ generic<T>
     unsafe { memcpy((void*)&v[0], (const void*)&slot, (size_t)sizeof(T)); }
     return v[0];
 }
+
+generic<T>
+int Chan::enqueue(T val) { return self.send(val); }
+
+generic<T>
+?T Chan::dequeue() { return self.recv(); }
 
 generic<T>
 void Chan::close() {

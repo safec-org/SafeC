@@ -1,53 +1,14 @@
-// SafeC Standard Library — HMAC-SHA256 implementation (see hmac.h).
+// SafeC Standard Library — HMAC-SHA256 (see hmac.h; Hmac<H> is header-only).
 #pragma once
 #include <std/crypto/hmac.h>
 #include <std/crypto/sha256.h>
-#include <std/crypto/sha256.h>
-#include <std/mem.h>
 
 namespace std {
 
 void hmac_sha256(const &unsigned char key, unsigned long keyLen,
                   const &unsigned char data, unsigned long dataLen,
-                  &unsigned char out_ref) { unsigned char* out = out_ref;
-    unsafe {
-        unsigned char keyBlock[SHA256_BLOCK_SIZE];
-        unsigned long i = 0UL;
-
-        if (keyLen > (unsigned long)SHA256_BLOCK_SIZE) {
-            unsigned char keyDigest[SHA256_DIGEST_SIZE];
-            sha256((const &unsigned char)key, keyLen, (&unsigned char)keyDigest);
-            i = 0UL;
-            while (i < (unsigned long)SHA256_DIGEST_SIZE) { keyBlock[i] = keyDigest[i]; i = i + 1UL; }
-            while (i < (unsigned long)SHA256_BLOCK_SIZE) { keyBlock[i] = (unsigned char)0; i = i + 1UL; }
-        } else {
-            i = 0UL;
-            while (i < keyLen) { keyBlock[i] = key[i]; i = i + 1UL; }
-            while (i < (unsigned long)SHA256_BLOCK_SIZE) { keyBlock[i] = (unsigned char)0; i = i + 1UL; }
-        }
-
-        unsigned char ipad[SHA256_BLOCK_SIZE];
-        unsigned char opad[SHA256_BLOCK_SIZE];
-        i = 0UL;
-        while (i < (unsigned long)SHA256_BLOCK_SIZE) {
-            ipad[i] = keyBlock[i] ^ (unsigned char)0x36;
-            opad[i] = keyBlock[i] ^ (unsigned char)0x5c;
-            i = i + 1UL;
-        }
-
-        // inner = SHA256(ipad || data)
-        struct Sha256Ctx innerCtx = Sha256Ctx::new();
-        innerCtx.update((const &unsigned char)ipad, (unsigned long)SHA256_BLOCK_SIZE);
-        innerCtx.update((const &unsigned char)data, dataLen);
-        unsigned char innerDigest[SHA256_DIGEST_SIZE];
-        innerCtx.finish((&unsigned char)innerDigest);
-
-        // out = SHA256(opad || inner)
-        struct Sha256Ctx outerCtx = Sha256Ctx::new();
-        outerCtx.update((const &unsigned char)opad, (unsigned long)SHA256_BLOCK_SIZE);
-        outerCtx.update((const &unsigned char)innerDigest, (unsigned long)SHA256_DIGEST_SIZE);
-        outerCtx.finish((&unsigned char)out);
-    }
+                  &unsigned char out) {
+    hash_bytes(Hmac::new(Sha256Ctx::new(), key, keyLen), data, dataLen, out);
 }
 
 } // namespace std

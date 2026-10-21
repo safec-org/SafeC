@@ -1,7 +1,7 @@
 // SafeC Standard Library — Bump Allocator
 // O(1) alloc, O(1) reset. No individual free — reset reclaims all.
-// Conforms to Allocator (allocator.h): typed allocation is alloc_t /
-// alloc_array_t there.
+// Conforms to ArenaAllocator (allocator.h), and to Allocator with a no-op
+// dealloc: typed allocation is alloc_t / alloc_array_t there.
 #pragma once
 #include <std/mem.h>
 #include <std/alloc/allocator.h>

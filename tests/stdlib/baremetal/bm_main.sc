@@ -159,7 +159,7 @@ static void t_ring_alloc() {
         r.write(in, 40UL);
         r.read(out, 30UL);
         r.write(in, 40UL);                       // wraps
-        CHECK(r.readable() == 50UL);
+        CHECK(r.length() == 50UL);
         r.read(out, 10UL);
         CHECK(out[9] == 39);
 

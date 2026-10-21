@@ -15,6 +15,14 @@
 
 namespace std {
 
+// What a watchdog block type provides; Watchdog<C> requires it.
+trait WatchdogChip {
+    void init(unsigned long base, unsigned int timeout) const;
+    void enable(unsigned long base) const;
+    void feed(unsigned long base) const;
+    int  caused_reset(unsigned long base) const;
+}
+
 struct WatchdogGeneric {
     int  unused_;
     void init(unsigned long base, unsigned int timeout) const;
@@ -30,7 +38,7 @@ struct Stm32F4Iwdg {
     int  caused_reset(unsigned long base) const;
 };
 
-generic<C>
+generic<C: WatchdogChip>
 struct Watchdog {
     &volatile unsigned int base; // MMIO base address
     unsigned int timeout;  // timeout period (chip-specific units, see above)
@@ -49,7 +57,7 @@ struct Watchdog {
     unsigned long addr_() const;
 };
 
-generic<C>
+generic<C: WatchdogChip>
 struct Watchdog<C> Watchdog::new(&volatile unsigned int base, unsigned int timeout) {
     struct Watchdog<C> w;
     w.base = base;
@@ -58,13 +66,13 @@ struct Watchdog<C> Watchdog::new(&volatile unsigned int base, unsigned int timeo
     return w;
 }
 
-generic<C>
+generic<C: WatchdogChip>
 unsigned long Watchdog::addr_() const { unsafe { return (unsigned long)self.base; } }
-generic<C>
+generic<C: WatchdogChip>
 void Watchdog::enable() { self.chip.enable(self.addr_()); }
-generic<C>
+generic<C: WatchdogChip>
 void Watchdog::feed() { self.chip.feed(self.addr_()); }
-generic<C>
+generic<C: WatchdogChip>
 int Watchdog::caused_reset() const { return self.chip.caused_reset(self.addr_()); }
 
 } // namespace std

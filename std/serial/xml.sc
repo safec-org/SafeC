@@ -368,4 +368,14 @@ struct Value xml_parse(const &char text, ?&int ok) {
     return v;
 }
 
+struct Xml Xml::new(const &char root_tag) {
+    struct Xml x;
+    x.root = root_tag;
+    return x;
+}
+
+void Xml::write(const &Value v, &String out) const { xml_write(v, self.root, out); }
+
+struct Value Xml::parse(const &char text, ?&int ok) const { return xml_parse(text, ok); }
+
 } // namespace std

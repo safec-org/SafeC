@@ -10,6 +10,7 @@
 #include <std/str.h>
 #include <std/sched/io_nb.h>
 #include <std/io_traits.h>
+#include <std/io_buf.h>
 #include <std/crypto/sha1.h>
 #include <std/crypto/sha1.h>
 #include <std/crypto/rng.h>
@@ -46,22 +47,6 @@ static struct String ws_compute_accept_(const char* key) {
     }
     combined.free();
     return base64_encode(digest, 20UL);
-}
-
-// Reads from the socket until 'terminator' has arrived, appending to 'out'.
-// Returns the offset just past the terminator, or -1 if the connection
-// closed first.
-static long ws_read_until_(int fd, struct String* out, const char* terminator) {
-    unsigned long termLen; unsafe { termLen = str_len(terminator); }
-    struct TcpStream s = TcpStream::from_fd(fd);
-    unsigned char chunk[512];
-    while (1) {
-        long long n = s.read(&chunk[0], 512UL);
-        if (n <= 0LL) { return -1L; }
-        unsafe { out->push_n((const char*)&chunk[0], (unsigned long)n); }
-        long idx; unsafe { idx = out->index_of(terminator); }
-        if (idx >= 0L) { return idx + (long)termLen; }
-    }
 }
 
 // ── Client handshake ───────────────────────────────────────────────────────
@@ -126,21 +111,20 @@ struct WsConn WsConn::connect_timeout(const &char host, unsigned short port,
     }
 
     if (good) {
-        struct String buf = String::new();
-        long headerEnd = ws_read_until_(fd, &buf, "\r\n\r\n");
-        if (headerEnd < 0L) {
+        struct TcpStream s = TcpStream::from_fd(fd);
+        struct BufReader<TcpStream> in = BufReader::over(&s);
+        struct String headerBlock = String::new();
+        if (!in.read_until(&headerBlock, "\r\n\r\n")) {
             good = 0;
         } else {
-            struct String headerBlock = buf.substr(0UL, (unsigned long)headerEnd);
             if (headerBlock.index_of("101") < 0L) { good = 0; }
             struct String accept = http_header_get(headerBlock.as_ptr(), "Sec-WebSocket-Accept");
             struct String expected = ws_compute_accept_(keyB64.as_ptr());
             if (!accept.eq_cstr(expected.as_ptr())) { good = 0; }
             accept.free();
             expected.free();
-            headerBlock.free();
         }
-        buf.free();
+        headerBlock.free();
     }
     keyB64.free();
 
@@ -177,15 +161,14 @@ int WsConn::accept(int listenFd) {
     unsafe { fd_set_blocking(fd); }
 
     int good = 1;
-    struct String buf = String::new();
-    long headerEnd = ws_read_until_(fd, &buf, "\r\n\r\n");
+    struct TcpStream s = TcpStream::from_fd(fd);
+    struct BufReader<TcpStream> in = BufReader::over(&s);
+    struct String headerBlock = String::new();
     struct String key = String::new();
-    if (headerEnd < 0L) {
+    if (!in.read_until(&headerBlock, "\r\n\r\n")) {
         good = 0;
     } else {
-        struct String headerBlock = buf.substr(0UL, (unsigned long)headerEnd);
         struct String foundKey = http_header_get(headerBlock.as_ptr(), "Sec-WebSocket-Key");
-        headerBlock.free();
         if (foundKey.is_empty()) {
             good = 0;
         } else {
@@ -194,7 +177,7 @@ int WsConn::accept(int listenFd) {
         }
         if (good == 0) { foundKey.free(); }
     }
-    buf.free();
+    headerBlock.free();
 
     if (good) {
         struct String accept = ws_compute_accept_(key.as_ptr());
@@ -205,7 +188,6 @@ int WsConn::accept(int listenFd) {
             resp.push(accept.as_ptr());
             resp.push("\r\n\r\n");
         }
-        struct TcpStream s = TcpStream::from_fd(fd);
         int sent;
         unsafe { sent = write_all(&s, (const &unsigned char)resp.as_ptr(), resp.length()); }
         if (!sent) { good = 0; }
@@ -215,7 +197,6 @@ int WsConn::accept(int listenFd) {
     key.free();
 
     if (!good) {
-        struct TcpStream s = TcpStream::from_fd(fd);
         s.close();
         return 0;
     }
@@ -227,6 +208,8 @@ int WsConn::accept(int listenFd) {
 }
 
 // ── Framing ───────────────────────────────────────────────────────────────
+
+#define WS_MASK_CHUNK_ 16384
 
 static int ws_write_frame_(struct WsConn* conn, int opcode,
                             const unsigned char* data, unsigned long len) {
@@ -257,7 +240,10 @@ static int ws_write_frame_(struct WsConn* conn, int opcode,
             headLen = 10UL;
         }
     }
-    if (!write_all(&s, &head[0], headLen)) { return 0; }
+    // Header, mask key and a small payload leave in one write; a large
+    // payload streams through without a copy of the whole of it.
+    struct BufWriter<TcpStream> out = BufWriter::over(&s);
+    if (!write_all(&out, &head[0], headLen)) { return 0; }
 
     if (mustMask) {
         unsigned char maskKey[4];
@@ -266,33 +252,30 @@ static int ws_write_frame_(struct WsConn* conn, int opcode,
         unsafe { rngOk = rng.init(); }
         if (!rngOk) { return 0; }
         unsafe { rng.fill(&maskKey[0], 4UL); }
-        if (!write_all(&s, &maskKey[0], 4UL)) { return 0; }
+        if (!write_all(&out, &maskKey[0], 4UL)) { return 0; }
 
-        if (len > 0UL) {
-            unsigned char* masked;
-            unsafe { masked = (unsigned char*)alloc_raw_(len); }
-            if (masked == (unsigned char*)0) { return 0; }
-            unsigned long i = 0UL;
-            while (i < len) {
-                unsigned char b;
-                unsigned char mk;
-                unsafe { b = data[i]; mk = maskKey[i % 4UL]; }
-                unsafe { masked[i] = (unsigned char)((unsigned int)b ^ (unsigned int)mk); }
-                i = i + 1UL;
+        // Masked a chunk at a time (a multiple of 4, so the key lines up).
+        unsigned char chunk[WS_MASK_CHUNK_];
+        unsigned long i = 0UL;
+        while (i < len) {
+            unsigned long n = len - i;
+            if (n > (unsigned long)WS_MASK_CHUNK_) { n = (unsigned long)WS_MASK_CHUNK_; }
+            unsigned long k = 0UL;
+            unsafe {
+                while (k < n) {
+                    chunk[k] = (unsigned char)((unsigned int)data[i + k] ^ (unsigned int)maskKey[k & 3UL]);
+                    k = k + 1UL;
+                }
             }
-            int wrote;
-            unsafe { wrote = write_all(&s, (const &unsigned char)masked, len); }
-            unsafe { dealloc_raw_((void*)masked); }
-            if (!wrote) { return 0; }
+            if (!write_all(&out, &chunk[0], n)) { return 0; }
+            i = i + n;
         }
-    } else {
-        if (len > 0UL) {
-            int ok;
-            unsafe { ok = write_all(&s, (const &unsigned char)data, len); }
-            if (!ok) { return 0; }
-        }
+    } else if (len > 0UL) {
+        int ok;
+        unsafe { ok = write_all(&out, (const &unsigned char)data, len); }
+        if (!ok) { return 0; }
     }
-    return 1;
+    return out.flush() == 0;
 }
 
 int WsConn::send_text(const &char text) {

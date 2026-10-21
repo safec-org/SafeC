@@ -106,11 +106,11 @@ static void tmpfs_split_path_(const char* path,
     }
 }
 
-// ── VfsOps callbacks ──────────────────────────────────────────────────────────
+// ── FileSystem methods (see vfs.h) ────────────────────────────────────────────
 
-static int tmpfs_vfs_open_(?&void ctx_ref, const &char path_ref, int flags,
-                            &VfsNode node_out) {
-    void* ctx = ctx_ref;
+int TmpfsCtx::open(const &char path_ref, int flags, &VfsNode node_out) {
+    void* ctx;
+    unsafe { ctx = (void*)self; }
     const char* path = path_ref;
     struct TmpfsCtx* tc;
     unsafe { tc = (struct TmpfsCtx*)ctx; }
@@ -153,8 +153,9 @@ static int tmpfs_vfs_open_(?&void ctx_ref, const &char path_ref, int flags,
     return 0;
 }
 
-static int tmpfs_vfs_unlink_(?&void ctx_ref, const &char path_ref) {
-    void* ctx = ctx_ref;
+int TmpfsCtx::unlink(const &char path_ref) {
+    void* ctx;
+    unsafe { ctx = (void*)self; }
     const char* path = path_ref;
     struct TmpfsCtx* tc;
     unsafe { tc = (struct TmpfsCtx*)ctx; }
@@ -167,8 +168,9 @@ static int tmpfs_vfs_unlink_(?&void ctx_ref, const &char path_ref) {
     return 0;
 }
 
-static int tmpfs_vfs_mkdir_(?&void ctx_ref, const &char path_ref) {
-    void* ctx = ctx_ref;
+int TmpfsCtx::mkdir(const &char path_ref) {
+    void* ctx;
+    unsafe { ctx = (void*)self; }
     const char* path = path_ref;
     struct TmpfsCtx* tc;
     unsafe { tc = (struct TmpfsCtx*)ctx; }
@@ -192,10 +194,9 @@ static int tmpfs_vfs_mkdir_(?&void ctx_ref, const &char path_ref) {
     return 0;
 }
 
-static unsigned long tmpfs_vfs_read_(?&void ctx_ref, unsigned long inode,
-                                      unsigned long offset,
-                                      &unsigned char buf_ref, unsigned long len) {
-    void* ctx = ctx_ref;
+unsigned long TmpfsCtx::read(unsigned long inode, unsigned long offset, &unsigned char buf_ref, unsigned long len) {
+    void* ctx;
+    unsafe { ctx = (void*)self; }
     unsigned char* buf = buf_ref;
     struct TmpfsCtx* tc;
     unsafe { tc = (struct TmpfsCtx*)ctx; }
@@ -222,10 +223,9 @@ static unsigned long tmpfs_vfs_read_(?&void ctx_ref, unsigned long inode,
     return avail;
 }
 
-static unsigned long tmpfs_vfs_write_(?&void ctx_ref, unsigned long inode,
-                                       unsigned long offset,
-                                       const &unsigned char buf_ref, unsigned long len) {
-    void* ctx = ctx_ref;
+unsigned long TmpfsCtx::write(unsigned long inode, unsigned long offset, const &unsigned char buf_ref, unsigned long len) {
+    void* ctx;
+    unsafe { ctx = (void*)self; }
     const unsigned char* buf = buf_ref;
     struct TmpfsCtx* tc;
     unsafe { tc = (struct TmpfsCtx*)ctx; }
@@ -254,9 +254,9 @@ static unsigned long tmpfs_vfs_write_(?&void ctx_ref, unsigned long inode,
     return len;
 }
 
-static int tmpfs_vfs_readdir_(?&void ctx_ref, unsigned long inode,
-                               fn void(&VfsNode, ?&void) cb, ?&void user) {
-    void* ctx = ctx_ref;
+int TmpfsCtx::readdir(unsigned long inode, fn void(&VfsNode, ?&void) cb, ?&void user) {
+    void* ctx;
+    unsafe { ctx = (void*)self; }
     struct TmpfsCtx* tc;
     unsafe { tc = (struct TmpfsCtx*)ctx; }
     int count = 0;
@@ -281,7 +281,7 @@ static int tmpfs_vfs_readdir_(?&void ctx_ref, unsigned long inode,
                 node.type  = tc->inodes[j].type;
                 node.size  = tc->inodes[j].size;
                 node.inode = (unsigned long)j;
-                node.fs_ctx = ctx;
+                node.fs_ctx = null;
                 cb(&node, user);
             }
             count = count + 1;
@@ -289,20 +289,6 @@ static int tmpfs_vfs_readdir_(?&void ctx_ref, unsigned long inode,
         j = j + 1;
     }
     return count;
-}
-
-inline struct VfsOps tmpfs_ops() {
-    struct VfsOps ops;
-    unsafe {
-        memset((void*)&ops, 0, sizeof(struct VfsOps));
-        ops.open    = tmpfs_vfs_open_;
-        ops.unlink  = tmpfs_vfs_unlink_;
-        ops.mkdir   = tmpfs_vfs_mkdir_;
-        ops.read    = tmpfs_vfs_read_;
-        ops.write   = tmpfs_vfs_write_;
-        ops.readdir = tmpfs_vfs_readdir_;
-    }
-    return ops;
 }
 
 } // namespace std

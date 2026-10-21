@@ -93,9 +93,11 @@ struct Ext2Ctx {
     // Read file data for inode at byte offset `offset` into `buf` for `len` bytes.
     unsigned long read_file(unsigned long ino, unsigned long offset,
                              &unsigned char buf, unsigned long len);
-};
 
-// Return VfsOps for the ext2 driver.
-struct VfsOps ext2_ops();
+    // ── FsRead (vfs.h): mount with vfs.mount_ro(mountpoint, &ctx) ──────────
+    int           open(const &char path, int flags, &VfsNode node_out);
+    unsigned long read(unsigned long inode, unsigned long offset, &unsigned char buf, unsigned long len);
+    int           readdir(unsigned long inode, fn void(&VfsNode, ?&void) cb, ?&void user);
+};
 
 } // namespace std

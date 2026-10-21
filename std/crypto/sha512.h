@@ -1,5 +1,6 @@
 // SafeC Standard Library — SHA-512 / SHA-384 Hash (FIPS 180-4)
 // Freestanding-safe. No dynamic allocation.
+// Sha512Ctx conforms to hash.h's Hasher and BlockHash (generic hashing, Hmac).
 #pragma once
 
 #define SHA512_DIGEST_SIZE  64   // bytes
@@ -31,6 +32,10 @@ struct Sha512Ctx {
     // For SHA-512: digest must be at least 64 bytes.
     // For SHA-384: digest must be at least 48 bytes.
     void finish(&unsigned char digest);
+
+    // 64 (SHA-512) or 48 (SHA-384) / SHA512_BLOCK_SIZE (hash.h's BlockHash).
+    unsigned long digest_size() const;
+    unsigned long block_size() const;
 };
 
 // Convenience: hash `len` bytes and write the 64-byte digest.

@@ -305,10 +305,15 @@ void t_tcp() {
     }
 }
 
-struct LoopDrv { int frames; unsigned long bytes; };
-static int loop_tx(&LoopDrv d, const &unsigned char buf, unsigned long len) {
-    d.frames = d.frames + 1;
-    d.bytes = d.bytes + len;
+// A NetDriver: anything with transmit(frame, len).
+struct LoopDrv {
+    int frames;
+    unsigned long bytes;
+    int transmit(const &unsigned char frame, unsigned long len);
+};
+int LoopDrv::transmit(const &unsigned char frame, unsigned long len) {
+    self.frames = self.frames + 1;
+    self.bytes = self.bytes + len;
     return 0;
 }
 
@@ -326,7 +331,7 @@ void t_drivers() {
     struct LoopDrv drv;
     drv.frames = 0;
     drv.bytes = 0UL;
-    struct NetIf nif = NetIf::new(&drv, loop_tx);
+    struct NetIf nif = NetIf::new(&drv);
     struct PacketBuf pkt;
     pkt.reset();
     pkt.len = 60UL;

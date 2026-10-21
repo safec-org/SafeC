@@ -23,6 +23,17 @@
 
 namespace std {
 
+// What a GPIO block type provides (GpioGeneric, Stm32F4Gpio below, or
+// your own): GpioPin<C> requires it, so a type missing one is rejected
+// where the pin type is named.
+trait GpioChip {
+    void set_direction(unsigned long base, int pin, int direction) const;
+    void write(unsigned long base, int pin, int value) const;
+    int  read(unsigned long base, int pin) const;
+    void toggle(unsigned long base, int pin) const;
+    void set_pull(unsigned long base, int pin, int pull) const;
+}
+
 struct GpioGeneric {
     int  unused_;
     void set_direction(unsigned long base, int pin, int direction) const;
@@ -41,7 +52,7 @@ struct Stm32F4Gpio {
     void set_pull(unsigned long base, int pin, int pull) const;
 };
 
-generic<C>
+generic<C: GpioChip>
 struct GpioPin {
     &volatile unsigned int base; // MMIO base address of the GPIO port
     int          pin;        // pin number within the port
@@ -67,7 +78,7 @@ struct GpioPin {
     unsigned long addr_() const;
 };
 
-generic<C>
+generic<C: GpioChip>
 struct GpioPin<C> GpioPin::new(&volatile unsigned int base, int pin, int direction) {
     struct GpioPin<C> p;
     p.base = base;
@@ -78,20 +89,20 @@ struct GpioPin<C> GpioPin::new(&volatile unsigned int base, int pin, int directi
     return p;
 }
 
-generic<C>
+generic<C: GpioChip>
 unsigned long GpioPin::addr_() const { unsafe { return (unsigned long)self.base; } }
-generic<C>
+generic<C: GpioChip>
 void GpioPin::set_direction(int direction) {
     self.direction = direction;
     self.chip.set_direction(self.addr_(), self.pin, direction);
 }
-generic<C>
+generic<C: GpioChip>
 void GpioPin::write(int value) { self.chip.write(self.addr_(), self.pin, value); }
-generic<C>
+generic<C: GpioChip>
 int GpioPin::read() const { return self.chip.read(self.addr_(), self.pin); }
-generic<C>
+generic<C: GpioChip>
 void GpioPin::toggle() { self.chip.toggle(self.addr_(), self.pin); }
-generic<C>
+generic<C: GpioChip>
 void GpioPin::set_pull(int pull) { self.chip.set_pull(self.addr_(), self.pin, pull); }
 
 } // namespace std

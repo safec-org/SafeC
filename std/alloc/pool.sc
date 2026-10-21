@@ -26,26 +26,30 @@ inline unsigned long PoolAllocator::header_size_() const {
     return (unsigned long)24;
 }
 
+// The whole buffer as one free block. cap < hdr means the buffer can't even
+// hold one block header: writing one would overrun it, and 'cap - hdr'
+// would underflow. The pool is left empty (permanently exhausted) instead.
+inline void PoolAllocator::reset() {
+    unsigned long hdr = (unsigned long)24;
+    if (self.cap < hdr) {
+        self.head = (void*)0;
+        return;
+    }
+    unsafe {
+        struct PoolBlock* first = (struct PoolBlock*)self.base;
+        first->size    = self.cap - hdr;
+        first->is_free = 1;
+        first->next    = (void*)0;
+        self.head = (void*)first;
+    }
+}
+
 inline struct PoolAllocator PoolAllocator::over(&unsigned char buffer, unsigned long cap) {
     struct PoolAllocator a;
     unsafe { a.base = (&heap void)buffer; }
     a.owned = 0;
     a.cap  = cap;
-    unsigned long hdr = (unsigned long)24;
-    // cap < hdr means the caller's buffer can't even hold one block
-    // header: writing one would overrun it, and 'cap - hdr' would
-    // underflow. Leave the pool empty (permanently exhausted) instead.
-    if (cap < hdr) {
-        a.head = (void*)0;
-        return a;
-    }
-    unsafe {
-        struct PoolBlock* first = (struct PoolBlock*)buffer;
-        first->size = cap - hdr;
-        first->is_free = 1;
-        first->next    = (void*)0;
-        a.head = (void*)first;
-    }
+    a.reset();
     return a;
 }
 
@@ -61,13 +65,7 @@ inline struct PoolAllocator PoolAllocator::new(unsigned long cap) {
     unsafe { a.base = (&heap void)malloc(allocCap); }
     a.owned = 1;
     a.cap = allocCap;
-    unsafe {
-        struct PoolBlock* first = (struct PoolBlock*)a.base;
-        first->size    = allocCap - hdr;
-        first->is_free = 1;
-        first->next    = (void*)0;
-        a.head = (void*)first;
-    }
+    a.reset();
     return a;
 }
 

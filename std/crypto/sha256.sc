@@ -2,6 +2,7 @@
 #pragma once
 #include <std/stddef.h>
 #include <std/crypto/sha256.h>
+#include <std/crypto/hash.h>
 
 namespace std {
 
@@ -173,11 +174,13 @@ void Sha256Ctx::finish(&unsigned char digest) {
     }
 }
 
+inline unsigned long Sha256Ctx::digest_size() const { return self.is224 ? (unsigned long)SHA224_DIGEST_SIZE : (unsigned long)SHA256_DIGEST_SIZE; }
+
+inline unsigned long Sha256Ctx::block_size() const { return (unsigned long)SHA256_BLOCK_SIZE; }
+
 void sha256(const &unsigned char data, unsigned long len,
             &unsigned char digest) {
-    struct Sha256Ctx ctx = Sha256Ctx::new();
-    ctx.update(data, len);
-    ctx.finish(digest);
+    hash_bytes(Sha256Ctx::new(), data, len, digest);
 }
 
 } // namespace std

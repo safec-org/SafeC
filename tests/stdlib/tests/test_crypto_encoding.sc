@@ -7,6 +7,7 @@
 #include <std/crypto/sha1.h>
 #include <std/crypto/sha256.h>
 #include <std/crypto/sha512.h>
+#include <std/crypto/hash.h>
 #include <std/crypto/hmac.h>
 #include <std/crypto/aes.h>
 #include <std/crypto/rng.h>
@@ -98,6 +99,71 @@ void t_hmac() {
                     (const unsigned char*)"what do ya want for nothing?", 28UL, (unsigned char*)d);
         to_hex(d, 32UL, hex);
         ASSERT_STR_EQ(hex, "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+    }
+}
+
+// ── hash.h's Hasher / BlockHash ─────────────────────────────────────────────
+// One generic check run over every hash context and over Hmac<H> for each:
+// hash_bytes one-shot, and streaming in uneven pieces across block
+// boundaries, both give the expected digest of digest_size() bytes.
+generic<H: Hasher>
+int hasher_kat(H fresh, const &unsigned char msg, unsigned long len, const &char expected) {
+    unsigned char d[64];
+    char hex[160];
+    int ok = 1;
+    unsafe {
+        if (fresh.digest_size() * 2UL != str_len(expected)) ok = 0;
+        hash_bytes(fresh, msg, len, &d[0]);
+        to_hex(&d[0], fresh.digest_size(), &hex[0]);
+        if (!str_eq(&hex[0], expected)) ok = 0;
+        H h = fresh;
+        unsigned long cuts[4] = { 1UL, 63UL, 64UL, 129UL };
+        unsigned long at = 0UL;
+        unsigned long c = 0UL;
+        while (c < 4UL) {
+            unsigned long n = cuts[c] < len - at ? cuts[c] : len - at;
+            h.update((const &unsigned char)((const unsigned char*)msg + at), n);
+            at = at + n;
+            c = c + 1UL;
+        }
+        h.update((const &unsigned char)((const unsigned char*)msg + at), len - at);
+        h.finish(&d[0]);
+        to_hex(&d[0], fresh.digest_size(), &hex[0]);
+        if (!str_eq(&hex[0], expected)) ok = 0;
+    }
+    return ok;
+}
+
+void t_hasher_generic() {
+    unsafe {
+        unsigned char m[1000];
+        unsigned long i = 0UL;
+        while (i < 1000UL) { m[i] = (unsigned char)(i * 7UL + 3UL); i = i + 1UL; }
+        const &unsigned char msg = &m[0];
+        ASSERT_EQ(hasher_kat(Sha1Ctx::new(), msg, 1000UL, "4231a8a50a10fa9758db8ec71fdef855b751048a"), 1);
+        ASSERT_EQ(hasher_kat(Sha256Ctx::new_224(), msg, 1000UL, "23729dacbd480285c5c68439e2fe22ca5611a63cd6c14d2ec5ae2c85"), 1);
+        ASSERT_EQ(hasher_kat(Sha256Ctx::new(), msg, 1000UL, "1e9bc38cbf860b9ec31918b065f9b52476c549a782e0e7990bed8ce3868d2371"), 1);
+        ASSERT_EQ(hasher_kat(Sha512Ctx::new_384(), msg, 1000UL, "94c38db521ca733b8904c2d14b6e82d33dcfcc26e1318c579dbee1fc2f472019034e792263b9d46e90e700de2f6e7e91"), 1);
+        ASSERT_EQ(hasher_kat(Sha512Ctx::new(), msg, 1000UL, "00e36fccf193e59697a92b5ab24666ce6326d7fa16bf10832d0991ddc591112e9dfa6a636950ed9c4d67344a760654c2ff7785e1d60094d651038735b5dccabd"), 1);
+
+        // Hmac<H> over every BlockHash: RFC 2202 / RFC 4231 case 2 ("Jefe")
+        // and case 6 (a 131-byte key, longer than every block: hashed first).
+        const &unsigned char jefe = (const &unsigned char)"Jefe";
+        const &unsigned char want = (const &unsigned char)"what do ya want for nothing?";
+        ASSERT_EQ(hasher_kat(Hmac::new(Sha1Ctx::new(), jefe, 4UL), want, 28UL, "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79"), 1);
+        ASSERT_EQ(hasher_kat(Hmac::new(Sha256Ctx::new_224(), jefe, 4UL), want, 28UL, "a30e01098bc6dbbf45690f3a7e9e6d0f8bbea2a39e6148008fd05e44"), 1);
+        ASSERT_EQ(hasher_kat(Hmac::new(Sha256Ctx::new(), jefe, 4UL), want, 28UL, "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"), 1);
+        ASSERT_EQ(hasher_kat(Hmac::new(Sha512Ctx::new_384(), jefe, 4UL), want, 28UL, "af45d2e376484031617f78d2b58a6b1b9c7ef464f5a01b47e42ec3736322445e8e2240ca5e69e2c78b3239ecfab21649"), 1);
+        ASSERT_EQ(hasher_kat(Hmac::new(Sha512Ctx::new(), jefe, 4UL), want, 28UL, "164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea2505549758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737"), 1);
+        unsigned char longKey[131];
+        i = 0UL;
+        while (i < 131UL) { longKey[i] = (unsigned char)0xaa; i = i + 1UL; }
+        const &unsigned char lk = &longKey[0];
+        const &unsigned char big = (const &unsigned char)"Test Using Larger Than Block-Size Key - Hash Key First";
+        ASSERT_EQ(hasher_kat(Hmac::new(Sha1Ctx::new(), lk, 131UL), big, 54UL, "90d0dace1c1bdc957339307803160335bde6df2b"), 1);
+        ASSERT_EQ(hasher_kat(Hmac::new(Sha256Ctx::new(), lk, 131UL), big, 54UL, "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"), 1);
+        ASSERT_EQ(hasher_kat(Hmac::new(Sha512Ctx::new_384(), lk, 131UL), big, 54UL, "4ece084485813e9088d2c63a041bc5b44f9ef1012a2b588f3cd11f05033ac4c60c2ef6ab4030fe8296248df163f44952"), 1);
+        ASSERT_EQ(hasher_kat(Hmac::new(Sha512Ctx::new(), lk, 131UL), big, 54UL, "80b24263c7c1a3ebb71493c1dd7be8b49b46d1f41b4aeec1121b013783f8f3526b56d037e05f2598bd0fd2215d6a1e5295e64f73f63f0aec8b915a985d786598"), 1);
     }
 }
 
@@ -483,6 +549,7 @@ int main() {
         t.add("sha256", t_sha256);
         t.add("sha512/384", t_sha512);
         t.add("hmac-sha256", t_hmac);
+        t.add("Hasher: every hash and Hmac<H> through one generic check", t_hasher_generic);
         t.add("aes128/256", t_aes);
         t.add("rng", t_rng);
         t.add("base64", t_base64);
