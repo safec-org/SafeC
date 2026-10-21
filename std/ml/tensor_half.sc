@@ -1,8 +1,12 @@
 // SafeC Standard Library — fp16 / bf16 tensors and mixed-precision ops
 // (see tensor_half.h).
 #include <std/ml/tensor_half.h>
+#include <std/sync/parallel.h>
+#include <std/simd/cpu.h>
 
 namespace std {
+
+extern void* memcpy(void* dst, const void* src, unsigned long n);
 
 // ── Precision helpers ────────────────────────────────────────────────────────
 
@@ -281,6 +285,118 @@ void loss_scaler_update(&LossScaler s, int allFinite) {
         s.scale = s.scale * s.growthFactor;
         s.goodSteps = 0;
     }
+}
+
+
+// ── half_gemv ────────────────────────────────────────────────────────────────
+// Rows [lo, hi) of y = w x. The widening is written so clang vectorizes it:
+// bf16 is the top half of a float32; fp16 is (bits & 0x7fff) << 13 read as
+// a float32 times 2^112 (exact for normal and subnormal values), with
+// inf/NaN patched and the sign put back. Eight accumulators per row keep
+// the adds independent.
+struct HalfGemvJob {
+    const unsigned short* w;
+    const float* x;
+    float* y;
+    unsigned long k;
+    int bf;
+};
+
+static float half_gemv_w_(unsigned short h, int bf) __attribute__((always_inline)) {
+    unsigned int u = 0U;
+    float v = (float)0.0;
+    if (bf) {
+        u = ((unsigned int)h) << 16;
+        unsafe { memcpy((void*)&v, (const void*)&u, 4UL); }
+        return v;
+    }
+    u = ((unsigned int)h & 0x7fffU) << 13;
+    unsafe { memcpy((void*)&v, (const void*)&u, 4UL); }
+    v = v * (float)5.192296858534828e33;                      // 2^112
+    unsigned int r = 0U;
+    unsafe { memcpy((void*)&r, (const void*)&v, 4UL); }
+    if (((unsigned int)h & 0x7c00U) == 0x7c00U) r = u | 0x7f800000U;   // inf / NaN
+    r = r | (((unsigned int)h & 0x8000U) << 16);
+    unsafe { memcpy((void*)&v, (const void*)&r, 4UL); }
+    return v;
+}
+
+static void half_gemv_rows_body_(&HalfGemvJob j, unsigned long lo, unsigned long hi) __attribute__((always_inline)) {
+    unsigned long k = j.k;
+    unsafe {
+        unsigned long r = lo;
+        while (r < hi) {
+            const unsigned short* w = j.w + r * k;
+            float a0 = (float)0.0; float a1 = (float)0.0; float a2 = (float)0.0; float a3 = (float)0.0;
+            float a4 = (float)0.0; float a5 = (float)0.0; float a6 = (float)0.0; float a7 = (float)0.0;
+            unsigned long c = 0UL;
+            if (j.bf) {
+                while (c + 8UL <= k) {
+                    a0 = a0 + half_gemv_w_(w[c], 1) * j.x[c];
+                    a1 = a1 + half_gemv_w_(w[c + 1UL], 1) * j.x[c + 1UL];
+                    a2 = a2 + half_gemv_w_(w[c + 2UL], 1) * j.x[c + 2UL];
+                    a3 = a3 + half_gemv_w_(w[c + 3UL], 1) * j.x[c + 3UL];
+                    a4 = a4 + half_gemv_w_(w[c + 4UL], 1) * j.x[c + 4UL];
+                    a5 = a5 + half_gemv_w_(w[c + 5UL], 1) * j.x[c + 5UL];
+                    a6 = a6 + half_gemv_w_(w[c + 6UL], 1) * j.x[c + 6UL];
+                    a7 = a7 + half_gemv_w_(w[c + 7UL], 1) * j.x[c + 7UL];
+                    c = c + 8UL;
+                }
+            } else {
+                while (c + 8UL <= k) {
+                    a0 = a0 + half_gemv_w_(w[c], 0) * j.x[c];
+                    a1 = a1 + half_gemv_w_(w[c + 1UL], 0) * j.x[c + 1UL];
+                    a2 = a2 + half_gemv_w_(w[c + 2UL], 0) * j.x[c + 2UL];
+                    a3 = a3 + half_gemv_w_(w[c + 3UL], 0) * j.x[c + 3UL];
+                    a4 = a4 + half_gemv_w_(w[c + 4UL], 0) * j.x[c + 4UL];
+                    a5 = a5 + half_gemv_w_(w[c + 5UL], 0) * j.x[c + 5UL];
+                    a6 = a6 + half_gemv_w_(w[c + 6UL], 0) * j.x[c + 6UL];
+                    a7 = a7 + half_gemv_w_(w[c + 7UL], 0) * j.x[c + 7UL];
+                    c = c + 8UL;
+                }
+            }
+            float a = ((a0 + a1) + (a2 + a3)) + ((a4 + a5) + (a6 + a7));
+            while (c < k) { a = a + half_gemv_w_(w[c], j.bf) * j.x[c]; c = c + 1UL; }
+            j.y[r] = a;
+            r = r + 1UL;
+        }
+    }
+}
+
+static void half_gemv_rows_base_(&HalfGemvJob j, unsigned long lo, unsigned long hi) { half_gemv_rows_body_(j, lo, hi); }
+#if defined(__x86_64__)
+static void half_gemv_rows_avx2_(&HalfGemvJob j, unsigned long lo, unsigned long hi)
+    __attribute__((target("avx2,fma"))) { half_gemv_rows_body_(j, lo, hi); }
+static void half_gemv_rows_avx512_(&HalfGemvJob j, unsigned long lo, unsigned long hi)
+    __attribute__((target("avx512f,avx512bw,avx512vl,avx2,fma"))) { half_gemv_rows_body_(j, lo, hi); }
+#endif
+
+static void half_gemv_rows_(&HalfGemvJob j, unsigned long lo, unsigned long hi) {
+#if defined(__x86_64__)
+    int l = simd_level();
+    if (l >= SIMD_AVX512) { half_gemv_rows_avx512_(j, lo, hi); return; }
+    if (l >= SIMD_AVX2) { half_gemv_rows_avx2_(j, lo, hi); return; }
+#endif
+    half_gemv_rows_base_(j, lo, hi);
+}
+
+int half_gemv(const &HalfTensor w, const &float x, &float y) {
+    if (w.ndim != 2UL || w.shape[0] == 0UL || w.shape[1] == 0UL) return 0;
+    struct HalfGemvJob j;
+    unsafe {
+        j.w = (const unsigned short*)w.data;
+        j.x = (const float*)x;
+        j.y = (float*)y;
+    }
+    j.k = w.shape[1];
+    j.bf = w.dtype == TENSOR_BF16 ? 1 : 0;
+    unsigned long n = w.shape[0];
+    // at least ~256 KB of weights per chunk, so small layers stay on one thread
+    unsigned long grain = 131072UL / j.k;
+    if (grain < 1UL) grain = 1UL;
+    if (n * j.k >= 262144UL) parallel_for(n, grain, half_gemv_rows_, &j);
+    else half_gemv_rows_(&j, 0UL, n);
+    return 1;
 }
 
 } // namespace std

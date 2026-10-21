@@ -79,6 +79,15 @@ struct HalfTensor half_relu(const &HalfTensor a);
 struct HalfTensor half_matmul(const &HalfTensor a, const &HalfTensor b);  // 2D x 2D, f32 accumulate
 float             half_sum(const &HalfTensor a);                          // f32 accumulate, not rounded
 
+// ── Decoding (one token at a time) ───────────────────────────────────────────
+// y = w x for a linear layer's weight 'w' (2D, [n][k], fp16 or bf16) and
+// float32 vectors x (k values) and y (n values): the matrix-vector product
+// of decoding one token, which is bound by reading the weights. Each weight
+// is widened in registers (no float32 copy of the matrix), accumulated in
+// float32, vectorized for the CPU's SIMD tier and split over rows on
+// std/sync/parallel.h's pool. 1 on success, 0 if 'w' isn't 2D.
+int half_gemv(const &HalfTensor w, const &float x, &float y);
+
 // ── Mixed precision with autograd (float32 Tensors) ─────────────────────────
 // Forward: each element rounded to 'dtype' precision. Backward: gradient
 // passed through unchanged (straight-through estimator).

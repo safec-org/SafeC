@@ -3,39 +3,31 @@
 #pragma once
 #include <std/stddef.h>
 #include <std/ml/tensor_blas.h>
+#include <std/simd/gemm.h>
 
 namespace std {
 
 extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
-// Standard CBLAS C ABI (Accelerate, OpenBLAS, and MKL's cblas_* entry
-// points all share this exact signature) — declared directly rather than
-// through a vendor header since SafeC has no C-header-interop story yet
-// (same convention as gpu_mps.sc declaring objc_msgSend itself, or
-// gpu_spirv.sc declaring the Vulkan entry points itself).
-// order: 101=RowMajor, 102=ColMajor. trans: 111=NoTrans, 112=Trans.
-extern void cblas_sgemm(int order, int transA, int transB,
-                         int M, int N, int K,
-                         float alpha, const float* A, int lda,
-                         const float* B, int ldb,
-                         float beta, float* C, int ldc);
-
-// vDSP (also Accelerate.framework, alongside cblas_sgemm above): a
+// The products go through std/simd/gemm.h's sgemm, which hands them to the
+// CBLAS the program links (Accelerate, AOCL-BLAS, oneMKL, OpenBLAS, ...;
+// a weak reference, see gemm.sc) and otherwise runs its own vectorized,
+// threaded kernel -- so this file needs no BLAS at link time.
+// vDSP (Accelerate.framework, Apple only): a
 // vectorized float32 elementwise add, C[i] = A[i] + B[i] for i in [0,N),
 // strides IA/IB/IC (1 for contiguous, this file's only use). Verified
 // directly (not assumed) that C may alias B for an in-place accumulate
 // (C = A + C) before relying on that below (same check as tensor_f32's
 // predecessor did for the double-precision vDSP_vaddD).
 //
-// Apple-only API (Accelerate.framework) — everywhere else, cblas_sgemm
-// comes from a standalone CBLAS (OpenBLAS/MKL), which has no vDSP
-// equivalent bundled with it. Non-Apple falls back to a plain strided
+// Apple-only API (Accelerate.framework) — a standalone CBLAS elsewhere
+// (OpenBLAS/MKL) has no vDSP equivalent bundled with it. Non-Apple falls back to a plain strided
 // accumulate loop instead: this is the backward pass, called once per
-// matmul per training step, not the hot cblas_sgemm calls themselves, so
+// matmul per training step, not the hot sgemm calls themselves, so
 // losing vectorization here (a compiler-auto-vectorized loop still gets
 // most of it) doesn't erase BLAS's actual advantage the way re-
-// implementing cblas_sgemm by hand would.
+// implementing sgemm by hand would.
 #ifdef __APPLE__
 extern void vDSP_vadd(const float* A, long IA, const float* B, long IB,
                        float* C, long IC, unsigned long N);
@@ -88,7 +80,7 @@ static void vDSP_vadd(const float* A, long IA, const float* B, long IB,
 
 // ── Backward (BLAS-accelerated) ───────────────────────────────────────────────
 // Same math as tensor.h's __matmul_backward (dA = dC . B^T, dB = A^T . dC):
-// each a single cblas_sgemm call with a transpose flag instead of a hand-
+// each a single sgemm call with a transpose flag instead of a hand-
 // rolled loop — BLAS takes the transpose directly (CblasTrans), no need
 // to physically materialize B^T/A^T first.
 //
@@ -137,20 +129,16 @@ static void __matmul_backward_blas(void* selfPtr) {
             __tensor_ensure_grad(a);
             // dA[m,k] = dC[m,n] . B^T[n,k]
             float* dA = __blas_scratch_get_(m * k);
-            cblas_sgemm(101, 111, 112, (int)m, (int)k, (int)n,
-                (float)1.0, (const float*)selfT->grad, (int)n,
-                (const float*)b->data, (int)n,
-                (float)0.0, dA, (int)k);
+            sgemm(SGEMM_NO_TRANS, SGEMM_TRANS, m, k, n, (float)1.0, (const &float)selfT->grad, n,
+                  (const &float)b->data, n, (float)0.0, (&float)dA, k);
             vDSP_vadd((const float*)dA, 1L, (const float*)a->grad, 1L, (float*)a->grad, 1L, m * k);
         }
         if (b->requiresGrad) {
             __tensor_ensure_grad(b);
             // dB[k,n] = A^T[k,m] . dC[m,n]
             float* dB = __blas_scratch_get_(k * n);
-            cblas_sgemm(101, 112, 111, (int)k, (int)n, (int)m,
-                (float)1.0, (const float*)a->data, (int)k,
-                (const float*)selfT->grad, (int)n,
-                (float)0.0, dB, (int)n);
+            sgemm(SGEMM_TRANS, SGEMM_NO_TRANS, k, n, m, (float)1.0, (const &float)a->data, k,
+                  (const &float)selfT->grad, n, (float)0.0, (&float)dB, n);
             vDSP_vadd((const float*)dB, 1L, (const float*)b->grad, 1L, (float*)b->grad, 1L, k * n);
         }
     }
@@ -162,7 +150,7 @@ static void __matmul_backward_blas(void* selfPtr) {
     unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
     // __tensor_alloc (not tensor_new_2d) deliberately: tensor_new_2d's
     // extra tensor_fill(0.0) zero-pass is dead work here specifically —
-    // cblas_sgemm below runs with beta=0.0, which means "ignore C's
+    // sgemm below runs with beta=0.0, which means "ignore C's
     // incoming contents, write every element fresh", so the zero-fill's
     // result is fully overwritten before anything ever reads it. A real,
     // measured cost, not a theoretical one: one O(m*n) pass per matmul
@@ -174,10 +162,8 @@ static void __matmul_backward_blas(void* selfPtr) {
         out = __tensor_alloc((const unsigned long*)&outShape[0], 2UL, 0);
     }
     unsafe {
-        cblas_sgemm(101, 111, 111, (int)m, (int)n, (int)k,
-            (float)1.0, (const float*)a->data, (int)k,
-            (const float*)b->data, (int)n,
-            (float)0.0, (float*)out->data, (int)n);
+        sgemm(SGEMM_NO_TRANS, SGEMM_NO_TRANS, m, n, k, (float)1.0, (const &float)a->data, k,
+              (const &float)b->data, n, (float)0.0, (&float)out->data, n);
     }
     __tensor_link2(out, a, b, (void*)__matmul_backward_blas);
     return out;
