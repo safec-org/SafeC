@@ -32,10 +32,10 @@
 #include <std/kernel/frame.h>
 
 // Portable mapping flags (map()'s 'flags'). Every mapping is readable.
-#define MMU_WRITE   1   // writable
-#define MMU_EXEC    2   // executable
-#define MMU_USER    4   // reachable from user mode (x86 U/S, RISC-V U, ARM EL0/PL0)
-#define MMU_DEVICE  8   // uncached device memory (x86 PCD|PWT, ARM device
+#define MMU_WRITE   1u  // writable
+#define MMU_EXEC    2u  // executable
+#define MMU_USER    4u  // reachable from user mode (x86 U/S, RISC-V U, ARM EL0/PL0)
+#define MMU_DEVICE  8u  // uncached device memory (x86 PCD|PWT, ARM device
                         // attributes; RISC-V: no effect — PMAs decide)
 
 namespace std {
