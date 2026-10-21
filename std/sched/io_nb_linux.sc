@@ -35,9 +35,14 @@ extern int connect(int fd, const void* addr, unsigned int addrlen);
 // accident of this specific ABI, not something to depend on).
 extern int fcntl(int fd, int cmd, ...);
 extern int setsockopt(int fd, int level, int optname, const void* optval, unsigned int optlen);
+extern int getsockopt(int fd, int level, int optname, void* optval, void* optlen);
+extern int poll(void* fds, unsigned long nfds, int timeout);
 
 #define SCHED_SOL_SOCKET    1
 #define SCHED_SO_REUSEADDR  2
+#define SCHED_SO_ERROR      4
+#define SCHED_POLLOUT       0x0004
+#define SCHED_EINTR         4
 #define SCHED_IPPROTO_TCP   6
 #define SCHED_TCP_NODELAY   1
 
@@ -176,6 +181,29 @@ inline int tcp_connect_nb(unsigned int addr_network_order, unsigned short port) 
     // value here isn't itself meaningful the way it is for a blocking
     // connect().
     return fd;
+}
+
+struct SchedPollFd {
+    int   fd;
+    short events;
+    short revents;
+};
+
+inline int tcp_wait_connected(int fd) {
+    int rc = 0;
+    unsafe {
+        struct SchedPollFd p;
+        p.fd = fd;
+        p.events = (short)SCHED_POLLOUT;
+        p.revents = (short)0;
+        rc = poll((void*)&p, 1UL, -1);
+        while (rc < 0 && errno_get() == SCHED_EINTR) rc = poll((void*)&p, 1UL, -1);
+        if (rc < 0) return -1;
+        int err = 0;
+        unsigned int len = 4U;
+        if (getsockopt(fd, SCHED_SOL_SOCKET, SCHED_SO_ERROR, (void*)&err, (void*)&len) != 0 || err != 0) return -1;
+    }
+    return 0;
 }
 
 } // namespace std

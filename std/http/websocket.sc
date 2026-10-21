@@ -108,6 +108,7 @@ struct WsConn ws_connect(const &char host, unsigned short port,
         unsafe { fd = tcp_connect_nb(addr, port); }
         if (fd < 0) { good = 0; }
     }
+    if (good) { unsafe { if (tcp_wait_connected(fd) != 0) good = 0; } }
     if (good) { unsafe { fd_set_blocking(fd); } }
 
     struct String keyB64 = string_new();
