@@ -39,6 +39,32 @@ extern void  free(void* ptr);
 // LDS, then one atomicAdd per block.
 static const char* nr_kernel_source_() {
     return
+    // Activation storage: NR_ACT 0 float, 1 fp16, 2 bf16 (each precision is its
+    // own compiled module). Arithmetic is fp32; a 16-bit store rounds to nearest
+    // even.
+    "#ifndef NR_ACT\n"
+    "#define NR_ACT 0\n"
+    "#endif\n"
+    "#if NR_ACT\n"
+    "typedef unsigned short act_t;\n"
+    "__device__ inline float LD(const act_t* p, unsigned long long i) {\n"
+    "    unsigned short v = p[i];\n"
+    "    return NR_ACT == 2 ? __builtin_bit_cast(float, (unsigned)v << 16) : (float)__builtin_bit_cast(_Float16, v);\n"
+    "}\n"
+    "__device__ inline void ST(act_t* p, unsigned long long i, float x) {\n"
+    "    if (NR_ACT == 2) {\n"
+    "        unsigned u = __builtin_bit_cast(unsigned, x);\n"
+    "        p[i] = (u & 0x7fffffffu) > 0x7f800000u ? (unsigned short)((u >> 16) | 0x40u)\n"
+    "                                                : (unsigned short)((u + 0x7fffu + ((u >> 16) & 1u)) >> 16);\n"
+    "    } else {\n"
+    "        p[i] = __builtin_bit_cast(unsigned short, (_Float16)x);\n"
+    "    }\n"
+    "}\n"
+    "#else\n"
+    "typedef float act_t;\n"
+    "__device__ inline float LD(const act_t* p, unsigned long long i) { return p[i]; }\n"
+    "__device__ inline void ST(act_t* p, unsigned long long i, float x) { p[i] = x; }\n"
+    "#endif\n"
     "#define GS(i, n) for (unsigned i = blockIdx.x * blockDim.x + threadIdx.x; i < (n); i += gridDim.x * blockDim.x)\n"
     // Every thread of the block must call it; the total is valid in thread 0.
     "__device__ inline float block_sum(float s) {\n"
@@ -94,12 +120,12 @@ static const char* nr_kernel_source_() {
     // h = act(z + b[channel]); z keeps the sum when it is a separate buffer.
     // b may be null (an activation alone).
     // channel = (i / plane) % C: plane 1 for rows, batch*H*W for channel-major.
-    "extern \"C\" __global__ void bias_act(float* z, float* h, const float* b, unsigned n, unsigned plane,\n"
+    "extern \"C\" __global__ void bias_act(act_t* z, act_t* h, const float* b, unsigned n, unsigned plane,\n"
     "                                    unsigned C, int act) {\n"
     "    GS(i, n) {\n"
-    "        float v = b ? z[i] + b[(i / plane) % C] : z[i];\n"
-    "        if (z != h) z[i] = v;\n"
-    "        h[i] = act_f(v, act);\n"
+    "        float v = b ? LD(z, i) + b[(i / plane) % C] : LD(z, i);\n"
+    "        if (z != h) ST(z, i, v);\n"
+    "        ST(h, i, act_f(v, act));\n"
     "    }\n"
     "}\n"
     // d[i] *= act'(src[i]) over channel c's 'count' elements (blockIdx.x = c,
@@ -107,14 +133,14 @@ static const char* nr_kernel_source_() {
     // its partial in part[c * gridDim.y + slice], and the channel's last block
     // to finish (counter in part's tail, left at 0) adds them up in order, so
     // the sum does not depend on scheduling.
-    "extern \"C\" __global__ void act_grad_bias(float* d, const float* src, float* gb, float* part, unsigned count,\n"
+    "extern \"C\" __global__ void act_grad_bias(act_t* d, const act_t* src, float* gb, float* part, unsigned count,\n"
     "                                         unsigned plane, unsigned C, int act) {\n"
     "    unsigned c = blockIdx.x, S = gridDim.y;\n"
     "    float s = 0.0f;\n"
     "    for (unsigned e = blockIdx.y * blockDim.x + threadIdx.x; e < count; e += S * blockDim.x) {\n"
-    "        unsigned i = (e / plane) * plane * C + c * plane + e % plane;\n"
-    "        float g = d[i];\n"
-    "        if (act) { g *= act_d(src[i], act); d[i] = g; }\n"
+    "        unsigned long long i = (unsigned long long)(e / plane) * plane * C + c * plane + e % plane;\n"
+    "        float g = LD(d, i);\n"
+    "        if (act) { g *= act_d(LD(src, i), act); ST(d, i, g); }\n"
     "        s += g;\n"
     "    }\n"
     "    s = block_sum(s);\n"
@@ -127,15 +153,15 @@ static const char* nr_kernel_source_() {
     "}\n"
     // The same for row-major [rows][C] (a fully connected layer): 16 columns per
     // block, 16 threads down each column, then a fixed-order sum of the 16.
-    "extern \"C\" __global__ void act_grad_rows(float* d, const float* src, float* gb, unsigned rows, unsigned C, int act) {\n"
+    "extern \"C\" __global__ void act_grad_rows(act_t* d, const act_t* src, float* gb, unsigned rows, unsigned C, int act) {\n"
     "    __shared__ float part[16][17];\n"
     "    const unsigned tx = threadIdx.x % 16, ty = threadIdx.x / 16, c = blockIdx.x * 16 + tx;\n"
     "    float s = 0.0f;\n"
     "    if (c < C) {\n"
     "        for (unsigned r = ty; r < rows; r += 16) {\n"
-    "            unsigned i = r * C + c;\n"
-    "            float g = d[i];\n"
-    "            if (act) { g *= act_d(src[i], act); d[i] = g; }\n"
+    "            unsigned long long i = (unsigned long long)r * C + c;\n"
+    "            float g = LD(d, i);\n"
+    "            if (act) { g *= act_d(LD(src, i), act); ST(d, i, g); }\n"
     "            s += g;\n"
     "        }\n"
     "    }\n"
@@ -147,8 +173,8 @@ static const char* nr_kernel_source_() {
     "        gb[c] = t;\n"
     "    }\n"
     "}\n"
-    // Channel-major image x [C][B][H][W] -> col [C*kh*kw][B*oh*ow]. g packs the
-    // geometry: kh kw sh sw ph pw dh dw (kernel, stride, padding, dilation).
+    // NCHW images x [B][C][H][W] -> col [C*kh*kw][B*oh*ow] (column b*P + p). g
+    // packs the geometry: kh kw sh sw ph pw dh dw (kernel, stride, padding, dilation).
     "struct Geom { unsigned kh, kw, sh, sw, ph, pw, dh, dw; };\n"
     "extern \"C\" __global__ void im2col(const float* x, float* col, unsigned C, unsigned H, unsigned W,\n"
     "                                  unsigned oh, unsigned ow, Geom g, unsigned B) {\n"
@@ -158,10 +184,10 @@ static const char* nr_kernel_source_() {
     "        unsigned j = kk % g.kw, i = (kk / g.kw) % g.kh, c = kk / (g.kw * g.kh);\n"
     "        unsigned b = n / P, p = n % P;\n"
     "        int iy = (int)((p / ow) * g.sh + i * g.dh) - (int)g.ph, ix = (int)((p % ow) * g.sw + j * g.dw) - (int)g.pw;\n"
-    "        col[t] = (iy >= 0 && iy < (int)H && ix >= 0 && ix < (int)W) ? x[((c * B + b) * H + iy) * W + ix] : 0.0f;\n"
+    "        col[t] = (iy >= 0 && iy < (int)H && ix >= 0 && ix < (int)W) ? x[((b * C + c) * H + iy) * W + ix] : 0.0f;\n"
     "    }\n"
     "}\n"
-    // The adjoint, as a gather: x[c][b][iy][ix] = sum of the col entries that
+    // The adjoint, as a gather: x[b][c][iy][ix] (NCHW) = sum of the col entries that
     // im2col would read it into. With a bias it is a transposed convolution's
     // output: h = act(sum + bias[c]), z = the sum plus bias when z is a
     // separate buffer.
@@ -169,7 +195,7 @@ static const char* nr_kernel_source_() {
     "                                  unsigned H, unsigned W, unsigned oh, unsigned ow, Geom g, unsigned B) {\n"
     "    unsigned N = B * oh * ow;\n"
     "    GS(t, C * B * H * W) {\n"
-    "        unsigned ix = t % W, iy = (t / W) % H, b = (t / (W * H)) % B, c = t / (W * H * B);\n"
+    "        unsigned ix = t % W, iy = (t / W) % H, c = (t / (W * H)) % C, b = t / (W * H * C);\n"
     "        float sum = 0.0f;\n"
     "        // without dilation only kernel rows (columns) congruent to iy + ph mod sh can hit\n"
     "        const unsigned i0 = g.dh == 1 ? (iy + g.ph) % g.sh : 0, is = g.dh == 1 ? g.sh : 1;\n"
@@ -314,19 +340,25 @@ static const char* nr_kernel_source_() {
     // finish (all others have read them by then) advances st[7] and clears
     // st[11], so a step is one launch.
     "struct OptTab { float* w[32]; const float* g[32]; float* m[32]; float* v[32]; unsigned n[32]; };\n"
-    "extern \"C\" __global__ void opt_sumsq(OptTab t, float* st) {\n"
+    // ls: the fp16 loss scale [scale, good steps] (null: none). The gradients
+    // hold it; the sums are of the unscaled values, inf / NaN on an overflow.
+    "extern \"C\" __global__ void opt_sumsq(OptTab t, float* st, const float* ls) {\n"
     "    __shared__ const float* sg;\n"
     "    __shared__ unsigned sn;\n"
     "    if (threadIdx.x == 0) { sg = t.g[blockIdx.y]; sn = t.n[blockIdx.y]; }\n"
     "    __syncthreads();\n"
     "    unsigned n = sn;\n"
     "    const float* g = sg;\n"
+    "    const float inv = ls ? 1.0f / ls[0] : 1.0f;\n"
     "    float s = 0.0f;\n"
-    "    GS(i, n) s += g[i] * g[i];\n"
+    "    GS(i, n) { float u = g[i] * inv; s += u * u; }\n"
     "    s = block_sum(s);\n"
     "    if (threadIdx.x == 0) atomicAdd(&st[11], s);\n"
     "}\n"
-    "extern \"C\" __global__ void opt_step(OptTab tab, float* st, int kind, int clip, int finalLaunch, float clampW) {\n"
+    // With a loss scale, a step whose gradients overflowed changes no weight or
+    // step count and halves the scale; 2000 good steps in a row double it.
+    "extern \"C\" __global__ void opt_step(OptTab tab, float* st, int kind, int clip, int finalLaunch, float clampW,\n"
+    "                                    float* ls) {\n"
     "#pragma clang fp contract(off)\n"
     "    __shared__ float* sp[4];\n"
     "    __shared__ unsigned sn;\n"
@@ -339,20 +371,22 @@ static const char* nr_kernel_source_() {
     "    float* w = sp[0]; const float* gr = sp[1]; float* m = sp[2]; float* v = sp[3];\n"
     "    float lr = st[0], mu = st[1], b1 = st[2], b2 = st[3], eps = st[4], wd = st[5];\n"
     "    float t = st[7] + 1.0f;\n"
-    "    __shared__ float corr[3];   // 1/(1-b1^t), 1/sqrt(1-b2^t), gradient scale: once per block\n"
+    "    __shared__ float corr[4];   // 1/(1-b1^t), 1/sqrt(1-b2^t), gradient scale, skip: once per block\n"
     "    if (threadIdx.x == 0) {\n"
     "        corr[0] = 1.0f / (1.0f - powf(b1, t));\n"
     "        corr[1] = 1.0f / sqrtf(1.0f - powf(b2, t));\n"
-    "        float gsc = 1.0f;\n"
+    "        float gsc = ls ? 1.0f / ls[0] : 1.0f;\n"
     "        if (clip) {\n"
     "            float nrm = sqrtf(st[11]);\n"
-    "            if (nrm > st[6] && nrm > 0.0f) gsc = st[6] / nrm;\n"
+    "            if (nrm > st[6] && nrm > 0.0f) gsc *= st[6] / nrm;\n"
     "        }\n"
     "        corr[2] = gsc;\n"
+    "        corr[3] = ls && !isfinite(st[11]) ? 1.0f : 0.0f;\n"
     "    }\n"
     "    __syncthreads();\n"
     "    float ibc1 = corr[0], isbc2 = corr[1], gs = corr[2];\n"
-    "    GS(i, n) {\n"
+    "    const bool skip = corr[3] != 0.0f;\n"
+    "    if (!skip) GS(i, n) {\n"
     "        float g = gr[i] * gs, wi = w[i];\n"
     "        if (kind == 0) {\n"
     "            w[i] = wi - lr * (g + wd * wi);\n"
@@ -388,8 +422,12 @@ static const char* nr_kernel_source_() {
     "        if (clampW > 0.0f) { float v = w[i]; w[i] = v > clampW ? clampW : (v < -clampW ? -clampW : v); }\n"
     "    }\n"
     "    if (finalLaunch && last_block((unsigned*)&st[12], gridDim.x * gridDim.y) && threadIdx.x == 0) {\n"
-    "        st[7] = t;\n"
-    "        if (clip) st[11] = 0.0f;\n"
+    "        if (!skip) st[7] = t;\n"
+    "        if (clip || ls) st[11] = 0.0f;\n"
+    "        if (ls) {\n"
+    "            if (skip) { ls[0] *= 0.5f; ls[1] = 0.0f; }\n"
+    "            else if ((ls[1] += 1.0f) >= 2000.0f) { ls[0] *= 2.0f; ls[1] = 0.0f; }\n"
+    "        }\n"
     "    }\n"
     "}\n"
     // Batches: rows order[cur .. cur+rows) of x and y, in one launch; the
@@ -576,8 +614,8 @@ static const char* nr_kernel_source_() {
     "    }\n"
     "}\n"
     // d[i] *= act'(src[i]) (a layer without a bias of its own)
-    "extern \"C\" __global__ void act_grad_ew(float* d, const float* src, unsigned n, int act) {\n"
-    "    GS(i, n) d[i] *= act_d(src[i], act);\n"
+    "extern \"C\" __global__ void act_grad_ew(act_t* d, const act_t* src, unsigned n, int act) {\n"
+    "    GS(i, n) ST(d, i, LD(d, i) * act_d(LD(src, i), act));\n"
     "}\n"
     // Pooling over 'planes' channel-major planes (C*B of them) of H x W into
     // oH x oW, the window geometry as convnet.h's Pool2dSpec (padding clipped to
@@ -592,36 +630,37 @@ static const char* nr_kernel_source_() {
     "    padded = (float)((hp - h0) * (wp - w0));\n"
     "    hs = max(h0, 0); ws = max(w0, 0); he = min(h1, (int)H); we = min(w1, (int)W);\n"
     "}\n"
-    "extern \"C\" __global__ void pool_fwd(const float* x, float* z, float* h, float* idx, unsigned planes, unsigned H,\n"
+    "extern \"C\" __global__ void pool_fwd(const act_t* x, act_t* z, act_t* h, float* idx, unsigned planes, unsigned H,\n"
     "                                    unsigned W, unsigned oH, unsigned oW, Geom g, int mode, int act) {\n"
     "    GS(t, planes * oH * oW) {\n"
     "        unsigned ox = t % oW, oy = (t / oW) % oH, pl = t / (oW * oH);\n"
     "        int hs, he, ws, we; float padded;\n"
     "        pool_window(oy, ox, H, W, g, hs, he, ws, we, padded);\n"
-    "        const float* img = x + (unsigned long long)pl * H * W;\n"
+    "        const act_t* img = x + (unsigned long long)pl * H * W;\n"
     "        float v;\n"
     "        if (mode == 0) {\n"
     "            unsigned best = hs * W + ws;\n"
-    "            float bv = img[best];\n"
+    "            float bv = LD(img, best);\n"
     "            for (int i = hs; i < he; ++i)\n"
     "                for (int j = ws; j < we; ++j) {\n"
     "                    unsigned at = i * W + j;\n"
-    "                    if (img[at] > bv) { bv = img[at]; best = at; }\n"
+    "                    float xv = LD(img, at);\n"
+    "                    if (xv > bv) { bv = xv; best = at; }\n"
     "                }\n"
     "            idx[t] = (float)best;\n"
     "            v = bv;\n"
     "        } else {\n"
     "            float acc = 0.0f;\n"
     "            for (int i = hs; i < he; ++i)\n"
-    "                for (int j = ws; j < we; ++j) acc += img[i * W + j];\n"
+    "                for (int j = ws; j < we; ++j) acc += LD(img, i * W + j);\n"
     "            v = acc / (mode == 1 ? padded : (float)((he - hs) * (we - ws)));\n"
     "        }\n"
-    "        if (z != h) z[t] = v;\n"
-    "        h[t] = act_f(v, act);\n"
+    "        if (z != h) ST(z, t, v);\n"
+    "        ST(h, t, act_f(v, act));\n"
     "    }\n"
     "}\n"
     // dx by gathering, for each input, the windows that cover it.
-    "extern \"C\" __global__ void pool_bwd(const float* d, const float* idx, float* dx, unsigned planes, unsigned H,\n"
+    "extern \"C\" __global__ void pool_bwd(const act_t* d, const float* idx, act_t* dx, unsigned planes, unsigned H,\n"
     "                                    unsigned W, unsigned oH, unsigned oW, Geom g, int mode) {\n"
     "    GS(t, planes * H * W) {\n"
     "        unsigned x0 = t % W, y0 = (t / W) % H, pl = t / (W * H);\n"
@@ -633,116 +672,100 @@ static const char* nr_kernel_source_() {
     "            for (unsigned ox = oxLo; ox <= oxHi && ox < oW; ++ox) {\n"
     "                unsigned o = (pl * oH + oy) * oW + ox;\n"
     "                if (mode == 0) {\n"
-    "                    if ((unsigned)idx[o] == y0 * W + x0) s += d[o];\n"
+    "                    if ((unsigned)idx[o] == y0 * W + x0) s += LD(d, o);\n"
     "                } else {\n"
     "                    int hs, he, ws, we; float padded;\n"
     "                    pool_window(oy, ox, H, W, g, hs, he, ws, we, padded);\n"
-    "                    s += d[o] / (mode == 1 ? padded : (float)((he - hs) * (we - ws)));\n"
+    "                    s += LD(d, o) / (mode == 1 ? padded : (float)((he - hs) * (we - ws)));\n"
     "                }\n"
     "            }\n"
-    "        dx[t] = s;\n"
+    "        ST(dx, t, s);\n"
     "    }\n"
     "}\n"
     // Global pooling: each of 'planes' planes of P values to one (idx: the
     // first largest for max).
-    "extern \"C\" __global__ void gpool_fwd(const float* x, float* z, float* h, float* idx, unsigned planes, unsigned P,\n"
+    "extern \"C\" __global__ void gpool_fwd(const act_t* x, act_t* z, act_t* h, float* idx, unsigned planes, unsigned P,\n"
     "                                     int mode, int act) {\n"
     "    GS(t, planes) {\n"
-    "        const float* src = x + (unsigned long long)t * P;\n"
+    "        const act_t* src = x + (unsigned long long)t * P;\n"
     "        float v;\n"
     "        if (mode == 0) {\n"
     "            unsigned best = 0;\n"
-    "            for (unsigned q = 1; q < P; ++q) if (src[q] > src[best]) best = q;\n"
+    "            float bv = LD(src, 0);\n"
+    "            for (unsigned q = 1; q < P; ++q) { float xv = LD(src, q); if (xv > bv) { bv = xv; best = q; } }\n"
     "            idx[t] = (float)best;\n"
-    "            v = src[best];\n"
+    "            v = bv;\n"
     "        } else {\n"
     "            float acc = 0.0f;\n"
-    "            for (unsigned q = 0; q < P; ++q) acc += src[q];\n"
+    "            for (unsigned q = 0; q < P; ++q) acc += LD(src, q);\n"
     "            v = acc / (float)P;\n"
     "        }\n"
-    "        if (z != h) z[t] = v;\n"
-    "        h[t] = act_f(v, act);\n"
+    "        if (z != h) ST(z, t, v);\n"
+    "        ST(h, t, act_f(v, act));\n"
     "    }\n"
     "}\n"
-    "extern \"C\" __global__ void gpool_bwd(const float* d, const float* idx, float* dx, unsigned planes, unsigned P, int mode) {\n"
+    "extern \"C\" __global__ void gpool_bwd(const act_t* d, const float* idx, act_t* dx, unsigned planes, unsigned P, int mode) {\n"
     "    GS(t, planes * P) {\n"
     "        unsigned pl = t / P, q = t % P;\n"
-    "        dx[t] = mode == 0 ? ((unsigned)idx[pl] == q ? d[pl] : 0.0f) : d[pl] / (float)P;\n"
+    "        ST(dx, t, mode == 0 ? ((unsigned)idx[pl] == q ? LD(d, pl) : 0.0f) : LD(d, pl) / (float)P);\n"
     "    }\n"
     "}\n"
     // Nearest upsampling by f of planes H x W, and its adjoint (sums of f x f blocks).
-    "extern \"C\" __global__ void upsample_fwd(const float* x, float* z, float* h, unsigned planes, unsigned H, unsigned W,\n"
+    "extern \"C\" __global__ void upsample_fwd(const act_t* x, act_t* z, act_t* h, unsigned planes, unsigned H, unsigned W,\n"
     "                                        unsigned f, int act) {\n"
     "    unsigned OW = W * f, OH = H * f;\n"
     "    GS(t, planes * OH * OW) {\n"
     "        unsigned ox = t % OW, oy = (t / OW) % OH, pl = t / (OW * OH);\n"
-    "        float v = x[((unsigned long long)pl * H + oy / f) * W + ox / f];\n"
-    "        if (z != h) z[t] = v;\n"
-    "        h[t] = act_f(v, act);\n"
+    "        float v = LD(x, ((unsigned long long)pl * H + oy / f) * W + ox / f);\n"
+    "        if (z != h) ST(z, t, v);\n"
+    "        ST(h, t, act_f(v, act));\n"
     "    }\n"
     "}\n"
-    "extern \"C\" __global__ void upsample_bwd(const float* d, float* dx, unsigned planes, unsigned H, unsigned W, unsigned f) {\n"
+    "extern \"C\" __global__ void upsample_bwd(const act_t* d, act_t* dx, unsigned planes, unsigned H, unsigned W, unsigned f) {\n"
     "    unsigned OW = W * f, OH = H * f;\n"
     "    GS(t, planes * H * W) {\n"
     "        unsigned x0 = t % W, y0 = (t / W) % H, pl = t / (W * H);\n"
     "        float s = 0.0f;\n"
     "        for (unsigned i = 0; i < f; ++i)\n"
-    "            for (unsigned j = 0; j < f; ++j) s += d[((unsigned long long)pl * OH + y0 * f + i) * OW + x0 * f + j];\n"
-    "        dx[t] = s;\n"
+    "            for (unsigned j = 0; j < f; ++j) s += LD(d, ((unsigned long long)pl * OH + y0 * f + i) * OW + x0 * f + j);\n"
+    "        ST(dx, t, s);\n"
     "    }\n"
     "}\n"
-    // Channel-major [inC][B][inP] -> [outC][B][outP] with the same row order
-    // (inC*inP == outC*outP): a reshape of each image's CHW row.
-    "extern \"C\" __global__ void reshape_cm(const float* in, float* out, unsigned B, unsigned inC, unsigned inP,\n"
-    "                                      unsigned outC, unsigned outP) {\n"
-    "    GS(t, outC * B * outP) {\n"
-    "        unsigned oc = t / (B * outP), b = (t / outP) % B, op = t % outP;\n"
-    "        unsigned f = oc * outP + op;\n"
-    "        out[t] = in[((unsigned long long)(f / inP) * B + b) * inP + f % inP];\n"
-    "    }\n"
-    "}\n"
-    // Group norm over channel-major x: one block per (image b, group g), over
-    // its C/G channels' planes. stats [B*G][2] = mean, 1/sqrt(var + eps).
-    "extern \"C\" __global__ void gn_fwd(const float* x, float* z, float* h, const float* gamma, const float* beta,\n"
+    "extern \"C\" __global__ void gn_fwd(const act_t* x, act_t* z, act_t* h, const float* gamma, const float* beta,\n"
     "                                  float* stats, unsigned C, unsigned B, unsigned P, unsigned G, float eps, int act) {\n"
     "    const unsigned u = blockIdx.x, b = u / G, g = u % G, Cg = C / G, n = Cg * P;\n"
+    "    const unsigned long long base = ((unsigned long long)b * C + g * Cg) * P;\n"
     "    __shared__ float mean_s, inv_s;\n"
     "    float a = 0.0f;\n"
-    "    for (unsigned e = threadIdx.x; e < n; e += blockDim.x)\n"
-    "        a += x[((unsigned long long)(g * Cg + e / P) * B + b) * P + e % P];\n"
+    "    for (unsigned e = threadIdx.x; e < n; e += blockDim.x) a += LD(x, base + e);\n"
     "    a = block_sum(a);\n"
     "    if (threadIdx.x == 0) mean_s = a / (float)n;\n"
     "    __syncthreads();\n"
     "    const float mean = mean_s;\n"
     "    float q = 0.0f;\n"
-    "    for (unsigned e = threadIdx.x; e < n; e += blockDim.x) {\n"
-    "        float dd = x[((unsigned long long)(g * Cg + e / P) * B + b) * P + e % P] - mean;\n"
-    "        q += dd * dd;\n"
-    "    }\n"
+    "    for (unsigned e = threadIdx.x; e < n; e += blockDim.x) { float dd = LD(x, base + e) - mean; q += dd * dd; }\n"
     "    q = block_sum(q);\n"
     "    if (threadIdx.x == 0) { inv_s = 1.0f / sqrtf(q / (float)n + eps); stats[u * 2] = mean; stats[u * 2 + 1] = inv_s; }\n"
     "    __syncthreads();\n"
     "    const float inv = inv_s;\n"
     "    for (unsigned e = threadIdx.x; e < n; e += blockDim.x) {\n"
     "        unsigned c = g * Cg + e / P;\n"
-    "        unsigned long long i = ((unsigned long long)c * B + b) * P + e % P;\n"
-    "        float v = gamma[c] * (x[i] - mean) * inv + beta[c];\n"
-    "        if (z != h) z[i] = v;\n"
-    "        h[i] = act_f(v, act);\n"
+    "        float v = gamma[c] * (LD(x, base + e) - mean) * inv + beta[c];\n"
+    "        if (z != h) ST(z, base + e, v);\n"
+    "        ST(h, base + e, act_f(v, act));\n"
     "    }\n"
     "}\n"
-    "extern \"C\" __global__ void gn_bwd(const float* x, const float* dy, float* dx, const float* gamma, const float* stats,\n"
+    "extern \"C\" __global__ void gn_bwd(const act_t* x, const act_t* dy, act_t* dx, const float* gamma, const float* stats,\n"
     "                                  unsigned C, unsigned B, unsigned P, unsigned G) {\n"
     "    const unsigned u = blockIdx.x, b = u / G, g = u % G, Cg = C / G, n = Cg * P;\n"
+    "    const unsigned long long base = ((unsigned long long)b * C + g * Cg) * P;\n"
     "    const float mean = stats[u * 2], inv = stats[u * 2 + 1];\n"
     "    __shared__ float m1_s, m2_s;\n"
     "    float a = 0.0f, q = 0.0f;\n"
     "    for (unsigned e = threadIdx.x; e < n; e += blockDim.x) {\n"
-    "        unsigned c = g * Cg + e / P;\n"
-    "        unsigned long long i = ((unsigned long long)c * B + b) * P + e % P;\n"
-    "        float dxh = dy[i] * gamma[c];\n"
+    "        float dxh = LD(dy, base + e) * gamma[g * Cg + e / P];\n"
     "        a += dxh;\n"
-    "        q += dxh * (x[i] - mean) * inv;\n"
+    "        q += dxh * (LD(x, base + e) - mean) * inv;\n"
     "    }\n"
     "    a = block_sum(a);\n"
     "    q = block_sum(q);\n"
@@ -750,24 +773,22 @@ static const char* nr_kernel_source_() {
     "    __syncthreads();\n"
     "    const float m1 = m1_s, m2 = m2_s;\n"
     "    for (unsigned e = threadIdx.x; e < n; e += blockDim.x) {\n"
-    "        unsigned c = g * Cg + e / P;\n"
-    "        unsigned long long i = ((unsigned long long)c * B + b) * P + e % P;\n"
-    "        float xh = (x[i] - mean) * inv;\n"
-    "        dx[i] = inv * (dy[i] * gamma[c] - m1 - xh * m2);\n"
+    "        float xh = (LD(x, base + e) - mean) * inv;\n"
+    "        ST(dx, base + e, inv * (LD(dy, base + e) * gamma[g * Cg + e / P] - m1 - xh * m2));\n"
     "    }\n"
     "}\n"
     // dgamma[c] = sum dy * xhat, dbeta[c] = sum dy over images and plane; one block per channel.
-    "extern \"C\" __global__ void gn_params(const float* x, const float* dy, const float* stats, float* dgamma, float* dbeta,\n"
+    "extern \"C\" __global__ void gn_params(const act_t* x, const act_t* dy, const float* stats, float* dgamma, float* dbeta,\n"
     "                                     unsigned C, unsigned B, unsigned P, unsigned G) {\n"
     "    const unsigned c = blockIdx.x, g = c / (C / G), n = B * P;\n"
     "    float a = 0.0f, q = 0.0f;\n"
     "    for (unsigned e = threadIdx.x; e < n; e += blockDim.x) {\n"
     "        unsigned b = e / P;\n"
-    "        unsigned long long i = (unsigned long long)c * B * P + e;\n"
+    "        unsigned long long i = ((unsigned long long)b * C + c) * P + e % P;\n"
     "        float mean = stats[(b * G + g) * 2], inv = stats[(b * G + g) * 2 + 1];\n"
-    "        float gy = dy[i];\n"
+    "        float gy = LD(dy, i);\n"
     "        a += gy;\n"
-    "        q += gy * (x[i] - mean) * inv;\n"
+    "        q += gy * (LD(x, i) - mean) * inv;\n"
     "    }\n"
     "    a = block_sum(a);\n"
     "    q = block_sum(q);\n"
@@ -784,8 +805,26 @@ static const char* nr_kernel_source_() {
     "                        : ((c - cx) / plane == (unsigned)lab[r % labRows] ? 1.0f : 0.0f);\n"
     "    }\n"
     "}\n"
-    "extern \"C\" __global__ void slice_cols(const float* src, float* dst, unsigned rows, unsigned sc, unsigned dc, unsigned off) {\n"
-    "    GS(t, rows * dc) dst[t] = src[(unsigned long long)(t / dc) * sc + off + t % dc];\n"
+    "extern \"C\" __global__ void slice_cols(const act_t* src, act_t* dst, unsigned rows, unsigned sc, unsigned dc, unsigned off) {\n"
+    "    GS(t, rows * dc) ST(dst, t, LD(src, (unsigned long long)(t / dc) * sc + off + t % dc));\n"
+    "}\n"
+    // out[b] = (a[b] (na values), s[b] (ns values)): a per-image channel concat.
+    "extern \"C\" __global__ void concat_rows(const act_t* a, unsigned na, const act_t* s, unsigned ns, act_t* out, unsigned B) {\n"
+    "    const unsigned w = na + ns;\n"
+    "    GS(t, B * w) {\n"
+    "        unsigned r = t / w, c = t % w;\n"
+    "        ST(out, t, c < na ? LD(a, (unsigned long long)r * na + c) : LD(s, (unsigned long long)r * ns + c - na));\n"
+    "    }\n"
+    "}\n"
+    // Precision boundaries: float -> act (k * x) and act -> float (k * x); k
+    // from *kp when kp is set (the loss scale, or its inverse with inv).
+    "extern \"C\" __global__ void to_act(const float* x, act_t* y, unsigned n, const float* kp, int inv) {\n"
+    "    float k = kp ? (inv ? 1.0f / kp[0] : kp[0]) : 1.0f;\n"
+    "    GS(i, n) ST(y, i, x[i] * k);\n"
+    "}\n"
+    "extern \"C\" __global__ void from_act(const act_t* x, float* y, unsigned n, const float* kp, int inv) {\n"
+    "    float k = kp ? (inv ? 1.0f / kp[0] : kp[0]) : 1.0f;\n"
+    "    GS(i, n) y[i] = LD(x, i) * k;\n"
     "}\n"
     // ── GAN ──
     // Counter-based noise: value i of draw 'salt' in step ctr[0].
@@ -1072,38 +1111,39 @@ static const char* nr_kernel_source_() {
     "}\n"
     // ── Skips, resize, dropout, spectral norm ──
     // z = a + b + bias[channel] (b, bias may be null), h = act(z); a may be z.
-    "extern \"C\" __global__ void add_act(const float* a, const float* b, const float* bias, float* z, float* h, unsigned n,\n"
+    "extern \"C\" __global__ void add_act(const act_t* a, const act_t* b, const float* bias, act_t* z, act_t* h, unsigned n,\n"
     "                                   unsigned plane, unsigned C, int act) {\n"
     "    GS(i, n) {\n"
-    "        float v = a[i];\n"
-    "        if (b) v += b[i];\n"
+    "        float v = LD(a, i);\n"
+    "        if (b) v += LD(b, i);\n"
     "        if (bias) v += bias[(i / plane) % C];\n"
-    "        if (z != h) z[i] = v;\n"
-    "        h[i] = act_f(v, act);\n"
+    "        if (z != h) ST(z, i, v);\n"
+    "        ST(h, i, act_f(v, act));\n"
     "    }\n"
     "}\n"
     // out = a + b (out may be a or b), or out = a * b
-    "extern \"C\" __global__ void ew2(const float* a, const float* b, float* out, unsigned n, int mul) {\n"
-    "    GS(i, n) out[i] = mul ? a[i] * b[i] : a[i] + b[i];\n"
+    "extern \"C\" __global__ void ew2(const act_t* a, const act_t* b, act_t* out, unsigned n, int mul) {\n"
+    "    GS(i, n) ST(out, i, mul ? LD(a, i) * LD(b, i) : LD(a, i) + LD(b, i));\n"
     "}\n"
     // Sparse resampling along one axis with CSR tap lists (start[o] .. start[o+1]
     // into tidx / tw): x viewed as [outer][inLen][inner] -> out [outer][outLen][inner],
     // out[a][o][c] = sum_k tw[k] x[a][tidx[k]][c].
-    "extern \"C\" __global__ void taps_apply(const float* x, float* out, const float* start, const float* tidx, const float* tw,\n"
+    "extern \"C\" __global__ void taps_apply(const act_t* x, act_t* out, const float* start, const float* tidx, const float* tw,\n"
     "                                      unsigned outer, unsigned inLen, unsigned outLen, unsigned inner) {\n"
     "    GS(t, outer * outLen * inner) {\n"
     "        unsigned c = t % inner, o = (t / inner) % outLen, a = t / (inner * outLen);\n"
-    "        const float* src = x + (unsigned long long)a * inLen * inner + c;\n"
+    "        const act_t* src = x + (unsigned long long)a * inLen * inner + c;\n"
     "        float s = 0.0f;\n"
-    "        for (unsigned k = (unsigned)start[o]; k < (unsigned)start[o + 1]; ++k) s += tw[k] * src[(unsigned)tidx[k] * inner];\n"
-    "        out[t] = s;\n"
+    "        for (unsigned k = (unsigned)start[o]; k < (unsigned)start[o + 1]; ++k)\n"
+    "            s += tw[k] * LD(src, (unsigned long long)tidx[k] * inner);\n"
+    "        ST(out, t, s);\n"
     "    }\n"
     "}\n"
     // Dropout: per unit (a value, or a plane of 'plane' values for dropout2d)
     // mask = 0 with probability p else 1 / (1 - p) from a counter-based hash of
     // (seed, draw counter ctr[0], unit); out = x * mask. The last block
     // advances ctr[0] (ctr[1]: block count).
-    "extern \"C\" __global__ void dropout_fwd(const float* x, float* out, float* mask, unsigned n, unsigned plane, float p,\n"
+    "extern \"C\" __global__ void dropout_fwd(const act_t* x, act_t* out, act_t* mask, unsigned n, unsigned plane, float p,\n"
     "                                       unsigned long long seed, float* ctr) {\n"
     "    unsigned long long c = (unsigned long long)ctr[0];\n"
     "    float keep = p >= 1.0f ? 0.0f : 1.0f / (1.0f - p);\n"
@@ -1111,8 +1151,8 @@ static const char* nr_kernel_source_() {
     "        unsigned u = i / plane;\n"
     "        float r = (float)(mix64(seed ^ mix64((c << 32) | u)) >> 40) * 5.9604645e-8f;\n"
     "        float m = r < p ? 0.0f : keep;\n"
-    "        mask[i] = m;\n"
-    "        out[i] = x[i] * m;\n"
+    "        ST(mask, i, m);\n"
+    "        ST(out, i, LD(x, i) * m);\n"
     "    }\n"
     "    if (last_block((unsigned*)&ctr[1], gridDim.x) && threadIdx.x == 0) ctr[0] += 1.0f;\n"
     "}\n"
@@ -1190,80 +1230,162 @@ static const char* nr_kernel_source_() {
     "    }\n"
     "}\n"
     // ── Batch norm, spread over blocks ──
-    // Unit u = sg * C + c: channel c's rows of segment sg, n = (B/S)*P values from
-    // c*B*P + sg*n (channel-major). stats[u*8 + ...]: 0 mean, 1 1/sqrt(var+eps),
-    // 2 unbiased var, 3 sum dy, 4 sum dy*xhat. part: 2 partials per (unit, slice),
-    // then (at a fixed offset) a counter per unit.
-    // mode 0: mean; 1: variance (two-pass, as convnet.sc); 2: the backward sums.
-    "extern \"C\" __global__ void bn_sums(const float* x, const float* dy, float* stats, float* part, unsigned C, unsigned B,\n"
-    "                                   unsigned P, unsigned S, float eps, int mode) {\n"
-    "    const unsigned u = blockIdx.x, c = u % C, sg = u / C, n = (B / S) * P, slices = gridDim.y;\n"
-    "    const unsigned long long base = (unsigned long long)c * B * P + (unsigned long long)sg * n;\n"
-    "    const float mean = mode > 0 ? stats[u * 8] : 0.0f, inv = mode > 1 ? stats[u * 8 + 1] : 0.0f;\n"
+    // Unit u = sg * C + c: channel c's planes in segment sg's rows (B/S images),
+    // n = (B/S)*P values at (b*C + c)*P + p (NCHW). cb (optional) is the bias of
+    // a convolution folded into this norm: its input is x + cb[c]. stats[u*8 +
+    // ...]: 0 mean, 1 1/sqrt(var+eps), 2 unbiased var, 3 sum dy, 4 sum dy*xhat.
+    // part: 4 values per (unit, slice), then (at a fixed offset) a counter per unit.
+    "struct BnArgs {\n"
+    "    const act_t* x; const act_t* dy; const act_t* src; float* stats; float* part; float* rm; float* rv;\n"
+    "    float* dgamma; float* dbeta; const float* gamma; const float* beta; const float* cb; float* cgb;\n"
+    "    act_t* z; act_t* h;\n"
+    "    unsigned C, B, P, S;\n"
+    "    float eps, momentum;\n"
+    "    int act, training;\n"
+    "};\n"
+    "__device__ inline unsigned long long bn_index(const BnArgs& a, unsigned sg, unsigned c, unsigned e) {\n"
+    "    return ((unsigned long long)(sg * (a.B / a.S) + e / a.P) * a.C + c) * a.P + e % a.P;\n"
+    "}\n"
+    // Forward statistics in one launch: each block its slice's count, mean and
+    // sum of squared deviations (two passes over its own values), the unit's last
+    // block merges them (Chan et al.) -- the CPU's two-pass accuracy without a
+    // second launch. With S == 1 it also moves the running statistics.
+    "extern \"C\" __global__ void bn_stats(BnArgs a) {\n"
+    "    const unsigned u = blockIdx.x, c = u % a.C, sg = u / a.C, n = (a.B / a.S) * a.P, slices = gridDim.y;\n"
+    "    const float cb = a.cb ? a.cb[c] : 0.0f;\n"
+    "    __shared__ float m_s;\n"
+    "    float s = 0.0f, cnt = 0.0f;\n"
+    "    for (unsigned e = blockIdx.y * blockDim.x + threadIdx.x; e < n; e += slices * blockDim.x) {\n"
+    "        s += LD(a.x, bn_index(a, sg, c, e)) + cb;\n"
+    "        cnt += 1.0f;\n"
+    "    }\n"
+    "    s = block_sum(s);\n"
+    "    cnt = block_sum(cnt);\n"
+    "    if (threadIdx.x == 0) m_s = cnt > 0.0f ? s / cnt : 0.0f;\n"
+    "    __syncthreads();\n"
+    "    const float mb = m_s;\n"
+    "    float q = 0.0f;\n"
+    "    for (unsigned e = blockIdx.y * blockDim.x + threadIdx.x; e < n; e += slices * blockDim.x) {\n"
+    "        float d = LD(a.x, bn_index(a, sg, c, e)) + cb - mb;\n"
+    "        q += d * d;\n"
+    "    }\n"
+    "    q = block_sum(q);\n"
+    "    float* pp = a.part + (u * slices + blockIdx.y) * 4;\n"
+    "    if (threadIdx.x == 0) { pp[0] = cnt; pp[1] = mb; pp[2] = q; }\n"
+    "    unsigned* cntr = (unsigned*)(a.part + 4ull * a.C * 8 * 64);\n"
+    "    if (last_block(&cntr[u], slices) && threadIdx.x == 0) {\n"
+    "        float N = 0.0f, sm = 0.0f;\n"
+    "        for (unsigned k = 0; k < slices; ++k) { const float* r = a.part + (u * slices + k) * 4; N += r[0]; sm += r[0] * r[1]; }\n"
+    "        float mean = sm / N, m2 = 0.0f;\n"
+    "        for (unsigned k = 0; k < slices; ++k) {\n"
+    "            const float* r = a.part + (u * slices + k) * 4;\n"
+    "            float d = r[1] - mean;\n"
+    "            m2 += r[2] + r[0] * d * d;\n"
+    "        }\n"
+    "        float var = m2 / N;\n"
+    "        float unb = n > 1 ? m2 / (float)(n - 1) : var;\n"
+    "        float* st = a.stats + u * 8;\n"
+    "        st[0] = mean; st[1] = 1.0f / sqrtf(var + a.eps); st[2] = unb;\n"
+    "        if (a.S == 1) {\n"
+    "            a.rm[c] = (1.0f - a.momentum) * a.rm[c] + a.momentum * mean;\n"
+    "            a.rv[c] = (1.0f - a.momentum) * a.rv[c] + a.momentum * unb;\n"
+    "        }\n"
+    "    }\n"
+    "}\n"
+    // The output gradient through the norm's own activation: dy act'(src).
+    "__device__ inline float bn_dy(const BnArgs& a, unsigned long long i) {\n"
+    "    float g = LD(a.dy, i);\n"
+    "    return a.act ? g * act_d(LD(a.src, i), a.act) : g;\n"
+    "}\n"
+    // Backward sums (sum dy, sum dy*xhat) per unit; with S == 1 the last block
+    // also writes dgamma / dbeta and a folded convolution's bias gradient (the
+    // sum of dx: 0 with batch statistics, gamma inv sum dy with running ones).
+    "extern \"C\" __global__ void bn_grads(BnArgs a) {\n"
+    "    const unsigned u = blockIdx.x, c = u % a.C, sg = u / a.C, n = (a.B / a.S) * a.P, slices = gridDim.y;\n"
+    "    const float cb = a.cb ? a.cb[c] : 0.0f;\n"
+    "    const float mean = a.stats[u * 8], inv = a.stats[u * 8 + 1];\n"
     "    float s0 = 0.0f, s1 = 0.0f;\n"
     "    for (unsigned e = blockIdx.y * blockDim.x + threadIdx.x; e < n; e += slices * blockDim.x) {\n"
-    "        float v = x[base + e];\n"
-    "        if (mode == 0) s0 += v;\n"
-    "        else if (mode == 1) { float d = v - mean; s0 += d * d; }\n"
-    "        else { float g = dy[base + e]; s0 += g; s1 += g * (v - mean) * inv; }\n"
+    "        unsigned long long i = bn_index(a, sg, c, e);\n"
+    "        float g = bn_dy(a, i);\n"
+    "        s0 += g;\n"
+    "        s1 += g * (LD(a.x, i) + cb - mean) * inv;\n"
     "    }\n"
     "    s0 = block_sum(s0);\n"
-    "    if (mode == 2) s1 = block_sum(s1);\n"
-    "    if (threadIdx.x == 0) { part[(u * slices + blockIdx.y) * 2] = s0; part[(u * slices + blockIdx.y) * 2 + 1] = s1; }\n"
-    "    // counters at a fixed offset (past room for 8 segments x 64 slices per channel): the grid varies by call\n"
-    "    unsigned* cnt = (unsigned*)(part + 2ull * C * 8 * 64);\n"
-    "    if (last_block(&cnt[u], slices) && threadIdx.x == 0) {\n"
+    "    s1 = block_sum(s1);\n"
+    "    float* pp = a.part + (u * slices + blockIdx.y) * 4;\n"
+    "    if (threadIdx.x == 0) { pp[0] = s0; pp[1] = s1; }\n"
+    "    unsigned* cntr = (unsigned*)(a.part + 4ull * a.C * 8 * 64);\n"
+    "    if (last_block(&cntr[u], slices) && threadIdx.x == 0) {\n"
     "        float t0 = 0.0f, t1 = 0.0f;\n"
-    "        for (unsigned k = 0; k < slices; ++k) { t0 += part[(u * slices + k) * 2]; t1 += part[(u * slices + k) * 2 + 1]; }\n"
-    "        if (mode == 0) stats[u * 8] = t0 / (float)n;\n"
-    "        else if (mode == 1) {\n"
-    "            float var = t0 / (float)n;\n"
-    "            stats[u * 8 + 1] = 1.0f / sqrtf(var + eps);\n"
-    "            stats[u * 8 + 2] = n > 1 ? t0 / (float)(n - 1) : var;\n"
-    "        } else { stats[u * 8 + 3] = t0; stats[u * 8 + 4] = t1; }\n"
+    "        for (unsigned k = 0; k < slices; ++k) { t0 += a.part[(u * slices + k) * 4]; t1 += a.part[(u * slices + k) * 4 + 1]; }\n"
+    "        a.stats[u * 8 + 3] = t0;\n"
+    "        a.stats[u * 8 + 4] = t1;\n"
+    "        if (a.S == 1) {\n"
+    "            a.dgamma[c] = t1;\n"
+    "            a.dbeta[c] = t0;\n"
+    "            if (a.cgb) a.cgb[c] = a.training ? 0.0f : a.gamma[c] * inv * t0;\n"
+    "        }\n"
     "    }\n"
     "}\n"
     // One thread per channel. phase 0: running statistics from each segment in
-    // order (training); 1: dgamma / dbeta summed over segments; 2: inference
-    // statistics (every segment's mean / inv from the running ones).
-    "extern \"C\" __global__ void bn_finish(float* rm, float* rv, float* dgamma, float* dbeta, float* stats, unsigned C,\n"
-    "                                     unsigned S, float momentum, float eps, int phase) {\n"
-    "    GS(c, C) {\n"
+    // order (training, S > 1); 1: dgamma / dbeta (and a folded bias's gradient)
+    // summed over segments (S > 1); 2: inference statistics (every segment's
+    // mean / inv from the running ones).
+    "extern \"C\" __global__ void bn_finish(BnArgs a, int phase) {\n"
+    "    GS(c, a.C) {\n"
     "        if (phase == 0) {\n"
-    "            for (unsigned sg = 0; sg < S; ++sg) {\n"
-    "                const float* st = stats + (sg * C + c) * 8;\n"
-    "                rm[c] = (1.0f - momentum) * rm[c] + momentum * st[0];\n"
-    "                rv[c] = (1.0f - momentum) * rv[c] + momentum * st[2];\n"
+    "            for (unsigned sg = 0; sg < a.S; ++sg) {\n"
+    "                const float* st = a.stats + (sg * a.C + c) * 8;\n"
+    "                a.rm[c] = (1.0f - a.momentum) * a.rm[c] + a.momentum * st[0];\n"
+    "                a.rv[c] = (1.0f - a.momentum) * a.rv[c] + a.momentum * st[2];\n"
     "            }\n"
     "        } else if (phase == 1) {\n"
-    "            float g = 0.0f, b = 0.0f;\n"
-    "            for (unsigned sg = 0; sg < S; ++sg) { g += stats[(sg * C + c) * 8 + 4]; b += stats[(sg * C + c) * 8 + 3]; }\n"
-    "            dgamma[c] = g;\n"
-    "            dbeta[c] = b;\n"
+    "            float g = 0.0f, b = 0.0f, cg = 0.0f;\n"
+    "            for (unsigned sg = 0; sg < a.S; ++sg) {\n"
+    "                const float* st = a.stats + (sg * a.C + c) * 8;\n"
+    "                g += st[4]; b += st[3];\n"
+    "                cg += a.gamma[c] * st[1] * st[3];\n"
+    "            }\n"
+    "            a.dgamma[c] = g;\n"
+    "            a.dbeta[c] = b;\n"
+    "            if (a.cgb) a.cgb[c] = a.training ? 0.0f : cg;\n"
     "        } else {\n"
-    "            float inv = 1.0f / sqrtf(rv[c] + eps);\n"
-    "            for (unsigned sg = 0; sg < S; ++sg) { stats[(sg * C + c) * 8] = rm[c]; stats[(sg * C + c) * 8 + 1] = inv; }\n"
+    "            float inv = 1.0f / sqrtf(a.rv[c] + a.eps);\n"
+    "            for (unsigned sg = 0; sg < a.S; ++sg) { a.stats[(sg * a.C + c) * 8] = a.rm[c]; a.stats[(sg * a.C + c) * 8 + 1] = inv; }\n"
     "        }\n"
     "    }\n"
     "}\n"
-    // Elementwise: y = act(gamma (x - mean) inv + beta) (mode 0), or the input
-    // gradient (mode 1, from dy and the backward sums; training 0: dy gamma inv).
-    "extern \"C\" __global__ void bn_apply(const float* x, const float* dy, float* z, float* h, const float* gamma,\n"
-    "                                    const float* beta, const float* stats, unsigned C, unsigned B, unsigned P,\n"
-    "                                    unsigned S, int act, int mode, int training) {\n"
-    "    const unsigned n = (B / S) * P;\n"
-    "    GS(t, C * B * P) {\n"
-    "        unsigned c = t / (B * P), sg = (t % (B * P)) / n;\n"
-    "        const float* st = stats + (sg * C + c) * 8;\n"
+    // Elementwise: y = act(gamma (x + cb - mean) inv + beta) (mode 0), or the
+    // input gradient into h (mode 1; the activation's gradient applied first).
+    "extern \"C\" __global__ void bn_apply(BnArgs a, int mode) {\n"
+    "    const unsigned Bs = a.B / a.S;\n"
+    "    GS(t, a.C * a.B * a.P) {\n"
+    "        unsigned c = (t / a.P) % a.C, sg = (t / (a.C * a.P)) / Bs;\n"
+    "        const float* st = a.stats + (sg * a.C + c) * 8;\n"
     "        const float mean = st[0], inv = st[1];\n"
+    "        const float xv = LD(a.x, t) + (a.cb ? a.cb[c] : 0.0f);\n"
     "        if (mode == 0) {\n"
-    "            float v = gamma[c] * (x[t] - mean) * inv + beta[c];\n"
-    "            if (z != h) z[t] = v;\n"
-    "            h[t] = act_f(v, act);\n"
+    "            float v = a.gamma[c] * (xv - mean) * inv + a.beta[c];\n"
+    "            if (a.z != a.h) ST(a.z, t, v);\n"
+    "            ST(a.h, t, act_f(v, a.act));\n"
     "        } else {\n"
-    "            float k = gamma[c] * inv, g = dy[t];\n"
-    "            h[t] = training ? k / (float)n * ((float)n * g - st[3] - (x[t] - mean) * inv * st[4]) : k * g;\n"
+    "            const float n = (float)(Bs * a.P), k = a.gamma[c] * inv, g = bn_dy(a, t);\n"
+    "            ST(a.h, t, a.training ? k / n * (n * g - st[3] - (xv - mean) * inv * st[4]) : k * g);\n"
     "        }\n"
+    "    }\n"
+    "}\n"
+    // The im2col engine's GEMM result cm [C][B*P] (channel-major) to NCHW:
+    // h = act(cm + bias[c] (+ add)), z the pre-activation copy when separate.
+    "extern \"C\" __global__ void cm_out(const float* cm, const float* add, const float* bias, float* z, float* h, unsigned C,\n"
+    "                                  unsigned B, unsigned P, int act) {\n"
+    "    GS(t, C * B * P) {\n"
+    "        unsigned p = t % P, c = (t / P) % C, b = t / (P * C);\n"
+    "        float v = cm[((unsigned long long)c * B + b) * P + p];\n"
+    "        if (bias) v += bias[c];\n"
+    "        if (add) v += add[t];\n"
+    "        if (z != h) z[t] = v;\n"
+    "        h[t] = act_f(v, act);\n"
     "    }\n"
     "}\n";
 }
@@ -1291,7 +1413,7 @@ static const char* nr_kernel_source_() {
 #define NR_GPOOL_BWD 20
 #define NR_UP_FWD 21
 #define NR_UP_BWD 22
-#define NR_RESHAPE 23
+#define NR_CM_OUT 23
 #define NR_GN_FWD 24
 #define NR_GN_BWD 25
 #define NR_GN_PARAMS 26
@@ -1321,10 +1443,14 @@ static const char* nr_kernel_source_() {
 #define NR_SN_FIX 50
 #define NR_SPLITK 51
 #define NR_SPLITK_RED 52
-#define NR_BN_SUMS 53
+#define NR_BN_STATS 53
 #define NR_BN_FINISH 54
 #define NR_BN_APPLY 55
-#define NR_COUNT 56
+#define NR_BN_GRADS 56
+#define NR_CONCAT 57
+#define NR_TO_ACT 58
+#define NR_FROM_ACT 59
+#define NR_COUNT 60
 
 static const char* nr_kernel_name_(int k) {
     if (k == NR_BIAS_ACT) return "bias_act";
@@ -1349,7 +1475,7 @@ static const char* nr_kernel_name_(int k) {
     if (k == NR_GPOOL_BWD) return "gpool_bwd";
     if (k == NR_UP_FWD) return "upsample_fwd";
     if (k == NR_UP_BWD) return "upsample_bwd";
-    if (k == NR_RESHAPE) return "reshape_cm";
+    if (k == NR_CM_OUT) return "cm_out";
     if (k == NR_GN_FWD) return "gn_fwd";
     if (k == NR_GN_BWD) return "gn_bwd";
     if (k == NR_GN_PARAMS) return "gn_params";
@@ -1379,33 +1505,35 @@ static const char* nr_kernel_name_(int k) {
     if (k == NR_SN_FIX) return "sn_fix";
     if (k == NR_SPLITK) return "gemm_nt_splitk";
     if (k == NR_SPLITK_RED) return "splitk_reduce";
-    if (k == NR_BN_SUMS) return "bn_sums";
+    if (k == NR_BN_STATS) return "bn_stats";
+    if (k == NR_BN_GRADS) return "bn_grads";
+    if (k == NR_CONCAT) return "concat_rows";
+    if (k == NR_TO_ACT) return "to_act";
+    if (k == NR_FROM_ACT) return "from_act";
     if (k == NR_BN_FINISH) return "bn_finish";
     if (k == NR_BN_APPLY) return "bn_apply";
     return "small_net_step";
 }
 
 // ── Module state ─────────────────────────────────────────────────────────────
+// The source compiles once per activation type (NR_ACT 0 fp32, 1 fp16, 2
+// bf16); g_nr_prec picks the module a launch uses (a 16-bit net's passes
+// set it, everything else runs fp32).
 static int   g_nr_state = 0;      // 0 = not tried, 1 = ready, -1 = unavailable
+static int   g_nr_half[3];        // the same for the 16-bit modules
+static int   g_nr_prec = 0;
 static void* g_nr_stream = (void*)0;
-static void* g_nr_fn[NR_COUNT];
+static void* g_nr_fn[3 * NR_COUNT];
 
-static int nr_ensure_() {
-    if (g_nr_state != 0) return g_nr_state == 1;
-    g_nr_state = -1;
-    if (!rocm_available()) return 0;
-    ?&void sh = rocm_stream_handle();
-    match (sh) {
-        case null: { return 0; }
-        case some(s): { unsafe { g_nr_stream = (void*)s; } }
-    }
+static int nr_compile_(int prec) {
     unsafe {
         void* prog = (void*)0;
         if (hiprtcCreateProgram(&prog, nr_kernel_source_(), "safec_nn_rocm.hip", 0,
                                 (const char**)0, (const char**)0) != 0) return 0;
-        const char* opts[1];
+        const char* opts[2];
         opts[0] = "-O3";
-        if (hiprtcCompileProgram(prog, 1, &opts[0]) != 0) { hiprtcDestroyProgram(&prog); return 0; }
+        opts[1] = prec == 0 ? "-DNR_ACT=0" : (prec == 1 ? "-DNR_ACT=1" : "-DNR_ACT=2");
+        if (hiprtcCompileProgram(prog, 2, &opts[0]) != 0) { hiprtcDestroyProgram(&prog); return 0; }
         unsigned long codeSize = 0UL;
         hiprtcGetCodeSize(prog, &codeSize);
         char* code = (char*)malloc(codeSize);
@@ -1418,12 +1546,33 @@ static int nr_ensure_() {
         if (loaded != 0) return 0;
         int k = 0;
         while (k < NR_COUNT) {
-            if (hipModuleGetFunction(&g_nr_fn[k], module, nr_kernel_name_(k)) != 0) return 0;
+            if (hipModuleGetFunction(&g_nr_fn[prec * NR_COUNT + k], module, nr_kernel_name_(k)) != 0) return 0;
             k = k + 1;
         }
     }
+    return 1;
+}
+
+static int nr_ensure_() {
+    if (g_nr_state != 0) return g_nr_state == 1;
+    g_nr_state = -1;
+    if (!rocm_available()) return 0;
+    ?&void sh = rocm_stream_handle();
+    match (sh) {
+        case null: { return 0; }
+        case some(s): { unsafe { g_nr_stream = (void*)s; } }
+    }
+    if (!nr_compile_(0)) return 0;
     g_nr_state = 1;
     return 1;
+}
+
+// The module for activation type prec (compiled on first use).
+static int nr_ensure_prec_(int prec) {
+    if (!nr_ensure_() || prec < 0 || prec > 2) return 0;
+    if (prec == 0) return 1;
+    if (g_nr_half[prec] == 0) g_nr_half[prec] = nr_compile_(prec) ? 1 : -1;
+    return g_nr_half[prec] == 1;
 }
 
 static int nr_capturing_() {
@@ -1434,7 +1583,7 @@ static int nr_capturing_() {
 
 static int nr_launch_grid_(int k, unsigned long gx, unsigned long gy, &void params) {
     unsafe {
-        return hipModuleLaunchKernel(g_nr_fn[k], (unsigned int)gx, (unsigned int)gy, 1U, NR_BLOCK, 1U, 1U, 0U,
+        return hipModuleLaunchKernel(g_nr_fn[g_nr_prec * NR_COUNT + k], (unsigned int)gx, (unsigned int)gy, 1U, NR_BLOCK, 1U, 1U, 0U,
                                      g_nr_stream, (void**)params, (void**)0) == 0;
     }
 }
@@ -1467,11 +1616,37 @@ static int nr_write_(struct RocmBuf dst, const &float host, unsigned long n) {
     return rocm_write(dst, host, n) && rocm_sync();
 }
 
+// n activations (of the current module's type) from src to dst.
+static int nr_copy_(struct RocmBuf src, struct RocmBuf dst, unsigned long n) {
+    return rocm_copy(src, 0UL, dst, 0UL, g_nr_prec != 0 ? (n + 1UL) / 2UL : n);
+}
+
+// The first n 16-bit values of b (a RocmBuf holding them).
+static struct RocmHalfBuf nr_hv_(struct RocmBuf b, unsigned long n) {
+    struct RocmHalfBuf v;
+    v.dev = b.dev;
+    v.len = n;
+    v.dtype = g_nr_prec;
+    return v;
+}
+
+// float -> activation (toAct) or back, times *kp (1 / *kp with inv) when kp is set.
+static int nr_cvt_(int toAct, struct RocmBuf src, struct RocmBuf dst, unsigned long n, struct RocmBuf kp, int inv) {
+    if (!nr_fits_(src, toAct ? n : (n + 1UL) / 2UL) || !nr_fits_(dst, toAct ? (n + 1UL) / 2UL : n)) return 0;
+    unsafe {
+        void* ps = (void*)src.dev; void* pd = (void*)dst.dev; void* pk = (void*)kp.dev;
+        unsigned int nn = (unsigned int)n; int iv = inv;
+        void* p[5];
+        p[0] = (void*)&ps; p[1] = (void*)&pd; p[2] = (void*)&nn; p[3] = (void*)&pk; p[4] = (void*)&iv;
+        return nr_launch_(toAct ? NR_TO_ACT : NR_FROM_ACT, n, (&void)&p[0]);
+    }
+}
+
 // ── Kernel wrappers ──────────────────────────────────────────────────────────
 
 static int nr_bias_act_(struct RocmBuf z, struct RocmBuf h, struct RocmBuf b, unsigned long n, unsigned long plane,
                         unsigned long C, int act) {
-    if (!nr_fits_(z, n) || !nr_fits_(h, n) || !nr_fits_(b, C)) return 0;
+    if (!nr_fits_(z, n) || !nr_fits_(h, n) || (b.dev != 0UL && !nr_fits_(b, C))) return 0;   // b may be absent
     unsafe {
         void* pz = (void*)z.dev; void* ph = (void*)h.dev; void* pb = (void*)b.dev;
         unsigned int nn = (unsigned int)n; unsigned int pl = (unsigned int)plane; unsigned int cc = (unsigned int)C;
@@ -1813,19 +1988,20 @@ static int nr_upsample_(int backward, struct RocmBuf src, struct RocmBuf z, stru
     }
 }
 
-// channel-major [inC][B][inP] -> [outC][B][outP], the same CHW rows
-static int nr_reshape_(struct RocmBuf in, struct RocmBuf out, unsigned long B, unsigned long inC, unsigned long inP,
-                       unsigned long outC, unsigned long outP) {
-    unsigned long n = outC * B * outP;
-    if (inC * inP != outC * outP || !nr_fits_(in, n) || !nr_fits_(out, n)) return 0;
+// NCHW h = act(cm + bias (+ add)) from the im2col engine's channel-major cm [C][B*P].
+static int nr_cm_out_(struct RocmBuf cm, struct RocmBuf add, struct RocmBuf bias, struct RocmBuf z, struct RocmBuf h,
+                      unsigned long C, unsigned long B, unsigned long P, int act) {
+    unsigned long n = C * B * P;
+    if (!nr_fits_(cm, n) || !nr_fits_(z, n) || !nr_fits_(h, n)) return 0;
     unsafe {
-        void* pi = (void*)in.dev; void* po = (void*)out.dev;
-        unsigned int a0 = (unsigned int)B; unsigned int a1 = (unsigned int)inC; unsigned int a2 = (unsigned int)inP;
-        unsigned int a3 = (unsigned int)outC; unsigned int a4 = (unsigned int)outP;
-        void* p[7];
-        p[0] = (void*)&pi; p[1] = (void*)&po; p[2] = (void*)&a0; p[3] = (void*)&a1; p[4] = (void*)&a2;
-        p[5] = (void*)&a3; p[6] = (void*)&a4;
-        return nr_launch_(NR_RESHAPE, n, (&void)&p[0]);
+        void* pc = (void*)cm.dev; void* pa = (void*)add.dev; void* pb = (void*)bias.dev; void* pz = (void*)z.dev;
+        void* ph = (void*)h.dev;
+        unsigned int a0 = (unsigned int)C; unsigned int a1 = (unsigned int)B; unsigned int a2 = (unsigned int)P;
+        int ac = act;
+        void* p[9];
+        p[0] = (void*)&pc; p[1] = (void*)&pa; p[2] = (void*)&pb; p[3] = (void*)&pz; p[4] = (void*)&ph;
+        p[5] = (void*)&a0; p[6] = (void*)&a1; p[7] = (void*)&a2; p[8] = (void*)&ac;
+        return nr_launch_(NR_CM_OUT, n, (&void)&p[0]);
     }
 }
 
@@ -1845,12 +2021,6 @@ static unsigned long nr_out_size_(const &RocmLayer L) { return L.outC * L.outH *
 // Every layer but the fully connected one keeps its activations channel-major.
 static int nr_is_cm_(const &RocmLayer L) { return L.kind != ROCM_LAYER_LINEAR; }
 
-// convIn: how the layer's input is converted from the producer's layout.
-#define NR_CV_NONE    0
-#define NR_CV_TO_CM   1   // rows [B][C][P] -> channel-major [C][B][P]
-#define NR_CV_TO_ROWS 2   // channel-major -> rows (a fully connected layer after a multi-channel map)
-#define NR_CV_RESHAPE 3   // channel-major with another C x P (a convolution reading the map as another geometry)
-
 struct RocmNet rocm_net_new(unsigned long maxBatch) {
     struct RocmNet n;
     n.layers = vec_new();
@@ -1858,9 +2028,9 @@ struct RocmNet rocm_net_new(unsigned long maxBatch) {
     n.inC = 0UL; n.inH = 0UL; n.inW = 0UL;
     n.training = 1;
     n.segments = 1UL;
-    n.out = nr_none_();
-    n.dout = nr_none_();
     n.ok = nr_ensure_();
+    n.precision = 0;
+    n.scale = nr_none_(); n.xh = nr_none_(); n.dxh = nr_none_(); n.out32 = nr_none_(); n.dout32 = nr_none_();
     return n;
 }
 
@@ -1879,8 +2049,10 @@ int rocm_net_set_training(&RocmNet n, int training) {
 static void nr_layer_free_(&RocmLayer L) {
     rocm_free(&L.w); rocm_free(&L.b); rocm_free(&L.gw); rocm_free(&L.gb);
     rocm_free(&L.runMean); rocm_free(&L.runVar); rocm_free(&L.stats);
-    rocm_free(&L.z); rocm_free(&L.h); rocm_free(&L.dh); rocm_free(&L.col); rocm_free(&L.xin); rocm_free(&L.part);
-    rocm_free(&L.wsn); rocm_free(&L.aux);
+    rocm_free(&L.z); rocm_free(&L.col); rocm_free(&L.cm); rocm_free(&L.part);
+    if ((L.alias & 1) == 0) rocm_free(&L.h);
+    if ((L.alias & 2) == 0) rocm_free(&L.dh);
+    rocm_free(&L.wsn); rocm_free(&L.aux); rocm_free(&L.wh);
 }
 
 static int nr_alloc_(&RocmBuf b, unsigned long n) {
@@ -1918,13 +2090,12 @@ static struct RocmLayer nr_layer_(int kind, int act, unsigned long inC, unsigned
     L.conv = conv2d_spec(1UL, 1UL, 0UL);
     L.pool = pool2d_spec(1UL, 1UL, 0UL);
     L.factor = 1UL; L.momentum = (float)0.1; L.eps = (float)0.00001;
-    L.convIn = NR_CV_NONE;
     L.w = nr_none_(); L.b = nr_none_(); L.gw = nr_none_(); L.gb = nr_none_();
     L.runMean = nr_none_(); L.runVar = nr_none_(); L.stats = nr_none_();
-    L.z = nr_none_(); L.h = nr_none_(); L.dh = nr_none_(); L.col = nr_none_(); L.xin = nr_none_(); L.part = nr_none_();
+    L.z = nr_none_(); L.h = nr_none_(); L.dh = nr_none_(); L.col = nr_none_(); L.cm = nr_none_(); L.part = nr_none_();
     L.slot = 0UL; L.skipC = 0UL; L.skipH = 0UL; L.skipW = 0UL; L.skipAccum = 0;
-    L.mode = 0; L.flag = 0; L.prob = (float)0.0; L.seed = 0UL; L.spectral = 0;
-    L.wsn = nr_none_(); L.aux = nr_none_();
+    L.mode = 0; L.flag = 0; L.prob = (float)0.0; L.seed = 0UL; L.spectral = 0; L.foldBias = 0; L.alias = 0;
+    L.wsn = nr_none_(); L.aux = nr_none_(); L.wh = nr_none_();
     return L;
 }
 
@@ -1933,38 +2104,30 @@ static struct RocmLayer nr_layer_(int kind, int act, unsigned long inC, unsigned
 // buffers. Frees L's buffers and clears n.ok on failure.
 static int nr_push_(&RocmNet n, struct RocmLayer L) {
     if (!n.ok) { nr_layer_free_(&L); return 0; }
+    // every activation is NCHW (a row per sample), so a layer only needs the
+    // previous output's size to match: no layout conversions
     unsigned long pc = 0UL; unsigned long ph = 0UL; unsigned long pw = 0UL;
-    unsigned long count = n.layers.length();
-    int prevCm = 0;
-    if (count == 0UL) {
-        if (n.inC * n.inH * n.inW == 0UL) { n.inC = L.inC; n.inH = L.inH; n.inW = L.inW; }
-    } else {
-        prevCm = nr_is_cm_(n.layers.at(count - 1UL));
-    }
+    if (n.layers.length() == 0UL && n.inC * n.inH * n.inW == 0UL) { n.inC = L.inC; n.inH = L.inH; n.inW = L.inW; }
     nr_cur_geom_(n, &pc, &ph, &pw);
     int ok = pc * ph * pw == nr_in_size_(&L) && nr_out_size_(&L) != 0UL;
-    if (nr_is_cm_(&L)) {
-        if (!prevCm) L.convIn = L.inC > 1UL ? NR_CV_TO_CM : NR_CV_NONE;
-        else L.convIn = pc != L.inC ? NR_CV_RESHAPE : NR_CV_NONE;
-    } else {
-        L.convIn = prevCm && pc > 1UL ? NR_CV_TO_ROWS : NR_CV_NONE;
-    }
     unsigned long B = n.maxBatch;
     unsigned long outN = B * nr_out_size_(&L);
-    ok = ok && nr_alloc_(&L.h, outN) && nr_alloc_(&L.dh, outN);
+    if ((L.alias & 1) == 0) ok = ok && nr_alloc_(&L.h, outN);
+    if ((L.alias & 2) == 0) ok = ok && nr_alloc_(&L.dh, outN);
     if (ok && L.w.dev != 0UL) ok = nr_alloc_(&L.gw, L.w.len) && nr_alloc_(&L.gb, L.b.len);
     if (ok && nr_needs_z_(L.act)) ok = nr_alloc_(&L.z, outN);
     unsigned long kk = L.conv.kH * L.conv.kW;
-    if (ok && L.kind == ROCM_LAYER_CONV) ok = nr_alloc_(&L.col, L.inC * kk * B * L.outH * L.outW);
-    if (ok && L.kind == ROCM_LAYER_CONVT) ok = nr_alloc_(&L.col, L.outC * kk * B * L.inH * L.inW);
     if (ok && (L.kind == ROCM_LAYER_CONV || L.kind == ROCM_LAYER_CONVT))
         ok = nr_alloc_(&L.part, L.outC * (NR_GB_SLICES + 1UL)) && rocm_zero(L.part);
     if (ok && (L.kind == ROCM_LAYER_MAXPOOL || L.kind == ROCM_LAYER_GLOBAL_MAXPOOL)) ok = nr_alloc_(&L.stats, outN);
     if (ok && L.kind == ROCM_LAYER_BATCHNORM) ok = nr_alloc_(&L.stats, 8UL * ROCM_MAX_SEGMENTS * L.outC);
     if (ok && L.kind == ROCM_LAYER_GROUPNORM) ok = nr_alloc_(&L.stats, 2UL * B * L.factor);
-    if (ok && L.convIn != NR_CV_NONE) ok = nr_alloc_(&L.xin, B * nr_in_size_(&L));
+    // the im2col engine's channel-major scratch: a convolution's GEMM output and
+    // output gradient, a transposed convolution's input (then its input gradient)
+    if (ok && L.kind == ROCM_LAYER_ADD && L.flag) ok = nr_alloc_(&L.cm, outN);
     unsigned long skipN = B * L.skipC * L.skipH * L.skipW;
     if (ok && L.kind == ROCM_LAYER_SAVE) ok = nr_alloc_(&L.aux, outN);
+    if (ok && L.kind == ROCM_LAYER_CONCAT) ok = nr_alloc_(&L.aux, skipN);
     if (ok && L.kind == ROCM_LAYER_ADD && L.flag)
         ok = nr_alloc_(&L.col, L.skipC * B * L.outH * L.outW) && nr_alloc_(&L.aux, skipN) &&
              nr_alloc_(&L.part, L.outC * (NR_GB_SLICES + 1UL)) && rocm_zero(L.part);
@@ -1975,26 +2138,39 @@ static int nr_push_(&RocmNet n, struct RocmLayer L) {
     }
     if (ok && L.kind == ROCM_LAYER_DROPOUT) ok = nr_alloc_(&L.stats, outN) && nr_alloc_(&L.aux, 2UL) && rocm_zero(L.aux);
     if (ok && L.kind == ROCM_LAYER_BATCHNORM)
-        ok = nr_alloc_(&L.part, L.outC * ROCM_MAX_SEGMENTS * (2UL * NR_BN_SLICES + 1UL)) && rocm_zero(L.part);
-    // split-K scratch for the weight gradient (sized at the largest batch)
-    if (ok && L.kind == ROCM_LAYER_CONV) {
-        unsigned long G = L.conv.groups;
-        ok = nr_splitk_reserve_(L.outC / G, (L.inC / G) * kk, B * L.outH * L.outW);
+        ok = nr_alloc_(&L.part, L.outC * ROCM_MAX_SEGMENTS * (4UL * NR_BN_SLICES + 1UL)) && rocm_zero(L.part);
+    unsigned long count = n.layers.length();
+    if (ok && count > 0UL) {
+        &RocmLayer prev = n.layers.at(count - 1UL);
+        // a batch norm right after a convolution without an activation applies the
+        // convolution's bias itself (it cancels in batch statistics): one pass less
+        // each way
+        if (L.kind == ROCM_LAYER_BATCHNORM && (prev.kind == ROCM_LAYER_CONV || prev.kind == ROCM_LAYER_CONVT) &&
+            prev.act == ACT_NONE && prev.outC == L.inC) {
+            prev.foldBias = 1;
+            L.flag = 1;
+            L.slot = count - 1UL;
+        }
+        // an ADD's input gradient is its own output gradient: the previous layer
+        // reads it from the ADD's buffer instead of a copy
+        if (L.kind == ROCM_LAYER_ADD && prev.alias == 0 && prev.kind != ROCM_LAYER_SAVE) {
+            rocm_free(&prev.dh);
+            prev.dh = L.dh;
+            prev.alias = 2;
+        }
     }
-    if (ok && L.kind == ROCM_LAYER_CONVT) {
-        unsigned long G = L.conv.groups;
-        ok = nr_splitk_reserve_(L.inC / G, (L.outC / G) * kk, B * L.inH * L.inW);
+    // the im2col engine's scratch (with MIOpen it is allocated only if a shape falls back to it)
+    if (ok && (L.kind == ROCM_LAYER_CONV || L.kind == ROCM_LAYER_CONVT) && !nr_mio_on_()) {
+        n.layers.push(L);   // nr_conv_scratch_ reads the net's maxBatch only
+        &RocmLayer last = n.layers.at(n.layers.length() - 1UL);
+        ok = nr_conv_scratch_(n, last) && rocm_sync();
+        if (!ok) { nr_layer_free_(last); n.layers.pop(); n.ok = 0; return 0; }
+        return 1;
     }
     if (ok && L.kind == ROCM_LAYER_ADD && L.flag) ok = nr_splitk_reserve_(L.outC, L.skipC, B * L.outH * L.outW);
     ok = ok && rocm_sync();
     if (!ok) { nr_layer_free_(&L); n.ok = 0; return 0; }
     n.layers.push(L);
-    // the row-major output copy, needed after a multi-channel channel-major layer
-    rocm_free(&n.out);
-    rocm_free(&n.dout);
-    if (nr_is_cm_(&L) && L.outC > 1UL) {
-        if (!nr_alloc_(&n.out, outN) || !nr_alloc_(&n.dout, outN)) { n.ok = 0; return 0; }
-    }
     return 1;
 }
 
@@ -2160,6 +2336,15 @@ int rocm_net_add_groupnorm(&RocmNet n, const &Tensor gamma, const &Tensor beta, 
 unsigned long rocm_net_add_save(&RocmNet n) {
     struct RocmLayer L;
     if (!nr_geom_layer_(n, ROCM_LAYER_SAVE, ACT_NONE, &L)) return 0UL;
+    unsigned long count = n.layers.length();
+    if (count > 0UL) {
+        // the saved activation is the previous layer's output itself, and its
+        // gradient goes straight into the previous layer's (no copies)
+        &RocmLayer prev = n.layers.at(count - 1UL);
+        L.h = prev.h;
+        L.dh = prev.dh;
+        L.alias = 3;
+    }
     if (!nr_push_(n, L)) return 0UL;
     return n.layers.length() - 1UL;
 }
@@ -2518,59 +2703,58 @@ void rocm_net_free(&RocmNet n) {
     unsigned long i = 0UL;
     while (i < n.layers.length()) { nr_layer_free_(n.layers.at(i)); i = i + 1UL; }
     n.layers.free();
-    rocm_free(&n.out);
-    rocm_free(&n.dout);
+    rocm_free(&n.scale); rocm_free(&n.xh); rocm_free(&n.dxh); rocm_free(&n.out32); rocm_free(&n.dout32);
+    n.precision = 0;
     n.ok = 0;
 }
 
-// ── Batch norm passes (bn_sums / bn_finish / bn_apply) ──
+// ── Batch norm passes (bn_stats / bn_grads / bn_finish / bn_apply) ──
 
-static int nr_bn_sums_(&RocmLayer L, struct RocmBuf x, struct RocmBuf dy, unsigned long B, unsigned long S, int mode) {
-    unsigned long P = L.outH * L.outW;
-    unsigned long n = (B / S) * P;
-    unsigned long slices = n / 4096UL;
-    if (slices > NR_BN_SLICES) slices = NR_BN_SLICES;
-    if (slices == 0UL) slices = 1UL;
-    unsafe {
-        void* px = (void*)x.dev; void* pd = (void*)dy.dev; void* ps = (void*)L.stats.dev; void* pp = (void*)L.part.dev;
-        unsigned int a0 = (unsigned int)L.inC; unsigned int a1 = (unsigned int)B; unsigned int a2 = (unsigned int)P;
-        unsigned int a3 = (unsigned int)S;
-        float ep = L.eps; int md = mode;
-        void* p[10];
-        p[0] = (void*)&px; p[1] = (void*)&pd; p[2] = (void*)&ps; p[3] = (void*)&pp; p[4] = (void*)&a0;
-        p[5] = (void*)&a1; p[6] = (void*)&a2; p[7] = (void*)&a3; p[8] = (void*)&ep; p[9] = (void*)&md;
-        return nr_launch_grid_(NR_BN_SUMS, L.inC * S, slices, (&void)&p[0]);
+// The kernels' BnArgs.
+struct NrBnArgs_ {
+    unsigned long x; unsigned long dy; unsigned long src; unsigned long stats; unsigned long part; unsigned long rm;
+    unsigned long rv; unsigned long dgamma; unsigned long dbeta; unsigned long gamma; unsigned long beta;
+    unsigned long cb; unsigned long cgb; unsigned long z; unsigned long h;
+    unsigned int C; unsigned int B; unsigned int P; unsigned int S;
+    float eps; float momentum;
+    int act; int training;
+};
+
+// A batch norm's arguments; 'folded' is the convolution whose bias it applies (or null).
+static struct NrBnArgs_ nr_bn_args_(const &RocmNet n, const &RocmLayer L, struct RocmBuf x, struct RocmBuf dy,
+                                    struct RocmBuf z, struct RocmBuf h, unsigned long B, unsigned long S) {
+    struct NrBnArgs_ a;
+    a.x = x.dev; a.dy = dy.dev; a.src = L.z.dev != 0UL ? L.z.dev : L.h.dev; a.stats = L.stats.dev; a.part = L.part.dev;
+    a.rm = L.runMean.dev; a.rv = L.runVar.dev; a.dgamma = L.gw.dev; a.dbeta = L.gb.dev; a.gamma = L.w.dev;
+    a.beta = L.b.dev; a.cb = 0UL; a.cgb = 0UL; a.z = z.dev; a.h = h.dev;
+    if (L.flag) {
+        &RocmLayer conv = n.layers.at(L.slot);
+        a.cb = conv.b.dev;
+        a.cgb = conv.gb.dev;
     }
+    a.C = (unsigned int)L.inC; a.B = (unsigned int)B; a.P = (unsigned int)(L.outH * L.outW); a.S = (unsigned int)S;
+    a.eps = L.eps; a.momentum = L.momentum; a.act = L.act; a.training = n.training;
+    return a;
 }
 
-static int nr_bn_finish_(&RocmLayer L, unsigned long S, int phase) {
-    unsafe {
-        void* pm = (void*)L.runMean.dev; void* pv = (void*)L.runVar.dev; void* pg = (void*)L.gw.dev;
-        void* pb = (void*)L.gb.dev; void* ps = (void*)L.stats.dev;
-        unsigned int a0 = (unsigned int)L.inC; unsigned int a1 = (unsigned int)S;
-        float mo = L.momentum; float ep = L.eps; int ph = phase;
-        void* p[10];
-        p[0] = (void*)&pm; p[1] = (void*)&pv; p[2] = (void*)&pg; p[3] = (void*)&pb; p[4] = (void*)&ps;
-        p[5] = (void*)&a0; p[6] = (void*)&a1; p[7] = (void*)&mo; p[8] = (void*)&ep; p[9] = (void*)&ph;
-        return nr_launch_(NR_BN_FINISH, L.inC, (&void)&p[0]);
-    }
+static unsigned long nr_bn_slices_(const &RocmLayer L, unsigned long B, unsigned long S) {
+    unsigned long sl = (B / S) * L.outH * L.outW / 4096UL;
+    if (sl > NR_BN_SLICES) sl = NR_BN_SLICES;
+    return sl == 0UL ? 1UL : sl;
 }
 
-static int nr_bn_apply_(&RocmLayer L, struct RocmBuf x, struct RocmBuf dy, struct RocmBuf z, struct RocmBuf h,
-                        unsigned long B, unsigned long S, int mode, int training) {
-    unsigned long P = L.outH * L.outW;
-    unsigned long N = L.inC * B * P;
+// kernel NR_BN_STATS / NR_BN_GRADS over (C*S, slices); NR_BN_FINISH (phase) over C;
+// NR_BN_APPLY (mode = phase) over every value
+static int nr_bn_launch_(int kernel, struct NrBnArgs_ a, int phase, unsigned long slices) {
     unsafe {
-        void* px = (void*)x.dev; void* pd = (void*)dy.dev; void* pz = (void*)z.dev; void* ph = (void*)h.dev;
-        void* pg = (void*)L.w.dev; void* pb = (void*)L.b.dev; void* ps = (void*)L.stats.dev;
-        unsigned int a0 = (unsigned int)L.inC; unsigned int a1 = (unsigned int)B; unsigned int a2 = (unsigned int)P;
-        unsigned int a3 = (unsigned int)S;
-        int ac = L.act; int md = mode; int tr = training;
-        void* p[14];
-        p[0] = (void*)&px; p[1] = (void*)&pd; p[2] = (void*)&pz; p[3] = (void*)&ph; p[4] = (void*)&pg;
-        p[5] = (void*)&pb; p[6] = (void*)&ps; p[7] = (void*)&a0; p[8] = (void*)&a1; p[9] = (void*)&a2;
-        p[10] = (void*)&a3; p[11] = (void*)&ac; p[12] = (void*)&md; p[13] = (void*)&tr;
-        return nr_launch_(NR_BN_APPLY, N, (&void)&p[0]);
+        struct NrBnArgs_ aa = a;
+        int ph = phase;
+        void* p[2];
+        p[0] = (void*)&aa; p[1] = (void*)&ph;
+        if (kernel == NR_BN_STATS || kernel == NR_BN_GRADS)
+            return nr_launch_grid_(kernel, (unsigned long)a.C * (unsigned long)a.S, slices, (&void)&p[0]);
+        if (kernel == NR_BN_FINISH) return nr_launch_(kernel, (unsigned long)a.C, (&void)&p[0]);
+        return nr_launch_(kernel, (unsigned long)a.C * (unsigned long)a.B * (unsigned long)a.P, (&void)&p[0]);
     }
 }
 
@@ -2626,9 +2810,245 @@ static int nr_splitk_gemm_(struct RocmBuf a, struct RocmBuf b, struct RocmBuf c,
     }
 }
 
+// ── MIOpen convolution engine (optional) ─────────────────────────────────────
+// Weak references: a program linked with -lMIOpen gets MIOpen's convolution
+// kernels (implicit GEMM, Winograd, matrix cores) for CONV / CONVT layers;
+// without it these resolve to null and every convolution runs on the
+// im2col engine. MIOpen sees the NCHW activations as they are and queues
+// its kernels on gpu_rocm's stream, so they order with the rest and record
+// into graphs.
+extern int miopenCreate(void** handle) __attribute__((weak));
+extern int miopenSetStream(void* handle, void* stream) __attribute__((weak));
+extern int miopenCreateTensorDescriptor(void** desc) __attribute__((weak));
+extern int miopenSet4dTensorDescriptor(void* desc, int dataType, int n, int c, int h, int w) __attribute__((weak));
+extern int miopenCreateConvolutionDescriptor(void** desc) __attribute__((weak));
+extern int miopenInitConvolutionDescriptor(void* desc, int mode, int padH, int padW, int strideH, int strideW,
+                                           int dilationH, int dilationW) __attribute__((weak));
+extern int miopenSetConvolutionGroupCount(void* desc, int groups) __attribute__((weak));
+extern int miopenSetTransposeConvOutputPadding(void* desc, int adjH, int adjW) __attribute__((weak));
+extern int miopenConvolutionForwardGetWorkSpaceSize(void* handle, void* wDesc, void* xDesc, void* convDesc,
+                                                    void* yDesc, unsigned long* bytes) __attribute__((weak));
+extern int miopenConvolutionBackwardDataGetWorkSpaceSize(void* handle, void* dyDesc, void* wDesc, void* convDesc,
+                                                         void* dxDesc, unsigned long* bytes) __attribute__((weak));
+extern int miopenConvolutionBackwardWeightsGetWorkSpaceSize(void* handle, void* dyDesc, void* xDesc, void* convDesc,
+                                                            void* dwDesc, unsigned long* bytes) __attribute__((weak));
+extern int miopenFindConvolutionForwardAlgorithm(void* handle, void* xDesc, const void* x, void* wDesc, const void* w,
+                                                 void* convDesc, void* yDesc, void* y, int request, int* returned,
+                                                 void* perf, void* ws, unsigned long wsBytes, int exhaustive)
+    __attribute__((weak));
+extern int miopenFindConvolutionBackwardDataAlgorithm(void* handle, void* dyDesc, const void* dy, void* wDesc,
+                                                      const void* w, void* convDesc, void* dxDesc, void* dx,
+                                                      int request, int* returned, void* perf, void* ws,
+                                                      unsigned long wsBytes, int exhaustive) __attribute__((weak));
+extern int miopenFindConvolutionBackwardWeightsAlgorithm(void* handle, void* dyDesc, const void* dy, void* xDesc,
+                                                         const void* x, void* convDesc, void* dwDesc, void* dw,
+                                                         int request, int* returned, void* perf, void* ws,
+                                                         unsigned long wsBytes, int exhaustive) __attribute__((weak));
+extern int miopenConvolutionForward(void* handle, const void* alpha, void* xDesc, const void* x, void* wDesc,
+                                    const void* w, void* convDesc, int algo, const void* beta, void* yDesc, void* y,
+                                    void* ws, unsigned long wsBytes) __attribute__((weak));
+extern int miopenConvolutionBackwardData(void* handle, const void* alpha, void* dyDesc, const void* dy, void* wDesc,
+                                         const void* w, void* convDesc, int algo, const void* beta, void* dxDesc,
+                                         void* dx, void* ws, unsigned long wsBytes) __attribute__((weak));
+extern int miopenConvolutionBackwardWeights(void* handle, const void* alpha, void* dyDesc, const void* dy,
+                                            void* xDesc, const void* x, void* convDesc, int algo, const void* beta,
+                                            void* dwDesc, void* dw, void* ws, unsigned long wsBytes)
+    __attribute__((weak));
+
+// miopenConvAlgoPerf_t
+struct NrMioPerf_ {
+    int           algo;
+    float         time;
+    unsigned long memory;
+};
+
+#define NR_MIO_PLANS 512
+#define NR_MIO_KEY   20
+
+static int   g_mio_engine = ROCM_CONV_AUTO;
+static int   g_mio_state = 0;           // 0 untried, 1 ready, -1 MIOpen not linked or failed
+static void* g_mio_handle = (void*)0;
+static struct RocmBuf g_mio_ws;         // workspace (floats), grown outside capture
+static struct RocmBuf g_mio_tmp;        // a destination for the backward Finds
+static unsigned long g_mio_key[NR_MIO_PLANS * NR_MIO_KEY];
+static void* g_mio_desc[NR_MIO_PLANS * 4];   // x, y, w, conv
+static int   g_mio_algo[NR_MIO_PLANS * 3];   // forward, backward data, backward weights
+static int   g_mio_good[NR_MIO_PLANS];       // 0: MIOpen failed for this shape (the im2col engine runs it)
+static int   g_mio_count = 0;
+static int   g_mio_fresh = -1;               // the plan the last nr_mio_plan_ created (-1: none)
+
+static int nr_mio_on_() {
+    if (g_mio_engine != ROCM_CONV_AUTO) return 0;
+    if (g_mio_state == 0) {
+        g_mio_state = -1;
+        g_mio_ws = nr_none_();
+        g_mio_tmp = nr_none_();
+        unsafe {
+            if (nr_ensure_() && (void*)miopenCreate != (void*)0 && miopenCreate(&g_mio_handle) == 0 &&
+                miopenSetStream(g_mio_handle, g_nr_stream) == 0) g_mio_state = 1;
+        }
+    }
+    return g_mio_state == 1;
+}
+
+int rocm_conv_engine(int engine) {
+    g_mio_engine = engine == ROCM_CONV_IM2COL ? ROCM_CONV_IM2COL : ROCM_CONV_AUTO;
+    return nr_mio_on_();
+}
+
+static void nr_mio_fill_key_(const &RocmLayer L, unsigned long B, &unsigned long key) {
+    unsafe {
+        unsigned long* k = (unsigned long*)key;
+        k[0] = (unsigned long)L.kind; k[1] = B; k[2] = L.inC; k[3] = L.inH; k[4] = L.inW; k[5] = L.outC;
+        k[6] = L.outH; k[7] = L.outW; k[8] = L.conv.kH; k[9] = L.conv.kW; k[10] = L.conv.strideH;
+        k[11] = L.conv.strideW; k[12] = L.conv.padH; k[13] = L.conv.padW; k[14] = L.conv.dilationH;
+        k[15] = L.conv.dilationW; k[16] = L.conv.groups; k[17] = L.conv.outPadH; k[18] = L.conv.outPadW;
+        k[19] = (unsigned long)g_nr_prec;
+    }
+}
+
+static int nr_mio_find_plan_(const &RocmLayer L, unsigned long B) {
+    unsigned long key[NR_MIO_KEY];
+    nr_mio_fill_key_(L, B, &key[0]);
+    int i = 0;
+    while (i < g_mio_count) {
+        int same = 1;
+        int j = 0;
+        while (same && j < NR_MIO_KEY) { if (g_mio_key[i * NR_MIO_KEY + j] != key[j]) same = 0; j = j + 1; }
+        if (same) return i;
+        i = i + 1;
+    }
+    return -1;
+}
+
+static int nr_mio_grow_(&RocmBuf b, unsigned long bytes) {
+    unsigned long n = (bytes + 3UL) / 4UL;
+    if (n == 0UL) n = 1UL;
+    if (b.len >= n) return 1;
+    rocm_sync();
+    rocm_free(b);
+    *b = rocm_alloc(n);
+    return b.dev != 0UL;
+}
+
+// The plan for L at batch B: found earlier, or (outside capture) created now
+// with all three Finds on these buffers. -1 when MIOpen can't run it.
+static int nr_mio_plan_(const &RocmLayer L, unsigned long B, struct RocmBuf x, struct RocmBuf y, struct RocmBuf w,
+                        struct RocmBuf dy) {
+    int found = nr_mio_find_plan_(L, B);
+    if (found >= 0) return g_mio_good[found] ? found : -1;
+    if (nr_capturing_() || g_mio_count >= NR_MIO_PLANS) return -1;
+    int i = g_mio_count;
+    g_mio_count = g_mio_count + 1;
+    unsafe { nr_mio_fill_key_(L, B, (&unsigned long)&g_mio_key[i * NR_MIO_KEY]); }
+    g_mio_good[i] = 0;
+    int transposed = L.kind == ROCM_LAYER_CONVT;
+    unsigned long G = L.conv.groups;
+    int ok = 1;
+    unsafe {
+        void* xd = (void*)0; void* yd = (void*)0; void* wd = (void*)0; void* cd = (void*)0;
+        ok = miopenCreateTensorDescriptor(&xd) == 0 && miopenCreateTensorDescriptor(&yd) == 0 &&
+             miopenCreateTensorDescriptor(&wd) == 0 && miopenCreateConvolutionDescriptor(&cd) == 0;
+        int dt = g_nr_prec == 0 ? 1 : (g_nr_prec == 1 ? 0 : 5);   // miopenFloat, miopenHalf, miopenBFloat16
+        ok = ok && miopenSet4dTensorDescriptor(xd, dt, (int)B, (int)L.inC, (int)L.inH, (int)L.inW) == 0 &&
+             miopenSet4dTensorDescriptor(yd, dt, (int)B, (int)L.outC, (int)L.outH, (int)L.outW) == 0;
+        if (transposed) ok = ok && miopenSet4dTensorDescriptor(wd, dt, (int)L.inC, (int)(L.outC / G), (int)L.conv.kH, (int)L.conv.kW) == 0;
+        else ok = ok && miopenSet4dTensorDescriptor(wd, dt, (int)L.outC, (int)(L.inC / G), (int)L.conv.kH, (int)L.conv.kW) == 0;
+        ok = ok && miopenInitConvolutionDescriptor(cd, transposed ? 1 : 0, (int)L.conv.padH, (int)L.conv.padW,
+                                                   (int)L.conv.strideH, (int)L.conv.strideW, (int)L.conv.dilationH,
+                                                   (int)L.conv.dilationW) == 0;
+        if (ok && G > 1UL) ok = miopenSetConvolutionGroupCount(cd, (int)G) == 0;
+        if (ok && transposed && (L.conv.outPadH > 0UL || L.conv.outPadW > 0UL))
+            ok = miopenSetTransposeConvOutputPadding(cd, (int)L.conv.outPadH, (int)L.conv.outPadW) == 0;
+        g_mio_desc[i * 4] = xd; g_mio_desc[i * 4 + 1] = yd; g_mio_desc[i * 4 + 2] = wd; g_mio_desc[i * 4 + 3] = cd;
+        unsigned long wf = 0UL; unsigned long wb = 0UL; unsigned long ww = 0UL;
+        ok = ok && miopenConvolutionForwardGetWorkSpaceSize(g_mio_handle, wd, xd, cd, yd, &wf) == 0 &&
+             miopenConvolutionBackwardDataGetWorkSpaceSize(g_mio_handle, yd, wd, cd, xd, &wb) == 0 &&
+             miopenConvolutionBackwardWeightsGetWorkSpaceSize(g_mio_handle, yd, xd, cd, wd, &ww) == 0;
+        unsigned long most = wf > wb ? wf : wb;
+        if (ww > most) most = ww;
+        unsigned long tmpN = B * nr_in_size_(L);
+        if (w.len > tmpN) tmpN = w.len;
+        ok = ok && nr_mio_grow_(&g_mio_ws, most) && nr_mio_grow_(&g_mio_tmp, tmpN * 4UL);
+        struct NrMioPerf_ pf;
+        int got = 0;
+        void* ws = (void*)g_mio_ws.dev;
+        unsigned long wsb = g_mio_ws.len * 4UL;
+        ok = ok && miopenFindConvolutionForwardAlgorithm(g_mio_handle, xd, (const void*)x.dev, wd, (const void*)w.dev,
+                                                         cd, yd, (void*)y.dev, 1, &got, (void*)&pf, ws, wsb, 0) == 0 &&
+             got > 0;
+        g_mio_algo[i * 3] = pf.algo;
+        got = 0;
+        ok = ok && miopenFindConvolutionBackwardDataAlgorithm(g_mio_handle, yd, (const void*)dy.dev, wd, (const void*)w.dev,
+                                                              cd, xd, (void*)g_mio_tmp.dev, 1, &got, (void*)&pf, ws,
+                                                              wsb, 0) == 0 && got > 0;
+        g_mio_algo[i * 3 + 1] = pf.algo;
+        got = 0;
+        ok = ok && miopenFindConvolutionBackwardWeightsAlgorithm(g_mio_handle, yd, (const void*)dy.dev, xd,
+                                                                 (const void*)x.dev, cd, wd, (void*)g_mio_tmp.dev, 1,
+                                                                 &got, (void*)&pf, ws, wsb, 0) == 0 && got > 0;
+        g_mio_algo[i * 3 + 2] = pf.algo;
+    }
+    g_mio_good[i] = ok;
+    g_mio_fresh = ok ? i : -1;
+    return ok ? i : -1;
+}
+
+// op 0: y = conv(x); 1: dx from dy; 2: dw from dy and x (overwritten: beta 0)
+static int nr_mio_run_(int plan, int op, struct RocmBuf a, struct RocmBuf b, struct RocmBuf out) {
+    float one = (float)1.0;
+    float zero = (float)0.0;
+    unsafe {
+        void* xd = g_mio_desc[plan * 4]; void* yd = g_mio_desc[plan * 4 + 1];
+        void* wd = g_mio_desc[plan * 4 + 2]; void* cd = g_mio_desc[plan * 4 + 3];
+        void* ws = (void*)g_mio_ws.dev;
+        unsigned long wsb = g_mio_ws.len * 4UL;
+        if (op == 0)   // a = x, b = w
+            return miopenConvolutionForward(g_mio_handle, (const void*)&one, xd, (const void*)a.dev, wd, (const void*)b.dev,
+                                            cd, g_mio_algo[plan * 3], (const void*)&zero, yd, (void*)out.dev, ws, wsb) == 0;
+        if (op == 1)   // a = dy, b = w
+            return miopenConvolutionBackwardData(g_mio_handle, (const void*)&one, yd, (const void*)a.dev, wd,
+                                                 (const void*)b.dev, cd, g_mio_algo[plan * 3 + 1], (const void*)&zero,
+                                                 xd, (void*)out.dev, ws, wsb) == 0;
+        // a = dy, b = x
+        return miopenConvolutionBackwardWeights(g_mio_handle, (const void*)&one, yd, (const void*)a.dev, xd,
+                                                (const void*)b.dev, cd, g_mio_algo[plan * 3 + 2], (const void*)&zero,
+                                                wd, (void*)out.dev, ws, wsb) == 0;
+    }
+}
+
+// The weight gradient (op 2) into L.gw: through a 16-bit scratch for a 16-bit net.
+static int nr_mio_dw_(int plan, &RocmLayer L, struct RocmBuf dy, struct RocmBuf x) {
+    if (g_nr_prec == 0) return nr_mio_run_(plan, 2, dy, x, L.gw);
+    return nr_mio_run_(plan, 2, dy, x, g_mio_tmp) && nr_cvt_(0, g_mio_tmp, L.gw, L.gw.len, nr_none_(), 0);
+}
+
+// The im2col engine's scratch for a convolution layer, allocated the first
+// time it runs on that engine (never during capture).
+static int nr_conv_scratch_(const &RocmNet n, &RocmLayer L) {
+    if (L.col.dev != 0UL) return 1;
+    if (nr_capturing_()) return 0;
+    unsigned long B = n.maxBatch;
+    unsigned long kk = L.conv.kH * L.conv.kW;
+    unsigned long G = L.conv.groups;
+    if (L.kind == ROCM_LAYER_CONV) {
+        return nr_alloc_(&L.col, L.inC * kk * B * L.outH * L.outW) && nr_alloc_(&L.cm, B * nr_out_size_(L)) &&
+               nr_splitk_reserve_(L.outC / G, (L.inC / G) * kk, B * L.outH * L.outW);
+    }
+    return nr_alloc_(&L.col, L.outC * kk * B * L.inH * L.inW) && nr_alloc_(&L.cm, B * nr_in_size_(L)) &&
+           nr_splitk_reserve_(L.inC / G, (L.outC / G) * kk, B * L.inH * L.inW);
+}
+
 // ── Skip / resize / dropout / spectral-norm passes ──
 
 static struct RocmBuf nr_wt_(const &RocmLayer L) { return L.spectral ? L.wsn : L.w; }
+// The weight a pass computes with: its 16-bit copy in a 16-bit net.
+static struct RocmBuf nr_wk_(const &RocmLayer L) { return g_nr_prec != 0 ? L.wh : nr_wt_(L); }
+static int nr_has_wh_(const &RocmLayer L) {
+    int k = L.kind;
+    return L.w.dev != 0UL && (k == ROCM_LAYER_LINEAR || k == ROCM_LAYER_CONV || k == ROCM_LAYER_CONVT ||
+                              (k == ROCM_LAYER_ADD && L.flag));
+}
 
 static int nr_ew2_(struct RocmBuf a, struct RocmBuf b, struct RocmBuf out, unsigned long n, int mul) {
     if (!nr_fits_(a, n) || !nr_fits_(b, n) || !nr_fits_(out, n)) return 0;
@@ -2713,19 +3133,27 @@ static int nr_resize_(&RocmLayer L, struct RocmBuf src, struct RocmBuf dst, unsi
 // dst = src (n values), or dst += src when accumulate.
 static int nr_put_(struct RocmBuf src, struct RocmBuf dst, unsigned long n, int accumulate) {
     if (accumulate) return nr_ew2_(dst, src, dst, n, 0);
-    return rocm_copy(src, 0UL, dst, 0UL, n);
+    return nr_copy_(src, dst, n);
+}
+
+// An ADD's projection shortcut as a 1x1 convolution layer (for its MIOpen plan).
+static struct RocmLayer nr_proj_layer_(const &RocmLayer L) {
+    struct RocmLayer p = nr_layer_(ROCM_LAYER_CONV, ACT_NONE, L.skipC, L.skipH, L.skipW);
+    p.outC = L.outC; p.outH = L.outH; p.outW = L.outW;
+    p.conv = L.conv;
+    return p;
 }
 
 static int nr_skip_fwd_(&RocmNet n, &RocmLayer L, struct RocmBuf x, struct RocmBuf zt, unsigned long B) {
     int k = L.kind;
     unsigned long N = L.outC * B * L.outH * L.outW;
-    if (k == ROCM_LAYER_SAVE) return rocm_copy(x, 0UL, L.h, 0UL, N);
+    if (k == ROCM_LAYER_SAVE) return L.alias != 0 || nr_copy_(x, L.h, N);
     if (k == ROCM_LAYER_RESIZE) {
         if (!nr_resize_(L, x, zt, B, 0)) return 0;
         return L.act == ACT_NONE || nr_bias_act_(zt, L.h, nr_none_(), N, 1UL, 1UL, L.act);
     }
     if (k == ROCM_LAYER_DROPOUT) {
-        if (!n.training || L.prob <= (float)0.0) return rocm_copy(x, 0UL, L.h, 0UL, N);
+        if (!n.training || L.prob <= (float)0.0) return nr_copy_(x, L.h, N);
         unsafe {
             void* px = (void*)x.dev; void* po = (void*)L.h.dev; void* pm = (void*)L.stats.dev; void* pc = (void*)L.aux.dev;
             unsigned int nn = (unsigned int)N;
@@ -2741,17 +3169,32 @@ static int nr_skip_fwd_(&RocmNet n, &RocmLayer L, struct RocmBuf x, struct RocmB
     }
     &RocmLayer sv = n.layers.at(L.slot);
     if (k == ROCM_LAYER_CONCAT) {
-        // channel-major: x's channels, then the saved ones, each one contiguous block
-        unsigned long nx = L.inC * B * L.inH * L.inW;
-        return rocm_copy(x, 0UL, L.h, 0UL, nx) && rocm_copy(sv.h, 0UL, L.h, nx, N - nx);
+        // per image: x's channels, then the saved ones
+        unsigned long nx = L.inC * L.inH * L.inW;
+        unsigned long ns = L.skipC * L.skipH * L.skipW;
+        if (!nr_fits_(x, B * nx) || !nr_fits_(sv.h, B * ns) || !nr_fits_(L.h, B * (nx + ns))) return 0;
+        unsafe {
+            void* pa = (void*)x.dev; void* ps = (void*)sv.h.dev; void* po = (void*)L.h.dev;
+            unsigned int a0 = (unsigned int)nx; unsigned int a1 = (unsigned int)ns; unsigned int bb = (unsigned int)B;
+            void* p[6];
+            p[0] = (void*)&pa; p[1] = (void*)&a0; p[2] = (void*)&ps; p[3] = (void*)&a1; p[4] = (void*)&po; p[5] = (void*)&bb;
+            return nr_launch_(NR_CONCAT, B * (nx + ns), (&void)&p[0]);
+        }
     }
     // ADD
     unsigned long P = L.outH * L.outW;
     if (!L.flag) return nr_add_act_(x, sv.h, nr_none_(), zt, L.h, N, 1UL, 1UL, L.act);
+    if (nr_mio_on_()) {
+        struct RocmLayer pl = nr_proj_layer_(L);
+        int plan = nr_mio_plan_(&pl, B, sv.h, zt, nr_wk_(L), L.dh);
+        if (plan >= 0)
+            return nr_mio_run_(plan, 0, sv.h, nr_wk_(L), zt) && nr_add_act_(zt, x, L.b, zt, L.h, N, P, L.outC, L.act);
+    }
+    if (g_nr_prec != 0) return 0;   // 16-bit convolutions run on MIOpen only
     struct NrGeom_ g = nr_conv_geom_(&L.conv);
     if (!nr_im2col_(sv.h, L.col, L.skipC, L.skipH, L.skipW, L.outH, L.outW, g, B)) return 0;
-    if (!rocm_gemm(L.w, 0, L.col, 0, zt, L.outC, B * P, L.skipC)) return 0;
-    return nr_add_act_(zt, x, L.b, zt, L.h, N, B * P, L.outC, L.act);
+    if (!rocm_gemm(L.w, 0, L.col, 0, L.cm, L.outC, B * P, L.skipC)) return 0;
+    return nr_cm_out_(L.cm, x, L.b, zt, L.h, L.outC, B, P, L.act);
 }
 
 // L.dh holds the pre-activation gradient. Sends d(saved) to the SAVE layer
@@ -2760,14 +3203,15 @@ static int nr_skip_bwd_(&RocmNet n, &RocmLayer L, struct RocmBuf x, unsigned lon
     int k = L.kind;
     unsigned long N = L.outC * B * L.outH * L.outW;
     if (k == ROCM_LAYER_SAVE) {
+        if (L.alias != 0) return !L.flag || nr_ew2_(L.dh, L.aux, L.dh, N, 0);   // the gradient is already in place
         if (!needDx) return 1;
         if (L.flag) return nr_ew2_(L.dh, L.aux, dx, N, 0);
-        return rocm_copy(L.dh, 0UL, dx, 0UL, N);
+        return nr_copy_(L.dh, dx, N);
     }
     if (k == ROCM_LAYER_RESIZE) return !needDx || nr_resize_(L, L.dh, dx, B, 1);
     if (k == ROCM_LAYER_DROPOUT) {
         if (!needDx) return 1;
-        if (!n.training || L.prob <= (float)0.0) return rocm_copy(L.dh, 0UL, dx, 0UL, N);
+        if (!n.training || L.prob <= (float)0.0) return nr_copy_(L.dh, dx, N);
         return nr_ew2_(L.dh, L.stats, dx, N, 1);
     }
     &RocmLayer sv = n.layers.at(L.slot);
@@ -2775,20 +3219,34 @@ static int nr_skip_bwd_(&RocmNet n, &RocmLayer L, struct RocmBuf x, unsigned lon
     sv.flag = 1;
     unsigned long skipN = B * L.skipC * L.skipH * L.skipW;
     if (k == ROCM_LAYER_CONCAT) {
-        unsigned long nx = L.inC * B * L.inH * L.inW;
-        if (needDx && !rocm_copy(L.dh, 0UL, dx, 0UL, nx)) return 0;
-        return nr_put_(nr_at_(L.dh, nx, N - nx), sv.aux, N - nx, acc);
+        // per image: the first inC*P values of each row back to x, the rest to the saved activation
+        unsigned long nx = L.inC * L.inH * L.inW;
+        unsigned long ns = L.skipC * L.skipH * L.skipW;
+        if (needDx && !rocm_slice_cols(L.dh, dx, B, nx + ns, nx, 0UL)) return 0;
+        if (!acc) return rocm_slice_cols(L.dh, sv.aux, B, nx + ns, ns, nx);
+        return rocm_slice_cols(L.dh, L.aux, B, nx + ns, ns, nx) && nr_ew2_(sv.aux, L.aux, sv.aux, B * ns, 0);
     }
-    // ADD
-    if (needDx && !rocm_copy(L.dh, 0UL, dx, 0UL, N)) return 0;
+    // ADD (the previous layer usually reads L.dh itself)
+    if (needDx && dx.dev != L.dh.dev && !nr_copy_(L.dh, dx, N)) return 0;
     if (!L.flag) return nr_put_(L.dh, sv.aux, N, acc);
     unsigned long P = L.outH * L.outW;
     unsigned long Nc = B * P;
     struct NrGeom_ g = nr_conv_geom_(&L.conv);
     // bias gradient (the activation's gradient is already applied), weight gradient, d(saved)
-    if (!nr_act_grad_(L.dh, L.h, L.gb, L.part, Nc, Nc, L.outC, ACT_NONE)) return 0;
-    if (!nr_gemm_(L.dh, 0, L.col, 1, L.gw, L.outC, L.skipC, Nc)) return 0;
-    if (!rocm_gemm(L.w, 1, L.dh, 0, L.col, L.skipC, Nc, L.outC)) return 0;
+    if (!nr_act_grad_(L.dh, L.h, L.gb, L.part, Nc, P, L.outC, ACT_NONE)) return 0;
+    if (nr_mio_on_()) {
+        struct RocmLayer pl = nr_proj_layer_(L);
+        int plan = nr_mio_find_plan_(&pl, B);
+        if (plan >= 0 && g_mio_good[plan]) {
+            struct RocmBuf dst = acc ? L.aux : sv.aux;
+            return nr_mio_dw_(plan, L, L.dh, sv.h) && nr_mio_run_(plan, 1, L.dh, nr_wk_(L), dst) &&
+                   (!acc || nr_ew2_(sv.aux, L.aux, sv.aux, skipN, 0));
+        }
+    }
+    if (g_nr_prec != 0) return 0;
+    if (!nr_swap01_(L.dh, L.cm, B, L.outC, P)) return 0;
+    if (!nr_gemm_(L.cm, 0, L.col, 1, L.gw, L.outC, L.skipC, Nc)) return 0;
+    if (!rocm_gemm(L.w, 1, L.cm, 0, L.col, L.skipC, Nc, L.outC)) return 0;
     struct RocmBuf dst = acc ? L.aux : sv.aux;
     if (!nr_col2im_(L.col, nr_none_(), dst, nr_none_(), ACT_NONE, L.skipC, L.skipH, L.skipW, L.outH, L.outW, g, B))
         return 0;
@@ -2866,11 +3324,17 @@ static int nr_layer_fwd_(&RocmNet n, &RocmLayer L, struct RocmBuf x, unsigned lo
     struct RocmBuf zt = L.z.dev != 0UL ? L.z : L.h;
     int k = L.kind;
     if (L.spectral && !nr_sn_forward_(n, L)) return 0;
-    struct RocmBuf wt = nr_wt_(L);
+    if (L.spectral && g_nr_prec != 0 && !nr_cvt_(1, L.wsn, L.wh, L.w.len, nr_none_(), 0)) return 0;
+    struct RocmBuf wt = nr_wk_(L);
     if (k == ROCM_LAYER_LINEAR) {
         unsigned long in = nr_in_size_(L);
-        return rocm_gemm(x, 0, wt, 0, zt, B, L.outC, in) &&
-               nr_bias_act_(zt, L.h, L.b, B * L.outC, 1UL, L.outC, L.act);
+        if (g_nr_prec != 0) {
+            if (!rocm_half_gemm(nr_hv_(x, B * in), 0, nr_hv_(wt, in * L.outC), 0, nr_hv_(zt, B * L.outC), B, L.outC, in))
+                return 0;
+        } else if (!rocm_gemm(x, 0, wt, 0, zt, B, L.outC, in)) {
+            return 0;
+        }
+        return nr_bias_act_(zt, L.h, L.b, B * L.outC, 1UL, L.outC, L.act);
     }
     unsigned long Pin = L.inH * L.inW;
     unsigned long P = L.outH * L.outW;
@@ -2882,25 +3346,36 @@ static int nr_layer_fwd_(&RocmNet n, &RocmLayer L, struct RocmBuf x, unsigned lo
         unsigned long ci = L.inC / G;
         unsigned long co = L.outC / G;
         unsigned long gi = 0UL;
+        if (nr_mio_on_()) {
+            int plan = nr_mio_plan_(L, B, x, zt, wt, L.dh);
+            if (plan >= 0)
+                return nr_mio_run_(plan, 0, x, wt, zt) &&
+                       (L.foldBias || nr_bias_act_(zt, L.h, L.b, L.outC * B * P, P, L.outC, L.act));
+        }
+        if (g_nr_prec != 0 || !nr_conv_scratch_(n, L)) return 0;
         if (k == ROCM_LAYER_CONV) {
+            // im2col -> per group W x col into cm [outC][B*P] -> NCHW with bias and activation
             unsigned long K = ci * kk;
             unsigned long N = B * P;
             if (!nr_im2col_(x, L.col, L.inC, L.inH, L.inW, L.outH, L.outW, g, B)) return 0;
             while (gi < G) {
                 if (!rocm_gemm(nr_at_(wt, gi * co * K, co * K), 0, nr_at_(L.col, gi * K * N, K * N), 0,
-                               nr_at_(zt, gi * co * N, co * N), co, N, K)) return 0;
+                               nr_at_(L.cm, gi * co * N, co * N), co, N, K)) return 0;
                 gi = gi + 1UL;
             }
-            return nr_bias_act_(zt, L.h, L.b, L.outC * N, N, L.outC, L.act);
+            return nr_cm_out_(L.cm, nr_none_(), L.foldBias ? nr_none_() : L.b, zt, L.h, L.outC, B, P, L.act);
         }
+        // input to channel-major cm [inC][B*Pin], per group W^T x cm into col, col2im to NCHW
         unsigned long KT = co * kk;
         unsigned long Nin = B * Pin;
+        if (!nr_swap01_(x, L.cm, B, L.inC, Pin)) return 0;
         while (gi < G) {
-            if (!rocm_gemm(nr_at_(wt, gi * ci * KT, ci * KT), 1, nr_at_(x, gi * ci * Nin, ci * Nin), 0,
+            if (!rocm_gemm(nr_at_(wt, gi * ci * KT, ci * KT), 1, nr_at_(L.cm, gi * ci * Nin, ci * Nin), 0,
                            nr_at_(L.col, gi * KT * Nin, KT * Nin), KT, Nin, ci)) return 0;
             gi = gi + 1UL;
         }
         // col2im adds the bias and applies the activation
+        if (L.foldBias) return nr_col2im_(L.col, nr_none_(), L.h, nr_none_(), ACT_NONE, L.outC, L.outH, L.outW, L.inH, L.inW, g, B);
         return nr_col2im_(L.col, zt, L.h, L.b, L.act, L.outC, L.outH, L.outW, L.inH, L.inW, g, B);
     }
     if (k == ROCM_LAYER_MAXPOOL || k == ROCM_LAYER_AVGPOOL) {
@@ -2912,20 +3387,22 @@ static int nr_layer_fwd_(&RocmNet n, &RocmLayer L, struct RocmBuf x, unsigned lo
         return nr_gpool_fwd_(x, zt, L.h, L.stats, planes, Pin, k == ROCM_LAYER_GLOBAL_MAXPOOL ? 0 : 1, L.act);
     if (k == ROCM_LAYER_UPSAMPLE) return nr_upsample_(0, x, zt, L.h, planes, L.inH, L.inW, L.factor, L.act);
     if (k == ROCM_LAYER_RESHAPE) {
-        if (!nr_reshape_(x, zt, B, L.inC, Pin, L.outC, P)) return 0;
-        return L.act == ACT_NONE || nr_bias_act_(zt, L.h, nr_none_(), L.outC * B * P, 1UL, 1UL, L.act);
+        // the same NCHW rows
+        return nr_bias_act_(x, L.h, nr_none_(), L.outC * B * P, 1UL, 1UL, L.act) &&
+               (L.z.dev == 0UL || nr_copy_(x, L.z, L.outC * B * P));
     }
     if (k >= ROCM_LAYER_SAVE) return nr_skip_fwd_(n, L, x, zt, B);
     if (k == ROCM_LAYER_BATCHNORM) {
         unsigned long S = n.segments == 0UL ? 1UL : n.segments;
         if (S > ROCM_MAX_SEGMENTS || B % S != 0UL || L.inC * S > 65535UL) return 0;
+        struct NrBnArgs_ a = nr_bn_args_(n, L, x, nr_none_(), zt, L.h, B, S);
         if (n.training) {
-            if (!nr_bn_sums_(L, x, nr_none_(), B, S, 0) || !nr_bn_sums_(L, x, nr_none_(), B, S, 1) ||
-                !nr_bn_finish_(L, S, 0)) return 0;
-        } else if (!nr_bn_finish_(L, S, 2)) {
+            if (!nr_bn_launch_(NR_BN_STATS, a, 0, nr_bn_slices_(L, B, S))) return 0;
+            if (S > 1UL && !nr_bn_launch_(NR_BN_FINISH, a, 0, 1UL)) return 0;
+        } else if (!nr_bn_launch_(NR_BN_FINISH, a, 2, 1UL)) {
             return 0;
         }
-        return nr_bn_apply_(L, x, nr_none_(), zt, L.h, B, S, 0, n.training);
+        return nr_bn_launch_(NR_BN_APPLY, a, 0, 1UL);
     }
     // group norm
     unsafe {
@@ -2948,10 +3425,15 @@ static int nr_layer_bwd_core_(&RocmNet n, &RocmLayer L, struct RocmBuf x, unsign
                               struct RocmBuf dx) {
     struct RocmBuf src = L.z.dev != 0UL ? L.z : L.h;
     int k = L.kind;
-    struct RocmBuf wt = nr_wt_(L);
+    struct RocmBuf wt = nr_wk_(L);
     if (k == ROCM_LAYER_LINEAR) {
         unsigned long in = nr_in_size_(L);
         if (!nr_act_grad_rows_(L.dh, src, L.gb, B, L.outC, L.act)) return 0;
+        if (g_nr_prec != 0) {
+            struct RocmHalfBuf d = nr_hv_(L.dh, B * L.outC);
+            return rocm_half_gemm_f32(nr_hv_(x, B * in), 1, d, 0, L.gw, in, L.outC, B) &&
+                   (!needDx || rocm_half_gemm(d, 0, nr_hv_(wt, in * L.outC), 1, nr_hv_(dx, B * in), B, in, L.outC));
+        }
         if (!rocm_gemm(x, 1, L.dh, 0, L.gw, in, L.outC, B)) return 0;
         return !needDx || rocm_gemm(L.dh, 0, wt, 1, dx, B, in, L.outC);
     }
@@ -2960,7 +3442,14 @@ static int nr_layer_bwd_core_(&RocmNet n, &RocmLayer L, struct RocmBuf x, unsign
     unsigned long planes = L.inC * B;
     if (k == ROCM_LAYER_CONV || k == ROCM_LAYER_CONVT) {
         unsigned long N = B * P;
-        if (!nr_act_grad_(L.dh, src, L.gb, L.part, N, N, L.outC, L.act)) return 0;
+        // a folded bias's gradient comes from the batch norm (already run)
+        if (!L.foldBias && !nr_act_grad_(L.dh, src, L.gb, L.part, N, P, L.outC, L.act)) return 0;
+        if (nr_mio_on_()) {
+            int plan = nr_mio_find_plan_(L, B);
+            if (plan >= 0 && g_mio_good[plan])
+                return nr_mio_dw_(plan, L, L.dh, x) && (!needDx || nr_mio_run_(plan, 1, L.dh, wt, dx));
+        }
+        if (g_nr_prec != 0) return 0;
         unsigned long G = L.conv.groups;
         unsigned long kk = L.conv.kH * L.conv.kW;
         struct NrGeom_ g = nr_conv_geom_(&L.conv);
@@ -2968,26 +3457,29 @@ static int nr_layer_bwd_core_(&RocmNet n, &RocmLayer L, struct RocmBuf x, unsign
         unsigned long co = L.outC / G;
         unsigned long gi = 0UL;
         if (k == ROCM_LAYER_CONV) {
+            // dz to channel-major cm; dW = dz col^T; dcol = W^T dz; col2im to NCHW dx
             unsigned long K = ci * kk;
+            if (!nr_swap01_(L.dh, L.cm, B, L.outC, P)) return 0;
             while (gi < G) {
-                if (!nr_gemm_(nr_at_(L.dh, gi * co * N, co * N), 0, nr_at_(L.col, gi * K * N, K * N), 1,
+                if (!nr_gemm_(nr_at_(L.cm, gi * co * N, co * N), 0, nr_at_(L.col, gi * K * N, K * N), 1,
                               nr_at_(L.gw, gi * co * K, co * K), co, K, N)) return 0;
                 gi = gi + 1UL;
             }
             if (!needDx) return 1;
             gi = 0UL;
             while (gi < G) {
-                if (!rocm_gemm(nr_at_(wt, gi * co * K, co * K), 1, nr_at_(L.dh, gi * co * N, co * N), 0,
+                if (!rocm_gemm(nr_at_(wt, gi * co * K, co * K), 1, nr_at_(L.cm, gi * co * N, co * N), 0,
                                nr_at_(L.col, gi * K * N, K * N), K, N, co)) return 0;
                 gi = gi + 1UL;
             }
             return nr_col2im_(L.col, nr_none_(), dx, nr_none_(), ACT_NONE, L.inC, L.inH, L.inW, L.outH, L.outW, g, B);
         }
+        // dcol = im2col(dz); dW = x_cm dcol^T (cm still holds the input); dx_cm = W dcol -> NCHW
         unsigned long KT = co * kk;
         unsigned long Nin = B * Pin;
         if (!nr_im2col_(L.dh, L.col, L.outC, L.outH, L.outW, L.inH, L.inW, g, B)) return 0;
         while (gi < G) {
-            if (!nr_gemm_(nr_at_(x, gi * ci * Nin, ci * Nin), 0, nr_at_(L.col, gi * KT * Nin, KT * Nin), 1,
+            if (!nr_gemm_(nr_at_(L.cm, gi * ci * Nin, ci * Nin), 0, nr_at_(L.col, gi * KT * Nin, KT * Nin), 1,
                           nr_at_(L.gw, gi * ci * KT, ci * KT), ci, KT, Nin)) return 0;
             gi = gi + 1UL;
         }
@@ -2995,19 +3487,22 @@ static int nr_layer_bwd_core_(&RocmNet n, &RocmLayer L, struct RocmBuf x, unsign
         gi = 0UL;
         while (gi < G) {
             if (!rocm_gemm(nr_at_(wt, gi * ci * KT, ci * KT), 0, nr_at_(L.col, gi * KT * Nin, KT * Nin), 0,
-                           nr_at_(dx, gi * ci * Nin, ci * Nin), ci, Nin, KT)) return 0;
+                           nr_at_(L.cm, gi * ci * Nin, ci * Nin), ci, Nin, KT)) return 0;
             gi = gi + 1UL;
         }
-        return 1;
+        return nr_swap01_(L.cm, dx, L.inC, B, Pin);
+    }
+    if (k == ROCM_LAYER_BATCHNORM) {
+        // the activation's gradient is applied inside bn_grads / bn_apply
+        unsigned long S = n.segments == 0UL ? 1UL : n.segments;
+        struct RocmBuf dst = needDx ? dx : L.dh;   // in place is safe: each value is read before it is written
+        struct NrBnArgs_ a = nr_bn_args_(n, L, x, L.dh, nr_none_(), dst, B, S);
+        if (!nr_bn_launch_(NR_BN_GRADS, a, 0, nr_bn_slices_(L, B, S))) return 0;
+        if (S > 1UL && !nr_bn_launch_(NR_BN_FINISH, a, 1, 1UL)) return 0;
+        return nr_bn_launch_(NR_BN_APPLY, a, 1, 1UL);
     }
     if (!nr_act_ew_(L.dh, src, L.outC * B * P, L.act)) return 0;
     if (k >= ROCM_LAYER_SAVE) return nr_skip_bwd_(n, L, x, B, needDx, dx);
-    if (k == ROCM_LAYER_BATCHNORM) {
-        unsigned long S = n.segments == 0UL ? 1UL : n.segments;
-        struct RocmBuf dst = needDx ? dx : L.dh;   // in place is safe: each value is read before it is written
-        return nr_bn_sums_(L, x, L.dh, B, S, 2) && nr_bn_finish_(L, S, 1) &&
-               nr_bn_apply_(L, x, L.dh, nr_none_(), dst, B, S, 1, n.training);
-    }
     if (k == ROCM_LAYER_GROUPNORM) {
         unsafe {
             void* px = (void*)x.dev; void* pd = (void*)L.dh.dev; void* po = (void*)dx.dev; void* pg = (void*)L.w.dev;
@@ -3033,7 +3528,7 @@ static int nr_layer_bwd_core_(&RocmNet n, &RocmLayer L, struct RocmBuf x, unsign
     if (k == ROCM_LAYER_GLOBAL_AVGPOOL || k == ROCM_LAYER_GLOBAL_MAXPOOL)
         return nr_gpool_bwd_(L.dh, L.stats, dx, planes, Pin, k == ROCM_LAYER_GLOBAL_MAXPOOL ? 0 : 1);
     if (k == ROCM_LAYER_UPSAMPLE) return nr_upsample_(1, L.dh, nr_none_(), dx, planes, L.inH, L.inW, L.factor, ACT_NONE);
-    return nr_reshape_(L.dh, dx, B, L.outC, P, L.inC, Pin);   // reshape
+    return nr_copy_(L.dh, dx, L.outC * B * P);   // reshape
 }
 
 static int nr_layer_bwd_(&RocmNet n, &RocmLayer L, struct RocmBuf x, unsigned long B, int needDx, struct RocmBuf dx) {
@@ -3041,65 +3536,103 @@ static int nr_layer_bwd_(&RocmNet n, &RocmLayer L, struct RocmBuf x, unsigned lo
     return !L.spectral || nr_sn_backward_(L);
 }
 
-// The producer of layer i's input: (C, P, channel-major).
-static void nr_producer_(const &RocmNet n, unsigned long i, &unsigned long C, &unsigned long P, &int cm) {
-    if (i == 0UL) { *C = n.inC; *P = n.inH * n.inW; *cm = 0; return; }
-    &RocmLayer prev = n.layers.at(i - 1UL);
-    *C = prev.outC; *P = prev.outH * prev.outW; *cm = nr_is_cm_(prev);
+// A 16-bit net's weights rounded for this pass (spectral ones in their layer).
+static int nr_round_weights_(&RocmNet n) {
+    unsigned long i = 0UL;
+    while (i < n.layers.length()) {
+        &RocmLayer L = n.layers.at(i);
+        if (nr_has_wh_(L) && !L.spectral && !nr_cvt_(1, L.w, L.wh, L.w.len, nr_none_(), 0)) return 0;
+        i = i + 1UL;
+    }
+    return 1;
 }
 
-// Converts layer i's input from the producer's layout into the layer's
-// (toLayer 1), or a gradient back (toLayer 0).
-static int nr_convert_(&RocmNet n, unsigned long i, struct RocmBuf src, struct RocmBuf dst, unsigned long B, int toLayer) {
-    &RocmLayer L = n.layers.at(i);
-    unsigned long pc = 0UL; unsigned long pp = 0UL; int pcm = 0;
-    nr_producer_(n, i, &pc, &pp, &pcm);
-    unsigned long P = L.inH * L.inW;
-    if (L.convIn == NR_CV_TO_CM) return toLayer ? nr_swap01_(src, dst, B, L.inC, P) : nr_swap01_(src, dst, L.inC, B, P);
-    if (L.convIn == NR_CV_TO_ROWS) return toLayer ? nr_swap01_(src, dst, pc, B, pp) : nr_swap01_(src, dst, B, pc, pp);
-    return toLayer ? nr_reshape_(src, dst, B, pc, pp, L.inC, P) : nr_reshape_(src, dst, B, L.inC, P, pc, pp);
+// A new fp32 convolution shape (MIOpen plan 'plan'): its forward and
+// backward timed on both engines (best of 3 after one run each), and
+// MIOpen dropped for it when the im2col engine is faster (small
+// convolutions, where MIOpen's cost per call dominates). The scratch the
+// im2col engine needs is freed again when MIOpen wins.
+static void nr_engine_pick_(&RocmNet n, &RocmLayer L, struct RocmBuf x, unsigned long B, int plan) {
+    if (!nr_conv_scratch_(n, L)) return;
+    double best[2];
+    int e = 0;
+    while (e < 2) {
+        g_mio_engine = e == 0 ? ROCM_CONV_AUTO : ROCM_CONV_IM2COL;
+        best[e] = 1.0e30;
+        int r = 0;
+        while (r < 4) {
+            rocm_sync();
+            long long t0 = time_mono_ns();
+            int ok = nr_layer_fwd_(n, L, x, B) && nr_layer_bwd_core_(n, L, x, B, 1, g_mio_tmp);
+            ok = rocm_sync() && ok;
+            double t = (double)(time_mono_ns() - t0);
+            if (ok && r > 0 && t < best[e]) best[e] = t;
+            r = r + 1;
+        }
+        e = e + 1;
+    }
+    g_mio_engine = ROCM_CONV_AUTO;
+    // (a margin keeps timing noise from moving a shape off MIOpen)
+    if (best[1] < (double)0.9 * best[0]) {
+        g_mio_good[plan] = 0;
+        nr_layer_fwd_(n, L, x, B);   // the scratch the backward pass reads (the timed one overwrote it)
+    } else {
+        rocm_free(&L.col);
+        rocm_free(&L.cm);
+    }
 }
 
-static int nr_out_rows_(const &RocmNet n) { return n.out.dev != 0UL; }
+static int nr_forward_(&RocmNet n, struct RocmBuf x, unsigned long batch) {
+    struct RocmBuf cur = x;
+    if (n.precision != 0) {
+        if (!nr_cvt_(1, x, n.xh, batch * rocm_net_in_dim(n), nr_none_(), 0) || !nr_round_weights_(n)) return 0;
+        cur = n.xh;
+    }
+    unsigned long c = n.layers.length();
+    unsigned long i = 0UL;
+    while (i < c) {
+        &RocmLayer L = n.layers.at(i);
+        g_mio_fresh = -1;
+        if (!nr_layer_fwd_(n, L, cur, batch)) return 0;
+        if (g_mio_fresh >= 0 && n.precision == 0 && !L.spectral &&
+            (L.kind == ROCM_LAYER_CONV || L.kind == ROCM_LAYER_CONVT)) nr_engine_pick_(n, L, cur, batch, g_mio_fresh);
+        cur = L.h;
+        i = i + 1UL;
+    }
+    return n.precision == 0 || nr_cvt_(0, cur, n.out32, batch * rocm_net_out_dim(n), nr_none_(), 0);
+}
 
 struct RocmBuf rocm_net_forward(&RocmNet n, struct RocmBuf x, unsigned long batch) {
     unsigned long c = n.layers.length();
     if (!n.ok || c == 0UL || batch == 0UL || batch > n.maxBatch || !nr_fits_(x, batch * rocm_net_in_dim(n)))
         return nr_none_();
-    struct RocmBuf cur = x;
-    unsigned long i = 0UL;
-    while (i < c) {
-        &RocmLayer L = n.layers.at(i);
-        if (L.convIn != NR_CV_NONE) {
-            if (!nr_convert_(n, i, cur, L.xin, batch, 1)) return nr_none_();
-            cur = L.xin;
-        }
-        if (!nr_layer_fwd_(n, L, cur, batch)) return nr_none_();
-        cur = L.h;
-        i = i + 1UL;
-    }
+    g_nr_prec = n.precision;
+    int ok = nr_forward_(n, x, batch);
+    g_nr_prec = 0;
+    if (!ok) return nr_none_();
     &RocmLayer last = n.layers.at(c - 1UL);
-    unsigned long outN = batch * nr_out_size_(last);
-    if (nr_out_rows_(n)) {
-        if (!nr_swap01_(last.h, n.out, last.outC, batch, last.outH * last.outW)) return nr_none_();
-        return nr_view_(n.out, outN);
-    }
-    return nr_view_(last.h, outN);
+    if (n.precision != 0) return nr_view_(n.out32, batch * nr_out_size_(last));
+    return nr_view_(last.h, batch * nr_out_size_(last));
 }
 
 struct RocmBuf rocm_net_grad_output(const &RocmNet n) {
     unsigned long c = n.layers.length();
     if (c == 0UL) return nr_none_();
-    if (nr_out_rows_(n)) return n.dout;
+    if (n.precision != 0) return n.dout32;
     return n.layers.at(c - 1UL).dh;
 }
 
-int rocm_net_backward(&RocmNet n, struct RocmBuf x, unsigned long batch, struct RocmBuf dx) {
+static int nr_backward_(&RocmNet n, struct RocmBuf x, unsigned long batch, struct RocmBuf dx) {
     unsigned long c = n.layers.length();
-    if (!n.ok || c == 0UL || batch == 0UL || batch > n.maxBatch) return 0;
-    if (nr_out_rows_(n)) {
+    // fp16: the loss scale in the gradients from here back
+    struct RocmBuf ls = n.precision == ROCM_FP16 ? n.scale : nr_none_();
+    struct RocmBuf in0 = x;
+    struct RocmBuf dx0 = dx;
+    if (n.precision != 0) {
         &RocmLayer last = n.layers.at(c - 1UL);
-        if (!nr_swap01_(n.dout, last.dh, batch, last.outC, last.outH * last.outW)) return 0;
+        if (!nr_cvt_(1, n.dout32, last.dh, batch * nr_out_size_(last), ls, 0)) return 0;
+        in0 = n.xh;
+        if (dx.dev != 0UL) dx0 = n.dxh;
     }
     // SAVE layers: no skip gradient written yet (flag)
     unsigned long i = 0UL;
@@ -3112,16 +3645,63 @@ int rocm_net_backward(&RocmNet n, struct RocmBuf x, unsigned long batch, struct 
     while (i > 0UL) {
         i = i - 1UL;
         &RocmLayer L = n.layers.at(i);
-        int conv = L.convIn != NR_CV_NONE;
-        struct RocmBuf in = conv ? L.xin : (i > 0UL ? n.layers.at(i - 1UL).h : x);
-        struct RocmBuf target = i > 0UL ? n.layers.at(i - 1UL).dh : dx;
+        struct RocmBuf in = i > 0UL ? n.layers.at(i - 1UL).h : in0;
+        struct RocmBuf target = i > 0UL ? n.layers.at(i - 1UL).dh : dx0;
         int needDx = i > 0UL || dx.dev != 0UL;
         if (needDx && i == 0UL && !nr_fits_(dx, batch * nr_in_size_(L))) return 0;
-        struct RocmBuf dst = conv ? L.xin : target;
-        if (!nr_layer_bwd_(n, L, in, batch, needDx, dst)) return 0;
-        if (needDx && conv && !nr_convert_(n, i, L.xin, target, batch, 0)) return 0;
+        if (!nr_layer_bwd_(n, L, in, batch, needDx, target)) return 0;
     }
-    return 1;
+    return n.precision == 0 || dx.dev == 0UL || nr_cvt_(0, n.dxh, dx, batch * rocm_net_in_dim(n), ls, 1);
+}
+
+int rocm_net_backward(&RocmNet n, struct RocmBuf x, unsigned long batch, struct RocmBuf dx) {
+    unsigned long c = n.layers.length();
+    if (!n.ok || c == 0UL || batch == 0UL || batch > n.maxBatch) return 0;
+    g_nr_prec = n.precision;
+    int ok = nr_backward_(n, x, batch, dx);
+    g_nr_prec = 0;
+    return ok;
+}
+
+int rocm_net_set_loss_scale(&RocmNet n, float scale) {
+    if (n.scale.dev == 0UL || !(scale > (float)0.0)) return 0;
+    float v[2];
+    v[0] = scale; v[1] = (float)0.0;
+    return nr_write_(n.scale, &v[0], 2UL);
+}
+
+float rocm_net_loss_scale(const &RocmNet n) {
+    if (n.precision != ROCM_FP16 || n.scale.dev == 0UL) return (float)1.0;
+    float v[2];
+    v[0] = (float)1.0;
+    if (!rocm_read(n.scale, &v[0], 2UL)) return (float)0.0;
+    return v[0];
+}
+
+int rocm_net_set_precision(&RocmNet n, int dtype) {
+    if (!n.ok || n.layers.length() == 0UL || (dtype != 0 && dtype != ROCM_FP16 && dtype != ROCM_BF16)) return 0;
+    if (dtype == 0) { n.precision = 0; return 1; }
+    if (!nr_ensure_prec_(dtype)) return 0;
+    unsigned long i = 0UL;
+    while (i < n.layers.length()) {
+        &RocmLayer L = n.layers.at(i);
+        int k = L.kind;
+        int conv = k == ROCM_LAYER_CONV || k == ROCM_LAYER_CONVT || (k == ROCM_LAYER_ADD && L.flag);
+        if (conv && !nr_mio_on_()) return 0;
+        if (nr_has_wh_(L) && L.wh.dev == 0UL && !nr_alloc_(&L.wh, (L.w.len + 1UL) / 2UL)) return 0;
+        i = i + 1UL;
+    }
+    unsigned long B = n.maxBatch;
+    unsigned long in = rocm_net_in_dim(n);
+    unsigned long out = rocm_net_out_dim(n);
+    if (n.scale.dev == 0UL &&
+        (!nr_alloc_(&n.scale, 2UL) || !nr_alloc_(&n.xh, (B * in + 1UL) / 2UL) || !nr_alloc_(&n.dxh, (B * in + 1UL) / 2UL) ||
+         !nr_alloc_(&n.out32, B * out) || !nr_alloc_(&n.dout32, B * out))) {
+        n.ok = 0;
+        return 0;
+    }
+    n.precision = dtype;
+    return rocm_net_set_loss_scale(n, dtype == ROCM_FP16 ? (float)65536.0 : (float)1.0);
 }
 
 // ── Training steps ───────────────────────────────────────────────────────────
@@ -3151,7 +3731,7 @@ struct NrNetTab_ {
 // the largest padded weight in LDS.
 static int nr_small_(const &RocmNet n, unsigned long rows) {
     unsigned long c = n.layers.length();
-    if (c == 0UL || c > 8UL) return 0;
+    if (c == 0UL || c > 8UL || n.precision != 0) return 0;
     unsigned long macs = 0UL;
     unsigned long floats = rows * n.layers.at(0UL).inC;
     unsigned long maxO = 0UL;
@@ -3261,6 +3841,7 @@ struct RocmOptimizer rocm_optimizer_new(int kind, float lr) {
     o.clipNorm = (float)0.0;
     o.clampWeights = (float)0.0;
     o.t = 0UL;
+    o.lossScale = nr_none_();
     o.ok = nr_ensure_();
     o.state = o.ok ? rocm_alloc(13UL) : nr_none_();
     if (o.state.dev == 0UL) { o.ok = 0; return o; }
@@ -3303,6 +3884,7 @@ int rocm_optimizer_add(&RocmOptimizer o, struct RocmBuf w, struct RocmBuf g) {
 
 int rocm_optimizer_add_net(&RocmOptimizer o, const &RocmNet n) {
     if (!n.ok) { o.ok = 0; return 0; }
+    if (n.precision == ROCM_FP16) o.lossScale = n.scale;
     unsigned long i = 0UL;
     while (i < n.layers.length()) {
         &RocmLayer L = n.layers.at(i);
@@ -3353,9 +3935,11 @@ static int nr_opt_launch_(const &RocmOptimizer o, int kernel, int clip) {
             int cl = clip;
             int fin = base + c == count ? 1 : 0;
             float cw = o.clampWeights;
-            void* p[6];
+            void* pl = (void*)o.lossScale.dev;
+            void* p[7];
             p[0] = (void*)&t; p[1] = (void*)&ps; p[2] = (void*)&kind; p[3] = (void*)&cl; p[4] = (void*)&fin;
-            p[5] = (void*)&cw;
+            p[5] = (void*)&cw; p[6] = (void*)&pl;
+            if (kernel == NR_SUMSQ) p[2] = (void*)&pl;
             if (!nr_launch_grid_(kernel, blocks, c, (&void)&p[0])) return 0;
         }
         base = base + c;
@@ -3368,7 +3952,7 @@ int rocm_optimizer_step(&RocmOptimizer o) {
     if (!nr_capturing_() && !rocm_optimizer_sync(o)) return 0;
     if (o.w.length() == 0UL) return 1;
     int clip = o.clipNorm > (float)0.0 ? 1 : 0;
-    if (clip && !nr_opt_launch_(o, NR_SUMSQ, clip)) return 0;
+    if ((clip || o.lossScale.dev != 0UL) && !nr_opt_launch_(o, NR_SUMSQ, clip)) return 0;
     if (!nr_opt_launch_(o, NR_OPT, clip)) return 0;
     o.t = o.t + 1UL;
     return 1;
