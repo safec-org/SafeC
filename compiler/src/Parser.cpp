@@ -635,6 +635,19 @@ TypePtr Parser::parseTypeDeclarator(TypePtr base, bool baseVolatile) {
 }
 
 // Parse <T: Constraint1 + Constraint2, U, ...>
+// A trait name in a bound or supertrait list: 'Map' or 'std::Map'. Traits
+// are looked up by their plain name, so the namespace is dropped.
+std::string Parser::parseTraitName() {
+    std::string name = cur().text;
+    consume();
+    while (cur().is(TK::ColonColon) && peek().is(TK::Ident)) {
+        consume();
+        name = cur().text;
+        consume();
+    }
+    return name;
+}
+
 std::vector<GenericParam> Parser::parseGenericParams() {
     std::vector<GenericParam> params;
     expect(TK::Lt, "expected '<' after 'generic'");
@@ -657,8 +670,7 @@ std::vector<GenericParam> Parser::parseGenericParams() {
                     diag_.error(cur().loc, "expected constraint name");
                     break;
                 }
-                p.constraints.push_back(cur().text);
-                consume();
+                p.constraints.push_back(parseTraitName());
             } while (match(TK::Plus));
         }
         params.push_back(std::move(p));
@@ -1548,7 +1560,7 @@ std::unique_ptr<TraitDecl> Parser::parseTraitDecl() {
     // ': A + B' — supertraits, every one of which the trait requires too.
     if (match(TK::Colon)) {
         do {
-            if (cur().is(TK::Ident)) { td->supertraits.push_back(cur().text); consume(); }
+            if (cur().is(TK::Ident)) { td->supertraits.push_back(parseTraitName()); }
             else { diag_.error(cur().loc, "expected supertrait name after ':' or '+'"); break; }
         } while (match(TK::Plus));
     }

@@ -133,6 +133,7 @@ private:
     int     mallocDeferCounter_ = 0;
 
     std::vector<GenericParam> parseGenericParams(); // <T: Constraint, ...>
+    std::string parseTraitName();                   // Name or ns::Name
 
     // ── GNU/Clang __attribute__((...)) tolerance ─────────────────────────────
     // SafeC has its own native attribute keywords (inline, noreturn, pure,
