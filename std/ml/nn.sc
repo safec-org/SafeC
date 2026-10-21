@@ -735,6 +735,16 @@ struct Optimizer optimizer_new(int kind, float lr) {
     return o;
 }
 
+struct Optimizer optimizer_from(const &Optimizer o) {
+    struct Optimizer d = optimizer_new(o.kind, o.lr);
+    d.momentum = o.momentum;
+    d.beta1 = o.beta1;
+    d.beta2 = o.beta2;
+    d.eps = o.eps;
+    d.weightDecay = o.weightDecay;
+    return d;
+}
+
 void optimizer_add(&Optimizer o, &Tensor param) {
     ?&TensorArena cur = nn_heap_begin_();
     unsigned long n;
