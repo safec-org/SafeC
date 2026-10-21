@@ -37,9 +37,13 @@ extern void* memcpy(void* dst, const void* src, size_t n);
 #define ATT_LIN_CSCAN        7    // linear attention, prefix / total over the state parts
 #define ATT_LIN_HOUT         8    // linear attention, chunk outputs
 #define ATT_TF32X3           9    // flash attention, fp32 on tensor cores (3xTF32), sm_80+
-#define ATT_KINDS            9
+#define ATT_DEC_PART         10   // decode attention split partials; 10..14 = up to 1, 2, 4, 8, 16 query rows
+#define ATT_DEC_COMBINE      15   // decode attention, merge of the split partials
+#define ATT_KINDS            15
 #define ATT_DIMS             5
-#define ATT_VARIANTS         135  // ATT_KINDS * 3 dtypes * ATT_DIMS
+#define ATT_VARIANTS         225  // ATT_KINDS * 3 dtypes * ATT_DIMS
+#define ATT_DEC_ROWS         16UL // decode path: at most this many query rows per kv head
+#define ATT_DEC_SPLITS       512UL // most key splits (dec_combine holds 1024 weights)
 #define ATT_LC               64UL // linear attention chunk rows (LinChunk in the .cu)
 #define ATT_LIN_BLOCKS       512UL // lin_hstate blocks to aim for (parts x kv heads)
 
@@ -948,6 +952,207 @@ static const char* attn_kernel_source_() {
     "    }\n"
     "}\n"
     "\n"
+    "// ── Decode attention (flash-decoding): a few query rows against a long KV cache ──\n"
+    "// One block per (batch, kv head, key split): the R = (heads / kvHeads) * seqLen\n"
+    "// query rows that share a kv head read each key and value once. Scores are\n"
+    "// four threads per key (32-key tiles, q pre-scaled in shared memory), then an online\n"
+    "// softmax per row, then P V with each thread on two dims of one key group.\n"
+    "// Each split writes its unnormalized output, max and sum; dec_combine merges.\n"
+    "template <int D> struct DecCfg {\n"
+    "    static constexpr int W = D / 2;                     // threads per key group (two dims each)\n"
+    "    static constexpr int KG = D >= 256 ? 1 : 128 / W;   // key groups\n"
+    "};\n"
+    "template <int T> __device__ __forceinline__ float2 ld2(const void* p, size_t i) {\n"
+    "    if (T == 0) return __ldg((const float2*)((const float*)p + i));\n"
+    "    const unsigned w = __ldg((const unsigned*)((const unsigned short*)p + i));\n"
+    "    if (T == 1) return make_float2(h2f((unsigned short)(w & 0xffffu)), h2f((unsigned short)(w >> 16)));\n"
+    "    return make_float2(__uint_as_float(w << 16), __uint_as_float(w & 0xffff0000u));\n"
+    "}\n"
+    "// Raw 8-element loads (16 bytes of fp16/bf16, 32 of fp32) and their conversion,\n"
+    "// so a tile's keys can be fetched while the previous tile is still in use.\n"
+    "template <int T> struct Raw8 { uint4 a, b; };\n"
+    "template <int T> __device__ __forceinline__ Raw8<T> ldraw8(const void* p, size_t i) {\n"
+    "    Raw8<T> r;\n"
+    "    if (T == 0) { r.a = __ldg((const uint4*)((const float*)p + i)); r.b = __ldg((const uint4*)((const float*)p + i + 4)); }\n"
+    "    else r.a = __ldg((const uint4*)((const unsigned short*)p + i));\n"
+    "    return r;\n"
+    "}\n"
+    "template <int T> __device__ __forceinline__ void cvt8(const Raw8<T>& r, float* f) {\n"
+    "    if (T == 0) {\n"
+    "        f[0] = __uint_as_float(r.a.x); f[1] = __uint_as_float(r.a.y); f[2] = __uint_as_float(r.a.z); f[3] = __uint_as_float(r.a.w);\n"
+    "        f[4] = __uint_as_float(r.b.x); f[5] = __uint_as_float(r.b.y); f[6] = __uint_as_float(r.b.z); f[7] = __uint_as_float(r.b.w);\n"
+    "    } else {\n"
+    "        const unsigned w[4] = {r.a.x, r.a.y, r.a.z, r.a.w};\n"
+    "#pragma unroll\n"
+    "        for (int e = 0; e < 4; ++e) {\n"
+    "            f[2 * e] = T == 1 ? h2f((unsigned short)(w[e] & 0xffffu)) : __uint_as_float(w[e] << 16);\n"
+    "            f[2 * e + 1] = T == 1 ? h2f((unsigned short)(w[e] >> 16)) : __uint_as_float(w[e] & 0xffff0000u);\n"
+    "        }\n"
+    "    }\n"
+    "}\n"
+    "template <int T, int D, int RM> __device__ void dec_part(const void* q, const void* k, const void* v, float* Op, float* Ml,\n"
+    "                                                       int Sq, int Sk, int H, int Hkv, float sl2, int causal, int win,\n"
+    "                                                       int chunk) {\n"
+    "    typedef DecCfg<D> C;\n"
+    "    __shared__ __align__(16) float qs[RM][D];\n"
+    "    __shared__ float ps[RM][32];\n"
+    "    __shared__ float red[C::KG > 1 ? RM * C::KG * D : 1];\n"
+    "    __shared__ float sm_m[RM], sm_l[RM], sm_a[RM];\n"
+    "    const int tid = threadIdx.x, ns = gridDim.x, split = blockIdx.x, bk = blockIdx.y;\n"
+    "    const int b = bk / Hkv, kh = bk - b * Hkv, G = H / Hkv, R = G * Sq;\n"
+    "    for (int e = tid; e < R * D; e += 128) {\n"
+    "        const int r = e / D, d = e - r * D, g = r / Sq, i = r - g * Sq;\n"
+    "        qs[r][d] = ldv<T>(q, (((size_t)b * H + kh * G + g) * Sq + i) * D + d) * sl2;\n"
+    "    }\n"
+    "    if (tid < RM) { sm_m[tid] = NEG_INF; sm_l[tid] = 0.0f; }\n"
+    "    const size_t kvoff = (size_t)bk * Sk * D;\n"
+    "    const int j0 = split * chunk, j1 = min(Sk, j0 + chunk);\n"
+    "    const int jk = tid >> 2, pp = tid & 3;                 // scores: four threads per key\n"
+    "    const int kg = tid / C::W, d0 = (tid - kg * C::W) * 2;   // P V: two dims of one key group\n"
+    "    const bool pv = kg < C::KG;\n"
+    "    const int warp = tid >> 5, lane = tid & 31;\n"
+    "    float acc[RM][2];\n"
+    "#pragma unroll\n"
+    "    for (int r = 0; r < RM; ++r) { acc[r][0] = 0.0f; acc[r][1] = 0.0f; }\n"
+    "    __syncthreads();\n"
+    "    // 8-dim slices round-robin over the four threads: the q reads hit four\n"
+    "    // consecutive 32-byte blocks (no bank conflicts), the k reads 64 bytes.\n"
+    "    // The next tile's keys are loaded right after this tile's scores.\n"
+    "    constexpr int NC = D / 32;\n"
+    "    Raw8<T> kr[NC];\n"
+    "    if (j0 + jk < j1)\n"
+    "#pragma unroll\n"
+    "        for (int c = 0; c < NC; ++c) kr[c] = ldraw8<T>(k, kvoff + (size_t)(j0 + jk) * D + pp * 8 + c * 32);\n"
+    "    for (int t0 = j0; t0 < j1; t0 += 32) {\n"
+    "        const int j = t0 + jk;\n"
+    "        float s[RM];\n"
+    "#pragma unroll\n"
+    "        for (int r = 0; r < RM; ++r) s[r] = 0.0f;\n"
+    "        if (j < j1) {\n"
+    "#pragma unroll\n"
+    "            for (int cc = 0; cc < NC; ++cc) {\n"
+    "                const int c = pp * 8 + cc * 32;\n"
+    "                float kf[8];\n"
+    "                cvt8<T>(kr[cc], kf);\n"
+    "#pragma unroll\n"
+    "                for (int r = 0; r < RM; ++r)\n"
+    "                    if (r < R) {\n"
+    "                        const float4 a = *(const float4*)&qs[r][c], e = *(const float4*)&qs[r][c + 4];\n"
+    "                        s[r] += a.x * kf[0] + a.y * kf[1] + a.z * kf[2] + a.w * kf[3] +\n"
+    "                                e.x * kf[4] + e.y * kf[5] + e.z * kf[6] + e.w * kf[7];\n"
+    "                    }\n"
+    "            }\n"
+    "        }\n"
+    "        if (j + 32 < j1)\n"
+    "#pragma unroll\n"
+    "            for (int c = 0; c < NC; ++c) kr[c] = ldraw8<T>(k, kvoff + (size_t)(j + 32) * D + pp * 8 + c * 32);\n"
+    "#pragma unroll\n"
+    "        for (int r = 0; r < RM; ++r) {\n"
+    "            s[r] += __shfl_xor_sync(FULL, s[r], 1);\n"
+    "            s[r] += __shfl_xor_sync(FULL, s[r], 2);\n"
+    "        }\n"
+    "        if (pp == 0)\n"
+    "#pragma unroll\n"
+    "            for (int r = 0; r < RM; ++r)\n"
+    "                if (r < R) {\n"
+    "                    const int pos = r % Sq + Sk - Sq;\n"
+    "                    const bool ok = j < j1 && (!causal || j <= pos) && (win <= 0 || j > pos - win);\n"
+    "                    ps[r][jk] = ok ? s[r] : NEG_INF;\n"
+    "                }\n"
+    "        __syncthreads();\n"
+    "        for (int r = warp; r < R; r += 4) {\n"
+    "            float x = ps[r][lane];\n"
+    "            float mt = x;\n"
+    "            for (int off = 16; off > 0; off >>= 1) mt = fmaxf(mt, __shfl_xor_sync(FULL, mt, off));\n"
+    "            const float mo = sm_m[r], mn = fmaxf(mo, mt);\n"
+    "            float a = 1.0f;\n"
+    "            if (mn != NEG_INF) { a = exp2f(mo - mn); x = exp2f(x - mn); } else x = 0.0f;\n"
+    "            ps[r][lane] = x;\n"
+    "            float sum = x;\n"
+    "            for (int off = 16; off > 0; off >>= 1) sum += __shfl_xor_sync(FULL, sum, off);\n"
+    "            if (lane == 0) { sm_m[r] = mn; sm_l[r] = sm_l[r] * a + sum; sm_a[r] = a; }\n"
+    "        }\n"
+    "        __syncthreads();\n"
+    "        if (pv) {\n"
+    "            const int tl = min(32, j1 - t0);\n"
+    "#pragma unroll\n"
+    "            for (int r = 0; r < RM; ++r) if (r < R) { acc[r][0] *= sm_a[r]; acc[r][1] *= sm_a[r]; }\n"
+    "#pragma unroll 4\n"
+    "            for (int jj = kg; jj < tl; jj += C::KG) {\n"
+    "                const float2 vv = ld2<T>(v, kvoff + (size_t)(t0 + jj) * D + d0);\n"
+    "#pragma unroll\n"
+    "                for (int r = 0; r < RM; ++r)\n"
+    "                    if (r < R) { const float p = ps[r][jj]; acc[r][0] += p * vv.x; acc[r][1] += p * vv.y; }\n"
+    "            }\n"
+    "        }\n"
+    "        __syncthreads();\n"
+    "    }\n"
+    "    const size_t base = (size_t)bk * R;\n"
+    "    if (C::KG > 1) {\n"
+    "        if (pv)\n"
+    "#pragma unroll\n"
+    "            for (int r = 0; r < RM; ++r)\n"
+    "                if (r < R) { red[(kg * RM + r) * D + d0] = acc[r][0]; red[(kg * RM + r) * D + d0 + 1] = acc[r][1]; }\n"
+    "        __syncthreads();\n"
+    "        for (int e = tid; e < R * D; e += 128) {\n"
+    "            const int r = e / D, d = e - r * D;\n"
+    "            float t = 0.0f;\n"
+    "#pragma unroll\n"
+    "            for (int g = 0; g < C::KG; ++g) t += red[(g * RM + r) * D + d];\n"
+    "            Op[((base + r) * ns + split) * D + d] = t;\n"
+    "        }\n"
+    "    } else if (pv) {\n"
+    "#pragma unroll\n"
+    "        for (int r = 0; r < RM; ++r)\n"
+    "            if (r < R) {\n"
+    "                Op[((base + r) * ns + split) * D + d0] = acc[r][0];\n"
+    "                Op[((base + r) * ns + split) * D + d0 + 1] = acc[r][1];\n"
+    "            }\n"
+    "    }\n"
+    "    if (tid < R) { Ml[((base + tid) * ns + split) * 2] = sm_m[tid]; Ml[((base + tid) * ns + split) * 2 + 1] = sm_l[tid]; }\n"
+    "}\n"
+    "// One block per (query row, 32 dims): out = sum_s 2^(m_s - M) O_s / sum_s 2^(m_s - M) l_s\n"
+    "// (0 if no key is visible); lanes on dims, the four warps on every fourth split.\n"
+    "template <int T, int D> __device__ void dec_combine(const float* Op, const float* Ml, void* o, int Sq, int H, int Hkv, int ns) {\n"
+    "    __shared__ float wts[1024];\n"
+    "    __shared__ float rs[4];\n"
+    "    __shared__ float part[4][32];\n"
+    "    const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, row = blockIdx.x, d = blockIdx.y * 32 + lane;\n"
+    "    const int G = H / Hkv, R = G * Sq, bk = row / R, r = row - bk * R, b = bk / Hkv, kh = bk - b * Hkv;\n"
+    "    const int g = r / Sq, i = r - g * Sq;\n"
+    "    const float* ml = Ml + (size_t)row * ns * 2;\n"
+    "    float m = NEG_INF;\n"
+    "    for (int s = tid; s < ns; s += 128) m = fmaxf(m, ml[2 * s]);\n"
+    "    for (int off = 16; off > 0; off >>= 1) m = fmaxf(m, __shfl_xor_sync(FULL, m, off));\n"
+    "    if (lane == 0) rs[warp] = m;\n"
+    "    __syncthreads();\n"
+    "    m = fmaxf(fmaxf(rs[0], rs[1]), fmaxf(rs[2], rs[3]));\n"
+    "    __syncthreads();\n"
+    "    float l = 0.0f;\n"
+    "    for (int s = tid; s < ns; s += 128) {\n"
+    "        const float ms = ml[2 * s];\n"
+    "        const float w = ms == NEG_INF ? 0.0f : exp2f(ms - m);\n"
+    "        wts[s] = w;\n"
+    "        l += w * ml[2 * s + 1];\n"
+    "    }\n"
+    "    for (int off = 16; off > 0; off >>= 1) l += __shfl_xor_sync(FULL, l, off);\n"
+    "    if (lane == 0) rs[warp] = l;\n"
+    "    __syncthreads();\n"
+    "    l = (rs[0] + rs[1]) + (rs[2] + rs[3]);\n"
+    "    float t = 0.0f;\n"
+    "    if (d < D) {\n"
+    "        const float* op = Op + (size_t)row * ns * D + d;\n"
+    "#pragma unroll 8\n"
+    "        for (int s = warp; s < ns; s += 4) t += wts[s] * op[(size_t)s * D];\n"
+    "    }\n"
+    "    part[warp][lane] = t;\n"
+    "    __syncthreads();\n"
+    "    if (warp == 0 && d < D) {\n"
+    "        t = (part[0][lane] + part[1][lane]) + (part[2][lane] + part[3][lane]);\n"
+    "        stv<T>(o, (((size_t)b * H + kh * G + g) * Sq + i) * D + d, l > 0.0f ? t / l : 0.0f);\n"
+    "    }\n"
+    "}\n"
+    "\n"
     "// ── Entry point for the variant this source was compiled as ─────────────────\n"
     "#if VK == 1\n"
     "extern \"C\" __global__ __launch_bounds__(128) void attn_entry(const void* q, const void* k, const void* v, void* o,\n"
@@ -998,6 +1203,17 @@ static const char* attn_kernel_source_() {
     "#if __CUDA_ARCH__ >= 800\n"
     "    flash_tf32x3<VD>((const float*)q, (const float*)k, (const float*)v, (float*)o, Sq, Sk, H, Hkv, sl2, causal, win);\n"
     "#endif\n"
+    "}\n"
+    "#elif VK >= 10 && VK <= 14\n"
+    "extern \"C\" __global__ __launch_bounds__(128) void attn_entry(const void* q, const void* k, const void* v, float* Op, float* Ml,\n"
+    "                                                            int Sq, int Sk, int H, int Hkv, float sl2, int causal, int win,\n"
+    "                                                            int chunk) {\n"
+    "    dec_part<VT, VD, 1 << (VK - 10)>(q, k, v, Op, Ml, Sq, Sk, H, Hkv, sl2, causal, win, chunk);\n"
+    "}\n"
+    "#elif VK == 15\n"
+    "extern \"C\" __global__ __launch_bounds__(128) void attn_entry(const float* Op, const float* Ml, void* o, int Sq, int H, int Hkv,\n"
+    "                                                            int ns) {\n"
+    "    dec_combine<VT, VD>(Op, Ml, o, Sq, H, Hkv, ns);\n"
     "}\n"
     "#endif\n";
 }
@@ -1227,6 +1443,7 @@ extern ?&void dlsym(void* handle, const char* name);
 
 static int   g_sd_state = 0;      // 0 = not tried, 1 = ready, -1 = unavailable
 static int   g_sd_enabled = 1;    // cuda_attention_use_cudnn
+static int   g_att_decode = 1;    // cuda_attention_use_decode
 static void* g_sd_handle = (void*)0;
 static fn int(void**) p_cudnnCreate;
 static fn int(void*, void*) p_cudnnSetStream;
@@ -1280,6 +1497,11 @@ static int sd_load_() {
     }
     g_sd_state = 1;
     return 1;
+}
+
+int cuda_attention_use_decode(int on) {
+    g_att_decode = on ? 1 : 0;
+    return g_att_decode;
 }
 
 int cuda_attention_use_cudnn(int on) {
@@ -1637,6 +1859,86 @@ static int sd_run_(unsigned long q, unsigned long k, unsigned long v, unsigned l
     }
 }
 
+// ── Decode attention ─────────────────────────────────────────────────────────
+// Flash-decoding for few query rows per kv head ((heads / kvHeads) * seqLen
+// <= 16, e.g. one token per step against a KV cache): the keys are split
+// over enough blocks to fill the GPU (about eight per SM, 32-key multiples),
+// each split's partial softmax goes to a workspace and a second kernel merges
+// them. cuDNN's and the tiled kernels' grids are one block per 32 / 64 query
+// rows per head, which leaves most of the GPU idle on such shapes.
+static unsigned long long g_att_dec_ws = 0ULL;
+static unsigned long g_att_dec_ws_bytes = 0UL;
+
+static int attn_decode_(unsigned long q, unsigned long k, unsigned long v, unsigned long o, int dtype,
+                        struct CudaAttnShape s, float sl2, int causal) {
+    unsigned long rows = (s.heads / s.kvHeads) * s.seqLen;
+    if (rows > ATT_DEC_ROWS) return 0;
+    if (q % 16UL != 0UL || k % 16UL != 0UL || v % 16UL != 0UL) return 0;   // 16-byte K loads
+    unsigned long bk = s.batch * s.kvHeads;
+    if (bk > 65535UL || bk * rows > 2147483647UL) return 0;
+    int kind = ATT_DEC_PART;
+    unsigned long rm = 1UL;
+    while (rm < rows) { rm = rm * 2UL; kind = kind + 1; }
+    unsigned long sms = (unsigned long)cuda_sm_count();
+    if (sms == 0UL) sms = 1UL;
+    // Splits at least 8 * rows / elementBytes keys long, so the fp32 partials
+    // stay at most a quarter of the K and V bytes they summarize.
+    unsigned long elem = dtype == 0 ? 4UL : 2UL;
+    unsigned long minChunk = (8UL * rows / elem + 31UL) / 32UL * 32UL;
+    if (minChunk < 32UL) minChunk = 32UL;
+    unsigned long ns = (sms * 8UL + bk - 1UL) / bk;
+    unsigned long most = (s.kvLen + minChunk - 1UL) / minChunk;
+    if (ns > most) ns = most;
+    if (ns > ATT_DEC_SPLITS) ns = ATT_DEC_SPLITS;
+    unsigned long chunk = (s.kvLen + ns - 1UL) / ns;
+    chunk = (chunk + 31UL) / 32UL * 32UL;
+    ns = (s.kvLen + chunk - 1UL) / chunk;
+    ?&void part = attn_kernel_(kind, dtype, s.headDim);
+    ?&void comb = attn_kernel_(ATT_DEC_COMBINE, dtype, s.headDim);
+    if (part == (void*)0 || comb == (void*)0) return 0;
+    unsigned long prow = checked_mul_size(bk * rows, ns);
+    unsigned long opBytes = checked_mul_size(prow, s.headDim * 4UL);
+    unsigned long bytes = opBytes + prow * 8UL;
+    unsafe {
+        if (bytes > g_att_dec_ws_bytes) {
+            if (g_att_dec_ws != 0ULL) {
+                cuStreamSynchronize((void*)cuda_stream_handle());
+                cuMemFree_v2(g_att_dec_ws);
+                g_att_dec_ws = 0ULL;
+                g_att_dec_ws_bytes = 0UL;
+            }
+            if (cuMemAlloc_v2(&g_att_dec_ws, bytes) != 0) { g_att_dec_ws = 0ULL; return 0; }
+            g_att_dec_ws_bytes = bytes;
+        }
+        void* pq = (void*)q;
+        void* pk = (void*)k;
+        void* pv = (void*)v;
+        void* po = (void*)o;
+        void* pop = (void*)(unsigned long)g_att_dec_ws;
+        void* pml = (void*)((unsigned long)g_att_dec_ws + opBytes);
+        int sq = (int)s.seqLen;
+        int sk = (int)s.kvLen;
+        int h = (int)s.heads;
+        int hkv = (int)s.kvHeads;
+        float l2 = sl2;
+        int c = causal ? 1 : 0;
+        int win = (int)s.window;
+        int ch = (int)chunk;
+        int nsi = (int)ns;
+        void* params[13];
+        params[0] = (void*)&pq; params[1] = (void*)&pk; params[2] = (void*)&pv; params[3] = (void*)&pop;
+        params[4] = (void*)&pml; params[5] = (void*)&sq; params[6] = (void*)&sk; params[7] = (void*)&h;
+        params[8] = (void*)&hkv; params[9] = (void*)&l2; params[10] = (void*)&c; params[11] = (void*)&win;
+        params[12] = (void*)&ch;
+        if (!attn_launch_(part, (unsigned int)ns, (unsigned int)bk, 1U, 128U, 0UL, (&void)&params[0])) return 0;
+        void* cparams[7];
+        cparams[0] = (void*)&pop; cparams[1] = (void*)&pml; cparams[2] = (void*)&po; cparams[3] = (void*)&sq;
+        cparams[4] = (void*)&h; cparams[5] = (void*)&hkv; cparams[6] = (void*)&nsi;
+        return attn_launch_(comb, (unsigned int)(bk * rows), (unsigned int)((s.headDim + 31UL) / 32UL), 1U, 128U, 0UL,
+                            (&void)&cparams[0]);
+    }
+}
+
 // ── Flash attention ──────────────────────────────────────────────────────────
 
 static int attn_flash_(unsigned long q, unsigned long k, unsigned long v, unsigned long o, int dtype,
@@ -1652,8 +1954,9 @@ static int attn_flash_(unsigned long q, unsigned long k, unsigned long v, unsign
         else if (s.headDim == 128UL) sc = (float)0.08838834764831845;
         else sc = 0.0625f;
     }
-    if (dtype != 0 && cuda_compute_capability() >= 80 && sd_run_(q, k, v, o, dtype, s, sc, causal)) return 1;
     float sl2 = sc * (float)1.4426950408889634;   // softmax in base 2
+    if (g_att_decode && attn_decode_(q, k, v, o, dtype, s, sl2, causal)) return 1;
+    if (dtype != 0 && cuda_compute_capability() >= 80 && sd_run_(q, k, v, o, dtype, s, sc, causal)) return 1;
     // Tensor cores on sm_80+ up to head dim 128: mma.sync in fp16/bf16, 3xTF32 for fp32.
     int tc = cuda_compute_capability() >= 80 && s.headDim <= 128UL;
     int kind = ATT_SIMT;

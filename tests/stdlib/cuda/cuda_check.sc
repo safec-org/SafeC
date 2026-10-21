@@ -588,6 +588,123 @@ static void check_half() {
 
 // Large host <-> device copies (the pinned-lane path), odd sizes, and the
 // ordering of a write after queued kernels that read the old contents.
+// Decode-step ops: cuda_half_gemv (both dtypes, vector and scalar paths),
+// cuda_rmsnorm (with and without weight, in place) and cuda_gelu.
+static void check_decode_ops() {
+    int dts[2];
+    dts[0] = CUDA_BF16; dts[1] = CUDA_FP16;
+    // k % 8 == 0 (16-byte loads; 2056 leaves a partial 256-wide step) and not;
+    // n picks 4, 2 and 1 warps per row on a 132-SM GPU; ki == 3 runs the
+    // 1536 case on a weight view 2 bytes in (unaligned: the scalar path).
+    unsigned long ks[4];
+    ks[0] = 1536UL; ks[1] = 2056UL; ks[2] = 100UL; ks[3] = 1536UL;
+    unsigned long ns[3];
+    ns[0] = 37UL; ns[1] = 1500UL; ns[2] = 3000UL;
+    int di = 0;
+    while (di < 2) {
+        int ki = 0;
+        while (ki < 12) {
+            unsigned long n = ns[ki / 4];
+            unsigned long k = ks[ki % 4];
+            unsigned long off = ki % 4 == 3 ? 1UL : 0UL;
+            struct Vec<float> w = seq(n * k, 0.0013f, -0.9f);
+            struct Vec<float> x = seq(k, 0.017f, -0.7f);
+            struct CudaHalfBuf dw = std::cuda_half_upload(w.at(0UL), n * k + off, dts[di]);
+            struct Vec<unsigned short> bits = std::vec_with_cap(n * k + off);
+            unsigned long z = 0UL;
+            while (z < n * k + off) { bits.push((unsigned short)0); z = z + 1UL; }
+            std::cuda_half_read(dw, bits.at(0UL), n * k + off);   // the rounded weights the GPU uses
+            struct CudaHalfBuf view = dw;
+            view.dev = dw.dev + 2UL * off;
+            view.len = n * k;
+            struct CudaBuf dx = std::cuda_upload(x.at(0UL), k);
+            struct CudaBuf dy = std::cuda_alloc(n);
+            int ok = std::cuda_half_gemv(view, dx, dy, n, k);
+            struct Vec<float> got = download(dy);
+            float err = (float)0.0;
+            float big = (float)0.0;
+            unsigned long r = 0UL;
+            while (r < n) {
+                double ref = 0.0;
+                unsigned long c = 0UL;
+                while (c < k) {
+                    float wv = dts[di] == CUDA_BF16 ? std::bf16_to_f32(*bits.at(off + r * k + c)) : std::fp16_to_f32(*bits.at(off + r * k + c));
+                    ref = ref + (double)wv * (double)*x.at(c);
+                    c = c + 1UL;
+                }
+                float d = *got.at(r) - (float)ref;
+                if (d < (float)0.0) d = -d;
+                if (d > err) err = d;
+                float a = (float)ref;
+                if (a < (float)0.0) a = -a;
+                if (a > big) big = a;
+                r = r + 1UL;
+            }
+            check(ok && err <= (float)1e-5 * (big > (float)1.0 ? big : (float)1.0) * (float)k, "half gemv vs reference");
+            got.free(); w.free(); x.free(); bits.free();
+            std::cuda_half_free(&dw); std::cuda_free(&dx); std::cuda_free(&dy);
+            ki = ki + 1;
+        }
+        di = di + 1;
+    }
+    // rmsnorm: 3 rows of 1536, with weight into y, then without weight in place
+    unsigned long rows = 3UL;
+    unsigned long n = 1536UL;
+    struct Vec<float> x = seq(rows * n, 0.011f, -0.8f);
+    struct Vec<float> w = seq(n, 0.002f, 0.5f);
+    struct CudaBuf dx = std::cuda_upload(x.at(0UL), rows * n);
+    struct CudaBuf dw = std::cuda_upload(w.at(0UL), n);
+    struct CudaBuf dy = std::cuda_alloc(rows * n);
+    int ok1 = std::cuda_rmsnorm(dx, dw, dy, rows, n, (float)1e-6);
+    struct Vec<float> y1 = download(dy);
+    struct CudaBuf none;
+    none.dev = 0UL; none.len = 0UL;
+    int ok2 = std::cuda_rmsnorm(dx, none, dx, rows, n, (float)1e-6);
+    struct Vec<float> y2 = download(dx);
+    float e1 = (float)0.0;
+    float e2 = (float)0.0;
+    unsigned long r = 0UL;
+    while (r < rows) {
+        double ss = 0.0;
+        unsigned long c = 0UL;
+        while (c < n) { double v = (double)*x.at(r * n + c); ss = ss + v * v; c = c + 1UL; }
+        double inv = 1.0 / std::sqrt_d(ss / (double)n + 1e-6);
+        c = 0UL;
+        while (c < n) {
+            float r1 = (float)((double)*x.at(r * n + c) * inv * (double)*w.at(c));
+            float r2 = (float)((double)*x.at(r * n + c) * inv);
+            float d1 = *y1.at(r * n + c) - r1; if (d1 < (float)0.0) d1 = -d1; if (d1 > e1) e1 = d1;
+            float d2 = *y2.at(r * n + c) - r2; if (d2 < (float)0.0) d2 = -d2; if (d2 > e2) e2 = d2;
+            c = c + 1UL;
+        }
+        r = r + 1UL;
+    }
+    check(ok1 && e1 < (float)1e-5, "rmsnorm with weight");
+    check(ok2 && e2 < (float)1e-5, "rmsnorm without weight, in place");
+    // gelu (tanh approximation)
+    struct Vec<float> gx = seq(1000UL, 0.01f, -5.0f);
+    struct CudaBuf dg = std::cuda_upload(gx.at(0UL), 1000UL);
+    struct CudaBuf dgo = std::cuda_alloc(1000UL);
+    int ok3 = std::cuda_gelu(dg, dgo);
+    struct Vec<float> go = download(dgo);
+    float e3 = (float)0.0;
+    unsigned long i = 0UL;
+    while (i < 1000UL) {
+        double v = (double)*gx.at(i);
+        double ref = 0.5 * v * (1.0 + std::tanh_d(0.7978845608028654 * (v + 0.044715 * v * v * v)));
+        float d = *go.at(i) - (float)ref; if (d < (float)0.0) d = -d; if (d > e3) e3 = d;
+        i = i + 1UL;
+    }
+    check(ok3 && e3 < (float)1e-5, "gelu (tanh) vs reference");
+    // bad shapes are rejected
+    struct CudaHalfBuf small = std::cuda_half_alloc(10UL, CUDA_BF16);
+    check(!std::cuda_half_gemv(small, dg, dgo, 5UL, 4UL), "half gemv rejects a too-small weight buffer");
+    check(!std::cuda_rmsnorm(dx, dw, dy, 4UL, n, (float)1e-6), "rmsnorm rejects too many rows");
+    std::cuda_half_free(&small);
+    x.free(); w.free(); y1.free(); y2.free(); gx.free(); go.free();
+    std::cuda_free(&dx); std::cuda_free(&dw); std::cuda_free(&dy); std::cuda_free(&dg); std::cuda_free(&dgo);
+}
+
 static void check_transfers() {
     unsigned long sizes[3];
     sizes[0] = 262145UL;     // just over 1 MiB of floats: one lane
@@ -1001,6 +1118,7 @@ int main() {
     a.free(); b.free(); want.free(); ga.free(); gb.free(); ref.free(); hc.free();
 
     check_half();
+    check_decode_ops();
     check_transfers();
     check_cudnn();
     check_cufft();

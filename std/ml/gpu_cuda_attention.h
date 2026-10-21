@@ -74,6 +74,14 @@ int cuda_attention_head_dim_ok(unsigned long headDim);
 // the own kernels. Returns 1 if cuDNN is in use after the call.
 int cuda_attention_use_cudnn(int on);
 
+// Flash attention with few query rows per kv head ((heads / kvHeads) *
+// seqLen <= 16, e.g. decoding one token against a KV cache) runs a
+// split-KV ("flash-decoding") kernel pair in any dtype, ahead of cuDNN:
+// the keys are spread over every SM and the partial softmaxes merged.
+// It sizes a workspace on its first call of a shape (make that call
+// before capturing a graph). on = 0 turns it off; returns the setting.
+int cuda_attention_use_decode(int on);
+
 // out = softmax(q k^T * scale [+ mask]) v. 'scale' <= 0 means
 // 1 / sqrt(headDim). A query with no visible key gets zeros.
 int cuda_flash_attention(struct CudaBuf q, struct CudaBuf k, struct CudaBuf v, struct CudaBuf out,

@@ -367,7 +367,77 @@ static const char* cuda_kernel_source_() {
     "extern \"C\" __global__ void mse_f16(const unsigned short* y, const unsigned short* t, unsigned short* dy, float* l, unsigned n) { mse16<0>(y, t, dy, l, n); }\n"
     "extern \"C\" __global__ void mse_bf16(const unsigned short* y, const unsigned short* t, unsigned short* dy, float* l, unsigned n) { mse16<1>(y, t, dy, l, n); }\n"
     "extern \"C\" __global__ void sgd2_f16(unsigned short* w1, const unsigned short* g1, unsigned n1, unsigned short* w2, const unsigned short* g2, unsigned n2, float lr) { sgd2_16<0>(w1, g1, n1, w2, g2, n2, lr); }\n"
-    "extern \"C\" __global__ void sgd2_bf16(unsigned short* w1, const unsigned short* g1, unsigned n1, unsigned short* w2, const unsigned short* g2, unsigned n2, float lr) { sgd2_16<1>(w1, g1, n1, w2, g2, n2, lr); }\n";
+    "extern \"C\" __global__ void sgd2_bf16(unsigned short* w1, const unsigned short* g1, unsigned n1, unsigned short* w2, const unsigned short* g2, unsigned n2, float lr) { sgd2_16<1>(w1, g1, n1, w2, g2, n2, lr); }\n"
+    "// Decode ops: tanh GELU, RMSNorm, and a 16-bit-weight GEMV with fp32 x / y\n"
+    "EW_UNARY(ew_gelu, 0.5f * x * (1.0f + tanhf(0.7978845608028654f * (x + 0.044715f * x * x * x))))\n"
+    "// One block per row; y may be x (every x value is read before y is written).\n"
+    "extern \"C\" __global__ void rmsnorm(const float* x, const float* w, float* y, unsigned n, float eps) {\n"
+    "    const float* xr = x + (size_t)blockIdx.x * n;\n"
+    "    float* yr = y + (size_t)blockIdx.x * n;\n"
+    "    float s = 0.0f;\n"
+    "    for (unsigned i = threadIdx.x; i < n; i += blockDim.x) { float v = xr[i]; s += v * v; }\n"
+    "    s = block_sum(s);\n"
+    "    __shared__ float inv;\n"
+    "    if (threadIdx.x == 0) inv = rsqrtf(s / (float)n + eps);\n"
+    "    __syncthreads();\n"
+    "    const float r = inv;\n"
+    "    for (unsigned i = threadIdx.x; i < n; i += blockDim.x) yr[i] = xr[i] * r * (w ? w[i] : 1.0f);\n"
+    "}\n"
+    "// 16 bytes of weights that are read once: past L1, so x stays cached there.\n"
+    "__device__ __forceinline__ uint4 ld_stream(const unsigned short* p) {\n"
+    "    uint4 v;\n"
+    "    asm volatile(\"ld.global.nc.L1::no_allocate.v4.u32 {%0,%1,%2,%3}, [%4];\"\n"
+    "                 : \"=r\"(v.x), \"=r\"(v.y), \"=r\"(v.z), \"=r\"(v.w) : \"l\"(p));\n"
+    "    return v;\n"
+    "}\n"
+    "template <int BF> __device__ __forceinline__ float lo16(unsigned u) { return BF ? __uint_as_float(u << 16) : h2f((unsigned short)(u & 0xffffu)); }\n"
+    "template <int BF> __device__ __forceinline__ float hi16(unsigned u) { return BF ? __uint_as_float(u & 0xffff0000u) : h2f((unsigned short)(u >> 16)); }\n"
+    "template <int BF> __device__ __forceinline__ float dot8(uint4 w, const float* x) {\n"
+    "    const float4 a = *(const float4*)x, b = *(const float4*)(x + 4);\n"
+    "    return lo16<BF>(w.x) * a.x + hi16<BF>(w.x) * a.y + lo16<BF>(w.y) * a.z + hi16<BF>(w.y) * a.w +\n"
+    "           lo16<BF>(w.z) * b.x + hi16<BF>(w.z) * b.y + lo16<BF>(w.w) * b.z + hi16<BF>(w.w) * b.w;\n"
+    "}\n"
+    "// y = W x with W [n][k]. 128 threads = 4 warps; 'wpr' (1, 2 or 4) warps share\n"
+    "// a row, rows grid-strided. VEC (k % 8 == 0, 16-byte aligned W and x): each\n"
+    "// lane reads 8 weights per 16-byte load, four loads in flight per warp.\n"
+    "template <int BF, int VEC> __device__ void gemv16(const unsigned short* __restrict__ W, const float* __restrict__ x,\n"
+    "                                                 float* __restrict__ y, unsigned n, unsigned k, int wpr) {\n"
+    "    __shared__ float part[4];\n"
+    "    const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31, rpb = 4 / wpr, sl = warp % wpr;\n"
+    "    const size_t kk = k;\n"
+    "    for (unsigned r0 = blockIdx.x * rpb; r0 < n; r0 += gridDim.x * rpb) {\n"
+    "        const unsigned row = r0 + warp / wpr;\n"
+    "        float s = 0.0f;\n"
+    "        if (row < n) {\n"
+    "            const unsigned short* wr = W + (size_t)row * kk;\n"
+    "            if (VEC) {\n"
+    "                const size_t step = 256u * wpr;\n"
+    "                for (size_t c = sl * 256u + lane * 8u; c < kk; c += 4 * step) {\n"
+    "                    uint4 wv[4];\n"
+    "#pragma unroll\n"
+    "                    for (int u = 0; u < 4; ++u) if (c + u * step < kk) wv[u] = ld_stream(wr + c + u * step);\n"
+    "#pragma unroll\n"
+    "                    for (int u = 0; u < 4; ++u) if (c + u * step < kk) s += dot8<BF>(wv[u], x + c + u * step);\n"
+    "                }\n"
+    "            } else {\n"
+    "                for (size_t c = sl * 32u + lane; c < kk; c += 32u * wpr) s += ld16<BF>(wr[c]) * __ldg(x + c);\n"
+    "            }\n"
+    "        }\n"
+    "        for (int off = 16; off > 0; off >>= 1) s += __shfl_down_sync(0xffffffffu, s, off);\n"
+    "        if (wpr == 1) {\n"
+    "            if (lane == 0 && row < n) y[row] = s;\n"
+    "        } else {\n"
+    "            if (lane == 0) part[warp] = s;\n"
+    "            __syncthreads();\n"
+    "            if (sl == 0 && lane == 0 && row < n) { float t = 0.0f; for (int i = 0; i < wpr; ++i) t += part[warp + i]; y[row] = t; }\n"
+    "            __syncthreads();\n"
+    "        }\n"
+    "    }\n"
+    "}\n"
+    "extern \"C\" __global__ void __launch_bounds__(128) gemv_f16(const unsigned short* W, const float* x, float* y, unsigned n, unsigned k, int wpr) { gemv16<0, 1>(W, x, y, n, k, wpr); }\n"
+    "extern \"C\" __global__ void __launch_bounds__(128) gemv_bf16(const unsigned short* W, const float* x, float* y, unsigned n, unsigned k, int wpr) { gemv16<1, 1>(W, x, y, n, k, wpr); }\n"
+    "extern \"C\" __global__ void __launch_bounds__(128) gemv1_f16(const unsigned short* W, const float* x, float* y, unsigned n, unsigned k, int wpr) { gemv16<0, 0>(W, x, y, n, k, wpr); }\n"
+    "extern \"C\" __global__ void __launch_bounds__(128) gemv1_bf16(const unsigned short* W, const float* x, float* y, unsigned n, unsigned k, int wpr) { gemv16<1, 0>(W, x, y, n, k, wpr); }\n";
 }
 
 // Kernel table, in this order.
@@ -401,7 +471,11 @@ static const char* cuda_kernel_source_() {
 #define K_RELUG_F16 29
 #define K_MSE_F16 31
 #define K_SGD2_F16 33
-#define K_COUNT 35
+#define K_GELU 35
+#define K_RMSNORM 36
+#define K_GEMV_F16 37
+#define K_GEMV1_F16 39   // scalar loads (k % 8 != 0 or unaligned)
+#define K_COUNT 41
 
 static const char* cuda_kernel_name_(int k) {
     if (k == K_ADD) return "ew_add";
@@ -438,6 +512,12 @@ static const char* cuda_kernel_name_(int k) {
     if (k == K_MSE_F16 + 1) return "mse_bf16";
     if (k == K_SGD2_F16) return "sgd2_f16";
     if (k == K_SGD2_F16 + 1) return "sgd2_bf16";
+    if (k == K_GELU) return "ew_gelu";
+    if (k == K_RMSNORM) return "rmsnorm";
+    if (k == K_GEMV_F16) return "gemv_f16";
+    if (k == K_GEMV_F16 + 1) return "gemv_bf16";
+    if (k == K_GEMV1_F16) return "gemv1_f16";
+    if (k == K_GEMV1_F16 + 1) return "gemv1_bf16";
     return "upsample2x";
 }
 
@@ -477,6 +557,7 @@ static void* g_cuda_lane_job = (void*)0;
 static void* g_cuda_fn[K_COUNT];
 static char  g_cuda_name[256];
 static int   g_cuda_blocks_cap = 0;   // 0 = use CUDA_MAX_BLOCKS
+static int   g_cuda_sms = 0;          // the GPU's SM count
 static int   g_cuda_tf32 = 0;
 
 // cuBLASLt plans, one per (ta, tb, m, n, k, epilogue): descriptor, three
@@ -595,6 +676,7 @@ static int cuda_ensure_() {
         cuDeviceGetAttribute(&major, CUDA_ATTR_CC_MAJOR, best);
         cuDeviceGetAttribute(&minor, CUDA_ATTR_CC_MINOR, best);
         g_cuda_blocks_cap = bestSms * 8;
+        g_cuda_sms = bestSms;
         if (cuDevicePrimaryCtxRetain(&g_cuda_ctx, best) != CUDA_OK) return 0;
         if (cuCtxSetCurrent(g_cuda_ctx) != CUDA_OK) return 0;
         if (cuStreamCreate(&g_cuda_stream, CUDA_STREAM_NON_BLOCKING) != CUDA_OK) return 0;
@@ -1087,6 +1169,24 @@ int cuda_pow(struct CudaBuf a, struct CudaBuf b, struct CudaBuf out) { return cu
 int cuda_relu_grad(struct CudaBuf z, struct CudaBuf g, struct CudaBuf out) { return cuda_binary_(K_RELU_GRAD, z, g, out); }
 int cuda_scale(struct CudaBuf a, float k, struct CudaBuf out) { return cuda_unary_(K_SCALE, a, k, out); }
 int cuda_relu(struct CudaBuf a, struct CudaBuf out) { return cuda_unary_(K_RELU, a, 0.0f, out); }
+int cuda_gelu(struct CudaBuf a, struct CudaBuf out) { return cuda_unary_(K_GELU, a, 0.0f, out); }
+
+int cuda_rmsnorm(struct CudaBuf x, struct CudaBuf w, struct CudaBuf y, unsigned long rows, unsigned long n, float eps) {
+    if (!cuda_ensure_() || rows == 0UL || n == 0UL || rows > 2147483647UL || n > 4294967295UL) return 0;
+    if (!cuda_fits_(x, rows * n) || !cuda_fits_(y, rows * n)) return 0;
+    if (w.dev != 0UL && w.len < n) return 0;
+    unsafe {
+        void* px = (void*)x.dev;
+        void* pw = (void*)w.dev;
+        void* py = (void*)y.dev;
+        unsigned int nn = (unsigned int)n;
+        float e = eps;
+        void* params[5];
+        params[0] = (void*)&px; params[1] = (void*)&pw; params[2] = (void*)&py; params[3] = (void*)&nn; params[4] = (void*)&e;
+        return cuLaunchKernel(g_cuda_fn[K_RMSNORM], (unsigned int)rows, 1U, 1U, CUDA_BLOCK, 1U, 1U, 0U,
+                              g_cuda_stream, &params[0], (void**)0) == CUDA_OK;
+    }
+}
 int cuda_exp(struct CudaBuf a, struct CudaBuf out) { return cuda_unary_(K_EXP, a, 0.0f, out); }
 int cuda_log(struct CudaBuf a, struct CudaBuf out) { return cuda_unary_(K_LOG, a, 0.0f, out); }
 int cuda_sqrt(struct CudaBuf a, struct CudaBuf out) { return cuda_unary_(K_SQRT, a, 0.0f, out); }
@@ -1226,6 +1326,11 @@ int cuda_tf32_enabled() { return g_cuda_tf32; }
 int cuda_compute_capability() {
     if (!cuda_ensure_()) return 0;
     return g_cuda_cc;
+}
+
+int cuda_sm_count() {
+    if (!cuda_ensure_()) return 0;
+    return g_cuda_sms;
 }
 
 ?&void cuda_load_module(const &char source, const &char name) {
@@ -1624,6 +1729,37 @@ int cuda_half_gemm_relu(struct CudaHalfBuf a, int ta, struct CudaHalfBuf b, int 
     }
     return cuda_gemm_ex_(a.dev, ta, b.dev, tb, c.dev, t, t, m, n, k) &&
            cuda_launch2_(cuda_k16_(K_RELU_F16, a.dtype), c.dev, c.dev, m * n);
+}
+
+// One to four warps per row (more on short outputs, so every SM has rows
+// to stream), 128-thread blocks of 4 / wpr rows each.
+int cuda_half_gemv(struct CudaHalfBuf w, struct CudaBuf x, struct CudaBuf y, unsigned long n, unsigned long k) {
+    if (!cuda_ensure_() || n == 0UL || k == 0UL || n > 2147483647UL || k > 4294967295UL) return 0;
+    if (!cuda_half_ok_(w, n * k) || !cuda_fits_(x, k) || !cuda_fits_(y, n)) return 0;
+    int vec = k % 8UL == 0UL && w.dev % 16UL == 0UL && x.dev % 16UL == 0UL;
+    unsigned long sms = g_cuda_sms > 0 ? (unsigned long)g_cuda_sms : 1UL;
+    int wpr = 1;
+    if (n < sms * 16UL) wpr = n < sms * 8UL || k >= 4096UL ? 4 : 2;
+    if (!vec || k < 512UL) wpr = 1;   // too short to split
+    unsigned long rpb = 4UL / (unsigned long)wpr;
+    // One resident wave (16 blocks per SM) grid-strided when the full grid
+    // would leave a partial second wave; past two waves the full grid streams better.
+    unsigned long blocks = (n + rpb - 1UL) / rpb;
+    if (blocks < sms * 32UL && blocks > sms * 16UL) blocks = sms * 16UL;
+    unsafe {
+        void* pw = (void*)w.dev;
+        void* px = (void*)x.dev;
+        void* py = (void*)y.dev;
+        unsigned int nn = (unsigned int)n;
+        unsigned int kk = (unsigned int)k;
+        int split = wpr;
+        void* params[6];
+        params[0] = (void*)&pw; params[1] = (void*)&px; params[2] = (void*)&py; params[3] = (void*)&nn;
+        params[4] = (void*)&kk; params[5] = (void*)&split;
+        return cuLaunchKernel(g_cuda_fn[cuda_k16_(vec ? K_GEMV_F16 : K_GEMV1_F16, w.dtype)],
+                              (unsigned int)blocks, 1U, 1U, 128U, 1U, 1U, 0U,
+                              g_cuda_stream, &params[0], (void**)0) == CUDA_OK;
+    }
 }
 
 int cuda_half_relu(struct CudaHalfBuf a, struct CudaHalfBuf out) {
