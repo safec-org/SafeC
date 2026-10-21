@@ -1374,7 +1374,10 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTr
         // otherwise it's a field declaration.
         // Heuristic: after parsing type + name, check for '('
         auto savedPos = pos_;
-        // 'static T make(...);' — a static method (no self)
+        // 'generic<T> [static] R m(...);' — a method with its own type
+        // parameters; 'static T make(...);' — a static method (no self)
+        std::vector<GenericParam> memberGenerics;
+        if (cur().is(TK::KW_generic)) { consume(); memberGenerics = parseGenericParams(); }
         bool staticMember = false;
         if (cur().is(TK::KW_static)) { consume(); staticMember = true; }
 
@@ -1476,6 +1479,7 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTr
             expect(TK::RParen, "expected ')' closing method parameter list");
             if (cur().is(TK::KW_const)) { consume(); md.isConst = true; }
             md.isStatic = staticMember;
+            md.genericParams = std::move(memberGenerics);
             if (md.isStatic && md.isConst)
                 diag_.error(md.loc, "a static method has no 'self' and can't be 'const'");
             expect(TK::Semicolon, "expected ';' after method declaration");
@@ -1483,6 +1487,8 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTr
         } else {
             if (staticMember)
                 diag_.error(cur().loc, "'static' applies to methods only, not struct fields");
+            if (!memberGenerics.empty())
+                diag_.error(cur().loc, "'generic<...>' applies to methods only, not struct fields");
             // Field declaration
             FieldDecl fd;
             fd.index = fieldIdx++;

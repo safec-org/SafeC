@@ -751,6 +751,7 @@ struct MethodDecl {
     std::vector<ParamDecl>   params;
     bool                     isConst = false;   // const method qualifier
     bool                     isStatic = false;  // 'static' method: no self
+    std::vector<GenericParam> genericParams;    // 'generic<T> void m(...);': the method's own
     SourceLocation           loc;
 };
 

@@ -628,6 +628,7 @@ std::unique_ptr<StructDecl> cloneStructDecl(const StructDecl &sd,
         cmd.returnType = substituteType(md.returnType, subs);
         cmd.isConst    = md.isConst;
         cmd.isStatic   = md.isStatic;
+        cmd.genericParams = md.genericParams;
         cmd.loc        = md.loc;
         for (auto &p : md.params) {
             ParamDecl pd;
