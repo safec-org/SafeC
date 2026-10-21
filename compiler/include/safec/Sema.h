@@ -482,6 +482,10 @@ private:
     // "StructName::method" → the FunctionDecl synthesized from the struct
     // body's declaration, which an out-of-line definition must match.
     std::unordered_map<std::string, FunctionDecl*> methodBodyDecl_;
+    // Re-resolves the struct-body method declarations once every top-level
+    // declaration is collected: a typedef or struct declared after the
+    // struct that mentions it. Names still unresolved are unknown types.
+    void resolveMethodBodyDecls();
     // Namespace registries: "ns::name" (as written at the call site) →
     // decl* (already mangled, e.g. FunctionDecl::name == "ns_name"). See
     // collectFunction/collectGlobalVar for population and checkIdent for

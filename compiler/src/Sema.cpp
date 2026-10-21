@@ -360,11 +360,62 @@ TypePtr Sema::resolveType(TypePtr ty) {
     return ty;
 }
 
+void Sema::resolveMethodBodyDecls() {
+    // A bare name parsed as a struct that names no struct, typedef or
+    // generic template (looked through references, pointers, arrays,
+    // optionals and function types).
+    auto unknownName = [&](const auto &self, const TypePtr &t) -> std::string {
+        if (!t) return "";
+        switch (t->kind) {
+        case TypeKind::Struct: {
+            auto &st = static_cast<const StructType &>(*t);
+            if (!st.isDefined && st.typeArgs.empty() && !typeRegistry_.count(st.name) &&
+                !genericStructTemplates_.count(st.name))
+                return st.name;
+            return "";
+        }
+        case TypeKind::Reference: return self(self, static_cast<const ReferenceType &>(*t).base);
+        case TypeKind::Pointer:   return self(self, static_cast<const PointerType &>(*t).base);
+        case TypeKind::Array:     return self(self, static_cast<const ArrayType &>(*t).element);
+        case TypeKind::Optional:  return self(self, static_cast<const OptionalType &>(*t).inner);
+        case TypeKind::Function: {
+            auto &ft = static_cast<const FunctionType &>(*t);
+            std::string n = self(self, ft.returnType);
+            for (auto &p : ft.paramTypes) if (n.empty()) n = self(self, p);
+            return n;
+        }
+        default: return "";
+        }
+    };
+    for (auto &[key, d] : methodBodyDecl_) {
+        bool changed = false;
+        if (d->returnType) { auto r = resolveType(d->returnType); changed |= r != d->returnType; d->returnType = r; }
+        for (auto &p : d->params) {
+            if (!p.type) continue;
+            auto r = resolveType(p.type); changed |= r != p.type; p.type = r;
+        }
+        std::string bad = unknownName(unknownName, d->returnType);
+        for (auto &p : d->params) if (bad.empty()) bad = unknownName(unknownName, p.type);
+        if (!bad.empty()) {
+            diag_.error(d->loc, "unknown type '" + bad + "' in the declaration of '" + key + "'");
+            continue;
+        }
+        if (changed) {
+            // Calls type-check against the symbol's function type.
+            std::vector<TypePtr> pts;
+            for (auto &p : d->params) pts.push_back(p.type);
+            if (auto *sym = lookup(d->name))
+                if (sym->fnDecl == d) sym->type = makeReference(makeFunction(d->returnType, pts, d->isVariadic), Region::Static);
+        }
+    }
+}
+
 // ── Pass 1: Collect top-level declarations ─────────────────────────────────────
 bool Sema::run() {
     // Global scope
     pushScope();
     collectDecls(tu_);
+    resolveMethodBodyDecls();
     checkTraitSupertraits();
     completeGenericStructInstances();
     for (auto &d : tu_.decls) checkDecl(*d);
@@ -711,7 +762,11 @@ void Sema::collectFunction(FunctionDecl &fn) {
         auto dit = methodBodyDecl_.find(owner + "::" + mname);
         if (dit != methodBodyDecl_.end() && dit->second != &fn &&
             dit->second->genericParams.size() == fn.genericParams.size()) {   // else reported above
-            const FunctionDecl &d = *dit->second;
+            FunctionDecl &d = *dit->second;
+            // The declaration was resolved when its struct was collected; a
+            // typedef declared after the struct only resolves now.
+            if (d.returnType) d.returnType = resolveType(d.returnType);
+            for (auto &p : d.params) if (p.type) p.type = resolveType(p.type);
             // Compared without const qualifiers: a leading 'const' on an
             // out-of-line definition ('inline const &char S::f() const') is
             // parsed as the function's const flag, not part of the type.
