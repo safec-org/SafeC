@@ -127,10 +127,22 @@ public:
     // ── Dependency management ─────────────────────────────────────────────────
 
     // Fetch and build all dependencies listed in the manifest.
-    // Dependencies are cloned under <root>/deps/<name>/ and built to
-    // <root>/build/deps/lib<name>.a.
+    // Git dependencies are cloned under <root>/deps/<name>/; source
+    // packages are built to <root>/build/deps/lib<name>.a, prebuilt
+    // libraries are checked to exist (see Dependency in Manifest.h).
     // Returns true if all deps succeed.
     bool fetchAndBuildDeps();
+
+    // What a dependency contributes to a build, once fetched.
+    struct DepLayout {
+        std::string dir;                          // its directory ("" for lib-only)
+        bool fromSource = false;                  // built from <dir>/src
+        std::vector<std::string> safecIncludes;   // include dirs for SafeC sources
+        std::vector<std::string> foreignIncludes; // include dirs for C/C++ sources
+        std::vector<std::string> linkInputs;      // library files and rpath flags
+        std::string error;                        // why it can't be used, if so
+    };
+    DepLayout depLayout(const Dependency& dep) const;
 
 private:
     std::string   root_;
@@ -284,6 +296,16 @@ private:
     // site comment in runCmd's definition for why this exists.
     static int runCmd(const std::vector<std::string>& argv, bool verbose,
                        bool suppressOutput = false);
+
+    // A dependency's directory: <root>/deps/<name> for a git URL, 'path'
+    // (against the project root) for a local one, "" for a lib-only entry.
+    std::string depDir(const Dependency& dep) const;
+
+    // Every dependency's include dirs, and its link inputs (a source
+    // package's built archive, a prebuilt one's library files).
+    void depIncludes(std::vector<std::string>& safecIncs,
+                     std::vector<std::string>& foreignIncs) const;
+    std::vector<std::string> depLinkInputs() const;
 
     // Clone a git repository.  Returns true on success.
     bool gitClone(const std::string& url, const std::string& dest) const;

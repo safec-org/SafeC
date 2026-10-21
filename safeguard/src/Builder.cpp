@@ -975,61 +975,178 @@ bool Builder::gitClone(const std::string& url, const std::string& dest) const {
     return rc == 0;
 }
 
+// ── dependency layout ────────────────────────────────────────────────────────
+
+std::string Builder::depDir(const Dependency& dep) const {
+    if (!dep.path.empty()) {
+        fs::path p(dep.path);
+        return (p.is_absolute() ? p : fs::path(root_) / p).lexically_normal().string();
+    }
+    if (!dep.version.empty()) return (fs::path(root_) / "deps" / dep.name).string();
+    return "";
+}
+
+// Library files for 'name' in a prebuilt library directory: lib<name> (or
+// <name>.lib) in lib/, lib64/ or the directory itself, static first. A
+// directory without one by that name contributes every library in the
+// first of those that has any (static ones if there are), e.g. an OpenSSL
+// install with libssl and libcrypto for a dependency named "openssl".
+static std::vector<fs::path> findLibraries(const fs::path& dir, const std::string& name) {
+    auto isStatic = [](const fs::path& f) {
+        std::string e = f.extension().string();
+        return e == ".a" || e == ".lib";
+    };
+    auto isShared = [](const fs::path& f) {
+        std::string n = f.filename().string(), e = f.extension().string();
+        return e == ".dylib" || e == ".so" || n.find(".so.") != std::string::npos;
+    };
+    for (const char* sub : { "lib", "lib64", "" }) {
+        fs::path d = *sub ? dir / sub : dir;
+        if (!fs::is_directory(d)) continue;
+        for (const std::string& f : { "lib" + name + ".a", name + ".lib",
+                                      "lib" + name + ".dylib", "lib" + name + ".so" })
+            if (fs::exists(d / f)) return { d / f };
+        std::vector<fs::path> statics, shareds;
+        for (auto& e : fs::directory_iterator(d)) {
+            if (!e.is_regular_file() && !e.is_symlink()) continue;
+            if (isStatic(e.path())) statics.push_back(e.path());
+            else if (isShared(e.path()) && e.path().filename().string().rfind("lib", 0) == 0)
+                shareds.push_back(e.path());
+        }
+        std::sort(statics.begin(), statics.end());
+        std::sort(shareds.begin(), shareds.end());
+        if (!statics.empty()) return statics;
+        if (!shareds.empty()) {
+            // libfoo.so.1.2 next to libfoo.so: keep one name per library
+            std::vector<fs::path> out;
+            std::set<std::string> seen;
+            for (auto& f : shareds) {
+                std::string stem = f.filename().string();
+                stem = stem.substr(0, stem.find('.'));
+                if (seen.insert(stem).second) out.push_back(f);
+            }
+            return out;
+        }
+    }
+    return {};
+}
+
+Builder::DepLayout Builder::depLayout(const Dependency& dep) const {
+    DepLayout l;
+    l.dir = depDir(dep);
+    fs::path base = l.dir.empty() ? fs::path(root_) : fs::path(l.dir);
+    auto against = [&](const std::string& s) {
+        fs::path p(s);
+        return (p.is_absolute() ? p : base / p).lexically_normal();
+    };
+    std::vector<fs::path> libs;
+    if (!dep.libs.empty()) {
+        for (auto& f : dep.libs) {
+            fs::path p = against(f);
+            if (!fs::exists(p)) { l.error = "library not found: " + p.string(); return l; }
+            libs.push_back(p);
+        }
+    } else if (l.dir.empty()) {
+        l.error = "needs a 'version' (git URL), a 'path' or a 'lib'";
+        return l;
+    } else if (!fs::exists(l.dir)) {
+        l.error = "directory not found: " + l.dir;
+        return l;
+    } else if (fs::is_directory(fs::path(l.dir) / "src")) {
+        l.fromSource = true;
+        fs::path inc = fs::path(l.dir) / "include";
+        if (fs::exists(inc)) { l.safecIncludes.push_back(inc.string()); l.foreignIncludes.push_back(inc.string()); }
+        l.safecIncludes.push_back((fs::path(l.dir) / "src").string());
+        l.linkInputs.push_back((fs::path(root_) / "build" / "deps" / ("lib" + dep.name + ".a")).string());
+        return l;
+    } else {
+        libs = findLibraries(l.dir, dep.name);
+        if (libs.empty()) {
+            l.error = "no src/ and no library (lib" + dep.name + ".a/.so/.dylib or any other) in " +
+                      l.dir + ", lib/ or lib64/";
+            return l;
+        }
+    }
+    if (!dep.includes.empty()) {
+        for (auto& i : dep.includes) {
+            fs::path p = against(i);
+            if (!fs::is_directory(p)) { l.error = "include directory not found: " + p.string(); return l; }
+            l.safecIncludes.push_back(p.string());
+            l.foreignIncludes.push_back(p.string());
+        }
+    } else if (!l.dir.empty() && fs::is_directory(fs::path(l.dir) / "include")) {
+        std::string inc = (fs::path(l.dir) / "include").string();
+        l.safecIncludes.push_back(inc);
+        l.foreignIncludes.push_back(inc);
+    }
+    std::set<std::string> rpaths;
+    for (auto& f : libs) {
+        l.linkInputs.push_back(f.string());
+#ifndef _WIN32
+        std::string e = f.extension().string();
+        if (e != ".a" && e != ".lib" && rpaths.insert(f.parent_path().string()).second)
+            l.linkInputs.push_back("-Wl,-rpath," + f.parent_path().string());   // find it at run time
+#endif
+    }
+    return l;
+}
+
+void Builder::depIncludes(std::vector<std::string>& safecIncs,
+                          std::vector<std::string>& foreignIncs) const {
+    for (auto& dep : manifest_.dependencies) {
+        DepLayout l = depLayout(dep);
+        if (!l.error.empty()) continue;   // reported by fetchAndBuildDeps
+        safecIncs.insert(safecIncs.end(), l.safecIncludes.begin(), l.safecIncludes.end());
+        foreignIncs.insert(foreignIncs.end(), l.foreignIncludes.begin(), l.foreignIncludes.end());
+    }
+}
+
+std::vector<std::string> Builder::depLinkInputs() const {
+    std::vector<std::string> out;
+    for (auto& dep : manifest_.dependencies) {
+        DepLayout l = depLayout(dep);
+        if (!l.error.empty()) continue;
+        for (auto& f : l.linkInputs)
+            if (f.rfind("-", 0) == 0 || fs::exists(f)) out.push_back(f);
+    }
+    return out;
+}
+
 // ── fetch and build all dependencies ─────────────────────────────────────────
 
 bool Builder::fetchAndBuildDeps() {
     if (manifest_.dependencies.empty()) return true;
 
-    fs::path depsDir   = fs::path(root_) / "deps";
     fs::path depLibDir = fs::path(root_) / "build" / "deps";
-    fs::create_directories(depsDir);
     fs::create_directories(depLibDir);
-
-    std::string safecBin = findSafec();
 
     for (auto& dep : manifest_.dependencies) {
         if (dep.name.empty()) continue;
 
-        std::string destDir;
-        if (!dep.path.empty()) {
-            // Local path dependency
-            destDir = dep.path;
-            if (!fs::exists(destDir)) {
-                std::cerr << "safeguard: local dependency path not found: "
-                          << destDir << "\n";
+        if (dep.path.empty() && !dep.version.empty()) {
+            // Remote dependency — dep.version holds the git URL
+            fs::create_directories(fs::path(root_) / "deps");
+            if (!gitClone(dep.version, depDir(dep))) {
+                std::cerr << "safeguard: failed to fetch dependency '"
+                          << dep.name << "' from " << dep.version << "\n";
                 return false;
             }
-        } else {
-            // Remote dependency — dep.version holds the GitHub URL
-            destDir = (depsDir / dep.name).string();
-            if (!dep.version.empty()) {
-                if (!gitClone(dep.version, destDir)) {
-                    std::cerr << "safeguard: failed to fetch dependency '"
-                              << dep.name << "' from " << dep.version << "\n";
-                    return false;
-                }
-            } else {
-                std::cerr << "safeguard: dependency '" << dep.name
-                          << "' has no version/url field\n";
-                return false;
-            }
+        }
+        DepLayout l = depLayout(dep);
+        if (!l.error.empty()) {
+            std::cerr << "safeguard: dependency '" << dep.name << "': " << l.error << "\n";
+            return false;
+        }
+        if (!l.fromSource) {
+            std::cout << "safeguard: dependency '" << dep.name << "' ready (prebuilt)\n";
+            continue;
         }
 
         // Build the dependency
         fs::path libOut = depLibDir / ("lib" + dep.name + ".a");
         if (!fs::exists(libOut)) {
-            // The dep's src/ directory
-            fs::path depSrc = fs::path(destDir) / "src";
-            if (!fs::exists(depSrc)) {
-                std::cerr << "safeguard: dependency '" << dep.name
-                          << "' has no src/ directory at " << destDir << "\n";
-                return false;
-            }
-            // Include its own include/ or src/ directory
-            std::vector<std::string> incs;
-            fs::path depInc = fs::path(destDir) / "include";
-            if (fs::exists(depInc)) incs.push_back(depInc.string());
-            incs.push_back(depSrc.string());
+            fs::path depSrc = fs::path(l.dir) / "src";
+            std::vector<std::string> incs = l.safecIncludes;
             // Also add std dir (SafeC-side only — see buildLib's
             // foreignIncludeDirs doc comment for why this must not reach
             // a real C/C++ compiler's search path).
@@ -1038,12 +1155,9 @@ bool Builder::fetchAndBuildDeps() {
                 incs.push_back(stdDir);
                 incs.push_back(fs::path(stdDir).parent_path().string());
             }
-            std::vector<std::string> foreignIncs;
-            if (fs::exists(depInc)) foreignIncs.push_back(depInc.string());
-
             if (!buildLib(depSrc.string(), libOut.string(), incs,
                           /*compatPreprocessor=*/false, /*tolerateArchMismatch=*/false,
-                          foreignIncs)) {
+                          l.foreignIncludes)) {
                 std::cerr << "safeguard: failed to build dependency '"
                           << dep.name << "'\n";
                 return false;
@@ -1106,16 +1220,8 @@ bool Builder::build() {
         userIncs.push_back(stdDir);
         userIncs.push_back(fs::path(stdDir).parent_path().string());
     }
-    // Also add include/ from each dependency
-    for (auto& dep : manifest_.dependencies) {
-        std::string destDir = dep.path.empty()
-            ? (fs::path(root_) / "deps" / dep.name).string()
-            : dep.path;
-        fs::path depInc = fs::path(destDir) / "include";
-        if (fs::exists(depInc)) userIncs.push_back(depInc.string());
-        fs::path depSrc = fs::path(destDir) / "src";
-        if (fs::exists(depSrc)) userIncs.push_back(depSrc.string());
-    }
+    // Each dependency's include/ (and a source package's src/) — added
+    // below together with the foreign list.
 
     // 3b. Separate, narrower include list for genuine .c/.cpp files.
     // SafeC's own std/ directory must NOT be on a real C/C++ compiler's
@@ -1131,13 +1237,7 @@ bool Builder::build() {
     std::vector<std::string> foreignIncs;
     fs::path projInc = fs::path(root_) / "include";
     if (fs::exists(projInc)) foreignIncs.push_back(projInc.string());
-    for (auto& dep : manifest_.dependencies) {
-        std::string destDir = dep.path.empty()
-            ? (fs::path(root_) / "deps" / dep.name).string()
-            : dep.path;
-        fs::path depInc = fs::path(destDir) / "include";
-        if (fs::exists(depInc)) foreignIncs.push_back(depInc.string());
-    }
+    depIncludes(userIncs, foreignIncs);
 
     // 4. Compile user sources. Mixed SafeC/C/C++ — each file is dispatched
     // by extension and compiled to its own .o (SafeC via safec --emit-llvm
@@ -1206,12 +1306,8 @@ bool Builder::build() {
 
     // 6. Collect archive libraries
     std::vector<std::string> archives;
+    for (auto& f : depLinkInputs()) archives.push_back(f);
     if (!stdLib.empty()) archives.push_back(stdLib);
-    fs::path depLibDir = fs::path(root_) / "build" / "deps";
-    for (auto& dep : manifest_.dependencies) {
-        fs::path libOut = depLibDir / ("lib" + dep.name + ".a");
-        if (fs::exists(libOut)) archives.push_back(libOut.string());
-    }
 
     // 7. Produce the final artifact. build.crate_type selects what "final"
     // means: a linked executable (the default, "bin"), a dynamic library
@@ -1262,15 +1358,7 @@ bool Builder::check() {
     std::vector<std::string> foreignIncs;
     fs::path projInc = fs::path(root_) / "include";
     if (fs::exists(projInc)) foreignIncs.push_back(projInc.string());
-    for (auto& dep : manifest_.dependencies) {
-        std::string destDir = dep.path.empty()
-            ? (fs::path(root_) / "deps" / dep.name).string()
-            : dep.path;
-        fs::path depInc = fs::path(destDir) / "include";
-        if (fs::exists(depInc)) { userIncs.push_back(depInc.string()); foreignIncs.push_back(depInc.string()); }
-        fs::path depSrc = fs::path(destDir) / "src";
-        if (fs::exists(depSrc)) userIncs.push_back(depSrc.string());
-    }
+    depIncludes(userIncs, foreignIncs);
 
     fs::path srcDir = fs::path(root_) / "src";
     std::vector<std::string> srcs;
@@ -1337,23 +1425,12 @@ bool Builder::test() {
         userIncs.push_back(stdDir);
         userIncs.push_back(fs::path(stdDir).parent_path().string());
     }
-    for (auto& dep : manifest_.dependencies) {
-        std::string destDir = dep.path.empty()
-            ? (fs::path(root_) / "deps" / dep.name).string()
-            : dep.path;
-        fs::path depInc = fs::path(destDir) / "include";
-        if (fs::exists(depInc)) userIncs.push_back(depInc.string());
-        fs::path depSrc = fs::path(destDir) / "src";
-        if (fs::exists(depSrc)) userIncs.push_back(depSrc.string());
-    }
+    std::vector<std::string> depForeignIncs;
+    depIncludes(userIncs, depForeignIncs);
 
     std::vector<std::string> archives;
+    for (auto& f : depLinkInputs()) archives.push_back(f);
     if (!stdLib.empty()) archives.push_back(stdLib);
-    fs::path depLibDir = fs::path(root_) / "build" / "deps";
-    for (auto& dep : manifest_.dependencies) {
-        fs::path libOut = depLibDir / ("lib" + dep.name + ".a");
-        if (fs::exists(libOut)) archives.push_back(libOut.string());
-    }
 
     std::string safecBin = findSafec();
     fs::path buildDir = fs::path(root_) / "build" / "tests";
@@ -1466,16 +1543,14 @@ void Builder::writeLock(const std::vector<std::string>& srcFiles) const {
     }
 
     // Record pinned git SHAs for all dependencies.
-    fs::path depsDir = fs::path(root_) / "deps";
     for (auto& dep : manifest_.dependencies) {
         LockedDep ld;
         ld.name = dep.name;
-        ld.url  = dep.path.empty() ? dep.version : dep.path;
-        std::string depDir = dep.path.empty()
-            ? (depsDir / dep.name).string()
-            : dep.path;
-        if (fs::exists(depDir)) {
-            ld.git_sha = gitRevParse(depDir);
+        ld.url  = !dep.path.empty() ? dep.path : !dep.version.empty() ? dep.version
+                : dep.libs.empty() ? "" : dep.libs.front();
+        std::string dir = depDir(dep);
+        if (!dir.empty() && fs::exists(dir)) {
+            ld.git_sha = gitRevParse(dir);
         }
         lf.deps.push_back(ld);
     }
@@ -1527,15 +1602,12 @@ bool Builder::checkLock() const {
     }
 
     // Check git SHAs for dependencies.
-    fs::path depsDir = fs::path(root_) / "deps";
     for (auto& locked : lf.deps) {
         std::string depDir;
         // Find matching dep in manifest.
         for (auto& dep : manifest_.dependencies) {
             if (dep.name == locked.name) {
-                depDir = dep.path.empty()
-                    ? (depsDir / dep.name).string()
-                    : dep.path;
+                depDir = this->depDir(dep);
                 break;
             }
         }
