@@ -5,10 +5,18 @@
 
 namespace safeguard {
 
+// Where a dependency comes from: a git URL in 'version' (cloned under
+// deps/<name>), a local directory in 'path', or neither when 'lib' names
+// prebuilt library files directly. A directory with a src/ is a SafeC
+// source package built to build/deps/lib<name>.a; one without is a
+// prebuilt library directory (libraries in lib/, lib64/ or the directory
+// itself, headers in include/).
 struct Dependency {
     std::string name;
-    std::string version; // semver string, e.g. "1.0.0"
-    std::string path;    // local path override (empty if registry dep)
+    std::string version; // git URL to clone
+    std::string path;    // local directory (relative to the project root)
+    std::vector<std::string> libs;     // 'lib': prebuilt library files, linked as is
+    std::vector<std::string> includes; // 'include': header dirs for prebuilt libraries
 };
 
 struct PackageInfo {

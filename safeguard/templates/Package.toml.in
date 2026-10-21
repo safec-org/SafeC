@@ -13,7 +13,14 @@ edition = "2026"
 # name    = "mylib"
 # version = "https://github.com/user/mylib"
 #
-# To add a local path dependency:
+# To add a local dependency (a SafeC package with src/, or a directory of
+# prebuilt libraries in lib/ with headers in include/):
 # [[dependencies]]
 # name    = "mylib"
 # path    = "../mylib"
+#
+# To link prebuilt library files directly:
+# [[dependencies]]
+# name    = "mylib"
+# lib     = ["vendor/libmylib.a"]
+# include = ["vendor/include"]

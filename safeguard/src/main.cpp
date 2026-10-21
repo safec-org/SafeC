@@ -30,10 +30,17 @@ Commands:
 Dependency format in Package.toml:
   [[dependencies]]
   name    = "mylib"
-  version = "https://github.com/user/mylib"   # GitHub URL
-  # or for a local path:
+  version = "https://github.com/user/mylib"   # git URL, cloned to deps/mylib
+  # or a local directory:
   name    = "mylib"
   path    = "../mylib"
+  # or prebuilt library files:
+  name    = "mylib"
+  lib     = ["vendor/libmylib.a"]             # .a / .so / .dylib / .lib
+  include = ["vendor/include"]
+  A directory (fetched or local) with src/ is a SafeC package built from
+  source; one without is a prebuilt library directory: lib<name> (or every
+  library) in lib/, lib64/ or the directory itself, headers in include/.
 
 Options (build / run / check / test):
   --release     Enable optimisations (-O2)

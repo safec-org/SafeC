@@ -77,17 +77,14 @@ std::vector<ManifestParser::Token> ManifestParser::tokenize(
         if (line.empty()) continue;
 
         if (line.front() == '[') {
-            // Section header
-            size_t close = line.find(']');
+            // Section header: [table] or [[array-of-tables]]
+            bool array = line.size() > 1 && line[1] == '[';
+            size_t close = line.find(array ? "]]" : "]");
             if (close == std::string::npos)
                 throw std::runtime_error(srcName + ":" + std::to_string(lineno) +
                                          ": unterminated section header");
-            // Handle [[dependencies]] array-of-table header
-            std::string inner = trim(line.substr(1, close - 1));
-            // Strip extra [ ] for array-of-table
-            if (!inner.empty() && inner.front() == '[' && inner.back() == ']')
-                inner = trim(inner.substr(1, inner.size() - 2));
-            section = inner;
+            size_t open = array ? 2 : 1;
+            section = trim(line.substr(open, close - open));
             // Emit a section-start marker
             tokens.push_back({"__section__", section});
             continue;
@@ -155,6 +152,8 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
         else if (tok.key == "dependencies.name")    curDep.name    = tok.value;
         else if (tok.key == "dependencies.version") curDep.version = tok.value;
         else if (tok.key == "dependencies.path")    curDep.path    = tok.value;
+        else if (tok.key == "dependencies.lib")     curDep.libs     = splitList(tok.value);
+        else if (tok.key == "dependencies.include") curDep.includes = splitList(tok.value);
 
         // features.* — [features] table: name = ["dep1", "dep2", ...]
         else if (tok.key.rfind("features.", 0) == 0) {
@@ -254,9 +253,19 @@ std::string ManifestParser::serialize(const Manifest& m) {
     for (auto& d : m.dependencies) {
         o << "\n[[dependencies]]\n";
         o << "name    = \"" << d.name    << "\"\n";
-        o << "version = \"" << d.version << "\"\n";
+        if (!d.version.empty())
+            o << "version = \"" << d.version << "\"\n";
         if (!d.path.empty())
             o << "path    = \"" << d.path    << "\"\n";
+        auto list = [&](const char* key, const std::vector<std::string>& v) {
+            if (v.empty()) return;
+            o << key << "[";
+            for (size_t i = 0; i < v.size(); ++i)
+                o << (i ? ", " : "") << "\"" << v[i] << "\"";
+            o << "]\n";
+        };
+        list("lib     = ", d.libs);
+        list("include = ", d.includes);
     }
 
     if (!m.features.empty()) {
