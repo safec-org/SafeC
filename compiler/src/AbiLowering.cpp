@@ -31,6 +31,20 @@
 //     DAG-size reason.
 // Every SafeC translation unit runs the same rule for the same target, so
 // SafeC-to-SafeC calls across separately compiled objects stay consistent.
+//
+// Large aggregate *parameters* get the same treatment, first: a first-class
+// aggregate argument is flattened into scalars by the backend, and LLVM's
+// fast -O0 instruction selector and the optimizing one don't flatten a
+// mixed aggregate ('{ [8 x i32], [64 x i8], i64, i32 }') the same way. A
+// function compiled at -O2 and called from an -O0 object then read garbage
+// (std's release archive under a debug program: hmac_sha256 computed the
+// wrong MAC). A parameter over 16 bytes that isn't an HFA is passed as a
+// pointer to a caller-made copy instead, the rule CodeGen already applies
+// to indirect calls and the AAPCS64 C rule. On AArch64 a smaller non-HFA
+// aggregate (1-16 bytes) has the same problem ('{ i32, [12 x i8] }',
+// '[16 x i8]') and is passed as integer registers instead, '[N x i64]', as
+// clang coerces it there. (x86-64 lowers those consistently already, and
+// its C ABI classifies them per eightbyte, so they stay as they are.)
 
 #include "safec/AbiLowering.h"
 
@@ -170,6 +184,139 @@ void rewriteCall(llvm::CallInst *ci, llvm::Value *newCallee, const Rules &r) {
     ci->eraseFromParent();
 }
 
+// How an aggregate parameter is passed (see the top): unchanged (nullptr),
+// as a pointer to a caller-made copy ('ptr'), or as integer registers
+// ('[N x i64]').
+llvm::Type *paramABIType(llvm::Type *ty, const Rules &r) {
+    if (!ty->isStructTy() && !ty->isArrayTy()) return nullptr;
+    if (!ty->isSized() || isHFA(ty)) return nullptr;
+    uint64_t sz = r.dl.getTypeAllocSize(ty);
+    if (sz == 0) return nullptr;
+    if (sz > 16) return llvm::PointerType::get(ty->getContext(), 0);
+    if (!r.aarch64) return nullptr;
+    return llvm::ArrayType::get(llvm::Type::getInt64Ty(ty->getContext()), (sz + 7) / 8);
+}
+
+// 'f' with every indirectly-passed parameter turned into a 'ptr'; direct
+// calls copy the argument into a temporary and pass its address.
+llvm::Function *rewriteParams(llvm::Function *f, const Rules &r) {
+    llvm::FunctionType *ft = f->getFunctionType();
+    std::vector<llvm::Type *> params;
+    std::vector<llvm::Type *> indirectTy(ft->getNumParams(), nullptr);
+    for (unsigned i = 0; i < ft->getNumParams(); ++i) {
+        llvm::Type *p = ft->getParamType(i);
+        if (llvm::Type *abi = paramABIType(p, r)) {
+            indirectTy[i] = p;
+            params.push_back(abi);
+        } else {
+            params.push_back(p);
+        }
+    }
+    auto *newFT = llvm::FunctionType::get(ft->getReturnType(), params, ft->isVarArg());
+    llvm::Module *m = f->getParent();
+    std::string name = f->getName().str();
+    f->setName(name + ".pre_byref");
+    llvm::Function *nf = llvm::Function::Create(newFT, f->getLinkage(), f->getAddressSpace(), name, m);
+    nf->copyAttributesFrom(f);
+    nf->setCallingConv(f->getCallingConv());
+    nf->setSubprogram(f->getSubprogram());
+    f->setSubprogram(nullptr);
+    llvm::LLVMContext &ctx = f->getContext();
+    llvm::AttributeList old = f->getAttributes();
+    std::vector<llvm::AttributeSet> pattrs;
+    for (unsigned i = 0; i < f->arg_size(); ++i)
+        pattrs.push_back(!indirectTy[i] ? old.getParamAttrs(i)
+            : params[i]->isPointerTy()
+            ? llvm::AttributeSet::get(ctx, {llvm::Attribute::get(ctx, llvm::Attribute::NonNull),
+                                             llvm::Attribute::get(ctx, llvm::Attribute::NoUndef)})
+            : llvm::AttributeSet());
+    nf->setAttributes(llvm::AttributeList::get(ctx, old.getFnAttrs(), old.getRetAttrs(), pattrs));
+
+    if (!f->isDeclaration()) {
+        nf->splice(nf->begin(), f);
+        llvm::IRBuilder<> b(&nf->getEntryBlock(), nf->getEntryBlock().begin());
+        auto nit = nf->arg_begin();
+        for (auto &a : f->args()) {
+            nit->takeName(&a);
+            if (llvm::Type *t = indirectTy[a.getArgNo()]) {
+                llvm::Value *src = &*nit;
+                if (!params[a.getArgNo()]->isPointerTy()) {
+                    // integer registers: spill them, read the aggregate back
+                    llvm::AllocaInst *slot = b.CreateAlloca(params[a.getArgNo()], nullptr, nit->getName() + ".regs");
+                    b.CreateStore(&*nit, slot);
+                    src = slot;
+                }
+                llvm::Value *v = b.CreateLoad(t, src, nit->getName() + ".val");
+                a.replaceAllUsesWith(v);
+            } else {
+                a.replaceAllUsesWith(&*nit);
+            }
+            ++nit;
+        }
+    }
+
+    std::vector<llvm::CallInst *> calls;
+    for (llvm::User *u : f->users())
+        if (auto *ci = llvm::dyn_cast<llvm::CallInst>(u))
+            if (ci->getCalledOperand() == f) calls.push_back(ci);
+    for (auto *ci : calls) {
+        llvm::Function *caller = ci->getFunction();
+        llvm::IRBuilder<> b(ci);
+        std::vector<llvm::Value *> args;
+        for (unsigned i = 0; i < ci->arg_size(); ++i) {
+            llvm::Value *a = ci->getArgOperand(i);
+            if (i < indirectTy.size() && indirectTy[i]) {
+                bool regs = !params[i]->isPointerTy();
+                // integer registers: a slot as wide as the registers, the
+                // aggregate copied in, the registers loaded back out
+                llvm::AllocaInst *tmp = entryAlloca(caller, regs ? params[i] : indirectTy[i], "byref.tmp");
+                auto pass = [&](llvm::Value *slot) -> llvm::Value * {
+                    return regs ? b.CreateLoad(params[i], slot, "byref.regs") : slot;
+                };
+                auto *ld = llvm::dyn_cast<llvm::LoadInst>(a);
+                if (ld && ld->hasOneUse() && !ld->isVolatile() && ld->getParent() == ci->getParent()) {
+                    bool clobbered = false;
+                    for (auto it = std::next(ld->getIterator()); &*it != ci; ++it)
+                        if (it->mayWriteToMemory()) { clobbered = true; break; }
+                    if (!clobbered) {
+                        llvm::IRBuilder<> lb(ld);
+                        emitCopy(lb, r.dl, tmp, ld->getPointerOperand(), indirectTy[i]);
+                        args.push_back(pass(tmp));
+                        continue;
+                    }
+                }
+                b.CreateStore(a, tmp);
+                args.push_back(pass(tmp));
+            } else {
+                args.push_back(a);
+            }
+        }
+        llvm::CallInst *nc = b.CreateCall(newFT, nf, args);
+        nc->setCallingConv(ci->getCallingConv());
+        nc->setDebugLoc(ci->getDebugLoc());
+        nc->setTailCallKind(llvm::CallInst::TCK_None);
+        llvm::AttributeList oa = ci->getAttributes();
+        std::vector<llvm::AttributeSet> cattrs;
+        for (unsigned i = 0; i < ci->arg_size(); ++i)
+            cattrs.push_back(i < indirectTy.size() && indirectTy[i] ? llvm::AttributeSet() : oa.getParamAttrs(i));
+        nc->setAttributes(llvm::AttributeList::get(ctx, oa.getFnAttrs(), oa.getRetAttrs(), cattrs));
+        if (!ci->use_empty()) ci->replaceAllUsesWith(nc);
+        // the copied-from load is dead now
+        for (unsigned i = 0; i < ci->arg_size(); ++i)
+            if (auto *ld = llvm::dyn_cast<llvm::LoadInst>(ci->getArgOperand(i)))
+                if (i < indirectTy.size() && indirectTy[i] && ld->hasOneUse()) {
+                    ci->setArgOperand(i, llvm::PoisonValue::get(ld->getType()));
+                    ld->eraseFromParent();
+                }
+        ci->eraseFromParent();
+    }
+    // Address-taken uses: indirect calls already pass these parameters as
+    // pointers (CodeGen's emitIndirectCall), so the new signature fits.
+    f->replaceAllUsesWith(nf);
+    f->eraseFromParent();
+    return nf;
+}
+
 llvm::Function *rewriteFunction(llvm::Function *f, const Rules &r) {
     llvm::Type *retTy = f->getReturnType();
     llvm::FunctionType *newFT = sretType(f->getFunctionType());
@@ -253,6 +400,17 @@ void lowerAggregateABI(llvm::Module &m) {
             triple.isARM() || triple.isThumb(),
             triple.getArch() == llvm::Triple::x86 && !triple.isOSWindows() && !triple.isOSDarwin(),
             triple.isRISCV(), triple.isArch64Bit() ? 8u : 4u};
+
+    // 0. Functions with large aggregate parameters (see the top).
+    {
+        std::vector<llvm::Function *> byref;
+        for (auto &f : m) {
+            if (f.isIntrinsic()) continue;
+            for (auto *p : f.getFunctionType()->params())
+                if (paramABIType(p, r)) { byref.push_back(&f); break; }
+        }
+        for (auto *f : byref) rewriteParams(f, r);
+    }
 
     // 1. Functions with memory-class return types.
     std::vector<llvm::Function *> fns;
