@@ -31,9 +31,9 @@ struct PCB {
 
     // Mark process as zombie with the given exit code.
     void          exit(int exit_code);
-};
 
-// Initialize a PCB with the given pid, entry point, and stack.
-struct PCB pcb_init(int pid, unsigned long entry, unsigned long sp, unsigned long page_table);
+    // Initialize a PCB with the given pid, entry point, and stack.
+    static struct PCB new(int pid, unsigned long entry, unsigned long sp, unsigned long page_table);
+};
 
 } // namespace std

@@ -12,7 +12,7 @@ namespace std {
 
 #define CV_R          float
 #define CV_C          struct Complex32
-#define CV_CNEW       complex32_new
+#define CV_CNEW       Complex32::new
 #define CV_DOT        dsp_dot_f32
 #define CV_SDOT       dsp_sliding_dot_f32
 #define CV_FFT        fft_f32

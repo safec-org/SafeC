@@ -4,7 +4,7 @@
 
 namespace std {
 
-inline struct PCB pcb_init(int pid, unsigned long entry, unsigned long sp, unsigned long page_table) {
+inline struct PCB PCB::new(int pid, unsigned long entry, unsigned long sp, unsigned long page_table) {
     struct PCB p;
     p.pid        = pid;
     p.state      = 0; // PROC_READY

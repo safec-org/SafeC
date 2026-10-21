@@ -33,13 +33,14 @@ struct Complex {
     double  abs() const;   // magnitude: sqrt(re^2 + im^2)
     double  arg() const;   // phase angle: atan2(im, re)
     Complex conj() const;  // complex conjugate: (re, -im)
+
+    static Complex new(double re, double im);
+
+    // magnitude * e^(i*theta) = magnitude * (cos(theta), sin(theta)) — the
+    // form FFT twiddle factors and oscillator/DFT kernels are naturally
+    // expressed in.
+    static Complex polar(double magnitude, double theta);
 };
-
-Complex complex_new(double re, double im);
-
-// e^(i*theta) = (cos(theta), sin(theta)) — the form FFT twiddle factors
-// and oscillator/DFT kernels are naturally expressed in.
-Complex complex_from_polar(double magnitude, double theta);
 
 // Single-precision complex: the float counterpart of Complex, with the same
 // layout (re then im). The _f32 DSP functions (fft_f32, stft_forward_f32,
@@ -57,12 +58,12 @@ struct Complex32 {
     float     abs() const;
     float     arg() const;
     Complex32 conj() const;
-};
 
-Complex32 complex32_new(float re, float im);
-Complex32 complex32_from_polar(float magnitude, float theta);
-Complex32 complex_to_f32(Complex c);     // rounds each part to float
-Complex   complex_from_f32(Complex32 c);
+    static Complex32 new(float re, float im);
+    static Complex32 polar(float magnitude, float theta);
+    static Complex32 from(Complex c);    // rounds each part to float
+    Complex          to_complex() const; // back to double (exact)
+};
 
 struct FComplex {
     Fixed re;
@@ -75,17 +76,18 @@ struct FComplex {
 
     Fixed     abs() const;
     FComplex  conj() const;
+
+    static FComplex new(Fixed re, Fixed im);
+
+    // Quantizes a double-precision Complex to Q8.24 (to_complex converts
+    // back). Twiddle factors and other coefficients computed once
+    // (at filter/FFT-plan design time) in double precision are quantized to
+    // Fixed via these — the same design-time-float / runtime-fixed split
+    // std/dsp/biquad.h's cookbook designers use (FBiquad::from), and
+    // completely standard practice (even hardware FFT accelerators
+    // precompute twiddle tables offline in floating point).
+    static FComplex from(Complex c);
+    Complex         to_complex() const;
 };
-
-FComplex fcomplex_new(Fixed re, Fixed im);
-
-// Converts a double-precision Complex to Q8.24 FComplex and back. Twiddle
-// factors and other coefficients computed once (at filter/FFT-plan design
-// time) in double precision are quantized to Fixed via these — the same
-// design-time-float / runtime-fixed split std/dsp/filter.h's biquad
-// cookbook formulas use, and completely standard practice (even hardware
-// FFT accelerators precompute twiddle tables offline in floating point).
-FComplex complex_to_fixed(Complex c);
-Complex  fcomplex_to_float(FComplex c);
 
 } // namespace std

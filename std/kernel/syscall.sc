@@ -4,7 +4,7 @@
 
 namespace std {
 
-inline struct SyscallTable syscall_init() {
+inline struct SyscallTable SyscallTable::new() {
     struct SyscallTable t;
     t.count = 0;
     int i = 0;

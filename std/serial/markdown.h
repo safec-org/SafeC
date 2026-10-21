@@ -48,6 +48,10 @@ struct MdNode {
     // code blocks <pre><code>, blockquotes <blockquote>, inline runs their
     // usual <strong>/<em>/<code>/<a href>). Text content is HTML-escaped;
     // only render_html output itself is trusted markup.
+    // Parses 'text' into a heap-allocated MD_DOC root node (release it with
+    // doc.free()).
+    static &heap MdNode parse(const &char text);
+
     struct String render_html() const;
 
     // Renders this node back to canonical Markdown text (a round-trip —
@@ -57,12 +61,8 @@ struct MdNode {
     struct String render_markdown() const;
 
     // Recursively frees this node's whole subtree and the node itself
-    // (every MdNode is heap-allocated by md_parse) — don't use it after.
+    // (every MdNode is heap-allocated by MdNode::parse) — don't use it after.
     void free();
 };
-
-// Parses 'text' into a heap-allocated MD_DOC root node (release it with
-// doc.free()).
-&heap MdNode md_parse(const &char text);
 
 } // namespace std

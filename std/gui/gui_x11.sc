@@ -190,7 +190,7 @@ static int __gui_x11_keysym(unsigned long ks) {
     return GUI_KEY_UNKNOWN;
 }
 
-struct GuiWindow gui_create_window(const &char title, int width, int height) {
+struct GuiWindow GuiWindow::create(const &char title, int width, int height) {
     struct GuiWindow win;
     win.platform = null;
     win.width = width;

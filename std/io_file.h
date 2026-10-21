@@ -1,8 +1,10 @@
 // SafeC Standard Library — File I/O (C11 <stdio.h> wrappers)
 // Handles are '&File' references to an opaque type (the C FILE underneath is
-// never exposed); file_open returns '?&File', null on failure.
+// never exposed); File::open returns '?&File', null on failure.
 // Operations are methods on the handle: f.read(buf, n), f.write(buf, n),
 // f.seek(off, whence), f.close(), ...
+// File conforms to io_traits.h's Reader and Writer, so read_exact,
+// write_all and copy_stream work on it.
 #pragma once
 
 namespace std {
@@ -10,15 +12,22 @@ namespace std {
 struct File {
     int opaque_;   // never constructed by SafeC code; only referenced
 
+    // ── Open ──────────────────────────────────────────────────────────────────
+
+    // Open a file.  mode: "r", "w", "a", "rb", "wb", etc.
+    // Returns a file handle, or null on failure.
+    static ?&File open(const &char path, const &char mode);
+
     // ── Close ─────────────────────────────────────────────────────────────────
 
-    // Close a file handle opened by file_open.  Returns 0 on success.
+    // Close a file handle opened by File::open.  Returns 0 on success.
     int  close();
 
     // ── Read ──────────────────────────────────────────────────────────────────
 
-    // Read at most n bytes into buf.  Returns bytes actually read (0 = EOF).
-    unsigned long read(&unsigned char buf, unsigned long n);
+    // Read at most n bytes into buf.  Returns bytes actually read (0 = EOF),
+    // or -1 when an error stopped it before any byte was read.
+    long long read(&unsigned char buf, unsigned long n);
 
     // Read a single character.  Returns -1 on EOF/error.
     int  getc();
@@ -28,8 +37,9 @@ struct File {
 
     // ── Write ─────────────────────────────────────────────────────────────────
 
-    // Write n bytes from buf.  Returns bytes actually written.
-    unsigned long write(const &unsigned char buf, unsigned long n);
+    // Write n bytes from buf.  Returns bytes actually written (fewer than n
+    // on an error part-way), or -1 when an error stopped it before any byte.
+    long long write(const &unsigned char buf, unsigned long n);
 
     // Write a single character.  Returns c on success, -1 on error.
     int  putc(int c);
@@ -66,12 +76,11 @@ struct File {
     long long size();
 };
 
-// Open a file.  mode: "r", "w", "a", "rb", "wb", etc.
-// Returns a file handle, or null on failure.
-?&File file_open(const &char path, const &char mode);
-
 // Kept for std/ml until its refactor moves to the methods above; forward to
-// f.close() / f.read() / f.write() / f.seek() / f.tell() / f.size().
+// File::open() / f.close() / f.read() / f.write() / f.seek() / f.tell() /
+// f.size(). file_read / file_write keep their old unsigned results (an
+// error reads as 0 bytes).
+?&File        file_open(const &char path, const &char mode);
 int           file_close(&File f);
 unsigned long file_read(&File f, &unsigned char buf, unsigned long n);
 unsigned long file_write(&File f, const &unsigned char buf, unsigned long n);

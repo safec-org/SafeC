@@ -25,11 +25,11 @@ struct DmaBuffer {
 
     // Return physical address of byte at `offset`.
     unsigned long phys_at(unsigned long offset) const;
-};
 
-// Initialise a DmaBuffer wrapping an existing allocation.
-// `phys` = 0 means physical == virtual (identity-mapped / non-MMU systems).
-struct DmaBuffer dma_buf_wrap(&unsigned char virt, unsigned long phys, unsigned long size);
+    // Initialise a DmaBuffer wrapping an existing allocation.
+    // `phys` = 0 means physical == virtual (identity-mapped / non-MMU systems).
+    static struct DmaBuffer wrap(&unsigned char virt, unsigned long phys, unsigned long size);
+};
 
 // A DMA channel descriptor, generic over the driver context type T its
 // callbacks take. One driver owns a channel for its whole lifetime, so the
@@ -52,10 +52,15 @@ generic<T> struct DmaChannel {
 
     // Is this channel currently busy?
     int  is_busy() const;
+
+    // A channel driven by start_fn/poll_fn on 'ctx' (T inferred from them).
+    static struct DmaChannel<T> new(unsigned int id,
+                                    fn int(?&T, unsigned long, unsigned long, unsigned long) start_fn,
+                                    fn int(?&T) poll_fn, ?&T ctx);
 };
 
 generic<T>
-struct DmaChannel<T> dma_channel_new(unsigned int id,
+struct DmaChannel<T> DmaChannel::new(unsigned int id,
                                      fn int(?&T, unsigned long, unsigned long, unsigned long) start_fn,
                                      fn int(?&T) poll_fn, ?&T ctx) {
     struct DmaChannel<T> ch;

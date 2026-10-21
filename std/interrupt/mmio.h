@@ -14,10 +14,10 @@ struct MmioReg {
     void         clear_bits(unsigned int mask);
     unsigned int read_field(int lo, int hi) const;
     void         write_field(int lo, int hi, unsigned int val);
-};
 
-// Create a MmioReg pointing at `addr`.
-struct MmioReg mmio_reg(&volatile unsigned int addr);
+    // Create a MmioReg pointing at `addr`.
+    static struct MmioReg at(&volatile unsigned int addr);
+};
 
 // ── Free-function API (backward-compatible) ───────────────────────────────────
 unsigned int mmio_read32(&volatile unsigned int addr);

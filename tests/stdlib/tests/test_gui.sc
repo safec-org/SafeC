@@ -251,7 +251,7 @@ static const unsigned char kPngStored[75] = {
 
 void t_draw() {
     struct GuiWindow win = make_win(32, 24);
-    struct GuiColor red = gui_rgb((unsigned char)255, (unsigned char)0, (unsigned char)0);
+    struct GuiColor red = GuiColor::rgb((unsigned char)255, (unsigned char)0, (unsigned char)0);
     ASSERT_EQ(red.a, 255);
     win.fill_rect(2, 3, 4, 5, red);
     ASSERT_EQ(count_red(&win), 20);
@@ -259,7 +259,7 @@ void t_draw() {
     ASSERT_EQ(px(&win, 6, 3, 0), 0);
     win.fill_rect(30, 22, 10, 10, red);              // clipped at the edge
     ASSERT_EQ(count_red(&win), 24);
-    struct GuiColor blue = gui_rgba((unsigned char)0, (unsigned char)0, (unsigned char)255, (unsigned char)128);
+    struct GuiColor blue = GuiColor::rgba((unsigned char)0, (unsigned char)0, (unsigned char)255, (unsigned char)128);
     win.draw_line(0, 0, 9, 9, blue);
     ASSERT_EQ(px(&win, 5, 5, 2), 255);
     ASSERT_EQ(px(&win, 5, 5, 3), 128);
@@ -327,7 +327,7 @@ void t_svg() {
 }
 
 void t_font() {
-    struct GuiFont f = gui_font_new(5, 7, 65, 3);
+    struct GuiFont f = GuiFont::new(5, 7, 65, 3);
     ASSERT_EQ(f.get_bit(65, 2, 3), 0);
     f.set_bit(65, 2, 3, 1);
     f.set_bit(67, 4, 6, 1);
@@ -345,10 +345,10 @@ void t_font() {
     ASSERT_EQ(g.get_bit(67, 4, 6), 1);
     ASSERT_EQ(g.get_bit(67, 3, 6), 0);
     struct GuiWindow win = make_win(16, 8);
-    g.draw_text(&win, 0, 0, "A", gui_rgb((unsigned char)255, (unsigned char)0, (unsigned char)0), 1);
+    g.draw_text(&win, 0, 0, "A", GuiColor::rgb((unsigned char)255, (unsigned char)0, (unsigned char)0), 1);
     ASSERT_EQ(count_red(&win), 1);
     ASSERT_EQ(px(&win, 2, 3, 0), 255);
-    struct GuiFont d = gui_font_default();
+    struct GuiFont d = GuiFont::default();
     ASSERT_EQ(d.glyphW, 8);
     ASSERT_EQ(d.get_bit((int)'!', 3, 2), 1);
     f.free();
@@ -376,16 +376,16 @@ static struct GuiEvent mouse(int kind, double x, double y) {
 }
 
 void t_widgets() {
-    &Widget root = widget_vstack();
+    &Widget root = Widget::vstack();
     root.set_padding(4).set_spacing(2);
-    &Widget btn = widget_button("Go").set_pref_size(40, 20);
+    &Widget btn = Widget::button("Go").set_pref_size(40, 20);
     widget_on_click(btn, on_click, (?&int)&gClicks);
-    &Widget box = widget_checkbox("opt", 0);
+    &Widget box = Widget::checkbox("opt", 0);
     widget_on_change(box, on_change, (?&int)&gChanges);
-    &Widget lbl = widget_label("hello");
+    &Widget lbl = Widget::label("hello");
     root.add_child(btn);
     root.add_child(box);
-    root.add_child(widget_spacer());
+    root.add_child(Widget::spacer());
     root.add_child(lbl);
     root.layout(0, 0, 100, 100);
     ASSERT_EQ(btn.x, 4);
@@ -430,7 +430,7 @@ void t_widgets() {
 }
 
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("draw primitives", t_draw);
         t.add("png decode", t_png);

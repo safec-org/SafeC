@@ -4,9 +4,9 @@
 
 namespace std {
 
-inline struct ThreadSched thread_sched_init() {
+inline struct ThreadSched ThreadSched::new() {
     struct ThreadSched s;
-    s.inner = task_sched_init();
+    s.inner = TaskScheduler::new();
     int i = 0;
     while (i < THREAD_MAX) {
         s.priority[i] = 0;

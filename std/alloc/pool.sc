@@ -26,7 +26,7 @@ inline unsigned long PoolAllocator::header_size_() const {
     return (unsigned long)24;
 }
 
-inline struct PoolAllocator pool_init(&unsigned char buffer, unsigned long cap) {
+inline struct PoolAllocator PoolAllocator::over(&unsigned char buffer, unsigned long cap) {
     struct PoolAllocator a;
     unsafe { a.base = (&heap void)buffer; }
     a.owned = 0;
@@ -49,7 +49,7 @@ inline struct PoolAllocator pool_init(&unsigned char buffer, unsigned long cap) 
     return a;
 }
 
-inline struct PoolAllocator pool_new(unsigned long cap) {
+inline struct PoolAllocator PoolAllocator::new(unsigned long cap) {
     struct PoolAllocator a;
     unsigned long hdr = (unsigned long)24;
     // Always malloc at least enough room for one block header, regardless

@@ -310,11 +310,11 @@ static struct Value yaml_parse_scalar_(const char* text) {
     struct Value result;
     int handled = 1;
     if (trimmed.is_empty() || trimmed.eq_cstr("~") || trimmed.eq_cstr_ignore_case("null")) {
-        result = value_null();
+        result = Value::null();
     } else if (trimmed.eq_cstr_ignore_case("true")) {
-        result = value_bool(1);
+        result = Value::from_bool(1);
     } else if (trimmed.eq_cstr_ignore_case("false")) {
-        result = value_bool(0);
+        result = Value::from_bool(0);
     } else if (c0 == '"') {
         struct String out = String::new();
         unsigned long i = 1UL;
@@ -337,7 +337,7 @@ static struct Value yaml_parse_scalar_(const char* text) {
                 i = i + 1UL;
             }
         }
-        result = value_string(out.as_ptr());
+        result = Value::from_str(out.as_ptr());
         out.free();
     } else if (c0 == '\'') {
         struct String out = String::new();
@@ -355,7 +355,7 @@ static struct Value yaml_parse_scalar_(const char* text) {
             unsafe { out.push_char(c); }
             i = i + 1UL;
         }
-        result = value_string(out.as_ptr());
+        result = Value::from_str(out.as_ptr());
         out.free();
     } else {
         // Plain scalar: number if it looks like one, else a bare string.
@@ -378,11 +378,11 @@ static struct Value yaml_parse_scalar_(const char* text) {
         }
         if (isNumeric) {
             int pok = 0;
-            if (isFloat) { result = value_float(trimmed.parse_float(&pok)); }
-            else { result = value_int(trimmed.parse_int(&pok)); }
-            unsafe { if (pok == 0) { result = value_string(t); } }
+            if (isFloat) { result = Value::from_float(trimmed.parse_float(&pok)); }
+            else { result = Value::from_int(trimmed.parse_int(&pok)); }
+            unsafe { if (pok == 0) { result = Value::from_str(t); } }
         } else {
-            unsafe { result = value_string(t); }
+            unsafe { result = Value::from_str(t); }
         }
     }
     (void)handled;
@@ -421,7 +421,7 @@ static long long yaml_find_colon_(const char* s) {
 
 static struct Value yaml_parse_mapping_(&Vec<struct YamlLine_> lines, unsigned long* idx,
                                          unsigned long indent, int* ok) {
-    struct Value obj = value_object();
+    struct Value obj = Value::object();
     unsigned long n;
     unsafe { n = lines->length(); }
     while (1) {
@@ -479,7 +479,7 @@ static struct Value yaml_parse_mapping_(&Vec<struct YamlLine_> lines, unsigned l
 
 static struct Value yaml_parse_sequence_(&Vec<struct YamlLine_> lines, unsigned long* idx,
                                           unsigned long indent, int* ok) {
-    struct Value arr = value_array();
+    struct Value arr = Value::array();
     unsigned long n;
     unsafe { n = lines->length(); }
     while (1) {
@@ -542,12 +542,12 @@ static struct Value yaml_parse_block_(&Vec<struct YamlLine_> lines, unsigned lon
     unsafe { n = lines->length(); }
     unsigned long curIdx;
     unsafe { curIdx = *idx; }
-    if (curIdx >= n) { return value_null(); }
+    if (curIdx >= n) { return Value::null(); }
     struct YamlLine_* yl;
     unsafe { yl = lines->at(curIdx); }
     unsigned long ylIndent;
     unsafe { ylIndent = yl->indent; }
-    if (ylIndent < minIndent) { return value_null(); }
+    if (ylIndent < minIndent) { return Value::null(); }
     unsigned long indent = ylIndent;
     const char* content;
     unsafe { content = yl->content.as_ptr(); }
@@ -581,7 +581,7 @@ struct Value yaml_parse(const &char text, ?&int ok) {
     if (ok != (int*)0) { unsafe { *ok = good; } }
     if (good == 0) {
         result.free();
-        return value_null();
+        return Value::null();
     }
     return result;
 }

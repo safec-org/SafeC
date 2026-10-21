@@ -139,7 +139,7 @@ int ffft(&FComplex data, unsigned long n) {
             unsigned long k = 0UL;
             while (k < half) {
                 double theta = -SAFEC_DSP_TWO_PI * (double)k / (double)len;
-                struct FComplex w = complex_to_fixed(complex_from_polar(1.0, theta));
+                struct FComplex w = FComplex::from(Complex::polar(1.0, theta));
                 unsafe {
                     struct FComplex u = data[block + k];
                     struct FComplex v = data[block + k + half] * w;
@@ -173,7 +173,7 @@ int fifft(&FComplex data, unsigned long n) {
     while (i < n) {
         unsafe {
             struct FComplex c = data[i].conj();
-            data[i] = fcomplex_new(fixed_mul(c.re, invN), fixed_mul(c.im, invN));
+            data[i] = FComplex::new(fixed_mul(c.re, invN), fixed_mul(c.im, invN));
         }
         i = i + 1UL;
     }

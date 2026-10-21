@@ -171,13 +171,13 @@ static struct Value csv_parse_field_(struct CsvCursor_* c) {
             unsafe { out.push_char(ch); c->pos = c->pos + 1UL; }
         }
     }
-    struct Value v = value_string(out.as_ptr());
+    struct Value v = Value::from_str(out.as_ptr());
     out.free();
     return v;
 }
 
 static struct Value csv_parse_row_(struct CsvCursor_* c) {
-    struct Value row = value_array();
+    struct Value row = Value::array();
     while (1) {
         struct Value field = csv_parse_field_(c);
         row.array_push(field);
@@ -192,7 +192,7 @@ static struct Value csv_parse_row_(struct CsvCursor_* c) {
 }
 
 struct Value csv_parse(const &char text, ?&int ok) {
-    struct Value rows = value_array();
+    struct Value rows = Value::array();
     struct CsvCursor_ c;
     c.text = text;
     c.pos = 0UL;

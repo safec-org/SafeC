@@ -76,7 +76,7 @@ static struct RpcResult __server_fn_dispatch(const unsigned char* data, unsigned
     struct Value* argsField; unsafe { argsField = root.object_get("args"); }
     struct Value argsVal;
     if (argsField == (struct Value*)0) {
-        unsafe { argsVal = value_null(); }
+        unsafe { argsVal = Value::null(); }
     } else {
         unsafe { argsVal = argsField->clone(); }
     }
@@ -114,11 +114,11 @@ struct Value server_fn_call(const &char host, unsigned short port, const &char n
                              const ?&Value args, ?&int ok) {
     struct Value envelope;
     unsafe {
-        envelope = value_object();
-        envelope.object_set("fn", value_string(name));
+        envelope = Value::object();
+        envelope.object_set("fn", Value::from_str(name));
         match (args) {
             case some(a): { envelope.object_set("args", a.clone()); }
-            case null:    { envelope.object_set("args", value_null()); }
+            case null:    { envelope.object_set("args", Value::null()); }
         }
     }
     struct String reqText;
@@ -132,7 +132,7 @@ struct Value server_fn_call(const &char host, unsigned short port, const &char n
     if (!rr.ok) {
         unsafe { *ok = 0; }
         unsafe { rr.free(); }
-        return value_null();
+        return Value::null();
     }
 
     struct String respText;

@@ -20,7 +20,7 @@ namespace std {
 //   win.draw_rect_border(x, y, w, h, color, thickness)
 //   win.draw_line(x0, y0, x1, y1, color)
 //   win.draw_text(x, y, text, color, scale)   // built-in 8x8 font
-// gui_rgb()/gui_rgba() are declared there too.
+// GuiColor::rgb()/GuiColor::rgba() are declared there too.
 
 // Width/height in pixels 'text' would occupy if drawn with the built-in
 // font at the given scale, without actually drawing it — used by widgets

@@ -3,7 +3,7 @@
 // See reactor.h for the portable API and usage shape, and for the full
 // list of backend files (reactor_epoll.sc for Linux/Android,
 // reactor_win32.sc for Windows) — all three implement the exact same
-// std::Reactor/reactor_init/reactor_run surface, since SCHED_READ/
+// std::Reactor (Reactor::new)/reactor_run surface, since SCHED_READ/
 // SCHED_WRITE/SCHED_SIGNAL are already backend-agnostic; nothing in this
 // module's callers needs to know which one is actually compiled in.
 //
@@ -70,7 +70,7 @@ static int reactor_portable_filter_(short kqFilter) {
     return SCHED_READ;
 }
 
-inline struct Reactor reactor_init() {
+inline struct Reactor Reactor::new() {
     struct Reactor r;
     r.kq = -1;
     // Unused on this backend (kqueue has native EVFILT_SIGNAL and

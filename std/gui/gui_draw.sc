@@ -109,14 +109,14 @@ static const unsigned char gFont8x8[GUI_FONT_COUNT * 8] = {
     0x00U, 0x00U, 0x10U, 0x3CU, 0x00U, 0x00U, 0x00U, 0x00U, // 126 '~'
 };
 
-struct GuiColor gui_rgba(unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+struct GuiColor GuiColor::rgba(unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
     struct GuiColor c;
     c.r = r; c.g = g; c.b = b; c.a = a;
     return c;
 }
 
-struct GuiColor gui_rgb(unsigned char r, unsigned char g, unsigned char b) {
-    return gui_rgba(r, g, b, 255U);
+struct GuiColor GuiColor::rgb(unsigned char r, unsigned char g, unsigned char b) {
+    return GuiColor::rgba(r, g, b, 255U);
 }
 
 static unsigned int __gui_pack(struct GuiColor c) {

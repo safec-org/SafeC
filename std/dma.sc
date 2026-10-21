@@ -7,7 +7,7 @@
 
 namespace std {
 
-inline struct DmaBuffer dma_buf_wrap(&unsigned char virt, unsigned long phys, unsigned long size) {
+inline struct DmaBuffer DmaBuffer::wrap(&unsigned char virt, unsigned long phys, unsigned long size) {
     struct DmaBuffer buf;
     buf.virt  = virt;
     buf.phys  = (phys != (unsigned long)0) ? phys : (unsigned long)virt;

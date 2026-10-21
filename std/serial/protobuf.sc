@@ -94,7 +94,7 @@ void pb_write_bytes_field(&String out, int field_num,
 
 // ── Reader ────────────────────────────────────────────────────────────────
 
-struct PbReader pb_reader_new(const &unsigned char data, unsigned long len) {
+struct PbReader PbReader::new(const &unsigned char data, unsigned long len) {
     struct PbReader r;
     r.data = data;
     r.len  = len;

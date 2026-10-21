@@ -47,9 +47,9 @@ static struct Vec<unsigned char> __b64url_decode(const char* s, int* ok) {
 struct String jwt_sign(const &Value claims, const &char secret) {
     struct Value header;
     unsafe {
-        header = value_object();
-        header.object_set("alg", value_string("HS256"));
-        header.object_set("typ", value_string("JWT"));
+        header = Value::object();
+        header.object_set("alg", Value::from_str("HS256"));
+        header.object_set("typ", Value::from_str("JWT"));
     }
     struct String headerJson; struct String payloadJson;
     unsafe {
@@ -112,7 +112,7 @@ struct Value jwt_verify(const &char token_ref, const &char secret, ?&int ok) { c
     long long dot2 = __nth_char_index(token, '.', 1);
     if (dot1 < 0LL || dot2 < 0LL) {
         unsafe { *ok = 0; }
-        return value_null();
+        return Value::null();
     }
 
     struct String headerB64;
@@ -161,7 +161,7 @@ struct Value jwt_verify(const &char token_ref, const &char secret, ?&int ok) { c
     int sigMatch;
     unsafe { sigMatch = sigB64.eq_cstr(expectedSigB64.as_ptr()); }
 
-    struct Value result = value_null();
+    struct Value result = Value::null();
     if (headerValid && sigMatch) {
         int payloadOk;
         struct Vec<unsigned char> payloadBytes = __b64url_decode(payloadB64.as_ptr(), &payloadOk);

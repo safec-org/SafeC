@@ -37,14 +37,20 @@ struct TlsfBlock {
 
 struct TlsfAllocator {
     &heap void    base;                                       // heap-backed managed memory
-    int           owned;   // 1 if tlsf_new allocated base (destroy() frees it)
+    int           owned;   // 1 if TlsfAllocator::new allocated base (destroy() frees it)
     unsigned long cap;
     unsigned int  fl_bitmap;                                  // first-level bitmap
     unsigned int  sl_bitmap[TLSF_FL_MAX];                     // second-level bitmaps
     void*         blocks[TLSF_FL_MAX * TLSF_SL_COUNT];       // free-list heads (raw ptrs)
 
+    // A TLSF allocator over a user-provided heap buffer of `cap` bytes.
+    static struct TlsfAllocator over(&unsigned char buffer, unsigned long cap);
+
+    // A heap-backed TLSF allocator of `cap` bytes.
+    static struct TlsfAllocator new(unsigned long cap);
+
     // Allocate `size` bytes aligned to `align`. O(1). Every block is
-    // 8-aligned (given an 8-aligned buffer: always for tlsf_new), so align
+    // 8-aligned (given an 8-aligned buffer: always for TlsfAllocator::new), so align
     // is honoured up to 8 (0 is taken as 1). null when no free block fits,
     // or `align` is above 8 or not a power of two.
     ?&heap void   alloc(unsigned long size, unsigned long align);
@@ -61,12 +67,6 @@ struct TlsfAllocator {
     void          remove_(&TlsfBlock blk);
     void*         find_(unsigned long size);
 };
-
-// Initialize over a user-provided heap buffer.
-struct TlsfAllocator tlsf_init(&unsigned char buffer, unsigned long cap);
-
-// Create a heap-backed TLSF allocator.
-struct TlsfAllocator tlsf_new(unsigned long cap);
 
 // Compute first-level and second-level indices for a given size.
 void tlsf_mapping_(unsigned long size, &int fl, &int sl);

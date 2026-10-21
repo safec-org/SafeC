@@ -174,11 +174,11 @@ void idft_f32(const &Complex32 in, &Complex32 out, unsigned long n) {
 void fdft(const &FComplex in, &FComplex out, unsigned long n) {
     unsigned long k = 0UL;
     while (k < n) {
-        struct FComplex sum = fcomplex_new((Fixed)0, (Fixed)0);
+        struct FComplex sum = FComplex::new((Fixed)0, (Fixed)0);
         unsigned long i = 0UL;
         while (i < n) {
             double theta = -SAFEC_DSP_TWO_PI * (double)k * (double)i / (double)n;
-            struct FComplex twiddle = complex_to_fixed(complex_from_polar(1.0, theta));
+            struct FComplex twiddle = FComplex::from(Complex::polar(1.0, theta));
             struct FComplex xi;
             unsafe { xi = in[i]; }
             sum = sum + xi * twiddle;
@@ -194,18 +194,18 @@ void fidft(const &FComplex in, &FComplex out, unsigned long n) {
     Fixed invN = fixed_div((Fixed)FIXED_ONE, fixed_from_int((int)n));
     unsigned long k = 0UL;
     while (k < n) {
-        struct FComplex sum = fcomplex_new((Fixed)0, (Fixed)0);
+        struct FComplex sum = FComplex::new((Fixed)0, (Fixed)0);
         unsigned long i = 0UL;
         while (i < n) {
             double theta = SAFEC_DSP_TWO_PI * (double)k * (double)i / (double)n;
-            struct FComplex twiddle = complex_to_fixed(complex_from_polar(1.0, theta));
+            struct FComplex twiddle = FComplex::from(Complex::polar(1.0, theta));
             struct FComplex xi;
             unsafe { xi = in[i]; }
             sum = sum + xi * twiddle;
             i = i + 1UL;
         }
         unsafe {
-            out[k] = fcomplex_new(fixed_mul(sum.re, invN), fixed_mul(sum.im, invN));
+            out[k] = FComplex::new(fixed_mul(sum.re, invN), fixed_mul(sum.im, invN));
         }
         k = k + 1UL;
     }

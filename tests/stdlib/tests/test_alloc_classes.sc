@@ -317,25 +317,25 @@ void CountingHeap::dealloc(?&heap void ptr) {
 }
 
 void t_allocator_trait() {
-    struct BumpAllocator b = bump_new(4096UL);
+    struct BumpAllocator b = BumpAllocator::new(4096UL);
     ASSERT_EQ(exercise_allocator(&b, 16UL), 1);
     b.destroy();
 
-    struct PoolAllocator p = pool_new(4096UL);
+    struct PoolAllocator p = PoolAllocator::new(4096UL);
     unsigned long poolFree = p.available();
     ASSERT_EQ(exercise_allocator(&p, 16UL), 1);
     ASSERT_EQ(p.available(), poolFree);              // every block came back
     p.destroy();
 
     // A slab hands out one object size: the array is one Rec, a second won't fit.
-    struct SlabAllocator s = slab_new(sizeof(struct Rec), 4UL);
+    struct SlabAllocator s = SlabAllocator::new(sizeof(struct Rec), 4UL);
     ASSERT_EQ(exercise_allocator(&s, 1UL), 1);
     ASSERT_EQ(s.available(), 4UL);
     ?&heap Rec two = alloc_array_t(&s, 2UL);
     ASSERT_TRUE(two.is_null());
     s.destroy();
 
-    struct TlsfAllocator t = tlsf_new(65536UL);
+    struct TlsfAllocator t = TlsfAllocator::new(65536UL);
     ASSERT_EQ(exercise_allocator(&t, 16UL), 1);
     ?&heap Rec big = alloc_array_t(&t, 2000UL);      // fits again: all coalesced
     ASSERT_FALSE(big.is_null());
@@ -351,7 +351,7 @@ void t_allocator_trait() {
 }
 
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("alloc size classes around 1MB", t_size_classes);
         t.add("conv2d then large allocations", t_conv_then_alloc);

@@ -549,7 +549,7 @@ void t_signals() {
 }
 
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("mem", t_mem);
         t.add("str", t_str);

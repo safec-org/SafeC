@@ -357,7 +357,7 @@ void t_rl_agents() {
 }
 
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("backend is the CPU without features", t_backend_name);
         t.add("train_fit (Trainable) = trainer_fit", t_fit_matches_trainer_fit);

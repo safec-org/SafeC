@@ -1,6 +1,6 @@
 // SafeC Standard Library — Chan<T>: typed channel over the channel built-ins
 //
-//   struct Chan<int> ch = std::chan_new(16);
+//   struct Chan<int> ch = std::Chan::new(16);   // T inferred from the target
 //   ch.send(42);                    // blocks while full; 0 once closed
 //   match (ch.recv()) {             // blocks while empty; null once closed and drained
 //       case some(v): ...
@@ -36,13 +36,15 @@ generic<T>
 struct Chan {
     ?&void raw;   // runtime handle from __safec_chan_create; null if creation failed
 
+    static struct Chan<T> new(int cap);   // buffered channel of `cap` slots
+
     int  send(T val);     // 1 on success, 0 if closed (or never created)
     ?T   recv();          // null once closed and drained
     void close();         // wakes every blocked sender/receiver
 };
 
 generic<T>
-struct Chan<T> chan_new(int cap) {
+struct Chan<T> Chan::new(int cap) {
     static_assert(sizeof(T) <= 8UL, "Chan<T>: T must fit in 8 bytes (channels carry fixed 8-byte payload slots) — send a ?&T to a larger value instead");
     struct Chan<T> c;
     c.raw = null;

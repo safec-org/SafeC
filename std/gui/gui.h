@@ -65,11 +65,11 @@ struct GuiColor {
     unsigned char g;
     unsigned char b;
     unsigned char a;
-};
 
-// Defined in gui_draw.sc.
-struct GuiColor gui_rgba(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
-struct GuiColor gui_rgb(unsigned char r, unsigned char g, unsigned char b);
+    // Defined in gui_draw.sc. rgb() is opaque (a = 255).
+    static struct GuiColor rgba(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+    static struct GuiColor rgb(unsigned char r, unsigned char g, unsigned char b);
+};
 
 struct GuiEvent {
     int          kind;       // GuiEventKind
@@ -98,6 +98,11 @@ struct GuiWindow {
     int                  width;
     int                  height;
     int                  shouldClose;
+
+    // Creates and shows a window with a zeroed (transparent black) pixel
+    // buffer of 'width'x'height'. On failure, returned window's 'platform' is
+    // null and 'width'/'height' are 0 — callers should check before use.
+    static struct GuiWindow create(const &char title, int width, int height);
 
     // Each backend (gui_cocoa/gui_win32/gui_x11/gui_fb.sc) defines these.
 
@@ -138,10 +143,5 @@ struct GuiWindow {
     // Defined in gui_svg.sc.
     int  draw_svg(int ox, int oy, const &char svgText);
 };
-
-// Creates and shows a window with a zeroed (transparent black) pixel
-// buffer of 'width'x'height'. On failure, returned window's 'platform' is
-// null and 'width'/'height' are 0 — callers should check before use.
-struct GuiWindow gui_create_window(const &char title, int width, int height);
 
 } // namespace std

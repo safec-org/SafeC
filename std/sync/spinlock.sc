@@ -4,7 +4,7 @@
 
 namespace std {
 
-inline struct Spinlock spinlock_init() {
+inline struct Spinlock Spinlock::new() {
     struct Spinlock s;
     s.locked = 0;
     return s;

@@ -127,7 +127,7 @@ static int __gui_win32_keycode(unsigned long vk) {
 }
 
 // WndProc: pulls the per-window GuiWin32Platform back out of GWLP_USERDATA
-// (set right after CreateWindowExW in gui_create_window), translates the
+// (set right after CreateWindowExW in GuiWindow::create), translates the
 // message into a GuiEvent, and queues it — actual application logic never
 // runs inside this callback, only GuiWindow::poll_event()'s caller sees events.
 void* __gui_win32_wndproc(void* hwnd, unsigned int msg, unsigned long wparam, long lparam) {
@@ -250,7 +250,7 @@ void* __gui_win32_wndproc(void* hwnd, unsigned int msg, unsigned long wparam, lo
     }
 }
 
-struct GuiWindow gui_create_window(const &char title, int width, int height) {
+struct GuiWindow GuiWindow::create(const &char title, int width, int height) {
     struct GuiWindow win;
     win.platform = null;
     win.width = width;
@@ -338,7 +338,7 @@ void GuiWindow::set_pixel(int x, int y, unsigned int rgba) {
     unsafe {
         unsigned long idx = ((unsigned long)y * (unsigned long)self.width + (unsigned long)x) * 4UL;
         // Win32's DIB is BGRA byte order for BI_RGB 32bpp, unlike Cocoa's
-        // RGBA CGImage — swap R/B here so gui_draw.h's gui_rgba(r,g,b,a)
+        // RGBA CGImage — swap R/B here so gui_draw.h's GuiColor::rgba(r,g,b,a)
         // still means the same visual color on both backends.
         self.pixels[idx + 0UL] = (unsigned char)((rgba >> 8)  & 0xFFU); // B
         self.pixels[idx + 1UL] = (unsigned char)((rgba >> 16) & 0xFFU); // G

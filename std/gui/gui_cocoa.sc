@@ -112,7 +112,7 @@ void __gui_cocoa_init() {
 
 // ── window creation ──────────────────────────────────────────────────────────
 
-struct GuiWindow gui_create_window(const &char title, int width, int height) {
+struct GuiWindow GuiWindow::create(const &char title, int width, int height) {
     __gui_cocoa_init();
 
     struct GuiWindow win;

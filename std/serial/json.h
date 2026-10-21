@@ -6,9 +6,9 @@
 //
 //   struct Point { double x; double y; };
 //   struct Value Point::to_value() const {
-//       struct Value v = value_object();
-//       v.object_set("x", value_float(self.x));
-//       v.object_set("y", value_float(self.y));
+//       struct Value v = Value::object();
+//       v.object_set("x", Value::from_float(self.x));
+//       v.object_set("y", Value::from_float(self.y));
 //       return v;
 //   }
 //   ...
@@ -30,7 +30,7 @@ struct String value_to_json(const &Value v);
 
 // Parses a JSON document. On success, '*ok' (if non-NULL) is set to 1 and
 // the parsed tree is returned; on failure, '*ok' is set to 0 and the
-// return value is value_null(). Ignores trailing content after the first
+// return value is Value::null(). Ignores trailing content after the first
 // complete value (matches most JSON libraries' default leniency).
 struct Value json_parse(const &char text, ?&int ok);
 

@@ -14,6 +14,12 @@ struct Sha256Ctx {
     unsigned long total_bytes;   // total bytes processed
     int           is224;         // 1 = SHA-224 variant
 
+    // A fresh SHA-256 context.
+    static struct Sha256Ctx new();
+
+    // A fresh SHA-224 context (same struct, is224 = 1).
+    static struct Sha256Ctx new_224();
+
     // Feed `len` bytes of data into the hash.
     void update(const &unsigned char data, unsigned long len);
 
@@ -22,12 +28,6 @@ struct Sha256Ctx {
     // For SHA-224: digest must be at least 28 bytes.
     void finish(&unsigned char digest);
 };
-
-// Initialise a SHA-256 context.
-struct Sha256Ctx sha256_init();
-
-// Initialise a SHA-224 context.
-struct Sha256Ctx sha224_init();
 
 // Convenience: hash `len` bytes and write 32-byte digest.
 void sha256(const &unsigned char data, unsigned long len,

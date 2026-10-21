@@ -46,7 +46,7 @@ static struct MemDisk memdisk_load(const &char path) {
     struct MemDisk d;
     d.data = null;
     d.size = 0UL;
-    ?&File fq = file_open(path, "rb");
+    ?&File fq = File::open(path, "rb");
     if (fq.is_null()) return d;
     &File f = std::expect_ref(fq, "memdisk file");
     long long sz = f.size();
@@ -247,7 +247,7 @@ void t_ext2() {
 }
 
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("tmpfs+vfs", t_tmpfs_vfs);
         t.add("partition (MBR)", t_partition);

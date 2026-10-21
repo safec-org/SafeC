@@ -15,10 +15,11 @@
 // around the loop, which is what makes a plucked string's timbre brighten-
 // then-decay the way it audibly does. Seed the delay line with an
 // excitation buffer (e.g. white noise, or a single impulse) via
-// ks_init/ks_reset, then call process() repeatedly with no input — the
+// KarplusStrong::new/reset, then call process() repeatedly with no input — the
 // string is self-sustaining except for the built-in decay.
 #pragma once
 #include <std/dsp/fixed.h>
+#include <std/dsp/sample_filter.h>
 
 namespace std {
 
@@ -30,6 +31,10 @@ struct CombFF {
 
     double process(double x);
     void   reset();
+    void   process_block(const &double in, &double out, unsigned long n);   // out may alias in
+
+    // 'history' is the caller's ring buffer of 'delay' samples, zeroed.
+    static struct CombFF new(&double history, unsigned long delay, double gain);
 };
 
 struct CombFB {
@@ -40,6 +45,9 @@ struct CombFB {
 
     double process(double x);
     void   reset();
+    void   process_block(const &double in, &double out, unsigned long n);   // out may alias in
+
+    static struct CombFB new(&double history, unsigned long delay, double gain);
 };
 
 struct KarplusStrong {
@@ -53,11 +61,11 @@ struct KarplusStrong {
     // if n < length the remainder is left at its previous contents —
     // callers doing a fresh pluck should size the excitation to 'length').
     void   reset(const &double excitation, unsigned long n);
-};
 
-struct CombFF comb_ff_init(&double history, unsigned long delay, double gain);
-struct CombFB comb_fb_init(&double history, unsigned long delay, double gain);
-struct KarplusStrong ks_init(&double buffer, unsigned long length, double damping);
+    // 'buffer' is the caller's delay line of 'length' samples; seed it
+    // (or call reset) with an excitation before process().
+    static struct KarplusStrong new(&double buffer, unsigned long length, double damping);
+};
 
 // Single precision: the three filters above on float buffers.
 struct CombFF32 {
@@ -68,6 +76,9 @@ struct CombFF32 {
 
     float process(float x);
     void  reset();
+    void  process_block(const &float in, &float out, unsigned long n);   // out may alias in
+
+    static struct CombFF32 new(&float history, unsigned long delay, float gain);
 };
 
 struct CombFB32 {
@@ -78,6 +89,9 @@ struct CombFB32 {
 
     float process(float x);
     void  reset();
+    void  process_block(const &float in, &float out, unsigned long n);   // out may alias in
+
+    static struct CombFB32 new(&float history, unsigned long delay, float gain);
 };
 
 struct KarplusStrong32 {
@@ -88,11 +102,9 @@ struct KarplusStrong32 {
 
     float process();
     void  reset(const &float excitation, unsigned long n);
-};
 
-struct CombFF32 comb_ff_init_f32(&float history, unsigned long delay, float gain);
-struct CombFB32 comb_fb_init_f32(&float history, unsigned long delay, float gain);
-struct KarplusStrong32 ks_init_f32(&float buffer, unsigned long length, float damping);
+    static struct KarplusStrong32 new(&float buffer, unsigned long length, float damping);
+};
 
 struct FCombFF {
     &Fixed history;
@@ -102,6 +114,9 @@ struct FCombFF {
 
     Fixed process(Fixed x);
     void  reset();
+    void  process_block(const &Fixed in, &Fixed out, unsigned long n);   // out may alias in
+
+    static struct FCombFF new(&Fixed history, unsigned long delay, Fixed gain);
 };
 
 struct FCombFB {
@@ -112,6 +127,9 @@ struct FCombFB {
 
     Fixed process(Fixed x);
     void  reset();
+    void  process_block(const &Fixed in, &Fixed out, unsigned long n);   // out may alias in
+
+    static struct FCombFB new(&Fixed history, unsigned long delay, Fixed gain);
 };
 
 struct FKarplusStrong {
@@ -122,10 +140,8 @@ struct FKarplusStrong {
 
     Fixed process();
     void  reset(const &Fixed excitation, unsigned long n);
-};
 
-struct FCombFF comb_ff_init_fixed(&Fixed history, unsigned long delay, Fixed gain);
-struct FCombFB comb_fb_init_fixed(&Fixed history, unsigned long delay, Fixed gain);
-struct FKarplusStrong ks_init_fixed(&Fixed buffer, unsigned long length, Fixed damping);
+    static struct FKarplusStrong new(&Fixed buffer, unsigned long length, Fixed damping);
+};
 
 } // namespace std

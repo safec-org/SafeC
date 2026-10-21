@@ -19,7 +19,7 @@
 //   struct Point Point::from_proto(const unsigned char* data, unsigned long len, int* ok) {
 //       struct Point p;
 //       p.x = 0; p.y = 0;
-//       struct PbReader r = pb_reader_new(data, len);
+//       struct PbReader r = PbReader::new(data, len);
 //       int good = 1;
 //       while (r.has_more()) {
 //           int field; int wireType;
@@ -88,6 +88,9 @@ struct PbReader {
     unsigned long        len;
     unsigned long        pos;
 
+    // A reader positioned at the start of data[0..len).
+    static struct PbReader new(const &unsigned char data, unsigned long len);
+
     int has_more() const;
 
     // Each returns 1 on success, 0 on a truncated/malformed encoding (ran
@@ -114,7 +117,5 @@ struct PbReader {
     // a truncated encoding.
     int skip_field(int wire_type);
 };
-
-struct PbReader pb_reader_new(const &unsigned char data, unsigned long len);
 
 } // namespace std

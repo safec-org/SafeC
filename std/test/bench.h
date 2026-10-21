@@ -22,6 +22,9 @@ struct BenchSuite {
     struct BenchCase cases[BENCH_MAX];
     int count;
 
+    // An empty suite.
+    static struct BenchSuite new();
+
     // Type-erased registration behind bench_add.
     void add_raw_(const char* name, void* func, void* arg, unsigned long iters);
 
@@ -31,8 +34,6 @@ struct BenchSuite {
     // Print results table to stdout.
     void print_results() const;
 };
-
-struct BenchSuite bench_suite_init();
 
 // Register a benchmark: func(arg) is called `iters` times per run.
 generic<T>

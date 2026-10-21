@@ -6,7 +6,7 @@
 #endif
 
 // ── Hosted-mode extern declarations ──────────────────────────────────────────
-// clock() is used only in hosted mode (perf_counter_init calibration).
+// clock() is used only in hosted mode (PerfCounter::new calibration).
 namespace std {
 
 extern long  clock();    // POSIX clock() returns long; CLOCKS_PER_SEC = 1000000
@@ -86,11 +86,11 @@ inline unsigned long long PerfCounter::ns() const {
          + r * (unsigned long long)1000000000 / self.freq_hz;
 }
 
-// ── perf_counter_init ─────────────────────────────────────────────────────────
+// ── PerfCounter::new ──────────────────────────────────────────────────────────
 // Attempts to calibrate the cycle counter frequency using clock() over a short
 // spin.  In freestanding mode, or if calibration fails, sets freq_hz = 0.
 
-struct PerfCounter perf_counter_init() {
+struct PerfCounter PerfCounter::new() {
     struct PerfCounter ctr;
     ctr.start_val = (unsigned long long)0;
     ctr.end_val   = (unsigned long long)0;

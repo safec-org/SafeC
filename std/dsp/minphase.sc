@@ -18,7 +18,7 @@ void minimum_phase(const &double x, unsigned long n, unsigned long fftLen, &doub
         if (i < n) {
             unsafe { v = x[i]; }
         }
-        unsafe { spec[i] = complex_new(v, 0.0); }
+        unsafe { spec[i] = Complex::new(v, 0.0); }
         i = i + 1UL;
     }
     unsafe { fft(spec, fftLen); }
@@ -30,7 +30,7 @@ void minimum_phase(const &double x, unsigned long n, unsigned long fftLen, &doub
         unsafe { xi = spec[i]; }
         double mag = xi.abs();
         double logMag = log_d(mag + 1e-9);
-        unsafe { spec[i] = complex_new(logMag, 0.0); }
+        unsafe { spec[i] = Complex::new(logMag, 0.0); }
         i = i + 1UL;
     }
 
@@ -56,7 +56,7 @@ void minimum_phase(const &double x, unsigned long n, unsigned long fftLen, &doub
         } else if (i == half) {
             wv = cre;
         }
-        unsafe { spec[i] = complex_new(wv, 0.0); }
+        unsafe { spec[i] = Complex::new(wv, 0.0); }
         i = i + 1UL;
     }
 
@@ -72,7 +72,7 @@ void minimum_phase(const &double x, unsigned long n, unsigned long fftLen, &doub
         double b;
         unsafe { a = wi.re; b = wi.im; }
         double ea = exp_d(a);
-        unsafe { spec[i] = complex_new(ea * cos_d(b), ea * sin_d(b)); }
+        unsafe { spec[i] = Complex::new(ea * cos_d(b), ea * sin_d(b)); }
         i = i + 1UL;
     }
 

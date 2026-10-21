@@ -6,7 +6,7 @@
 
 namespace std {
 
-inline Complex complex_new(double re, double im) {
+inline Complex Complex::new(double re, double im) {
     Complex c;
     c.re = re;
     c.im = im;
@@ -14,16 +14,16 @@ inline Complex complex_new(double re, double im) {
 }
 
 inline Complex Complex::operator+(Complex other) const {
-    return complex_new(self.re + other.re, self.im + other.im);
+    return Complex::new(self.re + other.re, self.im + other.im);
 }
 
 inline Complex Complex::operator-(Complex other) const {
-    return complex_new(self.re - other.re, self.im - other.im);
+    return Complex::new(self.re - other.re, self.im - other.im);
 }
 
 inline Complex Complex::operator*(Complex other) const {
     // (a+bi)(c+di) = (ac-bd) + (ad+bc)i
-    return complex_new(self.re * other.re - self.im * other.im,
+    return Complex::new(self.re * other.re - self.im * other.im,
                         self.re * other.im + self.im * other.re);
 }
 
@@ -32,11 +32,11 @@ inline Complex Complex::operator/(Complex other) const {
     double denom = other.re * other.re + other.im * other.im;
     double nre = self.re * other.re + self.im * other.im;
     double nim = self.im * other.re - self.re * other.im;
-    return complex_new(nre / denom, nim / denom);
+    return Complex::new(nre / denom, nim / denom);
 }
 
 inline Complex Complex::neg() const {
-    return complex_new(-self.re, -self.im);
+    return Complex::new(-self.re, -self.im);
 }
 
 inline double Complex::abs() const {
@@ -48,14 +48,14 @@ inline double Complex::arg() const {
 }
 
 inline Complex Complex::conj() const {
-    return complex_new(self.re, -self.im);
+    return Complex::new(self.re, -self.im);
 }
 
-inline Complex complex_from_polar(double magnitude, double theta) {
-    return complex_new(magnitude * cos_d(theta), magnitude * sin_d(theta));
+inline Complex Complex::polar(double magnitude, double theta) {
+    return Complex::new(magnitude * cos_d(theta), magnitude * sin_d(theta));
 }
 
-inline Complex32 complex32_new(float re, float im) {
+inline Complex32 Complex32::new(float re, float im) {
     Complex32 c;
     c.re = re;
     c.im = im;
@@ -63,15 +63,15 @@ inline Complex32 complex32_new(float re, float im) {
 }
 
 inline Complex32 Complex32::operator+(Complex32 other) const {
-    return complex32_new(self.re + other.re, self.im + other.im);
+    return Complex32::new(self.re + other.re, self.im + other.im);
 }
 
 inline Complex32 Complex32::operator-(Complex32 other) const {
-    return complex32_new(self.re - other.re, self.im - other.im);
+    return Complex32::new(self.re - other.re, self.im - other.im);
 }
 
 inline Complex32 Complex32::operator*(Complex32 other) const {
-    return complex32_new(self.re * other.re - self.im * other.im,
+    return Complex32::new(self.re * other.re - self.im * other.im,
                          self.re * other.im + self.im * other.re);
 }
 
@@ -79,11 +79,11 @@ inline Complex32 Complex32::operator/(Complex32 other) const {
     float denom = other.re * other.re + other.im * other.im;
     float nre = self.re * other.re + self.im * other.im;
     float nim = self.im * other.re - self.re * other.im;
-    return complex32_new(nre / denom, nim / denom);
+    return Complex32::new(nre / denom, nim / denom);
 }
 
 inline Complex32 Complex32::neg() const {
-    return complex32_new(-self.re, -self.im);
+    return Complex32::new(-self.re, -self.im);
 }
 
 inline float Complex32::abs() const {
@@ -95,22 +95,22 @@ inline float Complex32::arg() const {
 }
 
 inline Complex32 Complex32::conj() const {
-    return complex32_new(self.re, -self.im);
+    return Complex32::new(self.re, -self.im);
 }
 
-inline Complex32 complex32_from_polar(float magnitude, float theta) {
-    return complex32_new(magnitude * cos_f(theta), magnitude * sin_f(theta));
+inline Complex32 Complex32::polar(float magnitude, float theta) {
+    return Complex32::new(magnitude * cos_f(theta), magnitude * sin_f(theta));
 }
 
-inline Complex32 complex_to_f32(Complex c) {
-    return complex32_new((float)c.re, (float)c.im);
+inline Complex32 Complex32::from(Complex c) {
+    return Complex32::new((float)c.re, (float)c.im);
 }
 
-inline Complex complex_from_f32(Complex32 c) {
-    return complex_new((double)c.re, (double)c.im);
+inline Complex Complex32::to_complex() const {
+    return Complex::new((double)self.re, (double)self.im);
 }
 
-inline FComplex fcomplex_new(Fixed re, Fixed im) {
+inline FComplex FComplex::new(Fixed re, Fixed im) {
     FComplex c;
     c.re = re;
     c.im = im;
@@ -118,11 +118,11 @@ inline FComplex fcomplex_new(Fixed re, Fixed im) {
 }
 
 inline FComplex FComplex::operator+(FComplex other) const {
-    return fcomplex_new(fixed_add(self.re, other.re), fixed_add(self.im, other.im));
+    return FComplex::new(fixed_add(self.re, other.re), fixed_add(self.im, other.im));
 }
 
 inline FComplex FComplex::operator-(FComplex other) const {
-    return fcomplex_new(fixed_sub(self.re, other.re), fixed_sub(self.im, other.im));
+    return FComplex::new(fixed_sub(self.re, other.re), fixed_sub(self.im, other.im));
 }
 
 inline FComplex FComplex::operator*(FComplex other) const {
@@ -131,11 +131,11 @@ inline FComplex FComplex::operator*(FComplex other) const {
     Fixed bd = fixed_mul(self.im, other.im);
     Fixed ad = fixed_mul(self.re, other.im);
     Fixed bc = fixed_mul(self.im, other.re);
-    return fcomplex_new(fixed_sub(ac, bd), fixed_add(ad, bc));
+    return FComplex::new(fixed_sub(ac, bd), fixed_add(ad, bc));
 }
 
 inline FComplex FComplex::neg() const {
-    return fcomplex_new(fixed_neg(self.re), fixed_neg(self.im));
+    return FComplex::new(fixed_neg(self.re), fixed_neg(self.im));
 }
 
 inline Fixed FComplex::abs() const {
@@ -144,15 +144,15 @@ inline Fixed FComplex::abs() const {
 }
 
 inline FComplex FComplex::conj() const {
-    return fcomplex_new(self.re, fixed_neg(self.im));
+    return FComplex::new(self.re, fixed_neg(self.im));
 }
 
-inline FComplex complex_to_fixed(Complex c) {
-    return fcomplex_new(fixed_from_float(c.re), fixed_from_float(c.im));
+inline FComplex FComplex::from(Complex c) {
+    return FComplex::new(fixed_from_float(c.re), fixed_from_float(c.im));
 }
 
-inline Complex fcomplex_to_float(FComplex c) {
-    return complex_new(fixed_to_float(c.re), fixed_to_float(c.im));
+inline Complex FComplex::to_complex() const {
+    return Complex::new(fixed_to_float(self.re), fixed_to_float(self.im));
 }
 
 } // namespace std

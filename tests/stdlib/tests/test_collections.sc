@@ -109,7 +109,7 @@ void t_string() {
         unsigned long n = csv.split(",", &parts[0], 4UL);
         ASSERT_EQ(n, 3);
         ASSERT_TRUE(parts[2].eq_cstr("c"));
-        struct String joined = string_join("-", &parts[0], n);
+        struct String joined = String::join("-", &parts[0], n);
         ASSERT_STR_EQ(joined.as_ptr(), "a-b-c");
         int ok = 0;
         struct String num = String::from("12345");
@@ -502,7 +502,7 @@ void t_string_more() {
 }
 
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("vec", t_vec);
         t.add("string", t_string);

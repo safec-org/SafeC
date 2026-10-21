@@ -6,7 +6,7 @@
 // portable rect/text primitives every gui_* backend shares, so a UI built
 // here looks identical on Cocoa/Win32/X11/bare metal.
 //
-// A widget tree is built once (widget_vstack(), widget_button(), ...,
+// A widget tree is built once (Widget::vstack(), Widget::button(), ...,
 // parent.add_child(child)), then driven once per frame:
 //
 //   root.layout(0, 0, win.width, win.height);
@@ -18,7 +18,7 @@
 // Every built-in widget constructor returns a heap-allocated
 // 'struct Widget*' with sensible defaults already set — customize it with
 // its set_*() methods and the widget_on_*() calls below (each returns the same
-// widget pointer, so calls chain: widget_button("Go").set_padding(8)
+// widget pointer, so calls chain: Widget::button("Go").set_padding(8)
 // .set_bg(r,g,b,a)). Every widget is fully independently
 // customizable: colors, border, padding, spacing, preferred size, stretch
 // weight, cross-axis alignment, font (and font scale), visibility, and
@@ -121,6 +121,21 @@ struct Widget {
     struct Vec<&Widget> children;
     ?&Widget parent;        // empty (null) for the root widget
 
+    // ── constructors ─────────────────────────────────────────────────────
+    // All return a freshly heap-allocated, non-null widget — a region-less
+    // '&Widget' (see README's "Outliving references"), since nothing here
+    // cares whether the tree it ends up in is heap/stack/static/arena-owned.
+    // (widget_custom, below, stays a free function: it is generic over the
+    // caller's userData type.)
+    static &Widget vstack();
+    static &Widget hstack();
+    static &Widget button(const &char text);
+    static &Widget label(const &char text);
+    static &Widget checkbox(const &char text, int checked);
+    static &Widget textinput(const &char placeholder);
+    static &Widget spacer();
+    static &Widget slider(double minValue, double maxValue, double value);
+
     // ── tree ─────────────────────────────────────────────────────────────
     void add_child(&Widget child);
 
@@ -196,19 +211,6 @@ typedef fn void(&Widget, int, int, int, int) WidgetLayoutFn;
 // reaching this widget's parent/siblings), 0 to let normal dispatch
 // (hover/press/click detection) continue.
 typedef fn int(&Widget, &GuiEvent) WidgetCustomEventFn;
-
-// ── constructors ─────────────────────────────────────────────────────────────
-// All return a freshly heap-allocated, non-null widget — a region-less
-// '&Widget' (see README's "Outliving references"), since nothing here
-// cares whether the tree it ends up in is heap/stack/static/arena-owned.
-&Widget widget_vstack();
-&Widget widget_hstack();
-&Widget widget_button(const &char text);
-&Widget widget_label(const &char text);
-&Widget widget_checkbox(const &char text, int checked);
-&Widget widget_textinput(const &char placeholder);
-&Widget widget_spacer();
-&Widget widget_slider(double minValue, double maxValue, double value);
 
 // Custom widgets: 'draw'/'layout' are required; 'eventFn' may be NULL (the
 // widget then just participates in hit-testing/hover/press/click like a

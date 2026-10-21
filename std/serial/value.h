@@ -54,6 +54,15 @@ struct Value {
     struct Vec<struct Value>       arr_val;   // VAL_ARRAY  — elements by value
     struct Vec<struct ObjectEntry> obj_val;   // VAL_OBJECT — key/value entries by value
 
+    // ── Construction ────────────────────────────────────────────────────────
+    static struct Value null();
+    static struct Value from_bool(int v);
+    static struct Value from_int(long long v);
+    static struct Value from_float(double v);
+    static struct Value from_str(const &char s);   // copies s
+    static struct Value array();                   // empty; grow with v.array_push
+    static struct Value object();                  // empty; grow with v.object_set
+
     int kind_of() const;
     int is_null() const;
     int as_bool() const;
@@ -82,16 +91,12 @@ struct Value {
     void            free();
 };
 
-struct Value value_null();
-struct Value value_bool(int v);
-struct Value value_int(long long v);
-struct Value value_float(double v);
-struct Value value_string(const &char s);   // copies s
-struct Value value_array();                 // empty; grow with v.array_push
-struct Value value_object();                // empty; grow with v.object_set
-
 // Kept for std/ml until its refactor moves to the methods above; forward to
+// Value::array() / Value::object() / Value::from_str(s) /
 // arr.array_push(v) / obj.object_set(key, v) / v.clone() / v.free().
+struct Value value_array();
+struct Value value_object();
+struct Value value_string(const &char s);
 void value_array_push(&Value arr, struct Value v);
 void value_object_set(&Value obj, const &char key, struct Value v);
 struct Value value_clone(const &Value v);

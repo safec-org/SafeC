@@ -13,16 +13,16 @@
 #include <std/scx/scx.h>
 
 static struct Value sample() {
-    struct Value o = value_object();
-    o.object_set("name", value_string("Ada \"L\""));
-    o.object_set("age", value_int(36LL));
-    o.object_set("pi", value_float(3.5));
-    o.object_set("ok", value_bool(1));
-    o.object_set("nil", value_null());
-    struct Value arr = value_array();
-    arr.array_push(value_int(1LL));
-    arr.array_push(value_int(2LL));
-    arr.array_push(value_string("three"));
+    struct Value o = Value::object();
+    o.object_set("name", Value::from_str("Ada \"L\""));
+    o.object_set("age", Value::from_int(36LL));
+    o.object_set("pi", Value::from_float(3.5));
+    o.object_set("ok", Value::from_bool(1));
+    o.object_set("nil", Value::null());
+    struct Value arr = Value::array();
+    arr.array_push(Value::from_int(1LL));
+    arr.array_push(Value::from_int(2LL));
+    arr.array_push(Value::from_str("three"));
     o.object_set("list", arr);
     return o;
 }
@@ -132,7 +132,7 @@ void t_protobuf() {
         pb_write_string_field(&buf, 3, "hi");
         pb_write_double_field(&buf, 4, 2.25);
         pb_write_bool_field(&buf, 5, 1);
-        struct PbReader r = pb_reader_new((const unsigned char*)buf.as_ptr(), buf.length());
+        struct PbReader r = PbReader::new((const unsigned char*)buf.as_ptr(), buf.length());
         int fn_ = 0;
         int wt = 0;
         long long iv = 0LL;
@@ -164,7 +164,7 @@ void t_protobuf() {
 
 void t_markdown() {
     unsafe {
-        &heap MdNode doc = md_parse("# Title\n\nSome **bold** and *it* with `code` and [link](http://x).\n\n- a\n- b\n\n```\nfn()\n```\n");
+        &heap MdNode doc = MdNode::parse("# Title\n\nSome **bold** and *it* with `code` and [link](http://x).\n\n- a\n- b\n\n```\nfn()\n```\n");
         struct String html = doc.render_html();
         ASSERT_TRUE(html.contains("<h1>Title</h1>"));
         ASSERT_TRUE(html.contains("<strong>bold</strong>"));
@@ -173,7 +173,7 @@ void t_markdown() {
         ASSERT_TRUE(html.contains("<a href=\"http://x\">link</a>"));
         ASSERT_TRUE(html.contains("<li>"));
         struct String md = doc.render_markdown();
-        &heap MdNode doc2 = md_parse(md.as_ptr());
+        &heap MdNode doc2 = MdNode::parse(md.as_ptr());
         struct String html2 = doc2.render_html();
         ASSERT_STR_EQ(html.as_ptr(), html2.as_ptr());
         html.free(); html2.free(); md.free();
@@ -225,7 +225,7 @@ void t_writers_varint() {
         int i = 0;
         while (i < 6) { pb_write_varint(&buf, vals[i]); i = i + 1; }
         ASSERT_EQ(buf.length(), 1 + 1 + 2 + 2 + 10 + 10);
-        struct PbReader r = pb_reader_new((const unsigned char*)buf.as_ptr(), buf.length());
+        struct PbReader r = PbReader::new((const unsigned char*)buf.as_ptr(), buf.length());
         int good = 1;
         i = 0;
         while (i < 6) {
@@ -237,7 +237,7 @@ void t_writers_varint() {
         ASSERT_FALSE(r.has_more());
         unsigned long long v = 0ULL;
         ASSERT_FALSE(r.read_varint(&v));                      // nothing left
-        struct PbReader trunc = pb_reader_new((const unsigned char*)"\x80\x80", 2UL);
+        struct PbReader trunc = PbReader::new((const unsigned char*)"\x80\x80", 2UL);
         ASSERT_FALSE(trunc.read_varint(&v));                  // unterminated
         buf.free();
 
@@ -249,7 +249,7 @@ void t_writers_varint() {
 }
 
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("value", t_value);
         t.add("json", t_json);

@@ -18,7 +18,7 @@
 // alloc and dealloc with these signatures. Each call is resolved at compile
 // time (no dispatch at run time).
 //
-//   struct BumpAllocator arena = bump_new(4096UL);
+//   struct BumpAllocator arena = BumpAllocator::new(4096UL);
 //   ?&heap Packet p = alloc_t(&arena);              // T = Packet, from the target
 //   ?&heap float xs = alloc_array_t(&arena, 64UL);  // 64 floats
 //   ...
@@ -32,7 +32,7 @@
 //         8; null beyond, and null when size > its object size.
 //   tlsf  up to 8; null beyond.
 // The bounds for pool, slab and tlsf assume an 8-aligned backing buffer:
-// always true for *_new; for *_init it's the buffer you pass.
+// always true for X::new; for X::over it's the buffer you pass.
 #include <std/mem.h>
 
 namespace std {

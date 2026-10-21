@@ -8,6 +8,7 @@
 #include <std/convert.h>
 #include <std/str.h>
 #include <std/sched/io_nb.h>
+#include <std/io_traits.h>
 #include <std/sched/reactor.h>
 #include <std/thread.h>
 extern void* malloc(size_t size);
@@ -226,15 +227,30 @@ static int read_n_(int fd, struct String* out, unsigned long want) {
     return 1;
 }
 
-static int write_all_(int fd, const char* data, unsigned long len) {
-    unsigned long sent = 0UL;
-    while (sent < len) {
-        long n;
-        unsafe { n = sock_write_(fd, (const void*)(data + sent), len - sent); }
-        if (n <= 0L) { return 0; }
-        sent = sent + (unsigned long)n;
-    }
-    return 1;
+// ── TcpStream ─────────────────────────────────────────────────────────────
+
+struct TcpStream TcpStream::from_fd(int fd) {
+    struct TcpStream s;
+    s.fd = fd;
+    return s;
+}
+
+long long TcpStream::read(&unsigned char buf, unsigned long n) {
+    unsafe { return (long long)sock_read_(self.fd, (void*)buf, n); }
+}
+
+long long TcpStream::write(const &unsigned char buf, unsigned long n) {
+    unsafe { return (long long)sock_write_(self.fd, (const void*)buf, n); }
+}
+
+int TcpStream::close() {
+    unsafe { return sock_close_(self.fd); }
+}
+
+// The whole of 'text' to the socket; 1 on success.
+static int write_text_(int fd, const &String text) {
+    struct TcpStream s = TcpStream::from_fd(fd);
+    unsafe { return write_all(&s, (const &unsigned char)text.as_ptr(), text.length()); }
 }
 
 // ── Header parsing ────────────────────────────────────────────────────────
@@ -453,7 +469,7 @@ struct HttpResponse http_request_timeout(const &char host, unsigned short port,
             req.push("\r\n");
             if (body_len > 0UL) { req.push_n((const char*)body, body_len); }
         }
-        if (!write_all_(fd, req.as_ptr(), req.length())) { good = 0; }
+        if (!write_text_(fd, &req)) { good = 0; }
         req.free();
     }
 
@@ -621,7 +637,7 @@ int http_serve(unsigned short port, HttpHandler handler) {
         if (reqOk) {
             struct HttpResponse resp = handler(&req);
             struct String respText = http_render_response_(&resp);
-            write_all_(clientFd, respText.as_ptr(), respText.length());
+            write_text_(clientFd, &respText);
             respText.free();
             resp.free();
         }
@@ -653,7 +669,7 @@ static ?&__HttpThreadCtx __http_worker_main(?&__HttpThreadCtx argPtr) {
             struct HttpResponse resp;
             unsafe { resp = ctx->handler(&req); }
             struct String respText = http_render_response_(&resp);
-            write_all_(clientFd, respText.as_ptr(), respText.length());
+            write_text_(clientFd, &respText);
             respText.free();
             resp.free();
         }
@@ -1148,9 +1164,9 @@ static ?&HttpReactorThreadCtx_ http_reactor_worker_(?&HttpReactorThreadCtx_ argP
         struct HttpReactorThreadCtx_* ctx = (struct HttpReactorThreadCtx_*)argPtr;
         struct HttpReactorShared_* shared = ctx->shared;
 
-        struct Reactor reactor = reactor_init();
+        struct Reactor reactor = Reactor::new();
         if (reactor.init() != 0) { return null; }
-        struct TaskScheduler sched = task_sched_init();
+        struct TaskScheduler sched = TaskScheduler::new();
 
         struct HttpDispatchQ_* myQueue = shared->queues + ctx->selfIndex;
 

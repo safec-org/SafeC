@@ -22,6 +22,9 @@ struct ThreadSched {
     struct TaskScheduler inner;             // underlying round-robin scheduler
     int                  priority[THREAD_MAX];  // per-thread priority (higher = first)
 
+    // An empty thread scheduler (all slots empty, no threads running).
+    static struct ThreadSched new();
+
     // Type-erased spawn behind thread_spawn() (below).
     Thread  spawn_raw_(void* func, void* arg, int priority);
 
@@ -41,9 +44,6 @@ struct ThreadSched {
     // Return number of active (non-DONE) threads.
     int     active_count() const;
 };
-
-// Initialize a thread scheduler (all slots empty, no threads running).
-struct ThreadSched thread_sched_init();
 
 // Spawn a thread running func(arg, resume_point) (same protocol as
 // task_spawn). priority >= 0; higher values run earlier in each tick.

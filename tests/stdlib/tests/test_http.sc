@@ -18,6 +18,8 @@
 #include <std/http/websocket.h>
 #include <std/rpc/rpc.h>
 #include <std/rpc/server_fn.h>
+#include <std/io_traits.h>
+#include <std/ipc/pipe.h>
 
 static unsigned short g_http_port = (unsigned short)0;
 static unsigned short g_rpc_port = (unsigned short)0;
@@ -110,7 +112,7 @@ static struct Value fn_add(const &Value args) {
         if (!av.is_null()) a = av->as_int();
         if (!bv.is_null()) b = bv->as_int();
     }
-    return value_int(a + b);
+    return Value::from_int(a + b);
 }
 
 static ?&int run_fn(?&int arg) {
@@ -217,6 +219,40 @@ void t_http_roundtrip() {
     }
 }
 
+// TcpStream through io_traits.h: a hand-written request with write_all,
+// the status line with read_exact, the rest with copy_stream into a Pipe.
+void t_tcp_stream() {
+    start_servers();
+    unsafe {
+        int ok = 0;
+        struct HttpResponse warm = get_retry("/echo", &ok);   // server is up
+        warm.free();
+        unsigned int lo = sched_ipv4((unsigned char)127, (unsigned char)0,
+                                     (unsigned char)0, (unsigned char)1);
+        int fd = tcp_connect_timeout(lo, g_http_port, 2000);
+        ASSERT_TRUE(fd >= 0);
+        if (fd < 0) return;
+        struct TcpStream s = TcpStream::from_fd(fd);
+        const &char req = "POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello";
+        ASSERT_EQ(write_all(&s, (const &unsigned char)req, str_len(req)), 1);
+        unsigned char status[12];
+        ASSERT_EQ(read_exact(&s, &status[0], 12UL), 1);
+        ASSERT_EQ(status[9], '2');
+        ASSERT_EQ(status[11], '0');
+        struct Pipe p;
+        ASSERT_EQ(p.init(), 0);
+        long long rest = copy_stream(&s, &p);       // until the server closes
+        ASSERT_TRUE(rest > 5LL);
+        ASSERT_EQ(s.close(), 0);
+        p.close_write();
+        unsigned char tail[4096];
+        long long n = p.read(&tail[0], 4096UL);
+        ASSERT_EQ(n, rest);
+        if (n >= 5LL) { ASSERT_EQ(tail[n - 1LL], 'o'); }   // body "hello" last
+        p.close_read();
+    }
+}
+
 void t_cors() {
     unsafe {
         struct HttpRequest req;
@@ -239,9 +275,9 @@ void t_cors() {
 
 void t_jwt() {
     unsafe {
-        struct Value claims = value_object();
-        claims.object_set("sub", value_string("1234567890"));
-        claims.object_set("admin", value_bool(1));
+        struct Value claims = Value::object();
+        claims.object_set("sub", Value::from_str("1234567890"));
+        claims.object_set("admin", Value::from_bool(1));
         struct String tok = jwt_sign(&claims, "secret");
         ASSERT_EQ(tok.count("."), 2);
         ASSERT_TRUE(tok.starts_with("eyJ"));   // base64url of '{"'
@@ -271,8 +307,8 @@ void t_oauth2() {
         int ok = 0;
         struct HttpResponse warm = get_retry("/echo", &ok);
         warm.free();
-        struct OAuth2Token t = oauth2_exchange_code("127.0.0.1", g_http_port, "/token", "cid", "csecret",
-                                                    "code42", "http://localhost/cb", &ok);
+        struct OAuth2Token t = OAuth2Token::exchange_code("127.0.0.1", g_http_port, "/token", "cid", "csecret",
+                                                          "code42", "http://localhost/cb", &ok);
         ASSERT_TRUE(ok);
         ASSERT_STR_EQ(t.accessToken.as_ptr(), "abc123");
         ASSERT_STR_EQ(t.refreshToken.as_ptr(), "r1");
@@ -307,9 +343,9 @@ void t_rpc() {
         ASSERT_FALSE(miss.ok);
         miss.free();
 
-        struct Value args = value_object();
-        args.object_set("a", value_int(40LL));
-        args.object_set("b", value_int(2LL));
+        struct Value args = Value::object();
+        args.object_set("a", Value::from_int(40LL));
+        args.object_set("b", Value::from_int(2LL));
         int ok = 0;
         struct Value res;
         tries = 0;
@@ -334,7 +370,7 @@ void t_websocket() {
         struct WsConn c;
         int tries = 0;
         while (1) {
-            c = ws_connect("127.0.0.1", g_ws_port, "/", &ok);
+            c = WsConn::connect("127.0.0.1", g_ws_port, "/", &ok);
             if (ok || tries >= 50) break;
             thread_sleep_ms(20UL);
             tries = tries + 1;
@@ -432,7 +468,7 @@ void t_connect_timeout() {
         r.free();
 
         t0 = time_mono_ns();
-        struct WsConn c = ws_connect_timeout("127.0.0.1", silentPort, "/", 300, &ok);
+        struct WsConn c = WsConn::connect_timeout("127.0.0.1", silentPort, "/", 300, &ok);
         ASSERT_FALSE(ok);
         ASSERT_EQ(c.fd, -1);
         ASSERT_TRUE(ms_since(t0) < 2000LL);
@@ -541,9 +577,10 @@ int main() {
     // Watchdog: a networking regression should fail this test, not hang
     // the whole 'safeguard test' run (SIGALRM's default action terminates).
     unsafe { alarm(60u); }
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("http client/server", t_http_roundtrip);
+        t.add("tcp stream (io traits)", t_tcp_stream);
         t.add("cors", t_cors);
         t.add("jwt hs256", t_jwt);
         t.add("oauth2 code exchange", t_oauth2);

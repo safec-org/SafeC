@@ -9,6 +9,7 @@
 #include <std/convert.h>
 #include <std/str.h>
 #include <std/sched/io_nb.h>
+#include <std/io_traits.h>
 #include <std/crypto/sha1.h>
 #include <std/crypto/sha1.h>
 #include <std/crypto/rng.h>
@@ -20,46 +21,6 @@
 // file (http.sc supplies http_resolve_host/http_header_get, reused below).
 
 namespace std {
-
-// Same platform split as http.sc's sock_read_/sock_write_/sock_close_
-// (file-local there, so repeated here): Winsock sockets only support
-// recv/send/closesocket, and on Linux writes go through send() with
-// MSG_NOSIGNAL so a peer that has gone away can't kill the process with
-// SIGPIPE (io_nb_bsd.sc sets SO_NOSIGPIPE on BSD/macOS sockets instead).
-#ifdef _WIN32
-extern int recv(unsigned long long fd, void* buf, int count, int flags);
-extern int send(unsigned long long fd, const void* buf, int count, int flags);
-extern int closesocket(unsigned long long fd);
-static long ws_sock_read_(int fd, void* buf, unsigned long count) {
-    unsafe { return (long)recv((unsigned long long)fd, buf, (int)count, 0); }
-}
-static long ws_sock_write_(int fd, const void* buf, unsigned long count) {
-    unsafe { return (long)send((unsigned long long)fd, buf, (int)count, 0); }
-}
-static int ws_sock_close_(int fd) {
-    unsafe { return closesocket((unsigned long long)fd); }
-}
-#else
-extern ssize_t read(int fd, void* buf, size_t count);
-extern int close(int fd);
-static long ws_sock_read_(int fd, void* buf, unsigned long count) {
-    unsafe { return read(fd, buf, count); }
-}
-#ifdef __linux__
-extern ssize_t send(int fd, const void* buf, size_t count, int flags);
-static long ws_sock_write_(int fd, const void* buf, unsigned long count) {
-    unsafe { return send(fd, buf, count, 0x4000); } // MSG_NOSIGNAL
-}
-#else
-extern ssize_t write(int fd, const void* buf, size_t count);
-static long ws_sock_write_(int fd, const void* buf, unsigned long count) {
-    unsafe { return write(fd, buf, count); }
-}
-#endif
-static int ws_sock_close_(int fd) {
-    unsafe { return close(fd); }
-}
-#endif
 
 void WsMessage::free() {
     if (self.data != (unsigned char*)0) {
@@ -87,55 +48,31 @@ static struct String ws_compute_accept_(const char* key) {
     return base64_encode(digest, 20UL);
 }
 
-// ── Shared blocking I/O helpers (see http.sc's identically-shaped, but
-// file-local, versions — duplicated here rather than exposed from http.h
-// since these are small and this module shouldn't need to reach into
-// http.sc's request/response-specific internals). ──
-
+// Reads from the socket until 'terminator' has arrived, appending to 'out'.
+// Returns the offset just past the terminator, or -1 if the connection
+// closed first.
 static long ws_read_until_(int fd, struct String* out, const char* terminator) {
     unsigned long termLen; unsafe { termLen = str_len(terminator); }
-    char chunk[512];
+    struct TcpStream s = TcpStream::from_fd(fd);
+    unsigned char chunk[512];
     while (1) {
-        long n;
-        unsafe { n = ws_sock_read_(fd, (void*)chunk, 512UL); }
-        if (n <= 0L) { return -1L; }
-        unsafe { out->push_n(chunk, (unsigned long)n); }
+        long long n = s.read(&chunk[0], 512UL);
+        if (n <= 0LL) { return -1L; }
+        unsafe { out->push_n((const char*)&chunk[0], (unsigned long)n); }
         long idx; unsafe { idx = out->index_of(terminator); }
         if (idx >= 0L) { return idx + (long)termLen; }
     }
 }
 
-static int ws_write_all_(int fd, const char* data, unsigned long len) {
-    unsigned long sent = 0UL;
-    while (sent < len) {
-        long n;
-        unsafe { n = ws_sock_write_(fd, (const void*)(data + sent), len - sent); }
-        if (n <= 0L) { return 0; }
-        sent = sent + (unsigned long)n;
-    }
-    return 1;
-}
-
-static int ws_read_n_(int fd, unsigned char* out, unsigned long want) {
-    unsigned long got = 0UL;
-    while (got < want) {
-        long n;
-        unsafe { n = ws_sock_read_(fd, (void*)(out + got), want - got); }
-        if (n <= 0L) { return 0; }
-        got = got + (unsigned long)n;
-    }
-    return 1;
-}
-
 // ── Client handshake ───────────────────────────────────────────────────────
 
-struct WsConn ws_connect(const &char host, unsigned short port,
-                          const &char path, ?&int ok) {
-    return ws_connect_timeout(host, port, path, WS_DEFAULT_TIMEOUT_MS, ok);
+struct WsConn WsConn::connect(const &char host, unsigned short port,
+                              const &char path, ?&int ok) {
+    return WsConn::connect_timeout(host, port, path, WS_DEFAULT_TIMEOUT_MS, ok);
 }
 
-struct WsConn ws_connect_timeout(const &char host, unsigned short port,
-                                  const &char path, int timeout_ms, ?&int ok) {
+struct WsConn WsConn::connect_timeout(const &char host, unsigned short port,
+                                      const &char path, int timeout_ms, ?&int ok) {
     struct WsConn conn;
     conn.fd = -1;
     conn.is_server = 0;
@@ -181,7 +118,10 @@ struct WsConn ws_connect_timeout(const &char host, unsigned short port,
             req.push(keyB64.as_ptr());
             req.push("\r\nSec-WebSocket-Version: 13\r\n\r\n");
         }
-        if (!ws_write_all_(fd, req.as_ptr(), req.length())) { good = 0; }
+        struct TcpStream s = TcpStream::from_fd(fd);
+        int sent;
+        unsafe { sent = write_all(&s, (const &unsigned char)req.as_ptr(), req.length()); }
+        if (!sent) { good = 0; }
         req.free();
     }
 
@@ -213,7 +153,8 @@ struct WsConn ws_connect_timeout(const &char host, unsigned short port,
     if (good) {
         conn.fd = fd;
     } else if (fd >= 0) {
-        unsafe { ws_sock_close_(fd); }
+        struct TcpStream s = TcpStream::from_fd(fd);
+        s.close();
     }
     if (ok != (int*)0) { unsafe { *ok = good; } }
     return conn;
@@ -264,14 +205,18 @@ int WsConn::accept(int listenFd) {
             resp.push(accept.as_ptr());
             resp.push("\r\n\r\n");
         }
-        if (!ws_write_all_(fd, resp.as_ptr(), resp.length())) { good = 0; }
+        struct TcpStream s = TcpStream::from_fd(fd);
+        int sent;
+        unsafe { sent = write_all(&s, (const &unsigned char)resp.as_ptr(), resp.length()); }
+        if (!sent) { good = 0; }
         resp.free();
         accept.free();
     }
     key.free();
 
     if (!good) {
-        unsafe { ws_sock_close_(fd); }
+        struct TcpStream s = TcpStream::from_fd(fd);
+        s.close();
         return 0;
     }
     unsafe {
@@ -288,6 +233,7 @@ static int ws_write_frame_(struct WsConn* conn, int opcode,
     int fd;
     int mustMask;
     unsafe { fd = conn->fd; mustMask = (conn->is_server != 0) ? 0 : 1; }
+    struct TcpStream s = TcpStream::from_fd(fd);
 
     unsigned char head[10];
     unsigned long headLen = 0UL;
@@ -311,7 +257,7 @@ static int ws_write_frame_(struct WsConn* conn, int opcode,
             headLen = 10UL;
         }
     }
-    if (!ws_write_all_(fd, (const char*)head, headLen)) { return 0; }
+    if (!write_all(&s, &head[0], headLen)) { return 0; }
 
     if (mustMask) {
         unsigned char maskKey[4];
@@ -320,7 +266,7 @@ static int ws_write_frame_(struct WsConn* conn, int opcode,
         unsafe { rngOk = rng.init(); }
         if (!rngOk) { return 0; }
         unsafe { rng.fill(&maskKey[0], 4UL); }
-        if (!ws_write_all_(fd, (const char*)maskKey, 4UL)) { return 0; }
+        if (!write_all(&s, &maskKey[0], 4UL)) { return 0; }
 
         if (len > 0UL) {
             unsigned char* masked;
@@ -335,14 +281,14 @@ static int ws_write_frame_(struct WsConn* conn, int opcode,
                 i = i + 1UL;
             }
             int wrote;
-            unsafe { wrote = ws_write_all_(fd, (const char*)masked, len); }
+            unsafe { wrote = write_all(&s, (const &unsigned char)masked, len); }
             unsafe { dealloc_raw_((void*)masked); }
             if (!wrote) { return 0; }
         }
     } else {
         if (len > 0UL) {
             int ok;
-            unsafe { ok = ws_write_all_(fd, (const char*)data, len); }
+            unsafe { ok = write_all(&s, (const &unsigned char)data, len); }
             if (!ok) { return 0; }
         }
     }
@@ -373,10 +319,10 @@ int WsConn::send_close() {
 }
 
 int WsConn::recv(&WsMessage out) {
-    int fd = self.fd;
+    struct TcpStream s = TcpStream::from_fd(self.fd);
 
     unsigned char head[2];
-    if (!ws_read_n_(fd, head, 2UL)) { return 0; }
+    if (!read_exact(&s, &head[0], 2UL)) { return 0; }
     int opcode;
     int maskBit;
     unsigned long len7;
@@ -389,11 +335,11 @@ int WsConn::recv(&WsMessage out) {
     unsigned long payloadLen = len7;
     if (len7 == 126UL) {
         unsigned char ext[2];
-        if (!ws_read_n_(fd, ext, 2UL)) { return 0; }
+        if (!read_exact(&s, &ext[0], 2UL)) { return 0; }
         unsafe { payloadLen = ((unsigned long)ext[0] << 8) | (unsigned long)ext[1]; }
     } else if (len7 == 127UL) {
         unsigned char ext[8];
-        if (!ws_read_n_(fd, ext, 8UL)) { return 0; }
+        if (!read_exact(&s, &ext[0], 8UL)) { return 0; }
         unsigned long v = 0UL;
         int i = 0;
         while (i < 8) {
@@ -407,14 +353,16 @@ int WsConn::recv(&WsMessage out) {
 
     unsigned char maskKey[4];
     if (maskBit != 0) {
-        if (!ws_read_n_(fd, maskKey, 4UL)) { return 0; }
+        if (!read_exact(&s, &maskKey[0], 4UL)) { return 0; }
     }
 
     unsigned char* payload = (unsigned char*)0;
     if (payloadLen > 0UL) {
         unsafe { payload = (unsigned char*)alloc_raw_(payloadLen); }
         if (payload == (unsigned char*)0) { return 0; }
-        if (!ws_read_n_(fd, payload, payloadLen)) {
+        int got;
+        unsafe { got = read_exact(&s, (&unsigned char)payload, payloadLen); }
+        if (!got) {
             unsafe { dealloc_raw_((void*)payload); }
             return 0;
         }
@@ -440,8 +388,10 @@ int WsConn::recv(&WsMessage out) {
 
 void WsConn::close() {
     self.send_close();
-    int fd = self.fd;
-    if (fd >= 0) { unsafe { ws_sock_close_(fd); } }
+    if (self.fd >= 0) {
+        struct TcpStream s = TcpStream::from_fd(self.fd);
+        s.close();
+    }
 }
 
 } // namespace std

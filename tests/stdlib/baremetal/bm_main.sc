@@ -163,7 +163,7 @@ static void t_ring_alloc() {
         r.read(out, 10UL);
         CHECK(out[9] == 39);
 
-        struct TlsfAllocator t = std::tlsf_new(32768UL);
+        struct TlsfAllocator t = std::TlsfAllocator::new(32768UL);
         ?&heap void a = t.alloc(100UL, 8UL);
         ?&heap void b = t.alloc(3000UL, 8UL);
         CHECK(!a.is_null() && !b.is_null());
@@ -173,13 +173,13 @@ static void t_ring_alloc() {
         CHECK(!c.is_null());
         t.destroy();
 
-        struct SlabAllocator sl = std::slab_new(24UL, 8UL);
+        struct SlabAllocator sl = std::SlabAllocator::new(24UL, 8UL);
         ?&heap unsigned long s1 = std::alloc_t(&sl);   // through the Allocator trait
         CHECK(!s1.is_null());
         CHECK(sl.available() == 7UL);
         sl.destroy();
 
-        struct PoolAllocator p = std::pool_new(2048UL);
+        struct PoolAllocator p = std::PoolAllocator::new(2048UL);
         unsigned long before = p.available();
         ?&heap void pa = p.alloc(200UL, 8UL);
         CHECK(!pa.is_null());
@@ -207,7 +207,7 @@ static void t_crypto() {
         unsigned char blk[16];
         int i = 0;
         while (i < 16) { key[i] = (unsigned char)i; blk[i] = (unsigned char)(i * 17); i = i + 1; }
-        struct AesCtx c = std::aes128_init(key);
+        struct AesCtx c = std::AesCtx::new_128(key);
         c.encrypt_block(blk);
         hex(blk, 16UL, h);
         CHECK(str_is(h, "69c4e0d86a7b0430d8cdb78070b4c55a"));
@@ -243,9 +243,9 @@ static void t_fixed_net() {
 
 static void t_serial_sync() {
     unsafe {
-        struct Value o = std::value_object();
-        o.object_set("n", std::value_int(-42LL));
-        o.object_set("s", std::value_string("bm"));
+        struct Value o = std::Value::object();
+        o.object_set("n", std::Value::from_int(-42LL));
+        o.object_set("s", std::Value::from_str("bm"));
         struct String js = std::value_to_json(&o);
         int ok = 0;
         struct Value back = std::json_parse(js.as_ptr(), &ok);
@@ -257,7 +257,7 @@ static void t_serial_sync() {
         back.free();
         o.free();
 
-        struct Spinlock sp = std::spinlock_init();
+        struct Spinlock sp = std::Spinlock::new();
         sp.lock();
         CHECK(sp.is_locked());
         CHECK(!sp.trylock());

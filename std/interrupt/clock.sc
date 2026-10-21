@@ -9,7 +9,7 @@
 
 namespace std {
 
-inline struct ClockConfig clock_init(&volatile unsigned int base) {
+inline struct ClockConfig ClockConfig::new(&volatile unsigned int base) {
     struct ClockConfig c;
     c.base     = base;
     c.source   = 0; // HSI default

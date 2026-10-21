@@ -11,6 +11,10 @@
 // via the same pointer-to-integer convention std::thread.h's OS-thread
 // handles already use.
 //
+// Pipe conforms to io_traits.h's Reader and Writer (read from the read end,
+// write to the write end), so read_exact / write_all / copy_stream work on
+// it.
+//
 // Backends (picked the same way as std/sched/reactor.h's):
 //   pipe_posix.sc  — macOS, iOS, Linux, Android, FreeBSD (pipe() is
 //                    identical across all of these — no per-OS split

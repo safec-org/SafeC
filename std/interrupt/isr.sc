@@ -4,7 +4,7 @@
 
 namespace std {
 
-inline struct IsrTable isr_init() {
+inline struct IsrTable IsrTable::new() {
     struct IsrTable t;
     t.count = 0;
     int i = 0;

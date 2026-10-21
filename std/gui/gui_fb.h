@@ -19,9 +19,9 @@ struct GuiFbConfig {
     int redShift; int greenShift; int blueShift; // bit position of each channel's LSB (32bpp only; ignored for 16bpp RGB565)
 };
 
-// Must be called once, before gui_create_window(), with the real
+// Must be called once, before GuiWindow::create(), with the real
 // framebuffer's parameters (see struct GuiFbConfig's field comments).
-// Without it gui_create_window() fails (its 'platform' is null).
+// Without it GuiWindow::create() fails (its 'platform' is null).
 void gui_fb_configure(struct GuiFbConfig cfg);
 
 // Called by a target's own input driver/ISR with whatever it decodes (e.g.

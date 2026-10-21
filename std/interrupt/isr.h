@@ -19,10 +19,10 @@ struct IsrTable {
     // Dispatch: call the handler for IRQ `irq` if registered.
     // Returns 1 if a handler was called, 0 if no handler registered.
     int   dispatch(int irq);
-};
 
-// Initialize an ISR vector table (all entries set to NULL).
-struct IsrTable isr_init();
+    // Initialize an ISR vector table (all entries set to NULL).
+    static struct IsrTable new();
+};
 
 // Disable all interrupts (platform-specific inline asm).
 void irq_disable();

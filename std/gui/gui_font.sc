@@ -7,6 +7,7 @@
 #include <std/gui/gui_font.h>
 #include <std/mem.h>
 #include <std/io_file.h>
+#include <std/io_traits.h>
 #include <std/panic.h>
 extern void* memset(void* ptr, int val, size_t n);
 
@@ -17,7 +18,7 @@ static int __gui_font_bytes_per_glyph(int glyphW, int glyphH) {
     return (bits + 7) / 8;
 }
 
-struct GuiFont gui_font_new(int glyphW, int glyphH, int first, int count) {
+struct GuiFont GuiFont::new(int glyphW, int glyphH, int first, int count) {
     struct GuiFont f;
     f.glyphW = glyphW;
     f.glyphH = glyphH;
@@ -78,8 +79,8 @@ void GuiFont::set_bit(int cp, int px, int py, int value) {
 // re-derive an equivalent GuiFont here by calling the public
 // GuiWindow::draw_text() (gui.h, defined in gui_draw.sc) for each glyph
 // instead of reaching into its internals.
-struct GuiFont gui_font_default() {
-    struct GuiFont f = gui_font_new(8, 8, 32, 95);
+struct GuiFont GuiFont::default() {
+    struct GuiFont f = GuiFont::new(8, 8, 32, 95);
     int cp = 32;
     while (cp <= 126) {
         // Render this one glyph at scale 1 into a throwaway 8x8 window
@@ -97,7 +98,7 @@ struct GuiFont gui_font_default() {
         }
         char one[2];
         unsafe { one[0] = (char)cp; one[1] = '\0'; }
-        struct GuiColor white = gui_rgba(255U, 255U, 255U, 255U);
+        struct GuiColor white = GuiColor::rgba(255U, 255U, 255U, 255U);
         unsafe { tmp.draw_text(0, 0, (const char*)one, white, 1); }
 
         int py = 0;
@@ -129,7 +130,7 @@ void GuiFont::free() {
 }
 
 int GuiFont::save(const &char path) const {
-    ?&File fq = file_open(path, "wb");
+    ?&File fq = File::open(path, "wb");
     if (fq.is_null()) { return 0; }
     &File f = expect_ref(fq, "GuiFont::save: file");
 
@@ -152,28 +153,28 @@ int GuiFont::save(const &char path) const {
         header[14] = (unsigned char)((count >> 16) & 0xFFU);
         header[15] = (unsigned char)((count >> 24) & 0xFFU);
     }
-    unsigned long wrote;
-    unsafe { wrote = f.write(&header[0], 16UL); }
-    if (wrote != 16UL) { f.close(); return 0; }
+    int wrote;
+    unsafe { wrote = write_all(f, &header[0], 16UL); }
+    if (!wrote) { f.close(); return 0; }
 
     int glyphW; int glyphH; int count;
     unsafe { glyphW = self.glyphW; glyphH = self.glyphH; count = self.count; }
     unsigned long total = (unsigned long)(__gui_font_bytes_per_glyph(glyphW, glyphH) * count);
-    unsigned long bodyWrote;
-    unsafe { bodyWrote = f.write((const &unsigned char)self.bitmap, total); }
+    int bodyWrote;
+    unsafe { bodyWrote = write_all(f, (const &unsigned char)self.bitmap, total); }
     f.close();
-    return (bodyWrote == total) ? 1 : 0;
+    return bodyWrote;
 }
 
 int GuiFont::load(const &char path) {
-    ?&File fq = file_open(path, "rb");
+    ?&File fq = File::open(path, "rb");
     if (fq.is_null()) { return 0; }
     &File f = expect_ref(fq, "GuiFont::load: file");
 
     unsigned char header[16];
-    unsigned long got;
-    unsafe { got = f.read(&header[0], 16UL); }
-    if (got != 16UL) { f.close(); return 0; }
+    int got;
+    unsafe { got = read_exact(f, &header[0], 16UL); }
+    if (!got) { f.close(); return 0; }
 
     int ok = 1;
     unsafe {
@@ -195,12 +196,12 @@ int GuiFont::load(const &char path) {
               | ((unsigned int)header[14] << 16) | ((unsigned int)header[15] << 24);
     }
 
-    struct GuiFont loaded = gui_font_new(glyphW, glyphH, (int)first, (int)count);
+    struct GuiFont loaded = GuiFont::new(glyphW, glyphH, (int)first, (int)count);
     unsigned long total = (unsigned long)(__gui_font_bytes_per_glyph(glyphW, glyphH) * (int)count);
-    unsigned long bodyGot;
-    unsafe { bodyGot = f.read((&unsigned char)loaded.bitmap, total); }
+    int bodyGot;
+    unsafe { bodyGot = read_exact(f, (&unsigned char)loaded.bitmap, total); }
     f.close();
-    if (bodyGot != total) {
+    if (!bodyGot) {
         loaded.free();
         return 0;
     }

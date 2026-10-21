@@ -45,6 +45,9 @@ struct TaskScheduler {
     int           count;     // number of registered tasks
     int           current;   // index of currently running task
 
+    // An empty scheduler (no tasks).
+    static struct TaskScheduler new();
+
     // Type-erased spawn behind task_spawn() (below) and the compiler's
     // bare-metal spawn runtime. Returns task index, or -1 if full.
     int           spawn_raw_(void* func, void* arg);
@@ -82,9 +85,6 @@ struct TaskScheduler {
     // uses to decide whether to poll with a zero or infinite timeout.
     int           has_ready() const;
 };
-
-// Initialize a task scheduler.
-struct TaskScheduler task_sched_init();
 
 // Spawn a task running func(arg, resume_point):
 //   - func returns >0 to yield, with that value as the next resume_point

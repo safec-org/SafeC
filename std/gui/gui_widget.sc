@@ -13,11 +13,11 @@
 namespace std {
 
 static struct GuiColor __widget_default_bg(int kind) {
-    if (kind == WIDGET_BUTTON) { return gui_rgba(70U, 70U, 78U, 255U); }
-    if (kind == WIDGET_TEXTINPUT) { return gui_rgba(30U, 30U, 34U, 255U); }
-    if (kind == WIDGET_CHECKBOX) { return gui_rgba(0U, 0U, 0U, 0U); }
-    if (kind == WIDGET_SLIDER) { return gui_rgba(50U, 50U, 56U, 255U); }
-    return gui_rgba(0U, 0U, 0U, 0U);
+    if (kind == WIDGET_BUTTON) { return GuiColor::rgba(70U, 70U, 78U, 255U); }
+    if (kind == WIDGET_TEXTINPUT) { return GuiColor::rgba(30U, 30U, 34U, 255U); }
+    if (kind == WIDGET_CHECKBOX) { return GuiColor::rgba(0U, 0U, 0U, 0U); }
+    if (kind == WIDGET_SLIDER) { return GuiColor::rgba(50U, 50U, 56U, 255U); }
+    return GuiColor::rgba(0U, 0U, 0U, 0U);
 }
 
 static &Widget __widget_new(int kind) {
@@ -32,8 +32,8 @@ static &Widget __widget_new(int kind) {
         w->alignment = WIDGET_ALIGN_START;
 
         w->style.bg = __widget_default_bg(kind);
-        w->style.fg = gui_rgba(230U, 230U, 235U, 255U);
-        w->style.border = gui_rgba(110U, 110U, 120U, 255U);
+        w->style.fg = GuiColor::rgba(230U, 230U, 235U, 255U);
+        w->style.border = GuiColor::rgba(110U, 110U, 120U, 255U);
         w->style.borderWidth = 0;
         w->style.padding = 6;
         w->style.spacing = 6;
@@ -69,17 +69,17 @@ static &Widget __widget_new(int kind) {
     return w;
 }
 
-&Widget widget_vstack() {
+&Widget Widget::vstack() {
     return __widget_new(WIDGET_VSTACK);
 }
-&Widget widget_hstack() {
+&Widget Widget::hstack() {
     return __widget_new(WIDGET_HSTACK);
 }
-&Widget widget_spacer() {
+&Widget Widget::spacer() {
     &Widget w = __widget_new(WIDGET_SPACER);
     unsafe { w->stretch = 1; return w; }
 }
-&Widget widget_button(const &char text) {
+&Widget Widget::button(const &char text) {
     &Widget w = __widget_new(WIDGET_BUTTON);
     unsafe {
         w->text.free();
@@ -87,7 +87,7 @@ static &Widget __widget_new(int kind) {
         return w;
     }
 }
-&Widget widget_label(const &char text) {
+&Widget Widget::label(const &char text) {
     &Widget w = __widget_new(WIDGET_LABEL);
     unsafe {
         w->text.free();
@@ -95,7 +95,7 @@ static &Widget __widget_new(int kind) {
         return w;
     }
 }
-&Widget widget_checkbox(const &char text, int checked) {
+&Widget Widget::checkbox(const &char text, int checked) {
     &Widget w = __widget_new(WIDGET_CHECKBOX);
     unsafe {
         w->text.free();
@@ -104,7 +104,7 @@ static &Widget __widget_new(int kind) {
         return w;
     }
 }
-&Widget widget_textinput(const &char placeholder) {
+&Widget Widget::textinput(const &char placeholder) {
     &Widget w = __widget_new(WIDGET_TEXTINPUT);
     unsafe {
         w->text.free();
@@ -112,7 +112,7 @@ static &Widget __widget_new(int kind) {
         return w;
     }
 }
-&Widget widget_slider(double minValue, double maxValue, double value) {
+&Widget Widget::slider(double minValue, double maxValue, double value) {
     &Widget w = __widget_new(WIDGET_SLIDER);
     unsafe {
         w->sliderMin = minValue;
@@ -143,16 +143,16 @@ void Widget::add_child(&Widget child) {
 // ── customization ────────────────────────────────────────────────────────────
 
 &Widget Widget::set_bg(unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-    unsafe { self.style.bg = gui_rgba(r, g, b, a); }
+    unsafe { self.style.bg = GuiColor::rgba(r, g, b, a); }
     unsafe { return (struct Widget*)self; }
 }
 &Widget Widget::set_fg(unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-    unsafe { self.style.fg = gui_rgba(r, g, b, a); }
+    unsafe { self.style.fg = GuiColor::rgba(r, g, b, a); }
     unsafe { return (struct Widget*)self; }
 }
 &Widget Widget::set_border(unsigned char r, unsigned char g, unsigned char b,
                                   unsigned char a, int width) {
-    unsafe { self.style.border = gui_rgba(r, g, b, a); self.style.borderWidth = width; }
+    unsafe { self.style.border = GuiColor::rgba(r, g, b, a); self.style.borderWidth = width; }
     unsafe { return (struct Widget*)self; }
 }
 &Widget Widget::set_padding(int padding) {
@@ -401,18 +401,18 @@ void Widget::render(&GuiWindow win) {
         if (borderWidth > 0) { win.draw_rect_border(x, y, w, h, border, borderWidth); }
     } else if (kind == WIDGET_BUTTON) {
         struct GuiColor fill = bg;
-        if (!enabled) { fill = gui_rgba(50U, 50U, 54U, 255U); }
+        if (!enabled) { fill = GuiColor::rgba(50U, 50U, 54U, 255U); }
         else if (pressed) {
             unsigned char pr = (unsigned char)(bg.r > 30U ? bg.r - 30U : 0U);
             unsigned char pg = (unsigned char)(bg.g > 30U ? bg.g - 30U : 0U);
             unsigned char pb = (unsigned char)(bg.b > 30U ? bg.b - 30U : 0U);
-            fill = gui_rgba(pr, pg, pb, bg.a);
+            fill = GuiColor::rgba(pr, pg, pb, bg.a);
         }
         else if (hover) {
             unsigned char hr = (unsigned char)(bg.r + 15U > 255U ? 255U : bg.r + 15U);
             unsigned char hg = (unsigned char)(bg.g + 15U > 255U ? 255U : bg.g + 15U);
             unsigned char hb = (unsigned char)(bg.b + 15U > 255U ? 255U : bg.b + 15U);
-            fill = gui_rgba(hr, hg, hb, bg.a);
+            fill = GuiColor::rgba(hr, hg, hb, bg.a);
         }
         win.fill_rect(x, y, w, h, fill);
         win.draw_rect_border(x, y, w, h, border, borderWidth > 0 ? borderWidth : 1);
@@ -430,12 +430,12 @@ void Widget::render(&GuiWindow win) {
     } else if (kind == WIDGET_CHECKBOX) {
         int boxSize = 16;
         int boxY = y + (h - boxSize) / 2;
-        struct GuiColor boxFill = enabled ? gui_rgba(30U, 30U, 34U, 255U) : gui_rgba(45U, 45U, 48U, 255U);
+        struct GuiColor boxFill = enabled ? GuiColor::rgba(30U, 30U, 34U, 255U) : GuiColor::rgba(45U, 45U, 48U, 255U);
         win.fill_rect(x, boxY, boxSize, boxSize, boxFill);
         win.draw_rect_border(x, boxY, boxSize, boxSize, border, 1);
         int checked; unsafe { checked = self.checked; }
         if (checked) {
-            win.fill_rect(x + 3, boxY + 3, boxSize - 6, boxSize - 6, gui_rgba(90U, 170U, 255U, 255U));
+            win.fill_rect(x + 3, boxY + 3, boxSize - 6, boxSize - 6, GuiColor::rgba(90U, 170U, 255U, 255U));
         }
         struct GuiColor fg; int scale; const struct GuiFont* font;
         unsafe { fg = self.style.fg; scale = self.style.fontScale; font = self.style.font; }
@@ -450,7 +450,7 @@ void Widget::render(&GuiWindow win) {
     } else if (kind == WIDGET_TEXTINPUT) {
         int focused; unsafe { focused = self.focused; }
         win.fill_rect(x, y, w, h, bg);
-        win.draw_rect_border(x, y, w, h, focused ? gui_rgba(90U, 170U, 255U, 255U) : border, borderWidth > 0 ? borderWidth : 1);
+        win.draw_rect_border(x, y, w, h, focused ? GuiColor::rgba(90U, 170U, 255U, 255U) : border, borderWidth > 0 ? borderWidth : 1);
         int padding; unsafe { padding = self.style.padding; }
         struct GuiColor fg; int scale; const struct GuiFont* font;
         unsafe { fg = self.style.fg; scale = self.style.fontScale; font = self.style.font; }
@@ -469,7 +469,7 @@ void Widget::render(&GuiWindow win) {
         double frac = (maxV > minV) ? (val - minV) / (maxV - minV) : 0.0;
         if (frac < 0.0) { frac = 0.0; } if (frac > 1.0) { frac = 1.0; }
         int handleX = x + (int)(frac * (double)(w - 12));
-        win.fill_rect(handleX, y, 12, h, gui_rgba(90U, 170U, 255U, 255U));
+        win.fill_rect(handleX, y, 12, h, GuiColor::rgba(90U, 170U, 255U, 255U));
     }
 
     if (kind == WIDGET_VSTACK || kind == WIDGET_HSTACK) {

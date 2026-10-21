@@ -10,7 +10,7 @@
 //
 // On-disk format ("SCXF", version 1) — little-endian, no external
 // dependency (not TTF/OTF — a font must already be rasterized to a
-// GuiFont, e.g. via gui_font_new()+font.set_bit(), before it can be
+// GuiFont, e.g. via GuiFont::new()+font.set_bit(), before it can be
 // saved):
 //   offset 0  (4 bytes)  magic "SCXF"
 //   offset 4  (1 byte)   version = 1
@@ -33,6 +33,15 @@ struct GuiFont {
     int first;                  // first codepoint this font covers
     int count;                  // number of glyphs (codepoints first..first+count-1)
     &heap unsigned char bitmap; // count * bytesPerGlyph(glyphW,glyphH) bytes
+
+    // Allocates a blank (all-zero) font of the given shape, ready for
+    // set_bit() calls to draw each glyph programmatically.
+    static struct GuiFont new(int glyphW, int glyphH, int first, int count);
+
+    // A heap-owned copy of the built-in 8x8 font (see gui_draw.sc), in the
+    // same generic GuiFont representation — e.g. as a starting point to edit
+    // with set_bit() and save a modified variant. Release it with free().
+    static struct GuiFont default();
 
     // Bit accessors, (0,0) = top-left of the glyph for codepoint 'cp'.
     // Reads return 0 for an out-of-range codepoint or pixel; writes are a
@@ -59,14 +68,5 @@ struct GuiFont {
     int  text_width(const &char text, int scale) const;
     int  text_height(int scale) const;
 };
-
-// Allocates a blank (all-zero) font of the given shape, ready for
-// set_bit() calls to draw each glyph programmatically.
-struct GuiFont gui_font_new(int glyphW, int glyphH, int first, int count);
-
-// A heap-owned copy of the built-in 8x8 font (see gui_draw.sc), in the
-// same generic GuiFont representation — e.g. as a starting point to edit
-// with set_bit() and save a modified variant.
-struct GuiFont gui_font_default();
 
 } // namespace std

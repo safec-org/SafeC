@@ -440,7 +440,7 @@ Channels — `std/sync/channel.h`'s `Chan<T>` is a typed, bounded, blocking MPMC
 ```c
 #include <std/sync/channel.h>
 
-struct Chan<int> ch = std::chan_new(4);   // capacity 4
+struct Chan<int> ch = std::Chan::new(4);  // capacity 4
 ch.send(42);                              // blocks while full; 0 once closed
 match (ch.recv()) {                       // blocks while empty; null once closed and drained
     case some(v): printf("got %d\n", v);
@@ -449,7 +449,7 @@ match (ch.recv()) {                       // blocks while empty; null once close
 ch.close();
 ```
 
-For single-consumer fan-in from multiple producer threads without the channel runtime's blocking/condvar overhead, `std/sync/mpsc.h` provides a spinlock-guarded bounded ring buffer (`struct MpscQueue<T> q = std::mpsc_new(64UL); q.enqueue(v); q.dequeue()` → `?T`); `std/sync/lockfree.h`'s `LFQueue<T>` (`lfq_new`) is the single-producer/single-consumer case with no locking at all. For communicating with a *different process* rather than another thread, see `std/ipc/pipe.h` (anonymous pipes, typically parent/child after `fork()`) and `std/ipc/uds.h` (named Unix domain sockets, for unrelated processes).
+For single-consumer fan-in from multiple producer threads without the channel runtime's blocking/condvar overhead, `std/sync/mpsc.h` provides a spinlock-guarded bounded ring buffer (`struct MpscQueue<T> q = std::MpscQueue::new(64UL); q.enqueue(v); q.dequeue()` → `?T`); `std/sync/lockfree.h`'s `LFQueue<T>` (`LFQueue::new`) is the single-producer/single-consumer case with no locking at all. For communicating with a *different process* rather than another thread, see `std/ipc/pipe.h` (anonymous pipes, typically parent/child after `fork()`) and `std/ipc/uds.h` (named Unix domain sockets, for unrelated processes).
 
 ### Bare-Metal
 

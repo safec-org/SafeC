@@ -64,7 +64,7 @@ void t_sha256() {
         ASSERT_STR_EQ(hex, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
         // Streaming in odd-size chunks must equal one-shot (448-bit message, FIPS 180-4 B.2).
         const &char msg = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
-        struct Sha256Ctx c = sha256_init();
+        struct Sha256Ctx c = Sha256Ctx::new();
         c.update((const unsigned char*)&msg[0], 5UL);
         c.update((const unsigned char*)&msg[5], 51UL);
         c.finish(d);
@@ -110,14 +110,14 @@ void t_aes() {
         while (i < 32) { key[i] = (unsigned char)i; i = i + 1; }
         i = 0;
         while (i < 16) { blk[i] = (unsigned char)(i * 17); i = i + 1; }  // 00 11 22 .. ff
-        struct AesCtx c = aes128_init(key);
+        struct AesCtx c = AesCtx::new_128(key);
         c.encrypt_block(blk);
         to_hex(blk, 16UL, hex);
         ASSERT_STR_EQ(hex, "69c4e0d86a7b0430d8cdb78070b4c55a");
         c.decrypt_block(blk);
         ASSERT_EQ(blk[1], 0x11);
         ASSERT_EQ(blk[15], 0xff);
-        struct AesCtx c2 = aes256_init(key);
+        struct AesCtx c2 = AesCtx::new_256(key);
         c2.encrypt_block(blk);
         to_hex(blk, 16UL, hex);
         ASSERT_STR_EQ(hex, "8ea2b7ca516745bfeafc49904b496089");
@@ -349,8 +349,8 @@ static const unsigned char kTlsRecord[33] = {
 
 void t_tls_record() {
     unsafe {
-        struct TlsSession a = tls_session_init();
-        struct TlsSession b = tls_session_init();
+        struct TlsSession a = TlsSession::new();
+        struct TlsSession b = TlsSession::new();
         unsigned char out[256];
         unsigned char got[256];
         unsigned char ct = (unsigned char)0;
@@ -408,7 +408,7 @@ void t_tls_record() {
         ASSERT_EQ(nonce[11], iv1[11] ^ 5);   // write_seq is 5 now
 
         struct TlsTranscript tr;
-        tr.hash = sha256_init();
+        tr.hash = Sha256Ctx::new();
         tr.update((const unsigned char*)"abc", 3UL);
         unsigned char d[32];
         char hex[80];
@@ -422,25 +422,44 @@ void t_crypto_misc() {
     unsafe {
         unsigned char d[64];
         char hex[160];
-        struct Sha1Ctx s1 = sha1_init();
+        struct Sha1Ctx s1 = Sha1Ctx::new();
         s1.update((const unsigned char*)"a", 1UL);
         s1.update((const unsigned char*)"bc", 2UL);
         s1.finish(d);
         to_hex(d, 20UL, hex);
         ASSERT_STR_EQ(hex, "a9993e364706816aba3e25717850c26c9cd0d89d");
-        struct Sha512Ctx s5 = sha512_init();
+        struct Sha512Ctx s5 = Sha512Ctx::new();
         s5.update((const unsigned char*)"ab", 2UL);
         s5.update((const unsigned char*)"c", 1UL);
         s5.finish(d);
         to_hex(d, 64UL, hex);
         ASSERT_STR_EQ(hex, "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f");
 
-        struct SecureAllocator sa = secure_alloc_new(32UL, 4UL);
+        struct SecureAllocator sa = SecureAllocator::new(32UL, 4UL);
         ASSERT_EQ(sa.available(), 4);
-        &heap void p = sa.alloc();
-        safe_memset((&unsigned char)p, 0x5A, 32UL);
+        ?&heap void p = sa.alloc(32UL, 8UL);
+        ASSERT_FALSE(p.is_null());
+        match (p) { case null: { } case some(r): { safe_memset((&unsigned char)r, 0x5A, 32UL); } }
         ASSERT_EQ(sa.available(), 3);
-        sa.dealloc((?&heap void)p);
+        sa.dealloc(p);
+        ASSERT_EQ(sa.available(), 4);
+        ASSERT_TRUE(sa.alloc(33UL, 1UL).is_null());     // bigger than a slot
+        ASSERT_TRUE(sa.alloc(8UL, 16UL).is_null());     // alignment above 8
+        // Allocator conformance: the typed helpers work over it, and a slot
+        // comes back zeroed after dealloc_t.
+        ?&heap unsigned long long w = alloc_t(&sa);
+        ASSERT_FALSE(w.is_null());
+        match (w) {
+            case null: { }
+            case some(x): {
+                *x = 0xDEADBEEFULL;
+                unsigned long long* raw = (unsigned long long*)x;
+                raw[1] = 0x77ULL; raw[3] = 0x77ULL;     // the rest of the 32-byte slot
+                dealloc_t(&sa, x);
+                ASSERT_EQ(raw[1], 0);                   // zeroed past the free-list link
+                ASSERT_EQ(raw[3], 0);
+            }
+        }
         ASSERT_EQ(sa.available(), 4);
         sa.destroy();
 
@@ -458,7 +477,7 @@ void t_crypto_misc() {
 }
 
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("sha1", t_sha1);
         t.add("sha256", t_sha256);

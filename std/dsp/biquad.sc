@@ -1,6 +1,6 @@
 // SafeC Standard Library — Biquad implementation (see biquad.h)
 //
-// biquad_lowpass/highpass/bandpass/notch/allpass/peaking/lowshelf/
+// Biquad::lowpass/highpass/bandpass/notch/allpass/peaking/lowshelf/
 // highshelf implement Robert Bristow-Johnson's "Audio EQ Cookbook"
 // formulas verbatim. Correctness is checked in this module's own test
 // suite via the well-known invariants each filter type must satisfy
@@ -22,7 +22,7 @@ namespace std {
 
 typedef vec<float, 2> bq_f32x2_;
 
-inline struct Biquad biquad_new(double b0, double b1, double b2, double a1, double a2) {
+inline struct Biquad Biquad::new(double b0, double b1, double b2, double a1, double a2) {
     struct Biquad bq;
     bq.b0 = b0; bq.b1 = b1; bq.b2 = b2; bq.a1 = a1; bq.a2 = a2;
     bq.z1 = 0.0; bq.z2 = 0.0;
@@ -153,9 +153,9 @@ inline void Biquad::reset() {
 }
 
 // ── Single precision ────────────────────────────────────────────────────────
-// Biquad32: the same filter on floats; design in double, then biquad_to_f32.
+// Biquad32: the same filter on floats; design in double, then Biquad32::from.
 
-inline struct Biquad32 biquad_new_f32(float b0, float b1, float b2, float a1, float a2) {
+inline struct Biquad32 Biquad32::new(float b0, float b1, float b2, float a1, float a2) {
     struct Biquad32 bq;
     bq.b0 = b0; bq.b1 = b1; bq.b2 = b2; bq.a1 = a1; bq.a2 = a2;
     bq.z1 = 0.0; bq.z2 = 0.0;
@@ -280,8 +280,8 @@ inline void Biquad32::reset() {
     self.z2 = 0.0;
 }
 
-inline struct Biquad32 biquad_to_f32(struct Biquad bq) {
-    struct Biquad32 r = biquad_new_f32((float)bq.b0, (float)bq.b1, (float)bq.b2, (float)bq.a1, (float)bq.a2);
+inline struct Biquad32 Biquad32::from(struct Biquad bq) {
+    struct Biquad32 r = Biquad32::new((float)bq.b0, (float)bq.b1, (float)bq.b2, (float)bq.a1, (float)bq.a2);
     r.z1 = (float)bq.z1;
     r.z2 = (float)bq.z2;
     return r;
@@ -303,7 +303,7 @@ static struct RbjCtx_ rbj_setup_(double fs, double f0, double q) {
     return ctx;
 }
 
-struct Biquad biquad_lowpass(double fs, double f0, double q) {
+struct Biquad Biquad::lowpass(double fs, double f0, double q) {
     struct RbjCtx_ c = rbj_setup_(fs, f0, q);
     double a0 = 1.0 + c.alpha;
     double b0 = (1.0 - c.cosW0) / 2.0;
@@ -311,10 +311,10 @@ struct Biquad biquad_lowpass(double fs, double f0, double q) {
     double b2 = (1.0 - c.cosW0) / 2.0;
     double a1 = -2.0 * c.cosW0;
     double a2 = 1.0 - c.alpha;
-    return biquad_new(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0);
+    return Biquad::new(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0);
 }
 
-struct Biquad biquad_highpass(double fs, double f0, double q) {
+struct Biquad Biquad::highpass(double fs, double f0, double q) {
     struct RbjCtx_ c = rbj_setup_(fs, f0, q);
     double a0 = 1.0 + c.alpha;
     double b0 = (1.0 + c.cosW0) / 2.0;
@@ -322,10 +322,10 @@ struct Biquad biquad_highpass(double fs, double f0, double q) {
     double b2 = (1.0 + c.cosW0) / 2.0;
     double a1 = -2.0 * c.cosW0;
     double a2 = 1.0 - c.alpha;
-    return biquad_new(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0);
+    return Biquad::new(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0);
 }
 
-struct Biquad biquad_bandpass(double fs, double f0, double q) {
+struct Biquad Biquad::bandpass(double fs, double f0, double q) {
     struct RbjCtx_ c = rbj_setup_(fs, f0, q);
     double a0 = 1.0 + c.alpha;
     double b0 = c.alpha;
@@ -333,10 +333,10 @@ struct Biquad biquad_bandpass(double fs, double f0, double q) {
     double b2 = -c.alpha;
     double a1 = -2.0 * c.cosW0;
     double a2 = 1.0 - c.alpha;
-    return biquad_new(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0);
+    return Biquad::new(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0);
 }
 
-struct Biquad biquad_notch(double fs, double f0, double q) {
+struct Biquad Biquad::notch(double fs, double f0, double q) {
     struct RbjCtx_ c = rbj_setup_(fs, f0, q);
     double a0 = 1.0 + c.alpha;
     double b0 = 1.0;
@@ -344,10 +344,10 @@ struct Biquad biquad_notch(double fs, double f0, double q) {
     double b2 = 1.0;
     double a1 = -2.0 * c.cosW0;
     double a2 = 1.0 - c.alpha;
-    return biquad_new(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0);
+    return Biquad::new(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0);
 }
 
-struct Biquad biquad_allpass(double fs, double f0, double q) {
+struct Biquad Biquad::allpass(double fs, double f0, double q) {
     struct RbjCtx_ c = rbj_setup_(fs, f0, q);
     double a0 = 1.0 + c.alpha;
     double b0 = 1.0 - c.alpha;
@@ -355,10 +355,10 @@ struct Biquad biquad_allpass(double fs, double f0, double q) {
     double b2 = 1.0 + c.alpha;
     double a1 = -2.0 * c.cosW0;
     double a2 = 1.0 - c.alpha;
-    return biquad_new(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0);
+    return Biquad::new(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0);
 }
 
-struct Biquad biquad_peaking(double fs, double f0, double q, double dbGain) {
+struct Biquad Biquad::peaking(double fs, double f0, double q, double dbGain) {
     double A = pow_d(10.0, dbGain / 40.0);
     struct RbjCtx_ c = rbj_setup_(fs, f0, q);
     double a0 = 1.0 + c.alpha / A;
@@ -367,10 +367,10 @@ struct Biquad biquad_peaking(double fs, double f0, double q, double dbGain) {
     double b2 = 1.0 - c.alpha * A;
     double a1 = -2.0 * c.cosW0;
     double a2 = 1.0 - c.alpha / A;
-    return biquad_new(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0);
+    return Biquad::new(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0);
 }
 
-struct Biquad biquad_lowshelf(double fs, double f0, double s, double dbGain) {
+struct Biquad Biquad::lowshelf(double fs, double f0, double s, double dbGain) {
     double A = pow_d(10.0, dbGain / 40.0);
     double w0 = SAFEC_DSP_TWO_PI_B * f0 / fs;
     double cosW0 = cos_d(w0);
@@ -383,10 +383,10 @@ struct Biquad biquad_lowshelf(double fs, double f0, double s, double dbGain) {
     double b2 =   A * ((A + 1.0) - (A - 1.0) * cosW0 - 2.0 * sqrtA * alpha);
     double a1 =  -2.0 * ((A - 1.0) + (A + 1.0) * cosW0);
     double a2 =        (A + 1.0) + (A - 1.0) * cosW0 - 2.0 * sqrtA * alpha;
-    return biquad_new(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0);
+    return Biquad::new(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0);
 }
 
-struct Biquad biquad_highshelf(double fs, double f0, double s, double dbGain) {
+struct Biquad Biquad::highshelf(double fs, double f0, double s, double dbGain) {
     double A = pow_d(10.0, dbGain / 40.0);
     double w0 = SAFEC_DSP_TWO_PI_B * f0 / fs;
     double cosW0 = cos_d(w0);
@@ -399,11 +399,11 @@ struct Biquad biquad_highshelf(double fs, double f0, double s, double dbGain) {
     double b2 =   A * ((A + 1.0) + (A - 1.0) * cosW0 - 2.0 * sqrtA * alpha);
     double a1 =   2.0 * ((A - 1.0) - (A + 1.0) * cosW0);
     double a2 =        (A + 1.0) - (A - 1.0) * cosW0 - 2.0 * sqrtA * alpha;
-    return biquad_new(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0);
+    return Biquad::new(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0);
 }
 
-struct Biquad bilinear_2nd_order(double B0, double B1, double B2,
-                                         double A0, double A1, double A2, double fs) {
+struct Biquad Biquad::bilinear(double B0, double B1, double B2,
+                              double A0, double A1, double A2, double fs) {
     double k = 2.0 * fs;
     double k2 = k * k;
 
@@ -415,7 +415,7 @@ struct Biquad bilinear_2nd_order(double B0, double B1, double B2,
     double dz1 = 2.0 * (A0 - A2 * k2);
     double dz0 = A2 * k2 - A1 * k + A0;
 
-    return biquad_new(nz2 / dz2, nz1 / dz2, nz0 / dz2, dz1 / dz2, dz0 / dz2);
+    return Biquad::new(nz2 / dz2, nz1 / dz2, nz0 / dz2, dz1 / dz2, dz0 / dz2);
 }
 
 // H(e^{j*omega}) itself — shared by Biquad::response_mag/response_phase below so the
@@ -425,21 +425,21 @@ struct Biquad bilinear_2nd_order(double B0, double B1, double B2,
 // in exactly one place.
 static struct Complex biquad_freq_response_(const &Biquad bq, double fs, double freqHz) {
     double omega = SAFEC_DSP_TWO_PI_B * freqHz / fs;
-    struct Complex zInv = complex_new(cos_d(-omega), sin_d(-omega));
+    struct Complex zInv = Complex::new(cos_d(-omega), sin_d(-omega));
     struct Complex zInv2 = zInv * zInv;
     double b0 = bq.b0; double b1 = bq.b1; double b2 = bq.b2; double a1 = bq.a1; double a2 = bq.a2;
 
-    struct Complex cb0 = complex_new(b0, 0.0);
-    struct Complex cb1 = complex_new(b1, 0.0);
-    struct Complex cb2 = complex_new(b2, 0.0);
+    struct Complex cb0 = Complex::new(b0, 0.0);
+    struct Complex cb1 = Complex::new(b1, 0.0);
+    struct Complex cb2 = Complex::new(b2, 0.0);
     struct Complex numT1 = cb1 * zInv;
     struct Complex numT2 = cb2 * zInv2;
     struct Complex numSum1 = cb0 + numT1;
     struct Complex num = numSum1 + numT2;
 
-    struct Complex ca0 = complex_new(1.0, 0.0);
-    struct Complex ca1 = complex_new(a1, 0.0);
-    struct Complex ca2 = complex_new(a2, 0.0);
+    struct Complex ca0 = Complex::new(1.0, 0.0);
+    struct Complex ca1 = Complex::new(a1, 0.0);
+    struct Complex ca2 = Complex::new(a2, 0.0);
     struct Complex denT1 = ca1 * zInv;
     struct Complex denT2 = ca2 * zInv2;
     struct Complex denSum1 = ca0 + denT1;
@@ -470,7 +470,11 @@ inline void FBiquad::reset() {
     self.z2 = (Fixed)0;
 }
 
-struct FBiquad biquad_to_fixed(struct Biquad bq) {
+void FBiquad::process_block(const &Fixed in, &Fixed out, unsigned long n) {
+    filter_process_each_fixed(self, in, out, n);
+}
+
+struct FBiquad FBiquad::from(struct Biquad bq) {
     struct FBiquad fbq;
     fbq.b0 = fixed_from_float(bq.b0);
     fbq.b1 = fixed_from_float(bq.b1);

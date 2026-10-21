@@ -22,23 +22,23 @@ struct OAuth2Token {
     struct String tokenType;    // usually "Bearer"
     long long     expiresIn;    // seconds; 0 if not returned
 
+    // Exchanges an authorization code for tokens: POSTs
+    // 'grant_type=authorization_code&code=...&redirect_uri=...&client_id=...
+    // &client_secret=...' to '<tokenHost>:<tokenPort><tokenPath>'.
+    // *ok is set to 0 on any transport/HTTP-status/JSON-shape failure.
+    static struct OAuth2Token exchange_code(const &char tokenHost, unsigned short tokenPort,
+                                            const &char tokenPath, const &char clientId,
+                                            const &char clientSecret, const &char code,
+                                            const &char redirectUri, ?&int ok);
+
+    // Exchanges a refresh token for a fresh access token
+    // ('grant_type=refresh_token&refresh_token=...&client_id=...&client_secret=...').
+    static struct OAuth2Token refresh(const &char tokenHost, unsigned short tokenPort,
+                                      const &char tokenPath, const &char clientId,
+                                      const &char clientSecret, const &char refreshToken, ?&int ok);
+
     // Releases the three owned strings.
     void free();
 };
-
-// Exchanges an authorization code for tokens: POSTs
-// 'grant_type=authorization_code&code=...&redirect_uri=...&client_id=...
-// &client_secret=...' to '<tokenHost>:<tokenPort><tokenPath>'.
-// *ok is set to 0 on any transport/HTTP-status/JSON-shape failure.
-struct OAuth2Token oauth2_exchange_code(const &char tokenHost, unsigned short tokenPort,
-                                        const &char tokenPath, const &char clientId,
-                                        const &char clientSecret, const &char code,
-                                        const &char redirectUri, ?&int ok);
-
-// Exchanges a refresh token for a fresh access token
-// ('grant_type=refresh_token&refresh_token=...&client_id=...&client_secret=...').
-struct OAuth2Token oauth2_refresh(const &char tokenHost, unsigned short tokenPort,
-                                  const &char tokenPath, const &char clientId,
-                                  const &char clientSecret, const &char refreshToken, ?&int ok);
 
 } // namespace std

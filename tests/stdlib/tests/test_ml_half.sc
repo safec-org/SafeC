@@ -246,7 +246,7 @@ void t_mixed_precision_batch() {
 }
 
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("half-precision CPU features", t_half_features);
         t.add("fp16 -> f32 bulk, all 65536 patterns", t_fp16_to_f32_all);

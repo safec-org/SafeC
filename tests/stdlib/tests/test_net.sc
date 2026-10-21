@@ -339,7 +339,7 @@ void t_drivers() {
     struct DmaEngine eng;
     eng.polls = 0;
     eng.moved = 0UL;
-    struct DmaChannel<DmaEngine> ch = dma_channel_new(1U, dma_start, dma_poll, (?&DmaEngine)&eng);
+    struct DmaChannel<DmaEngine> ch = DmaChannel::new(1U, dma_start, dma_poll, (?&DmaEngine)&eng);
     ASSERT_EQ(ch.start(0x1000UL, 0x2000UL, 256UL), 0);
     ASSERT_TRUE(ch.is_busy());
     ASSERT_EQ(ch.start(0UL, 0UL, 1UL), -1);   // busy
@@ -412,7 +412,7 @@ void t_build_parse() {
 }
 
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("net_core/ethernet", t_core_eth);
         t.add("ipv4/udp", t_ipv4_udp);

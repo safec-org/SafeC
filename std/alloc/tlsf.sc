@@ -197,7 +197,7 @@ void* TlsfAllocator::find_(unsigned long size) {
     }
 }
 
-struct TlsfAllocator tlsf_init(&unsigned char buffer, unsigned long cap) {
+struct TlsfAllocator TlsfAllocator::over(&unsigned char buffer, unsigned long cap) {
     struct TlsfAllocator a;
     unsafe { a.base = (&heap void)buffer; }
     a.owned     = 0;
@@ -221,7 +221,7 @@ struct TlsfAllocator tlsf_init(&unsigned char buffer, unsigned long cap) {
     return a;
 }
 
-struct TlsfAllocator tlsf_new(unsigned long cap) {
+struct TlsfAllocator TlsfAllocator::new(unsigned long cap) {
     struct TlsfAllocator a;
     unsafe { a.base = (&heap void)malloc(cap); }
     a.owned = 1;

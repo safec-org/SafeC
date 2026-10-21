@@ -252,8 +252,8 @@ static struct String html_decode_text_(struct HtmlCursor_* c) {
 
 // Same classification rule as xml_infer_scalar_ (see its comment).
 static struct Value html_infer_scalar_(struct String* text) {
-    if (text->eq_cstr("true")) { return value_bool(1); }
-    if (text->eq_cstr("false")) { return value_bool(0); }
+    if (text->eq_cstr("true")) { return Value::from_bool(1); }
+    if (text->eq_cstr("false")) { return Value::from_bool(0); }
     unsigned long len = text->length();
     if (len > 0UL) {
         int allInt = 1;
@@ -275,27 +275,27 @@ static struct Value html_infer_scalar_(struct String* text) {
         if (allInt && hasDigit) {
             int ok = 0;
             long long n = text->parse_int(&ok);
-            if (ok) { return value_int(n); }
+            if (ok) { return Value::from_int(n); }
         }
         if (allFloatChars && hasDigit && hasDotOrExp) {
             int ok = 0;
             double f = text->parse_float(&ok);
-            if (ok) { return value_float(f); }
+            if (ok) { return Value::from_float(f); }
         }
     }
-    return value_string(text->as_ptr());
+    return Value::from_str(text->as_ptr());
 }
 
 static struct Value html_parse_value_(struct HtmlCursor_* c) {
     int okNow;
     unsafe { okNow = c->ok; }
-    if (!okNow) { return value_null(); }
+    if (!okNow) { return Value::null(); }
 
     if (html_at_close_(c)) {
         // No more content before the enclosing tag closes (or end of
         // input): could be an empty string or an empty object/array — see
         // the file-level ambiguity note above; resolved as "".
-        return value_string("");
+        return Value::from_str("");
     }
     if (html_peek_(c) != '<') {
         struct String text = html_decode_text_(c);
@@ -316,9 +316,9 @@ static struct Value html_parse_value_(struct HtmlCursor_* c) {
     struct Value result;
     if (tag.eq_cstr("em")) {
         html_eat_literal_(c, "null");
-        result = value_null();
+        result = Value::null();
     } else if (tag.eq_cstr("ul")) {
-        struct Value arr = value_array();
+        struct Value arr = Value::array();
         while (html_at_close_(c) == 0) {
             int stillOk;
             unsafe { stillOk = c->ok; }
@@ -331,7 +331,7 @@ static struct Value html_parse_value_(struct HtmlCursor_* c) {
         }
         result = arr;
     } else if (tag.eq_cstr("dl")) {
-        struct Value obj = value_object();
+        struct Value obj = Value::object();
         while (html_at_close_(c) == 0) {
             int stillOk2;
             unsafe { stillOk2 = c->ok; }
@@ -349,7 +349,7 @@ static struct Value html_parse_value_(struct HtmlCursor_* c) {
         result = obj;
     } else {
         unsafe { c->ok = 0; }
-        result = value_null();
+        result = Value::null();
     }
 
     html_expect_close_(c, tag.as_ptr());
@@ -366,7 +366,7 @@ struct Value html_parse(const &char text, ?&int ok) {
     if (ok != (int*)0) { unsafe { *ok = c.ok; } }
     if (c.ok == 0) {
         v.free();
-        return value_null();
+        return Value::null();
     }
     return v;
 }

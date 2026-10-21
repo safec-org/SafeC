@@ -41,9 +41,10 @@ struct AudioBuffer {
 
     int   is_empty() const;
     int   is_full() const;
-};
 
-// Initialise with given channel count (capacity = AUDIO_BUF_FRAMES).
-struct AudioBuffer audio_buf_init(unsigned long channels);
+    // An empty buffer of 'channels' channels (capacity = AUDIO_BUF_FRAMES
+    // frames), zeroed.
+    static struct AudioBuffer new(unsigned long channels);
+};
 
 } // namespace std

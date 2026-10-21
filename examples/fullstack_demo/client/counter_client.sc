@@ -40,7 +40,7 @@ static void on_decrement(?&Signal<int> s) {
 // Exported: the page's inline <script> calls this once, right after
 // WebAssembly.instantiate() resolves.
 __attribute__((export_name)) int hydrate_init() {
-    gCounter = std::signal_new(0);
+    gCounter = std::Signal::new(0);
 
     int countHandle = std::dom_get_element("#count");
     std::dom_set_text(countHandle, "0");

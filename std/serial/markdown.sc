@@ -233,7 +233,7 @@ static int __md_is_ordered_item(const char* line, unsigned long* markerLen) {
     return 0;
 }
 
-&heap MdNode md_parse(const &char text_ref) { const char* text = text_ref;
+&heap MdNode MdNode::parse(const &char text_ref) { const char* text = text_ref;
     &heap MdNode doc = __md_new(MD_DOC);
 
     // Split into lines.
@@ -679,7 +679,7 @@ struct String MdNode::render_markdown() const {
 
 // ── lifecycle ─────────────────────────────────────────────────────────────────
 
-// Every MdNode lives in its own heap allocation (md_parse builds the tree
+// Every MdNode lives in its own heap allocation (MdNode::parse builds the tree
 // that way), so free() releases the node itself after its subtree.
 void MdNode::free() {
     unsigned long cn = self.children.length();

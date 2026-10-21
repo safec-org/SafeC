@@ -7,16 +7,14 @@ namespace std {
 
 extern void* memset(void* p, int v, size_t n);
 
-struct SecureAllocator secure_alloc_new(unsigned long obj_size,
-                                        unsigned long count) {
+struct SecureAllocator SecureAllocator::new(unsigned long obj_size, unsigned long count) {
     struct SecureAllocator sa;
-    sa.slab = slab_new(obj_size, count);
+    sa.slab = SlabAllocator::new(obj_size, count);
     return sa;
 }
 
-&heap void SecureAllocator::alloc() {
-    void* p = self.slab.alloc(self.slab.obj_size, 1UL);
-    unsafe { return (&heap void)p; }
+inline ?&heap void SecureAllocator::alloc(unsigned long size, unsigned long align) {
+    return self.slab.alloc(size, align);
 }
 
 inline void SecureAllocator::dealloc(?&heap void ptr) {
@@ -34,7 +32,9 @@ inline void SecureAllocator::destroy() {
     // Zero all backing memory before freeing.
     unsafe {
         if ((void*)self.slab.base != (void*)0) {
-            unsigned long total = self.slab.obj_size * self.slab.cap;
+            // Every slot's whole stride (with SlabAllocator::new that is
+            // obj_size plus its 8-byte tag), not just obj_size * cap.
+            unsigned long total = self.slab.slot_stride_() * self.slab.cap;
             memset((void*)self.slab.base, 0, total);
         }
     }

@@ -8,7 +8,7 @@ namespace std {
 extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
-inline struct BumpAllocator bump_init(&unsigned char buffer, unsigned long cap) {
+inline struct BumpAllocator BumpAllocator::over(&unsigned char buffer, unsigned long cap) {
     struct BumpAllocator a;
     unsafe { a.base = (&heap void)buffer; }
     a.owned = 0;
@@ -17,7 +17,7 @@ inline struct BumpAllocator bump_init(&unsigned char buffer, unsigned long cap) 
     return a;
 }
 
-inline struct BumpAllocator bump_new(unsigned long cap) {
+inline struct BumpAllocator BumpAllocator::new(unsigned long cap) {
     struct BumpAllocator a;
     unsafe { a.base = (&heap void)malloc(cap); }
     a.owned = 1;

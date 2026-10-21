@@ -20,15 +20,15 @@ struct Sha1Ctx {
     unsigned char buf[SHA1_BLOCK_SIZE]; // partial block buffer
     unsigned long total_bytes;         // total bytes processed
 
+    // A fresh SHA-1 context.
+    static struct Sha1Ctx new();
+
     // Feed `len` bytes of data into the hash.
     void update(const &unsigned char data, unsigned long len);
 
     // Finalise and write the 20-byte digest.
     void finish(&unsigned char digest);
 };
-
-// Initialise a SHA-1 context.
-struct Sha1Ctx sha1_init();
 
 // Convenience: hash `len` bytes and write the 20-byte digest.
 void sha1(const &unsigned char data, unsigned long len,

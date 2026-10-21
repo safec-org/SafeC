@@ -4,7 +4,7 @@
 // for the portable API this implements.
 //
 // Unlike the OS-native backends (Cocoa/Win32/X11), there is no windowing
-// system here — 'gui_create_window()' doesn't open anything, it just
+// system here — 'GuiWindow::create()' doesn't open anything, it just
 // validates that gui_fb_configure() was called first and allocates the
 // same CPU-side RGBA8888 draw buffer every backend uses; GuiWindow::present()
 // copies (and, if needed, pixel-format-converts) that buffer into the
@@ -15,7 +15,7 @@
 // driver to call gui_fb_inject_event() — this file has no opinion on
 // which one you use.
 //
-// Call gui_fb_configure() exactly once, before gui_create_window(), with
+// Call gui_fb_configure() exactly once, before GuiWindow::create(), with
 // the real framebuffer's base address/pitch/pixel format — typically
 // values your bootloader handed you (e.g. a Multiboot2 framebuffer tag's
 // framebuffer_addr/framebuffer_pitch/framebuffer_bpp fields).
@@ -58,7 +58,7 @@ void gui_fb_inject_event(&GuiWindow win, struct GuiEvent ev) {
     }
 }
 
-struct GuiWindow gui_create_window(const &char title, int width, int height) {
+struct GuiWindow GuiWindow::create(const &char title, int width, int height) {
     (void)title; // no window chrome/titlebar on bare metal
     struct GuiWindow win;
     win.platform = null;

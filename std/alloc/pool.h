@@ -17,12 +17,18 @@ struct PoolBlock {
 
 struct PoolAllocator {
     &heap void    base;       // heap-backed managed memory
-    int           owned;   // 1 if pool_new allocated base (destroy() frees it)
+    int           owned;   // 1 if PoolAllocator::new allocated base (destroy() frees it)
     unsigned long cap;        // total buffer size
     void*         head;       // first PoolBlock* in the list (raw — unsafe only)
 
+    // A pool over a user-provided heap buffer (8-aligned) of `cap` bytes.
+    static struct PoolAllocator over(&unsigned char buffer, unsigned long cap);
+
+    // A heap-backed pool of `cap` bytes.
+    static struct PoolAllocator new(unsigned long cap);
+
     // Allocate `size` bytes aligned to `align`. Every block is 8-aligned
-    // (given an 8-aligned buffer: always for pool_new), so align is honoured
+    // (given an 8-aligned buffer: always for PoolAllocator::new), so align is honoured
     // up to 8 (0 is taken as 1). null if no free block fits, or `align` is
     // above 8 or not a power of two.
     ?&heap void   alloc(unsigned long size, unsigned long align);
@@ -34,17 +40,11 @@ struct PoolAllocator {
     // Return total free bytes (sum of all free blocks).
     unsigned long available() const;
 
-    // Free the backing buffer (only valid for heap-backed allocators from pool_new).
+    // Free the backing buffer (only valid for heap-backed allocators from PoolAllocator::new).
     void          destroy();
 
     // Internal: return the fixed header size in bytes.
     unsigned long header_size_() const;
 };
-
-// Initialize over a user-provided heap buffer (8-aligned).
-struct PoolAllocator pool_init(&unsigned char buffer, unsigned long cap);
-
-// Create a heap-backed pool allocator.
-struct PoolAllocator pool_new(unsigned long cap);
 
 } // namespace std

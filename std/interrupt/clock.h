@@ -34,9 +34,9 @@ struct ClockConfig {
 
     // Get current system clock frequency in Hz.
     unsigned int get_freq() const;
-};
 
-// Initialize clock configuration at `base`.
-struct ClockConfig clock_init(&volatile unsigned int base);
+    // Initialize clock configuration at `base`.
+    static struct ClockConfig new(&volatile unsigned int base);
+};
 
 } // namespace std

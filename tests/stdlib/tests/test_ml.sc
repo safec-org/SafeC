@@ -711,7 +711,7 @@ void t_mamba() {
 }
 
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("fp16/bf16 rounding", t_round);
         t.add("tensor <-> half", t_convert);

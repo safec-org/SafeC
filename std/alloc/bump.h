@@ -10,9 +10,15 @@ namespace std {
 
 struct BumpAllocator {
     &heap void    base;    // heap-backed backing buffer
-    int           owned;   // 1 if bump_new allocated base (destroy() frees it)
+    int           owned;   // 1 if BumpAllocator::new allocated base (destroy() frees it)
     unsigned long used;    // bytes currently allocated
     unsigned long cap;     // total buffer capacity in bytes
+
+    // An arena over an existing heap buffer of `cap` bytes (not freed by destroy()).
+    static struct BumpAllocator over(&unsigned char buffer, unsigned long cap);
+
+    // A heap-backed arena of `cap` bytes (destroy() frees it).
+    static struct BumpAllocator new(unsigned long cap);
 
     // Allocate `size` bytes whose address is a multiple of `align` (any
     // power of two; 0 is taken as 1), padding the arena as needed. null
@@ -28,14 +34,8 @@ struct BumpAllocator {
     // Return the number of bytes still available.
     unsigned long remaining() const;
 
-    // Free the backing buffer (only valid for heap-backed allocators from bump_new).
+    // Free the backing buffer (only valid for heap-backed allocators from BumpAllocator::new).
     void          destroy();
 };
-
-// Initialize a bump allocator over an existing heap buffer.
-struct BumpAllocator bump_init(&unsigned char buffer, unsigned long cap);
-
-// Create a heap-backed bump allocator with the given capacity.
-struct BumpAllocator bump_new(unsigned long cap);
 
 } // namespace std

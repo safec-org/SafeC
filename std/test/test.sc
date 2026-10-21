@@ -63,7 +63,7 @@ void test_assert_eq_s(const ?&char a, const ?&char b, const &char desc,
 
 // ── TestSuite ─────────────────────────────────────────────────────────────────
 
-struct TestSuite test_suite_init() {
+struct TestSuite TestSuite::new() {
     struct TestSuite s;
     s.count  = 0;
     s.passed = 0;

@@ -21,7 +21,7 @@ static unsigned long fuzz_rng_(unsigned long* state) {
     }
 }
 
-struct FuzzTarget fuzz_target_init(fn void(const &unsigned char, unsigned long) func, unsigned long iters) {
+struct FuzzTarget FuzzTarget::new(fn void(const &unsigned char, unsigned long) func, unsigned long iters) {
     struct FuzzTarget t;
     t.func    = func;
     t.seed  = (unsigned long)0xDEADBEEFCAFEBABE;

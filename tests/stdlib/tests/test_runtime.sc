@@ -1,5 +1,5 @@
 // std::alloc (bump/slab/pool/tlsf), heap, result, thread/atomic, std::sync
-// (spinlock/mpsc/lockfree/channel/task/thread_bare), time, io_file,
+// (spinlock/mpsc/lockfree/channel/task/thread_bare), time, io_file, io_traits,
 // test/bench+fuzz, simd (+ vmath, sgemm, cpu), ipc (pipe, uds)
 #include <std/test/test.h>
 #include <std/test/bench.h>
@@ -17,6 +17,7 @@
 #include <std/atomic.h>
 #include <std/time.h>
 #include <std/io_file.h>
+#include <std/io_traits.h>
 #include <std/io.h>
 #include <std/sync/spinlock.h>
 #include <std/sync/mpsc.h>
@@ -38,7 +39,7 @@
 struct Pkt { long long id; int len; };
 
 void t_typed_alloc() {
-    struct BumpAllocator b = bump_new(256UL);
+    struct BumpAllocator b = BumpAllocator::new(256UL);
     ?&heap Pkt p = alloc_t(&b);
     match (p) { case some(x): { x.id = 7LL; x.len = 3; } case null: ASSERT_TRUE(0); }
     ?&heap long long arr = alloc_array_t(&b, 8UL);
@@ -48,7 +49,7 @@ void t_typed_alloc() {
     ASSERT_TRUE(tooMany.is_null());
     b.destroy();
 
-    struct SlabAllocator s = slab_new(sizeof(struct Pkt), 2UL);
+    struct SlabAllocator s = SlabAllocator::new(sizeof(struct Pkt), 2UL);
     ?&heap Pkt s1 = alloc_t(&s);
     ?&heap Pkt s2 = alloc_t(&s);
     ?&heap Pkt s3 = alloc_t(&s);
@@ -58,7 +59,7 @@ void t_typed_alloc() {
     ASSERT_EQ(s.available(), 2);
     s.destroy();
 
-    struct PoolAllocator pl = pool_new(4096UL);
+    struct PoolAllocator pl = PoolAllocator::new(4096UL);
     unsigned long before = pl.available();
     ?&heap Pkt pp = alloc_t(&pl);
     match (pp) {
@@ -68,7 +69,7 @@ void t_typed_alloc() {
     ASSERT_EQ(pl.available(), before);
     pl.destroy();
 
-    struct TlsfAllocator t = tlsf_new(65536UL);
+    struct TlsfAllocator t = TlsfAllocator::new(65536UL);
     ?&heap int ints = alloc_array_t(&t, 100UL);
     match (ints) {
         case some(x): { unsafe { x[99] = 5; ASSERT_EQ(x[99], 5); } dealloc_t(&t, x); }
@@ -79,7 +80,7 @@ void t_typed_alloc() {
 
 void t_bump() {
     unsafe {
-        struct BumpAllocator b = bump_new(1024UL);
+        struct BumpAllocator b = BumpAllocator::new(1024UL);
         ?&heap char p1 = (?&heap char)b.alloc(10UL, 1UL);
         ?&heap char p2 = (?&heap char)b.alloc(8UL, 8UL);
         ASSERT_FALSE(p1.is_null());
@@ -106,7 +107,7 @@ void t_bump() {
 
 void t_slab() {
     unsafe {
-        struct SlabAllocator s = slab_new(32UL, 4UL);
+        struct SlabAllocator s = SlabAllocator::new(32UL, 4UL);
         ?&heap void a = s.alloc(32UL, 8UL);
         ?&heap void b = s.alloc(32UL, 8UL);
         ?&heap void c = s.alloc(32UL, 8UL);
@@ -130,7 +131,7 @@ void t_slab() {
 
 void t_pool() {
     unsafe {
-        struct PoolAllocator p = pool_new(4096UL);
+        struct PoolAllocator p = PoolAllocator::new(4096UL);
         unsigned long before = p.available();
         ?&heap char aq = (?&heap char)p.alloc(100UL, 1UL);
         ?&heap char bq = (?&heap char)p.alloc(200UL, 8UL);
@@ -156,7 +157,7 @@ void t_pool() {
 
 void t_tlsf() {
     unsafe {
-        struct TlsfAllocator t = tlsf_new(65536UL);
+        struct TlsfAllocator t = TlsfAllocator::new(65536UL);
         ?&heap unsigned char ptrs[64];
         int i = 0;
         while (i < 64) {
@@ -255,7 +256,7 @@ static ?&int worker(?&int arg) {
 void t_threads() {
     unsafe {
         mutex_init(&g_mtx);
-        g_spin = spinlock_init();
+        g_spin = Spinlock::new();
         unsigned long long tids[4];
         int i = 0;
         while (i < 4) { ASSERT_EQ(thread_create(&tids[i], worker, null), 0); i = i + 1; }
@@ -320,7 +321,7 @@ static ?&int chan_producer(?&int arg) {
 }
 
 void t_queues() {
-    g_mq = mpsc_new(64UL);
+    g_mq = MpscQueue::new(64UL);
     unsigned long long t1 = 0ULL;
     unsigned long long t2 = 0ULL;
     unsafe { g_bases[0] = 0; g_bases[1] = 100000; }
@@ -343,7 +344,7 @@ void t_queues() {
     ASSERT_TRUE(g_mq.dequeue().is_none());
     g_mq.destroy();
 
-    struct LFQueue<long long> q = lfq_new(8UL);
+    struct LFQueue<long long> q = LFQueue::new(8UL);
     long long i = 0LL;
     while (i < 8LL) { ASSERT_TRUE(q.enqueue(i)); i = i + 1LL; }
     ASSERT_TRUE(q.is_full());
@@ -352,7 +353,7 @@ void t_queues() {
     ASSERT_EQ(q.len(), 7);
     q.destroy();
 
-    struct Chan<int> ch = chan_new(4);
+    struct Chan<int> ch = Chan::new(4);
     ch.send(11);
     ch.send(22);
     ASSERT_EQ(ch.recv().default(0), 11);
@@ -362,7 +363,7 @@ void t_queues() {
     ASSERT_FALSE(ch.send(33));
 
     // blocking hand-off across threads, closed by the producer
-    g_ch = chan_new(2);
+    g_ch = Chan::new(2);
     unsigned long long tp = 0ULL;
     thread_create(&tp, chan_producer, null);
     long long total = 0LL;
@@ -472,7 +473,7 @@ void t_tasks() {
         ASSERT_FALSE(tsq.is_null());
         if (sq.is_null() || tsq.is_null()) return;
         &TaskScheduler s = std::expect_ref(sq, "sq is null");
-        *s = task_sched_init();
+        *s = TaskScheduler::new();
         ASSERT_TRUE(task_spawn(s, counting_task, null) >= 0);
         task_spawn(s, counting_task, null);
         s.run_all();
@@ -482,7 +483,7 @@ void t_tasks() {
 
         g_task_hits = 0;
         &ThreadSched ts = std::expect_ref(tsq, "tsq is null");
-        *ts = thread_sched_init();
+        *ts = ThreadSched::new();
         Thread a = thread_spawn(ts, counting_task, null, 1);
         thread_spawn(ts, counting_task, null, 5);
         ts.join_thread(a);
@@ -502,7 +503,7 @@ static void on_sig(?&int seen) {
 }
 
 void t_signal() {
-    struct Signal<int> c = signal_new(5);
+    struct Signal<int> c = Signal::new(5);
     unsafe { signal_subscribe(&c, on_sig, (?&int)&g_sig_seen); }
     unsigned long last = c.get_version();
     ASSERT_FALSE(c.changed(&last));
@@ -544,14 +545,14 @@ void t_time() {
 void t_file() {
     unsafe {
         const &char path = "/tmp/safec_stdlib_test_file.txt";
-        ?&File wq = file_open(path, "wb");
+        ?&File wq = File::open(path, "wb");
         ASSERT_FALSE(wq.is_null());
         if (wq.is_null()) return;
         &File w = std::expect_ref(wq, "write handle");
         w.puts("line1\n");
         w.write((const &unsigned char)"abc", 3UL);
         w.close();
-        &File f = std::expect_ref(file_open(path, "rb"), "read handle");
+        &File f = std::expect_ref(File::open(path, "rb"), "read handle");
         ASSERT_EQ(f.size(), 9);
         char buf[32];
         f.gets(buf, 32);
@@ -561,6 +562,68 @@ void t_file() {
         ASSERT_EQ(f.tell(), 0);
         f.close();
         ASSERT_EQ(io_remove(path), 0);
+        ASSERT_TRUE(File::open("/nonexistent_dir_safec/x", "rb").is_null());
+    }
+}
+
+// io_traits.h's Reader/Writer helpers over File and Pipe: write_all,
+// read_exact (and its early-EOF result), copy_stream in both directions.
+void t_io_traits() {
+    unsafe {
+        const &char path = "/tmp/safec_stdlib_test_traits.bin";
+        unsigned char data[10000];
+        unsigned long i = 0UL;
+        while (i < 10000UL) { data[i] = (unsigned char)(i * 7UL + 3UL); i = i + 1UL; }
+
+        &File w = std::expect_ref(File::open(path, "wb"), "write handle");
+        ASSERT_EQ(write_all(w, &data[0], 10000UL), 1);
+        w.close();
+
+        &File r = std::expect_ref(File::open(path, "rb"), "read handle");
+        unsigned char back[10000];
+        ASSERT_EQ(read_exact(r, &back[0], 6000UL), 1);
+        ASSERT_EQ(back[5999], data[5999]);
+        ASSERT_EQ(read_exact(r, &back[6000], 5000UL), 0);    // only 4000 left
+        ASSERT_EQ(back[9999], data[9999]);
+        r.close();
+
+        // File -> Pipe -> File, the pipe drained by a second copy after
+        // its write end closes. 10000 bytes fit the pipe's buffer.
+        struct Pipe p;
+        ASSERT_EQ(p.init(), 0);
+        &File src = std::expect_ref(File::open(path, "rb"), "source");
+        ASSERT_EQ(copy_stream(src, &p), 10000);
+        src.close();
+        ASSERT_EQ(p.close_write(), 0);
+        const &char path2 = "/tmp/safec_stdlib_test_traits2.bin";
+        &File dst = std::expect_ref(File::open(path2, "wb"), "dest");
+        ASSERT_EQ(copy_stream(&p, dst), 10000);
+        dst.close();
+        ASSERT_EQ(p.close_read(), 0);
+
+        &File chk = std::expect_ref(File::open(path2, "rb"), "check");
+        ASSERT_EQ(chk.size(), 10000);
+        unsigned char again[10000];
+        ASSERT_EQ(read_exact(chk, &again[0], 10000UL), 1);
+        ASSERT_EQ(again[0], data[0]);
+        ASSERT_EQ(again[4321], data[4321]);
+        ASSERT_EQ(again[9999], data[9999]);
+        ASSERT_EQ(chk.read(&again[0], 16UL), 0);              // EOF
+        chk.close();
+
+        // Pipe read_exact / write_all directly.
+        struct Pipe q;
+        ASSERT_EQ(q.init(), 0);
+        ASSERT_EQ(write_all(&q, (const &unsigned char)"hello", 5UL), 1);
+        ASSERT_EQ(q.close_write(), 0);
+        unsigned char hb[8];
+        ASSERT_EQ(read_exact(&q, &hb[0], 3UL), 1);
+        ASSERT_EQ(hb[2], 'l');
+        ASSERT_EQ(read_exact(&q, &hb[0], 3UL), 0);            // 2 left, then EOF
+        ASSERT_EQ(q.close_read(), 0);
+
+        ASSERT_EQ(io_remove(path), 0);
+        ASSERT_EQ(io_remove(path2), 0);
     }
 }
 
@@ -575,13 +638,13 @@ void t_bench_fuzz() {
         ASSERT_FALSE(bq.is_null());
         if (bq.is_null()) return;
         &BenchSuite b = std::expect_ref(bq, "bq is null");
-        *b = bench_suite_init();
+        *b = BenchSuite::new();
         bench_add(b, "noop", bench_fn, null, 1000UL);
         b.run();
         ASSERT_EQ(g_bench_calls, 1000);
         ASSERT_TRUE(b.cases[0].elapsed_s >= 0.0);
         dealloc(bq);
-        struct FuzzTarget ft = fuzz_target_init(fuzz_fn, 50UL);
+        struct FuzzTarget ft = FuzzTarget::new(fuzz_fn, 50UL);
         unsigned char corpus[4] = { (unsigned char)115, (unsigned char)101, (unsigned char)101, (unsigned char)100 };   // "seed"
         ft.run(&corpus[0], 4UL);
         ASSERT_EQ(g_fuzz_calls, 51);
@@ -818,7 +881,7 @@ void t_cond_trylock() {
 }
 
 int main() {
-    struct TestSuite t = test_suite_init();
+    struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("bump", t_bump);
         t.add("typed allocators", t_typed_alloc);
@@ -833,6 +896,7 @@ int main() {
         t.add("parallel_for", t_parallel);
         t.add("time", t_time);
         t.add("io_file", t_file);
+        t.add("io_traits over File/Pipe", t_io_traits);
         t.add("bench/fuzz", t_bench_fuzz);
         t.add("simd", t_simd);
         t.add("simd ops/vmath/sgemm/cpu", t_simd_more);

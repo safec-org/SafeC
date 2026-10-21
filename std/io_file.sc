@@ -21,7 +21,7 @@ extern int            feof(void* stream);
 extern int            ferror(void* stream);
 extern int            fflush(void* stream);
 
-inline ?&File file_open(const &char path, const &char mode) {
+inline ?&File File::open(const &char path, const &char mode) {
     unsafe { return (?&File)fopen(path, mode); }
 }
 
@@ -29,8 +29,12 @@ inline int File::close() {
     unsafe { return fclose((void*)self); }
 }
 
-inline unsigned long File::read(&unsigned char buf, unsigned long n) {
-    unsafe { return fread((void*)buf, (unsigned long)1, n, (void*)self); }
+inline long long File::read(&unsigned char buf, unsigned long n) {
+    unsafe {
+        unsigned long got = fread((void*)buf, (unsigned long)1, n, (void*)self);
+        if (got == 0UL && n > 0UL && ferror((void*)self) != 0) { return -1LL; }
+        return (long long)got;
+    }
 }
 
 inline int File::getc() {
@@ -41,8 +45,12 @@ inline ?&char File::gets(&char buf, int n) {
     unsafe { return fgets(buf, n, (void*)self); }
 }
 
-inline unsigned long File::write(const &unsigned char buf, unsigned long n) {
-    unsafe { return fwrite((const void*)buf, (unsigned long)1, n, (void*)self); }
+inline long long File::write(const &unsigned char buf, unsigned long n) {
+    unsafe {
+        unsigned long put = fwrite((const void*)buf, (unsigned long)1, n, (void*)self);
+        if (put == 0UL && n > 0UL) { return -1LL; }
+        return (long long)put;
+    }
 }
 
 inline int File::putc(int c) {
@@ -89,9 +97,15 @@ inline long long File::size() {
 }
 
 // Forwarding wrappers kept for std/ml (see io_file.h).
+// kept for std/ml until its refactor moves to the static method
+inline ?&File        file_open(const &char path, const &char mode) { return File::open(path, mode); }
 inline int           file_close(&File f) { return f.close(); }
-inline unsigned long file_read(&File f, &unsigned char buf, unsigned long n) { return f.read(buf, n); }
-inline unsigned long file_write(&File f, const &unsigned char buf, unsigned long n) { return f.write(buf, n); }
+inline unsigned long file_read(&File f, &unsigned char buf, unsigned long n) {
+    long long r = f.read(buf, n); return r < 0LL ? 0UL : (unsigned long)r;
+}
+inline unsigned long file_write(&File f, const &unsigned char buf, unsigned long n) {
+    long long r = f.write(buf, n); return r < 0LL ? 0UL : (unsigned long)r;
+}
 inline int           file_seek(&File f, long long offset, int whence) { return f.seek(offset, whence); }
 inline long long     file_tell(&File f) { return f.tell(); }
 inline long long     file_size(&File f) { return f.size(); }

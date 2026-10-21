@@ -7,7 +7,7 @@
 // that set() both updates the value and pushes the change straight to the
 // DOM node(s) that depend on it — SolidJS-style signals, no virtual DOM.
 //
-//   struct Signal<int> count = std::signal_new(0);
+//   struct Signal<int> count = std::Signal::new(0);
 //   std::signal_subscribe(&count, on_count_changed, (?&Label)&label);
 //   count.set(count.get() + 1);      // updates, bumps version, notifies
 //   count.free();
@@ -29,6 +29,8 @@ struct Signal {
     unsigned long version;   // bumped on every set()
     struct Vec<struct SignalSub> subs;
 
+    static struct Signal<T> new(T val);   // holds val, version 0, no subscribers
+
     T             get() const;
     &T            get_ref();            // in-place access; call notify() after mutating
     void          set(T val);           // stores val, bumps version, notifies
@@ -42,7 +44,7 @@ struct Signal {
 };
 
 generic<T>
-struct Signal<T> signal_new(T val) {
+struct Signal<T> Signal::new(T val) {
     struct Signal<T> s;
     s.value = val;
     s.version = 0UL;

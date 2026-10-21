@@ -16,7 +16,7 @@ static char* value_strdup_(const char* s) {
     return buf;
 }
 
-inline struct Value value_null() {
+inline struct Value Value::null() {
     struct Value v;
     v.kind = VAL_NULL;
     v.int_val = 0LL;
@@ -28,42 +28,42 @@ inline struct Value value_null() {
     return v;
 }
 
-inline struct Value value_bool(int b) {
-    struct Value v = value_null();
+inline struct Value Value::from_bool(int b) {
+    struct Value v = Value::null();
     v.kind = VAL_BOOL;
     v.bool_val = b;
     return v;
 }
 
-inline struct Value value_int(long long n) {
-    struct Value v = value_null();
+inline struct Value Value::from_int(long long n) {
+    struct Value v = Value::null();
     v.kind = VAL_INT;
     v.int_val = n;
     return v;
 }
 
-inline struct Value value_float(double f) {
-    struct Value v = value_null();
+inline struct Value Value::from_float(double f) {
+    struct Value v = Value::null();
     v.kind = VAL_FLOAT;
     v.float_val = f;
     return v;
 }
 
-inline struct Value value_string(const &char s) {
-    struct Value v = value_null();
+inline struct Value Value::from_str(const &char s) {
+    struct Value v = Value::null();
     v.kind = VAL_STRING;
     v.str_val = value_strdup_(s);
     return v;
 }
 
-inline struct Value value_array() {
-    struct Value v = value_null();
+inline struct Value Value::array() {
+    struct Value v = Value::null();
     v.kind = VAL_ARRAY;
     return v;
 }
 
-inline struct Value value_object() {
-    struct Value v = value_null();
+inline struct Value Value::object() {
+    struct Value v = Value::null();
     v.kind = VAL_OBJECT;
     return v;
 }
@@ -87,7 +87,7 @@ inline void Value::object_set(const &char key, struct Value v) {
 }
 
 struct Value Value::clone() const {
-    struct Value out = value_null();
+    struct Value out = Value::null();
     int kind = self.kind;
     out.kind = kind;
     out.int_val   = self.int_val;
@@ -156,6 +156,12 @@ void Value::free() {
 }
 
 // Forwarding wrappers kept for std/ml (see value.h).
+// kept for std/ml until its refactor moves to the static method
+inline struct Value value_array() { return Value::array(); }
+// kept for std/ml until its refactor moves to the static method
+inline struct Value value_object() { return Value::object(); }
+// kept for std/ml until its refactor moves to the static method
+inline struct Value value_string(const &char s) { return Value::from_str(s); }
 inline void value_array_push(&Value arr, struct Value v) { arr.array_push(v); }
 inline void value_object_set(&Value obj, const &char key, struct Value v) { obj.object_set(key, v); }
 inline struct Value value_clone(const &Value v) { return v.clone(); }
