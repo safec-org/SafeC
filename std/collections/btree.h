@@ -41,7 +41,7 @@ struct BTree {
     // are touched — pool nodes are claimed lazily, so a ~pool-sized memset
     // (or a by-value constructor copying the whole pool) would be pure waste.
     void          init();
-    int           insert(unsigned long key, V val);  // 0 on success, -1 if the pool is full
+    int           insert(unsigned long key, V val);  // insert or overwrite; 0 if the pool is full
     ?&V           get(unsigned long key) const;      // null if missing
     int           contains(unsigned long key) const;
     ?V            remove(unsigned long key);         // the removed value, or null
@@ -179,21 +179,21 @@ generic<V>
 int BTree::insert(unsigned long key, V val) {
     // Overwrite in place first: no splits for a key that's already present.
     match (self.get(key)) {
-        case some(slot): { *slot = val; return 0; }
+        case some(slot): { *slot = val; return 1; }
         case null: { }
     }
     if (self.root == 0UL) {
         unsigned long r = self.alloc_node_();
-        if (r == 0UL) return -1;
+        if (r == 0UL) return 0;
         self.root = r;
     }
     if (self.node_(self.root).n == BTREE_MAX_KEYS) {
         unsigned long nr = self.alloc_node_();
-        if (nr == 0UL) return -1;
+        if (nr == 0UL) return 0;
         &BTreeNode<V> top = self.node_(nr);
         top.leaf = 0;
         unsafe { top.children[0] = self.root; }
-        if (!self.split_child_(nr, 0)) { self.free_node_(nr); return -1; }
+        if (!self.split_child_(nr, 0)) { self.free_node_(nr); return 0; }
         self.root = nr;
     }
     // Descend, splitting full children before entering them.
@@ -213,14 +213,14 @@ int BTree::insert(unsigned long key, V val) {
             }
             n.n = n.n + 1;
             self.count = self.count + 1UL;
-            return 0;
+            return 1;
         }
         unsafe { while (i >= 0 && key < n.keys[i]) { i = i - 1; } }
         i = i + 1;
         unsigned long child = 0UL;
         unsafe { child = n.children[i]; }
         if (self.node_(child).n == BTREE_MAX_KEYS) {
-            if (!self.split_child_(cur, i)) return -1;
+            if (!self.split_child_(cur, i)) return 0;
             unsafe {
                 if (key > n.keys[i]) i = i + 1;
                 child = n.children[i];
@@ -228,7 +228,7 @@ int BTree::insert(unsigned long key, V val) {
         }
         cur = child;
     }
-    return -1;
+    return 0;
 }
 
 // ── Traversal ─────────────────────────────────────────────────────────────────

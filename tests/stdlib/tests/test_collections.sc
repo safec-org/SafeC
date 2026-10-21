@@ -320,7 +320,7 @@ void t_btree() {
         while (i < 200UL) { t.remove((i * 7919UL) % 1000UL); i = i + 1UL; }
         ASSERT_EQ(t.length(),0);
         i = 0UL;
-        while (i < 200UL) { ASSERT_EQ(t.insert((i * 7919UL) % 1000UL, (int)i), 0); i = i + 1UL; }
+        while (i < 200UL) { ASSERT_TRUE(t.insert((i * 7919UL) % 1000UL, (int)i)); i = i + 1UL; }
         round = round + 1;
     }
     ASSERT_EQ(t.get((7UL * 7919UL) % 1000UL).default(-1), 7);
