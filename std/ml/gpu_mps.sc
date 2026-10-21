@@ -4290,9 +4290,7 @@ int mps_gemm(struct MpsBuf a, int ta, struct MpsBuf b, int tb, struct MpsBuf c,
 
 // ── Interop (see gpu_mps.h's mps_dispatch) ──────────────────────────────────
 #define MPS_DISPATCH_MAX_ 64UL
-// void*, not const char*: safec emits a static array of pointers to const as
-// an LLVM constant, so the optimizer drops the stores into it.
-static void*       __mps_dispatch_names[64];
+static const char* __mps_dispatch_names[64];
 static void*       __mps_dispatch_pipes[64];
 static unsigned long __mps_dispatch_limit[64];   // the pipeline's maxTotalThreadsPerThreadgroup
 static unsigned long __mps_dispatch_count = 0UL;
@@ -4313,7 +4311,7 @@ static long __mps_dispatch_slot(const char* kernel) {
     unsafe {
         unsigned long i = 0UL;
         while (i < __mps_dispatch_count) {
-            const char* name = (const char*)__mps_dispatch_names[i];
+            const char* name = __mps_dispatch_names[i];
             if (name == kernel || __mps_str_eq(name, kernel)) return (long)i;
             i = i + 1UL;
         }
@@ -4322,7 +4320,7 @@ static long __mps_dispatch_slot(const char* kernel) {
         if (pipe == (void*)0) return -1L;
         if (__sel_maxThreads == (void*)0) __sel_maxThreads = sel_registerName("maxTotalThreadsPerThreadgroup");
         MMsgULong maxFn = (MMsgULong)objc_msgSend;
-        __mps_dispatch_names[i] = (void*)kernel;
+        __mps_dispatch_names[i] = kernel;
         __mps_dispatch_pipes[i] = pipe;
         __mps_dispatch_limit[i] = maxFn(pipe, __sel_maxThreads);
         __mps_dispatch_count = i + 1UL;

@@ -1169,6 +1169,17 @@ DeclPtr Parser::parseTopLevelDecl() {
     return decl;
 }
 
+// A leading 'const' qualifies the base type (see the KW_const case in
+// parseStmt): the declared object is itself const only when no pointer
+// declarator follows. 'const char* p' and 'const char* names[4]' are
+// mutable pointers (and arrays of them) to const data, as in C.
+static bool leadingConstMakesObjectConst(const TypePtr &t) {
+    const Type *cur = t.get();
+    while (cur && cur->kind == TypeKind::Array)
+        cur = static_cast<const ArrayType *>(cur)->element.get();
+    return !(cur && cur->kind == TypeKind::Pointer);
+}
+
 DeclPtr Parser::parseFunctionOrGlobalVar(bool isConst, bool isConsteval,
                                           bool isInline, bool isExtern, bool isStatic,
                                           std::vector<GenericParam> genericParams) {
@@ -1187,7 +1198,7 @@ DeclPtr Parser::parseFunctionOrGlobalVar(bool isConst, bool isConsteval,
         if (tryParseCStyleFuncPtrDeclarator(retType, fpName, fpType)) {
             auto gv = std::make_unique<GlobalVarDecl>(std::move(fpName), loc);
             gv->type     = std::move(fpType);
-            gv->isConst  = isConst;
+            gv->isConst  = isConst && leadingConstMakesObjectConst(gv->type);
             gv->isStatic = isStatic;
             gv->isExtern = isExtern;
             GnuAttrs suffixAttrs;
@@ -1262,7 +1273,7 @@ DeclPtr Parser::parseFunctionOrGlobalVar(bool isConst, bool isConsteval,
     auto gv = std::make_unique<GlobalVarDecl>(std::move(name), loc);
     gv->type      = std::move(retType);
     gv->isVolatile = objectVolatile;
-    gv->isConst   = isConst;
+    gv->isConst   = isConst && leadingConstMakesObjectConst(gv->type);
     gv->isStatic  = isStatic;
     gv->isExtern  = isExtern;
     // GNU/Clang suffix attributes: 'int x __attribute__((aligned(16)));'
@@ -2052,7 +2063,7 @@ StmtPtr Parser::parseVarDeclStmt(bool isConst, bool isStatic) {
     auto mkDecl = [&](std::string n, TypePtr t, ExprPtr i, SourceLocation l) {
         desugarMallocDefer(i, n, l, pendingExtraStmt_);
         auto vs = std::make_unique<VarDeclStmt>(std::move(n), std::move(t), std::move(i), l);
-        vs->isConst  = isConst;
+        vs->isConst  = isConst && leadingConstMakesObjectConst(vs->declType);
         vs->isStatic = isStatic;
         vs->isVolatile = objectVolatile;
         return vs;
