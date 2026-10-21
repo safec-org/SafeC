@@ -52,9 +52,9 @@ int fd_set_nonblocking(int fd);
 // that want simple synchronous request/response semantics on top of
 // tcp_listen_nb/tcp_accept_nb/tcp_connect_nb's portable socket setup
 // rather than pairing them with std::Reactor/std::TaskScheduler. Returns 0
-// on success. Safe to call on a socket with a connect() already in
-// progress — per POSIX, a blocking-mode I/O call on such a socket waits
-// for the connection to complete rather than failing.
+// on success. On a socket from tcp_connect_nb, call tcp_wait_connected
+// first: Darwin and Winsock fail send/recv with ENOTCONN while the
+// handshake is still in flight instead of waiting for it.
 int fd_set_blocking(int fd);
 
 // open() in non-blocking mode where the platform supports it for regular
@@ -77,6 +77,12 @@ int tcp_accept_nb(int listenfd);
 // SO_ERROR if you need to distinguish)". Returns the socket fd, or -1 on
 // immediate failure.
 int tcp_connect_nb(unsigned int addr_network_order, unsigned short port);
+
+// Blocks until a tcp_connect_nb socket's handshake finishes (poll for
+// writable, then SO_ERROR). Returns 0 if connected, -1 if the connect
+// failed (refused, unreachable, ...). For synchronous callers; a
+// std::Reactor task awaits SCHED_WRITE instead.
+int tcp_wait_connected(int fd);
 
 // True if the most recent non-blocking socket call (accept/recv/send/
 // connect/...) failed only because it would have blocked — i.e. "not

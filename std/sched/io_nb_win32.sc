@@ -36,6 +36,8 @@
 // values exactly; IPPROTO_TCP=6/TCP_NODELAY=1 match every backend here.
 #define SCHED_SOL_SOCKET    0xffff
 #define SCHED_SO_REUSEADDR  0x0004
+#define SCHED_SO_ERROR      0x1007
+#define SCHED_POLLWRNORM    0x0010
 #define SCHED_IPPROTO_TCP   6
 #define SCHED_TCP_NODELAY   1
 
@@ -74,6 +76,8 @@ extern int connect(unsigned long long fd, const void* addr, int addrlen);
 extern int ioctlsocket(unsigned long long fd, int cmd, unsigned long* argp);
 extern int setsockopt(unsigned long long fd, int level, int optname, const void* optval, int optlen);
 extern int WSAGetLastError();
+extern int getsockopt(unsigned long long fd, int level, int optname, void* optval, void* optlen);
+extern int WSAPoll(void* fds, unsigned long nfds, int timeout);
 
 #define SAFEC_WSAEWOULDBLOCK 10035
 
@@ -238,6 +242,27 @@ inline int tcp_connect_nb(unsigned int addr_network_order, unsigned short port) 
     // so the return value here isn't itself meaningful the way it is for
     // a blocking connect().
     return ifd;
+}
+
+// WSAPOLLFD: the SOCKET is pointer-sized.
+struct SchedPollFd {
+    unsigned long long fd;
+    short events;
+    short revents;
+};
+
+inline int tcp_wait_connected(int fd) {
+    unsafe {
+        struct SchedPollFd p;
+        p.fd = (unsigned long long)fd;
+        p.events = (short)SCHED_POLLWRNORM;
+        p.revents = (short)0;
+        if (WSAPoll((void*)&p, 1UL, -1) < 0) return -1;
+        int err = 0;
+        int len = 4;
+        if (getsockopt((unsigned long long)fd, SCHED_SOL_SOCKET, SCHED_SO_ERROR, (void*)&err, (void*)&len) != 0 || err != 0) return -1;
+    }
+    return 0;
 }
 
 } // namespace std

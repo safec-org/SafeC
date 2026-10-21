@@ -46,9 +46,14 @@ extern int connect(int fd, const void* addr, unsigned int addrlen);
 // something to rely on either way.
 extern int fcntl(int fd, int cmd, ...);
 extern int setsockopt(int fd, int level, int optname, const void* optval, unsigned int optlen);
+extern int getsockopt(int fd, int level, int optname, void* optval, void* optlen);
+extern int poll(void* fds, unsigned int nfds, int timeout);
 
 #define SCHED_SOL_SOCKET    0xffff
 #define SCHED_SO_REUSEADDR  0x0004
+#define SCHED_SO_ERROR      0x1007
+#define SCHED_POLLOUT       0x0004
+#define SCHED_EINTR         4
 // A write to a socket whose peer has closed raises SIGPIPE, which kills the
 // process by default; BSD sockets opt out per socket (Linux does it per
 // send with MSG_NOSIGNAL). Accepted sockets don't reliably inherit it.
@@ -221,6 +226,29 @@ inline int tcp_connect_nb(unsigned int addr_network_order, unsigned short port) 
     // value here isn't itself meaningful the way it is for a blocking
     // connect().
     return fd;
+}
+
+struct SchedPollFd {
+    int   fd;
+    short events;
+    short revents;
+};
+
+inline int tcp_wait_connected(int fd) {
+    int rc = 0;
+    unsafe {
+        struct SchedPollFd p;
+        p.fd = fd;
+        p.events = (short)SCHED_POLLOUT;
+        p.revents = (short)0;
+        rc = poll((void*)&p, 1U, -1);
+        while (rc < 0 && errno_get() == SCHED_EINTR) rc = poll((void*)&p, 1U, -1);
+        if (rc < 0) return -1;
+        int err = 0;
+        unsigned int len = 4U;
+        if (getsockopt(fd, SCHED_SOL_SOCKET, SCHED_SO_ERROR, (void*)&err, (void*)&len) != 0 || err != 0) return -1;
+    }
+    return 0;
 }
 
 } // namespace std
