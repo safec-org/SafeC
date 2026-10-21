@@ -617,6 +617,280 @@ static void check_attention() {
 }
 
 
+// Mixed precision: fp16 <-> bf16, many-buffer conversion and unscaling with
+// the overflow flag, master-weight SGD / Adam (against the CPU arithmetic,
+// skipped when flagged), 16-bit elementwise ops and bias.
+static struct Vec<unsigned short> read_half(struct RocmHalfBuf h) {
+    struct Vec<unsigned short> v = std::vec_with_cap(h.len);
+    unsigned long i = 0UL;
+    while (i < h.len) { v.push((unsigned short)0); i = i + 1UL; }
+    std::rocm_half_read(h, v.at(0UL), h.len);
+    return v;
+}
+
+static int half_nan_(unsigned short h, int d) {
+    unsigned int u = (unsigned int)h & 0x7FFFU;
+    return d == ROCM_BF16 ? u > 0x7F80U : u > 0x7C00U;
+}
+
+static void check_mixed_precision() {
+    // fp16 <-> bf16 over every 16-bit pattern, against float16.h's bulk conversions
+    unsigned long n = 65536UL;
+    struct Vec<unsigned short> pat = std::vec_with_cap(n);
+    struct Vec<unsigned short> cpu = std::vec_with_cap(n);
+    unsigned long i = 0UL;
+    while (i < n) { pat.push((unsigned short)i); cpu.push((unsigned short)0); i = i + 1UL; }
+    int d = ROCM_FP16;
+    while (d <= ROCM_BF16) {
+        int to = d == ROCM_FP16 ? ROCM_BF16 : ROCM_FP16;
+        struct RocmHalfBuf hs = std::rocm_half_alloc(n, d);
+        struct RocmHalfBuf hd = std::rocm_half_alloc(n, to);
+        check(std::rocm_half_write(hs, pat.at(0UL), n) && std::rocm_half_convert(hs, hd), "half convert ran");
+        struct Vec<unsigned short> got = read_half(hd);
+        if (d == ROCM_FP16) std::fp16_to_bf16_bulk(pat.at(0UL), cpu.at(0UL), n);
+        else std::bf16_to_fp16_bulk(pat.at(0UL), cpu.at(0UL), n);
+        unsigned long bad = 0UL;
+        i = 0UL;
+        while (i < n) {
+            if (half_nan_(*pat.at(i), d)) { if (!half_nan_(*got.at(i), to)) bad = bad + 1UL; }
+            else if (*got.at(i) != *cpu.at(i)) bad = bad + 1UL;
+            i = i + 1UL;
+        }
+        check(bad == 0UL, d == ROCM_FP16 ? "fp16 -> bf16 == CPU" : "bf16 -> fp16 == CPU");
+        got.free();
+        std::rocm_half_free(&hs);
+        std::rocm_half_free(&hd);
+        d = d + 1;
+    }
+
+    // 40 buffers (two launches) to bf16 and back, lengths 1 .. 2000
+    struct Vec<struct RocmBuf> f32s = std::vec_new();
+    struct Vec<struct RocmHalfBuf> h16s = std::vec_new();
+    struct Vec<struct RocmBuf> backs = std::vec_new();
+    struct Vec<float> host = seq(2000UL, (float)0.37, -(float)17.0);
+    unsigned long b = 0UL;
+    while (b < 40UL) {
+        unsigned long len = 1UL + (b * 977UL) % 2000UL;
+        f32s.push(std::rocm_upload(host.at(0UL), len));
+        h16s.push(std::rocm_half_alloc(len, ROCM_BF16));
+        backs.push(std::rocm_alloc(len));
+        b = b + 1UL;
+    }
+    check(std::rocm_to_half_many(&f32s, &h16s) && std::rocm_from_half_many(&h16s, &backs), "many conversions ran");
+    unsigned long bad = 0UL;
+    b = 0UL;
+    while (b < 40UL) {
+        struct RocmBuf back = *backs.at(b);
+        struct Vec<float> got = download(back);
+        i = 0UL;
+        while (i < back.len) {
+            if (*got.at(i) != std::bf16_to_f32(std::f32_to_bf16(*host.at(i)))) bad = bad + 1UL;
+            i = i + 1UL;
+        }
+        got.free();
+        b = b + 1UL;
+    }
+    check(bad == 0UL, "40 buffers round-trip through bf16");
+    // a list mixing fp16 and bf16 is refused
+    struct RocmHalfBuf odd = std::rocm_half_alloc(5UL, ROCM_FP16);
+    struct Vec<struct RocmHalfBuf> mixed = std::vec_new();
+    mixed.push(*h16s.at(0UL));
+    mixed.push(odd);
+    struct Vec<struct RocmBuf> two = std::vec_new();
+    two.push(*backs.at(0UL));
+    two.push(*backs.at(1UL));
+    check(!std::rocm_from_half_many(&mixed, &two), "mixed dtypes refused");
+
+    // unscaling: fp16 gradients holding 512 x the value; then one overflow
+    struct RocmBuf flag = std::rocm_alloc(1UL);
+    struct Vec<float> gv = seq(3000UL, (float)0.01, -(float)0.5);
+    struct Vec<float> scaled = std::vec_with_cap(3000UL);
+    i = 0UL;
+    while (i < 3000UL) { scaled.push(*gv.at(i) * (float)512.0); i = i + 1UL; }
+    struct RocmHalfBuf g16a = std::rocm_half_upload(scaled.at(0UL), 3000UL, ROCM_FP16);
+    struct RocmHalfBuf g16b = std::rocm_half_upload(scaled.at(0UL), 1000UL, ROCM_FP16);
+    struct RocmBuf g32a = std::rocm_alloc(3000UL);
+    struct RocmBuf g32b = std::rocm_alloc(1000UL);
+    struct Vec<struct RocmHalfBuf> gs = std::vec_new();
+    gs.push(g16a); gs.push(g16b);
+    struct Vec<struct RocmBuf> g32s = std::vec_new();
+    g32s.push(g32a); g32s.push(g32b);
+    check(std::rocm_zero(flag) && std::rocm_half_unscale_many(&gs, &g32s, (float)1.0 / (float)512.0, flag), "unscale ran");
+    struct Vec<float> fl = download(flag);
+    struct Vec<float> u = download(g32a);
+    bad = 0UL;
+    i = 0UL;
+    while (i < 3000UL) {
+        float want = std::fp16_to_f32(std::f32_to_fp16(*scaled.at(i))) * ((float)1.0 / (float)512.0);
+        if (*u.at(i) != want) bad = bad + 1UL;
+        i = i + 1UL;
+    }
+    check(bad == 0UL && *fl.at(0UL) == (float)0.0, "unscaled values, no overflow");
+    fl.free(); u.free();
+    unsigned short inf = (unsigned short)0x7C00;
+    std::rocm_half_write(g16b, &inf, 1UL);
+    check(std::rocm_half_unscale_many(&gs, &g32s, (float)1.0 / (float)512.0, flag), "unscale ran again");
+    fl = download(flag);
+    check(*fl.at(0UL) == (float)1.0, "overflow flagged");
+    fl.free();
+    // fp32 gradients in place
+    struct Vec<struct RocmBuf> one = std::vec_new();
+    one.push(g32a);
+    check(std::rocm_zero(flag) && std::rocm_unscale_many(&one, &one, (float)4.0, flag), "fp32 unscale in place");
+    u = download(g32a);
+    fl = download(flag);
+    check(*u.at(10UL) == std::fp16_to_f32(std::f32_to_fp16(*scaled.at(10UL))) * ((float)1.0 / (float)512.0) * (float)4.0 &&
+          *fl.at(0UL) == (float)0.0, "fp32 unscale values");
+    u.free(); fl.free();
+
+    // master-weight Adam (coupled and decoupled decay) and momentum SGD, 3 steps
+    unsigned long m = 777UL;
+    struct Vec<float> w0 = seq(m, (float)0.003, -(float)0.1);
+    struct Vec<float> g0 = seq(m, (float)0.011, -(float)0.4);
+    int variant = 0;
+    while (variant < 3) {
+        struct RocmBuf dw = std::rocm_upload(w0.at(0UL), m);
+        struct RocmBuf dg = std::rocm_upload(g0.at(0UL), m);
+        struct RocmBuf dm = std::rocm_alloc(m);
+        struct RocmBuf dvv = std::rocm_alloc(m);
+        struct RocmHalfBuf wh = std::rocm_half_alloc(m, ROCM_BF16);
+        std::rocm_zero(dm); std::rocm_zero(dvv); std::rocm_zero(flag);
+        struct Vec<float> cw = std::vec_with_cap(m);
+        struct Vec<float> cm = std::vec_with_cap(m);
+        struct Vec<float> cv = std::vec_with_cap(m);
+        i = 0UL;
+        while (i < m) { cw.push(*w0.at(i)); cm.push((float)0.0); cv.push((float)0.0); i = i + 1UL; }
+        float lr = (float)0.01; float b1 = (float)0.9; float b2 = (float)0.999; float eps = (float)1.0e-8; float wd = (float)0.05; float mu = (float)0.9;
+        unsigned long t = 1UL;
+        while (t <= 3UL) {
+            if (variant < 2)
+                check(std::rocm_mp_adam(dw, dm, dvv, dg, wh, lr, b1, b2, eps, wd, variant, t, flag), "mp adam ran");
+            else
+                check(std::rocm_mp_sgd(dw, dg, dm, wh, lr, mu, wd, flag), "mp sgd ran");
+            float bc1 = (float)1.0 - std::pow_f(b1, (float)t);
+            float bc2 = (float)1.0 - std::pow_f(b2, (float)t);
+            i = 0UL;
+            while (i < m) {
+                float g = *g0.at(i);
+                float w = *cw.at(i);
+                if (variant < 2) {
+                    if (variant == 0) g = g + wd * w;
+                    float mi = b1 * *cm.at(i) + ((float)1.0 - b1) * g;
+                    float vi = b2 * *cv.at(i) + ((float)1.0 - b2) * g * g;
+                    *cm.at(i) = mi; *cv.at(i) = vi;
+                    float upd = (mi / bc1) / (std::sqrt_f(vi / bc2) + eps);
+                    if (variant == 1) upd = upd + wd * w;
+                    *cw.at(i) = w - lr * upd;
+                } else {
+                    float gi = g + wd * w;
+                    float v = mu * *cm.at(i) + gi;
+                    *cm.at(i) = v;
+                    *cw.at(i) = w - lr * v;
+                }
+                i = i + 1UL;
+            }
+            t = t + 1UL;
+        }
+        struct Vec<float> gw = download(dw);
+        struct Vec<unsigned short> gh = read_half(wh);
+        float worst = (float)0.0;
+        bad = 0UL;
+        i = 0UL;
+        while (i < m) {
+            float dd = *gw.at(i) - *cw.at(i);
+            if (dd < (float)0.0) dd = -dd;
+            float cwi = *cw.at(i);
+            float sc = cwi < (float)0.0 ? (float)0.0 - cwi : cwi;
+            dd = dd / (sc > (float)1.0e-3 ? sc : (float)1.0e-3);
+            if (dd > worst) worst = dd;
+            if (*gh.at(i) != std::f32_to_bf16(*gw.at(i))) bad = bad + 1UL;
+            i = i + 1UL;
+        }
+        check(worst < (float)1.0e-5, variant == 0 ? "mp adam == CPU" : (variant == 1 ? "mp adamw == CPU" : "mp momentum sgd == CPU"));
+        check(bad == 0UL, "master weights' bf16 copy");
+        // a flagged step changes nothing
+        float one1 = (float)1.0;
+        std::rocm_write(flag, &one1, 1UL);
+        if (variant < 2) std::rocm_mp_adam(dw, dm, dvv, dg, wh, lr, b1, b2, eps, wd, variant, 4UL, flag);
+        else std::rocm_mp_sgd(dw, dg, dm, wh, lr, mu, wd, flag);
+        struct Vec<float> gw2 = download(dw);
+        check(maxdiff(&gw, &gw2) == (float)0.0, "flagged step skipped");
+        gw.free(); gw2.free(); gh.free(); cw.free(); cm.free(); cv.free();
+        std::rocm_free(&dw); std::rocm_free(&dg); std::rocm_free(&dm); std::rocm_free(&dvv);
+        std::rocm_half_free(&wh);
+        variant = variant + 1;
+    }
+
+    // 16-bit elementwise and bias, against CPU arithmetic on the decoded values
+    unsigned long e = 4099UL;
+    struct Vec<float> xa = seq(e, (float)0.13, -(float)6.0);
+    struct Vec<float> xb = seq(e, -(float)0.07, (float)3.0);
+    d = ROCM_FP16;
+    while (d <= ROCM_BF16) {
+        struct RocmHalfBuf ha = std::rocm_half_upload(xa.at(0UL), e, d);
+        struct RocmHalfBuf hb = std::rocm_half_upload(xb.at(0UL), e, d);
+        struct RocmHalfBuf ho = std::rocm_half_alloc(e, d);
+        struct Vec<unsigned short> ab = read_half(ha);
+        struct Vec<unsigned short> bb = read_half(hb);
+        int op = 0;
+        while (op < 5) {
+            int ok = 0;
+            if (op == 0) ok = std::rocm_half_add(ha, hb, ho);
+            if (op == 1) ok = std::rocm_half_sub(ha, hb, ho);
+            if (op == 2) ok = std::rocm_half_mul(ha, hb, ho);
+            if (op == 3) ok = std::rocm_half_scale(ha, (float)0.3, ho);
+            if (op == 4) ok = std::rocm_half_axpy(ha, -(float)1.7, hb, ho);
+            struct Vec<unsigned short> ob = read_half(ho);
+            bad = 0UL;
+            i = 0UL;
+            while (i < e) {
+                float x = std::half_decode(*ab.at(i), d);
+                float y = std::half_decode(*bb.at(i), d);
+                float r = op == 0 ? x + y : (op == 1 ? x - y : (op == 2 ? x * y : (op == 3 ? x * (float)0.3 : x + -(float)1.7 * y)));
+                if (*ob.at(i) != std::half_encode(r, d)) bad = bad + 1UL;
+                i = i + 1UL;
+            }
+            check(ok && bad == 0UL, "half elementwise == CPU");
+            ob.free();
+            op = op + 1;
+        }
+        // NCHW bias + relu: 3 images x 7 channels x 5x5 (175 values per image, e >= 525)
+        struct Vec<float> bias = seq(7UL, (float)0.5, -(float)1.5);
+        struct RocmHalfBuf hbias = std::rocm_half_upload(bias.at(0UL), 7UL, d);
+        struct Vec<unsigned short> biasb = read_half(hbias);
+        check(std::rocm_half_bias(ha, hbias, 3UL, 7UL, 25UL, 1), "half bias ran");
+        struct Vec<unsigned short> yb = read_half(ha);
+        bad = 0UL;
+        i = 0UL;
+        while (i < e) {
+            unsigned short want = *ab.at(i);
+            if (i < 525UL) {
+                float r = std::half_decode(*ab.at(i), d) + std::half_decode(*biasb.at((i / 25UL) % 7UL), d);
+                if (r < (float)0.0) r = (float)0.0;
+                want = std::half_encode(r, d);
+            }
+            if (*yb.at(i) != want) bad = bad + 1UL;
+            i = i + 1UL;
+        }
+        check(bad == 0UL, "half NCHW bias + relu == CPU");
+        yb.free(); biasb.free(); bias.free(); ab.free(); bb.free();
+        std::rocm_half_free(&ha); std::rocm_half_free(&hb); std::rocm_half_free(&ho); std::rocm_half_free(&hbias);
+        d = d + 1;
+    }
+
+    b = 0UL;
+    while (b < 40UL) {
+        std::rocm_free(f32s.at(b)); std::rocm_half_free(h16s.at(b)); std::rocm_free(backs.at(b));
+        b = b + 1UL;
+    }
+    std::rocm_half_free(&odd);
+    std::rocm_half_free(&g16a); std::rocm_half_free(&g16b);
+    std::rocm_free(&g32a); std::rocm_free(&g32b); std::rocm_free(&flag);
+    f32s.free(); h16s.free(); backs.free(); mixed.free(); two.free(); gs.free(); g32s.free(); one.free();
+    pat.free(); cpu.free(); host.free(); gv.free(); scaled.free(); w0.free(); g0.free(); xa.free(); xb.free();
+}
+
+
 int main() {
     if (!std::rocm_available()) { unsafe { printf("no ROCm GPU -- skipped\n"); } return 0; }
     unsafe { printf("device: %s\n", std::rocm_device_name()); }
@@ -756,6 +1030,7 @@ int main() {
     a.free(); b.free(); want.free(); ga.free(); gb.free(); ref.free(); hc.free();
 
     check_half();
+    check_mixed_precision();
     check_decode_ops();
 
     // matrix-core kernels (when the GPU has them), then the CUDA-core ones

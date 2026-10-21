@@ -35,6 +35,8 @@ namespace std {
 &Tensor tensor_transpose(const &Tensor in);
 
 // Copies out the column range [startCol, startCol+numCols) of every row.
+// Records a backward edge (gradients go back into those columns) when the
+// input requires grad.
 &Tensor tensor_slice_cols(const &Tensor in, unsigned long startCol, unsigned long numCols);
 
 // Writes 'src' into 'dst's column range [startCol, startCol+numCols)

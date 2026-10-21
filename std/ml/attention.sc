@@ -61,19 +61,40 @@ extern void  free(void* ptr);
     return out;
 }
 
-&Tensor tensor_slice_cols(const &Tensor in, unsigned long startCol, unsigned long numCols) {
-    unsigned long rows; unsigned long cols;
-    unsafe { rows = in->shape[0]; cols = in->shape[1]; }
-    &Tensor out = tensor_new_2d(rows, numCols, 0);
-    unsigned long r = 0UL;
-    while (r < rows) {
-        unsigned long c = 0UL;
-        while (c < numCols) {
-            unsafe { out->data[r * numCols + c] = in->data[r * cols + startCol + c]; }
-            c = c + 1UL;
+// Column slice, differentiable: the start column rides in extraScalar.
+static void attn_slice_backward_(void* selfPtr) {
+    unsafe {
+        struct Tensor* s = (struct Tensor*)selfPtr;
+        struct Tensor* a = __tensor_parent(s, 0UL);
+        if (!a->requiresGrad) return;
+        __tensor_ensure_grad(a);
+        unsigned long start = (unsigned long)s->extraScalar;
+        unsigned long len = s->shape[1];
+        unsigned long n = a->shape[1];
+        unsigned long rows = s->shape[0];
+        unsigned long r = 0UL;
+        while (r < rows) {
+            unsigned long c = 0UL;
+            while (c < len) { a->grad[r * n + start + c] = a->grad[r * n + start + c] + s->grad[r * len + c]; c = c + 1UL; }
+            r = r + 1UL;
         }
-        r = r + 1UL;
     }
+}
+
+&Tensor tensor_slice_cols(const &Tensor a, unsigned long start, unsigned long len) {
+    unsigned long rows; unsigned long n;
+    unsafe { rows = a->shape[0]; n = a->shape[1]; }
+    &Tensor out = tensor_new_2d(rows, len, 0);
+    unsafe {
+        unsigned long r = 0UL;
+        while (r < rows) {
+            unsigned long c = 0UL;
+            while (c < len) { out->data[r * len + c] = a->data[r * n + start + c]; c = c + 1UL; }
+            r = r + 1UL;
+        }
+        out->extraScalar = (float)start;
+    }
+    __tensor_link1(out, a, (void*)attn_slice_backward_);
     return out;
 }
 

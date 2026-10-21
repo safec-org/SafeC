@@ -5,7 +5,9 @@
 #include <std/ml/tensor.h>
 #include <std/ml/tensor_nn.h>
 #include <std/ml/nn.h>
+#include <std/ml/convnet.h>
 #include <std/math.h>
+#include <std/panic.h>
 
 namespace std {
 
@@ -145,22 +147,31 @@ static &Tensor vae_cond_(const &Vae v, const &Tensor x, const &Tensor y) {
     return tensor_concat_cols(x, tensor_one_hot(y, v.cfg.classes));
 }
 
+// z = mu + exp(logvar / 2) * eps
+static &Tensor vae_reparam_(&Rng rng, const &Tensor mu, const &Tensor logvar, unsigned long m, unsigned long latent) {
+    &Tensor eps = rng_normal_tensor(rng, m, latent);
+    return tensor_add(mu, tensor_mul(tensor_exp(tensor_scale(logvar, (float)0.5)), eps));
+}
+
+// KL(N(mu, sigma^2) || N(0, 1)) = -1/2 sum(1 + logvar - mu^2 - exp(logvar)),
+// averaged over the batch.
+static &Tensor vae_kl_(const &Tensor mu, const &Tensor logvar, float rows) {
+    &Tensor inner = tensor_sub(tensor_add_scalar(logvar, (float)1.0),
+                               tensor_add(tensor_mul(mu, mu), tensor_exp(logvar)));
+    return tensor_scale(tensor_sum(inner), (float)-0.5 / rows);
+}
+
 &Tensor vae_loss(&Vae v, const &Tensor x, const &Tensor y) {
     &Tensor h = mlp_forward(&v.enc, vae_cond_(v, x, y));
     &Tensor mu = mlp_forward(&v.muHead, h);
     &Tensor logvar = mlp_forward(&v.logvarHead, h);
     unsigned long m = ae_rows_(x);
     float rows = (float)m;
-    // z = mu + exp(logvar / 2) * eps
-    &Tensor eps = rng_normal_tensor(&v.rng, m, v.cfg.latent);
-    &Tensor z = tensor_add(mu, tensor_mul(tensor_exp(tensor_scale(logvar, (float)0.5)), eps));
+    &Tensor z = vae_reparam_(&v.rng, mu, logvar, m, v.cfg.latent);
     &Tensor out = mlp_forward(&v.dec, vae_cond_(v, z, y));
     // reconstruction summed over features, averaged over the batch
     &Tensor recon = tensor_scale(ae_recon_mean_(out, x, v.cfg.recon), ae_cols_(x));
-    // KL(N(mu, sigma^2) || N(0, 1)) = -1/2 sum(1 + logvar - mu^2 - exp(logvar))
-    &Tensor inner = tensor_sub(tensor_add_scalar(logvar, (float)1.0),
-                               tensor_add(tensor_mul(mu, mu), tensor_exp(logvar)));
-    &Tensor kl = tensor_scale(tensor_sum(inner), (float)-0.5 / rows);
+    &Tensor kl = vae_kl_(mu, logvar, rows);
     v.lastRecon = ae_value_(recon);
     v.lastKl = ae_value_(kl);
     return tensor_add(recon, tensor_scale(kl, v.cfg.beta));
@@ -366,6 +377,137 @@ void vqvae_free(&VqVae v) {
     v.codebook->free();
     v.idle->free();
     unsafe { free((void*)v.codebook); free((void*)v.idle); }
+}
+
+// ══ Convolutional autoencoder / VAE ══════════════════════════════════════════
+
+static void ae_net_check_(int ok, const &char what) {
+    if (!ok) panic_at(what, "autoencoder.sc", __LINE__);
+}
+
+// Runs 'net' forward in inference mode.
+static &Tensor ae_infer_(&ConvNet net, const &Tensor x) {
+    int was = convnet_set_training(net, 0);
+    &Tensor out = convnet_forward(net, x);
+    convnet_set_training(net, was);
+    return out;
+}
+
+struct ConvAutoencoder conv_autoencoder_new(struct ConvNet enc, struct ConvNet dec, int recon) {
+    struct ConvAutoencoder ae;
+    ae.enc = enc;
+    ae.dec = dec;
+    ae_net_check_(convnet_in_dim(&ae.dec) == convnet_out_dim(&ae.enc)
+                  && convnet_out_dim(&ae.dec) == convnet_in_dim(&ae.enc),
+                  "conv_autoencoder_new: the decoder must map the code back to the encoder's input size");
+    ae.recon = recon;
+    ae.lastRecon = (float)0.0;
+    return ae;
+}
+
+&Tensor conv_autoencoder_encode(&ConvAutoencoder ae, const &Tensor x) { return ae_infer_(&ae.enc, x); }
+
+&Tensor conv_autoencoder_decode(&ConvAutoencoder ae, const &Tensor z) {
+    return ae_output_(ae_infer_(&ae.dec, z), ae.recon);
+}
+
+&Tensor conv_autoencoder_reconstruct(&ConvAutoencoder ae, const &Tensor x) {
+    return conv_autoencoder_decode(ae, conv_autoencoder_encode(ae, x));
+}
+
+&Tensor conv_autoencoder_loss(&ConvAutoencoder ae, const &Tensor x, const &Tensor y) {
+    &Tensor out = convnet_forward(&ae.dec, convnet_forward(&ae.enc, x));
+    &Tensor loss = ae_recon_mean_(out, x, ae.recon);
+    ae.lastRecon = ae_value_(loss);
+    return loss;
+}
+
+void conv_autoencoder_add_params(&Optimizer opt, const &ConvAutoencoder ae) {
+    optimizer_add_convnet(opt, &ae.enc);
+    optimizer_add_convnet(opt, &ae.dec);
+}
+
+void conv_autoencoder_free(&ConvAutoencoder ae) {
+    convnet_free(&ae.enc);
+    convnet_free(&ae.dec);
+}
+
+struct ConvVae conv_vae_new(struct ConvNet enc, struct ConvNet dec, const &VaeConfig cfg) {
+    struct ConvVae v;
+    v.cfg = *cfg;
+    v.rng = rng_new(cfg.seed);
+    v.enc = enc;
+    v.dec = dec;
+    unsigned long c = cfg.classes;
+    ae_net_check_(v.enc.inC > c, "conv_vae_new: the encoder needs the image's channels plus one per class");
+    unsigned long dataDim = (v.enc.inC - c) * v.enc.inH * v.enc.inW;
+    ae_net_check_(convnet_in_dim(&v.dec) == cfg.latent + c && convnet_out_dim(&v.dec) == dataDim,
+                  "conv_vae_new: the decoder must map latent (+ classes) inputs to the image's size");
+    unsigned long feat = convnet_out_dim(&v.enc);
+    v.muHead = mlp_new(feat, 0UL, 0UL, cfg.latent, ACT_NONE, ACT_NONE, &v.rng);
+    v.logvarHead = mlp_new(feat, 0UL, 0UL, cfg.latent, ACT_NONE, ACT_NONE, &v.rng);
+    v.lastRecon = (float)0.0;
+    v.lastKl = (float)0.0;
+    return v;
+}
+
+// The encoder's input: x, plus one label plane per class for a CVAE.
+static &Tensor cvae_enc_in_(const &ConvVae v, const &Tensor x, const &Tensor y) {
+    if (v.cfg.classes == 0UL) return x;
+    return tensor_append_label_channels(x, y, v.cfg.classes, v.enc.inH, v.enc.inW);
+}
+
+// The decoder's input: z, plus the one-hot label for a CVAE.
+static &Tensor cvae_dec_in_(const &ConvVae v, const &Tensor z, const &Tensor y) {
+    if (v.cfg.classes == 0UL) return z;
+    return tensor_concat_cols(z, tensor_one_hot(y, v.cfg.classes));
+}
+
+&Tensor conv_vae_loss(&ConvVae v, const &Tensor x, const &Tensor y) {
+    &Tensor h = convnet_forward(&v.enc, cvae_enc_in_(v, x, y));
+    &Tensor mu = mlp_forward(&v.muHead, h);
+    &Tensor logvar = mlp_forward(&v.logvarHead, h);
+    unsigned long m = ae_rows_(x);
+    &Tensor z = vae_reparam_(&v.rng, mu, logvar, m, v.cfg.latent);
+    &Tensor out = convnet_forward(&v.dec, cvae_dec_in_(v, z, y));
+    &Tensor recon = tensor_scale(ae_recon_mean_(out, x, v.cfg.recon), ae_cols_(x));
+    &Tensor kl = vae_kl_(mu, logvar, (float)m);
+    v.lastRecon = ae_value_(recon);
+    v.lastKl = ae_value_(kl);
+    return tensor_add(recon, tensor_scale(kl, v.cfg.beta));
+}
+
+&Tensor conv_vae_encode(&ConvVae v, const &Tensor x, const &Tensor y) {
+    return mlp_forward(&v.muHead, ae_infer_(&v.enc, cvae_enc_in_(v, x, y)));
+}
+
+&Tensor conv_vae_decode(&ConvVae v, const &Tensor z, const &Tensor y) {
+    return ae_output_(ae_infer_(&v.dec, cvae_dec_in_(v, z, y)), v.cfg.recon);
+}
+
+&Tensor conv_vae_reconstruct(&ConvVae v, const &Tensor x, const &Tensor y) {
+    return conv_vae_decode(v, conv_vae_encode(v, x, y), y);
+}
+
+&Tensor conv_vae_sample(&ConvVae v, unsigned long n, ?&Tensor labels) {
+    &Tensor z = rng_normal_tensor(&v.rng, n, v.cfg.latent);
+    match (labels) {
+        case some(l): { return conv_vae_decode(v, z, l); }
+        case null: { }
+    }
+    &Tensor none = tensor_new_1d(n, 0);   // class 0 if a CVAE is sampled without labels
+    return conv_vae_decode(v, z, none);
+}
+
+void conv_vae_add_params(&Optimizer opt, const &ConvVae v) {
+    optimizer_add_convnet(opt, &v.enc);
+    optimizer_add_mlp(opt, &v.muHead);
+    optimizer_add_mlp(opt, &v.logvarHead);
+    optimizer_add_convnet(opt, &v.dec);
+}
+
+void conv_vae_free(&ConvVae v) {
+    convnet_free(&v.enc); mlp_free(&v.muHead); mlp_free(&v.logvarHead); convnet_free(&v.dec);
 }
 
 } // namespace std

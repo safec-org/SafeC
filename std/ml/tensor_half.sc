@@ -116,6 +116,123 @@ struct HalfTensor tensor_to_half(const &Tensor t, int dtype) {
     return out;
 }
 
+// ── Batch conversion ─────────────────────────────────────────────────────────
+
+static void __half_encode_bulk(const float* src, unsigned short* dst, unsigned long n, int dtype) {
+    unsafe {
+        if (dtype == TENSOR_BF16) f32_to_bf16_bulk((const &float)src, (&unsigned short)dst, n);
+        else f32_to_fp16_bulk((const &float)src, (&unsigned short)dst, n);
+    }
+}
+
+static void __half_decode_bulk(const unsigned short* src, float* dst, unsigned long n, int dtype) {
+    unsafe {
+        if (dtype == TENSOR_BF16) bf16_to_f32_bulk((const &unsigned short)src, (&float)dst, n);
+        else fp16_to_f32_bulk((const &unsigned short)src, (&float)dst, n);
+    }
+}
+
+int tensor_to_half_into(const &Tensor t, &HalfTensor dst) {
+    unsafe {
+        if (t->size != dst.size) return 0;
+        __half_encode_bulk((const float*)t->data, (unsigned short*)dst.data, t->size, dst.dtype);
+    }
+    return 1;
+}
+
+int half_to_tensor_into(const &HalfTensor h, &Tensor dst) {
+    unsafe {
+        if (dst->size != h.size) return 0;
+        __half_decode_bulk((const unsigned short*)h.data, (float*)dst->data, h.size, h.dtype);
+    }
+    return 1;
+}
+
+int half_convert(const &HalfTensor src, &HalfTensor dst) {
+    if (src.size != dst.size) return 0;
+    unsafe {
+        const unsigned short* s = (const unsigned short*)src.data;
+        unsigned short* d = (unsigned short*)dst.data;
+        if (src.dtype == dst.dtype) memcpy((void*)d, (const void*)s, src.size * 2UL);
+        else if (dst.dtype == TENSOR_BF16) fp16_to_bf16_bulk((const &unsigned short)s, (&unsigned short)d, src.size);
+        else bf16_to_fp16_bulk((const &unsigned short)s, (&unsigned short)d, src.size);
+    }
+    return 1;
+}
+
+struct Vec<struct HalfTensor> tensors_to_half(const &Vec<&Tensor> ts, int dtype) {
+    struct Vec<struct HalfTensor> out = vec_new();
+    unsigned long i = 0UL;
+    while (i < ts.length()) { out.push(tensor_to_half(*ts.at(i), dtype)); i = i + 1UL; }
+    return out;
+}
+
+int tensors_to_half_into(const &Vec<&Tensor> ts, &Vec<struct HalfTensor> dst) {
+    if (ts.length() != dst.length()) return 0;
+    int ok = 1;
+    unsigned long i = 0UL;
+    while (i < ts.length()) {
+        if (!tensor_to_half_into(*ts.at(i), dst.at(i))) ok = 0;
+        i = i + 1UL;
+    }
+    return ok;
+}
+
+int halves_to_tensors(const &Vec<struct HalfTensor> hs, &Vec<&Tensor> dst) {
+    if (hs.length() != dst.length()) return 0;
+    int ok = 1;
+    unsigned long i = 0UL;
+    while (i < hs.length()) {
+        if (!half_to_tensor_into(hs.at(i), *dst.at(i))) ok = 0;
+        i = i + 1UL;
+    }
+    return ok;
+}
+
+void half_tensors_free(&Vec<struct HalfTensor> hs) {
+    unsigned long i = 0UL;
+    while (i < hs.length()) { &HalfTensor h = hs.at(i); h.free(); i = i + 1UL; }
+    hs.free();
+}
+
+#define HALF_GRAD_CHUNK 4096UL
+
+int half_grads_accumulate(const &Vec<struct HalfTensor> grads, &Vec<&Tensor> params, float invScale) {
+    if (grads.length() != params.length()) return 0;
+    int finite = 1;
+    float buf[4096];
+    unsigned long t = 0UL;
+    while (t < grads.length()) {
+        &HalfTensor g = grads.at(t);
+        &Tensor p = *params.at(t);
+        unsafe {
+            if (g.size != p->size) return 0;
+            if (p->grad == (float*)0) {
+                float* z = (float*)malloc(sizeof(float) * p->size);
+                unsigned long k = 0UL;
+                while (k < p->size) { z[k] = (float)0.0; k = k + 1UL; }
+                p->grad = (&heap float)z;
+            }
+            unsigned long i = 0UL;
+            while (i < g.size) {
+                unsigned long n = g.size - i < HALF_GRAD_CHUNK ? g.size - i : HALF_GRAD_CHUNK;
+                float* b = (float*)&buf[0];
+                __half_decode_bulk((const unsigned short*)&g.data[i], b, n, g.dtype);
+                unsigned long k = 0UL;
+                while (k < n) {
+                    float v = p->grad[i + k] + b[k] * invScale;
+                    if (v - v != (float)0.0) finite = 0;    // inf or NaN
+                    p->grad[i + k] = v;
+                    k = k + 1UL;
+                }
+                i = i + n;
+            }
+        }
+        t = t + 1UL;
+    }
+    return finite;
+}
+
 // ── HalfTensor ops ───────────────────────────────────────────────────────────
 
 #define HALF_ADD 0
@@ -270,6 +387,16 @@ int loss_scaler_unscale(&LossScaler s, &Tensor p) {
             p->grad[i] = g;
             i = i + 1UL;
         }
+    }
+    return finite;
+}
+
+int loss_scaler_unscale_all(&LossScaler s, &Vec<&Tensor> params) {
+    int finite = 1;
+    unsigned long i = 0UL;
+    while (i < params.length()) {
+        if (!loss_scaler_unscale(s, *params.at(i))) finite = 0;
+        i = i + 1UL;
     }
     return finite;
 }

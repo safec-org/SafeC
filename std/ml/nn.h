@@ -11,8 +11,9 @@
 //   * Losses: MSE, Huber, binary cross-entropy on logits, softmax
 //     cross-entropy on class indices.
 //   * Mlp — a stack of fully connected layers with an activation.
-//   * Optimizer — SGD, momentum, Nesterov, RMSProp, Adam and AdamW over a
-//     list of parameter tensors, with gradient-norm clipping.
+//   * Optimizer — SGD, momentum, Nesterov, RMSProp, Adagrad, Adam, AdamW
+//     and Lion over a list of parameter tensors, with gradient-norm
+//     clipping.
 //
 // trainer.h runs the training loop; autoencoder.h, gan.h and rl.h build
 // their models from these pieces. Every model here works on rows: a batch
@@ -114,6 +115,18 @@ void mlp_copy(&Mlp dst, const &Mlp src);
 void mlp_soft_update(&Mlp dst, const &Mlp src, float tau);
 void mlp_free(&Mlp m);
 
+// ── Saving and loading tensors ───────────────────────────────────────────────
+// A list of tensors' shapes and values to a file and back: the magic
+// "SCTN", the count, then per tensor its rank, shape and float32 values
+// (all little-endian, 64-bit counts). Loading fills existing tensors and
+// requires the same count and shapes. Return 1 on success, 0 when the file
+// can't be opened, is truncated or doesn't match.
+int tensors_save(const &Vec<&Tensor> ts, const &char path);
+int tensors_load(&Vec<&Tensor> ts, const &char path);
+// An Mlp's parameters (load into an Mlp built with the same sizes).
+int mlp_save_file(const &Mlp m, const &char path);
+int mlp_load_file(&Mlp m, const &char path);
+
 // ── Optimizers ───────────────────────────────────────────────────────────────
 #define OPT_SGD       0
 #define OPT_MOMENTUM  1   // heavy ball, 'momentum' 0.9
@@ -121,6 +134,9 @@ void mlp_free(&Mlp m);
 #define OPT_RMSPROP   3   // squared-gradient average 'beta2' (0.99)
 #define OPT_ADAM      4   // 'beta1' 0.9, 'beta2' 0.999, 'eps' 1e-8
 #define OPT_ADAMW     5   // Adam with decoupled weight decay ('weightDecay' 0.01)
+#define OPT_ADAGRAD   6   // per-weight lr / sqrt(sum of squared gradients) (Duchi et al. 2011)
+#define OPT_LION      7   // sign of the interpolated momentum (Chen et al. 2023); 'beta1' 0.9,
+                          // 'beta2' 0.99, decoupled 'weightDecay'; use ~3-10x smaller lr than Adam
 
 // Fields are public: change lr (a schedule), betas or weight decay
 // between steps. State buffers are created when a parameter is added,
@@ -135,7 +151,7 @@ struct Optimizer {
     float beta1;
     float beta2;
     float eps;
-    float weightDecay;       // L2 for SGD / momentum / RMSProp / Adam, decoupled for AdamW
+    float weightDecay;       // L2 for SGD / momentum / RMSProp / Adagrad / Adam, decoupled for AdamW / Lion
     unsigned long t;         // steps taken
 };
 struct Optimizer optimizer_new(int kind, float lr);

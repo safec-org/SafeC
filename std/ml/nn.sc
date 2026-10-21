@@ -5,6 +5,7 @@
 #include <std/ml/tensor.h>
 #include <std/ml/tensor_nn.h>
 #include <std/math.h>
+#include <std/io_file.h>
 
 namespace std {
 
@@ -727,8 +728,8 @@ struct Optimizer optimizer_new(int kind, float lr) {
     o.lr = lr;
     o.momentum = (float)0.9;
     o.beta1 = (float)0.9;
-    o.beta2 = kind == OPT_RMSPROP ? (float)0.99 : (float)0.999;
-    o.eps = (float)0.00000001;
+    o.beta2 = kind == OPT_RMSPROP || kind == OPT_LION ? (float)0.99 : (float)0.999;
+    o.eps = kind == OPT_ADAGRAD ? (float)0.0000000001 : (float)0.00000001;
     o.weightDecay = kind == OPT_ADAMW ? (float)0.01 : (float)0.0;
     o.t = 0UL;
     return o;
@@ -815,6 +816,25 @@ void optimizer_step(&Optimizer o) {
                         w[j] = w[j] - lr * (nest ? g + mu * m[j] : m[j]);
                         j = j + 1UL;
                     }
+                } else if (o.kind == OPT_ADAGRAD) {
+                    while (j < n) {
+                        float g = gr[j] + wd * w[j];
+                        v[j] = v[j] + g * g;
+                        w[j] = w[j] - lr * g / (sqrt_f(v[j]) + o.eps);
+                        j = j + 1UL;
+                    }
+                } else if (o.kind == OPT_LION) {
+                    // update = sign(b1 m + (1 - b1) g); m = b2 m + (1 - b2) g
+                    float b1 = o.beta1;
+                    float b2 = o.beta2;
+                    while (j < n) {
+                        float g = gr[j];
+                        float c = b1 * m[j] + ((float)1.0 - b1) * g;
+                        float sg = c > (float)0.0 ? (float)1.0 : (c < (float)0.0 ? (float)-1.0 : (float)0.0);
+                        w[j] = w[j] - lr * (sg + wd * w[j]);
+                        m[j] = b2 * m[j] + ((float)1.0 - b2) * g;
+                        j = j + 1UL;
+                    }
                 } else if (o.kind == OPT_RMSPROP) {
                     float a = o.beta2;
                     while (j < n) {
@@ -855,5 +875,94 @@ void optimizer_free(&Optimizer o) {
     }
     o.params.free(); o.m.free(); o.v.free();
 }
+
+// ══ Saving and loading tensors ═══════════════════════════════════════════════
+
+static int nn_write_(&File f, const void* p, unsigned long bytes) {
+    unsafe { return file_write(f, (const &unsigned char)(const unsigned char*)p, bytes) == bytes; }
+}
+
+static int nn_read_(&File f, void* p, unsigned long bytes) {
+    unsafe { return file_read(f, (&unsigned char)(unsigned char*)p, bytes) == bytes; }
+}
+
+int tensors_save(const &Vec<&Tensor> ts, const &char path) {
+    ?&File fo = file_open(path, "wb");
+    match (fo) {
+        case null: { return 0; }
+        case some(f): {
+            int ok = 1;
+            unsigned char magic[4];
+            unsafe {
+                magic[0] = (unsigned char)83; magic[1] = (unsigned char)67;   // "SCTN"
+                magic[2] = (unsigned char)84; magic[3] = (unsigned char)78;
+                ok = nn_write_(f, (const void*)&magic[0], 4UL);
+                unsigned long count = ts.length();
+                ok = ok && nn_write_(f, (const void*)&count, sizeof(unsigned long));
+                unsigned long i = 0UL;
+                while (ok && i < count) {
+                    &Tensor t = *ts.at(i);
+                    unsigned long nd = t->ndim;
+                    ok = nn_write_(f, (const void*)&nd, sizeof(unsigned long));
+                    ok = ok && nn_write_(f, (const void*)t->shape, sizeof(unsigned long) * nd);
+                    ok = ok && nn_write_(f, (const void*)t->data, sizeof(float) * t->size);
+                    i = i + 1UL;
+                }
+            }
+            if (file_close(f) != 0) ok = 0;
+            return ok;
+        }
+    }
+    return 0;
+}
+
+int tensors_load(&Vec<&Tensor> ts, const &char path) {
+    ?&File fo = file_open(path, "rb");
+    match (fo) {
+        case null: { return 0; }
+        case some(f): {
+            int ok = 1;
+            unsigned char magic[4];
+            unsafe {
+                ok = nn_read_(f, (void*)&magic[0], 4UL)
+                     && magic[0] == (unsigned char)83 && magic[1] == (unsigned char)67
+                     && magic[2] == (unsigned char)84 && magic[3] == (unsigned char)78;
+                unsigned long count = 0UL;
+                ok = ok && nn_read_(f, (void*)&count, sizeof(unsigned long)) && count == ts.length();
+                // check every shape before overwriting anything
+                long long start = file_tell(f);
+                unsigned long i = 0UL;
+                while (ok && i < count) {
+                    &Tensor t = *ts.at(i);
+                    unsigned long nd = 0UL;
+                    ok = nn_read_(f, (void*)&nd, sizeof(unsigned long)) && nd == t->ndim;
+                    unsigned long d = 0UL;
+                    while (ok && d < nd) {
+                        unsigned long dim = 0UL;
+                        ok = nn_read_(f, (void*)&dim, sizeof(unsigned long)) && dim == t->shape[d];
+                        d = d + 1UL;
+                    }
+                    ok = ok && file_seek(f, (long long)(sizeof(float) * t->size), 1) == 0;
+                    i = i + 1UL;
+                }
+                ok = ok && file_seek(f, start, 0) == 0;
+                i = 0UL;
+                while (ok && i < count) {
+                    &Tensor t = *ts.at(i);
+                    unsigned long skip = sizeof(unsigned long) * (1UL + t->ndim);
+                    ok = file_seek(f, (long long)skip, 1) == 0;
+                    ok = ok && nn_read_(f, (void*)t->data, sizeof(float) * t->size);
+                    i = i + 1UL;
+                }
+            }
+            file_close(f);
+            return ok;
+        }
+    }
+    return 0;
+}
+
+int mlp_save_file(const &Mlp m, const &char path) { return tensors_save(&m.params, path); }
+int mlp_load_file(&Mlp m, const &char path) { return tensors_load(&m.params, path); }
 
 } // namespace std

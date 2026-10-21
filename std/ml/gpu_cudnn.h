@@ -60,6 +60,31 @@ int cuda_maxpool2d(struct CudaBuf x, struct CudaBuf y, unsigned long batch, unsi
 int cuda_avgpool2d(struct CudaBuf x, struct CudaBuf y, unsigned long batch, unsigned long channels,
                    unsigned long height, unsigned long width, unsigned long kernel, unsigned long stride);
 
+// ── fp16 / bf16 ──────────────────────────────────────────────────────────────
+// The same convolution on 16-bit NCHW tensors (gpu_cuda.h's CudaHalfBuf):
+// cuDNN's half / bfloat16 convolutions (fp32 compute, tensor cores where
+// cuDNN picks them), rounding once per output; the bias add and ReLU are
+// one fused 16-bit kernel (cuda_half_bias). Weights are rounded from a Conv2D's fp32 ones on
+// upload. x, y and the layer must share one dtype.
+struct CudaHalfConv2D {
+    struct CudaHalfBuf weight;
+    struct CudaHalfBuf bias;
+    unsigned long      inChannels;
+    unsigned long      outChannels;
+    unsigned long      kH;
+    unsigned long      kW;
+    unsigned long      stride;
+    unsigned long      padding;
+};
+struct CudaHalfConv2D cuda_half_conv2d_upload(const &Conv2D layer, int dtype);   // CUDA_FP16 / CUDA_BF16
+void cuda_half_conv2d_free(&CudaHalfConv2D layer);
+int cuda_half_conv2d(const &CudaHalfConv2D layer, struct CudaHalfBuf x, struct CudaHalfBuf y,
+                     unsigned long batch, unsigned long height, unsigned long width);
+int cuda_half_conv2d_relu(const &CudaHalfConv2D layer, struct CudaHalfBuf x, struct CudaHalfBuf y,
+                          unsigned long batch, unsigned long height, unsigned long width);
+// 16-bit pooling is gpu_cuda.h's cuda_half_maxpool2d / cuda_half_avgpool2d
+// (a CUDA kernel, the same as on ROCm).
+
 // out[b] = (a[b], c[b]) along channels, for each of 'batch' images whose
 // planes are 'plane' = height*width elements (concat_channels).
 int cuda_concat_channels(struct CudaBuf a, unsigned long aChannels, struct CudaBuf c, unsigned long cChannels,

@@ -57,6 +57,31 @@ int rocm_maxpool2d(struct RocmBuf x, struct RocmBuf y, unsigned long batch, unsi
 int rocm_avgpool2d(struct RocmBuf x, struct RocmBuf y, unsigned long batch, unsigned long channels,
                    unsigned long height, unsigned long width, unsigned long kernel, unsigned long stride);
 
+// ── fp16 / bf16 ──────────────────────────────────────────────────────────────
+// The same convolution on 16-bit NCHW tensors (gpu_rocm.h's
+// RocmHalfBuf): MIOpen's half / bfloat16 kernels, which accumulate in fp32
+// and round once per output; the bias add and ReLU are one fused 16-bit
+// kernel (rocm_half_bias). Weights are rounded from a Conv2D's fp32 ones on
+// upload. x, y and the layer must share one dtype.
+struct RocmHalfConv2D {
+    struct RocmHalfBuf weight;
+    struct RocmHalfBuf bias;
+    unsigned long      inChannels;
+    unsigned long      outChannels;
+    unsigned long      kH;
+    unsigned long      kW;
+    unsigned long      stride;
+    unsigned long      padding;
+};
+struct RocmHalfConv2D rocm_half_conv2d_upload(const &Conv2D layer, int dtype);   // ROCM_FP16 / ROCM_BF16
+void rocm_half_conv2d_free(&RocmHalfConv2D layer);
+int rocm_half_conv2d(const &RocmHalfConv2D layer, struct RocmHalfBuf x, struct RocmHalfBuf y,
+                     unsigned long batch, unsigned long height, unsigned long width);
+int rocm_half_conv2d_relu(const &RocmHalfConv2D layer, struct RocmHalfBuf x, struct RocmHalfBuf y,
+                          unsigned long batch, unsigned long height, unsigned long width);
+// 16-bit pooling is gpu_rocm.h's rocm_half_maxpool2d / rocm_half_avgpool2d
+// (a HIP kernel: MIOpen has no bfloat16 pooling solver on every GPU).
+
 // out[b] = (a[b], c[b]) along channels, for each of 'batch' images whose
 // planes are 'plane' = height*width elements (concat_channels).
 int rocm_concat_channels(struct RocmBuf a, unsigned long aChannels, struct RocmBuf c, unsigned long cChannels,
