@@ -385,12 +385,24 @@ void t_connect_timeout() {
                                      (unsigned char)0, (unsigned char)1);
         unsigned short closedPort = (unsigned short)(g_http_port + (unsigned short)10);
         unsigned short silentPort = (unsigned short)(g_http_port + (unsigned short)11);
+        int ok = 0;
+        struct HttpResponse warm = get_retry("/echo", &ok);   // server is up
+        warm.free();
 
         // Refused: reported as a failure right away.
         long long t0 = time_mono_ns();
         int fd = tcp_connect_timeout(lo, closedPort, 2000);
         ASSERT_EQ(fd, -1);
         ASSERT_TRUE(ms_since(t0) < 1000LL);
+
+        // tcp_wait_connected (no time limit of its own) on the same two
+        // outcomes.
+        fd = tcp_connect_nb(lo, closedPort);
+        ASSERT_TRUE(fd >= 0);
+        if (fd >= 0) { ASSERT_EQ(tcp_wait_connected(fd), -1); close(fd); }
+        fd = tcp_connect_nb(lo, g_http_port);
+        ASSERT_TRUE(fd >= 0);
+        if (fd >= 0) { ASSERT_EQ(tcp_wait_connected(fd), 0); close(fd); }
 
         // Unanswered SYN (10.255.255.1 is normally blackholed; where it is
         // unroutable or rejected instead, connect fails even sooner).
@@ -402,9 +414,6 @@ void t_connect_timeout() {
         ASSERT_TRUE(ms_since(t0) < 2000LL);
 
         // Success path returns a usable blocking socket.
-        int ok = 0;
-        struct HttpResponse warm = get_retry("/echo", &ok);   // server is up
-        warm.free();
         fd = tcp_connect_timeout(lo, g_http_port, 2000);
         ASSERT_TRUE(fd >= 0);
         if (fd >= 0) close(fd);

@@ -280,9 +280,60 @@ inline int tcp_connect_nb(unsigned int addr_network_order, unsigned short port) 
     return sched_connect_begin_(addr_network_order, port, &err);
 }
 
-// select(), not WSAPoll: WSAPoll never reports a failed non-blocking
-// connect on Windows releases before 10 2004 (it just times out), while
+// Waits for an in-flight non-blocking connect on 'fd' to finish, for at
+// most 'timeout_ms' (<= 0: no limit). Returns 0 if it connected,
+// otherwise the Winsock error (WSAETIMEDOUT on timeout). select(), not
+// WSAPoll: WSAPoll never reports a failed non-blocking connect on Windows
+// releases before 10 2004 (with no timeout it would wait forever), while
 // select() reports it through exceptfds.
+static int sched_wait_connected_(unsigned long long fd, int timeout_ms) {
+    struct SchedFdSet1 wset;
+    struct SchedFdSet1 eset;
+    wset.fd_count = 1U; wset.fd_array[0] = fd;
+    eset.fd_count = 1U; eset.fd_array[0] = fd;
+    struct SchedWinTimeval tv;
+    tv.tv_sec  = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    int n;
+    unsafe {
+        n = select(0, (void*)0, (void*)&wset, (void*)&eset,
+                   (timeout_ms > 0) ? (const void*)&tv : (const void*)0);
+    }
+    if (n == 0) {
+        return SAFEC_WSAETIMEDOUT;
+    }
+    int err = 0;
+    if (n < 0) {
+        unsafe { err = WSAGetLastError(); }
+        return err;
+    }
+    int soerr = 0;
+    int len = 4;
+    int grc;
+    unsafe { grc = getsockopt(fd, SCHED_SOL_SOCKET, SCHED_SO_ERROR,
+                              (void*)&soerr, (void*)&len); }
+    if (grc != 0) {
+        unsafe { err = WSAGetLastError(); }
+    } else {
+        err = soerr;
+    }
+    // A failed connect is reported only through exceptfds; make sure it
+    // never reads as success even if SO_ERROR came back 0.
+    if (err == 0 && eset.fd_count != 0U) {
+        err = SAFEC_WSAETIMEDOUT;
+    }
+    return err;
+}
+
+inline int tcp_wait_connected(int fd) {
+    int err = sched_wait_connected_((unsigned long long)(unsigned int)fd, 0);
+    if (err != 0) {
+        unsafe { WSASetLastError(err); }
+        return -1;
+    }
+    return 0;
+}
+
 inline int tcp_connect_timeout(unsigned int addr_network_order, unsigned short port,
                                int timeout_ms) {
     int err = 0;
@@ -292,39 +343,7 @@ inline int tcp_connect_timeout(unsigned int addr_network_order, unsigned short p
     }
     unsigned long long fd = (unsigned long long)(unsigned int)ifd;
     if (err == SAFEC_WSAEWOULDBLOCK) {
-        struct SchedFdSet1 wset;
-        struct SchedFdSet1 eset;
-        wset.fd_count = 1U; wset.fd_array[0] = fd;
-        eset.fd_count = 1U; eset.fd_array[0] = fd;
-        struct SchedWinTimeval tv;
-        tv.tv_sec  = timeout_ms / 1000;
-        tv.tv_usec = (timeout_ms % 1000) * 1000;
-        int n;
-        unsafe {
-            n = select(0, (void*)0, (void*)&wset, (void*)&eset,
-                       (timeout_ms > 0) ? (const void*)&tv : (const void*)0);
-        }
-        if (n == 0) {
-            err = SAFEC_WSAETIMEDOUT;
-        } else if (n < 0) {
-            unsafe { err = WSAGetLastError(); }
-        } else {
-            int soerr = 0;
-            int len = 4;
-            int grc;
-            unsafe { grc = getsockopt(fd, SCHED_SOL_SOCKET, SCHED_SO_ERROR,
-                                      (void*)&soerr, (void*)&len); }
-            if (grc != 0) {
-                unsafe { err = WSAGetLastError(); }
-            } else {
-                err = soerr;
-            }
-            // A failed connect is reported only through exceptfds; make
-            // sure it never reads as success even if SO_ERROR came back 0.
-            if (err == 0 && eset.fd_count != 0U) {
-                err = SAFEC_WSAETIMEDOUT;
-            }
-        }
+        err = sched_wait_connected_(fd, timeout_ms);
     }
     if (err == 0 && fd_set_blocking(ifd) != 0) {
         unsafe { err = WSAGetLastError(); }

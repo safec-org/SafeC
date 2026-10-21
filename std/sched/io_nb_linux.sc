@@ -216,6 +216,54 @@ inline int tcp_connect_nb(unsigned int addr_network_order, unsigned short port) 
     return sched_connect_begin_(addr_network_order, port, &err);
 }
 
+// Waits for an in-flight non-blocking connect on 'fd' to finish, for at
+// most 'timeout_ms' (<= 0: no limit). Returns 0 if it connected,
+// otherwise the error (ETIMEDOUT on timeout, else SO_ERROR's value).
+static int sched_wait_connected_(int fd, int timeout_ms) {
+    long long deadline = 0LL;
+    if (timeout_ms > 0) {
+        deadline = time_mono_ns() + (long long)timeout_ms * 1000000LL;
+    }
+    while (1) {
+        int wait_ms = -1;
+        if (timeout_ms > 0) {
+            long long left = deadline - time_mono_ns();
+            wait_ms = (left <= 0LL) ? 0 : (int)((left + 999999LL) / 1000000LL);
+        }
+        struct SchedPollFd pfd;
+        pfd.fd = fd;
+        pfd.events = (short)SCHED_POLLOUT;
+        pfd.revents = (short)0;
+        int n;
+        unsafe { n = poll((void*)&pfd, 1UL, wait_ms); }
+        if (n > 0) {
+            int soerr = 0;
+            unsigned int len = 4U;
+            int grc;
+            unsafe { grc = getsockopt(fd, SCHED_SOL_SOCKET, SCHED_SO_ERROR,
+                                      (void*)&soerr, (void*)&len); }
+            return (grc != 0) ? errno_get() : soerr;
+        }
+        if (n == 0) {
+            return ERRNO_ETIMEDOUT();
+        }
+        int perr = errno_get();
+        if (perr != SCHED_EINTR) {
+            return perr;
+        }
+    }
+    return 0;
+}
+
+inline int tcp_wait_connected(int fd) {
+    int err = sched_wait_connected_(fd, 0);
+    if (err != 0) {
+        errno_set(err);
+        return -1;
+    }
+    return 0;
+}
+
 inline int tcp_connect_timeout(unsigned int addr_network_order, unsigned short port,
                                int timeout_ms) {
     int err = 0;
@@ -224,41 +272,7 @@ inline int tcp_connect_timeout(unsigned int addr_network_order, unsigned short p
         return -1;
     }
     if (err == SCHED_EINPROGRESS) {
-        long long deadline = 0LL;
-        if (timeout_ms > 0) {
-            deadline = time_mono_ns() + (long long)timeout_ms * 1000000LL;
-        }
-        while (1) {
-            int wait_ms = -1;
-            if (timeout_ms > 0) {
-                long long left = deadline - time_mono_ns();
-                wait_ms = (left <= 0LL) ? 0 : (int)((left + 999999LL) / 1000000LL);
-            }
-            struct SchedPollFd pfd;
-            pfd.fd = fd;
-            pfd.events = (short)SCHED_POLLOUT;
-            pfd.revents = (short)0;
-            int n;
-            unsafe { n = poll((void*)&pfd, 1UL, wait_ms); }
-            if (n > 0) {
-                int soerr = 0;
-                unsigned int len = 4U;
-                int grc;
-                unsafe { grc = getsockopt(fd, SCHED_SOL_SOCKET, SCHED_SO_ERROR,
-                                          (void*)&soerr, (void*)&len); }
-                err = (grc != 0) ? errno_get() : soerr;
-                break;
-            }
-            if (n == 0) {
-                err = ERRNO_ETIMEDOUT();
-                break;
-            }
-            int perr = errno_get();
-            if (perr != SCHED_EINTR) {
-                err = perr;
-                break;
-            }
-        }
+        err = sched_wait_connected_(fd, timeout_ms);
     }
     if (err == 0 && fd_set_blocking(fd) != 0) {
         err = errno_get();
