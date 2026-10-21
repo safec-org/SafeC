@@ -7,6 +7,18 @@
 
 namespace safec {
 
+// A keyword spelled like an identifier ('new', 'join', 'match', ...): usable
+// as a method name where a name is expected and '(' follows, since no
+// keyword can appear there ('T::new()', 'static T join(...);', 'x.spawn()').
+static bool isWordKeyword(const Token &t) {
+    if (t.is(TK::Ident) || t.is(TK::KW_operator) || t.text.empty()) return false;
+    unsigned char c = (unsigned char)t.text[0];
+    if (!(std::isalpha(c) || c == '_')) return false;
+    for (unsigned char ch : t.text) if (!(std::isalnum(ch) || ch == '_')) return false;
+    return true;
+}
+
+
 // ── Constructor ───────────────────────────────────────────────────────────────
 Parser::Parser(std::vector<Token> tokens, DiagEngine &diag)
     : toks_(std::move(tokens)), diag_(diag) {
@@ -1191,7 +1203,7 @@ DeclPtr Parser::parseFunctionOrGlobalVar(bool isConst, bool isConsteval,
     if (cur().is(TK::ColonColon)) {
         consume(); // consume '::'
         methodOwner = name;  // struct name
-        if (cur().is(TK::KW_new)) toks_[pos_].kind = TK::Ident;   // 'T::new' is an ordinary method name
+        if (isWordKeyword(cur())) toks_[pos_].kind = TK::Ident;   // 'T::new', 'T::join': ordinary method names
         if (!cur().is(TK::Ident) && !cur().is(TK::KW_operator)) {
             diag_.error(cur().loc, "expected method name after '::'");
             syncToDecl();
@@ -1368,7 +1380,7 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTr
 
         // Try to parse as method declaration
         TypePtr maybeType = parseType();
-        if (cur().is(TK::KW_new) && peek().is(TK::LParen)) toks_[pos_].kind = TK::Ident;   // 'new' as a method name
+        if (isWordKeyword(cur()) && peek().is(TK::LParen)) toks_[pos_].kind = TK::Ident;   // 'new', 'join', ... as method names
         bool fieldVolatile = typeVolatile_;
         bool isMethodDecl = false;
         std::string memberName;
@@ -2783,7 +2795,8 @@ ExprPtr Parser::parsePostfixExpr() {
             // dotted position is never ambiguous with the label use, so it
             // gets a targeted carve-out rather than accepting every
             // keyword as a field name here.
-            if (cur().is(TK::Ident) || cur().is(TK::KW_default)) {
+            if (cur().is(TK::Ident) || cur().is(TK::KW_default) ||
+                (isWordKeyword(cur()) && peek().is(TK::LParen))) {   // x.join(...)
                 field = cur().text; consume();
             } else if (cur().is(TK::IntLit)) {
                 // Tuple field access: t.0, t.1, ...
@@ -2796,7 +2809,8 @@ ExprPtr Parser::parsePostfixExpr() {
         } else if (cur().is(TK::Arrow)) {
             consume();
             std::string field = cur().text;
-            if (!cur().is(TK::Ident) && !cur().is(TK::KW_default))
+            if (!cur().is(TK::Ident) && !cur().is(TK::KW_default) &&
+                !(isWordKeyword(cur()) && peek().is(TK::LParen)))
                 diag_.error(cur().loc, "expected field name");
             else consume();
             e = std::make_unique<MemberExpr>(std::move(e), std::move(field), true, loc);
@@ -2863,7 +2877,7 @@ ExprPtr Parser::parsePrimaryExpr() {
         // Namespace-qualified reference: std::foo, a::b::c, ... — joined
         // into one IdentExpr whose 'name' is the qualified string; Sema
         // resolves it against the namespace registry (see checkIdent).
-        while (cur().is(TK::ColonColon) && (peek().is(TK::Ident) || peek().is(TK::KW_new))) {
+        while (cur().is(TK::ColonColon) && (peek().is(TK::Ident) || isWordKeyword(peek()))) {
             consume(); // '::'
             name += "::";
             name += cur().text;

@@ -1898,7 +1898,13 @@ void Sema::checkFor(ForStmt &s, FunctionDecl &fn) {
 void Sema::checkReturn(ReturnStmt &s, FunctionDecl &fn) {
     if (s.value) {
         if (fn.returnType) adoptTupleLiteral(s.value, fn.returnType);
+        // The return type is the target a generic call infers from, the same
+        // as a declared variable's ('return Vec::new();').
+        TypePtr savedExpectedType = expectedType_;
+        if (fn.returnType && !fn.returnType->isError() && fn.returnType->kind != TypeKind::Void)
+            expectedType_ = fn.returnType;
         TypePtr valTy = checkExpr(*s.value);
+        expectedType_ = savedExpectedType;
 
         // Region escape check: a returned '&stack T' refers to a local that's
         // gone the moment the function returns, so it can never be valid.

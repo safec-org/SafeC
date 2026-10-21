@@ -47,4 +47,19 @@ long generic_static() {
 // CHECK-LABEL: define {{.*}}@generic_static(
 // CHECK: ret i64 53
 
+// Keyword-spelled method names ('join', 'spawn') and inference from the
+// return type in 'return Box::new();'.
+struct Kw { int x; static struct Kw join(int a); int spawn() const; };
+struct Kw Kw::join(int a) { struct Kw k; k.x = a; return k; }
+int Kw::spawn() const { return self.x + 1; }
+struct Box<int> made() { return Box::new(); }
+
+int keyword_names() {
+    struct Kw k = Kw::join(4);
+    struct Box<int> b = made();
+    return k.spawn() * 10 + b.get();
+}
+// CHECK-LABEL: define {{.*}}@keyword_names(
+// CHECK: ret i32 53
+
 int main() { return 0; }
