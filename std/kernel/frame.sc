@@ -10,6 +10,7 @@ inline void FrameAllocator::init(unsigned long total_frames) {
     if (total_frames > maxFrames) { total_frames = maxFrames; }
     self.total_frames = total_frames;
     self.used_frames  = (unsigned long)0;
+    self.base         = (unsigned long)0;
     int i = 0;
     while (i < FRAME_BITMAP_SIZE) {
         self.bitmap[i] = (unsigned int)0;
@@ -25,6 +26,15 @@ inline int FrameAllocator::ctz32_(unsigned int x) const {
         n = n + 1;
     }
     return n;
+}
+
+inline void FrameAllocator::init_at(unsigned long base_phys, unsigned long total_frames) {
+    self.init(total_frames);
+    self.base = base_phys & ~4095UL;
+}
+
+inline unsigned long FrameAllocator::frame_addr(unsigned long frame) const {
+    return self.base + frame * 4096UL;
 }
 
 inline long long FrameAllocator::alloc() {

@@ -161,12 +161,17 @@ inline long long time_wall_ns() {
     }
 }
 #else
-// struct timespec { time_t tv_sec; long tv_nsec; }: time_t is 'long' on the
-// hosted ABIs here (LP64 and ILP32 Linux/BSD/macOS), so a 32-bit host gets
-// two 4-byte fields, not two long longs.
+// struct timespec { time_t tv_sec; long tv_nsec; }: two 4-byte fields on a
+// 32-bit C ABI, two 8-byte fields on a 64-bit one. (SafeC's own 'long' is 64
+// bits everywhere, so it can't stand in for C's here.)
+#if __SIZEOF_POINTER__ == 4
+#define SAFEC_TS_FIELD_ int
+#else
+#define SAFEC_TS_FIELD_ long long
+#endif
 struct SafecTimespec_ {
-    long tv_sec;
-    long tv_nsec;
+    SAFEC_TS_FIELD_ tv_sec;
+    SAFEC_TS_FIELD_ tv_nsec;
 };
 extern int clock_gettime(int clk, void* ts);
 
@@ -268,8 +273,8 @@ extern int nanosleep(void* req, void* rem);
 inline void time_sleep_ns(long long ns) {
     unsafe {
         struct SafecTimespec_ ts;
-        ts.tv_sec = (long)(ns / 1000000000LL);
-        ts.tv_nsec = (long)(ns % 1000000000LL);
+        ts.tv_sec = (SAFEC_TS_FIELD_)(ns / 1000000000LL);
+        ts.tv_nsec = (SAFEC_TS_FIELD_)(ns % 1000000000LL);
         nanosleep((void*)&ts, (void*)0);
     }
 }

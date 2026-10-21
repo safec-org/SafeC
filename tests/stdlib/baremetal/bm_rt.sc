@@ -5,7 +5,9 @@
 // these from newlib/picolibc or its own BSP). Bump allocator over a static
 // arena; free() only reclaims the most recent block.
 
+#ifndef BM_HEAP_SIZE
 #define BM_HEAP_SIZE (1024 * 1024)
+#endif
 
 static unsigned char g_heap[BM_HEAP_SIZE];
 static unsigned long g_heap_top = 0UL;

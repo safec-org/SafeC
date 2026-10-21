@@ -213,8 +213,8 @@ struct MmuContext {
 
 // A context over an existing root table at physical 'root' — zeroed, and
 // aligned as the format needs (4 KiB; 16 KiB for MmuArmV7). 'frames' must be
-// a live, &static-lifetime FrameAllocator (the kernel's own, usually),
-// handing out 4 KiB frames whose memory is at frame * 4096 + phys_offset.
+// a live, &static-lifetime FrameAllocator (the kernel's own, usually);
+// frame f's table memory is at frames.frame_addr(f) + phys_offset.
 // F comes from the target type:
 //   struct MmuContext<MmuNative> mmu = std::mmu_init(root, &g_frames, 0UL);
 generic<F>
@@ -266,7 +266,7 @@ int MmuContext::map(unsigned long virt, unsigned long phys, unsigned int flags) 
         if (!self.fmt.valid(e)) {
             long long frame = self.frames.alloc();
             if (frame < 0LL) { return 0; }
-            unsigned long next = (unsigned long)frame * 4096UL;
+            unsigned long next = self.frames.frame_addr((unsigned long)frame);
             unsafe {
                 unsigned char* t = (unsigned char*)self.table_(next);
                 unsigned long k = 0UL;

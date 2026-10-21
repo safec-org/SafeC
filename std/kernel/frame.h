@@ -12,9 +12,17 @@ struct FrameAllocator {
     unsigned int  bitmap[FRAME_BITMAP_SIZE];
     unsigned long total_frames;  // total number of physical frames
     unsigned long used_frames;   // currently allocated frames
+    unsigned long base;          // physical address of frame 0
 
-    // Initialize for `total_frames` frames (clears bitmap).
+    // Initialize for `total_frames` frames starting at physical 0 (clears bitmap).
     void          init(unsigned long total_frames);
+
+    // Initialize for `total_frames` frames starting at physical `base_phys`
+    // (4 KiB aligned) — e.g. the RAM base on boards where RAM isn't at 0.
+    void          init_at(unsigned long base_phys, unsigned long total_frames);
+
+    // Physical address of frame number `frame`: base + frame * 4096.
+    unsigned long frame_addr(unsigned long frame) const;
 
     // Allocate a single frame. Returns frame number, or -1 if OOM.
     long long     alloc();

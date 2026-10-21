@@ -153,19 +153,17 @@ extern int pthread_join(unsigned long long tid, void** retval);
 extern int pthread_detach(unsigned long long tid);
 extern unsigned long long pthread_self();
 extern int sched_yield();
-// struct timespec { time_t tv_sec; long tv_nsec; }: time_t is 'long' on the
-// hosted ABIs here (LP64 and ILP32 Linux/BSD/macOS), so a 32-bit host gets
-// two 4-byte fields, not two long longs.
-// pthread_cond_timedwait's timeout code differs per OS.
-#if defined(__APPLE__) || defined(__FreeBSD__)
-#define SAFEC_ETIMEDOUT_ 60
+// struct timespec { time_t tv_sec; long tv_nsec; }: two 4-byte fields on a
+// 32-bit C ABI, two 8-byte fields on a 64-bit one. (SafeC's own 'long' is 64
+// bits everywhere, so it can't stand in for C's here.)
+#if __SIZEOF_POINTER__ == 4
+#define SAFEC_TS_FIELD_ int
 #else
-#define SAFEC_ETIMEDOUT_ 110
+#define SAFEC_TS_FIELD_ long long
 #endif
-
 struct SafecTimespec_ {
-    long tv_sec;
-    long tv_nsec;
+    SAFEC_TS_FIELD_ tv_sec;
+    SAFEC_TS_FIELD_ tv_nsec;
 };
 extern int nanosleep(void* req, void* rem);
 extern int clock_gettime(int clk, void* ts);
@@ -202,8 +200,8 @@ unsigned long long thread_self()           { unsafe { return pthread_self(); } }
 inline void thread_sleep_ms(unsigned long ms) {
     unsafe {
         struct SafecTimespec_ ts;
-        ts.tv_sec = (long)(ms / 1000UL);
-        ts.tv_nsec = (long)((ms % 1000UL) * 1000000UL);
+        ts.tv_sec = (SAFEC_TS_FIELD_)(ms / 1000UL);
+        ts.tv_nsec = (SAFEC_TS_FIELD_)((ms % 1000UL) * 1000000UL);
         nanosleep((void*)&ts, (void*)0);
     }
 }
@@ -264,8 +262,8 @@ inline int cond_timedwait_ms(&unsigned long long cv, &unsigned long long m, unsi
         clock_gettime(0, (void*)&ts); // CLOCK_REALTIME = 0
         long long ns_add = (long long)ms * 1000000LL;
         long long nsec = (long long)ts.tv_nsec + ns_add;
-        ts.tv_sec = ts.tv_sec + (long)(nsec / 1000000000LL);
-        ts.tv_nsec = (long)(nsec % 1000000000LL);
+        ts.tv_sec = ts.tv_sec + (SAFEC_TS_FIELD_)(nsec / 1000000000LL);
+        ts.tv_nsec = (SAFEC_TS_FIELD_)(nsec % 1000000000LL);
         int r = pthread_cond_timedwait((void*)(*cv), (void*)(*m), (void*)&ts);
         if (r == 0) return 0;
         return r == SAFEC_ETIMEDOUT_ ? THREAD_TIMEDOUT : -1;
