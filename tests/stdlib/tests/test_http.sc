@@ -6,6 +6,8 @@
 #include <std/panic.h>
 #include <std/str.h>
 #include <std/thread.h>
+#include <std/time.h>
+#include <std/sched/io_nb.h>
 #include <std/collections/string.h>
 #include <std/serial/value.h>
 #include <std/serial/json.h>
@@ -368,6 +370,171 @@ void t_websocket() {
     }
 }
 
+extern int close(int fd);
+
+static long long ms_since(long long t0) {
+    return (time_mono_ns() - t0) / 1000000LL;
+}
+
+// connect()/handshake timeouts: none of these may take anywhere near the
+// kernel's ~130s SYN-retry limit or block forever on a silent server.
+void t_connect_timeout() {
+    start_servers();
+    unsafe {
+        unsigned int lo = sched_ipv4((unsigned char)127, (unsigned char)0,
+                                     (unsigned char)0, (unsigned char)1);
+        unsigned short closedPort = (unsigned short)(g_http_port + (unsigned short)10);
+        unsigned short silentPort = (unsigned short)(g_http_port + (unsigned short)11);
+        int ok = 0;
+        struct HttpResponse warm = get_retry("/echo", &ok);   // server is up
+        warm.free();
+
+        // Refused: reported as a failure right away.
+        long long t0 = time_mono_ns();
+        int fd = tcp_connect_timeout(lo, closedPort, 2000);
+        ASSERT_EQ(fd, -1);
+        ASSERT_TRUE(ms_since(t0) < 1000LL);
+
+        // tcp_wait_connected (no time limit of its own) on the same two
+        // outcomes.
+        fd = tcp_connect_nb(lo, closedPort);
+        ASSERT_TRUE(fd >= 0);
+        if (fd >= 0) { ASSERT_EQ(tcp_wait_connected(fd), -1); close(fd); }
+        fd = tcp_connect_nb(lo, g_http_port);
+        ASSERT_TRUE(fd >= 0);
+        if (fd >= 0) { ASSERT_EQ(tcp_wait_connected(fd), 0); close(fd); }
+
+        // Unanswered SYN (10.255.255.1 is normally blackholed; where it is
+        // unroutable or rejected instead, connect fails even sooner).
+        t0 = time_mono_ns();
+        fd = tcp_connect_timeout(sched_ipv4((unsigned char)10, (unsigned char)255,
+                                            (unsigned char)255, (unsigned char)1),
+                                 (unsigned short)80, 300);
+        ASSERT_EQ(fd, -1);
+        ASSERT_TRUE(ms_since(t0) < 2000LL);
+
+        // Success path returns a usable blocking socket.
+        fd = tcp_connect_timeout(lo, g_http_port, 2000);
+        ASSERT_TRUE(fd >= 0);
+        if (fd >= 0) close(fd);
+
+        // A listener that never accept()s: the kernel completes the TCP
+        // handshake, then nothing ever answers the request.
+        int lfd = tcp_listen_nb(silentPort);
+        ASSERT_TRUE(lfd >= 0);
+        if (lfd < 0) return;
+
+        t0 = time_mono_ns();
+        struct HttpResponse r = http_request_timeout("127.0.0.1", silentPort, "GET", "/",
+                                                     null, null, 0UL, 2000, 300, &ok);
+        ASSERT_FALSE(ok);
+        ASSERT_TRUE(ms_since(t0) < 2000LL);
+        r.free();
+
+        t0 = time_mono_ns();
+        struct WsConn c = ws_connect_timeout("127.0.0.1", silentPort, "/", 300, &ok);
+        ASSERT_FALSE(ok);
+        ASSERT_EQ(c.fd, -1);
+        ASSERT_TRUE(ms_since(t0) < 2000LL);
+        close(lfd);
+
+        // The same limits don't get in the way of a server that answers.
+        r = http_request_timeout("127.0.0.1", g_http_port, "GET", "/echo",
+                                 null, null, 0UL, 2000, 2000, &ok);
+        ASSERT_TRUE(ok);
+        ASSERT_EQ(r.status, 200);
+        r.free();
+    }
+}
+
+// Accepts connections and closes them at once without reading, so the
+// client's next writes hit a reset connection.
+static unsigned short g_closer_port = (unsigned short)0;
+static ?&int run_closer(?&int arg) {
+    unsafe {
+        int lfd = tcp_listen_nb(g_closer_port);
+        if (lfd < 0) return null;
+        fd_set_blocking(lfd);
+        while (1) {
+            int cfd = tcp_accept_nb(lfd);
+            if (cfd >= 0) close(cfd);
+        }
+    }
+    return null;
+}
+
+// Writing to a peer that has closed must fail the request, not kill the
+// process with SIGPIPE.
+void t_write_to_closed_peer() {
+    start_servers();
+    unsafe {
+        g_closer_port = (unsigned short)(g_http_port + (unsigned short)12);
+        unsigned long long t = 0ULL;
+        thread_create(&t, run_closer, null); thread_detach(t);
+        unsigned long n = 4UL * 1024UL * 1024UL;
+        struct String body = string_repeat("x", n);
+        int ok = 1;
+        int tries = 0;
+        // Retry while the closer thread comes up (connect refused until then).
+        while (1) {
+            struct HttpResponse r = http_request_timeout("127.0.0.1", g_closer_port, "POST", "/",
+                                                         null, (const unsigned char*)body.as_ptr(), n,
+                                                         2000, 2000, &ok);
+            r.free();
+            tries = tries + 1;
+            if (tries >= 20) break;
+            thread_sleep_ms(20UL);
+        }
+        ASSERT_FALSE(ok);
+        body.free();
+    }
+}
+
+static ?&int resolve_worker(?&int arg) {
+    unsafe {
+        unsigned int want = sched_ipv4((unsigned char)127, (unsigned char)0,
+                                       (unsigned char)0, (unsigned char)1);
+        int i = 0;
+        while (i < 200) {
+            unsigned int a = 0U;
+            if (!http_resolve_host("localhost", &a) || a != want) {
+                match (arg) { case some(bad): { *bad = 1; } case null: { } }
+            }
+            i = i + 1;
+        }
+    }
+    return null;
+}
+
+// Hostname resolution, including from several threads at once (the old
+// gethostbyname path shared one static result buffer across threads).
+void t_resolve() {
+    start_servers();
+    unsafe {
+        unsigned int a = 0U;
+        ASSERT_TRUE(http_resolve_host("localhost", &a));
+        ASSERT_EQ(a, sched_ipv4((unsigned char)127, (unsigned char)0,
+                                (unsigned char)0, (unsigned char)1));
+        ASSERT_TRUE(http_resolve_host("10.1.2.3", &a));
+        ASSERT_EQ(a, sched_ipv4((unsigned char)10, (unsigned char)1,
+                                (unsigned char)2, (unsigned char)3));
+
+        int bad = 0;
+        unsigned long long th[4];
+        int k = 0;
+        while (k < 4) { thread_create(&th[k], resolve_worker, &bad); k = k + 1; }
+        k = 0;
+        while (k < 4) { thread_join(th[k]); k = k + 1; }
+        ASSERT_EQ(bad, 0);
+
+        int ok = 0;
+        struct HttpResponse r = http_get("localhost", g_http_port, "/echo", &ok);
+        ASSERT_TRUE(ok);
+        ASSERT_EQ(r.status, 200);
+        r.free();
+    }
+}
+
 extern unsigned int alarm(unsigned int seconds);
 
 int main() {
@@ -382,6 +549,9 @@ int main() {
         t.add("oauth2 code exchange", t_oauth2);
         t.add("rpc + server_fn", t_rpc);
         t.add("websocket", t_websocket);
+        t.add("connect/handshake timeouts", t_connect_timeout);
+        t.add("write to closed peer", t_write_to_closed_peer);
+        t.add("host resolution", t_resolve);
     }
     t.run();
     t.print_summary();

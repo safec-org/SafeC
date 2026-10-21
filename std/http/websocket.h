@@ -52,6 +52,18 @@ struct WsMessage {
 struct WsConn ws_connect(const &char host, unsigned short port,
                           const &char path, ?&int ok);
 
+#define WS_DEFAULT_TIMEOUT_MS 30000
+
+// ws_connect with an explicit limit: 'timeout_ms' bounds the TCP connect
+// and each send/receive of the opening handshake (a server that accepts
+// but never answers the Upgrade fails after that long). It is cleared once
+// the handshake succeeds, so ws_recv on the returned connection still
+// waits indefinitely for the next message. <= 0 means no limit. ws_connect
+// uses WS_DEFAULT_TIMEOUT_MS. DNS resolution is not covered (see
+// http_request_timeout).
+struct WsConn ws_connect_timeout(const &char host, unsigned short port,
+                                  const &char path, int timeout_ms, ?&int ok);
+
 // ── Server ────────────────────────────────────────────────────────────────
 
 // Creates a blocking listening socket on 'port'. Returns the fd, or -1 on

@@ -26,6 +26,7 @@
 //     semantics the way a socket from tcp_listen_nb/tcp_connect_nb has.
 #pragma once
 #include <std/sched/io_nb.h>
+#include <std/time.h>
 
 #define SCHED_O_CREAT  0x0100
 #define SAFEC_FIONBIO  0x8004667EU
@@ -36,10 +37,11 @@
 // values exactly; IPPROTO_TCP=6/TCP_NODELAY=1 match every backend here.
 #define SCHED_SOL_SOCKET    0xffff
 #define SCHED_SO_REUSEADDR  0x0004
-#define SCHED_SO_ERROR      0x1007
-#define SCHED_POLLWRNORM    0x0010
 #define SCHED_IPPROTO_TCP   6
 #define SCHED_TCP_NODELAY   1
+#define SCHED_SO_ERROR      0x1007
+#define SCHED_SO_RCVTIMEO   0x1006
+#define SCHED_SO_SNDTIMEO   0x1005
 
 namespace std {
 
@@ -76,10 +78,27 @@ extern int connect(unsigned long long fd, const void* addr, int addrlen);
 extern int ioctlsocket(unsigned long long fd, int cmd, unsigned long* argp);
 extern int setsockopt(unsigned long long fd, int level, int optname, const void* optval, int optlen);
 extern int WSAGetLastError();
+extern void WSASetLastError(int err);
 extern int getsockopt(unsigned long long fd, int level, int optname, void* optval, void* optlen);
-extern int WSAPoll(void* fds, unsigned long nfds, int timeout);
+extern int select(int nfds, void* readfds, void* writefds, void* exceptfds, const void* timeout);
+extern int closesocket(unsigned long long fd);
 
 #define SAFEC_WSAEWOULDBLOCK 10035
+#define SAFEC_WSAETIMEDOUT   10060
+
+// Winsock 'fd_set' holding a single socket: u_int fd_count, then the
+// SOCKET array (8-byte aligned, so fd_array starts at offset 8 exactly as
+// in the real 64-entry struct; select() only reads fd_count entries).
+struct SchedFdSet1 {
+    unsigned int       fd_count;
+    unsigned long long fd_array[1];
+};
+
+// Winsock 'struct timeval': two 4-byte longs (Windows 'long' is 32-bit).
+struct SchedWinTimeval {
+    int tv_sec;
+    int tv_usec;
+};
 
 inline unsigned short sched_htons(unsigned short host16) {
     return (unsigned short)(((host16 & (unsigned short)0xFF) << 8) |
@@ -215,7 +234,12 @@ inline int tcp_accept_nb(int listenfd) {
     return ifd;
 }
 
-inline int tcp_connect_nb(unsigned int addr_network_order, unsigned short port) {
+// socket()+non-blocking connect() shared by tcp_connect_nb and
+// tcp_connect_timeout. Returns the socket (or -1, with nothing left open)
+// and stores 0 in 'err_out' if connect() succeeded immediately, otherwise
+// WSAGetLastError() (normally WSAEWOULDBLOCK).
+static int sched_connect_begin_(unsigned int addr_network_order, unsigned short port,
+                                &int err_out) {
     io_nb_wsa_init_();
     unsigned long long fd;
     unsafe { fd = socket(SCHED_AF_INET, SCHED_SOCK_STREAM, 0); }
@@ -225,6 +249,7 @@ inline int tcp_connect_nb(unsigned int addr_network_order, unsigned short port) 
     }
     int ifd = (int)fd;
     if (fd_set_nonblocking(ifd) != 0) {
+        unsafe { closesocket(fd); }
         return -1;
     }
 
@@ -234,35 +259,114 @@ inline int tcp_connect_nb(unsigned int addr_network_order, unsigned short port) 
     addr.sin_addr   = addr_network_order;
     addr.sin_zero   = 0UL;
 
-    unsafe { connect(fd, (const void*)&addr, 16); }
+    int rc;
+    unsafe { rc = connect(fd, (const void*)&addr, 16); }
+    int e = 0;
+    if (rc != 0) {
+        unsafe { e = WSAGetLastError(); }
+    }
+    unsafe { *err_out = e; }
+    return ifd;
+}
+
+inline int tcp_connect_nb(unsigned int addr_network_order, unsigned short port) {
     // Non-blocking connect(): a non-zero return here almost always just
     // means WSAEWOULDBLOCK (the handshake hasn't finished yet), not
     // failure — the caller awaits SCHED_WRITE on 'fd' and treats
     // writability as "connect attempt finished" per the header comment,
     // so the return value here isn't itself meaningful the way it is for
     // a blocking connect().
+    int err = 0;
+    return sched_connect_begin_(addr_network_order, port, &err);
+}
+
+// Waits for an in-flight non-blocking connect on 'fd' to finish, for at
+// most 'timeout_ms' (<= 0: no limit). Returns 0 if it connected,
+// otherwise the Winsock error (WSAETIMEDOUT on timeout). select(), not
+// WSAPoll: WSAPoll never reports a failed non-blocking connect on Windows
+// releases before 10 2004 (with no timeout it would wait forever), while
+// select() reports it through exceptfds.
+static int sched_wait_connected_(unsigned long long fd, int timeout_ms) {
+    struct SchedFdSet1 wset;
+    struct SchedFdSet1 eset;
+    wset.fd_count = 1U; wset.fd_array[0] = fd;
+    eset.fd_count = 1U; eset.fd_array[0] = fd;
+    struct SchedWinTimeval tv;
+    tv.tv_sec  = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    int n;
+    unsafe {
+        n = select(0, (void*)0, (void*)&wset, (void*)&eset,
+                   (timeout_ms > 0) ? (const void*)&tv : (const void*)0);
+    }
+    if (n == 0) {
+        return SAFEC_WSAETIMEDOUT;
+    }
+    int err = 0;
+    if (n < 0) {
+        unsafe { err = WSAGetLastError(); }
+        return err;
+    }
+    int soerr = 0;
+    int len = 4;
+    int grc;
+    unsafe { grc = getsockopt(fd, SCHED_SOL_SOCKET, SCHED_SO_ERROR,
+                              (void*)&soerr, (void*)&len); }
+    if (grc != 0) {
+        unsafe { err = WSAGetLastError(); }
+    } else {
+        err = soerr;
+    }
+    // A failed connect is reported only through exceptfds; make sure it
+    // never reads as success even if SO_ERROR came back 0.
+    if (err == 0 && eset.fd_count != 0U) {
+        err = SAFEC_WSAETIMEDOUT;
+    }
+    return err;
+}
+
+inline int tcp_wait_connected(int fd) {
+    int err = sched_wait_connected_((unsigned long long)(unsigned int)fd, 0);
+    if (err != 0) {
+        unsafe { WSASetLastError(err); }
+        return -1;
+    }
+    return 0;
+}
+
+inline int tcp_connect_timeout(unsigned int addr_network_order, unsigned short port,
+                               int timeout_ms) {
+    int err = 0;
+    int ifd = sched_connect_begin_(addr_network_order, port, &err);
+    if (ifd < 0) {
+        return -1;
+    }
+    unsigned long long fd = (unsigned long long)(unsigned int)ifd;
+    if (err == SAFEC_WSAEWOULDBLOCK) {
+        err = sched_wait_connected_(fd, timeout_ms);
+    }
+    if (err == 0 && fd_set_blocking(ifd) != 0) {
+        unsafe { err = WSAGetLastError(); }
+    }
+    if (err != 0) {
+        unsafe { closesocket(fd); WSASetLastError(err); }
+        return -1;
+    }
     return ifd;
 }
 
-// WSAPOLLFD: the SOCKET is pointer-sized.
-struct SchedPollFd {
-    unsigned long long fd;
-    short events;
-    short revents;
-};
-
-inline int tcp_wait_connected(int fd) {
+// Winsock takes SO_RCVTIMEO/SO_SNDTIMEO as a DWORD of milliseconds, not a
+// struct timeval.
+inline int sock_set_io_timeout(int fd, int timeout_ms) {
+    unsigned int ms = (timeout_ms > 0) ? (unsigned int)timeout_ms : 0U;
+    unsigned long long s = (unsigned long long)(unsigned int)fd;
+    int rc1;
+    int rc2;
     unsafe {
-        struct SchedPollFd p;
-        p.fd = (unsigned long long)fd;
-        p.events = (short)SCHED_POLLWRNORM;
-        p.revents = (short)0;
-        if (WSAPoll((void*)&p, 1UL, -1) < 0) return -1;
-        int err = 0;
-        int len = 4;
-        if (getsockopt((unsigned long long)fd, SCHED_SOL_SOCKET, SCHED_SO_ERROR, (void*)&err, (void*)&len) != 0 || err != 0) return -1;
+        rc1 = setsockopt(s, SCHED_SOL_SOCKET, SCHED_SO_RCVTIMEO, (const void*)&ms, 4);
+        rc2 = setsockopt(s, SCHED_SOL_SOCKET, SCHED_SO_SNDTIMEO, (const void*)&ms, 4);
     }
-    return 0;
+    return (rc1 == 0 && rc2 == 0) ? 0 : -1;
 }
 
 } // namespace std

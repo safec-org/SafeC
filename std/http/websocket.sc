@@ -21,9 +21,45 @@
 
 namespace std {
 
+// Same platform split as http.sc's sock_read_/sock_write_/sock_close_
+// (file-local there, so repeated here): Winsock sockets only support
+// recv/send/closesocket, and on Linux writes go through send() with
+// MSG_NOSIGNAL so a peer that has gone away can't kill the process with
+// SIGPIPE (io_nb_bsd.sc sets SO_NOSIGPIPE on BSD/macOS sockets instead).
+#ifdef _WIN32
+extern int recv(unsigned long long fd, void* buf, int count, int flags);
+extern int send(unsigned long long fd, const void* buf, int count, int flags);
+extern int closesocket(unsigned long long fd);
+static long ws_sock_read_(int fd, void* buf, unsigned long count) {
+    unsafe { return (long)recv((unsigned long long)fd, buf, (int)count, 0); }
+}
+static long ws_sock_write_(int fd, const void* buf, unsigned long count) {
+    unsafe { return (long)send((unsigned long long)fd, buf, (int)count, 0); }
+}
+static int ws_sock_close_(int fd) {
+    unsafe { return closesocket((unsigned long long)fd); }
+}
+#else
 extern ssize_t read(int fd, void* buf, size_t count);
-extern ssize_t write(int fd, const void* buf, size_t count);
 extern int close(int fd);
+static long ws_sock_read_(int fd, void* buf, unsigned long count) {
+    unsafe { return read(fd, buf, count); }
+}
+#ifdef __linux__
+extern ssize_t send(int fd, const void* buf, size_t count, int flags);
+static long ws_sock_write_(int fd, const void* buf, unsigned long count) {
+    unsafe { return send(fd, buf, count, 0x4000); } // MSG_NOSIGNAL
+}
+#else
+extern ssize_t write(int fd, const void* buf, size_t count);
+static long ws_sock_write_(int fd, const void* buf, unsigned long count) {
+    unsafe { return write(fd, buf, count); }
+}
+#endif
+static int ws_sock_close_(int fd) {
+    unsafe { return close(fd); }
+}
+#endif
 
 void WsMessage::free() {
     if (self.data != (unsigned char*)0) {
@@ -61,7 +97,7 @@ static long ws_read_until_(int fd, struct String* out, const char* terminator) {
     char chunk[512];
     while (1) {
         long n;
-        unsafe { n = read(fd, (void*)chunk, 512UL); }
+        unsafe { n = ws_sock_read_(fd, (void*)chunk, 512UL); }
         if (n <= 0L) { return -1L; }
         unsafe { out->push_n(chunk, (unsigned long)n); }
         long idx; unsafe { idx = out->index_of(terminator); }
@@ -73,7 +109,7 @@ static int ws_write_all_(int fd, const char* data, unsigned long len) {
     unsigned long sent = 0UL;
     while (sent < len) {
         long n;
-        unsafe { n = write(fd, (const void*)(data + sent), len - sent); }
+        unsafe { n = ws_sock_write_(fd, (const void*)(data + sent), len - sent); }
         if (n <= 0L) { return 0; }
         sent = sent + (unsigned long)n;
     }
@@ -84,7 +120,7 @@ static int ws_read_n_(int fd, unsigned char* out, unsigned long want) {
     unsigned long got = 0UL;
     while (got < want) {
         long n;
-        unsafe { n = read(fd, (void*)(out + got), want - got); }
+        unsafe { n = ws_sock_read_(fd, (void*)(out + got), want - got); }
         if (n <= 0L) { return 0; }
         got = got + (unsigned long)n;
     }
@@ -95,6 +131,11 @@ static int ws_read_n_(int fd, unsigned char* out, unsigned long want) {
 
 struct WsConn ws_connect(const &char host, unsigned short port,
                           const &char path, ?&int ok) {
+    return ws_connect_timeout(host, port, path, WS_DEFAULT_TIMEOUT_MS, ok);
+}
+
+struct WsConn ws_connect_timeout(const &char host, unsigned short port,
+                                  const &char path, int timeout_ms, ?&int ok) {
     struct WsConn conn;
     conn.fd = -1;
     conn.is_server = 0;
@@ -105,11 +146,12 @@ struct WsConn ws_connect(const &char host, unsigned short port,
 
     int fd = -1;
     if (good) {
-        unsafe { fd = tcp_connect_nb(addr, port); }
+        unsafe { fd = tcp_connect_timeout(addr, port, timeout_ms); }
         if (fd < 0) { good = 0; }
     }
-    if (good) { unsafe { if (tcp_wait_connected(fd) != 0) good = 0; } }
-    if (good) { unsafe { fd_set_blocking(fd); } }
+    if (good && timeout_ms > 0) {
+        if (sock_set_io_timeout(fd, timeout_ms) != 0) { good = 0; }
+    }
 
     struct String keyB64 = string_new();
     if (good) {
@@ -162,10 +204,16 @@ struct WsConn ws_connect(const &char host, unsigned short port,
     }
     keyB64.free();
 
+    // The handshake timeout must not outlive it: an open WebSocket can sit
+    // idle between messages indefinitely, and ws_recv blocks until one
+    // arrives.
+    if (good && timeout_ms > 0) {
+        if (sock_set_io_timeout(fd, 0) != 0) { good = 0; }
+    }
     if (good) {
         conn.fd = fd;
     } else if (fd >= 0) {
-        unsafe { close(fd); }
+        unsafe { ws_sock_close_(fd); }
     }
     if (ok != (int*)0) { unsafe { *ok = good; } }
     return conn;
@@ -223,7 +271,7 @@ int ws_accept(int listenFd, &WsConn out) {
     key.free();
 
     if (!good) {
-        unsafe { close(fd); }
+        unsafe { ws_sock_close_(fd); }
         return 0;
     }
     unsafe {
@@ -395,7 +443,7 @@ void ws_close(&WsConn conn) {
     ws_send_close(conn);
     int fd;
     unsafe { fd = conn->fd; }
-    if (fd >= 0) { unsafe { close(fd); } }
+    if (fd >= 0) { unsafe { ws_sock_close_(fd); } }
 }
 
 } // namespace std
