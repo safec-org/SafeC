@@ -155,6 +155,9 @@ struct Optimizer {
     unsigned long t;         // steps taken
 };
 struct Optimizer optimizer_new(int kind, float lr);
+// An empty optimizer with o's kind and hyperparameters (not its parameters
+// or state), as nn_rocm.h's rocm_optimizer_from.
+struct Optimizer optimizer_from(const &Optimizer o);
 void  optimizer_add(&Optimizer o, &Tensor param);
 void  optimizer_add_mlp(&Optimizer o, const &Mlp m);
 void  optimizer_zero_grad(&Optimizer o);

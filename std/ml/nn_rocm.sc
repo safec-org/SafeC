@@ -5227,4 +5227,181 @@ void rocm_batches_free(&RocmBatches b) {
     b.ok = 0;
 }
 
+// ── The training traits ──────────────────────────────────────────────────────
+
+struct RocmFitGraphs rocm_fit_graphs_new_() {
+    struct RocmFitGraphs g;
+    g.full.exec = 0UL;
+    g.tail.exec = 0UL;
+    g.chunk.exec = 0UL;
+    g.seenFull = 0;
+    g.seenTail = 0;
+    return g;
+}
+
+void rocm_fit_graphs_free_(&RocmFitGraphs g) {
+    rocm_graph_free(&g.full);
+    rocm_graph_free(&g.tail);
+    rocm_graph_free(&g.chunk);
+    g.seenFull = 0;
+    g.seenTail = 0;
+}
+
+int rocm_trainer_reserve_(&RocmBuf b, unsigned long n) {
+    if (b.dev != 0UL && b.len >= n) return 1;
+    rocm_free(b);
+    return nr_alloc_(b, n);
+}
+
+int rocm_net_download_mlp(const &RocmNet n, &Mlp m) { return rocm_net_download(n, &m.params); }
+
+static fn int(&RocmNet, struct RocmBuf, struct RocmBuf, unsigned long, struct RocmBuf) nr_loss_step_(int loss) {
+    if (loss == TRAIN_LOSS_MSE) return rocm_net_mse_step;
+    if (loss == TRAIN_LOSS_BCE) return rocm_net_bce_step;
+    return rocm_net_ce_step;
+}
+
+// The fields every RocmTrainer constructor sets the same way, after 'dev'.
+generic<H, D>
+static void nr_trainer_finish_(&RocmTrainer<H, D> t, const &Optimizer opt, const &TrainerOptions o) {
+    t.opt = rocm_optimizer_from(opt);
+    t.maxBatch = o.maxBatch;
+    t.xs = nr_none_();
+    t.ys = nr_none_();
+    t.loss1 = nr_none_();
+    t.active = 0;
+}
+
+struct RocmTrainer<struct Mlp, struct RocmNet> rocm_mlp_trainer_new(struct Mlp m, int loss, const &Optimizer opt,
+                                                                    const &TrainerOptions o) {
+    struct RocmTrainer<struct Mlp, struct RocmNet> t;
+    t.host = m;
+    t.dev = rocm_net_from_mlp(&t.host, o.maxBatch);
+    nr_trainer_finish_(&t, opt, o);
+    t.ok = t.dev.ok && (o.precision == 0 || rocm_net_set_precision(&t.dev, o.precision)) &&
+           rocm_optimizer_add_net(&t.opt, &t.dev) && t.opt.ok;
+    t.stepFn = nr_loss_step_(loss);
+    t.downloadFn = rocm_net_download_mlp;
+    t.freeFn = rocm_net_free;
+    return t;
+}
+
+struct RocmTrainer<struct ConvNet, struct RocmNet> rocm_convnet_trainer_new(struct ConvNet n, int loss,
+                                                                            const &Optimizer opt,
+                                                                            const &TrainerOptions o) {
+    struct RocmTrainer<struct ConvNet, struct RocmNet> t;
+    t.host = n;
+    t.dev = rocm_net_from_convnet(&t.host, o.maxBatch);
+    nr_trainer_finish_(&t, opt, o);
+    t.ok = t.dev.ok && (o.precision == 0 || rocm_net_set_precision(&t.dev, o.precision)) &&
+           rocm_optimizer_add_net(&t.opt, &t.dev) && t.opt.ok;
+    t.stepFn = nr_loss_step_(loss);
+    t.downloadFn = rocm_net_download_convnet;
+    t.freeFn = rocm_net_free;
+    return t;
+}
+
+struct RocmTrainer<struct Vae, struct RocmVae> rocm_vae_trainer_new(struct Vae v, const &Optimizer opt,
+                                                                    const &TrainerOptions o) {
+    struct RocmTrainer<struct Vae, struct RocmVae> t;
+    t.host = v;
+    t.dev = rocm_vae_new(&t.host, o.maxBatch);
+    nr_trainer_finish_(&t, opt, o);
+    t.ok = t.dev.ok && o.precision == 0 && rocm_optimizer_add_vae(&t.opt, &t.dev) && t.opt.ok;
+    t.stepFn = rocm_vae_step;
+    t.downloadFn = rocm_vae_download;
+    t.freeFn = rocm_vae_free;
+    return t;
+}
+
+struct RocmTrainer<struct ConvVae, struct RocmVae> rocm_conv_vae_trainer_new(struct ConvVae v, const &Optimizer opt,
+                                                                             const &TrainerOptions o) {
+    struct RocmTrainer<struct ConvVae, struct RocmVae> t;
+    t.host = v;
+    t.dev = rocm_conv_vae_new(&t.host, o.maxBatch);
+    nr_trainer_finish_(&t, opt, o);
+    t.ok = t.dev.ok && o.precision == 0 && rocm_optimizer_add_vae(&t.opt, &t.dev) && t.opt.ok;
+    t.stepFn = rocm_vae_step;
+    t.downloadFn = rocm_conv_vae_download;
+    t.freeFn = rocm_vae_free;
+    return t;
+}
+
+struct RocmTrainer<struct ConvAutoencoder, struct RocmConvAe> rocm_conv_ae_trainer_new(struct ConvAutoencoder ae,
+                                                                                       const &Optimizer opt,
+                                                                                       const &TrainerOptions o) {
+    struct RocmTrainer<struct ConvAutoencoder, struct RocmConvAe> t;
+    t.host = ae;
+    t.dev = rocm_conv_autoencoder_new(&t.host, o.maxBatch);
+    nr_trainer_finish_(&t, opt, o);
+    t.ok = t.dev.ok && o.precision == 0 && rocm_optimizer_add_conv_autoencoder(&t.opt, &t.dev) && t.opt.ok;
+    t.stepFn = rocm_conv_autoencoder_step;
+    t.downloadFn = rocm_conv_autoencoder_download;
+    t.freeFn = rocm_conv_autoencoder_free;
+    return t;
+}
+
+struct RocmGanTrainer<struct Gan> rocm_gan_trainer_new(struct Gan g, const &TrainerOptions o) {
+    struct RocmGanTrainer<struct Gan> t;
+    t.host = g;
+    t.dev = rocm_gan_new(&t.host, o.maxBatch);
+    t.downloadFn = rocm_gan_download;
+    t.xs = nr_none_();
+    t.ls = nr_none_();
+    return t;
+}
+
+struct RocmGanTrainer<struct Dcgan> rocm_dcgan_trainer_new(struct Dcgan g, const &TrainerOptions o) {
+    struct RocmGanTrainer<struct Dcgan> t;
+    t.host = g;
+    t.dev = rocm_dcgan_new(&t.host, o.maxBatch);
+    t.downloadFn = rocm_dcgan_download;
+    t.xs = nr_none_();
+    t.ls = nr_none_();
+    return t;
+}
+
+struct RocmDqnAgent rocm_dqn_agent_new(struct Dqn d) {
+    struct RocmDqnAgent a;
+    a.host = d;
+    a.dev = rocm_dqn_new(&a.host);
+    return a;
+}
+
+float RocmDqnAgent::epsilon() { return rocm_dqn_epsilon(&self.dev); }
+
+unsigned long RocmDqnAgent::act(const &Tensor obs, int explore) { return rocm_dqn_act(&self.dev, obs, explore); }
+
+int RocmDqnAgent::observe(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminal) {
+    return rocm_dqn_observe(&self.dev, obs, action, reward, next, terminal);
+}
+
+float RocmDqnAgent::last_loss() { return rocm_dqn_loss(&self.dev); }
+
+unsigned long RocmDqnAgent::updates() { return self.dev.updates; }
+
+int RocmDqnAgent::sync() { return rocm_dqn_download(&self.dev, &self.host); }
+
+void RocmDqnAgent::free() { rocm_dqn_free(&self.dev); }
+
+struct RocmPgAgent rocm_pg_agent_new(struct PolicyAgent a, const &TrainerOptions o) {
+    struct RocmPgAgent p;
+    p.host = a;
+    p.dev = rocm_pg_new(&p.host, o.maxBatch);
+    return p;
+}
+
+unsigned long RocmPgAgent::act(const &Tensor obs, int sample) { return rocm_pg_act(&self.dev, obs, sample); }
+
+void RocmPgAgent::record(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminated,
+                         int truncated) {
+    rocm_pg_record(&self.dev, obs, action, reward, next, terminated, truncated);
+}
+
+float RocmPgAgent::update() { return rocm_pg_update(&self.dev); }
+
+int RocmPgAgent::sync() { return rocm_pg_download(&self.dev, &self.host); }
+
+void RocmPgAgent::free() { rocm_pg_free(&self.dev); }
+
 } // namespace std

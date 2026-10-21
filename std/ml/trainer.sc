@@ -17,6 +17,31 @@ struct TrainConfig train_config_default() {
     return c;
 }
 
+struct TrainerOptions trainer_options_default() {
+    struct TrainerOptions o;
+    o.maxBatch = 256UL;
+    o.precision = 0;
+    return o;
+}
+
+struct TrainReport train_report_new_() {
+    struct TrainReport rep;
+    rep.firstEpochLoss = (float)0.0;
+    rep.lastEpochLoss = (float)0.0;
+    rep.bestEpochLoss = (float)3.0e38;
+    rep.steps = 0UL;
+    rep.epochs = 0UL;
+    return rep;
+}
+
+void train_report_epoch_(&TrainReport rep, unsigned long epoch, float mean, unsigned long steps) {
+    if (epoch == 0UL) rep.firstEpochLoss = mean;
+    rep.lastEpochLoss = mean;
+    if (mean < rep.bestEpochLoss) rep.bestEpochLoss = mean;
+    rep.steps = rep.steps + steps;
+    rep.epochs = epoch + 1UL;
+}
+
 float trainer_step_(&Optimizer opt, &Tensor loss, float clipNorm) {
     optimizer_zero_grad(opt);
     tensor_backward(loss);

@@ -19,6 +19,10 @@
 //
 // The model, the forward pass and the loss are all resolved at compile
 // time (trainer_fit is generic over the model type).
+//
+// train_traits.h puts this loop and nn_rocm.h's rocm_trainer_fit behind one
+// interface (the Trainable trait), and train.h picks the backend at build
+// time.
 #include <std/ml/tensor.h>
 #include <std/ml/nn.h>
 #include <std/ml/datasets.h>
@@ -45,40 +49,63 @@ struct TrainReport {
 // epochs 10, batch 32, seed 1, shuffled, no clipping, constant lr.
 struct TrainConfig train_config_default();
 
+// One epoch's result, as a Trainable's fit_epoch reports it (train_traits.h).
+struct EpochLoss {
+    float loss;              // mean batch loss
+    unsigned long steps;     // batches (optimizer steps) taken
+    int   ok;                // 0: the epoch failed (a device error)
+};
+
+// How a backend-neutral trainer (train.h) is built. The CPU ignores both:
+// maxBatch sizes a device trainer's buffers (cfg.batchSize must not exceed
+// it), precision is the activations' type on a device that supports it
+// (0: fp32, TENSOR_FP16 or TENSOR_BF16, tensor_half.h's values).
+struct TrainerOptions {
+    unsigned long maxBatch;
+    int precision;
+};
+// maxBatch 256, fp32.
+struct TrainerOptions trainer_options_default();
+
 // Internal: one optimizer step from a loss tensor.
 float trainer_step_(&Optimizer opt, &Tensor loss, float clipNorm);
+
+// Internal: a fresh report, and one epoch's mean loss and step count added.
+struct TrainReport train_report_new_();
+void train_report_epoch_(&TrainReport rep, unsigned long epoch, float mean, unsigned long steps);
+
+// Internal: one epoch of trainer_fit over dl (its next pass), the step
+// tensors in stepArena. Returns the mean batch loss and sets *batches.
+generic<T>
+float trainer_epoch_(&T model, fn &Tensor(&T, const &Tensor, const &Tensor) lossFn, &Optimizer opt,
+                     &DataLoader dl, &TensorArena stepArena, float clipNorm, &unsigned long batches) {
+    double sum = 0.0;
+    unsigned long n = 0UL;
+    struct Batch b;
+    tensor_arena_begin(stepArena);
+    while (dataloader_next(dl, &b)) {
+        &Tensor loss = lossFn(model, b.x, b.y);
+        sum = sum + (double)trainer_step_(opt, loss, clipNorm);
+        n = n + 1UL;
+        tensor_arena_reset(stepArena);
+    }
+    tensor_arena_end();
+    tensor_arena_reset(stepArena);
+    *batches = n;
+    return n > 0UL ? (float)(sum / (double)n) : (float)0.0;
+}
 
 generic<T>
 struct TrainReport trainer_fit(&T model, fn &Tensor(&T, const &Tensor, const &Tensor) lossFn,
                                &Optimizer opt, const &Dataset data, const &TrainConfig cfg) {
-    struct TrainReport rep;
-    rep.firstEpochLoss = (float)0.0;
-    rep.lastEpochLoss = (float)0.0;
-    rep.bestEpochLoss = (float)3.0e38;
-    rep.steps = 0UL;
-    rep.epochs = 0UL;
+    struct TrainReport rep = train_report_new_();
     struct DataLoader dl = dataloader_new(data, cfg.batchSize, cfg.shuffle, cfg.seed);
     struct TensorArena stepArena = tensor_arena_new(0UL);
-    struct Batch b;
     unsigned long e = 0UL;
     while (e < cfg.epochs) {
-        double sum = 0.0;
         unsigned long batches = 0UL;
-        tensor_arena_begin(&stepArena);
-        while (dataloader_next(&dl, &b)) {
-            &Tensor loss = lossFn(model, b.x, b.y);
-            sum = sum + (double)trainer_step_(opt, loss, cfg.clipNorm);
-            batches = batches + 1UL;
-            tensor_arena_reset(&stepArena);
-        }
-        tensor_arena_end();
-        tensor_arena_reset(&stepArena);
-        float mean = batches > 0UL ? (float)(sum / (double)batches) : (float)0.0;
-        if (e == 0UL) rep.firstEpochLoss = mean;
-        rep.lastEpochLoss = mean;
-        if (mean < rep.bestEpochLoss) rep.bestEpochLoss = mean;
-        rep.steps = rep.steps + batches;
-        rep.epochs = e + 1UL;
+        float mean = trainer_epoch_(model, lossFn, opt, &dl, &stepArena, cfg.clipNorm, &batches);
+        train_report_epoch_(&rep, e, mean, batches);
         opt.lr = opt.lr * cfg.lrDecay;
         e = e + 1UL;
     }
