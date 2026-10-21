@@ -109,6 +109,7 @@ static const char* rocm_kernel_source_() {
     "EW_UNARY(ew_log, __logf(x))\n"
     "EW_UNARY(ew_exp, __expf(x))\n"
     "EW_UNARY(ew_sqrt, __fsqrt_rn(x))\n"
+    "EW_UNARY(ew_gelu, 0.5f * x * (1.0f + tanhf(0.7978845608028654f * (x + 0.044715f * x * x * x))))\n"
     "EW_UNARY(ew_scale, x * k)\n"
     "\n"
     "// relu backward: g_in = g_out where x > 0\n"
@@ -520,6 +521,59 @@ static const char* rocm_kernel_source_() {
     "            O[((unsigned long long)h * seq + i0 + i) * d + col] = den != 0.0f ? pk[i][col] / den : 0.0f;\n"
     "        }\n"
     "    }\n"
+    "}\n"
+    "// Decode-step ops (one token at a time, M = 1).\n"
+    "// gemv_half: y = W x with W [n][k] fp16/bf16 (row-major) and fp32 x, y; one\n"
+    "// wave per output row, 16-byte weight loads when k % 8 == 0. Memory-bound:\n"
+    "// ~1 TB/s on an MI100, where a GEMM with one row (rocBLAS) is far slower.\n"
+    "__device__ __forceinline__ float gv_wsum(float a) {\n"
+    "    a += __shfl_xor(a, 32); a += __shfl_xor(a, 16); a += __shfl_xor(a, 8);\n"
+    "    a += __shfl_xor(a, 4); a += __shfl_xor(a, 2); a += __shfl_xor(a, 1);\n"
+    "    return a;\n"
+    "}\n"
+    "template <int BF>\n"
+    "__device__ __forceinline__ void gemv_half_impl(const unsigned short* __restrict__ W, const float* __restrict__ x,\n"
+    "                                               float* __restrict__ y, unsigned n, unsigned k) {\n"
+    "    const unsigned lane = threadIdx.x & 63u;\n"
+    "    const unsigned row = blockIdx.x * (blockDim.x >> 6) + (threadIdx.x >> 6);\n"
+    "    if (row >= n) return;\n"
+    "    const unsigned short* w = W + (unsigned long long)row * k;\n"
+    "    float a = 0.0f;\n"
+    "    if ((k & 7u) == 0u) {\n"
+    "#pragma unroll 2\n"
+    "        for (unsigned kk = lane * 8u; kk < k; kk += 512u) {\n"
+    "            const uint4 v = *(const uint4*)(w + kk);\n"
+    "            const float4 x0 = *(const float4*)(x + kk), x1 = *(const float4*)(x + kk + 4u);\n"
+    "            a = fmaf(h2f((unsigned short)(v.x & 0xffffu), BF), x0.x, a); a = fmaf(h2f((unsigned short)(v.x >> 16), BF), x0.y, a);\n"
+    "            a = fmaf(h2f((unsigned short)(v.y & 0xffffu), BF), x0.z, a); a = fmaf(h2f((unsigned short)(v.y >> 16), BF), x0.w, a);\n"
+    "            a = fmaf(h2f((unsigned short)(v.z & 0xffffu), BF), x1.x, a); a = fmaf(h2f((unsigned short)(v.z >> 16), BF), x1.y, a);\n"
+    "            a = fmaf(h2f((unsigned short)(v.w & 0xffffu), BF), x1.z, a); a = fmaf(h2f((unsigned short)(v.w >> 16), BF), x1.w, a);\n"
+    "        }\n"
+    "    } else {\n"
+    "        for (unsigned kk = lane; kk < k; kk += 64u) a = fmaf(h2f(w[kk], BF), x[kk], a);\n"
+    "    }\n"
+    "    a = gv_wsum(a);\n"
+    "    if (lane == 0u) y[row] = a;\n"
+    "}\n"
+    "extern \"C\" __global__ __launch_bounds__(256) void gemv_half(const unsigned short* W, const float* x, float* y,\n"
+    "                                                            unsigned n, unsigned k, int bf) {\n"
+    "    if (bf) gemv_half_impl<1>(W, x, y, n, k);\n"
+    "    else gemv_half_impl<0>(W, x, y, n, k);\n"
+    "}\n"
+    "// rmsnorm_rows: y[r] = x[r] * rsqrt(mean(x[r]^2) + eps) * w (w == 0: no\n"
+    "// weight); one block per row; y may alias x.\n"
+    "extern \"C\" __global__ __launch_bounds__(256) void rmsnorm_rows(const float* x, const float* __restrict__ w,\n"
+    "                                                               float* y, unsigned n, float eps) {\n"
+    "    __shared__ float red[4];\n"
+    "    const float* xr = x + (unsigned long long)blockIdx.x * n;\n"
+    "    float* yr = y + (unsigned long long)blockIdx.x * n;\n"
+    "    float s = 0.0f;\n"
+    "    for (unsigned i = threadIdx.x; i < n; i += 256u) { float v = xr[i]; s = fmaf(v, v, s); }\n"
+    "    s = gv_wsum(s);\n"
+    "    if ((threadIdx.x & 63u) == 0u) red[threadIdx.x >> 6] = s;\n"
+    "    __syncthreads();\n"
+    "    const float inv = rsqrtf((red[0] + red[1] + red[2] + red[3]) / (float)n + eps);\n"
+    "    for (unsigned i = threadIdx.x; i < n; i += 256u) yr[i] = xr[i] * inv * (w ? w[i] : 1.0f);\n"
     "}\n"
     "// ── Attention on matrix cores (CDNA: gfx908 / gfx90a / gfx94x / gfx950) ──────\n"
     "// fp32 MFMA versions of the flash and linear attention kernels above, used\n"
@@ -1439,7 +1493,10 @@ static const char* rocm_kernel_source_() {
 #define K_LA_OUT64 38
 #define K_LA_OUT128 39
 #define K_LA_CAUSAL64 40
-#define K_COUNT 41
+#define K_GEMV_HALF 41
+#define K_RMSNORM 42
+#define K_GELU 43
+#define K_COUNT 44
 
 static const char* rocm_kernel_name_(int k) {
     if (k == K_ADD) return "ew_add";
@@ -1482,6 +1539,9 @@ static const char* rocm_kernel_name_(int k) {
     if (k == K_LA_OUT64) return "la_out_d64";
     if (k == K_LA_OUT128) return "la_out_d128";
     if (k == K_LA_CAUSAL64) return "la_causal_d64";
+    if (k == K_GEMV_HALF) return "gemv_half";
+    if (k == K_RMSNORM) return "rmsnorm_rows";
+    if (k == K_GELU) return "ew_gelu";
     return "mse_grad";
 }
 
@@ -1819,6 +1879,24 @@ int rocm_relu(struct RocmBuf a, struct RocmBuf out) { return rocm_unary_(K_RELU,
 int rocm_exp(struct RocmBuf a, struct RocmBuf out) { return rocm_unary_(K_EXP, a, 0.0f, out); }
 int rocm_log(struct RocmBuf a, struct RocmBuf out) { return rocm_unary_(K_LOG, a, 0.0f, out); }
 int rocm_sqrt(struct RocmBuf a, struct RocmBuf out) { return rocm_unary_(K_SQRT, a, 0.0f, out); }
+int rocm_gelu(struct RocmBuf a, struct RocmBuf out) { return rocm_unary_(K_GELU, a, 0.0f, out); }
+
+int rocm_rmsnorm(struct RocmBuf x, struct RocmBuf w, struct RocmBuf y, unsigned long rows, unsigned long n, float eps) {
+    if (!rocm_ensure_() || rows == 0UL || n == 0UL || rows > 2147483647UL || n > 4294967295UL) return 0;
+    if (!rocm_fits_(x, rows * n) || !rocm_fits_(y, rows * n)) return 0;
+    if (w.dev != 0UL && w.len < n) return 0;
+    unsafe {
+        void* px = (void*)x.dev;
+        void* pw = (void*)w.dev;
+        void* py = (void*)y.dev;
+        unsigned int nn = (unsigned int)n;
+        float e = eps;
+        void* params[5];
+        params[0] = (void*)&px; params[1] = (void*)&pw; params[2] = (void*)&py; params[3] = (void*)&nn; params[4] = (void*)&e;
+        return hipModuleLaunchKernel(g_rocm_fn[K_RMSNORM], (unsigned int)rows, 1U, 1U, ROCM_BLOCK, 1U, 1U, 0U,
+                                     g_rocm_stream, &params[0], (void**)0) == ROCM_HIP_OK;
+    }
+}
 
 // ── fp16 / bf16 ─────────────────────────────────────────────────────────────
 
@@ -1955,6 +2033,24 @@ int rocm_half_relu(struct RocmHalfBuf a, struct RocmHalfBuf out) {
         void* params[4];
         params[0] = (void*)&pa; params[1] = (void*)&po; params[2] = (void*)&nn; params[3] = (void*)&bf;
         return rocm_launch_(K_HALF_RELU, n, (&void)&params[0]);
+    }
+}
+
+int rocm_half_gemv(struct RocmHalfBuf w, struct RocmBuf x, struct RocmBuf y, unsigned long n, unsigned long k) {
+    if (!rocm_ensure_() || n == 0UL || k == 0UL || n > 2147483647UL || k > 4294967295UL) return 0;
+    if (!rocm_half_fits_(w, n * k) || !rocm_fits_(x, k) || !rocm_fits_(y, n)) return 0;
+    unsafe {
+        void* pw = (void*)w.dev;
+        void* px = (void*)x.dev;
+        void* py = (void*)y.dev;
+        unsigned int nn = (unsigned int)n;
+        unsigned int kk = (unsigned int)k;
+        int bf = w.dtype == ROCM_BF16 ? 1 : 0;
+        void* params[6];
+        params[0] = (void*)&pw; params[1] = (void*)&px; params[2] = (void*)&py; params[3] = (void*)&nn;
+        params[4] = (void*)&kk; params[5] = (void*)&bf;
+        return hipModuleLaunchKernel(g_rocm_fn[K_GEMV_HALF], (unsigned int)((n + 3UL) / 4UL), 1U, 1U, ROCM_BLOCK, 1U, 1U, 0U,
+                                     g_rocm_stream, &params[0], (void**)0) == ROCM_HIP_OK;
     }
 }
 

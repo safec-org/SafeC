@@ -49,6 +49,7 @@ namespace std {
 extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
+#if defined(__APPLE__)
 extern void* objc_getClass(const char* name);
 extern void* sel_registerName(const char* name);
 extern void* objc_msgSend(void* recv, void* op);
@@ -66,6 +67,18 @@ extern void* MTLCreateSystemDefaultDevice();
 // invoked — safe to call from a language with no Objective-C block
 // literal support.
 extern void* dispatch_data_create(const void* buffer, unsigned long size, void* queue, void* destructor);
+#else
+// No Metal outside Apple platforms: null stand-ins for the Objective-C /
+// Metal / libdispatch entry points, so this file still compiles and links
+// into std everywhere (mps_available() is 0 and every op reports failure).
+extern void* memcpy(void* dst, const void* src, size_t n);
+extern void* memset(void* dst, int c, size_t n);
+static void* objc_getClass(const char* name) { return (void*)0; }
+static void* sel_registerName(const char* name) { return (void*)0; }
+static void* objc_msgSend(void* recv, void* op) { return (void*)0; }
+static void* MTLCreateSystemDefaultDevice() { return (void*)0; }
+static void* dispatch_data_create(const void* buffer, unsigned long size, void* queue, void* destructor) { return (void*)0; }
+#endif
 
 struct MTLSize {
     unsigned long width;
