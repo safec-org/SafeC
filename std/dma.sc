@@ -19,8 +19,10 @@ inline struct DmaBuffer dma_buf_wrap(&unsigned char virt, unsigned long phys, un
 void DmaBuffer::to_device() {
     // Flush all cache lines in the buffer range.
     unsafe {
-        unsigned long p = (unsigned long)self.virt;
-        unsigned long end = p + self.size;
+        // Start at the line holding the first byte: stepping from an
+        // unaligned address would skip the line holding the last one.
+        unsigned long p = mem_align_down((unsigned long)self.virt, (unsigned long)MEM_CACHE_LINE_SIZE);
+        unsigned long end = (unsigned long)self.virt + self.size;
         while (p < end) {
             mem_clflush_raw_((const void*)p);
             p = p + (unsigned long)MEM_CACHE_LINE_SIZE;
@@ -51,8 +53,10 @@ void DmaBuffer::to_cpu() {
 #else
         asm volatile ("" : : : "memory");
 #endif
-        unsigned long p = (unsigned long)self.virt;
-        unsigned long end = p + self.size;
+        // Start at the line holding the first byte: stepping from an
+        // unaligned address would skip the line holding the last one.
+        unsigned long p = mem_align_down((unsigned long)self.virt, (unsigned long)MEM_CACHE_LINE_SIZE);
+        unsigned long end = (unsigned long)self.virt + self.size;
         while (p < end) {
             mem_clflush_raw_((const void*)p);
             p = p + (unsigned long)MEM_CACHE_LINE_SIZE;

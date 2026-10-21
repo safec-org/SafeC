@@ -32,17 +32,16 @@ inline struct PoolAllocator pool_init(&unsigned char buffer, unsigned long cap) 
     a.owned = 0;
     a.cap  = cap;
     unsigned long hdr = (unsigned long)24;
+    // cap < hdr means the caller's buffer can't even hold one block
+    // header: writing one would overrun it, and 'cap - hdr' would
+    // underflow. Leave the pool empty (permanently exhausted) instead.
+    if (cap < hdr) {
+        a.head = (void*)0;
+        return a;
+    }
     unsafe {
         struct PoolBlock* first = (struct PoolBlock*)buffer;
-        // cap < hdr means the caller's buffer can't even hold one block
-        // header; 'cap - hdr' would underflow to a huge value and the pool
-        // would believe it owns far more memory than it actually does, so
-        // clamp to an empty (permanently exhausted) pool instead.
-        if (cap >= hdr) {
-            first->size = cap - hdr;
-        } else {
-            first->size = (unsigned long)0;
-        }
+        first->size = cap - hdr;
         first->is_free = 1;
         first->next    = (void*)0;
         a.head = (void*)first;

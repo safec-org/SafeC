@@ -6,8 +6,10 @@
 namespace std {
 
 inline unsigned int bf_mask32(int lo, int hi) {
-    unsigned int width = (unsigned int)(hi - lo + 1);
-    unsigned int mask = ((unsigned int)1 << width) - (unsigned int)1;
+    int width = hi - lo + 1;
+    // A full-width field can't use 1 << 32 (shifting by the width is undefined).
+    unsigned int mask = ~(unsigned int)0;
+    if (width < 32) { mask = ((unsigned int)1 << width) - (unsigned int)1; }
     return mask << lo;
 }
 

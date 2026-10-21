@@ -400,6 +400,107 @@ void t_slice() {
     h.free();
 }
 
+// String methods and capacity APIs the main cases don't reach.
+void t_string_more() {
+    unsafe {
+        struct String s = string_from_n("abcdefgh", 5UL);
+        ASSERT_STR_EQ(s.as_ptr(), "abcde");
+        ASSERT_TRUE(s.reserve(100UL));
+        ASSERT_TRUE(s.cap >= 106UL);
+        s.shrink_to_fit();
+        ASSERT_EQ(s.cap, 6);
+        ASSERT_STR_EQ(s.as_ptr(), "abcde");
+        struct String t = string_from("-x");
+        s.push_str(&t);
+        s.push_uint(18446744073709551615ULL);
+        s.push_bool(0);
+        ASSERT_STR_EQ(s.as_ptr(), "abcde-x18446744073709551615false");
+        s.truncate(7UL);
+        ASSERT_STR_EQ(s.as_ptr(), "abcde-x");
+        s.truncate(100UL);                          // longer: no-op
+        ASSERT_EQ(s.length(), 7);
+        ASSERT_TRUE(s.remove_range(1UL, 3UL));
+        ASSERT_STR_EQ(s.as_ptr(), "ade-x");
+        ASSERT_FALSE(s.remove_range(9UL, 12UL));
+        ASSERT_TRUE(s.replace("de", "XYZ"));
+        ASSERT_STR_EQ(s.as_ptr(), "aXYZ-x");
+        ASSERT_FALSE(s.replace("nope", "?"));
+        ASSERT_EQ(s.find_char('Z'), 3);
+        ASSERT_EQ(s.find_char('q'), -1);
+        struct String low = s.to_lower();
+        ASSERT_STR_EQ(low.as_ptr(), "axyz-x");
+        ASSERT_TRUE(low.eq_ignore_case(&s));
+        ASSERT_TRUE(low.lt(&s) == 0);
+        ASSERT_TRUE(s.lt(&low));                    // 'X' < 'x'
+        struct String pad = low.pad_left(9UL, '*');
+        ASSERT_STR_EQ(pad.as_ptr(), "***axyz-x");
+        struct String sp = pad.strip_prefix("***");
+        ASSERT_STR_EQ(sp.as_ptr(), "axyz-x");
+        struct String rep = string_from("ab").repeat(3UL);
+        ASSERT_STR_EQ(rep.as_ptr(), "ababab");
+        struct String ws = string_from("  \t lead");
+        struct String tl = ws.trim_left();
+        ASSERT_STR_EQ(tl.as_ptr(), "lead");
+        ASSERT_TRUE(tl.is_ascii());
+        ASSERT_TRUE(tl.is_alphanumeric());
+        struct String ne = string_from("caf\xC3\xA9");
+        ASSERT_FALSE(ne.is_ascii());
+        struct String words = string_from("  one two\tthree  four ");
+        struct String parts[3];
+        ASSERT_EQ(words.split_whitespace(&parts[0], 3UL), 3);
+        ASSERT_STR_EQ(parts[0].as_ptr(), "one");
+        ASSERT_STR_EQ(parts[2].as_ptr(), "three  four");   // last slot takes the rest
+        int ok = 0;
+        struct String fl = string_from("-2.5e2");
+        ASSERT_TRUE(fl.parse_float(&ok) == -250.0);
+        ASSERT_TRUE(ok);
+        struct String bad = string_from("2.5x");
+        bad.parse_float(&ok);
+        ASSERT_FALSE(ok);
+        int i = 0;
+        while (i < 3) { parts[i].free(); i = i + 1; }
+        s.free(); t.free(); low.free(); pad.free(); sp.free(); rep.free(); ws.free();
+        tl.free(); ne.free(); words.free(); fl.free(); bad.free();
+
+        // reserve / with_cap variants
+        int arr[4];
+        arr[0] = 4; arr[1] = 3; arr[2] = 2; arr[3] = 1;
+        struct Vec<int> v = vec_from_arr(&arr[0], 4UL);
+        ASSERT_EQ(v.length(), 4);
+        ASSERT_EQ(*v.at(3UL), 1);
+        ASSERT_TRUE(v.reserve(64UL));
+        ASSERT_TRUE(v.total_capacity() >= 64UL);
+        v.shrink();
+        ASSERT_EQ(v.total_capacity(), 4);
+        v.free();
+        struct Stack<int> st = stack_with_cap(16UL);
+        ASSERT_TRUE(st.reserve(32UL));
+        st.push(5);
+        ASSERT_EQ(st.pop().default(0), 5);
+        st.free();
+        struct Queue<int> q = queue_new();
+        ASSERT_TRUE(q.reserve(10UL));
+        q.enqueue(9);
+        ASSERT_EQ(q.dequeue().default(0), 9);
+        q.free();
+        struct HashMap<int, int> m = map_with_cap(100UL);
+        ASSERT_TRUE(m.reserve(500UL));
+        m.insert(3, 30);
+        ASSERT_EQ(m.get(3).default(0), 30);
+        m.free();
+
+        int buf[5];
+        arr_fill(&buf[0], 5UL, 7);
+        ASSERT_EQ(buf[4], 7);
+        ASSERT_TRUE(arr_set(&buf[0], 5UL, 2UL, 1));
+        ASSERT_FALSE(arr_set(&buf[0], 5UL, 5UL, 1));
+        int cp[5];
+        arr_copy(&cp[0], &buf[0], 5UL);
+        ASSERT_EQ(cp[2], 1);
+        ASSERT_EQ(cp[0], 7);
+    }
+}
+
 int main() {
     struct TestSuite t = test_suite_init();
     unsafe {
@@ -413,6 +514,7 @@ int main() {
         t.add("ringbuffer", t_ring);
         t.add("static_vec/static_map", t_static);
         t.add("slice", t_slice);
+        t.add("string/capacity extras", t_string_more);
     }
     t.run();
     t.print_summary();

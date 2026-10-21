@@ -1,4 +1,4 @@
-// std::serial — value, json, csv, xml, yaml, html, protobuf, markdown
+// std::serial — value, json, csv, xml, yaml, html, protobuf, markdown; std::scx
 #include <std/test/test.h>
 #include <std/mem.h>
 #include <std/str.h>
@@ -10,6 +10,7 @@
 #include <std/serial/html.h>
 #include <std/serial/protobuf.h>
 #include <std/serial/markdown.h>
+#include <std/scx/scx.h>
 
 static struct Value sample() {
     struct Value o = value_object();
@@ -180,6 +181,73 @@ void t_markdown() {
     }
 }
 
+// The append-to-String writers equal the value_to_* convenience forms, and
+// varints round-trip at their size boundaries.
+void t_writers_varint() {
+    unsafe {
+        struct Value o = sample();
+        ASSERT_EQ(o.kind_of(), VAL_OBJECT);
+        ?&Value okv = o.object_get("ok");
+        ASSERT_EQ(okv->as_bool(), 1);
+        ASSERT_EQ(okv->kind_of(), VAL_BOOL);
+
+        struct String a = string_from("prefix:");
+        json_write(&o, &a);
+        struct String j = value_to_json(&o);
+        ASSERT_TRUE(a.starts_with("prefix:"));
+        ASSERT_STR_EQ(&a.as_ptr()[7], j.as_ptr());
+        a.clear();
+        yaml_write(&o, &a);
+        struct String y = value_to_yaml(&o);
+        ASSERT_STR_EQ(a.as_ptr(), y.as_ptr());
+        a.clear();
+        xml_write(&o, "root", &a);
+        struct String x = value_to_xml(&o, "root");
+        ASSERT_STR_EQ(a.as_ptr(), x.as_ptr());
+        a.clear();
+        html_write(&o, &a);
+        struct String h = value_to_html(&o);
+        ASSERT_STR_EQ(a.as_ptr(), h.as_ptr());
+        int ok = 0;
+        struct Value rows = csv_parse("a,b\n1,2\n", &ok);
+        a.clear();
+        csv_write(&rows, &a);
+        struct String c = value_to_csv(&rows);
+        ASSERT_STR_EQ(a.as_ptr(), c.as_ptr());
+        j.free(); y.free(); x.free(); h.free(); c.free(); a.free();
+        value_free(&rows);
+        value_free(&o);
+
+        unsigned long long vals[6];
+        vals[0] = 0ULL; vals[1] = 127ULL; vals[2] = 128ULL; vals[3] = 300ULL;
+        vals[4] = 9223372036854775808ULL; vals[5] = 18446744073709551615ULL;
+        struct String buf = string_new();
+        int i = 0;
+        while (i < 6) { pb_write_varint(&buf, vals[i]); i = i + 1; }
+        ASSERT_EQ(buf.length(), 1 + 1 + 2 + 2 + 10 + 10);
+        struct PbReader r = pb_reader_new((const unsigned char*)buf.as_ptr(), buf.length());
+        int good = 1;
+        i = 0;
+        while (i < 6) {
+            unsigned long long v = 0ULL;
+            if (!pb_read_varint(&r, &v) || v != vals[i]) good = 0;
+            i = i + 1;
+        }
+        ASSERT_TRUE(good);
+        ASSERT_FALSE(pb_reader_has_more(&r));
+        unsigned long long v = 0ULL;
+        ASSERT_FALSE(pb_read_varint(&r, &v));                 // nothing left
+        struct PbReader trunc = pb_reader_new((const unsigned char*)"\x80\x80", 2UL);
+        ASSERT_FALSE(pb_read_varint(&trunc, &v));             // unterminated
+        buf.free();
+
+        struct String e = string_new();
+        scx_append_esc(&e, "<a href='x'>\"&\"</a>");
+        ASSERT_STR_EQ(e.as_ptr(), "&lt;a href=&#39;x&#39;&gt;&quot;&amp;&quot;&lt;/a&gt;");
+        e.free();
+    }
+}
+
 int main() {
     struct TestSuite t = test_suite_init();
     unsafe {
@@ -189,6 +257,7 @@ int main() {
         t.add("xml/yaml/html", t_xml_yaml_html);
         t.add("protobuf", t_protobuf);
         t.add("markdown", t_markdown);
+        t.add("writers/varint/scx", t_writers_varint);
     }
     t.run();
     t.print_summary();

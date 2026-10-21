@@ -1,4 +1,5 @@
-// std::crypto (sha1/sha256/sha512/hmac/aes/rng) + std::encoding (base64/url/utf8/ascii)
+// std::crypto (sha1/sha256/sha512/hmac/aes/rng/x509/tls/secure_alloc) +
+// std::encoding (base64/url/utf8/ascii)
 // Known-answer vectors: FIPS 180-4 "abc", RFC 4231 case 2, FIPS-197 Appendix C.
 #include <std/test/test.h>
 #include <std/mem.h>
@@ -9,6 +10,9 @@
 #include <std/crypto/hmac.h>
 #include <std/crypto/aes.h>
 #include <std/crypto/rng.h>
+#include <std/crypto/x509.h>
+#include <std/crypto/tls.h>
+#include <std/crypto/secure_alloc.h>
 #include <std/encoding/base64.h>
 #include <std/encoding/url.h>
 #include <std/encoding/utf8.h>
@@ -193,6 +197,196 @@ void t_utf8() {
     }
 }
 
+// The generator is ChaCha20 (RFC 8439 block function): seed = key, counter
+// from 0, nonce word 14 = 1. Reference values from an independent ChaCha20.
+void t_rng_kat() {
+    unsafe {
+        unsigned char seed[32];
+        int i = 0;
+        while (i < 32) { seed[i] = (unsigned char)i; i = i + 1; }
+        struct RngCtx r;
+        rng_init_seed(&r, seed);
+        test_assert_eq_u(r.rand32(), 0x02F1A42FULL, "chacha20 word 0", __FILE__, __LINE__);
+        test_assert_eq_u(r.rand32(), 0x898E8050ULL, "chacha20 word 1", __FILE__, __LINE__);
+        test_assert_eq_u(r.rand64(), 0xE06EDF0FE53152A2ULL, "chacha20 words 2-3", __FILE__, __LINE__);
+        unsigned char buf[100];
+        r.fill(&buf[0], 100UL);            // crosses into the second block
+        struct RngCtx q;
+        rng_init_seed(&q, seed);
+        unsigned char all[116];
+        q.fill(&all[0], 116UL);
+        ASSERT_EQ(safe_memcmp(&buf[0], &all[16], 100UL), 0);
+        ASSERT_EQ(r.rand_range(1UL), 0);
+    }
+}
+
+// A self-signed P-256 certificate: C=KR, O=SafeC Test, CN=www.Example.com,
+// SAN DNS:example.com + DNS:*.Example.org, CA:TRUE, serial 0x1234,
+// valid 2026-10-21 12:29:05 .. 2036-10-18 12:29:05 UTC.
+static const unsigned char kCertDer[485] = {
+    0x30U, 0x82U, 0x01U, 0xE1U, 0x30U, 0x82U, 0x01U, 0x88U, 0xA0U, 0x03U, 0x02U, 0x01U, 0x02U, 0x02U, 0x02U, 0x12U,
+    0x34U, 0x30U, 0x0AU, 0x06U, 0x08U, 0x2AU, 0x86U, 0x48U, 0xCEU, 0x3DU, 0x04U, 0x03U, 0x02U, 0x30U, 0x3CU, 0x31U,
+    0x0BU, 0x30U, 0x09U, 0x06U, 0x03U, 0x55U, 0x04U, 0x06U, 0x13U, 0x02U, 0x4BU, 0x52U, 0x31U, 0x13U, 0x30U, 0x11U,
+    0x06U, 0x03U, 0x55U, 0x04U, 0x0AU, 0x0CU, 0x0AU, 0x53U, 0x61U, 0x66U, 0x65U, 0x43U, 0x20U, 0x54U, 0x65U, 0x73U,
+    0x74U, 0x31U, 0x18U, 0x30U, 0x16U, 0x06U, 0x03U, 0x55U, 0x04U, 0x03U, 0x0CU, 0x0FU, 0x77U, 0x77U, 0x77U, 0x2EU,
+    0x45U, 0x78U, 0x61U, 0x6DU, 0x70U, 0x6CU, 0x65U, 0x2EU, 0x63U, 0x6FU, 0x6DU, 0x30U, 0x1EU, 0x17U, 0x0DU, 0x32U,
+    0x36U, 0x31U, 0x30U, 0x32U, 0x31U, 0x31U, 0x32U, 0x32U, 0x39U, 0x30U, 0x35U, 0x5AU, 0x17U, 0x0DU, 0x33U, 0x36U,
+    0x31U, 0x30U, 0x31U, 0x38U, 0x31U, 0x32U, 0x32U, 0x39U, 0x30U, 0x35U, 0x5AU, 0x30U, 0x3CU, 0x31U, 0x0BU, 0x30U,
+    0x09U, 0x06U, 0x03U, 0x55U, 0x04U, 0x06U, 0x13U, 0x02U, 0x4BU, 0x52U, 0x31U, 0x13U, 0x30U, 0x11U, 0x06U, 0x03U,
+    0x55U, 0x04U, 0x0AU, 0x0CU, 0x0AU, 0x53U, 0x61U, 0x66U, 0x65U, 0x43U, 0x20U, 0x54U, 0x65U, 0x73U, 0x74U, 0x31U,
+    0x18U, 0x30U, 0x16U, 0x06U, 0x03U, 0x55U, 0x04U, 0x03U, 0x0CU, 0x0FU, 0x77U, 0x77U, 0x77U, 0x2EU, 0x45U, 0x78U,
+    0x61U, 0x6DU, 0x70U, 0x6CU, 0x65U, 0x2EU, 0x63U, 0x6FU, 0x6DU, 0x30U, 0x59U, 0x30U, 0x13U, 0x06U, 0x07U, 0x2AU,
+    0x86U, 0x48U, 0xCEU, 0x3DU, 0x02U, 0x01U, 0x06U, 0x08U, 0x2AU, 0x86U, 0x48U, 0xCEU, 0x3DU, 0x03U, 0x01U, 0x07U,
+    0x03U, 0x42U, 0x00U, 0x04U, 0x75U, 0xA5U, 0xD0U, 0x54U, 0x98U, 0x93U, 0x28U, 0xF8U, 0xC0U, 0x02U, 0x6FU, 0xB0U,
+    0x78U, 0x13U, 0x38U, 0x9BU, 0xEEU, 0xE6U, 0xF5U, 0x08U, 0xE4U, 0x0AU, 0x9CU, 0xFBU, 0x54U, 0xB0U, 0x20U, 0x26U,
+    0x31U, 0xD0U, 0x44U, 0x6EU, 0xA1U, 0x62U, 0xE2U, 0x1BU, 0xFDU, 0x96U, 0xBDU, 0x84U, 0x2FU, 0xF4U, 0xA6U, 0xD3U,
+    0xB0U, 0x9BU, 0x2FU, 0xC1U, 0x8FU, 0xFEU, 0xBEU, 0x44U, 0x5CU, 0x29U, 0x86U, 0x6FU, 0xD2U, 0x0DU, 0xC9U, 0x66U,
+    0x55U, 0xE4U, 0x19U, 0x86U, 0xA3U, 0x7AU, 0x30U, 0x78U, 0x30U, 0x1DU, 0x06U, 0x03U, 0x55U, 0x1DU, 0x0EU, 0x04U,
+    0x16U, 0x04U, 0x14U, 0xFDU, 0x9DU, 0x77U, 0x5CU, 0xC6U, 0x81U, 0x3AU, 0x2CU, 0xB6U, 0x9BU, 0x96U, 0xE1U, 0xC5U,
+    0x64U, 0xC5U, 0x97U, 0xFBU, 0x5DU, 0xF9U, 0xCFU, 0x30U, 0x1FU, 0x06U, 0x03U, 0x55U, 0x1DU, 0x23U, 0x04U, 0x18U,
+    0x30U, 0x16U, 0x80U, 0x14U, 0xFDU, 0x9DU, 0x77U, 0x5CU, 0xC6U, 0x81U, 0x3AU, 0x2CU, 0xB6U, 0x9BU, 0x96U, 0xE1U,
+    0xC5U, 0x64U, 0xC5U, 0x97U, 0xFBU, 0x5DU, 0xF9U, 0xCFU, 0x30U, 0x25U, 0x06U, 0x03U, 0x55U, 0x1DU, 0x11U, 0x04U,
+    0x1EU, 0x30U, 0x1CU, 0x82U, 0x0BU, 0x65U, 0x78U, 0x61U, 0x6DU, 0x70U, 0x6CU, 0x65U, 0x2EU, 0x63U, 0x6FU, 0x6DU,
+    0x82U, 0x0DU, 0x2AU, 0x2EU, 0x45U, 0x78U, 0x61U, 0x6DU, 0x70U, 0x6CU, 0x65U, 0x2EU, 0x6FU, 0x72U, 0x67U, 0x30U,
+    0x0FU, 0x06U, 0x03U, 0x55U, 0x1DU, 0x13U, 0x01U, 0x01U, 0xFFU, 0x04U, 0x05U, 0x30U, 0x03U, 0x01U, 0x01U, 0xFFU,
+    0x30U, 0x0AU, 0x06U, 0x08U, 0x2AU, 0x86U, 0x48U, 0xCEU, 0x3DU, 0x04U, 0x03U, 0x02U, 0x03U, 0x47U, 0x00U, 0x30U,
+    0x44U, 0x02U, 0x20U, 0x6DU, 0x53U, 0xF9U, 0xF8U, 0x85U, 0x5EU, 0xF3U, 0x84U, 0xADU, 0x63U, 0x5BU, 0xF1U, 0x0AU,
+    0x56U, 0xD1U, 0x16U, 0xC0U, 0x56U, 0x17U, 0xDFU, 0xD7U, 0x84U, 0x72U, 0xB5U, 0x41U, 0x7AU, 0x5EU, 0xC6U, 0xB5U,
+    0x8BU, 0x80U, 0xB6U, 0x02U, 0x20U, 0x6BU, 0x98U, 0x05U, 0x76U, 0x77U, 0xFEU, 0x9FU, 0x75U, 0x88U, 0x4CU, 0x98U,
+    0xFAU, 0x0CU, 0xC1U, 0xF9U, 0xDDU, 0xA7U, 0x6FU, 0x73U, 0x92U, 0x6FU, 0xC4U, 0xA5U, 0xD0U, 0xF6U, 0xE9U, 0x79U,
+    0xBDU, 0xB3U, 0x5AU, 0x1AU, 0xE8U
+};
+
+void t_x509() {
+    unsafe {
+        struct X509Cert c;
+        ASSERT_EQ(x509_parse_der(&kCertDer[0], 485UL, &c), 0);
+        ASSERT_STR_EQ((const char*)c.subject.cn, "www.Example.com");
+        ASSERT_STR_EQ((const char*)c.subject.o, "SafeC Test");
+        ASSERT_STR_EQ((const char*)c.subject.c, "KR");
+        ASSERT_STR_EQ((const char*)c.issuer.cn, "www.Example.com");
+        ASSERT_EQ(c.serial_len, 2);
+        ASSERT_EQ(c.serial[0], 0x12);
+        ASSERT_EQ(c.serial[1], 0x34);
+        test_assert_eq_u(c.validity.not_before, 1792585745ULL, "not_before", __FILE__, __LINE__);
+        test_assert_eq_u(c.validity.not_after, 2107945745ULL, "not_after", __FILE__, __LINE__);
+        ASSERT_TRUE(c.is_valid_at(1900000000ULL));
+        ASSERT_FALSE(c.is_valid_at(1700000000ULL));
+        ASSERT_TRUE(c.is_ca_cert());
+        ASSERT_EQ(c.san.count, 2);
+        ASSERT_TRUE(c.pubkey_len > 60UL);
+        // DNS names match case-insensitively; '*.' covers one label; the CN
+        // is ignored because the certificate has DNS SANs (RFC 6125).
+        ASSERT_TRUE(c.matches_hostname("example.com"));
+        ASSERT_TRUE(c.matches_hostname("EXAMPLE.com"));
+        ASSERT_TRUE(c.matches_hostname("api.example.org"));
+        ASSERT_FALSE(c.matches_hostname("a.b.example.org"));
+        ASSERT_FALSE(c.matches_hostname("www.example.com"));
+        ASSERT_TRUE(x509_verify_chain(&c, &c));
+        ASSERT_TRUE(x509_parse_der(&kCertDer[0], 40UL, &c) != 0);   // truncated
+    }
+}
+
+void t_tls_record() {
+    unsafe {
+        struct TlsSession a = tls_session_init();
+        struct TlsSession b = tls_session_init();
+        unsigned char out[256];
+        unsigned char got[256];
+        unsigned char ct = (unsigned char)0;
+        // Plaintext records before the handshake.
+        unsigned long n = a.encode_record((unsigned char)TLS_HANDSHAKE, (const unsigned char*)"hello", 5UL, &out[0], 256UL);
+        ASSERT_EQ(n, 10);
+        ASSERT_EQ(out[0], TLS_HANDSHAKE);
+        ASSERT_EQ(out[4], 5);
+        ASSERT_EQ(b.decode_record(&out[0], n, &ct, &got[0], 256UL), 5);
+        ASSERT_EQ(ct, TLS_HANDSHAKE);
+        ASSERT_FALSE(a.is_established());
+
+        unsigned char k1[32];
+        unsigned char k2[32];
+        unsigned char iv1[12];
+        unsigned char iv2[12];
+        int i = 0;
+        while (i < 32) { k1[i] = (unsigned char)i; k2[i] = (unsigned char)(100 + i); i = i + 1; }
+        i = 0;
+        while (i < 12) { iv1[i] = (unsigned char)(7 * i); iv2[i] = (unsigned char)(3 + i); i = i + 1; }
+        a.install_keys(k1, iv1, k2, iv2);
+        b.install_keys(k2, iv2, k1, iv1);
+        ASSERT_TRUE(a.is_established());          // installing keys turns protection on
+
+        // A record that doesn't fit is refused without consuming a sequence number.
+        ASSERT_EQ(a.encode_record((unsigned char)TLS_APPLICATION_DATA, (const unsigned char*)"secret data", 11UL, &out[0], 8UL), 0);
+        ASSERT_EQ(a.write_seq, 0);
+        int round = 0;
+        while (round < 3) {
+            n = a.encode_record((unsigned char)TLS_APPLICATION_DATA, (const unsigned char*)"secret data", 11UL, &out[0], 256UL);
+            ASSERT_EQ(n, 5UL + 16UL);
+            ASSERT_EQ(out[0], TLS_APPLICATION_DATA);
+            ASSERT_EQ(b.decode_record(&out[0], n, &ct, &got[0], 256UL), 11);
+            ASSERT_EQ(ct, TLS_APPLICATION_DATA);
+            ASSERT_EQ(safe_memcmp((const &unsigned char)&got[0], (const &unsigned char)"secret data", 11UL), 0);
+            round = round + 1;
+        }
+        n = a.build_alert((unsigned char)TLS_ALERT_FATAL, (unsigned char)TLS_ALERT_CLOSE_NOTIFY, &out[0], 256UL);
+        ASSERT_EQ(b.decode_record(&out[0], n, &ct, &got[0], 256UL), 2);
+        ASSERT_EQ(ct, TLS_ALERT);
+        ASSERT_EQ(got[0], TLS_ALERT_FATAL);
+        ASSERT_EQ(b.decode_record(&out[0], 4UL, &ct, &got[0], 256UL), 0);   // short header
+        unsigned char nonce[12];
+        a.compute_nonce(nonce, 1);
+        ASSERT_EQ(nonce[11], iv1[11] ^ 4);   // write_seq is 4 now
+
+        struct TlsTranscript tr;
+        tr.hash = sha256_init();
+        tr.update((const unsigned char*)"abc", 3UL);
+        unsigned char d[32];
+        char hex[80];
+        tr.finish(d);
+        to_hex(d, 32UL, hex);
+        ASSERT_STR_EQ(hex, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    }
+}
+
+void t_crypto_misc() {
+    unsafe {
+        unsigned char d[64];
+        char hex[160];
+        struct Sha1Ctx s1 = sha1_init();
+        s1.update((const unsigned char*)"a", 1UL);
+        s1.update((const unsigned char*)"bc", 2UL);
+        s1.finish(d);
+        to_hex(d, 20UL, hex);
+        ASSERT_STR_EQ(hex, "a9993e364706816aba3e25717850c26c9cd0d89d");
+        struct Sha512Ctx s5 = sha512_init();
+        s5.update((const unsigned char*)"ab", 2UL);
+        s5.update((const unsigned char*)"c", 1UL);
+        s5.finish(d);
+        to_hex(d, 64UL, hex);
+        ASSERT_STR_EQ(hex, "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f");
+
+        struct SecureAllocator sa = secure_alloc_new(32UL, 4UL);
+        ASSERT_EQ(sa.available(), 4);
+        &heap void p = sa.alloc();
+        safe_memset((&unsigned char)p, 0x5A, 32UL);
+        ASSERT_EQ(sa.available(), 3);
+        sa.dealloc((?&heap void)p);
+        ASSERT_EQ(sa.available(), 4);
+        sa.destroy();
+
+        ASSERT_TRUE(ascii_is_alpha('g'));
+        ASSERT_FALSE(ascii_is_alpha('1'));
+        ASSERT_TRUE(ascii_is_alnum('1'));
+        ASSERT_TRUE(ascii_is_upper('G'));
+        ASSERT_FALSE(ascii_is_upper('g'));
+        ASSERT_TRUE(ascii_is_print('~'));
+        ASSERT_FALSE(ascii_is_print((char)9));
+        ASSERT_EQ(ascii_to_lower('Q'), 'q');
+        ASSERT_TRUE(ascii_is_valid_n("ab\xC3", 2UL));
+        ASSERT_FALSE(ascii_is_valid_n("ab\xC3", 3UL));
+    }
+}
+
 int main() {
     struct TestSuite t = test_suite_init();
     unsafe {
@@ -205,6 +399,10 @@ int main() {
         t.add("base64", t_base64);
         t.add("url", t_url);
         t.add("utf8/ascii", t_utf8);
+        t.add("rng chacha20 vectors", t_rng_kat);
+        t.add("x509", t_x509);
+        t.add("tls record layer", t_tls_record);
+        t.add("sha streaming/secure_alloc/ascii", t_crypto_misc);
     }
     t.run();
     t.print_summary();

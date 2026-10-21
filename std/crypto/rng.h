@@ -1,7 +1,7 @@
 // SafeC Standard Library — Cryptographic RNG
-// Hardware-backed (rdrand on x86-64, or /dev/urandom on hosted).
-// Falls back to a ChaCha20-based CSPRNG seeded from a timer or user seed.
-// Freestanding-safe when hardware entropy source is available.
+// A ChaCha20 keystream generator, seeded from rdrand (x86-64) or
+// /dev/urandom (hosted), or from a caller-supplied 32-byte seed.
+// Freestanding-safe with rng_init_seed() or rdrand.
 #pragma once
 
 #define RNG_BLOCK_SIZE 64   // ChaCha20 output block (bytes)
@@ -20,14 +20,15 @@ struct RngCtx {
     unsigned int  rand32();
 
     // Return a random 64-bit unsigned integer.
-    unsigned long rand64();
+    unsigned long long rand64();
 
     // Return a uniform random integer in [0, bound).
     unsigned long rand_range(unsigned long bound);
 };
 
-// Initialise with automatic seeding (hardware entropy or /dev/urandom).
-// Returns 1 on success, 0 if no entropy source available.
+// Initialise with automatic seeding (rdrand on x86-64, else /dev/urandom).
+// Returns 1; aborts with a diagnostic if no entropy source is available
+// (use rng_init_seed() with your own entropy source on such targets).
 int rng_init(&RngCtx ctx);
 
 // Initialise with a user-provided 32-byte seed (deterministic; useful for tests).

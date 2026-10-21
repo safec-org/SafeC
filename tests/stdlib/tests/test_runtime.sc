@@ -1,6 +1,6 @@
 // std::alloc (bump/slab/pool/tlsf), heap, result, thread/atomic, std::sync
 // (spinlock/mpsc/lockfree/channel/task/thread_bare), time, io_file,
-// test/bench+fuzz, simd
+// test/bench+fuzz, simd (+ vmath, sgemm, cpu), ipc (pipe, uds)
 #include <std/test/test.h>
 #include <std/test/bench.h>
 #include <std/test/fuzz.h>
@@ -26,6 +26,13 @@
 #include <std/sync/thread_bare.h>
 #include <std/sync/parallel.h>
 #include <std/simd/simd.h>
+#include <std/simd/vmath.h>
+#include <std/simd/gemm.h>
+#include <std/simd/cpu.h>
+#include <std/math.h>
+#include <std/ipc/pipe.h>
+#include <std/ipc/uds.h>
+#include <std/sched/io_nb.h>
 #include <std/reactive/signal.h>
 
 struct Pkt { long long id; int len; };
@@ -590,6 +597,210 @@ void t_simd() {
     }
 }
 
+static int near_f(float a, float b, float eps) {
+    float d = a - b;
+    if (d < (float)0.0) d = -d;
+    return d <= eps;
+}
+
+void t_simd_more() {
+    unsafe {
+        double d2[2];
+        d2[0] = 1.5; d2[1] = -2.0;
+        f64x2 vd = simd_load_f64x2((const double*)d2);
+        f64x2 fd = simd_fma_f64x2(vd, simd_splat_f64x2(2.0), simd_splat_f64x2(1.0));
+        simd_store_f64x2(fd, (double*)d2);
+        ASSERT_TRUE(d2[0] == 4.0 && d2[1] == -3.0);
+        ASSERT_TRUE(simd_hsum_f64x2(fd) == 1.0);
+        double d4[4];
+        d4[0] = 1.0; d4[1] = 2.0; d4[2] = 3.0; d4[3] = 4.0;
+        f64x4 v4 = simd_fma_f64x4(simd_load_f64x4((const double*)d4), simd_splat_f64x4(2.0), simd_splat_f64x4(0.5));
+        ASSERT_TRUE(simd_hsum_f64x4(v4) == 22.0);
+        float f4[4];
+        f4[0] = (float)3.0; f4[1] = (float)-1.0; f4[2] = (float)7.0; f4[3] = (float)2.0;
+        f32x4 a = simd_load_f32x4((const float*)f4);
+        ASSERT_TRUE(simd_hmin_f32x4(a) == (float)-1.0);
+        f32x4 mx = simd_max_f32x4(a, simd_splat_f32x4((float)2.5));
+        simd_store_f32x4(mx, (float*)f4);
+        ASSERT_TRUE(f4[1] == (float)2.5 && f4[2] == (float)7.0);
+        ASSERT_TRUE(simd_hsum_f32x4(simd_min_f32x4(a, simd_splat_f32x4((float)0.0))) == (float)-1.0);
+        float f8[8];
+        int i = 0;
+        while (i < 8) { f8[i] = (float)(i - 4); i = i + 1; }
+        f32x8 v8 = simd_max_f32x8(simd_load_f32x8((const float*)f8), simd_splat_f32x8((float)0.0));
+        ASSERT_TRUE(simd_hsum_f32x8(v8) == (float)6.0);
+        int i8[8];
+        i = 0;
+        while (i < 8) { i8[i] = i * 3; i = i + 1; }
+        i32x8 vi8 = simd_load_i32x8((const int*)i8);
+        ASSERT_EQ(simd_hsum_i32x8(vi8), 84);
+        int i4[4];
+        simd_store_i32x4(simd_min_i32x4(simd_splat_i32x4(5), simd_load_i32x4((const int*)i8)), (int*)i4);
+        ASSERT_EQ(i4[3], 5);
+        unsigned int u4[4];
+        u4[0] = 1u; u4[1] = 2u; u4[2] = 3u; u4[3] = 4000000000u;
+        u32x4 vu = simd_load_u32x4((const unsigned int*)u4);
+        simd_store_u32x4(vu, (unsigned int*)u4);
+        test_assert_eq_u(simd_hsum_u32x4(simd_splat_u32x4(1000000000u)), 4000000000ULL, "hsum u32", __FILE__, __LINE__);
+        signed char sb[16];
+        i = 0;
+        while (i < 16) { sb[i] = (signed char)(i - 8); i = i + 1; }
+        signed char sb2[16];
+        simd_store_i8x16(simd_load_i8x16((const signed char*)sb), (signed char*)sb2);
+        ASSERT_EQ(sb2[0], -8);
+        ASSERT_EQ(sb2[15], 7);
+
+        // vmath against libm
+        float x[9];
+        float y[9];
+        i = 0;
+        while (i < 9) { x[i] = (float)(i - 4) * (float)1.5; i = i + 1; }
+        int ok = 1;
+        vm_exp_f32((const float*)x, (float*)y, 9UL);
+        i = 0;
+        while (i < 9) { if (!near_f(y[i], exp_f(x[i]), exp_f(x[i]) * (float)1e-5)) ok = 0; i = i + 1; }
+        ASSERT_TRUE(ok);
+        vm_tanh_f32((const float*)x, (float*)y, 9UL);
+        i = 0;
+        while (i < 9) { if (!near_f(y[i], tanh_f(x[i]), (float)1e-5)) ok = 0; i = i + 1; }
+        ASSERT_TRUE(ok);
+        vm_sigmoid_f32((const float*)x, (float*)y, 9UL);
+        i = 0;
+        while (i < 9) {
+            float ref = (float)1.0 / ((float)1.0 + exp_f(-x[i]));
+            if (!near_f(y[i], ref, (float)1e-5)) ok = 0;
+            i = i + 1;
+        }
+        ASSERT_TRUE(ok);
+
+        // sgemm against a naive product (odd sizes hit the edge paths)
+        unsigned long m = 7UL;
+        unsigned long n = 5UL;
+        unsigned long k = 9UL;
+        float A[63];
+        float B[45];
+        float C[35];
+        float R[35];
+        i = 0;
+        while (i < 63) { A[i] = (float)((i * 7) % 11) - (float)5.0; i = i + 1; }
+        i = 0;
+        while (i < 45) { B[i] = (float)((i * 5) % 13) * (float)0.25; i = i + 1; }
+        unsigned long r = 0UL;
+        while (r < m) {
+            unsigned long cc = 0UL;
+            while (cc < n) {
+                float acc = (float)0.0;
+                unsigned long p = 0UL;
+                while (p < k) { acc = acc + A[r * k + p] * B[p * n + cc]; p = p + 1UL; }
+                R[r * n + cc] = (float)2.0 * acc + (float)1.0;
+                C[r * n + cc] = (float)1.0;
+                cc = cc + 1UL;
+            }
+            r = r + 1UL;
+        }
+        sgemm(SGEMM_NO_TRANS, SGEMM_NO_TRANS, m, n, k, (float)2.0, (const float*)A, k,
+              (const float*)B, n, (float)1.0, (float*)C, n);
+        i = 0;
+        while (i < 35) { if (!near_f(C[i], R[i], (float)1e-3)) ok = 0; i = i + 1; }
+        ASSERT_TRUE(ok);
+        sgemm_serial(SGEMM_NO_TRANS, SGEMM_NO_TRANS, m, n, k, (float)2.0, (const float*)A, k,
+                     (const float*)B, n, (float)0.0, (float*)C, n);
+        i = 0;
+        while (i < 35) { if (!near_f(C[i] + (float)1.0, R[i], (float)1e-3)) ok = 0; i = i + 1; }
+        ASSERT_TRUE(ok);
+        ASSERT_TRUE(sgemm_vendor() == 0 || sgemm_vendor() == 1);
+        ASSERT_TRUE(str_len(sgemm_backend()) > 0UL);
+        int lvl = simd_level();
+        ASSERT_TRUE(lvl >= SIMD_SCALAR);
+        ASSERT_TRUE(str_len(simd_level_name(lvl)) > 0UL);
+        ASSERT_STR_EQ(simd_level_name(SIMD_AVX2), "AVX2");
+    }
+}
+
+void t_ipc() {
+    unsafe {
+        struct Pipe p;
+        ASSERT_EQ(pipe_create(&p), 0);
+        ASSERT_EQ(pipe_set_read_nonblocking(&p), 0);
+        unsigned char buf[16];
+        // Empty non-blocking pipe: returns at once instead of blocking.
+        ASSERT_EQ(pipe_read(&p, &buf[0], 16UL), -1);
+        ASSERT_TRUE(sock_would_block());
+        ASSERT_EQ(pipe_set_write_nonblocking(&p), 0);
+        ASSERT_EQ(pipe_write(&p, (const unsigned char*)"ping", 4UL), 4);
+        ASSERT_EQ(pipe_read(&p, &buf[0], 16UL), 4);
+        ASSERT_EQ(buf[3], 'g');
+        ASSERT_EQ(pipe_close_write(&p), 0);
+        ASSERT_EQ(pipe_read(&p, &buf[0], 16UL), 0);          // EOF
+        ASSERT_EQ(pipe_close_read(&p), 0);
+
+        const &char path = "/tmp/safec_std_test_uds.sock";
+        ASSERT_EQ(uds_unlink(path), 0);                      // missing is fine
+        int lfd = uds_listen_nb(path);
+        ASSERT_TRUE(lfd >= 0);
+        ASSERT_EQ(uds_accept_nb(lfd), -1);                   // nobody yet
+        int cfd = uds_connect_nb(path);
+        ASSERT_TRUE(cfd >= 0);
+        int sfd = -1;
+        int tries = 0;
+        while (sfd < 0 && tries < 1000) { sfd = uds_accept_nb(lfd); tries = tries + 1; }
+        ASSERT_TRUE(sfd >= 0);
+        ASSERT_EQ(uds_listen_nb(path), -1);                  // path still bound
+        ASSERT_EQ(sched_htons((unsigned short)0x1234), 0x3412);
+        ASSERT_EQ(uds_unlink(path), 0);
+        ASSERT_EQ(uds_listen_nb("/tmp/a-path-that-is-far-too-long-for-sun-path-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"), -1);
+    }
+}
+
+static unsigned long long g_cmtx = 0ULL;
+static unsigned long long g_cond = 0ULL;
+static int g_ready = 0;
+
+static ?&int signaller(?&int arg) {
+    unsafe {
+        time_sleep_ns(2000000LL);
+        mutex_lock(&g_cmtx);
+        g_ready = 1;
+        cond_signal(&g_cond);
+        mutex_unlock(&g_cmtx);
+    }
+    return null;
+}
+
+void t_cond_trylock() {
+    unsafe {
+        ASSERT_EQ(mutex_init(&g_cmtx), 0);
+        ASSERT_EQ(cond_init(&g_cond), 0);
+        unsigned long long tid = 0ULL;
+        ASSERT_EQ(thread_create(&tid, signaller, null), 0);
+        mutex_lock(&g_cmtx);
+        while (g_ready == 0) { cond_wait(&g_cond, &g_cmtx); }
+        ASSERT_TRUE(mutex_trylock(&g_cmtx) != 0);   // already held
+        mutex_unlock(&g_cmtx);
+        thread_join(tid);
+        ASSERT_EQ(g_ready, 1);
+        ASSERT_EQ(mutex_trylock(&g_cmtx), 0);
+        mutex_unlock(&g_cmtx);
+        // timed wait with nobody signalling times out
+        mutex_lock(&g_cmtx);
+        ASSERT_TRUE(cond_timedwait_ms(&g_cond, &g_cmtx, 5UL) != 0);
+        mutex_unlock(&g_cmtx);
+        cond_destroy(&g_cond);
+        mutex_destroy(&g_cmtx);
+
+        unsigned long long rw = 0ULL;
+        ASSERT_EQ(rwlock_init(&rw), 0);
+        ASSERT_EQ(rwlock_tryrdlock(&rw), 0);
+        ASSERT_EQ(rwlock_tryrdlock(&rw), 0);       // shared
+        ASSERT_TRUE(rwlock_trywrlock(&rw) != 0);    // readers hold it
+        rwlock_rdunlock(&rw);
+        rwlock_rdunlock(&rw);
+        ASSERT_EQ(rwlock_trywrlock(&rw), 0);
+        rwlock_wrunlock(&rw);
+        rwlock_destroy(&rw);
+    }
+}
+
 int main() {
     struct TestSuite t = test_suite_init();
     unsafe {
@@ -608,6 +819,9 @@ int main() {
         t.add("io_file", t_file);
         t.add("bench/fuzz", t_bench_fuzz);
         t.add("simd", t_simd);
+        t.add("simd ops/vmath/sgemm/cpu", t_simd_more);
+        t.add("ipc pipe/uds", t_ipc);
+        t.add("cond/trylock/rwlock try", t_cond_trylock);
     }
     t.run();
     t.print_summary();

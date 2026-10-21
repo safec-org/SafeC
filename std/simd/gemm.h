@@ -50,6 +50,6 @@ void sgemm_serial(int transA, int transB, unsigned long m, unsigned long n, unsi
 // (BLIS)", "oneMKL", "Accelerate", "OpenBLAS", "CBLAS" (another library) or
 // "built-in".
 int sgemm_vendor();
-const char* sgemm_backend();
+const &char sgemm_backend();
 
 } // namespace std

@@ -349,6 +349,68 @@ void t_drivers() {
     ASSERT_EQ(eng.moved, 256);
 }
 
+void t_build_parse() {
+    unsafe {
+        struct PacketBuf pkt;
+        pkt.reset();
+        unsigned int src = net_ip4((unsigned char)10, (unsigned char)1, (unsigned char)2, (unsigned char)3);
+        unsigned int dst = net_ip4((unsigned char)10, (unsigned char)9, (unsigned char)8, (unsigned char)7);
+        unsigned long p = ipv4_build(&pkt, 0UL, (unsigned char)17, src, dst, (unsigned short)8);
+        ASSERT_EQ(p, IPV4_HDR_LEN);
+        pkt.len = p + 8UL;
+        struct Ipv4Hdr h4;
+        ASSERT_EQ(ipv4_parse(&pkt, 0UL, &h4), 0);
+        ASSERT_EQ(h4.proto, 17);
+        ASSERT_EQ(h4.total_len, IPV4_HDR_LEN + 8);
+        ASSERT_TRUE(h4.src == src && h4.dst == dst);
+
+        struct Ipv6Addr a;
+        struct Ipv6Addr b;
+        safe_memset((&Ipv6Addr)&a, 0, sizeof(struct Ipv6Addr));
+        safe_memset((&Ipv6Addr)&b, 0, sizeof(struct Ipv6Addr));
+        a.bytes[15] = (unsigned char)1;
+        b.bytes[0] = (unsigned char)0x20; b.bytes[1] = (unsigned char)0x01;
+        pkt.reset();
+        p = ipv6_build(&pkt, 0UL, (unsigned char)6, (unsigned char)64, &a, &b, (unsigned short)20);
+        ASSERT_EQ(p, 40);
+        pkt.len = p + 20UL;
+        struct Ipv6Hdr h6;
+        ASSERT_EQ(ipv6_parse(&pkt, 0UL, &h6), 0);
+        ASSERT_EQ(h6.next_hdr, 6);
+        ASSERT_EQ(h6.hop_limit, 64);
+        ASSERT_EQ(h6.payload_len, 20);
+        ASSERT_TRUE(ipv6_addr_eq(&h6.src, &a));
+        ASSERT_TRUE(ipv6_addr_eq(&h6.dst, &b));
+
+        // A 20-byte TCP header written by hand: ports 1234 -> 80, SYN|ACK.
+        pkt.reset();
+        unsigned char tcp[20];
+        int i = 0;
+        while (i < 20) { tcp[i] = (unsigned char)0; i = i + 1; }
+        tcp[0] = (unsigned char)0x04; tcp[1] = (unsigned char)0xD2;
+        tcp[2] = (unsigned char)0x00; tcp[3] = (unsigned char)0x50;
+        tcp[4] = (unsigned char)0x00; tcp[5] = (unsigned char)0x00; tcp[6] = (unsigned char)0x01; tcp[7] = (unsigned char)0x00;
+        tcp[12] = (unsigned char)0x50;           // data offset 5 words
+        tcp[13] = (unsigned char)0x12;           // SYN + ACK
+        tcp[14] = (unsigned char)0x10; tcp[15] = (unsigned char)0x00;
+        i = 0;
+        while (i < 20) { pkt.data[i] = tcp[i]; i = i + 1; }
+        pkt.len = 20UL;
+        struct TcpHdr th;
+        ASSERT_EQ(tcp_parse(&pkt, 0UL, &th), 0);
+        ASSERT_EQ(th.src_port, 1234);
+        ASSERT_EQ(th.dst_port, 80);
+        ASSERT_EQ(th.seq, 256);
+        ASSERT_EQ(th.flags, 0x12);
+        ASSERT_EQ(th.window, 4096);
+        pkt.len = 10UL;
+        ASSERT_EQ(tcp_parse(&pkt, 0UL, &th), -1);   // truncated
+        pkt.len = 20UL;
+        pkt.data[12] = (unsigned char)0x60;      // claims 24 header bytes
+        ASSERT_EQ(tcp_parse(&pkt, 0UL, &th), -1);
+    }
+}
+
 int main() {
     struct TestSuite t = test_suite_init();
     unsafe {
@@ -360,6 +422,7 @@ int main() {
         t.add("dhcp", t_dhcp);
         t.add("tcp handshake+data+fin", t_tcp);
         t.add("netif/dma drivers", t_drivers);
+        t.add("ipv4/ipv6/tcp header build+parse", t_build_parse);
     }
     t.run();
     t.print_summary();

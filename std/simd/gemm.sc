@@ -294,7 +294,7 @@ static void gemm_vendor_tile_(const &GemmJob j, unsigned long i0, unsigned long 
 #endif
 }
 
-const char* sgemm_backend() {
+const &char sgemm_backend() {
 #if GEMM_VENDOR
     if (!gemm_vendor_linked_()) return "built-in";
     unsafe {

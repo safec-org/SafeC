@@ -5,10 +5,13 @@
 namespace std {
 
 inline void FrameAllocator::init(unsigned long total_frames) {
+    // The bitmap tracks at most FRAME_BITMAP_SIZE * 32 frames.
+    unsigned long maxFrames = (unsigned long)FRAME_BITMAP_SIZE * (unsigned long)32;
+    if (total_frames > maxFrames) { total_frames = maxFrames; }
     self.total_frames = total_frames;
     self.used_frames  = (unsigned long)0;
     int i = 0;
-    while (i < 4096) {
+    while (i < FRAME_BITMAP_SIZE) {
         self.bitmap[i] = (unsigned int)0;
         i = i + 1;
     }
@@ -25,8 +28,9 @@ inline int FrameAllocator::ctz32_(unsigned int x) const {
 }
 
 inline long long FrameAllocator::alloc() {
-    unsigned long max_idx = self.total_frames / (unsigned long)32;
-    if (max_idx > (unsigned long)4096) { max_idx = (unsigned long)4096; }
+    // Round up: a partial last word still holds frames.
+    unsigned long max_idx = (self.total_frames + (unsigned long)31) / (unsigned long)32;
+    if (max_idx > (unsigned long)FRAME_BITMAP_SIZE) { max_idx = (unsigned long)FRAME_BITMAP_SIZE; }
 
     unsigned long i = (unsigned long)0;
     while (i < max_idx) {
@@ -48,6 +52,7 @@ inline void FrameAllocator::free(unsigned long frame) {
     if (frame >= self.total_frames) { return; }
     unsigned long idx = frame / (unsigned long)32;
     int bit = (int)(frame & (unsigned long)31);
+    if ((self.bitmap[idx] & ((unsigned int)1 << bit)) == (unsigned int)0) { return; }  // already free
     self.bitmap[idx]  = self.bitmap[idx] & ~((unsigned int)1 << bit);
     self.used_frames  = self.used_frames - (unsigned long)1;
 }

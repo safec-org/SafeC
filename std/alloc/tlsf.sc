@@ -169,8 +169,11 @@ void* TlsfAllocator::find_(unsigned long size) {
     if (fl >= TLSF_FL_MAX) { return (void*)0; }
 
     unsafe {
-        unsigned int sl_map = self.sl_bitmap[fl] & ~(((unsigned int)1 << (sl + 1)) - (unsigned int)1);
+        // 'search' is already rounded up to a class whose every block fits,
+        // so that class itself (sl) is searched too, not only those above it.
+        unsigned int sl_map = self.sl_bitmap[fl] & ~(((unsigned int)1 << sl) - (unsigned int)1);
         if (sl_map == (unsigned int)0) {
+            if (fl + 1 >= TLSF_FL_MAX) { return (void*)0; }
             unsigned int fl_map = self.fl_bitmap & ~(((unsigned int)1 << (fl + 1)) - (unsigned int)1);
             if (fl_map == (unsigned int)0) {
                 return (void*)0;

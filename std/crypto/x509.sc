@@ -354,7 +354,7 @@ static int parse_san_(const unsigned char* buf, unsigned long buf_len,
 int x509_parse_der(const &unsigned char der_ref, unsigned long len,
                    &stack X509Cert cert_out) { const unsigned char* der = der_ref;
     unsafe {
-        memset((void*)&cert_out, 0, (unsigned long)sizeof(struct X509Cert));
+        memset((void*)cert_out, 0, (unsigned long)sizeof(struct X509Cert));   // the struct, not the reference
     }
 
     unsigned long pos = (unsigned long)0;
@@ -587,6 +587,22 @@ inline int X509Cert::is_ca_cert() const {
 }
 
 // Wildcard match: *.example.com matches sub.example.com but not a.b.example.com
+// DNS names compare case-insensitively (RFC 6125 §6.4.1).
+static int host_eq_(const char* a, const char* b) {
+    int i = 0;
+    unsafe {
+        while (a[i] != (char)0 && b[i] != (char)0) {
+            char x = a[i];
+            char y = b[i];
+            if (x >= 'A' && x <= 'Z') { x = (char)((int)x + 32); }
+            if (y >= 'A' && y <= 'Z') { y = (char)((int)y + 32); }
+            if (x != y) { return 0; }
+            i = i + 1;
+        }
+        return (a[i] == (char)0 && b[i] == (char)0) ? 1 : 0;
+    }
+}
+
 static int wildcard_match_(const char* pattern, const char* hostname) {
     // pattern must start with "*."
     unsafe {
@@ -598,7 +614,7 @@ static int wildcard_match_(const char* pattern, const char* hostname) {
         // suffix of hostname after the first '.' must match pattern+1
         const char* hs = hostname + i;      // ".example.com"
         const char* ps = pattern  + 1;      // ".example.com"
-        return str_eq_(hs, ps);
+        return host_eq_(hs, ps);
     }
 }
 
@@ -610,18 +626,20 @@ int X509Cert::matches_hostname(const &char hostname) const {
             if (name[0] == (char)'*') {
                 if (wildcard_match_(name, hostname) != 0) { return 1; }
             } else {
-                if (str_eq_(name, hostname) != 0) { return 1; }
+                if (host_eq_(name, hostname) != 0) { return 1; }
             }
         }
         i = i + 1;
     }
-    // Fallback: check CN
+    // The subject CN is only a fallback for certificates without DNS SANs
+    // (RFC 6125 §6.4.4).
+    if (self.san.count > 0) { return 0; }
     unsafe {
         const char* cn = (const char*)self.subject.cn;
         if (cn[0] == (char)'*') {
             if (wildcard_match_(cn, hostname) != 0) { return 1; }
         } else {
-            if (str_eq_(cn, hostname) != 0) { return 1; }
+            if (host_eq_(cn, hostname) != 0) { return 1; }
         }
     }
     return 0;

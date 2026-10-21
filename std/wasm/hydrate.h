@@ -25,6 +25,6 @@ void hydrate_bind_text_int_handle(&Signal<int> signal, int elementHandle);
 // Convenience: dom_get_element(selector) + hydrate_bind_text_int_handle().
 // Returns the resolved element handle (-1 if 'selector' matched nothing,
 // in which case no binding was registered).
-int hydrate_bind_text_int(&Signal<int> signal, const char* selector);
+int hydrate_bind_text_int(&Signal<int> signal, const &char selector);
 
 } // namespace std

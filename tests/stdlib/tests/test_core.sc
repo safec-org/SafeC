@@ -12,6 +12,14 @@
 #include <std/complex.h>
 #include <std/sys.h>
 #include <std/io.h>
+#include <std/atomic.h>
+#include <std/cmp.h>
+#include <std/fenv.h>
+#include <std/errno.h>
+#include <std/locale.h>
+#include <std/log.h>
+#include <std/time.h>
+#include <std/signal.h>
 
 static int near_d(double a, double b, double eps) {
     double d = a - b;
@@ -257,6 +265,289 @@ void t_sys() {
     }
 }
 
+// Edge cases the original suite missed: full-width bit fields, wrapped
+// results of checked arithmetic, and the less common math/complex/str APIs.
+void t_core_extra() {
+    unsafe {
+        test_assert_eq_u(bits32(0xDEADBEEFu, 0, 31), 0xDEADBEEFULL, "bits32 full", __FILE__, __LINE__);
+        test_assert_eq_u(bits64(0x0123456789ABCDEFULL, 0, 63), 0x0123456789ABCDEFULL, "bits64 full", __FILE__, __LINE__);
+        test_assert_eq_u(bits64(0xF0ULL, 4, 7), 0xFULL, "bits64", __FILE__, __LINE__);
+        test_assert_eq_u(set_bits32(0x12345678u, 0, 31, 0xCAFEBABEu), 0xCAFEBABEULL, "set_bits32 full", __FILE__, __LINE__);
+        test_assert_eq_u(rotl64(0x8000000000000001ULL, 4), 0x18ULL, "rotl64", __FILE__, __LINE__);
+        ASSERT_EQ(bsf32(0u), -1);
+        ASSERT_EQ(bsf32(0x50u), 4);
+        ASSERT_EQ(bsr32(0x50u), 6);
+
+        // ckd_*: the wrapped two's-complement result is stored on overflow.
+        int r = 0;
+        ASSERT_TRUE(ckd_add_i32(&r, 2147483647, 1));
+        ASSERT_EQ(r, -2147483647 - 1);
+        ASSERT_TRUE(ckd_sub_i32(&r, -2147483647 - 1, 1));
+        ASSERT_EQ(r, 2147483647);
+        long long r64 = 0LL;
+        ASSERT_TRUE(ckd_add_i64(&r64, 9223372036854775807LL, 2LL));
+        ASSERT_EQ(r64, -9223372036854775807LL);
+        ASSERT_TRUE(ckd_mul_i64(&r64, 4611686018427387904LL, 2LL));
+        ASSERT_EQ(r64, -9223372036854775807LL - 1LL);
+        ASSERT_FALSE(ckd_mul_i64(&r64, -3LL, 7LL));
+        ASSERT_EQ(r64, -21);
+        unsigned int u = 0u;
+        ASSERT_TRUE(ckd_add_u32(&u, 4294967295u, 2u));
+        ASSERT_EQ(u, 1);
+        ASSERT_TRUE(ckd_mul_u32(&u, 65536u, 65536u));
+        unsigned long long u64 = 0ULL;
+        ASSERT_TRUE(ckd_sub_u64(&u64, 0ULL, 1ULL));
+        test_assert_eq_u(u64, 18446744073709551615ULL, "ckd_sub_u64 wrap", __FILE__, __LINE__);
+
+        // str_ndup stops at the terminator.
+        ?&heap char nd = str_ndup("ab", 100UL);
+        ASSERT_STR_EQ(nd, "ab");
+        dealloc(nd);
+        ASSERT_STR_EQ(str_find_any("hello, world", ",!"), ", world");
+        ASSERT_TRUE(str_find_any("abc", "xyz").is_null());
+        const ?&unsigned char hit = mem_chr((const &unsigned char)"abcdef", 'd', 6UL);
+        match (hit) {
+            case null: { ASSERT_TRUE(0); }
+            case some(h): { ASSERT_EQ(h[0], 'd'); ASSERT_EQ(h[1], 'e'); }
+        }
+        ASSERT_TRUE(mem_chr((const &unsigned char)"abc", 'z', 3UL).is_null());
+
+        // float_clamp_to_ll rounds to nearest and handles NaN / the top end.
+        ASSERT_EQ(float_clamp_to_ll(2.6, 0LL, 100LL), 3);
+        ASSERT_EQ(float_clamp_to_ll(-2.6, -100LL, 100LL), -3);
+        ASSERT_EQ(float_clamp_to_ll(0.0 / 0.0, -5LL, 5LL), -5);
+        ASSERT_EQ(float_clamp_to_ll(1e300, 0LL, 9223372036854775807LL), 9223372036854775807LL);
+
+        // ctype / math odds and ends
+        ASSERT_TRUE(char_is_alnum('z'));
+        ASSERT_FALSE(char_is_alnum('-'));
+        ASSERT_TRUE(char_is_print(' '));
+        ASSERT_FALSE(char_is_print(127));
+        ASSERT_TRUE(char_is_upper('Q'));
+        ASSERT_TRUE(char_is_ctrl(10));
+        ASSERT_EQ(abs_ll(-7LL), 7);
+        ASSERT_EQ(max_int(3, 9), 9);
+        ASSERT_EQ(max_ll(-3LL, -9LL), -3);
+        ASSERT_EQ(clamp_ll(-50LL, -10LL, 10LL), -10);
+        ASSERT_TRUE(near_d((double)clamp_f((float)2.5, (float)0.0, (float)1.0), 1.0, 0.0));
+        ASSERT_TRUE(near_d((double)min_f((float)2.0, (float)-1.0), -1.0, 0.0));
+        ASSERT_TRUE(near_d(max_d(1.0, 2.0), 2.0, 0.0));
+        ASSERT_TRUE(near_d((double)pow_f((float)2.0, (float)8.0), 256.0, 1e-3));
+        ASSERT_TRUE(near_d((double)atan2_f((float)1.0, (float)1.0), PI_D() / 4.0, 1e-6));
+        ASSERT_TRUE(near_d((double)exp2_f((float)5.0), 32.0, 1e-4));
+        ASSERT_TRUE(near_d((double)log2_f((float)64.0), 6.0, 1e-5));
+        ASSERT_TRUE(near_d((double)hypot_f((float)5.0, (float)12.0), 13.0, 1e-5));
+        ASSERT_TRUE(near_d((double)copysign_f((float)3.0, (float)-0.5), -3.0, 0.0));
+        ASSERT_TRUE(near_d((double)floor_f((float)-1.5), -2.0, 0.0));
+        ASSERT_TRUE(near_d((double)round_f((float)2.5), 3.0, 0.0));
+        ASSERT_TRUE(near_d((double)tan_f((float)0.0), 0.0, 1e-7));
+        ASSERT_TRUE(near_d((double)acos_f((float)1.0), 0.0, 1e-6));
+        ASSERT_TRUE(near_d((double)cosh_f((float)0.0), 1.0, 1e-7));
+        ASSERT_TRUE(isinf_f((float)1e30 * (float)1e30));
+        ASSERT_FALSE(isfinite_d(INF_D()));
+        ASSERT_TRUE(isfinite_d(1.0));
+        ASSERT_TRUE(near_d(asin_d(1.0), PI_D() / 2.0, 1e-12));
+        ASSERT_TRUE(near_d(atan_d(1.0), PI_D() / 4.0, 1e-12));
+        ASSERT_TRUE(near_d(cbrt_d(27.0), 3.0, 1e-12));
+        ASSERT_TRUE(near_d(ceil_d(1.2), 2.0, 0.0));
+        ASSERT_TRUE(near_d(trunc_d(-1.7), -1.0, 0.0));
+        ASSERT_TRUE(near_d(fma_d(2.0, 3.0, 4.0), 10.0, 0.0));
+        ASSERT_TRUE(near_d(log_d(E_D()), 1.0, 1e-12));
+        ASSERT_TRUE(near_d(sinh_d(0.0), 0.0, 0.0));
+        ASSERT_TRUE(near_d(tanh_d(0.0), 0.0, 0.0));
+        ASSERT_TRUE(near_d(LN2_D(), 0.6931471805599453, 1e-15));
+        ASSERT_TRUE(near_d(SQRT2_D() * SQRT2_D(), 2.0, 1e-15));
+        ASSERT_TRUE(near_d((double)PI_F(), 3.14159265, 1e-6));
+
+        // single-precision complex
+        float a[2];
+        float b[2];
+        float o[2];
+        cmplx_f(a, (float)3.0, (float)4.0);
+        ASSERT_TRUE(near_d((double)cabs_f(a), 5.0, 1e-6));
+        ASSERT_TRUE(near_d((double)creal_f(a), 3.0, 0.0));
+        ASSERT_TRUE(near_d((double)cimag_f(a), 4.0, 0.0));
+        cconj_f(o, a);
+        ASSERT_TRUE(near_d((double)o[1], -4.0, 0.0));
+        cneg_f(o, a);
+        ASSERT_TRUE(near_d((double)o[0], -3.0, 0.0));
+        cmplx_f(b, (float)1.0, (float)-1.0);
+        cadd_f(o, a, b);
+        ASSERT_TRUE(near_d((double)o[0], 4.0, 0.0));
+        csub_f(o, a, b);
+        ASSERT_TRUE(near_d((double)o[1], 5.0, 0.0));
+        cmul_f(o, a, b);                          // (3+4i)(1-i) = 7+i
+        ASSERT_TRUE(near_d((double)o[0], 7.0, 1e-6));
+        ASSERT_TRUE(near_d((double)o[1], 1.0, 1e-6));
+        cdiv_f(o, o, b);
+        ASSERT_TRUE(near_d((double)o[0], 3.0, 1e-5));
+        cmplx_f(a, (float)0.0, (float)0.0);
+        cexp_f(o, a);
+        ASSERT_TRUE(near_d((double)o[0], 1.0, 1e-6));
+        cmplx_f(a, (float)-1.0, (float)0.0);
+        clog_f(o, a);                             // log(-1) = i*pi
+        ASSERT_TRUE(near_d((double)o[1], PI_D(), 1e-5));
+        ASSERT_TRUE(near_d((double)carg_f(a), PI_D(), 1e-5));
+        cmplx_f(b, (float)2.0, (float)0.0);
+        cmplx_f(a, (float)3.0, (float)0.0);
+        cpow_f(o, a, b);                          // 3^2
+        ASSERT_TRUE(near_d((double)o[0], 9.0, 1e-4));
+        cmplx_f(a, (float)0.0, (float)0.0);
+        csin_f(o, a);
+        ASSERT_TRUE(near_d((double)o[0], 0.0, 1e-7));
+        ccos_f(o, a);
+        ASSERT_TRUE(near_d((double)o[0], 1.0, 1e-7));
+        cmplx_f(a, (float)-4.0, (float)0.0);
+        csqrt_f(o, a);
+        ASSERT_TRUE(near_d((double)o[1], 2.0, 1e-5));
+
+        // atomics (single-threaded semantics) and orderings
+        int ai = 5;
+        ASSERT_EQ(atomic_load_int(&ai), 5);
+        ASSERT_EQ(atomic_fetch_and_int(&ai, 4), 5);
+        ASSERT_EQ(atomic_fetch_xor_int(&ai, 6), 4);
+        ASSERT_EQ(ai, 2);
+        long long al = 10LL;
+        atomic_store_ll(&al, 20LL);
+        ASSERT_EQ(atomic_fetch_sub_ll(&al, 5LL), 20);
+        long long expect = 99LL;
+        ASSERT_FALSE(atomic_cas_ll(&al, &expect, 1LL));
+        ASSERT_EQ(expect, 15);
+        ASSERT_TRUE(atomic_cas_ll(&al, &expect, 1LL));
+        ASSERT_EQ(al, 1);
+        atomic_thread_fence();
+        int x = 3;
+        int y = 8;
+        struct Less<int> lt = order_less();
+        struct Greater<int> gt = order_greater();
+        ASSERT_TRUE(lt.cmp(&x, &y) < 0);
+        ASSERT_TRUE(gt.cmp(&x, &y) > 0);
+        ASSERT_EQ(lt.cmp(&x, &x), 0);
+
+        char hb[32];
+        fmt_hex_upper((char*)hb, 32UL, 0xabcULL);
+        ASSERT_STR_EQ((const char*)hb, "ABC");
+        io_fmt_float((char*)hb, 32, 0.5);
+        ASSERT_STR_EQ((const char*)hb, "0.5");
+        io_fmt_hex((char*)hb, 32, 255ULL);
+        ASSERT_STR_EQ((const char*)hb, "0xff");
+        io_fmt_uint((char*)hb, 32, 7ULL);
+        ASSERT_STR_EQ((const char*)hb, "7");
+        io_fmt_float_prec((char*)hb, 32, 1.25, 1);
+        ASSERT_STR_EQ((const char*)hb, "1.2");
+        io_fmt_str((char*)hb, 32, "xy");
+        ASSERT_STR_EQ((const char*)hb, "xy");
+    }
+}
+
+static int gLogCalls = 0;
+static int gLogLevel = 0;
+static void log_capture(int level, const &char tag, const &char msg, const &char file, int line) {
+    gLogCalls = gLogCalls + 1;
+    gLogLevel = level;
+}
+
+// fenv, errno, locale, log, time and sys clock/env wrappers.
+void t_env() {
+    unsafe {
+        int mode = fenv_get_round();
+        ASSERT_EQ(mode, FE_TONEAREST());
+        ASSERT_EQ(fenv_set_round(FE_UPWARD()), 0);
+        ASSERT_EQ(fenv_get_round(), FE_UPWARD());
+        volatile double one = 1.0;
+        volatile double three = 3.0;
+        double up = one / three;
+        fenv_set_round(FE_DOWNWARD());
+        double down = one / three;
+        ASSERT_TRUE(up > down);                  // the mode really reached the FPU
+        fenv_set_round(FE_TONEAREST());
+        fenv_clear(FE_ALL_EXCEPT());
+        ASSERT_EQ(fenv_test(FE_ALL_EXCEPT()), 0);
+        fenv_raise(FE_DIVBYZERO());
+        ASSERT_TRUE(fenv_test(FE_DIVBYZERO()) != 0);
+        unsigned char env[64];
+        ASSERT_EQ(fenv_save(&env[0]), 0);
+        fenv_clear(FE_ALL_EXCEPT());
+        ASSERT_EQ(fenv_restore(&env[0]), 0);
+        ASSERT_TRUE(fenv_test(FE_DIVBYZERO()) != 0);
+        ASSERT_EQ(fenv_save_clear(&env[0]), 0);
+        ASSERT_EQ(fenv_test(FE_ALL_EXCEPT()), 0);
+
+        errno_set(ERRNO_ENOENT());
+        ASSERT_EQ(errno_get(), ERRNO_ENOENT());
+        ASSERT_TRUE(str_len(errno_str(ERRNO_ENOENT())) > 0UL);
+        errno_set(0);
+
+        ASSERT_STR_EQ(locale_set(LC_NUMERIC(), "C"), "C");
+        ASSERT_STR_EQ(locale_get(LC_NUMERIC()), "C");
+
+        log_set_backend(log_capture);
+        log_write(LOG_LEVEL_ERROR, "t", "m", "f.sc", 1);
+        log_write(LOG_LEVEL_DEBUG, "t", "filtered", "f.sc", 2);   // above LOG_LEVEL
+        ASSERT_EQ(gLogCalls, 1);
+        ASSERT_EQ(gLogLevel, LOG_LEVEL_ERROR);
+
+        ASSERT_TRUE(time_is_leap(2024));
+        ASSERT_FALSE(time_is_leap(1900));
+        ASSERT_TRUE(time_is_leap(2000));
+        ASSERT_EQ(time_days_in_month(1, 2023), 28);
+        ASSERT_EQ(time_days_in_month(12, 2023), -1);
+        ASSERT_TRUE(near_d(time_diff(100LL, 40LL), 60.0, 0.0));
+        ASSERT_EQ(time_elapsed_ns(5LL, 12LL), 7);
+        int tm[9];
+        ASSERT_TRUE(time_parse("2024-02-29 13:45:10", "%Y-%m-%d %H:%M:%S", tm));
+        ASSERT_EQ(tm[5], 124);
+        ASSERT_EQ(tm[4], 1);
+        ASSERT_EQ(tm[3], 29);
+        ASSERT_EQ(tm[2], 13);
+        time_gmtime(951782400LL, tm);            // 2000-02-29 00:00:00 UTC
+        ASSERT_EQ(tm[5], 100);
+        ASSERT_EQ(tm[3], 29);
+        time_localtime(time_now(), tm);
+        ASSERT_TRUE(tm[5] >= 124);
+        char tb[32];
+        time_gmtime(0LL, tm);
+        ASSERT_EQ(time_format(tb, 32UL, "%Y-%m-%d", tm), 10);
+        ASSERT_STR_EQ((const char*)tb, "1970-01-01");
+
+        // sys: clocks go through time.h (correct clock ids on Linux and macOS)
+        long long c0 = sys_cpu_time_ns();
+        ASSERT_TRUE(c0 >= 0LL);
+        volatile long long spin = 0LL;
+        while (spin < 2000000LL) { spin = spin + 1LL; }
+        ASSERT_TRUE(sys_cpu_time_ns() > c0);
+        long long m0 = sys_monotonic_ns();
+        time_sleep_ns(1500000LL);
+        long long dm = sys_monotonic_ns() - m0;
+        ASSERT_TRUE(dm >= 1500000LL);
+        ASSERT_TRUE(sys_time_now_ns() / 1000000000LL >= time_now() - 1LL);
+        ASSERT_TRUE(sys_getenv("SAFEC_SURELY_UNSET_VAR_42").is_null());
+        ASSERT_EQ(sys_atoll("-9000000000"), -9000000000LL);
+        ASSERT_EQ(sys_llabs(-9000000000LL), 9000000000LL);
+        const &char end = "";
+        ASSERT_TRUE(near_d(sys_strtod("2.5rest", (?&&const char)&end), 2.5, 0.0));
+        ASSERT_STR_EQ(end, "rest");
+    }
+}
+
+static int gSigCount = 0;
+static void on_usr1(int sig) { gSigCount = gSigCount + sig; }
+extern int getpid();
+
+void t_signals() {
+    unsafe {
+        signal_handle(SIG_USR1(), on_usr1);
+        ASSERT_EQ(signal_raise(SIG_USR1()), 0);
+        ASSERT_EQ(gSigCount, SIG_USR1());
+        ASSERT_EQ(signal_kill(getpid(), SIG_USR1()), 0);
+        ASSERT_EQ(gSigCount, 2 * SIG_USR1());
+        signal_ignore(SIG_USR2());
+        ASSERT_EQ(signal_raise(SIG_USR2()), 0);      // ignored: still alive
+        signal_default(SIG_USR1());
+        ASSERT_EQ(signal_kill(getpid(), 0), 0);      // signal 0: existence check only
+    }
+}
+
 int main() {
     struct TestSuite t = test_suite_init();
     unsafe {
@@ -270,6 +561,9 @@ int main() {
         t.add("stdckdint", t_ckd);
         t.add("complex", t_complex);
         t.add("sys", t_sys);
+        t.add("core edge cases", t_core_extra);
+        t.add("fenv/errno/locale/log/time", t_env);
+        t.add("signals", t_signals);
     }
     t.run();
     t.print_summary();

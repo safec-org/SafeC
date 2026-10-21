@@ -13,7 +13,7 @@ struct DomCallbackSlot {
 static struct DomCallbackSlot gDomCallbacks[DOM_MAX_CALLBACKS];
 static int gDomCallbackCount = 0;
 
-unsigned long wasm_strlen(const char* s) {
+unsigned long wasm_strlen(const &char s) {
     unsigned long n = 0UL;
     unsafe {
         while (s[n] != (char)0) {
@@ -23,25 +23,25 @@ unsigned long wasm_strlen(const char* s) {
     return n;
 }
 
-int dom_get_element(const char* selector) {
+int dom_get_element(const &char selector) {
     unsigned long len = wasm_strlen(selector);
     int handle;
     unsafe { handle = js_get_element(selector, len); }
     return handle;
 }
 
-void dom_set_text(int handle, const char* text) {
+void dom_set_text(int handle, const &char text) {
     unsigned long len = wasm_strlen(text);
     unsafe { js_set_text(handle, text, len); }
 }
 
-void dom_set_attr(int handle, const char* name, const char* value) {
+void dom_set_attr(int handle, const &char name, const &char value) {
     unsigned long nameLen = wasm_strlen(name);
     unsigned long valLen = wasm_strlen(value);
     unsafe { js_set_attr(handle, name, nameLen, value, valLen); }
 }
 
-void dom_console_log(const char* text) {
+void dom_console_log(const &char text) {
     unsigned long len = wasm_strlen(text);
     unsafe { js_console_log(text, len); }
 }
@@ -60,7 +60,7 @@ int dom_register_callback_raw_(void* handler, void* userdata) {
     return id;
 }
 
-int dom_on_click_raw_(const char* selector, void* handler, void* userdata) {
+int dom_on_click_raw_(const &char selector, void* handler, void* userdata) {
     int handle = dom_get_element(selector);
     if (handle < 0) {
         return -1;
@@ -88,7 +88,7 @@ void dom_dispatch_event(int callbackId) {
     unsafe { h(ud); }
 }
 
-void wasm_itoa(long long v, char* buf, unsigned long cap) {
+void wasm_itoa(long long v, &char buf, unsigned long cap) {
     unsafe {
         if (cap == 0UL) {
             return;

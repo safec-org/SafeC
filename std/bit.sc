@@ -106,21 +106,26 @@ inline const int ilog2(unsigned long long x) {
     return 63 - clz64(x);
 }
 
+// Mask of the low 'width' bits; a full-width field can't use 1 << width
+// (shifting by the type's width is undefined).
+inline const unsigned int low_mask32_(int width) {
+    if (width >= 32) return ~(unsigned int)0;
+    return ((unsigned int)1 << width) - (unsigned int)1;
+}
+
 inline const unsigned int bits32(unsigned int x, int lo, int hi) {
-    int width = hi - lo + 1;
-    unsigned int mask = (unsigned int)((1 << width) - 1);
-    return (x >> lo) & mask;
+    return (x >> lo) & low_mask32_(hi - lo + 1);
 }
 
 inline const unsigned long long bits64(unsigned long long x, int lo, int hi) {
     int width = hi - lo + 1;
-    unsigned long long mask = ((unsigned long long)1 << width) - (unsigned long long)1;
+    unsigned long long mask = ~(unsigned long long)0;
+    if (width < 64) mask = ((unsigned long long)1 << width) - (unsigned long long)1;
     return (x >> lo) & mask;
 }
 
 inline const unsigned int set_bits32(unsigned int x, int lo, int hi, unsigned int val) {
-    int width = hi - lo + 1;
-    unsigned int mask = (unsigned int)((1 << width) - 1);
+    unsigned int mask = low_mask32_(hi - lo + 1);
     return (x & ~(mask << lo)) | ((val & mask) << lo);
 }
 

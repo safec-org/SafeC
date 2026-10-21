@@ -5,6 +5,13 @@
 // ── MmioReg constructor ───────────────────────────────────────────────────────
 namespace std {
 
+// Mask of the low (hi - lo + 1) bits; a full 32-bit field can't use 1 << 32.
+static unsigned int mmio_field_mask_(int lo, int hi) {
+    int width = hi - lo + 1;
+    if (width >= 32) { return ~(unsigned int)0; }
+    return ((unsigned int)1 << width) - (unsigned int)1;
+}
+
 inline struct MmioReg mmio_reg(&volatile unsigned int addr) {
     struct MmioReg r;
     r.addr = addr;
@@ -37,8 +44,7 @@ inline void MmioReg::clear_bits(unsigned int mask) {
 inline unsigned int MmioReg::read_field(int lo, int hi) const {
     unsafe {
         unsigned int val   = volatile_load((unsigned int*)self.addr);
-        unsigned int width = (unsigned int)(hi - lo + 1);
-        unsigned int mask  = ((unsigned int)1 << width) - (unsigned int)1;
+        unsigned int mask  = mmio_field_mask_(lo, hi);
         return (val >> lo) & mask;
     }
 }
@@ -46,8 +52,7 @@ inline unsigned int MmioReg::read_field(int lo, int hi) const {
 inline void MmioReg::write_field(int lo, int hi, unsigned int val) {
     unsafe {
         unsigned int reg   = volatile_load((unsigned int*)self.addr);
-        unsigned int width = (unsigned int)(hi - lo + 1);
-        unsigned int mask  = ((unsigned int)1 << width) - (unsigned int)1;
+        unsigned int mask  = mmio_field_mask_(lo, hi);
         reg = reg & ~(mask << lo);
         reg = reg | ((val & mask) << lo);
         volatile_store((unsigned int*)self.addr, reg);
@@ -63,26 +68,23 @@ inline void mmio_write32(&volatile unsigned int addr, unsigned int val) {
     unsafe { volatile_store((unsigned int*)addr, val); }
 }
 
+// 8/16-bit registers get 8/16-bit accesses: a 32-bit store would also write
+// the neighbouring registers (and a 32-bit load can fault or have read side
+// effects on them).
 inline unsigned int mmio_read16(&volatile unsigned short addr) {
-    unsafe {
-        unsigned int val = volatile_load((unsigned int*)addr);
-        return val & (unsigned int)0xFFFF;
-    }
+    unsafe { return (unsigned int)volatile_load((unsigned short*)addr); }
 }
 
 inline void mmio_write16(&volatile unsigned short addr, unsigned int val) {
-    unsafe { volatile_store((unsigned int*)addr, val & (unsigned int)0xFFFF); }
+    unsafe { volatile_store((unsigned short*)addr, (unsigned short)(val & (unsigned int)0xFFFF)); }
 }
 
 inline unsigned int mmio_read8(&volatile unsigned char addr) {
-    unsafe {
-        unsigned int val = volatile_load((unsigned int*)addr);
-        return val & (unsigned int)0xFF;
-    }
+    unsafe { return (unsigned int)volatile_load((unsigned char*)addr); }
 }
 
 inline void mmio_write8(&volatile unsigned char addr, unsigned int val) {
-    unsafe { volatile_store((unsigned int*)addr, val & (unsigned int)0xFF); }
+    unsafe { volatile_store((unsigned char*)addr, (unsigned char)(val & (unsigned int)0xFF)); }
 }
 
 inline void mmio_set_bits32(&volatile unsigned int addr, unsigned int mask) {
@@ -102,8 +104,7 @@ inline void mmio_clear_bits32(&volatile unsigned int addr, unsigned int mask) {
 inline unsigned int mmio_read_field32(&volatile unsigned int addr, int lo, int hi) {
     unsafe {
         unsigned int val   = volatile_load((unsigned int*)addr);
-        unsigned int width = (unsigned int)(hi - lo + 1);
-        unsigned int mask  = ((unsigned int)1 << width) - (unsigned int)1;
+        unsigned int mask  = mmio_field_mask_(lo, hi);
         return (val >> lo) & mask;
     }
 }
@@ -111,8 +112,7 @@ inline unsigned int mmio_read_field32(&volatile unsigned int addr, int lo, int h
 inline void mmio_write_field32(&volatile unsigned int addr, int lo, int hi, unsigned int val) {
     unsafe {
         unsigned int reg   = volatile_load((unsigned int*)addr);
-        unsigned int width = (unsigned int)(hi - lo + 1);
-        unsigned int mask  = ((unsigned int)1 << width) - (unsigned int)1;
+        unsigned int mask  = mmio_field_mask_(lo, hi);
         reg = reg & ~(mask << lo);
         reg = reg | ((val & mask) << lo);
         volatile_store((unsigned int*)addr, reg);

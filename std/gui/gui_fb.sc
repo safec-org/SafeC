@@ -22,27 +22,15 @@
 #pragma once
 #include <std/stddef.h>
 #include <std/gui/gui.h>
+#include <std/gui/gui_fb.h>
 #include <std/mem.h>
 extern void* memset(void* ptr, int val, size_t n);
 
 namespace std {
 
-#define GUI_FB_QUEUE_CAP 32
-
-struct GuiFbConfig {
-    void* base;           // linear framebuffer physical/virtual base address
-    unsigned long pitch;  // bytes per scanline (may exceed width*bytesPerPixel if padded)
-    int width;
-    int height;
-    int bpp;               // bits per pixel — 32 (xRGB/xBGR) or 16 (RGB565) supported
-    int redShift; int greenShift; int blueShift; // bit position of each channel's LSB (32bpp only; ignored for 16bpp RGB565)
-};
-
 static struct GuiFbConfig gFbConfig;
 static int gFbConfigured = 0;
 
-// Must be called once, before gui_create_window(), with the real
-// framebuffer's parameters (see struct GuiFbConfig's field comments).
 void gui_fb_configure(struct GuiFbConfig cfg) {
     gFbConfig = cfg;
     gFbConfigured = 1;

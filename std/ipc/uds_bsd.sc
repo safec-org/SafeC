@@ -9,6 +9,7 @@
 #pragma once
 #include <std/ipc/uds.h>
 #include <std/str.h>
+#include <std/errno.h>
 
 #define SAFEC_AF_UNIX     1
 #define SAFEC_SOCK_STREAM 1
@@ -32,6 +33,7 @@ extern int accept(int fd, void* addr, void* addrlen);
 extern int connect(int fd, const void* addr, unsigned int addrlen);
 extern int fcntl(int fd, int cmd, int arg);
 extern int unlink(const char* path);
+extern int close(int fd);
 
 static int uds_fill_addr_(struct SockAddrUn* addr, const char* path) {
     unsafe {
@@ -69,15 +71,18 @@ inline int uds_listen_nb(const &char path) {
         return -1;
     }
     if (uds_set_nonblocking_(fd) != 0) {
+        unsafe { close(fd); }
         return -1;
     }
     struct SockAddrUn addr;
     if (uds_fill_addr_(&addr, path) != 0) {
+        unsafe { close(fd); }
         return -1;
     }
     int rc;
     unsafe { rc = bind(fd, (const void*)&addr, 106U); }
     if (rc != 0) {
+        unsafe { close(fd); }
         return -1;
     }
     // See std/sched/io_nb_bsd.sc's tcp_listen_nb for why 512, not a small
@@ -85,6 +90,7 @@ inline int uds_listen_nb(const &char path) {
     // to any listening socket, not just TCP ones.
     unsafe { rc = listen(fd, 512); }
     if (rc != 0) {
+        unsafe { close(fd); }
         return -1;
     }
     return fd;
@@ -97,6 +103,7 @@ inline int uds_accept_nb(int listenfd) {
         return -1;
     }
     if (uds_set_nonblocking_(fd) != 0) {
+        unsafe { close(fd); }
         return -1;
     }
     return fd;
@@ -109,10 +116,12 @@ inline int uds_connect_nb(const &char path) {
         return -1;
     }
     if (uds_set_nonblocking_(fd) != 0) {
+        unsafe { close(fd); }
         return -1;
     }
     struct SockAddrUn addr;
     if (uds_fill_addr_(&addr, path) != 0) {
+        unsafe { close(fd); }
         return -1;
     }
     unsafe { connect(fd, (const void*)&addr, 106U); }
@@ -124,6 +133,7 @@ inline int uds_connect_nb(const &char path) {
 inline int uds_unlink(const &char path) {
     int rc;
     unsafe { rc = unlink(path); }
+    if (rc != 0 && errno_get() == ERRNO_ENOENT()) { return 0; }   // nothing to remove
     return rc;
 }
 

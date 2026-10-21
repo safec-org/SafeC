@@ -91,7 +91,8 @@ struct TcpConn {
     void close();
 };
 
-// Parse TCP header from pkt at byte offset `offset`.
+// Parse TCP header from pkt at byte offset `offset`. Returns 0 on success,
+// -1 if the packet is truncated or the data offset is invalid.
 int tcp_parse(&stack PacketBuf pkt, unsigned long offset,
               &stack TcpHdr hdr_out);
 

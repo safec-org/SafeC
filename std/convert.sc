@@ -160,9 +160,13 @@ inline int ll_to_int(long long v, &int out) {
 }
 
 inline const long long float_clamp_to_ll(double v, long long min, long long max) {
+    if (v != v) return min;                 // NaN
     if (v < (double)min) return min;
-    if (v > (double)max) return max;
-    return (long long)v;
+    // '>=': (double)max can round up past max (2^63 for LLONG_MAX), and
+    // converting that back to long long is undefined.
+    if (v >= (double)max) return max;
+    // Round half away from zero (the cast alone truncates).
+    return (long long)(v < 0.0 ? v - 0.5 : v + 0.5);
 }
 
 inline int str_is_int(const &char s) {
