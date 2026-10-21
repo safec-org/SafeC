@@ -78,11 +78,11 @@ struct HalfTensor tensor_to_half(const &Tensor t, int dtype);               // r
 // split across the thread pool on large tensors).
 //
 //   struct Vec<struct HalfTensor> w16 = tensors_to_half(&net.params, TENSOR_BF16);
-//   ... optimizer_step(&opt);
+//   ... opt.step();
 //   tensors_to_half_into(&net.params, &w16);            // refresh the copy
 //   ... after a GPU backward that produced fp16 gradients g16:
 //   int ok = half_grads_accumulate(&g16, &net.params, (float)1.0 / scaler.scale);
-//   loss_scaler_update(&scaler, ok);
+//   scaler.update(ok);
 
 // Into an existing tensor of the same size (dst keeps its dtype / shape);
 // 0 on a size mismatch.
@@ -99,7 +99,7 @@ int  halves_to_tensors(const &Vec<struct HalfTensor> hs, &Vec<&Tensor> dst);
 void half_tensors_free(&Vec<struct HalfTensor> hs);
 // params[i].grad += decode(grads[i]) * invScale (allocating the gradient
 // if needed). Returns 1 if every resulting gradient value is finite -- the
-// loss_scaler_update argument -- and 0 on an overflow or a size mismatch.
+// LossScaler::update argument -- and 0 on an overflow or a size mismatch.
 int  half_grads_accumulate(const &Vec<struct HalfTensor> grads, &Vec<&Tensor> params, float invScale);
 
 // ── HalfTensor ops (float32 compute, result rounded to a's dtype) ───────────
@@ -141,20 +141,20 @@ struct LossScaler {
     float backoffFactor;   // scale *= backoffFactor after an overflow
     int   growthInterval;
     int   goodSteps;       // clean steps since the last change
+
+    // Call after tensor_backward() on (loss * scale): divides p.grad by the
+    // scale in place and returns 1 if every gradient is finite, or 0 if any
+    // gradient overflowed (inf/NaN) — skip the optimizer step in that case.
+    int unscale(&Tensor p);
+    // LossScaler::unscale over every tensor in a list; 1 if all are finite.
+    int unscale_all(&Vec<&Tensor> params);
+    // Call once per step with the combined result of LossScaler::unscale over
+    // all parameters (1 = all finite). Grows or backs off the scale.
+    void update(int allFinite);
 };
 
 // scale 65536, growth 2x every 2000 clean steps, backoff 0.5x — the
 // defaults PyTorch's GradScaler uses.
 struct LossScaler loss_scaler_new();
-
-// Call after tensor_backward() on (loss * scale): divides p.grad by the
-// scale in place and returns 1 if every gradient is finite, or 0 if any
-// gradient overflowed (inf/NaN) — skip the optimizer step in that case.
-int  loss_scaler_unscale(&LossScaler s, &Tensor p);
-// loss_scaler_unscale over every tensor in a list; 1 if all are finite.
-int  loss_scaler_unscale_all(&LossScaler s, &Vec<&Tensor> params);
-// Call once per step with the combined result of loss_scaler_unscale over
-// all parameters (1 = all finite). Grows or backs off the scale.
-void loss_scaler_update(&LossScaler s, int allFinite);
 
 } // namespace std

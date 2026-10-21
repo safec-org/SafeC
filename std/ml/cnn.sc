@@ -44,8 +44,8 @@ struct FeatureMap feature_map_new(unsigned long channels, unsigned long height, 
     return fm;
 }
 
-void feature_map_free(&FeatureMap fm) {
-    unsafe { if (!fm->fromArena) free((void*)fm->data); }
+void FeatureMap::free() {
+    unsafe { if (!self->fromArena) free((void*)self->data); }
 }
 
 static float __cnn_init_weight(unsigned long i, unsigned long seed) {
@@ -79,11 +79,11 @@ struct Conv2D conv2d_new(unsigned long inChannels, unsigned long outChannels,
     return layer;
 }
 
-void conv2d_free(&Conv2D layer) {
-    unsafe { free((void*)layer->weight); free((void*)layer->bias); }
+void Conv2D::free() {
+    unsafe { free((void*)self->weight); free((void*)self->bias); }
 }
 
-// conv2d_forward is im2col + GEMM: for a block of output pixels, gather
+// Conv2D::forward is im2col + GEMM: for a block of output pixels, gather
 // each pixel's receptive field into a column (inC*kH*kW values, zero where
 // the window hangs over the padding), then out[:, block] += W . columns
 // with sgemm, W being the weight viewed as an outC x (inC*kH*kW) matrix.
@@ -641,12 +641,12 @@ static struct FeatureMap conv_run_(const &Conv2D layer, const &FeatureMap input,
     return out;
 }
 
-struct FeatureMap conv2d_forward(const &Conv2D layer, const &FeatureMap input) {
-    return conv_run_(layer, input, 0);
+struct FeatureMap Conv2D::forward(const &FeatureMap input) const {
+    return conv_run_(self, input, 0);
 }
 
-struct FeatureMap conv2d_relu_forward(const &Conv2D layer, const &FeatureMap input) {
-    return conv_run_(layer, input, 1);
+struct FeatureMap Conv2D::relu_forward(const &FeatureMap input) const {
+    return conv_run_(self, input, 1);
 }
 
 // ── Pooling, upsampling, concatenation ───────────────────────────────────────
@@ -887,26 +887,26 @@ struct ResidualBlock residual_block_new(unsigned long inChannels, unsigned long 
     return b;
 }
 
-struct FeatureMap residual_block_forward(const &ResidualBlock block, const &FeatureMap input) {
-    struct FeatureMap h1 = conv2d_relu_forward(&block->conv1, input);
-    struct FeatureMap h2 = conv2d_forward(&block->conv2, &h1);
-    feature_map_free(&h1);
+struct FeatureMap ResidualBlock::forward(const &FeatureMap input) const {
+    struct FeatureMap h1 = self->conv1.relu_forward(input);
+    struct FeatureMap h2 = self->conv2.forward(&h1);
+    h1.free();
     struct FeatureMap out;
-    if (block->hasProjection) {
-        struct FeatureMap sc = conv2d_forward(&block->projection, input);
+    if (self->hasProjection) {
+        struct FeatureMap sc = self->projection.forward(input);
         out = feature_map_add(&h2, &sc, 1);
-        feature_map_free(&sc);
+        sc.free();
     } else {
         out = feature_map_add(&h2, input, 1);
     }
-    feature_map_free(&h2);
+    h2.free();
     return out;
 }
 
-void residual_block_free(&ResidualBlock block) {
-    conv2d_free(&block->conv1);
-    conv2d_free(&block->conv2);
-    conv2d_free(&block->projection);
+void ResidualBlock::free() {
+    self->conv1.free();
+    self->conv2.free();
+    self->projection.free();
 }
 
 struct FeatureMap upsample2x_nearest(const &FeatureMap input) {

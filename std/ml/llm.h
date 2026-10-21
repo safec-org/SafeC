@@ -30,17 +30,17 @@ struct LlmClient {
     unsigned short port;
     struct String model;
     struct String apiKey;  // sent as 'Authorization: Bearer <apiKey>' when non-empty
+
+    // POSTs 'messages' (Vec<struct LlmMessage>) to
+    // '<client.host>:<client.port>/v1/chat/completions' as
+    // '{"model":..., "messages":[{"role":...,"content":...}, ...]}' and
+    // returns 'choices[0].message.content' from the JSON response.
+    // *ok is set to 0 on any transport, HTTP-status, or JSON-shape failure.
+    struct String chat(&Vec<struct LlmMessage> messages, ?&int ok);
 };
 
 struct LlmClient llm_client_new(const &char host, unsigned short port,
                                  const &char model, const &char apiKey);
-
-// POSTs 'messages' (Vec<struct LlmMessage>) to
-// '<client.host>:<client.port>/v1/chat/completions' as
-// '{"model":..., "messages":[{"role":...,"content":...}, ...]}' and
-// returns 'choices[0].message.content' from the JSON response.
-// *ok is set to 0 on any transport, HTTP-status, or JSON-shape failure.
-struct String llm_chat(&LlmClient client, &Vec<struct LlmMessage> messages, ?&int ok);
 
 // ── PromptTemplate ───────────────────────────────────────────────────────────
 // Replaces every '{name}' occurrence in 'tmpl' with 'vars' object field
@@ -56,17 +56,18 @@ typedef fn struct Value(const &Value input) ChainStepFn;
 
 struct Chain {
     struct Vec<ChainStepFn> steps;
+
+    void add_step(ChainStepFn step);
+    struct Value run(const &Value input);
+    void free();
 };
 
 struct Chain chain_new();
-void chain_add_step(&Chain c, ChainStepFn step);
-struct Value chain_run(&Chain c, const &Value input);
-void chain_free(&Chain c);
 
 // ── Graph executor ───────────────────────────────────────────────────────────
 // Named nodes transform a shared Value state; each node either always
 // advances to a fixed 'nextNode', or (if 'router' is set) calls 'router'
-// on the post-node state to pick the next node by name. graph_run()
+// on the post-node state to pick the next node by name. Graph::run()
 // starts at the graph's entry node and keeps following edges until a
 // node returns/routes to "__end__", a named node isn't found (also
 // treated as end), or 'maxSteps' is hit (guards against an accidental
@@ -84,13 +85,14 @@ struct GraphNode {
 struct Graph {
     struct Vec<struct GraphNode> nodes;
     struct String entryNode;
+
+    void add_node(const &char name, GraphNodeFn nodeFn, const &char nextNode);
+    void add_conditional_node(const &char name, GraphNodeFn nodeFn, GraphRouterFn router);
+    struct Value run(struct Value initialState, int maxSteps);
+    void free();
 };
 
 struct Graph graph_new(const &char entryNode);
-void graph_add_node(&Graph g, const &char name, GraphNodeFn nodeFn, const &char nextNode);
-void graph_add_conditional_node(&Graph g, const &char name, GraphNodeFn nodeFn, GraphRouterFn router);
-struct Value graph_run(&Graph g, struct Value initialState, int maxSteps);
-void graph_free(&Graph g);
 
 // ── Tracer ───────────────────────────────────────────────────────────────────
 struct TraceEvent {
@@ -102,14 +104,14 @@ struct TraceEvent {
 
 struct Tracer {
     struct Vec<struct TraceEvent> events;
+
+    void record(const &char name, const &Value input, const &Value output, double durationMs);
+    // Dumps every recorded event as a JSON array: '[{"name":...,"input":...,
+    // "output":...,"durationMs":...}, ...]'.
+    struct String to_json() const;
+    void free();
 };
 
 struct Tracer tracer_new();
-void tracer_record(&Tracer t, const &char name, const &Value input,
-                    const &Value output, double durationMs);
-// Dumps every recorded event as a JSON array: '[{"name":...,"input":...,
-// "output":...,"durationMs":...}, ...]'.
-struct String tracer_to_json(const &Tracer t);
-void tracer_free(&Tracer t);
 
 } // namespace std

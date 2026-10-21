@@ -18,43 +18,43 @@ struct UNet unet_new(unsigned long inChannels, unsigned long c1, unsigned long c
     return net;
 }
 
-void unet_free(&UNet net) {
+void UNet::free() {
     unsafe {
-        conv2d_free((struct Conv2D*)&net->encConv1);
-        conv2d_free((struct Conv2D*)&net->encConv2);
-        conv2d_free((struct Conv2D*)&net->bottleneck);
-        conv2d_free((struct Conv2D*)&net->decConv1);
-        conv2d_free((struct Conv2D*)&net->decConv2);
+        ((struct Conv2D*)&self->encConv1).free();
+        ((struct Conv2D*)&self->encConv2).free();
+        ((struct Conv2D*)&self->bottleneck).free();
+        ((struct Conv2D*)&self->decConv1).free();
+        ((struct Conv2D*)&self->decConv2).free();
     }
 }
 
-struct FeatureMap unet_forward(&UNet net, const &FeatureMap input) {
+struct FeatureMap UNet::forward(const &FeatureMap input) {
 
-    struct FeatureMap e1 = conv2d_relu_forward(&net->encConv1, input);
+    struct FeatureMap e1 = self->encConv1.relu_forward(input);
     struct FeatureMap p1 = maxpool2d_forward(&e1, 2UL, 2UL);
 
-    struct FeatureMap e2 = conv2d_relu_forward(&net->encConv2, &p1);
-    feature_map_free(&p1);
+    struct FeatureMap e2 = self->encConv2.relu_forward(&p1);
+    p1.free();
     struct FeatureMap p2 = maxpool2d_forward(&e2, 2UL, 2UL);
 
-    struct FeatureMap b = conv2d_relu_forward(&net->bottleneck, &p2);
-    feature_map_free(&p2);
+    struct FeatureMap b = self->bottleneck.relu_forward(&p2);
+    p2.free();
 
     struct FeatureMap u1 = upsample2x_nearest(&b);
-    feature_map_free(&b);
+    b.free();
     struct FeatureMap cat1 = concat_channels(&u1, &e2);
-    feature_map_free(&u1);
-    feature_map_free(&e2);
-    struct FeatureMap d1 = conv2d_relu_forward(&net->decConv1, &cat1);
-    feature_map_free(&cat1);
+    u1.free();
+    e2.free();
+    struct FeatureMap d1 = self->decConv1.relu_forward(&cat1);
+    cat1.free();
 
     struct FeatureMap u2 = upsample2x_nearest(&d1);
-    feature_map_free(&d1);
+    d1.free();
     struct FeatureMap cat2 = concat_channels(&u2, &e1);
-    feature_map_free(&u2);
-    feature_map_free(&e1);
-    struct FeatureMap out = conv2d_forward(&net->decConv2, &cat2);
-    feature_map_free(&cat2);
+    u2.free();
+    e1.free();
+    struct FeatureMap out = self->decConv2.forward(&cat2);
+    cat2.free();
 
     return out;
 }

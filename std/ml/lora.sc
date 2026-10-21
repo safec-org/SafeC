@@ -16,7 +16,7 @@ static ?&TensorArena lora_heap_begin_() {
 
 static void lora_heap_end_(?&TensorArena cur) {
     match (cur) {
-        case some(a): { tensor_arena_begin(a); }
+        case some(a): { a.begin(); }
         case null: { }
     }
 }
@@ -51,7 +51,7 @@ static void lora_make_pair_(unsigned long in, unsigned long out, unsigned long r
     &Tensor B = tensor_new_2d(r, out, 1);
     lora_heap_end_(cur);
     float bound = (float)1.0 / sqrt_f((float)in);
-    rng_fill_uniform(rng, A, -bound, bound);
+    rng.fill_uniform(A, -bound, bound);
     As.push(A);
     Bs.push(B);
 }
@@ -66,7 +66,7 @@ static &Tensor lora_layer_(const &Tensor x, const &Tensor W, const &Tensor b, co
         float keep = (float)1.0 / ((float)1.0 - dropout);
         unsafe {
             unsigned long i = 0UL;
-            while (i < mask->size) { mask->data[i] = rng_uniform(rng) < dropout ? (float)0.0 : keep; i = i + 1UL; }
+            while (i < mask->size) { mask->data[i] = rng.uniform() < dropout ? (float)0.0 : keep; i = i + 1UL; }
         }
         xin = tensor_mul(x, mask);
     }
@@ -99,22 +99,22 @@ struct LoraMlp lora_attach(&Mlp base, const &LoraConfig cfg) {
     return l;
 }
 
-&Tensor lora_forward(&LoraMlp l, const &Tensor x) {
-    &Mlp m = l.base;
-    &Tensor h = lora_layer_(x, *m.params.at(0UL), *m.params.at(1UL), *l.A.at(0UL), *l.B.at(0UL),
-                            l.scale, l.cfg.dropout, &l.rng, m.nLayers == 1UL ? m.outAct : m.act);
+&Tensor LoraMlp::forward(const &Tensor x) {
+    &Mlp m = self.base;
+    &Tensor h = lora_layer_(x, *m.params.at(0UL), *m.params.at(1UL), *self.A.at(0UL), *self.B.at(0UL),
+                            self.scale, self.cfg.dropout, &self.rng, m.nLayers == 1UL ? m.outAct : m.act);
     unsigned long k = 1UL;
     while (k < m.nLayers) {
-        h = lora_layer_(h, *m.params.at(2UL * k), *m.params.at(2UL * k + 1UL), *l.A.at(k), *l.B.at(k),
-                        l.scale, l.cfg.dropout, &l.rng, k + 1UL == m.nLayers ? m.outAct : m.act);
+        h = lora_layer_(h, *m.params.at(2UL * k), *m.params.at(2UL * k + 1UL), *self.A.at(k), *self.B.at(k),
+                        self.scale, self.cfg.dropout, &self.rng, k + 1UL == m.nLayers ? m.outAct : m.act);
         k = k + 1UL;
     }
     return h;
 }
 
-void lora_add_params(&Optimizer opt, const &LoraMlp l) {
+void LoraMlp::add_params(&Optimizer opt) const {
     unsigned long k = 0UL;
-    while (k < l.A.length()) { optimizer_add(opt, *l.A.at(k)); optimizer_add(opt, *l.B.at(k)); k = k + 1UL; }
+    while (k < self.A.length()) { opt.add(*self.A.at(k)); opt.add(*self.B.at(k)); k = k + 1UL; }
 }
 
 static unsigned long lora_count_(const &Vec<&Tensor> As, const &Vec<&Tensor> Bs) {
@@ -129,17 +129,17 @@ static unsigned long lora_count_(const &Vec<&Tensor> As, const &Vec<&Tensor> Bs)
     return n;
 }
 
-unsigned long lora_param_count(const &LoraMlp l) { return lora_count_(&l.A, &l.B); }
+unsigned long LoraMlp::param_count() const { return lora_count_(&self.A, &self.B); }
 
-void lora_merge(&LoraMlp l) {
+void LoraMlp::merge() {
     unsigned long k = 0UL;
-    while (k < l.base.nLayers) {
-        &Tensor W = *l.base.params.at(2UL * k);
-        &Tensor A = *l.A.at(k);
-        &Tensor B = *l.B.at(k);
+    while (k < self.base.nLayers) {
+        &Tensor W = *self.base.params.at(2UL * k);
+        &Tensor A = *self.A.at(k);
+        &Tensor B = *self.B.at(k);
         unsigned long in = lora_rows_(W);
         unsigned long out = lora_cols_(W);
-        unsigned long r = l.cfg.rank;
+        unsigned long r = self.cfg.rank;
         unsafe {
             unsigned long i = 0UL;
             while (i < in) {
@@ -148,7 +148,7 @@ void lora_merge(&LoraMlp l) {
                     float acc = (float)0.0;
                     unsigned long t = 0UL;
                     while (t < r) { acc = acc + A->data[i * r + t] * B->data[t * out + j]; t = t + 1UL; }
-                    W->data[i * out + j] = W->data[i * out + j] + l.scale * acc;
+                    W->data[i * out + j] = W->data[i * out + j] + self.scale * acc;
                     j = j + 1UL;
                 }
                 i = i + 1UL;
@@ -159,17 +159,17 @@ void lora_merge(&LoraMlp l) {
     }
 }
 
-void lora_detach(&LoraMlp l) {
+void LoraMlp::detach() {
     unsigned long i = 0UL;
-    while (i < l.base.params.length()) {
-        &Tensor p = *l.base.params.at(i);
+    while (i < self.base.params.length()) {
+        &Tensor p = *self.base.params.at(i);
         unsafe { p->requiresGrad = 1; }
         i = i + 1UL;
     }
     unsigned long k = 0UL;
-    while (k < l.A.length()) { lora_drop_(*l.A.at(k)); lora_drop_(*l.B.at(k)); k = k + 1UL; }
-    l.A.free();
-    l.B.free();
+    while (k < self.A.length()) { lora_drop_(*self.A.at(k)); lora_drop_(*self.B.at(k)); k = k + 1UL; }
+    self.A.free();
+    self.B.free();
 }
 
 // ══ NF4 ══════════════════════════════════════════════════════════════════════
@@ -314,22 +314,22 @@ static float nf4_block_scale_(const &Nf4Tensor q, unsigned long bl) {
     return w;
 }
 
-unsigned long nf4_bytes(const &Nf4Tensor q) {
-    unsigned long n = q.rows * q.cols;
+unsigned long Nf4Tensor::bytes() const {
+    unsigned long n = self.rows * self.cols;
     unsigned long b = (n + 1UL) / 2UL;
-    if (q.doubleQuant) {
-        unsigned long groups = (q.blocks + NF4_SCALE_BLOCK - 1UL) / NF4_SCALE_BLOCK;
-        return b + q.blocks + 4UL * groups + 4UL;
+    if (self.doubleQuant) {
+        unsigned long groups = (self.blocks + NF4_SCALE_BLOCK - 1UL) / NF4_SCALE_BLOCK;
+        return b + self.blocks + 4UL * groups + 4UL;
     }
-    return b + 4UL * q.blocks;
+    return b + 4UL * self.blocks;
 }
 
-void nf4_free(&Nf4Tensor q) {
+void Nf4Tensor::free() {
     unsafe {
-        free((void*)q.codes);
-        if (q.absmax != (float*)0) free((void*)q.absmax);
-        if (q.absmaxQ != (unsigned char*)0) free((void*)q.absmaxQ);
-        if (q.absmaxScale != (float*)0) free((void*)q.absmaxScale);
+        free((void*)self.codes);
+        if (self.absmax != (float*)0) free((void*)self.absmax);
+        if (self.absmaxQ != (unsigned char*)0) free((void*)self.absmaxQ);
+        if (self.absmaxScale != (float*)0) free((void*)self.absmaxScale);
     }
 }
 
@@ -362,48 +362,48 @@ struct QLoraMlp qlora_attach(const &Mlp base, const &LoraConfig cfg, unsigned lo
     return q;
 }
 
-&Tensor qlora_forward(&QLoraMlp q, const &Tensor x) {
+&Tensor QLoraMlp::forward(const &Tensor x) {
     // the dequantized weights are temporaries (in the caller's arena, if any)
-    &Tensor h = lora_layer_(x, nf4_dequantize(q.W.at(0UL)), *q.bias.at(0UL), *q.A.at(0UL), *q.B.at(0UL),
-                            q.scale, q.cfg.dropout, &q.rng, q.nLayers == 1UL ? q.outAct : q.act);
+    &Tensor h = lora_layer_(x, nf4_dequantize(self.W.at(0UL)), *self.bias.at(0UL), *self.A.at(0UL), *self.B.at(0UL),
+                            self.scale, self.cfg.dropout, &self.rng, self.nLayers == 1UL ? self.outAct : self.act);
     unsigned long k = 1UL;
-    while (k < q.nLayers) {
-        h = lora_layer_(h, nf4_dequantize(q.W.at(k)), *q.bias.at(k), *q.A.at(k), *q.B.at(k),
-                        q.scale, q.cfg.dropout, &q.rng, k + 1UL == q.nLayers ? q.outAct : q.act);
+    while (k < self.nLayers) {
+        h = lora_layer_(h, nf4_dequantize(self.W.at(k)), *self.bias.at(k), *self.A.at(k), *self.B.at(k),
+                        self.scale, self.cfg.dropout, &self.rng, k + 1UL == self.nLayers ? self.outAct : self.act);
         k = k + 1UL;
     }
     return h;
 }
 
-void qlora_add_params(&Optimizer opt, const &QLoraMlp q) {
+void QLoraMlp::add_params(&Optimizer opt) const {
     unsigned long k = 0UL;
-    while (k < q.A.length()) { optimizer_add(opt, *q.A.at(k)); optimizer_add(opt, *q.B.at(k)); k = k + 1UL; }
+    while (k < self.A.length()) { opt.add(*self.A.at(k)); opt.add(*self.B.at(k)); k = k + 1UL; }
 }
 
-unsigned long qlora_param_count(const &QLoraMlp q) { return lora_count_(&q.A, &q.B); }
+unsigned long QLoraMlp::param_count() const { return lora_count_(&self.A, &self.B); }
 
-unsigned long qlora_base_bytes(const &QLoraMlp q) {
+unsigned long QLoraMlp::base_bytes() const {
     unsigned long n = 0UL;
     unsigned long k = 0UL;
-    while (k < q.nLayers) {
-        n = n + nf4_bytes(q.W.at(k));
-        &Tensor b = *q.bias.at(k);
+    while (k < self.nLayers) {
+        n = n + self.W.at(k).bytes();
+        &Tensor b = *self.bias.at(k);
         unsafe { n = n + 4UL * b->size; }
         k = k + 1UL;
     }
     return n;
 }
 
-void qlora_free(&QLoraMlp q) {
+void QLoraMlp::free() {
     unsigned long k = 0UL;
-    while (k < q.nLayers) {
-        nf4_free(q.W.at(k));
-        lora_drop_(*q.bias.at(k));
-        lora_drop_(*q.A.at(k));
-        lora_drop_(*q.B.at(k));
+    while (k < self.nLayers) {
+        self.W.at(k).free();
+        lora_drop_(*self.bias.at(k));
+        lora_drop_(*self.A.at(k));
+        lora_drop_(*self.B.at(k));
         k = k + 1UL;
     }
-    q.W.free(); q.bias.free(); q.A.free(); q.B.free();
+    self.W.free(); self.bias.free(); self.A.free(); self.B.free();
 }
 
 } // namespace std

@@ -496,7 +496,7 @@ static const char* cuda_kernel_source_() {
     "    }\n"
     "    if (bad && flag) *flag = 1.0f;\n"
     "}\n"
-    "// fp32 master-weight steps (nn.h's optimizer_step), writing the 16-bit copy\n"
+    "// fp32 master-weight steps (nn.h's Optimizer::step), writing the 16-bit copy\n"
     "// wh when not null; nothing happens when *skip != 0.\n"
     "extern \"C\" __global__ void mp_sgd(float* w, const float* g, float* vel, unsigned short* wh, float lr,\n"
     "                                      float mom, float wd, unsigned n, int bf, const float* skip) {\n"
@@ -1144,7 +1144,7 @@ int cuda_write(struct CudaBuf dst, const &float host, unsigned long n) {
 
 struct CudaBuf cuda_upload(const &float host, unsigned long n) {
     struct CudaBuf b = cuda_alloc(n);
-    if (b.dev != 0UL && !cuda_write(b, host, n)) cuda_free(&b);
+    if (b.dev != 0UL && !cuda_write(b, host, n)) b.free();
     return b;
 }
 
@@ -1153,10 +1153,10 @@ int cuda_read(struct CudaBuf src, &float host, unsigned long n) {
     unsafe { return cuda_read_bytes_((void*)host, (unsigned long long)src.dev, n * sizeof(float)); }
 }
 
-void cuda_free(&CudaBuf b) {
-    if (b.dev != 0UL) { unsafe { cuMemFree_v2((unsigned long long)b.dev); } }
-    b.dev = 0UL;
-    b.len = 0UL;
+void CudaBuf::free() {
+    if (self.dev != 0UL) { unsafe { cuMemFree_v2((unsigned long long)self.dev); } }
+    self.dev = 0UL;
+    self.len = 0UL;
 }
 
 int cuda_sync() {
@@ -1555,9 +1555,9 @@ int cuda_graph_launch(struct CudaGraph g) {
     unsafe { return cuGraphLaunch((void*)g.exec, g_cuda_stream) == CUDA_OK; }
 }
 
-void cuda_graph_free(&CudaGraph g) {
-    if (g.exec != 0UL) { unsafe { cuGraphExecDestroy((void*)g.exec); } }
-    g.exec = 0UL;
+void CudaGraph::free() {
+    if (self.exec != 0UL) { unsafe { cuGraphExecDestroy((void*)self.exec); } }
+    self.exec = 0UL;
 }
 
 // ── Host-array convenience ops ───────────────────────────────────────────────
@@ -1819,8 +1819,8 @@ struct CudaHalfBuf cuda_half_upload(const &float host, unsigned long n, int dtyp
     struct CudaBuf tmp = cuda_upload(host, n);
     int ok = tmp.dev != 0UL && cuda_to_half(tmp, b);
     if (ok) ok = cuda_sync();   // tmp is freed next
-    cuda_free(&tmp);
-    if (!ok) cuda_half_free(&b);
+    tmp.free();
+    if (!ok) b.free();
     return b;
 }
 
@@ -1834,10 +1834,10 @@ int cuda_half_read(struct CudaHalfBuf src, &unsigned short bits, unsigned long n
     unsafe { return cuda_read_bytes_((void*)bits, (unsigned long long)src.dev, n * 2UL); }
 }
 
-void cuda_half_free(&CudaHalfBuf b) {
-    if (b.dev != 0UL) { unsafe { cuMemFree_v2((unsigned long long)b.dev); } }
-    b.dev = 0UL;
-    b.len = 0UL;
+void CudaHalfBuf::free() {
+    if (self.dev != 0UL) { unsafe { cuMemFree_v2((unsigned long long)self.dev); } }
+    self.dev = 0UL;
+    self.len = 0UL;
 }
 
 // Launches a two-pointer CudaHalfBuf kernel over n elements: (a, out, n).

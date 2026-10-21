@@ -27,14 +27,14 @@ void t_adagrad_lion() {
         unsafe { target->data[0] = (float)1.0; target->data[1] = (float)-2.0; target->data[2] = (float)0.5; }
         struct Optimizer opt = optimizer_new(kinds[k], kinds[k] == OPT_ADAGRAD ? (float)0.5 : (float)0.01);
         opt.weightDecay = (float)0.0;
-        optimizer_add(&opt, w);
+        opt.add(w);
         struct TensorArena ar = tensor_arena_new(0UL);
         unsigned long s = 0UL;
         while (s < 600UL) {
-            tensor_arena_begin(&ar);
+            ar.begin();
             trainer_step_(&opt, tensor_mse_loss(w, target), (float)0.0);
             tensor_arena_end();
-            tensor_arena_reset(&ar);
+            ar.reset();
             s = s + 1UL;
         }
         unsafe {
@@ -43,8 +43,8 @@ void t_adagrad_lion() {
             while (i < 3UL) { float d = w->data[i] - target->data[i]; e = e + d * d; i = i + 1UL; }
             ASSERT_TRUE(e < (float)1e-3);
         }
-        tensor_arena_free(&ar);
-        optimizer_free(&opt);
+        ar.free();
+        opt.free();
         drop_(w); drop_(target);
         k = k + 1;
     }
@@ -55,7 +55,7 @@ static &Tensor gc_loss_(int which, &Tensor x, const &Tensor aux, const &AdaLN ad
     if (which == 0) return tensor_sum(tensor_mul(tensor_layer_norm(x, (float)0.00001), aux));
     if (which == 1) return tensor_sum(tensor_mul(tensor_mul_row(x, tensor_slice_cols(aux, 0UL, 1UL)), aux));
     if (which == 2) return tensor_sum(tensor_mul(tensor_slice_cols(x, 1UL, 2UL), tensor_slice_cols(aux, 0UL, 2UL)));
-    struct AdaLNOut o = adaln_forward(ad, x, cond);
+    struct AdaLNOut o = ad.forward(x, cond);
     return tensor_sum(tensor_mul(tensor_mul(o.out, o.gate), aux));
 }
 
@@ -64,17 +64,17 @@ static double grad_check_(int which) {
     &Tensor x = tensor_new_2d(4UL, 4UL, 1);
     &Tensor aux = tensor_new_2d(4UL, 4UL, 0);
     &Tensor cond = tensor_new_2d(4UL, 3UL, 0);
-    rng_fill_uniform(&rng, x, (float)-1.0, (float)1.0);
-    rng_fill_uniform(&rng, aux, (float)-1.0, (float)1.0);
-    rng_fill_uniform(&rng, cond, (float)-1.0, (float)1.0);
+    rng.fill_uniform(x, (float)-1.0, (float)1.0);
+    rng.fill_uniform(aux, (float)-1.0, (float)1.0);
+    rng.fill_uniform(cond, (float)-1.0, (float)1.0);
     // which 1 multiplies by the row [aux[0..4)] -- slice_cols(aux, 0, 1) is [4, 1]; use a [4] row instead
     struct AdaLN ad = adaln_new(4UL, 3UL, 1);
-    rng_fill_uniform(&rng, ad.W, (float)-0.5, (float)0.5);   // away from the zero init
-    rng_fill_uniform(&rng, ad.b, (float)-0.5, (float)0.5);
+    rng.fill_uniform(ad.W, (float)-0.5, (float)0.5);   // away from the zero init
+    rng.fill_uniform(ad.b, (float)-0.5, (float)0.5);
     struct TensorArena ar = tensor_arena_new(0UL);
-    tensor_arena_begin(&ar);
+    ar.begin();
     tensor_backward(gc_loss_(which, x, aux, &ad, cond));
-    tensor_arena_reset(&ar);
+    ar.reset();
     double worst = 0.0;
     unsafe {
         unsigned long i = 0UL;
@@ -86,7 +86,7 @@ static double grad_check_(int which) {
             x->data[i] = keep - h;
             float lm = gc_loss_(which, x, aux, &ad, cond)->data[0];
             x->data[i] = keep;
-            tensor_arena_reset(&ar);
+            ar.reset();
             double num = ((double)lp - (double)lm) / (2.0 * (double)h);
             double e = num - (double)x->grad[i];
             if (e < 0.0) e = -e;
@@ -106,7 +106,7 @@ static double grad_check_(int which) {
                 ad.W->data[i] = keep - h;
                 float lm = gc_loss_(which, x, aux, &ad, cond)->data[0];
                 ad.W->data[i] = keep;
-                tensor_arena_reset(&ar);
+                ar.reset();
                 double num = ((double)lp - (double)lm) / (2.0 * (double)h);
                 double e = num - (double)ad.W->grad[i];
                 if (e < 0.0) e = -e;
@@ -118,8 +118,8 @@ static double grad_check_(int which) {
         }
     }
     tensor_arena_end();
-    tensor_arena_free(&ar);
-    adaln_free(&ad);
+    ar.free();
+    ad.free();
     drop_(x); drop_(aux); drop_(cond);
     return worst;
 }
@@ -151,9 +151,9 @@ void t_mul_row_grad() {
 void t_layer_norm() {
     struct Rng rng = rng_new(9UL);
     &Tensor x = tensor_new_2d(5UL, 16UL, 0);
-    rng_fill_normal(&rng, x, (float)3.0, (float)2.0);
+    rng.fill_normal(x, (float)3.0, (float)2.0);
     struct LayerNorm ln = layer_norm_new(16UL);
-    &Tensor y = layer_norm_forward(&ln, x);
+    &Tensor y = ln.forward(x);
     unsafe {
         unsigned long r = 0UL;
         while (r < 5UL) {
@@ -168,8 +168,8 @@ void t_layer_norm() {
     // a fresh AdaLN is a plain LayerNorm with a zero gate
     struct AdaLN ad = adaln_new(16UL, 4UL, 1);
     &Tensor cond = tensor_new_2d(5UL, 4UL, 0);
-    rng_fill_normal(&rng, cond, (float)0.0, (float)1.0);
-    struct AdaLNOut o = adaln_forward(&ad, x, cond);
+    rng.fill_normal(cond, (float)0.0, (float)1.0);
+    struct AdaLNOut o = ad.forward(x, cond);
     unsafe {
         unsigned long i = 0UL;
         while (i < 80UL) {
@@ -179,8 +179,8 @@ void t_layer_norm() {
             i = i + 1UL;
         }
     }
-    adaln_free(&ad);
-    layer_norm_free(&ln);
+    ad.free();
+    ln.free();
 }
 
 // AdaLN learns a class-dependent affine map that a plain LayerNorm can't:
@@ -194,7 +194,7 @@ static &Tensor cond_loss_(&CondModel m, const &Tensor xy, const &Tensor labels) 
     unsigned long n = 8UL;
     &Tensor x = tensor_slice_cols(xy, 0UL, n);
     &Tensor target = tensor_slice_cols(xy, n, n);
-    struct AdaLNOut o = adaln_forward(&m.ad, x, tensor_one_hot(labels, m.classes));
+    struct AdaLNOut o = m.ad.forward(x, tensor_one_hot(labels, m.classes));
     return tensor_mse_loss(o.out, target);
 }
 
@@ -209,7 +209,7 @@ void t_adaln_conditioning() {
             float c = d.y->data[i];
             float* row = (float*)&d.x->data[i * 2UL * n];
             unsigned long k = 0UL;
-            while (k < n) { row[k] = rng_normal(&rng); k = k + 1UL; }
+            while (k < n) { row[k] = rng.normal(); k = k + 1UL; }
             double s = 0.0; double sq = 0.0;
             k = 0UL;
             while (k < n) { s = s + (double)row[k]; k = k + 1UL; }
@@ -229,30 +229,30 @@ void t_adaln_conditioning() {
     m.ad = adaln_new(n, 3UL, 0);
     m.classes = 3UL;
     struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.05);
-    adaln_add_params(&opt, &m.ad);
+    m.ad.add_params(&opt);
     struct TrainConfig tc = train_config_default();
     tc.epochs = 40UL;
     struct TrainReport rep = trainer_fit(&m, cond_loss_, &opt, &d, &tc);
     ASSERT_TRUE(rep.firstEpochLoss > (float)0.5);
     ASSERT_TRUE(rep.lastEpochLoss < (float)0.001);
-    optimizer_free(&opt);
-    adaln_free(&m.ad);
-    dataset_free(&d);
+    opt.free();
+    m.ad.free();
+    d.free();
 }
 
 // ── LoRA ─────────────────────────────────────────────────────────────────────
 static &Tensor base_loss_(&Mlp m, const &Tensor x, const &Tensor y) {
-    return tensor_cross_entropy_loss(mlp_forward(m, x), y);
+    return tensor_cross_entropy_loss(m.forward(x), y);
 }
-static &Tensor base_logits_(&Mlp m, const &Tensor x) { return mlp_forward(m, x); }
+static &Tensor base_logits_(&Mlp m, const &Tensor x) { return m.forward(x); }
 static &Tensor lora_loss_(&LoraMlp l, const &Tensor x, const &Tensor y) {
-    return tensor_cross_entropy_loss(lora_forward(l, x), y);
+    return tensor_cross_entropy_loss(l.forward(x), y);
 }
-static &Tensor lora_logits_(&LoraMlp l, const &Tensor x) { return lora_forward(l, x); }
+static &Tensor lora_logits_(&LoraMlp l, const &Tensor x) { return l.forward(x); }
 static &Tensor qlora_loss_(&QLoraMlp q, const &Tensor x, const &Tensor y) {
-    return tensor_cross_entropy_loss(qlora_forward(q, x), y);
+    return tensor_cross_entropy_loss(q.forward(x), y);
 }
-static &Tensor qlora_logits_(&QLoraMlp q, const &Tensor x) { return qlora_forward(q, x); }
+static &Tensor qlora_logits_(&QLoraMlp q, const &Tensor x) { return q.forward(x); }
 
 // Task A: moons. Task B: the same points, rotated 90 degrees, with the
 // labels swapped -- a new task the frozen base gets wrong.
@@ -288,11 +288,11 @@ static struct Mlp pretrain_(&Dataset a) {
     struct Rng rng = rng_new(6UL);
     struct Mlp base = mlp_new(2UL, 64UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &rng);
     struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.01);
-    optimizer_add_mlp(&opt, &base);
+    base.add_params(&opt);
     struct TrainConfig tc = train_config_default();
     tc.epochs = 60UL;
     trainer_fit(&base, base_loss_, &opt, a, &tc);
-    optimizer_free(&opt);
+    opt.free();
     return base;
 }
 
@@ -310,17 +310,17 @@ void t_lora() {
     struct LoraMlp ft = lora_attach(&base, &cfg);
     // B starts at zero: the adapted network equals the base
     tensor_set_grad_enabled(0);
-    &Tensor y0 = mlp_forward(&base, b.x);
-    &Tensor y1 = lora_forward(&ft, b.x);
+    &Tensor y0 = base.forward(b.x);
+    &Tensor y1 = ft.forward(b.x);
     unsafe { unsigned long i = 0UL; while (i < y0->size) { ASSERT_TRUE(y0->data[i] == y1->data[i]); i = i + 1UL; } }
     tensor_set_grad_enabled(1);
     // trainable: r * (in + out) per layer (1040 here, 23% of this small base;
     // the fraction r (in + out) / (in out) shrinks with layer width)
-    ASSERT_EQ(lora_param_count(&ft), 4UL * (2UL + 64UL) + 4UL * (64UL + 64UL) + 4UL * (64UL + 2UL));
-    ASSERT_TRUE(lora_param_count(&ft) * 4UL < mlp_param_count(&base));
+    ASSERT_EQ(ft.param_count(), 4UL * (2UL + 64UL) + 4UL * (64UL + 64UL) + 4UL * (64UL + 2UL));
+    ASSERT_TRUE(ft.param_count() * 4UL < base.param_count());
 
     struct Optimizer opt = optimizer_new(OPT_ADAMW, (float)0.01);
-    lora_add_params(&opt, &ft);
+    ft.add_params(&opt);
     struct TrainConfig tc = train_config_default();
     tc.epochs = 60UL;
     trainer_fit(&ft, lora_loss_, &opt, &b, &tc);
@@ -329,19 +329,19 @@ void t_lora() {
 
     // merging folds the update into the base weights
     tensor_set_grad_enabled(0);
-    &Tensor ya = lora_forward(&ft, b.x);
-    lora_merge(&ft);
-    &Tensor yb = mlp_forward(&base, b.x);
+    &Tensor ya = ft.forward(b.x);
+    ft.merge();
+    &Tensor yb = base.forward(b.x);
     unsafe {
         unsigned long i = 0UL;
         while (i < ya->size) { float d = ya->data[i] - yb->data[i]; ASSERT_TRUE(d < (float)1e-3 && d > (float)-1e-3); i = i + 1UL; }
     }
     tensor_set_grad_enabled(1);
     ASSERT_TRUE(trainer_accuracy(&base, base_logits_, &b, 128UL) > (float)0.95);
-    lora_detach(&ft);
-    optimizer_free(&opt);
-    mlp_free(&base);
-    dataset_free(&a); dataset_free(&b);
+    ft.detach();
+    opt.free();
+    base.free();
+    a.free(); b.free();
 }
 
 // ── NF4 / QLoRA ──────────────────────────────────────────────────────────────
@@ -362,13 +362,13 @@ void t_nf4() {
     struct Nf4Tensor qg = nf4_quantize(g, 16UL, 0);
     &Tensor gd = nf4_dequantize(&qg);
     unsafe { unsigned long i = 0UL; while (i < 16UL) { ASSERT_TRUE(gd->data[i] == g->data[i]); i = i + 1UL; } }
-    nf4_free(&qg);
+    qg.free();
 
     // Gaussian weights: small relative error at ~4.5 bits (4.1 with double quantization)
     struct Rng rng = rng_new(1UL);
     unsigned long rows = 256UL; unsigned long cols = 256UL;
     &Tensor w = tensor_new_2d(rows, cols, 0);
-    rng_fill_normal(&rng, w, (float)0.0, (float)0.02);
+    rng.fill_normal(w, (float)0.0, (float)0.02);
     int dq = 0;
     double errs[2];
     while (dq < 2) {
@@ -385,11 +385,11 @@ void t_nf4() {
             }
         }
         errs[dq] = sqrt_d(se / s2);
-        double bits = 8.0 * (double)nf4_bytes(&q) / (double)(rows * cols);
+        double bits = 8.0 * (double)q.bytes() / (double)(rows * cols);
         if (dq) ASSERT_TRUE(bits < 4.2);
         else ASSERT_TRUE(bits > 4.45 && bits < 4.55);
         ASSERT_TRUE(errs[dq] < 0.12);
-        nf4_free(&q);
+        q.free();
         drop_(wd);
         dq = dq + 1;
     }
@@ -402,24 +402,24 @@ void t_qlora() {
     struct Dataset a = dataset_moons(512UL, (float)0.08, &rng);
     struct Dataset b = task_b_(&a);
     struct Mlp base = pretrain_(&a);
-    unsigned long fp32Bytes = 4UL * mlp_param_count(&base);
+    unsigned long fp32Bytes = 4UL * base.param_count();
     struct LoraConfig cfg = lora_config_default(4UL);
     cfg.alpha = (float)8.0;
     struct QLoraMlp q = qlora_attach(&base, &cfg, NF4_BLOCK, 1);
-    mlp_free(&base);                                   // the quantized copy is all that's needed
-    ASSERT_TRUE(qlora_base_bytes(&q) * 6UL < fp32Bytes);
+    base.free();                                   // the quantized copy is all that's needed
+    ASSERT_TRUE(q.base_bytes() * 6UL < fp32Bytes);
     // the 4-bit base still solves task A
     ASSERT_TRUE(trainer_accuracy(&q, qlora_logits_, &a, 128UL) > (float)0.95);
     struct Optimizer opt = optimizer_new(OPT_ADAMW, (float)0.01);
-    qlora_add_params(&opt, &q);
+    q.add_params(&opt);
     struct TrainConfig tc = train_config_default();
     tc.epochs = 60UL;
     trainer_fit(&q, qlora_loss_, &opt, &b, &tc);
     ASSERT_TRUE(trainer_accuracy(&q, qlora_logits_, &b, 128UL) > (float)0.95);
-    ASSERT_EQ(qlora_param_count(&q), 4UL * (2UL + 64UL) + 4UL * (64UL + 64UL) + 4UL * (64UL + 2UL));
-    optimizer_free(&opt);
-    qlora_free(&q);
-    dataset_free(&a); dataset_free(&b);
+    ASSERT_EQ(q.param_count(), 4UL * (2UL + 64UL) + 4UL * (64UL + 64UL) + 4UL * (64UL + 2UL));
+    opt.free();
+    q.free();
+    a.free(); b.free();
 }
 
 int main() {

@@ -3,7 +3,7 @@
 //
 // Thin wrappers that make the CPU models satisfy the traits: CpuTrainer
 // (Trainable: trainer_fit's loop and arithmetic, one epoch per fit_epoch),
-// CpuGanTrainer (GanTrainable: gan_train / dcgan_train), CpuDqnAgent
+// CpuGanTrainer (GanTrainable: Gan::train / Dcgan::train), CpuDqnAgent
 // (ValueAgent: rl.h's Dqn) and CpuPgAgent (PolicyLearner: rl.h's
 // PolicyAgent). Each takes its model by value into 'host' and trains it in
 // place, so sync() has nothing to do. train.h names these without the Cpu
@@ -43,7 +43,7 @@ struct CpuTrainer {
 
 generic<M>
 int CpuTrainer::fit_begin(const &Dataset data, const &TrainConfig cfg) {
-    if (self.active) dataloader_free(&self.dl);
+    if (self.active) self.dl.free();
     self.dl = dataloader_new(data, cfg.batchSize, cfg.shuffle, cfg.seed);
     self.clipNorm = cfg.clipNorm;
     self.active = 1;
@@ -63,16 +63,16 @@ struct EpochLoss CpuTrainer::fit_epoch() {
 
 generic<M>
 void CpuTrainer::fit_end() {
-    if (self.active) dataloader_free(&self.dl);
+    if (self.active) self.dl.free();
     self.active = 0;
 }
 
 generic<M>
 float CpuTrainer::train_step(const &Tensor x, const &Tensor y) {
-    tensor_arena_begin(&self.stepArena);
+    self.stepArena.begin();
     float l = trainer_step_(&self.opt, self.lossFn(&self.host, x, y), self.clipNorm);
     tensor_arena_end();
-    tensor_arena_reset(&self.stepArena);
+    self.stepArena.reset();
     return l;
 }
 
@@ -88,8 +88,8 @@ int CpuTrainer::sync() { return 1; }
 generic<M>
 void CpuTrainer::free() {
     self.fit_end();
-    optimizer_free(&self.opt);
-    tensor_arena_free(&self.stepArena);
+    self.opt.free();
+    self.stepArena.free();
 }
 
 // 'opt' supplies the optimizer's kind and hyperparameters (optimizer_from);

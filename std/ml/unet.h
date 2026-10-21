@@ -22,14 +22,15 @@ struct UNet {
     struct Conv2D bottleneck; // c2 -> c2
     struct Conv2D decConv1; // (c2 + c2 skip) -> c1
     struct Conv2D decConv2; // (c1 + c1 skip) -> outChannels
+
+    // Input height/width must each be divisible by 4 (two 2x poolings).
+    // 'net' isn't semantically mutated, but is taken by mutable reference
+    // since its Conv2D sub-layers are threaded through by address internally.
+    struct FeatureMap forward(const &FeatureMap input);
+    void free();
 };
 
 struct UNet unet_new(unsigned long inChannels, unsigned long c1, unsigned long c2,
                       unsigned long outChannels);
-// Input height/width must each be divisible by 4 (two 2x poolings).
-// 'net' isn't semantically mutated, but is taken by mutable reference
-// since its Conv2D sub-layers are threaded through by address internally.
-struct FeatureMap unet_forward(&UNet net, const &FeatureMap input);
-void unet_free(&UNet net);
 
 } // namespace std

@@ -34,10 +34,15 @@ struct CudaConv2D {
     unsigned long  kW;
     unsigned long  stride;
     unsigned long  padding;
+
+    void free();
+    int forward(struct CudaBuf x, struct CudaBuf y, unsigned long batch, unsigned long height, unsigned long width) const;
+    // y = relu(conv(x) + bias), fused.
+    int forward_relu(struct CudaBuf x, struct CudaBuf y, unsigned long batch, unsigned long height,
+                     unsigned long width) const;
 };
 
 struct CudaConv2D cuda_conv2d_upload(const &Conv2D layer);
-void cuda_conv2d_free(&CudaConv2D layer);
 
 // Output side length of a convolution or pooling window: (dim + 2*padding - kernel)/stride + 1.
 unsigned long cuda_conv_out_dim(unsigned long dim, unsigned long kernel,
@@ -45,13 +50,7 @@ unsigned long cuda_conv_out_dim(unsigned long dim, unsigned long kernel,
 
 // ── Queued ops (1 = enqueued, 0 = bad size / no GPU / cuDNN error) ─────────
 // x: [batch, inChannels, height, width]; y: [batch, outChannels, outH, outW]
-// with outH/outW from cuda_conv_out_dim. Same arithmetic as conv2d_forward.
-
-int cuda_conv2d(const &CudaConv2D layer, struct CudaBuf x, struct CudaBuf y,
-                unsigned long batch, unsigned long height, unsigned long width);
-// y = relu(conv(x) + bias), fused.
-int cuda_conv2d_relu(const &CudaConv2D layer, struct CudaBuf x, struct CudaBuf y,
-                     unsigned long batch, unsigned long height, unsigned long width);
+// with outH/outW from cuda_conv_out_dim. Same arithmetic as Conv2D::forward.
 
 // kernel x kernel window, given stride, no padding (maxpool2d_forward /
 // avgpool2d_forward). x: [batch, channels, height, width].
@@ -75,13 +74,14 @@ struct CudaHalfConv2D {
     unsigned long      kW;
     unsigned long      stride;
     unsigned long      padding;
+
+    void free();
+    int forward(struct CudaHalfBuf x, struct CudaHalfBuf y, unsigned long batch, unsigned long height,
+                unsigned long width) const;
+    int forward_relu(struct CudaHalfBuf x, struct CudaHalfBuf y, unsigned long batch, unsigned long height,
+                     unsigned long width) const;
 };
 struct CudaHalfConv2D cuda_half_conv2d_upload(const &Conv2D layer, int dtype);   // CUDA_FP16 / CUDA_BF16
-void cuda_half_conv2d_free(&CudaHalfConv2D layer);
-int cuda_half_conv2d(const &CudaHalfConv2D layer, struct CudaHalfBuf x, struct CudaHalfBuf y,
-                     unsigned long batch, unsigned long height, unsigned long width);
-int cuda_half_conv2d_relu(const &CudaHalfConv2D layer, struct CudaHalfBuf x, struct CudaHalfBuf y,
-                          unsigned long batch, unsigned long height, unsigned long width);
 // 16-bit pooling is gpu_cuda.h's cuda_half_maxpool2d / cuda_half_avgpool2d
 // (a CUDA kernel, the same as on ROCm).
 
@@ -112,13 +112,14 @@ struct CudaUNet {
     unsigned long  height;
     unsigned long  width;
     int            ok;     // 0 if an upload or allocation failed
+
+    // y: [batch, outChannels, height, width]. Queued, like the ops above.
+    int forward(struct CudaBuf x, struct CudaBuf y) const;
+    void free();
 };
 
 // height and width must each be divisible by 4.
 struct CudaUNet cuda_unet_new(const &UNet net, unsigned long batch, unsigned long height, unsigned long width);
-// y: [batch, outChannels, height, width]. Queued, like the ops above.
-int cuda_unet_forward(const &CudaUNet net, struct CudaBuf x, struct CudaBuf y);
-void cuda_unet_free(&CudaUNet net);
 
 // ── Host convenience (upload → compute → read back) ──────────────────────────
 // Same signatures and results as the CPU functions; each falls back to the

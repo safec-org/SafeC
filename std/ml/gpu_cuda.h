@@ -46,6 +46,8 @@ const &char cuda_device_name();
 struct CudaBuf {
     unsigned long dev;
     unsigned long len;
+
+    void free();   // dev := 0
 };
 
 struct CudaBuf cuda_alloc(unsigned long n);                       // uninitialized; dev == 0 on failure
@@ -57,7 +59,6 @@ int  cuda_read(struct CudaBuf src, &float host, unsigned long n);         // wai
 // caller), each staging its slice through pinned buffers with the DMA of
 // one chunk overlapping the copy of the next: ~2x the driver's own
 // pageable-memory path, which is bounded by one core's memcpy rate.
-void cuda_free(&CudaBuf b);                                       // b.dev := 0
 int  cuda_sync();                                                 // wait for all queued work
 
 // TF32 tensor cores for every later cuda_gemm / cuda_gemm_relu (sm_80 and
@@ -117,6 +118,8 @@ int cuda_upsample2x_nearest(struct CudaBuf in, struct CudaBuf out,
 
 struct CudaGraph {
     unsigned long exec;   // 0 = invalid
+
+    void free();
 };
 
 // Ops issued between begin and end are recorded instead of run. Don't call
@@ -124,7 +127,6 @@ struct CudaGraph {
 int  cuda_capture_begin();
 struct CudaGraph cuda_capture_end();          // exec == 0 on failure
 int  cuda_graph_launch(struct CudaGraph g);   // queued like any other op
-void cuda_graph_free(&CudaGraph g);
 
 // ── fp16 / bf16 ──────────────────────────────────────────────────────────────
 // 16-bit storage, fp32 arithmetic (the same API as gpu_rocm.h's RocmHalfBuf):
@@ -142,13 +144,14 @@ struct CudaHalfBuf {
     unsigned long dev;
     unsigned long len;
     int           dtype;
+
+    void free();
 };
 
 struct CudaHalfBuf cuda_half_alloc(unsigned long n, int dtype);                   // uninitialized
 struct CudaHalfBuf cuda_half_upload(const &float host, unsigned long n, int dtype); // rounded on the GPU
 int  cuda_half_write(struct CudaHalfBuf dst, const &unsigned short bits, unsigned long n);  // raw bits
 int  cuda_half_read(struct CudaHalfBuf src, &unsigned short bits, unsigned long n);         // waits
-void cuda_half_free(&CudaHalfBuf b);
 
 // Conversions over dst.len (to_half) / src.len (from_half) elements.
 int cuda_to_half(struct CudaBuf src, struct CudaHalfBuf dst);     // round to dst.dtype
@@ -213,7 +216,7 @@ int cuda_unscale_many(const &Vec<struct CudaBuf> src, const &Vec<struct CudaBuf>
                       struct CudaBuf flag);
 int cuda_zero(struct CudaBuf b);                     // b = 0 (all of b.len)
 // Optimizer steps on fp32 master weights w with gradient g, as nn.h's
-// optimizer_step (OPT_SGD / OPT_MOMENTUM when vel is valid, OPT_ADAM /
+// Optimizer::step (OPT_SGD / OPT_MOMENTUM when vel is valid, OPT_ADAM /
 // OPT_ADAMW when decoupled; 'step' is the 1-based step count for the bias
 // correction). The updated weights are also written, rounded, to wHalf when
 // it is valid. Skipped entirely when skip is valid and skip[0] != 0. Pass an

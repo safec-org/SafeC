@@ -36,12 +36,13 @@ struct DiTBlock {
     &Tensor W2; &Tensor b2; // [dHidden,dModel], [1,dModel]
     &Tensor WadaLN; // [dModelCond, 6*dModel]
     unsigned long numHeads;
+
+    &Tensor forward(const &Tensor x, const &Tensor c) const;
+    void free();
 };
 
 struct DiTBlock dit_block_new(unsigned long dModel, unsigned long dHidden,
                                unsigned long dModelCond, unsigned long numHeads);
-&Tensor dit_block_forward(const &DiTBlock block, const &Tensor x, const &Tensor c);
-void dit_block_free(&DiTBlock block);
 
 // ── JiT (plain pre-LN transformer, additive conditioning) ───────────────────
 // Conditioning is added directly to the token embeddings once, up front
@@ -56,11 +57,12 @@ struct JiTBlock {
     &Tensor W1; &Tensor b1;
     &Tensor W2; &Tensor b2;
     unsigned long numHeads;
+
+    &Tensor forward(const &Tensor x) const;
+    void free();
 };
 
 struct JiTBlock jit_block_new(unsigned long dModel, unsigned long dHidden, unsigned long numHeads);
-&Tensor jit_block_forward(const &JiTBlock block, const &Tensor x);
-void jit_block_free(&JiTBlock block);
 
 // patches: [seqLen, patchDim], WPatchEmbed: [patchDim, dModel], cond:
 // [1, dModel] (broadcast-added to every token's embedding once, up

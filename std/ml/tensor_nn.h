@@ -55,15 +55,16 @@ struct AdamState {
     float beta1;
     float beta2;
     float eps;
-    unsigned long t; // step count, starts at 0, incremented by adam_step
+    unsigned long t; // step count, starts at 0, incremented by AdamState::step
+
+    void step(&Tensor param);
+    void free();
 };
 
 struct AdamState adam_new(unsigned long size, float lr, float beta1, float beta2, float eps);
 // Convenience default (lr=0.001, beta1=0.9, beta2=0.999, eps=1e-8 — the
 // values from the original Adam paper and every framework's default).
 struct AdamState adam_new_default(unsigned long size, float lr);
-void adam_step(&AdamState state, &Tensor param);
-void adam_free(&AdamState state);
 
 // ── 1D pooling ────────────────────────────────────────────────────────────────
 // Pools along the tensor's LAST axis with the given kernel size and

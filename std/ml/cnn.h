@@ -17,17 +17,18 @@ struct FeatureMap {
     unsigned long channels;
     unsigned long height;
     unsigned long width;
-    int           fromArena; // 1 if data came from a TensorArena (feature_map_free leaves it)
+    int           fromArena; // 1 if data came from a TensorArena (FeatureMap::free leaves it)
+
+    void free();
 };
 
-// Between tensor_arena_begin and tensor_arena_end (std/ml/tensor.h), new
+// Between TensorArena::begin and tensor_arena_end (std/ml/tensor.h), new
 // feature maps -- the ones these functions return, and every layer's
-// intermediate inside unet_forward and the like -- come from the thread's
+// intermediate inside UNet::forward and the like -- come from the thread's
 // TensorArena, as tensors do: no malloc (or page faults, for fresh memory)
-// per layer. feature_map_free does nothing for them; tensor_arena_reset
+// per layer. FeatureMap::free does nothing for them; TensorArena::reset
 // releases them all, so don't use one after its arena is reset.
 struct FeatureMap feature_map_new(unsigned long channels, unsigned long height, unsigned long width);
-void feature_map_free(&FeatureMap fm);
 
 // out[oc][oh][ow] = bias[oc] + sum_ic sum_kh sum_kw
 //                     weight[oc][ic][kh][kw] * in[ic][oh*stride+kh-padding][ow*stride+kw-padding]
@@ -44,18 +45,19 @@ struct Conv2D {
     unsigned long kW;
     unsigned long stride;
     unsigned long padding;
+
+    // Convolution + bias, computed as im2col + sgemm (std/simd/gemm.h): SIMD
+    // on any target, and split across std/sync/parallel.h's thread pool when
+    // the layer is large enough.
+    struct FeatureMap forward(const &FeatureMap input) const;
+    // relu(layer.forward(input)), in one pass.
+    struct FeatureMap relu_forward(const &FeatureMap input) const;
+    void free();
 };
 
 struct Conv2D conv2d_new(unsigned long inChannels, unsigned long outChannels,
                           unsigned long kH, unsigned long kW,
                           unsigned long stride, unsigned long padding);
-// Convolution + bias, computed as im2col + sgemm (std/simd/gemm.h): SIMD
-// on any target, and split across std/sync/parallel.h's thread pool when
-// the layer is large enough.
-struct FeatureMap conv2d_forward(const &Conv2D layer, const &FeatureMap input);
-// relu(conv2d_forward(layer, input)), in one pass.
-struct FeatureMap conv2d_relu_forward(const &Conv2D layer, const &FeatureMap input);
-void conv2d_free(&Conv2D layer);
 
 // Max/avg pooling: kernel x kernel window, given stride, no padding.
 // Channel count is preserved; caller must choose dimensions divisible by
@@ -91,10 +93,11 @@ struct ResidualBlock {
     struct Conv2D conv2;
     struct Conv2D projection;  // used only when hasProjection
     int           hasProjection;
+
+    struct FeatureMap forward(const &FeatureMap input) const;
+    void free();
 };
 struct ResidualBlock residual_block_new(unsigned long inChannels, unsigned long outChannels, unsigned long stride);
-struct FeatureMap residual_block_forward(const &ResidualBlock block, const &FeatureMap input);
-void residual_block_free(&ResidualBlock block);
 
 // Nearest-neighbor 2x spatial upsample: out[c][2h+dh][2w+dw] = in[c][h][w]
 // for dh,dw in {0,1}. Used by U-Net's decoder path (see unet.h) in place

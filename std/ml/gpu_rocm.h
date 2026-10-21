@@ -41,13 +41,14 @@ const &char rocm_device_name();
 struct RocmBuf {
     unsigned long dev;
     unsigned long len;
+
+    void free();   // dev := 0
 };
 
 struct RocmBuf rocm_alloc(unsigned long n);                       // uninitialized; dev == 0 on failure
 struct RocmBuf rocm_upload(const &float host, unsigned long n);  // dev == 0 on failure
 int  rocm_write(struct RocmBuf dst, const &float host, unsigned long n);  // 1 on success
 int  rocm_read(struct RocmBuf src, &float host, unsigned long n);         // waits for queued work
-void rocm_free(&RocmBuf b);                                       // b.dev := 0
 int  rocm_sync();                                                 // wait for all queued work
 
 // ── Queued device ops (1 = enqueued, 0 = invalid buffer/size or no GPU) ─────
@@ -115,13 +116,14 @@ struct RocmHalfBuf {
     unsigned long dev;
     unsigned long len;
     int           dtype;
+
+    void free();
 };
 
 struct RocmHalfBuf rocm_half_alloc(unsigned long n, int dtype);                   // uninitialized
 struct RocmHalfBuf rocm_half_upload(const &float host, unsigned long n, int dtype); // rounded on the GPU
 int  rocm_half_write(struct RocmHalfBuf dst, const &unsigned short bits, unsigned long n);  // raw bits
 int  rocm_half_read(struct RocmHalfBuf src, &unsigned short bits, unsigned long n);         // waits
-void rocm_half_free(&RocmHalfBuf b);
 
 // Queued conversions over dst.len elements.
 int rocm_to_half(struct RocmBuf src, struct RocmHalfBuf dst);     // round to dst.dtype
@@ -181,7 +183,7 @@ int rocm_unscale_many(const &Vec<struct RocmBuf> src, const &Vec<struct RocmBuf>
                       struct RocmBuf flag);
 int rocm_zero(struct RocmBuf b);                     // b = 0 (all of b.len)
 // Optimizer steps on fp32 master weights w with gradient g, as nn.h's
-// optimizer_step (OPT_SGD / OPT_MOMENTUM when vel is valid, OPT_ADAM /
+// Optimizer::step (OPT_SGD / OPT_MOMENTUM when vel is valid, OPT_ADAM /
 // OPT_ADAMW when decoupled; 'step' is the 1-based step count for the bias
 // correction). The updated weights are also written, rounded, to wHalf when
 // it is valid. Skipped entirely when skip is valid and skip[0] != 0. Pass an
@@ -216,6 +218,8 @@ int rocm_half_avgpool2d(struct RocmHalfBuf x, struct RocmHalfBuf y, unsigned lon
 
 struct RocmGraph {
     unsigned long exec;   // 0 = invalid
+
+    void free();
 };
 
 // Ops issued between begin and end are recorded instead of run. Don't call
@@ -223,7 +227,6 @@ struct RocmGraph {
 int  rocm_capture_begin();
 struct RocmGraph rocm_capture_end();          // exec == 0 on failure
 int  rocm_graph_launch(struct RocmGraph g);   // queued like any other op
-void rocm_graph_free(&RocmGraph g);
 
 // ── Interop: for libraries layered on this backend (gpu_miopen.h, dsp/fft_rocm.h)
 

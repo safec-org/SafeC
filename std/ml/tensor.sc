@@ -37,7 +37,7 @@ struct TensorArena tensor_arena_new(unsigned long chunkBytes) {
     return a;
 }
 
-void tensor_arena_begin(&TensorArena a) { g_tensor_arena = (?&TensorArena)a; }
+void TensorArena::begin() { g_tensor_arena = (?&TensorArena)self; }
 void tensor_arena_end() { g_tensor_arena = null; }
 ?&TensorArena tensor_arena_current_() { return g_tensor_arena; }
 
@@ -102,47 +102,47 @@ void tensor_arena_track_(&TensorArena a, void* t) {
     }
 }
 
-void tensor_arena_reset(&TensorArena a) {
+void TensorArena::reset() {
     unsafe {
         // the parents vectors live on the heap
-        void** list = (void**)a.tracked;
+        void** list = (void**)self.tracked;
         unsigned long i = 0UL;
-        while (i < a.trackedCount) {
+        while (i < self.trackedCount) {
             struct Tensor* t = (struct Tensor*)list[i];
             t->parents.free();
             i = i + 1UL;
         }
-        a.trackedCount = 0UL;
-        unsigned long* c = (unsigned long*)a.first;
+        self.trackedCount = 0UL;
+        unsigned long* c = (unsigned long*)self.first;
         while (c != (unsigned long*)0) { c[2] = 0UL; c = (unsigned long*)c[0]; }
-        a.current = a.first;
+        self.current = self.first;
     }
 }
 
-void tensor_arena_free(&TensorArena a) {
-    tensor_arena_reset(a);
+void TensorArena::free() {
+    self.reset();
     unsafe {
-        unsigned long* c = (unsigned long*)a.first;
+        unsigned long* c = (unsigned long*)self.first;
         while (c != (unsigned long*)0) {
             unsigned long* next = (unsigned long*)c[0];
             dealloc_raw_((void*)c);
             c = next;
         }
-        if (a.tracked != 0UL) dealloc_raw_((void*)a.tracked);
+        if (self.tracked != 0UL) dealloc_raw_((void*)self.tracked);
     }
-    a.first = 0UL;
-    a.current = 0UL;
-    a.tracked = 0UL;
-    a.trackedCap = 0UL;
+    self.first = 0UL;
+    self.current = 0UL;
+    self.tracked = 0UL;
+    self.trackedCap = 0UL;
 }
 
-unsigned long tensor_arena_used(const &TensorArena a) {
+unsigned long TensorArena::used() const {
     unsigned long used = 0UL;
     unsafe {
-        unsigned long* c = (unsigned long*)a.first;
+        unsigned long* c = (unsigned long*)self.first;
         while (c != (unsigned long*)0) {
             used = used + c[2];
-            if ((unsigned long)c == a.current) break;
+            if ((unsigned long)c == self.current) break;
             c = (unsigned long*)c[0];
         }
     }

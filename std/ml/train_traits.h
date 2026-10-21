@@ -87,17 +87,17 @@ struct TrainReport train_fit(&M m, const &Dataset data, const &TrainConfig cfg) 
 }
 
 trait GanTrainable {
-    // gan_train_step: cfg.nCritic critic steps and one generator step on
+    // Gan::train_step: cfg.nCritic critic steps and one generator step on
     // real [rows, dataDim]; labels (rows class indices) for a conditional
     // GAN, else null.
     struct GanLosses train_step(const &Tensor real, ?&Tensor labels);
-    // gan_train: epochs over data in shuffled batches. The last step's losses.
+    // Gan::train: epochs over data in shuffled batches. The last step's losses.
     struct GanLosses train(const &Dataset data, unsigned long epochs, unsigned long batchSize);
     int  sync();
     void free();
 }
 
-// gan_train for any GanTrainable, leaving the host model synced.
+// Gan::train for any GanTrainable, leaving the host model synced.
 generic<G: GanTrainable>
 struct GanLosses train_gan(&G g, const &Dataset data, unsigned long epochs, unsigned long batchSize) {
     struct GanLosses l = g.train(data, epochs, batchSize);

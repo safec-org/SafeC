@@ -224,10 +224,10 @@ struct Mamba mamba_new(unsigned long dModel, unsigned long dState, unsigned long
     return m;
 }
 
-void mamba_free(&Mamba layer) {
-    ssm_release_(layer->inProj); ssm_release_(layer->convW); ssm_release_(layer->convB);
-    ssm_release_(layer->xProj); ssm_release_(layer->dtProj); ssm_release_(layer->dtBias);
-    ssm_release_(layer->Alog); ssm_release_(layer->Dskip); ssm_release_(layer->outProj);
+void Mamba::free() {
+    ssm_release_(self->inProj); ssm_release_(self->convW); ssm_release_(self->convB);
+    ssm_release_(self->xProj); ssm_release_(self->dtProj); ssm_release_(self->dtBias);
+    ssm_release_(self->Alog); ssm_release_(self->Dskip); ssm_release_(self->outProj);
 }
 
 // Runs T tokens from the given state (conv [dInner][dConv-1], h
@@ -301,30 +301,30 @@ struct MambaState mamba_state_new(const &Mamba layer) {
     return s;
 }
 
-void mamba_state_reset(&MambaState state) {
+void MambaState::reset() {
     unsafe {
         unsigned long i = 0UL;
-        while (i < state->conv->size) { state->conv->data[i] = (float)0.0; i = i + 1UL; }
+        while (i < self->conv->size) { self->conv->data[i] = (float)0.0; i = i + 1UL; }
         i = 0UL;
-        while (i < state->h->size) { state->h->data[i] = (float)0.0; i = i + 1UL; }
+        while (i < self->h->size) { self->h->data[i] = (float)0.0; i = i + 1UL; }
     }
 }
 
-void mamba_state_free(&MambaState state) {
-    ssm_release_(state->conv);
-    ssm_release_(state->h);
+void MambaState::free() {
+    ssm_release_(self->conv);
+    ssm_release_(self->h);
 }
 
-&Tensor mamba_forward(const &Mamba layer, const &Tensor X) {
-    struct MambaState s = mamba_state_new(layer);
-    mamba_state_reset(&s);
-    &Tensor out = mamba_run_(layer, X, s.conv, s.h);
-    mamba_state_free(&s);
+&Tensor Mamba::forward(const &Tensor X) const {
+    struct MambaState s = mamba_state_new(self);
+    s.reset();
+    &Tensor out = mamba_run_(self, X, s.conv, s.h);
+    s.free();
     return out;
 }
 
-&Tensor mamba_step(const &Mamba layer, &MambaState state, const &Tensor x) {
-    return mamba_run_(layer, x, state->conv, state->h);
+&Tensor Mamba::step(&MambaState state, const &Tensor x) const {
+    return mamba_run_(self, x, state->conv, state->h);
 }
 
 } // namespace std

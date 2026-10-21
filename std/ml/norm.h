@@ -30,11 +30,12 @@ struct LayerNorm {
     &Tensor beta;    // [dim], init 0
     unsigned long dim;
     float eps;       // 1e-5
+
+    &Tensor forward(const &Tensor x) const;
+    void add_params(&Optimizer opt) const;
+    void free();
 };
 struct LayerNorm layer_norm_new(unsigned long dim);
-&Tensor          layer_norm_forward(const &LayerNorm ln, const &Tensor x);
-void             layer_norm_add_params(&Optimizer opt, const &LayerNorm ln);
-void             layer_norm_free(&LayerNorm ln);
 
 struct AdaLN {
     &Tensor W;       // [condDim, chunks * dim], init 0
@@ -43,15 +44,16 @@ struct AdaLN {
     unsigned long condDim;
     int   gated;     // 1: a third chunk, the residual gate
     float eps;
+
+    // x [m, dim], cond [m, condDim] (one conditioning row per sample).
+    struct AdaLNOut forward(const &Tensor x, const &Tensor cond) const;
+    void add_params(&Optimizer opt) const;
+    void free();
 };
 struct AdaLNOut {
     &Tensor out;     // LN(x) * (1 + scale) + shift, [m, dim]
     &Tensor gate;    // [m, dim]; all ones when not gated
 };
 struct AdaLN    adaln_new(unsigned long dim, unsigned long condDim, int gated);
-// x [m, dim], cond [m, condDim] (one conditioning row per sample).
-struct AdaLNOut adaln_forward(const &AdaLN a, const &Tensor x, const &Tensor cond);
-void            adaln_add_params(&Optimizer opt, const &AdaLN a);
-void            adaln_free(&AdaLN a);
 
 } // namespace std

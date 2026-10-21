@@ -19,51 +19,51 @@ struct Rng rng_new(unsigned long seed) {
     return r;
 }
 
-unsigned long rng_u64(&Rng r) {
-    r.state = r.state + 0x9E3779B97F4A7C15UL;
-    unsigned long z = r.state;
+unsigned long Rng::u64() {
+    self.state = self.state + 0x9E3779B97F4A7C15UL;
+    unsigned long z = self.state;
     z = (z ^ (z >> 30UL)) * 0xBF58476D1CE4E5B9UL;
     z = (z ^ (z >> 27UL)) * 0x94D049BB133111EBUL;
     return z ^ (z >> 31UL);
 }
 
-float rng_uniform(&Rng r) {
-    return (float)(rng_u64(r) >> 40UL) / (float)16777216.0;
+float Rng::uniform() {
+    return (float)(self.u64() >> 40UL) / (float)16777216.0;
 }
 
-float rng_normal(&Rng r) {
-    if (r.hasSpare) { r.hasSpare = 0; return r.spare; }
-    float u1 = (float)1.0 - rng_uniform(r);    // (0, 1]
-    float u2 = rng_uniform(r);
+float Rng::normal() {
+    if (self.hasSpare) { self.hasSpare = 0; return self.spare; }
+    float u1 = (float)1.0 - self.uniform();    // (0, 1]
+    float u2 = self.uniform();
     float mag = sqrt_f((float)-2.0 * log_f(u1));
     float ang = (float)6.283185307179586 * u2;
-    r.spare = mag * sin_f(ang);
-    r.hasSpare = 1;
+    self.spare = mag * sin_f(ang);
+    self.hasSpare = 1;
     return mag * cos_f(ang);
 }
 
-unsigned long rng_below(&Rng r, unsigned long n) {
+unsigned long Rng::below(unsigned long n) {
     if (n == 0UL) return 0UL;
-    return rng_u64(r) % n;
+    return self.u64() % n;
 }
 
-void rng_fill_uniform(&Rng r, &Tensor t, float lo, float hi) {
+void Rng::fill_uniform(&Tensor t, float lo, float hi) {
     unsafe {
         unsigned long i = 0UL;
-        while (i < t->size) { t->data[i] = lo + (hi - lo) * rng_uniform(r); i = i + 1UL; }
+        while (i < t->size) { t->data[i] = lo + (hi - lo) * self.uniform(); i = i + 1UL; }
     }
 }
 
-void rng_fill_normal(&Rng r, &Tensor t, float mean, float std) {
+void Rng::fill_normal(&Tensor t, float mean, float std) {
     unsafe {
         unsigned long i = 0UL;
-        while (i < t->size) { t->data[i] = mean + std * rng_normal(r); i = i + 1UL; }
+        while (i < t->size) { t->data[i] = mean + std * self.normal(); i = i + 1UL; }
     }
 }
 
-&Tensor rng_normal_tensor(&Rng r, unsigned long rows, unsigned long cols) {
+&Tensor Rng::normal_tensor(unsigned long rows, unsigned long cols) {
     &Tensor t = tensor_new_2d(rows, cols, 0);
-    rng_fill_normal(r, t, (float)0.0, (float)1.0);
+    self.fill_normal(t, (float)0.0, (float)1.0);
     return t;
 }
 
@@ -631,7 +631,7 @@ static ?&TensorArena nn_heap_begin_() {
 
 static void nn_heap_end_(?&TensorArena cur) {
     match (cur) {
-        case some(a): { tensor_arena_begin(a); }
+        case some(a): { a.begin(); }
         case null: { }
     }
 }
@@ -653,8 +653,8 @@ struct Mlp mlp_new(unsigned long inDim, unsigned long hidden, unsigned long hidd
         &Tensor W = tensor_new_2d(fin, fout, 1);
         &Tensor b = tensor_new_1d(fout, 1);
         float bound = (float)1.0 / sqrt_f((float)fin);
-        rng_fill_uniform(rng, W, -bound, bound);
-        rng_fill_uniform(rng, b, -bound, bound);
+        rng.fill_uniform(W, -bound, bound);
+        rng.fill_uniform(b, -bound, bound);
         m.params.push(W);
         m.params.push(b);
         l = l + 1UL;
@@ -670,31 +670,31 @@ static &Tensor mlp_layer_(const &Mlp m, unsigned long l, const &Tensor x) {
     return tensor_activate(y, l + 1UL == m.nLayers ? m.outAct : m.act);
 }
 
-&Tensor mlp_forward(const &Mlp m, const &Tensor x) {
-    &Tensor h = mlp_layer_(m, 0UL, x);
+&Tensor Mlp::forward(const &Tensor x) const {
+    &Tensor h = mlp_layer_(self, 0UL, x);
     unsigned long l = 1UL;
-    while (l < m.nLayers) {
-        h = mlp_layer_(m, l, h);
+    while (l < self.nLayers) {
+        h = mlp_layer_(self, l, h);
         l = l + 1UL;
     }
     return h;
 }
 
-unsigned long mlp_param_count(const &Mlp m) {
+unsigned long Mlp::param_count() const {
     unsigned long n = 0UL;
     unsigned long i = 0UL;
-    while (i < m.params.length()) {
-        &Tensor p = *m.params.at(i);
+    while (i < self.params.length()) {
+        &Tensor p = *self.params.at(i);
         unsafe { n = n + p->size; }
         i = i + 1UL;
     }
     return n;
 }
 
-void mlp_soft_update(&Mlp dst, const &Mlp src, float tau) {
+void Mlp::soft_update(const &Mlp src, float tau) {
     unsigned long i = 0UL;
-    while (i < dst.params.length()) {
-        &Tensor d = *dst.params.at(i);
+    while (i < self.params.length()) {
+        &Tensor d = *self.params.at(i);
         &Tensor s = *src.params.at(i);
         unsafe {
             unsigned long j = 0UL;
@@ -704,17 +704,17 @@ void mlp_soft_update(&Mlp dst, const &Mlp src, float tau) {
     }
 }
 
-void mlp_copy(&Mlp dst, const &Mlp src) { mlp_soft_update(dst, src, (float)1.0); }
+void Mlp::copy(const &Mlp src) { self.soft_update(src, (float)1.0); }
 
-void mlp_free(&Mlp m) {
+void Mlp::free() {
     unsigned long i = 0UL;
-    while (i < m.params.length()) {
-        &Tensor p = *m.params.at(i);
+    while (i < self.params.length()) {
+        &Tensor p = *self.params.at(i);
         p->free();
         unsafe { free((void*)p); }
         i = i + 1UL;
     }
-    m.params.free();
+    self.params.free();
 }
 
 // ══ Optimizers ═══════════════════════════════════════════════════════════════
@@ -745,31 +745,31 @@ struct Optimizer optimizer_from(const &Optimizer o) {
     return d;
 }
 
-void optimizer_add(&Optimizer o, &Tensor param) {
+void Optimizer::add(&Tensor param) {
     ?&TensorArena cur = nn_heap_begin_();
     unsigned long n;
     unsafe { n = param->size; }
-    o.params.push(param);
-    o.m.push(tensor_new_1d(n, 0));
-    o.v.push(tensor_new_1d(n, 0));
+    self.params.push(param);
+    self.m.push(tensor_new_1d(n, 0));
+    self.v.push(tensor_new_1d(n, 0));
     nn_heap_end_(cur);
 }
 
-void optimizer_add_mlp(&Optimizer o, const &Mlp m) {
+void Mlp::add_params(&Optimizer o) const {
     unsigned long i = 0UL;
-    while (i < m.params.length()) { optimizer_add(o, *m.params.at(i)); i = i + 1UL; }
+    while (i < self.params.length()) { o.add(*self.params.at(i)); i = i + 1UL; }
 }
 
-void optimizer_zero_grad(&Optimizer o) {
+void Optimizer::zero_grad() {
     unsigned long i = 0UL;
-    while (i < o.params.length()) { tensor_zero_grad(*o.params.at(i)); i = i + 1UL; }
+    while (i < self.params.length()) { tensor_zero_grad(*self.params.at(i)); i = i + 1UL; }
 }
 
-float optimizer_clip_grad_norm(&Optimizer o, float maxNorm) {
+float Optimizer::clip_grad_norm(float maxNorm) {
     double sq = 0.0;
     unsigned long i = 0UL;
-    while (i < o.params.length()) {
-        &Tensor p = *o.params.at(i);
+    while (i < self.params.length()) {
+        &Tensor p = *self.params.at(i);
         unsafe {
             if (p->grad != (float*)0) {
                 unsigned long j = 0UL;
@@ -782,8 +782,8 @@ float optimizer_clip_grad_norm(&Optimizer o, float maxNorm) {
     if (norm > maxNorm && norm > (float)0.0) {
         float sc = maxNorm / norm;
         i = 0UL;
-        while (i < o.params.length()) {
-            &Tensor p = *o.params.at(i);
+        while (i < self.params.length()) {
+            &Tensor p = *self.params.at(i);
             unsafe {
                 if (p->grad != (float*)0) {
                     unsigned long j = 0UL;
@@ -917,25 +917,25 @@ static void opt_range_(&OptJob j, unsigned long lo, unsigned long hi) {
     opt_base_(j, lo, hi);
 }
 
-void optimizer_step(&Optimizer o) {
-    o.t = o.t + 1UL;
-    float bc1 = (float)1.0 - pow_f(o.beta1, (float)o.t);
-    float bc2 = (float)1.0 - pow_f(o.beta2, (float)o.t);
+void Optimizer::step() {
+    self.t = self.t + 1UL;
+    float bc1 = (float)1.0 - pow_f(self.beta1, (float)self.t);
+    float bc2 = (float)1.0 - pow_f(self.beta2, (float)self.t);
     struct OptJob j;
-    j.kind = o.kind;
-    j.lr = o.lr;
-    j.wd = o.weightDecay;
-    j.mu = o.momentum;
-    j.b1 = o.beta1;
-    j.b2 = o.beta2;
-    j.eps = o.eps;
+    j.kind = self.kind;
+    j.lr = self.lr;
+    j.wd = self.weightDecay;
+    j.mu = self.momentum;
+    j.b1 = self.beta1;
+    j.b2 = self.beta2;
+    j.eps = self.eps;
     j.ibc1 = (float)1.0 / bc1;
     j.isbc2 = (float)1.0 / sqrt_f(bc2);
     unsigned long i = 0UL;
-    while (i < o.params.length()) {
-        &Tensor p = *o.params.at(i);
-        &Tensor mt = *o.m.at(i);
-        &Tensor vt = *o.v.at(i);
+    while (i < self.params.length()) {
+        &Tensor p = *self.params.at(i);
+        &Tensor mt = *self.m.at(i);
+        &Tensor vt = *self.v.at(i);
         unsafe {
             if (p->grad != (float*)0) {
                 j.w = (float*)p->data;
@@ -951,16 +951,16 @@ void optimizer_step(&Optimizer o) {
     }
 }
 
-void optimizer_free(&Optimizer o) {
+void Optimizer::free() {
     unsigned long i = 0UL;
-    while (i < o.m.length()) {
-        &Tensor a = *o.m.at(i);
-        &Tensor b = *o.v.at(i);
+    while (i < self.m.length()) {
+        &Tensor a = *self.m.at(i);
+        &Tensor b = *self.v.at(i);
         a->free(); b->free();
         unsafe { free((void*)a); free((void*)b); }
         i = i + 1UL;
     }
-    o.params.free(); o.m.free(); o.v.free();
+    self.params.free(); self.m.free(); self.v.free();
 }
 
 // ══ Saving and loading tensors ═══════════════════════════════════════════════
@@ -1049,7 +1049,7 @@ int tensors_load(&Vec<&Tensor> ts, const &char path) {
     return 0;
 }
 
-int mlp_save_file(const &Mlp m, const &char path) { return tensors_save(&m.params, path); }
-int mlp_load_file(&Mlp m, const &char path) { return tensors_load(&m.params, path); }
+int Mlp::save_file(const &char path) const { return tensors_save(&self.params, path); }
+int Mlp::load_file(const &char path) { return tensors_load(&self.params, path); }
 
 } // namespace std

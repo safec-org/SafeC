@@ -25,6 +25,15 @@ struct Dataset {
     unsigned long features;
     unsigned long targets;
     unsigned long classes;   // 0 for regression / unlabeled
+
+    // Shuffles, then puts 'testFraction' of the rows in 'test'.
+    struct DatasetSplit split(float testFraction, &Rng rng) const;
+    // Mean 0, std 1 per feature column, from the set's own statistics.
+    void standardize();
+    // The same with this set's statistics applied to it and 'test' (no test
+    // leakage).
+    void standardize_pair(&Dataset test);
+    void free();
 };
 
 // ── Synthetic data ───────────────────────────────────────────────────────────
@@ -65,13 +74,6 @@ struct DatasetSplit {
     struct Dataset train;
     struct Dataset test;
 };
-// Shuffles, then puts 'testFraction' of the rows in 'test'.
-struct DatasetSplit dataset_split(const &Dataset ds, float testFraction, &Rng rng);
-// Mean 0, std 1 per feature column, from ds's own statistics.
-void dataset_standardize(&Dataset ds);
-// The same with train's statistics applied to both (no test leakage).
-void dataset_standardize_pair(&Dataset train, &Dataset test);
-void dataset_free(&Dataset ds);
 
 // ── Mini-batches ─────────────────────────────────────────────────────────────
 struct Batch {
@@ -91,13 +93,14 @@ struct DataLoader {
     unsigned long pos;
     int shuffle;
     struct Rng rng;
+
+    // Fills 'out' with the next batch (new tensors, in the active tensor arena
+    // if any) and returns 1, or returns 0 at the end of an epoch and rewinds
+    // (reshuffling) for the next one.
+    int next(&Batch out);
+    unsigned long batches() const;   // batches per epoch
+    void free();
 };
 struct DataLoader dataloader_new(const &Dataset ds, unsigned long batchSize, int shuffle, unsigned long seed);
-// Fills 'out' with the next batch (new tensors, in the active tensor arena
-// if any) and returns 1, or returns 0 at the end of an epoch and rewinds
-// (reshuffling) for the next one.
-int  dataloader_next(&DataLoader dl, &Batch out);
-unsigned long dataloader_batches(const &DataLoader dl);   // batches per epoch
-void dataloader_free(&DataLoader dl);
 
 } // namespace std

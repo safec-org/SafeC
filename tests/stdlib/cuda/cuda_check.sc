@@ -120,16 +120,16 @@ static struct Vec<float> fm_download(struct CudaBuf b, unsigned long off, unsign
 }
 
 static void check_cudnn() {
-    // conv2d_forward_cuda vs conv2d_forward: 3x3, stride 1, pad 1, odd sizes
+    // conv2d_forward_cuda vs Conv2D::forward: 3x3, stride 1, pad 1, odd sizes
     struct Conv2D l1 = std::conv2d_new(3UL, 8UL, 3UL, 3UL, 1UL, 1UL);
     conv_bias(&l1);
     struct FeatureMap x1 = std::feature_map_new(3UL, 17UL, 13UL);
     fm_fill(&x1, 0UL);
-    struct FeatureMap c1 = std::conv2d_forward(&l1, &x1);
+    struct FeatureMap c1 = l1.forward(&x1);
     struct FeatureMap g1 = std::conv2d_forward_cuda(&l1, &x1);
     check(g1.channels == 8UL && g1.height == 17UL && g1.width == 13UL, "conv2d_forward_cuda shape");
     unsafe { check(fm_err((const float*)g1.data, (const float*)c1.data, fm_size(&c1)) < 1e-5f, "conv2d_forward_cuda values"); }
-    std::feature_map_free(&g1);
+    g1.free();
 
     // queued conv on a batch of two images: 5x5, stride 2, pad 0; then + relu
     struct Conv2D l2 = std::conv2d_new(4UL, 6UL, 5UL, 5UL, 2UL, 0UL);
@@ -138,8 +138,8 @@ static void check_cudnn() {
     struct FeatureMap xb = std::feature_map_new(4UL, 21UL, 15UL);
     fm_fill(&xa, 3UL);
     fm_fill(&xb, 50UL);
-    struct FeatureMap ca = std::conv2d_forward(&l2, &xa);
-    struct FeatureMap cb = std::conv2d_forward(&l2, &xb);
+    struct FeatureMap ca = l2.forward(&xa);
+    struct FeatureMap cb = l2.forward(&xb);
     unsigned long inN = fm_size(&xa);
     unsigned long outN = fm_size(&ca);
     check(std::cuda_conv_out_dim(21UL, 5UL, 2UL, 0UL) == ca.height && std::cuda_conv_out_dim(15UL, 5UL, 2UL, 0UL) == ca.width,
@@ -155,27 +155,27 @@ static void check_cudnn() {
         dx2.len = inN;
         std::cuda_write(dx2, xb.data, inN);
     }
-    check(std::cuda_conv2d(&d2, dx, dy, 2UL, 21UL, 15UL), "cuda_conv2d batch ran");
+    check(d2.forward(dx, dy, 2UL, 21UL, 15UL), "CudaConv2D::forward batch ran");
     struct Vec<float> ya = fm_download(dy, 0UL, outN);
     struct Vec<float> yb = fm_download(dy, outN, outN);
     unsafe {
         check(fm_err(ya.at(0UL), (const float*)ca.data, outN) < 1e-5f &&
-              fm_err(yb.at(0UL), (const float*)cb.data, outN) < 1e-5f, "cuda_conv2d batch values");
+              fm_err(yb.at(0UL), (const float*)cb.data, outN) < 1e-5f, "CudaConv2D::forward batch values");
     }
     ya.free(); yb.free();
-    check(std::cuda_conv2d_relu(&d2, dx, dy, 2UL, 21UL, 15UL), "cuda_conv2d_relu ran");
+    check(d2.forward_relu(dx, dy, 2UL, 21UL, 15UL), "CudaConv2D::forward_relu ran");
     ya = fm_download(dy, outN, outN);
     unsafe {
         unsigned long i = 0UL;
         while (i < outN) { if (cb.data[i] < 0.0f) cb.data[i] = 0.0f; i = i + 1UL; }
-        check(fm_err(ya.at(0UL), (const float*)cb.data, outN) < 1e-5f, "cuda_conv2d_relu values");
+        check(fm_err(ya.at(0UL), (const float*)cb.data, outN) < 1e-5f, "CudaConv2D::forward_relu values");
     }
     ya.free();
-    check(!std::cuda_conv2d(&d2, dx, dy, 3UL, 21UL, 15UL), "cuda_conv2d rejects short buffers");
+    check(!d2.forward(dx, dy, 3UL, 21UL, 15UL), "CudaConv2D::forward rejects short buffers");
 
     // the cached plan replays inside a graph
     check(std::cuda_capture_begin(), "conv capture begin");
-    std::cuda_conv2d(&d2, dx, dy, 2UL, 21UL, 15UL);
+    d2.forward(dx, dy, 2UL, 21UL, 15UL);
     struct CudaGraph cg = std::cuda_capture_end();
     check(cg.exec != 0UL, "conv capture end");
     std::cuda_scale(dy, 0.0f, dy);
@@ -183,11 +183,11 @@ static void check_cudnn() {
     ya = fm_download(dy, 0UL, outN);
     unsafe { check(fm_err(ya.at(0UL), (const float*)ca.data, outN) < 1e-5f, "conv graph values"); }
     ya.free();
-    std::cuda_graph_free(&cg);
+    cg.free();
 
     // TF32 tensor cores: same result to ~1e-3
     check(std::cuda_set_tf32(1), "tf32 on");
-    check(std::cuda_conv2d(&d2, dx, dy, 2UL, 21UL, 15UL), "tf32 conv ran");
+    check(d2.forward(dx, dy, 2UL, 21UL, 15UL), "tf32 conv ran");
     ya = fm_download(dy, 0UL, outN);
     unsafe { check(fm_err(ya.at(0UL), (const float*)ca.data, outN) < 1e-2f, "tf32 conv values"); }
     ya.free();
@@ -270,34 +270,34 @@ static void check_cudnn() {
     ya.free(); yb.free();
     check(!std::cuda_copy_rows(dx, 0UL, 4UL, dc2, 0UL, 16UL, 8UL, 2UL) &&
           !std::cuda_copy_rows(dx, 0UL, 8UL, dc2, 250UL, 8UL, 8UL, 2UL), "cuda_copy_rows rejects overlap / overrun");
-    std::cuda_free(&dc2);
+    dc2.free();
 
     // a cached conv plan run on other buffers (rebinds its variant pack)
     struct CudaBuf dy2 = std::cuda_alloc(2UL * outN);
-    check(std::cuda_conv2d(&d2, dx, dy2, 2UL, 21UL, 15UL), "cuda_conv2d other buffers ran");
+    check(d2.forward(dx, dy2, 2UL, 21UL, 15UL), "CudaConv2D::forward other buffers ran");
     yb = fm_download(dy2, 0UL, outN);
-    unsafe { check(fm_err(yb.at(0UL), (const float*)ca.data, outN) < 1e-5f, "cuda_conv2d other buffers values"); }
+    unsafe { check(fm_err(yb.at(0UL), (const float*)ca.data, outN) < 1e-5f, "CudaConv2D::forward other buffers values"); }
     yb.free();
-    std::cuda_free(&dy2);
+    dy2.free();
 
     // whole U-Net
     struct UNet net = std::unet_new(3UL, 8UL, 16UL, 2UL);
     struct FeatureMap ux = std::feature_map_new(3UL, 32UL, 24UL);
     fm_fill(&ux, 7UL);
-    struct FeatureMap uc = std::unet_forward(&net, &ux);
+    struct FeatureMap uc = net.forward(&ux);
     struct FeatureMap ug = std::unet_forward_cuda(&net, &ux);
     check(ug.channels == 2UL && ug.height == 32UL && ug.width == 24UL, "unet_forward_cuda shape");
     unsafe { check(fm_err((const float*)ug.data, (const float*)uc.data, fm_size(&uc)) < 1e-4f, "unet_forward_cuda values"); }
 
-    std::feature_map_free(&ug); std::feature_map_free(&uc); std::feature_map_free(&ux);
-    std::unet_free(&net);
-    std::feature_map_free(&cat); std::feature_map_free(&up); std::feature_map_free(&mp); std::feature_map_free(&ap);
-    std::cuda_free(&dxa); std::cuda_free(&dxb); std::cuda_free(&dc); std::cuda_free(&du); std::cuda_free(&dp);
-    std::cuda_free(&dx); std::cuda_free(&dy);
-    std::cuda_conv2d_free(&d2);
-    std::feature_map_free(&ca); std::feature_map_free(&cb); std::feature_map_free(&xa); std::feature_map_free(&xb);
-    std::feature_map_free(&c1); std::feature_map_free(&x1);
-    std::conv2d_free(&l1); std::conv2d_free(&l2);
+    ug.free(); uc.free(); ux.free();
+    net.free();
+    cat.free(); up.free(); mp.free(); ap.free();
+    dxa.free(); dxb.free(); dc.free(); du.free(); dp.free();
+    dx.free(); dy.free();
+    d2.free();
+    ca.free(); cb.free(); xa.free(); xb.free();
+    c1.free(); x1.free();
+    l1.free(); l2.free();
 }
 
 static &heap Complex cplx_new(unsigned long n, unsigned long salt) {
@@ -566,23 +566,23 @@ static void check_half() {
         i = 0UL;
         while (i < 1000UL) { if (*ob.at(i) != *o2.at(i)) bad = bad + 1UL; i = i + 1UL; }
         check(bad == 0UL, bf ? "bf16 sgd2 matches sgd" : "fp16 sgd2 matches sgd");
-        std::cuda_half_free(&hy); std::cuda_half_free(&ht); std::cuda_half_free(&hd); std::cuda_half_free(&hr);
-        std::cuda_half_free(&c16r); std::cuda_half_free(&w1); std::cuda_half_free(&w2); std::cuda_half_free(&w1b);
-        std::cuda_half_free(&w2b); std::cuda_half_free(&g2); std::cuda_free(&loss);
+        hy.free(); ht.free(); hd.free(); hr.free();
+        c16r.free(); w1.free(); w2.free(); w1b.free();
+        w2b.free(); g2.free(); loss.free();
         y.free(); tt.free(); yb.free(); tb_.free(); ob.free(); o2.free(); cr.free();
 
         // dtype mismatches are rejected
         struct CudaHalfBuf other = std::cuda_half_alloc(k * nn, bf ? CUDA_FP16 : CUDA_BF16);
         check(!std::cuda_half_gemm_f32(ha, 0, other, 0, c32, m, nn, k), "half gemm dtype check");
-        std::cuda_half_free(&other);
+        other.free();
 
-        std::cuda_half_free(&h); std::cuda_half_free(&hu); std::cuda_half_free(&ha); std::cuda_half_free(&hb);
-        std::cuda_half_free(&c16); std::cuda_half_free(&hg); std::cuda_free(&c32); std::cuda_free(&back);
+        h.free(); hu.free(); ha.free(); hb.free();
+        c16.free(); hg.free(); c32.free(); back.free();
         bits.free(); ubits.free(); fb.free(); a.free(); b.free(); ar.free(); br.free(); cb.free();
         wb.free(); gbits.free(); wn.free();
         d = d + 1;
     }
-    std::cuda_free(&dv);
+    dv.free();
     v.free();
 }
 
@@ -642,7 +642,7 @@ static void check_decode_ops() {
             }
             check(ok && err <= (float)1e-5 * (big > (float)1.0 ? big : (float)1.0) * (float)k, "half gemv vs reference");
             got.free(); w.free(); x.free(); bits.free();
-            std::cuda_half_free(&dw); std::cuda_free(&dx); std::cuda_free(&dy);
+            dw.free(); dx.free(); dy.free();
             ki = ki + 1;
         }
         di = di + 1;
@@ -700,9 +700,9 @@ static void check_decode_ops() {
     struct CudaHalfBuf small = std::cuda_half_alloc(10UL, CUDA_BF16);
     check(!std::cuda_half_gemv(small, dg, dgo, 5UL, 4UL), "half gemv rejects a too-small weight buffer");
     check(!std::cuda_rmsnorm(dx, dw, dy, 4UL, n, (float)1e-6), "rmsnorm rejects too many rows");
-    std::cuda_half_free(&small);
+    small.free();
     x.free(); w.free(); y1.free(); y2.free(); gx.free(); go.free();
-    std::cuda_free(&dx); std::cuda_free(&dw); std::cuda_free(&dy); std::cuda_free(&dg); std::cuda_free(&dgo);
+    dx.free(); dw.free(); dy.free(); dg.free(); dgo.free();
 }
 
 static void check_transfers() {
@@ -747,8 +747,8 @@ static void check_transfers() {
         unsafe { check(std::cuda_copy_to_host((void*)raw.at(0UL), d.dev + 4UL, (n - 1UL) * 4UL), "cuda_copy_to_host ran"); }
         unsafe { check(*raw.at(0UL) == *h.at(0UL) && *raw.at(n - 2UL) == *h.at(n - 2UL), "raw byte copies at an offset"); }
         raw.free(); h.free(); h2.free();
-        std::cuda_free(&d);
-        std::cuda_free(&out);
+        d.free();
+        out.free();
         si = si + 1;
     }
 }
@@ -840,7 +840,7 @@ static void check_cufft() {
     check(maxdiff(&gf, &re) < 1e-5f, "cuda_fft_c2r round trip");
     gf.free();
 
-    std::cuda_free(&din); std::cuda_free(&dfreq); std::cuda_free(&dre); std::cuda_free(&dhalf); std::cuda_free(&dback);
+    din.free(); dfreq.free(); dre.free(); dhalf.free(); dback.free();
     hf.free(); re.free();
     unsafe {
         std::dealloc(x); std::dealloc(ref); std::dealloc(got);
@@ -892,8 +892,8 @@ static void check_mixed_precision() {
         }
         check(bad == 0UL, d == CUDA_FP16 ? "fp16 -> bf16 == CPU" : "bf16 -> fp16 == CPU");
         got.free();
-        std::cuda_half_free(&hs);
-        std::cuda_half_free(&hd);
+        hs.free();
+        hd.free();
         d = d + 1;
     }
 
@@ -1050,8 +1050,8 @@ static void check_mixed_precision() {
         struct Vec<float> gw2 = download(dw);
         check(maxdiff(&gw, &gw2) == (float)0.0, "flagged step skipped");
         gw.free(); gw2.free(); gh.free(); cw.free(); cm.free(); cv.free();
-        std::cuda_free(&dw); std::cuda_free(&dg); std::cuda_free(&dm); std::cuda_free(&dvv);
-        std::cuda_half_free(&wh);
+        dw.free(); dg.free(); dm.free(); dvv.free();
+        wh.free();
         variant = variant + 1;
     }
 
@@ -1127,16 +1127,16 @@ static void check_mixed_precision() {
                 unsigned long q = 0UL;
                 while (q < h1.length()) { if (*h1.at(q) != *h2.at(q)) { diff = diff + 1UL; q = h1.length(); } q = q + 1UL; }
                 h1.free(); h2.free();
-                std::cuda_half_free(ah.at(k)); std::cuda_half_free(bh.at(k));
+                ah.at(k).free(); bh.at(k).free();
             }
             x1.free(); x2.free(); y1.free(); y2.free();
-            std::cuda_free(am.at(k)); std::cuda_free(av.at(k)); std::cuda_free(bm.at(k)); std::cuda_free(bv.at(k));
+            am.at(k).free(); av.at(k).free(); bm.at(k).free(); bv.at(k).free();
             k = k + 1UL;
         }
         check(okAll && diff == 0UL, pass == 0 ? "mp adam many == per tensor (bf16 copies, flagged step skipped)"
                                               : "mp adam many == per tensor (no 16-bit copies)");
         k = 0UL;
-        while (k < keep.length()) { std::cuda_free(keep.at(k)); k = k + 1UL; }
+        while (k < keep.length()) { keep.at(k).free(); k = k + 1UL; }
         aw.free(); am.free(); av.free(); ag.free(); ah.free(); bw.free(); bm.free(); bv.free(); bh.free(); keep.free();
         pass = pass + 1;
     }
@@ -1148,7 +1148,7 @@ static void check_mixed_precision() {
     e1.push(lone);
     check(!std::cuda_mp_adam_many(&e1, &e2, &e2, &e2, &e3, (float)0.01, (float)0.9, (float)0.999, (float)1.0e-8,
                                   (float)0.0, 1, 1UL, flag), "mp adam many rejects mismatched lists");
-    std::cuda_free(&lone);
+    lone.free();
     e1.free(); e2.free(); e3.free();
 
     // 16-bit elementwise and bias, against CPU arithmetic on the decoded values
@@ -1204,18 +1204,18 @@ static void check_mixed_precision() {
         }
         check(bad == 0UL, "half NCHW bias + relu == CPU");
         yb.free(); biasb.free(); bias.free(); ab.free(); bb.free();
-        std::cuda_half_free(&ha); std::cuda_half_free(&hb); std::cuda_half_free(&ho); std::cuda_half_free(&hbias);
+        ha.free(); hb.free(); ho.free(); hbias.free();
         d = d + 1;
     }
 
     b = 0UL;
     while (b < 40UL) {
-        std::cuda_free(f32s.at(b)); std::cuda_half_free(h16s.at(b)); std::cuda_free(backs.at(b));
+        f32s.at(b).free(); h16s.at(b).free(); backs.at(b).free();
         b = b + 1UL;
     }
-    std::cuda_half_free(&odd);
-    std::cuda_half_free(&g16a); std::cuda_half_free(&g16b);
-    std::cuda_free(&g32a); std::cuda_free(&g32b); std::cuda_free(&flag);
+    odd.free();
+    g16a.free(); g16b.free();
+    g32a.free(); g32b.free(); flag.free();
     f32s.free(); h16s.free(); backs.free(); mixed.free(); two.free(); gs.free(); g32s.free(); one.free();
     pat.free(); cpu.free(); host.free(); gv.free(); scaled.free(); w0.free(); g0.free(); xa.free(); xb.free();
 }
@@ -1274,8 +1274,8 @@ static void check_cudnn_half() {
             fm_fill(&xb, 50UL);
             fm_round_(&xa, d);
             fm_round_(&xb, d);
-            struct FeatureMap ca = std::conv2d_forward(&lr, &xa);
-            struct FeatureMap cb = std::conv2d_forward(&lr, &xb);
+            struct FeatureMap ca = lr.forward(&xa);
+            struct FeatureMap cb = lr.forward(&xb);
             unsigned long inN = fm_size(&xa);
             unsigned long outN = fm_size(&ca);
             struct Vec<float> both = std::vec_with_cap(2UL * inN);
@@ -1289,7 +1289,7 @@ static void check_cudnn_half() {
             struct CudaHalfBuf hx = std::cuda_half_upload(both.at(0UL), 2UL * inN, d);
             struct CudaHalfBuf hy = std::cuda_half_alloc(2UL * outN, d);
             check(hl.weight.dev != 0UL && hx.dev != 0UL && hy.dev != 0UL, "half conv upload");
-            check(std::cuda_half_conv2d(&hl, hx, hy, 2UL, 21UL, 15UL), d == CUDA_FP16 ? "fp16 conv ran" : "bf16 conv ran");
+            check(hl.forward(hx, hy, 2UL, 21UL, 15UL), d == CUDA_FP16 ? "fp16 conv ran" : "bf16 conv ran");
             struct Vec<float> ya = half_download_(hy, 0UL, outN);
             struct Vec<float> yb = half_download_(hy, outN, outN);
             unsafe {
@@ -1297,7 +1297,7 @@ static void check_cudnn_half() {
                       d == CUDA_FP16 ? "fp16 conv values" : "bf16 conv values");
             }
             ya.free(); yb.free();
-            check(std::cuda_half_conv2d_relu(&hl, hx, hy, 2UL, 21UL, 15UL), "half conv relu ran");
+            check(hl.forward_relu(hx, hy, 2UL, 21UL, 15UL), "half conv relu ran");
             yb = half_download_(hy, outN, outN);
             unsafe {
                 unsigned long i = 0UL;
@@ -1321,15 +1321,15 @@ static void check_cudnn_half() {
                 pa.free();
                 struct CudaHalfBuf other = std::cuda_half_alloc(2UL * pn, d == CUDA_FP16 ? CUDA_BF16 : CUDA_FP16);
                 check(!std::cuda_half_maxpool2d(hx, other, 2UL, inC, 21UL, 15UL, 3UL, 2UL), "half pool rejects mixed dtypes");
-                std::cuda_half_free(&other);
-                std::cuda_half_free(&hp);
-                std::feature_map_free(&mp); std::feature_map_free(&ap);
+                other.free();
+                hp.free();
+                mp.free(); ap.free();
             }
-            std::cuda_half_free(&hx); std::cuda_half_free(&hy);
-            std::cuda_half_conv2d_free(&hl);
+            hx.free(); hy.free();
+            hl.free();
             both.free();
-            std::feature_map_free(&ca); std::feature_map_free(&cb); std::feature_map_free(&xa); std::feature_map_free(&xb);
-            std::conv2d_free(&l); std::conv2d_free(&lr);
+            ca.free(); cb.free(); xa.free(); xb.free();
+            l.free(); lr.free();
             shape = shape + 1;
         }
         d = d + 1;
@@ -1581,7 +1581,7 @@ int main() {
         std::dealloc(rawq);
         std::dealloc(backq);
     }
-    std::cuda_free(&dg); std::cuda_free(&w1); std::cuda_free(&w2);
+    dg.free(); w1.free(); w2.free();
     hv.free();
 
     // graph: record add + scale, replay twice
@@ -1596,10 +1596,10 @@ int main() {
     while (i < n) { *want.at(i) = *b.at(i) * (float)0.5; i = i + 1UL; }
     check(maxdiff(&got, &want) < 1e-5f, "graph replay values");
     got.free();
-    std::cuda_graph_free(&g);
+    g.free();
 
-    std::cuda_free(&da); std::cuda_free(&db); std::cuda_free(&dout); std::cuda_free(&d1);
-    std::cuda_free(&small); std::cuda_free(&dga); std::cuda_free(&dgb); std::cuda_free(&dgc);
+    da.free(); db.free(); dout.free(); d1.free();
+    small.free(); dga.free(); dgb.free(); dgc.free();
     check(da.dev == 0UL, "free clears handle");
     a.free(); b.free(); want.free(); ga.free(); gb.free(); ref.free(); hc.free();
 

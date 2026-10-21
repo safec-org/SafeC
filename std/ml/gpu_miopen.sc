@@ -266,14 +266,14 @@ static int mio_conv_(const &RocmConv2D layer, struct RocmBuf x, struct RocmBuf y
     return rocm_bias_channels(yv, layer.bias, batch, layer.outChannels, outH * outW, relu);
 }
 
-int rocm_conv2d(const &RocmConv2D layer, struct RocmBuf x, struct RocmBuf y,
-                unsigned long batch, unsigned long height, unsigned long width) {
-    return mio_conv_(layer, x, y, batch, height, width, 0);
+int RocmConv2D::forward(struct RocmBuf x, struct RocmBuf y, unsigned long batch, unsigned long height,
+                        unsigned long width) const {
+    return mio_conv_(self, x, y, batch, height, width, 0);
 }
 
-int rocm_conv2d_relu(const &RocmConv2D layer, struct RocmBuf x, struct RocmBuf y,
-                     unsigned long batch, unsigned long height, unsigned long width) {
-    return mio_conv_(layer, x, y, batch, height, width, 1);
+int RocmConv2D::forward_relu(struct RocmBuf x, struct RocmBuf y, unsigned long batch, unsigned long height,
+                             unsigned long width) const {
+    return mio_conv_(self, x, y, batch, height, width, 1);
 }
 
 static int mio_pool_dt_(int mode, int dt, unsigned long xdev, unsigned long xlen, unsigned long ydev, unsigned long ylen,
@@ -337,15 +337,15 @@ struct RocmConv2D rocm_conv2d_upload(const &Conv2D layer) {
     d.weight = rocm_upload(layer.weight, wn);
     d.bias = rocm_upload(layer.bias, layer.outChannels);
     if (d.weight.dev == 0UL || d.bias.dev == 0UL) {
-        rocm_free(&d.weight);
-        rocm_free(&d.bias);
+        d.weight.free();
+        d.bias.free();
     }
     return d;
 }
 
-void rocm_conv2d_free(&RocmConv2D layer) {
-    rocm_free(&layer.weight);
-    rocm_free(&layer.bias);
+void RocmConv2D::free() {
+    self.weight.free();
+    self.bias.free();
 }
 
 // ── fp16 / bf16 ──────────────────────────────────────────────────────────────
@@ -364,15 +364,15 @@ struct RocmHalfConv2D rocm_half_conv2d_upload(const &Conv2D layer, int dtype) {
     d.weight = rocm_half_upload(layer.weight, wn, dtype);
     d.bias = rocm_half_upload(layer.bias, layer.outChannels, dtype);
     if (d.weight.dev == 0UL || d.bias.dev == 0UL) {
-        rocm_half_free(&d.weight);
-        rocm_half_free(&d.bias);
+        d.weight.free();
+        d.bias.free();
     }
     return d;
 }
 
-void rocm_half_conv2d_free(&RocmHalfConv2D layer) {
-    rocm_half_free(&layer.weight);
-    rocm_half_free(&layer.bias);
+void RocmHalfConv2D::free() {
+    self.weight.free();
+    self.bias.free();
 }
 
 static int mio_half_conv_(const &RocmHalfConv2D layer, struct RocmHalfBuf x, struct RocmHalfBuf y,
@@ -400,14 +400,14 @@ static int mio_half_conv_(const &RocmHalfConv2D layer, struct RocmHalfBuf x, str
     return rocm_half_bias(y, layer.bias, batch, layer.outChannels, outH * outW, relu);
 }
 
-int rocm_half_conv2d(const &RocmHalfConv2D layer, struct RocmHalfBuf x, struct RocmHalfBuf y,
-                     unsigned long batch, unsigned long height, unsigned long width) {
-    return mio_half_conv_(layer, x, y, batch, height, width, 0);
+int RocmHalfConv2D::forward(struct RocmHalfBuf x, struct RocmHalfBuf y, unsigned long batch, unsigned long height,
+                            unsigned long width) const {
+    return mio_half_conv_(self, x, y, batch, height, width, 0);
 }
 
-int rocm_half_conv2d_relu(const &RocmHalfConv2D layer, struct RocmHalfBuf x, struct RocmHalfBuf y,
-                          unsigned long batch, unsigned long height, unsigned long width) {
-    return mio_half_conv_(layer, x, y, batch, height, width, 1);
+int RocmHalfConv2D::forward_relu(struct RocmHalfBuf x, struct RocmHalfBuf y, unsigned long batch,
+                                 unsigned long height, unsigned long width) const {
+    return mio_half_conv_(self, x, y, batch, height, width, 1);
 }
 
 // ── U-Net ────────────────────────────────────────────────────────────────────
@@ -443,41 +443,41 @@ struct RocmUNet rocm_unet_new(const &UNet net, unsigned long batch, unsigned lon
     return g;
 }
 
-int rocm_unet_forward(const &RocmUNet net, struct RocmBuf x, struct RocmBuf y) {
-    if (!net.ok) return 0;
-    unsigned long B = net.batch;
-    unsigned long H = net.height;
-    unsigned long W = net.width;
-    unsigned long c1 = net.encConv1.outChannels;
-    unsigned long c2 = net.encConv2.outChannels;
+int RocmUNet::forward(struct RocmBuf x, struct RocmBuf y) const {
+    if (!self.ok) return 0;
+    unsigned long B = self.batch;
+    unsigned long H = self.height;
+    unsigned long W = self.width;
+    unsigned long c1 = self.encConv1.outChannels;
+    unsigned long c2 = self.encConv2.outChannels;
     // Encoder: conv+relu -> 2x2 max pool, twice.
-    return rocm_conv2d_relu(&net.encConv1, x, net.e1, B, H, W) &&
-           rocm_maxpool2d(net.e1, net.p1, B, c1, H, W, 2UL, 2UL) &&
-           rocm_conv2d_relu(&net.encConv2, net.p1, net.e2, B, H / 2UL, W / 2UL) &&
-           rocm_maxpool2d(net.e2, net.p2, B, c2, H / 2UL, W / 2UL, 2UL, 2UL) &&
-           rocm_conv2d_relu(&net.bottleneck, net.p2, net.mid, B, H / 4UL, W / 4UL) &&
+    return self.encConv1.forward_relu(x, self.e1, B, H, W) &&
+           rocm_maxpool2d(self.e1, self.p1, B, c1, H, W, 2UL, 2UL) &&
+           self.encConv2.forward_relu(self.p1, self.e2, B, H / 2UL, W / 2UL) &&
+           rocm_maxpool2d(self.e2, self.p2, B, c2, H / 2UL, W / 2UL, 2UL, 2UL) &&
+           self.bottleneck.forward_relu(self.p2, self.mid, B, H / 4UL, W / 4UL) &&
            // Decoder: upsample + concat the skip (one kernel), conv(+relu).
-           rocm_upsample2x_concat(net.mid, c2, net.e2, c2, net.cat1, B, H / 4UL, W / 4UL) &&
-           rocm_conv2d_relu(&net.decConv1, net.cat1, net.d1, B, H / 2UL, W / 2UL) &&
-           rocm_upsample2x_concat(net.d1, c1, net.e1, c1, net.cat2, B, H / 2UL, W / 2UL) &&
-           rocm_conv2d(&net.decConv2, net.cat2, y, B, H, W);
+           rocm_upsample2x_concat(self.mid, c2, self.e2, c2, self.cat1, B, H / 4UL, W / 4UL) &&
+           self.decConv1.forward_relu(self.cat1, self.d1, B, H / 2UL, W / 2UL) &&
+           rocm_upsample2x_concat(self.d1, c1, self.e1, c1, self.cat2, B, H / 2UL, W / 2UL) &&
+           self.decConv2.forward(self.cat2, y, B, H, W);
 }
 
-void rocm_unet_free(&RocmUNet net) {
-    rocm_conv2d_free(&net.encConv1);
-    rocm_conv2d_free(&net.encConv2);
-    rocm_conv2d_free(&net.bottleneck);
-    rocm_conv2d_free(&net.decConv1);
-    rocm_conv2d_free(&net.decConv2);
-    rocm_free(&net.e1);
-    rocm_free(&net.p1);
-    rocm_free(&net.e2);
-    rocm_free(&net.p2);
-    rocm_free(&net.mid);
-    rocm_free(&net.cat1);
-    rocm_free(&net.d1);
-    rocm_free(&net.cat2);
-    net.ok = 0;
+void RocmUNet::free() {
+    self.encConv1.free();
+    self.encConv2.free();
+    self.bottleneck.free();
+    self.decConv1.free();
+    self.decConv2.free();
+    self.e1.free();
+    self.p1.free();
+    self.e2.free();
+    self.p2.free();
+    self.mid.free();
+    self.cat1.free();
+    self.d1.free();
+    self.cat2.free();
+    self.ok = 0;
 }
 
 // ── Host convenience ─────────────────────────────────────────────────────────
@@ -494,14 +494,14 @@ struct FeatureMap conv2d_forward_rocm(const &Conv2D layer, const &FeatureMap inp
         struct RocmBuf y = rocm_alloc(layer.outChannels * outH * outW);
         struct FeatureMap out = feature_map_new(layer.outChannels, outH, outW);
         int ok = d.weight.dev != 0UL && x.dev != 0UL && y.dev != 0UL &&
-                 rocm_conv2d(&d, x, y, 1UL, h, w) && rocm_read(y, out.data, y.len);
-        rocm_conv2d_free(&d);
-        rocm_free(&x);
-        rocm_free(&y);
+                 d.forward(x, y, 1UL, h, w) && rocm_read(y, out.data, y.len);
+        d.free();
+        x.free();
+        y.free();
         if (ok) return out;
-        feature_map_free(&out);
+        out.free();
     }
-    return conv2d_forward(layer, input);
+    return layer.forward(input);
 }
 
 struct FeatureMap unet_forward_rocm(&UNet net, const &FeatureMap input) {
@@ -514,14 +514,14 @@ struct FeatureMap unet_forward_rocm(&UNet net, const &FeatureMap input) {
         struct RocmBuf y = rocm_alloc(outC * h * w);
         struct FeatureMap out = feature_map_new(outC, h, w);
         int ok = g.ok && x.dev != 0UL && y.dev != 0UL &&
-                 rocm_unet_forward(&g, x, y) && rocm_read(y, out.data, y.len);
-        rocm_unet_free(&g);
-        rocm_free(&x);
-        rocm_free(&y);
+                 g.forward(x, y) && rocm_read(y, out.data, y.len);
+        g.free();
+        x.free();
+        y.free();
         if (ok) return out;
-        feature_map_free(&out);
+        out.free();
     }
-    return unet_forward(net, input);
+    return net.forward(input);
 }
 
 } // namespace std

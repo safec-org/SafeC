@@ -182,20 +182,19 @@ struct GatedDeltaNet gated_deltanet_new(unsigned long dModel, unsigned long keyD
     return layer;
 }
 
-void gated_deltanet_free(&GatedDeltaNet layer) {
+void GatedDeltaNet::free() {
     unsafe {
-        layer->Walpha->free(); layer->Wbeta->free();
-        free((void*)layer->Walpha); free((void*)layer->Wbeta);
+        self->Walpha->free(); self->Wbeta->free();
+        free((void*)self->Walpha); free((void*)self->Wbeta);
     }
 }
 
-&Tensor gated_deltanet_forward(const &GatedDeltaNet layer, const &Tensor X,
-                                const &Tensor Q, const &Tensor K, const &Tensor V) {
+&Tensor GatedDeltaNet::forward(const &Tensor X, const &Tensor Q, const &Tensor K, const &Tensor V) const {
     unsigned long seqLen; unsigned long dModel;
     unsigned long keyDim; unsigned long valueDim;
     unsafe {
         seqLen = X->shape[0]; dModel = X->shape[1];
-        keyDim = layer->keyDim; valueDim = layer->valueDim;
+        keyDim = self->keyDim; valueDim = self->valueDim;
     }
 
     &Tensor out = tensor_new_2d(seqLen, valueDim, 0);
@@ -211,8 +210,8 @@ void gated_deltanet_free(&GatedDeltaNet layer) {
             unsigned long d = 0UL;
             while (d < dModel) {
                 float xv = X->data[t * dModel + d];
-                alphaLogit = alphaLogit + xv * layer->Walpha->data[d];
-                betaLogit = betaLogit + xv * layer->Wbeta->data[d];
+                alphaLogit = alphaLogit + xv * self->Walpha->data[d];
+                betaLogit = betaLogit + xv * self->Wbeta->data[d];
                 d = d + 1UL;
             }
             float alpha = (float)1.0 / ((float)1.0 + exp_f(-alphaLogit));

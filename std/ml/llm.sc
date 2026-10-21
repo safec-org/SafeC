@@ -30,11 +30,11 @@ struct LlmClient llm_client_new(const &char host, unsigned short port,
     return c;
 }
 
-struct String llm_chat(&LlmClient client, &Vec<struct LlmMessage> messages, ?&int ok) {
+struct String LlmClient::chat(&Vec<struct LlmMessage> messages, ?&int ok) {
     struct Value req;
     unsafe {
         req = value_object();
-        value_object_set(&req, "model", value_string(client.model.as_ptr()));
+        value_object_set(&req, "model", value_string(self.model.as_ptr()));
         struct Value msgArr = value_array();
         unsigned long n = messages.length();
         unsigned long i = 0UL;
@@ -54,10 +54,10 @@ struct String llm_chat(&LlmClient client, &Vec<struct LlmMessage> messages, ?&in
 
     struct String headers = string_new();
     unsafe {
-        int hasKey = client.apiKey.length() > 0UL;
+        int hasKey = self.apiKey.length() > 0UL;
         if (hasKey) {
             headers.push("Authorization: Bearer ");
-            headers.push(client.apiKey.as_ptr());
+            headers.push(self.apiKey.as_ptr());
             headers.push("\r\n");
         }
     }
@@ -65,7 +65,7 @@ struct String llm_chat(&LlmClient client, &Vec<struct LlmMessage> messages, ?&in
     int httpOk = 0;
     struct HttpResponse resp;
     unsafe {
-        resp = http_request(client.host.as_ptr(), client.port, "POST", "/v1/chat/completions",
+        resp = http_request(self.host.as_ptr(), self.port, "POST", "/v1/chat/completions",
                              headers.as_ptr(), (const unsigned char*)body.data, body.len, &httpOk);
     }
     unsafe { headers.free(); body.free(); }
@@ -150,19 +150,19 @@ struct Chain chain_new() {
     return c;
 }
 
-void chain_add_step(&Chain c, ChainStepFn step) {
-    unsafe { c.steps.push(step); }
+void Chain::add_step(ChainStepFn step) {
+    unsafe { self.steps.push(step); }
 }
 
-struct Value chain_run(&Chain c, const &Value input) {
+struct Value Chain::run(const &Value input) {
     struct Value current;
     unsafe { current = value_clone(input); }
     unsigned long n;
-    unsafe { n = c.steps.length(); }
+    unsafe { n = self.steps.length(); }
     unsigned long i = 0UL;
     while (i < n) {
         unsafe {
-            ChainStepFn* fp = c.steps.at(i);
+            ChainStepFn* fp = self.steps.at(i);
             struct Value next = (*fp)(&current);
             value_free(&current);
             current = next;
@@ -172,8 +172,8 @@ struct Value chain_run(&Chain c, const &Value input) {
     return current;
 }
 
-void chain_free(&Chain c) {
-    unsafe { c.steps.free(); }
+void Chain::free() {
+    unsafe { self.steps.free(); }
 }
 
 // ── Graph executor ───────────────────────────────────────────────────────────
@@ -195,12 +195,12 @@ static void __graph_add(&Graph g, const char* name, GraphNodeFn nodeFn,
     unsafe { g.nodes.push(node); }
 }
 
-void graph_add_node(&Graph g, const &char name, GraphNodeFn nodeFn, const &char nextNode) {
-    __graph_add(g, name, nodeFn, (GraphRouterFn)0, nextNode);
+void Graph::add_node(const &char name, GraphNodeFn nodeFn, const &char nextNode) {
+    __graph_add(self, name, nodeFn, (GraphRouterFn)0, nextNode);
 }
 
-void graph_add_conditional_node(&Graph g, const &char name, GraphNodeFn nodeFn, GraphRouterFn router) {
-    __graph_add(g, name, nodeFn, router, "__end__");
+void Graph::add_conditional_node(const &char name, GraphNodeFn nodeFn, GraphRouterFn router) {
+    __graph_add(self, name, nodeFn, router, "__end__");
 }
 
 static struct GraphNode* __graph_find(&Graph g, const char* name) {
@@ -217,10 +217,10 @@ static struct GraphNode* __graph_find(&Graph g, const char* name) {
     return (struct GraphNode*)0;
 }
 
-struct Value graph_run(&Graph g, struct Value initialState, int maxSteps) {
+struct Value Graph::run(struct Value initialState, int maxSteps) {
     struct Value state = initialState;
     struct String currentName;
-    unsafe { currentName = string_from(g.entryNode.as_ptr()); }
+    unsafe { currentName = string_from(self.entryNode.as_ptr()); }
 
     int step = 0;
     while (step < maxSteps) {
@@ -229,7 +229,7 @@ struct Value graph_run(&Graph g, struct Value initialState, int maxSteps) {
         if (isEnd) break;
 
         struct GraphNode* node;
-        unsafe { node = __graph_find(g, currentName.as_ptr()); }
+        unsafe { node = __graph_find(self, currentName.as_ptr()); }
         if (node == (struct GraphNode*)0) break;
 
         struct Value nextState;
@@ -252,20 +252,20 @@ struct Value graph_run(&Graph g, struct Value initialState, int maxSteps) {
     return state;
 }
 
-void graph_free(&Graph g) {
+void Graph::free() {
     unsigned long n;
-    unsafe { n = g.nodes.length(); }
+    unsafe { n = self.nodes.length(); }
     unsigned long i = 0UL;
     while (i < n) {
         unsafe {
-            struct GraphNode* node = g.nodes.at(i);
+            struct GraphNode* node = self.nodes.at(i);
             node->name.free();
             node->nextNode.free();
         }
         i = i + 1UL;
     }
-    unsafe { g.nodes.free(); }
-    unsafe { g.entryNode.free(); }
+    unsafe { self.nodes.free(); }
+    unsafe { self.entryNode.free(); }
 }
 
 // ── Tracer ───────────────────────────────────────────────────────────────────
@@ -276,23 +276,22 @@ struct Tracer tracer_new() {
     return t;
 }
 
-void tracer_record(&Tracer t, const &char name, const &Value input,
-                    const &Value output, double durationMs) {
+void Tracer::record(const &char name, const &Value input, const &Value output, double durationMs) {
     struct TraceEvent ev;
     ev.name = string_from(name);
     unsafe { ev.inputJson = value_to_json(input); ev.outputJson = value_to_json(output); }
     ev.durationMs = durationMs;
-    unsafe { t.events.push(ev); }
+    unsafe { self.events.push(ev); }
 }
 
-struct String tracer_to_json(const &Tracer t) {
+struct String Tracer::to_json() const {
     struct String out = string_new();
     unsafe {
         out.push("[");
-        unsigned long n = t.events.length();
+        unsigned long n = self.events.length();
         unsigned long i = 0UL;
         while (i < n) {
-            struct TraceEvent* ev = t.events.at(i);
+            struct TraceEvent* ev = self.events.at(i);
             if (i > 0UL) out.push(",");
             out.push("{\"name\":\"");
             out.push(ev->name.as_ptr());
@@ -310,20 +309,20 @@ struct String tracer_to_json(const &Tracer t) {
     return out;
 }
 
-void tracer_free(&Tracer t) {
+void Tracer::free() {
     unsigned long n;
-    unsafe { n = t.events.length(); }
+    unsafe { n = self.events.length(); }
     unsigned long i = 0UL;
     while (i < n) {
         unsafe {
-            struct TraceEvent* ev = t.events.at(i);
+            struct TraceEvent* ev = self.events.at(i);
             ev->name.free();
             ev->inputJson.free();
             ev->outputJson.free();
         }
         i = i + 1UL;
     }
-    unsafe { t.events.free(); }
+    unsafe { self.events.free(); }
 }
 
 } // namespace std

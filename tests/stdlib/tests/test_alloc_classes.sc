@@ -2,7 +2,7 @@
 // allocations. Sizes in (1MB, 1.5MB] used to map to a size class 33 one past
 // the 33-entry cache tables, so alloc_raw_ read allocCacheCount_[33], which is
 // whatever thread_local the linker put next — cnn.sc's im2col buffer pointer
-// once conv2d_forward had run, giving a garbage "cached" block and a segfault.
+// once Conv2D::forward had run, giving a garbage "cached" block and a segfault.
 #include <std/test/test.h>
 #include <std/mem.h>
 #include <std/thread.h>
@@ -52,7 +52,7 @@ static void conv_then_alloc(unsigned long inC, unsigned long outC, unsigned long
         i = 0UL;
         while (i < outC) { l.bias[i] = (float)i * (float)0.05 - (float)0.1; i = i + 1UL; }
     }
-    struct FeatureMap y = relu ? conv2d_relu_forward(&l, &x) : conv2d_forward(&l, &x);
+    struct FeatureMap y = relu ? l.relu_forward(&x) : l.forward(&x);
     unsigned long oh = (h + 2UL * pad - k) / stride + 1UL;
     unsigned long ow = (w + 2UL * pad - k) / stride + 1UL;
     ASSERT_EQ(y.channels, outC);
@@ -101,9 +101,9 @@ static void conv_then_alloc(unsigned long inC, unsigned long outC, unsigned long
         t_size_classes();
         round = round + 1;
     }
-    feature_map_free(&y);
-    feature_map_free(&x);
-    conv2d_free(&l);
+    y.free();
+    x.free();
+    l.free();
 }
 
 void t_conv_then_alloc() {

@@ -19,7 +19,7 @@ static ?&TensorArena rl_heap_begin_() {
 
 static void rl_heap_end_(?&TensorArena cur) {
     match (cur) {
-        case some(a): { tensor_arena_begin(a); }
+        case some(a): { a.begin(); }
         case null: { }
     }
 }
@@ -39,7 +39,7 @@ static unsigned long rl_argmax_(const float* v, unsigned long n, &Rng rng) {
             if (v[i] > v[best]) { best = i; ties = 1UL; }
             else if (v[i] == v[best]) {
                 ties = ties + 1UL;
-                if (rng_below(rng, ties) == 0UL) best = i;
+                if (rng.below(ties) == 0UL) best = i;
             }
             i = i + 1UL;
         }
@@ -66,24 +66,24 @@ struct Bandit bandit_new(unsigned long k, unsigned long seed) {
     ?&TensorArena cur = rl_heap_begin_();
     b.means = tensor_new_1d(k, 0);
     rl_heap_end_(cur);
-    rng_fill_normal(&b.rng, b.means, (float)0.0, (float)1.0);
+    b.rng.fill_normal(b.means, (float)0.0, (float)1.0);
     return b;
 }
 
-float bandit_pull(&Bandit b, unsigned long arm) {
-    unsafe { return b.means->data[arm] + rng_normal(&b.rng); }
+float Bandit::pull(unsigned long arm) {
+    unsafe { return self.means->data[arm] + self.rng.normal(); }
 }
 
-unsigned long bandit_best_arm(const &Bandit b) {
+unsigned long Bandit::best_arm() const {
     unsigned long best = 0UL;
     unsafe {
         unsigned long i = 1UL;
-        while (i < b.k) { if (b.means->data[i] > b.means->data[best]) best = i; i = i + 1UL; }
+        while (i < self.k) { if (self.means->data[i] > self.means->data[best]) best = i; i = i + 1UL; }
     }
     return best;
 }
 
-void bandit_free(&Bandit b) { rl_drop_(b.means); }
+void Bandit::free() { rl_drop_(self.means); }
 
 // ══ GridWorld ════════════════════════════════════════════════════════════════
 
@@ -104,76 +104,76 @@ struct GridWorld gridworld_new(unsigned long width, unsigned long height, unsign
     g.steps = 0UL;
     g.maxSteps = 1000UL;
     g.rng = rng_new(seed);
-    gridworld_set(&g, width - 1UL, height - 1UL, GRID_GOAL);
+    g.set(width - 1UL, height - 1UL, GRID_GOAL);
     return g;
 }
 
 struct GridWorld gridworld_cliff(unsigned long seed) {
     struct GridWorld g = gridworld_new(12UL, 4UL, seed);
-    gridworld_set_start(&g, 0UL, 3UL);
+    g.set_start(0UL, 3UL);
     unsigned long x = 1UL;
-    while (x < 11UL) { gridworld_set(&g, x, 3UL, GRID_PIT); x = x + 1UL; }
+    while (x < 11UL) { g.set(x, 3UL, GRID_PIT); x = x + 1UL; }
     return g;
 }
 
-void gridworld_set(&GridWorld g, unsigned long x, unsigned long y, int cell) {
-    unsafe { g.cells->data[y * g.width + x] = (float)cell; }
+void GridWorld::set(unsigned long x, unsigned long y, int cell) {
+    unsafe { self.cells->data[y * self.width + x] = (float)cell; }
 }
 
-void gridworld_set_start(&GridWorld g, unsigned long x, unsigned long y) {
-    g.start = y * g.width + x;
+void GridWorld::set_start(unsigned long x, unsigned long y) {
+    self.start = y * self.width + x;
 }
 
-unsigned long gridworld_states(const &GridWorld g) { return g.width * g.height; }
+unsigned long GridWorld::states() const { return self.width * self.height; }
 
-unsigned long gridworld_reset(&GridWorld g) {
-    g.state = g.start;
-    g.steps = 0UL;
-    return g.state;
+unsigned long GridWorld::reset() {
+    self.state = self.start;
+    self.steps = 0UL;
+    return self.state;
 }
 
 static int grid_cell_(const &GridWorld g, unsigned long s) {
     unsafe { return (int)g.cells->data[s]; }
 }
 
-struct EnvStep gridworld_step(&GridWorld g, unsigned long action, &unsigned long next) {
+struct EnvStep GridWorld::step(unsigned long action, &unsigned long next) {
     struct EnvStep r;
-    r.reward = g.stepReward;
+    r.reward = self.stepReward;
     r.terminated = 0;
     r.truncated = 0;
-    if (g.slip > (float)0.0 && rng_uniform(&g.rng) < g.slip) action = rng_below(&g.rng, 4UL);
-    unsigned long x = g.state % g.width;
-    unsigned long y = g.state / g.width;
+    if (self.slip > (float)0.0 && self.rng.uniform() < self.slip) action = self.rng.below(4UL);
+    unsigned long x = self.state % self.width;
+    unsigned long y = self.state / self.width;
     if (action == GRID_UP && y > 0UL) y = y - 1UL;
-    else if (action == GRID_RIGHT && x + 1UL < g.width) x = x + 1UL;
-    else if (action == GRID_DOWN && y + 1UL < g.height) y = y + 1UL;
+    else if (action == GRID_RIGHT && x + 1UL < self.width) x = x + 1UL;
+    else if (action == GRID_DOWN && y + 1UL < self.height) y = y + 1UL;
     else if (action == GRID_LEFT && x > 0UL) x = x - 1UL;
-    unsigned long s = y * g.width + x;
-    int cell = grid_cell_(g, s);
-    if (cell != GRID_WALL) g.state = s;
+    unsigned long s = y * self.width + x;
+    int cell = grid_cell_(self, s);
+    if (cell != GRID_WALL) self.state = s;
     if (cell == GRID_PIT) {
-        r.reward = g.pitReward;
-        if (g.pitTerminal) r.terminated = 1;
-        else g.state = g.start;
+        r.reward = self.pitReward;
+        if (self.pitTerminal) r.terminated = 1;
+        else self.state = self.start;
     } else if (cell == GRID_GOAL) {
-        r.reward = r.reward + g.goalReward;
+        r.reward = r.reward + self.goalReward;
         r.terminated = 1;
     }
-    g.steps = g.steps + 1UL;
-    if (!r.terminated && g.steps >= g.maxSteps) r.truncated = 1;
-    *next = g.state;
+    self.steps = self.steps + 1UL;
+    if (!r.terminated && self.steps >= self.maxSteps) r.truncated = 1;
+    *next = self.state;
     return r;
 }
 
-void gridworld_one_hot(const &GridWorld g, unsigned long state, &Tensor obs) {
+void GridWorld::one_hot(unsigned long state, &Tensor obs) const {
     unsafe {
-        unsigned long n = g.width * g.height;
+        unsigned long n = self.width * self.height;
         unsigned long i = 0UL;
         while (i < n) { obs->data[i] = i == state ? (float)1.0 : (float)0.0; i = i + 1UL; }
     }
 }
 
-void gridworld_free(&GridWorld g) { rl_drop_(g.cells); }
+void GridWorld::free() { rl_drop_(self.cells); }
 
 // ══ CartPole ═════════════════════════════════════════════════════════════════
 
@@ -195,16 +195,16 @@ struct CartPole cartpole_new(unsigned long seed) {
     return env;
 }
 
-void cartpole_reset(&CartPole env, &Tensor obs) {
-    env.x = (float)0.1 * rng_uniform(&env.rng) - (float)0.05;
-    env.xDot = (float)0.1 * rng_uniform(&env.rng) - (float)0.05;
-    env.theta = (float)0.1 * rng_uniform(&env.rng) - (float)0.05;
-    env.thetaDot = (float)0.1 * rng_uniform(&env.rng) - (float)0.05;
-    env.steps = 0UL;
-    cartpole_obs_(env, obs);
+void CartPole::reset(&Tensor obs) {
+    self.x = (float)0.1 * self.rng.uniform() - (float)0.05;
+    self.xDot = (float)0.1 * self.rng.uniform() - (float)0.05;
+    self.theta = (float)0.1 * self.rng.uniform() - (float)0.05;
+    self.thetaDot = (float)0.1 * self.rng.uniform() - (float)0.05;
+    self.steps = 0UL;
+    cartpole_obs_(self, obs);
 }
 
-struct EnvStep cartpole_step(&CartPole env, unsigned long action, &Tensor obs) {
+struct EnvStep CartPole::step(unsigned long action, &Tensor obs) {
     float gravity = (float)9.8;
     float massPole = (float)0.1;
     float totalMass = (float)1.1;
@@ -212,23 +212,23 @@ struct EnvStep cartpole_step(&CartPole env, unsigned long action, &Tensor obs) {
     float poleMassLength = (float)0.05;
     float tau = (float)0.02;
     float force = action == 1UL ? (float)10.0 : (float)-10.0;
-    float c = cos_f(env.theta);
-    float s = sin_f(env.theta);
-    float temp = (force + poleMassLength * env.thetaDot * env.thetaDot * s) / totalMass;
+    float c = cos_f(self.theta);
+    float s = sin_f(self.theta);
+    float temp = (force + poleMassLength * self.thetaDot * self.thetaDot * s) / totalMass;
     float thetaAcc = (gravity * s - c * temp) /
                      (length * ((float)4.0 / (float)3.0 - massPole * c * c / totalMass));
     float xAcc = temp - poleMassLength * thetaAcc * c / totalMass;
-    env.x = env.x + tau * env.xDot;
-    env.xDot = env.xDot + tau * xAcc;
-    env.theta = env.theta + tau * env.thetaDot;
-    env.thetaDot = env.thetaDot + tau * thetaAcc;
-    env.steps = env.steps + 1UL;
-    cartpole_obs_(env, obs);
+    self.x = self.x + tau * self.xDot;
+    self.xDot = self.xDot + tau * xAcc;
+    self.theta = self.theta + tau * self.thetaDot;
+    self.thetaDot = self.thetaDot + tau * thetaAcc;
+    self.steps = self.steps + 1UL;
+    cartpole_obs_(self, obs);
     struct EnvStep r;
     r.reward = (float)1.0;
     float lim = (float)0.20943951;        // 12 degrees
-    r.terminated = env.x < (float)-2.4 || env.x > (float)2.4 || env.theta < -lim || env.theta > lim;
-    r.truncated = !r.terminated && env.steps >= env.maxSteps;
+    r.terminated = self.x < (float)-2.4 || self.x > (float)2.4 || self.theta < -lim || self.theta > lim;
+    r.truncated = !r.terminated && self.steps >= self.maxSteps;
     return r;
 }
 
@@ -262,38 +262,38 @@ static void bandit_softmax_(const &BanditAgent a, float* p) {
     }
 }
 
-unsigned long bandit_agent_select(&BanditAgent a) {
-    unsigned long k = a.k;
+unsigned long BanditAgent::select() {
+    unsigned long k = self.k;
     unsigned long choice = 0UL;
     unsafe {
         float* score = (float*)malloc(sizeof(float) * k);
-        const float* n = (const float*)a.counts->data;
-        const float* q = (const float*)a.values->data;
+        const float* n = (const float*)self.counts->data;
+        const float* q = (const float*)self.values->data;
         unsigned long i = 0UL;
-        if (a.kind == BANDIT_EPS_GREEDY) {
-            if (rng_uniform(&a.rng) < a.param) choice = rng_below(&a.rng, k);
-            else choice = rl_argmax_(q, k, &a.rng);
-        } else if (a.kind == BANDIT_UCB1) {
+        if (self.kind == BANDIT_EPS_GREEDY) {
+            if (self.rng.uniform() < self.param) choice = self.rng.below(k);
+            else choice = rl_argmax_(q, k, &self.rng);
+        } else if (self.kind == BANDIT_UCB1) {
             int untried = 0;
             while (i < k) { if (n[i] == (float)0.0) { untried = 1; choice = i; break; } i = i + 1UL; }
             if (!untried) {
-                float lt = log_f((float)a.t);
+                float lt = log_f((float)self.t);
                 i = 0UL;
-                while (i < k) { score[i] = q[i] + a.param * sqrt_f(lt / n[i]); i = i + 1UL; }
-                choice = rl_argmax_((const float*)score, k, &a.rng);
+                while (i < k) { score[i] = q[i] + self.param * sqrt_f(lt / n[i]); i = i + 1UL; }
+                choice = rl_argmax_((const float*)score, k, &self.rng);
             }
-        } else if (a.kind == BANDIT_THOMPSON) {
+        } else if (self.kind == BANDIT_THOMPSON) {
             // posterior of each arm's mean under a N(0, param^2) prior and unit noise
-            float prior = (float)1.0 / (a.param * a.param);
+            float prior = (float)1.0 / (self.param * self.param);
             while (i < k) {
                 float prec = prior + n[i];
-                score[i] = n[i] * q[i] / prec + rng_normal(&a.rng) / sqrt_f(prec);
+                score[i] = n[i] * q[i] / prec + self.rng.normal() / sqrt_f(prec);
                 i = i + 1UL;
             }
-            choice = rl_argmax_((const float*)score, k, &a.rng);
+            choice = rl_argmax_((const float*)score, k, &self.rng);
         } else {
-            bandit_softmax_(a, score);
-            float u = rng_uniform(&a.rng);
+            bandit_softmax_(self, score);
+            float u = self.rng.uniform();
             float acc = (float)0.0;
             choice = k - 1UL;
             while (i < k) { acc = acc + score[i]; if (u < acc) { choice = i; break; } i = i + 1UL; }
@@ -303,32 +303,32 @@ unsigned long bandit_agent_select(&BanditAgent a) {
     return choice;
 }
 
-void bandit_agent_update(&BanditAgent a, unsigned long arm, float reward) {
-    a.t = a.t + 1UL;
+void BanditAgent::update(unsigned long arm, float reward) {
+    self.t = self.t + 1UL;
     unsafe {
-        a.counts->data[arm] = a.counts->data[arm] + (float)1.0;
-        if (a.kind == BANDIT_GRADIENT) {
-            float* p = (float*)malloc(sizeof(float) * a.k);
-            bandit_softmax_(a, p);
-            float d = reward - a.baseline;
+        self.counts->data[arm] = self.counts->data[arm] + (float)1.0;
+        if (self.kind == BANDIT_GRADIENT) {
+            float* p = (float*)malloc(sizeof(float) * self.k);
+            bandit_softmax_(self, p);
+            float d = reward - self.baseline;
             unsigned long i = 0UL;
-            while (i < a.k) {
+            while (i < self.k) {
                 float ind = i == arm ? (float)1.0 : (float)0.0;
-                a.values->data[i] = a.values->data[i] + a.param * d * (ind - p[i]);
+                self.values->data[i] = self.values->data[i] + self.param * d * (ind - p[i]);
                 i = i + 1UL;
             }
             free((void*)p);
         } else {
-            float n = a.counts->data[arm];
-            a.values->data[arm] = a.values->data[arm] + (reward - a.values->data[arm]) / n;
+            float n = self.counts->data[arm];
+            self.values->data[arm] = self.values->data[arm] + (reward - self.values->data[arm]) / n;
         }
     }
-    a.baseline = a.baseline + (reward - a.baseline) / (float)a.t;
+    self.baseline = self.baseline + (reward - self.baseline) / (float)self.t;
 }
 
-void bandit_agent_free(&BanditAgent a) {
-    rl_drop_(a.counts);
-    rl_drop_(a.values);
+void BanditAgent::free() {
+    rl_drop_(self.counts);
+    rl_drop_(self.values);
 }
 
 // ══ Tabular TD ═══════════════════════════════════════════════════════════════
@@ -359,16 +359,16 @@ static float tab_max_(const &TabularAgent a, unsigned long s) {
     return m;
 }
 
-unsigned long tabular_greedy(const &TabularAgent a, unsigned long state) {
+unsigned long TabularAgent::greedy(unsigned long state) const {
     unsigned long best = 0UL;
     unsigned long i = 1UL;
-    while (i < a.actions) { if (tab_q_(a, state, i) > tab_q_(a, state, best)) best = i; i = i + 1UL; }
+    while (i < self.actions) { if (tab_q_(self, state, i) > tab_q_(self, state, best)) best = i; i = i + 1UL; }
     return best;
 }
 
-unsigned long tabular_act(&TabularAgent a, unsigned long state) {
-    if (rng_uniform(&a.rng) < a.epsilon) return rng_below(&a.rng, a.actions);
-    unsafe { return rl_argmax_((const float*)&a.q->data[state * a.actions], a.actions, &a.rng); }
+unsigned long TabularAgent::act(unsigned long state) {
+    if (self.rng.uniform() < self.epsilon) return self.rng.below(self.actions);
+    unsafe { return rl_argmax_((const float*)&self.q->data[state * self.actions], self.actions, &self.rng); }
 }
 
 static float tab_apply_(&TabularAgent a, unsigned long s, unsigned long act, float target) {
@@ -377,33 +377,31 @@ static float tab_apply_(&TabularAgent a, unsigned long s, unsigned long act, flo
     return td;
 }
 
-float q_learning_update(&TabularAgent a, unsigned long s, unsigned long act, float r,
-                        unsigned long s2, int terminal) {
-    float target = terminal ? r : r + a.gamma * tab_max_(a, s2);
-    return tab_apply_(a, s, act, target);
+float TabularAgent::q_learning_update(unsigned long s, unsigned long act, float r, unsigned long s2, int terminal) {
+    float target = terminal ? r : r + self.gamma * tab_max_(self, s2);
+    return tab_apply_(self, s, act, target);
 }
 
-float sarsa_update(&TabularAgent a, unsigned long s, unsigned long act, float r,
-                   unsigned long s2, unsigned long a2, int terminal) {
-    float target = terminal ? r : r + a.gamma * tab_q_(a, s2, a2);
-    return tab_apply_(a, s, act, target);
+float TabularAgent::sarsa_update(unsigned long s, unsigned long act, float r, unsigned long s2, unsigned long a2,
+                                 int terminal) {
+    float target = terminal ? r : r + self.gamma * tab_q_(self, s2, a2);
+    return tab_apply_(self, s, act, target);
 }
 
-float expected_sarsa_update(&TabularAgent a, unsigned long s, unsigned long act, float r,
-                            unsigned long s2, int terminal) {
+float TabularAgent::expected_sarsa_update(unsigned long s, unsigned long act, float r, unsigned long s2, int terminal) {
     float target = r;
     if (!terminal) {
         float mean = (float)0.0;
         unsigned long i = 0UL;
-        while (i < a.actions) { mean = mean + tab_q_(a, s2, i); i = i + 1UL; }
-        mean = mean / (float)a.actions;
-        float ev = ((float)1.0 - a.epsilon) * tab_max_(a, s2) + a.epsilon * mean;
-        target = r + a.gamma * ev;
+        while (i < self.actions) { mean = mean + tab_q_(self, s2, i); i = i + 1UL; }
+        mean = mean / (float)self.actions;
+        float ev = ((float)1.0 - self.epsilon) * tab_max_(self, s2) + self.epsilon * mean;
+        target = r + self.gamma * ev;
     }
-    return tab_apply_(a, s, act, target);
+    return tab_apply_(self, s, act, target);
 }
 
-void tabular_agent_free(&TabularAgent a) { rl_drop_(a.q); }
+void TabularAgent::free() { rl_drop_(self.q); }
 
 // ══ DQN ══════════════════════════════════════════════════════════════════════
 
@@ -423,27 +421,26 @@ struct ReplayBuffer replay_new(unsigned long slots, unsigned long obsDim) {
     return rb;
 }
 
-void replay_push(&ReplayBuffer rb, const &Tensor obs, unsigned long action, float reward,
-                 const &Tensor next, int terminal) {
-    unsigned long p = rb.pos;
-    unsigned long d = rb.obsDim;
+void ReplayBuffer::push(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminal) {
+    unsigned long p = self.pos;
+    unsigned long d = self.obsDim;
     unsafe {
         unsigned long i = 0UL;
         while (i < d) {
-            rb.obs->data[p * d + i] = obs->data[i];
-            rb.next->data[p * d + i] = next->data[i];
+            self.obs->data[p * d + i] = obs->data[i];
+            self.next->data[p * d + i] = next->data[i];
             i = i + 1UL;
         }
-        rb.action->data[p] = (float)action;
-        rb.reward->data[p] = reward;
-        rb.terminal->data[p] = terminal ? (float)1.0 : (float)0.0;
+        self.action->data[p] = (float)action;
+        self.reward->data[p] = reward;
+        self.terminal->data[p] = terminal ? (float)1.0 : (float)0.0;
     }
-    rb.pos = (p + 1UL) % rb.slots;
-    if (rb.size < rb.slots) rb.size = rb.size + 1UL;
+    self.pos = (p + 1UL) % self.slots;
+    if (self.size < self.slots) self.size = self.size + 1UL;
 }
 
-void replay_free(&ReplayBuffer rb) {
-    rl_drop_(rb.obs); rl_drop_(rb.next); rl_drop_(rb.action); rl_drop_(rb.reward); rl_drop_(rb.terminal);
+void ReplayBuffer::free() {
+    rl_drop_(self.obs); rl_drop_(self.next); rl_drop_(self.action); rl_drop_(self.reward); rl_drop_(self.terminal);
 }
 
 struct DqnConfig dqn_config_default() {
@@ -474,9 +471,9 @@ struct Dqn dqn_new(unsigned long obsDim, unsigned long actions, const &DqnConfig
     d.rng = rng_new(cfg.seed);
     d.q = mlp_new(obsDim, cfg.hidden, cfg.hiddenLayers, actions, ACT_RELU, ACT_NONE, &d.rng);
     d.target = mlp_new(obsDim, cfg.hidden, cfg.hiddenLayers, actions, ACT_RELU, ACT_NONE, &d.rng);
-    mlp_copy(&d.target, &d.q);
+    d.target.copy(&d.q);
     d.opt = optimizer_new(OPT_ADAM, cfg.lr);
-    optimizer_add_mlp(&d.opt, &d.q);
+    d.q.add_params(&d.opt);
     d.buffer = replay_new(cfg.bufferSize, obsDim);
     d.stepArena = tensor_arena_new(0UL);
     d.obsDim = obsDim;
@@ -487,23 +484,23 @@ struct Dqn dqn_new(unsigned long obsDim, unsigned long actions, const &DqnConfig
     return d;
 }
 
-float dqn_epsilon(const &Dqn d) {
-    if (d.steps >= d.cfg.epsDecaySteps) return d.cfg.epsEnd;
-    float f = (float)d.steps / (float)d.cfg.epsDecaySteps;
-    return d.cfg.epsStart + f * (d.cfg.epsEnd - d.cfg.epsStart);
+float Dqn::epsilon() const {
+    if (self.steps >= self.cfg.epsDecaySteps) return self.cfg.epsEnd;
+    float f = (float)self.steps / (float)self.cfg.epsDecaySteps;
+    return self.cfg.epsStart + f * (self.cfg.epsEnd - self.cfg.epsStart);
 }
 
-unsigned long dqn_act(&Dqn d, const &Tensor obs, int explore) {
-    if (explore && rng_uniform(&d.rng) < dqn_epsilon(d)) return rng_below(&d.rng, d.actions);
+unsigned long Dqn::act(const &Tensor obs, int explore) {
+    if (explore && self.rng.uniform() < self.epsilon()) return self.rng.below(self.actions);
     ?&TensorArena outer = tensor_arena_current_();
     int was = tensor_is_grad_enabled();
     tensor_set_grad_enabled(0);
-    tensor_arena_begin(&d.stepArena);
-    &Tensor q = mlp_forward(&d.q, rl_row_(obs, d.obsDim));
+    self.stepArena.begin();
+    &Tensor q = self.q.forward(rl_row_(obs, self.obsDim));
     unsigned long a;
-    unsafe { a = rl_argmax_((const float*)q->data, d.actions, &d.rng); }
+    unsafe { a = rl_argmax_((const float*)q->data, self.actions, &self.rng); }
     tensor_arena_end();
-    tensor_arena_reset(&d.stepArena);
+    self.stepArena.reset();
     tensor_set_grad_enabled(was);
     rl_heap_end_(outer);
     return a;
@@ -521,7 +518,7 @@ static float dqn_train_(&Dqn d) {
     unsafe {
         unsigned long r = 0UL;
         while (r < B) {
-            unsigned long j = rng_below(&d.rng, d.buffer.size);
+            unsigned long j = d.rng.below(d.buffer.size);
             unsigned long c = 0UL;
             while (c < D) {
                 ob->data[r * D + c] = d.buffer.obs->data[j * D + c];
@@ -536,8 +533,8 @@ static float dqn_train_(&Dqn d) {
     }
     // targets without gradient: r + gamma * (1 - terminal) * Q_target(s', a*)
     tensor_set_grad_enabled(0);
-    &Tensor qt = mlp_forward(&d.target, nx);
-    &Tensor qo = d.cfg.doubleDqn ? mlp_forward(&d.q, nx) : qt;
+    &Tensor qt = d.target.forward(nx);
+    &Tensor qo = d.cfg.doubleDqn ? d.q.forward(nx) : qt;
     unsafe {
         unsigned long r = 0UL;
         while (r < B) {
@@ -550,45 +547,44 @@ static float dqn_train_(&Dqn d) {
         }
     }
     tensor_set_grad_enabled(1);
-    &Tensor qsa = tensor_sum_rows(tensor_mul(mlp_forward(&d.q, ob), tensor_one_hot(act, A)));
+    &Tensor qsa = tensor_sum_rows(tensor_mul(d.q.forward(ob), tensor_one_hot(act, A)));
     &Tensor loss = tensor_huber_loss(qsa, y, d.cfg.huberDelta);
-    optimizer_zero_grad(&d.opt);
+    d.opt.zero_grad();
     tensor_backward(loss);
-    if (d.cfg.clipNorm > (float)0.0) optimizer_clip_grad_norm(&d.opt, d.cfg.clipNorm);
-    optimizer_step(&d.opt);
+    if (d.cfg.clipNorm > (float)0.0) d.opt.clip_grad_norm(d.cfg.clipNorm);
+    d.opt.step();
     d.updates = d.updates + 1UL;
     if (d.cfg.targetEvery > 0UL) {
-        if (d.updates % d.cfg.targetEvery == 0UL) mlp_copy(&d.target, &d.q);
+        if (d.updates % d.cfg.targetEvery == 0UL) d.target.copy(&d.q);
     } else {
-        mlp_soft_update(&d.target, &d.q, d.cfg.tau);
+        d.target.soft_update(&d.q, d.cfg.tau);
     }
     unsafe { return loss->data[0]; }
 }
 
-float dqn_observe(&Dqn d, const &Tensor obs, unsigned long action, float reward,
-                  const &Tensor next, int terminal) {
-    replay_push(&d.buffer, obs, action, reward, next, terminal);
-    d.steps = d.steps + 1UL;
-    if (d.buffer.size < d.cfg.learningStarts || d.buffer.size < d.cfg.batchSize) return (float)-1.0;
-    if (d.steps % d.cfg.trainEvery != 0UL) return (float)-1.0;
+float Dqn::observe(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminal) {
+    self.buffer.push(obs, action, reward, next, terminal);
+    self.steps = self.steps + 1UL;
+    if (self.buffer.size < self.cfg.learningStarts || self.buffer.size < self.cfg.batchSize) return (float)-1.0;
+    if (self.steps % self.cfg.trainEvery != 0UL) return (float)-1.0;
     ?&TensorArena outer = tensor_arena_current_();
     int was = tensor_is_grad_enabled();
-    tensor_arena_begin(&d.stepArena);
-    float l = dqn_train_(d);
+    self.stepArena.begin();
+    float l = dqn_train_(self);
     tensor_arena_end();
-    tensor_arena_reset(&d.stepArena);
+    self.stepArena.reset();
     tensor_set_grad_enabled(was);
     rl_heap_end_(outer);
-    d.lastLoss = l;
+    self.lastLoss = l;
     return l;
 }
 
-void dqn_free(&Dqn d) {
-    optimizer_free(&d.opt);
-    mlp_free(&d.q);
-    mlp_free(&d.target);
-    replay_free(&d.buffer);
-    tensor_arena_free(&d.stepArena);
+void Dqn::free() {
+    self.opt.free();
+    self.q.free();
+    self.target.free();
+    self.buffer.free();
+    self.stepArena.free();
 }
 
 // ══ Policy gradient ══════════════════════════════════════════════════════════
@@ -626,8 +622,8 @@ struct PolicyAgent pg_new(unsigned long obsDim, unsigned long actions, const &Pg
         while (i < wl->size) { wl->data[i] = wl->data[i] * (float)0.01; i = i + 1UL; }
     }
     a.opt = optimizer_new(OPT_ADAM, cfg.lr);
-    optimizer_add_mlp(&a.opt, &a.policy);
-    optimizer_add_mlp(&a.opt, &a.value);
+    a.policy.add_params(&a.opt);
+    a.value.add_params(&a.opt);
     a.stepArena = tensor_arena_new(0UL);
     a.obsDim = obsDim;
     a.actions = actions;
@@ -638,18 +634,18 @@ struct PolicyAgent pg_new(unsigned long obsDim, unsigned long actions, const &Pg
     return a;
 }
 
-unsigned long pg_act(&PolicyAgent a, const &Tensor obs, int sample) {
+unsigned long PolicyAgent::act(const &Tensor obs, int sample) {
     ?&TensorArena outer = tensor_arena_current_();
     int was = tensor_is_grad_enabled();
     tensor_set_grad_enabled(0);
-    tensor_arena_begin(&a.stepArena);
-    &Tensor logits = mlp_forward(&a.policy, rl_row_(obs, a.obsDim));
+    self.stepArena.begin();
+    &Tensor logits = self.policy.forward(rl_row_(obs, self.obsDim));
     unsigned long choice = 0UL;
     unsafe {
         const float* l = (const float*)logits->data;
-        unsigned long A = a.actions;
+        unsigned long A = self.actions;
         if (!sample) {
-            choice = rl_argmax_(l, A, &a.rng);
+            choice = rl_argmax_(l, A, &self.rng);
         } else {
             float mx = l[0];
             unsigned long i = 1UL;
@@ -657,7 +653,7 @@ unsigned long pg_act(&PolicyAgent a, const &Tensor obs, int sample) {
             float s = (float)0.0;
             i = 0UL;
             while (i < A) { s = s + exp_f(l[i] - mx); i = i + 1UL; }
-            float u = rng_uniform(&a.rng) * s;
+            float u = self.rng.uniform() * s;
             float acc = (float)0.0;
             choice = A - 1UL;
             i = 0UL;
@@ -665,23 +661,23 @@ unsigned long pg_act(&PolicyAgent a, const &Tensor obs, int sample) {
         }
     }
     tensor_arena_end();
-    tensor_arena_reset(&a.stepArena);
+    self.stepArena.reset();
     tensor_set_grad_enabled(was);
     rl_heap_end_(outer);
     return choice;
 }
 
-void pg_record(&PolicyAgent a, const &Tensor obs, unsigned long action, float reward,
-               const &Tensor next, int terminated, int truncated) {
+void PolicyAgent::record(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminated,
+                         int truncated) {
     unsafe {
         unsigned long i = 0UL;
-        while (i < a.obsDim) { a.rObs.push(obs->data[i]); a.rNext.push(next->data[i]); i = i + 1UL; }
+        while (i < self.obsDim) { self.rObs.push(obs->data[i]); self.rNext.push(next->data[i]); i = i + 1UL; }
     }
-    a.rAction.push((float)action);
-    a.rReward.push(reward);
-    a.rTerminal.push(terminated ? (float)1.0 : (float)0.0);
-    a.rDone.push(terminated || truncated ? (float)1.0 : (float)0.0);
-    a.rollout = a.rollout + 1UL;
+    self.rAction.push((float)action);
+    self.rReward.push(reward);
+    self.rTerminal.push(terminated ? (float)1.0 : (float)0.0);
+    self.rDone.push(terminated || truncated ? (float)1.0 : (float)0.0);
+    self.rollout = self.rollout + 1UL;
 }
 
 // Rows 'idx[0..m)' of a flat [N, w] float array as an [m, w] tensor.
@@ -710,7 +706,7 @@ static float pg_step_(&PolicyAgent a, const float* obs, const float* act, const 
     &Tensor Ac = pg_rows_(act, 1UL, idx, m);
     &Tensor Adv = pg_rows_(adv, 1UL, idx, m);
     &Tensor Ret = pg_rows_(ret, 1UL, idx, m);
-    &Tensor logpAll = tensor_log_softmax(mlp_forward(&a.policy, O));
+    &Tensor logpAll = tensor_log_softmax(a.policy.forward(O));
     &Tensor logp = tensor_sum_rows(tensor_mul(logpAll, tensor_one_hot(Ac, A)));
     &Tensor ent = tensor_scale(tensor_mean(tensor_sum_rows(tensor_mul(tensor_exp(logpAll), logpAll))), (float)-1.0);
     &Tensor pol = logp;
@@ -723,34 +719,34 @@ static float pg_step_(&PolicyAgent a, const float* obs, const float* act, const 
     } else {
         pol = tensor_scale(tensor_mean(tensor_mul(logp, Adv)), (float)-1.0);
     }
-    &Tensor vl = tensor_mse_loss(mlp_forward(&a.value, O), Ret);
+    &Tensor vl = tensor_mse_loss(a.value.forward(O), Ret);
     &Tensor loss = tensor_sub(tensor_add(pol, tensor_scale(vl, a.cfg.valueCoef)),
                               tensor_scale(ent, a.cfg.entropyCoef));
-    optimizer_zero_grad(&a.opt);
+    a.opt.zero_grad();
     tensor_backward(loss);
-    if (a.cfg.clipNorm > (float)0.0) optimizer_clip_grad_norm(&a.opt, a.cfg.clipNorm);
-    optimizer_step(&a.opt);
+    if (a.cfg.clipNorm > (float)0.0) a.opt.clip_grad_norm(a.cfg.clipNorm);
+    a.opt.step();
     unsafe {
         a.lastEntropy = ent->data[0];
         return loss->data[0];
     }
 }
 
-float pg_update(&PolicyAgent a) {
-    unsigned long N = a.rollout;
+float PolicyAgent::update() {
+    unsigned long N = self.rollout;
     if (N == 0UL) return (float)0.0;
-    unsigned long D = a.obsDim;
+    unsigned long D = self.obsDim;
     float last = (float)0.0;
     ?&TensorArena outer = tensor_arena_current_();
     int was = tensor_is_grad_enabled();
-    tensor_arena_begin(&a.stepArena);
+    self.stepArena.begin();
     unsafe {
-        const float* obs = (const float*)pg_vec_ptr_(&a.rObs);
-        const float* nxt = (const float*)pg_vec_ptr_(&a.rNext);
-        const float* act = (const float*)pg_vec_ptr_(&a.rAction);
-        const float* rew = (const float*)pg_vec_ptr_(&a.rReward);
-        const float* term = (const float*)pg_vec_ptr_(&a.rTerminal);
-        const float* done = (const float*)pg_vec_ptr_(&a.rDone);
+        const float* obs = (const float*)pg_vec_ptr_(&self.rObs);
+        const float* nxt = (const float*)pg_vec_ptr_(&self.rNext);
+        const float* act = (const float*)pg_vec_ptr_(&self.rAction);
+        const float* rew = (const float*)pg_vec_ptr_(&self.rReward);
+        const float* term = (const float*)pg_vec_ptr_(&self.rTerminal);
+        const float* done = (const float*)pg_vec_ptr_(&self.rDone);
         float* adv = (float*)malloc(sizeof(float) * N);
         float* ret = (float*)malloc(sizeof(float) * N);
         float* logpOld = (float*)malloc(sizeof(float) * N);
@@ -765,16 +761,16 @@ float pg_update(&PolicyAgent a) {
         &Tensor O = pg_rows_(obs, D, (const unsigned long*)idx, N);
         &Tensor Nx = pg_rows_(nxt, D, (const unsigned long*)idx, N);
         &Tensor Ac = pg_rows_(act, 1UL, (const unsigned long*)idx, N);
-        &Tensor Vt = mlp_forward(&a.value, O);
-        &Tensor Vn = mlp_forward(&a.value, Nx);
-        &Tensor Lp = tensor_sum_rows(tensor_mul(tensor_log_softmax(mlp_forward(&a.policy, O)), tensor_one_hot(Ac, a.actions)));
+        &Tensor Vt = self.value.forward(O);
+        &Tensor Vn = self.value.forward(Nx);
+        &Tensor Lp = tensor_sum_rows(tensor_mul(tensor_log_softmax(self.policy.forward(O)), tensor_one_hot(Ac, self.actions)));
         i = 0UL;
         while (i < N) { v[i] = Vt->data[i]; vn[i] = Vn->data[i]; logpOld[i] = Lp->data[i]; i = i + 1UL; }
-        tensor_arena_reset(&a.stepArena);
+        self.stepArena.reset();
         tensor_set_grad_enabled(1);
 
-        float g = a.cfg.gamma;
-        if (a.cfg.algo == PG_REINFORCE) {
+        float g = self.cfg.gamma;
+        if (self.cfg.algo == PG_REINFORCE) {
             // Monte Carlo returns; a cut-off episode bootstraps from V(next)
             float G = (float)0.0;
             long t = (long)N - 1L;
@@ -789,7 +785,7 @@ float pg_update(&PolicyAgent a) {
             }
         } else {
             // GAE(lambda)
-            float lam = a.cfg.gaeLambda;
+            float lam = self.cfg.gaeLambda;
             float gae = (float)0.0;
             long t = (long)N - 1L;
             while (t >= 0L) {
@@ -803,7 +799,7 @@ float pg_update(&PolicyAgent a) {
                 t = t - 1L;
             }
         }
-        if (a.cfg.normalizeAdv && N > 1UL) {
+        if (self.cfg.normalizeAdv && N > 1UL) {
             double s = 0.0; double sq = 0.0;
             i = 0UL;
             while (i < N) { s = s + (double)adv[i]; sq = sq + (double)adv[i] * (double)adv[i]; i = i + 1UL; }
@@ -813,31 +809,31 @@ float pg_update(&PolicyAgent a) {
             while (i < N) { adv[i] = (float)(((double)adv[i] - m) / sd); i = i + 1UL; }
         }
 
-        if (a.cfg.algo == PG_PPO) {
-            unsigned long mb = a.cfg.minibatch == 0UL ? N : a.cfg.minibatch;
+        if (self.cfg.algo == PG_PPO) {
+            unsigned long mb = self.cfg.minibatch == 0UL ? N : self.cfg.minibatch;
             unsigned long e = 0UL;
-            while (e < a.cfg.epochs) {
+            while (e < self.cfg.epochs) {
                 // shuffle, then minibatches
                 i = N;
                 while (i > 1UL) {
-                    unsigned long j = rng_below(&a.rng, i);
+                    unsigned long j = self.rng.below(i);
                     unsigned long tmp = idx[i - 1UL]; idx[i - 1UL] = idx[j]; idx[j] = tmp;
                     i = i - 1UL;
                 }
                 unsigned long start = 0UL;
                 while (start < N) {
                     unsigned long m = N - start < mb ? N - start : mb;
-                    last = pg_step_(a, obs, act, (const float*)adv, (const float*)ret, (const float*)logpOld,
+                    last = pg_step_(self, obs, act, (const float*)adv, (const float*)ret, (const float*)logpOld,
                                     (const unsigned long*)&idx[start], m);
-                    tensor_arena_reset(&a.stepArena);
+                    self.stepArena.reset();
                     start = start + m;
                 }
                 e = e + 1UL;
             }
         } else {
-            last = pg_step_(a, obs, act, (const float*)adv, (const float*)ret, (const float*)logpOld,
+            last = pg_step_(self, obs, act, (const float*)adv, (const float*)ret, (const float*)logpOld,
                             (const unsigned long*)idx, N);
-            tensor_arena_reset(&a.stepArena);
+            self.stepArena.reset();
         }
         free((void*)adv); free((void*)ret); free((void*)logpOld);
         free((void*)v); free((void*)vn); free((void*)idx);
@@ -845,19 +841,19 @@ float pg_update(&PolicyAgent a) {
     tensor_arena_end();
     tensor_set_grad_enabled(was);
     rl_heap_end_(outer);
-    a.rObs.clear(); a.rNext.clear(); a.rAction.clear();
-    a.rReward.clear(); a.rTerminal.clear(); a.rDone.clear();
-    a.rollout = 0UL;
+    self.rObs.clear(); self.rNext.clear(); self.rAction.clear();
+    self.rReward.clear(); self.rTerminal.clear(); self.rDone.clear();
+    self.rollout = 0UL;
     return last;
 }
 
-void pg_free(&PolicyAgent a) {
-    optimizer_free(&a.opt);
-    mlp_free(&a.policy);
-    mlp_free(&a.value);
-    tensor_arena_free(&a.stepArena);
-    a.rObs.free(); a.rNext.free(); a.rAction.free();
-    a.rReward.free(); a.rTerminal.free(); a.rDone.free();
+void PolicyAgent::free() {
+    self.opt.free();
+    self.policy.free();
+    self.value.free();
+    self.stepArena.free();
+    self.rObs.free(); self.rNext.free(); self.rAction.free();
+    self.rReward.free(); self.rTerminal.free(); self.rDone.free();
 }
 
 } // namespace std

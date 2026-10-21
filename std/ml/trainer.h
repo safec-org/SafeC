@@ -10,10 +10,10 @@
 // targets, and returns a 1-element loss tensor.
 //
 //   static &Tensor clf_loss(&Mlp m, const &Tensor x, const &Tensor y) {
-//       return tensor_cross_entropy_loss(mlp_forward(m, x), y);
+//       return tensor_cross_entropy_loss(m.forward(x), y);
 //   }
 //   struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.01);
-//   optimizer_add_mlp(&opt, &net);
+//   net.add_params(&opt);
 //   struct TrainConfig cfg = train_config_default();
 //   struct TrainReport rep = trainer_fit(&net, clf_loss, &opt, &train, &cfg);
 //
@@ -82,15 +82,15 @@ float trainer_epoch_(&T model, fn &Tensor(&T, const &Tensor, const &Tensor) loss
     double sum = 0.0;
     unsigned long n = 0UL;
     struct Batch b;
-    tensor_arena_begin(stepArena);
-    while (dataloader_next(dl, &b)) {
+    stepArena.begin();
+    while (dl.next(&b)) {
         &Tensor loss = lossFn(model, b.x, b.y);
         sum = sum + (double)trainer_step_(opt, loss, clipNorm);
         n = n + 1UL;
-        tensor_arena_reset(stepArena);
+        stepArena.reset();
     }
     tensor_arena_end();
-    tensor_arena_reset(stepArena);
+    stepArena.reset();
     *batches = n;
     return n > 0UL ? (float)(sum / (double)n) : (float)0.0;
 }
@@ -109,8 +109,8 @@ struct TrainReport trainer_fit(&T model, fn &Tensor(&T, const &Tensor, const &Te
         opt.lr = opt.lr * cfg.lrDecay;
         e = e + 1UL;
     }
-    tensor_arena_free(&stepArena);
-    dataloader_free(&dl);
+    stepArena.free();
+    dl.free();
     return rep;
 }
 
@@ -125,17 +125,17 @@ float trainer_evaluate(&T model, fn &Tensor(&T, const &Tensor, const &Tensor) lo
     struct Batch b;
     double sum = 0.0;
     unsigned long rows = 0UL;
-    tensor_arena_begin(&stepArena);
-    while (dataloader_next(&dl, &b)) {
+    stepArena.begin();
+    while (dl.next(&b)) {
         &Tensor loss = lossFn(model, b.x, b.y);
         unsafe { sum = sum + (double)loss->data[0] * (double)b.rows; }
         rows = rows + b.rows;
-        tensor_arena_reset(&stepArena);
+        stepArena.reset();
     }
     tensor_arena_end();
     tensor_set_grad_enabled(was);
-    tensor_arena_free(&stepArena);
-    dataloader_free(&dl);
+    stepArena.free();
+    dl.free();
     return rows > 0UL ? (float)(sum / (double)rows) : (float)0.0;
 }
 
@@ -151,17 +151,17 @@ float trainer_accuracy(&T model, fn &Tensor(&T, const &Tensor) logitsFn,
     struct Batch b;
     double hits = 0.0;
     unsigned long rows = 0UL;
-    tensor_arena_begin(&stepArena);
-    while (dataloader_next(&dl, &b)) {
+    stepArena.begin();
+    while (dl.next(&b)) {
         &Tensor logits = logitsFn(model, b.x);
         hits = hits + (double)tensor_accuracy(logits, b.y) * (double)b.rows;
         rows = rows + b.rows;
-        tensor_arena_reset(&stepArena);
+        stepArena.reset();
     }
     tensor_arena_end();
     tensor_set_grad_enabled(was);
-    tensor_arena_free(&stepArena);
-    dataloader_free(&dl);
+    stepArena.free();
+    dl.free();
     return rows > 0UL ? (float)(hits / (double)rows) : (float)0.0;
 }
 

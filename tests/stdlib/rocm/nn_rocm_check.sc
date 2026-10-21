@@ -8,7 +8,7 @@ extern int printf(const char* fmt, ...);
 
 static int g_checks = 0;
 static int g_fails = 0;
-static int   g_prec = 0;                   // the nets' activations (rocm_net_set_precision)
+static int   g_prec = 0;                   // the nets' activations (RocmNet::set_precision)
 static float g_tol = (float)0.0005;        // the gradient checks' tolerance at that precision
 static float g_scale = (float)1.0;         // the fp16 loss scale (in the parameter gradients)
 static float g_div = (float)1.0;           // rel_diff_ divides the GPU's values by this
@@ -46,7 +46,7 @@ static float rel_diff_(struct RocmBuf d, const float* host, unsigned long n) {
 
 static &Tensor param_(unsigned long r, unsigned long c, float scale, &Rng rng) {
     &Tensor t = tensor_new_2d(r, c, 1);
-    rng_fill_uniform(rng, t, -scale, scale);
+    rng.fill_uniform(t, -scale, scale);
     return t;
 }
 
@@ -98,9 +98,9 @@ static &Tensor cpu_layer_(const &Spec s, &Tensor x) {
 }
 
 static int gpu_add_(&RocmNet n, const &Spec s) {
-    if (s.kind == ROCM_LAYER_LINEAR) return rocm_net_add_linear(n, s.w, s.b, s.act);
-    if (s.kind == ROCM_LAYER_CONV) return rocm_net_add_conv2d(n, s.w, s.b, s.inC, s.inH, s.inW, s.k, s.s, s.p, s.act);
-    return rocm_net_add_conv_transpose2d(n, s.w, s.b, s.inC, s.inH, s.inW, s.k, s.s, s.p, s.act);
+    if (s.kind == ROCM_LAYER_LINEAR) return n.add_linear(s.w, s.b, s.act);
+    if (s.kind == ROCM_LAYER_CONV) return n.add_conv2d(s.w, s.b, s.inC, s.inH, s.inW, s.k, s.s, s.p, s.act);
+    return n.add_conv_transpose2d(s.w, s.b, s.inC, s.inH, s.inW, s.k, s.s, s.p, s.act);
 }
 
 #define LOSS_CE  0
@@ -115,15 +115,15 @@ static void grad_case_(const char* name, &Vec<struct Spec> specs, unsigned long 
                        unsigned long outDim, int loss, unsigned long seed, int step) {
     struct Rng rng = rng_new(seed);
     &Tensor x = tensor_new_2d(rows, inDim, 1);
-    rng_fill_normal(&rng, x, (float)0.0, (float)1.0);
+    rng.fill_normal(x, (float)0.0, (float)1.0);
     unsigned long tcols = loss == LOSS_CE ? 1UL : outDim;
     &Tensor y = tensor_new_2d(rows, tcols, 0);
     if (loss == LOSS_CE) {
         unsafe { unsigned long r = 0UL; while (r < rows) { y->data[r] = (float)((r * 7UL) % outDim); r = r + 1UL; } }
     } else if (loss == LOSS_BCE) {
-        rng_fill_uniform(&rng, y, (float)0.0, (float)1.0);
+        rng.fill_uniform(y, (float)0.0, (float)1.0);
     } else {
-        rng_fill_normal(&rng, y, (float)0.0, (float)1.0);
+        rng.fill_normal(y, (float)0.0, (float)1.0);
     }
     // CPU
     unsigned long i = 0UL;
@@ -138,8 +138,8 @@ static void grad_case_(const char* name, &Vec<struct Spec> specs, unsigned long 
     struct RocmNet n = rocm_net_new(rows + 3UL);
     i = 0UL;
     while (i < specs.length()) { gpu_add_(&n, specs.at(i)); i = i + 1UL; }
-    check(n.ok && rocm_net_in_dim(&n) == inDim && rocm_net_out_dim(&n) == outDim, name);
-    if (g_prec != 0) check(rocm_net_set_precision(&n, g_prec) && rocm_net_set_loss_scale(&n, g_scale), name);
+    check(n.ok && n.in_dim() == inDim && n.out_dim() == outDim, name);
+    if (g_prec != 0) check(n.set_precision(g_prec) && n.set_loss_scale(g_scale), name);
     struct RocmBuf dx = upload_(x);
     struct RocmBuf dy = upload_(y);
     struct RocmBuf ddx = std::rocm_alloc(rows * inDim);
@@ -152,12 +152,12 @@ static void grad_case_(const char* name, &Vec<struct Spec> specs, unsigned long 
         else if (loss == LOSS_MSE) ok = rocm_net_mse_step(&n, dx, dy, rows, lb);
         else ok = rocm_net_bce_step(&n, dx, dy, rows, lb);
     } else {
-        out = rocm_net_forward(&n, dx, rows);
+        out = n.forward(dx, rows);
         ok = out.dev != 0UL;
-        if (loss == LOSS_CE) ok = ok && rocm_cross_entropy(out, dy, rocm_net_grad_output(&n), lb, rows, outDim);
-        else if (loss == LOSS_MSE) ok = ok && rocm_mse(out, dy, rocm_net_grad_output(&n), lb, rows * outDim, (float)1.0);
-        else ok = ok && rocm_bce_logits(out, dy, rocm_net_grad_output(&n), lb, rows * outDim, (float)1.0);
-        ok = ok && rocm_net_backward(&n, dx, rows, ddx);
+        if (loss == LOSS_CE) ok = ok && rocm_cross_entropy(out, dy, n.grad_output(), lb, rows, outDim);
+        else if (loss == LOSS_MSE) ok = ok && rocm_mse(out, dy, n.grad_output(), lb, rows * outDim, (float)1.0);
+        else ok = ok && rocm_bce_logits(out, dy, n.grad_output(), lb, rows * outDim, (float)1.0);
+        ok = ok && n.backward(dx, rows, ddx);
     }
     check(ok, name);
     float worst = (float)0.0;
@@ -185,8 +185,8 @@ static void grad_case_(const char* name, &Vec<struct Spec> specs, unsigned long 
         printf("  %-38s%s max rel err %.2e\n", name, step ? " (step)" : "       ", (double)worst);
     }
     check(worst < g_tol, name);
-    rocm_net_free(&n);
-    std::rocm_free(&dx); std::rocm_free(&dy); std::rocm_free(&ddx); std::rocm_free(&lb);
+    n.free();
+    dx.free(); dy.free(); ddx.free(); lb.free();
 }
 
 static void grad_tests_() {
@@ -260,7 +260,7 @@ static float max_rel_tensor_(struct RocmBuf d, const &Tensor t) {
     unsafe { return rel_diff_(d, (const float*)t->data, t->size); }
 }
 
-// The net's buffers (rocm_net_download_stats) against a ConvNet's.
+// The net's buffers (RocmNet::download_stats) against a ConvNet's.
 static float buffers_diff_(&RocmNet n, const &Vec<&Tensor> cpu) {
     struct Vec<&Tensor> copy = std::vec_new();
     unsigned long i = 0UL;
@@ -271,7 +271,7 @@ static float buffers_diff_(&RocmNet n, const &Vec<&Tensor> cpu) {
         i = i + 1UL;
     }
     float e = (float)1.0e30;
-    if (rocm_net_download_stats(n, &copy)) {
+    if (n.download_stats(&copy)) {
         e = (float)0.0;
         i = 0UL;
         while (i < cpu.length()) {
@@ -294,22 +294,22 @@ static float buffers_diff_(&RocmNet n, const &Vec<&Tensor> cpu) {
 
 static void convnet_case_(const char* name, &ConvNet c, unsigned long rows, int loss, unsigned long seed, int twice) {
     struct Rng rng = rng_new(seed);
-    unsigned long inDim = convnet_in_dim(c);
-    unsigned long outDim = convnet_out_dim(c);
+    unsigned long inDim = c.in_dim();
+    unsigned long outDim = c.out_dim();
     unsigned long total = twice ? 2UL * rows : rows;
     &Tensor x = tensor_new_2d(total, inDim, 1);
-    rng_fill_normal(&rng, x, (float)0.0, (float)1.0);
+    rng.fill_normal(x, (float)0.0, (float)1.0);
     unsigned long tcols = loss == LOSS_CE ? 1UL : outDim;
     &Tensor y = tensor_new_2d(total, tcols, 0);
     if (loss == LOSS_CE) {
         unsafe { unsigned long r = 0UL; while (r < total) { y->data[r] = (float)((r * 7UL) % outDim); r = r + 1UL; } }
     } else {
-        rng_fill_normal(&rng, y, (float)0.0, (float)1.0);
+        rng.fill_normal(y, (float)0.0, (float)1.0);
     }
     // the GPU copy first: the CPU pass moves the running statistics
     struct RocmNet n = rocm_net_from_convnet(c, total);
-    check(n.ok && rocm_net_in_dim(&n) == inDim && rocm_net_out_dim(&n) == outDim, name);
-    if (g_prec != 0) check(rocm_net_set_precision(&n, g_prec) && rocm_net_set_loss_scale(&n, g_scale), name);
+    check(n.ok && n.in_dim() == inDim && n.out_dim() == outDim, name);
+    if (g_prec != 0) check(n.set_precision(g_prec) && n.set_loss_scale(g_scale), name);
     unsigned long i = 0UL;
     while (i < c.params.length()) { tensor_zero_grad(*c.params.at(i)); i = i + 1UL; }
     &Tensor out = tensor_new_2d(total, outDim, 0);  // the CPU output
@@ -327,8 +327,8 @@ static void convnet_case_(const char* name, &ConvNet c, unsigned long rows, int 
             k = 0UL;
             while (k < rows * tcols) { y1->data[k] = y->data[k]; y2->data[k] = y->data[rows * tcols + k]; k = k + 1UL; }
         }
-        &Tensor o1 = convnet_forward(c, x1);
-        &Tensor o2 = convnet_forward(c, x2);
+        &Tensor o1 = c.forward(x1);
+        &Tensor o2 = c.forward(x2);
         &Tensor l2 = tensor_add(tensor_mse_loss(o1, y1), tensor_mse_loss(o2, y2));
         tensor_backward(l2);
         unsafe {
@@ -340,7 +340,7 @@ static void convnet_case_(const char* name, &ConvNet c, unsigned long rows, int 
         }
         n.segments = 2UL;
     } else {
-        &Tensor oc = convnet_forward(c, x);
+        &Tensor oc = c.forward(x);
         &Tensor l1 = loss == LOSS_CE ? tensor_cross_entropy_loss(oc, y) : tensor_mse_loss(oc, y);
         tensor_backward(l1);
         unsafe {
@@ -356,11 +356,11 @@ static void convnet_case_(const char* name, &ConvNet c, unsigned long rows, int 
     struct RocmBuf ddx = std::rocm_alloc(total * inDim);
     struct RocmBuf lb = std::rocm_alloc(1UL);
     std::rocm_zero(lb);
-    struct RocmBuf o = rocm_net_forward(&n, dx, total);
+    struct RocmBuf o = n.forward(dx, total);
     int ok = o.dev != 0UL;
-    if (loss == LOSS_CE) ok = ok && rocm_cross_entropy(o, dy, rocm_net_grad_output(&n), lb, total, outDim);
-    else ok = ok && rocm_mse(o, dy, rocm_net_grad_output(&n), lb, total * outDim, twice ? (float)2.0 : (float)1.0);
-    ok = ok && rocm_net_backward(&n, dx, total, ddx);
+    if (loss == LOSS_CE) ok = ok && rocm_cross_entropy(o, dy, n.grad_output(), lb, total, outDim);
+    else ok = ok && rocm_mse(o, dy, n.grad_output(), lb, total * outDim, twice ? (float)2.0 : (float)1.0);
+    ok = ok && n.backward(dx, total, ddx);
     check(ok, name);
     float worst = (float)0.0;
     unsafe {
@@ -391,8 +391,8 @@ static void convnet_case_(const char* name, &ConvNet c, unsigned long rows, int 
         printf("  %-45s max rel err %.2e\n", name, (double)worst);
     }
     check(worst < g_tol, name);
-    rocm_net_free(&n);
-    std::rocm_free(&dx); std::rocm_free(&dy); std::rocm_free(&ddx); std::rocm_free(&lb);
+    n.free();
+    dx.free(); dy.free(); ddx.free(); lb.free();
 }
 
 static int nr_fill_test_(struct RocmBuf b, unsigned long n) {
@@ -412,16 +412,16 @@ static void dropout_props_(int byChannel) {
     unsigned long P = 25UL;
     float p = (float)0.3;
     struct RocmNet n = rocm_net_new(rows);
-    rocm_net_set_input(&n, C, 5UL, 5UL);
-    rocm_net_add_dropout(&n, p, byChannel, 1234UL);
+    n.set_input(C, 5UL, 5UL);
+    n.add_dropout(p, byChannel, 1234UL);
     struct Rng rng = rng_new(50UL);
     &Tensor x = tensor_new_2d(rows, C * P, 0);
-    rng_fill_uniform(&rng, x, (float)0.5, (float)1.5);
+    rng.fill_uniform(x, (float)0.5, (float)1.5);
     struct RocmBuf dx = upload_(x);
     struct RocmBuf ddx = std::rocm_alloc(rows * C * P);
-    struct RocmBuf o = rocm_net_forward(&n, dx, rows);
-    int ok = o.dev != 0UL && nr_fill_test_(rocm_net_grad_output(&n), rows * C * P) &&
-             rocm_net_backward(&n, dx, rows, ddx);
+    struct RocmBuf o = n.forward(dx, rows);
+    int ok = o.dev != 0UL && nr_fill_test_(n.grad_output(), rows * C * P) &&
+             n.backward(dx, rows, ddx);
     struct Vec<float> out = std::vec_with_cap(rows * C * P);
     struct Vec<float> grad = std::vec_with_cap(rows * C * P);
     unsigned long i = 0UL;
@@ -451,8 +451,8 @@ static void dropout_props_(int byChannel) {
     unsafe { printf("  dropout%s (training): %.3f dropped (p %.2f)\n", byChannel ? "2d" : "", (double)frac, (double)p); }
     check(ok && good && frac > p - (float)0.06 && frac < p + (float)0.06, byChannel ? "dropout2d properties" : "dropout properties");
     out.free(); grad.free();
-    rocm_net_free(&n);
-    std::rocm_free(&dx); std::rocm_free(&ddx);
+    n.free();
+    dx.free(); ddx.free();
 }
 
 static void convnet_tests_() {
@@ -463,99 +463,99 @@ static void convnet_tests_() {
     struct ConvNet a = convnet_new(4UL, 9UL, 8UL);
     struct Conv2dSpec s1 = conv2d_spec(3UL, 1UL, 1UL);
     s1.kW = 2UL; s1.strideH = 2UL; s1.padW = 0UL; s1.dilationW = 2UL; s1.groups = 2UL;
-    convnet_conv_ex(&a, 6UL, &s1, ACT_NONE, &rng);
-    convnet_batchnorm(&a, ACT_RELU);
+    a.conv_ex(6UL, &s1, ACT_NONE, &rng);
+    a.batchnorm(ACT_RELU);
     struct Pool2dSpec p1 = pool2d_spec(3UL, 2UL, 1UL);
     p1.ceilMode = 1;
-    convnet_maxpool_ex(&a, &p1);
-    convnet_groupnorm(&a, 2UL, ACT_SILU);
+    a.maxpool_ex(&p1);
+    a.groupnorm(2UL, ACT_SILU);
     struct Conv2dSpec s2 = conv2d_spec(3UL, 2UL, 1UL);
     s2.groups = 3UL; s2.outPadH = 1UL;
-    convnet_deconv_ex(&a, 6UL, &s2, ACT_TANH, &rng);
+    a.deconv_ex(6UL, &s2, ACT_TANH, &rng);
     struct Pool2dSpec p2 = pool2d_spec(2UL, 2UL, 1UL);
     p2.countIncludePad = 0;
-    convnet_avgpool_ex(&a, &p2);
-    convnet_global_avgpool(&a);
-    convnet_dense(&a, 5UL, ACT_NONE, &rng);
+    a.avgpool_ex(&p2);
+    a.global_avgpool();
+    a.dense(5UL, ACT_NONE, &rng);
     convnet_case_("convnet: groups/dilation/pools/norms", &a, 6UL, LOSS_CE, 41UL, 0);
-    convnet_free(&a);
+    a.free();
 
     // dense -> reshape -> upsample -> conv -> layer norm -> global max pool -> dense
     struct ConvNet b = convnet_new(1UL, 1UL, 10UL);
-    convnet_dense(&b, 3UL * 4UL * 4UL, ACT_LEAKY, &rng);
-    convnet_reshape(&b, 3UL, 4UL, 4UL);
-    convnet_upsample(&b, 2UL);
-    convnet_conv(&b, 5UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);
-    convnet_layernorm(&b, ACT_GELU);
-    convnet_instancenorm(&b, ACT_SIGMOID);
+    b.dense(3UL * 4UL * 4UL, ACT_LEAKY, &rng);
+    b.reshape(3UL, 4UL, 4UL);
+    b.upsample(2UL);
+    b.conv(5UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);
+    b.layernorm(ACT_GELU);
+    b.instancenorm(ACT_SIGMOID);
     // (at 16 bits a max over near-equal values can pick another element)
-    if (g_prec == 0) convnet_global_maxpool(&b);
-    else convnet_global_avgpool(&b);
-    convnet_dense(&b, 3UL, ACT_NONE, &rng);
+    if (g_prec == 0) b.global_maxpool();
+    else b.global_avgpool();
+    b.dense(3UL, ACT_NONE, &rng);
     convnet_case_("convnet: dense/reshape/upsample/norms", &b, 7UL, LOSS_MSE, 42UL, 0);
-    convnet_free(&b);
+    b.free();
 
     // a DCGAN-style discriminator with batch norm: two stacked batches
     struct ConvNet d = convnet_new(1UL, 8UL, 8UL);
-    convnet_conv(&d, 4UL, 4UL, 2UL, 1UL, ACT_LEAKY, &rng);
-    convnet_conv(&d, 8UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);
-    convnet_batchnorm(&d, ACT_LEAKY);
-    convnet_conv(&d, 1UL, 2UL, 1UL, 0UL, ACT_NONE, &rng);
+    d.conv(4UL, 4UL, 2UL, 1UL, ACT_LEAKY, &rng);
+    d.conv(8UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);
+    d.batchnorm(ACT_LEAKY);
+    d.conv(1UL, 2UL, 1UL, 0UL, ACT_NONE, &rng);
     convnet_case_("convnet: batch norm, two stacked batches", &d, 5UL, LOSS_MSE, 43UL, 1);
     // ... and in inference mode (running statistics)
-    convnet_set_training(&d, 0);
+    d.set_training(0);
     convnet_case_("convnet: batch norm, inference mode", &d, 5UL, LOSS_MSE, 44UL, 0);
-    convnet_free(&d);
+    d.free();
     // residual blocks (identity and projection shortcuts, batch norm) -> global pool -> dense
     struct ConvNet r = convnet_new(3UL, 8UL, 8UL);
-    convnet_conv(&r, 4UL, 3UL, 1UL, 1UL, ACT_RELU, &rng);
-    convnet_residual_block(&r, 4UL, 1UL, 1, ACT_RELU, &rng);     // identity shortcut
-    convnet_residual_block(&r, 8UL, 2UL, 1, ACT_RELU, &rng);     // projection, stride 2
-    convnet_residual_block(&r, 8UL, 1UL, 0, ACT_LEAKY, &rng);    // no batch norm
-    convnet_global_avgpool(&r);
-    convnet_dense(&r, 4UL, ACT_NONE, &rng);
+    r.conv(4UL, 3UL, 1UL, 1UL, ACT_RELU, &rng);
+    r.residual_block(4UL, 1UL, 1, ACT_RELU, &rng);     // identity shortcut
+    r.residual_block(8UL, 2UL, 1, ACT_RELU, &rng);     // projection, stride 2
+    r.residual_block(8UL, 1UL, 0, ACT_LEAKY, &rng);    // no batch norm
+    r.global_avgpool();
+    r.dense(4UL, ACT_NONE, &rng);
     convnet_case_("convnet: residual blocks", &r, 6UL, LOSS_CE, 45UL, 0);
-    convnet_free(&r);
+    r.free();
 
     // U-Net-style: saves reused twice, concat skips, bilinear / bicubic / nearest resizing
     struct ConvNet u = convnet_new(2UL, 8UL, 8UL);
-    convnet_conv(&u, 4UL, 3UL, 1UL, 1UL, ACT_RELU, &rng);
-    unsigned long sv0 = convnet_save(&u);                          // 4 x 8 x 8
-    convnet_maxpool(&u, 2UL, 2UL, 0UL);                           // 4 x 4 x 4
-    convnet_conv(&u, 6UL, 3UL, 1UL, 1UL, ACT_TANH, &rng);
-    unsigned long sv1 = convnet_save(&u);                          // 6 x 4 x 4
-    convnet_resize(&u, 3UL, 3UL, RESIZE_BICUBIC, 1);              // 6 x 3 x 3 (down)
-    convnet_resize(&u, 4UL, 4UL, RESIZE_NEAREST, 0);              // 6 x 4 x 4
-    convnet_concat_skip(&u, sv1);                                  // 12 x 4 x 4
-    convnet_upsample_bilinear(&u, 2UL);                           // 12 x 8 x 8
-    convnet_concat_skip(&u, sv0);                                  // 16 x 8 x 8
-    convnet_add_skip(&u, sv0, ACT_NONE, &rng);                     // + projection 4 -> 16
-    convnet_resize(&u, 11UL, 7UL, RESIZE_BICUBIC, 0);             // 16 x 11 x 7
-    convnet_conv(&u, 1UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);
+    u.conv(4UL, 3UL, 1UL, 1UL, ACT_RELU, &rng);
+    unsigned long sv0 = u.save();                          // 4 x 8 x 8
+    u.maxpool(2UL, 2UL, 0UL);                           // 4 x 4 x 4
+    u.conv(6UL, 3UL, 1UL, 1UL, ACT_TANH, &rng);
+    unsigned long sv1 = u.save();                          // 6 x 4 x 4
+    u.resize(3UL, 3UL, RESIZE_BICUBIC, 1);              // 6 x 3 x 3 (down)
+    u.resize(4UL, 4UL, RESIZE_NEAREST, 0);              // 6 x 4 x 4
+    u.concat_skip(sv1);                                  // 12 x 4 x 4
+    u.upsample_bilinear(2UL);                           // 12 x 8 x 8
+    u.concat_skip(sv0);                                  // 16 x 8 x 8
+    u.add_skip(sv0, ACT_NONE, &rng);                     // + projection 4 -> 16
+    u.resize(11UL, 7UL, RESIZE_BICUBIC, 0);             // 16 x 11 x 7
+    u.conv(1UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);
     convnet_case_("convnet: concat skips, resizes", &u, 4UL, LOSS_MSE, 46UL, 0);
-    convnet_free(&u);
+    u.free();
 
     // spectral norm on conv, deconv and dense weights (training, then inference)
     struct ConvNet sn = convnet_new(2UL, 6UL, 6UL);
-    convnet_conv(&sn, 5UL, 3UL, 2UL, 1UL, ACT_LEAKY, &rng);
-    convnet_spectral_norm(&sn, &rng);
-    convnet_deconv(&sn, 3UL, 2UL, 2UL, 0UL, ACT_LEAKY, &rng);
-    convnet_spectral_norm(&sn, &rng);
-    convnet_dense(&sn, 4UL, ACT_NONE, &rng);
-    convnet_spectral_norm(&sn, &rng);
+    sn.conv(5UL, 3UL, 2UL, 1UL, ACT_LEAKY, &rng);
+    sn.spectral_norm(&rng);
+    sn.deconv(3UL, 2UL, 2UL, 0UL, ACT_LEAKY, &rng);
+    sn.spectral_norm(&rng);
+    sn.dense(4UL, ACT_NONE, &rng);
+    sn.spectral_norm(&rng);
     convnet_case_("convnet: spectral norm (training)", &sn, 5UL, LOSS_CE, 47UL, 0);
-    convnet_set_training(&sn, 0);
+    sn.set_training(0);
     convnet_case_("convnet: spectral norm (inference)", &sn, 5UL, LOSS_CE, 48UL, 0);
-    convnet_free(&sn);
+    sn.free();
 
     // dropout in inference passes values through (the CPU's masks come from its own Rng)
     struct ConvNet dr = convnet_new(3UL, 4UL, 4UL);
-    convnet_conv(&dr, 4UL, 3UL, 1UL, 1UL, ACT_RELU, &rng);
-    convnet_dropout(&dr, (float)0.3, 1, &rng);
-    convnet_dense(&dr, 3UL, ACT_NONE, &rng);
-    convnet_set_training(&dr, 0);
+    dr.conv(4UL, 3UL, 1UL, 1UL, ACT_RELU, &rng);
+    dr.dropout((float)0.3, 1, &rng);
+    dr.dense(3UL, ACT_NONE, &rng);
+    dr.set_training(0);
     convnet_case_("convnet: dropout (inference)", &dr, 5UL, LOSS_CE, 49UL, 0);
-    convnet_free(&dr);
+    dr.free();
     dropout_props_(0);
     dropout_props_(1);
 }
@@ -564,12 +564,12 @@ static void convnet_tests_() {
 static struct ConvNet half_net_(unsigned long seed) {
     struct Rng rng = rng_new(seed);
     struct ConvNet c = convnet_new(1UL, 16UL, 16UL);
-    convnet_conv(&c, 8UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);
-    convnet_batchnorm(&c, ACT_RELU);
-    convnet_residual_block(&c, 8UL, 1UL, 1, ACT_RELU, &rng);
-    convnet_residual_block(&c, 16UL, 2UL, 1, ACT_RELU, &rng);
-    convnet_global_avgpool(&c);
-    convnet_dense(&c, 4UL, ACT_NONE, &rng);
+    c.conv(8UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);
+    c.batchnorm(ACT_RELU);
+    c.residual_block(8UL, 1UL, 1, ACT_RELU, &rng);
+    c.residual_block(16UL, 2UL, 1, ACT_RELU, &rng);
+    c.global_avgpool();
+    c.dense(4UL, ACT_NONE, &rng);
     return c;
 }
 
@@ -582,17 +582,17 @@ static void half_train_case_(const char* name, int prec, float scale0) {
     struct ConvNet c2 = half_net_(9UL);
     struct RocmNet a = rocm_net_from_convnet(&c1, 64UL);
     struct RocmNet b = rocm_net_from_convnet(&c2, 64UL);
-    int ok = rocm_net_set_precision(&b, prec);
-    if (scale0 > (float)0.0) ok = ok && rocm_net_set_loss_scale(&b, scale0);
+    int ok = b.set_precision(prec);
+    if (scale0 > (float)0.0) ok = ok && b.set_loss_scale(scale0);
     struct RocmOptimizer oa = rocm_optimizer_new(OPT_ADAM, (float)0.003);
     struct RocmOptimizer ob = rocm_optimizer_new(OPT_ADAM, (float)0.003);
-    ok = ok && rocm_optimizer_add_net(&oa, &a) && rocm_optimizer_add_net(&ob, &b);
+    ok = ok && a.add_params(&oa) && b.add_params(&ob);
     struct TrainConfig tc = train_config_default();
     tc.epochs = 5UL;
     tc.batchSize = 64UL;
     struct TrainReport ra = rocm_trainer_fit(&a, rocm_net_ce_step, &oa, &data, &tc);
     struct TrainReport rb = rocm_trainer_fit(&b, rocm_net_ce_step, &ob, &data, &tc);
-    float s = rocm_net_loss_scale(&b);
+    float s = b.loss_scale();
     unsafe { printf("  %-38s loss fp32 %.4f -> %.4f, 16-bit %.4f -> %.4f, loss scale %g\n", name,
                     (double)ra.firstEpochLoss, (double)ra.lastEpochLoss, (double)rb.firstEpochLoss,
                     (double)rb.lastEpochLoss, (double)s); }
@@ -601,10 +601,10 @@ static void half_train_case_(const char* name, int prec, float scale0) {
     if (scale0 == (float)0.0) ok = ok && absf_(rb.lastEpochLoss - ra.lastEpochLoss) < (float)0.1 * ra.firstEpochLoss;
     if (prec == ROCM_FP16) ok = ok && (scale0 > (float)0.0 ? s < scale0 : s == (float)65536.0);
     check(ok, name);
-    rocm_optimizer_free(&oa); rocm_optimizer_free(&ob);
-    rocm_net_free(&a); rocm_net_free(&b);
-    convnet_free(&c1); convnet_free(&c2);
-    dataset_free(&data);
+    oa.free(); ob.free();
+    a.free(); b.free();
+    c1.free(); c2.free();
+    data.free();
 }
 
 static void half_tests_(int prec) {
@@ -621,30 +621,30 @@ static void half_tests_(int prec) {
     if (prec == ROCM_FP16) half_train_case_("train fp16, overflowing loss scale", prec, (float)16777216.0);
 }
 
-// ── Optimizers: every kind against optimizer_step, eager and replayed ───────
+// ── Optimizers: every kind against Optimizer::step, eager and replayed ───────
 static void opt_case_(int kind, float clip, int graph) {
     unsigned long n = 1000UL;
     struct Rng rng = rng_new(20UL + (unsigned long)kind);
     &Tensor w = tensor_new_1d(n, 1);
-    rng_fill_normal(&rng, w, (float)0.0, (float)1.0);
+    rng.fill_normal(w, (float)0.0, (float)1.0);
     tensor_backward(tensor_sum(w));   // allocates w's gradient, overwritten below
     &Tensor g = tensor_new_1d(n, 0);
-    rng_fill_normal(&rng, g, (float)0.0, (float)1.0);
+    rng.fill_normal(g, (float)0.0, (float)1.0);
     struct RocmBuf dw = upload_(w);
     struct RocmBuf dg = upload_(g);
     struct Optimizer o = optimizer_new(kind, (float)0.01);
     o.weightDecay = (float)0.05;
-    optimizer_add(&o, w);
+    o.add(w);
     struct RocmOptimizer d = rocm_optimizer_new(kind, (float)0.01);
     d.weightDecay = (float)0.05;
     d.clipNorm = clip;
-    rocm_optimizer_add(&d, dw, dg);
+    d.add(dw, dg);
     struct RocmGraph gr;
     gr.exec = 0UL;
     if (graph) {
-        rocm_optimizer_sync(&d);
+        d.sync();
         std::rocm_capture_begin();
-        rocm_optimizer_step(&d);
+        d.step();
         gr = std::rocm_capture_end();
         check(gr.exec != 0UL, "optimizer graph capture");
     }
@@ -654,10 +654,10 @@ static void opt_case_(int kind, float clip, int graph) {
             unsigned long i = 0UL;
             while (i < n) { w->grad[i] = g->data[i]; i = i + 1UL; }
         }
-        if (clip > (float)0.0) optimizer_clip_grad_norm(&o, clip);
-        optimizer_step(&o);
+        if (clip > (float)0.0) o.clip_grad_norm(clip);
+        o.step();
         if (graph) std::rocm_graph_launch(gr);
-        else rocm_optimizer_step(&d);
+        else d.step();
         s = s + 1;
     }
     float e;
@@ -665,10 +665,10 @@ static void opt_case_(int kind, float clip, int graph) {
     unsafe { printf("  optimizer kind %d%s%s  max rel err %.2e\n", kind, clip > (float)0.0 ? " clip" : "",
                     graph ? " graph" : "", (double)e); }
     check(d.ok && e < (float)0.00001, "optimizer step");
-    std::rocm_graph_free(&gr);
-    rocm_optimizer_free(&d);
-    optimizer_free(&o);
-    std::rocm_free(&dw); std::rocm_free(&dg);
+    gr.free();
+    d.free();
+    o.free();
+    dw.free(); dg.free();
 }
 
 static void opt_tests_() {
@@ -681,7 +681,7 @@ static void opt_tests_() {
 
 // ── rocm_trainer_fit against trainer_fit ─────────────────────────────────────
 static &Tensor clf_loss_(&Mlp m, const &Tensor x, const &Tensor y) {
-    return tensor_cross_entropy_loss(mlp_forward(m, x), y);
+    return tensor_cross_entropy_loss(m.forward(x), y);
 }
 
 static void trainer_test_() {
@@ -696,14 +696,14 @@ static void trainer_test_() {
     tc.clipNorm = (float)1.0;
     tc.lrDecay = (float)0.9;
     struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.01);
-    optimizer_add_mlp(&o, &cpu);
+    cpu.add_params(&o);
     struct TrainReport rc = trainer_fit(&cpu, clf_loss_, &o, &data, &tc);
     struct RocmNet net = rocm_net_from_mlp(&host, 32UL);
     struct RocmOptimizer d = rocm_optimizer_new(OPT_ADAM, (float)0.01);
-    rocm_optimizer_add_net(&d, &net);
+    net.add_params(&d);
     struct TrainReport rg = rocm_trainer_fit(&net, rocm_net_ce_step, &d, &data, &tc);
     check(rg.steps == rc.steps && rg.epochs == rc.epochs && d.t == rc.steps, "trainer step count");
-    check(rocm_net_download(&net, &host.params), "trainer download");
+    check(net.download(&host.params), "trainer download");
     float worst = (float)0.0;
     unsigned long i = 0UL;
     while (i < host.params.length()) {
@@ -721,12 +721,12 @@ static void trainer_test_() {
                     (double)rc.firstEpochLoss, (double)rc.lastEpochLoss, (double)rg.firstEpochLoss,
                     (double)rg.lastEpochLoss, (double)worst); }
     check(fe < (float)0.0005 && le < (float)0.001 && worst < (float)0.001, "trainer matches trainer_fit");
-    rocm_optimizer_free(&d);
-    optimizer_free(&o);
-    rocm_net_free(&net);
-    mlp_free(&cpu);
-    mlp_free(&host);
-    dataset_free(&data);
+    d.free();
+    o.free();
+    net.free();
+    cpu.free();
+    host.free();
+    data.free();
 }
 
 // ── VAE: trains, and agrees with the CPU VAE's loss level ───────────────────
@@ -741,12 +741,12 @@ static void vae_case_(unsigned long classes) {
     struct TrainConfig tc = train_config_default();
     tc.epochs = 15UL;
     struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.003);
-    vae_add_params(&o, &cpu);
+    cpu.add_params(&o);
     struct TrainReport rc = trainer_fit(&cpu, vae_loss, &o, &data, &tc);
     struct RocmVae dv = rocm_vae_new(&host, 32UL);
     check(dv.ok, "rocm_vae_new");
     struct RocmOptimizer d = rocm_optimizer_new(OPT_ADAM, (float)0.003);
-    rocm_optimizer_add_vae(&d, &dv);
+    dv.add_params(&d);
     struct TrainReport rg = rocm_trainer_fit(&dv, rocm_vae_step, &d, &data, &tc);
     unsafe { printf("  %s: loss cpu %.3f -> %.3f, gpu %.3f -> %.3f\n", classes > 0UL ? "cvae" : "vae", (double)rc.firstEpochLoss,
                     (double)rc.lastEpochLoss, (double)rg.firstEpochLoss, (double)rg.lastEpochLoss); }
@@ -754,13 +754,13 @@ static void vae_case_(unsigned long classes) {
     check(rg.lastEpochLoss < rg.firstEpochLoss * (float)0.8, "vae loss falls");
     check(absf_(rg.firstEpochLoss - rc.firstEpochLoss) < (float)0.03 * rc.firstEpochLoss, "vae first epoch ~ cpu");
     check(absf_(rg.lastEpochLoss - rc.lastEpochLoss) < (float)0.1 * rc.lastEpochLoss, "vae last epoch ~ cpu");
-    check(rocm_vae_download(&dv, &host), "vae download");
-    rocm_optimizer_free(&d);
-    optimizer_free(&o);
-    rocm_vae_free(&dv);
-    vae_free(&cpu);
-    vae_free(&host);
-    dataset_free(&data);
+    check(dv.download(&host), "vae download");
+    d.free();
+    o.free();
+    dv.free();
+    cpu.free();
+    host.free();
+    data.free();
 }
 
 // ── Convolutional autoencoders ───────────────────────────────────────────────
@@ -769,12 +769,12 @@ static &Tensor cae_loss_(&ConvAutoencoder a, const &Tensor x, const &Tensor y) {
 static struct ConvAutoencoder cae_build_() {
     struct Rng rng = rng_new(61UL);
     struct ConvNet enc = convnet_new(1UL, 8UL, 8UL);
-    convnet_conv(&enc, 4UL, 3UL, 2UL, 1UL, ACT_RELU, &rng);     // 4 x 4 x 4
-    convnet_conv(&enc, 8UL, 3UL, 2UL, 1UL, ACT_RELU, &rng);     // 8 x 2 x 2
+    enc.conv(4UL, 3UL, 2UL, 1UL, ACT_RELU, &rng);     // 4 x 4 x 4
+    enc.conv(8UL, 3UL, 2UL, 1UL, ACT_RELU, &rng);     // 8 x 2 x 2
     struct ConvNet dec = convnet_new(8UL, 2UL, 2UL);
-    convnet_deconv(&dec, 4UL, 4UL, 2UL, 1UL, ACT_RELU, &rng);   // 4 x 4 x 4
-    convnet_upsample_bilinear(&dec, 2UL);                       // 4 x 8 x 8
-    convnet_conv(&dec, 1UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);     // 1 x 8 x 8
+    dec.deconv(4UL, 4UL, 2UL, 1UL, ACT_RELU, &rng);   // 4 x 4 x 4
+    dec.upsample_bilinear(2UL);                       // 4 x 8 x 8
+    dec.conv(1UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);     // 1 x 8 x 8
     return conv_autoencoder_new(enc, dec, RECON_BCE);
 }
 
@@ -786,14 +786,14 @@ static void conv_ae_test_() {
     struct TrainConfig tc = train_config_default();
     tc.epochs = 4UL;
     struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.003);
-    conv_autoencoder_add_params(&o, &cpu);
+    cpu.add_params(&o);
     struct TrainReport rc = trainer_fit(&cpu, cae_loss_, &o, &data, &tc);
     struct RocmConvAe dev = rocm_conv_autoencoder_new(&host, 32UL);
     check(dev.ok, "rocm_conv_autoencoder_new");
     struct RocmOptimizer d = rocm_optimizer_new(OPT_ADAM, (float)0.003);
-    rocm_optimizer_add_conv_autoencoder(&d, &dev);
+    dev.add_params(&d);
     struct TrainReport rg = rocm_trainer_fit(&dev, rocm_conv_autoencoder_step, &d, &data, &tc);
-    check(rocm_conv_autoencoder_download(&dev, &host), "conv autoencoder download");
+    check(dev.download(&host), "conv autoencoder download");
     float e = params_diff_(&host.enc.params, &cpu.enc.params);
     float e2 = params_diff_(&host.dec.params, &cpu.dec.params);
     if (e2 > e) e = e2;
@@ -802,24 +802,24 @@ static void conv_ae_test_() {
                     (double)rg.lastEpochLoss, (double)e); }
     check(rg.steps == rc.steps && absf_(rg.lastEpochLoss - rc.lastEpochLoss) < (float)0.0005 && e < (float)0.001,
           "conv autoencoder matches trainer_fit");
-    rocm_optimizer_free(&d);
-    optimizer_free(&o);
-    rocm_conv_autoencoder_free(&dev);
-    conv_autoencoder_free(&cpu);
-    conv_autoencoder_free(&host);
-    dataset_free(&data);
+    d.free();
+    o.free();
+    dev.free();
+    cpu.free();
+    host.free();
+    data.free();
 }
 
 static struct ConvVae cvae_build_(const &VaeConfig cfg) {
     struct Rng rng = rng_new(62UL);
     unsigned long c = cfg.classes;
     struct ConvNet enc = convnet_new(1UL + c, 8UL, 8UL);
-    convnet_conv(&enc, 8UL, 3UL, 2UL, 1UL, ACT_RELU, &rng);     // 8 x 4 x 4
-    convnet_conv(&enc, 16UL, 3UL, 2UL, 1UL, ACT_RELU, &rng);    // 16 x 2 x 2
+    enc.conv(8UL, 3UL, 2UL, 1UL, ACT_RELU, &rng);     // 8 x 4 x 4
+    enc.conv(16UL, 3UL, 2UL, 1UL, ACT_RELU, &rng);    // 16 x 2 x 2
     struct ConvNet dec = convnet_new(cfg.latent + c, 1UL, 1UL);
-    convnet_deconv(&dec, 16UL, 2UL, 1UL, 0UL, ACT_RELU, &rng);  // 16 x 2 x 2
-    convnet_deconv(&dec, 8UL, 4UL, 2UL, 1UL, ACT_RELU, &rng);   // 8 x 4 x 4
-    convnet_deconv(&dec, 1UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);   // 1 x 8 x 8
+    dec.deconv(16UL, 2UL, 1UL, 0UL, ACT_RELU, &rng);  // 16 x 2 x 2
+    dec.deconv(8UL, 4UL, 2UL, 1UL, ACT_RELU, &rng);   // 8 x 4 x 4
+    dec.deconv(1UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);   // 1 x 8 x 8
     return conv_vae_new(enc, dec, cfg);
 }
 
@@ -833,12 +833,12 @@ static void conv_vae_case_(unsigned long classes) {
     struct TrainConfig tc = train_config_default();
     tc.epochs = 15UL;
     struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.003);
-    conv_vae_add_params(&o, &cpu);
+    cpu.add_params(&o);
     struct TrainReport rc = trainer_fit(&cpu, conv_vae_loss, &o, &data, &tc);
     struct RocmVae dv = rocm_conv_vae_new(&host, 32UL);
     check(dv.ok, "rocm_conv_vae_new");
     struct RocmOptimizer d = rocm_optimizer_new(OPT_ADAM, (float)0.003);
-    rocm_optimizer_add_vae(&d, &dv);
+    dv.add_params(&d);
     struct TrainReport rg = rocm_trainer_fit(&dv, rocm_vae_step, &d, &data, &tc);
     unsafe { printf("  conv %s: loss cpu %.3f -> %.3f, gpu %.3f -> %.3f\n", classes > 0UL ? "cvae" : "vae",
                     (double)rc.firstEpochLoss, (double)rc.lastEpochLoss, (double)rg.firstEpochLoss,
@@ -846,13 +846,13 @@ static void conv_vae_case_(unsigned long classes) {
     check(rg.steps == rc.steps && rg.lastEpochLoss < rg.firstEpochLoss * (float)0.8, "conv vae loss falls");
     check(absf_(rg.firstEpochLoss - rc.firstEpochLoss) < (float)0.03 * rc.firstEpochLoss, "conv vae first epoch ~ cpu");
     check(absf_(rg.lastEpochLoss - rc.lastEpochLoss) < (float)0.1 * rc.lastEpochLoss, "conv vae last epoch ~ cpu");
-    check(rocm_conv_vae_download(&dv, &host), "conv vae download");
-    rocm_optimizer_free(&d);
-    optimizer_free(&o);
-    rocm_vae_free(&dv);
-    conv_vae_free(&cpu);
-    conv_vae_free(&host);
-    dataset_free(&data);
+    check(dv.download_conv_vae(&host), "conv vae download");
+    d.free();
+    o.free();
+    dv.free();
+    cpu.free();
+    host.free();
+    data.free();
 }
 
 static void vae_test_() {
@@ -863,7 +863,7 @@ static void vae_test_() {
     conv_vae_case_(4UL);
 }
 
-// ── GANs: steps against gan_train_step / dcgan_train_step with the same noise ─
+// ── GANs: steps against Gan::train_step / Dcgan::train_step with the same noise ─
 static float params_diff_(const &Vec<&Tensor> a, const &Vec<&Tensor> b) {
     float worst = (float)0.0;
     unsigned long i = 0UL;
@@ -898,17 +898,17 @@ static void upload_at_(struct RocmBuf b, unsigned long off, const &Tensor t) {
     unsafe { std::rocm_write(view_(b, off, t->size), (const &float)(const float*)t->data, t->size); }
 }
 
-// The noise gan_train_step will draw from rng (a copy), into dev.noise.
+// The noise Gan::train_step will draw from rng (a copy), into dev.noise.
 static void gan_noise_(&RocmGan dev, struct Rng rng, unsigned long m) {
     unsigned long nc = dev.cfg.nCritic == 0UL ? 1UL : dev.cfg.nCritic;
     unsigned long Z = dev.cfg.latent;
     unsigned long c = 0UL;
     while (c <= nc) {
-        &Tensor z = rng_normal_tensor(&rng, m, Z);
+        &Tensor z = rng.normal_tensor(m, Z);
         upload_at_(dev.noise, c * dev.maxBatch * Z, z);
         if (c < nc && dev.cfg.loss == GAN_WGAN_GP) {
             &Tensor t = tensor_new_1d(m, 0);
-            unsafe { unsigned long r = 0UL; while (r < m) { t->data[r] = rng_uniform(&rng); r = r + 1UL; } }
+            unsafe { unsigned long r = 0UL; while (r < m) { t->data[r] = rng.uniform(); r = r + 1UL; } }
             upload_at_(dev.noise, (nc + 1UL) * dev.maxBatch * Z + c * dev.maxBatch, t);
         }
         c = c + 1UL;
@@ -945,7 +945,7 @@ static void gan_case_(const char* name, int loss, unsigned long classes, unsigne
     check(dev.ok, name);
     struct Rng rng = rng_new(77UL);
     &Tensor real = tensor_new_2d(m, D, 0);
-    rng_fill_normal(&rng, real, (float)1.0, (float)0.5);
+    rng.fill_normal(real, (float)1.0, (float)0.5);
     &Tensor lab = tensor_new_1d(m, 0);
     unsafe { unsigned long r = 0UL; while (r < m) { lab->data[r] = (float)(r % (classes == 0UL ? 1UL : classes)); r = r + 1UL; } }
     struct RocmBuf dr = upload_(real);
@@ -955,13 +955,13 @@ static void gan_case_(const char* name, int loss, unsigned long classes, unsigne
     int ok = 1;
     while (s < 3) {
         gan_noise_(&dev, cpu.rng, m);
-        if (classes > 0UL) lc = gan_train_step(&cpu, real, (?&Tensor)lab);
-        else lc = gan_train_step(&cpu, real, null);
+        if (classes > 0UL) lc = cpu.train_step(real, (?&Tensor)lab);
+        else lc = cpu.train_step(real, null);
         ok = ok && rocm_gan_step_(&dev, dr, dl, m, 0);
         s = s + 1;
     }
-    struct GanLosses lg = rocm_gan_losses(&dev);
-    ok = ok && rocm_gan_download(&dev, &host);
+    struct GanLosses lg = dev.losses();
+    ok = ok && dev.download(&host);
     float e = params_diff_(&host.gen.params, &cpu.gen.params);
     float e2 = params_diff_(&host.disc.params, &cpu.disc.params);
     float e3 = params_diff_(&host.genEma.params, &cpu.genEma.params);
@@ -973,24 +973,24 @@ static void gan_case_(const char* name, int loss, unsigned long classes, unsigne
     unsafe { printf("  %-38s weights %.2e  losses %.2e (d %.4f / %.4f)\n", name, (double)e, (double)le,
                     (double)lc.d, (double)lg.d); }
     check(ok && host.steps == cpu.steps && e < (float)0.001 && le < (float)0.001, name);
-    rocm_gan_free(&dev);
-    gan_free(&cpu);
-    gan_free(&host);
-    std::rocm_free(&dr); std::rocm_free(&dl);
+    dev.free();
+    cpu.free();
+    host.free();
+    dr.free(); dl.free();
 }
 
 static struct Dcgan dcgan_build_(const &GanConfig cfg) {
     struct Rng rng = rng_new(5UL);
     unsigned long c = cfg.classes;
     struct ConvNet gen = convnet_new(cfg.latent + c, 1UL, 1UL);
-    convnet_deconv(&gen, 8UL, 4UL, 1UL, 0UL, ACT_NONE, &rng);   // 8 x 4 x 4
-    convnet_batchnorm(&gen, ACT_RELU);
-    convnet_deconv(&gen, 1UL, 4UL, 2UL, 1UL, ACT_TANH, &rng);   // 1 x 8 x 8
+    gen.deconv(8UL, 4UL, 1UL, 0UL, ACT_NONE, &rng);   // 8 x 4 x 4
+    gen.batchnorm(ACT_RELU);
+    gen.deconv(1UL, 4UL, 2UL, 1UL, ACT_TANH, &rng);   // 1 x 8 x 8
     struct ConvNet disc = convnet_new(1UL + c, 8UL, 8UL);
-    convnet_conv(&disc, 4UL, 4UL, 2UL, 1UL, ACT_LEAKY, &rng);   // 4 x 4 x 4
-    convnet_conv(&disc, 8UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);    // 8 x 2 x 2
-    convnet_batchnorm(&disc, ACT_LEAKY);
-    convnet_conv(&disc, 1UL, 2UL, 1UL, 0UL, ACT_NONE, &rng);    // 1 x 1 x 1
+    disc.conv(4UL, 4UL, 2UL, 1UL, ACT_LEAKY, &rng);   // 4 x 4 x 4
+    disc.conv(8UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);    // 8 x 2 x 2
+    disc.batchnorm(ACT_LEAKY);
+    disc.conv(1UL, 2UL, 1UL, 0UL, ACT_NONE, &rng);    // 1 x 1 x 1
     return dcgan_new(gen, disc, cfg);
 }
 
@@ -1009,7 +1009,7 @@ static void dcgan_case_(const char* name, unsigned long classes) {
     check(dev.ok, name);
     struct Rng rng = rng_new(78UL);
     &Tensor real = tensor_new_2d(m, 64UL, 0);
-    rng_fill_uniform(&rng, real, (float)-1.0, (float)1.0);
+    rng.fill_uniform(real, (float)-1.0, (float)1.0);
     &Tensor lab = tensor_new_1d(m, 0);
     unsafe { unsigned long r = 0UL; while (r < m) { lab->data[r] = (float)(r % (classes == 0UL ? 1UL : classes)); r = r + 1UL; } }
     struct RocmBuf dr = upload_(real);
@@ -1019,13 +1019,13 @@ static void dcgan_case_(const char* name, unsigned long classes) {
     int s = 0;
     while (s < 3) {
         gan_noise_(&dev, cpu.rng, m);
-        if (classes > 0UL) lc = dcgan_train_step(&cpu, real, (?&Tensor)lab);
-        else lc = dcgan_train_step(&cpu, real, null);
+        if (classes > 0UL) lc = cpu.train_step(real, (?&Tensor)lab);
+        else lc = cpu.train_step(real, null);
         ok = ok && rocm_gan_step_(&dev, dr, dl, m, 0);
         s = s + 1;
     }
-    struct GanLosses lg = rocm_gan_losses(&dev);
-    ok = ok && rocm_dcgan_download(&dev, &host);
+    struct GanLosses lg = dev.losses();
+    ok = ok && dev.download_dcgan(&host);
     float e = params_diff_(&host.gen.params, &cpu.gen.params);
     float e2 = params_diff_(&host.disc.params, &cpu.disc.params);
     float e3 = params_diff_(&host.genEma.params, &cpu.genEma.params);
@@ -1042,10 +1042,10 @@ static void dcgan_case_(const char* name, unsigned long classes) {
     if (lge > le) le = lge;
     unsafe { printf("  %-38s weights+stats %.2e  losses %.2e\n", name, (double)e, (double)le); }
     check(ok && e < (float)0.001 && le < (float)0.001, name);
-    rocm_gan_free(&dev);
-    dcgan_free(&cpu);
-    dcgan_free(&host);
-    std::rocm_free(&dr); std::rocm_free(&dl);
+    dev.free();
+    cpu.free();
+    host.free();
+    dr.free(); dl.free();
 }
 
 static void gan_tests_() {
@@ -1064,13 +1064,13 @@ static void gan_tests_() {
     cfg.hidden = 32UL;
     struct Gan g = gan_new(2UL, &cfg);
     struct RocmGan dev = rocm_gan_new(&g, 64UL);
-    struct GanLosses l = rocm_gan_train(&dev, &data, 5UL, 64UL);
-    check(dev.steps == 20UL && rocm_gan_download(&dev, &g) && g.steps == 20UL && l.d > (float)0.0 && l.d < (float)5.0,
-          "rocm_gan_train");
-    unsafe { printf("  rocm_gan_train: 20 steps, last losses d %.4f g %.4f\n", (double)l.d, (double)l.g); }
-    rocm_gan_free(&dev);
-    gan_free(&g);
-    dataset_free(&data);
+    struct GanLosses l = dev.train(&data, 5UL, 64UL);
+    check(dev.steps == 20UL && dev.download(&g) && g.steps == 20UL && l.d > (float)0.0 && l.d < (float)5.0,
+          "RocmGan::train");
+    unsafe { printf("  RocmGan::train: 20 steps, last losses d %.4f g %.4f\n", (double)l.d, (double)l.g); }
+    dev.free();
+    g.free();
+    data.free();
 }
 
 // ── RL: device agents follow the host agents step for step ──────────────────
@@ -1095,23 +1095,23 @@ static void dqn_case_(const char* name, unsigned long targetEvery, int doubleDqn
     float lc = (float)-1.0;
     unsigned long i = 0UL;
     while (i < 160UL) {
-        rng_fill_normal(&env, o, (float)0.0, (float)1.0);
-        rng_fill_normal(&env, n, (float)0.0, (float)1.0);
-        unsigned long a1 = dqn_act(&cpu, o, 1);
-        unsigned long a2 = rocm_dqn_act(&dev, o, 1);
+        env.fill_normal(o, (float)0.0, (float)1.0);
+        env.fill_normal(n, (float)0.0, (float)1.0);
+        unsigned long a1 = cpu.act(o, 1);
+        unsigned long a2 = dev.act(o, 1);
         if (a1 != a2) same = 0;
-        float r = rng_uniform(&env);
-        int t = rng_below(&env, 10UL) == 0UL;
-        float l = dqn_observe(&cpu, o, a1, r, n, t);
+        float r = env.uniform();
+        int t = env.below(10UL) == 0UL;
+        float l = cpu.observe(o, a1, r, n, t);
         if (l >= (float)0.0) lc = l;
-        if (rocm_dqn_observe(&dev, o, a1, r, n, t) < 0) ok = 0;
+        if (dev.observe(o, a1, r, n, t) < 0) ok = 0;
         i = i + 1UL;
     }
     // greedy actions agree too
-    unsigned long g1 = dqn_act(&cpu, o, 0);
-    unsigned long g2 = rocm_dqn_act(&dev, o, 0);
-    float lg = rocm_dqn_loss(&dev);
-    ok = ok && rocm_dqn_download(&dev, &host);
+    unsigned long g1 = cpu.act(o, 0);
+    unsigned long g2 = dev.act(o, 0);
+    float lg = dev.loss();
+    ok = ok && dev.download(&host);
     float e = params_diff_(&host.q.params, &cpu.q.params);
     float e2 = params_diff_(&host.target.params, &cpu.target.params);
     if (e2 > e) e = e2;
@@ -1119,9 +1119,9 @@ static void dqn_case_(const char* name, unsigned long targetEvery, int doubleDqn
     unsafe { printf("  %-38s %lu updates, weights %.2e, loss %.2e\n", name, host.updates, (double)e, (double)le); }
     check(ok && same && g1 == g2 && host.updates == cpu.updates && host.steps == cpu.steps && e < (float)0.001 &&
           le < (float)0.001, name);
-    rocm_dqn_free(&dev);
-    dqn_free(&cpu);
-    dqn_free(&host);
+    dev.free();
+    cpu.free();
+    host.free();
 }
 
 static void pg_case_(const char* name, int algo, unsigned long rollout) {
@@ -1144,24 +1144,24 @@ static void pg_case_(const char* name, int algo, unsigned long rollout) {
     while (u < 2) {
         unsigned long i = 0UL;
         while (i < rollout) {
-            rng_fill_normal(&env, o, (float)0.0, (float)1.0);
-            rng_fill_normal(&env, n, (float)0.0, (float)1.0);
-            unsigned long a1 = pg_act(&cpu, o, 1);
-            unsigned long a2 = rocm_pg_act(&dev, o, 1);
+            env.fill_normal(o, (float)0.0, (float)1.0);
+            env.fill_normal(n, (float)0.0, (float)1.0);
+            unsigned long a1 = cpu.act(o, 1);
+            unsigned long a2 = dev.act(o, 1);
             if (a1 != a2) same = 0;
-            float r = rng_uniform(&env);
-            int t = rng_below(&env, 20UL) == 0UL;
-            int tr = !t && rng_below(&env, 30UL) == 0UL;
-            pg_record(&cpu, o, a1, r, n, t, tr);
-            rocm_pg_record(&dev, o, a1, r, n, t, tr);
+            float r = env.uniform();
+            int t = env.below(20UL) == 0UL;
+            int tr = !t && env.below(30UL) == 0UL;
+            cpu.record(o, a1, r, n, t, tr);
+            dev.record(o, a1, r, n, t, tr);
             i = i + 1UL;
         }
-        lc = pg_update(&cpu);
-        lg = rocm_pg_update(&dev);
+        lc = cpu.update();
+        lg = dev.update();
         if (lg == (float)-1.0) ok = 0;
         u = u + 1;
     }
-    ok = ok && rocm_pg_download(&dev, &host);
+    ok = ok && dev.download(&host);
     float e = params_diff_(&host.policy.params, &cpu.policy.params);
     float e2 = params_diff_(&host.value.params, &cpu.value.params);
     if (e2 > e) e = e2;
@@ -1169,9 +1169,9 @@ static void pg_case_(const char* name, int algo, unsigned long rollout) {
     unsafe { printf("  %-38s weights %.2e, loss %.2e (%.5f / %.5f)\n", name, (double)e, (double)le, (double)lc,
                     (double)lg); }
     check(ok && same && e < (float)0.001 && le < (float)0.001, name);
-    rocm_pg_free(&dev);
-    pg_free(&cpu);
-    pg_free(&host);
+    dev.free();
+    cpu.free();
+    host.free();
 }
 
 static void rl_tests_() {

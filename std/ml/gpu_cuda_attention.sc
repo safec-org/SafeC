@@ -2164,7 +2164,7 @@ static int attn_host_(const &float q, const &float k, const &float v, &float out
         else ok = cuda_flash_attention_ex(dq, dk, dv, dout, s, scale, causal);
     }
     ok = ok && cuda_read(dout, out, qn);
-    cuda_free(&dq); cuda_free(&dk); cuda_free(&dv); cuda_free(&dout);
+    dq.free(); dk.free(); dv.free(); dout.free();
     return ok;
 }
 

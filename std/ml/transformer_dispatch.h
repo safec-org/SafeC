@@ -6,7 +6,7 @@
 // "portable core, opt-in extension" split as tensor.h vs tensor_blas.h/
 // tensor_gpu.h. This file is the extension: jit_block_forward_on/
 // jit_forward_on are the exact same computation as transformer.h's
-// jit_block_forward/jit_forward, with every projection matmul (Q/K/V/Wo,
+// JiTBlock::forward/jit_forward, with every projection matmul (Q/K/V/Wo,
 // the FFN's W1/W2) and the FFN's relu routed through tensor_dispatch.h's
 // tensor_matmul_on/tensor_relu_on instead of always running on the CPU.
 //

@@ -65,11 +65,11 @@ struct RNNCell rnn_cell_new(unsigned long inputSize, unsigned long hiddenSize) {
     return c;
 }
 
-&Tensor rnn_cell_forward(const &RNNCell cell, const &Tensor x_t, const &Tensor h_prev) {
+&Tensor RNNCell::forward(const &Tensor x_t, const &Tensor h_prev) const {
     unsafe {
-        &Tensor xi = tensor_matmul(x_t, cell->W_ih);
-        &Tensor hh = tensor_matmul(h_prev, cell->W_hh);
-        &Tensor sum = __row_add4(xi, hh, cell->b_ih, cell->b_hh);
+        &Tensor xi = tensor_matmul(x_t, self->W_ih);
+        &Tensor hh = tensor_matmul(h_prev, self->W_hh);
+        &Tensor sum = __row_add4(xi, hh, self->b_ih, self->b_hh);
         &Tensor h_t = tensor_tanh_fwd(sum);
         xi->free(); hh->free(); sum->free();
         free((void*)xi); free((void*)hh); free((void*)sum);
@@ -77,11 +77,11 @@ struct RNNCell rnn_cell_new(unsigned long inputSize, unsigned long hiddenSize) {
     }
 }
 
-void rnn_cell_free(&RNNCell cell) {
+void RNNCell::free() {
     unsafe {
-        cell->W_ih->free(); cell->W_hh->free(); cell->b_ih->free(); cell->b_hh->free();
-        free((void*)cell->W_ih); free((void*)cell->W_hh);
-        free((void*)cell->b_ih); free((void*)cell->b_hh);
+        self->W_ih->free(); self->W_hh->free(); self->b_ih->free(); self->b_hh->free();
+        free((void*)self->W_ih); free((void*)self->W_hh);
+        free((void*)self->b_ih); free((void*)self->b_hh);
     }
 }
 
@@ -98,21 +98,21 @@ struct GRUCell gru_cell_new(unsigned long inputSize, unsigned long hiddenSize) {
     return c;
 }
 
-&Tensor gru_cell_forward(const &GRUCell cell, const &Tensor x_t, const &Tensor h_prev) {
+&Tensor GRUCell::forward(const &Tensor x_t, const &Tensor h_prev) const {
     unsafe {
-        &Tensor r_sum = __row_add4(tensor_matmul(x_t, cell->W_ir), tensor_matmul(h_prev, cell->W_hr),
-                                           cell->b_ir, cell->b_hr);
+        &Tensor r_sum = __row_add4(tensor_matmul(x_t, self->W_ir), tensor_matmul(h_prev, self->W_hr),
+                                           self->b_ir, self->b_hr);
         &Tensor r_t = tensor_sigmoid_fwd(r_sum);
 
-        &Tensor z_sum = __row_add4(tensor_matmul(x_t, cell->W_iz), tensor_matmul(h_prev, cell->W_hz),
-                                           cell->b_iz, cell->b_hz);
+        &Tensor z_sum = __row_add4(tensor_matmul(x_t, self->W_iz), tensor_matmul(h_prev, self->W_hz),
+                                           self->b_iz, self->b_hz);
         &Tensor z_t = tensor_sigmoid_fwd(z_sum);
 
-        &Tensor hn = tensor_matmul(h_prev, cell->W_hn);
-        &Tensor hn_b = tensor_add(hn, cell->b_hn);
+        &Tensor hn = tensor_matmul(h_prev, self->W_hn);
+        &Tensor hn_b = tensor_add(hn, self->b_hn);
         &Tensor r_hn = tensor_mul(r_t, hn_b);
-        &Tensor in_ = tensor_matmul(x_t, cell->W_in);
-        &Tensor in_b = tensor_add(in_, cell->b_in);
+        &Tensor in_ = tensor_matmul(x_t, self->W_in);
+        &Tensor in_b = tensor_add(in_, self->b_in);
         &Tensor n_sum = tensor_add(in_b, r_hn);
         &Tensor n_t = tensor_tanh_fwd(n_sum);
 
@@ -133,12 +133,12 @@ struct GRUCell gru_cell_new(unsigned long inputSize, unsigned long hiddenSize) {
     }
 }
 
-void gru_cell_free(&GRUCell cell) {
+void GRUCell::free() {
     unsafe {
         &Tensor all[12];
-        all[0]=cell->W_ir; all[1]=cell->W_hr; all[2]=cell->b_ir; all[3]=cell->b_hr;
-        all[4]=cell->W_iz; all[5]=cell->W_hz; all[6]=cell->b_iz; all[7]=cell->b_hz;
-        all[8]=cell->W_in; all[9]=cell->W_hn; all[10]=cell->b_in; all[11]=cell->b_hn;
+        all[0]=self->W_ir; all[1]=self->W_hr; all[2]=self->b_ir; all[3]=self->b_hr;
+        all[4]=self->W_iz; all[5]=self->W_hz; all[6]=self->b_iz; all[7]=self->b_hz;
+        all[8]=self->W_in; all[9]=self->W_hn; all[10]=self->b_in; all[11]=self->b_hn;
         int i = 0;
         while (i < 12) { all[i]->free(); free((void*)all[i]); i = i + 1; }
     }
@@ -159,21 +159,19 @@ struct LSTMCell lstm_cell_new(unsigned long inputSize, unsigned long hiddenSize)
     return c;
 }
 
-&Tensor lstm_cell_forward(const &LSTMCell cell, const &Tensor x_t,
-                           const &Tensor h_prev, const &Tensor c_prev,
-                           &&Tensor c_out) {
+&Tensor LSTMCell::forward(const &Tensor x_t, const &Tensor h_prev, const &Tensor c_prev, &&Tensor c_out) const {
     unsafe {
-        &Tensor i_sum = __row_add4(tensor_matmul(x_t, cell->W_ii), tensor_matmul(h_prev, cell->W_hi),
-                                           cell->b_ii, cell->b_hi);
+        &Tensor i_sum = __row_add4(tensor_matmul(x_t, self->W_ii), tensor_matmul(h_prev, self->W_hi),
+                                           self->b_ii, self->b_hi);
         &Tensor i_t = tensor_sigmoid_fwd(i_sum);
-        &Tensor f_sum = __row_add4(tensor_matmul(x_t, cell->W_if), tensor_matmul(h_prev, cell->W_hf),
-                                           cell->b_if, cell->b_hf);
+        &Tensor f_sum = __row_add4(tensor_matmul(x_t, self->W_if), tensor_matmul(h_prev, self->W_hf),
+                                           self->b_if, self->b_hf);
         &Tensor f_t = tensor_sigmoid_fwd(f_sum);
-        &Tensor g_sum = __row_add4(tensor_matmul(x_t, cell->W_ig), tensor_matmul(h_prev, cell->W_hg),
-                                           cell->b_ig, cell->b_hg);
+        &Tensor g_sum = __row_add4(tensor_matmul(x_t, self->W_ig), tensor_matmul(h_prev, self->W_hg),
+                                           self->b_ig, self->b_hg);
         &Tensor g_t = tensor_tanh_fwd(g_sum);
-        &Tensor o_sum = __row_add4(tensor_matmul(x_t, cell->W_io), tensor_matmul(h_prev, cell->W_ho),
-                                           cell->b_io, cell->b_ho);
+        &Tensor o_sum = __row_add4(tensor_matmul(x_t, self->W_io), tensor_matmul(h_prev, self->W_ho),
+                                           self->b_io, self->b_ho);
         &Tensor o_t = tensor_sigmoid_fwd(o_sum);
 
         &Tensor fc = tensor_mul(f_t, c_prev);
@@ -196,13 +194,13 @@ struct LSTMCell lstm_cell_new(unsigned long inputSize, unsigned long hiddenSize)
     }
 }
 
-void lstm_cell_free(&LSTMCell cell) {
+void LSTMCell::free() {
     unsafe {
         &Tensor all[16];
-        all[0]=cell->W_ii; all[1]=cell->W_hi; all[2]=cell->b_ii; all[3]=cell->b_hi;
-        all[4]=cell->W_if; all[5]=cell->W_hf; all[6]=cell->b_if; all[7]=cell->b_hf;
-        all[8]=cell->W_ig; all[9]=cell->W_hg; all[10]=cell->b_ig; all[11]=cell->b_hg;
-        all[12]=cell->W_io; all[13]=cell->W_ho; all[14]=cell->b_io; all[15]=cell->b_ho;
+        all[0]=self->W_ii; all[1]=self->W_hi; all[2]=self->b_ii; all[3]=self->b_hi;
+        all[4]=self->W_if; all[5]=self->W_hf; all[6]=self->b_if; all[7]=self->b_hf;
+        all[8]=self->W_ig; all[9]=self->W_hg; all[10]=self->b_ig; all[11]=self->b_hg;
+        all[12]=self->W_io; all[13]=self->W_ho; all[14]=self->b_io; all[15]=self->b_ho;
         int i = 0;
         while (i < 16) { all[i]->free(); free((void*)all[i]); i = i + 1; }
     }
@@ -223,22 +221,21 @@ struct XLSTMCell xlstm_cell_new(unsigned long inputSize, unsigned long hiddenSiz
     return c;
 }
 
-struct XLSTMState xlstm_cell_forward(const &XLSTMCell cell, const &Tensor x_t,
-                                      const &XLSTMState prev) {
+struct XLSTMState XLSTMCell::forward(const &Tensor x_t, const &XLSTMState prev) const {
     unsafe {
-        &Tensor z_sum = __row_add4(tensor_matmul(x_t, cell->Wz), tensor_matmul(prev->h, cell->Rz),
-                                           cell->bz, tensor_zeros_like(cell->bz));
+        &Tensor z_sum = __row_add4(tensor_matmul(x_t, self->Wz), tensor_matmul(prev->h, self->Rz),
+                                           self->bz, tensor_zeros_like(self->bz));
         &Tensor z_t = tensor_tanh_fwd(z_sum);
 
-        &Tensor zerob = tensor_zeros_like(cell->bi);
-        &Tensor i_raw = __row_add4(tensor_matmul(x_t, cell->Wi), tensor_matmul(prev->h, cell->Ri),
-                                           cell->bi, zerob);
-        &Tensor zerob2 = tensor_zeros_like(cell->bf);
-        &Tensor f_raw = __row_add4(tensor_matmul(x_t, cell->Wf), tensor_matmul(prev->h, cell->Rf),
-                                           cell->bf, zerob2);
-        &Tensor zerob3 = tensor_zeros_like(cell->bo);
-        &Tensor o_sum = __row_add4(tensor_matmul(x_t, cell->Wo), tensor_matmul(prev->h, cell->Ro),
-                                           cell->bo, zerob3);
+        &Tensor zerob = tensor_zeros_like(self->bi);
+        &Tensor i_raw = __row_add4(tensor_matmul(x_t, self->Wi), tensor_matmul(prev->h, self->Ri),
+                                           self->bi, zerob);
+        &Tensor zerob2 = tensor_zeros_like(self->bf);
+        &Tensor f_raw = __row_add4(tensor_matmul(x_t, self->Wf), tensor_matmul(prev->h, self->Rf),
+                                           self->bf, zerob2);
+        &Tensor zerob3 = tensor_zeros_like(self->bo);
+        &Tensor o_sum = __row_add4(tensor_matmul(x_t, self->Wo), tensor_matmul(prev->h, self->Ro),
+                                           self->bo, zerob3);
         &Tensor o_t = tensor_sigmoid_fwd(o_sum);
 
         // Stabilizer: m_t = max(f_raw + m_prev, i_raw), elementwise
@@ -304,22 +301,22 @@ struct XLSTMState xlstm_cell_forward(const &XLSTMCell cell, const &Tensor x_t,
     }
 }
 
-void xlstm_cell_free(&XLSTMCell cell) {
+void XLSTMCell::free() {
     unsafe {
         &Tensor all[12];
-        all[0]=cell->Wz; all[1]=cell->Rz; all[2]=cell->bz;
-        all[3]=cell->Wi; all[4]=cell->Ri; all[5]=cell->bi;
-        all[6]=cell->Wf; all[7]=cell->Rf; all[8]=cell->bf;
-        all[9]=cell->Wo; all[10]=cell->Ro; all[11]=cell->bo;
+        all[0]=self->Wz; all[1]=self->Rz; all[2]=self->bz;
+        all[3]=self->Wi; all[4]=self->Ri; all[5]=self->bi;
+        all[6]=self->Wf; all[7]=self->Rf; all[8]=self->bf;
+        all[9]=self->Wo; all[10]=self->Ro; all[11]=self->bo;
         int i = 0;
         while (i < 12) { all[i]->free(); free((void*)all[i]); i = i + 1; }
     }
 }
 
-void xlstm_state_free(&XLSTMState s) {
+void XLSTMState::free() {
     unsafe {
-        s->h->free(); s->c->free(); s->n->free(); s->m->free();
-        free((void*)s->h); free((void*)s->c); free((void*)s->n); free((void*)s->m);
+        self->h->free(); self->c->free(); self->n->free(); self->m->free();
+        free((void*)self->h); free((void*)self->c); free((void*)self->n); free((void*)self->m);
     }
 }
 

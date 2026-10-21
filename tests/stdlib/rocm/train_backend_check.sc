@@ -37,7 +37,7 @@ static void tensor_drop(&Tensor t) {
     unsafe { free((void*)t); }
 }
 
-static &Tensor clf_logits_(&Mlp m, const &Tensor x) { return mlp_forward(m, x); }
+static &Tensor clf_logits_(&Mlp m, const &Tensor x) { return m.forward(x); }
 
 // Any Trainable: fit, report, check the loss fell.
 generic<M: Trainable>
@@ -68,7 +68,7 @@ static void mlp_cases_(const &TrainerOptions to) {
     result("mlp.acc", (double)trainer_accuracy(&t.host, clf_logits_, &data, 64UL), 0.01);
     unsafe { result("mlp.w0", (double)(*t.host.params.at(0UL))->data[0], 0.001); }
     t.free();
-    mlp_free(&t.host);
+    t.host.free();
 
     // train_step on a host batch (MSE)
     struct Dataset sine = dataset_sine(64UL, (float)0.0, &drng);
@@ -82,10 +82,10 @@ static void mlp_cases_(const &TrainerOptions to) {
     result("step.first", (double)first, 0.0005);
     result("step.last", (double)last, 0.002);
     s.free();
-    mlp_free(&s.host);
-    optimizer_free(&adam);
-    dataset_free(&sine);
-    dataset_free(&data);
+    s.host.free();
+    adam.free();
+    sine.free();
+    data.free();
 }
 
 static void convnet_case_(const &TrainerOptions to) {
@@ -93,10 +93,10 @@ static void convnet_case_(const &TrainerOptions to) {
     struct Dataset data = dataset_shapes(250UL, 8UL, &drng);
     struct Rng rng = rng_new(21UL);
     struct ConvNet n = convnet_new(1UL, 8UL, 8UL);
-    convnet_conv(&n, 8UL, 3UL, 1UL, 1UL, ACT_RELU, &rng);
-    convnet_maxpool(&n, 2UL, 2UL, 0UL);
-    convnet_conv(&n, 8UL, 3UL, 1UL, 1UL, ACT_RELU, &rng);
-    convnet_dense(&n, 4UL, ACT_NONE, &rng);
+    n.conv(8UL, 3UL, 1UL, 1UL, ACT_RELU, &rng);
+    n.maxpool(2UL, 2UL, 0UL);
+    n.conv(8UL, 3UL, 1UL, 1UL, ACT_RELU, &rng);
+    n.dense(4UL, ACT_NONE, &rng);
     struct Optimizer adam = optimizer_new(OPT_ADAM, (float)0.005);
     ConvNetTrainer t = convnet_trainer_new(n, TRAIN_LOSS_CE, &adam, to);
     struct TrainConfig tc = train_config_default();
@@ -105,9 +105,9 @@ static void convnet_case_(const &TrainerOptions to) {
     result("cnn.first", (double)rep.firstEpochLoss, 0.001);
     result("cnn.last", (double)rep.lastEpochLoss, 0.003);
     t.free();
-    convnet_free(&t.host);
-    optimizer_free(&adam);
-    dataset_free(&data);
+    t.host.free();
+    adam.free();
+    data.free();
 }
 
 static void autoencoder_cases_(const &TrainerOptions to) {
@@ -124,25 +124,25 @@ static void autoencoder_cases_(const &TrainerOptions to) {
     result("vae.first", (double)rep.firstEpochLoss, 0.03);
     result("vae.last", (double)rep.lastEpochLoss, 0.1);
     v.free();
-    vae_free(&v.host);
+    v.host.free();
 
     struct Rng rng = rng_new(61UL);
     struct ConvNet enc = convnet_new(1UL, 8UL, 8UL);
-    convnet_conv(&enc, 4UL, 3UL, 2UL, 1UL, ACT_RELU, &rng);     // 4 x 4 x 4
-    convnet_conv(&enc, 8UL, 3UL, 2UL, 1UL, ACT_RELU, &rng);     // 8 x 2 x 2
+    enc.conv(4UL, 3UL, 2UL, 1UL, ACT_RELU, &rng);     // 4 x 4 x 4
+    enc.conv(8UL, 3UL, 2UL, 1UL, ACT_RELU, &rng);     // 8 x 2 x 2
     struct ConvNet dec = convnet_new(8UL, 2UL, 2UL);
-    convnet_deconv(&dec, 4UL, 4UL, 2UL, 1UL, ACT_RELU, &rng);   // 4 x 4 x 4
-    convnet_upsample_bilinear(&dec, 2UL);                       // 4 x 8 x 8
-    convnet_conv(&dec, 1UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);     // 1 x 8 x 8
+    dec.deconv(4UL, 4UL, 2UL, 1UL, ACT_RELU, &rng);   // 4 x 4 x 4
+    dec.upsample_bilinear(2UL);                       // 4 x 8 x 8
+    dec.conv(1UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);     // 1 x 8 x 8
     ConvAeTrainer a = conv_ae_trainer_new(conv_autoencoder_new(enc, dec, RECON_BCE), &adam, to);
     tc.epochs = 4UL;
     struct TrainReport ra = fit_case_(&a, "conv ae", &data, &tc, (float)0.95);
     result("cae.first", (double)ra.firstEpochLoss, 0.0005);
     result("cae.last", (double)ra.lastEpochLoss, 0.001);
     a.free();
-    conv_autoencoder_free(&a.host);
-    optimizer_free(&adam);
-    dataset_free(&data);
+    a.host.free();
+    adam.free();
+    data.free();
 }
 
 // The device draws its own noise for a GAN: the losses stay finite and the
@@ -158,14 +158,14 @@ static void gan_case_(const &TrainerOptions to) {
     unsafe { printf("  %-12s d %.4f g %.4f, one more step d %.4f g %.4f\n", "gan", (double)l.d, (double)l.g,
                     (double)s.d, (double)s.g); }
     check(l.d == l.d && l.g == l.g && l.d != (float)0.0 && s.d == s.d && s.g == s.g, "gan");
-    &Tensor sample = gan_generate(&g.host, 8UL, null);
+    &Tensor sample = g.host.generate(8UL, null);
     unsigned long rows = 0UL;
     unsafe { rows = sample->shape[0]; }
     check(rows == 8UL, "gan host generates");
     tensor_drop(sample);
     g.free();
-    gan_free(&g.host);
-    dataset_free(&data);
+    g.host.free();
+    data.free();
 }
 
 // ── RL through the agent traits ──────────────────────────────────────────────
@@ -176,12 +176,12 @@ unsigned long value_run_(&A a, &Rng env, unsigned long steps) {
     unsigned long sum = 0UL;
     unsigned long i = 0UL;
     while (i < steps) {
-        rng_fill_normal(env, o, (float)0.0, (float)1.0);
-        rng_fill_normal(env, n, (float)0.0, (float)1.0);
+        env.fill_normal(o, (float)0.0, (float)1.0);
+        env.fill_normal(n, (float)0.0, (float)1.0);
         unsigned long act = a.act(o, 1);
         sum = sum * 3UL + act;
-        float r = rng_uniform(env);
-        int t = rng_below(env, 10UL) == 0UL;
+        float r = env.uniform();
+        int t = env.below(10UL) == 0UL;
         if (a.observe(o, act, r, n, t) < 0) check(0, "observe");
         i = i + 1UL;
     }
@@ -199,12 +199,12 @@ float policy_run_(&P p, &Rng env, unsigned long rollout, int updates) {
     while (u < updates) {
         unsigned long i = 0UL;
         while (i < rollout) {
-            rng_fill_normal(env, o, (float)0.0, (float)1.0);
-            rng_fill_normal(env, n, (float)0.0, (float)1.0);
+            env.fill_normal(o, (float)0.0, (float)1.0);
+            env.fill_normal(n, (float)0.0, (float)1.0);
             unsigned long act = p.act(o, 1);
-            float r = rng_uniform(env);
-            int t = rng_below(env, 20UL) == 0UL;
-            int tr = !t && rng_below(env, 30UL) == 0UL;
+            float r = env.uniform();
+            int t = env.below(20UL) == 0UL;
+            int tr = !t && env.below(30UL) == 0UL;
             p.record(o, act, r, n, t, tr);
             i = i + 1UL;
         }
@@ -234,7 +234,7 @@ static void rl_cases_(const &TrainerOptions to) {
     result("dqn.loss", (double)dl, 0.001);
     unsafe { result("dqn.w0", (double)(*d.host.q.params.at(0UL))->data[0], 0.001); }
     d.free();
-    dqn_free(&d.host);
+    d.host.free();
 
     struct PgConfig pc = pg_config_default(PG_PPO);
     pc.hidden = 32UL;
@@ -248,7 +248,7 @@ static void rl_cases_(const &TrainerOptions to) {
     result("ppo.loss", (double)pl, 0.001);
     unsafe { result("ppo.w0", (double)(*p.host.policy.params.at(0UL))->data[0], 0.001); }
     p.free();
-    pg_free(&p.host);
+    p.host.free();
 }
 
 int main() {

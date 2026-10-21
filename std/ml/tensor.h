@@ -61,19 +61,19 @@ typedef fn void(void* selfTensor) TensorBackwardFn;
 // Every op allocates its output. In a training loop that is a malloc (and,
 // for fresh memory, page faults) per op per step: on a small MLP that cost
 // more than the arithmetic. A TensorArena is a chunked bump allocator for a
-// step's temporaries: between tensor_arena_begin(&a) and tensor_arena_end()
+// step's temporaries: between a.begin() and tensor_arena_end()
 // every tensor created on this thread (data, shape, gradient) comes from
-// it, and tensor_arena_reset(&a) drops them all at once while keeping the
+// it, and a.reset() drops them all at once while keeping the
 // memory -- already faulted in -- for the next step.
 //
 //   struct TensorArena a = tensor_arena_new(0UL);
 //   while (step < steps) {
-//       tensor_arena_begin(&a);
+//       a.begin();
 //       ... forward, tensor_backward, optimizer update ...
 //       tensor_arena_end();
-//       tensor_arena_reset(&a);     // this step's tensors are gone
+//       a.reset();     // this step's tensors are gone
 //   }
-//   tensor_arena_free(&a);
+//   a.free();
 //
 // Tensors created outside the arena (parameters) stay on the heap, and so do
 // their gradients, so they survive resets. Tensor::free() on an arena tensor
@@ -85,16 +85,17 @@ struct TensorArena {
     unsigned long tracked;     // tensors to release on reset (internal)
     unsigned long trackedCount;
     unsigned long trackedCap;
+
+    void begin();   // this thread's new tensors go to this arena
+    void reset();   // drop every tensor in it, keep the memory
+    void free();
+    // Bytes handed out since the last reset.
+    unsigned long used() const;
 };
 
 // chunkBytes 0 = 16 MiB chunks (larger requests get their own chunk).
 struct TensorArena tensor_arena_new(unsigned long chunkBytes);
-void tensor_arena_begin(&TensorArena a);   // this thread's new tensors go to a
 void tensor_arena_end();                   // back to the heap
-void tensor_arena_reset(&TensorArena a);   // drop every tensor in it, keep the memory
-void tensor_arena_free(&TensorArena a);
-// Bytes handed out since the last reset.
-unsigned long tensor_arena_used(const &TensorArena a);
 
 // Internal (tensor.h's allocation helpers): the arena new tensors use on this
 // thread, or null; 64-byte-aligned memory from it; and registering a tensor

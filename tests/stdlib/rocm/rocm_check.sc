@@ -295,24 +295,24 @@ static void check_half() {
         check(bad == 0UL, bf ? "bf16 gemm_relu" : "fp16 gemm_relu");
         check(!std::rocm_half_relu_grad(hy, h, ho), "half relu_grad size check");   // g shorter than z
 
-        std::rocm_half_free(&hg2); std::rocm_half_free(&ho); std::rocm_half_free(&hy); std::rocm_half_free(&ht);
-        std::rocm_half_free(&hdy); std::rocm_free(&loss); std::rocm_half_free(&w1a); std::rocm_half_free(&w2a);
-        std::rocm_half_free(&w1b); std::rocm_half_free(&w2b); std::rocm_half_free(&g1); std::rocm_half_free(&g2);
-        std::rocm_half_free(&hb2); std::rocm_half_free(&ha2); std::rocm_half_free(&cr);
+        hg2.free(); ho.free(); hy.free(); ht.free();
+        hdy.free(); loss.free(); w1a.free(); w2a.free();
+        w1b.free(); w2b.free(); g1.free(); g2.free();
+        hb2.free(); ha2.free(); cr.free();
         gb2.free(); ob.free(); xa.free(); xb.free();
 
         // dtype mismatches are rejected
         struct RocmHalfBuf other = std::rocm_half_alloc(k * nn, bf ? ROCM_FP16 : ROCM_BF16);
         check(!std::rocm_half_gemm_f32(ha, 0, other, 0, c32, m, nn, k), "half gemm dtype check");
-        std::rocm_half_free(&other);
+        other.free();
 
-        std::rocm_half_free(&h); std::rocm_half_free(&hu); std::rocm_half_free(&ha); std::rocm_half_free(&hb);
-        std::rocm_half_free(&c16); std::rocm_half_free(&hg); std::rocm_free(&c32); std::rocm_free(&back);
+        h.free(); hu.free(); ha.free(); hb.free();
+        c16.free(); hg.free(); c32.free(); back.free();
         bits.free(); ubits.free(); fb.free(); a.free(); b.free(); ar.free(); br.free(); cb.free();
         wb.free(); gbits.free(); wn.free();
         d = d + 1;
     }
-    std::rocm_free(&dv);
+    dv.free();
     v.free();
 }
 
@@ -431,7 +431,7 @@ static void check_decode_ops() {
             }
             check(ok && err <= (float)1e-5 * (big > (float)1.0 ? big : (float)1.0) * (float)k, "half gemv vs reference");
             got.free(); w.free(); x.free(); bits.free();
-            std::rocm_half_free(&dw); std::rocm_free(&dx); std::rocm_free(&dy);
+            dw.free(); dx.free(); dy.free();
             ki = ki + 1;
         }
         di = di + 1;
@@ -489,9 +489,9 @@ static void check_decode_ops() {
     struct RocmHalfBuf small = std::rocm_half_alloc(10UL, ROCM_BF16);
     check(!std::rocm_half_gemv(small, dg, dgo, 5UL, 4UL), "half gemv rejects a too-small weight buffer");
     check(!std::rocm_rmsnorm(dx, dw, dy, 4UL, n, (float)1e-6), "rmsnorm rejects too many rows");
-    std::rocm_half_free(&small);
+    small.free();
     x.free(); w.free(); y1.free(); y2.free(); gx.free(); go.free();
-    std::rocm_free(&dx); std::rocm_free(&dw); std::rocm_free(&dy); std::rocm_free(&dg); std::rocm_free(&dgo);
+    dx.free(); dw.free(); dy.free(); dg.free(); dgo.free();
 }
 
 static void check_attention() {
@@ -581,8 +581,8 @@ static void check_attention() {
         struct Vec<float> gg = download(dout);
         check(relmax(&gg, &ref) < 1.0e-4f, "linear attention graph values");
         gg.free();
-        std::rocm_graph_free(&g);
-        std::rocm_free(&dq); std::rocm_free(&dk); std::rocm_free(&dv); std::rocm_free(&dout);
+        g.free();
+        dq.free(); dk.free(); dv.free(); dout.free();
         ref.free(); q.free(); k.free(); v.free(); got.free();
         li = li + 1;
     }
@@ -611,7 +611,7 @@ static void check_attention() {
     check(big.dev != 0UL && !std::rocm_flash_attention(big, big, big, big, 1UL, n1, n1, 129UL, 0.0f, 0) &&
           !std::rocm_linear_attention(big, big, big, big, 1UL, n1, n1, 129UL, 0), "headDim > 128 rejected");
     check(!std::rocm_flash_attention(big, big, big, big, 1UL, n1, n1 - 1UL, 64UL, 0.0f, 1), "causal flash rejects kv < sl");
-    std::rocm_free(&big);
+    big.free();
     sa.free(); la.free(); tq.free(); tk.free(); tv.free();
     q1.free(); k1.free(); v1.free(); g1.free(); c1.free(); c2.free();
 }
@@ -658,8 +658,8 @@ static void check_mixed_precision() {
         }
         check(bad == 0UL, d == ROCM_FP16 ? "fp16 -> bf16 == CPU" : "bf16 -> fp16 == CPU");
         got.free();
-        std::rocm_half_free(&hs);
-        std::rocm_half_free(&hd);
+        hs.free();
+        hd.free();
         d = d + 1;
     }
 
@@ -816,8 +816,8 @@ static void check_mixed_precision() {
         struct Vec<float> gw2 = download(dw);
         check(maxdiff(&gw, &gw2) == (float)0.0, "flagged step skipped");
         gw.free(); gw2.free(); gh.free(); cw.free(); cm.free(); cv.free();
-        std::rocm_free(&dw); std::rocm_free(&dg); std::rocm_free(&dm); std::rocm_free(&dvv);
-        std::rocm_half_free(&wh);
+        dw.free(); dg.free(); dm.free(); dvv.free();
+        wh.free();
         variant = variant + 1;
     }
 
@@ -874,18 +874,18 @@ static void check_mixed_precision() {
         }
         check(bad == 0UL, "half NCHW bias + relu == CPU");
         yb.free(); biasb.free(); bias.free(); ab.free(); bb.free();
-        std::rocm_half_free(&ha); std::rocm_half_free(&hb); std::rocm_half_free(&ho); std::rocm_half_free(&hbias);
+        ha.free(); hb.free(); ho.free(); hbias.free();
         d = d + 1;
     }
 
     b = 0UL;
     while (b < 40UL) {
-        std::rocm_free(f32s.at(b)); std::rocm_half_free(h16s.at(b)); std::rocm_free(backs.at(b));
+        f32s.at(b).free(); h16s.at(b).free(); backs.at(b).free();
         b = b + 1UL;
     }
-    std::rocm_half_free(&odd);
-    std::rocm_half_free(&g16a); std::rocm_half_free(&g16b);
-    std::rocm_free(&g32a); std::rocm_free(&g32b); std::rocm_free(&flag);
+    odd.free();
+    g16a.free(); g16b.free();
+    g32a.free(); g32b.free(); flag.free();
     f32s.free(); h16s.free(); backs.free(); mixed.free(); two.free(); gs.free(); g32s.free(); one.free();
     pat.free(); cpu.free(); host.free(); gv.free(); scaled.free(); w0.free(); g0.free(); xa.free(); xb.free();
 }
@@ -1022,10 +1022,10 @@ int main() {
     while (i < n) { *want.at(i) = *b.at(i) * (float)0.5; i = i + 1UL; }
     check(maxdiff(&got, &want) < 1e-5f, "graph replay values");
     got.free();
-    std::rocm_graph_free(&g);
+    g.free();
 
-    std::rocm_free(&da); std::rocm_free(&db); std::rocm_free(&dout); std::rocm_free(&d1);
-    std::rocm_free(&small); std::rocm_free(&dga); std::rocm_free(&dgb); std::rocm_free(&dgc);
+    da.free(); db.free(); dout.free(); d1.free();
+    small.free(); dga.free(); dgb.free(); dgc.free();
     check(da.dev == 0UL, "free clears handle");
     a.free(); b.free(); want.free(); ga.free(); gb.free(); ref.free(); hc.free();
 

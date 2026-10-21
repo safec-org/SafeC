@@ -360,7 +360,7 @@ static const char* rocm_kernel_source_() {
     "}\n"
     // Mixed-precision optimizer steps on fp32 master weights, also writing
     // the 16-bit copy wh (when not null); nothing happens when *skip != 0
-    // (a gradient overflowed). Same arithmetic as nn.h's optimizer_step.
+    // (a gradient overflowed). Same arithmetic as nn.h's Optimizer::step.
     "extern \"C\" __global__ void mp_sgd(float* w, const float* g, float* vel, unsigned short* wh, float lr,\n"
     "                                      float mom, float wd, unsigned n, int bf, const float* skip) {\n"
     "#pragma clang fp contract(off)\n"
@@ -1773,7 +1773,7 @@ int rocm_write(struct RocmBuf dst, const &float host, unsigned long n) {
 
 struct RocmBuf rocm_upload(const &float host, unsigned long n) {
     struct RocmBuf b = rocm_alloc(n);
-    if (b.dev != 0UL && !rocm_write(b, host, n)) rocm_free(&b);
+    if (b.dev != 0UL && !rocm_write(b, host, n)) b.free();
     return b;
 }
 
@@ -1786,10 +1786,10 @@ int rocm_read(struct RocmBuf src, &float host, unsigned long n) {
     }
 }
 
-void rocm_free(&RocmBuf b) {
-    if (b.dev != 0UL) { unsafe { hipFree((void*)b.dev); } }
-    b.dev = 0UL;
-    b.len = 0UL;
+void RocmBuf::free() {
+    if (self.dev != 0UL) { unsafe { hipFree((void*)self.dev); } }
+    self.dev = 0UL;
+    self.len = 0UL;
 }
 
 int rocm_sync() {
@@ -2032,10 +2032,10 @@ struct RocmHalfBuf rocm_half_alloc(unsigned long n, int dtype) {
     return b;
 }
 
-void rocm_half_free(&RocmHalfBuf b) {
-    if (b.dev != 0UL) { unsafe { hipFree((void*)b.dev); } }
-    b.dev = 0UL;
-    b.len = 0UL;
+void RocmHalfBuf::free() {
+    if (self.dev != 0UL) { unsafe { hipFree((void*)self.dev); } }
+    self.dev = 0UL;
+    self.len = 0UL;
 }
 
 int rocm_half_write(struct RocmHalfBuf dst, const &unsigned short bits, unsigned long n) {
@@ -2084,8 +2084,8 @@ struct RocmHalfBuf rocm_half_upload(const &float host, unsigned long n, int dtyp
     if (h.dev == 0UL) return h;
     struct RocmBuf tmp = rocm_upload(host, n);
     int ok = tmp.dev != 0UL && rocm_to_half(tmp, h) && rocm_sync();
-    rocm_free(&tmp);
-    if (!ok) rocm_half_free(&h);
+    tmp.free();
+    if (!ok) h.free();
     return h;
 }
 
@@ -2393,9 +2393,9 @@ int rocm_graph_launch(struct RocmGraph g) {
     unsafe { return hipGraphLaunch((void*)g.exec, g_rocm_stream) == ROCM_HIP_OK; }
 }
 
-void rocm_graph_free(&RocmGraph g) {
-    if (g.exec != 0UL) { unsafe { hipGraphExecDestroy((void*)g.exec); } }
-    g.exec = 0UL;
+void RocmGraph::free() {
+    if (self.exec != 0UL) { unsafe { hipGraphExecDestroy((void*)self.exec); } }
+    self.exec = 0UL;
 }
 
 // ── Host-array convenience ops ───────────────────────────────────────────────
@@ -2406,9 +2406,9 @@ static int rocm_host_binary_(int kernel, const &float a, const &float b, &float 
     struct RocmBuf dout = rocm_alloc(n);
     int ok = da.dev != 0UL && db.dev != 0UL && dout.dev != 0UL &&
              rocm_binary_(kernel, da, db, dout) && rocm_read(dout, out, n);
-    rocm_free(&da);
-    rocm_free(&db);
-    rocm_free(&dout);
+    da.free();
+    db.free();
+    dout.free();
     return ok;
 }
 
@@ -2417,8 +2417,8 @@ static int rocm_host_unary_(int kernel, const &float a, float k, &float out, uns
     struct RocmBuf dout = rocm_alloc(n);
     int ok = da.dev != 0UL && dout.dev != 0UL &&
              rocm_unary_(kernel, da, k, dout) && rocm_read(dout, out, n);
-    rocm_free(&da);
-    rocm_free(&dout);
+    da.free();
+    dout.free();
     return ok;
 }
 
@@ -2437,8 +2437,8 @@ int rocm_sum_f32(const &float a, &float out1, unsigned long n) {
     struct RocmBuf da = rocm_upload(a, n);
     struct RocmBuf dout = rocm_alloc(1UL);
     int ok = da.dev != 0UL && dout.dev != 0UL && rocm_sum(da, dout) && rocm_read(dout, out1, 1UL);
-    rocm_free(&da);
-    rocm_free(&dout);
+    da.free();
+    dout.free();
     return ok;
 }
 
@@ -2504,7 +2504,7 @@ static int rocm_lin_scratch_(unsigned long need) {
     if (!g_rocm_lin_init) { g_rocm_lin_scratch.dev = 0UL; g_rocm_lin_scratch.len = 0UL; g_rocm_lin_init = 1; }
     if (g_rocm_lin_scratch.len >= need) return 1;
     if (g_rocm_capturing) return 0;
-    rocm_free(&g_rocm_lin_scratch);
+    g_rocm_lin_scratch.free();
     g_rocm_lin_scratch = rocm_alloc(need);
     if (g_rocm_lin_scratch.dev == 0UL) { g_rocm_lin_scratch.len = 0UL; return 0; }
     return 1;
@@ -2630,10 +2630,10 @@ static int rocm_attention_f32_(const &float q, const &float k, const &float v, &
                     : rocm_flash_attention(dq, dk, dv, dout, heads, seqLen, kvLen, headDim, scale, causal);
         ok = ok && rocm_read(dout, out, nq);
     }
-    rocm_free(&dq);
-    rocm_free(&dk);
-    rocm_free(&dv);
-    rocm_free(&dout);
+    dq.free();
+    dk.free();
+    dv.free();
+    dout.free();
     return ok;
 }
 
@@ -2674,9 +2674,9 @@ int rocm_matmul_f32(const &float a, const &float b, &float out,
         }
         ok = ok && rocm_read(dc, out, M * N);
     }
-    rocm_free(&da);
-    rocm_free(&db);
-    rocm_free(&dc);
+    da.free();
+    db.free();
+    dc.free();
     return ok;
 }
 
@@ -2687,9 +2687,9 @@ int rocm_matmul_f32_blas(const &float a, const &float b, &float out,
     struct RocmBuf dc = rocm_alloc(M * N);
     int ok = da.dev != 0UL && db.dev != 0UL && dc.dev != 0UL &&
              rocm_gemm(da, 0, db, 0, dc, M, N, K) && rocm_read(dc, out, M * N);
-    rocm_free(&da);
-    rocm_free(&db);
-    rocm_free(&dc);
+    da.free();
+    db.free();
+    dc.free();
     return ok;
 }
 

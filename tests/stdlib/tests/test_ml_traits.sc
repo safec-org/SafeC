@@ -1,6 +1,6 @@
 // std::ml's training traits (train_traits.h) and the backend-neutral names
 // (train.h) on the CPU backend: every trainer reached through the traits
-// trains exactly as the direct API it wraps (trainer_fit, gan_train, dqn_*,
+// trains exactly as the direct API it wraps (trainer_fit, Gan::train, dqn_*,
 // pg_*). tests/stdlib/rocm/train_backend_check.sc runs one program on both
 // backends.
 #include <std/test/test.h>
@@ -47,9 +47,9 @@ static int same_report_(const &TrainReport a, const &TrainReport b) {
 
 // ── Trainable ────────────────────────────────────────────────────────────────
 static &Tensor clf_loss_(&Mlp m, const &Tensor x, const &Tensor y) {
-    return tensor_cross_entropy_loss(mlp_forward(m, x), y);
+    return tensor_cross_entropy_loss(m.forward(x), y);
 }
-static &Tensor clf_logits_(&Mlp m, const &Tensor x) { return mlp_forward(m, x); }
+static &Tensor clf_logits_(&Mlp m, const &Tensor x) { return m.forward(x); }
 
 void t_backend_name() {
     const char* name = ML_TRAIN_BACKEND;
@@ -71,7 +71,7 @@ void t_fit_matches_trainer_fit() {
     tc.clipNorm = (float)1.0;
     tc.lrDecay = (float)0.9;
     struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.01);
-    optimizer_add_mlp(&o, &a);
+    a.add_params(&o);
     struct TrainReport ra = trainer_fit(&a, clf_loss_, &o, &data, &tc);
 
     struct Optimizer adam = optimizer_new(OPT_ADAM, (float)0.01);
@@ -90,11 +90,11 @@ void t_fit_matches_trainer_fit() {
     struct TrainReport again = train_fit(&t, &data, &tc);
     ASSERT_TRUE(again.lastEpochLoss < rb.firstEpochLoss);
     t.free();
-    optimizer_free(&o);
-    optimizer_free(&adam);
-    mlp_free(&a);
-    mlp_free(&t.host);
-    dataset_free(&data);
+    o.free();
+    adam.free();
+    a.free();
+    t.host.free();
+    data.free();
 }
 
 // The loss kinds, and train_step on host batches.
@@ -111,7 +111,7 @@ void t_losses_and_train_step() {
     while (i < 150) { last = t.train_step(data.x, data.y); i = i + 1; }
     ASSERT_TRUE(last < first * (float)0.2);
     t.free();
-    mlp_free(&t.host);
+    t.host.free();
 
     // BCE on logits: a 0/1 target per row
     struct Dataset xr = dataset_xor(200UL, (float)0.0, &rng);
@@ -122,22 +122,22 @@ void t_losses_and_train_step() {
     struct TrainReport rep = train_fit(&t2, &xr, &tc);
     ASSERT_TRUE(rep.lastEpochLoss < rep.firstEpochLoss * (float)0.5);
     t2.free();
-    mlp_free(&t2.host);
-    optimizer_free(&adam);
-    dataset_free(&xr);
-    dataset_free(&data);
+    t2.host.free();
+    adam.free();
+    xr.free();
+    data.free();
 }
 
 static &Tensor conv_loss_(&ConvNet n, const &Tensor x, const &Tensor y) {
-    return tensor_cross_entropy_loss(convnet_forward(n, x), y);
+    return tensor_cross_entropy_loss(n.forward(x), y);
 }
 
 static struct ConvNet small_cnn_(unsigned long seed) {
     struct Rng rng = rng_new(seed);
     struct ConvNet n = convnet_new(1UL, 8UL, 8UL);
-    convnet_conv(&n, 4UL, 3UL, 1UL, 1UL, ACT_RELU, &rng);
-    convnet_maxpool(&n, 2UL, 2UL, 0UL);
-    convnet_dense(&n, 4UL, ACT_NONE, &rng);
+    n.conv(4UL, 3UL, 1UL, 1UL, ACT_RELU, &rng);
+    n.maxpool(2UL, 2UL, 0UL);
+    n.dense(4UL, ACT_NONE, &rng);
     return n;
 }
 
@@ -149,7 +149,7 @@ void t_convnet_trainer() {
     struct TrainConfig tc = train_config_default();
     tc.epochs = 3UL;
     struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.01);
-    optimizer_add_convnet(&o, &a);
+    a.add_params(&o);
     struct TrainReport ra = trainer_fit(&a, conv_loss_, &o, &data, &tc);
     struct Optimizer adam = optimizer_new(OPT_ADAM, (float)0.01);
     struct TrainerOptions to = trainer_options_default();
@@ -158,11 +158,11 @@ void t_convnet_trainer() {
     ASSERT_TRUE(same_report_(&ra, &rb));
     ASSERT_TRUE(params_diff_(&a.params, &t.host.params) == (float)0.0);
     t.free();
-    optimizer_free(&o);
-    optimizer_free(&adam);
-    convnet_free(&a);
-    convnet_free(&t.host);
-    dataset_free(&data);
+    o.free();
+    adam.free();
+    a.free();
+    t.host.free();
+    data.free();
 }
 
 void t_autoencoder_trainers() {
@@ -175,7 +175,7 @@ void t_autoencoder_trainers() {
     struct TrainConfig tc = train_config_default();
     tc.epochs = 3UL;
     struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.003);
-    vae_add_params(&o, &a);
+    a.add_params(&o);
     struct TrainReport ra = trainer_fit(&a, vae_loss, &o, &data, &tc);
     struct Optimizer adam = optimizer_new(OPT_ADAM, (float)0.003);
     struct TrainerOptions to = trainer_options_default();
@@ -185,25 +185,25 @@ void t_autoencoder_trainers() {
     ASSERT_TRUE(params_diff_(&a.dec.params, &t.host.dec.params) == (float)0.0);
     ASSERT_TRUE(t.host.lastRecon == a.lastRecon);   // the trainer's host is the trained model
     t.free();
-    optimizer_free(&o);
-    vae_free(&a);
-    vae_free(&t.host);
+    o.free();
+    a.free();
+    t.host.free();
 
     // convolutional autoencoder
     struct Rng rng = rng_new(61UL);
     struct ConvNet enc = convnet_new(1UL, 8UL, 8UL);
-    convnet_conv(&enc, 4UL, 3UL, 2UL, 1UL, ACT_RELU, &rng);
+    enc.conv(4UL, 3UL, 2UL, 1UL, ACT_RELU, &rng);
     struct ConvNet dec = convnet_new(4UL, 4UL, 4UL);
-    convnet_deconv(&dec, 1UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);
+    dec.deconv(1UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);
     ConvAeTrainer c = conv_ae_trainer_new(conv_autoencoder_new(enc, dec, RECON_BCE), &adam, &to);
     tc.epochs = 4UL;
     struct TrainReport rc = train_fit(&c, &data, &tc);
     ASSERT_EQ(rc.epochs, 4UL);
     ASSERT_TRUE(rc.lastEpochLoss < rc.firstEpochLoss);
     c.free();
-    conv_autoencoder_free(&c.host);
-    optimizer_free(&adam);
-    dataset_free(&data);
+    c.host.free();
+    adam.free();
+    data.free();
 }
 
 // ── GanTrainable ─────────────────────────────────────────────────────────────
@@ -215,7 +215,7 @@ void t_gan_trainer() {
     cfg.emaDecay = (float)0.0;
     struct Gan a = gan_new(2UL, &cfg);
     struct Gan b = gan_new(2UL, &cfg);
-    struct GanLosses la = gan_train(&a, &data, 2UL, 32UL);
+    struct GanLosses la = a.train(&data, 2UL, 32UL);
     struct TrainerOptions to = trainer_options_default();
     GanTrainer t = gan_trainer_new(b, &to);
     struct GanLosses lb = train_gan(&t, &data, 2UL, 32UL);
@@ -227,9 +227,9 @@ void t_gan_trainer() {
     ASSERT_TRUE(ls.d == ls.d && ls.g == ls.g);   // finite
     ASSERT_EQ(t.host.steps, a.steps + 1UL);
     t.free();
-    gan_free(&a);
-    gan_free(&t.host);
-    dataset_free(&data);
+    a.free();
+    t.host.free();
+    data.free();
 }
 
 // ── ValueAgent / PolicyLearner: generic loops ────────────────────────────────
@@ -241,12 +241,12 @@ unsigned long value_run_(&A a, &Rng env, unsigned long steps) {
     unsigned long sum = 0UL;
     unsigned long i = 0UL;
     while (i < steps) {
-        rng_fill_normal(env, o, (float)0.0, (float)1.0);
-        rng_fill_normal(env, n, (float)0.0, (float)1.0);
+        env.fill_normal(o, (float)0.0, (float)1.0);
+        env.fill_normal(n, (float)0.0, (float)1.0);
         unsigned long act = a.act(o, 1);
         sum = sum + act;
-        float r = rng_uniform(env);
-        int t = rng_below(env, 10UL) == 0UL;
+        float r = env.uniform();
+        int t = env.below(10UL) == 0UL;
         a.observe(o, act, r, n, t);
         i = i + 1UL;
     }
@@ -264,12 +264,12 @@ float policy_run_(&P p, &Rng env, unsigned long rollout, int updates) {
     while (u < updates) {
         unsigned long i = 0UL;
         while (i < rollout) {
-            rng_fill_normal(env, o, (float)0.0, (float)1.0);
-            rng_fill_normal(env, n, (float)0.0, (float)1.0);
+            env.fill_normal(o, (float)0.0, (float)1.0);
+            env.fill_normal(n, (float)0.0, (float)1.0);
             unsigned long act = p.act(o, 1);
-            float r = rng_uniform(env);
-            int t = rng_below(env, 20UL) == 0UL;
-            int tr = !t && rng_below(env, 30UL) == 0UL;
+            float r = env.uniform();
+            int t = env.below(20UL) == 0UL;
+            int tr = !t && env.below(30UL) == 0UL;
             p.record(o, act, r, n, t, tr);
             i = i + 1UL;
         }
@@ -297,13 +297,13 @@ void t_rl_agents() {
     unsigned long sum = 0UL;
     unsigned long i = 0UL;
     while (i < 160UL) {
-        rng_fill_normal(&e1, o, (float)0.0, (float)1.0);
-        rng_fill_normal(&e1, n, (float)0.0, (float)1.0);
-        unsigned long act = dqn_act(&direct, o, 1);
+        e1.fill_normal(o, (float)0.0, (float)1.0);
+        e1.fill_normal(n, (float)0.0, (float)1.0);
+        unsigned long act = direct.act(o, 1);
         sum = sum + act;
-        float r = rng_uniform(&e1);
-        int t = rng_below(&e1, 10UL) == 0UL;
-        dqn_observe(&direct, o, act, r, n, t);
+        float r = e1.uniform();
+        int t = e1.below(10UL) == 0UL;
+        direct.observe(o, act, r, n, t);
         i = i + 1UL;
     }
     struct Rng e2 = rng_new(91UL);
@@ -315,8 +315,8 @@ void t_rl_agents() {
     ASSERT_TRUE(d.sync());
     ASSERT_TRUE(params_diff_(&direct.q.params, &d.host.q.params) == (float)0.0);
     d.free();
-    dqn_free(&d.host);
-    dqn_free(&direct);
+    d.host.free();
+    direct.free();
 
     struct PgConfig pc = pg_config_default(PG_PPO);
     pc.hidden = 32UL;
@@ -331,16 +331,16 @@ void t_rl_agents() {
     while (u < 2) {
         i = 0UL;
         while (i < 100UL) {
-            rng_fill_normal(&e3, o, (float)0.0, (float)1.0);
-            rng_fill_normal(&e3, n, (float)0.0, (float)1.0);
-            unsigned long act = pg_act(&pd, o, 1);
-            float r = rng_uniform(&e3);
-            int t = rng_below(&e3, 20UL) == 0UL;
-            int tr = !t && rng_below(&e3, 30UL) == 0UL;
-            pg_record(&pd, o, act, r, n, t, tr);
+            e3.fill_normal(o, (float)0.0, (float)1.0);
+            e3.fill_normal(n, (float)0.0, (float)1.0);
+            unsigned long act = pd.act(o, 1);
+            float r = e3.uniform();
+            int t = e3.below(20UL) == 0UL;
+            int tr = !t && e3.below(30UL) == 0UL;
+            pd.record(o, act, r, n, t, tr);
             i = i + 1UL;
         }
-        lc = pg_update(&pd);
+        lc = pd.update();
         u = u + 1;
     }
     struct Rng e4 = rng_new(92UL);
@@ -349,8 +349,8 @@ void t_rl_agents() {
     ASSERT_TRUE(p.sync());
     ASSERT_TRUE(params_diff_(&pd.policy.params, &p.host.policy.params) == (float)0.0);
     p.free();
-    pg_free(&p.host);
-    pg_free(&pd);
+    p.host.free();
+    pd.free();
     tensor_drop(o);
     tensor_drop(n);
 }
@@ -363,7 +363,7 @@ int main() {
         t.add("loss kinds, train_step", t_losses_and_train_step);
         t.add("ConvNet trainer = trainer_fit", t_convnet_trainer);
         t.add("VAE / conv autoencoder trainers", t_autoencoder_trainers);
-        t.add("train_gan (GanTrainable) = gan_train", t_gan_trainer);
+        t.add("train_gan (GanTrainable) = Gan::train", t_gan_trainer);
         t.add("ValueAgent / PolicyLearner loops = dqn_* / pg_*", t_rl_agents);
     }
     t.run();

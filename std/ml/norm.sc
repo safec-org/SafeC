@@ -126,7 +126,7 @@ static ?&TensorArena norm_heap_begin_() {
 
 static void norm_heap_end_(?&TensorArena cur) {
     match (cur) {
-        case some(a): { tensor_arena_begin(a); }
+        case some(a): { a.begin(); }
         case null: { }
     }
 }
@@ -148,18 +148,18 @@ struct LayerNorm layer_norm_new(unsigned long dim) {
     return ln;
 }
 
-&Tensor layer_norm_forward(const &LayerNorm ln, const &Tensor x) {
-    return tensor_add_bias(tensor_mul_row(tensor_layer_norm(x, ln.eps), ln.gamma), ln.beta);
+&Tensor LayerNorm::forward(const &Tensor x) const {
+    return tensor_add_bias(tensor_mul_row(tensor_layer_norm(x, self.eps), self.gamma), self.beta);
 }
 
-void layer_norm_add_params(&Optimizer opt, const &LayerNorm ln) {
-    optimizer_add(opt, ln.gamma);
-    optimizer_add(opt, ln.beta);
+void LayerNorm::add_params(&Optimizer opt) const {
+    opt.add(self.gamma);
+    opt.add(self.beta);
 }
 
-void layer_norm_free(&LayerNorm ln) {
-    norm_drop_(ln.gamma);
-    norm_drop_(ln.beta);
+void LayerNorm::free() {
+    norm_drop_(self.gamma);
+    norm_drop_(self.beta);
 }
 
 // ── AdaLN ────────────────────────────────────────────────────────────────────
@@ -178,15 +178,15 @@ struct AdaLN adaln_new(unsigned long dim, unsigned long condDim, int gated) {
     return a;
 }
 
-struct AdaLNOut adaln_forward(const &AdaLN a, const &Tensor x, const &Tensor cond) {
-    unsigned long n = a.dim;
-    &Tensor mod = tensor_add_bias(tensor_matmul(cond, a.W), a.b);
+struct AdaLNOut AdaLN::forward(const &Tensor x, const &Tensor cond) const {
+    unsigned long n = self.dim;
+    &Tensor mod = tensor_add_bias(tensor_matmul(cond, self.W), self.b);
     &Tensor shift = tensor_slice_cols(mod, 0UL, n);
     &Tensor scale = tensor_slice_cols(mod, n, n);
-    &Tensor xh = tensor_layer_norm(x, a.eps);
+    &Tensor xh = tensor_layer_norm(x, self.eps);
     struct AdaLNOut o;
     o.out = tensor_add(tensor_mul(xh, tensor_add_scalar(scale, (float)1.0)), shift);
-    if (a.gated) {
+    if (self.gated) {
         o.gate = tensor_slice_cols(mod, 2UL * n, n);
     } else {
         unsigned long m;
@@ -196,14 +196,14 @@ struct AdaLNOut adaln_forward(const &AdaLN a, const &Tensor x, const &Tensor con
     return o;
 }
 
-void adaln_add_params(&Optimizer opt, const &AdaLN a) {
-    optimizer_add(opt, a.W);
-    optimizer_add(opt, a.b);
+void AdaLN::add_params(&Optimizer opt) const {
+    opt.add(self.W);
+    opt.add(self.b);
 }
 
-void adaln_free(&AdaLN a) {
-    norm_drop_(a.W);
-    norm_drop_(a.b);
+void AdaLN::free() {
+    norm_drop_(self.W);
+    norm_drop_(self.b);
 }
 
 } // namespace std

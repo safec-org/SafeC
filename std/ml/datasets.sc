@@ -21,7 +21,7 @@ static ?&TensorArena ds_heap_begin_() {
 
 static void ds_heap_end_(?&TensorArena cur) {
     match (cur) {
-        case some(a): { tensor_arena_begin(a); }
+        case some(a): { a.begin(); }
         case null: { }
     }
 }
@@ -52,10 +52,10 @@ struct Dataset dataset_moons(unsigned long n, float noise, &Rng rng) {
     unsigned long i = 0UL;
     while (i < n) {
         unsigned long c = i % 2UL;
-        float t = DS_PI * rng_uniform(rng);
+        float t = DS_PI * rng.uniform();
         float a = c == 0UL ? cos_f(t) : (float)1.0 - cos_f(t);
         float b = c == 0UL ? sin_f(t) : (float)0.5 - sin_f(t);
-        ds_set_(&d, i, a + noise * rng_normal(rng), b + noise * rng_normal(rng), (float)c);
+        ds_set_(&d, i, a + noise * rng.normal(), b + noise * rng.normal(), (float)c);
         i = i + 1UL;
     }
     return d;
@@ -66,9 +66,9 @@ struct Dataset dataset_circles(unsigned long n, float noise, float factor, &Rng 
     unsigned long i = 0UL;
     while (i < n) {
         unsigned long c = i % 2UL;
-        float t = (float)2.0 * DS_PI * rng_uniform(rng);
+        float t = (float)2.0 * DS_PI * rng.uniform();
         float r = c == 0UL ? (float)1.0 : factor;
-        ds_set_(&d, i, r * cos_f(t) + noise * rng_normal(rng), r * sin_f(t) + noise * rng_normal(rng), (float)c);
+        ds_set_(&d, i, r * cos_f(t) + noise * rng.normal(), r * sin_f(t) + noise * rng.normal(), (float)c);
         i = i + 1UL;
     }
     return d;
@@ -79,8 +79,8 @@ struct Dataset dataset_spirals(unsigned long n, unsigned long classes, float noi
     unsigned long i = 0UL;
     while (i < n) {
         unsigned long c = i % classes;
-        float r = rng_uniform(rng);
-        float t = (float)c * (float)2.0 * DS_PI / (float)classes + r * (float)4.0 + noise * rng_normal(rng);
+        float r = rng.uniform();
+        float t = (float)c * (float)2.0 * DS_PI / (float)classes + r * (float)4.0 + noise * rng.normal();
         ds_set_(&d, i, r * cos_f(t), r * sin_f(t), (float)c);
         i = i + 1UL;
     }
@@ -91,14 +91,14 @@ struct Dataset dataset_blobs(unsigned long n, unsigned long classes, unsigned lo
                              float spread, &Rng rng) {
     struct Dataset d = ds_new_(n, features, 1UL, classes);
     &Tensor centers = tensor_new_2d(classes, features, 0);
-    rng_fill_uniform(rng, centers, (float)-5.0, (float)5.0);
+    rng.fill_uniform(centers, (float)-5.0, (float)5.0);
     unsafe {
         unsigned long i = 0UL;
         while (i < n) {
             unsigned long c = i % classes;
             unsigned long f = 0UL;
             while (f < features) {
-                d.x->data[i * features + f] = centers->data[c * features + f] + spread * rng_normal(rng);
+                d.x->data[i * features + f] = centers->data[c * features + f] + spread * rng.normal();
                 f = f + 1UL;
             }
             d.y->data[i] = (float)c;
@@ -114,10 +114,10 @@ struct Dataset dataset_xor(unsigned long n, float noise, &Rng rng) {
     struct Dataset d = ds_new_(n, 2UL, 1UL, 2UL);
     unsigned long i = 0UL;
     while (i < n) {
-        float a = (float)2.0 * rng_uniform(rng) - (float)1.0;
-        float b = (float)2.0 * rng_uniform(rng) - (float)1.0;
+        float a = (float)2.0 * rng.uniform() - (float)1.0;
+        float b = (float)2.0 * rng.uniform() - (float)1.0;
         float label = (a > (float)0.0) != (b > (float)0.0) ? (float)1.0 : (float)0.0;
-        ds_set_(&d, i, a + noise * rng_normal(rng), b + noise * rng_normal(rng), label);
+        ds_set_(&d, i, a + noise * rng.normal(), b + noise * rng.normal(), label);
         i = i + 1UL;
     }
     return d;
@@ -128,9 +128,9 @@ struct Dataset dataset_sine(unsigned long n, float noise, &Rng rng) {
     unsafe {
         unsigned long i = 0UL;
         while (i < n) {
-            float x = DS_PI * ((float)2.0 * rng_uniform(rng) - (float)1.0);
+            float x = DS_PI * ((float)2.0 * rng.uniform() - (float)1.0);
             d.x->data[i] = x;
-            d.y->data[i] = sin_f(x) + noise * rng_normal(rng);
+            d.y->data[i] = sin_f(x) + noise * rng.normal();
             i = i + 1UL;
         }
     }
@@ -141,9 +141,9 @@ struct Dataset dataset_gaussian_ring(unsigned long n, unsigned long modes, float
     struct Dataset d = ds_new_(n, 2UL, 1UL, modes);
     unsigned long i = 0UL;
     while (i < n) {
-        unsigned long c = rng_below(rng, modes);
+        unsigned long c = rng.below(modes);
         float t = (float)2.0 * DS_PI * (float)c / (float)modes;
-        ds_set_(&d, i, radius * cos_f(t) + std * rng_normal(rng), radius * sin_f(t) + std * rng_normal(rng), (float)c);
+        ds_set_(&d, i, radius * cos_f(t) + std * rng.normal(), radius * sin_f(t) + std * rng.normal(), (float)c);
         i = i + 1UL;
     }
     return d;
@@ -158,9 +158,9 @@ struct Dataset dataset_shapes(unsigned long n, unsigned long side, &Rng rng) {
             float* img = (float*)&d.x->data[i * side * side];
             // size between side/3 and side-2, centered somewhere it fits
             unsigned long lo = side / 3UL;
-            unsigned long sz = lo + rng_below(rng, side - 2UL - lo + 1UL);
-            unsigned long x0 = 1UL + rng_below(rng, side - sz - 1UL);
-            unsigned long y0 = 1UL + rng_below(rng, side - sz - 1UL);
+            unsigned long sz = lo + rng.below(side - 2UL - lo + 1UL);
+            unsigned long x0 = 1UL + rng.below(side - sz - 1UL);
+            unsigned long y0 = 1UL + rng.below(side - sz - 1UL);
             float half = (float)(sz - 1UL) * (float)0.5;
             float cx = (float)x0 + half;
             float cy = (float)y0 + half;
@@ -247,7 +247,7 @@ struct Dataset dataset_load_mnist(const &char imagesPath, const &char labelsPath
             if (limit > 0UL && limit < count) count = limit;
             unsigned long px = rows * cols;
             if (16UL + count * px <= ni && 8UL + count <= nl) {
-                dataset_free(&d);
+                d.free();
                 d = ds_new_(count, px, 1UL, 10UL);
                 unsigned long i = 0UL;
                 while (i < count * px) { d.x->data[i] = (float)ip[16UL + i] / (float)255.0; i = i + 1UL; }
@@ -314,7 +314,7 @@ struct Dataset dataset_load_csv(const &char path, long labelColumn, int hasHeade
         int labeled = labelColumn >= 0L && (unsigned long)labelColumn < cols;
         unsigned long features = labeled ? cols - 1UL : cols;
         if (rows > 0UL && features > 0UL) {
-            dataset_free(&d);
+            d.free();
             d = ds_new_(rows, features, 1UL, 0UL);
             int ok = 1;
             float maxLabel = (float)0.0;
@@ -359,7 +359,7 @@ struct Dataset dataset_load_csv(const &char path, long labelColumn, int hasHeade
                 }
                 pos = end + 1UL;
             }
-            if (!ok) { dataset_free(&d); d = ds_empty_(); }
+            if (!ok) { d.free(); d = ds_empty_(); }
             else if (labeled && classification) d.classes = (unsigned long)maxLabel + 1UL;
         }
         free((void*)buf);
@@ -378,26 +378,26 @@ static void ds_copy_row_(&Dataset dst, unsigned long di, const &Dataset src, uns
     }
 }
 
-struct DatasetSplit dataset_split(const &Dataset ds, float testFraction, &Rng rng) {
-    unsigned long n = ds.n;
+struct DatasetSplit Dataset::split(float testFraction, &Rng rng) const {
+    unsigned long n = self.n;
     unsigned long nTest = (unsigned long)((float)n * testFraction);
     if (nTest > n) nTest = n;
     struct DatasetSplit s;
-    s.train = ds_new_(n - nTest, ds.features, ds.targets, ds.classes);
-    s.test = ds_new_(nTest, ds.features, ds.targets, ds.classes);
+    s.train = ds_new_(n - nTest, self.features, self.targets, self.classes);
+    s.test = ds_new_(nTest, self.features, self.targets, self.classes);
     unsafe {
         unsigned long* order = (unsigned long*)malloc(sizeof(unsigned long) * (n + 1UL));
         unsigned long i = 0UL;
         while (i < n) { order[i] = i; i = i + 1UL; }
         i = n;
         while (i > 1UL) {
-            unsigned long j = rng_below(rng, i);
+            unsigned long j = rng.below(i);
             unsigned long t = order[i - 1UL]; order[i - 1UL] = order[j]; order[j] = t;
             i = i - 1UL;
         }
         i = 0UL;
-        while (i < nTest) { ds_copy_row_(&s.test, i, ds, order[i]); i = i + 1UL; }
-        while (i < n) { ds_copy_row_(&s.train, i - nTest, ds, order[i]); i = i + 1UL; }
+        while (i < nTest) { ds_copy_row_(&s.test, i, self, order[i]); i = i + 1UL; }
+        while (i < n) { ds_copy_row_(&s.train, i - nTest, self, order[i]); i = i + 1UL; }
         free((void*)order);
     }
     return s;
@@ -448,13 +448,13 @@ static void ds_standardize_(&Dataset fit, ?&Dataset other) {
     }
 }
 
-void dataset_standardize(&Dataset ds) { ds_standardize_(ds, null); }
-void dataset_standardize_pair(&Dataset train, &Dataset test) { ds_standardize_(train, (?&Dataset)test); }
+void Dataset::standardize() { ds_standardize_(self, null); }
+void Dataset::standardize_pair(&Dataset test) { ds_standardize_(self, (?&Dataset)test); }
 
-void dataset_free(&Dataset ds) {
-    ds.x->free(); ds.y->free();
-    unsafe { free((void*)ds.x); free((void*)ds.y); }
-    ds.n = 0UL;
+void Dataset::free() {
+    self.x->free(); self.y->free();
+    unsafe { free((void*)self.x); free((void*)self.y); }
+    self.n = 0UL;
 }
 
 // ── Mini-batches ─────────────────────────────────────────────────────────────
@@ -463,7 +463,7 @@ static void dl_shuffle_(&DataLoader dl) {
     unsafe {
         unsigned long i = dl.n;
         while (i > 1UL) {
-            unsigned long j = rng_below(&dl.rng, i);
+            unsigned long j = dl.rng.below(i);
             unsigned long t = dl.order[i - 1UL]; dl.order[i - 1UL] = dl.order[j]; dl.order[j] = t;
             i = i - 1UL;
         }
@@ -489,40 +489,40 @@ struct DataLoader dataloader_new(const &Dataset ds, unsigned long batchSize, int
     return dl;
 }
 
-int dataloader_next(&DataLoader dl, &Batch out) {
-    if (dl.pos >= dl.n) {
-        dl.pos = 0UL;
-        if (dl.shuffle) dl_shuffle_(dl);
+int DataLoader::next(&Batch out) {
+    if (self.pos >= self.n) {
+        self.pos = 0UL;
+        if (self.shuffle) dl_shuffle_(self);
         return 0;
     }
-    unsigned long rows = dl.n - dl.pos;
-    if (rows > dl.batchSize) rows = dl.batchSize;
+    unsigned long rows = self.n - self.pos;
+    if (rows > self.batchSize) rows = self.batchSize;
     unsigned long F; unsigned long T;
-    unsafe { F = dl.x->shape[1]; T = dl.y->shape[1]; }
+    unsafe { F = self.x->shape[1]; T = self.y->shape[1]; }
     out.x = tensor_new_2d(rows, F, 0);
     out.y = tensor_new_2d(rows, T, 0);
     out.rows = rows;
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
-            unsigned long src = dl.order[dl.pos + r];
+            unsigned long src = self.order[self.pos + r];
             unsigned long f = 0UL;
-            while (f < F) { out.x->data[r * F + f] = dl.x->data[src * F + f]; f = f + 1UL; }
+            while (f < F) { out.x->data[r * F + f] = self.x->data[src * F + f]; f = f + 1UL; }
             unsigned long t = 0UL;
-            while (t < T) { out.y->data[r * T + t] = dl.y->data[src * T + t]; t = t + 1UL; }
+            while (t < T) { out.y->data[r * T + t] = self.y->data[src * T + t]; t = t + 1UL; }
             r = r + 1UL;
         }
     }
-    dl.pos = dl.pos + rows;
+    self.pos = self.pos + rows;
     return 1;
 }
 
-unsigned long dataloader_batches(const &DataLoader dl) {
-    return (dl.n + dl.batchSize - 1UL) / dl.batchSize;
+unsigned long DataLoader::batches() const {
+    return (self.n + self.batchSize - 1UL) / self.batchSize;
 }
 
-void dataloader_free(&DataLoader dl) {
-    unsafe { free((void*)dl.order); }
+void DataLoader::free() {
+    unsafe { free((void*)self.order); }
 }
 
 } // namespace std
