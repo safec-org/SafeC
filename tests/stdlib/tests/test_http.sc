@@ -438,6 +438,94 @@ void t_connect_timeout() {
     }
 }
 
+// Accepts connections and closes them at once without reading, so the
+// client's next writes hit a reset connection.
+static unsigned short g_closer_port = (unsigned short)0;
+static ?&int run_closer(?&int arg) {
+    unsafe {
+        int lfd = tcp_listen_nb(g_closer_port);
+        if (lfd < 0) return null;
+        fd_set_blocking(lfd);
+        while (1) {
+            int cfd = tcp_accept_nb(lfd);
+            if (cfd >= 0) close(cfd);
+        }
+    }
+    return null;
+}
+
+// Writing to a peer that has closed must fail the request, not kill the
+// process with SIGPIPE.
+void t_write_to_closed_peer() {
+    start_servers();
+    unsafe {
+        g_closer_port = (unsigned short)(g_http_port + (unsigned short)12);
+        unsigned long long t = 0ULL;
+        thread_create(&t, run_closer, null); thread_detach(t);
+        unsigned long n = 4UL * 1024UL * 1024UL;
+        struct String body = string_repeat("x", n);
+        int ok = 1;
+        int tries = 0;
+        // Retry while the closer thread comes up (connect refused until then).
+        while (1) {
+            struct HttpResponse r = http_request_timeout("127.0.0.1", g_closer_port, "POST", "/",
+                                                         null, (const unsigned char*)body.as_ptr(), n,
+                                                         2000, 2000, &ok);
+            r.free();
+            tries = tries + 1;
+            if (tries >= 20) break;
+            thread_sleep_ms(20UL);
+        }
+        ASSERT_FALSE(ok);
+        body.free();
+    }
+}
+
+static ?&int resolve_worker(?&int arg) {
+    unsafe {
+        unsigned int want = sched_ipv4((unsigned char)127, (unsigned char)0,
+                                       (unsigned char)0, (unsigned char)1);
+        int i = 0;
+        while (i < 200) {
+            unsigned int a = 0U;
+            if (!http_resolve_host("localhost", &a) || a != want) {
+                match (arg) { case some(bad): { *bad = 1; } case null: { } }
+            }
+            i = i + 1;
+        }
+    }
+    return null;
+}
+
+// Hostname resolution, including from several threads at once (the old
+// gethostbyname path shared one static result buffer across threads).
+void t_resolve() {
+    start_servers();
+    unsafe {
+        unsigned int a = 0U;
+        ASSERT_TRUE(http_resolve_host("localhost", &a));
+        ASSERT_EQ(a, sched_ipv4((unsigned char)127, (unsigned char)0,
+                                (unsigned char)0, (unsigned char)1));
+        ASSERT_TRUE(http_resolve_host("10.1.2.3", &a));
+        ASSERT_EQ(a, sched_ipv4((unsigned char)10, (unsigned char)1,
+                                (unsigned char)2, (unsigned char)3));
+
+        int bad = 0;
+        unsigned long long th[4];
+        int k = 0;
+        while (k < 4) { thread_create(&th[k], resolve_worker, &bad); k = k + 1; }
+        k = 0;
+        while (k < 4) { thread_join(th[k]); k = k + 1; }
+        ASSERT_EQ(bad, 0);
+
+        int ok = 0;
+        struct HttpResponse r = http_get("localhost", g_http_port, "/echo", &ok);
+        ASSERT_TRUE(ok);
+        ASSERT_EQ(r.status, 200);
+        r.free();
+    }
+}
+
 extern unsigned int alarm(unsigned int seconds);
 
 int main() {
@@ -453,6 +541,8 @@ int main() {
         t.add("rpc + server_fn", t_rpc);
         t.add("websocket", t_websocket);
         t.add("connect/handshake timeouts", t_connect_timeout);
+        t.add("write to closed peer", t_write_to_closed_peer);
+        t.add("host resolution", t_resolve);
     }
     t.run();
     t.print_summary();

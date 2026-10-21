@@ -44,7 +44,7 @@ struct HttpRequest {
 };
 
 // Resolves 'host' (a numeric IPv4 address or a hostname, via
-// gethostbyname) to a network-byte-order IPv4 address suitable for
+// getaddrinfo — safe to call from several threads at once) to a network-byte-order IPv4 address suitable for
 // tcp_connect_nb (see std/sched/io_nb.h). Returns 1 on success, 0 if the
 // address doesn't parse and hostname resolution also failed. Exposed
 // separately (not just used internally by http_request) since
@@ -58,7 +58,7 @@ int http_resolve_host(const &char host, &unsigned int addr_out);
 struct String http_header_get(const &char raw_headers, const &char name);
 
 // Performs a blocking HTTP/1.1 request. 'host' may be a hostname (resolved
-// via gethostbyname) or a numeric IPv4 address. 'extra_headers' may be
+// via getaddrinfo) or a numeric IPv4 address. 'extra_headers' may be
 // NULL/empty, or a caller-built block of additional "Key: value\r\n" lines
 // (each line already CRLF-terminated) — Host, Content-Length, and
 // Connection: close are added automatically and don't need to be included.
@@ -80,7 +80,7 @@ struct HttpResponse http_request(const &char host, unsigned short port,
 // individual send/receive on the socket (SO_SNDTIMEO/SO_RCVTIMEO), so a
 // server that accepts but never answers fails the request after that long
 // rather than hanging; it is not a limit on the whole transfer. Either
-// value <= 0 means no limit. DNS resolution (gethostbyname) is not
+// value <= 0 means no limit. DNS resolution (getaddrinfo) is not
 // covered by either: it is bounded only by the system resolver's own
 // timeout/attempts settings.
 struct HttpResponse http_request_timeout(const &char host, unsigned short port,

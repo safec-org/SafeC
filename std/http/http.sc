@@ -36,6 +36,7 @@ namespace std {
 extern int recv(unsigned long long fd, void* buf, int count, int flags);
 extern int send(unsigned long long fd, const void* buf, int count, int flags);
 extern int closesocket(unsigned long long fd);
+extern int WSAStartup(unsigned short versionRequested, void* wsaData);
 static long sock_read_(int fd, void* buf, unsigned long count) {
     unsafe { return (long)recv((unsigned long long)fd, buf, (int)count, 0); }
 }
@@ -59,23 +60,48 @@ extern int close(int fd);
 static long sock_read_(int fd, void* buf, unsigned long count) {
     unsafe { return read(fd, buf, count); }
 }
+#ifdef __linux__
+// send() with MSG_NOSIGNAL rather than write(): a write to a socket whose
+// peer has already closed raises SIGPIPE, whose default action kills the
+// whole process. BSD/macOS opt out per socket instead (SO_NOSIGPIPE, set
+// by io_nb_bsd.sc on every socket it hands out).
+extern ssize_t send(int fd, const void* buf, size_t count, int flags);
+#define HTTP_MSG_NOSIGNAL_ 0x4000
+static long sock_write_(int fd, const void* buf, unsigned long count) {
+    unsafe { return send(fd, buf, count, HTTP_MSG_NOSIGNAL_); }
+}
+#else
 static long sock_write_(int fd, const void* buf, unsigned long count) {
     unsafe { return write(fd, buf, count); }
 }
+#endif
 static int sock_close_(int fd) {
     unsafe { return close(fd); }
 }
 #endif
 
-// POSIX 'struct hostent' (<netdb.h>) — stable layout across BSD/Linux.
-struct HostEnt_ {
-    char*  h_name;
-    char** h_aliases;
-    int    h_addrtype;
-    int    h_length;
-    char** h_addr_list;
+// 'struct addrinfo' (<netdb.h>/<ws2tcpip.h>). The first four ints and
+// ai_next agree everywhere; Linux puts ai_addr before ai_canonname, BSD/
+// macOS and Windows the other way round. (Windows' ai_addrlen is a size_t
+// rather than a 4-byte socklen_t, but on 64-bit targets the pointers that
+// follow land at the same offsets either way.)
+struct AddrInfo_ {
+    int    ai_flags;
+    int    ai_family;
+    int    ai_socktype;
+    int    ai_protocol;
+    unsigned long ai_addrlen;
+#ifdef __linux__
+    void*  ai_addr;
+    char*  ai_canonname;
+#else
+    char*  ai_canonname;
+    void*  ai_addr;
+#endif
+    struct AddrInfo_* ai_next;
 };
-extern void* gethostbyname(const char* name);
+extern int  getaddrinfo(const char* node, const char* service, const void* hints, void** res);
+extern void freeaddrinfo(void* res);
 
 void HttpResponse::free() {
     self.headers.free();
@@ -125,27 +151,44 @@ static int parse_dotted_quad_(const char* host, unsigned int* addr_out) {
 int http_resolve_host(const &char host, &unsigned int addr_out) {
     if (parse_dotted_quad_(host, addr_out)) { return 1; }
 
-    void* hePtr;
-    unsafe { hePtr = gethostbyname(host); }
-    if (hePtr == (void*)0) { return 0; }
-    struct HostEnt_* he;
-    unsafe { he = (struct HostEnt_*)hePtr; }
-    char** addrList;
-    unsafe { addrList = he->h_addr_list; }
-    if (addrList == (char**)0) { return 0; }
-    char* first;
-    unsafe { first = addrList[0]; }
-    if (first == (char*)0) { return 0; }
-    unsigned int netAddr = 0U;
-    int k = 0;
-    while (k < 4) {
-        unsigned char b;
-        unsafe { b = (unsigned char)first[k]; }
-        netAddr = netAddr | (((unsigned int)b) << (k * 8));
-        k = k + 1;
+    // getaddrinfo, not gethostbyname: gethostbyname returns a pointer into
+    // one static buffer shared by every thread, so two concurrent
+    // http_request calls on different threads could read each other's
+    // (or a half-written) result.
+#ifdef _WIN32
+    // Winsock refuses every call, getaddrinfo included, until WSAStartup
+    // has run; the socket helpers only do that once they create a socket,
+    // which here comes after resolution. Safe to repeat (reference-counted).
+    unsigned char wsaData[512];
+    unsafe { WSAStartup((unsigned short)0x0202, (void*)&wsaData[0]); }
+#endif
+    struct AddrInfo_ hints;
+    hints.ai_flags = 0;
+    hints.ai_family = SCHED_AF_INET;
+    hints.ai_socktype = SCHED_SOCK_STREAM;
+    hints.ai_protocol = 0;
+    hints.ai_addrlen = 0UL;
+    hints.ai_addr = (void*)0;
+    hints.ai_canonname = (char*)0;
+    hints.ai_next = (struct AddrInfo_*)0;
+    void* resPtr = (void*)0;
+    int rc;
+    unsafe { rc = getaddrinfo(host, (const char*)0, (const void*)&hints, &resPtr); }
+    if (rc != 0 || resPtr == (void*)0) { return 0; }
+    void* sa;
+    unsafe { sa = ((struct AddrInfo_*)resPtr)->ai_addr; }
+    int found = 0;
+    if (sa != (void*)0) {
+        // sockaddr_in.sin_addr sits at byte offset 4 on every platform
+        // (Linux/Windows: 2-byte family + port; BSD: len + family + port),
+        // already in network byte order.
+        unsigned int netAddr;
+        unsafe { netAddr = *(unsigned int*)((unsigned char*)sa + 4); }
+        unsafe { *addr_out = netAddr; }
+        found = 1;
     }
-    unsafe { *addr_out = netAddr; }
-    return 1;
+    unsafe { freeaddrinfo(resPtr); }
+    return found;
 }
 
 // ── Blocking socket I/O helpers ───────────────────────────────────────────
