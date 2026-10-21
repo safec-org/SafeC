@@ -12,6 +12,7 @@ namespace std {
 // vDSP_vsub computes C = B - A (second argument minus first — the
 // reverse of what the argument order suggests), the other two are the
 // ordinary commutative operations their names imply.
+#ifdef __APPLE__
 extern void vDSP_vadd(const float* A, long IA, const float* B, long IB,
                        float* C, long IC, unsigned long N);
 extern void vDSP_vsub(const float* A, long IA, const float* B, long IB,
@@ -64,5 +65,15 @@ extern void vDSP_sve(const float* A, long IA, float* result, unsigned long N);
     __tensor_link1(out, a, (void*)__sum_backward);
     return out;
 }
+
+#else
+// Accelerate is Apple-only. Elsewhere the same functions are std's own
+// vectorized, threaded tensor ops (tensor.h), so tensor_auto.h and direct
+// callers work -- and link -- on every hosted platform.
+&Tensor tensor_add_vdsp(const &Tensor a, const &Tensor b) { return tensor_add(a, b); }
+&Tensor tensor_sub_vdsp(const &Tensor a, const &Tensor b) { return tensor_sub(a, b); }
+&Tensor tensor_mul_vdsp(const &Tensor a, const &Tensor b) { return tensor_mul(a, b); }
+&Tensor tensor_sum_vdsp(const &Tensor a) { return tensor_sum(a); }
+#endif
 
 } // namespace std

@@ -6,6 +6,9 @@
 #include <std/ml/tensor_nn.h>
 #include <std/ml/cnn.h>
 
+extern void* malloc(unsigned long size);
+extern void free(void* ptr);
+
 static int near(float a, float b, float tol) {
     float d = a - b;
     if (d < (float)0.0) d = (float)0.0 - d;
@@ -103,6 +106,69 @@ void t_matmul_accumulates_f32() {
     struct HalfTensor p = half_matmul(&a, &b);
     ASSERT_TRUE(p.at1(0UL) == (float)4096.0);
     p.free(); a.free(); b.free();
+}
+
+void t_half_gemv() {
+    // both dtypes; n * k large enough to take the threaded path, with a
+    // k that isn't a multiple of 8 (tail loop)
+    int dts[2];
+    dts[0] = TENSOR_FP16; dts[1] = TENSOR_BF16;
+    int di = 0;
+    while (di < 2) {
+        unsigned long n = 301UL;
+        unsigned long k = 1029UL;
+        struct HalfTensor w = half_tensor_new_2d(n, k, dts[di]);
+        float* x;
+        float* y;
+        unsafe {
+            x = (float*)malloc(sizeof(float) * k);
+            y = (float*)malloc(sizeof(float) * n);
+        }
+        unsigned long i = 0UL;
+        while (i < n * k) { w.set1(i, (float)((i * 37UL) % 113UL) * (float)0.01 - (float)0.55); i = i + 1UL; }
+        unsafe { i = 0UL; while (i < k) { x[i] = (float)((i * 11UL) % 29UL) * (float)0.03 - (float)0.4; i = i + 1UL; } }
+        int ok;
+        unsafe { ok = half_gemv(&w, (const &float)x, (&float)y); }
+        ASSERT_TRUE(ok);
+        float worst = (float)0.0;
+        unsigned long r = 0UL;
+        while (r < n) {
+            double ref = 0.0;
+            unsigned long c = 0UL;
+            unsafe { while (c < k) { ref = ref + (double)w.at2(r, c) * (double)x[c]; c = c + 1UL; } }
+            float d;
+            unsafe { d = y[r] - (float)ref; }
+            if (d < (float)0.0) d = -d;
+            if (d > worst) worst = d;
+            r = r + 1UL;
+        }
+        ASSERT_TRUE(worst < (float)1e-3);
+        unsafe { free((void*)x); free((void*)y); }
+        w.free();
+        di = di + 1;
+    }
+    // fp16 widening edge cases: subnormal, negative, +-inf (inf * 1 = inf)
+    struct HalfTensor e = half_tensor_new_2d(4UL, 1UL, TENSOR_FP16);
+    unsafe {
+        e.data[0] = (unsigned short)0x0001;   // smallest subnormal, 2^-24
+        e.data[1] = (unsigned short)0xc500;   // -5
+        e.data[2] = (unsigned short)0x7c00;   // +inf
+        e.data[3] = (unsigned short)0xfc00;   // -inf
+    }
+    float one[1];
+    float out[4];
+    unsafe {
+        one[0] = (float)1.0;
+        ASSERT_TRUE(half_gemv(&e, (const &float)&one[0], (&float)&out[0]));
+    }
+    ASSERT_TRUE(out[0] == (float)5.960464477539063e-08);
+    ASSERT_TRUE(out[1] == (float)-5.0);
+    ASSERT_TRUE(out[2] > (float)3.0e38 && out[2] * (float)0.5 == out[2]);
+    ASSERT_TRUE(out[3] < (float)-3.0e38 && out[3] * (float)0.5 == out[3]);
+    // a 1D tensor is not a matrix
+    struct HalfTensor v = half_tensor_new_1d(4UL, TENSOR_BF16);
+    unsafe { ASSERT_TRUE(!half_gemv(&v, (const &float)&one[0], (&float)&out[0])); }
+    e.free(); v.free();
 }
 
 void t_cast_autograd() {
@@ -338,6 +404,7 @@ int main() {
         t.add("tensor <-> half", t_convert);
         t.add("half ops", t_half_ops);
         t.add("half matmul f32 accumulate", t_matmul_accumulates_f32);
+        t.add("half gemv", t_half_gemv);
         t.add("tensor_cast autograd", t_cast_autograd);
         t.add("tensor_matmul_lowp", t_matmul_lowp);
         t.add("loss scaler", t_loss_scaler);
