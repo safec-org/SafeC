@@ -989,7 +989,7 @@ int CudaHalfConv2D::forward_relu(struct CudaHalfBuf x, struct CudaHalfBuf y, uns
     return dnn_half_conv_(self, x, y, batch, height, width, 1);
 }
 
-struct CudaHalfConv2D cuda_half_conv2d_upload(const &Conv2D layer, int dtype) {
+struct CudaHalfConv2D CudaHalfConv2D::upload(const &Conv2D layer, int dtype) {
     struct CudaHalfConv2D d;
     d.inChannels = layer.inChannels;
     d.outChannels = layer.outChannels;
@@ -998,8 +998,8 @@ struct CudaHalfConv2D cuda_half_conv2d_upload(const &Conv2D layer, int dtype) {
     d.stride = layer.stride;
     d.padding = layer.padding;
     unsigned long wn = layer.outChannels * layer.inChannels * layer.kH * layer.kW;
-    d.weight = cuda_half_upload(layer.weight, wn, dtype);
-    d.bias = cuda_half_upload(layer.bias, layer.outChannels, dtype);
+    d.weight = CudaHalfBuf::upload(layer.weight, wn, dtype);
+    d.bias = CudaHalfBuf::upload(layer.bias, layer.outChannels, dtype);
     if (d.weight.dev == 0UL || d.bias.dev == 0UL) {
         d.weight.free();
         d.bias.free();
@@ -1014,7 +1014,7 @@ void CudaHalfConv2D::free() {
 
 // ── Layers ───────────────────────────────────────────────────────────────────
 
-struct CudaConv2D cuda_conv2d_upload(const &Conv2D layer) {
+struct CudaConv2D CudaConv2D::upload(const &Conv2D layer) {
     struct CudaConv2D d;
     d.inChannels = layer.inChannels;
     d.outChannels = layer.outChannels;
@@ -1023,8 +1023,8 @@ struct CudaConv2D cuda_conv2d_upload(const &Conv2D layer) {
     d.stride = layer.stride;
     d.padding = layer.padding;
     unsigned long wn = layer.outChannels * layer.inChannels * layer.kH * layer.kW;
-    d.weight = cuda_upload(layer.weight, wn);
-    d.bias = cuda_upload(layer.bias, layer.outChannels);
+    d.weight = CudaBuf::upload(layer.weight, wn);
+    d.bias = CudaBuf::upload(layer.bias, layer.outChannels);
     if (d.weight.dev == 0UL || d.bias.dev == 0UL) {
         d.weight.free();
         d.bias.free();
@@ -1039,31 +1039,31 @@ void CudaConv2D::free() {
 
 // ── U-Net ────────────────────────────────────────────────────────────────────
 
-struct CudaUNet cuda_unet_new(const &UNet net, unsigned long batch, unsigned long height, unsigned long width) {
+struct CudaUNet CudaUNet::new(const &UNet net, unsigned long batch, unsigned long height, unsigned long width) {
     struct CudaUNet g;
     g.batch = batch;
     g.height = height;
     g.width = width;
-    g.encConv1 = cuda_conv2d_upload(&net.encConv1);
-    g.encConv2 = cuda_conv2d_upload(&net.encConv2);
-    g.bottleneck = cuda_conv2d_upload(&net.bottleneck);
-    g.decConv1 = cuda_conv2d_upload(&net.decConv1);
-    g.decConv2 = cuda_conv2d_upload(&net.decConv2);
+    g.encConv1 = CudaConv2D::upload(&net.encConv1);
+    g.encConv2 = CudaConv2D::upload(&net.encConv2);
+    g.bottleneck = CudaConv2D::upload(&net.bottleneck);
+    g.decConv1 = CudaConv2D::upload(&net.decConv1);
+    g.decConv2 = CudaConv2D::upload(&net.decConv2);
     unsigned long c1 = net.encConv1.outChannels;
     unsigned long c2 = net.encConv2.outChannels;
     unsigned long hw = height * width;
     unsigned long hw2 = hw / 4UL;
     unsigned long hw4 = hw / 16UL;
     unsigned long upN = c2 * hw2 > c1 * hw ? c2 * hw2 : c1 * hw;
-    g.e1 = cuda_alloc(batch * c1 * hw);
-    g.p1 = cuda_alloc(batch * c1 * hw2);
-    g.e2 = cuda_alloc(batch * c2 * hw2);
-    g.p2 = cuda_alloc(batch * c2 * hw4);
-    g.mid = cuda_alloc(batch * c2 * hw4);
-    g.up = cuda_alloc(batch * upN);
-    g.cat1 = cuda_alloc(batch * 2UL * c2 * hw2);
-    g.d1 = cuda_alloc(batch * c1 * hw2);
-    g.cat2 = cuda_alloc(batch * 2UL * c1 * hw);
+    g.e1 = CudaBuf::alloc(batch * c1 * hw);
+    g.p1 = CudaBuf::alloc(batch * c1 * hw2);
+    g.e2 = CudaBuf::alloc(batch * c2 * hw2);
+    g.p2 = CudaBuf::alloc(batch * c2 * hw4);
+    g.mid = CudaBuf::alloc(batch * c2 * hw4);
+    g.up = CudaBuf::alloc(batch * upN);
+    g.cat1 = CudaBuf::alloc(batch * 2UL * c2 * hw2);
+    g.d1 = CudaBuf::alloc(batch * c1 * hw2);
+    g.cat2 = CudaBuf::alloc(batch * 2UL * c1 * hw);
     g.ok = batch > 0UL && height % 4UL == 0UL && width % 4UL == 0UL && height > 0UL && width > 0UL &&
            g.encConv1.weight.dev != 0UL && g.encConv2.weight.dev != 0UL && g.bottleneck.weight.dev != 0UL &&
            g.decConv1.weight.dev != 0UL && g.decConv2.weight.dev != 0UL &&
@@ -1121,10 +1121,10 @@ struct FeatureMap conv2d_forward_cuda(const &Conv2D layer, const &FeatureMap inp
     unsigned long outH = cuda_conv_out_dim(h, layer.kH, layer.stride, layer.padding);
     unsigned long outW = cuda_conv_out_dim(w, layer.kW, layer.stride, layer.padding);
     if (inC == layer.inChannels && outH > 0UL && outW > 0UL && cudnn_ensure_()) {
-        struct CudaConv2D d = cuda_conv2d_upload(layer);
-        struct CudaBuf x = cuda_upload(input.data, inC * h * w);
-        struct CudaBuf y = cuda_alloc(layer.outChannels * outH * outW);
-        struct FeatureMap out = feature_map_new(layer.outChannels, outH, outW);
+        struct CudaConv2D d = CudaConv2D::upload(layer);
+        struct CudaBuf x = CudaBuf::upload(input.data, inC * h * w);
+        struct CudaBuf y = CudaBuf::alloc(layer.outChannels * outH * outW);
+        struct FeatureMap out = FeatureMap::new(layer.outChannels, outH, outW);
         int ok = d.weight.dev != 0UL && x.dev != 0UL && y.dev != 0UL &&
                  d.forward(x, y, 1UL, h, w) && cuda_read(y, out.data, y.len);
         d.free();
@@ -1140,11 +1140,11 @@ struct FeatureMap unet_forward_cuda(&UNet net, const &FeatureMap input) {
     unsigned long h = input.height;
     unsigned long w = input.width;
     if (input.channels == net.encConv1.inChannels && cudnn_ensure_()) {
-        struct CudaUNet g = cuda_unet_new(net, 1UL, h, w);
+        struct CudaUNet g = CudaUNet::new(net, 1UL, h, w);
         unsigned long outC = net.decConv2.outChannels;
-        struct CudaBuf x = cuda_upload(input.data, input.channels * h * w);
-        struct CudaBuf y = cuda_alloc(outC * h * w);
-        struct FeatureMap out = feature_map_new(outC, h, w);
+        struct CudaBuf x = CudaBuf::upload(input.data, input.channels * h * w);
+        struct CudaBuf y = CudaBuf::alloc(outC * h * w);
+        struct FeatureMap out = FeatureMap::new(outC, h, w);
         int ok = g.ok && x.dev != 0UL && y.dev != 0UL &&
                  g.forward(x, y) && cuda_read(y, out.data, y.len);
         g.free();

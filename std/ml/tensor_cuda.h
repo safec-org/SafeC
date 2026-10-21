@@ -15,9 +15,9 @@ namespace std {
 &Tensor tensor_add_cuda(const &Tensor a, const &Tensor b);
 &Tensor tensor_sub_cuda(const &Tensor a, const &Tensor b);
 &Tensor tensor_mul_cuda(const &Tensor a, const &Tensor b);
-&Tensor tensor_scale_cuda(const &Tensor a, float k);
-&Tensor tensor_relu_cuda(const &Tensor a);
-&Tensor tensor_sum_cuda(const &Tensor a);
+&Tensor Tensor::scale_cuda(float k) const;
+&Tensor Tensor::relu_cuda() const;
+&Tensor Tensor::sum_cuda() const;
 &Tensor tensor_matmul_cuda(const &Tensor a, const &Tensor b);
 
 // Same op, dispatched to cuBLAS (gpu_cuda.h's cuda_matmul_f32_blas)

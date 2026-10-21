@@ -20,8 +20,7 @@ namespace std {
 
 // ── LlmClient ────────────────────────────────────────────────────────────────
 
-struct LlmClient llm_client_new(const &char host, unsigned short port,
-                                 const &char model, const &char apiKey) {
+struct LlmClient LlmClient::new(const &char host, unsigned short port, const &char model, const &char apiKey) {
     struct LlmClient c;
     c.host = string_from(host);
     c.port = port;
@@ -144,7 +143,7 @@ struct String prompt_template_render(const &char tmpl_ref, const &Value vars) { 
 
 // ── Chain ────────────────────────────────────────────────────────────────────
 
-struct Chain chain_new() {
+struct Chain Chain::new() {
     struct Chain c;
     unsafe { c.steps = vec_new(); }
     return c;
@@ -178,7 +177,7 @@ void Chain::free() {
 
 // ── Graph executor ───────────────────────────────────────────────────────────
 
-struct Graph graph_new(const &char entryNode) {
+struct Graph Graph::new(const &char entryNode) {
     struct Graph g;
     unsafe { g.nodes = vec_new(); }
     g.entryNode = string_from(entryNode);
@@ -270,7 +269,7 @@ void Graph::free() {
 
 // ── Tracer ───────────────────────────────────────────────────────────────────
 
-struct Tracer tracer_new() {
+struct Tracer Tracer::new() {
     struct Tracer t;
     unsafe { t.events = vec_new(); }
     return t;

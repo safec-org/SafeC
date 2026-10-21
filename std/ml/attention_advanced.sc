@@ -18,8 +18,8 @@ static void aa_drop_(&Tensor t) {
     unsafe { free((void*)t); }
 }
 
-struct Mla mla_new(unsigned long dModel, unsigned long dLatent, unsigned long numHeads, &Rng rng) {
-    if (numHeads == 0UL || dModel % numHeads != 0UL) panic_at("mla_new: numHeads must divide dModel", "attention_advanced.sc", __LINE__);
+struct Mla Mla::new(unsigned long dModel, unsigned long dLatent, unsigned long numHeads, &Rng rng) {
+    if (numHeads == 0UL || dModel % numHeads != 0UL) panic_at("Mla::new: numHeads must divide dModel", "attention_advanced.sc", __LINE__);
     struct Mla m;
     m.Wq = attn_weight_(dModel, dModel, rng);
     m.Wdkv = attn_weight_(dModel, dLatent, rng);
@@ -47,11 +47,11 @@ void Mla::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
 
 void Mla::free() { aa_drop_(self.Wq); aa_drop_(self.Wdkv); aa_drop_(self.Wuk); aa_drop_(self.Wuv); }
 
-struct EgMla eg_mla_new(unsigned long dModel, unsigned long dLatent, unsigned long numGroups,
+struct EgMla EgMla::new(unsigned long dModel, unsigned long dLatent, unsigned long numGroups,
                         unsigned long headsPerGroup, &Rng rng) {
     if (numGroups == 0UL || dModel % numGroups != 0UL || headsPerGroup == 0UL ||
         (dModel / numGroups) % headsPerGroup != 0UL)
-        panic_at("eg_mla_new: numGroups must divide dModel and headsPerGroup the group width",
+        panic_at("EgMla::new: numGroups must divide dModel and headsPerGroup the group width",
                  "attention_advanced.sc", __LINE__);
     struct EgMla m;
     m.Wq = attn_weight_(dModel, dModel, rng);
@@ -79,12 +79,12 @@ struct EgMla eg_mla_new(unsigned long dModel, unsigned long dLatent, unsigned lo
 
     &Tensor Q = tensor_matmul(X, self.Wq);
     &Tensor c_kv = tensor_matmul(X, self.Wdkv);
-    &Tensor out = tensor_new_2d(seqLen, dModel, 0);
+    &Tensor out = Tensor::new_2d(seqLen, dModel, 0);
 
     unsigned long g = 0UL;
     while (g < numGroups) {
         unsigned long startCol = g * groupDim;
-        &Tensor Qg = tensor_slice_cols(Q, startCol, groupDim);
+        &Tensor Qg = Q.slice_cols(startCol, groupDim);
         &Tensor Kg = tensor_matmul(c_kv, *self.Wuk.at(g));
         &Tensor Vg = tensor_matmul(c_kv, *self.Wuv.at(g));
         &Tensor groupOut = mha_forward(Qg, Kg, Vg, self.headsPerGroup);
@@ -118,7 +118,7 @@ void EgMla::free() {
 static &Tensor __row_slice(&Tensor in, unsigned long startRow, unsigned long numRows) {
     unsigned long cols;
     unsafe { cols = in->shape[1]; }
-    &Tensor out = tensor_new_2d(numRows, cols, 0);
+    &Tensor out = Tensor::new_2d(numRows, cols, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < numRows) {
@@ -152,7 +152,7 @@ static void __row_set(&Tensor dst, unsigned long startRow, &Tensor src) {
 static &Tensor __row_cyclic_shift(&Tensor in, unsigned long shift) {
     unsigned long rows; unsigned long cols;
     unsafe { rows = in->shape[0]; cols = in->shape[1]; }
-    &Tensor out = tensor_new_2d(rows, cols, 0);
+    &Tensor out = Tensor::new_2d(rows, cols, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
@@ -183,7 +183,7 @@ static &Tensor __row_cyclic_shift(&Tensor in, unsigned long shift) {
         Qs = Q; Ks = K; Vs = V;
     }
 
-    &Tensor winOut = tensor_new_2d(seqLen, dim, 0);
+    &Tensor winOut = Tensor::new_2d(seqLen, dim, 0);
     unsigned long numWindows = seqLen / windowSize;
     unsigned long w = 0UL;
     while (w < numWindows) {
@@ -217,10 +217,10 @@ static float __gdn_init_weight(unsigned long i, unsigned long seed) {
     return (((float)(h % 2000UL) / (float)1000.0) - (float)1.0) * (float)0.3;
 }
 
-struct GatedDeltaNet gated_deltanet_new(unsigned long dModel, unsigned long keyDim, unsigned long valueDim) {
+struct GatedDeltaNet GatedDeltaNet::new(unsigned long dModel, unsigned long keyDim, unsigned long valueDim) {
     struct GatedDeltaNet layer;
-    layer.Walpha = tensor_new_2d(dModel, 1UL, 0);
-    layer.Wbeta = tensor_new_2d(dModel, 1UL, 0);
+    layer.Walpha = Tensor::new_2d(dModel, 1UL, 0);
+    layer.Wbeta = Tensor::new_2d(dModel, 1UL, 0);
     unsafe {
         unsigned long i = 0UL;
         while (i < dModel) {
@@ -249,7 +249,7 @@ void GatedDeltaNet::free() {
         keyDim = self->keyDim; valueDim = self->valueDim;
     }
 
-    &Tensor out = tensor_new_2d(seqLen, valueDim, 0);
+    &Tensor out = Tensor::new_2d(seqLen, valueDim, 0);
 
     unsafe {
         float* S = (float*)malloc(sizeof(float) * keyDim * valueDim);

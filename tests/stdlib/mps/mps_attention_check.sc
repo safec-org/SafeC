@@ -263,9 +263,9 @@ int main() {
     struct Vec<float> cpu = std::vec_with_cap(qn);
     unsigned long i = 0UL;
     while (i < qn) { got.push(0.0f); cpu.push(0.0f); i = i + 1UL; }
-    &Tensor tq = std::tensor_from_2d(q.at(0UL), 40UL, 64UL, 0);
-    &Tensor tk = std::tensor_from_2d(k.at(0UL), 56UL, 64UL, 0);
-    &Tensor tv = std::tensor_from_2d(v.at(0UL), 56UL, 64UL, 0);
+    &Tensor tq = Tensor::from_2d(q.at(0UL), 40UL, 64UL, 0);
+    &Tensor tk = Tensor::from_2d(k.at(0UL), 56UL, 64UL, 0);
+    &Tensor tv = Tensor::from_2d(v.at(0UL), 56UL, 64UL, 0);
     int l = 0;
     while (l < 2) {
         &Tensor tr = l ? std::linear_attention_forward(tq, tk, tv) : std::flash_attention_forward(tq, tk, tv, 16UL);

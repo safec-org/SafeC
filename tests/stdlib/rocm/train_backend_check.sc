@@ -51,12 +51,12 @@ struct TrainReport fit_case_(&M t, const char* name, const &Dataset d, const &Tr
 }
 
 static void mlp_cases_(const &TrainerOptions to) {
-    struct Rng drng = rng_new(1UL);
-    struct Dataset data = dataset_xor(250UL, (float)0.0, &drng);   // 7 full batches + a 26-row tail
-    struct Rng r = rng_new(3UL);
-    struct Optimizer adam = optimizer_new(OPT_ADAM, (float)0.01);
-    MlpTrainer t = mlp_trainer_new(mlp_new(2UL, 16UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &r), TRAIN_LOSS_CE, &adam, to);
-    struct TrainConfig tc = train_config_default();
+    struct Rng drng = Rng::new(1UL);
+    struct Dataset data = Dataset::xor(250UL, (float)0.0, &drng);   // 7 full batches + a 26-row tail
+    struct Rng r = Rng::new(3UL);
+    struct Optimizer adam = Optimizer::new(OPT_ADAM, (float)0.01);
+    MlpTrainer t = mlp_trainer_new(Mlp::new(2UL, 16UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &r), TRAIN_LOSS_CE, &adam, to);
+    struct TrainConfig tc = TrainConfig::default();
     tc.epochs = 6UL;
     tc.clipNorm = (float)1.0;
     tc.lrDecay = (float)0.9;
@@ -72,8 +72,8 @@ static void mlp_cases_(const &TrainerOptions to) {
     t.host.free();
 
     // train_step on a host batch (MSE)
-    struct Dataset sine = dataset_sine(64UL, (float)0.0, &drng);
-    MlpTrainer s = mlp_trainer_new(mlp_new(1UL, 32UL, 1UL, 1UL, ACT_TANH, ACT_NONE, &r), TRAIN_LOSS_MSE, &adam, to);
+    struct Dataset sine = Dataset::sine(64UL, (float)0.0, &drng);
+    MlpTrainer s = mlp_trainer_new(Mlp::new(1UL, 32UL, 1UL, 1UL, ACT_TANH, ACT_NONE, &r), TRAIN_LOSS_MSE, &adam, to);
     float first = s.train_step(sine.x, sine.y);
     float last = first;
     int i = 0;
@@ -90,17 +90,17 @@ static void mlp_cases_(const &TrainerOptions to) {
 }
 
 static void convnet_case_(const &TrainerOptions to) {
-    struct Rng drng = rng_new(9UL);
-    struct Dataset data = dataset_shapes(250UL, 8UL, &drng);
-    struct Rng rng = rng_new(21UL);
-    struct ConvNet n = convnet_new(1UL, 8UL, 8UL);
+    struct Rng drng = Rng::new(9UL);
+    struct Dataset data = Dataset::shapes(250UL, 8UL, &drng);
+    struct Rng rng = Rng::new(21UL);
+    struct ConvNet n = ConvNet::new(1UL, 8UL, 8UL);
     n.conv(8UL, 3UL, 1UL, 1UL, ACT_RELU, &rng);
     n.maxpool(2UL, 2UL, 0UL);
     n.conv(8UL, 3UL, 1UL, 1UL, ACT_RELU, &rng);
     n.dense(4UL, ACT_NONE, &rng);
-    struct Optimizer adam = optimizer_new(OPT_ADAM, (float)0.005);
+    struct Optimizer adam = Optimizer::new(OPT_ADAM, (float)0.005);
     ConvNetTrainer t = convnet_trainer_new(n, TRAIN_LOSS_CE, &adam, to);
-    struct TrainConfig tc = train_config_default();
+    struct TrainConfig tc = TrainConfig::default();
     tc.epochs = 5UL;
     struct TrainReport rep = fit_case_(&t, "convnet ce", &data, &tc, (float)0.8);
     result("cnn.first", (double)rep.firstEpochLoss, 0.001);
@@ -112,13 +112,13 @@ static void convnet_case_(const &TrainerOptions to) {
 }
 
 static void autoencoder_cases_(const &TrainerOptions to) {
-    struct Rng drng = rng_new(9UL);
-    struct Dataset data = dataset_shapes(256UL, 8UL, &drng);
-    struct VaeConfig cfg = vae_config_default(4UL);
+    struct Rng drng = Rng::new(9UL);
+    struct Dataset data = Dataset::shapes(256UL, 8UL, &drng);
+    struct VaeConfig cfg = VaeConfig::default(4UL);
     cfg.hidden = 64UL;
-    struct Optimizer adam = optimizer_new(OPT_ADAM, (float)0.003);
-    VaeTrainer v = vae_trainer_new(vae_new(64UL, &cfg), &adam, to);
-    struct TrainConfig tc = train_config_default();
+    struct Optimizer adam = Optimizer::new(OPT_ADAM, (float)0.003);
+    VaeTrainer v = vae_trainer_new(Vae::new(64UL, &cfg), &adam, to);
+    struct TrainConfig tc = TrainConfig::default();
     tc.epochs = 15UL;
     struct TrainReport rep = fit_case_(&v, "vae", &data, &tc, (float)0.8);
     // the device draws its own noise: the loss level agrees, not the values
@@ -127,15 +127,15 @@ static void autoencoder_cases_(const &TrainerOptions to) {
     v.free();
     v.host.free();
 
-    struct Rng rng = rng_new(61UL);
-    struct ConvNet enc = convnet_new(1UL, 8UL, 8UL);
+    struct Rng rng = Rng::new(61UL);
+    struct ConvNet enc = ConvNet::new(1UL, 8UL, 8UL);
     enc.conv(4UL, 3UL, 2UL, 1UL, ACT_RELU, &rng);     // 4 x 4 x 4
     enc.conv(8UL, 3UL, 2UL, 1UL, ACT_RELU, &rng);     // 8 x 2 x 2
-    struct ConvNet dec = convnet_new(8UL, 2UL, 2UL);
+    struct ConvNet dec = ConvNet::new(8UL, 2UL, 2UL);
     dec.deconv(4UL, 4UL, 2UL, 1UL, ACT_RELU, &rng);   // 4 x 4 x 4
     dec.upsample_bilinear(2UL);                       // 4 x 8 x 8
     dec.conv(1UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);     // 1 x 8 x 8
-    ConvAeTrainer a = conv_ae_trainer_new(conv_autoencoder_new(enc, dec, RECON_BCE), &adam, to);
+    ConvAeTrainer a = conv_ae_trainer_new(ConvAutoencoder::new(enc, dec, RECON_BCE), &adam, to);
     tc.epochs = 4UL;
     struct TrainReport ra = fit_case_(&a, "conv ae", &data, &tc, (float)0.95);
     result("cae.first", (double)ra.firstEpochLoss, 0.0005);
@@ -149,11 +149,11 @@ static void autoencoder_cases_(const &TrainerOptions to) {
 // The device draws its own noise for a GAN: the losses stay finite and the
 // host model is synced, but they don't follow the CPU's.
 static void gan_case_(const &TrainerOptions to) {
-    struct Rng drng = rng_new(4UL);
-    struct Dataset data = dataset_gaussian_ring(256UL, 4UL, (float)2.0, (float)0.1, &drng);
-    struct GanConfig cfg = gan_config_default(4UL);
+    struct Rng drng = Rng::new(4UL);
+    struct Dataset data = Dataset::gaussian_ring(256UL, 4UL, (float)2.0, (float)0.1, &drng);
+    struct GanConfig cfg = GanConfig::default(4UL);
     cfg.hidden = 32UL;
-    GanTrainer g = gan_trainer_new(gan_new(2UL, &cfg), to);
+    GanTrainer g = gan_trainer_new(Gan::new(2UL, &cfg), to);
     struct GanLosses l = train_gan(&g, &data, 5UL, 64UL);
     struct GanLosses s = g.train_step(data.x, null);
     unsafe { printf("  %-12s d %.4f g %.4f, one more step d %.4f g %.4f\n", "gan", (double)l.d, (double)l.g,
@@ -172,8 +172,8 @@ static void gan_case_(const &TrainerOptions to) {
 // ── RL through the agent traits ──────────────────────────────────────────────
 generic<A: ValueAgent>
 unsigned long value_run_(&A a, &Rng env, unsigned long steps) {
-    &Tensor o = tensor_new_1d(4UL, 0);
-    &Tensor n = tensor_new_1d(4UL, 0);
+    &Tensor o = Tensor::new_1d(4UL, 0);
+    &Tensor n = Tensor::new_1d(4UL, 0);
     unsigned long sum = 0UL;
     unsigned long i = 0UL;
     while (i < steps) {
@@ -193,8 +193,8 @@ unsigned long value_run_(&A a, &Rng env, unsigned long steps) {
 
 generic<P: PolicyLearner>
 float policy_run_(&P p, &Rng env, unsigned long rollout, int updates) {
-    &Tensor o = tensor_new_1d(4UL, 0);
-    &Tensor n = tensor_new_1d(4UL, 0);
+    &Tensor o = Tensor::new_1d(4UL, 0);
+    &Tensor n = Tensor::new_1d(4UL, 0);
     float l = (float)0.0;
     int u = 0;
     while (u < updates) {
@@ -218,14 +218,14 @@ float policy_run_(&P p, &Rng env, unsigned long rollout, int updates) {
 }
 
 static void rl_cases_(const &TrainerOptions to) {
-    struct DqnConfig cfg = dqn_config_default();
+    struct DqnConfig cfg = DqnConfig::default();
     cfg.hidden = 32UL;
     cfg.batchSize = 32UL;
     cfg.bufferSize = 500UL;
     cfg.learningStarts = 64UL;
     cfg.epsDecaySteps = 100UL;
-    DqnLearner d = dqn_learner_new(dqn_new(4UL, 3UL, &cfg));
-    struct Rng env = rng_new(91UL);
+    DqnLearner d = dqn_learner_new(Dqn::new(4UL, 3UL, &cfg));
+    struct Rng env = Rng::new(91UL);
     unsigned long acts = value_run_(&d, &env, 160UL);
     float dl = d.last_loss();
     check(d.updates() > 0UL && d.sync(), "dqn");
@@ -237,12 +237,12 @@ static void rl_cases_(const &TrainerOptions to) {
     d.free();
     d.host.free();
 
-    struct PgConfig pc = pg_config_default(PG_PPO);
+    struct PgConfig pc = PgConfig::default(PG_PPO);
     pc.hidden = 32UL;
     pc.minibatch = 24UL;
     pc.epochs = 3UL;
-    PgLearner p = pg_learner_new(pg_new(4UL, 3UL, &pc), to);
-    struct Rng env2 = rng_new(92UL);
+    PgLearner p = pg_learner_new(PolicyAgent::new(4UL, 3UL, &pc), to);
+    struct Rng env2 = Rng::new(92UL);
     float pl = policy_run_(&p, &env2, 100UL, 2);
     check(pl != (float)-1.0 && p.sync(), "ppo");
     unsafe { printf("  %-12s loss %.5f\n", "ppo", (double)pl); }
@@ -254,7 +254,7 @@ static void rl_cases_(const &TrainerOptions to) {
 
 int main() {
     unsafe { printf("train_backend_check: backend %s\n", ML_TRAIN_BACKEND); }
-    struct TrainerOptions to = trainer_options_default();
+    struct TrainerOptions to = TrainerOptions::default();
     to.maxBatch = 256UL;
     mlp_cases_(&to);
     convnet_case_(&to);

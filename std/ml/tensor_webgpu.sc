@@ -49,57 +49,57 @@ namespace std {
     return out;
 }
 
-&Tensor tensor_scale_webgpu(const &Tensor a, float k) {
-    if (!webgpu_available()) { return tensor_scale(a, k); }
-    &Tensor out = __tensor_alloc_uninit_like(a);
+&Tensor Tensor::scale_webgpu(float k) const {
+    if (!webgpu_available()) { return self.scale(k); }
+    &Tensor out = __tensor_alloc_uninit_like(self);
     unsafe {
-        int ok = webgpu_scale_f32((const float*)a->data, k, (float*)out->data, out->size);
+        int ok = webgpu_scale_f32((const float*)self->data, k, (float*)out->data, out->size);
         if (!ok) {
             unsigned long i = 0UL;
-            while (i < out->size) { out->data[i] = a->data[i] * k; i = i + 1UL; }
+            while (i < out->size) { out->data[i] = self->data[i] * k; i = i + 1UL; }
         }
     }
     unsafe { out->extraScalar = k; }
-    __tensor_link1(out, a, (void*)__scale_backward);
+    __tensor_link1(out, self, (void*)__scale_backward);
     return out;
 }
 
-&Tensor tensor_relu_webgpu(const &Tensor a) {
-    if (!webgpu_available()) { return tensor_relu(a); }
-    &Tensor out = __tensor_alloc_uninit_like(a);
+&Tensor Tensor::relu_webgpu() const {
+    if (!webgpu_available()) { return self.relu(); }
+    &Tensor out = __tensor_alloc_uninit_like(self);
     unsafe {
-        int ok = webgpu_relu_f32((const float*)a->data, (float*)out->data, out->size);
+        int ok = webgpu_relu_f32((const float*)self->data, (float*)out->data, out->size);
         if (!ok) {
             unsigned long i = 0UL;
             while (i < out->size) {
-                float v = a->data[i];
+                float v = self->data[i];
                 out->data[i] = (v > (float)0.0) ? v : (float)0.0;
                 i = i + 1UL;
             }
         }
     }
-    __tensor_link1(out, a, (void*)__relu_backward);
+    __tensor_link1(out, self, (void*)__relu_backward);
     return out;
 }
 
-&Tensor tensor_sum_webgpu(const &Tensor a) {
-    if (!webgpu_available()) { return tensor_sum(a); }
+&Tensor Tensor::sum_webgpu() const {
+    if (!webgpu_available()) { return self.sum(); }
     unsigned long one[1];
     unsafe { one[0] = 1UL; }
     &Tensor out = __tensor_alloc(one, 1UL, 0);
     unsafe {
         float fout[1];
-        int ok = webgpu_sum_f32((const float*)a->data, (float*)fout, a->size);
+        int ok = webgpu_sum_f32((const float*)self->data, (float*)fout, self->size);
         if (ok) {
             out->data[0] = fout[0];
         } else {
             float acc = (float)0.0;
             unsigned long i = 0UL;
-            while (i < a->size) { acc = acc + a->data[i]; i = i + 1UL; }
+            while (i < self->size) { acc = acc + self->data[i]; i = i + 1UL; }
             out->data[0] = acc;
         }
     }
-    __tensor_link1(out, a, (void*)__sum_backward);
+    __tensor_link1(out, self, (void*)__sum_backward);
     return out;
 }
 
@@ -108,7 +108,7 @@ namespace std {
 
     unsigned long m; unsigned long k; unsigned long n;
     unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
-    &Tensor out = tensor_new_2d(m, n, 0);
+    &Tensor out = Tensor::new_2d(m, n, 0);
     unsafe {
         int ok = webgpu_matmul_f32((const float*)a->data, (const float*)b->data, (float*)out->data, m, k, n);
         if (!ok) {

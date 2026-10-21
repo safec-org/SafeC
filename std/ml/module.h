@@ -20,8 +20,8 @@
 //   Recurrent      Parameterized + forward(x_t, h): RNNCell, GRUCell
 //   Generative     sample(n, labels): Gan, Dcgan, Vae, ConvVae
 //
-//   struct Mlp net = mlp_new(2UL, 32UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &rng);
-//   struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.01);
+//   struct Mlp net = Mlp::new(2UL, 32UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &rng);
+//   struct Optimizer opt = Optimizer::new(OPT_ADAM, (float)0.01);
 //   model_add_params(&net, &opt);
 //   struct TrainReport rep = module_fit(&net, TRAIN_LOSS_CE, &opt, &data, &cfg);
 //   float acc = module_accuracy(&net, &test, 64UL);
@@ -168,7 +168,7 @@ generic<M: Module>
 // forward(x) without recording gradients.
 generic<M: Module>
 &Tensor module_predict(&M m, const &Tensor x) {
-    struct GradGuard noGrad = autograd().no_grad();
+    struct GradGuard noGrad = Autograd::get().no_grad();
     &Tensor y = m.forward(x);
     noGrad.restore();
     return y;
@@ -198,8 +198,8 @@ float module_epoch_(&M m, int loss, &Optimizer opt, &DataLoader dl, &TensorArena
 generic<M: Module>
 struct TrainReport module_fit(&M m, int loss, &Optimizer opt, const &Dataset data, const &TrainConfig cfg) {
     struct TrainReport rep = train_report_new_();
-    struct DataLoader dl = dataloader_new(data, cfg.batchSize, cfg.shuffle, cfg.seed);
-    struct TensorArena stepArena = tensor_arena_new(0UL);
+    struct DataLoader dl = DataLoader::new(data, cfg.batchSize, cfg.shuffle, cfg.seed);
+    struct TensorArena stepArena = TensorArena::new(0UL);
     unsigned long e = 0UL;
     while (e < cfg.epochs) {
         unsigned long batches = 0UL;
@@ -216,9 +216,9 @@ struct TrainReport module_fit(&M m, int loss, &Optimizer opt, const &Dataset dat
 // Mean built-in loss over a dataset, without gradients.
 generic<M: Module>
 float module_evaluate(&M m, int loss, const &Dataset data, unsigned long batchSize) {
-    struct DataLoader dl = dataloader_new(data, batchSize, 0, 0UL);
-    struct TensorArena stepArena = tensor_arena_new(0UL);
-    struct GradGuard noGrad = autograd().no_grad();
+    struct DataLoader dl = DataLoader::new(data, batchSize, 0, 0UL);
+    struct TensorArena stepArena = TensorArena::new(0UL);
+    struct GradGuard noGrad = Autograd::get().no_grad();
     struct Batch b;
     double sum = 0.0;
     unsigned long rows = 0UL;
@@ -239,9 +239,9 @@ float module_evaluate(&M m, int loss, const &Dataset data, unsigned long batchSi
 // Classification accuracy of m's logits over a dataset.
 generic<M: Module>
 float module_accuracy(&M m, const &Dataset data, unsigned long batchSize) {
-    struct DataLoader dl = dataloader_new(data, batchSize, 0, 0UL);
-    struct TensorArena stepArena = tensor_arena_new(0UL);
-    struct GradGuard noGrad = autograd().no_grad();
+    struct DataLoader dl = DataLoader::new(data, batchSize, 0, 0UL);
+    struct TensorArena stepArena = TensorArena::new(0UL);
+    struct GradGuard noGrad = Autograd::get().no_grad();
     struct Batch b;
     double hits = 0.0;
     unsigned long rows = 0UL;
@@ -284,8 +284,8 @@ float model_epoch_(&M m, &Optimizer opt, &DataLoader dl, &TensorArena stepArena,
 generic<M: LossModel>
 struct TrainReport model_fit(&M m, &Optimizer opt, const &Dataset data, const &TrainConfig cfg) {
     struct TrainReport rep = train_report_new_();
-    struct DataLoader dl = dataloader_new(data, cfg.batchSize, cfg.shuffle, cfg.seed);
-    struct TensorArena stepArena = tensor_arena_new(0UL);
+    struct DataLoader dl = DataLoader::new(data, cfg.batchSize, cfg.shuffle, cfg.seed);
+    struct TensorArena stepArena = TensorArena::new(0UL);
     unsigned long e = 0UL;
     while (e < cfg.epochs) {
         unsigned long batches = 0UL;
@@ -302,9 +302,9 @@ struct TrainReport model_fit(&M m, &Optimizer opt, const &Dataset data, const &T
 // Mean loss over a dataset, without gradients.
 generic<M: LossModel>
 float model_evaluate(&M m, const &Dataset data, unsigned long batchSize) {
-    struct DataLoader dl = dataloader_new(data, batchSize, 0, 0UL);
-    struct TensorArena stepArena = tensor_arena_new(0UL);
-    struct GradGuard noGrad = autograd().no_grad();
+    struct DataLoader dl = DataLoader::new(data, batchSize, 0, 0UL);
+    struct TensorArena stepArena = TensorArena::new(0UL);
+    struct GradGuard noGrad = Autograd::get().no_grad();
     struct Batch b;
     double sum = 0.0;
     unsigned long rows = 0UL;
@@ -335,7 +335,7 @@ generic<C: Recurrent>
 &Tensor recurrent_run(&C cell, const &Tensor xs, const &Tensor h0) {
     unsigned long T = 0UL;
     unsafe { T = xs->shape[0]; }
-    if (T == 0UL) return tensor_add_scalar(h0, (float)0.0);
+    if (T == 0UL) return h0.add_scalar((float)0.0);
     &Tensor h = cell.forward(recurrent_row_(xs, 0UL), h0);
     unsigned long t = 1UL;
     while (t < T) {

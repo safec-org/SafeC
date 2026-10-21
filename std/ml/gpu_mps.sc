@@ -2320,7 +2320,7 @@ int mps_matmul_atb_f32_chained(const &float a, &void bufDC, &float out,
 // GPU buffer instead of a plain CPU array. Needed for the fused
 // forward+loss+backward training step: dW2 = H^T . dY needs BOTH H (an
 // activation computed earlier in the SAME still-open batch by
-// tensor_relu_gpu, not yet read back to CPU) and dY (matmul2-backward's
+// Tensor::relu_gpu, not yet read back to CPU) and dY (matmul2-backward's
 // own incoming gradient, also still-pending) read straight from GPU
 // memory -- mps_matmul_atb_f32_chained's plain-CPU-array 'a' parameter
 // can't express that. (Doesn't arise for matmul1's own backward: its 'a'

@@ -158,20 +158,20 @@ static void run_case(const char* what, struct CudaAttnShape s, int dtype, int ca
     while (i < qn) { got.push(0.0f); i = i + 1UL; }
     int ok = 0;
     if (dtype == 0) {
-        struct CudaBuf dq = std::cuda_upload(q.at(0UL), qn);
-        struct CudaBuf dk = std::cuda_upload(k.at(0UL), kn);
-        struct CudaBuf dv = std::cuda_upload(v.at(0UL), kn);
-        struct CudaBuf dout = std::cuda_alloc(qn);
+        struct CudaBuf dq = CudaBuf::upload(q.at(0UL), qn);
+        struct CudaBuf dk = CudaBuf::upload(k.at(0UL), kn);
+        struct CudaBuf dv = CudaBuf::upload(v.at(0UL), kn);
+        struct CudaBuf dout = CudaBuf::alloc(qn);
         ok = lin ? std::cuda_linear_attention_ex(dq, dk, dv, dout, s, causal)
                  : std::cuda_flash_attention_ex(dq, dk, dv, dout, s, 0.0f, causal);
         ok = ok && std::cuda_read(dout, got.at(0UL), qn);
         dq.free(); dk.free(); dv.free(); dout.free();
     } else {
-        struct CudaHalfBuf hq = std::cuda_half_upload(q.at(0UL), qn, dtype);
-        struct CudaHalfBuf hk = std::cuda_half_upload(k.at(0UL), kn, dtype);
-        struct CudaHalfBuf hv = std::cuda_half_upload(v.at(0UL), kn, dtype);
-        struct CudaHalfBuf hout = std::cuda_half_alloc(qn, dtype);
-        struct CudaBuf dout = std::cuda_alloc(qn);
+        struct CudaHalfBuf hq = CudaHalfBuf::upload(q.at(0UL), qn, dtype);
+        struct CudaHalfBuf hk = CudaHalfBuf::upload(k.at(0UL), kn, dtype);
+        struct CudaHalfBuf hv = CudaHalfBuf::upload(v.at(0UL), kn, dtype);
+        struct CudaHalfBuf hout = CudaHalfBuf::alloc(qn, dtype);
+        struct CudaBuf dout = CudaBuf::alloc(qn);
         ok = lin ? std::cuda_half_linear_attention(hq, hk, hv, hout, s, causal)
                  : std::cuda_half_flash_attention(hq, hk, hv, hout, s, 0.0f, causal);
         ok = ok && std::cuda_from_half(hout, dout) && std::cuda_read(dout, got.at(0UL), qn);
@@ -253,17 +253,17 @@ int main() {
     struct Vec<float> q = data(qn, 4UL, (float)0.5, 0);
     struct Vec<float> k = data(kn, 5UL, (float)0.5, 0);
     struct Vec<float> v = data(kn, 6UL, (float)1.0, 0);
-    struct CudaBuf dq = std::cuda_upload(q.at(0UL), qn);
-    struct CudaBuf dk = std::cuda_upload(k.at(0UL), kn);
-    struct CudaBuf dv = std::cuda_upload(v.at(0UL), kn);
-    struct CudaBuf dout = std::cuda_alloc(qn);
+    struct CudaBuf dq = CudaBuf::upload(q.at(0UL), qn);
+    struct CudaBuf dk = CudaBuf::upload(k.at(0UL), kn);
+    struct CudaBuf dv = CudaBuf::upload(v.at(0UL), kn);
+    struct CudaBuf dout = CudaBuf::alloc(qn);
     struct Vec<float> got = std::vec_with_cap(qn);
     struct Vec<float> cpu = std::vec_with_cap(qn);
     unsigned long i = 0UL;
     while (i < qn) { got.push(0.0f); cpu.push(0.0f); i = i + 1UL; }
-    &Tensor tq = std::tensor_from_2d(q.at(0UL), 40UL, 64UL, 0);
-    &Tensor tk = std::tensor_from_2d(k.at(0UL), 56UL, 64UL, 0);
-    &Tensor tv = std::tensor_from_2d(v.at(0UL), 56UL, 64UL, 0);
+    &Tensor tq = Tensor::from_2d(q.at(0UL), 40UL, 64UL, 0);
+    &Tensor tk = Tensor::from_2d(k.at(0UL), 56UL, 64UL, 0);
+    &Tensor tv = Tensor::from_2d(v.at(0UL), 56UL, 64UL, 0);
     int l = 0;
     while (l < 2) {
         &Tensor tr = l ? std::linear_attention_forward(tq, tk, tv) : std::flash_attention_forward(tq, tk, tv, 16UL);
@@ -297,7 +297,7 @@ int main() {
     }
 
     // Graph capture: both ops recorded once (their variants are built above) and replayed.
-    struct CudaBuf dout2 = std::cuda_alloc(qn);
+    struct CudaBuf dout2 = CudaBuf::alloc(qn);
     check(std::cuda_capture_begin(), "attention capture begin");
     std::cuda_flash_attention_ex(dq, dk, dv, dout, one, (float)0.0, 1);
     std::cuda_linear_attention_ex(dq, dk, dv, dout2, one, 0);

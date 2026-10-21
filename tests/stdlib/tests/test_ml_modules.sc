@@ -41,7 +41,7 @@ static float max_diff_(const &Tensor a, const &Tensor b) {
 }
 
 static &Tensor randn_(unsigned long r, unsigned long c, &Rng rng) {
-    &Tensor t = tensor_new_2d(r, c, 0);
+    &Tensor t = Tensor::new_2d(r, c, 0);
     rng.fill_normal(t, (float)0.0, (float)1.0);
     return t;
 }
@@ -82,29 +82,29 @@ int module_contract_(&M m, const &Tensor x, unsigned long outCols, const &char p
 }
 
 void t_every_module() {
-    struct Rng rng = rng_new(7UL);
+    struct Rng rng = Rng::new(7UL);
     &Tensor x8 = randn_(5UL, 8UL, &rng);
 
-    struct Mlp mlp = mlp_new(8UL, 16UL, 1UL, 3UL, ACT_RELU, ACT_NONE, &rng);
+    struct Mlp mlp = Mlp::new(8UL, 16UL, 1UL, 3UL, ACT_RELU, ACT_NONE, &rng);
     ASSERT_TRUE(module_contract_(&mlp, x8, 3UL, "build/test_ml_modules_mlp.bin"));
 
-    struct ConvNet cn = convnet_new(2UL, 2UL, 2UL);
+    struct ConvNet cn = ConvNet::new(2UL, 2UL, 2UL);
     cn.conv(4UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);
     cn.batchnorm(ACT_RELU);
     cn.dense(3UL, ACT_NONE, &rng);
     cn.set_training(0);
     ASSERT_TRUE(module_contract_(&cn, x8, 3UL, "build/test_ml_modules_convnet.bin"));
 
-    struct LayerNorm ln = layer_norm_new(8UL);
+    struct LayerNorm ln = LayerNorm::new(8UL);
     ASSERT_TRUE(module_contract_(&ln, x8, 8UL, "build/test_ml_modules_ln.bin"));
 
-    struct LoraConfig lc = lora_config_default(2UL);
-    struct LoraMlp lora = lora_attach(&mlp, &lc);
+    struct LoraConfig lc = LoraConfig::default(2UL);
+    struct LoraMlp lora = LoraMlp::attach(&mlp, &lc);
     rng.fill_normal(*lora.B.at(0UL), (float)0.0, (float)0.1);
     ASSERT_TRUE(module_contract_(&lora, x8, 3UL, "build/test_ml_modules_lora.bin"));
     ASSERT_EQ(model_param_count(&lora), 2UL * (8UL + 16UL) + 2UL * (16UL + 3UL));
 
-    struct MultiHeadAttention mha = mha_new(8UL, 2UL, &rng);
+    struct MultiHeadAttention mha = MultiHeadAttention::new(8UL, 2UL, &rng);
     ASSERT_TRUE(module_contract_(&mha, x8, 8UL, "build/test_ml_modules_mha.bin"));
     // the layer is mha_forward between its projections
     &Tensor h = mha_forward(tensor_matmul(x8, mha.Wq), tensor_matmul(x8, mha.Wk), tensor_matmul(x8, mha.Wv), 2UL);
@@ -112,16 +112,16 @@ void t_every_module() {
     &Tensor got = mha.forward(x8);
     ASSERT_TRUE(max_diff_(want, got) < (float)0.000001);
 
-    struct Mla mla = mla_new(8UL, 4UL, 2UL, &rng);
+    struct Mla mla = Mla::new(8UL, 4UL, 2UL, &rng);
     ASSERT_TRUE(module_contract_(&mla, x8, 8UL, "build/test_ml_modules_mla.bin"));
-    struct EgMla eg = eg_mla_new(8UL, 4UL, 2UL, 2UL, &rng);
+    struct EgMla eg = EgMla::new(8UL, 4UL, 2UL, 2UL, &rng);
     ASSERT_TRUE(module_contract_(&eg, x8, 8UL, "build/test_ml_modules_egmla.bin"));
     ASSERT_EQ(model_param_count(&eg), 64UL + 32UL + 2UL * 2UL * 4UL * 4UL);
 
-    struct JiTBlock jb = jit_block_new(8UL, 16UL, 2UL);
+    struct JiTBlock jb = JiTBlock::new(8UL, 16UL, 2UL);
     ASSERT_TRUE(module_contract_(&jb, x8, 8UL, "build/test_ml_modules_jit.bin"));
 
-    struct Mamba mb = mamba_new(8UL, 4UL, 3UL, 2UL);
+    struct Mamba mb = Mamba::new(8UL, 4UL, 3UL, 2UL);
     ASSERT_TRUE(module_contract_(&mb, x8, 8UL, "build/test_ml_modules_mamba.bin"));
 
     mb.free(); jb.free(); eg.free(); mla.free(); mha.free();
@@ -135,20 +135,20 @@ static &Tensor clf_loss_(&Mlp m, const &Tensor x, const &Tensor y) {
 }
 
 void t_module_fit_matches_trainer_fit() {
-    struct Rng drng = rng_new(1UL);
-    struct Dataset data = dataset_xor(250UL, (float)0.0, &drng);
-    struct Rng r1 = rng_new(3UL);
-    struct Mlp a = mlp_new(2UL, 16UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &r1);
-    struct Rng r2 = rng_new(3UL);
-    struct Mlp b = mlp_new(2UL, 16UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &r2);
-    struct TrainConfig tc = train_config_default();
+    struct Rng drng = Rng::new(1UL);
+    struct Dataset data = Dataset::xor(250UL, (float)0.0, &drng);
+    struct Rng r1 = Rng::new(3UL);
+    struct Mlp a = Mlp::new(2UL, 16UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &r1);
+    struct Rng r2 = Rng::new(3UL);
+    struct Mlp b = Mlp::new(2UL, 16UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &r2);
+    struct TrainConfig tc = TrainConfig::default();
     tc.epochs = 5UL;
     tc.clipNorm = (float)1.0;
     tc.lrDecay = (float)0.9;
-    struct Optimizer oa = optimizer_new(OPT_ADAM, (float)0.01);
+    struct Optimizer oa = Optimizer::new(OPT_ADAM, (float)0.01);
     model_add_params(&a, &oa);
     struct TrainReport ra = trainer_fit(&a, clf_loss_, &oa, &data, &tc);
-    struct Optimizer ob = optimizer_new(OPT_ADAM, (float)0.01);
+    struct Optimizer ob = Optimizer::new(OPT_ADAM, (float)0.01);
     model_add_params(&b, &ob);
     struct TrainReport rb = module_fit(&b, TRAIN_LOSS_CE, &ob, &data, &tc);
     ASSERT_TRUE(ra.firstEpochLoss == rb.firstEpochLoss && ra.lastEpochLoss == rb.lastEpochLoss);
@@ -156,8 +156,8 @@ void t_module_fit_matches_trainer_fit() {
     ASSERT_TRUE(module_evaluate(&b, TRAIN_LOSS_CE, &data, 64UL) < ra.firstEpochLoss);
     ASSERT_TRUE(module_accuracy(&b, &data, 64UL) > (float)0.8);
     // model_copy / model_soft_update
-    struct Rng r3 = rng_new(9UL);
-    struct Mlp c = mlp_new(2UL, 16UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &r3);
+    struct Rng r3 = Rng::new(9UL);
+    struct Mlp c = Mlp::new(2UL, 16UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &r3);
     ASSERT_TRUE(model_copy(&c, &b));
     &Tensor yb = module_predict(&b, data.x);
     &Tensor yc = module_predict(&c, data.x);
@@ -170,21 +170,21 @@ void t_module_fit_matches_trainer_fit() {
 }
 
 void t_model_fit_autoencoders() {
-    struct Rng drng = rng_new(9UL);
-    struct Dataset data = dataset_shapes(128UL, 8UL, &drng);
-    struct VaeConfig cfg = vae_config_default(4UL);
+    struct Rng drng = Rng::new(9UL);
+    struct Dataset data = Dataset::shapes(128UL, 8UL, &drng);
+    struct VaeConfig cfg = VaeConfig::default(4UL);
     cfg.hidden = 32UL;
-    struct Vae v = vae_new(64UL, &cfg);
-    struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.003);
+    struct Vae v = Vae::new(64UL, &cfg);
+    struct Optimizer o = Optimizer::new(OPT_ADAM, (float)0.003);
     model_add_params(&v, &o);
-    struct TrainConfig tc = train_config_default();
+    struct TrainConfig tc = TrainConfig::default();
     tc.epochs = 6UL;
     struct TrainReport rep = model_fit(&v, &o, &data, &tc);
     ASSERT_TRUE(rep.lastEpochLoss < rep.firstEpochLoss);
     ASSERT_TRUE(model_evaluate(&v, &data, 64UL) > (float)0.0);
     // the whole state round-trips through a file
     ASSERT_TRUE(model_save_file(&v, "build/test_ml_modules_vae.bin"));
-    struct Vae w = vae_new(64UL, &cfg);
+    struct Vae w = Vae::new(64UL, &cfg);
     ASSERT_TRUE(model_load_file(&w, "build/test_ml_modules_vae.bin"));
     struct Vec<&Tensor> a = vec_new();
     struct Vec<&Tensor> b = vec_new();
@@ -213,7 +213,7 @@ struct Avg2 {
 };
 generic<M: Module>
 &Tensor Avg2::forward(const &Tensor x) {
-    return tensor_scale(tensor_add(self.a.forward(x), self.b.forward(x)), (float)0.5);
+    return tensor_add(self.a.forward(x), self.b.forward(x)).scale((float)0.5);
 }
 generic<M: Module>
 void Avg2::collect_params(&Vec<&Tensor> out) const { self.a.collect_params(out); self.b.collect_params(out); }
@@ -221,15 +221,15 @@ generic<M: Module>
 void Avg2::collect_state(&Vec<&Tensor> out) const { self.a.collect_state(out); self.b.collect_state(out); }
 
 void t_generic_struct_is_a_module() {
-    struct Rng rng = rng_new(4UL);
-    struct Dataset data = dataset_moons(200UL, (float)0.1, &rng);
+    struct Rng rng = Rng::new(4UL);
+    struct Dataset data = Dataset::moons(200UL, (float)0.1, &rng);
     struct Avg2<struct Mlp> pair;
-    pair.a = mlp_new(2UL, 16UL, 1UL, 2UL, ACT_RELU, ACT_NONE, &rng);
-    pair.b = mlp_new(2UL, 16UL, 1UL, 2UL, ACT_TANH, ACT_NONE, &rng);
-    struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.02);
+    pair.a = Mlp::new(2UL, 16UL, 1UL, 2UL, ACT_RELU, ACT_NONE, &rng);
+    pair.b = Mlp::new(2UL, 16UL, 1UL, 2UL, ACT_TANH, ACT_NONE, &rng);
+    struct Optimizer o = Optimizer::new(OPT_ADAM, (float)0.02);
     model_add_params(&pair, &o);
     ASSERT_EQ(model_param_count(&pair), 2UL * (2UL * 16UL + 16UL + 16UL * 2UL + 2UL));
-    struct TrainConfig tc = train_config_default();
+    struct TrainConfig tc = TrainConfig::default();
     tc.epochs = 30UL;
     struct TrainReport rep = module_fit(&pair, TRAIN_LOSS_CE, &o, &data, &tc);
     ASSERT_TRUE(rep.lastEpochLoss < rep.firstEpochLoss * (float)0.6);
@@ -251,11 +251,11 @@ float unroll_by_hand_diff_(&C cell, const &Tensor xs, const &Tensor h0) {
 }
 
 void t_recurrent_cells() {
-    struct Rng rng = rng_new(5UL);
+    struct Rng rng = Rng::new(5UL);
     &Tensor xs = randn_(6UL, 3UL, &rng);
     &Tensor h0 = randn_(1UL, 4UL, &rng);
-    struct RNNCell rc = rnn_cell_new(3UL, 4UL);
-    struct GRUCell gc = gru_cell_new(3UL, 4UL);
+    struct RNNCell rc = RNNCell::new(3UL, 4UL);
+    struct GRUCell gc = GRUCell::new(3UL, 4UL);
     ASSERT_TRUE(unroll_by_hand_diff_(&rc, xs, h0) == (float)0.0);
     ASSERT_TRUE(unroll_by_hand_diff_(&gc, xs, h0) == (float)0.0);
     &Tensor last = recurrent_run(&gc, xs, h0);
@@ -274,12 +274,12 @@ unsigned long sample_rows_(&G g, unsigned long n) {
 }
 
 void t_generative_models() {
-    struct GanConfig gcfg = gan_config_default(4UL);
+    struct GanConfig gcfg = GanConfig::default(4UL);
     gcfg.hidden = 16UL;
-    struct Gan g = gan_new(2UL, &gcfg);
-    struct VaeConfig vcfg = vae_config_default(4UL);
+    struct Gan g = Gan::new(2UL, &gcfg);
+    struct VaeConfig vcfg = VaeConfig::default(4UL);
     vcfg.hidden = 16UL;
-    struct Vae v = vae_new(10UL, &vcfg);
+    struct Vae v = Vae::new(10UL, &vcfg);
     ASSERT_EQ(sample_rows_(&g, 7UL), 7UL);
     ASSERT_EQ(sample_rows_(&v, 5UL), 5UL);
     g.free(); v.free();
@@ -291,10 +291,10 @@ struct ConstPredict {
     &Tensor value;
     &Tensor predict(const &Tensor x, float sigma);
 };
-&Tensor ConstPredict::predict(const &Tensor x, float sigma) { return tensor_scale(self.value, (float)1.0); }
+&Tensor ConstPredict::predict(const &Tensor x, float sigma) { return self.value.scale((float)1.0); }
 
 void t_denoise_model_solvers() {
-    struct Rng rng = rng_new(6UL);
+    struct Rng rng = Rng::new(6UL);
     &Tensor x = randn_(3UL, 4UL, &rng);
     struct ConstPredict m;
     m.value = randn_(3UL, 4UL, &rng);
@@ -315,9 +315,9 @@ unsigned long cond_rows_(&C m, const &Tensor x, const &Tensor c) {
 }
 
 void t_cond_modules() {
-    struct Rng rng = rng_new(8UL);
-    struct DiTBlock dit = dit_block_new(8UL, 16UL, 4UL, 2UL);
-    struct JiT jit = jit_new(6UL, 8UL, 16UL, 2UL, 2UL);
+    struct Rng rng = Rng::new(8UL);
+    struct DiTBlock dit = DiTBlock::new(8UL, 16UL, 4UL, 2UL);
+    struct JiT jit = JiT::new(6UL, 8UL, 16UL, 2UL, 2UL);
     &Tensor x = randn_(5UL, 8UL, &rng);
     &Tensor c = randn_(1UL, 4UL, &rng);
     &Tensor patches = randn_(5UL, 6UL, &rng);

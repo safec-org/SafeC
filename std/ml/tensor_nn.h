@@ -1,14 +1,14 @@
 #pragma once
 // SafeC Standard Library — neural-net building blocks on top of std::ml's
-// Tensor/autograd core (tensor.h/tensor.sc): activation functions, the
+// Tensor/Autograd::get core (tensor.h/tensor.sc): activation functions, the
 // Adam optimizer, and 1D pooling. Separate file from tensor.sc for the
 // same reason tensor_gpu.h is separate — an independently useful slice of
 // functionality, not a change to the core type or its existing ops.
 //
 // Every activation below is elementwise, allocates via
-// __tensor_alloc_uninit_like (like tensor_relu), and links into the same
-// autograd graph via its own backward function — same shape as
-// tensor.sc's existing tensor_relu/tensor_scale, just more of them.
+// __tensor_alloc_uninit_like (like Tensor::relu), and links into the same
+// Autograd::get graph via its own backward function — same shape as
+// tensor.sc's existing Tensor::relu/Tensor::scale, just more of them.
 //
 // Internal 'static' helpers (every __X_backward function) are defined
 // right here, not in tensor_nn.sc — same reasoning as tensor.h's own
@@ -25,21 +25,21 @@ namespace std {
 
 // Moved here from tensor.h -- a neural-net activation function, grouped
 // with the rest of them rather than with tensor.h's core arithmetic ops.
-&Tensor tensor_relu(const &Tensor a);
-&Tensor tensor_sigmoid(const &Tensor a);
-&Tensor tensor_tanh_t(const &Tensor a);      // 'tensor_tanh' would collide with math.h's tanh_f-style naming convention if this were 'tanh'; matches this file's other tensor_-prefixed names instead
-&Tensor tensor_softmax(const &Tensor a);     // last-axis softmax (row-wise for a rank-2 tensor)
-&Tensor tensor_elu(const &Tensor a, float alpha);
-&Tensor tensor_gelu(const &Tensor a);        // tanh approximation (the common fast form, not the exact erf one)
-&Tensor tensor_silu(const &Tensor a);        // aka Swish: x * sigmoid(x)
+&Tensor Tensor::relu() const;
+&Tensor Tensor::sigmoid() const;
+&Tensor Tensor::tanh() const;   // 'tensor_tanh' would collide with math.h's tanh_f-style naming convention if this were 'tanh'; matches this file's other tensor_-prefixed names instead
+&Tensor Tensor::softmax() const;   // last-axis softmax (row-wise for a rank-2 tensor)
+&Tensor Tensor::elu(float alpha) const;
+&Tensor Tensor::gelu() const;   // tanh approximation (the common fast form, not the exact erf one)
+&Tensor Tensor::silu() const;   // aka Swish: x * sigmoid(x)
 
 // GLU/SwiGLU split the input's last axis in half (must be even) into
 // [a1, a2] and gate one half with (a function of) the other:
 //   GLU(x)    = a1 * sigmoid(a2)
 //   SwiGLU(x) = silu(a1) * a2
 // Output shape is the input's shape with the last axis halved.
-&Tensor tensor_glu(const &Tensor a);
-&Tensor tensor_swiglu(const &Tensor a);
+&Tensor Tensor::glu() const;
+&Tensor Tensor::swiglu() const;
 
 // ── Adam optimizer ───────────────────────────────────────────────────────────
 // Per-parameter state (first/second moment buffers, same size as the
@@ -59,12 +59,12 @@ struct AdamState {
 
     void step(&Tensor param);
     void free();
-};
 
-struct AdamState adam_new(unsigned long size, float lr, float beta1, float beta2, float eps);
-// Convenience default (lr=0.001, beta1=0.9, beta2=0.999, eps=1e-8 — the
-// values from the original Adam paper and every framework's default).
-struct AdamState adam_new_default(unsigned long size, float lr);
+    static struct AdamState new(unsigned long size, float lr, float beta1, float beta2, float eps);
+    // Convenience default (lr=0.001, beta1=0.9, beta2=0.999, eps=1e-8 — the
+    // values from the original Adam paper and every framework's default).
+    static struct AdamState new_default(unsigned long size, float lr);
+};
 
 // ── 1D pooling ────────────────────────────────────────────────────────────────
 // Pools along the tensor's LAST axis with the given kernel size and
@@ -75,8 +75,8 @@ struct AdamState adam_new_default(unsigned long size, float lr);
 // (batch, channel) row's length axis independently) -- this is genuine
 // N-D-aware pooling via Tensor's existing arbitrary-ndim shape, not
 // limited to rank-2.
-&Tensor tensor_maxpool1d(const &Tensor a, unsigned long kernel, unsigned long stride);
-&Tensor tensor_avgpool1d(const &Tensor a, unsigned long kernel, unsigned long stride);
+&Tensor Tensor::maxpool1d(unsigned long kernel, unsigned long stride) const;
+&Tensor Tensor::avgpool1d(unsigned long kernel, unsigned long stride) const;
 
 // ══ Internal helpers (static — each including file gets its own copy) ═══════
 

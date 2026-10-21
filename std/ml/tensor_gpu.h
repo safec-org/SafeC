@@ -10,8 +10,8 @@
 //
 // Every op below is the GPU-dispatched twin of the same-named tensor.sc
 // function (tensor_add_gpu <-> tensor_add, etc): same forward math, linked
-// into the same autograd graph via the same backward function (backward
-// doesn't care which backend computed forward, so nothing autograd-side
+// into the same Autograd::get graph via the same backward function (backward
+// doesn't care which backend computed forward, so nothing Autograd::get-side
 // needed to change), same fallback behavior. Tensor is float32 (see
 // tensor.h), the same precision Metal itself uses (Metal has no 'double'
 // at all) — every op here now reads/writes a Tensor's 'data'/'grad'
@@ -41,20 +41,20 @@ namespace std {
 // trip, and diff's own gradient propagating onward the same way.
 &Tensor tensor_sub_gpu(const &Tensor a, const &Tensor b);
 &Tensor tensor_mul_gpu(const &Tensor a, const &Tensor b);
-&Tensor tensor_scale_gpu(const &Tensor a, float k);
-&Tensor tensor_relu_gpu(const &Tensor a);
+&Tensor Tensor::scale_gpu(float k) const;
+&Tensor Tensor::relu_gpu() const;
 // out = a * a -- chain-aware self-multiply, used for the loss computation's
 // sq = diff * diff. Not just tensor_mul_gpu(a, a): when 'a' is itself still
 // GPU-pending (the usual case here, diff coming straight from a batched
 // tensor_sub_gpu), tensor_mul_gpu's generic two-CPU-array signature can't
 // express "both operands are the same still-pending buffer" -- see
 // gpu_mps.h's mps_square_f32_chained comment.
-&Tensor tensor_square_gpu(const &Tensor a);
-// tensor_sum_gpu's GPU reduction (std::mps_sum_f32) is a two-stage
+&Tensor Tensor::square_gpu() const;
+// Tensor::sum_gpu's GPU reduction (std::mps_sum_f32) is a two-stage
 // parallel reduction (grid-stride accumulate + threadgroup tree
 // reduction) -- see gpu_mps.sc's comment on mps_sum_f32. Chain-aware like
-// tensor_sub_gpu/tensor_square_gpu above.
-&Tensor tensor_sum_gpu(const &Tensor a);
+// tensor_sub_gpu/Tensor::square_gpu above.
+&Tensor Tensor::sum_gpu() const;
 &Tensor tensor_matmul_gpu(const &Tensor a, const &Tensor b);
 
 // ── Batched dispatch (chains of tensor_*_gpu ops with no CPU step
@@ -78,7 +78,7 @@ void tensor_gpu_batch_begin();
 void tensor_gpu_batch_end();
 
 // ── Cross-batch persistent tensors ──────────────────────────────────────────
-// Marks 't' so every tensor_matmul_gpu/tensor_relu_gpu call (forward AND
+// Marks 't' so every tensor_matmul_gpu/Tensor::relu_gpu call (forward AND
 // the corresponding backward's data lookups) that reads it finds its
 // device buffer directly instead of re-uploading (memcpy) t->data fresh on
 // every single call — see tensor_gpu.sc's comment on the implementation.
@@ -89,7 +89,7 @@ void tensor_gpu_batch_end();
 // step) — NOT a weight matrix, which SGD rewrites every step. Call
 // tensor_gpu_release_all_persistent() once, when truly done with every
 // marked tensor (e.g. at the very end of a training run).
-void tensor_gpu_mark_persistent(const &Tensor t);
+void Tensor::gpu_mark_persistent() const;
 void tensor_gpu_release_all_persistent();
 
 } // namespace std

@@ -17,15 +17,15 @@ namespace std {
     return tensor_matmul(a, b); // DEVICE_CPU, and the default for any future enum value
 }
 
-&Tensor tensor_relu_on(const &Tensor a, enum Device device) {
-    if (device == DEVICE_MPS) { return tensor_relu_gpu(a); }
-    if (device == DEVICE_CUDA || device == DEVICE_CUDA_BLAS) { return tensor_relu_cuda(a); }
-    if (device == DEVICE_ROCM || device == DEVICE_ROCM_BLAS) { return tensor_relu_rocm(a); }
+&Tensor Tensor::relu_on(enum Device device) const {
+    if (device == DEVICE_MPS) { return self.relu_gpu(); }
+    if (device == DEVICE_CUDA || device == DEVICE_CUDA_BLAS) { return self.relu_cuda(); }
+    if (device == DEVICE_ROCM || device == DEVICE_ROCM_BLAS) { return self.relu_rocm(); }
     // DEVICE_SPIRV/DEVICE_WEBGPU/DEVICE_CPU_BLAS: relu has no SPIR-V/
     // WebGPU/vendor-BLAS-specific implementation (BLAS covers matmul
     // only -- relu isn't a BLAS operation at all), so these fall back to
     // the portable CPU path, same as DEVICE_CPU itself.
-    return tensor_relu(a);
+    return self.relu();
 }
 
 } // namespace std

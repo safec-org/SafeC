@@ -17,7 +17,7 @@ namespace std {
 // trained weights). Values stay in a small range to keep gate pre-
 // activations well-behaved.
 static &Tensor __rnn_init_weight(unsigned long rows, unsigned long cols, unsigned long seed) {
-    &Tensor t = tensor_new_2d(rows, cols, 0);
+    &Tensor t = Tensor::new_2d(rows, cols, 0);
     unsafe {
         unsigned long i = 0UL;
         while (i < t->size) {
@@ -32,7 +32,7 @@ static &Tensor __rnn_init_weight(unsigned long rows, unsigned long cols, unsigne
 }
 
 static &Tensor __rnn_zeros(unsigned long rows, unsigned long cols) {
-    return tensor_new_2d(rows, cols, 0);
+    return Tensor::new_2d(rows, cols, 0);
 }
 
 static &Tensor __row_add4(&Tensor a, &Tensor b,
@@ -46,7 +46,7 @@ static &Tensor __row_add4(&Tensor a, &Tensor b,
 }
 
 static &Tensor __one_minus(&Tensor z) {
-    &Tensor out = tensor_zeros_like(z);
+    &Tensor out = z.zeros_like();
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) { out->data[i] = (float)1.0 - z->data[i]; i = i + 1UL; }
@@ -56,7 +56,7 @@ static &Tensor __one_minus(&Tensor z) {
 
 // ── Plain RNN ────────────────────────────────────────────────────────────────
 
-struct RNNCell rnn_cell_new(unsigned long inputSize, unsigned long hiddenSize) {
+struct RNNCell RNNCell::new(unsigned long inputSize, unsigned long hiddenSize) {
     struct RNNCell c;
     c.W_ih = __rnn_init_weight(inputSize, hiddenSize, 1UL);
     c.W_hh = __rnn_init_weight(hiddenSize, hiddenSize, 2UL);
@@ -70,7 +70,7 @@ struct RNNCell rnn_cell_new(unsigned long inputSize, unsigned long hiddenSize) {
         &Tensor xi = tensor_matmul(x_t, self->W_ih);
         &Tensor hh = tensor_matmul(h_prev, self->W_hh);
         &Tensor sum = __row_add4(xi, hh, self->b_ih, self->b_hh);
-        &Tensor h_t = tensor_tanh_fwd(sum);
+        &Tensor h_t = sum.tanh_fwd();
         xi->free(); hh->free(); sum->free();
         free((void*)xi); free((void*)hh); free((void*)sum);
         return h_t;
@@ -87,7 +87,7 @@ void RNNCell::free() {
 
 // ── GRU ──────────────────────────────────────────────────────────────────────
 
-struct GRUCell gru_cell_new(unsigned long inputSize, unsigned long hiddenSize) {
+struct GRUCell GRUCell::new(unsigned long inputSize, unsigned long hiddenSize) {
     struct GRUCell c;
     c.W_ir = __rnn_init_weight(inputSize, hiddenSize, 10UL); c.W_hr = __rnn_init_weight(hiddenSize, hiddenSize, 11UL);
     c.b_ir = __rnn_zeros(1UL, hiddenSize); c.b_hr = __rnn_zeros(1UL, hiddenSize);
@@ -102,11 +102,11 @@ struct GRUCell gru_cell_new(unsigned long inputSize, unsigned long hiddenSize) {
     unsafe {
         &Tensor r_sum = __row_add4(tensor_matmul(x_t, self->W_ir), tensor_matmul(h_prev, self->W_hr),
                                            self->b_ir, self->b_hr);
-        &Tensor r_t = tensor_sigmoid_fwd(r_sum);
+        &Tensor r_t = r_sum.sigmoid_fwd();
 
         &Tensor z_sum = __row_add4(tensor_matmul(x_t, self->W_iz), tensor_matmul(h_prev, self->W_hz),
                                            self->b_iz, self->b_hz);
-        &Tensor z_t = tensor_sigmoid_fwd(z_sum);
+        &Tensor z_t = z_sum.sigmoid_fwd();
 
         &Tensor hn = tensor_matmul(h_prev, self->W_hn);
         &Tensor hn_b = tensor_add(hn, self->b_hn);
@@ -114,7 +114,7 @@ struct GRUCell gru_cell_new(unsigned long inputSize, unsigned long hiddenSize) {
         &Tensor in_ = tensor_matmul(x_t, self->W_in);
         &Tensor in_b = tensor_add(in_, self->b_in);
         &Tensor n_sum = tensor_add(in_b, r_hn);
-        &Tensor n_t = tensor_tanh_fwd(n_sum);
+        &Tensor n_t = n_sum.tanh_fwd();
 
         &Tensor one_minus_z = __one_minus(z_t);
         &Tensor term1 = tensor_mul(one_minus_z, n_t);
@@ -146,7 +146,7 @@ void GRUCell::free() {
 
 // ── LSTM ─────────────────────────────────────────────────────────────────────
 
-struct LSTMCell lstm_cell_new(unsigned long inputSize, unsigned long hiddenSize) {
+struct LSTMCell LSTMCell::new(unsigned long inputSize, unsigned long hiddenSize) {
     struct LSTMCell c;
     c.W_ii = __rnn_init_weight(inputSize, hiddenSize, 20UL); c.W_hi = __rnn_init_weight(hiddenSize, hiddenSize, 21UL);
     c.b_ii = __rnn_zeros(1UL, hiddenSize); c.b_hi = __rnn_zeros(1UL, hiddenSize);
@@ -163,21 +163,21 @@ struct LSTMCell lstm_cell_new(unsigned long inputSize, unsigned long hiddenSize)
     unsafe {
         &Tensor i_sum = __row_add4(tensor_matmul(x_t, self->W_ii), tensor_matmul(h_prev, self->W_hi),
                                            self->b_ii, self->b_hi);
-        &Tensor i_t = tensor_sigmoid_fwd(i_sum);
+        &Tensor i_t = i_sum.sigmoid_fwd();
         &Tensor f_sum = __row_add4(tensor_matmul(x_t, self->W_if), tensor_matmul(h_prev, self->W_hf),
                                            self->b_if, self->b_hf);
-        &Tensor f_t = tensor_sigmoid_fwd(f_sum);
+        &Tensor f_t = f_sum.sigmoid_fwd();
         &Tensor g_sum = __row_add4(tensor_matmul(x_t, self->W_ig), tensor_matmul(h_prev, self->W_hg),
                                            self->b_ig, self->b_hg);
-        &Tensor g_t = tensor_tanh_fwd(g_sum);
+        &Tensor g_t = g_sum.tanh_fwd();
         &Tensor o_sum = __row_add4(tensor_matmul(x_t, self->W_io), tensor_matmul(h_prev, self->W_ho),
                                            self->b_io, self->b_ho);
-        &Tensor o_t = tensor_sigmoid_fwd(o_sum);
+        &Tensor o_t = o_sum.sigmoid_fwd();
 
         &Tensor fc = tensor_mul(f_t, c_prev);
         &Tensor ig = tensor_mul(i_t, g_t);
         &Tensor c_t = tensor_add(fc, ig);
-        &Tensor tanh_c = tensor_tanh_fwd(c_t);
+        &Tensor tanh_c = c_t.tanh_fwd();
         &Tensor h_t = tensor_mul(o_t, tanh_c);
 
         &Tensor garbage[9];
@@ -208,7 +208,7 @@ void LSTMCell::free() {
 
 // ── xLSTM (sLSTM) ─────────────────────────────────────────────────────────────
 
-struct XLSTMCell xlstm_cell_new(unsigned long inputSize, unsigned long hiddenSize) {
+struct XLSTMCell XLSTMCell::new(unsigned long inputSize, unsigned long hiddenSize) {
     struct XLSTMCell c;
     c.Wz = __rnn_init_weight(inputSize, hiddenSize, 30UL); c.Rz = __rnn_init_weight(hiddenSize, hiddenSize, 31UL);
     c.bz = __rnn_zeros(1UL, hiddenSize);
@@ -224,27 +224,27 @@ struct XLSTMCell xlstm_cell_new(unsigned long inputSize, unsigned long hiddenSiz
 struct XLSTMState XLSTMCell::forward(const &Tensor x_t, const &XLSTMState prev) const {
     unsafe {
         &Tensor z_sum = __row_add4(tensor_matmul(x_t, self->Wz), tensor_matmul(prev->h, self->Rz),
-                                           self->bz, tensor_zeros_like(self->bz));
-        &Tensor z_t = tensor_tanh_fwd(z_sum);
+                                           self->bz, self->bz.zeros_like());
+        &Tensor z_t = z_sum.tanh_fwd();
 
-        &Tensor zerob = tensor_zeros_like(self->bi);
+        &Tensor zerob = self->bi.zeros_like();
         &Tensor i_raw = __row_add4(tensor_matmul(x_t, self->Wi), tensor_matmul(prev->h, self->Ri),
                                            self->bi, zerob);
-        &Tensor zerob2 = tensor_zeros_like(self->bf);
+        &Tensor zerob2 = self->bf.zeros_like();
         &Tensor f_raw = __row_add4(tensor_matmul(x_t, self->Wf), tensor_matmul(prev->h, self->Rf),
                                            self->bf, zerob2);
-        &Tensor zerob3 = tensor_zeros_like(self->bo);
+        &Tensor zerob3 = self->bo.zeros_like();
         &Tensor o_sum = __row_add4(tensor_matmul(x_t, self->Wo), tensor_matmul(prev->h, self->Ro),
                                            self->bo, zerob3);
-        &Tensor o_t = tensor_sigmoid_fwd(o_sum);
+        &Tensor o_t = o_sum.sigmoid_fwd();
 
         // Stabilizer: m_t = max(f_raw + m_prev, i_raw), elementwise
         // (broadcasting prev->m's single scalar across the hidden dim).
         unsigned long hiddenSize;
         hiddenSize = i_raw->shape[1];
-        &Tensor m_t = tensor_new_2d(1UL, hiddenSize, 0);
-        &Tensor i_t = tensor_new_2d(1UL, hiddenSize, 0);
-        &Tensor f_t = tensor_new_2d(1UL, hiddenSize, 0);
+        &Tensor m_t = Tensor::new_2d(1UL, hiddenSize, 0);
+        &Tensor i_t = Tensor::new_2d(1UL, hiddenSize, 0);
+        &Tensor f_t = Tensor::new_2d(1UL, hiddenSize, 0);
         float mPrevScalar = prev->m->data[0];
         unsigned long k = 0UL;
         while (k < hiddenSize) {
@@ -266,7 +266,7 @@ struct XLSTMState XLSTMCell::forward(const &Tensor x_t, const &XLSTMState prev) 
         &Tensor n_t = tensor_add(fnT, i_t);
 
         // h_t = o_t * (c_t / n_t), elementwise divide
-        &Tensor ratio = tensor_new_2d(1UL, hiddenSize, 0);
+        &Tensor ratio = Tensor::new_2d(1UL, hiddenSize, 0);
         k = 0UL;
         while (k < hiddenSize) {
             float denom = n_t->data[k];
@@ -278,7 +278,7 @@ struct XLSTMState XLSTMCell::forward(const &Tensor x_t, const &XLSTMState prev) 
         // m_t is stored as a [1,1] scalar (the *maximum* over the hidden
         // dim, matching the paper's scalar-per-timestep stabilizer) —
         // reduce the elementwise m_t computed above.
-        &Tensor m_scalar = tensor_new_2d(1UL, 1UL, 0);
+        &Tensor m_scalar = Tensor::new_2d(1UL, 1UL, 0);
         float mMax = m_t->data[0];
         k = 1UL;
         while (k < hiddenSize) { if (m_t->data[k] > mMax) mMax = m_t->data[k]; k = k + 1UL; }

@@ -34,7 +34,7 @@ static struct FeatureMap fm_uninit_(unsigned long channels, unsigned long height
     return fm;
 }
 
-struct FeatureMap feature_map_new(unsigned long channels, unsigned long height, unsigned long width) {
+struct FeatureMap FeatureMap::new(unsigned long channels, unsigned long height, unsigned long width) {
     struct FeatureMap fm = fm_uninit_(channels, height, width);
     unsigned long size = channels * height * width;
     unsafe {
@@ -54,8 +54,7 @@ static float __cnn_init_weight(unsigned long i, unsigned long seed) {
     return (((float)(h % 2000UL) / (float)1000.0) - (float)1.0) * (float)0.3; // [-0.3, 0.3)
 }
 
-struct Conv2D conv2d_new(unsigned long inChannels, unsigned long outChannels,
-                          unsigned long kH, unsigned long kW,
+struct Conv2D Conv2D::new(unsigned long inChannels, unsigned long outChannels, unsigned long kH, unsigned long kW,
                           unsigned long stride, unsigned long padding) {
     struct Conv2D layer;
     unsigned long wSize = outChannels * inChannels * kH * kW;
@@ -588,7 +587,7 @@ static struct FeatureMap conv_run_(const &Conv2D layer, const &FeatureMap input,
     unsigned long pixels = outH * outW;
     unsigned long K = inC * kH * kW;
     if (pixels == 0UL || outC == 0UL || K == 0UL) {
-        struct FeatureMap empty = feature_map_new(outC, outH, outW);
+        struct FeatureMap empty = FeatureMap::new(outC, outH, outW);
         unsafe {
             unsigned long oc = 0UL;
             while (oc < outC) {
@@ -822,22 +821,21 @@ static struct FeatureMap pool_(const &FeatureMap input, unsigned long kernel, un
     return out;
 }
 
-struct FeatureMap maxpool2d_forward(const &FeatureMap input, unsigned long kernel, unsigned long stride) {
-    return pool_(input, kernel, stride, 0UL, 0, MAP_MAX);
+struct FeatureMap FeatureMap::maxpool2d(unsigned long kernel, unsigned long stride) const {
+    return pool_(self, kernel, stride, 0UL, 0, MAP_MAX);
 }
 
-struct FeatureMap avgpool2d_forward(const &FeatureMap input, unsigned long kernel, unsigned long stride) {
-    return pool_(input, kernel, stride, 0UL, 1, MAP_AVG);
+struct FeatureMap FeatureMap::avgpool2d(unsigned long kernel, unsigned long stride) const {
+    return pool_(self, kernel, stride, 0UL, 1, MAP_AVG);
 }
 
-struct FeatureMap maxpool2d_forward_ex(const &FeatureMap input, unsigned long kernel, unsigned long stride,
-                                       unsigned long padding) {
-    return pool_(input, kernel, stride, padding, 0, MAP_MAX);
+struct FeatureMap FeatureMap::maxpool2d_ex(unsigned long kernel, unsigned long stride, unsigned long padding) const {
+    return pool_(self, kernel, stride, padding, 0, MAP_MAX);
 }
 
-struct FeatureMap avgpool2d_forward_ex(const &FeatureMap input, unsigned long kernel, unsigned long stride,
-                                       unsigned long padding, int countIncludePad) {
-    return pool_(input, kernel, stride, padding, countIncludePad, MAP_AVG);
+struct FeatureMap FeatureMap::avgpool2d_ex(unsigned long kernel, unsigned long stride, unsigned long padding,
+                                           int countIncludePad) const {
+    return pool_(self, kernel, stride, padding, countIncludePad, MAP_AVG);
 }
 
 static struct FeatureMap global_pool_(const &FeatureMap input, int op) {
@@ -856,8 +854,8 @@ static struct FeatureMap global_pool_(const &FeatureMap input, int op) {
     return out;
 }
 
-struct FeatureMap global_avgpool2d(const &FeatureMap input) { return global_pool_(input, MAP_GAVG); }
-struct FeatureMap global_maxpool2d(const &FeatureMap input) { return global_pool_(input, MAP_GMAX); }
+struct FeatureMap FeatureMap::global_avgpool2d() const { return global_pool_(self, MAP_GAVG); }
+struct FeatureMap FeatureMap::global_maxpool2d() const { return global_pool_(self, MAP_GMAX); }
 
 struct FeatureMap feature_map_add(const &FeatureMap a, const &FeatureMap b, int relu) {
     unsigned long c; unsigned long h; unsigned long w;
@@ -877,13 +875,13 @@ struct FeatureMap feature_map_add(const &FeatureMap a, const &FeatureMap b, int 
 
 // ── Residual block (ResNet basic block) ──────────────────────────────────────
 
-struct ResidualBlock residual_block_new(unsigned long inChannels, unsigned long outChannels, unsigned long stride) {
+struct ResidualBlock ResidualBlock::new(unsigned long inChannels, unsigned long outChannels, unsigned long stride) {
     struct ResidualBlock b;
-    b.conv1 = conv2d_new(inChannels, outChannels, 3UL, 3UL, stride, 1UL);
-    b.conv2 = conv2d_new(outChannels, outChannels, 3UL, 3UL, 1UL, 1UL);
+    b.conv1 = Conv2D::new(inChannels, outChannels, 3UL, 3UL, stride, 1UL);
+    b.conv2 = Conv2D::new(outChannels, outChannels, 3UL, 3UL, 1UL, 1UL);
     b.hasProjection = (stride != 1UL || inChannels != outChannels) ? 1 : 0;
-    if (b.hasProjection) b.projection = conv2d_new(inChannels, outChannels, 1UL, 1UL, stride, 0UL);
-    else b.projection = conv2d_new(1UL, 1UL, 1UL, 1UL, 1UL, 0UL);   // unused placeholder, freed with the block
+    if (b.hasProjection) b.projection = Conv2D::new(inChannels, outChannels, 1UL, 1UL, stride, 0UL);
+    else b.projection = Conv2D::new(1UL, 1UL, 1UL, 1UL, 1UL, 0UL);   // unused placeholder, freed with the block
     return b;
 }
 
@@ -909,13 +907,13 @@ void ResidualBlock::free() {
     self->projection.free();
 }
 
-struct FeatureMap upsample2x_nearest(const &FeatureMap input) {
+struct FeatureMap FeatureMap::upsample2x_nearest() const {
     unsigned long c; unsigned long h; unsigned long w;
-    unsafe { c = input->channels; h = input->height; w = input->width; }
+    unsafe { c = self->channels; h = self->height; w = self->width; }
     struct FeatureMap out = fm_uninit_(c, h * 2UL, w * 2UL);
     struct MapJob j;
     unsafe {
-        j.in = (const float*)input->data;
+        j.in = (const float*)self->data;
         j.out = (float*)out.data;
     }
     j.h = h; j.w = w; j.outH = h * 2UL; j.outW = w * 2UL;

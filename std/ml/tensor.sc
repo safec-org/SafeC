@@ -1,5 +1,5 @@
 // SafeC Standard Library — Tensor implementation (see tensor.h). Internal
-// 'static' helpers (allocation, autograd-graph plumbing, every
+// 'static' helpers (allocation, Autograd::get-graph plumbing, every
 // __X_backward function) are defined in tensor.h itself, not here -- see
 // that header's own comment for why. This file only implements the
 // public API declared there, and #includes only headers (never another
@@ -26,7 +26,7 @@ static ?&TensorArena g_tensor_arena = null;
 static thread_local ?&TensorArena g_tensor_arena = null;
 #endif
 
-struct TensorArena tensor_arena_new(unsigned long chunkBytes) {
+struct TensorArena TensorArena::new(unsigned long chunkBytes) {
     struct TensorArena a;
     a.first = 0UL;
     a.current = 0UL;
@@ -179,23 +179,23 @@ inline void Tensor::free() {
 
 // ══ Allocation & lifecycle ═══════════════════════════════════════════════════
 
-&Tensor tensor_new_1d(unsigned long n, int requiresGrad) {
+&Tensor Tensor::new_1d(unsigned long n, int requiresGrad) {
     unsigned long shape[1];
     unsafe { shape[0] = n; }
     &Tensor t = __tensor_alloc(shape, 1UL, requiresGrad);
-    tensor_fill(t, (float)0.0);
+    t.fill((float)0.0);
     return t;
 }
 
-&Tensor tensor_new_2d(unsigned long rows, unsigned long cols, int requiresGrad) {
+&Tensor Tensor::new_2d(unsigned long rows, unsigned long cols, int requiresGrad) {
     unsigned long shape[2];
     unsafe { shape[0] = rows; shape[1] = cols; }
     &Tensor t = __tensor_alloc(shape, 2UL, requiresGrad);
-    tensor_fill(t, (float)0.0);
+    t.fill((float)0.0);
     return t;
 }
 
-&Tensor tensor_from_1d(const &float values, unsigned long n, int requiresGrad) {
+&Tensor Tensor::from_1d(const &float values, unsigned long n, int requiresGrad) {
     unsigned long shape[1];
     unsafe { shape[0] = n; }
     &Tensor t = __tensor_alloc(shape, 1UL, requiresGrad);
@@ -203,7 +203,7 @@ inline void Tensor::free() {
     return t;
 }
 
-&Tensor tensor_from_2d(const &float values, unsigned long rows, unsigned long cols, int requiresGrad) {
+&Tensor Tensor::from_2d(const &float values, unsigned long rows, unsigned long cols, int requiresGrad) {
     unsigned long shape[2];
     unsafe { shape[0] = rows; shape[1] = cols; }
     &Tensor t = __tensor_alloc(shape, 2UL, requiresGrad);
@@ -211,16 +211,15 @@ inline void Tensor::free() {
     return t;
 }
 
-&Tensor tensor_zeros_like(const &Tensor t) {
+&Tensor Tensor::zeros_like() const {
     &Tensor out;
-    unsafe { out = __tensor_alloc((const unsigned long*)t->shape, t->ndim, 0); }
-    tensor_fill(out, (float)0.0);
+    unsafe { out = __tensor_alloc((const unsigned long*)self->shape, self->ndim, 0); }
+    out.fill((float)0.0);
     return out;
 }
 
-&Tensor tensor_fill(&Tensor t, float v) {
-    unsafe { __tensor_ew(EW_FILL, (const float*)0, (const float*)0, v, (float*)t->data, t->size); }
-    return t;
+void Tensor::fill(float v) {
+    unsafe { __tensor_ew(EW_FILL, (const float*)0, (const float*)0, v, (float*)self->data, self->size); }
 }
 
 // ══ Elementwise & reduction ops ══════════════════════════════════════════════
@@ -259,32 +258,32 @@ inline void Tensor::free() {
 }
 
 // ── Scale (multiply by a scalar constant) ─────────────────────────────────────
-&Tensor tensor_scale(const &Tensor a, float k) {
-    &Tensor out = __tensor_alloc_uninit_like(a);
+&Tensor Tensor::scale(float k) const {
+    &Tensor out = __tensor_alloc_uninit_like(self);
     unsafe {
-        __tensor_ew(EW_SCALE, (const float*)a->data, (const float*)0, k, (float*)out->data, out->size);
+        __tensor_ew(EW_SCALE, (const float*)self->data, (const float*)0, k, (float*)out->data, out->size);
     }
     unsafe { out->extraScalar = k; }
-    __tensor_link1(out, a, (void*)__scale_backward);
+    __tensor_link1(out, self, (void*)__scale_backward);
     return out;
 }
 
-// tensor_relu/__relu_backward moved to tensor_nn.h/.sc (see those files) --
+// Tensor::relu/__relu_backward moved to tensor_nn.h/.sc (see those files) --
 // it's a neural-net activation function, not core tensor arithmetic, and
 // tensor_nn.sc is where every other activation (sigmoid, tanh, elu, gelu,
 // silu, glu, swiglu) already lives. Include tensor_nn.h wherever relu is
 // needed (and link tensor_nn.sc at build time).
 
 // ── Sum (full reduction to a 1-element tensor) ────────────────────────────────
-&Tensor tensor_sum(const &Tensor a) {
+&Tensor Tensor::sum() const {
     unsigned long one[1];
     unsafe { one[0] = 1UL; }
     &Tensor out = __tensor_alloc(one, 1UL, 0);
     unsafe {
         // Eight running sums (one f32x8), so the loop runs at vector width
         // and loses less precision than one long serial sum.
-        const float* p = (const float*)a->data;
-        unsigned long n = a->size;
+        const float* p = (const float*)self->data;
+        unsigned long n = self->size;
         f32x8 acc8;
         unsigned long i = 0UL;
         while (i + 8UL <= n) { acc8 = acc8 + *(const f32x8*)&p[i]; i = i + 8UL; }
@@ -292,7 +291,7 @@ inline void Tensor::free() {
         while (i < n) { acc = acc + p[i]; i = i + 1UL; }
         out->data[0] = acc;
     }
-    __tensor_link1(out, a, (void*)__sum_backward);
+    __tensor_link1(out, self, (void*)__sum_backward);
     return out;
 }
 
@@ -372,13 +371,13 @@ void Tensor::zero_grad() {
 
 // ── Gradient mode (no_grad) ──────────────────────────────────────────────────
 // Backing storage stays a private 'static' in this one TU -- every other
-// file only ever reaches it through autograd(), so there's exactly one copy
+// file only ever reaches it through Autograd::get(), so there's exactly one copy
 // of the flag no matter how many files get linked together (see tensor.h's
 // comment on why that matters here, unlike the header's own per-TU-private
 // static helpers).
 static struct Autograd g_autograd = { 1 };
 
-&Autograd autograd() { unsafe { return (&Autograd)&g_autograd; } }
+&Autograd Autograd::get() { unsafe { return (&Autograd)&g_autograd; } }
 
 int Autograd::enabled() const { return self.gradEnabled; }
 
@@ -391,6 +390,6 @@ struct GradGuard Autograd::no_grad() {
     return g;
 }
 
-void GradGuard::restore() { autograd().set_enabled(self.was); }
+void GradGuard::restore() { Autograd::get().set_enabled(self.was); }
 
 } // namespace std

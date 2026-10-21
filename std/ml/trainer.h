@@ -12,9 +12,9 @@
 //   static &Tensor clf_loss(&Mlp m, const &Tensor x, const &Tensor y) {
 //       return tensor_cross_entropy_loss(m.forward(x), y);
 //   }
-//   struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.01);
+//   struct Optimizer opt = Optimizer::new(OPT_ADAM, (float)0.01);
 //   model_add_params(&net, &opt);   // module.h
-//   struct TrainConfig cfg = train_config_default();
+//   struct TrainConfig cfg = TrainConfig::default();
 //   struct TrainReport rep = trainer_fit(&net, clf_loss, &opt, &train, &cfg);
 //
 // The model, the forward pass and the loss are all resolved at compile
@@ -38,6 +38,9 @@ struct TrainConfig {
     int   shuffle;
     float clipNorm;          // > 0: clip the global gradient norm to this
     float lrDecay;           // lr *= lrDecay after every epoch (1 = constant)
+
+    // epochs 10, batch 32, seed 1, shuffled, no clipping, constant lr.
+    static struct TrainConfig default();
 };
 
 struct TrainReport {
@@ -47,9 +50,6 @@ struct TrainReport {
     unsigned long steps;
     unsigned long epochs;
 };
-
-// epochs 10, batch 32, seed 1, shuffled, no clipping, constant lr.
-struct TrainConfig train_config_default();
 
 // One epoch's result, as a Trainable's fit_epoch reports it (train_traits.h).
 struct EpochLoss {
@@ -65,9 +65,10 @@ struct EpochLoss {
 struct TrainerOptions {
     unsigned long maxBatch;
     int precision;
+
+    // maxBatch 256, fp32.
+    static struct TrainerOptions default();
 };
-// maxBatch 256, fp32.
-struct TrainerOptions trainer_options_default();
 
 // Internal: one optimizer step from a loss tensor.
 float trainer_step_(&Optimizer opt, &Tensor loss, float clipNorm);
@@ -101,8 +102,8 @@ generic<T>
 struct TrainReport trainer_fit(&T model, fn &Tensor(&T, const &Tensor, const &Tensor) lossFn,
                                &Optimizer opt, const &Dataset data, const &TrainConfig cfg) {
     struct TrainReport rep = train_report_new_();
-    struct DataLoader dl = dataloader_new(data, cfg.batchSize, cfg.shuffle, cfg.seed);
-    struct TensorArena stepArena = tensor_arena_new(0UL);
+    struct DataLoader dl = DataLoader::new(data, cfg.batchSize, cfg.shuffle, cfg.seed);
+    struct TensorArena stepArena = TensorArena::new(0UL);
     unsigned long e = 0UL;
     while (e < cfg.epochs) {
         unsigned long batches = 0UL;
@@ -120,9 +121,9 @@ struct TrainReport trainer_fit(&T model, fn &Tensor(&T, const &Tensor, const &Te
 generic<T>
 float trainer_evaluate(&T model, fn &Tensor(&T, const &Tensor, const &Tensor) lossFn,
                        const &Dataset data, unsigned long batchSize) {
-    struct DataLoader dl = dataloader_new(data, batchSize, 0, 0UL);
-    struct TensorArena stepArena = tensor_arena_new(0UL);
-    struct GradGuard noGrad = autograd().no_grad();
+    struct DataLoader dl = DataLoader::new(data, batchSize, 0, 0UL);
+    struct TensorArena stepArena = TensorArena::new(0UL);
+    struct GradGuard noGrad = Autograd::get().no_grad();
     struct Batch b;
     double sum = 0.0;
     unsigned long rows = 0UL;
@@ -145,9 +146,9 @@ float trainer_evaluate(&T model, fn &Tensor(&T, const &Tensor, const &Tensor) lo
 generic<T>
 float trainer_accuracy(&T model, fn &Tensor(&T, const &Tensor) logitsFn,
                        const &Dataset data, unsigned long batchSize) {
-    struct DataLoader dl = dataloader_new(data, batchSize, 0, 0UL);
-    struct TensorArena stepArena = tensor_arena_new(0UL);
-    struct GradGuard noGrad = autograd().no_grad();
+    struct DataLoader dl = DataLoader::new(data, batchSize, 0, 0UL);
+    struct TensorArena stepArena = TensorArena::new(0UL);
+    struct GradGuard noGrad = Autograd::get().no_grad();
     struct Batch b;
     double hits = 0.0;
     unsigned long rows = 0UL;

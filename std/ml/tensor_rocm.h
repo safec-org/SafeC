@@ -18,9 +18,9 @@ namespace std {
 &Tensor tensor_add_rocm(const &Tensor a, const &Tensor b);
 &Tensor tensor_sub_rocm(const &Tensor a, const &Tensor b);
 &Tensor tensor_mul_rocm(const &Tensor a, const &Tensor b);
-&Tensor tensor_scale_rocm(const &Tensor a, float k);
-&Tensor tensor_relu_rocm(const &Tensor a);
-&Tensor tensor_sum_rocm(const &Tensor a);
+&Tensor Tensor::scale_rocm(float k) const;
+&Tensor Tensor::relu_rocm() const;
+&Tensor Tensor::sum_rocm() const;
 &Tensor tensor_matmul_rocm(const &Tensor a, const &Tensor b);
 
 // tensor_matmul_rocm uses this library's own tiled HIP kernel;

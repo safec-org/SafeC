@@ -40,9 +40,9 @@ struct CudaConv2D {
     // y = relu(conv(x) + bias), fused.
     int forward_relu(struct CudaBuf x, struct CudaBuf y, unsigned long batch, unsigned long height,
                      unsigned long width) const;
-};
 
-struct CudaConv2D cuda_conv2d_upload(const &Conv2D layer);
+    static struct CudaConv2D upload(const &Conv2D layer);
+};
 
 // Output side length of a convolution or pooling window: (dim + 2*padding - kernel)/stride + 1.
 unsigned long cuda_conv_out_dim(unsigned long dim, unsigned long kernel,
@@ -52,8 +52,8 @@ unsigned long cuda_conv_out_dim(unsigned long dim, unsigned long kernel,
 // x: [batch, inChannels, height, width]; y: [batch, outChannels, outH, outW]
 // with outH/outW from cuda_conv_out_dim. Same arithmetic as Conv2D::forward.
 
-// kernel x kernel window, given stride, no padding (maxpool2d_forward /
-// avgpool2d_forward). x: [batch, channels, height, width].
+// kernel x kernel window, given stride, no padding (FeatureMap::maxpool2d /
+// FeatureMap::avgpool2d). x: [batch, channels, height, width].
 int cuda_maxpool2d(struct CudaBuf x, struct CudaBuf y, unsigned long batch, unsigned long channels,
                    unsigned long height, unsigned long width, unsigned long kernel, unsigned long stride);
 int cuda_avgpool2d(struct CudaBuf x, struct CudaBuf y, unsigned long batch, unsigned long channels,
@@ -80,8 +80,9 @@ struct CudaHalfConv2D {
                 unsigned long width) const;
     int forward_relu(struct CudaHalfBuf x, struct CudaHalfBuf y, unsigned long batch, unsigned long height,
                      unsigned long width) const;
+
+    static struct CudaHalfConv2D upload(const &Conv2D layer, int dtype);   // CUDA_FP16 / CUDA_BF16
 };
-struct CudaHalfConv2D cuda_half_conv2d_upload(const &Conv2D layer, int dtype);   // CUDA_FP16 / CUDA_BF16
 // 16-bit pooling is gpu_cuda.h's cuda_half_maxpool2d / cuda_half_avgpool2d
 // (a CUDA kernel, the same as on ROCm).
 
@@ -116,10 +117,10 @@ struct CudaUNet {
     // y: [batch, outChannels, height, width]. Queued, like the ops above.
     int forward(struct CudaBuf x, struct CudaBuf y) const;
     void free();
-};
 
-// height and width must each be divisible by 4.
-struct CudaUNet cuda_unet_new(const &UNet net, unsigned long batch, unsigned long height, unsigned long width);
+    // height and width must each be divisible by 4.
+    static struct CudaUNet new(const &UNet net, unsigned long batch, unsigned long height, unsigned long width);
+};
 
 // ── Host convenience (upload → compute → read back) ──────────────────────────
 // Same signatures and results as the CPU functions; each falls back to the

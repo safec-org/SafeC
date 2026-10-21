@@ -24,8 +24,8 @@
 // function forwarding to the backend's, and the generic loops
 // (train_fit, train_gan) are monomorphized for the chosen type.
 //
-//   struct Optimizer adam = optimizer_new(OPT_ADAM, (float)0.01);    // kind + hyperparameters
-//   struct TrainerOptions to = trainer_options_default();
+//   struct Optimizer adam = Optimizer::new(OPT_ADAM, (float)0.01);    // kind + hyperparameters
+//   struct TrainerOptions to = TrainerOptions::default();
 //   MlpTrainer t = mlp_trainer_new(net, TRAIN_LOSS_CE, &adam, &to);
 //   struct TrainReport rep = train_fit(&t, &data, &cfg);
 //   float acc = trainer_accuracy(&t.host, logits_fn, &test, 64UL);   // the trained Mlp
@@ -35,8 +35,8 @@
 // The names: MlpTrainer, ConvNetTrainer, VaeTrainer, ConvVaeTrainer and
 // ConvAeTrainer (Trainable), GanTrainer and DcganTrainer (GanTrainable),
 // DqnLearner (ValueAgent), PgLearner (PolicyLearner). On the CPU any other
-// Module trains the same way with cpu_module_trainer_new, and any LossModel
-// with cpu_model_trainer_new. ML_TRAIN_BACKEND is
+// Module trains the same way with CpuTrainer::new, and any LossModel
+// with CpuModelTrainer::new. ML_TRAIN_BACKEND is
 // the backend's name as a string.
 #include <std/ml/train_traits.h>
 
@@ -80,9 +80,9 @@ static ConvAeTrainer conv_ae_trainer_new(struct ConvAutoencoder ae, const &Optim
 }
 static GanTrainer gan_trainer_new(struct Gan g, const &TrainerOptions o) { return rocm_gan_trainer_new(g, o); }
 static DcganTrainer dcgan_trainer_new(struct Dcgan g, const &TrainerOptions o) { return rocm_dcgan_trainer_new(g, o); }
-static DqnLearner dqn_learner_new(struct Dqn d) { return rocm_dqn_agent_new(d); }
+static DqnLearner dqn_learner_new(struct Dqn d) { return RocmDqnAgent::new(d); }
 // o.maxBatch: the longest rollout PolicyAgent::update will see.
-static PgLearner pg_learner_new(struct PolicyAgent a, const &TrainerOptions o) { return rocm_pg_agent_new(a, o); }
+static PgLearner pg_learner_new(struct PolicyAgent a, const &TrainerOptions o) { return RocmPgAgent::new(a, o); }
 
 #else
 
@@ -98,25 +98,25 @@ typedef struct CpuDqnAgent DqnLearner;
 typedef struct CpuPgAgent PgLearner;
 
 static MlpTrainer mlp_trainer_new(struct Mlp m, int loss, const &Optimizer opt, const &TrainerOptions o) {
-    return cpu_module_trainer_new(m, loss, opt);
+    return CpuTrainer::new(m, loss, opt);
 }
 static ConvNetTrainer convnet_trainer_new(struct ConvNet n, int loss, const &Optimizer opt, const &TrainerOptions o) {
-    return cpu_module_trainer_new(n, loss, opt);
+    return CpuTrainer::new(n, loss, opt);
 }
 static VaeTrainer vae_trainer_new(struct Vae v, const &Optimizer opt, const &TrainerOptions o) {
-    return cpu_model_trainer_new(v, opt);
+    return CpuModelTrainer::new(v, opt);
 }
 static ConvVaeTrainer conv_vae_trainer_new(struct ConvVae v, const &Optimizer opt, const &TrainerOptions o) {
-    return cpu_model_trainer_new(v, opt);
+    return CpuModelTrainer::new(v, opt);
 }
 static ConvAeTrainer conv_ae_trainer_new(struct ConvAutoencoder ae, const &Optimizer opt, const &TrainerOptions o) {
-    return cpu_model_trainer_new(ae, opt);
+    return CpuModelTrainer::new(ae, opt);
 }
-static GanTrainer gan_trainer_new(struct Gan g, const &TrainerOptions o) { return cpu_gan_trainer_new(g); }
-static DcganTrainer dcgan_trainer_new(struct Dcgan g, const &TrainerOptions o) { return cpu_gan_trainer_new(g); }
-static DqnLearner dqn_learner_new(struct Dqn d) { return cpu_dqn_agent_new(d); }
+static GanTrainer gan_trainer_new(struct Gan g, const &TrainerOptions o) { return CpuGanTrainer::new(g); }
+static DcganTrainer dcgan_trainer_new(struct Dcgan g, const &TrainerOptions o) { return CpuGanTrainer::new(g); }
+static DqnLearner dqn_learner_new(struct Dqn d) { return CpuDqnAgent::new(d); }
 // o.maxBatch: the longest rollout PolicyAgent::update will see (a device's limit).
-static PgLearner pg_learner_new(struct PolicyAgent a, const &TrainerOptions o) { return cpu_pg_agent_new(a); }
+static PgLearner pg_learner_new(struct PolicyAgent a, const &TrainerOptions o) { return CpuPgAgent::new(a); }
 
 #endif
 

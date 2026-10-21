@@ -7,7 +7,7 @@
 namespace std {
 
 &Tensor recurrent_row_(const &Tensor xs, unsigned long t) {
-    &Tensor idx = tensor_new_1d(1UL, 0);
+    &Tensor idx = Tensor::new_1d(1UL, 0);
     unsafe { idx->data[0] = (float)t; }
     return tensor_gather_rows(xs, idx);
 }

@@ -17,26 +17,26 @@ namespace std {
 // ── ReLU ─────────────────────────────────────────────────────────────────────
 // Moved here from tensor.sc -- it's a neural-net activation function like
 // every other one in this section, not core tensor arithmetic.
-&Tensor tensor_relu(const &Tensor a) {
-    &Tensor out = __tensor_alloc_uninit_like(a);
-    unsafe { __tensor_ew(EW_RELU, (const float*)a->data, (const float*)0, (float)0.0, (float*)out->data, out->size); }
-    __tensor_link1(out, a, (void*)__relu_backward);
+&Tensor Tensor::relu() const {
+    &Tensor out = __tensor_alloc_uninit_like(self);
+    unsafe { __tensor_ew(EW_RELU, (const float*)self->data, (const float*)0, (float)0.0, (float*)out->data, out->size); }
+    __tensor_link1(out, self, (void*)__relu_backward);
     return out;
 }
 
 // ── Sigmoid ──────────────────────────────────────────────────────────────────
-&Tensor tensor_sigmoid(const &Tensor a) {
-    &Tensor out = __tensor_alloc_uninit_like(a);
-    unsafe { vm_sigmoid_f32((const float*)a->data, (float*)out->data, out->size); }
-    __tensor_link1(out, a, (void*)__sigmoid_backward);
+&Tensor Tensor::sigmoid() const {
+    &Tensor out = __tensor_alloc_uninit_like(self);
+    unsafe { vm_sigmoid_f32((const float*)self->data, (float*)out->data, out->size); }
+    __tensor_link1(out, self, (void*)__sigmoid_backward);
     return out;
 }
 
 // ── Tanh ─────────────────────────────────────────────────────────────────────
-&Tensor tensor_tanh_t(const &Tensor a) {
-    &Tensor out = __tensor_alloc_uninit_like(a);
-    unsafe { vm_tanh_f32((const float*)a->data, (float*)out->data, out->size); }
-    __tensor_link1(out, a, (void*)__tanh_t_backward);
+&Tensor Tensor::tanh() const {
+    &Tensor out = __tensor_alloc_uninit_like(self);
+    unsafe { vm_tanh_f32((const float*)self->data, (float*)out->data, out->size); }
+    __tensor_link1(out, self, (void*)__tanh_t_backward);
     return out;
 }
 
@@ -79,82 +79,82 @@ static void softmax_rows_(&SoftmaxJob j, unsigned long lo, unsigned long hi) {
     }
 }
 
-&Tensor tensor_softmax(const &Tensor a) {
-    &Tensor out = __tensor_alloc_uninit_like(a);
+&Tensor Tensor::softmax() const {
+    &Tensor out = __tensor_alloc_uninit_like(self);
     unsafe {
         struct SoftmaxJob j;
-        j.in = (const float*)a->data;
+        j.in = (const float*)self->data;
         j.out = (float*)out->data;
-        j.cols = a->shape[a->ndim - 1UL];
-        unsigned long rows = a->size / j.cols;
-        if (a->size >= TENSOR_EW_PAR && rows > 1UL) parallel_for(rows, 16384UL / j.cols + 1UL, softmax_rows_, &j);
+        j.cols = self->shape[self->ndim - 1UL];
+        unsigned long rows = self->size / j.cols;
+        if (self->size >= TENSOR_EW_PAR && rows > 1UL) parallel_for(rows, 16384UL / j.cols + 1UL, softmax_rows_, &j);
         else softmax_rows_(&j, 0UL, rows);
     }
-    __tensor_link1(out, a, (void*)__softmax_backward);
+    __tensor_link1(out, self, (void*)__softmax_backward);
     return out;
 }
 
 // ── ELU ──────────────────────────────────────────────────────────────────────
-&Tensor tensor_elu(const &Tensor a, float alpha) {
-    &Tensor out = __tensor_alloc_uninit_like(a);
+&Tensor Tensor::elu(float alpha) const {
+    &Tensor out = __tensor_alloc_uninit_like(self);
     unsafe {
         unsigned long n = out->size;
         float* y = (float*)out->data;
         unsigned long i = 0UL;
-        while (i < n) { float x = a->data[i]; y[i] = x < (float)0.0 ? x : (float)0.0; i = i + 1UL; }
+        while (i < n) { float x = self->data[i]; y[i] = x < (float)0.0 ? x : (float)0.0; i = i + 1UL; }
         vm_exp_f32((const float*)y, y, n);
         i = 0UL;
         while (i < n) {
-            float x = a->data[i];
+            float x = self->data[i];
             y[i] = (x > (float)0.0) ? x : (alpha * (y[i] - (float)1.0));
             i = i + 1UL;
         }
     }
     unsafe { out->extraScalar = alpha; }
-    __tensor_link1(out, a, (void*)__elu_backward);
+    __tensor_link1(out, self, (void*)__elu_backward);
     return out;
 }
 
 // ── GELU (tanh approximation) ─────────────────────────────────────────────────
-&Tensor tensor_gelu(const &Tensor a) {
-    &Tensor out = __tensor_alloc_uninit_like(a);
+&Tensor Tensor::gelu() const {
+    &Tensor out = __tensor_alloc_uninit_like(self);
     unsafe {
         float c = (float)0.7978845608028654;
         unsigned long n = out->size;
         float* y = (float*)out->data;
         unsigned long i = 0UL;
-        while (i < n) { float x = a->data[i]; y[i] = c * (x + (float)0.044715 * x * x * x); i = i + 1UL; }
+        while (i < n) { float x = self->data[i]; y[i] = c * (x + (float)0.044715 * x * x * x); i = i + 1UL; }
         vm_tanh_f32((const float*)y, y, n);
         i = 0UL;
-        while (i < n) { float x = a->data[i]; y[i] = (float)0.5 * x * ((float)1.0 + y[i]); i = i + 1UL; }
+        while (i < n) { float x = self->data[i]; y[i] = (float)0.5 * x * ((float)1.0 + y[i]); i = i + 1UL; }
     }
-    __tensor_link1(out, a, (void*)__gelu_backward);
+    __tensor_link1(out, self, (void*)__gelu_backward);
     return out;
 }
 
 // ── SiLU / Swish ───────────────────────────────────────────────────────────────
-&Tensor tensor_silu(const &Tensor a) {
-    &Tensor out = __tensor_alloc_uninit_like(a);
+&Tensor Tensor::silu() const {
+    &Tensor out = __tensor_alloc_uninit_like(self);
     unsafe {
         unsigned long n = out->size;
         float* y = (float*)out->data;
-        vm_sigmoid_f32((const float*)a->data, y, n);
+        vm_sigmoid_f32((const float*)self->data, y, n);
         unsigned long i = 0UL;
-        while (i < n) { y[i] = a->data[i] * y[i]; i = i + 1UL; }
+        while (i < n) { y[i] = self->data[i] * y[i]; i = i + 1UL; }
     }
-    __tensor_link1(out, a, (void*)__silu_backward);
+    __tensor_link1(out, self, (void*)__silu_backward);
     return out;
 }
 
 // ── GLU: split last axis in half, out = a1 * sigmoid(a2) ─────────────────────
-&Tensor tensor_glu(const &Tensor a) {
+&Tensor Tensor::glu() const {
     unsigned long ndim;
-    unsafe { ndim = a->ndim; }
+    unsafe { ndim = self->ndim; }
     unsigned long* outShape;
     unsafe { outShape = (unsigned long*)alloc_raw_(checked_mul_size(sizeof(unsigned long), ndim)); }
     unsafe {
         unsigned long i = 0UL;
-        while (i < ndim) { outShape[i] = a->shape[i]; i = i + 1UL; }
+        while (i < ndim) { outShape[i] = self->shape[i]; i = i + 1UL; }
         outShape[ndim - 1UL] = outShape[ndim - 1UL] / 2UL;
     }
     &Tensor out = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
@@ -168,25 +168,25 @@ static void softmax_rows_(&SoftmaxJob j, unsigned long lo, unsigned long hi) {
             unsigned long outBase = r * outLast;
             unsigned long inBase = r * inLast;
             float* y = &out->data[outBase];
-            vm_sigmoid_f32((const float*)&a->data[inBase + outLast], y, outLast);
+            vm_sigmoid_f32((const float*)&self->data[inBase + outLast], y, outLast);
             unsigned long j = 0UL;
-            while (j < outLast) { y[j] = a->data[inBase + j] * y[j]; j = j + 1UL; }
+            while (j < outLast) { y[j] = self->data[inBase + j] * y[j]; j = j + 1UL; }
             r = r + 1UL;
         }
     }
-    __tensor_link1(out, a, (void*)__glu_backward);
+    __tensor_link1(out, self, (void*)__glu_backward);
     return out;
 }
 
 // ── SwiGLU: split last axis in half, out = silu(a1) * a2 ──────────────────────
-&Tensor tensor_swiglu(const &Tensor a) {
+&Tensor Tensor::swiglu() const {
     unsigned long ndim;
-    unsafe { ndim = a->ndim; }
+    unsafe { ndim = self->ndim; }
     unsigned long* outShape;
     unsafe { outShape = (unsigned long*)alloc_raw_(checked_mul_size(sizeof(unsigned long), ndim)); }
     unsafe {
         unsigned long i = 0UL;
-        while (i < ndim) { outShape[i] = a->shape[i]; i = i + 1UL; }
+        while (i < ndim) { outShape[i] = self->shape[i]; i = i + 1UL; }
         outShape[ndim - 1UL] = outShape[ndim - 1UL] / 2UL;
     }
     &Tensor out = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
@@ -200,24 +200,24 @@ static void softmax_rows_(&SoftmaxJob j, unsigned long lo, unsigned long hi) {
             unsigned long outBase = r * outLast;
             unsigned long inBase = r * inLast;
             float* y = &out->data[outBase];
-            vm_sigmoid_f32((const float*)&a->data[inBase], y, outLast);
+            vm_sigmoid_f32((const float*)&self->data[inBase], y, outLast);
             unsigned long j = 0UL;
             while (j < outLast) {
-                float a1 = a->data[inBase + j];
-                y[j] = (a1 * y[j]) * a->data[inBase + outLast + j];
+                float a1 = self->data[inBase + j];
+                y[j] = (a1 * y[j]) * self->data[inBase + outLast + j];
                 j = j + 1UL;
             }
             r = r + 1UL;
         }
     }
-    __tensor_link1(out, a, (void*)__swiglu_backward);
+    __tensor_link1(out, self, (void*)__swiglu_backward);
     return out;
 }
 
 // ══ Optimizers ════════════════════════════════════════════════════════════════
 
 // ── Adam ─────────────────────────────────────────────────────────────────────
-struct AdamState adam_new(unsigned long size, float lr, float beta1, float beta2, float eps) {
+struct AdamState AdamState::new(unsigned long size, float lr, float beta1, float beta2, float eps) {
     struct AdamState s;
     unsafe {
         float* mBuf = (float*)malloc(sizeof(float) * size);
@@ -233,8 +233,8 @@ struct AdamState adam_new(unsigned long size, float lr, float beta1, float beta2
     return s;
 }
 
-struct AdamState adam_new_default(unsigned long size, float lr) {
-    return adam_new(size, lr, (float)0.9, (float)0.999, (float)0.00000001);
+struct AdamState AdamState::new_default(unsigned long size, float lr) {
+    return AdamState::new(size, lr, (float)0.9, (float)0.999, (float)0.00000001);
 }
 
 void AdamState::step(&Tensor param) {
@@ -269,15 +269,15 @@ void AdamState::free() {
 // ══ Pooling ═══════════════════════════════════════════════════════════════════
 
 // ── 1D max pooling ───────────────────────────────────────────────────────────
-&Tensor tensor_maxpool1d(const &Tensor a, unsigned long kernel, unsigned long stride) {
+&Tensor Tensor::maxpool1d(unsigned long kernel, unsigned long stride) const {
     unsigned long ndim; unsigned long lastDim;
-    unsafe { ndim = a->ndim; lastDim = a->shape[ndim - 1UL]; }
+    unsafe { ndim = self->ndim; lastDim = self->shape[ndim - 1UL]; }
     unsigned long outLen = (lastDim - kernel) / stride + 1UL;
     unsigned long* outShape;
     unsafe { outShape = (unsigned long*)alloc_raw_(checked_mul_size(sizeof(unsigned long), ndim)); }
     unsafe {
         unsigned long i = 0UL;
-        while (i < ndim) { outShape[i] = a->shape[i]; i = i + 1UL; }
+        while (i < ndim) { outShape[i] = self->shape[i]; i = i + 1UL; }
         outShape[ndim - 1UL] = outLen;
     }
     &Tensor out = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
@@ -292,11 +292,11 @@ void AdamState::free() {
             unsigned long o = 0UL;
             while (o < outLen) {
                 unsigned long winStart = o * stride;
-                float best = a->data[inBase + winStart];
+                float best = self->data[inBase + winStart];
                 unsigned long bestIdx = inBase + winStart;
                 unsigned long k = 1UL;
                 while (k < kernel) {
-                    float v = a->data[inBase + winStart + k];
+                    float v = self->data[inBase + winStart + k];
                     if (v > best) { best = v; bestIdx = inBase + winStart + k; }
                     k = k + 1UL;
                 }
@@ -306,9 +306,9 @@ void AdamState::free() {
             }
             r = r + 1UL;
         }
-        out->requiresGrad = a->requiresGrad;
+        out->requiresGrad = self->requiresGrad;
         if (out->requiresGrad) {
-            out->parents.push(a);
+            out->parents.push(self);
             out->parents.push(idxCache);
             out->gradFn = (void*)__maxpool1d_backward;
         }
@@ -317,15 +317,15 @@ void AdamState::free() {
 }
 
 // ── 1D average pooling ───────────────────────────────────────────────────────
-&Tensor tensor_avgpool1d(const &Tensor a, unsigned long kernel, unsigned long stride) {
+&Tensor Tensor::avgpool1d(unsigned long kernel, unsigned long stride) const {
     unsigned long ndim; unsigned long lastDim;
-    unsafe { ndim = a->ndim; lastDim = a->shape[ndim - 1UL]; }
+    unsafe { ndim = self->ndim; lastDim = self->shape[ndim - 1UL]; }
     unsigned long outLen = (lastDim - kernel) / stride + 1UL;
     unsigned long* outShape;
     unsafe { outShape = (unsigned long*)alloc_raw_(checked_mul_size(sizeof(unsigned long), ndim)); }
     unsafe {
         unsigned long i = 0UL;
-        while (i < ndim) { outShape[i] = a->shape[i]; i = i + 1UL; }
+        while (i < ndim) { outShape[i] = self->shape[i]; i = i + 1UL; }
         outShape[ndim - 1UL] = outLen;
     }
     &Tensor out = __tensor_alloc((const unsigned long*)outShape, ndim, 0);
@@ -342,7 +342,7 @@ void AdamState::free() {
                 unsigned long winStart = o * stride;
                 float sum = (float)0.0;
                 unsigned long k = 0UL;
-                while (k < kernel) { sum = sum + a->data[inBase + winStart + k]; k = k + 1UL; }
+                while (k < kernel) { sum = sum + self->data[inBase + winStart + k]; k = k + 1UL; }
                 out->data[outBase + o] = sum * invK;
                 o = o + 1UL;
             }
@@ -351,7 +351,7 @@ void AdamState::free() {
         // See tensor_nn.h's __avgpool1d_backward comment for the base-10000 choice.
         out->extraScalar = (float)(kernel * 10000UL + stride);
     }
-    __tensor_link1(out, a, (void*)__avgpool1d_backward);
+    __tensor_link1(out, self, (void*)__avgpool1d_backward);
     return out;
 }
 

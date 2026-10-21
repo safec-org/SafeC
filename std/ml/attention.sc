@@ -12,24 +12,24 @@ namespace std {
 extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
-&Tensor softmax_rows(const &Tensor x) {
+&Tensor Tensor::softmax_rows() const {
     unsigned long rows; unsigned long cols;
-    unsafe { rows = x->shape[0]; cols = x->shape[1]; }
-    &Tensor out = tensor_new_2d(rows, cols, 0);
+    unsafe { rows = self->shape[0]; cols = self->shape[1]; }
+    &Tensor out = Tensor::new_2d(rows, cols, 0);
     unsigned long r = 0UL;
     while (r < rows) {
         float rowMax;
-        unsafe { rowMax = x->data[r * cols]; }
+        unsafe { rowMax = self->data[r * cols]; }
         unsigned long c = 1UL;
         while (c < cols) {
             float v;
-            unsafe { v = x->data[r * cols + c]; }
+            unsafe { v = self->data[r * cols + c]; }
             if (v > rowMax) rowMax = v;
             c = c + 1UL;
         }
         unsafe {
             float* y = &out->data[r * cols];
-            const float* xr = &x->data[r * cols];
+            const float* xr = &self->data[r * cols];
             c = 0UL;
             while (c < cols) { y[c] = xr[c] - rowMax; c = c + 1UL; }
             vm_exp_f32((const float*)y, y, cols);
@@ -45,15 +45,15 @@ extern void  free(void* ptr);
     return out;
 }
 
-&Tensor tensor_transpose(const &Tensor in) {
+&Tensor Tensor::transpose() const {
     unsigned long rows; unsigned long cols;
-    unsafe { rows = in->shape[0]; cols = in->shape[1]; }
-    &Tensor out = tensor_new_2d(cols, rows, 0);
+    unsafe { rows = self->shape[0]; cols = self->shape[1]; }
+    &Tensor out = Tensor::new_2d(cols, rows, 0);
     unsigned long r = 0UL;
     while (r < rows) {
         unsigned long c = 0UL;
         while (c < cols) {
-            unsafe { out->data[c * rows + r] = in->data[r * cols + c]; }
+            unsafe { out->data[c * rows + r] = self->data[r * cols + c]; }
             c = c + 1UL;
         }
         r = r + 1UL;
@@ -81,20 +81,20 @@ static void attn_slice_backward_(void* selfPtr) {
     }
 }
 
-&Tensor tensor_slice_cols(const &Tensor a, unsigned long start, unsigned long len) {
+&Tensor Tensor::slice_cols(unsigned long start, unsigned long len) const {
     unsigned long rows; unsigned long n;
-    unsafe { rows = a->shape[0]; n = a->shape[1]; }
-    &Tensor out = tensor_new_2d(rows, len, 0);
+    unsafe { rows = self->shape[0]; n = self->shape[1]; }
+    &Tensor out = Tensor::new_2d(rows, len, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
             unsigned long c = 0UL;
-            while (c < len) { out->data[r * len + c] = a->data[r * n + start + c]; c = c + 1UL; }
+            while (c < len) { out->data[r * len + c] = self->data[r * n + start + c]; c = c + 1UL; }
             r = r + 1UL;
         }
         out->extraScalar = (float)start;
     }
-    __tensor_link1(out, a, (void*)attn_slice_backward_);
+    __tensor_link1(out, self, (void*)attn_slice_backward_);
     return out;
 }
 
@@ -115,11 +115,11 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src) {
 &Tensor attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V) {
     unsigned long headDim;
     unsafe { headDim = Q->shape[1]; }
-    &Tensor Kt = tensor_transpose(K);
+    &Tensor Kt = K.transpose();
     &Tensor scores = tensor_matmul(Q, Kt);
     float scale = (float)1.0 / sqrt_f((float)headDim);
-    &Tensor scaled = tensor_scale(scores, scale);
-    &Tensor weights = softmax_rows(scaled);
+    &Tensor scaled = scores.scale(scale);
+    &Tensor weights = scaled.softmax_rows();
     &Tensor result = tensor_matmul(weights, V);
 
     Kt->free(); scores->free(); scaled->free(); weights->free();
@@ -132,13 +132,13 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src) {
     unsafe { seqLen = Q->shape[0]; dModel = Q->shape[1]; }
     unsigned long headDim = dModel / numHeads;
 
-    &Tensor out = tensor_new_2d(seqLen, dModel, 0);
+    &Tensor out = Tensor::new_2d(seqLen, dModel, 0);
     unsigned long h = 0UL;
     while (h < numHeads) {
         unsigned long startCol = h * headDim;
-        &Tensor Qh = tensor_slice_cols(Q, startCol, headDim);
-        &Tensor Kh = tensor_slice_cols(K, startCol, headDim);
-        &Tensor Vh = tensor_slice_cols(V, startCol, headDim);
+        &Tensor Qh = Q.slice_cols(startCol, headDim);
+        &Tensor Kh = K.slice_cols(startCol, headDim);
+        &Tensor Vh = V.slice_cols(startCol, headDim);
         &Tensor headOut = attention_forward(Qh, Kh, Vh);
         tensor_set_cols(out, startCol, headOut);
 
@@ -152,7 +152,7 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src) {
 &Tensor gated_attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
                                  const &Tensor gateLogits) {
     &Tensor raw = attention_forward(Q, K, V);
-    &Tensor gate = tensor_sigmoid_fwd(gateLogits);
+    &Tensor gate = gateLogits.sigmoid_fwd();
     &Tensor out = tensor_mul(raw, gate);
     raw->free(); gate->free();
     unsafe { free((void*)raw); free((void*)gate); }
@@ -162,7 +162,7 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src) {
 &Tensor gated_mha_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
                            unsigned long numHeads, const &Tensor gateLogits) {
     &Tensor raw = mha_forward(Q, K, V, numHeads);
-    &Tensor gate = tensor_sigmoid_fwd(gateLogits);
+    &Tensor gate = gateLogits.sigmoid_fwd();
     &Tensor out = tensor_mul(raw, gate);
     raw->free(); gate->free();
     unsafe { free((void*)raw); free((void*)gate); }
@@ -172,7 +172,7 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src) {
 // phi(x) = elu(x) + 1, elementwise (always > 0, used as linear
 // attention's kernel feature map).
 static &Tensor __phi_elu_p1(&Tensor x) {
-    &Tensor out = tensor_zeros_like(x);
+    &Tensor out = x.zeros_like();
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
@@ -190,7 +190,7 @@ static &Tensor __phi_elu_p1(&Tensor x) {
 
     &Tensor phiQ = __phi_elu_p1(Q);
     &Tensor phiK = __phi_elu_p1(K);
-    &Tensor out = tensor_new_2d(seqLen, headDim, 0);
+    &Tensor out = Tensor::new_2d(seqLen, headDim, 0);
 
     unsafe {
         // KV[d1][d2] = sum_j phiK[j][d1] * V[j][d2]   ([headDim, headDim])
@@ -249,7 +249,7 @@ static &Tensor __phi_elu_p1(&Tensor x) {
     unsafe { seqLen = Q->shape[0]; headDim = Q->shape[1]; kvLen = K->shape[0]; }
     float scale = (float)1.0 / sqrt_f((float)headDim);
 
-    &Tensor out = tensor_new_2d(seqLen, headDim, 0); // doubles as the running 'acc' buffer
+    &Tensor out = Tensor::new_2d(seqLen, headDim, 0); // doubles as the running 'acc' buffer
 
     unsafe {
         // -1.0e30, not double's -1.0e300 -- float32 only goes to ~3.4e38
@@ -332,7 +332,7 @@ static &Tensor __phi_elu_p1(&Tensor x) {
 
 // A [rows, cols] weight, U(-1/sqrt(rows), 1/sqrt(rows)) (nn.h's Mlp init).
 &Tensor attn_weight_(unsigned long rows, unsigned long cols, &Rng rng) {
-    &Tensor w = tensor_new_2d(rows, cols, 0);
+    &Tensor w = Tensor::new_2d(rows, cols, 0);
     float bound = (float)1.0 / sqrt_f((float)rows);
     rng.fill_uniform(w, -bound, bound);
     return w;
@@ -343,8 +343,8 @@ static void attn_drop_(&Tensor t) {
     unsafe { free((void*)t); }
 }
 
-struct MultiHeadAttention mha_new(unsigned long dModel, unsigned long numHeads, &Rng rng) {
-    if (numHeads == 0UL || dModel % numHeads != 0UL) panic_at("mha_new: numHeads must divide dModel", "attention.sc", __LINE__);
+struct MultiHeadAttention MultiHeadAttention::new(unsigned long dModel, unsigned long numHeads, &Rng rng) {
+    if (numHeads == 0UL || dModel % numHeads != 0UL) panic_at("MultiHeadAttention::new: numHeads must divide dModel", "attention.sc", __LINE__);
     struct MultiHeadAttention a;
     a.Wq = attn_weight_(dModel, dModel, rng);
     a.Wk = attn_weight_(dModel, dModel, rng);

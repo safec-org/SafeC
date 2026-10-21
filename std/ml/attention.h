@@ -3,8 +3,8 @@
 //
 // Built on std/ml/tensor.h's CPU Tensor. Inference-focused (the
 // vLLM-inspired half of this library's brief), not a training library:
-// softmax_rows() and the attention functions below are forward-only —
-// they don't record autograd edges (see tensor.h's Tensor::gradFn) even
+// Tensor::softmax_rows() and the attention functions below are forward-only —
+// they don't record Autograd::get edges (see tensor.h's Tensor::gradFn) even
 // on requiresGrad inputs. Q/K/V are always plain 2D tensors, [seqLen,
 // dim] — no batch dimension (call these once per sequence in a batch)
 // and no positional encoding baked in (add it to Q/K yourself before
@@ -31,15 +31,15 @@ namespace std {
 // Row-wise softmax: for a [rows, cols] tensor, each output row sums to 1.
 // Numerically stable (subtracts each row's max before exponentiating).
 // Forward-only — see this header's note above.
-&Tensor softmax_rows(const &Tensor x);
+&Tensor Tensor::softmax_rows() const;
 
 // out[r][c] = in[r][c] transposed -> [cols, rows].
-&Tensor tensor_transpose(const &Tensor in);
+&Tensor Tensor::transpose() const;
 
 // Copies out the column range [startCol, startCol+numCols) of every row.
 // Records a backward edge (gradients go back into those columns) when the
 // input requires grad.
-&Tensor tensor_slice_cols(const &Tensor in, unsigned long startCol, unsigned long numCols);
+&Tensor Tensor::slice_cols(unsigned long startCol, unsigned long numCols) const;
 
 // Writes 'src' into 'dst's column range [startCol, startCol+numCols)
 // (numCols == src's own column count), row by row. Used to reassemble
@@ -107,9 +107,10 @@ struct MultiHeadAttention {
     void collect_params(&Vec<&Tensor> out) const;
     void collect_state(&Vec<&Tensor> out) const;
     void free();
+
+    // Weights U(-1/sqrt(dModel), 1/sqrt(dModel)) from rng; numHeads divides dModel.
+    static struct MultiHeadAttention new(unsigned long dModel, unsigned long numHeads, &Rng rng);
 };
-// Weights U(-1/sqrt(dModel), 1/sqrt(dModel)) from rng; numHeads divides dModel.
-struct MultiHeadAttention mha_new(unsigned long dModel, unsigned long numHeads, &Rng rng);
 
 // Internal: a [rows, cols] weight, U(-1/sqrt(rows), 1/sqrt(rows)) from rng.
 &Tensor attn_weight_(unsigned long rows, unsigned long cols, &Rng rng);

@@ -1,6 +1,6 @@
 #pragma once
 #include <std/stddef.h>
-// SafeC Standard Library — Tensor: CPU tensors with reverse-mode autograd.
+// SafeC Standard Library — Tensor: CPU tensors with reverse-mode Autograd::get.
 //
 // PyTorch-style ergonomics (build a graph implicitly by calling ops;
 // Tensor::backward() walks it) over a plain flat f32 buffer — no unified-
@@ -66,7 +66,7 @@ typedef fn void(void* selfTensor) TensorBackwardFn;
 // it, and a.reset() drops them all at once while keeping the
 // memory -- already faulted in -- for the next step.
 //
-//   struct TensorArena a = tensor_arena_new(0UL);
+//   struct TensorArena a = TensorArena::new(0UL);
 //   while (step < steps) {
 //       a.begin();
 //       ... forward, Tensor::backward, optimizer update ...
@@ -91,10 +91,11 @@ struct TensorArena {
     void free();
     // Bytes handed out since the last reset.
     unsigned long used() const;
+
+    // chunkBytes 0 = 16 MiB chunks (larger requests get their own chunk).
+    static struct TensorArena new(unsigned long chunkBytes);
 };
 
-// chunkBytes 0 = 16 MiB chunks (larger requests get their own chunk).
-struct TensorArena tensor_arena_new(unsigned long chunkBytes);
 void tensor_arena_end();                   // back to the heap
 
 // Internal (tensor.h's allocation helpers): the arena new tensors use on this
@@ -119,7 +120,7 @@ struct Tensor {
     void*         gradFn;
     struct Vec<&Tensor> parents; // inputs this tensor was computed from
     int           visited;     // topological-sort scratch flag, used and cleared by Tensor::backward()
-    float         extraScalar; // op-specific constant (e.g. tensor_scale's k) the gradFn needs
+    float         extraScalar; // op-specific constant (e.g. Tensor::scale's k) the gradFn needs
     ?&TensorArena owner;       // the TensorArena that owns this tensor's memory, or null (heap)
 
     // Element access (row-major; 'idx1D' for a rank-1 tensor,
@@ -139,6 +140,17 @@ struct Tensor {
     // optimizer steps if that's not what you want).
     void backward();
     void zero_grad();
+
+    static &Tensor new_1d(unsigned long n, int requiresGrad);
+    static &Tensor new_2d(unsigned long rows, unsigned long cols, int requiresGrad);
+    // Copies 'values' (length must equal the tensor's size) into a freshly
+    // allocated tensor of the given shape.
+    static &Tensor from_1d(const &float values, unsigned long n, int requiresGrad);
+    static &Tensor from_2d(const &float values, unsigned long rows, unsigned long cols, int requiresGrad);
+    &Tensor zeros_like() const;
+    void    fill(float v);
+    &Tensor scale(float k) const;   // a * scalar k
+    &Tensor sum() const;   // -> scalar (1-element) tensor
 };
 
 // Every function below takes/returns 'Tensor' by a region-less reference
@@ -153,24 +165,14 @@ struct Tensor {
 // release; call it, then let the reference go out of scope.
 
 // ── Construction ─────────────────────────────────────────────────────────────
-&Tensor tensor_new_1d(unsigned long n, int requiresGrad);
-&Tensor tensor_new_2d(unsigned long rows, unsigned long cols, int requiresGrad);
-// Copies 'values' (length must equal the tensor's size) into a freshly
-// allocated tensor of the given shape.
-&Tensor tensor_from_1d(const &float values, unsigned long n, int requiresGrad);
-&Tensor tensor_from_2d(const &float values, unsigned long rows, unsigned long cols, int requiresGrad);
-&Tensor tensor_zeros_like(const &Tensor t);
-&Tensor tensor_fill(&Tensor t, float v);
 
 // ── Forward ops (each records a backward edge when either operand
 // requires grad) ────────────────────────────────────────────────────────────
 &Tensor tensor_add(const &Tensor a, const &Tensor b);
 &Tensor tensor_sub(const &Tensor a, const &Tensor b);
 &Tensor tensor_mul(const &Tensor a, const &Tensor b);      // elementwise
-&Tensor tensor_scale(const &Tensor a, float k);             // a * scalar k
 &Tensor tensor_matmul(const &Tensor a, const &Tensor b);   // 2D x 2D
-&Tensor tensor_sum(const &Tensor a);                        // -> scalar (1-element) tensor
-// tensor_relu lives in tensor_nn.h alongside the rest of the activation
+// Tensor::relu lives in tensor_nn.h alongside the rest of the activation
 // functions (sigmoid, tanh, elu, gelu, silu, glu, swiglu) -- include that
 // header too wherever relu is needed.
 
@@ -189,12 +191,12 @@ struct Tensor {
 // 'parents' and setting 'gradFn' entirely, which is the real cost this
 // exists to avoid (Vec::push's first call allocates; skipping it removes
 // a real std::alloc from every op call during inference). Doesn't affect
-// LEAF tensors' own requiresGrad (tensor_new_2d's explicit argument is
+// LEAF tensors' own requiresGrad (Tensor::new_2d's explicit argument is
 // unaffected) — only what happens when ops COMPOSE tensors.
 //
 // The flag lives in the program's one Autograd state, reached through
-// autograd():
-//   struct GradGuard g = autograd().no_grad();   // inference from here
+// Autograd::get():
+//   struct GradGuard g = Autograd::get().no_grad();   // inference from here
 //   ... forward passes record nothing ...
 //   g.restore();                                 // back to the previous mode
 struct GradGuard {
@@ -210,10 +212,10 @@ struct Autograd {
     void set_enabled(int enabled);
     // Disables recording and returns a guard that restores the previous mode.
     struct GradGuard no_grad();
-};
 
-// The program's autograd state (one for all threads).
-&Autograd autograd();
+    // The program's Autograd::get state (one for all threads).
+    static &Autograd get();
+};
 
 // ══ Internal helpers (static — each including file gets its own copy) ═══════
 // Not part of the public API; used by tensor.sc's own op implementations
@@ -365,14 +367,14 @@ static void __tensor_ensure_grad(struct Tensor* t) {
     }
 }
 
-// Same shape/alloc as tensor_zeros_like, but skips the zero-fill --
+// Same shape/alloc as Tensor::zeros_like, but skips the zero-fill --
 // profiled (via 'sample' on a real training run): tensor_add/sub/mul/
-// scale/relu were all allocating their output through tensor_zeros_like
+// scale/relu were all allocating their output through Tensor::zeros_like
 // and then immediately overwriting every single element in the very next
 // loop, making the zero-fill (a real, measured cost -- __bzero showed up
 // as its own line in the profile) pure wasted memory-bandwidth work. Any
 // caller using this MUST write every element before returning; it is not
-// a safe drop-in replacement for tensor_zeros_like everywhere.
+// a safe drop-in replacement for Tensor::zeros_like everywhere.
 static &Tensor __tensor_alloc_uninit_like(struct Tensor* t) {
     unsafe { return __tensor_alloc((const unsigned long*)t->shape, t->ndim, 0); }
 }
@@ -392,7 +394,7 @@ static void __tensor_accumulate(struct Tensor* dst, const float* delta) {
 
 static void __tensor_link2(struct Tensor* out, struct Tensor* a, struct Tensor* b, void* backwardFn) {
     unsafe {
-        if (!autograd().enabled()) { out->requiresGrad = 0; return; }
+        if (!Autograd::get().enabled()) { out->requiresGrad = 0; return; }
         out->requiresGrad = a->requiresGrad || b->requiresGrad;
         if (!out->requiresGrad) return;
         out->parents.push(a);
@@ -403,7 +405,7 @@ static void __tensor_link2(struct Tensor* out, struct Tensor* a, struct Tensor* 
 
 static void __tensor_link1(struct Tensor* out, struct Tensor* a, void* backwardFn) {
     unsafe {
-        if (!autograd().enabled()) { out->requiresGrad = 0; return; }
+        if (!Autograd::get().enabled()) { out->requiresGrad = 0; return; }
         out->requiresGrad = a->requiresGrad;
         if (!out->requiresGrad) return;
         out->parents.push(a);

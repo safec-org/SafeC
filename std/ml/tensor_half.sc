@@ -87,31 +87,31 @@ void HalfTensor::free() {
     self.size = 0UL;
 }
 
-struct HalfTensor half_tensor_new_1d(unsigned long n, int dtype) {
+struct HalfTensor HalfTensor::new_1d(unsigned long n, int dtype) {
     return __half_alloc(n, 1UL, 1UL, dtype);
 }
 
-struct HalfTensor half_tensor_new_2d(unsigned long rows, unsigned long cols, int dtype) {
+struct HalfTensor HalfTensor::new_2d(unsigned long rows, unsigned long cols, int dtype) {
     return __half_alloc(rows, cols, 2UL, dtype);
 }
 
-struct HalfTensor tensor_to_half(const &Tensor t, int dtype) {
+struct HalfTensor Tensor::to_half(int dtype) const {
     struct HalfTensor h;
     unsafe {
-        unsigned long d1 = t->ndim == 2UL ? t->shape[1] : 1UL;
-        h = __half_alloc(t->shape[0], d1, t->ndim, dtype);
-        if (dtype == TENSOR_BF16) f32_to_bf16_bulk((const float*)t->data, (unsigned short*)h.data, t->size);
-        else f32_to_fp16_bulk((const float*)t->data, (unsigned short*)h.data, t->size);
+        unsigned long d1 = self->ndim == 2UL ? self->shape[1] : 1UL;
+        h = __half_alloc(self->shape[0], d1, self->ndim, dtype);
+        if (dtype == TENSOR_BF16) f32_to_bf16_bulk((const float*)self->data, (unsigned short*)h.data, self->size);
+        else f32_to_fp16_bulk((const float*)self->data, (unsigned short*)h.data, self->size);
     }
     return h;
 }
 
-&Tensor half_to_tensor(const &HalfTensor h, int requiresGrad) {
-    &Tensor out = h.ndim == 2UL ? tensor_new_2d(h.shape[0], h.shape[1], requiresGrad)
-                                : tensor_new_1d(h.shape[0], requiresGrad);
+&Tensor HalfTensor::to_tensor(int requiresGrad) const {
+    &Tensor out = self.ndim == 2UL ? Tensor::new_2d(self.shape[0], self.shape[1], requiresGrad)
+                                : Tensor::new_1d(self.shape[0], requiresGrad);
     unsafe {
-        if (h.dtype == TENSOR_BF16) bf16_to_f32_bulk((const unsigned short*)h.data, (float*)out->data, h.size);
-        else fp16_to_f32_bulk((const unsigned short*)h.data, (float*)out->data, h.size);
+        if (self.dtype == TENSOR_BF16) bf16_to_f32_bulk((const unsigned short*)self.data, (float*)out->data, self.size);
+        else fp16_to_f32_bulk((const unsigned short*)self.data, (float*)out->data, self.size);
     }
     return out;
 }
@@ -163,7 +163,7 @@ int half_convert(const &HalfTensor src, &HalfTensor dst) {
 struct Vec<struct HalfTensor> tensors_to_half(const &Vec<&Tensor> ts, int dtype) {
     struct Vec<struct HalfTensor> out = vec_new();
     unsigned long i = 0UL;
-    while (i < ts.length()) { out.push(tensor_to_half(*ts.at(i), dtype)); i = i + 1UL; }
+    while (i < ts.length()) { out.push((*ts.at(i)).to_half(dtype)); i = i + 1UL; }
     return out;
 }
 
@@ -259,25 +259,25 @@ struct HalfTensor half_add(const &HalfTensor a, const &HalfTensor b) { return __
 struct HalfTensor half_sub(const &HalfTensor a, const &HalfTensor b) { return __half_binary(a, b, HALF_SUB); }
 struct HalfTensor half_mul(const &HalfTensor a, const &HalfTensor b) { return __half_binary(a, b, HALF_MUL); }
 
-struct HalfTensor half_scale(const &HalfTensor a, float k) {
-    struct HalfTensor out = __half_like(a);
+struct HalfTensor HalfTensor::scale(float k) const {
+    struct HalfTensor out = __half_like(self);
     unsafe {
         unsigned long i = 0UL;
-        while (i < a.size) {
-            out.data[i] = half_encode(half_decode(a.data[i], a.dtype) * k, a.dtype);
+        while (i < self.size) {
+            out.data[i] = half_encode(half_decode(self.data[i], self.dtype) * k, self.dtype);
             i = i + 1UL;
         }
     }
     return out;
 }
 
-struct HalfTensor half_relu(const &HalfTensor a) {
-    struct HalfTensor out = __half_like(a);
+struct HalfTensor HalfTensor::relu() const {
+    struct HalfTensor out = __half_like(self);
     unsafe {
         unsigned long i = 0UL;
-        while (i < a.size) {
-            float x = half_decode(a.data[i], a.dtype);
-            out.data[i] = x > (float)0.0 ? a.data[i] : (unsigned short)0;
+        while (i < self.size) {
+            float x = half_decode(self.data[i], self.dtype);
+            out.data[i] = x > (float)0.0 ? self.data[i] : (unsigned short)0;
             i = i + 1UL;
         }
     }
@@ -320,16 +320,16 @@ struct HalfTensor half_matmul(const &HalfTensor a, const &HalfTensor b) {
     return out;
 }
 
-float half_sum(const &HalfTensor a) {
+float HalfTensor::sum() const {
     float acc = (float)0.0;
     unsafe {
         unsigned long i = 0UL;
-        while (i < a.size) { acc = acc + half_decode(a.data[i], a.dtype); i = i + 1UL; }
+        while (i < self.size) { acc = acc + half_decode(self.data[i], self.dtype); i = i + 1UL; }
     }
     return acc;
 }
 
-// ── Mixed precision with autograd ────────────────────────────────────────────
+// ── Mixed precision with Autograd::get ────────────────────────────────────────────
 
 // Straight-through: d(cast(a))/da is treated as the identity.
 static void __cast_backward(void* selfPtr) {
@@ -340,25 +340,25 @@ static void __cast_backward(void* selfPtr) {
     }
 }
 
-&Tensor tensor_cast(const &Tensor a, int dtype) {
-    &Tensor out = __tensor_alloc_uninit_like(a);
+&Tensor Tensor::cast(int dtype) const {
+    &Tensor out = __tensor_alloc_uninit_like(self);
     unsafe {
         unsigned long i = 0UL;
-        while (i < out->size) { out->data[i] = half_round(a->data[i], dtype); i = i + 1UL; }
+        while (i < out->size) { out->data[i] = half_round(self->data[i], dtype); i = i + 1UL; }
     }
-    __tensor_link1(out, a, (void*)__cast_backward);
+    __tensor_link1(out, self, (void*)__cast_backward);
     return out;
 }
 
 &Tensor tensor_matmul_lowp(const &Tensor a, const &Tensor b, int dtype) {
-    &Tensor ca = tensor_cast(a, dtype);
-    &Tensor cb = tensor_cast(b, dtype);
-    return tensor_cast(tensor_matmul(ca, cb), dtype);
+    &Tensor ca = a.cast(dtype);
+    &Tensor cb = b.cast(dtype);
+    return tensor_matmul(ca, cb).cast(dtype);
 }
 
 // ── Dynamic loss scaling ─────────────────────────────────────────────────────
 
-struct LossScaler loss_scaler_new() {
+struct LossScaler LossScaler::new() {
     struct LossScaler s;
     s.scale = (float)65536.0;
     s.growthFactor = (float)2.0;
@@ -416,7 +416,7 @@ void LossScaler::update(int allFinite) {
 }
 
 
-// ── half_gemv ────────────────────────────────────────────────────────────────
+// ── HalfTensor::gemv ────────────────────────────────────────────────────────────────
 // Rows [lo, hi) of y = w x. The widening is written so clang vectorizes it:
 // bf16 is the top half of a float32; fp16 is (bits & 0x7fff) << 13 read as
 // a float32 times 2^112 (exact for normal and subnormal values), with
@@ -762,21 +762,21 @@ static void half_gemv_batch_rows_(&HalfGemvBatch b, unsigned long lo, unsigned l
     }
 }
 
-int half_gemv_batch(const &HalfTensor w, const &float x, unsigned long m, &float y) {
-    if (w.ndim != 2UL || w.shape[0] == 0UL || w.shape[1] == 0UL) return 0;
+int HalfTensor::gemv_batch(const &float x, unsigned long m, &float y) const {
+    if (self.ndim != 2UL || self.shape[0] == 0UL || self.shape[1] == 0UL) return 0;
     if (m == 0UL) return 1;
     struct HalfGemvBatch b;
     unsafe {
-        b.j.w = (const unsigned short*)w.data;
+        b.j.w = (const unsigned short*)self.data;
         b.j.x = (const float*)x;
         b.j.y = (float*)y;
         b.j.xe = (const float*)0;
         b.j.xo = (const float*)0;
     }
-    b.j.k = w.shape[1];
-    b.j.bf = w.dtype == TENSOR_BF16 ? 1 : 0;
+    b.j.k = self.shape[1];
+    b.j.bf = self.dtype == TENSOR_BF16 ? 1 : 0;
     b.m = m;
-    b.n = w.shape[0];
+    b.n = self.shape[0];
     b.half = 0UL;
     unsigned long n = b.n;
     float* split = (float*)0;
@@ -808,6 +808,6 @@ int half_gemv_batch(const &HalfTensor w, const &float x, unsigned long m, &float
     return 1;
 }
 
-int half_gemv(const &HalfTensor w, const &float x, &float y) { return half_gemv_batch(w, x, 1UL, y); }
+int HalfTensor::gemv(const &float x, &float y) const { return self.gemv_batch(x, 1UL, y); }
 
 } // namespace std

@@ -3,7 +3,7 @@
 //
 // Both normalize each row of a [batch, dim] tensor to mean 0 and variance
 // 1 and carry reverse-mode autograd (activations.h's
-// tensor_layernorm_rows is the forward-only version).
+// Tensor::layernorm_rows is the forward-only version).
 //
 //   LayerNorm (Ba et al. 2016):  y = LN(x) * gamma + beta, learned
 //     per-feature gamma (init 1) and beta (init 0).
@@ -16,13 +16,13 @@
 //     at 0, so a residual branch x + gate * f(y) starts as the identity.
 #include <std/ml/tensor.h>
 #include <std/ml/nn.h>
-#include <std/ml/attention.h>   // tensor_slice_cols
+#include <std/ml/attention.h>   // Tensor::slice_cols
 
 namespace std {
 
-// LN(x) without the affine part, row by row, with autograd.
-&Tensor tensor_layer_norm(const &Tensor x, float eps);
-// x [m,n] * g [n] on every row, with autograd.
+// LN(x) without the affine part, row by row, with Autograd::get.
+&Tensor Tensor::layer_norm(float eps) const;
+// x [m,n] * g [n] on every row, with Autograd::get.
 &Tensor tensor_mul_row(const &Tensor x, const &Tensor g);
 
 struct LayerNorm {
@@ -36,8 +36,9 @@ struct LayerNorm {
     void collect_params(&Vec<&Tensor> out) const;
     void collect_state(&Vec<&Tensor> out) const;
     void free();
+
+    static struct LayerNorm new(unsigned long dim);
 };
-struct LayerNorm layer_norm_new(unsigned long dim);
 
 struct AdaLN {
     &Tensor W;       // [condDim, chunks * dim], init 0
@@ -53,11 +54,12 @@ struct AdaLN {
     void collect_params(&Vec<&Tensor> out) const;
     void collect_state(&Vec<&Tensor> out) const;
     void free();
+
+    static struct AdaLN new(unsigned long dim, unsigned long condDim, int gated);
 };
 struct AdaLNOut {
     &Tensor out;     // LN(x) * (1 + scale) + shift, [m, dim]
     &Tensor gate;    // [m, dim]; all ones when not gated
 };
-struct AdaLN    adaln_new(unsigned long dim, unsigned long condDim, int gated);
 
 } // namespace std

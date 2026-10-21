@@ -62,13 +62,13 @@ struct Mamba {
     void free();
     // x: [1, dModel] (or [dModel]) -> [1, dModel]; advances 'state'.
     &Tensor step(&MambaState state, const &Tensor x) const;
-};
 
-// Deterministic initialization following the paper (and HF transformers'
-// MambaMixer): Alog[d][n] = log(n + 1), Dskip = 1, dtBias chosen so
-// softplus(dtBias) spans [0.001, 0.1] log-uniformly, other weights small
-// and pseudo-random. Typical: dState 16, dConv 4, expand 2.
-struct Mamba mamba_new(unsigned long dModel, unsigned long dState, unsigned long dConv, unsigned long expand);
+    // Deterministic initialization following the paper (and HF transformers'
+    // MambaMixer): Alog[d][n] = log(n + 1), Dskip = 1, dtBias chosen so
+    // softplus(dtBias) spans [0.001, 0.1] log-uniformly, other weights small
+    // and pseudo-random. Typical: dState 16, dConv 4, expand 2.
+    static struct Mamba new(unsigned long dModel, unsigned long dState, unsigned long dConv, unsigned long expand);
+};
 
 // Recurrent decoding, one token at a time with a fixed-size state.
 // Feeding tokens 0..T-1 through Mamba::step gives the same rows as
@@ -79,7 +79,8 @@ struct MambaState {
 
     void reset();
     void free();
+
+    static struct MambaState new(const &Mamba layer);   // zero state
 };
-struct MambaState mamba_state_new(const &Mamba layer);  // zero state
 
 } // namespace std

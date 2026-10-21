@@ -45,30 +45,30 @@ static void norm_ln_backward_(void* selfPtr) {
     }
 }
 
-&Tensor tensor_layer_norm(const &Tensor x, float eps) {
+&Tensor Tensor::layer_norm(float eps) const {
     unsigned long n; unsigned long rows;
-    unsafe { n = x->shape[x->ndim - 1UL]; rows = x->size / n; }
-    &Tensor out = __tensor_alloc_uninit_like(x);
-    &Tensor inv = tensor_new_1d(rows, 0);
+    unsafe { n = self->shape[self->ndim - 1UL]; rows = self->size / n; }
+    &Tensor out = __tensor_alloc_uninit_like(self);
+    &Tensor inv = Tensor::new_1d(rows, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
             unsigned long base = r * n;
             double s = 0.0;
             unsigned long c = 0UL;
-            while (c < n) { s = s + (double)x->data[base + c]; c = c + 1UL; }
+            while (c < n) { s = s + (double)self->data[base + c]; c = c + 1UL; }
             double mean = s / (double)n;
             double v = 0.0;
             c = 0UL;
-            while (c < n) { double d = (double)x->data[base + c] - mean; v = v + d * d; c = c + 1UL; }
+            while (c < n) { double d = (double)self->data[base + c] - mean; v = v + d * d; c = c + 1UL; }
             float is = (float)(1.0 / sqrt_d(v / (double)n + (double)eps));
             inv->data[r] = is;
             c = 0UL;
-            while (c < n) { out->data[base + c] = (float)((double)x->data[base + c] - mean) * is; c = c + 1UL; }
+            while (c < n) { out->data[base + c] = (float)((double)self->data[base + c] - mean) * is; c = c + 1UL; }
             r = r + 1UL;
         }
     }
-    __tensor_link2(out, x, inv, (void*)norm_ln_backward_);
+    __tensor_link2(out, self, inv, (void*)norm_ln_backward_);
     unsafe {
         // not in a graph: release the aux now (an arena's goes with its reset)
         if (!out->requiresGrad) {
@@ -136,20 +136,20 @@ static void norm_drop_(&Tensor t) {
     unsafe { free((void*)t); }
 }
 
-struct LayerNorm layer_norm_new(unsigned long dim) {
+struct LayerNorm LayerNorm::new(unsigned long dim) {
     struct LayerNorm ln;
     ?&TensorArena cur = norm_heap_begin_();
-    ln.gamma = tensor_new_1d(dim, 1);
-    ln.beta = tensor_new_1d(dim, 1);
+    ln.gamma = Tensor::new_1d(dim, 1);
+    ln.beta = Tensor::new_1d(dim, 1);
     norm_heap_end_(cur);
-    tensor_fill(ln.gamma, (float)1.0);
+    ln.gamma.fill((float)1.0);
     ln.dim = dim;
     ln.eps = (float)0.00001;
     return ln;
 }
 
 &Tensor LayerNorm::forward(const &Tensor x) const {
-    return tensor_add_bias(tensor_mul_row(tensor_layer_norm(x, self.eps), self.gamma), self.beta);
+    return tensor_add_bias(tensor_mul_row(x.layer_norm(self.eps), self.gamma), self.beta);
 }
 
 void LayerNorm::collect_params(&Vec<&Tensor> out) const {
@@ -166,12 +166,12 @@ void LayerNorm::free() {
 
 // ── AdaLN ────────────────────────────────────────────────────────────────────
 
-struct AdaLN adaln_new(unsigned long dim, unsigned long condDim, int gated) {
+struct AdaLN AdaLN::new(unsigned long dim, unsigned long condDim, int gated) {
     struct AdaLN a;
     unsigned long chunks = gated ? 3UL : 2UL;
     ?&TensorArena cur = norm_heap_begin_();
-    a.W = tensor_new_2d(condDim, chunks * dim, 1);
-    a.b = tensor_new_1d(chunks * dim, 1);
+    a.W = Tensor::new_2d(condDim, chunks * dim, 1);
+    a.b = Tensor::new_1d(chunks * dim, 1);
     norm_heap_end_(cur);
     a.dim = dim;
     a.condDim = condDim;
@@ -183,17 +183,18 @@ struct AdaLN adaln_new(unsigned long dim, unsigned long condDim, int gated) {
 struct AdaLNOut AdaLN::forward(const &Tensor x, const &Tensor cond) const {
     unsigned long n = self.dim;
     &Tensor mod = tensor_add_bias(tensor_matmul(cond, self.W), self.b);
-    &Tensor shift = tensor_slice_cols(mod, 0UL, n);
-    &Tensor scale = tensor_slice_cols(mod, n, n);
-    &Tensor xh = tensor_layer_norm(x, self.eps);
+    &Tensor shift = mod.slice_cols(0UL, n);
+    &Tensor scale = mod.slice_cols(n, n);
+    &Tensor xh = x.layer_norm(self.eps);
     struct AdaLNOut o;
-    o.out = tensor_add(tensor_mul(xh, tensor_add_scalar(scale, (float)1.0)), shift);
+    o.out = tensor_add(tensor_mul(xh, scale.add_scalar((float)1.0)), shift);
     if (self.gated) {
-        o.gate = tensor_slice_cols(mod, 2UL * n, n);
+        o.gate = mod.slice_cols(2UL * n, n);
     } else {
         unsigned long m;
         unsafe { m = x->shape[0]; }
-        o.gate = tensor_fill(tensor_new_2d(m, n, 0), (float)1.0);
+        o.gate = Tensor::new_2d(m, n, 0);
+        o.gate.fill((float)1.0);
     }
     return o;
 }

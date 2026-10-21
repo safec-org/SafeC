@@ -9,7 +9,7 @@
 // inspectable and independently linkable, but awkward for CALLERS that
 // want to pick a device once (e.g. per neural-net layer, or from a
 // config/CLI flag) rather than hard-coding one function name per call
-// site. tensor_matmul_on(a, b, device)/tensor_relu_on(a, device) below
+// site. tensor_matmul_on(a, b, device)/a.relu_on(device) below
 // are that single entry point: an ordinary runtime switch over an enum,
 // dispatching to whichever backend function the caller asked for.
 //
@@ -61,6 +61,6 @@ enum Device {
 };
 
 &Tensor tensor_matmul_on(const &Tensor a, const &Tensor b, enum Device device);
-&Tensor tensor_relu_on(const &Tensor a, enum Device device);
+&Tensor Tensor::relu_on(enum Device device) const;
 
 } // namespace std

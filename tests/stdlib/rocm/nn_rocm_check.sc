@@ -1,5 +1,5 @@
 // Correctness check for std/ml/nn_rocm (device-resident training) against
-// std::ml's CPU autograd. Needs a ROCm GPU; run with tests/stdlib/rocm/run.sh.
+// std::ml's CPU Autograd::get. Needs a ROCm GPU; run with tests/stdlib/rocm/run.sh.
 #include <std/ml/nn_rocm.h>
 #include <std/ml/module.h>
 #include <std/ml/convnet.h>
@@ -46,13 +46,13 @@ static float rel_diff_(struct RocmBuf d, const float* host, unsigned long n) {
 }
 
 static &Tensor param_(unsigned long r, unsigned long c, float scale, &Rng rng) {
-    &Tensor t = tensor_new_2d(r, c, 1);
+    &Tensor t = Tensor::new_2d(r, c, 1);
     rng.fill_uniform(t, -scale, scale);
     return t;
 }
 
 static struct RocmBuf upload_(const &Tensor t) {
-    unsafe { return std::rocm_upload((const &float)(const float*)t->data, t->size); }
+    unsafe { return RocmBuf::upload((const &float)(const float*)t->data, t->size); }
 }
 
 static float read1_(struct RocmBuf b) {
@@ -61,7 +61,7 @@ static float read1_(struct RocmBuf b) {
     return v;
 }
 
-// ── Layer specs: one network built both on the CPU (autograd) and the GPU ───
+// ── Layer specs: one network built both on the CPU (Autograd::get) and the GPU ───
 struct Spec {
     int kind;
     unsigned long inC; unsigned long inH; unsigned long inW;
@@ -95,7 +95,7 @@ static &Tensor cpu_layer_(const &Spec s, &Tensor x) {
     if (s.kind == ROCM_LAYER_LINEAR) y = tensor_add_bias(tensor_matmul(x, s.w), s.b);
     else if (s.kind == ROCM_LAYER_CONV) y = tensor_conv2d(x, s.w, s.b, s.inC, s.inH, s.inW, s.k, s.k, s.s, s.p);
     else y = tensor_conv_transpose2d(x, s.w, s.b, s.inC, s.inH, s.inW, s.k, s.k, s.s, s.p);
-    return tensor_activate(y, s.act);
+    return y.activate(s.act);
 }
 
 static int gpu_add_(&RocmNet n, const &Spec s) {
@@ -114,11 +114,11 @@ static int gpu_add_(&RocmNet n, const &Spec s) {
 // kernel for small fully connected nets) and dx is not compared.
 static void grad_case_(const char* name, &Vec<struct Spec> specs, unsigned long rows, unsigned long inDim,
                        unsigned long outDim, int loss, unsigned long seed, int step) {
-    struct Rng rng = rng_new(seed);
-    &Tensor x = tensor_new_2d(rows, inDim, 1);
+    struct Rng rng = Rng::new(seed);
+    &Tensor x = Tensor::new_2d(rows, inDim, 1);
     rng.fill_normal(x, (float)0.0, (float)1.0);
     unsigned long tcols = loss == LOSS_CE ? 1UL : outDim;
-    &Tensor y = tensor_new_2d(rows, tcols, 0);
+    &Tensor y = Tensor::new_2d(rows, tcols, 0);
     if (loss == LOSS_CE) {
         unsafe { unsigned long r = 0UL; while (r < rows) { y->data[r] = (float)((r * 7UL) % outDim); r = r + 1UL; } }
     } else if (loss == LOSS_BCE) {
@@ -136,15 +136,15 @@ static void grad_case_(const char* name, &Vec<struct Spec> specs, unsigned long 
               : (loss == LOSS_MSE ? tensor_mse_loss(h, y) : tensor_bce_logits_loss(h, y));
     l.backward();
     // GPU
-    struct RocmNet n = rocm_net_new(rows + 3UL);
+    struct RocmNet n = RocmNet::new(rows + 3UL);
     i = 0UL;
     while (i < specs.length()) { gpu_add_(&n, specs.at(i)); i = i + 1UL; }
     check(n.ok && n.in_dim() == inDim && n.out_dim() == outDim, name);
     if (g_prec != 0) check(n.set_precision(g_prec) && n.set_loss_scale(g_scale), name);
     struct RocmBuf dx = upload_(x);
     struct RocmBuf dy = upload_(y);
-    struct RocmBuf ddx = std::rocm_alloc(rows * inDim);
-    struct RocmBuf lb = std::rocm_alloc(1UL);
+    struct RocmBuf ddx = RocmBuf::alloc(rows * inDim);
+    struct RocmBuf lb = RocmBuf::alloc(1UL);
     std::rocm_zero(lb);
     int ok = 1;
     struct RocmBuf out = g_prec != 0 ? n.out32 : n.layers.at(n.layers.length() - 1UL).h;
@@ -191,7 +191,7 @@ static void grad_case_(const char* name, &Vec<struct Spec> specs, unsigned long 
 }
 
 static void grad_tests_() {
-    struct Rng rng = rng_new(11UL);
+    struct Rng rng = Rng::new(11UL);
     struct Vec<struct Spec> a = std::vec_new();
     a.push(lin_(6UL, 16UL, ACT_TANH, &rng));
     a.push(lin_(16UL, 16UL, ACT_RELU, &rng));
@@ -250,9 +250,9 @@ static void grad_tests_() {
     g2.free();
 }
 
-// ── ConvNets (every layer kind rocm_net_from_convnet takes) ─────────────────
+// ── ConvNets (every layer kind RocmNet::from_convnet takes) ─────────────────
 // One forward / loss / backward of a convnet.h ConvNet on the CPU and of its
-// rocm_net_from_convnet copy; compares the output, every parameter
+// RocmNet::from_convnet copy; compares the output, every parameter
 // gradient, d(loss)/dx and the batch norms' running statistics. With
 // 'twice' the CPU runs two batches through separate passes (summing their
 // losses) and the GPU both stacked as one batch with segments = 2, as
@@ -268,7 +268,7 @@ static float buffers_diff_(&RocmNet n, const &Vec<&Tensor> cpu) {
     while (i < cpu.length()) {
         unsigned long sz;
         unsafe { sz = (*cpu.at(i))->size; }
-        copy.push(tensor_new_1d(sz, 0));
+        copy.push(Tensor::new_1d(sz, 0));
         i = i + 1UL;
     }
     float e = (float)1.0e30;
@@ -294,34 +294,34 @@ static float buffers_diff_(&RocmNet n, const &Vec<&Tensor> cpu) {
 }
 
 static void convnet_case_(const char* name, &ConvNet c, unsigned long rows, int loss, unsigned long seed, int twice) {
-    struct Rng rng = rng_new(seed);
+    struct Rng rng = Rng::new(seed);
     unsigned long inDim = c.in_dim();
     unsigned long outDim = c.out_dim();
     unsigned long total = twice ? 2UL * rows : rows;
-    &Tensor x = tensor_new_2d(total, inDim, 1);
+    &Tensor x = Tensor::new_2d(total, inDim, 1);
     rng.fill_normal(x, (float)0.0, (float)1.0);
     unsigned long tcols = loss == LOSS_CE ? 1UL : outDim;
-    &Tensor y = tensor_new_2d(total, tcols, 0);
+    &Tensor y = Tensor::new_2d(total, tcols, 0);
     if (loss == LOSS_CE) {
         unsafe { unsigned long r = 0UL; while (r < total) { y->data[r] = (float)((r * 7UL) % outDim); r = r + 1UL; } }
     } else {
         rng.fill_normal(y, (float)0.0, (float)1.0);
     }
     // the GPU copy first: the CPU pass moves the running statistics
-    struct RocmNet n = rocm_net_from_convnet(c, total);
+    struct RocmNet n = RocmNet::from_convnet(c, total);
     check(n.ok && n.in_dim() == inDim && n.out_dim() == outDim, name);
     if (g_prec != 0) check(n.set_precision(g_prec) && n.set_loss_scale(g_scale), name);
     unsigned long i = 0UL;
     while (i < c.params.length()) { (*c.params.at(i)).zero_grad(); i = i + 1UL; }
-    &Tensor out = tensor_new_2d(total, outDim, 0);  // the CPU output
-    &Tensor gx = tensor_new_2d(total, inDim, 0);    // d(loss)/dx on the CPU
+    &Tensor out = Tensor::new_2d(total, outDim, 0);  // the CPU output
+    &Tensor gx = Tensor::new_2d(total, inDim, 0);    // d(loss)/dx on the CPU
     float lval = (float)0.0;
     if (twice) {
         // rows [0, m) and [m, 2m) as two passes
-        &Tensor x1 = tensor_new_2d(rows, inDim, 1);
-        &Tensor x2 = tensor_new_2d(rows, inDim, 1);
-        &Tensor y1 = tensor_new_2d(rows, tcols, 0);
-        &Tensor y2 = tensor_new_2d(rows, tcols, 0);
+        &Tensor x1 = Tensor::new_2d(rows, inDim, 1);
+        &Tensor x2 = Tensor::new_2d(rows, inDim, 1);
+        &Tensor y1 = Tensor::new_2d(rows, tcols, 0);
+        &Tensor y2 = Tensor::new_2d(rows, tcols, 0);
         unsafe {
             unsigned long k = 0UL;
             while (k < rows * inDim) { x1->data[k] = x->data[k]; x2->data[k] = x->data[rows * inDim + k]; k = k + 1UL; }
@@ -354,8 +354,8 @@ static void convnet_case_(const char* name, &ConvNet c, unsigned long rows, int 
     }
     struct RocmBuf dx = upload_(x);
     struct RocmBuf dy = upload_(y);
-    struct RocmBuf ddx = std::rocm_alloc(total * inDim);
-    struct RocmBuf lb = std::rocm_alloc(1UL);
+    struct RocmBuf ddx = RocmBuf::alloc(total * inDim);
+    struct RocmBuf lb = RocmBuf::alloc(1UL);
     std::rocm_zero(lb);
     struct RocmBuf o = n.forward(dx, total);
     int ok = o.dev != 0UL;
@@ -412,14 +412,14 @@ static void dropout_props_(int byChannel) {
     unsigned long C = 4UL;
     unsigned long P = 25UL;
     float p = (float)0.3;
-    struct RocmNet n = rocm_net_new(rows);
+    struct RocmNet n = RocmNet::new(rows);
     n.set_input(C, 5UL, 5UL);
     n.add_dropout(p, byChannel, 1234UL);
-    struct Rng rng = rng_new(50UL);
-    &Tensor x = tensor_new_2d(rows, C * P, 0);
+    struct Rng rng = Rng::new(50UL);
+    &Tensor x = Tensor::new_2d(rows, C * P, 0);
     rng.fill_uniform(x, (float)0.5, (float)1.5);
     struct RocmBuf dx = upload_(x);
-    struct RocmBuf ddx = std::rocm_alloc(rows * C * P);
+    struct RocmBuf ddx = RocmBuf::alloc(rows * C * P);
     struct RocmBuf o = n.forward(dx, rows);
     int ok = o.dev != 0UL && nr_fill_test_(n.grad_output(), rows * C * P) &&
              n.backward(dx, rows, ddx);
@@ -457,23 +457,23 @@ static void dropout_props_(int byChannel) {
 }
 
 static void convnet_tests_() {
-    struct Rng rng = rng_new(31UL);
+    struct Rng rng = Rng::new(31UL);
     // grouped rectangular dilated conv, batch norm, ceil-mode max pool, group
     // norm, grouped transposed conv with output padding, avg pool without the
     // padding, global avg pool, dense
-    struct ConvNet a = convnet_new(4UL, 9UL, 8UL);
-    struct Conv2dSpec s1 = conv2d_spec(3UL, 1UL, 1UL);
+    struct ConvNet a = ConvNet::new(4UL, 9UL, 8UL);
+    struct Conv2dSpec s1 = Conv2dSpec::new(3UL, 1UL, 1UL);
     s1.kW = 2UL; s1.strideH = 2UL; s1.padW = 0UL; s1.dilationW = 2UL; s1.groups = 2UL;
     a.conv_ex(6UL, &s1, ACT_NONE, &rng);
     a.batchnorm(ACT_RELU);
-    struct Pool2dSpec p1 = pool2d_spec(3UL, 2UL, 1UL);
+    struct Pool2dSpec p1 = Pool2dSpec::new(3UL, 2UL, 1UL);
     p1.ceilMode = 1;
     a.maxpool_ex(&p1);
     a.groupnorm(2UL, ACT_SILU);
-    struct Conv2dSpec s2 = conv2d_spec(3UL, 2UL, 1UL);
+    struct Conv2dSpec s2 = Conv2dSpec::new(3UL, 2UL, 1UL);
     s2.groups = 3UL; s2.outPadH = 1UL;
     a.deconv_ex(6UL, &s2, ACT_TANH, &rng);
-    struct Pool2dSpec p2 = pool2d_spec(2UL, 2UL, 1UL);
+    struct Pool2dSpec p2 = Pool2dSpec::new(2UL, 2UL, 1UL);
     p2.countIncludePad = 0;
     a.avgpool_ex(&p2);
     a.global_avgpool();
@@ -482,7 +482,7 @@ static void convnet_tests_() {
     a.free();
 
     // dense -> reshape -> upsample -> conv -> layer norm -> global max pool -> dense
-    struct ConvNet b = convnet_new(1UL, 1UL, 10UL);
+    struct ConvNet b = ConvNet::new(1UL, 1UL, 10UL);
     b.dense(3UL * 4UL * 4UL, ACT_LEAKY, &rng);
     b.reshape(3UL, 4UL, 4UL);
     b.upsample(2UL);
@@ -497,7 +497,7 @@ static void convnet_tests_() {
     b.free();
 
     // a DCGAN-style discriminator with batch norm: two stacked batches
-    struct ConvNet d = convnet_new(1UL, 8UL, 8UL);
+    struct ConvNet d = ConvNet::new(1UL, 8UL, 8UL);
     d.conv(4UL, 4UL, 2UL, 1UL, ACT_LEAKY, &rng);
     d.conv(8UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);
     d.batchnorm(ACT_LEAKY);
@@ -508,7 +508,7 @@ static void convnet_tests_() {
     convnet_case_("convnet: batch norm, inference mode", &d, 5UL, LOSS_MSE, 44UL, 0);
     d.free();
     // residual blocks (identity and projection shortcuts, batch norm) -> global pool -> dense
-    struct ConvNet r = convnet_new(3UL, 8UL, 8UL);
+    struct ConvNet r = ConvNet::new(3UL, 8UL, 8UL);
     r.conv(4UL, 3UL, 1UL, 1UL, ACT_RELU, &rng);
     r.residual_block(4UL, 1UL, 1, ACT_RELU, &rng);     // identity shortcut
     r.residual_block(8UL, 2UL, 1, ACT_RELU, &rng);     // projection, stride 2
@@ -519,7 +519,7 @@ static void convnet_tests_() {
     r.free();
 
     // U-Net-style: saves reused twice, concat skips, bilinear / bicubic / nearest resizing
-    struct ConvNet u = convnet_new(2UL, 8UL, 8UL);
+    struct ConvNet u = ConvNet::new(2UL, 8UL, 8UL);
     u.conv(4UL, 3UL, 1UL, 1UL, ACT_RELU, &rng);
     unsigned long sv0 = u.save();                          // 4 x 8 x 8
     u.maxpool(2UL, 2UL, 0UL);                           // 4 x 4 x 4
@@ -537,7 +537,7 @@ static void convnet_tests_() {
     u.free();
 
     // spectral norm on conv, deconv and dense weights (training, then inference)
-    struct ConvNet sn = convnet_new(2UL, 6UL, 6UL);
+    struct ConvNet sn = ConvNet::new(2UL, 6UL, 6UL);
     sn.conv(5UL, 3UL, 2UL, 1UL, ACT_LEAKY, &rng);
     sn.spectral_norm(&rng);
     sn.deconv(3UL, 2UL, 2UL, 0UL, ACT_LEAKY, &rng);
@@ -550,7 +550,7 @@ static void convnet_tests_() {
     sn.free();
 
     // dropout in inference passes values through (the CPU's masks come from its own Rng)
-    struct ConvNet dr = convnet_new(3UL, 4UL, 4UL);
+    struct ConvNet dr = ConvNet::new(3UL, 4UL, 4UL);
     dr.conv(4UL, 3UL, 1UL, 1UL, ACT_RELU, &rng);
     dr.dropout((float)0.3, 1, &rng);
     dr.dense(3UL, ACT_NONE, &rng);
@@ -563,8 +563,8 @@ static void convnet_tests_() {
 
 // ── Mixed precision: a small ResNet trained in fp32 and in 16 bits ──────────
 static struct ConvNet half_net_(unsigned long seed) {
-    struct Rng rng = rng_new(seed);
-    struct ConvNet c = convnet_new(1UL, 16UL, 16UL);
+    struct Rng rng = Rng::new(seed);
+    struct ConvNet c = ConvNet::new(1UL, 16UL, 16UL);
     c.conv(8UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);
     c.batchnorm(ACT_RELU);
     c.residual_block(8UL, 1UL, 1, ACT_RELU, &rng);
@@ -577,18 +577,18 @@ static struct ConvNet half_net_(unsigned long seed) {
 // The 16-bit run's losses track the fp32 run's. scale0 > 0: an fp16 loss
 // scale that overflows at first (steps skipped, the scale backs off).
 static void half_train_case_(const char* name, int prec, float scale0) {
-    struct Rng drng = rng_new(5UL);
-    struct Dataset data = dataset_shapes(512UL, 16UL, &drng);
+    struct Rng drng = Rng::new(5UL);
+    struct Dataset data = Dataset::shapes(512UL, 16UL, &drng);
     struct ConvNet c1 = half_net_(9UL);
     struct ConvNet c2 = half_net_(9UL);
-    struct RocmNet a = rocm_net_from_convnet(&c1, 64UL);
-    struct RocmNet b = rocm_net_from_convnet(&c2, 64UL);
+    struct RocmNet a = RocmNet::from_convnet(&c1, 64UL);
+    struct RocmNet b = RocmNet::from_convnet(&c2, 64UL);
     int ok = b.set_precision(prec);
     if (scale0 > (float)0.0) ok = ok && b.set_loss_scale(scale0);
-    struct RocmOptimizer oa = rocm_optimizer_new(OPT_ADAM, (float)0.003);
-    struct RocmOptimizer ob = rocm_optimizer_new(OPT_ADAM, (float)0.003);
+    struct RocmOptimizer oa = RocmOptimizer::new(OPT_ADAM, (float)0.003);
+    struct RocmOptimizer ob = RocmOptimizer::new(OPT_ADAM, (float)0.003);
     ok = ok && a.add_params(&oa) && b.add_params(&ob);
-    struct TrainConfig tc = train_config_default();
+    struct TrainConfig tc = TrainConfig::default();
     tc.epochs = 5UL;
     tc.batchSize = 64UL;
     struct TrainReport ra = rocm_trainer_fit(&a, rocm_net_ce_step, &oa, &data, &tc);
@@ -625,18 +625,18 @@ static void half_tests_(int prec) {
 // ── Optimizers: every kind against Optimizer::step, eager and replayed ───────
 static void opt_case_(int kind, float clip, int graph) {
     unsigned long n = 1000UL;
-    struct Rng rng = rng_new(20UL + (unsigned long)kind);
-    &Tensor w = tensor_new_1d(n, 1);
+    struct Rng rng = Rng::new(20UL + (unsigned long)kind);
+    &Tensor w = Tensor::new_1d(n, 1);
     rng.fill_normal(w, (float)0.0, (float)1.0);
-    tensor_sum(w).backward();   // allocates w's gradient, overwritten below
-    &Tensor g = tensor_new_1d(n, 0);
+    w.sum().backward();   // allocates w's gradient, overwritten below
+    &Tensor g = Tensor::new_1d(n, 0);
     rng.fill_normal(g, (float)0.0, (float)1.0);
     struct RocmBuf dw = upload_(w);
     struct RocmBuf dg = upload_(g);
-    struct Optimizer o = optimizer_new(kind, (float)0.01);
+    struct Optimizer o = Optimizer::new(kind, (float)0.01);
     o.weightDecay = (float)0.05;
     o.add(w);
-    struct RocmOptimizer d = rocm_optimizer_new(kind, (float)0.01);
+    struct RocmOptimizer d = RocmOptimizer::new(kind, (float)0.01);
     d.weightDecay = (float)0.05;
     d.clipNorm = clip;
     d.add(dw, dg);
@@ -686,21 +686,21 @@ static &Tensor clf_loss_(&Mlp m, const &Tensor x, const &Tensor y) {
 }
 
 static void trainer_test_() {
-    struct Rng drng = rng_new(1UL);
-    struct Dataset data = dataset_xor(250UL, (float)0.0, &drng);   // 7 full batches + a 26-row tail
-    struct Rng r1 = rng_new(3UL);
-    struct Mlp cpu = mlp_new(2UL, 16UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &r1);
-    struct Rng r2 = rng_new(3UL);
-    struct Mlp host = mlp_new(2UL, 16UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &r2);
-    struct TrainConfig tc = train_config_default();
+    struct Rng drng = Rng::new(1UL);
+    struct Dataset data = Dataset::xor(250UL, (float)0.0, &drng);   // 7 full batches + a 26-row tail
+    struct Rng r1 = Rng::new(3UL);
+    struct Mlp cpu = Mlp::new(2UL, 16UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &r1);
+    struct Rng r2 = Rng::new(3UL);
+    struct Mlp host = Mlp::new(2UL, 16UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &r2);
+    struct TrainConfig tc = TrainConfig::default();
     tc.epochs = 6UL;
     tc.clipNorm = (float)1.0;
     tc.lrDecay = (float)0.9;
-    struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.01);
+    struct Optimizer o = Optimizer::new(OPT_ADAM, (float)0.01);
     model_add_params(&cpu, &o);
     struct TrainReport rc = trainer_fit(&cpu, clf_loss_, &o, &data, &tc);
-    struct RocmNet net = rocm_net_from_mlp(&host, 32UL);
-    struct RocmOptimizer d = rocm_optimizer_new(OPT_ADAM, (float)0.01);
+    struct RocmNet net = RocmNet::from_mlp(&host, 32UL);
+    struct RocmOptimizer d = RocmOptimizer::new(OPT_ADAM, (float)0.01);
     net.add_params(&d);
     struct TrainReport rg = rocm_trainer_fit(&net, rocm_net_ce_step, &d, &data, &tc);
     check(rg.steps == rc.steps && rg.epochs == rc.epochs && d.t == rc.steps, "trainer step count");
@@ -732,21 +732,21 @@ static void trainer_test_() {
 
 // ── VAE: trains, and agrees with the CPU VAE's loss level ───────────────────
 static void vae_case_(unsigned long classes) {
-    struct Rng drng = rng_new(9UL);
-    struct Dataset data = dataset_shapes(256UL, 8UL, &drng);   // 4 shape classes
-    struct VaeConfig cfg = vae_config_default(4UL);
+    struct Rng drng = Rng::new(9UL);
+    struct Dataset data = Dataset::shapes(256UL, 8UL, &drng);   // 4 shape classes
+    struct VaeConfig cfg = VaeConfig::default(4UL);
     cfg.hidden = 64UL;
     cfg.classes = classes;
-    struct Vae cpu = vae_new(64UL, &cfg);
-    struct Vae host = vae_new(64UL, &cfg);
-    struct TrainConfig tc = train_config_default();
+    struct Vae cpu = Vae::new(64UL, &cfg);
+    struct Vae host = Vae::new(64UL, &cfg);
+    struct TrainConfig tc = TrainConfig::default();
     tc.epochs = 15UL;
-    struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.003);
+    struct Optimizer o = Optimizer::new(OPT_ADAM, (float)0.003);
     model_add_params(&cpu, &o);
     struct TrainReport rc = model_fit(&cpu, &o, &data, &tc);
-    struct RocmVae dv = rocm_vae_new(&host, 32UL);
-    check(dv.ok, "rocm_vae_new");
-    struct RocmOptimizer d = rocm_optimizer_new(OPT_ADAM, (float)0.003);
+    struct RocmVae dv = RocmVae::new(&host, 32UL);
+    check(dv.ok, "RocmVae::new");
+    struct RocmOptimizer d = RocmOptimizer::new(OPT_ADAM, (float)0.003);
     dv.add_params(&d);
     struct TrainReport rg = rocm_trainer_fit(&dv, rocm_vae_step, &d, &data, &tc);
     unsafe { printf("  %s: loss cpu %.3f -> %.3f, gpu %.3f -> %.3f\n", classes > 0UL ? "cvae" : "vae", (double)rc.firstEpochLoss,
@@ -768,30 +768,30 @@ static void vae_case_(unsigned long classes) {
 static &Tensor cae_loss_(&ConvAutoencoder a, const &Tensor x, const &Tensor y) { return a.loss(x, y); }
 
 static struct ConvAutoencoder cae_build_() {
-    struct Rng rng = rng_new(61UL);
-    struct ConvNet enc = convnet_new(1UL, 8UL, 8UL);
+    struct Rng rng = Rng::new(61UL);
+    struct ConvNet enc = ConvNet::new(1UL, 8UL, 8UL);
     enc.conv(4UL, 3UL, 2UL, 1UL, ACT_RELU, &rng);     // 4 x 4 x 4
     enc.conv(8UL, 3UL, 2UL, 1UL, ACT_RELU, &rng);     // 8 x 2 x 2
-    struct ConvNet dec = convnet_new(8UL, 2UL, 2UL);
+    struct ConvNet dec = ConvNet::new(8UL, 2UL, 2UL);
     dec.deconv(4UL, 4UL, 2UL, 1UL, ACT_RELU, &rng);   // 4 x 4 x 4
     dec.upsample_bilinear(2UL);                       // 4 x 8 x 8
     dec.conv(1UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);     // 1 x 8 x 8
-    return conv_autoencoder_new(enc, dec, RECON_BCE);
+    return ConvAutoencoder::new(enc, dec, RECON_BCE);
 }
 
 static void conv_ae_test_() {
-    struct Rng drng = rng_new(9UL);
-    struct Dataset data = dataset_shapes(250UL, 8UL, &drng);
+    struct Rng drng = Rng::new(9UL);
+    struct Dataset data = Dataset::shapes(250UL, 8UL, &drng);
     struct ConvAutoencoder cpu = cae_build_();
     struct ConvAutoencoder host = cae_build_();
-    struct TrainConfig tc = train_config_default();
+    struct TrainConfig tc = TrainConfig::default();
     tc.epochs = 4UL;
-    struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.003);
+    struct Optimizer o = Optimizer::new(OPT_ADAM, (float)0.003);
     model_add_params(&cpu, &o);
     struct TrainReport rc = trainer_fit(&cpu, cae_loss_, &o, &data, &tc);
-    struct RocmConvAe dev = rocm_conv_autoencoder_new(&host, 32UL);
-    check(dev.ok, "rocm_conv_autoencoder_new");
-    struct RocmOptimizer d = rocm_optimizer_new(OPT_ADAM, (float)0.003);
+    struct RocmConvAe dev = RocmConvAe::new(&host, 32UL);
+    check(dev.ok, "RocmConvAe::new");
+    struct RocmOptimizer d = RocmOptimizer::new(OPT_ADAM, (float)0.003);
     dev.add_params(&d);
     struct TrainReport rg = rocm_trainer_fit(&dev, rocm_conv_autoencoder_step, &d, &data, &tc);
     check(dev.download(&host), "conv autoencoder download");
@@ -812,33 +812,33 @@ static void conv_ae_test_() {
 }
 
 static struct ConvVae cvae_build_(const &VaeConfig cfg) {
-    struct Rng rng = rng_new(62UL);
+    struct Rng rng = Rng::new(62UL);
     unsigned long c = cfg.classes;
-    struct ConvNet enc = convnet_new(1UL + c, 8UL, 8UL);
+    struct ConvNet enc = ConvNet::new(1UL + c, 8UL, 8UL);
     enc.conv(8UL, 3UL, 2UL, 1UL, ACT_RELU, &rng);     // 8 x 4 x 4
     enc.conv(16UL, 3UL, 2UL, 1UL, ACT_RELU, &rng);    // 16 x 2 x 2
-    struct ConvNet dec = convnet_new(cfg.latent + c, 1UL, 1UL);
+    struct ConvNet dec = ConvNet::new(cfg.latent + c, 1UL, 1UL);
     dec.deconv(16UL, 2UL, 1UL, 0UL, ACT_RELU, &rng);  // 16 x 2 x 2
     dec.deconv(8UL, 4UL, 2UL, 1UL, ACT_RELU, &rng);   // 8 x 4 x 4
     dec.deconv(1UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);   // 1 x 8 x 8
-    return conv_vae_new(enc, dec, cfg);
+    return ConvVae::new(enc, dec, cfg);
 }
 
 static void conv_vae_case_(unsigned long classes) {
-    struct Rng drng = rng_new(9UL);
-    struct Dataset data = dataset_shapes(256UL, 8UL, &drng);
-    struct VaeConfig cfg = vae_config_default(4UL);
+    struct Rng drng = Rng::new(9UL);
+    struct Dataset data = Dataset::shapes(256UL, 8UL, &drng);
+    struct VaeConfig cfg = VaeConfig::default(4UL);
     cfg.classes = classes;
     struct ConvVae cpu = cvae_build_(&cfg);
     struct ConvVae host = cvae_build_(&cfg);
-    struct TrainConfig tc = train_config_default();
+    struct TrainConfig tc = TrainConfig::default();
     tc.epochs = 15UL;
-    struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.003);
+    struct Optimizer o = Optimizer::new(OPT_ADAM, (float)0.003);
     model_add_params(&cpu, &o);
     struct TrainReport rc = model_fit(&cpu, &o, &data, &tc);
-    struct RocmVae dv = rocm_conv_vae_new(&host, 32UL);
-    check(dv.ok, "rocm_conv_vae_new");
-    struct RocmOptimizer d = rocm_optimizer_new(OPT_ADAM, (float)0.003);
+    struct RocmVae dv = RocmVae::new_conv(&host, 32UL);
+    check(dv.ok, "RocmVae::new_conv");
+    struct RocmOptimizer d = RocmOptimizer::new(OPT_ADAM, (float)0.003);
     dv.add_params(&d);
     struct TrainReport rg = rocm_trainer_fit(&dv, rocm_vae_step, &d, &data, &tc);
     unsafe { printf("  conv %s: loss cpu %.3f -> %.3f, gpu %.3f -> %.3f\n", classes > 0UL ? "cvae" : "vae",
@@ -908,7 +908,7 @@ static void gan_noise_(&RocmGan dev, struct Rng rng, unsigned long m) {
         &Tensor z = rng.normal_tensor(m, Z);
         upload_at_(dev.noise, c * dev.maxBatch * Z, z);
         if (c < nc && dev.cfg.loss == GAN_WGAN_GP) {
-            &Tensor t = tensor_new_1d(m, 0);
+            &Tensor t = Tensor::new_1d(m, 0);
             unsafe { unsigned long r = 0UL; while (r < m) { t->data[r] = rng.uniform(); r = r + 1UL; } }
             upload_at_(dev.noise, (nc + 1UL) * dev.maxBatch * Z + c * dev.maxBatch, t);
         }
@@ -930,7 +930,7 @@ static void gan_sgd_(&Optimizer a, &Optimizer b) {
 static void gan_case_(const char* name, int loss, unsigned long classes, unsigned long nCritic, int sgd) {
     unsigned long m = 6UL;
     unsigned long D = 3UL;
-    struct GanConfig cfg = gan_config_default(4UL);
+    struct GanConfig cfg = GanConfig::default(4UL);
     cfg.hidden = 16UL;
     cfg.loss = loss;
     cfg.classes = classes;
@@ -939,15 +939,15 @@ static void gan_case_(const char* name, int loss, unsigned long classes, unsigne
     cfg.lrG = (float)0.002;
     cfg.lrD = (float)0.002;
     cfg.clip = (float)0.05;
-    struct Gan cpu = gan_new(D, &cfg);
-    struct Gan host = gan_new(D, &cfg);
+    struct Gan cpu = Gan::new(D, &cfg);
+    struct Gan host = Gan::new(D, &cfg);
     if (sgd) { gan_sgd_(&cpu.optG, &host.optG); gan_sgd_(&cpu.optD, &host.optD); }
-    struct RocmGan dev = rocm_gan_new(&host, m);
+    struct RocmGan dev = RocmGan::new(&host, m);
     check(dev.ok, name);
-    struct Rng rng = rng_new(77UL);
-    &Tensor real = tensor_new_2d(m, D, 0);
+    struct Rng rng = Rng::new(77UL);
+    &Tensor real = Tensor::new_2d(m, D, 0);
     rng.fill_normal(real, (float)1.0, (float)0.5);
-    &Tensor lab = tensor_new_1d(m, 0);
+    &Tensor lab = Tensor::new_1d(m, 0);
     unsafe { unsigned long r = 0UL; while (r < m) { lab->data[r] = (float)(r % (classes == 0UL ? 1UL : classes)); r = r + 1UL; } }
     struct RocmBuf dr = upload_(real);
     struct RocmBuf dl = upload_(lab);
@@ -981,23 +981,23 @@ static void gan_case_(const char* name, int loss, unsigned long classes, unsigne
 }
 
 static struct Dcgan dcgan_build_(const &GanConfig cfg) {
-    struct Rng rng = rng_new(5UL);
+    struct Rng rng = Rng::new(5UL);
     unsigned long c = cfg.classes;
-    struct ConvNet gen = convnet_new(cfg.latent + c, 1UL, 1UL);
+    struct ConvNet gen = ConvNet::new(cfg.latent + c, 1UL, 1UL);
     gen.deconv(8UL, 4UL, 1UL, 0UL, ACT_NONE, &rng);   // 8 x 4 x 4
     gen.batchnorm(ACT_RELU);
     gen.deconv(1UL, 4UL, 2UL, 1UL, ACT_TANH, &rng);   // 1 x 8 x 8
-    struct ConvNet disc = convnet_new(1UL + c, 8UL, 8UL);
+    struct ConvNet disc = ConvNet::new(1UL + c, 8UL, 8UL);
     disc.conv(4UL, 4UL, 2UL, 1UL, ACT_LEAKY, &rng);   // 4 x 4 x 4
     disc.conv(8UL, 4UL, 2UL, 1UL, ACT_NONE, &rng);    // 8 x 2 x 2
     disc.batchnorm(ACT_LEAKY);
     disc.conv(1UL, 2UL, 1UL, 0UL, ACT_NONE, &rng);    // 1 x 1 x 1
-    return dcgan_new(gen, disc, cfg);
+    return Dcgan::new(gen, disc, cfg);
 }
 
 static void dcgan_case_(const char* name, unsigned long classes) {
     unsigned long m = 5UL;
-    struct GanConfig cfg = gan_config_default(3UL);
+    struct GanConfig cfg = GanConfig::default(3UL);
     cfg.classes = classes;
     cfg.emaDecay = (float)0.9;
     cfg.lrG = (float)0.002;
@@ -1006,12 +1006,12 @@ static void dcgan_case_(const char* name, unsigned long classes) {
     struct Dcgan host = dcgan_build_(&cfg);
     gan_sgd_(&cpu.optG, &host.optG);
     gan_sgd_(&cpu.optD, &host.optD);
-    struct RocmGan dev = rocm_dcgan_new(&host, m);
+    struct RocmGan dev = RocmGan::new_dcgan(&host, m);
     check(dev.ok, name);
-    struct Rng rng = rng_new(78UL);
-    &Tensor real = tensor_new_2d(m, 64UL, 0);
+    struct Rng rng = Rng::new(78UL);
+    &Tensor real = Tensor::new_2d(m, 64UL, 0);
     rng.fill_uniform(real, (float)-1.0, (float)1.0);
-    &Tensor lab = tensor_new_1d(m, 0);
+    &Tensor lab = Tensor::new_1d(m, 0);
     unsafe { unsigned long r = 0UL; while (r < m) { lab->data[r] = (float)(r % (classes == 0UL ? 1UL : classes)); r = r + 1UL; } }
     struct RocmBuf dr = upload_(real);
     struct RocmBuf dl = upload_(lab);
@@ -1059,12 +1059,12 @@ static void gan_tests_() {
     dcgan_case_("dcgan (batch norm)", 0UL);
     dcgan_case_("dcgan conditional", 2UL);
     // the training loop runs and its graphs replay
-    struct Rng drng = rng_new(3UL);
-    struct Dataset data = dataset_blobs(200UL, 1UL, 2UL, (float)0.5, &drng);   // 3 full batches of 64 + a tail
-    struct GanConfig cfg = gan_config_default(4UL);
+    struct Rng drng = Rng::new(3UL);
+    struct Dataset data = Dataset::blobs(200UL, 1UL, 2UL, (float)0.5, &drng);   // 3 full batches of 64 + a tail
+    struct GanConfig cfg = GanConfig::default(4UL);
     cfg.hidden = 32UL;
-    struct Gan g = gan_new(2UL, &cfg);
-    struct RocmGan dev = rocm_gan_new(&g, 64UL);
+    struct Gan g = Gan::new(2UL, &cfg);
+    struct RocmGan dev = RocmGan::new(&g, 64UL);
     struct GanLosses l = dev.train(&data, 5UL, 64UL);
     check(dev.steps == 20UL && dev.download(&g) && g.steps == 20UL && l.d > (float)0.0 && l.d < (float)5.0,
           "RocmGan::train");
@@ -1076,7 +1076,7 @@ static void gan_tests_() {
 
 // ── RL: device agents follow the host agents step for step ──────────────────
 static void dqn_case_(const char* name, unsigned long targetEvery, int doubleDqn) {
-    struct DqnConfig cfg = dqn_config_default();
+    struct DqnConfig cfg = DqnConfig::default();
     cfg.hidden = 32UL;
     cfg.batchSize = 32UL;
     cfg.bufferSize = 500UL;
@@ -1084,13 +1084,13 @@ static void dqn_case_(const char* name, unsigned long targetEvery, int doubleDqn
     cfg.epsDecaySteps = 100UL;
     cfg.targetEvery = targetEvery;
     cfg.doubleDqn = doubleDqn;
-    struct Dqn cpu = dqn_new(4UL, 3UL, &cfg);
-    struct Dqn host = dqn_new(4UL, 3UL, &cfg);
-    struct RocmDqn dev = rocm_dqn_new(&host);
+    struct Dqn cpu = Dqn::new(4UL, 3UL, &cfg);
+    struct Dqn host = Dqn::new(4UL, 3UL, &cfg);
+    struct RocmDqn dev = RocmDqn::new(&host);
     check(dev.ok, name);
-    struct Rng env = rng_new(91UL);
-    &Tensor o = tensor_new_1d(4UL, 0);
-    &Tensor n = tensor_new_1d(4UL, 0);
+    struct Rng env = Rng::new(91UL);
+    &Tensor o = Tensor::new_1d(4UL, 0);
+    &Tensor n = Tensor::new_1d(4UL, 0);
     int same = 1;
     int ok = 1;
     float lc = (float)-1.0;
@@ -1126,17 +1126,17 @@ static void dqn_case_(const char* name, unsigned long targetEvery, int doubleDqn
 }
 
 static void pg_case_(const char* name, int algo, unsigned long rollout) {
-    struct PgConfig cfg = pg_config_default(algo);
+    struct PgConfig cfg = PgConfig::default(algo);
     cfg.hidden = 32UL;
     cfg.minibatch = 24UL;      // with rollout 100: 4 full minibatches and a short one
     cfg.epochs = 3UL;
-    struct PolicyAgent cpu = pg_new(4UL, 3UL, &cfg);
-    struct PolicyAgent host = pg_new(4UL, 3UL, &cfg);
-    struct RocmPolicy dev = rocm_pg_new(&host, 256UL);
+    struct PolicyAgent cpu = PolicyAgent::new(4UL, 3UL, &cfg);
+    struct PolicyAgent host = PolicyAgent::new(4UL, 3UL, &cfg);
+    struct RocmPolicy dev = RocmPolicy::new(&host, 256UL);
     check(dev.ok, name);
-    struct Rng env = rng_new(92UL);
-    &Tensor o = tensor_new_1d(4UL, 0);
-    &Tensor n = tensor_new_1d(4UL, 0);
+    struct Rng env = Rng::new(92UL);
+    &Tensor o = Tensor::new_1d(4UL, 0);
+    &Tensor n = Tensor::new_1d(4UL, 0);
     int same = 1;
     int ok = 1;
     float lc = (float)0.0;

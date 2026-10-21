@@ -32,9 +32,9 @@ namespace std {
     return tensor_mul(a, b);
 }
 
-&Tensor tensor_sum_auto(const &Tensor a) {
-    if (a->size >= TENSOR_AUTO_VDSP_MIN_ELEMS) { return tensor_sum_vdsp(a); }
-    return tensor_sum(a);
+&Tensor Tensor::sum_auto() const {
+    if (self->size >= TENSOR_AUTO_VDSP_MIN_ELEMS) { return self.sum_vdsp(); }
+    return self.sum();
 }
 
 // No size check at all: benchmarked 2x2x2 through 128x128x128 (8 to

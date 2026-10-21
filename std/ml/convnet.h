@@ -1,6 +1,6 @@
 #pragma once
 // SafeC Standard Library — trainable convolutional networks on std::ml's
-// autograd core.
+// Autograd::get core.
 //
 // cnn.h runs convolutions forward on FeatureMaps; this file makes them
 // differentiable on Tensors so they train with Tensor::backward and the
@@ -47,7 +47,7 @@
 namespace std {
 
 // ── Convolution ──────────────────────────────────────────────────────────────
-// Every field per axis; conv2d_spec fills a square kernel with dilation 1,
+// Every field per axis; Conv2dSpec::new fills a square kernel with dilation 1,
 // 1 group and no output padding. inC and outC must divide by groups;
 // outPad (transposed convolution only) must be below stride or dilation.
 struct Conv2dSpec {
@@ -62,8 +62,9 @@ struct Conv2dSpec {
     unsigned long groups;
     unsigned long outPadH;
     unsigned long outPadW;
+
+    static struct Conv2dSpec new(unsigned long kernel, unsigned long stride, unsigned long padding);
 };
-struct Conv2dSpec conv2d_spec(unsigned long kernel, unsigned long stride, unsigned long padding);
 
 // x is [batch, inC*inH*inW] (a 1D tensor is one image). Each returns
 // [batch, outC*outH*outW] and records its backward edge to x, weight and
@@ -107,29 +108,28 @@ struct Pool2dSpec {
     unsigned long padW;
     int ceilMode;
     int countIncludePad;           // avg pooling only
+
+    // Square window; floor mode, padding counted.
+    static struct Pool2dSpec new(unsigned long kernel, unsigned long stride, unsigned long padding);
 };
-// Square window; floor mode, padding counted.
-struct Pool2dSpec pool2d_spec(unsigned long kernel, unsigned long stride, unsigned long padding);
 unsigned long pool_out_side(unsigned long dim, unsigned long kernel, unsigned long stride,
                             unsigned long padding, int ceilMode);
-&Tensor tensor_maxpool2d_ex(const &Tensor x, unsigned long channels, unsigned long height, unsigned long width,
-                            const &Pool2dSpec spec);
-&Tensor tensor_avgpool2d_ex(const &Tensor x, unsigned long channels, unsigned long height, unsigned long width,
-                            const &Pool2dSpec spec);
-&Tensor tensor_maxpool2d(const &Tensor x, unsigned long channels, unsigned long height, unsigned long width,
-                         unsigned long kernel, unsigned long stride, unsigned long padding);
-&Tensor tensor_avgpool2d(const &Tensor x, unsigned long channels, unsigned long height, unsigned long width,
-                         unsigned long kernel, unsigned long stride, unsigned long padding, int countIncludePad);
+&Tensor Tensor::maxpool2d_ex(unsigned long channels, unsigned long height, unsigned long width, const &Pool2dSpec spec) const;
+&Tensor Tensor::avgpool2d_ex(unsigned long channels, unsigned long height, unsigned long width, const &Pool2dSpec spec) const;
+&Tensor Tensor::maxpool2d(unsigned long channels, unsigned long height, unsigned long width, unsigned long kernel,
+                          unsigned long stride, unsigned long padding) const;
+&Tensor Tensor::avgpool2d(unsigned long channels, unsigned long height, unsigned long width, unsigned long kernel,
+                          unsigned long stride, unsigned long padding, int countIncludePad) const;
 // Global pooling: each channel's whole plane to one value, [batch, C*H*W]
 // -> [batch, C] (a classifier head, or the squeeze of squeeze-and-excite).
 // Max sends the gradient to the plane's (first) largest input.
-&Tensor tensor_global_avgpool2d(const &Tensor x, unsigned long channels, unsigned long height, unsigned long width);
-&Tensor tensor_global_maxpool2d(const &Tensor x, unsigned long channels, unsigned long height, unsigned long width);
+&Tensor Tensor::global_avgpool2d(unsigned long channels, unsigned long height, unsigned long width) const;
+&Tensor Tensor::global_maxpool2d(unsigned long channels, unsigned long height, unsigned long width) const;
 
 // ── Resizing ─────────────────────────────────────────────────────────────────
 // out[c][h*factor + i][w*factor + j] = in[c][h][w]; gradients sum back.
-&Tensor tensor_upsample_nearest(const &Tensor x, unsigned long channels, unsigned long height, unsigned long width,
-                                unsigned long factor);
+&Tensor Tensor::upsample_nearest(unsigned long channels, unsigned long height, unsigned long width,
+                                 unsigned long factor) const;
 // To any outH x outW (up or down), as PyTorch's interpolate(size=...):
 //   RESIZE_NEAREST   source floor(o * in / out) ('nearest'; alignCorners ignored)
 //   RESIZE_BILINEAR  the four nearest pixels
@@ -141,11 +141,11 @@ unsigned long pool_out_side(unsigned long dim, unsigned long kernel, unsigned lo
 #define RESIZE_NEAREST  0
 #define RESIZE_BILINEAR 1
 #define RESIZE_BICUBIC  2
-&Tensor tensor_resize2d(const &Tensor x, unsigned long channels, unsigned long height, unsigned long width,
-                        unsigned long outH, unsigned long outW, int mode, int alignCorners);
-// tensor_resize2d to factor x the size, bilinear, corners not aligned.
-&Tensor tensor_upsample_bilinear(const &Tensor x, unsigned long channels, unsigned long height, unsigned long width,
-                                 unsigned long factor);
+&Tensor Tensor::resize2d(unsigned long channels, unsigned long height, unsigned long width, unsigned long outH,
+                         unsigned long outW, int mode, int alignCorners) const;
+// Tensor::resize2d to factor x the size, bilinear, corners not aligned.
+&Tensor Tensor::upsample_bilinear(unsigned long channels, unsigned long height, unsigned long width,
+                                  unsigned long factor) const;
 
 // ── Normalization and dropout ────────────────────────────────────────────────
 // Batch normalization (Ioffe & Szegedy 2015) over x [batch, channels*plane]:
@@ -174,10 +174,9 @@ unsigned long pool_out_side(unsigned long dim, unsigned long kernel, unsigned lo
 &Tensor tensor_spectral_norm(const &Tensor weight, &Tensor u, unsigned long iters, int training);
 // Inverted dropout: in training each value is zeroed with probability p
 // and the rest scaled by 1 / (1 - p); in inference x passes unchanged.
-// tensor_dropout2d drops whole channel planes (spatial dropout).
-&Tensor tensor_dropout(const &Tensor x, float p, int training, &Rng rng);
-&Tensor tensor_dropout2d(const &Tensor x, unsigned long channels, unsigned long plane, float p,
-                         int training, &Rng rng);
+// Tensor::dropout2d drops whole channel planes (spatial dropout).
+&Tensor Tensor::dropout(float p, int training, &Rng rng) const;
+&Tensor Tensor::dropout2d(unsigned long channels, unsigned long plane, float p, int training, &Rng rng) const;
 
 // ── Conditioning ─────────────────────────────────────────────────────────────
 // One constant plane per class, 1 in the plane of each row's label (m
@@ -185,7 +184,7 @@ unsigned long pool_out_side(unsigned long dim, unsigned long kernel, unsigned lo
 // classes*height*width], no gradient. tensor_append_label_channels puts
 // them after x's channels (x [m, C*height*width] -> [m, (C+classes)*...]):
 // how a conditional ConvVae / Dcgan feeds the label to its image-side net.
-&Tensor tensor_label_planes(const &Tensor labels, unsigned long classes, unsigned long height, unsigned long width);
+&Tensor Tensor::label_planes(unsigned long classes, unsigned long height, unsigned long width) const;
 &Tensor tensor_append_label_channels(const &Tensor x, const &Tensor labels, unsigned long classes,
                                      unsigned long height, unsigned long width);
 
@@ -198,7 +197,7 @@ unsigned long pool_out_side(unsigned long dim, unsigned long kernel, unsigned lo
 #define CONV_LAYER_DENSE           5   // fully connected over the flattened map -> outC x 1 x 1
 #define CONV_LAYER_RESHAPE         6   // reinterpret the geometry (same size), no data change
 #define CONV_LAYER_BATCHNORM       7
-#define CONV_LAYER_RESIZE          8   // tensor_resize2d to outH x outW ('mode', 'flag' = alignCorners)
+#define CONV_LAYER_RESIZE          8   // Tensor::resize2d to outH x outW ('mode', 'flag' = alignCorners)
 #define CONV_LAYER_GLOBAL_AVGPOOL  9   // -> C x 1 x 1
 #define CONV_LAYER_GLOBAL_MAXPOOL  10
 #define CONV_LAYER_GROUPNORM       11  // 'factor' groups
@@ -238,13 +237,13 @@ struct ConvLayer {
 // at gamma 1, beta 0. params holds every layer's trained tensors, all
 // requiring grad, on the heap; buffers holds what is not trained (batch
 // norms' running statistics, spectral norms' u). 'training' (1 from
-// convnet_new) picks batch statistics in batch norm and updates the running
+// ConvNet::new) picks batch statistics in batch norm and updates the running
 // ones, iterates spectral norms and applies dropout; set it to 0 for
 // inference with ConvNet::set_training. The models in autoencoder.h and
 // gan.h do that in their inference functions (encode / decode / sample /
 // generate / score).
 //
-//   struct ConvNet net = convnet_new(1UL, 28UL, 28UL);
+//   struct ConvNet net = ConvNet::new(1UL, 28UL, 28UL);
 //   net.conv(32UL, 3UL, 1UL, 1UL, ACT_NONE, &rng);      // 32 x 28 x 28
 //   net.batchnorm(ACT_RELU);
 //   net.residual_block(64UL, 2UL, 1, ACT_RELU, &rng);   // 64 x 14 x 14
@@ -331,7 +330,8 @@ struct ConvNet {
     void collect_params(&Vec<&Tensor> out) const;
     void collect_state(&Vec<&Tensor> out) const;
     void free();
+
+    static struct ConvNet new(unsigned long channels, unsigned long height, unsigned long width);
 };
-struct ConvNet convnet_new(unsigned long channels, unsigned long height, unsigned long width);
 
 } // namespace std

@@ -6,7 +6,7 @@
 
 namespace std {
 
-struct TrainConfig train_config_default() {
+struct TrainConfig TrainConfig::default() {
     struct TrainConfig c;
     c.epochs = 10UL;
     c.batchSize = 32UL;
@@ -17,7 +17,7 @@ struct TrainConfig train_config_default() {
     return c;
 }
 
-struct TrainerOptions trainer_options_default() {
+struct TrainerOptions TrainerOptions::default() {
     struct TrainerOptions o;
     o.maxBatch = 256UL;
     o.precision = 0;

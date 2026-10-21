@@ -2021,7 +2021,7 @@ static unsigned long nr_out_size_(const &RocmLayer L) { return L.outC * L.outH *
 // Every layer but the fully connected one keeps its activations channel-major.
 static int nr_is_cm_(const &RocmLayer L) { return L.kind != ROCM_LAYER_LINEAR; }
 
-struct RocmNet rocm_net_new(unsigned long maxBatch) {
+struct RocmNet RocmNet::new(unsigned long maxBatch) {
     struct RocmNet n;
     n.layers = vec_new();
     n.maxBatch = maxBatch == 0UL ? 1UL : maxBatch;
@@ -2056,7 +2056,7 @@ static void nr_layer_free_(&RocmLayer L) {
 }
 
 static int nr_alloc_(&RocmBuf b, unsigned long n) {
-    *b = rocm_alloc(n);
+    *b = RocmBuf::alloc(n);
     return b.dev != 0UL;
 }
 
@@ -2087,8 +2087,8 @@ static struct RocmLayer nr_layer_(int kind, int act, unsigned long inC, unsigned
     L.kind = kind; L.act = act;
     L.inC = inC; L.inH = inH; L.inW = inW;
     L.outC = inC; L.outH = inH; L.outW = inW;
-    L.conv = conv2d_spec(1UL, 1UL, 0UL);
-    L.pool = pool2d_spec(1UL, 1UL, 0UL);
+    L.conv = Conv2dSpec::new(1UL, 1UL, 0UL);
+    L.pool = Pool2dSpec::new(1UL, 1UL, 0UL);
     L.factor = 1UL; L.momentum = (float)0.1; L.eps = (float)0.00001;
     L.w = nr_none_(); L.b = nr_none_(); L.gw = nr_none_(); L.gb = nr_none_();
     L.runMean = nr_none_(); L.runVar = nr_none_(); L.stats = nr_none_();
@@ -2241,14 +2241,14 @@ int RocmNet::add_conv_transpose2d_ex(const &Tensor w, const &Tensor b, unsigned 
 
 int RocmNet::add_conv2d(const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH, unsigned long inW,
                         unsigned long kernel, unsigned long stride, unsigned long padding, int act) {
-    struct Conv2dSpec s = conv2d_spec(kernel, stride, padding);
+    struct Conv2dSpec s = Conv2dSpec::new(kernel, stride, padding);
     return nr_add_conv_(self, ROCM_LAYER_CONV, w, b, inC, inH, inW, &s, act);
 }
 
 int RocmNet::add_conv_transpose2d(const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH,
                                   unsigned long inW, unsigned long kernel, unsigned long stride,
                                   unsigned long padding, int act) {
-    struct Conv2dSpec s = conv2d_spec(kernel, stride, padding);
+    struct Conv2dSpec s = Conv2dSpec::new(kernel, stride, padding);
     return nr_add_conv_(self, ROCM_LAYER_CONVT, w, b, inC, inH, inW, &s, act);
 }
 
@@ -2363,7 +2363,7 @@ int RocmNet::add_skip(unsigned long slot, ?&Tensor projW, ?&Tensor projB, int ac
             st = st + 1UL;
         if (st > sv.outH) { self.ok = 0; return 0; }
         L.flag = 1;
-        L.conv = conv2d_spec(1UL, st, 0UL);
+        L.conv = Conv2dSpec::new(1UL, st, 0UL);
         int up = 0;
         match (projW) {
             case some(w): {
@@ -2554,8 +2554,8 @@ int RocmNet::spectral_norm(const &Tensor u) {
     return 1;
 }
 
-struct RocmNet rocm_net_from_mlp(const &Mlp m, unsigned long maxBatch) {
-    struct RocmNet n = rocm_net_new(maxBatch);
+struct RocmNet RocmNet::from_mlp(const &Mlp m, unsigned long maxBatch) {
+    struct RocmNet n = RocmNet::new(maxBatch);
     unsigned long l = 0UL;
     while (n.ok && l < m.nLayers) {
         int act = l + 1UL == m.nLayers ? m.outAct : m.act;
@@ -2565,8 +2565,8 @@ struct RocmNet rocm_net_from_mlp(const &Mlp m, unsigned long maxBatch) {
     return n;
 }
 
-struct RocmNet rocm_net_from_convnet(const &ConvNet c, unsigned long maxBatch) {
-    struct RocmNet n = rocm_net_new(maxBatch);
+struct RocmNet RocmNet::from_convnet(const &ConvNet c, unsigned long maxBatch) {
+    struct RocmNet n = RocmNet::new(maxBatch);
     n.set_input(c.inC, c.inH, c.inW);
     n.training = c.training ? 1 : 0;
     struct Vec<unsigned long> slots = vec_new();   // ConvNet slot -> SAVE layer index
@@ -2779,7 +2779,7 @@ static int nr_splitk_reserve_(unsigned long m, unsigned long n, unsigned long k)
     if (g_nr_splitk.len >= need) return 1;
     rocm_sync();
     g_nr_splitk.free();
-    g_nr_splitk = rocm_alloc(need);
+    g_nr_splitk = RocmBuf::alloc(need);
     return g_nr_splitk.dev != 0UL;
 }
 
@@ -2921,7 +2921,7 @@ static int nr_mio_grow_(&RocmBuf b, unsigned long bytes) {
     if (b.len >= n) return 1;
     rocm_sync();
     b.free();
-    *b = rocm_alloc(n);
+    *b = RocmBuf::alloc(n);
     return b.dev != 0UL;
 }
 
@@ -3822,7 +3822,7 @@ static void nr_opt_fields_(const &RocmOptimizer o, &float out) {
     }
 }
 
-struct RocmOptimizer rocm_optimizer_new(int kind, float lr) {
+struct RocmOptimizer RocmOptimizer::new(int kind, float lr) {
     struct RocmOptimizer o;
     o.w = vec_new(); o.g = vec_new(); o.m = vec_new(); o.v = vec_new();
     o.kind = kind;
@@ -3837,7 +3837,7 @@ struct RocmOptimizer rocm_optimizer_new(int kind, float lr) {
     o.t = 0UL;
     o.lossScale = nr_none_();
     o.ok = nr_ensure_();
-    o.state = o.ok ? rocm_alloc(13UL) : nr_none_();
+    o.state = o.ok ? RocmBuf::alloc(13UL) : nr_none_();
     if (o.state.dev == 0UL) { o.ok = 0; return o; }
     float init[13];
     unsigned long z = 0UL;
@@ -3865,8 +3865,8 @@ int RocmOptimizer::sync() {
 
 int RocmOptimizer::add(struct RocmBuf w, struct RocmBuf g) {
     if (!self.ok || w.dev == 0UL || !nr_fits_(g, w.len)) return 0;
-    struct RocmBuf m = rocm_alloc(w.len);
-    struct RocmBuf v = rocm_alloc(w.len);
+    struct RocmBuf m = RocmBuf::alloc(w.len);
+    struct RocmBuf v = RocmBuf::alloc(w.len);
     if (m.dev == 0UL || v.dev == 0UL || !rocm_zero(m) || !rocm_zero(v)) {
         m.free(); v.free();
         self.ok = 0;
@@ -4000,7 +4000,7 @@ int rocm_slice_cols(struct RocmBuf src, struct RocmBuf dst, unsigned long rows, 
 static void nr_vae_finish_(&RocmVae d, const &Mlp muHead, const &Mlp logvarHead) {
     d.eps = nr_none_(); d.zbuf = nr_none_(); d.dz = nr_none_(); d.counter = nr_none_();
     d.encIn = nr_none_(); d.decIn = nr_none_(); d.decGrad = nr_none_();
-    d.head = rocm_net_new(d.maxBatch);
+    d.head = RocmNet::new(d.maxBatch);
     d.ok = d.enc.ok && d.head.ok && d.dec.ok;
     if (!d.ok) return;
     // fused head: W [hidden, 2L] rows (Wmu[r] | Wlv[r]), b (bmu | blv)
@@ -4050,24 +4050,24 @@ static struct RocmVae nr_vae_blank_(const &VaeConfig cfg, unsigned long maxBatch
     return d;
 }
 
-struct RocmVae rocm_vae_new(const &Vae v, unsigned long maxBatch) {
+struct RocmVae RocmVae::new(const &Vae v, unsigned long maxBatch) {
     struct RocmVae d = nr_vae_blank_(&v.cfg, maxBatch);
     d.inDim = v.dec.outDim;
     d.encChannels = d.inDim;
     d.encPlane = 1UL;
-    d.enc = rocm_net_from_mlp(&v.enc, d.maxBatch);
-    d.dec = rocm_net_from_mlp(&v.dec, d.maxBatch);
+    d.enc = RocmNet::from_mlp(&v.enc, d.maxBatch);
+    d.dec = RocmNet::from_mlp(&v.dec, d.maxBatch);
     nr_vae_finish_(&d, &v.muHead, &v.logvarHead);
     return d;
 }
 
-struct RocmVae rocm_conv_vae_new(const &ConvVae v, unsigned long maxBatch) {
+struct RocmVae RocmVae::new_conv(const &ConvVae v, unsigned long maxBatch) {
     struct RocmVae d = nr_vae_blank_(&v.cfg, maxBatch);
     d.inDim = v.dec.out_dim();
     d.encChannels = v.enc.inC - v.cfg.classes;
     d.encPlane = v.enc.inH * v.enc.inW;
-    d.enc = rocm_net_from_convnet(&v.enc, d.maxBatch);
-    d.dec = rocm_net_from_convnet(&v.dec, d.maxBatch);
+    d.enc = RocmNet::from_convnet(&v.enc, d.maxBatch);
+    d.dec = RocmNet::from_convnet(&v.dec, d.maxBatch);
     d.enc.training = 1;   // conv_vae_loss runs both nets in training mode
     d.dec.training = 1;
     nr_vae_finish_(&d, &v.muHead, &v.logvarHead);
@@ -4190,10 +4190,10 @@ void RocmVae::free() {
 
 // ── Convolutional autoencoder ────────────────────────────────────────────────
 
-struct RocmConvAe rocm_conv_autoencoder_new(const &ConvAutoencoder ae, unsigned long maxBatch) {
+struct RocmConvAe RocmConvAe::new(const &ConvAutoencoder ae, unsigned long maxBatch) {
     struct RocmConvAe a;
-    a.enc = rocm_net_from_convnet(&ae.enc, maxBatch);
-    a.dec = rocm_net_from_convnet(&ae.dec, maxBatch);
+    a.enc = RocmNet::from_convnet(&ae.enc, maxBatch);
+    a.dec = RocmNet::from_convnet(&ae.dec, maxBatch);
     a.enc.training = 1;   // conv_autoencoder_loss runs both nets in training mode
     a.dec.training = 1;
     a.recon = ae.recon;
@@ -4315,8 +4315,8 @@ static int nr_append_(struct RocmBuf x, struct RocmBuf labels, struct RocmBuf ou
     }
 }
 
-struct RocmOptimizer rocm_optimizer_from(const &Optimizer o) {
-    struct RocmOptimizer d = rocm_optimizer_new(o.kind, o.lr);
+struct RocmOptimizer RocmOptimizer::from(const &Optimizer o) {
+    struct RocmOptimizer d = RocmOptimizer::new(o.kind, o.lr);
     d.momentum = o.momentum;
     d.beta1 = o.beta1;
     d.beta2 = o.beta2;
@@ -4341,8 +4341,8 @@ static void nr_gan_finish_(&RocmGan d, const &Optimizer optG, const &Optimizer o
     d.ema = vec_new();
     d.emaSrc = vec_new();
     d.ok = d.ok && d.gen.ok && d.disc.ok;
-    d.optG = rocm_optimizer_from(optG);
-    d.optD = rocm_optimizer_from(optD);
+    d.optG = RocmOptimizer::from(optG);
+    d.optD = RocmOptimizer::from(optD);
     if (d.cfg.loss == GAN_WGAN) d.optD.clampWeights = d.cfg.clip;
     d.ok = d.ok && d.gen.add_params(&d.optG) && d.disc.add_params(&d.optD);
     // averaged generator: (w, b) of every parameterized layer, then (mean, var) of every batch norm
@@ -4399,11 +4399,11 @@ static struct RocmGan nr_gan_blank_(const &GanConfig cfg, unsigned long maxBatch
     return d;
 }
 
-struct RocmGan rocm_gan_new(const &Gan g, unsigned long maxBatch) {
+struct RocmGan RocmGan::new(const &Gan g, unsigned long maxBatch) {
     struct RocmGan d = nr_gan_blank_(&g.cfg, maxBatch);
     unsigned long rowsD = g.cfg.loss == GAN_WGAN_GP ? 4UL * d.maxBatch : 2UL * d.maxBatch;
-    d.gen = rocm_net_from_mlp(&g.gen, d.maxBatch);
-    d.disc = rocm_net_from_mlp(&g.disc, rowsD);
+    d.gen = RocmNet::from_mlp(&g.gen, d.maxBatch);
+    d.disc = RocmNet::from_mlp(&g.disc, rowsD);
     d.dataDim = g.gen.outDim;
     d.channels = d.dataDim;
     d.plane = 1UL;
@@ -4412,11 +4412,11 @@ struct RocmGan rocm_gan_new(const &Gan g, unsigned long maxBatch) {
     return d;
 }
 
-struct RocmGan rocm_dcgan_new(const &Dcgan g, unsigned long maxBatch) {
+struct RocmGan RocmGan::new_dcgan(const &Dcgan g, unsigned long maxBatch) {
     struct RocmGan d = nr_gan_blank_(&g.cfg, maxBatch);
     unsigned long rowsD = g.cfg.loss == GAN_WGAN_GP ? 4UL * d.maxBatch : 2UL * d.maxBatch;
-    d.gen = rocm_net_from_convnet(&g.gen, d.maxBatch);
-    d.disc = rocm_net_from_convnet(&g.disc, rowsD);
+    d.gen = RocmNet::from_convnet(&g.gen, d.maxBatch);
+    d.disc = RocmNet::from_convnet(&g.disc, rowsD);
     // training steps run both nets in training mode, as Dcgan::train_step
     d.gen.training = 1;
     d.disc.training = 1;
@@ -4550,7 +4550,7 @@ struct GanLosses RocmGan::train(const &Dataset data, unsigned long epochs, unsig
     struct GanLosses last;
     last.d = (float)0.0;
     last.g = (float)0.0;
-    struct RocmBatches bt = rocm_batches_new(data, batchSize, 1, self.cfg.seed + 101UL);
+    struct RocmBatches bt = RocmBatches::new(data, batchSize, 1, self.cfg.seed + 101UL);
     struct RocmGraph graphs[2];
     graphs[0].exec = 0UL;
     graphs[1].exec = 0UL;
@@ -4677,7 +4677,7 @@ static int nr_forward1_(&RocmNet net, struct RocmBuf obs1, const &Tensor obs, un
 
 static int nr_launch1_(int kernel, &void params) { return nr_launch_grid_(kernel, 1UL, 1UL, params); }
 
-struct RocmDqn rocm_dqn_new(const &Dqn d) {
+struct RocmDqn RocmDqn::new(const &Dqn d) {
     struct RocmDqn r;
     r.cfg = d.cfg;
     r.rng = d.rng;
@@ -4699,9 +4699,9 @@ struct RocmDqn rocm_dqn_new(const &Dqn d) {
     unsigned long st = W > B ? W : B;
     if (d.actions > st) st = d.actions;
     unsafe { r.stage = (&heap float)(float*)malloc(sizeof(float) * (st > slots * W ? st : slots * W)); }
-    r.q = rocm_net_from_mlp(&d.q, B);
-    r.target = rocm_net_from_mlp(&d.target, B);
-    r.opt = rocm_optimizer_from(&d.opt);
+    r.q = RocmNet::from_mlp(&d.q, B);
+    r.target = RocmNet::from_mlp(&d.target, B);
+    r.opt = RocmOptimizer::from(&d.opt);
     r.opt.clipNorm = d.cfg.clipNorm;
     r.ok = r.q.ok && r.target.ok && r.q.add_params(&r.opt);
     nr_param_list_(&r.q, &r.qParams);
@@ -4865,7 +4865,7 @@ void RocmDqn::free() {
 
 // ── Policy gradient ──
 
-struct RocmPolicy rocm_pg_new(const &PolicyAgent a, unsigned long maxRollout) {
+struct RocmPolicy RocmPolicy::new(const &PolicyAgent a, unsigned long maxRollout) {
     struct RocmPolicy r;
     r.cfg = a.cfg;
     r.rng = a.rng;
@@ -4884,9 +4884,9 @@ struct RocmPolicy rocm_pg_new(const &PolicyAgent a, unsigned long maxRollout) {
     unsigned long D = a.obsDim;
     unsigned long W = 2UL * D + 4UL;
     unsafe { r.stage = (&heap float)(float*)malloc(sizeof(float) * (N * W + a.actions + 1UL)); }
-    r.policy = rocm_net_from_mlp(&a.policy, N);
-    r.value = rocm_net_from_mlp(&a.value, N);
-    r.opt = rocm_optimizer_from(&a.opt);
+    r.policy = RocmNet::from_mlp(&a.policy, N);
+    r.value = RocmNet::from_mlp(&a.value, N);
+    r.opt = RocmOptimizer::from(&a.opt);
     r.opt.clipNorm = a.cfg.clipNorm;
     r.ok = r.policy.ok && r.value.ok && r.policy.add_params(&r.opt) &&
            r.value.add_params(&r.opt) &&
@@ -5145,13 +5145,13 @@ static void nr_shuffle_(&RocmBatches b) {
     }
 }
 
-struct RocmBatches rocm_batches_new(const &Dataset d, unsigned long batchSize, int shuffle, unsigned long seed) {
+struct RocmBatches RocmBatches::new(const &Dataset d, unsigned long batchSize, int shuffle, unsigned long seed) {
     struct RocmBatches b;
     b.n = d.n;
     b.batchSize = batchSize == 0UL ? 1UL : batchSize;
     if (b.batchSize > b.n && b.n > 0UL) b.batchSize = b.n;
     b.shuffle = shuffle;
-    b.rng = rng_new(seed);
+    b.rng = Rng::new(seed);
     unsafe {
         b.features = d.x->shape[1];
         b.targets = d.y->shape[1];
@@ -5257,7 +5257,7 @@ static fn int(&RocmNet, struct RocmBuf, struct RocmBuf, unsigned long, struct Ro
 // The fields every RocmTrainer constructor sets the same way, after 'dev'.
 generic<H, D>
 static void nr_trainer_finish_(&RocmTrainer<H, D> t, const &Optimizer opt, const &TrainerOptions o) {
-    t.opt = rocm_optimizer_from(opt);
+    t.opt = RocmOptimizer::from(opt);
     t.maxBatch = o.maxBatch;
     t.xs = nr_none_();
     t.ys = nr_none_();
@@ -5281,7 +5281,7 @@ struct RocmTrainer<struct Mlp, struct RocmNet> rocm_mlp_trainer_new(struct Mlp m
                                                                     const &TrainerOptions o) {
     struct RocmTrainer<struct Mlp, struct RocmNet> t;
     t.host = m;
-    t.dev = rocm_net_from_mlp(&t.host, o.maxBatch);
+    t.dev = RocmNet::from_mlp(&t.host, o.maxBatch);
     nr_trainer_finish_(&t, opt, o);
     t.ok = t.dev.ok && (o.precision == 0 || t.dev.set_precision(o.precision)) &&
            t.dev.add_params(&t.opt) && t.opt.ok;
@@ -5296,7 +5296,7 @@ struct RocmTrainer<struct ConvNet, struct RocmNet> rocm_convnet_trainer_new(stru
                                                                             const &TrainerOptions o) {
     struct RocmTrainer<struct ConvNet, struct RocmNet> t;
     t.host = n;
-    t.dev = rocm_net_from_convnet(&t.host, o.maxBatch);
+    t.dev = RocmNet::from_convnet(&t.host, o.maxBatch);
     nr_trainer_finish_(&t, opt, o);
     t.ok = t.dev.ok && (o.precision == 0 || t.dev.set_precision(o.precision)) &&
            t.dev.add_params(&t.opt) && t.opt.ok;
@@ -5310,7 +5310,7 @@ struct RocmTrainer<struct Vae, struct RocmVae> rocm_vae_trainer_new(struct Vae v
                                                                     const &TrainerOptions o) {
     struct RocmTrainer<struct Vae, struct RocmVae> t;
     t.host = v;
-    t.dev = rocm_vae_new(&t.host, o.maxBatch);
+    t.dev = RocmVae::new(&t.host, o.maxBatch);
     nr_trainer_finish_(&t, opt, o);
     t.ok = t.dev.ok && o.precision == 0 && t.dev.add_params(&t.opt) && t.opt.ok;
     t.stepFn = rocm_vae_step;
@@ -5323,7 +5323,7 @@ struct RocmTrainer<struct ConvVae, struct RocmVae> rocm_conv_vae_trainer_new(str
                                                                              const &TrainerOptions o) {
     struct RocmTrainer<struct ConvVae, struct RocmVae> t;
     t.host = v;
-    t.dev = rocm_conv_vae_new(&t.host, o.maxBatch);
+    t.dev = RocmVae::new_conv(&t.host, o.maxBatch);
     nr_trainer_finish_(&t, opt, o);
     t.ok = t.dev.ok && o.precision == 0 && t.dev.add_params(&t.opt) && t.opt.ok;
     t.stepFn = rocm_vae_step;
@@ -5337,7 +5337,7 @@ struct RocmTrainer<struct ConvAutoencoder, struct RocmConvAe> rocm_conv_ae_train
                                                                                        const &TrainerOptions o) {
     struct RocmTrainer<struct ConvAutoencoder, struct RocmConvAe> t;
     t.host = ae;
-    t.dev = rocm_conv_autoencoder_new(&t.host, o.maxBatch);
+    t.dev = RocmConvAe::new(&t.host, o.maxBatch);
     nr_trainer_finish_(&t, opt, o);
     t.ok = t.dev.ok && o.precision == 0 && t.dev.add_params(&t.opt) && t.opt.ok;
     t.stepFn = rocm_conv_autoencoder_step;
@@ -5349,7 +5349,7 @@ struct RocmTrainer<struct ConvAutoencoder, struct RocmConvAe> rocm_conv_ae_train
 struct RocmGanTrainer<struct Gan> rocm_gan_trainer_new(struct Gan g, const &TrainerOptions o) {
     struct RocmGanTrainer<struct Gan> t;
     t.host = g;
-    t.dev = rocm_gan_new(&t.host, o.maxBatch);
+    t.dev = RocmGan::new(&t.host, o.maxBatch);
     t.downloadFn = nr_download_gan_;
     t.xs = nr_none_();
     t.ls = nr_none_();
@@ -5359,17 +5359,17 @@ struct RocmGanTrainer<struct Gan> rocm_gan_trainer_new(struct Gan g, const &Trai
 struct RocmGanTrainer<struct Dcgan> rocm_dcgan_trainer_new(struct Dcgan g, const &TrainerOptions o) {
     struct RocmGanTrainer<struct Dcgan> t;
     t.host = g;
-    t.dev = rocm_dcgan_new(&t.host, o.maxBatch);
+    t.dev = RocmGan::new_dcgan(&t.host, o.maxBatch);
     t.downloadFn = nr_download_dcgan_;
     t.xs = nr_none_();
     t.ls = nr_none_();
     return t;
 }
 
-struct RocmDqnAgent rocm_dqn_agent_new(struct Dqn d) {
+struct RocmDqnAgent RocmDqnAgent::new(struct Dqn d) {
     struct RocmDqnAgent a;
     a.host = d;
-    a.dev = rocm_dqn_new(&a.host);
+    a.dev = RocmDqn::new(&a.host);
     return a;
 }
 
@@ -5389,10 +5389,10 @@ int RocmDqnAgent::sync() { return self.dev.download(&self.host); }
 
 void RocmDqnAgent::free() { self.dev.free(); }
 
-struct RocmPgAgent rocm_pg_agent_new(struct PolicyAgent a, const &TrainerOptions o) {
+struct RocmPgAgent RocmPgAgent::new(struct PolicyAgent a, const &TrainerOptions o) {
     struct RocmPgAgent p;
     p.host = a;
-    p.dev = rocm_pg_new(&p.host, o.maxBatch);
+    p.dev = RocmPolicy::new(&p.host, o.maxBatch);
     return p;
 }
 

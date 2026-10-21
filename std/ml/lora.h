@@ -20,7 +20,7 @@
 //
 // Both wrap an Mlp (nn.h) and are Modules (module.h), so they train like
 // any other model:
-//   struct LoraMlp ft = lora_attach(&pretrained, &cfg);
+//   struct LoraMlp ft = LoraMlp::attach(&pretrained, &cfg);
 //   model_add_params(&ft, &opt);       // adapters only
 //   module_fit(&ft, TRAIN_LOSS_CE, &opt, &data, &tc);
 #include <std/ml/tensor.h>
@@ -34,9 +34,10 @@ struct LoraConfig {
     float alpha;          // the update is scaled by alpha / r
     float dropout;        // on the adapter's input while training (grad enabled)
     unsigned long seed;
+
+    // alpha = rank (scale 1), no dropout.
+    static struct LoraConfig default(unsigned long rank);
 };
-// alpha = rank (scale 1), no dropout.
-struct LoraConfig lora_config_default(unsigned long rank);
 
 // ── LoRA ─────────────────────────────────────────────────────────────────────
 // Borrows the base Mlp and freezes its parameters (requiresGrad = 0) until
@@ -59,8 +60,9 @@ struct LoraMlp {
     void merge();
     // Frees the adapters and unfreezes the base.
     void detach();
+
+    static struct LoraMlp attach(&Mlp base, const &LoraConfig cfg);
 };
-struct LoraMlp lora_attach(&Mlp base, const &LoraConfig cfg);
 
 // ── NF4 quantization ─────────────────────────────────────────────────────────
 #define NF4_BLOCK        64UL    // weights per absmax scale
@@ -80,9 +82,10 @@ struct Nf4Tensor {
 
     unsigned long bytes() const;   // storage, all parts
     void free();
+
+    static struct Nf4Tensor quantize(const &Tensor w, unsigned long blockSize, int doubleQuant);
+    &Tensor dequantize() const;   // [rows, cols], no grad
 };
-struct Nf4Tensor nf4_quantize(const &Tensor w, unsigned long blockSize, int doubleQuant);
-&Tensor          nf4_dequantize(const &Nf4Tensor q);     // [rows, cols], no grad
 
 // ── QLoRA ────────────────────────────────────────────────────────────────────
 // Copies the base: weights to NF4, biases as float32, all frozen. The base
@@ -105,7 +108,8 @@ struct QLoraMlp {
     void collect_state(&Vec<&Tensor> out) const;
     unsigned long base_bytes() const;        // the frozen base at rest
     void free();
+
+    static struct QLoraMlp attach(const &Mlp base, const &LoraConfig cfg, unsigned long blockSize, int doubleQuant);
 };
-struct QLoraMlp qlora_attach(const &Mlp base, const &LoraConfig cfg, unsigned long blockSize, int doubleQuant);
 
 } // namespace std

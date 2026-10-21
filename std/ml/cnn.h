@@ -4,7 +4,7 @@
 //
 // Feature maps are channels-first (CHW), flat row-major float32 buffers —
 // deliberately not std::Tensor (which tops out at 2D and is wired for
-// matmul-shaped autograd; convolution's 4D weight tensor and 3D
+// matmul-shaped Autograd::get; convolution's 4D weight tensor and 3D
 // activations don't fit that shape). Forward-only, like the rest of
 // std/ml's newer additions (see attention.h). Conv2D supports stride and
 // zero-padding; no dilation, no grouped/depthwise convolution.
@@ -20,15 +20,36 @@ struct FeatureMap {
     int           fromArena; // 1 if data came from a TensorArena (FeatureMap::free leaves it)
 
     void free();
-};
 
-// Between TensorArena::begin and tensor_arena_end (std/ml/tensor.h), new
-// feature maps -- the ones these functions return, and every layer's
-// intermediate inside UNet::forward and the like -- come from the thread's
-// TensorArena, as tensors do: no malloc (or page faults, for fresh memory)
-// per layer. FeatureMap::free does nothing for them; TensorArena::reset
-// releases them all, so don't use one after its arena is reset.
-struct FeatureMap feature_map_new(unsigned long channels, unsigned long height, unsigned long width);
+    // Between TensorArena::begin and tensor_arena_end (std/ml/tensor.h), new
+    // feature maps -- the ones these functions return, and every layer's
+    // intermediate inside UNet::forward and the like -- come from the thread's
+    // TensorArena, as tensors do: no malloc (or page faults, for fresh memory)
+    // per layer. FeatureMap::free does nothing for them; TensorArena::reset
+    // releases them all, so don't use one after its arena is reset.
+    static struct FeatureMap new(unsigned long channels, unsigned long height, unsigned long width);
+    // Max/avg pooling: kernel x kernel window, given stride, no padding.
+    // Channel count is preserved; caller must choose dimensions divisible by
+    // the kernel/stride combination.
+    struct FeatureMap maxpool2d(unsigned long kernel, unsigned long stride) const;
+    struct FeatureMap avgpool2d(unsigned long kernel, unsigned long stride) const;
+    // The same with 'padding' on every side; output side (dim + 2*padding -
+    // kernel)/stride + 1. Max pooling ignores the padded positions (as
+    // PyTorch's MaxPool2d does); avg pooling counts them as zeros in the
+    // divisor when 'countIncludePad' (PyTorch's AvgPool2d default) and
+    // divides by the positions inside the plane otherwise.
+    struct FeatureMap maxpool2d_ex(unsigned long kernel, unsigned long stride, unsigned long padding) const;
+    struct FeatureMap avgpool2d_ex(unsigned long kernel, unsigned long stride, unsigned long padding,
+                                   int countIncludePad) const;
+    // Global pooling over each channel's whole plane: channels x 1 x 1 (the
+    // classifier head of ResNet-style networks).
+    struct FeatureMap global_avgpool2d() const;
+    struct FeatureMap global_maxpool2d() const;
+    // Nearest-neighbor 2x spatial upsample: out[c][2h+dh][2w+dw] = in[c][h][w]
+    // for dh,dw in {0,1}. Used by U-Net's decoder path (see unet.h) in place
+    // of a learned transposed convolution.
+    struct FeatureMap upsample2x_nearest() const;
+};
 
 // out[oc][oh][ow] = bias[oc] + sum_ic sum_kh sum_kw
 //                     weight[oc][ic][kh][kw] * in[ic][oh*stride+kh-padding][ow*stride+kw-padding]
@@ -53,30 +74,10 @@ struct Conv2D {
     // relu(layer.forward(input)), in one pass.
     struct FeatureMap relu_forward(const &FeatureMap input) const;
     void free();
+
+    static struct Conv2D new(unsigned long inChannels, unsigned long outChannels, unsigned long kH, unsigned long kW,
+                             unsigned long stride, unsigned long padding);
 };
-
-struct Conv2D conv2d_new(unsigned long inChannels, unsigned long outChannels,
-                          unsigned long kH, unsigned long kW,
-                          unsigned long stride, unsigned long padding);
-
-// Max/avg pooling: kernel x kernel window, given stride, no padding.
-// Channel count is preserved; caller must choose dimensions divisible by
-// the kernel/stride combination.
-struct FeatureMap maxpool2d_forward(const &FeatureMap input, unsigned long kernel, unsigned long stride);
-struct FeatureMap avgpool2d_forward(const &FeatureMap input, unsigned long kernel, unsigned long stride);
-// The same with 'padding' on every side; output side (dim + 2*padding -
-// kernel)/stride + 1. Max pooling ignores the padded positions (as
-// PyTorch's MaxPool2d does); avg pooling counts them as zeros in the
-// divisor when 'countIncludePad' (PyTorch's AvgPool2d default) and
-// divides by the positions inside the plane otherwise.
-struct FeatureMap maxpool2d_forward_ex(const &FeatureMap input, unsigned long kernel, unsigned long stride,
-                                       unsigned long padding);
-struct FeatureMap avgpool2d_forward_ex(const &FeatureMap input, unsigned long kernel, unsigned long stride,
-                                       unsigned long padding, int countIncludePad);
-// Global pooling over each channel's whole plane: channels x 1 x 1 (the
-// classifier head of ResNet-style networks).
-struct FeatureMap global_avgpool2d(const &FeatureMap input);
-struct FeatureMap global_maxpool2d(const &FeatureMap input);
 
 // Residual connection: out = a + b, element by element (relu(a + b) when
 // 'relu'); a and b must have the same shape.
@@ -96,13 +97,9 @@ struct ResidualBlock {
 
     struct FeatureMap forward(const &FeatureMap input) const;
     void free();
-};
-struct ResidualBlock residual_block_new(unsigned long inChannels, unsigned long outChannels, unsigned long stride);
 
-// Nearest-neighbor 2x spatial upsample: out[c][2h+dh][2w+dw] = in[c][h][w]
-// for dh,dw in {0,1}. Used by U-Net's decoder path (see unet.h) in place
-// of a learned transposed convolution.
-struct FeatureMap upsample2x_nearest(const &FeatureMap input);
+    static struct ResidualBlock new(unsigned long inChannels, unsigned long outChannels, unsigned long stride);
+};
 
 // Concatenates 'a' and 'b' along the channel axis: out has
 // a.channels + b.channels channels, a's copied first, then b's. Both

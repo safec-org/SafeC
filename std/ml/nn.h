@@ -1,7 +1,7 @@
 #pragma once
-// SafeC Standard Library — trainable networks on std::ml's autograd core.
+// SafeC Standard Library — trainable networks on std::ml's Autograd::get core.
 //
-// tensor.h / tensor_nn.h carry the Tensor type, reverse-mode autograd and
+// tensor.h / tensor_nn.h carry the Tensor type, reverse-mode Autograd::get and
 // the activations. This file adds what training a model end to end needs:
 //
 //   * Rng — a small deterministic random generator (splitmix64), so every
@@ -40,34 +40,34 @@ struct Rng {
     // A tensor of the given shape filled from N(0, 1) (a VAE's epsilon, a
     // GAN's latent batch). Not part of any graph.
     &Tensor normal_tensor(unsigned long rows, unsigned long cols);
-};
 
-struct Rng    rng_new(unsigned long seed);
+    static struct Rng new(unsigned long seed);
+};
 
 // ── More differentiable ops ──────────────────────────────────────────────────
 // Shapes are [rows, cols] unless noted; every op records its backward
 // edge like tensor_add does.
 &Tensor tensor_add_bias(const &Tensor x, const &Tensor b);     // x [m,n] + b [n] on every row
-&Tensor tensor_add_scalar(const &Tensor a, float k);
-&Tensor tensor_exp(const &Tensor a);
-&Tensor tensor_log(const &Tensor a);                           // natural log; a must be > 0
-&Tensor tensor_abs(const &Tensor a);
-&Tensor tensor_leaky_relu(const &Tensor a, float slope);
-&Tensor tensor_clamp(const &Tensor a, float lo, float hi);     // gradient 0 where clamped
+&Tensor Tensor::add_scalar(float k) const;
+&Tensor Tensor::exp() const;
+&Tensor Tensor::log() const;   // natural log; a must be > 0
+&Tensor Tensor::abs() const;
+&Tensor Tensor::leaky_relu(float slope) const;
+&Tensor Tensor::clamp(float lo, float hi) const;   // gradient 0 where clamped
 &Tensor tensor_minimum(const &Tensor a, const &Tensor b);      // elementwise min
-&Tensor tensor_mean(const &Tensor a);                          // -> 1 element
-&Tensor tensor_sum_rows(const &Tensor a);                      // [m,n] -> [m,1]
+&Tensor Tensor::mean() const;   // -> 1 element
+&Tensor Tensor::sum_rows() const;   // [m,n] -> [m,1]
 &Tensor tensor_concat_cols(const &Tensor a, const &Tensor b);  // [m,p] ++ [m,q] -> [m,p+q]
 // out[i] = table[idx[i]]: [K,d] and m indices -> [m,d]. Gradients
 // scatter-add back into the table's rows (embeddings, VQ codebooks).
 &Tensor tensor_gather_rows(const &Tensor table, const &Tensor idx);
-&Tensor tensor_log_softmax(const &Tensor a);                   // last axis, numerically stable
+&Tensor Tensor::log_softmax() const;   // last axis, numerically stable
 // A copy that is not part of the graph: gradients stop here.
-&Tensor tensor_detach(const &Tensor a);
+&Tensor Tensor::detach() const;
 
 // Constant helpers (no gradient).
-&Tensor tensor_one_hot(const &Tensor labels, unsigned long classes);   // m labels -> [m, classes]
-&Tensor tensor_argmax_rows(const &Tensor a);                             // [m,n] -> [m] indices
+&Tensor Tensor::one_hot(unsigned long classes) const;   // m labels -> [m, classes]
+&Tensor Tensor::argmax_rows() const;   // [m,n] -> [m] indices
 
 // ── Losses (each returns a 1-element tensor, averaged over elements) ─────────
 &Tensor tensor_mse_loss(const &Tensor pred, const &Tensor target);
@@ -90,7 +90,7 @@ float   tensor_accuracy(const &Tensor logits, const &Tensor labels);
 #define ACT_SIGMOID  4
 #define ACT_GELU     5
 #define ACT_SILU     6
-&Tensor tensor_activate(const &Tensor x, int act);
+&Tensor Tensor::activate(int act) const;
 
 // ── Multi-layer perceptron ───────────────────────────────────────────────────
 // inDim -> hidden (x hiddenLayers) -> outDim, 'act' after every hidden
@@ -111,9 +111,10 @@ struct Mlp {
     void collect_params(&Vec<&Tensor> out) const;
     void collect_state(&Vec<&Tensor> out) const;
     void free();
+
+    static struct Mlp new(unsigned long inDim, unsigned long hidden, unsigned long hiddenLayers, unsigned long outDim,
+                          int act, int outAct, &Rng rng);
 };
-struct Mlp mlp_new(unsigned long inDim, unsigned long hidden, unsigned long hiddenLayers,
-                   unsigned long outDim, int act, int outAct, &Rng rng);
 
 // ── Saving and loading tensors ───────────────────────────────────────────────
 // A list of tensors' shapes and values to a file and back: the magic
@@ -158,10 +159,11 @@ struct Optimizer {
     float clip_grad_norm(float maxNorm);
     void step();
     void free();                           // frees the state, not the parameters
+
+    static struct Optimizer new(int kind, float lr);
+    // An empty optimizer with o's kind and hyperparameters (not its parameters
+    // or state), as nn_rocm.h's RocmOptimizer::from.
+    static struct Optimizer from(const &Optimizer o);
 };
-struct Optimizer optimizer_new(int kind, float lr);
-// An empty optimizer with o's kind and hyperparameters (not its parameters
-// or state), as nn_rocm.h's rocm_optimizer_from.
-struct Optimizer optimizer_from(const &Optimizer o);
 
 } // namespace std
