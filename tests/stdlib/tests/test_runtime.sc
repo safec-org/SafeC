@@ -540,7 +540,7 @@ void t_tasks() {
         ts.run_all();
         ASSERT_EQ(g_task_hits, 8);
 
-        // The Scheduler role: the same bounded driver over both
+        // The TaskRunner role: the same bounded driver over both
         g_task_hits = 0;
         *ts = ThreadSched::new();
         ts.spawn(counting_task, null, 2);

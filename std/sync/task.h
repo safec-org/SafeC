@@ -26,10 +26,10 @@ namespace std {
 // What a cooperative scheduler offers to the code driving it: one round,
 // run to completion, and how many tasks are left. TaskScheduler and
 // ThreadSched (thread_bare.h, priority-ordered) both conform, so a driver
-// loop written once against Scheduler runs either. Spawning isn't part of
+// loop written once against TaskRunner runs either. Spawning isn't part of
 // it: ThreadSched::spawn takes a priority that TaskScheduler::spawn has no
-// place for.
-trait Scheduler {
+// place for. (Not called Scheduler: that's kernel/scheduler.h's struct.)
+trait TaskRunner {
     int  tick();                 // one round; returns the still-active count
     void run_all();              // until every task is done
     int  active_count() const;
@@ -113,7 +113,7 @@ int TaskScheduler::spawn(fn int(?&T, int) func, ?&T arg) {
 
 // Runs at most max_rounds rounds of s (a bounded run_all, e.g. for a
 // watchdog-fed main loop). Returns the tasks still active afterwards.
-generic<S: Scheduler>
+generic<S: TaskRunner>
 int run_rounds(&S s, int max_rounds) {
     int left = s.active_count();
     int r = 0;
