@@ -11,12 +11,12 @@ namespace std {
 // kernel32.dll — always linked on Windows
 
 extern void* CreateThread(void* sec, unsigned long stack_sz, void* func, void* arg,
-                           unsigned long flags, unsigned long* tid_out);
-extern unsigned long WaitForSingleObject(void* handle, unsigned long ms);
+                           unsigned int flags, unsigned int* tid_out);
+extern unsigned int WaitForSingleObject(void* handle, unsigned int ms);
 extern int CloseHandle(void* handle);
-extern void Sleep(unsigned long ms);
+extern void Sleep(unsigned int ms);
 extern int SwitchToThread();
-extern unsigned long GetCurrentThreadId();
+extern unsigned int GetCurrentThreadId();
 
 // CRITICAL_SECTION (40 bytes on x64; we alloc 64 to be safe)
 extern void InitializeCriticalSection(void* cs);
@@ -27,10 +27,10 @@ extern int  TryEnterCriticalSection(void* cs);
 
 // CONDITION_VARIABLE (8 bytes on Vista+; we alloc 16)
 extern void InitializeConditionVariable(void* cv);
-extern int  SleepConditionVariableCS(void* cv, void* cs, unsigned long ms);
+extern int  SleepConditionVariableCS(void* cv, void* cs, unsigned int ms);
 extern void WakeConditionVariable(void* cv);
 extern void WakeAllConditionVariable(void* cv);
-extern unsigned long GetLastError();
+extern unsigned int GetLastError();
 
 // SRWLOCK (8 bytes; we alloc 16)
 extern void InitializeSRWLock(void* rw);
@@ -43,7 +43,7 @@ extern int  TryAcquireSRWLockExclusive(void* rw);
 
 inline int thread_create_raw_(&unsigned long long tid, void* func, void* arg) {
     unsafe {
-        void* h = CreateThread((void*)0, 0UL, func, arg, 0UL, (unsigned long*)0);
+        void* h = CreateThread((void*)0, 0UL, func, arg, 0u, (unsigned int*)0);
         if (h == (void*)0) return -1;
         *tid = (unsigned long long)h;
         return 0;
@@ -53,7 +53,7 @@ inline int thread_create_raw_(&unsigned long long tid, void* func, void* arg) {
 inline int thread_join(unsigned long long tid) {
     unsafe {
         void* h = (void*)tid;
-        unsigned long r = WaitForSingleObject(h, 4294967295UL); // INFINITE
+        unsigned int r = WaitForSingleObject(h, 0xFFFFFFFFu); // INFINITE
         CloseHandle(h);
         return (int)r;
     }
@@ -64,7 +64,7 @@ inline int thread_detach(unsigned long long tid) {
 }
 
 void thread_yield()                  { unsafe { SwitchToThread(); } }
-void thread_sleep_ms(unsigned long ms) { unsafe { Sleep(ms); } }
+void thread_sleep_ms(unsigned long ms) { unsafe { Sleep(ms > 0xFFFFFFFEUL ? 0xFFFFFFFEu : (unsigned int)ms); } }
 
 inline unsigned long long thread_self() {
     unsafe { return (unsigned long long)GetCurrentThreadId(); }
@@ -110,14 +110,14 @@ inline int cond_destroy(&unsigned long long cv) {
 
 inline int cond_wait(&unsigned long long cv, &unsigned long long m) {
     unsafe {
-        return SleepConditionVariableCS((void*)(*cv), (void*)(*m), 4294967295UL) ? 0 : -1;
+        return SleepConditionVariableCS((void*)(*cv), (void*)(*m), 0xFFFFFFFFu) ? 0 : -1;
     }
 }
 
 inline int cond_timedwait_ms(&unsigned long long cv, &unsigned long long m, unsigned long ms) {
     unsafe {
-        if (SleepConditionVariableCS((void*)(*cv), (void*)(*m), (unsigned long)ms)) return 0;
-        return GetLastError() == 1460UL ? THREAD_TIMEDOUT : -1;   // ERROR_TIMEOUT
+        if (SleepConditionVariableCS((void*)(*cv), (void*)(*m), ms > 0xFFFFFFFEUL ? 0xFFFFFFFEu : (unsigned int)ms)) return 0;
+        return GetLastError() == 1460u ? THREAD_TIMEDOUT : -1;   // ERROR_TIMEOUT
     }
 }
 
@@ -153,6 +153,13 @@ extern int pthread_join(unsigned long long tid, void** retval);
 extern int pthread_detach(unsigned long long tid);
 extern unsigned long long pthread_self();
 extern int sched_yield();
+// pthread_cond_timedwait's timeout code differs per OS.
+#if defined(__APPLE__) || defined(__FreeBSD__)
+#define SAFEC_ETIMEDOUT_ 60
+#else
+#define SAFEC_ETIMEDOUT_ 110
+#endif
+
 // struct timespec { time_t tv_sec; long tv_nsec; }: two 4-byte fields on a
 // 32-bit C ABI, two 8-byte fields on a 64-bit one. (SafeC's own 'long' is 64
 // bits everywhere, so it can't stand in for C's here.)

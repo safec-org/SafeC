@@ -40,6 +40,9 @@ int mutex_init(&unsigned long long m);
 int mutex_destroy(&unsigned long long m);
 int mutex_lock(&unsigned long long m);
 int mutex_trylock(&unsigned long long m);  // 0=locked, non-zero=busy
+// Don't re-lock a mutex the calling thread already holds: a Windows
+// CRITICAL_SECTION allows it (recursive), a default POSIX mutex deadlocks
+// (mutex_lock) or reports busy (mutex_trylock).
 int mutex_unlock(&unsigned long long m);
 
 // ── Condition variable ────────────────────────────────────────────────────────

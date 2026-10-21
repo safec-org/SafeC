@@ -258,13 +258,14 @@ inline double time_ns_to_ms(long long ns) {
 // versus nanosleep's nanosecond request, rounded up (not down) so a
 // caller never sleeps for *less* than asked.
 #ifdef _WIN32
-extern void Sleep(unsigned long ms);
+extern void Sleep(unsigned int ms);
 
 inline void time_sleep_ns(long long ns) {
     unsafe {
         long long ms = (ns + 999999LL) / 1000000LL;
         if (ms < 0LL) { ms = 0LL; }
-        Sleep((unsigned long)ms);
+        if (ms > 0xFFFFFFFELL) { ms = 0xFFFFFFFELL; }   // INFINITE is 0xFFFFFFFF
+        Sleep((unsigned int)ms);
     }
 }
 #else

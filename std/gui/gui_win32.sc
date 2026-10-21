@@ -1,16 +1,9 @@
 // SafeC Standard Library — GUI backend: Windows (Win32 API). See gui.h for
 // the portable API this implements.
 //
-// NOTE ON VERIFICATION: unlike gui_cocoa.sc (built and run for real on a
-// live Mac while developing this library), this backend has been written
-// carefully against the real Win32 API surface (RegisterClassExW,
-// CreateWindowExW, GetMessage/PeekMessage's WNDPROC-callback event model,
-// StretchDIBits for presenting a top-down 32bpp DIB) but could not be
-// compiled or executed in the environment this was developed in (no
-// Windows host/toolchain available). Treat it as a solid, API-correct
-// starting point that hasn't had the same "actually ran it" pass the
-// Cocoa backend got — sanity-check it on a real Windows machine before
-// depending on it.
+// Verified under Wine (tests/stdlib/win32/run.sh): client size, pixels
+// read back with GetPixel, and key, text, mouse, wheel, resize and close
+// messages. Not yet run on a real Windows host.
 //
 // Event model translation: Win32 delivers input via window-procedure
 // callbacks (WndProc), not a poll-a-queue-yourself model like Cocoa/X11 —
@@ -51,6 +44,7 @@ extern int DestroyWindow(void* hwnd);
 extern void PostQuitMessage(int exitCode);
 extern void* SetWindowLongPtrW(void* hwnd, int index, void* newLong);
 extern void* GetWindowLongPtrW(void* hwnd, int index);
+extern int AdjustWindowRect(&int rect, unsigned int style, int menu);
 
 #define GUI_WM_CLOSE       0x0010U
 #define GUI_WM_DESTROY     0x0002U
@@ -62,6 +56,7 @@ extern void* GetWindowLongPtrW(void* hwnd, int index);
 #define GUI_WM_MOUSEMOVE   0x0200U
 #define GUI_WM_KEYDOWN     0x0100U
 #define GUI_WM_KEYUP       0x0101U
+#define GUI_WM_CHAR        0x0102U
 #define GUI_WM_MOUSEWHEEL  0x020AU
 #define GUI_GWLP_USERDATA  (-21)
 
@@ -101,8 +96,12 @@ struct GuiWin32Platform {
     int queueHead;
     int queueTail;
     int closeRequested;
-    struct GuiWindow* selfWin; // so WndProc can update win.width/height on resize
 };
+
+// Signed 16-bit halves of a message parameter (GET_X_LPARAM and friends):
+// coordinates left of / above the client area are negative.
+static double __gui_win32_lo(long v) { return (double)(short)(v & 0xFFFFL); }
+static double __gui_win32_hi(long v) { return (double)(short)((v >> 16) & 0xFFFFL); }
 
 static void __gui_win32_push(struct GuiWin32Platform* p, struct GuiEvent ev) {
     unsafe {
@@ -170,7 +169,7 @@ void* __gui_win32_wndproc(void* hwnd, unsigned int msg, unsigned long wparam, lo
             struct GuiEvent ev;
             ev.defaultPrevented = 0;
             ev.kind = GUI_EVENT_MOUSE_DOWN;
-            ev.x = (double)(lparam & 0xFFFF); ev.y = (double)((lparam >> 16) & 0xFFFF);
+            ev.x = __gui_win32_lo(lparam); ev.y = __gui_win32_hi(lparam);
             ev.button = (msg == GUI_WM_LBUTTONDOWN) ? 0 : 1;
             ev.keycode = 0; ev.codepoint = 0U; ev.scrollDx = 0.0; ev.scrollDy = 0.0;
             ev.width = 0; ev.height = 0;
@@ -181,7 +180,7 @@ void* __gui_win32_wndproc(void* hwnd, unsigned int msg, unsigned long wparam, lo
             struct GuiEvent ev;
             ev.defaultPrevented = 0;
             ev.kind = GUI_EVENT_MOUSE_UP;
-            ev.x = (double)(lparam & 0xFFFF); ev.y = (double)((lparam >> 16) & 0xFFFF);
+            ev.x = __gui_win32_lo(lparam); ev.y = __gui_win32_hi(lparam);
             ev.button = (msg == GUI_WM_LBUTTONUP) ? 0 : 1;
             ev.keycode = 0; ev.codepoint = 0U; ev.scrollDx = 0.0; ev.scrollDy = 0.0;
             ev.width = 0; ev.height = 0;
@@ -192,7 +191,7 @@ void* __gui_win32_wndproc(void* hwnd, unsigned int msg, unsigned long wparam, lo
             struct GuiEvent ev;
             ev.defaultPrevented = 0;
             ev.kind = GUI_EVENT_MOUSE_MOVE;
-            ev.x = (double)(lparam & 0xFFFF); ev.y = (double)((lparam >> 16) & 0xFFFF);
+            ev.x = __gui_win32_lo(lparam); ev.y = __gui_win32_hi(lparam);
             ev.button = 0; ev.keycode = 0; ev.codepoint = 0U; ev.scrollDx = 0.0; ev.scrollDy = 0.0;
             ev.width = 0; ev.height = 0;
             __gui_win32_push(p, ev);
@@ -212,12 +211,35 @@ void* __gui_win32_wndproc(void* hwnd, unsigned int msg, unsigned long wparam, lo
             __gui_win32_push(p, ev);
             return (void*)0;
         }
+        if (msg == GUI_WM_CHAR) {
+            // TranslateMessage turns a key press into WM_CHAR: put the
+            // character on that KEY_DOWN (as the other backends do), or queue
+            // it as its own CHAR event if the key press was already taken.
+            unsigned int c = (unsigned int)(wparam & 0xFFFFUL);
+            if (c < 32U || c == 127U) { return (void*)0; }    // control characters
+            if (p->queueHead != p->queueTail) {
+                int last = (p->queueTail + GUI_WIN32_QUEUE_CAP - 1) % GUI_WIN32_QUEUE_CAP;
+                if (p->queue[last].kind == GUI_EVENT_KEY_DOWN && p->queue[last].codepoint == 0U) {
+                    p->queue[last].codepoint = c;
+                    return (void*)0;
+                }
+            }
+            struct GuiEvent ev;
+            ev.defaultPrevented = 0;
+            ev.kind = GUI_EVENT_CHAR;
+            ev.codepoint = c;
+            ev.x = 0.0; ev.y = 0.0; ev.button = 0; ev.keycode = 0; ev.scrollDx = 0.0; ev.scrollDy = 0.0;
+            ev.width = 0; ev.height = 0;
+            __gui_win32_push(p, ev);
+            return (void*)0;
+        }
         if (msg == GUI_WM_MOUSEWHEEL) {
             struct GuiEvent ev;
             ev.defaultPrevented = 0;
             ev.kind = GUI_EVENT_SCROLL;
-            long delta = (lparam >> 16) & 0xFFFF;
-            ev.scrollDy = (double)delta / 120.0;
+            // The wheel delta is the signed high word of wParam (WHEEL_DELTA
+            // = 120 per notch); lParam holds screen coordinates.
+            ev.scrollDy = __gui_win32_hi((long)wparam) / 120.0;
             ev.scrollDx = 0.0;
             ev.x = 0.0; ev.y = 0.0; ev.button = 0; ev.keycode = 0; ev.codepoint = 0U;
             ev.width = 0; ev.height = 0;
@@ -247,7 +269,6 @@ struct GuiWindow gui_create_window(const &char title, int width, int height) {
         p->queueHead = 0;
         p->queueTail = 0;
         p->closeRequested = 0;
-        p->selfWin = (struct GuiWindow*)0;
 
         void* inst = GetModuleHandleA((const void*)0);
 
@@ -267,8 +288,12 @@ struct GuiWindow gui_create_window(const &char title, int width, int height) {
         RegisterClassExA((const void*)&wc);
 
         // WS_OVERLAPPEDWINDOW (0x00CF0000) | WS_VISIBLE (0x10000000)
+        // width/height are the client area; the window is that plus its frame.
+        int rect[4];
+        rect[0] = 0; rect[1] = 0; rect[2] = width; rect[3] = height;
+        AdjustWindowRect(&rect[0], 0x10CF0000U, 0);
         void* hwnd = CreateWindowExA(0U, "SafeCGuiWindowClass", title, 0x10CF0000U,
-                                      100, 100, width, height,
+                                      100, 100, rect[2] - rect[0], rect[3] - rect[1],
                                       (void*)0, (void*)0, inst, (void*)0);
         p->hwnd = hwnd;
         if (hwnd != (void*)0) {
@@ -297,7 +322,7 @@ void gui_present(&GuiWindow win) {
         bmi[0] = 40;                 // biSize
         bmi[1] = win.width;         // biWidth
         bmi[2] = -win.height;       // biHeight (top-down)
-        bmi[3] = (1 << 16) | 32;     // biPlanes=1 (low word), biBitCount=32 (high word)
+        bmi[3] = (32 << 16) | 1;     // biPlanes = 1 (low word), biBitCount = 32 (high word)
         bmi[4] = 0;                  // biCompression = BI_RGB
         bmi[5] = 0; bmi[6] = 0; bmi[7] = 0; bmi[8] = 0; bmi[9] = 0;
         StretchDIBits(dc, 0, 0, win.width, win.height, 0, 0, win.width, win.height,
@@ -349,6 +374,20 @@ int gui_poll_event(&GuiWindow win, &GuiEvent outEvent) {
         if (p->queueHead == p->queueTail) { return 0; }
         *outEvent = p->queue[p->queueHead];
         p->queueHead = (p->queueHead + 1) % GUI_WIN32_QUEUE_CAP;
+        if (outEvent.kind == GUI_EVENT_RESIZE) {
+            int w = outEvent.width;
+            int h = outEvent.height;
+            if (w <= 0 || h <= 0 || (w == win.width && h == win.height)) { return 0; }   // minimized / unchanged
+            // New size: a new zeroed pixel buffer to match.
+            unsigned long npix = (unsigned long)w * (unsigned long)h * 4UL;
+            void* px = alloc_raw_(npix);
+            if (px == (void*)0) { return 0; }
+            memset(px, 0, npix);
+            dealloc_raw_((void*)win.pixels);
+            win.pixels = (&heap unsigned char)px;
+            win.width = w;
+            win.height = h;
+        }
         return 1;
     }
 }
