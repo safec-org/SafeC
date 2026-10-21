@@ -82,7 +82,6 @@ inline int time_parse(const &char s, const &char fmt, &int tm_fields) {
 #endif
 
 // struct tm has 9 int fields (at minimum); we use a 56-byte buffer to be safe
-// struct timespec = { time_t sec; long nsec } = 16 bytes on 64-bit
 
 inline long long time_now() {
     unsafe { return time((long long*)0); }
@@ -162,13 +161,25 @@ inline long long time_wall_ns() {
     }
 }
 #else
+// struct timespec { time_t tv_sec; long tv_nsec; }: two 4-byte fields on a
+// 32-bit C ABI, two 8-byte fields on a 64-bit one. (SafeC's own 'long' is 64
+// bits everywhere, so it can't stand in for C's here.)
+#if __SIZEOF_POINTER__ == 4
+#define SAFEC_TS_FIELD_ int
+#else
+#define SAFEC_TS_FIELD_ long long
+#endif
+struct SafecTimespec_ {
+    SAFEC_TS_FIELD_ tv_sec;
+    SAFEC_TS_FIELD_ tv_nsec;
+};
 extern int clock_gettime(int clk, void* ts);
 
 inline long long time_wall_ns() {
     unsafe {
-        long long ts[2];
-        if (clock_gettime(0, (void*)ts) != 0) return -1LL;
-        return ts[0] * 1000000000LL + ts[1];
+        struct SafecTimespec_ ts;
+        if (clock_gettime(0, (void*)&ts) != 0) return -1LL;
+        return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
     }
 }
 #endif
@@ -201,9 +212,9 @@ inline long long time_mono_ns() {
 #else
 inline long long time_mono_ns() {
     unsafe {
-        long long ts[2];
-        if (clock_gettime(SAFEC_CLOCK_MONOTONIC_, (void*)ts) != 0) return -1LL;
-        return ts[0] * 1000000000LL + ts[1];
+        struct SafecTimespec_ ts;
+        if (clock_gettime(SAFEC_CLOCK_MONOTONIC_, (void*)&ts) != 0) return -1LL;
+        return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
     }
 }
 #endif
@@ -228,9 +239,9 @@ inline long long time_cpu_ns() {
 #else
 inline long long time_cpu_ns() {
     unsafe {
-        long long ts[2];
-        if (clock_gettime(SAFEC_CLOCK_CPUTIME_, (void*)ts) != 0) return -1LL;
-        return ts[0] * 1000000000LL + ts[1];
+        struct SafecTimespec_ ts;
+        if (clock_gettime(SAFEC_CLOCK_CPUTIME_, (void*)&ts) != 0) return -1LL;
+        return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
     }
 }
 #endif
@@ -247,13 +258,14 @@ inline double time_ns_to_ms(long long ns) {
 // versus nanosleep's nanosecond request, rounded up (not down) so a
 // caller never sleeps for *less* than asked.
 #ifdef _WIN32
-extern void Sleep(unsigned long ms);
+extern void Sleep(unsigned int ms);
 
 inline void time_sleep_ns(long long ns) {
     unsafe {
         long long ms = (ns + 999999LL) / 1000000LL;
         if (ms < 0LL) { ms = 0LL; }
-        Sleep((unsigned long)ms);
+        if (ms > 0xFFFFFFFELL) { ms = 0xFFFFFFFELL; }   // INFINITE is 0xFFFFFFFF
+        Sleep((unsigned int)ms);
     }
 }
 #else
@@ -261,10 +273,10 @@ extern int nanosleep(void* req, void* rem);
 
 inline void time_sleep_ns(long long ns) {
     unsafe {
-        long long ts[2];
-        ts[0] = ns / 1000000000LL;
-        ts[1] = ns % 1000000000LL;
-        nanosleep((void*)ts, (void*)0);
+        struct SafecTimespec_ ts;
+        ts.tv_sec = (SAFEC_TS_FIELD_)(ns / 1000000000LL);
+        ts.tv_nsec = (SAFEC_TS_FIELD_)(ns % 1000000000LL);
+        nanosleep((void*)&ts, (void*)0);
     }
 }
 #endif

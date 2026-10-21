@@ -1,78 +1,37 @@
-// SafeC Standard Library — SPI HAL
-// Generic MMIO layout:
-//   base + 0x00 = data register (write TX, read RX)
-//   base + 0x04 = status register (bit 0 = busy, bit 1 = TX empty)
-//   base + 0x08 = control register (mode, enable)
-//   base + 0x0C = chip select register
+// SafeC Standard Library — SPI HAL chips (see spi.h)
 #pragma once
 #include <std/hal/spi.h>
+#include <std/hal/reg.h>
 
 namespace std {
 
-inline struct SpiDevice spi_init(&volatile unsigned int base, int mode) {
-    struct SpiDevice s;
-    s.base = base;
-    s.mode = mode;
-    unsafe {
-        unsigned int* ctrl = (unsigned int*)((unsigned long)base + (unsigned long)8);
-        unsigned int val = ((unsigned int)mode & (unsigned int)3) | (unsigned int)0x80;
-        volatile_store(ctrl, val);
-    }
-    return s;
+// ── SpiGeneric: DATA +0, STATUS +4 (bit0 busy, bit1 TX ready), CTRL +8, CS +0xC
+void SpiGeneric::init(unsigned long base, int mode) const {
+    hal_wr32_(base, 0x08UL, ((unsigned int)mode & 3u) | 0x80u);
+}
+unsigned char SpiGeneric::transfer(unsigned long base, unsigned char tx) const {
+    while ((hal_rd32_(base, 0x04UL) & 2u) == 0u) { }
+    hal_wr32_(base, 0x00UL, (unsigned int)tx);
+    while ((hal_rd32_(base, 0x04UL) & 1u) != 0u) { }
+    return (unsigned char)hal_rd32_(base, 0x00UL);
+}
+void SpiGeneric::cs(unsigned long base, int asserted) const {
+    hal_wr32_(base, 0x0CUL, asserted != 0 ? 0u : 1u);
 }
 
-inline unsigned char SpiDevice::transfer(unsigned char tx) {
-    unsafe {
-        unsigned int* status   = (unsigned int*)((unsigned long)self.base + (unsigned long)4);
-        unsigned int* data_reg = (unsigned int*)self.base;
-
-        // Wait until TX empty
-        while ((volatile_load(status) & (unsigned int)2) == (unsigned int)0) { }
-
-        // Write TX byte
-        volatile_store(data_reg, (unsigned int)tx);
-
-        // Wait until not busy
-        while ((volatile_load(status) & (unsigned int)1) != (unsigned int)0) { }
-
-        // Read RX byte
-        return (unsigned char)volatile_load(data_reg);
-    }
+// ── STM32F4 SPI: CR1 +0, SR +8 (RXNE bit0, TXE bit1), DR +0xC ───────────────
+void Stm32F4Spi::init(unsigned long base, int mode) const {
+    // CPHA/CPOL = mode, MSTR, BR = fPCLK/16, SSI|SSM (software NSS), then SPE.
+    unsigned int cr1 = ((unsigned int)mode & 3u) | 0x04u | (3u << 3) | 0x300u;
+    hal_wr32_(base, 0x00UL, cr1);
+    hal_wr32_(base, 0x00UL, cr1 | 0x40u);
 }
-
-inline void SpiDevice::cs_assert() {
-    unsafe {
-        unsigned int* cs = (unsigned int*)((unsigned long)self.base + (unsigned long)12);
-        volatile_store(cs, (unsigned int)0);
-    }
+unsigned char Stm32F4Spi::transfer(unsigned long base, unsigned char tx) const {
+    while ((hal_rd32_(base, 0x08UL) & 2u) == 0u) { }          // TXE
+    hal_wr8_(base, 0x0CUL, (unsigned int)tx);                   // 8-bit frame
+    while ((hal_rd32_(base, 0x08UL) & 1u) == 0u) { }          // RXNE
+    return (unsigned char)hal_rd8_(base, 0x0CUL);
 }
-
-inline void SpiDevice::cs_deassert() {
-    unsafe {
-        unsigned int* cs = (unsigned int*)((unsigned long)self.base + (unsigned long)12);
-        volatile_store(cs, (unsigned int)1);
-    }
-}
-
-inline void SpiDevice::write(const &unsigned char tx, ?&unsigned char rx, unsigned long len) {
-    unsigned long i = (unsigned long)0;
-    while (i < len) {
-        unsigned char b;
-        unsafe { b = self.transfer(tx[i]); }
-        match (rx) {
-            case null: { }
-            case some(r): { unsafe { r[i] = b; } }
-        }
-        i = i + (unsigned long)1;
-    }
-}
-
-inline void SpiDevice::read(&unsigned char rx, unsigned long len) {
-    unsigned long i = (unsigned long)0;
-    while (i < len) {
-        unsafe { rx[i] = self.transfer((unsigned char)0xFF); }
-        i = i + (unsigned long)1;
-    }
-}
+void Stm32F4Spi::cs(unsigned long base, int asserted) const { }   // NSS is a GPIO
 
 } // namespace std

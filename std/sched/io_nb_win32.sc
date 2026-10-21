@@ -75,7 +75,7 @@ extern int bind(unsigned long long fd, const void* addr, int addrlen);
 extern int listen(unsigned long long fd, int backlog);
 extern unsigned long long accept(unsigned long long fd, void* addr, void* addrlen);
 extern int connect(unsigned long long fd, const void* addr, int addrlen);
-extern int ioctlsocket(unsigned long long fd, int cmd, unsigned long* argp);
+extern int ioctlsocket(unsigned long long fd, int cmd, unsigned int* argp);   // u_long: 32 bits on Windows
 extern int setsockopt(unsigned long long fd, int level, int optname, const void* optval, int optlen);
 extern int WSAGetLastError();
 extern void WSASetLastError(int err);
@@ -129,14 +129,14 @@ inline int sock_would_block() {
 }
 
 inline int fd_set_nonblocking(int fd) {
-    unsigned long mode = 1UL; // non-zero = enable non-blocking mode
+    unsigned int mode = 1u; // non-zero = enable non-blocking mode
     int rc;
     unsafe { rc = ioctlsocket((unsigned long long)fd, (int)SAFEC_FIONBIO, &mode); }
     return rc;
 }
 
 inline int fd_set_blocking(int fd) {
-    unsigned long mode = 0UL; // zero = disable non-blocking mode
+    unsigned int mode = 0u; // zero = disable non-blocking mode
     int rc;
     unsafe { rc = ioctlsocket((unsigned long long)fd, (int)SAFEC_FIONBIO, &mode); }
     return rc;

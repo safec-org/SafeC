@@ -31,6 +31,20 @@ static void to_hex(const &unsigned char d, unsigned long n, &char out) {
     }
 }
 
+static int hexv(char c) {
+    if (c >= '0' && c <= '9') return (int)(c - '0');
+    return (int)(c - 'a') + 10;
+}
+static void hex_to_bytes(const &char h, &unsigned char out) {
+    unsafe {
+        unsigned long i = 0UL;
+        while (h[2UL * i] != (char)0) {
+            out[i] = (unsigned char)(hexv(h[2UL * i]) * 16 + hexv(h[2UL * i + 1UL]));
+            i = i + 1UL;
+        }
+    }
+}
+
 void t_sha1() {
     unsafe {
         unsigned char d[20];
@@ -287,6 +301,52 @@ void t_x509() {
     }
 }
 
+// AES-256-GCM, McGrew & Viega test case 16 (60-byte message, 20-byte AAD).
+void t_aes_gcm() {
+    unsafe {
+        unsigned char key[32];
+        unsigned char iv[12];
+        unsigned char aad[20];
+        unsigned char msg[60];
+        unsigned char tag[16];
+        char hex[160];
+        hex_to_bytes("feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308", &key[0]);
+        hex_to_bytes("cafebabefacedbaddecaf888", &iv[0]);
+        hex_to_bytes("feedfacedeadbeeffeedfacedeadbeefabaddad2", &aad[0]);
+        hex_to_bytes("d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39", &msg[0]);
+        struct AesCtx aes = aes256_init(&key[0]);
+        aes.gcm_encrypt(&iv[0], (const ?&unsigned char)&aad[0], 20UL, &msg[0], 60UL, &tag[0]);
+        to_hex(msg, 60UL, hex);
+        ASSERT_STR_EQ(hex, "522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f662");
+        to_hex(tag, 16UL, hex);
+        ASSERT_STR_EQ(hex, "76fc6ece0f4e1768cddf8853bb2d551b");
+        ASSERT_TRUE(aes.gcm_decrypt(&iv[0], (const ?&unsigned char)&aad[0], 20UL, &msg[0], 60UL, &tag[0]));
+        ASSERT_EQ(msg[0], 0xd9);
+        aes.gcm_encrypt(&iv[0], (const ?&unsigned char)&aad[0], 20UL, &msg[0], 60UL, &tag[0]);
+        aad[3] = aad[3] ^ (unsigned char)1;                 // tampered AAD
+        ASSERT_FALSE(aes.gcm_decrypt(&iv[0], (const ?&unsigned char)&aad[0], 20UL, &msg[0], 60UL, &tag[0]));
+        ASSERT_EQ(msg[0], 0x52);                            // left as ciphertext
+        aes.destroy();
+        // Empty message and AAD, zero key and IV (test case 13).
+        struct AesCtx z;
+        unsigned char zk[32];
+        int i = 0;
+        while (i < 32) { zk[i] = (unsigned char)0; i = i + 1; }
+        z = aes256_init(&zk[0]);
+        z.gcm_encrypt(&zk[0], null, 0UL, &msg[0], 0UL, &tag[0]);
+        to_hex(tag, 16UL, hex);
+        ASSERT_STR_EQ(hex, "530f8afbc74536b9a963b4f1c4cb738b");
+    }
+}
+
+// "secret data" as application data, sequence 0, sealed by an independent
+// AES-GCM implementation (Python cryptography) with the keys used below.
+static const unsigned char kTlsRecord[33] = {
+    0x17U, 0x03U, 0x03U, 0x00U, 0x1CU, 0x05U, 0xB9U, 0xDAU, 0xA5U, 0x8BU, 0x79U, 0x30U, 0xAAU, 0x57U, 0xB8U, 0x74U,
+    0x3FU, 0x7EU, 0x02U, 0xC2U, 0x33U, 0xA9U, 0x8DU, 0xA8U, 0x22U, 0x90U, 0x7DU, 0x06U, 0xEAU, 0xD0U, 0x28U, 0x95U,
+    0xA2U
+};
+
 void t_tls_record() {
     unsafe {
         struct TlsSession a = tls_session_init();
@@ -321,13 +381,23 @@ void t_tls_record() {
         int round = 0;
         while (round < 3) {
             n = a.encode_record((unsigned char)TLS_APPLICATION_DATA, (const unsigned char*)"secret data", 11UL, &out[0], 256UL);
-            ASSERT_EQ(n, 5UL + 16UL);
+            ASSERT_EQ(n, 5UL + 11UL + 1UL + 16UL);
+            if (round == 0) { ASSERT_EQ(safe_memcmp(&out[0], &kTlsRecord[0], 33UL), 0); }   // RFC 8446 wire format
             ASSERT_EQ(out[0], TLS_APPLICATION_DATA);
             ASSERT_EQ(b.decode_record(&out[0], n, &ct, &got[0], 256UL), 11);
             ASSERT_EQ(ct, TLS_APPLICATION_DATA);
             ASSERT_EQ(safe_memcmp((const &unsigned char)&got[0], (const &unsigned char)"secret data", 11UL), 0);
             round = round + 1;
         }
+        // A tampered record fails authentication and doesn't advance read_seq.
+        n = a.encode_record((unsigned char)TLS_HANDSHAKE, (const unsigned char*)"hs", 2UL, &out[0], 256UL);
+        out[7] = out[7] ^ (unsigned char)0x40;
+        ASSERT_EQ(b.decode_record(&out[0], n, &ct, &got[0], 256UL), 0);
+        ASSERT_EQ(b.read_seq, 3);
+        out[7] = out[7] ^ (unsigned char)0x40;
+        ASSERT_EQ(b.decode_record(&out[0], n, &ct, &got[0], 256UL), 2);
+        ASSERT_EQ(ct, TLS_HANDSHAKE);                     // inner type, outer is application_data
+        ASSERT_EQ(out[0], TLS_APPLICATION_DATA);
         n = a.build_alert((unsigned char)TLS_ALERT_FATAL, (unsigned char)TLS_ALERT_CLOSE_NOTIFY, &out[0], 256UL);
         ASSERT_EQ(b.decode_record(&out[0], n, &ct, &got[0], 256UL), 2);
         ASSERT_EQ(ct, TLS_ALERT);
@@ -335,7 +405,7 @@ void t_tls_record() {
         ASSERT_EQ(b.decode_record(&out[0], 4UL, &ct, &got[0], 256UL), 0);   // short header
         unsigned char nonce[12];
         a.compute_nonce(nonce, 1);
-        ASSERT_EQ(nonce[11], iv1[11] ^ 4);   // write_seq is 4 now
+        ASSERT_EQ(nonce[11], iv1[11] ^ 5);   // write_seq is 5 now
 
         struct TlsTranscript tr;
         tr.hash = sha256_init();
@@ -401,6 +471,7 @@ int main() {
         t.add("utf8/ascii", t_utf8);
         t.add("rng chacha20 vectors", t_rng_kat);
         t.add("x509", t_x509);
+        t.add("aes-256-gcm vectors", t_aes_gcm);
         t.add("tls record layer", t_tls_record);
         t.add("sha streaming/secure_alloc/ascii", t_crypto_misc);
     }

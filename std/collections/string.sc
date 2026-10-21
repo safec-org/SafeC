@@ -92,14 +92,14 @@ inline struct String string_repeat(const &char cstr, unsigned long n) {
     return s;
 }
 
-inline struct String string_join(const &char sep, &stack String parts, unsigned long count) {
+inline struct String string_join(const &char sep, &String parts, unsigned long count) {
     struct String out = string_new();
     unsigned long i = 0UL;
     while (i < count) {
         if (i > 0UL && sep != (const char*)0) { out.push(sep); }
         unsafe {
             struct String* arr = (struct String*)parts;
-            out.push_str((&stack String)arr[i]);
+            out.push_str((&String)arr[i]);
         }
         i = i + 1UL;
     }
@@ -179,7 +179,7 @@ inline int String::push_n(const &char data, unsigned long n) {
     return 1;
 }
 
-inline int String::push_str(&stack String other) {
+inline int String::push_str(&String other) {
     unsafe { return self.push((const char*)other.data); }
 }
 
@@ -561,7 +561,7 @@ inline struct String String::capitalize() const {
 }
 
 // ── Split ─────────────────────────────────────────────────────────────────────
-unsigned long String::split(const &char delim, &stack String out, unsigned long max) const {
+unsigned long String::split(const &char delim, &String out, unsigned long max) const {
     if (max == 0UL || self.cap == 0UL) { return 0UL; }
     unsigned long dlen = str_len(delim);
     if (dlen == 0UL) {
@@ -626,7 +626,7 @@ unsigned long String::split(const &char delim, &stack String out, unsigned long 
     return cnt;
 }
 
-unsigned long String::split_lines(&stack String out, unsigned long max) const {
+unsigned long String::split_lines(&String out, unsigned long max) const {
     if (max == 0UL || self.cap == 0UL) { return 0UL; }
     unsigned long cnt = 0UL;
     unsigned long start = 0UL;
@@ -680,7 +680,7 @@ unsigned long String::split_lines(&stack String out, unsigned long max) const {
     return cnt;
 }
 
-unsigned long String::split_whitespace(&stack String out, unsigned long max) const {
+unsigned long String::split_whitespace(&String out, unsigned long max) const {
     if (max == 0UL || self.cap == 0UL) { return 0UL; }
     unsigned long cnt = 0UL;
     unsigned long i = 0UL;
@@ -733,7 +733,7 @@ unsigned long String::split_whitespace(&stack String out, unsigned long max) con
 }
 
 // ── Comparison ────────────────────────────────────────────────────────────────
-inline int String::eq(&stack String other) const {
+inline int String::eq(&String other) const {
     if (self.len != other.len) { return 0; }
     unsafe { return safe_memcmp_raw_((const void*)self.data, (const void*)other.data, self.len) == 0; }
 }
@@ -742,14 +742,14 @@ inline int String::eq_cstr(const &char other) const {
     unsafe { return str_cmp((const char*)self.data, other) == 0; }
 }
 
-inline int String::cmp(&stack String other) const {
+inline int String::cmp(&String other) const {
     unsafe { return str_cmp((const char*)self.data, (const char*)other.data); }
 }
 
-int String::lt(&stack String other) const { return self.cmp(other) < 0; }
-int String::gt(&stack String other) const { return self.cmp(other) > 0; }
+int String::lt(&String other) const { return self.cmp(other) < 0; }
+int String::gt(&String other) const { return self.cmp(other) > 0; }
 
-inline int String::eq_ignore_case(&stack String other) const {
+inline int String::eq_ignore_case(&String other) const {
     if (self.len != other.len) { return 0; }
     unsigned long i = 0UL;
     while (i < self.len) {

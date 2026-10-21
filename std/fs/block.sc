@@ -4,7 +4,7 @@
 
 namespace std {
 
-inline int BlockDevice::read(unsigned long lba, &stack unsigned char buf, unsigned long count) {
+inline int BlockDevice::read(unsigned long lba, &unsigned char buf, unsigned long count) {
     if (self.read_fn == (void*)0) { return -1; }
     unsafe {
         fn int(void*, unsigned long, unsigned char*, unsigned long) func =
@@ -14,7 +14,7 @@ inline int BlockDevice::read(unsigned long lba, &stack unsigned char buf, unsign
     return -1;
 }
 
-inline int BlockDevice::write(unsigned long lba, const &stack unsigned char buf, unsigned long count) {
+inline int BlockDevice::write(unsigned long lba, const &unsigned char buf, unsigned long count) {
     if (self.write_fn == (void*)0) { return -1; }
     unsafe {
         fn int(void*, unsigned long, const unsigned char*, unsigned long) func =

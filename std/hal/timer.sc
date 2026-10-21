@@ -1,72 +1,33 @@
-// SafeC Standard Library — Timer HAL
-// Generic MMIO layout:
-//   base + 0x00 = control register (bit 0 = enable)
-//   base + 0x04 = prescaler register
-//   base + 0x08 = period/auto-reload register
-//   base + 0x0C = counter register (read-only)
-//   base + 0x10 = status register (bit 0 = overflow flag)
+// SafeC Standard Library — Timer HAL chips (see timer.h)
 #pragma once
 #include <std/hal/timer.h>
+#include <std/hal/reg.h>
 
 namespace std {
 
-inline struct Timer timer_init(&volatile unsigned int base, unsigned int prescaler) {
-    struct Timer t;
-    t.base      = base;
-    t.prescaler = prescaler;
-    unsafe {
-        unsigned int* psc_reg = (unsigned int*)((unsigned long)base + (unsigned long)4);
-        volatile_store(psc_reg, prescaler);
-    }
-    return t;
+// ── TimerGeneric: CTRL +0, PRESCALER +4, PERIOD +8, COUNT +0xC, STATUS +0x10 ─
+void TimerGeneric::init(unsigned long base, unsigned int prescaler) const { hal_wr32_(base, 0x04UL, prescaler); }
+void TimerGeneric::set_period(unsigned long base, unsigned int period) const { hal_wr32_(base, 0x08UL, period); }
+void TimerGeneric::run(unsigned long base, int on) const {
+    if (on != 0) { hal_set32_(base, 0x00UL, 1u); } else { hal_clr32_(base, 0x00UL, 1u); }
 }
+unsigned int TimerGeneric::count(unsigned long base) const { return hal_rd32_(base, 0x0CUL); }
+int TimerGeneric::flag(unsigned long base) const { return (hal_rd32_(base, 0x10UL) & 1u) != 0u; }
+void TimerGeneric::clear_flag(unsigned long base) const { hal_wr32_(base, 0x10UL, 0u); }
 
-inline void Timer::set_period(unsigned int period) {
-    unsafe {
-        unsigned int* arr_reg = (unsigned int*)((unsigned long)self.base + (unsigned long)8);
-        volatile_store(arr_reg, period);
-    }
+// ── STM32 TIMx: CR1 +0 (CEN bit0), SR +0x10 (UIF bit0, write 0 to clear),
+//    EGR +0x14 (UG bit0), CNT +0x24, PSC +0x28, ARR +0x2C ────────────────────
+void Stm32F4Tim::init(unsigned long base, unsigned int prescaler) const {
+    hal_wr32_(base, 0x28UL, prescaler & 0xFFFFu);
+    hal_wr32_(base, 0x14UL, 1u);                         // UG: load PSC now
+    hal_wr32_(base, 0x10UL, 0u);                         // ...and drop the UIF that set
 }
-
-inline void Timer::start() {
-    unsafe {
-        unsigned int* ctrl = (unsigned int*)self.base;
-        unsigned int val = volatile_load(ctrl);
-        val = val | (unsigned int)1;
-        volatile_store(ctrl, val);
-    }
+void Stm32F4Tim::set_period(unsigned long base, unsigned int period) const { hal_wr32_(base, 0x2CUL, period); }
+void Stm32F4Tim::run(unsigned long base, int on) const {
+    if (on != 0) { hal_set32_(base, 0x00UL, 1u); } else { hal_clr32_(base, 0x00UL, 1u); }
 }
-
-inline void Timer::stop() {
-    unsafe {
-        unsigned int* ctrl = (unsigned int*)self.base;
-        unsigned int val = volatile_load(ctrl);
-        val = val & ~(unsigned int)1;
-        volatile_store(ctrl, val);
-    }
-}
-
-inline unsigned int Timer::read() const {
-    unsafe {
-        unsigned int* cnt = (unsigned int*)((unsigned long)self.base + (unsigned long)12);
-        return volatile_load(cnt);
-    }
-}
-
-inline void Timer::clear_flag() {
-    unsafe {
-        unsigned int* status = (unsigned int*)((unsigned long)self.base + (unsigned long)16);
-        volatile_store(status, (unsigned int)0);
-    }
-}
-
-inline int Timer::flag_set() const {
-    unsafe {
-        unsigned int* status = (unsigned int*)((unsigned long)self.base + (unsigned long)16);
-        unsigned int val = volatile_load(status);
-        if ((val & (unsigned int)1) != (unsigned int)0) { return 1; }
-        return 0;
-    }
-}
+unsigned int Stm32F4Tim::count(unsigned long base) const { return hal_rd32_(base, 0x24UL); }
+int Stm32F4Tim::flag(unsigned long base) const { return (hal_rd32_(base, 0x10UL) & 1u) != 0u; }
+void Stm32F4Tim::clear_flag(unsigned long base) const { hal_wr32_(base, 0x10UL, ~1u); }   // rc_w0
 
 } // namespace std

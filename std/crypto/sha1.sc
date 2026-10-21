@@ -77,7 +77,7 @@ inline struct Sha1Ctx sha1_init() {
     return ctx;
 }
 
-inline void Sha1Ctx::update(const &stack unsigned char data, unsigned long len) {
+inline void Sha1Ctx::update(const &unsigned char data, unsigned long len) {
     unsigned long buf_used = self.total_bytes % (unsigned long)SHA1_BLOCK_SIZE;
     self.total_bytes = self.total_bytes + len;
 
@@ -95,7 +95,7 @@ inline void Sha1Ctx::update(const &stack unsigned char data, unsigned long len) 
     }
 }
 
-void Sha1Ctx::finish(&stack unsigned char digest) {
+void Sha1Ctx::finish(&unsigned char digest) {
     unsigned long buf_used = self.total_bytes % (unsigned long)SHA1_BLOCK_SIZE;
     unsigned long bit_len  = self.total_bytes * (unsigned long)8;
 
@@ -135,8 +135,8 @@ void Sha1Ctx::finish(&stack unsigned char digest) {
     }
 }
 
-void sha1(const &stack unsigned char data, unsigned long len,
-          &stack unsigned char digest) {
+void sha1(const &unsigned char data, unsigned long len,
+          &unsigned char digest) {
     struct Sha1Ctx ctx = sha1_init();
     ctx.update(data, len);
     ctx.finish(digest);

@@ -37,7 +37,7 @@ inline int AudioBuffer::is_full() const {
     return 0;
 }
 
-inline unsigned long AudioBuffer::write_frames(&stack Fixed src, unsigned long n) {
+inline unsigned long AudioBuffer::write_frames(&Fixed src, unsigned long n) {
     unsigned long space = self.writable_frames();
     if (n > space) { n = space; }
     unsigned long mask = self.cap_frames - (unsigned long)1;
@@ -59,7 +59,7 @@ inline unsigned long AudioBuffer::write_frames(&stack Fixed src, unsigned long n
     return n;
 }
 
-inline unsigned long AudioBuffer::read_frames(&stack Fixed dst, unsigned long n) {
+inline unsigned long AudioBuffer::read_frames(&Fixed dst, unsigned long n) {
     unsigned long avail = self.readable_frames();
     if (n > avail) { n = avail; }
     unsigned long mask = self.cap_frames - (unsigned long)1;
@@ -81,7 +81,7 @@ inline unsigned long AudioBuffer::read_frames(&stack Fixed dst, unsigned long n)
     return n;
 }
 
-inline unsigned long AudioBuffer::peek_frames(&stack Fixed dst, unsigned long n) const {
+inline unsigned long AudioBuffer::peek_frames(&Fixed dst, unsigned long n) const {
     unsigned long avail = self.readable_frames();
     if (n > avail) { n = avail; }
     unsigned long mask = self.cap_frames - (unsigned long)1;
@@ -101,7 +101,7 @@ inline unsigned long AudioBuffer::peek_frames(&stack Fixed dst, unsigned long n)
     return n;
 }
 
-inline void AudioBuffer::mix_frames(&stack Fixed src, unsigned long n) {
+inline void AudioBuffer::mix_frames(&Fixed src, unsigned long n) {
     unsigned long space = self.writable_frames();
     if (n > space) { n = space; }
     unsigned long mask = self.cap_frames - (unsigned long)1;

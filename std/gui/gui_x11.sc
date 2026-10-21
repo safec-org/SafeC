@@ -1,16 +1,9 @@
 // SafeC Standard Library — GUI backend: Linux/BSD/Unix (X11 via Xlib). See
 // gui.h for the portable API this implements.
 //
-// NOTE ON VERIFICATION: like gui_win32.sc, this backend is written
-// carefully against the real Xlib API/ABI (XOpenDisplay, XCreateSimpleWindow,
-// XSelectInput, the XEvent union's per-type struct layouts, XPutImage for
-// presenting) but could not be linked or executed in the environment this
-// was developed in (no X server / Xlib headers available — a real Mac,
-// not Linux, and no XQuartz installed). It did get the same real-
-// compiler type/syntax check every other file here did (safec's front
-// end doesn't need the actual libX11 to type-check code against `extern`
-// declarations) — sanity-check it end-to-end on a real X11 host before
-// depending on it.
+// Verified against a real X server (Xvfb): tests/stdlib/x11/run.sh draws,
+// presents and reads the window back with XGetImage, and checks key, text,
+// mouse, scroll, resize and close events sent through the server.
 #pragma once
 #include <std/stddef.h>
 #include <std/gui/gui.h>
@@ -45,6 +38,8 @@ extern int XPutImage(void* display, unsigned long drawable, void* gc, void* imag
 extern void* XDefaultVisual(void* display, int screen);
 extern unsigned int XDefaultDepth(void* display, int screen);
 extern int XFlush(void* display);
+extern int XDestroyImage(void* image);
+extern int XLookupString(void* keyEvent, char* buf, int len, unsigned long* keysym, void* status);
 
 #define GUI_X11_KEY_PRESS_MASK    (1L << 0)
 #define GUI_X11_KEY_RELEASE_MASK  (1L << 1)
@@ -157,20 +152,41 @@ struct GuiX11Platform {
     void* gc;
     unsigned long wmDeleteMessage;
     int closeRequested;
+    void* image;          // XImage over win.pixels, rebuilt on resize
 };
 
-static int __gui_x11_keycode(unsigned int kc) {
-    // Common X11 keycodes on a typical PC-101 layout under Xorg.
-    if (kc == 113U) { return GUI_KEY_LEFT; }
-    if (kc == 114U) { return GUI_KEY_RIGHT; }
-    if (kc == 111U) { return GUI_KEY_UP; }
-    if (kc == 116U) { return GUI_KEY_DOWN; }
-    if (kc == 36U)  { return GUI_KEY_ENTER; }
-    if (kc == 9U)   { return GUI_KEY_ESCAPE; }
-    if (kc == 23U)  { return GUI_KEY_TAB; }
-    if (kc == 22U)  { return GUI_KEY_BACKSPACE; }
-    if (kc == 65U)  { return GUI_KEY_SPACE; }
-    if (kc == 119U) { return GUI_KEY_DELETE; }
+// An XImage whose data is our pixel buffer (ZPixmap, 32 bits per pixel).
+static void* __gui_x11_image(void* display, &GuiWindow win) {
+    unsafe {
+        int screen = XDefaultScreen(display);
+        return XCreateImage(display, XDefaultVisual(display, screen), XDefaultDepth(display, screen),
+                            2, 0, (const void*)win.pixels,
+                            (unsigned int)win.width, (unsigned int)win.height, 32, 0);
+    }
+}
+
+// XDestroyImage would free 'data' too; the pixels are ours, so detach them
+// first (XImage starts with four ints, then the data pointer).
+static void __gui_x11_free_image(void* image) {
+    if (image == (void*)0) { return; }
+    unsafe {
+        *(void**)((unsigned long)image + 16UL) = (void*)0;
+        XDestroyImage(image);
+    }
+}
+
+// X keysyms (layout-independent, unlike raw keycodes) to GuiKey.
+static int __gui_x11_keysym(unsigned long ks) {
+    if (ks == 0xFF51UL) { return GUI_KEY_LEFT; }
+    if (ks == 0xFF53UL) { return GUI_KEY_RIGHT; }
+    if (ks == 0xFF52UL) { return GUI_KEY_UP; }
+    if (ks == 0xFF54UL) { return GUI_KEY_DOWN; }
+    if (ks == 0xFF0DUL || ks == 0xFF8DUL) { return GUI_KEY_ENTER; }   // Return, KP_Enter
+    if (ks == 0xFF1BUL) { return GUI_KEY_ESCAPE; }
+    if (ks == 0xFF09UL) { return GUI_KEY_TAB; }
+    if (ks == 0xFF08UL) { return GUI_KEY_BACKSPACE; }
+    if (ks == 0x20UL)   { return GUI_KEY_SPACE; }
+    if (ks == 0xFFFFUL) { return GUI_KEY_DELETE; }
     return GUI_KEY_UNKNOWN;
 }
 
@@ -218,6 +234,7 @@ struct GuiWindow gui_create_window(const &char title, int width, int height) {
         p->gc = gc;
         p->wmDeleteMessage = wmDelete;
         p->closeRequested = 0;
+        p->image = __gui_x11_image(display, &win);
         (void)screen;
 
         win.platform = (void*)p;
@@ -231,24 +248,9 @@ void gui_present(&GuiWindow win) {
     if (!hasPlatform) { return; }
     unsafe {
         struct GuiX11Platform* p = (struct GuiX11Platform*)win.platform;
-        int screen = XDefaultScreen(p->display);
-        void* visual = XDefaultVisual(p->display, screen);
-        unsigned int depth = XDefaultDepth(p->display, screen);
-        // ZPixmap = 2. bytesPerLine=0 lets Xlib compute it from width*32bpp.
-        void* image = XCreateImage(p->display, visual, depth, 2, 0,
-                                    (const void*)win.pixels,
-                                    (unsigned int)win.width, (unsigned int)win.height,
-                                    32, 0);
-        if (image != (void*)0) {
-            XPutImage(p->display, p->window, p->gc, image, 0, 0, 0, 0,
+        if (p->image != (void*)0) {
+            XPutImage(p->display, p->window, p->gc, p->image, 0, 0, 0, 0,
                       (unsigned int)win.width, (unsigned int)win.height);
-            // XCreateImage takes ownership of 'data' for XDestroyImage's
-            // sake in real Xlib usage; since win.pixels is *our* buffer
-            // (reused every frame, not handed off), a real integration
-            // must NOT let XDestroyImage free it — build with a static
-            // XImage and memcpy per frame instead of XCreateImage-per-
-            // frame if profiling ever shows this path matters; unverified
-            // either way (see file header).
         }
         XFlush(p->display);
     }
@@ -297,6 +299,14 @@ int gui_poll_event(&GuiWindow win, &GuiEvent outEvent) {
         }
         if (t == GUI_X11_BUTTON_PRESS_TYPE || t == GUI_X11_BUTTON_RELEASE_TYPE) {
             struct X11ButtonEvent* be = (struct X11ButtonEvent*)&buf;
+            if (be->button >= 4U && be->button <= 7U) {     // wheel: 4/5 up/down, 6/7 left/right
+                if (t != GUI_X11_BUTTON_PRESS_TYPE) { return 0; }
+                outEvent.kind = GUI_EVENT_SCROLL;
+                outEvent.x = (double)be->x; outEvent.y = (double)be->y;
+                outEvent.scrollDx = be->button == 6U ? -1.0 : (be->button == 7U ? 1.0 : 0.0);
+                outEvent.scrollDy = be->button == 4U ? 1.0 : (be->button == 5U ? -1.0 : 0.0);
+                return 1;
+            }
             outEvent.kind = (t == GUI_X11_BUTTON_PRESS_TYPE) ? GUI_EVENT_MOUSE_DOWN : GUI_EVENT_MOUSE_UP;
             outEvent.x = (double)be->x; outEvent.y = (double)be->y;
             // Button1=left(1), Button2=middle, Button3=right in X11's
@@ -313,18 +323,34 @@ int gui_poll_event(&GuiWindow win, &GuiEvent outEvent) {
             return 1;
         }
         if (t == GUI_X11_KEY_PRESS_TYPE || t == GUI_X11_KEY_RELEASE_TYPE) {
-            struct X11KeyEvent* ke = (struct X11KeyEvent*)&buf;
             outEvent.kind = (t == GUI_X11_KEY_PRESS_TYPE) ? GUI_EVENT_KEY_DOWN : GUI_EVENT_KEY_UP;
-            outEvent.keycode = __gui_x11_keycode(ke->keycode);
-            // Full text (via XLookupString + an XIC for proper input-
-            // method support) isn't wired up here — see file header;
-            // codepoint stays 0, same keycode-only limitation gui_win32.sc
-            // documents.
+            char text[8];
+            unsigned long keysym = 0UL;
+            int n = XLookupString((void*)&buf, (char*)text, 8, &keysym, (void*)0);
+            outEvent.keycode = __gui_x11_keysym(keysym);
+            // Like the Cocoa backend: a key press also carries the typed
+            // character (ASCII; no input-method composition) in codepoint.
             outEvent.codepoint = 0U;
+            if (t == GUI_X11_KEY_PRESS_TYPE && n > 0) {
+                unsigned int c = (unsigned int)(unsigned char)text[0];
+                if (c >= 32U && c < 127U) { outEvent.codepoint = c; }
+            }
             return 1;
         }
         if (t == GUI_X11_CONFIGURE_NOTIFY_TYPE) {
             struct X11ConfigureEvent* ce = (struct X11ConfigureEvent*)&buf;
+            if (ce->w == win.width && ce->h == win.height) { return 0; }   // a move
+            // New size: a new zeroed pixel buffer and XImage to match.
+            unsigned long npix = (unsigned long)ce->w * (unsigned long)ce->h * 4UL;
+            void* px = alloc_raw_(npix);
+            if (px == (void*)0) { return 0; }
+            memset(px, 0, npix);
+            __gui_x11_free_image(p->image);
+            dealloc_raw_((void*)win.pixels);
+            win.pixels = (&heap unsigned char)px;
+            win.width = ce->w;
+            win.height = ce->h;
+            p->image = __gui_x11_image(p->display, win);
             outEvent.kind = GUI_EVENT_RESIZE;
             outEvent.width = ce->w; outEvent.height = ce->h;
             return 1;
@@ -337,6 +363,7 @@ void gui_destroy_window(&GuiWindow win) {
     unsafe {
         if (!win.platform.is_null()) {
             struct GuiX11Platform* p = (struct GuiX11Platform*)win.platform;
+            __gui_x11_free_image(p->image);
             if (p->gc != (void*)0) { XFreeGC(p->display, p->gc); }
             XDestroyWindow(p->display, p->window);
             XCloseDisplay(p->display);

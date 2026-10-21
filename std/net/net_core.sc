@@ -119,7 +119,7 @@ inline void PacketBuf::reset() {
 
 // ── NetIf ─────────────────────────────────────────────────────────────────────
 
-inline int NetIf::tx(&stack PacketBuf pkt) {
+inline int NetIf::tx(&PacketBuf pkt) {
     if (self.tx_fn == (void*)0) { return -1; }
     unsafe {
         fn int(void*, unsigned char*, unsigned long) func =

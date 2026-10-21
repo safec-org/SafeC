@@ -18,10 +18,10 @@ struct EthernetHdr {
 };
 
 // Parse Ethernet header from packet (returns 0 on success, -1 if too short).
-int eth_parse(&stack PacketBuf pkt, &stack EthernetHdr hdr_out);
+int eth_parse(&PacketBuf pkt, &EthernetHdr hdr_out);
 
 // Write Ethernet header into packet at offset 0; sets pkt.len to ETH_HDR_LEN.
-void eth_build(&stack PacketBuf pkt, const unsigned char dst[NET_MAC_LEN],
+void eth_build(&PacketBuf pkt, const unsigned char dst[NET_MAC_LEN],
                const unsigned char src[NET_MAC_LEN], unsigned short ethertype);
 
 } // namespace std

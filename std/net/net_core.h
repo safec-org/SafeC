@@ -58,7 +58,7 @@ struct NetIf {
     void*         iface_ctx;           // &T
 
     // Transmit a packet.  Returns 0 on success.
-    int  tx(&stack PacketBuf pkt);
+    int  tx(&PacketBuf pkt);
 };
 
 // An interface whose tx() calls tx(ctx, frame, len) (0 on success).

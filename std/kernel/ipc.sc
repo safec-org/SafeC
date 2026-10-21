@@ -35,7 +35,7 @@ inline int Mailbox::send(int sender_pid, int type, const ?&unsigned char payload
     return 1;
 }
 
-inline int Mailbox::recv(&stack Message out) {
+inline int Mailbox::recv(&Message out) {
     if (self.count <= 0) { return 0; } // empty
 
     int idx = self.tail;
@@ -51,7 +51,7 @@ inline int Mailbox::recv(&stack Message out) {
     return 1;
 }
 
-inline int Mailbox::peek(&stack Message out) const {
+inline int Mailbox::peek(&Message out) const {
     if (self.count <= 0) { return 0; }
 
     int idx = self.tail;

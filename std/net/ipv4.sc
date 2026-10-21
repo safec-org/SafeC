@@ -25,8 +25,8 @@ inline unsigned short ip_checksum(const &unsigned char data, unsigned long len) 
     return (unsigned short)(~sum & (unsigned long)0xFFFF);
 }
 
-int ipv4_parse(&stack PacketBuf pkt, unsigned long offset,
-               &stack Ipv4Hdr hdr_out) {
+int ipv4_parse(&PacketBuf pkt, unsigned long offset,
+               &Ipv4Hdr hdr_out) {
     if (pkt.len < offset + (unsigned long)IPV4_HDR_LEN) { return -1; }
     unsafe {
         unsigned char* d = (unsigned char*)pkt.data + offset;
@@ -51,7 +51,7 @@ int ipv4_parse(&stack PacketBuf pkt, unsigned long offset,
     return 0;
 }
 
-unsigned long ipv4_build(&stack PacketBuf pkt, unsigned long offset,
+unsigned long ipv4_build(&PacketBuf pkt, unsigned long offset,
                          unsigned char proto, unsigned int src, unsigned int dst,
                          unsigned short payload_len) {
     unsigned short total = (unsigned short)((unsigned short)IPV4_HDR_LEN + payload_len);

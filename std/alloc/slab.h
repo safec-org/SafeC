@@ -8,7 +8,7 @@ struct SlabAllocator {
     &heap void    base;       // heap-backed backing buffer
     int           owned;   // 1 if slab_new allocated base (destroy() frees it)
     void*         free_head;  // head of embedded free-list (raw — unsafe arithmetic)
-    unsigned long obj_size;   // size of each object (>= sizeof(void*))
+    unsigned long obj_size;   // slot size: the requested size rounded up to a multiple of 8
     unsigned long cap;        // max number of objects
     unsigned long used;       // currently allocated count
     // 1 if each slot has an extra 8-byte double-free-detection tag ahead
@@ -38,9 +38,11 @@ struct SlabAllocator {
     unsigned long slot_stride_() const;
 };
 
-// Initialize over a user-provided heap buffer of exactly obj_size*count
-// bytes. obj_size must be >= 8 (pointer size). No double-free detection
-// (see has_tags) — the buffer size contract can't grow to fit a tag.
+// Initialize over a user-provided buffer of obj_size*count bytes. Slots are
+// obj_size rounded up to a multiple of 8 (at least 8, to hold the free-list
+// link) and start 8-byte aligned, so 'cap' can come out below 'count' when
+// that rounding doesn't fit. No double-free detection (see has_tags) — the
+// buffer size contract can't grow to fit a tag.
 struct SlabAllocator slab_init(&unsigned char buffer, unsigned long obj_size, unsigned long count);
 
 // Create a heap-backed slab allocator (double-free-detecting).

@@ -31,10 +31,10 @@ struct VfsNode {
     ?&void        fs_ctx;           // driver-internal: the owning VfsMount
 
     // Read `len` bytes from file at `offset` into `buf`.  Returns bytes read.
-    unsigned long read(unsigned long offset, &stack unsigned char buf, unsigned long len);
+    unsigned long read(unsigned long offset, &unsigned char buf, unsigned long len);
 
     // Write `len` bytes from `buf` to file at `offset`.  Returns bytes written.
-    unsigned long write(unsigned long offset, const &stack unsigned char buf, unsigned long len);
+    unsigned long write(unsigned long offset, const &unsigned char buf, unsigned long len);
 
     // Type-erased listing behind vfs_readdir (below).
     int readdir_raw_(void* cb, void* user);
@@ -45,7 +45,7 @@ struct VfsOps {
     // Mount from a raw byte buffer (e.g. RAM disk) or opaque driver handle.
     fn int(?&void ctx, unsigned long size) mount;
     fn int(?&void ctx) unmount;
-    fn int(?&void ctx, const &char path, int flags, &stack VfsNode node_out) open;
+    fn int(?&void ctx, const &char path, int flags, &VfsNode node_out) open;
     fn int(?&void ctx, const &char path) unlink;
     fn int(?&void ctx, const &char path) mkdir;
     fn unsigned long(?&void ctx, unsigned long inode, unsigned long off,
@@ -74,7 +74,7 @@ struct Vfs {
     int  unmount(const &char mountpoint);
 
     // Open path; fills `node_out`.  Returns 0 on success.
-    int  open(const &char path, int flags, &stack VfsNode node_out);
+    int  open(const &char path, int flags, &VfsNode node_out);
 
     // Remove a file.
     int  unlink(const &char path);

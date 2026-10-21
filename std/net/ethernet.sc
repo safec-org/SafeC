@@ -4,7 +4,7 @@
 
 namespace std {
 
-inline int eth_parse(&stack PacketBuf pkt, &stack EthernetHdr hdr_out) {
+inline int eth_parse(&PacketBuf pkt, &EthernetHdr hdr_out) {
     if (pkt.len < (unsigned long)ETH_HDR_LEN) { return -1; }
     unsafe {
         unsigned char* d = (unsigned char*)pkt.data;
@@ -20,7 +20,7 @@ inline int eth_parse(&stack PacketBuf pkt, &stack EthernetHdr hdr_out) {
     return 0;
 }
 
-void eth_build(&stack PacketBuf pkt, const unsigned char dst[NET_MAC_LEN],
+void eth_build(&PacketBuf pkt, const unsigned char dst[NET_MAC_LEN],
                const unsigned char src[NET_MAC_LEN], unsigned short ethertype) {
     unsafe {
         unsigned char* d = (unsigned char*)pkt.data;

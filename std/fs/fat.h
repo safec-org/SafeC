@@ -43,7 +43,7 @@ struct FatCtx {
     unsigned long  bytes_per_cluster;
 
     // Read a cluster into `buf` (must be >= bytes_per_cluster bytes).
-    int read_cluster(unsigned long cluster, &stack unsigned char buf);
+    int read_cluster(unsigned long cluster, &unsigned char buf);
 
     // Follow FAT chain to find cluster at position `idx` from `start_cluster`.
     unsigned long follow_fat(unsigned long start_cluster, unsigned long idx);

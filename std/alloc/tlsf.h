@@ -50,8 +50,8 @@ struct TlsfAllocator {
     void          destroy();
 
     // Internal helpers.
-    void          insert_(&stack TlsfBlock blk);
-    void          remove_(&stack TlsfBlock blk);
+    void          insert_(&TlsfBlock blk);
+    void          remove_(&TlsfBlock blk);
     void*         find_(unsigned long size);
 };
 
@@ -62,7 +62,7 @@ struct TlsfAllocator tlsf_init(&unsigned char buffer, unsigned long cap);
 struct TlsfAllocator tlsf_new(unsigned long cap);
 
 // Compute first-level and second-level indices for a given size.
-void tlsf_mapping_(unsigned long size, &stack int fl, &stack int sl);
+void tlsf_mapping_(unsigned long size, &int fl, &int sl);
 
 // ── Typed allocation (recommended) ───────────────────────────────────────────
 generic<T>

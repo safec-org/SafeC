@@ -55,7 +55,7 @@ inline int RingBuffer::is_full() const {
 // auto-vectorizer can turn into real SIMD loads/stores; the masked version
 // couldn't be vectorized as well with a data-dependent wraparound computed
 // fresh every byte.
-inline unsigned long RingBuffer::write(const &stack unsigned char data, unsigned long len) {
+inline unsigned long RingBuffer::write(const &unsigned char data, unsigned long len) {
     unsigned long space = self.writable();
     if (len > space) { len = space; }
     unsigned long head = self.head;
@@ -81,7 +81,7 @@ inline unsigned long RingBuffer::write(const &stack unsigned char data, unsigned
     return len;
 }
 
-inline unsigned long RingBuffer::read(&stack unsigned char out, unsigned long len) {
+inline unsigned long RingBuffer::read(&unsigned char out, unsigned long len) {
     unsigned long avail = self.readable();
     if (len > avail) { len = avail; }
     unsigned long tail = self.tail;
@@ -106,7 +106,7 @@ inline unsigned long RingBuffer::read(&stack unsigned char out, unsigned long le
     return len;
 }
 
-inline unsigned long RingBuffer::peek(&stack unsigned char out, unsigned long len) const {
+inline unsigned long RingBuffer::peek(&unsigned char out, unsigned long len) const {
     unsigned long avail = self.readable();
     if (len > avail) { len = avail; }
     unsigned long tail = self.tail;

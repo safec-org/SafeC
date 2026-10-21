@@ -28,13 +28,13 @@ struct RingBuffer {
     int  is_full() const;
 
     // Write up to `len` bytes from `data`.  Returns bytes actually written.
-    unsigned long write(const &stack unsigned char data, unsigned long len);
+    unsigned long write(const &unsigned char data, unsigned long len);
 
     // Read up to `len` bytes into `out`.  Returns bytes actually read.
-    unsigned long read(&stack unsigned char out, unsigned long len);
+    unsigned long read(&unsigned char out, unsigned long len);
 
     // Peek at `len` bytes without consuming them.  Returns bytes copied.
-    unsigned long peek(&stack unsigned char out, unsigned long len) const;
+    unsigned long peek(&unsigned char out, unsigned long len) const;
 
     // Discard `len` bytes.  Returns bytes discarded.
     unsigned long discard(unsigned long len);

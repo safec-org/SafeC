@@ -55,17 +55,26 @@ inline void SlabAllocator::build_freelist_() {
     }
 }
 
+// Slot size: at least one pointer (free slots hold the free-list link) and
+// a multiple of 8, so every slot — and the link inside it — stays aligned.
+static unsigned long slab_slot_size_(unsigned long obj_size) {
+    unsigned long sz = obj_size < 8UL ? 8UL : obj_size;
+    return (sz + 7UL) & ~7UL;
+}
+
+// The caller's buffer is taken to be obj_size * count bytes. Rounding the
+// slot size (and aligning the buffer's start) can fit fewer slots than
+// 'count'; cap says how many there are.
 inline struct SlabAllocator slab_init(&unsigned char buffer, unsigned long obj_size, unsigned long count) {
     struct SlabAllocator a;
-    unsafe { a.base = (&heap void)buffer; }
+    unsigned long bytes = checked_mul_size(obj_size, count);
+    unsigned long addr;
+    unsafe { addr = (unsigned long)buffer; }
+    unsigned long skip = ((addr + 7UL) & ~7UL) - addr;
+    unsafe { a.base = (&heap void)(addr + skip); }
     a.owned = 0;
-    // Ensure minimum object size can hold a pointer
-    if (obj_size < (unsigned long)8) {
-        a.obj_size = (unsigned long)8;
-    } else {
-        a.obj_size = obj_size;
-    }
-    a.cap       = count;
+    a.obj_size  = slab_slot_size_(obj_size);
+    a.cap       = bytes > skip ? (bytes - skip) / a.obj_size : 0UL;
     a.used      = (unsigned long)0;
     a.free_head = (void*)0;
     a.has_tags  = 0;
@@ -75,11 +84,7 @@ inline struct SlabAllocator slab_init(&unsigned char buffer, unsigned long obj_s
 
 inline struct SlabAllocator slab_new(unsigned long obj_size, unsigned long count) {
     struct SlabAllocator a;
-    if (obj_size < (unsigned long)8) {
-        a.obj_size = (unsigned long)8;
-    } else {
-        a.obj_size = obj_size;
-    }
+    a.obj_size = slab_slot_size_(obj_size);
     a.cap      = count;
     a.used     = (unsigned long)0;
     a.has_tags = 1;

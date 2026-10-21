@@ -6,8 +6,8 @@
 
 namespace std {
 
-int udp_parse(&stack PacketBuf pkt, unsigned long offset,
-              &stack UdpHdr hdr_out) {
+int udp_parse(&PacketBuf pkt, unsigned long offset,
+              &UdpHdr hdr_out) {
     if (pkt.len < offset + (unsigned long)UDP_HDR_LEN) { return -1; }
     unsafe {
         unsigned char* d = (unsigned char*)pkt.data + offset;
@@ -23,7 +23,7 @@ int udp_parse(&stack PacketBuf pkt, unsigned long offset,
     return 0;
 }
 
-unsigned long udp_build(&stack PacketBuf pkt, unsigned long offset,
+unsigned long udp_build(&PacketBuf pkt, unsigned long offset,
                         unsigned short src_port, unsigned short dst_port,
                         unsigned short payload_len) {
     unsafe {
@@ -47,7 +47,7 @@ unsigned long udp_build(&stack PacketBuf pkt, unsigned long offset,
     return payload_start;
 }
 
-unsigned long udp_frame(&stack PacketBuf pkt,
+unsigned long udp_frame(&PacketBuf pkt,
                         const unsigned char eth_src[NET_MAC_LEN],
                         const unsigned char eth_dst[NET_MAC_LEN],
                         unsigned int ip_src, unsigned int ip_dst,

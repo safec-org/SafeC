@@ -60,13 +60,13 @@ struct TcpConn {
 
     // Feed a received packet (starting at TCP header offset in pkt).
     // Returns 1 if state changed, 0 otherwise.
-    int  recv(&stack PacketBuf pkt, unsigned long tcp_offset);
+    int  recv(&PacketBuf pkt, unsigned long tcp_offset);
 
     // Enqueue payload data to send.  Returns bytes accepted (0 if full).
     unsigned long send(const &unsigned char data, unsigned long len);
 
     // Build next outgoing segment into pkt; returns 1 if segment produced.
-    int  build_segment(&stack PacketBuf pkt,
+    int  build_segment(&PacketBuf pkt,
                        const unsigned char eth_src[NET_MAC_LEN],
                        const unsigned char eth_dst[NET_MAC_LEN]);
 
@@ -93,8 +93,8 @@ struct TcpConn {
 
 // Parse TCP header from pkt at byte offset `offset`. Returns 0 on success,
 // -1 if the packet is truncated or the data offset is invalid.
-int tcp_parse(&stack PacketBuf pkt, unsigned long offset,
-              &stack TcpHdr hdr_out);
+int tcp_parse(&PacketBuf pkt, unsigned long offset,
+              &TcpHdr hdr_out);
 
 // Compute TCP checksum (pseudo-header + segment).
 unsigned short tcp_checksum(unsigned int src_ip, unsigned int dst_ip,

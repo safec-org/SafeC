@@ -12,7 +12,7 @@
 namespace std {
 
 struct X509Validity {
-    unsigned long long not_before;   // seconds since epoch
+    unsigned long long not_before;   // seconds since epoch (dates before 1970 clamp to 0)
     unsigned long long not_after;
 };
 
@@ -57,13 +57,13 @@ struct X509Cert {
 // Parse a DER-encoded certificate from `der` (len bytes).
 // Fills `cert_out` on success.  Returns 0 on success, negative on error.
 int x509_parse_der(const &unsigned char der, unsigned long len,
-                   &stack X509Cert cert_out);
+                   &X509Cert cert_out);
 
 // Verify that `cert` was signed by `issuer_cert` (structural chain check only).
 // Returns 1 if issuer name matches, 0 otherwise.
 // NOTE: Full crypto verification requires std/crypto/rsa.h (not yet implemented);
 //       this function checks only the structural chain (issuer name match).
-int x509_verify_chain(const &stack X509Cert cert,
-                       const &stack X509Cert issuer_cert);
+int x509_verify_chain(const &X509Cert cert,
+                       const &X509Cert issuer_cert);
 
 } // namespace std

@@ -29,12 +29,12 @@ unsigned short ip_checksum(const &unsigned char data, unsigned long len);
 
 // Parse IPv4 header from pkt at byte offset `offset`.
 // Returns 0 on success, -1 on truncation or bad version.
-int  ipv4_parse(&stack PacketBuf pkt, unsigned long offset,
-                &stack Ipv4Hdr hdr_out);
+int  ipv4_parse(&PacketBuf pkt, unsigned long offset,
+                &Ipv4Hdr hdr_out);
 
 // Write IPv4 header into pkt at byte offset `offset` (pkt must have capacity).
 // Computes and fills checksum. Returns byte offset of first payload byte.
-unsigned long ipv4_build(&stack PacketBuf pkt, unsigned long offset,
+unsigned long ipv4_build(&PacketBuf pkt, unsigned long offset,
                          unsigned char proto, unsigned int src, unsigned int dst,
                          unsigned short payload_len);
 

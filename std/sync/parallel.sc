@@ -36,7 +36,7 @@ void parallel_for_raw_(unsigned long n, unsigned long grain, void* body, void* c
 #else
 
 #ifdef _WIN32
-extern unsigned long GetActiveProcessorCount(unsigned short group);
+extern unsigned int GetActiveProcessorCount(unsigned short group);   // DWORD
 #else
 #if defined(__APPLE__)
 extern int sysctlbyname(const char* name, void* oldp, void* oldlenp, void* newp, unsigned long newlen);

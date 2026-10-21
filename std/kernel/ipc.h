@@ -25,10 +25,10 @@ struct Mailbox {
     int            send(int sender_pid, int type, const ?&unsigned char payload, unsigned long size); // payload may be null when size == 0
 
     // Receive next message. Copies into `out`. Returns 1 on success, 0 if empty.
-    int            recv(&stack Message out);
+    int            recv(&Message out);
 
     // Peek at next message without removing it. Returns 1 if available.
-    int            peek(&stack Message out) const;
+    int            peek(&Message out) const;
 
     // Check if the mailbox has messages. Returns 1 if non-empty.
     int            has_msg() const;

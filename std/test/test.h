@@ -106,6 +106,6 @@ struct TestSuite test_suite_init();
 
 // Run all tests in `suite`, print summary, then call exit(1) on any failure.
 // Useful as the last line of a test main().
-void test_run_and_exit(&stack TestSuite suite);
+void test_run_and_exit(&TestSuite suite);
 
 } // namespace std

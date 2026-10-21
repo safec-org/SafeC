@@ -91,7 +91,7 @@ inline void ArpTable::clear() {
 // [18..23] THA
 // [24..27] TPA
 
-void arp_build_packet(&stack PacketBuf pkt,
+void arp_build_packet(&PacketBuf pkt,
                       unsigned short op,
                       const unsigned char sha[NET_MAC_LEN], unsigned int spa,
                       const unsigned char tha[NET_MAC_LEN], unsigned int tpa) {
@@ -122,10 +122,10 @@ void arp_build_packet(&stack PacketBuf pkt,
     pkt.len = base + (unsigned long)ARP_PKT_LEN;
 }
 
-int arp_parse_packet(&stack PacketBuf pkt, unsigned long offset,
-                     &stack unsigned short op,
-                     unsigned char sha[NET_MAC_LEN], &stack unsigned int spa,
-                     unsigned char tha[NET_MAC_LEN], &stack unsigned int tpa) {
+int arp_parse_packet(&PacketBuf pkt, unsigned long offset,
+                     &unsigned short op,
+                     unsigned char sha[NET_MAC_LEN], &unsigned int spa,
+                     unsigned char tha[NET_MAC_LEN], &unsigned int tpa) {
     if (pkt.len < offset + (unsigned long)ARP_PKT_LEN) { return -1; }
     unsafe {
         unsigned char* d = (unsigned char*)pkt.data + offset;

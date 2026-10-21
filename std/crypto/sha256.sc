@@ -112,7 +112,7 @@ inline struct Sha256Ctx sha224_init() {
     return ctx;
 }
 
-inline void Sha256Ctx::update(const &stack unsigned char data, unsigned long len) {
+inline void Sha256Ctx::update(const &unsigned char data, unsigned long len) {
     unsigned long buf_used = self.total_bytes % (unsigned long)SHA256_BLOCK_SIZE;
     self.total_bytes = self.total_bytes + len;
 
@@ -130,7 +130,7 @@ inline void Sha256Ctx::update(const &stack unsigned char data, unsigned long len
     }
 }
 
-void Sha256Ctx::finish(&stack unsigned char digest) {
+void Sha256Ctx::finish(&unsigned char digest) {
     unsigned long buf_used = self.total_bytes % (unsigned long)SHA256_BLOCK_SIZE;
     unsigned long bit_len  = self.total_bytes * (unsigned long)8;
 
@@ -173,8 +173,8 @@ void Sha256Ctx::finish(&stack unsigned char digest) {
     }
 }
 
-void sha256(const &stack unsigned char data, unsigned long len,
-            &stack unsigned char digest) {
+void sha256(const &unsigned char data, unsigned long len,
+            &unsigned char digest) {
     struct Sha256Ctx ctx = sha256_init();
     ctx.update(data, len);
     ctx.finish(digest);

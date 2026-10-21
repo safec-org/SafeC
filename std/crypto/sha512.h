@@ -19,12 +19,12 @@ struct Sha512Ctx {
     int                 is384;             // 1 = SHA-384 variant
 
     // Feed `len` bytes of data into the hash.
-    void update(const &stack unsigned char data, unsigned long len);
+    void update(const &unsigned char data, unsigned long len);
 
     // Finalise and write the digest.
     // For SHA-512: digest must be at least 64 bytes.
     // For SHA-384: digest must be at least 48 bytes.
-    void finish(&stack unsigned char digest);
+    void finish(&unsigned char digest);
 };
 
 // Initialise a SHA-512 context.
@@ -34,11 +34,11 @@ struct Sha512Ctx sha512_init();
 struct Sha512Ctx sha384_init();
 
 // Convenience: hash `len` bytes and write the 64-byte digest.
-void sha512(const &stack unsigned char data, unsigned long len,
-            &stack unsigned char digest);
+void sha512(const &unsigned char data, unsigned long len,
+            &unsigned char digest);
 
 // Convenience: hash `len` bytes and write the 48-byte digest.
-void sha384(const &stack unsigned char data, unsigned long len,
-            &stack unsigned char digest);
+void sha384(const &unsigned char data, unsigned long len,
+            &unsigned char digest);
 
 } // namespace std

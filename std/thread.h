@@ -40,6 +40,9 @@ int mutex_init(&unsigned long long m);
 int mutex_destroy(&unsigned long long m);
 int mutex_lock(&unsigned long long m);
 int mutex_trylock(&unsigned long long m);  // 0=locked, non-zero=busy
+// Don't re-lock a mutex the calling thread already holds: a Windows
+// CRITICAL_SECTION allows it (recursive), a default POSIX mutex deadlocks
+// (mutex_lock) or reports busy (mutex_trylock).
 int mutex_unlock(&unsigned long long m);
 
 // ── Condition variable ────────────────────────────────────────────────────────
@@ -47,6 +50,9 @@ int mutex_unlock(&unsigned long long m);
 int cond_init(&unsigned long long cv);
 int cond_destroy(&unsigned long long cv);
 int cond_wait(&unsigned long long cv, &unsigned long long m);
+// Waits at most 'ms' milliseconds: 0 if woken, THREAD_TIMEDOUT if the time
+// ran out, -1 on another error (the same codes on every platform).
+#define THREAD_TIMEDOUT 1
 int cond_timedwait_ms(&unsigned long long cv, &unsigned long long m, unsigned long ms);
 int cond_signal(&unsigned long long cv);
 int cond_broadcast(&unsigned long long cv);
