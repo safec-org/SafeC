@@ -700,6 +700,9 @@ struct FunctionDecl : Decl {
     bool        isMethod      = false;   // true → T::m(...)
     std::string methodOwner;             // struct name (e.g. "Foo" for Foo::m)
     bool        isConstMethod = false;   // const qualifier after params
+    // A static method ('static T make(...);' in the struct body): no
+    // 'self', called as 'T::make(...)'. Mangled T_make like any method.
+    bool        isStaticMethod = false;
     bool        isMustUse     = false;   // [[must_use]] — warn if return discarded
     // True for an out-of-line method definition ('inline T Box::get()...')
     // whose methodOwner names a generic struct *template* — collectFunction
@@ -747,6 +750,7 @@ struct MethodDecl {
     TypePtr                  returnType;
     std::vector<ParamDecl>   params;
     bool                     isConst = false;   // const method qualifier
+    bool                     isStatic = false;  // 'static' method: no self
     SourceLocation           loc;
 };
 

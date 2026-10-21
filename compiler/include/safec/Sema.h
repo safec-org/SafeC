@@ -456,6 +456,14 @@ private:
     TypePtr expectedType_;
     // Method registry: "StructName::methodName" → FunctionDecl* (mangled)
     std::unordered_map<std::string, FunctionDecl*> methodRegistry_;
+    // Static methods: "StructName::method" → FunctionDecl* (mangled
+    // StructName_method, no self), called as 'StructName::method(...)' or
+    // 'ns::StructName::method(...)'. On a generic struct the decl is a
+    // generic function over the struct's parameters. staticMethodNames_
+    // holds the names each struct body declares 'static', so an
+    // out-of-line definition is recognized as one.
+    std::unordered_map<std::string, FunctionDecl*> staticMethodRegistry_;
+    std::unordered_map<std::string, std::unordered_set<std::string>> staticMethodNames_;
     // Namespace registries: "ns::name" (as written at the call site) →
     // decl* (already mangled, e.g. FunctionDecl::name == "ns_name"). See
     // collectFunction/collectGlobalVar for population and checkIdent for
