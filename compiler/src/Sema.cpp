@@ -89,9 +89,15 @@ void Sema::checkTraitSupertraits() {
         if (state[name] == 0) visit(name);
 }
 
-bool Sema::satisfiesTrait(const TypePtr &ty, const std::string &trait) const {
-    if (trait.empty()) return true;
-    if (!ty) return false;
+std::string Sema::constraintError(const TypePtr &ty, const std::string &trait, const std::string &where) const {
+    std::string why = traitMismatch(ty, trait);
+    return "type '" + ty->str() + "' does not satisfy constraint '" + trait + "' " + where +
+           (why == "-" ? std::string() : " (" + why + ")");
+}
+
+std::string Sema::traitMismatch(const TypePtr &ty, const std::string &trait) const {
+    if (trait.empty()) return "";
+    if (!ty) return "-";
 
     // Structural traits: judged by TypeKind, not by looking up a method —
     // SafeC has no 'operator[]' overload mechanism, so these apply only to
@@ -101,17 +107,18 @@ bool Sema::satisfiesTrait(const TypePtr &ty, const std::string &trait) const {
     // satisfy them via a user 'trait' that names an explicit accessor
     // method instead (e.g. 'trait Indexable { int get(int i); }').
     if (trait == "Indexed") {
-        return ty->kind == TypeKind::Array   || ty->kind == TypeKind::Pointer ||
-               ty->kind == TypeKind::Slice   || ty->kind == TypeKind::Vector  ||
-               ty->kind == TypeKind::Reference;
+        bool ok = ty->kind == TypeKind::Array   || ty->kind == TypeKind::Pointer ||
+                  ty->kind == TypeKind::Slice   || ty->kind == TypeKind::Vector  ||
+                  ty->kind == TypeKind::Reference;
+        return ok ? "" : "-";
     }
     if (trait == "Pointer") {
-        return ty->kind == TypeKind::Pointer || ty->kind == TypeKind::Reference;
+        return ty->kind == TypeKind::Pointer || ty->kind == TypeKind::Reference ? "" : "-";
     }
 
     // Primitive numeric types satisfy Numeric/Ord/Eq/Add/Sub/Mul/Div — not
     // user traits, which name methods a primitive doesn't have.
-    if (ty->isArithmetic()) return isBuiltinTrait(trait);
+    if (ty->isArithmetic()) return isBuiltinTrait(trait) ? "" : "-";
     // Struct types: check if they have the required operator/method names —
     // whether 'trait' names a builtin trait or a user 'trait Name { ... }'
     // declaration, both are just a list of required method names.
@@ -122,26 +129,45 @@ bool Sema::satisfiesTrait(const TypePtr &ty, const std::string &trait) const {
                 for (auto &op : td->requiredOps) {
                     std::string key = st.name + "::" + op;
                     if (methodRegistry_.find(key) == methodRegistry_.end())
-                        return false;
+                        return "no '" + op + "'";
                 }
-                return true;
+                return "";
             }
         }
         auto uit = userTraits_.find(trait);
         if (uit != userTraits_.end()) {
+            auto dit = userTraitDecls_.find(trait);
             for (auto &methodName : uit->second) {
                 std::string key = st.name + "::" + methodName;
-                if (methodRegistry_.find(key) == methodRegistry_.end())
-                    return false;
+                auto mit = methodRegistry_.find(key);
+                if (mit == methodRegistry_.end())
+                    return "no method '" + methodName + "'";
+                // The trait's declaration fixes the shape: static or not and
+                // how many parameters (types aren't compared: one trait can
+                // serve several sample types, say).
+                if (dit == userTraitDecls_.end()) continue;
+                for (auto &m : dit->second->methods) {
+                    if (m.name != methodName) continue;
+                    const FunctionDecl &f = *mit->second;
+                    if (m.isStatic != f.isStaticMethod)
+                        return "'" + methodName + "' is " + (m.isStatic ? "static" : "an instance method") +
+                               " in the trait";
+                    size_t have = f.params.size() - (f.isStaticMethod ? 0 : 1);
+                    if (!f.isVariadic && have != m.params.size())
+                        return "'" + methodName + "' takes " + std::to_string(have) +
+                               " parameter(s), the trait " + std::to_string(m.params.size());
+                }
             }
             auto sit = userTraitSupers_.find(trait);
             if (sit != userTraitSupers_.end())
-                for (auto &super : sit->second)
-                    if (!satisfiesTrait(ty, super)) return false;
-            return true;
+                for (auto &super : sit->second) {
+                    std::string why = traitMismatch(ty, super);
+                    if (!why.empty()) return why == "-" ? "not '" + super + "'" : why + ", from '" + super + "'";
+                }
+            return "";
         }
     }
-    return false;
+    return "-";
 }
 
 // ── Scope ─────────────────────────────────────────────────────────────────────
@@ -360,11 +386,78 @@ TypePtr Sema::resolveType(TypePtr ty) {
     return ty;
 }
 
+void Sema::resolveMethodBodyDecls() {
+    // A bare name parsed as a struct that names no struct, typedef or
+    // generic template (looked through references, pointers, arrays,
+    // optionals and function types).
+    auto unknownName = [&](const auto &self, const TypePtr &t) -> std::string {
+        if (!t) return "";
+        switch (t->kind) {
+        case TypeKind::Struct: {
+            auto &st = static_cast<const StructType &>(*t);
+            if (!st.isDefined && st.typeArgs.empty() && !typeRegistry_.count(st.name) &&
+                !genericStructTemplates_.count(st.name))
+                return st.name;
+            return "";
+        }
+        case TypeKind::Reference: return self(self, static_cast<const ReferenceType &>(*t).base);
+        case TypeKind::Pointer:   return self(self, static_cast<const PointerType &>(*t).base);
+        case TypeKind::Array:     return self(self, static_cast<const ArrayType &>(*t).element);
+        case TypeKind::Optional:  return self(self, static_cast<const OptionalType &>(*t).inner);
+        case TypeKind::Function: {
+            auto &ft = static_cast<const FunctionType &>(*t);
+            std::string n = self(self, ft.returnType);
+            for (auto &p : ft.paramTypes) if (n.empty()) n = self(self, p);
+            return n;
+        }
+        default: return "";
+        }
+    };
+    // Trait method signatures: resolved too, so an unknown type in one is
+    // reported instead of silently ignored (conformance itself compares
+    // names, static-ness and parameter counts; see traitMismatch).
+    for (auto &[tname, td] : userTraitDecls_) {
+        for (auto &m : td->methods) {
+            std::string bad;
+            if (m.returnType) { m.returnType = resolveType(m.returnType); bad = unknownName(unknownName, m.returnType); }
+            for (auto &p : m.params) {
+                if (!p.type) continue;
+                p.type = resolveType(p.type);
+                if (bad.empty()) bad = unknownName(unknownName, p.type);
+            }
+            if (!bad.empty())
+                diag_.error(m.loc, "unknown type '" + bad + "' in trait '" + tname + "' method '" + m.name + "'");
+        }
+    }
+    for (auto &[key, d] : methodBodyDecl_) {
+        bool changed = false;
+        if (d->returnType) { auto r = resolveType(d->returnType); changed |= r != d->returnType; d->returnType = r; }
+        for (auto &p : d->params) {
+            if (!p.type) continue;
+            auto r = resolveType(p.type); changed |= r != p.type; p.type = r;
+        }
+        std::string bad = unknownName(unknownName, d->returnType);
+        for (auto &p : d->params) if (bad.empty()) bad = unknownName(unknownName, p.type);
+        if (!bad.empty()) {
+            diag_.error(d->loc, "unknown type '" + bad + "' in the declaration of '" + key + "'");
+            continue;
+        }
+        if (changed) {
+            // Calls type-check against the symbol's function type.
+            std::vector<TypePtr> pts;
+            for (auto &p : d->params) pts.push_back(p.type);
+            if (auto *sym = lookup(d->name))
+                if (sym->fnDecl == d) sym->type = makeReference(makeFunction(d->returnType, pts, d->isVariadic), Region::Static);
+        }
+    }
+}
+
 // ── Pass 1: Collect top-level declarations ─────────────────────────────────────
 bool Sema::run() {
     // Global scope
     pushScope();
     collectDecls(tu_);
+    resolveMethodBodyDecls();
     checkTraitSupertraits();
     completeGenericStructInstances();
     for (auto &d : tu_.decls) checkDecl(*d);
@@ -430,6 +523,7 @@ void Sema::collectDecls(TranslationUnit &tu) {
             userTraits_[td.name] = std::move(methodNames);
             userTraitSupers_[td.name] = td.supertraits;
             userTraitLocs_[td.name] = td.loc;
+            userTraitDecls_[td.name] = &td;
             break;
         }
         default: break;
@@ -711,7 +805,11 @@ void Sema::collectFunction(FunctionDecl &fn) {
         auto dit = methodBodyDecl_.find(owner + "::" + mname);
         if (dit != methodBodyDecl_.end() && dit->second != &fn &&
             dit->second->genericParams.size() == fn.genericParams.size()) {   // else reported above
-            const FunctionDecl &d = *dit->second;
+            FunctionDecl &d = *dit->second;
+            // The declaration was resolved when its struct was collected; a
+            // typedef declared after the struct only resolves now.
+            if (d.returnType) d.returnType = resolveType(d.returnType);
+            for (auto &p : d.params) if (p.type) p.type = resolveType(p.type);
             // Compared without const qualifiers: a leading 'const' on an
             // out-of-line definition ('inline const &char S::f() const') is
             // parsed as the function's const flag, not part of the type.
@@ -966,14 +1064,15 @@ TypePtr Sema::instantiateGenericStruct(const std::string &name,
     }
 
     TypeSubst subs;
+    bool boundFailed = false;
     for (size_t i = 0; i < tpl->genericParams.size(); ++i) {
         auto &gp = tpl->genericParams[i];
         subs[gp.name] = typeArgs[i];
         for (auto &constraint : gp.constraints) {
             if (!satisfiesTrait(typeArgs[i], constraint)) {
-                diag_.error(loc, "type '" + typeArgs[i]->str() +
-                    "' does not satisfy constraint '" + constraint +
-                    "' for generic parameter '" + gp.name + "' of struct '" + name + "'");
+                diag_.error(loc, constraintError(typeArgs[i], constraint, "for generic parameter '" + gp.name +
+                                                 "' of struct '" + name + "'"));
+                boundFailed = true;
             }
         }
     }
@@ -1032,7 +1131,7 @@ TypePtr Sema::instantiateGenericStruct(const std::string &name,
     auto methodsIt = genericStructMethodTemplates_.find(name);
     if (methodsIt != genericStructMethodTemplates_.end())
         for (FunctionDecl *methodTpl : methodsIt->second)
-            instantiateStructMethod(methodTpl, clonePtr, subs);
+            instantiateStructMethod(methodTpl, clonePtr, subs, /*checkBody=*/!boundFailed);
 
     return clonePtr->type;
 }
@@ -1042,7 +1141,8 @@ TypePtr Sema::instantiateGenericStruct(const std::string &name,
 // collectFunction does for an ordinary method. Each (instance, template)
 // pair is done once; a bodyless declaration is skipped when the same
 // method also has a definition.
-void Sema::instantiateStructMethod(FunctionDecl *methodTpl, StructDecl *clonePtr, const TypeSubst &subs) {
+void Sema::instantiateStructMethod(FunctionDecl *methodTpl, StructDecl *clonePtr, const TypeSubst &subs,
+                                   bool checkBody) {
     if (!instantiatedStructMethods_.insert({clonePtr, methodTpl}).second) return;
     if (!methodTpl->body) {
         auto it = genericStructMethodTemplates_.find(methodTpl->methodOwner);
@@ -1079,13 +1179,15 @@ void Sema::instantiateStructMethod(FunctionDecl *methodTpl, StructDecl *clonePtr
     sym.initialized = true;
     if (!scopes_.empty()) scopes_[0].define(std::move(sym));
 
-    bool savedPure = checkingPure_;
-    int savedLoopDepth = loopDepth_;
-    auto savedLabels = functionLabels_;
-    checkFunction(*methodClone);
-    checkingPure_ = savedPure;
-    loopDepth_ = savedLoopDepth;
-    functionLabels_ = savedLabels;
+    if (checkBody) {
+        bool savedPure = checkingPure_;
+        int savedLoopDepth = loopDepth_;
+        auto savedLabels = functionLabels_;
+        checkFunction(*methodClone);
+        checkingPure_ = savedPure;
+        loopDepth_ = savedLoopDepth;
+        functionLabels_ = savedLabels;
+    }
 
     monoFunctions_.push_back(std::move(methodClone));
 }
@@ -2547,10 +2649,13 @@ TypePtr Sema::coerceGenericFnValue(Expr &e, TypePtr exprTy, const TypePtr &targe
                         "' from '" + target->str() + "'");
             return makeError();
         }
+        bool failed = false;
         for (auto &constraint : gp.constraints)
-            if (!satisfiesTrait(it->second, constraint))
-                diag_.error(e.loc, "type '" + it->second->str() + "' does not satisfy constraint '" +
-                            constraint + "' for generic parameter '" + gp.name + "'");
+            if (!satisfiesTrait(it->second, constraint)) {
+                diag_.error(e.loc, constraintError(it->second, constraint, "for generic parameter '" + gp.name + "'"));
+                failed = true;
+            }
+        if (failed) return makeError();
     }
     FunctionDecl *monoFn = instantiateGeneric(fnDecl, subs);
     ident.resolvedFn = monoFn;
@@ -4063,18 +4168,21 @@ TypePtr Sema::checkCall(CallExpr &e) {
         // one must be satisfied, so report each unmet constraint rather
         // than stopping at the first (matches how a missing-field struct
         // literal reports every missing field, not just one).
+        bool boundFailed = false;
         for (auto &gp : fnDecl->genericParams) {
             if (gp.constraints.empty()) continue;
             auto it = subs.find(gp.name);
             if (it == subs.end()) continue;
             for (auto &constraint : gp.constraints) {
                 if (!satisfiesTrait(it->second, constraint)) {
-                    diag_.error(e.loc,
-                        "type '" + it->second->str() + "' does not satisfy constraint '" +
-                        constraint + "' for generic parameter '" + gp.name + "'");
+                    diag_.error(e.loc, constraintError(it->second, constraint, "for generic parameter '" + gp.name + "'"));
+                    boundFailed = true;
                 }
             }
         }
+        // Don't instantiate past a failed bound (its body would only repeat
+        // the missing methods as errors).
+        if (boundFailed) return makeError();
 
         FunctionDecl *monoFn = instantiateGeneric(fnDecl, subs);
         for (size_t i = 0; i < e.args.size() && i + selfSkip < monoFn->params.size(); ++i)
@@ -5007,6 +5115,13 @@ bool Sema::matchType(const TypePtr &paramTy, const TypePtr &argTy, TypeSubst &su
         subs[gt.name] = argTy;
         return true;
     }
+    // A raw pointer passed where a reference is expected ('const &T' given
+    // a 'const double*'): infer from the pointee, as a non-generic call
+    // accepts the pointer there; the instantiated parameter is then checked
+    // like any other argument.
+    if (paramTy->kind == TypeKind::Reference && argTy->kind == TypeKind::Pointer)
+        return matchType(static_cast<const ReferenceType &>(*paramTy).base,
+                         static_cast<const PointerType &>(*argTy).base, subs);
     if (paramTy->kind != argTy->kind) return false;
     switch (paramTy->kind) {
     case TypeKind::Optional:

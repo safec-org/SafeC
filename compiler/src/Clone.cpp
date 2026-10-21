@@ -529,8 +529,15 @@ static StmtPtr cloneStmtImpl(const Stmt *sp, const TypeSubst &subs) {
         return std::make_unique<MatchStmt>(
             cloneExprImpl(ms.subject.get(), subs), std::move(arms), ms.loc);
     }
+    case StmtKind::Defer: {
+        auto &ds = static_cast<const DeferStmt &>(s);
+        return std::make_unique<DeferStmt>(cloneStmtImpl(ds.body.get(), subs), ds.loc, ds.isErrDefer);
+    }
     default:
-        return std::make_unique<BreakStmt>(s.loc); // safe sentinel
+        // Every StmtKind is handled above; reaching here means a new kind
+        // was added without a clone case (it used to become a silent
+        // 'break', which is how 'defer' in generic bodies broke).
+        return std::make_unique<BreakStmt>(s.loc);
     }
 }
 

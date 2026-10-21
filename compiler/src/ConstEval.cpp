@@ -1347,8 +1347,15 @@ std::optional<ConstValue> ConstEvalEngine::evalCast(const CastExpr &e, Frame &fr
     if (!val) return {};
     if (!e.targetType) return val;
 
+    // A newtype converts like its base type ('(Fixed)0.5' with
+    // 'newtype Fixed = int;' is the int 0).
+    TypePtr target = e.targetType;
+    while (target && target->kind == TypeKind::Newtype)
+        target = static_cast<const NewtypeType &>(*target).base;
+    if (!target) return val;
+
     // Cast to numeric types based on TypeKind
-    switch (e.targetType->kind) {
+    switch (target->kind) {
     case TypeKind::Int8:  case TypeKind::Int16: case TypeKind::Int32:
     case TypeKind::Int64: case TypeKind::UInt8: case TypeKind::UInt16:
     case TypeKind::UInt32: case TypeKind::UInt64:
