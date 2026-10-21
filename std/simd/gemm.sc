@@ -1,11 +1,18 @@
 // SafeC Standard Library — packed SGEMM (see gemm.h).
 //
 // C is cut into MC x NC tiles, each one task for the thread pool. A task
-// walks k in KC-deep slices: it packs its A slice into MR-row strips
-// (alpha folded in) and its B slice into NR-column strips, both zero-padded
-// to whole strips, then runs the MR x NR kernel over every strip pair.
-// A packed A slice (MC x KC) stays in L2 across the B strips; a B strip
-// (KC x NR) stays in L1 across the A strips.
+// walks k in KC-deep slices and runs the MR x NR kernel over every pair of
+// an MR-row strip of op(A) (alpha folded in) and an NR-column strip of
+// op(B), both packed contiguously and zero-padded to whole strips. A packed
+// A slice (MC x KC) stays in L2 across the B strips; a B strip (KC x NR)
+// stays in L1 across the A strips.
+//
+// When both packed operands fit in GEMM_PREPACK_MAX floats, they are packed
+// once per call, strips split across the pool, and every tile then reads
+// them; otherwise each tile packs its own slices. (Packing per tile packs B
+// once per tile row and A once per tile column, which for the mid-sized
+// products of training -- 128 x 256 x 784 split into 16 tiles -- cost about
+// as much as the multiply.)
 #pragma once
 #include <std/simd/gemm.h>
 #include <std/simd/simd.h>
@@ -26,6 +33,9 @@ namespace std {
 // Below this many multiply-adds a product runs on one thread: waking the
 // pool costs a few microseconds.
 #define GEMM_PAR_MIN 1048576UL
+// Up to this many floats (A and B packed together, 16 MB) are packed once
+// per call instead of per tile.
+#define GEMM_PREPACK_MAX 4194304UL
 
 // Packing buffers, kept per thread and reused: allocating them per call
 // would mmap and page-fault ~320 KB every time. Freestanding targets have no
@@ -187,6 +197,12 @@ struct GemmJob {
     int           vendor;   // tiles go to the vendor BLAS
     int           kern;     // GEMM_K_*: built-in kernel for this CPU
     unsigned long mr;       // its strip height: 4, or 8 for AVX-512
+    float*        apk;      // packed op(A), all of it (prepacked path), else null
+    float*        bpk;      // packed op(B), all of it (prepacked path), else null
+    unsigned long mp;       // m rounded up to whole MR strips
+    unsigned long np;       // n rounded up to whole NR strips
+    unsigned long slices;   // KC-deep slices of k
+    unsigned long aUnits;   // A strips per slice
 };
 
 // ── Vendor BLAS ──────────────────────────────────────────────────────────────
@@ -296,71 +312,162 @@ const char* sgemm_backend() {
 #endif
 }
 
+// Packs one MR-row strip of op(A) -- rows i .. i+h (h <= mr, the rest
+// zero), columns p0 .. p0+kc -- times alpha: dst[p * mr + r]. Each loop
+// reads memory contiguously.
+static void gemm_pack_a_strip_(const &GemmJob j, float* dst, unsigned long i, unsigned long h,
+                               unsigned long p0, unsigned long kc) {
+    unsafe {
+        unsigned long mr = j.mr;
+        float al = j.alpha;
+        if (j.transA) {
+            // op(A)[i + r][p0 + p] = a[(p0 + p) * lda + i + r]: rows of a are contiguous in r
+            unsigned long p = 0UL;
+            while (p < kc) {
+                const float* src = &j.a[(p0 + p) * j.lda + i];
+                float* d = &dst[p * mr];
+                unsigned long r = 0UL;
+                while (r < h) { d[r] = src[r] * al; r = r + 1UL; }
+                while (r < mr) { d[r] = (float)0.0; r = r + 1UL; }
+                p = p + 1UL;
+            }
+        } else {
+            unsigned long r = 0UL;
+            while (r < h) {
+                const float* src = &j.a[(i + r) * j.lda + p0];
+                unsigned long p = 0UL;
+                while (p < kc) { dst[p * mr + r] = src[p] * al; p = p + 1UL; }
+                r = r + 1UL;
+            }
+            while (r < mr) {
+                unsigned long p = 0UL;
+                while (p < kc) { dst[p * mr + r] = (float)0.0; p = p + 1UL; }
+                r = r + 1UL;
+            }
+        }
+    }
+}
+
+// Packs one NR-column strip of op(B) -- columns c0 .. c0+w (w <= NR, the
+// rest zero), rows p0 .. p0+kc: dst[p * NR + t].
+static void gemm_pack_b_strip_(const &GemmJob j, float* dst, unsigned long c0, unsigned long w,
+                               unsigned long p0, unsigned long kc) {
+    unsafe {
+        if (!j.transB) {
+            unsigned long p = 0UL;
+            while (p < kc) {
+                const float* src = &j.b[(p0 + p) * j.ldb + c0];
+                float* d = &dst[p * GEMM_NR];
+                if (w == GEMM_NR) {
+                    *(f32x8*)&d[0] = *(const f32x8*)&src[0];
+                    *(f32x8*)&d[8] = *(const f32x8*)&src[8];
+                } else {
+                    unsigned long t = 0UL;
+                    while (t < w) { d[t] = src[t]; t = t + 1UL; }
+                    while (t < GEMM_NR) { d[t] = (float)0.0; t = t + 1UL; }
+                }
+                p = p + 1UL;
+            }
+        } else {
+            // op(B)[p0 + p][c0 + t] = b[(c0 + t) * ldb + p0 + p]: rows of b are contiguous in p
+            unsigned long t = 0UL;
+            while (t < w) {
+                const float* src = &j.b[(c0 + t) * j.ldb + p0];
+                unsigned long p = 0UL;
+                while (p < kc) { dst[p * GEMM_NR + t] = src[p]; p = p + 1UL; }
+                t = t + 1UL;
+            }
+            while (t < GEMM_NR) {
+                unsigned long p = 0UL;
+                while (p < kc) { dst[p * GEMM_NR + t] = (float)0.0; p = p + 1UL; }
+                t = t + 1UL;
+            }
+        }
+    }
+}
+
 // Packs op(A)[i0 .. i0+mc, p0 .. p0+kc) * alpha into MR-row strips.
 static void gemm_pack_a_(const &GemmJob j, float* dst, unsigned long i0, unsigned long mc,
                          unsigned long p0, unsigned long kc) {
-    unsafe {
-        unsigned long s = 0UL;
-        while (s < mc) {
-            unsigned long p = 0UL;
-            while (p < kc) {
-                unsigned long r = 0UL;
-                while (r < j.mr) {
-                    float v = (float)0.0;
-                    if (s + r < mc) {
-                        unsigned long i = i0 + s + r;
-                        unsigned long q = p0 + p;
-                        v = j.transA ? j.a[q * j.lda + i] : j.a[i * j.lda + q];
-                    }
-                    dst[r] = v * j.alpha;
-                    r = r + 1UL;
-                }
-                dst = dst + j.mr;
-                p = p + 1UL;
-            }
-            s = s + j.mr;
-        }
+    unsigned long s = 0UL;
+    while (s < mc) {
+        unsigned long h = mc - s < j.mr ? mc - s : j.mr;
+        unsafe { gemm_pack_a_strip_(j, &dst[s * kc], i0 + s, h, p0, kc); }
+        s = s + j.mr;
     }
 }
 
 // Packs op(B)[p0 .. p0+kc, j0 .. j0+nc) into NR-column strips.
 static void gemm_pack_b_(const &GemmJob j, float* dst, unsigned long p0, unsigned long kc,
                          unsigned long j0, unsigned long nc) {
-    unsafe {
-        unsigned long s = 0UL;
-        while (s < nc) {
-            unsigned long w = nc - s < GEMM_NR ? nc - s : GEMM_NR;
-            unsigned long p = 0UL;
-            while (p < kc) {
-                unsigned long q = p0 + p;
-                if (!j.transB && w == GEMM_NR) {
-                    const float* src = &j.b[q * j.ldb + j0 + s];
-                    *(f32x8*)&dst[0] = *(const f32x8*)&src[0];
-                    *(f32x8*)&dst[8] = *(const f32x8*)&src[8];
-                } else {
-                    unsigned long t = 0UL;
-                    while (t < GEMM_NR) {
-                        float v = (float)0.0;
-                        if (t < w) {
-                            unsigned long col = j0 + s + t;
-                            v = j.transB ? j.b[col * j.ldb + q] : j.b[q * j.ldb + col];
-                        }
-                        dst[t] = v;
-                        t = t + 1UL;
-                    }
-                }
-                dst = dst + GEMM_NR;
-                p = p + 1UL;
-            }
-            s = s + GEMM_NR;
-        }
+    unsigned long s = 0UL;
+    while (s < nc) {
+        unsigned long w = nc - s < GEMM_NR ? nc - s : GEMM_NR;
+        unsafe { gemm_pack_b_strip_(j, &dst[s * kc], j0 + s, w, p0, kc); }
+        s = s + GEMM_NR;
     }
+}
+
+// Prepacked path: unit u < slices * aUnits is A strip (u % aUnits) of slice
+// (u / aUnits); the rest are B strips. Slice q starts at element mp * q * KC
+// of apk (np * q * KC of bpk), and a strip there is kc * mr (kc * NR) long.
+static void gemm_pack_units_(&GemmJob j, unsigned long lo, unsigned long hi) {
+    unsigned long u = lo;
+    unsigned long bStrips = j.np / GEMM_NR;
+    while (u < hi) {
+        unsigned long aTotal = j.slices * j.aUnits;
+        if (u < aTotal) {
+            unsigned long q = u / j.aUnits;
+            unsigned long st = u % j.aUnits;
+            unsigned long p0 = q * GEMM_KC;
+            unsigned long kc = j.k - p0 < GEMM_KC ? j.k - p0 : GEMM_KC;
+            unsigned long i = st * j.mr;
+            unsigned long h = j.m - i < j.mr ? j.m - i : j.mr;
+            unsafe { gemm_pack_a_strip_(j, &j.apk[j.mp * p0 + st * j.mr * kc], i, h, p0, kc); }
+        } else {
+            unsigned long v = u - aTotal;
+            unsigned long q = v / bStrips;
+            unsigned long st = v % bStrips;
+            unsigned long p0 = q * GEMM_KC;
+            unsigned long kc = j.k - p0 < GEMM_KC ? j.k - p0 : GEMM_KC;
+            unsigned long c0 = st * GEMM_NR;
+            unsigned long w = j.n - c0 < GEMM_NR ? j.n - c0 : GEMM_NR;
+            unsafe { gemm_pack_b_strip_(j, &j.bpk[j.np * p0 + st * GEMM_NR * kc], c0, w, p0, kc); }
+        }
+        u = u + 1UL;
+    }
+}
+
+// The packed buffer for the prepacked path, kept per thread (the caller's)
+// and grown as needed.
+#if defined(__SAFEC_FREESTANDING__) || defined(__wasm__)
+static float* g_gemm_pack = (float*)0;
+static unsigned long g_gemm_pack_cap = 0UL;
+#else
+static thread_local float* g_gemm_pack = (float*)0;
+static thread_local unsigned long g_gemm_pack_cap = 0UL;
+#endif
+
+static float* gemm_pack_buf_(unsigned long floats) {
+    if (floats > g_gemm_pack_cap) {
+        unsafe {
+            if (g_gemm_pack != (float*)0) dealloc_raw_((void*)g_gemm_pack);
+            g_gemm_pack = (float*)alloc_raw_(sizeof(float) * floats);
+        }
+        if (g_gemm_pack == (float*)0) panic_at("sgemm: out of memory", "gemm.sc", __LINE__);
+        g_gemm_pack_cap = floats;
+    }
+    return g_gemm_pack;
 }
 
 static void gemm_tiles_(&GemmJob j, unsigned long lo, unsigned long hi) {
     unsafe {
-        float* apack = gemm_scratch_();
-        float* bpack = &apack[GEMM_MC * GEMM_KC];
+        float* apack = (float*)0;
+        float* bpack = (float*)0;
+        if (j.apk == (float*)0) {
+            apack = gemm_scratch_();
+            bpack = &apack[GEMM_MC * GEMM_KC];
+        }
         float edge[128];                     // up to 8 x GEMM_NR partial tile
         unsigned long t = lo;
         while (t < hi) {
@@ -390,16 +497,26 @@ static void gemm_tiles_(&GemmJob j, unsigned long lo, unsigned long hi) {
             unsigned long p0 = 0UL;
             while (p0 < j.k) {
                 unsigned long kc = j.k - p0 < GEMM_KC ? j.k - p0 : GEMM_KC;
-                gemm_pack_a_(j, apack, i0, mc, p0, kc);
-                gemm_pack_b_(j, bpack, p0, kc, j0, nc);
+                const float* abase;
+                const float* bbase;
+                if (j.apk != (float*)0) {
+                    // strips of this tile inside the call's packed operands
+                    abase = (const float*)&j.apk[j.mp * p0 + i0 * kc];
+                    bbase = (const float*)&j.bpk[j.np * p0 + j0 * kc];
+                } else {
+                    gemm_pack_a_(j, apack, i0, mc, p0, kc);
+                    gemm_pack_b_(j, bpack, p0, kc, j0, nc);
+                    abase = (const float*)apack;
+                    bbase = (const float*)bpack;
+                }
                 unsigned long sb = 0UL;
                 while (sb < nc) {
                     unsigned long w = nc - sb < GEMM_NR ? nc - sb : GEMM_NR;
-                    const float* bp = &bpack[sb * kc];
+                    const float* bp = &bbase[sb * kc];
                     unsigned long sa = 0UL;
                     while (sa < mc) {
                         unsigned long h = mc - sa < j.mr ? mc - sa : j.mr;
-                        const float* ap = &apack[sa * kc];
+                        const float* ap = &abase[sa * kc];
                         float* cp = &j.c[(i0 + sa) * j.ldc + j0 + sb];
                         if (h == j.mr && w == GEMM_NR) {
                             gemm_kernel_(j.kern, ap, bp, kc, cp, j.ldc);
@@ -475,6 +592,19 @@ static void gemm_run_(int transA, int transB, unsigned long m, unsigned long n, 
     }
     j.tilesN = (n + j.nc - 1UL) / j.nc;
     unsigned long tiles = ((m + j.mc - 1UL) / j.mc) * j.tilesN;
+    j.mp = (m + j.mr - 1UL) / j.mr * j.mr;
+    j.np = (n + GEMM_NR - 1UL) / GEMM_NR * GEMM_NR;
+    j.slices = (k + GEMM_KC - 1UL) / GEMM_KC;
+    j.aUnits = j.mp / j.mr;
+    unsafe { j.apk = (float*)0; j.bpk = (float*)0; }
+    // Pack once per call when more than one tile would repack the same strips.
+    if (!vendor && k > 0UL && tiles > 1UL && (j.mp + j.np) * k <= GEMM_PREPACK_MAX) {
+        float* buf = gemm_pack_buf_((j.mp + j.np) * k);
+        unsafe { j.apk = buf; j.bpk = &buf[j.mp * k]; }
+        unsigned long units = j.slices * (j.aUnits + j.np / GEMM_NR);
+        if (par && units > 1UL) parallel_for(units, 4UL, gemm_pack_units_, &j);
+        else gemm_pack_units_(&j, 0UL, units);
+    }
     if (par && tiles > 1UL)
         parallel_for(tiles, 1UL, gemm_tiles_, &j);
     else

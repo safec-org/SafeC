@@ -786,10 +786,141 @@ float optimizer_clip_grad_norm(&Optimizer o, float maxNorm) {
     return norm;
 }
 
+// One parameter's update over [lo, hi): the loops compile once per ISA
+// level (the target() copies below) and split across the thread pool for
+// large tensors, like tensor.h's elementwise kernels.
+struct OptJob {
+    float*       w;
+    const float* g;
+    float*       m;
+    float*       v;
+    int   kind;
+    float lr;
+    float wd;
+    float mu;
+    float b1;
+    float b2;
+    float eps;
+    float ibc1;     // Adam: 1 / (1 - beta1^t)
+    float isbc2;    // Adam: 1 / sqrt(1 - beta2^t)
+};
+
+static void opt_body_(const &OptJob j, unsigned long lo, unsigned long hi) __attribute__((always_inline)) {
+    unsafe {
+        float* w = j.w;
+        const float* gr = j.g;
+        float* m = j.m;
+        float* v = j.v;
+        float lr = j.lr;
+        float wd = j.wd;
+        unsigned long i = lo;
+        int kind = j.kind;
+        if (kind == OPT_SGD) {
+            while (i < hi) { w[i] = w[i] - lr * (gr[i] + wd * w[i]); i = i + 1UL; }
+        } else if (kind == OPT_MOMENTUM) {
+            float mu = j.mu;
+            while (i < hi) {
+                float g = gr[i] + wd * w[i];
+                float mi = mu * m[i] + g;
+                m[i] = mi;
+                w[i] = w[i] - lr * mi;
+                i = i + 1UL;
+            }
+        } else if (kind == OPT_NESTEROV) {
+            float mu = j.mu;
+            while (i < hi) {
+                float g = gr[i] + wd * w[i];
+                float mi = mu * m[i] + g;
+                m[i] = mi;
+                w[i] = w[i] - lr * (g + mu * mi);
+                i = i + 1UL;
+            }
+        } else if (kind == OPT_ADAGRAD) {
+            float eps = j.eps;
+            while (i < hi) {
+                float g = gr[i] + wd * w[i];
+                float vi = v[i] + g * g;
+                v[i] = vi;
+                w[i] = w[i] - lr * g / (__builtin_sqrt(vi) + eps);
+                i = i + 1UL;
+            }
+        } else if (kind == OPT_LION) {
+            // update = sign(b1 m + (1 - b1) g); m = b2 m + (1 - b2) g
+            float b1 = j.b1;
+            float b2 = j.b2;
+            while (i < hi) {
+                float g = gr[i];
+                float c = b1 * m[i] + ((float)1.0 - b1) * g;
+                float sg = c > (float)0.0 ? (float)1.0 : (c < (float)0.0 ? (float)-1.0 : (float)0.0);
+                w[i] = w[i] - lr * (sg + wd * w[i]);
+                m[i] = b2 * m[i] + ((float)1.0 - b2) * g;
+                i = i + 1UL;
+            }
+        } else if (kind == OPT_RMSPROP) {
+            float a = j.b2;
+            float eps = j.eps;
+            while (i < hi) {
+                float g = gr[i] + wd * w[i];
+                float vi = a * v[i] + ((float)1.0 - a) * g * g;
+                v[i] = vi;
+                w[i] = w[i] - lr * g / (__builtin_sqrt(vi) + eps);
+                i = i + 1UL;
+            }
+        } else {
+            // Adam / AdamW: m_hat / (sqrt(v_hat) + eps), with
+            // sqrt(v / bc2) = sqrt(v) / sqrt(bc2)
+            float b1 = j.b1;
+            float b2 = j.b2;
+            float eps = j.eps;
+            float ibc1 = j.ibc1;
+            float isbc2 = j.isbc2;
+            float l2 = kind == OPT_ADAMW ? (float)0.0 : wd;
+            float dec = kind == OPT_ADAMW ? wd : (float)0.0;
+            while (i < hi) {
+                float g = gr[i] + l2 * w[i];
+                float mi = b1 * m[i] + ((float)1.0 - b1) * g;
+                float vi = b2 * v[i] + ((float)1.0 - b2) * g * g;
+                m[i] = mi;
+                v[i] = vi;
+                float upd = (mi * ibc1) / (__builtin_sqrt(vi) * isbc2 + eps) + dec * w[i];
+                w[i] = w[i] - lr * upd;
+                i = i + 1UL;
+            }
+        }
+    }
+}
+
+static void opt_base_(const &OptJob j, unsigned long lo, unsigned long hi) { opt_body_(j, lo, hi); }
+#if defined(__x86_64__)
+static void opt_avx2_(const &OptJob j, unsigned long lo, unsigned long hi)
+    __attribute__((target("avx2,fma"))) { opt_body_(j, lo, hi); }
+static void opt_avx512_(const &OptJob j, unsigned long lo, unsigned long hi)
+    __attribute__((target("avx512f,avx512bw,avx512dq,avx512vl,avx2,fma"))) { opt_body_(j, lo, hi); }
+#endif
+
+static void opt_range_(&OptJob j, unsigned long lo, unsigned long hi) {
+#if defined(__x86_64__)
+    int l = simd_level();
+    if (l >= SIMD_AVX512) { opt_avx512_(j, lo, hi); return; }
+    if (l >= SIMD_AVX2) { opt_avx2_(j, lo, hi); return; }
+#endif
+    opt_base_(j, lo, hi);
+}
+
 void optimizer_step(&Optimizer o) {
     o.t = o.t + 1UL;
     float bc1 = (float)1.0 - pow_f(o.beta1, (float)o.t);
     float bc2 = (float)1.0 - pow_f(o.beta2, (float)o.t);
+    struct OptJob j;
+    j.kind = o.kind;
+    j.lr = o.lr;
+    j.wd = o.weightDecay;
+    j.mu = o.momentum;
+    j.b1 = o.beta1;
+    j.b2 = o.beta2;
+    j.eps = o.eps;
+    j.ibc1 = (float)1.0 / bc1;
+    j.isbc2 = (float)1.0 / sqrt_f(bc2);
     unsigned long i = 0UL;
     while (i < o.params.length()) {
         &Tensor p = *o.params.at(i);
@@ -797,67 +928,13 @@ void optimizer_step(&Optimizer o) {
         &Tensor vt = *o.v.at(i);
         unsafe {
             if (p->grad != (float*)0) {
-                float* w = (float*)p->data;
-                const float* gr = (const float*)p->grad;
-                float* m = (float*)mt->data;
-                float* v = (float*)vt->data;
+                j.w = (float*)p->data;
+                j.g = (const float*)p->grad;
+                j.m = (float*)mt->data;
+                j.v = (float*)vt->data;
                 unsigned long n = p->size;
-                float lr = o.lr;
-                float wd = o.weightDecay;
-                unsigned long j = 0UL;
-                if (o.kind == OPT_SGD) {
-                    while (j < n) { w[j] = w[j] - lr * (gr[j] + wd * w[j]); j = j + 1UL; }
-                } else if (o.kind == OPT_MOMENTUM || o.kind == OPT_NESTEROV) {
-                    float mu = o.momentum;
-                    int nest = o.kind == OPT_NESTEROV;
-                    while (j < n) {
-                        float g = gr[j] + wd * w[j];
-                        m[j] = mu * m[j] + g;
-                        w[j] = w[j] - lr * (nest ? g + mu * m[j] : m[j]);
-                        j = j + 1UL;
-                    }
-                } else if (o.kind == OPT_ADAGRAD) {
-                    while (j < n) {
-                        float g = gr[j] + wd * w[j];
-                        v[j] = v[j] + g * g;
-                        w[j] = w[j] - lr * g / (sqrt_f(v[j]) + o.eps);
-                        j = j + 1UL;
-                    }
-                } else if (o.kind == OPT_LION) {
-                    // update = sign(b1 m + (1 - b1) g); m = b2 m + (1 - b2) g
-                    float b1 = o.beta1;
-                    float b2 = o.beta2;
-                    while (j < n) {
-                        float g = gr[j];
-                        float c = b1 * m[j] + ((float)1.0 - b1) * g;
-                        float sg = c > (float)0.0 ? (float)1.0 : (c < (float)0.0 ? (float)-1.0 : (float)0.0);
-                        w[j] = w[j] - lr * (sg + wd * w[j]);
-                        m[j] = b2 * m[j] + ((float)1.0 - b2) * g;
-                        j = j + 1UL;
-                    }
-                } else if (o.kind == OPT_RMSPROP) {
-                    float a = o.beta2;
-                    while (j < n) {
-                        float g = gr[j] + wd * w[j];
-                        v[j] = a * v[j] + ((float)1.0 - a) * g * g;
-                        w[j] = w[j] - lr * g / (sqrt_f(v[j]) + o.eps);
-                        j = j + 1UL;
-                    }
-                } else {
-                    float b1 = o.beta1;
-                    float b2 = o.beta2;
-                    int decoupled = o.kind == OPT_ADAMW;
-                    while (j < n) {
-                        float g = gr[j];
-                        if (!decoupled) g = g + wd * w[j];
-                        m[j] = b1 * m[j] + ((float)1.0 - b1) * g;
-                        v[j] = b2 * v[j] + ((float)1.0 - b2) * g * g;
-                        float upd = (m[j] / bc1) / (sqrt_f(v[j] / bc2) + o.eps);
-                        if (decoupled) upd = upd + wd * w[j];
-                        w[j] = w[j] - lr * upd;
-                        j = j + 1UL;
-                    }
-                }
+                if (n >= TENSOR_EW_PAR) parallel_for(n, 16384UL, opt_range_, &j);
+                else opt_range_(&j, 0UL, n);
             }
         }
         i = i + 1UL;
