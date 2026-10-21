@@ -48,6 +48,7 @@
 // The bounds for pool, slab and tlsf assume an 8-aligned backing buffer:
 // always true for X::new; for X::over it's the buffer you pass.
 #include <std/mem.h>
+#include <std/traits.h>   // Resettable
 
 namespace std {
 
@@ -62,11 +63,6 @@ trait Deallocate {
     // Gives back a block alloc returned; null is a no-op. A no-op on an
     // allocator that can't free one block (bump: reset() frees them all).
     void dealloc(?&heap void ptr);
-}
-
-trait Resettable {
-    // Frees every block at once; blocks handed out before become invalid.
-    void reset();
 }
 
 trait Allocator : Allocate + Deallocate {}

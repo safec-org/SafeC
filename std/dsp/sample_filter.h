@@ -43,6 +43,7 @@
 // sliding dot products, the biquad's look-ahead recurrence) stay hand-
 // written; the others are filter_process_each over process().
 #include <std/dsp/fixed.h>
+#include <std/traits.h>   // Resettable
 
 namespace std {
 
@@ -53,11 +54,6 @@ trait SampleProcessor {
 trait BlockProcessor {
     // out[i] = process(in[i]) for i < n; out may alias in.
     void process_block(const &double in, &double out, unsigned long n);
-}
-
-trait Resettable {
-    // Clears the state: the next output is the response from silence.
-    void reset();
 }
 
 trait SampleFilter : SampleProcessor + BlockProcessor + Resettable {}
