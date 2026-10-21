@@ -15,16 +15,16 @@
 
 namespace std {
 
-&Tensor tensor_add_rocm(const &Tensor a, const &Tensor b);
-&Tensor tensor_sub_rocm(const &Tensor a, const &Tensor b);
-&Tensor tensor_mul_rocm(const &Tensor a, const &Tensor b);
-&Tensor Tensor::scale_rocm(float k) const;
-&Tensor Tensor::relu_rocm() const;
-&Tensor Tensor::sum_rocm() const;
-&Tensor tensor_matmul_rocm(const &Tensor a, const &Tensor b);
+&FloatTensor tensor_add_rocm(const &FloatTensor a, const &FloatTensor b);
+&FloatTensor tensor_sub_rocm(const &FloatTensor a, const &FloatTensor b);
+&FloatTensor tensor_mul_rocm(const &FloatTensor a, const &FloatTensor b);
+&FloatTensor FloatTensor::scale_rocm(float k) const;
+&FloatTensor FloatTensor::relu_rocm() const;
+&FloatTensor FloatTensor::sum_rocm() const;
+&FloatTensor tensor_matmul_rocm(const &FloatTensor a, const &FloatTensor b);
 
 // tensor_matmul_rocm uses this library's own tiled HIP kernel;
 // tensor_matmul_rocm_blas uses rocBLAS, which is several times faster.
-&Tensor tensor_matmul_rocm_blas(const &Tensor a, const &Tensor b);
+&FloatTensor tensor_matmul_rocm_blas(const &FloatTensor a, const &FloatTensor b);
 
 } // namespace std

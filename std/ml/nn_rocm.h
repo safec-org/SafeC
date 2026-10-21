@@ -176,22 +176,22 @@ struct RocmNet {
     // Appends a layer, uploading its parameters from host tensors (shapes as
     // nn.h's Mlp / convnet.h). A layer's input must match the previous layer's
     // output (conv: inC*inH*inW). Return 1, or 0 (and ok = 0).
-    int add_linear(const &Tensor w, const &Tensor b, int act);
-    int add_conv2d(const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH, unsigned long inW,
+    int add_linear(const &FloatTensor w, const &FloatTensor b, int act);
+    int add_conv2d(const &FloatTensor w, const &FloatTensor b, unsigned long inC, unsigned long inH, unsigned long inW,
                    unsigned long kernel, unsigned long stride, unsigned long padding, int act);
-    int add_conv_transpose2d(const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH,
+    int add_conv_transpose2d(const &FloatTensor w, const &FloatTensor b, unsigned long inC, unsigned long inH,
                              unsigned long inW, unsigned long kernel, unsigned long stride, unsigned long padding,
                              int act);
-    int add_conv2d_ex(const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH, unsigned long inW,
+    int add_conv2d_ex(const &FloatTensor w, const &FloatTensor b, unsigned long inC, unsigned long inH, unsigned long inW,
                       const &Conv2dSpec spec, int act);
-    int add_conv_transpose2d_ex(const &Tensor w, const &Tensor b, unsigned long inC, unsigned long inH,
+    int add_conv_transpose2d_ex(const &FloatTensor w, const &FloatTensor b, unsigned long inC, unsigned long inH,
                                 unsigned long inW, const &Conv2dSpec spec, int act);
     // These take their input geometry from the previous layer (or RocmNet::set_input).
     // RocmNet::add_save returns the SAVE layer's index, the slot that ADD /
     // CONCAT name; ADD's projection weight is [C, skipC] (a 1x1 convolution
     // with the stride that maps the saved size onto the current one).
     unsigned long add_save();
-    int add_skip(unsigned long slot, ?&Tensor projW, ?&Tensor projB, int act);
+    int add_skip(unsigned long slot, ?&FloatTensor projW, ?&FloatTensor projB, int act);
     int add_concat(unsigned long slot);
     int add_resize(unsigned long outH, unsigned long outW, int mode, int alignCorners);
     // p: drop probability; the mask is drawn on the GPU from 'seed' (not rng.h's stream).
@@ -199,16 +199,16 @@ struct RocmNet {
     // Spectral normalization of the last layer's weight (CONV / CONVT / LINEAR),
     // u [weight rows] the power iteration's vector (one iteration per training
     // forward pass, as convnet.h).
-    int spectral_norm(const &Tensor u);
+    int spectral_norm(const &FloatTensor u);
     int add_maxpool(const &Pool2dSpec spec, int act);
     int add_avgpool(const &Pool2dSpec spec, int act);
     int add_global_pool(int max, int act);
     int add_upsample(unsigned long factor, int act);
     int add_reshape(unsigned long channels, unsigned long height, unsigned long width);
     // gamma, beta [C]; runMean, runVar [C] (the starting running statistics).
-    int add_batchnorm(const &Tensor gamma, const &Tensor beta, const &Tensor runMean, const &Tensor runVar,
+    int add_batchnorm(const &FloatTensor gamma, const &FloatTensor beta, const &FloatTensor runMean, const &FloatTensor runVar,
                       float momentum, float eps, int act);
-    int add_groupnorm(const &Tensor gamma, const &Tensor beta, unsigned long groups, float eps, int act);
+    int add_groupnorm(const &FloatTensor gamma, const &FloatTensor beta, unsigned long groups, float eps, int act);
     unsigned long in_dim() const;
     unsigned long out_dim() const;
     int set_training(int training);   // returns the previous mode
@@ -232,12 +232,12 @@ struct RocmNet {
     // Every parameterized layer's weight and bias (gamma and beta for norms),
     // in order (W0, b0, W1, b1, ...: an Mlp's or a ConvNet's params), from or
     // to host tensors of the same sizes. Download waits.
-    int download(&Vec<&Tensor> params) const;
-    int upload(const &Vec<&Tensor> params);
+    int download(&Vec<&FloatTensor> params) const;
+    int upload(const &Vec<&FloatTensor> params);
     // The non-trained buffers in a ConvNet's order: each batch norm's running
     // mean and variance, each spectral norm's u.
-    int download_stats(&Vec<&Tensor> buffers) const;
-    int upload_stats(const &Vec<&Tensor> buffers);
+    int download_stats(&Vec<&FloatTensor> buffers) const;
+    int upload_stats(const &Vec<&FloatTensor> buffers);
     // Parameters and running statistics back into the ConvNet it was built from.
     int download_convnet(&ConvNet c) const;
     void free();
@@ -508,11 +508,11 @@ struct RocmDqn {
     int   ok;
 
     float epsilon() const;
-    unsigned long act(const &Tensor obs, int explore);   // waits for the action values
+    unsigned long act(const &FloatTensor obs, int explore);   // waits for the action values
     // Dqn::observe: stores the transition and queues an update when due. Returns
     // 1 when an update was queued, 0 when none was due, -1 on failure (no
     // read-back: RocmDqn::loss gives the last update's loss).
-    int observe(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminal);
+    int observe(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminal);
     float loss() const;   // waits
     int download(&Dqn h) const;   // networks, counters, Rng (not the replay buffer)
     void free();
@@ -553,8 +553,8 @@ struct RocmPolicy {
     float lastEntropy;
     int   ok;
 
-    unsigned long act(const &Tensor obs, int sample);   // waits for the logits
-    void record(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminated,
+    unsigned long act(const &FloatTensor obs, int sample);   // waits for the logits
+    void record(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminated,
                 int truncated);
     // PolicyAgent::update on the GPU; returns the last minibatch's loss (one
     // read-back at the end), or -1 on failure (e.g. a rollout longer than
@@ -748,7 +748,7 @@ struct RocmTrainer {
     int   fit_begin(const &Dataset data, const &TrainConfig cfg);
     struct EpochLoss fit_epoch();
     void  fit_end();
-    float train_step(const &Tensor x, const &Tensor y);             // -1 on failure
+    float train_step(const &FloatTensor x, const &FloatTensor y);             // -1 on failure
     float learning_rate();
     void  set_learning_rate(float lr);
     int   sync();
@@ -792,7 +792,7 @@ void RocmTrainer::fit_end() {
 }
 
 generic<H, D>
-float RocmTrainer::train_step(const &Tensor x, const &Tensor y) {
+float RocmTrainer::train_step(const &FloatTensor x, const &FloatTensor y) {
     unsigned long rows = 0UL;
     unsigned long nx = 0UL;
     unsigned long ny = 0UL;
@@ -859,14 +859,14 @@ struct RocmGanTrainer {
     struct RocmBuf xs;            // train_step's batch and labels
     struct RocmBuf ls;
 
-    struct GanLosses train_step(const &Tensor real, ?&Tensor labels);
+    struct GanLosses train_step(const &FloatTensor real, ?&FloatTensor labels);
     struct GanLosses train(const &Dataset data, unsigned long epochs, unsigned long batchSize);
     int  sync();
     void free();
 };
 
 generic<H>
-struct GanLosses RocmGanTrainer::train_step(const &Tensor real, ?&Tensor labels) {
+struct GanLosses RocmGanTrainer::train_step(const &FloatTensor real, ?&FloatTensor labels) {
     struct GanLosses l;
     l.d = (float)0.0;
     l.g = (float)0.0;
@@ -909,8 +909,8 @@ struct RocmDqnAgent {
     struct RocmDqn dev;
 
     float epsilon();
-    unsigned long act(const &Tensor obs, int explore);
-    int   observe(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminal);
+    unsigned long act(const &FloatTensor obs, int explore);
+    int   observe(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminal);
     float last_loss();             // waits
     unsigned long updates();
     int   sync();
@@ -924,8 +924,8 @@ struct RocmPgAgent {
     struct PolicyAgent host;
     struct RocmPolicy dev;
 
-    unsigned long act(const &Tensor obs, int sample);
-    void  record(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminated,
+    unsigned long act(const &FloatTensor obs, int sample);
+    void  record(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminated,
                  int truncated);
     float update();
     int   sync();

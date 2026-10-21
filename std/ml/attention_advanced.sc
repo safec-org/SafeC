@@ -13,7 +13,7 @@ extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
 // ── MLA / EG-MLA ─────────────────────────────────────────────────────────────
-static void aa_drop_(&Tensor t) {
+static void aa_drop_(&FloatTensor t) {
     t->free();
     unsafe { free((void*)t); }
 }
@@ -29,21 +29,21 @@ struct Mla Mla::new(unsigned long dModel, unsigned long dLatent, unsigned long n
     return m;
 }
 
-&Tensor Mla::forward(const &Tensor X) const {
-    &Tensor Q = tensor_matmul(X, self.Wq);
-    &Tensor c_kv = tensor_matmul(X, self.Wdkv);
-    &Tensor K = tensor_matmul(c_kv, self.Wuk);
-    &Tensor V = tensor_matmul(c_kv, self.Wuv);
-    &Tensor out = mha_forward(Q, K, V, self.numHeads);
+&FloatTensor Mla::forward(const &FloatTensor X) const {
+    &FloatTensor Q = tensor_matmul(X, self.Wq);
+    &FloatTensor c_kv = tensor_matmul(X, self.Wdkv);
+    &FloatTensor K = tensor_matmul(c_kv, self.Wuk);
+    &FloatTensor V = tensor_matmul(c_kv, self.Wuv);
+    &FloatTensor out = mha_forward(Q, K, V, self.numHeads);
     aa_drop_(Q); aa_drop_(c_kv); aa_drop_(K); aa_drop_(V);
     return out;
 }
 
-void Mla::collect_params(&Vec<&Tensor> out) const {
+void Mla::collect_params(&Vec<&FloatTensor> out) const {
     out.push(self.Wq); out.push(self.Wdkv); out.push(self.Wuk); out.push(self.Wuv);
 }
 
-void Mla::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+void Mla::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
 void Mla::free() { aa_drop_(self.Wq); aa_drop_(self.Wdkv); aa_drop_(self.Wuk); aa_drop_(self.Wuv); }
 
@@ -68,7 +68,7 @@ struct EgMla EgMla::new(unsigned long dModel, unsigned long dLatent, unsigned lo
     return m;
 }
 
-&Tensor EgMla::forward(const &Tensor X) const {
+&FloatTensor EgMla::forward(const &FloatTensor X) const {
     unsigned long numGroups = self.Wuk.length();
     if (numGroups == 0UL || self.Wuv.length() != numGroups) {
         panic_at("EgMla::forward: Wuk / Wuv must be non-empty and the same length", "attention_advanced.sc", __LINE__);
@@ -77,17 +77,17 @@ struct EgMla EgMla::new(unsigned long dModel, unsigned long dLatent, unsigned lo
     unsafe { seqLen = X->shape[0]; dModel = self.Wq->shape[1]; }
     unsigned long groupDim = dModel / numGroups;
 
-    &Tensor Q = tensor_matmul(X, self.Wq);
-    &Tensor c_kv = tensor_matmul(X, self.Wdkv);
-    &Tensor out = Tensor::new_2d(seqLen, dModel, 0);
+    &FloatTensor Q = tensor_matmul(X, self.Wq);
+    &FloatTensor c_kv = tensor_matmul(X, self.Wdkv);
+    &FloatTensor out = FloatTensor::new_2d(seqLen, dModel, 0);
 
     unsigned long g = 0UL;
     while (g < numGroups) {
         unsigned long startCol = g * groupDim;
-        &Tensor Qg = Q.slice_cols(startCol, groupDim);
-        &Tensor Kg = tensor_matmul(c_kv, *self.Wuk.at(g));
-        &Tensor Vg = tensor_matmul(c_kv, *self.Wuv.at(g));
-        &Tensor groupOut = mha_forward(Qg, Kg, Vg, self.headsPerGroup);
+        &FloatTensor Qg = Q.slice_cols(startCol, groupDim);
+        &FloatTensor Kg = tensor_matmul(c_kv, *self.Wuk.at(g));
+        &FloatTensor Vg = tensor_matmul(c_kv, *self.Wuv.at(g));
+        &FloatTensor groupOut = mha_forward(Qg, Kg, Vg, self.headsPerGroup);
         tensor_set_cols(out, startCol, groupOut);
         aa_drop_(Qg); aa_drop_(Kg); aa_drop_(Vg); aa_drop_(groupOut);
         g = g + 1UL;
@@ -96,14 +96,14 @@ struct EgMla EgMla::new(unsigned long dModel, unsigned long dLatent, unsigned lo
     return out;
 }
 
-void EgMla::collect_params(&Vec<&Tensor> out) const {
+void EgMla::collect_params(&Vec<&FloatTensor> out) const {
     out.push(self.Wq);
     out.push(self.Wdkv);
     unsigned long g = 0UL;
     while (g < self.Wuk.length()) { out.push(*self.Wuk.at(g)); out.push(*self.Wuv.at(g)); g = g + 1UL; }
 }
 
-void EgMla::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+void EgMla::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
 void EgMla::free() {
     aa_drop_(self.Wq);
@@ -115,10 +115,10 @@ void EgMla::free() {
 }
 
 // ── Shifted-window attention ─────────────────────────────────────────────────
-static &Tensor __row_slice(&Tensor in, unsigned long startRow, unsigned long numRows) {
+static &FloatTensor __row_slice(&FloatTensor in, unsigned long startRow, unsigned long numRows) {
     unsigned long cols;
     unsafe { cols = in->shape[1]; }
-    &Tensor out = Tensor::new_2d(numRows, cols, 0);
+    &FloatTensor out = FloatTensor::new_2d(numRows, cols, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < numRows) {
@@ -133,7 +133,7 @@ static &Tensor __row_slice(&Tensor in, unsigned long startRow, unsigned long num
     return out;
 }
 
-static void __row_set(&Tensor dst, unsigned long startRow, &Tensor src) {
+static void __row_set(&FloatTensor dst, unsigned long startRow, &FloatTensor src) {
     unsigned long cols; unsigned long numRows;
     unsafe { cols = dst->shape[1]; numRows = src->shape[0]; }
     unsafe {
@@ -149,10 +149,10 @@ static void __row_set(&Tensor dst, unsigned long startRow, &Tensor src) {
     }
 }
 
-static &Tensor __row_cyclic_shift(&Tensor in, unsigned long shift) {
+static &FloatTensor __row_cyclic_shift(&FloatTensor in, unsigned long shift) {
     unsigned long rows; unsigned long cols;
     unsafe { rows = in->shape[0]; cols = in->shape[1]; }
-    &Tensor out = Tensor::new_2d(rows, cols, 0);
+    &FloatTensor out = FloatTensor::new_2d(rows, cols, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
@@ -168,13 +168,13 @@ static &Tensor __row_cyclic_shift(&Tensor in, unsigned long shift) {
     return out;
 }
 
-&Tensor windowed_attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
+&FloatTensor windowed_attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V,
                                     unsigned long windowSize, unsigned long shift) {
     unsigned long seqLen; unsigned long dim;
     unsafe { seqLen = Q->shape[0]; dim = Q->shape[1]; }
 
     int didShift = (shift > 0UL) ? 1 : 0;
-    &Tensor Qs; &Tensor Ks; &Tensor Vs;
+    &FloatTensor Qs; &FloatTensor Ks; &FloatTensor Vs;
     if (didShift) {
         Qs = __row_cyclic_shift(Q, shift);
         Ks = __row_cyclic_shift(K, shift);
@@ -183,15 +183,15 @@ static &Tensor __row_cyclic_shift(&Tensor in, unsigned long shift) {
         Qs = Q; Ks = K; Vs = V;
     }
 
-    &Tensor winOut = Tensor::new_2d(seqLen, dim, 0);
+    &FloatTensor winOut = FloatTensor::new_2d(seqLen, dim, 0);
     unsigned long numWindows = seqLen / windowSize;
     unsigned long w = 0UL;
     while (w < numWindows) {
         unsigned long startRow = w * windowSize;
-        &Tensor qw = __row_slice(Qs, startRow, windowSize);
-        &Tensor kw = __row_slice(Ks, startRow, windowSize);
-        &Tensor vw = __row_slice(Vs, startRow, windowSize);
-        &Tensor ow = attention_forward(qw, kw, vw);
+        &FloatTensor qw = __row_slice(Qs, startRow, windowSize);
+        &FloatTensor kw = __row_slice(Ks, startRow, windowSize);
+        &FloatTensor vw = __row_slice(Vs, startRow, windowSize);
+        &FloatTensor ow = attention_forward(qw, kw, vw);
         __row_set(winOut, startRow, ow);
 
         qw->free(); kw->free(); vw->free(); ow->free();
@@ -202,7 +202,7 @@ static &Tensor __row_cyclic_shift(&Tensor in, unsigned long shift) {
     if (didShift) {
         Qs->free(); Ks->free(); Vs->free();
         unsafe { free((void*)Qs); free((void*)Ks); free((void*)Vs); }
-        &Tensor out = __row_cyclic_shift(winOut, seqLen - shift);
+        &FloatTensor out = __row_cyclic_shift(winOut, seqLen - shift);
         winOut->free();
         unsafe { free((void*)winOut); }
         return out;
@@ -219,8 +219,8 @@ static float __gdn_init_weight(unsigned long i, unsigned long seed) {
 
 struct GatedDeltaNet GatedDeltaNet::new(unsigned long dModel, unsigned long keyDim, unsigned long valueDim) {
     struct GatedDeltaNet layer;
-    layer.Walpha = Tensor::new_2d(dModel, 1UL, 0);
-    layer.Wbeta = Tensor::new_2d(dModel, 1UL, 0);
+    layer.Walpha = FloatTensor::new_2d(dModel, 1UL, 0);
+    layer.Wbeta = FloatTensor::new_2d(dModel, 1UL, 0);
     unsafe {
         unsigned long i = 0UL;
         while (i < dModel) {
@@ -241,7 +241,7 @@ void GatedDeltaNet::free() {
     }
 }
 
-&Tensor GatedDeltaNet::forward(const &Tensor X, const &Tensor Q, const &Tensor K, const &Tensor V) const {
+&FloatTensor GatedDeltaNet::forward(const &FloatTensor X, const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V) const {
     unsigned long seqLen; unsigned long dModel;
     unsigned long keyDim; unsigned long valueDim;
     unsafe {
@@ -249,7 +249,7 @@ void GatedDeltaNet::free() {
         keyDim = self->keyDim; valueDim = self->valueDim;
     }
 
-    &Tensor out = Tensor::new_2d(seqLen, valueDim, 0);
+    &FloatTensor out = FloatTensor::new_2d(seqLen, valueDim, 0);
 
     unsafe {
         float* S = (float*)malloc(sizeof(float) * keyDim * valueDim);
@@ -316,11 +316,11 @@ void GatedDeltaNet::free() {
     return out;
 }
 
-void GatedDeltaNet::collect_params(&Vec<&Tensor> out) const {
+void GatedDeltaNet::collect_params(&Vec<&FloatTensor> out) const {
     out.push(self.Walpha);
     out.push(self.Wbeta);
 }
 
-void GatedDeltaNet::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+void GatedDeltaNet::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
 } // namespace std

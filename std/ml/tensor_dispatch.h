@@ -60,7 +60,7 @@ enum Device {
     DEVICE_WEBGPU = 8,     // WebGPU (tensor_webgpu.sc)
 };
 
-&Tensor tensor_matmul_on(const &Tensor a, const &Tensor b, enum Device device);
-&Tensor Tensor::relu_on(enum Device device) const;
+&FloatTensor tensor_matmul_on(const &FloatTensor a, const &FloatTensor b, enum Device device);
+&FloatTensor FloatTensor::relu_on(enum Device device) const;
 
 } // namespace std

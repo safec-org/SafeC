@@ -42,7 +42,7 @@ void train_report_epoch_(&TrainReport rep, unsigned long epoch, float mean, unsi
     rep.epochs = epoch + 1UL;
 }
 
-float trainer_step_(&Optimizer opt, &Tensor loss, float clipNorm) {
+float trainer_step_(&Optimizer opt, &FloatTensor loss, float clipNorm) {
     opt.zero_grad();
     loss.backward();
     if (clipNorm > (float)0.0) opt.clip_grad_norm(clipNorm);

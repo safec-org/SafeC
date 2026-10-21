@@ -591,7 +591,7 @@ void ConstEvalEngine::resolveIfConstInStmt(Stmt &s) {
     switch (s.kind) {
     case StmtKind::IfConst: {
         auto &ics = static_cast<IfConstStmt &>(s);
-        if (ics.cond) {
+        if (ics.cond && !ics.constResult.has_value()) {   // Sema may have decided already
             auto val = evalExpr(*ics.cond);
             if (val) ics.constResult = val->toBool();
         }

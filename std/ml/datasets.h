@@ -19,8 +19,8 @@
 namespace std {
 
 struct Dataset {
-    &Tensor x;               // [n, features]
-    &Tensor y;               // [n, targets]
+    &FloatTensor x;               // [n, features]
+    &FloatTensor y;               // [n, targets]
     unsigned long n;
     unsigned long features;
     unsigned long targets;
@@ -77,16 +77,16 @@ struct DatasetSplit {
 
 // ── Mini-batches ─────────────────────────────────────────────────────────────
 struct Batch {
-    &Tensor x;   // [rows, features]
-    &Tensor y;   // [rows, targets]
+    &FloatTensor x;   // [rows, features]
+    &FloatTensor y;   // [rows, targets]
     unsigned long rows;
 };
 
 // Iterates a dataset in batches of 'batchSize' (the last one may be
 // smaller), in a fresh random order every epoch when 'shuffle'.
 struct DataLoader {
-    &Tensor x;
-    &Tensor y;
+    &FloatTensor x;
+    &FloatTensor y;
     &heap unsigned long order;
     unsigned long n;
     unsigned long batchSize;

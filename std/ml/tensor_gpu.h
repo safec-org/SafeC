@@ -32,30 +32,30 @@
 
 namespace std {
 
-&Tensor tensor_add_gpu(const &Tensor a, const &Tensor b);
+&FloatTensor tensor_add_gpu(const &FloatTensor a, const &FloatTensor b);
 // tensor_sub_gpu is chain-aware (see tensor_gpu.sc's chain-tracking
 // comment): under an open batch, both its forward and its backward
 // (__sub_backward_gpu) participate in the fused forward+loss+backward
 // training-step path -- e.g. diff = tensor_sub_gpu(pred, target) reading
 // 'pred' straight from a still-pending matmul/relu output, no CPU round
 // trip, and diff's own gradient propagating onward the same way.
-&Tensor tensor_sub_gpu(const &Tensor a, const &Tensor b);
-&Tensor tensor_mul_gpu(const &Tensor a, const &Tensor b);
-&Tensor Tensor::scale_gpu(float k) const;
-&Tensor Tensor::relu_gpu() const;
+&FloatTensor tensor_sub_gpu(const &FloatTensor a, const &FloatTensor b);
+&FloatTensor tensor_mul_gpu(const &FloatTensor a, const &FloatTensor b);
+&FloatTensor FloatTensor::scale_gpu(float k) const;
+&FloatTensor FloatTensor::relu_gpu() const;
 // out = a * a -- chain-aware self-multiply, used for the loss computation's
 // sq = diff * diff. Not just tensor_mul_gpu(a, a): when 'a' is itself still
 // GPU-pending (the usual case here, diff coming straight from a batched
 // tensor_sub_gpu), tensor_mul_gpu's generic two-CPU-array signature can't
 // express "both operands are the same still-pending buffer" -- see
 // gpu_mps.h's mps_square_f32_chained comment.
-&Tensor Tensor::square_gpu() const;
+&FloatTensor FloatTensor::square_gpu() const;
 // Tensor::sum_gpu's GPU reduction (std::mps_sum_f32) is a two-stage
 // parallel reduction (grid-stride accumulate + threadgroup tree
 // reduction) -- see gpu_mps.sc's comment on mps_sum_f32. Chain-aware like
 // tensor_sub_gpu/Tensor::square_gpu above.
-&Tensor Tensor::sum_gpu() const;
-&Tensor tensor_matmul_gpu(const &Tensor a, const &Tensor b);
+&FloatTensor FloatTensor::sum_gpu() const;
+&FloatTensor tensor_matmul_gpu(const &FloatTensor a, const &FloatTensor b);
 
 // ── Batched dispatch (chains of tensor_*_gpu ops with no CPU step
 // between them, e.g. matmul -> relu -> matmul) ──────────────────────────────
@@ -89,7 +89,7 @@ void tensor_gpu_batch_end();
 // step) — NOT a weight matrix, which SGD rewrites every step. Call
 // tensor_gpu_release_all_persistent() once, when truly done with every
 // marked tensor (e.g. at the very end of a training run).
-void Tensor::gpu_mark_persistent() const;
+void FloatTensor::gpu_mark_persistent() const;
 void tensor_gpu_release_all_persistent();
 
 } // namespace std

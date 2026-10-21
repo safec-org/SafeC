@@ -12,12 +12,12 @@
 
 namespace std {
 
-&Tensor tensor_add_webgpu(const &Tensor a, const &Tensor b);
-&Tensor tensor_sub_webgpu(const &Tensor a, const &Tensor b);
-&Tensor tensor_mul_webgpu(const &Tensor a, const &Tensor b);
-&Tensor Tensor::scale_webgpu(float k) const;
-&Tensor Tensor::relu_webgpu() const;
-&Tensor Tensor::sum_webgpu() const;
-&Tensor tensor_matmul_webgpu(const &Tensor a, const &Tensor b);
+&FloatTensor tensor_add_webgpu(const &FloatTensor a, const &FloatTensor b);
+&FloatTensor tensor_sub_webgpu(const &FloatTensor a, const &FloatTensor b);
+&FloatTensor tensor_mul_webgpu(const &FloatTensor a, const &FloatTensor b);
+&FloatTensor FloatTensor::scale_webgpu(float k) const;
+&FloatTensor FloatTensor::relu_webgpu() const;
+&FloatTensor FloatTensor::sum_webgpu() const;
+&FloatTensor tensor_matmul_webgpu(const &FloatTensor a, const &FloatTensor b);
 
 } // namespace std

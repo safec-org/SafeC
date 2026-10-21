@@ -71,13 +71,13 @@ trait BatchStep {
     // One optimizer step on a batch given as host tensors (x [rows, features],
     // y [rows, targets]); returns its loss. On a device this uploads the batch
     // and waits for the loss: for hand-written loops, not speed.
-    float train_step(const &Tensor x, const &Tensor y);
+    float train_step(const &FloatTensor x, const &FloatTensor y);
 }
 
 trait Actor {
     // An action for one observation (explore / sample 1: the agent's
     // exploration; 0: the best action).
-    unsigned long act(const &Tensor obs, int explore);
+    unsigned long act(const &FloatTensor obs, int explore);
 }
 
 // ── Roles ────────────────────────────────────────────────────────────────────
@@ -112,7 +112,7 @@ trait GanTrainable : HostSynced {
     // Gan::train_step: cfg.nCritic critic steps and one generator step on
     // real [rows, dataDim]; labels (rows class indices) for a conditional
     // GAN, else null.
-    struct GanLosses train_step(const &Tensor real, ?&Tensor labels);
+    struct GanLosses train_step(const &FloatTensor real, ?&FloatTensor labels);
     // Gan::train: epochs over data in shuffled batches. The last step's losses.
     struct GanLosses train(const &Dataset data, unsigned long epochs, unsigned long batchSize);
 }
@@ -129,13 +129,13 @@ trait ValueAgent : Actor + HostSynced {
     float epsilon();
     // Stores the transition and trains when due: 1 when a gradient step ran,
     // 0 when none was due, -1 on failure.
-    int   observe(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminal);
+    int   observe(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminal);
     float last_loss();                    // the last gradient step's loss
     unsigned long updates();              // gradient steps taken
 }
 
 trait PolicyLearner : Actor + HostSynced {
-    void  record(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminated,
+    void  record(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminated,
                  int truncated);
     // Trains on the recorded rollout and clears it; the last loss (-1 on failure).
     float update();

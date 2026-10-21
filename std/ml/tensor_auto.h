@@ -43,10 +43,10 @@
 
 namespace std {
 
-&Tensor tensor_add_auto(const &Tensor a, const &Tensor b);
-&Tensor tensor_sub_auto(const &Tensor a, const &Tensor b);
-&Tensor tensor_mul_auto(const &Tensor a, const &Tensor b);
-&Tensor Tensor::sum_auto() const;
-&Tensor tensor_matmul_auto(const &Tensor a, const &Tensor b);
+&FloatTensor tensor_add_auto(const &FloatTensor a, const &FloatTensor b);
+&FloatTensor tensor_sub_auto(const &FloatTensor a, const &FloatTensor b);
+&FloatTensor tensor_mul_auto(const &FloatTensor a, const &FloatTensor b);
+&FloatTensor FloatTensor::sum_auto() const;
+&FloatTensor tensor_matmul_auto(const &FloatTensor a, const &FloatTensor b);
 
 } // namespace std

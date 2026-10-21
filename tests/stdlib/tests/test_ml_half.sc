@@ -161,7 +161,8 @@ void t_half_to_half_bulk() {
     }
 }
 
-static void tensor_drop_(&Tensor t) {
+generic<E>
+static void tensor_drop_(&DenseTensor<E> t) {
     t->free();
     unsafe { free((void*)t); }
 }
@@ -169,63 +170,60 @@ static void tensor_drop_(&Tensor t) {
 // Masters -> 16-bit copies -> back; fp16 <-> bf16; gradients with the loss
 // scale divided out, and overflow detection.
 void t_mixed_precision_batch() {
-    struct Vec<&Tensor> ps = vec_new();
-    ps.push(Tensor::new_2d(3UL, 5UL, 1));
-    ps.push(Tensor::new_1d(7UL, 1));
+    struct Vec<&FloatTensor> ps = vec_new();
+    ps.push(FloatTensor::new_2d(3UL, 5UL, 1));
+    ps.push(FloatTensor::new_1d(7UL, 1));
     unsafe {
         unsigned long t = 0UL;
         while (t < 2UL) {
-            &Tensor p = *ps.at(t);
+            &FloatTensor p = *ps.at(t);
             unsigned long i = 0UL;
             while (i < p->size) { p->data[i] = (float)i * (float)0.37 - (float)1.1 + (float)t; i = i + 1UL; }
             t = t + 1UL;
         }
     }
-    struct Vec<struct HalfTensor> w16 = tensors_to_half(&ps, TENSOR_BF16);
+    struct Vec<&BF16Tensor> w16 = vec_new();
+    tensors_convert(&ps, &w16);
     ASSERT_EQ(w16.length(), 2UL);
-    &HalfTensor h0 = w16.at(0UL);
+    &BF16Tensor h0 = *w16.at(0UL);
     ASSERT_EQ(h0.size, 15UL);
     ASSERT_EQ(h0.ndim, 2UL);
+    ASSERT_EQ(h0.requiresGrad, 0);
     unsafe { ASSERT_TRUE(h0.at1(4UL) == bf16_to_f32(f32_to_bf16((*ps.at(0UL))->data[4]))); }
 
     // refresh after the masters change
     unsafe { (*ps.at(1UL))->data[3] = (float)42.0; }
-    ASSERT_TRUE(tensors_to_half_into(&ps, &w16));
-    &HalfTensor h1 = w16.at(1UL);
+    ASSERT_TRUE(tensors_convert_into(&ps, &w16));
+    &BF16Tensor h1 = *w16.at(1UL);
     ASSERT_TRUE(h1.at1(3UL) == (float)42.0);
 
     // back into fresh tensors
-    struct Vec<&Tensor> copies = vec_new();
-    copies.push(Tensor::new_2d(3UL, 5UL, 0));
-    copies.push(Tensor::new_1d(7UL, 0));
-    ASSERT_TRUE(halves_to_tensors(&w16, &copies));
+    struct Vec<&FloatTensor> copies = vec_new();
+    copies.push(FloatTensor::new_2d(3UL, 5UL, 0));
+    copies.push(FloatTensor::new_1d(7UL, 0));
+    ASSERT_TRUE(tensors_convert_into(&w16, &copies));
     unsafe { ASSERT_TRUE((*copies.at(1UL))->data[3] == (float)42.0); }
 
     // bf16 -> fp16
-    struct HalfTensor f16 = HalfTensor::new_1d(7UL, TENSOR_FP16);
-    ASSERT_TRUE(half_convert(h1, &f16));
+    &HalfTensor f16 = HalfTensor::new_1d(7UL, 0);
+    ASSERT_TRUE(tensor_convert_into(h1, f16));
     ASSERT_TRUE(f16.at1(3UL) == (float)42.0);
-    struct HalfTensor small = HalfTensor::new_1d(3UL, TENSOR_FP16);
-    ASSERT_TRUE(!half_convert(h1, &small));
+    &HalfTensor small = HalfTensor::new_1d(3UL, 0);
+    ASSERT_TRUE(!tensor_convert_into(h1, small));
 
     // gradients: fp16 values scaled by 1024, divided back out
-    struct Vec<struct HalfTensor> g16 = vec_new();
-    struct HalfTensor ga = HalfTensor::new_2d(3UL, 5UL, TENSOR_FP16);
-    struct HalfTensor gb = HalfTensor::new_1d(7UL, TENSOR_FP16);
-    unsigned long i = 0UL;
-    while (i < 15UL) { ga.set1(i, (float)1024.0 * (float)0.25); i = i + 1UL; }
-    i = 0UL;
-    while (i < 7UL) { gb.set1(i, (float)-2048.0); i = i + 1UL; }
-    g16.push(ga);
-    g16.push(gb);
+    struct Vec<&HalfTensor> g16 = vec_new();
+    g16.push(HalfTensor::new_2d(3UL, 5UL, 0));
+    g16.push(HalfTensor::new_1d(7UL, 0));
+    (*g16.at(0UL)).fill((float)1024.0 * (float)0.25);
+    (*g16.at(1UL)).fill((float)-2048.0);
     ASSERT_TRUE(half_grads_accumulate(&g16, &ps, (float)1.0 / (float)1024.0));
     unsafe {
         ASSERT_TRUE((*ps.at(0UL))->grad[7] == (float)0.25);
         ASSERT_TRUE((*ps.at(1UL))->grad[2] == (float)-2.0);
     }
     // an overflowed gradient (fp16 infinity) is reported
-    &HalfTensor gbr = g16.at(1UL);
-    gbr.set1(5UL, (float)1.0e9);              // rounds to +inf in fp16
+    (*g16.at(1UL)).set1(5UL, (float)1.0e9);   // rounds to +inf in fp16
     ASSERT_TRUE(!half_grads_accumulate(&g16, &ps, (float)1.0));
 
     // LossScaler::unscale_all over the list
@@ -237,10 +235,10 @@ void t_mixed_precision_batch() {
     ASSERT_TRUE(sc.unscale_all(&ps));
     unsafe { ASSERT_TRUE((*ps.at(0UL))->grad[0] == (float)2.0); }
 
-    half_tensors_free(&g16);
-    half_tensors_free(&w16);
-    f16.free();
-    small.free();
+    tensors_free(&g16);
+    tensors_free(&w16);
+    tensor_drop_(f16);
+    tensor_drop_(small);
     tensor_drop_(*copies.at(0UL)); tensor_drop_(*copies.at(1UL));
     tensor_drop_(*ps.at(0UL)); tensor_drop_(*ps.at(1UL));
     copies.free();

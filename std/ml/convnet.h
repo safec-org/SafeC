@@ -69,16 +69,16 @@ struct Conv2dSpec {
 // x is [batch, inC*inH*inW] (a 1D tensor is one image). Each returns
 // [batch, outC*outH*outW] and records its backward edge to x, weight and
 // bias, like tensor_add does. outC is bias's size.
-&Tensor tensor_conv2d_ex(const &Tensor x, const &Tensor weight, const &Tensor bias,
+&FloatTensor tensor_conv2d_ex(const &FloatTensor x, const &FloatTensor weight, const &FloatTensor bias,
                          unsigned long inC, unsigned long inH, unsigned long inW, const &Conv2dSpec spec);
-&Tensor tensor_conv_transpose2d_ex(const &Tensor x, const &Tensor weight, const &Tensor bias,
+&FloatTensor tensor_conv_transpose2d_ex(const &FloatTensor x, const &FloatTensor weight, const &FloatTensor bias,
                                    unsigned long inC, unsigned long inH, unsigned long inW, const &Conv2dSpec spec);
 // The common case: kH x kW kernel, one stride and padding for both axes.
-&Tensor tensor_conv2d(const &Tensor x, const &Tensor weight, const &Tensor bias,
+&FloatTensor tensor_conv2d(const &FloatTensor x, const &FloatTensor weight, const &FloatTensor bias,
                       unsigned long inC, unsigned long inH, unsigned long inW,
                       unsigned long kH, unsigned long kW,
                       unsigned long stride, unsigned long padding);
-&Tensor tensor_conv_transpose2d(const &Tensor x, const &Tensor weight, const &Tensor bias,
+&FloatTensor tensor_conv_transpose2d(const &FloatTensor x, const &FloatTensor weight, const &FloatTensor bias,
                                 unsigned long inC, unsigned long inH, unsigned long inW,
                                 unsigned long kH, unsigned long kW,
                                 unsigned long stride, unsigned long padding);
@@ -114,21 +114,21 @@ struct Pool2dSpec {
 };
 unsigned long pool_out_side(unsigned long dim, unsigned long kernel, unsigned long stride,
                             unsigned long padding, int ceilMode);
-&Tensor Tensor::maxpool2d_ex(unsigned long channels, unsigned long height, unsigned long width, const &Pool2dSpec spec) const;
-&Tensor Tensor::avgpool2d_ex(unsigned long channels, unsigned long height, unsigned long width, const &Pool2dSpec spec) const;
-&Tensor Tensor::maxpool2d(unsigned long channels, unsigned long height, unsigned long width, unsigned long kernel,
+&FloatTensor FloatTensor::maxpool2d_ex(unsigned long channels, unsigned long height, unsigned long width, const &Pool2dSpec spec) const;
+&FloatTensor FloatTensor::avgpool2d_ex(unsigned long channels, unsigned long height, unsigned long width, const &Pool2dSpec spec) const;
+&FloatTensor FloatTensor::maxpool2d(unsigned long channels, unsigned long height, unsigned long width, unsigned long kernel,
                           unsigned long stride, unsigned long padding) const;
-&Tensor Tensor::avgpool2d(unsigned long channels, unsigned long height, unsigned long width, unsigned long kernel,
+&FloatTensor FloatTensor::avgpool2d(unsigned long channels, unsigned long height, unsigned long width, unsigned long kernel,
                           unsigned long stride, unsigned long padding, int countIncludePad) const;
 // Global pooling: each channel's whole plane to one value, [batch, C*H*W]
 // -> [batch, C] (a classifier head, or the squeeze of squeeze-and-excite).
 // Max sends the gradient to the plane's (first) largest input.
-&Tensor Tensor::global_avgpool2d(unsigned long channels, unsigned long height, unsigned long width) const;
-&Tensor Tensor::global_maxpool2d(unsigned long channels, unsigned long height, unsigned long width) const;
+&FloatTensor FloatTensor::global_avgpool2d(unsigned long channels, unsigned long height, unsigned long width) const;
+&FloatTensor FloatTensor::global_maxpool2d(unsigned long channels, unsigned long height, unsigned long width) const;
 
 // ── Resizing ─────────────────────────────────────────────────────────────────
 // out[c][h*factor + i][w*factor + j] = in[c][h][w]; gradients sum back.
-&Tensor Tensor::upsample_nearest(unsigned long channels, unsigned long height, unsigned long width,
+&FloatTensor FloatTensor::upsample_nearest(unsigned long channels, unsigned long height, unsigned long width,
                                  unsigned long factor) const;
 // To any outH x outW (up or down), as PyTorch's interpolate(size=...):
 //   RESIZE_NEAREST   source floor(o * in / out) ('nearest'; alignCorners ignored)
@@ -141,10 +141,10 @@ unsigned long pool_out_side(unsigned long dim, unsigned long kernel, unsigned lo
 #define RESIZE_NEAREST  0
 #define RESIZE_BILINEAR 1
 #define RESIZE_BICUBIC  2
-&Tensor Tensor::resize2d(unsigned long channels, unsigned long height, unsigned long width, unsigned long outH,
+&FloatTensor FloatTensor::resize2d(unsigned long channels, unsigned long height, unsigned long width, unsigned long outH,
                          unsigned long outW, int mode, int alignCorners) const;
 // Tensor::resize2d to factor x the size, bilinear, corners not aligned.
-&Tensor Tensor::upsample_bilinear(unsigned long channels, unsigned long height, unsigned long width,
+&FloatTensor FloatTensor::upsample_bilinear(unsigned long channels, unsigned long height, unsigned long width,
                                   unsigned long factor) const;
 
 // ── Normalization and dropout ────────────────────────────────────────────────
@@ -155,8 +155,8 @@ unsigned long pool_out_side(unsigned long dim, unsigned long kernel, unsigned lo
 // statistics are used and runMean / runVar ([channels], no gradient) move
 // toward them by 'momentum' (PyTorch: 0.1, with the unbiased variance);
 // otherwise the running statistics are used. eps is added to the variance.
-&Tensor tensor_batch_norm(const &Tensor x, const &Tensor gamma, const &Tensor beta,
-                          &Tensor runMean, &Tensor runVar,
+&FloatTensor tensor_batch_norm(const &FloatTensor x, const &FloatTensor gamma, const &FloatTensor beta,
+                          &FloatTensor runMean, &FloatTensor runVar,
                           unsigned long channels, unsigned long plane,
                           int training, float momentum, float eps);
 // Group normalization (Wu & He 2018): each image's channels split into
@@ -164,19 +164,19 @@ unsigned long pool_out_side(unsigned long dim, unsigned long kernel, unsigned lo
 // gamma / beta per channel. Batch-independent, the same in training and
 // inference. groups 1 is layer norm over (C, H, W); groups == channels is
 // instance norm.
-&Tensor tensor_group_norm(const &Tensor x, const &Tensor gamma, const &Tensor beta,
+&FloatTensor tensor_group_norm(const &FloatTensor x, const &FloatTensor gamma, const &FloatTensor beta,
                           unsigned long channels, unsigned long plane, unsigned long groups, float eps);
 // Spectral normalization (Miyato et al. 2018): weight / sigma, sigma its
 // largest singular value (the weight seen as a matrix [rows, size/rows]),
 // estimated by power iteration from u ([rows], no gradient). In training
 // 'iters' iterations update u; in inference u is kept. The gradient treats
 // u and v as constants, as PyTorch does.
-&Tensor tensor_spectral_norm(const &Tensor weight, &Tensor u, unsigned long iters, int training);
+&FloatTensor tensor_spectral_norm(const &FloatTensor weight, &FloatTensor u, unsigned long iters, int training);
 // Inverted dropout: in training each value is zeroed with probability p
 // and the rest scaled by 1 / (1 - p); in inference x passes unchanged.
 // Tensor::dropout2d drops whole channel planes (spatial dropout).
-&Tensor Tensor::dropout(float p, int training, &Rng rng) const;
-&Tensor Tensor::dropout2d(unsigned long channels, unsigned long plane, float p, int training, &Rng rng) const;
+&FloatTensor FloatTensor::dropout(float p, int training, &Rng rng) const;
+&FloatTensor FloatTensor::dropout2d(unsigned long channels, unsigned long plane, float p, int training, &Rng rng) const;
 
 // ── Conditioning ─────────────────────────────────────────────────────────────
 // One constant plane per class, 1 in the plane of each row's label (m
@@ -184,8 +184,8 @@ unsigned long pool_out_side(unsigned long dim, unsigned long kernel, unsigned lo
 // classes*height*width], no gradient. tensor_append_label_channels puts
 // them after x's channels (x [m, C*height*width] -> [m, (C+classes)*...]):
 // how a conditional ConvVae / Dcgan feeds the label to its image-side net.
-&Tensor Tensor::label_planes(unsigned long classes, unsigned long height, unsigned long width) const;
-&Tensor tensor_append_label_channels(const &Tensor x, const &Tensor labels, unsigned long classes,
+&FloatTensor FloatTensor::label_planes(unsigned long classes, unsigned long height, unsigned long width) const;
+&FloatTensor tensor_append_label_channels(const &FloatTensor x, const &FloatTensor labels, unsigned long classes,
                                      unsigned long height, unsigned long width);
 
 // ── ConvNet ──────────────────────────────────────────────────────────────────
@@ -252,8 +252,8 @@ struct ConvLayer {
 //   &Tensor logits = net.forward(batch);                // [m, 784] -> [m, 10]
 struct ConvNet {
     struct Vec<struct ConvLayer> layers;
-    struct Vec<&Tensor> params;
-    struct Vec<&Tensor> buffers;  // not trained by the optimizer
+    struct Vec<&FloatTensor> params;
+    struct Vec<&FloatTensor> buffers;  // not trained by the optimizer
     struct Vec<struct Rng> rngs;  // one per dropout layer
     unsigned long slots;          // saved activations (CONV_LAYER_SAVE)
     int training;
@@ -320,15 +320,15 @@ struct ConvNet {
     unsigned long fold_batchnorm();
     unsigned long in_dim() const;             // inC*inH*inW
     unsigned long out_dim() const;            // outC*outH*outW
-    &Tensor forward(const &Tensor x) const;   // [batch, in_dim] -> [batch, out_dim]
+    &FloatTensor forward(const &FloatTensor x) const;   // [batch, in_dim] -> [batch, out_dim]
     // Same layers, a copy of the parameters and buffers (e.g. a GAN's averaged
     // generator).
     struct ConvNet clone() const;
     // Parameterized (module.h): the trained parameters; the state adds the
     // buffers (running statistics, spectral norms' u), so model_save_file /
     // model_copy carry them too.
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
     static struct ConvNet new(unsigned long channels, unsigned long height, unsigned long width);

@@ -25,21 +25,21 @@ namespace std {
 
 // Moved here from tensor.h -- a neural-net activation function, grouped
 // with the rest of them rather than with tensor.h's core arithmetic ops.
-&Tensor Tensor::relu() const;
-&Tensor Tensor::sigmoid() const;
-&Tensor Tensor::tanh() const;   // 'tensor_tanh' would collide with math.h's tanh_f-style naming convention if this were 'tanh'; matches this file's other tensor_-prefixed names instead
-&Tensor Tensor::softmax() const;   // last-axis softmax (row-wise for a rank-2 tensor)
-&Tensor Tensor::elu(float alpha) const;
-&Tensor Tensor::gelu() const;   // tanh approximation (the common fast form, not the exact erf one)
-&Tensor Tensor::silu() const;   // aka Swish: x * sigmoid(x)
+&FloatTensor FloatTensor::relu() const;
+&FloatTensor FloatTensor::sigmoid() const;
+&FloatTensor FloatTensor::tanh() const;   // 'tensor_tanh' would collide with math.h's tanh_f-style naming convention if this were 'tanh'; matches this file's other tensor_-prefixed names instead
+&FloatTensor FloatTensor::softmax() const;   // last-axis softmax (row-wise for a rank-2 tensor)
+&FloatTensor FloatTensor::elu(float alpha) const;
+&FloatTensor FloatTensor::gelu() const;   // tanh approximation (the common fast form, not the exact erf one)
+&FloatTensor FloatTensor::silu() const;   // aka Swish: x * sigmoid(x)
 
 // GLU/SwiGLU split the input's last axis in half (must be even) into
 // [a1, a2] and gate one half with (a function of) the other:
 //   GLU(x)    = a1 * sigmoid(a2)
 //   SwiGLU(x) = silu(a1) * a2
 // Output shape is the input's shape with the last axis halved.
-&Tensor Tensor::glu() const;
-&Tensor Tensor::swiglu() const;
+&FloatTensor FloatTensor::glu() const;
+&FloatTensor FloatTensor::swiglu() const;
 
 // ── Adam optimizer ───────────────────────────────────────────────────────────
 // Per-parameter state (first/second moment buffers, same size as the
@@ -57,7 +57,7 @@ struct AdamState {
     float eps;
     unsigned long t; // step count, starts at 0, incremented by AdamState::step
 
-    void step(&Tensor param);
+    void step(&FloatTensor param);
     void free();
 
     static struct AdamState new(unsigned long size, float lr, float beta1, float beta2, float eps);
@@ -75,15 +75,15 @@ struct AdamState {
 // (batch, channel) row's length axis independently) -- this is genuine
 // N-D-aware pooling via Tensor's existing arbitrary-ndim shape, not
 // limited to rank-2.
-&Tensor Tensor::maxpool1d(unsigned long kernel, unsigned long stride) const;
-&Tensor Tensor::avgpool1d(unsigned long kernel, unsigned long stride) const;
+&FloatTensor FloatTensor::maxpool1d(unsigned long kernel, unsigned long stride) const;
+&FloatTensor FloatTensor::avgpool1d(unsigned long kernel, unsigned long stride) const;
 
 // ══ Internal helpers (static — each including file gets its own copy) ═══════
 
 static void __relu_backward(void* selfPtr) {
     unsafe {
-        struct Tensor* selfT = (struct Tensor*)selfPtr;
-        struct Tensor* a = __tensor_parent(selfT, 0UL);
+        FloatTensor* selfT = (FloatTensor*)selfPtr;
+        FloatTensor* a = __tensor_parent(selfT, 0UL);
         if (!a->requiresGrad) return;
         __tensor_ensure_grad(a);
         __tensor_ew(EW_ACC_RELU, (const float*)selfT->grad, (const float*)a->data, (float)0.0,
@@ -93,8 +93,8 @@ static void __relu_backward(void* selfPtr) {
 
 static void __sigmoid_backward(void* selfPtr) {
     unsafe {
-        struct Tensor* selfT = (struct Tensor*)selfPtr;
-        struct Tensor* a = __tensor_parent(selfT, 0UL);
+        FloatTensor* selfT = (FloatTensor*)selfPtr;
+        FloatTensor* a = __tensor_parent(selfT, 0UL);
         if (a->requiresGrad) {
             __tensor_ensure_grad(a);
             __tensor_ew(EW_ACC_SIGB, (const float*)selfT->grad, (const float*)selfT->data, (float)0.0,
@@ -105,8 +105,8 @@ static void __sigmoid_backward(void* selfPtr) {
 
 static void __tanh_t_backward(void* selfPtr) {
     unsafe {
-        struct Tensor* selfT = (struct Tensor*)selfPtr;
-        struct Tensor* a = __tensor_parent(selfT, 0UL);
+        FloatTensor* selfT = (FloatTensor*)selfPtr;
+        FloatTensor* a = __tensor_parent(selfT, 0UL);
         if (a->requiresGrad) {
             __tensor_ensure_grad(a);
             __tensor_ew(EW_ACC_TANHB, (const float*)selfT->grad, (const float*)selfT->data, (float)0.0,
@@ -117,8 +117,8 @@ static void __tanh_t_backward(void* selfPtr) {
 
 static void __softmax_backward(void* selfPtr) {
     unsafe {
-        struct Tensor* selfT = (struct Tensor*)selfPtr;
-        struct Tensor* a = __tensor_parent(selfT, 0UL);
+        FloatTensor* selfT = (FloatTensor*)selfPtr;
+        FloatTensor* a = __tensor_parent(selfT, 0UL);
         if (a->requiresGrad) {
             __tensor_ensure_grad(a);
             unsigned long lastDim = selfT->shape[selfT->ndim - 1UL];
@@ -146,8 +146,8 @@ static void __softmax_backward(void* selfPtr) {
 
 static void __elu_backward(void* selfPtr) {
     unsafe {
-        struct Tensor* selfT = (struct Tensor*)selfPtr;
-        struct Tensor* a = __tensor_parent(selfT, 0UL);
+        FloatTensor* selfT = (FloatTensor*)selfPtr;
+        FloatTensor* a = __tensor_parent(selfT, 0UL);
         float alpha = selfT->extraScalar;
         if (a->requiresGrad) {
             __tensor_ensure_grad(a);
@@ -165,8 +165,8 @@ static void __elu_backward(void* selfPtr) {
 
 static void __gelu_backward(void* selfPtr) {
     unsafe {
-        struct Tensor* selfT = (struct Tensor*)selfPtr;
-        struct Tensor* a = __tensor_parent(selfT, 0UL);
+        FloatTensor* selfT = (FloatTensor*)selfPtr;
+        FloatTensor* a = __tensor_parent(selfT, 0UL);
         if (a->requiresGrad) {
             __tensor_ensure_grad(a);
             float c = (float)0.7978845608028654; // sqrt(2/pi)
@@ -195,8 +195,8 @@ static void __gelu_backward(void* selfPtr) {
 
 static void __silu_backward(void* selfPtr) {
     unsafe {
-        struct Tensor* selfT = (struct Tensor*)selfPtr;
-        struct Tensor* a = __tensor_parent(selfT, 0UL);
+        FloatTensor* selfT = (FloatTensor*)selfPtr;
+        FloatTensor* a = __tensor_parent(selfT, 0UL);
         if (a->requiresGrad) {
             __tensor_ensure_grad(a);
             unsigned long n = selfT->size;
@@ -217,8 +217,8 @@ static void __silu_backward(void* selfPtr) {
 
 static void __glu_backward(void* selfPtr) {
     unsafe {
-        struct Tensor* selfT = (struct Tensor*)selfPtr;
-        struct Tensor* a = __tensor_parent(selfT, 0UL);
+        FloatTensor* selfT = (FloatTensor*)selfPtr;
+        FloatTensor* a = __tensor_parent(selfT, 0UL);
         if (a->requiresGrad) {
             __tensor_ensure_grad(a);
             unsigned long outLast = selfT->shape[selfT->ndim - 1UL];
@@ -246,8 +246,8 @@ static void __glu_backward(void* selfPtr) {
 
 static void __swiglu_backward(void* selfPtr) {
     unsafe {
-        struct Tensor* selfT = (struct Tensor*)selfPtr;
-        struct Tensor* a = __tensor_parent(selfT, 0UL);
+        FloatTensor* selfT = (FloatTensor*)selfPtr;
+        FloatTensor* a = __tensor_parent(selfT, 0UL);
         if (a->requiresGrad) {
             __tensor_ensure_grad(a);
             unsigned long outLast = selfT->shape[selfT->ndim - 1UL];
@@ -277,9 +277,9 @@ static void __swiglu_backward(void* selfPtr) {
 
 static void __maxpool1d_backward(void* selfPtr) {
     unsafe {
-        struct Tensor* selfT = (struct Tensor*)selfPtr;
-        struct Tensor* a = __tensor_parent(selfT, 0UL);
-        struct Tensor* idxCache = __tensor_parent(selfT, 1UL);
+        FloatTensor* selfT = (FloatTensor*)selfPtr;
+        FloatTensor* a = __tensor_parent(selfT, 0UL);
+        FloatTensor* idxCache = __tensor_parent(selfT, 1UL);
         if (a->requiresGrad) {
             __tensor_ensure_grad(a);
             unsigned long i = 0UL;
@@ -294,8 +294,8 @@ static void __maxpool1d_backward(void* selfPtr) {
 
 static void __avgpool1d_backward(void* selfPtr) {
     unsafe {
-        struct Tensor* selfT = (struct Tensor*)selfPtr;
-        struct Tensor* a = __tensor_parent(selfT, 0UL);
+        FloatTensor* selfT = (FloatTensor*)selfPtr;
+        FloatTensor* a = __tensor_parent(selfT, 0UL);
         if (a->requiresGrad) {
             __tensor_ensure_grad(a);
             // Base 10000, not the double-precision predecessor's

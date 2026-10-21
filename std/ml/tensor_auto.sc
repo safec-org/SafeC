@@ -17,22 +17,22 @@ namespace std {
 // the measured crossover actually falls.
 #define TENSOR_AUTO_VDSP_MIN_ELEMS ((unsigned long)256)
 
-&Tensor tensor_add_auto(const &Tensor a, const &Tensor b) {
+&FloatTensor tensor_add_auto(const &FloatTensor a, const &FloatTensor b) {
     if (a->size >= TENSOR_AUTO_VDSP_MIN_ELEMS) { return tensor_add_vdsp(a, b); }
     return tensor_add(a, b);
 }
 
-&Tensor tensor_sub_auto(const &Tensor a, const &Tensor b) {
+&FloatTensor tensor_sub_auto(const &FloatTensor a, const &FloatTensor b) {
     if (a->size >= TENSOR_AUTO_VDSP_MIN_ELEMS) { return tensor_sub_vdsp(a, b); }
     return tensor_sub(a, b);
 }
 
-&Tensor tensor_mul_auto(const &Tensor a, const &Tensor b) {
+&FloatTensor tensor_mul_auto(const &FloatTensor a, const &FloatTensor b) {
     if (a->size >= TENSOR_AUTO_VDSP_MIN_ELEMS) { return tensor_mul_vdsp(a, b); }
     return tensor_mul(a, b);
 }
 
-&Tensor Tensor::sum_auto() const {
+&FloatTensor FloatTensor::sum_auto() const {
     if (self->size >= TENSOR_AUTO_VDSP_MIN_ELEMS) { return self.sum_vdsp(); }
     return self.sum();
 }
@@ -45,7 +45,7 @@ namespace std {
 // scale. Always dispatching to BLAS here isn't a shortcut that skipped
 // measuring the small-size case — it's what measuring the small-size
 // case actually found.
-&Tensor tensor_matmul_auto(const &Tensor a, const &Tensor b) {
+&FloatTensor tensor_matmul_auto(const &FloatTensor a, const &FloatTensor b) {
     return tensor_matmul_blas(a, b);
 }
 

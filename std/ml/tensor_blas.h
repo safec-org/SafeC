@@ -23,6 +23,6 @@
 
 namespace std {
 
-&Tensor tensor_matmul_blas(const &Tensor a, const &Tensor b);
+&FloatTensor tensor_matmul_blas(const &FloatTensor a, const &FloatTensor b);
 
 } // namespace std

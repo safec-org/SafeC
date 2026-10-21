@@ -12,10 +12,10 @@ namespace std {
 extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
-&Tensor Tensor::softmax_rows() const {
+&FloatTensor FloatTensor::softmax_rows() const {
     unsigned long rows; unsigned long cols;
     unsafe { rows = self->shape[0]; cols = self->shape[1]; }
-    &Tensor out = Tensor::new_2d(rows, cols, 0);
+    &FloatTensor out = FloatTensor::new_2d(rows, cols, 0);
     unsigned long r = 0UL;
     while (r < rows) {
         float rowMax;
@@ -45,10 +45,10 @@ extern void  free(void* ptr);
     return out;
 }
 
-&Tensor Tensor::transpose() const {
+&FloatTensor FloatTensor::transpose() const {
     unsigned long rows; unsigned long cols;
     unsafe { rows = self->shape[0]; cols = self->shape[1]; }
-    &Tensor out = Tensor::new_2d(cols, rows, 0);
+    &FloatTensor out = FloatTensor::new_2d(cols, rows, 0);
     unsigned long r = 0UL;
     while (r < rows) {
         unsigned long c = 0UL;
@@ -64,8 +64,8 @@ extern void  free(void* ptr);
 // Column slice, differentiable: the start column rides in extraScalar.
 static void attn_slice_backward_(void* selfPtr) {
     unsafe {
-        struct Tensor* s = (struct Tensor*)selfPtr;
-        struct Tensor* a = __tensor_parent(s, 0UL);
+        FloatTensor* s = (FloatTensor*)selfPtr;
+        FloatTensor* a = __tensor_parent(s, 0UL);
         if (!a->requiresGrad) return;
         __tensor_ensure_grad(a);
         unsigned long start = (unsigned long)s->extraScalar;
@@ -81,10 +81,10 @@ static void attn_slice_backward_(void* selfPtr) {
     }
 }
 
-&Tensor Tensor::slice_cols(unsigned long start, unsigned long len) const {
+&FloatTensor FloatTensor::slice_cols(unsigned long start, unsigned long len) const {
     unsigned long rows; unsigned long n;
     unsafe { rows = self->shape[0]; n = self->shape[1]; }
-    &Tensor out = Tensor::new_2d(rows, len, 0);
+    &FloatTensor out = FloatTensor::new_2d(rows, len, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
@@ -98,7 +98,7 @@ static void attn_slice_backward_(void* selfPtr) {
     return out;
 }
 
-void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src) {
+void tensor_set_cols(&FloatTensor dst, unsigned long startCol, const &FloatTensor src) {
     unsigned long rows; unsigned long dstCols; unsigned long srcCols;
     unsafe { rows = dst->shape[0]; dstCols = dst->shape[1]; srcCols = src->shape[1]; }
     unsigned long r = 0UL;
@@ -112,34 +112,34 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src) {
     }
 }
 
-&Tensor attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V) {
+&FloatTensor attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V) {
     unsigned long headDim;
     unsafe { headDim = Q->shape[1]; }
-    &Tensor Kt = K.transpose();
-    &Tensor scores = tensor_matmul(Q, Kt);
+    &FloatTensor Kt = K.transpose();
+    &FloatTensor scores = tensor_matmul(Q, Kt);
     float scale = (float)1.0 / sqrt_f((float)headDim);
-    &Tensor scaled = scores.scale(scale);
-    &Tensor weights = scaled.softmax_rows();
-    &Tensor result = tensor_matmul(weights, V);
+    &FloatTensor scaled = scores.scale(scale);
+    &FloatTensor weights = scaled.softmax_rows();
+    &FloatTensor result = tensor_matmul(weights, V);
 
     Kt->free(); scores->free(); scaled->free(); weights->free();
     unsafe { free((void*)Kt); free((void*)scores); free((void*)scaled); free((void*)weights); }
     return result;
 }
 
-&Tensor mha_forward(const &Tensor Q, const &Tensor K, const &Tensor V, unsigned long numHeads) {
+&FloatTensor mha_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V, unsigned long numHeads) {
     unsigned long seqLen; unsigned long dModel;
     unsafe { seqLen = Q->shape[0]; dModel = Q->shape[1]; }
     unsigned long headDim = dModel / numHeads;
 
-    &Tensor out = Tensor::new_2d(seqLen, dModel, 0);
+    &FloatTensor out = FloatTensor::new_2d(seqLen, dModel, 0);
     unsigned long h = 0UL;
     while (h < numHeads) {
         unsigned long startCol = h * headDim;
-        &Tensor Qh = Q.slice_cols(startCol, headDim);
-        &Tensor Kh = K.slice_cols(startCol, headDim);
-        &Tensor Vh = V.slice_cols(startCol, headDim);
-        &Tensor headOut = attention_forward(Qh, Kh, Vh);
+        &FloatTensor Qh = Q.slice_cols(startCol, headDim);
+        &FloatTensor Kh = K.slice_cols(startCol, headDim);
+        &FloatTensor Vh = V.slice_cols(startCol, headDim);
+        &FloatTensor headOut = attention_forward(Qh, Kh, Vh);
         tensor_set_cols(out, startCol, headOut);
 
         Qh->free(); Kh->free(); Vh->free(); headOut->free();
@@ -149,21 +149,21 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src) {
     return out;
 }
 
-&Tensor gated_attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
-                                 const &Tensor gateLogits) {
-    &Tensor raw = attention_forward(Q, K, V);
-    &Tensor gate = gateLogits.sigmoid_fwd();
-    &Tensor out = tensor_mul(raw, gate);
+&FloatTensor gated_attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V,
+                                 const &FloatTensor gateLogits) {
+    &FloatTensor raw = attention_forward(Q, K, V);
+    &FloatTensor gate = gateLogits.sigmoid_fwd();
+    &FloatTensor out = tensor_mul(raw, gate);
     raw->free(); gate->free();
     unsafe { free((void*)raw); free((void*)gate); }
     return out;
 }
 
-&Tensor gated_mha_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
-                           unsigned long numHeads, const &Tensor gateLogits) {
-    &Tensor raw = mha_forward(Q, K, V, numHeads);
-    &Tensor gate = gateLogits.sigmoid_fwd();
-    &Tensor out = tensor_mul(raw, gate);
+&FloatTensor gated_mha_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V,
+                           unsigned long numHeads, const &FloatTensor gateLogits) {
+    &FloatTensor raw = mha_forward(Q, K, V, numHeads);
+    &FloatTensor gate = gateLogits.sigmoid_fwd();
+    &FloatTensor out = tensor_mul(raw, gate);
     raw->free(); gate->free();
     unsafe { free((void*)raw); free((void*)gate); }
     return out;
@@ -171,8 +171,8 @@ void tensor_set_cols(&Tensor dst, unsigned long startCol, const &Tensor src) {
 
 // phi(x) = elu(x) + 1, elementwise (always > 0, used as linear
 // attention's kernel feature map).
-static &Tensor __phi_elu_p1(&Tensor x) {
-    &Tensor out = x.zeros_like();
+static &FloatTensor __phi_elu_p1(&FloatTensor x) {
+    &FloatTensor out = x.zeros_like();
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) {
@@ -184,13 +184,13 @@ static &Tensor __phi_elu_p1(&Tensor x) {
     return out;
 }
 
-&Tensor linear_attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V) {
+&FloatTensor linear_attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V) {
     unsigned long seqLen; unsigned long headDim; unsigned long kvLen;
     unsafe { seqLen = Q->shape[0]; headDim = Q->shape[1]; kvLen = K->shape[0]; }
 
-    &Tensor phiQ = __phi_elu_p1(Q);
-    &Tensor phiK = __phi_elu_p1(K);
-    &Tensor out = Tensor::new_2d(seqLen, headDim, 0);
+    &FloatTensor phiQ = __phi_elu_p1(Q);
+    &FloatTensor phiK = __phi_elu_p1(K);
+    &FloatTensor out = FloatTensor::new_2d(seqLen, headDim, 0);
 
     unsafe {
         // KV[d1][d2] = sum_j phiK[j][d1] * V[j][d2]   ([headDim, headDim])
@@ -243,13 +243,13 @@ static &Tensor __phi_elu_p1(&Tensor x) {
     return out;
 }
 
-&Tensor flash_attention_forward(const &Tensor Q, const &Tensor K, const &Tensor V,
+&FloatTensor flash_attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V,
                                  unsigned long kvBlockSize) {
     unsigned long seqLen; unsigned long headDim; unsigned long kvLen;
     unsafe { seqLen = Q->shape[0]; headDim = Q->shape[1]; kvLen = K->shape[0]; }
     float scale = (float)1.0 / sqrt_f((float)headDim);
 
-    &Tensor out = Tensor::new_2d(seqLen, headDim, 0); // doubles as the running 'acc' buffer
+    &FloatTensor out = FloatTensor::new_2d(seqLen, headDim, 0); // doubles as the running 'acc' buffer
 
     unsafe {
         // -1.0e30, not double's -1.0e300 -- float32 only goes to ~3.4e38
@@ -331,14 +331,14 @@ static &Tensor __phi_elu_p1(&Tensor x) {
 // ── Multi-head self-attention layer ──────────────────────────────────────────
 
 // A [rows, cols] weight, U(-1/sqrt(rows), 1/sqrt(rows)) (nn.h's Mlp init).
-&Tensor attn_weight_(unsigned long rows, unsigned long cols, &Rng rng) {
-    &Tensor w = Tensor::new_2d(rows, cols, 0);
+&FloatTensor attn_weight_(unsigned long rows, unsigned long cols, &Rng rng) {
+    &FloatTensor w = FloatTensor::new_2d(rows, cols, 0);
     float bound = (float)1.0 / sqrt_f((float)rows);
     rng.fill_uniform(w, -bound, bound);
     return w;
 }
 
-static void attn_drop_(&Tensor t) {
+static void attn_drop_(&FloatTensor t) {
     t->free();
     unsafe { free((void*)t); }
 }
@@ -354,21 +354,21 @@ struct MultiHeadAttention MultiHeadAttention::new(unsigned long dModel, unsigned
     return a;
 }
 
-&Tensor MultiHeadAttention::forward(const &Tensor X) const {
-    &Tensor Q = tensor_matmul(X, self.Wq);
-    &Tensor K = tensor_matmul(X, self.Wk);
-    &Tensor V = tensor_matmul(X, self.Wv);
-    &Tensor h = mha_forward(Q, K, V, self.numHeads);
-    &Tensor out = tensor_matmul(h, self.Wo);
+&FloatTensor MultiHeadAttention::forward(const &FloatTensor X) const {
+    &FloatTensor Q = tensor_matmul(X, self.Wq);
+    &FloatTensor K = tensor_matmul(X, self.Wk);
+    &FloatTensor V = tensor_matmul(X, self.Wv);
+    &FloatTensor h = mha_forward(Q, K, V, self.numHeads);
+    &FloatTensor out = tensor_matmul(h, self.Wo);
     attn_drop_(Q); attn_drop_(K); attn_drop_(V); attn_drop_(h);
     return out;
 }
 
-void MultiHeadAttention::collect_params(&Vec<&Tensor> out) const {
+void MultiHeadAttention::collect_params(&Vec<&FloatTensor> out) const {
     out.push(self.Wq); out.push(self.Wk); out.push(self.Wv); out.push(self.Wo);
 }
 
-void MultiHeadAttention::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+void MultiHeadAttention::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
 void MultiHeadAttention::free() {
     attn_drop_(self.Wq); attn_drop_(self.Wk); attn_drop_(self.Wv); attn_drop_(self.Wo);

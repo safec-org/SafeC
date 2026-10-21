@@ -16,8 +16,8 @@ namespace std {
 // initialization should overwrite '.data' themselves, e.g. by loading
 // trained weights). Values stay in a small range to keep gate pre-
 // activations well-behaved.
-static &Tensor __rnn_init_weight(unsigned long rows, unsigned long cols, unsigned long seed) {
-    &Tensor t = Tensor::new_2d(rows, cols, 0);
+static &FloatTensor __rnn_init_weight(unsigned long rows, unsigned long cols, unsigned long seed) {
+    &FloatTensor t = FloatTensor::new_2d(rows, cols, 0);
     unsafe {
         unsigned long i = 0UL;
         while (i < t->size) {
@@ -31,22 +31,22 @@ static &Tensor __rnn_init_weight(unsigned long rows, unsigned long cols, unsigne
     return t;
 }
 
-static &Tensor __rnn_zeros(unsigned long rows, unsigned long cols) {
-    return Tensor::new_2d(rows, cols, 0);
+static &FloatTensor __rnn_zeros(unsigned long rows, unsigned long cols) {
+    return FloatTensor::new_2d(rows, cols, 0);
 }
 
-static &Tensor __row_add4(&Tensor a, &Tensor b,
-                                  &Tensor c, &Tensor d) {
-    &Tensor ab = tensor_add(a, b);
-    &Tensor cd = tensor_add(c, d);
-    &Tensor out = tensor_add(ab, cd);
+static &FloatTensor __row_add4(&FloatTensor a, &FloatTensor b,
+                                  &FloatTensor c, &FloatTensor d) {
+    &FloatTensor ab = tensor_add(a, b);
+    &FloatTensor cd = tensor_add(c, d);
+    &FloatTensor out = tensor_add(ab, cd);
     ab->free(); cd->free();
     unsafe { free((void*)ab); free((void*)cd); }
     return out;
 }
 
-static &Tensor __one_minus(&Tensor z) {
-    &Tensor out = z.zeros_like();
+static &FloatTensor __one_minus(&FloatTensor z) {
+    &FloatTensor out = z.zeros_like();
     unsafe {
         unsigned long i = 0UL;
         while (i < out->size) { out->data[i] = (float)1.0 - z->data[i]; i = i + 1UL; }
@@ -65,12 +65,12 @@ struct RNNCell RNNCell::new(unsigned long inputSize, unsigned long hiddenSize) {
     return c;
 }
 
-&Tensor RNNCell::forward(const &Tensor x_t, const &Tensor h_prev) const {
+&FloatTensor RNNCell::forward(const &FloatTensor x_t, const &FloatTensor h_prev) const {
     unsafe {
-        &Tensor xi = tensor_matmul(x_t, self->W_ih);
-        &Tensor hh = tensor_matmul(h_prev, self->W_hh);
-        &Tensor sum = __row_add4(xi, hh, self->b_ih, self->b_hh);
-        &Tensor h_t = sum.tanh_fwd();
+        &FloatTensor xi = tensor_matmul(x_t, self->W_ih);
+        &FloatTensor hh = tensor_matmul(h_prev, self->W_hh);
+        &FloatTensor sum = __row_add4(xi, hh, self->b_ih, self->b_hh);
+        &FloatTensor h_t = sum.tanh_fwd();
         xi->free(); hh->free(); sum->free();
         free((void*)xi); free((void*)hh); free((void*)sum);
         return h_t;
@@ -98,30 +98,30 @@ struct GRUCell GRUCell::new(unsigned long inputSize, unsigned long hiddenSize) {
     return c;
 }
 
-&Tensor GRUCell::forward(const &Tensor x_t, const &Tensor h_prev) const {
+&FloatTensor GRUCell::forward(const &FloatTensor x_t, const &FloatTensor h_prev) const {
     unsafe {
-        &Tensor r_sum = __row_add4(tensor_matmul(x_t, self->W_ir), tensor_matmul(h_prev, self->W_hr),
+        &FloatTensor r_sum = __row_add4(tensor_matmul(x_t, self->W_ir), tensor_matmul(h_prev, self->W_hr),
                                            self->b_ir, self->b_hr);
-        &Tensor r_t = r_sum.sigmoid_fwd();
+        &FloatTensor r_t = r_sum.sigmoid_fwd();
 
-        &Tensor z_sum = __row_add4(tensor_matmul(x_t, self->W_iz), tensor_matmul(h_prev, self->W_hz),
+        &FloatTensor z_sum = __row_add4(tensor_matmul(x_t, self->W_iz), tensor_matmul(h_prev, self->W_hz),
                                            self->b_iz, self->b_hz);
-        &Tensor z_t = z_sum.sigmoid_fwd();
+        &FloatTensor z_t = z_sum.sigmoid_fwd();
 
-        &Tensor hn = tensor_matmul(h_prev, self->W_hn);
-        &Tensor hn_b = tensor_add(hn, self->b_hn);
-        &Tensor r_hn = tensor_mul(r_t, hn_b);
-        &Tensor in_ = tensor_matmul(x_t, self->W_in);
-        &Tensor in_b = tensor_add(in_, self->b_in);
-        &Tensor n_sum = tensor_add(in_b, r_hn);
-        &Tensor n_t = n_sum.tanh_fwd();
+        &FloatTensor hn = tensor_matmul(h_prev, self->W_hn);
+        &FloatTensor hn_b = tensor_add(hn, self->b_hn);
+        &FloatTensor r_hn = tensor_mul(r_t, hn_b);
+        &FloatTensor in_ = tensor_matmul(x_t, self->W_in);
+        &FloatTensor in_b = tensor_add(in_, self->b_in);
+        &FloatTensor n_sum = tensor_add(in_b, r_hn);
+        &FloatTensor n_t = n_sum.tanh_fwd();
 
-        &Tensor one_minus_z = __one_minus(z_t);
-        &Tensor term1 = tensor_mul(one_minus_z, n_t);
-        &Tensor term2 = tensor_mul(z_t, h_prev);
-        &Tensor h_t = tensor_add(term1, term2);
+        &FloatTensor one_minus_z = __one_minus(z_t);
+        &FloatTensor term1 = tensor_mul(one_minus_z, n_t);
+        &FloatTensor term2 = tensor_mul(z_t, h_prev);
+        &FloatTensor h_t = tensor_add(term1, term2);
 
-        &Tensor garbage[13];
+        &FloatTensor garbage[13];
         garbage[0]=r_sum; garbage[1]=r_t; garbage[2]=z_sum; garbage[3]=z_t;
         garbage[4]=hn; garbage[5]=hn_b; garbage[6]=r_hn; garbage[7]=in_;
         garbage[8]=in_b; garbage[9]=n_sum; garbage[10]=n_t;
@@ -135,7 +135,7 @@ struct GRUCell GRUCell::new(unsigned long inputSize, unsigned long hiddenSize) {
 
 void GRUCell::free() {
     unsafe {
-        &Tensor all[12];
+        &FloatTensor all[12];
         all[0]=self->W_ir; all[1]=self->W_hr; all[2]=self->b_ir; all[3]=self->b_hr;
         all[4]=self->W_iz; all[5]=self->W_hz; all[6]=self->b_iz; all[7]=self->b_hz;
         all[8]=self->W_in; all[9]=self->W_hn; all[10]=self->b_in; all[11]=self->b_hn;
@@ -159,28 +159,28 @@ struct LSTMCell LSTMCell::new(unsigned long inputSize, unsigned long hiddenSize)
     return c;
 }
 
-&Tensor LSTMCell::forward(const &Tensor x_t, const &Tensor h_prev, const &Tensor c_prev, &&Tensor c_out) const {
+&FloatTensor LSTMCell::forward(const &FloatTensor x_t, const &FloatTensor h_prev, const &FloatTensor c_prev, &&FloatTensor c_out) const {
     unsafe {
-        &Tensor i_sum = __row_add4(tensor_matmul(x_t, self->W_ii), tensor_matmul(h_prev, self->W_hi),
+        &FloatTensor i_sum = __row_add4(tensor_matmul(x_t, self->W_ii), tensor_matmul(h_prev, self->W_hi),
                                            self->b_ii, self->b_hi);
-        &Tensor i_t = i_sum.sigmoid_fwd();
-        &Tensor f_sum = __row_add4(tensor_matmul(x_t, self->W_if), tensor_matmul(h_prev, self->W_hf),
+        &FloatTensor i_t = i_sum.sigmoid_fwd();
+        &FloatTensor f_sum = __row_add4(tensor_matmul(x_t, self->W_if), tensor_matmul(h_prev, self->W_hf),
                                            self->b_if, self->b_hf);
-        &Tensor f_t = f_sum.sigmoid_fwd();
-        &Tensor g_sum = __row_add4(tensor_matmul(x_t, self->W_ig), tensor_matmul(h_prev, self->W_hg),
+        &FloatTensor f_t = f_sum.sigmoid_fwd();
+        &FloatTensor g_sum = __row_add4(tensor_matmul(x_t, self->W_ig), tensor_matmul(h_prev, self->W_hg),
                                            self->b_ig, self->b_hg);
-        &Tensor g_t = g_sum.tanh_fwd();
-        &Tensor o_sum = __row_add4(tensor_matmul(x_t, self->W_io), tensor_matmul(h_prev, self->W_ho),
+        &FloatTensor g_t = g_sum.tanh_fwd();
+        &FloatTensor o_sum = __row_add4(tensor_matmul(x_t, self->W_io), tensor_matmul(h_prev, self->W_ho),
                                            self->b_io, self->b_ho);
-        &Tensor o_t = o_sum.sigmoid_fwd();
+        &FloatTensor o_t = o_sum.sigmoid_fwd();
 
-        &Tensor fc = tensor_mul(f_t, c_prev);
-        &Tensor ig = tensor_mul(i_t, g_t);
-        &Tensor c_t = tensor_add(fc, ig);
-        &Tensor tanh_c = c_t.tanh_fwd();
-        &Tensor h_t = tensor_mul(o_t, tanh_c);
+        &FloatTensor fc = tensor_mul(f_t, c_prev);
+        &FloatTensor ig = tensor_mul(i_t, g_t);
+        &FloatTensor c_t = tensor_add(fc, ig);
+        &FloatTensor tanh_c = c_t.tanh_fwd();
+        &FloatTensor h_t = tensor_mul(o_t, tanh_c);
 
-        &Tensor garbage[9];
+        &FloatTensor garbage[9];
         garbage[0]=i_sum; garbage[1]=i_t; garbage[2]=f_sum; garbage[3]=f_t;
         garbage[4]=g_sum; garbage[5]=g_t; garbage[6]=o_sum; garbage[7]=o_t;
         garbage[8]=tanh_c;
@@ -196,7 +196,7 @@ struct LSTMCell LSTMCell::new(unsigned long inputSize, unsigned long hiddenSize)
 
 void LSTMCell::free() {
     unsafe {
-        &Tensor all[16];
+        &FloatTensor all[16];
         all[0]=self->W_ii; all[1]=self->W_hi; all[2]=self->b_ii; all[3]=self->b_hi;
         all[4]=self->W_if; all[5]=self->W_hf; all[6]=self->b_if; all[7]=self->b_hf;
         all[8]=self->W_ig; all[9]=self->W_hg; all[10]=self->b_ig; all[11]=self->b_hg;
@@ -221,30 +221,30 @@ struct XLSTMCell XLSTMCell::new(unsigned long inputSize, unsigned long hiddenSiz
     return c;
 }
 
-struct XLSTMState XLSTMCell::forward(const &Tensor x_t, const &XLSTMState prev) const {
+struct XLSTMState XLSTMCell::forward(const &FloatTensor x_t, const &XLSTMState prev) const {
     unsafe {
-        &Tensor z_sum = __row_add4(tensor_matmul(x_t, self->Wz), tensor_matmul(prev->h, self->Rz),
+        &FloatTensor z_sum = __row_add4(tensor_matmul(x_t, self->Wz), tensor_matmul(prev->h, self->Rz),
                                            self->bz, self->bz.zeros_like());
-        &Tensor z_t = z_sum.tanh_fwd();
+        &FloatTensor z_t = z_sum.tanh_fwd();
 
-        &Tensor zerob = self->bi.zeros_like();
-        &Tensor i_raw = __row_add4(tensor_matmul(x_t, self->Wi), tensor_matmul(prev->h, self->Ri),
+        &FloatTensor zerob = self->bi.zeros_like();
+        &FloatTensor i_raw = __row_add4(tensor_matmul(x_t, self->Wi), tensor_matmul(prev->h, self->Ri),
                                            self->bi, zerob);
-        &Tensor zerob2 = self->bf.zeros_like();
-        &Tensor f_raw = __row_add4(tensor_matmul(x_t, self->Wf), tensor_matmul(prev->h, self->Rf),
+        &FloatTensor zerob2 = self->bf.zeros_like();
+        &FloatTensor f_raw = __row_add4(tensor_matmul(x_t, self->Wf), tensor_matmul(prev->h, self->Rf),
                                            self->bf, zerob2);
-        &Tensor zerob3 = self->bo.zeros_like();
-        &Tensor o_sum = __row_add4(tensor_matmul(x_t, self->Wo), tensor_matmul(prev->h, self->Ro),
+        &FloatTensor zerob3 = self->bo.zeros_like();
+        &FloatTensor o_sum = __row_add4(tensor_matmul(x_t, self->Wo), tensor_matmul(prev->h, self->Ro),
                                            self->bo, zerob3);
-        &Tensor o_t = o_sum.sigmoid_fwd();
+        &FloatTensor o_t = o_sum.sigmoid_fwd();
 
         // Stabilizer: m_t = max(f_raw + m_prev, i_raw), elementwise
         // (broadcasting prev->m's single scalar across the hidden dim).
         unsigned long hiddenSize;
         hiddenSize = i_raw->shape[1];
-        &Tensor m_t = Tensor::new_2d(1UL, hiddenSize, 0);
-        &Tensor i_t = Tensor::new_2d(1UL, hiddenSize, 0);
-        &Tensor f_t = Tensor::new_2d(1UL, hiddenSize, 0);
+        &FloatTensor m_t = FloatTensor::new_2d(1UL, hiddenSize, 0);
+        &FloatTensor i_t = FloatTensor::new_2d(1UL, hiddenSize, 0);
+        &FloatTensor f_t = FloatTensor::new_2d(1UL, hiddenSize, 0);
         float mPrevScalar = prev->m->data[0];
         unsigned long k = 0UL;
         while (k < hiddenSize) {
@@ -258,33 +258,33 @@ struct XLSTMState XLSTMCell::forward(const &Tensor x_t, const &XLSTMState prev) 
             k = k + 1UL;
         }
 
-        &Tensor fc = tensor_mul(f_t, prev->c);
-        &Tensor iz = tensor_mul(i_t, z_t);
-        &Tensor c_t = tensor_add(fc, iz);
+        &FloatTensor fc = tensor_mul(f_t, prev->c);
+        &FloatTensor iz = tensor_mul(i_t, z_t);
+        &FloatTensor c_t = tensor_add(fc, iz);
 
-        &Tensor fnT = tensor_mul(f_t, prev->n);
-        &Tensor n_t = tensor_add(fnT, i_t);
+        &FloatTensor fnT = tensor_mul(f_t, prev->n);
+        &FloatTensor n_t = tensor_add(fnT, i_t);
 
         // h_t = o_t * (c_t / n_t), elementwise divide
-        &Tensor ratio = Tensor::new_2d(1UL, hiddenSize, 0);
+        &FloatTensor ratio = FloatTensor::new_2d(1UL, hiddenSize, 0);
         k = 0UL;
         while (k < hiddenSize) {
             float denom = n_t->data[k];
             ratio->data[k] = (denom != (float)0.0) ? (c_t->data[k] / denom) : (float)0.0;
             k = k + 1UL;
         }
-        &Tensor h_t = tensor_mul(o_t, ratio);
+        &FloatTensor h_t = tensor_mul(o_t, ratio);
 
         // m_t is stored as a [1,1] scalar (the *maximum* over the hidden
         // dim, matching the paper's scalar-per-timestep stabilizer) —
         // reduce the elementwise m_t computed above.
-        &Tensor m_scalar = Tensor::new_2d(1UL, 1UL, 0);
+        &FloatTensor m_scalar = FloatTensor::new_2d(1UL, 1UL, 0);
         float mMax = m_t->data[0];
         k = 1UL;
         while (k < hiddenSize) { if (m_t->data[k] > mMax) mMax = m_t->data[k]; k = k + 1UL; }
         m_scalar->data[0] = mMax;
 
-        &Tensor garbage[15];
+        &FloatTensor garbage[15];
         garbage[0]=z_sum; garbage[1]=zerob; garbage[2]=i_raw; garbage[3]=zerob2;
         garbage[4]=f_raw; garbage[5]=zerob3; garbage[6]=o_sum; garbage[7]=m_t;
         garbage[8]=i_t; garbage[9]=f_t; garbage[10]=fc; garbage[11]=iz;
@@ -303,7 +303,7 @@ struct XLSTMState XLSTMCell::forward(const &Tensor x_t, const &XLSTMState prev) 
 
 void XLSTMCell::free() {
     unsafe {
-        &Tensor all[12];
+        &FloatTensor all[12];
         all[0]=self->Wz; all[1]=self->Rz; all[2]=self->bz;
         all[3]=self->Wi; all[4]=self->Ri; all[5]=self->bi;
         all[6]=self->Wf; all[7]=self->Rf; all[8]=self->bf;
@@ -320,16 +320,16 @@ void XLSTMState::free() {
     }
 }
 
-void RNNCell::collect_params(&Vec<&Tensor> out) const {
+void RNNCell::collect_params(&Vec<&FloatTensor> out) const {
     out.push(self.W_ih);
     out.push(self.W_hh);
     out.push(self.b_ih);
     out.push(self.b_hh);
 }
 
-void RNNCell::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+void RNNCell::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
-void GRUCell::collect_params(&Vec<&Tensor> out) const {
+void GRUCell::collect_params(&Vec<&FloatTensor> out) const {
     out.push(self.W_ir);
     out.push(self.W_hr);
     out.push(self.b_ir);
@@ -344,9 +344,9 @@ void GRUCell::collect_params(&Vec<&Tensor> out) const {
     out.push(self.b_hn);
 }
 
-void GRUCell::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+void GRUCell::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
-void LSTMCell::collect_params(&Vec<&Tensor> out) const {
+void LSTMCell::collect_params(&Vec<&FloatTensor> out) const {
     out.push(self.W_ii);
     out.push(self.W_hi);
     out.push(self.b_ii);
@@ -365,9 +365,9 @@ void LSTMCell::collect_params(&Vec<&Tensor> out) const {
     out.push(self.b_ho);
 }
 
-void LSTMCell::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+void LSTMCell::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
-void XLSTMCell::collect_params(&Vec<&Tensor> out) const {
+void XLSTMCell::collect_params(&Vec<&FloatTensor> out) const {
     out.push(self.Wz);
     out.push(self.Rz);
     out.push(self.bz);
@@ -382,6 +382,6 @@ void XLSTMCell::collect_params(&Vec<&Tensor> out) const {
     out.push(self.bo);
 }
 
-void XLSTMCell::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+void XLSTMCell::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
 } // namespace std

@@ -118,9 +118,9 @@ static float* __blas_scratch_get_(unsigned long n) {
 
 static void __matmul_backward_blas(void* selfPtr) {
     unsafe {
-        struct Tensor* selfT = (struct Tensor*)selfPtr;
-        &Tensor a = __tensor_parent(selfT, 0UL);
-        &Tensor b = __tensor_parent(selfT, 1UL);
+        FloatTensor* selfT = (FloatTensor*)selfPtr;
+        &FloatTensor a = __tensor_parent(selfT, 0UL);
+        &FloatTensor b = __tensor_parent(selfT, 1UL);
         unsigned long m = a->shape[0];
         unsigned long k = a->shape[1];
         unsigned long n = b->shape[1];
@@ -145,7 +145,7 @@ static void __matmul_backward_blas(void* selfPtr) {
 }
 
 // ── Forward ──────────────────────────────────────────────────────────────────
-&Tensor tensor_matmul_blas(const &Tensor a, const &Tensor b) {
+&FloatTensor tensor_matmul_blas(const &FloatTensor a, const &FloatTensor b) {
     unsigned long m; unsigned long k; unsigned long n;
     unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
     // __tensor_alloc (not Tensor::new_2d) deliberately: Tensor::new_2d's
@@ -156,7 +156,7 @@ static void __matmul_backward_blas(void* selfPtr) {
     // measured cost, not a theoretical one: one O(m*n) pass per matmul
     // call, on every forward call this function ever makes.
     unsigned long outShape[2];
-    &Tensor out;
+    &FloatTensor out;
     unsafe {
         outShape[0] = m; outShape[1] = n;
         out = __tensor_alloc((const unsigned long*)&outShape[0], 2UL, 0);

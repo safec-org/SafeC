@@ -12,18 +12,18 @@
 
 namespace std {
 
-&Tensor tensor_add_cuda(const &Tensor a, const &Tensor b);
-&Tensor tensor_sub_cuda(const &Tensor a, const &Tensor b);
-&Tensor tensor_mul_cuda(const &Tensor a, const &Tensor b);
-&Tensor Tensor::scale_cuda(float k) const;
-&Tensor Tensor::relu_cuda() const;
-&Tensor Tensor::sum_cuda() const;
-&Tensor tensor_matmul_cuda(const &Tensor a, const &Tensor b);
+&FloatTensor tensor_add_cuda(const &FloatTensor a, const &FloatTensor b);
+&FloatTensor tensor_sub_cuda(const &FloatTensor a, const &FloatTensor b);
+&FloatTensor tensor_mul_cuda(const &FloatTensor a, const &FloatTensor b);
+&FloatTensor FloatTensor::scale_cuda(float k) const;
+&FloatTensor FloatTensor::relu_cuda() const;
+&FloatTensor FloatTensor::sum_cuda() const;
+&FloatTensor tensor_matmul_cuda(const &FloatTensor a, const &FloatTensor b);
 
 // Same op, dispatched to cuBLAS (gpu_cuda.h's cuda_matmul_f32_blas)
 // instead of the hand-written PTX kernel tensor_matmul_cuda uses — the
 // CUDA-vendor equivalent of tensor_blas.h's Accelerate-backed
 // tensor_matmul_blas.
-&Tensor tensor_matmul_cuda_blas(const &Tensor a, const &Tensor b);
+&FloatTensor tensor_matmul_cuda_blas(const &FloatTensor a, const &FloatTensor b);
 
 } // namespace std

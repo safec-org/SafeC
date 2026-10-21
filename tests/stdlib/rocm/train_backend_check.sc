@@ -33,12 +33,12 @@ static void result(const char* name, double v, double tol) {
     unsafe { printf("RESULT %s %.7g %g\n", name, v, tol); }
 }
 
-static void tensor_drop(&Tensor t) {
+static void tensor_drop(&FloatTensor t) {
     t->free();
     unsafe { free((void*)t); }
 }
 
-static &Tensor clf_logits_(&Mlp m, const &Tensor x) { return m.forward(x); }
+static &FloatTensor clf_logits_(&Mlp m, const &FloatTensor x) { return m.forward(x); }
 
 // Any Trainable: fit, report, check the loss fell.
 generic<M: Trainable>
@@ -159,7 +159,7 @@ static void gan_case_(const &TrainerOptions to) {
     unsafe { printf("  %-12s d %.4f g %.4f, one more step d %.4f g %.4f\n", "gan", (double)l.d, (double)l.g,
                     (double)s.d, (double)s.g); }
     check(l.d == l.d && l.g == l.g && l.d != (float)0.0 && s.d == s.d && s.g == s.g, "gan");
-    &Tensor sample = g.host.sample(8UL, null);
+    &FloatTensor sample = g.host.sample(8UL, null);
     unsigned long rows = 0UL;
     unsafe { rows = sample->shape[0]; }
     check(rows == 8UL, "gan host generates");
@@ -172,8 +172,8 @@ static void gan_case_(const &TrainerOptions to) {
 // ── RL through the agent traits ──────────────────────────────────────────────
 generic<A: ValueAgent>
 unsigned long value_run_(&A a, &Rng env, unsigned long steps) {
-    &Tensor o = Tensor::new_1d(4UL, 0);
-    &Tensor n = Tensor::new_1d(4UL, 0);
+    &FloatTensor o = FloatTensor::new_1d(4UL, 0);
+    &FloatTensor n = FloatTensor::new_1d(4UL, 0);
     unsigned long sum = 0UL;
     unsigned long i = 0UL;
     while (i < steps) {
@@ -193,8 +193,8 @@ unsigned long value_run_(&A a, &Rng env, unsigned long steps) {
 
 generic<P: PolicyLearner>
 float policy_run_(&P p, &Rng env, unsigned long rollout, int updates) {
-    &Tensor o = Tensor::new_1d(4UL, 0);
-    &Tensor n = Tensor::new_1d(4UL, 0);
+    &FloatTensor o = FloatTensor::new_1d(4UL, 0);
+    &FloatTensor n = FloatTensor::new_1d(4UL, 0);
     float l = (float)0.0;
     int u = 0;
     while (u < updates) {

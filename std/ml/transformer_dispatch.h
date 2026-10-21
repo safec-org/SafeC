@@ -24,12 +24,12 @@
 
 namespace std {
 
-&Tensor jit_block_forward_on(const &JiTBlock block, const &Tensor x, enum Device device);
+&FloatTensor jit_block_forward_on(const &JiTBlock block, const &FloatTensor x, enum Device device);
 
 // JiT::forward on a device (functions, not methods: transformer.h's
 // structs don't depend on this file) — see tensor_dispatch.h's own header
 // comment for why enum Device's enumerators (DEVICE_CPU etc.) must be
 // referenced unqualified rather than as std::DEVICE_CPU.
-&Tensor jit_forward_on(const &JiT model, const &Tensor patches, const &Tensor cond, enum Device device);
+&FloatTensor jit_forward_on(const &JiT model, const &FloatTensor patches, const &FloatTensor cond, enum Device device);
 
 } // namespace std

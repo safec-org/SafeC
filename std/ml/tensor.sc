@@ -108,7 +108,7 @@ void TensorArena::reset() {
         void** list = (void**)self.tracked;
         unsigned long i = 0UL;
         while (i < self.trackedCount) {
-            struct Tensor* t = (struct Tensor*)list[i];
+            FloatTensor* t = (FloatTensor*)list[i];
             t->parents.free();
             i = i + 1UL;
         }
@@ -151,76 +151,7 @@ unsigned long TensorArena::used() const {
 
 // ══ Tensor methods ═══════════════════════════════════════════════════════════
 
-inline float Tensor::at1(unsigned long i) const {
-    unsafe { return self.data[i]; }
-}
-
-inline float Tensor::at2(unsigned long r, unsigned long c) const {
-    unsafe { return self.data[r * self.shape[1] + c]; }
-}
-
-inline void Tensor::set1(unsigned long i, float v) {
-    unsafe { self.data[i] = v; }
-}
-
-inline void Tensor::set2(unsigned long r, unsigned long c, float v) {
-    unsafe { self.data[r * self.shape[1] + c] = v; }
-}
-
-inline void Tensor::free() {
-    match (self.owner) { case some(o): { return; } case null: { } }   // its TensorArena owns it
-    unsafe {
-        if (self.data != (float*)0) { std::free((void*)self.data); self.data = (float*)0; }
-        if (self.shape != (unsigned long*)0) { std::free((void*)self.shape); self.shape = (unsigned long*)0; }
-        if (self.grad != (float*)0) { std::free((void*)self.grad); self.grad = (float*)0; }
-        self.parents.free();
-    }
-}
-
 // ══ Allocation & lifecycle ═══════════════════════════════════════════════════
-
-&Tensor Tensor::new_1d(unsigned long n, int requiresGrad) {
-    unsigned long shape[1];
-    unsafe { shape[0] = n; }
-    &Tensor t = __tensor_alloc(shape, 1UL, requiresGrad);
-    t.fill((float)0.0);
-    return t;
-}
-
-&Tensor Tensor::new_2d(unsigned long rows, unsigned long cols, int requiresGrad) {
-    unsigned long shape[2];
-    unsafe { shape[0] = rows; shape[1] = cols; }
-    &Tensor t = __tensor_alloc(shape, 2UL, requiresGrad);
-    t.fill((float)0.0);
-    return t;
-}
-
-&Tensor Tensor::from_1d(const &float values, unsigned long n, int requiresGrad) {
-    unsigned long shape[1];
-    unsafe { shape[0] = n; }
-    &Tensor t = __tensor_alloc(shape, 1UL, requiresGrad);
-    unsafe { __tensor_ew(EW_COPY, (const float*)values, (const float*)0, (float)0.0, (float*)t->data, n); }
-    return t;
-}
-
-&Tensor Tensor::from_2d(const &float values, unsigned long rows, unsigned long cols, int requiresGrad) {
-    unsigned long shape[2];
-    unsafe { shape[0] = rows; shape[1] = cols; }
-    &Tensor t = __tensor_alloc(shape, 2UL, requiresGrad);
-    unsafe { __tensor_ew(EW_COPY, (const float*)values, (const float*)0, (float)0.0, (float*)t->data, rows * cols); }
-    return t;
-}
-
-&Tensor Tensor::zeros_like() const {
-    &Tensor out;
-    unsafe { out = __tensor_alloc((const unsigned long*)self->shape, self->ndim, 0); }
-    out.fill((float)0.0);
-    return out;
-}
-
-void Tensor::fill(float v) {
-    unsafe { __tensor_ew(EW_FILL, (const float*)0, (const float*)0, v, (float*)self->data, self->size); }
-}
 
 // ══ Elementwise & reduction ops ══════════════════════════════════════════════
 // Backward math for each of these lives in tensor.h, right next to the
@@ -228,8 +159,8 @@ void Tensor::fill(float v) {
 // __add_backward etc. there.
 
 // ── Add ──────────────────────────────────────────────────────────────────────
-&Tensor tensor_add(const &Tensor a, const &Tensor b) {
-    &Tensor out = __tensor_alloc_uninit_like(a);
+&FloatTensor tensor_add_f32_(const &FloatTensor a, const &FloatTensor b) {
+    &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         __tensor_ew(EW_ADD, (const float*)a->data, (const float*)b->data, (float)0.0, (float*)out->data, out->size);
     }
@@ -238,8 +169,8 @@ void Tensor::fill(float v) {
 }
 
 // ── Sub ──────────────────────────────────────────────────────────────────────
-&Tensor tensor_sub(const &Tensor a, const &Tensor b) {
-    &Tensor out = __tensor_alloc_uninit_like(a);
+&FloatTensor tensor_sub_f32_(const &FloatTensor a, const &FloatTensor b) {
+    &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         __tensor_ew(EW_SUB, (const float*)a->data, (const float*)b->data, (float)0.0, (float*)out->data, out->size);
     }
@@ -248,8 +179,8 @@ void Tensor::fill(float v) {
 }
 
 // ── Mul (elementwise) ──────────────────────────────────────────────────────────
-&Tensor tensor_mul(const &Tensor a, const &Tensor b) {
-    &Tensor out = __tensor_alloc_uninit_like(a);
+&FloatTensor tensor_mul_f32_(const &FloatTensor a, const &FloatTensor b) {
+    &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         __tensor_ew(EW_MUL, (const float*)a->data, (const float*)b->data, (float)0.0, (float*)out->data, out->size);
     }
@@ -258,13 +189,13 @@ void Tensor::fill(float v) {
 }
 
 // ── Scale (multiply by a scalar constant) ─────────────────────────────────────
-&Tensor Tensor::scale(float k) const {
-    &Tensor out = __tensor_alloc_uninit_like(self);
+&FloatTensor tensor_scale_f32_(const &FloatTensor a, float k) {
+    &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
-        __tensor_ew(EW_SCALE, (const float*)self->data, (const float*)0, k, (float*)out->data, out->size);
+        __tensor_ew(EW_SCALE, (const float*)a->data, (const float*)0, k, (float*)out->data, out->size);
     }
     unsafe { out->extraScalar = k; }
-    __tensor_link1(out, self, (void*)__scale_backward);
+    __tensor_link1(out, a, (void*)__scale_backward);
     return out;
 }
 
@@ -275,15 +206,15 @@ void Tensor::fill(float v) {
 // needed (and link tensor_nn.sc at build time).
 
 // ── Sum (full reduction to a 1-element tensor) ────────────────────────────────
-&Tensor Tensor::sum() const {
+&FloatTensor tensor_sum_f32_(const &FloatTensor a) {
     unsigned long one[1];
     unsafe { one[0] = 1UL; }
-    &Tensor out = __tensor_alloc(one, 1UL, 0);
+    &FloatTensor out = __tensor_alloc(one, 1UL, 0);
     unsafe {
         // Eight running sums (one f32x8), so the loop runs at vector width
         // and loses less precision than one long serial sum.
-        const float* p = (const float*)self->data;
-        unsigned long n = self->size;
+        const float* p = (const float*)a->data;
+        unsigned long n = a->size;
         f32x8 acc8;
         unsigned long i = 0UL;
         while (i + 8UL <= n) { acc8 = acc8 + *(const f32x8*)&p[i]; i = i + 8UL; }
@@ -291,18 +222,18 @@ void Tensor::fill(float v) {
         while (i < n) { acc = acc + p[i]; i = i + 1UL; }
         out->data[0] = acc;
     }
-    __tensor_link1(out, self, (void*)__sum_backward);
+    __tensor_link1(out, a, (void*)__sum_backward);
     return out;
 }
 
 // ══ Matrix multiply ══════════════════════════════════════════════════════════
 
-&Tensor tensor_matmul(const &Tensor a, const &Tensor b) {
+&FloatTensor tensor_matmul_f32_(const &FloatTensor a, const &FloatTensor b) {
     unsigned long m; unsigned long k; unsigned long n;
     unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
     unsigned long shape[2];
     unsafe { shape[0] = m; shape[1] = n; }
-    &Tensor out = __tensor_alloc(shape, 2UL, 0);   // sgemm's beta = 0 writes every element
+    &FloatTensor out = __tensor_alloc(shape, 2UL, 0);   // sgemm's beta = 0 writes every element
     // Packed SIMD GEMM (std/simd/gemm.h); large products run on the
     // std/sync/parallel.h thread pool.
     unsafe {
@@ -314,60 +245,6 @@ void Tensor::fill(float v) {
 }
 
 // ══ Graph traversal & Tensor::backward() ══════════════════════════════════════
-
-static void __tensor_toposort(&Tensor t, &Vec<&Tensor> order) {
-    unsafe { if (t->visited) return; }
-    unsafe { t->visited = 1; }
-    unsigned long n;
-    unsafe { n = t->parents.length(); }
-    unsigned long i = 0UL;
-    while (i < n) {
-        __tensor_toposort(__tensor_parent(t, i), order);
-        i = i + 1UL;
-    }
-    order.push(t);
-}
-
-void Tensor::backward() {
-    __tensor_ensure_grad(self);
-    unsafe {
-        unsigned long i = 0UL;
-        while (i < self->size) { self->grad[i] = (float)1.0; i = i + 1UL; }
-    }
-
-    struct Vec<&Tensor> order = vec_new();
-    __tensor_toposort(self, &order);
-
-    unsafe {
-        unsigned long n = order.length();
-        long long idx = (long long)n - 1LL;
-        while (idx >= 0LL) {
-            &Tensor node = *order.at((unsigned long)idx);
-            if (node->gradFn != (void*)0) {
-                TensorBackwardFn backwardFn = (TensorBackwardFn)node->gradFn;
-                backwardFn((void*)node);
-            }
-            idx = idx - 1LL;
-        }
-
-        unsigned long j = 0UL;
-        while (j < n) {
-            &Tensor node2 = *order.at(j);
-            node2->visited = 0;
-            j = j + 1UL;
-        }
-        order.free();
-    }
-}
-
-void Tensor::zero_grad() {
-    unsafe {
-        if (self->grad != (float*)0) {
-            unsigned long i = 0UL;
-            while (i < self->size) { self->grad[i] = (float)0.0; i = i + 1UL; }
-        }
-    }
-}
 
 // ── Gradient mode (no_grad) ──────────────────────────────────────────────────
 // Backing storage stays a private 'static' in this one TU -- every other

@@ -8,6 +8,8 @@
 #include <vector>
 #include <string>
 #include <functional>
+#include <set>
+#include <optional>
 
 namespace safec {
 
@@ -264,6 +266,12 @@ private:
     // instantiateGenericStruct clones+finishes each one the first time
     // that template is actually instantiated.
     std::unordered_map<std::string, std::vector<FunctionDecl *>> genericStructMethodTemplates_;
+    // Each generic struct's instances with their substitutions, and which
+    // (instance, method template) pairs have been instantiated.
+    std::unordered_map<std::string, std::vector<std::pair<StructDecl *, TypeSubst>>> genericStructInstances_;
+    std::set<std::pair<StructDecl *, FunctionDecl *>> instantiatedStructMethods_;
+    void instantiateStructMethod(FunctionDecl *methodTpl, StructDecl *inst, const TypeSubst &subs);
+    void completeGenericStructInstances();
 
     // Monomorphizes 'name<typeArgs...>' (a generic struct template
     // reference) into a concrete StructType, cloning+substituting its
@@ -300,6 +308,7 @@ private:
                        const TypePtr                       &expectedType = nullptr);
     bool matchType(const TypePtr &paramTy, const TypePtr &argTy, TypeSubst &subs);
     FunctionDecl *instantiateGeneric(FunctionDecl *fnDecl, TypeSubst &subs);
+    std::optional<int64_t> tryConstInt(const Expr &e);
     TypePtr coerceGenericFnValue(Expr &e, TypePtr exprTy, const TypePtr &target);
 
     MonoKey   makeMonoKey(const std::string &name, const TypeSubst &subs,

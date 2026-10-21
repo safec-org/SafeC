@@ -261,12 +261,12 @@ int main() {
     struct Vec<float> cpu = std::vec_with_cap(qn);
     unsigned long i = 0UL;
     while (i < qn) { got.push(0.0f); cpu.push(0.0f); i = i + 1UL; }
-    &Tensor tq = Tensor::from_2d(q.at(0UL), 40UL, 64UL, 0);
-    &Tensor tk = Tensor::from_2d(k.at(0UL), 56UL, 64UL, 0);
-    &Tensor tv = Tensor::from_2d(v.at(0UL), 56UL, 64UL, 0);
+    &FloatTensor tq = FloatTensor::from_2d(q.at(0UL), 40UL, 64UL, 0);
+    &FloatTensor tk = FloatTensor::from_2d(k.at(0UL), 56UL, 64UL, 0);
+    &FloatTensor tv = FloatTensor::from_2d(v.at(0UL), 56UL, 64UL, 0);
     int l = 0;
     while (l < 2) {
-        &Tensor tr = l ? std::linear_attention_forward(tq, tk, tv) : std::flash_attention_forward(tq, tk, tv, 16UL);
+        &FloatTensor tr = l ? std::linear_attention_forward(tq, tk, tv) : std::flash_attention_forward(tq, tk, tv, 16UL);
         i = 0UL;
         while (i < qn) { unsafe { *cpu.at(i) = tr->data[i]; } i = i + 1UL; }
         tr.free();

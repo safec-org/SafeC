@@ -21,8 +21,8 @@ extern void vDSP_vmul(const float* A, long IA, const float* B, long IB,
                        float* C, long IC, unsigned long N);
 extern void vDSP_sve(const float* A, long IA, float* result, unsigned long N);
 
-&Tensor tensor_add_vdsp(const &Tensor a, const &Tensor b) {
-    &Tensor out = __tensor_alloc_uninit_like(a);
+&FloatTensor tensor_add_vdsp(const &FloatTensor a, const &FloatTensor b) {
+    &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         vDSP_vadd((const float*)a->data, 1L, (const float*)b->data, 1L,
                   (float*)out->data, 1L, out->size);
@@ -31,8 +31,8 @@ extern void vDSP_sve(const float* A, long IA, float* result, unsigned long N);
     return out;
 }
 
-&Tensor tensor_sub_vdsp(const &Tensor a, const &Tensor b) {
-    &Tensor out = __tensor_alloc_uninit_like(a);
+&FloatTensor tensor_sub_vdsp(const &FloatTensor a, const &FloatTensor b) {
+    &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         // out = a - b: vDSP_vsub(X, ..., Y, ..., Z, ...) computes Z = Y - X,
         // so X=b, Y=a gives Z=a-b.
@@ -43,8 +43,8 @@ extern void vDSP_sve(const float* A, long IA, float* result, unsigned long N);
     return out;
 }
 
-&Tensor tensor_mul_vdsp(const &Tensor a, const &Tensor b) {
-    &Tensor out = __tensor_alloc_uninit_like(a);
+&FloatTensor tensor_mul_vdsp(const &FloatTensor a, const &FloatTensor b) {
+    &FloatTensor out = __tensor_alloc_uninit_like(a);
     unsafe {
         vDSP_vmul((const float*)a->data, 1L, (const float*)b->data, 1L,
                   (float*)out->data, 1L, out->size);
@@ -53,10 +53,10 @@ extern void vDSP_sve(const float* A, long IA, float* result, unsigned long N);
     return out;
 }
 
-&Tensor Tensor::sum_vdsp() const {
+&FloatTensor FloatTensor::sum_vdsp() const {
     unsigned long one[1];
     unsafe { one[0] = 1UL; }
-    &Tensor out = __tensor_alloc(one, 1UL, 0);
+    &FloatTensor out = __tensor_alloc(one, 1UL, 0);
     unsafe {
         float acc = (float)0.0;
         vDSP_sve((const float*)self->data, 1L, &acc, self->size);
@@ -70,10 +70,10 @@ extern void vDSP_sve(const float* A, long IA, float* result, unsigned long N);
 // Accelerate is Apple-only. Elsewhere the same functions are std's own
 // vectorized, threaded tensor ops (tensor.h), so tensor_auto.h and direct
 // callers work -- and link -- on every hosted platform.
-&Tensor tensor_add_vdsp(const &Tensor a, const &Tensor b) { return tensor_add(a, b); }
-&Tensor tensor_sub_vdsp(const &Tensor a, const &Tensor b) { return tensor_sub(a, b); }
-&Tensor tensor_mul_vdsp(const &Tensor a, const &Tensor b) { return tensor_mul(a, b); }
-&Tensor Tensor::sum_vdsp() const { return self.sum(); }
+&FloatTensor tensor_add_vdsp(const &FloatTensor a, const &FloatTensor b) { return tensor_add(a, b); }
+&FloatTensor tensor_sub_vdsp(const &FloatTensor a, const &FloatTensor b) { return tensor_sub(a, b); }
+&FloatTensor tensor_mul_vdsp(const &FloatTensor a, const &FloatTensor b) { return tensor_mul(a, b); }
+&FloatTensor FloatTensor::sum_vdsp() const { return self.sum(); }
 #endif
 
 } // namespace std

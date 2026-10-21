@@ -33,16 +33,16 @@ namespace std {
 //   h2 = LN(x); h2 = h2*(1+scale2)+shift2
 //   x = x + gate2 * (relu(h2@W1+b1)@W2+b2)
 struct DiTBlock {
-    &Tensor Wq; &Tensor Wk; &Tensor Wv; &Tensor Wo; // [dModel,dModel]
-    &Tensor W1; &Tensor b1; // [dModel,dHidden], [1,dHidden]
-    &Tensor W2; &Tensor b2; // [dHidden,dModel], [1,dModel]
-    &Tensor WadaLN; // [dModelCond, 6*dModel]
+    &FloatTensor Wq; &FloatTensor Wk; &FloatTensor Wv; &FloatTensor Wo; // [dModel,dModel]
+    &FloatTensor W1; &FloatTensor b1; // [dModel,dHidden], [1,dHidden]
+    &FloatTensor W2; &FloatTensor b2; // [dHidden,dModel], [1,dModel]
+    &FloatTensor WadaLN; // [dModelCond, 6*dModel]
     unsigned long numHeads;
 
-    &Tensor forward(const &Tensor x, const &Tensor c) const;
+    &FloatTensor forward(const &FloatTensor x, const &FloatTensor c) const;
     // Parameterized (module.h): every weight tensor.
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
     static struct DiTBlock new(unsigned long dModel, unsigned long dHidden, unsigned long dModelCond,
@@ -58,15 +58,15 @@ struct DiTBlock {
 //   h = LN(x); x = x + MHA(h@Wq,h@Wk,h@Wv,heads)@Wo
 //   h2 = LN(x); x = x + relu(h2@W1+b1)@W2+b2
 struct JiTBlock {
-    &Tensor Wq; &Tensor Wk; &Tensor Wv; &Tensor Wo;
-    &Tensor W1; &Tensor b1;
-    &Tensor W2; &Tensor b2;
+    &FloatTensor Wq; &FloatTensor Wk; &FloatTensor Wv; &FloatTensor Wo;
+    &FloatTensor W1; &FloatTensor b1;
+    &FloatTensor W2; &FloatTensor b2;
     unsigned long numHeads;
 
-    &Tensor forward(const &Tensor x) const;
+    &FloatTensor forward(const &FloatTensor x) const;
     // Parameterized (module.h): every weight tensor.
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
     static struct JiTBlock new(unsigned long dModel, unsigned long dHidden, unsigned long numHeads);
@@ -76,13 +76,13 @@ struct JiTBlock {
 // patches: [seqLen, patchDim]; cond: [1, dModel], broadcast-added to every
 // token's embedding once, up front.
 struct JiT {
-    &Tensor WPatchEmbed;               // [patchDim, dModel]
+    &FloatTensor WPatchEmbed;               // [patchDim, dModel]
     struct Vec<struct JiTBlock> blocks;
 
-    &Tensor forward(const &Tensor patches, const &Tensor cond) const;   // -> [seqLen, dModel]
+    &FloatTensor forward(const &FloatTensor patches, const &FloatTensor cond) const;   // -> [seqLen, dModel]
     // Parameterized (module.h): the embedding, then each block's weights.
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
 
     static struct JiT new(unsigned long patchDim, unsigned long dModel, unsigned long dHidden, unsigned long numHeads,

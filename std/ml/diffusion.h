@@ -31,21 +31,21 @@ namespace std {
 // model for dpm_solver_2_step, an x0-prediction one for
 // dpm_solver_pp_2_step. Any struct with this method conforms.
 trait DenoiseModel {
-    &Tensor predict(const &Tensor x, float sigma);
+    &FloatTensor predict(const &FloatTensor x, float sigma);
 }
 
 // Internal: the order-2 solvers' midpoint sample and noise level (pp: the
 // x0-prediction form), and the update from the midpoint prediction.
 struct DpmMidpoint {
-    &Tensor x_s;
+    &FloatTensor x_s;
     float sigma_s;
     float h;            // lambda_next - lambda_cur
 };
-struct DpmMidpoint dpm_midpoint_(const &Tensor x_cur, const &Tensor pred, float alpha_cur, float sigma_cur,
+struct DpmMidpoint dpm_midpoint_(const &FloatTensor x_cur, const &FloatTensor pred, float alpha_cur, float sigma_cur,
                                  float alpha_next, float sigma_next, int pp);
-&Tensor dpm_finish_(const &Tensor x_cur, const &Tensor predMid, float sigma_cur, float alpha_next,
+&FloatTensor dpm_finish_(const &FloatTensor x_cur, const &FloatTensor predMid, float sigma_cur, float alpha_next,
                     float sigma_next, float h, int pp);
-void dpm_drop_(&Tensor t);
+void dpm_drop_(&FloatTensor t);
 
 // ── EDM (Karras et al., "Elucidating the Design Space...") schedule ────────
 // sigma(i) = (sigmaMax^(1/rho) + i/(numSteps-1)*(sigmaMin^(1/rho)-sigmaMax^(1/rho)))^rho
@@ -70,13 +70,13 @@ void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd
 // Pass a zero tensor for 'noise' to get the deterministic (posterior-
 // mean-only) step — useful for verification, matching how the rest of
 // std/ml avoids baking in an RNG (see rnn.h's header comment).
-&Tensor ddpm_sampler_step(const &Tensor x_t, const &Tensor epsPred,
-                           float beta_t, float alphaBar_t, const &Tensor noise);
+&FloatTensor ddpm_sampler_step(const &FloatTensor x_t, const &FloatTensor epsPred,
+                           float beta_t, float alphaBar_t, const &FloatTensor noise);
 
 // ── DDIM deterministic sampler step (eta=0) ─────────────────────────────────
 // x0Pred = (x_t - sqrt(1-alphaBar_t)*epsPred) / sqrt(alphaBar_t)
 // x_{t-1} = sqrt(alphaBar_prev)*x0Pred + sqrt(1-alphaBar_prev)*epsPred
-&Tensor ddim_sampler_step(const &Tensor x_t, const &Tensor epsPred,
+&FloatTensor ddim_sampler_step(const &FloatTensor x_t, const &FloatTensor epsPred,
                            float alphaBar_t, float alphaBar_prev);
 
 // ── DPM-Solver (Lu et al. 2022): eps-prediction exponential integrator ─────
@@ -85,7 +85,7 @@ void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd
 // this is NOT the same update as ddim_sampler_step — that equivalence
 // holds for the *data*-prediction form below (dpm_solver_pp_1_step), not
 // this eps-prediction one; see diffusion.sc's header comment.
-&Tensor dpm_solver_1_step(const &Tensor x_cur, const &Tensor epsPred,
+&FloatTensor dpm_solver_1_step(const &FloatTensor x_cur, const &FloatTensor epsPred,
                            float alpha_cur, float sigma_cur,
                            float alpha_next, float sigma_next);
 
@@ -94,11 +94,11 @@ void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd
 // higher-accuracy update: model.predict(x_s, sigma_s) at the midpoint
 // sample / noise level, returning the predicted eps.
 generic<M: DenoiseModel>
-&Tensor dpm_solver_2_step(&M model, const &Tensor x_cur, const &Tensor epsPred,
+&FloatTensor dpm_solver_2_step(&M model, const &FloatTensor x_cur, const &FloatTensor epsPred,
                           float alpha_cur, float sigma_cur, float alpha_next, float sigma_next) {
     struct DpmMidpoint mp = dpm_midpoint_(x_cur, epsPred, alpha_cur, sigma_cur, alpha_next, sigma_next, 0);
-    &Tensor eps_s = model.predict(mp.x_s, mp.sigma_s);
-    &Tensor out = dpm_finish_(x_cur, eps_s, sigma_cur, alpha_next, sigma_next, mp.h, 0);
+    &FloatTensor eps_s = model.predict(mp.x_s, mp.sigma_s);
+    &FloatTensor out = dpm_finish_(x_cur, eps_s, sigma_cur, alpha_next, sigma_next, mp.h, 0);
     dpm_drop_(mp.x_s);
     dpm_drop_(eps_s);
     return out;
@@ -109,18 +109,18 @@ generic<M: DenoiseModel>
 // predicted x0 (the denoised sample) instead of a predicted eps (the
 // noise). Order-1 is provably identical to ddim_sampler_step — see
 // diffusion.sc's header comment for the derivation.
-&Tensor dpm_solver_pp_1_step(const &Tensor x_cur, const &Tensor x0Pred,
+&FloatTensor dpm_solver_pp_1_step(const &FloatTensor x_cur, const &FloatTensor x0Pred,
                               float alpha_cur, float sigma_cur,
                               float alpha_next, float sigma_next);
 
 // Order-2 midpoint variant, x0-prediction form: model.predict(x_s, sigma_s)
 // at the log-SNR midpoint returns a predicted x0 (not eps).
 generic<M: DenoiseModel>
-&Tensor dpm_solver_pp_2_step(&M model, const &Tensor x_cur, const &Tensor x0Pred,
+&FloatTensor dpm_solver_pp_2_step(&M model, const &FloatTensor x_cur, const &FloatTensor x0Pred,
                              float alpha_cur, float sigma_cur, float alpha_next, float sigma_next) {
     struct DpmMidpoint mp = dpm_midpoint_(x_cur, x0Pred, alpha_cur, sigma_cur, alpha_next, sigma_next, 1);
-    &Tensor x0_s = model.predict(mp.x_s, mp.sigma_s);
-    &Tensor out = dpm_finish_(x_cur, x0_s, sigma_cur, alpha_next, sigma_next, mp.h, 1);
+    &FloatTensor x0_s = model.predict(mp.x_s, mp.sigma_s);
+    &FloatTensor out = dpm_finish_(x_cur, x0_s, sigma_cur, alpha_next, sigma_next, mp.h, 1);
     dpm_drop_(mp.x_s);
     dpm_drop_(x0_s);
     return out;

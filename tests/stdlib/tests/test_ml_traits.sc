@@ -16,7 +16,7 @@
 
 extern void free(void* ptr);
 
-static void tensor_drop(&Tensor t) {
+static void tensor_drop(&FloatTensor t) {
     t->free();
     unsafe { free((void*)t); }
 }
@@ -24,13 +24,13 @@ static void tensor_drop(&Tensor t) {
 static float absf_(float x) { return x < (float)0.0 ? -x : x; }
 
 // max |a - b| over two parameter lists of the same shapes
-static float params_diff_(const &Vec<&Tensor> a, const &Vec<&Tensor> b) {
+static float params_diff_(const &Vec<&FloatTensor> a, const &Vec<&FloatTensor> b) {
     float worst = (float)0.0;
     if (a.length() != b.length()) return (float)1.0e30;
     unsigned long i = 0UL;
     while (i < a.length()) {
-        &Tensor x = *a.at(i);
-        &Tensor y = *b.at(i);
+        &FloatTensor x = *a.at(i);
+        &FloatTensor y = *b.at(i);
         unsafe {
             if (x->size != y->size) return (float)1.0e30;
             unsigned long j = 0UL;
@@ -47,10 +47,10 @@ static int same_report_(const &TrainReport a, const &TrainReport b) {
 }
 
 // ── Trainable ────────────────────────────────────────────────────────────────
-static &Tensor clf_loss_(&Mlp m, const &Tensor x, const &Tensor y) {
+static &FloatTensor clf_loss_(&Mlp m, const &FloatTensor x, const &FloatTensor y) {
     return tensor_cross_entropy_loss(m.forward(x), y);
 }
-static &Tensor clf_logits_(&Mlp m, const &Tensor x) { return m.forward(x); }
+static &FloatTensor clf_logits_(&Mlp m, const &FloatTensor x) { return m.forward(x); }
 
 void t_backend_name() {
     const char* name = ML_TRAIN_BACKEND;
@@ -129,7 +129,7 @@ void t_losses_and_train_step() {
     data.free();
 }
 
-static &Tensor conv_loss_(&ConvNet n, const &Tensor x, const &Tensor y) {
+static &FloatTensor conv_loss_(&ConvNet n, const &FloatTensor x, const &FloatTensor y) {
     return tensor_cross_entropy_loss(n.forward(x), y);
 }
 
@@ -237,8 +237,8 @@ void t_gan_trainer() {
 // Random observations and rewards from 'env'; returns the actions' sum.
 generic<A: ValueAgent>
 unsigned long value_run_(&A a, &Rng env, unsigned long steps) {
-    &Tensor o = Tensor::new_1d(4UL, 0);
-    &Tensor n = Tensor::new_1d(4UL, 0);
+    &FloatTensor o = FloatTensor::new_1d(4UL, 0);
+    &FloatTensor n = FloatTensor::new_1d(4UL, 0);
     unsigned long sum = 0UL;
     unsigned long i = 0UL;
     while (i < steps) {
@@ -258,8 +258,8 @@ unsigned long value_run_(&A a, &Rng env, unsigned long steps) {
 
 generic<P: PolicyLearner>
 float policy_run_(&P p, &Rng env, unsigned long rollout, int updates) {
-    &Tensor o = Tensor::new_1d(4UL, 0);
-    &Tensor n = Tensor::new_1d(4UL, 0);
+    &FloatTensor o = FloatTensor::new_1d(4UL, 0);
+    &FloatTensor n = FloatTensor::new_1d(4UL, 0);
     float l = (float)0.0;
     int u = 0;
     while (u < updates) {
@@ -293,8 +293,8 @@ void t_rl_agents() {
     DqnLearner d = dqn_learner_new(Dqn::new(4UL, 3UL, &cfg));
     // the same loop by hand on the direct API
     struct Rng e1 = Rng::new(91UL);
-    &Tensor o = Tensor::new_1d(4UL, 0);
-    &Tensor n = Tensor::new_1d(4UL, 0);
+    &FloatTensor o = FloatTensor::new_1d(4UL, 0);
+    &FloatTensor n = FloatTensor::new_1d(4UL, 0);
     unsigned long sum = 0UL;
     unsigned long i = 0UL;
     while (i < 160UL) {

@@ -11,26 +11,26 @@ namespace std {
 // Uninitialized outputs (every element is written), the shared elementwise
 // kernels and vmath.h's vectorized exp/tanh/sigmoid.
 
-&Tensor Tensor::relu_fwd() const {
-    &Tensor out = __tensor_alloc_uninit_like(self);
+&FloatTensor FloatTensor::relu_fwd() const {
+    &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe { __tensor_ew(EW_RELU, (const float*)self->data, (const float*)0, (float)0.0, (float*)out->data, out->size); }
     return out;
 }
 
-&Tensor Tensor::sigmoid_fwd() const {
-    &Tensor out = __tensor_alloc_uninit_like(self);
+&FloatTensor FloatTensor::sigmoid_fwd() const {
+    &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe { vm_sigmoid_f32((const float*)self->data, (float*)out->data, out->size); }
     return out;
 }
 
-&Tensor Tensor::tanh_fwd() const {
-    &Tensor out = __tensor_alloc_uninit_like(self);
+&FloatTensor FloatTensor::tanh_fwd() const {
+    &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe { vm_tanh_f32((const float*)self->data, (float*)out->data, out->size); }
     return out;
 }
 
-&Tensor Tensor::silu_fwd() const {
-    &Tensor out = __tensor_alloc_uninit_like(self);
+&FloatTensor FloatTensor::silu_fwd() const {
+    &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe {
         vm_sigmoid_f32((const float*)self->data, (float*)out->data, out->size);
         __tensor_ew(EW_MUL, (const float*)self->data, (const float*)out->data, (float)0.0, (float*)out->data, out->size);
@@ -38,8 +38,8 @@ namespace std {
     return out;
 }
 
-&Tensor Tensor::gelu_fwd() const {
-    &Tensor out = __tensor_alloc_uninit_like(self);
+&FloatTensor FloatTensor::gelu_fwd() const {
+    &FloatTensor out = __tensor_alloc_uninit_like(self);
     float c = (float)0.7978845608028654; // sqrt(2/pi)
     unsafe {
         unsigned long n = out->size;
@@ -53,10 +53,10 @@ namespace std {
     return out;
 }
 
-&Tensor Tensor::layernorm_rows(float eps) const {
+&FloatTensor FloatTensor::layernorm_rows(float eps) const {
     unsigned long rows; unsigned long cols;
     unsafe { rows = self->shape[0]; cols = self->shape[1]; }
-    &Tensor out = Tensor::new_2d(rows, cols, 0);
+    &FloatTensor out = FloatTensor::new_2d(rows, cols, 0);
     unsafe {
         unsigned long r = 0UL;
         while (r < rows) {
@@ -86,7 +86,7 @@ namespace std {
     return out;
 }
 
-&Tensor tensor_residual_add(const &Tensor x, const &Tensor sublayerOut) {
+&FloatTensor tensor_residual_add(const &FloatTensor x, const &FloatTensor sublayerOut) {
     return tensor_add(x, sublayerOut);
 }
 

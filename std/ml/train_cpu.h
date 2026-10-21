@@ -36,7 +36,7 @@ struct CpuTrainer {
     int   fit_begin(const &Dataset data, const &TrainConfig cfg);
     struct EpochLoss fit_epoch();
     void  fit_end();
-    float train_step(const &Tensor x, const &Tensor y);
+    float train_step(const &FloatTensor x, const &FloatTensor y);
     float learning_rate();
     void  set_learning_rate(float lr);
     int   sync();
@@ -74,7 +74,7 @@ void CpuTrainer::fit_end() {
 }
 
 generic<M: Module>
-float CpuTrainer::train_step(const &Tensor x, const &Tensor y) {
+float CpuTrainer::train_step(const &FloatTensor x, const &FloatTensor y) {
     self.stepArena.begin();
     float l = trainer_step_(&self.opt, module_loss(&self.host, self.loss, x, y), self.clipNorm);
     tensor_arena_end();
@@ -124,7 +124,7 @@ struct CpuModelTrainer {
     int   fit_begin(const &Dataset data, const &TrainConfig cfg);
     struct EpochLoss fit_epoch();
     void  fit_end();
-    float train_step(const &Tensor x, const &Tensor y);
+    float train_step(const &FloatTensor x, const &FloatTensor y);
     float learning_rate();
     void  set_learning_rate(float lr);
     int   sync();
@@ -160,7 +160,7 @@ void CpuModelTrainer::fit_end() {
 }
 
 generic<M: LossModel>
-float CpuModelTrainer::train_step(const &Tensor x, const &Tensor y) {
+float CpuModelTrainer::train_step(const &FloatTensor x, const &FloatTensor y) {
     self.stepArena.begin();
     float l = trainer_step_(&self.opt, self.host.loss(x, y), self.clipNorm);
     tensor_arena_end();
@@ -201,7 +201,7 @@ generic<H: GanModel>
 struct CpuGanTrainer {
     H host;
 
-    struct GanLosses train_step(const &Tensor real, ?&Tensor labels);
+    struct GanLosses train_step(const &FloatTensor real, ?&FloatTensor labels);
     struct GanLosses train(const &Dataset data, unsigned long epochs, unsigned long batchSize);
     int  sync();
     void free();
@@ -210,7 +210,7 @@ struct CpuGanTrainer {
 };
 
 generic<H: GanModel>
-struct GanLosses CpuGanTrainer::train_step(const &Tensor real, ?&Tensor labels) {
+struct GanLosses CpuGanTrainer::train_step(const &FloatTensor real, ?&FloatTensor labels) {
     return self.host.train_step(real, labels);
 }
 
@@ -239,8 +239,8 @@ struct CpuDqnAgent {
     struct Dqn host;
 
     float epsilon();
-    unsigned long act(const &Tensor obs, int explore);
-    int   observe(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminal);
+    unsigned long act(const &FloatTensor obs, int explore);
+    int   observe(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminal);
     float last_loss();
     unsigned long updates();
     int   sync();
@@ -253,8 +253,8 @@ struct CpuDqnAgent {
 struct CpuPgAgent {
     struct PolicyAgent host;
 
-    unsigned long act(const &Tensor obs, int sample);
-    void  record(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminated,
+    unsigned long act(const &FloatTensor obs, int sample);
+    void  record(const &FloatTensor obs, unsigned long action, float reward, const &FloatTensor next, int terminated,
                  int truncated);
     float update();
     int   sync();

@@ -20,20 +20,20 @@
 
 namespace std {
 
-&Tensor Tensor::relu_fwd() const;   // max(x, 0), elementwise -- forward-only, like every other op in this file
-&Tensor Tensor::sigmoid_fwd() const;   // 1 / (1 + exp(-x)), elementwise
-&Tensor Tensor::tanh_fwd() const;   // tanh(x), elementwise
-&Tensor Tensor::silu_fwd() const;   // x * sigmoid(x) ("swish"), elementwise
-&Tensor Tensor::gelu_fwd() const;   // tanh-approximation GELU, elementwise
+&FloatTensor FloatTensor::relu_fwd() const;   // max(x, 0), elementwise -- forward-only, like every other op in this file
+&FloatTensor FloatTensor::sigmoid_fwd() const;   // 1 / (1 + exp(-x)), elementwise
+&FloatTensor FloatTensor::tanh_fwd() const;   // tanh(x), elementwise
+&FloatTensor FloatTensor::silu_fwd() const;   // x * sigmoid(x) ("swish"), elementwise
+&FloatTensor FloatTensor::gelu_fwd() const;   // tanh-approximation GELU, elementwise
 
 // out[r][c] = (x[r][c] - rowMean) / sqrt(rowVar + eps), per row (mean 0,
 // var 1 across each row). No affine gain/bias — apply your own
 // elementwise scale/shift after calling this if you need one (e.g.
 // AdaLN-style conditioning, see transformer.h).
-&Tensor Tensor::layernorm_rows(float eps) const;
+&FloatTensor FloatTensor::layernorm_rows(float eps) const;
 
 // x + sublayerOut. A plain alias for tensor_add, named for residual/
 // skip-connection call sites (ResNet blocks, transformer sublayers).
-&Tensor tensor_residual_add(const &Tensor x, const &Tensor sublayerOut);
+&FloatTensor tensor_residual_add(const &FloatTensor x, const &FloatTensor sublayerOut);
 
 } // namespace std

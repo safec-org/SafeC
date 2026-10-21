@@ -12,12 +12,12 @@
 
 namespace std {
 
-&Tensor tensor_add_spirv(const &Tensor a, const &Tensor b);
-&Tensor tensor_sub_spirv(const &Tensor a, const &Tensor b);
-&Tensor tensor_mul_spirv(const &Tensor a, const &Tensor b);
-&Tensor Tensor::scale_spirv(float k) const;
-&Tensor Tensor::relu_spirv() const;
-&Tensor Tensor::sum_spirv() const;
-&Tensor tensor_matmul_spirv(const &Tensor a, const &Tensor b);
+&FloatTensor tensor_add_spirv(const &FloatTensor a, const &FloatTensor b);
+&FloatTensor tensor_sub_spirv(const &FloatTensor a, const &FloatTensor b);
+&FloatTensor tensor_mul_spirv(const &FloatTensor a, const &FloatTensor b);
+&FloatTensor FloatTensor::scale_spirv(float k) const;
+&FloatTensor FloatTensor::relu_spirv() const;
+&FloatTensor FloatTensor::sum_spirv() const;
+&FloatTensor tensor_matmul_spirv(const &FloatTensor a, const &FloatTensor b);
 
 } // namespace std

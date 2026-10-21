@@ -45,13 +45,13 @@ static float rel_diff_(struct RocmBuf d, const float* host, unsigned long n) {
     return m / scale;
 }
 
-static &Tensor param_(unsigned long r, unsigned long c, float scale, &Rng rng) {
-    &Tensor t = Tensor::new_2d(r, c, 1);
+static &FloatTensor param_(unsigned long r, unsigned long c, float scale, &Rng rng) {
+    &FloatTensor t = FloatTensor::new_2d(r, c, 1);
     rng.fill_uniform(t, -scale, scale);
     return t;
 }
 
-static struct RocmBuf upload_(const &Tensor t) {
+static struct RocmBuf upload_(const &FloatTensor t) {
     unsafe { return RocmBuf::upload((const &float)(const float*)t->data, t->size); }
 }
 
@@ -67,7 +67,7 @@ struct Spec {
     unsigned long inC; unsigned long inH; unsigned long inW;
     unsigned long k; unsigned long s; unsigned long p;
     int act;
-    &Tensor w; &Tensor b;
+    &FloatTensor w; &FloatTensor b;
 };
 
 static struct Spec lin_(unsigned long in, unsigned long out, int act, &Rng rng) {
@@ -90,8 +90,8 @@ static struct Spec conv_(int kind, unsigned long inC, unsigned long hw, unsigned
     return s;
 }
 
-static &Tensor cpu_layer_(const &Spec s, &Tensor x) {
-    &Tensor y = x;
+static &FloatTensor cpu_layer_(const &Spec s, &FloatTensor x) {
+    &FloatTensor y = x;
     if (s.kind == ROCM_LAYER_LINEAR) y = tensor_add_bias(tensor_matmul(x, s.w), s.b);
     else if (s.kind == ROCM_LAYER_CONV) y = tensor_conv2d(x, s.w, s.b, s.inC, s.inH, s.inW, s.k, s.k, s.s, s.p);
     else y = tensor_conv_transpose2d(x, s.w, s.b, s.inC, s.inH, s.inW, s.k, s.k, s.s, s.p);
@@ -115,10 +115,10 @@ static int gpu_add_(&RocmNet n, const &Spec s) {
 static void grad_case_(const char* name, &Vec<struct Spec> specs, unsigned long rows, unsigned long inDim,
                        unsigned long outDim, int loss, unsigned long seed, int step) {
     struct Rng rng = Rng::new(seed);
-    &Tensor x = Tensor::new_2d(rows, inDim, 1);
+    &FloatTensor x = FloatTensor::new_2d(rows, inDim, 1);
     rng.fill_normal(x, (float)0.0, (float)1.0);
     unsigned long tcols = loss == LOSS_CE ? 1UL : outDim;
-    &Tensor y = Tensor::new_2d(rows, tcols, 0);
+    &FloatTensor y = FloatTensor::new_2d(rows, tcols, 0);
     if (loss == LOSS_CE) {
         unsafe { unsigned long r = 0UL; while (r < rows) { y->data[r] = (float)((r * 7UL) % outDim); r = r + 1UL; } }
     } else if (loss == LOSS_BCE) {
@@ -129,10 +129,10 @@ static void grad_case_(const char* name, &Vec<struct Spec> specs, unsigned long 
     // CPU
     unsigned long i = 0UL;
     while (i < specs.length()) { specs.at(i).w.zero_grad(); specs.at(i).b.zero_grad(); i = i + 1UL; }
-    &Tensor h = x;
+    &FloatTensor h = x;
     i = 0UL;
     while (i < specs.length()) { h = cpu_layer_(specs.at(i), h); i = i + 1UL; }
-    &Tensor l = loss == LOSS_CE ? tensor_cross_entropy_loss(h, y)
+    &FloatTensor l = loss == LOSS_CE ? tensor_cross_entropy_loss(h, y)
               : (loss == LOSS_MSE ? tensor_mse_loss(h, y) : tensor_bce_logits_loss(h, y));
     l.backward();
     // GPU
@@ -257,18 +257,18 @@ static void grad_tests_() {
 // 'twice' the CPU runs two batches through separate passes (summing their
 // losses) and the GPU both stacked as one batch with segments = 2, as
 // gan.h's discriminator step does.
-static float max_rel_tensor_(struct RocmBuf d, const &Tensor t) {
+static float max_rel_tensor_(struct RocmBuf d, const &FloatTensor t) {
     unsafe { return rel_diff_(d, (const float*)t->data, t->size); }
 }
 
 // The net's buffers (RocmNet::download_stats) against a ConvNet's.
-static float buffers_diff_(&RocmNet n, const &Vec<&Tensor> cpu) {
-    struct Vec<&Tensor> copy = std::vec_new();
+static float buffers_diff_(&RocmNet n, const &Vec<&FloatTensor> cpu) {
+    struct Vec<&FloatTensor> copy = std::vec_new();
     unsigned long i = 0UL;
     while (i < cpu.length()) {
         unsigned long sz;
         unsafe { sz = (*cpu.at(i))->size; }
-        copy.push(Tensor::new_1d(sz, 0));
+        copy.push(FloatTensor::new_1d(sz, 0));
         i = i + 1UL;
     }
     float e = (float)1.0e30;
@@ -276,8 +276,8 @@ static float buffers_diff_(&RocmNet n, const &Vec<&Tensor> cpu) {
         e = (float)0.0;
         i = 0UL;
         while (i < cpu.length()) {
-            &Tensor a = *copy.at(i);
-            &Tensor b = *cpu.at(i);
+            &FloatTensor a = *copy.at(i);
+            &FloatTensor b = *cpu.at(i);
             unsafe {
                 unsigned long j = 0UL;
                 while (j < a->size) {
@@ -298,10 +298,10 @@ static void convnet_case_(const char* name, &ConvNet c, unsigned long rows, int 
     unsigned long inDim = c.in_dim();
     unsigned long outDim = c.out_dim();
     unsigned long total = twice ? 2UL * rows : rows;
-    &Tensor x = Tensor::new_2d(total, inDim, 1);
+    &FloatTensor x = FloatTensor::new_2d(total, inDim, 1);
     rng.fill_normal(x, (float)0.0, (float)1.0);
     unsigned long tcols = loss == LOSS_CE ? 1UL : outDim;
-    &Tensor y = Tensor::new_2d(total, tcols, 0);
+    &FloatTensor y = FloatTensor::new_2d(total, tcols, 0);
     if (loss == LOSS_CE) {
         unsafe { unsigned long r = 0UL; while (r < total) { y->data[r] = (float)((r * 7UL) % outDim); r = r + 1UL; } }
     } else {
@@ -313,24 +313,24 @@ static void convnet_case_(const char* name, &ConvNet c, unsigned long rows, int 
     if (g_prec != 0) check(n.set_precision(g_prec) && n.set_loss_scale(g_scale), name);
     unsigned long i = 0UL;
     while (i < c.params.length()) { (*c.params.at(i)).zero_grad(); i = i + 1UL; }
-    &Tensor out = Tensor::new_2d(total, outDim, 0);  // the CPU output
-    &Tensor gx = Tensor::new_2d(total, inDim, 0);    // d(loss)/dx on the CPU
+    &FloatTensor out = FloatTensor::new_2d(total, outDim, 0);  // the CPU output
+    &FloatTensor gx = FloatTensor::new_2d(total, inDim, 0);    // d(loss)/dx on the CPU
     float lval = (float)0.0;
     if (twice) {
         // rows [0, m) and [m, 2m) as two passes
-        &Tensor x1 = Tensor::new_2d(rows, inDim, 1);
-        &Tensor x2 = Tensor::new_2d(rows, inDim, 1);
-        &Tensor y1 = Tensor::new_2d(rows, tcols, 0);
-        &Tensor y2 = Tensor::new_2d(rows, tcols, 0);
+        &FloatTensor x1 = FloatTensor::new_2d(rows, inDim, 1);
+        &FloatTensor x2 = FloatTensor::new_2d(rows, inDim, 1);
+        &FloatTensor y1 = FloatTensor::new_2d(rows, tcols, 0);
+        &FloatTensor y2 = FloatTensor::new_2d(rows, tcols, 0);
         unsafe {
             unsigned long k = 0UL;
             while (k < rows * inDim) { x1->data[k] = x->data[k]; x2->data[k] = x->data[rows * inDim + k]; k = k + 1UL; }
             k = 0UL;
             while (k < rows * tcols) { y1->data[k] = y->data[k]; y2->data[k] = y->data[rows * tcols + k]; k = k + 1UL; }
         }
-        &Tensor o1 = c.forward(x1);
-        &Tensor o2 = c.forward(x2);
-        &Tensor l2 = tensor_add(tensor_mse_loss(o1, y1), tensor_mse_loss(o2, y2));
+        &FloatTensor o1 = c.forward(x1);
+        &FloatTensor o2 = c.forward(x2);
+        &FloatTensor l2 = tensor_add(tensor_mse_loss(o1, y1), tensor_mse_loss(o2, y2));
         l2.backward();
         unsafe {
             lval = l2->data[0];
@@ -341,8 +341,8 @@ static void convnet_case_(const char* name, &ConvNet c, unsigned long rows, int 
         }
         n.segments = 2UL;
     } else {
-        &Tensor oc = c.forward(x);
-        &Tensor l1 = loss == LOSS_CE ? tensor_cross_entropy_loss(oc, y) : tensor_mse_loss(oc, y);
+        &FloatTensor oc = c.forward(x);
+        &FloatTensor l1 = loss == LOSS_CE ? tensor_cross_entropy_loss(oc, y) : tensor_mse_loss(oc, y);
         l1.backward();
         unsafe {
             lval = l1->data[0];
@@ -416,7 +416,7 @@ static void dropout_props_(int byChannel) {
     n.set_input(C, 5UL, 5UL);
     n.add_dropout(p, byChannel, 1234UL);
     struct Rng rng = Rng::new(50UL);
-    &Tensor x = Tensor::new_2d(rows, C * P, 0);
+    &FloatTensor x = FloatTensor::new_2d(rows, C * P, 0);
     rng.fill_uniform(x, (float)0.5, (float)1.5);
     struct RocmBuf dx = upload_(x);
     struct RocmBuf ddx = RocmBuf::alloc(rows * C * P);
@@ -626,10 +626,10 @@ static void half_tests_(int prec) {
 static void opt_case_(int kind, float clip, int graph) {
     unsigned long n = 1000UL;
     struct Rng rng = Rng::new(20UL + (unsigned long)kind);
-    &Tensor w = Tensor::new_1d(n, 1);
+    &FloatTensor w = FloatTensor::new_1d(n, 1);
     rng.fill_normal(w, (float)0.0, (float)1.0);
     w.sum().backward();   // allocates w's gradient, overwritten below
-    &Tensor g = Tensor::new_1d(n, 0);
+    &FloatTensor g = FloatTensor::new_1d(n, 0);
     rng.fill_normal(g, (float)0.0, (float)1.0);
     struct RocmBuf dw = upload_(w);
     struct RocmBuf dg = upload_(g);
@@ -681,7 +681,7 @@ static void opt_tests_() {
 }
 
 // ── rocm_trainer_fit against trainer_fit ─────────────────────────────────────
-static &Tensor clf_loss_(&Mlp m, const &Tensor x, const &Tensor y) {
+static &FloatTensor clf_loss_(&Mlp m, const &FloatTensor x, const &FloatTensor y) {
     return tensor_cross_entropy_loss(m.forward(x), y);
 }
 
@@ -708,8 +708,8 @@ static void trainer_test_() {
     float worst = (float)0.0;
     unsigned long i = 0UL;
     while (i < host.params.length()) {
-        &Tensor a = *host.params.at(i);
-        &Tensor b = *cpu.params.at(i);
+        &FloatTensor a = *host.params.at(i);
+        &FloatTensor b = *cpu.params.at(i);
         unsafe {
             unsigned long j = 0UL;
             while (j < a->size) { float df = absf_(a->data[j] - b->data[j]); if (df > worst) worst = df; j = j + 1UL; }
@@ -765,7 +765,7 @@ static void vae_case_(unsigned long classes) {
 }
 
 // ── Convolutional autoencoders ───────────────────────────────────────────────
-static &Tensor cae_loss_(&ConvAutoencoder a, const &Tensor x, const &Tensor y) { return a.loss(x, y); }
+static &FloatTensor cae_loss_(&ConvAutoencoder a, const &FloatTensor x, const &FloatTensor y) { return a.loss(x, y); }
 
 static struct ConvAutoencoder cae_build_() {
     struct Rng rng = Rng::new(61UL);
@@ -865,12 +865,12 @@ static void vae_test_() {
 }
 
 // ── GANs: steps against Gan::train_step / Dcgan::train_step with the same noise ─
-static float params_diff_(const &Vec<&Tensor> a, const &Vec<&Tensor> b) {
+static float params_diff_(const &Vec<&FloatTensor> a, const &Vec<&FloatTensor> b) {
     float worst = (float)0.0;
     unsigned long i = 0UL;
     while (i < a.length()) {
-        &Tensor x = *a.at(i);
-        &Tensor y = *b.at(i);
+        &FloatTensor x = *a.at(i);
+        &FloatTensor y = *b.at(i);
         unsafe {
             float scale = (float)1.0;
             float m = (float)0.0;
@@ -895,7 +895,7 @@ static struct RocmBuf view_(struct RocmBuf b, unsigned long off, unsigned long n
     return v;
 }
 
-static void upload_at_(struct RocmBuf b, unsigned long off, const &Tensor t) {
+static void upload_at_(struct RocmBuf b, unsigned long off, const &FloatTensor t) {
     unsafe { std::rocm_write(view_(b, off, t->size), (const &float)(const float*)t->data, t->size); }
 }
 
@@ -905,10 +905,10 @@ static void gan_noise_(&RocmGan dev, struct Rng rng, unsigned long m) {
     unsigned long Z = dev.cfg.latent;
     unsigned long c = 0UL;
     while (c <= nc) {
-        &Tensor z = rng.normal_tensor(m, Z);
+        &FloatTensor z = rng.normal_tensor(m, Z);
         upload_at_(dev.noise, c * dev.maxBatch * Z, z);
         if (c < nc && dev.cfg.loss == GAN_WGAN_GP) {
-            &Tensor t = Tensor::new_1d(m, 0);
+            &FloatTensor t = FloatTensor::new_1d(m, 0);
             unsafe { unsigned long r = 0UL; while (r < m) { t->data[r] = rng.uniform(); r = r + 1UL; } }
             upload_at_(dev.noise, (nc + 1UL) * dev.maxBatch * Z + c * dev.maxBatch, t);
         }
@@ -945,9 +945,9 @@ static void gan_case_(const char* name, int loss, unsigned long classes, unsigne
     struct RocmGan dev = RocmGan::new(&host, m);
     check(dev.ok, name);
     struct Rng rng = Rng::new(77UL);
-    &Tensor real = Tensor::new_2d(m, D, 0);
+    &FloatTensor real = FloatTensor::new_2d(m, D, 0);
     rng.fill_normal(real, (float)1.0, (float)0.5);
-    &Tensor lab = Tensor::new_1d(m, 0);
+    &FloatTensor lab = FloatTensor::new_1d(m, 0);
     unsafe { unsigned long r = 0UL; while (r < m) { lab->data[r] = (float)(r % (classes == 0UL ? 1UL : classes)); r = r + 1UL; } }
     struct RocmBuf dr = upload_(real);
     struct RocmBuf dl = upload_(lab);
@@ -956,7 +956,7 @@ static void gan_case_(const char* name, int loss, unsigned long classes, unsigne
     int ok = 1;
     while (s < 3) {
         gan_noise_(&dev, cpu.rng, m);
-        if (classes > 0UL) lc = cpu.train_step(real, (?&Tensor)lab);
+        if (classes > 0UL) lc = cpu.train_step(real, (?&FloatTensor)lab);
         else lc = cpu.train_step(real, null);
         ok = ok && rocm_gan_step_(&dev, dr, dl, m, 0);
         s = s + 1;
@@ -1009,9 +1009,9 @@ static void dcgan_case_(const char* name, unsigned long classes) {
     struct RocmGan dev = RocmGan::new_dcgan(&host, m);
     check(dev.ok, name);
     struct Rng rng = Rng::new(78UL);
-    &Tensor real = Tensor::new_2d(m, 64UL, 0);
+    &FloatTensor real = FloatTensor::new_2d(m, 64UL, 0);
     rng.fill_uniform(real, (float)-1.0, (float)1.0);
-    &Tensor lab = Tensor::new_1d(m, 0);
+    &FloatTensor lab = FloatTensor::new_1d(m, 0);
     unsafe { unsigned long r = 0UL; while (r < m) { lab->data[r] = (float)(r % (classes == 0UL ? 1UL : classes)); r = r + 1UL; } }
     struct RocmBuf dr = upload_(real);
     struct RocmBuf dl = upload_(lab);
@@ -1020,7 +1020,7 @@ static void dcgan_case_(const char* name, unsigned long classes) {
     int s = 0;
     while (s < 3) {
         gan_noise_(&dev, cpu.rng, m);
-        if (classes > 0UL) lc = cpu.train_step(real, (?&Tensor)lab);
+        if (classes > 0UL) lc = cpu.train_step(real, (?&FloatTensor)lab);
         else lc = cpu.train_step(real, null);
         ok = ok && rocm_gan_step_(&dev, dr, dl, m, 0);
         s = s + 1;
@@ -1089,8 +1089,8 @@ static void dqn_case_(const char* name, unsigned long targetEvery, int doubleDqn
     struct RocmDqn dev = RocmDqn::new(&host);
     check(dev.ok, name);
     struct Rng env = Rng::new(91UL);
-    &Tensor o = Tensor::new_1d(4UL, 0);
-    &Tensor n = Tensor::new_1d(4UL, 0);
+    &FloatTensor o = FloatTensor::new_1d(4UL, 0);
+    &FloatTensor n = FloatTensor::new_1d(4UL, 0);
     int same = 1;
     int ok = 1;
     float lc = (float)-1.0;
@@ -1135,8 +1135,8 @@ static void pg_case_(const char* name, int algo, unsigned long rollout) {
     struct RocmPolicy dev = RocmPolicy::new(&host, 256UL);
     check(dev.ok, name);
     struct Rng env = Rng::new(92UL);
-    &Tensor o = Tensor::new_1d(4UL, 0);
-    &Tensor n = Tensor::new_1d(4UL, 0);
+    &FloatTensor o = FloatTensor::new_1d(4UL, 0);
+    &FloatTensor n = FloatTensor::new_1d(4UL, 0);
     int same = 1;
     int ok = 1;
     float lc = (float)0.0;

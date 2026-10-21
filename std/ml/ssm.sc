@@ -11,7 +11,7 @@ namespace std {
 extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
-static void ssm_release_(&Tensor t) {
+static void ssm_release_(&FloatTensor t) {
     t->free();
     unsafe { free((void*)t); }
 }
@@ -91,11 +91,11 @@ static void scan_run_(&ScanJob j, unsigned long D) {
     else scan_channels_(j, 0UL, D);
 }
 
-&Tensor ssm_selective_scan(const &Tensor x, const &Tensor delta, const &Tensor A,
-                           const &Tensor B, const &Tensor C, const &Tensor Dskip) {
+&FloatTensor ssm_selective_scan(const &FloatTensor x, const &FloatTensor delta, const &FloatTensor A,
+                           const &FloatTensor B, const &FloatTensor C, const &FloatTensor Dskip) {
     unsigned long T; unsigned long D; unsigned long N;
     unsafe { T = x->shape[0]; D = x->shape[1]; N = A->shape[1]; }
-    &Tensor y = Tensor::new_2d(T, D, 0);
+    &FloatTensor y = FloatTensor::new_2d(T, D, 0);
     struct ScanJob j;
     unsafe {
         float* h = (float*)malloc(sizeof(float) * D * N);
@@ -180,8 +180,8 @@ static float ssm_init_(unsigned long i, unsigned long seed) {
     return ((float)(h % 2000UL) / (float)1000.0) - (float)1.0;   // [-1, 1)
 }
 
-static &Tensor ssm_rand_(unsigned long rows, unsigned long cols, unsigned long seed, float scale) {
-    &Tensor t = Tensor::new_2d(rows, cols, 0);
+static &FloatTensor ssm_rand_(unsigned long rows, unsigned long cols, unsigned long seed, float scale) {
+    &FloatTensor t = FloatTensor::new_2d(rows, cols, 0);
     unsafe {
         unsigned long i = 0UL;
         while (i < rows * cols) { t->data[i] = ssm_init_(i, seed) * scale; i = i + 1UL; }
@@ -200,9 +200,9 @@ struct Mamba Mamba::new(unsigned long dModel, unsigned long dState, unsigned lon
     m.xProj   = ssm_rand_(dInner, dtRank + 2UL * dState, 34UL, (float)1.0 / sqrt_f((float)dInner));
     m.dtProj  = ssm_rand_(dtRank, dInner, 35UL, (float)1.0 / sqrt_f((float)dtRank));
     m.outProj = ssm_rand_(dInner, dModel, 36UL, (float)1.0 / sqrt_f((float)dInner));
-    m.dtBias  = Tensor::new_2d(1UL, dInner, 0);
-    m.Alog    = Tensor::new_2d(dInner, dState, 0);
-    m.Dskip   = Tensor::new_2d(1UL, dInner, 0);
+    m.dtBias  = FloatTensor::new_2d(1UL, dInner, 0);
+    m.Alog    = FloatTensor::new_2d(dInner, dState, 0);
+    m.Dskip   = FloatTensor::new_2d(1UL, dInner, 0);
     unsafe {
         float lo = log_f((float)0.001);
         float hi = log_f((float)0.1);
@@ -232,20 +232,20 @@ void Mamba::free() {
 
 // Runs T tokens from the given state (conv [dInner][dConv-1], h
 // [dInner][dState]) and leaves the state after the last token there.
-static &Tensor mamba_run_(const &Mamba m, const &Tensor X, &Tensor convState, &Tensor hState) {
+static &FloatTensor mamba_run_(const &Mamba m, const &FloatTensor X, &FloatTensor convState, &FloatTensor hState) {
     unsigned long T; unsigned long E; unsigned long N; unsigned long R;
     unsafe { T = X->size / m->dModel; }
     E = m->dInner; N = m->dState; R = m->dtRank;
 
-    &Tensor X2 = Tensor::new_2d(T, m->dModel, 0);
+    &FloatTensor X2 = FloatTensor::new_2d(T, m->dModel, 0);
     unsafe {
         unsigned long i = 0UL;
         while (i < T * m->dModel) { X2->data[i] = X->data[i]; i = i + 1UL; }
     }
-    &Tensor xz = tensor_matmul(X2, m->inProj);          // [T, 2E]: x | z
+    &FloatTensor xz = tensor_matmul(X2, m->inProj);          // [T, 2E]: x | z
     ssm_release_(X2);
 
-    &Tensor xc = Tensor::new_2d(T, E, 0);
+    &FloatTensor xc = FloatTensor::new_2d(T, E, 0);
     struct ConvJob cj;
     unsafe {
         cj.in = (const float*)xz->data; cj.ldin = 2UL * E;
@@ -257,9 +257,9 @@ static &Tensor mamba_run_(const &Mamba m, const &Tensor X, &Tensor convState, &T
     if (T * E * m->dConv >= 65536UL) parallel_for(E, 64UL, conv_channels_, &cj);
     else conv_channels_(&cj, 0UL, E);
 
-    &Tensor xdbl = tensor_matmul(xc, m->xProj);         // [T, R + 2N]: dt | B | C
+    &FloatTensor xdbl = tensor_matmul(xc, m->xProj);         // [T, R + 2N]: dt | B | C
     unsigned long W = R + 2UL * N;
-    &Tensor dtLow = Tensor::new_2d(T, R, 0);
+    &FloatTensor dtLow = FloatTensor::new_2d(T, R, 0);
     unsafe {
         unsigned long t = 0UL;
         while (t < T) {
@@ -268,10 +268,10 @@ static &Tensor mamba_run_(const &Mamba m, const &Tensor X, &Tensor convState, &T
             t = t + 1UL;
         }
     }
-    &Tensor dt = tensor_matmul(dtLow, m->dtProj);       // [T, E], before bias + softplus
+    &FloatTensor dt = tensor_matmul(dtLow, m->dtProj);       // [T, E], before bias + softplus
     ssm_release_(dtLow);
 
-    &Tensor y = Tensor::new_2d(T, E, 0);
+    &FloatTensor y = FloatTensor::new_2d(T, E, 0);
     struct ScanJob j;
     unsafe {
         j.x = (const float*)xc->data; j.ldx = E;
@@ -288,7 +288,7 @@ static &Tensor mamba_run_(const &Mamba m, const &Tensor X, &Tensor convState, &T
     j.T = T; j.N = N;
     scan_run_(&j, E);
 
-    &Tensor out = tensor_matmul(y, m->outProj);         // [T, dModel]
+    &FloatTensor out = tensor_matmul(y, m->outProj);         // [T, dModel]
     ssm_release_(xz); ssm_release_(xc); ssm_release_(xdbl); ssm_release_(dt); ssm_release_(y);
     return out;
 }
@@ -296,8 +296,8 @@ static &Tensor mamba_run_(const &Mamba m, const &Tensor X, &Tensor convState, &T
 struct MambaState MambaState::new(const &Mamba layer) {
     struct MambaState s;
     unsigned long k1 = layer->dConv > 1UL ? layer->dConv - 1UL : 1UL;
-    s.conv = Tensor::new_2d(layer->dInner, k1, 0);
-    s.h = Tensor::new_2d(layer->dInner, layer->dState, 0);
+    s.conv = FloatTensor::new_2d(layer->dInner, k1, 0);
+    s.h = FloatTensor::new_2d(layer->dInner, layer->dState, 0);
     return s;
 }
 
@@ -315,19 +315,19 @@ void MambaState::free() {
     ssm_release_(self->h);
 }
 
-&Tensor Mamba::forward(const &Tensor X) const {
+&FloatTensor Mamba::forward(const &FloatTensor X) const {
     struct MambaState s = MambaState::new(self);
     s.reset();
-    &Tensor out = mamba_run_(self, X, s.conv, s.h);
+    &FloatTensor out = mamba_run_(self, X, s.conv, s.h);
     s.free();
     return out;
 }
 
-&Tensor Mamba::step(&MambaState state, const &Tensor x) const {
+&FloatTensor Mamba::step(&MambaState state, const &FloatTensor x) const {
     return mamba_run_(self, x, state->conv, state->h);
 }
 
-void Mamba::collect_params(&Vec<&Tensor> out) const {
+void Mamba::collect_params(&Vec<&FloatTensor> out) const {
     out.push(self.inProj);
     out.push(self.convW);
     out.push(self.convB);
@@ -339,6 +339,6 @@ void Mamba::collect_params(&Vec<&Tensor> out) const {
     out.push(self.outProj);
 }
 
-void Mamba::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+void Mamba::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
 } // namespace std

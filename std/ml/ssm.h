@@ -24,8 +24,8 @@ namespace std {
 // e.g. after softplus); A: [D, N] (negative for a decaying state); B, C:
 // [T, N]; Dskip: [D] (the skip connection, D in the paper). Returns y: [T, D].
 // The state starts at zero.
-&Tensor ssm_selective_scan(const &Tensor x, const &Tensor delta, const &Tensor A,
-                           const &Tensor B, const &Tensor C, const &Tensor Dskip);
+&FloatTensor ssm_selective_scan(const &FloatTensor x, const &FloatTensor delta, const &FloatTensor A,
+                           const &FloatTensor B, const &FloatTensor C, const &FloatTensor Dskip);
 
 // One Mamba block (the mixer of Mamba / Mamba-1 language models, without
 // the surrounding RMSNorm and residual add):
@@ -39,15 +39,15 @@ namespace std {
 // PyTorch nn.Linear's weight to load it); convW is [dInner, dConv], the
 // PyTorch Conv1d weight [dInner, 1, dConv] with the middle axis dropped.
 struct Mamba {
-    &Tensor inProj;   // [dModel, 2 * dInner]
-    &Tensor convW;    // [dInner, dConv]
-    &Tensor convB;    // [dInner]
-    &Tensor xProj;    // [dInner, dtRank + 2 * dState]
-    &Tensor dtProj;   // [dtRank, dInner]
-    &Tensor dtBias;   // [dInner]
-    &Tensor Alog;     // [dInner, dState]; A = -exp(Alog)
-    &Tensor Dskip;    // [dInner]
-    &Tensor outProj;  // [dInner, dModel]
+    &FloatTensor inProj;   // [dModel, 2 * dInner]
+    &FloatTensor convW;    // [dInner, dConv]
+    &FloatTensor convB;    // [dInner]
+    &FloatTensor xProj;    // [dInner, dtRank + 2 * dState]
+    &FloatTensor dtProj;   // [dtRank, dInner]
+    &FloatTensor dtBias;   // [dInner]
+    &FloatTensor Alog;     // [dInner, dState]; A = -exp(Alog)
+    &FloatTensor Dskip;    // [dInner]
+    &FloatTensor outProj;  // [dInner, dModel]
     unsigned long dModel;
     unsigned long dInner;   // expand * dModel
     unsigned long dState;   // N
@@ -55,13 +55,13 @@ struct Mamba {
     unsigned long dtRank;   // ceil(dModel / 16)
 
     // X: [T, dModel] -> [T, dModel], the whole sequence at once (prefill).
-    &Tensor forward(const &Tensor X) const;
+    &FloatTensor forward(const &FloatTensor X) const;
     // Parameterized (module.h): every weight tensor.
-    void collect_params(&Vec<&Tensor> out) const;
-    void collect_state(&Vec<&Tensor> out) const;
+    void collect_params(&Vec<&FloatTensor> out) const;
+    void collect_state(&Vec<&FloatTensor> out) const;
     void free();
     // x: [1, dModel] (or [dModel]) -> [1, dModel]; advances 'state'.
-    &Tensor step(&MambaState state, const &Tensor x) const;
+    &FloatTensor step(&MambaState state, const &FloatTensor x) const;
 
     // Deterministic initialization following the paper (and HF transformers'
     // MambaMixer): Alog[d][n] = log(n + 1), Dskip = 1, dtBias chosen so
@@ -74,8 +74,8 @@ struct Mamba {
 // Feeding tokens 0..T-1 through Mamba::step gives the same rows as
 // Mamba::forward on the whole sequence.
 struct MambaState {
-    &Tensor conv;  // [dInner, dConv - 1], the last inputs to the convolution, oldest first
-    &Tensor h;     // [dInner, dState], the SSM state
+    &FloatTensor conv;  // [dInner, dConv - 1], the last inputs to the convolution, oldest first
+    &FloatTensor h;     // [dInner, dState], the SSM state
 
     void reset();
     void free();
