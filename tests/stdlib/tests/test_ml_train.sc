@@ -3,6 +3,7 @@
 // models built on them.
 #include <std/test/test.h>
 #include <std/ml/nn.h>
+#include <std/ml/module.h>
 #include <std/ml/datasets.h>
 #include <std/ml/trainer.h>
 #include <std/io_file.h>
@@ -266,7 +267,7 @@ void t_trainer_moons() {
     struct DatasetSplit sp = data.split((float)0.25, &rng);
     struct Mlp net = mlp_new(2UL, 32UL, 2UL, 2UL, ACT_RELU, ACT_NONE, &rng);
     struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.01);
-    net.add_params(&opt);
+    model_add_params(&net, &opt);
     struct TrainConfig cfg = train_config_default();
     cfg.epochs = 60UL;
     struct TrainReport rep = trainer_fit(&net, clf_loss_, &opt, &sp.train, &cfg);
@@ -291,7 +292,7 @@ void t_trainer_sine() {
     struct Mlp net = mlp_new(1UL, 32UL, 2UL, 1UL, ACT_TANH, ACT_NONE, &rng);
     struct Optimizer opt = optimizer_new(OPT_ADAMW, (float)0.01);
     opt.weightDecay = (float)0.0001;
-    net.add_params(&opt);
+    model_add_params(&net, &opt);
     struct TrainConfig cfg = train_config_default();
     cfg.epochs = 80UL;
     cfg.clipNorm = (float)1.0;
@@ -331,8 +332,8 @@ void t_autoencoders() {
         struct Autoencoder ae = autoencoder_new(d.features, &cfg);
         float before = recon_err_(&ae, d);
         struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.003);
-        ae.add_params(&opt);
-        trainer_fit(&ae, autoencoder_loss, &opt, d, &tc);
+        model_add_params(&ae, &opt);
+        model_fit(&ae, &opt, d, &tc);
         float after = recon_err_(&ae, d);
         ASSERT_TRUE(after < before * (float)0.3);
         if (variant == 2) ASSERT_TRUE(ae.lastPenalty > (float)0.0);
@@ -352,7 +353,7 @@ void t_vae() {
     // a classifier that later judges the CVAE's samples
     struct Mlp judge = mlp_new(100UL, 64UL, 1UL, 4UL, ACT_RELU, ACT_NONE, &rng);
     struct Optimizer jo = optimizer_new(OPT_ADAM, (float)0.003);
-    judge.add_params(&jo);
+    model_add_params(&judge, &jo);
     struct TrainConfig tc = train_config_default();
     tc.epochs = 30UL;
     trainer_fit(&judge, clf_loss_, &jo, &shapes, &tc);
@@ -365,9 +366,9 @@ void t_vae() {
         cfg.classes = cond ? 4UL : 0UL;
         struct Vae v = vae_new(100UL, &cfg);
         struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.002);
-        v.add_params(&opt);
+        model_add_params(&v, &opt);
         tc.epochs = 60UL;
-        struct TrainReport rep = trainer_fit(&v, vae_loss, &opt, &shapes, &tc);
+        struct TrainReport rep = model_fit(&v, &opt, &shapes, &tc);
         ASSERT_TRUE(rep.lastEpochLoss < rep.firstEpochLoss * (float)0.6);
         ASSERT_TRUE(v.lastKl > (float)0.1);
         &Tensor labels = tensor_new_1d(64UL, 0);
@@ -403,10 +404,10 @@ void t_vqvae() {
     cfg.codes = 16UL;
     struct VqVae v = vqvae_new(6UL, &cfg);
     struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.003);
-    v.add_params(&opt);
+    model_add_params(&v, &opt);
     struct TrainConfig tc = train_config_default();
     tc.epochs = 60UL;
-    struct TrainReport rep = trainer_fit(&v, vqvae_loss, &opt, &blobs, &tc);
+    struct TrainReport rep = model_fit(&v, &opt, &blobs, &tc);
     ASSERT_TRUE(rep.lastEpochLoss < rep.firstEpochLoss * (float)0.2);
     ASSERT_TRUE(v.lastPerplexity > (float)4.0);     // codes in use, not collapsed to one
     int was = tensor_is_grad_enabled();
@@ -471,7 +472,7 @@ void t_gans() {
         if (k == GAN_WGAN_GP) cfg.nCritic = 5UL;
         struct Gan g = gan_new(2UL, &cfg);
         g.train(&target, k == GAN_WGAN || k == GAN_WGAN_GP ? 100UL : 80UL, 64UL);
-        &Tensor s = g.generate(2000UL, null);
+        &Tensor s = g.sample(2000UL, null);
         unsafe {
             double mx = 0.0; double my = 0.0; double vx = 0.0; double vy = 0.0;
             unsigned long i = 0UL;
@@ -514,7 +515,7 @@ void t_cgan() {
     g.train(&ring, 30UL, 64UL);
     &Tensor labels = tensor_new_1d(400UL, 0);
     unsafe { unsigned long i = 0UL; while (i < 400UL) { labels->data[i] = (float)(i % 4UL); i = i + 1UL; } }
-    &Tensor s = g.generate(400UL, (?&Tensor)labels);
+    &Tensor s = g.sample(400UL, (?&Tensor)labels);
     unsigned long hit = 0UL;
     unsafe {
         unsigned long i = 0UL;
@@ -1213,7 +1214,7 @@ void t_convnet_skips() {
     ASSERT_EQ(n.out_dim(), 3UL);
     // conv 2->4 (72 + 4), conv 4->4 (144 + 4), projection 2->4 (8 + 4), deconv 4->4 (256 + 4),
     // group norm (6 + 6), dense 216 -> 3 (648 + 3)
-    ASSERT_EQ(n.param_count(), 76UL + 148UL + 12UL + 260UL + 12UL + 651UL);
+    ASSERT_EQ(model_param_count(&n), 76UL + 148UL + 12UL + 260UL + 12UL + 651UL);
     &Tensor x = tensor_new_2d(2UL, 72UL, 1);
     &Tensor aux = tensor_new_2d(2UL, 3UL, 0);
     rng.fill_uniform(x, (float)-1.0, (float)1.0);
@@ -1255,9 +1256,9 @@ void t_convnet_skips() {
     ASSERT_EQ(r.outC, 8UL);
     ASSERT_EQ(r.outH, 4UL);
     // conv 4->8 (288 + 8), bn (16), conv 8->8 (576 + 8), bn (16), projection 4->8 (32 + 8)
-    ASSERT_EQ(r.param_count(), 296UL + 16UL + 584UL + 16UL + 40UL);
+    ASSERT_EQ(model_param_count(&r), 296UL + 16UL + 584UL + 16UL + 40UL);
     r.residual_block(8UL, 1UL, 0, ACT_RELU, &rng);       // identity shortcut, no batch norm
-    ASSERT_EQ(r.param_count(), 952UL + 584UL + 584UL);
+    ASSERT_EQ(model_param_count(&r), 952UL + 584UL + 584UL);
     r.free();
 }
 
@@ -1300,19 +1301,19 @@ void t_convnet_fold_and_files() {
     &Tensor before = n.forward(x);
 
     // save, then load into a differently initialized net of the same layers
-    ASSERT_TRUE(n.save_file("build/test_ml_train_convnet.bin"));
+    ASSERT_TRUE(model_save_file(&n, "build/test_ml_train_convnet.bin"));
     struct Rng other = rng_new(77UL);
     struct ConvNet m = fold_net_(&other);
     m.set_training(0);
     &Tensor m0 = m.forward(x);
     ASSERT_TRUE(max_rel_diff_(before, m0) > (float)1e-3);
-    ASSERT_TRUE(m.load_file("build/test_ml_train_convnet.bin"));
+    ASSERT_TRUE(model_load_file(&m, "build/test_ml_train_convnet.bin"));
     &Tensor m1 = m.forward(x);
     ASSERT_TRUE(max_rel_diff_(before, m1) == (float)0.0);
     struct ConvNet wrong = convnet_new(3UL, 8UL, 8UL);
     wrong.conv(5UL, 3UL, 1UL, 1UL, ACT_NONE, &other);
-    ASSERT_TRUE(!wrong.load_file("build/test_ml_train_convnet.bin"));
-    ASSERT_TRUE(!wrong.load_file("build/no_such_file_test_ml_train.bin"));
+    ASSERT_TRUE(!model_load_file(&wrong, "build/test_ml_train_convnet.bin"));
+    ASSERT_TRUE(!model_load_file(&wrong, "build/no_such_file_test_ml_train.bin"));
     wrong.free();
 
     // folding: three batch norms disappear, inference output unchanged
@@ -1326,8 +1327,8 @@ void t_convnet_fold_and_files() {
     struct Mlp c = mlp_new(4UL, 8UL, 1UL, 2UL, ACT_RELU, ACT_NONE, &other);
     &Tensor mx = tensor_new_2d(5UL, 4UL, 0);
     rng.fill_uniform(mx, (float)-1.0, (float)1.0);
-    ASSERT_TRUE(a.save_file("build/test_ml_train_mlp.bin"));
-    ASSERT_TRUE(c.load_file("build/test_ml_train_mlp.bin"));
+    ASSERT_TRUE(model_save_file(&a, "build/test_ml_train_mlp.bin"));
+    ASSERT_TRUE(model_load_file(&c, "build/test_ml_train_mlp.bin"));
     &Tensor ya = a.forward(mx);
     &Tensor yc = c.forward(mx);
     ASSERT_TRUE(max_rel_diff_(ya, yc) == (float)0.0);
@@ -1497,7 +1498,7 @@ void t_cnn_classifier() {
     net.global_avgpool();
     net.dense(4UL, ACT_NONE, &rng);
     struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.003);
-    net.add_params(&opt);
+    model_add_params(&net, &opt);
     struct TrainConfig tc = train_config_default();
     tc.epochs = 6UL;
     struct TrainReport rep = trainer_fit(&net, cnn_clf_loss_, &opt, &sp.train, &tc);
@@ -1611,7 +1612,7 @@ void t_conv_matches_cnn() {
     ASSERT_EQ(net.out_dim(), 4UL * 16UL * 16UL);
     net.dense(5UL, ACT_NONE, &rng);
     ASSERT_EQ(net.out_dim(), 5UL);
-    ASSERT_EQ(net.param_count(), 8UL * 9UL + 8UL + 16UL + 8UL * 64UL + 4UL + 1024UL * 5UL + 5UL);
+    ASSERT_EQ(model_param_count(&net), 8UL * 9UL + 8UL + 16UL + 8UL * 64UL + 4UL + 1024UL * 5UL + 5UL);
     ASSERT_EQ(net.buffers.length(), 2UL);
     &Tensor in = tensor_new_2d(3UL, 256UL, 0);
     &Tensor out = net.forward(in);
@@ -1674,7 +1675,7 @@ static &Tensor shapes8_logits_(&Mlp m, const &Tensor x) { return m.forward(x); }
 static struct Mlp shapes8_judge_(const &Dataset shapes, &Rng rng) {
     struct Mlp judge = mlp_new(64UL, 64UL, 1UL, 4UL, ACT_RELU, ACT_NONE, rng);
     struct Optimizer jo = optimizer_new(OPT_ADAM, (float)0.003);
-    judge.add_params(&jo);
+    model_add_params(&judge, &jo);
     struct TrainConfig tc = train_config_default();
     tc.epochs = 30UL;
     trainer_fit(&judge, clf_loss_, &jo, shapes, &tc);
@@ -1703,8 +1704,8 @@ void t_conv_autoencoders() {
     struct ConvAutoencoder ae = conv_autoencoder_new(shapes_encoder_(0UL, &rng), dec0, RECON_BCE);
     float before = conv_recon_err_(&ae, &shapes);
     struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.003);
-    ae.add_params(&opt);
-    trainer_fit(&ae, conv_autoencoder_loss, &opt, &shapes, &tc);
+    model_add_params(&ae, &opt);
+    model_fit(&ae, &opt, &shapes, &tc);
     float after = conv_recon_err_(&ae, &shapes);
     ASSERT_TRUE(after < before * (float)0.3);
     ASSERT_EQ(ae.enc.training, 1);
@@ -1721,9 +1722,9 @@ void t_conv_autoencoders() {
         struct ConvVae v = conv_vae_new(shapes_encoder_(cfg.classes, &rng),
                                         shapes_decoder_(4UL + cfg.classes, &rng), &cfg);
         struct Optimizer vo = optimizer_new(OPT_ADAM, (float)0.003);
-        v.add_params(&vo);
+        model_add_params(&v, &vo);
         tc.epochs = cond ? 40UL : 25UL;
-        struct TrainReport rep = trainer_fit(&v, conv_vae_loss, &vo, &shapes, &tc);
+        struct TrainReport rep = model_fit(&v, &vo, &shapes, &tc);
         ASSERT_TRUE(rep.lastEpochLoss < rep.firstEpochLoss * (float)0.6);
         ASSERT_TRUE(v.lastKl > (float)0.1);
         int was = tensor_is_grad_enabled();
@@ -1787,7 +1788,7 @@ void t_dcgan() {
     struct Dcgan g = shapes_dcgan_(0UL, &rng);
     struct GanLosses l = g.train(&shapes, 15UL, 64UL);
     ASSERT_TRUE(l.d == l.d && l.g == l.g);   // finite, not NaN
-    &Tensor s = g.generate(256UL, null);
+    &Tensor s = g.sample(256UL, null);
     unsafe { ASSERT_EQ(s->shape[1], 64UL); }
     double d = tensor_mean_value_(s) - tensor_mean_value_(shapes.x);
     if (d < 0.0) d = -d;
@@ -1802,7 +1803,7 @@ void t_dcgan() {
     struct Dcgan cg = shapes_dcgan_(4UL, &rng);
     cg.train(&shapes, 60UL, 64UL);
     &Tensor labels = cycle_labels_(256UL);
-    &Tensor cs = cg.generate(256UL, (?&Tensor)labels);
+    &Tensor cs = cg.sample(256UL, (?&Tensor)labels);
     int was = tensor_is_grad_enabled();
     tensor_set_grad_enabled(0);
     float acc = tensor_accuracy(judge.forward(cs), labels);

@@ -5,6 +5,7 @@
 // backends.
 #include <std/test/test.h>
 #include <std/ml/train.h>
+#include <std/ml/module.h>
 #include <std/ml/nn.h>
 #include <std/ml/datasets.h>
 #include <std/ml/trainer.h>
@@ -71,7 +72,7 @@ void t_fit_matches_trainer_fit() {
     tc.clipNorm = (float)1.0;
     tc.lrDecay = (float)0.9;
     struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.01);
-    a.add_params(&o);
+    model_add_params(&a, &o);
     struct TrainReport ra = trainer_fit(&a, clf_loss_, &o, &data, &tc);
 
     struct Optimizer adam = optimizer_new(OPT_ADAM, (float)0.01);
@@ -149,7 +150,7 @@ void t_convnet_trainer() {
     struct TrainConfig tc = train_config_default();
     tc.epochs = 3UL;
     struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.01);
-    a.add_params(&o);
+    model_add_params(&a, &o);
     struct TrainReport ra = trainer_fit(&a, conv_loss_, &o, &data, &tc);
     struct Optimizer adam = optimizer_new(OPT_ADAM, (float)0.01);
     struct TrainerOptions to = trainer_options_default();
@@ -175,8 +176,8 @@ void t_autoencoder_trainers() {
     struct TrainConfig tc = train_config_default();
     tc.epochs = 3UL;
     struct Optimizer o = optimizer_new(OPT_ADAM, (float)0.003);
-    a.add_params(&o);
-    struct TrainReport ra = trainer_fit(&a, vae_loss, &o, &data, &tc);
+    model_add_params(&a, &o);
+    struct TrainReport ra = model_fit(&a, &o, &data, &tc);
     struct Optimizer adam = optimizer_new(OPT_ADAM, (float)0.003);
     struct TrainerOptions to = trainer_options_default();
     VaeTrainer t = vae_trainer_new(b, &adam, &to);

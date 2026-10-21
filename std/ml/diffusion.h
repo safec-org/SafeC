@@ -27,16 +27,25 @@
 
 namespace std {
 
-// Type-erased forms behind dpm_solver_2_step / dpm_solver_pp_2_step.
-typedef fn &Tensor(const &Tensor x, float sigma, void* userData) EpsModelFn;
-&Tensor dpm_solver_2_step_raw_(EpsModelFn model, void* userData,
-                               const &Tensor x_cur, const &Tensor epsPred,
-                               float alpha_cur, float sigma_cur,
-                               float alpha_next, float sigma_next);
-&Tensor dpm_solver_pp_2_step_raw_(EpsModelFn model, void* userData,
-                                  const &Tensor x_cur, const &Tensor x0Pred,
-                                  float alpha_cur, float sigma_cur,
-                                  float alpha_next, float sigma_next);
+// A denoiser the order-2 solvers call at their midpoint: an eps-prediction
+// model for dpm_solver_2_step, an x0-prediction one for
+// dpm_solver_pp_2_step. Any struct with this method conforms.
+trait DenoiseModel {
+    &Tensor predict(const &Tensor x, float sigma);
+}
+
+// Internal: the order-2 solvers' midpoint sample and noise level (pp: the
+// x0-prediction form), and the update from the midpoint prediction.
+struct DpmMidpoint {
+    &Tensor x_s;
+    float sigma_s;
+    float h;            // lambda_next - lambda_cur
+};
+struct DpmMidpoint dpm_midpoint_(const &Tensor x_cur, const &Tensor pred, float alpha_cur, float sigma_cur,
+                                 float alpha_next, float sigma_next, int pp);
+&Tensor dpm_finish_(const &Tensor x_cur, const &Tensor predMid, float sigma_cur, float alpha_next,
+                    float sigma_next, float h, int pp);
+void dpm_drop_(&Tensor t);
 
 // ── EDM (Karras et al., "Elucidating the Design Space...") schedule ────────
 // sigma(i) = (sigmaMax^(1/rho) + i/(numSteps-1)*(sigmaMin^(1/rho)-sigmaMax^(1/rho)))^rho
@@ -82,21 +91,17 @@ void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd
 
 // Order-2 (midpoint variant, r1=1/2): evaluates the eps-model a second
 // time at the log-SNR midpoint between the current and next step for a
-// higher-accuracy update. 'model' is called internally as
-// model(x_s, sigma_s, userData) at the midpoint sample/noise-level.
-// 'userData' stays 'void*' — deliberately type-erased caller context,
-// same as std/gui's callback userData (see gui_widget.h's field comment).
-// 'userData' is passed through to 'model' unchanged; the callback and its
-// context are checked against each other at compile time.
-generic<T>
-&Tensor dpm_solver_2_step(fn &Tensor(const &Tensor, float, ?&T) model, ?&T userData,
-                           const &Tensor x_cur, const &Tensor epsPred,
-                           float alpha_cur, float sigma_cur,
-                           float alpha_next, float sigma_next) {
-    unsafe {
-        return dpm_solver_2_step_raw_((EpsModelFn)model, (void*)userData, x_cur, epsPred,
-                                      alpha_cur, sigma_cur, alpha_next, sigma_next);
-    }
+// higher-accuracy update: model.predict(x_s, sigma_s) at the midpoint
+// sample / noise level, returning the predicted eps.
+generic<M: DenoiseModel>
+&Tensor dpm_solver_2_step(&M model, const &Tensor x_cur, const &Tensor epsPred,
+                          float alpha_cur, float sigma_cur, float alpha_next, float sigma_next) {
+    struct DpmMidpoint mp = dpm_midpoint_(x_cur, epsPred, alpha_cur, sigma_cur, alpha_next, sigma_next, 0);
+    &Tensor eps_s = model.predict(mp.x_s, mp.sigma_s);
+    &Tensor out = dpm_finish_(x_cur, eps_s, sigma_cur, alpha_next, sigma_next, mp.h, 0);
+    dpm_drop_(mp.x_s);
+    dpm_drop_(eps_s);
+    return out;
 }
 
 // ── DPM-Solver++ (Lu et al. 2022b): data(x0)-prediction parametrization ────
@@ -108,18 +113,17 @@ generic<T>
                               float alpha_cur, float sigma_cur,
                               float alpha_next, float sigma_next);
 
-// Order-2 midpoint variant, x0-prediction form. 'model' is called
-// internally as model(x_s, sigma_s, userData) at the log-SNR midpoint,
-// returning a predicted x0 (not eps).
-generic<T>
-&Tensor dpm_solver_pp_2_step(fn &Tensor(const &Tensor, float, ?&T) model, ?&T userData,
-                              const &Tensor x_cur, const &Tensor x0Pred,
-                              float alpha_cur, float sigma_cur,
-                              float alpha_next, float sigma_next) {
-    unsafe {
-        return dpm_solver_pp_2_step_raw_((EpsModelFn)model, (void*)userData, x_cur, x0Pred,
-                                         alpha_cur, sigma_cur, alpha_next, sigma_next);
-    }
+// Order-2 midpoint variant, x0-prediction form: model.predict(x_s, sigma_s)
+// at the log-SNR midpoint returns a predicted x0 (not eps).
+generic<M: DenoiseModel>
+&Tensor dpm_solver_pp_2_step(&M model, const &Tensor x_cur, const &Tensor x0Pred,
+                             float alpha_cur, float sigma_cur, float alpha_next, float sigma_next) {
+    struct DpmMidpoint mp = dpm_midpoint_(x_cur, x0Pred, alpha_cur, sigma_cur, alpha_next, sigma_next, 1);
+    &Tensor x0_s = model.predict(mp.x_s, mp.sigma_s);
+    &Tensor out = dpm_finish_(x_cur, x0_s, sigma_cur, alpha_next, sigma_next, mp.h, 1);
+    dpm_drop_(mp.x_s);
+    dpm_drop_(x0_s);
+    return out;
 }
 
 } // namespace std

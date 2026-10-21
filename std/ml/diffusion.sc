@@ -105,36 +105,42 @@ void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd
     return out;
 }
 
-&Tensor dpm_solver_2_step_raw_(EpsModelFn model, void* userData,
-                           const &Tensor x_cur, const &Tensor epsPred,
-                           float alpha_cur, float sigma_cur,
-                           float alpha_next, float sigma_next) {
+struct DpmMidpoint dpm_midpoint_(const &Tensor x_cur, const &Tensor pred, float alpha_cur, float sigma_cur,
+                                 float alpha_next, float sigma_next, int pp) {
     float lambda_cur = log_f(alpha_cur / sigma_cur);
     float lambda_next = log_f(alpha_next / sigma_next);
     float h = lambda_next - lambda_cur;
     float lambda_s = lambda_cur + (float)0.5 * h;
     float sigma_s = (float)1.0 / sqrt_f(exp_f((float)2.0 * lambda_s) + (float)1.0);
     float alpha_s = exp_f(lambda_s) * sigma_s;
-    float expm1Half = exp_f((float)0.5 * h) - (float)1.0;
-
+    // eps form: x_s = (sigma_s/sigma) x - alpha_s (e^{h/2} - 1) eps
+    // x0 form:  x_s = (sigma_s/sigma) x - alpha_s (e^{-h/2} - 1) x0
+    float expm1Half = pp ? exp_f((float)-0.5 * h) - (float)1.0 : exp_f((float)0.5 * h) - (float)1.0;
     &Tensor sTerm1 = tensor_scale(x_cur, sigma_s / sigma_cur);
-    &Tensor sTerm2 = tensor_scale(epsPred, alpha_s * expm1Half);
-    &Tensor x_s = tensor_sub(sTerm1, sTerm2);
+    &Tensor sTerm2 = tensor_scale(pred, alpha_s * expm1Half);
+    struct DpmMidpoint mp;
+    mp.x_s = tensor_sub(sTerm1, sTerm2);
+    mp.sigma_s = sigma_s;
+    mp.h = h;
+    dpm_drop_(sTerm1);
+    dpm_drop_(sTerm2);
+    return mp;
+}
 
-    &Tensor eps_s;
-    unsafe { eps_s = model(x_s, sigma_s, userData); }
-
-    float expm1h = exp_f(h) - (float)1.0;
+&Tensor dpm_finish_(const &Tensor x_cur, const &Tensor predMid, float sigma_cur, float alpha_next,
+                    float sigma_next, float h, int pp) {
+    float expm1 = pp ? exp_f(-h) - (float)1.0 : exp_f(h) - (float)1.0;
     &Tensor nTerm1 = tensor_scale(x_cur, sigma_next / sigma_cur);
-    &Tensor nTerm2 = tensor_scale(eps_s, alpha_next * expm1h);
+    &Tensor nTerm2 = tensor_scale(predMid, alpha_next * expm1);
     &Tensor out = tensor_sub(nTerm1, nTerm2);
-
-    sTerm1->free(); sTerm2->free(); x_s->free(); eps_s->free(); nTerm1->free(); nTerm2->free();
-    unsafe {
-        free((void*)sTerm1); free((void*)sTerm2); free((void*)x_s);
-        free((void*)eps_s); free((void*)nTerm1); free((void*)nTerm2);
-    }
+    dpm_drop_(nTerm1);
+    dpm_drop_(nTerm2);
     return out;
+}
+
+void dpm_drop_(&Tensor t) {
+    t->free();
+    unsafe { free((void*)t); }
 }
 
 &Tensor dpm_solver_pp_1_step(const &Tensor x_cur, const &Tensor x0Pred,
@@ -151,38 +157,6 @@ void ddpm_linear_schedule(unsigned long numSteps, float betaStart, float betaEnd
 
     term1->free(); term2->free();
     unsafe { free((void*)term1); free((void*)term2); }
-    return out;
-}
-
-&Tensor dpm_solver_pp_2_step_raw_(EpsModelFn model, void* userData,
-                              const &Tensor x_cur, const &Tensor x0Pred,
-                              float alpha_cur, float sigma_cur,
-                              float alpha_next, float sigma_next) {
-    float lambda_cur = log_f(alpha_cur / sigma_cur);
-    float lambda_next = log_f(alpha_next / sigma_next);
-    float h = lambda_next - lambda_cur;
-    float lambda_s = lambda_cur + (float)0.5 * h;
-    float sigma_s = (float)1.0 / sqrt_f(exp_f((float)2.0 * lambda_s) + (float)1.0);
-    float alpha_s = exp_f(lambda_s) * sigma_s;
-    float expm1NegHalf = exp_f((float)-0.5 * h) - (float)1.0;
-
-    &Tensor sTerm1 = tensor_scale(x_cur, sigma_s / sigma_cur);
-    &Tensor sTerm2 = tensor_scale(x0Pred, alpha_s * expm1NegHalf);
-    &Tensor x_s = tensor_sub(sTerm1, sTerm2);
-
-    &Tensor x0_s;
-    unsafe { x0_s = model(x_s, sigma_s, userData); }
-
-    float expm1NegH = exp_f(-h) - (float)1.0;
-    &Tensor nTerm1 = tensor_scale(x_cur, sigma_next / sigma_cur);
-    &Tensor nTerm2 = tensor_scale(x0_s, alpha_next * expm1NegH);
-    &Tensor out = tensor_sub(nTerm1, nTerm2);
-
-    sTerm1->free(); sTerm2->free(); x_s->free(); x0_s->free(); nTerm1->free(); nTerm2->free();
-    unsafe {
-        free((void*)sTerm1); free((void*)sTerm2); free((void*)x_s);
-        free((void*)x0_s); free((void*)nTerm1); free((void*)nTerm2);
-    }
     return out;
 }
 

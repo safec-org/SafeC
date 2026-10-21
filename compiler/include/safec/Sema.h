@@ -477,6 +477,18 @@ private:
     // names (see TraitDecl in AST.h). Populated in collectDecls, consulted
     // by satisfiesTrait() alongside builtinTraits_.
     std::unordered_map<std::string, std::vector<std::string>> userTraits_;
+    // Each user trait's supertraits ('trait Name : A + B'), and where it was
+    // declared. checkTraitSupertraits() rejects unknown supertraits and
+    // cycles (dropping the offending edges), so satisfiesTrait()'s recursion
+    // through them always terminates.
+    std::unordered_map<std::string, std::vector<std::string>> userTraitSupers_;
+    std::unordered_map<std::string, SourceLocation> userTraitLocs_;
+    // Where the declaration or statement being checked starts: resolveType()
+    // has no location of its own, so a generic struct instantiated there
+    // (and a constraint it fails) is reported here.
+    SourceLocation typeUseLoc_;
+    void checkTraitSupertraits();
+    bool isBuiltinTrait(const std::string &trait) const;
     bool satisfiesTrait(const TypePtr &ty, const std::string &trait) const;
     static std::string binaryOpToMethodName(BinaryOp op);
 

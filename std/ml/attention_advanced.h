@@ -10,6 +10,8 @@
 #include <std/ml/attention.h>
 #include <std/collections/slice.h>
 
+#include <std/collections/vec.h>
+
 namespace std {
 
 // ── Multi-head Latent Attention (MLA, DeepSeek-V2) ──────────────────────────
@@ -23,8 +25,22 @@ namespace std {
 //   K    = c_kv @ Wuk                    [seqLen, dModel]
 //   V    = c_kv @ Wuv                    [seqLen, dModel]
 //   out  = mha_forward(Q, K, V, numHeads)
-&Tensor mla_forward(const &Tensor X, const &Tensor Wq, const &Tensor Wdkv,
-                     const &Tensor Wuk, const &Tensor Wuv, unsigned long numHeads);
+// (Mla::forward; forward only, like attention.h).
+struct Mla {
+    &Tensor Wq;     // [dModel, dModel]
+    &Tensor Wdkv;   // [dModel, dLatent]
+    &Tensor Wuk;    // [dLatent, dModel]
+    &Tensor Wuv;    // [dLatent, dModel]
+    unsigned long numHeads;
+
+    &Tensor forward(const &Tensor X) const;   // [seqLen, dModel] -> [seqLen, dModel]
+    // Parameterized (module.h): Wq, Wdkv, Wuk, Wuv.
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
+    void free();
+};
+// Weights U(-1/sqrt(in), 1/sqrt(in)) from rng; numHeads divides dModel.
+struct Mla mla_new(unsigned long dModel, unsigned long dLatent, unsigned long numHeads, &Rng rng);
 
 // EG-MLA (Extended-Group MLA): shares one down-projected latent c_kv
 // across 'numGroups' independent up-projection groups (grouped-query
@@ -33,10 +49,23 @@ namespace std {
 // = dModel/numGroups) and runs 'headsPerGroup' ordinary attention heads
 // over its own up-projected K/V slice; results are concatenated back
 // into one [seqLen, dModel] tensor. WukGroups/WuvGroups hold one tensor
-// per group (caller-owned); their length is the group count and must match.
-&Tensor eg_mla_forward(const &Tensor X, const &Tensor Wq, const &Tensor Wdkv,
-                        struct Slice<&Tensor> WukGroups, struct Slice<&Tensor> WuvGroups,
-                        unsigned long headsPerGroup);
+// per group; their length is the group count.
+struct EgMla {
+    &Tensor Wq;                   // [dModel, dModel]
+    &Tensor Wdkv;                 // [dModel, dLatent]
+    struct Vec<&Tensor> Wuk;      // per group [dLatent, groupDim]
+    struct Vec<&Tensor> Wuv;
+    unsigned long headsPerGroup;
+
+    &Tensor forward(const &Tensor X) const;   // [seqLen, dModel] -> [seqLen, dModel]
+    // Parameterized (module.h): Wq, Wdkv, then each group's Wuk, Wuv.
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
+    void free();
+};
+// numGroups groups of headsPerGroup heads; numGroups divides dModel.
+struct EgMla eg_mla_new(unsigned long dModel, unsigned long dLatent, unsigned long numGroups,
+                        unsigned long headsPerGroup, &Rng rng);
 
 // ── Shifted-Window attention (Swin, adapted to 1D sequences) ────────────────
 // Swin's two core ideas — partition into fixed-size local windows and
@@ -79,6 +108,9 @@ struct GatedDeltaNet {
     // X: [seqLen, dModel] (gate input only), Q/K: [seqLen, keyDim], V: [seqLen, valueDim]
     // -> result: [seqLen, valueDim], computed via a sequential scan over time.
     &Tensor forward(const &Tensor X, const &Tensor Q, const &Tensor K, const &Tensor V) const;
+    // Parameterized (module.h): every weight tensor.
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     void free();
 };
 

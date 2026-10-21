@@ -13,12 +13,14 @@
 //       return tensor_cross_entropy_loss(m.forward(x), y);
 //   }
 //   struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.01);
-//   net.add_params(&opt);
+//   model_add_params(&net, &opt);   // module.h
 //   struct TrainConfig cfg = train_config_default();
 //   struct TrainReport rep = trainer_fit(&net, clf_loss, &opt, &train, &cfg);
 //
 // The model, the forward pass and the loss are all resolved at compile
-// time (trainer_fit is generic over the model type).
+// time (trainer_fit is generic over the model type). For a built-in loss
+// on any Module, or a model's own loss (autoencoders, VAEs), module.h's
+// module_fit / model_fit need no loss function at all.
 //
 // train_traits.h puts this loop and nn_rocm.h's rocm_trainer_fit behind one
 // interface (the Trainable trait), and train.h picks the backend at build

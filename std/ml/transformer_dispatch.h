@@ -6,7 +6,7 @@
 // "portable core, opt-in extension" split as tensor.h vs tensor_blas.h/
 // tensor_gpu.h. This file is the extension: jit_block_forward_on/
 // jit_forward_on are the exact same computation as transformer.h's
-// JiTBlock::forward/jit_forward, with every projection matmul (Q/K/V/Wo,
+// JiTBlock::forward / JiT::forward, with every projection matmul (Q/K/V/Wo,
 // the FFN's W1/W2) and the FFN's relu routed through tensor_dispatch.h's
 // tensor_matmul_on/tensor_relu_on instead of always running on the CPU.
 //
@@ -26,11 +26,10 @@ namespace std {
 
 &Tensor jit_block_forward_on(const &JiTBlock block, const &Tensor x, enum Device device);
 
-// Same signature as transformer.h's jit_forward, plus a device — see
-// tensor_dispatch.h's own header comment for why enum Device's
-// enumerators (DEVICE_CPU etc.) must be referenced unqualified rather
-// than as std::DEVICE_CPU.
-&Tensor jit_forward_on(const &Tensor patches, const &Tensor WPatchEmbed, const &Tensor cond,
-                        struct Slice<JiTBlock> blocks, enum Device device);
+// JiT::forward on a device (functions, not methods: transformer.h's
+// structs don't depend on this file) — see tensor_dispatch.h's own header
+// comment for why enum Device's enumerators (DEVICE_CPU etc.) must be
+// referenced unqualified rather than as std::DEVICE_CPU.
+&Tensor jit_forward_on(const &JiT model, const &Tensor patches, const &Tensor cond, enum Device device);
 
 } // namespace std

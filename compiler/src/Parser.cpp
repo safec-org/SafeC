@@ -1505,7 +1505,7 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTr
     return sd;
 }
 
-// trait Name { RetType method(Params) [const]; ... }
+// trait Name [: Super + ...] { RetType method(Params) [const]; ... }
 // Deliberately simpler than parseStructDecl's method-parsing branch (no
 // fields, no operator overloads, no C-style function-pointer members) —
 // a trait body is only ever a list of required method signatures.
@@ -1517,6 +1517,13 @@ std::unique_ptr<TraitDecl> Parser::parseTraitDecl() {
     else diag_.error(cur().loc, "expected trait name after 'trait'");
 
     auto td = std::make_unique<TraitDecl>(std::move(name), loc);
+    // ': A + B' — supertraits, every one of which the trait requires too.
+    if (match(TK::Colon)) {
+        do {
+            if (cur().is(TK::Ident)) { td->supertraits.push_back(cur().text); consume(); }
+            else { diag_.error(cur().loc, "expected supertrait name after ':' or '+'"); break; }
+        } while (match(TK::Plus));
+    }
     expect(TK::LBrace, "expected '{' in trait definition");
     while (!atEnd() && !cur().is(TK::RBrace)) {
         auto savedPos = pos_;

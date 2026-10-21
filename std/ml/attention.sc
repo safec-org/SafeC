@@ -328,4 +328,50 @@ static &Tensor __phi_elu_p1(&Tensor x) {
     return out;
 }
 
+// ── Multi-head self-attention layer ──────────────────────────────────────────
+
+// A [rows, cols] weight, U(-1/sqrt(rows), 1/sqrt(rows)) (nn.h's Mlp init).
+&Tensor attn_weight_(unsigned long rows, unsigned long cols, &Rng rng) {
+    &Tensor w = tensor_new_2d(rows, cols, 0);
+    float bound = (float)1.0 / sqrt_f((float)rows);
+    rng.fill_uniform(w, -bound, bound);
+    return w;
+}
+
+static void attn_drop_(&Tensor t) {
+    t->free();
+    unsafe { free((void*)t); }
+}
+
+struct MultiHeadAttention mha_new(unsigned long dModel, unsigned long numHeads, &Rng rng) {
+    if (numHeads == 0UL || dModel % numHeads != 0UL) panic_at("mha_new: numHeads must divide dModel", "attention.sc", __LINE__);
+    struct MultiHeadAttention a;
+    a.Wq = attn_weight_(dModel, dModel, rng);
+    a.Wk = attn_weight_(dModel, dModel, rng);
+    a.Wv = attn_weight_(dModel, dModel, rng);
+    a.Wo = attn_weight_(dModel, dModel, rng);
+    a.numHeads = numHeads;
+    return a;
+}
+
+&Tensor MultiHeadAttention::forward(const &Tensor X) const {
+    &Tensor Q = tensor_matmul(X, self.Wq);
+    &Tensor K = tensor_matmul(X, self.Wk);
+    &Tensor V = tensor_matmul(X, self.Wv);
+    &Tensor h = mha_forward(Q, K, V, self.numHeads);
+    &Tensor out = tensor_matmul(h, self.Wo);
+    attn_drop_(Q); attn_drop_(K); attn_drop_(V); attn_drop_(h);
+    return out;
+}
+
+void MultiHeadAttention::collect_params(&Vec<&Tensor> out) const {
+    out.push(self.Wq); out.push(self.Wk); out.push(self.Wv); out.push(self.Wo);
+}
+
+void MultiHeadAttention::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+
+void MultiHeadAttention::free() {
+    attn_drop_(self.Wq); attn_drop_(self.Wk); attn_drop_(self.Wv); attn_drop_(self.Wo);
+}
+
 } // namespace std

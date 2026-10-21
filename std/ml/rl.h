@@ -220,6 +220,10 @@ struct Dqn {
     // Stores the transition and trains when due; returns the loss, or -1 when
     // no gradient step ran.
     float observe(const &Tensor obs, unsigned long action, float reward, const &Tensor next, int terminal);
+    // Parameterized (module.h): the Q network's parameters; the state adds
+    // the target network.
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     void free();
 };
 struct Dqn    dqn_new(unsigned long obsDim, unsigned long actions, const &DqnConfig cfg);
@@ -279,6 +283,9 @@ struct PolicyAgent {
     // Trains on the stored rollout with the configured algorithm, clears it,
     // and returns the last loss.
     float update();
+    // Parameterized (module.h): the policy and value networks.
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     void free();
 };
 struct PolicyAgent pg_new(unsigned long obsDim, unsigned long actions, const &PgConfig cfg);

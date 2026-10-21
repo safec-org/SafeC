@@ -16,6 +16,8 @@
 // The CPU scan runs the D channels in parallel on std/sync/parallel.h's pool.
 #include <std/ml/tensor.h>
 
+#include <std/collections/vec.h>
+
 namespace std {
 
 // The selective scan on its own. x, delta: [T, D] (delta already positive,
@@ -54,6 +56,9 @@ struct Mamba {
 
     // X: [T, dModel] -> [T, dModel], the whole sequence at once (prefill).
     &Tensor forward(const &Tensor X) const;
+    // Parameterized (module.h): every weight tensor.
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     void free();
     // x: [1, dModel] (or [dModel]) -> [1, dModel]; advances 'state'.
     &Tensor step(&MambaState state, const &Tensor x) const;

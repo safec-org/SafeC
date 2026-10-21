@@ -5,12 +5,13 @@
 // autograd -- or convolutional ones (ConvAutoencoder, ConvVae) built from
 // convnet.h's ConvNet.
 //
-// Every *_loss function has trainer_fit's loss signature (model, x, y), so
+// Each model's loss(x, y) method is its training loss, so each is a
+// LossModel (module.h) and module.h's generic functions train any of them:
 //   struct Optimizer opt = optimizer_new(OPT_ADAM, (float)0.001);
-//   vae.add_params(&opt);
-//   trainer_fit(&vae, vae_loss, &opt, &data, &cfg);
-// trains any of them. 'y' is ignored except by a conditional VAE, which
-// reads class indices from it.
+//   model_add_params(&vae, &opt);
+//   model_fit(&vae, &opt, &data, &cfg);
+// 'y' is ignored except by a conditional VAE, which reads class indices
+// from it.
 //
 // Reconstruction losses: RECON_MSE for real-valued data, RECON_BCE for data
 // in [0, 1] (images). With RECON_BCE the decoder outputs logits and the
@@ -58,11 +59,14 @@ struct Autoencoder {
     &Tensor encode(const &Tensor x);         // [m, latent]
     &Tensor decode(const &Tensor z);         // [m, inDim]
     &Tensor reconstruct(const &Tensor x);
-    void add_params(&Optimizer opt) const;
+    // Parameterized (module.h).
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     void free();
+
+    &Tensor loss(const &Tensor x, const &Tensor y);
 };
 struct Autoencoder autoencoder_new(unsigned long inDim, const &AutoencoderConfig cfg);
-&Tensor autoencoder_loss(&Autoencoder ae, const &Tensor x, const &Tensor y);
 
 // ── Variational autoencoder (VAE, beta-VAE, CVAE) ────────────────────────────
 // Kingma & Welling 2014. The encoder outputs mu and log sigma^2 of a
@@ -104,11 +108,14 @@ struct Vae {
     // n new samples from the prior; 'labels' (n class indices) for a CVAE,
     // null for an unconditional VAE.
     &Tensor sample(unsigned long n, ?&Tensor labels);
-    void add_params(&Optimizer opt) const;
+    // Parameterized (module.h).
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     void free();
+
+    &Tensor loss(const &Tensor x, const &Tensor y);
 };
 struct Vae vae_new(unsigned long inDim, const &VaeConfig cfg);
-&Tensor vae_loss(&Vae v, const &Tensor x, const &Tensor y);
 
 // ── Vector-quantized VAE ─────────────────────────────────────────────────────
 // van den Oord et al. 2017. The encoder output z_e is replaced by its
@@ -149,11 +156,14 @@ struct VqVae {
     &Tensor encode(const &Tensor x);         // [m] code indices
     &Tensor decode(const &Tensor codes);     // indices -> [m, inDim]
     &Tensor reconstruct(const &Tensor x);
-    void add_params(&Optimizer opt) const;
+    // Parameterized (module.h).
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     void free();
+
+    &Tensor loss(const &Tensor x, const &Tensor y);
 };
 struct VqVae vqvae_new(unsigned long inDim, const &VqVaeConfig cfg);
-&Tensor vqvae_loss(&VqVae v, const &Tensor x, const &Tensor y);
 
 // ── Convolutional autoencoder and VAE ────────────────────────────────────────
 // The same models with a ConvNet encoder and decoder you build (convnet.h):
@@ -188,11 +198,14 @@ struct ConvAutoencoder {
     &Tensor encode(const &Tensor x);
     &Tensor decode(const &Tensor z);
     &Tensor reconstruct(const &Tensor x);
-    void add_params(&Optimizer opt) const;
+    // Parameterized (module.h).
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     void free();
+
+    &Tensor loss(const &Tensor x, const &Tensor y);
 };
 struct ConvAutoencoder conv_autoencoder_new(struct ConvNet enc, struct ConvNet dec, int recon);
-&Tensor conv_autoencoder_loss(&ConvAutoencoder ae, const &Tensor x, const &Tensor y);
 
 // Convolutional VAE: linear mu / log sigma^2 heads on the flattened encoder
 // features, the loss of Vae. Reads latent, recon, beta, classes and seed
@@ -219,10 +232,13 @@ struct ConvVae {
     // n samples from the prior; 'labels' (n class indices) for a conditional
     // VAE, null otherwise.
     &Tensor sample(unsigned long n, ?&Tensor labels);
-    void add_params(&Optimizer opt) const;
+    // Parameterized (module.h).
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     void free();
+
+    &Tensor loss(const &Tensor x, const &Tensor y);
 };
 struct ConvVae conv_vae_new(struct ConvNet enc, struct ConvNet dec, const &VaeConfig cfg);
-&Tensor conv_vae_loss(&ConvVae v, const &Tensor x, const &Tensor y);
 
 } // namespace std

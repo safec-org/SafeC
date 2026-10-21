@@ -221,26 +221,74 @@ void JiTBlock::free() {
     return out;
 }
 
-&Tensor jit_forward(const &Tensor patches, const &Tensor WPatchEmbed, const &Tensor cond,
-                     struct Slice<JiTBlock> blocks) {
-    unsigned long numBlocks = blocks.length();
-    &Tensor embedRaw = tensor_matmul(patches, WPatchEmbed);
+struct JiT jit_new(unsigned long patchDim, unsigned long dModel, unsigned long dHidden, unsigned long numHeads,
+                   unsigned long depth) {
+    struct JiT m;
+    m.WPatchEmbed = __xf_init_weight(patchDim, dModel, 301UL);
+    m.blocks = vec_new();
+    unsigned long i = 0UL;
+    while (i < depth) { m.blocks.push(jit_block_new(dModel, dHidden, numHeads)); i = i + 1UL; }
+    return m;
+}
+
+&Tensor JiT::forward(const &Tensor patches, const &Tensor cond) const {
+    &Tensor embedRaw = tensor_matmul(patches, self.WPatchEmbed);
     &Tensor x = __add_broadcast_row(embedRaw, cond);
     embedRaw->free();
     unsafe { free((void*)embedRaw); }
 
     unsigned long i = 0UL;
-    while (i < numBlocks) {
-        &JiTBlock blk = blocks.at(i);
-        unsafe {
-            &Tensor next = blk.forward(x);
-            x->free();
-            free((void*)x);
-            x = next;
-        }
+    while (i < self.blocks.length()) {
+        &Tensor next = self.blocks.at(i).forward(x);
+        x->free();
+        unsafe { free((void*)x); }
+        x = next;
         i = i + 1UL;
     }
     return x;
 }
+
+void JiT::collect_params(&Vec<&Tensor> out) const {
+    out.push(self.WPatchEmbed);
+    unsigned long i = 0UL;
+    while (i < self.blocks.length()) { self.blocks.at(i).collect_params(out); i = i + 1UL; }
+}
+
+void JiT::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+
+void JiT::free() {
+    self.WPatchEmbed->free();
+    unsafe { free((void*)self.WPatchEmbed); }
+    unsigned long i = 0UL;
+    while (i < self.blocks.length()) { self.blocks.at(i).free(); i = i + 1UL; }
+    self.blocks.free();
+}
+
+void DiTBlock::collect_params(&Vec<&Tensor> out) const {
+    out.push(self.Wq);
+    out.push(self.Wk);
+    out.push(self.Wv);
+    out.push(self.Wo);
+    out.push(self.W1);
+    out.push(self.b1);
+    out.push(self.W2);
+    out.push(self.b2);
+    out.push(self.WadaLN);
+}
+
+void DiTBlock::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+
+void JiTBlock::collect_params(&Vec<&Tensor> out) const {
+    out.push(self.Wq);
+    out.push(self.Wk);
+    out.push(self.Wv);
+    out.push(self.Wo);
+    out.push(self.W1);
+    out.push(self.b1);
+    out.push(self.W2);
+    out.push(self.b2);
+}
+
+void JiTBlock::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
 
 } // namespace std

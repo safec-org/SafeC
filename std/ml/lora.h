@@ -18,10 +18,11 @@
 // frozen base costs ~4.1-4.5 bits per weight at rest while gradients flow
 // in float32 through it to the adapters.
 //
-// Both wrap an Mlp (nn.h). Train them with trainer.h like any model:
+// Both wrap an Mlp (nn.h) and are Modules (module.h), so they train like
+// any other model:
 //   struct LoraMlp ft = lora_attach(&pretrained, &cfg);
-//   ft.add_params(&opt);                // adapters only
-//   trainer_fit(&ft, my_loss, &opt, &data, &tc);
+//   model_add_params(&ft, &opt);       // adapters only
+//   module_fit(&ft, TRAIN_LOSS_CE, &opt, &data, &tc);
 #include <std/ml/tensor.h>
 #include <std/ml/nn.h>
 #include <std/collections/vec.h>
@@ -49,8 +50,10 @@ struct LoraMlp {
     struct Rng rng;
 
     &Tensor forward(const &Tensor x);
-    void add_params(&Optimizer opt) const;
-    unsigned long param_count() const;       // trainable values
+    // Parameterized (module.h): the adapters (A_0, B_0, A_1, B_1, ...), which
+    // are all that trains and all a LoRA file holds.
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     // W += scale * A B in the base for every layer, then B = 0: the base alone
     // now computes what the adapted network did.
     void merge();
@@ -97,8 +100,9 @@ struct QLoraMlp {
     struct Rng rng;
 
     &Tensor forward(const &Tensor x);
-    void add_params(&Optimizer opt) const;
-    unsigned long param_count() const;       // trainable values
+    // Parameterized (module.h): the adapters, as for LoraMlp.
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     unsigned long base_bytes() const;        // the frozen base at rest
     void free();
 };

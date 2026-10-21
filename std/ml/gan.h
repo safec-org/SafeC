@@ -33,7 +33,7 @@
 // the class-conditional distribution.
 //
 // emaDecay > 0 keeps an exponential moving average of the generator's
-// weights (Karras et al. 2018) and Gan::generate samples from it: the
+// weights (Karras et al. 2018) and Gan::sample samples from it: the
 // adversarial game oscillates, and the average sits nearer its centre
 // than any single step's weights. The decay ramps up as
 // min(emaDecay, (1 + t) / (10 + t)) over the first steps t.
@@ -47,6 +47,7 @@
 #include <std/ml/nn.h>
 #include <std/ml/convnet.h>
 #include <std/ml/datasets.h>
+#include <std/ml/module.h>
 
 namespace std {
 
@@ -96,9 +97,13 @@ struct Gan {
     struct GanLosses train(const &Dataset data, unsigned long epochs, unsigned long batchSize);
     // n generated rows from the averaged generator (heap tensor, caller
     // frees); 'labels' as above.
-    &Tensor generate(unsigned long n, ?&Tensor labels);
+    &Tensor sample(unsigned long n, ?&Tensor labels);
     // D's raw score for rows (higher = more real).
     &Tensor score(const &Tensor x, ?&Tensor labels);
+    // Parameterized (module.h): G's and D's parameters; the state adds the
+    // averaged generator (and a Dcgan's buffers).
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     void free();
 };
 
@@ -106,6 +111,13 @@ struct GanLosses {
     float d;                 // last discriminator / critic loss
     float g;                 // generator loss
 };
+
+// What a trainable GAN offers (Gan and Dcgan; CpuGanTrainer is generic over
+// it): its two training entry points, its tensors and sampling.
+trait GanModel : Parameterized + Generative {
+    struct GanLosses train_step(const &Tensor real, ?&Tensor labels);
+    struct GanLosses train(const &Dataset data, unsigned long epochs, unsigned long batchSize);
+}
 
 struct Gan gan_new(unsigned long dataDim, const &GanConfig cfg);
 // Internal (exposed for tests): GAN_WGAN_GP's penalty term for g's critic
@@ -127,7 +139,7 @@ struct Gan gan_new(unsigned long dataDim, const &GanConfig cfg);
 // per class (tensor_append_label_channels) -- so for C-channel images D
 // takes C + classes channels. Takes ownership of both nets. Training steps
 // run the nets in training mode (batch norm on batch statistics);
-// Dcgan::generate and Dcgan::score in inference mode.
+// Dcgan::sample and Dcgan::score in inference mode.
 //
 //   struct ConvNet gen = convnet_new(latent, 1UL, 1UL);
 //   gen.deconv(64UL, 4UL, 1UL, 0UL, ACT_NONE, &rng);   // 64 x 4 x 4
@@ -155,8 +167,12 @@ struct Dcgan {
     // 'labels' (m class indices) for a conditional DCGAN, else null -- as for Gan.
     struct GanLosses train_step(const &Tensor real, ?&Tensor labels);
     struct GanLosses train(const &Dataset data, unsigned long epochs, unsigned long batchSize);
-    &Tensor generate(unsigned long n, ?&Tensor labels);   // heap tensor, caller frees
+    &Tensor sample(unsigned long n, ?&Tensor labels);   // heap tensor, caller frees
     &Tensor score(const &Tensor x, ?&Tensor labels);
+    // Parameterized (module.h): G's and D's parameters; the state adds the
+    // averaged generator (and a Dcgan's buffers).
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     void free();
 };
 struct Dcgan dcgan_new(struct ConvNet gen, struct ConvNet disc, const &GanConfig cfg);

@@ -320,4 +320,68 @@ void XLSTMState::free() {
     }
 }
 
+void RNNCell::collect_params(&Vec<&Tensor> out) const {
+    out.push(self.W_ih);
+    out.push(self.W_hh);
+    out.push(self.b_ih);
+    out.push(self.b_hh);
+}
+
+void RNNCell::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+
+void GRUCell::collect_params(&Vec<&Tensor> out) const {
+    out.push(self.W_ir);
+    out.push(self.W_hr);
+    out.push(self.b_ir);
+    out.push(self.b_hr);
+    out.push(self.W_iz);
+    out.push(self.W_hz);
+    out.push(self.b_iz);
+    out.push(self.b_hz);
+    out.push(self.W_in);
+    out.push(self.W_hn);
+    out.push(self.b_in);
+    out.push(self.b_hn);
+}
+
+void GRUCell::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+
+void LSTMCell::collect_params(&Vec<&Tensor> out) const {
+    out.push(self.W_ii);
+    out.push(self.W_hi);
+    out.push(self.b_ii);
+    out.push(self.b_hi);
+    out.push(self.W_if);
+    out.push(self.W_hf);
+    out.push(self.b_if);
+    out.push(self.b_hf);
+    out.push(self.W_ig);
+    out.push(self.W_hg);
+    out.push(self.b_ig);
+    out.push(self.b_hg);
+    out.push(self.W_io);
+    out.push(self.W_ho);
+    out.push(self.b_io);
+    out.push(self.b_ho);
+}
+
+void LSTMCell::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+
+void XLSTMCell::collect_params(&Vec<&Tensor> out) const {
+    out.push(self.Wz);
+    out.push(self.Rz);
+    out.push(self.bz);
+    out.push(self.Wi);
+    out.push(self.Ri);
+    out.push(self.bi);
+    out.push(self.Wf);
+    out.push(self.Rf);
+    out.push(self.bf);
+    out.push(self.Wo);
+    out.push(self.Ro);
+    out.push(self.bo);
+}
+
+void XLSTMCell::collect_state(&Vec<&Tensor> out) const { self.collect_params(out); }
+
 } // namespace std

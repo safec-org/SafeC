@@ -322,21 +322,14 @@ struct ConvNet {
     unsigned long in_dim() const;             // inC*inH*inW
     unsigned long out_dim() const;            // outC*outH*outW
     &Tensor forward(const &Tensor x) const;   // [batch, in_dim] -> [batch, out_dim]
-    unsigned long param_count() const;
     // Same layers, a copy of the parameters and buffers (e.g. a GAN's averaged
     // generator).
     struct ConvNet clone() const;
-    // self = src and self = tau * src + (1 - tau) * self, as for Mlp (buffers
-    // included).
-    void copy(const &ConvNet src);
-    void soft_update(const &ConvNet src, float tau);
-    // Every trained parameter into o (not the buffers).
-    void add_params(&Optimizer o) const;
-    // Parameters and buffers to / from a file (tensors_save's format, nn.h).
-    // Loading needs a net built with the same layers; returns 1 on success, 0
-    // when the file is missing, unreadable or doesn't match.
-    int save_file(const &char path) const;
-    int load_file(const &char path);
+    // Parameterized (module.h): the trained parameters; the state adds the
+    // buffers (running statistics, spectral norms' u), so model_save_file /
+    // model_copy carry them too.
+    void collect_params(&Vec<&Tensor> out) const;
+    void collect_state(&Vec<&Tensor> out) const;
     void free();
 };
 struct ConvNet convnet_new(unsigned long channels, unsigned long height, unsigned long width);
