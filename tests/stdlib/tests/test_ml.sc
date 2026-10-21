@@ -143,7 +143,28 @@ void t_half_gemv() {
             r = r + 1UL;
         }
         ASSERT_TRUE(worst < (float)1e-3);
-        unsafe { free((void*)x); free((void*)y); }
+        // half_gemv_batch: m vectors in one pass equal m half_gemv calls
+        unsigned long m = 5UL;
+        float* xs;
+        float* ys;
+        unsafe {
+            xs = (float*)malloc(sizeof(float) * k * m);
+            ys = (float*)malloc(sizeof(float) * n * m);
+            i = 0UL; while (i < k * m) { xs[i] = (float)((i * 13UL) % 31UL) * (float)0.02 - (float)0.3; i = i + 1UL; }
+            ok = half_gemv_batch(&w, (const &float)xs, m, (&float)ys);
+        }
+        ASSERT_TRUE(ok);
+        int same = 1;
+        unsigned long v = 0UL;
+        while (v < m) {
+            unsafe {
+                half_gemv(&w, (const &float)&xs[v * k], (&float)y);
+                r = 0UL; while (r < n) { if (y[r] != ys[v * n + r]) same = 0; r = r + 1UL; }
+            }
+            v = v + 1UL;
+        }
+        ASSERT_TRUE(same);
+        unsafe { free((void*)x); free((void*)y); free((void*)xs); free((void*)ys); }
         w.free();
         di = di + 1;
     }
