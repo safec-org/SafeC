@@ -8,18 +8,27 @@
 //   (none)   the CPU: train_cpu.h's CpuTrainer, CpuGanTrainer, ...
 //   rocm     an AMD GPU: nn_rocm.h's RocmTrainer, RocmGanTrainer, ... (link
 //            -lMIOpen -lamdhip64 -lhiprtc -lrocblas)
+//   mps      an Apple GPU (Metal): nn_mps.h's MpsTrainer for MlpTrainer.
+//            nn_mps.h has fully connected nets only, so the other names
+//            (ConvNetTrainer, the autoencoder and VAE trainers, GanTrainer,
+//            DcganTrainer, DqnLearner, PgLearner) stay the CPU's and train
+//            there; an MlpTrainer built with TrainerOptions.precision set
+//            fails to build (ok = 0: no 16-bit activations on Metal yet).
+//            Link -framework Metal -framework Foundation -lobjc. rocm wins
+//            when both are enabled.
 //   cuda     not available yet: there is no device-resident CUDA training
 //            stack (gpu_cuda.h / tensor_cuda.h are per-op), so the build
 //            stops with an error rather than silently training on the CPU
-//            (unless rocm is enabled too, which wins). A CUDA backend adds
-//            types satisfying train_traits.h's traits and a branch here.
+//            (unless rocm or mps is enabled too, which wins). A CUDA backend
+//            adds types satisfying train_traits.h's traits and a branch here.
 //
 // In Package.toml:
 //
 //   [features]
 //   rocm = []        # safeguard build --features rocm
+//   mps = []         # safeguard build --features mps
 //
-// which reaches the sources as SAFEC_FEATURE_ROCM. Everything is resolved
+// which reach the sources as SAFEC_FEATURE_ROCM / SAFEC_FEATURE_MPS. Everything is resolved
 // at compile time: each name is a typedef and each constructor a static
 // function forwarding to the backend's, and the generic loops
 // (train_fit, train_gan) are monomorphized for the chosen type.
@@ -42,8 +51,11 @@
 
 #if defined(SAFEC_FEATURE_ROCM)
 #include <std/ml/nn_rocm.h>
+#elif defined(SAFEC_FEATURE_MPS)
+#include <std/ml/nn_mps.h>
+#include <std/ml/train_cpu.h>
 #elif defined(SAFEC_FEATURE_CUDA)
-#error "std/ml/train.h: no CUDA training backend yet (build with the rocm feature, or neither)"
+#error "std/ml/train.h: no CUDA training backend yet (build with the rocm or mps feature, or none)"
 #else
 #include <std/ml/train_cpu.h>
 #endif
@@ -83,6 +95,40 @@ static DcganTrainer dcgan_trainer_new(struct Dcgan g, const &TrainerOptions o) {
 static DqnLearner dqn_learner_new(struct Dqn d) { return RocmDqnAgent::new(d); }
 // o.maxBatch: the longest rollout PolicyAgent::update will see.
 static PgLearner pg_learner_new(struct PolicyAgent a, const &TrainerOptions o) { return RocmPgAgent::new(a, o); }
+
+#elif defined(SAFEC_FEATURE_MPS)
+
+// Fully connected nets on the GPU; everything else on the CPU (see the top).
+#define ML_TRAIN_BACKEND "mps"
+typedef struct MpsTrainer<struct Mlp, struct MpsNet> MlpTrainer;
+typedef struct CpuTrainer<struct ConvNet> ConvNetTrainer;
+typedef struct CpuModelTrainer<struct Vae> VaeTrainer;
+typedef struct CpuModelTrainer<struct ConvVae> ConvVaeTrainer;
+typedef struct CpuModelTrainer<struct ConvAutoencoder> ConvAeTrainer;
+typedef struct CpuGanTrainer<struct Gan> GanTrainer;
+typedef struct CpuGanTrainer<struct Dcgan> DcganTrainer;
+typedef struct CpuDqnAgent DqnLearner;
+typedef struct CpuPgAgent PgLearner;
+
+static MlpTrainer mlp_trainer_new(struct Mlp m, int loss, const &Optimizer opt, const &TrainerOptions o) {
+    return mps_mlp_trainer_new(m, loss, opt, o);
+}
+static ConvNetTrainer convnet_trainer_new(struct ConvNet n, int loss, const &Optimizer opt, const &TrainerOptions o) {
+    return CpuTrainer::new(n, loss, opt);
+}
+static VaeTrainer vae_trainer_new(struct Vae v, const &Optimizer opt, const &TrainerOptions o) {
+    return CpuModelTrainer::new(v, opt);
+}
+static ConvVaeTrainer conv_vae_trainer_new(struct ConvVae v, const &Optimizer opt, const &TrainerOptions o) {
+    return CpuModelTrainer::new(v, opt);
+}
+static ConvAeTrainer conv_ae_trainer_new(struct ConvAutoencoder ae, const &Optimizer opt, const &TrainerOptions o) {
+    return CpuModelTrainer::new(ae, opt);
+}
+static GanTrainer gan_trainer_new(struct Gan g, const &TrainerOptions o) { return CpuGanTrainer::new(g); }
+static DcganTrainer dcgan_trainer_new(struct Dcgan g, const &TrainerOptions o) { return CpuGanTrainer::new(g); }
+static DqnLearner dqn_learner_new(struct Dqn d) { return CpuDqnAgent::new(d); }
+static PgLearner pg_learner_new(struct PolicyAgent a, const &TrainerOptions o) { return CpuPgAgent::new(a); }
 
 #else
 
