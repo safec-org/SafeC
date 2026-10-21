@@ -537,6 +537,7 @@ std::unique_ptr<FunctionDecl> cloneFunctionDecl(const FunctionDecl &fn,
     clone->isVariadic    = fn.isVariadic;
     clone->isMethod      = fn.isMethod;
     clone->methodOwner   = fn.methodOwner;
+    clone->isStaticMethod = fn.isStaticMethod;
     clone->isConstMethod = fn.isConstMethod;
     clone->isMustUse     = fn.isMustUse;
     // Bare-metal / effect system attrs
@@ -626,6 +627,7 @@ std::unique_ptr<StructDecl> cloneStructDecl(const StructDecl &sd,
         cmd.name       = md.name;
         cmd.returnType = substituteType(md.returnType, subs);
         cmd.isConst    = md.isConst;
+        cmd.isStatic   = md.isStatic;
         cmd.loc        = md.loc;
         for (auto &p : md.params) {
             ParamDecl pd;

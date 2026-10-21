@@ -1191,6 +1191,7 @@ DeclPtr Parser::parseFunctionOrGlobalVar(bool isConst, bool isConsteval,
     if (cur().is(TK::ColonColon)) {
         consume(); // consume '::'
         methodOwner = name;  // struct name
+        if (cur().is(TK::KW_new)) toks_[pos_].kind = TK::Ident;   // 'T::new' is an ordinary method name
         if (!cur().is(TK::Ident) && !cur().is(TK::KW_operator)) {
             diag_.error(cur().loc, "expected method name after '::'");
             syncToDecl();
@@ -1361,9 +1362,13 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTr
         // otherwise it's a field declaration.
         // Heuristic: after parsing type + name, check for '('
         auto savedPos = pos_;
+        // 'static T make(...);' — a static method (no self)
+        bool staticMember = false;
+        if (cur().is(TK::KW_static)) { consume(); staticMember = true; }
 
         // Try to parse as method declaration
         TypePtr maybeType = parseType();
+        if (cur().is(TK::KW_new) && peek().is(TK::LParen)) toks_[pos_].kind = TK::Ident;   // 'new' as a method name
         bool fieldVolatile = typeVolatile_;
         bool isMethodDecl = false;
         std::string memberName;
@@ -1458,9 +1463,14 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl(bool isUnion, bool consumeTr
             }
             expect(TK::RParen, "expected ')' closing method parameter list");
             if (cur().is(TK::KW_const)) { consume(); md.isConst = true; }
+            md.isStatic = staticMember;
+            if (md.isStatic && md.isConst)
+                diag_.error(md.loc, "a static method has no 'self' and can't be 'const'");
             expect(TK::Semicolon, "expected ';' after method declaration");
             sd->methodDecls.push_back(std::move(md));
         } else {
+            if (staticMember)
+                diag_.error(cur().loc, "'static' applies to methods only, not struct fields");
             // Field declaration
             FieldDecl fd;
             fd.index = fieldIdx++;
@@ -2853,7 +2863,7 @@ ExprPtr Parser::parsePrimaryExpr() {
         // Namespace-qualified reference: std::foo, a::b::c, ... — joined
         // into one IdentExpr whose 'name' is the qualified string; Sema
         // resolves it against the namespace registry (see checkIdent).
-        while (cur().is(TK::ColonColon) && peek().is(TK::Ident)) {
+        while (cur().is(TK::ColonColon) && (peek().is(TK::Ident) || peek().is(TK::KW_new))) {
             consume(); // '::'
             name += "::";
             name += cur().text;

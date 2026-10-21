@@ -537,6 +537,28 @@ void Sema::collectFunction(FunctionDecl &fn) {
     if (fn.body && fn.namespaceName.empty()) providedFns_.insert(fn.name);
     // Method support (OBJECT.md §4): T::m(P...) → T_m(T* self, P...)
     if (fn.isMethod) {
+        {
+            auto sit = staticMethodNames_.find(fn.methodOwner);
+            if (sit != staticMethodNames_.end() && sit->second.count(fn.name))
+                fn.isStaticMethod = true;
+        }
+        if (fn.isStaticMethod) {
+            // No self. On a generic struct template it becomes a generic
+            // function over the struct's parameters (inferred from the
+            // arguments and the call's target type, like any generic
+            // function); below, the ordinary function path resolves its
+            // types against them.
+            auto genTplIt = genericStructTemplates_.find(fn.methodOwner);
+            if (genTplIt != genericStructTemplates_.end() && fn.genericParams.empty())
+                fn.genericParams = genTplIt->second->genericParams;
+            if (genTplIt == genericStructTemplates_.end() &&
+                typeRegistry_.find(fn.methodOwner) == typeRegistry_.end())
+                diag_.error(fn.loc, "method owner struct '" + fn.methodOwner + "' not declared");
+            std::string originalName = fn.name;
+            fn.name = fn.methodOwner + "_" + fn.name;
+            staticMethodRegistry_[fn.methodOwner + "::" + originalName] = &fn;
+            methodRegistry_[fn.methodOwner + "::" + originalName] = &fn;
+        } else {
         // 'inline int Box::get() const {...}' where "Box" names a
         // generic<T> struct template (see collectStruct's early-return
         // branch — a template is never registered into typeRegistry_,
@@ -588,6 +610,7 @@ void Sema::collectFunction(FunctionDecl &fn) {
         fn.name = fn.methodOwner + "_" + fn.name;
         // Register in method registry under original qualified name
         methodRegistry_[fn.methodOwner + "::" + originalName] = &fn;
+        }
     }
 
     // Namespace support: 'namespace std { void foo(); }' → mangled symbol
@@ -675,6 +698,8 @@ void Sema::collectStruct(StructDecl &sd) {
     // concrete layout to register yet. Record the template and stop;
     // instantiateGenericStruct clones+substitutes+collectStruct()s a
     // concrete copy the first time 'Box<SomeType>' is actually resolved.
+    for (auto &md : sd.methodDecls)
+        if (md.isStatic) staticMethodNames_[sd.name].insert(md.name);
     if (!sd.genericParams.empty()) {
         // Resolve each field's raw parsed type (the parser has no notion
         // of generics — 'T value;' parses its type as an ordinary
@@ -811,6 +836,7 @@ void Sema::collectStruct(StructDecl &sd) {
         synth->isMethod      = true;
         synth->methodOwner   = sd.name;
         synth->isConstMethod = md.isConst;
+        synth->isStaticMethod = md.isStatic;
         synth->isExtern      = true; // no body here; defined elsewhere and linked
         collectFunction(*synth);
         synthesizedMethods_.push_back(std::move(synth));
@@ -870,6 +896,11 @@ TypePtr Sema::instantiateGenericStruct(const std::string &name,
     }
     auto clone = cloneStructDecl(*tpl, subs);
     clone->name = mangleName(name, subs, tpl->genericParams);
+    // Static methods of a generic struct are generic functions (see
+    // collectFunction), not per-instance methods.
+    clone->methodDecls.erase(std::remove_if(clone->methodDecls.begin(), clone->methodDecls.end(),
+                                            [](const MethodDecl &m) { return m.isStatic; }),
+                             clone->methodDecls.end());
     structInstanceOrigin_[clone->name] = {name, typeArgs};
     clone->genericParams.clear();
 
@@ -2246,6 +2277,24 @@ TypePtr Sema::checkIdent(IdentExpr &e) {
         if (vit != namespaceVarRegistry_.end()) {
             e.name = vit->second->name;
         } else {
+            // 'T::m' / 'ns::T::m': a static method. Methods are keyed by the
+            // plain struct name, so drop any namespace qualification.
+            std::string key = e.name;
+            size_t last = key.rfind("::");
+            size_t prev = last == 0 ? std::string::npos : key.rfind("::", last - 1);
+            if (prev != std::string::npos) key = key.substr(prev + 2);
+            auto sit = staticMethodRegistry_.find(key);
+            if (sit != staticMethodRegistry_.end()) {
+                e.name = sit->second->name;
+                e.resolvedFn = sit->second;
+                auto *sym = lookup(e.name);
+                return sym && sym->type ? sym->type : makeError();
+            }
+            if (methodRegistry_.count(key)) {
+                diag_.error(e.loc, "'" + key + "' is not a static method; call it on a value ('x." +
+                            key.substr(key.rfind("::") + 2) + "(...)')");
+                return makeError();
+            }
             diag_.error(e.loc, "use of undeclared namespace member '" + e.name + "'");
             return makeError();
         }
@@ -3606,6 +3655,12 @@ TypePtr Sema::checkCall(CallExpr &e) {
             if (mit != methodRegistry_.end()) {
                 // Found a method — transform: replace callee, store base for CodeGen
                 FunctionDecl *methodFn = mit->second;
+                if (methodFn->isStaticMethod) {
+                    diag_.error(e.loc, "'" + mem.field + "' is a static method of '" + st.name +
+                                "'; call it as '" + st.name + "::" + mem.field + "(...)'");
+                    for (auto &a : e.args) checkExpr(*a);
+                    return makeError();
+                }
                 auto newCallee = std::make_unique<IdentExpr>(methodFn->name, e.loc);
                 newCallee->resolvedFn = methodFn;
                 newCallee->type       = methodFn->funcType();
