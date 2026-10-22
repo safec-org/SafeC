@@ -20,9 +20,21 @@ window.routes.set("/api/data", (init) => ({
     text: `echo:${init.body}|${init.headers["Content-Type"]}|${init.headers["X-A"]}`,
 }));
 
-const app = await loadSafeC(readFileSync(wasmPath), {
-    globals: { ...window, window, console: fakeConsole },
-});
+// Like a browser, the window's functions only accept the window itself
+// (or undefined) as their receiver; the glue must not call them through
+// a copy of the globals object.
+const globals = { ...window, window, console: fakeConsole };
+for (const name of ["fetch", "setTimeout", "clearTimeout", "setInterval",
+                    "clearInterval", "requestAnimationFrame"]) {
+    const fn = globals[name];
+    if (typeof fn !== "function") continue;
+    globals[name] = function (...args) {
+        if (this !== undefined && this !== globals && this !== globalThis)
+            throw new TypeError(`Illegal invocation: ${name}`);
+        return fn.apply(window, args);
+    };
+}
+const app = await loadSafeC(readFileSync(wasmPath), { globals });
 const ex = app.exports;
 let failures = 0;
 const step = (name, fn) => {

@@ -31,7 +31,19 @@
 // -3 = window). glue.handle(el) / glue.element(h) convert by hand.
 
 export function createSafeCGlue(options = {}) {
-    const g = Object.assign({}, globalThis, options.globals || {});
+    // Look each global up on its owner (options.globals first, then
+    // globalThis) and bind functions to that owner: browsers' fetch,
+    // setTimeout, requestAnimationFrame, ... throw "Illegal invocation"
+    // when called with any other receiver, e.g. a copy of globalThis.
+    const own = options.globals || {};
+    const g = new Proxy({}, {
+        get(_, k) {
+            const from = k in own ? own : globalThis;
+            const v = from[k];
+            return typeof v === "function" ? v.bind(from) : v;
+        },
+        has(_, k) { return k in own || k in globalThis; },
+    });
     const prefix = options.prefix || "";
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
