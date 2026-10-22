@@ -29,7 +29,11 @@
 //   - integer division by a run-time value costs dozens of cycles on Apple
 //     GPUs, so the hot index arithmetic divides with DK_UDIV / DK_UMOD: on
 //     Metal through a float reciprocal made exact by correction (dk_udiv,
-//     the reciprocal declared by DK_RECIP), elsewhere plain / and %.
+//     the reciprocal declared by DK_RECIP), elsewhere plain / and %;
+//   - the kernels with a thread per row (softmax, layer norm, cross-entropy,
+//     row sums) take a simdgroup per row on Metal (GSR, MpsBackend launches
+//     32 threads per row), its lanes splitting the columns: a few hundred
+//     rows are too few threads to keep an Apple GPU busy.
 #if defined(__METAL_VERSION__)
 #include <metal_stdlib>
 using namespace metal;
@@ -81,6 +85,8 @@ inline unsigned int dk_udiv(unsigned int q, unsigned int d, float inv) {
 #define DK_RECIP(inv, d) float inv = 1.0f / (float)(d);
 #define DK_UDIV(q, d, inv) dk_udiv((q), (d), (inv))
 #define DK_UMOD(q, d, inv) ((q) - dk_udiv((q), (d), (inv)) * (d))
+// rows r for this simdgroup (a grid of 32 threads per row); dk_lane splits the columns
+#define GSR(r, n) for (unsigned int r = (blockIdx.x * blockDim.x + threadIdx.x) / 32u; r < (n); r += blockDim.x * gridDim.x / 32u)
 #else
 #define DK_U64 unsigned long long
 #define dk_double double
@@ -462,7 +468,16 @@ DK_KERNEL(dk_mul_row_acc) {
 // out[r] = sum_c x[r,c]                                       n = rows
 DK_KERNEL(dk_rowsum) {
     unsigned int C = a.u[0];
+#if defined(__METAL_VERSION__)
+    GSR(r, N) {
+        float s = 0.0f;
+        for (unsigned int c = dk_lane; c < C; c += 32u) s += CF(0)[r * C + c];
+        s = simd_sum(s);
+        if (dk_lane == 0u) F(1)[r] = s;
+    }
+#else
     GS(r, N) { float s = 0.0f; for (unsigned int c = 0; c < C; c++) s += CF(0)[r * C + c]; F(1)[r] = s; }
+#endif
 }
 // dx[r,c] += g[r]                                             n = rows*cols
 DK_KERNEL(dk_rowbcast_acc) {
@@ -514,6 +529,29 @@ __device__ __forceinline__ bool attn_vis(unsigned int flags, unsigned int w, int
 // visible key come out 0.
 DK_KERNEL(dk_softmax_rows) {
     unsigned int C = a.u[0];
+#if defined(__METAL_VERSION__)
+    GSR(r, N) {
+        TP x = CF(0) + r * C; TP o = F(1) + r * C;
+        unsigned int fl = a.u[2];
+        int pos = (int)r + (int)a.u[4];
+        float mx = -3.0e38f;
+        for (unsigned int c = dk_lane; c < C; c += 32u) if (!fl || attn_vis(fl, a.u[3], pos, (int)c)) mx = fmaxf(mx, x[c]);
+        mx = simd_max(mx);
+        float s = 0.0f;
+        for (unsigned int c = dk_lane; c < C; c += 32u) if (!fl || attn_vis(fl, a.u[3], pos, (int)c)) s += expf(x[c] - mx);
+        s = simd_sum(s);
+        if (fl) {
+            float inv = s > 0.0f ? 1.0f / s : 0.0f;
+            for (unsigned int c = dk_lane; c < C; c += 32u) o[c] = attn_vis(fl, a.u[3], pos, (int)c) ? expf(x[c] - mx) * inv : 0.0f;
+        } else if (a.u[1]) {
+            float l = mx + logf(s);
+            for (unsigned int c = dk_lane; c < C; c += 32u) o[c] = x[c] - l;
+        } else {
+            float inv = 1.0f / s;
+            for (unsigned int c = dk_lane; c < C; c += 32u) o[c] = expf(x[c] - mx) * inv;
+        }
+    }
+#else
     GS(r, N) {
         TP x = CF(0) + r * C; TP o = F(1) + r * C;
         if (a.u[2]) {
@@ -531,11 +569,27 @@ DK_KERNEL(dk_softmax_rows) {
         if (a.u[1]) { float l = mx + logf(s); for (unsigned int c = 0; c < C; c++) o[c] = x[c] - l; }
         else { float inv = 1.0f / s; for (unsigned int c = 0; c < C; c++) o[c] = expf(x[c] - mx) * inv; }
     }
+#endif
 }
 // dx += y * (g - sum(g*y))  (softmax), dx += g - exp(y) * sum(g) (log-softmax)
 // p0 = g, p1 = y (the forward output), p2 = dx
 DK_KERNEL(dk_softmax_bwd) {
     unsigned int C = a.u[0];
+#if defined(__METAL_VERSION__)
+    GSR(r, N) {
+        TP g = CF(0) + r * C; TP y = CF(1) + r * C; TP dx = F(2) + r * C;
+        float s = 0.0f;
+        if (a.u[1]) {
+            for (unsigned int c = dk_lane; c < C; c += 32u) s += g[c];
+            s = simd_sum(s);
+            for (unsigned int c = dk_lane; c < C; c += 32u) dx[c] += g[c] - expf(y[c]) * s;
+        } else {
+            for (unsigned int c = dk_lane; c < C; c += 32u) s += g[c] * y[c];
+            s = simd_sum(s);
+            for (unsigned int c = dk_lane; c < C; c += 32u) dx[c] += y[c] * (g[c] - s);
+        }
+    }
+#else
     GS(r, N) {
         TP g = CF(0) + r * C; TP y = CF(1) + r * C; TP dx = F(2) + r * C;
         if (a.u[1]) {
@@ -546,6 +600,7 @@ DK_KERNEL(dk_softmax_bwd) {
             for (unsigned int c = 0; c < C; c++) dx[c] += y[c] * (g[c] - s);
         }
     }
+#endif
 }
 
 // ── Transpose ────────────────────────────────────────────────────────────────
@@ -809,6 +864,19 @@ DK_KERNEL(dk_attn_bwd_kv) {
 DK_KERNEL(dk_ce_fwd) {
     unsigned int C = a.u[0];
     float acc = 0.0f;
+#if defined(__METAL_VERSION__)
+    GSR(r, N) {
+        TP x = CF(0) + r * C;
+        float mx = -3.0e38f;
+        for (unsigned int c = dk_lane; c < C; c += 32u) mx = fmaxf(mx, x[c]);
+        mx = simd_max(mx);
+        float s = 0.0f;
+        for (unsigned int c = dk_lane; c < C; c += 32u) s += expf(x[c] - mx);
+        s = simd_sum(s);
+        unsigned int lab = (unsigned int)CF(1)[r];
+        if (dk_lane == 0u) acc += (mx + logf(s) - x[lab]) * a.f[0];
+    }
+#else
     GS(r, N) {
         TP x = CF(0) + r * C;
         float mx = x[0]; for (unsigned int c = 1; c < C; c++) mx = fmaxf(mx, x[c]);
@@ -816,11 +884,27 @@ DK_KERNEL(dk_ce_fwd) {
         unsigned int lab = (unsigned int)CF(1)[r];
         acc += (mx + logf(s) - x[lab]) * a.f[0];
     }
+#endif
     block_add(acc, FA(2) DK_IDA);
 }
 // dlogits += seed[0] * (softmax - onehot) / rows; p3 = seed (the loss's grad)
 DK_KERNEL(dk_ce_bwd) {
     unsigned int C = a.u[0];
+#if defined(__METAL_VERSION__)
+    GSR(r, N) {
+        TP x = CF(0) + r * C; TP d = F(2) + r * C;
+        float sc = CF(3)[0] * a.f[0];
+        float mx = -3.0e38f;
+        for (unsigned int c = dk_lane; c < C; c += 32u) mx = fmaxf(mx, x[c]);
+        mx = simd_max(mx);
+        float s = 0.0f;
+        for (unsigned int c = dk_lane; c < C; c += 32u) s += expf(x[c] - mx);
+        s = simd_sum(s);
+        unsigned int lab = (unsigned int)CF(1)[r];
+        float inv = 1.0f / s;
+        for (unsigned int c = dk_lane; c < C; c += 32u) ACCUM(d[c], sc * (expf(x[c] - mx) * inv - (c == lab ? 1.0f : 0.0f)));
+    }
+#else
     GS(r, N) {
         TP x = CF(0) + r * C; TP d = F(2) + r * C;
         float sc = CF(3)[0] * a.f[0];
@@ -830,6 +914,7 @@ DK_KERNEL(dk_ce_bwd) {
         float inv = 1.0f / s;
         for (unsigned int c = 0; c < C; c++) ACCUM(d[c], sc * (expf(x[c] - mx) * inv - (c == lab ? 1.0f : 0.0f)));
     }
+#endif
 }
 // Elementwise losses: u0 = 0 BCE on logits, 1 Huber (f1 = delta); p0 = x,
 // p1 = target, p2 = loss[0], f0 = 1/n                          n = elements
@@ -858,6 +943,19 @@ DK_KERNEL(dk_ewloss_bwd) {
 // p0 = x, p1 = xhat out, p2 = inv std [rows]
 DK_KERNEL(dk_layernorm) {
     unsigned int C = a.u[0];
+#if defined(__METAL_VERSION__)
+    GSR(r, N) {
+        TP x = CF(0) + r * C; TP o = F(1) + r * C;
+        float m = 0.0f;
+        for (unsigned int c = dk_lane; c < C; c += 32u) m += x[c];
+        m = simd_sum(m) / (float)C;
+        float v = 0.0f;
+        for (unsigned int c = dk_lane; c < C; c += 32u) { float d = x[c] - m; v += d * d; }
+        float is = rsqrtf(simd_sum(v) / (float)C + a.f[0]);
+        if (dk_lane == 0u) F(2)[r] = is;
+        for (unsigned int c = dk_lane; c < C; c += 32u) o[c] = (x[c] - m) * is;
+    }
+#else
     GS(r, N) {
         TP x = CF(0) + r * C; TP o = F(1) + r * C;
         float m = 0.0f; for (unsigned int c = 0; c < C; c++) m += x[c]; m /= (float)C;
@@ -866,10 +964,21 @@ DK_KERNEL(dk_layernorm) {
         F(2)[r] = is;
         for (unsigned int c = 0; c < C; c++) o[c] = (x[c] - m) * is;
     }
+#endif
 }
 // dx += inv * (g - mean(g) - xhat * mean(g * xhat)); p0 = g, p1 = xhat, p2 = inv, p3 = dx
 DK_KERNEL(dk_layernorm_bwd) {
     unsigned int C = a.u[0];
+#if defined(__METAL_VERSION__)
+    GSR(r, N) {
+        TP g = CF(0) + r * C; TP y = CF(1) + r * C; TP dx = F(3) + r * C;
+        float mg = 0.0f, mgy = 0.0f;
+        for (unsigned int c = dk_lane; c < C; c += 32u) { mg += g[c]; mgy += g[c] * y[c]; }
+        mg = simd_sum(mg) / (float)C; mgy = simd_sum(mgy) / (float)C;
+        float is = CF(2)[r];
+        for (unsigned int c = dk_lane; c < C; c += 32u) dx[c] += is * (g[c] - mg - y[c] * mgy);
+    }
+#else
     GS(r, N) {
         TP g = CF(0) + r * C; TP y = CF(1) + r * C; TP dx = F(3) + r * C;
         float mg = 0.0f, mgy = 0.0f;
@@ -878,6 +987,7 @@ DK_KERNEL(dk_layernorm_bwd) {
         float is = CF(2)[r];
         for (unsigned int c = 0; c < C; c++) dx[c] += is * (g[c] - mg - y[c] * mgy);
     }
+#endif
 }
 
 // ── Optimizer step over one parameter (nn.h's OPT_* arithmetic) ─────────────
