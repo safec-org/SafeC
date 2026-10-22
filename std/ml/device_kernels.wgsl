@@ -2017,7 +2017,7 @@ fn wk_gemm1(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) 
         let Ab = aw(0u) + z * aw(9u) * ea;
         let Bb = aw(1u) + z * aw(10u) * ea;
         let Cb = aw(2u) + z * aw(11u) * ec;
-        // four k at a time: naga's loops keep Metal's compiler from
+        // eight k at a time: naga's loops keep Metal's compiler from
         // unrolling them, and each step waits for its loads otherwise
         let sak = select(1u, lda, GTA);
         let sbk = select(ldb, 1u, GTB);
@@ -2028,6 +2028,18 @@ fn wk_gemm1(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) 
         var a2 = 0.0;
         var a3 = 0.0;
         var k = 0u;
+        for (; k + 8u <= K; k += 8u) {
+            a0 += gld(Ab, GAT, ia) * gld(Bb, GAT, ib);
+            a1 += gld(Ab, GAT, ia + sak) * gld(Bb, GAT, ib + sbk);
+            a2 += gld(Ab, GAT, ia + 2u * sak) * gld(Bb, GAT, ib + 2u * sbk);
+            a3 += gld(Ab, GAT, ia + 3u * sak) * gld(Bb, GAT, ib + 3u * sbk);
+            a0 += gld(Ab, GAT, ia + 4u * sak) * gld(Bb, GAT, ib + 4u * sbk);
+            a1 += gld(Ab, GAT, ia + 5u * sak) * gld(Bb, GAT, ib + 5u * sbk);
+            a2 += gld(Ab, GAT, ia + 6u * sak) * gld(Bb, GAT, ib + 6u * sbk);
+            a3 += gld(Ab, GAT, ia + 7u * sak) * gld(Bb, GAT, ib + 7u * sbk);
+            ia += 8u * sak;
+            ib += 8u * sbk;
+        }
         for (; k + 4u <= K; k += 4u) {
             a0 += gld(Ab, GAT, ia) * gld(Bb, GAT, ib);
             a1 += gld(Ab, GAT, ia + sak) * gld(Bb, GAT, ib + sbk);
