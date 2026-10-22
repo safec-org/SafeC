@@ -7,6 +7,7 @@
 // and Flusher, so read_exact, write_all, copy_stream, stream_size and
 // io_buf.h's BufReader / BufWriter work on it.
 #pragma once
+#include <std/collections/string.h>
 
 namespace std {
 
@@ -75,6 +76,17 @@ struct File {
     // Return the size of the file in bytes, or -1 on error.
     // (Seeks to end, reads position, seeks back.)
     long long size();
+
+    // ── Whole files ───────────────────────────────────────────────────────────
+
+    // Appends the whole contents of the file at 'path' to 'out' (binary;
+    // 'out' stays NUL-terminated). 1 on success, 0 if it can't be opened
+    // or a read fails ('out' then holds whatever was read).
+    static int read_to_string(const &char path, &String out);
+
+    // Creates or truncates the file at 'path' and writes 'n' bytes from
+    // 'data'. 1 when every byte was written and the file closed cleanly.
+    static int write_bytes(const &char path, const &char data, unsigned long n);
 };
 
 // Kept for std/ml until its refactor moves to the methods above; forward to
