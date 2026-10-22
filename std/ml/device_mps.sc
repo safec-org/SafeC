@@ -22,8 +22,9 @@
 //   - Metal has no doubles: the batch / group norm statistics accumulate in
 //     fp32 (two-pass, so they hold device_check's tolerance).
 //   - The fused attention kernels work in 8 x 8 tiles (64 threads), not
-//     16 x 16: four 16-row tiles of 128 floats overflow 32 KB of
-//     threadgroup memory.
+//     16 x 16, for head dims over 64: four 16-row tiles of 128 floats
+//     overflow 32 KB of threadgroup memory (a second build, DK_ATTN64, has
+//     16 x 16 tiles for head dims up to 64).
 //   - A kernel runs on the CPU (device_ref.sc, on the shared memory; counted
 //     in DeviceStats.cpuLaunches) only if its pipeline can't be built; one
 //     with 16-bit arguments or a table of handles then declines instead, as
@@ -86,7 +87,8 @@ typedef fn void(void*, void*, struct DmpsSize_, struct DmpsSize_) DmpsMsgDispatc
 
 #define DMPS_BLOCK 256UL
 #define DMPS_MAX_GROUPS 4096UL
-#define DMPS_ATTN_T 8UL            // device_kernels.cu's ATTN_T on Metal
+#define DMPS_ATTN_T 8UL            // device_kernels.cu's ATTN_T on Metal ...
+#define DMPS_ATTN64_T 16UL         // ... and in its DK_ATTN64 build, for head dims up to 64
 #define DMPS_GEMM_FILL 32UL        // 64 x 64 GEMM tiles from this many on (two per GPU core), else 32 x 32
 #define DMPS_RED_BYTES 128UL       // dk_red: a float per simdgroup
 #define DMPS_INLINE_BYTES 4096UL   // uploads up to this size travel with a dispatch (setBytes)
@@ -120,10 +122,12 @@ static void* g_dmps_dev = (void*)0;
 static void* g_dmps_queue = (void*)0;
 static void* g_dmps_rset = (void*)0;    // the residency set (null before macOS 15: useResources instead)
 static void* g_dmps_event = (void*)0;
-static void* g_dmps_lib[2];             // plain, DK_TAGGED
-static int   g_dmps_lib_state[2];
+static void* g_dmps_lib[4];             // builds: plain, DK_TAGGED, and both with DK_ATTN64
+static int   g_dmps_lib_state[4];
 static void* g_dmps_pipe[2 * DK_COUNT];
 static int   g_dmps_pipe_state[2 * DK_COUNT];   // 0 = not yet, 1 = built, -1 = can't
+static void* g_dmps_apipe[6];           // the attention kernels of the DK_ATTN64 builds
+static int   g_dmps_apipe_state[6];
 static void* g_dmps_gemm[24];           // mk_gemm<tile>_<op(a)><op(b)>_<type>
 static int   g_dmps_gemm_state[24];
 static void* g_dmps_conv[36];           // mk_conv_<op><shape>_<type>
@@ -224,15 +228,17 @@ static int dmps_ensure_() {
 
 // ── Kernels: device_kernels.cu as Metal Shading Language ─────────────────────
 // Compiled on first use with IEEE math (no fast-math, precise functions), as
-// hiprtc and NVRTC compile it.
-static int dmps_library_(int tagged) {
-    if (g_dmps_lib_state[tagged] != 0) return g_dmps_lib_state[tagged] == 1;
-    g_dmps_lib_state[tagged] = -1;
+// hiprtc and NVRTC compile it. Build b: bit 0 DK_TAGGED (16-bit arguments),
+// bit 1 DK_ATTN64 (16 x 16 attention tiles for head dims up to 64).
+static int dmps_library_(int b) {
+    if (g_dmps_lib_state[b] != 0) return g_dmps_lib_state[b] == 1;
+    g_dmps_lib_state[b] = -1;
     unsafe {
         const char* src = device_kernel_source_();
         char* text = (char*)0;
-        if (tagged) {
-            const char* pre = "#define DK_TAGGED 1\n";
+        if (b != 0) {
+            const char* pre = b == 1 ? "#define DK_TAGGED 1\n"
+                            : (b == 2 ? "#define DK_ATTN64 1\n" : "#define DK_TAGGED 1\n#define DK_ATTN64 1\n");
             unsigned long np = 0UL;
             while (pre[np] != (char)0) np = np + 1UL;
             unsigned long ns = 0UL;
@@ -267,16 +273,16 @@ static int dmps_library_(int tagged) {
         objc_autoreleasePoolPop(pool);
         if (text != (char*)0) free((void*)text);
         if (lib == (void*)0) return 0;
-        g_dmps_lib[tagged] = lib;
+        g_dmps_lib[b] = lib;
     }
-    g_dmps_lib_state[tagged] = 1;
+    g_dmps_lib_state[b] = 1;
     return 1;
 }
 
-// The pipeline for function 'name' of a library, null when it can't be built
+// The pipeline for function 'name' of build b, null when it can't be built
 // for 'threads' threads per threadgroup.
-static void* dmps_make_pipe_(int tagged, const char* name, unsigned long threads) {
-    if (!dmps_library_(tagged)) return (void*)0;
+static void* dmps_make_pipe_(int b, const char* name, unsigned long threads) {
+    if (!dmps_library_(b)) return (void*)0;
     unsafe {
         void* pool = objc_autoreleasePoolPush();
         DmpsMsg0 m0 = (DmpsMsg0)objc_msgSend;
@@ -284,7 +290,7 @@ static void* dmps_make_pipe_(int tagged, const char* name, unsigned long threads
         DmpsMsg2 m2 = (DmpsMsg2)objc_msgSend;
         void* str = m1(m0(objc_getClass("NSString"), sel_registerName("alloc")), sel_registerName("initWithUTF8String:"),
                        (void*)name);
-        void* f = m1(g_dmps_lib[tagged], sel_registerName("newFunctionWithName:"), str);
+        void* f = m1(g_dmps_lib[b], sel_registerName("newFunctionWithName:"), str);
         dmps_release_obj_(str);
         void* pipe = (void*)0;
         if (f != (void*)0) {
@@ -318,6 +324,21 @@ static int dmps_rows_(int kernel) {
 static unsigned long dmps_block_(int kernel) {
     if (kernel == DK_ATTN_FWD || kernel == DK_ATTN_BWD_Q || kernel == DK_ATTN_BWD_KV) return DMPS_ATTN_T * DMPS_ATTN_T;
     return DMPS_BLOCK;
+}
+
+// The fused attention kernels with 16 x 16 tiles (the DK_ATTN64 builds), when
+// the head dims allow; null otherwise.
+static void* dmps_attn64_pipe_(int kernel, int tagged, const &DevArgs args) {
+    if (kernel != DK_ATTN_FWD && kernel != DK_ATTN_BWD_Q && kernel != DK_ATTN_BWD_KV) return (void*)0;
+    unsafe {
+        if (args.u[3] > 64U || args.u[4] > 64U) return (void*)0;
+        unsigned long slot = (unsigned long)tagged * 3UL + (unsigned long)(kernel - DK_ATTN_FWD);
+        if (g_dmps_apipe_state[slot] == 0) {
+            g_dmps_apipe[slot] = dmps_make_pipe_(2 + tagged, device_kernel_name_(kernel), DMPS_ATTN64_T * DMPS_ATTN64_T);
+            g_dmps_apipe_state[slot] = g_dmps_apipe[slot] != (void*)0 ? 1 : -1;
+        }
+        return g_dmps_apipe[slot];
+    }
 }
 
 static void* dmps_pipe_(int kernel, int tagged) {
@@ -830,17 +851,19 @@ int MpsBackend::launch(int kernel, unsigned long n, const &DevArgs args) {
         unsigned long i = 0UL;
         while (i < (unsigned long)DEVK_PTRS) { if (dev_tag_(args.p[i]) != 0UL) tagged = 1; i = i + 1UL; }
     }
-    void* pipe = dmps_pipe_(kernel, tagged);
+    unsigned long tile = DMPS_ATTN64_T;
+    void* pipe = dmps_attn64_pipe_(kernel, tagged, args);
+    if (pipe == (void*)0) { pipe = dmps_pipe_(kernel, tagged); tile = DMPS_ATTN_T; }
     if (pipe == (void*)0) return dmps_cpu_launch_(kernel, n, args, tagged);
-    unsigned long threads = dmps_block_(kernel);
+    unsigned long threads = dmps_block_(kernel) == DMPS_BLOCK ? DMPS_BLOCK : tile * tile;
     unsigned long groups = ((dmps_rows_(kernel) ? 32UL * n : n) + DMPS_BLOCK - 1UL) / DMPS_BLOCK;
     if (groups > DMPS_MAX_GROUPS) groups = DMPS_MAX_GROUPS;
     if (groups == 0UL) groups = 1UL;
     if (threads != DMPS_BLOCK) {
-        // a block per (head, tile of 8 rows): rows are keys for dk_attn_bwd_kv, else queries
+        // a block per (head, tile of rows): rows are keys for dk_attn_bwd_kv, else queries
         unsafe {
             unsigned long rows = kernel == DK_ATTN_BWD_KV ? (unsigned long)args.u[1] : (unsigned long)args.u[0];
-            groups = (unsigned long)args.u[2] * ((rows + DMPS_ATTN_T - 1UL) / DMPS_ATTN_T);
+            groups = (unsigned long)args.u[2] * ((rows + tile - 1UL) / tile);
         }
         if (groups > 65535UL) groups = 65535UL;
         if (groups == 0UL) groups = 1UL;

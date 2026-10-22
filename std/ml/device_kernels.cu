@@ -26,6 +26,7 @@
 //     small threadgroup scratch the kernel declares (dk_red);
 //   - attention tiles are 8 x 8 instead of 16 x 16 (ATTN_T): Metal's 32 KB
 //     of threadgroup memory doesn't hold four 16-row tiles of 128 floats;
+//     a second build with DK_ATTN64 keeps 16 x 16 for head dims up to 64;
 //   - integer division by a run-time value costs dozens of cycles on Apple
 //     GPUs, so the hot index arithmetic divides with DK_UDIV / DK_UMOD: on
 //     Metal through a float reciprocal made exact by correction (dk_udiv,
@@ -631,10 +632,14 @@ DK_KERNEL(dk_transpose) {
 // p4 = lse [H*S] (fp32), p5 = dout, p7 = D [H*S] (fp32, rowsum(dout * out),
 // written by dk_attn_bwd_q for dk_attn_bwd_kv). Launched over
 // 256 * H * ceil(rows / 16) threads (rows: S, or L for dk_attn_bwd_kv).
+#if defined(__METAL_VERSION__) && defined(DK_ATTN64)
+#define ATTN_MAXD 64   // a second Metal build for head dims up to 64, where 16 x 16 tiles fit
+#define ATTN_T 16
+#elif defined(__METAL_VERSION__)
 #define ATTN_MAXD 128
-#if defined(__METAL_VERSION__)
 #define ATTN_T 8   // 64 threads per block (see Portability above)
 #else
+#define ATTN_MAXD 128
 #define ATTN_T 16
 #endif
 #define ATTN_LD (ATTN_MAXD + 1)
