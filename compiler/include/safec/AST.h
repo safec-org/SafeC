@@ -191,6 +191,16 @@ struct CallExpr : Expr {
     NullOp  nullOp = NullOp::None;
     ExprPtr nullOpBase;
 
+    // Set by Sema::checkCall for the calls the heap/arena lifetime analysis
+    // (MemoryFlow.cpp) treats as primitives rather than through a summary:
+    // std::dealloc()/dealloc_raw_()/an allocator's 'dealloc' method (frees
+    // args[0]) and the arena_reset/destroy/mark/free_to<R> builtins, whose
+    // region is 'memRegion'. Recorded here because a generic callee's name
+    // is rewritten to its monomorphized form by the time the analysis runs.
+    enum class MemOp { None, Dealloc, ArenaReset, ArenaDestroy, ArenaMark, ArenaFreeTo };
+    MemOp       memOp = MemOp::None;
+    std::string memRegion;
+
     CallExpr(ExprPtr fn, std::vector<ExprPtr> a, SourceLocation l)
         : Expr(ExprKind::Call, l), callee(std::move(fn)),
           args(std::move(a)) {}
@@ -498,6 +508,9 @@ struct VarDeclStmt : Stmt {
 
     // Filled by sema for codegen
     TypePtr resolvedType;
+    // The VarDecl Sema bound this declaration to (what IdentExpr::resolved
+    // points at for its uses).
+    VarDecl *decl = nullptr;
 };
 
 // C-style 'T a, b = 1, c;' desugars to N sibling VarDeclStmts that must
@@ -737,6 +750,9 @@ struct FunctionDecl : Decl {
     std::string wasmImportModule;
     std::string wasmImportName;
     std::string namespaceName;           // enclosing 'namespace X { ... }', e.g. "std"; empty = none
+    // Filled by Sema::checkFunction: the VarDecl of each parameter, in
+    // 'params' order (self first for a method).
+    std::vector<VarDecl *> paramVars;
 
     FunctionDecl(std::string n, SourceLocation l)
         : Decl(DeclKind::Function, std::move(n), l) {}

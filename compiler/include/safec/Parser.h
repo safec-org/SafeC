@@ -24,6 +24,12 @@ private:
     // ── Token stream ──────────────────────────────────────────────────────────
     const Token &cur()  const { return toks_[pos_]; }
     void expectTypeArgClose();
+    // 'const &T' / 'const ?&T': the 'const' belongs to the reference type
+    // (a reference to const T, as '&const T'), so declaration-specifier
+    // loops leave it for parseType instead of taking it as the variable's.
+    bool constStartsReference() const {
+        return cur().is(TK::KW_const) && (peek().is(TK::Amp) || peek().is(TK::QuestionAmp));
+    }
     const Token &peek(int offset = 1) const {
         size_t idx = pos_ + offset;
         return (idx < toks_.size()) ? toks_[idx] : toks_.back();

@@ -24,47 +24,6 @@ struct Symbol {
     FunctionDecl *fnDecl   = nullptr;
     int          scopeDepth = 0;
     bool         initialized = false;
-    // Arena-reset invalidation tracking (see Sema::regionGeneration_): set
-    // when this variable is bound to a '&arena<R> T' value. 'arenaBindGen'
-    // is a snapshot of R's generation counter at bind time; a later read of
-    // this variable is stale if R's generation has since advanced (i.e. an
-    // arena_reset<R>()/arena_destroy<R>() happened in between).
-    std::string  arenaRegionName;
-    int          arenaBindGen = -1;
-    // arena_free_to<R>(mark) invalidation tracking (see
-    // Sema::regionMarkDepth_/regionScratchGeneration_): a reference bound
-    // before any arena_mark<R>() call ('arenaBindMarkDepth' == 0) is a
-    // "permanent" binding that only a real reset/destroy can stale — a
-    // free_to() only ever rewinds *into* an active mark scope, so it can
-    // never be freeing memory a depth-0 reference points into. A reference
-    // bound while inside a mark scope ('arenaBindMarkDepth' > 0) is
-    // checked against 'arenaBindScratchGen', a snapshot of R's
-    // free_to-only generation counter at bind time.
-    int          arenaBindMarkDepth  = 0;
-    int          arenaBindScratchGen = -1;
-    // Heap use-after-free/double-free tracking (see Sema::heapFreeGeneration_):
-    // set when this variable is bound to a '&heap T' value. 'heapBindGen' is
-    // a snapshot, at bind time, of the free-generation counter for *this
-    // specific variable's* VarDecl — a later read is stale if that counter
-    // has since advanced (i.e. std::dealloc() was called on this same
-    // variable in between). -1 means not tracked (not a '&heap T' binding).
-    int          heapBindGen = -1;
-    // Direct-copy alias tracking: when a '&heap T' variable's initializer
-    // (or a later simple assignment) is exactly another already-tracked
-    // '&heap T' variable's bare identifier ('&heap T q = p;' or 'q = p;'),
-    // 'heapTrackKey' is set to *that* variable's own tracking key (resolved
-    // transitively through any earlier aliasing) instead of this variable's
-    // own VarDecl — so std::dealloc() on either p or q bumps the one shared
-    // counter both are checked against, catching a use-after-free through
-    // whichever name it happens via. nullptr (the common case: not a direct
-    // alias of another tracked heap variable) means "key off my own
-    // VarDecl," queried through Sema::heapKeyOf(sym) rather than reading
-    // this field directly. This only follows the single-hop, syntactically
-    // obvious "whole variable copied from another whole variable" shape —
-    // an allocation reached through a struct field, an array element, a
-    // function parameter/return, or any expression more complex than a bare
-    // identifier still isn't tracked (see the warning in Memory & Regions).
-    const VarDecl *heapTrackKey = nullptr;
 };
 
 // ── Scope ─────────────────────────────────────────────────────────────────────
@@ -109,32 +68,12 @@ public:
     bool run();
 
 private:
-    // Snapshot of the three arena generation counters (regionGeneration_/
-    // regionMarkDepth_/regionScratchGeneration_) at the moment a
-    // '&arena<R> T' value is stored somewhere other than a plain local
-    // variable (struct field, array element) — see
-    // arenaFieldPathGeneration_/arenaFieldDeclGeneration_/
-    // arenaArrayGeneration_'s own doc comments further down for what each
-    // map covers, and isArenaSnapshotStale for how a snapshot is checked
-    // against the region's current counters.
-    struct ArenaGenSnapshot {
-        std::string regionName;
-        int         bindGen        = -1;
-        int         bindMarkDepth  = 0;
-        int         bindScratchGen = -1;
-    };
-
     // ── Scope management ──────────────────────────────────────────────────────
     void pushScope(bool isUnsafe = false);
     void popScope();
     Symbol *lookup(const std::string &name);
     void    define(Symbol sym);
     bool    inUnsafeScope() const;
-    // Resolves a heap-tracked symbol's actual generation-counter key (see
-    // Symbol::heapTrackKey) — its own VarDecl, unless it's a direct alias of
-    // another tracked '&heap T' variable, in which case that variable's key.
-    static const VarDecl *heapKeyOf(const Symbol *sym);
-
     // ── Type registry ─────────────────────────────────────────────────────────
     void registerBuiltinTypes();
     TypePtr lookupType(const std::string &name) const;
@@ -181,16 +120,6 @@ private:
     TypePtr checkMember(MemberExpr &e);
     TypePtr checkCast(CastExpr &e);
     TypePtr checkAssign(AssignExpr &e);
-    // Arena-staleness-through-storage helpers (see the ArenaGenSnapshot
-    // maps' doc comments above for what each covers). 'stampArenaTarget'
-    // is called from checkAssign whenever the RHS is a fresh '&arena<R> T'
-    // value being written into a MemberExpr/SubscriptExpr LHS; the
-    // matching check runs from checkMember/checkSubscript on the read side.
-    bool        isArenaSnapshotStale(const ArenaGenSnapshot &snap) const;
-    ArenaGenSnapshot arenaSnapshotNow(const std::string &regionName) const;
-    void        stampArenaTarget(const Expr &lhs, const std::string &regionName);
-    bool        checkArenaTargetStale(const Expr &e, const std::string &regionName,
-                                       SourceLocation loc);
     TypePtr checkAddrOf(UnaryExpr &e);
     // Is 'e' (an already-checked lvalue) volatile-qualified? See
     // CodeGen::isVolatileLValue, which mirrors this for code generation.
@@ -206,6 +135,15 @@ private:
     // the target isn't a struct or array — e.g. type is still being
     // inferred from the initializer.
     TypePtr checkCompoundInit(CompoundInitExpr &e, const TypePtr &targetTy);
+
+    // ── Heap/arena lifetime analysis ─────────────────────────────────────────
+    // Use-after-free, double-free and use-after-arena-reset/free_to checking
+    // (MemoryFlow.cpp): a dataflow analysis over every function body checked
+    // here ('checkedFns_', recorded by checkFunction), with per-function
+    // summaries applied at call sites. Runs at the end of run(), once every
+    // body (monomorphized instances included) is type-checked.
+    void checkMemoryFlow();
+    std::vector<FunctionDecl *> checkedFns_;
 
     // ── Region safety ─────────────────────────────────────────────────────────
     // Returns the scope depth a reference type originated from
@@ -362,99 +300,6 @@ private:
     std::vector<Scope>                      scopes_;
     std::unordered_map<std::string, TypePtr> typeRegistry_;  // struct/enum types by name
     std::unordered_map<std::string, RegionDecl*> regionRegistry_;
-    // Arena-reset invalidation: bumped every time a call to
-    // '__arena_reset_<name>'/'__arena_destroy_<name>' is seen during
-    // traversal (see checkCall) — see Symbol::arenaBindGen for how this is
-    // consulted. Flow-*sensitive* over the function's actual control flow
-    // (see the "Arena-reset flow sensitivity" comment above Sema::checkIf
-    // in Sema.cpp): if/else branches are checked against independent
-    // snapshots and merged conservatively afterward rather than sharing one
-    // running counter, and loop bodies are pre-scanned for reset/destroy/
-    // free_to calls so an earlier-iteration invalidation is visible to
-    // code textually before the call within the same body. Still sound
-    // (never misses a real bug) but not a full dataflow fixpoint — see
-    // reference/memory.md's "Arena References Die on Reset" section for
-    // the precise remaining imprecision (deeply nested marks; unusual
-    // expression nesting inside a loop body).
-    std::unordered_map<std::string, int> regionGeneration_;
-    // arena_mark<R>()/arena_free_to<R>(mark) invalidation (see
-    // Symbol::arenaBindMarkDepth's doc comment): 'regionMarkDepth_[R]' is
-    // incremented by every arena_mark<R>() and decremented (floored at 0)
-    // by every arena_free_to<R>(...) seen during traversal — same flow-
-    // sensitive control-flow tracking as regionGeneration_ above (if/else
-    // snapshot+merge, loop-body pre-scan covering free_to as well as
-    // reset/destroy). 'regionScratchGeneration_[R]' is bumped by free_to
-    // only, and is what actually staless a reference bound at depth > 0 —
-    // depth-0 (pre-mark) references never consult it at all, which is the
-    // fix for free_to() no longer nuking bindings that exist *outside* the
-    // scratch scope it's rewinding. One remaining imprecision, independent
-    // of flow-sensitivity: both counters are one-per-region rather than
-    // one-per-nesting-level, so a deeply nested mark's free_to can over-
-    // flag an outer scope's still-valid reference (documented, sound-safe
-    // direction — see reference/memory.md).
-    std::unordered_map<std::string, int> regionMarkDepth_;
-    std::unordered_map<std::string, int> regionScratchGeneration_;
-    // Heap use-after-free/double-free invalidation: bumped every time a
-    // recognized 'std::dealloc(p)' call is seen during traversal, keyed by
-    // *the specific variable's VarDecl* rather than by name (see
-    // Symbol::heapBindGen) — heap allocations are per-variable, not a
-    // shared named entity like an arena region, and keying by VarDecl*
-    // (stable, unique per declaration) sidesteps the false-positive risk a
-    // name-keyed map would have across shadowed/reused variable names.
-    // Same flow-sensitive if/else + loop-body tracking as the arena
-    // counters above (see checkIf/checkWhile/checkFor); intra-procedural
-    // only — a '&heap T' value freed through a *different* variable/alias
-    // than the one being read (including across a function call boundary)
-    // isn't tracked, so this is sound but not exhaustive, same spirit as
-    // every other checker in this section.
-    std::unordered_map<const VarDecl *, int> heapFreeGeneration_;
-    // Suppresses the heap-staleness check in checkIdent for exactly one
-    // identifier occurrence: the argument of 'std::dealloc(p)' itself is
-    // the last *valid* read of 'p', not a use-after-free — same shape of
-    // exemption as suppressArenaStaleCheck_ below.
-    bool suppressHeapStaleCheck_ = false;
-    // Suppresses the arena-staleness check in checkIdent for exactly one
-    // identifier occurrence: the LHS of 'p = <new-arena-value>;' evaluates
-    // 'p' as an assignment target, not a read of its old (possibly stale)
-    // value — same shape of exemption as definite-init's pre-marking of
-    // 'sym->initialized = true' before checking that same LHS occurrence.
-    bool suppressArenaStaleCheck_ = false;
-
-    // ── Arena staleness through struct fields / array elements ─────────────────
-    // Symbol::arenaBindGen (above) only tracks a *local variable* directly
-    // holding a '&arena<R> T' value — storing that value into a struct
-    // field or array element ('h.n = ref;', 'arr[i] = ref;') used to
-    // escape all tracking entirely: checkMember/checkSubscript never
-    // consulted anything, so a later read through the field/element after
-    // arena_reset<R>()/arena_free_to<R>() went unchecked. ArenaGenSnapshot
-    // (declared at the top of this class) is the snapshot type stored per
-    // path/field/array below.
-    // '.'-chain field access rooted at a plain local variable ('h.n', not
-    // 'p->n') — keyed by a string built from the root VarDecl* plus the
-    // dotted field path (see dotChainArenaKey in Sema.cpp), so 'h1.n' and
-    // 'h2.n' (two different Holder instances) get independent tracking.
-    // Precise: only the exact instance/path written is ever marked.
-    std::unordered_map<std::string, ArenaGenSnapshot> arenaFieldPathGeneration_;
-    // '->'-chain (or any field access not reachable as a plain '.'-chain
-    // from a local variable — see dotChainArenaKey's empty-string return)
-    // — keyed by the field's declaration identity (FieldDecl*, stable and
-    // shared across every instance of that struct type), since arrow
-    // access indirects through a reference/pointer with its own
-    // independent lifetime, making per-instance tracking impossible
-    // without real alias analysis. Necessarily coarser than the path map:
-    // a store through *any* instance bumps the one counter *every*
-    // instance's read is checked against. Sound (never misses a real
-    // staleness bug) but can over-flag a read of a different, still-valid
-    // instance after some *other* instance's field was restamped — the
-    // same conservative-by-construction tradeoff regionGeneration_ itself
-    // already makes (one counter per region, not per allocation).
-    std::unordered_map<const FieldDecl *, ArenaGenSnapshot> arenaFieldDeclGeneration_;
-    // Array-element tracking — keyed by the array variable's VarDecl*,
-    // collapsing every index into one bucket (no compile-time index
-    // precision for a runtime-computed subscript). Same soundness
-    // tradeoff as the FieldDecl* map above: a store to any element
-    // restamps the one entry every element's read is checked against.
-    std::unordered_map<const VarDecl *, ArenaGenSnapshot> arenaArrayGeneration_;
     // Fallback hint for generic-function inference when a type parameter
     // appears only in the return type (e.g. 'generic<T> T* vec_at(&stack
     // Vec v, unsigned long idx)') — inference is otherwise call-site-only
