@@ -246,6 +246,7 @@ struct ObjInfo {
     std::string site;        // Alloc/Mark: stable key used in summaries
     int         base = -1;   // View
     std::string prefix;      // View
+    bool        exprTemp = false; // Temp: a full-expression temporary (not a match binding)
 };
 ObjInfo objInfo(OK k) { ObjInfo oi; oi.kind = k; return oi; }
 
@@ -370,6 +371,7 @@ private:
     }
     int markObj(const std::string &site, const std::string &region);
     int tempObj(const void *p, int tag);
+    void dropTemps(State &st);
     int trustedObj() { return intern("U", objInfo(OK::Trusted)); }
     bool isTrusted(int o) const { return objs_[o].kind == OK::Trusted; }
     int canonBase(int o) const { return objs_[o].kind == OK::View ? objs_[o].base : o; }
@@ -629,7 +631,19 @@ int Walker::markObj(const std::string &site, const std::string &region) {
 }
 
 int Walker::tempObj(const void *p, int tag) {
-    return intern("T" + ptrKey(p) + ":" + std::to_string(tag), objInfo(OK::Temp));
+    ObjInfo oi = objInfo(OK::Temp);
+    oi.exprTemp = tag != 2;
+    return intern("T" + ptrKey(p) + ":" + std::to_string(tag), oi);
+}
+
+// Expression temporaries (call results, compound literals, materialized
+// rvalues) die with the full expression that made them. Dropping them at
+// each statement boundary keeps a temporary written on only one side of a
+// join ('k ? f() : g()') from carrying its previous evaluation's contents —
+// an allocation freed since — into the other side.
+void Walker::dropTemps(State &st) {
+    for (auto it = st.mem.begin(); it != st.mem.end();)
+        it = objs_[it->first].exprTemp ? st.mem.erase(it) : std::next(it);
 }
 
 bool Walker::strongObj(int o) const {
@@ -1981,20 +1995,27 @@ void Walker::doReturn(bool isError) {
 void Walker::loopOnce(Expr *cond, Stmt *body, Expr *incr, bool doWhile, const std::string &label,
                       bool alwaysTrue, State &back, State &exitS) {
     targets_.push_back({label, false, State{}, State{}});
+    // The condition and increment are full expressions of their own.
     if (!doWhile) {
+        dropTemps(cur_);
         State t, f;
         this->cond(cond, t, f);
+        dropTemps(t);
+        dropTemps(f);
         exitS = alwaysTrue ? State{} : std::move(f);
         cur_ = std::move(t);
         if (body) stmt(*body);
         cur_ = join(cur_, targets_.back().cont);
-        if (incr) rval(*incr);
+        if (incr) { dropTemps(cur_); rval(*incr); dropTemps(cur_); }
         back = cur_;
     } else {
         if (body) stmt(*body);
         cur_ = join(cur_, targets_.back().cont);
+        dropTemps(cur_);
         State t, f;
         this->cond(cond, t, f);
+        dropTemps(t);
+        dropTemps(f);
         exitS = alwaysTrue ? State{} : std::move(f);
         back = std::move(t);
     }
@@ -2024,6 +2045,7 @@ void Walker::loop(const Stmt &s, Expr *cond, Stmt *body, Expr *incr, bool doWhil
 }
 
 void Walker::stmt(Stmt &s) {
+    if (s.kind != StmtKind::Compound) dropTemps(cur_);
     int savedPos = curPos_;
     auto po = order_.find(&s);
     if (po != order_.end()) curPos_ = po->second;
