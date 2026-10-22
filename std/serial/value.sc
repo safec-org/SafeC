@@ -191,6 +191,24 @@ inline &Value Value::array_at(unsigned long idx) const {
 }
 inline unsigned long Value::object_len() const { return self.obj_val.length(); }
 
+const &char Value::object_key_at(unsigned long idx) const {
+    struct ObjectEntry* e;
+    unsafe { e = self.obj_val.at(idx); }
+    unsafe {
+        match (e->key) {
+            case some(k): { return k; }
+            case null:    { }
+        }
+    }
+    return "";
+}
+
+&Value Value::object_value_at(unsigned long idx) const {
+    struct ObjectEntry* e;
+    unsafe { e = self.obj_val.at(idx); }
+    unsafe { return e->val; }
+}
+
 ?&Value Value::object_get(const &char key) const {
     unsigned long i = 0UL;
     unsigned long n = self.obj_val.length();

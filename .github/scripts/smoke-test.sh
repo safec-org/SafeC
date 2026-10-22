@@ -564,6 +564,43 @@ else
     echo "  [SKIP] Objective-C (macOS only)"
 fi
 
+# std/async (examples/async_demo): a Runtime serving HTTP to its own
+# clients over loopback, a ThreadPool job awaited through a Oneshot -- the
+# OS readiness backend (epoll / kqueue / WSAPoll) at run time, and the
+# manifest's compat_preprocessor for the coroutine macros.
+cp -R "$SAFEC_HOME/examples/async_demo" "$WORKDIR/async_demo"
+if sg_in "$WORKDIR/async_demo" /tmp/sg_async.txt build; then
+    ASYNC_EXE="$WORKDIR/async_demo/build/async_demo"
+    [[ -f "$ASYNC_EXE.exe" ]] && ASYNC_EXE="$ASYNC_EXE.exe"
+    if with_timeout 60 "$ASYNC_EXE" >/tmp/sg_async_run.txt 2>&1 &&
+       grep -q "8/8 clients ok" /tmp/sg_async_run.txt; then
+        pass "examples/async_demo: $(tail -1 /tmp/sg_async_run.txt)"
+    else
+        fail "examples/async_demo run"
+        cat /tmp/sg_async_run.txt
+    fi
+else
+    fail "examples/async_demo build"
+    cat /tmp/sg_async.txt
+fi
+
+# std/audio (examples/audio_demo): built with no libraries in its manifest
+# (the backends bring theirs; ALSA and JACK are loaded at run time), lists
+# the APIs and devices -- zero on a runner without sound hardware is fine --
+# and plays a short tone through the dummy API's timer thread.
+cp -R "$SAFEC_HOME/examples/audio_demo" "$WORKDIR/audio_demo"
+AD="$WORKDIR/audio_demo/build/audio_demo"
+[[ "$OS" == windows ]] && AD="$AD.exe"
+if sg_in "$WORKDIR/audio_demo" /tmp/sg_audio.txt build &&
+   with_timeout 60 "$AD" list >/tmp/sg_audio_run.txt 2>&1 && grep -q "Dummy: 2 device(s)" /tmp/sg_audio_run.txt &&
+   with_timeout 60 "$AD" sine --api dummy --seconds 0.25 >>/tmp/sg_audio_run.txt 2>&1 &&
+   grep -q "done: 0.25 s of audio" /tmp/sg_audio_run.txt; then
+    pass "std/audio: examples/audio_demo lists devices and plays through the dummy API ($(head -1 /tmp/sg_audio_run.txt))"
+else
+    fail "std/audio: examples/audio_demo"
+    cat /tmp/sg_audio.txt /tmp/sg_audio_run.txt 2>/dev/null
+fi
+
 # A GUI app bundle (examples/gui_hello: a std/gui window that closes itself).
 GUI_CAN_BUILD=1
 [[ "$OS" == linux && ! -e /usr/include/X11/Xlib.h ]] && GUI_CAN_BUILD=0
@@ -682,7 +719,9 @@ fi
 
 # ── 5d. prebuilt std sections ────────────────────────────────────────────────
 # A native build with the packaged safec links the prebuilt sections holding
-# its units (core and collections for io.h + vec.h; not gui, ml, ...) and
+# its units (core and collections for io.h + vec.h — io_file.h's whole-file
+# helpers take a String, so io.h alone already needs collections/string.sc;
+# not gui, ml, ...) and
 # compiles no std. Without a section installed (install.sh --std=...), it
 # compiles that section's units from source and links the rest; a section
 # stamped for another compiler is ignored the same way. std is compiled
@@ -705,10 +744,10 @@ if [[ "$PKG_OK" -eq 1 ]]; then
     fi
     mkdir -p "$PRE/aside" && mv "$PRE_STD"/collections.* "$PRE/aside/"
     if pre_build >/tmp/sg_pre1.txt 2>&1 &&
-       grep -q "std section 'collections' is not installed in .*compiling its units from source: std/collections/vec.sc" /tmp/sg_pre1.txt &&
+       grep -q "std section 'collections' is not installed in .*compiling its units from source: std/collections/string.sc std/collections/vec.sc" /tmp/sg_pre1.txt &&
        grep -q "linking the prebuilt std sections core from" /tmp/sg_pre1.txt &&
        grep -q "prebuilt std ok" /tmp/sg_pre1.txt &&
-       [[ "$(cd "$PRE/app/build/deps/std" && ls *.o 2>/dev/null)" == "collections_vec_sc.o" ]]; then
+       [[ "$(cd "$PRE/app/build/deps/std" && ls *.o 2>/dev/null | tr '\n' ' ')" == "collections_string_sc.o collections_vec_sc.o " ]]; then
         pass "a section that isn't installed is compiled from source, the others linked prebuilt"
     else
         fail "a build with a std section missing"
@@ -735,6 +774,25 @@ else
     echo "  [SKIP] no package (see above)"
 fi
 rm -rf "$PRE"
+
+# ── 5e. std/wasm DOM interop under Node ──────────────────────────────────────
+# tests/stdlib/wasm builds a wasm32 module with safeguard and drives it
+# against a small fake DOM through std/wasm/safec_dom.js. Needs node and
+# clang's wasm-ld; skipped where either is missing.
+section "std/wasm DOM interop (Node)"
+WASM_LD_PROG="$("$CLANG_BIN" -print-prog-name=wasm-ld 2>/dev/null || true)"
+if command -v node >/dev/null 2>&1 && { [[ -x "$WASM_LD_PROG" ]] || command -v "$WASM_LD_PROG" >/dev/null 2>&1; }; then
+    rm -rf "$SAFEC_HOME/tests/stdlib/wasm/build"
+    if SAFEGUARD="$SAFEGUARD_BIN" SAFEC="$SAFEC_BIN" SAFEC_CLANG="$CLANG_BIN" \
+            bash "$SAFEC_HOME/tests/stdlib/wasm/run.sh" >/tmp/wasm_dom.txt 2>&1; then
+        pass "$(tail -1 /tmp/wasm_dom.txt)"
+    else
+        fail "std/wasm DOM interop"
+        cat /tmp/wasm_dom.txt
+    fi
+else
+    echo "  [SKIP] node or wasm-ld not available"
+fi
 
 # ── 6. sc-lsp wire-protocol smoke test ────────────────────────────────────────
 section "sc-lsp initialize handshake"

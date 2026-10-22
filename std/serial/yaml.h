@@ -5,16 +5,20 @@
 // double-quoted "..." with \" \\ \n \t \r \t escapes), block sequences
 // ('- item' per line, including the compact '- key: value' list-of-maps
 // shorthand), block mappings ('key: value' per line, indentation-nested),
-// '#' comments (outside quotes), and the null/bool/int/float scalar forms
-// YAML 1.1 core schema recognizes (~/null, true/false, plain integers and
-// floats).
+// flow collections on one line ('[a, b]', '{k: v, n: [1, 2]}', nested,
+// with quoted or plain items), literal and folded block scalars ('|' / '>',
+// with '-' strip / '+' keep chomping), '#' comments (at the line start or
+// after whitespace, outside quotes — 'a#b' is a plain scalar), and the
+// null/bool/int/float scalar forms YAML 1.1 core schema recognizes
+// (~/null, true/false, plain integers and floats).
 //
 // NOT supported (out of scope for this module — a full YAML 1.2 processor
-// is a much larger undertaking): flow style ('[a, b]' / '{k: v}'), anchors
-// & aliases ('&name' / '*name'), tags ('!!str'), multi-document streams
-// ('---' separators), block scalar literals ('|' / '>'), and merge keys
-// ('<<:'). A document using any of these either parses as plain scalar
-// text (least-surprise fallback) or fails — see yaml_parse's 'ok' contract.
+// is a much larger undertaking): flow collections spanning several lines,
+// anchors & aliases ('&name' / '*name'), tags ('!!str'), multi-document
+// streams ('---' separators), and merge keys ('<<:'). A document using any
+// of these either parses as plain scalar text (least-surprise fallback —
+// an unterminated '[...' stays a string) or fails — see yaml_parse's 'ok'
+// contract.
 #pragma once
 #include <std/serial/value.h>
 #include <std/collections/string.h>

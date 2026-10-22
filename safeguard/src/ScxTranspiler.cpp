@@ -1,5 +1,7 @@
 #include "ScxTranspiler.h"
 #include <cctype>
+#include <filesystem>
+#include <regex>
 #include <cstring>
 #include <memory>
 #include <sstream>
@@ -96,6 +98,28 @@ public:
         }
         expect(p, '>');
 
+        // Raw-text elements: <script>/<style> content is copied verbatim
+        // up to the matching close tag — '{', '}' and '<' are ordinary
+        // characters there (JS/CSS are full of them), so there is no
+        // interpolation inside these two elements.
+        if (tag == "script" || tag == "style") {
+            std::string close = "</" + tag;
+            size_t end = s_.find(close, p);
+            if (end == std::string::npos) fail(file_, s_, p, "unterminated element <" + tag + ">");
+            if (end > p) {
+                auto text  = std::make_unique<Node>();
+                text->kind = NodeKind::Text;
+                text->text = s_.substr(p, end - p);
+                node->children.push_back(std::move(text));
+            }
+            size_t q = end + close.size();
+            skipWs(q);
+            if (q >= s_.size() || s_[q] != '>')
+                fail(file_, s_, q, "malformed closing tag for <" + tag + ">");
+            p = q + 1;
+            return node;
+        }
+
         for (;;) {
             if (p >= s_.size()) fail(file_, s_, p, "unterminated element <" + tag + ">");
             if (s_[p] == '<' && peek(p, 1) == '/') {
@@ -111,7 +135,9 @@ public:
                 p = q;
                 break;
             }
-            if (s_[p] == '<') {
+            if (s_[p] == '<' && peek(p, 1) == '!') {
+                node->children.push_back(parseDeclaration(p));
+            } else if (s_[p] == '<') {
                 node->children.push_back(parseElement(p));
             } else if (s_[p] == '{') {
                 node->children.push_back(parseInterp(p));
@@ -120,6 +146,58 @@ public:
             }
         }
         return node;
+    }
+
+    // '<!-- comment -->' or '<!doctype html>' (any '<!...>'): kept verbatim
+    // as literal text.
+    NodePtr parseDeclaration(size_t& p) {
+        size_t start = p;
+        size_t end;
+        if (s_.compare(p, 4, "<!--") == 0) {
+            end = s_.find("-->", p + 4);
+            if (end == std::string::npos) fail(file_, s_, p, "unterminated <!-- comment");
+            end += 3;
+        } else {
+            end = s_.find('>', p);
+            if (end == std::string::npos) fail(file_, s_, p, "unterminated <! declaration");
+            end += 1;
+        }
+        p = end;
+        auto node  = std::make_unique<Node>();
+        node->kind = NodeKind::Text;
+        node->text = s_.substr(start, end - start);
+        return node;
+    }
+
+    // The operand of 'return' / '=': one element, or a sequence of
+    // declarations ('<!doctype html>', comments) and elements — a
+    // fragment, returned as an Element with an empty tag. Whitespace
+    // between top-level items becomes a single '\n'.
+    NodePtr parseRoot(size_t& p) {
+        auto frag  = std::make_unique<Node>();
+        frag->kind = NodeKind::Element; // tag "" = fragment
+        for (;;) {
+            if (s_[p] == '<' && peek(p, 1) == '!') frag->children.push_back(parseDeclaration(p));
+            else frag->children.push_back(parseElement(p));
+            size_t q = p;
+            skipWs(q);
+            if (q < s_.size() && s_[q] == '<' && (peek(q, 1) == '!' || isIdentStart(peek(q, 1)))) {
+                if (q > p) {
+                    auto nl  = std::make_unique<Node>();
+                    nl->kind = NodeKind::Text;
+                    nl->text = "\n";
+                    frag->children.push_back(std::move(nl));
+                }
+                p = q;
+                continue;
+            }
+            break;
+        }
+        if (frag->children.size() == 1 && frag->children[0]->kind == NodeKind::Element) {
+            NodePtr only = std::move(frag->children[0]);
+            return only;
+        }
+        return frag;
     }
 
 private:
@@ -260,6 +338,7 @@ public:
 private:
     std::string buf_;
     std::string pending_;
+    int         foreignDepth_ = 0; // inside <svg>/<math>: XML self-closing rules
 
     void flush(std::ostringstream& out) {
         if (!pending_.empty()) {
@@ -268,7 +347,21 @@ private:
         }
     }
 
+    // HTML void elements: never have content, written without a closing tag.
+    static bool isVoid(const std::string& t) {
+        static const char* kVoid[] = { "area", "base", "br", "col", "embed", "hr", "img", "input",
+                                       "link", "meta", "source", "track", "wbr" };
+        for (const char* v : kVoid) if (t == v) return true;
+        return false;
+    }
+
     void emitElement(const Node& el, std::ostringstream& out) {
+        if (el.tag.empty()) { // fragment
+            for (auto& c : el.children) emitNode(*c, out);
+            return;
+        }
+        bool foreign = el.tag == "svg" || el.tag == "math";
+        if (foreign) ++foreignDepth_;
         pending_ += "<" + el.tag;
         for (auto& a : el.attrs) {
             if (!a.isExpr) {
@@ -281,12 +374,20 @@ private:
             }
         }
         if (el.children.empty()) {
-            pending_ += "/>";
+            // An empty element is '<tag/>' only where that means "closed":
+            // SVG/MathML content. In HTML, '<div/>' parses as an *open*
+            // <div>, so non-void elements get an explicit close tag, and
+            // void elements (<br>, <meta>, ...) are written as plain start tags.
+            if (foreignDepth_ > 0) pending_ += "/>";
+            else if (isVoid(el.tag)) pending_ += ">";
+            else pending_ += "></" + el.tag + ">";
+            if (foreign) --foreignDepth_;
             return;
         }
         pending_ += ">";
         for (auto& c : el.children) emitNode(*c, out);
         pending_ += "</" + el.tag + ">";
+        if (foreign) --foreignDepth_;
     }
 
     void emitNode(const Node& n, std::ostringstream& out) {
@@ -361,6 +462,16 @@ public:
         lineMap_.insert(lineMap_.begin() + 1, n, headerOrigLine);
     }
 
+    // Drops generated text from 'pos' on (and the line-map entries of the
+    // newlines it held) — used to re-emit a statement's already-copied
+    // left-hand side once markup turns up on its right-hand side.
+    void truncate(size_t pos) {
+        for (size_t k = pos; k < out_.size(); ++k)
+            if (out_[k] == '\n' && lineMap_.size() > 2) lineMap_.pop_back();
+        out_.resize(pos);
+    }
+    size_t size() const { return out_.size(); }
+
     std::string&       text() { return out_; }
     std::vector<int>&  lineMap() { return lineMap_; }
 
@@ -376,6 +487,24 @@ private:
 
 } // namespace
 
+// '<tag' or '<!' (doctype/comment) at src[j]: the start of markup.
+static bool markupAt(const std::string& src, size_t j) {
+    return j + 1 < src.size() && src[j] == '<' && (isIdentStart(src[j + 1]) || src[j + 1] == '!');
+}
+
+// Expands one parsed markup tree into statements that build 'bufVar'
+// (declaring it first when 'declare' is set).
+static std::string genBuilder(const Node& root, const std::string& bufVar, bool declare) {
+    std::ostringstream gen;
+    if (declare) gen << "struct String " << bufVar << " = std::String::new();\n";
+    gen << "unsafe {\n";
+    std::ostringstream body;
+    CodeGen(bufVar).emit(root, body);
+    gen << body.str();
+    gen << "}\n";
+    return gen.str();
+}
+
 std::string transpileScx(const std::string& src, const std::string& filename,
                           std::vector<int>* lineMapOut) {
     Output out(src);
@@ -384,9 +513,37 @@ std::string transpileScx(const std::string& src, const std::string& filename,
     int tmpCounter = 0;
     bool usedMarkup = false;
     int origLine = 1;
+    // Start (in the output) of the statement being copied, and the paren
+    // depth there — so 'x = <markup>;' can re-emit its left-hand side.
+    size_t stmtStart = 0;
+    int parenDepth = 0;
+    // The .scx file's directory: a quoted '#include "x.h"' is resolved
+    // against it (the transpiled file is compiled from elsewhere, e.g.
+    // safeguard's build/scx/), the way it would be for a .sc file.
+    std::error_code fsErr;
+    std::filesystem::path srcDir = std::filesystem::absolute(std::filesystem::path(filename), fsErr).parent_path();
 
     while (i < src.size()) {
         char c = src[i];
+
+        // #include "relative.h" -> #include "<dir of the .scx>/relative.h"
+        if (c == '#' && (out.size() == 0 || out.text().back() == '\n') &&
+            src.compare(i, 8, "#include") == 0) {
+            size_t q = i + 8;
+            while (q < src.size() && (src[q] == ' ' || src[q] == '\t')) ++q;
+            if (q < src.size() && src[q] == '"') {
+                size_t e = src.find('"', q + 1);
+                if (e != std::string::npos && src.find('\n', q) > e) {
+                    std::filesystem::path rel(src.substr(q + 1, e - q - 1));
+                    std::filesystem::path abs = srcDir / rel;
+                    if (!rel.is_absolute() && !srcDir.empty() && std::filesystem::exists(abs, fsErr)) {
+                        out.copySrc("#include \"" + abs.lexically_normal().generic_string() + "\"", origLine);
+                        i = e + 1;
+                        continue;
+                    }
+                }
+            }
+        }
 
         // String / char literals — copy verbatim, don't scan their contents.
         if (c == '"' || c == '\'') {
@@ -427,13 +584,12 @@ std::string transpileScx(const std::string& src, const std::string& filename,
             size_t afterKw = i + 6;
             size_t j = afterKw;
             while (j < src.size() && isWs(src[j])) ++j;
-            if (j < src.size() && src[j] == '<' && j + 1 < src.size() &&
-                isIdentStart(src[j + 1])) {
+            if (markupAt(src, j)) {
                 int markupOrigLine = origLine; // pin generated lines here
 
                 MarkupParser mp(src, filename);
                 size_t p = j;
-                NodePtr root = mp.parseElement(p); // throws on malformed markup
+                NodePtr root = mp.parseRoot(p); // throws on malformed markup
 
                 size_t k = p;
                 while (k < src.size() && isWs(src[k])) ++k;
@@ -442,15 +598,11 @@ std::string transpileScx(const std::string& src, const std::string& filename,
                 ++k;
 
                 std::string bufVar = "__scx" + std::to_string(tmpCounter++);
-                std::ostringstream gen;
-                gen << "struct String " << bufVar << " = std::String::new();\n";
-                gen << "unsafe {\n";
-                std::ostringstream body;
-                CodeGen(bufVar).emit(*root, body);
-                gen << body.str();
-                gen << "}\n";
-                gen << "return " << bufVar << ";\n";
-                out.emitGen(gen.str(), markupOrigLine);
+                std::string gen = genBuilder(*root, bufVar, true);
+                gen += "return " + bufVar + ";\n";
+                // Braces keep a braceless 'if (c) return <a/>;' one statement.
+                out.emitGen("{\n" + gen + "}\n", markupOrigLine);
+                stmtStart = out.size();
 
                 // Resume normal scanning right after the consumed original
                 // 'return <markup>;' text — advance origLine by however
@@ -467,8 +619,58 @@ std::string transpileScx(const std::string& src, const std::string& filename,
             continue;
         }
 
+        // 'lhs = <markup>;' — a declaration's initializer or an assignment.
+        if (c == '=' && parenDepth == 0 && i + 1 < src.size() && src[i + 1] != '=' &&
+            (out.size() == 0 || std::string("=!<>+-*/%&|^").find(out.text().back()) == std::string::npos)) {
+            size_t j = i + 1;
+            while (j < src.size() && isWs(src[j])) ++j;
+            if (markupAt(src, j)) {
+                int markupOrigLine = origLine;
+                MarkupParser mp(src, filename);
+                size_t p = j;
+                NodePtr root = mp.parseRoot(p);
+                size_t k = p;
+                while (k < src.size() && isWs(src[k])) ++k;
+                if (k >= src.size() || src[k] != ';')
+                    fail(filename, src, k, "expected ';' after scx markup");
+                ++k;
+
+                std::string lhs = out.text().substr(stmtStart);
+                size_t a = lhs.find_first_not_of(" \t\r\n");
+                std::string lead = a == std::string::npos ? lhs : lhs.substr(0, a);
+                std::string lhsTrim = a == std::string::npos ? "" : lhs.substr(a);
+                while (!lhsTrim.empty() && isWs(lhsTrim.back())) lhsTrim.pop_back();
+                if (lhsTrim.empty()) fail(filename, src, i, "scx markup needs a left-hand side");
+                out.truncate(stmtStart);
+                out.emitGen(lead, markupOrigLine);
+
+                // '[const] [struct] Type[<...>] name' declares 'name'.
+                static const std::regex kDecl(
+                    R"(^(?:const\s+)?(?:struct\s+)?[A-Za-z_][\w:]*(?:<[^=;]*>)?\s+([A-Za-z_]\w*)$)");
+                std::smatch m;
+                std::string gen;
+                if (std::regex_match(lhsTrim, m, kDecl)) {
+                    gen = lhsTrim + " = std::String::new();\n" + genBuilder(*root, m[1].str(), false);
+                } else {
+                    std::string bufVar = "__scx" + std::to_string(tmpCounter++);
+                    gen = "{\n" + genBuilder(*root, bufVar, true) + lhsTrim + " = " + bufVar + ";\n}\n";
+                }
+                out.emitGen(gen, markupOrigLine);
+                origLine += lineOf(src, k) - lineOf(src, i);
+                usedMarkup = true;
+                stmtStart = out.size();
+                i = k;
+                continue;
+            }
+        }
+
         out.copySrc(c, origLine);
         ++i;
+        if (c == '(' || c == '[') ++parenDepth;
+        else if ((c == ')' || c == ']') && parenDepth > 0) --parenDepth;
+        else if (parenDepth == 0 && (c == ';' || c == '{' || c == '}')) stmtStart = out.size();
+        else if (parenDepth == 0 && c == ':' && (i >= src.size() || src[i] != ':') &&
+                 (i < 2 || src[i - 2] != ':')) stmtStart = out.size(); // 'case x:' / label
     }
 
     if (usedMarkup) {

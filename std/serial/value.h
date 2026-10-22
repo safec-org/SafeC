@@ -92,6 +92,12 @@ struct Value {
     unsigned long   array_len() const;
     &Value          array_at(unsigned long idx) const;
     unsigned long   object_len() const;
+    // The idx-th entry of an object, in insertion order (for iterating a
+    // VAL_OBJECT's keys — e.g. a YAML/JSON map whose order matters): its
+    // key ("" if the entry's key allocation failed) and its value. Like
+    // array_at, both trust 'idx' < object_len().
+    const &char     object_key_at(unsigned long idx) const;
+    &Value          object_value_at(unsigned long idx) const;
     // Empty (null case) if the key isn't present.
     ?&Value         object_get(const &char key) const;
 

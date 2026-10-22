@@ -90,6 +90,10 @@ private:
     // ── Pass 2: check bodies ──────────────────────────────────────────────────
     void checkDecl(Decl &d);
     void checkFunction(FunctionDecl &fn);
+    // goto/label rules: every label is unique within its function, and a
+    // goto may not jump into the scope of a local whose declaration it
+    // skips (see the definition).
+    void checkGotoJumps(FunctionDecl &fn);
     void checkGlobalVar(GlobalVarDecl &gv);
     void checkStaticAssert(StaticAssertDecl &sa);
 
