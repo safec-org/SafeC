@@ -48,6 +48,20 @@ int audio_streq_(const ?&char a, const ?&char b) {
     }
 }
 
+int audio_strprefix_(const ?&char s, const ?&char prefix) {
+    unsafe {
+        const char* x = (const char*)s;
+        const char* p = (const char*)prefix;
+        if (x == (const char*)0 || p == (const char*)0) return 0;
+        unsigned long i = 0UL;
+        while (p[i] != (char)0) {
+            if (x[i] != p[i]) return 0;
+            i = i + 1UL;
+        }
+        return 1;
+    }
+}
+
 void audio_strcat_int_(&char dst, unsigned long cap, long long v) {
     char tmp[24];
     int n = 0;

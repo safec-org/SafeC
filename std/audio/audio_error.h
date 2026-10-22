@@ -57,6 +57,7 @@ void          audio_strcpy_(&char dst, unsigned long cap, const ?&char src);
 void          audio_strcat_(&char dst, unsigned long cap, const ?&char src);
 unsigned long audio_strlen_(const ?&char s);
 int           audio_streq_(const ?&char a, const ?&char b);
+int           audio_strprefix_(const ?&char s, const ?&char prefix);
 // Appends the decimal 'v'.
 void          audio_strcat_int_(&char dst, unsigned long cap, long long v);
 
