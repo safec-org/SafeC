@@ -39,7 +39,10 @@
 // waiting on the same socket at the same time make the second one
 // re-poll). Wakes from other threads end a park at once on POSIX (a wake
 // pipe); on Windows the driver parks at most ASYNC_IO_REMOTE_MS at a time
-// so they are seen within that. Hosted targets only.
+// so they are seen within that. (WSAPoll on Windows before 10 2004 never
+// reports a refused connect, so a ConnectFut to a closed port waits there
+// until dropped or timed out: give connects a timeout() on old Windows.)
+// Hosted targets only.
 #pragma once
 #include <std/async/executor.h>
 #include <std/async/host.h>
