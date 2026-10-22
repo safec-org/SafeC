@@ -119,6 +119,96 @@ struct GuiColor GuiColor::rgb(unsigned char r, unsigned char g, unsigned char b)
     return GuiColor::rgba(r, g, b, 255U);
 }
 
+struct GuiColor GuiColor::hex(unsigned int rrggbb) {
+    return GuiColor::rgba((unsigned char)((rrggbb >> 16) & 0xFFU), (unsigned char)((rrggbb >> 8) & 0xFFU),
+                          (unsigned char)(rrggbb & 0xFFU), (unsigned char)255);
+}
+
+struct GuiColor GuiColor::hexa(unsigned int v) {
+    return GuiColor::rgba((unsigned char)((v >> 24) & 0xFFU), (unsigned char)((v >> 16) & 0xFFU),
+                          (unsigned char)((v >> 8) & 0xFFU), (unsigned char)(v & 0xFFU));
+}
+
+static unsigned char __gui_unit_byte(float f) {
+    if (!(f > 0.0f)) { return (unsigned char)0; }
+    if (f >= 1.0f) { return (unsigned char)255; }
+    return (unsigned char)(int)(f * 255.0f + 0.5f);
+}
+
+struct GuiColor GuiColor::rgbaf(float r, float g, float b, float a) {
+    return GuiColor::rgba(__gui_unit_byte(r), __gui_unit_byte(g), __gui_unit_byte(b), __gui_unit_byte(a));
+}
+
+struct GuiColor GuiColor::hsv(float h, float s, float v, float a) {
+    // h in degrees, wrapped into [0, 360).
+    float hh = h;
+    while (hh < 0.0f) { hh = hh + 360.0f; }
+    while (hh >= 360.0f) { hh = hh - 360.0f; }
+    if (s < 0.0f) { s = 0.0f; }
+    if (s > 1.0f) { s = 1.0f; }
+    if (v < 0.0f) { v = 0.0f; }
+    if (v > 1.0f) { v = 1.0f; }
+    float c = v * s;
+    float hp = hh / 60.0f;
+    int sector = (int)hp;
+    float frac = hp - (float)(sector / 2 * 2);
+    float x = c * (1.0f - (frac - 1.0f < 0.0f ? 1.0f - frac : frac - 1.0f));
+    float r = 0.0f; float g = 0.0f; float b = 0.0f;
+    if (sector == 0) { r = c; g = x; }
+    else if (sector == 1) { r = x; g = c; }
+    else if (sector == 2) { g = c; b = x; }
+    else if (sector == 3) { g = x; b = c; }
+    else if (sector == 4) { r = x; b = c; }
+    else { r = c; b = x; }
+    float m = v - c;
+    return GuiColor::rgbaf(r + m, g + m, b + m, a);
+}
+
+void GuiColor::to_hsv(&float h, &float s, &float v) const {
+    float r = (float)self.r / 255.0f;
+    float g = (float)self.g / 255.0f;
+    float b = (float)self.b / 255.0f;
+    float mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    float mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+    float d = mx - mn;
+    float hh = 0.0f;
+    if (d > 0.0f) {
+        if (mx == r) { hh = 60.0f * ((g - b) / d); }
+        else if (mx == g) { hh = 60.0f * ((b - r) / d + 2.0f); }
+        else { hh = 60.0f * ((r - g) / d + 4.0f); }
+        if (hh < 0.0f) { hh = hh + 360.0f; }
+    }
+    *h = hh;
+    *s = mx > 0.0f ? d / mx : 0.0f;
+    *v = mx;
+}
+
+struct GuiColor GuiColor::with_alpha(float f) const {
+    if (f < 0.0f) { f = 0.0f; }
+    if (f > 1.0f) { f = 1.0f; }
+    return GuiColor::rgba(self.r, self.g, self.b, (unsigned char)(int)((float)self.a * f + 0.5f));
+}
+
+struct GuiColor GuiColor::mix(struct GuiColor o, float t) const {
+    if (t < 0.0f) { t = 0.0f; }
+    if (t > 1.0f) { t = 1.0f; }
+    float u = 1.0f - t;
+    return GuiColor::rgba((unsigned char)(int)((float)self.r * u + (float)o.r * t + 0.5f),
+                          (unsigned char)(int)((float)self.g * u + (float)o.g * t + 0.5f),
+                          (unsigned char)(int)((float)self.b * u + (float)o.b * t + 0.5f),
+                          (unsigned char)(int)((float)self.a * u + (float)o.a * t + 0.5f));
+}
+
+struct GuiColor GuiColor::shade(float amount) const {
+    struct GuiColor target = amount >= 0.0f ? GuiColor::rgba((unsigned char)255, (unsigned char)255, (unsigned char)255, self.a)
+                                            : GuiColor::rgba((unsigned char)0, (unsigned char)0, (unsigned char)0, self.a);
+    return self.mix(target, amount >= 0.0f ? amount : -amount);
+}
+
+unsigned int GuiColor::packed() const {
+    return ((unsigned int)self.r << 24) | ((unsigned int)self.g << 16) | ((unsigned int)self.b << 8) | (unsigned int)self.a;
+}
+
 static unsigned int __gui_pack(struct GuiColor c) {
     unsigned int r = (unsigned int)c.r;
     unsigned int g = (unsigned int)c.g;
