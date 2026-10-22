@@ -5,6 +5,7 @@
 #include <std/mem.h>
 #include <std/gui/gui.h>
 #include <std/gui/gui_draw.h>
+#include <std/gui/gui_backend.h>
 
 extern void* XOpenDisplay(const char* name);
 extern int XCloseDisplay(void* d);
@@ -18,14 +19,24 @@ extern unsigned long XInternAtom(void* d, const char* name, int onlyIfExists);
 extern unsigned long XDefaultRootWindow(void* d);
 extern int XResizeWindow(void* d, unsigned long w, unsigned int width, unsigned int height);
 
-// The head of gui_x11.sc's platform struct.
-struct X11PlatformHead {
-    void* display;
-    unsigned long window;
-};
 
 static void* g_dpy = (void*)0;     // the test's own connection
 static unsigned long g_win = 0UL;
+static void* g_gui_dpy = (void*)0; // std/gui's own connection
+
+// The Display* std/gui's X11 backend uses, from its native handles.
+static void* gui_display_of(&GuiWindow win) {
+    ?&GuiWindowState ost = gui_window_state(win);
+    match (ost) {
+        case null: return (void*)0;
+        case some(st): {
+            &GuiBackend b = gui_backend();
+            struct GuiNativeHandle h = b.native_handle(st);
+            unsafe { return (void*)(unsigned long)h.display; }
+        }
+    }
+    return (void*)0;
+}
 
 // 0x00RRGGBB at (x, y) of the window, read back from the server.
 static unsigned int read_pixel(int x, int y, int w, int h) {
@@ -78,14 +89,15 @@ void t_x11() {
         if (win.platform.is_null()) return;
         g_dpy = XOpenDisplay((const char*)0);
         ASSERT_TRUE(g_dpy != (void*)0);
-        g_win = ((struct X11PlatformHead*)win.platform)->window;
-        XSync(((struct X11PlatformHead*)win.platform)->display, 0);
+        g_win = (unsigned long)win.native_handle();
+        g_gui_dpy = gui_display_of(&win);
+        XSync(g_gui_dpy, 0);
 
         win.fill_rect(0, 0, 64, 48, GuiColor::rgb((unsigned char)0, (unsigned char)0, (unsigned char)0));
         win.fill_rect(10, 10, 20, 10, GuiColor::rgb((unsigned char)255, (unsigned char)0, (unsigned char)0));
         win.fill_rect(40, 30, 5, 5, GuiColor::rgb((unsigned char)0, (unsigned char)128, (unsigned char)255));
         win.present();
-        XSync(((struct X11PlatformHead*)win.platform)->display, 0);
+        XSync(g_gui_dpy, 0);
         test_assert_eq_u(read_pixel(15, 15, 64, 48), 0xFF0000ULL, "red rectangle on screen", __FILE__, __LINE__);
         test_assert_eq_u(read_pixel(42, 32, 64, 48), 0x0080FFULL, "R/G/B order", __FILE__, __LINE__);
         test_assert_eq_u(read_pixel(2, 2, 64, 48), 0x000000ULL, "background", __FILE__, __LINE__);
@@ -128,7 +140,7 @@ void t_x11() {
         ASSERT_EQ(win.height, 50);
         win.fill_rect(70, 40, 5, 5, GuiColor::rgb((unsigned char)0, (unsigned char)255, (unsigned char)0));
         win.present();
-        XSync(((struct X11PlatformHead*)win.platform)->display, 0);
+        XSync(g_gui_dpy, 0);
         test_assert_eq_u(read_pixel(72, 42, 80, 50), 0x00FF00ULL, "drawn after resize", __FILE__, __LINE__);
 
         long cm[24];

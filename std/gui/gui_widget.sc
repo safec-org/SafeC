@@ -1,6 +1,5 @@
 // SafeC Standard Library — GUI: retained-mode widget tree implementation
 // (see gui_widget.h).
-// safeguard: implements <std/gui/gui.h>   (GuiEvent::prevent_default, declared there)
 #pragma once
 #include <std/gui/gui.h>
 #include <std/gui/gui_draw.h>
@@ -624,9 +623,6 @@ static int __widget_dispatch_one(&Widget w, struct GuiEvent* ev) {
 
 // ── default key actions + prevent_default ───────────────────────────────────
 
-void GuiEvent::prevent_default() {
-    unsafe { self.defaultPrevented = 1; }
-}
 
 static int __widget_is_focusable(&Widget w) {
     int kind; unsafe { kind = w->kind; }
