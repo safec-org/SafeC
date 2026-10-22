@@ -736,6 +736,25 @@ else
 fi
 rm -rf "$PRE"
 
+# ── 5e. std/wasm DOM interop under Node ──────────────────────────────────────
+# tests/stdlib/wasm builds a wasm32 module with safeguard and drives it
+# against a small fake DOM through std/wasm/safec_dom.js. Needs node and
+# clang's wasm-ld; skipped where either is missing.
+section "std/wasm DOM interop (Node)"
+WASM_LD_PROG="$("$CLANG_BIN" -print-prog-name=wasm-ld 2>/dev/null || true)"
+if command -v node >/dev/null 2>&1 && { [[ -x "$WASM_LD_PROG" ]] || command -v "$WASM_LD_PROG" >/dev/null 2>&1; }; then
+    rm -rf "$SAFEC_HOME/tests/stdlib/wasm/build"
+    if SAFEGUARD="$SAFEGUARD_BIN" SAFEC="$SAFEC_BIN" SAFEC_CLANG="$CLANG_BIN" \
+            bash "$SAFEC_HOME/tests/stdlib/wasm/run.sh" >/tmp/wasm_dom.txt 2>&1; then
+        pass "$(tail -1 /tmp/wasm_dom.txt)"
+    else
+        fail "std/wasm DOM interop"
+        cat /tmp/wasm_dom.txt
+    fi
+else
+    echo "  [SKIP] node or wasm-ld not available"
+fi
+
 # ── 6. sc-lsp wire-protocol smoke test ────────────────────────────────────────
 section "sc-lsp initialize handshake"
 REQUEST='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":null,"capabilities":{}}}'
