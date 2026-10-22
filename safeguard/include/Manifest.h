@@ -63,6 +63,9 @@ struct BuildConfig {
     std::string crateType;         // "bin" (default), "staticlib", or "cdylib"
     std::vector<std::string> frameworks; // macOS frameworks: -framework <name> at final link
     bool objcArc = false;          // compile .m/.mm with -fobjc-arc
+    bool compatPreprocessor = false; // [build] compat_preprocessor: compile the package's
+                                   // SafeC sources with safec --compat-preprocessor
+                                   // (function-like macros, '##', '#': std/async's AWAIT)
     int  useStd = -1;              // [build] std: -1 unset (std when SafeC is involved),
                                    // 1 always (a C/C++/ObjC package using std), 0 never,
                                    // 2 "all": every std module compiled into the archive,
