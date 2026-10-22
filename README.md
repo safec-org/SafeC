@@ -139,7 +139,7 @@ drawn from Oxide (Weiss et al., 2019) and Cyclone (Grossman et al., 2002).
 | `compiler/` | SafeC → LLVM IR compiler (C++17, ~19K LOC), with IR regression tests in `compiler/tests/` |
 | `std/` | Standard library modules (.h declarations + .sc implementations), including `std/simd/` (portable `vec<T,N>`-based SIMD + per-ISA convenience headers) and `std/hal/` (per-architecture bare-metal HAL) |
 | `safeguard/` | Package manager and build system — compiles and links mixed SafeC/C/C++/Objective-C projects, and bundles apps |
-| `tests/stdlib/` | Standard library test suites: hosted (`safeguard test`), bare-metal emulator/WebAssembly (`baremetal/`), and the GPU devices (`device/` on any device, `rocm/`, `cuda/`, `mps/`, `vulkan/`, `webgpu/`) |
+| `tests/stdlib/` | Standard library test suites: hosted (`safeguard test`), bare-metal emulator/WebAssembly (`baremetal/`), std/audio's Web Audio/Web MIDI glue under Node (`audio_web/`), Win32 and X11 backends (`win32/`, `x11/`), and the GPU devices (`device/` on any device, `rocm/`, `cuda/`, `mps/`, `vulkan/`, `webgpu/`) |
 | `tests/std_modules/` | Checks that every std header's functions are implemented by the std modules a build including it links |
 | `examples/` | Example projects, including a full-stack HTTP server + WebAssembly client |
 
