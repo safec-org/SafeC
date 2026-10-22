@@ -92,6 +92,70 @@ int main() {
 }
 )";
 
+// Entry points for 'new --lang c|cpp|objc|objcpp': a package with no SafeC
+// in it, built by clang/clang++ (Objective-C on macOS).
+static const char kMainCTemplate[] =
+R"(// {{NAME}} — entry point
+#include <stdio.h>
+
+int main(void) {
+    printf("Hello from {{NAME}}!\n");
+    return 0;
+}
+)";
+
+static const char kMainCppTemplate[] =
+R"(// {{NAME}} — entry point
+#include <iostream>
+
+int main() {
+    std::cout << "Hello from {{NAME}}!\n";
+    return 0;
+}
+)";
+
+static const char kMainObjCTemplate[] =
+R"(// {{NAME}} — entry point
+#import <Foundation/Foundation.h>
+#include <stdio.h>
+
+int main(void) {
+    @autoreleasepool {
+        NSString* greeting = [NSString stringWithFormat:@"Hello from %s!", "{{NAME}}"];
+        printf("%s\n", greeting.UTF8String);
+    }
+    return 0;
+}
+)";
+
+// The source file and [build] lines for each --lang.
+struct LangTemplate {
+    const char* lang;
+    const char* file;      // under src/
+    const char* source;
+    const char* buildKeys; // appended to [build]
+};
+static const LangTemplate kLangs[] = {
+    { "sc",     "main.sc", kMainScTemplate,   "" },
+    { "c",      "main.c",  kMainCTemplate,    "" },
+    { "cpp",    "main.cpp", kMainCppTemplate, "" },
+    { "objc",   "main.m",  kMainObjCTemplate, "frameworks = [\"Foundation\"]\nobjc_arc   = true\n" },
+    { "objcpp", "main.mm", kMainObjCTemplate, "frameworks = [\"Foundation\"]\nobjc_arc   = true\n" },
+};
+
+static const LangTemplate& langTemplate(const std::string& lang) {
+    std::string l = lang == "safec" ? "sc" : lang == "c++" ? "cpp" : lang == "objc++" ? "objcpp" : lang;
+    for (auto& t : kLangs) if (l == t.lang) return t;
+    throw std::runtime_error("unknown --lang '" + lang + "' (expected sc, c, cpp, objc or objcpp)");
+}
+
+static std::string manifestFor(const LangTemplate& t, const std::string& tmpl) {
+    std::string m = tmpl;
+    std::string anchor = "edition = \"2026\"\n";
+    m.insert(m.find(anchor) + anchor.size(), t.buildKeys);
+    return m;
+}
+
 static const char kGitignore[] =
 "build/\n"
 "*.ll\n"
@@ -112,7 +176,9 @@ std::string Project::findRoot(const std::string& startDir) {
     return "";
 }
 
-void Project::createNew(const std::string& name, const std::string& parentDir) {
+void Project::createNew(const std::string& name, const std::string& parentDir,
+                        const std::string& lang) {
+    const LangTemplate& t = langTemplate(lang);
     fs::path dest = fs::path(parentDir) / name;
     if (fs::exists(dest))
         throw std::runtime_error("directory already exists: " + dest.string());
@@ -128,11 +194,11 @@ void Project::createNew(const std::string& name, const std::string& parentDir) {
 
     // Package.toml
     writeFile((dest / "Package.toml").string(),
-              applyTemplate(kPackageTomlTemplate, name, version, author));
+              applyTemplate(manifestFor(t, kPackageTomlTemplate), name, version, author));
 
-    // src/main.sc
-    writeFile((dest / "src" / "main.sc").string(),
-              applyTemplate(kMainScTemplate, name, version, author));
+    // src/main.sc (or main.c/.cpp/.m/.mm)
+    writeFile((dest / "src" / t.file).string(),
+              applyTemplate(t.source, name, version, author));
 
     // .gitignore
     writeFile((dest / ".gitignore").string(), kGitignore);
@@ -142,8 +208,10 @@ void Project::createNew(const std::string& name, const std::string& parentDir) {
     std::cout << "  Run:  cd " << name << " && safeguard build\n";
 }
 
-void Project::initHere(const std::string& name) {
+void Project::initHere(const std::string& name, const std::string& lang) {
+    const LangTemplate& t = langTemplate(lang);
     std::string cwd = fs::current_path().string();
+    std::string mainFile = std::string("src/") + t.file;
 
     const char* user = std::getenv("USER");
     std::string author = user ? user : "unknown";
@@ -152,14 +220,13 @@ void Project::initHere(const std::string& name) {
     bool wroteManifest = false;
     if (!fs::exists("Package.toml")) {
         writeFile("Package.toml",
-                  applyTemplate(kPackageTomlTemplate, name, version, author));
+                  applyTemplate(manifestFor(t, kPackageTomlTemplate), name, version, author));
         wroteManifest = true;
     }
 
     bool wroteSrc = false;
-    if (!fs::exists("src/main.sc")) {
-        writeFile("src/main.sc",
-                  applyTemplate(kMainScTemplate, name, version, author));
+    if (!fs::exists(mainFile)) {
+        writeFile(mainFile, applyTemplate(t.source, name, version, author));
         wroteSrc = true;
     }
 
@@ -168,7 +235,7 @@ void Project::initHere(const std::string& name) {
 
     std::cout << "safeguard: initialised project '" << name << "' in " << cwd << "\n";
     if (!wroteManifest) std::cout << "  (Package.toml already existed, skipped)\n";
-    if (!wroteSrc)      std::cout << "  (src/main.sc already existed, skipped)\n";
+    if (!wroteSrc)      std::cout << "  (" << mainFile << " already existed, skipped)\n";
 }
 
 } // namespace safeguard

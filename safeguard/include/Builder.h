@@ -7,11 +7,15 @@
 namespace safeguard {
 
 // Source language, dispatched on file extension. SafeC compiles through
-// safec (.sc -> .ll -> .o); C and C++ compile straight to .o via clang /
-// clang++ — all three still land as ordinary object files, so they link
-// together into one binary using SafeC's C ABI compatibility with no
-// special glue needed.
-enum class SrcLang { SafeC, C, Cpp };
+// safec (.sc -> .ll -> .o); C, C++, Objective-C (.m) and Objective-C++
+// (.mm) compile straight to .o via clang / clang++ — all of them still land
+// as ordinary object files, so they link together into one binary using
+// SafeC's C ABI compatibility with no special glue needed.
+enum class SrcLang { SafeC, C, Cpp, ObjC, ObjCpp };
+// Compiled with clang++ / linked with the C++ runtime.
+inline bool isCxx(SrcLang l) { return l == SrcLang::Cpp || l == SrcLang::ObjCpp; }
+// Needs the Objective-C runtime (-lobjc); macOS only.
+inline bool isObjC(SrcLang l) { return l == SrcLang::ObjC || l == SrcLang::ObjCpp; }
 
 struct BuildOptions {
     bool   release = false;       // enable optimisations (-O2)
@@ -141,9 +145,10 @@ public:
     struct DepLayout {
         std::string dir;                          // its directory ("" for lib-only)
         bool fromSource = false;                  // built from <dir>/src
+        bool cxx = false;                         // brings C++ in: link with clang++
         std::vector<std::string> safecIncludes;   // include dirs for SafeC sources
         std::vector<std::string> foreignIncludes; // include dirs for C/C++ sources
-        std::vector<std::string> linkInputs;      // library files and rpath flags
+        std::vector<std::string> linkInputs;      // library files and link flags (rpath, -lobjc)
         std::string error;                        // why it can't be used, if so
     };
     DepLayout depLayout(const Dependency& dep) const;
@@ -165,6 +170,13 @@ private:
     bool isCrossTarget() const { return !opts_.target.empty(); }
     std::string targetTriple() const;
     std::string targetDirName() const { return opts_.target.empty() ? "host" : opts_.target; }
+    // "macos", "linux" or "windows" for the --target (the host without
+    // one), "" for bare metal or anything else; picks [build.<os>].
+    std::string targetOS() const;
+    bool targetIsWindows() const { return targetOS() == "windows"; }
+    const PlatformBuildConfig* platformBuild() const;
+    // [build] cflags followed by [build.<os>] cflags.
+    std::vector<std::string> compileFlags() const;
     // libc-named functions (malloc, free, ...) the project itself defines —
     // passed to safec as --provides on bare-metal builds so calls to them
     // aren't flagged as needing a hosted runtime.
@@ -267,8 +279,8 @@ private:
                          const std::string& buildDir,
                          bool suppressOutput = false) const;
 
-    // Compile a .c/.cpp/.cc/.cxx file straight to a .o with clang/clang++.
-    // Returns the .o path, or "" on failure.
+    // Compile a .c/.cpp/.cc/.cxx/.m/.mm file straight to a .o with
+    // clang/clang++. Returns the .o path, or "" on failure.
     std::string compileForeign(const std::string& srcPath,
                                 const std::string& buildDir,
                                 const std::vector<std::string>& includeDirs,
@@ -284,15 +296,17 @@ private:
     // the C++ runtime (libc++/libstdc++, exceptions, RTTI) links in; plain
     // clang otherwise. Also applies manifest_.build.libs/libDirs/lto
     // (-l/-L/-flto). 'shared' produces a dynamic library (-shared) instead
-    // of an executable, for build.crate_type = "cdylib". Returns true on
-    // success.
+    // of an executable, for build.crate_type = "cdylib". 'objc' links the
+    // Objective-C runtime; [build] frameworks are passed on macOS.
+    // Returns true on success.
     // Link flags for the CPU BLAS std's sgemm picks up (see [build] blas).
     std::vector<std::string> blasLinkFlags() const;
     bool linkFinal(const std::vector<std::string>& objFiles,
                     const std::vector<std::string>& archives,
                     const std::string& output,
                     bool useCxxDriver = false,
-                    bool shared = false) const;
+                    bool shared = false,
+                    bool objc = false) const;
 
     // Fork + exec a command, wait for it, return exit code.
     // 'suppressOutput': when true and 'verbose' is false, discard the
@@ -300,6 +314,9 @@ private:
     // site comment in runCmd's definition for why this exists.
     static int runCmd(const std::vector<std::string>& argv, bool verbose,
                        bool suppressOutput = false);
+
+    // Whether a dependency needs the C++ link driver.
+    bool depsNeedCxx() const;
 
     // A dependency's directory: <root>/deps/<name> for a git URL, 'path'
     // (against the project root) for a local one, "" for a lib-only entry.

@@ -118,17 +118,47 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
         }
         inDep = false;
     };
+    auto boolean = [&](const Token& tok) {
+        if (tok.value == "true") return true;
+        if (tok.value == "false") return false;
+        throw std::runtime_error(srcName + ": " + tok.key + " must be true or false, got \"" +
+                                 tok.value + "\"");
+    };
+    // [build.macos] / [build.linux] / [build.windows]: "build.linux.libs"
+    // sets forLinux.libs. Returns false for any other key.
+    auto platformKey = [&](const Token& tok) {
+        struct { const char* prefix; PlatformBuildConfig* cfg; } kOS[] = {
+            { "build.macos.", &m.build.forMacos },
+            { "build.linux.", &m.build.forLinux },
+            { "build.windows.", &m.build.forWindows },
+        };
+        for (auto& os : kOS) {
+            if (tok.key.rfind(os.prefix, 0) != 0) continue;
+            std::string k = tok.key.substr(std::string(os.prefix).size());
+            if (k == "cflags")          os.cfg->cflags     = splitList(tok.value);
+            else if (k == "libs")       os.cfg->libs       = splitList(tok.value);
+            else if (k == "lib_dirs")   os.cfg->libDirs    = splitList(tok.value);
+            else if (k == "frameworks") os.cfg->frameworks = splitList(tok.value);
+            else
+                throw std::runtime_error(srcName + ": unknown key '" + k + "' in [" +
+                                         tok.key.substr(0, std::string(os.prefix).size() - 1) +
+                                         "] (expected cflags, libs, lib_dirs or frameworks)");
+            return true;
+        }
+        return false;
+    };
 
     for (auto& tok : tokens) {
         if (tok.key == "__section__") {
-            if (tok.value == "dependencies") {
-                flushDep();
-                inDep = true;
-            } else {
-                flushDep();
-            }
+            flushDep();
+            if (tok.value == "dependencies") inDep = true;
+            else if (tok.value.rfind("build.", 0) == 0 && tok.value != "build.macos" &&
+                     tok.value != "build.linux" && tok.value != "build.windows")
+                throw std::runtime_error(srcName + ": unknown table [" + tok.value + "]; per-platform "
+                                         "settings go in [build.macos], [build.linux] or [build.windows]");
             continue;
         }
+        if (platformKey(tok)) continue;
 
         // package.*
         if (tok.key == "package.name")        m.package.name        = tok.value;
@@ -147,6 +177,8 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
         else if (tok.key == "build.lto")      m.build.lto      = tok.value;
         else if (tok.key == "build.blas")     m.build.blas     = tok.value;
         else if (tok.key == "build.crate_type") m.build.crateType = tok.value;
+        else if (tok.key == "build.frameworks") m.build.frameworks = splitList(tok.value);
+        else if (tok.key == "build.objc_arc")   m.build.objcArc  = boolean(tok);
 
         // dependencies.*
         else if (tok.key == "dependencies.name")    curDep.name    = tok.value;
@@ -249,6 +281,14 @@ std::string ManifestParser::serialize(const Manifest& m) {
         o << "blas       = \"" << m.build.blas << "\"\n";
     if (!m.build.crateType.empty() && m.build.crateType != "bin")
         o << "crate_type = \"" << m.build.crateType << "\"\n";
+    if (!m.build.frameworks.empty()) {
+        o << "frameworks = [";
+        for (size_t i = 0; i < m.build.frameworks.size(); ++i)
+            o << (i ? ", " : "") << "\"" << m.build.frameworks[i] << "\"";
+        o << "]\n";
+    }
+    if (m.build.objcArc)
+        o << "objc_arc   = true\n";
 
     for (auto& d : m.dependencies) {
         o << "\n[[dependencies]]\n";

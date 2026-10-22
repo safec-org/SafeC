@@ -27,6 +27,16 @@ struct PackageInfo {
     std::string license;
 };
 
+// [build.macos] / [build.linux] / [build.windows]: settings that apply only
+// when building for that OS (the --target's, or the host's), appended to
+// [build]'s own.
+struct PlatformBuildConfig {
+    std::vector<std::string> cflags;
+    std::vector<std::string> libs;
+    std::vector<std::string> libDirs;
+    std::vector<std::string> frameworks;
+};
+
 struct BuildConfig {
     std::string edition;           // e.g. "2026"
     std::vector<std::string> srcs; // explicit source files (empty = auto-discover)
@@ -39,6 +49,9 @@ struct BuildConfig {
                                    // AMD, oneMKL on Intel, Accelerate on macOS, if found),
                                    // "aocl", "mkl", "accelerate", "openblas" or "none"
     std::string crateType;         // "bin" (default), "staticlib", or "cdylib"
+    std::vector<std::string> frameworks; // macOS frameworks: -framework <name> at final link
+    bool objcArc = false;          // compile .m/.mm with -fobjc-arc
+    PlatformBuildConfig forMacos, forLinux, forWindows;   // [build.<os>]
 };
 
 struct Manifest {

@@ -6,13 +6,16 @@ namespace safeguard {
 class Project {
 public:
     // Create a new project at `path/name` (the directory must not exist).
-    // Populates Package.toml, src/main.sc, and a .gitignore.
+    // Populates Package.toml, src/main.sc, and a .gitignore. 'lang' picks
+    // the entry point: "sc" (SafeC, default), or "c", "cpp", "objc",
+    // "objcpp" for a package with no SafeC in it (src/main.c/.cpp/.m/.mm).
     static void createNew(const std::string& name,
-                           const std::string& parentDir = ".");
+                           const std::string& parentDir = ".",
+                           const std::string& lang = "sc");
 
     // Initialise the current directory as a safeguard project (Package.toml
-    // + src/main.sc if they do not already exist).
-    static void initHere(const std::string& name);
+    // + src/main.<ext> if they do not already exist).
+    static void initHere(const std::string& name, const std::string& lang = "sc");
 
     // Return the project root by searching upward from `startDir` for a
     // Package.toml file.  Returns "" if not found.

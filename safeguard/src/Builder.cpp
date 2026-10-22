@@ -132,6 +132,8 @@ SrcLang Builder::langOf(const std::string& path) {
     std::string ext = fs::path(path).extension().string();
     if (ext == ".c")   return SrcLang::C;
     if (ext == ".cc" || ext == ".cpp" || ext == ".cxx") return SrcLang::Cpp;
+    if (ext == ".m")   return SrcLang::ObjC;
+    if (ext == ".mm")  return SrcLang::ObjCpp;
     // .scx (scx markup templating) transpiles to plain SafeC before it ever
     // reaches safec (see materializeScx) — from compileSrc's point of view
     // it's just SafeC source, same as .sc.
@@ -142,7 +144,7 @@ std::vector<std::string> Builder::collectAllSources(
     const std::string& srcDir, const std::vector<std::string>& excludeSubdirNames) const {
     std::vector<std::string> srcs;
     if (!fs::exists(srcDir)) return srcs;
-    static const char* kExts[] = { ".sc", ".scx", ".c", ".cc", ".cpp", ".cxx" };
+    static const char* kExts[] = { ".sc", ".scx", ".c", ".cc", ".cpp", ".cxx", ".m", ".mm" };
     for (auto& e : fs::recursive_directory_iterator(srcDir)) {
         if (!e.is_regular_file()) continue;
         if (!excludeSubdirNames.empty()) {
@@ -405,6 +407,14 @@ std::string Builder::compileForeign(const std::string& srcPath,
                                      const std::vector<std::string>& includeDirs,
                                      SrcLang lang,
                                      bool suppressOutput) const {
+    // Objective-C needs Apple's runtime and frameworks; GNUstep isn't
+    // wired up, so say so instead of failing on <Foundation/Foundation.h>.
+    if (isObjC(lang) && targetOS() != "macos") {
+        if (!suppressOutput)
+            std::cerr << "safeguard: " << srcPath << ": Objective-C sources (.m/.mm) build only "
+                         "for macOS\n";
+        return "";
+    }
     // Flatten to a unique object name the same way compileSrc() does for
     // .sc files, so a C file and a SafeC file with the same basename in
     // different subdirectories don't clobber each other's .o.
@@ -421,14 +431,15 @@ std::string Builder::compileForeign(const std::string& srcPath,
     }
     fs::path obj = fs::path(buildDir) / (stem + ".o");
 
-    std::string compiler = findSystemClang(lang == SrcLang::Cpp);
+    std::string compiler = findSystemClang(isCxx(lang));
     std::vector<std::string> cmd = { compiler, "-c", srcPath, "-o", obj.string() };
     for (auto& inc : includeDirs) {
         cmd.push_back("-I");
         cmd.push_back(inc);
     }
     if (opts_.release) cmd.push_back("-O2");
-    for (auto& f : manifest_.build.cflags) cmd.push_back(f);
+    for (auto& f : compileFlags()) cmd.push_back(f);
+    if (isObjC(lang) && manifest_.build.objcArc) cmd.push_back("-fobjc-arc");
 
     int rc = runCmd(cmd, opts_.verbose, suppressOutput);
     if (rc != 0) {
@@ -630,7 +641,8 @@ bool Builder::linkFinal(const std::vector<std::string>& objFiles,
                           const std::vector<std::string>& archives,
                           const std::string& output,
                           bool useCxxDriver,
-                          bool shared) const {
+                          bool shared,
+                          bool objc) const {
     // A cross target links with the same LLVM clang that assembled the IR
     // (the system one may not know the target), through lld; bare metal
     // gets no libc/crt — the program's own runtime, linker script ('-T') and
@@ -663,11 +675,34 @@ bool Builder::linkFinal(const std::vector<std::string>& objFiles,
     // 'm.lib'") instead of being a harmless no-op.
     if (!targetIsBareMetal()) cmd.push_back("-lm"); // math library for std/math.sc
 #endif
+    const PlatformBuildConfig* plat = platformBuild();
     for (auto& d : manifest_.build.libDirs) cmd.push_back("-L" + d);
+    if (plat) for (auto& d : plat->libDirs) cmd.push_back("-L" + d);
     for (auto& l : manifest_.build.libs)    cmd.push_back("-l" + l);
-    for (auto& f : blasLinkFlags())         cmd.push_back(f);
+    if (plat) for (auto& l : plat->libs)    cmd.push_back("-l" + l);
+    // Frameworks are a Mach-O notion: [build] frameworks apply on macOS and
+    // are dropped (with a note) elsewhere; [build.macos] ones only reach here
+    // on macOS anyway.
+    std::vector<std::string> frameworks = manifest_.build.frameworks;
+    if (plat) frameworks.insert(frameworks.end(), plat->frameworks.begin(), plat->frameworks.end());
+    if (targetOS() == "macos") {
+        for (auto& f : frameworks) { cmd.push_back("-framework"); cmd.push_back(f); }
+        if (objc) cmd.push_back("-lobjc");
+    } else if (!manifest_.build.frameworks.empty()) {
+        static bool noted = false;
+        if (!noted) {
+            noted = true;
+            std::cerr << "safeguard: note: [build] frameworks apply to macOS builds only; ignored here\n";
+        }
+    }
+    // std's CPU BLAS (std/simd/gemm.sc) matters only when std is linked in —
+    // a package with no SafeC sources at all doesn't link it (see build()).
+    bool linksStd = std::any_of(archives.begin(), archives.end(), [](const std::string& a) {
+        return fs::path(a).filename() == "libsafec_std.a";
+    });
+    if (linksStd) for (auto& f : blasLinkFlags()) cmd.push_back(f);
     // Extra link flags from manifest
-    for (auto& f : manifest_.build.cflags) cmd.push_back(f);
+    for (auto& f : compileFlags()) cmd.push_back(f);
     cmd.push_back("-o");
     cmd.push_back(output);
     int rc = runCmd(cmd, opts_.verbose);
@@ -812,6 +847,42 @@ bool Builder::targetIsBareMetal() const {
 bool Builder::targetIsWasm() const {
     std::string t = targetTriple();
     return t.rfind("wasm32-", 0) == 0 || t.rfind("wasm64-", 0) == 0;
+}
+
+std::string Builder::targetOS() const {
+    if (!isCrossTarget()) {
+#if defined(_WIN32)
+        return "windows";
+#elif defined(__APPLE__)
+        return "macos";
+#elif defined(__linux__)
+        return "linux";
+#else
+        return "";
+#endif
+    }
+    if (targetIsBareMetal()) return "";
+    std::string t = targetTriple();
+    if (t.find("windows") != std::string::npos) return "windows";
+    if (t.find("apple") != std::string::npos || t.find("darwin") != std::string::npos ||
+        t.find("macos") != std::string::npos) return "macos";
+    if (t.find("linux") != std::string::npos) return "linux";
+    return "";
+}
+
+const PlatformBuildConfig* Builder::platformBuild() const {
+    std::string os = targetOS();
+    if (os == "macos")   return &manifest_.build.forMacos;
+    if (os == "linux")   return &manifest_.build.forLinux;
+    if (os == "windows") return &manifest_.build.forWindows;
+    return nullptr;
+}
+
+std::vector<std::string> Builder::compileFlags() const {
+    std::vector<std::string> out = manifest_.build.cflags;
+    if (const PlatformBuildConfig* p = platformBuild())
+        out.insert(out.end(), p->cflags.begin(), p->cflags.end());
+    return out;
 }
 
 // ── build a library from a source directory ───────────────────────────────────
@@ -1059,6 +1130,13 @@ Builder::DepLayout Builder::depLayout(const Dependency& dep) const {
         if (fs::exists(inc)) { l.safecIncludes.push_back(inc.string()); l.foreignIncludes.push_back(inc.string()); }
         l.safecIncludes.push_back((fs::path(l.dir) / "src").string());
         l.linkInputs.push_back((fs::path(root_) / "build" / "deps" / ("lib" + dep.name + ".a")).string());
+        // C++ or Objective-C in it: the C++ link driver, the ObjC runtime.
+        bool objc = false;
+        for (auto& src : collectAllSources((fs::path(l.dir) / "src").string())) {
+            if (isCxx(langOf(src))) l.cxx = true;
+            if (isObjC(langOf(src))) objc = true;
+        }
+        if (objc && targetOS() == "macos") l.linkInputs.push_back("-lobjc");
         return l;
     } else {
         libs = findLibraries(l.dir, dep.name);
@@ -1111,6 +1189,14 @@ std::vector<std::string> Builder::depLinkInputs() const {
             if (f.rfind("-", 0) == 0 || fs::exists(f)) out.push_back(f);
     }
     return out;
+}
+
+bool Builder::depsNeedCxx() const {
+    for (auto& dep : manifest_.dependencies) {
+        DepLayout l = depLayout(dep);
+        if (l.error.empty() && l.cxx) return true;
+    }
+    return false;
 }
 
 // ── fetch and build all dependencies ─────────────────────────────────────────
@@ -1196,8 +1282,8 @@ std::string Builder::exportedIncludeDir() const {
 }
 
 // The public headers of a library build, copied into build/include with
-// their paths kept: everything under the project's include/, and the .h
-// files under src/ (both are what a dependent building this package from
+// their paths kept: everything under the project's include/, and the
+// headers (.h, and C++'s .hh/.hpp/.hxx) under src/ (both are what a dependent building this package from
 // source gets on its include path -- see depLayout). The directory is
 // rebuilt each time, so a header deleted from the sources leaves it too.
 // A src/ header with the same path as an include/ one is an error: a
@@ -1210,7 +1296,8 @@ static bool exportHeaders(const fs::path& root, const fs::path& dest) {
         if (!fs::is_directory(dir)) return true;
         for (auto& e : fs::recursive_directory_iterator(dir)) {
             if (!e.is_regular_file()) continue;
-            if (headersOnly && e.path().extension() != ".h") continue;
+            std::string ext = e.path().extension().string();
+            if (headersOnly && ext != ".h" && ext != ".hh" && ext != ".hpp" && ext != ".hxx") continue;
             std::string rel = fs::relative(e.path(), dir).generic_string();
             auto [it, fresh] = files.emplace(rel, e.path().lexically_normal());
             if (!fresh) {
@@ -1245,14 +1332,39 @@ bool Builder::build() {
     // 1. Fetch + build dependencies
     if (!fetchAndBuildDeps()) return false;
 
+    // The sources: [build] srcs, or everything under src/.
+    fs::path srcDir = fs::path(root_) / "src";
+    std::vector<std::string> srcs;
+    if (!manifest_.build.srcs.empty()) {
+        for (auto& s : manifest_.build.srcs) {
+            fs::path p(s);
+            srcs.push_back(p.is_absolute() ? s : (fs::path(root_) / p).string());
+        }
+    } else {
+        srcs = collectAllSources(srcDir.string());
+    }
+    if (srcs.empty()) {
+        std::cerr << "safeguard: no .sc/.c/.cpp/.m/.mm source files found under src/\n";
+        return false;
+    }
+
     // 2. Build (or reuse) std library. A missing std/ directory is only a
     // warning (a project using nothing but extern declarations can still
     // link without it), but if std/ was found and building it failed, that's
     // a real error — silently linking without it just produces a wall of
-    // confusing "undefined symbol" errors instead.
+    // confusing "undefined symbol" errors instead. A package with no SafeC
+    // in it (its own sources or a SafeC source dependency) — a plain C,
+    // C++ or Objective-C one — doesn't use std, and neither builds nor
+    // links it.
+    bool usesStd = std::any_of(srcs.begin(), srcs.end(),
+                               [](const std::string& f) { return langOf(f) == SrcLang::SafeC; });
+    for (auto& dep : manifest_.dependencies) {
+        DepLayout l = depLayout(dep);
+        if (l.error.empty() && l.fromSource) usesStd = true;
+    }
     std::string stdDir  = findStdDir();
-    std::string stdLib  = ensureStdLib();
-    if (stdLib.empty() && !stdDir.empty()) {
+    std::string stdLib  = usesStd ? ensureStdLib() : "";
+    if (usesStd && stdLib.empty() && !stdDir.empty()) {
         std::cerr << "safeguard: failed to build the standard library "
                      "(see compiler errors above) — aborting build\n";
         return false;
@@ -1288,28 +1400,19 @@ bool Builder::build() {
     }
     depIncludes(userIncs, foreignIncs);
 
-    // 4. Compile user sources. Mixed SafeC/C/C++ — each file is dispatched
-    // by extension and compiled to its own .o (SafeC via safec --emit-llvm
-    // + clang -c; C/C++ straight to .o via clang/clang++), never merged
-    // into a shared translation unit, so per-file recompilation stays
-    // granular the same way it already was for pure-SafeC projects.
-    fs::path srcDir = fs::path(root_) / "src";
-    std::vector<std::string> srcs;
-    if (!manifest_.build.srcs.empty()) {
-        for (auto& s : manifest_.build.srcs) {
-            fs::path p(s);
-            srcs.push_back(p.is_absolute() ? s : (fs::path(root_) / p).string());
-        }
-    } else {
-        srcs = collectAllSources(srcDir.string());
+    // 4. Compile user sources. Mixed SafeC/C/C++/ObjC — each file is
+    // dispatched by extension and compiled to its own .o (SafeC via safec
+    // --emit-llvm + clang -c; the others straight to .o via clang/clang++),
+    // never merged into a shared translation unit, so per-file
+    // recompilation stays granular the same way it already was for
+    // pure-SafeC projects. C++ anywhere in the link (its own sources or a
+    // dependency's) makes clang++ the link driver; Objective-C links the
+    // ObjC runtime.
+    bool hasCpp = depsNeedCxx(), hasObjC = false;
+    for (auto& src : srcs) {
+        if (isCxx(langOf(src))) hasCpp = true;
+        if (isObjC(langOf(src))) hasObjC = true;
     }
-    if (srcs.empty()) {
-        std::cerr << "safeguard: no .sc/.c/.cpp source files found under src/\n";
-        return false;
-    }
-
-    bool hasCpp = false;
-    for (auto& src : srcs) if (langOf(src) == SrcLang::Cpp) hasCpp = true;
 
     std::vector<std::string> defs = featureDefines();
     if (opts_.verbose && !defs.empty()) {
@@ -1377,11 +1480,12 @@ bool Builder::build() {
         if (!packArchive(allObjs, outputPath())) return false;
         if (!exportHeaders(root_, exportedIncludeDir())) return false;
     } else if (crateType == "cdylib") {
-        if (!linkFinal(objFiles, archives, outputPath(), hasCpp, /*shared=*/true))
+        if (!linkFinal(objFiles, archives, outputPath(), hasCpp, /*shared=*/true, hasObjC))
             return false;
         if (!exportHeaders(root_, exportedIncludeDir())) return false;
     } else {
-        if (!linkFinal(objFiles, archives, outputPath(), hasCpp)) return false;
+        if (!linkFinal(objFiles, archives, outputPath(), hasCpp, /*shared=*/false, hasObjC))
+            return false;
     }
 
     // 8. Write / refresh Package.lock after a successful build.
@@ -1427,7 +1531,7 @@ bool Builder::check() {
         srcs = collectAllSources(srcDir.string());
     }
     if (srcs.empty()) {
-        std::cerr << "safeguard: no .sc/.c/.cpp source files found under src/\n";
+        std::cerr << "safeguard: no .sc/.c/.cpp/.m/.mm source files found under src/\n";
         return false;
     }
 
@@ -1445,9 +1549,15 @@ bool Builder::check() {
             if (compileSrc(safecBin, realSrc, checkDir.string(), userIncs, false, false, defs).empty())
                 ok = false;
         } else {
-            std::vector<std::string> cmd = { findSystemClang(lang == SrcLang::Cpp),
+            if (isObjC(lang) && targetOS() != "macos") {
+                std::cerr << "safeguard: " << src << ": Objective-C sources (.m/.mm) build only for macOS\n";
+                ok = false;
+                continue;
+            }
+            std::vector<std::string> cmd = { findSystemClang(isCxx(lang)),
                                               "-fsyntax-only", src };
             for (auto& inc : foreignIncs) { cmd.push_back("-I"); cmd.push_back(inc); }
+            if (isObjC(lang) && manifest_.build.objcArc) cmd.push_back("-fobjc-arc");
             if (runCmd(cmd, opts_.verbose) != 0) {
                 std::cerr << "safeguard: check failed for " << src << "\n";
                 ok = false;
@@ -1468,9 +1578,21 @@ bool Builder::test() {
     }
 
     if (!fetchAndBuildDeps()) return false;
+    auto testSrcs = collectAllSources(testsDir.string());
+    if (testSrcs.empty()) {
+        std::cout << "safeguard: tests/ has no .sc/.c/.cpp/.m/.mm files\n";
+        return true;
+    }
+    // std is built and linked when SafeC is involved (see build()).
+    bool usesStd = std::any_of(testSrcs.begin(), testSrcs.end(),
+                               [](const std::string& f) { return langOf(f) == SrcLang::SafeC; });
+    for (auto& dep : manifest_.dependencies) {
+        DepLayout l = depLayout(dep);
+        if (l.error.empty() && l.fromSource) usesStd = true;
+    }
     std::string stdDir = findStdDir();
-    std::string stdLib = ensureStdLib();
-    if (stdLib.empty() && !stdDir.empty()) {
+    std::string stdLib = usesStd ? ensureStdLib() : "";
+    if (usesStd && stdLib.empty() && !stdDir.empty()) {
         std::cerr << "safeguard: failed to build the standard library "
                      "(see compiler errors above) — aborting test run\n";
         return false;
@@ -1481,8 +1603,16 @@ bool Builder::test() {
         userIncs.push_back(stdDir);
         userIncs.push_back(fs::path(stdDir).parent_path().string());
     }
+    // C/C++/ObjC tests get the project's include/ and the dependencies'
+    // headers, never std/ (see build()'s foreignIncs).
     std::vector<std::string> depForeignIncs;
+    fs::path projInc = fs::path(root_) / "include";
+    if (fs::exists(projInc)) {
+        userIncs.push_back(projInc.string());
+        depForeignIncs.push_back(projInc.string());
+    }
     depIncludes(userIncs, depForeignIncs);
+    bool depsCxx = depsNeedCxx();
 
     std::vector<std::string> archives;
     for (auto& f : depLinkInputs()) archives.push_back(f);
@@ -1491,12 +1621,6 @@ bool Builder::test() {
     std::string safecBin = findSafec();
     fs::path buildDir = fs::path(root_) / "build" / "tests";
     fs::create_directories(buildDir);
-
-    auto testSrcs = collectAllSources(testsDir.string());
-    if (testSrcs.empty()) {
-        std::cout << "safeguard: tests/ has no .sc/.c/.cpp files\n";
-        return true;
-    }
 
     std::vector<std::string> defs = featureDefines();
 
@@ -1515,7 +1639,7 @@ bool Builder::test() {
                 compileSrc(safecBin, realSrc, buildDir.string(), userIncs, true, false, defs);
             if (!ll.empty()) obj = llToObj(ll, buildDir.string());
         } else {
-            obj = compileForeign(src, buildDir.string(), userIncs, lang);
+            obj = compileForeign(src, buildDir.string(), depForeignIncs, lang);
         }
         if (obj.empty()) {
             std::cout << "test " << name << " ... FAILED (build error)\n";
@@ -1531,7 +1655,7 @@ bool Builder::test() {
             continue;
         }
         std::string testBin = (buildDir / name).string();
-        if (!linkFinal({obj}, archives, testBin, lang == SrcLang::Cpp)) {
+        if (!linkFinal({obj}, archives, testBin, isCxx(lang) || depsCxx, /*shared=*/false, isObjC(lang))) {
             std::cout << "test " << name << " ... FAILED (link error)\n";
             ++failed;
             continue;

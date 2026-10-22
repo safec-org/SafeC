@@ -15,8 +15,10 @@ static void usage() {
     std::cout << R"(Usage: safeguard <command> [options]
 
 Commands:
-  new   <name>  Create a new project directory with a skeleton
-  init  [name]  Initialise the current directory as a project
+  new   <name> [--lang L]  Create a new project directory with a skeleton
+  init  [name] [--lang L]  Initialise the current directory as a project
+                L: sc (SafeC, default), c, cpp, objc, objcpp — a package
+                with no SafeC in it (src/main.c, .cpp, .m or .mm)
   fetch         Clone and build all [dependencies] from Package.toml
   build         Compile all sources in the current project
   check         Fast compile-only pass — reports errors without linking
@@ -41,6 +43,12 @@ Dependency format in Package.toml:
   A directory (fetched or local) with src/ is a SafeC package built from
   source; one without is a prebuilt library directory: lib<name> (or every
   library) in lib/, lib64/ or the directory itself, headers in include/.
+
+[build] keys for C/C++/Objective-C:
+  frameworks = ["Cocoa"]     macOS frameworks to link (ignored elsewhere)
+  objc_arc   = true          compile .m/.mm with -fobjc-arc
+  [build.macos] / [build.linux] / [build.windows]
+    cflags, libs, lib_dirs, frameworks — added only when building for that OS
 
 Options (build / run / check / test):
   --release     Enable optimisations (-O2)
@@ -88,6 +96,7 @@ Environment:
 
 Examples:
   safeguard new hello_world
+  safeguard new cfast --lang c
   cd hello_world && safeguard build
   safeguard check
   safeguard test
@@ -114,27 +123,36 @@ int main(int argc, char** argv) {
 
     std::string cmd = argv[1];
 
-    // ── new ───────────────────────────────────────────────────────────────────
-    if (cmd == "new") {
-        if (argc < 3) {
-            std::cerr << "safeguard: 'new' requires a project name\n";
-            return 1;
+    // ── new / init ────────────────────────────────────────────────────────────
+    if (cmd == "new" || cmd == "init") {
+        std::string name, lang = "sc";
+        for (int i = 2; i < argc; ++i) {
+            std::string arg = argv[i];
+            if (arg == "--lang") {
+                if (i + 1 >= argc) {
+                    std::cerr << "safeguard: --lang requires an argument\n";
+                    return 1;
+                }
+                lang = argv[++i];
+                continue;
+            }
+            if (arg.rfind("--lang=", 0) == 0) { lang = arg.substr(7); continue; }
+            if (arg.rfind("--", 0) == 0 || !name.empty()) {
+                std::cerr << "safeguard: unknown option '" << arg << "'\n";
+                return 1;
+            }
+            name = arg;
+        }
+        if (name.empty()) {
+            if (cmd == "new") {
+                std::cerr << "safeguard: 'new' requires a project name\n";
+                return 1;
+            }
+            name = fs::current_path().filename().string();
         }
         try {
-            safeguard::Project::createNew(argv[2]);
-        } catch (std::exception& e) {
-            std::cerr << "safeguard error: " << e.what() << "\n";
-            return 1;
-        }
-        return 0;
-    }
-
-    // ── init ──────────────────────────────────────────────────────────────────
-    if (cmd == "init") {
-        std::string name = (argc >= 3) ? argv[2]
-                                       : fs::current_path().filename().string();
-        try {
-            safeguard::Project::initHere(name);
+            if (cmd == "new") safeguard::Project::createNew(name, ".", lang);
+            else safeguard::Project::initHere(name, lang);
         } catch (std::exception& e) {
             std::cerr << "safeguard error: " << e.what() << "\n";
             return 1;
