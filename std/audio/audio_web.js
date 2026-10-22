@@ -143,7 +143,9 @@ registerProcessor('safec-audio', SafeCAudioProcessor);
             s.source = s.ctx.createMediaStreamSource(inputStream);
             s.source.connect(s.node);
         }
-        s.node.connect(s.ctx.destination);
+        // A worklet node without outputs (input-only) is pulled through its
+        // input; connecting it to the destination would throw.
+        if (s.outCh || s.mode !== "worklet") s.node.connect(s.ctx.destination);
         s.connected = true;
     }
 

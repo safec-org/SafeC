@@ -55,6 +55,42 @@ int test_open(int frames_wanted) {
     return (int)frames;
 }
 
+static double g_in_sum = 0.0;
+static int g_in_calls = 0;
+
+int capture(&AudioIo io, ?&Synth sp) {
+    g_in_calls = g_in_calls + 1;
+    struct Slice<short> in = io.input_i16();         // f32 from the browser, i16 here
+    for (unsigned long i = 0UL; i < in.len; i = i + 1UL) g_in_sum = g_in_sum + (double)*in.at(i);
+    return AUDIO_CB_CONTINUE;
+}
+
+// An input-only stream (the page called SafeCAudio.enableInput()).
+__attribute__((export_name("test_open_input")))
+int test_open_input() {
+    g_in_sum = 0.0;
+    g_in_calls = 0;
+    struct Result<Audio, AudioError> r = std::Audio::open(AUDIO_API_WEBAUDIO);
+    if (!r.ok()) return -1;
+    g_audio = r.unwrap_or(std::Audio::closed());
+    if (g_audio.default_input_device() == AUDIO_DEFAULT_DEVICE) return -2;
+    struct AudioStreamParams ip = std::AudioStreamParams::of(g_audio.default_input_device(), 1);
+    unsigned int frames = 128U;
+    struct Result<AudioStream, AudioError> sr =
+        g_audio.open_stream(null, (?&AudioStreamParams)&ip, AUDIO_FORMAT_I16, 48000U, &frames, capture,
+                            (?&Synth)&g_synth, null);
+    if (!sr.ok()) return -3;
+    g_stream = sr.unwrap_or(std::AudioStream::closed());
+    if (g_stream.start().failed()) return -4;
+    return (int)frames;
+}
+
+__attribute__((export_name("test_in_calls")))
+int test_in_calls() { return g_in_calls; }
+
+__attribute__((export_name("test_in_sum")))
+double test_in_sum() { return g_in_sum; }
+
 __attribute__((export_name("test_calls")))
 int test_calls() { return g_synth.calls; }
 

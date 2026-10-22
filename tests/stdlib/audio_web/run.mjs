@@ -125,6 +125,29 @@ FakeContext.worklet = true;
     check(T.test_close() === 0, "AudioWorklet: stop() and close()");
 }
 
+// Input through the worklet: microphone frames reach an i16 callback.
+{
+    SafeCAudio.options.navigator = {
+        mediaDevices: { getUserMedia: async () => ({ getAudioTracks: () => [{ getSettings: () => ({ channelCount: 1 }) }] }) },
+    };
+    await SafeCAudio.enableInput();
+    FakeWorkletNode.last = null;
+    const frames = T.test_open_input();
+    check(frames === 128, `AudioWorklet input: stream opened (got ${frames})`);
+    for (let i = 0; i < 20 && !FakeWorkletNode.last; i++) await tick();
+    const proc = FakeWorkletNode.last.processor;
+    check(FakeWorkletNode.last.connections.length === 0, "AudioWorklet input: an output-less node is not connected to the destination");
+    for (let q = 0; q < 4; q++) {
+        const mic = new Float32Array(128).fill(0.5);
+        proc.process([[mic]], []);
+        for (let i = 0; i < 5; i++) await tick();
+    }
+    // 4 periods of 128 samples at 0.5 -> 16384 each in i16.
+    check(T.test_in_calls() === 4, `AudioWorklet input: one callback per period (${T.test_in_calls()})`);
+    check(Math.abs(T.test_in_sum() - 4 * 128 * 16384) < 1, `AudioWorklet input: samples converted to i16 (${T.test_in_sum()})`);
+    check(T.test_close() === 0, "AudioWorklet input: stop() and close()");
+}
+
 // Web MIDI.
 {
     const sent = [];
