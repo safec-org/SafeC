@@ -81,6 +81,41 @@ std::string Builder::findClang(bool cxx) const {
     const char* envVar = cxx ? "SAFEC_CLANGXX" : "SAFEC_CLANG";
     if (const char* e = std::getenv(envVar); e && *e) return e;
 
+    // The clang safec itself uses (safec --print-clang): the one from the
+    // LLVM safec was built with, so it reads safec's IR — a system 'clang'
+    // older than that LLVM rejects it. clang++ is taken from beside it.
+    // An older safec without the option prints nothing usable; fall through.
+    static std::string fromSafec = [this] {
+        std::string cmd = "\"" + findSafec() + "\" --print-clang";
+#ifdef _WIN32
+        FILE* p = _popen(cmd.c_str(), "r");
+#else
+        FILE* p = popen(cmd.c_str(), "r");
+#endif
+        std::string out;
+        if (p) {
+            char line[1024];
+            if (fgets(line, sizeof(line), p)) out = line;
+#ifdef _WIN32
+            _pclose(p);
+#else
+            pclose(p);
+#endif
+        }
+        while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) out.pop_back();
+        return fs::path(out).is_absolute() && fs::exists(out) ? out : std::string();
+    }();
+    if (!fromSafec.empty()) {
+        if (!cxx) return fromSafec;
+        fs::path c(fromSafec);
+        std::string name = c.filename().string();
+        size_t at = name.find("clang");
+        if (at != std::string::npos) {
+            fs::path cxxPath = c.parent_path() / (name.substr(0, at) + "clang++" + name.substr(at + 5));
+            if (fs::exists(cxxPath)) return cxxPath.string();
+        }
+    }
+
     const char* name = cxx ? "clang++" : "clang";
     static const char* kPrefixes[] = {
         "/opt/homebrew/opt/llvm/bin",  // Homebrew, Apple Silicon
@@ -263,6 +298,27 @@ std::string Builder::materializeScx(const std::string& src,
 
 // ── command runner ────────────────────────────────────────────────────────────
 
+#ifdef _WIN32
+// One argument as the child's CommandLineToArgvW will read it back: quoted
+// when empty or holding a space, tab or quote; a quote, and the backslashes
+// before a quote or the closing quote, escaped with backslashes.
+static std::string quoteWindowsArg(const std::string& a) {
+    if (!a.empty() && a.find_first_of(" \t\"") == std::string::npos) return a;
+    std::string out = "\"";
+    size_t slashes = 0;
+    for (char c : a) {
+        if (c == '\\') { ++slashes; continue; }
+        if (c == '"') out.append(slashes * 2 + 1, '\\');
+        else out.append(slashes, '\\');
+        slashes = 0;
+        out += c;
+    }
+    out.append(slashes * 2, '\\');
+    out += '"';
+    return out;
+}
+#endif
+
 int Builder::runCmd(const std::vector<std::string>& argv, bool verbose,
                      bool suppressOutput, const std::string& stdoutPath) {
     if (argv.empty()) return -1;
@@ -285,9 +341,11 @@ int Builder::runCmd(const std::vector<std::string>& argv, bool verbose,
     fflush(stdout);
 #ifdef _WIN32
     // _spawnvp is the MSVC CRT's argv-based process launcher — like
-    // execvp, it searches PATH and takes an argv array directly (no shell
-    // involved), so arguments containing spaces/quotes don't need manual
-    // shell-quoting the way a system()-based approach would require.
+    // execvp, it searches PATH and takes an argv array (no shell involved).
+    // It does join that array into one command line *without* quoting,
+    // though, and the child splits it again (CommandLineToArgvW rules), so
+    // each argument is quoted here: a path under 'Program Files' would
+    // otherwise arrive as two arguments.
     // _P_WAIT blocks until the child exits and yields its exit code
     // directly, playing the same role fork()+waitpid()+WEXITSTATUS() does
     // on POSIX below.
@@ -307,10 +365,12 @@ int Builder::runCmd(const std::vector<std::string>& argv, bool verbose,
         outFd = _open(stdoutPath.c_str(), _O_WRONLY | _O_CREAT | _O_TRUNC, 0644);
         if (outFd != -1) _dup2(outFd, 1);
     }
+    std::vector<std::string> quoted;
+    for (auto& s : argv) quoted.push_back(quoteWindowsArg(s));
     std::vector<const char*> args;
-    for (auto& s : argv) args.push_back(s.c_str());
+    for (auto& s : quoted) args.push_back(s.c_str());
     args.push_back(nullptr);
-    intptr_t rc = _spawnvp(_P_WAIT, args[0], args.data());
+    intptr_t rc = _spawnvp(_P_WAIT, argv[0].c_str(), args.data());
     int spawnErrno = errno;
     if (keptOut != -1) {
         fflush(stdout);
@@ -965,7 +1025,11 @@ std::vector<std::string> Builder::runtimeFlags() const {
 
 std::vector<std::string> Builder::runtimeLinkFlags() const {
     if (runtimeFlags().empty()) return {};
-    return { "-Wl,/NODEFAULTLIB:libcmt", "-Wl,/DEFAULTLIB:msvcrt" };
+    // legacy_stdio_definitions: with the DLL CRT, printf & co. are inline
+    // functions in the UCRT headers, which SafeC's own 'extern int printf'
+    // declarations never see; this library has their out-of-line bodies.
+    return { "-Wl,/NODEFAULTLIB:libcmt", "-Wl,/DEFAULTLIB:msvcrt",
+             "-Wl,/DEFAULTLIB:legacy_stdio_definitions" };
 }
 
 std::string Builder::targetOS() const {
