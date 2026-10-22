@@ -240,6 +240,11 @@ trait MpsTensor : DeviceTensor {
 trait VulkanTensor : DeviceTensor {
     unsigned long device_buffer() const;
 }
+// WebGPU's device_buffer() is a byte offset into the backend's device heap
+// (gpu_webgpu.h's WebGpuBuf.handle), the element type in its top bits.
+trait WebGpuTensor : DeviceTensor {
+    unsigned long device_buffer() const;
+}
 
 // Coherence bits ('coh'): which copies are current. Both the values' bits
 // may be set (the copies agree); a gradient that doesn't exist yet counts as
