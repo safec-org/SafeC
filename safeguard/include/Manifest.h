@@ -10,13 +10,25 @@ namespace safeguard {
 // prebuilt library files directly. A directory with a src/ is a SafeC
 // source package built to build/deps/lib<name>.a; one without is a
 // prebuilt library directory (libraries in lib/, lib64/ or the directory
-// itself, headers in include/).
+// itself, headers in include/). 'build' makes the directory a C/C++/ObjC
+// project safeguard builds itself instead: "sources" compiles its source
+// files into build/deps/<name>/lib<name>.a, "cmake" configures, builds and
+// installs it into build/deps/<name>/install.
 struct Dependency {
     std::string name;
     std::string version; // git URL to clone
     std::string path;    // local directory (relative to the project root)
     std::vector<std::string> libs;     // 'lib': prebuilt library files, linked as is
-    std::vector<std::string> includes; // 'include': header dirs for prebuilt libraries
+                                       // (for build = "cmake": against the install prefix)
+    std::vector<std::string> includes; // 'include': header dirs (prebuilt libraries, or
+                                       // a built dependency's public headers)
+    std::string build;                 // "" (none), "sources" or "cmake"
+    std::vector<std::string> sources;  // build = "sources": files, directories or
+                                       // '*' patterns, against the dependency's directory
+    std::vector<std::string> defines;  // build = "sources": -D for its compiles
+    std::vector<std::string> cflags;   // build = "sources": extra compile flags
+    std::vector<std::string> cmakeArgs;  // build = "cmake": extra configure arguments
+    std::vector<std::string> frameworks; // macOS frameworks its library needs
 };
 
 struct PackageInfo {
@@ -25,6 +37,16 @@ struct PackageInfo {
     std::string author;
     std::string description;
     std::string license;
+};
+
+// [build.macos] / [build.linux] / [build.windows]: settings that apply only
+// when building for that OS (the --target's, or the host's), appended to
+// [build]'s own.
+struct PlatformBuildConfig {
+    std::vector<std::string> cflags;
+    std::vector<std::string> libs;
+    std::vector<std::string> libDirs;
+    std::vector<std::string> frameworks;
 };
 
 struct BuildConfig {
@@ -39,11 +61,36 @@ struct BuildConfig {
                                    // AMD, oneMKL on Intel, Accelerate on macOS, if found),
                                    // "aocl", "mkl", "accelerate", "openblas" or "none"
     std::string crateType;         // "bin" (default), "staticlib", or "cdylib"
+    std::vector<std::string> frameworks; // macOS frameworks: -framework <name> at final link
+    bool objcArc = false;          // compile .m/.mm with -fobjc-arc
+    int  useStd = -1;              // [build] std: -1 unset (std when SafeC is involved),
+                                   // 1 always (a C/C++/ObjC package using std), 0 never
+    PlatformBuildConfig forMacos, forLinux, forWindows;   // [build.<os>]
+};
+
+// [bundle]: how 'safeguard bundle' packages a bin target as an application
+// (build/<name>.app on macOS, build/<name>/ on Windows, a .deb and an
+// AppDir on Linux).
+struct BundleConfig {
+    bool present = false;          // the manifest has a [bundle] table
+    std::string name;              // display name (defaults to package.name)
+    std::string identifier;        // reverse-DNS id, e.g. "org.example.hello" (required)
+    std::string version;           // defaults to package.version
+    std::string icon;              // .png (any platform), .icns (macOS) or .ico (Windows)
+    std::vector<std::string> resources; // files/directories copied into the bundle
+    std::string category;          // freedesktop category ("Utility", ...) or a
+                                   // macOS "public.app-category.*" type
+    std::string copyright;
+    std::string subsystem;         // Windows: "windows" (default) or "console"
+    std::string minSystemVersion;  // macOS LSMinimumSystemVersion (default "11.0")
+    std::string codesignIdentity;  // macOS: "-" (ad-hoc, default), an identity, or "none"
+    std::vector<std::string> depends; // Linux: the .deb's Depends
 };
 
 struct Manifest {
     PackageInfo  package;
     BuildConfig  build;
+    BundleConfig bundle;
     std::vector<Dependency> dependencies;
 
     // [features] table, Cargo-style: name -> list of other feature names it

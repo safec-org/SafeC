@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <cstdlib>
+#include <map>
 #include <set>
 #include <fstream>
 #include <cctype>
@@ -80,6 +81,41 @@ std::string Builder::findClang(bool cxx) const {
     const char* envVar = cxx ? "SAFEC_CLANGXX" : "SAFEC_CLANG";
     if (const char* e = std::getenv(envVar); e && *e) return e;
 
+    // The clang safec itself uses (safec --print-clang): the one from the
+    // LLVM safec was built with, so it reads safec's IR — a system 'clang'
+    // older than that LLVM rejects it. clang++ is taken from beside it.
+    // An older safec without the option prints nothing usable; fall through.
+    static std::string fromSafec = [this] {
+        std::string cmd = "\"" + findSafec() + "\" --print-clang";
+#ifdef _WIN32
+        FILE* p = _popen(cmd.c_str(), "r");
+#else
+        FILE* p = popen(cmd.c_str(), "r");
+#endif
+        std::string out;
+        if (p) {
+            char line[1024];
+            if (fgets(line, sizeof(line), p)) out = line;
+#ifdef _WIN32
+            _pclose(p);
+#else
+            pclose(p);
+#endif
+        }
+        while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) out.pop_back();
+        return fs::path(out).is_absolute() && fs::exists(out) ? out : std::string();
+    }();
+    if (!fromSafec.empty()) {
+        if (!cxx) return fromSafec;
+        fs::path c(fromSafec);
+        std::string name = c.filename().string();
+        size_t at = name.find("clang");
+        if (at != std::string::npos) {
+            fs::path cxxPath = c.parent_path() / (name.substr(0, at) + "clang++" + name.substr(at + 5));
+            if (fs::exists(cxxPath)) return cxxPath.string();
+        }
+    }
+
     const char* name = cxx ? "clang++" : "clang";
     static const char* kPrefixes[] = {
         "/opt/homebrew/opt/llvm/bin",  // Homebrew, Apple Silicon
@@ -96,6 +132,35 @@ std::string Builder::findSystemClang(bool cxx) const {
     const char* envVar = cxx ? "SAFEC_CLANGXX" : "SAFEC_CLANG";
     if (const char* e = std::getenv(envVar); e && *e) return e;
     return cxx ? "clang++" : "clang";
+}
+
+std::string Builder::findLlvmTool(const std::string& name) const {
+#ifdef _WIN32
+    std::string file = name + ".exe";
+#else
+    std::string file = name;
+#endif
+    for (const std::string& clang : { findClang(false), findSystemClang(false) }) {
+        fs::path c(clang);
+        if (c.has_parent_path() && fs::exists(c.parent_path() / file))
+            return (c.parent_path() / file).string();
+    }
+    // The clang on PATH: an LLVM install keeps its tools beside it.
+    if (const char* path = std::getenv("PATH")) {
+#ifdef _WIN32
+        const char sep = ';'; const char* clangFile = "clang.exe";
+#else
+        const char sep = ':'; const char* clangFile = "clang";
+#endif
+        std::stringstream ss(path);
+        std::string dir;
+        while (std::getline(ss, dir, sep)) {
+            if (dir.empty() || !fs::exists(fs::path(dir) / clangFile)) continue;
+            if (fs::exists(fs::path(dir) / file)) return (fs::path(dir) / file).string();
+            break;
+        }
+    }
+    return name;
 }
 
 std::string Builder::findStdDir() const {
@@ -131,6 +196,8 @@ SrcLang Builder::langOf(const std::string& path) {
     std::string ext = fs::path(path).extension().string();
     if (ext == ".c")   return SrcLang::C;
     if (ext == ".cc" || ext == ".cpp" || ext == ".cxx") return SrcLang::Cpp;
+    if (ext == ".m")   return SrcLang::ObjC;
+    if (ext == ".mm")  return SrcLang::ObjCpp;
     // .scx (scx markup templating) transpiles to plain SafeC before it ever
     // reaches safec (see materializeScx) — from compileSrc's point of view
     // it's just SafeC source, same as .sc.
@@ -141,7 +208,7 @@ std::vector<std::string> Builder::collectAllSources(
     const std::string& srcDir, const std::vector<std::string>& excludeSubdirNames) const {
     std::vector<std::string> srcs;
     if (!fs::exists(srcDir)) return srcs;
-    static const char* kExts[] = { ".sc", ".scx", ".c", ".cc", ".cpp", ".cxx" };
+    static const char* kExts[] = { ".sc", ".scx", ".c", ".cc", ".cpp", ".cxx", ".m", ".mm" };
     for (auto& e : fs::recursive_directory_iterator(srcDir)) {
         if (!e.is_regular_file()) continue;
         if (!excludeSubdirNames.empty()) {
@@ -208,16 +275,7 @@ std::string Builder::materializeScx(const std::string& src,
 
     fs::path scxOutDir = fs::path(buildDir) / "scx";
     fs::create_directories(scxOutDir);
-    std::string stem;
-    try {
-        fs::path rel = fs::relative(fs::path(src), root_);
-        std::string r = rel.string();
-        for (char& c : r)
-            if (c == '/' || c == '\\' || c == '.') c = '_';
-        stem = r;
-    } catch (...) {
-        stem = fs::path(src).stem().string();
-    }
+    std::string stem = flatBuildName(fs::path(src).string());
     fs::path outPath = scxOutDir / (stem + ".sc");
     std::ofstream out(outPath);
     if (!out) {
@@ -231,8 +289,50 @@ std::string Builder::materializeScx(const std::string& src,
 
 // ── command runner ────────────────────────────────────────────────────────────
 
+// A source's path relative to the project when there is one (same drive,
+// on Windows), else its absolute path: fs::relative across drives (std on
+// D:, a project in C:\\...\\Temp) yields nothing usable.
+std::string Builder::sourceKey(const std::string& src) const {
+    std::error_code ec;
+    fs::path rel = fs::relative(src, root_, ec);
+    if (!ec && !rel.empty() && !rel.has_root_name() && !rel.has_root_directory())
+        return rel.string();
+    return fs::absolute(src, ec).lexically_normal().string();
+}
+
+// sourceKey() flattened into one file name for build/: separators, dots and
+// a drive's ':' become '_' (a ':' on NTFS would name an alternate data
+// stream of one file, so every std object ended up in the same place).
+std::string Builder::flatBuildName(const std::string& src) const {
+    std::string r = sourceKey(src);
+    for (char& c : r)
+        if (c == '/' || c == '\\' || c == '.' || c == ':') c = '_';
+    return r.empty() ? fs::path(src).stem().string() : r;
+}
+
+#ifdef _WIN32
+// One argument as the child's CommandLineToArgvW will read it back: quoted
+// when empty or holding a space, tab or quote; a quote, and the backslashes
+// before a quote or the closing quote, escaped with backslashes.
+static std::string quoteWindowsArg(const std::string& a) {
+    if (!a.empty() && a.find_first_of(" \t\"") == std::string::npos) return a;
+    std::string out = "\"";
+    size_t slashes = 0;
+    for (char c : a) {
+        if (c == '\\') { ++slashes; continue; }
+        if (c == '"') out.append(slashes * 2 + 1, '\\');
+        else out.append(slashes, '\\');
+        slashes = 0;
+        out += c;
+    }
+    out.append(slashes * 2, '\\');
+    out += '"';
+    return out;
+}
+#endif
+
 int Builder::runCmd(const std::vector<std::string>& argv, bool verbose,
-                     bool suppressOutput) {
+                     bool suppressOutput, const std::string& stdoutPath) {
     if (argv.empty()) return -1;
     if (verbose) {
         for (size_t i = 0; i < argv.size(); ++i)
@@ -248,11 +348,16 @@ int Builder::runCmd(const std::vector<std::string>& argv, bool verbose,
     // genuine failures in noise. Verbose mode still shows everything, since
     // its whole contract is "show me every command and its output."
     bool quiet = suppressOutput && !verbose;
+    // What safeguard printed so far comes before the child's own output.
+    std::cout.flush();
+    fflush(stdout);
 #ifdef _WIN32
     // _spawnvp is the MSVC CRT's argv-based process launcher — like
-    // execvp, it searches PATH and takes an argv array directly (no shell
-    // involved), so arguments containing spaces/quotes don't need manual
-    // shell-quoting the way a system()-based approach would require.
+    // execvp, it searches PATH and takes an argv array (no shell involved).
+    // It does join that array into one command line *without* quoting,
+    // though, and the child splits it again (CommandLineToArgvW rules), so
+    // each argument is quoted here: a path under 'Program Files' would
+    // otherwise arrive as two arguments.
     // _P_WAIT blocks until the child exits and yields its exit code
     // directly, playing the same role fork()+waitpid()+WEXITSTATUS() does
     // on POSIX below.
@@ -264,11 +369,26 @@ int Builder::runCmd(const std::vector<std::string>& argv, bool verbose,
         nullFd = _open("NUL", _O_WRONLY);
         if (nullFd != -1) { _dup2(nullFd, 1); _dup2(nullFd, 2); }
     }
+    // 'stdoutPath': the child's stdout goes to that file (see captureCmd).
+    int keptOut = -1, outFd = -1;
+    if (!stdoutPath.empty()) {
+        fflush(stdout);
+        keptOut = _dup(1);
+        outFd = _open(stdoutPath.c_str(), _O_WRONLY | _O_CREAT | _O_TRUNC, 0644);
+        if (outFd != -1) _dup2(outFd, 1);
+    }
+    std::vector<std::string> quoted;
+    for (auto& s : argv) quoted.push_back(quoteWindowsArg(s));
     std::vector<const char*> args;
-    for (auto& s : argv) args.push_back(s.c_str());
+    for (auto& s : quoted) args.push_back(s.c_str());
     args.push_back(nullptr);
-    intptr_t rc = _spawnvp(_P_WAIT, args[0], args.data());
+    intptr_t rc = _spawnvp(_P_WAIT, argv[0].c_str(), args.data());
     int spawnErrno = errno;
+    if (keptOut != -1) {
+        fflush(stdout);
+        _dup2(keptOut, 1); _close(keptOut);
+        if (outFd != -1) _close(outFd);
+    }
     if (quiet) {
         fflush(stdout); fflush(stderr);
         if (savedOut != -1) { _dup2(savedOut, 1); _close(savedOut); }
@@ -292,9 +412,24 @@ int Builder::runCmd(const std::vector<std::string>& argv, bool verbose,
         nullFd = open("/dev/null", O_WRONLY);
         if (nullFd != -1) { dup2(nullFd, 1); dup2(nullFd, 2); }
     }
+    // 'stdoutPath': the child's stdout goes to that file (see captureCmd).
+    int keptOut = -1, outFd = -1;
+    if (!stdoutPath.empty()) {
+        fflush(stdout);
+        keptOut = dup(1);
+        outFd = open(stdoutPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (outFd != -1) dup2(outFd, 1);
+    }
     pid_t pid = fork();
+    auto restoreOut = [&]() {
+        if (keptOut == -1) return;
+        fflush(stdout);
+        dup2(keptOut, 1); close(keptOut);
+        if (outFd != -1) close(outFd);
+    };
     if (pid < 0) {
         std::cerr << "safeguard: fork failed: " << strerror(errno) << "\n";
+        restoreOut();
         if (quiet) {
             if (savedOut != -1) { dup2(savedOut, 1); close(savedOut); }
             if (savedErr != -1) { dup2(savedErr, 2); close(savedErr); }
@@ -317,6 +452,7 @@ int Builder::runCmd(const std::vector<std::string>& argv, bool verbose,
     }
     int status = 0;
     waitpid(pid, &status, 0);
+    restoreOut();
     if (quiet) {
         fflush(stdout); fflush(stderr);
         if (savedOut != -1) { dup2(savedOut, 1); close(savedOut); }
@@ -325,6 +461,29 @@ int Builder::runCmd(const std::vector<std::string>& argv, bool verbose,
     }
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 #endif
+}
+
+// Run a command and collect its stdout (through a temporary file, so the
+// argv-based runCmd above needs no shell quoting). Returns false if it
+// couldn't run or exited non-zero.
+bool Builder::captureCmd(const std::vector<std::string>& argv, std::string& out, bool verbose) {
+    static int seq = 0;
+#ifdef _WIN32
+    int pid = _getpid();
+#else
+    int pid = (int)getpid();
+#endif
+    std::error_code ec;
+    fs::path tmp = fs::temp_directory_path(ec) /
+                   ("safeguard-" + std::to_string(pid) + "-" + std::to_string(++seq) + ".out");
+    int rc = runCmd(argv, verbose, /*suppressOutput=*/false, tmp.string());
+    std::ifstream in(tmp);
+    std::stringstream ss;
+    ss << in.rdbuf();
+    out = ss.str();
+    in.close();
+    fs::remove(tmp, ec);
+    return rc == 0;
 }
 
 // ── compile one .sc → .ll ─────────────────────────────────────────────────────
@@ -339,17 +498,7 @@ std::string Builder::compileSrc(const std::string& safecBin,
     // Derive a flat output name to avoid collisions across subdirectories
     fs::path src(srcPath);
     // Use relative-path-derived stem: e.g. src/foo/bar.sc → foo_bar.ll
-    std::string stem;
-    try {
-        fs::path rel = fs::relative(src, root_);
-        std::string r = rel.string();
-        // Replace path separators and dots with underscores
-        for (char& c : r)
-            if (c == '/' || c == '\\' || c == '.') c = '_';
-        stem = r;
-    } catch (...) {
-        stem = src.stem().string();
-    }
+    std::string stem = flatBuildName(fs::path(src).string());
     fs::path llFile = fs::path(buildDir) / (stem + ".ll");
 
     std::vector<std::string> cmd = { safecBin };
@@ -386,6 +535,7 @@ std::string Builder::llToObj(const std::string& llFile,
     fs::path obj = fs::path(buildDir) / (fs::path(llFile).stem().string() + ".o");
     std::vector<std::string> cmd = { findClang(false), "-c", llFile, "-o", obj.string() };
     for (auto& f : targetClangFlags()) cmd.push_back(f);
+    for (auto& f : runtimeFlags()) cmd.push_back(f);
     cmd.push_back("-Wno-override-module");
     if (opts_.release) cmd.push_back("-O2");
     int rc = runCmd(cmd, opts_.verbose, suppressOutput);
@@ -403,31 +553,42 @@ std::string Builder::compileForeign(const std::string& srcPath,
                                      const std::string& buildDir,
                                      const std::vector<std::string>& includeDirs,
                                      SrcLang lang,
-                                     bool suppressOutput) const {
+                                     bool suppressOutput,
+                                     const std::vector<std::string>* flags) const {
+    // Objective-C needs Apple's runtime and frameworks; GNUstep isn't
+    // wired up, so say so instead of failing on <Foundation/Foundation.h>.
+    if (isObjC(lang) && targetOS() != "macos") {
+        if (!suppressOutput)
+            std::cerr << "safeguard: " << srcPath << ": Objective-C sources (.m/.mm) build only "
+                         "for macOS\n";
+        return "";
+    }
     // Flatten to a unique object name the same way compileSrc() does for
     // .sc files, so a C file and a SafeC file with the same basename in
     // different subdirectories don't clobber each other's .o.
     fs::path src(srcPath);
-    std::string stem;
-    try {
-        fs::path rel = fs::relative(src, root_);
-        std::string r = rel.string();
-        for (char& c : r)
-            if (c == '/' || c == '\\' || c == '.') c = '_';
-        stem = r;
-    } catch (...) {
-        stem = src.stem().string();
-    }
+    std::string stem = flatBuildName(fs::path(src).string());
     fs::path obj = fs::path(buildDir) / (stem + ".o");
 
-    std::string compiler = findSystemClang(lang == SrcLang::Cpp);
+    // A cross target compiles with the LLVM clang and its target flags,
+    // like the SafeC objects and the link (linkFinal).
+    std::string compiler = isCrossTarget() ? findClang(isCxx(lang)) : findSystemClang(isCxx(lang));
     std::vector<std::string> cmd = { compiler, "-c", srcPath, "-o", obj.string() };
+    for (auto& f : targetClangFlags()) cmd.push_back(f);
+    for (auto& f : runtimeFlags()) cmd.push_back(f);
     for (auto& inc : includeDirs) {
         cmd.push_back("-I");
         cmd.push_back(inc);
     }
     if (opts_.release) cmd.push_back("-O2");
-    for (auto& f : manifest_.build.cflags) cmd.push_back(f);
+    // 'flags': a built dependency's own (see buildNativeDep); otherwise the
+    // project's [build] cflags, plus -fobjc-arc for ObjC when objc_arc is set.
+    if (flags) {
+        for (auto& f : *flags) cmd.push_back(f);
+    } else {
+        for (auto& f : compileFlags()) cmd.push_back(f);
+        if (isObjC(lang) && manifest_.build.objcArc) cmd.push_back("-fobjc-arc");
+    }
 
     int rc = runCmd(cmd, opts_.verbose, suppressOutput);
     if (rc != 0) {
@@ -442,8 +603,13 @@ std::string Builder::compileForeign(const std::string& srcPath,
 
 bool Builder::packArchive(const std::vector<std::string>& objFiles,
                             const std::string& archivePath) const {
-    // ar rcs <archive> <obj1> <obj2> ...
-    std::vector<std::string> cmd = { "ar", "rcs", archivePath };
+    // ar rcs <archive> <obj1> <obj2> ... with LLVM's llvm-ar when it sits
+    // beside clang: it indexes ELF, Mach-O and COFF members alike, where the
+    // system 'ar' only knows its own platform's (Apple's leaves a cross-built
+    // Windows or Linux archive with no symbol table, so nothing links from it).
+    std::string ar = findLlvmTool("llvm-ar");
+    if (ar == "llvm-ar") ar = "ar";   // not found beside clang: the system one
+    std::vector<std::string> cmd = { ar, "rcs", archivePath };
     for (auto& o : objFiles) cmd.push_back(o);
     int rc = runCmd(cmd, opts_.verbose);
     if (rc != 0) {
@@ -629,7 +795,9 @@ bool Builder::linkFinal(const std::vector<std::string>& objFiles,
                           const std::vector<std::string>& archives,
                           const std::string& output,
                           bool useCxxDriver,
-                          bool shared) const {
+                          bool shared,
+                          bool objc,
+                          const std::vector<std::string>& extraFlags) const {
     // A cross target links with the same LLVM clang that assembled the IR
     // (the system one may not know the target), through lld; bare metal
     // gets no libc/crt — the program's own runtime, linker script ('-T') and
@@ -637,6 +805,8 @@ bool Builder::linkFinal(const std::vector<std::string>& objFiles,
     std::vector<std::string> cmd = { isCrossTarget() ? findClang(useCxxDriver)
                                                      : findSystemClang(useCxxDriver) };
     for (auto& f : targetClangFlags()) cmd.push_back(f);
+    for (auto& f : runtimeFlags()) cmd.push_back(f);
+    for (auto& f : runtimeLinkFlags()) cmd.push_back(f);
     if (isCrossTarget()) cmd.push_back("-fuse-ld=lld");
     if (targetIsBareMetal()) { cmd.push_back("-nostdlib"); cmd.push_back("-static"); }
     // WebAssembly: a library module the host instantiates — no _start, its
@@ -654,19 +824,41 @@ bool Builder::linkFinal(const std::vector<std::string>& objFiles,
     // or use the portable -Wl,--whole-archive on Linux.
     // For simplicity, just list the .a files directly (works for most cases).
     for (auto& a : archives) cmd.push_back(a);
-#ifndef _WIN32
     // math functions live in a separate libm on macOS/Linux; on Windows
     // they're part of the standard CRT that's always linked, and there is
     // no 'm.lib' for clang's MSVC-style link.exe driver to find — passing
     // -lm there fails the link with LNK1181 ("cannot open input file
     // 'm.lib'") instead of being a harmless no-op.
-    if (!targetIsBareMetal()) cmd.push_back("-lm"); // math library for std/math.sc
-#endif
+    if (!targetIsBareMetal() && !targetIsWindows()) cmd.push_back("-lm"); // math library for std/math.sc
+    const PlatformBuildConfig* plat = platformBuild();
     for (auto& d : manifest_.build.libDirs) cmd.push_back("-L" + d);
+    if (plat) for (auto& d : plat->libDirs) cmd.push_back("-L" + d);
     for (auto& l : manifest_.build.libs)    cmd.push_back("-l" + l);
-    for (auto& f : blasLinkFlags())         cmd.push_back(f);
+    if (plat) for (auto& l : plat->libs)    cmd.push_back("-l" + l);
+    // Frameworks are a Mach-O notion: [build] frameworks apply on macOS and
+    // are dropped (with a note) elsewhere; [build.macos] ones only reach here
+    // on macOS anyway.
+    std::vector<std::string> frameworks = manifest_.build.frameworks;
+    if (plat) frameworks.insert(frameworks.end(), plat->frameworks.begin(), plat->frameworks.end());
+    if (targetOS() == "macos") {
+        for (auto& f : frameworks) { cmd.push_back("-framework"); cmd.push_back(f); }
+        if (objc) cmd.push_back("-lobjc");
+    } else if (!manifest_.build.frameworks.empty()) {
+        static bool noted = false;
+        if (!noted) {
+            noted = true;
+            std::cerr << "safeguard: note: [build] frameworks apply to macOS builds only; ignored here\n";
+        }
+    }
+    // std's CPU BLAS (std/simd/gemm.sc) matters only when std is linked in —
+    // a package with no SafeC sources at all doesn't link it (see build()).
+    bool linksStd = std::any_of(archives.begin(), archives.end(), [](const std::string& a) {
+        return fs::path(a).filename() == "libsafec_std.a";
+    });
+    if (linksStd) for (auto& f : blasLinkFlags()) cmd.push_back(f);
     // Extra link flags from manifest
-    for (auto& f : manifest_.build.cflags) cmd.push_back(f);
+    for (auto& f : compileFlags()) cmd.push_back(f);
+    for (auto& f : extraFlags) cmd.push_back(f);
     cmd.push_back("-o");
     cmd.push_back(output);
     int rc = runCmd(cmd, opts_.verbose);
@@ -813,6 +1005,67 @@ bool Builder::targetIsWasm() const {
     return t.rfind("wasm32-", 0) == 0 || t.rfind("wasm64-", 0) == 0;
 }
 
+// With [build] std = true, C/C++/ObjC sources reach std's headers as
+// <std/...> through std's parent directory -- never std/ itself, whose
+// stdint.h & co. would shadow the system's (see build()'s foreignIncs).
+void Builder::stdForeignInclude(std::vector<std::string>& foreignIncs, const std::string& stdDir) const {
+    if (manifest_.build.useStd == 1 && !stdDir.empty())
+        foreignIncs.push_back(fs::path(stdDir).parent_path().string());
+}
+
+std::vector<std::string> Builder::runtimeFlags() const {
+    if (!targetIsWindows()) return {};
+    std::string t = targetTriple();
+    // MinGW (-gnu) targets use their own runtime's shared msvcrt already.
+    if (t.find("gnu") != std::string::npos || t.find("mingw") != std::string::npos) return {};
+    return { "-fms-runtime-lib=dll" };
+}
+
+std::vector<std::string> Builder::runtimeLinkFlags() const {
+    if (runtimeFlags().empty()) return {};
+    // legacy_stdio_definitions: with the DLL CRT, printf & co. are inline
+    // functions in the UCRT headers, which SafeC's own 'extern int printf'
+    // declarations never see; this library has their out-of-line bodies.
+    return { "-Wl,/NODEFAULTLIB:libcmt", "-Wl,/DEFAULTLIB:msvcrt",
+             "-Wl,/DEFAULTLIB:legacy_stdio_definitions" };
+}
+
+std::string Builder::targetOS() const {
+    if (!isCrossTarget()) {
+#if defined(_WIN32)
+        return "windows";
+#elif defined(__APPLE__)
+        return "macos";
+#elif defined(__linux__)
+        return "linux";
+#else
+        return "";
+#endif
+    }
+    if (targetIsBareMetal()) return "";
+    std::string t = targetTriple();
+    if (t.find("windows") != std::string::npos) return "windows";
+    if (t.find("apple") != std::string::npos || t.find("darwin") != std::string::npos ||
+        t.find("macos") != std::string::npos) return "macos";
+    if (t.find("linux") != std::string::npos) return "linux";
+    return "";
+}
+
+const PlatformBuildConfig* Builder::platformBuild() const {
+    std::string os = targetOS();
+    if (os == "macos")   return &manifest_.build.forMacos;
+    if (os == "linux")   return &manifest_.build.forLinux;
+    if (os == "windows") return &manifest_.build.forWindows;
+    return nullptr;
+}
+
+std::vector<std::string> Builder::compileFlags() const {
+    std::vector<std::string> out = manifest_.build.cflags;
+    if (const PlatformBuildConfig* p = platformBuild())
+        out.insert(out.end(), p->cflags.begin(), p->cflags.end());
+    return out;
+}
+
 // ── build a library from a source directory ───────────────────────────────────
 
 bool Builder::buildLib(const std::string& srcDir,
@@ -916,6 +1169,7 @@ std::string Builder::ensureStdLib() {
     fs::path stampPath = libPath;
     stampPath += ".stamp";
     std::string stamp = "safec=" + findSafec() + "\nstd=" + stdDir + "\n";
+    for (auto& f : runtimeFlags()) stamp += "runtime=" + f + "\n";   // a CRT switch rebuilds std
     if (fs::exists(libPath)) {
         std::error_code ec;
         auto built = fs::last_write_time(libPath, ec);
@@ -1003,7 +1257,7 @@ static std::vector<fs::path> findLibraries(const fs::path& dir, const std::strin
     for (const char* sub : { "lib", "lib64", "" }) {
         fs::path d = *sub ? dir / sub : dir;
         if (!fs::is_directory(d)) continue;
-        for (const std::string& f : { "lib" + name + ".a", name + ".lib",
+        for (const std::string& f : { "lib" + name + ".a", name + ".lib", "lib" + name + ".lib",
                                       "lib" + name + ".dylib", "lib" + name + ".so" })
             if (fs::exists(d / f)) return { d / f };
         std::vector<fs::path> statics, shareds;
@@ -1031,18 +1285,118 @@ static std::vector<fs::path> findLibraries(const fs::path& dir, const std::strin
     return {};
 }
 
+// '*' (any run of characters) and '?' (one) in a file name.
+static bool wildcardMatch(const std::string& pat, const std::string& name) {
+    size_t p = 0, n = 0, star = std::string::npos, mark = 0;
+    while (n < name.size()) {
+        if (p < pat.size() && (pat[p] == '?' || pat[p] == name[n])) { ++p; ++n; }
+        else if (p < pat.size() && pat[p] == '*') { star = p++; mark = n; }
+        else if (star != std::string::npos) { p = star + 1; n = ++mark; }
+        else return false;
+    }
+    while (p < pat.size() && pat[p] == '*') ++p;
+    return p == pat.size();
+}
+
+static bool isNativeSource(const fs::path& f) {
+    std::string e = f.extension().string();
+    return e == ".c" || e == ".cc" || e == ".cpp" || e == ".cxx" || e == ".m" || e == ".mm";
+}
+
+// The source files of a build = "sources" dependency. Each 'sources' entry
+// is a file, a directory (searched recursively) or a pattern with '*'/'?'
+// in its last component, against the dependency's directory; with none,
+// its src/ (recursively) if it has one, else the files directly in it.
+// Only C/C++/Objective-C files count.
+static std::vector<std::string> nativeSources(const Dependency& dep, const fs::path& dir,
+                                              std::string& error) {
+    std::set<std::string> out;
+    auto addTree = [&](const fs::path& d) {
+        for (auto& e : fs::recursive_directory_iterator(d))
+            if (e.is_regular_file() && isNativeSource(e.path())) out.insert(e.path().lexically_normal().string());
+    };
+    if (dep.sources.empty()) {
+        if (fs::is_directory(dir / "src")) addTree(dir / "src");
+        else
+            for (auto& e : fs::directory_iterator(dir))
+                if (e.is_regular_file() && isNativeSource(e.path())) out.insert(e.path().lexically_normal().string());
+    }
+    for (auto& s : dep.sources) {
+        fs::path p = fs::path(s).is_absolute() ? fs::path(s) : dir / s;
+        std::string last = p.filename().string();
+        if (last.find_first_of("*?") != std::string::npos) {
+            size_t before = out.size();
+            if (fs::is_directory(p.parent_path()))
+                for (auto& e : fs::directory_iterator(p.parent_path()))
+                    if (e.is_regular_file() && isNativeSource(e.path()) &&
+                        wildcardMatch(last, e.path().filename().string()))
+                        out.insert(e.path().lexically_normal().string());
+            if (out.size() == before) { error = "no C/C++/ObjC file matches " + p.string(); return {}; }
+        } else if (fs::is_directory(p)) {
+            addTree(p);
+        } else if (fs::is_regular_file(p)) {
+            if (!isNativeSource(p)) {
+                error = p.string() + " is not a C, C++ or Objective-C source (.c/.cc/.cpp/.cxx/.m/.mm)";
+                return {};
+            }
+            out.insert(p.lexically_normal().string());
+        } else {
+            error = "source not found: " + p.string();
+            return {};
+        }
+    }
+    if (out.empty()) error = "no C/C++/ObjC sources in " + dir.string() + " (list them in 'sources')";
+    return { out.begin(), out.end() };
+}
+
 Builder::DepLayout Builder::depLayout(const Dependency& dep) const {
     DepLayout l;
     l.dir = depDir(dep);
     fs::path base = l.dir.empty() ? fs::path(root_) : fs::path(l.dir);
-    auto against = [&](const std::string& s) {
+    auto against = [&](const std::string& s, const fs::path& b) {
         fs::path p(s);
-        return (p.is_absolute() ? p : base / p).lexically_normal();
+        return (p.is_absolute() ? p : b / p).lexically_normal();
     };
     std::vector<fs::path> libs;
-    if (!dep.libs.empty()) {
+    bool objc = false;
+    std::vector<std::string> defaultIncludes;   // used when 'include' isn't given
+    if (!dep.build.empty()) {
+        // A C/C++/ObjC project safeguard builds itself (buildNativeDep) into
+        // build/deps/<name>. Its library may not exist yet: fetchAndBuildDeps
+        // builds it, then checks.
+        if (!fs::is_directory(l.dir)) { l.error = "directory not found: " + l.dir; return l; }
+        l.native = true;
+        l.outDir = (fs::path(root_) / "build" / "deps" / dep.name).string();
+        if (dep.build == "sources") {
+            for (auto& src : nativeSources(dep, l.dir, l.error)) {
+                SrcLang lang = langOf(src);
+                if (isCxx(lang)) l.cxx = true;
+                if (isObjC(lang)) objc = true;
+            }
+            if (!l.error.empty()) return l;
+            libs.push_back(fs::path(l.outDir) / ("lib" + dep.name + ".a"));
+            defaultIncludes.push_back(fs::is_directory(fs::path(l.dir) / "include")
+                                      ? (fs::path(l.dir) / "include").string() : l.dir);
+        } else {
+            // What a CMake project compiles can't be told from outside, and
+            // clang++ links plain C just as well.
+            l.cxx = true;
+            fs::path prefix = fs::path(l.outDir) / "install";
+            if (!dep.libs.empty()) {
+                for (auto& f : dep.libs) libs.push_back(against(f, prefix));
+            } else {
+                libs = findLibraries(prefix, dep.name);
+                // No install() rules: the libraries the build tree holds.
+                if (libs.empty() && fs::is_directory(fs::path(l.outDir) / "build"))
+                    libs = findLibraries(fs::path(l.outDir) / "build", dep.name);
+            }
+            if (fs::is_directory(prefix / "include")) defaultIncludes.push_back((prefix / "include").string());
+            else if (fs::is_directory(fs::path(l.dir) / "include"))
+                defaultIncludes.push_back((fs::path(l.dir) / "include").string());
+        }
+    } else if (!dep.libs.empty()) {
         for (auto& f : dep.libs) {
-            fs::path p = against(f);
+            fs::path p = against(f, base);
             if (!fs::exists(p)) { l.error = "library not found: " + p.string(); return l; }
             libs.push_back(p);
         }
@@ -1058,6 +1412,13 @@ Builder::DepLayout Builder::depLayout(const Dependency& dep) const {
         if (fs::exists(inc)) { l.safecIncludes.push_back(inc.string()); l.foreignIncludes.push_back(inc.string()); }
         l.safecIncludes.push_back((fs::path(l.dir) / "src").string());
         l.linkInputs.push_back((fs::path(root_) / "build" / "deps" / ("lib" + dep.name + ".a")).string());
+        for (auto& src : collectAllSources((fs::path(l.dir) / "src").string())) {
+            if (isCxx(langOf(src))) l.cxx = true;
+            if (isObjC(langOf(src))) objc = true;
+        }
+        if (objc && targetOS() == "macos") l.linkInputs.push_back("-lobjc");
+        for (auto& f : dep.frameworks)
+            if (targetOS() == "macos") l.linkInputs.push_back("-Wl,-framework," + f);
         return l;
     } else {
         libs = findLibraries(l.dir, dep.name);
@@ -1067,26 +1428,51 @@ Builder::DepLayout Builder::depLayout(const Dependency& dep) const {
             return l;
         }
     }
+    if (!l.dir.empty() && !l.native && fs::is_directory(fs::path(l.dir) / "include"))
+        defaultIncludes.push_back((fs::path(l.dir) / "include").string());
     if (!dep.includes.empty()) {
         for (auto& i : dep.includes) {
-            fs::path p = against(i);
+            fs::path p = against(i, base);
             if (!fs::is_directory(p)) { l.error = "include directory not found: " + p.string(); return l; }
             l.safecIncludes.push_back(p.string());
             l.foreignIncludes.push_back(p.string());
         }
-    } else if (!l.dir.empty() && fs::is_directory(fs::path(l.dir) / "include")) {
-        std::string inc = (fs::path(l.dir) / "include").string();
-        l.safecIncludes.push_back(inc);
-        l.foreignIncludes.push_back(inc);
+    } else {
+        l.safecIncludes = defaultIncludes;
+        l.foreignIncludes = defaultIncludes;
     }
     std::set<std::string> rpaths;
     for (auto& f : libs) {
-        l.linkInputs.push_back(f.string());
-#ifndef _WIN32
         std::string e = f.extension().string();
-        if (e != ".a" && e != ".lib" && rpaths.insert(f.parent_path().string()).second)
-            l.linkInputs.push_back("-Wl,-rpath," + f.parent_path().string());   // find it at run time
-#endif
+        if (targetIsWindows()) {
+            // A DLL is linked through its import library (<stem>.lib beside
+            // it) and found at run time beside the program: copyRuntimeLibs
+            // puts it there. An import library's DLL is <stem>.dll beside
+            // it, or in ../bin/ (CMake's install layout).
+            fs::path lib = f, dll;
+            if (e == ".dll") {
+                dll = f;
+                lib = fs::path(f).replace_extension(".lib");
+                if (!fs::exists(lib)) { l.error = "no import library " + lib.string() + " for " + f.string(); return l; }
+            } else if (e == ".lib") {
+                for (const fs::path& c : { fs::path(f).replace_extension(".dll"),
+                                           f.parent_path().parent_path() / "bin" / fs::path(f).replace_extension(".dll").filename() })
+                    if (fs::exists(c)) { dll = c; break; }
+            }
+            l.linkInputs.push_back(lib.string());
+            if (!dll.empty()) l.runtimeLibs.push_back(dll.string());
+            continue;
+        }
+        l.linkInputs.push_back(f.string());
+        if (e != ".a" && e != ".lib") {
+            l.runtimeLibs.push_back(f.string());
+            if (rpaths.insert(f.parent_path().string()).second)
+                l.linkInputs.push_back("-Wl,-rpath," + f.parent_path().string());   // find it at run time
+        }
+    }
+    if (targetOS() == "macos") {
+        if (objc) l.linkInputs.push_back("-lobjc");
+        for (auto& f : dep.frameworks) l.linkInputs.push_back("-Wl,-framework," + f);
     }
     return l;
 }
@@ -1110,6 +1496,186 @@ std::vector<std::string> Builder::depLinkInputs() const {
             if (f.rfind("-", 0) == 0 || fs::exists(f)) out.push_back(f);
     }
     return out;
+}
+
+bool Builder::depsNeedCxx() const {
+    for (auto& dep : manifest_.dependencies) {
+        DepLayout l = depLayout(dep);
+        if (l.error.empty() && l.cxx) return true;
+    }
+    return false;
+}
+
+std::vector<std::string> Builder::depRuntimeLibs() const {
+    std::vector<std::string> out;
+    for (auto& dep : manifest_.dependencies) {
+        DepLayout l = depLayout(dep);
+        if (!l.error.empty()) continue;
+        for (auto& f : l.runtimeLibs)
+            if (fs::exists(f) && std::find(out.begin(), out.end(), f) == out.end()) out.push_back(f);
+    }
+    return out;
+}
+
+bool Builder::copyRuntimeLibs(const std::string& dir) const {
+    if (!targetIsWindows()) return true;   // an rpath finds them (see depLayout)
+    for (auto& f : depRuntimeLibs()) {
+        fs::path dest = fs::path(dir) / fs::path(f).filename();
+        std::error_code ec;
+        if (fs::equivalent(f, dest, ec)) continue;
+        fs::copy_file(f, dest, fs::copy_options::update_existing, ec);
+        if (ec) {
+            std::cerr << "safeguard: could not copy " << f << " to " << dir << ": " << ec.message() << "\n";
+            return false;
+        }
+    }
+    return true;
+}
+
+// ── C/C++/ObjC dependencies built from source ────────────────────────────────
+
+// The newest modification time of the files under 'dir', skipping .git and
+// any directory in 'skip' (the project's own build/ and deps/, when the
+// dependency directory contains them).
+static fs::file_time_type newestFileTime(const fs::path& dir, const std::vector<fs::path>& skip) {
+    fs::file_time_type newest = fs::file_time_type::min();
+    std::error_code ec;
+    for (auto it = fs::recursive_directory_iterator(dir, fs::directory_options::skip_permission_denied, ec);
+         !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        if (it->is_directory(ec)) {
+            fs::path p = it->path().lexically_normal();
+            bool skipped = it->path().filename() == ".git";
+            for (auto& s : skip) if (fs::equivalent(p, s, ec)) skipped = true;
+            ec.clear();
+            if (skipped) it.disable_recursion_pending();
+            continue;
+        }
+        auto t = it->last_write_time(ec);
+        if (!ec && t > newest) newest = t;
+        ec.clear();
+    }
+    return newest;
+}
+
+bool Builder::buildNativeDep(const Dependency& dep, const DepLayout& l) const {
+    fs::path out(l.outDir);
+    fs::create_directories(out);
+    std::string cc = findSystemClang(false), cxx = findSystemClang(true);
+
+    // Rebuilt when its settings (this stamp) or any file under its
+    // directory changed since the last build.
+    std::ostringstream cfg;
+    cfg << "build=" << dep.build << "\ndir=" << l.dir << "\nrelease=" << opts_.release
+        << "\ncc=" << cc << "\ncxx=" << cxx << "\n";
+    auto list = [&](const char* key, const std::vector<std::string>& v) {
+        cfg << key << "=";
+        for (auto& x : v) cfg << x << ";";
+        cfg << "\n";
+    };
+    list("sources", dep.sources);
+    list("defines", dep.defines);
+    list("cflags", dep.cflags);
+    list("include", dep.includes);
+    list("cmake_args", dep.cmakeArgs);
+    list("lib", dep.libs);
+    fs::path stampPath = out / "build.stamp";
+    bool sameConfig = false;
+    {
+        std::ifstream in(stampPath);
+        std::stringstream prev;
+        prev << in.rdbuf();
+        sameConfig = in && prev.str() == cfg.str();
+    }
+    std::error_code ec;
+    if (sameConfig) {
+        auto built = fs::last_write_time(stampPath, ec);
+        auto newest = newestFileTime(l.dir, { fs::path(root_) / "build", fs::path(root_) / "deps" });
+        if (!ec && newest <= built) {
+            if (opts_.verbose) std::cout << "safeguard: dependency '" << dep.name << "' is up to date\n";
+            return true;
+        }
+    }
+    fs::remove(stampPath, ec);
+    std::cout << "safeguard: building dependency '" << dep.name << "' (" << dep.build << ")\n";
+
+    if (dep.build == "sources") {
+        std::string err;
+        auto srcs = nativeSources(dep, l.dir, err);
+        if (!err.empty()) { std::cerr << "safeguard: dependency '" << dep.name << "': " << err << "\n"; return false; }
+        std::vector<std::string> flags;
+        for (auto& d : dep.defines) flags.push_back("-D" + d);
+        // Its objects may end up in a shared library (a cdylib dependent).
+        if (!targetIsWindows()) flags.push_back("-fPIC");
+        for (auto& f : dep.cflags) flags.push_back(f);
+        fs::path objDir = out / "obj";
+        fs::remove_all(objDir, ec);
+        fs::create_directories(objDir);
+        std::vector<std::string> objs;
+        for (auto& src : srcs) {
+            std::string obj = compileForeign(src, objDir.string(), l.foreignIncludes, langOf(src), false, &flags);
+            if (obj.empty()) return false;
+            objs.push_back(obj);
+        }
+        fs::path lib = out / ("lib" + dep.name + ".a");
+        fs::remove(lib, ec);
+        if (!packArchive(objs, lib.string())) return false;
+    } else {
+        if (isCrossTarget()) {
+            std::cerr << "safeguard: dependency '" << dep.name << "': build = \"cmake\" can't be "
+                         "cross-compiled for --target yet; build it with a CMake toolchain file and "
+                         "use it as a prebuilt dependency\n";
+            return false;
+        }
+        fs::path buildDir = out / "build", prefix = out / "install";
+        // A changed configuration starts from a fresh cache.
+        if (!sameConfig) fs::remove_all(buildDir, ec);
+        // A non-debug build type on Windows: a Debug one would pull in the
+        // debug CRT, which doesn't mix with the release CRT the rest of the
+        // program links (the shared one, MultiThreadedDLL — see
+        // runtimeFlags()).
+        std::string config = opts_.release ? "Release" : targetIsWindows() ? "RelWithDebInfo" : "Debug";
+        if (!fs::exists(buildDir / "CMakeCache.txt")) {
+            std::vector<std::string> conf = {
+                "cmake", "-S", l.dir, "-B", buildDir.string(), "--no-warn-unused-cli",
+                "-DCMAKE_BUILD_TYPE=" + config,
+                "-DCMAKE_INSTALL_PREFIX=" + prefix.string(),
+                "-DCMAKE_INSTALL_LIBDIR=lib",
+                "-DCMAKE_C_COMPILER=" + cc,
+                "-DCMAKE_CXX_COMPILER=" + cxx,
+                "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
+            };
+            if (targetIsWindows()) {
+                conf.push_back("-DCMAKE_POLICY_DEFAULT_CMP0091=NEW");
+                conf.push_back("-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL");   // as runtimeFlags()
+            }
+            // Ninja when there is one: the Visual Studio generators ignore
+            // CMAKE_C_COMPILER, so on Windows it's what makes "the same
+            // compiler" hold.
+            if (runCmd({ "ninja", "--version" }, false, /*suppressOutput=*/true) == 0) {
+                conf.push_back("-G");
+                conf.push_back("Ninja");
+            }
+            for (auto& a : dep.cmakeArgs) conf.push_back(a);
+            if (runCmd(conf, opts_.verbose) != 0) {
+                std::cerr << "safeguard: dependency '" << dep.name << "': cmake configure failed\n";
+                fs::remove_all(buildDir, ec);
+                return false;
+            }
+        }
+        if (runCmd({ "cmake", "--build", buildDir.string(), "--config", config, "--parallel" }, opts_.verbose) != 0) {
+            std::cerr << "safeguard: dependency '" << dep.name << "': cmake build failed\n";
+            return false;
+        }
+        // A fresh prefix, so a header or library the project no longer
+        // installs doesn't linger.
+        fs::remove_all(prefix, ec);
+        if (runCmd({ "cmake", "--install", buildDir.string(), "--config", config }, opts_.verbose) != 0) {
+            std::cerr << "safeguard: dependency '" << dep.name << "': cmake --install failed\n";
+            return false;
+        }
+    }
+    std::ofstream(stampPath) << cfg.str();
+    return true;
 }
 
 // ── fetch and build all dependencies ─────────────────────────────────────────
@@ -1136,6 +1702,25 @@ bool Builder::fetchAndBuildDeps() {
         if (!l.error.empty()) {
             std::cerr << "safeguard: dependency '" << dep.name << "': " << l.error << "\n";
             return false;
+        }
+        if (l.native) {
+            if (!buildNativeDep(dep, l)) {
+                std::cerr << "safeguard: failed to build dependency '" << dep.name << "'\n";
+                return false;
+            }
+            // Now that it's built, its libraries must be there.
+            DepLayout built = depLayout(dep);
+            bool any = false;
+            for (auto& f : built.linkInputs) if (f.rfind("-", 0) != 0 && fs::exists(f)) any = true;
+            if (!built.error.empty() || !any) {
+                std::cerr << "safeguard: dependency '" << dep.name << "': "
+                          << (!built.error.empty() ? built.error
+                              : "built, but no library found in " + built.outDir +
+                                "/install (lib/) or its build tree; name it with 'lib'") << "\n";
+                return false;
+            }
+            std::cout << "safeguard: dependency '" << dep.name << "' ready (" << dep.build << ")\n";
+            continue;
         }
         if (!l.fromSource) {
             std::cout << "safeguard: dependency '" << dep.name << "' ready (prebuilt)\n";
@@ -1177,17 +1762,105 @@ std::string Builder::outputPath() const {
                 ("lib" + manifest_.build.output + ".a")).string();
     }
     if (type == "cdylib") {
-#if defined(__APPLE__)
-        const char* ext = ".dylib";
-#elif defined(_WIN32)
-        const char* ext = ".dll";
-#else
-        const char* ext = ".so";
-#endif
+        // Windows names a DLL <output>.dll, no "lib" prefix; its import
+        // library is <output>.lib beside it (importLibPath).
+        if (targetIsWindows())
+            return (fs::path(root_) / "build" / (manifest_.build.output + ".dll")).string();
+        const char* ext = targetOS() == "macos" ? ".dylib" : ".so";
         return (fs::path(root_) / "build" /
                 ("lib" + manifest_.build.output + ext)).string();
     }
+    // Windows: the .exe clang would add anyway (a cross link wouldn't), so
+    // this names the real file.
+    if (targetIsWindows())
+        return (fs::path(root_) / "build" / (manifest_.build.output + ".exe")).string();
     return (fs::path(root_) / "build" / manifest_.build.output).string();
+}
+
+std::string Builder::exportedIncludeDir() const {
+    return (fs::path(root_) / "build" / "include").string();
+}
+
+std::string Builder::importLibPath() const {
+    return (fs::path(root_) / "build" / (manifest_.build.output + ".lib")).string();
+}
+
+// A DLL exports only what it is told to (SafeC has no dllexport), so a
+// Windows cdylib exports every external function defined in the package's
+// own object files — the same set a .so/.dylib exposes from them — listed
+// in a .def file. std's and the dependencies' archives linked into it are
+// left out, as are C++-mangled names ('?...': SafeC can't call those) and
+// data (importing a variable from a DLL needs __declspec(dllimport) in the
+// consumer, which SafeC can't express; export an accessor function).
+std::string Builder::writeExportsDef(const std::vector<std::string>& objFiles) const {
+    std::vector<std::string> cmd = { findLlvmTool("llvm-nm"), "--defined-only", "--extern-only", "-P" };
+    for (auto& o : objFiles) cmd.push_back(o);
+    std::string out;
+    if (!captureCmd(cmd, out, opts_.verbose)) {
+        std::cerr << "safeguard: llvm-nm failed listing the DLL's exports (it ships with LLVM, "
+                     "beside clang; put it on PATH)\n";
+        return "!";
+    }
+    // -P lines: "<name> <type> <value> <size>"; "<file>:" headers between objects.
+    std::set<std::string> names;
+    std::istringstream ss(out);
+    std::string line;
+    while (std::getline(ss, line)) {
+        std::istringstream ls(line);
+        std::string name, type;
+        if (!(ls >> name >> type)) continue;
+        if (type == "T" && name[0] != '?') names.insert(name);
+    }
+    if (names.empty()) return "";
+    fs::path def = fs::path(root_) / "build" / (manifest_.build.output + ".def");
+    std::ofstream f(def);
+    f << "EXPORTS\n";
+    for (auto& n : names) f << "    " << n << "\n";
+    if (!f) {
+        std::cerr << "safeguard: cannot write " << def.string() << "\n";
+        return "!";
+    }
+    return def.string();
+}
+
+// The public headers of a library build, copied into build/include with
+// their paths kept: everything under the project's include/, and the
+// headers (.h, and C++'s .hh/.hpp/.hxx) under src/ (both are what a dependent building this package from
+// source gets on its include path -- see depLayout). The directory is
+// rebuilt each time, so a header deleted from the sources leaves it too.
+// A src/ header with the same path as an include/ one is an error: a
+// dependent would see one or the other depending on the search order.
+static bool exportHeaders(const fs::path& root, const fs::path& dest) {
+    std::error_code ec;
+    fs::remove_all(dest, ec);
+    std::map<std::string, fs::path> files;   // relative path -> source
+    auto collect = [&](const fs::path& dir, bool headersOnly) {
+        if (!fs::is_directory(dir)) return true;
+        for (auto& e : fs::recursive_directory_iterator(dir)) {
+            if (!e.is_regular_file()) continue;
+            std::string ext = e.path().extension().string();
+            if (headersOnly && ext != ".h" && ext != ".hh" && ext != ".hpp" && ext != ".hxx") continue;
+            std::string rel = fs::relative(e.path(), dir).generic_string();
+            auto [it, fresh] = files.emplace(rel, e.path().lexically_normal());
+            if (!fresh) {
+                std::cerr << "safeguard: header '" << rel << "' is both " << it->second.string()
+                          << " and " << e.path().lexically_normal().string() << "; a library exports one header per path\n";
+                return false;
+            }
+        }
+        return true;
+    };
+    if (!collect(root / "include", false) || !collect(root / "src", true)) return false;
+    for (auto& [rel, src] : files) {
+        fs::path out = dest / rel;
+        fs::create_directories(out.parent_path());
+        fs::copy_file(src, out, fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            std::cerr << "safeguard: could not export " << src.string() << ": " << ec.message() << "\n";
+            return false;
+        }
+    }
+    return true;
 }
 
 bool Builder::build() {
@@ -1201,14 +1874,41 @@ bool Builder::build() {
     // 1. Fetch + build dependencies
     if (!fetchAndBuildDeps()) return false;
 
+    // The sources: [build] srcs, or everything under src/.
+    fs::path srcDir = fs::path(root_) / "src";
+    std::vector<std::string> srcs;
+    if (!manifest_.build.srcs.empty()) {
+        for (auto& s : manifest_.build.srcs) {
+            fs::path p(s);
+            srcs.push_back(p.is_absolute() ? s : (fs::path(root_) / p).string());
+        }
+    } else {
+        srcs = collectAllSources(srcDir.string());
+    }
+    if (srcs.empty()) {
+        std::cerr << "safeguard: no .sc/.c/.cpp/.m/.mm source files found under src/\n";
+        return false;
+    }
+
     // 2. Build (or reuse) std library. A missing std/ directory is only a
     // warning (a project using nothing but extern declarations can still
     // link without it), but if std/ was found and building it failed, that's
     // a real error — silently linking without it just produces a wall of
-    // confusing "undefined symbol" errors instead.
+    // confusing "undefined symbol" errors instead. A package with no SafeC
+    // in it (its own sources or a SafeC source dependency) — a plain C,
+    // C++ or Objective-C one — doesn't use std, and neither builds nor
+    // links it.
+    bool usesStd = std::any_of(srcs.begin(), srcs.end(),
+                               [](const std::string& f) { return langOf(f) == SrcLang::SafeC; });
+    for (auto& dep : manifest_.dependencies) {
+        DepLayout l = depLayout(dep);
+        if (l.error.empty() && l.fromSource) usesStd = true;
+    }
+    // [build] std overrides: a C/C++/ObjC package calling into std sets it.
+    if (manifest_.build.useStd >= 0) usesStd = manifest_.build.useStd == 1;
     std::string stdDir  = findStdDir();
-    std::string stdLib  = ensureStdLib();
-    if (stdLib.empty() && !stdDir.empty()) {
+    std::string stdLib  = usesStd ? ensureStdLib() : "";
+    if (usesStd && stdLib.empty() && !stdDir.empty()) {
         std::cerr << "safeguard: failed to build the standard library "
                      "(see compiler errors above) — aborting build\n";
         return false;
@@ -1236,31 +1936,28 @@ bool Builder::build() {
     // fair game — those are meant to be consumed by any language.
     std::vector<std::string> foreignIncs;
     fs::path projInc = fs::path(root_) / "include";
-    if (fs::exists(projInc)) foreignIncs.push_back(projInc.string());
+    if (fs::exists(projInc)) {
+        // Both languages: a library's exported headers (see exportHeaders)
+        // are included by its own SafeC sources too.
+        userIncs.push_back(projInc.string());
+        foreignIncs.push_back(projInc.string());
+    }
+    stdForeignInclude(foreignIncs, stdDir);
     depIncludes(userIncs, foreignIncs);
 
-    // 4. Compile user sources. Mixed SafeC/C/C++ — each file is dispatched
-    // by extension and compiled to its own .o (SafeC via safec --emit-llvm
-    // + clang -c; C/C++ straight to .o via clang/clang++), never merged
-    // into a shared translation unit, so per-file recompilation stays
-    // granular the same way it already was for pure-SafeC projects.
-    fs::path srcDir = fs::path(root_) / "src";
-    std::vector<std::string> srcs;
-    if (!manifest_.build.srcs.empty()) {
-        for (auto& s : manifest_.build.srcs) {
-            fs::path p(s);
-            srcs.push_back(p.is_absolute() ? s : (fs::path(root_) / p).string());
-        }
-    } else {
-        srcs = collectAllSources(srcDir.string());
+    // 4. Compile user sources. Mixed SafeC/C/C++/ObjC — each file is
+    // dispatched by extension and compiled to its own .o (SafeC via safec
+    // --emit-llvm + clang -c; the others straight to .o via clang/clang++),
+    // never merged into a shared translation unit, so per-file
+    // recompilation stays granular the same way it already was for
+    // pure-SafeC projects. C++ anywhere in the link (its own sources or a
+    // dependency's) makes clang++ the link driver; Objective-C links the
+    // ObjC runtime.
+    bool hasCpp = depsNeedCxx(), hasObjC = false;
+    for (auto& src : srcs) {
+        if (isCxx(langOf(src))) hasCpp = true;
+        if (isObjC(langOf(src))) hasObjC = true;
     }
-    if (srcs.empty()) {
-        std::cerr << "safeguard: no .sc/.c/.cpp source files found under src/\n";
-        return false;
-    }
-
-    bool hasCpp = false;
-    for (auto& src : srcs) if (langOf(src) == SrcLang::Cpp) hasCpp = true;
 
     std::vector<std::string> defs = featureDefines();
     if (opts_.verbose && !defs.empty()) {
@@ -1326,11 +2023,40 @@ bool Builder::build() {
         // (std/deps' .a files) are meant to be linked in later by whatever
         // consumes this .a, not re-flattened into it here.
         if (!packArchive(allObjs, outputPath())) return false;
+        if (!exportHeaders(root_, exportedIncludeDir())) return false;
     } else if (crateType == "cdylib") {
-        if (!linkFinal(objFiles, archives, outputPath(), hasCpp, /*shared=*/true))
+        // Windows: the exports are listed explicitly (writeExportsDef), and
+        // the link writes the import library build/<output>.lib beside the
+        // DLL.
+        std::vector<std::string> extra;
+        std::string def;
+        if (targetIsWindows()) {
+            def = writeExportsDef(objFiles);
+            if (def == "!") return false;
+            if (def.empty())
+                std::cerr << "safeguard: warning: " << outputPath() << " exports no functions, so no "
+                             "import library is written for it\n";
+            else
+                extra.push_back("-Wl,/DEF:" + def);
+        } else if (targetOS() == "linux") {
+            // A SONAME, so a dependent records "lib<output>.so" (found on its
+            // rpath, or beside it in a bundle) rather than this path.
+            extra.push_back("-Wl,-soname," + fs::path(outputPath()).filename().string());
+        }
+        if (!linkFinal(objFiles, archives, outputPath(), hasCpp, /*shared=*/true, hasObjC, extra))
             return false;
+        if (!def.empty() && !fs::exists(importLibPath())) {
+            std::cerr << "safeguard: the link wrote no import library " << importLibPath() << "\n";
+            return false;
+        }
+        if (!exportHeaders(root_, exportedIncludeDir())) return false;
+        if (!copyRuntimeLibs(buildDir)) return false;
     } else {
-        if (!linkFinal(objFiles, archives, outputPath(), hasCpp)) return false;
+        std::vector<std::string> extra;
+        if (opts_.bundle && !bundleLinkFlags(extra)) return false;
+        if (!linkFinal(objFiles, archives, outputPath(), hasCpp, /*shared=*/false, hasObjC, extra))
+            return false;
+        if (!copyRuntimeLibs(buildDir)) return false;
     }
 
     // 8. Write / refresh Package.lock after a successful build.
@@ -1357,7 +2083,13 @@ bool Builder::check() {
     }
     std::vector<std::string> foreignIncs;
     fs::path projInc = fs::path(root_) / "include";
-    if (fs::exists(projInc)) foreignIncs.push_back(projInc.string());
+    if (fs::exists(projInc)) {
+        // Both languages: a library's exported headers (see exportHeaders)
+        // are included by its own SafeC sources too.
+        userIncs.push_back(projInc.string());
+        foreignIncs.push_back(projInc.string());
+    }
+    stdForeignInclude(foreignIncs, stdDir);
     depIncludes(userIncs, foreignIncs);
 
     fs::path srcDir = fs::path(root_) / "src";
@@ -1371,7 +2103,7 @@ bool Builder::check() {
         srcs = collectAllSources(srcDir.string());
     }
     if (srcs.empty()) {
-        std::cerr << "safeguard: no .sc/.c/.cpp source files found under src/\n";
+        std::cerr << "safeguard: no .sc/.c/.cpp/.m/.mm source files found under src/\n";
         return false;
     }
 
@@ -1389,9 +2121,15 @@ bool Builder::check() {
             if (compileSrc(safecBin, realSrc, checkDir.string(), userIncs, false, false, defs).empty())
                 ok = false;
         } else {
-            std::vector<std::string> cmd = { findSystemClang(lang == SrcLang::Cpp),
+            if (isObjC(lang) && targetOS() != "macos") {
+                std::cerr << "safeguard: " << src << ": Objective-C sources (.m/.mm) build only for macOS\n";
+                ok = false;
+                continue;
+            }
+            std::vector<std::string> cmd = { findSystemClang(isCxx(lang)),
                                               "-fsyntax-only", src };
             for (auto& inc : foreignIncs) { cmd.push_back("-I"); cmd.push_back(inc); }
+            if (isObjC(lang) && manifest_.build.objcArc) cmd.push_back("-fobjc-arc");
             if (runCmd(cmd, opts_.verbose) != 0) {
                 std::cerr << "safeguard: check failed for " << src << "\n";
                 ok = false;
@@ -1412,9 +2150,23 @@ bool Builder::test() {
     }
 
     if (!fetchAndBuildDeps()) return false;
+    auto testSrcs = collectAllSources(testsDir.string());
+    if (testSrcs.empty()) {
+        std::cout << "safeguard: tests/ has no .sc/.c/.cpp/.m/.mm files\n";
+        return true;
+    }
+    // std is built and linked when SafeC is involved (see build()).
+    bool usesStd = std::any_of(testSrcs.begin(), testSrcs.end(),
+                               [](const std::string& f) { return langOf(f) == SrcLang::SafeC; });
+    for (auto& dep : manifest_.dependencies) {
+        DepLayout l = depLayout(dep);
+        if (l.error.empty() && l.fromSource) usesStd = true;
+    }
+    // [build] std overrides: a C/C++/ObjC package calling into std sets it.
+    if (manifest_.build.useStd >= 0) usesStd = manifest_.build.useStd == 1;
     std::string stdDir = findStdDir();
-    std::string stdLib = ensureStdLib();
-    if (stdLib.empty() && !stdDir.empty()) {
+    std::string stdLib = usesStd ? ensureStdLib() : "";
+    if (usesStd && stdLib.empty() && !stdDir.empty()) {
         std::cerr << "safeguard: failed to build the standard library "
                      "(see compiler errors above) — aborting test run\n";
         return false;
@@ -1425,8 +2177,17 @@ bool Builder::test() {
         userIncs.push_back(stdDir);
         userIncs.push_back(fs::path(stdDir).parent_path().string());
     }
+    // C/C++/ObjC tests get the project's include/ and the dependencies'
+    // headers, never std/ (see build()'s foreignIncs).
     std::vector<std::string> depForeignIncs;
+    fs::path projInc = fs::path(root_) / "include";
+    if (fs::exists(projInc)) {
+        userIncs.push_back(projInc.string());
+        depForeignIncs.push_back(projInc.string());
+    }
+    stdForeignInclude(depForeignIncs, stdDir);
     depIncludes(userIncs, depForeignIncs);
+    bool depsCxx = depsNeedCxx();
 
     std::vector<std::string> archives;
     for (auto& f : depLinkInputs()) archives.push_back(f);
@@ -1435,12 +2196,7 @@ bool Builder::test() {
     std::string safecBin = findSafec();
     fs::path buildDir = fs::path(root_) / "build" / "tests";
     fs::create_directories(buildDir);
-
-    auto testSrcs = collectAllSources(testsDir.string());
-    if (testSrcs.empty()) {
-        std::cout << "safeguard: tests/ has no .sc/.c/.cpp files\n";
-        return true;
-    }
+    if (!copyRuntimeLibs(buildDir.string())) return false;
 
     std::vector<std::string> defs = featureDefines();
 
@@ -1459,7 +2215,7 @@ bool Builder::test() {
                 compileSrc(safecBin, realSrc, buildDir.string(), userIncs, true, false, defs);
             if (!ll.empty()) obj = llToObj(ll, buildDir.string());
         } else {
-            obj = compileForeign(src, buildDir.string(), userIncs, lang);
+            obj = compileForeign(src, buildDir.string(), depForeignIncs, lang);
         }
         if (obj.empty()) {
             std::cout << "test " << name << " ... FAILED (build error)\n";
@@ -1475,7 +2231,7 @@ bool Builder::test() {
             continue;
         }
         std::string testBin = (buildDir / name).string();
-        if (!linkFinal({obj}, archives, testBin, lang == SrcLang::Cpp)) {
+        if (!linkFinal({obj}, archives, testBin, isCxx(lang) || depsCxx, /*shared=*/false, isObjC(lang))) {
             std::cout << "test " << name << " ... FAILED (link error)\n";
             ++failed;
             continue;
@@ -1512,6 +2268,617 @@ int Builder::run(const std::vector<std::string>& args) {
     std::vector<std::string> cmd = { out };
     for (auto& a : args) cmd.push_back(a);
     return runCmd(cmd, opts_.verbose);
+}
+
+// ── public: bundle ───────────────────────────────────────────────────────────
+// 'safeguard bundle' packages a bin target with its [bundle] settings:
+//   macOS    build/<name>.app — Contents/MacOS/<exe>, Info.plist, Resources/
+//            (icon, resources), Frameworks/ (the dependencies' dylibs),
+//            code-signed (ad-hoc unless an identity is given)
+//   Windows  build/<name>/ — <exe>.exe linked for the GUI subsystem with an
+//            icon/version/manifest resource, the dependencies' DLLs, the
+//            resources: a portable app folder
+//   Linux    build/<pkg>_<version>_<arch>.deb (dpkg-deb) and the same tree
+//            as build/<name>.AppDir
+
+namespace {
+
+// Width and height of a PNG (from its IHDR chunk); false if it isn't one.
+bool pngSize(const fs::path& file, unsigned& w, unsigned& h) {
+    std::ifstream in(file, std::ios::binary);
+    unsigned char b[24];
+    if (!in.read(reinterpret_cast<char*>(b), sizeof b)) return false;
+    static const unsigned char sig[8] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
+    if (std::memcmp(b, sig, 8) != 0 || std::memcmp(b + 12, "IHDR", 4) != 0) return false;
+    w = (unsigned)b[16] << 24 | (unsigned)b[17] << 16 | (unsigned)b[18] << 8 | b[19];
+    h = (unsigned)b[20] << 24 | (unsigned)b[21] << 16 | (unsigned)b[22] << 8 | b[23];
+    return true;
+}
+
+// Copy a resource (a file, or a directory with its contents) into 'destDir'
+// under its own name.
+bool copyResource(const fs::path& src, const fs::path& destDir) {
+    std::error_code ec;
+    if (!fs::exists(src)) {
+        std::cerr << "safeguard: bundle resource not found: " << src.string() << "\n";
+        return false;
+    }
+    fs::create_directories(destDir, ec);
+    fs::path dest = destDir / src.filename();
+    if (fs::is_directory(src))
+        fs::copy(src, dest, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+    else
+        fs::copy_file(src, dest, fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+        std::cerr << "safeguard: could not copy " << src.string() << ": " << ec.message() << "\n";
+        return false;
+    }
+    return true;
+}
+
+std::string xmlEscape(const std::string& s) {
+    std::string out;
+    for (char c : s) {
+        if (c == '&') out += "&amp;";
+        else if (c == '<') out += "&lt;";
+        else if (c == '>') out += "&gt;";
+        else if (c == '"') out += "&quot;";
+        else out += c;
+    }
+    return out;
+}
+
+// The numeric parts of a version ("1.2.3-beta" -> 1, 2, 3, 0) — Windows'
+// version resource and manifest want four numbers.
+std::vector<unsigned> versionParts(const std::string& v) {
+    std::vector<unsigned> parts;
+    size_t i = 0;
+    while (parts.size() < 4 && i < v.size() && std::isdigit((unsigned char)v[i])) {
+        unsigned n = 0;
+        while (i < v.size() && std::isdigit((unsigned char)v[i])) n = n * 10 + (unsigned)(v[i++] - '0');
+        parts.push_back(n > 65535 ? 65535 : n);
+        if (i < v.size() && v[i] == '.') ++i; else break;
+    }
+    while (parts.size() < 4) parts.push_back(0);
+    return parts;
+}
+
+// [bundle] category: a freedesktop main category ("Utility", ...) or a
+// macOS "public.app-category.*" type, translated for the other platform
+// where there's a counterpart.
+const std::pair<const char*, const char*> kCategories[] = {
+    { "Utility",     "public.app-category.utilities" },
+    { "Development", "public.app-category.developer-tools" },
+    { "Game",        "public.app-category.games" },
+    { "Graphics",    "public.app-category.graphics-design" },
+    { "Education",   "public.app-category.education" },
+    { "Office",      "public.app-category.productivity" },
+    { "AudioVideo",  "public.app-category.music" },
+    { "Audio",       "public.app-category.music" },
+    { "Video",       "public.app-category.video" },
+    { "Network",     "public.app-category.social-networking" },
+    { "Science",     "public.app-category.education" },
+    { "Finance",     "public.app-category.finance" },
+};
+
+std::string macCategory(const std::string& c) {
+    if (c.rfind("public.app-category.", 0) == 0) return c;
+    for (auto& [fd, mac] : kCategories) if (c == fd) return mac;
+    return "";
+}
+
+std::string desktopCategory(const std::string& c) {
+    if (c.rfind("public.app-category.", 0) != 0) return c.empty() ? "Utility" : c;
+    for (auto& [fd, mac] : kCategories) if (c == mac) return fd;
+    return "Utility";
+}
+
+// A Debian package name: lowercase letters, digits, '+', '-', '.'.
+std::string debName(const std::string& name) {
+    std::string out;
+    for (char c : name) {
+        char l = (char)std::tolower((unsigned char)c);
+        out += (std::isalnum((unsigned char)l) || l == '+' || l == '.' || l == '-') ? l : '-';
+    }
+    return out;
+}
+
+std::string trimmed(std::string s) {
+    while (!s.empty() && std::isspace((unsigned char)s.back())) s.pop_back();
+    size_t i = 0;
+    while (i < s.size() && std::isspace((unsigned char)s[i])) ++i;
+    return s.substr(i);
+}
+
+} // namespace
+
+bool Builder::bundleLinkFlags(std::vector<std::string>& out) const {
+    std::string os = targetOS();
+    if (os == "macos") {
+        // The bundled dylibs (bundleMacOS) are found through this rpath.
+        out.push_back("-Wl,-rpath,@executable_path/../Frameworks");
+    } else if (os == "linux") {
+        // /usr/lib/<pkg>/ in the .deb, and the same place in the AppDir.
+        out.push_back("-Wl,-rpath,$ORIGIN/../lib/" + debName(manifest_.package.name));
+    } else if (os == "windows") {
+        std::string res = windowsResource();
+        if (res.empty()) return false;
+        out.push_back(res);
+        out.push_back("-Wl,/MANIFEST:NO");   // the resource carries the manifest
+        if (manifest_.bundle.subsystem == "windows") {
+            // No console window; mainCRTStartup still calls a plain main().
+            out.push_back("-Wl,/SUBSYSTEM:WINDOWS");
+            out.push_back("-Wl,/ENTRY:mainCRTStartup");
+        }
+    }
+    return true;
+}
+
+std::string Builder::windowsResource() const {
+    const BundleConfig& b = manifest_.bundle;
+    fs::path dir = fs::path(root_) / "build" / "bundle";
+    fs::create_directories(dir);
+    std::vector<unsigned> v = versionParts(b.version);
+    std::string v4 = std::to_string(v[0]) + "." + std::to_string(v[1]) + "." +
+                     std::to_string(v[2]) + "." + std::to_string(v[3]);
+
+    // The icon: an .ico as is, a .png wrapped in a one-image .ico (Windows
+    // reads PNG-compressed icon images, up to 256x256).
+    fs::path ico;
+    if (!b.icon.empty()) {
+        fs::path icon = fs::path(root_) / b.icon;
+        std::string ext = icon.extension().string();
+        unsigned w = 0, h = 0;
+        if (!fs::exists(icon)) {
+            std::cerr << "safeguard: bundle icon not found: " << icon.string() << "\n";
+            return "";
+        }
+        if (ext == ".ico") {
+            ico = icon;
+        } else if (ext == ".png") {
+            if (!pngSize(icon, w, h) || w > 256 || h > 256) {
+                std::cerr << "safeguard: " << icon.string() << ": a Windows icon needs a PNG of at most "
+                             "256x256 (or give an .ico)\n";
+                return "";
+            }
+            std::ifstream in(icon, std::ios::binary);
+            std::string png((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            ico = dir / "app.ico";
+            std::ofstream out(ico, std::ios::binary);
+            auto u16 = [&](unsigned x) { out.put((char)(x & 0xff)); out.put((char)(x >> 8 & 0xff)); };
+            auto u32 = [&](unsigned long x) { u16((unsigned)(x & 0xffff)); u16((unsigned)(x >> 16 & 0xffff)); };
+            u16(0); u16(1); u16(1);                              // ICONDIR: an icon, one image
+            out.put((char)(w == 256 ? 0 : w)); out.put((char)(h == 256 ? 0 : h));
+            out.put(0); out.put(0);                              // no palette, reserved
+            u16(1); u16(32);                                     // planes, bits per pixel
+            u32((unsigned long)png.size()); u32(6 + 16);         // image size, offset
+            out << png;
+        } else {
+            std::cerr << "safeguard: warning: " << icon.string() << ": Windows can't use an .icns icon "
+                         "(give a .png or .ico); the executable gets none\n";
+        }
+    }
+
+    // The application manifest: per-monitor DPI awareness, common controls
+    // v6 (themed controls), and no elevation.
+    fs::path manifest = dir / "app.manifest";
+    std::ofstream(manifest) <<
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
+        "<assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\">\n"
+        "  <assemblyIdentity type=\"win32\" name=\"" << xmlEscape(b.identifier) << "\" version=\"" << v4 << "\"/>\n"
+        "  <dependency>\n"
+        "    <dependentAssembly>\n"
+        "      <assemblyIdentity type=\"win32\" name=\"Microsoft.Windows.Common-Controls\" version=\"6.0.0.0\"\n"
+        "                        processorArchitecture=\"*\" publicKeyToken=\"6595b64144ccf1df\" language=\"*\"/>\n"
+        "    </dependentAssembly>\n"
+        "  </dependency>\n"
+        "  <application xmlns=\"urn:schemas-microsoft-com:asm.v3\">\n"
+        "    <windowsSettings>\n"
+        "      <dpiAware xmlns=\"http://schemas.microsoft.com/SMI/2005/WindowsSettings\">true/pm</dpiAware>\n"
+        "      <dpiAwareness xmlns=\"http://schemas.microsoft.com/SMI/2016/WindowsSettings\">PerMonitorV2</dpiAwareness>\n"
+        "    </windowsSettings>\n"
+        "  </application>\n"
+        "  <compatibility xmlns=\"urn:schemas-microsoft-com:compatibility.v1\">\n"
+        "    <application>\n"
+        "      <supportedOS Id=\"{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}\"/>\n"   // Windows 10/11
+        "    </application>\n"
+        "  </compatibility>\n"
+        "  <trustInfo xmlns=\"urn:schemas-microsoft-com:asm.v3\">\n"
+        "    <security>\n"
+        "      <requestedPrivileges>\n"
+        "        <requestedExecutionLevel level=\"asInvoker\" uiAccess=\"false\"/>\n"
+        "      </requestedPrivileges>\n"
+        "    </security>\n"
+        "  </trustInfo>\n"
+        "</assembly>\n";
+
+    // The .rc: numeric constants only (no <windows.h>), so it needs no
+    // preprocessor. Strings double their quotes.
+    auto rcStr = [](const std::string& s) {
+        std::string out = "\"";
+        for (char c : s) out += c == '"' ? std::string("\"\"") : std::string(1, c);
+        return out + "\"";
+    };
+    std::string exe = manifest_.build.output + ".exe";
+    std::string vc = std::to_string(v[0]) + "," + std::to_string(v[1]) + "," +
+                     std::to_string(v[2]) + "," + std::to_string(v[3]);
+    fs::path rc = dir / "app.rc";
+    {
+        std::ofstream f(rc);
+        if (!ico.empty()) f << "1 ICON " << rcStr(fs::absolute(ico).generic_string()) << "\n";
+        f << "1 24 " << rcStr(fs::absolute(manifest).generic_string()) << "\n"   // RT_MANIFEST
+          << "1 VERSIONINFO\n"
+          << "FILEVERSION " << vc << "\n"
+          << "PRODUCTVERSION " << vc << "\n"
+          << "FILEFLAGSMASK 0x3f\nFILEFLAGS 0x0\nFILEOS 0x40004\nFILETYPE 0x1\nFILESUBTYPE 0x0\n"
+          << "BEGIN\n"
+          << "  BLOCK \"StringFileInfo\"\n  BEGIN\n    BLOCK \"040904b0\"\n    BEGIN\n";
+        auto val = [&](const char* k, const std::string& s) {
+            if (!s.empty()) f << "      VALUE \"" << k << "\", " << rcStr(s) << "\n";
+        };
+        val("CompanyName", manifest_.package.author);
+        val("FileDescription", manifest_.package.description.empty() ? b.name : manifest_.package.description);
+        val("FileVersion", b.version);
+        val("InternalName", manifest_.build.output);
+        val("LegalCopyright", b.copyright);
+        val("OriginalFilename", exe);
+        val("ProductName", b.name);
+        val("ProductVersion", b.version);
+        f << "    END\n  END\n"
+          << "  BLOCK \"VarFileInfo\"\n  BEGIN\n    VALUE \"Translation\", 0x409, 1200\n  END\n"
+          << "END\n";
+    }
+
+    // llvm-rc (beside clang), or the Windows SDK's rc.
+    fs::path res = dir / (manifest_.build.output + ".res");
+    std::error_code ec;
+    fs::remove(res, ec);
+    std::string llvmRc = findLlvmTool("llvm-rc");
+    int rcCode = runCmd({ llvmRc, "/no-preprocess", "/FO", res.string(), rc.string() }, opts_.verbose,
+                        /*suppressOutput=*/llvmRc == "llvm-rc");
+    if (rcCode != 0 || !fs::exists(res)) {
+        rcCode = runCmd({ "rc", "/nologo", "/fo", res.string(), rc.string() }, opts_.verbose);
+        if (rcCode != 0 || !fs::exists(res)) {
+            std::cerr << "safeguard: could not compile " << rc.string() << " (needs llvm-rc, which "
+                         "ships with LLVM, or the Windows SDK's rc)\n";
+            return "";
+        }
+    }
+    return res.string();
+}
+
+bool Builder::bundleMacOS() const {
+    const BundleConfig& b = manifest_.bundle;
+    fs::path build = fs::path(root_) / "build";
+    fs::path app = build / (b.name + ".app");
+    fs::path contents = app / "Contents";
+    std::error_code ec;
+    fs::remove_all(app, ec);
+    fs::create_directories(contents / "MacOS");
+    fs::create_directories(contents / "Resources");
+    std::string exeName = manifest_.build.output;
+    fs::path exe = contents / "MacOS" / exeName;
+    fs::copy_file(outputPath(), exe, fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+        std::cerr << "safeguard: could not copy " << outputPath() << ": " << ec.message() << "\n";
+        return false;
+    }
+
+    // The icon: an .icns as is; a .png turned into one (sips scales it to
+    // each size of an .iconset, iconutil packs it).
+    std::string iconFile;
+    if (!b.icon.empty()) {
+        fs::path icon = fs::path(root_) / b.icon;
+        std::string ext = icon.extension().string();
+        if (!fs::exists(icon)) {
+            std::cerr << "safeguard: bundle icon not found: " << icon.string() << "\n";
+            return false;
+        }
+        iconFile = icon.stem().string() + ".icns";
+        fs::path icns = contents / "Resources" / iconFile;
+        if (ext == ".icns") {
+            fs::copy_file(icon, icns, fs::copy_options::overwrite_existing, ec);
+        } else if (ext == ".png") {
+            fs::path set = build / "bundle" / (icon.stem().string() + ".iconset");
+            fs::remove_all(set, ec);
+            fs::create_directories(set);
+            for (int size : { 16, 32, 128, 256, 512 }) {
+                for (int scale : { 1, 2 }) {
+                    std::string px = std::to_string(size * scale);
+                    std::string name = "icon_" + std::to_string(size) + "x" + std::to_string(size) +
+                                       (scale == 2 ? "@2x" : "") + ".png";
+                    if (runCmd({ "sips", "-z", px, px, icon.string(), "--out", (set / name).string() },
+                               opts_.verbose, /*suppressOutput=*/true) != 0) {
+                        std::cerr << "safeguard: sips could not scale " << icon.string() << "\n";
+                        return false;
+                    }
+                }
+            }
+            if (runCmd({ "iconutil", "-c", "icns", set.string(), "-o", icns.string() }, opts_.verbose) != 0) {
+                std::cerr << "safeguard: iconutil could not make " << icns.string() << "\n";
+                return false;
+            }
+        } else {
+            std::cerr << "safeguard: warning: " << icon.string() << ": macOS can't use an .ico icon "
+                         "(give a .png or .icns); the bundle gets none\n";
+            iconFile.clear();
+        }
+    }
+    for (auto& r : b.resources)
+        if (!copyResource(fs::path(root_) / r, contents / "Resources")) return false;
+
+    {
+        std::ofstream f(contents / "Info.plist");
+        auto key = [&](const char* k, const std::string& v) {
+            f << "\t<key>" << k << "</key>\n\t<string>" << xmlEscape(v) << "</string>\n";
+        };
+        f << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+             "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+             "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+             "<plist version=\"1.0\">\n<dict>\n";
+        key("CFBundleDevelopmentRegion", "en");
+        key("CFBundleExecutable", exeName);
+        key("CFBundleIdentifier", b.identifier);
+        key("CFBundleInfoDictionaryVersion", "6.0");
+        key("CFBundleName", b.name);
+        key("CFBundleDisplayName", b.name);
+        key("CFBundlePackageType", "APPL");
+        key("CFBundleShortVersionString", b.version);
+        key("CFBundleVersion", b.version);
+        if (!iconFile.empty()) key("CFBundleIconFile", iconFile);
+        key("LSMinimumSystemVersion", b.minSystemVersion);
+        if (!macCategory(b.category).empty()) key("LSApplicationCategoryType", macCategory(b.category));
+        if (!b.copyright.empty()) key("NSHumanReadableCopyright", b.copyright);
+        f << "\t<key>NSHighResolutionCapable</key>\n\t<true/>\n"
+             "\t<key>NSPrincipalClass</key>\n\t<string>NSApplication</string>\n"
+             "</dict>\n</plist>\n";
+    }
+    std::ofstream(contents / "PkgInfo") << "APPL????";
+
+    // The dependencies' dylibs go into Contents/Frameworks; each one's
+    // install name becomes @rpath/<file> (in it and in the executable),
+    // and the executable's rpath (bundleLinkFlags) points there.
+    std::vector<fs::path> frameworks;
+    for (auto& lib : depRuntimeLibs()) {
+        if (fs::path(lib).extension() != ".dylib") continue;
+        fs::create_directories(contents / "Frameworks");
+        fs::path dest = contents / "Frameworks" / fs::path(lib).filename();
+        fs::copy_file(lib, dest, fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            std::cerr << "safeguard: could not copy " << lib << ": " << ec.message() << "\n";
+            return false;
+        }
+        std::string out;
+        if (!captureCmd({ "otool", "-D", dest.string() }, out)) {
+            std::cerr << "safeguard: otool -D failed for " << dest.string() << "\n";
+            return false;
+        }
+        // "<file>:\n<install name>\n"
+        std::string id = trimmed(out.substr(out.find('\n') == std::string::npos ? out.size() : out.find('\n') + 1));
+        std::string rpathId = "@rpath/" + dest.filename().string();
+        if (runCmd({ "install_name_tool", "-id", rpathId, dest.string() }, opts_.verbose) != 0 ||
+            (!id.empty() && id != rpathId &&
+             runCmd({ "install_name_tool", "-change", id, rpathId, exe.string() }, opts_.verbose) != 0)) {
+            std::cerr << "safeguard: install_name_tool failed for " << dest.string() << "\n";
+            return false;
+        }
+        frameworks.push_back(dest);
+    }
+
+    // Sign the nested code first, then the bundle (install_name_tool has
+    // invalidated the linker's ad-hoc signatures).
+    std::string identity = !opts_.signIdentity.empty() ? opts_.signIdentity : b.codesignIdentity;
+    if (identity != "none") {
+        for (auto& f : frameworks)
+            if (runCmd({ "codesign", "--force", "--sign", identity, f.string() }, opts_.verbose) != 0) {
+                std::cerr << "safeguard: codesign failed for " << f.string() << "\n";
+                return false;
+            }
+        if (runCmd({ "codesign", "--force", "--sign", identity, app.string() }, opts_.verbose) != 0) {
+            std::cerr << "safeguard: codesign failed for " << app.string() << "\n";
+            return false;
+        }
+    }
+    std::cout << "safeguard: bundled " << app.lexically_normal().string()
+              << (identity == "none" ? " (unsigned)" : identity == "-" ? " (ad-hoc signed)" : " (signed)") << "\n";
+    return true;
+}
+
+bool Builder::bundleWindows() const {
+    const BundleConfig& b = manifest_.bundle;
+    fs::path dir = fs::path(root_) / "build" / b.name;
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    fs::path exe = outputPath();
+    fs::copy_file(exe, dir / exe.filename(), fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+        std::cerr << "safeguard: could not copy " << exe.string() << ": " << ec.message() << "\n";
+        return false;
+    }
+    for (auto& lib : depRuntimeLibs())
+        if (fs::path(lib).extension() == ".dll" && !copyResource(lib, dir)) return false;
+    for (auto& r : b.resources)
+        if (!copyResource(fs::path(root_) / r, dir)) return false;
+    std::cout << "safeguard: bundled " << dir.lexically_normal().string() << "\n";
+    return true;
+}
+
+bool Builder::bundleLinux() const {
+    const BundleConfig& b = manifest_.bundle;
+    const std::string pkg = debName(manifest_.package.name);
+    const std::string exeName = manifest_.build.output;
+    fs::path build = fs::path(root_) / "build";
+    std::error_code ec;
+
+    // The Debian architecture: dpkg's own for the host, else the target's.
+    std::string arch, dpkgArch;
+    bool haveDpkg = captureCmd({ "dpkg", "--print-architecture" }, dpkgArch);
+    if (isCrossTarget()) {
+        std::string t = targetTriple();
+        std::string cpu = t.substr(0, t.find('-'));
+        arch = cpu == "x86_64" ? "amd64" : cpu == "aarch64" ? "arm64"
+             : (cpu.size() == 4 && cpu[0] == 'i' && cpu.substr(2) == "86") ? "i386"
+             : cpu.rfind("armv7", 0) == 0 ? "armhf" : cpu;
+    } else {
+        arch = trimmed(dpkgArch);
+    }
+    if (arch.empty()) {
+#if defined(__x86_64__)
+        arch = "amd64";
+#elif defined(__aarch64__)
+        arch = "arm64";
+#else
+        arch = "unknown";
+#endif
+    }
+
+    // The package tree: /usr/bin/<exe>, /usr/lib/<pkg>/ (the dependencies'
+    // shared libraries, on the executable's rpath), /usr/share/applications/
+    // <id>.desktop, /usr/share/icons/hicolor/<size>/apps/<id>.png and
+    // /usr/share/<pkg>/ (resources).
+    fs::path stage = build / "deb" / (pkg + "_" + b.version + "_" + arch);
+    fs::remove_all(stage, ec);
+    fs::path usr = stage / "usr";
+    fs::create_directories(usr / "bin");
+    fs::copy_file(outputPath(), usr / "bin" / exeName, fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+        std::cerr << "safeguard: could not copy " << outputPath() << ": " << ec.message() << "\n";
+        return false;
+    }
+    fs::permissions(usr / "bin" / exeName, fs::perms(0755), ec);
+    for (auto& lib : depRuntimeLibs()) {
+        // libfoo.so, and the libfoo.so.N... names beside it (the SONAME the
+        // executable asks for is usually one of them), symlinks kept.
+        fs::path f(lib);
+        std::string stem = f.filename().string();
+        stem = stem.substr(0, stem.find(".so") == std::string::npos ? stem.size() : stem.find(".so") + 3);
+        fs::path dest = usr / "lib" / pkg;
+        fs::create_directories(dest);
+        for (auto& e : fs::directory_iterator(f.parent_path(), ec)) {
+            std::string n = e.path().filename().string();
+            if (n.rfind(stem, 0) != 0) continue;
+            fs::remove(dest / n, ec);
+            if (e.is_symlink()) fs::copy_symlink(e.path(), dest / n, ec);
+            else fs::copy_file(e.path(), dest / n, fs::copy_options::overwrite_existing, ec);
+            if (ec) {
+                std::cerr << "safeguard: could not copy " << e.path().string() << ": " << ec.message() << "\n";
+                return false;
+            }
+        }
+    }
+    fs::path iconPng;
+    if (!b.icon.empty()) {
+        fs::path icon = fs::path(root_) / b.icon;
+        unsigned w = 0, h = 0;
+        if (!fs::exists(icon)) {
+            std::cerr << "safeguard: bundle icon not found: " << icon.string() << "\n";
+            return false;
+        }
+        if (icon.extension() == ".png" && pngSize(icon, w, h)) {
+            fs::path dir = usr / "share" / "icons" / "hicolor" / (std::to_string(w) + "x" + std::to_string(h)) / "apps";
+            fs::create_directories(dir);
+            iconPng = dir / (b.identifier + ".png");
+            fs::copy_file(icon, iconPng, fs::copy_options::overwrite_existing, ec);
+        } else {
+            std::cerr << "safeguard: warning: " << icon.string() << ": the Linux desktop entry needs a .png "
+                         "icon; the package gets none\n";
+        }
+    }
+    for (auto& r : b.resources)
+        if (!copyResource(fs::path(root_) / r, usr / "share" / pkg)) return false;
+    fs::path desktop = usr / "share" / "applications" / (b.identifier + ".desktop");
+    fs::create_directories(desktop.parent_path());
+    {
+        std::ofstream f(desktop);
+        f << "[Desktop Entry]\nType=Application\nName=" << b.name << "\nExec=" << exeName << "\n";
+        if (!iconPng.empty()) f << "Icon=" << b.identifier << "\n";
+        if (!manifest_.package.description.empty()) f << "Comment=" << manifest_.package.description << "\n";
+        f << "Categories=" << desktopCategory(b.category) << ";\nTerminal=false\n";
+    }
+
+    // The AppDir: the same /usr tree plus AppRun, the desktop entry and the
+    // icon at its top (what appimagetool packs into an AppImage).
+    fs::path appDir = build / (b.name + ".AppDir");
+    fs::remove_all(appDir, ec);
+    fs::create_directories(appDir);
+    fs::copy(usr, appDir / "usr", fs::copy_options::recursive | fs::copy_options::copy_symlinks, ec);
+    fs::create_symlink("usr/bin/" + exeName, appDir / "AppRun", ec);
+    fs::copy_file(desktop, appDir / desktop.filename(), ec);
+    if (!iconPng.empty()) {
+        fs::copy_file(iconPng, appDir / iconPng.filename(), ec);
+        fs::create_symlink(iconPng.filename(), appDir / ".DirIcon", ec);
+    }
+    if (ec) {
+        std::cerr << "safeguard: could not assemble " << appDir.string() << ": " << ec.message() << "\n";
+        return false;
+    }
+    std::cout << "safeguard: bundled " << appDir.lexically_normal().string() << "\n";
+
+    // DEBIAN/control, then dpkg-deb.
+    if (!haveDpkg) {
+        std::cerr << "safeguard: warning: dpkg not found; skipped the .deb (install dpkg to build one)\n";
+        return true;
+    }
+    uintmax_t bytes = 0;
+    for (auto& e : fs::recursive_directory_iterator(usr, ec))
+        if (e.is_regular_file() && !e.is_symlink()) bytes += e.file_size();
+    fs::create_directories(stage / "DEBIAN");
+    {
+        std::ofstream f(stage / "DEBIAN" / "control");
+        f << "Package: " << pkg << "\n"
+          << "Version: " << b.version << "\n"
+          << "Architecture: " << arch << "\n"
+          << "Maintainer: " << (manifest_.package.author.empty() ? "unknown" : manifest_.package.author) << "\n"
+          << "Installed-Size: " << (bytes + 1023) / 1024 << "\n";
+        if (!b.depends.empty()) {
+            f << "Depends: ";
+            for (size_t i = 0; i < b.depends.size(); ++i) f << (i ? ", " : "") << b.depends[i];
+            f << "\n";
+        }
+        f << "Section: " << (desktopCategory(b.category) == "Game" ? "games" : "misc") << "\n"
+          << "Priority: optional\n"
+          << "Description: " << (manifest_.package.description.empty() ? b.name : manifest_.package.description)
+          << "\n";
+    }
+    // dpkg-deb insists on 0755 directories.
+    fs::permissions(stage, fs::perms(0755), ec);
+    for (auto& e : fs::recursive_directory_iterator(stage, ec)) {
+        if (e.is_symlink()) continue;
+        if (e.is_directory()) fs::permissions(e.path(), fs::perms(0755), ec);
+        else if (e.path() != usr / "bin" / exeName) fs::permissions(e.path(), fs::perms(0644), ec);
+    }
+    fs::path deb = build / (pkg + "_" + b.version + "_" + arch + ".deb");
+    fs::remove(deb, ec);
+    if (runCmd({ "dpkg-deb", "--build", "--root-owner-group", stage.string(), deb.string() }, opts_.verbose) != 0) {
+        std::cerr << "safeguard: dpkg-deb failed\n";
+        return false;
+    }
+    std::cout << "safeguard: bundled " << deb.lexically_normal().string() << "\n";
+    return true;
+}
+
+bool Builder::bundle() {
+    if (!manifest_.bundle.present) {
+        std::cerr << "safeguard: 'bundle' needs a [bundle] table in Package.toml (at least "
+                     "identifier = \"org.example." << manifest_.package.name << "\")\n";
+        return false;
+    }
+    if (manifest_.build.crateType != "bin") {
+        std::cerr << "safeguard: 'bundle' packages an application: it needs build.crate_type = \"bin\"\n";
+        return false;
+    }
+    std::string os = targetOS();
+    if (os.empty()) {
+        std::cerr << "safeguard: 'bundle' packages for macOS, Windows or Linux, not --target "
+                  << opts_.target << "\n";
+        return false;
+    }
+    opts_.bundle = true;
+    if (!build()) return false;
+    if (os == "macos") return bundleMacOS();
+    if (os == "windows") return bundleWindows();
+    return bundleLinux();
 }
 
 // ── public: clean ─────────────────────────────────────────────────────────────
@@ -1559,13 +2926,7 @@ void Builder::writeLock(const std::vector<std::string>& srcFiles) const {
     for (auto& src : srcFiles) {
         std::string h = hashFile(src);
         if (!h.empty()) {
-            std::string rel;
-            try {
-                rel = fs::relative(src, root_).string();
-            } catch (...) {
-                rel = src;
-            }
-            lf.sources[rel] = h;
+            lf.sources[sourceKey(src)] = h;
         }
     }
 

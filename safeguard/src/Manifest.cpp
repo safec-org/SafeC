@@ -118,17 +118,48 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
         }
         inDep = false;
     };
+    auto boolean = [&](const Token& tok) {
+        if (tok.value == "true") return true;
+        if (tok.value == "false") return false;
+        throw std::runtime_error(srcName + ": " + tok.key + " must be true or false, got \"" +
+                                 tok.value + "\"");
+    };
+    // [build.macos] / [build.linux] / [build.windows]: "build.linux.libs"
+    // sets forLinux.libs. Returns false for any other key.
+    auto platformKey = [&](const Token& tok) {
+        struct { const char* prefix; PlatformBuildConfig* cfg; } kOS[] = {
+            { "build.macos.", &m.build.forMacos },
+            { "build.linux.", &m.build.forLinux },
+            { "build.windows.", &m.build.forWindows },
+        };
+        for (auto& os : kOS) {
+            if (tok.key.rfind(os.prefix, 0) != 0) continue;
+            std::string k = tok.key.substr(std::string(os.prefix).size());
+            if (k == "cflags")          os.cfg->cflags     = splitList(tok.value);
+            else if (k == "libs")       os.cfg->libs       = splitList(tok.value);
+            else if (k == "lib_dirs")   os.cfg->libDirs    = splitList(tok.value);
+            else if (k == "frameworks") os.cfg->frameworks = splitList(tok.value);
+            else
+                throw std::runtime_error(srcName + ": unknown key '" + k + "' in [" +
+                                         tok.key.substr(0, std::string(os.prefix).size() - 1) +
+                                         "] (expected cflags, libs, lib_dirs or frameworks)");
+            return true;
+        }
+        return false;
+    };
 
     for (auto& tok : tokens) {
         if (tok.key == "__section__") {
-            if (tok.value == "dependencies") {
-                flushDep();
-                inDep = true;
-            } else {
-                flushDep();
-            }
+            flushDep();
+            if (tok.value == "dependencies") inDep = true;
+            else if (tok.value == "bundle") m.bundle.present = true;
+            else if (tok.value.rfind("build.", 0) == 0 && tok.value != "build.macos" &&
+                     tok.value != "build.linux" && tok.value != "build.windows")
+                throw std::runtime_error(srcName + ": unknown table [" + tok.value + "]; per-platform "
+                                         "settings go in [build.macos], [build.linux] or [build.windows]");
             continue;
         }
+        if (platformKey(tok)) continue;
 
         // package.*
         if (tok.key == "package.name")        m.package.name        = tok.value;
@@ -147,6 +178,24 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
         else if (tok.key == "build.lto")      m.build.lto      = tok.value;
         else if (tok.key == "build.blas")     m.build.blas     = tok.value;
         else if (tok.key == "build.crate_type") m.build.crateType = tok.value;
+        else if (tok.key == "build.frameworks") m.build.frameworks = splitList(tok.value);
+        else if (tok.key == "build.objc_arc")   m.build.objcArc  = boolean(tok);
+        else if (tok.key == "build.std")        m.build.useStd   = boolean(tok) ? 1 : 0;
+
+        // bundle.*
+        else if (tok.key == "bundle.name")       m.bundle.name       = tok.value;
+        else if (tok.key == "bundle.identifier") m.bundle.identifier = tok.value;
+        else if (tok.key == "bundle.version")    m.bundle.version    = tok.value;
+        else if (tok.key == "bundle.icon")       m.bundle.icon       = tok.value;
+        else if (tok.key == "bundle.resources")  m.bundle.resources  = splitList(tok.value);
+        else if (tok.key == "bundle.category")   m.bundle.category   = tok.value;
+        else if (tok.key == "bundle.copyright")  m.bundle.copyright  = tok.value;
+        else if (tok.key == "bundle.subsystem")  m.bundle.subsystem  = tok.value;
+        else if (tok.key == "bundle.min_system_version") m.bundle.minSystemVersion = tok.value;
+        else if (tok.key == "bundle.codesign_identity")  m.bundle.codesignIdentity = tok.value;
+        else if (tok.key == "bundle.depends")    m.bundle.depends    = splitList(tok.value);
+        else if (tok.key.rfind("bundle.", 0) == 0)
+            throw std::runtime_error(srcName + ": unknown key '" + tok.key.substr(7) + "' in [bundle]");
 
         // dependencies.*
         else if (tok.key == "dependencies.name")    curDep.name    = tok.value;
@@ -154,6 +203,12 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
         else if (tok.key == "dependencies.path")    curDep.path    = tok.value;
         else if (tok.key == "dependencies.lib")     curDep.libs     = splitList(tok.value);
         else if (tok.key == "dependencies.include") curDep.includes = splitList(tok.value);
+        else if (tok.key == "dependencies.build")   curDep.build    = tok.value;
+        else if (tok.key == "dependencies.sources") curDep.sources  = splitList(tok.value);
+        else if (tok.key == "dependencies.defines") curDep.defines  = splitList(tok.value);
+        else if (tok.key == "dependencies.cflags")  curDep.cflags   = splitList(tok.value);
+        else if (tok.key == "dependencies.cmake_args") curDep.cmakeArgs  = splitList(tok.value);
+        else if (tok.key == "dependencies.frameworks") curDep.frameworks = splitList(tok.value);
 
         // features.* — [features] table: name = ["dep1", "dep2", ...]
         else if (tok.key.rfind("features.", 0) == 0) {
@@ -184,6 +239,50 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
     if (!m.build.lto.empty() && m.build.lto != "thin" && m.build.lto != "full")
         throw std::runtime_error(srcName + ": build.lto must be \"thin\" or "
                                  "\"full\", got \"" + m.build.lto + "\"");
+
+    for (auto& d : m.dependencies) {
+        std::string where = srcName + ": dependency '" + d.name + "': ";
+        if (!d.build.empty() && d.build != "sources" && d.build != "cmake")
+            throw std::runtime_error(where + "build must be \"sources\" or \"cmake\", got \"" + d.build + "\"");
+        if (!d.build.empty() && d.path.empty() && d.version.empty())
+            throw std::runtime_error(where + "build = \"" + d.build + "\" needs a 'path' or a "
+                                     "'version' (git URL) naming the project to build");
+        if (d.build != "sources" && (!d.sources.empty() || !d.defines.empty() || !d.cflags.empty()))
+            throw std::runtime_error(where + "sources, defines and cflags need build = \"sources\""
+                                     + (d.build == "cmake" ? " (pass CMake settings in cmake_args)" : ""));
+        if (d.build != "cmake" && !d.cmakeArgs.empty())
+            throw std::runtime_error(where + "cmake_args needs build = \"cmake\"");
+        if (d.build == "sources" && !d.libs.empty())
+            throw std::runtime_error(where + "build = \"sources\" produces its own library; drop 'lib'");
+    }
+
+    if (m.bundle.present) {
+        if (m.bundle.identifier.empty())
+            throw std::runtime_error(srcName + ": [bundle] identifier is required "
+                                     "(a reverse-DNS name such as \"org.example." + m.package.name + "\")");
+        for (char c : m.bundle.identifier)
+            if (!std::isalnum((unsigned char)c) && c != '.' && c != '-')
+                throw std::runtime_error(srcName + ": bundle.identifier may only contain letters, "
+                                         "digits, '.' and '-', got \"" + m.bundle.identifier + "\"");
+        if (m.bundle.name.empty()) m.bundle.name = m.package.name;
+        if (m.bundle.version.empty()) m.bundle.version = m.package.version;
+        if (m.bundle.version.empty() || !std::isdigit((unsigned char)m.bundle.version[0]))
+            throw std::runtime_error(srcName + ": the bundle version must start with a digit "
+                                     "(e.g. \"1.2.0\"), got \"" + m.bundle.version + "\"");
+        if (m.bundle.subsystem.empty()) m.bundle.subsystem = "windows";
+        else if (m.bundle.subsystem != "windows" && m.bundle.subsystem != "console")
+            throw std::runtime_error(srcName + ": bundle.subsystem must be \"windows\" or "
+                                     "\"console\", got \"" + m.bundle.subsystem + "\"");
+        if (m.bundle.minSystemVersion.empty()) m.bundle.minSystemVersion = "11.0";
+        if (m.bundle.codesignIdentity.empty()) m.bundle.codesignIdentity = "-";
+        if (!m.bundle.icon.empty()) {
+            std::string ext = m.bundle.icon.substr(m.bundle.icon.find_last_of('.') == std::string::npos
+                                                   ? m.bundle.icon.size() : m.bundle.icon.find_last_of('.'));
+            if (ext != ".png" && ext != ".icns" && ext != ".ico")
+                throw std::runtime_error(srcName + ": bundle.icon must be a .png, .icns or .ico file, got \"" +
+                                         m.bundle.icon + "\"");
+        }
+    }
 
     return m;
 }
@@ -249,6 +348,16 @@ std::string ManifestParser::serialize(const Manifest& m) {
         o << "blas       = \"" << m.build.blas << "\"\n";
     if (!m.build.crateType.empty() && m.build.crateType != "bin")
         o << "crate_type = \"" << m.build.crateType << "\"\n";
+    if (!m.build.frameworks.empty()) {
+        o << "frameworks = [";
+        for (size_t i = 0; i < m.build.frameworks.size(); ++i)
+            o << (i ? ", " : "") << "\"" << m.build.frameworks[i] << "\"";
+        o << "]\n";
+    }
+    if (m.build.objcArc)
+        o << "objc_arc   = true\n";
+    if (m.build.useStd >= 0)
+        o << "std        = " << (m.build.useStd ? "true" : "false") << "\n";
 
     for (auto& d : m.dependencies) {
         o << "\n[[dependencies]]\n";
@@ -266,6 +375,13 @@ std::string ManifestParser::serialize(const Manifest& m) {
         };
         list("lib     = ", d.libs);
         list("include = ", d.includes);
+        if (!d.build.empty())
+            o << "build   = \"" << d.build << "\"\n";
+        list("sources = ", d.sources);
+        list("defines = ", d.defines);
+        list("cflags  = ", d.cflags);
+        list("cmake_args = ", d.cmakeArgs);
+        list("frameworks = ", d.frameworks);
     }
 
     if (!m.features.empty()) {

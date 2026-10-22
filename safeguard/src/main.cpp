@@ -15,13 +15,20 @@ static void usage() {
     std::cout << R"(Usage: safeguard <command> [options]
 
 Commands:
-  new   <name>  Create a new project directory with a skeleton
-  init  [name]  Initialise the current directory as a project
+  new   <name> [--lang L] [--std]  Create a new project directory with a skeleton
+  init  [name] [--lang L] [--std]  Initialise the current directory as a project
+                L: sc (SafeC, default), c, cpp, objc, objcpp — a package
+                with no SafeC in it (src/main.c, .cpp, .m or .mm)
+                --std: such a package builds and links SafeC's std too
+                ([build] std = true)
   fetch         Clone and build all [dependencies] from Package.toml
   build         Compile all sources in the current project
   check         Fast compile-only pass — reports errors without linking
   test          Build and run every file under tests/ as a standalone binary
   run   [args..]Build and immediately run the output binary
+  bundle        Build the bin target and package it per its [bundle] table:
+                build/<name>.app (macOS), build/<name>/ (Windows),
+                a .deb and build/<name>.AppDir (Linux)
   clean         Remove the build/ and deps/ directories
   verify-lock   Check Package.lock against current dependency state
   lint          Run static-analysis lint passes on all source files
@@ -38,9 +45,42 @@ Dependency format in Package.toml:
   name    = "mylib"
   lib     = ["vendor/libmylib.a"]             # .a / .so / .dylib / .lib
   include = ["vendor/include"]
+  # or a C/C++/ObjC project safeguard builds (into build/deps/<name>):
+  name       = "mylib"
+  path       = "../mylib"                      # or version = git URL
+  build      = "cmake"                         # configure, build, install
+  cmake_args = ["-DMYLIB_TESTS=OFF"]
+  # or: build = "sources", sources = ["src", "extra/*.c"],
+  #     defines = ["NDEBUG"], cflags = ["-fobjc-arc"], include = ["include"]
+  frameworks = ["Foundation"]                  # macOS frameworks it needs
   A directory (fetched or local) with src/ is a SafeC package built from
   source; one without is a prebuilt library directory: lib<name> (or every
-  library) in lib/, lib64/ or the directory itself, headers in include/.
+  library) in lib/, lib64/ or the directory itself, headers in include/
+  (on Windows, <name>.lib — a DLL's import library, the DLL beside it or
+  in ../bin/ is copied next to the program). SafeC calls C++ only through
+  extern "C" functions.
+
+[build] keys for C/C++/Objective-C:
+  frameworks = ["Cocoa"]     macOS frameworks to link (ignored elsewhere)
+  objc_arc   = true          compile .m/.mm with -fobjc-arc
+  std        = true          build and link SafeC's std (default: only
+                             when the package has SafeC); false: never
+  [build.macos] / [build.linux] / [build.windows]
+    cflags, libs, lib_dirs, frameworks — added only when building for that OS
+
+[bundle] format (for 'safeguard bundle'):
+  [bundle]
+  name       = "Hello"                 # default: package name
+  identifier = "org.example.hello"     # required
+  version    = "1.0.0"                 # default: package version
+  icon       = "assets/icon.png"       # .png (any OS), .icns, .ico
+  resources  = ["assets/data"]         # copied into the bundle
+  category   = "Utility"               # or "public.app-category.*"
+  copyright  = "(c) 2026 Example"
+  subsystem  = "windows"               # Windows: "windows" (GUI) / "console"
+  min_system_version = "11.0"          # macOS LSMinimumSystemVersion
+  codesign_identity  = "-"             # macOS: "-" ad-hoc, identity, "none"
+  depends    = ["libx11-6"]            # Linux: the .deb's Depends
 
 Options (build / run / check / test):
   --release     Enable optimisations (-O2)
@@ -62,6 +102,10 @@ Options (build / run / check / test):
                             become imports; std/wasm/wasm_rt supplies the
                             runtime).
                             'test' builds without running; 'run' is refused.
+
+Options (bundle):
+  --sign <identity>        macOS code-signing identity ("-" = ad-hoc,
+                            "none" = unsigned); overrides codesign_identity
 
 [features] format in Package.toml (Rust-Cargo-style; see advanced/safeguard
 docs for the full write-up):
@@ -88,6 +132,7 @@ Environment:
 
 Examples:
   safeguard new hello_world
+  safeguard new cfast --lang c
   cd hello_world && safeguard build
   safeguard check
   safeguard test
@@ -114,27 +159,38 @@ int main(int argc, char** argv) {
 
     std::string cmd = argv[1];
 
-    // ── new ───────────────────────────────────────────────────────────────────
-    if (cmd == "new") {
-        if (argc < 3) {
-            std::cerr << "safeguard: 'new' requires a project name\n";
-            return 1;
+    // ── new / init ────────────────────────────────────────────────────────────
+    if (cmd == "new" || cmd == "init") {
+        std::string name, lang = "sc";
+        bool withStd = false;
+        for (int i = 2; i < argc; ++i) {
+            std::string arg = argv[i];
+            if (arg == "--std") { withStd = true; continue; }
+            if (arg == "--lang") {
+                if (i + 1 >= argc) {
+                    std::cerr << "safeguard: --lang requires an argument\n";
+                    return 1;
+                }
+                lang = argv[++i];
+                continue;
+            }
+            if (arg.rfind("--lang=", 0) == 0) { lang = arg.substr(7); continue; }
+            if (arg.rfind("--", 0) == 0 || !name.empty()) {
+                std::cerr << "safeguard: unknown option '" << arg << "'\n";
+                return 1;
+            }
+            name = arg;
+        }
+        if (name.empty()) {
+            if (cmd == "new") {
+                std::cerr << "safeguard: 'new' requires a project name\n";
+                return 1;
+            }
+            name = fs::current_path().filename().string();
         }
         try {
-            safeguard::Project::createNew(argv[2]);
-        } catch (std::exception& e) {
-            std::cerr << "safeguard error: " << e.what() << "\n";
-            return 1;
-        }
-        return 0;
-    }
-
-    // ── init ──────────────────────────────────────────────────────────────────
-    if (cmd == "init") {
-        std::string name = (argc >= 3) ? argv[2]
-                                       : fs::current_path().filename().string();
-        try {
-            safeguard::Project::initHere(name);
+            if (cmd == "new") safeguard::Project::createNew(name, ".", lang, withStd);
+            else safeguard::Project::initHere(name, lang, withStd);
         } catch (std::exception& e) {
             std::cerr << "safeguard error: " << e.what() << "\n";
             return 1;
@@ -206,8 +262,9 @@ int main(int argc, char** argv) {
         }
     }
 
-    // ── build / check / test / run / clean ─────────────────────────────────────
-    if (cmd == "build" || cmd == "check" || cmd == "test" || cmd == "run" || cmd == "clean") {
+    // ── build / check / test / run / bundle / clean ───────────────────────────
+    if (cmd == "build" || cmd == "check" || cmd == "test" || cmd == "run" || cmd == "bundle" ||
+        cmd == "clean") {
         safeguard::BuildOptions opts;
         std::vector<std::string> runArgs;
         bool pastSep = false; // '--' separator for run args
@@ -229,6 +286,14 @@ int main(int argc, char** argv) {
                 continue;
             }
             if (arg.rfind("--target=", 0) == 0) { opts.target = arg.substr(9); continue; }
+            if (arg == "--sign" && cmd == "bundle") {
+                if (i + 1 >= argc) {
+                    std::cerr << "safeguard: --sign requires an identity (\"-\" for ad-hoc)\n";
+                    return 1;
+                }
+                opts.signIdentity = argv[++i];
+                continue;
+            }
             if (arg == "--features") {
                 if (i + 1 >= argc) {
                     std::cerr << "safeguard: --features requires an argument\n";
@@ -277,6 +342,9 @@ int main(int argc, char** argv) {
             }
             if (cmd == "test") {
                 return builder.test() ? 0 : 1;
+            }
+            if (cmd == "bundle") {
+                return builder.bundle() ? 0 : 1;
             }
             if (cmd == "run") {
                 int rc = builder.run(runArgs);

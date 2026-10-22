@@ -7,11 +7,15 @@
 namespace safeguard {
 
 // Source language, dispatched on file extension. SafeC compiles through
-// safec (.sc -> .ll -> .o); C and C++ compile straight to .o via clang /
-// clang++ — all three still land as ordinary object files, so they link
-// together into one binary using SafeC's C ABI compatibility with no
-// special glue needed.
-enum class SrcLang { SafeC, C, Cpp };
+// safec (.sc -> .ll -> .o); C, C++, Objective-C (.m) and Objective-C++
+// (.mm) compile straight to .o via clang / clang++ — all of them still land
+// as ordinary object files, so they link together into one binary using
+// SafeC's C ABI compatibility with no special glue needed.
+enum class SrcLang { SafeC, C, Cpp, ObjC, ObjCpp };
+// Compiled with clang++ / linked with the C++ runtime.
+inline bool isCxx(SrcLang l) { return l == SrcLang::Cpp || l == SrcLang::ObjCpp; }
+// Needs the Objective-C runtime (-lobjc); macOS only.
+inline bool isObjC(SrcLang l) { return l == SrcLang::ObjC || l == SrcLang::ObjCpp; }
 
 struct BuildOptions {
     bool   release = false;       // enable optimisations (-O2)
@@ -33,6 +37,13 @@ struct BuildOptions {
     // --target <alias|triple>: cross-compile (a bare-metal alias from
     // 'safec --list-targets', or any LLVM triple). Empty = host.
     std::string target;
+
+    // Set by 'safeguard bundle': the executable is linked for its app
+    // bundle (rpath to the bundled libraries; on Windows the GUI subsystem
+    // and the icon/version/manifest resource). 'signIdentity' (--sign)
+    // overrides [bundle] codesign_identity.
+    bool bundle = false;
+    std::string signIdentity;
 };
 
 class Builder {
@@ -64,6 +75,11 @@ public:
     // trivially-passing state rather than a failure).
     bool test();
 
+    // Build the bin target for its [bundle] and package it: build/<name>.app
+    // on macOS, build/<name>/ (exe, DLLs, resources) on Windows, and a .deb
+    // plus build/<name>.AppDir on Linux. Returns true on success.
+    bool bundle();
+
     // Build then execute the output binary.
     // Returns the exit code of the child process, or -1 on build failure.
     int run(const std::vector<std::string>& args = {});
@@ -73,6 +89,16 @@ public:
 
     // Return path to the compiled binary (valid after a successful build()).
     std::string outputPath() const;
+    // build/include: the headers a library build exports beside its
+    // build/lib<output>.a/.so/.dylib, so build/ can be consumed as a
+    // prebuilt dependency (its include/ and its library).
+    std::string exportedIncludeDir() const;
+    // A source's key for names under build/ and Package.lock (see Builder.cpp).
+    std::string sourceKey(const std::string& src) const;
+    std::string flatBuildName(const std::string& src) const;
+    // Windows cdylib: build/<output>.lib, the import library dependents
+    // link against (the DLL's exports are listed in build/<output>.def).
+    std::string importLibPath() const;
 
     // Check Package.lock against current state.
     // Prints warnings for mismatches; returns false if any dep SHA differs.
@@ -137,9 +163,16 @@ public:
     struct DepLayout {
         std::string dir;                          // its directory ("" for lib-only)
         bool fromSource = false;                  // built from <dir>/src
+        bool native = false;                      // build = "sources"/"cmake" (buildNativeDep)
+        bool cxx = false;                         // brings C++ in: link with clang++
+        std::string outDir;                       // native: build/deps/<name>
         std::vector<std::string> safecIncludes;   // include dirs for SafeC sources
         std::vector<std::string> foreignIncludes; // include dirs for C/C++ sources
-        std::vector<std::string> linkInputs;      // library files and rpath flags
+        std::vector<std::string> linkInputs;      // library files and link flags (rpath,
+                                                  // -lobjc, -Wl,-framework,<name>)
+        std::vector<std::string> runtimeLibs;     // shared libraries a program loads at
+                                                  // run time (.dll copied beside it on
+                                                  // Windows; bundled by 'bundle')
         std::string error;                        // why it can't be used, if so
     };
     DepLayout depLayout(const Dependency& dep) const;
@@ -161,6 +194,22 @@ private:
     bool isCrossTarget() const { return !opts_.target.empty(); }
     std::string targetTriple() const;
     std::string targetDirName() const { return opts_.target.empty() ? "host" : opts_.target; }
+    // "macos", "linux" or "windows" for the --target (the host without
+    // one), "" for bare metal or anything else; picks [build.<os>].
+    std::string targetOS() const;
+    bool targetIsWindows() const { return targetOS() == "windows"; }
+    // The C runtime every object and the link use: on Windows (MSVC ABI)
+    // the shared one (msvcrt / ucrtbase DLLs, clang's -fms-runtime-lib=dll,
+    // /MD), so a cdylib and the program that loads it share one heap and
+    // memory may cross the DLL boundary. Empty elsewhere.
+    std::vector<std::string> runtimeFlags() const;
+    // ... and at the link: clang's driver names libcmt (the static CRT)
+    // whatever the objects ask for, so the link swaps it for msvcrt.
+    std::vector<std::string> runtimeLinkFlags() const;
+    void stdForeignInclude(std::vector<std::string>& foreignIncs, const std::string& stdDir) const;
+    const PlatformBuildConfig* platformBuild() const;
+    // [build] cflags followed by [build.<os>] cflags.
+    std::vector<std::string> compileFlags() const;
     // libc-named functions (malloc, free, ...) the project itself defines —
     // passed to safec as --provides on bare-metal builds so calls to them
     // aren't flagged as needing a hosted runtime.
@@ -263,13 +312,15 @@ private:
                          const std::string& buildDir,
                          bool suppressOutput = false) const;
 
-    // Compile a .c/.cpp/.cc/.cxx file straight to a .o with clang/clang++.
-    // Returns the .o path, or "" on failure.
+    // Compile a .c/.cpp/.cc/.cxx/.m/.mm file straight to a .o with
+    // clang/clang++. 'flags' replaces the project's cflags (a built
+    // dependency's own defines/cflags). Returns the .o path, or "" on failure.
     std::string compileForeign(const std::string& srcPath,
                                 const std::string& buildDir,
                                 const std::vector<std::string>& includeDirs,
                                 SrcLang lang,
-                                bool suppressOutput = false) const;
+                                bool suppressOutput = false,
+                                const std::vector<std::string>* flags = nullptr) const;
 
     // Pack .o files into a static archive with ar.  Returns true on success.
     bool packArchive(const std::vector<std::string>& objFiles,
@@ -280,22 +331,61 @@ private:
     // the C++ runtime (libc++/libstdc++, exceptions, RTTI) links in; plain
     // clang otherwise. Also applies manifest_.build.libs/libDirs/lto
     // (-l/-L/-flto). 'shared' produces a dynamic library (-shared) instead
-    // of an executable, for build.crate_type = "cdylib". Returns true on
-    // success.
+    // of an executable, for build.crate_type = "cdylib". 'objc' links the
+    // Objective-C runtime; [build] frameworks are passed on macOS.
+    // 'extraFlags' go last (a cdylib's export list, a bundle's link flags).
+    // Returns true on success.
     // Link flags for the CPU BLAS std's sgemm picks up (see [build] blas).
     std::vector<std::string> blasLinkFlags() const;
     bool linkFinal(const std::vector<std::string>& objFiles,
                     const std::vector<std::string>& archives,
                     const std::string& output,
                     bool useCxxDriver = false,
-                    bool shared = false) const;
+                    bool shared = false,
+                    bool objc = false,
+                    const std::vector<std::string>& extraFlags = {}) const;
 
     // Fork + exec a command, wait for it, return exit code.
     // 'suppressOutput': when true and 'verbose' is false, discard the
     // child's stdout/stderr instead of letting it print — see the call
     // site comment in runCmd's definition for why this exists.
+    // 'stdoutPath': write the child's stdout to that file instead.
     static int runCmd(const std::vector<std::string>& argv, bool verbose,
-                       bool suppressOutput = false);
+                       bool suppressOutput = false, const std::string& stdoutPath = "");
+    // Run a command, returning its stdout in 'out'; false if it failed.
+    static bool captureCmd(const std::vector<std::string>& argv, std::string& out,
+                           bool verbose = false);
+
+    // An LLVM tool (llvm-nm, llvm-rc, ...): beside the LLVM clang findClang()
+    // picks, beside the clang on PATH, else the bare name.
+    std::string findLlvmTool(const std::string& name) const;
+
+    // Windows cdylib: write build/<output>.def exporting the external
+    // functions defined in the package's own objects (not std's or a
+    // dependency's). Returns the .def path, "" if none, or "!" on error.
+    std::string writeExportsDef(const std::vector<std::string>& objFiles) const;
+
+    // Build a 'build = "sources"/"cmake"' dependency into l.outDir, unless
+    // it is up to date. Returns true on success.
+    bool buildNativeDep(const Dependency& dep, const DepLayout& l) const;
+
+    // What the dependencies contribute beyond their libraries: whether one
+    // needs the C++ link driver, and their run-time shared libraries.
+    bool depsNeedCxx() const;
+    std::vector<std::string> depRuntimeLibs() const;
+    // Windows: copy the dependencies' DLLs into 'dir' (beside an exe or
+    // DLL just linked there), the way an rpath finds them elsewhere.
+    bool copyRuntimeLibs(const std::string& dir) const;
+
+    // ── bundle ───────────────────────────────────────────────────────────────
+    // Link flags the executable needs for its bundle (see BuildOptions::bundle).
+    bool bundleLinkFlags(std::vector<std::string>& out) const;
+    // Windows: write the .rc (icon, version info, application manifest)
+    // under build/bundle/ and compile it to a .res; "" on failure.
+    std::string windowsResource() const;
+    bool bundleMacOS() const;
+    bool bundleWindows() const;
+    bool bundleLinux() const;
 
     // A dependency's directory: <root>/deps/<name> for a git URL, 'path'
     // (against the project root) for a local one, "" for a lib-only entry.
