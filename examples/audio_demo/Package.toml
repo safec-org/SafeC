@@ -1,0 +1,13 @@
+[package]
+name        = "audio_demo"
+version     = "1.0.0"
+author      = "SafeC <safec@example.org>"
+description = "std/audio: list audio devices and MIDI ports, play a sine, monitor MIDI input"
+license     = "MIT"
+
+[build]
+edition = "2026"
+
+# No libraries to list: std/audio's backends for the target bring what they
+# need (CoreAudio/CoreMIDI frameworks, ole32/winmm; ALSA and JACK are
+# loaded at run time), see 'safeguard std-modules std/audio/audio.h'.

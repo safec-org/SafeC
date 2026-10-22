@@ -1,0 +1,83 @@
+// std::scx + safeguard's scx transpiler: void and empty elements, SVG
+// self-closing, <!doctype>/comments, raw <script>/<style>, fragments,
+// markup as an initializer / assignment, and quoted includes relative to
+// the .scx file.
+#include <std/test/test.h>
+#include <std/collections/string.h>
+#include "../fixtures/scx_fixture.h"
+
+struct Holder { struct String s; };
+
+static struct String empty_and_void() {
+    return <div><span class="x"></span><br/><img src="a.png"/><meta charset="utf-8"/><script src="app.js"></script></div>;
+}
+
+static struct String svg_icon() {
+    return <svg viewBox="0 0 2 2"><path d="M0 0"/><g></g></svg>;
+}
+
+static struct String doc(const char* title) {
+    return <!doctype html>
+    <html><head><title>{title}</title><style>body { color: red; }</style></head>
+    <!-- a comment -->
+    <body><script>if (a < b) { go({x: 1}); }</script></body></html>;
+}
+
+static struct String fragment() {
+    return <li>a</li>
+    <li>b</li>;
+}
+
+static struct String initializer(const char* name) {
+    struct String s = <p class="who">{name}</p>;
+    s.push("!");
+    return s;
+}
+
+static void assign(&Holder h, int flag) {
+    if (flag) h.s = <b>{SCX_FIXTURE_TITLE}</b>;
+}
+
+void t_elements() {
+    struct String a = empty_and_void();
+    ASSERT_STR_EQ(a.as_ptr(), "<div><span class=\"x\"></span><br><img src=\"a.png\"><meta charset=\"utf-8\"><script src=\"app.js\"></script></div>");
+    struct String b = svg_icon();
+    ASSERT_STR_EQ(b.as_ptr(), "<svg viewBox=\"0 0 2 2\"><path d=\"M0 0\"/><g/></svg>");
+    a.free(); b.free();
+}
+
+void t_doc() {
+    struct String d = doc("T<1>");
+    ASSERT_TRUE(d.starts_with("<!doctype html>\n<html><head><title>T&lt;1&gt;</title>"));
+    ASSERT_TRUE(d.contains("<style>body { color: red; }</style>"));
+    ASSERT_TRUE(d.contains("<!-- a comment -->"));
+    ASSERT_TRUE(d.contains("<script>if (a < b) { go({x: 1}); }</script>"));
+    struct String f = fragment();
+    ASSERT_STR_EQ(f.as_ptr(), "<li>a</li>\n<li>b</li>");
+    d.free(); f.free();
+}
+
+void t_expressions() {
+    struct String s = initializer("Ada");
+    ASSERT_STR_EQ(s.as_ptr(), "<p class=\"who\">Ada</p>!");
+    struct Holder h;
+    h.s = String::from("unset");
+    assign(&h, 0);
+    ASSERT_STR_EQ(h.s.as_ptr(), "unset");
+    h.s.free();
+    assign(&h, 1);
+    ASSERT_STR_EQ(h.s.as_ptr(), "<b>fixture</b>");
+    s.free(); h.s.free();
+}
+
+int main() {
+    struct TestSuite t = TestSuite::new();
+    unsafe {
+        t.add("elements", t_elements);
+        t.add("doctype/raw text/fragments", t_doc);
+        t.add("initializer/assignment", t_expressions);
+    }
+    t.run();
+    t.print_summary();
+    return t.all_passed() ? 0 : 1;
+}
