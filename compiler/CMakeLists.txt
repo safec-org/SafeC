@@ -42,6 +42,9 @@ set(SAFEC_SOURCES
 
 add_executable(safec ${SAFEC_SOURCES})
 target_compile_definitions(safec PRIVATE SAFEC_VERSION="${PROJECT_VERSION}")
+# The LLVM install safec is built against: its clang reads the IR safec
+# emits (an older clang rejects newer IR, e.g. 'getelementptr ... nuw').
+target_compile_definitions(safec PRIVATE SAFEC_LLVM_BINDIR="${LLVM_TOOLS_BINARY_DIR}")
 
 # ── Compile options ───────────────────────────────────────────────────────────
 if(MSVC)

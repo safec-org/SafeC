@@ -395,6 +395,25 @@ static void optimizeModule(llvm::Module &mod, llvm::TargetMachine *tm,
 // mirroring safeguard's SAFEC_CLANG/SAFEC_CLANGXX env vars.
 static std::string findTool(const char *envVar, const char *name) {
     if (const char *e = std::getenv(envVar); e && *e) return e;
+    // clang reads safec's IR, so it must be at least as new as the LLVM safec
+    // was built with: that LLVM's own clang first (Homebrew's llvm/bin, apt's
+    // /usr/lib/llvm-<N>/bin), then 'clang-<N>' on PATH, before whatever
+    // older 'clang' the system has.
+    bool isClang = std::strcmp(name, "clang") == 0 || std::strcmp(name, "clang++") == 0;
+#ifdef SAFEC_LLVM_BINDIR
+    if (isClang) {
+        llvm::SmallString<256> p(SAFEC_LLVM_BINDIR);
+        llvm::sys::path::append(p, name);
+#ifdef _WIN32
+        p += ".exe";
+#endif
+        if (llvm::sys::fs::exists(p)) return std::string(p);
+    }
+#endif
+    if (isClang) {
+        std::string versioned = std::string(name) + "-" + std::to_string(LLVM_VERSION_MAJOR);
+        if (auto found = llvm::sys::findProgramByName(versioned)) return *found;
+    }
     static const char *kPrefixes[] = {
         "/opt/homebrew/opt/llvm/bin",  // Homebrew, Apple Silicon
         "/usr/local/opt/llvm/bin",     // Homebrew, Intel
@@ -1026,6 +1045,12 @@ int main(int argc, char **argv) {
     // (also needs no input file, so it's scanned before option parsing).
     // '--list-targets' prints the bare-metal aliases.
     for (int i = 1; i < argc; ++i) {
+        // '--print-clang': the clang safec hands its IR to (see findTool), so
+        // safeguard compiles safec's output with the same one.
+        if (std::strcmp(argv[i], "--print-clang") == 0) {
+            fprintf(stdout, "%s\n", findTool("SAFEC_CLANG", "clang").c_str());
+            return 0;
+        }
         if (std::strcmp(argv[i], "--list-targets") == 0) {
             for (auto &t : bareMetalTargets())
                 fprintf(stdout, "%-8s %s%s%s\n", t.alias, t.triple,
