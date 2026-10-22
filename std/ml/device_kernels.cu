@@ -401,12 +401,33 @@ extern "C" __global__ void dk_scatter_rows(DevArgs a) {
     GS(i, N) { unsigned int r = i / D, c = i % D; atomicAdd(&FA(2)[(unsigned int)CF(1)[r] * D + c], CF(0)[i]); }
 }
 
+// ── Attention masks (attention.h) ────────────────────────────────────────────
+// Query row i sits at position pos = i + (keys - queries); flags bit 0
+// (causal) hides keys j > pos, bit 1 (a sliding window of w) keys j <= pos - w.
+__device__ __forceinline__ bool attn_vis(unsigned int flags, unsigned int w, int pos, int j) {
+    if ((flags & 1u) && j > pos) return false;
+    if ((flags & 2u) && j <= pos - (int)w) return false;
+    return true;
+}
+
 // ── Softmax family: one thread per row, u0 = cols ────────────────────────────
-// u1: 0 softmax, 1 log-softmax
+// u1: 0 softmax, 1 log-softmax. A masked softmax (u1 = 0): u2 = mask flags,
+// u3 = window, u4 = (int) keys - queries; hidden entries and rows with no
+// visible key come out 0.
 extern "C" __global__ void dk_softmax_rows(DevArgs a) {
     unsigned int C = a.u[0];
     GS(r, N) {
         TP x = CF(0) + r * C; TP o = F(1) + r * C;
+        if (a.u[2]) {
+            int pos = (int)r + (int)a.u[4];
+            float mx = -3.0e38f;
+            for (unsigned int c = 0; c < C; c++) if (attn_vis(a.u[2], a.u[3], pos, (int)c)) mx = fmaxf(mx, x[c]);
+            float s = 0.0f;
+            for (unsigned int c = 0; c < C; c++) if (attn_vis(a.u[2], a.u[3], pos, (int)c)) s += expf(x[c] - mx);
+            float inv = s > 0.0f ? 1.0f / s : 0.0f;
+            for (unsigned int c = 0; c < C; c++) o[c] = attn_vis(a.u[2], a.u[3], pos, (int)c) ? expf(x[c] - mx) * inv : 0.0f;
+            continue;
+        }
         float mx = x[0]; for (unsigned int c = 1; c < C; c++) mx = fmaxf(mx, x[c]);
         float s = 0.0f; for (unsigned int c = 0; c < C; c++) s += expf(x[c] - mx);
         if (a.u[1]) { float l = mx + logf(s); for (unsigned int c = 0; c < C; c++) o[c] = x[c] - l; }
@@ -426,6 +447,257 @@ extern "C" __global__ void dk_softmax_bwd(DevArgs a) {
             float s = 0.0f; for (unsigned int c = 0; c < C; c++) s += g[c] * y[c];
             for (unsigned int c = 0; c < C; c++) dx[c] += y[c] * (g[c] - s);
         }
+    }
+}
+
+// ── Transpose ────────────────────────────────────────────────────────────────
+// out [C, R] = in [R, C]^T, or with u2 = 1 out += it (u6 = 1: write); u0 = R,
+// u1 = C                                                       n = R*C
+extern "C" __global__ void dk_transpose(DevArgs a) {
+    unsigned int R = a.u[0], C = a.u[1];
+    GS(i, N) {
+        unsigned int r = i / C, c = i % C;
+        float v = CF(0)[i];
+        if (a.u[2]) ACCUM(F(1)[c * R + r], v); else F(1)[c * R + r] = v;
+    }
+}
+
+// ── Fused multi-head attention (attention.h) ─────────────────────────────────
+// q [S, H*D], k [L, H*D], v [L, H*E], out [S, H*E] (head h is columns
+// [h*D, (h+1)*D) of each row): out = softmax(scale q k^T, masked) v per head
+// without forming the score matrix -- FlashAttention-2's tiling (Dao 2023):
+// a block of 256 threads takes one head's tile of 16 rows and walks the
+// other side in tiles of 16 through shared memory, 16 x 16 scores at a time,
+// with an online softmax; the row's log-sum-exp is kept for the backward
+// pass, which recomputes the scores from it. Thread t works on row t / 16
+// of its tile and, across the head's columns, on every 16th one from t % 16
+// (D, E <= ATTN_MAXD). Tiles a causal or windowed mask hides entirely are
+// skipped. Arguments shared by the three kernels: u0 = S, u1 = L, u2 = H,
+// u3 = D, u4 = E, u5 = flags (bits 0-1 the mask, as attn_vis; bits 2-4: dq,
+// dk, dv are unwritten zero gradients: write them), u6 = window, f0 = scale;
+// p4 = lse [H*S] (fp32), p5 = dout, p7 = D [H*S] (fp32, rowsum(dout * out),
+// written by dk_attn_bwd_q for dk_attn_bwd_kv). Launched over
+// 256 * H * ceil(rows / 16) threads (rows: S, or L for dk_attn_bwd_kv).
+#define ATTN_MAXD 128
+#define ATTN_T 16
+#define ATTN_LD (ATTN_MAXD + 1)
+#define ATTN_PER (ATTN_MAXD / ATTN_T)
+#define ATTN_HID (-3.0e38f)
+// The key range a tile of rows [i0, i0 + 16) can see: [lo, hi).
+__device__ __forceinline__ void attn_range(const DevArgs& a, unsigned int i0, int& lo, int& hi) {
+    int off = (int)a.u[1] - (int)a.u[0];
+    lo = 0; hi = (int)a.u[1];
+    if (a.u[5] & 1u) { int m = (int)i0 + ATTN_T - 1 + off + 1; if (m < hi) hi = m; }
+    if (a.u[5] & 2u) { int m = (int)i0 + off - (int)a.u[6] + 1; if (m > lo) lo = m; }
+    if (lo < 0) lo = 0;
+}
+// rows [r0, r0 + 16) of a [rows, H*W] tensor's head h -> sh [16][ATTN_LD] (0 past the end)
+__device__ __forceinline__ void attn_load(TP x, float* sh, unsigned int r0, unsigned int rows, unsigned int H,
+                                          unsigned int h, unsigned int W) {
+    for (unsigned int k = threadIdx.x; k < ATTN_T * W; k += blockDim.x) {
+        unsigned int r = k / W, c = k % W;
+        sh[r * ATTN_LD + c] = r0 + r < rows ? (float)x[((r0 + r) * H + h) * W + c] : 0.0f;
+    }
+}
+// p0 q, p1 k, p2 v, p3 out, p4 lse (written)
+extern "C" __global__ void dk_attn_fwd(DevArgs a) {
+    __shared__ float Qs[ATTN_T * ATTN_LD], Ks[ATTN_T * ATTN_LD], Vs[ATTN_T * ATTN_LD], Ps[ATTN_T * (ATTN_T + 1)];
+    unsigned int S = a.u[0], L = a.u[1], H = a.u[2], D = a.u[3], E = a.u[4], fl = a.u[5] & 3u;
+    int off = (int)L - (int)S;
+    unsigned int tiles = (S + ATTN_T - 1) / ATTN_T;
+    unsigned int r = threadIdx.x / ATTN_T, ln = threadIdx.x % ATTN_T;
+    for (unsigned int u = blockIdx.x; u < H * tiles; u += gridDim.x) {
+        unsigned int h = u / tiles, i0 = (u % tiles) * ATTN_T, i = i0 + r;
+        attn_load(CF(0), Qs, i0, S, H, h, D);
+        float acc[ATTN_PER];
+        for (unsigned int t = 0; t < ATTN_PER; t++) acc[t] = 0.0f;
+        float m = ATTN_HID, l = 0.0f;
+        int lo, hi;
+        attn_range(a, i0, lo, hi);
+        for (int j0 = (lo / ATTN_T) * ATTN_T; j0 < hi; j0 += ATTN_T) {
+            __syncthreads();
+            attn_load(CF(1), Ks, (unsigned int)j0, L, H, h, D);
+            attn_load(CF(2), Vs, (unsigned int)j0, L, H, h, E);
+            __syncthreads();
+            unsigned int j = (unsigned int)j0 + ln;
+            float sc = ATTN_HID;
+            if (i < S && j < L && attn_vis(fl, a.u[6], (int)i + off, (int)j)) {
+                float s = 0.0f;
+                for (unsigned int d = 0; d < D; d++) s += Qs[r * ATTN_LD + d] * Ks[ln * ATTN_LD + d];
+                sc = s * a.f[0];
+            }
+            Ps[r * (ATTN_T + 1) + ln] = sc;
+            __syncthreads();
+            float mt = ATTN_HID;
+            for (unsigned int c = 0; c < ATTN_T; c++) mt = fmaxf(mt, Ps[r * (ATTN_T + 1) + c]);
+            if (mt > ATTN_HID) {
+                float mn = fmaxf(m, mt), cr = expf(m - mn);
+                float pv[ATTN_T], ps = 0.0f;
+                for (unsigned int c = 0; c < ATTN_T; c++) {
+                    float sv = Ps[r * (ATTN_T + 1) + c];
+                    pv[c] = sv > ATTN_HID ? expf(sv - mn) : 0.0f;
+                    ps += pv[c];
+                }
+                l = l * cr + ps;
+                for (unsigned int t = 0; t < ATTN_PER; t++) {
+                    unsigned int e = ln + t * ATTN_T;
+                    if (e < E) {
+                        float x = acc[t] * cr;
+                        for (unsigned int c = 0; c < ATTN_T; c++) x += pv[c] * Vs[c * ATTN_LD + e];
+                        acc[t] = x;
+                    }
+                }
+                m = mn;
+            }
+        }
+        if (i < S) {
+            float inv = l > 0.0f ? 1.0f / l : 0.0f;
+            TP o = F(3) + (i * H + h) * E;
+            for (unsigned int t = 0; t < ATTN_PER; t++) { unsigned int e = ln + t * ATTN_T; if (e < E) o[e] = acc[t] * inv; }
+            if (ln == 0) FA(4)[h * S + i] = l > 0.0f ? m + logf(l) : 3.0e38f;   // no visible key: every p is 0
+        }
+        __syncthreads();
+    }
+}
+// p0 q, p1 k, p2 v, p3 out, p6 dq (+)= scale * sum_j ds_ij k_j (0: none),
+// ds_ij = p_ij (dout_i . v_j - D_i)
+extern "C" __global__ void dk_attn_bwd_q(DevArgs a) {
+    __shared__ float Qs[ATTN_T * ATTN_LD], Gs[ATTN_T * ATTN_LD], Ks[ATTN_T * ATTN_LD], Vs[ATTN_T * ATTN_LD];
+    __shared__ float Ds[ATTN_T * (ATTN_T + 1)], Rd[ATTN_T], Rl[ATTN_T];
+    unsigned int S = a.u[0], L = a.u[1], H = a.u[2], D = a.u[3], E = a.u[4], fl = a.u[5] & 3u;
+    int off = (int)L - (int)S;
+    unsigned int tiles = (S + ATTN_T - 1) / ATTN_T;
+    unsigned int r = threadIdx.x / ATTN_T, ln = threadIdx.x % ATTN_T;
+    for (unsigned int u = blockIdx.x; u < H * tiles; u += gridDim.x) {
+        unsigned int h = u / tiles, i0 = (u % tiles) * ATTN_T, i = i0 + r;
+        attn_load(CF(5), Gs, i0, S, H, h, E);
+        attn_load(CF(3), Ks, i0, S, H, h, E);   // the output rows, for D (Ks is free until the key tiles)
+        __syncthreads();
+        float part = 0.0f;
+        for (unsigned int e = ln; e < E; e += ATTN_T) part += Gs[r * ATTN_LD + e] * Ks[r * ATTN_LD + e];
+        Ds[r * (ATTN_T + 1) + ln] = part;
+        __syncthreads();
+        if (ln == 0) {
+            float Di = 0.0f;
+            for (unsigned int c = 0; c < ATTN_T; c++) Di += Ds[r * (ATTN_T + 1) + c];
+            Rd[r] = Di;
+            Rl[r] = i < S ? FA(4)[h * S + i] : 0.0f;
+            if (i < S) FA(7)[h * S + i] = Di;
+        }
+        if (!a.p[6]) { __syncthreads(); continue; }
+        attn_load(CF(0), Qs, i0, S, H, h, D);
+        float dq[ATTN_PER];
+        for (unsigned int t = 0; t < ATTN_PER; t++) dq[t] = 0.0f;
+        int lo, hi;
+        attn_range(a, i0, lo, hi);
+        for (int j0 = (lo / ATTN_T) * ATTN_T; j0 < hi; j0 += ATTN_T) {
+            __syncthreads();
+            attn_load(CF(1), Ks, (unsigned int)j0, L, H, h, D);
+            attn_load(CF(2), Vs, (unsigned int)j0, L, H, h, E);
+            __syncthreads();
+            unsigned int j = (unsigned int)j0 + ln;
+            float ds = 0.0f;
+            if (i < S && j < L && attn_vis(fl, a.u[6], (int)i + off, (int)j)) {
+                float s = 0.0f, dp = 0.0f;
+                for (unsigned int d = 0; d < D; d++) s += Qs[r * ATTN_LD + d] * Ks[ln * ATTN_LD + d];
+                for (unsigned int e = 0; e < E; e++) dp += Gs[r * ATTN_LD + e] * Vs[ln * ATTN_LD + e];
+                ds = expf(s * a.f[0] - Rl[r]) * (dp - Rd[r]);
+            }
+            Ds[r * (ATTN_T + 1) + ln] = ds;
+            __syncthreads();
+            for (unsigned int t = 0; t < ATTN_PER; t++) {
+                unsigned int d = ln + t * ATTN_T;
+                if (d < D) {
+                    float x = dq[t];
+                    for (unsigned int c = 0; c < ATTN_T; c++) x += Ds[r * (ATTN_T + 1) + c] * Ks[c * ATTN_LD + d];
+                    dq[t] = x;
+                }
+            }
+        }
+        if (i < S) {
+            TP o = F(6) + (i * H + h) * D;
+            for (unsigned int t = 0; t < ATTN_PER; t++) {
+                unsigned int d = ln + t * ATTN_T;
+                if (d < D) { if (a.u[5] & 4u) o[d] = a.f[0] * dq[t]; else o[d] += a.f[0] * dq[t]; }
+            }
+        }
+        __syncthreads();
+    }
+}
+// p0 q, p1 k, p2 v, p3 dk (+)= scale * sum_i ds_ij q_i, p6 dv (+)= sum_i p_ij
+// dout_i (either 0: none); after dk_attn_bwd_q. A block takes 16 keys.
+extern "C" __global__ void dk_attn_bwd_kv(DevArgs a) {
+    __shared__ float Ks[ATTN_T * ATTN_LD], Vs[ATTN_T * ATTN_LD], Qs[ATTN_T * ATTN_LD], Gs[ATTN_T * ATTN_LD];
+    __shared__ float Ps[ATTN_T * (ATTN_T + 1)], Ds[ATTN_T * (ATTN_T + 1)], Rd[ATTN_T], Rl[ATTN_T];
+    unsigned int S = a.u[0], L = a.u[1], H = a.u[2], D = a.u[3], E = a.u[4], fl = a.u[5] & 3u;
+    int off = (int)L - (int)S;
+    unsigned int tiles = (L + ATTN_T - 1) / ATTN_T;
+    unsigned int r = threadIdx.x / ATTN_T, ln = threadIdx.x % ATTN_T;
+    for (unsigned int u = blockIdx.x; u < H * tiles; u += gridDim.x) {
+        unsigned int h = u / tiles, j0 = (u % tiles) * ATTN_T, j = j0 + r;
+        attn_load(CF(1), Ks, j0, L, H, h, D);
+        attn_load(CF(2), Vs, j0, L, H, h, E);
+        float dk[ATTN_PER], dv[ATTN_PER];
+        for (unsigned int t = 0; t < ATTN_PER; t++) { dk[t] = 0.0f; dv[t] = 0.0f; }
+        // the queries that can see keys [j0, j0 + 16): [qlo, qhi)
+        int qlo = 0, qhi = (int)S;
+        if (fl & 1u) { int m2 = (int)j0 - off; if (m2 > qlo) qlo = m2; }
+        if (fl & 2u) { int m2 = (int)j0 + ATTN_T - 1 - off + (int)a.u[6]; if (m2 < qhi) qhi = m2; }
+        if (qlo < 0) qlo = 0;
+        for (int i0 = (qlo / ATTN_T) * ATTN_T; i0 < qhi; i0 += ATTN_T) {
+            __syncthreads();
+            attn_load(CF(0), Qs, (unsigned int)i0, S, H, h, D);
+            attn_load(CF(5), Gs, (unsigned int)i0, S, H, h, E);
+            if (threadIdx.x < ATTN_T) {
+                unsigned int i = (unsigned int)i0 + threadIdx.x;
+                Rl[threadIdx.x] = i < S ? FA(4)[h * S + i] : 0.0f;
+                Rd[threadIdx.x] = i < S ? FA(7)[h * S + i] : 0.0f;
+            }
+            __syncthreads();
+            // thread (key r, query ln)
+            unsigned int i = (unsigned int)i0 + ln;
+            float p = 0.0f, ds = 0.0f;
+            if (i < S && j < L && attn_vis(fl, a.u[6], (int)i + off, (int)j)) {
+                float s = 0.0f, dp = 0.0f;
+                for (unsigned int d = 0; d < D; d++) s += Qs[ln * ATTN_LD + d] * Ks[r * ATTN_LD + d];
+                for (unsigned int e = 0; e < E; e++) dp += Gs[ln * ATTN_LD + e] * Vs[r * ATTN_LD + e];
+                p = expf(s * a.f[0] - Rl[ln]);
+                ds = p * (dp - Rd[ln]);
+            }
+            Ps[r * (ATTN_T + 1) + ln] = p;
+            Ds[r * (ATTN_T + 1) + ln] = ds;
+            __syncthreads();
+            for (unsigned int t = 0; t < ATTN_PER; t++) {
+                unsigned int d = ln + t * ATTN_T;
+                if (d < E) {
+                    float x = dv[t];
+                    for (unsigned int c = 0; c < ATTN_T; c++) x += Ps[r * (ATTN_T + 1) + c] * Gs[c * ATTN_LD + d];
+                    dv[t] = x;
+                }
+                if (d < D) {
+                    float x = dk[t];
+                    for (unsigned int c = 0; c < ATTN_T; c++) x += Ds[r * (ATTN_T + 1) + c] * Qs[c * ATTN_LD + d];
+                    dk[t] = x;
+                }
+            }
+        }
+        if (j < L) {
+            if (a.p[3]) {
+                TP o = F(3) + (j * H + h) * D;
+                for (unsigned int t = 0; t < ATTN_PER; t++) {
+                    unsigned int d = ln + t * ATTN_T;
+                    if (d < D) { if (a.u[5] & 8u) o[d] = a.f[0] * dk[t]; else o[d] += a.f[0] * dk[t]; }
+                }
+            }
+            if (a.p[6]) {
+                TP o = F(6) + (j * H + h) * E;
+                for (unsigned int t = 0; t < ATTN_PER; t++) {
+                    unsigned int e = ln + t * ATTN_T;
+                    if (e < E) { if (a.u[5] & 16u) o[e] = dv[t]; else o[e] += dv[t]; }
+                }
+            }
+        }
+        __syncthreads();
     }
 }
 

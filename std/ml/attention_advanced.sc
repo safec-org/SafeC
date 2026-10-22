@@ -13,10 +13,7 @@ extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
 // ── MLA / EG-MLA ─────────────────────────────────────────────────────────────
-static void aa_drop_(&FloatTensor t) {
-    t->free();
-    unsafe { free((void*)t); }
-}
+static void aa_drop_(&FloatTensor t) { attn_release_(t); }
 
 struct Mla Mla::new(unsigned long dModel, unsigned long dLatent, unsigned long numHeads, &Rng rng) {
     if (numHeads == 0UL || dModel % numHeads != 0UL) panic_at("Mla::new: numHeads must divide dModel", "attention_advanced.sc", __LINE__);
@@ -35,7 +32,7 @@ struct Mla Mla::new(unsigned long dModel, unsigned long dLatent, unsigned long n
     &FloatTensor K = tensor_matmul(c_kv, self.Wuk);
     &FloatTensor V = tensor_matmul(c_kv, self.Wuv);
     &FloatTensor out = mha_forward(Q, K, V, self.numHeads);
-    aa_drop_(Q); aa_drop_(c_kv); aa_drop_(K); aa_drop_(V);
+    attn_release_tmp_(out, Q); attn_release_tmp_(out, c_kv); attn_release_tmp_(out, K); attn_release_tmp_(out, V);
     return out;
 }
 
@@ -69,31 +66,34 @@ struct EgMla EgMla::new(unsigned long dModel, unsigned long dLatent, unsigned lo
 }
 
 &FloatTensor EgMla::forward(const &FloatTensor X) const {
-    unsafe { tensor_host_((void*)X); }
     unsigned long numGroups = self.Wuk.length();
     if (numGroups == 0UL || self.Wuv.length() != numGroups) {
         panic_at("EgMla::forward: Wuk / Wuv must be non-empty and the same length", "attention_advanced.sc", __LINE__);
     }
-    unsigned long seqLen; unsigned long dModel;
-    unsafe { seqLen = X->shape[0]; dModel = self.Wq->shape[1]; }
+    unsigned long dModel;
+    unsafe { dModel = self.Wq->shape[1]; }
     unsigned long groupDim = dModel / numGroups;
 
     &FloatTensor Q = tensor_matmul(X, self.Wq);
     &FloatTensor c_kv = tensor_matmul(X, self.Wdkv);
-    &FloatTensor out = FloatTensor::new_2d(seqLen, dModel, 0);
-
+    // the groups' outputs joined column-wise
+    &FloatTensor out = Q;
     unsigned long g = 0UL;
     while (g < numGroups) {
-        unsigned long startCol = g * groupDim;
-        &FloatTensor Qg = Q.slice_cols(startCol, groupDim);
+        &FloatTensor Qg = Q.slice_cols(g * groupDim, groupDim);
         &FloatTensor Kg = tensor_matmul(c_kv, *self.Wuk.at(g));
         &FloatTensor Vg = tensor_matmul(c_kv, *self.Wuv.at(g));
         &FloatTensor groupOut = mha_forward(Qg, Kg, Vg, self.headsPerGroup);
-        tensor_set_cols(out, startCol, groupOut);
-        aa_drop_(Qg); aa_drop_(Kg); aa_drop_(Vg); aa_drop_(groupOut);
+        attn_release_tmp_(groupOut, Qg); attn_release_tmp_(groupOut, Kg); attn_release_tmp_(groupOut, Vg);
+        if (g == 0UL) out = groupOut;
+        else {
+            &FloatTensor joined = tensor_concat_cols(out, groupOut);
+            attn_release_tmp_(joined, out); attn_release_tmp_(joined, groupOut);
+            out = joined;
+        }
         g = g + 1UL;
     }
-    aa_drop_(Q); aa_drop_(c_kv);
+    attn_release_tmp_(out, Q); attn_release_tmp_(out, c_kv);
     return out;
 }
 

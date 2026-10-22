@@ -530,6 +530,166 @@ static int dref_spatial_(int kernel, unsigned long n, const &DevArgs a) {
     return 0;
 }
 
+// attention.h's masks: is key j visible from position pos (flags: 1 causal, 2 window w)?
+static int dref_attn_vis_(unsigned int flags, unsigned int w, long pos, long j) {
+    if ((flags & 1U) != 0U && j > pos) return 0;
+    if ((flags & 2U) != 0U && j <= pos - (long)w) return 0;
+    return 1;
+}
+
+// DK_SOFTMAX_ROWS with a mask: u2 flags, u3 window, u4 (int) keys - queries.
+static void dref_softmax_mask_(const &DevArgs a, unsigned long n) {
+    unsafe {
+        const float* X = (const float*)a.p[0];
+        float* O = (float*)a.p[1];
+        unsigned long C = (unsigned long)a.u[0];
+        unsigned long r = 0UL;
+        while (r < n) {
+            long pos = (long)r + (long)(int)a.u[4];
+            const float* x = &X[r * C];
+            float* o = &O[r * C];
+            float mx = (float)-3.0e38;
+            unsigned long c = 0UL;
+            while (c < C) { if (dref_attn_vis_(a.u[2], a.u[3], pos, (long)c) && x[c] > mx) mx = x[c]; c = c + 1UL; }
+            float s = (float)0.0;
+            c = 0UL;
+            while (c < C) { if (dref_attn_vis_(a.u[2], a.u[3], pos, (long)c)) s = s + exp_f(x[c] - mx); c = c + 1UL; }
+            float inv = s > (float)0.0 ? (float)1.0 / s : (float)0.0;
+            c = 0UL;
+            while (c < C) { o[c] = dref_attn_vis_(a.u[2], a.u[3], pos, (long)c) ? exp_f(x[c] - mx) * inv : (float)0.0; c = c + 1UL; }
+            r = r + 1UL;
+        }
+    }
+}
+
+// The fused attention kernels (DK_ATTN_FWD, DK_ATTN_BWD_Q, DK_ATTN_BWD_KV;
+// device_kernels.cu has the arguments): one (head, row) at a time, whatever
+// the launch's thread count (the GPU kernels' is a tiling's).
+#define DREF_ATTN_MAXD 128UL
+static int dref_attn_(int kernel, unsigned long n, const &DevArgs a) {
+    unsafe {
+        const float* Q = (const float*)a.p[0]; const float* K = (const float*)a.p[1]; const float* V = (const float*)a.p[2];
+        float* P3 = (float*)a.p[3]; float* LSE = (float*)a.p[4]; const float* G = (const float*)a.p[5];
+        float* P6 = (float*)a.p[6]; float* DS = (float*)a.p[7];
+        unsigned long S = (unsigned long)a.u[0]; unsigned long L = (unsigned long)a.u[1]; unsigned long H = (unsigned long)a.u[2];
+        unsigned long D = (unsigned long)a.u[3]; unsigned long E = (unsigned long)a.u[4];
+        unsigned int fl = a.u[5] & 3U; unsigned int w = a.u[6];
+        float sc = a.f[0];
+        long off = (long)L - (long)S;
+        float acc[DREF_ATTN_MAXD];
+        float acc2[DREF_ATTN_MAXD];
+        unsigned long rowsAll = H * (kernel == DK_ATTN_BWD_KV ? L : S);
+        unsigned long t = 0UL;
+        while (t < rowsAll) {
+            if (kernel == DK_ATTN_BWD_KV) {
+                unsigned long h = t / L; unsigned long j = t % L;
+                const float* kr = &K[(j * H + h) * D];
+                const float* vr = &V[(j * H + h) * E];
+                unsigned long d = 0UL;
+                while (d < D) { acc[d] = (float)0.0; d = d + 1UL; }
+                d = 0UL;
+                while (d < E) { acc2[d] = (float)0.0; d = d + 1UL; }
+                unsigned long i = 0UL;
+                while (i < S) {
+                    if (dref_attn_vis_(fl, w, (long)i + off, (long)j)) {
+                        const float* qr = &Q[(i * H + h) * D];
+                        const float* gr = &G[(i * H + h) * E];
+                        float s = (float)0.0;
+                        d = 0UL;
+                        while (d < D) { s = s + qr[d] * kr[d]; d = d + 1UL; }
+                        float p = exp_f(s * sc - LSE[h * S + i]);
+                        float dp = (float)0.0;
+                        d = 0UL;
+                        while (d < E) { acc2[d] = acc2[d] + p * gr[d]; dp = dp + gr[d] * vr[d]; d = d + 1UL; }
+                        float ds = p * (dp - DS[h * S + i]);
+                        d = 0UL;
+                        while (d < D) { acc[d] = acc[d] + ds * qr[d]; d = d + 1UL; }
+                    }
+                    i = i + 1UL;
+                }
+                if (P3 != (float*)0) {
+                    float* o = &P3[(j * H + h) * D];
+                    d = 0UL;
+                    while (d < D) { o[d] = ((a.u[5] & 8U) != 0U ? (float)0.0 : o[d]) + sc * acc[d]; d = d + 1UL; }
+                }
+                if (P6 != (float*)0) {
+                    float* o = &P6[(j * H + h) * E];
+                    d = 0UL;
+                    while (d < E) { o[d] = ((a.u[5] & 16U) != 0U ? (float)0.0 : o[d]) + acc2[d]; d = d + 1UL; }
+                }
+                t = t + 1UL;
+                continue;
+            }
+            unsigned long h = t / S; unsigned long i = t % S;
+            const float* qr = &Q[(i * H + h) * D];
+            long pos = (long)i + off;
+            unsigned long d = 0UL;
+            if (kernel == DK_ATTN_FWD) {
+                while (d < E) { acc[d] = (float)0.0; d = d + 1UL; }
+                float m = (float)-3.0e38;
+                float l = (float)0.0;
+                unsigned long j = 0UL;
+                while (j < L) {
+                    if (dref_attn_vis_(fl, w, pos, (long)j)) {
+                        const float* kr = &K[(j * H + h) * D];
+                        const float* vr = &V[(j * H + h) * E];
+                        float s = (float)0.0;
+                        d = 0UL;
+                        while (d < D) { s = s + qr[d] * kr[d]; d = d + 1UL; }
+                        s = s * sc;
+                        float mn = m > s ? m : s;
+                        float c = exp_f(m - mn);
+                        float p = exp_f(s - mn);
+                        l = l * c + p;
+                        d = 0UL;
+                        while (d < E) { acc[d] = acc[d] * c + p * vr[d]; d = d + 1UL; }
+                        m = mn;
+                    }
+                    j = j + 1UL;
+                }
+                float inv = l > (float)0.0 ? (float)1.0 / l : (float)0.0;
+                float* o = &P3[(i * H + h) * E];
+                d = 0UL;
+                while (d < E) { o[d] = acc[d] * inv; d = d + 1UL; }
+                LSE[t] = l > (float)0.0 ? m + log_f(l) : (float)3.0e38;
+            } else {
+                const float* orow = (const float*)&P3[(i * H + h) * E];
+                const float* gr = &G[(i * H + h) * E];
+                float Di = (float)0.0;
+                while (d < E) { Di = Di + gr[d] * orow[d]; d = d + 1UL; }
+                DS[t] = Di;
+                if (P6 != (float*)0) {
+                    d = 0UL;
+                    while (d < D) { acc[d] = (float)0.0; d = d + 1UL; }
+                    unsigned long j = 0UL;
+                    while (j < L) {
+                        if (dref_attn_vis_(fl, w, pos, (long)j)) {
+                            const float* kr = &K[(j * H + h) * D];
+                            const float* vr = &V[(j * H + h) * E];
+                            float s = (float)0.0;
+                            d = 0UL;
+                            while (d < D) { s = s + qr[d] * kr[d]; d = d + 1UL; }
+                            float p = exp_f(s * sc - LSE[t]);
+                            float dp = (float)0.0;
+                            d = 0UL;
+                            while (d < E) { dp = dp + gr[d] * vr[d]; d = d + 1UL; }
+                            float ds = p * (dp - Di);
+                            d = 0UL;
+                            while (d < D) { acc[d] = acc[d] + ds * kr[d]; d = d + 1UL; }
+                        }
+                        j = j + 1UL;
+                    }
+                    float* o = &P6[(i * H + h) * D];
+                    d = 0UL;
+                    while (d < D) { o[d] = ((a.u[5] & 4U) != 0U ? (float)0.0 : o[d]) + sc * acc[d]; d = d + 1UL; }
+                }
+            }
+            t = t + 1UL;
+        }
+        return 1;
+    }
+}
+
 // The CPU version of one DK_* kernel over n threads; 0 for an unknown kernel.
 int device_ref_launch_(int kernel, unsigned long n, const &DevArgs a) {
     unsafe {
@@ -603,6 +763,7 @@ int device_ref_launch_(int kernel, unsigned long n, const &DevArgs a) {
             return 1;
         }
         if (kernel == DK_SOFTMAX_ROWS) {
+            if (a.u[2] != 0U) { dref_softmax_mask_(a, n); return 1; }
             while (i < n) {
                 const float* x = (const float*)&P0[i * U0];
                 float* o = &P1[i * U0];
@@ -834,6 +995,17 @@ int device_ref_launch_(int kernel, unsigned long n, const &DevArgs a) {
         }
         if (kernel == DK_BIAS_CHANNELS) { while (i < n) { P0[i] = P0[i] + P1[(i / U1) % U0]; i = i + 1UL; } return 1; }
         if (kernel >= DK_BIAS_CHANNELS_BWD && kernel <= DK_RESIZE_BWD) return dref_spatial_(kernel, n, a);
+        if (kernel == DK_TRANSPOSE) {
+            while (i < n) {
+                unsigned long r = i / U1; unsigned long c = i % U1;
+                unsigned long k = c * U0 + r;
+                if (U2 != 0UL) P1[k] = (a.u[6] != 0U ? (float)0.0 : P1[k]) + P0[i];
+                else P1[k] = P0[i];
+                i = i + 1UL;
+            }
+            return 1;
+        }
+        if (kernel == DK_ATTN_FWD || kernel == DK_ATTN_BWD_Q || kernel == DK_ATTN_BWD_KV) return dref_attn_(kernel, n, a);
         if (kernel == DK_SPMM) {
             while (i < n) {
                 unsigned long r = i / U0; unsigned long j = i % U0;

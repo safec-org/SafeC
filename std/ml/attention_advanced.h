@@ -4,8 +4,10 @@
 // DeltaNet.
 //
 // Built on std/ml/attention.h's mha_forward/attention_forward and
-// std/ml/tensor.h's Tensor. Forward-only, like the rest of std/ml (see
-// attention.h's header comment). Scope notes on each section below.
+// std/ml/tensor.h's Tensor. MLA and EG-MLA record gradients and run on
+// devices like attention.h's ops (their weights require grad: they train
+// through trainer.h); the shifted-window attention and Gated DeltaNet are
+// forward-only host loops. Scope notes on each section below.
 #include <std/ml/tensor.h>
 #include <std/ml/attention.h>
 #include <std/collections/slice.h>
@@ -25,7 +27,7 @@ namespace std {
 //   K    = c_kv @ Wuk                    [seqLen, dModel]
 //   V    = c_kv @ Wuv                    [seqLen, dModel]
 //   out  = mha_forward(Q, K, V, numHeads)
-// (Mla::forward; forward only, like attention.h).
+// (Mla::forward).
 struct Mla {
     &FloatTensor Wq;     // [dModel, dModel]
     &FloatTensor Wdkv;   // [dModel, dLatent]
