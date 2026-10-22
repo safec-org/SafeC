@@ -26,7 +26,8 @@ static struct DeviceStats g_dev_stats[DEVICE_COUNT];
 // which Mach-O's linker rejects unless every link passes -U for it. A unit
 // with a backend feature defines its own (device.h) and, listed before the
 // std archive, is the one the linker keeps.
-#if !defined(SAFEC_FEATURE_ROCM) && !defined(SAFEC_FEATURE_CUDA) && !defined(SAFEC_FEATURE_MPS)
+#if !defined(SAFEC_FEATURE_ROCM) && !defined(SAFEC_FEATURE_CUDA) && !defined(SAFEC_FEATURE_MPS) && \
+    !defined(SAFEC_FEATURE_VULKAN) && !defined(SAFEC_FEATURE_WEBGPU)
 void device_link_backends_() __attribute__((weak)) {}
 #endif
 
@@ -63,6 +64,8 @@ static int device_from_name_(const char* s) {
         if (strcmp(s, "rocm") == 0 || strcmp(s, "hip") == 0) return DEVICE_ROCM;
         if (strcmp(s, "cuda") == 0) return DEVICE_CUDA;
         if (strcmp(s, "mps") == 0 || strcmp(s, "metal") == 0) return DEVICE_MPS;
+        if (strcmp(s, "vulkan") == 0 || strcmp(s, "spirv") == 0) return DEVICE_VULKAN;
+        if (strcmp(s, "webgpu") == 0 || strcmp(s, "wgpu") == 0) return DEVICE_WEBGPU;
     }
     return -1;
 }
@@ -81,6 +84,8 @@ int device_auto() {
         if (device_available(DEVICE_ROCM)) pick = DEVICE_ROCM;
         else if (device_available(DEVICE_CUDA)) pick = DEVICE_CUDA;
         else if (device_available(DEVICE_MPS)) pick = DEVICE_MPS;
+        else if (device_available(DEVICE_VULKAN)) pick = DEVICE_VULKAN;
+        else if (device_available(DEVICE_WEBGPU)) pick = DEVICE_WEBGPU;
         else pick = DEVICE_CPU;
     }
     g_dev_auto = pick;
@@ -98,6 +103,8 @@ const &char device_name(int device) {
     if (device == DEVICE_ROCM) return "rocm";
     if (device == DEVICE_CUDA) return "cuda";
     if (device == DEVICE_MPS) return "mps";
+    if (device == DEVICE_VULKAN) return "vulkan";
+    if (device == DEVICE_WEBGPU) return "webgpu";
     return "cpu";
 }
 
