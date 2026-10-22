@@ -682,7 +682,9 @@ fi
 
 # ── 5d. prebuilt std sections ────────────────────────────────────────────────
 # A native build with the packaged safec links the prebuilt sections holding
-# its units (core and collections for io.h + vec.h; not gui, ml, ...) and
+# its units (core and collections for io.h + vec.h — io_file.h's whole-file
+# helpers take a String, so io.h alone already needs collections/string.sc;
+# not gui, ml, ...) and
 # compiles no std. Without a section installed (install.sh --std=...), it
 # compiles that section's units from source and links the rest; a section
 # stamped for another compiler is ignored the same way. std is compiled
@@ -705,10 +707,10 @@ if [[ "$PKG_OK" -eq 1 ]]; then
     fi
     mkdir -p "$PRE/aside" && mv "$PRE_STD"/collections.* "$PRE/aside/"
     if pre_build >/tmp/sg_pre1.txt 2>&1 &&
-       grep -q "std section 'collections' is not installed in .*compiling its units from source: std/collections/vec.sc" /tmp/sg_pre1.txt &&
+       grep -q "std section 'collections' is not installed in .*compiling its units from source: std/collections/string.sc std/collections/vec.sc" /tmp/sg_pre1.txt &&
        grep -q "linking the prebuilt std sections core from" /tmp/sg_pre1.txt &&
        grep -q "prebuilt std ok" /tmp/sg_pre1.txt &&
-       [[ "$(cd "$PRE/app/build/deps/std" && ls *.o 2>/dev/null)" == "collections_vec_sc.o" ]]; then
+       [[ "$(cd "$PRE/app/build/deps/std" && ls *.o 2>/dev/null | tr '\n' ' ')" == "collections_string_sc.o collections_vec_sc.o " ]]; then
         pass "a section that isn't installed is compiled from source, the others linked prebuilt"
     else
         fail "a build with a std section missing"
