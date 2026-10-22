@@ -1089,7 +1089,7 @@ DeclPtr Parser::parseTopLevelDecl() {
             expect(TK::RParen, "expected ')' after alignment value");
             continue;
         }
-        if (match(TK::KW_const))     { isConst     = true; continue; }
+        if (!constStartsReference() && match(TK::KW_const)) { isConst = true; continue; }
         if (match(TK::KW_consteval)) { isConsteval = true; continue; }
         if (match(TK::KW_constinit)) { isConstinit  = true; continue; }
         if (match(TK::KW_inline))    { isInline    = true; continue; }
@@ -1782,6 +1782,9 @@ StmtPtr Parser::parseStmt() {
     case TK::KW_static_assert: return parseStaticAssertStmt();
     case TK::KW_asm:           return parseAsmStmt();
     case TK::KW_const: {
+        // 'const &R T x' is a reference to const T: parseType takes the
+        // 'const' with the reference (see constStartsReference).
+        if (constStartsReference()) return parseVarDeclStmt(false, false);
         consume();
         // 'const T x' binds to the BASE type: for a plain type that makes
         // the variable itself const/immutable ('const int x' — x can't be
@@ -1817,7 +1820,7 @@ StmtPtr Parser::parseStmt() {
         // thread_local at local scope must combine with static
         bool isStaticTL = match(TK::KW_static);
         bool isConst = false;
-        if (match(TK::KW_const)) isConst = true;
+        if (!constStartsReference() && match(TK::KW_const)) isConst = true;
         auto vs = parseVarDeclStmt(isConst, isStaticTL);
         applyToVarDecls(vs.get(), [](VarDeclStmt &d) { d.isThreadLocal = true; });
         return vs;
@@ -1825,7 +1828,7 @@ StmtPtr Parser::parseStmt() {
     case TK::KW_static: {
         consume();
         bool isConst = false;
-        if (match(TK::KW_const)) isConst = true;
+        if (!constStartsReference() && match(TK::KW_const)) isConst = true;
         return parseVarDeclStmt(isConst, true);
     }
     default:
