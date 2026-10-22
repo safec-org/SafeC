@@ -582,6 +582,31 @@ void t_alsa() {
     long period = (long)frames * 2L * 4L;
     ASSERT_TRUE(bytes >= 10L * period && bytes % period == 0L);
 
+    // Duplex on the null PCM (both directions; ALSA links the two PCMs).
+    struct AudioStreamOptions dn = AudioStreamOptions::none();
+    audio_strcpy_(&dn.device_name[0], (unsigned long)AUDIO_DEVICE_NAME_MAX, "null");
+    struct Rec rd = rec_new_();
+    rd.stop_after = 6;
+    frames = 128U;
+    sr = a.open_stream((?&AudioStreamParams)&p, (?&AudioStreamParams)&p, AUDIO_FORMAT_F32, 44100U, &frames, rec_f32,
+                       (?&Rec)&rd, (?&AudioStreamOptions)&dn);
+    match (sr.get_err()) { case some(e): printf("    alsa duplex: %s\n", e.message); case null: {} }
+    ASSERT_TRUE(sr.ok());
+    s = sr.unwrap_or(AudioStream::closed());
+    ASSERT_TRUE(s.latency() > 0L && s.input_latency() > 0L);
+    ASSERT_TRUE(s.start().ok());
+    t0 = audio_now_ns_();
+    while (s.is_running() && audio_now_ns_() - t0 < 5000000000LL) audio_sleep_us_(1000LL);
+    ASSERT_EQ(rd.calls, 6);
+    ASSERT_TRUE(rd.in_sum == (float)0.0);      // the null PCM captures silence
+    // Restart after the callback stopped it, then abort from the control thread.
+    rd.stop_after = 0;
+    ASSERT_TRUE(s.start().ok());
+    audio_sleep_us_(20000LL);
+    ASSERT_TRUE(s.abort().ok());
+    ASSERT_FALSE(s.is_running());
+    s.close();
+
     // Capture from a file, through the ALSA config main() installed
     // (ALSA_CONFIG_PATH: the system config plus a 'file' PCM whose infile
     // holds an i16 ramp).
