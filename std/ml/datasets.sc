@@ -477,6 +477,7 @@ struct DataLoader DataLoader::new(const &Dataset ds, unsigned long batchSize, in
     dl.batchSize = batchSize == 0UL ? 1UL : batchSize;
     dl.pos = 0UL;
     dl.shuffle = shuffle;
+    dl.device = DEVICE_CPU;
     dl.rng = Rng::new(seed);
     unsafe {
         unsigned long* order = (unsigned long*)malloc(sizeof(unsigned long) * (ds.n + 1UL));
@@ -498,6 +499,21 @@ int DataLoader::next(&Batch out) {
     if (rows > self.batchSize) rows = self.batchSize;
     unsigned long F; unsigned long T;
     unsafe { F = self.x->shape[1]; T = self.y->shape[1]; }
+    if (self.device != DEVICE_CPU) {
+        // the rows' indices go up; the rows are gathered on the device
+        &FloatTensor idx = FloatTensor::new_1d(rows, 0);
+        unsafe {
+            unsigned long r = 0UL;
+            while (r < rows) { idx->data[r] = (float)self.order[self.pos + r]; r = r + 1UL; }
+        }
+        struct GradGuard g = Autograd::get().no_grad();
+        out.x = tensor_gather_rows(self.x, idx);
+        out.y = tensor_gather_rows(self.y, idx);
+        g.restore();
+        out.rows = rows;
+        self.pos = self.pos + rows;
+        return 1;
+    }
     out.x = FloatTensor::new_2d(rows, F, 0);
     out.y = FloatTensor::new_2d(rows, T, 0);
     out.rows = rows;
@@ -513,6 +529,13 @@ int DataLoader::next(&Batch out) {
         }
     }
     self.pos = self.pos + rows;
+    return 1;
+}
+
+int DataLoader::to(int device) {
+    if (device == DEVICE_CPU || self.n >= 16777216UL) { self.device = DEVICE_CPU; return device == DEVICE_CPU; }
+    if (!self.x.place(device) || !self.y.place(device)) { self.device = DEVICE_CPU; return 0; }
+    self.device = device;
     return 1;
 }
 

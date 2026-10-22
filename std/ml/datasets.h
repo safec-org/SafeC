@@ -92,6 +92,7 @@ struct DataLoader {
     unsigned long batchSize;
     unsigned long pos;
     int shuffle;
+    int device;               // DEVICE_CPU, or where to() put the data (batches are gathered there)
     struct Rng rng;
 
     // Fills 'out' with the next batch (new tensors, in the active tensor arena
@@ -99,6 +100,10 @@ struct DataLoader {
     // (reshuffling) for the next one.
     int next(&Batch out);
     unsigned long batches() const;   // batches per epoch
+    // Keeps the dataset on 'device' (its tensors gain a device copy, uploaded
+    // once) and gathers each batch there; 1 on success, else the loader
+    // stays on the CPU.
+    int to(int device);
     void free();
 
     static struct DataLoader new(const &Dataset ds, unsigned long batchSize, int shuffle, unsigned long seed);

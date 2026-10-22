@@ -18,3 +18,11 @@ for t in cuda_check cuda_attention_check; do
         -lcuda -lcublas -lcublasLt -lnvrtc -lcudnn -lcufft -lm -lpthread -o "$OUT/$t"
     "$OUT/$t"
 done
+
+# ../device/device_check.sc with the cuda feature (SAFEC_FEATURE_CUDA links
+# device_cuda.sc in): every std::ml workload on the CPU and on the GPU.
+"$SAFEC" -I "$ROOT" -DSAFEC_FEATURE_CUDA=1 -DCHECK_DEVICE=DEVICE_CUDA "$HERE/../device/device_check.sc" -O2 \
+    -o "$OUT/device_check.ll"
+"$CLANG" -O2 -w "$OUT/device_check.ll" "$STD" -L"$CUDA/lib64" -Wl,-rpath,"$CUDA/lib64" \
+    -lcuda -lcublas -lcublasLt -lnvrtc -lcudnn -lcufft -lm -lpthread -o "$OUT/device_check"
+"$OUT/device_check"

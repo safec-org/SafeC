@@ -46,6 +46,7 @@ static &FloatTensor __row_add4(&FloatTensor a, &FloatTensor b,
 }
 
 static &FloatTensor __one_minus(&FloatTensor z) {
+    unsafe { tensor_host_write_((void*)z); }
     &FloatTensor out = z.zeros_like();
     unsafe {
         unsigned long i = 0UL;

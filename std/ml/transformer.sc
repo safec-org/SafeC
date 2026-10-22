@@ -27,6 +27,7 @@ static &FloatTensor __xf_init_weight(unsigned long rows, unsigned long cols, uns
 }
 
 static &FloatTensor __add_broadcast_row(&FloatTensor mat, &FloatTensor row) {
+    unsafe { tensor_host_write_((void*)mat); tensor_host_write_((void*)row); }
     unsigned long rows; unsigned long cols;
     unsafe { rows = mat->shape[0]; cols = mat->shape[1]; }
     &FloatTensor out = FloatTensor::new_2d(rows, cols, 0);
@@ -42,6 +43,7 @@ static &FloatTensor __add_broadcast_row(&FloatTensor mat, &FloatTensor row) {
 }
 
 static &FloatTensor __mul_broadcast_row(&FloatTensor mat, &FloatTensor row) {
+    unsafe { tensor_host_write_((void*)mat); tensor_host_write_((void*)row); }
     unsigned long rows; unsigned long cols;
     unsafe { rows = mat->shape[0]; cols = mat->shape[1]; }
     &FloatTensor out = FloatTensor::new_2d(rows, cols, 0);
@@ -58,6 +60,7 @@ static &FloatTensor __mul_broadcast_row(&FloatTensor mat, &FloatTensor row) {
 
 // mat * (1 + row), broadcast — the "scale" half of AdaLN modulation.
 static &FloatTensor __mul_broadcast_row_plus1(&FloatTensor mat, &FloatTensor row) {
+    unsafe { tensor_host_write_((void*)mat); tensor_host_write_((void*)row); }
     unsigned long rows; unsigned long cols;
     unsafe { rows = mat->shape[0]; cols = mat->shape[1]; }
     &FloatTensor out = FloatTensor::new_2d(rows, cols, 0);
@@ -103,6 +106,7 @@ void DiTBlock::free() {
 }
 
 &FloatTensor DiTBlock::forward(const &FloatTensor x, const &FloatTensor c) const {
+    unsafe { tensor_host_((void*)x); }
     &FloatTensor Wq; &FloatTensor Wk; &FloatTensor Wv; &FloatTensor Wo;
     &FloatTensor W1; &FloatTensor b1w; &FloatTensor W2; &FloatTensor b2w; &FloatTensor WadaLN;
     unsigned long numHeads; unsigned long dModel;

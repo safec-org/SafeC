@@ -22,9 +22,8 @@
 // on any Module, or a model's own loss (autoencoders, VAEs), module.h's
 // module_fit / model_fit need no loss function at all.
 //
-// train_traits.h puts this loop and nn_rocm.h's rocm_trainer_fit behind one
-// interface (the Trainable trait), and train.h picks the backend at build
-// time.
+// The same loops train on a GPU (device.h): set TrainConfig.device, or place
+// the model with model_to; every op then runs where its operands live.
 #include <std/ml/tensor.h>
 #include <std/ml/nn.h>
 #include <std/ml/datasets.h>
@@ -38,8 +37,21 @@ struct TrainConfig {
     int   shuffle;
     float clipNorm;          // > 0: clip the global gradient norm to this
     float lrDecay;           // lr *= lrDecay after every epoch (1 = constant)
+    // Where to train (device.h): the optimizer's parameters are placed there
+    // when fitting starts and stay there (model_to(&m, DEVICE_CPU) or
+    // model_sync brings them back). DEVICE_CPU (the default) leaves them
+    // where they are; DEVICE_AUTO picks device_default(). The dataset is
+    // uploaded once and each batch gathered on the device.
+    int   device;
+    // What that device's convolutions and matrix products compute in while
+    // fitting (device.h's DEVICE_FP32, DEVICE_FP16 with a dynamic loss scale,
+    // DEVICE_BF16); the device's previous precision comes back afterwards.
+    // DEVICE_PRECISION_KEEP (the default) uses the device's own setting
+    // (device_set_precision).
+    int   precision;
 
-    // epochs 10, batch 32, seed 1, shuffled, no clipping, constant lr.
+    // epochs 10, batch 32, seed 1, shuffled, no clipping, constant lr, no
+    // device change, the device's precision.
     static struct TrainConfig default();
 };
 
@@ -51,24 +63,15 @@ struct TrainReport {
     unsigned long epochs;
 };
 
-// One epoch's result, as a Trainable's fit_epoch reports it (train_traits.h).
-struct EpochLoss {
-    float loss;              // mean batch loss
-    unsigned long steps;     // batches (optimizer steps) taken
-    int   ok;                // 0: the epoch failed (a device error)
-};
 
-// How a backend-neutral trainer (train.h) is built. The CPU ignores both:
-// maxBatch sizes a device trainer's buffers (cfg.batchSize must not exceed
-// it), precision is the activations' type on a device that supports it
-// (0: fp32, TENSOR_FP16 or TENSOR_BF16, tensor_half.h's values).
-struct TrainerOptions {
-    unsigned long maxBatch;
-    int precision;
-
-    // maxBatch 256, fp32.
-    static struct TrainerOptions default();
-};
+// Internal: places the optimizer's parameters on 'device' (TrainConfig.device).
+void trainer_place_(&Optimizer opt, int device);
+// Internal: the loader's data on 'device' too (TrainConfig.device).
+void trainer_place_data_(&DataLoader dl, int device);
+// Internal: TrainConfig.precision on its device for a fit; returns the
+// previous precision for trainer_precision_end_.
+int  trainer_precision_begin_(const &TrainConfig cfg);
+void trainer_precision_end_(const &TrainConfig cfg, int previous);
 
 // Internal: one optimizer step from a loss tensor.
 float trainer_step_(&Optimizer opt, &FloatTensor loss, float clipNorm);
@@ -102,7 +105,10 @@ generic<T>
 struct TrainReport trainer_fit(&T model, fn &FloatTensor(&T, const &FloatTensor, const &FloatTensor) lossFn,
                                &Optimizer opt, const &Dataset data, const &TrainConfig cfg) {
     struct TrainReport rep = train_report_new_();
+    trainer_place_(opt, cfg.device);
     struct DataLoader dl = DataLoader::new(data, cfg.batchSize, cfg.shuffle, cfg.seed);
+    trainer_place_data_(&dl, cfg.device);
+    int prevPrec = trainer_precision_begin_(cfg);
     struct TensorArena stepArena = TensorArena::new(0UL);
     unsigned long e = 0UL;
     while (e < cfg.epochs) {
@@ -112,6 +118,7 @@ struct TrainReport trainer_fit(&T model, fn &FloatTensor(&T, const &FloatTensor,
         opt.lr = opt.lr * cfg.lrDecay;
         e = e + 1UL;
     }
+    trainer_precision_end_(cfg, prevPrec);
     stepArena.free();
     dl.free();
     return rep;
@@ -130,7 +137,7 @@ float trainer_evaluate(&T model, fn &FloatTensor(&T, const &FloatTensor, const &
     stepArena.begin();
     while (dl.next(&b)) {
         &FloatTensor loss = lossFn(model, b.x, b.y);
-        unsafe { sum = sum + (double)loss->data[0] * (double)b.rows; }
+        unsafe { tensor_host_((void*)loss); sum = sum + (double)loss->data[0] * (double)b.rows; }
         rows = rows + b.rows;
         stepArena.reset();
     }

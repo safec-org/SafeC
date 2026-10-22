@@ -2,7 +2,7 @@
 // SafeC Standard Library — neural-net building blocks on top of std::ml's
 // Tensor/Autograd::get core (tensor.h/tensor.sc): activation functions, the
 // Adam optimizer, and 1D pooling. Separate file from tensor.sc for the
-// same reason tensor_gpu.h is separate — an independently useful slice of
+// same reason the GPU backends are separate — an independently useful slice of
 // functionality, not a change to the core type or its existing ops.
 //
 // Every activation below is elementwise, allocates via
