@@ -106,8 +106,9 @@ struct IntLitExpr : Expr {
 
 struct FloatLitExpr : Expr {
     double value;
-    FloatLitExpr(double v, SourceLocation l)
-        : Expr(ExprKind::FloatLit, l), value(v) {}
+    bool isF32 = false;   // 'f'/'F' suffix: a float, not a double
+    FloatLitExpr(double v, SourceLocation l, bool f32 = false)
+        : Expr(ExprKind::FloatLit, l), value(v), isF32(f32) {}
 };
 
 struct BoolLitExpr : Expr {

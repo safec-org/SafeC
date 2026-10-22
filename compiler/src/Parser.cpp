@@ -2885,8 +2885,10 @@ ExprPtr Parser::parsePrimaryExpr() {
         return expr;
     }
     case TK::FloatLit: {
-        double v = cur().floatVal; consume();
-        return std::make_unique<FloatLitExpr>(v, loc);
+        double v = cur().floatVal;
+        bool f32 = cur().isFloat32;
+        consume();
+        return std::make_unique<FloatLitExpr>(v, loc, f32);
     }
     case TK::StringLit: {
         // Adjacent string-literal concatenation (C translation phase 6):
