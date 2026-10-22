@@ -3,13 +3,16 @@
 # IR and checks the output against the '// CHECK:' lines in the source
 # (see filecheck.py). A test with '// EXPECT-ERROR: <text>' directives must
 # instead fail to compile with exactly those errors (see filecheck.py for
-# line-tied vs. free-floating directives).
+# line-tied vs. free-floating directives). A test with a '// EXEC' line is
+# also linked with $CLANG_BIN and run, and must exit 0 (skipped, with a
+# note, when no clang is found).
 #
-#   SAFEC_BIN=path/to/safec compiler/tests/run.sh
+#   SAFEC_BIN=path/to/safec [CLANG_BIN=clang] compiler/tests/run.sh
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SAFEC_BIN="${SAFEC_BIN:-$HERE/../build/safec}"
+CLANG_BIN="${CLANG_BIN:-clang}"
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 
@@ -41,7 +44,21 @@ while IFS= read -r -d '' t; do
         echo "  [FAIL] $name"
         sed 's/^/      /' "$OUT/check.txt"
         FAIL=$((FAIL + 1))
+    elif grep -q '^// EXEC$' "$t" && command -v "$CLANG_BIN" >/dev/null 2>&1; then
+        exe="${ll%.ll}.exe"
+        if ! "$CLANG_BIN" -w "$ll" -o "$exe" >"$OUT/err.txt" 2>&1; then
+            echo "  [FAIL] $name (link)"
+            sed 's/^/      /' "$OUT/err.txt"
+            FAIL=$((FAIL + 1))
+        elif ! "$exe"; then
+            echo "  [FAIL] $name (exited $?)"
+            FAIL=$((FAIL + 1))
+        else
+            echo "  [PASS] $name"
+            PASS=$((PASS + 1))
+        fi
     else
+        grep -q '^// EXEC$' "$t" && echo "  [NOTE] $name: no $CLANG_BIN, not run"
         echo "  [PASS] $name"
         PASS=$((PASS + 1))
     fi

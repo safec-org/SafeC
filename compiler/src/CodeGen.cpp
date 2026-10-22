@@ -3300,9 +3300,23 @@ llvm::Value *CodeGen::genCall(CallExpr &e, FnEnv &env) {
                                              llvm::MaybeAlign(), parseOrdering(2));
         }
         if (ident.name == "atomic_cas" && e.args.size() >= 3) {
+            // Sema checked both values convert to the pointee type T;
+            // cmpxchg needs them as exactly T, so a narrower 'expected'
+            // or literal operates on the whole location, not part of it.
             auto *ptr      = genExpr(*e.args[0], env);
             auto *expected = genExpr(*e.args[1], env);
             auto *desired  = genExpr(*e.args[2], env);
+            TypePtr ptrTy  = e.args[0]->type;
+            TypePtr elemTy;
+            if (ptrTy && ptrTy->kind == TypeKind::Pointer)
+                elemTy = static_cast<PointerType &>(*ptrTy).base;
+            else if (ptrTy && ptrTy->kind == TypeKind::Reference)
+                elemTy = static_cast<ReferenceType &>(*ptrTy).base;
+            if (elemTy) {
+                auto *valTy = lowerType(elemTy);
+                expected = coerceScalar(expected, valTy, e.args[1]->type);
+                desired  = coerceScalar(desired, valTy, e.args[2]->type);
+            }
             auto ord = parseOrdering(3);
             auto *cmpxchg = builder_.CreateAtomicCmpXchg(
                 ptr, expected, desired, llvm::MaybeAlign(), ord, ord);

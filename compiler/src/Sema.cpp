@@ -3356,6 +3356,40 @@ TypePtr Sema::checkCall(CallExpr &e) {
                 return makeVoid();
             }
             if (ident.name == "atomic_cas") {
+                // bool atomic_cas(T *ptr, T expected, T desired[, order]):
+                // 'expected' is a value, compared against *ptr and never
+                // written back. For C11's write-back semantics (expected
+                // passed by address) use atomic_compare_exchange_strong.
+                if (e.args.size() != 3 && e.args.size() != 4)
+                    diag_.error(e.loc, "atomic_cas expects 3 arguments (pointer, expected, desired) "
+                                       "and an optional memory order");
+                TypePtr ptrTy = e.args.empty() ? nullptr : e.args[0]->type;
+                TypePtr elemTy;
+                if (ptrTy && ptrTy->kind == TypeKind::Pointer)
+                    elemTy = static_cast<PointerType &>(*ptrTy).base;
+                else if (ptrTy && ptrTy->kind == TypeKind::Reference)
+                    elemTy = static_cast<ReferenceType &>(*ptrTy).base;
+                else if (ptrTy && !ptrTy->isError())
+                    diag_.error(e.args[0]->loc, "atomic_cas: first argument must be a pointer, not '" +
+                                ptrTy->str() + "'");
+                for (size_t i = 1; elemTy && i < 3 && i < e.args.size(); ++i) {
+                    const TypePtr &argTy = e.args[i]->type;
+                    if (!argTy || argTy->isError() || elemTy->isError()) continue;
+                    if (canImplicitlyConvert(argTy, elemTy) ||
+                        intLiteralFitsType(*e.args[i], elemTy) ||
+                        floatLitFitsType(*e.args[i], elemTy))
+                        continue;
+                    std::string hint;
+                    if (i == 1 && (argTy->kind == TypeKind::Pointer ||
+                                   argTy->kind == TypeKind::Reference))
+                        hint = " (atomic_cas takes 'expected' by value; use "
+                               "atomic_compare_exchange_strong(ptr, &expected, desired) "
+                               "to have the current value written back on failure)";
+                    diag_.error(e.args[i]->loc,
+                        std::string("atomic_cas: cannot convert ") +
+                        (i == 1 ? "'expected'" : "'desired'") + " of type '" +
+                        argTy->str() + "' to '" + elemTy->str() + "'" + hint);
+                }
                 e.type = makeBool();
                 return makeBool();
             }
