@@ -534,6 +534,17 @@ static void __gui_composite_row(&GuiCanvas c, const &GuiPaintCtx pc, int y, int 
         unsigned char sg = (unsigned char)(int)(pc.solid[1] * 255.0f + 0.5f);
         unsigned char sb = (unsigned char)(int)(pc.solid[2] * 255.0f + 0.5f);
         float py = (float)y + 0.5f;
+        // Linear gradients: t is linear in x, so step it instead of
+        // evaluating the paint per pixel.
+        int linear = pc.kind == GUI_PAINT_LINEAR ? 1 : 0;
+        float lt = 0.0f;
+        float ldt = 0.0f;
+        if (linear) {
+            float u0 = pc.ia * ((float)x0 + 0.5f) + pc.ic * py + pc.ie;
+            float v0 = pc.ib * ((float)x0 + 0.5f) + pc.id * py + pc.iF;
+            lt = (u0 - pc.x0) * pc.cdx + (v0 - pc.y0) * pc.cdy;
+            ldt = pc.ia * pc.cdx + pc.ib * pc.cdy;
+        }
         int x = x0;
         while (x < x1) {
             float cv = cov[x - x0];
@@ -547,7 +558,9 @@ static void __gui_composite_row(&GuiCanvas c, const &GuiPaintCtx pc, int y, int 
                 x = x + 1;
                 continue;
             }
-            vec<float, 4> s = __gui_paint_at(pc, (float)x + 0.5f, py);
+            vec<float, 4> s;
+            if (linear) { s = __gui_lut_at(pc, __gui_spread(lt + ldt * (float)(x - x0), pc.spread)); }
+            else { s = __gui_paint_at(pc, (float)x + 0.5f, py); }
             vec<float, 4> ga = { galpha, galpha, galpha, galpha };
             s = s * ga;
             vec<float, 4> d = { (float)p[0], (float)p[1], (float)p[2], (float)p[3] };

@@ -26,7 +26,7 @@ void __gui_canvas_stroke_polys(&Vec<float> pts, &Vec<int> cont, float width, int
 void __gui_canvas_dash(&Vec<float> pts, &Vec<int> cont, const &float dash, int n, float offset,
                        &Vec<float> out, &Vec<int> outCont);
 
-#define GUI_FLATTEN_TOL 0.2f
+#define GUI_FLATTEN_TOL 0.05f
 
 // ── paints ────────────────────────────────────────────────────────────────
 

@@ -61,7 +61,7 @@ static void __gui_canvas_glyph(&GuiCanvas c, &GuiTypeface face, int glyph, float
     if (!__gui_canvas_text_cacheable(c, &scale)) {
         c.scratchPath.clear();
         if (!face.glyph_path(glyph, &c.scratchPath, size, ux, uy)) { return; }
-        __gui_canvas_flatten(&c.scratchPath, c.st.m, 0.2f, &c.fpts, &c.fcont);
+        __gui_canvas_flatten(&c.scratchPath, c.st.m, 0.05f, &c.fpts, &c.fcont);
         __gui_canvas_edges(c, &c.fpts, &c.fcont, GuiMatrix::identity(), 0);
         __gui_canvas_fill_edges(c, GUI_FILL_NONZERO, paint);
         return;
@@ -89,7 +89,7 @@ static void __gui_canvas_glyph(&GuiCanvas c, &GuiTypeface face, int glyph, float
             nb.coverage = null;
             c.scratchPath.clear();
             if (face.glyph_path(glyph, &c.scratchPath, (float)sizeKey / 64.0f, (float)sub * 0.25f, 0.0f)) {
-                __gui_canvas_flatten(&c.scratchPath, GuiMatrix::identity(), 0.15f, &c.fpts, &c.fcont);
+                __gui_canvas_flatten(&c.scratchPath, GuiMatrix::identity(), 0.05f, &c.fpts, &c.fcont);
                 __gui_canvas_edges(c, &c.fpts, &c.fcont, GuiMatrix::identity(), 0);
                 if (c.edges.len > 0UL) {
                     float x0 = 0.0f; float y0 = 0.0f; float x1 = 0.0f; float y1 = 0.0f;

@@ -115,6 +115,10 @@ static void __gui_emit_join(&Vec<float> out, &Vec<int> cont, float vx, float vy,
     float side = cross > 0.0f ? -1.0f : 1.0f;
     float ax = n0x * side; float ay = n0y * side;
     float bx = n1x * side; float by = n1y * side;
+    // A slight bend (between the segments of a flattened curve): every join
+    // style is the same to well under a hundredth of a pixel, so take the
+    // cheapest, a bevel.
+    if (dot > 0.97f) { lineJoin = GUI_JOIN_BEVEL; }
     if (lineJoin == GUI_JOIN_ROUND) {
         __gui_emit_fan(out, cont, vx, vy, ax, ay, bx, by, hw, tol);
         return;
@@ -170,6 +174,8 @@ void __gui_canvas_stroke_polys(&Vec<float> pts, &Vec<int> cont, float width, int
     float hw = width * 0.5f;
     if (hw <= 0.0f) { return; }
     struct Vec<float> clean = Vec::new();
+    struct Vec<float> ribbon = Vec::new();
+    struct Vec<float> poly = Vec::new();
     unsafe {
         const float* p = (const float*)pts.data;
         const int* ct = (const int*)cont.data;
@@ -218,6 +224,13 @@ void __gui_canvas_stroke_polys(&Vec<float> pts, &Vec<int> cont, float width, int
             }
             if (n == 2) { closed = 0; }
             int segs = closed ? n : n - 1;
+            // Consecutive segments that bend only slightly (a flattened
+            // curve) become one "ribbon" polygon — offset points on both
+            // sides, joined at the bisector — instead of a quad and a join
+            // each; real corners end the ribbon and get a join piece. A
+            // ribbon stays a simple polygon as long as the bend radius
+            // exceeds the half width, which the merge test checks.
+            ribbon.clear();
             int s = 0;
             while (s < segs) {
                 int a = s;
@@ -228,20 +241,49 @@ void __gui_canvas_stroke_polys(&Vec<float> pts, &Vec<int> cont, float width, int
                 float len = sqrt_f(dx * dx + dy * dy);
                 dx = dx / len; dy = dy / len;
                 float nx = -dy * hw; float ny = dx * hw;
-                float quad[8];
-                quad[0] = ax + nx; quad[1] = ay + ny;
-                quad[2] = bx + nx; quad[3] = by + ny;
-                quad[4] = bx - nx; quad[5] = by - ny;
-                quad[6] = ax - nx; quad[7] = ay - ny;
-                __gui_emit_poly(out, outCont, &quad[0], 4);
-                // The join at b with the next segment.
-                if (closed || s + 1 < segs) {
+                if (ribbon.len == 0UL) {
+                    ribbon.push(ax + nx); ribbon.push(ay + ny);
+                    ribbon.push(ax - nx); ribbon.push(ay - ny);
+                }
+                int hasNext = (closed || s + 1 < segs) ? 1 : 0;
+                int merged = 0;
+                float ex = 0.0f; float ey = 0.0f;
+                if (hasNext) {
                     int c2 = b + 1 < n ? b + 1 : 0;
                     float cx = q[c2 * 2]; float cy = q[c2 * 2 + 1];
-                    float ex = cx - bx; float ey = cy - by;
+                    ex = cx - bx; ey = cy - by;
                     float el = sqrt_f(ex * ex + ey * ey);
-                    if (el > 0.0f) {
-                        __gui_emit_join(out, outCont, bx, by, dx, dy, ex / el, ey / el, hw, lineJoin, miterLimit, tol);
+                    ex = ex / el; ey = ey / el;
+                    float dot = dx * ex + dy * ey;
+                    float shorter = len < el ? len : el;
+                    // bend angle ~ sqrt(2(1-dot)); radius ~ shorter / angle
+                    float bend = sqrt_f(2.0f * (1.0f - dot));
+                    int lastOfClosed = (closed && b == 0) ? 1 : 0;
+                    if (dot > 0.9f && !lastOfClosed && shorter > 2.0f * hw * bend) {
+                        // the bisector offset (a tiny miter)
+                        float mx = -dy - ey; float my = dx + ex;
+                        float ml = sqrt_f(mx * mx + my * my);
+                        float k = hw * 2.0f / (ml * ml);
+                        ribbon.push(bx + mx * k); ribbon.push(by + my * k);
+                        ribbon.push(bx - mx * k); ribbon.push(by - my * k);
+                        merged = 1;
+                    }
+                }
+                if (!merged) {
+                    ribbon.push(bx + nx); ribbon.push(by + ny);
+                    ribbon.push(bx - nx); ribbon.push(by - ny);
+                    // Emit: the left points forward, then the right ones back.
+                    unsigned long np = ribbon.len / 4UL;
+                    poly.clear();
+                    const float* rb = (const float*)ribbon.data;
+                    unsigned long k2 = 0UL;
+                    while (k2 < np) { poly.push(rb[k2 * 4UL]); poly.push(rb[k2 * 4UL + 1UL]); k2 = k2 + 1UL; }
+                    k2 = np;
+                    while (k2 > 0UL) { k2 = k2 - 1UL; poly.push(rb[k2 * 4UL + 2UL]); poly.push(rb[k2 * 4UL + 3UL]); }
+                    __gui_emit_poly(out, outCont, (const float*)poly.data, (int)(poly.len / 2UL));
+                    ribbon.clear();
+                    if (hasNext) {
+                        __gui_emit_join(out, outCont, bx, by, dx, dy, ex, ey, hw, lineJoin, miterLimit, tol);
                     }
                 }
                 s = s + 1;
@@ -259,6 +301,8 @@ void __gui_canvas_stroke_polys(&Vec<float> pts, &Vec<int> cont, float width, int
         }
     }
     clean.free();
+    ribbon.free();
+    poly.free();
 }
 
 // Cuts the polylines into dashes: alternating on/off lengths dash[0..n),
