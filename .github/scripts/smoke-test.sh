@@ -268,10 +268,25 @@ case "$(uname -s)" in
     *) OS=other ;;
 esac
 EXE=""; [[ "$OS" == windows ]] && EXE=".exe"
-# An LLVM tool beside $CLANG_BIN (or on PATH), for inspecting binaries.
+# An LLVM tool for inspecting binaries: beside $CLANG_BIN or its realpath
+# (apt.llvm.org's /usr/bin/clang-21 links into /usr/lib/llvm-21/bin), then
+# <tool>-<clang major>, then <tool> on PATH. Prints nothing if none is found.
 llvm_tool() {
-    local dir; dir="$(dirname "$(command -v "$CLANG_BIN" 2>/dev/null || echo /nonexistent)")"
-    if [[ -x "$dir/$1" || -x "$dir/$1.exe" ]]; then echo "$dir/$1"; else command -v "$1" 2>/dev/null; fi
+    local clang real d major
+    clang="$(command -v "${CLANG_BIN:-clang}" 2>/dev/null || true)"
+    if [[ -n "$clang" ]]; then
+        real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$clang" 2>/dev/null || echo "$clang")"
+        for d in "$(dirname "$clang")" "$(dirname "$real")"; do
+            if [[ -x "$d/$1" ]]; then echo "$d/$1"; return; fi
+            if [[ -x "$d/$1.exe" ]]; then echo "$d/$1.exe"; return; fi
+        done
+    fi
+    major="$(basename "${CLANG_BIN:-clang}" .exe | sed -nE 's/.*-([0-9]+)$/\1/p')"
+    if [[ -z "$major" && -n "$clang" ]]; then
+        major="$("$clang" --version 2>/dev/null | sed -nE 's/.*clang version ([0-9]+).*/\1/p' | head -1)"
+    fi
+    if [[ -n "$major" ]] && command -v "$1-$major" >/dev/null 2>&1; then command -v "$1-$major"; return; fi
+    command -v "$1" 2>/dev/null || true
 }
 # Run a command, killed after $1 seconds (a GUI program must exit by itself).
 with_timeout() { local t="$1"; shift; perl -e 'alarm shift; exec @ARGV' "$t" "$@"; }
@@ -619,7 +634,7 @@ else
         # Diagnostics: the link line, and what the std archive it links holds.
         sg_in "$WORKDIR/gui_hello" /tmp/sg_gui_v.txt build --verbose
         grep -iE 'llvm-ar|[^a-z]ar rcs|libsafec_std|-o .*gui_hello' /tmp/sg_gui_v.txt | tail -6 | cut -c1-600
-        NM="$(dirname "$(command -v "${CLANG_BIN:-clang}")")/llvm-nm"
+        NM="$(llvm_tool llvm-nm)"; NM="${NM:-nm}"
         for a in $(find "$WORKDIR/gui_hello/build/deps" -name 'libsafec_std.a' 2>/dev/null); do
             echo "    $a: $(wc -c < "$a") bytes"
             "$NM" "$a" 2>&1 | grep -cE ' T ' | sed 's/^/    defined functions: /'

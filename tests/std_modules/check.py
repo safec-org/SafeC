@@ -21,7 +21,8 @@ implementing no header, a malformed directive).
 
 Usage: check.py [--target T] [--keep DIR]
 Env: SAFEC (or SAFEC_BIN), SAFEGUARD_BIN (default: safeguard), SAFEC_HOME
-(the SafeC checkout), LLVM_NM (default: llvm-nm beside $CLANG_BIN or on PATH).
+(the SafeC checkout), LLVM_NM (default: llvm-nm beside $CLANG_BIN or its
+realpath, llvm-nm-<clang major>, or llvm-nm on PATH).
 """
 import argparse
 import os
@@ -44,18 +45,44 @@ os.environ["SAFEC"] = safec
 safeguard = os.environ.get("SAFEGUARD_BIN", "safeguard")
 
 
-def find_nm():
-    if os.environ.get("LLVM_NM"):
-        return os.environ["LLVM_NM"]
-    clang = shutil.which(os.environ.get("CLANG_BIN", "clang") or "clang")
-    for d in ([os.path.dirname(clang)] if clang else []) + ["/opt/homebrew/opt/llvm/bin", "/usr/local/opt/llvm/bin"]:
-        for n in ("llvm-nm", "llvm-nm.exe"):
-            if os.path.exists(os.path.join(d, n)):
-                return os.path.join(d, n)
-    return shutil.which("llvm-nm") or "llvm-nm"
+def find_llvm_tool(tool, env):
+    """An LLVM tool: $<env>; beside realpath($CLANG_BIN) (apt.llvm.org's
+    /usr/bin/clang-21 links to /usr/lib/llvm-21/bin, where the unversioned
+    tools are); <tool>-<major> with clang's major version; <tool> on PATH."""
+    if os.environ.get(env):
+        return os.environ[env]
+    exe = ".exe" if os.name == "nt" else ""
+    clang_name = os.environ.get("CLANG_BIN") or "clang"
+    clang = shutil.which(clang_name)
+    dirs = []
+    if clang:
+        dirs += [os.path.dirname(clang), os.path.dirname(os.path.realpath(clang))]
+    for d in dirs:
+        if os.path.exists(os.path.join(d, tool + exe)):
+            return os.path.join(d, tool + exe)
+    major = None
+    m = re.search(r"-(\d+)(?:\.exe)?$", os.path.basename(clang_name))
+    if m:
+        major = m.group(1)
+    elif clang:
+        try:
+            v = subprocess.run([clang, "--version"], capture_output=True, text=True).stdout
+            m = re.search(r"clang version (\d+)", v)
+            major = m.group(1) if m else None
+        except OSError:
+            pass
+    if major and shutil.which(f"{tool}-{major}"):
+        return shutil.which(f"{tool}-{major}")
+    if shutil.which(tool):
+        return shutil.which(tool)
+    for d in ("/opt/homebrew/opt/llvm/bin", "/usr/local/opt/llvm/bin"):   # Homebrew's keg-only LLVM
+        if os.path.exists(os.path.join(d, tool)):
+            return os.path.join(d, tool)
+    sys.exit(f"check.py: cannot find {tool}: set {env}, or CLANG_BIN to a clang with {tool} beside it "
+             f"(looked beside {clang or clang_name}, for {tool}-{major or '<major>'} and {tool} on PATH)")
 
 
-nm = find_nm()
+nm = find_llvm_tool("llvm-nm", "LLVM_NM")
 target = ["--target", args.target] if args.target else []
 
 # Feature-gated std sources, and every feature std knows.
