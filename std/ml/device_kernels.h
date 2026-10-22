@@ -96,7 +96,7 @@ namespace std {
 #define DK_SPMM_TGRAD 90
 #define DK_SPMM_VGRAD 91
 #define DK_COUNT 92
-#define DK_SOURCE_CRC 0x8ef59911U
+#define DK_SOURCE_CRC 0xbc6a9ac7U
 
 // The kernel running elementwise op code op alone (dk_ewop_<op>), or DK_EW.
 static int device_ew_kernel_(int op) {
@@ -2149,25 +2149,17 @@ static const char* device_kernel_source_() {
         "// fp16 / bf16 values held as unsigned shorts, converted with round to\n"
         "// nearest even (the same bits as float16.h's f32_to_fp16 / f32_to_bf16).\n"
         "// Hardware conversions: v_cvt on AMD (_Float16), cvt.rn on NVIDIA, half on\n"
-        "// Apple GPUs; on Vulkan integer arithmetic, so that no kernel needs\n"
-        "// shaderFloat16 (float16.h's f32_to_fp16, exactly).\n"
+        "// Apple GPUs; on Vulkan GLSL.std.450's PackHalf2x16 / UnpackHalf2x16, which\n"
+        "// need no shaderFloat16.\n"
         "#if defined(DK_VULKAN)\n"
         "uint16_t f2h_bits(float f) {\n"
-        "    uint x = asuint(f), s = (x >> 16) & 0x8000u, e = (x >> 23) & 0xffu, m = x & 0x7fffffu;\n"
-        "    int E = (int)e - 112;   // the fp16 exponent\n"
-        "    if (e == 0xffu) return (uint16_t)(s | 0x7c00u | (m != 0u ? 0x200u : 0u));\n"
-        "    if (E >= 31) return (uint16_t)(s | 0x7c00u);\n"
-        "    uint sig = E > 0 ? m : m | 0x800000u, shift = E > 0 ? 13u : (uint)(14 - E);\n"
-        "    if (E < -10) return (uint16_t)s;\n"
-        "    uint h = sig >> shift, rem = sig & ((1u << shift) - 1u), half = 1u << (shift - 1u);\n"
-        "    if (rem > half || (rem == half && (h & 1u) != 0u)) h++;   // a carry out of the mantissa bumps the exponent (to inf at the top)\n"
-        "    return (uint16_t)(s | (E > 0 ? ((uint)E << 10) + h : h));\n"
+        "    float2 v = float2(f, 0.0f);\n"
+        "    return (uint16_t)spirv_asm { result:$$uint = OpExtInst glsl450 PackHalf2x16 $v };\n"
         "}\n"
         "float h2f_bits(uint16_t b) {\n"
-        "    uint h = (uint)b, s = (h & 0x8000u) << 16, e = (h >> 10) & 0x1fu, m = h & 0x3ffu;\n"
-        "    if (e == 0u) return asfloat(s | asuint((float)m * 5.9604644775390625e-8f));   // zero or subnormal: m 2^-24, exact\n"
-        "    if (e == 31u) return asfloat(s | 0x7f800000u | (m << 13));\n"
-        "    return asfloat(s | ((e + 112u) << 23) | (m << 13));\n"
+        "    uint h = (uint)b;\n"
+        "    float2 v = spirv_asm { result:$$float2 = OpExtInst glsl450 UnpackHalf2x16 $h };\n"
+        "    return v.x;\n"
         "}\n"
         "#elif defined(__METAL_VERSION__)\n"
         "unsigned short f2h_bits(float f) { return as_type<ushort>(half(f)); }\n"

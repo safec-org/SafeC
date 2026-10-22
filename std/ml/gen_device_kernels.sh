@@ -59,7 +59,7 @@ python3 - "$SLANGC" <<'PY'
 # portability layer, and the rewrites below the C++ spellings Slang lacks.
 # Each kernel is its own SPIR-V module, per build: 0 plain, 1 DK_TAGGED
 # (the DK_* kernels), 2 DK_ATTN64 and 3 both (the attention kernels).
-import concurrent.futures, os, re, subprocess, sys, tempfile, zlib
+import concurrent.futures, os, re, shutil, subprocess, sys, tempfile, zlib
 
 def to_slang(s):
     # loops: clang's unroll pragma -> Slang's attribute
@@ -201,5 +201,6 @@ out.append('};')
 out.append('')
 out.append('} // namespace std')
 open('device_kernels_spirv.h', 'w').write('\n'.join(out) + '\n')
+shutil.rmtree(tmp)
 print(f'wrote device_kernels_spirv.h ({len(jobs)} modules, {4 * len(words)} bytes of SPIR-V)')
 PY
