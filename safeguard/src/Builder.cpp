@@ -99,6 +99,35 @@ std::string Builder::findSystemClang(bool cxx) const {
     return cxx ? "clang++" : "clang";
 }
 
+std::string Builder::findLlvmTool(const std::string& name) const {
+#ifdef _WIN32
+    std::string file = name + ".exe";
+#else
+    std::string file = name;
+#endif
+    for (const std::string& clang : { findClang(false), findSystemClang(false) }) {
+        fs::path c(clang);
+        if (c.has_parent_path() && fs::exists(c.parent_path() / file))
+            return (c.parent_path() / file).string();
+    }
+    // The clang on PATH: an LLVM install keeps its tools beside it.
+    if (const char* path = std::getenv("PATH")) {
+#ifdef _WIN32
+        const char sep = ';'; const char* clangFile = "clang.exe";
+#else
+        const char sep = ':'; const char* clangFile = "clang";
+#endif
+        std::stringstream ss(path);
+        std::string dir;
+        while (std::getline(ss, dir, sep)) {
+            if (dir.empty() || !fs::exists(fs::path(dir) / clangFile)) continue;
+            if (fs::exists(fs::path(dir) / file)) return (fs::path(dir) / file).string();
+            break;
+        }
+    }
+    return name;
+}
+
 std::string Builder::findStdDir() const {
     // 1. $SAFEC_HOME/std
     const char* home = std::getenv("SAFEC_HOME");
@@ -235,7 +264,7 @@ std::string Builder::materializeScx(const std::string& src,
 // ── command runner ────────────────────────────────────────────────────────────
 
 int Builder::runCmd(const std::vector<std::string>& argv, bool verbose,
-                     bool suppressOutput) {
+                     bool suppressOutput, const std::string& stdoutPath) {
     if (argv.empty()) return -1;
     if (verbose) {
         for (size_t i = 0; i < argv.size(); ++i)
@@ -270,11 +299,24 @@ int Builder::runCmd(const std::vector<std::string>& argv, bool verbose,
         nullFd = _open("NUL", _O_WRONLY);
         if (nullFd != -1) { _dup2(nullFd, 1); _dup2(nullFd, 2); }
     }
+    // 'stdoutPath': the child's stdout goes to that file (see captureCmd).
+    int keptOut = -1, outFd = -1;
+    if (!stdoutPath.empty()) {
+        fflush(stdout);
+        keptOut = _dup(1);
+        outFd = _open(stdoutPath.c_str(), _O_WRONLY | _O_CREAT | _O_TRUNC, 0644);
+        if (outFd != -1) _dup2(outFd, 1);
+    }
     std::vector<const char*> args;
     for (auto& s : argv) args.push_back(s.c_str());
     args.push_back(nullptr);
     intptr_t rc = _spawnvp(_P_WAIT, args[0], args.data());
     int spawnErrno = errno;
+    if (keptOut != -1) {
+        fflush(stdout);
+        _dup2(keptOut, 1); _close(keptOut);
+        if (outFd != -1) _close(outFd);
+    }
     if (quiet) {
         fflush(stdout); fflush(stderr);
         if (savedOut != -1) { _dup2(savedOut, 1); _close(savedOut); }
@@ -298,9 +340,24 @@ int Builder::runCmd(const std::vector<std::string>& argv, bool verbose,
         nullFd = open("/dev/null", O_WRONLY);
         if (nullFd != -1) { dup2(nullFd, 1); dup2(nullFd, 2); }
     }
+    // 'stdoutPath': the child's stdout goes to that file (see captureCmd).
+    int keptOut = -1, outFd = -1;
+    if (!stdoutPath.empty()) {
+        fflush(stdout);
+        keptOut = dup(1);
+        outFd = open(stdoutPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (outFd != -1) dup2(outFd, 1);
+    }
     pid_t pid = fork();
+    auto restoreOut = [&]() {
+        if (keptOut == -1) return;
+        fflush(stdout);
+        dup2(keptOut, 1); close(keptOut);
+        if (outFd != -1) close(outFd);
+    };
     if (pid < 0) {
         std::cerr << "safeguard: fork failed: " << strerror(errno) << "\n";
+        restoreOut();
         if (quiet) {
             if (savedOut != -1) { dup2(savedOut, 1); close(savedOut); }
             if (savedErr != -1) { dup2(savedErr, 2); close(savedErr); }
@@ -323,6 +380,7 @@ int Builder::runCmd(const std::vector<std::string>& argv, bool verbose,
     }
     int status = 0;
     waitpid(pid, &status, 0);
+    restoreOut();
     if (quiet) {
         fflush(stdout); fflush(stderr);
         if (savedOut != -1) { dup2(savedOut, 1); close(savedOut); }
@@ -331,6 +389,29 @@ int Builder::runCmd(const std::vector<std::string>& argv, bool verbose,
     }
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 #endif
+}
+
+// Run a command and collect its stdout (through a temporary file, so the
+// argv-based runCmd above needs no shell quoting). Returns false if it
+// couldn't run or exited non-zero.
+bool Builder::captureCmd(const std::vector<std::string>& argv, std::string& out, bool verbose) {
+    static int seq = 0;
+#ifdef _WIN32
+    int pid = _getpid();
+#else
+    int pid = (int)getpid();
+#endif
+    std::error_code ec;
+    fs::path tmp = fs::temp_directory_path(ec) /
+                   ("safeguard-" + std::to_string(pid) + "-" + std::to_string(++seq) + ".out");
+    int rc = runCmd(argv, verbose, /*suppressOutput=*/false, tmp.string());
+    std::ifstream in(tmp);
+    std::stringstream ss;
+    ss << in.rdbuf();
+    out = ss.str();
+    in.close();
+    fs::remove(tmp, ec);
+    return rc == 0;
 }
 
 // ── compile one .sc → .ll ─────────────────────────────────────────────────────
@@ -435,8 +516,11 @@ std::string Builder::compileForeign(const std::string& srcPath,
     }
     fs::path obj = fs::path(buildDir) / (stem + ".o");
 
-    std::string compiler = findSystemClang(isCxx(lang));
+    // A cross target compiles with the LLVM clang and its target flags,
+    // like the SafeC objects and the link (linkFinal).
+    std::string compiler = isCrossTarget() ? findClang(isCxx(lang)) : findSystemClang(isCxx(lang));
     std::vector<std::string> cmd = { compiler, "-c", srcPath, "-o", obj.string() };
+    for (auto& f : targetClangFlags()) cmd.push_back(f);
     for (auto& inc : includeDirs) {
         cmd.push_back("-I");
         cmd.push_back(inc);
@@ -652,7 +736,8 @@ bool Builder::linkFinal(const std::vector<std::string>& objFiles,
                           const std::string& output,
                           bool useCxxDriver,
                           bool shared,
-                          bool objc) const {
+                          bool objc,
+                          const std::vector<std::string>& extraFlags) const {
     // A cross target links with the same LLVM clang that assembled the IR
     // (the system one may not know the target), through lld; bare metal
     // gets no libc/crt — the program's own runtime, linker script ('-T') and
@@ -677,14 +762,12 @@ bool Builder::linkFinal(const std::vector<std::string>& objFiles,
     // or use the portable -Wl,--whole-archive on Linux.
     // For simplicity, just list the .a files directly (works for most cases).
     for (auto& a : archives) cmd.push_back(a);
-#ifndef _WIN32
     // math functions live in a separate libm on macOS/Linux; on Windows
     // they're part of the standard CRT that's always linked, and there is
     // no 'm.lib' for clang's MSVC-style link.exe driver to find — passing
     // -lm there fails the link with LNK1181 ("cannot open input file
     // 'm.lib'") instead of being a harmless no-op.
-    if (!targetIsBareMetal()) cmd.push_back("-lm"); // math library for std/math.sc
-#endif
+    if (!targetIsBareMetal() && !targetIsWindows()) cmd.push_back("-lm"); // math library for std/math.sc
     const PlatformBuildConfig* plat = platformBuild();
     for (auto& d : manifest_.build.libDirs) cmd.push_back("-L" + d);
     if (plat) for (auto& d : plat->libDirs) cmd.push_back("-L" + d);
@@ -713,6 +796,7 @@ bool Builder::linkFinal(const std::vector<std::string>& objFiles,
     if (linksStd) for (auto& f : blasLinkFlags()) cmd.push_back(f);
     // Extra link flags from manifest
     for (auto& f : compileFlags()) cmd.push_back(f);
+    for (auto& f : extraFlags) cmd.push_back(f);
     cmd.push_back("-o");
     cmd.push_back(output);
     int rc = runCmd(cmd, opts_.verbose);
@@ -1085,7 +1169,7 @@ static std::vector<fs::path> findLibraries(const fs::path& dir, const std::strin
     for (const char* sub : { "lib", "lib64", "" }) {
         fs::path d = *sub ? dir / sub : dir;
         if (!fs::is_directory(d)) continue;
-        for (const std::string& f : { "lib" + name + ".a", name + ".lib",
+        for (const std::string& f : { "lib" + name + ".a", name + ".lib", "lib" + name + ".lib",
                                       "lib" + name + ".dylib", "lib" + name + ".so" })
             if (fs::exists(d / f)) return { d / f };
         std::vector<fs::path> statics, shareds;
@@ -1271,12 +1355,32 @@ Builder::DepLayout Builder::depLayout(const Dependency& dep) const {
     }
     std::set<std::string> rpaths;
     for (auto& f : libs) {
-        l.linkInputs.push_back(f.string());
-#ifndef _WIN32
         std::string e = f.extension().string();
-        if (e != ".a" && e != ".lib" && rpaths.insert(f.parent_path().string()).second)
-            l.linkInputs.push_back("-Wl,-rpath," + f.parent_path().string());   // find it at run time
-#endif
+        if (targetIsWindows()) {
+            // A DLL is linked through its import library (<stem>.lib beside
+            // it) and found at run time beside the program: copyRuntimeLibs
+            // puts it there. An import library's DLL is <stem>.dll beside
+            // it, or in ../bin/ (CMake's install layout).
+            fs::path lib = f, dll;
+            if (e == ".dll") {
+                dll = f;
+                lib = fs::path(f).replace_extension(".lib");
+                if (!fs::exists(lib)) { l.error = "no import library " + lib.string() + " for " + f.string(); return l; }
+            } else if (e == ".lib") {
+                for (const fs::path& c : { fs::path(f).replace_extension(".dll"),
+                                           f.parent_path().parent_path() / "bin" / fs::path(f).replace_extension(".dll").filename() })
+                    if (fs::exists(c)) { dll = c; break; }
+            }
+            l.linkInputs.push_back(lib.string());
+            if (!dll.empty()) l.runtimeLibs.push_back(dll.string());
+            continue;
+        }
+        l.linkInputs.push_back(f.string());
+        if (e != ".a" && e != ".lib") {
+            l.runtimeLibs.push_back(f.string());
+            if (rpaths.insert(f.parent_path().string()).second)
+                l.linkInputs.push_back("-Wl,-rpath," + f.parent_path().string());   // find it at run time
+        }
     }
     if (targetOS() == "macos") {
         if (objc) l.linkInputs.push_back("-lobjc");
@@ -1312,6 +1416,32 @@ bool Builder::depsNeedCxx() const {
         if (l.error.empty() && l.cxx) return true;
     }
     return false;
+}
+
+std::vector<std::string> Builder::depRuntimeLibs() const {
+    std::vector<std::string> out;
+    for (auto& dep : manifest_.dependencies) {
+        DepLayout l = depLayout(dep);
+        if (!l.error.empty()) continue;
+        for (auto& f : l.runtimeLibs)
+            if (fs::exists(f) && std::find(out.begin(), out.end(), f) == out.end()) out.push_back(f);
+    }
+    return out;
+}
+
+bool Builder::copyRuntimeLibs(const std::string& dir) const {
+    if (!targetIsWindows()) return true;   // an rpath finds them (see depLayout)
+    for (auto& f : depRuntimeLibs()) {
+        fs::path dest = fs::path(dir) / fs::path(f).filename();
+        std::error_code ec;
+        if (fs::equivalent(f, dest, ec)) continue;
+        fs::copy_file(f, dest, fs::copy_options::update_existing, ec);
+        if (ec) {
+            std::cerr << "safeguard: could not copy " << f << " to " << dir << ": " << ec.message() << "\n";
+            return false;
+        }
+    }
+    return true;
 }
 
 // ── C/C++/ObjC dependencies built from source ────────────────────────────────
@@ -1544,21 +1674,65 @@ std::string Builder::outputPath() const {
                 ("lib" + manifest_.build.output + ".a")).string();
     }
     if (type == "cdylib") {
-#if defined(__APPLE__)
-        const char* ext = ".dylib";
-#elif defined(_WIN32)
-        const char* ext = ".dll";
-#else
-        const char* ext = ".so";
-#endif
+        // Windows names a DLL <output>.dll, no "lib" prefix; its import
+        // library is <output>.lib beside it (importLibPath).
+        if (targetIsWindows())
+            return (fs::path(root_) / "build" / (manifest_.build.output + ".dll")).string();
+        const char* ext = targetOS() == "macos" ? ".dylib" : ".so";
         return (fs::path(root_) / "build" /
                 ("lib" + manifest_.build.output + ext)).string();
     }
+    // Windows: the .exe clang would add anyway (a cross link wouldn't), so
+    // this names the real file.
+    if (targetIsWindows())
+        return (fs::path(root_) / "build" / (manifest_.build.output + ".exe")).string();
     return (fs::path(root_) / "build" / manifest_.build.output).string();
 }
 
 std::string Builder::exportedIncludeDir() const {
     return (fs::path(root_) / "build" / "include").string();
+}
+
+std::string Builder::importLibPath() const {
+    return (fs::path(root_) / "build" / (manifest_.build.output + ".lib")).string();
+}
+
+// A DLL exports only what it is told to (SafeC has no dllexport), so a
+// Windows cdylib exports every external function defined in the package's
+// own object files — the same set a .so/.dylib exposes from them — listed
+// in a .def file. std's and the dependencies' archives linked into it are
+// left out, as are C++-mangled names ('?...': SafeC can't call those) and
+// data (importing a variable from a DLL needs __declspec(dllimport) in the
+// consumer, which SafeC can't express; export an accessor function).
+std::string Builder::writeExportsDef(const std::vector<std::string>& objFiles) const {
+    std::vector<std::string> cmd = { findLlvmTool("llvm-nm"), "--defined-only", "--extern-only", "-P" };
+    for (auto& o : objFiles) cmd.push_back(o);
+    std::string out;
+    if (!captureCmd(cmd, out, opts_.verbose)) {
+        std::cerr << "safeguard: llvm-nm failed listing the DLL's exports (it ships with LLVM, "
+                     "beside clang; put it on PATH)\n";
+        return "!";
+    }
+    // -P lines: "<name> <type> <value> <size>"; "<file>:" headers between objects.
+    std::set<std::string> names;
+    std::istringstream ss(out);
+    std::string line;
+    while (std::getline(ss, line)) {
+        std::istringstream ls(line);
+        std::string name, type;
+        if (!(ls >> name >> type)) continue;
+        if (type == "T" && name[0] != '?') names.insert(name);
+    }
+    if (names.empty()) return "";
+    fs::path def = fs::path(root_) / "build" / (manifest_.build.output + ".def");
+    std::ofstream f(def);
+    f << "EXPORTS\n";
+    for (auto& n : names) f << "    " << n << "\n";
+    if (!f) {
+        std::cerr << "safeguard: cannot write " << def.string() << "\n";
+        return "!";
+    }
+    return def.string();
 }
 
 // The public headers of a library build, copied into build/include with
@@ -1760,12 +1934,36 @@ bool Builder::build() {
         if (!packArchive(allObjs, outputPath())) return false;
         if (!exportHeaders(root_, exportedIncludeDir())) return false;
     } else if (crateType == "cdylib") {
-        if (!linkFinal(objFiles, archives, outputPath(), hasCpp, /*shared=*/true, hasObjC))
+        // Windows: the exports are listed explicitly (writeExportsDef), and
+        // the link writes the import library build/<output>.lib beside the
+        // DLL.
+        std::vector<std::string> extra;
+        std::string def;
+        if (targetIsWindows()) {
+            def = writeExportsDef(objFiles);
+            if (def == "!") return false;
+            if (def.empty())
+                std::cerr << "safeguard: warning: " << outputPath() << " exports no functions, so no "
+                             "import library is written for it\n";
+            else
+                extra.push_back("-Wl,/DEF:" + def);
+        } else if (targetOS() == "linux") {
+            // A SONAME, so a dependent records "lib<output>.so" (found on its
+            // rpath, or beside it in a bundle) rather than this path.
+            extra.push_back("-Wl,-soname," + fs::path(outputPath()).filename().string());
+        }
+        if (!linkFinal(objFiles, archives, outputPath(), hasCpp, /*shared=*/true, hasObjC, extra))
             return false;
+        if (!def.empty() && !fs::exists(importLibPath())) {
+            std::cerr << "safeguard: the link wrote no import library " << importLibPath() << "\n";
+            return false;
+        }
         if (!exportHeaders(root_, exportedIncludeDir())) return false;
+        if (!copyRuntimeLibs(buildDir)) return false;
     } else {
         if (!linkFinal(objFiles, archives, outputPath(), hasCpp, /*shared=*/false, hasObjC))
             return false;
+        if (!copyRuntimeLibs(buildDir)) return false;
     }
 
     // 8. Write / refresh Package.lock after a successful build.
@@ -1901,6 +2099,7 @@ bool Builder::test() {
     std::string safecBin = findSafec();
     fs::path buildDir = fs::path(root_) / "build" / "tests";
     fs::create_directories(buildDir);
+    if (!copyRuntimeLibs(buildDir.string())) return false;
 
     std::vector<std::string> defs = featureDefines();
 

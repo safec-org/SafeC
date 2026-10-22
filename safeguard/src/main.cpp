@@ -50,8 +50,10 @@ Dependency format in Package.toml:
   frameworks = ["Foundation"]                  # macOS frameworks it needs
   A directory (fetched or local) with src/ is a SafeC package built from
   source; one without is a prebuilt library directory: lib<name> (or every
-  library) in lib/, lib64/ or the directory itself, headers in include/.
-  SafeC calls C++ only through extern "C" functions.
+  library) in lib/, lib64/ or the directory itself, headers in include/
+  (on Windows, <name>.lib — a DLL's import library, the DLL beside it or
+  in ../bin/ is copied next to the program). SafeC calls C++ only through
+  extern "C" functions.
 
 [build] keys for C/C++/Objective-C:
   frameworks = ["Cocoa"]     macOS frameworks to link (ignored elsewhere)

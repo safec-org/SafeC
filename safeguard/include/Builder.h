@@ -81,6 +81,9 @@ public:
     // build/lib<output>.a/.so/.dylib, so build/ can be consumed as a
     // prebuilt dependency (its include/ and its library).
     std::string exportedIncludeDir() const;
+    // Windows cdylib: build/<output>.lib, the import library dependents
+    // link against (the DLL's exports are listed in build/<output>.def).
+    std::string importLibPath() const;
 
     // Check Package.lock against current state.
     // Prints warnings for mismatches; returns false if any dep SHA differs.
@@ -152,6 +155,9 @@ public:
         std::vector<std::string> foreignIncludes; // include dirs for C/C++ sources
         std::vector<std::string> linkInputs;      // library files and link flags (rpath,
                                                   // -lobjc, -Wl,-framework,<name>)
+        std::vector<std::string> runtimeLibs;     // shared libraries a program loads at
+                                                  // run time (.dll copied beside it on
+                                                  // Windows)
         std::string error;                        // why it can't be used, if so
     };
     DepLayout depLayout(const Dependency& dep) const;
@@ -303,6 +309,7 @@ private:
     // (-l/-L/-flto). 'shared' produces a dynamic library (-shared) instead
     // of an executable, for build.crate_type = "cdylib". 'objc' links the
     // Objective-C runtime; [build] frameworks are passed on macOS.
+    // 'extraFlags' go last (a cdylib's export list).
     // Returns true on success.
     // Link flags for the CPU BLAS std's sgemm picks up (see [build] blas).
     std::vector<std::string> blasLinkFlags() const;
@@ -311,21 +318,40 @@ private:
                     const std::string& output,
                     bool useCxxDriver = false,
                     bool shared = false,
-                    bool objc = false) const;
+                    bool objc = false,
+                    const std::vector<std::string>& extraFlags = {}) const;
 
     // Fork + exec a command, wait for it, return exit code.
     // 'suppressOutput': when true and 'verbose' is false, discard the
     // child's stdout/stderr instead of letting it print — see the call
     // site comment in runCmd's definition for why this exists.
+    // 'stdoutPath': write the child's stdout to that file instead.
     static int runCmd(const std::vector<std::string>& argv, bool verbose,
-                       bool suppressOutput = false);
+                       bool suppressOutput = false, const std::string& stdoutPath = "");
+    // Run a command, returning its stdout in 'out'; false if it failed.
+    static bool captureCmd(const std::vector<std::string>& argv, std::string& out,
+                           bool verbose = false);
+
+    // An LLVM tool (llvm-nm, llvm-rc, ...): beside the LLVM clang findClang()
+    // picks, beside the clang on PATH, else the bare name.
+    std::string findLlvmTool(const std::string& name) const;
+
+    // Windows cdylib: write build/<output>.def exporting the external
+    // functions defined in the package's own objects (not std's or a
+    // dependency's). Returns the .def path, "" if none, or "!" on error.
+    std::string writeExportsDef(const std::vector<std::string>& objFiles) const;
 
     // Build a 'build = "sources"/"cmake"' dependency into l.outDir, unless
     // it is up to date. Returns true on success.
     bool buildNativeDep(const Dependency& dep, const DepLayout& l) const;
 
-    // Whether a dependency needs the C++ link driver.
+    // What the dependencies contribute beyond their libraries: whether one
+    // needs the C++ link driver, and their run-time shared libraries.
     bool depsNeedCxx() const;
+    std::vector<std::string> depRuntimeLibs() const;
+    // Windows: copy the dependencies' DLLs into 'dir' (beside an exe or
+    // DLL just linked there), the way an rpath finds them elsewhere.
+    bool copyRuntimeLibs(const std::string& dir) const;
 
     // A dependency's directory: <root>/deps/<name> for a git URL, 'path'
     // (against the project root) for a local one, "" for a lib-only entry.
