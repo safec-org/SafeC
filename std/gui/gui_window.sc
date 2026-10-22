@@ -544,6 +544,9 @@ void GuiWindow::set_position(int x, int y) {
         case some(st): {
             &GuiBackend b = gui_backend();
             b.window_set_position(st, x, y);
+            // what was asked for until the platform reports where it went
+            st.x = x;
+            st.y = y;
         }
     }
 }
