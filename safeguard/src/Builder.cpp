@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <cstdlib>
+#include <map>
 #include <set>
 #include <fstream>
 #include <cctype>
@@ -1190,6 +1191,49 @@ std::string Builder::outputPath() const {
     return (fs::path(root_) / "build" / manifest_.build.output).string();
 }
 
+std::string Builder::exportedIncludeDir() const {
+    return (fs::path(root_) / "build" / "include").string();
+}
+
+// The public headers of a library build, copied into build/include with
+// their paths kept: everything under the project's include/, and the .h
+// files under src/ (both are what a dependent building this package from
+// source gets on its include path -- see depLayout). The directory is
+// rebuilt each time, so a header deleted from the sources leaves it too.
+// A src/ header with the same path as an include/ one is an error: a
+// dependent would see one or the other depending on the search order.
+static bool exportHeaders(const fs::path& root, const fs::path& dest) {
+    std::error_code ec;
+    fs::remove_all(dest, ec);
+    std::map<std::string, fs::path> files;   // relative path -> source
+    auto collect = [&](const fs::path& dir, bool headersOnly) {
+        if (!fs::is_directory(dir)) return true;
+        for (auto& e : fs::recursive_directory_iterator(dir)) {
+            if (!e.is_regular_file()) continue;
+            if (headersOnly && e.path().extension() != ".h") continue;
+            std::string rel = fs::relative(e.path(), dir).generic_string();
+            auto [it, fresh] = files.emplace(rel, e.path().lexically_normal());
+            if (!fresh) {
+                std::cerr << "safeguard: header '" << rel << "' is both " << it->second.string()
+                          << " and " << e.path().lexically_normal().string() << "; a library exports one header per path\n";
+                return false;
+            }
+        }
+        return true;
+    };
+    if (!collect(root / "include", false) || !collect(root / "src", true)) return false;
+    for (auto& [rel, src] : files) {
+        fs::path out = dest / rel;
+        fs::create_directories(out.parent_path());
+        fs::copy_file(src, out, fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            std::cerr << "safeguard: could not export " << src.string() << ": " << ec.message() << "\n";
+            return false;
+        }
+    }
+    return true;
+}
+
 bool Builder::build() {
     std::string safecBin = findSafec();
     std::string buildDir = (fs::path(root_) / "build").string();
@@ -1236,7 +1280,12 @@ bool Builder::build() {
     // fair game — those are meant to be consumed by any language.
     std::vector<std::string> foreignIncs;
     fs::path projInc = fs::path(root_) / "include";
-    if (fs::exists(projInc)) foreignIncs.push_back(projInc.string());
+    if (fs::exists(projInc)) {
+        // Both languages: a library's exported headers (see exportHeaders)
+        // are included by its own SafeC sources too.
+        userIncs.push_back(projInc.string());
+        foreignIncs.push_back(projInc.string());
+    }
     depIncludes(userIncs, foreignIncs);
 
     // 4. Compile user sources. Mixed SafeC/C/C++ — each file is dispatched
@@ -1326,9 +1375,11 @@ bool Builder::build() {
         // (std/deps' .a files) are meant to be linked in later by whatever
         // consumes this .a, not re-flattened into it here.
         if (!packArchive(allObjs, outputPath())) return false;
+        if (!exportHeaders(root_, exportedIncludeDir())) return false;
     } else if (crateType == "cdylib") {
         if (!linkFinal(objFiles, archives, outputPath(), hasCpp, /*shared=*/true))
             return false;
+        if (!exportHeaders(root_, exportedIncludeDir())) return false;
     } else {
         if (!linkFinal(objFiles, archives, outputPath(), hasCpp)) return false;
     }
@@ -1357,7 +1408,12 @@ bool Builder::check() {
     }
     std::vector<std::string> foreignIncs;
     fs::path projInc = fs::path(root_) / "include";
-    if (fs::exists(projInc)) foreignIncs.push_back(projInc.string());
+    if (fs::exists(projInc)) {
+        // Both languages: a library's exported headers (see exportHeaders)
+        // are included by its own SafeC sources too.
+        userIncs.push_back(projInc.string());
+        foreignIncs.push_back(projInc.string());
+    }
     depIncludes(userIncs, foreignIncs);
 
     fs::path srcDir = fs::path(root_) / "src";

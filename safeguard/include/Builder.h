@@ -73,6 +73,10 @@ public:
 
     // Return path to the compiled binary (valid after a successful build()).
     std::string outputPath() const;
+    // build/include: the headers a library build exports beside its
+    // build/lib<output>.a/.so/.dylib, so build/ can be consumed as a
+    // prebuilt dependency (its include/ and its library).
+    std::string exportedIncludeDir() const;
 
     // Check Package.lock against current state.
     // Prints warnings for mismatches; returns false if any dep SHA differs.

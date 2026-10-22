@@ -170,6 +170,23 @@ else
     cat /tmp/sg_test.txt
 fi
 
+# A library build exports its headers (include/ and src/'s .h files) into
+# build/include beside build/lib<name>.a, so build/ is a prebuilt dependency.
+mkdir -p "$WORKDIR/ci_lib/src" "$WORKDIR/ci_lib/include/ci_lib"
+printf '[package]\nname = "ci_lib"\nversion = "0.1.0"\n\n[build]\nedition = "2026"\ncrate_type = "staticlib"\n' \
+    > "$WORKDIR/ci_lib/Package.toml"
+printf '#pragma once\n#define CI_LIB_BASE 40\n' > "$WORKDIR/ci_lib/include/ci_lib/config.h"
+printf '#pragma once\n#include <ci_lib/config.h>\nint ci_lib_answer();\n' > "$WORKDIR/ci_lib/src/ci_lib.h"
+printf '#include "ci_lib.h"\nint ci_lib_answer() { return CI_LIB_BASE + 2; }\n' > "$WORKDIR/ci_lib/src/ci_lib.sc"
+if (cd "$WORKDIR/ci_lib" && "$SAFEGUARD_BIN" build >/tmp/sg_lib.txt 2>&1) &&
+   [[ -f "$WORKDIR/ci_lib/build/libci_lib.a" && -f "$WORKDIR/ci_lib/build/include/ci_lib.h" &&
+      -f "$WORKDIR/ci_lib/build/include/ci_lib/config.h" ]]; then
+    pass "safeguard build (staticlib) exports build/include beside build/libci_lib.a"
+else
+    fail "safeguard build (staticlib) did not produce build/libci_lib.a with build/include"
+    cat /tmp/sg_lib.txt
+fi
+
 popd >/dev/null
 rm -rf "$WORKDIR"
 
