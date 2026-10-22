@@ -1011,7 +1011,8 @@ static int g_dvk_gemm_mod[24];
 static int g_dvk_conv_mod[36];
 
 // The GEMM kernel for g: 64 x 64 tiles when there are enough of them to fill
-// the GPU and b isn't transposed, else 32 x 32 (MpsBackend's choice).
+// the GPU (four times as many when b is transposed: its 16-deep tiles read
+// b^T in short runs), else 32 x 32.
 static int dvk_gemm_(const &DvkGemm_ g, unsigned long batch) {
     if (!dvk_ensure_()) return 0;
     if (g.m == 0U || g.n == 0U || batch == 0UL) return 1;
@@ -1019,7 +1020,7 @@ static int dvk_gemm_(const &DvkGemm_ g, unsigned long batch) {
     unsigned long m = (unsigned long)g.m;
     unsigned long n = (unsigned long)g.n;
     unsigned long tile = 32UL;
-    if (g.tb == 0U && ((m + 63UL) / 64UL) * ((n + 63UL) / 64UL) * batch >= DVK_GEMM_FILL) tile = 64UL;
+    if (((m + 63UL) / 64UL) * ((n + 63UL) / 64UL) * batch >= (g.tb == 0U ? DVK_GEMM_FILL : 4UL * DVK_GEMM_FILL)) tile = 64UL;
     unsigned long slot = (tile == 64UL ? 12UL : 0UL) + (unsigned long)g.at * 4UL + (unsigned long)g.ta + 2UL * (unsigned long)g.tb;
     if (g.at > 2U || slot >= 24UL) return 0;
     unsafe {
