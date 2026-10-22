@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Builds and runs the Vulkan backend checks (needs a Vulkan 1.2 GPU with the
 # loader, e.g. Homebrew's vulkan-loader + molten-vk on macOS, and Homebrew
-# LLVM's clang, which safec's IR targets): every std::ml training workload on
-# the CPU and on the Vulkan device backend in fp32, fp16 and bf16.
+# LLVM's clang, which safec's IR targets): gpu_spirv.h's host-array API, and
+# every std::ml training workload on the CPU and on the Vulkan device backend
+# in fp32, fp16 and bf16.
 #   usage: run.sh
 #   Env: SAFEC (default compiler/build/safec), SAFEGUARD (default: on PATH),
 #        OUT (build dir), STD_ARCHIVE (a prebuilt release libsafec_std.a),
@@ -43,6 +44,11 @@ if [[ "$(uname)" == "Darwin" ]]; then FRAMEWORKS="-framework Metal -framework Fo
 WRAP="$OUT/clang_link.sh"
 printf '#!/bin/sh\nexec "%s" -w "$@" "%s" %s %s -lm -lpthread\n' "$CLANG" "$STD" "$VULKAN_LIB" "$FRAMEWORKS" > "$WRAP"
 chmod +x "$WRAP"
+for t in vulkan_spirv_check; do
+    SAFEC_CLANG="$WRAP" "$SAFEC" "$HERE/$t.sc" -I "$ROOT" --emit-bin -O2 -o "$OUT/$t"
+    "$OUT/$t"
+done
+
 # ../device/device_check.sc with the vulkan feature (SAFEC_FEATURE_VULKAN
 # links device_vulkan.sc in): every std::ml workload on the CPU and on the GPU.
 SAFEC_CLANG="$WRAP" "$SAFEC" "$HERE/../device/device_check.sc" -I "$ROOT" -DSAFEC_FEATURE_VULKAN=1 \

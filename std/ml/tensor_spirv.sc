@@ -1,5 +1,5 @@
 // SafeC Standard Library — GPU-backed Tensor ops implementation (Vulkan/SPIR-V (cross-vendor), see
-// tensor_spirv.h). UNVERIFIED — see gpu_spirv.h/.sc's warnings; every op falls back to CPU today.
+// tensor_spirv.h): gpu_spirv.h's host-array ops, the CPU loop when one doesn't run.
 #pragma once
 #include <std/ml/tensor_spirv.h>
 #include <std/ml/tensor_nn.h>
