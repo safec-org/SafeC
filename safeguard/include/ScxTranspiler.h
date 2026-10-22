@@ -4,26 +4,40 @@
 
 namespace safeguard {
 
-// Transpiles a .scx file (ordinary SafeC source, plus one extra piece of
-// syntax: HTML-like markup as the operand of a 'return' statement) into
-// plain SafeC source that 'safec' can compile unmodified.
+// Transpiles a .scx file (ordinary SafeC source, plus HTML-like markup in
+// three statement positions) into plain SafeC source that 'safec' can
+// compile unmodified. Markup may be:
 //
-// Supported form (the only place markup may appear — see scx.md in
-// safec-docs for the full writeup):
+//   return <markup>;                 // the function's String result
+//   struct String s = <markup>;      // a declaration's initializer
+//   lhs = <markup>;                  // an assignment (any lvalue)
 //
-//   return <tag attr="literal" attr2={expr}>
+// where <markup> is one element or a fragment — a sequence of elements,
+// '<!doctype ...>' declarations and '<!-- comments -->' (kept verbatim):
+//
+//   <tag attr="literal" attr2={expr}>
 //     text
 //     {expr}      // HTML-escaped and appended
 //     {!expr}     // appended raw/unescaped (e.g. pre-rendered child HTML)
 //     <nested>...</nested>
-//   </tag>;
+//   </tag>
 //
 // 'tag' names identifiers ([a-zA-Z][a-zA-Z0-9-]*); a tag with no children
-// may self-close as <tag ... />. {expr}/{!expr} expressions must evaluate
+// may self-close as <tag ... />. Output follows HTML rules: an empty void
+// element (br, img, meta, link, ...) is written as a start tag only, any
+// other empty element gets its close tag ('<div></div>' — '<div/>' would
+// parse as an open tag), and only inside <svg>/<math> are empty elements
+// written self-closed. <script> and <style> hold raw text: everything up
+// to the close tag is copied verbatim, braces included, with no
+// interpolation. {expr}/{!expr} expressions must evaluate
 // to 'const char*' — scx does no type-checking of its own (it runs before
 // safec's Sema ever sees the file), so a type mismatch surfaces as an
 // ordinary safec compile error on the generated code, pointing at the
 // synthesized .push()/scx_append_esc() call site.
+//
+// A quoted '#include "x.h"' is rewritten to the absolute path of x.h next
+// to the .scx file (when it exists there), since the generated file is
+// compiled from another directory.
 //
 // Everything outside a 'return <markup>;' statement passes through
 // byte-for-byte untouched (still ordinary SafeC — imports, structs, plain
@@ -34,8 +48,8 @@ namespace safeguard {
 //
 // Throws std::runtime_error (message prefixed "<file>:<line>: ...") on
 // malformed markup: unterminated tag, mismatched open/close tag names, an
-// unterminated {expr}, or a 'return <ident...' that never resolves to a
-// complete, well-formed element followed by ';'.
+// unterminated {expr}, or markup that never resolves to a complete,
+// well-formed element followed by ';'.
 std::string transpileScx(const std::string& source, const std::string& filename);
 
 // Same transpilation, plus a line map for tools (the LSP) that need to

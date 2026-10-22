@@ -1,6 +1,7 @@
 // SafeC Standard Library — HTML serialization implementation (see html.h)
 #pragma once
 #include <std/serial/html.h>
+#include <std/str.h>
 #include <std/serial/value.h>
 #include <std/collections/string.h>
 #include <std/fmt.h>
@@ -125,6 +126,190 @@ inline struct String value_to_html(const &Value v) {
     struct String out = String::new();
     html_write(v, &out);
     return out;
+}
+
+// UTF-8 for one code point (no std/encoding dependency for this one use).
+static void html_push_utf8_(&String out, unsigned int cp) {
+    if (cp < 0x80U) { out.push_char((char)cp); }
+    else if (cp < 0x800U) {
+        out.push_char((char)(0xC0U | (cp >> 6)));
+        out.push_char((char)(0x80U | (cp & 0x3FU)));
+    } else if (cp < 0x10000U) {
+        out.push_char((char)(0xE0U | (cp >> 12)));
+        out.push_char((char)(0x80U | ((cp >> 6) & 0x3FU)));
+        out.push_char((char)(0x80U | (cp & 0x3FU)));
+    } else {
+        out.push_char((char)(0xF0U | (cp >> 18)));
+        out.push_char((char)(0x80U | ((cp >> 12) & 0x3FU)));
+        out.push_char((char)(0x80U | ((cp >> 6) & 0x3FU)));
+        out.push_char((char)(0x80U | (cp & 0x3FU)));
+    }
+}
+
+// Code point for a named reference (the name without '&' / ';'), or 0.
+static unsigned int html_named_entity_(const &String name) {
+    if (name.eq_cstr("amp")) { return 0x26U; }
+    if (name.eq_cstr("lt")) { return 0x3CU; }
+    if (name.eq_cstr("gt")) { return 0x3EU; }
+    if (name.eq_cstr("quot")) { return 0x22U; }
+    if (name.eq_cstr("apos")) { return 0x27U; }
+    if (name.eq_cstr("nbsp")) { return 0xA0U; }
+    if (name.eq_cstr("copy")) { return 0xA9U; }
+    if (name.eq_cstr("reg")) { return 0xAEU; }
+    if (name.eq_cstr("trade")) { return 0x2122U; }
+    if (name.eq_cstr("hellip")) { return 0x2026U; }
+    if (name.eq_cstr("mdash")) { return 0x2014U; }
+    if (name.eq_cstr("ndash")) { return 0x2013U; }
+    if (name.eq_cstr("lsquo")) { return 0x2018U; }
+    if (name.eq_cstr("rsquo")) { return 0x2019U; }
+    if (name.eq_cstr("ldquo")) { return 0x201CU; }
+    if (name.eq_cstr("rdquo")) { return 0x201DU; }
+    if (name.eq_cstr("laquo")) { return 0xABU; }
+    if (name.eq_cstr("raquo")) { return 0xBBU; }
+    if (name.eq_cstr("middot")) { return 0xB7U; }
+    if (name.eq_cstr("bull")) { return 0x2022U; }
+    if (name.eq_cstr("times")) { return 0xD7U; }
+    if (name.eq_cstr("divide")) { return 0xF7U; }
+    if (name.eq_cstr("deg")) { return 0xB0U; }
+    if (name.eq_cstr("larr")) { return 0x2190U; }
+    if (name.eq_cstr("uarr")) { return 0x2191U; }
+    if (name.eq_cstr("rarr")) { return 0x2192U; }
+    if (name.eq_cstr("darr")) { return 0x2193U; }
+    if (name.eq_cstr("harr")) { return 0x2194U; }
+    if (name.eq_cstr("ne")) { return 0x2260U; }
+    if (name.eq_cstr("le")) { return 0x2264U; }
+    if (name.eq_cstr("ge")) { return 0x2265U; }
+    return 0U;
+}
+
+void html_unescape(&String out, const &char s) {
+    unsigned long i = 0UL;
+    for (;;) {
+        char c;
+        unsafe { c = s[i]; }
+        if (c == (char)0) { break; }
+        if (c != '&') { out.push_char(c); i = i + 1UL; continue; }
+        // Find the ';' (references are short).
+        unsigned long j = i + 1UL;
+        unsafe { while (j - i <= 32UL && s[j] != (char)0 && s[j] != ';' && s[j] != '&' && s[j] != ' ') { j = j + 1UL; } }
+        char end;
+        unsafe { end = s[j]; }
+        unsigned int cp = 0U;
+        if (end == ';' && j > i + 1UL) {
+            char h;
+            unsafe { h = s[i + 1UL]; }
+            if (h == '#') {
+                unsigned long k = i + 2UL;
+                int hex = 0;
+                unsafe { if (s[k] == 'x' || s[k] == 'X') { hex = 1; k = k + 1UL; } }
+                unsigned int v = 0U;
+                int digits = 0;
+                while (k < j) {
+                    char d;
+                    unsafe { d = s[k]; }
+                    unsigned int dv = 99U;
+                    if (d >= '0' && d <= '9') { dv = (unsigned int)(d - '0'); }
+                    else if (hex && d >= 'a' && d <= 'f') { dv = (unsigned int)(d - 'a') + 10U; }
+                    else if (hex && d >= 'A' && d <= 'F') { dv = (unsigned int)(d - 'A') + 10U; }
+                    if (dv >= (hex ? 16U : 10U)) { digits = -1; break; }
+                    if (v < 0x110000U) { v = v * (hex ? 16U : 10U) + dv; }
+                    digits = digits + 1;
+                    k = k + 1UL;
+                }
+                if (digits > 0 && v > 0U && v < 0x110000U) { cp = v; }
+            } else {
+                struct String name;
+                unsafe { name = String::from_n((const char*)s + i + 1UL, j - i - 1UL); }
+                cp = html_named_entity_(&name);
+                name.free();
+            }
+        }
+        if (cp == 0U) { out.push_char('&'); i = i + 1UL; continue; }
+        html_push_utf8_(out, cp);
+        i = j + 1UL;
+    }
+}
+
+// Is the tag name s[a..b) (lowercase compare) a block-level boundary?
+static int html_is_block_tag_(const &char s, unsigned long a, unsigned long b) {
+    struct String name;
+    unsafe { name = String::from_n((const char*)s + a, b - a); }
+    struct String n = name.to_lower();
+    name.free();
+    int block = n.eq_cstr("p") || n.eq_cstr("br") || n.eq_cstr("div") || n.eq_cstr("li") ||
+                n.eq_cstr("ul") || n.eq_cstr("ol") || n.eq_cstr("dl") || n.eq_cstr("dt") ||
+                n.eq_cstr("dd") || n.eq_cstr("tr") || n.eq_cstr("td") || n.eq_cstr("th") ||
+                n.eq_cstr("table") || n.eq_cstr("thead") || n.eq_cstr("tbody") || n.eq_cstr("pre") ||
+                n.eq_cstr("blockquote") || n.eq_cstr("section") || n.eq_cstr("article") ||
+                n.eq_cstr("header") || n.eq_cstr("footer") || n.eq_cstr("nav") || n.eq_cstr("aside") ||
+                n.eq_cstr("main") || n.eq_cstr("hr") || n.eq_cstr("details") || n.eq_cstr("summary") ||
+                n.eq_cstr("figure") || n.eq_cstr("figcaption") ||
+                (n.len == 2UL && n.char_at(0UL) == (int)'h' && n.char_at(1UL) >= (int)'1' && n.char_at(1UL) <= (int)'6');
+    n.free();
+    return block;
+}
+
+void html_strip_tags(&String out, const &char s) {
+    unsigned long i = 0UL;
+    for (;;) {
+        char c;
+        unsafe { c = s[i]; }
+        if (c == (char)0) { break; }
+        if (c != '<') { out.push_char(c); i = i + 1UL; continue; }
+        unsafe {
+            // Comment.
+            if (s[i + 1UL] == '!' && s[i + 2UL] == '-' && s[i + 3UL] == '-') {
+                unsigned long k = i + 4UL;
+                while (s[k] != (char)0 && !(s[k] == '-' && s[k + 1UL] == '-' && s[k + 2UL] == '>')) { k = k + 1UL; }
+                i = s[k] == (char)0 ? k : k + 3UL;
+                continue;
+            }
+            unsigned long a = i + 1UL;
+            if (s[a] == '/') { a = a + 1UL; }
+            unsigned long b = a;
+            while ((s[b] >= 'a' && s[b] <= 'z') || (s[b] >= 'A' && s[b] <= 'Z') || (s[b] >= '0' && s[b] <= '9')) { b = b + 1UL; }
+            if (b == a && s[i + 1UL] != '!' && s[i + 1UL] != '?') {
+                out.push_char('<');   // a lone '<', not a tag
+                i = i + 1UL;
+                continue;
+            }
+            // Skip to the tag's '>' (quoted attribute values may hold '>').
+            unsigned long k = b;
+            char q = (char)0;
+            while (s[k] != (char)0) {
+                if (q != (char)0) { if (s[k] == q) { q = (char)0; } }
+                else if (s[k] == '"' || s[k] == '\'') { q = s[k]; }
+                else if (s[k] == '>') { break; }
+                k = k + 1UL;
+            }
+            int closing = s[i + 1UL] == '/';
+            if (html_is_block_tag_(s, a, b) && out.len > 0UL) {
+                int last = out.char_at(out.len - 1UL);
+                if (last != (int)' ' && last != (int)'\n') { out.push_char(' '); }
+            }
+            i = s[k] == (char)0 ? k : k + 1UL;
+            // <script>/<style>: drop everything up to the close tag.
+            if (!closing && b - a == 6UL) {
+                struct String nm = String::from_n((const char*)s + a, 6UL);
+                struct String lo = nm.to_lower();
+                int raw = lo.eq_cstr("script");
+                nm.free(); lo.free();
+                if (raw) {
+                    const ?&char close = str_find((const char*)s + i, "</script");
+                    match (close) { case some(p): { i = (unsigned long)(p - (const char*)s); } case null: { } }
+                }
+            } else if (!closing && b - a == 5UL) {
+                struct String nm = String::from_n((const char*)s + a, 5UL);
+                struct String lo = nm.to_lower();
+                int raw = lo.eq_cstr("style");
+                nm.free(); lo.free();
+                if (raw) {
+                    const ?&char close = str_find((const char*)s + i, "</style");
+                    match (close) { case some(p): { i = (unsigned long)(p - (const char*)s); } case null: { } }
+                }
+            }
+        }
+    }
 }
 
 // ── Parser ────────────────────────────────────────────────────────────────

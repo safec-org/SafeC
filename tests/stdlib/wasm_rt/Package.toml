@@ -1,0 +1,9 @@
+[package]
+name        = "wasm_rt_tests"
+version     = "0.1.0"
+author      = "SafeC"
+description = "std/wasm/wasm_rt (allocator, libc subset, compiler-rt builtins), run under Node (see run.sh)"
+license     = "MIT"
+
+[build]
+edition = "2026"
