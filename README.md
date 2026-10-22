@@ -92,7 +92,8 @@ int main() {
 | **WebAssembly** | `--target=wasm32`/`wasm64` builds library modules; `export_name`/`import_module`/`import_name` attributes define the module's interface, and `std/wasm` supplies a freestanding runtime and DOM interop. |
 | **Modern Language** | Generics, struct methods, operator overloading, pattern matching, optional types, slices, defer, tuples, typed channels. |
 | **Borrow Checker** | Mutable-XOR-shared aliasing discipline with non-lexical lifetimes (NLL). |
-| **Standard Library** | 30+ modules, generic and `void*`-free: mem, io, str, math, collections (vec, map, list, bst, ...), thread, atomic, simd, serialization (JSON/XML/HTML/protobuf), HTTP, crypto, a cooperative task scheduler + real-time I/O reactor, real-time audio and MIDI I/O (ALSA, JACK, Core Audio, WASAPI, Web Audio; the ALSA sequencer, Core MIDI, WinMM, Web MIDI), and ML tensors that train on the CPU (with BLAS) or on a tensor device: ROCm, CUDA, Metal, Vulkan (SPIR-V) or WebGPU, all from one kernel set. |
+| **Standard Library** | 30+ modules, generic and `void*`-free: mem, io, str, math, collections (vec, map, list, bst, ...), thread, atomic, simd, serialization (JSON/XML/HTML/protobuf), HTTP, crypto, a cooperative task scheduler + real-time I/O reactor, Rust-style async (futures, executors, async TCP), real-time audio and MIDI I/O (ALSA, JACK, Core Audio, WASAPI, Web Audio; the ALSA sequencer, Core MIDI, WinMM, Web MIDI), and ML tensors that train on the CPU (with BLAS) or on a tensor device: ROCm, CUDA, Metal, Vulkan (SPIR-V) or WebGPU, all from one kernel set. |
+| **Async/Await (library)** | `std/async`: Rust's `Future`/`Poll`/`Waker`/`Context` model without language coroutines — stackless state machines written with `ASYNC_BEGIN`/`AWAIT` macros over `goto` (the compiler rejects a local that would live across an await), a deterministic no-heap single-threaded executor that runs on bare metal and wasm32 too, a multi-threaded `ThreadPool`, timers, join/select/timeout combinators, channels, `Mutex`/`Semaphore`/`Notify`/cancellation, and async TCP on the epoll/kqueue/WSAPoll reactor. |
 | **Package Manager** | `safeguard` — project scaffolding, dependency resolution, build orchestration, mixed SafeC/C/C++/Objective-C compilation and linking, plus `format` (reindenter), `lint` (static analysis), `check` (fast compile-only), and `test` (build + run `tests/`). It builds C/C++/Objective-C packages and existing C/C++ libraries (plain sources or CMake) as dependencies; libraries export their headers to `build/include` (Windows DLLs with an import library); `safeguard bundle` packages GUI apps as a macOS `.app`, a Windows app folder or a Linux `.deb`. It compiles and links only the std modules a project includes, with the system libraries and frameworks those modules need. |
 | **LSP Support** | Language server sharing the compiler's own frontend (always in sync with the language); diagnostics, hover, completion, go-to-definition; VS Code extension (`.sc` and `.h`), Neovim, Emacs. |
 
@@ -141,7 +142,7 @@ drawn from Oxide (Weiss et al., 2019) and Cyclone (Grossman et al., 2002).
 | `safeguard/` | Package manager and build system — compiles and links mixed SafeC/C/C++/Objective-C projects, and bundles apps |
 | `tests/stdlib/` | Standard library test suites: hosted (`safeguard test`), bare-metal emulator/WebAssembly (`baremetal/`), std/audio's Web Audio/Web MIDI glue under Node (`audio_web/`), Win32 and X11 backends (`win32/`, `x11/`), and the GPU devices (`device/` on any device, `rocm/`, `cuda/`, `mps/`, `vulkan/`, `webgpu/`) |
 | `tests/std_modules/` | Checks that every std header's functions are implemented by the std modules a build including it links |
-| `examples/` | Example projects, including a full-stack HTTP server + WebAssembly client |
+| `examples/` | Example projects, including a full-stack HTTP server + WebAssembly client and an async HTTP server/client demo (`async_demo`) |
 
 ### Compiler Pipeline
 
@@ -216,8 +217,8 @@ Verified with real generated machine code (not just accepted input) across:
 | iOS | AArch64 (device + simulator) |
 | Android | AArch64, Aarch32, x86_64, x86 |
 | FreeBSD | x86_64, AArch64 |
-| Bare metal (`--target=<alias>`) | x86, x86_64, AArch32, AArch64, Cortex-M0/M3/M4/M7/M33, RV32I/E, RV64I/E — the whole stdlib builds and a 54-check suite runs in the Unicorn emulator for each |
-| WebAssembly (`--target=wasm32`/`wasm64`) | Library modules with `export_name`/`import_*` attributes; same 54-check suite runs under Node |
+| Bare metal (`--target=<alias>`) | x86, x86_64, AArch32, AArch64, Cortex-M0/M3/M4/M7/M33, RV32I/E, RV64I/E — the whole stdlib builds and a 62-check suite (including the async LocalExecutor) runs in the Unicorn emulator for each |
+| WebAssembly (`--target=wasm32`/`wasm64`) | Library modules with `export_name`/`import_*` attributes; same 62-check suite runs under Node |
 | Portable / GPU | SPIR-V, CUDA (NVPTX), ROCm (AMDGPU; the `std::ml` ROCm backend is tested on an MI100) |
 
 **Metal Shading Language is not supported** — Apple's Metal compiler has no
@@ -455,6 +456,33 @@ match (ch.recv()) {                       // blocks while empty; null once close
 ch.close();
 ```
 
+Async — `std/async` is Rust's futures model as a library: a future is a struct whose `poll(&Context cx)` returns `Poll<T>`, and the coroutine macros turn `poll` into a resumable state machine (the resume point and every local that lives across an await are fields of the struct; resumption is a `switch` that `goto`s back to the await point):
+
+```c
+#include <std/async/async.h>
+#include <std/async/host.h>
+
+struct Countdown {
+    int st; int i; struct Sleep d;
+    struct Poll<int> poll(&Context cx);
+    void drop();
+};
+struct Poll<int> Countdown::poll(&Context cx) {
+    ASYNC_BEGIN(self.st, 1);                 // one await point
+    for (self.i = 3; self.i > 0; self.i = self.i - 1) {
+        self.d = Sleep::new(100LL);
+        AWAIT(1, self.d);                    // Pending until the timer fires
+        printf("%d\n", self.i);
+    }
+    ASYNC_RETURN(42);
+    ASYNC_END;
+}
+void Countdown::drop() { if (self.st == 1) self.d.drop(); }
+
+struct Countdown c; c.st = ASYNC_INIT;
+int v = block_on(&c);                        // or spawn on LocalExecutor / ThreadPool / Runtime
+```
+
 For single-consumer fan-in from multiple producer threads without the channel runtime's blocking/condvar overhead, `std/sync/mpsc.h` provides a spinlock-guarded bounded ring buffer (`struct MpscQueue<T> q = std::MpscQueue::new(64UL); q.enqueue(v); q.dequeue()` → `?T`); `std/sync/lockfree.h`'s `LFQueue<T>` (`LFQueue::new`) is the single-producer/single-consumer case with no locking at all. For communicating with a *different process* rather than another thread, see `std/ipc/pipe.h` (anonymous pipes, typically parent/child after `fork()`) and `std/ipc/uds.h` (named Unix domain sockets, for unrelated processes).
 
 ### Bare-Metal
@@ -478,7 +506,7 @@ section(".rodata") const int MAGIC = 42;
 
 ## Non-Goals
 
-- Async/await
+- Language-level async/await (`std/async` provides futures, executors and `goto`-based coroutines as a library)
 - Dynamic dispatch / vtables
 - Garbage collection
 - Reflection / RTTI

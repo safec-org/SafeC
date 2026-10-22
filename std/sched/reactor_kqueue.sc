@@ -123,7 +123,8 @@ inline void Reactor::remove(int fd, int filter) {
     }
 }
 
-inline int Reactor::poll(&TaskScheduler sched, long long timeout_ms) {
+// Reactor::poll(sched, ...) is reactor.sc's, over this.
+inline int Reactor::poll_events_raw_(void* on_ready, void* ctx, long long timeout_ms) {
     struct KEvent events[64];
     struct TimeSpec ts;
     const void* toPtr;
@@ -144,7 +145,7 @@ inline int Reactor::poll(&TaskScheduler sched, long long timeout_ms) {
     int i = 0;
     while (i < n) {
         int filter = reactor_portable_filter_(events[i].filter);
-        sched->unblock_fd((int)events[i].ident, filter);
+        unsafe { fn void(void*, int, int) cb = (fn void(void*, int, int))on_ready; cb(ctx, (int)events[i].ident, filter); }
         i = i + 1;
     }
     return n;
