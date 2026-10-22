@@ -19,7 +19,7 @@
 
 .PARAMETER Std
     The prebuilt std sections to install, comma-separated: core (std/*.sc),
-    collections, gui, ml, crypto, net, http, dsp, fs, sync, alloc, simd, ...
+    collections, gui, ml, crypto, net, http, dsp, fs, sync, async, alloc, simd, ...
     (std's top-level directories), or "all" (the default). std's sources are
     always installed: a build that needs a section that isn't installed
     compiles its units from source. "+ml,gui" adds sections to an existing

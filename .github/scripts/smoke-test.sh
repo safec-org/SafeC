@@ -564,6 +564,26 @@ else
     echo "  [SKIP] Objective-C (macOS only)"
 fi
 
+# std/async (examples/async_demo): a Runtime serving HTTP to its own
+# clients over loopback, a ThreadPool job awaited through a Oneshot -- the
+# OS readiness backend (epoll / kqueue / WSAPoll) at run time, and the
+# manifest's compat_preprocessor for the coroutine macros.
+cp -R "$SAFEC_HOME/examples/async_demo" "$WORKDIR/async_demo"
+if sg_in "$WORKDIR/async_demo" /tmp/sg_async.txt build; then
+    ASYNC_EXE="$WORKDIR/async_demo/build/async_demo"
+    [[ -f "$ASYNC_EXE.exe" ]] && ASYNC_EXE="$ASYNC_EXE.exe"
+    if with_timeout 60 "$ASYNC_EXE" >/tmp/sg_async_run.txt 2>&1 &&
+       grep -q "8/8 clients ok" /tmp/sg_async_run.txt; then
+        pass "examples/async_demo: $(tail -1 /tmp/sg_async_run.txt)"
+    else
+        fail "examples/async_demo run"
+        cat /tmp/sg_async_run.txt
+    fi
+else
+    fail "examples/async_demo build"
+    cat /tmp/sg_async.txt
+fi
+
 # A GUI app bundle (examples/gui_hello: a std/gui window that closes itself).
 GUI_CAN_BUILD=1
 [[ "$OS" == linux && ! -e /usr/include/X11/Xlib.h ]] && GUI_CAN_BUILD=0
