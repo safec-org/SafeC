@@ -31,8 +31,9 @@
 // (download, sync), before releasing memory, and before an upload while
 // work is queued that doesn't fit the staging arena (one that does is
 // copied there and applied in order by a dispatch, mk_copy). A program
-// enables it with its vulkan feature; link -lvulkan (on macOS: brew install
-// vulkan-loader molten-vk, -L/opt/homebrew/lib -lvulkan).
+// enables it with its vulkan feature; safeguard then links the loader
+// (-lvulkan, -lvulkan-1 on Windows; on macOS: brew install vulkan-loader
+// molten-vk, found in /opt/homebrew/lib or $VULKAN_SDK/lib).
 //
 // Requirements (else available() is 0): Vulkan 1.2 with bufferDeviceAddress,
 // shaderInt64, shaderInt16 and storageBuffer16BitAccess (16-bit values; fp16
@@ -59,6 +60,10 @@
 //     tensor op computes on the CPU; also counted);
 //   - pipelines are built on first use (MoltenVK translates each to Metal
 //     then), so a program's first steps include their compile time.
+// safeguard: feature vulkan
+// safeguard: link linux -lvulkan
+// safeguard: link macos -L${VULKAN_SDK}/lib -L/opt/homebrew/lib -L/usr/local/lib -lvulkan
+// safeguard: link windows -L${VULKAN_SDK}/Lib -lvulkan-1
 #pragma once
 #include <std/stddef.h>
 #include <std/ml/device.h>
