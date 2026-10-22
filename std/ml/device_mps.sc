@@ -6,8 +6,10 @@
 // there. Every buffer joins one MTLResidencySet attached to gpu_mps.h's
 // queue, which keeps it resident for kernels that reach it only through an
 // address. device_kernels.cu is compiled at run time by newLibraryWithSource
-// (plain, and with DK_TAGGED on first use), and its Metal-only kernels run
-// the GEMMs (mk_gemm, simdgroup matrices) and copies (mk_copy).
+// (plain, and with DK_TAGGED or DK_ATTN64 on first use), and its Metal-only
+// kernels run what rocBLAS and MIOpen do on ROCm: GEMMs (mk_gemm, simdgroup
+// matrices), convolutions as implicit GEMMs (mk_conv_*, through conv()) and
+// copies (mk_copy, mk_upload).
 //
 // Work is encoded into one command buffer at a time (one compute encoder, a
 // memory barrier after each dispatch) and committed every DMPS_COMMIT_EVERY
@@ -15,8 +17,12 @@
 // predecessor signals, so they run in order although the GPU sees their
 // buffers only through addresses. The host waits only when it reads
 // (download, sync), before releasing memory, and before an upload too large
-// to travel with a dispatch while work is queued. A program enables it with its mps feature;
-// link -framework Metal -framework Foundation -lobjc.
+// to travel with a dispatch while work is queued. A program enables it with
+// its mps feature; link -framework Metal -framework Foundation -lobjc. The
+// kernels need float atomics (Apple GPU family 7, M1 on; elsewhere the
+// source doesn't compile and they fall back as below), residency sets need
+// macOS 15 (before it, each encoder makes every buffer resident with
+// useResources).
 //
 // Limits, against ROCm / CUDA:
 //   - Metal has no doubles: the batch / group norm statistics accumulate in
@@ -89,7 +95,7 @@ typedef fn void(void*, void*, struct DmpsSize_, struct DmpsSize_) DmpsMsgDispatc
 #define DMPS_MAX_GROUPS 4096UL
 #define DMPS_ATTN_T 8UL            // device_kernels.cu's ATTN_T on Metal ...
 #define DMPS_ATTN64_T 16UL         // ... and in its DK_ATTN64 build, for head dims up to 64
-#define DMPS_GEMM_FILL 32UL        // 64 x 64 GEMM tiles from this many on (two per GPU core), else 32 x 32
+#define DMPS_GEMM_FILL 32UL        // the bigger GEMM / conv tiles from this many tiles on (two per GPU core)
 #define DMPS_RED_BYTES 128UL       // dk_red: a float per simdgroup
 #define DMPS_INLINE_BYTES 4096UL   // uploads up to this size travel with a dispatch (setBytes)
 #define DMPS_COMMIT_EVERY 64UL     // dispatches per command buffer
@@ -299,7 +305,11 @@ static void* dmps_make_pipe_(int b, const char* name, unsigned long threads) {
             if (pipe == (void*)0) dmps_log_("device_mps: a kernel's pipeline failed: ", err);
             dmps_release_obj_(f);
         } else {
-            dmps_log_("device_mps: no such kernel: ", (void*)0);
+            unsigned long n = 0UL;
+            while (name[n] != (char)0) n = n + 1UL;
+            write(2, (const void*)"device_mps: no such kernel: ", 28UL);
+            write(2, (const void*)name, n);
+            write(2, (const void*)"\n", 1UL);
         }
         if (pipe != (void*)0) {
             DmpsMsgU mu = (DmpsMsgU)objc_msgSend;
@@ -320,7 +330,7 @@ static int dmps_rows_(int kernel) {
            kernel == DK_CE_BWD || kernel == DK_LAYERNORM || kernel == DK_LAYERNORM_BWD;
 }
 
-// Threads per threadgroup for a DK_* kernel.
+// Threads per threadgroup for a DK_* kernel of the first two builds.
 static unsigned long dmps_block_(int kernel) {
     if (kernel == DK_ATTN_FWD || kernel == DK_ATTN_BWD_Q || kernel == DK_ATTN_BWD_KV) return DMPS_ATTN_T * DMPS_ATTN_T;
     return DMPS_BLOCK;
@@ -575,8 +585,8 @@ struct DmpsConv_ {
 // of the product per threadgroup.
 #define DMPS_SHAPE_32 0   // 32 x 32
 #define DMPS_SHAPE_64 1   // 64 x 64
-#define DMPS_SHAPE_W  2   // 32 x 128: few output channels
-#define DMPS_SHAPE_S  3   // 8 x 128: one or a few
+#define DMPS_SHAPE_W  2   // 32 x 128
+#define DMPS_SHAPE_S  3   // 8 x 128: up to 8 rows
 
 static unsigned long dmps_shape_rows_(int shape) { return shape == DMPS_SHAPE_64 ? 64UL : (shape == DMPS_SHAPE_S ? 8UL : 32UL); }
 static unsigned long dmps_shape_cols_(int shape) { return shape == DMPS_SHAPE_64 ? 64UL : (shape == DMPS_SHAPE_32 ? 32UL : 128UL); }
@@ -855,11 +865,12 @@ int MpsBackend::launch(int kernel, unsigned long n, const &DevArgs args) {
     void* pipe = dmps_attn64_pipe_(kernel, tagged, args);
     if (pipe == (void*)0) { pipe = dmps_pipe_(kernel, tagged); tile = DMPS_ATTN_T; }
     if (pipe == (void*)0) return dmps_cpu_launch_(kernel, n, args, tagged);
-    unsigned long threads = dmps_block_(kernel) == DMPS_BLOCK ? DMPS_BLOCK : tile * tile;
+    int attn = kernel == DK_ATTN_FWD || kernel == DK_ATTN_BWD_Q || kernel == DK_ATTN_BWD_KV;
+    unsigned long threads = attn ? tile * tile : DMPS_BLOCK;
     unsigned long groups = ((dmps_rows_(kernel) ? 32UL * n : n) + DMPS_BLOCK - 1UL) / DMPS_BLOCK;
     if (groups > DMPS_MAX_GROUPS) groups = DMPS_MAX_GROUPS;
     if (groups == 0UL) groups = 1UL;
-    if (threads != DMPS_BLOCK) {
+    if (attn) {
         // a block per (head, tile of rows): rows are keys for dk_attn_bwd_kv, else queries
         unsafe {
             unsigned long rows = kernel == DK_ATTN_BWD_KV ? (unsigned long)args.u[1] : (unsigned long)args.u[0];
