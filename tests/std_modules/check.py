@@ -54,6 +54,11 @@ os.environ["SAFEC"] = safec
 safeguard = os.environ.get("SAFEGUARD_BIN", "safeguard")
 
 
+# COFF COMDAT constants and string literals (MSVC's '__real@<hex>',
+# '__xmm@<hex>', '??_C@...'): every object that needs one defines it and the
+# linker keeps one copy, so they repeat across sections by design.
+MERGEABLE = re.compile(r"^(__real@|__xmm@|__ymm@|__zmm@|\?\?_C@)")
+
 def find_llvm_tool(tool, env):
     """An LLVM tool: $<env>; beside realpath($CLANG_BIN) (apt.llvm.org's
     /usr/bin/clang-21 links to /usr/lib/llvm-21/bin, where the unversioned
@@ -215,6 +220,7 @@ for d, _, fs in os.walk(std):
             rel = os.path.relpath(os.path.join(d, f), std).replace(os.sep, "/")
             unit_section[stem(rel)] = rel.split("/")[0] if "/" in rel else "core"
 sec_defs = {}               # section -> symbols its archive defines
+sec_strong = {}
 if args.prebuilt:
     pre_units, pre_skips = {}, set()
     for f in sorted(os.listdir(args.prebuilt)):
@@ -245,10 +251,17 @@ if args.prebuilt:
             errors.append(f"prebuilt {sec}.a: no member {st}.o")
         for st in sorted(got - listed):
             errors.append(f"prebuilt {sec}.a: member {st}.o isn't in {sec}.units")
+        # sec_defs: everything the section defines, weak definitions included
+        # (what a build linking it gets); sec_strong: the definitions that may
+        # appear only once across sections.
         sec_defs[sec] = {}
+        sec_strong[sec] = {}
         for m, (d, _, w) in members.items():
+            for sym in d:
+                sec_defs[sec].setdefault(sym, m)
             for sym in d - w:
-                sec_defs[sec][sym] = m
+                if not MERGEABLE.match(sym):
+                    sec_strong[sec][sym] = m
     # Every std unit no feature gates is in exactly one section.
     want = {st for st in objs if st not in gated_stems}
     for st in sorted(want - set(pre_units)):
@@ -257,7 +270,7 @@ if args.prebuilt:
         if st not in gated_stems:
             errors.append(f"prebuilt: {pre_units[st]}.units lists {st}, which isn't a std unit here")
     seen = {}
-    for sec, ds in sorted(sec_defs.items()):
+    for sec, ds in sorted(sec_strong.items()):
         for sym, m in ds.items():
             if sym in seen:
                 errors.append(f"prebuilt: {sym} is defined in {seen[sym]} and {sec}.a({m})")
