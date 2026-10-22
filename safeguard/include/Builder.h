@@ -93,6 +93,9 @@ public:
     // build/lib<output>.a/.so/.dylib, so build/ can be consumed as a
     // prebuilt dependency (its include/ and its library).
     std::string exportedIncludeDir() const;
+    // A source's key for names under build/ and Package.lock (see Builder.cpp).
+    std::string sourceKey(const std::string& src) const;
+    std::string flatBuildName(const std::string& src) const;
     // Windows cdylib: build/<output>.lib, the import library dependents
     // link against (the DLL's exports are listed in build/<output>.def).
     std::string importLibPath() const;

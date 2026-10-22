@@ -275,16 +275,7 @@ std::string Builder::materializeScx(const std::string& src,
 
     fs::path scxOutDir = fs::path(buildDir) / "scx";
     fs::create_directories(scxOutDir);
-    std::string stem;
-    try {
-        fs::path rel = fs::relative(fs::path(src), root_);
-        std::string r = rel.string();
-        for (char& c : r)
-            if (c == '/' || c == '\\' || c == '.') c = '_';
-        stem = r;
-    } catch (...) {
-        stem = fs::path(src).stem().string();
-    }
+    std::string stem = flatBuildName(fs::path(src).string());
     fs::path outPath = scxOutDir / (stem + ".sc");
     std::ofstream out(outPath);
     if (!out) {
@@ -297,6 +288,27 @@ std::string Builder::materializeScx(const std::string& src,
 }
 
 // ── command runner ────────────────────────────────────────────────────────────
+
+// A source's path relative to the project when there is one (same drive,
+// on Windows), else its absolute path: fs::relative across drives (std on
+// D:, a project in C:\\...\\Temp) yields nothing usable.
+std::string Builder::sourceKey(const std::string& src) const {
+    std::error_code ec;
+    fs::path rel = fs::relative(src, root_, ec);
+    if (!ec && !rel.empty() && !rel.has_root_name() && !rel.has_root_directory())
+        return rel.string();
+    return fs::absolute(src, ec).lexically_normal().string();
+}
+
+// sourceKey() flattened into one file name for build/: separators, dots and
+// a drive's ':' become '_' (a ':' on NTFS would name an alternate data
+// stream of one file, so every std object ended up in the same place).
+std::string Builder::flatBuildName(const std::string& src) const {
+    std::string r = sourceKey(src);
+    for (char& c : r)
+        if (c == '/' || c == '\\' || c == '.' || c == ':') c = '_';
+    return r.empty() ? fs::path(src).stem().string() : r;
+}
 
 #ifdef _WIN32
 // One argument as the child's CommandLineToArgvW will read it back: quoted
@@ -486,17 +498,7 @@ std::string Builder::compileSrc(const std::string& safecBin,
     // Derive a flat output name to avoid collisions across subdirectories
     fs::path src(srcPath);
     // Use relative-path-derived stem: e.g. src/foo/bar.sc → foo_bar.ll
-    std::string stem;
-    try {
-        fs::path rel = fs::relative(src, root_);
-        std::string r = rel.string();
-        // Replace path separators and dots with underscores
-        for (char& c : r)
-            if (c == '/' || c == '\\' || c == '.') c = '_';
-        stem = r;
-    } catch (...) {
-        stem = src.stem().string();
-    }
+    std::string stem = flatBuildName(fs::path(src).string());
     fs::path llFile = fs::path(buildDir) / (stem + ".ll");
 
     std::vector<std::string> cmd = { safecBin };
@@ -565,16 +567,7 @@ std::string Builder::compileForeign(const std::string& srcPath,
     // .sc files, so a C file and a SafeC file with the same basename in
     // different subdirectories don't clobber each other's .o.
     fs::path src(srcPath);
-    std::string stem;
-    try {
-        fs::path rel = fs::relative(src, root_);
-        std::string r = rel.string();
-        for (char& c : r)
-            if (c == '/' || c == '\\' || c == '.') c = '_';
-        stem = r;
-    } catch (...) {
-        stem = src.stem().string();
-    }
+    std::string stem = flatBuildName(fs::path(src).string());
     fs::path obj = fs::path(buildDir) / (stem + ".o");
 
     // A cross target compiles with the LLVM clang and its target flags,
@@ -2933,13 +2926,7 @@ void Builder::writeLock(const std::vector<std::string>& srcFiles) const {
     for (auto& src : srcFiles) {
         std::string h = hashFile(src);
         if (!h.empty()) {
-            std::string rel;
-            try {
-                rel = fs::relative(src, root_).string();
-            } catch (...) {
-                rel = src;
-            }
-            lf.sources[rel] = h;
+            lf.sources[sourceKey(src)] = h;
         }
     }
 
