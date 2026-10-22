@@ -14,8 +14,8 @@
 // dispatches without waiting; each command buffer waits for an MTLEvent its
 // predecessor signals, so they run in order although the GPU sees their
 // buffers only through addresses. The host waits only when it reads
-// (download, sync), and before an upload into or release of memory the
-// queued work may still use. A program enables it with its mps feature;
+// (download, sync), before releasing memory, and before an upload too large
+// to travel with a dispatch while work is queued. A program enables it with its mps feature;
 // link -framework Metal -framework Foundation -lobjc.
 //
 // Limits, against ROCm / CUDA:
@@ -24,11 +24,10 @@
 //   - The fused attention kernels work in 8 x 8 tiles (64 threads), not
 //     16 x 16: four 16-row tiles of 128 floats overflow 32 KB of
 //     threadgroup memory.
-//   - Convolutions run im2col + GEMM (conv() declines): there is no MIOpen /
-//     cuDNN to call.
 //   - A kernel runs on the CPU (device_ref.sc, on the shared memory; counted
 //     in DeviceStats.cpuLaunches) only if its pipeline can't be built; one
-//     with 16-bit arguments or a table of handles then declines instead.
+//     with 16-bit arguments or a table of handles then declines instead, as
+//     do GEMMs and copies (the tensor op computes on the CPU; also counted).
 //   - gpu_mps.h's batches and this backend share the queue: an open batch
 //     is submitted before this backend's next command buffer starts, but
 //     work this backend has encoded and not yet committed waits for
@@ -88,8 +87,9 @@ typedef fn void(void*, void*, struct DmpsSize_, struct DmpsSize_) DmpsMsgDispatc
 #define DMPS_BLOCK 256UL
 #define DMPS_MAX_GROUPS 4096UL
 #define DMPS_ATTN_T 8UL            // device_kernels.cu's ATTN_T on Metal
-#define DMPS_GEMM_TILE 64UL        // mk_gemm's tile (MK_BM, MK_BN), 128 threads
+#define DMPS_GEMM_FILL 32UL        // 64 x 64 GEMM tiles from this many on (two per GPU core), else 32 x 32
 #define DMPS_RED_BYTES 128UL       // dk_red: a float per simdgroup
+#define DMPS_INLINE_BYTES 4096UL   // uploads up to this size travel with a dispatch (setBytes)
 #define DMPS_COMMIT_EVERY 64UL     // dispatches per command buffer
 #define DMPS_FLIGHT 32UL           // committed command buffers not yet known done
 #define DMPS_SHARED_UNTRACKED 256UL   // MTLResourceStorageModeShared | MTLResourceHazardTrackingModeUntracked
@@ -124,8 +124,12 @@ static void* g_dmps_lib[2];             // plain, DK_TAGGED
 static int   g_dmps_lib_state[2];
 static void* g_dmps_pipe[2 * DK_COUNT];
 static int   g_dmps_pipe_state[2 * DK_COUNT];   // 0 = not yet, 1 = built, -1 = can't
-static void* g_dmps_gemm = (void*)0;
+static void* g_dmps_gemm[24];           // mk_gemm<tile>_<op(a)><op(b)>_<type>
+static int   g_dmps_gemm_state[24];
+static void* g_dmps_conv[36];           // mk_conv_<op><shape>_<type>
+static int   g_dmps_conv_state[36];
 static void* g_dmps_copy = (void*)0;
+static void* g_dmps_upload = (void*)0;
 
 // Buffers sorted by address.
 static struct DmpsBuf_* g_dmps_bufs = (struct DmpsBuf_*)0;
@@ -288,6 +292,8 @@ static void* dmps_make_pipe_(int tagged, const char* name, unsigned long threads
             pipe = m2(g_dmps_dev, sel_registerName("newComputePipelineStateWithFunction:error:"), f, (void*)&err);
             if (pipe == (void*)0) dmps_log_("device_mps: a kernel's pipeline failed: ", err);
             dmps_release_obj_(f);
+        } else {
+            dmps_log_("device_mps: no such kernel: ", (void*)0);
         }
         if (pipe != (void*)0) {
             DmpsMsgU mu = (DmpsMsgU)objc_msgSend;
@@ -461,9 +467,10 @@ static int dmps_wait_() {
 }
 
 // One dispatch of 'groups' threadgroups of 'threads' on the open encoder,
-// 'args' (len bytes) at buffer 0; then a barrier, so the next one sees its writes.
-static int dmps_dispatch_(void* pipe, const void* args, unsigned long len, unsigned long groupsX, unsigned long groupsY,
-                          unsigned long groupsZ, unsigned long threads) {
+// 'args' (len bytes) at buffer 0 and 'extra' (extraLen bytes, if any) at
+// buffer 1; then a barrier, so the next one sees its writes.
+static int dmps_dispatch_ex_(void* pipe, const void* args, unsigned long len, const void* extra, unsigned long extraLen,
+                             unsigned long groupsX, unsigned long groupsY, unsigned long groupsZ, unsigned long threads) {
     if (!dmps_begin_()) return 0;
     unsafe {
         if (pipe != g_dmps_last_pipe) {
@@ -473,6 +480,7 @@ static int dmps_dispatch_(void* pipe, const void* args, unsigned long len, unsig
         }
         DmpsMsgBytes setBytes = (DmpsMsgBytes)objc_msgSend;
         setBytes(g_dmps_enc, s_dmps_setBytes, args, len, 0UL);
+        if (extraLen > 0UL) setBytes(g_dmps_enc, s_dmps_setBytes, extra, extraLen, 1UL);
         struct DmpsSize_ grid;
         grid.width = groupsX; grid.height = groupsY; grid.depth = groupsZ;
         struct DmpsSize_ tg;
@@ -487,15 +495,92 @@ static int dmps_dispatch_(void* pipe, const void* args, unsigned long len, unsig
     return 1;
 }
 
+static int dmps_dispatch_(void* pipe, const void* args, unsigned long len, unsigned long groupsX, unsigned long groupsY,
+                          unsigned long groupsZ, unsigned long threads) {
+    unsafe { return dmps_dispatch_ex_(pipe, args, len, (const void*)0, 0UL, groupsX, groupsY, groupsZ, threads); }
+}
+
+// The GEMM kernel for g: 64 x 64 tiles when there are enough of them to fill
+// the GPU and b isn't transposed (its 16-deep tiles read b^T in short runs),
+// else 32 x 32; one pipeline per tile, transposes and element type.
 static int dmps_gemm_(const &DmpsGemm_ g, unsigned long batch) {
     if (!dmps_ensure_()) return 0;
     if (g.m == 0U || g.n == 0U || batch == 0UL) return 1;
-    if (g_dmps_gemm == (void*)0) g_dmps_gemm = dmps_make_pipe_(0, "mk_gemm", 128UL);
-    if (g_dmps_gemm == (void*)0) return 0;
+    unsigned long m = (unsigned long)g.m;
+    unsigned long n = (unsigned long)g.n;
+    unsigned long tile = 32UL;
+    if (g.tb == 0U && ((m + 63UL) / 64UL) * ((n + 63UL) / 64UL) * batch >= DMPS_GEMM_FILL) tile = 64UL;
+    unsigned long slot = (tile == 64UL ? 12UL : 0UL) + (unsigned long)g.at * 4UL + (unsigned long)g.ta + 2UL * (unsigned long)g.tb;
+    if (g.at > 2U || slot >= 24UL) return 0;
     unsafe {
-        return dmps_dispatch_(g_dmps_gemm, (const void*)g, sizeof(struct DmpsGemm_),
-                              ((unsigned long)g.n + DMPS_GEMM_TILE - 1UL) / DMPS_GEMM_TILE,
-                              ((unsigned long)g.m + DMPS_GEMM_TILE - 1UL) / DMPS_GEMM_TILE, batch, 128UL);
+        if (g_dmps_gemm_state[slot] == 0) {
+            char name[32];
+            const char* base = tile == 64UL ? "mk_gemm64_" : "mk_gemm32_";
+            const char* sfx = g.at == 0U ? "f32" : (g.at == 1U ? "f16" : "bf16");
+            unsigned long i = 0UL;
+            while (base[i] != (char)0) { name[i] = base[i]; i = i + 1UL; }
+            name[i] = g.ta ? 't' : 'n'; name[i + 1UL] = g.tb ? 't' : 'n'; name[i + 2UL] = '_';
+            i = i + 3UL;
+            unsigned long j = 0UL;
+            while (sfx[j] != (char)0) { name[i] = sfx[j]; i = i + 1UL; j = j + 1UL; }
+            name[i] = (char)0;
+            g_dmps_gemm[slot] = dmps_make_pipe_(0, (const char*)&name[0], 128UL);
+            g_dmps_gemm_state[slot] = g_dmps_gemm[slot] != (void*)0 ? 1 : -1;
+        }
+        if (g_dmps_gemm[slot] == (void*)0) { device_note_cpu_launch_(DEVICE_MPS); return 0; }   // the tensor op runs on the CPU
+        return dmps_dispatch_(g_dmps_gemm[slot], (const void*)g, sizeof(struct DmpsGemm_), (n + tile - 1UL) / tile,
+                              (m + tile - 1UL) / tile, batch, 128UL);
+    }
+}
+
+// mk_conv_*'s DkConv: a plain convolution I [B, Ci, Hi, Wi] -> O [B, Co, Ho, Wo]
+// with W [Co, Ci, kH, kW].
+struct DmpsConv_ {
+    unsigned long x; unsigned long w; unsigned long y;
+    unsigned int B; unsigned int Ci; unsigned int Hi; unsigned int Wi; unsigned int Co; unsigned int Ho; unsigned int Wo;
+    unsigned int kH; unsigned int kW; unsigned int sH; unsigned int sW; unsigned int pH; unsigned int pW;
+    unsigned int dH; unsigned int dW;
+    unsigned int kSplit;
+};
+
+// Conv kernel tile shapes (device_kernels.cu's mk_conv_*): rows x columns
+// of the product per threadgroup.
+#define DMPS_SHAPE_32 0   // 32 x 32
+#define DMPS_SHAPE_64 1   // 64 x 64
+#define DMPS_SHAPE_W  2   // 32 x 128: few output channels
+#define DMPS_SHAPE_S  3   // 8 x 128: one or a few
+
+static unsigned long dmps_shape_rows_(int shape) { return shape == DMPS_SHAPE_64 ? 64UL : (shape == DMPS_SHAPE_S ? 8UL : 32UL); }
+static unsigned long dmps_shape_cols_(int shape) { return shape == DMPS_SHAPE_64 ? 64UL : (shape == DMPS_SHAPE_32 ? 32UL : 128UL); }
+
+// The shape for an m x n product: no more rows than it has, the wide
+// shapes while they still give the GPU enough threadgroups.
+static int dmps_conv_shape_(unsigned long m, unsigned long n) {
+    if (m <= 8UL && (n + 127UL) / 128UL >= DMPS_GEMM_FILL) return DMPS_SHAPE_S;
+    if (m <= 32UL) return ((n + 127UL) / 128UL) * ((m + 31UL) / 32UL) >= DMPS_GEMM_FILL ? DMPS_SHAPE_W : DMPS_SHAPE_32;
+    return ((m + 63UL) / 64UL) * ((n + 63UL) / 64UL) >= DMPS_GEMM_FILL ? DMPS_SHAPE_64 : DMPS_SHAPE_32;
+}
+
+// The pipeline for conv kernel op (0 fwd, 1 bwd_x, 2 bwd_w), a shape, type t.
+static void* dmps_conv_pipe_(int op, int shape, int t) {
+    unsigned long slot = ((unsigned long)op * 4UL + (unsigned long)shape) * 3UL + (unsigned long)t;
+    unsafe {
+        if (g_dmps_conv_state[slot] == 0) {
+            char name[40];
+            const char* base = op == 0 ? "mk_conv_fwd" : (op == 1 ? "mk_conv_bwd_x" : "mk_conv_bwd_w");
+            const char* sh = shape == DMPS_SHAPE_32 ? "32_" : (shape == DMPS_SHAPE_64 ? "64_" : (shape == DMPS_SHAPE_W ? "w_" : "s_"));
+            const char* sfx = t == 0 ? "f32" : (t == 1 ? "f16" : "bf16");
+            unsigned long i = 0UL;
+            while (base[i] != (char)0) { name[i] = base[i]; i = i + 1UL; }
+            unsigned long j = 0UL;
+            while (sh[j] != (char)0) { name[i] = sh[j]; i = i + 1UL; j = j + 1UL; }
+            j = 0UL;
+            while (sfx[j] != (char)0) { name[i] = sfx[j]; i = i + 1UL; j = j + 1UL; }
+            name[i] = (char)0;
+            g_dmps_conv[slot] = dmps_make_pipe_(0, (const char*)&name[0], 128UL);
+            g_dmps_conv_state[slot] = g_dmps_conv[slot] != (void*)0 ? 1 : -1;
+        }
+        return g_dmps_conv[slot];
     }
 }
 
@@ -597,10 +682,24 @@ void MpsBackend::release(unsigned long handle) {
     }
 }
 
+// Into idle memory, a memcpy; while work is queued, a small upload (a
+// batch's row indices, a seed gradient) travels with a dispatch that
+// writes it in order, and a large one waits for the queue first.
 int MpsBackend::upload(unsigned long dst, const &float src, unsigned long n) {
     if (n == 0UL) return 1;
     unsigned char* p = dmps_host_(dst);
     if (p == (unsigned char*)0) return 0;
+    if (dmps_busy_() && n * 4UL <= DMPS_INLINE_BYTES) {
+        if (g_dmps_upload == (void*)0) g_dmps_upload = dmps_make_pipe_(0, "mk_upload", DMPS_BLOCK);
+        if (g_dmps_upload != (void*)0) {
+            struct DevArgs a = dev_args_();
+            unsafe {
+                a.p[2] = dst; a.u[7] = (unsigned int)n;
+                return dmps_dispatch_ex_(g_dmps_upload, (const void*)&a, sizeof(struct DevArgs), (const void*)src, n * 4UL,
+                                         (n + DMPS_BLOCK - 1UL) / DMPS_BLOCK, 1UL, 1UL, DMPS_BLOCK);
+            }
+        }
+    }
     if (dmps_busy_() && !dmps_wait_()) return 0;   // queued work may still read or write dst
     unsafe { memcpy((void*)p, (const void*)src, n * 4UL); }
     return 1;
@@ -618,7 +717,7 @@ int MpsBackend::copy(unsigned long dst, unsigned long src, unsigned long n) {
     if (n == 0UL) return 1;
     if (!dmps_ensure_()) return 0;
     if (g_dmps_copy == (void*)0) g_dmps_copy = dmps_make_pipe_(0, "mk_copy", DMPS_BLOCK);
-    if (g_dmps_copy == (void*)0) return 0;
+    if (g_dmps_copy == (void*)0) { device_note_cpu_launch_(DEVICE_MPS); return 0; }
     struct DevArgs a = dev_args_();
     unsafe {
         a.p[0] = src; a.p[2] = dst; a.u[7] = (unsigned int)n;
@@ -651,7 +750,67 @@ int MpsBackend::gemm_batched(const &DevGemm g) {
     return dmps_gemm_(&r, g.batch);
 }
 
-int MpsBackend::conv(const &DevConv c) { return 0; }
+// Convolutions as implicit GEMMs (device_kernels.cu's mk_conv_*): the
+// forward pass, the input gradient as a gather over the windows (no
+// atomics), the weight gradient split over batch x pixels and added
+// atomically into zeroed weights (fp32 only: a 16-bit one declines and
+// device.sc runs it in fp32). A transposed convolution is the plain one with
+// input and output swapped, so its forward pass is the input-gradient kernel
+// and its input gradient the forward one.
+int MpsBackend::conv(const &DevConv c) {
+    if (!dmps_ensure_() || c.dtype < DEVICE_FP32 || c.dtype > DEVICE_BF16) return 0;
+    struct DmpsConv_ k;
+    k.w = c.w; k.B = (unsigned int)c.batch;
+    k.kH = (unsigned int)c.kH; k.kW = (unsigned int)c.kW; k.sH = (unsigned int)c.sH; k.sW = (unsigned int)c.sW;
+    k.pH = (unsigned int)c.pH; k.pW = (unsigned int)c.pW; k.dH = (unsigned int)c.dH; k.dW = (unsigned int)c.dW;
+    k.kSplit = 0U;
+    if (!c.transpose) {
+        k.x = c.x; k.y = c.y;
+        k.Ci = (unsigned int)c.inC; k.Hi = (unsigned int)c.inH; k.Wi = (unsigned int)c.inW;
+        k.Co = (unsigned int)c.outC; k.Ho = (unsigned int)c.outH; k.Wo = (unsigned int)c.outW;
+    } else {
+        k.x = c.y; k.y = c.x;
+        k.Ci = (unsigned int)c.outC; k.Hi = (unsigned int)c.outH; k.Wi = (unsigned int)c.outW;
+        k.Co = (unsigned int)c.inC; k.Ho = (unsigned int)c.inH; k.Wo = (unsigned int)c.inW;
+    }
+    int op = c.op == DEV_CONV_BWD_WEIGHTS ? 2 : ((c.op == DEV_CONV_FWD) == (c.transpose == 0) ? 0 : 1);
+    if (op == 2 && c.dtype != DEVICE_FP32) return 0;
+    unsigned long kk = (unsigned long)k.kH * (unsigned long)k.kW;
+    // the product's m and n
+    unsigned long m = op == 1 ? (unsigned long)k.Ci : (unsigned long)k.Co;
+    unsigned long n = op == 0 ? c.batch * (unsigned long)k.Ho * (unsigned long)k.Wo
+                    : (op == 1 ? c.batch * (unsigned long)k.Hi * (unsigned long)k.Wi : (unsigned long)k.Ci * kk);
+    if (m == 0UL || n == 0UL) return 1;
+    // the input gradient runs per stride phase (without dilation): fewer pixels each
+    unsigned long phases = 1UL;
+    if (op == 1 && k.dH == 1U && k.dW == 1U) {
+        phases = (unsigned long)k.sH * (unsigned long)k.sW;
+        n = c.batch * (((unsigned long)k.Hi + (unsigned long)k.sH - 1UL) / (unsigned long)k.sH) *
+            (((unsigned long)k.Wi + (unsigned long)k.sW - 1UL) / (unsigned long)k.sW);
+    }
+    int shape = dmps_conv_shape_(m, n * phases);
+    void* pipe = dmps_conv_pipe_(op, shape, c.dtype);
+    if (pipe == (void*)0) { device_note_cpu_launch_(DEVICE_MPS); return 0; }   // im2col + GEMM instead
+    unsigned long groupsX = (n + dmps_shape_cols_(shape) - 1UL) / dmps_shape_cols_(shape);
+    unsigned long groupsY = (m + dmps_shape_rows_(shape) - 1UL) / dmps_shape_rows_(shape);
+    unsigned long splits = phases;
+    if (op == 2) {
+        // zero the weights, then enough slices of k to fill the GPU
+        unsigned long nw = (unsigned long)k.Co * (unsigned long)k.Ci * kk;
+        struct DevArgs z = dev_args_();
+        unsafe { z.p[2] = c.w; z.u[0] = 5U; z.u[7] = (unsigned int)nw; }   // EW_FILL 0
+        if (!MpsBackend::launch(DK_EWOP_5, nw, &z)) return 0;
+        unsigned long kTot = c.batch * (unsigned long)k.Ho * (unsigned long)k.Wo;
+        splits = (128UL + groupsX * groupsY - 1UL) / (groupsX * groupsY);
+        if (splits > kTot / 256UL) splits = kTot / 256UL;
+        if (splits < 1UL) splits = 1UL;
+        unsigned long per = (kTot + splits - 1UL) / splits;
+        per = (per + 31UL) / 32UL * 32UL;
+        k.kSplit = (unsigned int)per;
+        splits = (kTot + per - 1UL) / per;
+    }
+    unsafe { return dmps_dispatch_(pipe, (const void*)&k, sizeof(struct DmpsConv_), groupsX, groupsY, splits, 128UL); }
+}
 int MpsBackend::storage16() { return 1; }
 
 int MpsBackend::launch(int kernel, unsigned long n, const &DevArgs args) {
