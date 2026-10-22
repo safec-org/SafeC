@@ -610,8 +610,13 @@ std::string Builder::compileForeign(const std::string& srcPath,
 
 bool Builder::packArchive(const std::vector<std::string>& objFiles,
                             const std::string& archivePath) const {
-    // ar rcs <archive> <obj1> <obj2> ...
-    std::vector<std::string> cmd = { "ar", "rcs", archivePath };
+    // ar rcs <archive> <obj1> <obj2> ... with LLVM's llvm-ar when it sits
+    // beside clang: it indexes ELF, Mach-O and COFF members alike, where the
+    // system 'ar' only knows its own platform's (Apple's leaves a cross-built
+    // Windows or Linux archive with no symbol table, so nothing links from it).
+    std::string ar = findLlvmTool("llvm-ar");
+    if (ar == "llvm-ar") ar = "ar";   // not found beside clang: the system one
+    std::vector<std::string> cmd = { ar, "rcs", archivePath };
     for (auto& o : objFiles) cmd.push_back(o);
     int rc = runCmd(cmd, opts_.verbose);
     if (rc != 0) {
