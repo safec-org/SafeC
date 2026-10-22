@@ -35,8 +35,14 @@ LLVM_PREFIX="$W/llvm-install"
 bash "$W/SafeC/.github/scripts/build-llvm.sh" "$LLVM_VER" "$LLVM_PREFIX"
 
 # libstdc++ and libgcc linked in, so the binaries need no particular
-# libstdc++.so.6 (GLIBCXX_*) either.
+# libstdc++.so.6 (GLIBCXX_*) either -- if this GCC has a static libstdc++.
+# devtoolset's otherwise links the parts CentOS 7's libstdc++.so.6 lacks
+# statically, which needs GLIBCXX_3.4.19 at most: still fine.
 LDFLAGS_STATIC="-static-libstdc++ -static-libgcc"
+if ! echo 'int main() { return 0; }' | g++ -x c++ - $LDFLAGS_STATIC -o /tmp/static-probe 2>/dev/null; then
+    echo "note: no static libstdc++ here; linking devtoolset's libstdc++"
+    LDFLAGS_STATIC=""
+fi
 cmake -G Ninja -S "$W/SafeC/compiler" -B "$W/SafeC/compiler/build" \
     -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_PREFIX/lib/cmake/llvm" -DSAFEC_STATIC_LLVM=ON \
     -DCMAKE_EXE_LINKER_FLAGS="$LDFLAGS_STATIC"

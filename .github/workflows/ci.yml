@@ -175,8 +175,10 @@ jobs:
               PY="$(ls -d /opt/python/cp312-*/bin/python | head -1)"
               "$PY" -m venv /tmp/bt && /tmp/bt/bin/pip install --quiet "cmake>=3.20,<4" ninja
               export PATH="/tmp/bt/bin:$PATH"
+              STATIC="-static-libstdc++ -static-libgcc"
+              echo "int main() { return 0; }" | g++ -x c++ - $STATIC -o /tmp/probe || STATIC=""
               cmake -G Ninja -S SafeC/safeguard -B SafeC/safeguard/build -DCMAKE_BUILD_TYPE=Release \
-                -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+                -DCMAKE_EXE_LINKER_FLAGS="$STATIC"
               cmake --build SafeC/safeguard/build'
 
       - name: Check safeguard runs on glibc 2.25

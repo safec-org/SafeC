@@ -1258,7 +1258,7 @@ std::string Builder::stdSection(const std::string& unit) {
 }
 
 // "11.0" < "10.15"? Compared field by field, numerically.
-static bool versionLess(const std::string& a, const std::string& b) {
+[[maybe_unused]] static bool versionLess(const std::string& a, const std::string& b) {
     std::istringstream sa(a), sb(b);
     std::string x, y;
     while (true) {
