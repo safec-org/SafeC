@@ -170,6 +170,19 @@ else
     cat /tmp/sg_test.txt
 fi
 
+# std modules: the build compiled only the std it uses — for the scaffold,
+# which includes no std header, just the runtime safec's own code calls
+# into (std/mem.sc's allocator for 'new', ...), not all of std/.
+STD_OBJS=$(ls build/deps/std/*.o 2>/dev/null | wc -l | tr -d ' ')
+if [[ "$STD_OBJS" -gt 0 && "$STD_OBJS" -lt 20 ]] &&
+   "$SAFEGUARD_BIN" std-modules >/tmp/sg_stdmods.txt 2>&1 && grep -q "^unit std/mem.sc" /tmp/sg_stdmods.txt &&
+   ! grep -q "^unit std/io.sc" /tmp/sg_stdmods.txt; then
+    pass "safeguard build compiled $STD_OBJS std modules (std-modules lists them)"
+else
+    fail "std modules of the scaffold ($STD_OBJS objects)"
+    cat /tmp/sg_stdmods.txt 2>/dev/null
+fi
+
 # A library build exports its headers (include/ and src/'s .h files) into
 # build/include beside build/lib<name>.a, so build/ is a prebuilt dependency.
 mkdir -p "$WORKDIR/ci_lib/src" "$WORKDIR/ci_lib/include/ci_lib"
@@ -487,6 +500,10 @@ if [[ "$OS" == other || "$GUI_CAN_BUILD" -eq 0 ]]; then
 else
     cp -R "$SAFEC_HOME/examples/gui_hello" "$WORKDIR/gui_hello"
     G="$WORKDIR/gui_hello/build"
+    # Its manifest names no system library: std/gui's backend brings them.
+    if grep -qE '^(libs|frameworks|depends)' "$WORKDIR/gui_hello/Package.toml"; then
+        fail "examples/gui_hello/Package.toml lists libraries by hand"
+    fi
     if sg_in "$WORKDIR/gui_hello" /tmp/sg_gui.txt bundle; then
         GUI_OK=1
         case "$OS" in
@@ -557,6 +574,23 @@ fi
 
 popd >/dev/null
 rm -rf "$WORKDIR"
+
+# ── 5c. std module completeness ──────────────────────────────────────────────
+# Every std header's functions are implemented by the std modules a build
+# including it compiles (tests/std_modules/check.py: safec's declarations
+# of each header against llvm-nm of the subset's objects).
+section "std module completeness"
+if command -v python3 >/dev/null 2>&1; then
+    if SAFEC="$SAFEC_BIN" SAFEGUARD_BIN="$SAFEGUARD_BIN" CLANG_BIN="$CLANG_BIN" \
+            python3 "$SAFEC_HOME/tests/std_modules/check.py" >/tmp/std_modules.txt 2>&1; then
+        pass "$(head -1 /tmp/std_modules.txt)"
+    else
+        fail "std module completeness"
+        cat /tmp/std_modules.txt
+    fi
+else
+    echo "  [SKIP] python3 not available"
+fi
 
 # ── 6. sc-lsp wire-protocol smoke test ────────────────────────────────────────
 section "sc-lsp initialize handshake"
