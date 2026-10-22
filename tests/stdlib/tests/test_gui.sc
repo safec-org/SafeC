@@ -390,14 +390,17 @@ void t_widgets() {
     root.dispatch_event(&up);
     ASSERT_EQ(gClicks, 1);
 
+    btn.set_enabled(1);                                 // (disabled widgets aren't focusable)
+    ASSERT_EQ(box.focused, 1);                          // clicking focused the check box
     struct GuiEvent tab = mouse(GUI_EVENT_KEY_DOWN, 0.0, 0.0);
     tab.keycode = GUI_KEY_TAB;
     tab.prevent_default();                              // suppresses Tab's focus move
     root.dispatch_event(&tab);
     ASSERT_EQ(btn.focused, 0);
     tab.defaultPrevented = 0;
-    root.dispatch_event(&tab);                          // default action: focus the first focusable
+    root.dispatch_event(&tab);                          // default action: the next focusable (wrapping)
     ASSERT_EQ(btn.focused, 1);
+    ASSERT_EQ(box.focused, 0);
 
     struct GuiWindow win = make_win(100, 100);
     root.set_bg((unsigned char)255, (unsigned char)0, (unsigned char)0, (unsigned char)255);
