@@ -666,7 +666,8 @@ struct GuiUi {
 // A standard message box: 'text' and a row of buttons (GUI_MB_* bits),
 // shown modally. onClose(dialog, result) runs once a button (result
 // GUI_RESULT_*) or Escape (GUI_RESULT_CANCEL) closed it; the box frees
-// itself afterwards.
+// itself afterwards. The buttons are named "yes", "no", "ok" and "cancel"
+// (Widget::find).
 generic<T>
 void gui_message_box(&GuiUi ui, const &char title, const &char text, int buttons,
                      fn void(&Widget, int, ?&T) onClose, ?&T userData);

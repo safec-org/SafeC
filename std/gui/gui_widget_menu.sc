@@ -141,6 +141,22 @@ static void __wm_activate(&GuiUi ui, &Widget item) {
     ui.dirty = 1;
 }
 
+static int __wm_holds_focus(&GuiUi ui, &Widget w) {
+    ?&Widget cur = ui.focus;
+    int guard = 0;
+    while (guard < 256) {
+        match (cur) {
+            case some(f): {
+                unsafe { if ((void*)f == (void*)w) { return 1; } }
+                cur = f.parent;
+            }
+            case null: { return 0; }
+        }
+        guard = guard + 1;
+    }
+    return 0;
+}
+
 static int __wm_shortcut_in(&GuiUi ui, &Widget w, &GuiEvent ev, int mods, int depth) {
     if (depth > 64 || !w.visible) { return 0; }
     if (w.kind == WIDGET_MENUITEM && w.shortcut.len > 0UL && __w_effectively_enabled(w)) {
@@ -155,8 +171,12 @@ static int __wm_shortcut_in(&GuiUi ui, &Widget w, &GuiEvent ev, int mods, int de
         if (__wm_shortcut_in(ui, *w.children.at(i), ev, mods, depth + 1)) { return 1; }
         i = i + 1UL;
     }
+    // a context menu's shortcuts apply while its widget (or something in
+    // it) has the keyboard focus
     match (w.contextMenu) {
-        case some(m): { if (__wm_shortcut_in(ui, m, ev, mods, depth + 1)) { return 1; } }
+        case some(m): {
+            if (__wm_holds_focus(ui, w) && __wm_shortcut_in(ui, m, ev, mods, depth + 1)) { return 1; }
+        }
         case null: { }
     }
     return 0;
@@ -165,8 +185,10 @@ static int __wm_shortcut_in(&GuiUi ui, &Widget w, &GuiEvent ev, int mods, int de
 int __wk_menu_shortcut(&GuiUi ui, &Widget root, &GuiEvent ev) {
     if (ev.kind != GUI_EVENT_KEY_DOWN) { return 0; }
     int mods = ev.modifiers & (GUI_MOD_CTRL | GUI_MOD_SHIFT | GUI_MOD_ALT | GUI_MOD_META);
-    // a plain key (no modifier) is only a shortcut for F-keys and Delete
-    if (mods == 0 && !(ev.keycode >= GUI_KEY_F1 && ev.keycode <= GUI_KEY_F12)) { return 0; }
+    // a plain key (no modifier) is only a shortcut for F-keys, Delete and
+    // Insert (the focused widget saw the key first)
+    if (mods == 0 && !(ev.keycode >= GUI_KEY_F1 && ev.keycode <= GUI_KEY_F12) &&
+        ev.keycode != GUI_KEY_DELETE && ev.keycode != GUI_KEY_INSERT) { return 0; }
     return __wm_shortcut_in(ui, root, ev, mods, 0);
 }
 

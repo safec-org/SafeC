@@ -2121,7 +2121,8 @@ void gui_message_box_raw_(&GuiUi ui, const &char title, const &char text, int bu
         if ((buttons & bits[i]) != 0) {
             const char* label = bits[i] == GUI_MB_YES ? "Yes" : (bits[i] == GUI_MB_NO ? "No" : (bits[i] == GUI_MB_OK ? "OK" : "Cancel"));
             &Widget b;
-            unsafe { b = Widget::button(label); }
+            const char* nm = bits[i] == GUI_MB_YES ? "yes" : (bits[i] == GUI_MB_NO ? "no" : (bits[i] == GUI_MB_OK ? "ok" : "cancel"));
+            unsafe { b = Widget::button(label); b.set_name(nm); }
             b.set_min_size(72, 0);
             b.tag = (long)bits[i];
             b.on_click_raw_((void*)__w_mb_clicked, (void*)0);

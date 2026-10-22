@@ -25,7 +25,8 @@
 //
 // Rendering: a window with a widget root is laid out and painted by its
 // GuiUi; a window with an on_draw callback gets a GuiCanvas over its
-// buffer (after the widgets, if it has both). Windows are repainted only
+// buffer (after the widgets, if it has both); a window with neither shows
+// whatever you put in win.pixels yourself. Windows are repainted only
 // when something changed: an input event, a resize, a timer or animation
 // callback, or app.redraw(win). on_frame callbacks run once per frame
 // (frame_interval(), 60 Hz by default) while they return 1, with the
