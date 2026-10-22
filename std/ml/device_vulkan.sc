@@ -35,8 +35,8 @@
 // vulkan-loader molten-vk, -L/opt/homebrew/lib -lvulkan).
 //
 // Requirements (else available() is 0): Vulkan 1.2 with bufferDeviceAddress,
-// shaderInt64, shaderInt16 and storageBuffer16BitAccess (16-bit values; the
-// kernels convert them in integer arithmetic, so no shaderFloat16), float
+// shaderInt64, shaderInt16 and storageBuffer16BitAccess (16-bit values; fp16
+// converts through GLSL.std.450's PackHalf2x16, so no shaderFloat16), float
 // atomic adds on buffers (VK_EXT_shader_atomic_float), subgroup arithmetic
 // and shuffles, and 32-wide subgroups (the device's size, or one it can
 // require: not AMD's wave64-only GCN). MoltenVK's fast math is turned off
