@@ -256,6 +256,64 @@ void t_writers_varint() {
     }
 }
 
+// The object member 'k' (the object itself when missing — the asserts then fail).
+static &Value fld(const &Value o, const &char k) {
+    ?&Value r = o.object_get(k);
+    match (r) { case some(x): { return x; } case null: { } }
+    return o;
+}
+
+void t_yaml_flow_block() {
+    unsafe {
+        int ok = 0;
+        struct Value v = yaml_parse("outline: [2, 4]\nempty: []\nmap: {a: 1, b: [x, \"y, z\"], c: {d: true}}\nurl: http://x.y/z\ntag: a#b # comment\nitems:\n  - [1, 2]\n  - {k: v}\n", &ok);
+        ASSERT_TRUE(ok);
+        &Value o = fld(&v, "outline");
+        ASSERT_EQ(o.kind_of(), VAL_ARRAY);
+        ASSERT_EQ(o.array_len(), 2);
+        ASSERT_EQ(o.array_at(1UL).as_int(), 4);
+        ASSERT_EQ(fld(&v, "empty").array_len(), 0);
+        &Value m = fld(&v, "map");
+        ASSERT_EQ(m.object_len(), 3);
+        ASSERT_STR_EQ(m.object_key_at(1UL), "b");
+        ASSERT_STR_EQ(m.object_value_at(1UL).array_at(1UL).as_string(), "y, z");
+        ASSERT_TRUE(fld(fld(m, "c"), "d").as_bool());
+        ASSERT_STR_EQ(fld(&v, "url").as_string(), "http://x.y/z");
+        ASSERT_STR_EQ(fld(&v, "tag").as_string(), "a#b");
+        &Value items = fld(&v, "items");
+        ASSERT_EQ(items.array_at(0UL).array_len(), 2);
+        ASSERT_STR_EQ(fld(items.array_at(1UL), "k").as_string(), "v");
+        ASSERT_STR_EQ(v.object_key_at(0UL), "outline");
+        v.free();
+
+        struct Value b = yaml_parse("lit: |\n  line one\n    indented\n\n  after blank\nfold: >\n  a\n  b\n\n  c\nstrip: |-\n  x\nkeep: |+\n  y\n\nlist:\n  - |\n    in list\n  - plain\nnext: 1\n", &ok);
+        ASSERT_TRUE(ok);
+        ASSERT_STR_EQ(fld(&b, "lit").as_string(), "line one\n  indented\n\nafter blank\n");
+        ASSERT_STR_EQ(fld(&b, "fold").as_string(), "a b\nc\n");
+        ASSERT_STR_EQ(fld(&b, "strip").as_string(), "x");
+        ASSERT_STR_EQ(fld(&b, "keep").as_string(), "y\n\n");
+        ASSERT_STR_EQ(fld(&b, "list").array_at(0UL).as_string(), "in list\n");
+        ASSERT_STR_EQ(fld(&b, "list").array_at(1UL).as_string(), "plain");
+        ASSERT_EQ(fld(&b, "next").as_int(), 1);
+        b.free();
+
+        struct Value bad = yaml_parse("x: [1, 2\n", &ok);
+        ASSERT_TRUE(ok);   // an unclosed flow collection stays a plain string
+        ASSERT_STR_EQ(fld(&bad, "x").as_string(), "[1, 2");
+        bad.free();
+    }
+}
+
+void t_html_text() {
+    struct String u = String::new();
+    html_unescape(&u, "a &lt;b&gt; &amp;amp; &#39;q&#x27; &mdash; &copy; &nbsp;|&bogus; & x &#0;");
+    ASSERT_STR_EQ(u.as_ptr(), "a <b> &amp; 'q' \xe2\x80\x94 \xc2\xa9 \xc2\xa0|&bogus; & x &#0;");
+    struct String t = String::new();
+    html_strip_tags(&t, "<h2 id=\"x\">Title <a href=\"#x\">#</a></h2><p>One &amp; <code>two</code></p><script>if (a<b) {}</script><!-- c --><p title=\"a>b\">three</p>4 < 5");
+    ASSERT_STR_EQ(t.as_ptr(), "Title # One &amp; two three 4 < 5");
+    u.free(); t.free();
+}
+
 int main() {
     struct TestSuite t = TestSuite::new();
     unsafe {
@@ -265,6 +323,8 @@ int main() {
         t.add("xml/yaml/html", t_xml_yaml_html);
         t.add("protobuf", t_protobuf);
         t.add("markdown", t_markdown);
+        t.add("yaml flow/block scalars, value order", t_yaml_flow_block);
+        t.add("html unescape/strip_tags", t_html_text);
         t.add("writers/varint/scx", t_writers_varint);
     }
     t.run();
