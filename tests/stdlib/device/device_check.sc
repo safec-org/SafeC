@@ -631,6 +631,27 @@ static void cv_values_(&FloatTensor t, &float out) {
     unsafe { tensor_host_((void*)t); unsigned long i = 0UL; while (i < t->size) { out[i] = t->data[i]; i = i + 1UL; } }
 }
 
+// The fp16 loss scale a trainer leaves after a few overflowing steps
+// (2048): at the 65536 a device starts from, the checks' output gradients
+// (normal values times the scale) are past fp16's range. Each overflowing
+// step is skipped and halves the scale.
+static void cv_low_scale_() {
+    &FloatTensor W = FloatTensor::new_2d(1UL, 1UL, 1);
+    &FloatTensor x = FloatTensor::new_2d(1UL, 1UL, 0);
+    W.fill((float)1.0); x.fill((float)1.0);
+    struct Optimizer opt = Optimizer::new(OPT_SGD, (float)0.0);
+    opt.add(W);
+    W.place(CHECK_DEVICE); x.place(CHECK_DEVICE);
+    int i = 0;
+    while (i < 16 && device_loss_scale(CHECK_DEVICE) > (float)2048.0) {
+        opt.zero_grad();
+        tensor_matmul(x, W).sum().scale((float)1e36).backward();
+        opt.step();
+        i = i + 1;
+    }
+    opt.free(); W.free(); x.free();
+}
+
 void check_conv_() {
     struct ConvCase_ cases[10];
     cases[0] = conv_case_(0, 3UL, 1UL, 13UL, 16UL, 3UL, 1UL, 1UL, 1UL);    // one input channel
@@ -675,6 +696,7 @@ void check_conv_() {
         int prec = DEVICE_FP32;
         while (prec <= DEVICE_BF16) {
             device_set_precision(CHECK_DEVICE, prec);
+            if (prec == DEVICE_FP16) cv_low_scale_();
             x.zero_grad(); w.zero_grad(); b.zero_grad();
             x.place(CHECK_DEVICE); w.place(CHECK_DEVICE); b.place(CHECK_DEVICE);
             &FloatTensor od = cv_out_(&c, x, w, b);
