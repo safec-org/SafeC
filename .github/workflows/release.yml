@@ -10,6 +10,11 @@ name: Release
 # that had to be worked through there (LLVM acquisition, MSVC-vs-GCC compile
 # flags, etc.) before it reached parity with macOS/Linux.
 #
+# Platform floor: the macOS binaries and prebuilt std run on macOS 11.0 and
+# later. The job builds LLVM's libraries itself for that (build-llvm.sh,
+# cached): Homebrew's are built for the runner's macOS. check-macos-min.py
+# checks the result.
+#
 # Tag patterns accept both 'v1.2.3' and '1.2.3'-style tags (no required 'v'
 # prefix) — this project's actual releases use the latter (e.g.
 # '1.0.0-beta'), and the release job's own gate below matches the same way.
@@ -31,11 +36,20 @@ env:
   # (see docs/advanced/compiler.md); a CI run against 18 confirmed the
   # hard way that the minimum is a real requirement, not a suggestion.
   LLVM_VERSION: "21"
+  # The LLVM source release build-llvm.sh builds for the macOS binaries
+  # (the Windows job's SDK archive is the same version).
+  LLVM_PKG_VERSION: "21.1.8"
 
 jobs:
   # ── macOS (Apple Silicon) ────────────────────────────────────────────────
   macos:
     runs-on: macos-14
+    timeout-minutes: 300
+    env:
+      # Everything compiled and linked here -- LLVM, safec, safeguard,
+      # sc-lsp, and the prebuilt std (which 'safeguard std-prebuilt' builds
+      # for 11.0 anyway) -- runs on macOS 11 and later.
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - name: Checkout SafeC
         uses: actions/checkout@v4
@@ -49,22 +63,30 @@ jobs:
           path: sc-language-server
 
       - name: Install LLVM
-        # Unversioned — Homebrew's llvm@N formulas are only kept around for
-        # a few recent majors and can disappear from homebrew-core, while
-        # plain 'llvm' always tracks current stable (>= this project's
-        # minimum by construction, since that's what it's developed
-        # against). Pinning to a specific old major here is what actually
-        # caused the CI failure this fix addresses.
-        run: brew install llvm
+        # Homebrew's clang (any current one is >= this project's minimum) is
+        # what the smoke test and the std prebuilt compile safec's IR with.
+        # Its libraries are built for the runner's macOS, so safec links
+        # the ones build-llvm.sh builds for 11.0 instead (next steps).
+        run: brew install llvm ninja
+
+      - name: Cache LLVM libraries (macOS 11.0)
+        uses: actions/cache@v4
+        with:
+          path: llvm-install
+          key: llvm-${{ env.LLVM_PKG_VERSION }}-macos-arm64-11.0-${{ hashFiles('SafeC/.github/scripts/build-llvm.sh') }}
+
+      - name: Build LLVM libraries (macOS 11.0)
+        run: bash SafeC/.github/scripts/build-llvm.sh "$LLVM_PKG_VERSION" "$GITHUB_WORKSPACE/llvm-install"
 
       - name: Build safec compiler
         run: |
-          LLVM_DIR="$(brew --prefix llvm)/lib/cmake/llvm"
-          # Static LLVM: the published safec must not need the exact
-          # libLLVM.dylib this runner's Homebrew happened to have.
+          set -o pipefail
+          LLVM_DIR="$GITHUB_WORKSPACE/llvm-install/lib/cmake/llvm"
+          # Static LLVM: the published safec must not need a libLLVM.dylib.
           cmake -S SafeC/compiler -B SafeC/compiler/build \
-            -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR" -DSAFEC_STATIC_LLVM=ON
-          cmake --build SafeC/compiler/build -j "$(sysctl -n hw.ncpu)"
+            -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR" -DSAFEC_STATIC_LLVM=ON \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET"
+          cmake --build SafeC/compiler/build -j "$(sysctl -n hw.ncpu)" 2>&1 | tee build-safec.log
           if otool -L SafeC/compiler/build/safec | grep -i 'libLLVM'; then
             echo "::error::safec links libLLVM dynamically"; exit 1
           fi
@@ -72,14 +94,32 @@ jobs:
 
       - name: Build safeguard
         run: |
-          cmake -S SafeC/safeguard -B SafeC/safeguard/build -DCMAKE_BUILD_TYPE=Release
-          cmake --build SafeC/safeguard/build -j "$(sysctl -n hw.ncpu)"
+          set -o pipefail
+          cmake -S SafeC/safeguard -B SafeC/safeguard/build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET"
+          cmake --build SafeC/safeguard/build -j "$(sysctl -n hw.ncpu)" 2>&1 | tee build-safeguard.log
 
       - name: Build sc-lsp
         run: |
+          set -o pipefail
           cmake -S sc-language-server -B sc-language-server/build \
-            -DCMAKE_BUILD_TYPE=Release -DSAFEC_DIR="$GITHUB_WORKSPACE/SafeC/compiler"
-          cmake --build sc-language-server/build -j "$(sysctl -n hw.ncpu)"
+            -DCMAKE_BUILD_TYPE=Release -DSAFEC_DIR="$GITHUB_WORKSPACE/SafeC/compiler" \
+            -DLLVM_DIR="$GITHUB_WORKSPACE/llvm-install/lib/cmake/llvm" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET"
+          cmake --build sc-language-server/build -j "$(sysctl -n hw.ncpu)" 2>&1 | tee build-sc-lsp.log
+
+      - name: Check the binaries run on macOS 11.0
+        # Their own minimum, and no linker warning that something linked in
+        # was built for a newer macOS (which the minimum alone can't show).
+        run: |
+          # ld64: "object file (...) was built for newer 'macOS' version (14.0)
+          # than being linked (11.0)", "... dylib ... which was built for
+          # newer version 14.0".
+          if grep -hE "built for newer ('?macOS'? )?version" build-*.log; then
+            echo "::error::an object or library linked into a release binary is built for a newer macOS than $MACOSX_DEPLOYMENT_TARGET"; exit 1
+          fi
+          python3 SafeC/.github/scripts/check-macos-min.py --max "$MACOSX_DEPLOYMENT_TARGET" \
+            SafeC/compiler/build/safec SafeC/safeguard/build/safeguard sc-language-server/build/sc-lsp
 
       - name: Smoke test before packaging
         run: bash SafeC/.github/scripts/smoke-test.sh
@@ -94,12 +134,13 @@ jobs:
         # bin/, std/, README.md and lib/<triple>/std/<section>.a: std
         # prebuilt for this platform, one archive per section, by the
         # packaged safec (see package.sh), which a native build links
-        # instead of compiling std.
+        # instead of compiling std. The std objects must run on 11.0 too.
         run: |
           set -euo pipefail
           OUT="safec-macos-arm64"
           bash SafeC/.github/scripts/package.sh "$OUT" SafeC/compiler/build/safec \
             SafeC/safeguard/build/safeguard sc-language-server/build/sc-lsp
+          python3 SafeC/.github/scripts/check-macos-min.py --max "$MACOSX_DEPLOYMENT_TARGET" "$OUT"/lib/*/std/*.a
           tar czf "${OUT}.tar.gz" "$OUT"
 
       - uses: actions/upload-artifact@v4
