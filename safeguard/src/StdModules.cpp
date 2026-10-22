@@ -233,6 +233,9 @@ const StdIndex& StdIndex::load(const std::string& stdDir) {
                 if (f.header) { bad("only in a .sc"); continue; }
                 f.runtime = true;
                 f.runtimeOs = args;
+            } else if (kind == "runtime-symbol") {
+                if (f.header || args.empty()) { bad("a .sc names its symbol prefixes"); continue; }
+                f.runtimeSymbols.insert(f.runtimeSymbols.end(), args.begin(), args.end());
             } else if (kind == "link" || kind == "deb") {
                 if (f.header || args.size() < 2) { bad("expects '<os> <items...>' in a .sc"); continue; }
                 LinkRule r{args[0], std::vector<std::string>(args.begin() + 1, args.end())};
@@ -269,7 +272,7 @@ const StdIndex& StdIndex::load(const std::string& stdDir) {
             idx.units[h].push_back(rel);
             owned = true;
         }
-        if (!owned && !f.runtime)
+        if (!owned && !f.runtime && f.runtimeSymbols.empty())
             idx.problems.push_back("std/" + rel + ": implements no header (name it with '// safeguard: implements <std/...h>')");
     }
     for (auto& [h, us] : idx.units) {
@@ -373,16 +376,79 @@ std::set<std::string> StdIndex::closure(const std::set<std::string>& roots, cons
     return out;
 }
 
-std::set<std::string> StdIndex::allUnits(const StdPlatform& p) const {
+std::set<std::string> StdIndex::runtimeUnits(const std::set<std::string>& refs, const StdPlatform& p) const {
+    std::set<std::string> out;
+    for (auto& [rel, f] : files) {
+        if (f.header || f.runtimeSymbols.empty() || !unitApplies(f, p)) continue;
+        for (auto& pre : f.runtimeSymbols) {
+            auto it = refs.lower_bound(pre);
+            if (it != refs.end() && it->compare(0, pre.size(), pre) == 0) { out.insert(rel); break; }
+        }
+    }
+    return out;
+}
+
+std::set<std::string> StdIndex::runtimeSymbolPrefixes() const {
+    std::set<std::string> out;
+    for (auto& [rel, f] : files) out.insert(f.runtimeSymbols.begin(), f.runtimeSymbols.end());
+    return out;
+}
+
+std::set<std::string> StdIndex::allUnits(const StdPlatform& p, bool featureBackends) const {
     StdPlatform any = p;
     std::set<std::string> out;
     for (auto& [rel, f] : files) {
         if (f.header) continue;
         any.features.clear();
-        for (auto& w : f.features) any.features.insert(w);   // every backend, as before
+        if (featureBackends)
+            for (auto& w : f.features) any.features.insert(w);   // every backend, as before
         if (unitApplies(f, any)) out.insert(rel);
     }
     return out;
+}
+
+std::set<std::string> irExternalRefs(const fs::path& llFile) {
+    std::set<std::string> out;
+    std::ifstream in(llFile);
+    std::string line;
+    while (std::getline(in, line)) {
+        // 'declare <type> @name(' and '@name = external global ...'.
+        bool decl = line.rfind("declare ", 0) == 0;
+        if (!decl && !(line.size() > 1 && line[0] == '@' && line.find(" = external ") != std::string::npos))
+            continue;
+        size_t at = line.find('@');
+        if (at == std::string::npos) continue;
+        std::string name;
+        if (at + 1 < line.size() && line[at + 1] == '"') {
+            size_t close = line.find('"', at + 2);
+            if (close == std::string::npos) continue;
+            name = line.substr(at + 2, close - at - 2);
+        } else {
+            size_t e = at + 1;
+            while (e < line.size() && (std::isalnum((unsigned char)line[e]) || line[e] == '_' ||
+                                       line[e] == '.' || line[e] == '$'))
+                ++e;
+            name = line.substr(at + 1, e - at - 1);
+        }
+        if (!name.empty() && name.rfind("llvm.", 0) != 0) out.insert(name);
+    }
+    return out;
+}
+
+bool readRefs(const fs::path& file, std::set<std::string>& out) {
+    std::ifstream in(file);
+    if (!in) return false;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (!line.empty()) out.insert(line);
+    }
+    return true;
+}
+
+void writeRefs(const fs::path& file, const std::set<std::string>& refs) {
+    std::ofstream out(file, std::ios::binary);
+    for (auto& r : refs) out << r << "\n";
 }
 
 std::vector<std::string> StdIndex::linkFlags(const std::set<std::string>& unitSet, const StdPlatform& p) const {

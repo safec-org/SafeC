@@ -28,6 +28,12 @@ namespace safeguard {
 //       runtime [<os>...]            (a .sc) always in the build (for these
 //                                    OSes): it defines functions safec emits
 //                                    calls to without any #include
+//       runtime-symbol <prefix>...   (a .sc) in the build when its compiled
+//                                    code (the project's, a dependency's or
+//                                    another std unit's IR) refers to a
+//                                    symbol starting with one of these: what
+//                                    safec emits calls to for 'new',
+//                                    channels or 'spawn' (see ensureStdLib)
 //       link <os> <flag>...          (a .sc) system libraries the unit calls
 //                                    into, for builds for <os>
 //       deb <package>...             (a .sc) the Debian packages providing
@@ -85,6 +91,7 @@ public:
         std::vector<std::string> features;
         bool runtime = false;
         std::vector<std::string> runtimeOs;  // empty: any
+        std::vector<std::string> runtimeSymbols;  // 'runtime-symbol' prefixes
         std::vector<LinkRule> links;
         std::vector<LinkRule> debs;
     };
@@ -99,9 +106,15 @@ public:
 
     // The units a build with these roots (std headers or units, rel) needs.
     std::set<std::string> closure(const std::set<std::string>& roots, const StdPlatform& p) const;
+    // The 'runtime-symbol' units that code referring to these symbols
+    // needs (each applying to p).
+    std::set<std::string> runtimeUnits(const std::set<std::string>& refs, const StdPlatform& p) const;
+    // Every 'runtime-symbol' prefix std names.
+    std::set<std::string> runtimeSymbolPrefixes() const;
     // Every unit for this platform (variants and the wasm runtime
-    // permitting): [build] std = "all".
-    std::set<std::string> allUnits(const StdPlatform& p) const;
+    // permitting): [build] std = "all" -- with each feature-gated backend
+    // too, unless 'featureBackends' is false (the prebuilt archive).
+    std::set<std::string> allUnits(const StdPlatform& p, bool featureBackends = true) const;
     // Whether a unit joins builds for p at all (variant, feature, wasm/).
     bool unitApplies(const File& f, const StdPlatform& p) const;
     // The system link flags and .deb packages of these units, in order,
@@ -120,6 +133,15 @@ public:
     // The #includes of a source or header file.
     static std::vector<Include> scanIncludes(const std::filesystem::path& file);
 };
+
+// The external symbols an LLVM IR file refers to: the names of its
+// 'declare's and 'external' globals -- what the 'runtime-symbol'
+// directives match. Empty if it can't be read.
+std::set<std::string> irExternalRefs(const std::filesystem::path& llFile);
+// A symbol list file (one per line), as irExternalRefs' results are kept
+// beside objects and libraries ('.refs'). readRefs: false if missing.
+bool readRefs(const std::filesystem::path& file, std::set<std::string>& out);
+void writeRefs(const std::filesystem::path& file, const std::set<std::string>& refs);
 
 // The std files (rel) a project's own files include: 'files' are scanned,
 // and so is every non-std file they include, found beside the including

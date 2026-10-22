@@ -329,17 +329,28 @@ int main(int argc, char** argv) {
                 }
                 continue;
             }
-            if (cmd == "std-modules" && arg.rfind("-", 0) != 0) { runArgs.push_back(arg); continue; }
+            if (cmd == "std-modules" && arg.rfind("-", 0) != 0) {
+                runArgs.push_back(arg);
+                continue;
+            }
             std::cerr << "safeguard: unknown option '" << arg << "'\n";
             return 1;
         }
 
         try {
             if (cmd == "std-modules" && !runArgs.empty() && !fs::exists("Package.toml")) {
-                // Outside a project: just the named std files and sources.
+                // Outside a project: just the named std files and sources
+                // (the std units it compiles cached in a scratch project).
                 safeguard::Manifest none;
-                safeguard::Builder builder(fs::current_path().string(), none, opts);
-                return builder.printStdModules(runArgs) ? 0 : 1;
+                fs::path work = fs::temp_directory_path() / "safeguard-std-modules";
+                fs::create_directories(work);
+                std::vector<std::string> args;
+                for (auto& a : runArgs) {
+                    bool stdName = a.rfind("std/", 0) == 0 || a.rfind("<", 0) == 0;
+                    args.push_back(!stdName && fs::exists(a) ? fs::absolute(a).string() : a);
+                }
+                safeguard::Builder builder(work.string(), none, opts);
+                return builder.printStdModules(args) ? 0 : 1;
             }
             auto [root, manifest] = requireProject();
             safeguard::Builder builder(root, manifest, opts);

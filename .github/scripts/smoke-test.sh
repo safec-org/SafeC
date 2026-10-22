@@ -17,6 +17,8 @@ pass() { echo "  [PASS] $1"; }
 fail() { echo "  [FAIL] $1"; FAILURES=$((FAILURES + 1)); }
 
 section() { echo ""; echo "── $1 ──────────────────────────────────────────"; }
+# Run safeguard in a directory, output to a log; true if it succeeded.
+sg_in() { local dir="$1" log="$2"; shift 2; (cd "$dir" && "$SAFEGUARD_BIN" "$@") >"$log" 2>&1; }
 
 # ── 1. safec --help ───────────────────────────────────────────────────────────
 section "safec --help"
@@ -171,16 +173,40 @@ else
 fi
 
 # std modules: the build compiled only the std it uses — for the scaffold,
-# which includes no std header, just the runtime safec's own code calls
-# into (std/mem.sc's allocator for 'new', ...), not all of std/.
+# which includes no std header and calls nothing safec routes to std's
+# runtime ('new', channels, 'spawn'), none of it.
 STD_OBJS=$(ls build/deps/std/*.o 2>/dev/null | wc -l | tr -d ' ')
-if [[ "$STD_OBJS" -gt 0 && "$STD_OBJS" -lt 20 ]] &&
-   "$SAFEGUARD_BIN" std-modules >/tmp/sg_stdmods.txt 2>&1 && grep -q "^unit std/mem.sc" /tmp/sg_stdmods.txt &&
-   ! grep -q "^unit std/io.sc" /tmp/sg_stdmods.txt; then
-    pass "safeguard build compiled $STD_OBJS std modules (std-modules lists them)"
+if [[ "$STD_OBJS" -eq 0 ]] && "$SAFEGUARD_BIN" std-modules >/tmp/sg_stdmods.txt 2>&1 &&
+   ! grep -q "^unit " /tmp/sg_stdmods.txt; then
+    pass "safeguard build compiled no std module for a program using none (std-modules agrees)"
 else
     fail "std modules of the scaffold ($STD_OBJS objects)"
     cat /tmp/sg_stdmods.txt 2>/dev/null
+fi
+
+# The runtime units come with what the code calls into: a hello world on
+# std/io.h has no thread or channel module (nor -lpthread on Linux); a
+# channel ('chan_create', no #include) brings sync/channel.sc, thread.sc and
+# -lpthread; so does 'spawn' (pthread_create) with thread.sc.
+mkdir -p "$WORKDIR/ci_rt/src"
+printf '[package]\nname = "ci_rt"\nversion = "0.1.0"\n\n[build]\nedition = "2026"\n' > "$WORKDIR/ci_rt/Package.toml"
+printf '#include <std/io.h>\nint main() { std::println("hi"); return 0; }\n' > "$WORKDIR/ci_rt/src/hello.sc"
+printf 'int main() {\n    void* ch = (void*)0;\n    unsafe { ch = chan_create(1); chan_close(ch); }\n    return 0;\n}\n' > "$WORKDIR/ci_rt/src/chan.sc"
+printf 'void* work(void* a) { return a; }\nint main() {\n    long long h = spawn(work, 0);\n    join(h);\n    return 0;\n}\n' > "$WORKDIR/ci_rt/src/spawn.sc"
+RT_OK=1
+for f in hello chan spawn; do
+    sg_in "$WORKDIR/ci_rt" "/tmp/sg_rt_$f.txt" std-modules --target x86_64-unknown-linux-gnu "src/$f.sc" || RT_OK=0
+done
+grep -qE "^unit std/(thread|sync/channel)\.sc|^link -lpthread" /tmp/sg_rt_hello.txt && RT_OK=0
+grep -q "^unit std/sync/channel.sc" /tmp/sg_rt_chan.txt && grep -q "^unit std/thread.sc" /tmp/sg_rt_chan.txt &&
+    grep -q "^link -lpthread" /tmp/sg_rt_chan.txt || RT_OK=0
+grep -q "^unit std/thread.sc" /tmp/sg_rt_spawn.txt && grep -q "^link -lpthread" /tmp/sg_rt_spawn.txt &&
+    ! grep -q "^unit std/sync/channel.sc" /tmp/sg_rt_spawn.txt || RT_OK=0
+if [[ "$RT_OK" -eq 1 ]]; then
+    pass "runtime std modules follow the code: no thread/channel/-lpthread for hello, both for channels"
+else
+    fail "runtime std modules (std-modules for Linux)"
+    head -50 /tmp/sg_rt_hello.txt /tmp/sg_rt_chan.txt /tmp/sg_rt_spawn.txt
 fi
 
 # A library build exports its headers (include/ and src/'s .h files) into
@@ -216,8 +242,6 @@ llvm_tool() {
 }
 # Run a command, killed after $1 seconds (a GUI program must exit by itself).
 with_timeout() { local t="$1"; shift; perl -e 'alarm shift; exec @ARGV' "$t" "$@"; }
-# Run safeguard in a directory, output to a log; true if it succeeded.
-sg_in() { local dir="$1" log="$2"; shift 2; (cd "$dir" && "$SAFEGUARD_BIN" "$@") >"$log" 2>&1; }
 
 # A plain C package (no SafeC): built without std, run.
 if (cd "$WORKDIR" && "$SAFEGUARD_BIN" new ci_cpkg --lang c >/dev/null 2>&1) &&

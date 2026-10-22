@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <cstdlib>
+#include <cstdio>
 #include <map>
 #include <set>
 #include <fstream>
@@ -1042,6 +1043,7 @@ bool Builder::buildLib(const std::string& srcDir,
     if (srcs.empty()) return true; // nothing to compile
 
     std::vector<std::string> objs;
+    std::set<std::string> refs;
     for (auto& src : srcs) {
         SrcLang lang = langOf(src);
         std::string obj;
@@ -1050,6 +1052,7 @@ bool Builder::buildLib(const std::string& srcDir,
             if (realSrc.empty()) return false;
             std::string ll = compileSrc(safecBin, realSrc, buildDir, includeDirs, compatPreprocessor);
             if (ll.empty()) return false;
+            for (auto& r : irExternalRefs(ll)) refs.insert(r);
             obj = llToObj(ll, buildDir);
         } else {
             obj = compileForeign(src, buildDir, foreignIncludeDirs, lang);
@@ -1057,6 +1060,9 @@ bool Builder::buildLib(const std::string& srcDir,
         if (obj.empty()) return false;
         objs.push_back(obj);
     }
+    // The symbols its code refers to, for the program's runtime units
+    // (depStdRefs).
+    writeRefs(libOut + ".refs", refs);
     return packArchive(objs, libOut);
 }
 
@@ -1110,21 +1116,124 @@ std::set<std::string> Builder::stdRoots(const std::vector<std::string>& files) c
     return roots;
 }
 
-bool Builder::ensureStdLib(const std::set<std::string>& roots) {
+// The external symbols a build's dependencies refer to: the '.refs' a
+// SafeC library build writes beside it (buildLib for a source dependency,
+// build() for a staticlib). A SafeC library from before those existed (a
+// '.std' but no '.refs') counts as referring to every runtime symbol, as
+// every build then included those units.
+std::set<std::string> Builder::depStdRefs() const {
+    std::set<std::string> refs;
+    std::string stdDir = findStdDir();
+    for (auto& dep : manifest_.dependencies) {
+        DepLayout l = depLayout(dep);
+        if (!l.error.empty()) continue;
+        for (auto& lib : l.linkInputs) {
+            if (lib.rfind("-", 0) == 0) continue;
+            if (readRefs(lib + ".refs", refs)) continue;
+            std::error_code ec;
+            if ((l.fromSource || fs::exists(lib + ".std", ec)) && !stdDir.empty())
+                for (auto& p : StdIndex::load(stdDir).runtimeSymbolPrefixes()) refs.insert(p);
+        }
+    }
+    return refs;
+}
+
+std::vector<std::string> Builder::safecIncludeDirs() const {
+    std::vector<std::string> incs, foreign;
+    std::string stdDir = findStdDir();
+    if (!stdDir.empty()) {
+        incs.push_back(stdDir);
+        incs.push_back(fs::path(stdDir).parent_path().string());
+    }
+    fs::path projInc = fs::path(root_) / "include";
+    if (fs::exists(projInc)) incs.push_back(projInc.string());
+    depIncludes(incs, foreign);
+    return incs;
+}
+
+bool Builder::sourceRefs(const std::vector<std::string>& files, const std::string& outDir,
+                         std::set<std::string>& refs) {
+    std::vector<std::string> incs = safecIncludeDirs();
+    std::vector<std::string> defs = featureDefines();
+    fs::create_directories(outDir);
+    for (auto& f : files) {
+        if (langOf(f) != SrcLang::SafeC) continue;
+        std::string real = materializeScx(f, outDir);
+        std::string ll = real.empty() ? "" : compileSrc(findSafec(), real, outDir, incs, false, false, defs);
+        if (ll.empty()) return false;
+        for (auto& r : irExternalRefs(ll)) refs.insert(r);
+    }
+    return true;
+}
+
+bool Builder::stdUnitObject(const StdIndex& idx, const std::string& unit, const std::string& objDirS,
+                            bool compile, StdUnitObj& out) const {
+    fs::path objDir(objDirS);
+    std::string stdDir = idx.dir;
+    std::string stem = unit;
+    for (char& c : stem) if (c == '/' || c == '.') c = '_';
+    fs::path obj = objDir / (stem + ".o"), skip = objDir / (stem + ".skip"), refs = objDir / (stem + ".refs");
+    std::error_code ec;
+    std::string safecBin = findSafec();
+    fs::file_time_type newest = fs::file_time_type::min();
+    if (fs::exists(safecBin, ec)) newest = fs::last_write_time(safecBin, ec);
+    for (auto& in : idx.compileInputs(unit)) {
+        auto t = fs::last_write_time(fs::path(stdDir) / in, ec);
+        if (!ec && t > newest) newest = t;
+    }
+    auto fresh = [&](const fs::path& f) {
+        return fs::exists(f, ec) && fs::last_write_time(f, ec) >= newest;
+    };
+    if (fresh(obj) && readRefs(refs, out.refs)) { out.obj = obj.string(); return true; }
+    if (fresh(skip)) { out.skipped = true; return true; }
+    if (!compile) return true;   // unknown: no object, no symbols
+    fs::remove(obj, ec);
+    fs::remove(skip, ec);
+    // safec itself can also reject a file purely for being
+    // architecture-inapplicable (e.g. std::simd's ARM-only DSP
+    // builtins raising a Sema/CodeGen error on a non-ARM target, the
+    // same intent as the assembler rejecting riscv.sc's CSR
+    // instructions on non-RISC-V — just enforced earlier in the
+    // pipeline). Both are tolerated identically: the file's functions
+    // simply aren't available for this target; anything that actually
+    // calls them gets a normal, clear "undefined symbol" at link time.
+    // The std .sc files include their own headers; pass the std dir's parent
+    // so that #include "std/io.h" resolves, and the std dir itself so that
+    // #include "io.h" (relative includes inside .sc files) resolves.
+    std::vector<std::string> incs = { stdDir, fs::path(stdDir).parent_path().string() };
+    std::string ll = compileSrc(safecBin, (fs::path(stdDir) / unit).string(), objDir.string(), incs,
+                                /*compatPreprocessor=*/true, /*suppressOutput=*/true, {}, stem);
+    std::string o = ll.empty() ? "" : llToObj(ll, objDir.string(), /*suppressOutput=*/true);
+    if (o.empty()) {
+        std::cerr << "safeguard: warning: skipping 'std/" << unit << "' — does not "
+                  << (ll.empty() ? "compile" : "assemble") << " for the current target\n";
+        std::ofstream(skip) << "";
+        out.skipped = true;
+        return true;
+    }
+    out.refs = irExternalRefs(ll);
+    writeRefs(refs, out.refs);
+    out.obj = o;
+    return true;
+}
+
+bool Builder::ensureStdLib(const std::set<std::string>& roots, const std::set<std::string>& refs, bool link) {
     stdArchive_.clear();
     stdLinkFlags_.clear();
     stdDebDepends_.clear();
+    stdUnits_.clear();
     std::string stdDir = findStdDir();
-    // A prebuilt std archive (SAFEC_STD_ARCHIVE): linked as is -- the linker
+    // A std archive named by SAFEC_STD_ARCHIVE: linked as is -- the linker
     // takes the members the program references. Its system libraries still
     // come from std's annotations when std/ is around (see below).
-    const char* prebuilt = std::getenv("SAFEC_STD_ARCHIVE");
-    if (prebuilt && *prebuilt && !fs::exists(prebuilt)) {
-        std::cerr << "safeguard: SAFEC_STD_ARCHIVE names " << prebuilt << ", which doesn't exist\n";
+    const char* envArchive = std::getenv("SAFEC_STD_ARCHIVE");
+    std::string given = envArchive ? envArchive : "";
+    if (!given.empty() && !fs::exists(given)) {
+        std::cerr << "safeguard: SAFEC_STD_ARCHIVE names " << given << ", which doesn't exist\n";
         return false;
     }
     if (stdDir.empty()) {
-        if (prebuilt && *prebuilt) { stdArchive_ = prebuilt; return true; }
+        if (!given.empty()) { stdArchive_ = given; return true; }
         std::cerr << "safeguard: warning: cannot find SafeC std/ directory; "
                      "set SAFEC_HOME to your SafeC install prefix or repository root\n";
         return true;
@@ -1135,10 +1244,67 @@ bool Builder::ensureStdLib(const std::set<std::string>& roots) {
         reported = true;
         for (auto& p : idx.problems) std::cerr << "safeguard: warning: " << p << "\n";
     }
-
-    // The modules the build uses, and the system libraries they call into.
     StdPlatform plat = stdPlatform();
-    std::set<std::string> units = idx.closure(roots, plat);
+
+    // Each unit compiled here gets its own object under
+    // build/deps/[<target>/]std/, reused until the unit or a std header it
+    // includes changes, or the compiler does. The stamp records which
+    // compiler and std/ built them: switching either (e.g. SAFEC_HOME/SAFEC
+    // now naming a different, possibly older safec) rebuilds everything --
+    // an mtime comparison can't see that, and a PATH-resolved 'safec' has no
+    // path to stat at all. A unit that doesn't compile for the target
+    // (std/hal/riscv.sc's CSR asm on another ISA, say) leaves a .skip marker
+    // instead, so it is reported once, not on every build.
+    fs::path depDir = isCrossTarget() ? fs::path(root_) / "build" / "deps" / targetDirName()
+                                      : fs::path(root_) / "build" / "deps";
+    fs::path objDir = depDir / "std";
+    fs::path libPath = depDir / "libsafec_std.a";
+    std::error_code ec;
+    std::string stamp = "safec=" + findSafec() + "\nstd=" + stdDir + "\n";
+    for (auto& f : runtimeFlags()) stamp += "runtime=" + f + "\n";   // a CRT switch rebuilds std
+    {
+        std::ifstream in(objDir / "build.stamp");
+        std::stringstream prev;
+        prev << in.rdbuf();
+        if (!in || prev.str() != stamp) fs::remove_all(objDir, ec);
+    }
+    fs::remove(fs::path(libPath).concat(".stamp"), ec);   // the whole-std archive's, before units
+    fs::create_directories(objDir);
+    std::ofstream(objDir / "build.stamp") << stamp;
+
+    // A unit: compiled here (with SAFEC_STD_ARCHIVE, only what was compiled
+    // before is known of it).
+    std::map<std::string, StdUnitObj> done;
+    std::set<std::string> allRefs = refs;
+    bool compileHere = given.empty();
+    auto process = [&](const std::string& unit) -> bool {
+        if (done.count(unit)) return true;
+        StdUnitObj u;
+        if (!stdUnitObject(idx, unit, objDir.string(), compileHere, u)) return false;
+        allRefs.insert(u.refs.begin(), u.refs.end());
+        done[unit] = u;
+        return true;
+    };
+
+    // The modules the build uses: the roots' closure, and the units the
+    // code's references bring in ('runtime-symbol'), which have includes
+    // and references of their own -- to a fixed point.
+    std::set<std::string> rtUnits, units;
+    for (;;) {
+        std::set<std::string> r = roots;
+        r.insert(rtUnits.begin(), rtUnits.end());
+        units = idx.closure(r, plat);
+        for (auto& u : units)
+            if (!process(u)) return false;
+        bool grew = false;
+        for (auto& u : idx.runtimeUnits(allRefs, plat))
+            if (rtUnits.insert(u).second) grew = true;
+        if (!grew) break;
+    }
+    stdUnits_ = units;
+    if (!link) return true;
+
+    // The system libraries the modules call into.
     for (auto& f : idx.linkFlags(units, plat)) {
         if (f != "blas") { stdLinkFlags_.push_back(f); continue; }
         // The [build] blas choice, less what's already there ('-framework
@@ -1164,83 +1330,23 @@ bool Builder::ensureStdLib(const std::set<std::string>& roots) {
         for (auto& u : units) std::cout << " " << u;
         std::cout << "\n";
     }
-    if (prebuilt && *prebuilt) { stdArchive_ = prebuilt; return true; }
+    if (!given.empty()) { stdArchive_ = given; return true; }
     // [build] std = "all": every unit, as one archive the linker picks from.
-    if (manifest_.build.useStd == 2) units = idx.allUnits(plat);
+    if (manifest_.build.useStd == 2)
+        for (auto& u : idx.allUnits(plat))
+            if (!process(u)) return false;
 
-    // Each unit compiles to its own object under build/deps/[<target>/]std/,
-    // reused until the unit or a std header it includes changes, or the
-    // compiler does. The stamp records which compiler and std/ built them:
-    // switching either (e.g. SAFEC_HOME/SAFEC now naming a different,
-    // possibly older safec) rebuilds everything -- an mtime comparison
-    // can't see that, and a PATH-resolved 'safec' has no path to stat at
-    // all. A unit that doesn't compile for the target (std/hal/riscv.sc's
-    // CSR asm on another ISA, say) leaves a .skip marker instead, so it is
-    // reported once, not on every build.
-    fs::path depDir = isCrossTarget() ? fs::path(root_) / "build" / "deps" / targetDirName()
-                                      : fs::path(root_) / "build" / "deps";
-    fs::path objDir = depDir / "std";
-    fs::path libPath = depDir / "libsafec_std.a";
-    std::error_code ec;
-    std::string stamp = "safec=" + findSafec() + "\nstd=" + stdDir + "\n";
-    for (auto& f : runtimeFlags()) stamp += "runtime=" + f + "\n";   // a CRT switch rebuilds std
-    {
-        std::ifstream in(objDir / "build.stamp");
-        std::stringstream prev;
-        prev << in.rdbuf();
-        if (!in || prev.str() != stamp) fs::remove_all(objDir, ec);
-    }
-    fs::remove(fs::path(libPath).concat(".stamp"), ec);   // the whole-std archive's, before units
-    fs::create_directories(objDir);
-    std::ofstream(objDir / "build.stamp") << stamp;
-
-    std::string safecBin = findSafec();
-    fs::file_time_type compilerTime = fs::file_time_type::min();
-    if (fs::exists(safecBin, ec)) compilerTime = fs::last_write_time(safecBin, ec);
-    // The std .sc files include their own headers; pass the std dir's parent
-    // so that #include "std/io.h" resolves, and the std dir itself so that
-    // #include "io.h" (relative includes inside .sc files) resolves.
-    std::vector<std::string> incs = { stdDir, fs::path(stdDir).parent_path().string() };
+    // The objects compiled here.
     std::vector<std::string> objs;
     bool rebuilt = false;
-    for (auto& unit : units) {
-        std::string stem = unit;
-        for (char& c : stem) if (c == '/' || c == '.') c = '_';
-        fs::path obj = objDir / (stem + ".o"), skip = objDir / (stem + ".skip");
-        fs::file_time_type newest = compilerTime;
-        for (auto& in : idx.compileInputs(unit)) {
-            auto t = fs::last_write_time(fs::path(stdDir) / in, ec);
-            if (!ec && t > newest) newest = t;
-        }
-        auto fresh = [&](const fs::path& f) {
-            return fs::exists(f, ec) && fs::last_write_time(f, ec) >= newest;
-        };
-        if (fresh(obj)) { objs.push_back(obj.string()); continue; }
-        if (fresh(skip)) continue;
-        fs::remove(obj, ec);
-        fs::remove(skip, ec);
-        rebuilt = true;
-        // safec itself can also reject a file purely for being
-        // architecture-inapplicable (e.g. std::simd's ARM-only DSP
-        // builtins raising a Sema/CodeGen error on a non-ARM target, the
-        // same intent as the assembler rejecting riscv.sc's CSR
-        // instructions on non-RISC-V — just enforced earlier in the
-        // pipeline). Both are tolerated identically: the file's functions
-        // simply aren't available for this target; anything that actually
-        // calls them gets a normal, clear "undefined symbol" at link time.
-        std::string ll = compileSrc(safecBin, (fs::path(stdDir) / unit).string(), objDir.string(), incs,
-                                    /*compatPreprocessor=*/true, /*suppressOutput=*/true, {}, stem);
-        std::string o = ll.empty() ? "" : llToObj(ll, objDir.string(), /*suppressOutput=*/true);
-        if (o.empty()) {
-            std::cerr << "safeguard: warning: skipping 'std/" << unit << "' — does not "
-                      << (ll.empty() ? "compile" : "assemble") << " for the current target\n";
-            std::ofstream(skip) << "";
-            continue;
-        }
-        objs.push_back(o);
+    for (auto& [unit, u] : done) {
+        if (u.obj.empty()) continue;
+        objs.push_back(u.obj);
+        auto t = fs::last_write_time(u.obj, ec);
+        if (!ec && fs::exists(libPath) && t > fs::last_write_time(libPath, ec)) rebuilt = true;
     }
-
-    // One archive of them, repacked when its member list or a member changes.
+    // One archive of them, repacked when its member list or a member
+    // changes.
     if (objs.empty()) return true;
     std::string members;
     for (auto& o : objs) members += o + "\n";
@@ -1772,7 +1878,7 @@ bool Builder::fetchAndBuildDeps() {
 
         // Build the dependency
         fs::path libOut = depLibDir / ("lib" + dep.name + ".a");
-        if (!fs::exists(libOut)) {
+        if (!fs::exists(libOut) || !fs::exists(fs::path(libOut).concat(".refs"))) {
             fs::path depSrc = fs::path(l.dir) / "src";
             std::vector<std::string> incs = l.safecIncludes;
             // Also add std dir (SafeC-side only — see buildLib's
@@ -1932,11 +2038,7 @@ bool Builder::build() {
         return false;
     }
 
-    // 2. Build (or reuse) std library. A missing std/ directory is only a
-    // warning (a project using nothing but extern declarations can still
-    // link without it), but if std/ was found and building it failed, that's
-    // a real error — silently linking without it just produces a wall of
-    // confusing "undefined symbol" errors instead. A package with no SafeC
+    // 2. Whether std is built (step 6) and linked. A package with no SafeC
     // in it (its own sources or a SafeC source dependency) — a plain C,
     // C++ or Objective-C one — doesn't use std, and neither builds nor
     // links it.
@@ -1949,16 +2051,10 @@ bool Builder::build() {
     // [build] std overrides: a C/C++/ObjC package calling into std sets it.
     if (manifest_.build.useStd >= 0) usesStd = manifest_.build.useStd != 0;
     std::string stdDir  = findStdDir();
-    // Only the std modules the sources (and dependencies) include.
+    // Only the std modules the sources (and dependencies) include, and the
+    // ones their compiled code calls into (ensureStdLib, after step 5).
     std::set<std::string> stdRootSet;
-    if (usesStd && !opts_.emitLLVM) {
-        stdRootSet = stdRoots(srcs);
-        if (!ensureStdLib(stdRootSet)) {
-            std::cerr << "safeguard: failed to build the standard library "
-                         "(see compiler errors above) — aborting build\n";
-            return false;
-        }
-    }
+    if (usesStd && !opts_.emitLLVM) stdRootSet = stdRoots(srcs);
 
     // 3. Determine include paths for user sources
     std::vector<std::string> userIncs;
@@ -2030,6 +2126,7 @@ bool Builder::build() {
     // 5. Compile each source straight through to a .o (SafeC via .ll; C/C++
     // directly), collecting object files for the final link.
     std::vector<std::string> objFiles;
+    std::set<std::string> refs;   // the external symbols of their IR (see ensureStdLib)
     for (auto& src : srcs) {
         SrcLang lang = langOf(src);
         if (lang == SrcLang::SafeC) {
@@ -2037,6 +2134,7 @@ bool Builder::build() {
             if (realSrc.empty()) return false;
             std::string ll = compileSrc(safecBin, realSrc, buildDir, userIncs, false, false, defs);
             if (ll.empty()) return false;
+            for (auto& r : irExternalRefs(ll)) refs.insert(r);
             std::string obj = llToObj(ll, buildDir);
             if (obj.empty()) return false;
             objFiles.push_back(obj);
@@ -2047,7 +2145,18 @@ bool Builder::build() {
         }
     }
 
-    // 6. Collect archive libraries
+    // 6. Build (or reuse) the std library. A missing std/ directory is only
+    // a warning (see ensureStdLib), but if std/ was found and building it
+    // failed, that's a real error — silently linking without it just
+    // produces a wall of confusing "undefined symbol" errors instead.
+    if (usesStd) {
+        for (auto& r : depStdRefs()) refs.insert(r);
+        if (!ensureStdLib(stdRootSet, refs)) {
+            std::cerr << "safeguard: failed to build the standard library "
+                         "(see compiler errors above) — aborting build\n";
+            return false;
+        }
+    }
     std::vector<std::string> archives;
     for (auto& f : depLinkInputs()) archives.push_back(f);
     if (!stdArchive_.empty()) archives.push_back(stdArchive_);
@@ -2071,11 +2180,13 @@ bool Builder::build() {
         if (!packArchive(allObjs, outputPath())) return false;
         if (!exportHeaders(root_, exportedIncludeDir())) return false;
         // The std files it includes, beside it: a program linking this
-        // library builds those std modules too (see stdRoots).
+        // library builds those std modules too (see stdRoots); and the
+        // symbols its code refers to, for the runtime units (depStdRefs).
         if (!stdRootSet.empty()) {
             std::ofstream stdList(outputPath() + ".std");
             for (auto& r : stdRootSet) stdList << r << "\n";
         }
+        if (usesStd) writeRefs(outputPath() + ".refs", refs);
     } else if (crateType == "cdylib") {
         // Windows: the exports are listed explicitly (writeExportsDef), and
         // the link writes the import library build/<output>.lib beside the
@@ -2217,12 +2328,6 @@ bool Builder::test() {
     // [build] std overrides: a C/C++/ObjC package calling into std sets it.
     if (manifest_.build.useStd >= 0) usesStd = manifest_.build.useStd != 0;
     std::string stdDir = findStdDir();
-    // The std modules every test includes, in one archive the tests share.
-    if (usesStd && !ensureStdLib(stdRoots(testSrcs))) {
-        std::cerr << "safeguard: failed to build the standard library "
-                     "(see compiler errors above) — aborting test run\n";
-        return false;
-    }
 
     std::vector<std::string> userIncs;
     if (!stdDir.empty()) {
@@ -2241,10 +2346,6 @@ bool Builder::test() {
     depIncludes(userIncs, depForeignIncs);
     bool depsCxx = depsNeedCxx();
 
-    std::vector<std::string> archives;
-    for (auto& f : depLinkInputs()) archives.push_back(f);
-    if (!stdArchive_.empty()) archives.push_back(stdArchive_);
-
     std::string safecBin = findSafec();
     fs::path buildDir = fs::path(root_) / "build" / "tests";
     fs::create_directories(buildDir);
@@ -2252,9 +2353,11 @@ bool Builder::test() {
 
     std::vector<std::string> defs = featureDefines();
 
-    int passed = 0, failed = 0;
+    // Compile every test first: the std modules they all include, and the
+    // ones their code calls into, go into one archive the tests share.
+    std::vector<std::string> testObjs;
+    std::set<std::string> refs;
     for (auto& src : testSrcs) {
-        std::string name = fs::path(src).stem().string();
         SrcLang lang = langOf(src);
         std::string obj;
         if (lang == SrcLang::SafeC) {
@@ -2265,10 +2368,33 @@ bool Builder::test() {
             // regardless of whether a given test file invokes them.
             std::string ll = realSrc.empty() ? "" :
                 compileSrc(safecBin, realSrc, buildDir.string(), userIncs, true, false, defs);
-            if (!ll.empty()) obj = llToObj(ll, buildDir.string());
+            if (!ll.empty()) {
+                for (auto& r : irExternalRefs(ll)) refs.insert(r);
+                obj = llToObj(ll, buildDir.string());
+            }
         } else {
             obj = compileForeign(src, buildDir.string(), depForeignIncs, lang);
         }
+        testObjs.push_back(obj);
+    }
+    if (usesStd) {
+        for (auto& r : depStdRefs()) refs.insert(r);
+        if (!ensureStdLib(stdRoots(testSrcs), refs)) {
+            std::cerr << "safeguard: failed to build the standard library "
+                         "(see compiler errors above) — aborting test run\n";
+            return false;
+        }
+    }
+    std::vector<std::string> archives;
+    for (auto& f : depLinkInputs()) archives.push_back(f);
+    if (!stdArchive_.empty()) archives.push_back(stdArchive_);
+
+    int passed = 0, failed = 0;
+    for (size_t ti = 0; ti < testSrcs.size(); ++ti) {
+        const std::string& src = testSrcs[ti];
+        std::string name = fs::path(src).stem().string();
+        SrcLang lang = langOf(src);
+        const std::string& obj = testObjs[ti];
         if (obj.empty()) {
             std::cout << "test " << name << " ... FAILED (build error)\n";
             ++failed;
@@ -3079,9 +3205,18 @@ bool Builder::printStdModules(const std::vector<std::string>& args) {
             files = collectAllSources((fs::path(root_) / "src").string());
         }
     }
-    if (!files.empty() || args.empty())
+    std::set<std::string> refs;
+    if (!files.empty() || args.empty()) {
         for (auto& r : stdRoots(files)) roots.insert(r);
-    std::set<std::string> units = idx.closure(roots, plat);
+        // What their code calls into: compiled to IR as a build does.
+        if (!sourceRefs(files, (fs::path(root_) / "build" / "std-modules").string(), refs)) return false;
+        if (args.empty())
+            for (auto& r : depStdRefs()) refs.insert(r);
+    }
+    // The modules, as a build works them out (compiling the std units
+    // that takes, for the symbols their code refers to).
+    if (!ensureStdLib(roots, refs, /*link=*/false)) return false;
+    std::set<std::string> units = stdUnits_;
     for (auto& p : idx.problems) std::cout << "problem " << p << "\n";
     for (auto& u : units) std::cout << "unit std/" << u << "\n";
     std::vector<std::string> flags = idx.linkFlags(units, plat);

@@ -127,17 +127,26 @@ public:
                   const std::vector<std::string>& foreignIncludeDirs = {});
 
     // Build (or reuse) the parts of SafeC's standard library a build uses:
-    // the std modules 'roots' (std headers/units, see stdRoots) reach — or
-    // all of them with [build] std = "all" — each unit compiled to its own
-    // cached object, packed into build/deps/[<target>/]libsafec_std.a.
+    // the std modules 'roots' (std headers/units, see stdRoots) reach, and
+    // the 'runtime-symbol' units the build's code ('refs': the external
+    // symbols of its own and its dependencies' IR, see stdRefs) and those
+    // modules' own code refer to, to a fixed point — or all of them with
+    // [build] std = "all" — each unit compiled to its own cached object,
+    // packed into build/deps/[<target>/]libsafec_std.a.
     // Sets stdArchive_ ("" when nothing is to be linked) and the system
     // libraries those modules need (stdLinkFlags_, stdDebDepends_; see
-    // StdModules.h). Returns false on failure.
-    bool ensureStdLib(const std::set<std::string>& roots);
+    // StdModules.h). With 'link' false, only works out the modules (into
+    // stdUnits_), compiling what that needs, for 'std-modules'. Returns
+    // false on failure.
+    bool ensureStdLib(const std::set<std::string>& roots, const std::set<std::string>& refs,
+                      bool link = true);
 
     // The std files the given project files, its dependencies' sources and
     // its prebuilt SafeC libraries include.
     std::set<std::string> stdRoots(const std::vector<std::string>& files) const;
+    // The external symbols the build's dependencies refer to (the '.refs'
+    // beside a SafeC library; see ensureStdLib).
+    std::set<std::string> depStdRefs() const;
 
     // 'safeguard std-modules': what the build (or, given std headers and
     // files in 'args', those) takes from std, and the system libraries.
@@ -180,6 +189,25 @@ private:
     std::string stdArchive_;
     std::vector<std::string> stdLinkFlags_;
     std::vector<std::string> stdDebDepends_;
+    std::set<std::string> stdUnits_;          // the modules (ensureStdLib)
+
+    // One std unit's object: compiled into objDir (or reused from there)
+    // with the symbols its IR refers to kept beside it (<stem>.refs).
+    // 'skipped': it doesn't compile for this target (a .skip marker).
+    struct StdUnitObj {
+        std::string obj;
+        bool skipped = false;
+        std::set<std::string> refs;
+    };
+    bool stdUnitObject(const StdIndex& idx, const std::string& unit, const std::string& objDir,
+                       bool compile, StdUnitObj& out) const;
+    // The external symbols of the SafeC sources among 'files', compiled to
+    // IR into 'outDir' (for 'std-modules'). False if one doesn't compile.
+    bool sourceRefs(const std::vector<std::string>& files, const std::string& outDir,
+                    std::set<std::string>& refs);
+    // The include directories for SafeC sources: std, the project's
+    // include/ and its dependencies'.
+    std::vector<std::string> safecIncludeDirs() const;
     // The target, its OS and the enabled features, for std's modules.
     StdPlatform stdPlatform() const;
 
