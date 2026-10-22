@@ -55,6 +55,8 @@ const &char audio_error_name(int code);
 int audio_fail_(&AudioError e, int code, const &char message);
 int audio_fail2_(&AudioError e, int code, const &char prefix, const &char detail);
 int audio_fail_code_(&AudioError e, int code, const &char prefix, long long value);
+// "<prefix> (0x<hex>)": an HRESULT or a four-character OSStatus.
+int audio_fail_hex_(&AudioError e, int code, const &char prefix, unsigned int value);
 
 // Bounded string helpers std/audio uses for device and port names (no libc
 // on wasm32). Copy 'src' into 'dst' (capacity 'cap', always NUL-terminated);
@@ -64,7 +66,8 @@ void          audio_strcat_(&char dst, unsigned long cap, const ?&char src);
 unsigned long audio_strlen_(const ?&char s);
 int           audio_streq_(const ?&char a, const ?&char b);
 int           audio_strprefix_(const ?&char s, const ?&char prefix);
-// Appends the decimal 'v'.
+// Appends the decimal 'v' / "0x" and 8 hex digits.
 void          audio_strcat_int_(&char dst, unsigned long cap, long long v);
+void          audio_strcat_hex_(&char dst, unsigned long cap, unsigned int v);
 
 } // namespace std

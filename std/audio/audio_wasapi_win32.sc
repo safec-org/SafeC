@@ -375,7 +375,7 @@ static int audio_wasapi_probe_(&AudioHost_ h) {
     if (!w_coinit_()) return audio_fail_(&h.error, AUDIO_ERR_SYSTEM, "wasapi: CoInitializeEx failed");
     int hr = 0;
     void* en = w_enumerator_(&hr);
-    if (en == (void*)0) return audio_fail_code_(&h.error, AUDIO_ERR_UNAVAILABLE, "wasapi: no MMDeviceEnumerator", (long long)hr);
+    if (en == (void*)0) return audio_fail_hex_(&h.error, AUDIO_ERR_UNAVAILABLE, "wasapi: no MMDeviceEnumerator", (unsigned int)hr);
     char defOut[AUDIO_DEVICE_KEY_MAX];
     char defIn[AUDIO_DEVICE_KEY_MAX];
     w_default_id_(en, W_E_RENDER, &defOut[0]);
@@ -437,13 +437,13 @@ static int w_open_dir_(&AudioStreamState_ st, &WStream_ w, void* en, int d) {
             return audio_fail_(&st.error, AUDIO_ERR_INVALID_DEVICE, "wasapi: bad endpoint id");
         WGetDevice_ getDevice = (WGetDevice_)w_method_(en, 5);
         hr = getDevice(en, (const unsigned short*)&wid[0], &dev);
-        if (hr < 0 || dev == (void*)0) return audio_fail_code_(&st.error, AUDIO_ERR_INVALID_DEVICE, "wasapi: endpoint gone", (long long)hr);
+        if (hr < 0 || dev == (void*)0) return audio_fail_hex_(&st.error, AUDIO_ERR_INVALID_DEVICE, "wasapi: endpoint gone", (unsigned int)hr);
     }
     void* client = (void*)0;
     hr = w_audio_client_(dev, &client);
     if (hr < 0) {
         w_release_(dev);
-        return audio_fail_code_(&st.error, AUDIO_ERR_SYSTEM, "wasapi: IMMDevice::Activate", (long long)hr);
+        return audio_fail_hex_(&st.error, AUDIO_ERR_SYSTEM, "wasapi: IMMDevice::Activate", (unsigned int)hr);
     }
     int rc = AUDIO_OK;
     unsafe {
@@ -452,7 +452,7 @@ static int w_open_dir_(&AudioStreamState_ st, &WStream_ w, void* en, int d) {
         hr = getMix(client, (void**)&mix);
         if (hr < 0 || mix == (WFormat_*)0) {
             w_release_(client); w_release_(dev);
-            return audio_fail_code_(&st.error, AUDIO_ERR_SYSTEM, "wasapi: GetMixFormat", (long long)hr);
+            return audio_fail_hex_(&st.error, AUDIO_ERR_SYSTEM, "wasapi: GetMixFormat", (unsigned int)hr);
         }
         int channels = (int)mix->channels;
         if (st.user_channels[d] + st.first_channel[d] > channels) {
@@ -502,7 +502,7 @@ static int w_open_dir_(&AudioStreamState_ st, &WStream_ w, void* en, int d) {
                 }
                 if (hr < 0) {
                     int code = (unsigned int)hr == W_E_DEVICE_IN_USE ? AUDIO_ERR_DEVICE_BUSY : AUDIO_ERR_SYSTEM;
-                    rc = audio_fail_code_(&st.error, code, "wasapi: exclusive IAudioClient::Initialize", (long long)hr);
+                    rc = audio_fail_hex_(&st.error, code, "wasapi: exclusive IAudioClient::Initialize", (unsigned int)hr);
                 }
                 st.device_format[d] = chosen;
             }
@@ -522,7 +522,7 @@ static int w_open_dir_(&AudioStreamState_ st, &WStream_ w, void* en, int d) {
             long long dur = w_hns_(frames * periods, st.sample_rate);
             if (dur < defPeriod * 2LL) dur = defPeriod * 2LL;
             hr = init(client, W_SHAREMODE_SHARED, flags, dur, 0LL, &fmt, (const WGuid_*)0);
-            if (hr < 0) rc = audio_fail_code_(&st.error, AUDIO_ERR_SYSTEM, "wasapi: IAudioClient::Initialize", (long long)hr);
+            if (hr < 0) rc = audio_fail_hex_(&st.error, AUDIO_ERR_SYSTEM, "wasapi: IAudioClient::Initialize", (unsigned int)hr);
             st.device_format[d] = w_format_of_(&fmt);
             if (rc == AUDIO_OK && st.device_format[d] == 0U)
                 rc = audio_fail_(&st.error, AUDIO_ERR_UNSUPPORTED, "wasapi: unsupported mix format");
@@ -541,11 +541,11 @@ static int w_open_dir_(&AudioStreamState_ st, &WStream_ w, void* en, int d) {
         if (w.event[d] == (void*)0) return audio_fail_(&st.error, AUDIO_ERR_SYSTEM, "wasapi: CreateEvent");
         WSetEvent_ setEvent = (WSetEvent_)w_method_(client, 13);
         hr = setEvent(client, w.event[d]);
-        if (hr < 0) return audio_fail_code_(&st.error, AUDIO_ERR_SYSTEM, "wasapi: SetEventHandle", (long long)hr);
+        if (hr < 0) return audio_fail_hex_(&st.error, AUDIO_ERR_SYSTEM, "wasapi: SetEventHandle", (unsigned int)hr);
         struct WGuid_ iid = d == AUDIO_DIR_OUT ? w_iid_render_client_() : w_iid_capture_client_();
         WGetService_ getService = (WGetService_)w_method_(client, 14);
         hr = getService(client, &iid, &w.service[d]);
-        if (hr < 0) return audio_fail_code_(&st.error, AUDIO_ERR_SYSTEM, "wasapi: GetService", (long long)hr);
+        if (hr < 0) return audio_fail_hex_(&st.error, AUDIO_ERR_SYSTEM, "wasapi: GetService", (unsigned int)hr);
         long long lat = 0LL;
         WGetLatency_ getLatency = (WGetLatency_)w_method_(client, 5);
         getLatency(client, &lat);
@@ -568,7 +568,7 @@ static int audio_wasapi_open_(&AudioHost_ h, &AudioStreamState_ st) {
     if (!w_coinit_()) return audio_fail_(&st.error, AUDIO_ERR_SYSTEM, "wasapi: CoInitializeEx failed");
     int hr = 0;
     void* en = w_enumerator_(&hr);
-    if (en == (void*)0) return audio_fail_code_(&st.error, AUDIO_ERR_UNAVAILABLE, "wasapi: no MMDeviceEnumerator", (long long)hr);
+    if (en == (void*)0) return audio_fail_hex_(&st.error, AUDIO_ERR_UNAVAILABLE, "wasapi: no MMDeviceEnumerator", (unsigned int)hr);
     ?&WStream_ wp = null;
     unsafe { wp = (?&WStream_)alloc_zeroed_raw_(sizeof(struct WStream_)); }
     match (wp) {
@@ -780,7 +780,7 @@ static int audio_wasapi_start_(&AudioStreamState_ st) {
                     if (hr < 0) {
                         audio_stream_request_stop_(st, AUDIO_CB_ABORT);
                         audio_stream_thread_join_(st);
-                        return audio_fail_code_(&st.error, AUDIO_ERR_SYSTEM, "wasapi: IAudioClient::Start", (long long)hr);
+                        return audio_fail_hex_(&st.error, AUDIO_ERR_SYSTEM, "wasapi: IAudioClient::Start", (unsigned int)hr);
                     }
                 }
             }

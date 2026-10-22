@@ -79,6 +79,18 @@ void audio_strcat_int_(&char dst, unsigned long cap, long long v) {
     audio_strcat_(dst, cap, &out[0]);
 }
 
+void audio_strcat_hex_(&char dst, unsigned long cap, unsigned int v) {
+    char out[11];
+    out[0] = '0';
+    out[1] = 'x';
+    for (int i = 0; i < 8; i = i + 1) {
+        unsigned int nib = (v >> (unsigned int)(28 - 4 * i)) & 0xFU;
+        out[2 + i] = (char)(nib < 10U ? 48U + nib : 55U + nib);
+    }
+    out[10] = (char)0;
+    audio_strcat_(dst, cap, &out[0]);
+}
+
 struct AudioError AudioError::none() {
     struct AudioError e;
     e.code = AUDIO_OK;
@@ -125,6 +137,15 @@ int audio_fail2_(&AudioError e, int code, const &char prefix, const &char detail
 }
 int audio_fail_code_(&AudioError e, int code, const &char prefix, long long value) {
     *e = AudioError::make_code(code, prefix, value);
+    return code;
+}
+
+int audio_fail_hex_(&AudioError e, int code, const &char prefix, unsigned int value) {
+    e.code = code;
+    audio_strcpy_(&e.message[0], (unsigned long)AUDIO_ERROR_MESSAGE_MAX, prefix);
+    audio_strcat_(&e.message[0], (unsigned long)AUDIO_ERROR_MESSAGE_MAX, " (");
+    audio_strcat_hex_(&e.message[0], (unsigned long)AUDIO_ERROR_MESSAGE_MAX, value);
+    audio_strcat_(&e.message[0], (unsigned long)AUDIO_ERROR_MESSAGE_MAX, ")");
     return code;
 }
 

@@ -127,6 +127,8 @@ struct AudioDeviceInfo {
 
     // Whether 'rate' is in sample_rates.
     int supports_rate(unsigned int rate) const;
+    // An empty record (id 0, no channels), e.g. for Result::unwrap_or().
+    static struct AudioDeviceInfo none();
 };
 
 // One direction of a stream.

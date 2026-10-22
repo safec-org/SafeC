@@ -155,11 +155,13 @@ int AudioDeviceInfo::supports_rate(unsigned int rate) const {
     return 0;
 }
 
-struct AudioDeviceInfo audio_device_info_blank_() {
+struct AudioDeviceInfo AudioDeviceInfo::none() {
     struct AudioDeviceInfo d;
     unsafe { safe_memset_raw_((void*)&d, 0, sizeof(struct AudioDeviceInfo)); }
     return d;
 }
+
+struct AudioDeviceInfo audio_device_info_blank_() { return AudioDeviceInfo::none(); }
 
 void audio_device_add_rate_(&AudioDeviceInfo info, unsigned int rate) {
     int n = info.sample_rate_count;
