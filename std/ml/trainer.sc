@@ -3,6 +3,8 @@
 #include <std/ml/trainer.h>
 #include <std/ml/tensor.h>
 #include <std/ml/nn.h>
+#include <std/ml/device.h>
+#include <std/ml/device_kernels.h>
 
 namespace std {
 
@@ -69,6 +71,55 @@ float trainer_step_(&Optimizer opt, &FloatTensor loss, float clipNorm) {
     if (clipNorm > (float)0.0) opt.clip_grad_norm(clipNorm);
     opt.step();
     unsafe { tensor_host_((void*)loss); return loss->data[0]; }
+}
+
+struct TrainLossSum trainer_loss_sum_() {
+    struct TrainLossSum s;
+    s.host = 0.0; s.dev = 0UL; s.device = DEVICE_CPU; s.steps = 0UL;
+    return s;
+}
+
+// The device sum's value into the host's; frees it.
+static void trainer_loss_fold_(&TrainLossSum s) {
+    if (s.dev == 0UL) return;
+    float v = (float)0.0;
+    if (device_download_(s.device, (&float)&v, s.dev, 1UL)) s.host = s.host + (double)v;
+    device_mem_free_(s.device, s.dev, 4UL);
+    s.dev = 0UL;
+}
+
+void trainer_step_sum_(&Optimizer opt, &FloatTensor loss, float clipNorm, &TrainLossSum s) {
+    opt.zero_grad();
+    loss.backward();
+    if (clipNorm > (float)0.0) opt.clip_grad_norm(clipNorm);
+    opt.step();
+    s.steps = s.steps + 1UL;
+    unsafe {
+        FloatTensor* t = (FloatTensor*)loss;
+        int d = t->dev;
+        if (d != DEVICE_CPU && (t->coh & TS_DEV) != 0 && t->dbuf != 0UL) {
+            if (s.dev != 0UL && s.device != d) trainer_loss_fold_(s);
+            if (s.dev == 0UL) {
+                s.dev = device_mem_alloc_(d, 4UL);
+                s.device = d;
+                struct DevArgs z = dev_args_();
+                z.p[2] = s.dev; z.u[0] = (unsigned int)EW_FILL;
+                if (s.dev != 0UL && !device_launch_(d, DK_EW, 1UL, &z)) { device_mem_free_(d, s.dev, 4UL); s.dev = 0UL; }
+            }
+            if (s.dev != 0UL) {
+                struct DevArgs a = dev_args_();
+                a.p[0] = t->dbuf; a.p[2] = s.dev; a.u[0] = (unsigned int)EW_ACC;
+                if (device_launch_(d, DK_EW, 1UL, &a)) return;
+            }
+        }
+        tensor_host_((void*)t);
+        s.host = s.host + (double)t->data[0];
+    }
+}
+
+float trainer_loss_mean_(&TrainLossSum s) {
+    trainer_loss_fold_(s);
+    return s.steps > 0UL ? (float)(s.host / (double)s.steps) : (float)0.0;
 }
 
 } // namespace std

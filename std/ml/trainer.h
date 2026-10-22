@@ -76,6 +76,21 @@ void trainer_precision_end_(const &TrainConfig cfg, int previous);
 // Internal: one optimizer step from a loss tensor.
 float trainer_step_(&Optimizer opt, &FloatTensor loss, float clipNorm);
 
+// Internal: an epoch's running loss sum, kept where the losses are -- a
+// scalar on the device for a device's losses, read once when the epoch ends
+// -- so a step on a GPU doesn't wait for its loss to reach the host.
+struct TrainLossSum {
+    double host;            // losses computed on the CPU
+    unsigned long dev;      // the device scalar (fp32), 0 until a device loss
+    int device;
+    unsigned long steps;
+};
+struct TrainLossSum trainer_loss_sum_();
+// trainer_step_, its loss added to s.
+void trainer_step_sum_(&Optimizer opt, &FloatTensor loss, float clipNorm, &TrainLossSum s);
+// The mean loss of s's steps (reading the device's sum: waits); releases s.
+float trainer_loss_mean_(&TrainLossSum s);
+
 // Internal: a fresh report, and one epoch's mean loss and step count added.
 struct TrainReport train_report_new_();
 void train_report_epoch_(&TrainReport rep, unsigned long epoch, float mean, unsigned long steps);
@@ -85,20 +100,18 @@ void train_report_epoch_(&TrainReport rep, unsigned long epoch, float mean, unsi
 generic<T>
 float trainer_epoch_(&T model, fn &FloatTensor(&T, const &FloatTensor, const &FloatTensor) lossFn, &Optimizer opt,
                      &DataLoader dl, &TensorArena stepArena, float clipNorm, &unsigned long batches) {
-    double sum = 0.0;
-    unsigned long n = 0UL;
+    struct TrainLossSum sum = trainer_loss_sum_();
     struct Batch b;
     stepArena.begin();
     while (dl.next(&b)) {
         &FloatTensor loss = lossFn(model, b.x, b.y);
-        sum = sum + (double)trainer_step_(opt, loss, clipNorm);
-        n = n + 1UL;
+        trainer_step_sum_(opt, loss, clipNorm, &sum);
         stepArena.reset();
     }
     tensor_arena_end();
     stepArena.reset();
-    *batches = n;
-    return n > 0UL ? (float)(sum / (double)n) : (float)0.0;
+    *batches = sum.steps;
+    return trainer_loss_mean_(&sum);
 }
 
 generic<T>

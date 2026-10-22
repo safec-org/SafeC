@@ -236,19 +236,17 @@ generic<M: Module>
 generic<M: Module>
 float module_epoch_(&M m, int loss, &Optimizer opt, &DataLoader dl, &TensorArena stepArena, float clipNorm,
                     &unsigned long batches) {
-    double sum = 0.0;
-    unsigned long n = 0UL;
+    struct TrainLossSum sum = trainer_loss_sum_();
     struct Batch b;
     stepArena.begin();
     while (dl.next(&b)) {
-        sum = sum + (double)trainer_step_(opt, module_loss(m, loss, b.x, b.y), clipNorm);
-        n = n + 1UL;
+        trainer_step_sum_(opt, module_loss(m, loss, b.x, b.y), clipNorm, &sum);
         stepArena.reset();
     }
     tensor_arena_end();
     stepArena.reset();
-    *batches = n;
-    return n > 0UL ? (float)(sum / (double)n) : (float)0.0;
+    *batches = sum.steps;
+    return trainer_loss_mean_(&sum);
 }
 
 // trainer_fit with a built-in loss: the same batches, steps, lr decay and
@@ -326,19 +324,17 @@ float module_accuracy(&M m, const &Dataset data, unsigned long batchSize) {
 generic<M: LossModel>
 float model_epoch_(&M m, &Optimizer opt, &DataLoader dl, &TensorArena stepArena, float clipNorm,
                    &unsigned long batches) {
-    double sum = 0.0;
-    unsigned long n = 0UL;
+    struct TrainLossSum sum = trainer_loss_sum_();
     struct Batch b;
     stepArena.begin();
     while (dl.next(&b)) {
-        sum = sum + (double)trainer_step_(opt, m.loss(b.x, b.y), clipNorm);
-        n = n + 1UL;
+        trainer_step_sum_(opt, m.loss(b.x, b.y), clipNorm, &sum);
         stepArena.reset();
     }
     tensor_arena_end();
     stepArena.reset();
-    *batches = n;
-    return n > 0UL ? (float)(sum / (double)n) : (float)0.0;
+    *batches = sum.steps;
+    return trainer_loss_mean_(&sum);
 }
 
 // trainer_fit on the model's own loss (an autoencoder's reconstruction, a
