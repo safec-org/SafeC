@@ -5,10 +5,10 @@
 #   usage: run.sh
 #   Env: SAFEC (default compiler/build/safec), SAFEGUARD (default: on PATH),
 #        OUT (build dir), STD_ARCHIVE (a prebuilt release libsafec_std.a).
-# Links the release std archive 'safeguard build --release' makes for this
-# checkout (rebuilt incrementally on every run, so it follows std edits)
-# rather than listing std sources by hand: the checks reach std/ml, whose
-# source set changes as the library grows.
+# Links the release archive of all of std ../std_archive.sh makes for this
+# checkout through safeguard (rebuilt incrementally on every run, so it
+# follows std edits) rather than listing std sources by hand: the checks
+# reach std/ml, whose source set changes as the library grows.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
@@ -23,12 +23,7 @@ done
 
 STD="${STD_ARCHIVE:-}"
 if [[ -z "$STD" ]]; then
-    P="$OUT/_std"
-    mkdir -p "$P/src"
-    printf '[package]\nname = "mps_checks_std"\nversion = "0.1.0"\n\n[build]\nedition = "2026"\n' > "$P/Package.toml"
-    echo 'int main() { return 0; }' > "$P/src/main.sc"
-    (cd "$P" && SAFEC="$SAFEC" SAFEC_HOME="$ROOT" "$SAFEGUARD" build --release >/dev/null)
-    STD="$P/build/deps/libsafec_std.a"
+    STD="$(SAFEC="$SAFEC" SAFEGUARD="$SAFEGUARD" SAFEC_HOME="$ROOT" "$HERE/../std_archive.sh" "$OUT/_std" 2>/dev/null)"
 fi
 
 WRAP="$OUT/clang_link.sh"
