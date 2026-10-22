@@ -34,7 +34,7 @@ build_std() {   # <alias> <extra-flags> -> $OUT/<alias>/libsafec_std.a
   [[ -f "$d/libsafec_std.a" ]] && return 0
   mkdir -p "$d/std"
   while IFS= read -r -d '' f; do
-    case "$(basename "$f" .sc)" in *_linux|*_bsd|*_win32|*_posix|*_epoll|*_kqueue|*_cocoa|*_x11) continue ;; esac
+    case "$(basename "$f" .sc)" in *_linux|*_bsd|*_win32|*_posix|*_epoll|*_kqueue|*_cocoa|*_macos|*_x11) continue ;; esac
     local o="$d/std/$(echo "${f#$ROOT/std/}" | tr '/.' '__').o"
     "$SAFEC" -I "$ROOT/std" -I "$ROOT" "$f" --target="$t" --emit-llvm --compat-preprocessor -o "${o%.o}.ll" 2>/dev/null &&
       "$CLANG" -c "${o%.o}.ll" -o "$o" "${CFLAGS[@]}" $extra -Wno-override-module 2>/dev/null || rm -f "$o"

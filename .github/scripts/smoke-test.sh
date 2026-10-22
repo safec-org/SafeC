@@ -584,6 +584,23 @@ else
     cat /tmp/sg_async.txt
 fi
 
+# std/audio (examples/audio_demo): built with no libraries in its manifest
+# (the backends bring theirs; ALSA and JACK are loaded at run time), lists
+# the APIs and devices -- zero on a runner without sound hardware is fine --
+# and plays a short tone through the dummy API's timer thread.
+cp -R "$SAFEC_HOME/examples/audio_demo" "$WORKDIR/audio_demo"
+AD="$WORKDIR/audio_demo/build/audio_demo"
+[[ "$OS" == windows ]] && AD="$AD.exe"
+if sg_in "$WORKDIR/audio_demo" /tmp/sg_audio.txt build &&
+   with_timeout 60 "$AD" list >/tmp/sg_audio_run.txt 2>&1 && grep -q "Dummy: 2 device(s)" /tmp/sg_audio_run.txt &&
+   with_timeout 60 "$AD" sine --api dummy --seconds 0.25 >>/tmp/sg_audio_run.txt 2>&1 &&
+   grep -q "done: 0.25 s of audio" /tmp/sg_audio_run.txt; then
+    pass "std/audio: examples/audio_demo lists devices and plays through the dummy API ($(head -1 /tmp/sg_audio_run.txt))"
+else
+    fail "std/audio: examples/audio_demo"
+    cat /tmp/sg_audio.txt /tmp/sg_audio_run.txt 2>/dev/null
+fi
+
 # A GUI app bundle (examples/gui_hello: a std/gui window that closes itself).
 GUI_CAN_BUILD=1
 [[ "$OS" == linux && ! -e /usr/include/X11/Xlib.h ]] && GUI_CAN_BUILD=0
@@ -702,7 +719,9 @@ fi
 
 # ── 5d. prebuilt std sections ────────────────────────────────────────────────
 # A native build with the packaged safec links the prebuilt sections holding
-# its units (core and collections for io.h + vec.h; not gui, ml, ...) and
+# its units (core and collections for io.h + vec.h — io_file.h's whole-file
+# helpers take a String, so io.h alone already needs collections/string.sc;
+# not gui, ml, ...) and
 # compiles no std. Without a section installed (install.sh --std=...), it
 # compiles that section's units from source and links the rest; a section
 # stamped for another compiler is ignored the same way. std is compiled
@@ -725,10 +744,10 @@ if [[ "$PKG_OK" -eq 1 ]]; then
     fi
     mkdir -p "$PRE/aside" && mv "$PRE_STD"/collections.* "$PRE/aside/"
     if pre_build >/tmp/sg_pre1.txt 2>&1 &&
-       grep -q "std section 'collections' is not installed in .*compiling its units from source: std/collections/vec.sc" /tmp/sg_pre1.txt &&
+       grep -q "std section 'collections' is not installed in .*compiling its units from source: std/collections/string.sc std/collections/vec.sc" /tmp/sg_pre1.txt &&
        grep -q "linking the prebuilt std sections core from" /tmp/sg_pre1.txt &&
        grep -q "prebuilt std ok" /tmp/sg_pre1.txt &&
-       [[ "$(cd "$PRE/app/build/deps/std" && ls *.o 2>/dev/null)" == "collections_vec_sc.o" ]]; then
+       [[ "$(cd "$PRE/app/build/deps/std" && ls *.o 2>/dev/null | tr '\n' ' ')" == "collections_string_sc.o collections_vec_sc.o " ]]; then
         pass "a section that isn't installed is compiled from source, the others linked prebuilt"
     else
         fail "a build with a std section missing"

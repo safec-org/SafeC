@@ -23,6 +23,20 @@ namespace std {
 // below, for anything that needs to drop untrusted text into HTML.
 void html_escape(&String out, const &char s);
 
+// The reverse: appends 's' to 'out' with character references decoded —
+// numeric ('&#39;', '&#x2014;', as UTF-8) and the common named ones
+// (amp lt gt quot apos nbsp, plus copy reg trade hellip mdash ndash
+// lsquo rsquo ldquo rdquo laquo raquo middot bull times divide deg
+// larr rarr uarr darr harr ne le ge); anything else is copied as-is.
+void html_unescape(&String out, const &char s);
+
+// Appends the text content of the HTML fragment 's' to 'out': tags and
+// comments removed, <script>/<style> content dropped, and a single space
+// standing in for each block-level boundary (</p>, <br>, </li>, </td>,
+// </h2>, ...) so words in adjacent blocks don't run together. Character
+// references are left as they are (follow with html_unescape for text).
+void html_strip_tags(&String out, const &char s);
+
 // Appends v's rendered HTML fragment to 'out'.
 void html_write(const &Value v, &String out);
 

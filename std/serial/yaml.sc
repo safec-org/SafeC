@@ -203,6 +203,8 @@ inline struct String value_to_yaml(const &Value v) {
 struct YamlLine_ {
     unsigned long indent;
     struct String content; // comment-stripped, trailing-whitespace-trimmed
+    const char*   doc;     // the whole document (block scalars re-read raw lines)
+    unsigned long end;     // offset just past this line's '\n' in 'doc'
 };
 
 // Strips a trailing '#...' comment (only when the '#' is outside any
@@ -227,7 +229,13 @@ static struct String yaml_strip_comment_(const char* line) {
             i = i + 1UL;
             continue;
         }
-        if (c == '#') { break; }
+        if (c == '#') {
+            // A comment starts at '#' only at the line start or after
+            // whitespace ('a#b' is a plain scalar).
+            char prev = (char)0;
+            unsafe { if (i > 0UL) { prev = line[i - 1UL]; } }
+            if (i == 0UL || prev == ' ' || prev == '\t') { break; }
+        }
         unsafe { out.push_char(c); }
         i = i + 1UL;
     }
@@ -278,6 +286,8 @@ static struct Vec<struct YamlLine_> yaml_split_lines_(const char* text) {
             struct YamlLine_ yl;
             yl.indent = indent;
             yl.content = content;
+            yl.doc = text;
+            yl.end = i;
             lines.push(yl);
         } else {
             content.free();
@@ -299,6 +309,8 @@ static void yaml_free_lines_(&Vec<struct YamlLine_> lines) {
     unsafe { lines->free(); }
 }
 
+static struct Value yaml_parse_flow_value_(const char* t);
+
 static struct Value yaml_parse_scalar_(const char* text) {
     struct String s; unsafe { s = String::from(text); }
     struct String trimmed = s.trim();
@@ -315,6 +327,8 @@ static struct Value yaml_parse_scalar_(const char* text) {
         result = Value::from_bool(1);
     } else if (trimmed.eq_cstr_ignore_case("false")) {
         result = Value::from_bool(0);
+    } else if (c0 == '[' || c0 == '{') {
+        result = yaml_parse_flow_value_(t);
     } else if (c0 == '"') {
         struct String out = String::new();
         unsigned long i = 1UL;
@@ -390,6 +404,213 @@ static struct Value yaml_parse_scalar_(const char* text) {
     return result;
 }
 
+// ── Flow collections ('[a, b]', '{k: v}') ───────────────────────────────────
+// One line only (a flow collection spanning lines isn't supported). Items
+// are flow scalars — quoted, or plain text up to the next ',' ']' '}' —
+// or nested flow collections.
+
+static struct Value yaml_parse_flow_(const char* s, unsigned long* i, int* ok);
+
+static void yaml_flow_ws_(const char* s, unsigned long* i) {
+    unsafe { while (s[*i] == ' ' || s[*i] == '\t') { *i = *i + 1UL; } }
+}
+
+// A flow scalar starting at s[*i]; 'is_key' also stops a plain scalar at
+// ': ' (or ':' before ',', '}' or the end).
+static struct Value yaml_parse_flow_scalar_(const char* s, unsigned long* i, int is_key, int* ok) {
+    unsigned long start;
+    unsigned long end;
+    unsafe {
+        start = *i;
+        char q = s[start];
+        if (q == '"' || q == '\'') {
+            unsigned long k = start + 1UL;
+            while (s[k] != (char)0) {
+                if (q == '"' && s[k] == '\\' && s[k + 1UL] != (char)0) { k = k + 2UL; continue; }
+                if (s[k] == q) {
+                    if (q == '\'' && s[k + 1UL] == '\'') { k = k + 2UL; continue; }
+                    break;
+                }
+                k = k + 1UL;
+            }
+            if (s[k] != q) { *ok = 0; return Value::null(); }
+            end = k + 1UL;
+        } else {
+            unsigned long k = start;
+            while (s[k] != (char)0 && s[k] != ',' && s[k] != ']' && s[k] != '}') {
+                if (is_key && s[k] == ':' &&
+                    (s[k + 1UL] == ' ' || s[k + 1UL] == ',' || s[k + 1UL] == '}' || s[k + 1UL] == (char)0)) { break; }
+                k = k + 1UL;
+            }
+            end = k;
+        }
+        *i = end;
+        struct String piece = String::from_n(s + start, end - start);
+        struct Value v = yaml_parse_scalar_(piece.as_ptr());
+        piece.free();
+        return v;
+    }
+}
+
+static struct Value yaml_parse_flow_(const char* s, unsigned long* i, int* ok) {
+    yaml_flow_ws_(s, i);
+    char c;
+    unsafe { c = s[*i]; }
+    if (c == '[') {
+        struct Value arr = Value::array();
+        unsafe { *i = *i + 1UL; }
+        for (;;) {
+            yaml_flow_ws_(s, i);
+            unsafe { c = s[*i]; }
+            if (c == ']') { unsafe { *i = *i + 1UL; } return arr; }
+            if (c == (char)0) { unsafe { *ok = 0; } return arr; }
+            arr.array_push(yaml_parse_flow_(s, i, ok));
+            int good; unsafe { good = *ok; }
+            if (!good) { return arr; }
+            yaml_flow_ws_(s, i);
+            unsafe { c = s[*i]; }
+            if (c == ',') { unsafe { *i = *i + 1UL; } }
+            else if (c != ']') { unsafe { *ok = 0; } return arr; }
+        }
+    }
+    if (c == '{') {
+        struct Value obj = Value::object();
+        unsafe { *i = *i + 1UL; }
+        for (;;) {
+            yaml_flow_ws_(s, i);
+            unsafe { c = s[*i]; }
+            if (c == '}') { unsafe { *i = *i + 1UL; } return obj; }
+            if (c == (char)0) { unsafe { *ok = 0; } return obj; }
+            struct Value key = yaml_parse_flow_scalar_(s, i, 1, ok);
+            struct String keyStr = String::new();
+            if (key.kind_of() == VAL_STRING) { keyStr.push(key.as_string()); }
+            else if (key.kind_of() == VAL_INT) { keyStr.push_int(key.as_int()); }
+            else if (key.kind_of() == VAL_BOOL) { keyStr.push(key.as_bool() ? "true" : "false"); }
+            key.free();
+            yaml_flow_ws_(s, i);
+            unsafe { c = s[*i]; }
+            struct Value val;
+            if (c == ':') {
+                unsafe { *i = *i + 1UL; }
+                yaml_flow_ws_(s, i);
+                unsafe { c = s[*i]; }
+                if (c == ',' || c == '}') { val = Value::null(); }
+                else { val = yaml_parse_flow_(s, i, ok); }
+            } else {
+                val = Value::null();   // '{a, b}': keys with null values
+            }
+            obj.object_set(keyStr.as_ptr(), val);
+            keyStr.free();
+            int good; unsafe { good = *ok; }
+            if (!good) { return obj; }
+            yaml_flow_ws_(s, i);
+            unsafe { c = s[*i]; }
+            if (c == ',') { unsafe { *i = *i + 1UL; } }
+            else if (c != '}') { unsafe { *ok = 0; } return obj; }
+        }
+    }
+    return yaml_parse_flow_scalar_(s, i, 0, ok);
+}
+
+// A whole scalar position holding '[...]' / '{...}'. Text that doesn't
+// parse as one flow collection stays a plain string (least surprise).
+static struct Value yaml_parse_flow_value_(const char* t) {
+    unsigned long i = 0UL;
+    int ok = 1;
+    struct Value v = yaml_parse_flow_(t, &i, &ok);
+    yaml_flow_ws_(t, &i);
+    char rest;
+    unsafe { rest = t[i]; }
+    if (!ok || rest != (char)0) {
+        v.free();
+        unsafe { return Value::from_str(t); }
+    }
+    return v;
+}
+
+// ── Block scalars ('|' literal, '>' folded) ─────────────────────────────────
+
+// 1 if 'h' is a block scalar header: '|' or '>' plus an optional
+// chomping indicator ('-' strip, '+' keep) and/or indentation digit.
+static int yaml_is_block_header_(const &String h) {
+    int c0 = h.char_at(0UL);
+    if (c0 != (int)'|' && c0 != (int)'>') { return 0; }
+    for (unsigned long k = 1UL; k < h.len; k = k + 1UL) {
+        int c = h.char_at(k);
+        if (c != (int)'-' && c != (int)'+' && !(c >= (int)'1' && c <= (int)'9')) { return 0; }
+    }
+    return 1;
+}
+
+// Reads the block scalar whose header ends the line lines[*idx - 1]; its
+// content is every following raw line indented more than 'parentIndent'
+// (blank lines included). Advances *idx past the lines it consumed.
+static struct Value yaml_block_scalar_(&Vec<struct YamlLine_> lines, unsigned long* idx,
+                                       const &String header, unsigned long parentIndent) {
+    struct YamlLine_* hl;
+    unsafe { hl = lines->at(*idx - 1UL); }
+    const char* doc;
+    unsigned long pos;
+    unsafe { doc = hl->doc; pos = hl->end; }
+    int folded = header.char_at(0UL) == (int)'>';
+    int chomp = header.contains("-") ? -1 : (header.contains("+") ? 1 : 0);
+    unsigned long blockIndent = 0UL;
+    struct String out = String::new();
+    struct String pendingBreaks = String::new();   // newlines held until more content (or chomping)
+    int any = 0;
+    unsigned long endPos = pos;
+    unsafe {
+        while (doc[pos] != (char)0) {
+            unsigned long ls = pos;
+            unsigned long ind = 0UL;
+            while (doc[pos] == ' ') { ind = ind + 1UL; pos = pos + 1UL; }
+            unsigned long cs = pos;
+            while (doc[pos] != (char)0 && doc[pos] != '\n') { pos = pos + 1UL; }
+            unsigned long ce = pos;
+            if (ce > cs && doc[ce - 1UL] == '\r') { ce = ce - 1UL; }
+            if (doc[pos] == '\n') { pos = pos + 1UL; }
+            int blank = ce == cs;
+            if (!blank && ind <= parentIndent) { pos = ls; break; }
+            if (!blank && blockIndent == 0UL) { blockIndent = ind; }
+            endPos = pos;
+            if (blank) { pendingBreaks.push_char('\n'); continue; }
+            unsigned long from = ls + (blockIndent < ind ? blockIndent : ind);
+            if (any) {
+                if (folded && pendingBreaks.len == 0UL && ind == blockIndent) { out.push_char(' '); }
+                else if (folded) { out.push_str(&pendingBreaks); if (ind != blockIndent) { out.push_char('\n'); } }
+                else { out.push_char('\n'); out.push_str(&pendingBreaks); }
+            } else {
+                out.push_str(&pendingBreaks);
+            }
+            pendingBreaks.clear();
+            out.push_n(doc + from, ce - from);
+            any = 1;
+        }
+    }
+    if (any) {
+        if (chomp == 0) { out.push_char('\n'); }
+        else if (chomp == 1) { out.push_char('\n'); out.push_str(&pendingBreaks); }
+    }
+    pendingBreaks.free();
+    // Skip the parsed lines that belong to the block.
+    unsigned long n;
+    unsafe { n = lines->length(); }
+    while (1) {
+        unsigned long cur;
+        unsafe { cur = *idx; }
+        if (cur >= n) { break; }
+        struct YamlLine_* yl;
+        unsafe { yl = lines->at(cur); }
+        unsigned long lineEnd;
+        unsafe { lineEnd = yl->end; }
+        if (lineEnd > endPos) { break; }
+        unsafe { *idx = cur + 1UL; }
+    }
+    struct Value v = Value::from_str(out.as_ptr());
+    out.free();
+    return v;
+}
+
 static struct Value yaml_parse_block_(&Vec<struct YamlLine_> lines, unsigned long* idx,
                                        unsigned long minIndent, int* ok);
 
@@ -400,6 +621,7 @@ static struct Value yaml_parse_block_(&Vec<struct YamlLine_> lines, unsigned lon
 static long long yaml_find_colon_(const char* s) {
     unsigned long i = 0UL;
     char quote = (char)0;
+    int depth = 0;   // inside a flow collection: its ':'s aren't ours
     while (1) {
         char c;
         unsafe { c = s[i]; }
@@ -410,7 +632,9 @@ static long long yaml_find_colon_(const char* s) {
             continue;
         }
         if (c == '\'' || c == '"') { quote = c; i = i + 1UL; continue; }
-        if (c == ':') {
+        if (c == '[' || c == '{') { depth = depth + 1; }
+        else if ((c == ']' || c == '}') && depth > 0) { depth = depth - 1; }
+        if (c == ':' && depth == 0) {
             char next;
             unsafe { next = s[i + 1UL]; }
             if (next == (char)0 || next == ' ') { return (long long)i; }
@@ -464,6 +688,9 @@ static struct Value yaml_parse_mapping_(&Vec<struct YamlLine_> lines, unsigned l
         if (restTrimmed.is_empty()) {
             struct Value child = yaml_parse_block_(lines, idx, indent + 1UL, ok);
             unsafe { obj.object_set(keyStr.as_ptr(), child); }
+        } else if (yaml_is_block_header_(&restTrimmed)) {
+            struct Value child = yaml_block_scalar_(lines, idx, &restTrimmed, indent);
+            unsafe { obj.object_set(keyStr.as_ptr(), child); }
         } else {
             struct Value scalar = yaml_parse_scalar_(restTrimmed.as_ptr());
             unsafe { obj.object_set(keyStr.as_ptr(), scalar); }
@@ -509,6 +736,9 @@ static struct Value yaml_parse_sequence_(&Vec<struct YamlLine_> lines, unsigned 
             unsafe { *idx = *idx + 1UL; }
             struct Value child = yaml_parse_block_(lines, idx, indent + 1UL, ok);
             arr.array_push(child);
+        } else if (yaml_is_block_header_(&rest)) {
+            unsafe { *idx = *idx + 1UL; }
+            arr.array_push(yaml_block_scalar_(lines, idx, &rest, indent));
         } else if (yaml_find_colon_(rest.as_ptr()) >= 0) {
             // "- key: value" compact list-of-mappings shorthand: rewrite
             // this line in place as a mapping key at the column right

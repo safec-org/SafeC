@@ -60,7 +60,8 @@ struct StdPlatform {
     std::set<std::string> features;   // enabled [features], as named in the manifest
 };
 
-// Whether a platform-variant std unit (foo_linux.sc, gui_cocoa.sc, ...) is
+// Whether a platform-variant std unit (foo_linux.sc, gui_cocoa.sc,
+// audio_coreaudio_macos.sc, audio_webaudio_wasm.sc, ...) is
 // the one for this target (see its definition).
 bool stdVariantMatches(const std::filesystem::path& src, const std::string& triple, bool bareMetal);
 

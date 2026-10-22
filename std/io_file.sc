@@ -104,4 +104,40 @@ inline int           file_seek(&File f, long long offset, int whence) { return f
 inline long long     file_tell(&File f) { return f.tell(); }
 inline long long     file_size(&File f) { return f.size(); }
 
+int File::read_to_string(const &char path, &String out) {
+    ?&File fo = File::open(path, "rb");
+    match (fo) {
+        case some(f): {
+            long long total = f.size();
+            if (total > 0LL) { out.reserve((unsigned long)total); }
+            unsigned char buf[16384];
+            int ok = 1;
+            for (;;) {
+                long long n = f.read(&buf[0], 16384UL);
+                if (n < 0LL) { ok = 0; break; }
+                if (n == 0LL) { break; }
+                unsafe { out.push_n((const char*)&buf[0], (unsigned long)n); }
+            }
+            f.close();
+            return ok;
+        }
+        case null: { return 0; }
+    }
+    return 0;
+}
+
+int File::write_bytes(const &char path, const &char data, unsigned long n) {
+    ?&File fo = File::open(path, "wb");
+    match (fo) {
+        case some(f): {
+            long long w;
+            unsafe { w = f.write((const unsigned char*)data, n); }
+            int closed = f.close();
+            return (w == (long long)n && closed == 0) ? 1 : 0;
+        }
+        case null: { return 0; }
+    }
+    return 0;
+}
+
 } // namespace std
