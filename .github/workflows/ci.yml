@@ -10,7 +10,10 @@ name: CI
 # does the reverse) but goes further — it doesn't just build, it exercises
 # the actual toolchain: compiles the standard library, scaffolds and builds
 # a project with safeguard, runs safeguard's own check/lint/format/test
-# subcommands, and does a wire-protocol smoke test against sc-lsp.
+# subcommands, builds C/C++/Objective-C packages and dependencies (CMake
+# ones too), a cdylib with a dependent (a .dll + import library on
+# Windows), and an app bundle per platform (.app, app folder, .deb), and
+# does a wire-protocol smoke test against sc-lsp.
 
 on:
   push:
@@ -104,6 +107,12 @@ jobs:
           chmod +x llvm.sh
           sudo ./llvm.sh ${{ env.LLVM_VERSION }}
           sudo apt-get install -y "llvm-${{ env.LLVM_VERSION }}-dev" "clang-${{ env.LLVM_VERSION }}"
+
+      - name: Install X11 headers and Xvfb
+        # The smoke test bundles examples/gui_hello (std/gui's X11 backend)
+        # into a .deb and runs it under xvfb-run. cmake (the CMake
+        # dependency test) and dpkg-deb are already on the image.
+        run: sudo apt-get install -y libx11-dev xvfb
 
       - name: Build safec compiler
         run: |

@@ -187,6 +187,364 @@ else
     cat /tmp/sg_lib.txt
 fi
 
+# ── 5b. safeguard: other languages, built dependencies, cdylibs, bundles ─────
+section "safeguard: C/C++/ObjC packages and dependencies, cdylib, bundle"
+case "$(uname -s)" in
+    Darwin) OS=macos ;;
+    Linux) OS=linux ;;
+    MINGW*|MSYS*|CYGWIN*) OS=windows ;;
+    *) OS=other ;;
+esac
+EXE=""; [[ "$OS" == windows ]] && EXE=".exe"
+# An LLVM tool beside $CLANG_BIN (or on PATH), for inspecting binaries.
+llvm_tool() {
+    local dir; dir="$(dirname "$(command -v "$CLANG_BIN" 2>/dev/null || echo /nonexistent)")"
+    if [[ -x "$dir/$1" || -x "$dir/$1.exe" ]]; then echo "$dir/$1"; else command -v "$1" 2>/dev/null; fi
+}
+# Run a command, killed after $1 seconds (a GUI program must exit by itself).
+with_timeout() { local t="$1"; shift; perl -e 'alarm shift; exec @ARGV' "$t" "$@"; }
+# Run safeguard in a directory, output to a log; true if it succeeded.
+sg_in() { local dir="$1" log="$2"; shift 2; (cd "$dir" && "$SAFEGUARD_BIN" "$@") >"$log" 2>&1; }
+
+# A plain C package (no SafeC): built without std, run.
+if (cd "$WORKDIR" && "$SAFEGUARD_BIN" new ci_cpkg --lang c >/dev/null 2>&1) &&
+   sg_in "$WORKDIR/ci_cpkg" /tmp/sg_cpkg.txt run && grep -q "Hello from ci_cpkg!" /tmp/sg_cpkg.txt &&
+   [[ ! -e "$WORKDIR/ci_cpkg/build/deps/libsafec_std.a" ]]; then
+    pass "safeguard new --lang c: a C package builds and runs without std"
+else
+    fail "safeguard new --lang c package"
+    cat /tmp/sg_cpkg.txt
+fi
+
+# A C static library exporting its headers, used by a SafeC program.
+mkdir -p "$WORKDIR/ci_cstat/src" "$WORKDIR/ci_cstat/include" "$WORKDIR/ci_cstat_app/src"
+cat > "$WORKDIR/ci_cstat/Package.toml" <<'EOF'
+[package]
+name = "ci_cstat"
+version = "0.1.0"
+
+[build]
+edition = "2026"
+crate_type = "staticlib"
+EOF
+cat > "$WORKDIR/ci_cstat/include/ci_cstat.h" <<'EOF'
+#pragma once
+int ci_cstat_sum(const int* values, int n);
+EOF
+cat > "$WORKDIR/ci_cstat/src/ci_cstat.c" <<'EOF'
+#include <ci_cstat.h>
+int ci_cstat_sum(const int* values, int n) {
+    int s = 0;
+    for (int i = 0; i < n; ++i) s += values[i];
+    return s;
+}
+EOF
+cat > "$WORKDIR/ci_cstat_app/Package.toml" <<'EOF'
+[package]
+name = "ci_cstat_app"
+version = "0.1.0"
+
+[build]
+edition = "2026"
+
+[[dependencies]]
+name = "ci_cstat"
+path = "../ci_cstat/build"
+EOF
+cat > "$WORKDIR/ci_cstat_app/src/main.sc" <<'EOF'
+#include <ci_cstat.h>
+extern int printf(const char* fmt, ...);
+int main() {
+    int v[3] = { 1, 2, 39 };
+    unsafe { printf("ci_cstat sum %d\n", ci_cstat_sum(&v[0], 3)); }
+    return 0;
+}
+EOF
+if sg_in "$WORKDIR/ci_cstat" /tmp/sg_cstat.txt build &&
+   [[ -f "$WORKDIR/ci_cstat/build/libci_cstat.a" && -f "$WORKDIR/ci_cstat/build/include/ci_cstat.h" ]] &&
+   sg_in "$WORKDIR/ci_cstat_app" /tmp/sg_cstat.txt run && grep -q "ci_cstat sum 42" /tmp/sg_cstat.txt; then
+    pass "a C package built as a staticlib (with build/include) links into a SafeC program"
+else
+    fail "C staticlib package"
+    cat /tmp/sg_cstat.txt
+fi
+
+# A cdylib and a program using it: lib<name>.so/.dylib with an rpath, or on
+# Windows <name>.dll + its import library <name>.lib, the DLL copied beside
+# the program.
+mkdir -p "$WORKDIR/ci_dylib/src" "$WORKDIR/ci_dylib/include" "$WORKDIR/ci_dyapp/src"
+cat > "$WORKDIR/ci_dylib/Package.toml" <<'EOF'
+[package]
+name = "ci_dylib"
+version = "0.1.0"
+
+[build]
+edition = "2026"
+crate_type = "cdylib"
+EOF
+cat > "$WORKDIR/ci_dylib/include/ci_dylib.h" <<'EOF'
+#pragma once
+int ci_dylib_add(int a, int b);
+EOF
+cat > "$WORKDIR/ci_dylib/src/ci_dylib.sc" <<'EOF'
+#include <ci_dylib.h>
+static int twice(int x) { return x * 2; }
+int ci_dylib_add(int a, int b) { return twice(a) + b; }
+EOF
+cat > "$WORKDIR/ci_dyapp/Package.toml" <<'EOF'
+[package]
+name = "ci_dyapp"
+version = "0.1.0"
+author = "SafeC CI <ci@example.org>"
+
+[build]
+edition = "2026"
+
+[[dependencies]]
+name = "ci_dylib"
+path = "../ci_dylib/build"
+
+[bundle]
+identifier = "org.safec.ci-dyapp"
+subsystem  = "console"
+EOF
+cat > "$WORKDIR/ci_dyapp/src/main.sc" <<'EOF'
+#include <ci_dylib.h>
+extern int printf(const char* fmt, ...);
+int main() {
+    unsafe { printf("ci_dylib says %d\n", ci_dylib_add(20, 2)); }
+    return 0;
+}
+EOF
+case "$OS" in
+    windows) DYLIB_FILES=(ci_dylib.dll ci_dylib.lib include/ci_dylib.h) ;;
+    macos)   DYLIB_FILES=(libci_dylib.dylib include/ci_dylib.h) ;;
+    *)       DYLIB_FILES=(libci_dylib.so include/ci_dylib.h) ;;
+esac
+DYLIB_OK=1
+sg_in "$WORKDIR/ci_dylib" /tmp/sg_dylib.txt build || DYLIB_OK=0
+for f in "${DYLIB_FILES[@]}"; do [[ -f "$WORKDIR/ci_dylib/build/$f" ]] || { DYLIB_OK=0; echo "    missing build/$f"; }; done
+if [[ "$DYLIB_OK" -eq 1 ]]; then
+    pass "safeguard build (cdylib): ${DYLIB_FILES[*]}"
+else
+    fail "safeguard build (cdylib)"
+    cat /tmp/sg_dylib.txt
+fi
+if [[ "$OS" == windows ]]; then
+    READOBJ="$(llvm_tool llvm-readobj)"
+    if [[ -n "$READOBJ" ]]; then
+        "$READOBJ" --coff-exports "$WORKDIR/ci_dylib/build/ci_dylib.dll" >/tmp/sg_exports.txt 2>&1
+        if grep -q "Name: ci_dylib_add" /tmp/sg_exports.txt && ! grep -q "Name: twice" /tmp/sg_exports.txt &&
+           [[ "$(grep -c 'Name:' /tmp/sg_exports.txt)" -lt 5 ]]; then
+            pass "ci_dylib.dll exports ci_dylib_add (and not std's or static functions)"
+        else
+            fail "ci_dylib.dll export table"
+            cat /tmp/sg_exports.txt
+        fi
+    fi
+fi
+if sg_in "$WORKDIR/ci_dyapp" /tmp/sg_dyapp.txt run && grep -q "ci_dylib says 42" /tmp/sg_dyapp.txt &&
+   { [[ "$OS" != windows ]] || [[ -f "$WORKDIR/ci_dyapp/build/ci_dylib.dll" ]]; }; then
+    pass "a program using the cdylib builds and runs (safeguard run)"
+else
+    fail "a program using the cdylib"
+    cat /tmp/sg_dyapp.txt
+fi
+
+# Its bundle carries the shared library: Contents/Frameworks (macOS), the
+# app folder (Windows), /usr/lib/<pkg> on the rpath (Linux .deb). Run with
+# the library's own build directory moved away, so only the bundled copy
+# can satisfy it.
+if sg_in "$WORKDIR/ci_dyapp" /tmp/sg_dybundle.txt bundle; then
+    mv "$WORKDIR/ci_dylib/build" "$WORKDIR/ci_dylib/build.away"
+    BOUT=""
+    case "$OS" in
+        macos)
+            APP="$WORKDIR/ci_dyapp/build/ci_dyapp.app"
+            [[ -f "$APP/Contents/Frameworks/libci_dylib.dylib" ]] && codesign --verify --strict "$APP" &&
+                BOUT="$("$APP/Contents/MacOS/ci_dyapp" 2>&1)" ;;
+        windows)
+            [[ -f "$WORKDIR/ci_dyapp/build/ci_dyapp/ci_dylib.dll" ]] &&
+                BOUT="$("$WORKDIR/ci_dyapp/build/ci_dyapp/ci_dyapp.exe" 2>&1)" ;;
+        linux)
+            DEB="$(ls "$WORKDIR"/ci_dyapp/build/ci-dyapp_0.1.0_*.deb 2>/dev/null | head -1)"
+            if [[ -n "$DEB" ]] && dpkg-deb --contents "$DEB" | grep -q "usr/lib/ci-dyapp/libci_dylib.so"; then
+                rm -rf "$WORKDIR/deb_x" && dpkg -x "$DEB" "$WORKDIR/deb_x" &&
+                    BOUT="$("$WORKDIR/deb_x/usr/bin/ci_dyapp" 2>&1)"
+            fi ;;
+    esac
+    mv "$WORKDIR/ci_dylib/build.away" "$WORKDIR/ci_dylib/build"
+    if [[ "$BOUT" == *"ci_dylib says 42"* ]]; then
+        pass "safeguard bundle: the bundled program runs on its bundled cdylib"
+    else
+        fail "safeguard bundle with a cdylib dependency (output: '$BOUT')"
+        cat /tmp/sg_dybundle.txt
+    fi
+else
+    fail "safeguard bundle (cdylib dependent)"
+    cat /tmp/sg_dybundle.txt
+fi
+
+# A dependency that is a directory of C++ sources (build = "sources"),
+# called through extern "C": compiled with its defines, linked with clang++.
+mkdir -p "$WORKDIR/ci_vec" "$WORKDIR/ci_vec_app/src"
+cat > "$WORKDIR/ci_vec/ci_vec.h" <<'EOF'
+#pragma once
+#ifdef __cplusplus
+extern "C" {
+#endif
+int ci_vec_max(const int* values, int n);
+#ifdef __cplusplus
+}
+#endif
+EOF
+cat > "$WORKDIR/ci_vec/ci_vec.cpp" <<'EOF'
+#include "ci_vec.h"
+#include <algorithm>
+#include <vector>
+extern "C" int ci_vec_max(const int* values, int n) {
+    std::vector<int> v(values, values + n);
+    return *std::max_element(v.begin(), v.end()) + CI_VEC_BIAS;
+}
+EOF
+cat > "$WORKDIR/ci_vec_app/Package.toml" <<'EOF'
+[package]
+name = "ci_vec_app"
+version = "0.1.0"
+
+[build]
+edition = "2026"
+
+[[dependencies]]
+name    = "ci_vec"
+path    = "../ci_vec"
+build   = "sources"
+defines = ["CI_VEC_BIAS=2"]
+EOF
+cat > "$WORKDIR/ci_vec_app/src/main.sc" <<'EOF'
+#include <ci_vec.h>
+extern int printf(const char* fmt, ...);
+int main() {
+    int v[4] = { 7, 40, 3, 9 };
+    unsafe { printf("ci_vec max %d\n", ci_vec_max(&v[0], 4)); }
+    return 0;
+}
+EOF
+if sg_in "$WORKDIR/ci_vec_app" /tmp/sg_vec.txt run && grep -q "ci_vec max 42" /tmp/sg_vec.txt; then
+    pass "a C++ source dependency (build = \"sources\") links into a SafeC program"
+else
+    fail "C++ source dependency"
+    cat /tmp/sg_vec.txt
+fi
+
+# A CMake C++ library (examples/cpp_dep): configured, built and installed
+# into build/deps/, cached, rebuilt when its sources change.
+if command -v cmake >/dev/null 2>&1; then
+    cp -R "$SAFEC_HOME/examples/cpp_dep" "$WORKDIR/cpp_dep"
+    CMAKE_OK=1
+    sg_in "$WORKDIR/cpp_dep/app" /tmp/sg_cmake.txt run && grep -q "median 4.0, distinct 3" /tmp/sg_cmake.txt || CMAKE_OK=0
+    sg_in "$WORKDIR/cpp_dep/app" /tmp/sg_cmake2.txt build && ! grep -q "building dependency" /tmp/sg_cmake2.txt || CMAKE_OK=0
+    sleep 1
+    sed 's/\.size();/.size() + 100;/' "$WORKDIR/cpp_dep/cpplib/src/cppstats.cpp" > "$WORKDIR/cppstats.cpp" &&
+        mv "$WORKDIR/cppstats.cpp" "$WORKDIR/cpp_dep/cpplib/src/cppstats.cpp"
+    sg_in "$WORKDIR/cpp_dep/app" /tmp/sg_cmake3.txt run; grep -q "distinct 103" /tmp/sg_cmake3.txt || CMAKE_OK=0
+    if [[ "$CMAKE_OK" -eq 1 ]]; then
+        pass "a CMake C++ dependency (build = \"cmake\") builds, is cached, and rebuilds on change"
+    else
+        fail "CMake C++ dependency"
+        cat /tmp/sg_cmake.txt /tmp/sg_cmake2.txt /tmp/sg_cmake3.txt
+    fi
+else
+    echo "  [SKIP] cmake not available"
+fi
+
+# Objective-C: a package of its own and a dependency (examples/objc_dep).
+if [[ "$OS" == macos ]]; then
+    if (cd "$WORKDIR" && "$SAFEGUARD_BIN" new ci_objc --lang objc >/dev/null 2>&1) &&
+       sg_in "$WORKDIR/ci_objc" /tmp/sg_objc.txt run && grep -q "Hello from ci_objc!" /tmp/sg_objc.txt; then
+        pass "safeguard new --lang objc: an Objective-C package builds and runs"
+    else
+        fail "Objective-C package"
+        cat /tmp/sg_objc.txt
+    fi
+    cp -R "$SAFEC_HOME/examples/objc_dep" "$WORKDIR/objc_dep"
+    if sg_in "$WORKDIR/objc_dep/app" /tmp/sg_objcdep.txt run &&
+       grep -q "length 5, uppercase H.*LLO (6 bytes)" /tmp/sg_objcdep.txt; then
+        pass "an Objective-C dependency (Foundation, ARC) is callable from SafeC"
+    else
+        fail "Objective-C dependency"
+        cat /tmp/sg_objcdep.txt
+    fi
+else
+    echo "  [SKIP] Objective-C (macOS only)"
+fi
+
+# A GUI app bundle (examples/gui_hello: a std/gui window that closes itself).
+GUI_CAN_BUILD=1
+[[ "$OS" == linux && ! -e /usr/include/X11/Xlib.h ]] && GUI_CAN_BUILD=0
+if [[ "$OS" == other || "$GUI_CAN_BUILD" -eq 0 ]]; then
+    echo "  [SKIP] GUI bundle (no X11 headers / unsupported OS)"
+else
+    cp -R "$SAFEC_HOME/examples/gui_hello" "$WORKDIR/gui_hello"
+    G="$WORKDIR/gui_hello/build"
+    if sg_in "$WORKDIR/gui_hello" /tmp/sg_gui.txt bundle; then
+        GUI_OK=1
+        case "$OS" in
+            macos)
+                C="$G/GuiHello.app/Contents"
+                for f in MacOS/gui_hello Info.plist Resources/icon.icns Resources/greeting.txt; do
+                    [[ -f "$C/$f" ]] || { GUI_OK=0; echo "    missing $f"; }
+                done
+                [[ "$(plutil -extract CFBundleIdentifier raw "$C/Info.plist")" == org.safec.gui-hello ]] || GUI_OK=0
+                [[ "$(plutil -extract CFBundleExecutable raw "$C/Info.plist")" == gui_hello ]] || GUI_OK=0
+                codesign --verify --strict "$G/GuiHello.app" || GUI_OK=0
+                with_timeout 60 "$C/MacOS/gui_hello" >/tmp/sg_gui_run.txt 2>&1 || GUI_OK=0
+                ;;
+            windows)
+                for f in gui_hello.exe greeting.txt; do
+                    [[ -f "$G/GuiHello/$f" ]] || { GUI_OK=0; echo "    missing GuiHello/$f"; }
+                done
+                READOBJ="$(llvm_tool llvm-readobj)"
+                if [[ -n "$READOBJ" ]]; then
+                    "$READOBJ" --file-headers --coff-resources "$G/GuiHello/gui_hello.exe" >/tmp/sg_gui_res.txt 2>&1
+                    for k in IMAGE_SUBSYSTEM_WINDOWS_GUI "Type: ICON" "Type: VERSIONINFO" "Type: MANIFEST"; do
+                        grep -q "$k" /tmp/sg_gui_res.txt || { GUI_OK=0; echo "    gui_hello.exe lacks $k"; }
+                    done
+                fi
+                with_timeout 60 "$G/GuiHello/gui_hello.exe" >/tmp/sg_gui_run.txt 2>&1 || GUI_OK=0
+                ;;
+            linux)
+                DEB="$G/gui-hello_1.0.0_$(dpkg --print-architecture).deb"
+                dpkg-deb --info "$DEB" >/tmp/sg_gui_deb.txt 2>&1 || GUI_OK=0
+                dpkg-deb --contents "$DEB" >>/tmp/sg_gui_deb.txt 2>&1 || GUI_OK=0
+                for k in "Package: gui-hello" "Depends: libx11-6" ./usr/bin/gui_hello \
+                         ./usr/share/applications/org.safec.gui-hello.desktop \
+                         ./usr/share/icons/hicolor/256x256/apps/org.safec.gui-hello.png \
+                         ./usr/share/gui-hello/greeting.txt; do
+                    grep -q -- "$k" /tmp/sg_gui_deb.txt || { GUI_OK=0; echo "    .deb lacks $k"; }
+                done
+                [[ -x "$G/GuiHello.AppDir/AppRun" ]] || { GUI_OK=0; echo "    no AppDir/AppRun"; }
+                rm -rf "$WORKDIR/gui_x" && dpkg -x "$DEB" "$WORKDIR/gui_x" || GUI_OK=0
+                if command -v xvfb-run >/dev/null 2>&1; then
+                    with_timeout 60 xvfb-run -a "$WORKDIR/gui_x/usr/bin/gui_hello" >/tmp/sg_gui_run.txt 2>&1 || GUI_OK=0
+                else
+                    with_timeout 60 "$WORKDIR/gui_x/usr/bin/gui_hello" >/tmp/sg_gui_run.txt 2>&1 || GUI_OK=0
+                fi
+                ;;
+        esac
+        if [[ "$OS" != windows ]] && ! grep -q "gui_hello:" /tmp/sg_gui_run.txt; then GUI_OK=0; fi
+        if [[ "$GUI_OK" -eq 1 ]]; then
+            pass "safeguard bundle: GUI app bundle built, inspected and run ($(head -1 /tmp/sg_gui_run.txt))"
+        else
+            fail "GUI app bundle"
+            cat /tmp/sg_gui.txt /tmp/sg_gui_run.txt 2>/dev/null
+        fi
+    else
+        fail "safeguard bundle (GUI app)"
+        cat /tmp/sg_gui.txt
+    fi
+fi
+
 popd >/dev/null
 rm -rf "$WORKDIR"
 
