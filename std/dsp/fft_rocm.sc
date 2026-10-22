@@ -3,6 +3,7 @@
 // hipFFT plans are created with hipfftPlan1d / hipfftPlan2d (each plan
 // allocates its own work area) and bound to gpu_rocm's stream. On AMD a
 // hipfftHandle is a pointer, kept here as an opaque void*.
+// safeguard: link linux -L${ROCM_PATH:-/opt/rocm}/lib -lhipfft -lamdhip64
 #pragma once
 #include <std/stddef.h>
 #include <std/dsp/fft_rocm.h>

@@ -1,6 +1,7 @@
 // SafeC Standard Library — Math
 // Integer utilities are pure const functions eligible for compile-time evaluation.
 // Float/double utilities wrap the corresponding <math.h> functions.
+// safeguard: link unix -lm
 #pragma once
 #include <std/math.h>
 

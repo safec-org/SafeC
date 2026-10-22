@@ -1,4 +1,5 @@
 // SafeC Standard Library — floating-point environment implementation
+// safeguard: link unix -lm
 #pragma once
 #include <std/fenv.h>
 

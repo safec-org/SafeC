@@ -29,6 +29,7 @@
 // functions get name-mangled to 'std_name' and would silently fail to
 // link against the literal symbol names the compiler's CodeGen emits
 // calls to). Chan<T> (channel.h) calls these by their literal names.
+// safeguard: runtime                     (__safec_chan_*: chan_create & co.)
 #pragma once
 #include <std/sync/channel.h>
 #include <std/thread.h>

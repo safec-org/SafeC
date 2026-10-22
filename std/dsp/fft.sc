@@ -1,4 +1,5 @@
 // SafeC Standard Library — FFT implementation (see fft.h)
+// safeguard: link linux blas             (oneMKL's DFTI, weak, with [build] blas = "mkl")
 #pragma once
 #include <std/dsp/fft.h>
 #include <std/dsp/complex_dsp.h>

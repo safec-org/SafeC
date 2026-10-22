@@ -5,6 +5,9 @@
 // the ROCm backend's -- compiled once by NVRTC for the GPU's compute
 // capability. A program enables it with its cuda feature; link -lcuda
 // -lcublas -lnvrtc (and -lcudnn for cuDNN's convolutions).
+// safeguard: feature cuda
+// safeguard: link linux -L${CUDA_HOME:-/usr/local/cuda}/lib64 -lcuda -lcublas -lnvrtc
+// safeguard: link windows -L${CUDA_PATH}/lib/x64 -lcuda -lcublas -lnvrtc
 #pragma once
 #include <std/stddef.h>
 #include <std/ml/device.h>

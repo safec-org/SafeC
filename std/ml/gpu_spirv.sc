@@ -1,6 +1,9 @@
 // SafeC Standard Library — array ops on a Vulkan GPU (see gpu_spirv.h): the
 // device backend's memory and kernels (device_vulkan.sc) through device.h's
 // internal API, which also counts them in device_stats(DEVICE_VULKAN).
+// safeguard: link linux -lvulkan
+// safeguard: link macos -L${VULKAN_SDK}/lib -L/opt/homebrew/lib -L/usr/local/lib -lvulkan
+// safeguard: link windows -L${VULKAN_SDK}/Lib -lvulkan-1
 #pragma once
 #include <std/stddef.h>
 #include <std/ml/gpu_spirv.h>

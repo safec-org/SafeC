@@ -1,5 +1,6 @@
 // SafeC Standard Library — vDSP-accelerated elementwise Tensor ops
 // implementation (see tensor_vdsp.h).
+// safeguard: link macos -framework Accelerate
 #pragma once
 #include <std/ml/tensor_vdsp.h>
 #include <std/ml/tensor.h>

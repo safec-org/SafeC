@@ -13,6 +13,8 @@
 // fallback for shapes no graph engine takes.
 // Workspaces are per plan rather than shared, so a CudaGraph that captured a
 // convolution keeps a valid workspace however many shapes come later.
+// safeguard: link linux -L${CUDA_HOME:-/usr/local/cuda}/lib64 -lcudnn -lcuda
+// safeguard: link windows -L${CUDA_PATH}/lib/x64 -lcudnn -lcuda
 #pragma once
 #include <std/stddef.h>
 #include <std/ml/gpu_cudnn.h>

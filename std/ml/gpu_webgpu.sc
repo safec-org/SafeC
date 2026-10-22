@@ -3,6 +3,7 @@
 // the backend's device heap; ops are its kernel launches and GEMMs; the
 // host-array ops upload their inputs into temporary buffers, run, read the
 // result back and free them.
+// safeguard: link hosted -L${WGPU_HOME}/lib -lwgpu_native
 #pragma once
 #include <std/stddef.h>
 #include <std/ml/gpu_webgpu.h>

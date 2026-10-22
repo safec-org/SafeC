@@ -4,6 +4,7 @@
 // simply not special-cased, which is exactly equivalent to "supported,
 // with no transform applied," since transforms aren't implemented anyway)
 // and draw it immediately; no retained SVG DOM.
+// safeguard: implements <std/gui/gui.h>   (GuiWindow::draw_svg, declared there)
 #pragma once
 #include <std/gui/gui.h>
 #include <std/gui/gui_draw.h>

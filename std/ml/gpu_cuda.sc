@@ -6,6 +6,8 @@
 // runs on any CUDA GPU the installed NVRTC knows. Compilation takes
 // ~0.3 s once per process. Matmuls go to cuBLAS (and cuBLASLt for the
 // fused GEMM + ReLU), on the same stream as the kernels.
+// safeguard: link linux -L${CUDA_HOME:-/usr/local/cuda}/lib64 -lcuda -lcublas -lcublasLt -lnvrtc
+// safeguard: link windows -L${CUDA_PATH}/lib/x64 -lcuda -lcublas -lcublasLt -lnvrtc
 #pragma once
 #include <std/stddef.h>
 #include <std/ml/gpu_cuda.h>

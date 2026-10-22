@@ -1,5 +1,6 @@
 // SafeC Standard Library — Memory
 // Safe wrappers around malloc / free / realloc / mem* from libc.
+// safeguard: runtime                     (std_alloc_raw_: what `new T` calls)
 #pragma once
 #include <std/stddef.h>
 #include <std/mem.h>

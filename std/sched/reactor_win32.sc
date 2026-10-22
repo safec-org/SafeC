@@ -42,6 +42,7 @@
 // (now-implemented) epoll backend: implemented against the documented
 // Win32 API surface and struct layouts, but not yet exercised against a
 // real WSAPoll call.
+// safeguard: link windows -lws2_32
 #pragma once
 // See reactor_kqueue.sc's identical comment on this macro.
 #define SAFEC_REACTOR_BACKEND_INCLUDED_

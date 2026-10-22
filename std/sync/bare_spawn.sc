@@ -22,6 +22,7 @@
 // run to completion in one call — there's no OS thread underneath to
 // preempt it, so a function that never yields blocks the whole cooperative
 // scheduler (including whichever task called __safec_thread_join on it).
+// safeguard: runtime baremetal wasm      (__safec_thread_*: spawn/join without an OS)
 #pragma once
 #include <std/sync/task.h>
 

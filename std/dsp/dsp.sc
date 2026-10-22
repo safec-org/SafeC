@@ -1,3 +1,4 @@
+// safeguard: link macos blas             (vDSP_conv, weak: Accelerate unless [build] blas says otherwise)
 #pragma once
 #include <std/dsp/dsp.h>
 #include <std/simd/simd.h>

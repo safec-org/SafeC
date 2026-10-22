@@ -6,6 +6,8 @@
 // head dim) combination is used: VK selects the kernel, VT the element type
 // (0 fp32, 1 fp16, 2 bf16) and VD the head dim, and every variant exports
 // one entry point, attn_entry. All launches go on cuda_stream_handle().
+// safeguard: link linux -L${CUDA_HOME:-/usr/local/cuda}/lib64 -lcuda -ldl
+// safeguard: link windows -L${CUDA_PATH}/lib/x64 -lcuda
 #pragma once
 #include <std/stddef.h>
 #include <std/ml/gpu_cuda_attention.h>

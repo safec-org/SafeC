@@ -37,6 +37,7 @@
 //      below (__mps_buf_get/__mps_buf_put), which applies that exact
 //      pattern here, the same size-class-cache design std::alloc/dealloc
 //      already uses on the CPU side (see std/mem.sc).
+// safeguard: link macos -framework Metal -framework Foundation -lobjc
 #pragma once
 #include <std/stddef.h>
 #include <std/ml/gpu_mps.h>

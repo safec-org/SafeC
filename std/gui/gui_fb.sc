@@ -19,6 +19,7 @@
 // the real framebuffer's base address/pitch/pixel format — typically
 // values your bootloader handed you (e.g. a Multiboot2 framebuffer tag's
 // framebuffer_addr/framebuffer_pitch/framebuffer_bpp fields).
+// safeguard: implements <std/gui/gui.h>   (the bare-metal backend; gui_fb.h is its setup)
 #pragma once
 #include <std/stddef.h>
 #include <std/gui/gui.h>

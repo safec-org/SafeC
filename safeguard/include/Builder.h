@@ -1,6 +1,8 @@
 #pragma once
 #include "Manifest.h"
 #include "Lock.h"
+#include "StdModules.h"
+#include <set>
 #include <string>
 #include <vector>
 
@@ -107,23 +109,9 @@ public:
     // ── Library support ──────────────────────────────────────────────────────
 
     // Build a static library from all .sc/.c/.cpp files in `srcDir`
-    // (recursively). Outputs to `libOut` (e.g., "build/libfoo.a").
-    // 'compatPreprocessor' passes --compat-preprocessor to safec — needed for
-    // the standard library itself, which (unlike ordinary user code) relies
-    // on function-like macros in a few headers (e.g. ring buffer static
-    // storage declarations).
-    // 'tolerateArchMismatch': skip (warn, don't abort) a source file that
-    // fails to assemble to real machine code for the current target — used
-    // only for the standard library, which ships architecture-specific
-    // files (e.g. std/hal/riscv.sc's CSR asm, std/hal/aarch64.sc's MRS/MSR
-    // asm) alongside portable ones in the same tree; a native aarch64
-    // build has no way to assemble riscv.sc's instructions and was never
-    // going to call its functions anyway. A genuine SafeC-level error
-    // (parse/type-check failure, reported by safec itself rather than by
-    // the downstream assembler) still aborts unconditionally either way —
-    // this only tolerates the assembler rejecting instructions safec
-    // itself accepted as syntactically valid inline asm text. User project
-    // sources always use the strict (non-tolerant) default.
+    // (recursively) — a SafeC dependency built from source. Outputs to
+    // `libOut` (e.g., "build/libfoo.a").
+    // 'compatPreprocessor' passes --compat-preprocessor to safec.
     // 'foreignIncludeDirs': include search dirs used for .c/.cpp files
     // instead of 'includeDirs' — kept separate because 'includeDirs' for
     // the SafeC side typically includes SafeC's own std/ directory, whose
@@ -132,23 +120,28 @@ public:
     // if put on their search path. Defaults to empty (no extra include
     // dirs for foreign files) when not given.
     // Returns true on success.
-    // 'excludeSubdirNames': directory-name components to skip entirely
-    // during source discovery (e.g. "wasm" for the SafeC stdlib build —
-    // see collectAllSources's matching comment for why). Defaults to
-    // none; only the stdlib's own buildLib() call passes anything here,
-    // since this is about std/'s own internal layout, not something a
-    // user's project or a fetched dependency should ever need.
     bool buildLib(const std::string& srcDir,
                   const std::string& libOut,
                   const std::vector<std::string>& includeDirs = {},
                   bool compatPreprocessor = false,
-                  bool tolerateArchMismatch = false,
-                  const std::vector<std::string>& foreignIncludeDirs = {},
-                  const std::vector<std::string>& excludeSubdirNames = {});
+                  const std::vector<std::string>& foreignIncludeDirs = {});
 
-    // Build (or use cached) SafeC standard library.
-    // Returns the path to the built .a, or "" on failure.
-    std::string ensureStdLib();
+    // Build (or reuse) the parts of SafeC's standard library a build uses:
+    // the std modules 'roots' (std headers/units, see stdRoots) reach — or
+    // all of them with [build] std = "all" — each unit compiled to its own
+    // cached object, packed into build/deps/[<target>/]libsafec_std.a.
+    // Sets stdArchive_ ("" when nothing is to be linked) and the system
+    // libraries those modules need (stdLinkFlags_, stdDebDepends_; see
+    // StdModules.h). Returns false on failure.
+    bool ensureStdLib(const std::set<std::string>& roots);
+
+    // The std files the given project files, its dependencies' sources and
+    // its prebuilt SafeC libraries include.
+    std::set<std::string> stdRoots(const std::vector<std::string>& files) const;
+
+    // 'safeguard std-modules': what the build (or, given std headers and
+    // files in 'args', those) takes from std, and the system libraries.
+    bool printStdModules(const std::vector<std::string>& args);
 
     // ── Dependency management ─────────────────────────────────────────────────
 
@@ -181,6 +174,14 @@ private:
     std::string   root_;
     Manifest      manifest_;
     BuildOptions  opts_;
+
+    // The std archive this build links, and what its modules link (set by
+    // ensureStdLib).
+    std::string stdArchive_;
+    std::vector<std::string> stdLinkFlags_;
+    std::vector<std::string> stdDebDepends_;
+    // The target, its OS and the enabled features, for std's modules.
+    StdPlatform stdPlatform() const;
 
     // Locate the safec binary.
     std::string findSafec() const;
@@ -258,13 +259,7 @@ private:
     // 'excludeSubdirNames': any path whose components include one of
     // these names (case-sensitive, exact directory-name match — e.g.
     // "wasm" matches ".../std/wasm/..." but not ".../std/webassembly/...")
-    // is skipped. See the stdlib's own buildLib() call for why this
-    // exists: std/wasm/*.sc defines bare 'malloc'/'free'/etc. symbols
-    // meant only for a wasm32-target build that #includes them directly
-    // from source — compiling them into the general, all-hosted-platforms
-    // stdlib archive collides with the real libc there (confirmed in CI:
-    // Windows' libucrt raised LNK2005 "already defined" for exactly
-    // those symbols once std/wasm/wasm_rt.sc made it into libsafec_std.a).
+    // is skipped.
     std::vector<std::string> collectAllSources(
         const std::string& srcDir,
         const std::vector<std::string>& excludeSubdirNames = {}) const;
@@ -286,7 +281,8 @@ private:
                             const std::vector<std::string>& includeDirs = {},
                             bool compatPreprocessor = false,
                             bool suppressOutput = false,
-                            const std::vector<std::string>& defines = {}) const;
+                            const std::vector<std::string>& defines = {},
+                            const std::string& outStem = "") const;
 
     // ── [features] ────────────────────────────────────────────────────────────
 
