@@ -77,6 +77,13 @@ edition = "2026"
 # name    = "mylib"
 # lib     = ["vendor/libmylib.a"]
 # include = ["vendor/include"]
+#
+# To build a C/C++ library from source (a CMake project, or plain source
+# files with build = "sources") and link it:
+# [[dependencies]]
+# name    = "mylib"
+# path    = "../mylib"
+# build   = "cmake"
 )";
 
 static const char kMainScTemplate[] =

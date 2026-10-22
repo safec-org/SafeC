@@ -251,6 +251,9 @@ int Builder::runCmd(const std::vector<std::string>& argv, bool verbose,
     // genuine failures in noise. Verbose mode still shows everything, since
     // its whole contract is "show me every command and its output."
     bool quiet = suppressOutput && !verbose;
+    // What safeguard printed so far comes before the child's own output.
+    std::cout.flush();
+    fflush(stdout);
 #ifdef _WIN32
     // _spawnvp is the MSVC CRT's argv-based process launcher — like
     // execvp, it searches PATH and takes an argv array directly (no shell
@@ -406,7 +409,8 @@ std::string Builder::compileForeign(const std::string& srcPath,
                                      const std::string& buildDir,
                                      const std::vector<std::string>& includeDirs,
                                      SrcLang lang,
-                                     bool suppressOutput) const {
+                                     bool suppressOutput,
+                                     const std::vector<std::string>* flags) const {
     // Objective-C needs Apple's runtime and frameworks; GNUstep isn't
     // wired up, so say so instead of failing on <Foundation/Foundation.h>.
     if (isObjC(lang) && targetOS() != "macos") {
@@ -438,8 +442,14 @@ std::string Builder::compileForeign(const std::string& srcPath,
         cmd.push_back(inc);
     }
     if (opts_.release) cmd.push_back("-O2");
-    for (auto& f : compileFlags()) cmd.push_back(f);
-    if (isObjC(lang) && manifest_.build.objcArc) cmd.push_back("-fobjc-arc");
+    // 'flags': a built dependency's own (see buildNativeDep); otherwise the
+    // project's [build] cflags, plus -fobjc-arc for ObjC when objc_arc is set.
+    if (flags) {
+        for (auto& f : *flags) cmd.push_back(f);
+    } else {
+        for (auto& f : compileFlags()) cmd.push_back(f);
+        if (isObjC(lang) && manifest_.build.objcArc) cmd.push_back("-fobjc-arc");
+    }
 
     int rc = runCmd(cmd, opts_.verbose, suppressOutput);
     if (rc != 0) {
@@ -1103,18 +1113,118 @@ static std::vector<fs::path> findLibraries(const fs::path& dir, const std::strin
     return {};
 }
 
+// '*' (any run of characters) and '?' (one) in a file name.
+static bool wildcardMatch(const std::string& pat, const std::string& name) {
+    size_t p = 0, n = 0, star = std::string::npos, mark = 0;
+    while (n < name.size()) {
+        if (p < pat.size() && (pat[p] == '?' || pat[p] == name[n])) { ++p; ++n; }
+        else if (p < pat.size() && pat[p] == '*') { star = p++; mark = n; }
+        else if (star != std::string::npos) { p = star + 1; n = ++mark; }
+        else return false;
+    }
+    while (p < pat.size() && pat[p] == '*') ++p;
+    return p == pat.size();
+}
+
+static bool isNativeSource(const fs::path& f) {
+    std::string e = f.extension().string();
+    return e == ".c" || e == ".cc" || e == ".cpp" || e == ".cxx" || e == ".m" || e == ".mm";
+}
+
+// The source files of a build = "sources" dependency. Each 'sources' entry
+// is a file, a directory (searched recursively) or a pattern with '*'/'?'
+// in its last component, against the dependency's directory; with none,
+// its src/ (recursively) if it has one, else the files directly in it.
+// Only C/C++/Objective-C files count.
+static std::vector<std::string> nativeSources(const Dependency& dep, const fs::path& dir,
+                                              std::string& error) {
+    std::set<std::string> out;
+    auto addTree = [&](const fs::path& d) {
+        for (auto& e : fs::recursive_directory_iterator(d))
+            if (e.is_regular_file() && isNativeSource(e.path())) out.insert(e.path().lexically_normal().string());
+    };
+    if (dep.sources.empty()) {
+        if (fs::is_directory(dir / "src")) addTree(dir / "src");
+        else
+            for (auto& e : fs::directory_iterator(dir))
+                if (e.is_regular_file() && isNativeSource(e.path())) out.insert(e.path().lexically_normal().string());
+    }
+    for (auto& s : dep.sources) {
+        fs::path p = fs::path(s).is_absolute() ? fs::path(s) : dir / s;
+        std::string last = p.filename().string();
+        if (last.find_first_of("*?") != std::string::npos) {
+            size_t before = out.size();
+            if (fs::is_directory(p.parent_path()))
+                for (auto& e : fs::directory_iterator(p.parent_path()))
+                    if (e.is_regular_file() && isNativeSource(e.path()) &&
+                        wildcardMatch(last, e.path().filename().string()))
+                        out.insert(e.path().lexically_normal().string());
+            if (out.size() == before) { error = "no C/C++/ObjC file matches " + p.string(); return {}; }
+        } else if (fs::is_directory(p)) {
+            addTree(p);
+        } else if (fs::is_regular_file(p)) {
+            if (!isNativeSource(p)) {
+                error = p.string() + " is not a C, C++ or Objective-C source (.c/.cc/.cpp/.cxx/.m/.mm)";
+                return {};
+            }
+            out.insert(p.lexically_normal().string());
+        } else {
+            error = "source not found: " + p.string();
+            return {};
+        }
+    }
+    if (out.empty()) error = "no C/C++/ObjC sources in " + dir.string() + " (list them in 'sources')";
+    return { out.begin(), out.end() };
+}
+
 Builder::DepLayout Builder::depLayout(const Dependency& dep) const {
     DepLayout l;
     l.dir = depDir(dep);
     fs::path base = l.dir.empty() ? fs::path(root_) : fs::path(l.dir);
-    auto against = [&](const std::string& s) {
+    auto against = [&](const std::string& s, const fs::path& b) {
         fs::path p(s);
-        return (p.is_absolute() ? p : base / p).lexically_normal();
+        return (p.is_absolute() ? p : b / p).lexically_normal();
     };
     std::vector<fs::path> libs;
-    if (!dep.libs.empty()) {
+    bool objc = false;
+    std::vector<std::string> defaultIncludes;   // used when 'include' isn't given
+    if (!dep.build.empty()) {
+        // A C/C++/ObjC project safeguard builds itself (buildNativeDep) into
+        // build/deps/<name>. Its library may not exist yet: fetchAndBuildDeps
+        // builds it, then checks.
+        if (!fs::is_directory(l.dir)) { l.error = "directory not found: " + l.dir; return l; }
+        l.native = true;
+        l.outDir = (fs::path(root_) / "build" / "deps" / dep.name).string();
+        if (dep.build == "sources") {
+            for (auto& src : nativeSources(dep, l.dir, l.error)) {
+                SrcLang lang = langOf(src);
+                if (isCxx(lang)) l.cxx = true;
+                if (isObjC(lang)) objc = true;
+            }
+            if (!l.error.empty()) return l;
+            libs.push_back(fs::path(l.outDir) / ("lib" + dep.name + ".a"));
+            defaultIncludes.push_back(fs::is_directory(fs::path(l.dir) / "include")
+                                      ? (fs::path(l.dir) / "include").string() : l.dir);
+        } else {
+            // What a CMake project compiles can't be told from outside, and
+            // clang++ links plain C just as well.
+            l.cxx = true;
+            fs::path prefix = fs::path(l.outDir) / "install";
+            if (!dep.libs.empty()) {
+                for (auto& f : dep.libs) libs.push_back(against(f, prefix));
+            } else {
+                libs = findLibraries(prefix, dep.name);
+                // No install() rules: the libraries the build tree holds.
+                if (libs.empty() && fs::is_directory(fs::path(l.outDir) / "build"))
+                    libs = findLibraries(fs::path(l.outDir) / "build", dep.name);
+            }
+            if (fs::is_directory(prefix / "include")) defaultIncludes.push_back((prefix / "include").string());
+            else if (fs::is_directory(fs::path(l.dir) / "include"))
+                defaultIncludes.push_back((fs::path(l.dir) / "include").string());
+        }
+    } else if (!dep.libs.empty()) {
         for (auto& f : dep.libs) {
-            fs::path p = against(f);
+            fs::path p = against(f, base);
             if (!fs::exists(p)) { l.error = "library not found: " + p.string(); return l; }
             libs.push_back(p);
         }
@@ -1130,13 +1240,13 @@ Builder::DepLayout Builder::depLayout(const Dependency& dep) const {
         if (fs::exists(inc)) { l.safecIncludes.push_back(inc.string()); l.foreignIncludes.push_back(inc.string()); }
         l.safecIncludes.push_back((fs::path(l.dir) / "src").string());
         l.linkInputs.push_back((fs::path(root_) / "build" / "deps" / ("lib" + dep.name + ".a")).string());
-        // C++ or Objective-C in it: the C++ link driver, the ObjC runtime.
-        bool objc = false;
         for (auto& src : collectAllSources((fs::path(l.dir) / "src").string())) {
             if (isCxx(langOf(src))) l.cxx = true;
             if (isObjC(langOf(src))) objc = true;
         }
         if (objc && targetOS() == "macos") l.linkInputs.push_back("-lobjc");
+        for (auto& f : dep.frameworks)
+            if (targetOS() == "macos") l.linkInputs.push_back("-Wl,-framework," + f);
         return l;
     } else {
         libs = findLibraries(l.dir, dep.name);
@@ -1146,17 +1256,18 @@ Builder::DepLayout Builder::depLayout(const Dependency& dep) const {
             return l;
         }
     }
+    if (!l.dir.empty() && !l.native && fs::is_directory(fs::path(l.dir) / "include"))
+        defaultIncludes.push_back((fs::path(l.dir) / "include").string());
     if (!dep.includes.empty()) {
         for (auto& i : dep.includes) {
-            fs::path p = against(i);
+            fs::path p = against(i, base);
             if (!fs::is_directory(p)) { l.error = "include directory not found: " + p.string(); return l; }
             l.safecIncludes.push_back(p.string());
             l.foreignIncludes.push_back(p.string());
         }
-    } else if (!l.dir.empty() && fs::is_directory(fs::path(l.dir) / "include")) {
-        std::string inc = (fs::path(l.dir) / "include").string();
-        l.safecIncludes.push_back(inc);
-        l.foreignIncludes.push_back(inc);
+    } else {
+        l.safecIncludes = defaultIncludes;
+        l.foreignIncludes = defaultIncludes;
     }
     std::set<std::string> rpaths;
     for (auto& f : libs) {
@@ -1166,6 +1277,10 @@ Builder::DepLayout Builder::depLayout(const Dependency& dep) const {
         if (e != ".a" && e != ".lib" && rpaths.insert(f.parent_path().string()).second)
             l.linkInputs.push_back("-Wl,-rpath," + f.parent_path().string());   // find it at run time
 #endif
+    }
+    if (targetOS() == "macos") {
+        if (objc) l.linkInputs.push_back("-lobjc");
+        for (auto& f : dep.frameworks) l.linkInputs.push_back("-Wl,-framework," + f);
     }
     return l;
 }
@@ -1199,6 +1314,152 @@ bool Builder::depsNeedCxx() const {
     return false;
 }
 
+// ── C/C++/ObjC dependencies built from source ────────────────────────────────
+
+// The newest modification time of the files under 'dir', skipping .git and
+// any directory in 'skip' (the project's own build/ and deps/, when the
+// dependency directory contains them).
+static fs::file_time_type newestFileTime(const fs::path& dir, const std::vector<fs::path>& skip) {
+    fs::file_time_type newest = fs::file_time_type::min();
+    std::error_code ec;
+    for (auto it = fs::recursive_directory_iterator(dir, fs::directory_options::skip_permission_denied, ec);
+         !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        if (it->is_directory(ec)) {
+            fs::path p = it->path().lexically_normal();
+            bool skipped = it->path().filename() == ".git";
+            for (auto& s : skip) if (fs::equivalent(p, s, ec)) skipped = true;
+            ec.clear();
+            if (skipped) it.disable_recursion_pending();
+            continue;
+        }
+        auto t = it->last_write_time(ec);
+        if (!ec && t > newest) newest = t;
+        ec.clear();
+    }
+    return newest;
+}
+
+bool Builder::buildNativeDep(const Dependency& dep, const DepLayout& l) const {
+    fs::path out(l.outDir);
+    fs::create_directories(out);
+    std::string cc = findSystemClang(false), cxx = findSystemClang(true);
+
+    // Rebuilt when its settings (this stamp) or any file under its
+    // directory changed since the last build.
+    std::ostringstream cfg;
+    cfg << "build=" << dep.build << "\ndir=" << l.dir << "\nrelease=" << opts_.release
+        << "\ncc=" << cc << "\ncxx=" << cxx << "\n";
+    auto list = [&](const char* key, const std::vector<std::string>& v) {
+        cfg << key << "=";
+        for (auto& x : v) cfg << x << ";";
+        cfg << "\n";
+    };
+    list("sources", dep.sources);
+    list("defines", dep.defines);
+    list("cflags", dep.cflags);
+    list("include", dep.includes);
+    list("cmake_args", dep.cmakeArgs);
+    list("lib", dep.libs);
+    fs::path stampPath = out / "build.stamp";
+    bool sameConfig = false;
+    {
+        std::ifstream in(stampPath);
+        std::stringstream prev;
+        prev << in.rdbuf();
+        sameConfig = in && prev.str() == cfg.str();
+    }
+    std::error_code ec;
+    if (sameConfig) {
+        auto built = fs::last_write_time(stampPath, ec);
+        auto newest = newestFileTime(l.dir, { fs::path(root_) / "build", fs::path(root_) / "deps" });
+        if (!ec && newest <= built) {
+            if (opts_.verbose) std::cout << "safeguard: dependency '" << dep.name << "' is up to date\n";
+            return true;
+        }
+    }
+    fs::remove(stampPath, ec);
+    std::cout << "safeguard: building dependency '" << dep.name << "' (" << dep.build << ")\n";
+
+    if (dep.build == "sources") {
+        std::string err;
+        auto srcs = nativeSources(dep, l.dir, err);
+        if (!err.empty()) { std::cerr << "safeguard: dependency '" << dep.name << "': " << err << "\n"; return false; }
+        std::vector<std::string> flags;
+        for (auto& d : dep.defines) flags.push_back("-D" + d);
+        // Its objects may end up in a shared library (a cdylib dependent).
+        if (!targetIsWindows()) flags.push_back("-fPIC");
+        for (auto& f : dep.cflags) flags.push_back(f);
+        fs::path objDir = out / "obj";
+        fs::remove_all(objDir, ec);
+        fs::create_directories(objDir);
+        std::vector<std::string> objs;
+        for (auto& src : srcs) {
+            std::string obj = compileForeign(src, objDir.string(), l.foreignIncludes, langOf(src), false, &flags);
+            if (obj.empty()) return false;
+            objs.push_back(obj);
+        }
+        fs::path lib = out / ("lib" + dep.name + ".a");
+        fs::remove(lib, ec);
+        if (!packArchive(objs, lib.string())) return false;
+    } else {
+        if (isCrossTarget()) {
+            std::cerr << "safeguard: dependency '" << dep.name << "': build = \"cmake\" can't be "
+                         "cross-compiled for --target yet; build it with a CMake toolchain file and "
+                         "use it as a prebuilt dependency\n";
+            return false;
+        }
+        fs::path buildDir = out / "build", prefix = out / "install";
+        // A changed configuration starts from a fresh cache.
+        if (!sameConfig) fs::remove_all(buildDir, ec);
+        // A non-debug build type on Windows: a Debug one would pull in the
+        // debug CRT, which doesn't mix with the release CRT the rest of the
+        // program links (and MultiThreaded, the static CRT, is clang's
+        // default there too).
+        std::string config = opts_.release ? "Release" : targetIsWindows() ? "RelWithDebInfo" : "Debug";
+        if (!fs::exists(buildDir / "CMakeCache.txt")) {
+            std::vector<std::string> conf = {
+                "cmake", "-S", l.dir, "-B", buildDir.string(), "--no-warn-unused-cli",
+                "-DCMAKE_BUILD_TYPE=" + config,
+                "-DCMAKE_INSTALL_PREFIX=" + prefix.string(),
+                "-DCMAKE_INSTALL_LIBDIR=lib",
+                "-DCMAKE_C_COMPILER=" + cc,
+                "-DCMAKE_CXX_COMPILER=" + cxx,
+                "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
+            };
+            if (targetIsWindows()) {
+                conf.push_back("-DCMAKE_POLICY_DEFAULT_CMP0091=NEW");
+                conf.push_back("-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded");
+            }
+            // Ninja when there is one: the Visual Studio generators ignore
+            // CMAKE_C_COMPILER, so on Windows it's what makes "the same
+            // compiler" hold.
+            if (runCmd({ "ninja", "--version" }, false, /*suppressOutput=*/true) == 0) {
+                conf.push_back("-G");
+                conf.push_back("Ninja");
+            }
+            for (auto& a : dep.cmakeArgs) conf.push_back(a);
+            if (runCmd(conf, opts_.verbose) != 0) {
+                std::cerr << "safeguard: dependency '" << dep.name << "': cmake configure failed\n";
+                fs::remove_all(buildDir, ec);
+                return false;
+            }
+        }
+        if (runCmd({ "cmake", "--build", buildDir.string(), "--config", config, "--parallel" }, opts_.verbose) != 0) {
+            std::cerr << "safeguard: dependency '" << dep.name << "': cmake build failed\n";
+            return false;
+        }
+        // A fresh prefix, so a header or library the project no longer
+        // installs doesn't linger.
+        fs::remove_all(prefix, ec);
+        if (runCmd({ "cmake", "--install", buildDir.string(), "--config", config }, opts_.verbose) != 0) {
+            std::cerr << "safeguard: dependency '" << dep.name << "': cmake --install failed\n";
+            return false;
+        }
+    }
+    std::ofstream(stampPath) << cfg.str();
+    return true;
+}
+
 // ── fetch and build all dependencies ─────────────────────────────────────────
 
 bool Builder::fetchAndBuildDeps() {
@@ -1223,6 +1484,25 @@ bool Builder::fetchAndBuildDeps() {
         if (!l.error.empty()) {
             std::cerr << "safeguard: dependency '" << dep.name << "': " << l.error << "\n";
             return false;
+        }
+        if (l.native) {
+            if (!buildNativeDep(dep, l)) {
+                std::cerr << "safeguard: failed to build dependency '" << dep.name << "'\n";
+                return false;
+            }
+            // Now that it's built, its libraries must be there.
+            DepLayout built = depLayout(dep);
+            bool any = false;
+            for (auto& f : built.linkInputs) if (f.rfind("-", 0) != 0 && fs::exists(f)) any = true;
+            if (!built.error.empty() || !any) {
+                std::cerr << "safeguard: dependency '" << dep.name << "': "
+                          << (!built.error.empty() ? built.error
+                              : "built, but no library found in " + built.outDir +
+                                "/install (lib/) or its build tree; name it with 'lib'") << "\n";
+                return false;
+            }
+            std::cout << "safeguard: dependency '" << dep.name << "' ready (" << dep.build << ")\n";
+            continue;
         }
         if (!l.fromSource) {
             std::cout << "safeguard: dependency '" << dep.name << "' ready (prebuilt)\n";

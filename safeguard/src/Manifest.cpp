@@ -186,6 +186,12 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
         else if (tok.key == "dependencies.path")    curDep.path    = tok.value;
         else if (tok.key == "dependencies.lib")     curDep.libs     = splitList(tok.value);
         else if (tok.key == "dependencies.include") curDep.includes = splitList(tok.value);
+        else if (tok.key == "dependencies.build")   curDep.build    = tok.value;
+        else if (tok.key == "dependencies.sources") curDep.sources  = splitList(tok.value);
+        else if (tok.key == "dependencies.defines") curDep.defines  = splitList(tok.value);
+        else if (tok.key == "dependencies.cflags")  curDep.cflags   = splitList(tok.value);
+        else if (tok.key == "dependencies.cmake_args") curDep.cmakeArgs  = splitList(tok.value);
+        else if (tok.key == "dependencies.frameworks") curDep.frameworks = splitList(tok.value);
 
         // features.* — [features] table: name = ["dep1", "dep2", ...]
         else if (tok.key.rfind("features.", 0) == 0) {
@@ -216,6 +222,22 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
     if (!m.build.lto.empty() && m.build.lto != "thin" && m.build.lto != "full")
         throw std::runtime_error(srcName + ": build.lto must be \"thin\" or "
                                  "\"full\", got \"" + m.build.lto + "\"");
+
+    for (auto& d : m.dependencies) {
+        std::string where = srcName + ": dependency '" + d.name + "': ";
+        if (!d.build.empty() && d.build != "sources" && d.build != "cmake")
+            throw std::runtime_error(where + "build must be \"sources\" or \"cmake\", got \"" + d.build + "\"");
+        if (!d.build.empty() && d.path.empty() && d.version.empty())
+            throw std::runtime_error(where + "build = \"" + d.build + "\" needs a 'path' or a "
+                                     "'version' (git URL) naming the project to build");
+        if (d.build != "sources" && (!d.sources.empty() || !d.defines.empty() || !d.cflags.empty()))
+            throw std::runtime_error(where + "sources, defines and cflags need build = \"sources\""
+                                     + (d.build == "cmake" ? " (pass CMake settings in cmake_args)" : ""));
+        if (d.build != "cmake" && !d.cmakeArgs.empty())
+            throw std::runtime_error(where + "cmake_args needs build = \"cmake\"");
+        if (d.build == "sources" && !d.libs.empty())
+            throw std::runtime_error(where + "build = \"sources\" produces its own library; drop 'lib'");
+    }
 
     return m;
 }
@@ -306,6 +328,13 @@ std::string ManifestParser::serialize(const Manifest& m) {
         };
         list("lib     = ", d.libs);
         list("include = ", d.includes);
+        if (!d.build.empty())
+            o << "build   = \"" << d.build << "\"\n";
+        list("sources = ", d.sources);
+        list("defines = ", d.defines);
+        list("cflags  = ", d.cflags);
+        list("cmake_args = ", d.cmakeArgs);
+        list("frameworks = ", d.frameworks);
     }
 
     if (!m.features.empty()) {

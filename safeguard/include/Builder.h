@@ -145,10 +145,13 @@ public:
     struct DepLayout {
         std::string dir;                          // its directory ("" for lib-only)
         bool fromSource = false;                  // built from <dir>/src
+        bool native = false;                      // build = "sources"/"cmake" (buildNativeDep)
         bool cxx = false;                         // brings C++ in: link with clang++
+        std::string outDir;                       // native: build/deps/<name>
         std::vector<std::string> safecIncludes;   // include dirs for SafeC sources
         std::vector<std::string> foreignIncludes; // include dirs for C/C++ sources
-        std::vector<std::string> linkInputs;      // library files and link flags (rpath, -lobjc)
+        std::vector<std::string> linkInputs;      // library files and link flags (rpath,
+                                                  // -lobjc, -Wl,-framework,<name>)
         std::string error;                        // why it can't be used, if so
     };
     DepLayout depLayout(const Dependency& dep) const;
@@ -280,12 +283,14 @@ private:
                          bool suppressOutput = false) const;
 
     // Compile a .c/.cpp/.cc/.cxx/.m/.mm file straight to a .o with
-    // clang/clang++. Returns the .o path, or "" on failure.
+    // clang/clang++. 'flags' replaces the project's cflags (a built
+    // dependency's own defines/cflags). Returns the .o path, or "" on failure.
     std::string compileForeign(const std::string& srcPath,
                                 const std::string& buildDir,
                                 const std::vector<std::string>& includeDirs,
                                 SrcLang lang,
-                                bool suppressOutput = false) const;
+                                bool suppressOutput = false,
+                                const std::vector<std::string>* flags = nullptr) const;
 
     // Pack .o files into a static archive with ar.  Returns true on success.
     bool packArchive(const std::vector<std::string>& objFiles,
@@ -314,6 +319,10 @@ private:
     // site comment in runCmd's definition for why this exists.
     static int runCmd(const std::vector<std::string>& argv, bool verbose,
                        bool suppressOutput = false);
+
+    // Build a 'build = "sources"/"cmake"' dependency into l.outDir, unless
+    // it is up to date. Returns true on success.
+    bool buildNativeDep(const Dependency& dep, const DepLayout& l) const;
 
     // Whether a dependency needs the C++ link driver.
     bool depsNeedCxx() const;

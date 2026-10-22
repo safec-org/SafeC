@@ -1,0 +1,18 @@
+[package]
+name        = "objc_dep_app"
+version     = "0.1.0"
+author      = "SafeC"
+description = "A SafeC program calling an Objective-C library (macOS)"
+license     = "MIT"
+
+[build]
+edition = "2026"
+
+# ../nslen is a directory of Objective-C sources; safeguard compiles it into
+# build/deps/nslen/libnslen.a and links it with -lobjc and Foundation.
+[[dependencies]]
+name       = "nslen"
+path       = "../nslen"
+build      = "sources"
+cflags     = ["-fobjc-arc"]
+frameworks = ["Foundation"]

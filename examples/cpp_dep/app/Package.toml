@@ -1,0 +1,16 @@
+[package]
+name        = "cpp_dep_app"
+version     = "0.1.0"
+author      = "SafeC"
+description = "A SafeC program calling a C++ library built with CMake"
+license     = "MIT"
+
+[build]
+edition = "2026"
+
+# ../cpplib is a plain CMake project; safeguard builds and installs it into
+# build/deps/cppstats/ and links the library it installs.
+[[dependencies]]
+name  = "cppstats"
+path  = "../cpplib"
+build = "cmake"

@@ -40,9 +40,18 @@ Dependency format in Package.toml:
   name    = "mylib"
   lib     = ["vendor/libmylib.a"]             # .a / .so / .dylib / .lib
   include = ["vendor/include"]
+  # or a C/C++/ObjC project safeguard builds (into build/deps/<name>):
+  name       = "mylib"
+  path       = "../mylib"                      # or version = git URL
+  build      = "cmake"                         # configure, build, install
+  cmake_args = ["-DMYLIB_TESTS=OFF"]
+  # or: build = "sources", sources = ["src", "extra/*.c"],
+  #     defines = ["NDEBUG"], cflags = ["-fobjc-arc"], include = ["include"]
+  frameworks = ["Foundation"]                  # macOS frameworks it needs
   A directory (fetched or local) with src/ is a SafeC package built from
   source; one without is a prebuilt library directory: lib<name> (or every
   library) in lib/, lib64/ or the directory itself, headers in include/.
+  SafeC calls C++ only through extern "C" functions.
 
 [build] keys for C/C++/Objective-C:
   frameworks = ["Cocoa"]     macOS frameworks to link (ignored elsewhere)
