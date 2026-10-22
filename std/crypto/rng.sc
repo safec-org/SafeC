@@ -1,4 +1,5 @@
 // SafeC Standard Library — Cryptographic RNG (ChaCha20-based)
+// safeguard: link windows -lbcrypt          (BCryptGenRandom: the seed on Windows)
 #pragma once
 #include <std/stddef.h>
 #include <std/crypto/rng.h>
@@ -18,6 +19,16 @@ extern int fclose(void* f);
 // for every RNG user).
 extern void  abort();
 extern int   fprintf(void* stream, const char* fmt, ...);
+// The OS's own CSPRNG, the first seed source tried (see RngCtx::init).
+#if defined(_WIN32)
+// bcrypt.dll: NTSTATUS BCryptGenRandom(BCRYPT_ALG_HANDLE, PUCHAR, ULONG, ULONG);
+// a null algorithm with BCRYPT_USE_SYSTEM_PREFERRED_RNG (2) needs no handle.
+extern int BCryptGenRandom(void* alg, unsigned char* buf, unsigned int len, unsigned int flags);
+#elif defined(__APPLE__)
+extern int getentropy(void* buf, size_t len);              // libSystem, at most 256 bytes
+#elif defined(__linux__)
+extern long getrandom(void* buf, size_t len, unsigned int flags);   // glibc 2.25+, musl
+#endif
 
 static void rng_abort_(const char* msg) {
     unsafe { fprintf(SAFEC_STDERR_, "std::crypto::rng fatal: %s\n", msg); }
@@ -115,6 +126,28 @@ inline void RngCtx::init_seed(const unsigned char seed[32]) {
 }
 
 int RngCtx::init() {
+    // The OS's CSPRNG first: BCryptGenRandom on Windows (where there is no
+    // /dev/urandom), getentropy on macOS, getrandom on Linux.
+#if defined(_WIN32) || defined(__APPLE__) || defined(__linux__)
+    unsafe {
+        unsigned char os_seed[32];
+        int os_ok = 0;
+#if defined(_WIN32)
+        if (BCryptGenRandom((void*)0, (unsigned char*)os_seed, (unsigned int)32, (unsigned int)2) == 0) { os_ok = 1; }
+#elif defined(__APPLE__)
+        if (getentropy((void*)os_seed, (size_t)32) == 0) { os_ok = 1; }
+#else
+        if (getrandom((void*)os_seed, (size_t)32, (unsigned int)0) == (long)32) { os_ok = 1; }
+#endif
+        if (os_ok != 0) {
+            self.init_seed(os_seed);
+            return 1;
+        }
+    }
+#endif
+
+    // Else rdrand (x86-64), else /dev/urandom (a Linux kernel without
+    // getrandom, the BSDs).
 #ifdef __x86_64__
     // Try rdrand for seeding
     unsigned int seed_words[8];
@@ -164,8 +197,8 @@ int RngCtx::init() {
     }
 #endif
 
-    // No real entropy source was available (no rdrand, no /dev/urandom —
-    // e.g. a freestanding target without either). Previously this silently
+    // No real entropy source was available (no OS CSPRNG, no rdrand, no
+    // /dev/urandom — e.g. a freestanding target without either). Previously this silently
     // fell back to a fixed, fully-predictable seed and returned 0, trusting
     // every caller to check that return value before treating the "random"
     // stream as safe to use for keys/nonces — nothing enforced that, so a
@@ -175,7 +208,7 @@ int RngCtx::init() {
     // genuinely have their own entropy source (e.g. a hardware TRNG driver
     // on a microcontroller with no rdrand/urandom) should call
     // init_seed() directly with that source instead of init().
-    rng_abort_("RngCtx::init() found no entropy source (no rdrand, no /dev/urandom) — "
+    rng_abort_("RngCtx::init() found no entropy source (no OS random source, no rdrand, no /dev/urandom) — "
                "refusing to seed with a predictable fallback; call RngCtx::init_seed() "
                "with your own entropy source instead");
     return 0;

@@ -209,6 +209,39 @@ else
     head -50 /tmp/sg_rt_hello.txt /tmp/sg_rt_chan.txt /tmp/sg_rt_spawn.txt
 fi
 
+# std/crypto/rng seeds from the OS (BCryptGenRandom on Windows, which has
+# neither /dev/urandom nor, on every CPU, rdrand): two contexts and two runs
+# differ, and std's annotation links bcrypt.
+mkdir -p "$WORKDIR/ci_rng/src"
+printf '[package]\nname = "ci_rng"\nversion = "0.1.0"\n\n[build]\nedition = "2026"\n' > "$WORKDIR/ci_rng/Package.toml"
+cat > "$WORKDIR/ci_rng/src/main.sc" <<'EOF'
+#include <std/crypto/rng.h>
+extern int printf(const char* fmt, ...);
+int main() {
+    struct RngCtx a;
+    struct RngCtx b;
+    a.init();
+    b.init();
+    unsigned long long x = a.rand64();
+    unsigned long long y = b.rand64();
+    unsigned long long z = a.rand64();
+    unsafe { printf("rng %llx %llx %llx\n", x, y, z); }
+    if (x == y || x == z) { return 1; }
+    return 0;
+}
+EOF
+RNG1=""; RNG2=""
+if sg_in "$WORKDIR/ci_rng" /tmp/sg_rng.txt build; then
+    RNG_BIN="$WORKDIR/ci_rng/build/ci_rng"; [[ -f "$RNG_BIN.exe" ]] && RNG_BIN="$RNG_BIN.exe"
+    RNG1="$("$RNG_BIN" 2>&1)" && RNG2="$("$RNG_BIN" 2>&1)" || RNG1="failed: $RNG1"
+fi
+if [[ "$RNG1" == "rng "* && "$RNG2" == "rng "* && "$RNG1" != "$RNG2" ]]; then
+    pass "std/crypto/rng seeds from the OS ($RNG1)"
+else
+    fail "std/crypto/rng seeding (runs: '$RNG1' / '$RNG2')"
+    cat /tmp/sg_rng.txt
+fi
+
 # A library build exports its headers (include/ and src/'s .h files) into
 # build/include beside build/lib<name>.a, so build/ is a prebuilt dependency.
 mkdir -p "$WORKDIR/ci_lib/src" "$WORKDIR/ci_lib/include/ci_lib"
