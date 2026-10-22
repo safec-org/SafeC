@@ -2263,7 +2263,8 @@ TypePtr Sema::checkIntLit(IntLitExpr &e) {
 }
 
 TypePtr Sema::checkFloatLit(FloatLitExpr &e) {
-    return makeFloat(64); // default double
+    // 'f'/'F' suffix: float, as in C; otherwise double.
+    return makeFloat(e.isF32 ? 32 : 64);
 }
 
 TypePtr Sema::checkBoolLit(BoolLitExpr &) { return makeBool(); }
@@ -4751,7 +4752,8 @@ bool Sema::intLiteralFitsType(const Expr &e, const TypePtr &to) const {
 // +-inf for extreme magnitudes, exactly as plain C already permits without
 // requiring an explicit cast.
 bool Sema::floatLitFitsType(const Expr &e, const TypePtr &to) const {
-    if (!to || to->kind != TypeKind::Float32) return false;
+    // ... and a float literal ('1.5f') widening to double is exact.
+    if (!to || (to->kind != TypeKind::Float32 && to->kind != TypeKind::Float64)) return false;
     const Expr *inner = &e;
     if (inner->kind == ExprKind::Unary) {
         auto &u = static_cast<const UnaryExpr &>(*inner);

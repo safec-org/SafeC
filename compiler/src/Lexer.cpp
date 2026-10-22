@@ -238,12 +238,13 @@ Token Lexer::lexNumber() {
     // Optional suffix: u/U (unsigned), l/L (long), ll/LL (long long), f/F (float).
     bool isUnsigned = false;
     bool isLongLong = false;
+    bool isF32 = false;
     while (!atEnd() && (peek() == 'u' || peek() == 'U' ||
                         peek() == 'l' || peek() == 'L' ||
                         peek() == 'f' || peek() == 'F')) {
         char sf = peek();
         s += advance();
-        if (sf == 'f' || sf == 'F') isFloat = true;
+        if (sf == 'f' || sf == 'F') { isFloat = true; isF32 = true; }
         if (sf == 'u' || sf == 'U') isUnsigned = true;
         if (sf == 'l' || sf == 'L') {
             // Check for LL/ll suffix
@@ -262,8 +263,9 @@ Token Lexer::lexNumber() {
     tok.isLongLong = isLongLong;
     tok.isUnsigned = isUnsigned;
     if (isFloat) {
-        tok.kind     = TK::FloatLit;
-        tok.floatVal = std::stod(digits);
+        tok.kind      = TK::FloatLit;
+        tok.floatVal  = std::stod(digits);
+        tok.isFloat32 = isF32;
     } else {
         tok.kind = TK::IntLit;
         // For unsigned literals (or numbers that exceed LLONG_MAX),

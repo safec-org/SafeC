@@ -133,7 +133,8 @@ static ExprPtr cloneExprImpl(const Expr *ep, const TypeSubst &subs) {
     }
     case ExprKind::FloatLit:
         return fix(std::make_unique<FloatLitExpr>(
-            static_cast<const FloatLitExpr &>(e).value, e.loc));
+            static_cast<const FloatLitExpr &>(e).value, e.loc,
+            static_cast<const FloatLitExpr &>(e).isF32));
     case ExprKind::BoolLit:
         return fix(std::make_unique<BoolLitExpr>(
             static_cast<const BoolLitExpr &>(e).value, e.loc));
