@@ -141,6 +141,56 @@ jobs:
           SAFEC_HOME: ${{ github.workspace }}/SafeC
           CLANG_BIN: clang-${{ env.LLVM_VERSION }}
 
+      - name: Check the prebuilt std links with glibc 2.25
+        # The std objects a release ships (package.sh) may only call glibc
+        # functions that glibc 2.25 has (check-glibc.py --objects, against
+        # this runner's glibc). The release binaries themselves are built
+        # and checked in release.yml (a manylinux2014 container, with LLVM
+        # built there); this job's safec links apt.llvm.org's LLVM.
+        run: |
+          set -euo pipefail
+          bash SafeC/.github/scripts/package.sh pkg SafeC/compiler/build/safec SafeC/safeguard/build/safeguard
+          NM="llvm-nm-${{ env.LLVM_VERSION }}" python3 SafeC/.github/scripts/check-glibc.py --max 2.25 \
+            --objects pkg/lib/*/std/*.a
+
+  # ── Linux: glibc 2.25 floor ───────────────────────────────────────────────
+  # safeguard built as release.yml builds the Linux release binaries (in
+  # manylinux2014, glibc 2.17, libstdc++ static), and checked with
+  # check-glibc.py -- quick, as it needs no LLVM. safec and sc-lsp, which
+  # need LLVM built in that container too, are checked in release.yml.
+  linux-glibc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout SafeC
+        uses: actions/checkout@v4
+        with:
+          path: SafeC
+
+      - name: Build safeguard in manylinux2014
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -v "$GITHUB_WORKSPACE:/w" -w /w quay.io/pypa/manylinux2014_x86_64 bash -c '
+              set -euo pipefail
+              PY="$(ls -d /opt/python/cp312-*/bin/python | head -1)"
+              "$PY" -m venv /tmp/bt && /tmp/bt/bin/pip install --quiet "cmake>=3.20,<4" ninja
+              export PATH="/tmp/bt/bin:$PATH"
+              cmake -G Ninja -S SafeC/safeguard -B SafeC/safeguard/build -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+              cmake --build SafeC/safeguard/build'
+
+      - name: Check safeguard runs on glibc 2.25
+        run: |
+          python3 SafeC/.github/scripts/check-glibc.py --max 2.25 SafeC/safeguard/build/safeguard
+          SafeC/safeguard/build/safeguard --help >/dev/null
+          # The check itself: the runner's own glibc is newer than 2.25, so a
+          # program built here against it must be caught.
+          printf '#include <sys/stat.h>\nint main(int c, char** v) { struct stat s; return stat(v[0], &s); }\n' > new.c
+          cc new.c -o new-glibc
+          if python3 SafeC/.github/scripts/check-glibc.py --max 2.25 new-glibc; then
+            echo "::error::check-glibc.py passed a binary built against $(ldd --version | head -1)"; exit 1
+          fi
+
   # ── Windows (x86_64) ──────────────────────────────────────────────────────
   # Same build steps as release.yml's windows job (LLVM via LLVM.org's own
   # prebuilt SDK archive, not Chocolatey or vcpkg — see that step's comment

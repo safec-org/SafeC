@@ -11,9 +11,11 @@ name: Release
 # flags, etc.) before it reached parity with macOS/Linux.
 #
 # Platform floor: the macOS binaries and prebuilt std run on macOS 11.0 and
-# later. The job builds LLVM's libraries itself for that (build-llvm.sh,
-# cached): Homebrew's are built for the runner's macOS. check-macos-min.py
-# checks the result.
+# later, the Linux ones on glibc 2.25 and later. Both jobs build LLVM's
+# libraries themselves for that (build-llvm.sh, cached): Homebrew's are built
+# for the runner's macOS, apt.llvm.org's against Ubuntu's current glibc. The
+# Linux binaries are built in a manylinux2014 container (glibc 2.17); each
+# job checks the result (check-macos-min.py, check-glibc.py).
 #
 # Tag patterns accept both 'v1.2.3' and '1.2.3'-style tags (no required 'v'
 # prefix) — this project's actual releases use the latter (e.g.
@@ -36,8 +38,8 @@ env:
   # (see docs/advanced/compiler.md); a CI run against 18 confirmed the
   # hard way that the minimum is a real requirement, not a suggestion.
   LLVM_VERSION: "21"
-  # The LLVM source release build-llvm.sh builds for the macOS binaries
-  # (the Windows job's SDK archive is the same version).
+  # The LLVM source release build-llvm.sh builds for the macOS and Linux
+  # binaries (the Windows job's SDK archive is the same version).
   LLVM_PKG_VERSION: "21.1.8"
 
 jobs:
@@ -152,6 +154,7 @@ jobs:
   # ── Linux (x86_64) ────────────────────────────────────────────────────────
   linux:
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     steps:
       - name: Checkout SafeC
         uses: actions/checkout@v4
@@ -164,37 +167,40 @@ jobs:
           repository: safec-org/sc-language-server
           path: sc-language-server
 
+      - name: Cache LLVM libraries (manylinux2014)
+        uses: actions/cache@v4
+        with:
+          path: llvm-install
+          key: llvm-${{ env.LLVM_PKG_VERSION }}-manylinux2014-x86_64-${{ hashFiles('SafeC/.github/scripts/build-llvm.sh') }}
+
+      - name: Build safec, safeguard and sc-lsp for glibc 2.17+ (manylinux2014 container)
+        # CentOS 7's glibc 2.17 is what the binaries link against, so they
+        # import no newer symbol version and run on glibc >= 2.25 (and
+        # older); LLVM's libraries are built there too (build-llvm.sh,
+        # cached), and libstdc++ is linked statically. See
+        # build-linux-release.sh.
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -v "$GITHUB_WORKSPACE:/w" -w /w quay.io/pypa/manylinux2014_x86_64 \
+            bash /w/SafeC/.github/scripts/build-linux-release.sh /w "$LLVM_PKG_VERSION"
+
+      - name: Check the binaries run on glibc 2.25
+        run: |
+          python3 SafeC/.github/scripts/check-glibc.py --max 2.25 \
+            SafeC/compiler/build/safec SafeC/safeguard/build/safeguard sc-language-server/build/sc-lsp
+          if ldd SafeC/compiler/build/safec | grep -iE 'libLLVM|libstdc\+\+|libz|libtinfo|libzstd'; then
+            echo "::error::safec links a library a user's machine may lack"; exit 1
+          fi
+          ldd SafeC/compiler/build/safec
+
       - name: Install LLVM
+        # The clang the smoke test and the std prebuilt compile safec's IR
+        # with, and llvm-nm & co. for the checks. (safec doesn't link it.)
         run: |
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh ${{ env.LLVM_VERSION }}
-          sudo apt-get install -y "llvm-${{ env.LLVM_VERSION }}-dev" "clang-${{ env.LLVM_VERSION }}" \
-            zlib1g-dev libzstd-dev
-
-      - name: Build safec compiler
-        run: |
-          LLVM_DIR="/usr/lib/llvm-${{ env.LLVM_VERSION }}/lib/cmake/llvm"
-          # Static LLVM: the published safec must not need libLLVM.so.N
-          # from apt.llvm.org on the user's machine.
-          cmake -S SafeC/compiler -B SafeC/compiler/build \
-            -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR" -DSAFEC_STATIC_LLVM=ON
-          cmake --build SafeC/compiler/build -j "$(nproc)"
-          if ldd SafeC/compiler/build/safec | grep -i 'libLLVM'; then
-            echo "::error::safec links libLLVM dynamically"; exit 1
-          fi
-          ldd SafeC/compiler/build/safec
-
-      - name: Build safeguard
-        run: |
-          cmake -S SafeC/safeguard -B SafeC/safeguard/build -DCMAKE_BUILD_TYPE=Release
-          cmake --build SafeC/safeguard/build -j "$(nproc)"
-
-      - name: Build sc-lsp
-        run: |
-          cmake -S sc-language-server -B sc-language-server/build \
-            -DCMAKE_BUILD_TYPE=Release -DSAFEC_DIR="$GITHUB_WORKSPACE/SafeC/compiler"
-          cmake --build sc-language-server/build -j "$(nproc)"
+          sudo apt-get install -y "clang-${{ env.LLVM_VERSION }}" "llvm-${{ env.LLVM_VERSION }}"
 
       - name: Smoke test before packaging
         run: bash SafeC/.github/scripts/smoke-test.sh
@@ -209,12 +215,16 @@ jobs:
         # bin/, std/, README.md and lib/<triple>/std/<section>.a: std
         # prebuilt for this platform, one archive per section, by the
         # packaged safec (see package.sh), which a native build links
-        # instead of compiling std.
+        # instead of compiling std. Its objects must link with glibc 2.25:
+        # each glibc function they call must exist there (check-glibc.py
+        # --objects looks them up in this runner's glibc).
         run: |
           set -euo pipefail
           OUT="safec-linux-x86_64"
           bash SafeC/.github/scripts/package.sh "$OUT" SafeC/compiler/build/safec \
             SafeC/safeguard/build/safeguard sc-language-server/build/sc-lsp
+          NM="llvm-nm-${{ env.LLVM_VERSION }}" python3 SafeC/.github/scripts/check-glibc.py --max 2.25 \
+            --objects "$OUT"/lib/*/std/*.a
           tar czf "${OUT}.tar.gz" "$OUT"
 
       - uses: actions/upload-artifact@v4
