@@ -29,9 +29,10 @@ Commands:
                 it links for them (for the project's sources, or for the
                 given std headers and files)
   std-prebuilt <prefix>
-                Compile std for this machine, in release mode, into
-                <prefix>/lib/<triple>/libsafec_std.a (with its .stamp and
-                .units): the prebuilt archive a release install ships
+                Compile std for this machine, optimized, into one archive
+                per std section, <prefix>/lib/<triple>/std/<section>.a
+                (with its <section>.units): the prebuilt std a release
+                install ships
   test          Build and run every file under tests/ as a standalone binary
   run   [args..]Build and immediately run the output binary
   bundle        Build the bin target and package it per its [bundle] table:

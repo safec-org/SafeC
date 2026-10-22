@@ -19,7 +19,15 @@ a feature-gated source ('// safeguard: feature') defines is fine, and with
 every such feature enabled. It also fails on 'problem' lines (a std source
 implementing no header, a malformed directive).
 
-Usage: check.py [--target T] [--keep DIR]
+With --prebuilt DIR (a release install's lib/<triple>/std, see
+.github/scripts/package.sh), it also checks the prebuilt std's sections: each
+<section>.units lists exactly the std sources of that section no feature
+gates (std/<section>/..., 'core' for std/*.sc), each <section>.a holds
+exactly their objects, no symbol is defined in two sections, and for every
+header the sections holding its modules define what it needs -- what a build
+linking only those sections gets.
+
+Usage: check.py [--target T] [--keep DIR] [--prebuilt DIR]
 Env: SAFEC (or SAFEC_BIN), SAFEGUARD_BIN (default: safeguard), SAFEC_HOME
 (the SafeC checkout), LLVM_NM (default: llvm-nm beside $CLANG_BIN or its
 realpath, llvm-nm-<clang major>, or llvm-nm on PATH).
@@ -35,6 +43,7 @@ import tempfile
 ap = argparse.ArgumentParser()
 ap.add_argument("--target", default="")
 ap.add_argument("--keep", default="")
+ap.add_argument("--prebuilt", default="")
 args = ap.parse_args()
 
 home = os.environ.get("SAFEC_HOME") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -117,17 +126,41 @@ def stem(unit):  # std/x/y.sc -> x_y_sc (Builder::ensureStdLib's object names)
     return re.sub(r"[/.]", "_", unit[4:] if unit.startswith("std/") else unit)
 
 
-def nm_syms(path):
+def nm_members(path):
+    """{member: (defs, undefs, weak defs)} of an object (one member, its own
+    name) or an archive."""
     out = subprocess.run([nm, "-P", "--extern-only", path], capture_output=True, text=True).stdout
-    defs, undef = set(), set()
+    members = {}
+    cur = os.path.basename(path)
     for line in out.splitlines():
         p = line.split()
-        if len(p) < 2 or p[0].endswith(":"):
+        if len(p) == 1 and p[0].endswith(":"):
+            cur = p[0][:-1]
+            m = re.match(r".*\[(.*)\]$", cur)  # 'lib.a[member.o]'
+            if m:
+                cur = m.group(1)
+            members.setdefault(cur, (set(), set(), set()))
+            continue
+        if len(p) < 2:
             continue
         name = p[0]
         if sys.platform == "darwin" and not args.target and name.startswith("_"):
             name = name[1:]
-        (undef if p[1] in ("U", "w", "v") else defs).add(name)
+        d, u, w = members.setdefault(cur, (set(), set(), set()))
+        if p[1] in ("U", "w", "v"):
+            u.add(name)
+        else:
+            d.add(name)
+            if p[1] in ("W", "V"):
+                w.add(name)
+    return members
+
+
+def nm_syms(path):
+    defs, undef = set(), set()
+    for d, u, _ in nm_members(path).values():
+        defs |= d
+        undef |= u
     return defs, undef
 
 
@@ -170,6 +203,67 @@ def modules(h, extra):
     return units, problems
 
 
+def section(st):  # x_y_sc -> x (by the unit's path, kept below)
+    return unit_section.get(st, "core")
+
+
+# The prebuilt std's sections.
+unit_section = {}           # stem -> section, for every std source
+for d, _, fs in os.walk(std):
+    for f in fs:
+        if f.endswith(".sc"):
+            rel = os.path.relpath(os.path.join(d, f), std).replace(os.sep, "/")
+            unit_section[stem(rel)] = rel.split("/")[0] if "/" in rel else "core"
+sec_defs = {}               # section -> symbols its archive defines
+if args.prebuilt:
+    pre_units, pre_skips = {}, set()
+    for f in sorted(os.listdir(args.prebuilt)):
+        if not f.endswith(".units"):
+            continue
+        sec = f[:-6]
+        listed = set()
+        for line in open(os.path.join(args.prebuilt, f)):
+            w = line.split()
+            if len(w) >= 2 and w[0] in ("unit", "skip"):
+                st = stem(w[1])
+                if unit_section.get(st) != sec:
+                    errors.append(f"prebuilt {f}: lists std/{w[1]}, which is in section "
+                                  f"'{unit_section.get(st, '?')}'")
+                if st in pre_units:
+                    errors.append(f"prebuilt {f}: std/{w[1]} is also in {pre_units[st]}.units")
+                pre_units[st] = sec
+                if w[0] == "skip":
+                    pre_skips.add(st)
+                else:
+                    listed.add(st)
+        archive = os.path.join(args.prebuilt, sec + ".a")
+        members = nm_members(archive) if os.path.exists(archive) else {}
+        if listed and not members:
+            errors.append(f"prebuilt section '{sec}': {sec}.a is missing or empty")
+        got = {m[:-2] for m in members if m.endswith(".o")}
+        for st in sorted(listed - got):
+            errors.append(f"prebuilt {sec}.a: no member {st}.o")
+        for st in sorted(got - listed):
+            errors.append(f"prebuilt {sec}.a: member {st}.o isn't in {sec}.units")
+        sec_defs[sec] = {}
+        for m, (d, _, w) in members.items():
+            for sym in d - w:
+                sec_defs[sec][sym] = m
+    # Every std unit no feature gates is in exactly one section.
+    want = {st for st in objs if st not in gated_stems}
+    for st in sorted(want - set(pre_units)):
+        errors.append(f"prebuilt: {st} (section '{section(st)}') is in no section's .units")
+    for st in sorted(set(pre_units) - want - pre_skips):
+        if st not in gated_stems:
+            errors.append(f"prebuilt: {pre_units[st]}.units lists {st}, which isn't a std unit here")
+    seen = {}
+    for sec, ds in sorted(sec_defs.items()):
+        for sym, m in ds.items():
+            if sym in seen:
+                errors.append(f"prebuilt: {sym} is defined in {seen[sym]} and {sec}.a({m})")
+            else:
+                seen[sym] = f"{sec}.a({m})"
+
 problems_seen = set()
 for h in headers:
     with open(tu, "w") as f:
@@ -202,9 +296,22 @@ for h in headers:
                 continue
             errors.append(f"std/{h} ({passname}): {s} is defined by {', '.join(sorted(ds))}, "
                           f"not in its modules")
+        if args.prebuilt and passname == "no features":
+            # A build linking only the sections holding its modules' units.
+            secs = {section(u) for u in units if u not in gated_stems}
+            have = set()
+            for sec in secs:
+                have |= set(sec_defs.get(sec, {}))
+            for s in sorted(need):
+                ds = definers.get(s)
+                if not ds or s in have or ds <= gated_stems:
+                    continue
+                errors.append(f"std/{h} (prebuilt): {s} is defined by {', '.join(sorted(ds))}, "
+                              f"not in the sections it links ({', '.join(sorted(secs))})")
 
 print(f"std module check: {len(headers)} headers, {len(objs)} std objects, "
-      f"{len(skipped)} headers that don't compile alone for this target skipped")
+      f"{len(skipped)} headers that don't compile alone for this target skipped"
+      + (f", {len(sec_defs)} prebuilt sections" if args.prebuilt else ""))
 if skipped:
     print("  skipped: " + " ".join(skipped))
 for e in errors:

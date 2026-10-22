@@ -91,9 +91,10 @@ jobs:
           CLANG_BIN: clang
 
       - name: Package
-        # bin/, std/, README.md and lib/<triple>/libsafec_std.a: std prebuilt
-        # for this platform by the packaged safec (see package.sh), which a
-        # native build links instead of compiling std.
+        # bin/, std/, README.md and lib/<triple>/std/<section>.a: std
+        # prebuilt for this platform, one archive per section, by the
+        # packaged safec (see package.sh), which a native build links
+        # instead of compiling std.
         run: |
           set -euo pipefail
           OUT="safec-macos-arm64"
@@ -164,9 +165,10 @@ jobs:
           CLANG_BIN: clang-${{ env.LLVM_VERSION }}
 
       - name: Package
-        # bin/, std/, README.md and lib/<triple>/libsafec_std.a: std prebuilt
-        # for this platform by the packaged safec (see package.sh), which a
-        # native build links instead of compiling std.
+        # bin/, std/, README.md and lib/<triple>/std/<section>.a: std
+        # prebuilt for this platform, one archive per section, by the
+        # packaged safec (see package.sh), which a native build links
+        # instead of compiling std.
         run: |
           set -euo pipefail
           OUT="safec-linux-x86_64"
@@ -298,7 +300,7 @@ jobs:
 
       - name: Package
         shell: bash
-        # As on macOS/Linux: lib/x86_64-pc-windows-msvc/libsafec_std.a too.
+        # As on macOS/Linux: lib/x86_64-pc-windows-msvc/std/<section>.a too.
         run: |
           set -euo pipefail
           OUT="safec-windows-x86_64"

@@ -113,7 +113,7 @@ public:
     std::set<std::string> runtimeSymbolPrefixes() const;
     // Every unit for this platform (variants and the wasm runtime
     // permitting): [build] std = "all" -- with each feature-gated backend
-    // too, unless 'featureBackends' is false (the prebuilt archive).
+    // too, unless 'featureBackends' is false (the prebuilt std).
     std::set<std::string> allUnits(const StdPlatform& p, bool featureBackends = true) const;
     // Whether a unit joins builds for p at all (variant, feature, wasm/).
     bool unitApplies(const File& f, const StdPlatform& p) const;

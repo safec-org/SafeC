@@ -837,8 +837,8 @@ bool Builder::linkFinal(const std::vector<std::string>& objFiles,
     // std/math.sc, Cocoa or X11 or user32/gdi32 for std/gui, the CPU BLAS
     // for std/simd/gemm.sc, ... — only when std is linked in at all (a
     // package with no SafeC in it doesn't; see build()).
-    bool linksStd = !stdArchive_.empty() &&
-                    std::find(archives.begin(), archives.end(), stdArchive_) != archives.end();
+    bool linksStd = !stdArchives_.empty() &&
+                    std::find(archives.begin(), archives.end(), stdArchives_.front()) != archives.end();
     if (linksStd) for (auto& f : stdLinkFlags_) cmd.push_back(f);
     const PlatformBuildConfig* plat = platformBuild();
     for (auto& d : manifest_.build.libDirs) cmd.push_back("-L" + d);
@@ -1244,12 +1244,29 @@ std::string Builder::prebuiltStdStamp() const {
     std::string version;
     captureCmd({ safec, "--version" }, version, false);
     while (!version.empty() && (version.back() == '\n' || version.back() == '\r')) version.pop_back();
-    std::string s = "format=1\ntriple=" + hostTriple() + "\nsafec=" + hash + "\n";
+    std::string s = "format=2\ntriple=" + hostTriple() + "\nsafec=" + hash + "\n";
     std::string rt;
     for (auto& f : runtimeFlags()) rt += (rt.empty() ? "" : " ") + f;
     s += "runtime=" + rt + "\n";
     // Informational; not compared.
     return s + "safec-version=" + version.substr(0, version.find('\n')) + "\n";
+}
+
+std::string Builder::stdSection(const std::string& unit) {
+    size_t slash = unit.find('/');
+    return slash == std::string::npos ? "core" : unit.substr(0, slash);
+}
+
+// "11.0" < "10.15"? Compared field by field, numerically.
+static bool versionLess(const std::string& a, const std::string& b) {
+    std::istringstream sa(a), sb(b);
+    std::string x, y;
+    while (true) {
+        bool ha = (bool)std::getline(sa, x, '.'), hb = (bool)std::getline(sb, y, '.');
+        if (!ha && !hb) return false;
+        long va = ha ? std::atol(x.c_str()) : 0, vb = hb ? std::atol(y.c_str()) : 0;
+        if (va != vb) return va < vb;
+    }
 }
 
 std::vector<std::string> Builder::stdClangFlags() const {
@@ -1266,12 +1283,29 @@ std::vector<std::string> Builder::stdClangFlags() const {
     return f;
 }
 
-bool Builder::readPrebuiltUnits(const std::string& file, PrebuiltStd& out) {
+std::vector<std::string> Builder::stdLinkInputs() const {
+    // Several archives (the units compiled here, the prebuilt sections) can
+    // refer to each other's members: an ELF linker searches each archive
+    // once, in order, so they go in a group. ld64 and link.exe search all
+    // archives until nothing more resolves.
+    if (stdArchives_.size() < 2 || targetOS() == "macos" || targetIsWindows() || targetIsWasm())
+        return stdArchives_;
+    std::vector<std::string> out = { "-Wl,--start-group" };
+    out.insert(out.end(), stdArchives_.begin(), stdArchives_.end());
+    out.push_back("-Wl,--end-group");
+    return out;
+}
+
+bool Builder::readPrebuiltUnits(const std::string& file, PrebuiltStd& out, std::string* stamp) {
     std::ifstream in(file);
     if (!in) return false;
     std::string line, cur;
     while (std::getline(in, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.rfind("stamp ", 0) == 0) {
+            if (stamp) *stamp += line.substr(6) + "\n";
+            continue;
+        }
         std::istringstream ss(line);
         std::string kind, a, b;
         ss >> kind >> a >> b;
@@ -1294,18 +1328,23 @@ Builder::PrebuiltStd Builder::findPrebuiltStd() const {
     std::vector<fs::path> cands;
     std::string safec = findSafec();
     if (fs::path(safec).has_parent_path())
-        cands.push_back(fs::path(safec).parent_path().parent_path() / "lib" / triple);
+        cands.push_back(fs::path(safec).parent_path().parent_path() / "lib" / triple / "std");
     if (const char* home = std::getenv("SAFEC_HOME"); home && *home)
-        cands.push_back(fs::path(home) / "lib" / triple);
+        cands.push_back(fs::path(home) / "lib" / triple / "std");
+    // The first with any section in it (an install with only some sections
+    // is still the install's).
     fs::path dir;
     std::error_code ec;
-    for (auto& c : cands)
-        if (fs::exists(c / "libsafec_std.a", ec)) { dir = c; break; }
+    for (auto& c : cands) {
+        if (!fs::is_directory(c, ec)) continue;
+        for (auto& e : fs::directory_iterator(c, ec))
+            if (e.path().extension() == ".units") { dir = c; break; }
+        if (!dir.empty()) break;
+    }
     if (dir.empty()) return none;
-    fs::path archive = dir / "libsafec_std.a";
     auto skip = [&](const std::string& why) {
         if (opts_.verbose)
-            std::cout << "safeguard: not using the prebuilt std archive " << archive.string() << ": " << why
+            std::cout << "safeguard: not using the prebuilt std in " << dir.string() << ": " << why
                       << "; compiling std from source\n";
         return none;
     };
@@ -1313,15 +1352,14 @@ Builder::PrebuiltStd Builder::findPrebuiltStd() const {
     if (const char* e = std::getenv("SAFEC_STD_FROM_SOURCE"); e && *e && std::string(e) != "0")
         return skip("SAFEC_STD_FROM_SOURCE is set");
     if (!opts_.extraFlags.empty()) return skip("extra compiler flags are given");
-    std::string have;
-    {
-        std::ifstream in(dir / "libsafec_std.stamp");
-        std::stringstream ss;
-        ss << in.rdbuf();
-        have = ss.str();
-    }
-    if (have.empty()) return skip("it has no libsafec_std.stamp");
+#if defined(__APPLE__)
+    if (const char* e = std::getenv("MACOSX_DEPLOYMENT_TARGET");
+        e && *e && versionLess(e, kStdMacosMin))
+        return skip(std::string("MACOSX_DEPLOYMENT_TARGET is ") + e + ", and it is built for macOS " +
+                    kStdMacosMin);
+#endif
     std::string want = prebuiltStdStamp();
+    if (want.empty()) return skip("cannot read the compiler " + safec);
     // Compare all but the informational safec-version line.
     auto fields = [](const std::string& s) {
         std::map<std::string, std::string> m;
@@ -1334,22 +1372,49 @@ Builder::PrebuiltStd Builder::findPrebuiltStd() const {
         }
         return m;
     };
-    auto h = fields(have), w = fields(want);
-    if (h != w) {
-        std::string why;
-        for (auto& [k, v] : w)
-            if (h[k] != v) {
-                why = k == "safec" ? "it was built by a different safec (stamp " + h[k] + ", " + safec + " is " + v + ")"
-                    : k == "triple" ? "it is for " + h[k] + ", not " + v
-                    : "its " + k + " is '" + h[k] + "', this build's '" + v + "'";
-                break;
-            }
-        if (why.empty()) why = "its stamp is of another format";
-        return skip(why);
-    }
+    auto w = fields(want);
+    // Each section on its own: one added from another release, say, is
+    // compiled from source while the rest are linked.
     PrebuiltStd p;
-    if (!readPrebuiltUnits((dir / "libsafec_std.units").string(), p)) return skip("it has no libsafec_std.units");
-    p.archive = archive.string();
+    p.dir = dir.string();
+    std::map<std::string, std::vector<std::string>> rejected;   // why -> sections
+    std::vector<fs::path> files;
+    for (auto& e : fs::directory_iterator(dir, ec))
+        if (e.path().extension() == ".units") files.push_back(e.path());
+    std::sort(files.begin(), files.end());
+    for (auto& f : files) {
+        std::string section = f.stem().string();
+        PrebuiltStd s;
+        std::string have;
+        if (!readPrebuiltUnits(f.string(), s, &have)) continue;
+        std::string why;
+        auto h = fields(have);
+        if (h.empty()) why = "it has no stamp";
+        else if (h != w) {
+            for (auto& [k, v] : w)
+                if (h[k] != v) {
+                    why = k == "safec" ? "built by a different safec (stamp " + h[k] + ", " + safec + " is " + v + ")"
+                        : k == "triple" ? "built for " + h[k] + ", not " + v
+                        : "its " + k + " is '" + h[k] + "', this build's '" + v + "'";
+                    break;
+                }
+            if (why.empty()) why = "its stamp is of another format";
+        }
+        fs::path archive = dir / (section + ".a");
+        bool anyObj = s.unitHash.size() > s.skipped.size();
+        if (why.empty() && anyObj && !fs::exists(archive, ec)) why = "its archive " + archive.filename().string() + " is missing";
+        if (!why.empty()) { rejected[why].push_back(section); p.rejected.insert(section); continue; }
+        p.sections[section] = anyObj ? archive.string() : "";
+        for (auto& [u, hh] : s.unitHash) p.unitHash[u] = hh;
+        for (auto& [u, r] : s.refs) p.refs[u] = r;
+        p.skipped.insert(s.skipped.begin(), s.skipped.end());
+    }
+    if (opts_.verbose)
+        for (auto& [why, secs] : rejected) {
+            std::cout << "safeguard: not using the prebuilt std section" << (secs.size() > 1 ? "s" : "");
+            for (auto& s : secs) std::cout << " " << s;
+            std::cout << " in " << dir.string() << ": " << why << "; compiling their units from source\n";
+        }
     return p;
 }
 
@@ -1405,7 +1470,7 @@ bool Builder::stdUnitObject(const StdIndex& idx, const std::string& unit, const 
 }
 
 bool Builder::ensureStdLib(const std::set<std::string>& roots, const std::set<std::string>& refs, bool link) {
-    stdArchive_.clear();
+    stdArchives_.clear();
     stdLinkFlags_.clear();
     stdDebDepends_.clear();
     stdUnits_.clear();
@@ -1420,7 +1485,7 @@ bool Builder::ensureStdLib(const std::set<std::string>& roots, const std::set<st
         return false;
     }
     if (stdDir.empty()) {
-        if (!given.empty()) { stdArchive_ = given; return true; }
+        if (!given.empty()) { stdArchives_ = { given }; return true; }
         std::cerr << "safeguard: warning: cannot find SafeC std/ directory; "
                      "set SAFEC_HOME to your SafeC install prefix or repository root\n";
         return true;
@@ -1433,8 +1498,8 @@ bool Builder::ensureStdLib(const std::set<std::string>& roots, const std::set<st
     }
     StdPlatform plat = stdPlatform();
 
-    // Where the units' objects come from: the prebuilt archive of a release
-    // install, as far as it has them unchanged (std/ newer than it is
+    // Where the units' objects come from: the prebuilt sections of a release
+    // install, as far as they have them unchanged (std/ newer than they are
     // compiled here), or SAFEC_STD_ARCHIVE's archive, or compiled here.
     PrebuiltStd pre;
     if (!given.empty()) {
@@ -1443,8 +1508,6 @@ bool Builder::ensureStdLib(const std::set<std::string>& roots, const std::set<st
         pre.unitHash.clear();
     } else {
         pre = findPrebuiltStd();
-        if (!pre.archive.empty() && opts_.verbose)
-            std::cout << "safeguard: linking the prebuilt std archive " << pre.archive << "\n";
     }
 
     // Each unit compiled here gets its own object under
@@ -1476,27 +1539,35 @@ bool Builder::ensureStdLib(const std::set<std::string>& roots, const std::set<st
     fs::create_directories(objDir);
     std::ofstream(objDir / "build.stamp") << stamp;
 
-    // A unit: from the prebuilt archive when it has it built from the same
-    // inputs (its 'stale' members are replaced), else compiled here.
+    // A unit: from its prebuilt section when that has it built from the
+    // same inputs, else compiled here -- and then, if the section has an
+    // older build of it, that member is 'stale' and left out of the
+    // section's archive this build links, so no unit is linked twice.
     std::map<std::string, StdUnitObj> done;
-    std::set<std::string> stale;   // prebuilt members compiled here instead
+    std::map<std::string, std::set<std::string>> stale;   // section -> units compiled here instead
+    std::set<std::string> usedSections;                   // sections with members this build uses
+    std::map<std::string, std::vector<std::string>> notInstalled;   // section -> units compiled here
     std::set<std::string> allRefs = refs;
     bool compileHere = given.empty();
     auto process = [&](const std::string& unit) -> bool {
         if (done.count(unit)) return true;
         StdUnitObj u;
+        std::string section = stdSection(unit);
         auto h = pre.unitHash.find(unit);
-        if (!pre.archive.empty() && h != pre.unitHash.end()) {
+        if (pre.sections.count(section) && h != pre.unitHash.end()) {
             if (h->second == stdUnitHash(idx, unit)) {
                 u.skipped = pre.skipped.count(unit) > 0;
                 u.refs = pre.refs[unit];
+                if (!u.skipped) usedSections.insert(section);
                 done[unit] = u;
                 allRefs.insert(u.refs.begin(), u.refs.end());
                 return true;
             }
             if (opts_.verbose)
-                std::cout << "safeguard: std/" << unit << " changed since the prebuilt archive was built; built here instead\n";
-            if (!pre.skipped.count(unit)) stale.insert(unit);
+                std::cout << "safeguard: std/" << unit << " changed since the prebuilt std was built; built here instead\n";
+            if (!pre.skipped.count(unit)) stale[section].insert(unit);
+        } else if (!pre.dir.empty() && !pre.sections.count(section) && !pre.rejected.count(section)) {
+            notInstalled[section].push_back(unit);
         } else if (!given.empty()) {
             auto r = pre.refs.find(unit);
             if (r != pre.refs.end()) u.refs = r->second;
@@ -1551,13 +1622,21 @@ bool Builder::ensureStdLib(const std::set<std::string>& roots, const std::set<st
         for (auto& u : units) std::cout << " " << u;
         std::cout << "\n";
     }
-    if (!given.empty()) { stdArchive_ = given; return true; }
-    // [build] std = "all": every unit, as one archive the linker picks from.
+    if (!given.empty()) { stdArchives_ = { given }; return true; }
+    // [build] std = "all": every unit, as archives the linker picks from.
     if (manifest_.build.useStd == 2)
         for (auto& u : idx.allUnits(plat))
             if (!process(u)) return false;
+    if (opts_.verbose)
+        for (auto& [section, us] : notInstalled) {
+            std::cout << "safeguard: std section '" << section << "' is not installed in " << pre.dir
+                      << "; compiling its units from source:";
+            for (auto& u : us) std::cout << " std/" << u;
+            std::cout << "\n";
+        }
 
-    // The objects compiled here.
+    // The objects compiled here: one archive of them, repacked when its
+    // member list or a member changes.
     std::vector<std::string> objs;
     bool rebuilt = false;
     for (auto& [unit, u] : done) {
@@ -1566,57 +1645,67 @@ bool Builder::ensureStdLib(const std::set<std::string>& roots, const std::set<st
         auto t = fs::last_write_time(u.obj, ec);
         if (!ec && fs::exists(libPath) && t > fs::last_write_time(libPath, ec)) rebuilt = true;
     }
-    if (!pre.archive.empty() && objs.empty()) {
-        // Everything is in the prebuilt archive.
-        stdArchive_ = pre.archive;
-        return true;
+    auto ar = [&]() {
+        std::string a = findLlvmTool("llvm-ar");
+        return a == "llvm-ar" ? std::string("ar") : a;
+    };
+    // A file listing an archive's inputs: rebuilt when that changes.
+    auto unchanged = [&](const fs::path& lib, const std::string& members) {
+        std::ifstream in(fs::path(lib).concat(".members"));
+        std::stringstream prev;
+        prev << in.rdbuf();
+        return fs::exists(lib, ec) && prev.str() == members;
+    };
+    if (!objs.empty()) {
+        std::string members;
+        for (auto& o : objs) members += o + "\n";
+        if (rebuilt || !unchanged(libPath, members)) {
+            fs::remove(libPath, ec);   // ar adds to an existing archive
+            if (!packArchive(objs, libPath.string())) return false;
+            std::ofstream(fs::path(libPath).concat(".members")) << members;
+        }
+        stdArchives_.push_back(libPath.string());
     }
 
-    // One archive of them, repacked when its member list or a member
-    // changes. With a prebuilt archive: a copy of it, its stale members
-    // dropped and the ones compiled here added -- one archive, so no unit
-    // is linked twice, and no archive order to get right.
-    if (objs.empty()) return true;
-    std::string members;
-    if (!pre.archive.empty()) {
-        members = "prebuilt=" + pre.archive + " " +
-                  std::to_string((long long)fs::last_write_time(pre.archive, ec).time_since_epoch().count()) + "\n";
-        for (auto& s : stale) members += "replaces=" + s + "\n";
-    }
-    for (auto& o : objs) members += o + "\n";
-    fs::path membersPath = fs::path(libPath).concat(".members");
-    std::stringstream prev;
-    {
-        std::ifstream in(membersPath);
-        prev << in.rdbuf();
-    }
-    if (rebuilt || prev.str() != members || !fs::exists(libPath, ec)) {
-        fs::remove(libPath, ec);   // ar adds to an existing archive
-        if (!pre.archive.empty()) {
-            fs::copy_file(pre.archive, libPath, fs::copy_options::overwrite_existing, ec);
+    // The prebuilt sections that hold units of the build, as installed --
+    // or, with members compiled here instead, a copy without them
+    // (build/deps/std-prebuilt/<section>.a).
+    for (auto& section : usedSections) {
+        const std::string& archive = pre.sections[section];
+        if (archive.empty()) continue;
+        auto st = stale.find(section);
+        if (st == stale.end() || st->second.empty()) { stdArchives_.push_back(archive); continue; }
+        fs::path copy = depDir / "std-prebuilt" / (section + ".a");
+        std::string members = "prebuilt=" + archive + " " +
+            std::to_string((long long)fs::last_write_time(archive, ec).time_since_epoch().count()) + "\n";
+        for (auto& s : st->second) members += "drops=" + s + "\n";
+        if (!unchanged(copy, members)) {
+            fs::create_directories(copy.parent_path(), ec);
+            fs::remove(copy, ec);
+            fs::copy_file(archive, copy, fs::copy_options::overwrite_existing, ec);
             if (ec) {
-                std::cerr << "safeguard: cannot copy " << pre.archive << ": " << ec.message() << "\n";
+                std::cerr << "safeguard: cannot copy " << archive << ": " << ec.message() << "\n";
                 return false;
             }
-            if (!stale.empty()) {
-                std::string ar = findLlvmTool("llvm-ar");
-                if (ar == "llvm-ar") ar = "ar";
-                std::vector<std::string> cmd = { ar, "d", libPath.string() };
-                for (auto& s : stale) {
-                    std::string stem = s;
-                    for (char& c : stem) if (c == '/' || c == '.') c = '_';
-                    cmd.push_back(stem + ".o");
-                }
-                if (runCmd(cmd, opts_.verbose) != 0) {
-                    std::cerr << "safeguard: ar d failed for " << libPath.string() << "\n";
-                    return false;
-                }
+            std::vector<std::string> cmd = { ar(), "d", copy.string() };
+            for (auto& s : st->second) {
+                std::string stem = s;
+                for (char& c : stem) if (c == '/' || c == '.') c = '_';
+                cmd.push_back(stem + ".o");
             }
+            if (runCmd(cmd, opts_.verbose) != 0) {
+                std::cerr << "safeguard: ar d failed for " << copy.string() << "\n";
+                return false;
+            }
+            std::ofstream(fs::path(copy).concat(".members")) << members;
         }
-        if (!packArchive(objs, libPath.string())) return false;
-        std::ofstream(membersPath) << members;
+        stdArchives_.push_back(copy.string());
     }
-    stdArchive_ = libPath.string();
+    if (opts_.verbose && !usedSections.empty()) {
+        std::cout << "safeguard: linking the prebuilt std sections";
+        for (auto& s : usedSections) std::cout << " " << s;
+        std::cout << " from " << pre.dir << "\n";
+    }
     return true;
 }
 
@@ -1637,10 +1726,11 @@ bool Builder::writePrebuiltStd(const std::string& prefix) {
     const StdIndex& idx = StdIndex::load(stdDir);
     StdPlatform plat = stdPlatform();
     plat.features.clear();
-    fs::path out = fs::path(prefix) / "lib" / hostTriple();
+    fs::path out = fs::path(prefix) / "lib" / hostTriple() / "std";
+    std::error_code ec;
+    fs::remove_all(out, ec);   // no sections left over from another std
     fs::create_directories(out);
     fs::path objDir = fs::path(root_) / "build" / "deps" / "std";
-    std::error_code ec;
     fs::remove_all(objDir, ec);
     fs::create_directories(objDir);
     std::string stamp = prebuiltStdStamp();
@@ -1648,23 +1738,39 @@ bool Builder::writePrebuiltStd(const std::string& prefix) {
         std::cerr << "safeguard: cannot read the compiler " << findSafec() << "\n";
         return false;
     }
-    std::vector<std::string> objs;
-    std::ostringstream units;
-    units << "# safeguard prebuilt std: 'unit <std file> <input hash>' (or 'skip ...': it doesn't\n"
-             "# compile for this target), then the external symbols its IR refers to, 'ref <name>'\n";
+    struct Section { std::vector<std::string> objs; std::ostringstream units; };
+    std::map<std::string, Section> sections;
     for (auto& unit : idx.allUnits(plat, /*featureBackends=*/false)) {
         StdUnitObj u;
         if (!stdUnitObject(idx, unit, objDir.string(), true, u)) return false;
-        units << (u.skipped ? "skip " : "unit ") << unit << " " << stdUnitHash(idx, unit) << "\n";
-        for (auto& r : u.refs) units << "ref " << r << "\n";
-        if (!u.obj.empty()) objs.push_back(u.obj);
+        Section& s = sections[stdSection(unit)];
+        s.units << (u.skipped ? "skip " : "unit ") << unit << " " << stdUnitHash(idx, unit) << "\n";
+        for (auto& r : u.refs) s.units << "ref " << r << "\n";
+        if (!u.obj.empty()) s.objs.push_back(u.obj);
     }
-    fs::path lib = out / "libsafec_std.a";
-    fs::remove(lib, ec);
-    if (objs.empty() || !packArchive(objs, lib.string())) return false;
-    std::ofstream(out / "libsafec_std.units", std::ios::binary) << units.str();
-    std::ofstream(out / "libsafec_std.stamp", std::ios::binary) << stamp;
-    std::cout << "safeguard: wrote " << lib.string() << " (" << objs.size() << " std units)\n";
+    size_t total = 0;
+    std::string stampLines;
+    {
+        std::istringstream ss(stamp);
+        std::string l;
+        while (std::getline(ss, l)) stampLines += "stamp " + l + "\n";
+    }
+    for (auto& [name, s] : sections) {
+        // An archive only for a section with objects; its .units says the
+        // section is installed either way.
+        if (!s.objs.empty()) {
+            fs::path lib = out / (name + ".a");
+            if (!packArchive(s.objs, lib.string())) return false;
+        }
+        std::ofstream(out / (name + ".units"), std::ios::binary)
+            << "# safeguard prebuilt std, section '" << name << "': the compiler and target it is for\n"
+               "# ('stamp' lines), then 'unit <std file> <input hash>' (or 'skip ...': it doesn't\n"
+               "# compile for this target) and the external symbols its IR refers to, 'ref <name>'\n"
+            << stampLines << s.units.str();
+        total += s.objs.size();
+    }
+    std::cout << "safeguard: wrote " << out.string() << ": " << sections.size() << " sections, "
+              << total << " std units\n";
     return true;
 }
 
@@ -2462,7 +2568,7 @@ bool Builder::build() {
     }
     std::vector<std::string> archives;
     for (auto& f : depLinkInputs()) archives.push_back(f);
-    if (!stdArchive_.empty()) archives.push_back(stdArchive_);
+    for (auto& a : stdLinkInputs()) archives.push_back(a);
 
     // 7. Produce the final artifact. build.crate_type selects what "final"
     // means: a linked executable (the default, "bin"), a dynamic library
@@ -2690,7 +2796,7 @@ bool Builder::test() {
     }
     std::vector<std::string> archives;
     for (auto& f : depLinkInputs()) archives.push_back(f);
-    if (!stdArchive_.empty()) archives.push_back(stdArchive_);
+    for (auto& a : stdLinkInputs()) archives.push_back(a);
 
     int passed = 0, failed = 0;
     for (size_t ti = 0; ti < testSrcs.size(); ++ti) {
