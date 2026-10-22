@@ -68,7 +68,7 @@ struct BuildConfig {
                                    // 2 "all": every std module compiled into the archive,
                                    // not only the ones the sources include
     bool stdPrebuilt = true;       // [build] std_prebuilt: a native build may link a release
-                                   // install's prebuilt std archive (false: always compile std)
+                                   // install's prebuilt std sections (false: always compile std)
     PlatformBuildConfig forMacos, forLinux, forWindows;   // [build.<os>]
 };
 

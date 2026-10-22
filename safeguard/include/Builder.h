@@ -131,11 +131,14 @@ public:
     // the 'runtime-symbol' units the build's code ('refs': the external
     // symbols of its own and its dependencies' IR, see stdRefs) and those
     // modules' own code refer to, to a fixed point — or all of them with
-    // [build] std = "all" — each unit compiled to its own cached object,
-    // packed into build/deps/[<target>/]libsafec_std.a. A native build
-    // links the prebuilt archive of a release install instead when there is
-    // a matching one (see findPrebuiltStd), compiling only what it lacks.
-    // Sets stdArchive_ ("" when nothing is to be linked) and the system
+    // [build] std = "all" — each unit compiled to its own cached object
+    // (always optimized, see stdClangFlags), packed into
+    // build/deps/[<target>/]libsafec_std.a. A native build links the
+    // sections of a release install's prebuilt std that hold its units
+    // instead (see findPrebuiltStd), compiling only what they lack: a unit of
+    // a section that isn't installed, a feature-gated one, or one whose std
+    // sources changed. Sets stdArchives_ (empty when nothing is to be
+    // linked) and the system
     // libraries those modules need (stdLinkFlags_, stdDebDepends_; see
     // StdModules.h). With 'link' false, only works out the modules (into
     // stdUnits_), compiling what that needs, for 'std-modules'. Returns
@@ -155,12 +158,17 @@ public:
     bool printStdModules(const std::vector<std::string>& args);
 
     // 'safeguard std-prebuilt <prefix>': compile every hosted std unit that
-    // no feature gates, in release mode, into
-    // <prefix>/lib/<host triple>/libsafec_std.a with its .stamp (compiler
-    // and target) and .units (each unit's input hash and external symbols)
-    // -- the archive a release install ships and native builds link
-    // instead of compiling std.
+    // no feature gates, with std's flags (stdClangFlags), into one archive
+    // per std section, <prefix>/lib/<host triple>/std/<section>.a, each
+    // with its <section>.units (the stamp: compiler and target; then each
+    // unit's input hash and external symbols) -- what a release install
+    // ships and native builds link instead of compiling std.
     bool writePrebuiltStd(const std::string& prefix);
+
+    // A std unit's section: its top-level directory under std/
+    // ("collections/vec.sc" -> "collections"), "core" for the files
+    // directly in std/. The prebuilt std has one archive per section.
+    static std::string stdSection(const std::string& unit);
 
     // ── Dependency management ─────────────────────────────────────────────────
 
@@ -194,13 +202,16 @@ private:
     Manifest      manifest_;
     BuildOptions  opts_;
 
-    // The std archive this build links, and what its modules link (set by
-    // ensureStdLib).
-    std::string stdArchive_;
+    // The std archives this build links (the units compiled here, then the
+    // prebuilt sections it uses), and what its modules link (set by
+    // ensureStdLib). stdLinkInputs() is how they go on a link line.
+    std::vector<std::string> stdArchives_;
+    std::vector<std::string> stdLinkInputs() const;
     std::vector<std::string> stdLinkFlags_;
     std::vector<std::string> stdDebDepends_;
     std::set<std::string> stdUnits_;          // the modules (ensureStdLib)
-    bool stdFromSource_ = false;              // never the prebuilt archive (writePrebuiltStd)
+    bool stdFromSource_ = false;              // never the prebuilt std (writePrebuiltStd)
+    bool writingPrebuiltStd_ = false;         // 'std-prebuilt' (see stdClangFlags)
 
     // One std unit's object: compiled into objDir (or reused from there)
     // with the symbols its IR refers to kept beside it (<stem>.refs).
@@ -216,21 +227,37 @@ private:
     std::string stdUnitHash(const StdIndex& idx, const std::string& unit) const;
     mutable std::map<std::string, std::string> fileHashes_;   // std file -> hashFile
 
-    // A release install's prebuilt std archive (see writePrebuiltStd).
+    // A release install's prebuilt std (see writePrebuiltStd): the
+    // sections installed whose stamp matches, and their units.
     struct PrebuiltStd {
-        std::string archive;                                  // "" if none
+        std::string dir;                                      // lib/<triple>/std; "" if none
+        std::string archive;                                  // SAFEC_STD_ARCHIVE's, if given
+        std::map<std::string, std::string> sections;          // section -> its archive ("" if
+                                                              // all its units are skipped)
         std::map<std::string, std::string> unitHash;          // unit -> input hash
         std::map<std::string, std::set<std::string>> refs;    // unit -> external symbols
         std::set<std::string> skipped;                        // didn't compile for it
+        std::set<std::string> rejected;                       // installed, but stamped for
+                                                              // another compiler or target
     };
-    // The one beside the safec this build uses (<bin>/../lib/<triple>/) or
-    // under $SAFEC_HOME/lib/<triple>/, for a native build, if its stamp
-    // matches this compiler and target and nothing opts out
-    // ([build] std_prebuilt = false, SAFEC_STD_FROM_SOURCE=1).
+    // The one beside the safec this build uses (<bin>/../lib/<triple>/std/)
+    // or under $SAFEC_HOME/lib/<triple>/std/, for a native build, unless
+    // something opts out ([build] std_prebuilt = false,
+    // SAFEC_STD_FROM_SOURCE=1); of its sections, those whose stamp matches
+    // this compiler and target.
     PrebuiltStd findPrebuiltStd() const;
-    static bool readPrebuiltUnits(const std::string& file, PrebuiltStd& out);
-    // The stamp a prebuilt archive for this compiler and host carries.
+    // Reads a <section>.units (or a SAFEC_STD_ARCHIVE's .units) into 'out';
+    // its 'stamp' lines into 'stamp' if given.
+    static bool readPrebuiltUnits(const std::string& file, PrebuiltStd& out, std::string* stamp = nullptr);
+    // The stamp a prebuilt section for this compiler and host carries.
     std::string prebuiltStdStamp() const;
+    // The clang flags every std unit is compiled with, in debug and release
+    // builds alike and as the prebuilt std is: -O2, and for macOS the
+    // deployment target (kStdMacosMin, or MACOSX_DEPLOYMENT_TARGET when set;
+    // always kStdMacosMin for 'std-prebuilt').
+    std::vector<std::string> stdClangFlags() const;
+    // The oldest macOS a release's binaries and prebuilt std run on.
+    static constexpr const char* kStdMacosMin = "11.0";
     // The host as a target triple (aarch64-apple-darwin, x86_64-unknown-
     // linux-gnu, x86_64-pc-windows-msvc, ...): a prebuilt archive's directory.
     static std::string hostTriple();
@@ -364,10 +391,12 @@ private:
     std::string materializeScx(const std::string& src,
                                 const std::string& buildDir) const;
 
-    // Compile .ll to .o with clang.  Returns .o path or "".
+    // Compile .ll to .o with clang.  Returns .o path or "". 'stdUnit': a
+    // std unit, compiled with stdClangFlags whatever the build's mode.
     std::string llToObj(const std::string& llFile,
                          const std::string& buildDir,
-                         bool suppressOutput = false) const;
+                         bool suppressOutput = false,
+                         bool stdUnit = false) const;
 
     // Compile a .c/.cpp/.cc/.cxx/.m/.mm file straight to a .o with
     // clang/clang++. 'flags' replaces the project's cflags (a built

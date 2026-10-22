@@ -4,15 +4,19 @@
 #
 #   <out>/bin/safec, safeguard[, sc-lsp]          (.exe on Windows)
 #   <out>/std/...                                  SafeC's std sources
-#   <out>/lib/<triple>/libsafec_std.a              std, prebuilt for this machine
-#   <out>/lib/<triple>/libsafec_std.stamp          the compiler and target it is for
-#   <out>/lib/<triple>/libsafec_std.units          its units' input hashes and symbols
+#   <out>/lib/<triple>/std/<section>.a             std, prebuilt for this machine,
+#   <out>/lib/<triple>/std/<section>.units         one archive per section: its stamp
+#                                                  (compiler, target) and its units'
+#                                                  input hashes and symbols
 #   <out>/README.md
 #
-# The archive is every hosted std unit no feature gates, compiled in release
-# mode by the packaged safec from the packaged std/ ('safeguard
-# std-prebuilt'); a native build with that safec links it instead of
-# compiling std (see safeguard's ensureStdLib).
+# A section is a top-level directory of std/ (collections, gui, ml, ...),
+# 'core' the files directly in std/. Each archive holds the section's
+# hosted units that no feature gates, compiled optimized (and, on macOS, for
+# macOS 11.0 and later) by the packaged safec from the packaged std/
+# ('safeguard std-prebuilt'). A native build with that safec links the
+# sections holding its units instead of compiling them (see safeguard's
+# ensureStdLib); install.sh --std=<sections> installs only some of them.
 #
 #   usage: package.sh <out> <safec> <safeguard> [<sc-lsp>]
 set -euo pipefail

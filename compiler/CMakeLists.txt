@@ -132,14 +132,21 @@ if(APPLE)
     curses
   )
 elseif(UNIX)
-  # zlib is needed by LLVM on Linux; tinfo (ncurses) is needed by LLVM's
-  # terminal support.  Both are optional if the LLVM build already links them.
-  find_library(ZLIB_LIB z)
-  find_library(TINFO_LIB NAMES tinfo ncurses)
-  if(ZLIB_LIB)
-    target_link_libraries(safec PRIVATE ${ZLIB_LIB})
+  # zlib and tinfo (ncurses), for an LLVM built with them (its
+  # LLVMConfig.cmake says): an LLVM built without (the release's, see
+  # .github/scripts/build-llvm.sh) gets neither, so the release safec
+  # doesn't need a libtinfo.so.N or libz.so.1 that the user's distribution
+  # may name differently or lack.
+  if(LLVM_ENABLE_ZLIB)
+    find_library(ZLIB_LIB z)
+    if(ZLIB_LIB)
+      target_link_libraries(safec PRIVATE ${ZLIB_LIB})
+    endif()
   endif()
-  if(TINFO_LIB)
-    target_link_libraries(safec PRIVATE ${TINFO_LIB})
+  if(LLVM_ENABLE_TERMINFO)
+    find_library(TINFO_LIB NAMES tinfo ncurses)
+    if(TINFO_LIB)
+      target_link_libraries(safec PRIVATE ${TINFO_LIB})
+    endif()
   endif()
 endif()

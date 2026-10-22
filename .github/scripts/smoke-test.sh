@@ -268,10 +268,25 @@ case "$(uname -s)" in
     *) OS=other ;;
 esac
 EXE=""; [[ "$OS" == windows ]] && EXE=".exe"
-# An LLVM tool beside $CLANG_BIN (or on PATH), for inspecting binaries.
+# An LLVM tool for inspecting binaries: beside $CLANG_BIN or its realpath
+# (apt.llvm.org's /usr/bin/clang-21 links into /usr/lib/llvm-21/bin), then
+# <tool>-<clang major>, then <tool> on PATH. Prints nothing if none is found.
 llvm_tool() {
-    local dir; dir="$(dirname "$(command -v "$CLANG_BIN" 2>/dev/null || echo /nonexistent)")"
-    if [[ -x "$dir/$1" || -x "$dir/$1.exe" ]]; then echo "$dir/$1"; else command -v "$1" 2>/dev/null; fi
+    local clang real d major
+    clang="$(command -v "${CLANG_BIN:-clang}" 2>/dev/null || true)"
+    if [[ -n "$clang" ]]; then
+        real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$clang" 2>/dev/null || echo "$clang")"
+        for d in "$(dirname "$clang")" "$(dirname "$real")"; do
+            if [[ -x "$d/$1" ]]; then echo "$d/$1"; return; fi
+            if [[ -x "$d/$1.exe" ]]; then echo "$d/$1.exe"; return; fi
+        done
+    fi
+    major="$(basename "${CLANG_BIN:-clang}" .exe | sed -nE 's/.*-([0-9]+)$/\1/p')"
+    if [[ -z "$major" && -n "$clang" ]]; then
+        major="$("$clang" --version 2>/dev/null | sed -nE 's/.*clang version ([0-9]+).*/\1/p' | head -1)"
+    fi
+    if [[ -n "$major" ]] && command -v "$1-$major" >/dev/null 2>&1; then command -v "$1-$major"; return; fi
+    command -v "$1" 2>/dev/null || true
 }
 # Run a command, killed after $1 seconds (a GUI program must exit by itself).
 with_timeout() { local t="$1"; shift; perl -e 'alarm shift; exec @ARGV' "$t" "$@"; }
@@ -619,7 +634,7 @@ else
         # Diagnostics: the link line, and what the std archive it links holds.
         sg_in "$WORKDIR/gui_hello" /tmp/sg_gui_v.txt build --verbose
         grep -iE 'llvm-ar|[^a-z]ar rcs|libsafec_std|-o .*gui_hello' /tmp/sg_gui_v.txt | tail -6 | cut -c1-600
-        NM="$(dirname "$(command -v "${CLANG_BIN:-clang}")")/llvm-nm"
+        NM="$(llvm_tool llvm-nm)"; NM="${NM:-nm}"
         for a in $(find "$WORKDIR/gui_hello/build/deps" -name 'libsafec_std.a' 2>/dev/null); do
             echo "    $a: $(wc -c < "$a") bytes"
             "$NM" "$a" 2>&1 | grep -cE ' T ' | sed 's/^/    defined functions: /'
@@ -635,11 +650,27 @@ rm -rf "$WORKDIR"
 # ── 5c. std module completeness ──────────────────────────────────────────────
 # Every std header's functions are implemented by the std modules a build
 # including it compiles (tests/std_modules/check.py: safec's declarations
-# of each header against llvm-nm of the subset's objects).
+# of each header against llvm-nm of the subset's objects) -- and by the
+# prebuilt std sections such a build links: package.sh lays out an install
+# as release.yml packages it, with lib/<triple>/std/<section>.a, and
+# check.py --prebuilt checks those sections too.
 section "std module completeness"
+PRE="$(mktemp -d)"
+PKG_OK=0
+if bash "$SAFEC_HOME/.github/scripts/package.sh" "$PRE/inst" "$SAFEC_BIN" "$SAFEGUARD_BIN" >/tmp/sg_pkg.txt 2>&1 &&
+   ls "$PRE"/inst/lib/*/std/core.a "$PRE"/inst/lib/*/std/core.units "$PRE"/inst/lib/*/std/collections.a >/dev/null 2>&1; then
+    PKG_OK=1
+    PRE_STD="$(dirname "$(ls "$PRE"/inst/lib/*/std/core.a)")"
+    pass "package.sh lays out an install with lib/$(basename "$(dirname "$PRE_STD")")/std/: $(ls "$PRE_STD" | grep -c '\.units$') sections ($(ls "$PRE_STD" | sed -n 's/\.units$//p' | tr '\n' ' '))"
+else
+    fail "package.sh"
+    cat /tmp/sg_pkg.txt
+fi
 if command -v python3 >/dev/null 2>&1; then
+    PREARG=()
+    [[ "$PKG_OK" -eq 1 ]] && PREARG=(--prebuilt "$PRE_STD")
     if SAFEC="$SAFEC_BIN" SAFEGUARD_BIN="$SAFEGUARD_BIN" CLANG_BIN="$CLANG_BIN" \
-            python3 "$SAFEC_HOME/tests/std_modules/check.py" >/tmp/std_modules.txt 2>&1; then
+            python3 "$SAFEC_HOME/tests/std_modules/check.py" ${PREARG[@]+"${PREARG[@]}"} >/tmp/std_modules.txt 2>&1; then
         pass "$(head -1 /tmp/std_modules.txt)"
     else
         fail "std module completeness"
@@ -649,41 +680,59 @@ else
     echo "  [SKIP] python3 not available"
 fi
 
-# ── 5d. prebuilt std archive ─────────────────────────────────────────────────
-# A release install ships std prebuilt for its platform (package.sh, as
-# release.yml packages it): a native build with that safec links it and
-# compiles no std; a stamp naming another compiler is ignored, and std is
-# compiled from source again.
-section "prebuilt std archive"
-PRE="$(mktemp -d)"
-if bash "$SAFEC_HOME/.github/scripts/package.sh" "$PRE/inst" "$SAFEC_BIN" "$SAFEGUARD_BIN" >/tmp/sg_pkg.txt 2>&1 &&
-   ls "$PRE"/inst/lib/*/libsafec_std.a "$PRE"/inst/lib/*/libsafec_std.stamp "$PRE"/inst/lib/*/libsafec_std.units >/dev/null 2>&1; then
-    pass "package.sh lays out an install with lib/$(basename "$(dirname "$(ls "$PRE"/inst/lib/*/libsafec_std.a)")")/libsafec_std.a"
+# ── 5d. prebuilt std sections ────────────────────────────────────────────────
+# A native build with the packaged safec links the prebuilt sections holding
+# its units (core and collections for io.h + vec.h; not gui, ml, ...) and
+# compiles no std. Without a section installed (install.sh --std=...), it
+# compiles that section's units from source and links the rest; a section
+# stamped for another compiler is ignored the same way. std is compiled
+# optimized in a debug build too.
+section "prebuilt std sections"
+if [[ "$PKG_OK" -eq 1 ]]; then
     IBIN="$PRE/inst/bin/$(basename "$SAFEGUARD_BIN")"
     mkdir -p "$PRE/app/src"
     printf '[package]\nname = "pre_app"\nversion = "0.1.0"\n\n[build]\nedition = "2026"\n' > "$PRE/app/Package.toml"
     printf '#include <std/io.h>\n#include <std/collections/vec.h>\nint main() { std::println("prebuilt std ok"); return 0; }\n' \
         > "$PRE/app/src/main.sc"
     pre_build() { (cd "$PRE/app" && rm -rf build && env -u SAFEC -u SAFEC_STD_ARCHIVE SAFEC_HOME="$PRE/inst" "$IBIN" run --verbose); }
-    if pre_build >/tmp/sg_pre.txt 2>&1 && grep -q "linking the prebuilt std archive" /tmp/sg_pre.txt &&
-       grep -q "prebuilt std ok" /tmp/sg_pre.txt && [[ -z "$(ls "$PRE"/app/build/deps/std/*.o 2>/dev/null)" ]]; then
-        pass "a native build links the prebuilt std archive, compiling no std"
+    if pre_build >/tmp/sg_pre.txt 2>&1 && grep -q "linking the prebuilt std sections collections core from" /tmp/sg_pre.txt &&
+       grep -q "prebuilt std ok" /tmp/sg_pre.txt && [[ -z "$(ls "$PRE"/app/build/deps/std/*.o 2>/dev/null)" ]] &&
+       ! grep -qE 'std/(gui|ml|net)\.a' /tmp/sg_pre.txt; then
+        pass "a native build links only the prebuilt std sections it uses (core, collections), compiling no std"
     else
-        fail "a native build with the prebuilt std archive"
+        fail "a native build with the prebuilt std sections"
         cat /tmp/sg_pre.txt
     fi
-    STAMP="$(ls "$PRE"/inst/lib/*/libsafec_std.stamp)"
-    sed 's/^safec=.*/safec=0000000000000000/' "$STAMP" > "$PRE/stamp" && cp "$PRE/stamp" "$STAMP"
-    if pre_build >/tmp/sg_pre2.txt 2>&1 && grep -q "not using the prebuilt std archive.*different safec" /tmp/sg_pre2.txt &&
-       grep -q "prebuilt std ok" /tmp/sg_pre2.txt && [[ -n "$(ls "$PRE"/app/build/deps/std/*.o 2>/dev/null)" ]]; then
-        pass "a prebuilt std archive stamped for another compiler is ignored (std compiled from source)"
+    mkdir -p "$PRE/aside" && mv "$PRE_STD"/collections.* "$PRE/aside/"
+    if pre_build >/tmp/sg_pre1.txt 2>&1 &&
+       grep -q "std section 'collections' is not installed in .*compiling its units from source: std/collections/vec.sc" /tmp/sg_pre1.txt &&
+       grep -q "linking the prebuilt std sections core from" /tmp/sg_pre1.txt &&
+       grep -q "prebuilt std ok" /tmp/sg_pre1.txt &&
+       [[ "$(cd "$PRE/app/build/deps/std" && ls *.o 2>/dev/null)" == "collections_vec_sc.o" ]]; then
+        pass "a section that isn't installed is compiled from source, the others linked prebuilt"
     else
-        fail "a stale prebuilt std archive"
+        fail "a build with a std section missing"
+        cat /tmp/sg_pre1.txt
+    fi
+    if grep -E 'clang(\.exe)? -c .*collections_vec_sc\.ll' /tmp/sg_pre1.txt | grep -q -- ' -O2'; then
+        pass "std is compiled optimized (-O2) in a debug build"
+    else
+        fail "std's optimization flags in a debug build"
+        grep -E 'collections_vec_sc' /tmp/sg_pre1.txt
+    fi
+    mv "$PRE/aside"/collections.* "$PRE_STD/"
+    for u in "$PRE_STD"/*.units; do
+        sed 's/^stamp safec=.*/stamp safec=0000000000000000/' "$u" > "$PRE/stamp" && cp "$PRE/stamp" "$u"
+    done
+    if pre_build >/tmp/sg_pre2.txt 2>&1 && grep -q "not using the prebuilt std sections .*different safec" /tmp/sg_pre2.txt &&
+       grep -q "prebuilt std ok" /tmp/sg_pre2.txt && [[ -n "$(ls "$PRE"/app/build/deps/std/*.o 2>/dev/null)" ]]; then
+        pass "prebuilt std sections stamped for another compiler are ignored (std compiled from source)"
+    else
+        fail "stale prebuilt std sections"
         cat /tmp/sg_pre2.txt
     fi
 else
-    fail "package.sh"
-    cat /tmp/sg_pkg.txt
+    echo "  [SKIP] no package (see above)"
 fi
 rm -rf "$PRE"
 

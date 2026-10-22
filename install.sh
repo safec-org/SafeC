@@ -15,6 +15,8 @@ set -euo pipefail
 #  Options:
 #    --prefix=<path>   Install directory (default: ~/safec)
 #    --version=<tag>   Release tag to install (default: newest, including pre-releases)
+#    --std=<sections>  Prebuilt std sections to install (default: all);
+#                      --std=+<sections> adds sections to an existing install
 #    --skip-env        Skip shell environment configuration
 #    --help            Show this help message
 # ──────────────────────────────────────────────────────────────────────────────
@@ -38,8 +40,9 @@ error() { echo -e "${RED}[error]${RESET} $*"; }
 die()   { error "$@"; exit 1; }
 
 PREFIX=""
-VERSION="latest"
+VERSION=""
 SKIP_ENV=false
+STD="all"
 
 show_help() {
     cat <<'EOF'
@@ -51,6 +54,14 @@ Options:
   --prefix=<path>   Install directory (default: ~/safec)
   --version=<tag>   Release tag to install, e.g. v1.0.0-beta-4
                     (default: the newest release, including pre-releases)
+  --std=<sections>  The prebuilt std sections to install, comma-separated:
+                    core (std/*.sc), collections, gui, ml, crypto, net, http,
+                    dsp, fs, sync, alloc, simd, ... (std's top-level
+                    directories), or 'all' (the default). std's sources are
+                    always installed: a build that needs a section that
+                    isn't installed compiles its units from source.
+  --std=+<sections> Add prebuilt std sections to an existing install (from
+                    the release it was installed from; nothing else changes)
   --skip-env        Skip shell environment configuration
   --help            Show this help message
 
@@ -58,6 +69,8 @@ Examples:
   curl -fsSL https://raw.githubusercontent.com/safec-org/SafeC/main/install.sh | bash
   bash install.sh --prefix=/opt/safec
   bash install.sh --version=v1.0.0-beta-4
+  bash install.sh --std=core,collections,gui
+  bash install.sh --std=+ml
 EOF
     exit 0
 }
@@ -66,12 +79,32 @@ for arg in "$@"; do
     case "$arg" in
         --prefix=*)  PREFIX="${arg#*=}" ;;
         --version=*) VERSION="${arg#*=}" ;;
+        --std=*)     STD="${arg#*=}" ;;
         --skip-env)  SKIP_ENV=true ;;
         --help|-h)   show_help ;;
         *) die "Unknown option: $arg (use --help for usage)" ;;
     esac
 done
 PREFIX="${PREFIX:-${HOME}/safec}"
+
+# --std: 'all', a list of sections, or '+' and sections to add.
+ADD_STD=false
+if [[ "$STD" == +* ]]; then
+    ADD_STD=true
+    STD="${STD#+}"
+    [[ -n "$STD" && "$STD" != all ]] || die "--std=+ takes the sections to add, e.g. --std=+ml,gui"
+fi
+[[ -n "$STD" ]] || die "--std needs 'all' or a list of sections, e.g. --std=core,collections"
+[[ "$STD" =~ ^[a-z0-9_,]+$ ]] || die "--std: sections are comma-separated names, e.g. --std=core,collections"
+if $ADD_STD; then
+    # The release the install came from, so the sections match its safec.
+    [[ -x "${PREFIX}/bin/safec" ]] || die "No SafeC install in ${PREFIX} to add std sections to (use --prefix)"
+    if [[ -z "$VERSION" ]]; then
+        [[ -f "${PREFIX}/.release" ]] || die "${PREFIX} doesn't record its release; give it with --version=<tag>"
+        VERSION="$(head -1 "${PREFIX}/.release")"
+    fi
+fi
+VERSION="${VERSION:-latest}"
 
 # ── Platform detection ────────────────────────────────────────────────────────
 os="$(uname -s)"
@@ -95,6 +128,25 @@ if [[ "$ASSET" != "safec-macos-arm64.tar.gz" && "$ASSET" != "safec-linux-x86_64.
     die "No prebuilt release for ${plat_os}/${plat_arch} yet — see https://github.com/${REPO}/releases"
 fi
 info "Platform: ${BOLD}${plat_os}/${plat_arch}${RESET} → ${ASSET}"
+
+# The release binaries run on macOS 11 or newer, and on Linux with glibc
+# 2.25 or newer (release.yml builds and checks them so).
+if [[ "$plat_os" == macos ]]; then
+    macos_ver="$(sw_vers -productVersion 2>/dev/null || echo 0)"
+    if [[ "${macos_ver%%.*}" -lt 11 ]]; then
+        die "SafeC's release binaries need macOS 11 or newer (this is ${macos_ver})"
+    fi
+else
+    glibc_ver="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')"
+    if [[ -z "$glibc_ver" ]]; then
+        warn "Couldn't find glibc's version (musl?); SafeC's Linux binaries need glibc 2.25 or newer"
+    else
+        IFS=. read -r glibc_major glibc_minor _ <<< "$glibc_ver"
+        if (( glibc_major < 2 || (glibc_major == 2 && ${glibc_minor:-0} < 25) )); then
+            die "SafeC's Linux binaries need glibc 2.25 or newer (this system has ${glibc_ver})"
+        fi
+    fi
+fi
 
 command -v curl &>/dev/null || die "curl not found — required to download the release"
 command -v tar  &>/dev/null || die "tar not found — required to extract the release"
@@ -125,14 +177,65 @@ info "Downloading..."
 curl -fsSL -o "${TMPDIR}/${ASSET}" "$DOWNLOAD_URL"
 ok "Downloaded $(du -h "${TMPDIR}/${ASSET}" | cut -f1)"
 
-info "Extracting to ${BOLD}${PREFIX}${RESET}..."
-mkdir -p "$PREFIX"
 tar xzf "${TMPDIR}/${ASSET}" -C "$TMPDIR"
 EXTRACTED_DIR="$(find "$TMPDIR" -maxdepth 1 -type d -name 'safec-*')"
 [[ -n "$EXTRACTED_DIR" ]] || die "Unexpected archive layout"
+# The release's tag, from its download URL (.../releases/download/<tag>/...).
+RELEASE_TAG="$(echo "$DOWNLOAD_URL" | sed -nE 's|.*/releases/download/([^/]+)/.*|\1|p')"
+
+# The prebuilt std: lib/<triple>/std/<section>.a and .units, one pair per
+# section. The ones --std names (all by default) are installed.
+STD_SRC="$(find "${EXTRACTED_DIR}/lib" -mindepth 2 -maxdepth 2 -type d -name std 2>/dev/null | head -1)"
+SECTIONS=()
+if [[ -n "$STD_SRC" ]]; then
+    AVAILABLE="$(cd "$STD_SRC" && ls -- *.units 2>/dev/null | sed 's/\.units$//' | tr '\n' ' ')"
+    if [[ "$STD" == all ]]; then
+        read -r -a SECTIONS <<< "$AVAILABLE"
+    else
+        IFS=',' read -r -a SECTIONS <<< "$STD"
+        for s in ${SECTIONS[@]+"${SECTIONS[@]}"}; do
+            [[ -f "${STD_SRC}/${s}.units" ]] || die "No std section '${s}' in this release (sections: ${AVAILABLE})"
+        done
+    fi
+elif [[ "$STD" != all ]] || $ADD_STD; then
+    die "This release has no sectioned prebuilt std (lib/<triple>/std/); install it without --std"
+fi
+install_sections() {   # <destination lib/<triple>/std>
+    mkdir -p "$1"
+    for s in ${SECTIONS[@]+"${SECTIONS[@]}"}; do
+        cp "${STD_SRC}/${s}.units" "$1/"
+        if [[ -f "${STD_SRC}/${s}.a" ]]; then cp "${STD_SRC}/${s}.a" "$1/"; fi
+    done
+}
+
+if $ADD_STD; then
+    STD_DST="${PREFIX}/${STD_SRC#"${EXTRACTED_DIR}/"}"
+    install_sections "$STD_DST"
+    ok "Added std sections to ${STD_DST}: ${SECTIONS[*]-}"
+    INSTALLED="$(cd "$STD_DST" && ls -- *.units | sed 's/\.units$//' | tr '\n' ' ')"
+    info "Installed std sections: ${INSTALLED}"
+    exit 0
+fi
+
+info "Extracting to ${BOLD}${PREFIX}${RESET}..."
+mkdir -p "$PREFIX"
+# Everything but the prebuilt std, then the sections chosen; sections left
+# from an earlier install (another release's) are removed first.
+if [[ -n "$STD_SRC" ]]; then
+    STD_DST="${PREFIX}/${STD_SRC#"${EXTRACTED_DIR}/"}"
+    rm -rf "$STD_DST"
+    mv "$STD_SRC" "${TMPDIR}/prebuilt-std"
+    STD_SRC="${TMPDIR}/prebuilt-std"
+fi
 cp -R "${EXTRACTED_DIR}/." "$PREFIX/"
+if [[ -n "$STD_SRC" ]]; then install_sections "$STD_DST"; fi
+if [[ -n "$RELEASE_TAG" ]]; then echo "$RELEASE_TAG" > "${PREFIX}/.release"; fi
 chmod +x "${PREFIX}/bin/"* 2>/dev/null || true
 ok "Installed to ${PREFIX}"
+if [[ -n "$STD_SRC" ]]; then
+    if [[ "$STD" == all ]]; then info "Prebuilt std: all ${#SECTIONS[@]} sections"
+    else info "Prebuilt std sections: ${SECTIONS[*]-} (add more with: bash install.sh --prefix=${PREFIX} --std=+<sections>)"; fi
+fi
 
 # ── Check the installed binaries start ────────────────────────────────────────
 if ! version_out="$("${PREFIX}/bin/safec" --version 2>&1)"; then
