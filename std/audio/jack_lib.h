@@ -6,7 +6,6 @@
 // run without it. Function signatures follow <jack/jack.h> and
 // <jack/midiport.h>; jack_nframes_t is uint32, size_t is pointer width.
 #pragma once
-#if !defined(_WIN32) && !defined(__wasm__)
 #include <std/stddef.h>
 
 #define AUDIO_JACK_AUDIO_TYPE "32 bit float mono audio"
@@ -85,4 +84,3 @@ int audio_jack_load_();
 void* audio_jack_client_open_(const &char name);
 
 } // namespace std
-#endif

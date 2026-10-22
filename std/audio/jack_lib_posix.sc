@@ -6,7 +6,6 @@
 
 namespace std {
 
-#if !defined(_WIN32) && !defined(__wasm__)
 struct JackLib_ g_std_audio_jack_;
 
 // libjack prints "cannot connect to server" & co. itself; std reports
@@ -70,6 +69,5 @@ void* audio_jack_client_open_(const &char name) {
     int status = 0;
     unsafe { return g_std_audio_jack_.client_open(name, AUDIO_JACK_NO_START_SERVER, &status); }
 }
-#endif
 
 } // namespace std

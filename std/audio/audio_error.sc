@@ -10,7 +10,9 @@ unsigned long audio_strlen_(const ?&char s) {
     unsafe {
         const char* p = (const char*)s;
         if (p == (const char*)0) return 0UL;
-        while (p[n] != (char)0) n = n + 1UL;
+        // Bounded, so LLVM doesn't turn it into a strlen() call: wasm32
+        // modules have no libc to import one from.
+        while (n < 0x7FFFFFFFUL && p[n] != (char)0) n = n + 1UL;
     }
     return n;
 }

@@ -56,6 +56,8 @@ struct AlsaSeqEvent_ {
     unsigned char data[12];
 };
 
+static_assert(sizeof(struct AlsaSeqEvent_) == 28, "snd_seq_event_t is 28 bytes");
+
 typedef fn int(void**, const char*, int, int) AseqOpen_;
 typedef fn int(void*) AseqClose_;
 typedef fn int(void*, const char*) AseqSetName_;
