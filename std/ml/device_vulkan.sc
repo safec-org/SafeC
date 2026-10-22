@@ -35,13 +35,14 @@
 // vulkan-loader molten-vk, -L/opt/homebrew/lib -lvulkan).
 //
 // Requirements (else available() is 0): Vulkan 1.2 with bufferDeviceAddress,
-// shaderInt64, float atomic adds on buffers (VK_EXT_shader_atomic_float),
-// subgroup arithmetic and shuffles, and 32-wide subgroups (the device's
-// size, or one it can require: not AMD's wave64-only GCN). 16-bit storage
-// (storage16, the 16-bit GEMMs and convolutions) needs shaderInt16 and
-// storageBuffer16BitAccess; without them those decline and run in fp32.
-// MoltenVK's fast math is turned off (VK_EXT_layer_settings), so the
-// kernels round as the other backends' do.
+// shaderInt64, shaderInt16 and storageBuffer16BitAccess (16-bit values; the
+// kernels convert them in integer arithmetic, so no shaderFloat16), float
+// atomic adds on buffers (VK_EXT_shader_atomic_float), subgroup arithmetic
+// and shuffles, and 32-wide subgroups (the device's size, or one it can
+// require: not AMD's wave64-only GCN). MoltenVK's fast math is turned off
+// (VK_EXT_layer_settings), so the kernels round as the other backends' do.
+// The SPIR-V is regenerated only with Slang (gen_device_kernels.sh); using
+// the backend needs nothing but the Vulkan loader and a driver.
 //
 // Limits, against ROCm / CUDA:
 //   - no doubles in the kernels (as on Metal): the batch / group norm
@@ -237,7 +238,6 @@ extern int vkResetFences(void* device, unsigned int count, void** fences);
 #define DVK_STYPE_PROPERTIES2 1000059001
 #define DVK_STYPE_MEMORY_ALLOCATE_FLAGS 1000060000
 #define DVK_STYPE_16BIT_STORAGE 1000083000
-#define DVK_STYPE_FLOAT16_INT8 1000082000
 #define DVK_STYPE_SUBGROUP_PROPERTIES 1000094000
 #define DVK_STYPE_DRIVER_PROPERTIES 1000196000
 #define DVK_STYPE_SUBGROUP_SIZE_PROPERTIES 1000225000
@@ -344,7 +344,6 @@ static unsigned int g_dvk_family = 0U;
 static unsigned int g_dvk_memtype = 0U;     // device buffers
 static unsigned int g_dvk_hosttype = 0U;    // the staging arena
 static int g_dvk_mapped = 0;                // device buffers are host-visible
-static int g_dvk_16 = 0;                    // 16-bit storage
 static int g_dvk_full_sg = 0;               // can require full subgroups
 static int g_dvk_req_sg = 0;                // must require a subgroup size of 32
 static int g_dvk_serial = 0;                // dispatches run in order without barriers (MoltenVK)
@@ -461,7 +460,7 @@ static int dvk_instance_() {
 // What physical device pd offers; 0 if it lacks something the kernels need.
 // Fills the feature structs to enable (chained from f2) when it qualifies.
 static int dvk_qualifies_(void* pd, struct VkPhysicalDeviceFeatures2* f2, struct DvkFeat_* f16, struct DvkFeat_* bda,
-                          struct DvkFeat_* atom, struct DvkFeat_* sgc, struct DvkFeat_* hf) {
+                          struct DvkFeat_* atom, struct DvkFeat_* sgc) {
     unsafe {
         struct DvkProp_ sg;
         struct DvkProp_ sgs;
@@ -481,14 +480,15 @@ static int dvk_qualifies_(void* pd, struct VkPhysicalDeviceFeatures2* f2, struct
         f16->sType = DVK_STYPE_16BIT_STORAGE; f16->pNext = (void*)bda;
         bda->sType = DVK_STYPE_BDA_FEATURES; bda->pNext = (void*)atom;
         atom->sType = DVK_STYPE_ATOMIC_FLOAT_FEATURES; atom->pNext = (void*)sgc;
-        sgc->sType = DVK_STYPE_SUBGROUP_SIZE_FEATURES; sgc->pNext = (void*)hf;
-        hf->sType = DVK_STYPE_FLOAT16_INT8; hf->pNext = (void*)0;
-        while (i < 16U) { f16->b[i] = 0U; bda->b[i] = 0U; atom->b[i] = 0U; sgc->b[i] = 0U; hf->b[i] = 0U; i = i + 1U; }
+        sgc->sType = DVK_STYPE_SUBGROUP_SIZE_FEATURES; sgc->pNext = (void*)0;
+        while (i < 16U) { f16->b[i] = 0U; bda->b[i] = 0U; atom->b[i] = 0U; sgc->b[i] = 0U; i = i + 1U; }
         f2->sType = DVK_STYPE_FEATURES2; f2->pNext = (void*)f16;
         i = 0U;
         while (i < 55U) { f2->f[i] = 0U; i = i + 1U; }
         vkGetPhysicalDeviceFeatures2(pd, f2);
-        if (!bda->b[0] || !f2->f[DVK_F_INT64] || !atom->b[1]) return 0;   // bufferDeviceAddress, shaderInt64, shaderBufferFloat32AtomicAdd
+        // bufferDeviceAddress, shaderInt64, shaderBufferFloat32AtomicAdd, and the
+        // 16-bit loads and stores of the 16-bit kernels (and the GEMMs', for any c)
+        if (!bda->b[0] || !f2->f[DVK_F_INT64] || !atom->b[1] || !f16->b[0] || !f2->f[DVK_F_INT16]) return 0;
         int full = sgc->b[1] != 0U;                                          // computeFullSubgroups
         int need = 0;
         if (sg.v[0] != 32U) {
@@ -496,19 +496,16 @@ static int dvk_qualifies_(void* pd, struct VkPhysicalDeviceFeatures2* f2, struct
             if (!sgc->b[0] || sgs.v[0] > 32U || sgs.v[1] < 32U || (sgs.v[3] & DVK_STAGE_COMPUTE) == 0U || !full) return 0;
             need = 1;
         }
-        // what to enable: those, 16-bit storage if whole, and the subgroup controls
-        int s16 = f16->b[0] != 0U && f2->f[DVK_F_INT16] != 0U && hf->b[0] != 0U;
+        // what to enable: those and the subgroup controls
         i = 0U;
         while (i < 55U) { f2->f[i] = 0U; i = i + 1U; }
         f2->f[DVK_F_INT64] = 1U;
-        f2->f[DVK_F_INT16] = s16 ? 1U : 0U;
-        f16->b[0] = s16 ? 1U : 0U; f16->b[1] = 0U; f16->b[2] = 0U; f16->b[3] = 0U;
+        f2->f[DVK_F_INT16] = 1U;
+        f16->b[0] = 1U; f16->b[1] = 0U; f16->b[2] = 0U; f16->b[3] = 0U;
         bda->b[0] = 1U; bda->b[1] = 0U; bda->b[2] = 0U;
         i = 0U;
         while (i < 12U) { atom->b[i] = i == 1U ? 1U : 0U; i = i + 1U; }
         sgc->b[0] = need ? 1U : 0U; sgc->b[1] = full ? 1U : 0U;
-        hf->b[0] = s16 ? 1U : 0U; hf->b[1] = 0U;
-        g_dvk_16 = s16;
         g_dvk_full_sg = full;
         g_dvk_req_sg = need;
         // MoltenVK records compute dispatches into serial Metal encoders
@@ -552,19 +549,19 @@ static int dvk_ensure_() {
         vkEnumeratePhysicalDevices(g_dvk_instance, &n, pds);
         // the best qualifying device: discrete, then integrated, then any
         struct VkPhysicalDeviceFeatures2 f2;
-        struct DvkFeat_ f16; struct DvkFeat_ bda; struct DvkFeat_ atom; struct DvkFeat_ sgc; struct DvkFeat_ hf;
+        struct DvkFeat_ f16; struct DvkFeat_ bda; struct DvkFeat_ atom; struct DvkFeat_ sgc;
         int bestRank = 0;
         unsigned int best = 0U;
         unsigned int i = 0U;
         while (i < n) {
-            int r = dvk_qualifies_(pds[i], &f2, &f16, &bda, &atom, &sgc, &hf);
+            int r = dvk_qualifies_(pds[i], &f2, &f16, &bda, &atom, &sgc);
             if (r > bestRank) { bestRank = r; best = i; }
             i = i + 1U;
         }
         if (bestRank == 0) { free((void*)pds); return 0; }
         g_dvk_pd = pds[best];
         free((void*)pds);
-        dvk_qualifies_(g_dvk_pd, &f2, &f16, &bda, &atom, &sgc, &hf);   // its features to enable
+        dvk_qualifies_(g_dvk_pd, &f2, &f16, &bda, &atom, &sgc);   // its features to enable
 
         // a queue family with compute
         unsigned int nq = 0U;
@@ -747,7 +744,7 @@ static void* dvk_pipe_(int b, int k) {
     unsafe {
         int slot = b * DK_COUNT + k;
         if (g_dvk_kmod[slot] == 0) {
-            int m = (b & 1) != 0 && !g_dvk_16 ? -1 : dvk_module_(b, device_kernel_name_(k));
+            int m = dvk_module_(b, device_kernel_name_(k));
             g_dvk_kmod[slot] = m + 1 == 0 ? -1 : m + 1;
         }
         return g_dvk_kmod[slot] < 0 ? (void*)0 : dvk_pipe_at_(g_dvk_kmod[slot] - 1);
@@ -1016,7 +1013,6 @@ static int g_dvk_conv_mod[36];
 static int dvk_gemm_(const &DvkGemm_ g, unsigned long batch) {
     if (!dvk_ensure_()) return 0;
     if (g.m == 0U || g.n == 0U || batch == 0UL) return 1;
-    if (g.at != 0U && !g_dvk_16) return 0;   // 16-bit operands need 16-bit storage
     unsigned long m = (unsigned long)g.m;
     unsigned long n = (unsigned long)g.n;
     unsigned long tile = 32UL;
@@ -1256,7 +1252,6 @@ int VulkanBackend::gemm_batched(const &DevGemm g) {
     r.m = (unsigned int)g.m; r.n = (unsigned int)g.n; r.k = (unsigned int)g.k;
     r.ta = (unsigned int)g.ta; r.tb = (unsigned int)g.tb; r.at = (unsigned int)g.dtype; r.ct = (unsigned int)g.ctype;
     r.alpha = g.alpha; r.beta = g.beta;
-    if (r.ct != 0U && !g_dvk_16) return 0;
     return dvk_gemm_(&r, g.batch);
 }
 
@@ -1268,7 +1263,6 @@ int VulkanBackend::gemm_batched(const &DevGemm g) {
 // input and output swapped.
 int VulkanBackend::conv(const &DevConv c) {
     if (!dvk_ensure_() || c.dtype < DEVICE_FP32 || c.dtype > DEVICE_BF16) return 0;
-    if (c.dtype != DEVICE_FP32 && !g_dvk_16) return 0;
     struct DvkConv_ k;
     k.w = c.w; k.B = (unsigned int)c.batch;
     k.kH = (unsigned int)c.kH; k.kW = (unsigned int)c.kW; k.sH = (unsigned int)c.sH; k.sW = (unsigned int)c.sW;
@@ -1321,10 +1315,7 @@ int VulkanBackend::conv(const &DevConv c) {
     unsafe { return dvk_dispatch_(pipe, (const void*)&k, sizeof(struct DvkConv_), groupsX, groupsY, splits); }
 }
 
-int VulkanBackend::storage16() {
-    if (!dvk_ensure_()) return 0;
-    return g_dvk_16;
-}
+int VulkanBackend::storage16() { return dvk_ensure_(); }
 
 int VulkanBackend::launch(int kernel, unsigned long n, const &DevArgs args) {
     if (!dvk_ensure_() || kernel < 0 || kernel >= DK_COUNT) return 0;
