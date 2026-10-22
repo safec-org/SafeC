@@ -1,6 +1,7 @@
 // The GPU device backends (device.h) against the CPU: every training
 // workload of test_ml_device.sc, attention's gradients (the fused kernels and
-// the composed ops), and the sparse product, on CHECK_DEVICE.
+// the composed ops), convolutions' gradients, and the sparse product, on
+// CHECK_DEVICE.
 // Built by tests/stdlib/{rocm,cuda,mps}/run.sh with the backend's feature
 // define (-DSAFEC_FEATURE_ROCM=1 -DCHECK_DEVICE=DEVICE_ROCM, ...), which is
 // what links the backend in. Prints one line per check and exits nonzero on
@@ -533,6 +534,132 @@ void check_attention_() {
     Q.free(); K.free(); V.free(); W.free();
 }
 
+// ── Convolutions: the device's outputs and gradients = the CPU's ─────────────
+// Plain and transposed convolutions over shapes that reach every path of a
+// backend's convolutions: one input channel, channel counts that are
+// multiples of 16, stride 2, dilation, a 1x1 projection, one output channel,
+// and products wide enough for the bigger tiles; in fp32 (2e-4), then with
+// fp16 and bf16 storage (5%), each against the largest value (cv_err_).
+struct ConvCase_ {
+    int transpose;
+    unsigned long batch; unsigned long inC; unsigned long side; unsigned long outC;
+    unsigned long k; unsigned long stride; unsigned long pad; unsigned long dil;
+};
+
+static struct ConvCase_ conv_case_(int t, unsigned long b, unsigned long inC, unsigned long side, unsigned long outC,
+                                   unsigned long k, unsigned long stride, unsigned long pad, unsigned long dil) {
+    struct ConvCase_ c;
+    c.transpose = t; c.batch = b; c.inC = inC; c.side = side; c.outC = outC;
+    c.k = k; c.stride = stride; c.pad = pad; c.dil = dil;
+    return c;
+}
+
+static &FloatTensor cv_out_(const &ConvCase_ c, &FloatTensor x, &FloatTensor w, &FloatTensor b) {
+    struct Conv2dSpec s = Conv2dSpec::new(c.k, c.stride, c.pad);
+    s.dilationH = c.dil; s.dilationW = c.dil;
+    if (c.transpose) return tensor_conv_transpose2d_ex(x, w, b, c.inC, c.side, c.side, &s);
+    return tensor_conv2d_ex(x, w, b, c.inC, c.side, c.side, &s);
+}
+
+// The worst difference relative to the tensor's scale (1 + its largest
+// value): a gradient summed over thousands of 16-bit products cancels to
+// near 0 in places, where per-element relative error means nothing.
+static float cv_err_(const &float a, const &float b, unsigned long n) {
+    float worst = (float)0.0;
+    float scale = (float)1.0;
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < n) {
+            float d = absf_(a[i] - b[i]);
+            if (d > worst) worst = d;
+            if (absf_(a[i]) + (float)1.0 > scale) scale = absf_(a[i]) + (float)1.0;
+            i = i + 1UL;
+        }
+    }
+    return worst / scale;
+}
+
+static void cv_values_(&FloatTensor t, &float out) {
+    unsafe { tensor_host_((void*)t); unsigned long i = 0UL; while (i < t->size) { out[i] = t->data[i]; i = i + 1UL; } }
+}
+
+void check_conv_() {
+    struct ConvCase_ cases[10];
+    cases[0] = conv_case_(0, 3UL, 1UL, 13UL, 16UL, 3UL, 1UL, 1UL, 1UL);    // one input channel
+    cases[1] = conv_case_(0, 4UL, 16UL, 32UL, 32UL, 3UL, 1UL, 1UL, 1UL);   // channels by 16, wide products
+    cases[2] = conv_case_(0, 3UL, 32UL, 9UL, 64UL, 3UL, 2UL, 1UL, 1UL);    // stride 2, odd side
+    cases[3] = conv_case_(0, 2UL, 16UL, 10UL, 16UL, 3UL, 1UL, 2UL, 2UL);   // dilation 2
+    cases[4] = conv_case_(0, 3UL, 32UL, 8UL, 8UL, 1UL, 2UL, 0UL, 1UL);     // 1x1 projection
+    cases[5] = conv_case_(1, 3UL, 32UL, 7UL, 16UL, 4UL, 2UL, 1UL, 1UL);    // transposed, stride 2
+    cases[6] = conv_case_(1, 4UL, 16UL, 16UL, 1UL, 4UL, 2UL, 1UL, 1UL);    // transposed to one channel
+    cases[7] = conv_case_(1, 2UL, 8UL, 5UL, 16UL, 3UL, 1UL, 0UL, 1UL);     // transposed, stride 1
+    cases[8] = conv_case_(0, 8UL, 64UL, 16UL, 64UL, 3UL, 1UL, 1UL, 1UL);   // big tiles
+    cases[9] = conv_case_(0, 3UL, 16UL, 11UL, 48UL, 3UL, 1UL, 1UL, 1UL);   // 48 output channels
+    struct Rng rng = Rng::new(16UL);
+    int pick = device_set_precision_pick(DEVICE_PICK_ALWAYS);
+    int ci = 0;
+    while (ci < 10) {
+        struct ConvCase_ c;
+        unsafe { c = cases[ci]; }
+        unsigned long kk = c.k * c.k;
+        &FloatTensor x = FloatTensor::new_2d(c.batch, c.inC * c.side * c.side, 1);
+        &FloatTensor w = c.transpose ? FloatTensor::new_2d(c.inC, c.outC * kk, 1) : FloatTensor::new_2d(c.outC, c.inC * kk, 1);
+        &FloatTensor b = FloatTensor::new_1d(c.outC, 1);
+        rng.fill_normal(x, (float)0.0, (float)1.0);
+        rng.fill_uniform(w, (float)-0.3, (float)0.3);
+        rng.fill_normal(b, (float)0.0, (float)0.1);
+        &FloatTensor o = cv_out_(&c, x, w, b);
+        unsigned long no;
+        unsafe { no = o->size; }
+        &FloatTensor R = FloatTensor::new_2d(c.batch, no / c.batch, 0);
+        rng.fill_normal(R, (float)0.0, (float)1.0);
+        tensor_mul(o, R).sum().backward();
+        unsigned long nx; unsigned long nw;
+        unsafe { nx = x->size; nw = w->size; }
+        float* want;
+        float* got;
+        unsafe {
+            want = (float*)malloc(4UL * (no + nx + nw + c.outC));
+            got = (float*)malloc(4UL * (no + nx + nw + c.outC));
+            cv_values_(o, (&float)want);
+            at_grads_(x, (&float)&want[no]); at_grads_(w, (&float)&want[no + nx]); at_grads_(b, (&float)&want[no + nx + nw]);
+        }
+        int prec = DEVICE_FP32;
+        while (prec <= DEVICE_BF16) {
+            device_set_precision(CHECK_DEVICE, prec);
+            x.zero_grad(); w.zero_grad(); b.zero_grad();
+            x.place(CHECK_DEVICE); w.place(CHECK_DEVICE); b.place(CHECK_DEVICE);
+            &FloatTensor od = cv_out_(&c, x, w, b);
+            int on = od.device() == CHECK_DEVICE;
+            tensor_mul(od, R).sum().backward();
+            unsafe { cv_values_(od, (&float)got); }
+            x.place(DEVICE_CPU); w.place(DEVICE_CPU); b.place(DEVICE_CPU);
+            device_set_precision(CHECK_DEVICE, DEVICE_FP32);
+            float eo; float ex; float ew; float eb;
+            unsafe {
+                at_grads_(x, (&float)&got[no]); at_grads_(w, (&float)&got[no + nx]); at_grads_(b, (&float)&got[no + nx + nw]);
+                eo = cv_err_((const &float)want, (const &float)got, no);
+                ex = cv_err_((const &float)&want[no], (const &float)&got[no], nx);
+                ew = cv_err_((const &float)&want[no + nx], (const &float)&got[no + nx], nw);
+                eb = cv_err_((const &float)&want[no + nx + nw], (const &float)&got[no + nx + nw], c.outC);
+            }
+            float tol = prec == DEVICE_FP32 ? (float)2e-4 : (float)0.05;
+            print("  conv "); print(prec == DEVICE_FP32 ? "fp32" : (prec == DEVICE_FP16 ? "fp16" : "bf16"));
+            print(c.transpose ? " transposed " : " "); print_int((long long)c.inC); print("->"); print_int((long long)c.outC);
+            print(" side "); print_int((long long)c.side); print(" k"); print_int((long long)c.k); print(" s");
+            print_int((long long)c.stride); print(" p"); print_int((long long)c.pad); print(" d"); print_int((long long)c.dil);
+            print(" batch "); print_int((long long)c.batch); print(": output "); print_float((double)eo);
+            print(", dx "); print_float((double)ex); print(", dw "); print_float((double)ew); print(", db "); println_float((double)eb);
+            check_("convolution", on && eo < tol && ex < tol && ew < tol && eb < tol);
+            prec = prec + 1;
+        }
+        unsafe { free((void*)want); free((void*)got); }
+        x.free(); w.free(); b.free(); R.free();
+        ci = ci + 1;
+    }
+    device_set_precision_pick(pick);
+}
+
 // ── Sparse tensors ───────────────────────────────────────────────────────────
 static float sp_loss_(const &SparseTensor A, &FloatTensor X, &FloatTensor W) {
     return tensor_mul(tensor_spmm(A, X).tanh(), W).sum().at1(0UL);
@@ -621,6 +748,7 @@ int main() {
     if (!device_available(CHECK_DEVICE)) { println("  FAIL  backend not available (feature, library or GPU missing)"); return 1; }
     check_training_();
     check_attention_();
+    check_conv_();
     check_sparse_();
     // every kernel and GEMM above ran on the GPU, none on the CPU (device_ref)
     struct DeviceStats st = device_stats(CHECK_DEVICE);
