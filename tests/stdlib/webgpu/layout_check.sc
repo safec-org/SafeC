@@ -148,10 +148,6 @@ int main() {
           printf(" layout@%lu", (unsigned long)&v.layout - b);
           printf(" compute@%lu", (unsigned long)&v.compute - b);
           printf("\n"); }
-        { struct WGPUFutureWaitInfo v; unsigned long b = (unsigned long)&v; printf("WGPUFutureWaitInfo %lu", (unsigned long)sizeof(struct WGPUFutureWaitInfo));
-          printf(" future@%lu", (unsigned long)&v.future - b);
-          printf(" completed@%lu", (unsigned long)&v.completed - b);
-          printf("\n"); }
     }
     return 0;
 }

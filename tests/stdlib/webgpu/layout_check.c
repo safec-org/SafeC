@@ -147,9 +147,5 @@ int main(void) {
       printf(" layout@%zu", offsetof(WGPUComputePipelineDescriptor, layout));
       printf(" compute@%zu", offsetof(WGPUComputePipelineDescriptor, compute));
       printf("\n"); }
-    { WGPUFutureWaitInfo v; printf("WGPUFutureWaitInfo %zu", sizeof(v));
-      printf(" future@%zu", offsetof(WGPUFutureWaitInfo, future));
-      printf(" completed@%zu", offsetof(WGPUFutureWaitInfo, completed));
-      printf("\n"); }
     return 0;
 }

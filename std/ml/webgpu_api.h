@@ -12,9 +12,8 @@
 // by value; SafeC passes and receives structs by value with the platform's C
 // ABI, so the callback types below take it as one.
 //
-// wgpu-native extensions (wgpu.h) are declared at the end and used in one
-// place each; see device_webgpu.sc's header comment for what Dawn uses
-// instead.
+// The one wgpu-native extension used (wgpu.h's wgpuDevicePoll) is declared
+// at the end; see device_webgpu.sc's header comment for Dawn.
 #include <std/stddef.h>
 
 namespace std {
@@ -41,12 +40,11 @@ struct WGPUFuture {
 #define WGPU_POWER_HIGH_PERFORMANCE 2
 #define WGPU_REQUEST_STATUS_SUCCESS 1        // adapter, device, map, work done
 #define WGPU_STATUS_SUCCESS 1
-#define WGPU_WAIT_STATUS_SUCCESS 1
-#define WGPU_INSTANCE_FEATURE_TIMED_WAIT_ANY 1
 #define WGPU_FEATURE_SHADER_F16 11
 #define WGPU_FEATURE_SUBGROUPS 18
 #define WGPU_BUFFER_BINDING_UNIFORM 2
 #define WGPU_BUFFER_BINDING_STORAGE 3
+#define WGPU_BUFFER_BINDING_READ_ONLY_STORAGE 4
 #define WGPU_BUFFER_USAGE_MAP_READ 1UL
 #define WGPU_BUFFER_USAGE_MAP_WRITE 2UL
 #define WGPU_BUFFER_USAGE_COPY_SRC 4UL
@@ -266,18 +264,12 @@ struct WGPUComputePipelineDescriptor {
     void* layout;
     struct WGPUComputeState compute;
 };
-struct WGPUFutureWaitInfo {
-    struct WGPUFuture future;
-    unsigned int completed;
-};
 
 // ── Functions ────────────────────────────────────────────────────────────────
 extern void* wgpuCreateInstance(const struct WGPUInstanceDescriptor* descriptor);
 extern struct WGPUFuture wgpuInstanceRequestAdapter(void* instance, const struct WGPURequestAdapterOptions* options,
                                                     struct WGPURequestAdapterCallbackInfo callbackInfo);
 extern void wgpuInstanceProcessEvents(void* instance);
-extern int wgpuInstanceWaitAny(void* instance, unsigned long futureCount, struct WGPUFutureWaitInfo* futures,
-                               unsigned long timeoutNS);
 extern struct WGPUFuture wgpuAdapterRequestDevice(void* adapter, const struct WGPUDeviceDescriptor* descriptor,
                                                   struct WGPURequestDeviceCallbackInfo callbackInfo);
 extern int wgpuAdapterGetLimits(void* adapter, struct WGPULimits* limits);
@@ -318,10 +310,9 @@ extern const void* wgpuBufferGetConstMappedRange(void* buffer, unsigned long off
 extern void wgpuBufferUnmap(void* buffer);
 
 // ── wgpu-native extensions (wgpu.h) ──────────────────────────────────────────
-// Submits like wgpuQueueSubmit and returns the submission's index.
-extern unsigned long wgpuQueueSubmitForIndex(void* queue, unsigned long commandCount, void* const* commands);
-// Runs the device's callbacks and maintenance; with wait, first blocks until
-// submission *index (every submission when null) is done. 1 when the queue is empty.
+// Runs the device's maintenance (finished work, mapped buffers) so the
+// instance's callbacks can fire; with wait, first blocks until submission
+// *index (every submission when null) is done. 1 when the queue is empty.
 extern unsigned int wgpuDevicePoll(void* device, unsigned int wait, const unsigned long* submissionIndex);
 
 } // namespace std

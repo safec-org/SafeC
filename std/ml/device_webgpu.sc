@@ -9,14 +9,16 @@
 // implicit GEMMs (wk_conv, through conv()) and copies (wk_copy).
 //
 // Memory is one storage buffer, the heap, bound to every kernel twice (as
-// words and as atomic words) along with a uniform buffer of arguments. A
-// handle is a byte offset into the heap, so a handle plus a byte offset is
+// words and as atomic words: bind group 0, set once per compute pass). A
+// handle is a byte offset into it, so a handle plus a byte offset is
 // another handle and the optimizer's tables of handles work as they do on
-// ROCm; a kernel's DevArgs travel as 32 words (offsets, their element types,
-// u, f) at a 256-byte aligned dynamic offset of the uniform buffer. The heap
-// is a buddy allocator over power-of-two blocks from 256 bytes (device.sc's
-// cache asks for those sizes anyway); it starts at 64 MiB and doubles when
-// full, the GPU copying the old contents over, so handles stay valid.
+// ROCm. A kernel's DevArgs travel as 32 words (offsets, their element types,
+// u, f) at a 256-byte aligned dynamic offset of a uniform ring (bind group
+// 1: rebinding only it per dispatch costs the GPU no more than not
+// rebinding). The heap is a buddy allocator over power-of-two blocks from
+// 256 bytes (device.sc's cache asks for those sizes anyway); it starts at
+// 64 MiB and doubles when full, the GPU copying the old contents over, so
+// handles stay valid.
 //
 // Work is encoded into one compute pass at a time and submitted every
 // DWG_BATCH dispatches without waiting (WebGPU orders a pass's dispatches
@@ -24,9 +26,10 @@
 // when it reads (download, sync) and when DWG_FLIGHT command buffers are in
 // flight. Uploads go straight to the queue (wgpuQueueWriteBuffer, ordered
 // after the work submitted before them) unless the open command buffer has
-// work: then a small one travels through a staging buffer and a copy
-// recorded in order, and a large one submits first. Downloads copy into a
-// mappable buffer and map it.
+// work: then a small one travels with it, in a ring of host data written
+// once per submit, and a dispatch (wk_upload) writes it in order, as on
+// Metal; a large one submits first. Downloads copy into a mappable buffer
+// and map it.
 //
 // Linking: the webgpu feature (SAFEC_FEATURE_WEBGPU) registers the backend;
 // the program links a WebGPU implementation, for wgpu-native
@@ -37,12 +40,14 @@
 // webgpu.h revision with WGPUStringView and callback-info structs;
 // webgpu_api.h's layouts are checked against v29). Nothing here hard-codes
 // where it is installed; tests/stdlib/webgpu/run.sh takes WGPU_NATIVE_DIR.
-// Waiting uses one wgpu-native extension, wgpuDevicePoll (with
-// wgpuQueueSubmitForIndex), because wgpu-native doesn't implement
-// wgpuInstanceWaitAny. Dawn exports no wgpuDevicePoll: build with
-// -DSAFEC_WEBGPU_DAWN=1 (and link -lwebgpu_dawn) to wait through the
-// standard wgpuInstanceWaitAny on work-done and map futures instead (not
-// run here: no Dawn build on this machine).
+//
+// The host waits by running the instance's callbacks (work done, buffer
+// mapped) with the device polled without blocking: wgpu-native's one
+// extension used here, wgpuDevicePoll (a blocking poll sleeps about a
+// millisecond per wait on Metal). Dawn exports no wgpuDevicePoll and checks
+// the device in wgpuInstanceProcessEvents itself: build with
+// -DSAFEC_WEBGPU_DAWN=1 and link -lwebgpu_dawn (not run here: no Dawn build
+// on this machine).
 //
 // Limits, against ROCm / CUDA:
 //   - Device memory is at most one storage binding: the largest power of two
@@ -88,7 +93,7 @@ extern long  write(int fd, const void* buf, unsigned long n);
 #define DWG_UNIT_SHIFT 8UL            // heap blocks: powers of two from 256 bytes
 #define DWG_HEAP_START (1UL << 26)    // 64 MiB at first
 #define DWG_HEAP_LIMIT (1UL << 31)    // offsets stay below 2^31
-#define DWG_STAGE_BYTES (1UL << 20)   // staging per command buffer for uploads queued behind its work
+#define DWG_DATA_BYTES (1UL << 20)    // per command buffer: the host data its uploads carry
 #define DWG_INLINE_BYTES (1UL << 16)  // uploads up to this size travel with the open command buffer
 #define DWG_ATTN_T 8UL                // device_kernels.wgsl's attention tile for head dims up to 128 ...
 #define DWG_ATTN16_T 16UL             // ... and up to 64
@@ -101,9 +106,10 @@ static void* g_dwg_adapter = (void*)0;
 static void* g_dwg_dev = (void*)0;
 static void* g_dwg_queue = (void*)0;
 static void* g_dwg_module = (void*)0;
-static void* g_dwg_bgl = (void*)0;
+static void* g_dwg_bgl[2];               // group 0: the heap; group 1: the arguments
 static void* g_dwg_layout = (void*)0;
-static void* g_dwg_bg = (void*)0;
+static void* g_dwg_bg = (void*)0;        // the heap's bind group (remade when it grows)
+static void* g_dwg_abg = (void*)0;       // the arguments' (one dynamic offset per dispatch)
 static unsigned long g_dwg_errors = 0UL;   // errors the device reported
 static int g_dwg_req_done = 0;
 static void* g_dwg_req_result = (void*)0;
@@ -125,7 +131,8 @@ static unsigned long g_dwg_capfree[32];
 // its dispatches (host copy of its slot of the uniform ring), its staging.
 static void* g_dwg_args = (void*)0;              // uniform: DWG_FLIGHT slots of DWG_BATCH arguments
 static unsigned char* g_dwg_args_host = (unsigned char*)0;
-static void* g_dwg_stage = (void*)0;             // DWG_FLIGHT slots of DWG_STAGE_BYTES
+static void* g_dwg_data = (void*)0;              // DWG_FLIGHT slots of DWG_DATA_BYTES (group 0's D)
+static unsigned char* g_dwg_data_host = (unsigned char*)0;
 static void* g_dwg_rb = (void*)0;                // mappable readback buffer
 static unsigned long g_dwg_rb_bytes = 0UL;
 static void* g_dwg_enc = (void*)0;
@@ -133,10 +140,11 @@ static void* g_dwg_pass = (void*)0;
 static void* g_dwg_last_pipe = (void*)0;
 static unsigned long g_dwg_nargs = 0UL;          // dispatches in the open command buffer
 static unsigned long g_dwg_pending = 0UL;        // commands (dispatches, copies) in it
-static unsigned long g_dwg_stage_used = 0UL;
+static unsigned long g_dwg_data_used = 0UL;      // bytes of the open command buffer's data slot
 static unsigned long g_dwg_slot = 0UL;
-static unsigned long g_dwg_sub[DWG_FLIGHT];      // per slot: 1 + its last submission (index or future), 0 = none
-static unsigned long g_dwg_last_sub = 0UL;       // 1 + the last submission
+static unsigned long g_dwg_sub[DWG_FLIGHT];      // per slot: the serial of its last submission, 0 = none
+static unsigned long g_dwg_serial = 0UL;         // the last submission's serial (from 1)
+static unsigned long g_dwg_done = 0UL;           // every submission up to this serial is done
 static int g_dwg_map_done = 0;
 static int g_dwg_map_status = 0;
 
@@ -151,6 +159,7 @@ static int   g_dwg_gemm_state[36];
 static void* g_dwg_conv[27];             // wk_conv per op, tile rows and element type
 static int   g_dwg_conv_state[27];
 static void* g_dwg_copy = (void*)0;
+static void* g_dwg_upload = (void*)0;
 static void* g_dwg_map = (void*)0;
 
 static unsigned long dwg_strlen_(const char* s) {
@@ -195,40 +204,47 @@ static void dwg_on_map_(int status, struct WGPUStringView msg, void* u1, void* u
     g_dwg_map_status = status;
     g_dwg_map_done = 1;
 }
-static void dwg_on_done_(int status, struct WGPUStringView msg, void* u1, void* u2) { }
 
-// ── Waiting (the one place the backend needs more than webgpu.h) ─────────────
-// Submits a command buffer; returns 1 + something dwg_wait_for_ can wait on.
-static unsigned long dwg_queue_submit_(void* cb) {
+// ── Waiting ──────────────────────────────────────────────────────────────────
+// The host waits by running the instance's callbacks until a work-done or
+// map callback has fired, polling the device without blocking: a blocking
+// wgpuDevicePoll sleeps in steps of about a millisecond on Metal, against
+// a quarter of one for a readback this way.
+static void dwg_on_done_(int status, struct WGPUStringView msg, void* u1, void* u2) {
+    unsigned long s = (unsigned long)u1;
+    if (s > g_dwg_done) g_dwg_done = s;
+}
+
+// One round of the instance's callbacks. wgpu-native first needs the device
+// polled (its one extension used here, wgpu.h's wgpuDevicePoll); Dawn's
+// wgpuInstanceProcessEvents checks the device itself.
+static void dwg_tick_() {
     unsafe {
-#if defined(SAFEC_WEBGPU_DAWN)
-        wgpuQueueSubmit(g_dwg_queue, 1UL, (void* const*)&cb);
-        struct WGPUQueueWorkDoneCallbackInfo info;
-        memset((void*)&info, 0, sizeof(struct WGPUQueueWorkDoneCallbackInfo));
-        info.mode = WGPU_CALLBACK_MODE_WAIT_ANY_ONLY;
-        info.callback = dwg_on_done_;
-        struct WGPUFuture f = wgpuQueueOnSubmittedWorkDone(g_dwg_queue, info);
-        return f.id + 1UL;
-#else
-        return wgpuQueueSubmitForIndex(g_dwg_queue, 1UL, (void* const*)&cb) + 1UL;
+#if !defined(SAFEC_WEBGPU_DAWN)
+        wgpuDevicePoll(g_dwg_dev, 0U, (const unsigned long*)0);
 #endif
+        wgpuInstanceProcessEvents(g_dwg_inst);
     }
 }
 
-// Blocks until submission s (from dwg_queue_submit_) is done.
-static void dwg_wait_for_(unsigned long s) {
-    if (s == 0UL) return;
+// Submits a command buffer; returns its serial, which dwg_wait_for_ waits on.
+static unsigned long dwg_queue_submit_(void* cb) {
+    g_dwg_serial = g_dwg_serial + 1UL;
     unsafe {
-#if defined(SAFEC_WEBGPU_DAWN)
-        struct WGPUFutureWaitInfo w;
-        w.future.id = s - 1UL;
-        w.completed = 0U;
-        wgpuInstanceWaitAny(g_dwg_inst, 1UL, &w, 0xffffffffffffffffUL);
-#else
-        unsigned long idx = s - 1UL;
-        wgpuDevicePoll(g_dwg_dev, 1U, &idx);
-#endif
+        wgpuQueueSubmit(g_dwg_queue, 1UL, (void* const*)&cb);
+        struct WGPUQueueWorkDoneCallbackInfo info;
+        memset((void*)&info, 0, sizeof(struct WGPUQueueWorkDoneCallbackInfo));
+        info.mode = WGPU_CALLBACK_MODE_ALLOW_PROCESS_EVENTS;
+        info.callback = dwg_on_done_;
+        info.userdata1 = (void*)g_dwg_serial;
+        wgpuQueueOnSubmittedWorkDone(g_dwg_queue, info);
     }
+    return g_dwg_serial;
+}
+
+// Returns once submission s (and every one before it) is done.
+static void dwg_wait_for_(unsigned long s) {
+    while (g_dwg_done < s) dwg_tick_();
 }
 
 // Maps the readback buffer's first 'bytes' and waits for it; 1 on success.
@@ -238,25 +254,12 @@ static int dwg_map_readback_(unsigned long bytes) {
     unsafe {
         struct WGPUBufferMapCallbackInfo info;
         memset((void*)&info, 0, sizeof(struct WGPUBufferMapCallbackInfo));
-        info.callback = dwg_on_map_;
-#if defined(SAFEC_WEBGPU_DAWN)
-        info.mode = WGPU_CALLBACK_MODE_WAIT_ANY_ONLY;
-        struct WGPUFutureWaitInfo w;
-        w.future = wgpuBufferMapAsync(g_dwg_rb, WGPU_MAP_MODE_READ, 0UL, bytes, info);
-        w.completed = 0U;
-        wgpuInstanceWaitAny(g_dwg_inst, 1UL, &w, 0xffffffffffffffffUL);
-#else
         info.mode = WGPU_CALLBACK_MODE_ALLOW_PROCESS_EVENTS;
+        info.callback = dwg_on_map_;
         wgpuBufferMapAsync(g_dwg_rb, WGPU_MAP_MODE_READ, 0UL, bytes, info);
-        int iter = 0;
-        while (!g_dwg_map_done && iter < DWG_POLL_CAP) {
-            wgpuDevicePoll(g_dwg_dev, 1U, (const unsigned long*)0);
-            wgpuInstanceProcessEvents(g_dwg_inst);
-            iter = iter + 1;
-        }
-#endif
     }
-    return g_dwg_map_done && g_dwg_map_status == WGPU_REQUEST_STATUS_SUCCESS;
+    while (!g_dwg_map_done) dwg_tick_();
+    return g_dwg_map_status == WGPU_REQUEST_STATUS_SUCCESS;
 }
 
 // Runs the instance's callbacks until a request's has fired.
@@ -286,18 +289,19 @@ static void* dwg_buffer_(unsigned long bytes, unsigned long usage) {
     }
 }
 
-// (Re)binds the heap and the arguments: the one bind group every kernel uses.
+// (Re)binds the heap: group 0 of every kernel, as words and as atomic words,
+// with the uploads' data ring.
 static int dwg_bind_() {
     unsafe {
         struct WGPUBindGroupEntry e[3];
         memset((void*)&e[0], 0, sizeof(struct WGPUBindGroupEntry) * 3UL);
-        e[0].binding = 0U; e[0].buffer = g_dwg_args; e[0].offset = 0UL; e[0].size = DWG_ARG_WORDS * 4UL;
+        e[0].binding = 0U; e[0].buffer = g_dwg_heap; e[0].offset = 0UL; e[0].size = g_dwg_heap_bytes;
         e[1].binding = 1U; e[1].buffer = g_dwg_heap; e[1].offset = 0UL; e[1].size = g_dwg_heap_bytes;
-        e[2].binding = 2U; e[2].buffer = g_dwg_heap; e[2].offset = 0UL; e[2].size = g_dwg_heap_bytes;
+        e[2].binding = 2U; e[2].buffer = g_dwg_data; e[2].offset = 0UL; e[2].size = DWG_FLIGHT * DWG_DATA_BYTES;
         struct WGPUBindGroupDescriptor d;
         memset((void*)&d, 0, sizeof(struct WGPUBindGroupDescriptor));
         d.label = dwg_sv_("safec heap");
-        d.layout = g_dwg_bgl;
+        d.layout = g_dwg_bgl[0];
         d.entryCount = 3UL;
         d.entries = (const struct WGPUBindGroupEntry*)&e[0];
         unsigned long before = g_dwg_errors;
@@ -307,6 +311,25 @@ static int dwg_bind_() {
         g_dwg_bg = bg;
     }
     return 1;
+}
+
+// Binds the arguments' ring: group 1, one dynamic offset per dispatch (only
+// this group changes between dispatches).
+static int dwg_bind_args_() {
+    unsafe {
+        struct WGPUBindGroupEntry e;
+        memset((void*)&e, 0, sizeof(struct WGPUBindGroupEntry));
+        e.binding = 0U; e.buffer = g_dwg_args; e.offset = 0UL; e.size = DWG_ARG_WORDS * 4UL;
+        struct WGPUBindGroupDescriptor d;
+        memset((void*)&d, 0, sizeof(struct WGPUBindGroupDescriptor));
+        d.label = dwg_sv_("safec arguments");
+        d.layout = g_dwg_bgl[1];
+        d.entryCount = 1UL;
+        d.entries = (const struct WGPUBindGroupEntry*)&e;
+        unsigned long before = g_dwg_errors;
+        g_dwg_abg = wgpuDeviceCreateBindGroup(g_dwg_dev, &d);
+        return g_dwg_abg != (void*)0 && g_dwg_errors == before;
+    }
 }
 
 static void dwg_push_free_(unsigned long order, unsigned long unit) {
@@ -383,9 +406,13 @@ static void dwg_end_pass_() {
 static int dwg_pass_() {
     if (g_dwg_pass != (void*)0) return 1;
     if (!dwg_encoder_()) return 0;
-    unsafe { g_dwg_pass = wgpuCommandEncoderBeginComputePass(g_dwg_enc, (const void*)0); }
+    unsafe {
+        g_dwg_pass = wgpuCommandEncoderBeginComputePass(g_dwg_enc, (const void*)0);
+        if (g_dwg_pass == (void*)0) return 0;
+        wgpuComputePassEncoderSetBindGroup(g_dwg_pass, 0U, g_dwg_bg, 0UL, (const unsigned int*)0);
+    }
     g_dwg_last_pipe = (void*)0;
-    return g_dwg_pass != (void*)0;
+    return 1;
 }
 
 // Submits the open command buffer (no wait); the next one takes the next
@@ -402,14 +429,17 @@ static void dwg_submit_() {
             unsigned long off = g_dwg_slot * DWG_BATCH * DWG_ARG_STRIDE;
             wgpuQueueWriteBuffer(g_dwg_queue, g_dwg_args, off, (const void*)(g_dwg_args_host + off), g_dwg_nargs * DWG_ARG_STRIDE);
         }
+        if (g_dwg_data_used > 0UL) {
+            unsigned long off = g_dwg_slot * DWG_DATA_BYTES;
+            wgpuQueueWriteBuffer(g_dwg_queue, g_dwg_data, off, (const void*)(g_dwg_data_host + off), g_dwg_data_used);
+        }
         unsigned long s = dwg_queue_submit_(cb);
         wgpuCommandBufferRelease(cb);
         g_dwg_sub[g_dwg_slot] = s;
-        g_dwg_last_sub = s;
         g_dwg_slot = (g_dwg_slot + 1UL) % DWG_FLIGHT;
         g_dwg_nargs = 0UL;
         g_dwg_pending = 0UL;
-        g_dwg_stage_used = 0UL;
+        g_dwg_data_used = 0UL;
         if (g_dwg_sub[g_dwg_slot] != 0UL) {
             dwg_wait_for_(g_dwg_sub[g_dwg_slot]);
             g_dwg_sub[g_dwg_slot] = 0UL;
@@ -420,10 +450,7 @@ static void dwg_submit_() {
 // Submits and waits for everything queued; 0 if the device reported an error.
 static int dwg_wait_() {
     dwg_submit_();
-    dwg_wait_for_(g_dwg_last_sub);
-    unsigned long i = 0UL;
-    unsafe { while (i < DWG_FLIGHT) { g_dwg_sub[i] = 0UL; i = i + 1UL; } }
-    g_dwg_last_sub = 0UL;
+    dwg_wait_for_(g_dwg_serial);
     return g_dwg_errors == 0UL;
 }
 
@@ -439,7 +466,7 @@ static int dwg_dispatch_(void* pipe, const unsigned int* words, unsigned long gx
             g_dwg_last_pipe = pipe;
         }
         unsigned int doff = (unsigned int)off;
-        wgpuComputePassEncoderSetBindGroup(g_dwg_pass, 0U, g_dwg_bg, 1UL, (const unsigned int*)&doff);
+        wgpuComputePassEncoderSetBindGroup(g_dwg_pass, 1U, g_dwg_abg, 1UL, (const unsigned int*)&doff);
         wgpuComputePassEncoderDispatchWorkgroups(g_dwg_pass, (unsigned int)gx, (unsigned int)gy, (unsigned int)gz);
     }
     g_dwg_nargs = g_dwg_nargs + 1UL;
@@ -599,16 +626,7 @@ static int dwg_ensure_() {
     if (g_dwg_state != 0) return g_dwg_state == 1;
     g_dwg_state = -1;
     unsafe {
-#if defined(SAFEC_WEBGPU_DAWN)
-        int feat = WGPU_INSTANCE_FEATURE_TIMED_WAIT_ANY;
-        struct WGPUInstanceDescriptor idesc;
-        memset((void*)&idesc, 0, sizeof(struct WGPUInstanceDescriptor));
-        idesc.requiredFeatureCount = 1UL;
-        idesc.requiredFeatures = (const int*)&feat;
-        g_dwg_inst = wgpuCreateInstance(&idesc);
-#else
         g_dwg_inst = wgpuCreateInstance((const struct WGPUInstanceDescriptor*)0);
-#endif
         if (g_dwg_inst == (void*)0) return 0;
         struct WGPURequestAdapterOptions opts;
         memset((void*)&opts, 0, sizeof(struct WGPURequestAdapterOptions));
@@ -656,29 +674,32 @@ static int dwg_ensure_() {
         g_dwg_module = wgpuDeviceCreateShaderModule(g_dwg_dev, &md);
         if (g_dwg_module == (void*)0 || g_dwg_errors != 0UL) return 0;
 
-        // binding 0: the arguments (dynamic offset); 1, 2: the heap as words and atomics
-        struct WGPUBindGroupLayoutEntry le[3];
-        memset((void*)&le[0], 0, sizeof(struct WGPUBindGroupLayoutEntry) * 3UL);
+        // group 0: the heap as words and as atomics, the uploads' data; group 1: the arguments (dynamic offset)
+        struct WGPUBindGroupLayoutEntry le[4];
+        memset((void*)&le[0], 0, sizeof(struct WGPUBindGroupLayoutEntry) * 4UL);
         unsigned long i = 0UL;
-        while (i < 3UL) {
-            le[i].binding = (unsigned int)i;
+        while (i < 4UL) {
+            le[i].binding = i == 3UL ? 0U : (unsigned int)i;
             le[i].visibility = WGPU_SHADER_STAGE_COMPUTE;
-            le[i].buffer.type = i == 0UL ? WGPU_BUFFER_BINDING_UNIFORM : WGPU_BUFFER_BINDING_STORAGE;
+            le[i].buffer.type = i == 3UL ? WGPU_BUFFER_BINDING_UNIFORM : (i == 2UL ? WGPU_BUFFER_BINDING_READ_ONLY_STORAGE : WGPU_BUFFER_BINDING_STORAGE);
             i = i + 1UL;
         }
-        le[0].buffer.hasDynamicOffset = 1U;
-        le[0].buffer.minBindingSize = DWG_ARG_WORDS * 4UL;
+        le[3].buffer.hasDynamicOffset = 1U;
+        le[3].buffer.minBindingSize = DWG_ARG_WORDS * 4UL;
         struct WGPUBindGroupLayoutDescriptor ld;
         memset((void*)&ld, 0, sizeof(struct WGPUBindGroupLayoutDescriptor));
         ld.entryCount = 3UL;
         ld.entries = (const struct WGPUBindGroupLayoutEntry*)&le[0];
-        g_dwg_bgl = wgpuDeviceCreateBindGroupLayout(g_dwg_dev, &ld);
+        g_dwg_bgl[0] = wgpuDeviceCreateBindGroupLayout(g_dwg_dev, &ld);
+        ld.entryCount = 1UL;
+        ld.entries = (const struct WGPUBindGroupLayoutEntry*)&le[3];
+        g_dwg_bgl[1] = wgpuDeviceCreateBindGroupLayout(g_dwg_dev, &ld);
         struct WGPUPipelineLayoutDescriptor pd;
         memset((void*)&pd, 0, sizeof(struct WGPUPipelineLayoutDescriptor));
-        pd.bindGroupLayoutCount = 1UL;
-        pd.bindGroupLayouts = (const void* const*)&g_dwg_bgl;
+        pd.bindGroupLayoutCount = 2UL;
+        pd.bindGroupLayouts = (const void* const*)&g_dwg_bgl[0];
         g_dwg_layout = wgpuDeviceCreatePipelineLayout(g_dwg_dev, &pd);
-        if (g_dwg_bgl == (void*)0 || g_dwg_layout == (void*)0 || g_dwg_errors != 0UL) return 0;
+        if (g_dwg_bgl[0] == (void*)0 || g_dwg_bgl[1] == (void*)0 || g_dwg_layout == (void*)0 || g_dwg_errors != 0UL) return 0;
 
         // the heap: the largest power of two the bindings allow
         unsigned long cap = lim.maxStorageBufferBindingSize < lim.maxBufferSize ? lim.maxStorageBufferBindingSize : lim.maxBufferSize;
@@ -688,16 +709,17 @@ static int dwg_ensure_() {
         g_dwg_heap_bytes = DWG_HEAP_START < g_dwg_heap_max ? DWG_HEAP_START : g_dwg_heap_max;
         g_dwg_heap = dwg_buffer_(g_dwg_heap_bytes, WGPU_BUFFER_USAGE_STORAGE | WGPU_BUFFER_USAGE_COPY_SRC | WGPU_BUFFER_USAGE_COPY_DST);
         g_dwg_args = dwg_buffer_(DWG_FLIGHT * DWG_BATCH * DWG_ARG_STRIDE, WGPU_BUFFER_USAGE_UNIFORM | WGPU_BUFFER_USAGE_COPY_DST);
-        g_dwg_stage = dwg_buffer_(DWG_FLIGHT * DWG_STAGE_BYTES, WGPU_BUFFER_USAGE_COPY_SRC | WGPU_BUFFER_USAGE_COPY_DST);
+        g_dwg_data = dwg_buffer_(DWG_FLIGHT * DWG_DATA_BYTES, WGPU_BUFFER_USAGE_STORAGE | WGPU_BUFFER_USAGE_COPY_DST);
         g_dwg_args_host = (unsigned char*)malloc(DWG_FLIGHT * DWG_BATCH * DWG_ARG_STRIDE);
+        g_dwg_data_host = (unsigned char*)malloc(DWG_FLIGHT * DWG_DATA_BYTES);
         unsigned long units = g_dwg_heap_bytes >> DWG_UNIT_SHIFT;
         g_dwg_tag = (unsigned char*)malloc(units);
-        if (g_dwg_heap == (void*)0 || g_dwg_args == (void*)0 || g_dwg_stage == (void*)0 ||
-            g_dwg_args_host == (unsigned char*)0 || g_dwg_tag == (unsigned char*)0)
+        if (g_dwg_heap == (void*)0 || g_dwg_args == (void*)0 || g_dwg_data == (void*)0 ||
+            g_dwg_args_host == (unsigned char*)0 || g_dwg_data_host == (unsigned char*)0 || g_dwg_tag == (unsigned char*)0)
             return 0;
         memset((void*)g_dwg_args_host, 0, DWG_FLIGHT * DWG_BATCH * DWG_ARG_STRIDE);
         memset((void*)g_dwg_tag, 0, units);
-        if (!dwg_bind_()) return 0;
+        if (!dwg_bind_() || !dwg_bind_args_()) return 0;
         g_dwg_top = 0UL;
         while ((1UL << g_dwg_top) < units) g_dwg_top = g_dwg_top + 1UL;
         dwg_push_free_(g_dwg_top, 0UL);
@@ -740,12 +762,20 @@ int WebGpuBackend::upload_bytes(unsigned long dst, const void* src, unsigned lon
     dst = dev_addr_(dst);
     if ((dst & 3UL) != 0UL || (bytes & 3UL) != 0UL || dst + bytes > g_dwg_heap_bytes) return 0;
     unsafe {
-        if (g_dwg_pending > 0UL && bytes <= DWG_INLINE_BYTES && g_dwg_stage_used + bytes <= DWG_STAGE_BYTES) {
-            // behind the open command buffer's work, through its staging slot
-            unsigned long so = g_dwg_slot * DWG_STAGE_BYTES + g_dwg_stage_used;
-            wgpuQueueWriteBuffer(g_dwg_queue, g_dwg_stage, so, src, bytes);
-            g_dwg_stage_used = g_dwg_stage_used + bytes;
-            return dwg_copy_buffers_(g_dwg_stage, so, g_dwg_heap, dst, bytes);
+        if (g_dwg_pending > 0UL && bytes <= DWG_INLINE_BYTES && g_dwg_data_used + bytes <= DWG_DATA_BYTES) {
+            // behind the open command buffer's work: the bytes travel in its
+            // data slot and wk_upload writes them in order
+            if (g_dwg_upload == (void*)0) g_dwg_upload = dwg_make_pipe_("wk_upload", (const struct WGPUConstantEntry*)0, 0UL);
+            if (g_dwg_upload != (void*)0) {
+                unsigned long so = g_dwg_slot * DWG_DATA_BYTES + g_dwg_data_used;
+                memcpy((void*)(g_dwg_data_host + so), src, bytes);
+                g_dwg_data_used = g_dwg_data_used + bytes;
+                unsigned int w[DWG_ARG_WORDS];
+                memset((void*)&w[0], 0, DWG_ARG_WORDS * 4UL);
+                w[0] = (unsigned int)so; w[2] = (unsigned int)dst; w[23] = (unsigned int)(bytes / 4UL);
+                unsigned long groups = (bytes / 4UL + DWG_BLOCK - 1UL) / DWG_BLOCK;
+                return dwg_dispatch_(g_dwg_upload, (const unsigned int*)&w[0], groups, 1UL, 1UL);
+            }
         }
         if (g_dwg_pending > 0UL) dwg_submit_();   // queued work first
         wgpuQueueWriteBuffer(g_dwg_queue, g_dwg_heap, dst, src, bytes);

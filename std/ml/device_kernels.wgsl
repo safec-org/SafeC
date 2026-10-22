@@ -40,10 +40,13 @@
 // do on ROCm and device_kernels.cu's mk_* on Metal: GEMMs, convolutions as
 // implicit GEMMs, copies, and gpu_webgpu.h's few ops of its own.
 
+// Group 0 is the heap (set once per compute pass), group 1 the arguments
+// (a dynamic offset per dispatch: only that group changes between them).
 struct Args { w: array<vec4u, 8> }
-@group(0) @binding(0) var<uniform> A: Args;
-@group(0) @binding(1) var<storage, read_write> H: array<u32>;
-@group(0) @binding(2) var<storage, read_write> HA: array<atomic<u32>>;
+@group(0) @binding(0) var<storage, read_write> H: array<u32>;
+@group(0) @binding(1) var<storage, read_write> HA: array<atomic<u32>>;
+@group(0) @binding(2) var<storage, read> D: array<u32>;   // host data queued with the dispatches (wk_upload)
+@group(1) @binding(0) var<uniform> A: Args;
 
 override TAGGED: bool = false;   // the 16-bit build (some argument is fp16 / bf16)
 override OPC: i32 = -1;          // dk_ew's op: >= 0 for dk_ewop_<op>
@@ -1752,6 +1755,16 @@ fn wk_copy(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) n
         atomicAnd(&HA[b >> 2u], ~(0xffffu << sh));
         atomicOr(&HA[b >> 2u], h << sh);
     }
+}
+
+// dst = n words the host queued with this command buffer: an upload in
+// order with the queued work (Metal's mk_upload). p0 = their byte offset in
+// D, p2 = dst, u7 = n.
+@compute @workgroup_size(256)
+fn wk_upload(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u) {
+    let s = P(0u) >> 2u;
+    let d = P(2u) >> 2u;
+    for (var i = gid.x; i < N(); i += nwg.x * 256u) { H[d + i] = D[s + i]; }
 }
 
 // gpu_webgpu.h's elementwise ops with no DK_* kernel: p0 a, p1 b, p2 out,
