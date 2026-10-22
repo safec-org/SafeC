@@ -347,6 +347,14 @@ __attribute__((export_name("t_async_setup"))) int t_async_setup() {
     return g_fails;
 }
 
+// Nonzero while any timer, frame or fetch callback t_async_setup scheduled
+// hasn't run yet; run.mjs polls this instead of sleeping a fixed time.
+__attribute__((export_name("t_async_pending"))) int t_async_pending() {
+    if (g_async.timeouts == 0 || g_async.ticks < 3 || g_async.frame_ts == 0.0) { return 1; }
+    if (g_async.fetch_status == 0 || g_async.fetch_fail_status == 0) { return 1; }
+    return 0;
+}
+
 __attribute__((export_name("t_async_check"))) int t_async_check() {
     g_fails = 0;
     check_((g_async.timeouts == 1) != 0, __LINE__);

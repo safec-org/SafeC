@@ -73,7 +73,11 @@ expect("dom_off removes the listener", ex.clicks() === 2);
 
 step("storage, history, location (sync part)", () => ex.t_async_setup());
 expect("navigate assigns location", window.location.assigned === "/elsewhere");
-await sleep(60);
+// Wait for every scheduled callback (bounded), not a fixed time: a loaded
+// CI runner can take longer than any fixed sleep. A short extra wait then
+// gives the cancelled timer/frame time to (wrongly) fire.
+for (let waited = 0; ex.t_async_pending() && waited < 2000; waited += 10) await sleep(10);
+await sleep(20);
 step("timers, animation frames, fetch, popstate", () => ex.t_async_check());
 
 step("signals bound to the DOM", () => ex.t_hydrate());
