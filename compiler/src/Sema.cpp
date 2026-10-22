@@ -1,5 +1,6 @@
 #include "safec/Sema.h"
 #include <functional>
+#include <map>
 #include "safec/Clone.h"
 #include <cassert>
 #include <cstdint>
@@ -1412,6 +1413,117 @@ void Sema::checkDecl(Decl &d) {
     }
 }
 
+// A label names one place: two with the same name in one function would
+// leave every 'goto' to it ambiguous (codegen used to emit both into one
+// block, which LLVM rejects). And a goto may not jump into the scope of a
+// local variable past its declaration -- C++'s rule ("jump bypasses
+// variable initialization"), applied to every non-static local: at the
+// label the variable is in scope, but its declaration (and initializer)
+// never ran on the goto's path, so it holds garbage, which definite-
+// initialization checking can't see through a jump. Jumping into a nested
+// block is fine as long as no declaration in scope at the label was
+// skipped -- what lets std/async's AWAIT resume inside a loop body, while
+// a local declared before an await point (instead of in the future's
+// state struct) is rejected here at compile time. Labels inside 'match'
+// arms are not goto targets at all (see collectLabels).
+void Sema::checkGotoJumps(FunctionDecl &fn) {
+    if (!fn.body) return;
+    struct Site { const Stmt *at; std::string label; std::vector<const VarDeclStmt *> scope; };
+    std::vector<const VarDeclStmt *> scope;
+    std::map<std::string, std::vector<const VarDeclStmt *>> labelScope;
+    std::map<std::string, SourceLocation> labelLoc;
+    std::vector<Site> gotos;
+    std::function<void(Stmt &)> walk = [&](Stmt &s) {
+        size_t mark = scope.size();
+        switch (s.kind) {
+        case StmtKind::Compound:
+            for (auto &c : static_cast<CompoundStmt &>(s).body) if (c) walk(*c);
+            scope.resize(mark);
+            break;
+        case StmtKind::VarDecl: {
+            auto &vd = static_cast<VarDeclStmt &>(s);
+            if (!vd.isStatic) scope.push_back(&vd);
+            break;
+        }
+        case StmtKind::MultiVarDecl:
+            for (auto &d : static_cast<MultiVarDeclStmt &>(s).decls) if (d) walk(*d);
+            break;
+        case StmtKind::If: {
+            auto &i = static_cast<IfStmt &>(s);
+            if (i.then) { walk(*i.then); scope.resize(mark); }
+            if (i.else_) { walk(*i.else_); scope.resize(mark); }
+            break;
+        }
+        case StmtKind::IfConst: {
+            auto &i = static_cast<IfConstStmt &>(s);
+            if (i.then) { walk(*i.then); scope.resize(mark); }
+            if (i.else_) { walk(*i.else_); scope.resize(mark); }
+            break;
+        }
+        case StmtKind::While: case StmtKind::DoWhile: {
+            auto &w = static_cast<WhileStmt &>(s);
+            if (w.body) { walk(*w.body); scope.resize(mark); }
+            break;
+        }
+        case StmtKind::For: {
+            auto &f = static_cast<ForStmt &>(s);
+            if (f.init) walk(*f.init);
+            if (f.body) walk(*f.body);
+            scope.resize(mark);
+            break;
+        }
+        case StmtKind::Unsafe: {
+            auto &u = static_cast<UnsafeStmt &>(s);
+            if (u.body) { walk(*u.body); scope.resize(mark); }
+            break;
+        }
+        case StmtKind::Switch:
+            for (auto &c : static_cast<SwitchStmt &>(s).cases) {
+                for (auto &sub : c.body) if (sub) walk(*sub);
+                scope.resize(mark);
+            }
+            break;
+        case StmtKind::Match:
+            // Labels here aren't collected (not goto targets), but a goto
+            // inside an arm can still jump out of it.
+            for (auto &a : static_cast<MatchStmt &>(s).arms) {
+                if (a.body) walk(*a.body);
+                scope.resize(mark);
+            }
+            break;
+        case StmtKind::Label: {
+            auto &ls = static_cast<LabelStmt &>(s);
+            if (labelScope.count(ls.label)) {
+                diag_.error(s.loc, "duplicate label '" + ls.label + "' (first defined at line " +
+                                   std::to_string(labelLoc[ls.label].line) + ")");
+            } else {
+                labelScope[ls.label] = scope;
+                labelLoc[ls.label] = s.loc;
+            }
+            if (ls.body) walk(*ls.body);
+            break;
+        }
+        case StmtKind::Goto:
+            gotos.push_back({&s, static_cast<GotoStmt &>(s).label, scope});
+            break;
+        default: break;
+        }
+    };
+    walk(*fn.body);
+    for (auto &g : gotos) {
+        auto it = labelScope.find(g.label);
+        if (it == labelScope.end()) continue;   // undeclared: reported by checkStmt
+        for (const VarDeclStmt *vd : it->second) {
+            if (std::find(g.scope.begin(), g.scope.end(), vd) != g.scope.end()) continue;
+            diag_.error(g.at->loc, "goto '" + g.label + "' jumps over the declaration of '" + vd->name +
+                                   "' (line " + std::to_string(vd->loc.line) +
+                                   "), which is still in scope at the label but would never be initialized; "
+                                   "declare it before the goto, or in a block that ends before the label");
+            break;
+        }
+    }
+}
+
 void Sema::checkFunction(FunctionDecl &fn) {
     if (!fn.body) return; // declaration only
     // Generic templates: body is only type-checked on concrete instantiations
@@ -1525,6 +1637,7 @@ void Sema::checkFunction(FunctionDecl &fn) {
         }
     };
     collectLabels(*fn.body);
+    checkGotoJumps(fn);
 
     checkCompound(*fn.body, fn);
 

@@ -1161,7 +1161,7 @@ bool Builder::sourceRefs(const std::vector<std::string>& files, const std::strin
     for (auto& f : files) {
         if (langOf(f) != SrcLang::SafeC) continue;
         std::string real = materializeScx(f, outDir);
-        std::string ll = real.empty() ? "" : compileSrc(findSafec(), real, outDir, incs, false, false, defs);
+        std::string ll = real.empty() ? "" : compileSrc(findSafec(), real, outDir, incs, manifest_.build.compatPreprocessor, false, defs);
         if (ll.empty()) return false;
         for (auto& r : irExternalRefs(ll)) refs.insert(r);
     }
@@ -2525,7 +2525,7 @@ bool Builder::build() {
             if (langOf(src) != SrcLang::SafeC) continue;
             std::string realSrc = materializeScx(src, buildDir);
             if (realSrc.empty()) return false;
-            if (compileSrc(safecBin, realSrc, buildDir, userIncs, false, false, defs).empty())
+            if (compileSrc(safecBin, realSrc, buildDir, userIncs, manifest_.build.compatPreprocessor, false, defs).empty())
                 return false;
         }
         std::cout << "safeguard: LLVM IR written to " << buildDir << "/\n";
@@ -2541,7 +2541,7 @@ bool Builder::build() {
         if (lang == SrcLang::SafeC) {
             std::string realSrc = materializeScx(src, buildDir);
             if (realSrc.empty()) return false;
-            std::string ll = compileSrc(safecBin, realSrc, buildDir, userIncs, false, false, defs);
+            std::string ll = compileSrc(safecBin, realSrc, buildDir, userIncs, manifest_.build.compatPreprocessor, false, defs);
             if (ll.empty()) return false;
             for (auto& r : irExternalRefs(ll)) refs.insert(r);
             std::string obj = llToObj(ll, buildDir);
@@ -2690,7 +2690,7 @@ bool Builder::check() {
             // object-file assembly, no link.
             std::string realSrc = materializeScx(src, checkDir.string());
             if (realSrc.empty()) { ok = false; continue; }
-            if (compileSrc(safecBin, realSrc, checkDir.string(), userIncs, false, false, defs).empty())
+            if (compileSrc(safecBin, realSrc, checkDir.string(), userIncs, manifest_.build.compatPreprocessor, false, defs).empty())
                 ok = false;
         } else {
             if (isObjC(lang) && targetOS() != "macos") {

@@ -115,8 +115,23 @@ struct Reactor {
     // the same fd).
     int  poll(&TaskScheduler sched, long long timeout_ms);
 
+    // Waits like poll(), but hands every ready (fd, filter) to
+    // on_ready(ctx, fd, filter) instead of a TaskScheduler — the hook other
+    // schedulers drive the reactor through (std/async's IoDriver wakes the
+    // futures waiting on that fd). For SCHED_SIGNAL, 'fd' is the signal
+    // number. Returns the number of OS events processed. poll() is this
+    // with a callback that calls sched->unblock_fd().
+    generic<T> int poll_events(fn void(?&T, int, int) on_ready, ?&T ctx, long long timeout_ms);
+    // Type-erased form, implemented by each backend.
+    int  poll_events_raw_(void* on_ready, void* ctx, long long timeout_ms);
+
     void close_();
 };
+
+generic<T>
+int Reactor::poll_events(fn void(?&T, int, int) on_ready, ?&T ctx, long long timeout_ms) {
+    unsafe { return self.poll_events_raw_((void*)on_ready, (void*)ctx, timeout_ms); }
+}
 
 // Drives 'sched' to completion: repeatedly ticks every runnable task, and
 // whenever none are immediately runnable, polls the reactor — with a

@@ -190,7 +190,8 @@ inline void Reactor::remove(int fd, int filter) {
     unsafe { epoll_ctl(self.kq, SAFEC_EPOLL_CTL_DEL, fd, (const void*)&ev); }
 }
 
-inline int Reactor::poll(&TaskScheduler sched, long long timeout_ms) {
+// Reactor::poll(sched, ...) is reactor.sc's, over this.
+inline int Reactor::poll_events_raw_(void* on_ready, void* ctx, long long timeout_ms) {
     struct EpollEvent events[64];
     int timeout;
     if (timeout_ms < 0LL) {
@@ -218,10 +219,10 @@ inline int Reactor::poll(&TaskScheduler sched, long long timeout_ms) {
             // matters.
             struct SignalfdSiginfo info;
             unsafe { read(fd, (void*)&info, sizeof(struct SignalfdSiginfo)); }
-            sched->unblock_fd(signum, SCHED_SIGNAL);
+            unsafe { fn void(void*, int, int) cb = (fn void(void*, int, int))on_ready; cb(ctx, signum, SCHED_SIGNAL); }
         } else {
             int filter = (events[i].events & (unsigned int)SAFEC_EPOLLOUT) != 0U ? SCHED_WRITE : SCHED_READ;
-            sched->unblock_fd(fd, filter);
+            unsafe { fn void(void*, int, int) cb = (fn void(void*, int, int))on_ready; cb(ctx, fd, filter); }
         }
         i = i + 1;
     }
