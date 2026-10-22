@@ -534,6 +534,54 @@ void check_attention_() {
     Q.free(); K.free(); V.free(); W.free();
 }
 
+// Heads wider than 64 (a backend's kernels may tile them differently): one
+// head of 128 and two of 96, causal, fused against the CPU.
+void check_attention_wide_() {
+    struct Rng rng = Rng::new(17UL);
+    unsigned long widths[2];
+    unsigned long heads[2];
+    unsafe { widths[0] = 128UL; heads[0] = 1UL; widths[1] = 192UL; heads[1] = 2UL; }
+    int t = 0;
+    while (t < 2) {
+        unsigned long w; unsigned long h;
+        unsafe { w = widths[t]; h = heads[t]; }
+        &FloatTensor Q = FloatTensor::new_2d(20UL, w, 1);
+        &FloatTensor K = FloatTensor::new_2d(20UL, w, 1);
+        &FloatTensor V = FloatTensor::new_2d(20UL, w, 1);
+        &FloatTensor W = FloatTensor::new_2d(20UL, w, 0);
+        rng.fill_normal(Q, (float)0.0, (float)0.3);
+        rng.fill_normal(K, (float)0.0, (float)0.3);
+        rng.fill_normal(V, (float)0.0, (float)1.0);
+        rng.fill_normal(W, (float)0.0, (float)1.0);
+        unsigned long n = 20UL * w;
+        float* c;
+        unsafe { c = (float*)malloc(4UL * n * 6UL); }
+        &FloatTensor lc = tensor_mul(mha_forward_mask(Q, K, V, h, 1, 0UL), W).sum();
+        float l0 = lc.at1(0UL);
+        lc.backward();
+        unsafe { at_grads_(Q, (&float)c); at_grads_(K, (&float)&c[n]); at_grads_(V, (&float)&c[2UL * n]); }
+        Q.zero_grad(); K.zero_grad(); V.zero_grad();
+        Q.place(CHECK_DEVICE); K.place(CHECK_DEVICE); V.place(CHECK_DEVICE);
+        &FloatTensor l = tensor_mul(mha_forward_mask(Q, K, V, h, 1, 0UL), W).sum();
+        float ld = l.at1(0UL);
+        int on = l.device() == CHECK_DEVICE;
+        l.backward();
+        Q.place(DEVICE_CPU); K.place(DEVICE_CPU); V.place(DEVICE_CPU);
+        float e;
+        unsafe {
+            at_grads_(Q, (&float)&c[3UL * n]); at_grads_(K, (&float)&c[4UL * n]); at_grads_(V, (&float)&c[5UL * n]);
+            e = at_maxrel_((const &float)c, (const &float)&c[3UL * n], 3UL * n);
+            free((void*)c);
+        }
+        print("  attention fused causal, "); print_int((long long)h); print(h == 1UL ? " head of " : " heads of ");
+        print_int((long long)(w / h)); print(": loss cpu "); print_float((double)l0); print(" device ");
+        print_float((double)ld); print(", worst gradient difference "); println_float((double)e);
+        check_("wide attention heads", on && near_(l0, ld, (float)2e-4) && e < (float)2e-4);
+        Q.free(); K.free(); V.free(); W.free();
+        t = t + 1;
+    }
+}
+
 // ── Convolutions: the device's outputs and gradients = the CPU's ─────────────
 // Plain and transposed convolutions over shapes that reach every path of a
 // backend's convolutions: one input channel, channel counts that are
@@ -748,6 +796,7 @@ int main() {
     if (!device_available(CHECK_DEVICE)) { println("  FAIL  backend not available (feature, library or GPU missing)"); return 1; }
     check_training_();
     check_attention_();
+    check_attention_wide_();
     check_conv_();
     check_sparse_();
     // every kernel and GEMM above ran on the GPU, none on the CPU (device_ref)
