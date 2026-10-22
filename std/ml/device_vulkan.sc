@@ -1,10 +1,11 @@
 // SafeC Standard Library — the Vulkan device backend (see device.h).
 // VulkanBackend: any Vulkan 1.2 GPU (NVIDIA, AMD, Intel, Apple through
-// MoltenVK, ...). Device memory is VkBuffers named by their buffer device
-// addresses, the way ROCm and CUDA name theirs, so a handle plus a byte
-// offset is an address and the kernels' raw-address arguments (DevArgs.p,
-// the optimizer's tables of handles) work as they do there; a table sorted
-// by address finds the buffer behind one for the host. device_kernels.cu's
+// MoltenVK, ...). Device memory is carved from a few large VkBuffers (blocks
+// of 64 MB or more) and named by buffer device addresses, the way ROCm and
+// CUDA name theirs, so a handle plus a byte offset is an address and the
+// kernels' raw-address arguments (DevArgs.p, the optimizer's tables of
+// handles) work as they do there; a table sorted by address finds the piece
+// behind one for the host. device_kernels.cu's
 // kernels run as SPIR-V that gen_device_kernels.sh compiles ahead of time
 // with Slang (device_kernels_spirv.h, checked in: users need no shader
 // toolchain), each kernel its own module, per build: plain, DK_TAGGED
@@ -23,7 +24,10 @@
 // Work is recorded into one command buffer at a time (a pipeline barrier
 // after each dispatch, so the next sees its writes) and submitted every
 // DVK_COMMIT_EVERY dispatches without waiting, with a fence per command
-// buffer in a ring of DVK_RING. The host waits only when it reads
+// buffer in a ring of DVK_RING. On MoltenVK the barriers between dispatches
+// are left out: its compute encoders are serial (each dispatch starts once
+// the one before is done) and it ends the encoder at every barrier, ~20 us
+// a dispatch (SAFEC_VULKAN_BARRIERS=1 puts them back). The host waits only when it reads
 // (download, sync), before releasing memory, and before an upload while
 // work is queued that doesn't fit the staging arena (one that does is
 // copied there and applied in order by a dispatch, mk_copy). A program
@@ -122,6 +126,10 @@ struct VkPhysicalDeviceFeatures2 { int sType; void* pNext; unsigned int f[55]; }
 struct DvkFeat_ { int sType; void* pNext; unsigned int b[16]; };
 // VkPhysicalDeviceSubgroupProperties / ...SubgroupSizeControlProperties
 struct DvkProp_ { int sType; void* pNext; unsigned int v[4]; };
+struct VkPhysicalDeviceDriverProperties {
+    int sType; void* pNext; int driverID; char driverName[256]; char driverInfo[256]; unsigned char conformanceVersion[4];
+};
+#define DVK_DRIVER_MOLTENVK 14
 struct VkDeviceQueueCreateInfo {
     int sType; const void* pNext; unsigned int flags;
     unsigned int queueFamilyIndex; unsigned int queueCount; const float* pQueuePriorities;
@@ -231,6 +239,7 @@ extern int vkResetFences(void* device, unsigned int count, void** fences);
 #define DVK_STYPE_16BIT_STORAGE 1000083000
 #define DVK_STYPE_FLOAT16_INT8 1000082000
 #define DVK_STYPE_SUBGROUP_PROPERTIES 1000094000
+#define DVK_STYPE_DRIVER_PROPERTIES 1000196000
 #define DVK_STYPE_SUBGROUP_SIZE_PROPERTIES 1000225000
 #define DVK_STYPE_REQUIRED_SUBGROUP_SIZE 1000225001
 #define DVK_STYPE_SUBGROUP_SIZE_FEATURES 1000225002
@@ -251,9 +260,11 @@ extern int vkResetFences(void* device, unsigned int count, void** fences);
 #define DVK_STAGE_COMPUTE 32U                  // VK_SHADER_STAGE_COMPUTE_BIT
 #define DVK_REQUIRE_FULL_SUBGROUPS 2U
 #define DVK_SUBGROUP_NEEDS 21U                 // basic | arithmetic | shuffle
-#define DVK_PIPE_STAGES 6144U                  // compute shader | transfer
-#define DVK_ACCESS_WRITES 4160U                // shader write | transfer write
-#define DVK_ACCESS_ALL 6240U                   // shader read / write | transfer read / write
+#define DVK_STAGE_SHADER 2048U                 // VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+#define DVK_STAGE_HOST 16384U
+#define DVK_ACCESS_SHADER_WRITE 64U
+#define DVK_ACCESS_SHADER 96U                  // shader read | write
+#define DVK_ACCESS_HOST 24576U                 // host read | write
 #define DVK_POOL_RESET 2U
 #define DVK_ONE_TIME 1U
 #define DVK_DEVICE_LOST (-4)
@@ -267,14 +278,39 @@ extern int vkResetFences(void* device, unsigned int count, void** fences);
 #define DVK_COMMIT_EVERY 64UL     // dispatches per command buffer
 #define DVK_RING 16UL             // command buffers (and fences) in flight
 #define DVK_STAGE_BYTES 16777216UL   // the staging arena
+#define DVK_BLOCK_BYTES 67108864UL   // device memory is carved from VkBuffers of at least this
+#define DVK_ALIGN 256UL              // ... in pieces aligned to this
 
-// A device buffer: its address range, the VkBuffer and its memory, the host's view (null when not mapped).
+// A VkBuffer and its memory: its address range, the host's view (null when not mapped).
 struct DvkBuf_ {
     unsigned long addr;
     unsigned long bytes;
     void* buf;
     void* mem;
     unsigned char* cpu;
+};
+
+// A free range of a block, in bytes from its start.
+struct DvkRange_ {
+    unsigned long off;
+    unsigned long bytes;
+};
+
+// A block device memory is carved from: its buffer, its free ranges (sorted, coalesced), its live pieces.
+struct DvkBlock_ {
+    struct DvkBuf_ b;
+    struct DvkRange_* free;
+    unsigned long nfree;
+    unsigned long capfree;
+    unsigned long live;
+};
+
+// A piece (a handle's memory): its address range, the host's view, its block's address.
+struct DvkPiece_ {
+    unsigned long addr;
+    unsigned long bytes;
+    unsigned char* cpu;
+    unsigned long block;
 };
 
 // mk_gemm's DkGemm.
@@ -311,6 +347,7 @@ static int g_dvk_mapped = 0;                // device buffers are host-visible
 static int g_dvk_16 = 0;                    // 16-bit storage
 static int g_dvk_full_sg = 0;               // can require full subgroups
 static int g_dvk_req_sg = 0;                // must require a subgroup size of 32
+static int g_dvk_serial = 0;                // dispatches run in order without barriers (MoltenVK)
 static int g_dvk_reported = 0;
 
 // Pipelines: one per module of device_kernels_spirv.h (0 = not yet, -1 = can't)
@@ -318,10 +355,13 @@ static void* g_dvk_pipe[DK_SPIRV_MODULES];
 static int   g_dvk_pipe_state[DK_SPIRV_MODULES];
 static int   g_dvk_kmod[4 * DK_COUNT];      // the module of (build, DK_* kernel): 0 = not looked up, -1 = none, else index + 1
 
-// Buffers sorted by address.
-static struct DvkBuf_* g_dvk_bufs = (struct DvkBuf_*)0;
-static unsigned long g_dvk_nbufs = 0UL;
-static unsigned long g_dvk_capbufs = 0UL;
+// Blocks, and the pieces handed out, sorted by address.
+static struct DvkBlock_* g_dvk_blocks = (struct DvkBlock_*)0;
+static unsigned long g_dvk_nblocks = 0UL;
+static unsigned long g_dvk_capblocks = 0UL;
+static struct DvkPiece_* g_dvk_pieces = (struct DvkPiece_*)0;
+static unsigned long g_dvk_npieces = 0UL;
+static unsigned long g_dvk_cappieces = 0UL;
 
 // The command buffer ring: slot i's fence is pending while its submission may run.
 static void* g_dvk_cb[DVK_RING];
@@ -426,7 +466,9 @@ static int dvk_qualifies_(void* pd, struct VkPhysicalDeviceFeatures2* f2, struct
         struct DvkProp_ sg;
         struct DvkProp_ sgs;
         sg.sType = DVK_STYPE_SUBGROUP_PROPERTIES; sg.pNext = (void*)&sgs;
-        sgs.sType = DVK_STYPE_SUBGROUP_SIZE_PROPERTIES; sgs.pNext = (void*)0;
+        struct VkPhysicalDeviceDriverProperties drv;
+        sgs.sType = DVK_STYPE_SUBGROUP_SIZE_PROPERTIES; sgs.pNext = (void*)&drv;
+        drv.sType = DVK_STYPE_DRIVER_PROPERTIES; drv.pNext = (void*)0; drv.driverID = 0;
         sg.v[0] = 0U; sg.v[1] = 0U; sg.v[2] = 0U; sgs.v[0] = 0U; sgs.v[1] = 0U; sgs.v[3] = 0U;
         struct VkPhysicalDeviceProperties2 p;
         p.sType = DVK_STYPE_PROPERTIES2; p.pNext = (void*)&sg;
@@ -469,6 +511,12 @@ static int dvk_qualifies_(void* pd, struct VkPhysicalDeviceFeatures2* f2, struct
         g_dvk_16 = s16;
         g_dvk_full_sg = full;
         g_dvk_req_sg = need;
+        // MoltenVK records compute dispatches into serial Metal encoders
+        // (MTLDispatchTypeSerial: each starts once the one before it is done)
+        // and ends the encoder at every pipeline barrier, which costs ~20 us
+        // a dispatch; there the barriers between dispatches are redundant.
+        char* forced = getenv("SAFEC_VULKAN_BARRIERS");
+        g_dvk_serial = drv.driverID == DVK_DRIVER_MOLTENVK && (forced == (char*)0 || forced[0] != '1');
         return p.deviceType == 2 ? 3 : (p.deviceType == 1 ? 2 : 1);   // discrete, integrated, other
     }
 }
@@ -724,14 +772,17 @@ static int dvk_rows_(int kernel) {
 }
 
 // ── Buffers ──────────────────────────────────────────────────────────────────
-// The buffer holding address h, or -1.
+// Device memory is carved from a few large VkBuffers (blocks), as Vulkan
+// drivers prefer: some cap allocations at 4096, and MoltenVK makes every
+// buffer with a device address resident on each command encoder it opens.
+// The piece holding address h, or -1.
 static long dvk_find_(unsigned long h) {
     unsafe {
         long lo = 0L;
-        long hi = (long)g_dvk_nbufs - 1L;
+        long hi = (long)g_dvk_npieces - 1L;
         while (lo <= hi) {
             long mid = (lo + hi) / 2L;
-            struct DvkBuf_* b = &g_dvk_bufs[mid];
+            struct DvkPiece_* b = &g_dvk_pieces[mid];
             if (h < b->addr) hi = mid - 1L;
             else if (h >= b->addr + b->bytes) lo = mid + 1L;
             else return mid;
@@ -746,9 +797,80 @@ static unsigned char* dvk_host_(unsigned long h) {
     long i = dvk_find_(h);
     if (i < 0L) return (unsigned char*)0;
     unsafe {
-        if (g_dvk_bufs[i].cpu == (unsigned char*)0) return (unsigned char*)0;
-        return g_dvk_bufs[i].cpu + (h - g_dvk_bufs[i].addr);
+        if (g_dvk_pieces[i].cpu == (unsigned char*)0) return (unsigned char*)0;
+        return g_dvk_pieces[i].cpu + (h - g_dvk_pieces[i].addr);
     }
+}
+
+// Room for one more element in a malloc'd array (*arr of *cap elements of 'size' bytes, n used).
+static int dvk_grow_(void** arr, unsigned long* cap, unsigned long n, unsigned long size) {
+    unsafe {
+        if (n < *cap) return 1;
+        unsigned long nc = *cap == 0UL ? 16UL : *cap * 2UL;
+        void* na = malloc(size * nc);
+        if (na == (void*)0) return 0;
+        if (n > 0UL) memcpy(na, (const void*)*arr, size * n);
+        if (*arr != (void*)0) free(*arr);
+        *arr = na;
+        *cap = nc;
+    }
+    return 1;
+}
+
+// 'need' bytes from block k's free ranges (first fit): the piece's offset, or -1.
+static long dvk_take_(unsigned long k, unsigned long need) {
+    unsafe {
+        struct DvkBlock_* bl = &g_dvk_blocks[k];
+        unsigned long i = 0UL;
+        while (i < bl->nfree) {
+            struct DvkRange_* r = &bl->free[i];
+            if (r->bytes >= need) {
+                unsigned long off = r->off;
+                r->off = r->off + need;
+                r->bytes = r->bytes - need;
+                if (r->bytes == 0UL) {
+                    unsigned long j = i;
+                    while (j + 1UL < bl->nfree) { bl->free[j] = bl->free[j + 1UL]; j = j + 1UL; }
+                    bl->nfree = bl->nfree - 1UL;
+                }
+                bl->live = bl->live + 1UL;
+                return (long)off;
+            }
+            i = i + 1UL;
+        }
+    }
+    return -1L;
+}
+
+// Gives [off, off + bytes) back to block k's free ranges, merging neighbours.
+static int dvk_give_(unsigned long k, unsigned long off, unsigned long bytes) {
+    unsafe {
+        struct DvkBlock_* bl = &g_dvk_blocks[k];
+        unsigned long at = 0UL;
+        while (at < bl->nfree && bl->free[at].off < off) at = at + 1UL;
+        int prev = at > 0UL && bl->free[at - 1UL].off + bl->free[at - 1UL].bytes == off;
+        int next = at < bl->nfree && off + bytes == bl->free[at].off;
+        if (prev && next) {
+            bl->free[at - 1UL].bytes = bl->free[at - 1UL].bytes + bytes + bl->free[at].bytes;
+            unsigned long j = at;
+            while (j + 1UL < bl->nfree) { bl->free[j] = bl->free[j + 1UL]; j = j + 1UL; }
+            bl->nfree = bl->nfree - 1UL;
+        } else if (prev) {
+            bl->free[at - 1UL].bytes = bl->free[at - 1UL].bytes + bytes;
+        } else if (next) {
+            bl->free[at].off = off;
+            bl->free[at].bytes = bl->free[at].bytes + bytes;
+        } else {
+            if (!dvk_grow_((void**)&bl->free, &bl->capfree, bl->nfree, sizeof(struct DvkRange_))) return 0;
+            unsigned long j = bl->nfree;
+            while (j > at) { bl->free[j] = bl->free[j - 1UL]; j = j - 1UL; }
+            bl->free[at].off = off;
+            bl->free[at].bytes = bytes;
+            bl->nfree = bl->nfree + 1UL;
+        }
+        bl->live = bl->live - 1UL;
+    }
+    return 1;
 }
 
 // ── The command stream ───────────────────────────────────────────────────────
@@ -796,6 +918,11 @@ static int dvk_commit_() {
         unsigned long s = (unsigned long)g_dvk_open;
         g_dvk_open = -1L;
         g_dvk_next = (s + 1UL) % DVK_RING;
+        // the host may read what this command buffer wrote once its fence signals
+        struct VkMemoryBarrier mb;
+        mb.sType = DVK_STYPE_MEMORY_BARRIER; mb.pNext = (const void*)0;
+        mb.srcAccessMask = DVK_ACCESS_SHADER_WRITE; mb.dstAccessMask = DVK_ACCESS_HOST;
+        vkCmdPipelineBarrier(g_dvk_cb[s], DVK_STAGE_SHADER, DVK_STAGE_HOST, 0U, 1U, &mb, 0U, (const void*)0, 0U, (const void*)0);
         if (vkEndCommandBuffer(g_dvk_cb[s]) != 0) return dvk_check_(-1);
         struct VkSubmitInfo si;
         si.sType = DVK_STYPE_SUBMIT; si.pNext = (const void*)0;
@@ -829,7 +956,8 @@ static int dvk_wait_() {
 }
 
 // One dispatch of (gx, gy, gz) workgroups with 'len' bytes of push
-// constants, then a barrier, so the next one sees its writes.
+// constants, then a barrier, so the next one sees its writes (none where
+// dispatches run in order: g_dvk_serial).
 static int dvk_dispatch_(void* pipe, const void* push, unsigned long len, unsigned long gx, unsigned long gy, unsigned long gz) {
     if (!dvk_begin_()) return 0;
     unsafe {
@@ -840,10 +968,12 @@ static int dvk_dispatch_(void* pipe, const void* push, unsigned long len, unsign
         }
         vkCmdPushConstants(cb, g_dvk_layout, DVK_STAGE_COMPUTE, 0U, (unsigned int)len, push);
         vkCmdDispatch(cb, (unsigned int)gx, (unsigned int)gy, (unsigned int)gz);
-        struct VkMemoryBarrier mb;
-        mb.sType = DVK_STYPE_MEMORY_BARRIER; mb.pNext = (const void*)0;
-        mb.srcAccessMask = DVK_ACCESS_WRITES; mb.dstAccessMask = DVK_ACCESS_ALL;
-        vkCmdPipelineBarrier(cb, DVK_PIPE_STAGES, DVK_PIPE_STAGES, 0U, 1U, &mb, 0U, (const void*)0, 0U, (const void*)0);
+        if (!g_dvk_serial) {
+            struct VkMemoryBarrier mb;
+            mb.sType = DVK_STYPE_MEMORY_BARRIER; mb.pNext = (const void*)0;
+            mb.srcAccessMask = DVK_ACCESS_SHADER_WRITE; mb.dstAccessMask = DVK_ACCESS_SHADER;
+            vkCmdPipelineBarrier(cb, DVK_STAGE_SHADER, DVK_STAGE_SHADER, 0U, 1U, &mb, 0U, (const void*)0, 0U, (const void*)0);
+        }
     }
     g_dvk_count = g_dvk_count + 1UL;
     if (g_dvk_count >= DVK_COMMIT_EVERY) return dvk_commit_();
@@ -982,42 +1112,68 @@ struct VulkanBackend {
 
 int VulkanBackend::available() { return dvk_ensure_(); }
 
+// A piece of a block with room (first fit), else of a new block.
 unsigned long VulkanBackend::alloc(unsigned long bytes) {
     if (!dvk_ensure_()) return 0UL;
-    if (bytes == 0UL) bytes = 4UL;
+    unsigned long need = ((bytes == 0UL ? 1UL : bytes) + DVK_ALIGN - 1UL) / DVK_ALIGN * DVK_ALIGN;
     unsafe {
-        if (g_dvk_nbufs == g_dvk_capbufs) {
-            unsigned long cap = g_dvk_capbufs == 0UL ? 256UL : g_dvk_capbufs * 2UL;
-            struct DvkBuf_* bufs = (struct DvkBuf_*)malloc(sizeof(struct DvkBuf_) * cap);
-            if (bufs == (struct DvkBuf_*)0) return 0UL;
-            if (g_dvk_nbufs > 0UL) memcpy((void*)bufs, (const void*)g_dvk_bufs, sizeof(struct DvkBuf_) * g_dvk_nbufs);
-            if (g_dvk_bufs != (struct DvkBuf_*)0) free((void*)g_dvk_bufs);
-            g_dvk_bufs = bufs;
-            g_dvk_capbufs = cap;
+        if (!dvk_grow_((void**)&g_dvk_pieces, &g_dvk_cappieces, g_dvk_npieces, sizeof(struct DvkPiece_))) return 0UL;
+        unsigned long k = 0UL;
+        long off = -1L;
+        while (k < g_dvk_nblocks && off < 0L) {
+            off = dvk_take_(k, need);
+            if (off < 0L) k = k + 1UL;
         }
-        struct DvkBuf_ nb;
-        unsigned long addr = dvk_alloc_buf_(bytes, g_dvk_memtype, &nb);
-        if (addr == 0UL) return 0UL;
-        // insert, keeping the table sorted by address
-        unsigned long at = g_dvk_nbufs;
-        while (at > 0UL && g_dvk_bufs[at - 1UL].addr > addr) { g_dvk_bufs[at] = g_dvk_bufs[at - 1UL]; at = at - 1UL; }
-        g_dvk_bufs[at] = nb;
-        g_dvk_nbufs = g_dvk_nbufs + 1UL;
+        if (off < 0L) {
+            if (!dvk_grow_((void**)&g_dvk_blocks, &g_dvk_capblocks, g_dvk_nblocks, sizeof(struct DvkBlock_))) return 0UL;
+            struct DvkBlock_* bl = &g_dvk_blocks[g_dvk_nblocks];
+            unsigned long size = need > DVK_BLOCK_BYTES ? need : DVK_BLOCK_BYTES;
+            if (dvk_alloc_buf_(size, g_dvk_memtype, &bl->b) == 0UL) return 0UL;
+            bl->free = (struct DvkRange_*)0; bl->nfree = 0UL; bl->capfree = 0UL; bl->live = 1UL;
+            off = 0L;
+            if (size > need) {
+                if (!dvk_grow_((void**)&bl->free, &bl->capfree, 0UL, sizeof(struct DvkRange_))) return 0UL;
+                bl->free[0].off = need; bl->free[0].bytes = size - need; bl->nfree = 1UL;
+            }
+            k = g_dvk_nblocks;
+            g_dvk_nblocks = g_dvk_nblocks + 1UL;
+        }
+        struct DvkBlock_* b = &g_dvk_blocks[k];
+        unsigned long addr = b->b.addr + (unsigned long)off;
+        // insert the piece, keeping the table sorted by address
+        unsigned long at = g_dvk_npieces;
+        while (at > 0UL && g_dvk_pieces[at - 1UL].addr > addr) { g_dvk_pieces[at] = g_dvk_pieces[at - 1UL]; at = at - 1UL; }
+        g_dvk_pieces[at].addr = addr;
+        g_dvk_pieces[at].bytes = need;
+        g_dvk_pieces[at].cpu = b->b.cpu == (unsigned char*)0 ? (unsigned char*)0 : b->b.cpu + (unsigned long)off;
+        g_dvk_pieces[at].block = b->b.addr;
+        g_dvk_npieces = g_dvk_npieces + 1UL;
         return addr;
     }
 }
 
+// The piece goes back to its block; a block left empty goes back to the
+// driver (after the queued work, which may still use it).
 void VulkanBackend::release(unsigned long handle) {
     if (handle == 0UL) return;
     long i = dvk_find_(handle);
     if (i < 0L) return;
-    if (dvk_busy_()) dvk_wait_();
     unsafe {
-        vkDestroyBuffer(g_dvk_dev, g_dvk_bufs[i].buf, (const void*)0);
-        vkFreeMemory(g_dvk_dev, g_dvk_bufs[i].mem, (const void*)0);
+        struct DvkPiece_ pc = g_dvk_pieces[i];
         unsigned long j = (unsigned long)i;
-        while (j + 1UL < g_dvk_nbufs) { g_dvk_bufs[j] = g_dvk_bufs[j + 1UL]; j = j + 1UL; }
-        g_dvk_nbufs = g_dvk_nbufs - 1UL;
+        while (j + 1UL < g_dvk_npieces) { g_dvk_pieces[j] = g_dvk_pieces[j + 1UL]; j = j + 1UL; }
+        g_dvk_npieces = g_dvk_npieces - 1UL;
+        unsigned long k = 0UL;
+        while (k < g_dvk_nblocks && g_dvk_blocks[k].b.addr != pc.block) k = k + 1UL;
+        if (k == g_dvk_nblocks) return;
+        dvk_give_(k, pc.addr - pc.block, pc.bytes);
+        if (g_dvk_blocks[k].live > 0UL) return;
+        if (dvk_busy_()) dvk_wait_();
+        vkDestroyBuffer(g_dvk_dev, g_dvk_blocks[k].b.buf, (const void*)0);
+        vkFreeMemory(g_dvk_dev, g_dvk_blocks[k].b.mem, (const void*)0);
+        if (g_dvk_blocks[k].free != (struct DvkRange_*)0) free((void*)g_dvk_blocks[k].free);
+        g_dvk_blocks[k] = g_dvk_blocks[g_dvk_nblocks - 1UL];
+        g_dvk_nblocks = g_dvk_nblocks - 1UL;
     }
 }
 

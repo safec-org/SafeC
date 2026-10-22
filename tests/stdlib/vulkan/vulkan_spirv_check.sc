@@ -1,7 +1,7 @@
 // Correctness check for std/ml/gpu_spirv.h (array ops on a Vulkan GPU)
 // and tensor_spirv.h against CPU loops and tensors: every host-array op, a chain of buffer ops with no
 // read until its end, sums and products of awkward sizes, a write queued
-// behind ops that read the old contents, and the precise math the kernels
+// behind ops that read the old contents, dependent dispatches in order, and the precise math the kernels
 // need (fast math stays off under MoltenVK; a non-finite value is caught).
 // Needs a Vulkan GPU; run with tests/stdlib/vulkan/run.sh.
 #include <std/ml/gpu_spirv.h>
@@ -255,6 +255,31 @@ static void check_ieee_() {
     bg.free(); bs.free();
 }
 
+// 400 dependent dispatches over 4M values, queued back to back: each must
+// see the one before it (on MoltenVK the backend leaves out the barriers
+// between dispatches, its serial encoders ordering them).
+static void check_order_() {
+    unsigned long n = 4000000UL;
+    struct Vec<float> z = zeros(n);
+    struct Vec<float> o = zeros(n);
+    unsigned long i = 0UL;
+    while (i < n) { *o.at(i) = (float)1.0; i = i + 1UL; }
+    struct SpirvBuf x = SpirvBuf::upload((const &float)z.at(0UL), n);
+    struct SpirvBuf one = SpirvBuf::upload((const &float)o.at(0UL), n);
+    struct SpirvBuf y = SpirvBuf::alloc(n, 0);
+    int ok = x.valid() && one.valid() && y.valid();
+    int k = 0;
+    while (k < 200 && ok) { ok = spirv_add(x, one, y, n) && spirv_add(y, one, x, n); k = k + 1; }
+    unsafe { ok = ok && x.read((&void)z.at(0UL), 4UL * n); }
+    unsigned long wrong = 0UL;
+    i = 0UL;
+    while (i < n) { if (*z.at(i) != (float)400.0) wrong = wrong + 1UL; i = i + 1UL; }
+    unsafe { if (!ok || wrong > 0UL) printf("    order: ran %d, %lu values wrong\n", ok, wrong); }
+    check(ok && wrong == 0UL, "dependent dispatches run in order");
+    x.free(); one.free(); y.free();
+    z.free(); o.free();
+}
+
 // sum(relu(a . b)) and its gradients through tensor_spirv.h = through the CPU ops
 static void check_tensors_() {
     &FloatTensor a = FloatTensor::new_2d(5UL, 7UL, 1);
@@ -296,6 +321,7 @@ int main() {
     check_reductions_(1000003UL, 37UL, 65UL, 129UL);
     check_reductions_(4096UL, 128UL, 256UL, 64UL);
     check_chain_();
+    check_order_();
     check_tensors_();
     check_precise_();
     check_ieee_();
