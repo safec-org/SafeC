@@ -299,6 +299,16 @@ int  tensor_op_device_(void* a, void* b, void* c);
 ?&DenseTensor<float> tdev_slice_cols_(const &DenseTensor<float> a, unsigned long start, unsigned long len);
 ?&DenseTensor<float> tdev_gather_rows_(const &DenseTensor<float> table, const &DenseTensor<float> idx);
 ?&DenseTensor<float> tdev_softmax_(const &DenseTensor<float> a, int logMode);
+// Row softmax with attention.h's mask (causal, sliding window: ATTN_* flags).
+?&DenseTensor<float> tdev_softmax_mask_(const &DenseTensor<float> a, int causal, unsigned long window);
+?&DenseTensor<float> tdev_transpose_(const &DenseTensor<float> a);
+// Fused multi-head attention (attention.h's mha layout, every head in one
+// launch) with its backward: on the operands' device, or on the CPU through
+// device_ref.sc's versions of the same kernels. Null when a head is wider
+// than 128 or the device can't run it.
+?&DenseTensor<float> tensor_attention_fused_(const &DenseTensor<float> q, const &DenseTensor<float> k,
+                                             const &DenseTensor<float> v, unsigned long heads, int causal,
+                                             unsigned long window, float scale);
 ?&DenseTensor<float> tdev_loss_(const &DenseTensor<float> x, const &DenseTensor<float> t, int kind, float k);
 ?&DenseTensor<float> tdev_layer_norm_(const &DenseTensor<float> x, float eps);
 ?&DenseTensor<float> tdev_detach_(const &DenseTensor<float> a);

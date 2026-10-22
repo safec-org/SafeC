@@ -4,6 +4,8 @@
 #include <std/stddef.h>
 #include <std/ml/attention.h>
 #include <std/ml/tensor.h>
+#include <std/ml/tensor_nn.h>
+#include <std/ml/nn.h>
 #include <std/ml/activations.h>
 #include <std/math.h>
 
@@ -12,45 +14,104 @@ namespace std {
 extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
-&FloatTensor FloatTensor::softmax_rows() const {
+// ── Temporaries ──────────────────────────────────────────────────────────────
+void attn_release_(&FloatTensor t) {
+    match (t->owner) { case some(a): { return; } case null: { } }   // its TensorArena owns it
+    t->free();
+    unsafe { free((void*)t); }
+}
+
+void attn_release_tmp_(const &FloatTensor out, &FloatTensor t) {
+    int keep = 0;
+    unsafe { keep = out->requiresGrad; }
+    if (!keep) attn_release_(t);
+}
+
+// Whether ops on these record a graph.
+static int attn_grad_(const &FloatTensor a, const &FloatTensor b, const &FloatTensor c) {
+    if (!Autograd::get().enabled()) return 0;
+    unsafe { return a->requiresGrad || b->requiresGrad || c->requiresGrad; }
+}
+
+static int attn_on_cpu_(const &FloatTensor a, const &FloatTensor b, const &FloatTensor c) {
+    unsafe { return a->dev == DEVICE_CPU && b->dev == DEVICE_CPU && c->dev == DEVICE_CPU; }
+}
+
+// ── Softmax and transpose ────────────────────────────────────────────────────
+&FloatTensor FloatTensor::softmax_rows() const { return self.softmax(); }
+
+&FloatTensor FloatTensor::softmax_rows_mask(int causal, unsigned long window) const {
+    if (!causal && window == 0UL) return self.softmax();
+    match (tdev_softmax_mask_(self, causal, window)) { case some(o): { return o; } case null: { } }
     unsafe { tensor_host_((void*)self); }
     unsigned long rows; unsigned long cols;
-    unsafe { rows = self->shape[0]; cols = self->shape[1]; }
-    &FloatTensor out = FloatTensor::new_2d(rows, cols, 0);
+    unsafe { cols = self->shape[self->ndim - 1UL]; rows = self->size / cols; }
+    long off = (long)cols - (long)rows;
+    &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsigned long r = 0UL;
     while (r < rows) {
-        float rowMax;
-        unsafe { rowMax = self->data[r * cols]; }
-        unsigned long c = 1UL;
-        while (c < cols) {
-            float v;
-            unsafe { v = self->data[r * cols + c]; }
-            if (v > rowMax) rowMax = v;
-            c = c + 1UL;
-        }
+        long pos = (long)r + off;
+        // visible keys: [lo, hi)
+        long lo = window > 0UL ? pos - (long)window + 1L : 0L;
+        long hi = causal ? pos + 1L : (long)cols;
+        if (lo < 0L) lo = 0L;
+        if (hi > (long)cols) hi = (long)cols;
         unsafe {
             float* y = &out->data[r * cols];
             const float* xr = &self->data[r * cols];
-            c = 0UL;
-            while (c < cols) { y[c] = xr[c] - rowMax; c = c + 1UL; }
-            vm_exp_f32((const float*)y, y, cols);
-            float sum = (float)0.0;
-            c = 0UL;
-            while (c < cols) { sum = sum + y[c]; c = c + 1UL; }
-            float inv = (float)1.0 / sum;
-            c = 0UL;
-            while (c < cols) { y[c] = y[c] * inv; c = c + 1UL; }
+            unsigned long c = 0UL;
+            while (c < cols) { y[c] = (float)0.0; c = c + 1UL; }
+            if (lo < hi) {
+                unsigned long n = (unsigned long)(hi - lo);
+                float* yv = &y[(unsigned long)lo];
+                const float* xv = &xr[(unsigned long)lo];
+                float rowMax = xv[0];
+                c = 1UL;
+                while (c < n) { if (xv[c] > rowMax) rowMax = xv[c]; c = c + 1UL; }
+                c = 0UL;
+                while (c < n) { yv[c] = xv[c] - rowMax; c = c + 1UL; }
+                vm_exp_f32((const float*)yv, yv, n);
+                float sum = (float)0.0;
+                c = 0UL;
+                while (c < n) { sum = sum + yv[c]; c = c + 1UL; }
+                float inv = (float)1.0 / sum;
+                c = 0UL;
+                while (c < n) { yv[c] = yv[c] * inv; c = c + 1UL; }
+            }
         }
         r = r + 1UL;
     }
+    // hidden entries are 0: the softmax backward gives them no gradient
+    __tensor_link1(out, self, (void*)__softmax_backward);
     return out;
 }
 
+static void attn_transpose_backward_(void* selfPtr) {
+    unsafe {
+        FloatTensor* s = (FloatTensor*)selfPtr;
+        FloatTensor* a = __tensor_parent(s, 0UL);
+        if (!a->requiresGrad) return;
+        __tensor_ensure_grad(a);
+        unsigned long rows = a->shape[0];
+        unsigned long cols = a->shape[1];
+        unsigned long r = 0UL;
+        while (r < rows) {
+            unsigned long c = 0UL;
+            while (c < cols) { a->grad[r * cols + c] = a->grad[r * cols + c] + s->grad[c * rows + r]; c = c + 1UL; }
+            r = r + 1UL;
+        }
+    }
+}
+
 &FloatTensor FloatTensor::transpose() const {
+    match (tdev_transpose_(self)) { case some(o): { return o; } case null: { } }
     unsafe { tensor_host_((void*)self); }
     unsigned long rows; unsigned long cols;
     unsafe { rows = self->shape[0]; cols = self->shape[1]; }
-    &FloatTensor out = FloatTensor::new_2d(cols, rows, 0);
+    unsigned long shape[2];
+    unsafe { shape[0] = cols; shape[1] = rows; }
+    &FloatTensor out;
+    unsafe { out = __tensor_alloc((const unsigned long*)&shape[0], 2UL, 0); }
     unsigned long r = 0UL;
     while (r < rows) {
         unsigned long c = 0UL;
@@ -60,6 +121,7 @@ extern void  free(void* ptr);
         }
         r = r + 1UL;
     }
+    __tensor_link1(out, self, (void*)attn_transpose_backward_);
     return out;
 }
 
@@ -117,62 +179,96 @@ void tensor_set_cols(&FloatTensor dst, unsigned long startCol, const &FloatTenso
     }
 }
 
-&FloatTensor attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V) {
-    unsafe { tensor_host_((void*)Q); }
+// ── Scaled dot-product and multi-head attention ─────────────────────────────
+static int g_attn_fused = 1;
+
+int attention_set_fused(int on) {
+    int was = g_attn_fused;
+    g_attn_fused = on ? 1 : 0;
+    return was;
+}
+
+// One head from the composed ops: softmax(Q K^T / sqrt(d), masked) V.
+static &FloatTensor attn_composed_(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V, int causal,
+                                   unsigned long window) {
     unsigned long headDim;
     unsafe { headDim = Q->shape[1]; }
     &FloatTensor Kt = K.transpose();
     &FloatTensor scores = tensor_matmul(Q, Kt);
-    float scale = (float)1.0 / sqrt_f((float)headDim);
-    &FloatTensor scaled = scores.scale(scale);
-    &FloatTensor weights = scaled.softmax_rows();
+    &FloatTensor scaled = scores.scale((float)1.0 / sqrt_f((float)headDim));
+    &FloatTensor weights = scaled.softmax_rows_mask(causal, window);
     &FloatTensor result = tensor_matmul(weights, V);
-
-    Kt->free(); scores->free(); scaled->free(); weights->free();
-    unsafe { free((void*)Kt); free((void*)scores); free((void*)scaled); free((void*)weights); }
+    attn_release_tmp_(result, Kt); attn_release_tmp_(result, scores);
+    attn_release_tmp_(result, scaled); attn_release_tmp_(result, weights);
     return result;
 }
 
-&FloatTensor mha_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V, unsigned long numHeads) {
-    unsafe { tensor_host_((void*)Q); }
-    unsigned long seqLen; unsigned long dModel;
-    unsafe { seqLen = Q->shape[0]; dModel = Q->shape[1]; }
-    unsigned long headDim = dModel / numHeads;
+&FloatTensor attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V) {
+    return mha_forward_mask(Q, K, V, 1UL, 0, 0UL);
+}
 
-    &FloatTensor out = FloatTensor::new_2d(seqLen, dModel, 0);
+&FloatTensor attention_forward_mask(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V, int causal,
+                                    unsigned long window) {
+    return mha_forward_mask(Q, K, V, 1UL, causal, window);
+}
+
+&FloatTensor mha_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V, unsigned long numHeads) {
+    return mha_forward_mask(Q, K, V, numHeads, 0, 0UL);
+}
+
+&FloatTensor mha_forward_mask(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V, unsigned long numHeads,
+                              int causal, unsigned long window) {
+    unsigned long dModel; unsigned long dV;
+    unsafe { dModel = Q->shape[1]; dV = V->shape[1]; }
+    unsigned long headDim = dModel / numHeads;
+    unsigned long headDimV = dV / numHeads;
+    // on a GPU: every head in one launch
+    if (g_attn_fused && !attn_on_cpu_(Q, K, V)) {
+        match (tensor_attention_fused_(Q, K, V, numHeads, causal, window, (float)1.0 / sqrt_f((float)headDim))) {
+            case some(o): { return o; }
+            case null: { }
+        }
+    }
+    if (numHeads == 1UL) return attn_composed_(Q, K, V, causal, window);
+    // head by head, the outputs joined column-wise
+    ?&FloatTensor acc = null;
     unsigned long h = 0UL;
     while (h < numHeads) {
-        unsigned long startCol = h * headDim;
-        &FloatTensor Qh = Q.slice_cols(startCol, headDim);
-        &FloatTensor Kh = K.slice_cols(startCol, headDim);
-        &FloatTensor Vh = V.slice_cols(startCol, headDim);
-        &FloatTensor headOut = attention_forward(Qh, Kh, Vh);
-        tensor_set_cols(out, startCol, headOut);
-
-        Qh->free(); Kh->free(); Vh->free(); headOut->free();
-        unsafe { free((void*)Qh); free((void*)Kh); free((void*)Vh); free((void*)headOut); }
+        &FloatTensor Qh = Q.slice_cols(h * headDim, headDim);
+        &FloatTensor Kh = K.slice_cols(h * headDim, headDim);
+        &FloatTensor Vh = V.slice_cols(h * headDimV, headDimV);
+        &FloatTensor headOut = attn_composed_(Qh, Kh, Vh, causal, window);
+        attn_release_tmp_(headOut, Qh); attn_release_tmp_(headOut, Kh); attn_release_tmp_(headOut, Vh);
+        match (acc) {
+            case some(prev): {
+                &FloatTensor joined = tensor_concat_cols(prev, headOut);
+                attn_release_tmp_(joined, prev); attn_release_tmp_(joined, headOut);
+                acc = (?&FloatTensor)joined;
+            }
+            case null: { acc = (?&FloatTensor)headOut; }
+        }
         h = h + 1UL;
     }
-    return out;
+    match (acc) { case some(o): { return o; } case null: { } }
+    panic_at("mha_forward: numHeads must be > 0", "attention.sc", __LINE__);
+    return Q.scale((float)0.0);
 }
 
 &FloatTensor gated_attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V,
                                  const &FloatTensor gateLogits) {
     &FloatTensor raw = attention_forward(Q, K, V);
-    &FloatTensor gate = gateLogits.sigmoid_fwd();
+    &FloatTensor gate = gateLogits.sigmoid();
     &FloatTensor out = tensor_mul(raw, gate);
-    raw->free(); gate->free();
-    unsafe { free((void*)raw); free((void*)gate); }
+    attn_release_tmp_(out, raw); attn_release_tmp_(out, gate);
     return out;
 }
 
 &FloatTensor gated_mha_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V,
                            unsigned long numHeads, const &FloatTensor gateLogits) {
     &FloatTensor raw = mha_forward(Q, K, V, numHeads);
-    &FloatTensor gate = gateLogits.sigmoid_fwd();
+    &FloatTensor gate = gateLogits.sigmoid();
     &FloatTensor out = tensor_mul(raw, gate);
-    raw->free(); gate->free();
-    unsafe { free((void*)raw); free((void*)gate); }
+    attn_release_tmp_(out, raw); attn_release_tmp_(out, gate);
     return out;
 }
 
@@ -192,7 +288,36 @@ static &FloatTensor __phi_elu_p1(&FloatTensor x) {
     return out;
 }
 
+// The composed form (gradients, devices): phi(Q) (phi(K)^T V) divided row by
+// row by phi(Q) (phi(K)^T 1).
+static &FloatTensor attn_linear_graph_(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V) {
+    unsigned long dV;
+    unsafe { dV = V->shape[1]; }
+    &FloatTensor eq = Q.elu((float)1.0);
+    &FloatTensor phiQ = eq.add_scalar((float)1.0);
+    &FloatTensor ek = K.elu((float)1.0);
+    &FloatTensor phiK = ek.add_scalar((float)1.0);
+    &FloatTensor phiKt = phiK.transpose();               // [headDim, kvLen]
+    &FloatTensor KV = tensor_matmul(phiKt, V);           // [headDim, dV]
+    &FloatTensor Z = phiKt.sum_rows();                   // [headDim, 1]
+    &FloatTensor numer = tensor_matmul(phiQ, KV);        // [seqLen, dV]
+    &FloatTensor denom = tensor_matmul(phiQ, Z);         // [seqLen, 1], > 0
+    &FloatTensor ld = denom.log();
+    &FloatTensor nld = ld.scale((float)-1.0);
+    &FloatTensor inv = nld.exp();                        // 1 / denom
+    &FloatTensor ones = FloatTensor::new_2d(1UL, dV, 0);
+    ones.fill((float)1.0);
+    &FloatTensor invB = tensor_matmul(inv, ones);        // across the columns
+    &FloatTensor out = tensor_mul(numer, invB);
+    attn_release_tmp_(out, eq); attn_release_tmp_(out, phiQ); attn_release_tmp_(out, ek); attn_release_tmp_(out, phiK);
+    attn_release_tmp_(out, phiKt); attn_release_tmp_(out, KV); attn_release_tmp_(out, Z); attn_release_tmp_(out, numer);
+    attn_release_tmp_(out, denom); attn_release_tmp_(out, ld); attn_release_tmp_(out, nld); attn_release_tmp_(out, inv);
+    attn_release_tmp_(out, ones); attn_release_tmp_(out, invB);
+    return out;
+}
+
 &FloatTensor linear_attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V) {
+    if (attn_grad_(Q, K, V) || !attn_on_cpu_(Q, K, V)) return attn_linear_graph_(Q, K, V);
     unsafe { tensor_host_((void*)Q); tensor_host_((void*)K); tensor_host_((void*)V); }
     unsigned long seqLen; unsigned long headDim; unsigned long kvLen;
     unsafe { seqLen = Q->shape[0]; headDim = Q->shape[1]; kvLen = K->shape[0]; }
@@ -254,10 +379,15 @@ static &FloatTensor __phi_elu_p1(&FloatTensor x) {
 
 &FloatTensor flash_attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V,
                                  unsigned long kvBlockSize) {
-    unsafe { tensor_host_((void*)Q); tensor_host_((void*)K); tensor_host_((void*)V); }
     unsigned long seqLen; unsigned long headDim; unsigned long kvLen;
     unsafe { seqLen = Q->shape[0]; headDim = Q->shape[1]; kvLen = K->shape[0]; }
     float scale = (float)1.0 / sqrt_f((float)headDim);
+    if (attn_grad_(Q, K, V) || !attn_on_cpu_(Q, K, V)) {
+        // the fused op: the same online softmax, with a backward
+        match (tensor_attention_fused_(Q, K, V, 1UL, 0, 0UL, scale)) { case some(o): { return o; } case null: { } }
+        return attn_composed_(Q, K, V, 0, 0UL);
+    }
+    unsafe { tensor_host_((void*)Q); tensor_host_((void*)K); tensor_host_((void*)V); }
 
     &FloatTensor out = FloatTensor::new_2d(seqLen, headDim, 0); // doubles as the running 'acc' buffer
 
@@ -342,16 +472,13 @@ static &FloatTensor __phi_elu_p1(&FloatTensor x) {
 
 // A [rows, cols] weight, U(-1/sqrt(rows), 1/sqrt(rows)) (nn.h's Mlp init).
 &FloatTensor attn_weight_(unsigned long rows, unsigned long cols, &Rng rng) {
-    &FloatTensor w = FloatTensor::new_2d(rows, cols, 0);
+    &FloatTensor w = FloatTensor::new_2d(rows, cols, 1);
     float bound = (float)1.0 / sqrt_f((float)rows);
     rng.fill_uniform(w, -bound, bound);
     return w;
 }
 
-static void attn_drop_(&FloatTensor t) {
-    t->free();
-    unsafe { free((void*)t); }
-}
+static void attn_drop_(&FloatTensor t) { attn_release_(t); }
 
 struct MultiHeadAttention MultiHeadAttention::new(unsigned long dModel, unsigned long numHeads, &Rng rng) {
     if (numHeads == 0UL || dModel % numHeads != 0UL) panic_at("MultiHeadAttention::new: numHeads must divide dModel", "attention.sc", __LINE__);
@@ -361,6 +488,8 @@ struct MultiHeadAttention MultiHeadAttention::new(unsigned long dModel, unsigned
     a.Wv = attn_weight_(dModel, dModel, rng);
     a.Wo = attn_weight_(dModel, dModel, rng);
     a.numHeads = numHeads;
+    a.causal = 0;
+    a.window = 0UL;
     return a;
 }
 
@@ -368,9 +497,9 @@ struct MultiHeadAttention MultiHeadAttention::new(unsigned long dModel, unsigned
     &FloatTensor Q = tensor_matmul(X, self.Wq);
     &FloatTensor K = tensor_matmul(X, self.Wk);
     &FloatTensor V = tensor_matmul(X, self.Wv);
-    &FloatTensor h = mha_forward(Q, K, V, self.numHeads);
+    &FloatTensor h = mha_forward_mask(Q, K, V, self.numHeads, self.causal, self.window);
     &FloatTensor out = tensor_matmul(h, self.Wo);
-    attn_drop_(Q); attn_drop_(K); attn_drop_(V); attn_drop_(h);
+    attn_release_tmp_(out, Q); attn_release_tmp_(out, K); attn_release_tmp_(out, V); attn_release_tmp_(out, h);
     return out;
 }
 

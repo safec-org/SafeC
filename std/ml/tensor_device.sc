@@ -901,6 +901,210 @@ static void tdev_softmax_backward_(void* selfPtr) {
     return null;
 }
 
+// Masked (attention.h): flags bit 0 causal, bit 1 a sliding window; the
+// backward is the softmax's (hidden entries are 0, so they get no gradient).
+static unsigned int tdev_mask_flags_(int causal, unsigned long window) {
+    return (causal ? 1U : 0U) | (window > 0UL ? 2U : 0U);
+}
+
+?&FloatTensor tdev_softmax_mask_(const &FloatTensor a, int causal, unsigned long window) {
+    unsigned int flags = tdev_mask_flags_(causal, window);
+    if (flags == 0U) return tdev_softmax_(a, 0);
+    int d;
+    unsafe { d = tensor_op_device_((void*)a, (void*)0, (void*)0); }
+    if (d == DEVICE_CPU) return null;
+    unsafe {
+        if (!tensor_dev_((void*)a, d)) return null;
+        unsigned long cols = a->shape[a->ndim - 1UL];
+        unsigned long rows = a->size / cols;
+        match (tdev_like_((FloatTensor*)a, d, tdev_tag1_(d, (FloatTensor*)a))) {
+            case some(o): {
+                struct DevArgs g = dev_args_();
+                g.p[0] = a->dbuf; g.p[1] = o->dbuf; g.u[0] = (unsigned int)cols;
+                g.u[2] = flags; g.u[3] = (unsigned int)window; g.u[4] = (unsigned int)((long)cols - (long)rows);
+                if (!device_launch_(d, DK_SOFTMAX_ROWS, rows, &g)) { tdev_drop_((FloatTensor*)o); return null; }
+                o->extraScalar = (float)0.0;
+                __tensor_link1((FloatTensor*)o, (FloatTensor*)a, (void*)tdev_softmax_backward_);
+                return (?&FloatTensor)o;
+            }
+            case null: { return null; }
+        }
+    }
+    return null;
+}
+
+// ── Transpose ────────────────────────────────────────────────────────────────
+static void tdev_transpose_backward_(void* selfPtr) {
+    unsafe {
+        FloatTensor* s = (FloatTensor*)selfPtr;
+        FloatTensor* a = __tensor_parent(s, 0UL);
+        int m = a->requiresGrad ? tensor_grad_dev_acc_((void*)a, s->dev) : 0;
+        if (!m) return;
+        struct DevArgs g = dev_args_();
+        g.p[0] = s->dgrad; g.p[1] = a->dgrad;
+        g.u[0] = (unsigned int)s->shape[0]; g.u[1] = (unsigned int)s->shape[1]; g.u[2] = 1U; g.u[6] = m == 2 ? 1U : 0U;
+        device_launch_(s->dev, DK_TRANSPOSE, s->size, &g);
+        tensor_grad_dev_wrote_((void*)a);
+    }
+}
+
+?&FloatTensor tdev_transpose_(const &FloatTensor a) {
+    int d;
+    unsafe { d = tensor_op_device_((void*)a, (void*)0, (void*)0); }
+    if (d == DEVICE_CPU) return null;
+    unsafe {
+        if (a->ndim != 2UL || !tensor_dev_((void*)a, d)) return null;
+        unsigned long rows = a->shape[0];
+        unsigned long cols = a->shape[1];
+        match (tdev_2d_(cols, rows, d, tdev_tag1_(d, (FloatTensor*)a))) {
+            case some(o): {
+                struct DevArgs g = dev_args_();
+                g.p[0] = a->dbuf; g.p[1] = o->dbuf; g.u[0] = (unsigned int)rows; g.u[1] = (unsigned int)cols;
+                if (!device_launch_(d, DK_TRANSPOSE, a->size, &g)) { tdev_drop_((FloatTensor*)o); return null; }
+                __tensor_link1((FloatTensor*)o, (FloatTensor*)a, (void*)tdev_transpose_backward_);
+                return (?&FloatTensor)o;
+            }
+            case null: { return null; }
+        }
+    }
+    return null;
+}
+
+// ── Fused multi-head attention ───────────────────────────────────────────────
+// Node parents: q, k, v, lse [heads*S] (the rows' log-sum-exp, a constant of
+// the node), aux (host: heads, mask flags, window, scale). On the CPU the same
+// kernels run through device_ref.sc on the host buffers.
+#define TDEV_ATTN_MAXD 128UL
+// The kernels' launch: 256 threads per tile of 16 rows of each head.
+static unsigned long tdev_attn_threads_(unsigned long heads, unsigned long rows) {
+    return 256UL * heads * ((rows + 15UL) / 16UL);
+}
+
+static struct DevArgs tdev_attn_args_(FloatTensor* q, FloatTensor* k, FloatTensor* v, unsigned long heads,
+                                      unsigned int flags, unsigned long window, float scale) {
+    struct DevArgs g = dev_args_();
+    unsafe {
+        g.u[0] = (unsigned int)q->shape[0]; g.u[1] = (unsigned int)k->shape[0]; g.u[2] = (unsigned int)heads;
+        g.u[3] = (unsigned int)(q->shape[1] / heads); g.u[4] = (unsigned int)(v->shape[1] / heads);
+        g.u[5] = flags; g.u[6] = (unsigned int)window; g.f[0] = scale;
+    }
+    return g;
+}
+
+static void tdev_attn_backward_(void* selfPtr) {
+    unsafe {
+        FloatTensor* s = (FloatTensor*)selfPtr;
+        FloatTensor* q = __tensor_parent(s, 0UL);
+        FloatTensor* k = __tensor_parent(s, 1UL);
+        FloatTensor* v = __tensor_parent(s, 2UL);
+        FloatTensor* lse = __tensor_parent(s, 3UL);
+        FloatTensor* aux = __tensor_parent(s, 4UL);
+        unsigned long heads = (unsigned long)aux->data[0];
+        struct DevArgs g = tdev_attn_args_(q, k, v, heads, (unsigned int)aux->data[1], (unsigned long)aux->data[2],
+                                           aux->data[3]);
+        unsigned long nq = heads * q->shape[0];
+        unsigned long nk = heads * k->shape[0];
+        // where the forward pass ran (the node itself may have been copied to
+        // a device since, by an op with an operand there)
+        int d = lse->dev;
+        if (d == DEVICE_CPU) {
+            tensor_host_((void*)s); tensor_grad_host_((void*)s);
+            tensor_host_((void*)q); tensor_host_((void*)k); tensor_host_((void*)v);
+            float* ds = (float*)malloc(sizeof(float) * nq);
+            if (ds == (float*)0) return;
+            if (q->requiresGrad) __tensor_ensure_grad(q);
+            if (k->requiresGrad) __tensor_ensure_grad(k);
+            if (v->requiresGrad) __tensor_ensure_grad(v);
+            g.p[0] = (unsigned long)q->data; g.p[1] = (unsigned long)k->data; g.p[2] = (unsigned long)v->data;
+            g.p[3] = (unsigned long)s->data; g.p[4] = (unsigned long)lse->data; g.p[5] = (unsigned long)s->grad;
+            g.p[6] = q->requiresGrad ? (unsigned long)q->grad : 0UL; g.p[7] = (unsigned long)ds;
+            device_ref_launch_(DK_ATTN_BWD_Q, nq, &g);
+            g.p[3] = k->requiresGrad ? (unsigned long)k->grad : 0UL;
+            g.p[6] = v->requiresGrad ? (unsigned long)v->grad : 0UL;
+            if (g.p[3] != 0UL || g.p[6] != 0UL) device_ref_launch_(DK_ATTN_BWD_KV, nk, &g);
+            free((void*)ds);
+            return;
+        }
+        if (!tensor_dev_((void*)q, d) || !tensor_dev_((void*)k, d) || !tensor_dev_((void*)v, d)) return;
+        // in the order the kernels write: dq, then dk and dv (a tensor that is
+        // two of them is written once, then added to)
+        int mq = q->requiresGrad ? tensor_grad_dev_acc_((void*)q, d) : 0;
+        int mk = k->requiresGrad ? tensor_grad_dev_acc_((void*)k, d) : 0;
+        int mv = v->requiresGrad ? tensor_grad_dev_acc_((void*)v, d) : 0;
+        g.u[5] = g.u[5] | (mq == 2 ? 4U : 0U) | (mk == 2 ? 8U : 0U) | (mv == 2 ? 16U : 0U);
+        unsigned long ds = device_mem_alloc_(d, sizeof(float) * nq);
+        if (ds == 0UL) return;
+        g.p[0] = q->dbuf; g.p[1] = k->dbuf; g.p[2] = v->dbuf; g.p[3] = s->dbuf; g.p[4] = lse->dbuf; g.p[5] = s->dgrad;
+        g.p[6] = mq != 0 ? q->dgrad : 0UL; g.p[7] = ds;
+        device_launch_(d, DK_ATTN_BWD_Q, tdev_attn_threads_(heads, q->shape[0]), &g);
+        g.p[3] = mk != 0 ? k->dgrad : 0UL;
+        g.p[6] = mv != 0 ? v->dgrad : 0UL;
+        if (mk != 0 || mv != 0) device_launch_(d, DK_ATTN_BWD_KV, tdev_attn_threads_(heads, k->shape[0]), &g);
+        device_mem_free_(d, ds, sizeof(float) * nq);
+        if (mq != 0) tensor_grad_dev_wrote_((void*)q);
+        if (mk != 0) tensor_grad_dev_wrote_((void*)k);
+        if (mv != 0) tensor_grad_dev_wrote_((void*)v);
+    }
+}
+
+?&FloatTensor tensor_attention_fused_(const &FloatTensor q, const &FloatTensor k, const &FloatTensor v,
+                                      unsigned long heads, int causal, unsigned long window, float scale) {
+    unsafe {
+        if (heads == 0UL || q->ndim != 2UL || k->ndim != 2UL || v->ndim != 2UL) return null;
+        unsigned long S = q->shape[0];
+        unsigned long L = k->shape[0];
+        if (v->shape[0] != L || k->shape[1] != q->shape[1] || q->shape[1] % heads != 0UL || v->shape[1] % heads != 0UL) return null;
+        unsigned long D = q->shape[1] / heads;
+        unsigned long E = v->shape[1] / heads;
+        if (D == 0UL || D > TDEV_ATTN_MAXD || E == 0UL || E > TDEV_ATTN_MAXD || S == 0UL || L == 0UL) return null;
+        if (tdev_attn_threads_(heads, S > L ? S : L) >= 4294967295UL || heads * (S > L ? S : L) * (D > E ? D : E) >= 4294967295UL) return null;
+        unsigned int flags = tdev_mask_flags_(causal, window);
+        struct DevArgs g = tdev_attn_args_((FloatTensor*)q, (FloatTensor*)k, (FloatTensor*)v, heads, flags, window, scale);
+        int d = tensor_op_device_((void*)q, (void*)k, (void*)v);
+        FloatTensor* out;
+        FloatTensor* lse;
+        if (d == DEVICE_CPU) {
+            tensor_host_((void*)q); tensor_host_((void*)k); tensor_host_((void*)v);
+            unsigned long shape[2];
+            shape[0] = S; shape[1] = heads * E;
+            out = __tensor_alloc((const unsigned long*)&shape[0], 2UL, 0);
+            shape[0] = heads * S;
+            lse = __tensor_alloc((const unsigned long*)&shape[0], 1UL, 0);
+            g.p[0] = (unsigned long)q->data; g.p[1] = (unsigned long)k->data; g.p[2] = (unsigned long)v->data;
+            g.p[3] = (unsigned long)out->data; g.p[4] = (unsigned long)lse->data;
+            device_ref_launch_(DK_ATTN_FWD, heads * S, &g);
+        } else {
+            if (!tensor_dev_((void*)q, d) || !tensor_dev_((void*)k, d) || !tensor_dev_((void*)v, d)) return null;
+            int tag = (dev_tag_(q->dbuf) != 0UL || dev_tag_(k->dbuf) != 0UL || dev_tag_(v->dbuf) != 0UL)
+                      ? device_store_tag_(d) : DEVICE_FP32;
+            match (tdev_2d_(S, heads * E, d, tag)) {
+                case some(o): { out = (FloatTensor*)o; }
+                case null: { return null; }
+            }
+            match (tdev_1d_(heads * S, d)) {
+                case some(l): { lse = (FloatTensor*)l; }
+                case null: { tdev_drop_(out); return null; }
+            }
+            g.p[0] = q->dbuf; g.p[1] = k->dbuf; g.p[2] = v->dbuf; g.p[3] = out->dbuf; g.p[4] = lse->dbuf;
+            if (!device_launch_(d, DK_ATTN_FWD, tdev_attn_threads_(heads, S), &g)) { tdev_drop_(out); tdev_drop_(lse); return null; }
+            lse->coh = lse->coh & ~TS_DEVOP;   // a constant of the node
+        }
+        if (Autograd::get().enabled() && (q->requiresGrad || k->requiresGrad || v->requiresGrad)) {
+            &FloatTensor aux = tdev_aux_((float)heads, (float)flags, (float)window, scale);
+            out->requiresGrad = 1;
+            out->parents.push(q);
+            out->parents.push(k);
+            out->parents.push(v);
+            out->parents.push(lse);
+            out->parents.push(aux);
+            out->gradFn = (void*)tdev_attn_backward_;
+        } else {
+            tdev_drop_(lse);
+        }
+        return (?&FloatTensor)(&FloatTensor)out;
+    }
+}
+
 // ── Fused losses ─────────────────────────────────────────────────────────────
 // kind: 0 cross-entropy (t = class indices), 1 BCE on logits, 2 Huber (k = delta)
 static void tdev_loss_backward_(void* selfPtr) {

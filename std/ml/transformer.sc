@@ -4,7 +4,9 @@
 #include <std/ml/transformer.h>
 #include <std/ml/tensor.h>
 #include <std/ml/attention.h>
-#include <std/ml/activations.h>
+#include <std/ml/tensor_nn.h>
+#include <std/ml/nn.h>
+#include <std/ml/norm.h>
 
 namespace std {
 
@@ -12,7 +14,7 @@ extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
 static &FloatTensor __xf_init_weight(unsigned long rows, unsigned long cols, unsigned long seed) {
-    &FloatTensor t = FloatTensor::new_2d(rows, cols, 0);
+    &FloatTensor t = FloatTensor::new_2d(rows, cols, 1);
     unsafe {
         unsigned long i = 0UL;
         while (i < t->size) {
@@ -26,56 +28,33 @@ static &FloatTensor __xf_init_weight(unsigned long rows, unsigned long cols, uns
     return t;
 }
 
-static &FloatTensor __add_broadcast_row(&FloatTensor mat, &FloatTensor row) {
-    unsafe { tensor_host_write_((void*)mat); tensor_host_write_((void*)row); }
-    unsigned long rows; unsigned long cols;
-    unsafe { rows = mat->shape[0]; cols = mat->shape[1]; }
-    &FloatTensor out = FloatTensor::new_2d(rows, cols, 0);
-    unsafe {
-        unsigned long r = 0UL;
-        while (r < rows) {
-            unsigned long c = 0UL;
-            while (c < cols) { out->data[r * cols + c] = mat->data[r * cols + c] + row->data[c]; c = c + 1UL; }
-            r = r + 1UL;
-        }
-    }
-    return out;
+// A block's temporaries: freed after the forward pass unless its result is
+// part of a graph (backward reads them).
+static &FloatTensor xf_tmp_(&Vec<&FloatTensor> tmp, &FloatTensor t) {
+    tmp.push(t);
+    return t;
 }
 
-static &FloatTensor __mul_broadcast_row(&FloatTensor mat, &FloatTensor row) {
-    unsafe { tensor_host_write_((void*)mat); tensor_host_write_((void*)row); }
-    unsigned long rows; unsigned long cols;
-    unsafe { rows = mat->shape[0]; cols = mat->shape[1]; }
-    &FloatTensor out = FloatTensor::new_2d(rows, cols, 0);
-    unsafe {
-        unsigned long r = 0UL;
-        while (r < rows) {
-            unsigned long c = 0UL;
-            while (c < cols) { out->data[r * cols + c] = mat->data[r * cols + c] * row->data[c]; c = c + 1UL; }
-            r = r + 1UL;
-        }
-    }
-    return out;
+static void xf_release_(const &FloatTensor out, &Vec<&FloatTensor> tmp) {
+    unsigned long i = 0UL;
+    while (i < tmp.length()) { attn_release_tmp_(out, *tmp.at(i)); i = i + 1UL; }
+    tmp.free();
 }
 
-// mat * (1 + row), broadcast — the "scale" half of AdaLN modulation.
-static &FloatTensor __mul_broadcast_row_plus1(&FloatTensor mat, &FloatTensor row) {
-    unsafe { tensor_host_write_((void*)mat); tensor_host_write_((void*)row); }
-    unsigned long rows; unsigned long cols;
-    unsafe { rows = mat->shape[0]; cols = mat->shape[1]; }
-    &FloatTensor out = FloatTensor::new_2d(rows, cols, 0);
-    unsafe {
-        unsigned long r = 0UL;
-        while (r < rows) {
-            unsigned long c = 0UL;
-            while (c < cols) {
-                out->data[r * cols + c] = mat->data[r * cols + c] * ((float)1.0 + row->data[c]);
-                c = c + 1UL;
-            }
-            r = r + 1UL;
-        }
-    }
-    return out;
+// The feed-forward sublayer: relu(x W1 + b1) W2 + b2.
+static &FloatTensor xf_ffn_(&Vec<&FloatTensor> tmp, const &FloatTensor x, const &FloatTensor W1, const &FloatTensor b1,
+                            const &FloatTensor W2, const &FloatTensor b2) {
+    &FloatTensor hid = xf_tmp_(tmp, tensor_add_bias(xf_tmp_(tmp, tensor_matmul(x, W1)), b1)).relu();
+    return tensor_add_bias(xf_tmp_(tmp, tensor_matmul(xf_tmp_(tmp, hid), W2)), b2);
+}
+
+// Self-attention: mha(x Wq, x Wk, x Wv) Wo.
+static &FloatTensor xf_attn_(&Vec<&FloatTensor> tmp, const &FloatTensor x, const &FloatTensor Wq, const &FloatTensor Wk,
+                             const &FloatTensor Wv, const &FloatTensor Wo, unsigned long numHeads) {
+    &FloatTensor Q = xf_tmp_(tmp, tensor_matmul(x, Wq));
+    &FloatTensor K = xf_tmp_(tmp, tensor_matmul(x, Wk));
+    &FloatTensor V = xf_tmp_(tmp, tensor_matmul(x, Wv));
+    return tensor_matmul(xf_tmp_(tmp, mha_forward(Q, K, V, numHeads)), Wo);
 }
 
 // ── DiT ───────────────────────────────────────────────────────────────────────
@@ -87,9 +66,9 @@ struct DiTBlock DiTBlock::new(unsigned long dModel, unsigned long dHidden, unsig
     blk.Wv = __xf_init_weight(dModel, dModel, 103UL);
     blk.Wo = __xf_init_weight(dModel, dModel, 104UL);
     blk.W1 = __xf_init_weight(dModel, dHidden, 105UL);
-    blk.b1 = FloatTensor::new_2d(1UL, dHidden, 0);
+    blk.b1 = FloatTensor::new_2d(1UL, dHidden, 1);
     blk.W2 = __xf_init_weight(dHidden, dModel, 106UL);
-    blk.b2 = FloatTensor::new_2d(1UL, dModel, 0);
+    blk.b2 = FloatTensor::new_2d(1UL, dModel, 1);
     blk.WadaLN = __xf_init_weight(dModelCond, 6UL * dModel, 107UL);
     blk.numHeads = numHeads;
     return blk;
@@ -106,61 +85,32 @@ void DiTBlock::free() {
 }
 
 &FloatTensor DiTBlock::forward(const &FloatTensor x, const &FloatTensor c) const {
-    unsafe { tensor_host_((void*)x); }
-    &FloatTensor Wq; &FloatTensor Wk; &FloatTensor Wv; &FloatTensor Wo;
-    &FloatTensor W1; &FloatTensor b1w; &FloatTensor W2; &FloatTensor b2w; &FloatTensor WadaLN;
-    unsigned long numHeads; unsigned long dModel;
-    unsafe {
-        Wq = self->Wq; Wk = self->Wk; Wv = self->Wv; Wo = self->Wo;
-        W1 = self->W1; b1w = self->b1; W2 = self->W2; b2w = self->b2; WadaLN = self->WadaLN;
-        numHeads = self->numHeads;
-        dModel = x->shape[1];
-    }
+    unsigned long dModel;
+    unsafe { dModel = x->shape[1]; }
+    struct Vec<&FloatTensor> tmp = vec_new();
 
-    &FloatTensor mod = tensor_matmul(c, WadaLN);
-    &FloatTensor shift1 = mod.slice_cols(0UL, dModel);
-    &FloatTensor scale1 = mod.slice_cols(dModel, dModel);
-    &FloatTensor gate1 = mod.slice_cols(2UL * dModel, dModel);
-    &FloatTensor shift2 = mod.slice_cols(3UL * dModel, dModel);
-    &FloatTensor scale2 = mod.slice_cols(4UL * dModel, dModel);
-    &FloatTensor gate2 = mod.slice_cols(5UL * dModel, dModel);
+    &FloatTensor mod = xf_tmp_(&tmp, tensor_matmul(c, self.WadaLN));
+    &FloatTensor shift1 = xf_tmp_(&tmp, mod.slice_cols(0UL, dModel));
+    &FloatTensor scale1 = xf_tmp_(&tmp, mod.slice_cols(dModel, dModel));
+    &FloatTensor gate1 = xf_tmp_(&tmp, mod.slice_cols(2UL * dModel, dModel));
+    &FloatTensor shift2 = xf_tmp_(&tmp, mod.slice_cols(3UL * dModel, dModel));
+    &FloatTensor scale2 = xf_tmp_(&tmp, mod.slice_cols(4UL * dModel, dModel));
+    &FloatTensor gate2 = xf_tmp_(&tmp, mod.slice_cols(5UL * dModel, dModel));
 
-    &FloatTensor h = x.layernorm_rows((float)1e-5);
-    &FloatTensor hScaled = __mul_broadcast_row_plus1(h, scale1);
-    &FloatTensor hMod = __add_broadcast_row(hScaled, shift1);
-    &FloatTensor Q = tensor_matmul(hMod, Wq);
-    &FloatTensor K = tensor_matmul(hMod, Wk);
-    &FloatTensor V = tensor_matmul(hMod, Wv);
-    &FloatTensor attnRaw = mha_forward(Q, K, V, numHeads);
-    &FloatTensor attnOut = tensor_matmul(attnRaw, Wo);
-    &FloatTensor gatedAttn = __mul_broadcast_row(attnOut, gate1);
-    &FloatTensor x1 = tensor_residual_add(x, gatedAttn);
+    // x + gate1 * attn(LN(x) * (1 + scale1) + shift1)
+    &FloatTensor h = xf_tmp_(&tmp, x.layer_norm((float)1e-5));
+    &FloatTensor hScaled = xf_tmp_(&tmp, tensor_mul_row(h, xf_tmp_(&tmp, scale1.add_scalar((float)1.0))));
+    &FloatTensor hMod = xf_tmp_(&tmp, tensor_add_bias(hScaled, shift1));
+    &FloatTensor attnOut = xf_tmp_(&tmp, xf_attn_(&tmp, hMod, self.Wq, self.Wk, self.Wv, self.Wo, self.numHeads));
+    &FloatTensor x1 = xf_tmp_(&tmp, tensor_add(x, xf_tmp_(&tmp, tensor_mul_row(attnOut, gate1))));
 
-    &FloatTensor h2 = x1.layernorm_rows((float)1e-5);
-    &FloatTensor h2Scaled = __mul_broadcast_row_plus1(h2, scale2);
-    &FloatTensor h2Mod = __add_broadcast_row(h2Scaled, shift2);
-    &FloatTensor ffnHiddenRaw = tensor_matmul(h2Mod, W1);
-    &FloatTensor ffnHiddenBias = __add_broadcast_row(ffnHiddenRaw, b1w);
-    &FloatTensor ffnHidden = ffnHiddenBias.relu_fwd();
-    &FloatTensor ffnOutRaw = tensor_matmul(ffnHidden, W2);
-    &FloatTensor ffnOut = __add_broadcast_row(ffnOutRaw, b2w);
-    &FloatTensor gatedFfn = __mul_broadcast_row(ffnOut, gate2);
-    &FloatTensor out = tensor_residual_add(x1, gatedFfn);
-
-    mod->free(); shift1->free(); scale1->free(); gate1->free(); shift2->free(); scale2->free(); gate2->free();
-    h->free(); hScaled->free(); hMod->free(); Q->free(); K->free(); V->free();
-    attnRaw->free(); attnOut->free(); gatedAttn->free(); x1->free();
-    h2->free(); h2Scaled->free(); h2Mod->free(); ffnHiddenRaw->free(); ffnHiddenBias->free();
-    ffnHidden->free(); ffnOutRaw->free(); ffnOut->free(); gatedFfn->free();
-    unsafe {
-        free((void*)mod); free((void*)shift1); free((void*)scale1); free((void*)gate1);
-        free((void*)shift2); free((void*)scale2); free((void*)gate2);
-        free((void*)h); free((void*)hScaled); free((void*)hMod); free((void*)Q); free((void*)K); free((void*)V);
-        free((void*)attnRaw); free((void*)attnOut); free((void*)gatedAttn); free((void*)x1);
-        free((void*)h2); free((void*)h2Scaled); free((void*)h2Mod);
-        free((void*)ffnHiddenRaw); free((void*)ffnHiddenBias);
-        free((void*)ffnHidden); free((void*)ffnOutRaw); free((void*)ffnOut); free((void*)gatedFfn);
-    }
+    // x1 + gate2 * ffn(LN(x1) * (1 + scale2) + shift2)
+    &FloatTensor h2 = xf_tmp_(&tmp, x1.layer_norm((float)1e-5));
+    &FloatTensor h2Scaled = xf_tmp_(&tmp, tensor_mul_row(h2, xf_tmp_(&tmp, scale2.add_scalar((float)1.0))));
+    &FloatTensor h2Mod = xf_tmp_(&tmp, tensor_add_bias(h2Scaled, shift2));
+    &FloatTensor ffnOut = xf_tmp_(&tmp, xf_ffn_(&tmp, h2Mod, self.W1, self.b1, self.W2, self.b2));
+    &FloatTensor out = tensor_add(x1, xf_tmp_(&tmp, tensor_mul_row(ffnOut, gate2)));
+    xf_release_(out, &tmp);
     return out;
 }
 
@@ -172,9 +122,9 @@ struct JiTBlock JiTBlock::new(unsigned long dModel, unsigned long dHidden, unsig
     blk.Wv = __xf_init_weight(dModel, dModel, 203UL);
     blk.Wo = __xf_init_weight(dModel, dModel, 204UL);
     blk.W1 = __xf_init_weight(dModel, dHidden, 205UL);
-    blk.b1 = FloatTensor::new_2d(1UL, dHidden, 0);
+    blk.b1 = FloatTensor::new_2d(1UL, dHidden, 1);
     blk.W2 = __xf_init_weight(dHidden, dModel, 206UL);
-    blk.b2 = FloatTensor::new_2d(1UL, dModel, 0);
+    blk.b2 = FloatTensor::new_2d(1UL, dModel, 1);
     blk.numHeads = numHeads;
     return blk;
 }
@@ -189,39 +139,13 @@ void JiTBlock::free() {
 }
 
 &FloatTensor JiTBlock::forward(const &FloatTensor x) const {
-    &FloatTensor Wq; &FloatTensor Wk; &FloatTensor Wv; &FloatTensor Wo;
-    &FloatTensor W1; &FloatTensor b1w; &FloatTensor W2; &FloatTensor b2w;
-    unsigned long numHeads;
-    unsafe {
-        Wq = self->Wq; Wk = self->Wk; Wv = self->Wv; Wo = self->Wo;
-        W1 = self->W1; b1w = self->b1; W2 = self->W2; b2w = self->b2;
-        numHeads = self->numHeads;
-    }
-
-    &FloatTensor h = x.layernorm_rows((float)1e-5);
-    &FloatTensor Q = tensor_matmul(h, Wq);
-    &FloatTensor K = tensor_matmul(h, Wk);
-    &FloatTensor V = tensor_matmul(h, Wv);
-    &FloatTensor attnRaw = mha_forward(Q, K, V, numHeads);
-    &FloatTensor attnOut = tensor_matmul(attnRaw, Wo);
-    &FloatTensor x1 = tensor_residual_add(x, attnOut);
-
-    &FloatTensor h2 = x1.layernorm_rows((float)1e-5);
-    &FloatTensor ffnHiddenRaw = tensor_matmul(h2, W1);
-    &FloatTensor ffnHiddenBias = __add_broadcast_row(ffnHiddenRaw, b1w);
-    &FloatTensor ffnHidden = ffnHiddenBias.relu_fwd();
-    &FloatTensor ffnOutRaw = tensor_matmul(ffnHidden, W2);
-    &FloatTensor ffnOut = __add_broadcast_row(ffnOutRaw, b2w);
-    &FloatTensor out = tensor_residual_add(x1, ffnOut);
-
-    h->free(); Q->free(); K->free(); V->free(); attnRaw->free(); attnOut->free(); x1->free();
-    h2->free(); ffnHiddenRaw->free(); ffnHiddenBias->free(); ffnHidden->free(); ffnOutRaw->free(); ffnOut->free();
-    unsafe {
-        free((void*)h); free((void*)Q); free((void*)K); free((void*)V);
-        free((void*)attnRaw); free((void*)attnOut); free((void*)x1);
-        free((void*)h2); free((void*)ffnHiddenRaw); free((void*)ffnHiddenBias);
-        free((void*)ffnHidden); free((void*)ffnOutRaw); free((void*)ffnOut);
-    }
+    struct Vec<&FloatTensor> tmp = vec_new();
+    &FloatTensor h = xf_tmp_(&tmp, x.layer_norm((float)1e-5));
+    &FloatTensor attnOut = xf_tmp_(&tmp, xf_attn_(&tmp, h, self.Wq, self.Wk, self.Wv, self.Wo, self.numHeads));
+    &FloatTensor x1 = xf_tmp_(&tmp, tensor_add(x, attnOut));
+    &FloatTensor h2 = xf_tmp_(&tmp, x1.layer_norm((float)1e-5));
+    &FloatTensor out = tensor_add(x1, xf_tmp_(&tmp, xf_ffn_(&tmp, h2, self.W1, self.b1, self.W2, self.b2)));
+    xf_release_(out, &tmp);
     return out;
 }
 
@@ -237,15 +161,13 @@ struct JiT JiT::new(unsigned long patchDim, unsigned long dModel, unsigned long 
 
 &FloatTensor JiT::forward(const &FloatTensor patches, const &FloatTensor cond) const {
     &FloatTensor embedRaw = tensor_matmul(patches, self.WPatchEmbed);
-    &FloatTensor x = __add_broadcast_row(embedRaw, cond);
-    embedRaw->free();
-    unsafe { free((void*)embedRaw); }
+    &FloatTensor x = tensor_add_bias(embedRaw, cond);
+    attn_release_tmp_(x, embedRaw);
 
     unsigned long i = 0UL;
     while (i < self.blocks.length()) {
         &FloatTensor next = self.blocks.at(i).forward(x);
-        x->free();
-        unsafe { free((void*)x); }
+        attn_release_tmp_(next, x);
         x = next;
         i = i + 1UL;
     }
@@ -261,8 +183,7 @@ void JiT::collect_params(&Vec<&FloatTensor> out) const {
 void JiT::collect_state(&Vec<&FloatTensor> out) const { self.collect_params(out); }
 
 void JiT::free() {
-    self.WPatchEmbed->free();
-    unsafe { free((void*)self.WPatchEmbed); }
+    attn_release_(self.WPatchEmbed);
     unsigned long i = 0UL;
     while (i < self.blocks.length()) { self.blocks.at(i).free(); i = i + 1UL; }
     self.blocks.free();

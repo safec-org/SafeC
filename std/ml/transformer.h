@@ -6,9 +6,11 @@
 //
 // Both operate on [seqLen, dModel] token sequences (already-patchified/
 // embedded — no patchify/positional-encoding logic here, same scope
-// choice attention.h makes) built from std::mha_forward,
-// std::tensor_layernorm_rows, and plain feed-forward blocks. Forward-
-// only, like the rest of std/ml.
+// choice attention.h makes) built from std::mha_forward, layer norm
+// (norm.h) and plain feed-forward blocks. Their weights require grad and
+// every op records its backward edges, so they train through trainer.h --
+// on a GPU too (TrainConfig.device, model_to), where the attention runs as
+// attention.h's fused kernels.
 #include <std/ml/tensor.h>
 #include <std/ml/attention.h>
 #include <std/ml/activations.h>

@@ -1,14 +1,22 @@
 #pragma once
 // SafeC Standard Library — Attention (scaled dot-product + multi-head).
 //
-// Built on std/ml/tensor.h's CPU Tensor. Inference-focused (the
-// vLLM-inspired half of this library's brief), not a training library:
-// Tensor::softmax_rows() and the attention functions below are forward-only —
-// they don't record Autograd::get edges (see tensor.h's Tensor::gradFn) even
-// on requiresGrad inputs. Q/K/V are always plain 2D tensors, [seqLen,
-// dim] — no batch dimension (call these once per sequence in a batch)
-// and no positional encoding baked in (add it to Q/K yourself before
-// calling, e.g. via tensor_add with a precomputed positional tensor).
+// Built on std/ml/tensor.h's Tensor. Every op here records its backward
+// edges like tensor_matmul does, so attention layers train (trainer.h), and
+// runs where its operands live (device.h): on a GPU the multi-head ops run
+// as one fused kernel launch for every head -- QK^T, the softmax and the
+// product with V, never forming the score matrix -- with a fused backward,
+// and otherwise compose the device ops (transpose, matmul, masked softmax,
+// column slices). Q/K/V are plain 2D tensors, [seqLen, dim] -- no batch
+// dimension (call these once per sequence in a batch) and no positional
+// encoding baked in (add it to Q/K yourself before calling, e.g. via
+// tensor_add with a positional tensor).
+//
+// Masks: query row i sits at position pos = i + (kvLen - seqLen) (the last
+// seqLen keys are the queries' own tokens, any before them a KV cache).
+// causal hides keys j > pos; a sliding window w > 0 hides keys j <= pos - w
+// (the query sees its last w positions). A query with no visible key gets
+// zeros. These are gpu_rocm.h / gpu_cuda_attention.h / gpu_mps.h's masks.
 //
 // Scope note: standard scaled-dot-product/MHA, gated attention, gated
 // MHA, linear attention, and flash attention are implemented and
@@ -17,11 +25,12 @@
 // attention_advanced.h/.sc. std/ml/ROADMAP.md tracks anything still
 // outstanding.
 //
-// GPU versions: gpu_cuda_attention.h (NVIDIA) and gpu_mps.h's
+// Inference kernels: gpu_cuda_attention.h (NVIDIA) and gpu_mps.h's
 // mps_flash_attention / mps_linear_attention (Apple) -- batched multi-head
 // flash and linear attention, GQA, causal and sliding-window masks,
 // fp32/fp16/bf16, with the same argument forms -- and gpu_rocm.h's
-// rocm_flash_attention / rocm_linear_attention (AMD, fp32).
+// rocm_flash_attention / rocm_linear_attention (AMD, fp32), on their own
+// [heads][seqLen][headDim] buffers, forward only.
 #include <std/ml/tensor.h>
 #include <std/ml/nn.h>
 #include <std/collections/vec.h>
@@ -30,8 +39,10 @@ namespace std {
 
 // Row-wise softmax: for a [rows, cols] tensor, each output row sums to 1.
 // Numerically stable (subtracts each row's max before exponentiating).
-// Forward-only — see this header's note above.
 &FloatTensor FloatTensor::softmax_rows() const;
+// The same over the keys a mask leaves visible (row r is query r of a
+// [seqLen, kvLen] score matrix; see the masks above); hidden entries are 0.
+&FloatTensor FloatTensor::softmax_rows_mask(int causal, unsigned long window) const;
 
 // out[r][c] = in[r][c] transposed -> [cols, rows].
 &FloatTensor FloatTensor::transpose() const;
@@ -42,9 +53,9 @@ namespace std {
 &FloatTensor FloatTensor::slice_cols(unsigned long startCol, unsigned long numCols) const;
 
 // Writes 'src' into 'dst's column range [startCol, startCol+numCols)
-// (numCols == src's own column count), row by row. Used to reassemble
-// per-head outputs into one [seqLen, dModel] tensor after mha_forward's
-// per-head loop.
+// (numCols == src's own column count), row by row, in place -- not part of
+// the graph (tensor_concat_cols is the differentiable way to assemble
+// columns).
 void tensor_set_cols(&FloatTensor dst, unsigned long startCol, const &FloatTensor src);
 
 // Single-head scaled dot-product attention: softmax(Q @ K^T / sqrt(headDim)) @ V.
@@ -58,6 +69,18 @@ void tensor_set_cols(&FloatTensor dst, unsigned long startCol, const &FloatTenso
 // "Attention Is All You Need", without a separate output-projection
 // matrix (apply your own W_O via tensor_matmul on the result if needed).
 &FloatTensor mha_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V, unsigned long numHeads);
+
+// The two with a mask (causal 0/1, window 0 for none; see above).
+&FloatTensor attention_forward_mask(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V, int causal,
+                                    unsigned long window);
+&FloatTensor mha_forward_mask(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V, unsigned long numHeads,
+                              int causal, unsigned long window);
+
+// Whether the multi-head ops on a GPU run as the fused kernels (1, the
+// default) or as composed device ops (0: transpose, matmul, masked softmax
+// per head -- for comparison and testing). Head dims over 128 always
+// compose. Returns the previous setting.
+int attention_set_fused(int on);
 
 // ── Gated attention ──────────────────────────────────────────────────────────
 // Output gating: sigmoid(gateLogits) elementwise-multiplied into the
@@ -88,19 +111,24 @@ void tensor_set_cols(&FloatTensor dst, unsigned long startCol, const &FloatTenso
 // the same result as attention_forward() (up to floating-point rounding)
 // — the point is the memory-access pattern, not a different answer.
 // Q: [seqLen,headDim], K/V: [kvLen,headDim] -> result: [seqLen,headDim].
+// When it records gradients, or on a GPU, it is the fused attention op (one
+// row per thread with an online softmax: also never the full score matrix),
+// whose backward recomputes the scores from each row's log-sum-exp.
 &FloatTensor flash_attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V,
                                  unsigned long kvBlockSize);
 
 // ── Multi-head self-attention layer ──────────────────────────────────────────
-// The projections around mha_forward as one layer (forward only, like the
-// ops above):
-//   out = mha_forward(X Wq, X Wk, X Wv, numHeads) Wo      X: [seqLen, dModel]
+// The projections around mha_forward as one layer:
+//   out = mha_forward_mask(X Wq, X Wk, X Wv, numHeads, causal, window) Wo
+// X: [seqLen, dModel]. The weights require grad (a Module: module.h).
 struct MultiHeadAttention {
     &FloatTensor Wq;   // [dModel, dModel]
     &FloatTensor Wk;
     &FloatTensor Wv;
     &FloatTensor Wo;
     unsigned long numHeads;
+    int causal;             // 0 from new(); 1 for a decoder (each token sees itself and earlier ones)
+    unsigned long window;   // 0 from new(); > 0 a sliding window
 
     &FloatTensor forward(const &FloatTensor X) const;   // [seqLen, dModel] -> [seqLen, dModel]
     // Parameterized (module.h): Wq, Wk, Wv, Wo.
@@ -112,7 +140,12 @@ struct MultiHeadAttention {
     static struct MultiHeadAttention new(unsigned long dModel, unsigned long numHeads, &Rng rng);
 };
 
-// Internal: a [rows, cols] weight, U(-1/sqrt(rows), 1/sqrt(rows)) from rng.
+// Internal: a [rows, cols] weight, U(-1/sqrt(rows), 1/sqrt(rows)) from rng,
+// requiring grad.
 &FloatTensor attn_weight_(unsigned long rows, unsigned long cols, &Rng rng);
+// Internal: frees a temporary tensor a layer made (not one its arena owns).
+void attn_release_(&FloatTensor t);
+// Internal: ... unless 'out' is part of a graph (backward needs it).
+void attn_release_tmp_(const &FloatTensor out, &FloatTensor t);
 
 } // namespace std
