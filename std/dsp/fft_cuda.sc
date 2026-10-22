@@ -2,6 +2,8 @@
 //
 // cuFFT plans are created with the legacy cufftPlan1d / cufftPlan2d calls
 // (each plan allocates its own work area) and bound to gpu_cuda's stream.
+// safeguard: link linux -L${CUDA_HOME:-/usr/local/cuda}/lib64 -lcufft -lcuda
+// safeguard: link windows -L${CUDA_PATH}/lib/x64 -lcufft -lcuda
 #pragma once
 #include <std/stddef.h>
 #include <std/dsp/fft_cuda.h>

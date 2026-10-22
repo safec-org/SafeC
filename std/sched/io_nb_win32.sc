@@ -24,6 +24,7 @@
 //     a perfectly normal (blocking) file descriptor — don't
 //     await_fd()/register it with the reactor expecting non-blocking
 //     semantics the way a socket from tcp_listen_nb/tcp_connect_nb has.
+// safeguard: link windows -lws2_32
 #pragma once
 #include <std/sched/io_nb.h>
 #include <std/time.h>

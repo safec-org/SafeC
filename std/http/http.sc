@@ -1,4 +1,5 @@
 // SafeC Standard Library — HTTP/1.1 implementation (see http.h)
+// safeguard: link windows -lws2_32
 #pragma once
 #include <std/stddef.h>
 #include <std/http/http.h>

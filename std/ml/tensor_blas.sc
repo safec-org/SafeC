@@ -1,5 +1,6 @@
 // SafeC Standard Library — BLAS-accelerated Tensor matmul implementation
 // (see tensor_blas.h).
+// safeguard: link macos -framework Accelerate
 #pragma once
 #include <std/stddef.h>
 #include <std/ml/tensor_blas.h>

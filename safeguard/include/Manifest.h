@@ -64,7 +64,11 @@ struct BuildConfig {
     std::vector<std::string> frameworks; // macOS frameworks: -framework <name> at final link
     bool objcArc = false;          // compile .m/.mm with -fobjc-arc
     int  useStd = -1;              // [build] std: -1 unset (std when SafeC is involved),
-                                   // 1 always (a C/C++/ObjC package using std), 0 never
+                                   // 1 always (a C/C++/ObjC package using std), 0 never,
+                                   // 2 "all": every std module compiled into the archive,
+                                   // not only the ones the sources include
+    bool stdPrebuilt = true;       // [build] std_prebuilt: a native build may link a release
+                                   // install's prebuilt std archive (false: always compile std)
     PlatformBuildConfig forMacos, forLinux, forWindows;   // [build.<os>]
 };
 

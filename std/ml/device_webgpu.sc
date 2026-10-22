@@ -41,8 +41,9 @@
 //   <wgpu-native>/lib/libwgpu_native.a -framework Metal -framework QuartzCore
 //     -framework Foundation -lobjc               the static one (macOS; on
 //                                                Linux add -ldl -lm -lpthread)
-// In a safeguard project: [features] webgpu = [] and, under [build],
-// lib_dirs = ["<wgpu-native>/lib"] and libs = ["wgpu_native"]. The shared
+// In a safeguard project, the webgpu feature links -lwgpu_native, from
+// $WGPU_HOME/lib when that is set (with an rpath to it); otherwise add
+// lib_dirs = ["<wgpu-native>/lib"] under [build]. The shared
 // library's install name is @rpath/libwgpu_native.dylib (libwgpu_native.so
 // on Linux): the program finds it through an rpath (-Wl,-rpath,<dir>) or
 // DYLD_LIBRARY_PATH / LD_LIBRARY_PATH. Nothing here hard-codes where it is
@@ -79,6 +80,9 @@
 //     DeviceStats.cpuLaunches), as do GEMMs whose grid exceeds 65535
 //     workgroups a side. The heap's single binding means no CPU run of a
 //     device_ref.sc kernel over device memory, unlike Metal's shared memory.
+// safeguard: feature webgpu
+// safeguard: implements <std/ml/device.h> (device_webgpu_register_, which device.h's link hook calls)
+// safeguard: link hosted -L${WGPU_HOME}/lib -lwgpu_native
 #pragma once
 #include <std/stddef.h>
 #include <std/ml/device.h>

@@ -4,6 +4,7 @@
 // hiprtc for the selected GPU's own architecture (gfx908, gfx90a, gfx942,
 // gfx1100, ...), then loaded with hipModuleLoadData — so one build of this
 // library runs on any ROCm GPU. Compilation takes ~0.2 s once per process.
+// safeguard: link linux -L${ROCM_PATH:-/opt/rocm}/lib -lamdhip64 -lhiprtc -lrocblas
 #pragma once
 #include <std/ml/gpu_rocm.h>
 #include <std/math.h>

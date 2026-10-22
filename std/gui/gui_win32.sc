@@ -10,6 +10,7 @@
 // so WndProc here just pushes a GuiEvent into a small fixed-size ring
 // buffer per window, and GuiWindow::poll_event() pops from that ring (pumping
 // PeekMessage/DispatchMessage first so WndProc actually gets called).
+// safeguard: link windows -luser32 -lgdi32
 #pragma once
 #include <std/stddef.h>
 #include <std/gui/gui.h>

@@ -1,5 +1,6 @@
 // SafeC Standard Library — GUI backend: macOS (Cocoa via the Objective-C
 // runtime + Core Graphics). See gui.h for the portable API this implements.
+// safeguard: link macos -framework Cocoa -lobjc
 #pragma once
 #include <std/stddef.h>
 //

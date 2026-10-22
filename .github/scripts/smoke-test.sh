@@ -17,6 +17,8 @@ pass() { echo "  [PASS] $1"; }
 fail() { echo "  [FAIL] $1"; FAILURES=$((FAILURES + 1)); }
 
 section() { echo ""; echo "── $1 ──────────────────────────────────────────"; }
+# Run safeguard in a directory, output to a log; true if it succeeded.
+sg_in() { local dir="$1" log="$2"; shift 2; (cd "$dir" && "$SAFEGUARD_BIN" "$@") >"$log" 2>&1; }
 
 # ── 1. safec --help ───────────────────────────────────────────────────────────
 section "safec --help"
@@ -170,6 +172,76 @@ else
     cat /tmp/sg_test.txt
 fi
 
+# std modules: the build compiled only the std it uses — for the scaffold,
+# which includes no std header and calls nothing safec routes to std's
+# runtime ('new', channels, 'spawn'), none of it.
+STD_OBJS=$(ls build/deps/std/*.o 2>/dev/null | wc -l | tr -d ' ')
+if [[ "$STD_OBJS" -eq 0 ]] && "$SAFEGUARD_BIN" std-modules >/tmp/sg_stdmods.txt 2>&1 &&
+   ! grep -q "^unit " /tmp/sg_stdmods.txt; then
+    pass "safeguard build compiled no std module for a program using none (std-modules agrees)"
+else
+    fail "std modules of the scaffold ($STD_OBJS objects)"
+    cat /tmp/sg_stdmods.txt 2>/dev/null
+fi
+
+# The runtime units come with what the code calls into: a hello world on
+# std/io.h has no thread or channel module (nor -lpthread on Linux); a
+# channel ('chan_create', no #include) brings sync/channel.sc, thread.sc and
+# -lpthread; so does 'spawn' (pthread_create) with thread.sc.
+mkdir -p "$WORKDIR/ci_rt/src"
+printf '[package]\nname = "ci_rt"\nversion = "0.1.0"\n\n[build]\nedition = "2026"\n' > "$WORKDIR/ci_rt/Package.toml"
+printf '#include <std/io.h>\nint main() { std::println("hi"); return 0; }\n' > "$WORKDIR/ci_rt/src/hello.sc"
+printf 'int main() {\n    void* ch = (void*)0;\n    unsafe { ch = chan_create(1); chan_close(ch); }\n    return 0;\n}\n' > "$WORKDIR/ci_rt/src/chan.sc"
+printf 'void* work(void* a) { return a; }\nint main() {\n    long long h = spawn(work, 0);\n    join(h);\n    return 0;\n}\n' > "$WORKDIR/ci_rt/src/spawn.sc"
+RT_OK=1
+for f in hello chan spawn; do
+    sg_in "$WORKDIR/ci_rt" "/tmp/sg_rt_$f.txt" std-modules --target x86_64-unknown-linux-gnu "src/$f.sc" || RT_OK=0
+done
+grep -qE "^unit std/(thread|sync/channel)\.sc|^link -lpthread" /tmp/sg_rt_hello.txt && RT_OK=0
+grep -q "^unit std/sync/channel.sc" /tmp/sg_rt_chan.txt && grep -q "^unit std/thread.sc" /tmp/sg_rt_chan.txt &&
+    grep -q "^link -lpthread" /tmp/sg_rt_chan.txt || RT_OK=0
+grep -q "^unit std/thread.sc" /tmp/sg_rt_spawn.txt && grep -q "^link -lpthread" /tmp/sg_rt_spawn.txt &&
+    ! grep -q "^unit std/sync/channel.sc" /tmp/sg_rt_spawn.txt || RT_OK=0
+if [[ "$RT_OK" -eq 1 ]]; then
+    pass "runtime std modules follow the code: no thread/channel/-lpthread for hello, both for channels"
+else
+    fail "runtime std modules (std-modules for Linux)"
+    head -50 /tmp/sg_rt_hello.txt /tmp/sg_rt_chan.txt /tmp/sg_rt_spawn.txt
+fi
+
+# std/crypto/rng seeds from the OS (BCryptGenRandom on Windows, which has
+# neither /dev/urandom nor, on every CPU, rdrand): two contexts and two runs
+# differ, and std's annotation links bcrypt.
+mkdir -p "$WORKDIR/ci_rng/src"
+printf '[package]\nname = "ci_rng"\nversion = "0.1.0"\n\n[build]\nedition = "2026"\n' > "$WORKDIR/ci_rng/Package.toml"
+cat > "$WORKDIR/ci_rng/src/main.sc" <<'EOF'
+#include <std/crypto/rng.h>
+extern int printf(const char* fmt, ...);
+int main() {
+    struct RngCtx a;
+    struct RngCtx b;
+    a.init();
+    b.init();
+    unsigned long long x = a.rand64();
+    unsigned long long y = b.rand64();
+    unsigned long long z = a.rand64();
+    unsafe { printf("rng %llx %llx %llx\n", x, y, z); }
+    if (x == y || x == z) { return 1; }
+    return 0;
+}
+EOF
+RNG1=""; RNG2=""
+if sg_in "$WORKDIR/ci_rng" /tmp/sg_rng.txt build; then
+    RNG_BIN="$WORKDIR/ci_rng/build/ci_rng"; [[ -f "$RNG_BIN.exe" ]] && RNG_BIN="$RNG_BIN.exe"
+    RNG1="$("$RNG_BIN" 2>&1)" && RNG2="$("$RNG_BIN" 2>&1)" || RNG1="failed: $RNG1"
+fi
+if [[ "$RNG1" == "rng "* && "$RNG2" == "rng "* && "$RNG1" != "$RNG2" ]]; then
+    pass "std/crypto/rng seeds from the OS ($RNG1)"
+else
+    fail "std/crypto/rng seeding (runs: '$RNG1' / '$RNG2')"
+    cat /tmp/sg_rng.txt
+fi
+
 # A library build exports its headers (include/ and src/'s .h files) into
 # build/include beside build/lib<name>.a, so build/ is a prebuilt dependency.
 mkdir -p "$WORKDIR/ci_lib/src" "$WORKDIR/ci_lib/include/ci_lib"
@@ -203,8 +275,6 @@ llvm_tool() {
 }
 # Run a command, killed after $1 seconds (a GUI program must exit by itself).
 with_timeout() { local t="$1"; shift; perl -e 'alarm shift; exec @ARGV' "$t" "$@"; }
-# Run safeguard in a directory, output to a log; true if it succeeded.
-sg_in() { local dir="$1" log="$2"; shift 2; (cd "$dir" && "$SAFEGUARD_BIN" "$@") >"$log" 2>&1; }
 
 # A plain C package (no SafeC): built without std, run.
 if (cd "$WORKDIR" && "$SAFEGUARD_BIN" new ci_cpkg --lang c >/dev/null 2>&1) &&
@@ -487,6 +557,10 @@ if [[ "$OS" == other || "$GUI_CAN_BUILD" -eq 0 ]]; then
 else
     cp -R "$SAFEC_HOME/examples/gui_hello" "$WORKDIR/gui_hello"
     G="$WORKDIR/gui_hello/build"
+    # Its manifest names no system library: std/gui's backend brings them.
+    if grep -qE '^(libs|frameworks|depends)' "$WORKDIR/gui_hello/Package.toml"; then
+        fail "examples/gui_hello/Package.toml lists libraries by hand"
+    fi
     if sg_in "$WORKDIR/gui_hello" /tmp/sg_gui.txt bundle; then
         GUI_OK=1
         case "$OS" in
@@ -557,6 +631,61 @@ fi
 
 popd >/dev/null
 rm -rf "$WORKDIR"
+
+# ── 5c. std module completeness ──────────────────────────────────────────────
+# Every std header's functions are implemented by the std modules a build
+# including it compiles (tests/std_modules/check.py: safec's declarations
+# of each header against llvm-nm of the subset's objects).
+section "std module completeness"
+if command -v python3 >/dev/null 2>&1; then
+    if SAFEC="$SAFEC_BIN" SAFEGUARD_BIN="$SAFEGUARD_BIN" CLANG_BIN="$CLANG_BIN" \
+            python3 "$SAFEC_HOME/tests/std_modules/check.py" >/tmp/std_modules.txt 2>&1; then
+        pass "$(head -1 /tmp/std_modules.txt)"
+    else
+        fail "std module completeness"
+        cat /tmp/std_modules.txt
+    fi
+else
+    echo "  [SKIP] python3 not available"
+fi
+
+# ── 5d. prebuilt std archive ─────────────────────────────────────────────────
+# A release install ships std prebuilt for its platform (package.sh, as
+# release.yml packages it): a native build with that safec links it and
+# compiles no std; a stamp naming another compiler is ignored, and std is
+# compiled from source again.
+section "prebuilt std archive"
+PRE="$(mktemp -d)"
+if bash "$SAFEC_HOME/.github/scripts/package.sh" "$PRE/inst" "$SAFEC_BIN" "$SAFEGUARD_BIN" >/tmp/sg_pkg.txt 2>&1 &&
+   ls "$PRE"/inst/lib/*/libsafec_std.a "$PRE"/inst/lib/*/libsafec_std.stamp "$PRE"/inst/lib/*/libsafec_std.units >/dev/null 2>&1; then
+    pass "package.sh lays out an install with lib/$(basename "$(dirname "$(ls "$PRE"/inst/lib/*/libsafec_std.a)")")/libsafec_std.a"
+    IBIN="$PRE/inst/bin/$(basename "$SAFEGUARD_BIN")"
+    mkdir -p "$PRE/app/src"
+    printf '[package]\nname = "pre_app"\nversion = "0.1.0"\n\n[build]\nedition = "2026"\n' > "$PRE/app/Package.toml"
+    printf '#include <std/io.h>\n#include <std/collections/vec.h>\nint main() { std::println("prebuilt std ok"); return 0; }\n' \
+        > "$PRE/app/src/main.sc"
+    pre_build() { (cd "$PRE/app" && rm -rf build && env -u SAFEC -u SAFEC_STD_ARCHIVE SAFEC_HOME="$PRE/inst" "$IBIN" run --verbose); }
+    if pre_build >/tmp/sg_pre.txt 2>&1 && grep -q "linking the prebuilt std archive" /tmp/sg_pre.txt &&
+       grep -q "prebuilt std ok" /tmp/sg_pre.txt && [[ -z "$(ls "$PRE"/app/build/deps/std/*.o 2>/dev/null)" ]]; then
+        pass "a native build links the prebuilt std archive, compiling no std"
+    else
+        fail "a native build with the prebuilt std archive"
+        cat /tmp/sg_pre.txt
+    fi
+    STAMP="$(ls "$PRE"/inst/lib/*/libsafec_std.stamp)"
+    sed 's/^safec=.*/safec=0000000000000000/' "$STAMP" > "$PRE/stamp" && cp "$PRE/stamp" "$STAMP"
+    if pre_build >/tmp/sg_pre2.txt 2>&1 && grep -q "not using the prebuilt std archive.*different safec" /tmp/sg_pre2.txt &&
+       grep -q "prebuilt std ok" /tmp/sg_pre2.txt && [[ -n "$(ls "$PRE"/app/build/deps/std/*.o 2>/dev/null)" ]]; then
+        pass "a prebuilt std archive stamped for another compiler is ignored (std compiled from source)"
+    else
+        fail "a stale prebuilt std archive"
+        cat /tmp/sg_pre2.txt
+    fi
+else
+    fail "package.sh"
+    cat /tmp/sg_pkg.txt
+fi
+rm -rf "$PRE"
 
 # ── 6. sc-lsp wire-protocol smoke test ────────────────────────────────────────
 section "sc-lsp initialize handshake"

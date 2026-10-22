@@ -1,5 +1,6 @@
 // SafeC Standard Library — GUI: retained-mode widget tree implementation
 // (see gui_widget.h).
+// safeguard: implements <std/gui/gui.h>   (GuiEvent::prevent_default, declared there)
 #pragma once
 #include <std/gui/gui.h>
 #include <std/gui/gui_draw.h>

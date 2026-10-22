@@ -224,6 +224,17 @@ void t_rng() {
         ASSERT_TRUE(inrange);
         struct RngCtx sys;
         ASSERT_TRUE(sys.init() == 0 || sys.init() == 1);
+        // Seeded from the OS: two contexts differ, and a stream isn't constant.
+        struct RngCtx s1;
+        struct RngCtx s2;
+        ASSERT_EQ(s1.init(), 1);
+        ASSERT_EQ(s2.init(), 1);
+        ASSERT_TRUE(s1.rand64() != s2.rand64());
+        unsigned int first = s1.rand32();
+        int constant = 1;
+        i = 0;
+        while (i < 16) { if (s1.rand32() != first) constant = 0; i = i + 1; }
+        ASSERT_TRUE(constant == 0);
     }
 }
 

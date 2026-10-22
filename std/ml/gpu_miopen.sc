@@ -7,6 +7,7 @@
 // a convolution keeps a valid workspace however many shapes come later.
 // MIOpen's Find runs the candidates, so it needs real buffers: the plan is
 // built on the first call for a shape, with that call's x, weight and y.
+// safeguard: link linux -L${ROCM_PATH:-/opt/rocm}/lib -lMIOpen -lamdhip64
 #pragma once
 #include <std/stddef.h>
 #include <std/ml/gpu_miopen.h>

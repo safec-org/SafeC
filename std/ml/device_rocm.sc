@@ -5,6 +5,8 @@
 // once by hiprtc for the GPU at hand. A program enables it with its rocm
 // feature; link -lamdhip64 -lhiprtc -lrocblas (and -lMIOpen for MIOpen's
 // convolutions).
+// safeguard: feature rocm
+// safeguard: link linux -L${ROCM_PATH:-/opt/rocm}/lib -lamdhip64 -lhiprtc -lrocblas
 #pragma once
 #include <std/stddef.h>
 #include <std/ml/device.h>

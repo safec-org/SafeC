@@ -1,6 +1,8 @@
 #pragma once
 #include "Manifest.h"
 #include "Lock.h"
+#include "StdModules.h"
+#include <set>
 #include <string>
 #include <vector>
 
@@ -107,23 +109,9 @@ public:
     // ── Library support ──────────────────────────────────────────────────────
 
     // Build a static library from all .sc/.c/.cpp files in `srcDir`
-    // (recursively). Outputs to `libOut` (e.g., "build/libfoo.a").
-    // 'compatPreprocessor' passes --compat-preprocessor to safec — needed for
-    // the standard library itself, which (unlike ordinary user code) relies
-    // on function-like macros in a few headers (e.g. ring buffer static
-    // storage declarations).
-    // 'tolerateArchMismatch': skip (warn, don't abort) a source file that
-    // fails to assemble to real machine code for the current target — used
-    // only for the standard library, which ships architecture-specific
-    // files (e.g. std/hal/riscv.sc's CSR asm, std/hal/aarch64.sc's MRS/MSR
-    // asm) alongside portable ones in the same tree; a native aarch64
-    // build has no way to assemble riscv.sc's instructions and was never
-    // going to call its functions anyway. A genuine SafeC-level error
-    // (parse/type-check failure, reported by safec itself rather than by
-    // the downstream assembler) still aborts unconditionally either way —
-    // this only tolerates the assembler rejecting instructions safec
-    // itself accepted as syntactically valid inline asm text. User project
-    // sources always use the strict (non-tolerant) default.
+    // (recursively) — a SafeC dependency built from source. Outputs to
+    // `libOut` (e.g., "build/libfoo.a").
+    // 'compatPreprocessor' passes --compat-preprocessor to safec.
     // 'foreignIncludeDirs': include search dirs used for .c/.cpp files
     // instead of 'includeDirs' — kept separate because 'includeDirs' for
     // the SafeC side typically includes SafeC's own std/ directory, whose
@@ -132,23 +120,47 @@ public:
     // if put on their search path. Defaults to empty (no extra include
     // dirs for foreign files) when not given.
     // Returns true on success.
-    // 'excludeSubdirNames': directory-name components to skip entirely
-    // during source discovery (e.g. "wasm" for the SafeC stdlib build —
-    // see collectAllSources's matching comment for why). Defaults to
-    // none; only the stdlib's own buildLib() call passes anything here,
-    // since this is about std/'s own internal layout, not something a
-    // user's project or a fetched dependency should ever need.
     bool buildLib(const std::string& srcDir,
                   const std::string& libOut,
                   const std::vector<std::string>& includeDirs = {},
                   bool compatPreprocessor = false,
-                  bool tolerateArchMismatch = false,
-                  const std::vector<std::string>& foreignIncludeDirs = {},
-                  const std::vector<std::string>& excludeSubdirNames = {});
+                  const std::vector<std::string>& foreignIncludeDirs = {});
 
-    // Build (or use cached) SafeC standard library.
-    // Returns the path to the built .a, or "" on failure.
-    std::string ensureStdLib();
+    // Build (or reuse) the parts of SafeC's standard library a build uses:
+    // the std modules 'roots' (std headers/units, see stdRoots) reach, and
+    // the 'runtime-symbol' units the build's code ('refs': the external
+    // symbols of its own and its dependencies' IR, see stdRefs) and those
+    // modules' own code refer to, to a fixed point — or all of them with
+    // [build] std = "all" — each unit compiled to its own cached object,
+    // packed into build/deps/[<target>/]libsafec_std.a. A native build
+    // links the prebuilt archive of a release install instead when there is
+    // a matching one (see findPrebuiltStd), compiling only what it lacks.
+    // Sets stdArchive_ ("" when nothing is to be linked) and the system
+    // libraries those modules need (stdLinkFlags_, stdDebDepends_; see
+    // StdModules.h). With 'link' false, only works out the modules (into
+    // stdUnits_), compiling what that needs, for 'std-modules'. Returns
+    // false on failure.
+    bool ensureStdLib(const std::set<std::string>& roots, const std::set<std::string>& refs,
+                      bool link = true);
+
+    // The std files the given project files, its dependencies' sources and
+    // its prebuilt SafeC libraries include.
+    std::set<std::string> stdRoots(const std::vector<std::string>& files) const;
+    // The external symbols the build's dependencies refer to (the '.refs'
+    // beside a SafeC library; see ensureStdLib).
+    std::set<std::string> depStdRefs() const;
+
+    // 'safeguard std-modules': what the build (or, given std headers and
+    // files in 'args', those) takes from std, and the system libraries.
+    bool printStdModules(const std::vector<std::string>& args);
+
+    // 'safeguard std-prebuilt <prefix>': compile every hosted std unit that
+    // no feature gates, in release mode, into
+    // <prefix>/lib/<host triple>/libsafec_std.a with its .stamp (compiler
+    // and target) and .units (each unit's input hash and external symbols)
+    // -- the archive a release install ships and native builds link
+    // instead of compiling std.
+    bool writePrebuiltStd(const std::string& prefix);
 
     // ── Dependency management ─────────────────────────────────────────────────
 
@@ -181,6 +193,56 @@ private:
     std::string   root_;
     Manifest      manifest_;
     BuildOptions  opts_;
+
+    // The std archive this build links, and what its modules link (set by
+    // ensureStdLib).
+    std::string stdArchive_;
+    std::vector<std::string> stdLinkFlags_;
+    std::vector<std::string> stdDebDepends_;
+    std::set<std::string> stdUnits_;          // the modules (ensureStdLib)
+    bool stdFromSource_ = false;              // never the prebuilt archive (writePrebuiltStd)
+
+    // One std unit's object: compiled into objDir (or reused from there)
+    // with the symbols its IR refers to kept beside it (<stem>.refs).
+    // 'skipped': it doesn't compile for this target (a .skip marker).
+    struct StdUnitObj {
+        std::string obj;
+        bool skipped = false;
+        std::set<std::string> refs;
+    };
+    bool stdUnitObject(const StdIndex& idx, const std::string& unit, const std::string& objDir,
+                       bool compile, StdUnitObj& out) const;
+    // A hash of everything a std unit's compile reads, hex.
+    std::string stdUnitHash(const StdIndex& idx, const std::string& unit) const;
+    mutable std::map<std::string, std::string> fileHashes_;   // std file -> hashFile
+
+    // A release install's prebuilt std archive (see writePrebuiltStd).
+    struct PrebuiltStd {
+        std::string archive;                                  // "" if none
+        std::map<std::string, std::string> unitHash;          // unit -> input hash
+        std::map<std::string, std::set<std::string>> refs;    // unit -> external symbols
+        std::set<std::string> skipped;                        // didn't compile for it
+    };
+    // The one beside the safec this build uses (<bin>/../lib/<triple>/) or
+    // under $SAFEC_HOME/lib/<triple>/, for a native build, if its stamp
+    // matches this compiler and target and nothing opts out
+    // ([build] std_prebuilt = false, SAFEC_STD_FROM_SOURCE=1).
+    PrebuiltStd findPrebuiltStd() const;
+    static bool readPrebuiltUnits(const std::string& file, PrebuiltStd& out);
+    // The stamp a prebuilt archive for this compiler and host carries.
+    std::string prebuiltStdStamp() const;
+    // The host as a target triple (aarch64-apple-darwin, x86_64-unknown-
+    // linux-gnu, x86_64-pc-windows-msvc, ...): a prebuilt archive's directory.
+    static std::string hostTriple();
+    // The external symbols of the SafeC sources among 'files', compiled to
+    // IR into 'outDir' (for 'std-modules'). False if one doesn't compile.
+    bool sourceRefs(const std::vector<std::string>& files, const std::string& outDir,
+                    std::set<std::string>& refs);
+    // The include directories for SafeC sources: std, the project's
+    // include/ and its dependencies'.
+    std::vector<std::string> safecIncludeDirs() const;
+    // The target, its OS and the enabled features, for std's modules.
+    StdPlatform stdPlatform() const;
 
     // Locate the safec binary.
     std::string findSafec() const;
@@ -258,13 +320,7 @@ private:
     // 'excludeSubdirNames': any path whose components include one of
     // these names (case-sensitive, exact directory-name match — e.g.
     // "wasm" matches ".../std/wasm/..." but not ".../std/webassembly/...")
-    // is skipped. See the stdlib's own buildLib() call for why this
-    // exists: std/wasm/*.sc defines bare 'malloc'/'free'/etc. symbols
-    // meant only for a wasm32-target build that #includes them directly
-    // from source — compiling them into the general, all-hosted-platforms
-    // stdlib archive collides with the real libc there (confirmed in CI:
-    // Windows' libucrt raised LNK2005 "already defined" for exactly
-    // those symbols once std/wasm/wasm_rt.sc made it into libsafec_std.a).
+    // is skipped.
     std::vector<std::string> collectAllSources(
         const std::string& srcDir,
         const std::vector<std::string>& excludeSubdirNames = {}) const;
@@ -286,7 +342,8 @@ private:
                             const std::vector<std::string>& includeDirs = {},
                             bool compatPreprocessor = false,
                             bool suppressOutput = false,
-                            const std::vector<std::string>& defines = {}) const;
+                            const std::vector<std::string>& defines = {},
+                            const std::string& outStem = "") const;
 
     // ── [features] ────────────────────────────────────────────────────────────
 

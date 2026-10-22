@@ -3,6 +3,7 @@
 // The same transform as fft.sc, built from fft_core.h in float: half the
 // memory traffic, twice the values per vector register. Twiddles are
 // computed in double and rounded once.
+// safeguard: link linux blas
 #pragma once
 #include <std/dsp/fft.h>
 #include <std/dsp/complex_dsp.h>

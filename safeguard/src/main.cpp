@@ -24,6 +24,14 @@ Commands:
   fetch         Clone and build all [dependencies] from Package.toml
   build         Compile all sources in the current project
   check         Fast compile-only pass — reports errors without linking
+  std-modules [std/x.h|file...]
+                The std sources a build compiles and the system libraries
+                it links for them (for the project's sources, or for the
+                given std headers and files)
+  std-prebuilt <prefix>
+                Compile std for this machine, in release mode, into
+                <prefix>/lib/<triple>/libsafec_std.a (with its .stamp and
+                .units): the prebuilt archive a release install ships
   test          Build and run every file under tests/ as a standalone binary
   run   [args..]Build and immediately run the output binary
   bundle        Build the bin target and package it per its [bundle] table:
@@ -64,7 +72,9 @@ Dependency format in Package.toml:
   frameworks = ["Cocoa"]     macOS frameworks to link (ignored elsewhere)
   objc_arc   = true          compile .m/.mm with -fobjc-arc
   std        = true          build and link SafeC's std (default: only
-                             when the package has SafeC); false: never
+                             when the package has SafeC); false: never;
+                             "all": every std module, not only the ones
+                             the sources include
   [build.macos] / [build.linux] / [build.windows]
     cflags, libs, lib_dirs, frameworks — added only when building for that OS
 
@@ -80,7 +90,8 @@ Dependency format in Package.toml:
   subsystem  = "windows"               # Windows: "windows" (GUI) / "console"
   min_system_version = "11.0"          # macOS LSMinimumSystemVersion
   codesign_identity  = "-"             # macOS: "-" ad-hoc, identity, "none"
-  depends    = ["libx11-6"]            # Linux: the .deb's Depends
+  depends    = ["libsqlite3-0"]        # Linux: the .deb's Depends (with
+                                       # those std's modules name)
 
 Options (build / run / check / test):
   --release     Enable optimisations (-O2)
@@ -264,7 +275,7 @@ int main(int argc, char** argv) {
 
     // ── build / check / test / run / bundle / clean ───────────────────────────
     if (cmd == "build" || cmd == "check" || cmd == "test" || cmd == "run" || cmd == "bundle" ||
-        cmd == "clean") {
+        cmd == "clean" || cmd == "std-modules" || cmd == "std-prebuilt") {
         safeguard::BuildOptions opts;
         std::vector<std::string> runArgs;
         bool pastSep = false; // '--' separator for run args
@@ -322,11 +333,46 @@ int main(int argc, char** argv) {
                 }
                 continue;
             }
+            if ((cmd == "std-modules" || cmd == "std-prebuilt") && arg.rfind("-", 0) != 0) {
+                runArgs.push_back(arg);
+                continue;
+            }
             std::cerr << "safeguard: unknown option '" << arg << "'\n";
             return 1;
         }
 
         try {
+            if (cmd == "std-prebuilt") {
+                if (runArgs.size() != 1) {
+                    std::cerr << "safeguard: usage: safeguard std-prebuilt <prefix>\n";
+                    return 1;
+                }
+                // Built in a scratch project of its own, removed afterwards.
+                fs::path work = fs::temp_directory_path() /
+                                ("safeguard-std-prebuilt-" + std::to_string(std::rand()));
+                fs::create_directories(work);
+                opts.release = true;
+                safeguard::Manifest none;
+                safeguard::Builder builder(work.string(), none, opts);
+                bool ok = builder.writePrebuiltStd(fs::absolute(runArgs[0]).string());
+                std::error_code ec;
+                fs::remove_all(work, ec);
+                return ok ? 0 : 1;
+            }
+            if (cmd == "std-modules" && !runArgs.empty() && !fs::exists("Package.toml")) {
+                // Outside a project: just the named std files and sources
+                // (the std units it compiles cached in a scratch project).
+                safeguard::Manifest none;
+                fs::path work = fs::temp_directory_path() / "safeguard-std-modules";
+                fs::create_directories(work);
+                std::vector<std::string> args;
+                for (auto& a : runArgs) {
+                    bool stdName = a.rfind("std/", 0) == 0 || a.rfind("<", 0) == 0;
+                    args.push_back(!stdName && fs::exists(a) ? fs::absolute(a).string() : a);
+                }
+                safeguard::Builder builder(work.string(), none, opts);
+                return builder.printStdModules(args) ? 0 : 1;
+            }
             auto [root, manifest] = requireProject();
             safeguard::Builder builder(root, manifest, opts);
 
@@ -339,6 +385,9 @@ int main(int argc, char** argv) {
             }
             if (cmd == "check") {
                 return builder.check() ? 0 : 1;
+            }
+            if (cmd == "std-modules") {
+                return builder.printStdModules(runArgs) ? 0 : 1;
             }
             if (cmd == "test") {
                 return builder.test() ? 0 : 1;

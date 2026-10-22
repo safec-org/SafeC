@@ -1,4 +1,6 @@
 // SafeC Standard Library — Thread (cross-platform implementation)
+// safeguard: link linux -lpthread
+// safeguard: runtime-symbol pthread_create  (what `spawn` compiles to on a POSIX target)
 #pragma once
 #include <std/thread.h>
 #include <std/mem.h>

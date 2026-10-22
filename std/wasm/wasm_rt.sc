@@ -6,6 +6,7 @@
 // top-level definitions both keep the bare C-ABI name, which is how this
 // file's malloc() satisfies std::malloc's extern declaration at link
 // time without either side needing to know about the other).
+// safeguard: runtime wasm                (malloc & co. for a WebAssembly module)
 #pragma once
 #include <std/wasm/wasm_rt.h>
 //

@@ -4,6 +4,9 @@
 // Verified against a real X server (Xvfb): tests/stdlib/x11/run.sh draws,
 // presents and reads the window back with XGetImage, and checks key, text,
 // mouse, scroll, resize and close events sent through the server.
+// safeguard: link linux -lX11
+// safeguard: link bsd -L/usr/local/lib -lX11
+// safeguard: deb linux libx11-6
 #pragma once
 #include <std/stddef.h>
 #include <std/gui/gui.h>

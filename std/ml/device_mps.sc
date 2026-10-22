@@ -39,6 +39,8 @@
 //     is submitted before this backend's next command buffer starts, but
 //     work this backend has encoded and not yet committed waits for
 //     device_sync(DEVICE_MPS) before gpu_mps.h ops that should follow it.
+// safeguard: feature mps
+// safeguard: link macos -framework Metal -framework Foundation -lobjc
 #pragma once
 #include <std/stddef.h>
 #include <std/ml/device.h>

@@ -1,6 +1,8 @@
 // SafeC Standard Library — Cryptographic RNG
-// A ChaCha20 keystream generator, seeded from rdrand (x86-64) or
-// /dev/urandom (hosted), or from a caller-supplied 32-byte seed.
+// A ChaCha20 keystream generator, seeded from the OS's random source
+// (BCryptGenRandom on Windows, getentropy on macOS, getrandom on Linux),
+// else rdrand (x86-64) or /dev/urandom, or from a caller-supplied 32-byte
+// seed.
 // Freestanding-safe with RngCtx::init_seed() or rdrand.
 // Usage: struct RngCtx rng; rng.init(); rng.fill(buf, n);
 #pragma once
@@ -14,10 +16,10 @@ struct RngCtx {
     unsigned char buf[RNG_BLOCK_SIZE];
     unsigned long buf_pos;    // next byte to consume from buf
 
-    // Initialise in place with automatic seeding (rdrand on x86-64, else
-    // /dev/urandom). Returns 1; aborts with a diagnostic if no entropy
-    // source is available (use init_seed() with your own entropy source on
-    // such targets).
+    // Initialise in place with automatic seeding (the OS's random source,
+    // else rdrand on x86-64, else /dev/urandom). Returns 1; aborts with a
+    // diagnostic if no entropy source is available (use init_seed() with
+    // your own entropy source on such targets).
     int init();
 
     // Initialise in place with a user-provided 32-byte seed (deterministic;

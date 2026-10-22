@@ -13,6 +13,7 @@
 // once per tile row and A once per tile column, which for the mid-sized
 // products of training -- 128 x 256 x 784 split into 16 tiles -- cost about
 // as much as the multiply.)
+// safeguard: link hosted blas            (cblas_sgemm, weak: the [build] blas choice)
 #pragma once
 #include <std/simd/gemm.h>
 #include <std/simd/simd.h>
