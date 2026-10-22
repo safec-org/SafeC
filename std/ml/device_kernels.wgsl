@@ -2159,17 +2159,15 @@ fn wk_gemm8(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg:
 // Words: 0 x (I), 1 w, 2 y (O) byte offsets, 3 B, 4 Ci, 5 Hi, 6 Wi, 7 Co,
 // 8 Ho, 9 Wo, 10 kH, 11 kW, 12 sH, 13 sW, 14 pH, 15 pW, 16 dH, 17 dW,
 // 18 kSplit. A workgroup of 256 threads takes a CBM x CBN tile of the
-// product, k in steps of 16, each thread a CTN x CTN block: 4 x 4 in 64 x
-// 64, 32 x 128 or 16 x 256 tiles (few output channels take the flat ones),
-// 8 x 8 in 128 x 128 or 64 x 256 ones (four FMAs per workgroup-memory load
-// instead of two). Each thread loads the same column of the B tile every
-// step, so its pixel is decoded once. CT is I, W and O's element type
-// (COP 2: fp32).
+// product (64 x 64, 32 x 128 or 16 x 256: few output channels take the
+// flat ones), k in steps of 16, each thread a 4 x 4 block (8 x 8 blocks in
+// larger tiles measured no faster once the gathers were unrolled). Each
+// thread loads the same column of the B tile every step, so its pixel is
+// decoded once. CT is I, W and O's element type (COP 2: fp32).
 override COP: u32 = 0u;
 override CBM: u32 = 64u;
 override CT: u32 = 0u;
-override CTN: u32 = 4u;                           // each thread's block: CTN x CTN (4 or 8)
-override CBN: u32 = CTN * CTN * 256u / CBM;       // the tile's columns
+override CBN: u32 = 4096u / CBM;                 // the tile's columns
 var<workgroup> cA: array<f32, 16u * CBM>;         // [k 16][m CBM]
 var<workgroup> cB: array<f32, 16u * CBN>;         // [k 16][n CBN]
 struct Cv { x: u32, w: u32, y: u32, B: u32, Ci: u32, Hi: u32, Wi: u32, Co: u32, Ho: u32, Wo: u32,
@@ -2308,9 +2306,9 @@ fn wk_conv(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: 
         p0 = i32(ky * c.dH) - i32(c.pH);
         p1 = i32((r - ky * c.kW) * c.dW) - i32(c.pW);
     }
-    let tx = li % (BN / CTN);
-    let ty = li / (BN / CTN);
-    var acc: array<vec4f, 16>;   // CTN rows of CTN / 4 vec4 (4 x 4: the first four)
+    let tx = li % (BN / 4u);
+    let ty = li / (BN / 4u);
+    var acc: array<vec4f, 4>;
     for (var k0 = kBeg; k0 < kEnd; k0 += 16u) {
         if (li < 16u) {
             let k = min(k0 + li, kEnd - 1u);
@@ -2333,59 +2331,70 @@ fn wk_conv(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: 
             }
         }
         workgroupBarrier();
-        for (var q = 0u; q < CBM / 16u; q++) {
-            let e = li + q * 256u;
-            let kk = e % 16u;
-            let mm = e / 16u;
-            var v = 0.0;
-            if (m0 + mm < M && k0 + kk < kEnd) { v = cv_a(c, m0 + mm, k0 + kk, cK[kk]); }
-            cA[kk * CBM + mm] = v;
-        }
-        for (var r = li / BN; r < 16u; r += 256u / BN) {
-            var v = 0.0;
-            if (nIn && k0 + r < kEnd) { v = cv_b(c, cK[r], p0, p1, p2, ib, phased); }
-            cB[r * BN + bc] = v;
-        }
-        workgroupBarrier();
-        if (CTN == 8u) {
-            for (var kk = 0u; kk < 16u; kk++) {
-                let ai = kk * CBM + ty * 8u;
-                let bi = kk * BN + tx * 8u;
-                let a0 = vec4f(cA[ai], cA[ai + 1u], cA[ai + 2u], cA[ai + 3u]);
-                let a1 = vec4f(cA[ai + 4u], cA[ai + 5u], cA[ai + 6u], cA[ai + 7u]);
-                let b0 = vec4f(cB[bi], cB[bi + 1u], cB[bi + 2u], cB[bi + 3u]);
-                let b1 = vec4f(cB[bi + 4u], cB[bi + 5u], cB[bi + 6u], cB[bi + 7u]);
-                acc[0] += a0.x * b0; acc[1] += a0.x * b1;
-                acc[2] += a0.y * b0; acc[3] += a0.y * b1;
-                acc[4] += a0.z * b0; acc[5] += a0.z * b1;
-                acc[6] += a0.w * b0; acc[7] += a0.w * b1;
-                acc[8] += a1.x * b0; acc[9] += a1.x * b1;
-                acc[10] += a1.y * b0; acc[11] += a1.y * b1;
-                acc[12] += a1.z * b0; acc[13] += a1.z * b1;
-                acc[14] += a1.w * b0; acc[15] += a1.w * b1;
+        // the loads four at a time where the tile allows (naga's loops
+        // aren't unrolled: each load would wait for the one before)
+        let kk = li % 16u;
+        let ka = k0 + kk < kEnd;
+        let ta = cK[kk];
+        if (CBM >= 64u) {
+            for (var q = 0u; q < CBM / 16u; q += 4u) {
+                let mm = li / 16u + q * 16u;
+                var v0 = 0.0;
+                var v1 = 0.0;
+                var v2 = 0.0;
+                var v3 = 0.0;
+                if (ka && m0 + mm < M) { v0 = cv_a(c, m0 + mm, k0 + kk, ta); }
+                if (ka && m0 + mm + 16u < M) { v1 = cv_a(c, m0 + mm + 16u, k0 + kk, ta); }
+                if (ka && m0 + mm + 32u < M) { v2 = cv_a(c, m0 + mm + 32u, k0 + kk, ta); }
+                if (ka && m0 + mm + 48u < M) { v3 = cv_a(c, m0 + mm + 48u, k0 + kk, ta); }
+                cA[kk * CBM + mm] = v0;
+                cA[kk * CBM + mm + 16u] = v1;
+                cA[kk * CBM + mm + 32u] = v2;
+                cA[kk * CBM + mm + 48u] = v3;
             }
         } else {
-            for (var kk = 0u; kk < 16u; kk++) {
-                let ai = kk * CBM + ty * 4u;
-                let bi = kk * BN + tx * 4u;
-                let a = vec4f(cA[ai], cA[ai + 1u], cA[ai + 2u], cA[ai + 3u]);
-                let b = vec4f(cB[bi], cB[bi + 1u], cB[bi + 2u], cB[bi + 3u]);
-                acc[0] += a.x * b;
-                acc[1] += a.y * b;
-                acc[2] += a.z * b;
-                acc[3] += a.w * b;
+            for (var q = 0u; q < CBM / 16u; q++) {
+                let mm = li / 16u + q * 16u;
+                var v = 0.0;
+                if (ka && m0 + mm < M) { v = cv_a(c, m0 + mm, k0 + kk, ta); }
+                cA[kk * CBM + mm] = v;
             }
+        }
+        let rs = 256u / BN;   // B rows a pass of the workgroup loads; BN / 16 passes, a multiple of 4
+        for (var r = li / BN; r < 16u; r += 4u * rs) {
+            var v0 = 0.0;
+            var v1 = 0.0;
+            var v2 = 0.0;
+            var v3 = 0.0;
+            if (nIn && k0 + r < kEnd) { v0 = cv_b(c, cK[r], p0, p1, p2, ib, phased); }
+            if (nIn && k0 + r + rs < kEnd) { v1 = cv_b(c, cK[r + rs], p0, p1, p2, ib, phased); }
+            if (nIn && k0 + r + 2u * rs < kEnd) { v2 = cv_b(c, cK[r + 2u * rs], p0, p1, p2, ib, phased); }
+            if (nIn && k0 + r + 3u * rs < kEnd) { v3 = cv_b(c, cK[r + 3u * rs], p0, p1, p2, ib, phased); }
+            cB[r * BN + bc] = v0;
+            cB[(r + rs) * BN + bc] = v1;
+            cB[(r + 2u * rs) * BN + bc] = v2;
+            cB[(r + 3u * rs) * BN + bc] = v3;
+        }
+        workgroupBarrier();
+        for (var kk = 0u; kk < 16u; kk++) {
+            let ai = kk * CBM + ty * 4u;
+            let bi = kk * BN + tx * 4u;
+            let a = vec4f(cA[ai], cA[ai + 1u], cA[ai + 2u], cA[ai + 3u]);
+            let b = vec4f(cB[bi], cB[bi + 1u], cB[bi + 2u], cB[bi + 3u]);
+            acc[0] += a.x * b;
+            acc[1] += a.y * b;
+            acc[2] += a.z * b;
+            acc[3] += a.w * b;
         }
         workgroupBarrier();
     }
-    for (var i = 0u; i < CTN; i++) {
-        let gm = m0 + ty * CTN + i;
+    for (var i = 0u; i < 4u; i++) {
+        let gm = m0 + ty * 4u + i;
         if (gm >= M) { break; }
-        for (var j = 0u; j < CTN; j++) {
-            let gn = n0 + tx * CTN + j;
+        for (var j = 0u; j < 4u; j++) {
+            let gn = n0 + tx * 4u + j;
             if (gn >= Ntot) { break; }
-            var v = acc[i][j];
-            if (CTN == 8u) { v = acc[i * 2u + j / 4u][j % 4u]; }
+            let v = acc[i][j];
             if (COP == 0u) {
                 let b = gn / Po;
                 gst1(c.y, CT, (b * c.Co + gm) * Po + gn - b * Po, v);

@@ -160,8 +160,8 @@ static void* g_dwg_lpipe[2 * DK_COUNT];          // the row kernels with 32 lane
 static int   g_dwg_lpipe_state[2 * DK_COUNT];
 static void* g_dwg_gemm[108];            // wk_gemm / wk_gemm8 / wk_gemm1 per transposes and element types
 static int   g_dwg_gemm_state[108];
-static void* g_dwg_conv[45];             // wk_conv per op, tile shape and element type
-static int   g_dwg_conv_state[45];
+static void* g_dwg_conv[27];             // wk_conv per op, tile shape and element type
+static int   g_dwg_conv_state[27];
 static void* g_dwg_copy = (void*)0;
 static void* g_dwg_upload = (void*)0;
 static void* g_dwg_map = (void*)0;
@@ -626,34 +626,24 @@ static void* dwg_gemm_pipe_(int big, int ta, int tb, int at, int ct) {
     }
 }
 
-// wk_conv's tile shapes: rows x columns of the product, each thread's block.
-#define DWG_CONV_64 0     // 64 x 64, 4 x 4
-#define DWG_CONV_32 1     // 32 x 128, 4 x 4
-#define DWG_CONV_16 2     // 16 x 256, 4 x 4
-#define DWG_CONV_64W 3    // 64 x 256, 8 x 8
-#define DWG_CONV_128 4    // 128 x 128, 8 x 8
-static unsigned long dwg_conv_rows_(int shape) {
-    if (shape == DWG_CONV_128) return 128UL;
-    if (shape == DWG_CONV_64 || shape == DWG_CONV_64W) return 64UL;
-    return shape == DWG_CONV_32 ? 32UL : 16UL;
-}
-static unsigned long dwg_conv_cols_(int shape) {
-    unsigned long t = shape >= DWG_CONV_64W ? 8UL : 4UL;
-    return t * t * 256UL / dwg_conv_rows_(shape);
-}
+// wk_conv's tile shapes: rows x columns of the product.
+#define DWG_CONV_64 0     // 64 x 64
+#define DWG_CONV_32 1     // 32 x 128
+#define DWG_CONV_16 2     // 16 x 256
+static unsigned long dwg_conv_rows_(int shape) { return shape == DWG_CONV_64 ? 64UL : (shape == DWG_CONV_32 ? 32UL : 16UL); }
+static unsigned long dwg_conv_cols_(int shape) { return 4096UL / dwg_conv_rows_(shape); }
 
 // wk_conv for op (0 forward, 1 input gradient, 2 weight gradient), a tile
 // shape and element type t.
 static void* dwg_conv_pipe_(int op, int shape, int t) {
-    unsigned long slot = ((unsigned long)op * 5UL + (unsigned long)shape) * 3UL + (unsigned long)t;
+    unsigned long slot = ((unsigned long)op * 3UL + (unsigned long)shape) * 3UL + (unsigned long)t;
     unsafe {
         if (g_dwg_conv_state[slot] == 0) {
-            struct WGPUConstantEntry c[4];
+            struct WGPUConstantEntry c[3];
             c[0] = dwg_const_("COP", (double)op);
             c[1] = dwg_const_("CBM", (double)dwg_conv_rows_(shape));
             c[2] = dwg_const_("CT", (double)t);
-            c[3] = dwg_const_("CTN", shape >= DWG_CONV_64W ? 8.0 : 4.0);
-            g_dwg_conv[slot] = dwg_make_pipe_("wk_conv", (const struct WGPUConstantEntry*)&c[0], 4UL);
+            g_dwg_conv[slot] = dwg_make_pipe_("wk_conv", (const struct WGPUConstantEntry*)&c[0], 3UL);
             g_dwg_conv_state[slot] = g_dwg_conv[slot] != (void*)0 ? 1 : -1;
         }
         return g_dwg_conv[slot];
@@ -1004,13 +994,9 @@ int WebGpuBackend::gemm_batched(const &DevGemm g) {
 // device.sc runs it in fp32). A transposed convolution is the plain one with
 // input and output swapped, so its forward pass is the input-gradient kernel
 // and its input gradient the forward one; the input gradient runs a grid
-// slice per stride phase, as Metal's does. The tile (measured per op on an
-// M1 Pro): by the product's rows (output channels, or input channels for
-// the input gradient), 64 x 64 from 48, 32 x 128 from 17 and 16 x 256 below,
-// threads taking 4 x 4 blocks; the forward pass takes 128 x 128 from 96 and
-// 64 x 256 from 48 when that leaves 32 tiles, and the weight gradient
-// 128 x 128 from 128, threads taking 8 x 8 blocks (the input gradient's
-// gather runs slower in those).
+// slice per stride phase, as Metal's does. The tile, by the product's rows
+// (output channels, or input channels for the input gradient): 64 x 64
+// from 48, 32 x 128 from 17, 16 x 256 below.
 int WebGpuBackend::conv(const &DevConv c) {
     if (!dwg_ensure_() || c.dtype < DEVICE_FP32 || c.dtype > DEVICE_BF16) return 0;
     unsigned long x = c.x; unsigned long y = c.y;
@@ -1034,11 +1020,7 @@ int WebGpuBackend::conv(const &DevConv c) {
         phases = c.sH * c.sW;
         n = c.batch * ((Hi + c.sH - 1UL) / c.sH) * ((Wi + c.sW - 1UL) / c.sW);
     }
-    unsigned long np = n * phases;
     int shape = m >= 48UL ? DWG_CONV_64 : (m > 16UL ? DWG_CONV_32 : DWG_CONV_16);
-    if (op == 0 && m >= 96UL && ((m + 127UL) / 128UL) * ((np + 127UL) / 128UL) >= DWG_GEMM_FILL) shape = DWG_CONV_128;
-    else if (op == 0 && m >= 48UL && ((m + 63UL) / 64UL) * ((np + 255UL) / 256UL) >= DWG_GEMM_FILL) shape = DWG_CONV_64W;
-    else if (op == 2 && m >= 128UL) shape = DWG_CONV_128;   // split over k: enough workgroups either way
     unsigned long rows = dwg_conv_rows_(shape);
     unsigned long cols = dwg_conv_cols_(shape);
     void* pipe = dwg_conv_pipe_(op, shape, c.dtype);

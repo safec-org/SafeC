@@ -4,8 +4,8 @@
 // the SGD update, and buffers reused after free. Needs a WebGPU adapter;
 // run with tests/stdlib/webgpu/run.sh. Built with the webgpu feature, it also
 // reads a DEVICE_WEBGPU tensor's buffer (trait WebGpuTensor) through the
-// array API (the two share one device), and checks the convolutions large
-// enough for the backend's larger tiles, which device_check's don't reach.
+// array API (the two share one device), and checks the backend's GEMM paths
+// and large convolutions, which device_check's small models don't reach.
 #include <std/ml/gpu_webgpu.h>
 #include <std/ml/device.h>
 #include <std/ml/tensor.h>
@@ -341,9 +341,9 @@ static void check_gemm_path(int ta, int tb, unsigned long m, unsigned long n, un
     }
 }
 
-// Convolutions large enough for the backend's 8 x 8-block tiles (the
-// forward pass in 64 x 256 and 128 x 128 tiles, the weight gradient in
-// 128 x 128): output and gradients on DEVICE_WEBGPU against the CPU.
+// Convolutions the size of a ResNet's (many tiles, the weight gradient split
+// over k into many slices): output and gradients on DEVICE_WEBGPU against
+// the CPU.
 static float conv_err(const float* a, const float* b, unsigned long n) {
     float worst = (float)0.0;
     float scale = (float)1.0;
@@ -403,7 +403,7 @@ static void check_conv_tiles(unsigned long batch, unsigned long ch, unsigned lon
         float ex = conv_err(&want[no], &got[no], no);
         float ew = conv_err(&want[2UL * no], &got[2UL * no], nw);
         printf("  conv %lu->%lu side %lu batch %lu: output %.2e, dx %.2e, dw %.2e\n", ch, ch, side, batch, (double)eo, (double)ex, (double)ew);
-        check(eo < (float)2e-4 && ex < (float)2e-4 && ew < (float)2e-4, "convolution in 8 x 8-block tiles");
+        check(eo < (float)2e-4 && ex < (float)2e-4 && ew < (float)2e-4, "large convolution");
         free((void*)want); free((void*)got);
     }
     x.free(); w.free(); b.free(); R.free();
@@ -436,8 +436,8 @@ int main() {
         check_gemm_path(1, 1, 70UL, 150UL, 777UL, 0, 0, "split k");
         check_gemm_path(0, 0, 768UL, 770UL, 64UL, 0, 0, "128 x 128 tiles");
         check_gemm_path(1, 0, 768UL, 768UL, 40UL, 1, 1, "128 x 128 tiles, 16-bit");
-        check_conv_tiles(32UL, 64UL, 16UL);    // forward: 64 x 256 tiles
-        check_conv_tiles(64UL, 128UL, 8UL);    // forward and weight gradient: 128 x 128
+        check_conv_tiles(32UL, 64UL, 16UL);
+        check_conv_tiles(64UL, 128UL, 8UL);
     }
     unsafe { printf("webgpu arrays: %d checks, %d failures\n", g_checks, g_fails); }
     return g_fails == 0 ? 0 : 1;
