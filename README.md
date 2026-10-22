@@ -22,6 +22,8 @@ irm https://raw.githubusercontent.com/safec-org/SafeC/main/install.ps1 | iex
 ```bash
 bash install.sh --prefix=/opt/safec          # or specify install directory
 bash install.sh --version=v1.0.0-beta-4      # or pin a specific release
+bash install.sh --std=core,collections,gui   # only these prebuilt std sections (default: all)
+bash install.sh --std=+ml                    # add a section to an existing install later
 ```
 
 **Requirement: clang 21 or newer.** `safec` emits LLVM IR, and `safec --emit-bin` and `safeguard` hand it to clang to compile and link (clang also imports C headers). An older clang can't read that IR. The install scripts find a suitable clang, including versioned names like `clang-21`, apt.llvm.org's `/usr/lib/llvm-21` and Homebrew's `llvm`. If it isn't the plain `clang` on your `PATH`, they set `SAFEC_CLANG`/`SAFEC_CLANGXX` to it; if there's none, they print how to install one:
@@ -33,7 +35,7 @@ bash install.sh --version=v1.0.0-beta-4      # or pin a specific release
 | Windows | `winget install LLVM.LLVM` |
 | Other | [LLVM releases](https://github.com/llvm/llvm-project/releases) |
 
-Published binaries: macOS `arm64`, Linux `x86_64`, Windows `x86_64`. Each release also ships the standard library prebuilt for its platform (`lib/<triple>/libsafec_std.a`), which `safeguard` links instead of compiling std when it matches the installed `safec`. See [Releases](https://github.com/safec-org/SafeC/releases) for the full asset list, or `.github/workflows/release.yml` for how they're built. To build the compiler, stdlib, `safeguard`, or `sc-lsp` from source instead (e.g. for a platform the release workflow doesn't publish, or from an unreleased commit), see each component's own `CMakeLists.txt` under `compiler/`, `safeguard/`, and the sibling `sc-language-server` repo.
+Published binaries: macOS `arm64` (macOS 11 or newer), Linux `x86_64` (glibc 2.25 or newer: Debian 10, Ubuntu 18.04, RHEL 8 and later; not musl), Windows `x86_64`. Each release also ships the standard library prebuilt for its platform, one archive per section (`lib/<triple>/std/core.a`, `collections.a`, `gui.a`, `ml.a`, ...: std's top-level directories, `core` for the files directly in `std/`). `safeguard` links only the sections holding the std modules a project uses, instead of compiling them, when they match the installed `safec`; a section left out with `--std` (`-Std` for `install.ps1`) is compiled from source when a project needs it. std is always compiled optimized, in debug builds too. See [Releases](https://github.com/safec-org/SafeC/releases) for the full asset list, or `.github/workflows/release.yml` for how they're built. To build the compiler, stdlib, `safeguard`, or `sc-lsp` from source instead (e.g. for a platform the release workflow doesn't publish, or from an unreleased commit), see each component's own `CMakeLists.txt` under `compiler/`, `safeguard/`, and the sibling `sc-language-server` repo.
 
 Then create a project and run:
 
