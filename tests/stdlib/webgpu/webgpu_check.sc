@@ -4,10 +4,13 @@
 // the SGD update, and buffers reused after free. Needs a WebGPU adapter;
 // run with tests/stdlib/webgpu/run.sh. Built with the webgpu feature, it also
 // reads a DEVICE_WEBGPU tensor's buffer (trait WebGpuTensor) through the
-// array API: the two share one device.
+// array API (the two share one device), and checks the convolutions large
+// enough for the backend's larger tiles, which device_check's don't reach.
 #include <std/ml/gpu_webgpu.h>
 #include <std/ml/device.h>
 #include <std/ml/tensor.h>
+#include <std/ml/tensor_nn.h>
+#include <std/ml/convnet.h>
 #include <std/ml/float16.h>
 #include <std/math.h>
 extern int printf(const char* fmt, ...);
@@ -276,6 +279,74 @@ static void check_tensor_interop() {
     t.free();
 }
 
+// Convolutions large enough for the backend's 8 x 8-block tiles (the
+// forward pass in 64 x 256 and 128 x 128 tiles, the weight gradient in
+// 128 x 128): output and gradients on DEVICE_WEBGPU against the CPU.
+static float conv_err(const float* a, const float* b, unsigned long n) {
+    float worst = (float)0.0;
+    float scale = (float)1.0;
+    unsafe {
+        unsigned long i = 0UL;
+        while (i < n) {
+            float d = a[i] - b[i];
+            if (d < (float)0.0) d = -d;
+            if (d != d) d = (float)1e9;
+            if (d > worst) worst = d;
+            float m = a[i] < (float)0.0 ? -a[i] : a[i];
+            if (m + (float)1.0 > scale) scale = m + (float)1.0;
+            i = i + 1UL;
+        }
+    }
+    return worst / scale;
+}
+
+static void conv_values(&FloatTensor t, float* out, int grad) {
+    unsafe {
+        if (grad) tensor_grad_host_((void*)t); else tensor_host_((void*)t);
+        unsigned long i = 0UL;
+        while (i < t->size) { out[i] = grad ? t->grad[i] : t->data[i]; i = i + 1UL; }
+    }
+}
+
+static void check_conv_tiles(unsigned long batch, unsigned long ch, unsigned long side) {
+    struct Rng rng = Rng::new(21UL);
+    &FloatTensor x = FloatTensor::new_2d(batch, ch * side * side, 1);
+    &FloatTensor w = FloatTensor::new_2d(ch, ch * 9UL, 1);
+    &FloatTensor b = FloatTensor::new_1d(ch, 1);
+    &FloatTensor R = FloatTensor::new_2d(batch, ch * side * side, 0);
+    rng.fill_normal(x, (float)0.0, (float)1.0);
+    rng.fill_uniform(w, (float)-0.1, (float)0.1);
+    rng.fill_normal(b, (float)0.0, (float)0.1);
+    rng.fill_normal(R, (float)0.0, (float)1.0);
+    unsigned long no = batch * ch * side * side;
+    unsigned long nw = ch * ch * 9UL;
+    unsafe {
+        float* want = (float*)malloc(4UL * (2UL * no + nw));
+        float* got = (float*)malloc(4UL * (2UL * no + nw));
+        int pass = 0;
+        while (pass < 2) {
+            float* v = pass == 0 ? want : got;
+            if (pass == 1) { x.place(DEVICE_WEBGPU); w.place(DEVICE_WEBGPU); b.place(DEVICE_WEBGPU); }
+            x.zero_grad(); w.zero_grad(); b.zero_grad();
+            &FloatTensor o = tensor_conv2d(x, w, b, ch, side, side, 3UL, 3UL, 1UL, 1UL);
+            if (pass == 1) check(o.device() == DEVICE_WEBGPU, "convolution on the device");
+            tensor_mul(o, R).sum().backward();
+            conv_values(o, v, 0);
+            conv_values(x, &v[no], 1);
+            conv_values(w, &v[2UL * no], 1);
+            pass = pass + 1;
+        }
+        x.place(DEVICE_CPU); w.place(DEVICE_CPU); b.place(DEVICE_CPU);
+        float eo = conv_err(want, got, no);
+        float ex = conv_err(&want[no], &got[no], no);
+        float ew = conv_err(&want[2UL * no], &got[2UL * no], nw);
+        printf("  conv %lu->%lu side %lu batch %lu: output %.2e, dx %.2e, dw %.2e\n", ch, ch, side, batch, (double)eo, (double)ex, (double)ew);
+        check(eo < (float)2e-4 && ex < (float)2e-4 && ew < (float)2e-4, "convolution in 8 x 8-block tiles");
+        free((void*)want); free((void*)got);
+    }
+    x.free(); w.free(); b.free(); R.free();
+}
+
 int main() {
     unsafe { printf("webgpu available: %d\n", webgpu_available()); }
     if (!webgpu_available()) { unsafe { printf("webgpu arrays: no WebGPU adapter\n"); } return 1; }
@@ -293,7 +364,11 @@ int main() {
     check_matmul(33UL, 64UL, 65UL, WEBGPU_FP16, WEBGPU_FP16);   // 16-bit results across odd rows
     check_matmul(33UL, 64UL, 65UL, WEBGPU_BF16, WEBGPU_BF16);
     check_buffers();
-    if (device_available(DEVICE_WEBGPU)) check_tensor_interop();
+    if (device_available(DEVICE_WEBGPU)) {
+        check_tensor_interop();
+        check_conv_tiles(32UL, 64UL, 16UL);    // forward: 64 x 256 tiles
+        check_conv_tiles(64UL, 128UL, 8UL);    // forward and weight gradient: 128 x 128
+    }
     unsafe { printf("webgpu arrays: %d checks, %d failures\n", g_checks, g_fails); }
     return g_fails == 0 ? 0 : 1;
 }

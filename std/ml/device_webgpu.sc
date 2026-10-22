@@ -97,7 +97,7 @@ extern long  write(int fd, const void* buf, unsigned long n);
 #define DWG_INLINE_BYTES (1UL << 16)  // uploads up to this size travel with the open command buffer
 #define DWG_ATTN_T 8UL                // device_kernels.wgsl's attention tile for head dims up to 128 ...
 #define DWG_ATTN16_T 16UL             // ... and up to 64
-#define DWG_GEMM_TILE 64UL
+#define DWG_GEMM_FILL 32UL            // the 128 x 128 GEMM tile from this many tiles on (two per GPU core)
 #define DWG_POLL_CAP 1000000
 
 static int   g_dwg_state = 0;          // 0 = not yet, 1 = ready, -1 = unusable
@@ -154,10 +154,12 @@ static void* g_dwg_pipe[2 * DK_COUNT];
 static int   g_dwg_pipe_state[2 * DK_COUNT];     // 0 = not yet, 1 = built, -1 = can't
 static void* g_dwg_apipe[6];
 static int   g_dwg_apipe_state[6];
-static void* g_dwg_gemm[36];
-static int   g_dwg_gemm_state[36];
-static void* g_dwg_conv[27];             // wk_conv per op, tile rows and element type
-static int   g_dwg_conv_state[27];
+static void* g_dwg_lpipe[2 * DK_COUNT];          // the row kernels with 32 lanes a row
+static int   g_dwg_lpipe_state[2 * DK_COUNT];
+static void* g_dwg_gemm[72];             // wk_gemm / wk_gemm8 per transposes and element types
+static int   g_dwg_gemm_state[72];
+static void* g_dwg_conv[45];             // wk_conv per op, tile shape and element type
+static int   g_dwg_conv_state[45];
 static void* g_dwg_copy = (void*)0;
 static void* g_dwg_upload = (void*)0;
 static void* g_dwg_map = (void*)0;
@@ -561,14 +563,30 @@ static void* dwg_make_pipe_(const char* entry, const struct WGPUConstantEntry* c
 
 static int dwg_is_attn_(int kernel) { return kernel == DK_ATTN_FWD || kernel == DK_ATTN_BWD_Q || kernel == DK_ATTN_BWD_KV; }
 
-// DK_* kernel 'kernel' (TAGGED when 'tagged'), its 16 x 16 attention build when 'wide'.
-static void* dwg_pipe_(int kernel, int tagged, int wide) {
+// The kernels with a row per RL lanes (device_kernels.wgsl): u0 is the row length.
+static int dwg_rows_(int kernel) {
+    return kernel == DK_ROWSUM || kernel == DK_SOFTMAX_ROWS || kernel == DK_SOFTMAX_BWD || kernel == DK_CE_FWD ||
+           kernel == DK_CE_BWD || kernel == DK_LAYERNORM || kernel == DK_LAYERNORM_BWD;
+}
+
+// DK_* kernel 'kernel' (TAGGED when 'tagged'), its 16 x 16 attention build
+// when 'wide', with 32 lanes a row when 'lanes'.
+static void* dwg_pipe_(int kernel, int tagged, int wide, int lanes) {
     unsafe {
         struct WGPUConstantEntry c[4];
         unsigned long n = 0UL;
         if (tagged) { c[n] = dwg_const_("TAGGED", 1.0); n = n + 1UL; }
         int opc = device_kernel_wgsl_opc_(kernel);
         if (opc >= 0) { c[n] = dwg_const_("OPC", (double)opc); n = n + 1UL; }
+        if (lanes) {
+            c[n] = dwg_const_("RL", 32.0); n = n + 1UL;
+            unsigned long slot = (unsigned long)tagged * (unsigned long)DK_COUNT + (unsigned long)kernel;
+            if (g_dwg_lpipe_state[slot] == 0) {
+                g_dwg_lpipe[slot] = dwg_make_pipe_(device_kernel_wgsl_entry_(kernel), (const struct WGPUConstantEntry*)&c[0], n);
+                g_dwg_lpipe_state[slot] = g_dwg_lpipe[slot] != (void*)0 ? 1 : -1;
+            }
+            return g_dwg_lpipe[slot];
+        }
         if (wide) {
             c[n] = dwg_const_("ATT_T", (double)DWG_ATTN16_T); n = n + 1UL;
             c[n] = dwg_const_("ATT_MAXD", 64.0); n = n + 1UL;
@@ -588,8 +606,9 @@ static void* dwg_pipe_(int kernel, int tagged, int wide) {
     }
 }
 
-static void* dwg_gemm_pipe_(int ta, int tb, int at, int ct) {
-    unsigned long slot = (((unsigned long)ta * 2UL + (unsigned long)tb) * 3UL + (unsigned long)at) * 3UL + (unsigned long)ct;
+static void* dwg_gemm_pipe_(int big, int ta, int tb, int at, int ct) {
+    unsigned long slot = ((((unsigned long)big * 2UL + (unsigned long)ta) * 2UL + (unsigned long)tb) * 3UL + (unsigned long)at) * 3UL +
+                         (unsigned long)ct;
     unsafe {
         if (g_dwg_gemm_state[slot] == 0) {
             struct WGPUConstantEntry c[4];
@@ -597,24 +616,41 @@ static void* dwg_gemm_pipe_(int ta, int tb, int at, int ct) {
             c[1] = dwg_const_("GTB", (double)tb);
             c[2] = dwg_const_("GAT", (double)at);
             c[3] = dwg_const_("GCT", (double)ct);
-            g_dwg_gemm[slot] = dwg_make_pipe_("wk_gemm", (const struct WGPUConstantEntry*)&c[0], 4UL);
+            g_dwg_gemm[slot] = dwg_make_pipe_(big ? "wk_gemm8" : "wk_gemm", (const struct WGPUConstantEntry*)&c[0], 4UL);
             g_dwg_gemm_state[slot] = g_dwg_gemm[slot] != (void*)0 ? 1 : -1;
         }
         return g_dwg_gemm[slot];
     }
 }
 
-// wk_conv for op (0 forward, 1 input gradient, 2 weight gradient), tile
-// rows 64 / 32 / 16 (shape 0 / 1 / 2) and element type t.
+// wk_conv's tile shapes: rows x columns of the product, each thread's block.
+#define DWG_CONV_64 0     // 64 x 64, 4 x 4
+#define DWG_CONV_32 1     // 32 x 128, 4 x 4
+#define DWG_CONV_16 2     // 16 x 256, 4 x 4
+#define DWG_CONV_64W 3    // 64 x 256, 8 x 8
+#define DWG_CONV_128 4    // 128 x 128, 8 x 8
+static unsigned long dwg_conv_rows_(int shape) {
+    if (shape == DWG_CONV_128) return 128UL;
+    if (shape == DWG_CONV_64 || shape == DWG_CONV_64W) return 64UL;
+    return shape == DWG_CONV_32 ? 32UL : 16UL;
+}
+static unsigned long dwg_conv_cols_(int shape) {
+    unsigned long t = shape >= DWG_CONV_64W ? 8UL : 4UL;
+    return t * t * 256UL / dwg_conv_rows_(shape);
+}
+
+// wk_conv for op (0 forward, 1 input gradient, 2 weight gradient), a tile
+// shape and element type t.
 static void* dwg_conv_pipe_(int op, int shape, int t) {
-    unsigned long slot = ((unsigned long)op * 3UL + (unsigned long)shape) * 3UL + (unsigned long)t;
+    unsigned long slot = ((unsigned long)op * 5UL + (unsigned long)shape) * 3UL + (unsigned long)t;
     unsafe {
         if (g_dwg_conv_state[slot] == 0) {
-            struct WGPUConstantEntry c[3];
+            struct WGPUConstantEntry c[4];
             c[0] = dwg_const_("COP", (double)op);
-            c[1] = dwg_const_("CBM", shape == 0 ? 64.0 : (shape == 1 ? 32.0 : 16.0));
+            c[1] = dwg_const_("CBM", (double)dwg_conv_rows_(shape));
             c[2] = dwg_const_("CT", (double)t);
-            g_dwg_conv[slot] = dwg_make_pipe_("wk_conv", (const struct WGPUConstantEntry*)&c[0], 3UL);
+            c[3] = dwg_const_("CTN", shape >= DWG_CONV_64W ? 8.0 : 4.0);
+            g_dwg_conv[slot] = dwg_make_pipe_("wk_conv", (const struct WGPUConstantEntry*)&c[0], 4UL);
             g_dwg_conv_state[slot] = g_dwg_conv[slot] != (void*)0 ? 1 : -1;
         }
         return g_dwg_conv[slot];
@@ -845,8 +881,9 @@ int WebGpuBackend::sync() {
     return dwg_wait_();
 }
 
-// A strided batch on wk_gemm: a pipeline per transposes and element types,
-// the batch split into grids of at most 65535.
+// A strided batch on wk_gemm (64 x 64 tiles) or, with enough tiles to fill
+// the GPU, wk_gemm8 (128 x 128): a pipeline per tile, transposes and element
+// types, the batch split into grids of at most 65535.
 static int dwg_gemm_(int ta, int tb, int at, int ct, unsigned long m, unsigned long n, unsigned long k, float alpha,
                      unsigned long a, unsigned long lda, unsigned long sa, unsigned long b, unsigned long ldb,
                      unsigned long sb, float beta, unsigned long c, unsigned long ldc, unsigned long sc,
@@ -854,9 +891,11 @@ static int dwg_gemm_(int ta, int tb, int at, int ct, unsigned long m, unsigned l
     if (!dwg_ensure_()) return 0;
     if (m == 0UL || n == 0UL || batch == 0UL) return 1;
     if (at < 0 || at > 2 || ct < 0 || ct > 2) return 0;
-    unsigned long gx = (n + DWG_GEMM_TILE - 1UL) / DWG_GEMM_TILE;
-    unsigned long gy = (m + DWG_GEMM_TILE - 1UL) / DWG_GEMM_TILE;
-    void* pipe = dwg_gemm_pipe_(ta != 0, tb != 0, at, ct);
+    int big = ((m + 127UL) / 128UL) * ((n + 127UL) / 128UL) * batch >= DWG_GEMM_FILL;
+    unsigned long tile = big ? 128UL : 64UL;
+    unsigned long gx = (n + tile - 1UL) / tile;
+    unsigned long gy = (m + tile - 1UL) / tile;
+    void* pipe = dwg_gemm_pipe_(big, ta != 0, tb != 0, at, ct);
     if (pipe == (void*)0 || gx > DWG_MAX_DIM || gy > DWG_MAX_DIM) { device_note_cpu_launch_(DEVICE_WEBGPU); return 0; }
     unsigned int w[DWG_ARG_WORDS];
     unsafe {
@@ -898,9 +937,14 @@ int WebGpuBackend::gemm_batched(const &DevGemm g) {
 // atomically into zeroed weights (fp32 only: a 16-bit one declines and
 // device.sc runs it in fp32). A transposed convolution is the plain one with
 // input and output swapped, so its forward pass is the input-gradient kernel
-// and its input gradient the forward one. The tile is 64 x 64 for 48 rows
-// of the product on (output channels, or input channels for the input
-// gradient), 32 x 128 from 17, else 16 x 256.
+// and its input gradient the forward one; the input gradient runs a grid
+// slice per stride phase, as Metal's does. The tile (measured per op on an
+// M1 Pro): by the product's rows (output channels, or input channels for
+// the input gradient), 64 x 64 from 48, 32 x 128 from 17 and 16 x 256 below,
+// threads taking 4 x 4 blocks; the forward pass takes 128 x 128 from 96 and
+// 64 x 256 from 48 when that leaves 32 tiles, and the weight gradient
+// 128 x 128 from 128, threads taking 8 x 8 blocks (the input gradient's
+// gather runs slower in those).
 int WebGpuBackend::conv(const &DevConv c) {
     if (!dwg_ensure_() || c.dtype < DEVICE_FP32 || c.dtype > DEVICE_BF16) return 0;
     unsigned long x = c.x; unsigned long y = c.y;
@@ -918,9 +962,19 @@ int WebGpuBackend::conv(const &DevConv c) {
     unsigned long m = op == 1 ? Ci : Co;
     unsigned long n = op == 0 ? c.batch * Ho * Wo : (op == 1 ? c.batch * Hi * Wi : Ci * kk);
     if (m == 0UL || n == 0UL) return 1;
-    int shape = m >= 48UL ? 0 : (m > 16UL ? 1 : 2);
-    unsigned long rows = shape == 0 ? 64UL : (shape == 1 ? 32UL : 16UL);
-    unsigned long cols = 4096UL / rows;
+    // the input gradient runs per stride phase (without dilation): fewer pixels each
+    unsigned long phases = 1UL;
+    if (op == 1 && c.dH == 1UL && c.dW == 1UL) {
+        phases = c.sH * c.sW;
+        n = c.batch * ((Hi + c.sH - 1UL) / c.sH) * ((Wi + c.sW - 1UL) / c.sW);
+    }
+    unsigned long np = n * phases;
+    int shape = m >= 48UL ? DWG_CONV_64 : (m > 16UL ? DWG_CONV_32 : DWG_CONV_16);
+    if (op == 0 && m >= 96UL && ((m + 127UL) / 128UL) * ((np + 127UL) / 128UL) >= DWG_GEMM_FILL) shape = DWG_CONV_128;
+    else if (op == 0 && m >= 48UL && ((m + 63UL) / 64UL) * ((np + 255UL) / 256UL) >= DWG_GEMM_FILL) shape = DWG_CONV_64W;
+    else if (op == 2 && m >= 128UL) shape = DWG_CONV_128;   // split over k: enough workgroups either way
+    unsigned long rows = dwg_conv_rows_(shape);
+    unsigned long cols = dwg_conv_cols_(shape);
     void* pipe = dwg_conv_pipe_(op, shape, c.dtype);
     unsigned long gx = (n + cols - 1UL) / cols;
     unsigned long gy = (m + rows - 1UL) / rows;
@@ -934,7 +988,7 @@ int WebGpuBackend::conv(const &DevConv c) {
         w[10] = (unsigned int)c.kH; w[11] = (unsigned int)c.kW; w[12] = (unsigned int)c.sH; w[13] = (unsigned int)c.sW;
         w[14] = (unsigned int)c.pH; w[15] = (unsigned int)c.pW; w[16] = (unsigned int)c.dH; w[17] = (unsigned int)c.dW;
     }
-    unsigned long splits = 1UL;
+    unsigned long splits = phases;
     if (op == 2) {
         // zero the weights, then enough slices of k to fill the GPU
         unsigned long nw = Co * Ci * kk;
@@ -973,10 +1027,12 @@ int WebGpuBackend::launch(int kernel, unsigned long n, const &DevArgs args) {
     int attn = dwg_is_attn_(kernel);
     int wide = 0;
     unsafe { wide = attn && args.u[3] <= 64U && args.u[4] <= 64U; }
-    void* pipe = dwg_pipe_(kernel, tagged, wide);
-    if (pipe == (void*)0 && wide) { wide = 0; pipe = dwg_pipe_(kernel, tagged, 0); }
+    int lanes = 0;
+    unsafe { lanes = dwg_rows_(kernel) && args.u[0] >= 32U; }
+    void* pipe = dwg_pipe_(kernel, tagged, wide, lanes);
+    if (pipe == (void*)0 && (wide || lanes)) { wide = 0; lanes = 0; pipe = dwg_pipe_(kernel, tagged, 0, 0); }
     if (pipe == (void*)0) { device_note_cpu_launch_(DEVICE_WEBGPU); return 0; }   // the tensor op runs on the CPU
-    unsigned long groups = (n + DWG_BLOCK - 1UL) / DWG_BLOCK;
+    unsigned long groups = ((lanes ? 32UL * n : n) + DWG_BLOCK - 1UL) / DWG_BLOCK;
     if (groups > DWG_MAX_GROUPS) groups = DWG_MAX_GROUPS;
     if (attn) {
         // a workgroup per (head, tile of rows): rows are keys for dk_attn_bwd_kv, else queries

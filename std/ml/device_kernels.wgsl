@@ -275,6 +275,36 @@ fn block_add(v: f32, k: u32, li: u32) {
     if (li == 0u) { atadd(k, 0u, s); }
 }
 
+// The row kernels (row sums, softmax, cross-entropy, layer norm) give each
+// row RL lanes that split its columns (device_kernels.cu's GSR on Metal):
+// RL = 32 for rows of 32 columns on, 1 (a thread per row, as on ROCm) for
+// narrower ones. A workgroup takes 256 / RL rows at a time; every lane
+// joins the reductions, those past the last row with neutral values.
+override RL: u32 = 1u;
+// The total (maximum) over the RL lanes of v's row, to each of them.
+fn seg_sum(v: f32, li: u32) -> f32 {
+    if (RL == 1u) { return v; }
+    workgroupBarrier();
+    red[li] = v;
+    workgroupBarrier();
+    for (var w = RL / 2u; w > 0u; w >>= 1u) {
+        if (li % RL < w) { red[li] += red[li + w]; }
+        workgroupBarrier();
+    }
+    return red[li - li % RL];
+}
+fn seg_max(v: f32, li: u32) -> f32 {
+    if (RL == 1u) { return v; }
+    workgroupBarrier();
+    red[li] = v;
+    workgroupBarrier();
+    for (var w = RL / 2u; w > 0u; w >>= 1u) {
+        if (li % RL < w) { red[li] = max(red[li], red[li + w]); }
+        workgroupBarrier();
+    }
+    return red[li - li % RL];
+}
+
 // p0 = in, p1 = out[0] (zeroed by the caller); u0: 0 sum, 1 sum of squares
 @compute @workgroup_size(256)
 fn dk_sum(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u,
@@ -332,12 +362,16 @@ fn dk_mul_row_acc(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgr
 }
 // out[r] = sum_c x[r,c]                                       n = rows
 @compute @workgroup_size(256)
-fn dk_rowsum(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u) {
+fn dk_rowsum(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3u,
+             @builtin(num_workgroups) nwg: vec3u) {
     let C = U(0u);
-    for (var r = gid.x; r < N(); r += nwg.x * 256u) {
+    for (var rb = wg.x * (256u / RL); rb < N(); rb += nwg.x * (256u / RL)) {
+        let r = rb + li / RL;
+        let live = r < N();
         var s = 0.0;
-        for (var c = 0u; c < C; c++) { s += ld(0u, r * C + c); }
-        st(1u, r, s);
+        for (var c = li % RL; live && c < C; c += RL) { s += ld(0u, r * C + c); }
+        s = seg_sum(s, li);
+        if (live && li % RL == 0u) { st(1u, r, s); }
     }
 }
 // dx[r,c] += g[r]                                             n = rows*cols
@@ -403,56 +437,66 @@ fn attn_vis(flags: u32, w: u32, pos: i32, j: i32) -> bool {
     return true;
 }
 
-// ── Softmax family: one thread per row, u0 = cols ────────────────────────────
+// ── Softmax family: a row per RL lanes, u0 = cols ────────────────────────────
 // u1: 0 softmax, 1 log-softmax. A masked softmax: u2 = mask flags, u3 =
 // window, u4 = (int) keys - queries.
 @compute @workgroup_size(256)
-fn dk_softmax_rows(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u) {
+fn dk_softmax_rows(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3u,
+                   @builtin(num_workgroups) nwg: vec3u) {
     let C = U(0u);
-    for (var r = gid.x; r < N(); r += nwg.x * 256u) {
+    let fl = U(2u);
+    for (var rb = wg.x * (256u / RL); rb < N(); rb += nwg.x * (256u / RL)) {
+        let r = rb + li / RL;
+        let live = r < N();
         let b = r * C;
-        let fl = U(2u);
+        let pos = i32(r) + i32(U(4u));
+        var mx = -3.0e38;
+        for (var c = li % RL; live && c < C; c += RL) {
+            if (fl == 0u || attn_vis(fl, U(3u), pos, i32(c))) { mx = max(mx, ld(0u, b + c)); }
+        }
+        mx = seg_max(mx, li);
+        var s = 0.0;
+        for (var c = li % RL; live && c < C; c += RL) {
+            if (fl == 0u || attn_vis(fl, U(3u), pos, i32(c))) { s += exp(ld(0u, b + c) - mx); }
+        }
+        s = seg_sum(s, li);
+        if (!live) { continue; }
         if (fl != 0u) {
-            let pos = i32(r) + i32(U(4u));
-            var mx = -3.0e38;
-            for (var c = 0u; c < C; c++) { if (attn_vis(fl, U(3u), pos, i32(c))) { mx = max(mx, ld(0u, b + c)); } }
-            var s = 0.0;
-            for (var c = 0u; c < C; c++) { if (attn_vis(fl, U(3u), pos, i32(c))) { s += exp(ld(0u, b + c) - mx); } }
             let inv = select(0.0, 1.0 / s, s > 0.0);
-            for (var c = 0u; c < C; c++) {
+            for (var c = li % RL; c < C; c += RL) {
                 var v = 0.0;
                 if (attn_vis(fl, U(3u), pos, i32(c))) { v = exp(ld(0u, b + c) - mx) * inv; }
                 st(1u, b + c, v);
             }
-            continue;
-        }
-        var mx = ld(0u, b);
-        for (var c = 1u; c < C; c++) { mx = max(mx, ld(0u, b + c)); }
-        var s = 0.0;
-        for (var c = 0u; c < C; c++) { s += exp(ld(0u, b + c) - mx); }
-        if (U(1u) != 0u) {
+        } else if (U(1u) != 0u) {
             let l = mx + log(s);
-            for (var c = 0u; c < C; c++) { st(1u, b + c, ld(0u, b + c) - l); }
+            for (var c = li % RL; c < C; c += RL) { st(1u, b + c, ld(0u, b + c) - l); }
         } else {
             let inv = 1.0 / s;
-            for (var c = 0u; c < C; c++) { st(1u, b + c, exp(ld(0u, b + c) - mx) * inv); }
+            for (var c = li % RL; c < C; c += RL) { st(1u, b + c, exp(ld(0u, b + c) - mx) * inv); }
         }
     }
 }
 // dx += y * (g - sum(g*y)) (softmax), dx += g - exp(y) * sum(g) (log-softmax)
 // p0 = g, p1 = y, p2 = dx
 @compute @workgroup_size(256)
-fn dk_softmax_bwd(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u) {
+fn dk_softmax_bwd(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3u,
+                  @builtin(num_workgroups) nwg: vec3u) {
     let C = U(0u);
-    for (var r = gid.x; r < N(); r += nwg.x * 256u) {
+    let lg = U(1u) != 0u;
+    for (var rb = wg.x * (256u / RL); rb < N(); rb += nwg.x * (256u / RL)) {
+        let r = rb + li / RL;
+        let live = r < N();
         let b = r * C;
         var s = 0.0;
-        if (U(1u) != 0u) {
-            for (var c = 0u; c < C; c++) { s += ld(0u, b + c); }
-            for (var c = 0u; c < C; c++) { st(2u, b + c, ld(2u, b + c) + ld(0u, b + c) - exp(ld(1u, b + c)) * s); }
-        } else {
-            for (var c = 0u; c < C; c++) { s += ld(0u, b + c) * ld(1u, b + c); }
-            for (var c = 0u; c < C; c++) { st(2u, b + c, ld(2u, b + c) + ld(1u, b + c) * (ld(0u, b + c) - s)); }
+        for (var c = li % RL; live && c < C; c += RL) {
+            if (lg) { s += ld(0u, b + c); } else { s += ld(0u, b + c) * ld(1u, b + c); }
+        }
+        s = seg_sum(s, li);
+        if (!live) { continue; }
+        for (var c = li % RL; c < C; c += RL) {
+            if (lg) { st(2u, b + c, ld(2u, b + c) + ld(0u, b + c) - exp(ld(1u, b + c)) * s); }
+            else { st(2u, b + c, ld(2u, b + c) + ld(1u, b + c) * (ld(0u, b + c) - s)); }
         }
     }
 }
@@ -781,35 +825,47 @@ fn dk_attn_bwd_kv(@builtin(local_invocation_index) li: u32, @builtin(workgroup_i
 // Cross-entropy on class indices: p0 = logits [rows, C], p1 = labels, p2 =
 // loss[0]; u0 = C; f0 = 1/rows                                n = rows
 @compute @workgroup_size(256)
-fn dk_ce_fwd(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u,
-             @builtin(local_invocation_index) li: u32) {
+fn dk_ce_fwd(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3u,
+             @builtin(num_workgroups) nwg: vec3u) {
     let C = U(0u);
     var acc = 0.0;
-    for (var r = gid.x; r < N(); r += nwg.x * 256u) {
+    for (var rb = wg.x * (256u / RL); rb < N(); rb += nwg.x * (256u / RL)) {
+        let r = rb + li / RL;
+        let live = r < N();
         let b = r * C;
-        var mx = ld(0u, b);
-        for (var c = 1u; c < C; c++) { mx = max(mx, ld(0u, b + c)); }
+        var mx = -3.0e38;
+        for (var c = li % RL; live && c < C; c += RL) { mx = max(mx, ld(0u, b + c)); }
+        mx = seg_max(mx, li);
         var s = 0.0;
-        for (var c = 0u; c < C; c++) { s += exp(ld(0u, b + c) - mx); }
-        let lab = u32(ld(1u, r));
-        acc += (mx + log(s) - ld(0u, b + lab)) * F(0u);
+        for (var c = li % RL; live && c < C; c += RL) { s += exp(ld(0u, b + c) - mx); }
+        s = seg_sum(s, li);
+        if (live && li % RL == 0u) {
+            let lab = u32(ld(1u, r));
+            acc += (mx + log(s) - ld(0u, b + lab)) * F(0u);
+        }
     }
     block_add(acc, 2u, li);
 }
 // dlogits += seed[0] * (softmax - onehot) / rows; p3 = seed
 @compute @workgroup_size(256)
-fn dk_ce_bwd(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u) {
+fn dk_ce_bwd(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3u,
+             @builtin(num_workgroups) nwg: vec3u) {
     let C = U(0u);
-    for (var r = gid.x; r < N(); r += nwg.x * 256u) {
+    let sc = ld(3u, 0u) * F(0u);
+    for (var rb = wg.x * (256u / RL); rb < N(); rb += nwg.x * (256u / RL)) {
+        let r = rb + li / RL;
+        let live = r < N();
         let b = r * C;
-        let sc = ld(3u, 0u) * F(0u);
-        var mx = ld(0u, b);
-        for (var c = 1u; c < C; c++) { mx = max(mx, ld(0u, b + c)); }
+        var mx = -3.0e38;
+        for (var c = li % RL; live && c < C; c += RL) { mx = max(mx, ld(0u, b + c)); }
+        mx = seg_max(mx, li);
         var s = 0.0;
-        for (var c = 0u; c < C; c++) { s += exp(ld(0u, b + c) - mx); }
+        for (var c = li % RL; live && c < C; c += RL) { s += exp(ld(0u, b + c) - mx); }
+        s = seg_sum(s, li);
+        if (!live) { continue; }
         let lab = u32(ld(1u, r));
         let inv = 1.0 / s;
-        for (var c = 0u; c < C; c++) { accum(2u, b + c, sc * (exp(ld(0u, b + c) - mx) * inv - select(0.0, 1.0, c == lab))); }
+        for (var c = li % RL; c < C; c += RL) { accum(2u, b + c, sc * (exp(ld(0u, b + c) - mx) * inv - select(0.0, 1.0, c == lab))); }
     }
 }
 // Elementwise losses: u0 = 0 BCE on logits, 1 Huber (f1 = delta); p0 = x,
@@ -846,36 +902,44 @@ fn dk_ewloss_bwd(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgro
     }
 }
 
-// ── Layer norm: one thread per row, u0 = cols, f0 = eps ──────────────────────
+// ── Layer norm: a row per RL lanes, u0 = cols, f0 = eps ──────────────────────
 // p0 = x, p1 = xhat out, p2 = inv std [rows]
 @compute @workgroup_size(256)
-fn dk_layernorm(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u) {
+fn dk_layernorm(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3u,
+                @builtin(num_workgroups) nwg: vec3u) {
     let C = U(0u);
-    for (var r = gid.x; r < N(); r += nwg.x * 256u) {
+    for (var rb = wg.x * (256u / RL); rb < N(); rb += nwg.x * (256u / RL)) {
+        let r = rb + li / RL;
+        let live = r < N();
         let b = r * C;
         var m = 0.0;
-        for (var c = 0u; c < C; c++) { m += ld(0u, b + c); }
-        m /= f32(C);
+        for (var c = li % RL; live && c < C; c += RL) { m += ld(0u, b + c); }
+        m = seg_sum(m, li) / f32(C);
         var v = 0.0;
-        for (var c = 0u; c < C; c++) { let d = ld(0u, b + c) - m; v += d * d; }
-        let is = inverseSqrt(v / f32(C) + F(0u));
-        st(2u, r, is);
-        for (var c = 0u; c < C; c++) { st(1u, b + c, (ld(0u, b + c) - m) * is); }
+        for (var c = li % RL; live && c < C; c += RL) { let d = ld(0u, b + c) - m; v += d * d; }
+        let is = inverseSqrt(seg_sum(v, li) / f32(C) + F(0u));
+        if (!live) { continue; }
+        if (li % RL == 0u) { st(2u, r, is); }
+        for (var c = li % RL; c < C; c += RL) { st(1u, b + c, (ld(0u, b + c) - m) * is); }
     }
 }
 // dx += inv * (g - mean(g) - xhat * mean(g * xhat)); p0 = g, p1 = xhat, p2 = inv, p3 = dx
 @compute @workgroup_size(256)
-fn dk_layernorm_bwd(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u) {
+fn dk_layernorm_bwd(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3u,
+                    @builtin(num_workgroups) nwg: vec3u) {
     let C = U(0u);
-    for (var r = gid.x; r < N(); r += nwg.x * 256u) {
+    for (var rb = wg.x * (256u / RL); rb < N(); rb += nwg.x * (256u / RL)) {
+        let r = rb + li / RL;
+        let live = r < N();
         let b = r * C;
         var mg = 0.0;
         var mgy = 0.0;
-        for (var c = 0u; c < C; c++) { let g = ld(0u, b + c); mg += g; mgy += g * ld(1u, b + c); }
-        mg /= f32(C);
-        mgy /= f32(C);
+        for (var c = li % RL; live && c < C; c += RL) { let g = ld(0u, b + c); mg += g; mgy += g * ld(1u, b + c); }
+        mg = seg_sum(mg, li) / f32(C);
+        mgy = seg_sum(mgy, li) / f32(C);
+        if (!live) { continue; }
         let is = ld(2u, r);
-        for (var c = 0u; c < C; c++) {
+        for (var c = li % RL; c < C; c += RL) {
             st(3u, b + c, ld(3u, b + c) + is * (ld(0u, b + c) - mg - ld(1u, b + c) * mgy));
         }
     }
@@ -1880,6 +1944,103 @@ fn wk_gemm(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: 
     }
 }
 
+// wk_gemm's larger tile for products with enough of them to fill the GPU:
+// 128 x 128 per workgroup, each thread an 8 x 8 block (four FMAs per
+// workgroup-memory load instead of two), k in steps of 16. Every thread
+// stages whole vec4s (4 consecutive m of A, n of B) from loads neighbouring
+// threads make at neighbouring addresses. Same words and constants.
+var<workgroup> hA: array<vec4f, 512>;   // [k 16][m 128 as 32 vec4]
+var<workgroup> hB: array<vec4f, 512>;   // [k 16][n 128 as 32 vec4]
+fn g4(base: u32, t: u32, i0: u32, step: u32, n: u32) -> vec4f {
+    // elements i0, i0 + step, ... (n of them; the rest 0)
+    var v = vec4f(0.0);
+    if (n > 0u) { v.x = gld(base, t, i0); }
+    if (n > 1u) { v.y = gld(base, t, i0 + step); }
+    if (n > 2u) { v.z = gld(base, t, i0 + 2u * step); }
+    if (n > 3u) { v.w = gld(base, t, i0 + 3u * step); }
+    return v;
+}
+@compute @workgroup_size(256)
+fn wk_gemm8(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3u) {
+    let M = aw(3u);
+    let Nn = aw(4u);
+    let K = aw(5u);
+    let lda = aw(6u);
+    let ldb = aw(7u);
+    let ldc = aw(8u);
+    let z = wg.z + aw(14u);
+    let ea = select(2u, 4u, GAT == 0u);
+    let ec = select(2u, 4u, GCT == 0u);
+    let Ab = aw(0u) + z * aw(9u) * ea;
+    let Bb = aw(1u) + z * aw(10u) * ea;
+    let Cb = aw(2u) + z * aw(11u) * ec;
+    let m0 = wg.y * 128u;
+    let n0 = wg.x * 128u;
+    let tx = li % 16u;
+    let ty = li / 16u;
+    var acc: array<vec4f, 16>;   // rows ty*8 + i, columns tx*8 + (0..3 | 4..7)
+    for (var k0 = 0u; k0 < K; k0 += 16u) {
+        for (var q = 0u; q < 2u; q++) {
+            let e = li + q * 256u;
+            var m4: u32;
+            var kk: u32;
+            if (GTA) { m4 = e % 32u; kk = e / 32u; } else { kk = e % 16u; m4 = e / 16u; }
+            let gm = m0 + m4 * 4u;
+            let gk = k0 + kk;
+            var v = vec4f(0.0);
+            if (gk < K && gm < M) {
+                let cnt = min(M - gm, 4u);
+                if (GTA) { v = g4(Ab, GAT, gk * lda + gm, 1u, cnt); } else { v = g4(Ab, GAT, gm * lda + gk, lda, cnt); }
+            }
+            hA[kk * 32u + m4] = v;
+        }
+        for (var q = 0u; q < 2u; q++) {
+            let e = li + q * 256u;
+            var n4: u32;
+            var kk: u32;
+            if (GTB) { kk = e % 16u; n4 = e / 16u; } else { n4 = e % 32u; kk = e / 32u; }
+            let gn = n0 + n4 * 4u;
+            let gk = k0 + kk;
+            var v = vec4f(0.0);
+            if (gk < K && gn < Nn) {
+                let cnt = min(Nn - gn, 4u);
+                if (GTB) { v = g4(Bb, GAT, gn * ldb + gk, ldb, cnt); } else { v = g4(Bb, GAT, gk * ldb + gn, 1u, cnt); }
+            }
+            hB[kk * 32u + n4] = v;
+        }
+        workgroupBarrier();
+        for (var kk = 0u; kk < 16u; kk++) {
+            let a0 = hA[kk * 32u + ty * 2u];
+            let a1 = hA[kk * 32u + ty * 2u + 1u];
+            let b0 = hB[kk * 32u + tx * 2u];
+            let b1 = hB[kk * 32u + tx * 2u + 1u];
+            acc[0] += a0.x * b0; acc[1] += a0.x * b1;
+            acc[2] += a0.y * b0; acc[3] += a0.y * b1;
+            acc[4] += a0.z * b0; acc[5] += a0.z * b1;
+            acc[6] += a0.w * b0; acc[7] += a0.w * b1;
+            acc[8] += a1.x * b0; acc[9] += a1.x * b1;
+            acc[10] += a1.y * b0; acc[11] += a1.y * b1;
+            acc[12] += a1.z * b0; acc[13] += a1.z * b1;
+            acc[14] += a1.w * b0; acc[15] += a1.w * b1;
+        }
+        workgroupBarrier();
+    }
+    let alpha = bitcast<f32>(aw(12u));
+    let beta = bitcast<f32>(aw(13u));
+    for (var i = 0u; i < 8u; i++) {
+        let gm = m0 + ty * 8u + i;
+        if (gm >= M) { break; }
+        for (var j = 0u; j < 8u; j++) {
+            let gn = n0 + tx * 8u + j;
+            if (gn >= Nn) { break; }
+            let idx = gm * ldc + gn;
+            var v = alpha * acc[i * 2u + j / 4u][j % 4u];
+            if (beta != 0.0) { v += beta * gld(Cb, GCT, idx); }
+            gst1(Cb, GCT, idx, v);
+        }
+    }
+}
+
 // Convolutions as implicit GEMMs (WebGpuBackend::conv: MIOpen / cuDNN's
 // role), the column matrix gathered tile by tile instead of written out by
 // im2col. In a plain convolution's terms -- input I [B, Ci, Hi, Wi], weights
@@ -1892,75 +2053,80 @@ fn wk_gemm(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: 
 //          split over k (grid z, kSplit each), added atomically (fp32)
 // Words: 0 x (I), 1 w, 2 y (O) byte offsets, 3 B, 4 Ci, 5 Hi, 6 Wi, 7 Co,
 // 8 Ho, 9 Wo, 10 kH, 11 kW, 12 sH, 13 sW, 14 pH, 15 pW, 16 dH, 17 dW,
-// 18 kSplit. A workgroup of 256 threads takes a CBM x (4096 / CBM) tile of
-// the product (64 x 64, 32 x 128 or 16 x 256: few output channels take the
-// flat ones), k in steps of 16, each thread a 4 x 4 block; each thread
-// loads the same column of the B tile every step, so its pixel is decoded
-// once. CT is I, W and O's element type (COP 2: fp32).
+// 18 kSplit. A workgroup of 256 threads takes a CBM x CBN tile of the
+// product, k in steps of 16, each thread a CTN x CTN block: 4 x 4 in 64 x
+// 64, 32 x 128 or 16 x 256 tiles (few output channels take the flat ones),
+// 8 x 8 in 128 x 128 or 64 x 256 ones (four FMAs per workgroup-memory load
+// instead of two). Each thread loads the same column of the B tile every
+// step, so its pixel is decoded once. CT is I, W and O's element type
+// (COP 2: fp32).
 override COP: u32 = 0u;
 override CBM: u32 = 64u;
 override CT: u32 = 0u;
-var<workgroup> cA: array<f32, 16u * CBM>;            // [k 16][m CBM]
-var<workgroup> cB: array<f32, 16u * (4096u / CBM)>;  // [k 16][n BN]
+override CTN: u32 = 4u;                           // each thread's block: CTN x CTN (4 or 8)
+override CBN: u32 = CTN * CTN * 256u / CBM;       // the tile's columns
+var<workgroup> cA: array<f32, 16u * CBM>;         // [k 16][m CBM]
+var<workgroup> cB: array<f32, 16u * CBN>;         // [k 16][n CBN]
 struct Cv { x: u32, w: u32, y: u32, B: u32, Ci: u32, Hi: u32, Wi: u32, Co: u32, Ho: u32, Wo: u32,
             kH: u32, kW: u32, sH: u32, sW: u32, pH: u32, pW: u32, dH: u32, dW: u32, kSplit: u32 }
 fn cv_args() -> Cv {
     return Cv(aw(0u), aw(1u), aw(2u), aw(3u), aw(4u), aw(5u), aw(6u), aw(7u), aw(8u), aw(9u), aw(10u), aw(11u),
               aw(12u), aw(13u), aw(14u), aw(15u), aw(16u), aw(17u), aw(18u));
 }
+// The k step's 16 rows, decoded once per workgroup (cK): COP 0, 1 (the
+// channel, ky dH, kx dW, the tap ky kW + kx; by stride phase: the channel,
+// iy, ix, the tap), COP 2 (the image, oy sH, ox sW, the output pixel).
+var<workgroup> cK: array<vec4i, 16>;
 // A[m][k]: the weights (COP 0, 1) or the output gradient (COP 2)
-fn cv_a(c: Cv, m: u32, k: u32) -> f32 {
+fn cv_a(c: Cv, m: u32, k: u32, t: vec4i) -> f32 {
     let KK = c.kH * c.kW;
     if (COP == 0u) { return gld(c.w, CT, m * c.Ci * KK + k); }
-    if (COP == 1u) { return gld(c.w, CT, ((k / KK) * c.Ci + m) * KK + k % KK); }
-    let Po = c.Ho * c.Wo;
-    let b = k / Po;
-    return gld(c.y, 0u, (b * c.Co + m) * Po + (k - b * Po));
+    if (COP == 1u) { return gld(c.w, CT, (u32(t.x) * c.Ci + m) * KK + u32(t.w)); }
+    return gld(c.y, 0u, (u32(t.x) * c.Co + m) * c.Ho * c.Wo + u32(t.w));
 }
-// B[k][n] for the thread's column: its decoded pixel / tap (p0, p1, p2) and
-// image base (ib, an element offset)
-fn cv_b(c: Cv, k: u32, p0: i32, p1: i32, p2: u32, ib: u32) -> f32 {
-    let KK = c.kH * c.kW;
+// B[k][n] for k's decoded row t and the thread's column: its decoded pixel
+// or tap (p0, p1, p2) and image base (ib, an element offset)
+fn cv_b(c: Cv, t: vec4i, p0: i32, p1: i32, p2: u32, ib: u32, phased: bool) -> f32 {
     if (COP == 0u) {
         // p0, p1: the window's corner (oy sH - pH, ox sW - pW)
-        let ci = k / KK;
-        let r = k - ci * KK;
-        let ky = r / c.kW;
-        let kx = r - ky * c.kW;
-        let y = p0 + i32(ky * c.dH);
-        let x = p1 + i32(kx * c.dW);
+        let y = p0 + t.y;
+        let x = p1 + t.z;
         if (y < 0 || y >= i32(c.Hi) || x < 0 || x >= i32(c.Wi)) { return 0.0; }
-        return gld(c.x, CT, ib + (ci * c.Hi + u32(y)) * c.Wi + u32(x));
+        return gld(c.x, CT, ib + (u32(t.x) * c.Hi + u32(y)) * c.Wi + u32(x));
+    }
+    if (COP == 1u && phased) {
+        // p0, p1: the phase's first window row / column plus the pixel's
+        // (jy, jx); t: (co, iy, ix): the window (p0 - iy, p1 - ix)
+        let oy = p0 - t.y;
+        let ox = p1 - t.z;
+        if (oy < 0 || ox < 0 || oy >= i32(c.Ho) || ox >= i32(c.Wo)) { return 0.0; }
+        return gld(c.y, CT, ib + (u32(t.x) * c.Ho + u32(oy)) * c.Wo + u32(ox));
     }
     if (COP == 1u) {
-        // p0, p1: (y + pH, x + pW); the window at (oy, ox) holds (y, x) through tap (ky, kx)
-        let co = k / KK;
-        let r = k - co * KK;
-        let ky = r / c.kW;
-        let kx = r - ky * c.kW;
-        let ny = p0 - i32(ky * c.dH);
-        let nx = p1 - i32(kx * c.dW);
+        // p0, p1: (y + pH, x + pW); the window at (oy, ox) holds (y, x) through the tap
+        let ny = p0 - t.y;
+        let nx = p1 - t.z;
         if (ny < 0 || nx < 0) { return 0.0; }
-        let oy = u32(ny) / c.sH;
-        let ox = u32(nx) / c.sW;
-        if (oy * c.sH != u32(ny) || ox * c.sW != u32(nx) || oy >= c.Ho || ox >= c.Wo) { return 0.0; }
-        return gld(c.y, CT, ib + (co * c.Ho + oy) * c.Wo + ox);
+        var oy = u32(ny);
+        var ox = u32(nx);
+        if (c.sH != 1u || c.sW != 1u) {
+            oy = oy / c.sH;
+            ox = ox / c.sW;
+            if (oy * c.sH != u32(ny) || ox * c.sW != u32(nx)) { return 0.0; }
+        }
+        if (oy >= c.Ho || ox >= c.Wo) { return 0.0; }
+        return gld(c.y, CT, ib + (u32(t.x) * c.Ho + oy) * c.Wo + ox);
     }
     // COP 2: p0, p1: the tap's offset (ky dH - pH, kx dW - pW), p2 = ci
-    let Po = c.Ho * c.Wo;
-    let b = k / Po;
-    let op = k - b * Po;
-    let oy = op / c.Wo;
-    let ox = op - oy * c.Wo;
-    let y = i32(oy * c.sH) + p0;
-    let x = i32(ox * c.sW) + p1;
+    let y = t.y + p0;
+    let x = t.z + p1;
     if (y < 0 || y >= i32(c.Hi) || x < 0 || x >= i32(c.Wi)) { return 0.0; }
-    return gld(c.x, 0u, ((b * c.Ci + p2) * c.Hi + u32(y)) * c.Wi + u32(x));
+    return gld(c.x, 0u, ((u32(t.x) * c.Ci + p2) * c.Hi + u32(y)) * c.Wi + u32(x));
 }
 @compute @workgroup_size(256)
 fn wk_conv(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3u) {
     let c = cv_args();
-    let BN = 4096u / CBM;
+    let BN = CBN;
     let KK = c.kH * c.kW;
     let Po = c.Ho * c.Wo;
     let Pi = c.Hi * c.Wi;
@@ -1968,10 +2134,38 @@ fn wk_conv(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: 
     var Ntot = c.B * Po;
     var kBeg = 0u;
     var kEnd = c.Ci * KK;
-    if (COP == 1u) { M = c.Ci; Ntot = c.B * Pi; kEnd = c.Co * KK; }
+    // the input gradient by stride phase (without dilation): grid z =
+    // (ry, rx); its pixels y = yb + jy sH (likewise x) take the taps
+    // ky = ry + iy sH only, through the window oyb + jy - iy: no tap misses
+    // and no division (3 in 4 of the taps miss for stride 2 otherwise)
+    let phased = COP == 1u && c.dH == 1u && c.dW == 1u;
+    var ry = 0u;
+    var rx = 0u;
+    var yb = 0u;
+    var xb = 0u;
+    var py = c.Hi;
+    var px = c.Wi;
+    var tyc = c.kH;
+    var txc = c.kW;
+    var oyb = 0;
+    var oxb = 0;
+    if (phased) {
+        ry = wg.z / c.sW;
+        rx = wg.z - ry * c.sW;
+        yb = (ry + c.sH - c.pH % c.sH) % c.sH;
+        xb = (rx + c.sW - c.pW % c.sW) % c.sW;
+        py = select(0u, (c.Hi - yb + c.sH - 1u) / c.sH, yb < c.Hi);
+        px = select(0u, (c.Wi - xb + c.sW - 1u) / c.sW, xb < c.Wi);
+        tyc = select(0u, (c.kH - ry + c.sH - 1u) / c.sH, ry < c.kH);
+        txc = select(0u, (c.kW - rx + c.sW - 1u) / c.sW, rx < c.kW);
+        oyb = (i32(yb) + i32(c.pH) - i32(ry)) / i32(c.sH);
+        oxb = (i32(xb) + i32(c.pW) - i32(rx)) / i32(c.sW);
+    }
+    if (COP == 1u) { M = c.Ci; Ntot = c.B * py * px; kEnd = c.Co * tyc * txc; }
     if (COP == 2u) { Ntot = c.Ci * KK; kBeg = wg.z * c.kSplit; kEnd = min(c.B * Po, kBeg + c.kSplit); }
     let m0 = wg.y * CBM;
     let n0 = wg.x * BN;
+    if (n0 >= Ntot) { return; }   // a phase with fewer pixels: the whole workgroup
     // this thread's column of the B tile, decoded once
     let bc = li % BN;
     let n = n0 + bc;
@@ -1988,6 +2182,13 @@ fn wk_conv(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: 
         p0 = i32(oy * c.sH) - i32(c.pH);
         p1 = i32((op - oy * c.Wo) * c.sW) - i32(c.pW);
         ib = b * c.Ci * Pi;
+    } else if (phased) {
+        let b = nc / (py * px);
+        let ip = nc - b * py * px;
+        let jy = ip / px;
+        p0 = oyb + i32(jy);
+        p1 = oxb + i32(ip - jy * px);
+        ib = b * c.Co * Po;
     } else if (COP == 1u) {
         let b = nc / Pi;
         let ip = nc - b * Pi;
@@ -2002,46 +2203,92 @@ fn wk_conv(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: 
         p0 = i32(ky * c.dH) - i32(c.pH);
         p1 = i32((r - ky * c.kW) * c.dW) - i32(c.pW);
     }
-    let tx = li % (BN / 4u);
-    let ty = li / (BN / 4u);
-    var acc: array<vec4f, 4>;
+    let tx = li % (BN / CTN);
+    let ty = li / (BN / CTN);
+    var acc: array<vec4f, 16>;   // CTN rows of CTN / 4 vec4 (4 x 4: the first four)
     for (var k0 = kBeg; k0 < kEnd; k0 += 16u) {
+        if (li < 16u) {
+            let k = min(k0 + li, kEnd - 1u);
+            if (COP == 2u) {
+                let b = k / Po;
+                let op = k - b * Po;
+                let oy = op / c.Wo;
+                cK[li] = vec4i(i32(b), i32(oy * c.sH), i32((op - oy * c.Wo) * c.sW), i32(op));
+            } else if (phased) {
+                let co = k / (tyc * txc);
+                let r = k - co * tyc * txc;
+                let iy = r / txc;
+                let ix = r - iy * txc;
+                cK[li] = vec4i(i32(co), i32(iy), i32(ix), i32((ry + iy * c.sH) * c.kW + rx + ix * c.sW));
+            } else {
+                let q = k / KK;
+                let r = k - q * KK;
+                let ky = r / c.kW;
+                cK[li] = vec4i(i32(q), i32(ky * c.dH), i32((r - ky * c.kW) * c.dW), i32(r));
+            }
+        }
+        workgroupBarrier();
         for (var q = 0u; q < CBM / 16u; q++) {
             let e = li + q * 256u;
             let kk = e % 16u;
             let mm = e / 16u;
             var v = 0.0;
-            if (m0 + mm < M && k0 + kk < kEnd) { v = cv_a(c, m0 + mm, k0 + kk); }
+            if (m0 + mm < M && k0 + kk < kEnd) { v = cv_a(c, m0 + mm, k0 + kk, cK[kk]); }
             cA[kk * CBM + mm] = v;
         }
         for (var r = li / BN; r < 16u; r += 256u / BN) {
             var v = 0.0;
-            if (nIn && k0 + r < kEnd) { v = cv_b(c, k0 + r, p0, p1, p2, ib); }
+            if (nIn && k0 + r < kEnd) { v = cv_b(c, cK[r], p0, p1, p2, ib, phased); }
             cB[r * BN + bc] = v;
         }
         workgroupBarrier();
-        for (var kk = 0u; kk < 16u; kk++) {
-            let ai = kk * CBM + ty * 4u;
-            let bi = kk * BN + tx * 4u;
-            let a = vec4f(cA[ai], cA[ai + 1u], cA[ai + 2u], cA[ai + 3u]);
-            let b = vec4f(cB[bi], cB[bi + 1u], cB[bi + 2u], cB[bi + 3u]);
-            acc[0] += a.x * b;
-            acc[1] += a.y * b;
-            acc[2] += a.z * b;
-            acc[3] += a.w * b;
+        if (CTN == 8u) {
+            for (var kk = 0u; kk < 16u; kk++) {
+                let ai = kk * CBM + ty * 8u;
+                let bi = kk * BN + tx * 8u;
+                let a0 = vec4f(cA[ai], cA[ai + 1u], cA[ai + 2u], cA[ai + 3u]);
+                let a1 = vec4f(cA[ai + 4u], cA[ai + 5u], cA[ai + 6u], cA[ai + 7u]);
+                let b0 = vec4f(cB[bi], cB[bi + 1u], cB[bi + 2u], cB[bi + 3u]);
+                let b1 = vec4f(cB[bi + 4u], cB[bi + 5u], cB[bi + 6u], cB[bi + 7u]);
+                acc[0] += a0.x * b0; acc[1] += a0.x * b1;
+                acc[2] += a0.y * b0; acc[3] += a0.y * b1;
+                acc[4] += a0.z * b0; acc[5] += a0.z * b1;
+                acc[6] += a0.w * b0; acc[7] += a0.w * b1;
+                acc[8] += a1.x * b0; acc[9] += a1.x * b1;
+                acc[10] += a1.y * b0; acc[11] += a1.y * b1;
+                acc[12] += a1.z * b0; acc[13] += a1.z * b1;
+                acc[14] += a1.w * b0; acc[15] += a1.w * b1;
+            }
+        } else {
+            for (var kk = 0u; kk < 16u; kk++) {
+                let ai = kk * CBM + ty * 4u;
+                let bi = kk * BN + tx * 4u;
+                let a = vec4f(cA[ai], cA[ai + 1u], cA[ai + 2u], cA[ai + 3u]);
+                let b = vec4f(cB[bi], cB[bi + 1u], cB[bi + 2u], cB[bi + 3u]);
+                acc[0] += a.x * b;
+                acc[1] += a.y * b;
+                acc[2] += a.z * b;
+                acc[3] += a.w * b;
+            }
         }
         workgroupBarrier();
     }
-    for (var i = 0u; i < 4u; i++) {
-        let gm = m0 + ty * 4u + i;
+    for (var i = 0u; i < CTN; i++) {
+        let gm = m0 + ty * CTN + i;
         if (gm >= M) { break; }
-        for (var j = 0u; j < 4u; j++) {
-            let gn = n0 + tx * 4u + j;
+        for (var j = 0u; j < CTN; j++) {
+            let gn = n0 + tx * CTN + j;
             if (gn >= Ntot) { break; }
-            let v = acc[i][j];
+            var v = acc[i][j];
+            if (CTN == 8u) { v = acc[i * 2u + j / 4u][j % 4u]; }
             if (COP == 0u) {
                 let b = gn / Po;
                 gst1(c.y, CT, (b * c.Co + gm) * Po + gn - b * Po, v);
+            } else if (phased) {
+                let b = gn / (py * px);
+                let ip = gn - b * py * px;
+                let jy = ip / px;
+                gst1(c.x, CT, (b * c.Ci + gm) * Pi + (yb + jy * c.sH) * c.Wi + xb + (ip - jy * px) * c.sW, v);
             } else if (COP == 1u) {
                 let b = gn / Pi;
                 gst1(c.x, CT, (b * c.Ci + gm) * Pi + gn - b * Pi, v);
