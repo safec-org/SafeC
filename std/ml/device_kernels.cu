@@ -1,17 +1,88 @@
 // SafeC Standard Library — the device kernels behind std::ml's tensor ops on
-// ROCm (compiled at run time by hiprtc) and CUDA (NVRTC): one source for
-// both. gen_device_kernels.sh turns this file into device_kernels.h (the
-// source as a string and the kernel ids); edit this file, then regenerate.
+// ROCm (compiled at run time by hiprtc), CUDA (NVRTC) and Metal
+// (newLibraryWithSource): one source for all three. gen_device_kernels.sh
+// turns this file into device_kernels.h (the source as a string and the
+// kernel ids); edit this file, then regenerate.
 //
-// Every kernel takes one DevArgs (device.h) by value: device addresses in
-// p[], integers in u[], floats in f[]. It runs over n threads (n passed as
-// u[7]) in blocks of 256; per-row kernels use one thread per row.
+// Every kernel takes one DevArgs (device.h): device addresses in p[],
+// integers in u[], floats in f[]. It runs over n threads (n passed as u[7])
+// in blocks of 256; per-row kernels use one thread per row.
 
-struct DevArgs {
-    unsigned long long p[8];
+// ── Portability: CUDA / HIP and Metal ────────────────────────────────────────
+// The source is CUDA C++; as Metal Shading Language (C++14 with address
+// spaces) a few things differ, and the macros below absorb them, expanding
+// to nothing (or to the CUDA spelling) for hiprtc and NVRTC:
+//   - pointers and references name the memory they point into: dk_global
+//     (device memory), dk_shared (a block's shared memory), dk_thread (a
+//     thread's own variables);
+//   - Metal has no 64-bit 'long long' (DK_U64) and no double (dk_double, a
+//     wide accumulator: float there; the reductions it serves stay
+//     two-pass, so fp32 holds the tolerance);
+//   - a kernel receives its arguments in constant memory and its thread
+//     indices as parameters (DK_KERNEL declares both, under the CUDA names
+//     threadIdx, blockIdx, blockDim and gridDim), so a helper that reads
+//     them takes DK_IDS after its parameters and is called with DK_IDA;
+//   - block reductions (block_add, block_sum_d) use simdgroup sums and a
+//     small threadgroup scratch the kernel declares (dk_red);
+//   - attention tiles are 8 x 8 instead of 16 x 16 (ATTN_T): Metal's 32 KB
+//     of threadgroup memory doesn't hold four 16-row tiles of 128 floats.
+#if defined(__METAL_VERSION__)
+#include <metal_stdlib>
+using namespace metal;
+#define DK_U64 ulong
+#define dk_double float
+#define dk_global device
+#define dk_shared threadgroup
+#define dk_thread thread
+#define __device__
+#define __forceinline__ inline __attribute__((always_inline))
+#define __shared__ threadgroup
+#define __syncthreads() threadgroup_barrier(mem_flags::mem_threadgroup)
+struct DevArgs_ {
+    ulong p[8];
     unsigned int u[8];
     float f[8];
 };
+// const DevArgs& names the kernel's argument struct in constant memory.
+#define DevArgs constant DevArgs_
+#define DK_KERNEL(name) kernel void name(constant DevArgs_& a [[buffer(0)]], \
+    uint3 threadIdx [[thread_position_in_threadgroup]], uint3 blockIdx [[threadgroup_position_in_grid]], \
+    uint3 blockDim [[threads_per_threadgroup]], uint3 gridDim [[threadgroups_per_grid]], \
+    uint dk_lane [[thread_index_in_simdgroup]], uint dk_simd [[simdgroup_index_in_threadgroup]], \
+    threadgroup float* dk_red [[threadgroup(0)]])
+#define DK_IDS , uint3 threadIdx, uint3 blockIdx, uint3 blockDim, uint3 gridDim, uint dk_lane, uint dk_simd, \
+    threadgroup float* dk_red
+#define DK_IDA , threadIdx, blockIdx, blockDim, gridDim, dk_lane, dk_simd, dk_red
+// float atomics and the C math library's float functions
+inline void atomicAdd(device float* p, float v) { atomic_fetch_add_explicit((device atomic_float*)p, v, memory_order_relaxed); }
+inline float expf(float x) { return metal::exp(x); }
+inline float logf(float x) { return metal::log(x); }
+inline float tanhf(float x) { return metal::tanh(x); }
+inline float sqrtf(float x) { return metal::sqrt(x); }
+inline float rsqrtf(float x) { return metal::rsqrt(x); }
+inline float fabsf(float x) { return metal::fabs(x); }
+inline float floorf(float x) { return metal::floor(x); }
+inline float ceilf(float x) { return metal::ceil(x); }
+inline float fminf(float x, float y) { return metal::fmin(x, y); }
+inline float fmaxf(float x, float y) { return metal::fmax(x, y); }
+inline float fmaf(float x, float y, float z) { return metal::fma(x, y, z); }
+inline unsigned int __float_as_uint(float f) { return as_type<uint>(f); }
+inline float __uint_as_float(unsigned int u) { return as_type<float>(u); }
+#else
+#define DK_U64 unsigned long long
+#define dk_double double
+#define dk_global
+#define dk_shared
+#define dk_thread
+#define DK_KERNEL(name) extern "C" __global__ void name(DevArgs a)
+#define DK_IDS
+#define DK_IDA
+struct DevArgs {
+    DK_U64 p[8];
+    unsigned int u[8];
+    float f[8];
+};
+#endif
 
 #define GS(i, n) for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < (n); i += blockDim.x * gridDim.x)
 
@@ -30,47 +101,47 @@ __device__ unsigned short f2b_bits(float f);
 __device__ float b2f_bits(unsigned short b);
 #ifdef DK_TAGGED
 struct Ref {
-    unsigned long long p;   // the element's address
+    DK_U64 p;   // the element's address
     unsigned int tag;
     __device__ float get() const {
-        if (tag == 0u) return *(const float*)p;
-        unsigned short h = *(const unsigned short*)p;
+        if (tag == 0u) return *(const dk_global float*)p;
+        unsigned short h = *(const dk_global unsigned short*)p;
         return tag == 1u ? h2f_bits(h) : b2f_bits(h);
     }
     __device__ void set(float v) const {
-        if (tag == 0u) *(float*)p = v;
-        else *(unsigned short*)p = tag == 1u ? f2h_bits(v) : f2b_bits(v);
+        if (tag == 0u) *(dk_global float*)p = v;
+        else *(dk_global unsigned short*)p = tag == 1u ? f2h_bits(v) : f2b_bits(v);
     }
     __device__ operator float() const { return get(); }
-    __device__ const Ref& operator=(float v) const { set(v); return *this; }
-    __device__ const Ref& operator=(const Ref& o) const { set(o.get()); return *this; }
-    __device__ const Ref& operator+=(float v) const { set(get() + v); return *this; }
-    __device__ const Ref& operator-=(float v) const { set(get() - v); return *this; }
+    __device__ const dk_thread Ref& operator=(float v) const { set(v); return *this; }
+    __device__ const dk_thread Ref& operator=(const dk_thread Ref& o) const { set(o.get()); return *this; }
+    __device__ const dk_thread Ref& operator+=(float v) const { set(get() + v); return *this; }
+    __device__ const dk_thread Ref& operator-=(float v) const { set(get() - v); return *this; }
 };
 struct TP {
-    unsigned long long p;   // tagged handle
-    __device__ TP(unsigned long long h) : p(h) {}
+    DK_U64 p;   // tagged handle
+    __device__ TP(DK_U64 h) : p(h) {}
     __device__ unsigned int tag() const { return (unsigned int)(p >> 62); }
-    __device__ unsigned long long base() const { return p & DEV_ADDR_MASK; }
-    __device__ Ref operator[](unsigned long long i) const {
+    __device__ DK_U64 base() const { return p & DEV_ADDR_MASK; }
+    __device__ Ref operator[](DK_U64 i) const {
         Ref r; r.tag = tag(); r.p = base() + i * (r.tag == 0u ? 4ull : 2ull); return r;
     }
-    __device__ TP operator+(unsigned long long k) const { return TP(p + k * (tag() == 0u ? 4ull : 2ull)); }
+    __device__ TP operator+(DK_U64 k) const { return TP(p + k * (tag() == 0u ? 4ull : 2ull)); }
     __device__ explicit operator bool() const { return base() != 0ull; }
 };
 #else
 // The plain build (no argument is 16-bit): views are float pointers.
 struct TP {
-    unsigned long long p;
-    __device__ TP(unsigned long long h) : p(h) {}
-    __device__ float& operator[](unsigned long long i) const { return ((float*)p)[i]; }
-    __device__ TP operator+(unsigned long long k) const { return TP(p + k * 4ull); }
+    DK_U64 p;
+    __device__ TP(DK_U64 h) : p(h) {}
+    __device__ dk_global float& operator[](DK_U64 i) const { return ((dk_global float*)p)[i]; }
+    __device__ TP operator+(DK_U64 k) const { return TP(p + k * 4ull); }
     __device__ explicit operator bool() const { return p != 0ull; }
 };
 #endif
 #define F(k) TP(a.p[k])
 #define CF(k) TP(a.p[k])
-#define FA(k) ((float*)(a.p[k] & DEV_ADDR_MASK))
+#define FA(k) ((dk_global float*)(a.p[k] & DEV_ADDR_MASK))
 #define N (a.u[7])
 
 // Gradient kernels that add to their output take u6 = 1 to write it instead
@@ -208,7 +279,7 @@ __device__ __forceinline__ unsigned int h16_pack(float lo, float hi, unsigned in
 // values per thread through 32-bit words.
 __device__ bool ew_pairable(const DevArgs& a, int op, bool ow, unsigned int t) {
     if (t == 0u) return false;
-    unsigned long long ps[4];
+    DK_U64 ps[4];
     bool use[4];
     ps[0] = a.p[0]; use[0] = ew_uses_x(op);
     ps[1] = a.p[1]; use[1] = ew_uses_y(op);
@@ -222,7 +293,7 @@ __device__ bool ew_pairable(const DevArgs& a, int op, bool ow, unsigned int t) {
 
 // One instantiation per op: a tight loop, no per-element dispatch.
 template <int OPC>
-__device__ __forceinline__ void ew_run(const DevArgs& a) {
+__device__ __forceinline__ void ew_run(const DevArgs& a DK_IDS) {
     const int OP = OPC >= 0 ? OPC : (int)a.u[0];
     TP x = CF(0); TP y = CF(1); TP o = F(2); TP z = CF(3);
     float k = a.f[0], k2 = a.f[1];
@@ -233,10 +304,10 @@ __device__ __forceinline__ void ew_run(const DevArgs& a) {
 #ifdef DK_TAGGED
     unsigned int t = (unsigned int)(a.p[2] >> 62);
     if (ew_pairable(a, OP, ow, t)) {
-        const unsigned int* xw = (const unsigned int*)(a.p[0] & DEV_ADDR_MASK);
-        const unsigned int* yw = (const unsigned int*)(a.p[1] & DEV_ADDR_MASK);
-        const unsigned int* zw = (const unsigned int*)(a.p[3] & DEV_ADDR_MASK);
-        unsigned int* ow_ = (unsigned int*)(a.p[2] & DEV_ADDR_MASK);
+        const dk_global unsigned int* xw = (const dk_global unsigned int*)(a.p[0] & DEV_ADDR_MASK);
+        const dk_global unsigned int* yw = (const dk_global unsigned int*)(a.p[1] & DEV_ADDR_MASK);
+        const dk_global unsigned int* zw = (const dk_global unsigned int*)(a.p[3] & DEV_ADDR_MASK);
+        dk_global unsigned int* ow_ = (dk_global unsigned int*)(a.p[2] & DEV_ADDR_MASK);
         unsigned int n2 = N / 2u;
         GS(j, n2) {
             unsigned int xv = ux ? xw[j] : 0u, yv = uy ? yw[j] : 0u, zv = uz ? zw[j] : 0u, ov = uo ? ow_[j] : 0u;
@@ -266,51 +337,61 @@ __device__ __forceinline__ void ew_run(const DevArgs& a) {
 }
 
 // Any op (u0); dk_ewop_<code> below run one op each (device.sc picks them).
-extern "C" __global__ void dk_ew(DevArgs a) { ew_run<-1>(a); }
-extern "C" __global__ void dk_ewop_0(DevArgs a) { ew_run<0>(a); }
-extern "C" __global__ void dk_ewop_1(DevArgs a) { ew_run<1>(a); }
-extern "C" __global__ void dk_ewop_2(DevArgs a) { ew_run<2>(a); }
-extern "C" __global__ void dk_ewop_3(DevArgs a) { ew_run<3>(a); }
-extern "C" __global__ void dk_ewop_4(DevArgs a) { ew_run<4>(a); }
-extern "C" __global__ void dk_ewop_5(DevArgs a) { ew_run<5>(a); }
-extern "C" __global__ void dk_ewop_6(DevArgs a) { ew_run<6>(a); }
-extern "C" __global__ void dk_ewop_7(DevArgs a) { ew_run<7>(a); }
-extern "C" __global__ void dk_ewop_8(DevArgs a) { ew_run<8>(a); }
-extern "C" __global__ void dk_ewop_9(DevArgs a) { ew_run<9>(a); }
-extern "C" __global__ void dk_ewop_10(DevArgs a) { ew_run<10>(a); }
-extern "C" __global__ void dk_ewop_11(DevArgs a) { ew_run<11>(a); }
-extern "C" __global__ void dk_ewop_12(DevArgs a) { ew_run<12>(a); }
-extern "C" __global__ void dk_ewop_13(DevArgs a) { ew_run<13>(a); }
-extern "C" __global__ void dk_ewop_14(DevArgs a) { ew_run<14>(a); }
-extern "C" __global__ void dk_ewop_20(DevArgs a) { ew_run<20>(a); }
-extern "C" __global__ void dk_ewop_21(DevArgs a) { ew_run<21>(a); }
-extern "C" __global__ void dk_ewop_22(DevArgs a) { ew_run<22>(a); }
-extern "C" __global__ void dk_ewop_23(DevArgs a) { ew_run<23>(a); }
-extern "C" __global__ void dk_ewop_24(DevArgs a) { ew_run<24>(a); }
-extern "C" __global__ void dk_ewop_25(DevArgs a) { ew_run<25>(a); }
-extern "C" __global__ void dk_ewop_26(DevArgs a) { ew_run<26>(a); }
-extern "C" __global__ void dk_ewop_27(DevArgs a) { ew_run<27>(a); }
-extern "C" __global__ void dk_ewop_28(DevArgs a) { ew_run<28>(a); }
-extern "C" __global__ void dk_ewop_29(DevArgs a) { ew_run<29>(a); }
-extern "C" __global__ void dk_ewop_30(DevArgs a) { ew_run<30>(a); }
-extern "C" __global__ void dk_ewop_31(DevArgs a) { ew_run<31>(a); }
-extern "C" __global__ void dk_ewop_32(DevArgs a) { ew_run<32>(a); }
-extern "C" __global__ void dk_ewop_33(DevArgs a) { ew_run<33>(a); }
-extern "C" __global__ void dk_ewop_40(DevArgs a) { ew_run<40>(a); }
-extern "C" __global__ void dk_ewop_41(DevArgs a) { ew_run<41>(a); }
-extern "C" __global__ void dk_ewop_42(DevArgs a) { ew_run<42>(a); }
-extern "C" __global__ void dk_ewop_43(DevArgs a) { ew_run<43>(a); }
-extern "C" __global__ void dk_ewop_44(DevArgs a) { ew_run<44>(a); }
-extern "C" __global__ void dk_ewop_45(DevArgs a) { ew_run<45>(a); }
-extern "C" __global__ void dk_ewop_46(DevArgs a) { ew_run<46>(a); }
-extern "C" __global__ void dk_ewop_47(DevArgs a) { ew_run<47>(a); }
-extern "C" __global__ void dk_ewop_48(DevArgs a) { ew_run<48>(a); }
-extern "C" __global__ void dk_ewop_49(DevArgs a) { ew_run<49>(a); }
-extern "C" __global__ void dk_ewop_50(DevArgs a) { ew_run<50>(a); }
-extern "C" __global__ void dk_ewop_51(DevArgs a) { ew_run<51>(a); }
+DK_KERNEL(dk_ew) { ew_run<-1>(a DK_IDA); }
+DK_KERNEL(dk_ewop_0) { ew_run<0>(a DK_IDA); }
+DK_KERNEL(dk_ewop_1) { ew_run<1>(a DK_IDA); }
+DK_KERNEL(dk_ewop_2) { ew_run<2>(a DK_IDA); }
+DK_KERNEL(dk_ewop_3) { ew_run<3>(a DK_IDA); }
+DK_KERNEL(dk_ewop_4) { ew_run<4>(a DK_IDA); }
+DK_KERNEL(dk_ewop_5) { ew_run<5>(a DK_IDA); }
+DK_KERNEL(dk_ewop_6) { ew_run<6>(a DK_IDA); }
+DK_KERNEL(dk_ewop_7) { ew_run<7>(a DK_IDA); }
+DK_KERNEL(dk_ewop_8) { ew_run<8>(a DK_IDA); }
+DK_KERNEL(dk_ewop_9) { ew_run<9>(a DK_IDA); }
+DK_KERNEL(dk_ewop_10) { ew_run<10>(a DK_IDA); }
+DK_KERNEL(dk_ewop_11) { ew_run<11>(a DK_IDA); }
+DK_KERNEL(dk_ewop_12) { ew_run<12>(a DK_IDA); }
+DK_KERNEL(dk_ewop_13) { ew_run<13>(a DK_IDA); }
+DK_KERNEL(dk_ewop_14) { ew_run<14>(a DK_IDA); }
+DK_KERNEL(dk_ewop_20) { ew_run<20>(a DK_IDA); }
+DK_KERNEL(dk_ewop_21) { ew_run<21>(a DK_IDA); }
+DK_KERNEL(dk_ewop_22) { ew_run<22>(a DK_IDA); }
+DK_KERNEL(dk_ewop_23) { ew_run<23>(a DK_IDA); }
+DK_KERNEL(dk_ewop_24) { ew_run<24>(a DK_IDA); }
+DK_KERNEL(dk_ewop_25) { ew_run<25>(a DK_IDA); }
+DK_KERNEL(dk_ewop_26) { ew_run<26>(a DK_IDA); }
+DK_KERNEL(dk_ewop_27) { ew_run<27>(a DK_IDA); }
+DK_KERNEL(dk_ewop_28) { ew_run<28>(a DK_IDA); }
+DK_KERNEL(dk_ewop_29) { ew_run<29>(a DK_IDA); }
+DK_KERNEL(dk_ewop_30) { ew_run<30>(a DK_IDA); }
+DK_KERNEL(dk_ewop_31) { ew_run<31>(a DK_IDA); }
+DK_KERNEL(dk_ewop_32) { ew_run<32>(a DK_IDA); }
+DK_KERNEL(dk_ewop_33) { ew_run<33>(a DK_IDA); }
+DK_KERNEL(dk_ewop_40) { ew_run<40>(a DK_IDA); }
+DK_KERNEL(dk_ewop_41) { ew_run<41>(a DK_IDA); }
+DK_KERNEL(dk_ewop_42) { ew_run<42>(a DK_IDA); }
+DK_KERNEL(dk_ewop_43) { ew_run<43>(a DK_IDA); }
+DK_KERNEL(dk_ewop_44) { ew_run<44>(a DK_IDA); }
+DK_KERNEL(dk_ewop_45) { ew_run<45>(a DK_IDA); }
+DK_KERNEL(dk_ewop_46) { ew_run<46>(a DK_IDA); }
+DK_KERNEL(dk_ewop_47) { ew_run<47>(a DK_IDA); }
+DK_KERNEL(dk_ewop_48) { ew_run<48>(a DK_IDA); }
+DK_KERNEL(dk_ewop_49) { ew_run<49>(a DK_IDA); }
+DK_KERNEL(dk_ewop_50) { ew_run<50>(a DK_IDA); }
+DK_KERNEL(dk_ewop_51) { ew_run<51>(a DK_IDA); }
 
 // ── Reductions (256 threads per block, one atomic per block) ─────────────────
-__device__ void block_add(float v, float* out) {
+__device__ void block_add(float v, dk_global float* out DK_IDS) {
+#if defined(__METAL_VERSION__)
+    // each simdgroup's sum, then the first simdgroup adds those
+    v = simd_sum(v);
+    if (dk_lane == 0u) dk_red[dk_simd] = v;
+    __syncthreads();
+    if (dk_simd == 0u) {
+        float s = simd_sum(threadIdx.x < (blockDim.x + 31u) / 32u ? dk_red[threadIdx.x] : 0.0f);
+        if (threadIdx.x == 0u) atomicAdd(out, s);
+    }
+#else
     __shared__ float s[256];
     s[threadIdx.x] = v;
     __syncthreads();
@@ -319,33 +400,34 @@ __device__ void block_add(float v, float* out) {
         __syncthreads();
     }
     if (threadIdx.x == 0) atomicAdd(out, s[0]);
+#endif
 }
 
 // p0 = in, p1 = out[0] (zeroed by the caller); u0: 0 sum, 1 sum of squares
-extern "C" __global__ void dk_sum(DevArgs a) {
+DK_KERNEL(dk_sum) {
     TP x = CF(0);
     float acc = 0.0f;
     GS(i, N) { float v = x[i]; acc += a.u[0] ? v * v : v; }
-    block_add(acc, FA(1));
+    block_add(acc, FA(1) DK_IDA);
 }
 
 // ── Rows and columns: u0 = cols (rows = n / cols for row-shaped n) ──────────
 // out[r,c] = x[r,c] + b[c]                                    n = rows*cols
-extern "C" __global__ void dk_bias_rows(DevArgs a) {
+DK_KERNEL(dk_bias_rows) {
     unsigned int C = a.u[0];
     GS(i, N) F(2)[i] = CF(0)[i] + CF(1)[i % C];
 }
 // out[r,c] = x[r,c] * g[c]                                    n = rows*cols
-extern "C" __global__ void dk_mul_row(DevArgs a) {
+DK_KERNEL(dk_mul_row) {
     unsigned int C = a.u[0];
     GS(i, N) F(2)[i] = CF(0)[i] * CF(1)[i % C];
 }
 // gb[c] += sum_r d[r,c] (* x[r,c] when p2 != 0); u0 = cols, u1 = rows, u2 = S
 // row slices (0 or 1: one). Units are (256 columns, row slice); a thread per
 // column.                                                    n = ceil(cols/256)*S*256
-extern "C" __global__ void dk_colsum_acc(DevArgs a) {
+DK_KERNEL(dk_colsum_acc) {
     unsigned int C = a.u[0], R = a.u[1], S = a.u[2] > 1 ? a.u[2] : 1;
-    TP d = CF(0); float* gb = FA(1); TP x = CF(2);
+    TP d = CF(0); dk_global float* gb = FA(1); TP x = CF(2);
     for (unsigned int u = blockIdx.x; u < ((C + 255) / 256) * S; u += gridDim.x) {
         unsigned int c = (u / S) * 256 + threadIdx.x, sl = u % S;
         if (c < C) {
@@ -357,22 +439,22 @@ extern "C" __global__ void dk_colsum_acc(DevArgs a) {
     }
 }
 // dx[r,c] += d[r,c] * g[c]                                    n = rows*cols
-extern "C" __global__ void dk_mul_row_acc(DevArgs a) {
+DK_KERNEL(dk_mul_row_acc) {
     unsigned int C = a.u[0];
     GS(i, N) ACCUM(F(2)[i], CF(0)[i] * CF(1)[i % C]);
 }
 // out[r] = sum_c x[r,c]                                       n = rows
-extern "C" __global__ void dk_rowsum(DevArgs a) {
+DK_KERNEL(dk_rowsum) {
     unsigned int C = a.u[0];
     GS(r, N) { float s = 0.0f; for (unsigned int c = 0; c < C; c++) s += CF(0)[r * C + c]; F(1)[r] = s; }
 }
 // dx[r,c] += g[r]                                             n = rows*cols
-extern "C" __global__ void dk_rowbcast_acc(DevArgs a) {
+DK_KERNEL(dk_rowbcast_acc) {
     unsigned int C = a.u[0];
     GS(i, N) ACCUM(F(1)[i], CF(0)[i / C]);
 }
 // out [rows, p+q] = x [rows, p] ++ y [rows, q]; u0 = p, u1 = q   n = rows*(p+q)
-extern "C" __global__ void dk_concat(DevArgs a) {
+DK_KERNEL(dk_concat) {
     unsigned int P = a.u[0], Q = a.u[1], W = P + Q;
     GS(i, N) { unsigned int r = i / W, c = i % W; F(2)[i] = c < P ? CF(0)[r * P + c] : CF(1)[r * Q + c - P]; }
 }
@@ -381,7 +463,7 @@ extern "C" __global__ void dk_concat(DevArgs a) {
 //   0  narrow (p1)  = wide (p0) columns          (slice)
 //   1  wide (p1)   += narrow (p0)                (slice backward)
 //   2  narrow (p1) += wide (p0) columns          (concat backward)   n = rows*len
-extern "C" __global__ void dk_slice(DevArgs a) {
+DK_KERNEL(dk_slice) {
     unsigned int C = a.u[0], S = a.u[1], L = a.u[2];
     GS(i, N) {
         unsigned int r = i / L, c = i % L;
@@ -391,12 +473,12 @@ extern "C" __global__ void dk_slice(DevArgs a) {
     }
 }
 // out[i, :] = table[idx[i], :]; u0 = d                        n = m*d
-extern "C" __global__ void dk_gather_rows(DevArgs a) {
+DK_KERNEL(dk_gather_rows) {
     unsigned int D = a.u[0];
     GS(i, N) { unsigned int r = i / D, c = i % D; F(2)[i] = CF(0)[(unsigned int)CF(1)[r] * D + c]; }
 }
 // table.grad[idx[i], :] += g[i, :]                            n = m*d
-extern "C" __global__ void dk_scatter_rows(DevArgs a) {
+DK_KERNEL(dk_scatter_rows) {
     unsigned int D = a.u[0];
     GS(i, N) { unsigned int r = i / D, c = i % D; atomicAdd(&FA(2)[(unsigned int)CF(1)[r] * D + c], CF(0)[i]); }
 }
@@ -414,7 +496,7 @@ __device__ __forceinline__ bool attn_vis(unsigned int flags, unsigned int w, int
 // u1: 0 softmax, 1 log-softmax. A masked softmax (u1 = 0): u2 = mask flags,
 // u3 = window, u4 = (int) keys - queries; hidden entries and rows with no
 // visible key come out 0.
-extern "C" __global__ void dk_softmax_rows(DevArgs a) {
+DK_KERNEL(dk_softmax_rows) {
     unsigned int C = a.u[0];
     GS(r, N) {
         TP x = CF(0) + r * C; TP o = F(1) + r * C;
@@ -436,7 +518,7 @@ extern "C" __global__ void dk_softmax_rows(DevArgs a) {
 }
 // dx += y * (g - sum(g*y))  (softmax), dx += g - exp(y) * sum(g) (log-softmax)
 // p0 = g, p1 = y (the forward output), p2 = dx
-extern "C" __global__ void dk_softmax_bwd(DevArgs a) {
+DK_KERNEL(dk_softmax_bwd) {
     unsigned int C = a.u[0];
     GS(r, N) {
         TP g = CF(0) + r * C; TP y = CF(1) + r * C; TP dx = F(2) + r * C;
@@ -453,7 +535,7 @@ extern "C" __global__ void dk_softmax_bwd(DevArgs a) {
 // ── Transpose ────────────────────────────────────────────────────────────────
 // out [C, R] = in [R, C]^T, or with u2 = 1 out += it (u6 = 1: write); u0 = R,
 // u1 = C                                                       n = R*C
-extern "C" __global__ void dk_transpose(DevArgs a) {
+DK_KERNEL(dk_transpose) {
     unsigned int R = a.u[0], C = a.u[1];
     GS(i, N) {
         unsigned int r = i / C, c = i % C;
@@ -479,12 +561,16 @@ extern "C" __global__ void dk_transpose(DevArgs a) {
 // written by dk_attn_bwd_q for dk_attn_bwd_kv). Launched over
 // 256 * H * ceil(rows / 16) threads (rows: S, or L for dk_attn_bwd_kv).
 #define ATTN_MAXD 128
+#if defined(__METAL_VERSION__)
+#define ATTN_T 8   // 64 threads per block (see Portability above)
+#else
 #define ATTN_T 16
+#endif
 #define ATTN_LD (ATTN_MAXD + 1)
 #define ATTN_PER (ATTN_MAXD / ATTN_T)
 #define ATTN_HID (-3.0e38f)
 // The key range a tile of rows [i0, i0 + 16) can see: [lo, hi).
-__device__ __forceinline__ void attn_range(const DevArgs& a, unsigned int i0, int& lo, int& hi) {
+__device__ __forceinline__ void attn_range(const DevArgs& a, unsigned int i0, dk_thread int& lo, dk_thread int& hi) {
     int off = (int)a.u[1] - (int)a.u[0];
     lo = 0; hi = (int)a.u[1];
     if (a.u[5] & 1u) { int m = (int)i0 + ATTN_T - 1 + off + 1; if (m < hi) hi = m; }
@@ -492,15 +578,15 @@ __device__ __forceinline__ void attn_range(const DevArgs& a, unsigned int i0, in
     if (lo < 0) lo = 0;
 }
 // rows [r0, r0 + 16) of a [rows, H*W] tensor's head h -> sh [16][ATTN_LD] (0 past the end)
-__device__ __forceinline__ void attn_load(TP x, float* sh, unsigned int r0, unsigned int rows, unsigned int H,
-                                          unsigned int h, unsigned int W) {
+__device__ __forceinline__ void attn_load(TP x, dk_shared float* sh, unsigned int r0, unsigned int rows, unsigned int H,
+                                          unsigned int h, unsigned int W DK_IDS) {
     for (unsigned int k = threadIdx.x; k < ATTN_T * W; k += blockDim.x) {
         unsigned int r = k / W, c = k % W;
         sh[r * ATTN_LD + c] = r0 + r < rows ? (float)x[((r0 + r) * H + h) * W + c] : 0.0f;
     }
 }
 // p0 q, p1 k, p2 v, p3 out, p4 lse (written)
-extern "C" __global__ void dk_attn_fwd(DevArgs a) {
+DK_KERNEL(dk_attn_fwd) {
     __shared__ float Qs[ATTN_T * ATTN_LD], Ks[ATTN_T * ATTN_LD], Vs[ATTN_T * ATTN_LD], Ps[ATTN_T * (ATTN_T + 1)];
     unsigned int S = a.u[0], L = a.u[1], H = a.u[2], D = a.u[3], E = a.u[4], fl = a.u[5] & 3u;
     int off = (int)L - (int)S;
@@ -508,7 +594,7 @@ extern "C" __global__ void dk_attn_fwd(DevArgs a) {
     unsigned int r = threadIdx.x / ATTN_T, ln = threadIdx.x % ATTN_T;
     for (unsigned int u = blockIdx.x; u < H * tiles; u += gridDim.x) {
         unsigned int h = u / tiles, i0 = (u % tiles) * ATTN_T, i = i0 + r;
-        attn_load(CF(0), Qs, i0, S, H, h, D);
+        attn_load(CF(0), Qs, i0, S, H, h, D DK_IDA);
         float acc[ATTN_PER];
         for (unsigned int t = 0; t < ATTN_PER; t++) acc[t] = 0.0f;
         float m = ATTN_HID, l = 0.0f;
@@ -516,8 +602,8 @@ extern "C" __global__ void dk_attn_fwd(DevArgs a) {
         attn_range(a, i0, lo, hi);
         for (int j0 = (lo / ATTN_T) * ATTN_T; j0 < hi; j0 += ATTN_T) {
             __syncthreads();
-            attn_load(CF(1), Ks, (unsigned int)j0, L, H, h, D);
-            attn_load(CF(2), Vs, (unsigned int)j0, L, H, h, E);
+            attn_load(CF(1), Ks, (unsigned int)j0, L, H, h, D DK_IDA);
+            attn_load(CF(2), Vs, (unsigned int)j0, L, H, h, E DK_IDA);
             __syncthreads();
             unsigned int j = (unsigned int)j0 + ln;
             float sc = ATTN_HID;
@@ -561,7 +647,7 @@ extern "C" __global__ void dk_attn_fwd(DevArgs a) {
 }
 // p0 q, p1 k, p2 v, p3 out, p6 dq (+)= scale * sum_j ds_ij k_j (0: none),
 // ds_ij = p_ij (dout_i . v_j - D_i)
-extern "C" __global__ void dk_attn_bwd_q(DevArgs a) {
+DK_KERNEL(dk_attn_bwd_q) {
     __shared__ float Qs[ATTN_T * ATTN_LD], Gs[ATTN_T * ATTN_LD], Ks[ATTN_T * ATTN_LD], Vs[ATTN_T * ATTN_LD];
     __shared__ float Ds[ATTN_T * (ATTN_T + 1)], Rd[ATTN_T], Rl[ATTN_T];
     unsigned int S = a.u[0], L = a.u[1], H = a.u[2], D = a.u[3], E = a.u[4], fl = a.u[5] & 3u;
@@ -570,8 +656,8 @@ extern "C" __global__ void dk_attn_bwd_q(DevArgs a) {
     unsigned int r = threadIdx.x / ATTN_T, ln = threadIdx.x % ATTN_T;
     for (unsigned int u = blockIdx.x; u < H * tiles; u += gridDim.x) {
         unsigned int h = u / tiles, i0 = (u % tiles) * ATTN_T, i = i0 + r;
-        attn_load(CF(5), Gs, i0, S, H, h, E);
-        attn_load(CF(3), Ks, i0, S, H, h, E);   // the output rows, for D (Ks is free until the key tiles)
+        attn_load(CF(5), Gs, i0, S, H, h, E DK_IDA);
+        attn_load(CF(3), Ks, i0, S, H, h, E DK_IDA);   // the output rows, for D (Ks is free until the key tiles)
         __syncthreads();
         float part = 0.0f;
         for (unsigned int e = ln; e < E; e += ATTN_T) part += Gs[r * ATTN_LD + e] * Ks[r * ATTN_LD + e];
@@ -585,15 +671,15 @@ extern "C" __global__ void dk_attn_bwd_q(DevArgs a) {
             if (i < S) FA(7)[h * S + i] = Di;
         }
         if (!a.p[6]) { __syncthreads(); continue; }
-        attn_load(CF(0), Qs, i0, S, H, h, D);
+        attn_load(CF(0), Qs, i0, S, H, h, D DK_IDA);
         float dq[ATTN_PER];
         for (unsigned int t = 0; t < ATTN_PER; t++) dq[t] = 0.0f;
         int lo, hi;
         attn_range(a, i0, lo, hi);
         for (int j0 = (lo / ATTN_T) * ATTN_T; j0 < hi; j0 += ATTN_T) {
             __syncthreads();
-            attn_load(CF(1), Ks, (unsigned int)j0, L, H, h, D);
-            attn_load(CF(2), Vs, (unsigned int)j0, L, H, h, E);
+            attn_load(CF(1), Ks, (unsigned int)j0, L, H, h, D DK_IDA);
+            attn_load(CF(2), Vs, (unsigned int)j0, L, H, h, E DK_IDA);
             __syncthreads();
             unsigned int j = (unsigned int)j0 + ln;
             float ds = 0.0f;
@@ -626,7 +712,7 @@ extern "C" __global__ void dk_attn_bwd_q(DevArgs a) {
 }
 // p0 q, p1 k, p2 v, p3 dk (+)= scale * sum_i ds_ij q_i, p6 dv (+)= sum_i p_ij
 // dout_i (either 0: none); after dk_attn_bwd_q. A block takes 16 keys.
-extern "C" __global__ void dk_attn_bwd_kv(DevArgs a) {
+DK_KERNEL(dk_attn_bwd_kv) {
     __shared__ float Ks[ATTN_T * ATTN_LD], Vs[ATTN_T * ATTN_LD], Qs[ATTN_T * ATTN_LD], Gs[ATTN_T * ATTN_LD];
     __shared__ float Ps[ATTN_T * (ATTN_T + 1)], Ds[ATTN_T * (ATTN_T + 1)], Rd[ATTN_T], Rl[ATTN_T];
     unsigned int S = a.u[0], L = a.u[1], H = a.u[2], D = a.u[3], E = a.u[4], fl = a.u[5] & 3u;
@@ -635,8 +721,8 @@ extern "C" __global__ void dk_attn_bwd_kv(DevArgs a) {
     unsigned int r = threadIdx.x / ATTN_T, ln = threadIdx.x % ATTN_T;
     for (unsigned int u = blockIdx.x; u < H * tiles; u += gridDim.x) {
         unsigned int h = u / tiles, j0 = (u % tiles) * ATTN_T, j = j0 + r;
-        attn_load(CF(1), Ks, j0, L, H, h, D);
-        attn_load(CF(2), Vs, j0, L, H, h, E);
+        attn_load(CF(1), Ks, j0, L, H, h, D DK_IDA);
+        attn_load(CF(2), Vs, j0, L, H, h, E DK_IDA);
         float dk[ATTN_PER], dv[ATTN_PER];
         for (unsigned int t = 0; t < ATTN_PER; t++) { dk[t] = 0.0f; dv[t] = 0.0f; }
         // the queries that can see keys [j0, j0 + 16): [qlo, qhi)
@@ -646,8 +732,8 @@ extern "C" __global__ void dk_attn_bwd_kv(DevArgs a) {
         if (qlo < 0) qlo = 0;
         for (int i0 = (qlo / ATTN_T) * ATTN_T; i0 < qhi; i0 += ATTN_T) {
             __syncthreads();
-            attn_load(CF(0), Qs, (unsigned int)i0, S, H, h, D);
-            attn_load(CF(5), Gs, (unsigned int)i0, S, H, h, E);
+            attn_load(CF(0), Qs, (unsigned int)i0, S, H, h, D DK_IDA);
+            attn_load(CF(5), Gs, (unsigned int)i0, S, H, h, E DK_IDA);
             if (threadIdx.x < ATTN_T) {
                 unsigned int i = (unsigned int)i0 + threadIdx.x;
                 Rl[threadIdx.x] = i < S ? FA(4)[h * S + i] : 0.0f;
@@ -704,7 +790,7 @@ extern "C" __global__ void dk_attn_bwd_kv(DevArgs a) {
 // ── Fused losses -> loss[0] (zeroed by the caller), averaged ─────────────────
 // Cross-entropy on class indices: p0 = logits [rows, C], p1 = labels [rows],
 // p2 = loss[0]; u0 = C; f0 = 1/rows                            n = rows
-extern "C" __global__ void dk_ce_fwd(DevArgs a) {
+DK_KERNEL(dk_ce_fwd) {
     unsigned int C = a.u[0];
     float acc = 0.0f;
     GS(r, N) {
@@ -714,10 +800,10 @@ extern "C" __global__ void dk_ce_fwd(DevArgs a) {
         unsigned int lab = (unsigned int)CF(1)[r];
         acc += (mx + logf(s) - x[lab]) * a.f[0];
     }
-    block_add(acc, FA(2));
+    block_add(acc, FA(2) DK_IDA);
 }
 // dlogits += seed[0] * (softmax - onehot) / rows; p3 = seed (the loss's grad)
-extern "C" __global__ void dk_ce_bwd(DevArgs a) {
+DK_KERNEL(dk_ce_bwd) {
     unsigned int C = a.u[0];
     GS(r, N) {
         TP x = CF(0) + r * C; TP d = F(2) + r * C;
@@ -731,7 +817,7 @@ extern "C" __global__ void dk_ce_bwd(DevArgs a) {
 }
 // Elementwise losses: u0 = 0 BCE on logits, 1 Huber (f1 = delta); p0 = x,
 // p1 = target, p2 = loss[0], f0 = 1/n                          n = elements
-extern "C" __global__ void dk_ewloss_fwd(DevArgs a) {
+DK_KERNEL(dk_ewloss_fwd) {
     float acc = 0.0f;
     GS(i, N) {
         float x = CF(0)[i], t = CF(1)[i], v;
@@ -739,10 +825,10 @@ extern "C" __global__ void dk_ewloss_fwd(DevArgs a) {
         else { float d = x - t, ad = fabsf(d), k = a.f[1]; v = ad <= k ? 0.5f * d * d : k * (ad - 0.5f * k); }
         acc += v * a.f[0];
     }
-    block_add(acc, FA(2));
+    block_add(acc, FA(2) DK_IDA);
 }
 // dx += seed[0] / n * (sigmoid(x) - t)  |  clamp(x - t, -delta, delta); p2 = dx, p3 = seed
-extern "C" __global__ void dk_ewloss_bwd(DevArgs a) {
+DK_KERNEL(dk_ewloss_bwd) {
     float sc = CF(3)[0] * a.f[0];
     GS(i, N) {
         float x = CF(0)[i], t = CF(1)[i], g;
@@ -754,7 +840,7 @@ extern "C" __global__ void dk_ewloss_bwd(DevArgs a) {
 
 // ── Layer norm: one thread per row, u0 = cols, f0 = eps ──────────────────────
 // p0 = x, p1 = xhat out, p2 = inv std [rows]
-extern "C" __global__ void dk_layernorm(DevArgs a) {
+DK_KERNEL(dk_layernorm) {
     unsigned int C = a.u[0];
     GS(r, N) {
         TP x = CF(0) + r * C; TP o = F(1) + r * C;
@@ -766,7 +852,7 @@ extern "C" __global__ void dk_layernorm(DevArgs a) {
     }
 }
 // dx += inv * (g - mean(g) - xhat * mean(g * xhat)); p0 = g, p1 = xhat, p2 = inv, p3 = dx
-extern "C" __global__ void dk_layernorm_bwd(DevArgs a) {
+DK_KERNEL(dk_layernorm_bwd) {
     unsigned int C = a.u[0];
     GS(r, N) {
         TP g = CF(0) + r * C; TP y = CF(1) + r * C; TP dx = F(3) + r * C;
@@ -789,7 +875,8 @@ extern "C" __global__ void dk_layernorm_bwd(DevArgs a) {
 #define OPT_ADAMW    5
 #define OPT_ADAGRAD  6
 #define OPT_LION     7
-__device__ void opt_one(const DevArgs& a, float* w, const float* gr, float* m, float* v, unsigned int i, float cs) {
+__device__ void opt_one(const DevArgs& a, dk_global float* w, const dk_global float* gr, dk_global float* m, dk_global float* v,
+                        unsigned int i, float cs) {
     int kind = (int)a.u[0];
     float lr = a.f[0], wd = a.f[1], mu = a.f[2], b1 = a.f[3], b2 = a.f[4], eps = a.f[5];
     {
@@ -819,7 +906,7 @@ __device__ void opt_one(const DevArgs& a, float* w, const float* gr, float* m, f
     }
 }
 // p5 (when set): the loss scale's state; an overflowed step changes nothing.
-extern "C" __global__ void dk_opt(DevArgs a) {
+DK_KERNEL(dk_opt) {
     TP clip = CF(4);
     if (a.p[5] && CF(5)[2] != 0.0f) return;
     float cs = clip ? clip[0] : 1.0f;
@@ -828,19 +915,20 @@ extern "C" __global__ void dk_opt(DevArgs a) {
 // Every parameter's step in one launch: p0 = a table of u1 entries
 // {w, g, m, v, n, start} (u64 each; start = the entry's first thread),
 // otherwise dk_opt's arguments                               n = total values
-extern "C" __global__ void dk_opt_multi(DevArgs a) {
-    const unsigned long long* T = (const unsigned long long*)a.p[0];
+DK_KERNEL(dk_opt_multi) {
+    const dk_global DK_U64* T = (const dk_global DK_U64*)a.p[0];
     unsigned int cnt = a.u[1];
     if (a.p[5] && CF(5)[2] != 0.0f) return;
     GS(i, N) {
         unsigned int lo = 0, hi = cnt - 1;
         while (lo < hi) { unsigned int mid = (lo + hi + 1) / 2; if (T[mid * 6 + 5] <= i) lo = mid; else hi = mid - 1; }
-        const unsigned long long* e = T + lo * 6;
-        opt_one(a, (float*)e[0], (const float*)e[1], (float*)e[2], (float*)e[3], i - (unsigned int)e[5], 1.0f);
+        const dk_global DK_U64* e = T + lo * 6;
+        opt_one(a, (dk_global float*)e[0], (const dk_global float*)e[1], (dk_global float*)e[2], (dk_global float*)e[3],
+                i - (unsigned int)e[5], 1.0f);
     }
 }
 // scale[0] = sumsq[0] > maxNorm^2 ? maxNorm / sqrt(sumsq[0]) : 1; p0 = sumsq, p1 = scale, f0 = maxNorm
-extern "C" __global__ void dk_clip_scale(DevArgs a) {
+DK_KERNEL(dk_clip_scale) {
     if (blockIdx.x == 0 && threadIdx.x == 0) {
         float n = sqrtf(CF(0)[0]);
         F(1)[0] = (n > a.f[0] && n > 0.0f) ? a.f[0] / n : 1.0f;
@@ -856,7 +944,7 @@ extern "C" __global__ void dk_clip_scale(DevArgs a) {
     unsigned int C = a.u[0], H = a.u[1], W = a.u[2], KH = a.u[3], KW = a.u[4], OH = a.u[5], OW = a.u[6]; \
     unsigned int B = (unsigned int)a.f[6]; \
     int sh = (int)a.f[0], sw = (int)a.f[1], ph = (int)a.f[2], pw = (int)a.f[3], dh = (int)a.f[4], dw = (int)a.f[5];
-extern "C" __global__ void dk_im2col(DevArgs a) {
+DK_KERNEL(dk_im2col) {
     CONV_DECODE
     unsigned int OP = OH * OW, BP = B * OP;
     GS(i, N) {
@@ -869,7 +957,7 @@ extern "C" __global__ void dk_im2col(DevArgs a) {
     }
 }
 // x [B, C*H*W] += col2im(col): the adjoint of dk_im2col (atomics: windows overlap)
-extern "C" __global__ void dk_col2im(DevArgs a) {
+DK_KERNEL(dk_col2im) {
     CONV_DECODE
     unsigned int OP = OH * OW, BP = B * OP;
     GS(i, N) {
@@ -883,7 +971,7 @@ extern "C" __global__ void dk_col2im(DevArgs a) {
 }
 // out [B2, A, P] (+)= in [A, B2, P] with the first two axes swapped; u0 A, u1 B2, u2 P,
 // u3 = 1 to accumulate                                        n = A*B2*P
-extern "C" __global__ void dk_swap01(DevArgs a) {
+DK_KERNEL(dk_swap01) {
     unsigned int A = a.u[0], B2 = a.u[1], P = a.u[2];
     GS(i, N) {
         unsigned int p = i % P, t = i / P, bi = t % B2, ai = t / B2;   // i indexes 'in'
@@ -913,12 +1001,12 @@ template <int T> __device__ __forceinline__ unsigned int pk(float lo, float hi) 
     return T == 1 ? ((unsigned int)f2h_bits(lo) | ((unsigned int)f2h_bits(hi) << 16))
                   : ((unsigned int)f2b_bits(lo) | ((unsigned int)f2b_bits(hi) << 16));
 }
-__device__ __forceinline__ const unsigned int* pw(unsigned long long p) { return (const unsigned int*)(p & DEV_ADDR_MASK); }
-__device__ __forceinline__ unsigned int* pwm(unsigned long long p) { return (unsigned int*)(p & DEV_ADDR_MASK); }
+__device__ __forceinline__ const dk_global unsigned int* pw(DK_U64 p) { return (const dk_global unsigned int*)(p & DEV_ADDR_MASK); }
+__device__ __forceinline__ dk_global unsigned int* pwm(DK_U64 p) { return (dk_global unsigned int*)(p & DEV_ADDR_MASK); }
 // The 16-bit type every listed handle shares (4-byte aligned, nonzero), or 0.
-__device__ unsigned int pair_tag(unsigned long long p0, unsigned long long p1, unsigned long long p2, unsigned long long p3) {
+__device__ unsigned int pair_tag(DK_U64 p0, DK_U64 p1, DK_U64 p2, DK_U64 p3) {
     unsigned int t = (unsigned int)(p0 >> 62);
-    unsigned long long ps[4] = { p0, p1, p2, p3 };
+    DK_U64 ps[4] = { p0, p1, p2, p3 };
     if (t == 0u) return 0u;
     for (int q = 0; q < 4; q++) {
         if (ps[q] == 0ull) continue;
@@ -930,10 +1018,10 @@ __device__ unsigned int pair_tag(unsigned long long p0, unsigned long long p1, u
 
 // out[b, c, p] += bias[c]; u0 = channels, u1 = plane            n = batch*C*plane
 #ifdef DK_TAGGED
-template <int T> __device__ void bias_ch_pairs(const DevArgs& a) {
+template <int T> __device__ void bias_ch_pairs(const DevArgs& a DK_IDS) {
     unsigned int C = a.u[0], P = a.u[1];
     float iP = 1.0f / (float)P, iC = 1.0f / (float)C;
-    unsigned int* o = pwm(a.p[0]);
+    dk_global unsigned int* o = pwm(a.p[0]);
     GS(j, N / 2u) {
         float b = FA(1)[chan_of(2u * j, C, P, iP, iC)];
         unsigned int w = o[j];
@@ -941,13 +1029,13 @@ template <int T> __device__ void bias_ch_pairs(const DevArgs& a) {
     }
 }
 #endif
-extern "C" __global__ void dk_bias_channels(DevArgs a) {
+DK_KERNEL(dk_bias_channels) {
     unsigned int C = a.u[0], P = a.u[1];
 #ifdef DK_TAGGED
     if ((P & 1u) == 0u && (N & 1u) == 0u) {
         unsigned int t = pair_tag(a.p[0], 0ull, 0ull, 0ull);
-        if (t == 1u) { bias_ch_pairs<1>(a); return; }
-        if (t == 2u) { bias_ch_pairs<2>(a); return; }
+        if (t == 1u) { bias_ch_pairs<1>(a DK_IDA); return; }
+        if (t == 2u) { bias_ch_pairs<2>(a DK_IDA); return; }
     }
 #endif
     float iP = 1.0f / (float)P, iC = 1.0f / (float)C;
@@ -958,8 +1046,17 @@ extern "C" __global__ void dk_bias_channels(DevArgs a) {
 #define UNITS(u, U) for (unsigned int u = blockIdx.x; u < (U); u += gridDim.x)
 #define TSPLIT(q, M) for (unsigned int q = threadIdx.x; q < (M); q += blockDim.x)
 // The block's total of v, returned to every thread.
-__device__ double block_sum_d(double v) {
-    __shared__ double s[256];
+__device__ dk_double block_sum_d(dk_double v DK_IDS) {
+#if defined(__METAL_VERSION__)
+    __syncthreads();   // the previous call's readers are done with dk_red
+    v = simd_sum(v);
+    if (dk_lane == 0u) dk_red[dk_simd] = v;
+    __syncthreads();
+    float s = 0.0f;
+    for (unsigned int k = 0; k < (blockDim.x + 31u) / 32u; k++) s += dk_red[k];
+    return s;
+#else
+    __shared__ dk_double s[256];
     __syncthreads();
     s[threadIdx.x] = v;
     __syncthreads();
@@ -968,6 +1065,7 @@ __device__ double block_sum_d(double v) {
         __syncthreads();
     }
     return s[0];
+#endif
 }
 // Per-channel reductions over [batch, C, plane] split each channel's M =
 // batch*plane values into S slices (u3), a block each: slice s takes the
@@ -980,22 +1078,22 @@ __device__ unsigned int chan_at(unsigned int q, unsigned int c, unsigned int C, 
 }
 #define CHAN_AT(q, c, C, P) chan_at((q), (c), (C), (P), iP)
 // gb[c] += sum over batch and plane of d; u0 = C, u1 = plane, u2 = batch, u3 = S   n = C*S*256
-extern "C" __global__ void dk_bias_channels_bwd(DevArgs a) {
+DK_KERNEL(dk_bias_channels_bwd) {
     unsigned int C = a.u[0], P = a.u[1], M = a.u[2] * a.u[1], S = a.u[3];
     float iP = 1.0f / (float)P;
 #ifdef DK_TAGGED
     unsigned int t = (P & 1u) == 0u ? pair_tag(a.p[0], 0ull, 0ull, 0ull) : 0u;
     if (t != 0u) {
         // pairs: the channel's M / 2 words
-        const unsigned int* d = pw(a.p[0]);
+        const dk_global unsigned int* d = pw(a.p[0]);
         UNITS(u, C * S) {
             unsigned int c = u / S, sl = u % S;
-            double s = 0.0;
+            dk_double s = 0.0;
             SLICE_LOOP(q, M / 2u, sl, S) {
                 unsigned int w = d[CHAN_AT(2u * q, c, C, P) / 2u];
-                s += t == 1u ? (double)pk_lo<1>(w) + (double)pk_hi<1>(w) : (double)pk_lo<2>(w) + (double)pk_hi<2>(w);
+                s += t == 1u ? (dk_double)pk_lo<1>(w) + (dk_double)pk_hi<1>(w) : (dk_double)pk_lo<2>(w) + (dk_double)pk_hi<2>(w);
             }
-            s = block_sum_d(s);
+            s = block_sum_d(s DK_IDA);
             if (threadIdx.x == 0) atomicAdd(&FA(1)[c], (float)s);
         }
         return;
@@ -1003,9 +1101,9 @@ extern "C" __global__ void dk_bias_channels_bwd(DevArgs a) {
 #endif
     UNITS(u, C * S) {
         unsigned int c = u / S, sl = u % S;
-        double s = 0.0;
-        SLICE_LOOP(q, M, sl, S) s += (double)CF(0)[CHAN_AT(q, c, C, P)];
-        s = block_sum_d(s);
+        dk_double s = 0.0;
+        SLICE_LOOP(q, M, sl, S) s += (dk_double)CF(0)[CHAN_AT(q, c, C, P)];
+        s = block_sum_d(s DK_IDA);
         if (threadIdx.x == 0) atomicAdd(&FA(1)[c], (float)s);
     }
 }
@@ -1013,32 +1111,32 @@ extern "C" __global__ void dk_bias_channels_bwd(DevArgs a) {
 // ── Batch / group normalization (convnet.h's layout [batch, C*plane]) ───────
 // Batch norm statistics, pass 1: per (channel, slice) the count, mean and sum
 // of squared deviations, as doubles in p1 [C*S*3]. p0 x; u0 C, u1 plane, u2 batch, u3 S
-extern "C" __global__ void dk_bn_partial(DevArgs a) {
+DK_KERNEL(dk_bn_partial) {
     unsigned int C = a.u[0], P = a.u[1], M = a.u[2] * a.u[1], S = a.u[3];
     float iP = 1.0f / (float)P;
-    double* part = (double*)a.p[1];
+    dk_global dk_double* part = (dk_global dk_double*)a.p[1];
 #ifdef DK_TAGGED
     unsigned int t = (P & 1u) == 0u ? pair_tag(a.p[0], 0ull, 0ull, 0ull) : 0u;
     if (t != 0u) {
-        const unsigned int* xw = pw(a.p[0]);
+        const dk_global unsigned int* xw = pw(a.p[0]);
         UNITS(u, C * S) {
             unsigned int c = u / S, sl = u % S;
-            double s = 0.0, cnt = 0.0;
+            dk_double s = 0.0, cnt = 0.0;
             SLICE_LOOP(q, M / 2u, sl, S) {
                 unsigned int w = xw[CHAN_AT(2u * q, c, C, P) / 2u];
                 float lo = t == 1u ? pk_lo<1>(w) : pk_lo<2>(w), hi = t == 1u ? pk_hi<1>(w) : pk_hi<2>(w);
-                s += (double)lo + (double)hi; cnt += 2.0;
+                s += (dk_double)lo + (dk_double)hi; cnt += 2.0;
             }
-            cnt = block_sum_d(cnt);
-            double tot = block_sum_d(s);
-            double mu = cnt > 0.0 ? tot / cnt : 0.0;
-            double sq = 0.0;
+            cnt = block_sum_d(cnt DK_IDA);
+            dk_double tot = block_sum_d(s DK_IDA);
+            dk_double mu = cnt > 0.0 ? tot / cnt : 0.0;
+            dk_double sq = 0.0;
             SLICE_LOOP(q, M / 2u, sl, S) {
                 unsigned int w = xw[CHAN_AT(2u * q, c, C, P) / 2u];
-                double lo = (double)(t == 1u ? pk_lo<1>(w) : pk_lo<2>(w)) - mu, hi = (double)(t == 1u ? pk_hi<1>(w) : pk_hi<2>(w)) - mu;
+                dk_double lo = (dk_double)(t == 1u ? pk_lo<1>(w) : pk_lo<2>(w)) - mu, hi = (dk_double)(t == 1u ? pk_hi<1>(w) : pk_hi<2>(w)) - mu;
                 sq += lo * lo + hi * hi;
             }
-            sq = block_sum_d(sq);
+            sq = block_sum_d(sq DK_IDA);
             if (threadIdx.x == 0) { part[u * 3] = cnt; part[u * 3 + 1] = mu; part[u * 3 + 2] = sq; }
         }
         return;
@@ -1046,14 +1144,14 @@ extern "C" __global__ void dk_bn_partial(DevArgs a) {
 #endif
     UNITS(u, C * S) {
         unsigned int c = u / S, sl = u % S;
-        double s = 0.0, cnt = 0.0;
-        SLICE_LOOP(q, M, sl, S) { s += (double)CF(0)[CHAN_AT(q, c, C, P)]; cnt += 1.0; }
-        cnt = block_sum_d(cnt);
-        double tot = block_sum_d(s);
-        double mu = cnt > 0.0 ? tot / cnt : 0.0;
-        double sq = 0.0;
-        SLICE_LOOP(q, M, sl, S) { double d = (double)CF(0)[CHAN_AT(q, c, C, P)] - mu; sq += d * d; }
-        sq = block_sum_d(sq);
+        dk_double s = 0.0, cnt = 0.0;
+        SLICE_LOOP(q, M, sl, S) { s += (dk_double)CF(0)[CHAN_AT(q, c, C, P)]; cnt += 1.0; }
+        cnt = block_sum_d(cnt DK_IDA);
+        dk_double tot = block_sum_d(s DK_IDA);
+        dk_double mu = cnt > 0.0 ? tot / cnt : 0.0;
+        dk_double sq = 0.0;
+        SLICE_LOOP(q, M, sl, S) { dk_double d = (dk_double)CF(0)[CHAN_AT(q, c, C, P)] - mu; sq += d * d; }
+        sq = block_sum_d(sq DK_IDA);
         if (threadIdx.x == 0) { part[u * 3] = cnt; part[u * 3 + 1] = mu; part[u * 3 + 2] = sq; }
     }
 }
@@ -1061,17 +1159,17 @@ extern "C" __global__ void dk_bn_partial(DevArgs a) {
 // running statistics updated (training), mean and invstd. p0 partials, p1
 // mean[C], p2 invstd[C], p3 running mean, p4 running var; u0 C, u3 S,
 // u4 training; f0 momentum, f1 eps                              n = C
-extern "C" __global__ void dk_bn_finish(DevArgs a) {
+DK_KERNEL(dk_bn_finish) {
     unsigned int S = a.u[3];
-    const double* part = (const double*)a.p[0];
+    const dk_global dk_double* part = (const dk_global dk_double*)a.p[0];
     GS(c, N) {
         float mean, var;
         if (a.u[4]) {
-            double n = 0.0, mu = 0.0, m2 = 0.0;
+            dk_double n = 0.0, mu = 0.0, m2 = 0.0;
             for (unsigned int s = 0; s < S; s++) {
-                const double* p = part + (c * S + s) * 3;
+                const dk_global dk_double* p = part + (c * S + s) * 3;
                 if (p[0] == 0.0) continue;
-                double nn = n + p[0], d = p[1] - mu;
+                dk_double nn = n + p[0], d = p[1] - mu;
                 mu += d * p[0] / nn;
                 m2 += p[2] + d * d * n * p[0] / nn;
                 n = nn;
@@ -1091,17 +1189,17 @@ extern "C" __global__ void dk_bn_finish(DevArgs a) {
 }
 // Group norm statistics per (image, group) unit of M contiguous values:
 // p0 x, p1 mean[U], p2 invstd[U]; u0 M, u1 U; f0 eps            n = U*256
-extern "C" __global__ void dk_gn_stats(DevArgs a) {
+DK_KERNEL(dk_gn_stats) {
     unsigned int M = a.u[0];
     UNITS(u, a.u[1]) {
-        TP x = CF(0) + (unsigned long long)u * M;
-        double s = 0.0;
-        TSPLIT(q, M) s += (double)x[q];
-        double mu = block_sum_d(s) / (double)M;
-        double sq = 0.0;
-        TSPLIT(q, M) { double d = (double)x[q] - mu; sq += d * d; }
-        sq = block_sum_d(sq);
-        if (threadIdx.x == 0) { F(1)[u] = (float)mu; F(2)[u] = 1.0f / sqrtf((float)(sq / (double)M) + a.f[0]); }
+        TP x = CF(0) + (DK_U64)u * M;
+        dk_double s = 0.0;
+        TSPLIT(q, M) s += (dk_double)x[q];
+        dk_double mu = block_sum_d(s DK_IDA) / (dk_double)M;
+        dk_double sq = 0.0;
+        TSPLIT(q, M) { dk_double d = (dk_double)x[q] - mu; sq += d * d; }
+        sq = block_sum_d(sq DK_IDA);
+        if (threadIdx.x == 0) { F(1)[u] = (float)mu; F(2)[u] = 1.0f / sqrtf((float)(sq / (dk_double)M) + a.f[0]); }
     }
 }
 // The statistic of value i: its channel (batch norm, G = 0) or its (image, group).
@@ -1115,7 +1213,7 @@ __device__ unsigned int norm_stat(unsigned int i, unsigned int C, unsigned int P
 __device__ float fused_act(const DevArgs& a, float v) {
     return a.u[5] == 0 || v > 0.0f ? v : (a.u[5] == 1 ? 0.0f : a.f[1] * v);
 }
-__device__ float fused_dy(const DevArgs& a, unsigned long long i) {
+__device__ float fused_dy(const DevArgs& a, DK_U64 i) {
     float dy = TP(a.p[0])[i];
     if (a.u[5] == 0) return dy;
     return TP(a.p[7])[i] > 0.0f ? dy : (a.u[5] == 1 ? 0.0f : a.f[1] * dy);
@@ -1123,11 +1221,11 @@ __device__ float fused_dy(const DevArgs& a, unsigned long long i) {
 // out = gamma[c] (x - mean) invstd + beta[c]: p0 x, p1 out, p2 mean, p3 invstd,
 // p4 gamma, p5 beta; u0 C, u1 plane, u2 groups (0: batch norm)  n = values
 #ifdef DK_TAGGED
-template <int T> __device__ void norm_apply_pairs(const DevArgs& a) {
+template <int T> __device__ void norm_apply_pairs(const DevArgs& a DK_IDS) {
     unsigned int C = a.u[0], P = a.u[1], G = a.u[2];
     float iP = 1.0f / (float)P, iC = 1.0f / (float)C;
-    const unsigned int* x = pw(a.p[0]);
-    unsigned int* o = pwm(a.p[1]);
+    const dk_global unsigned int* x = pw(a.p[0]);
+    dk_global unsigned int* o = pwm(a.p[1]);
     GS(j, N / 2u) {
         unsigned int i = 2u * j, c = chan_of(i, C, P, iP, iC), st = norm_stat(i, C, P, G, iP, iC);
         float g = FA(4)[c], b = FA(5)[c], m = FA(2)[st], is = FA(3)[st];
@@ -1136,13 +1234,13 @@ template <int T> __device__ void norm_apply_pairs(const DevArgs& a) {
     }
 }
 #endif
-extern "C" __global__ void dk_norm_apply(DevArgs a) {
+DK_KERNEL(dk_norm_apply) {
     unsigned int C = a.u[0], P = a.u[1], G = a.u[2];
 #ifdef DK_TAGGED
     if ((P & 1u) == 0u && (N & 1u) == 0u) {
         unsigned int t = pair_tag(a.p[0], a.p[1], 0ull, 0ull);
-        if (t == 1u) { norm_apply_pairs<1>(a); return; }
-        if (t == 2u) { norm_apply_pairs<2>(a); return; }
+        if (t == 1u) { norm_apply_pairs<1>(a DK_IDA); return; }
+        if (t == 2u) { norm_apply_pairs<2>(a DK_IDA); return; }
     }
 #endif
     float iP = 1.0f / (float)P, iC = 1.0f / (float)C;
@@ -1157,7 +1255,7 @@ extern "C" __global__ void dk_norm_apply(DevArgs a) {
 // u1 plane, u2 groups, u3 batch, u4 S slices                    n = C*S*256
 #ifdef DK_TAGGED
 // dy * act'(y) for a pair
-template <int T> __device__ __forceinline__ void fused_dy2(const DevArgs& a, unsigned int j, float& lo, float& hi) {
+template <int T> __device__ __forceinline__ void fused_dy2(const DevArgs& a, unsigned int j, dk_thread float& lo, dk_thread float& hi) {
     unsigned int w = pw(a.p[0])[j];
     lo = pk_lo<T>(w); hi = pk_hi<T>(w);
     if (a.u[5] != 0u) {
@@ -1167,24 +1265,24 @@ template <int T> __device__ __forceinline__ void fused_dy2(const DevArgs& a, uns
         if (!(pk_hi<T>(y) > 0.0f)) hi *= s;
     }
 }
-template <int T> __device__ void norm_sums_pairs(const DevArgs& a) {
+template <int T> __device__ void norm_sums_pairs(const DevArgs& a DK_IDS) {
     unsigned int C = a.u[0], P = a.u[1], G = a.u[2], M = a.u[3] * a.u[1], S = a.u[4];
     float iP = 1.0f / (float)P, iC = 1.0f / (float)C;
-    const unsigned int* xw = pw(a.p[1]);
+    const dk_global unsigned int* xw = pw(a.p[1]);
     UNITS(u, C * S) {
         unsigned int c = u / S, sl = u % S;
-        double sd = 0.0, sx = 0.0;
+        dk_double sd = 0.0, sx = 0.0;
         SLICE_LOOP(q, M / 2u, sl, S) {
             unsigned int i = CHAN_AT(2u * q, c, C, P), st = G == 0 ? c : norm_stat(i, C, P, G, iP, iC);
             float dlo, dhi;
             fused_dy2<T>(a, i / 2u, dlo, dhi);
             float m = FA(2)[st], is = FA(3)[st];
             unsigned int w = xw[i / 2u];
-            sd += (double)dlo + (double)dhi;
-            sx += (double)(dlo * (pk_lo<T>(w) - m) * is) + (double)(dhi * (pk_hi<T>(w) - m) * is);
+            sd += (dk_double)dlo + (dk_double)dhi;
+            sx += (dk_double)(dlo * (pk_lo<T>(w) - m) * is) + (dk_double)(dhi * (pk_hi<T>(w) - m) * is);
         }
-        sd = block_sum_d(sd);
-        sx = block_sum_d(sx);
+        sd = block_sum_d(sd DK_IDA);
+        sx = block_sum_d(sx DK_IDA);
         if (threadIdx.x == 0) {
             if (a.p[4]) atomicAdd(&FA(4)[c], (float)sx);
             if (a.p[5]) atomicAdd(&FA(5)[c], (float)sd);
@@ -1193,27 +1291,27 @@ template <int T> __device__ void norm_sums_pairs(const DevArgs& a) {
     }
 }
 #endif
-extern "C" __global__ void dk_norm_sums(DevArgs a) {
+DK_KERNEL(dk_norm_sums) {
     unsigned int C = a.u[0], P = a.u[1], G = a.u[2], M = a.u[3] * a.u[1], S = a.u[4];
 #ifdef DK_TAGGED
     if ((P & 1u) == 0u) {
         unsigned int t = pair_tag(a.p[0], a.p[1], a.u[5] != 0u ? a.p[7] : 0ull, 0ull);
-        if (t == 1u) { norm_sums_pairs<1>(a); return; }
-        if (t == 2u) { norm_sums_pairs<2>(a); return; }
+        if (t == 1u) { norm_sums_pairs<1>(a DK_IDA); return; }
+        if (t == 2u) { norm_sums_pairs<2>(a DK_IDA); return; }
     }
 #endif
     float iP = 1.0f / (float)P, iC = 1.0f / (float)C;
     UNITS(u, C * S) {
         unsigned int c = u / S, sl = u % S;
-        double sd = 0.0, sx = 0.0;
+        dk_double sd = 0.0, sx = 0.0;
         SLICE_LOOP(q, M, sl, S) {
             unsigned int i = CHAN_AT(q, c, C, P), st = G == 0 ? c : norm_stat(i, C, P, G, iP, iC);
             float dy = fused_dy(a, i);
-            sd += (double)dy;
-            sx += (double)(dy * (CF(1)[i] - CF(2)[st]) * CF(3)[st]);
+            sd += (dk_double)dy;
+            sx += (dk_double)(dy * (CF(1)[i] - CF(2)[st]) * CF(3)[st]);
         }
-        sd = block_sum_d(sd);
-        sx = block_sum_d(sx);
+        sd = block_sum_d(sd DK_IDA);
+        sx = block_sum_d(sx DK_IDA);
         if (threadIdx.x == 0) {
             if (a.p[4]) atomicAdd(&FA(4)[c], (float)sx);
             if (a.p[5]) atomicAdd(&FA(5)[c], (float)sd);
@@ -1225,11 +1323,11 @@ extern "C" __global__ void dk_norm_sums(DevArgs a) {
 // in training (0 in eval). p0 dy, p1 x, p2 mean, p3 invstd, p4 gamma, p5 sums,
 // p6 dx; u0 C, u1 plane, u2 training; f0 1/N                    n = values
 #ifdef DK_TAGGED
-template <int T> __device__ void bn_bwd_dx_pairs(const DevArgs& a) {
+template <int T> __device__ void bn_bwd_dx_pairs(const DevArgs& a DK_IDS) {
     unsigned int C = a.u[0], P = a.u[1];
     float iP = 1.0f / (float)P, iC = 1.0f / (float)C;
-    const unsigned int* xw = pw(a.p[1]);
-    unsigned int* dx = pwm(a.p[6]);
+    const dk_global unsigned int* xw = pw(a.p[1]);
+    dk_global unsigned int* dx = pwm(a.p[6]);
     GS(j, N / 2u) {
         unsigned int c = chan_of(2u * j, C, P, iP, iC);
         float inv = FA(3)[c], mean = FA(2)[c], g = FA(4)[c] * inv;
@@ -1244,13 +1342,13 @@ template <int T> __device__ void bn_bwd_dx_pairs(const DevArgs& a) {
     }
 }
 #endif
-extern "C" __global__ void dk_bn_bwd_dx(DevArgs a) {
+DK_KERNEL(dk_bn_bwd_dx) {
     unsigned int C = a.u[0], P = a.u[1];
 #ifdef DK_TAGGED
     if ((P & 1u) == 0u && (N & 1u) == 0u) {
         unsigned int t = pair_tag(a.p[0], a.p[1], a.p[6], a.u[5] != 0u ? a.p[7] : 0ull);
-        if (t == 1u) { bn_bwd_dx_pairs<1>(a); return; }
-        if (t == 2u) { bn_bwd_dx_pairs<2>(a); return; }
+        if (t == 1u) { bn_bwd_dx_pairs<1>(a DK_IDA); return; }
+        if (t == 2u) { bn_bwd_dx_pairs<2>(a DK_IDA); return; }
     }
 #endif
     float iP = 1.0f / (float)P, iC = 1.0f / (float)C;
@@ -1265,21 +1363,21 @@ extern "C" __global__ void dk_bn_bwd_dx(DevArgs a) {
 // Group norm: per (image, group) unit, dxh = dy gamma[c],
 // dx += invstd (dxh - mean(dxh) - xh mean(dxh xh)). p0 dy, p1 x, p2 mean,
 // p3 invstd, p4 gamma, p5 dx; u0 C, u1 plane, u2 groups, u3 units   n = U*256
-extern "C" __global__ void dk_gn_bwd(DevArgs a) {
+DK_KERNEL(dk_gn_bwd) {
     unsigned int C = a.u[0], P = a.u[1], G = a.u[2];
     unsigned int Cg = C / G, M = Cg * P;
     float iP = 1.0f / (float)P;
     UNITS(u, a.u[3]) {
-        unsigned long long base = (unsigned long long)u * M;
+        DK_U64 base = (DK_U64)u * M;
         unsigned int g = u % G;
         float mean = CF(2)[u], inv = CF(3)[u];
-        double s1 = 0.0, s2 = 0.0;
+        dk_double s1 = 0.0, s2 = 0.0;
         TSPLIT(q, M) {
             float dxh = fused_dy(a, base + q) * CF(4)[g * Cg + udiv(q, P, iP)];
-            s1 += (double)dxh;
-            s2 += (double)(dxh * (CF(1)[base + q] - mean) * inv);
+            s1 += (dk_double)dxh;
+            s2 += (dk_double)(dxh * (CF(1)[base + q] - mean) * inv);
         }
-        float m1 = (float)(block_sum_d(s1) / (double)M), m2 = (float)(block_sum_d(s2) / (double)M);
+        float m1 = (float)(block_sum_d(s1 DK_IDA) / (dk_double)M), m2 = (float)(block_sum_d(s2 DK_IDA) / (dk_double)M);
         TSPLIT(q, M) {
             float dxh = fused_dy(a, base + q) * CF(4)[g * Cg + udiv(q, P, iP)];
             float xh = (CF(1)[base + q] - mean) * inv;
@@ -1305,25 +1403,25 @@ __device__ PoolWin pool_win(const DevArgs& a, unsigned int oh, unsigned int ow) 
 }
 // p0 x, p1 out [batch, C*oH*oW] (forward); p0 x, p1 dout, p2 dx (backward: u6 = 1)
 // n = batch*C*oH*oW
-extern "C" __global__ void dk_pool(DevArgs a) {
+DK_KERNEL(dk_pool) {
     unsigned int H = a.u[1], W = a.u[2], oH = a.u[3], oW = a.u[4], mode = a.u[5];
     float iW = 1.0f / (float)oW, iH = 1.0f / (float)oH;
     GS(i, N) {
         unsigned int t = udiv(i, oW, iW), ow = i - t * oW, pl = udiv(t, oH, iH), oh = t - pl * oH;
         PoolWin r = pool_win(a, oh, ow);
-        TP img = CF(0) + (unsigned long long)pl * H * W;
+        TP img = CF(0) + (DK_U64)pl * H * W;
         if (mode == 0) {
             unsigned int best = r.h0 * W + r.w0;
             float bv = img[best];
             for (unsigned int y = r.h0; y < r.h1; y++)
                 for (unsigned int x = r.w0; x < r.w1; x++) if (img[y * W + x] > bv) { bv = img[y * W + x]; best = y * W + x; }
-            if (a.u[6]) atomicAdd(&FA(2)[(unsigned long long)pl * H * W + best], CF(1)[i]); else F(1)[i] = bv;
+            if (a.u[6]) atomicAdd(&FA(2)[(DK_U64)pl * H * W + best], CF(1)[i]); else F(1)[i] = bv;
         } else {
             float div = mode == 1 ? (float)r.padded : (float)((r.h1 - r.h0) * (r.w1 - r.w0));
             if (a.u[6]) {
                 float share = CF(1)[i] / div;
                 for (unsigned int y = r.h0; y < r.h1; y++)
-                    for (unsigned int x = r.w0; x < r.w1; x++) atomicAdd(&FA(2)[(unsigned long long)pl * H * W + y * W + x], share);
+                    for (unsigned int x = r.w0; x < r.w1; x++) atomicAdd(&FA(2)[(DK_U64)pl * H * W + y * W + x], share);
             } else {
                 float acc = 0.0f;
                 for (unsigned int y = r.h0; y < r.h1; y++) for (unsigned int x = r.w0; x < r.w1; x++) acc += img[y * W + x];
@@ -1336,7 +1434,7 @@ extern "C" __global__ void dk_pool(DevArgs a) {
 // (y, x) sums the gradients of the windows that contain it -- for max
 // pooling, of those whose (first) largest value it is. p0 x, p1 dout, p2 dx;
 // geometry as dk_pool; u6 = 1: dx was an unwritten zero gradient   n = planes*H*W
-extern "C" __global__ void dk_pool_bwd(DevArgs a) {
+DK_KERNEL(dk_pool_bwd) {
     unsigned int H = a.u[1], W = a.u[2], oH = a.u[3], oW = a.u[4], mode = a.u[5];
     int kH = (int)a.f[0], kW = (int)a.f[1], sH = (int)a.f[2], sW = (int)a.f[3], pH = (int)a.f[4], pW = (int)a.f[5];
     if (kH == sH && kW == sW && pH == 0 && pW == 0 &&
@@ -1348,8 +1446,8 @@ extern "C" __global__ void dk_pool_bwd(DevArgs a) {
         GS(i, planes * oH * oW) {
             unsigned int t = udiv(i, oW, iW), ow = i - t * oW, pl = udiv(t, oH, iH), oh = t - pl * oH;
             PoolWin r = pool_win(a, oh, ow);
-            TP img = CF(0) + (unsigned long long)pl * H * W;
-            TP dx = F(2) + (unsigned long long)pl * H * W;
+            TP img = CF(0) + (DK_U64)pl * H * W;
+            TP dx = F(2) + (DK_U64)pl * H * W;
             float d = CF(1)[i];
             if (mode == 0) {
                 unsigned int best = r.h0 * W + r.w0;
@@ -1372,8 +1470,8 @@ extern "C" __global__ void dk_pool_bwd(DevArgs a) {
     float iW = 1.0f / (float)W, iH = 1.0f / (float)H, iK = 1.0f / (float)kH, iKw = 1.0f / (float)kW;
     GS(i, N) {
         unsigned int t = udiv(i, W, iW), x = i - t * W, pl = udiv(t, H, iH), y = t - pl * H;
-        TP img = CF(0) + (unsigned long long)pl * H * W;
-        TP dout = CF(1) + (unsigned long long)pl * oH * oW;
+        TP img = CF(0) + (DK_U64)pl * H * W;
+        TP dout = CF(1) + (DK_U64)pl * oH * oW;
         int oh0, oh1, ow0, ow1;
         if (kH == sH && kW == sW && pH == 0 && pW == 0) {
             // non-overlapping windows: exactly one holds (y, x)
@@ -1409,17 +1507,17 @@ extern "C" __global__ void dk_pool_bwd(DevArgs a) {
 }
 // Global pooling, one plane of u0 values per unit: p0 x, p1 out [planes];
 // backward (u2 = 1): p1 dout, p2 dx. u1 = 0 max, 1 avg           n = planes*256
-extern "C" __global__ void dk_gpool(DevArgs a) {
+DK_KERNEL(dk_gpool) {
     unsigned int P = a.u[0];
     UNITS(pl, N / 256) {
-        TP x = CF(0) + (unsigned long long)pl * P;
+        TP x = CF(0) + (DK_U64)pl * P;
         if (a.u[1]) {
-            if (a.u[2]) { float share = CF(1)[pl] / (float)P; TSPLIT(q, P) ACCUM(F(2)[(unsigned long long)pl * P + q], share); }
-            else { double s = 0.0; TSPLIT(q, P) s += (double)x[q]; s = block_sum_d(s); if (threadIdx.x == 0) F(1)[pl] = (float)(s / (double)P); }
+            if (a.u[2]) { float share = CF(1)[pl] / (float)P; TSPLIT(q, P) ACCUM(F(2)[(DK_U64)pl * P + q], share); }
+            else { dk_double s = 0.0; TSPLIT(q, P) s += (dk_double)x[q]; s = block_sum_d(s DK_IDA); if (threadIdx.x == 0) F(1)[pl] = (float)(s / (dk_double)P); }
         } else if (threadIdx.x == 0) {
             unsigned int best = 0;
             for (unsigned int q = 1; q < P; q++) if (x[q] > x[best]) best = q;
-            if (a.u[2]) F(2)[(unsigned long long)pl * P + best] += CF(1)[pl]; else F(1)[pl] = x[best];
+            if (a.u[2]) F(2)[(DK_U64)pl * P + best] += CF(1)[pl]; else F(1)[pl] = x[best];
         }
     }
 }
@@ -1427,17 +1525,17 @@ extern "C" __global__ void dk_gpool(DevArgs a) {
 // ── Upsampling and resizing (planes of H x W -> oH x oW) ─────────────────────
 // Nearest by an integer factor u2: forward (u3 = 0) p0 x, p1 out, one thread
 // per output; backward (u3 = 1) p0 dout, p1 dx, one per input. u0 W, u1 H
-extern "C" __global__ void dk_upsample(DevArgs a) {
+DK_KERNEL(dk_upsample) {
     unsigned int W = a.u[0], H = a.u[1], f = a.u[2], oW = W * f, oH = H * f;
     GS(i, N) {
         if (a.u[3] == 0) {
             unsigned int ow = i % oW, oh = (i / oW) % oH, pl = i / (oW * oH);
-            F(1)[i] = CF(0)[((unsigned long long)pl * H + oh / f) * W + ow / f];
+            F(1)[i] = CF(0)[((DK_U64)pl * H + oh / f) * W + ow / f];
         } else {
             unsigned int w = i % W, h = (i / W) % H, pl = i / (W * H);
             float s = 0.0f;
             for (unsigned int y = 0; y < f; y++)
-                for (unsigned int x = 0; x < f; x++) s += CF(0)[((unsigned long long)pl * oH + h * f + y) * oW + w * f + x];
+                for (unsigned int x = 0; x < f; x++) s += CF(0)[((DK_U64)pl * oH + h * f + y) * oW + w * f + x];
             ACCUM(F(1)[i], s);
         }
     }
@@ -1478,7 +1576,7 @@ __device__ Taps rs_taps(unsigned int o, unsigned int in, unsigned int out, unsig
     return t;
 }
 // sum_k w_k row[i_k]
-__device__ float rs_dot(const Taps& t, TP row) {
+__device__ float rs_dot(const dk_thread Taps& t, TP row) {
     float s = 0.0f;
     if (t.w0 != 0.0f) s += t.w0 * row[t.i0];
     if (t.w1 != 0.0f) s += t.w1 * row[t.i1];
@@ -1488,12 +1586,12 @@ __device__ float rs_dot(const Taps& t, TP row) {
 }
 // convnet.h's RESIZE_* (u4), alignCorners u5: p0 x, p1 out. u0 H, u1 W, u2 oH,
 // u3 oW                                                       n = planes*oH*oW
-extern "C" __global__ void dk_resize(DevArgs a) {
+DK_KERNEL(dk_resize) {
     unsigned int H = a.u[0], W = a.u[1], oH = a.u[2], oW = a.u[3];
     GS(i, N) {
         unsigned int ow = i % oW, oh = (i / oW) % oH, pl = i / (oW * oH);
         Taps ty = rs_taps(oh, H, oH, a.u[4], a.u[5]), tx = rs_taps(ow, W, oW, a.u[4], a.u[5]);
-        TP img = CF(0) + (unsigned long long)pl * H * W;
+        TP img = CF(0) + (DK_U64)pl * H * W;
         float acc = 0.0f;
         if (ty.w0 != 0.0f) acc += ty.w0 * rs_dot(tx, img + ty.i0 * W);
         if (ty.w1 != 0.0f) acc += ty.w1 * rs_dot(tx, img + ty.i1 * W);
@@ -1513,7 +1611,7 @@ __device__ float rs_weight(unsigned int o, unsigned int i, unsigned int in, unsi
 // for bicubic ones (floor(s) - 1 .. floor(s) + 2), borders clamped; a margin
 // of one either side for rounding.
 __device__ void rs_range(unsigned int i, unsigned int in, unsigned int out, unsigned int mode, unsigned int align,
-                         int* lo, int* hi) {
+                         dk_thread int* lo, dk_thread int* hi) {
     float a0, a1;
     float lo_s = mode == 1 ? (float)i - 1.0f : (float)i - 2.0f, hi_s = mode == 1 ? (float)i + 1.0f : (float)i + 2.0f;
     if (mode == 0) { float r = (float)out / (float)in; a0 = (float)i * r; a1 = (float)(i + 1) * r; }
@@ -1533,7 +1631,7 @@ __device__ void rs_range(unsigned int i, unsigned int in, unsigned int out, unsi
 // pass 1 (f0 = 1): dx[pl, y, x] (+)= sum over oy reading y of t[pl, oy, x] wy.
 // p0 source, p1 destination; u0 H, u1 W, u2 oH, u3 oW, u4 mode, u5 align
 // n = planes*oH*W (pass 0), planes*H*W (pass 1)
-extern "C" __global__ void dk_resize_bwd(DevArgs a) {
+DK_KERNEL(dk_resize_bwd) {
     unsigned int H = a.u[0], W = a.u[1], oH = a.u[2], oW = a.u[3], mode = a.u[4], align = a.u[5];
     GS(i, N) {
         unsigned int x = i % W, r = (i / W);
@@ -1542,7 +1640,7 @@ extern "C" __global__ void dk_resize_bwd(DevArgs a) {
         if (a.f[0] == 0.0f) {
             // r = pl * oH + oy: a row of dout
             rs_range(x, W, oW, mode, align, &q0, &q1);
-            TP d = CF(0) + (unsigned long long)r * oW;
+            TP d = CF(0) + (DK_U64)r * oW;
             for (int ox = q0; ox <= q1; ox++) {
                 float w = rs_weight((unsigned int)ox, x, W, oW, mode, align);
                 if (w != 0.0f) s += w * d[ox];
@@ -1551,7 +1649,7 @@ extern "C" __global__ void dk_resize_bwd(DevArgs a) {
         } else {
             unsigned int y = r % H, pl = r / H;
             rs_range(y, H, oH, mode, align, &q0, &q1);
-            TP t = CF(0) + (unsigned long long)pl * oH * W + x;
+            TP t = CF(0) + (DK_U64)pl * oH * W + x;
             for (int oy = q0; oy <= q1; oy++) {
                 float w = rs_weight((unsigned int)oy, y, H, oH, mode, align);
                 if (w != 0.0f) s += w * t[(unsigned int)oy * W];
@@ -1564,8 +1662,12 @@ extern "C" __global__ void dk_resize_bwd(DevArgs a) {
 // ── 16-bit storage (mixed precision) ─────────────────────────────────────────
 // fp16 / bf16 values held as unsigned shorts, converted with round to
 // nearest even (the same bits as float16.h's f32_to_fp16 / f32_to_bf16).
-// Hardware conversions: v_cvt on AMD (_Float16), cvt.rn on NVIDIA.
-#if defined(__HIPCC_RTC__) || defined(__HIP__)
+// Hardware conversions: v_cvt on AMD (_Float16), cvt.rn on NVIDIA, half on
+// Apple GPUs.
+#if defined(__METAL_VERSION__)
+unsigned short f2h_bits(float f) { return as_type<ushort>(half(f)); }
+float h2f_bits(unsigned short b) { return float(as_type<half>(b)); }
+#elif defined(__HIPCC_RTC__) || defined(__HIP__)
 __device__ unsigned short f2h_bits(float f) { _Float16 h = (_Float16)f; return *(unsigned short*)&h; }
 __device__ float h2f_bits(unsigned short b) { return (float)*(_Float16*)&b; }
 #else
@@ -1581,7 +1683,7 @@ __device__ float b2f_bits(unsigned short b) { return __uint_as_float((unsigned i
 // The dynamic loss scale's state (one per device, 4 floats): [scale,
 // 1/scale, overflow flag, good steps].
 // g *= 1/scale, the flag raised on a non-finite value: p0 g, p1 state   n = values
-extern "C" __global__ void dk_amp_unscale(DevArgs a) {
+DK_KERNEL(dk_amp_unscale) {
     TP st = F(1);
     float inv = st[1];
     GS(i, N) {
@@ -1592,15 +1694,15 @@ extern "C" __global__ void dk_amp_unscale(DevArgs a) {
 }
 // Every gradient of a table at once: p0 = u1 entries {g, n, start} (u64),
 // p1 state                                                     n = total values
-extern "C" __global__ void dk_amp_unscale_multi(DevArgs a) {
-    const unsigned long long* T = (const unsigned long long*)a.p[0];
+DK_KERNEL(dk_amp_unscale_multi) {
+    const dk_global DK_U64* T = (const dk_global DK_U64*)a.p[0];
     unsigned int cnt = a.u[1];
     TP st = F(1);
     float inv = st[1];
     GS(i, N) {
         unsigned int lo = 0, hi = cnt - 1;
         while (lo < hi) { unsigned int mid = (lo + hi + 1) / 2; if (T[mid * 3 + 2] <= i) lo = mid; else hi = mid - 1; }
-        float* g = (float*)T[lo * 3];
+        dk_global float* g = (dk_global float*)T[lo * 3];
         unsigned int j = i - (unsigned int)T[lo * 3 + 2];
         float v = g[j] * inv;
         if (!isfinite(v)) st[2] = 1.0f;
@@ -1609,7 +1711,7 @@ extern "C" __global__ void dk_amp_unscale_multi(DevArgs a) {
 }
 // After a step: an overflow halves the scale, u0 good steps in a row double
 // it; the flag is cleared. p0 state                             n = 1
-extern "C" __global__ void dk_amp_update(DevArgs a) {
+DK_KERNEL(dk_amp_update) {
     if (blockIdx.x == 0 && threadIdx.x == 0) {
         TP st = F(0);
         if (st[2] != 0.0f) { st[0] = fmaxf(st[0] * 0.5f, 1.0f); st[3] = 0.0f; }
@@ -1625,7 +1727,7 @@ extern "C" __global__ void dk_amp_update(DevArgs a) {
 // ── Sparse (CSR) x dense: sparse.h ───────────────────────────────────────────
 // out [rows, n] (+)= S [rows, cols] . X [cols, n]; p0 rowPtr, p1 colIdx (as
 // float32 indices), p2 values, p3 X, p4 out; u0 = n, u1 = 1 to accumulate   n = rows*ncols
-extern "C" __global__ void dk_spmm(DevArgs a) {
+DK_KERNEL(dk_spmm) {
     unsigned int NC = a.u[0];
     GS(i, N) {
         unsigned int r = i / NC, j = i % NC;
@@ -1637,7 +1739,7 @@ extern "C" __global__ void dk_spmm(DevArgs a) {
 }
 // dX[cols, n] += S^T . G: one thread per (nonzero, column)          n = nnz*ncols
 // p5 = row of each nonzero
-extern "C" __global__ void dk_spmm_tgrad(DevArgs a) {
+DK_KERNEL(dk_spmm_tgrad) {
     unsigned int NC = a.u[0];
     GS(i, N) {
         unsigned int e = i / NC, j = i % NC;
@@ -1647,7 +1749,7 @@ extern "C" __global__ void dk_spmm_tgrad(DevArgs a) {
 }
 // dvalues[e] += G[row(e), :] . X[col(e), :]                        n = nnz
 // p1 colIdx, p3 X, p4 G, p5 row of each nonzero, p6 dvalues
-extern "C" __global__ void dk_spmm_vgrad(DevArgs a) {
+DK_KERNEL(dk_spmm_vgrad) {
     unsigned int NC = a.u[0];
     GS(e, N) {
         unsigned int r = (unsigned int)CF(5)[e], col = (unsigned int)CF(1)[e];
@@ -1656,3 +1758,85 @@ extern "C" __global__ void dk_spmm_vgrad(DevArgs a) {
         F(6)[e] += s;
     }
 }
+
+// ── Metal only: GEMMs and copies (rocBLAS / cuBLAS and the copy engines' role
+// on the other backends; MpsBackend launches these by name) ────────────────
+#if defined(__METAL_VERSION__)
+// A strided batch of c_i = alpha op(a_i) op(b_i) + beta c_i (device.h's
+// DevGemm), row-major: a, b and c each fp32, fp16 or bf16 (at for a and b,
+// ct for c), products accumulated in fp32. Threadgroups of four simdgroups
+// take 64 x 64 tiles of c, 32 x 32 each on the 8 x 8 matrix units, k in
+// steps of 16 through threadgroup memory; the grid is (n / 64, m / 64, batch).
+struct DkGemm {
+    ulong a, b, c;          // addresses
+    ulong lda, ldb, ldc;
+    ulong sa, sb, sc;       // batch strides, in elements
+    uint m, n, k, ta, tb, at, ct;
+    float alpha, beta;
+};
+#define MK_BM 64u
+#define MK_BN 64u
+#define MK_BK 16u
+inline float mk_ld(ulong base, ulong i, uint t) {
+    if (t == 0u) return ((const device float*)base)[i];
+    ushort h = ((const device ushort*)base)[i];
+    return t == 1u ? h2f_bits(h) : b2f_bits(h);
+}
+inline void mk_st(ulong base, ulong i, uint t, float v) {
+    if (t == 0u) ((device float*)base)[i] = v;
+    else ((device ushort*)base)[i] = t == 1u ? f2h_bits(v) : f2b_bits(v);
+}
+kernel void mk_gemm(constant DkGemm& g [[buffer(0)]], uint3 tg [[threadgroup_position_in_grid]],
+                    uint tid [[thread_index_in_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float As[MK_BM * MK_BK];   // op(a) rows m0.., columns k0..
+    threadgroup float Bs[MK_BK * MK_BN];   // op(b) rows k0.., columns n0..
+    threadgroup float Cs[MK_BM * MK_BN];
+    uint m0 = tg.y * MK_BM, n0 = tg.x * MK_BN;
+    ulong A = g.a + (ulong)tg.z * g.sa * (g.at == 0u ? 4ul : 2ul);
+    ulong B = g.b + (ulong)tg.z * g.sb * (g.at == 0u ? 4ul : 2ul);
+    ulong C = g.c + (ulong)tg.z * g.sc * (g.ct == 0u ? 4ul : 2ul);
+    uint sr = (sg / 2u) * 32u, sc = (sg % 2u) * 32u;
+    simdgroup_float8x8 acc[4][4];
+    for (uint i = 0; i < 4u; i++)
+        for (uint j = 0; j < 4u; j++) acc[i][j] = simdgroup_float8x8(0.0f);
+    for (uint k0 = 0; k0 < g.k; k0 += MK_BK) {
+        // neighbouring threads read neighbouring addresses either way round
+        for (uint e = tid; e < MK_BM * MK_BK; e += 128u) {
+            uint r = g.ta ? e % MK_BM : e / MK_BK, c = g.ta ? e / MK_BM : e % MK_BK;
+            uint gm = m0 + r, gk = k0 + c;
+            As[r * MK_BK + c] = gm < g.m && gk < g.k ? mk_ld(A, g.ta ? (ulong)gk * g.lda + gm : (ulong)gm * g.lda + gk, g.at) : 0.0f;
+        }
+        for (uint e = tid; e < MK_BK * MK_BN; e += 128u) {
+            uint r = g.tb ? e % MK_BK : e / MK_BN, c = g.tb ? e / MK_BK : e % MK_BN;
+            uint gk = k0 + r, gn = n0 + c;
+            Bs[r * MK_BN + c] = gk < g.k && gn < g.n ? mk_ld(B, g.tb ? (ulong)gn * g.ldb + gk : (ulong)gk * g.ldb + gn, g.at) : 0.0f;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint kk = 0; kk < MK_BK; kk += 8u) {
+            simdgroup_float8x8 fa[4], fb[4];
+            for (uint i = 0; i < 4u; i++) simdgroup_load(fa[i], &As[(sr + i * 8u) * MK_BK + kk], MK_BK);
+            for (uint j = 0; j < 4u; j++) simdgroup_load(fb[j], &Bs[kk * MK_BN + sc + j * 8u], MK_BN);
+            for (uint i = 0; i < 4u; i++)
+                for (uint j = 0; j < 4u; j++) simdgroup_multiply_accumulate(acc[i][j], fa[i], fb[j], acc[i][j]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    for (uint i = 0; i < 4u; i++)
+        for (uint j = 0; j < 4u; j++) simdgroup_store(acc[i][j], &Cs[(sr + i * 8u) * MK_BN + sc + j * 8u], MK_BN);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint e = tid; e < MK_BM * MK_BN; e += 128u) {
+        uint gm = m0 + e / MK_BN, gn = n0 + e % MK_BN;
+        if (gm < g.m && gn < g.n) {
+            ulong i = (ulong)gm * g.ldc + gn;
+            float v = g.alpha * Cs[e];
+            if (g.beta != 0.0f) v += g.beta * mk_ld(C, i, g.ct);   // beta 0: c is not read
+            mk_st(C, i, g.ct, v);
+        }
+    }
+}
+// dst[i] = src[i] for n 32-bit words: p0 src, p2 dst, u7 = n (bit-exact,
+// unlike a float copy of words holding two 16-bit values)
+kernel void mk_copy(constant DevArgs_& a [[buffer(0)]], uint i [[thread_position_in_grid]]) {
+    if (i < a.u[7]) ((device uint*)a.p[2])[i] = ((const device uint*)a.p[0])[i];
+}
+#endif
