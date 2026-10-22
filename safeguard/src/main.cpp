@@ -28,6 +28,10 @@ Commands:
                 The std sources a build compiles and the system libraries
                 it links for them (for the project's sources, or for the
                 given std headers and files)
+  std-prebuilt <prefix>
+                Compile std for this machine, in release mode, into
+                <prefix>/lib/<triple>/libsafec_std.a (with its .stamp and
+                .units): the prebuilt archive a release install ships
   test          Build and run every file under tests/ as a standalone binary
   run   [args..]Build and immediately run the output binary
   bundle        Build the bin target and package it per its [bundle] table:
@@ -271,7 +275,7 @@ int main(int argc, char** argv) {
 
     // ── build / check / test / run / bundle / clean ───────────────────────────
     if (cmd == "build" || cmd == "check" || cmd == "test" || cmd == "run" || cmd == "bundle" ||
-        cmd == "clean" || cmd == "std-modules") {
+        cmd == "clean" || cmd == "std-modules" || cmd == "std-prebuilt") {
         safeguard::BuildOptions opts;
         std::vector<std::string> runArgs;
         bool pastSep = false; // '--' separator for run args
@@ -329,7 +333,7 @@ int main(int argc, char** argv) {
                 }
                 continue;
             }
-            if (cmd == "std-modules" && arg.rfind("-", 0) != 0) {
+            if ((cmd == "std-modules" || cmd == "std-prebuilt") && arg.rfind("-", 0) != 0) {
                 runArgs.push_back(arg);
                 continue;
             }
@@ -338,6 +342,23 @@ int main(int argc, char** argv) {
         }
 
         try {
+            if (cmd == "std-prebuilt") {
+                if (runArgs.size() != 1) {
+                    std::cerr << "safeguard: usage: safeguard std-prebuilt <prefix>\n";
+                    return 1;
+                }
+                // Built in a scratch project of its own, removed afterwards.
+                fs::path work = fs::temp_directory_path() /
+                                ("safeguard-std-prebuilt-" + std::to_string(std::rand()));
+                fs::create_directories(work);
+                opts.release = true;
+                safeguard::Manifest none;
+                safeguard::Builder builder(work.string(), none, opts);
+                bool ok = builder.writePrebuiltStd(fs::absolute(runArgs[0]).string());
+                std::error_code ec;
+                fs::remove_all(work, ec);
+                return ok ? 0 : 1;
+            }
             if (cmd == "std-modules" && !runArgs.empty() && !fs::exists("Package.toml")) {
                 // Outside a project: just the named std files and sources
                 // (the std units it compiles cached in a scratch project).

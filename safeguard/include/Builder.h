@@ -132,7 +132,9 @@ public:
     // symbols of its own and its dependencies' IR, see stdRefs) and those
     // modules' own code refer to, to a fixed point — or all of them with
     // [build] std = "all" — each unit compiled to its own cached object,
-    // packed into build/deps/[<target>/]libsafec_std.a.
+    // packed into build/deps/[<target>/]libsafec_std.a. A native build
+    // links the prebuilt archive of a release install instead when there is
+    // a matching one (see findPrebuiltStd), compiling only what it lacks.
     // Sets stdArchive_ ("" when nothing is to be linked) and the system
     // libraries those modules need (stdLinkFlags_, stdDebDepends_; see
     // StdModules.h). With 'link' false, only works out the modules (into
@@ -151,6 +153,14 @@ public:
     // 'safeguard std-modules': what the build (or, given std headers and
     // files in 'args', those) takes from std, and the system libraries.
     bool printStdModules(const std::vector<std::string>& args);
+
+    // 'safeguard std-prebuilt <prefix>': compile every hosted std unit that
+    // no feature gates, in release mode, into
+    // <prefix>/lib/<host triple>/libsafec_std.a with its .stamp (compiler
+    // and target) and .units (each unit's input hash and external symbols)
+    // -- the archive a release install ships and native builds link
+    // instead of compiling std.
+    bool writePrebuiltStd(const std::string& prefix);
 
     // ── Dependency management ─────────────────────────────────────────────────
 
@@ -190,6 +200,7 @@ private:
     std::vector<std::string> stdLinkFlags_;
     std::vector<std::string> stdDebDepends_;
     std::set<std::string> stdUnits_;          // the modules (ensureStdLib)
+    bool stdFromSource_ = false;              // never the prebuilt archive (writePrebuiltStd)
 
     // One std unit's object: compiled into objDir (or reused from there)
     // with the symbols its IR refers to kept beside it (<stem>.refs).
@@ -201,6 +212,28 @@ private:
     };
     bool stdUnitObject(const StdIndex& idx, const std::string& unit, const std::string& objDir,
                        bool compile, StdUnitObj& out) const;
+    // A hash of everything a std unit's compile reads, hex.
+    std::string stdUnitHash(const StdIndex& idx, const std::string& unit) const;
+    mutable std::map<std::string, std::string> fileHashes_;   // std file -> hashFile
+
+    // A release install's prebuilt std archive (see writePrebuiltStd).
+    struct PrebuiltStd {
+        std::string archive;                                  // "" if none
+        std::map<std::string, std::string> unitHash;          // unit -> input hash
+        std::map<std::string, std::set<std::string>> refs;    // unit -> external symbols
+        std::set<std::string> skipped;                        // didn't compile for it
+    };
+    // The one beside the safec this build uses (<bin>/../lib/<triple>/) or
+    // under $SAFEC_HOME/lib/<triple>/, for a native build, if its stamp
+    // matches this compiler and target and nothing opts out
+    // ([build] std_prebuilt = false, SAFEC_STD_FROM_SOURCE=1).
+    PrebuiltStd findPrebuiltStd() const;
+    static bool readPrebuiltUnits(const std::string& file, PrebuiltStd& out);
+    // The stamp a prebuilt archive for this compiler and host carries.
+    std::string prebuiltStdStamp() const;
+    // The host as a target triple (aarch64-apple-darwin, x86_64-unknown-
+    // linux-gnu, x86_64-pc-windows-msvc, ...): a prebuilt archive's directory.
+    static std::string hostTriple();
     // The external symbols of the SafeC sources among 'files', compiled to
     // IR into 'outDir' (for 'std-modules'). False if one doesn't compile.
     bool sourceRefs(const std::vector<std::string>& files, const std::string& outDir,

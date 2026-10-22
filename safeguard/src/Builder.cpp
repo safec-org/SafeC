@@ -1166,6 +1166,177 @@ bool Builder::sourceRefs(const std::vector<std::string>& files, const std::strin
     return true;
 }
 
+// ── hashes ───────────────────────────────────────────────────────────────────
+
+// A std unit's input hash: FNV-1a 64 (as Package.lock's, hashFile) over
+// the paths and hashes of the files its compile reads. It tells versions
+// apart; it doesn't authenticate them.
+namespace {
+struct Fnv64 {
+    unsigned long long h = 14695981039346656037ULL;
+    void add(const std::string& s) {
+        for (char c : s) { h ^= (unsigned char)c; h *= 1099511628211ULL; }
+        h *= 1099511628211ULL;   // a separator (xor 0)
+    }
+    std::string hex() const {
+        char buf[17];
+        std::snprintf(buf, sizeof buf, "%016llx", h);
+        return buf;
+    }
+};
+}
+
+std::string Builder::stdUnitHash(const StdIndex& idx, const std::string& unit) const {
+    Fnv64 h;
+    for (auto& in : idx.compileInputs(unit)) {   // a sorted set: a stable order
+        auto it = fileHashes_.find(in);
+        if (it == fileHashes_.end())
+            it = fileHashes_.emplace(in, hashFile((fs::path(idx.dir) / in).string())).first;
+        h.add(in);
+        h.add(it->second);
+    }
+    return h.hex();
+}
+
+// ── prebuilt std ─────────────────────────────────────────────────────────────
+
+std::string Builder::hostTriple() {
+#if defined(__aarch64__) || defined(_M_ARM64)
+    std::string arch = "aarch64";
+#elif defined(__x86_64__) || defined(_M_X64)
+    std::string arch = "x86_64";
+#else
+    std::string arch = "unknown";
+#endif
+#if defined(__APPLE__)
+    return arch + "-apple-darwin";
+#elif defined(_WIN32)
+    return arch + "-pc-windows-msvc";
+#elif defined(__linux__)
+    return arch + "-unknown-linux-gnu";
+#else
+    return arch + "-unknown-unknown";
+#endif
+}
+
+std::string Builder::prebuiltStdStamp() const {
+    // The compiler by content: its version line alone doesn't change between
+    // the commits of a release.
+    std::string safec = findSafec();
+    if (!fs::path(safec).has_parent_path()) {
+        // A PATH-resolved 'safec': find the file.
+        if (const char* path = std::getenv("PATH")) {
+#ifdef _WIN32
+            const char sep = ';'; std::string file = safec + ".exe";
+#else
+            const char sep = ':'; std::string file = safec;
+#endif
+            std::stringstream ss(path);
+            std::string dir;
+            while (std::getline(ss, dir, sep))
+                if (!dir.empty() && fs::exists(fs::path(dir) / file)) { safec = (fs::path(dir) / file).string(); break; }
+        }
+    }
+    std::string hash = hashFile(safec);   // as Package.lock's
+    if (hash.empty()) return "";
+    std::string version;
+    captureCmd({ safec, "--version" }, version, false);
+    while (!version.empty() && (version.back() == '\n' || version.back() == '\r')) version.pop_back();
+    std::string s = "format=1\ntriple=" + hostTriple() + "\nsafec=" + hash + "\n";
+    std::string rt;
+    for (auto& f : runtimeFlags()) rt += (rt.empty() ? "" : " ") + f;
+    s += "runtime=" + rt + "\n";
+    // Informational; not compared.
+    return s + "safec-version=" + version.substr(0, version.find('\n')) + "\n";
+}
+
+bool Builder::readPrebuiltUnits(const std::string& file, PrebuiltStd& out) {
+    std::ifstream in(file);
+    if (!in) return false;
+    std::string line, cur;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        std::istringstream ss(line);
+        std::string kind, a, b;
+        ss >> kind >> a >> b;
+        if (kind == "unit" || kind == "skip") {
+            out.unitHash[a] = b;
+            if (kind == "skip") out.skipped.insert(a);
+            cur = a;
+            out.refs[cur];
+        } else if (kind == "ref" && !cur.empty()) {
+            out.refs[cur].insert(a);
+        }
+    }
+    return true;
+}
+
+Builder::PrebuiltStd Builder::findPrebuiltStd() const {
+    PrebuiltStd none;
+    if (stdFromSource_ || isCrossTarget()) return none;   // cross, bare metal, wasm: never
+    std::string triple = hostTriple();
+    std::vector<fs::path> cands;
+    std::string safec = findSafec();
+    if (fs::path(safec).has_parent_path())
+        cands.push_back(fs::path(safec).parent_path().parent_path() / "lib" / triple);
+    if (const char* home = std::getenv("SAFEC_HOME"); home && *home)
+        cands.push_back(fs::path(home) / "lib" / triple);
+    fs::path dir;
+    std::error_code ec;
+    for (auto& c : cands)
+        if (fs::exists(c / "libsafec_std.a", ec)) { dir = c; break; }
+    if (dir.empty()) return none;
+    fs::path archive = dir / "libsafec_std.a";
+    auto skip = [&](const std::string& why) {
+        if (opts_.verbose)
+            std::cout << "safeguard: not using the prebuilt std archive " << archive.string() << ": " << why
+                      << "; compiling std from source\n";
+        return none;
+    };
+    if (!manifest_.build.stdPrebuilt) return skip("[build] std_prebuilt = false");
+    if (const char* e = std::getenv("SAFEC_STD_FROM_SOURCE"); e && *e && std::string(e) != "0")
+        return skip("SAFEC_STD_FROM_SOURCE is set");
+    if (!opts_.extraFlags.empty()) return skip("extra compiler flags are given");
+    std::string have;
+    {
+        std::ifstream in(dir / "libsafec_std.stamp");
+        std::stringstream ss;
+        ss << in.rdbuf();
+        have = ss.str();
+    }
+    if (have.empty()) return skip("it has no libsafec_std.stamp");
+    std::string want = prebuiltStdStamp();
+    // Compare all but the informational safec-version line.
+    auto fields = [](const std::string& s) {
+        std::map<std::string, std::string> m;
+        std::istringstream ss(s);
+        std::string l;
+        while (std::getline(ss, l)) {
+            if (!l.empty() && l.back() == '\r') l.pop_back();
+            size_t eq = l.find('=');
+            if (eq != std::string::npos && l.compare(0, eq, "safec-version") != 0) m[l.substr(0, eq)] = l.substr(eq + 1);
+        }
+        return m;
+    };
+    auto h = fields(have), w = fields(want);
+    if (h != w) {
+        std::string why;
+        for (auto& [k, v] : w)
+            if (h[k] != v) {
+                why = k == "safec" ? "it was built by a different safec (stamp " + h[k] + ", " + safec + " is " + v + ")"
+                    : k == "triple" ? "it is for " + h[k] + ", not " + v
+                    : "its " + k + " is '" + h[k] + "', this build's '" + v + "'";
+                break;
+            }
+        if (why.empty()) why = "its stamp is of another format";
+        return skip(why);
+    }
+    PrebuiltStd p;
+    if (!readPrebuiltUnits((dir / "libsafec_std.units").string(), p)) return skip("it has no libsafec_std.units");
+    p.archive = archive.string();
+    return p;
+}
+
 bool Builder::stdUnitObject(const StdIndex& idx, const std::string& unit, const std::string& objDirS,
                             bool compile, StdUnitObj& out) const {
     fs::path objDir(objDirS);
@@ -1246,6 +1417,20 @@ bool Builder::ensureStdLib(const std::set<std::string>& roots, const std::set<st
     }
     StdPlatform plat = stdPlatform();
 
+    // Where the units' objects come from: the prebuilt archive of a release
+    // install, as far as it has them unchanged (std/ newer than it is
+    // compiled here), or SAFEC_STD_ARCHIVE's archive, or compiled here.
+    PrebuiltStd pre;
+    if (!given.empty()) {
+        // Its units' symbols, if it is a prebuilt one (see writePrebuiltStd).
+        readPrebuiltUnits(fs::path(given).replace_extension(".units").string(), pre);
+        pre.unitHash.clear();
+    } else {
+        pre = findPrebuiltStd();
+        if (!pre.archive.empty() && opts_.verbose)
+            std::cout << "safeguard: linking the prebuilt std archive " << pre.archive << "\n";
+    }
+
     // Each unit compiled here gets its own object under
     // build/deps/[<target>/]std/, reused until the unit or a std header it
     // includes changes, or the compiler does. The stamp records which
@@ -1272,14 +1457,31 @@ bool Builder::ensureStdLib(const std::set<std::string>& roots, const std::set<st
     fs::create_directories(objDir);
     std::ofstream(objDir / "build.stamp") << stamp;
 
-    // A unit: compiled here (with SAFEC_STD_ARCHIVE, only what was compiled
-    // before is known of it).
+    // A unit: from the prebuilt archive when it has it built from the same
+    // inputs (its 'stale' members are replaced), else compiled here.
     std::map<std::string, StdUnitObj> done;
+    std::set<std::string> stale;   // prebuilt members compiled here instead
     std::set<std::string> allRefs = refs;
     bool compileHere = given.empty();
     auto process = [&](const std::string& unit) -> bool {
         if (done.count(unit)) return true;
         StdUnitObj u;
+        auto h = pre.unitHash.find(unit);
+        if (!pre.archive.empty() && h != pre.unitHash.end()) {
+            if (h->second == stdUnitHash(idx, unit)) {
+                u.skipped = pre.skipped.count(unit) > 0;
+                u.refs = pre.refs[unit];
+                done[unit] = u;
+                allRefs.insert(u.refs.begin(), u.refs.end());
+                return true;
+            }
+            if (opts_.verbose)
+                std::cout << "safeguard: std/" << unit << " changed since the prebuilt archive was built; built here instead\n";
+            if (!pre.skipped.count(unit)) stale.insert(unit);
+        } else if (!given.empty()) {
+            auto r = pre.refs.find(unit);
+            if (r != pre.refs.end()) u.refs = r->second;
+        }
         if (!stdUnitObject(idx, unit, objDir.string(), compileHere, u)) return false;
         allRefs.insert(u.refs.begin(), u.refs.end());
         done[unit] = u;
@@ -1345,10 +1547,23 @@ bool Builder::ensureStdLib(const std::set<std::string>& roots, const std::set<st
         auto t = fs::last_write_time(u.obj, ec);
         if (!ec && fs::exists(libPath) && t > fs::last_write_time(libPath, ec)) rebuilt = true;
     }
+    if (!pre.archive.empty() && objs.empty()) {
+        // Everything is in the prebuilt archive.
+        stdArchive_ = pre.archive;
+        return true;
+    }
+
     // One archive of them, repacked when its member list or a member
-    // changes.
+    // changes. With a prebuilt archive: a copy of it, its stale members
+    // dropped and the ones compiled here added -- one archive, so no unit
+    // is linked twice, and no archive order to get right.
     if (objs.empty()) return true;
     std::string members;
+    if (!pre.archive.empty()) {
+        members = "prebuilt=" + pre.archive + " " +
+                  std::to_string((long long)fs::last_write_time(pre.archive, ec).time_since_epoch().count()) + "\n";
+        for (auto& s : stale) members += "replaces=" + s + "\n";
+    }
     for (auto& o : objs) members += o + "\n";
     fs::path membersPath = fs::path(libPath).concat(".members");
     std::stringstream prev;
@@ -1358,10 +1573,78 @@ bool Builder::ensureStdLib(const std::set<std::string>& roots, const std::set<st
     }
     if (rebuilt || prev.str() != members || !fs::exists(libPath, ec)) {
         fs::remove(libPath, ec);   // ar adds to an existing archive
+        if (!pre.archive.empty()) {
+            fs::copy_file(pre.archive, libPath, fs::copy_options::overwrite_existing, ec);
+            if (ec) {
+                std::cerr << "safeguard: cannot copy " << pre.archive << ": " << ec.message() << "\n";
+                return false;
+            }
+            if (!stale.empty()) {
+                std::string ar = findLlvmTool("llvm-ar");
+                if (ar == "llvm-ar") ar = "ar";
+                std::vector<std::string> cmd = { ar, "d", libPath.string() };
+                for (auto& s : stale) {
+                    std::string stem = s;
+                    for (char& c : stem) if (c == '/' || c == '.') c = '_';
+                    cmd.push_back(stem + ".o");
+                }
+                if (runCmd(cmd, opts_.verbose) != 0) {
+                    std::cerr << "safeguard: ar d failed for " << libPath.string() << "\n";
+                    return false;
+                }
+            }
+        }
         if (!packArchive(objs, libPath.string())) return false;
         std::ofstream(membersPath) << members;
     }
     stdArchive_ = libPath.string();
+    return true;
+}
+
+// ── public: std-prebuilt ─────────────────────────────────────────────────────
+
+bool Builder::writePrebuiltStd(const std::string& prefix) {
+    if (isCrossTarget()) {
+        std::cerr << "safeguard: std-prebuilt builds for the host only (no --target)\n";
+        return false;
+    }
+    std::string stdDir = findStdDir();
+    if (stdDir.empty()) {
+        std::cerr << "safeguard: cannot find SafeC std/ directory; set SAFEC_HOME\n";
+        return false;
+    }
+    stdFromSource_ = true;
+    const StdIndex& idx = StdIndex::load(stdDir);
+    StdPlatform plat = stdPlatform();
+    plat.features.clear();
+    fs::path out = fs::path(prefix) / "lib" / hostTriple();
+    fs::create_directories(out);
+    fs::path objDir = fs::path(root_) / "build" / "deps" / "std";
+    std::error_code ec;
+    fs::remove_all(objDir, ec);
+    fs::create_directories(objDir);
+    std::string stamp = prebuiltStdStamp();
+    if (stamp.empty()) {
+        std::cerr << "safeguard: cannot read the compiler " << findSafec() << "\n";
+        return false;
+    }
+    std::vector<std::string> objs;
+    std::ostringstream units;
+    units << "# safeguard prebuilt std: 'unit <std file> <input hash>' (or 'skip ...': it doesn't\n"
+             "# compile for this target), then the external symbols its IR refers to, 'ref <name>'\n";
+    for (auto& unit : idx.allUnits(plat, /*featureBackends=*/false)) {
+        StdUnitObj u;
+        if (!stdUnitObject(idx, unit, objDir.string(), true, u)) return false;
+        units << (u.skipped ? "skip " : "unit ") << unit << " " << stdUnitHash(idx, unit) << "\n";
+        for (auto& r : u.refs) units << "ref " << r << "\n";
+        if (!u.obj.empty()) objs.push_back(u.obj);
+    }
+    fs::path lib = out / "libsafec_std.a";
+    fs::remove(lib, ec);
+    if (objs.empty() || !packArchive(objs, lib.string())) return false;
+    std::ofstream(out / "libsafec_std.units", std::ios::binary) << units.str();
+    std::ofstream(out / "libsafec_std.stamp", std::ios::binary) << stamp;
+    std::cout << "safeguard: wrote " << lib.string() << " (" << objs.size() << " std units)\n";
     return true;
 }
 

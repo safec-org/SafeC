@@ -649,6 +649,44 @@ else
     echo "  [SKIP] python3 not available"
 fi
 
+# ── 5d. prebuilt std archive ─────────────────────────────────────────────────
+# A release install ships std prebuilt for its platform (package.sh, as
+# release.yml packages it): a native build with that safec links it and
+# compiles no std; a stamp naming another compiler is ignored, and std is
+# compiled from source again.
+section "prebuilt std archive"
+PRE="$(mktemp -d)"
+if bash "$SAFEC_HOME/.github/scripts/package.sh" "$PRE/inst" "$SAFEC_BIN" "$SAFEGUARD_BIN" >/tmp/sg_pkg.txt 2>&1 &&
+   ls "$PRE"/inst/lib/*/libsafec_std.a "$PRE"/inst/lib/*/libsafec_std.stamp "$PRE"/inst/lib/*/libsafec_std.units >/dev/null 2>&1; then
+    pass "package.sh lays out an install with lib/$(basename "$(dirname "$(ls "$PRE"/inst/lib/*/libsafec_std.a)")")/libsafec_std.a"
+    IBIN="$PRE/inst/bin/$(basename "$SAFEGUARD_BIN")"
+    mkdir -p "$PRE/app/src"
+    printf '[package]\nname = "pre_app"\nversion = "0.1.0"\n\n[build]\nedition = "2026"\n' > "$PRE/app/Package.toml"
+    printf '#include <std/io.h>\n#include <std/collections/vec.h>\nint main() { std::println("prebuilt std ok"); return 0; }\n' \
+        > "$PRE/app/src/main.sc"
+    pre_build() { (cd "$PRE/app" && rm -rf build && env -u SAFEC -u SAFEC_STD_ARCHIVE SAFEC_HOME="$PRE/inst" "$IBIN" run --verbose); }
+    if pre_build >/tmp/sg_pre.txt 2>&1 && grep -q "linking the prebuilt std archive" /tmp/sg_pre.txt &&
+       grep -q "prebuilt std ok" /tmp/sg_pre.txt && [[ -z "$(ls "$PRE"/app/build/deps/std/*.o 2>/dev/null)" ]]; then
+        pass "a native build links the prebuilt std archive, compiling no std"
+    else
+        fail "a native build with the prebuilt std archive"
+        cat /tmp/sg_pre.txt
+    fi
+    STAMP="$(ls "$PRE"/inst/lib/*/libsafec_std.stamp)"
+    sed 's/^safec=.*/safec=0000000000000000/' "$STAMP" > "$PRE/stamp" && cp "$PRE/stamp" "$STAMP"
+    if pre_build >/tmp/sg_pre2.txt 2>&1 && grep -q "not using the prebuilt std archive.*different safec" /tmp/sg_pre2.txt &&
+       grep -q "prebuilt std ok" /tmp/sg_pre2.txt && [[ -n "$(ls "$PRE"/app/build/deps/std/*.o 2>/dev/null)" ]]; then
+        pass "a prebuilt std archive stamped for another compiler is ignored (std compiled from source)"
+    else
+        fail "a stale prebuilt std archive"
+        cat /tmp/sg_pre2.txt
+    fi
+else
+    fail "package.sh"
+    cat /tmp/sg_pkg.txt
+fi
+rm -rf "$PRE"
+
 # ── 6. sc-lsp wire-protocol smoke test ────────────────────────────────────────
 section "sc-lsp initialize handshake"
 REQUEST='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":null,"capabilities":{}}}'
