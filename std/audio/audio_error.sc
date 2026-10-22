@@ -113,6 +113,19 @@ struct AudioError AudioError::make_code(int code, const &char prefix, long long 
 int AudioError::ok() const { return self.code == AUDIO_OK || self.code == AUDIO_ERR_WARNING; }
 int AudioError::failed() const { return !(self.code == AUDIO_OK || self.code == AUDIO_ERR_WARNING); }
 
+int audio_fail_(&AudioError e, int code, const &char message) {
+    *e = AudioError::make(code, message);
+    return code;
+}
+int audio_fail2_(&AudioError e, int code, const &char prefix, const &char detail) {
+    *e = AudioError::make2(code, prefix, detail);
+    return code;
+}
+int audio_fail_code_(&AudioError e, int code, const &char prefix, long long value) {
+    *e = AudioError::make_code(code, prefix, value);
+    return code;
+}
+
 const &char audio_error_name(int code) {
     if (code == AUDIO_OK) return "ok";
     if (code == AUDIO_ERR_WARNING) return "warning";

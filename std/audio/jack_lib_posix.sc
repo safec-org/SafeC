@@ -56,6 +56,7 @@ int audio_jack_load_() {
         g_std_audio_jack_.midi_clear_buffer = (JackMidiClear_)audio_jack_sym_(lib, "jack_midi_clear_buffer", &ok);
         g_std_audio_jack_.midi_event_write = (JackMidiWrite_)audio_jack_sym_(lib, "jack_midi_event_write", &ok);
         g_std_audio_jack_.frame_time = (JackFrameTime_)audio_jack_sym_(lib, "jack_frame_time", &ok);
+        g_std_audio_jack_.get_client_name = (JackClientName_)audio_jack_sym_(lib, "jack_get_client_name", &ok);
         if (!ok) return 0;
         g_std_audio_jack_.set_error_function((void*)audio_jack_quiet_);
         g_std_audio_jack_.set_info_function((void*)audio_jack_quiet_);

@@ -147,21 +147,6 @@ int audio_default_api() {
     return AUDIO_API_DUMMY;
 }
 
-// ── error helpers ────────────────────────────────────────────────────────
-
-int audio_fail_(&AudioError e, int code, const &char message) {
-    *e = AudioError::make(code, message);
-    return code;
-}
-int audio_fail2_(&AudioError e, int code, const &char prefix, const &char detail) {
-    *e = AudioError::make2(code, prefix, detail);
-    return code;
-}
-int audio_fail_code_(&AudioError e, int code, const &char prefix, long long value) {
-    *e = AudioError::make_code(code, prefix, value);
-    return code;
-}
-
 // ── device lists ─────────────────────────────────────────────────────────
 
 int AudioDeviceInfo::supports_rate(unsigned int rate) const {

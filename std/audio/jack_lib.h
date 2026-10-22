@@ -43,6 +43,7 @@ typedef fn int(&JackMidiEvent_, void*, unsigned int) JackMidiGet_;
 typedef fn void(void*) JackMidiClear_;
 typedef fn int(void*, unsigned int, const unsigned char*, size_t) JackMidiWrite_;
 typedef fn unsigned int(const void*) JackFrameTime_;                // jack_last_frame_time, jack_frame_time
+typedef fn const char*(void*) JackClientName_;
 
 struct JackLib_ {
     int loaded;      // 0 not tried, 1 ok, -1 unavailable
@@ -71,6 +72,7 @@ struct JackLib_ {
     JackMidiClear_ midi_clear_buffer;
     JackMidiWrite_ midi_event_write;
     JackFrameTime_ frame_time;
+    JackClientName_ get_client_name;
 };
 
 // The loaded library (fields valid after audio_jack_load_() returned 1).

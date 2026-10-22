@@ -170,10 +170,4 @@ int  audio_stream_thread_start_(&AudioStreamState_ st, fn void(&AudioStreamState
 // Joins the stream thread if one is live. Never from the stream thread.
 void audio_stream_thread_join_(&AudioStreamState_ st);
 
-// Fills 'e' (code + message) and returns the code: the backends' one-liner
-// for "set the error and fail".
-int audio_fail_(&AudioError e, int code, const &char message);
-int audio_fail2_(&AudioError e, int code, const &char prefix, const &char detail);
-int audio_fail_code_(&AudioError e, int code, const &char prefix, long long value);
-
 } // namespace std

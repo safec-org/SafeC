@@ -50,6 +50,12 @@ struct AudioError {
 // The fixed English name of an AUDIO_ERR_* code ("unsupported", ...).
 const &char audio_error_name(int code);
 
+// Fill 'e' (code + message) and return the code: std/audio's one-liner
+// for "set the error and fail".
+int audio_fail_(&AudioError e, int code, const &char message);
+int audio_fail2_(&AudioError e, int code, const &char prefix, const &char detail);
+int audio_fail_code_(&AudioError e, int code, const &char prefix, long long value);
+
 // Bounded string helpers std/audio uses for device and port names (no libc
 // on wasm32). Copy 'src' into 'dst' (capacity 'cap', always NUL-terminated);
 // append; length; equality.
