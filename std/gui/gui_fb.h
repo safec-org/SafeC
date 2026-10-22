@@ -24,6 +24,11 @@ struct GuiFbConfig {
 // Without it GuiWindow::create() fails (its 'platform' is null).
 void gui_fb_configure(struct GuiFbConfig cfg);
 
+// A monotonic clock for timers and animation (GuiApp, gui_time_ms()):
+// e.g. a SysTick or TSC-based counter, in nanoseconds. Without one, time
+// is virtual and only moves while the event loop waits.
+void gui_fb_set_clock(fn long long() nowNs);
+
 // Called by a target's own input driver/ISR with whatever it decodes (e.g.
 // a PS/2 scancode translated to a GuiEvent); GuiWindow::poll_event() hands it back
 // out. Dropped when GUI_FB_QUEUE_CAP events are already waiting.

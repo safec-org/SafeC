@@ -117,6 +117,7 @@ struct Token {
     int64_t  intVal      = 0;
     double   floatVal    = 0.0;
     bool     isLongLong  = false;  // LL/ll suffix
+    bool     isFloat32   = false;  // f/F suffix on a floating literal
     bool     isUnsigned  = false;  // U/u suffix
 
     Token() = default;

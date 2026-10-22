@@ -1,7 +1,6 @@
 // std::gui, headless: drawing primitives, PNG decode, SVG, bitmap fonts and
 // the widget pipeline (layout/render/dispatch), all into a RAM-backed
-// GuiWindow. No windowing backend is linked: this file supplies
-// GuiWindow::set_pixel itself (straight RGBA, like the framebuffer backend).
+// GuiWindow (GuiWindow::offscreen: a pixel buffer with no window behind it).
 #include <std/test/test.h>
 #include <std/mem.h>
 #include <std/panic.h>
@@ -13,31 +12,12 @@
 #include <std/gui/gui_font.h>
 #include <std/gui/gui_widget.h>
 
-namespace std {
-void GuiWindow::set_pixel(int x, int y, unsigned int rgba) {
-    if (x < 0 || y < 0 || x >= self.width || y >= self.height) { return; }
-    unsafe {
-        unsigned long i = ((unsigned long)y * (unsigned long)self.width + (unsigned long)x) * 4UL;
-        self.pixels[i + 0UL] = (unsigned char)((rgba >> 24) & 0xFFU);
-        self.pixels[i + 1UL] = (unsigned char)((rgba >> 16) & 0xFFU);
-        self.pixels[i + 2UL] = (unsigned char)((rgba >> 8) & 0xFFU);
-        self.pixels[i + 3UL] = (unsigned char)(rgba & 0xFFU);
-    }
-}
-}
-
 static struct GuiWindow make_win(int w, int h) {
-    struct GuiWindow win;
-    win.platform = null;
-    unsafe { win.pixels = (&heap unsigned char)alloc_zeroed_raw_((unsigned long)(w * h * 4)); }
-    win.width = w;
-    win.height = h;
-    win.shouldClose = 0;
-    return win;
+    return GuiWindow::offscreen(w, h);
 }
 
 static void free_win(&GuiWindow win) {
-    unsafe { dealloc_raw_((void*)win.pixels); }
+    win.destroy();
 }
 
 // Channel c (0=R .. 3=A) of pixel (x, y).
@@ -410,14 +390,17 @@ void t_widgets() {
     root.dispatch_event(&up);
     ASSERT_EQ(gClicks, 1);
 
+    btn.set_enabled(1);                                 // (disabled widgets aren't focusable)
+    ASSERT_EQ(box.focused, 1);                          // clicking focused the check box
     struct GuiEvent tab = mouse(GUI_EVENT_KEY_DOWN, 0.0, 0.0);
     tab.keycode = GUI_KEY_TAB;
     tab.prevent_default();                              // suppresses Tab's focus move
     root.dispatch_event(&tab);
     ASSERT_EQ(btn.focused, 0);
     tab.defaultPrevented = 0;
-    root.dispatch_event(&tab);                          // default action: focus the first focusable
+    root.dispatch_event(&tab);                          // default action: the next focusable (wrapping)
     ASSERT_EQ(btn.focused, 1);
+    ASSERT_EQ(box.focused, 0);
 
     struct GuiWindow win = make_win(100, 100);
     root.set_bg((unsigned char)255, (unsigned char)0, (unsigned char)0, (unsigned char)255);

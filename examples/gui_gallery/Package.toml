@@ -1,0 +1,12 @@
+[package]
+name        = "gui_gallery"
+version     = "1.0.0"
+author      = "SafeC <safec@example.org>"
+description = "Every std/gui widget, and the vector canvas, in two windows"
+license     = "MIT"
+
+[build]
+edition = "2026"
+
+# Like examples/gui_hello, no libraries to list: std/gui's backend for the
+# OS brings its own.
