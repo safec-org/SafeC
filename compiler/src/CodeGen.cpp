@@ -548,7 +548,7 @@ llvm::Value *CodeGen::genNew(NewExpr &e, FnEnv &env) {
     // whatever bytes happen to precede the block as a bad magic value and
     // abort ("mismatched allocator or corrupted heap") — 'new'/'dealloc'
     // must share the same allocator for the compile-time UAF/double-free
-    // tracking (see Sema::heapFreeGeneration_) to correspond to anything
+    // analysis (see MemoryFlow.cpp) to correspond to anything
     // real at runtime.
     auto allocFn = mod_->getOrInsertFunction("std_alloc_raw_",
         llvm::FunctionType::get(PtrTy, {Int64Ty}, false));
