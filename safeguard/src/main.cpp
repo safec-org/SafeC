@@ -24,6 +24,9 @@ Commands:
   check         Fast compile-only pass — reports errors without linking
   test          Build and run every file under tests/ as a standalone binary
   run   [args..]Build and immediately run the output binary
+  bundle        Build the bin target and package it per its [bundle] table:
+                build/<name>.app (macOS), build/<name>/ (Windows),
+                a .deb and build/<name>.AppDir (Linux)
   clean         Remove the build/ and deps/ directories
   verify-lock   Check Package.lock against current dependency state
   lint          Run static-analysis lint passes on all source files
@@ -61,6 +64,20 @@ Dependency format in Package.toml:
   [build.macos] / [build.linux] / [build.windows]
     cflags, libs, lib_dirs, frameworks — added only when building for that OS
 
+[bundle] format (for 'safeguard bundle'):
+  [bundle]
+  name       = "Hello"                 # default: package name
+  identifier = "org.example.hello"     # required
+  version    = "1.0.0"                 # default: package version
+  icon       = "assets/icon.png"       # .png (any OS), .icns, .ico
+  resources  = ["assets/data"]         # copied into the bundle
+  category   = "Utility"               # or "public.app-category.*"
+  copyright  = "(c) 2026 Example"
+  subsystem  = "windows"               # Windows: "windows" (GUI) / "console"
+  min_system_version = "11.0"          # macOS LSMinimumSystemVersion
+  codesign_identity  = "-"             # macOS: "-" ad-hoc, identity, "none"
+  depends    = ["libx11-6"]            # Linux: the .deb's Depends
+
 Options (build / run / check / test):
   --release     Enable optimisations (-O2)
   --emit-llvm   Stop after emitting LLVM IR (do not link) [build only]
@@ -81,6 +98,10 @@ Options (build / run / check / test):
                             become imports; std/wasm/wasm_rt supplies the
                             runtime).
                             'test' builds without running; 'run' is refused.
+
+Options (bundle):
+  --sign <identity>        macOS code-signing identity ("-" = ad-hoc,
+                            "none" = unsigned); overrides codesign_identity
 
 [features] format in Package.toml (Rust-Cargo-style; see advanced/safeguard
 docs for the full write-up):
@@ -235,8 +256,9 @@ int main(int argc, char** argv) {
         }
     }
 
-    // ── build / check / test / run / clean ─────────────────────────────────────
-    if (cmd == "build" || cmd == "check" || cmd == "test" || cmd == "run" || cmd == "clean") {
+    // ── build / check / test / run / bundle / clean ───────────────────────────
+    if (cmd == "build" || cmd == "check" || cmd == "test" || cmd == "run" || cmd == "bundle" ||
+        cmd == "clean") {
         safeguard::BuildOptions opts;
         std::vector<std::string> runArgs;
         bool pastSep = false; // '--' separator for run args
@@ -258,6 +280,14 @@ int main(int argc, char** argv) {
                 continue;
             }
             if (arg.rfind("--target=", 0) == 0) { opts.target = arg.substr(9); continue; }
+            if (arg == "--sign" && cmd == "bundle") {
+                if (i + 1 >= argc) {
+                    std::cerr << "safeguard: --sign requires an identity (\"-\" for ad-hoc)\n";
+                    return 1;
+                }
+                opts.signIdentity = argv[++i];
+                continue;
+            }
             if (arg == "--features") {
                 if (i + 1 >= argc) {
                     std::cerr << "safeguard: --features requires an argument\n";
@@ -306,6 +336,9 @@ int main(int argc, char** argv) {
             }
             if (cmd == "test") {
                 return builder.test() ? 0 : 1;
+            }
+            if (cmd == "bundle") {
+                return builder.bundle() ? 0 : 1;
             }
             if (cmd == "run") {
                 int rc = builder.run(runArgs);

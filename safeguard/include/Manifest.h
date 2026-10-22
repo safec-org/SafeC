@@ -66,9 +66,29 @@ struct BuildConfig {
     PlatformBuildConfig forMacos, forLinux, forWindows;   // [build.<os>]
 };
 
+// [bundle]: how 'safeguard bundle' packages a bin target as an application
+// (build/<name>.app on macOS, build/<name>/ on Windows, a .deb and an
+// AppDir on Linux).
+struct BundleConfig {
+    bool present = false;          // the manifest has a [bundle] table
+    std::string name;              // display name (defaults to package.name)
+    std::string identifier;        // reverse-DNS id, e.g. "org.example.hello" (required)
+    std::string version;           // defaults to package.version
+    std::string icon;              // .png (any platform), .icns (macOS) or .ico (Windows)
+    std::vector<std::string> resources; // files/directories copied into the bundle
+    std::string category;          // freedesktop category ("Utility", ...) or a
+                                   // macOS "public.app-category.*" type
+    std::string copyright;
+    std::string subsystem;         // Windows: "windows" (default) or "console"
+    std::string minSystemVersion;  // macOS LSMinimumSystemVersion (default "11.0")
+    std::string codesignIdentity;  // macOS: "-" (ad-hoc, default), an identity, or "none"
+    std::vector<std::string> depends; // Linux: the .deb's Depends
+};
+
 struct Manifest {
     PackageInfo  package;
     BuildConfig  build;
+    BundleConfig bundle;
     std::vector<Dependency> dependencies;
 
     // [features] table, Cargo-style: name -> list of other feature names it

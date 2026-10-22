@@ -1961,7 +1961,9 @@ bool Builder::build() {
         if (!exportHeaders(root_, exportedIncludeDir())) return false;
         if (!copyRuntimeLibs(buildDir)) return false;
     } else {
-        if (!linkFinal(objFiles, archives, outputPath(), hasCpp, /*shared=*/false, hasObjC))
+        std::vector<std::string> extra;
+        if (opts_.bundle && !bundleLinkFlags(extra)) return false;
+        if (!linkFinal(objFiles, archives, outputPath(), hasCpp, /*shared=*/false, hasObjC, extra))
             return false;
         if (!copyRuntimeLibs(buildDir)) return false;
     }
@@ -2171,6 +2173,617 @@ int Builder::run(const std::vector<std::string>& args) {
     std::vector<std::string> cmd = { out };
     for (auto& a : args) cmd.push_back(a);
     return runCmd(cmd, opts_.verbose);
+}
+
+// ── public: bundle ───────────────────────────────────────────────────────────
+// 'safeguard bundle' packages a bin target with its [bundle] settings:
+//   macOS    build/<name>.app — Contents/MacOS/<exe>, Info.plist, Resources/
+//            (icon, resources), Frameworks/ (the dependencies' dylibs),
+//            code-signed (ad-hoc unless an identity is given)
+//   Windows  build/<name>/ — <exe>.exe linked for the GUI subsystem with an
+//            icon/version/manifest resource, the dependencies' DLLs, the
+//            resources: a portable app folder
+//   Linux    build/<pkg>_<version>_<arch>.deb (dpkg-deb) and the same tree
+//            as build/<name>.AppDir
+
+namespace {
+
+// Width and height of a PNG (from its IHDR chunk); false if it isn't one.
+bool pngSize(const fs::path& file, unsigned& w, unsigned& h) {
+    std::ifstream in(file, std::ios::binary);
+    unsigned char b[24];
+    if (!in.read(reinterpret_cast<char*>(b), sizeof b)) return false;
+    static const unsigned char sig[8] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
+    if (std::memcmp(b, sig, 8) != 0 || std::memcmp(b + 12, "IHDR", 4) != 0) return false;
+    w = (unsigned)b[16] << 24 | (unsigned)b[17] << 16 | (unsigned)b[18] << 8 | b[19];
+    h = (unsigned)b[20] << 24 | (unsigned)b[21] << 16 | (unsigned)b[22] << 8 | b[23];
+    return true;
+}
+
+// Copy a resource (a file, or a directory with its contents) into 'destDir'
+// under its own name.
+bool copyResource(const fs::path& src, const fs::path& destDir) {
+    std::error_code ec;
+    if (!fs::exists(src)) {
+        std::cerr << "safeguard: bundle resource not found: " << src.string() << "\n";
+        return false;
+    }
+    fs::create_directories(destDir, ec);
+    fs::path dest = destDir / src.filename();
+    if (fs::is_directory(src))
+        fs::copy(src, dest, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+    else
+        fs::copy_file(src, dest, fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+        std::cerr << "safeguard: could not copy " << src.string() << ": " << ec.message() << "\n";
+        return false;
+    }
+    return true;
+}
+
+std::string xmlEscape(const std::string& s) {
+    std::string out;
+    for (char c : s) {
+        if (c == '&') out += "&amp;";
+        else if (c == '<') out += "&lt;";
+        else if (c == '>') out += "&gt;";
+        else if (c == '"') out += "&quot;";
+        else out += c;
+    }
+    return out;
+}
+
+// The numeric parts of a version ("1.2.3-beta" -> 1, 2, 3, 0) — Windows'
+// version resource and manifest want four numbers.
+std::vector<unsigned> versionParts(const std::string& v) {
+    std::vector<unsigned> parts;
+    size_t i = 0;
+    while (parts.size() < 4 && i < v.size() && std::isdigit((unsigned char)v[i])) {
+        unsigned n = 0;
+        while (i < v.size() && std::isdigit((unsigned char)v[i])) n = n * 10 + (unsigned)(v[i++] - '0');
+        parts.push_back(n > 65535 ? 65535 : n);
+        if (i < v.size() && v[i] == '.') ++i; else break;
+    }
+    while (parts.size() < 4) parts.push_back(0);
+    return parts;
+}
+
+// [bundle] category: a freedesktop main category ("Utility", ...) or a
+// macOS "public.app-category.*" type, translated for the other platform
+// where there's a counterpart.
+const std::pair<const char*, const char*> kCategories[] = {
+    { "Utility",     "public.app-category.utilities" },
+    { "Development", "public.app-category.developer-tools" },
+    { "Game",        "public.app-category.games" },
+    { "Graphics",    "public.app-category.graphics-design" },
+    { "Education",   "public.app-category.education" },
+    { "Office",      "public.app-category.productivity" },
+    { "AudioVideo",  "public.app-category.music" },
+    { "Audio",       "public.app-category.music" },
+    { "Video",       "public.app-category.video" },
+    { "Network",     "public.app-category.social-networking" },
+    { "Science",     "public.app-category.education" },
+    { "Finance",     "public.app-category.finance" },
+};
+
+std::string macCategory(const std::string& c) {
+    if (c.rfind("public.app-category.", 0) == 0) return c;
+    for (auto& [fd, mac] : kCategories) if (c == fd) return mac;
+    return "";
+}
+
+std::string desktopCategory(const std::string& c) {
+    if (c.rfind("public.app-category.", 0) != 0) return c.empty() ? "Utility" : c;
+    for (auto& [fd, mac] : kCategories) if (c == mac) return fd;
+    return "Utility";
+}
+
+// A Debian package name: lowercase letters, digits, '+', '-', '.'.
+std::string debName(const std::string& name) {
+    std::string out;
+    for (char c : name) {
+        char l = (char)std::tolower((unsigned char)c);
+        out += (std::isalnum((unsigned char)l) || l == '+' || l == '.' || l == '-') ? l : '-';
+    }
+    return out;
+}
+
+std::string trimmed(std::string s) {
+    while (!s.empty() && std::isspace((unsigned char)s.back())) s.pop_back();
+    size_t i = 0;
+    while (i < s.size() && std::isspace((unsigned char)s[i])) ++i;
+    return s.substr(i);
+}
+
+} // namespace
+
+bool Builder::bundleLinkFlags(std::vector<std::string>& out) const {
+    std::string os = targetOS();
+    if (os == "macos") {
+        // The bundled dylibs (bundleMacOS) are found through this rpath.
+        out.push_back("-Wl,-rpath,@executable_path/../Frameworks");
+    } else if (os == "linux") {
+        // /usr/lib/<pkg>/ in the .deb, and the same place in the AppDir.
+        out.push_back("-Wl,-rpath,$ORIGIN/../lib/" + debName(manifest_.package.name));
+    } else if (os == "windows") {
+        std::string res = windowsResource();
+        if (res.empty()) return false;
+        out.push_back(res);
+        out.push_back("-Wl,/MANIFEST:NO");   // the resource carries the manifest
+        if (manifest_.bundle.subsystem == "windows") {
+            // No console window; mainCRTStartup still calls a plain main().
+            out.push_back("-Wl,/SUBSYSTEM:WINDOWS");
+            out.push_back("-Wl,/ENTRY:mainCRTStartup");
+        }
+    }
+    return true;
+}
+
+std::string Builder::windowsResource() const {
+    const BundleConfig& b = manifest_.bundle;
+    fs::path dir = fs::path(root_) / "build" / "bundle";
+    fs::create_directories(dir);
+    std::vector<unsigned> v = versionParts(b.version);
+    std::string v4 = std::to_string(v[0]) + "." + std::to_string(v[1]) + "." +
+                     std::to_string(v[2]) + "." + std::to_string(v[3]);
+
+    // The icon: an .ico as is, a .png wrapped in a one-image .ico (Windows
+    // reads PNG-compressed icon images, up to 256x256).
+    fs::path ico;
+    if (!b.icon.empty()) {
+        fs::path icon = fs::path(root_) / b.icon;
+        std::string ext = icon.extension().string();
+        unsigned w = 0, h = 0;
+        if (!fs::exists(icon)) {
+            std::cerr << "safeguard: bundle icon not found: " << icon.string() << "\n";
+            return "";
+        }
+        if (ext == ".ico") {
+            ico = icon;
+        } else if (ext == ".png") {
+            if (!pngSize(icon, w, h) || w > 256 || h > 256) {
+                std::cerr << "safeguard: " << icon.string() << ": a Windows icon needs a PNG of at most "
+                             "256x256 (or give an .ico)\n";
+                return "";
+            }
+            std::ifstream in(icon, std::ios::binary);
+            std::string png((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            ico = dir / "app.ico";
+            std::ofstream out(ico, std::ios::binary);
+            auto u16 = [&](unsigned x) { out.put((char)(x & 0xff)); out.put((char)(x >> 8 & 0xff)); };
+            auto u32 = [&](unsigned long x) { u16((unsigned)(x & 0xffff)); u16((unsigned)(x >> 16 & 0xffff)); };
+            u16(0); u16(1); u16(1);                              // ICONDIR: an icon, one image
+            out.put((char)(w == 256 ? 0 : w)); out.put((char)(h == 256 ? 0 : h));
+            out.put(0); out.put(0);                              // no palette, reserved
+            u16(1); u16(32);                                     // planes, bits per pixel
+            u32((unsigned long)png.size()); u32(6 + 16);         // image size, offset
+            out << png;
+        } else {
+            std::cerr << "safeguard: warning: " << icon.string() << ": Windows can't use an .icns icon "
+                         "(give a .png or .ico); the executable gets none\n";
+        }
+    }
+
+    // The application manifest: per-monitor DPI awareness, common controls
+    // v6 (themed controls), and no elevation.
+    fs::path manifest = dir / "app.manifest";
+    std::ofstream(manifest) <<
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
+        "<assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\">\n"
+        "  <assemblyIdentity type=\"win32\" name=\"" << xmlEscape(b.identifier) << "\" version=\"" << v4 << "\"/>\n"
+        "  <dependency>\n"
+        "    <dependentAssembly>\n"
+        "      <assemblyIdentity type=\"win32\" name=\"Microsoft.Windows.Common-Controls\" version=\"6.0.0.0\"\n"
+        "                        processorArchitecture=\"*\" publicKeyToken=\"6595b64144ccf1df\" language=\"*\"/>\n"
+        "    </dependentAssembly>\n"
+        "  </dependency>\n"
+        "  <application xmlns=\"urn:schemas-microsoft-com:asm.v3\">\n"
+        "    <windowsSettings>\n"
+        "      <dpiAware xmlns=\"http://schemas.microsoft.com/SMI/2005/WindowsSettings\">true/pm</dpiAware>\n"
+        "      <dpiAwareness xmlns=\"http://schemas.microsoft.com/SMI/2016/WindowsSettings\">PerMonitorV2</dpiAwareness>\n"
+        "    </windowsSettings>\n"
+        "  </application>\n"
+        "  <compatibility xmlns=\"urn:schemas-microsoft-com:compatibility.v1\">\n"
+        "    <application>\n"
+        "      <supportedOS Id=\"{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}\"/>\n"   // Windows 10/11
+        "    </application>\n"
+        "  </compatibility>\n"
+        "  <trustInfo xmlns=\"urn:schemas-microsoft-com:asm.v3\">\n"
+        "    <security>\n"
+        "      <requestedPrivileges>\n"
+        "        <requestedExecutionLevel level=\"asInvoker\" uiAccess=\"false\"/>\n"
+        "      </requestedPrivileges>\n"
+        "    </security>\n"
+        "  </trustInfo>\n"
+        "</assembly>\n";
+
+    // The .rc: numeric constants only (no <windows.h>), so it needs no
+    // preprocessor. Strings double their quotes.
+    auto rcStr = [](const std::string& s) {
+        std::string out = "\"";
+        for (char c : s) out += c == '"' ? std::string("\"\"") : std::string(1, c);
+        return out + "\"";
+    };
+    std::string exe = manifest_.build.output + ".exe";
+    std::string vc = std::to_string(v[0]) + "," + std::to_string(v[1]) + "," +
+                     std::to_string(v[2]) + "," + std::to_string(v[3]);
+    fs::path rc = dir / "app.rc";
+    {
+        std::ofstream f(rc);
+        if (!ico.empty()) f << "1 ICON " << rcStr(fs::absolute(ico).generic_string()) << "\n";
+        f << "1 24 " << rcStr(fs::absolute(manifest).generic_string()) << "\n"   // RT_MANIFEST
+          << "1 VERSIONINFO\n"
+          << "FILEVERSION " << vc << "\n"
+          << "PRODUCTVERSION " << vc << "\n"
+          << "FILEFLAGSMASK 0x3f\nFILEFLAGS 0x0\nFILEOS 0x40004\nFILETYPE 0x1\nFILESUBTYPE 0x0\n"
+          << "BEGIN\n"
+          << "  BLOCK \"StringFileInfo\"\n  BEGIN\n    BLOCK \"040904b0\"\n    BEGIN\n";
+        auto val = [&](const char* k, const std::string& s) {
+            if (!s.empty()) f << "      VALUE \"" << k << "\", " << rcStr(s) << "\n";
+        };
+        val("CompanyName", manifest_.package.author);
+        val("FileDescription", manifest_.package.description.empty() ? b.name : manifest_.package.description);
+        val("FileVersion", b.version);
+        val("InternalName", manifest_.build.output);
+        val("LegalCopyright", b.copyright);
+        val("OriginalFilename", exe);
+        val("ProductName", b.name);
+        val("ProductVersion", b.version);
+        f << "    END\n  END\n"
+          << "  BLOCK \"VarFileInfo\"\n  BEGIN\n    VALUE \"Translation\", 0x409, 1200\n  END\n"
+          << "END\n";
+    }
+
+    // llvm-rc (beside clang), or the Windows SDK's rc.
+    fs::path res = dir / (manifest_.build.output + ".res");
+    std::error_code ec;
+    fs::remove(res, ec);
+    std::string llvmRc = findLlvmTool("llvm-rc");
+    int rcCode = runCmd({ llvmRc, "/no-preprocess", "/FO", res.string(), rc.string() }, opts_.verbose,
+                        /*suppressOutput=*/llvmRc == "llvm-rc");
+    if (rcCode != 0 || !fs::exists(res)) {
+        rcCode = runCmd({ "rc", "/nologo", "/fo", res.string(), rc.string() }, opts_.verbose);
+        if (rcCode != 0 || !fs::exists(res)) {
+            std::cerr << "safeguard: could not compile " << rc.string() << " (needs llvm-rc, which "
+                         "ships with LLVM, or the Windows SDK's rc)\n";
+            return "";
+        }
+    }
+    return res.string();
+}
+
+bool Builder::bundleMacOS() const {
+    const BundleConfig& b = manifest_.bundle;
+    fs::path build = fs::path(root_) / "build";
+    fs::path app = build / (b.name + ".app");
+    fs::path contents = app / "Contents";
+    std::error_code ec;
+    fs::remove_all(app, ec);
+    fs::create_directories(contents / "MacOS");
+    fs::create_directories(contents / "Resources");
+    std::string exeName = manifest_.build.output;
+    fs::path exe = contents / "MacOS" / exeName;
+    fs::copy_file(outputPath(), exe, fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+        std::cerr << "safeguard: could not copy " << outputPath() << ": " << ec.message() << "\n";
+        return false;
+    }
+
+    // The icon: an .icns as is; a .png turned into one (sips scales it to
+    // each size of an .iconset, iconutil packs it).
+    std::string iconFile;
+    if (!b.icon.empty()) {
+        fs::path icon = fs::path(root_) / b.icon;
+        std::string ext = icon.extension().string();
+        if (!fs::exists(icon)) {
+            std::cerr << "safeguard: bundle icon not found: " << icon.string() << "\n";
+            return false;
+        }
+        iconFile = icon.stem().string() + ".icns";
+        fs::path icns = contents / "Resources" / iconFile;
+        if (ext == ".icns") {
+            fs::copy_file(icon, icns, fs::copy_options::overwrite_existing, ec);
+        } else if (ext == ".png") {
+            fs::path set = build / "bundle" / (icon.stem().string() + ".iconset");
+            fs::remove_all(set, ec);
+            fs::create_directories(set);
+            for (int size : { 16, 32, 128, 256, 512 }) {
+                for (int scale : { 1, 2 }) {
+                    std::string px = std::to_string(size * scale);
+                    std::string name = "icon_" + std::to_string(size) + "x" + std::to_string(size) +
+                                       (scale == 2 ? "@2x" : "") + ".png";
+                    if (runCmd({ "sips", "-z", px, px, icon.string(), "--out", (set / name).string() },
+                               opts_.verbose, /*suppressOutput=*/true) != 0) {
+                        std::cerr << "safeguard: sips could not scale " << icon.string() << "\n";
+                        return false;
+                    }
+                }
+            }
+            if (runCmd({ "iconutil", "-c", "icns", set.string(), "-o", icns.string() }, opts_.verbose) != 0) {
+                std::cerr << "safeguard: iconutil could not make " << icns.string() << "\n";
+                return false;
+            }
+        } else {
+            std::cerr << "safeguard: warning: " << icon.string() << ": macOS can't use an .ico icon "
+                         "(give a .png or .icns); the bundle gets none\n";
+            iconFile.clear();
+        }
+    }
+    for (auto& r : b.resources)
+        if (!copyResource(fs::path(root_) / r, contents / "Resources")) return false;
+
+    {
+        std::ofstream f(contents / "Info.plist");
+        auto key = [&](const char* k, const std::string& v) {
+            f << "\t<key>" << k << "</key>\n\t<string>" << xmlEscape(v) << "</string>\n";
+        };
+        f << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+             "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+             "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+             "<plist version=\"1.0\">\n<dict>\n";
+        key("CFBundleDevelopmentRegion", "en");
+        key("CFBundleExecutable", exeName);
+        key("CFBundleIdentifier", b.identifier);
+        key("CFBundleInfoDictionaryVersion", "6.0");
+        key("CFBundleName", b.name);
+        key("CFBundleDisplayName", b.name);
+        key("CFBundlePackageType", "APPL");
+        key("CFBundleShortVersionString", b.version);
+        key("CFBundleVersion", b.version);
+        if (!iconFile.empty()) key("CFBundleIconFile", iconFile);
+        key("LSMinimumSystemVersion", b.minSystemVersion);
+        if (!macCategory(b.category).empty()) key("LSApplicationCategoryType", macCategory(b.category));
+        if (!b.copyright.empty()) key("NSHumanReadableCopyright", b.copyright);
+        f << "\t<key>NSHighResolutionCapable</key>\n\t<true/>\n"
+             "\t<key>NSPrincipalClass</key>\n\t<string>NSApplication</string>\n"
+             "</dict>\n</plist>\n";
+    }
+    std::ofstream(contents / "PkgInfo") << "APPL????";
+
+    // The dependencies' dylibs go into Contents/Frameworks; each one's
+    // install name becomes @rpath/<file> (in it and in the executable),
+    // and the executable's rpath (bundleLinkFlags) points there.
+    std::vector<fs::path> frameworks;
+    for (auto& lib : depRuntimeLibs()) {
+        if (fs::path(lib).extension() != ".dylib") continue;
+        fs::create_directories(contents / "Frameworks");
+        fs::path dest = contents / "Frameworks" / fs::path(lib).filename();
+        fs::copy_file(lib, dest, fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            std::cerr << "safeguard: could not copy " << lib << ": " << ec.message() << "\n";
+            return false;
+        }
+        std::string out;
+        if (!captureCmd({ "otool", "-D", dest.string() }, out)) {
+            std::cerr << "safeguard: otool -D failed for " << dest.string() << "\n";
+            return false;
+        }
+        // "<file>:\n<install name>\n"
+        std::string id = trimmed(out.substr(out.find('\n') == std::string::npos ? out.size() : out.find('\n') + 1));
+        std::string rpathId = "@rpath/" + dest.filename().string();
+        if (runCmd({ "install_name_tool", "-id", rpathId, dest.string() }, opts_.verbose) != 0 ||
+            (!id.empty() && id != rpathId &&
+             runCmd({ "install_name_tool", "-change", id, rpathId, exe.string() }, opts_.verbose) != 0)) {
+            std::cerr << "safeguard: install_name_tool failed for " << dest.string() << "\n";
+            return false;
+        }
+        frameworks.push_back(dest);
+    }
+
+    // Sign the nested code first, then the bundle (install_name_tool has
+    // invalidated the linker's ad-hoc signatures).
+    std::string identity = !opts_.signIdentity.empty() ? opts_.signIdentity : b.codesignIdentity;
+    if (identity != "none") {
+        for (auto& f : frameworks)
+            if (runCmd({ "codesign", "--force", "--sign", identity, f.string() }, opts_.verbose) != 0) {
+                std::cerr << "safeguard: codesign failed for " << f.string() << "\n";
+                return false;
+            }
+        if (runCmd({ "codesign", "--force", "--sign", identity, app.string() }, opts_.verbose) != 0) {
+            std::cerr << "safeguard: codesign failed for " << app.string() << "\n";
+            return false;
+        }
+    }
+    std::cout << "safeguard: bundled " << app.lexically_normal().string()
+              << (identity == "none" ? " (unsigned)" : identity == "-" ? " (ad-hoc signed)" : " (signed)") << "\n";
+    return true;
+}
+
+bool Builder::bundleWindows() const {
+    const BundleConfig& b = manifest_.bundle;
+    fs::path dir = fs::path(root_) / "build" / b.name;
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    fs::path exe = outputPath();
+    fs::copy_file(exe, dir / exe.filename(), fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+        std::cerr << "safeguard: could not copy " << exe.string() << ": " << ec.message() << "\n";
+        return false;
+    }
+    for (auto& lib : depRuntimeLibs())
+        if (fs::path(lib).extension() == ".dll" && !copyResource(lib, dir)) return false;
+    for (auto& r : b.resources)
+        if (!copyResource(fs::path(root_) / r, dir)) return false;
+    std::cout << "safeguard: bundled " << dir.lexically_normal().string() << "\n";
+    return true;
+}
+
+bool Builder::bundleLinux() const {
+    const BundleConfig& b = manifest_.bundle;
+    const std::string pkg = debName(manifest_.package.name);
+    const std::string exeName = manifest_.build.output;
+    fs::path build = fs::path(root_) / "build";
+    std::error_code ec;
+
+    // The Debian architecture: dpkg's own for the host, else the target's.
+    std::string arch, dpkgArch;
+    bool haveDpkg = captureCmd({ "dpkg", "--print-architecture" }, dpkgArch);
+    if (isCrossTarget()) {
+        std::string t = targetTriple();
+        std::string cpu = t.substr(0, t.find('-'));
+        arch = cpu == "x86_64" ? "amd64" : cpu == "aarch64" ? "arm64"
+             : (cpu.size() == 4 && cpu[0] == 'i' && cpu.substr(2) == "86") ? "i386"
+             : cpu.rfind("armv7", 0) == 0 ? "armhf" : cpu;
+    } else {
+        arch = trimmed(dpkgArch);
+    }
+    if (arch.empty()) {
+#if defined(__x86_64__)
+        arch = "amd64";
+#elif defined(__aarch64__)
+        arch = "arm64";
+#else
+        arch = "unknown";
+#endif
+    }
+
+    // The package tree: /usr/bin/<exe>, /usr/lib/<pkg>/ (the dependencies'
+    // shared libraries, on the executable's rpath), /usr/share/applications/
+    // <id>.desktop, /usr/share/icons/hicolor/<size>/apps/<id>.png and
+    // /usr/share/<pkg>/ (resources).
+    fs::path stage = build / "deb" / (pkg + "_" + b.version + "_" + arch);
+    fs::remove_all(stage, ec);
+    fs::path usr = stage / "usr";
+    fs::create_directories(usr / "bin");
+    fs::copy_file(outputPath(), usr / "bin" / exeName, fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+        std::cerr << "safeguard: could not copy " << outputPath() << ": " << ec.message() << "\n";
+        return false;
+    }
+    fs::permissions(usr / "bin" / exeName, fs::perms(0755), ec);
+    for (auto& lib : depRuntimeLibs()) {
+        // libfoo.so, and the libfoo.so.N... names beside it (the SONAME the
+        // executable asks for is usually one of them), symlinks kept.
+        fs::path f(lib);
+        std::string stem = f.filename().string();
+        stem = stem.substr(0, stem.find(".so") == std::string::npos ? stem.size() : stem.find(".so") + 3);
+        fs::path dest = usr / "lib" / pkg;
+        fs::create_directories(dest);
+        for (auto& e : fs::directory_iterator(f.parent_path(), ec)) {
+            std::string n = e.path().filename().string();
+            if (n.rfind(stem, 0) != 0) continue;
+            fs::remove(dest / n, ec);
+            if (e.is_symlink()) fs::copy_symlink(e.path(), dest / n, ec);
+            else fs::copy_file(e.path(), dest / n, fs::copy_options::overwrite_existing, ec);
+            if (ec) {
+                std::cerr << "safeguard: could not copy " << e.path().string() << ": " << ec.message() << "\n";
+                return false;
+            }
+        }
+    }
+    fs::path iconPng;
+    if (!b.icon.empty()) {
+        fs::path icon = fs::path(root_) / b.icon;
+        unsigned w = 0, h = 0;
+        if (!fs::exists(icon)) {
+            std::cerr << "safeguard: bundle icon not found: " << icon.string() << "\n";
+            return false;
+        }
+        if (icon.extension() == ".png" && pngSize(icon, w, h)) {
+            fs::path dir = usr / "share" / "icons" / "hicolor" / (std::to_string(w) + "x" + std::to_string(h)) / "apps";
+            fs::create_directories(dir);
+            iconPng = dir / (b.identifier + ".png");
+            fs::copy_file(icon, iconPng, fs::copy_options::overwrite_existing, ec);
+        } else {
+            std::cerr << "safeguard: warning: " << icon.string() << ": the Linux desktop entry needs a .png "
+                         "icon; the package gets none\n";
+        }
+    }
+    for (auto& r : b.resources)
+        if (!copyResource(fs::path(root_) / r, usr / "share" / pkg)) return false;
+    fs::path desktop = usr / "share" / "applications" / (b.identifier + ".desktop");
+    fs::create_directories(desktop.parent_path());
+    {
+        std::ofstream f(desktop);
+        f << "[Desktop Entry]\nType=Application\nName=" << b.name << "\nExec=" << exeName << "\n";
+        if (!iconPng.empty()) f << "Icon=" << b.identifier << "\n";
+        if (!manifest_.package.description.empty()) f << "Comment=" << manifest_.package.description << "\n";
+        f << "Categories=" << desktopCategory(b.category) << ";\nTerminal=false\n";
+    }
+
+    // The AppDir: the same /usr tree plus AppRun, the desktop entry and the
+    // icon at its top (what appimagetool packs into an AppImage).
+    fs::path appDir = build / (b.name + ".AppDir");
+    fs::remove_all(appDir, ec);
+    fs::create_directories(appDir);
+    fs::copy(usr, appDir / "usr", fs::copy_options::recursive | fs::copy_options::copy_symlinks, ec);
+    fs::create_symlink("usr/bin/" + exeName, appDir / "AppRun", ec);
+    fs::copy_file(desktop, appDir / desktop.filename(), ec);
+    if (!iconPng.empty()) {
+        fs::copy_file(iconPng, appDir / iconPng.filename(), ec);
+        fs::create_symlink(iconPng.filename(), appDir / ".DirIcon", ec);
+    }
+    if (ec) {
+        std::cerr << "safeguard: could not assemble " << appDir.string() << ": " << ec.message() << "\n";
+        return false;
+    }
+    std::cout << "safeguard: bundled " << appDir.lexically_normal().string() << "\n";
+
+    // DEBIAN/control, then dpkg-deb.
+    if (!haveDpkg) {
+        std::cerr << "safeguard: warning: dpkg not found; skipped the .deb (install dpkg to build one)\n";
+        return true;
+    }
+    uintmax_t bytes = 0;
+    for (auto& e : fs::recursive_directory_iterator(usr, ec))
+        if (e.is_regular_file() && !e.is_symlink()) bytes += e.file_size();
+    fs::create_directories(stage / "DEBIAN");
+    {
+        std::ofstream f(stage / "DEBIAN" / "control");
+        f << "Package: " << pkg << "\n"
+          << "Version: " << b.version << "\n"
+          << "Architecture: " << arch << "\n"
+          << "Maintainer: " << (manifest_.package.author.empty() ? "unknown" : manifest_.package.author) << "\n"
+          << "Installed-Size: " << (bytes + 1023) / 1024 << "\n";
+        if (!b.depends.empty()) {
+            f << "Depends: ";
+            for (size_t i = 0; i < b.depends.size(); ++i) f << (i ? ", " : "") << b.depends[i];
+            f << "\n";
+        }
+        f << "Section: " << (desktopCategory(b.category) == "Game" ? "games" : "misc") << "\n"
+          << "Priority: optional\n"
+          << "Description: " << (manifest_.package.description.empty() ? b.name : manifest_.package.description)
+          << "\n";
+    }
+    // dpkg-deb insists on 0755 directories.
+    fs::permissions(stage, fs::perms(0755), ec);
+    for (auto& e : fs::recursive_directory_iterator(stage, ec)) {
+        if (e.is_symlink()) continue;
+        if (e.is_directory()) fs::permissions(e.path(), fs::perms(0755), ec);
+        else if (e.path() != usr / "bin" / exeName) fs::permissions(e.path(), fs::perms(0644), ec);
+    }
+    fs::path deb = build / (pkg + "_" + b.version + "_" + arch + ".deb");
+    fs::remove(deb, ec);
+    if (runCmd({ "dpkg-deb", "--build", "--root-owner-group", stage.string(), deb.string() }, opts_.verbose) != 0) {
+        std::cerr << "safeguard: dpkg-deb failed\n";
+        return false;
+    }
+    std::cout << "safeguard: bundled " << deb.lexically_normal().string() << "\n";
+    return true;
+}
+
+bool Builder::bundle() {
+    if (!manifest_.bundle.present) {
+        std::cerr << "safeguard: 'bundle' needs a [bundle] table in Package.toml (at least "
+                     "identifier = \"org.example." << manifest_.package.name << "\")\n";
+        return false;
+    }
+    if (manifest_.build.crateType != "bin") {
+        std::cerr << "safeguard: 'bundle' packages an application: it needs build.crate_type = \"bin\"\n";
+        return false;
+    }
+    std::string os = targetOS();
+    if (os.empty()) {
+        std::cerr << "safeguard: 'bundle' packages for macOS, Windows or Linux, not --target "
+                  << opts_.target << "\n";
+        return false;
+    }
+    opts_.bundle = true;
+    if (!build()) return false;
+    if (os == "macos") return bundleMacOS();
+    if (os == "windows") return bundleWindows();
+    return bundleLinux();
 }
 
 // ── public: clean ─────────────────────────────────────────────────────────────

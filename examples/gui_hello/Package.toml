@@ -1,0 +1,32 @@
+[package]
+name        = "gui_hello"
+version     = "1.0.0"
+author      = "SafeC <safec@example.org>"
+description = "A window that opens, draws for a moment and closes itself"
+license     = "MIT"
+
+[build]
+edition = "2026"
+
+# std/gui's backend for each OS (Cocoa, X11, Win32) and the system libraries
+# it calls into.
+[build.macos]
+frameworks = ["Cocoa"]
+libs       = ["objc"]
+
+[build.linux]
+libs = ["X11"]
+
+[build.windows]
+libs = ["user32", "gdi32"]
+
+# 'safeguard bundle': build/GuiHello.app (macOS), build/GuiHello/ (Windows),
+# build/gui-hello_1.0.0_<arch>.deb and build/GuiHello.AppDir (Linux).
+[bundle]
+name       = "GuiHello"
+identifier = "org.safec.gui-hello"
+icon       = "assets/icon.png"
+resources  = ["assets/greeting.txt"]
+category   = "Utility"
+copyright  = "Copyright 2026 the SafeC authors"
+depends    = ["libx11-6"]

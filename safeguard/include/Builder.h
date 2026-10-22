@@ -37,6 +37,13 @@ struct BuildOptions {
     // --target <alias|triple>: cross-compile (a bare-metal alias from
     // 'safec --list-targets', or any LLVM triple). Empty = host.
     std::string target;
+
+    // Set by 'safeguard bundle': the executable is linked for its app
+    // bundle (rpath to the bundled libraries; on Windows the GUI subsystem
+    // and the icon/version/manifest resource). 'signIdentity' (--sign)
+    // overrides [bundle] codesign_identity.
+    bool bundle = false;
+    std::string signIdentity;
 };
 
 class Builder {
@@ -67,6 +74,11 @@ public:
     // there is no tests/ directory at all, matching 'no tests' being a
     // trivially-passing state rather than a failure).
     bool test();
+
+    // Build the bin target for its [bundle] and package it: build/<name>.app
+    // on macOS, build/<name>/ (exe, DLLs, resources) on Windows, and a .deb
+    // plus build/<name>.AppDir on Linux. Returns true on success.
+    bool bundle();
 
     // Build then execute the output binary.
     // Returns the exit code of the child process, or -1 on build failure.
@@ -157,7 +169,7 @@ public:
                                                   // -lobjc, -Wl,-framework,<name>)
         std::vector<std::string> runtimeLibs;     // shared libraries a program loads at
                                                   // run time (.dll copied beside it on
-                                                  // Windows)
+                                                  // Windows; bundled by 'bundle')
         std::string error;                        // why it can't be used, if so
     };
     DepLayout depLayout(const Dependency& dep) const;
@@ -309,7 +321,7 @@ private:
     // (-l/-L/-flto). 'shared' produces a dynamic library (-shared) instead
     // of an executable, for build.crate_type = "cdylib". 'objc' links the
     // Objective-C runtime; [build] frameworks are passed on macOS.
-    // 'extraFlags' go last (a cdylib's export list).
+    // 'extraFlags' go last (a cdylib's export list, a bundle's link flags).
     // Returns true on success.
     // Link flags for the CPU BLAS std's sgemm picks up (see [build] blas).
     std::vector<std::string> blasLinkFlags() const;
@@ -352,6 +364,16 @@ private:
     // Windows: copy the dependencies' DLLs into 'dir' (beside an exe or
     // DLL just linked there), the way an rpath finds them elsewhere.
     bool copyRuntimeLibs(const std::string& dir) const;
+
+    // ── bundle ───────────────────────────────────────────────────────────────
+    // Link flags the executable needs for its bundle (see BuildOptions::bundle).
+    bool bundleLinkFlags(std::vector<std::string>& out) const;
+    // Windows: write the .rc (icon, version info, application manifest)
+    // under build/bundle/ and compile it to a .res; "" on failure.
+    std::string windowsResource() const;
+    bool bundleMacOS() const;
+    bool bundleWindows() const;
+    bool bundleLinux() const;
 
     // A dependency's directory: <root>/deps/<name> for a git URL, 'path'
     // (against the project root) for a local one, "" for a lib-only entry.

@@ -152,6 +152,7 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
         if (tok.key == "__section__") {
             flushDep();
             if (tok.value == "dependencies") inDep = true;
+            else if (tok.value == "bundle") m.bundle.present = true;
             else if (tok.value.rfind("build.", 0) == 0 && tok.value != "build.macos" &&
                      tok.value != "build.linux" && tok.value != "build.windows")
                 throw std::runtime_error(srcName + ": unknown table [" + tok.value + "]; per-platform "
@@ -179,6 +180,21 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
         else if (tok.key == "build.crate_type") m.build.crateType = tok.value;
         else if (tok.key == "build.frameworks") m.build.frameworks = splitList(tok.value);
         else if (tok.key == "build.objc_arc")   m.build.objcArc  = boolean(tok);
+
+        // bundle.*
+        else if (tok.key == "bundle.name")       m.bundle.name       = tok.value;
+        else if (tok.key == "bundle.identifier") m.bundle.identifier = tok.value;
+        else if (tok.key == "bundle.version")    m.bundle.version    = tok.value;
+        else if (tok.key == "bundle.icon")       m.bundle.icon       = tok.value;
+        else if (tok.key == "bundle.resources")  m.bundle.resources  = splitList(tok.value);
+        else if (tok.key == "bundle.category")   m.bundle.category   = tok.value;
+        else if (tok.key == "bundle.copyright")  m.bundle.copyright  = tok.value;
+        else if (tok.key == "bundle.subsystem")  m.bundle.subsystem  = tok.value;
+        else if (tok.key == "bundle.min_system_version") m.bundle.minSystemVersion = tok.value;
+        else if (tok.key == "bundle.codesign_identity")  m.bundle.codesignIdentity = tok.value;
+        else if (tok.key == "bundle.depends")    m.bundle.depends    = splitList(tok.value);
+        else if (tok.key.rfind("bundle.", 0) == 0)
+            throw std::runtime_error(srcName + ": unknown key '" + tok.key.substr(7) + "' in [bundle]");
 
         // dependencies.*
         else if (tok.key == "dependencies.name")    curDep.name    = tok.value;
@@ -237,6 +253,34 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
             throw std::runtime_error(where + "cmake_args needs build = \"cmake\"");
         if (d.build == "sources" && !d.libs.empty())
             throw std::runtime_error(where + "build = \"sources\" produces its own library; drop 'lib'");
+    }
+
+    if (m.bundle.present) {
+        if (m.bundle.identifier.empty())
+            throw std::runtime_error(srcName + ": [bundle] identifier is required "
+                                     "(a reverse-DNS name such as \"org.example." + m.package.name + "\")");
+        for (char c : m.bundle.identifier)
+            if (!std::isalnum((unsigned char)c) && c != '.' && c != '-')
+                throw std::runtime_error(srcName + ": bundle.identifier may only contain letters, "
+                                         "digits, '.' and '-', got \"" + m.bundle.identifier + "\"");
+        if (m.bundle.name.empty()) m.bundle.name = m.package.name;
+        if (m.bundle.version.empty()) m.bundle.version = m.package.version;
+        if (m.bundle.version.empty() || !std::isdigit((unsigned char)m.bundle.version[0]))
+            throw std::runtime_error(srcName + ": the bundle version must start with a digit "
+                                     "(e.g. \"1.2.0\"), got \"" + m.bundle.version + "\"");
+        if (m.bundle.subsystem.empty()) m.bundle.subsystem = "windows";
+        else if (m.bundle.subsystem != "windows" && m.bundle.subsystem != "console")
+            throw std::runtime_error(srcName + ": bundle.subsystem must be \"windows\" or "
+                                     "\"console\", got \"" + m.bundle.subsystem + "\"");
+        if (m.bundle.minSystemVersion.empty()) m.bundle.minSystemVersion = "11.0";
+        if (m.bundle.codesignIdentity.empty()) m.bundle.codesignIdentity = "-";
+        if (!m.bundle.icon.empty()) {
+            std::string ext = m.bundle.icon.substr(m.bundle.icon.find_last_of('.') == std::string::npos
+                                                   ? m.bundle.icon.size() : m.bundle.icon.find_last_of('.'));
+            if (ext != ".png" && ext != ".icns" && ext != ".ico")
+                throw std::runtime_error(srcName + ": bundle.icon must be a .png, .icns or .ico file, got \"" +
+                                         m.bundle.icon + "\"");
+        }
     }
 
     return m;
