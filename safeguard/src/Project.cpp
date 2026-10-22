@@ -156,10 +156,12 @@ static const LangTemplate& langTemplate(const std::string& lang) {
     throw std::runtime_error("unknown --lang '" + lang + "' (expected sc, c, cpp, objc or objcpp)");
 }
 
-static std::string manifestFor(const LangTemplate& t, const std::string& tmpl) {
+static std::string manifestFor(const LangTemplate& t, const std::string& tmpl, bool withStd) {
     std::string m = tmpl;
     std::string anchor = "edition = \"2026\"\n";
-    m.insert(m.find(anchor) + anchor.size(), t.buildKeys);
+    std::string keys = t.buildKeys;
+    if (withStd && std::string(t.lang) != "sc") keys += "std        = true\n";
+    m.insert(m.find(anchor) + anchor.size(), keys);
     return m;
 }
 
@@ -184,7 +186,7 @@ std::string Project::findRoot(const std::string& startDir) {
 }
 
 void Project::createNew(const std::string& name, const std::string& parentDir,
-                        const std::string& lang) {
+                        const std::string& lang, bool withStd) {
     const LangTemplate& t = langTemplate(lang);
     fs::path dest = fs::path(parentDir) / name;
     if (fs::exists(dest))
@@ -201,7 +203,7 @@ void Project::createNew(const std::string& name, const std::string& parentDir,
 
     // Package.toml
     writeFile((dest / "Package.toml").string(),
-              applyTemplate(manifestFor(t, kPackageTomlTemplate), name, version, author));
+              applyTemplate(manifestFor(t, kPackageTomlTemplate, withStd), name, version, author));
 
     // src/main.sc (or main.c/.cpp/.m/.mm)
     writeFile((dest / "src" / t.file).string(),
@@ -215,7 +217,7 @@ void Project::createNew(const std::string& name, const std::string& parentDir,
     std::cout << "  Run:  cd " << name << " && safeguard build\n";
 }
 
-void Project::initHere(const std::string& name, const std::string& lang) {
+void Project::initHere(const std::string& name, const std::string& lang, bool withStd) {
     const LangTemplate& t = langTemplate(lang);
     std::string cwd = fs::current_path().string();
     std::string mainFile = std::string("src/") + t.file;
@@ -227,7 +229,7 @@ void Project::initHere(const std::string& name, const std::string& lang) {
     bool wroteManifest = false;
     if (!fs::exists("Package.toml")) {
         writeFile("Package.toml",
-                  applyTemplate(manifestFor(t, kPackageTomlTemplate), name, version, author));
+                  applyTemplate(manifestFor(t, kPackageTomlTemplate, withStd), name, version, author));
         wroteManifest = true;
     }
 

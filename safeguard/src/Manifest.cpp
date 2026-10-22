@@ -180,6 +180,7 @@ Manifest ManifestParser::buildManifest(const std::vector<Token>& tokens,
         else if (tok.key == "build.crate_type") m.build.crateType = tok.value;
         else if (tok.key == "build.frameworks") m.build.frameworks = splitList(tok.value);
         else if (tok.key == "build.objc_arc")   m.build.objcArc  = boolean(tok);
+        else if (tok.key == "build.std")        m.build.useStd   = boolean(tok) ? 1 : 0;
 
         // bundle.*
         else if (tok.key == "bundle.name")       m.bundle.name       = tok.value;
@@ -355,6 +356,8 @@ std::string ManifestParser::serialize(const Manifest& m) {
     }
     if (m.build.objcArc)
         o << "objc_arc   = true\n";
+    if (m.build.useStd >= 0)
+        o << "std        = " << (m.build.useStd ? "true" : "false") << "\n";
 
     for (auto& d : m.dependencies) {
         o << "\n[[dependencies]]\n";

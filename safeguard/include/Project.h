@@ -9,13 +9,17 @@ public:
     // Populates Package.toml, src/main.sc, and a .gitignore. 'lang' picks
     // the entry point: "sc" (SafeC, default), or "c", "cpp", "objc",
     // "objcpp" for a package with no SafeC in it (src/main.c/.cpp/.m/.mm).
+    // 'withStd' writes '[build] std = true' for such a package, so it builds
+    // and links SafeC's std from the start (a SafeC package always does).
     static void createNew(const std::string& name,
                            const std::string& parentDir = ".",
-                           const std::string& lang = "sc");
+                           const std::string& lang = "sc",
+                           bool withStd = false);
 
     // Initialise the current directory as a safeguard project (Package.toml
     // + src/main.<ext> if they do not already exist).
-    static void initHere(const std::string& name, const std::string& lang = "sc");
+    static void initHere(const std::string& name, const std::string& lang = "sc",
+                         bool withStd = false);
 
     // Return the project root by searching upward from `startDir` for a
     // Package.toml file.  Returns "" if not found.

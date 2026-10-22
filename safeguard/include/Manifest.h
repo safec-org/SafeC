@@ -63,6 +63,8 @@ struct BuildConfig {
     std::string crateType;         // "bin" (default), "staticlib", or "cdylib"
     std::vector<std::string> frameworks; // macOS frameworks: -framework <name> at final link
     bool objcArc = false;          // compile .m/.mm with -fobjc-arc
+    int  useStd = -1;              // [build] std: -1 unset (std when SafeC is involved),
+                                   // 1 always (a C/C++/ObjC package using std), 0 never
     PlatformBuildConfig forMacos, forLinux, forWindows;   // [build.<os>]
 };
 

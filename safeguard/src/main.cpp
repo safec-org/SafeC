@@ -15,10 +15,12 @@ static void usage() {
     std::cout << R"(Usage: safeguard <command> [options]
 
 Commands:
-  new   <name> [--lang L]  Create a new project directory with a skeleton
-  init  [name] [--lang L]  Initialise the current directory as a project
+  new   <name> [--lang L] [--std]  Create a new project directory with a skeleton
+  init  [name] [--lang L] [--std]  Initialise the current directory as a project
                 L: sc (SafeC, default), c, cpp, objc, objcpp — a package
                 with no SafeC in it (src/main.c, .cpp, .m or .mm)
+                --std: such a package builds and links SafeC's std too
+                ([build] std = true)
   fetch         Clone and build all [dependencies] from Package.toml
   build         Compile all sources in the current project
   check         Fast compile-only pass — reports errors without linking
@@ -61,6 +63,8 @@ Dependency format in Package.toml:
 [build] keys for C/C++/Objective-C:
   frameworks = ["Cocoa"]     macOS frameworks to link (ignored elsewhere)
   objc_arc   = true          compile .m/.mm with -fobjc-arc
+  std        = true          build and link SafeC's std (default: only
+                             when the package has SafeC); false: never
   [build.macos] / [build.linux] / [build.windows]
     cflags, libs, lib_dirs, frameworks — added only when building for that OS
 
@@ -158,8 +162,10 @@ int main(int argc, char** argv) {
     // ── new / init ────────────────────────────────────────────────────────────
     if (cmd == "new" || cmd == "init") {
         std::string name, lang = "sc";
+        bool withStd = false;
         for (int i = 2; i < argc; ++i) {
             std::string arg = argv[i];
+            if (arg == "--std") { withStd = true; continue; }
             if (arg == "--lang") {
                 if (i + 1 >= argc) {
                     std::cerr << "safeguard: --lang requires an argument\n";
@@ -183,8 +189,8 @@ int main(int argc, char** argv) {
             name = fs::current_path().filename().string();
         }
         try {
-            if (cmd == "new") safeguard::Project::createNew(name, ".", lang);
-            else safeguard::Project::initHere(name, lang);
+            if (cmd == "new") safeguard::Project::createNew(name, ".", lang, withStd);
+            else safeguard::Project::initHere(name, lang, withStd);
         } catch (std::exception& e) {
             std::cerr << "safeguard error: " << e.what() << "\n";
             return 1;

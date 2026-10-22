@@ -473,6 +473,7 @@ std::string Builder::llToObj(const std::string& llFile,
     fs::path obj = fs::path(buildDir) / (fs::path(llFile).stem().string() + ".o");
     std::vector<std::string> cmd = { findClang(false), "-c", llFile, "-o", obj.string() };
     for (auto& f : targetClangFlags()) cmd.push_back(f);
+    for (auto& f : runtimeFlags()) cmd.push_back(f);
     cmd.push_back("-Wno-override-module");
     if (opts_.release) cmd.push_back("-O2");
     int rc = runCmd(cmd, opts_.verbose, suppressOutput);
@@ -521,6 +522,7 @@ std::string Builder::compileForeign(const std::string& srcPath,
     std::string compiler = isCrossTarget() ? findClang(isCxx(lang)) : findSystemClang(isCxx(lang));
     std::vector<std::string> cmd = { compiler, "-c", srcPath, "-o", obj.string() };
     for (auto& f : targetClangFlags()) cmd.push_back(f);
+    for (auto& f : runtimeFlags()) cmd.push_back(f);
     for (auto& inc : includeDirs) {
         cmd.push_back("-I");
         cmd.push_back(inc);
@@ -745,6 +747,8 @@ bool Builder::linkFinal(const std::vector<std::string>& objFiles,
     std::vector<std::string> cmd = { isCrossTarget() ? findClang(useCxxDriver)
                                                      : findSystemClang(useCxxDriver) };
     for (auto& f : targetClangFlags()) cmd.push_back(f);
+    for (auto& f : runtimeFlags()) cmd.push_back(f);
+    for (auto& f : runtimeLinkFlags()) cmd.push_back(f);
     if (isCrossTarget()) cmd.push_back("-fuse-ld=lld");
     if (targetIsBareMetal()) { cmd.push_back("-nostdlib"); cmd.push_back("-static"); }
     // WebAssembly: a library module the host instantiates — no _start, its
@@ -943,6 +947,27 @@ bool Builder::targetIsWasm() const {
     return t.rfind("wasm32-", 0) == 0 || t.rfind("wasm64-", 0) == 0;
 }
 
+// With [build] std = true, C/C++/ObjC sources reach std's headers as
+// <std/...> through std's parent directory -- never std/ itself, whose
+// stdint.h & co. would shadow the system's (see build()'s foreignIncs).
+void Builder::stdForeignInclude(std::vector<std::string>& foreignIncs, const std::string& stdDir) const {
+    if (manifest_.build.useStd == 1 && !stdDir.empty())
+        foreignIncs.push_back(fs::path(stdDir).parent_path().string());
+}
+
+std::vector<std::string> Builder::runtimeFlags() const {
+    if (!targetIsWindows()) return {};
+    std::string t = targetTriple();
+    // MinGW (-gnu) targets use their own runtime's shared msvcrt already.
+    if (t.find("gnu") != std::string::npos || t.find("mingw") != std::string::npos) return {};
+    return { "-fms-runtime-lib=dll" };
+}
+
+std::vector<std::string> Builder::runtimeLinkFlags() const {
+    if (runtimeFlags().empty()) return {};
+    return { "-Wl,/NODEFAULTLIB:libcmt", "-Wl,/DEFAULTLIB:msvcrt" };
+}
+
 std::string Builder::targetOS() const {
     if (!isCrossTarget()) {
 #if defined(_WIN32)
@@ -1082,6 +1107,7 @@ std::string Builder::ensureStdLib() {
     fs::path stampPath = libPath;
     stampPath += ".stamp";
     std::string stamp = "safec=" + findSafec() + "\nstd=" + stdDir + "\n";
+    for (auto& f : runtimeFlags()) stamp += "runtime=" + f + "\n";   // a CRT switch rebuilds std
     if (fs::exists(libPath)) {
         std::error_code ec;
         auto built = fs::last_write_time(libPath, ec);
@@ -1543,8 +1569,8 @@ bool Builder::buildNativeDep(const Dependency& dep, const DepLayout& l) const {
         if (!sameConfig) fs::remove_all(buildDir, ec);
         // A non-debug build type on Windows: a Debug one would pull in the
         // debug CRT, which doesn't mix with the release CRT the rest of the
-        // program links (and MultiThreaded, the static CRT, is clang's
-        // default there too).
+        // program links (the shared one, MultiThreadedDLL — see
+        // runtimeFlags()).
         std::string config = opts_.release ? "Release" : targetIsWindows() ? "RelWithDebInfo" : "Debug";
         if (!fs::exists(buildDir / "CMakeCache.txt")) {
             std::vector<std::string> conf = {
@@ -1558,7 +1584,7 @@ bool Builder::buildNativeDep(const Dependency& dep, const DepLayout& l) const {
             };
             if (targetIsWindows()) {
                 conf.push_back("-DCMAKE_POLICY_DEFAULT_CMP0091=NEW");
-                conf.push_back("-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded");
+                conf.push_back("-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL");   // as runtimeFlags()
             }
             // Ninja when there is one: the Visual Studio generators ignore
             // CMAKE_C_COMPILER, so on Windows it's what makes "the same
@@ -1816,6 +1842,8 @@ bool Builder::build() {
         DepLayout l = depLayout(dep);
         if (l.error.empty() && l.fromSource) usesStd = true;
     }
+    // [build] std overrides: a C/C++/ObjC package calling into std sets it.
+    if (manifest_.build.useStd >= 0) usesStd = manifest_.build.useStd == 1;
     std::string stdDir  = findStdDir();
     std::string stdLib  = usesStd ? ensureStdLib() : "";
     if (usesStd && stdLib.empty() && !stdDir.empty()) {
@@ -1852,6 +1880,7 @@ bool Builder::build() {
         userIncs.push_back(projInc.string());
         foreignIncs.push_back(projInc.string());
     }
+    stdForeignInclude(foreignIncs, stdDir);
     depIncludes(userIncs, foreignIncs);
 
     // 4. Compile user sources. Mixed SafeC/C/C++/ObjC — each file is
@@ -1998,6 +2027,7 @@ bool Builder::check() {
         userIncs.push_back(projInc.string());
         foreignIncs.push_back(projInc.string());
     }
+    stdForeignInclude(foreignIncs, stdDir);
     depIncludes(userIncs, foreignIncs);
 
     fs::path srcDir = fs::path(root_) / "src";
@@ -2070,6 +2100,8 @@ bool Builder::test() {
         DepLayout l = depLayout(dep);
         if (l.error.empty() && l.fromSource) usesStd = true;
     }
+    // [build] std overrides: a C/C++/ObjC package calling into std sets it.
+    if (manifest_.build.useStd >= 0) usesStd = manifest_.build.useStd == 1;
     std::string stdDir = findStdDir();
     std::string stdLib = usesStd ? ensureStdLib() : "";
     if (usesStd && stdLib.empty() && !stdDir.empty()) {
@@ -2091,6 +2123,7 @@ bool Builder::test() {
         userIncs.push_back(projInc.string());
         depForeignIncs.push_back(projInc.string());
     }
+    stdForeignInclude(depForeignIncs, stdDir);
     depIncludes(userIncs, depForeignIncs);
     bool depsCxx = depsNeedCxx();
 

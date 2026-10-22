@@ -195,6 +195,15 @@ private:
     // one), "" for bare metal or anything else; picks [build.<os>].
     std::string targetOS() const;
     bool targetIsWindows() const { return targetOS() == "windows"; }
+    // The C runtime every object and the link use: on Windows (MSVC ABI)
+    // the shared one (msvcrt / ucrtbase DLLs, clang's -fms-runtime-lib=dll,
+    // /MD), so a cdylib and the program that loads it share one heap and
+    // memory may cross the DLL boundary. Empty elsewhere.
+    std::vector<std::string> runtimeFlags() const;
+    // ... and at the link: clang's driver names libcmt (the static CRT)
+    // whatever the objects ask for, so the link swaps it for msvcrt.
+    std::vector<std::string> runtimeLinkFlags() const;
+    void stdForeignInclude(std::vector<std::string>& foreignIncs, const std::string& stdDir) const;
     const PlatformBuildConfig* platformBuild() const;
     // [build] cflags followed by [build.<os>] cflags.
     std::vector<std::string> compileFlags() const;
