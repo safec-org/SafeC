@@ -107,6 +107,13 @@ fn atadd(k: u32, i: u32, v: f32) { atomic_addf((P(k) >> 2u) + i, v); }
 fn finite(v: f32) -> bool { return (bitcast<u32>(v) & 0x7f800000u) != 0x7f800000u; }
 // Output k is 16-bit and word-aligned: elementwise kernels write it in pairs.
 fn pairs_out(k: u32) -> bool { return TAGGED && TG(k) != 0u && (P(k) & 3u) == 0u; }
+// Argument k holds type t word-aligned (device_kernels.cu's pair_tag), and
+// its elements 2j, 2j + 1 from one word.
+fn pair_ok(k: u32, t: u32) -> bool { return TG(k) == t && (P(k) & 3u) == 0u; }
+fn ldw2(k: u32, j: u32) -> vec2f {
+    let w = H[(P(k) >> 2u) + j];
+    return vec2f(h2f(w & 0xffffu, TG(k)), h2f(w >> 16u, TG(k)));
+}
 
 // ── Elementwise: op codes match tensor.h's EW_* ─────────────────────────────
 // p0 = in a, p1 = in b, p2 = out, p3 = aux; f0 = k, f1 = k2; u1 = 1: the
@@ -1259,6 +1266,24 @@ fn norm_apply_at(i: u32) -> f32 {
 @compute @workgroup_size(256)
 fn dk_norm_apply(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u) {
     let n = N();
+    let C = U(0u);
+    let Pp = U(1u);
+    if (pairs_out(1u) && pair_ok(0u, TG(1u)) && (Pp & 1u) == 0u && (n & 1u) == 0u) {
+        // both of a word's elements in one channel (even planes): its
+        // statistics read once, the input word once
+        let o = P(1u) >> 2u;
+        let t = TG(1u);
+        for (var j = gid.x; j < n / 2u; j += nwg.x * 256u) {
+            let c = chan_of(2u * j, C, Pp);
+            let sn = norm_stat(2u * j, C, Pp, U(2u));
+            let g = ld(4u, c) * ld(3u, sn);
+            let m = ld(2u, sn);
+            let b = ld(5u, c);
+            let x = ldw2(0u, j);
+            H[o + j] = pack16(fused_act(g * (x.x - m) + b), fused_act(g * (x.y - m) + b), t);
+        }
+        return;
+    }
     if (pairs_out(1u)) {
         let o = P(1u) >> 2u;
         let t = TG(1u);
@@ -1320,6 +1345,35 @@ fn bn_bwd_dx_at(i: u32) -> f32 {
 @compute @workgroup_size(256)
 fn dk_bn_bwd_dx(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u) {
     let n = N();
+    let C = U(0u);
+    let Pp = U(1u);
+    let t = TG(6u);
+    if (pairs_out(6u) && pair_ok(0u, t) && pair_ok(1u, t) && (U(5u) == 0u || pair_ok(7u, t)) &&
+        (Pp & 1u) == 0u && (n & 1u) == 0u) {
+        // both of a word's elements in one channel (even planes): the
+        // channel's values read once, each input word once
+        let o = P(6u) >> 2u;
+        for (var j = gid.x; j < n / 2u; j += nwg.x * 256u) {
+            let c = chan_of(2u * j, C, Pp);
+            let inv = ld(3u, c);
+            var m1 = 0.0;
+            var m2 = 0.0;
+            if (U(2u) != 0u) { m1 = ld(5u, c) * F(0u); m2 = ld(5u, C + c) * F(0u); }
+            let g = ld(4u, c) * inv;
+            var dy = ldw2(0u, j);
+            if (U(5u) != 0u) {
+                let y = ldw2(7u, j);
+                let sl = select(F(1u), 0.0, U(5u) == 1u);
+                if (!(y.x > 0.0)) { dy.x *= sl; }
+                if (!(y.y > 0.0)) { dy.y *= sl; }
+            }
+            let xh = (ldw2(1u, j) - vec2f(ld(2u, c))) * inv;
+            var v = g * (dy - vec2f(m1) - xh * m2);
+            if (U(6u) == 0u) { v += ldw2(6u, j); }
+            H[o + j] = pack16(v.x, v.y, t);
+        }
+        return;
+    }
     if (pairs_out(6u)) {
         let o = P(6u) >> 2u;
         let t = TG(6u);
@@ -1432,6 +1486,57 @@ fn dk_pool(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) n
         }
     }
 }
+// The gradient input i gathers from the windows that hold it -- for max
+// pooling, those whose (first) largest value it is.
+fn pool_bwd_at(i: u32) -> f32 {
+    let Hh = U(1u);
+    let W = U(2u);
+    let oH = U(3u);
+    let oW = U(4u);
+    let kH = i32(F(0u));
+    let kW = i32(F(1u));
+    let sH = i32(F(2u));
+    let sW = i32(F(3u));
+    let pH = i32(F(4u));
+    let pW = i32(F(5u));
+    let t = i / W;
+    let x = i - t * W;
+    let pl = t / Hh;
+    let y = t - pl * Hh;
+    let base = pl * Hh * W;
+    let dbase = pl * oH * oW;
+    var oh0: i32;
+    var oh1: i32;
+    var ow0: i32;
+    var ow1: i32;
+    if (kH == sH && kW == sW && pH == 0 && pW == 0) {
+        // non-overlapping windows: exactly one holds (y, x)
+        oh0 = i32(y / u32(kH)); oh1 = oh0;
+        ow0 = i32(x / u32(kW)); ow1 = ow0;
+    } else {
+        oh0 = (i32(y) + pH - kH + sH) / sH; oh1 = (i32(y) + pH) / sH;   // windows over row y
+        ow0 = (i32(x) + pW - kW + sW) / sW; ow1 = (i32(x) + pW) / sW;
+        if (i32(y) + pH - kH + 1 < 0) { oh0 = 0; }
+        if (i32(x) + pW - kW + 1 < 0) { ow0 = 0; }
+    }
+    if (oh1 > i32(oH) - 1) { oh1 = i32(oH) - 1; }
+    if (ow1 > i32(oW) - 1) { ow1 = i32(oW) - 1; }
+    var s = 0.0;
+    for (var oh = oh0; oh <= oh1; oh++) {
+        for (var ow = ow0; ow <= ow1; ow++) {
+            let r = pool_win(u32(oh), u32(ow));
+            if (y < r.h0 || y >= r.h1 || x < r.w0 || x >= r.w1) { continue; }
+            let d = ld(1u, dbase + u32(oh) * oW + u32(ow));
+            if (U(5u) == 0u) {
+                if (pool_argmax(base, r) == y * W + x) { s += d; }
+            } else {
+                s += d / pool_div(r);
+            }
+        }
+    }
+    if (U(6u) == 0u) { s += ld(2u, i); }
+    return s;
+}
 // The pooling's backward as a gather (no atomics, any element type). p0 x,
 // p1 dout, p2 dx; geometry as dk_pool; u6 = 1: dx was an unwritten zero
 // gradient                                                    n = planes*H*W
@@ -1448,10 +1553,40 @@ fn dk_pool_bwd(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroup
     let sW = i32(F(3u));
     let pH = i32(F(4u));
     let pW = i32(F(5u));
+    let n = N();
     let tiled = kH == sH && kW == sW && pH == 0 && pW == 0;
+    if (tiled && U(6u) != 0u && oH * u32(kH) == Hh && oW * u32(kW) == W && pairs_out(2u) && (kW & 1) == 0 && (W & 1u) == 0u) {
+        // exact tiling into a 16-bit gradient, windows an even number of
+        // columns wide: a thread per window writes its rows as whole words
+        let o = P(2u) >> 2u;
+        let t = TG(2u);
+        let planes = n / (Hh * W);
+        for (var i = gid.x; i < planes * oH * oW; i += nwg.x * 256u) {
+            let q = i / oW;
+            let ow = i - q * oW;
+            let pl = q / oH;
+            let oh = q - pl * oH;
+            let r = pool_win(oh, ow);
+            let base = pl * Hh * W;
+            let d = ld(1u, i);
+            var best = 0xffffffffu;
+            var share = 0.0;
+            if (mode == 0u) { best = pool_argmax(base, r); } else { share = d / pool_div(r); }
+            for (var yy = r.h0; yy < r.h1; yy++) {
+                for (var xx = r.w0; xx < r.w1; xx += 2u) {
+                    let e = yy * W + xx;
+                    var lo = share;
+                    var hi = share;
+                    if (mode == 0u) { lo = select(0.0, d, e == best); hi = select(0.0, d, e + 1u == best); }
+                    H[o + (base + e) / 2u] = pack16(lo, hi, t);
+                }
+            }
+        }
+        return;
+    }
     if (tiled && (U(6u) == 0u || (oH * u32(kH) == Hh && oW * u32(kW) == W))) {
         // non-overlapping windows partition the inputs: a thread per window
-        let planes = N() / (Hh * W);
+        let planes = n / (Hh * W);
         for (var i = gid.x; i < planes * oH * oW; i += nwg.x * 256u) {
             let t = i / oW;
             let ow = i - t * oW;
@@ -1474,44 +1609,15 @@ fn dk_pool_bwd(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroup
         }
         return;
     }
-    for (var i = gid.x; i < N(); i += nwg.x * 256u) {
-        let t = i / W;
-        let x = i - t * W;
-        let pl = t / Hh;
-        let y = t - pl * Hh;
-        let base = pl * Hh * W;
-        let dbase = pl * oH * oW;
-        var oh0: i32;
-        var oh1: i32;
-        var ow0: i32;
-        var ow1: i32;
-        if (tiled) {
-            // non-overlapping windows: exactly one holds (y, x)
-            oh0 = i32(y / u32(kH)); oh1 = oh0;
-            ow0 = i32(x / u32(kW)); ow1 = ow0;
-        } else {
-            oh0 = (i32(y) + pH - kH + sH) / sH; oh1 = (i32(y) + pH) / sH;   // windows over row y
-            ow0 = (i32(x) + pW - kW + sW) / sW; ow1 = (i32(x) + pW) / sW;
-            if (i32(y) + pH - kH + 1 < 0) { oh0 = 0; }
-            if (i32(x) + pW - kW + 1 < 0) { ow0 = 0; }
-        }
-        if (oh1 > i32(oH) - 1) { oh1 = i32(oH) - 1; }
-        if (ow1 > i32(oW) - 1) { ow1 = i32(oW) - 1; }
-        var s = 0.0;
-        for (var oh = oh0; oh <= oh1; oh++) {
-            for (var ow = ow0; ow <= ow1; ow++) {
-                let r = pool_win(u32(oh), u32(ow));
-                if (y < r.h0 || y >= r.h1 || x < r.w0 || x >= r.w1) { continue; }
-                let d = ld(1u, dbase + u32(oh) * oW + u32(ow));
-                if (mode == 0u) {
-                    if (pool_argmax(base, r) == y * W + x) { s += d; }
-                } else {
-                    s += d / pool_div(r);
-                }
-            }
-        }
-        accum(2u, i, s);
+    if (pairs_out(2u)) {
+        // a 16-bit gradient otherwise: two inputs per thread, whole words
+        let o = P(2u) >> 2u;
+        let t = TG(2u);
+        for (var j = gid.x; j < n / 2u; j += nwg.x * 256u) { H[o + j] = pack16(pool_bwd_at(2u * j), pool_bwd_at(2u * j + 1u), t); }
+        if ((n & 1u) != 0u && gid.x == 0u) { st(2u, n - 1u, pool_bwd_at(n - 1u)); }
+        return;
     }
+    for (var i = gid.x; i < n; i += nwg.x * 256u) { st(2u, i, pool_bwd_at(i)); }
 }
 // Global pooling, one plane of u0 values per unit: p0 x, p1 out [planes];
 // backward (u2 = 1): p1 dout, p2 dx. u1 = 0 max, 1 avg           n = planes*256
@@ -1878,6 +1984,34 @@ fn gst1(base: u32, t: u32, i: u32, v: f32) {
     atomicAnd(&HA[a >> 2u], ~(0xffffu << s));
     atomicOr(&HA[a >> 2u], f2h(v, t) << s);
 }
+// Elements i .. i + 3 = v (the first n of them): a 16-bit run starting on a
+// word boundary as two whole words (no atomics: the thread owns them), else
+// element by element.
+fn gst4(base: u32, t: u32, i: u32, v: vec4f, n: u32) {
+    if (t != 0u && n == 4u && (((base >> 1u) + i) & 1u) == 0u) {
+        let w = (base + 2u * i) >> 2u;
+        H[w] = pack16(v.x, v.y, t);
+        H[w + 1u] = pack16(v.z, v.w, t);
+        return;
+    }
+    if (n > 0u) { gst1(base, t, i, v.x); }
+    if (n > 1u) { gst1(base, t, i + 1u, v.y); }
+    if (n > 2u) { gst1(base, t, i + 2u, v.z); }
+    if (n > 3u) { gst1(base, t, i + 3u, v.w); }
+}
+// c's elements i .. i + 3 (n of them) = alpha acc + beta c (beta 0: c is not read).
+fn gemm_out4(Cb: u32, i: u32, acc: vec4f, n: u32, alpha: f32, beta: f32) {
+    var v = alpha * acc;
+    if (beta != 0.0) {
+        var c = vec4f(0.0);
+        if (n > 0u) { c.x = gld(Cb, GCT, i); }
+        if (n > 1u) { c.y = gld(Cb, GCT, i + 1u); }
+        if (n > 2u) { c.z = gld(Cb, GCT, i + 2u); }
+        if (n > 3u) { c.w = gld(Cb, GCT, i + 3u); }
+        v += beta * c;
+    }
+    gst4(Cb, GCT, i, v, n);
+}
 // One element of the A (B) tile at step k0 for e = li + 256 q: row (column)
 // e / 16 or e % 64, as the transposes make neighbouring threads read
 // neighbouring addresses; 0 outside the matrix.
@@ -1976,18 +2110,16 @@ fn wk_gemm(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: 
     }
     let alpha = bitcast<f32>(aw(12u));
     let beta = bitcast<f32>(aw(13u));
+    let gn = n0 + tx * 4u;
+    let nc = select(0u, min(Nn - gn, 4u), gn < Nn);
     for (var i = 0u; i < 4u; i++) {
         let gm = m0 + ty * 4u + i;
         if (gm >= M) { break; }
-        for (var j = 0u; j < 4u; j++) {
-            let gn = n0 + tx * 4u + j;
-            if (gn >= Nn) { break; }
-            let idx = gm * ldc + gn;
-            if (S > 1u) { atomic_addf((Cb >> 2u) + idx, alpha * acc[i][j]); continue; }
-            var v = alpha * acc[i][j];
-            if (beta != 0.0) { v += beta * gld(Cb, GCT, idx); }   // beta 0: c is not read
-            gst1(Cb, GCT, idx, v);
+        if (S > 1u) {
+            for (var j = 0u; j < nc; j++) { atomic_addf((Cb >> 2u) + gm * ldc + gn + j, alpha * acc[i][j]); }
+            continue;
         }
+        gemm_out4(Cb, gm * ldc + gn, acc[i], nc, alpha, beta);
     }
 }
 
@@ -2144,17 +2276,14 @@ fn wk_gemm8(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg:
     }
     let alpha = bitcast<f32>(aw(12u));
     let beta = bitcast<f32>(aw(13u));
+    let gn = n0 + tx * 8u;
+    let n0c = select(0u, min(Nn - gn, 4u), gn < Nn);
+    let n1c = select(0u, min(Nn - gn - 4u, 4u), gn + 4u < Nn);
     for (var i = 0u; i < 8u; i++) {
         let gm = m0 + ty * 8u + i;
         if (gm >= M) { break; }
-        for (var j = 0u; j < 8u; j++) {
-            let gn = n0 + tx * 8u + j;
-            if (gn >= Nn) { break; }
-            let idx = gm * ldc + gn;
-            var v = alpha * acc[i * 2u + j / 4u][j % 4u];
-            if (beta != 0.0) { v += beta * gld(Cb, GCT, idx); }
-            gst1(Cb, GCT, idx, v);
-        }
+        gemm_out4(Cb, gm * ldc + gn, acc[i * 2u], n0c, alpha, beta);
+        gemm_out4(Cb, gm * ldc + gn + 4u, acc[i * 2u + 1u], n1c, alpha, beta);
     }
 }
 
@@ -2403,24 +2532,33 @@ fn wk_conv(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: 
     for (var i = 0u; i < 4u; i++) {
         let gm = m0 + ty * 4u + i;
         if (gm >= M) { break; }
+        // the four outputs' indices: whole 16-bit words where they run on
+        var o = vec4u(0u);
+        var cnt = 0u;
         for (var j = 0u; j < 4u; j++) {
             let gn = n0 + tx * 4u + j;
             if (gn >= Ntot) { break; }
-            let v = acc[i][j];
             if (COP == 0u) {
                 let b = gn / Po;
-                gst1(c.y, CT, (b * c.Co + gm) * Po + gn - b * Po, v);
+                o[j] = (b * c.Co + gm) * Po + gn - b * Po;
             } else if (phased) {
                 let b = gn / (py * px);
                 let ip = gn - b * py * px;
                 let jy = ip / px;
-                gst1(c.x, CT, (b * c.Ci + gm) * Pi + (yb + jy * c.sH) * c.Wi + xb + (ip - jy * px) * c.sW, v);
+                o[j] = (b * c.Ci + gm) * Pi + (yb + jy * c.sH) * c.Wi + xb + (ip - jy * px) * c.sW;
             } else if (COP == 1u) {
                 let b = gn / Pi;
-                gst1(c.x, CT, (b * c.Ci + gm) * Pi + gn - b * Pi, v);
+                o[j] = (b * c.Ci + gm) * Pi + gn - b * Pi;
             } else {
-                atomic_addf((c.w >> 2u) + gm * Ntot + gn, v);
+                atomic_addf((c.w >> 2u) + gm * Ntot + gn, acc[i][j]);
             }
+            cnt = j + 1u;
+        }
+        if (COP == 2u) { continue; }
+        let ob = select(c.x, c.y, COP == 0u);
+        if (cnt == 4u && o.y == o.x + 1u && o.z == o.x + 2u && o.w == o.x + 3u) { gst4(ob, CT, o.x, acc[i], 4u); }
+        else {
+            for (var j = 0u; j < cnt; j++) { gst1(ob, CT, o[j], acc[i][j]); }
         }
     }
 }
