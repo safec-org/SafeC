@@ -324,6 +324,7 @@ static unsigned int __be32(const unsigned char* p) {
 int GuiImage::load_png(const &unsigned char data_ref, unsigned long size) { const unsigned char* data = data_ref;
     unsafe {
         self.pixels = (&heap unsigned char)0;
+        self.premultiplied = 0;
         self.width = 0;
         self.height = 0;
     }

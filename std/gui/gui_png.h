@@ -17,9 +17,33 @@
 namespace std {
 
 struct GuiImage {
-    &heap unsigned char pixels; // width*height*4 bytes, RGBA8888 (matches GuiWindow's own buffer format)
+    &heap unsigned char pixels; // width*height*4 bytes, RGBA8888, R first
     int width;
     int height;
+    int premultiplied;          // 1: color channels are premultiplied by alpha (an image a
+                                // GuiCanvas drew into); 0: straight alpha (as decoded from PNG)
+
+    // A transparent width x height image (premultiplied; ready for
+    // GuiCanvas::for_image). Free with free().
+    static struct GuiImage new(int width, int height);
+    // A premultiplied copy of a window's pixel buffer (a screenshot).
+    static struct GuiImage from_window(const &GuiWindow win);
+    // Reads and decodes a PNG file. 1 = ok.
+    int  load_png_file(const &char path);
+    // Writes the image as an RGBA PNG file (stored, uncompressed DEFLATE;
+    // straight alpha). 1 = ok.
+    int  save_png(const &char path) const;
+    // Converts between straight and premultiplied alpha in place (no-op
+    // when already in that form).
+    void premultiply();
+    void unpremultiply();
+    struct GuiImage copy() const;
+    // A resampled copy: area-averaging when shrinking (no aliasing),
+    // bilinear when enlarging. Keeps the alpha form.
+    struct GuiImage scaled(int width, int height) const;
+    // 0xRRGGBBAA as stored / unblended store; 0 / no-op out of bounds.
+    unsigned int get_pixel(int x, int y) const;
+    void set_pixel(int x, int y, unsigned int rgba);
 
     // Decodes a PNG file's bytes (already read into memory) into this
     // image in place ('struct GuiImage img; img.load_png(data, size)').
