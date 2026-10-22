@@ -21,10 +21,19 @@ static int g_dev_auto = -2;          // resolved device_auto(), -2 = not yet
 static int g_dev_avail[DEVICE_COUNT];   // 0 = unknown, 1 = yes, 2 = no
 static struct DeviceStats g_dev_stats[DEVICE_COUNT];
 
+// The default device_link_backends_ (no backends), for programs whose units
+// enable none: a weak definition rather than a weak undefined reference,
+// which Mach-O's linker rejects unless every link passes -U for it. A unit
+// with a backend feature defines its own (device.h) and, listed before the
+// std archive, is the one the linker keeps.
+#if !defined(SAFEC_FEATURE_ROCM) && !defined(SAFEC_FEATURE_CUDA) && !defined(SAFEC_FEATURE_MPS)
+void device_link_backends_() __attribute__((weak)) {}
+#endif
+
 static void device_link_() {
     if (g_dev_linked) return;
     g_dev_linked = 1;
-    unsafe { if ((void*)device_link_backends_ != (void*)0) device_link_backends_(); }
+    device_link_backends_();
 }
 
 void device_register_ops_(int device, struct DeviceOps ops) {
@@ -192,6 +201,7 @@ unsigned long device_bytes_reserved(int device) {
 struct DeviceStats device_stats(int device) {
     struct DeviceStats z;
     z.launches = 0UL; z.gemms = 0UL; z.uploads = 0UL; z.downloads = 0UL; z.uploadBytes = 0UL; z.downloadBytes = 0UL;
+    z.cpuLaunches = 0UL;
     if (device <= DEVICE_CPU || device >= DEVICE_COUNT) return z;
     unsafe { return g_dev_stats[device]; }
 }
@@ -202,7 +212,13 @@ void device_stats_reset(int device) {
         g_dev_stats[device].launches = 0UL; g_dev_stats[device].gemms = 0UL;
         g_dev_stats[device].uploads = 0UL; g_dev_stats[device].downloads = 0UL;
         g_dev_stats[device].uploadBytes = 0UL; g_dev_stats[device].downloadBytes = 0UL;
+        g_dev_stats[device].cpuLaunches = 0UL;
     }
+}
+
+void device_note_cpu_launch_(int device) {
+    if (device <= DEVICE_CPU || device >= DEVICE_COUNT) return;
+    unsafe { g_dev_stats[device].cpuLaunches = g_dev_stats[device].cpuLaunches + 1UL; }
 }
 
 int device_upload_(int device, unsigned long dst, const &float src, unsigned long n) {

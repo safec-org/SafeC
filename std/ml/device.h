@@ -67,6 +67,8 @@ void device_cache_clear(int device);
 // moved between host and device, and how many kernels and GEMMs ran. A
 // training step that keeps everything on the device shows no downloads
 // besides the loss it reads, and no uploads besides its batch.
+// cpuLaunches counts the kernels and GEMMs a backend ran on the CPU
+// (device_ref.sc) for want of a GPU version: 0 when the GPU ran them all.
 struct DeviceStats {
     unsigned long launches;
     unsigned long gemms;
@@ -74,6 +76,7 @@ struct DeviceStats {
     unsigned long downloads;
     unsigned long uploadBytes;
     unsigned long downloadBytes;
+    unsigned long cpuLaunches;
 };
 struct DeviceStats device_stats(int device);
 void device_stats_reset(int device);
@@ -320,6 +323,8 @@ int device_launch_(int device, int kernel, unsigned long n, const &DevArgs args)
 unsigned long device_offset_(int device, unsigned long handle, unsigned long bytes);
 // A zeroed argument struct.
 struct DevArgs dev_args_();
+// A backend ran a kernel or GEMM on the CPU (DeviceStats.cpuLaunches).
+void device_note_cpu_launch_(int device);
 // The kernels on the CPU over host addresses (device_ref.sc): what a backend
 // runs for a kernel it has no GPU version of, and the reference the GPU
 // kernels are tested against.
