@@ -72,6 +72,15 @@ struct HttpHeaders {
     void          free();
 };
 
+// A parameter of a structured header value — the "boundary" of
+// 'multipart/form-data; boundary="xyz"', the "filename" of a
+// Content-Disposition. Quoted values are unquoted (backslash escapes
+// resolved); names compare case-insensitively. Empty String if absent.
+struct String http_header_param(const &char value, const &char name);
+// The part of such a value before the first ';', trimmed and lowercased
+// ("multipart/form-data").
+struct String http_header_main_value(const &char value);
+
 // Case-insensitive ASCII comparison of two NUL-terminated strings (1 if
 // equal) — the comparison header names use.
 int http_name_eq(const &char a, const &char b);

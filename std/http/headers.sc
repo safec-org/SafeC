@@ -19,6 +19,68 @@ int http_name_eq(const &char a, const &char b) {
     }
 }
 
+struct String http_header_param(const &char value, const &char name) {
+    struct String out = String::new();
+    unsafe {
+        const char* s = value;
+        unsigned long i = 0UL;
+        // Skip the main value.
+        while (s[i] != (char)0 && s[i] != ';') {
+            if (s[i] == '"') { i = i + 1UL; while (s[i] != (char)0 && s[i] != '"') { i = i + 1UL; } }
+            if (s[i] != (char)0) { i = i + 1UL; }
+        }
+        while (s[i] == ';') {
+            i = i + 1UL;
+            while (hh_is_blank_(s[i])) { i = i + 1UL; }
+            unsigned long ka = i;
+            while (s[i] != (char)0 && s[i] != '=' && s[i] != ';') { i = i + 1UL; }
+            unsigned long kb = i;
+            while (kb > ka && hh_is_blank_(s[kb - 1UL])) { kb = kb - 1UL; }
+            int same = 1;
+            unsigned long k = 0UL;
+            while (ka + k < kb) {
+                if (name[k] == (char)0 || hh_lower_(s[ka + k]) != hh_lower_(name[k])) { same = 0; break; }
+                k = k + 1UL;
+            }
+            if (same && name[k] != (char)0) { same = 0; }
+            if (s[i] != '=') { continue; }
+            i = i + 1UL;
+            while (hh_is_blank_(s[i])) { i = i + 1UL; }
+            struct String v = String::new();
+            if (s[i] == '"') {
+                i = i + 1UL;
+                while (s[i] != (char)0 && s[i] != '"') {
+                    if (s[i] == '\\' && s[i + 1UL] != (char)0) { i = i + 1UL; }
+                    v.push_char(s[i]);
+                    i = i + 1UL;
+                }
+                if (s[i] == '"') { i = i + 1UL; }
+                while (s[i] != (char)0 && s[i] != ';') { i = i + 1UL; }
+            } else {
+                unsigned long va = i;
+                while (s[i] != (char)0 && s[i] != ';') { i = i + 1UL; }
+                unsigned long vb = i;
+                while (vb > va && hh_is_blank_(s[vb - 1UL])) { vb = vb - 1UL; }
+                v.push_n(&s[va], vb - va);
+            }
+            if (same) { out.free(); return v; }
+            v.free();
+        }
+    }
+    return out;
+}
+
+struct String http_header_main_value(const &char value) {
+    struct String out = String::new();
+    unsafe {
+        unsigned long i = 0UL;
+        while (hh_is_blank_(value[i])) { i = i + 1UL; }
+        while (value[i] != (char)0 && value[i] != ';') { out.push_char(hh_lower_(value[i])); i = i + 1UL; }
+        while (out.length() > 0UL && hh_is_blank_(out.as_ptr()[out.length() - 1UL])) { out.truncate(out.length() - 1UL); }
+    }
+    return out;
+}
+
 struct HttpHeaders HttpHeaders::new() {
     struct HttpHeaders h;
     h.fields = Vec::new();

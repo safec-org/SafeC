@@ -16,7 +16,7 @@
 #include <std/crypto/rng.h>
 #include <std/crypto/rng.h>
 #include <std/encoding/base64.h>
-#include <std/encoding/base64.h>
+#include <std/encoding/url.h>
 // See websocket.h's top comment: a std/sched/io_nb_*.sc backend and
 // std/http/http.sc must both already be included by the caller before this
 // file (http.sc supplies http_resolve_host/http_header_get, reused below).
@@ -357,9 +357,9 @@ int WsConn::send_close() {
     return ws_write_frame_(self, WS_OPCODE_CLOSE, (const unsigned char*)0, 0UL);
 }
 
-int WsConn::recv(&WsMessage out) {
+static int ws_recv_frame_(&WsConn conn, &WsMessage out, &int finOut) {
     struct WsSource_ s;
-    s.conn = self;
+    s.conn = conn;
 
     unsigned char head[2];
     if (!read_exact(&s, &head[0], 2UL)) { return 0; }
@@ -367,6 +367,7 @@ int WsConn::recv(&WsMessage out) {
     int maskBit;
     unsigned long len7;
     unsafe {
+        *finOut = (int)((head[0] >> 7) & 0x1U);
         opcode = (int)(head[0] & 0x0FU);
         maskBit = (int)((head[1] >> 7) & 0x1U);
         len7 = (unsigned long)(head[1] & 0x7FU);
@@ -424,6 +425,144 @@ int WsConn::recv(&WsMessage out) {
         out->len    = payloadLen;
     }
     return 1;
+}
+
+int WsConn::recv(&WsMessage out) {
+    int fin = 1;
+    return ws_recv_frame_(self, out, &fin);
+}
+
+int WsConn::recv_message(&WsMessage out, unsigned long max_len) {
+    struct String acc = String::new();
+    int msgOp = -1;
+    while (1) {
+        struct WsMessage f;
+        int fin = 1;
+        if (!ws_recv_frame_(self, &f, &fin)) { acc.free(); return 0; }
+        if (f.opcode == WS_OPCODE_PING) {
+            // Answered automatically, with the same payload (RFC 6455 5.5.3).
+            const unsigned char* d = (const unsigned char*)0;
+            unsafe { d = (const unsigned char*)f.data; }
+            ws_write_frame_(self, WS_OPCODE_PONG, d, f.len);
+            f.free();
+            continue;
+        }
+        if (f.opcode == WS_OPCODE_PONG) { f.free(); continue; }
+        if (f.opcode == WS_OPCODE_CLOSE) {
+            acc.free();
+            *out = f;
+            return 1;
+        }
+        if (f.opcode == WS_OPCODE_CONTINUATION) {
+            if (msgOp < 0) { f.free(); acc.free(); return 0; }
+        } else {
+            if (msgOp >= 0) { f.free(); acc.free(); return 0; }   // new message inside a fragmented one
+            msgOp = f.opcode;
+        }
+        if (max_len != 0UL && acc.length() + f.len > max_len) { f.free(); acc.free(); return 0; }
+        if (f.len > 0UL) { unsafe { acc.push_n((const char*)f.data, f.len); } }
+        f.free();
+        if (fin) { break; }
+    }
+    unsigned char* payload = (unsigned char*)0;
+    if (acc.length() > 0UL) {
+        unsafe {
+            payload = (unsigned char*)alloc_raw_(acc.length());
+            if (payload == (unsigned char*)0) { acc.free(); return 0; }
+            safe_memcpy_raw_((void*)payload, (const void*)acc.as_ptr(), acc.length());
+        }
+    }
+    unsafe {
+        out->opcode = msgOp;
+        out->data = payload;
+        out->len = acc.length();
+    }
+    acc.free();
+    return 1;
+}
+
+int ws_is_upgrade(const &HttpRequest req) {
+    return req.method.eq_cstr("GET") &&
+           http_header_has_token(req.headers.as_ptr(), "Upgrade", "websocket") &&
+           http_header_has_token(req.headers.as_ptr(), "Connection", "upgrade") &&
+           req.has_header("Sec-WebSocket-Key");
+}
+
+struct WsConn WsConn::accept_upgrade(const &HttpRequest req, &HttpConn conn, ?&int ok) {
+    struct WsConn c;
+    c.fd = -1;
+    c.is_server = 1;
+    c.early = null;
+    c.earlyLen = 0UL;
+    c.earlyPos = 0UL;
+    int good = ws_is_upgrade(req);
+    struct String ver = req.header("Sec-WebSocket-Version");
+    if (!ver.eq_cstr("13")) { good = 0; }
+    ver.free();
+    if (!good) {
+        if (ok != (int*)0) { unsafe { *ok = 0; } }
+        return c;
+    }
+    struct String key = req.header("Sec-WebSocket-Key");
+    struct String accept = ws_compute_accept_(key.as_ptr());
+    key.free();
+    struct String early = String::new();
+    struct TcpStream s = conn.detach(&early);
+    struct String resp = String::from("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+                                      "Connection: Upgrade\r\nSec-WebSocket-Accept: ");
+    resp.push_str(&accept);
+    resp.push("\r\n\r\n");
+    accept.free();
+    int sent;
+    unsafe { sent = write_all(&s, (const &unsigned char)resp.as_ptr(), resp.length()); }
+    resp.free();
+    // The server's I/O timeout must not cut an idle WebSocket off.
+    sock_set_io_timeout(s.fd, 0);
+    if (!sent) {
+        s.close();
+        early.free();
+        if (ok != (int*)0) { unsafe { *ok = 0; } }
+        return c;
+    }
+    c.fd = s.fd;
+    if (early.length() > 0UL) {
+        ?&heap unsigned char buf = (?&heap unsigned char)alloc_raw_(early.length());
+        match (buf) {
+            case some(b): {
+                unsafe { safe_memcpy_raw_((void*)b, (const void*)early.as_ptr(), early.length()); }
+                c.early = b;
+                c.earlyLen = early.length();
+            }
+            case null: { }
+        }
+    }
+    early.free();
+    if (ok != (int*)0) { unsafe { *ok = 1; } }
+    return c;
+}
+
+struct WsConn WsConn::connect_url(const &char url, int timeout_ms, ?&int ok) {
+    int pok = 0;
+    struct Url u = Url::parse(url, &pok);
+    if (pok && !u.scheme.eq_cstr("ws") && !u.scheme.eq_cstr("http")) { pok = 0; }
+    int port = u.port_or_default();
+    if (u.host.is_empty() || port <= 0) { pok = 0; }
+    struct WsConn c;
+    if (!pok) {
+        c.fd = -1;
+        c.is_server = 0;
+        c.early = null;
+        c.earlyLen = 0UL;
+        c.earlyPos = 0UL;
+        u.free();
+        if (ok != (int*)0) { unsafe { *ok = 0; } }
+        return c;
+    }
+    struct String target = u.request_target();
+    c = WsConn::connect_timeout(u.host.as_ptr(), (unsigned short)port, target.as_ptr(), timeout_ms, ok);
+    target.free();
+    u.free();
+    return c;
 }
 
 void WsConn::close() {

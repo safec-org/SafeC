@@ -172,7 +172,10 @@ static char http_lower_(char c) {
 static unsigned long http_next_header_(const &char h, unsigned long len, unsigned long pos,
                                        &unsigned long ks, &unsigned long ke,
                                        &unsigned long vs, &unsigned long ve) {
-    if (pos >= len) { return 0UL; }
+    if (pos >= len) {
+        *ks = len; *ke = len; *vs = len; *ve = len;
+        return 0UL;
+    }
     unsafe {
         unsigned long end = pos;
         while (end < len && h[end] != '\n') { end = end + 1UL; }
@@ -788,8 +791,15 @@ static struct String http_render_response_(&HttpResponse resp, int head, int kee
         unsigned long ve = 0UL;
         int hasType = 0;
         int hasDate = 0;
+        long long headLen = -1LL;
         while (len > 0UL) {
             unsigned long next = http_next_header_(h, len, pos, &ks, &ke, &vs, &ve);
+            if (head && ke > ks && http_key_is_(h, ks, ke, "content-length")) {
+                long long v = 0LL;
+                unsigned long k = vs;
+                while (k < ve && h[k] >= '0' && h[k] <= '9') { v = v * 10LL + (long long)((int)h[k] - (int)'0'); k = k + 1UL; }
+                if (k == ve && ve > vs) { headLen = v; }
+            }
             if (ke > ks && !http_key_is_(h, ks, ke, "content-length") &&
                 !http_key_is_(h, ks, ke, "connection") &&
                 !http_key_is_(h, ks, ke, "transfer-encoding")) {
@@ -813,8 +823,12 @@ static struct String http_render_response_(&HttpResponse resp, int head, int kee
         int bodyAllowed = http_status_has_body_(resp.status);
         if (!hasType && bodyAllowed) { out.push("Content-Type: text/plain\r\n"); }
         if (bodyAllowed) {
+            // HEAD: a handler that skipped building the body may state its
+            // length with an explicit Content-Length.
+            unsigned long long clen = (unsigned long long)resp.body.length();
+            if (head && resp.body.length() == 0UL && headLen >= 0LL) { clen = (unsigned long long)headLen; }
             out.push("Content-Length: ");
-            out.push_uint((unsigned long long)resp.body.length());
+            out.push_uint(clen);
             out.push("\r\n");
         }
         out.push(keep ? "Connection: keep-alive\r\n\r\n" : "Connection: close\r\n\r\n");
