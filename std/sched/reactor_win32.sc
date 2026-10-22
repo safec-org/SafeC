@@ -170,7 +170,8 @@ inline void Reactor::remove(int fd, int filter) {
     }
 }
 
-inline int Reactor::poll(&TaskScheduler sched, long long timeout_ms) {
+// Reactor::poll(sched, ...) is reactor.sc's, over this.
+inline int Reactor::poll_events_raw_(void* on_ready, void* ctx, long long timeout_ms) {
     unsigned long n;
     unsafe { n = self.watched.length(); }
     if (n == 0UL) {
@@ -229,7 +230,7 @@ inline int Reactor::poll(&TaskScheduler sched, long long timeout_ms) {
             unsafe { w = self.watched.at(i); }
             int wFilter;
             unsafe { wFilter = w->filter; }
-            sched->unblock_fd((int)readyFd, wFilter);
+            unsafe { fn void(void*, int, int) cb = (fn void(void*, int, int))on_ready; cb(ctx, (int)readyFd, wFilter); }
             processed = processed + 1;
         }
         i = i + 1UL;

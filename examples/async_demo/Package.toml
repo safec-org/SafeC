@@ -1,0 +1,12 @@
+[package]
+name        = "async_demo"
+version     = "1.0.0"
+author      = "SafeC <safec@example.org>"
+description = "std/async: an HTTP server, its clients and a thread-pool job in one Runtime"
+license     = "MIT"
+
+[build]
+edition = "2026"
+# std/async's coroutine macros (ASYNC_BEGIN, AWAIT, ...) are function-like
+# macros: they need safec's --compat-preprocessor.
+compat_preprocessor = true

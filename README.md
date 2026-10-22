@@ -141,7 +141,7 @@ drawn from Oxide (Weiss et al., 2019) and Cyclone (Grossman et al., 2002).
 | `safeguard/` | Package manager and build system — compiles and links mixed SafeC/C/C++/Objective-C projects, and bundles apps |
 | `tests/stdlib/` | Standard library test suites: hosted (`safeguard test`), bare-metal emulator/WebAssembly (`baremetal/`), std/audio's Web Audio/Web MIDI glue under Node (`audio_web/`), Win32 and X11 backends (`win32/`, `x11/`), and the GPU devices (`device/` on any device, `rocm/`, `cuda/`, `mps/`, `vulkan/`, `webgpu/`) |
 | `tests/std_modules/` | Checks that every std header's functions are implemented by the std modules a build including it links |
-| `examples/` | Example projects, including a full-stack HTTP server + WebAssembly client |
+| `examples/` | Example projects, including a full-stack HTTP server + WebAssembly client and an async HTTP server/client demo (`async_demo`) |
 
 ### Compiler Pipeline
 
@@ -216,8 +216,8 @@ Verified with real generated machine code (not just accepted input) across:
 | iOS | AArch64 (device + simulator) |
 | Android | AArch64, Aarch32, x86_64, x86 |
 | FreeBSD | x86_64, AArch64 |
-| Bare metal (`--target=<alias>`) | x86, x86_64, AArch32, AArch64, Cortex-M0/M3/M4/M7/M33, RV32I/E, RV64I/E — the whole stdlib builds and a 54-check suite runs in the Unicorn emulator for each |
-| WebAssembly (`--target=wasm32`/`wasm64`) | Library modules with `export_name`/`import_*` attributes; same 54-check suite runs under Node |
+| Bare metal (`--target=<alias>`) | x86, x86_64, AArch32, AArch64, Cortex-M0/M3/M4/M7/M33, RV32I/E, RV64I/E — the whole stdlib builds and a 62-check suite (including the async LocalExecutor) runs in the Unicorn emulator for each |
+| WebAssembly (`--target=wasm32`/`wasm64`) | Library modules with `export_name`/`import_*` attributes; same 62-check suite runs under Node |
 | Portable / GPU | SPIR-V, CUDA (NVPTX), ROCm (AMDGPU; the `std::ml` ROCm backend is tested on an MI100) |
 
 **Metal Shading Language is not supported** — Apple's Metal compiler has no
@@ -455,6 +455,33 @@ match (ch.recv()) {                       // blocks while empty; null once close
 ch.close();
 ```
 
+Async — `std/async` is Rust's futures model as a library: a future is a struct whose `poll(&Context cx)` returns `Poll<T>`, and the coroutine macros turn `poll` into a resumable state machine (the resume point and every local that lives across an await are fields of the struct; resumption is a `switch` that `goto`s back to the await point):
+
+```c
+#include <std/async/async.h>
+#include <std/async/host.h>
+
+struct Countdown {
+    int st; int i; struct Sleep d;
+    struct Poll<int> poll(&Context cx);
+    void drop();
+};
+struct Poll<int> Countdown::poll(&Context cx) {
+    ASYNC_BEGIN(self.st, 1);                 // one await point
+    for (self.i = 3; self.i > 0; self.i = self.i - 1) {
+        self.d = Sleep::new(100LL);
+        AWAIT(1, self.d);                    // Pending until the timer fires
+        printf("%d\n", self.i);
+    }
+    ASYNC_RETURN(42);
+    ASYNC_END;
+}
+void Countdown::drop() { if (self.st == 1) self.d.drop(); }
+
+struct Countdown c; c.st = ASYNC_INIT;
+int v = block_on(&c);                        // or spawn on LocalExecutor / ThreadPool / Runtime
+```
+
 For single-consumer fan-in from multiple producer threads without the channel runtime's blocking/condvar overhead, `std/sync/mpsc.h` provides a spinlock-guarded bounded ring buffer (`struct MpscQueue<T> q = std::MpscQueue::new(64UL); q.enqueue(v); q.dequeue()` → `?T`); `std/sync/lockfree.h`'s `LFQueue<T>` (`LFQueue::new`) is the single-producer/single-consumer case with no locking at all. For communicating with a *different process* rather than another thread, see `std/ipc/pipe.h` (anonymous pipes, typically parent/child after `fork()`) and `std/ipc/uds.h` (named Unix domain sockets, for unrelated processes).
 
 ### Bare-Metal
@@ -478,7 +505,7 @@ section(".rodata") const int MAGIC = 42;
 
 ## Non-Goals
 
-- Async/await
+- Language-level async/await (`std/async` provides futures, executors and `goto`-based coroutines as a library)
 - Dynamic dispatch / vtables
 - Garbage collection
 - Reflection / RTTI

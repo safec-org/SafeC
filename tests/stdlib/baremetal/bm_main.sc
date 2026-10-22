@@ -1,7 +1,9 @@
 // Bare-metal stdlib test image. No OS, no console: results are left in the
 // globals below and read back by the emulator harness (run.py) once main
 // returns. Covers the freestanding-safe modules — core, collections,
-// allocators, crypto, encoding, fixed-point DSP, net, serial, sync — on
+// allocators, crypto, encoding, fixed-point DSP, net, serial, sync, the
+// async LocalExecutor (coroutines, timers on a virtual clock, channels,
+// combinators, a mutex) — on
 // every ISA, including 64-bit arithmetic on 32-bit cores, soft-float, and
 // RV32I/E without the M extension (multiply/divide via builtins).
 #include <std/mem.h>
@@ -34,6 +36,7 @@
 #include <std/serial/value.h>
 #include <std/serial/json.h>
 #include <std/sync/spinlock.h>
+#include <std/async/async.h>
 
 volatile int g_checks = 0;
 volatile int g_fails = 0;
@@ -267,6 +270,90 @@ static void t_serial_sync() {
     }
 }
 
+// ── async: the no-heap LocalExecutor on a virtual clock ──────────────────
+static int g_bm_slots[2];
+static struct AsyncChannel<int> g_bm_ch;
+static struct AsyncMutex g_bm_mx;
+
+struct BmProducer {
+    int st; int i; int ok; struct ChanSend<int> tx; struct Sleep d;
+    struct Poll<int> poll(&Context cx);
+    void drop();
+};
+struct Poll<int> BmProducer::poll(&Context cx) {
+    ASYNC_BEGIN(self.st, 2);
+    for (self.i = 1; self.i <= 6; self.i = self.i + 1) {
+        self.d = Sleep::new(5LL);
+        AWAIT(1, self.d);
+        self.tx = g_bm_ch.send(self.i);
+        AWAIT_INTO(2, self.ok, self.tx);
+    }
+    g_bm_ch.close();
+    ASYNC_RETURN(self.i - 1);
+    ASYNC_END;
+}
+void BmProducer::drop() { self.st = ASYNC_DONE; }
+
+struct BmConsumer {
+    int st; int sum; ?int got; struct ChanRecv<int> rx; struct MutexLock l; struct YieldNow y;
+    struct Poll<int> poll(&Context cx);
+    void drop();
+};
+struct Poll<int> BmConsumer::poll(&Context cx) {
+    ASYNC_BEGIN(self.st, 3);
+    while (1) {
+        self.rx = g_bm_ch.recv();
+        AWAIT_INTO(1, self.got, self.rx);
+        if (self.got.is_none()) break;
+        self.l = g_bm_mx.lock();
+        AWAIT(2, self.l);
+        self.sum = self.sum + self.got.default(0);
+        self.y = YieldNow::new();
+        AWAIT(3, self.y);
+        g_bm_mx.unlock();
+    }
+    ASYNC_RETURN(self.sum);
+    ASYNC_END;
+}
+void BmConsumer::drop() { self.st = ASYNC_DONE; }
+
+static struct AsyncTask<struct BmProducer, int> g_bm_tp;
+static struct AsyncTask<struct BmConsumer, int> g_bm_tc[2];
+static struct LocalExecutor g_bm_ex;
+
+static void t_async() {
+    g_bm_ch = AsyncChannel::new(g_bm_slots[0..2]);
+    g_bm_mx = AsyncMutex::new();
+    g_bm_ex = LocalExecutor::new();
+    struct VirtualClock clk = VirtualClock::new(0LL);
+    struct BmProducer p;
+    p.st = ASYNC_INIT;
+    g_bm_tp = AsyncTask::new(p);
+    struct BmConsumer c;
+    c.st = ASYNC_INIT;
+    c.sum = 0;
+    c.got = null;
+    g_bm_tc[0] = AsyncTask::new(c);
+    g_bm_tc[1] = AsyncTask::new(c);
+    struct JoinHandle<int> hp = g_bm_ex.spawn(&g_bm_tp);
+    g_bm_ex.spawn(&g_bm_tc[0]);
+    g_bm_ex.spawn(&g_bm_tc[1]);
+    g_bm_ex.run(&clk);
+    CHECK(hp.is_finished());
+    CHECK(g_bm_tp.take().default(0) == 6);
+    CHECK(g_bm_tc[0].take().default(0) + g_bm_tc[1].take().default(0) == 21);
+    CHECK(clk.now == 30LL);
+    CHECK(g_bm_ex.live_count() == 0);
+
+    struct Sleep fast = Sleep::new(7LL);
+    struct Sleep slow = Sleep::new(50LL);
+    struct Select2<struct Sleep, struct Sleep, Unit, Unit> s = select2(fast, slow);
+    struct Either<Unit, Unit> e = g_bm_ex.block_on(&clk, &s);
+    CHECK(e.which == 1);
+    CHECK(clk.now == 37LL);
+    CHECK(g_bm_ex.timers.pending() == 0);
+}
+
 int main() {
     t_core();
     t_collections();
@@ -274,6 +361,7 @@ int main() {
     t_crypto();
     t_fixed_net();
     t_serial_sync();
+    t_async();
     g_done = 1;
     return g_fails;
 }

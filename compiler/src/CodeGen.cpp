@@ -1430,6 +1430,38 @@ void CodeGen::genStmt(Stmt &s, FnEnv &env) {
     }
 }
 
+// Whether a statement tree holds a goto target (the same statements
+// collectGotoLabels walks).
+bool CodeGen::stmtHasGotoLabel(Stmt &s) {
+    switch (s.kind) {
+    case StmtKind::Label: return true;
+    case StmtKind::Compound:
+        for (auto &c : static_cast<CompoundStmt &>(s).body) if (c && stmtHasGotoLabel(*c)) return true;
+        return false;
+    case StmtKind::If: {
+        auto &is = static_cast<IfStmt &>(s);
+        return (is.then && stmtHasGotoLabel(*is.then)) || (is.else_ && stmtHasGotoLabel(*is.else_));
+    }
+    case StmtKind::While: case StmtKind::DoWhile: {
+        auto &ws = static_cast<WhileStmt &>(s);
+        return ws.body && stmtHasGotoLabel(*ws.body);
+    }
+    case StmtKind::For: {
+        auto &fs = static_cast<ForStmt &>(s);
+        return fs.body && stmtHasGotoLabel(*fs.body);
+    }
+    case StmtKind::Unsafe: {
+        auto &us = static_cast<UnsafeStmt &>(s);
+        return us.body && stmtHasGotoLabel(*us.body);
+    }
+    case StmtKind::Switch:
+        for (auto &c : static_cast<SwitchStmt &>(s).cases)
+            for (auto &sub : c.body) if (sub && stmtHasGotoLabel(*sub)) return true;
+        return false;
+    default: return false;
+    }
+}
+
 // Pre-collect labels from a statement tree to create forward-declared BBs for goto
 void CodeGen::collectGotoLabels(Stmt &s, FnEnv &env) {
     switch (s.kind) {
@@ -1484,7 +1516,8 @@ void CodeGen::genCompound(CompoundStmt &s, FnEnv &env) {
     // (otherwise '{ int r = 1; } r = r + 1;' after the block would update
     // the inner 'r').
     auto outerLocals = env.locals;
-    for (auto &stmt : s.body) {
+    for (size_t si = 0; si < s.body.size(); ++si) {
+        auto &stmt = s.body[si];
         // Once a statement has terminated the current block (return, or an
         // if/else where both arms already return, etc.), any further
         // statements in this compound are unreachable dead code. Emitting IR
@@ -1492,8 +1525,18 @@ void CodeGen::genCompound(CompoundStmt &s, FnEnv &env) {
         // invalid IR ("terminator found in the middle of a basic block").
         // isTerminated, not getTerminator(): since LLVM 23 the latter assumes
         // a well-formed block and no longer returns null for an open one.
-        if (isTerminated(builder_.GetInsertBlock()))
-            break;
+        if (isTerminated(builder_.GetInsertBlock())) {
+            // ... unless a goto can still reach it: 'return 1; L1: ...'
+            // (std/async's resume points) continues in a fresh block that
+            // only the label's predecessors enter.
+            // The statements before that label are emitted too (dead, but
+            // their declarations stay bound for what follows).
+            bool labelAhead = false;
+            for (size_t k = si; k < s.body.size() && !labelAhead; ++k)
+                labelAhead = s.body[k] && stmtHasGotoLabel(*s.body[k]);
+            if (!labelAhead) break;
+            builder_.SetInsertPoint(llvm::BasicBlock::Create(ctx_, "post.term", env.fn));
+        }
         genStmt(*stmt, env);
     }
     env.locals = std::move(outerLocals);

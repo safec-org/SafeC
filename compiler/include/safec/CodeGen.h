@@ -157,6 +157,7 @@ private:
     // ── Statement codegen ──────────────────────────────────────────────────────
     void genStmt(Stmt &s, FnEnv &env);
     void collectGotoLabels(Stmt &s, FnEnv &env); // pre-create BBs for goto labels
+    bool stmtHasGotoLabel(Stmt &s);              // a goto target inside s
     void genCompound(CompoundStmt &s, FnEnv &env);
     void genIf(IfStmt &s, FnEnv &env);
     void genWhile(WhileStmt &s, FnEnv &env);
