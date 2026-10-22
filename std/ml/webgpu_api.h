@@ -12,8 +12,9 @@
 // by value; SafeC passes and receives structs by value with the platform's C
 // ABI, so the callback types below take it as one.
 //
-// The one wgpu-native extension used (wgpu.h's wgpuDevicePoll) is declared
-// at the end; see device_webgpu.sc's header comment for Dawn.
+// The two wgpu-native extensions used (wgpu.h's wgpuDevicePoll and
+// wgpuDeviceCreateShaderModuleTrusted) are declared at the end; see
+// device_webgpu.sc's header comment for Dawn.
 #include <std/stddef.h>
 
 namespace std {
@@ -310,6 +311,13 @@ extern const void* wgpuBufferGetConstMappedRange(void* buffer, unsigned long off
 extern void wgpuBufferUnmap(void* buffer);
 
 // ── wgpu-native extensions (wgpu.h) ──────────────────────────────────────────
+// A shader module without the runtime checks wgpu adds to every shader
+// (bounds checks on each buffer access, a counter in each loop); checks is
+// a WGPUShaderRuntimeChecks mask, 0 for none.
+#define WGPU_RUNTIME_CHECKS_BOUNDS 1UL
+#define WGPU_RUNTIME_CHECKS_LOOP_BOUNDING 2UL
+extern void* wgpuDeviceCreateShaderModuleTrusted(void* device, const struct WGPUShaderModuleDescriptor* descriptor,
+                                                 unsigned long checks);
 // Runs the device's maintenance (finished work, mapped buffers) so the
 // instance's callbacks can fire; with wait, first blocks until submission
 // *index (every submission when null) is done. 1 when the queue is empty.

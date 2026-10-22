@@ -279,6 +279,68 @@ static void check_tensor_interop() {
     t.free();
 }
 
+// The backend's GEMM paths through device.h (c = alpha op(a) op(b) + beta c):
+// the per-element kernel (small products), 64 x 64 tiles, split-K (few
+// tiles, long k: slices added atomically into c scaled by beta) and
+// 128 x 128 tiles, with transposes and 16-bit operands and results.
+static void check_gemm_path(int ta, int tb, unsigned long m, unsigned long n, unsigned long k, int dt, int ct, const char* what) {
+    int d = DEVICE_WEBGPU;
+    float* a = data(m * k, 11UL, (float)-1.0, (float)2.0);
+    float* b = data(k * n, 12UL, (float)-1.0, (float)2.0);
+    float* c0 = data(m * n, 13UL, (float)-1.0, (float)2.0);
+    float* got = zeros(m * n);
+    float* want = zeros(m * n);
+    unsafe {
+        round_to(a, m * k, dt); round_to(b, k * n, dt); round_to(c0, m * n, ct);
+        float alpha = (float)1.5;
+        float beta = (float)-0.5;
+        unsigned long lda = ta ? m : k;
+        unsigned long ldb = tb ? k : n;
+        unsigned long i = 0UL;
+        while (i < m) {
+            unsigned long j = 0UL;
+            while (j < n) {
+                double acc = 0.0;
+                unsigned long q = 0UL;
+                while (q < k) {
+                    double av = (double)(ta ? a[q * lda + i] : a[i * lda + q]);
+                    double bv = (double)(tb ? b[j * ldb + q] : b[q * ldb + j]);
+                    acc = acc + av * bv;
+                    q = q + 1UL;
+                }
+                want[i * n + j] = (float)((double)alpha * acc + (double)beta * (double)c0[i * n + j]);
+                j = j + 1UL;
+            }
+            i = i + 1UL;
+        }
+        round_to(want, m * n, ct);
+        // fp32 copies on the device, converted to the operand types there
+        unsigned long fa = device_mem_alloc_(d, 4UL * m * k), fb = device_mem_alloc_(d, 4UL * k * n), fc = device_mem_alloc_(d, 4UL * m * n);
+        unsigned long ha = dt == 0 ? fa : dev_tagged_(device_mem_alloc_(d, 2UL * m * k + 4UL), (unsigned long)dt);
+        unsigned long hb = dt == 0 ? fb : dev_tagged_(device_mem_alloc_(d, 2UL * k * n + 4UL), (unsigned long)dt);
+        unsigned long hc = ct == 0 ? fc : dev_tagged_(device_mem_alloc_(d, 2UL * m * n + 4UL), (unsigned long)ct);
+        int ok = device_upload_(d, fa, (const &float)a, m * k) && device_upload_(d, fb, (const &float)b, k * n) &&
+                 device_upload_(d, fc, (const &float)c0, m * n);
+        if (ok && dt != 0) ok = device_copy_(d, ha, fa, m * k) && device_copy_(d, hb, fb, k * n);
+        if (ok && ct != 0) ok = device_copy_(d, hc, fc, m * n);
+        struct DevGemm g;
+        g.dtype = dt; g.ctype = ct; g.ta = ta; g.tb = tb; g.m = m; g.n = n; g.k = k; g.alpha = alpha;
+        g.a = ha; g.lda = lda; g.sa = 0UL; g.b = hb; g.ldb = ldb; g.sb = 0UL; g.beta = beta; g.c = hc; g.ldc = n; g.sc = 0UL;
+        g.batch = 1UL;
+        if (ok) ok = device_gemm_batched_(d, &g);
+        if (ok && ct != 0) ok = device_copy_(d, fc, hc, m * n);
+        if (ok) ok = device_download_(d, (&float)got, fc, m * n);
+        double e = relerr(got, want, m * n);
+        double tol = (dt == 0 && ct == 0) ? 1.0e-5 : (ct == WEBGPU_BF16 || dt == WEBGPU_BF16 ? 1.6e-2 : 2.0e-3);
+        printf("  gemm %-22s %c%c %4lux%4lux%4lu err %.2e\n", what, ta ? 't' : 'n', tb ? 't' : 'n', m, n, k, e);
+        check(ok && e < tol, "gemm path");
+        device_mem_free_(d, fa, 4UL * m * k); device_mem_free_(d, fb, 4UL * k * n); device_mem_free_(d, fc, 4UL * m * n);
+        if (dt != 0) { device_mem_free_(d, ha, 2UL * m * k + 4UL); device_mem_free_(d, hb, 2UL * k * n + 4UL); }
+        if (ct != 0) device_mem_free_(d, hc, 2UL * m * n + 4UL);
+        free((void*)a); free((void*)b); free((void*)c0); free((void*)got); free((void*)want);
+    }
+}
+
 // Convolutions large enough for the backend's 8 x 8-block tiles (the
 // forward pass in 64 x 256 and 128 x 128 tiles, the weight gradient in
 // 128 x 128): output and gradients on DEVICE_WEBGPU against the CPU.
@@ -366,6 +428,14 @@ int main() {
     check_buffers();
     if (device_available(DEVICE_WEBGPU)) {
         check_tensor_interop();
+        check_gemm_path(0, 0, 33UL, 65UL, 70UL, 0, 0, "per element");
+        check_gemm_path(1, 1, 90UL, 40UL, 300UL, 1, 1, "per element, 16-bit");
+        check_gemm_path(0, 1, 200UL, 300UL, 150UL, 0, 0, "64 x 64 tiles");
+        check_gemm_path(1, 0, 130UL, 260UL, 100UL, 2, 2, "64 x 64 tiles, 16-bit");
+        check_gemm_path(0, 0, 100UL, 130UL, 1000UL, 0, 0, "split k");
+        check_gemm_path(1, 1, 70UL, 150UL, 777UL, 0, 0, "split k");
+        check_gemm_path(0, 0, 768UL, 770UL, 64UL, 0, 0, "128 x 128 tiles");
+        check_gemm_path(1, 0, 768UL, 768UL, 40UL, 1, 1, "128 x 128 tiles, 16-bit");
         check_conv_tiles(32UL, 64UL, 16UL);    // forward: 64 x 256 tiles
         check_conv_tiles(64UL, 128UL, 8UL);    // forward and weight gradient: 128 x 128
     }

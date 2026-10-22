@@ -42,12 +42,13 @@
 // where it is installed; tests/stdlib/webgpu/run.sh takes WGPU_NATIVE_DIR.
 //
 // The host waits by running the instance's callbacks (work done, buffer
-// mapped) with the device polled without blocking: wgpu-native's one
-// extension used here, wgpuDevicePoll (a blocking poll sleeps about a
-// millisecond per wait on Metal). Dawn exports no wgpuDevicePoll and checks
-// the device in wgpuInstanceProcessEvents itself: build with
-// -DSAFEC_WEBGPU_DAWN=1 and link -lwebgpu_dawn (not run here: no Dawn build
-// on this machine).
+// mapped) with the device polled without blocking (wgpuDevicePoll: a
+// blocking poll sleeps about a millisecond per wait on Metal). That and
+// the kernels' module without wgpu's runtime checks
+// (wgpuDeviceCreateShaderModuleTrusted, see dwg_module_) are the two
+// wgpu-native extensions used. Dawn exports neither and checks the device
+// in wgpuInstanceProcessEvents itself: build with -DSAFEC_WEBGPU_DAWN=1 and
+// link -lwebgpu_dawn (not run here: no Dawn build on this machine).
 //
 // Limits, against ROCm / CUDA:
 //   - Device memory is at most one storage binding: the largest power of two
@@ -82,6 +83,7 @@ extern void  free(void* ptr);
 extern void* memcpy(void* dst, const void* src, size_t n);
 extern void* memset(void* dst, int c, size_t n);
 extern long  write(int fd, const void* buf, unsigned long n);
+extern char* getenv(const char* name);
 
 #define DWG_BLOCK 256UL
 #define DWG_MAX_GROUPS 4096UL
@@ -156,8 +158,8 @@ static void* g_dwg_apipe[6];
 static int   g_dwg_apipe_state[6];
 static void* g_dwg_lpipe[2 * DK_COUNT];          // the row kernels with 32 lanes a row
 static int   g_dwg_lpipe_state[2 * DK_COUNT];
-static void* g_dwg_gemm[72];             // wk_gemm / wk_gemm8 per transposes and element types
-static int   g_dwg_gemm_state[72];
+static void* g_dwg_gemm[108];            // wk_gemm / wk_gemm8 / wk_gemm1 per transposes and element types
+static int   g_dwg_gemm_state[108];
 static void* g_dwg_conv[45];             // wk_conv per op, tile shape and element type
 static int   g_dwg_conv_state[45];
 static void* g_dwg_copy = (void*)0;
@@ -616,7 +618,8 @@ static void* dwg_gemm_pipe_(int big, int ta, int tb, int at, int ct) {
             c[1] = dwg_const_("GTB", (double)tb);
             c[2] = dwg_const_("GAT", (double)at);
             c[3] = dwg_const_("GCT", (double)ct);
-            g_dwg_gemm[slot] = dwg_make_pipe_(big ? "wk_gemm8" : "wk_gemm", (const struct WGPUConstantEntry*)&c[0], 4UL);
+            g_dwg_gemm[slot] = dwg_make_pipe_(big == 2 ? "wk_gemm1" : (big ? "wk_gemm8" : "wk_gemm"),
+                                              (const struct WGPUConstantEntry*)&c[0], 4UL);
             g_dwg_gemm_state[slot] = g_dwg_gemm[slot] != (void*)0 ? 1 : -1;
         }
         return g_dwg_gemm[slot];
@@ -654,6 +657,27 @@ static void* dwg_conv_pipe_(int op, int shape, int t) {
             g_dwg_conv_state[slot] = g_dwg_conv[slot] != (void*)0 ? 1 : -1;
         }
         return g_dwg_conv[slot];
+    }
+}
+
+// The kernels' module. wgpu adds bounds checks to every buffer access and a
+// counter to every loop of a shader (a web sandbox's guard against reads
+// past a binding and hung GPUs; CUDA, HIP and Metal kernels have neither):
+// a third of a small kernel's time on an M1 Pro. The kernels index only
+// the heap and terminate, so on wgpu-native the module is created without
+// them (its extension wgpuDeviceCreateShaderModuleTrusted);
+// SAFEC_WEBGPU_CHECKS=1 in the environment keeps them, for debugging a
+// kernel. Dawn builds keep them (its toggle to drop them,
+// disable_robustness, would go in a DawnTogglesDescriptor here).
+static void* dwg_module_(const struct WGPUShaderModuleDescriptor* md) {
+    unsafe {
+#if defined(SAFEC_WEBGPU_DAWN)
+        return wgpuDeviceCreateShaderModule(g_dwg_dev, md);
+#else
+        char* keep = getenv("SAFEC_WEBGPU_CHECKS");
+        if (keep != (char*)0 && keep[0] == '1') return wgpuDeviceCreateShaderModule(g_dwg_dev, md);
+        return wgpuDeviceCreateShaderModuleTrusted(g_dwg_dev, md, 0UL);
+#endif
     }
 }
 
@@ -707,7 +731,7 @@ static int dwg_ensure_() {
         memset((void*)&md, 0, sizeof(struct WGPUShaderModuleDescriptor));
         md.nextInChain = (void*)&src;
         md.label = dwg_sv_("device_kernels.wgsl");
-        g_dwg_module = wgpuDeviceCreateShaderModule(g_dwg_dev, &md);
+        g_dwg_module = dwg_module_(&md);
         if (g_dwg_module == (void*)0 || g_dwg_errors != 0UL) return 0;
 
         // group 0: the heap as words and as atomics, the uploads' data; group 1: the arguments (dynamic offset)
@@ -881,9 +905,13 @@ int WebGpuBackend::sync() {
     return dwg_wait_();
 }
 
-// A strided batch on wk_gemm (64 x 64 tiles) or, with enough tiles to fill
-// the GPU, wk_gemm8 (128 x 128): a pipeline per tile, transposes and element
-// types, the batch split into grids of at most 65535.
+// A strided batch: small products (up to 16384 elements of c, k up to 512)
+// on wk_gemm1, a thread per element (no tiles: the lowest latency); the
+// rest on wk_gemm (64 x 64 tiles) or, with enough tiles to fill the GPU,
+// wk_gemm8 (128 x 128). A pipeline per kernel, transposes and element
+// types; the batch split into grids of at most 65535. A single fp32
+// product with too few 64 x 64 tiles and a long k splits k over the grid
+// (wk_gemm adds the slices atomically), c first scaled by beta.
 static int dwg_gemm_(int ta, int tb, int at, int ct, unsigned long m, unsigned long n, unsigned long k, float alpha,
                      unsigned long a, unsigned long lda, unsigned long sa, unsigned long b, unsigned long ldb,
                      unsigned long sb, float beta, unsigned long c, unsigned long ldc, unsigned long sc,
@@ -892,11 +920,48 @@ static int dwg_gemm_(int ta, int tb, int at, int ct, unsigned long m, unsigned l
     if (m == 0UL || n == 0UL || batch == 0UL) return 1;
     if (at < 0 || at > 2 || ct < 0 || ct > 2) return 0;
     int big = ((m + 127UL) / 128UL) * ((n + 127UL) / 128UL) * batch >= DWG_GEMM_FILL;
+    if (m * n * batch <= 16384UL && k <= 512UL) big = 2;
+    if (big == 2) {
+        void* p1 = dwg_gemm_pipe_(2, ta != 0, tb != 0, at, ct);
+        if (p1 == (void*)0) return 0;
+        unsigned int w1[DWG_ARG_WORDS];
+        unsafe {
+            memset((void*)&w1[0], 0, DWG_ARG_WORDS * 4UL);
+            w1[0] = (unsigned int)dev_addr_(a); w1[1] = (unsigned int)dev_addr_(b); w1[2] = (unsigned int)dev_addr_(c);
+            w1[3] = (unsigned int)m; w1[4] = (unsigned int)n; w1[5] = (unsigned int)k;
+            w1[6] = (unsigned int)lda; w1[7] = (unsigned int)ldb; w1[8] = (unsigned int)ldc;
+            w1[9] = (unsigned int)sa; w1[10] = (unsigned int)sb; w1[11] = (unsigned int)sc;
+            memcpy((void*)&w1[12], (const void*)&alpha, 4UL);
+            memcpy((void*)&w1[13], (const void*)&beta, 4UL);
+            w1[17] = (unsigned int)batch;
+            unsigned long g = (m * n * batch + 255UL) / 256UL;
+            if (g > DWG_MAX_GROUPS) g = DWG_MAX_GROUPS;
+            return dwg_dispatch_(p1, (const unsigned int*)&w1[0], g, 1UL, 1UL);
+        }
+    }
     unsigned long tile = big ? 128UL : 64UL;
     unsigned long gx = (n + tile - 1UL) / tile;
     unsigned long gy = (m + tile - 1UL) / tile;
     void* pipe = dwg_gemm_pipe_(big, ta != 0, tb != 0, at, ct);
     if (pipe == (void*)0 || gx > DWG_MAX_DIM || gy > DWG_MAX_DIM) { device_note_cpu_launch_(DEVICE_WEBGPU); return 0; }
+    // split-K
+    unsigned long S = 1UL;
+    unsigned long kSlice = k;
+    if (!big && ct == 0 && batch == 1UL && ldc == n && k >= 256UL && gx * gy < DWG_GEMM_FILL) {
+        S = (DWG_GEMM_FILL + gx * gy - 1UL) / (gx * gy);
+        if (S > k / 128UL) S = k / 128UL;
+        kSlice = ((k + S - 1UL) / S + 15UL) / 16UL * 16UL;
+        S = (k + kSlice - 1UL) / kSlice;
+    }
+    if (S > 1UL && beta != (float)1.0) {
+        struct DevArgs e = dev_args_();
+        unsafe {
+            e.p[0] = c; e.p[2] = c; e.u[7] = (unsigned int)(m * n);
+            e.u[0] = beta == (float)0.0 ? 5U : 3U;   // EW_FILL 0 / EW_SCALE beta
+            e.f[0] = beta == (float)0.0 ? (float)0.0 : beta;
+        }
+        if (!WebGpuBackend::launch(beta == (float)0.0 ? DK_EWOP_5 : DK_EWOP_3, m * n, &e)) return 0;
+    }
     unsigned int w[DWG_ARG_WORDS];
     unsafe {
         memset((void*)&w[0], 0, DWG_ARG_WORDS * 4UL);
@@ -906,6 +971,7 @@ static int dwg_gemm_(int ta, int tb, int at, int ct, unsigned long m, unsigned l
         w[9] = (unsigned int)sa; w[10] = (unsigned int)sb; w[11] = (unsigned int)sc;
         memcpy((void*)&w[12], (const void*)&alpha, 4UL);
         memcpy((void*)&w[13], (const void*)&beta, 4UL);
+        w[15] = (unsigned int)S; w[16] = (unsigned int)kSlice;
     }
     unsigned long z = 0UL;
     while (z < batch) {
@@ -913,7 +979,7 @@ static int dwg_gemm_(int ta, int tb, int at, int ct, unsigned long m, unsigned l
         if (gz > DWG_MAX_DIM) gz = DWG_MAX_DIM;
         unsafe {
             w[14] = (unsigned int)z;
-            if (!dwg_dispatch_(pipe, (const unsigned int*)&w[0], gx, gy, gz)) return 0;
+            if (!dwg_dispatch_(pipe, (const unsigned int*)&w[0], gx, gy, gz * S)) return 0;
         }
         z = z + gz;
     }

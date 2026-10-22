@@ -1848,19 +1848,24 @@ fn wk_map(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nw
 // A strided batch of c_i = alpha op(a_i) op(b_i) + beta c_i (device.h's
 // DevGemm), row-major. Words: 0 a, 1 b, 2 c (byte offsets), 3 m, 4 n, 5 k,
 // 6 lda, 7 ldb, 8 ldc, 9 sa, 10 sb, 11 sc (batch strides in elements),
-// 12 alpha, 13 beta, 14 the first batch index of this dispatch. The
-// pipeline constants fix the transposes and the element types (GAT: a and
-// b's, GCT: c's), accumulation is fp32. A workgroup of 256 threads takes a
-// 64 x 64 tile of c, k in steps of 16 through workgroup memory, each thread
-// a 4 x 4 block of it; the grid is (n / 64, m / 64, batch). The tiles are
-// scalar arrays: threads storing different components of one vec4 in
-// workgroup memory race on Metal (the store rewrites the whole vector).
+// 12 alpha, 13 beta, 14 the first batch index of this dispatch, 15 the
+// slices of k (split-K, wk_gemm: 1 = none), 16 k per slice. The pipeline
+// constants fix the transposes and the element types (GAT: a and b's, GCT:
+// c's), accumulation is fp32. A workgroup of 256 threads takes a 64 x 64
+// tile of c, k in steps of 16 through workgroup memory, each thread a 4 x 4
+// block of it; the grid is (n / 64, m / 64, batch x slices). The tiles are
+// double-buffered: a step's global loads are in flight while the previous
+// step's tile is multiplied, one barrier per step. A product with too few
+// tiles to fill the GPU splits k over the grid, each slice adding its part
+// atomically into c, which the backend has scaled by beta (fp32 c only).
+// The tiles are scalar arrays: threads storing different components of one
+// vec4 in workgroup memory race on Metal (the store rewrites the vector).
 override GTA: bool = false;
 override GTB: bool = false;
 override GAT: u32 = 0u;
 override GCT: u32 = 0u;
-var<workgroup> gA: array<f32, 1024>;   // [k 16][m 64]
-var<workgroup> gB: array<f32, 1024>;   // [k 16][n 64]
+var<workgroup> gA: array<f32, 2048>;   // two [k 16][m 64]
+var<workgroup> gB: array<f32, 2048>;   // two [k 16][n 64]
 fn gld(base: u32, t: u32, i: u32) -> f32 {
     if (t == 0u) { return bitcast<f32>(H[(base >> 2u) + i]); }
     let a = base + 2u * i;
@@ -1873,6 +1878,46 @@ fn gst1(base: u32, t: u32, i: u32, v: f32) {
     atomicAnd(&HA[a >> 2u], ~(0xffffu << s));
     atomicOr(&HA[a >> 2u], f2h(v, t) << s);
 }
+// One element of the A (B) tile at step k0 for e = li + 256 q: row (column)
+// e / 16 or e % 64, as the transposes make neighbouring threads read
+// neighbouring addresses; 0 outside the matrix.
+fn gemm_ea(Ab: u32, M: u32, lda: u32, m0: u32, k0: u32, kEnd: u32, e: u32) -> f32 {
+    var mm = e / 16u;
+    var kk = e % 16u;
+    if (GTA) { mm = e % 64u; kk = e / 64u; }
+    let gm = m0 + mm;
+    let gk = k0 + kk;
+    if (gm >= M || gk >= kEnd) { return 0.0; }
+    return gld(Ab, GAT, select(gm * lda + gk, gk * lda + gm, GTA));
+}
+fn gemm_eb(Bb: u32, Nn: u32, ldb: u32, n0: u32, k0: u32, kEnd: u32, e: u32) -> f32 {
+    var nn = e % 64u;
+    var kk = e / 64u;
+    if (GTB) { kk = e % 16u; nn = e / 16u; }
+    let gn = n0 + nn;
+    let gk = k0 + kk;
+    if (gn >= Nn || gk >= kEnd) { return 0.0; }
+    return gld(Bb, GAT, select(gk * ldb + gn, gn * ldb + gk, GTB));
+}
+// The thread's four elements of each tile (written out: a loop over them
+// isn't unrolled, and a vector indexed by its counter costs more)
+fn gemm_ld_a(Ab: u32, M: u32, lda: u32, m0: u32, k0: u32, kEnd: u32, li: u32) -> vec4f {
+    return vec4f(gemm_ea(Ab, M, lda, m0, k0, kEnd, li), gemm_ea(Ab, M, lda, m0, k0, kEnd, li + 256u),
+                 gemm_ea(Ab, M, lda, m0, k0, kEnd, li + 512u), gemm_ea(Ab, M, lda, m0, k0, kEnd, li + 768u));
+}
+fn gemm_ld_b(Bb: u32, Nn: u32, ldb: u32, n0: u32, k0: u32, kEnd: u32, li: u32) -> vec4f {
+    return vec4f(gemm_eb(Bb, Nn, ldb, n0, k0, kEnd, li), gemm_eb(Bb, Nn, ldb, n0, k0, kEnd, li + 256u),
+                 gemm_eb(Bb, Nn, ldb, n0, k0, kEnd, li + 512u), gemm_eb(Bb, Nn, ldb, n0, k0, kEnd, li + 768u));
+}
+// The index of e = li + 256 q's element in a tile: A (k-major), B.
+fn gemm_ia(e: u32) -> u32 {
+    if (GTA) { return (e / 64u) * 64u + e % 64u; }
+    return (e % 16u) * 64u + e / 16u;
+}
+fn gemm_ib(e: u32) -> u32 {
+    if (GTB) { return (e % 16u) * 64u + e / 16u; }
+    return (e / 64u) * 64u + e % 64u;
+}
 @compute @workgroup_size(256)
 fn wk_gemm(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3u) {
     let M = aw(3u);
@@ -1881,7 +1926,10 @@ fn wk_gemm(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: 
     let lda = aw(6u);
     let ldb = aw(7u);
     let ldc = aw(8u);
-    let z = wg.z + aw(14u);
+    let S = aw(15u);
+    let z = wg.z / S + aw(14u);
+    let kBeg = (wg.z % S) * aw(16u);
+    let kEnd = min(K, kBeg + aw(16u));
     let ea = select(2u, 4u, GAT == 0u);
     let ec = select(2u, 4u, GCT == 0u);
     let Ab = aw(0u) + z * aw(9u) * ea;
@@ -1892,41 +1940,39 @@ fn wk_gemm(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: 
     let tx = li % 16u;
     let ty = li / 16u;
     var acc: array<vec4f, 4>;
-    for (var k0 = 0u; k0 < K; k0 += 16u) {
-        for (var q = 0u; q < 4u; q++) {
-            let e = li + q * 256u;
-            var mm: u32;
-            var kk: u32;
-            if (GTA) { mm = e % 64u; kk = e / 64u; } else { kk = e % 16u; mm = e / 16u; }
-            let gm = m0 + mm;
-            let gk = k0 + kk;
-            var v = 0.0;
-            if (gm < M && gk < K) { v = gld(Ab, GAT, select(gm * lda + gk, gk * lda + gm, GTA)); }
-            gA[kk * 64u + mm] = v;
-        }
-        for (var q = 0u; q < 4u; q++) {
-            let e = li + q * 256u;
-            var nn: u32;
-            var kk: u32;
-            if (GTB) { kk = e % 16u; nn = e / 16u; } else { nn = e % 64u; kk = e / 64u; }
-            let gn = n0 + nn;
-            let gk = k0 + kk;
-            var v = 0.0;
-            if (gn < Nn && gk < K) { v = gld(Bb, GAT, select(gk * ldb + gn, gn * ldb + gk, GTB)); }
-            gB[kk * 64u + nn] = v;
-        }
+    var ra = gemm_ld_a(Ab, M, lda, m0, kBeg, kEnd, li);
+    var rb = gemm_ld_b(Bb, Nn, ldb, n0, kBeg, kEnd, li);
+    let ia0 = gemm_ia(li);
+    let ia1 = gemm_ia(li + 256u);
+    let ia2 = gemm_ia(li + 512u);
+    let ia3 = gemm_ia(li + 768u);
+    let ib0 = gemm_ib(li);
+    let ib1 = gemm_ib(li + 256u);
+    let ib2 = gemm_ib(li + 512u);
+    let ib3 = gemm_ib(li + 768u);
+    var buf = 0u;
+    for (var k0 = kBeg; k0 < kEnd; k0 += 16u) {
+        gA[buf + ia0] = ra.x; gA[buf + ia1] = ra.y; gA[buf + ia2] = ra.z; gA[buf + ia3] = ra.w;
+        gB[buf + ib0] = rb.x; gB[buf + ib1] = rb.y; gB[buf + ib2] = rb.z; gB[buf + ib3] = rb.w;
         workgroupBarrier();
-        for (var kk = 0u; kk < 16u; kk++) {
-            let ai = kk * 64u + ty * 4u;
-            let bi = kk * 64u + tx * 4u;
+        if (k0 + 16u < kEnd) {
+            ra = gemm_ld_a(Ab, M, lda, m0, k0 + 16u, kEnd, li);
+            rb = gemm_ld_b(Bb, Nn, ldb, n0, k0 + 16u, kEnd, li);
+        }
+        // two k at a time (naga's loops aren't unrolled: each step would wait for its loads)
+        for (var kk = 0u; kk < 16u; kk += 2u) {
+            let ai = buf + kk * 64u + ty * 4u;
+            let bi = buf + kk * 64u + tx * 4u;
             let a = vec4f(gA[ai], gA[ai + 1u], gA[ai + 2u], gA[ai + 3u]);
             let b = vec4f(gB[bi], gB[bi + 1u], gB[bi + 2u], gB[bi + 3u]);
-            acc[0] += a.x * b;
-            acc[1] += a.y * b;
-            acc[2] += a.z * b;
-            acc[3] += a.w * b;
+            let a2 = vec4f(gA[ai + 64u], gA[ai + 65u], gA[ai + 66u], gA[ai + 67u]);
+            let b2 = vec4f(gB[bi + 64u], gB[bi + 65u], gB[bi + 66u], gB[bi + 67u]);
+            acc[0] += a.x * b + a2.x * b2;
+            acc[1] += a.y * b + a2.y * b2;
+            acc[2] += a.z * b + a2.z * b2;
+            acc[3] += a.w * b + a2.w * b2;
         }
-        workgroupBarrier();
+        buf = 1024u - buf;
     }
     let alpha = bitcast<f32>(aw(12u));
     let beta = bitcast<f32>(aw(13u));
@@ -1937,10 +1983,69 @@ fn wk_gemm(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: 
             let gn = n0 + tx * 4u + j;
             if (gn >= Nn) { break; }
             let idx = gm * ldc + gn;
+            if (S > 1u) { atomic_addf((Cb >> 2u) + idx, alpha * acc[i][j]); continue; }
             var v = alpha * acc[i][j];
             if (beta != 0.0) { v += beta * gld(Cb, GCT, idx); }   // beta 0: c is not read
             gst1(Cb, GCT, idx, v);
         }
+    }
+}
+
+// wk_gemm for small products (few outputs, short k): a thread per element of
+// c, k in registers over loads the cache serves (no tiles, no barriers:
+// the lowest latency). Same words and constants; the grid covers m n batch.
+@compute @workgroup_size(256)
+fn wk_gemm1(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u) {
+    let M = aw(3u);
+    let Nn = aw(4u);
+    let K = aw(5u);
+    let lda = aw(6u);
+    let ldb = aw(7u);
+    let ldc = aw(8u);
+    let ea = select(2u, 4u, GAT == 0u);
+    let ec = select(2u, 4u, GCT == 0u);
+    let alpha = bitcast<f32>(aw(12u));
+    let beta = bitcast<f32>(aw(13u));
+    let mn = M * Nn;
+    let total = mn * aw(17u);
+    for (var t = gid.x; t < total; t += nwg.x * 256u) {
+        let zl = t / mn;
+        let r = t - zl * mn;
+        let i = r / Nn;
+        let j = r - i * Nn;
+        let z = zl + aw(14u);
+        let Ab = aw(0u) + z * aw(9u) * ea;
+        let Bb = aw(1u) + z * aw(10u) * ea;
+        let Cb = aw(2u) + z * aw(11u) * ec;
+        // four k at a time: naga's loops keep Metal's compiler from
+        // unrolling them, and each step waits for its loads otherwise
+        let sak = select(1u, lda, GTA);
+        let sbk = select(ldb, 1u, GTB);
+        var ia = select(i * lda, i, GTA);
+        var ib = select(j, j * ldb, GTB);
+        var a0 = 0.0;
+        var a1 = 0.0;
+        var a2 = 0.0;
+        var a3 = 0.0;
+        var k = 0u;
+        for (; k + 4u <= K; k += 4u) {
+            a0 += gld(Ab, GAT, ia) * gld(Bb, GAT, ib);
+            a1 += gld(Ab, GAT, ia + sak) * gld(Bb, GAT, ib + sbk);
+            a2 += gld(Ab, GAT, ia + 2u * sak) * gld(Bb, GAT, ib + 2u * sbk);
+            a3 += gld(Ab, GAT, ia + 3u * sak) * gld(Bb, GAT, ib + 3u * sbk);
+            ia += 4u * sak;
+            ib += 4u * sbk;
+        }
+        for (; k < K; k++) {
+            a0 += gld(Ab, GAT, ia) * gld(Bb, GAT, ib);
+            ia += sak;
+            ib += sbk;
+        }
+        let acc = (a0 + a1) + (a2 + a3);
+        let idx = i * ldc + j;
+        var v = alpha * acc;
+        if (beta != 0.0) { v += beta * gld(Cb, GCT, idx); }
+        gst1(Cb, GCT, idx, v);
     }
 }
 
