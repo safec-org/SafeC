@@ -542,6 +542,16 @@ else
     else
         fail "safeguard bundle (GUI app)"
         cat /tmp/sg_gui.txt
+        # Diagnostics: the link line, and what the std archive it links holds.
+        sg_in "$WORKDIR/gui_hello" /tmp/sg_gui_v.txt build --verbose
+        grep -iE 'llvm-ar|[^a-z]ar rcs|libsafec_std|-o .*gui_hello' /tmp/sg_gui_v.txt | tail -6 | cut -c1-600
+        NM="$(dirname "$(command -v "${CLANG_BIN:-clang}")")/llvm-nm"
+        for a in $(find "$WORKDIR/gui_hello/build/deps" -name 'libsafec_std.a' 2>/dev/null); do
+            echo "    $a: $(wc -c < "$a") bytes"
+            "$NM" "$a" 2>&1 | grep -cE ' T ' | sed 's/^/    defined functions: /'
+            "$NM" "$a" 2>&1 | grep -E 'GuiWindow_create|std_thread_sleep_ms' | head -4 | sed 's/^/    /'
+            "$NM" "$a" 2>&1 | grep -iE 'error|warning' | head -3 | sed 's/^/    /'
+        done
     fi
 fi
 
