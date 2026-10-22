@@ -1,9 +1,9 @@
 # SafeC Package.lock — auto-generated, do not edit manually
 
 [safec]
-hash = "267e22e4b2ff876d"
+hash = ""
 
 [sources]
-"src/main.sc" = "e1321c918627e89b"
-"src/pages.scx" = "b195ef5b24cdd34a"
+"src/main.sc" = "9439a22eb53a5440"
+"src/pages.scx" = "645502bcfb90265a"
 

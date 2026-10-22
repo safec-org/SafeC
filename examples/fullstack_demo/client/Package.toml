@@ -1,0 +1,9 @@
+[package]
+name        = "counter_client"
+version     = "0.1.0"
+author      = "minjaekim"
+description = "fullstack_demo's WebAssembly client (build: safeguard build --target wasm32)"
+license     = "MIT"
+
+[build]
+edition = "2026"

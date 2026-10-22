@@ -7,16 +7,16 @@
 // std/crypto/sha1.h's own note) and std::base64_encode/base64_decode.
 //
 // Scope: masking (client-to-server, per the RFC's mandatory requirement)
-// and unmasking are fully handled. Message fragmentation (FIN=0
-// continuation frames) is not reassembled — WsConn::recv treats every frame as
-// a complete message; a peer that fragments large messages will need
-// application-level handling on top of this (most peers, including
-// browsers for reasonably-sized messages, don't fragment by default). Ping/
-// pong frames are surfaced to the caller via WsMessage's opcode rather than
-// answered automatically — respond with conn.send_pong() yourself if the
-// peer expects it.
+// and unmasking are fully handled. WsConn::recv returns single frames
+// (fragments and pings included, as before); WsConn::recv_message
+// reassembles fragmented messages and answers pings itself. A server can
+// accept on its own listening socket (ws_listen + accept) or upgrade a
+// request on an HttpServer/Router connection (accept_upgrade), so HTTP and
+// WebSocket endpoints share one port. No extensions (permessage-deflate)
+// and no wss:// (no TLS).
 #pragma once
 #include <std/collections/string.h>
+#include <std/http/http.h>
 
 namespace std {
 
@@ -88,8 +88,29 @@ struct WsConn {
     // close() (below) to do both.
     int send_close();
 
+    // Connects to a ws:// URL ("ws://host:port/path?query"; wss:// is not
+    // supported — no TLS handshake in std), with connect_timeout's limit.
+    static struct WsConn connect_url(const &char url, int timeout_ms, ?&int ok);
+
+    // ── Server, on an HTTP server's connection ────────────────────────────
+    // Completes the WebSocket handshake for a request an HttpServer/Router
+    // handler received (check ws_is_upgrade(req) first): writes the 101
+    // response, takes the socket over (conn.detach — the server then
+    // leaves the connection alone) and returns the WsConn. *ok = 0 if the
+    // request isn't a valid version-13 upgrade (the handler should then
+    // answer it normally, e.g. 400/426). The handler may serve the
+    // WebSocket right there (blocking that worker) or hand it to a thread.
+    static struct WsConn accept_upgrade(const &HttpRequest req, &HttpConn conn, ?&int ok);
+
+    // Reads one whole *message*: continuation frames are reassembled, pings
+    // are answered with a pong automatically and pongs skipped, so 'out' is
+    // a WS_OPCODE_TEXT/BINARY message or a WS_OPCODE_CLOSE frame. 0 on a
+    // connection error, a protocol error, or a message over 'max_len'
+    // bytes (0 = no limit).
+    int recv_message(&WsMessage out, unsigned long max_len);
+
     // Reads one complete frame (see the file-level comment on
-    // fragmentation). Returns 1 with 'out' filled on success, 0 on a
+    // fragmentation; recv_message reassembles). Returns 1 with 'out' filled on success, 0 on a
     // connection error/EOF/malformed frame. A WS_OPCODE_CLOSE message is
     // returned like any other (not treated specially) — check for it and
     // call close() yourself.
@@ -105,5 +126,9 @@ struct WsConn {
 // Creates a blocking listening socket on 'port'. Returns the fd, or -1 on
 // failure.
 int ws_listen(unsigned short port);
+
+// 1 if 'req' asks for a WebSocket upgrade (GET with Upgrade: websocket,
+// Connection: upgrade and a Sec-WebSocket-Key).
+int ws_is_upgrade(const &HttpRequest req);
 
 } // namespace std

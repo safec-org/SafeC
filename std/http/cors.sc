@@ -23,15 +23,13 @@ int cors_is_preflight(const &HttpRequest req) {
 void cors_apply_headers(&HttpResponse resp, const &char allowedOrigin) {
     int isWildcard;
     unsafe { isWildcard = str_eq(allowedOrigin, "*"); }
-    unsafe {
-        resp.headers.push("Access-Control-Allow-Origin: ");
-        resp.headers.push(allowedOrigin);
-        resp.headers.push("\r\n");
-        if (!isWildcard) {
-            resp.headers.push("Access-Control-Allow-Credentials: true\r\n");
-        }
-        resp.headers.push("Vary: Origin\r\n");
+    // http_headers_add, not a raw push: the block may or may not end in
+    // a CRLF (HttpResponse's constructors leave none).
+    http_headers_set(&resp.headers, "Access-Control-Allow-Origin", allowedOrigin);
+    if (!isWildcard) {
+        http_headers_set(&resp.headers, "Access-Control-Allow-Credentials", "true");
     }
+    http_headers_add(&resp.headers, "Vary", "Origin");
 }
 
 struct HttpResponse cors_preflight_response(const &char allowedOrigin,
@@ -40,15 +38,9 @@ struct HttpResponse cors_preflight_response(const &char allowedOrigin,
     struct HttpResponse resp;
     resp.status = 204;
     resp.headers = String::new();
-    unsafe {
-        resp.headers.push("Access-Control-Allow-Methods: ");
-        resp.headers.push(allowedMethods);
-        resp.headers.push("\r\n");
-        resp.headers.push("Access-Control-Allow-Headers: ");
-        resp.headers.push(allowedHeaders);
-        resp.headers.push("\r\n");
-        resp.headers.push("Access-Control-Max-Age: 86400\r\n");
-    }
+    http_headers_add(&resp.headers, "Access-Control-Allow-Methods", allowedMethods);
+    http_headers_add(&resp.headers, "Access-Control-Allow-Headers", allowedHeaders);
+    http_headers_add(&resp.headers, "Access-Control-Max-Age", "86400");
     resp.body = String::new();
     cors_apply_headers(&resp, allowedOrigin);
     return resp;
