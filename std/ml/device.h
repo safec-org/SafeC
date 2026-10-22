@@ -30,6 +30,8 @@
 //   rocm  -lamdhip64 -lhiprtc -lrocblas (-lMIOpen for MIOpen convolutions)
 //   cuda  -lcuda -lcublas -lnvrtc (-lcudnn for cuDNN convolutions)
 //   mps   -framework Metal -framework Foundation -lobjc
+//   vulkan -lvulkan (the Vulkan loader; on macOS Homebrew's vulkan-loader and
+//          molten-vk, -L/opt/homebrew/lib)
 //
 // Each backend is a struct of static functions (the interface below),
 // resolved at compile time; the runtime dispatch in device.sc calls them once
@@ -85,8 +87,8 @@ struct DeviceStats {
 struct DeviceStats device_stats(int device);
 void device_stats_reset(int device);
 
-// The device traits (DeviceTensor, RocmTensor, CudaTensor, MpsTensor) are in
-// tensor.h, next to trait Tensor they inherit.
+// The device traits (DeviceTensor, RocmTensor, CudaTensor, MpsTensor,
+// VulkanTensor) are in tensor.h, next to trait Tensor they inherit.
 
 // ── Backends ─────────────────────────────────────────────────────────────────
 // A device kernel launch: the kernel (DK_* in device_kernels.h), how many
@@ -161,11 +163,13 @@ struct DevConv {
 };
 
 // What a GPU backend implements: a struct (device_rocm.sc's RocmBackend,
-// device_cuda.sc's CudaBackend, device_mps.sc's MpsBackend) with these static
+// device_cuda.sc's CudaBackend, device_mps.sc's MpsBackend,
+// device_vulkan.sc's VulkanBackend) with these static
 // functions, reached through the type parameter of
 // device_register_backend_<B> (traits name instance methods only, so this
 // static interface is spelled out here). Device memory is named by unsigned
-// long handles: device addresses on ROCm / CUDA, an MTLBuffer on Metal. Each
+// long handles: device addresses on ROCm / CUDA, an MTLBuffer's GPU address
+// on Metal, a buffer device address on Vulkan. Each
 // call is queued on the backend's stream (ordered with gpu_rocm.h /
 // gpu_cuda.h / gpu_mps.h work) unless it says it waits.
 //   static int  available();
