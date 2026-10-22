@@ -12,16 +12,25 @@
 // pick uds_bsd.sc/uds_linux.sc themselves. http.sc only calls io_nb.h's
 // portable function signatures, never anything backend-specific.
 //
-// Scope: request/response bodies are Content-Length-delimited; chunked
-// transfer-encoding is not supported (a chunked response's body is
-// returned as-is, undecoded — check for a "Transfer-Encoding" header
-// yourself via http_header_get if that matters to your use case). No TLS
-// (see std/crypto/tls.h separately if you need HTTPS — this module speaks
-// plain HTTP only). The server is single-threaded/one-request-at-a-time;
-// combine with std::spawn per accepted connection for concurrency (see
-// reference/concurrency.md).
+// Scope: HTTP/1.1 (and 1.0) over plain TCP. Bodies may be Content-Length-
+// delimited, chunked (decoded on both sides; see http_chunked_encode /
+// HttpChunkedWriter for sending one) or, for responses, close-delimited.
+// Servers support persistent connections (keep-alive), "Expect:
+// 100-continue", HEAD, request-size limits and a clean stop (HttpServer);
+// the client can follow redirects and decode gzip/deflate bodies
+// (http_fetch). No TLS: std/crypto/tls.h is a record layer without a
+// handshake, so https:// URLs fail (see stdlib/http.md's HTTPS note).
+// Routing, middleware, static files, cookies, multipart forms and
+// Server-Sent Events live in the sibling headers (router.h,
+// static_files.h, cookie.h, multipart.h, sse.h).
+//
+// The legacy entry points (http_serve, http_serve_threaded) keep their
+// original one-request-per-connection behavior; HttpServer is the
+// configurable server, and http_serve_reactor the non-blocking one.
 #pragma once
 #include <std/collections/string.h>
+#include <std/encoding/url.h>
+#include <std/http/headers.h>
 
 namespace std {
 
@@ -31,14 +40,69 @@ struct HttpResponse {
                             // CRLF-separated, no leading/trailing blank line
     struct String body;
 
+    // ── Building ──────────────────────────────────────────────────────────
+    // Empty headers and body.
+    static struct HttpResponse new(int status);
+    // 'body' with Content-Type text/plain; charset=utf-8 / text/html;
+    // charset=utf-8 / application/json.
+    static struct HttpResponse text(int status, const &char body);
+    static struct HttpResponse html(int status, const &char body);
+    static struct HttpResponse json(int status, const &char body);
+    // 'len' raw bytes (may be null/0) with the given Content-Type.
+    static struct HttpResponse bytes(int status, const &char content_type,
+                                     const ?&unsigned char data, unsigned long len);
+    // A redirect (301, 302, 303, 307 or 308; anything else becomes 302)
+    // to 'location', with a short HTML body linking to it.
+    static struct HttpResponse redirect(int status, const &char location);
+    // 'status' with its reason phrase as a text/plain body ("404 Not
+    // Found") — the default error page.
+    static struct HttpResponse error(int status);
+
+    // Header edits on the raw block (see http_headers_set & co. below).
+    void          set_header(const &char name, const &char value);
+    void          add_header(const &char name, const &char value);
+    unsigned long remove_header(const &char name);
+    // Owned copy of the first value for 'name' (empty if absent).
+    struct String header(const &char name) const;
+    int           has_header(const &char name) const;
+    // The header block as an HttpHeaders (caller frees).
+    struct HttpHeaders header_map() const;
+    // Replaces the body (Content-Type untouched).
+    void          set_body(const &char body);
+    void          set_body_bytes(const &unsigned char data, unsigned long len);
+
     void free();
 };
 
 struct HttpRequest {
     struct String method;
-    struct String path;
+    struct String path;    // the request-target as sent: "/a/b?x=1"
     struct String headers; // raw header block, same shape as HttpResponse's
     struct String body;
+
+    // A request with this method and target and no headers or body — for
+    // tests and for calling a Router directly.
+    static struct HttpRequest new(const &char method, const &char path);
+
+    // Owned copy of the first value for 'name' (any case; empty if absent).
+    struct String header(const &char name) const;
+    int           has_header(const &char name) const;
+    struct HttpHeaders header_map() const;
+    // 'path' up to the '?' (still percent-encoded), and the part after it
+    // (empty when there is none).
+    struct String path_only() const;
+    struct String query_string() const;
+    // The decoded query parameters.
+    struct QueryParams query() const;
+    // The body parsed as application/x-www-form-urlencoded (regardless of
+    // Content-Type — check content_type_is() first if it matters).
+    struct QueryParams form() const;
+    // 1 if the Content-Type's media type (before any ';') equals 'mime',
+    // ignoring case: req.content_type_is("application/json").
+    int           content_type_is(const &char mime) const;
+    // The value of cookie 'name' from the Cookie header(s); empty if unset.
+    struct String cookie(const &char name) const;
+    struct HttpRequest clone() const;
 
     void free();
 };
@@ -78,6 +142,18 @@ int http_resolve_host(const &char host, &unsigned int addr_out);
 // Returns an owned copy of the value (leading/trailing whitespace
 // trimmed), or an empty String if the header isn't present.
 struct String http_header_get(const &char raw_headers, const &char name);
+
+// Edits on a raw header block (HttpRequest/HttpResponse::headers):
+// set replaces every line with this name by one "Name: value" line (at
+// the first one's position, or appended); add appends a line, keeping any
+// existing ones; remove deletes every line with this name and returns how
+// many there were. Names compare case-insensitively.
+void          http_headers_set(&String raw, const &char name, const &char value);
+void          http_headers_add(&String raw, const &char name, const &char value);
+unsigned long http_headers_remove(&String raw, const &char name);
+// 1 if header 'name' holds a comma-separated list containing 'token'
+// (case-insensitive) — e.g. http_header_has_token(h, "Connection", "close").
+int           http_header_has_token(const &char raw_headers, const &char name, const &char token);
 
 // Performs a blocking HTTP/1.1 request. 'host' may be a hostname (resolved
 // via getaddrinfo) or a numeric IPv4 address. 'extra_headers' may be
@@ -169,7 +245,159 @@ struct String http_build_response(int status, const &char content_type,
                                    const ?&unsigned char body, unsigned long body_len);
 
 // Standard reason phrase for a status code (e.g. 404 -> "Not Found"),
-// "Unknown" for anything not in the common set.
+// "Unknown" for anything not in the IANA registry's common set.
 const &char http_reason_phrase(int status);
+
+// Status classes: 1xx, 2xx, 3xx (a redirect: 301/302/303/307/308), 4xx,
+// 5xx.
+int http_status_is_informational(int status);
+int http_status_is_success(int status);
+int http_status_is_redirect(int status);
+int http_status_is_client_error(int status);
+int http_status_is_server_error(int status);
+
+// ── Chunked transfer coding (RFC 9112 §7.1) ───────────────────────────────
+
+// Appends 'len' bytes as one chunk ("<hex len>\r\n<data>\r\n") to 'out';
+// len 0 appends nothing (the terminator is http_chunked_end's job).
+void http_chunked_encode(&String out, const ?&unsigned char data, unsigned long len);
+// Appends the last-chunk + empty trailer ("0\r\n\r\n").
+void http_chunked_end(&String out);
+// Decodes a complete chunked body held in memory (chunk extensions and
+// trailer fields are skipped) into 'out'. *consumed (if non-null) gets the
+// number of input bytes used. 0 on a malformed or truncated encoding.
+int  http_chunked_decode(const &unsigned char data, unsigned long len, &String out,
+                         ?&unsigned long consumed);
+
+// ── Client: URLs, redirects, decompression ────────────────────────────────
+
+struct HttpClientOptions {
+    int           max_redirects;      // redirects followed (0: none); default 5
+    int           connect_timeout_ms; // default HTTP_DEFAULT_CONNECT_TIMEOUT_MS
+    int           io_timeout_ms;      // per send/receive; 0 = none (default 30000)
+    int           decompress;         // send Accept-Encoding: gzip, deflate and
+                                      // decode the body (default 1)
+    unsigned long max_body_bytes;     // larger response bodies fail; 0 = no limit
+                                      // (default 64 MiB)
+
+    static struct HttpClientOptions defaults();
+};
+
+// A request to an absolute http:// URL: resolves and connects to its host
+// and port, sends method + request-target, and follows redirects
+// (Location resolved against the current URL; 301/302/303 turn a non-GET/
+// HEAD request into a bodyless GET, 307/308 resend it unchanged) up to
+// opts.max_redirects. 'extra_headers' as for http_request. A gzip/deflate
+// Content-Encoding is decoded when opts.decompress is set (the
+// Content-Encoding header is then removed from the response). 'opts' may
+// be null (defaults()). *ok = 0 on a bad or non-http URL (https:// is not
+// supported: no TLS handshake in std), transport failure, malformed
+// response, too many redirects or a body over the limit; the status of a
+// completed exchange is reported even when it is 4xx/5xx (ok = 1).
+// 'final_url', if non-null, receives the URL the response came from.
+struct HttpResponse http_fetch(const &char method, const &char url,
+                               const ?&char extra_headers,
+                               const ?&unsigned char body, unsigned long body_len,
+                               const ?&HttpClientOptions opts, ?&String final_url,
+                               ?&int ok);
+// http_fetch conveniences with default options.
+struct HttpResponse http_get_url(const &char url, ?&int ok);
+struct HttpResponse http_post_url(const &char url, const &char content_type,
+                                  const ?&unsigned char body, unsigned long body_len, ?&int ok);
+
+// Decodes resp.body according to its Content-Encoding (gzip, x-gzip,
+// deflate — zlib or raw — or identity) in place and drops the header.
+// 0 (body untouched) on an unknown coding or corrupt data.
+int http_decode_body(&HttpResponse resp, unsigned long max_out);
+
+// ── Server: configuration, connections, lifecycle ─────────────────────────
+
+struct HttpServerConfig {
+    unsigned short port;            // 0 = any free port (see HttpServer::port)
+    int           threads;          // worker threads, each serving one connection at a time
+    int           keep_alive;       // persistent connections (HTTP/1.1 default, 1.0 opt-in)
+    int           idle_timeout_ms;  // how long a kept-alive connection may sit idle
+    int           io_timeout_ms;    // per send/receive while a request is in flight; 0 = none
+    int           max_requests_per_conn; // 0 = unlimited
+    unsigned long max_header_bytes; // request line + headers; larger gets 431
+    unsigned long max_body_bytes;   // Content-Length or chunked total; larger gets 413
+
+    // port, 8 threads, keep-alive on (5 s idle), 30 s I/O timeout, 1000
+    // requests per connection, 64 KiB of headers, 16 MiB of body.
+    static struct HttpServerConfig defaults(unsigned short port);
+};
+
+// The connection a request arrived on, as router handlers and middleware
+// see it (std/http/router.h). A handler that takes the socket over —
+// Server-Sent Events, a WebSocket upgrade, a hand-written streaming
+// response — calls detach(): the server then neither writes the returned
+// response nor closes the socket.
+struct HttpConn {
+    int            fd;
+    unsigned int   peer_addr;      // IPv4, network byte order (0 if unknown)
+    unsigned short peer_port;
+    unsigned long  request_index;  // 0 for the connection's first request
+    int            keep_alive;     // the server will keep the connection open after
+                                   // this response; set to 0 to close it instead
+    int            detached;
+    void*          reader_;        // internal: the connection's BufReader<TcpStream>
+
+    // Takes over the (blocking) socket. Bytes the client already sent past
+    // this request (pipelined data, a WebSocket frame right behind the
+    // handshake) are appended to 'early' if it is non-null.
+    struct TcpStream detach(?&String early);
+    // "a.b.c.d:port".
+    struct String peer_string() const;
+};
+
+// Dispatch entry the server loops call (std/http/router.h's Router uses
+// it); a plain HttpHandler is adapted to it. Internal: ctx is the router.
+typedef fn struct HttpResponse(void* ctx, &HttpRequest req, &HttpConn conn) HttpDispatchFn_;
+
+// A bound, configurable blocking server: threads × one connection at a
+// time each, with keep-alive. bind() opens the socket; serve() (blocking)
+// or start() (background thread) runs it; stop() ends it from any thread.
+//
+//   struct HttpServer srv = std::HttpServer::bind(&cfg, &ok);
+//   srv.start(handler);              // returns at once; srv.port is the bound port
+//   ...
+//   srv.stop();                      // in-flight requests finish, then the workers exit
+struct HttpServer {
+    unsigned short port;                // the bound port (useful with config port 0)
+    void*          shared_;             // internal server state
+
+    static struct HttpServer bind(const &HttpServerConfig cfg, ?&int ok);
+    // Runs the worker threads and blocks until stop(). 0 after a stop, -1
+    // if the server isn't bound or a worker thread can't start.
+    int  serve(HttpHandler handler);
+    // serve() on a background thread; returns 0 once the workers run.
+    int  start(HttpHandler handler);
+    int  serve_raw_(HttpDispatchFn_ dispatch, void* ctx);
+    int  start_raw_(HttpDispatchFn_ dispatch, void* ctx);
+    // Stops accepting, wakes idle keep-alive connections, waits for the
+    // workers to finish their current request, and closes the listening
+    // socket. Safe to call from a handler's thread too (then it doesn't
+    // wait for that worker). Idempotent.
+    void stop();
+    int  is_running() const;
+};
+
+// HttpServer::bind + serve in one call; returns only on a setup failure
+// (-1) — there is no handle to stop it with.
+int http_serve_config(const &HttpServerConfig cfg, HttpHandler handler);
+
+// Streams a response of unknown length over a detached connection with
+// chunked transfer coding: begin() writes the status line and headers
+// (plus Transfer-Encoding: chunked), write() sends a chunk, finish() the
+// last chunk and closes the socket.
+struct HttpChunkedWriter {
+    struct TcpStream s;
+    int              ok;      // 0 once any write failed
+
+    static struct HttpChunkedWriter begin(&HttpConn conn, int status, const ?&char headers);
+    int write(const &unsigned char data, unsigned long len);
+    int write_str(const &char text);
+    int finish();
+};
 
 } // namespace std
