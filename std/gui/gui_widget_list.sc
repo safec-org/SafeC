@@ -138,12 +138,21 @@ static void __wli_col_widths(&GuiUi ui, const &Widget w, int avail, &Vec<int> ou
     }
 }
 
+// The width table columns share: inside the border, beside a vertical
+// scroll bar when the rows overflow.
+static int __wli_table_avail(&GuiUi ui, const &Widget w) {
+    int avail = w.w - __w_ipx(ui, 2);
+    int viewH = w.h - __w_ipx(ui, 2) - __wli_header_h(ui, w);
+    if (w.contentH > (float)viewH) { avail = avail - __w_ipx(ui, ui.theme.scrollbarSize); }
+    return avail;
+}
+
 static void __wli_update_content(&GuiUi ui, &Widget w, int count) {
     w.contentH = __wli_row(ui) * (float)count;
     w.contentW = 0.0f;
     if (w.kind == WIDGET_TABLE) {
         struct Vec<int> cols = Vec::new();
-        __wli_col_widths(ui, w, w.w - __w_ipx(ui, 2), &cols);
+        __wli_col_widths(ui, w, __wli_table_avail(ui, w), &cols);
         int total = 0;
         unsigned long i = 0UL;
         while (i < cols.len) { total = total + *cols.at(i); i = i + 1UL; }
@@ -287,7 +296,7 @@ void __wk_list_paint(&GuiUi ui, &GuiCanvas c, &Widget w) {
     __w_scroll_clamp(w, (float)vw, (float)vh);
     struct Vec<int> cols = Vec::new();
     if (k == WIDGET_TABLE) {
-        __wli_col_widths(ui, w, w.w - __w_ipx(ui, 2), &cols);
+        __wli_col_widths(ui, w, __wli_table_avail(ui, w), &cols);
         // header
         float hy = y + bw;
         float hh2 = (float)__wli_header_h(ui, w);
@@ -550,7 +559,7 @@ int __wk_list_event(&GuiUi ui, &Widget w, &GuiEvent ev) {
             int hy = w.y + __w_ipx(ui, 1);
             if (ey >= (float)hy && ey < (float)(hy + __wli_header_h(ui, w))) {
                 struct Vec<int> cols = Vec::new();
-                __wli_col_widths(ui, w, w.w - __w_ipx(ui, 2), &cols);
+                __wli_col_widths(ui, w, __wli_table_avail(ui, w), &cols);
                 float cx2 = (float)vx - w.scrollX;
                 unsigned long ci = 0UL;
                 int near = 0;
@@ -573,7 +582,7 @@ int __wk_list_event(&GuiUi ui, &Widget w, &GuiEvent ev) {
             int hy = w.y + __w_ipx(ui, 1);
             if (ey >= (float)hy && ey < (float)(hy + __wli_header_h(ui, w))) {
                 struct Vec<int> cols = Vec::new();
-                __wli_col_widths(ui, w, w.w - __w_ipx(ui, 2), &cols);
+                __wli_col_widths(ui, w, __wli_table_avail(ui, w), &cols);
                 float cx2 = (float)vx - w.scrollX;
                 unsigned long ci = 0UL;
                 while (ci < cols.len) {

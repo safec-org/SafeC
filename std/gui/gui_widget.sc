@@ -126,7 +126,7 @@ static int __w_default_align(int kind) {
         kind == WIDGET_PROGRESS || kind == WIDGET_LIST || kind == WIDGET_TREE || kind == WIDGET_TABLE ||
         kind == WIDGET_TABS || kind == WIDGET_SCROLL || kind == WIDGET_SPLITTER || kind == WIDGET_SEPARATOR ||
         kind == WIDGET_MENUBAR || kind == WIDGET_STATUSBAR || kind == WIDGET_GROUP || kind == WIDGET_PANEL ||
-        kind == WIDGET_GRID || kind == WIDGET_STACK || kind == WIDGET_VSTACK || kind == WIDGET_HSTACK) {
+        kind == WIDGET_GRID || kind == WIDGET_CANVAS || kind == WIDGET_STACK || kind == WIDGET_VSTACK || kind == WIDGET_HSTACK) {
         return WIDGET_ALIGN_STRETCH;
     }
     return WIDGET_ALIGN_START;
