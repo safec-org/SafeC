@@ -33,14 +33,20 @@
 // and map it.
 //
 // Linking: the webgpu feature (SAFEC_FEATURE_WEBGPU) registers the backend;
-// the program links a WebGPU implementation, for wgpu-native
-//   -L<wgpu-native>/lib -lwgpu_native            (shared: plus an rpath), or
+// the program links a WebGPU implementation, for wgpu-native (a release from
+// https://github.com/gfx-rs/wgpu-native/releases, v24 or later: the webgpu.h
+// revision with WGPUStringView and callback-info structs; webgpu_api.h's
+// layouts are checked against v29), unpacked anywhere as <wgpu-native>:
+//   -L<wgpu-native>/lib -lwgpu_native            the shared library, or
 //   <wgpu-native>/lib/libwgpu_native.a -framework Metal -framework QuartzCore
-//     -framework Foundation -lobjc               (static, macOS; Linux: -ldl -lm -lpthread)
-// from https://github.com/gfx-rs/wgpu-native/releases (v24 or later: the
-// webgpu.h revision with WGPUStringView and callback-info structs;
-// webgpu_api.h's layouts are checked against v29). Nothing here hard-codes
-// where it is installed; tests/stdlib/webgpu/run.sh takes WGPU_NATIVE_DIR.
+//     -framework Foundation -lobjc               the static one (macOS; on
+//                                                Linux add -ldl -lm -lpthread)
+// In a safeguard project: [features] webgpu = [] and, under [build],
+// lib_dirs = ["<wgpu-native>/lib"] and libs = ["wgpu_native"]. The shared
+// library's install name is @rpath/libwgpu_native.dylib (libwgpu_native.so
+// on Linux): the program finds it through an rpath (-Wl,-rpath,<dir>) or
+// DYLD_LIBRARY_PATH / LD_LIBRARY_PATH. Nothing here hard-codes where it is
+// installed; tests/stdlib/webgpu/run.sh takes WGPU_NATIVE_DIR.
 //
 // The host waits by running the instance's callbacks (work done, buffer
 // mapped) with the device polled without blocking (wgpuDevicePoll: a
