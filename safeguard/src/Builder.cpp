@@ -535,13 +535,15 @@ std::string Builder::compileSrc(const std::string& safecBin,
 
 std::string Builder::llToObj(const std::string& llFile,
                                const std::string& buildDir,
-                               bool suppressOutput) const {
+                               bool suppressOutput,
+                               bool stdUnit) const {
     fs::path obj = fs::path(buildDir) / (fs::path(llFile).stem().string() + ".o");
     std::vector<std::string> cmd = { findClang(false), "-c", llFile, "-o", obj.string() };
     for (auto& f : targetClangFlags()) cmd.push_back(f);
     for (auto& f : runtimeFlags()) cmd.push_back(f);
     cmd.push_back("-Wno-override-module");
-    if (opts_.release) cmd.push_back("-O2");
+    if (stdUnit) for (auto& f : stdClangFlags()) cmd.push_back(f);   // std: optimized in debug builds too
+    else if (opts_.release) cmd.push_back("-O2");
     int rc = runCmd(cmd, opts_.verbose, suppressOutput);
     if (rc != 0) {
         if (!suppressOutput)
@@ -1250,6 +1252,20 @@ std::string Builder::prebuiltStdStamp() const {
     return s + "safec-version=" + version.substr(0, version.find('\n')) + "\n";
 }
 
+std::vector<std::string> Builder::stdClangFlags() const {
+    std::vector<std::string> f = { "-O2" };
+    if (!isCrossTarget() && targetOS() == "macos") {
+        // The prebuilt std runs on kStdMacosMin and later, as the release's
+        // binaries do (release.yml); std compiled here matches it, or the
+        // deployment target the build asks for.
+        std::string min = kStdMacosMin;
+        const char* e = std::getenv("MACOSX_DEPLOYMENT_TARGET");
+        if (!writingPrebuiltStd_ && e && *e) min = e;
+        f.push_back("-mmacosx-version-min=" + min);
+    }
+    return f;
+}
+
 bool Builder::readPrebuiltUnits(const std::string& file, PrebuiltStd& out) {
     std::ifstream in(file);
     if (!in) return false;
@@ -1374,7 +1390,7 @@ bool Builder::stdUnitObject(const StdIndex& idx, const std::string& unit, const 
     std::vector<std::string> incs = { stdDir, fs::path(stdDir).parent_path().string() };
     std::string ll = compileSrc(safecBin, (fs::path(stdDir) / unit).string(), objDir.string(), incs,
                                 /*compatPreprocessor=*/true, /*suppressOutput=*/true, {}, stem);
-    std::string o = ll.empty() ? "" : llToObj(ll, objDir.string(), /*suppressOutput=*/true);
+    std::string o = ll.empty() ? "" : llToObj(ll, objDir.string(), /*suppressOutput=*/true, /*stdUnit=*/true);
     if (o.empty()) {
         std::cerr << "safeguard: warning: skipping 'std/" << unit << "' — does not "
                   << (ll.empty() ? "compile" : "assemble") << " for the current target\n";
@@ -1434,10 +1450,12 @@ bool Builder::ensureStdLib(const std::set<std::string>& roots, const std::set<st
     // Each unit compiled here gets its own object under
     // build/deps/[<target>/]std/, reused until the unit or a std header it
     // includes changes, or the compiler does. The stamp records which
-    // compiler and std/ built them: switching either (e.g. SAFEC_HOME/SAFEC
-    // now naming a different, possibly older safec) rebuilds everything --
-    // an mtime comparison can't see that, and a PATH-resolved 'safec' has no
-    // path to stat at all. A unit that doesn't compile for the target
+    // compiler, std/ and flags built them: switching either (e.g.
+    // SAFEC_HOME/SAFEC now naming a different, possibly older safec)
+    // rebuilds everything -- an mtime comparison can't see that, and a
+    // PATH-resolved 'safec' has no path to stat at all. std is compiled with
+    // the same flags in debug and release builds (stdClangFlags), so the two
+    // share these objects. A unit that doesn't compile for the target
     // (std/hal/riscv.sc's CSR asm on another ISA, say) leaves a .skip marker
     // instead, so it is reported once, not on every build.
     fs::path depDir = isCrossTarget() ? fs::path(root_) / "build" / "deps" / targetDirName()
@@ -1447,6 +1465,7 @@ bool Builder::ensureStdLib(const std::set<std::string>& roots, const std::set<st
     std::error_code ec;
     std::string stamp = "safec=" + findSafec() + "\nstd=" + stdDir + "\n";
     for (auto& f : runtimeFlags()) stamp += "runtime=" + f + "\n";   // a CRT switch rebuilds std
+    for (auto& f : stdClangFlags()) stamp += "flag=" + f + "\n";     // (objects from before: -O0)
     {
         std::ifstream in(objDir / "build.stamp");
         std::stringstream prev;
@@ -1614,6 +1633,7 @@ bool Builder::writePrebuiltStd(const std::string& prefix) {
         return false;
     }
     stdFromSource_ = true;
+    writingPrebuiltStd_ = true;
     const StdIndex& idx = StdIndex::load(stdDir);
     StdPlatform plat = stdPlatform();
     plat.features.clear();

@@ -201,6 +201,7 @@ private:
     std::vector<std::string> stdDebDepends_;
     std::set<std::string> stdUnits_;          // the modules (ensureStdLib)
     bool stdFromSource_ = false;              // never the prebuilt archive (writePrebuiltStd)
+    bool writingPrebuiltStd_ = false;         // 'std-prebuilt' (see stdClangFlags)
 
     // One std unit's object: compiled into objDir (or reused from there)
     // with the symbols its IR refers to kept beside it (<stem>.refs).
@@ -231,6 +232,13 @@ private:
     static bool readPrebuiltUnits(const std::string& file, PrebuiltStd& out);
     // The stamp a prebuilt archive for this compiler and host carries.
     std::string prebuiltStdStamp() const;
+    // The clang flags every std unit is compiled with, in debug and release
+    // builds alike and as the prebuilt std is: -O2, and for macOS the
+    // deployment target (kStdMacosMin, or MACOSX_DEPLOYMENT_TARGET when set;
+    // always kStdMacosMin for 'std-prebuilt').
+    std::vector<std::string> stdClangFlags() const;
+    // The oldest macOS a release's binaries and prebuilt std run on.
+    static constexpr const char* kStdMacosMin = "11.0";
     // The host as a target triple (aarch64-apple-darwin, x86_64-unknown-
     // linux-gnu, x86_64-pc-windows-msvc, ...): a prebuilt archive's directory.
     static std::string hostTriple();
@@ -364,10 +372,12 @@ private:
     std::string materializeScx(const std::string& src,
                                 const std::string& buildDir) const;
 
-    // Compile .ll to .o with clang.  Returns .o path or "".
+    // Compile .ll to .o with clang.  Returns .o path or "". 'stdUnit': a
+    // std unit, compiled with stdClangFlags whatever the build's mode.
     std::string llToObj(const std::string& llFile,
                          const std::string& buildDir,
-                         bool suppressOutput = false) const;
+                         bool suppressOutput = false,
+                         bool stdUnit = false) const;
 
     // Compile a .c/.cpp/.cc/.cxx/.m/.mm file straight to a .o with
     // clang/clang++. 'flags' replaces the project's cflags (a built
