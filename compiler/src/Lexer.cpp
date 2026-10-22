@@ -307,6 +307,13 @@ Token Lexer::lexString() {
             case 'r':  s += '\r'; break;
             case '\\': s += '\\'; break;
             case '"':  s += '"';  break;
+            case '\'': s += '\''; break;
+            case '?':  s += '?';  break;
+            case 'a':  s += '\a'; break;
+            case 'b':  s += '\b'; break;
+            case 'f':  s += '\f'; break;
+            case 'v':  s += '\v'; break;
+            case 'e':  s += '\x1b'; break; // GNU extension, as in clang/gcc
             case '0':  s += '\0'; break;
             case 'x': {
                 std::string hex;
@@ -341,6 +348,10 @@ Token Lexer::lexChar() {
         case 'n': c = '\n'; break; case 't': c = '\t'; break;
         case 'r': c = '\r'; break; case '\\': c = '\\'; break;
         case '\'': c = '\''; break; case '0': c = '\0'; break;
+        case 'a': c = '\a'; break; case 'b': c = '\b'; break;
+        case 'f': c = '\f'; break; case 'v': c = '\v'; break;
+        case 'e': c = '\x1b'; break; case '"': c = '"'; break;
+        case '?': c = '?'; break;
         case 'x': {
             std::string hex;
             while (hex.size() < 2 && !atEnd() && std::isxdigit(peek())) hex += advance();
