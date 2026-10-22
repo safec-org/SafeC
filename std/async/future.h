@@ -210,20 +210,28 @@ struct WakerSlot {
 // ── WaitList ───────────────────────────────────────────────────────────────
 // A fixed set of registered wakers, for primitives several futures wait on
 // at once (a channel's senders, a mutex's lockers). No heap: ASYNC_WAITERS
-// slots. A waiter that finds it full gets id 0 and must re-poll on its own
-// (cx.wake_by_ref()) — slower, never wrong. Ids are 1-based.
+// slots. add() returns an id the future keeps and passes back to refresh
+// or remove its registration; an id stays tied to its registration (a
+// slot reused after a wake gets a new id), so a stale one is harmless. A
+// waiter that finds the list full gets id 0 and must re-poll on its own
+// (cx.wake_by_ref()) — slower, never wrong.
 #define ASYNC_WAITERS 32
 
 struct WaitList {
     struct Waker w[ASYNC_WAITERS];
-    int          used[ASYNC_WAITERS];
+    int          serial[ASYNC_WAITERS];   // 0 = free, else the registration's serial
     int          count;
-    unsigned int next_;      // where wake_one starts looking (fairness)
+    int          next_serial;
+    unsigned int next_;                   // where wake_one starts looking (fairness)
 
     static struct WaitList new();
-    // Register (or, with id > 0, refresh) a waiter. Returns its id, 0 if full.
+    // Register (or, with the id of a live registration, refresh) a waiter.
+    // Returns its id, 0 if full.
     int  add(int id, const &Waker w);
+    // Remove a registration (a stale or 0 id is ignored).
     void remove(int id);
+    // Whether 'id' is still registered (not woken or removed yet).
+    int  contains(int id) const;
     // Wake (and remove) one waiter. Returns 1 if there was one.
     int  wake_one();
     // Wake (and remove) every waiter. Returns how many.

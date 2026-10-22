@@ -126,35 +126,49 @@ void WakerSlot::clear() {
 }
 
 // ── WaitList ───────────────────────────────────────────────────────────────
+// id = serial * 64 + slot + 1 (ASYNC_WAITERS <= 63).
+
+static int waitlist_slot_(int id) { return (id & 63) - 1; }
 
 struct WaitList WaitList::new() {
     struct WaitList l;
     int i = 0;
     while (i < ASYNC_WAITERS) {
         l.w[i] = Waker::raw_((void*)0, (void*)0, (void*)0, (void*)0, 0UL);
-        l.used[i] = 0;
+        l.serial[i] = 0;
         i = i + 1;
     }
     l.count = 0;
+    l.next_serial = 1;
     l.next_ = 0U;
     return l;
 }
 
+int WaitList::contains(int id) const {
+    if (id <= 0) return 0;
+    int slot = waitlist_slot_(id);
+    if (slot < 0 || slot >= ASYNC_WAITERS) return 0;
+    return (self.serial[slot] != 0 && self.serial[slot] == id / 64) ? 1 : 0;
+}
+
 int WaitList::add(int id, const &Waker w) {
-    if (id > 0 && id <= ASYNC_WAITERS && self.used[id - 1] != 0) {
-        if (self.w[id - 1].will_wake(w) == 0) {
-            self.w[id - 1].drop();
-            self.w[id - 1] = w.clone();
+    if (self.contains(id) != 0) {
+        int slot = waitlist_slot_(id);
+        if (self.w[slot].will_wake(w) == 0) {
+            self.w[slot].drop();
+            self.w[slot] = w.clone();
         }
         return id;
     }
     int i = 0;
     while (i < ASYNC_WAITERS) {
-        if (self.used[i] == 0) {
-            self.used[i] = 1;
+        if (self.serial[i] == 0) {
+            int ser = self.next_serial;
+            self.next_serial = self.next_serial >= 16777215 ? 1 : self.next_serial + 1;
+            self.serial[i] = ser;
             self.w[i] = w.clone();
             self.count = self.count + 1;
-            return i + 1;
+            return ser * 64 + i + 1;
         }
         i = i + 1;
     }
@@ -162,10 +176,10 @@ int WaitList::add(int id, const &Waker w) {
 }
 
 void WaitList::remove(int id) {
-    if (id <= 0 || id > ASYNC_WAITERS) return;
-    if (self.used[id - 1] == 0) return;
-    self.used[id - 1] = 0;
-    self.w[id - 1].drop();
+    if (self.contains(id) == 0) return;
+    int slot = waitlist_slot_(id);
+    self.serial[slot] = 0;
+    self.w[slot].drop();
     self.count = self.count - 1;
 }
 
@@ -174,8 +188,8 @@ int WaitList::wake_one() {
     int k = 0;
     while (k < ASYNC_WAITERS) {
         int i = (int)((self.next_ + (unsigned int)k) % (unsigned int)ASYNC_WAITERS);
-        if (self.used[i] != 0) {
-            self.used[i] = 0;
+        if (self.serial[i] != 0) {
+            self.serial[i] = 0;
             self.count = self.count - 1;
             self.next_ = (unsigned int)(i + 1);
             struct Waker w = self.w[i];
@@ -191,8 +205,8 @@ int WaitList::wake_all() {
     int n = 0;
     int i = 0;
     while (i < ASYNC_WAITERS && self.count > 0) {
-        if (self.used[i] != 0) {
-            self.used[i] = 0;
+        if (self.serial[i] != 0) {
+            self.serial[i] = 0;
             self.count = self.count - 1;
             struct Waker w = self.w[i];
             w.wake();
