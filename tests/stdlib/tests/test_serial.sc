@@ -1,5 +1,6 @@
 // std::serial — value, json, csv, xml, yaml, html, protobuf, markdown; std::scx
 #include <std/test/test.h>
+#include <std/io.h>
 #include <std/mem.h>
 #include <std/str.h>
 #include <std/serial/value.h>
@@ -314,6 +315,119 @@ void t_html_text() {
     u.free(); t.free();
 }
 
+static struct String md_html(const &char src, int ext) {
+    struct MdOptions o = MdOptions::commonmark();
+    if (ext) { o = MdOptions::gfm(); o.html = 1; o.containers = 1; o.heading_ids = 1; }
+    &heap MdNode d = MdNode::parse_opts(src, &o);
+    struct String h = d.render_html();
+    d.free();
+    return h;
+}
+
+static void md_is(const &char src, int ext, const &char want) {
+    struct String h = md_html(src, ext);
+    if (!h.eq_cstr(want)) { eprint("got: "); eprintln(h.as_ptr()); }
+    ASSERT_STR_EQ(h.as_ptr(), want);
+    h.free();
+}
+
+struct MdHookCtx { int links; };
+
+static int md_test_hook(?&MdHookCtx ctx, const &MdNode n, int entering, &String out) {
+    if (n.kind == MD_LINK && entering) {
+        match (ctx) { case some(c): { c.links = c.links + 1; } case null: { } }
+        out.push("<a class=\"x\" href=\"/base");
+        out.push(n.text.as_ptr());
+        out.push("\">");
+        return 2;
+    }
+    if (n.kind == MD_CODE_BLOCK) {
+        out.push("<pre class=\"hl\">");
+        out.push(n.info.as_ptr());
+        out.push("</pre>\n");
+        return 1;
+    }
+    if (n.kind == MD_HEADING && !entering) {
+        out.push(" <a href=\"#");
+        out.push(n.id.as_ptr());
+        out.push("\">#</a></h2>\n");
+        return 1;
+    }
+    if (n.kind == MD_HEADING) {
+        out.push("<h2 id=\"");
+        out.push(n.id.as_ptr());
+        out.push("\">");
+        return 2;
+    }
+    return 0;
+}
+
+void t_markdown_ext() {
+    // Inlines: escapes, code-span precedence, intraword '_', nesting in links.
+    md_is("a\\*b\\* `x_y_z` snake_case_name *it* __b__ **a *b* c**\n", 0,
+          "<p>a*b* <code>x_y_z</code> snake_case_name <em>it</em> <strong>b</strong> <strong>a <em>b</em> c</strong></p>\n");
+    md_is("[`code` and *em*](/u \"T\") ![alt *x*](i.png) <https://a.b/c> <me@x.org>\n", 0,
+          "<p><a href=\"/u\" title=\"T\"><code>code</code> and <em>em</em></a> <img src=\"i.png\" alt=\"alt x\"> <a href=\"https://a.b/c\">https://a.b/c</a> <a href=\"mailto:me@x.org\">me@x.org</a></p>\n");
+    md_is("&lt;T&gt; &amp; &copy; &#65; a&b\nline  \nnext\\\nlast\n", 0,
+          "<p>&lt;T&gt; &amp; \xc2\xa9 A a&amp;b\nline<br>\nnext<br>\nlast</p>\n");
+    md_is("**a*\n", 0, "<p>*<em>a</em></p>\n");
+    md_is("<b>raw</b> <!-- c -->\n", 0, "<p>&lt;b&gt;raw&lt;/b&gt; &lt;!-- c --&gt;</p>\n");
+    md_is("<b>raw</b> x\n", 1, "<p><b>raw</b> x</p>\n");
+    md_is("~~gone~~ see https://example.com/a_b. ok\n", 1,
+          "<p><del>gone</del> see <a href=\"https://example.com/a_b\">https://example.com/a_b</a>. ok</p>\n");
+
+    // Blocks: nested lists, code in items, loose lists, setext, indented code.
+    md_is("- a\n  - b\n    - c\n- d\n\n  ```c\n  x\n  ```\n", 0,
+          "<ul>\n<li>\n<p>a</p>\n<ul>\n<li>b\n<ul>\n<li>c</li>\n</ul>\n</li>\n</ul>\n</li>\n<li>\n<p>d</p>\n<pre><code class=\"language-c\">x\n</code></pre>\n</li>\n</ul>\n");
+    md_is("3. x\n4. y\n", 0, "<ol start=\"3\">\n<li>x</li>\n<li>y</li>\n</ol>\n");
+    md_is("Title\n=====\n\n    code\n\n> q *e*\nlazy\n\n---\n", 0,
+          "<h1>Title</h1>\n<pre><code>code\n</code></pre>\n<blockquote>\n<p>q <em>e</em>\nlazy</p>\n</blockquote>\n<hr>\n");
+
+    // Extensions: tables, containers, raw HTML blocks, heading ids.
+    md_is("| a | `b\\|c` | d |\n|:--|:-:|--:|\n| *1* | 2 |\n", 1,
+          "<table>\n<thead>\n<tr>\n<th style=\"text-align:left\">a</th>\n<th style=\"text-align:center\"><code>b|c</code></th>\n<th style=\"text-align:right\">d</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td style=\"text-align:left\"><em>1</em></td>\n<td style=\"text-align:center\">2</td>\n<td style=\"text-align:right\"></td>\n</tr>\n</tbody>\n</table>\n");
+    md_is("::: warning `x` is *odd*\nbody\n::: details\ninner\n:::\n:::\n::: tip\nt\n:::\n", 1,
+          "<div class=\"custom-block warning\">\n<p class=\"custom-block-title\"><code>x</code> is <em>odd</em></p>\n<p>body</p>\n<details class=\"custom-block details\"><summary>Details</summary>\n<p>inner</p>\n</details>\n</div>\n<div class=\"custom-block tip\"><p class=\"custom-block-title\">TIP</p>\n<p>t</p>\n</div>\n");
+    md_is("<div class=\"x\">\n*not md*\n</div>\n\n<a id=\"anchor\"></a>\n\ntext\n", 1,
+          "<div class=\"x\">\n*not md*\n</div>\n<p><a id=\"anchor\"></a></p>\n<p>text</p>\n");
+    md_is("# A B\n## `__attribute__` {#__attribute__}\n## 2. Temporal Safety\n## A B\n## C/C++ & Rust?\n", 1,
+          "<h1 id=\"a-b\">A B</h1>\n<h2 id=\"__attribute__\"><code>__attribute__</code></h2>\n<h2 id=\"_2-temporal-safety\">2. Temporal Safety</h2>\n<h2 id=\"a-b-1\">A B</h2>\n<h2 id=\"c-c-rust\">C/C++ &amp; Rust?</h2>\n");
+
+    // Slugs, plain text.
+    struct String slug = String::new();
+    md_slugify("Hello, World! \xe2\x80\x9cq\xe2\x80\x9d \xed\x95\x9c", &slug);
+    ASSERT_STR_EQ(slug.as_ptr(), "hello-world-q-\xed\x95\x9c");
+    slug.free();
+    struct MdOptions o = MdOptions::gfm();
+    o.heading_ids = 1;
+    &heap MdNode d = MdNode::parse_opts("## *Hi* `there`\n\n```c\nint x;\n```\n[link](/a) and [x](/b)\n", &o);
+    struct String pt = String::new();
+    (*d.children.at(0UL)).plain_text(&pt);
+    ASSERT_STR_EQ(pt.as_ptr(), "Hi there");
+    pt.free();
+
+    // Hooks.
+    struct MdHookCtx ctx;
+    ctx.links = 0;
+    struct String hooked;
+    unsafe { hooked = md_render_html_with(d, md_test_hook, (?&MdHookCtx)&ctx); }
+    ASSERT_STR_EQ(hooked.as_ptr(), "<h2 id=\"hi-there\"><em>Hi</em> <code>there</code> <a href=\"#hi-there\">#</a></h2>\n<pre class=\"hl\">c</pre>\n<p><a class=\"x\" href=\"/base/a\">link</a> and <a class=\"x\" href=\"/base/b\">x</a></p>\n");
+    ASSERT_EQ(ctx.links, 2);
+    hooked.free();
+
+    // Markdown round trip of the extended syntax.
+    struct MdOptions all = MdOptions::gfm();
+    all.containers = 1;
+    &heap MdNode e = MdNode::parse_opts("::: tip Note\n- a\n  - b\n\n| x | y |\n|---|--:|\n| 1 | `2` |\n:::\n\n1. *x* ~~y~~\n", &all);
+    struct String h1 = e.render_html();
+    struct String back = e.render_markdown();
+    &heap MdNode e2 = MdNode::parse_opts(back.as_ptr(), &all);
+    struct String h2 = e2.render_html();
+    ASSERT_STR_EQ(h1.as_ptr(), h2.as_ptr());
+    h1.free(); h2.free(); back.free();
+    e.free(); e2.free(); d.free();
+}
+
 int main() {
     struct TestSuite t = TestSuite::new();
     unsafe {
@@ -323,6 +437,7 @@ int main() {
         t.add("xml/yaml/html", t_xml_yaml_html);
         t.add("protobuf", t_protobuf);
         t.add("markdown", t_markdown);
+        t.add("markdown extensions/hooks", t_markdown_ext);
         t.add("yaml flow/block scalars, value order", t_yaml_flow_block);
         t.add("html unescape/strip_tags", t_html_text);
         t.add("writers/varint/scx", t_writers_varint);
