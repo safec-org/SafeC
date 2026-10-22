@@ -222,6 +222,11 @@ void ThreadPool::wait_task_(&TaskHeader hdr) {
     mutex_lock(&self.mu);
     while ((async_load_(&hdr.state) & ASYNC_TASK_DONE) == 0) cond_wait(&self.done_cv, &self.mu);
     mutex_unlock(&self.mu);
+    // DONE is set inside task_header_finish_, under the header's lock: take
+    // it once so the worker is past its last touch of the task (the caller
+    // may free it as soon as this returns).
+    hdr.lock.lock();
+    hdr.lock.unlock();
 }
 
 void ThreadPool::wait_idle() {
