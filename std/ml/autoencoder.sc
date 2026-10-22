@@ -12,10 +12,12 @@
 namespace std {
 
 static float ae_cols_(const &FloatTensor t) {
+    unsafe { tensor_host_((void*)t); }
     unsafe { return (float)t->shape[t->ndim - 1UL]; }
 }
 
 static unsigned long ae_rows_(const &FloatTensor t) {
+    unsafe { tensor_host_((void*)t); }
     unsafe { return t->ndim >= 2UL ? t->shape[0] : 1UL; }
 }
 
@@ -32,6 +34,7 @@ static &FloatTensor ae_output_(&FloatTensor out, int recon) {
 }
 
 static float ae_value_(const &FloatTensor t) {
+    unsafe { tensor_host_((void*)t); }
     unsafe { return t->data[0]; }
 }
 
@@ -76,6 +79,7 @@ struct Autoencoder Autoencoder::new(unsigned long inDim, const &AutoencoderConfi
 &FloatTensor Autoencoder::loss(const &FloatTensor x, const &FloatTensor y) {
     // the encoder's input: a copy of x, corrupted for a denoising AE
     &FloatTensor noisy = x.detach();
+    unsafe { tensor_host_write_((void*)noisy); }
     int corrupt = self.cfg.noiseStd > (float)0.0 || self.cfg.dropProb > (float)0.0;
     if (corrupt) {
         unsafe {
@@ -239,6 +243,7 @@ struct VqVae VqVae::new(unsigned long inDim, const &VqVaeConfig cfg) {
 
 // Index of the nearest code for every row of ze.
 static &FloatTensor vq_nearest_(const &VqVae v, const &FloatTensor ze) {
+    unsafe { tensor_host_((void*)ze); }
     unsigned long m = ae_rows_(ze);
     unsigned long d = v.cfg.latent;
     unsigned long K = v.cfg.codes;
@@ -268,6 +273,7 @@ static &FloatTensor vq_nearest_(const &VqVae v, const &FloatTensor ze) {
 }
 
 static float vq_perplexity_(const &FloatTensor idx, unsigned long K) {
+    unsafe { tensor_host_((void*)idx); }
     float H = (float)0.0;
     unsafe {
         unsigned long m = idx->size;
@@ -288,6 +294,7 @@ static float vq_perplexity_(const &FloatTensor idx, unsigned long K) {
 
 // Copies encoder output row 'row' into code 'k'.
 static void vq_set_code_(&VqVae v, unsigned long k, const &FloatTensor ze, unsigned long row) {
+    unsafe { tensor_host_((void*)ze); }
     unsigned long d = v.cfg.latent;
     unsafe {
         unsigned long c = 0UL;
@@ -318,6 +325,7 @@ static void vq_maintain_(&VqVae v, const &FloatTensor ze) {
 }
 
 static void vq_count_use_(&VqVae v, const &FloatTensor idx) {
+    unsafe { tensor_host_((void*)idx); }
     unsafe {
         unsigned long k = 0UL;
         while (k < v.cfg.codes) { v.idle->data[k] = v.idle->data[k] + (float)1.0; k = k + 1UL; }

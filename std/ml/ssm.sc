@@ -93,6 +93,7 @@ static void scan_run_(&ScanJob j, unsigned long D) {
 
 &FloatTensor ssm_selective_scan(const &FloatTensor x, const &FloatTensor delta, const &FloatTensor A,
                            const &FloatTensor B, const &FloatTensor C, const &FloatTensor Dskip) {
+    unsafe { tensor_host_((void*)x); tensor_host_((void*)delta); tensor_host_((void*)A); tensor_host_((void*)B); tensor_host_((void*)C); tensor_host_((void*)Dskip); }
     unsigned long T; unsigned long D; unsigned long N;
     unsafe { T = x->shape[0]; D = x->shape[1]; N = A->shape[1]; }
     &FloatTensor y = FloatTensor::new_2d(T, D, 0);
@@ -233,6 +234,7 @@ void Mamba::free() {
 // Runs T tokens from the given state (conv [dInner][dConv-1], h
 // [dInner][dState]) and leaves the state after the last token there.
 static &FloatTensor mamba_run_(const &Mamba m, const &FloatTensor X, &FloatTensor convState, &FloatTensor hState) {
+    unsafe { tensor_host_((void*)X); tensor_host_write_((void*)convState); tensor_host_write_((void*)hState); }
     unsigned long T; unsigned long E; unsigned long N; unsigned long R;
     unsafe { T = X->size / m->dModel; }
     E = m->dInner; N = m->dState; R = m->dtRank;
@@ -242,7 +244,8 @@ static &FloatTensor mamba_run_(const &Mamba m, const &FloatTensor X, &FloatTenso
         unsigned long i = 0UL;
         while (i < T * m->dModel) { X2->data[i] = X->data[i]; i = i + 1UL; }
     }
-    &FloatTensor xz = tensor_matmul(X2, m->inProj);          // [T, 2E]: x | z
+    &FloatTensor xz = tensor_matmul(X2, m->inProj);
+    unsafe { tensor_host_((void*)xz); }          // [T, 2E]: x | z
     ssm_release_(X2);
 
     &FloatTensor xc = FloatTensor::new_2d(T, E, 0);
@@ -257,7 +260,8 @@ static &FloatTensor mamba_run_(const &Mamba m, const &FloatTensor X, &FloatTenso
     if (T * E * m->dConv >= 65536UL) parallel_for(E, 64UL, conv_channels_, &cj);
     else conv_channels_(&cj, 0UL, E);
 
-    &FloatTensor xdbl = tensor_matmul(xc, m->xProj);         // [T, R + 2N]: dt | B | C
+    &FloatTensor xdbl = tensor_matmul(xc, m->xProj);
+    unsafe { tensor_host_((void*)xdbl); }         // [T, R + 2N]: dt | B | C
     unsigned long W = R + 2UL * N;
     &FloatTensor dtLow = FloatTensor::new_2d(T, R, 0);
     unsafe {
@@ -268,7 +272,8 @@ static &FloatTensor mamba_run_(const &Mamba m, const &FloatTensor X, &FloatTenso
             t = t + 1UL;
         }
     }
-    &FloatTensor dt = tensor_matmul(dtLow, m->dtProj);       // [T, E], before bias + softplus
+    &FloatTensor dt = tensor_matmul(dtLow, m->dtProj);
+    unsafe { tensor_host_((void*)dt); }       // [T, E], before bias + softplus
     ssm_release_(dtLow);
 
     &FloatTensor y = FloatTensor::new_2d(T, E, 0);

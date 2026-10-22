@@ -55,7 +55,7 @@ int mps_add_f32(const &float a, const &float b, &float out, unsigned long n);
 // one-line kernel body differing. mps_sub_f32 itself is NOT routed through
 // __mps_run_binary_kernel (unlike mul/div/pow) — it's batch-aware, same
 // reasoning as mps_relu_f32/mps_matmul_f32 (see mps_relu_f32's comment):
-// tensor_gpu.sc's tensor_sub_gpu needs to encode it onto a shared batch's
+// a per-op caller needs to encode it onto a shared batch's
 // command buffer for the fused forward+loss+backward training-step path,
 // not force its own commit+wait mid-batch.
 int mps_sub_f32(const &float a, const &float b, &float out, unsigned long n);
@@ -101,7 +101,7 @@ int mps_matmul_f32(const &float a, const &float b, &float out,
 // GPU-backed matmul backward: dA = dC . B^T, dB = A^T . dC (same math
 // tensor_blas.sc's __matmul_backward_blas passes to cblas_dgemm via a
 // transpose flag; here each is its own kernel instead). Used by
-// tensor_gpu.sc's __matmul_backward_gpu so a matmul_gpu forward pass gets
+// a GPU matmul's backward pass, so a forward pass on the GPU gets
 // a matmul_gpu backward pass too, instead of falling back to the CPU
 // backward the way it used to — see that function's comment for why that
 // fallback was the actual dominant cost in a training loop, not dispatch
@@ -166,6 +166,10 @@ struct MpsBuf {
     // Copies 'bytes' (<= this.bytes) from 'src' into the buffer: valid while no
     // batch that reads or writes it is in flight. 1 = done.
     int  write(const &void src, unsigned long bytes);
+    // The buffer's memory as the CPU sees it (shared storage: the same bytes
+    // the GPU reads and writes), null for an invalid buffer or without Metal.
+    // Read or write it only while no batch using the buffer is in flight.
+    ?&float contents() const;
 
     static struct MpsBuf alloc(unsigned long n, int dtype);       // n uninitialized elements
     static struct MpsBuf upload(const &float host, unsigned long n);          // n fp32 values
@@ -238,7 +242,7 @@ int  mps_batch_is_active();
 // Commits what the open batch has encoded so far without waiting and keeps
 // the batch open: the GPU starts on that work while the caller encodes the
 // next. The command buffers run in order on the one queue, and
-// mps_batch_end() still waits for all of them (nn_mps.h's trainer submits
+// mps_batch_end() still waits for all of them (a trainer submits
 // every few steps of an epoch and waits once at its end). No-op without a
 // batch.
 void mps_batch_submit();
@@ -249,7 +253,7 @@ void mps_batch_register_finalize_raw_(MpsFinalizeFn finalizeFn, void* ctx);
 
 // Register a callback to run once, in registration order, after
 // mps_batch_end()'s single wait and raw GPU->CPU readback of every
-// batched op's output buffer. Exists for callers (tensor_gpu.sc) that
+// batched op's output buffer. Exists for callers that
 // need to do their own CPU-side post-processing on a batched op's result
 // (e.g. float32->float64 conversion) — that processing has to wait for
 // the same sync point the raw readback does, so it can't just run
@@ -691,7 +695,7 @@ unsigned long mps_linear_attn_state_bytes(unsigned long numHeads, unsigned long 
 // A zeroed state for a new sequence: MpsBuf::linear_attn_state (free() it
 // when the sequence is done).
 
-// ── Interop: for libraries layered on this backend (nn_mps.h) ───────────────
+// ── Interop: for libraries layered on this backend (device_mps.sc) ───────────────
 // Runs kernel 'kernel' of the embedded library (gpu_mps_kernels.metal) on
 // 'groups' threadgroups of 'groupSize' threads (one dimension): buffers
 // bufs[0 .. count) bound at indices 0 .. count-1 and, when paramBytes > 0,

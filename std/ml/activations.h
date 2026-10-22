@@ -13,7 +13,7 @@
 // Tensor::layernorm_rows/tensor_residual_add, previously couldn't also
 // link any tensor_<backend>.sc GPU file, since every one of those
 // #includes tensor_nn.h/.sc internally for its own backward-linking
-// needs). Renamed once this stopped being hypothetical: tensor_dispatch.h
+// needs). Renamed once this stopped being hypothetical: a device dispatch layer
 // combining GPU-backed ops with transformer.h's layers hit exactly this
 // collision.
 #include <std/ml/tensor.h>

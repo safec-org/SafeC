@@ -162,7 +162,7 @@ struct Optimizer {
 
     static struct Optimizer new(int kind, float lr);
     // An empty optimizer with o's kind and hyperparameters (not its parameters
-    // or state), as nn_rocm.h's RocmOptimizer::from.
+    // or state).
     static struct Optimizer from(const &Optimizer o);
 };
 

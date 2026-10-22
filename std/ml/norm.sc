@@ -46,6 +46,8 @@ static void norm_ln_backward_(void* selfPtr) {
 }
 
 &FloatTensor FloatTensor::layer_norm(float eps) const {
+    match (tdev_layer_norm_(self, eps)) { case some(o): { return o; } case null: { } }
+    unsafe { tensor_host_((void*)self); }
     unsigned long n; unsigned long rows;
     unsafe { n = self->shape[self->ndim - 1UL]; rows = self->size / n; }
     &FloatTensor out = __tensor_alloc_uninit_like(self);
@@ -106,6 +108,8 @@ static void norm_mul_row_backward_(void* selfPtr) {
 }
 
 &FloatTensor tensor_mul_row(const &FloatTensor x, const &FloatTensor g) {
+    match (tdev_mul_row_(x, g)) { case some(o): { return o; } case null: { } }
+    unsafe { tensor_host_((void*)x); tensor_host_((void*)g); }
     &FloatTensor out = __tensor_alloc_uninit_like(x);
     unsafe {
         unsigned long n = g->size;

@@ -1829,16 +1829,16 @@ LINEAR_Z(float, f32)
 LINEAR_Z(half, f16)
 LINEAR_Z(bfloat, bf16)
 
-// ── Training (nn_mps.h) ─────────────────────────────────────────────────────
-// The layer, loss, optimizer and batch kernels of nn_mps.h's MpsNet /
-// MpsOptimizer / mps_trainer_fit, dispatched from nn_mps.sc through
-// mps_dispatch. They follow nn_rocm.sc's HIP kernels (and through them
+// ── Training kernels ─────────────────────────────────────────────────────
+// Layer, loss, optimizer and batch kernels for training, dispatched through
+// mps_dispatch (device_mps.sc runs nn_opt_step for every optimizer step).
+// They follow the HIP training kernels (and through them
 // nn.h's CPU arithmetic) operation for operation. This file builds with
 // Metal's default fast math, so the transcendental functions here are the
 // precise:: ones: fast tanh turns large inputs into NaN (see gelu_tanh
 // above) and fast exp / log / sqrt / divide are a few ulp off the CPU's.
 // Each kernel's scalars arrive as one constant struct after its buffers;
-// the matching structs are in nn_mps.sc. Sums are taken in a fixed order
+// the optimizer's struct is in device_mps.sc. Sums are taken in a fixed order
 // (no atomics), so a run is deterministic.
 
 // nn.h's ACT_* tags: 1 ReLU, 2 leaky ReLU (0.2), 3 tanh, 4 sigmoid, 5 GELU
@@ -1901,7 +1901,7 @@ kernel void nn_bias_act(device float* z [[buffer(0)]],
 // Backward through the activation of a [rows][C] layer: d *= act'(src) in
 // place and gb[c] = the column sums of the result (the bias gradient). 16
 // columns per threadgroup, 16 threads down each column, then a fixed-order
-// sum of the 16 partial sums (nn_rocm.sc's act_grad_rows).
+// sum of the 16 partial sums.
 struct NnActGrad { uint rows; uint cols; int act; };
 kernel void nn_act_grad_rows(device float* d [[buffer(0)]],
                              device const float* src [[buffer(1)]],

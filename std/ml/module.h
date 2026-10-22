@@ -37,7 +37,7 @@
 
 namespace std {
 
-// Built-in losses for module_fit / module_loss (and the net trainers of train.h).
+// Built-in losses for module_fit / module_loss.
 #define TRAIN_LOSS_CE  0   // softmax cross-entropy on class indices (tensor_cross_entropy_loss)
 #define TRAIN_LOSS_MSE 1   // mean squared error (tensor_mse_loss)
 #define TRAIN_LOSS_BCE 2   // binary cross-entropy on logits (tensor_bce_logits_loss)
@@ -104,6 +104,52 @@ unsigned long model_param_count(const &M m) {
     return n;
 }
 
+// Places the whole state (parameters and buffers) on 'device' (device.h):
+// the model then trains and runs there through the same calls. 1 when every
+// tensor moved; an optimizer's moments follow its parameters on their next
+// step. DEVICE_AUTO picks device_default().
+generic<M: Parameterized>
+int model_to(&M m, int device) {
+    int d = device == DEVICE_AUTO ? device_default() : device;
+    struct Vec<&FloatTensor> ts = vec_new();
+    m.collect_state(&ts);
+    int ok = 1;
+    unsigned long i = 0UL;
+    while (i < ts.length()) {
+        if (!(*ts.at(i)).place(d)) ok = 0;
+        i = i + 1UL;
+    }
+    ts.free();
+    return ok;
+}
+
+// Where the model's first tensor lives (DEVICE_CPU for a model without any).
+generic<M: Parameterized>
+int model_device(const &M m) {
+    struct Vec<&FloatTensor> ts = vec_new();
+    m.collect_state(&ts);
+    int d = DEVICE_CPU;
+    if (ts.length() > 0UL) d = (*ts.at(0UL)).device();
+    ts.free();
+    return d;
+}
+
+// Makes every host copy of the model's state current (after device steps):
+// before reading parameters directly or saving. 1 on success.
+generic<M: Parameterized>
+int model_sync(&M m) {
+    struct Vec<&FloatTensor> ts = vec_new();
+    m.collect_state(&ts);
+    int ok = 1;
+    unsigned long i = 0UL;
+    while (i < ts.length()) {
+        if (!(*ts.at(i)).sync()) ok = 0;
+        i = i + 1UL;
+    }
+    ts.free();
+    return ok;
+}
+
 // The state (collect_state) to a file in tensors_save's format, and back
 // into a model built with the same shapes. 1 on success.
 generic<M: Parameterized>
@@ -139,7 +185,19 @@ int model_soft_update(&M dst, const &M src, float tau) {
         &FloatTensor b = *s.at(i);
         unsafe {
             if (a->size != b->size) { ok = 0; }
-            else {
+            else if (a->dev != DEVICE_CPU && a->dev == b->dev && tensor_dev_((void*)a, a->dev) && tensor_dev_((void*)b, a->dev)) {
+                // both on one device: a = (1 - tau) a + tau b there (a copy for tau 1)
+                if (tau == (float)1.0) {
+                    device_copy_(a->dev, a->dbuf, b->dbuf, a->size);
+                } else {
+                    struct DevArgs g = dev_args_();
+                    g.p[0] = b->dbuf; g.p[2] = a->dbuf; g.u[0] = (unsigned int)EW_LERP; g.f[0] = tau;
+                    device_launch_(a->dev, DK_EW, a->size, &g);
+                }
+                tensor_dev_wrote_((void*)a);
+            } else {
+                tensor_host_write_((void*)a);
+                tensor_host_((void*)b);
                 unsigned long j = 0UL;
                 while (j < a->size) { a->data[j] = tau * b->data[j] + ((float)1.0 - tau) * a->data[j]; j = j + 1UL; }
             }
@@ -198,7 +256,10 @@ float module_epoch_(&M m, int loss, &Optimizer opt, &DataLoader dl, &TensorArena
 generic<M: Module>
 struct TrainReport module_fit(&M m, int loss, &Optimizer opt, const &Dataset data, const &TrainConfig cfg) {
     struct TrainReport rep = train_report_new_();
+    trainer_place_(opt, cfg.device);
     struct DataLoader dl = DataLoader::new(data, cfg.batchSize, cfg.shuffle, cfg.seed);
+    trainer_place_data_(&dl, cfg.device);
+    int prevPrec = trainer_precision_begin_(cfg);
     struct TensorArena stepArena = TensorArena::new(0UL);
     unsigned long e = 0UL;
     while (e < cfg.epochs) {
@@ -208,6 +269,7 @@ struct TrainReport module_fit(&M m, int loss, &Optimizer opt, const &Dataset dat
         opt.lr = opt.lr * cfg.lrDecay;
         e = e + 1UL;
     }
+    trainer_precision_end_(cfg, prevPrec);
     stepArena.free();
     dl.free();
     return rep;
@@ -225,7 +287,7 @@ float module_evaluate(&M m, int loss, const &Dataset data, unsigned long batchSi
     stepArena.begin();
     while (dl.next(&b)) {
         &FloatTensor l = module_loss(m, loss, b.x, b.y);
-        unsafe { sum = sum + (double)l->data[0] * (double)b.rows; }
+        unsafe { tensor_host_((void*)l); sum = sum + (double)l->data[0] * (double)b.rows; }
         rows = rows + b.rows;
         stepArena.reset();
     }
@@ -284,7 +346,10 @@ float model_epoch_(&M m, &Optimizer opt, &DataLoader dl, &TensorArena stepArena,
 generic<M: LossModel>
 struct TrainReport model_fit(&M m, &Optimizer opt, const &Dataset data, const &TrainConfig cfg) {
     struct TrainReport rep = train_report_new_();
+    trainer_place_(opt, cfg.device);
     struct DataLoader dl = DataLoader::new(data, cfg.batchSize, cfg.shuffle, cfg.seed);
+    trainer_place_data_(&dl, cfg.device);
+    int prevPrec = trainer_precision_begin_(cfg);
     struct TensorArena stepArena = TensorArena::new(0UL);
     unsigned long e = 0UL;
     while (e < cfg.epochs) {
@@ -294,6 +359,7 @@ struct TrainReport model_fit(&M m, &Optimizer opt, const &Dataset data, const &T
         opt.lr = opt.lr * cfg.lrDecay;
         e = e + 1UL;
     }
+    trainer_precision_end_(cfg, prevPrec);
     stepArena.free();
     dl.free();
     return rep;
@@ -311,7 +377,7 @@ float model_evaluate(&M m, const &Dataset data, unsigned long batchSize) {
     stepArena.begin();
     while (dl.next(&b)) {
         &FloatTensor l = m.loss(b.x, b.y);
-        unsafe { sum = sum + (double)l->data[0] * (double)b.rows; }
+        unsafe { tensor_host_((void*)l); sum = sum + (double)l->data[0] * (double)b.rows; }
         rows = rows + b.rows;
         stepArena.reset();
     }

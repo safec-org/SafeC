@@ -122,6 +122,7 @@ static &FloatTensor cn_aux_(const &CnGeom_ g) {
 }
 
 static struct CnGeom_ cn_geom_of_(FloatTensor* a) {
+    unsafe { tensor_host_write_((void*)a); }
     struct CnGeom_ g;
     unsafe {
         g.C = (unsigned long)a->data[0];   g.H = (unsigned long)a->data[1];   g.W = (unsigned long)a->data[2];
@@ -570,6 +571,18 @@ static void cn_cnn_forward_(const &CnGeom_ g, const float* x, const float* w, co
 
 &FloatTensor tensor_conv2d_ex(const &FloatTensor x, const &FloatTensor weight, const &FloatTensor bias,
                          unsigned long inC, unsigned long inH, unsigned long inW, const &Conv2dSpec spec) {
+    if (spec.groups == 1UL) {
+        unsigned long outC0;
+        unsafe { outC0 = bias->size; }
+        unsigned long oH0 = conv_out_side_ex(inH, spec.kH, spec.strideH, spec.padH, spec.dilationH);
+        unsigned long oW0 = conv_out_side_ex(inW, spec.kW, spec.strideW, spec.padW, spec.dilationW);
+        match (tdev_conv_(x, weight, bias, 0, inC, inH, inW, outC0, oH0, oW0, spec.kH, spec.kW, spec.strideH,
+                          spec.strideW, spec.padH, spec.padW, spec.dilationH, spec.dilationW)) {
+            case some(o): { return o; }
+            case null: { }
+        }
+    }
+    unsafe { tensor_host_((void*)x); tensor_host_((void*)weight); tensor_host_((void*)bias); }
     unsigned long outC;
     unsafe { outC = bias->size; }
     cn_check_spec_(spec, inC, outC, "tensor_conv2d: kernel / stride / dilation 0, or channels not divisible by groups");
@@ -607,6 +620,18 @@ static void cn_cnn_forward_(const &CnGeom_ g, const float* x, const float* w, co
 
 &FloatTensor tensor_conv_transpose2d_ex(const &FloatTensor x, const &FloatTensor weight, const &FloatTensor bias,
                                    unsigned long inC, unsigned long inH, unsigned long inW, const &Conv2dSpec spec) {
+    if (spec.groups == 1UL) {
+        unsigned long outC0;
+        unsafe { outC0 = bias->size; }
+        unsigned long H0 = conv_transpose_out_side_ex(inH, spec.kH, spec.strideH, spec.padH, spec.dilationH, spec.outPadH);
+        unsigned long W0 = conv_transpose_out_side_ex(inW, spec.kW, spec.strideW, spec.padW, spec.dilationW, spec.outPadW);
+        match (tdev_conv_(x, weight, bias, 1, outC0, H0, W0, inC, inH, inW, spec.kH, spec.kW, spec.strideH,
+                          spec.strideW, spec.padH, spec.padW, spec.dilationH, spec.dilationW)) {
+            case some(o): { return o; }
+            case null: { }
+        }
+    }
+    unsafe { tensor_host_((void*)x); tensor_host_((void*)weight); tensor_host_((void*)bias); }
     unsigned long outC;
     unsafe { outC = bias->size; }
     cn_check_spec_(spec, inC, outC, "tensor_conv_transpose2d: kernel / stride / dilation 0, or channels not divisible by groups");
@@ -826,6 +851,17 @@ static void cn_pool_backward_(void* selfPtr) {
     }
 }
 
+// The device ops' description of a geometry.
+static struct TdevSpatial_ cn_tdev_sp_(int kind, const &CnGeom_ g, int mode) {
+    struct TdevSpatial_ d;
+    d.kind = kind;
+    d.C = g.C; d.H = g.H; d.W = g.W; d.oH = g.oH; d.oW = g.oW;
+    d.kH = g.kH; d.kW = g.kW; d.sH = g.sH; d.sW = g.sW; d.pH = g.pH; d.pW = g.pW;
+    d.mode = mode;
+    d.align = 0;
+    return d;
+}
+
 static &FloatTensor cn_pool_(const &FloatTensor x, unsigned long channels, unsigned long height, unsigned long width,
                         const &Pool2dSpec spec, unsigned long mode) {
     struct CnGeom_ g = cn_geom_blank_();
@@ -841,6 +877,9 @@ static &FloatTensor cn_pool_(const &FloatTensor x, unsigned long channels, unsig
     if (outSize == 0UL) panic_at("tensor_pool2d: window larger than the padded image", "convnet.sc", __LINE__);
     if (2UL * spec.padH > spec.kH || 2UL * spec.padW > spec.kW)
         panic_at("tensor_pool2d: padding over half the window", "convnet.sc", __LINE__);
+    struct TdevSpatial_ dg = cn_tdev_sp_(TDEV_POOL, &g, (int)mode);
+    match (tdev_spatial_(x, &dg)) { case some(o): { return o; } case null: { } }
+    unsafe { tensor_host_((void*)x); }
     &FloatTensor out = cn_alloc2_(batch, outSize);
     struct CnPoolJob_ j;
     j.g = g;
@@ -952,6 +991,9 @@ static &FloatTensor cn_gpool_(const &FloatTensor x, unsigned long channels, unsi
     g.C = channels; g.H = height; g.W = width; g.kH = height; g.kW = width;
     g.oC = channels; g.oH = 1UL; g.oW = 1UL;
     g.mode = mode;
+    struct TdevSpatial_ dg = cn_tdev_sp_(TDEV_GPOOL, &g, mode == CN_POOL_MAX ? 0 : 1);
+    match (tdev_spatial_(x, &dg)) { case some(o): { return o; } case null: { } }
+    unsafe { tensor_host_((void*)x); }
     unsigned long batch = cn_batch_(x, channels * height * width, "tensor_global_pool2d: x is not [batch, C*H*W]");
     &FloatTensor out = cn_alloc2_(batch, channels);
     struct CnPoolJob_ j;
@@ -1052,6 +1094,12 @@ static void cn_upsample_backward_(void* selfPtr) {
     g.C = channels; g.H = height; g.W = width;
     g.oC = channels; g.oH = height * factor; g.oW = width * factor;
     g.mode = factor;
+    if (factor != 0UL) {
+        struct TdevSpatial_ dg = cn_tdev_sp_(TDEV_UPSAMPLE, &g, 0);
+        dg.kH = factor;
+        match (tdev_spatial_(self, &dg)) { case some(o): { return o; } case null: { } }
+    }
+    unsafe { tensor_host_((void*)self); }
     unsigned long batch = cn_batch_(self, channels * height * width, "Tensor::upsample_nearest: x is not [batch, C*H*W]");
     if (factor == 0UL) panic_at("Tensor::upsample_nearest: factor 0", "convnet.sc", __LINE__);
     &FloatTensor out = cn_alloc2_(batch, channels * g.oH * g.oW);
@@ -1246,6 +1294,12 @@ static void cn_resize_backward_(void* selfPtr) {
     unsigned long batch = cn_batch_(self, channels * height * width, "Tensor::resize2d: x is not [batch, C*H*W]");
     if (outH == 0UL || outW == 0UL || mode < RESIZE_NEAREST || mode > RESIZE_BICUBIC)
         panic_at("Tensor::resize2d: empty output or unknown mode", "convnet.sc", __LINE__);
+    struct CnGeom_ rg = cn_geom_blank_();
+    rg.C = channels; rg.H = height; rg.W = width; rg.oH = outH; rg.oW = outW;
+    struct TdevSpatial_ dg = cn_tdev_sp_(TDEV_RESIZE, &rg, mode);
+    dg.align = mode == RESIZE_NEAREST ? 0 : alignCorners;
+    match (tdev_spatial_(self, &dg)) { case some(o): { return o; } case null: { } }
+    unsafe { tensor_host_((void*)self); }
     &FloatTensor out = cn_alloc2_(batch, channels * outH * outW);
     &FloatTensor aux = cn_alloc1_(6UL);
     struct CnResizeJob_ j;
@@ -1403,6 +1457,7 @@ static void cn_bn_bwd_channels_(&CnBnJob_ j, unsigned long lo, unsigned long hi)
 }
 
 static struct CnBnJob_ cn_bn_job_(FloatTensor* x, FloatTensor* gamma, FloatTensor* beta, FloatTensor* aux) {
+    unsafe { tensor_host_write_((void*)x); tensor_host_write_((void*)gamma); tensor_host_write_((void*)beta); tensor_host_write_((void*)aux); }
     struct CnBnJob_ j;
     unsafe {
         j.C = (unsigned long)aux->data[0];
@@ -1441,6 +1496,11 @@ static void cn_bn_backward_(void* selfPtr) {
                           &FloatTensor runMean, &FloatTensor runVar,
                           unsigned long channels, unsigned long plane,
                           int training, float momentum, float eps) {
+    match (tdev_batch_norm_(x, gamma, beta, runMean, runVar, channels, plane, training, momentum, eps, ACT_NONE)) {
+        case some(o): { return o; }
+        case null: { }
+    }
+    unsafe { tensor_host_write_((void*)runMean); tensor_host_write_((void*)runVar); }
     unsigned long batch = cn_batch_(x, channels * plane, "tensor_batch_norm: x is not [batch, channels*plane]");
     &FloatTensor out = __tensor_alloc_uninit_like(x);
     unsigned long shape[1];
@@ -1605,6 +1665,7 @@ static void cn_gn_param_channels_(&CnGnJob_ j, unsigned long lo, unsigned long h
 }
 
 static struct CnGnJob_ cn_gn_job_(FloatTensor* x, FloatTensor* gamma, FloatTensor* beta, FloatTensor* aux) {
+    unsafe { tensor_host_write_((void*)x); tensor_host_write_((void*)gamma); tensor_host_write_((void*)beta); tensor_host_write_((void*)aux); }
     struct CnGnJob_ j;
     unsafe {
         j.C = (unsigned long)aux->data[0];
@@ -1652,6 +1713,7 @@ static void cn_gn_backward_(void* selfPtr) {
         if (gamma->size != channels || beta->size != channels)
             panic_at("tensor_group_norm: gamma and beta must have one value per channel", "convnet.sc", __LINE__);
     }
+    match (tdev_group_norm_(x, gamma, beta, channels, plane, groups, eps, ACT_NONE)) { case some(o): { return o; } case null: { } }
     &FloatTensor out = __tensor_alloc_uninit_like(x);
     &FloatTensor aux = cn_alloc1_(4UL + 2UL * batch * groups);
     unsafe {
@@ -1752,6 +1814,7 @@ static void cn_sn_backward_(void* selfPtr) {
 }
 
 &FloatTensor tensor_spectral_norm(const &FloatTensor weight, &FloatTensor u, unsigned long iters, int training) {
+    unsafe { tensor_host_((void*)weight); tensor_host_write_((void*)u); }
     unsigned long rows;
     unsigned long cols;
     unsafe {
@@ -1819,6 +1882,7 @@ static &FloatTensor cn_dropout_(const &FloatTensor x, unsigned long plane, float
 // ══ Conditioning ═════════════════════════════════════════════════════════════
 
 &FloatTensor FloatTensor::label_planes(unsigned long classes, unsigned long height, unsigned long width) const {
+    unsafe { tensor_host_((void*)self); }
     unsigned long m;
     unsafe { m = self->size; }
     unsigned long plane = height * width;
@@ -2207,13 +2271,35 @@ static &FloatTensor cn_layer_forward_(const &ConvNet n, const &ConvLayer l, cons
     return x;   // reshape / identity: rows already hold the data in CHW order
 }
 
+// The layer and its activation: a batch / group norm and a ReLU or leaky
+// ReLU after it run as one device op.
+static &FloatTensor cn_layer_act_(const &ConvNet n, const &ConvLayer l, const &FloatTensor x, &Vec<&FloatTensor> saved) {
+    if (l.act == ACT_NONE || l.act == ACT_RELU || l.act == ACT_LEAKY) {
+        if (l.kind == CONV_LAYER_BATCHNORM) {
+            match (tdev_batch_norm_(x, *n.params.at(l.param), *n.params.at(l.param + 1UL), *n.buffers.at(l.buffer),
+                                    *n.buffers.at(l.buffer + 1UL), l.inC, l.inH * l.inW, n.training, (float)0.1,
+                                    (float)0.00001, l.act)) {
+                case some(o): { return o; }
+                case null: { }
+            }
+        } else if (l.kind == CONV_LAYER_GROUPNORM) {
+            match (tdev_group_norm_(x, *n.params.at(l.param), *n.params.at(l.param + 1UL), l.inC, l.inH * l.inW,
+                                    l.factor, (float)0.00001, l.act)) {
+                case some(o): { return o; }
+                case null: { }
+            }
+        }
+    }
+    return cn_layer_forward_(n, l, x, saved).activate(l.act);
+}
+
 &FloatTensor ConvNet::forward(const &FloatTensor x) const {
     struct Vec<&FloatTensor> saved = vec_new();
     &FloatTensor h = x;
     unsigned long i = 0UL;
     while (i < self.layers.length()) {
         &ConvLayer l = self.layers.at(i);
-        h = cn_layer_forward_(self, l, h, &saved).activate(l.act);
+        h = cn_layer_act_(self, l, h, &saved);
         i = i + 1UL;
     }
     saved.free();
@@ -2227,6 +2313,7 @@ static &FloatTensor cn_layer_forward_(const &ConvNet n, const &ConvLayer l, cons
 
 // Scales the weight entries that feed output channel oc by s[oc].
 static void cn_fold_weight_(const &ConvLayer l, &FloatTensor w, const float* sc) {
+    unsafe { tensor_host_write_((void*)w); }
     unsafe {
         unsigned long rows = w->shape[0];
         unsigned long cols = w->size / rows;
@@ -2259,11 +2346,16 @@ unsigned long ConvNet::fold_batchnorm() {
         if (bn.kind == CONV_LAYER_BATCHNORM && prev.act == ACT_NONE && !prev.spectral
             && (pk == CONV_LAYER_CONV || pk == CONV_LAYER_DECONV || pk == CONV_LAYER_DENSE)) {
             &FloatTensor gamma = *self.params.at(bn.param);
+        unsafe { tensor_host_((void*)gamma); }
             &FloatTensor beta = *self.params.at(bn.param + 1UL);
+        unsafe { tensor_host_((void*)beta); }
             &FloatTensor rm = *self.buffers.at(bn.buffer);
+        unsafe { tensor_host_((void*)rm); }
             &FloatTensor rv = *self.buffers.at(bn.buffer + 1UL);
+        unsafe { tensor_host_((void*)rv); }
             &FloatTensor w = *self.params.at(prev.param);
             &FloatTensor b = *self.params.at(prev.param + 1UL);
+        unsafe { tensor_host_write_((void*)b); }
             unsigned long C = bn.inC;
             float* sc = cn_scratch_(C);
             unsafe {
@@ -2292,6 +2384,7 @@ static void cn_clone_list_(&Vec<&FloatTensor> dst, const &Vec<&FloatTensor> src,
     unsigned long i = 0UL;
     while (i < src.length()) {
         &FloatTensor p = *src.at(i);
+        unsafe { tensor_host_((void*)p); }
         &FloatTensor q = p.zeros_like();
         unsafe {
             q->requiresGrad = requiresGrad;
@@ -2322,7 +2415,9 @@ static void cn_blend_list_(&Vec<&FloatTensor> dst, const &Vec<&FloatTensor> src,
     unsigned long i = 0UL;
     while (i < dst.length()) {
         &FloatTensor d = *dst.at(i);
+        unsafe { tensor_host_write_((void*)d); }
         &FloatTensor s = *src.at(i);
+        unsafe { tensor_host_((void*)s); }
         unsafe {
             unsigned long j = 0UL;
             while (j < d->size) { d->data[j] = tau * s->data[j] + ((float)1.0 - tau) * d->data[j]; j = j + 1UL; }

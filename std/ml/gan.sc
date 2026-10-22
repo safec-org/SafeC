@@ -58,6 +58,7 @@ struct Gan Gan::new(unsigned long dataDim, const &GanConfig cfg) {
 }
 
 static &FloatTensor gan_cond_(const &Gan g, const &FloatTensor x, ?&FloatTensor labels) {
+    unsafe { tensor_host_((void*)x); }
     if (g.cfg.classes > 0UL) {
         match (labels) {
             case some(l): { return tensor_concat_cols(x, l.one_hot(g.cfg.classes)); }
@@ -109,6 +110,7 @@ static void gan_clip_(const &Vec<&FloatTensor> params, float c) {
     unsigned long i = 0UL;
     while (i < params.length()) {
         &FloatTensor p = *params.at(i);
+        unsafe { tensor_host_write_((void*)p); }
         unsafe {
             unsigned long j = 0UL;
             while (j < p->size) {
@@ -122,6 +124,7 @@ static void gan_clip_(const &Vec<&FloatTensor> params, float c) {
 }
 
 static float gan_value_(const &FloatTensor t) {
+    unsafe { tensor_host_((void*)t); }
     unsafe { return t->data[0]; }
 }
 
@@ -153,6 +156,7 @@ static void gan_arena_restore_(?&TensorArena outer) {
 generic<T>
 static &FloatTensor gan_gp_core_(&T g, fn &FloatTensor(&T, const &FloatTensor, ?&FloatTensor) disc, const &FloatTensor xh,
                             ?&FloatTensor labels, float weight, &float value) {
+    unsafe { tensor_host_((void*)xh); }
     unsigned long m;
     unsigned long d;
     unsafe { m = xh->shape[0]; d = xh->size / m; }
@@ -160,7 +164,9 @@ static &FloatTensor gan_gp_core_(&T g, fn &FloatTensor(&T, const &FloatTensor, ?
     unsafe { xg->requiresGrad = 1; }
     disc(g, xg, labels).sum().backward();
     &FloatTensor xp = xh.detach();
+    unsafe { tensor_host_write_((void*)xp); }
     &FloatTensor xm = xh.detach();
+    unsafe { tensor_host_write_((void*)xm); }
     &FloatTensor coef = FloatTensor::new_2d(m, 1UL, 0);
     double pen = 0.0;
     float eps = (float)GAN_GP_EPS;
@@ -192,7 +198,9 @@ static &FloatTensor gan_gp_core_(&T g, fn &FloatTensor(&T, const &FloatTensor, ?
 
 // Rows t*real + (1 - t)*fake, t ~ U(0, 1) per row.
 static &FloatTensor gan_interpolates_(&Rng rng, const &FloatTensor real, const &FloatTensor fake) {
+    unsafe { tensor_host_((void*)real); tensor_host_((void*)fake); }
     &FloatTensor xh = real.detach();
+    unsafe { tensor_host_write_((void*)xh); }
     unsafe {
         unsigned long m = real->shape[0];
         unsigned long d = real->size / m;
@@ -273,6 +281,7 @@ struct GanLosses Gan::train(const &Dataset data, unsigned long epochs, unsigned 
     last.d = (float)0.0;
     last.g = (float)0.0;
     struct DataLoader dl = DataLoader::new(data, batchSize, 1, self.cfg.seed + 101UL);
+    dl.to(model_device(self));
     struct TensorArena batchArena = TensorArena::new(0UL);
     struct Batch b;
     unsigned long e = 0UL;
@@ -354,6 +363,7 @@ static &FloatTensor dcgan_labels_(unsigned long m, ?&FloatTensor labels) {
 }
 
 static &FloatTensor dcgan_disc_(&Dcgan g, const &FloatTensor x, ?&FloatTensor labels) {
+    unsafe { tensor_host_((void*)x); }
     if (g.cfg.classes == 0UL) return g.disc.forward(x);
     unsigned long m;
     unsafe { m = x->ndim >= 2UL ? x->shape[0] : 1UL; }
@@ -417,6 +427,7 @@ struct GanLosses Dcgan::train(const &Dataset data, unsigned long epochs, unsigne
     last.d = (float)0.0;
     last.g = (float)0.0;
     struct DataLoader dl = DataLoader::new(data, batchSize, 1, self.cfg.seed + 101UL);
+    dl.to(model_device(self));
     struct TensorArena batchArena = TensorArena::new(0UL);
     struct Batch b;
     unsigned long e = 0UL;

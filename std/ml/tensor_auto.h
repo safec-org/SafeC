@@ -1,10 +1,9 @@
 #pragma once
 // SafeC Standard Library — size-based automatic backend selection for
-// Tensor ops (mixing SIMD/vDSP/BLAS the way tensor_dispatch.h mixes
-// explicit devices, but chosen FOR the caller instead of BY the caller).
+// Tensor ops on the CPU (mixing SIMD/vDSP/BLAS, chosen FOR the caller
+// instead of BY the caller; GPU placement is device.h's job).
 //
-// tensor_dispatch.h's tensor_matmul_on(a, b, device) already lets a
-// caller pick a backend explicitly. What it doesn't do is pick the RIGHT
+// device.h already lets a caller pick a device explicitly. What it doesn't do is pick the RIGHT
 // one automatically — every backend has a size range where it's the
 // wrong choice (BLAS's own per-call setup overhead costs more than a
 // tiny naive loop saves; vDSP has the same shape of overhead; GPU's

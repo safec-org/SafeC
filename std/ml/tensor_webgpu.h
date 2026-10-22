@@ -1,7 +1,7 @@
 #pragma once
 // SafeC Standard Library — GPU-backed Tensor ops (WebGPU (wgpu-native/Dawn)).
 //
-// Same shape/rationale as tensor_gpu.h (MPS) — see that file's header
+// Per-op GPU tensor functions for a backend without a device.h backend yet
 // comment for the general design (why this is separate from tensor.sc,
 // what backward-reuse means, the dispatch-overhead cost every op here
 // pays). Tensor is float32 (see tensor.h), the same precision every

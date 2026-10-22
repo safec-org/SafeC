@@ -13,6 +13,7 @@ extern void* malloc(size_t size);
 extern void  free(void* ptr);
 
 &FloatTensor FloatTensor::softmax_rows() const {
+    unsafe { tensor_host_((void*)self); }
     unsigned long rows; unsigned long cols;
     unsafe { rows = self->shape[0]; cols = self->shape[1]; }
     &FloatTensor out = FloatTensor::new_2d(rows, cols, 0);
@@ -46,6 +47,7 @@ extern void  free(void* ptr);
 }
 
 &FloatTensor FloatTensor::transpose() const {
+    unsafe { tensor_host_((void*)self); }
     unsigned long rows; unsigned long cols;
     unsafe { rows = self->shape[0]; cols = self->shape[1]; }
     &FloatTensor out = FloatTensor::new_2d(cols, rows, 0);
@@ -82,6 +84,8 @@ static void attn_slice_backward_(void* selfPtr) {
 }
 
 &FloatTensor FloatTensor::slice_cols(unsigned long start, unsigned long len) const {
+    match (tdev_slice_cols_(self, start, len)) { case some(o): { return o; } case null: { } }
+    unsafe { tensor_host_((void*)self); }
     unsigned long rows; unsigned long n;
     unsafe { rows = self->shape[0]; n = self->shape[1]; }
     &FloatTensor out = FloatTensor::new_2d(rows, len, 0);
@@ -99,6 +103,7 @@ static void attn_slice_backward_(void* selfPtr) {
 }
 
 void tensor_set_cols(&FloatTensor dst, unsigned long startCol, const &FloatTensor src) {
+    unsafe { tensor_host_write_((void*)dst); tensor_host_((void*)src); }
     unsigned long rows; unsigned long dstCols; unsigned long srcCols;
     unsafe { rows = dst->shape[0]; dstCols = dst->shape[1]; srcCols = src->shape[1]; }
     unsigned long r = 0UL;
@@ -113,6 +118,7 @@ void tensor_set_cols(&FloatTensor dst, unsigned long startCol, const &FloatTenso
 }
 
 &FloatTensor attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V) {
+    unsafe { tensor_host_((void*)Q); }
     unsigned long headDim;
     unsafe { headDim = Q->shape[1]; }
     &FloatTensor Kt = K.transpose();
@@ -128,6 +134,7 @@ void tensor_set_cols(&FloatTensor dst, unsigned long startCol, const &FloatTenso
 }
 
 &FloatTensor mha_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V, unsigned long numHeads) {
+    unsafe { tensor_host_((void*)Q); }
     unsigned long seqLen; unsigned long dModel;
     unsafe { seqLen = Q->shape[0]; dModel = Q->shape[1]; }
     unsigned long headDim = dModel / numHeads;
@@ -172,6 +179,7 @@ void tensor_set_cols(&FloatTensor dst, unsigned long startCol, const &FloatTenso
 // phi(x) = elu(x) + 1, elementwise (always > 0, used as linear
 // attention's kernel feature map).
 static &FloatTensor __phi_elu_p1(&FloatTensor x) {
+    unsafe { tensor_host_write_((void*)x); }
     &FloatTensor out = x.zeros_like();
     unsafe {
         unsigned long i = 0UL;
@@ -185,6 +193,7 @@ static &FloatTensor __phi_elu_p1(&FloatTensor x) {
 }
 
 &FloatTensor linear_attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V) {
+    unsafe { tensor_host_((void*)Q); tensor_host_((void*)K); tensor_host_((void*)V); }
     unsigned long seqLen; unsigned long headDim; unsigned long kvLen;
     unsafe { seqLen = Q->shape[0]; headDim = Q->shape[1]; kvLen = K->shape[0]; }
 
@@ -245,6 +254,7 @@ static &FloatTensor __phi_elu_p1(&FloatTensor x) {
 
 &FloatTensor flash_attention_forward(const &FloatTensor Q, const &FloatTensor K, const &FloatTensor V,
                                  unsigned long kvBlockSize) {
+    unsafe { tensor_host_((void*)Q); tensor_host_((void*)K); tensor_host_((void*)V); }
     unsigned long seqLen; unsigned long headDim; unsigned long kvLen;
     unsafe { seqLen = Q->shape[0]; headDim = Q->shape[1]; kvLen = K->shape[0]; }
     float scale = (float)1.0 / sqrt_f((float)headDim);

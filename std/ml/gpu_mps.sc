@@ -627,7 +627,7 @@ static void* __mps_sum_pipeline = (void*)0;
 // std/collections, and a bounds-checked fixed array covers every actual
 // use here without adding that dependency. __mps_finalize_* is the
 // parallel list of caller-supplied post-readback callbacks (e.g.
-// tensor_gpu.sc's float32->float64 conversion). __mps_poolbuf_* is a
+// the old per-op path's float32->float64 conversion). __mps_poolbuf_* is a
 // third, separate list: every buffer __mps_buf_get/_with_bytes hands out
 // *while a batch is open* stays in flight until the whole batch's command
 // buffer completes (the GPU may still be reading or writing it right up
@@ -688,7 +688,7 @@ void mps_batch_begin() {
         if (!__mps_ensure_device_queue()) return;
         // The command buffers and encoders below come back autoreleased, and
         // a plain C program has no pool to drain them: without this one they
-        // were never freed (nn_mps.h's trainer grew ~30 KB per epoch).
+        // were never freed (a training loop grew ~30 KB per epoch).
         // mps_batch_end drains it once the GPU is done with them.
         __mps_batch_pool = objc_autoreleasePoolPush();
         MMsg0 msg0 = (MMsg0)objc_msgSend;
@@ -854,7 +854,7 @@ int mps_sub_f32(const &float a, const &float b, &float out, unsigned long n) {
 // mps_sum_f32: batch-aware. Under an open batch, the CPU-side "combine the
 // partial-sums array" step (the while-loop below) can't run inline the way
 // the non-batched path does -- bufOut isn't readable until mps_batch_end()'s
-// single wait, same reasoning as tensor_gpu.sc's __MpsGradAccumCtx/
+// single wait, same reasoning as a gradient-accumulation context's 
 // __mps_grad_accum_finalize. Same fix: register a finalize callback instead,
 // pointed at a small scratch copy of the partials (populated by
 // mps_batch_end()'s own generic pending-readback, same as any other batched
@@ -1813,6 +1813,16 @@ int MpsBuf::read(&void dst, unsigned long bytes) const {
         if (src == (void*)0) return 0;
         memcpy((void*)dst, src, bytes);
         return 1;
+    }
+}
+
+?&float MpsBuf::contents() const {
+    unsafe {
+        if (self.handle == (void*)0) return null;
+        MMsg0 msg0 = (MMsg0)objc_msgSend;
+        void* p = msg0(self.handle, __sel_contents);
+        if (p == (void*)0) return null;
+        return (?&float)(float*)p;
     }
 }
 
