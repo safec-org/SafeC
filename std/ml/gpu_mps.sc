@@ -4245,7 +4245,17 @@ int mps_gemm(struct MpsBuf a, int ta, struct MpsBuf b, int tb, struct MpsBuf c,
     return ok;
 }
 
-// ── Interop (see gpu_mps.h's mps_dispatch) ──────────────────────────────────
+// ── Interop (see gpu_mps.h's mps_device_handle and mps_dispatch) ────────────
+?&void mps_device_handle() {
+    if (!__mps_ensure_device_queue()) return null;
+    unsafe { return (?&void)__mps_device; }
+}
+
+?&void mps_queue_handle() {
+    if (!__mps_ensure_device_queue()) return null;
+    unsafe { return (?&void)__mps_queue; }
+}
+
 #define MPS_DISPATCH_MAX_ 64UL
 static const char* __mps_dispatch_names[64];
 static void*       __mps_dispatch_pipes[64];

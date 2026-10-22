@@ -622,6 +622,11 @@ int main() {
     check_training_();
     check_attention_();
     check_sparse_();
+    // every kernel and GEMM above ran on the GPU, none on the CPU (device_ref)
+    struct DeviceStats st = device_stats(CHECK_DEVICE);
+    print("  "); print_int((long long)st.launches); print(" kernels, "); print_int((long long)st.gemms);
+    print(" GEMMs, "); print_int((long long)st.cpuLaunches); println(" on the CPU");
+    check_("no kernel fell back to the CPU", st.cpuLaunches == 0UL);
     print("device_check: "); print_int((long long)g_bad); println(" failed");
     return g_bad == 0 ? 0 : 1;
 }

@@ -696,6 +696,12 @@ unsigned long mps_linear_attn_state_bytes(unsigned long numHeads, unsigned long 
 // when the sequence is done).
 
 // ── Interop: for libraries layered on this backend (device_mps.sc) ───────────────
+// The MTLDevice and the MTLCommandQueue every op above runs on; null without
+// a Metal device. Command buffers another library commits to the queue run
+// in commit order with this backend's batches.
+?&void mps_device_handle();
+?&void mps_queue_handle();
+
 // Runs kernel 'kernel' of the embedded library (gpu_mps_kernels.metal) on
 // 'groups' threadgroups of 'groupSize' threads (one dimension): buffers
 // bufs[0 .. count) bound at indices 0 .. count-1 and, when paramBytes > 0,
