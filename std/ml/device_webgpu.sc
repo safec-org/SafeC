@@ -5,8 +5,9 @@
 // can't run here; device_kernels.wgsl implements the same DK_* kernels with
 // the same arguments and semantics (gen_device_kernels_wgsl.sh checks the
 // two against each other and embeds the WGSL in device_kernels_wgsl.h),
-// plus what rocBLAS / MIOpen do on ROCm: GEMMs (wk_gemm), convolutions as
-// implicit GEMMs (wk_conv, through conv()) and copies (wk_copy).
+// plus what rocBLAS / MIOpen do on ROCm: GEMMs (wk_gemm1 for small products,
+// wk_gemm and wk_gemm8 in tiles), convolutions as implicit GEMMs (wk_conv,
+// through conv()) and copies (wk_copy).
 //
 // Memory is one storage buffer, the heap, bound to every kernel twice (as
 // words and as atomic words: bind group 0, set once per compute pass). A
@@ -63,6 +64,10 @@
 //     as whole words, or an element by two atomic operations on its word.
 //   - The fused attention kernels work in 8 x 8 tiles for head dims over 64
 //     (16 x 16 up to 64), as on Metal: 32 KB of workgroup memory.
+//   - GEMMs and convolutions multiply on scalar FMAs: WGSL can't reach an
+//     Apple GPU's simdgroup matrices (Metal's mk_gemm) or subgroups, so they
+//     run at about half Metal's throughput (1.4 against 2.9 TFLOP/s for an
+//     fp32 1024^3 GEMM on an M1 Pro), and 16-bit operands only save memory.
 //   - A kernel runs on the CPU only if its pipeline can't be built; the
 //     launch then declines and the tensor op computes on the CPU (counted in
 //     DeviceStats.cpuLaunches), as do GEMMs whose grid exceeds 65535
@@ -113,6 +118,7 @@ static void* g_dwg_layout = (void*)0;
 static void* g_dwg_bg = (void*)0;        // the heap's bind group (remade when it grows)
 static void* g_dwg_abg = (void*)0;       // the arguments' (one dynamic offset per dispatch)
 static unsigned long g_dwg_errors = 0UL;   // errors the device reported
+static int g_dwg_lost = 0;                 // the device is lost: nothing more will finish
 static int g_dwg_req_done = 0;
 static void* g_dwg_req_result = (void*)0;
 
@@ -130,7 +136,7 @@ static unsigned long g_dwg_nfree[32];
 static unsigned long g_dwg_capfree[32];
 
 // The command stream: the open encoder and compute pass, the arguments of
-// its dispatches (host copy of its slot of the uniform ring), its staging.
+// its dispatches (host copy of its slot of the uniform ring), its uploads' data.
 static void* g_dwg_args = (void*)0;              // uniform: DWG_FLIGHT slots of DWG_BATCH arguments
 static unsigned char* g_dwg_args_host = (unsigned char*)0;
 static void* g_dwg_data = (void*)0;              // DWG_FLIGHT slots of DWG_DATA_BYTES (group 0's D)
@@ -204,6 +210,10 @@ static void dwg_on_error_(const void* device, int type, struct WGPUStringView ms
     g_dwg_errors = g_dwg_errors + 1UL;
     dwg_log_("device_webgpu: ", msg.data, msg.length);
 }
+static void dwg_on_lost_(const void* device, int reason, struct WGPUStringView msg, void* u1, void* u2) {
+    g_dwg_lost = 1;
+    dwg_log_("device_webgpu: device lost: ", msg.data, msg.length);
+}
 static void dwg_on_map_(int status, struct WGPUStringView msg, void* u1, void* u2) {
     g_dwg_map_status = status;
     g_dwg_map_done = 1;
@@ -220,7 +230,7 @@ static void dwg_on_done_(int status, struct WGPUStringView msg, void* u1, void* 
 }
 
 // One round of the instance's callbacks. wgpu-native first needs the device
-// polled (its one extension used here, wgpu.h's wgpuDevicePoll); Dawn's
+// polled (wgpu.h's wgpuDevicePoll, without blocking); Dawn's
 // wgpuInstanceProcessEvents checks the device itself.
 static void dwg_tick_() {
     unsafe {
@@ -246,9 +256,10 @@ static unsigned long dwg_queue_submit_(void* cb) {
     return g_dwg_serial;
 }
 
-// Returns once submission s (and every one before it) is done.
+// Returns once submission s (and every one before it) is done, or the
+// device is lost.
 static void dwg_wait_for_(unsigned long s) {
-    while (g_dwg_done < s) dwg_tick_();
+    while (g_dwg_done < s && !g_dwg_lost) dwg_tick_();
 }
 
 // Maps the readback buffer's first 'bytes' and waits for it; 1 on success.
@@ -262,8 +273,8 @@ static int dwg_map_readback_(unsigned long bytes) {
         info.callback = dwg_on_map_;
         wgpuBufferMapAsync(g_dwg_rb, WGPU_MAP_MODE_READ, 0UL, bytes, info);
     }
-    while (!g_dwg_map_done) dwg_tick_();
-    return g_dwg_map_status == WGPU_REQUEST_STATUS_SUCCESS;
+    while (!g_dwg_map_done && !g_dwg_lost) dwg_tick_();
+    return g_dwg_map_done && g_dwg_map_status == WGPU_REQUEST_STATUS_SUCCESS;
 }
 
 // Runs the instance's callbacks until a request's has fired.
@@ -420,7 +431,7 @@ static int dwg_pass_() {
 }
 
 // Submits the open command buffer (no wait); the next one takes the next
-// slot of the argument and staging rings, once that slot's last command
+// slot of the argument and data rings, once that slot's last command
 // buffer is done (which bounds how far the host runs ahead).
 static void dwg_submit_() {
     if (g_dwg_enc == (void*)0) return;
@@ -455,7 +466,7 @@ static void dwg_submit_() {
 static int dwg_wait_() {
     dwg_submit_();
     dwg_wait_for_(g_dwg_serial);
-    return g_dwg_errors == 0UL;
+    return g_dwg_errors == 0UL && !g_dwg_lost;
 }
 
 // One dispatch of (gx, gy, gz) workgroups with 'words' (32) as its arguments.
@@ -572,39 +583,32 @@ static int dwg_rows_(int kernel) {
 }
 
 // DK_* kernel 'kernel' (TAGGED when 'tagged'), its 16 x 16 attention build
-// when 'wide', with 32 lanes a row when 'lanes'.
+// when 'wide', with 32 lanes a row when 'lanes'; built on first use.
 static void* dwg_pipe_(int kernel, int tagged, int wide, int lanes) {
     unsafe {
+        void** cache = &g_dwg_pipe[0];
+        int* state = &g_dwg_pipe_state[0];
+        unsigned long slot = (unsigned long)tagged * (unsigned long)DK_COUNT + (unsigned long)kernel;
+        if (lanes) { cache = &g_dwg_lpipe[0]; state = &g_dwg_lpipe_state[0]; }
+        else if (wide) {
+            cache = &g_dwg_apipe[0];
+            state = &g_dwg_apipe_state[0];
+            slot = (unsigned long)tagged * 3UL + (unsigned long)(kernel - DK_ATTN_FWD);
+        }
+        if (state[slot] != 0) return cache[slot];
         struct WGPUConstantEntry c[4];
         unsigned long n = 0UL;
         if (tagged) { c[n] = dwg_const_("TAGGED", 1.0); n = n + 1UL; }
         int opc = device_kernel_wgsl_opc_(kernel);
         if (opc >= 0) { c[n] = dwg_const_("OPC", (double)opc); n = n + 1UL; }
-        if (lanes) {
-            c[n] = dwg_const_("RL", 32.0); n = n + 1UL;
-            unsigned long slot = (unsigned long)tagged * (unsigned long)DK_COUNT + (unsigned long)kernel;
-            if (g_dwg_lpipe_state[slot] == 0) {
-                g_dwg_lpipe[slot] = dwg_make_pipe_(device_kernel_wgsl_entry_(kernel), (const struct WGPUConstantEntry*)&c[0], n);
-                g_dwg_lpipe_state[slot] = g_dwg_lpipe[slot] != (void*)0 ? 1 : -1;
-            }
-            return g_dwg_lpipe[slot];
-        }
+        if (lanes) { c[n] = dwg_const_("RL", 32.0); n = n + 1UL; }
         if (wide) {
             c[n] = dwg_const_("ATT_T", (double)DWG_ATTN16_T); n = n + 1UL;
             c[n] = dwg_const_("ATT_MAXD", 64.0); n = n + 1UL;
-            unsigned long slot = (unsigned long)tagged * 3UL + (unsigned long)(kernel - DK_ATTN_FWD);
-            if (g_dwg_apipe_state[slot] == 0) {
-                g_dwg_apipe[slot] = dwg_make_pipe_(device_kernel_wgsl_entry_(kernel), (const struct WGPUConstantEntry*)&c[0], n);
-                g_dwg_apipe_state[slot] = g_dwg_apipe[slot] != (void*)0 ? 1 : -1;
-            }
-            return g_dwg_apipe[slot];
         }
-        unsigned long slot = (unsigned long)tagged * (unsigned long)DK_COUNT + (unsigned long)kernel;
-        if (g_dwg_pipe_state[slot] == 0) {
-            g_dwg_pipe[slot] = dwg_make_pipe_(device_kernel_wgsl_entry_(kernel), (const struct WGPUConstantEntry*)&c[0], n);
-            g_dwg_pipe_state[slot] = g_dwg_pipe[slot] != (void*)0 ? 1 : -1;
-        }
-        return g_dwg_pipe[slot];
+        cache[slot] = dwg_make_pipe_(device_kernel_wgsl_entry_(kernel), (const struct WGPUConstantEntry*)&c[0], n);
+        state[slot] = cache[slot] != (void*)0 ? 1 : -1;
+        return cache[slot];
     }
 }
 
@@ -701,6 +705,8 @@ static int dwg_ensure_() {
         dd.label = dwg_sv_("safec");
         dd.requiredLimits = (const struct WGPULimits*)&lim;
         dd.uncapturedErrorCallbackInfo.callback = dwg_on_error_;
+        dd.deviceLostCallbackInfo.mode = WGPU_CALLBACK_MODE_ALLOW_PROCESS_EVENTS;
+        dd.deviceLostCallbackInfo.callback = dwg_on_lost_;
         struct WGPURequestDeviceCallbackInfo di;
         memset((void*)&di, 0, sizeof(struct WGPURequestDeviceCallbackInfo));
         di.mode = WGPU_CALLBACK_MODE_ALLOW_PROCESS_EVENTS;
