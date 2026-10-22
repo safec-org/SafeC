@@ -14,6 +14,8 @@ struct TimerQueue TimerQueue::new() {
     q.now_ms_ = 0LL;
     q.started = 0;
     q.lock = Spinlock::new();
+    q.overflow = WaitList::new();
+    q.ovf_min = -1LL;
     return q;
 }
 
@@ -58,6 +60,12 @@ int TimerQueue::advance(long long now_ms) {
         fired = fired + self.wheel.tick();
     }
     self.now_ms_ = now_ms;
+    // Sleeps waiting for a slot: let them retry once slots have freed up or
+    // the earliest of their deadlines has come.
+    if (self.overflow.len() > 0 && (fired > 0 || (self.ovf_min >= 0LL && now_ms >= self.ovf_min))) {
+        self.ovf_min = -1LL;
+        self.overflow.wake_all();
+    }
     self.lock.unlock();
     return fired;
 }
@@ -66,8 +74,9 @@ long long TimerQueue::now_ms() const { return self.now_ms_; }
 
 long long TimerQueue::next_deadline() const {
     unsigned long next = timerq_next_tick_(&self.wheel);
-    if (next == 0UL) return -1LL;
-    return self.origin_ms + (long long)next;
+    long long d = next == 0UL ? -1LL : self.origin_ms + (long long)next;
+    if (self.ovf_min >= 0LL && (d < 0LL || self.ovf_min < d)) d = self.ovf_min;
+    return d;
 }
 
 long long TimerQueue::park_timeout() const {
@@ -100,6 +109,17 @@ int TimerQueue::add_locked_(long long deadline_ms, void* cb, void* ctx) {
 
 void TimerQueue::cancel_locked_(int id) {
     self.wheel.cancel(id);
+    // A slot is free: a Sleep waiting for one can have it.
+    if (self.overflow.len() > 0) {
+        self.ovf_min = -1LL;
+        self.overflow.wake_all();
+    }
+}
+
+int TimerQueue::overflow_locked_(long long deadline_ms, const &Waker w, int id) {
+    int got = self.overflow.add(id, w);
+    if (got != 0 && (self.ovf_min < 0LL || deadline_ms < self.ovf_min)) self.ovf_min = deadline_ms;
+    return got;
 }
 
 // ── Sleep ──────────────────────────────────────────────────────────────────
@@ -127,6 +147,7 @@ struct Sleep Sleep::new(long long ms) {
     s.armed = 0;
     s.fired = 0;
     s.id = 0;
+    s.ovf_id = 0;
     s.waker = Waker::noop();
     s.has_waker = 0;
     s.tq = null;
@@ -157,6 +178,7 @@ struct Poll<Unit> Sleep::poll(&Context cx) {
             }
             if (self.deadline <= tq.now_ms_) {
                 if (self.id != 0) { tq.cancel_locked_(self.id); self.id = 0; }
+                if (self.ovf_id != 0) { tq.overflow.remove(self.ovf_id); self.ovf_id = 0; }
                 if (self.has_waker != 0) { self.has_waker = 0; self.waker.drop(); }
                 self.fired = 1;
                 tq.lock.unlock();
@@ -171,7 +193,14 @@ struct Poll<Unit> Sleep::poll(&Context cx) {
             if (self.id == 0) {
                 fn void(?&Sleep) cb = sleep_fire_;
                 unsafe { self.id = tq.add_locked_(self.deadline, (void*)cb, (void*)self); }
-                if (self.id == 0) busy = 1;   // wheel full: re-poll until the deadline
+                if (self.id != 0) {
+                    if (self.ovf_id != 0) { tq.overflow.remove(self.ovf_id); self.ovf_id = 0; }
+                } else {
+                    // Wheel full: wait for a slot (or the deadline) in the
+                    // overflow list; if that is full too, re-poll.
+                    self.ovf_id = tq.overflow_locked_(self.deadline, &cx.waker, self.ovf_id);
+                    if (self.ovf_id == 0) busy = 1;
+                }
             }
             tq.lock.unlock();
             if (busy != 0) cx.wake_by_ref();
@@ -187,6 +216,7 @@ void Sleep::drop() {
             tq.lock.lock();
             if (self.id != 0 && self.fired == 0) tq.cancel_locked_(self.id);
             self.id = 0;
+            if (self.ovf_id != 0) { tq.overflow.remove(self.ovf_id); self.ovf_id = 0; }
             if (self.has_waker != 0) { self.has_waker = 0; self.waker.drop(); }
             self.fired = 1;
             tq.lock.unlock();

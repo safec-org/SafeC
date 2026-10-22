@@ -209,41 +209,40 @@ static int local_step_(&LocalExecutor ex, &TaskHeader t) {
 }
 
 int LocalExecutor::run_ready() {
+    if (atomic_exchange_int(&self.notified, 0) == 0) return 0;
     int n = 0;
-    while (atomic_exchange_int(&self.notified, 0) != 0) {
-        ?&TaskHeader prev = null;
-        ?&TaskHeader cur = self.head;
-        int going = 1;
-        while (going != 0) {
-            match (cur) {
-                case null: going = 0;
-                case some(t): {
-                    int finished = 0;
-                    int st = atomic_load_int(&t.state);
-                    if ((st & ASYNC_TASK_DONE) != 0) {
-                        finished = 1;
-                    } else if ((st & ASYNC_TASK_NOTIFIED) != 0) {
-                        finished = local_step_(self, t);
-                        n = n + 1;
-                    }
-                    ?&TaskHeader nxt = t.next;
-                    if (finished != 0) {
-                        // Unlink it: the executor forgets finished tasks.
-                        match (prev) {
-                            case some(p): p.next = nxt;
-                            case null: self.head = nxt;
-                        }
-                        match (nxt) {
-                            case null: self.tail = prev;
-                            case some(x): { }
-                        }
-                        t.next = null;
-                        self.live = self.live - 1;
-                    } else {
-                        prev = t;
-                    }
-                    cur = nxt;
+    ?&TaskHeader prev = null;
+    ?&TaskHeader cur = self.head;
+    int going = 1;
+    while (going != 0) {
+        match (cur) {
+            case null: going = 0;
+            case some(t): {
+                int finished = 0;
+                int st = atomic_load_int(&t.state);
+                if ((st & ASYNC_TASK_DONE) != 0) {
+                    finished = 1;
+                } else if ((st & ASYNC_TASK_NOTIFIED) != 0) {
+                    finished = local_step_(self, t);
+                    n = n + 1;
                 }
+                ?&TaskHeader nxt = t.next;
+                if (finished != 0) {
+                    // Unlink it: the executor forgets finished tasks.
+                    match (prev) {
+                        case some(p): p.next = nxt;
+                        case null: self.head = nxt;
+                    }
+                    match (nxt) {
+                        case null: self.tail = prev;
+                        case some(x): { }
+                    }
+                    t.next = null;
+                    self.live = self.live - 1;
+                } else {
+                    prev = t;
+                }
+                cur = nxt;
             }
         }
     }

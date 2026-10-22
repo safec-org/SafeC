@@ -17,10 +17,10 @@
 //
 // The queue is std/dsp/timer_wheel.h's TimerWheel with a 1 ms tick
 // (WHEEL_TIMERS = 64 concurrent timers), advanced in jumps from one due
-// timer to the next rather than tick by tick. A future that finds the
-// wheel full falls back to re-polling until its deadline (correct, but
-// busy); keep the number of concurrently pending timers under 64 per
-// executor. All operations take the queue's spinlock, so a multi-threaded
+// timer to the next rather than tick by tick. A Sleep that finds the wheel
+// full waits in the queue's overflow list (ASYNC_WAITERS more) and retries
+// when a slot frees up or its deadline comes; past that it re-polls until
+// its deadline (correct, but busy). All operations take the queue's spinlock, so a multi-threaded
 // executor's workers share one queue.
 #pragma once
 #include <std/async/future.h>
@@ -38,6 +38,7 @@ struct Sleep {
     int            armed;       // deadline set
     int            fired;       // the queue woke it (deadline passed)
     int            id;          // TimerQueue registration, 0 = none
+    int            ovf_id;      // waiting for a free wheel slot (TimerQueue::overflow), 0 = no
     struct Waker   waker;       // what the timer wakes
     int            has_waker;
     ?&TimerQueue   tq;

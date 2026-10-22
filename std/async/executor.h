@@ -130,14 +130,17 @@ struct LocalExecutor {
     // Type-erased spawn behind spawn() and Context's: 1 on success.
     int  spawn_raw_(?&TaskHeader t);
 
-    // Poll every woken task, again and again, until none is woken. Doesn't
-    // advance the timers or wait. Returns how many polls it made.
+    // One round: poll every task woken when its turn in the spawn order
+    // comes (a task woken by one later in the order waits for the next
+    // round). Doesn't advance the timers or wait. Returns the polls made.
     int  run_ready();
-    // Advance the timer queue to now_ms (firing what is due) and run what
-    // that woke. Returns the polls made.
+    // Advance the timer queue to now_ms (firing what is due), then one
+    // round. Returns the polls made.
     int  turn(long long now_ms);
-    // Run until every spawned task has finished, parking on 'park' (and
-    // advancing the timers with its clock) whenever nothing is runnable.
+    // Run until every spawned task has finished: rounds, with the timers
+    // advanced by the Park's clock before each, parking on 'park' whenever
+    // nothing is runnable. A task that keeps waking itself doesn't stop
+    // timers from firing.
     generic<P: Park> void run(&P park);
     // Run 'fut' (and every spawned task, meanwhile) until 'fut' is Ready;
     // returns its value. Spawned tasks that are still running stay spawned.
@@ -321,11 +324,10 @@ generic<P: Park>
 void LocalExecutor::run(&P park) {
     fn void(?&P) up = park_unpark_thunk_;
     unsafe { self.install_park_((void*)up, (void*)park); }
-    self.turn(park.now_ms());
     while (self.live > 0) {
-        if (self.has_ready() != 0) { self.run_ready(); continue; }
-        park.park(self.timers.park_timeout());
         self.turn(park.now_ms());
+        if (self.live == 0 || self.has_ready() != 0) continue;
+        park.park(self.timers.park_timeout());
     }
     unsafe { self.install_park_((void*)0, (void*)0); }
 }
@@ -349,11 +351,10 @@ T LocalExecutor::block_on(&P park, &F fut) {
                 unsafe { self.install_park_((void*)0, (void*)0); }
                 return p.value;
             }
-            continue;
         }
-        if (self.has_ready() != 0) { self.run_ready(); continue; }
-        park.park(self.timers.park_timeout());
         self.turn(park.now_ms());
+        if (atomic_load_int(&self.root_woken) != 0 || self.has_ready() != 0) continue;
+        park.park(self.timers.park_timeout());
     }
     struct Poll<T> never = fut.poll(&cx);   // unreachable
     return never.value;

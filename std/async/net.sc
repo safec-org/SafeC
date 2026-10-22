@@ -337,7 +337,7 @@ void IoDriver::unpark() {
     if (self.wake_wr < 0) return;
     if (atomic_exchange_int(&self.wake_pending, 1) != 0) return;
     unsigned char one = (unsigned char)1;
-    unsafe { async_raw_write_(self.wake_wr, (const void*)&one, 1UL); }
+    unsafe { write(self.wake_wr, (const void*)&one, (size_t)1); }   // a pipe: not send()
 #endif
 }
 

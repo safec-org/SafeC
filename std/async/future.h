@@ -132,64 +132,6 @@ struct Waker Waker::counted(fn void(?&T, unsigned long) wake,
     unsafe { return Waker::raw_((void*)wake, (void*)clone, (void*)drop, (void*)data, tag); }
 }
 
-// ── TimerQueue ─────────────────────────────────────────────────────────────
-// The executor's timer queue (implemented in timer.sc; Sleep, Interval and
-// the queue's role are described in std/async/timer.h). Declared here
-// because Context points at one.
-struct TimerQueue {
-    struct TimerWheel wheel;     // tick = 1 ms since origin_ms
-    long long         origin_ms; // clock value of tick 0
-    long long         now_ms_;   // the time the queue was last advanced to
-    int               started;   // origin set (by the first advance)
-    struct Spinlock   lock;
-
-    static struct TimerQueue new();
-    // Moves the queue's clock to 'now_ms' (never backwards) and wakes every
-    // timer due by then. The first call sets the origin. Returns how many
-    // fired.
-    int       advance(long long now_ms);
-    // The current time: what the last advance() was given.
-    long long now_ms() const;
-    // The earliest pending deadline, or -1 if no timer is pending.
-    long long next_deadline() const;
-    // Milliseconds from now to the earliest deadline (0 if already due),
-    // or -1 if no timer is pending: how long an executor may park.
-    long long park_timeout() const;
-    int       pending() const;
-
-    // Internal, with 'lock' held: register cb(ctx) for 'deadline_ms'
-    // (0 = the wheel is full, or the deadline has passed), and cancel one.
-    int       add_locked_(long long deadline_ms, void* cb, void* ctx);
-    void      cancel_locked_(int id);
-};
-
-// ── Context ────────────────────────────────────────────────────────────────
-// What poll() gets: the waker of the task being polled, and the services of
-// the executor polling it. Executors fill it in for every poll; a future
-// only reads it (and clones the waker if it needs to keep it).
-//
-//   timers  the executor's timer queue (std/async/timer.h): Sleep,
-//           Interval and Timeout register there. null when the executor
-//           has none (Context::from_waker), and then sleeping is an error.
-//   io_     the executor's I/O driver (std/async/net.h's IoDriver), or
-//           null: the futures there read it through io_driver(cx).
-//   exec_, spawn_  the executor, and its type-erased spawn: what
-//           Context::spawn uses to start another task from inside a task.
-struct Context {
-    struct Waker      waker;
-    ?&TimerQueue      timers;
-    void*             io_;
-    void*             exec_;
-    void*             spawn_;    // fn int(void* exec, ?&TaskHeader task)
-
-    // A context with only a waker: no timers, no I/O, no spawning.
-    static struct Context from_waker(struct Waker w);
-    // A context with Waker::noop(): poll by hand and look at the result.
-    static struct Context noop();
-
-    void wake_by_ref() const;    // waker.wake_by_ref(): "poll me again soon"
-};
-
 // ── WakerSlot ──────────────────────────────────────────────────────────────
 // One registered waker (Rust's AtomicWaker): where a single waiting future
 // leaves its waker for whoever completes it. Not locked by itself; the
@@ -237,6 +179,71 @@ struct WaitList {
     // Wake (and remove) every waiter. Returns how many.
     int  wake_all();
     int  len() const;
+};
+
+// ── TimerQueue ─────────────────────────────────────────────────────────────
+// The executor's timer queue (implemented in timer.sc; Sleep, Interval and
+// the queue's role are described in std/async/timer.h). Declared here
+// because Context points at one.
+struct TimerQueue {
+    struct TimerWheel wheel;     // tick = 1 ms since origin_ms
+    long long         origin_ms; // clock value of tick 0
+    long long         now_ms_;   // the time the queue was last advanced to
+    int               started;   // origin set (by the first advance)
+    struct Spinlock   lock;
+    // Sleeps that found the wheel full wait here, and are woken to retry
+    // when a wheel slot frees up or the earliest of their deadlines comes.
+    struct WaitList   overflow;
+    long long         ovf_min;   // earliest deadline waiting in 'overflow', -1 if none
+
+    static struct TimerQueue new();
+    // Moves the queue's clock to 'now_ms' (never backwards) and wakes every
+    // timer due by then. The first call sets the origin. Returns how many
+    // fired.
+    int       advance(long long now_ms);
+    // The current time: what the last advance() was given.
+    long long now_ms() const;
+    // The earliest pending deadline, or -1 if no timer is pending.
+    long long next_deadline() const;
+    // Milliseconds from now to the earliest deadline (0 if already due),
+    // or -1 if no timer is pending: how long an executor may park.
+    long long park_timeout() const;
+    int       pending() const;
+
+    // Internal, with 'lock' held: register cb(ctx) for 'deadline_ms'
+    // (0 = the wheel is full, or the deadline has passed), and cancel one.
+    int       add_locked_(long long deadline_ms, void* cb, void* ctx);
+    void      cancel_locked_(int id);
+    // Internal, with 'lock' held: wait in 'overflow' for a free slot (0 =
+    // that is full too), and leave it.
+    int       overflow_locked_(long long deadline_ms, const &Waker w, int id);
+};
+
+// ── Context ────────────────────────────────────────────────────────────────
+// What poll() gets: the waker of the task being polled, and the services of
+// the executor polling it. Executors fill it in for every poll; a future
+// only reads it (and clones the waker if it needs to keep it).
+//
+//   timers  the executor's timer queue (std/async/timer.h): Sleep,
+//           Interval and Timeout register there. null when the executor
+//           has none (Context::from_waker), and then sleeping is an error.
+//   io_     the executor's I/O driver (std/async/net.h's IoDriver), or
+//           null: the futures there read it through io_driver(cx).
+//   exec_, spawn_  the executor, and its type-erased spawn: what
+//           Context::spawn uses to start another task from inside a task.
+struct Context {
+    struct Waker      waker;
+    ?&TimerQueue      timers;
+    void*             io_;
+    void*             exec_;
+    void*             spawn_;    // fn int(void* exec, ?&TaskHeader task)
+
+    // A context with only a waker: no timers, no I/O, no spawning.
+    static struct Context from_waker(struct Waker w);
+    // A context with Waker::noop(): poll by hand and look at the result.
+    static struct Context noop();
+
+    void wake_by_ref() const;    // waker.wake_by_ref(): "poll me again soon"
 };
 
 // ── Leaf futures ───────────────────────────────────────────────────────────
