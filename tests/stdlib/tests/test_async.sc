@@ -1153,6 +1153,91 @@ void t_thread_pool() {
     g_pool.shutdown();
 }
 
+// A task that keeps yielding must not keep timers from firing.
+static int g_flag = 0;
+
+struct Spinner {
+    int             st;
+    int             spins;
+    struct YieldNow y;
+    struct Poll<int> poll(&Context cx);
+    void drop();
+};
+
+struct Poll<int> Spinner::poll(&Context cx) {
+    ASYNC_BEGIN(self.st, 1);
+    self.spins = 0;
+    while (atomic_load_int(&g_flag) == 0 && self.spins < 50000000) {
+        self.spins = self.spins + 1;
+        self.y = YieldNow::new();
+        AWAIT(1, self.y);
+    }
+    ASYNC_RETURN(self.spins);
+    ASYNC_END;
+}
+
+void Spinner::drop() { self.st = ASYNC_DONE; }
+
+struct FlagAfter {
+    int          st;
+    struct Sleep d;
+    struct Poll<int> poll(&Context cx);
+    void drop();
+};
+
+struct Poll<int> FlagAfter::poll(&Context cx) {
+    ASYNC_BEGIN(self.st, 1);
+    self.d = Sleep::new(20LL);
+    AWAIT(1, self.d);
+    atomic_store_int(&g_flag, 1);
+    ASYNC_RETURN(1);
+    ASYNC_END;
+}
+
+void FlagAfter::drop() { if (self.st == 1) self.d.drop(); self.st = ASYNC_DONE; }
+
+static struct AsyncTask<struct FlagAfter, int> g_fa;
+static struct AsyncTask<struct Spinner, int> g_sp;
+
+void t_no_starvation() {
+    // LocalExecutor with the real clock: the spinner is the block_on root.
+    atomic_store_int(&g_flag, 0);
+    struct LocalExecutor ex = LocalExecutor::new();
+    struct HostPark park = HostPark::new();
+    struct FlagAfter fa;
+    fa.st = ASYNC_INIT;
+    g_fa = AsyncTask::new(fa);
+    ex.spawn(&g_fa);
+    struct Spinner sp;
+    sp.st = ASYNC_INIT;
+    int spins = ex.block_on(&park, &sp);
+    ASSERT_TRUE(spins < 50000000);
+    ASSERT_TRUE(g_fa.is_finished());
+    park.destroy();
+
+    // A one-thread pool kept busy by the spinner.
+    atomic_store_int(&g_flag, 0);
+    ?&heap ThreadPool pq = alloc(sizeof(struct ThreadPool));
+    ASSERT_FALSE(pq.is_null());
+    match (pq) {
+        case null: return;
+        case some(p): {
+            *p = ThreadPool::new();
+            ASSERT_EQ(p.start(1), 0);
+            sp.st = ASYNC_INIT;
+            g_sp = AsyncTask::new(sp);
+            fa.st = ASYNC_INIT;
+            g_fa = AsyncTask::new(fa);
+            p.spawn(&g_sp);
+            p.spawn(&g_fa);
+            p.wait_idle();
+            ASSERT_TRUE(g_sp.take().default(50000000) < 50000000);
+            p.shutdown();
+        }
+    }
+    dealloc(pq);
+}
+
 void t_host_block_on() {
     long long t0 = async_mono_ms();
     struct Ticker tk = Ticker::new(9, 3, 15LL);   // three real 15 ms sleeps
@@ -1496,6 +1581,7 @@ int main() {
         t.add("Mutex/Semaphore/Notify/CancelToken", t_sync);
         t.add("ThreadPool", t_thread_pool);
         t.add("host block_on (real time)", t_host_block_on);
+        t.add("busy tasks don't starve timers", t_no_starvation);
         t.add("async TCP over loopback", t_net_loopback);
     }
     t.run();

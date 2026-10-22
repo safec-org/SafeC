@@ -142,6 +142,9 @@ static ?&ThreadPool pool_worker_(?&ThreadPool pq) {
                         async_fetch_or_(&t.state, ASYNC_TASK_RUNNING);
                         mutex_unlock(&p.mu);
                         pool_run_one_(p, t);
+                        // Keep the timers going while there is always work:
+                        // otherwise a busy pool would never fire them.
+                        p.timers.advance(async_mono_ms());
                         mutex_lock(&p.mu);
                     }
                     case null: {
