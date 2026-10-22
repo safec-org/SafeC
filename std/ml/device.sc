@@ -201,6 +201,7 @@ unsigned long device_bytes_reserved(int device) {
 struct DeviceStats device_stats(int device) {
     struct DeviceStats z;
     z.launches = 0UL; z.gemms = 0UL; z.uploads = 0UL; z.downloads = 0UL; z.uploadBytes = 0UL; z.downloadBytes = 0UL;
+    z.cpuLaunches = 0UL;
     if (device <= DEVICE_CPU || device >= DEVICE_COUNT) return z;
     unsafe { return g_dev_stats[device]; }
 }
@@ -211,7 +212,13 @@ void device_stats_reset(int device) {
         g_dev_stats[device].launches = 0UL; g_dev_stats[device].gemms = 0UL;
         g_dev_stats[device].uploads = 0UL; g_dev_stats[device].downloads = 0UL;
         g_dev_stats[device].uploadBytes = 0UL; g_dev_stats[device].downloadBytes = 0UL;
+        g_dev_stats[device].cpuLaunches = 0UL;
     }
+}
+
+void device_note_cpu_launch_(int device) {
+    if (device <= DEVICE_CPU || device >= DEVICE_COUNT) return;
+    unsafe { g_dev_stats[device].cpuLaunches = g_dev_stats[device].cpuLaunches + 1UL; }
 }
 
 int device_upload_(int device, unsigned long dst, const &float src, unsigned long n) {
