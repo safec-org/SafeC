@@ -1,7 +1,6 @@
 // SafeC Standard Library — Memory
 // Safe wrappers around malloc / free / realloc / mem* from libc.
 // safeguard: runtime-symbol std_alloc_raw_  (what `new T` calls)
-// safeguard: link linux -lpthread          (pthread_key_create: the size-class cache's thread-exit hook)
 #pragma once
 #include <std/stddef.h>
 #include <std/mem.h>
@@ -655,9 +654,11 @@ static void alloc_quarantine_push_(void* raw, unsigned long cls) {
 
 #ifdef ALLOC_CACHE_HEAP_
 // pthread_key_t is an unsigned int on glibc and musl, an int on the BSDs:
-// the same 4 bytes either way.
-extern int pthread_key_create(unsigned int* key, void* destructor);
-extern int pthread_setspecific(unsigned int key, const void* value);
+// the same 4 bytes either way. Weak: before glibc 2.34 they live in
+// libpthread, which only a program that starts threads links (std/thread.sc
+// adds it) -- and one that doesn't has no thread to clean up after.
+extern int pthread_key_create(unsigned int* key, void* destructor) __attribute__((weak));
+extern int pthread_setspecific(unsigned int key, const void* value) __attribute__((weak));
 static int allocCacheKeyState_ = 0;          // 0 none, 1 being made, 2 made, -1 failed
 static unsigned int allocCacheKey_ = 0U;
 
@@ -696,21 +697,25 @@ static void alloc_cache_thread_exit_(void* table) {
 static int alloc_cache_ready_() {
     unsafe {
         if (allocCacheSlot_ != (void**)0) { return 1; }
-        int st = atomic_load_int(&allocCacheKeyState_);
-        if (st == 0) {
-            int expected = 0;
-            if (atomic_cas_int(&allocCacheKeyState_, &expected, 1)) {
-                int ok = pthread_key_create(&allocCacheKey_, (void*)alloc_cache_thread_exit_) == 0;
-                atomic_store_int(&allocCacheKeyState_, ok ? 2 : -1);
+        int haveKeys = (void*)pthread_key_create != (void*)0 && (void*)pthread_setspecific != (void*)0;
+        if (haveKeys) {
+            int st = atomic_load_int(&allocCacheKeyState_);
+            if (st == 0) {
+                int expected = 0;
+                if (atomic_cas_int(&allocCacheKeyState_, &expected, 1)) {
+                    int ok = pthread_key_create(&allocCacheKey_, (void*)alloc_cache_thread_exit_) == 0;
+                    atomic_store_int(&allocCacheKeyState_, ok ? 2 : -1);
+                }
             }
+            while (atomic_load_int(&allocCacheKeyState_) == 1) { }
         }
-        while (atomic_load_int(&allocCacheKeyState_) == 1) { }
-        // Without a key the table couldn't be released at thread exit:
-        // don't cache at all then.
-        if (atomic_load_int(&allocCacheKeyState_) != 2) { return 0; }
         void** t = (void**)calloc((size_t)ALLOC_CACHE_TOTAL_SLOTS_, sizeof(void*));
         if (t == (void**)0) { return 0; }
-        pthread_setspecific(allocCacheKey_, (const void*)t);
+        // Released at thread exit when the key exists (it can only be missing
+        // without libpthread, i.e. with no threads but this one).
+        if (haveKeys && atomic_load_int(&allocCacheKeyState_) == 2) {
+            pthread_setspecific(allocCacheKey_, (const void*)t);
+        }
         allocCacheSlot_ = t;
         return 1;
     }
