@@ -1,0 +1,9 @@
+[package]
+name        = "wasm_dom_tests"
+version     = "0.1.0"
+author      = "SafeC"
+description = "std/wasm DOM interop, run under Node with a fake DOM (see run.sh)"
+license     = "MIT"
+
+[build]
+edition = "2026"
