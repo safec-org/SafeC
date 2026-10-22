@@ -564,6 +564,23 @@ else
     echo "  [SKIP] Objective-C (macOS only)"
 fi
 
+# std/audio (examples/audio_demo): built with no libraries in its manifest
+# (the backends bring theirs; ALSA and JACK are loaded at run time), lists
+# the APIs and devices -- zero on a runner without sound hardware is fine --
+# and plays a short tone through the dummy API's timer thread.
+cp -R "$SAFEC_HOME/examples/audio_demo" "$WORKDIR/audio_demo"
+AD="$WORKDIR/audio_demo/build/audio_demo"
+[[ "$OS" == windows ]] && AD="$AD.exe"
+if sg_in "$WORKDIR/audio_demo" /tmp/sg_audio.txt build &&
+   with_timeout 60 "$AD" list >/tmp/sg_audio_run.txt 2>&1 && grep -q "Dummy: 2 device(s)" /tmp/sg_audio_run.txt &&
+   with_timeout 60 "$AD" sine --api dummy --seconds 0.25 >>/tmp/sg_audio_run.txt 2>&1 &&
+   grep -q "done: 0.25 s of audio" /tmp/sg_audio_run.txt; then
+    pass "std/audio: examples/audio_demo lists devices and plays through the dummy API ($(head -1 /tmp/sg_audio_run.txt))"
+else
+    fail "std/audio: examples/audio_demo"
+    cat /tmp/sg_audio.txt /tmp/sg_audio_run.txt 2>/dev/null
+fi
+
 # A GUI app bundle (examples/gui_hello: a std/gui window that closes itself).
 GUI_CAN_BUILD=1
 [[ "$OS" == linux && ! -e /usr/include/X11/Xlib.h ]] && GUI_CAN_BUILD=0

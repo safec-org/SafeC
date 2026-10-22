@@ -252,7 +252,20 @@ static const unsigned long allocClassCap_[33] = { 8192UL, 8192UL, 8192UL, 8192UL
 static const unsigned long allocClassOff_[33] = { 0UL, 8192UL, 16384UL, 24576UL, 32768UL, 40960UL, 49152UL, 57344UL, 65536UL, 73728UL, 81920UL, 90112UL, 98304UL, 106496UL, 111957UL, 116053UL, 118783UL, 120831UL, 122196UL, 123220UL, 123902UL, 124414UL, 124755UL, 125011UL, 125181UL, 125309UL, 125394UL, 125458UL, 125500UL, 125532UL, 125553UL, 125569UL, 125579UL };
 
 #ifndef __SAFEC_FREESTANDING__
+#if !defined(__APPLE__) && !defined(_WIN32) && !defined(__wasm__)
+// ELF (Linux, the BSDs): an executable's thread_local data is static TLS,
+// which the C library carves out of every thread's stack — ~1 MB of slots
+// there makes pthread_create() fail with EINVAL for any thread a library
+// starts with a smaller explicit stack (libjack's 512 KB client threads,
+// audio and plugin threads elsewhere). So the slot table is a per-thread
+// heap block instead, made on the thread's first cached free and released
+// at thread exit (alloc_cache_thread_exit_); the counts stay in TLS.
+// (macOS and Windows allocate TLS on the heap themselves.)
+#define ALLOC_CACHE_HEAP_ 1
+thread_local static void**        allocCacheSlot_ = (void**)0;
+#else
 thread_local static void*         allocCacheSlot_[ALLOC_CACHE_TOTAL_SLOTS_];
+#endif
 thread_local static unsigned long allocCacheCount_[33];
 #else
 // No size-class cache on bare metal: it needs TLS and ~1 MB of slots per
@@ -639,6 +652,78 @@ static void alloc_quarantine_push_(void* raw, unsigned long cls) {
     }
 }
 
+#ifdef ALLOC_CACHE_HEAP_
+// pthread_key_t is an unsigned int on glibc and musl, an int on the BSDs:
+// the same 4 bytes either way. Weak: before glibc 2.34 they live in
+// libpthread, which only a program that starts threads links (std/thread.sc
+// adds it) -- and one that doesn't has no thread to clean up after.
+extern int pthread_key_create(unsigned int* key, void* destructor) __attribute__((weak));
+extern int pthread_setspecific(unsigned int key, const void* value) __attribute__((weak));
+static int allocCacheKeyState_ = 0;          // 0 none, 1 being made, 2 made, -1 failed
+static unsigned int allocCacheKey_ = 0U;
+
+// Thread exit: hand the cached blocks back (slab blocks to their slab,
+// the rest to free()) and release the table.
+static void alloc_cache_thread_exit_(void* table) {
+    unsafe {
+        void** t = (void**)table;
+        if (t == (void**)0) { return; }
+        unsigned long cls = (unsigned long)0;
+        while (cls < ALLOC_CACHE_NUM_CLASSES_) {
+            unsigned long i = (unsigned long)0;
+            while (i < allocCacheCount_[cls]) {
+                void* raw = t[allocClassOff_[cls] + i];
+                unsigned long* hdr = (unsigned long*)raw;
+                unsigned long c = hdr[1];
+#ifdef ALLOC_SLABS_
+                if ((c & ALLOC_SLAB_FLAG_) != (unsigned long)0 && c != ALLOC_CLASS_UNCACHED_) {
+                    alloc_slab_free_(hdr, c & ~ALLOC_SLAB_FLAG_);
+                    i = i + (unsigned long)1;
+                    continue;
+                }
+#endif
+                free(raw);
+                i = i + (unsigned long)1;
+            }
+            allocCacheCount_[cls] = (unsigned long)0;
+            cls = cls + (unsigned long)1;
+        }
+        if (allocCacheSlot_ == t) { allocCacheSlot_ = (void**)0; }
+        free((void*)t);
+    }
+}
+
+// The calling thread's slot table, made on first use; 0 if it can't be.
+static int alloc_cache_ready_() {
+    unsafe {
+        if (allocCacheSlot_ != (void**)0) { return 1; }
+        int haveKeys = (void*)pthread_key_create != (void*)0 && (void*)pthread_setspecific != (void*)0;
+        if (haveKeys) {
+            int st = atomic_load_int(&allocCacheKeyState_);
+            if (st == 0) {
+                int expected = 0;
+                if (atomic_cas_int(&allocCacheKeyState_, &expected, 1)) {
+                    int ok = pthread_key_create(&allocCacheKey_, (void*)alloc_cache_thread_exit_) == 0;
+                    atomic_store_int(&allocCacheKeyState_, ok ? 2 : -1);
+                }
+            }
+            while (atomic_load_int(&allocCacheKeyState_) == 1) { }
+        }
+        void** t = (void**)calloc((size_t)ALLOC_CACHE_TOTAL_SLOTS_, sizeof(void*));
+        if (t == (void**)0) { return 0; }
+        // Released at thread exit when the key exists (it can only be missing
+        // without libpthread, i.e. with no threads but this one).
+        if (haveKeys && atomic_load_int(&allocCacheKeyState_) == 2) {
+            pthread_setspecific(allocCacheKey_, (const void*)t);
+        }
+        allocCacheSlot_ = t;
+        return 1;
+    }
+}
+#else
+static int alloc_cache_ready_() { return 1; }
+#endif
+
 void dealloc_raw_(void* ptr) {
     unsafe {
         if (ptr == (void*)0) { return; }
@@ -663,7 +748,7 @@ void dealloc_raw_(void* ptr) {
             // it out unchanged; one from another thread's slab goes back to
             // that slab (remotely) when freed after reuse.
             unsigned long sc = cls & ~ALLOC_SLAB_FLAG_;
-            if (allocCacheCount_[sc] < alloc_class_cap_(sc)) {
+            if (allocCacheCount_[sc] < alloc_class_cap_(sc) && alloc_cache_ready_()) {
                 allocCacheSlot_[allocClassOff_[sc] + allocCacheCount_[sc]] = raw;
                 allocCacheCount_[sc] = allocCacheCount_[sc] + (unsigned long)1;
                 return;
@@ -672,7 +757,7 @@ void dealloc_raw_(void* ptr) {
             return;
         }
 #endif
-        if (cls < ALLOC_CACHE_NUM_CLASSES_ && allocCacheCount_[cls] < alloc_class_cap_(cls)) {
+        if (cls < ALLOC_CACHE_NUM_CLASSES_ && allocCacheCount_[cls] < alloc_class_cap_(cls) && alloc_cache_ready_()) {
             allocCacheSlot_[allocClassOff_[cls] + allocCacheCount_[cls]] = raw;
             allocCacheCount_[cls] = allocCacheCount_[cls] + (unsigned long)1;
             return;

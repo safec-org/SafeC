@@ -14,7 +14,9 @@ namespace safeguard {
 // Several std modules ship one implementation per OS API, distinguished by a
 // filename suffix (sched/io_nb_{bsd,linux,win32}.sc, sched/reactor_{kqueue,
 // epoll,win32}.sc, ipc/uds_{bsd,linux}.sc, ipc/pipe_{posix,win32}.sc,
-// gui/gui_{cocoa,x11,win32,fb}.sc — fb being the bare-metal one). They define the same symbols, so only the
+// gui/gui_{cocoa,x11,win32,fb}.sc — fb being the bare-metal one,
+// audio/audio_{alsa_linux,jack_posix,coreaudio_macos,wasapi_win32,
+// webaudio_wasm}.sc — wasm being WebAssembly only). They define the same symbols, so only the
 // target's variant may go into a build: with all of them archived, the
 // linker resolves each symbol from whichever member it meets first
 // (alphabetically the BSD one, whose sockaddr layout is wrong on Linux) and
@@ -44,16 +46,19 @@ bool stdVariantMatches(const fs::path& src, const std::string& triple, bool bare
         bsd = triple.find("bsd") != std::string::npos;
     }
     if (endsWith("_fb")) return bareMetal;   // bare-metal framebuffer backend (see gui_fb.sc)
+    // WebAssembly host (browser/Node) backends: JS imports, see audio_webaudio_wasm.sc.
+    if (endsWith("_wasm")) return triple.rfind("wasm", 0) == 0;
     if (bareMetal) {
         // No OS API at all: none of the OS-specific backends apply.
         if (endsWith("_linux") || endsWith("_epoll") || endsWith("_bsd") || endsWith("_kqueue") ||
-            endsWith("_cocoa") || endsWith("_x11") || endsWith("_win32") || endsWith("_posix"))
+            endsWith("_cocoa") || endsWith("_macos") || endsWith("_x11") || endsWith("_win32") ||
+            endsWith("_posix"))
             return false;
         return true;
     }
     if (endsWith("_linux") || endsWith("_epoll")) return linux_;
     if (endsWith("_bsd") || endsWith("_kqueue")) return mac || bsd;
-    if (endsWith("_cocoa")) return mac;
+    if (endsWith("_cocoa") || endsWith("_macos")) return mac;
     if (endsWith("_x11")) return linux_ || bsd;
     if (endsWith("_win32")) return win;
     if (endsWith("_posix")) return !win;

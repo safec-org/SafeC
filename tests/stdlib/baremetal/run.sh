@@ -45,7 +45,7 @@ for t in "${TARGETS[@]}"; do
     # std archive: every source that builds for this target.
     while IFS= read -r -d '' f; do
         case "$(basename "$f" .sc)" in   # OS-specific backends never apply on bare metal
-            *_linux|*_bsd|*_win32|*_posix|*_epoll|*_kqueue|*_cocoa|*_x11) continue ;;
+            *_linux|*_bsd|*_win32|*_posix|*_epoll|*_kqueue|*_cocoa|*_macos|*_x11) continue ;;
         esac
         o="$d/std/$(echo "${f#$ROOT/std/}" | tr '/.' '__').o"
         compile "$t" "$f" "$o" || rm -f "$o"
