@@ -1,26 +1,82 @@
 #pragma once
-// SafeC Standard Library — GPU tensor ops via WebGPU (native, wgpu-native/
-// Dawn's webgpu.h C API — the same API a browser's WebGPU implementation
-// exposes to JS, just called directly from native code).
+// SafeC Standard Library — GPU array ops via WebGPU (the native webgpu.h C
+// API of wgpu-native or Dawn: the API a browser's WebGPU exposes to
+// JavaScript, called directly).
 //
-// UNVERIFIED: no WebGPU native library (wgpu-native or Dawn), no
-// webgpu.h, and no GPU-capable WebGPU backend (Vulkan/Metal/D3D12
-// instance) available to link against in this sandbox. Unlike
-// gpu_spirv.h's SPIR-V binary gap, WGSL (WebGPU's shader language) *is*
-// plain text, so — like gpu_mps.sc's runtime-compiled MSL and
-// gpu_cuda.sc's embedded PTX — every kernel below embeds real WGSL
-// source and compiles it at runtime via wgpuDeviceCreateShaderModule, no
-// missing-binary gap the way gpu_rocm.sc/gpu_spirv.sc have. What's
-// unverified here is the C API call sequence and struct layouts
-// (hand-written from memory against webgpu.h, not checked against a real
-// copy of it) and, fundamentally, that WebGPU's adapter/device
-// acquisition is asynchronous even in the native C API — see
-// gpu_webgpu.sc's header comment for how this handles that without a
-// real event loop.
+// A thin layer over the WebGPU tensor backend (device_webgpu.sc,
+// DEVICE_WEBGPU): the same device, queue, device heap and WGSL kernels
+// (device_kernels.wgsl), so these ops and std::ml tensors on DEVICE_WEBGPU
+// share one stream and run in order with each other. Every op is one of
+// the backend's kernels -- the DK_* elementwise ops and sum, wk_gemm for
+// matrix products, and wk_map for division, powers and square roots, which
+// the tensor ops don't need -- not a second copy of them. For training,
+// use the tensor backend (t.place(DEVICE_WEBGPU), TrainConfig.device):
+// these are for code that wants a GPU array without tensors.
 //
-// Gated behind the 'webgpu' feature (see Package.toml's [features]).
+// Link a WebGPU implementation as device_webgpu.sc describes (wgpu-native:
+// -lwgpu_native); the webgpu feature isn't needed to call these (it
+// registers the tensor backend). Without a WebGPU adapter every op returns
+// 0 and every constructor an invalid buffer.
 namespace std {
 
+// 1 if a WebGPU adapter and device are available (initializes them).
+int webgpu_available();
+
+// ── Device buffers ────────────────────────────────────────────────────────────
+// Element types of a buffer (WebGpuBuf.dtype): 0 = fp32, or 16-bit values.
+#define WEBGPU_FP16 1   // the values of device.h's DEVICE_FP16 / DEVICE_BF16
+#define WEBGPU_BF16 2
+
+// Memory on the WebGPU device -- the WebGPU twin of gpu_mps.h's MpsBuf.
+// 'handle' is the backend's device handle (a byte offset into its heap, the
+// element type in its top two bits as device.h's DEV_TAG_*), 0 for an
+// invalid (failed or freed) buffer; every op returns 0 for one. 'bytes' is
+// its size, 'dtype' its element type: 0 = fp32, WEBGPU_FP16 or WEBGPU_BF16.
+//
+// Ops on buffers are queued on the device's stream and return without
+// waiting; read() and read_f32() wait for the work queued before them, and
+// write() is ordered after it, so a buffer may be written, used and read
+// back without explicit synchronization. free() doesn't wait either: work
+// already queued still reads the memory before anything queued after it can
+// reuse it. Owned by the caller: free() exactly once.
+struct WebGpuBuf {
+    unsigned long handle;
+    unsigned long bytes;
+    int           dtype;
+
+    int  valid() const;   // handle != 0
+    void free();          // back to the device heap; handle := 0
+    // Copies the first 'bytes' (<= this.bytes) into 'dst', once the work
+    // queued before has run. 1 = done.
+    int  read(&void dst, unsigned long bytes) const;
+    // The first n elements as fp32 (16-bit ones converted on the CPU).
+    int  read_f32(&float dst, unsigned long n) const;
+    // Copies 'bytes' (<= this.bytes) from 'src' into the buffer, after the
+    // work queued before. 1 = done.
+    int  write(const &void src, unsigned long bytes);
+
+    static struct WebGpuBuf alloc(unsigned long n, int dtype);       // n uninitialized elements
+    static struct WebGpuBuf upload(const &float host, unsigned long n);          // n fp32 values
+    // n fp32 values rounded on the CPU (float16.h's f32_to_fp16_bulk /
+    // f32_to_bf16_bulk) and stored as fp16 / bf16.
+    static struct WebGpuBuf upload_f16(const &float host, unsigned long n);
+    static struct WebGpuBuf upload_bf16(const &float host, unsigned long n);
+    // n raw fp16 or bf16 values (dtype WEBGPU_FP16 / WEBGPU_BF16), copied as is.
+    static struct WebGpuBuf upload_bits(const &unsigned short bits, unsigned long n, int dtype);
+};
+
+// out [M, N] = a [M, K] . b [K, N], row-major. a and b share a dtype (fp32,
+// fp16 or bf16; products accumulate in fp32), out is any dtype. Queued.
+int webgpu_matmul(struct WebGpuBuf a, struct WebGpuBuf b, struct WebGpuBuf out,
+                  unsigned long M, unsigned long K, unsigned long N);
+// w[i] -= lr * g[i] for i < n, in place (any dtypes). Queued.
+int webgpu_sgd_update(struct WebGpuBuf w, struct WebGpuBuf g, float lr, unsigned long n);
+// Waits for everything queued on the device (tensor work too). 1 on success.
+int webgpu_sync();
+
+// ── Host arrays ───────────────────────────────────────────────────────────────
+// out[i] = a[i] op b[i] (or op a[i]) for i in [0, n): the inputs uploaded,
+// the op run, the result read back. 1 = done, 0 = no WebGPU (out untouched).
 int webgpu_add_f32(const &float a, const &float b, &float out, unsigned long n);
 int webgpu_sub_f32(const &float a, const &float b, &float out, unsigned long n);
 int webgpu_mul_f32(const &float a, const &float b, &float out, unsigned long n);
@@ -31,103 +87,10 @@ int webgpu_log_f32(const &float a, &float out, unsigned long n);
 int webgpu_exp_f32(const &float a, &float out, unsigned long n);
 int webgpu_sqrt_f32(const &float a, &float out, unsigned long n);
 int webgpu_scale_f32(const &float a, float k, &float out, unsigned long n);
+// out[0] = sum(a[0..n)): a reduction per workgroup, added atomically.
 int webgpu_sum_f32(const &float a, &float out, unsigned long n);
+// out [M, N] = a [M, K] . b [K, N].
 int webgpu_matmul_f32(const &float a, const &float b, &float out,
-                       unsigned long M, unsigned long K, unsigned long N);
-
-// True if wgpuCreateInstance succeeds and an adapter request resolves
-// (see gpu_webgpu.sc's polling-loop caveat) to a non-null adapter.
-int webgpu_available();
-
-// ── Persistent-device / GPU-resident tier ───────────────────────────────────
-// Applies the same fix as gpu_cuda.h's persistent-context tier and
-// gpu_mps.h's GPU-resident training rewrite to WebGPU's version of the
-// same problem: every webgpu_*_f32 function above re-runs the full
-// instance/adapter/device acquisition sequence (__wgpu_init, including
-// its async-callback poll loops) AND recompiles the shader module +
-// pipeline, on every single call. The functions below fix both: a
-// process-lifetime instance/device/queue (see gpu_webgpu.sc's
-// __wgpu_ensure_device) created once and reused by every call in this
-// tier, persistent device buffers uploaded once and reused across many
-// dispatches, and cached compute pipelines (compiled once per kernel, not
-// once per call). webgpu_sgd_update_f32 mirrors gpu_mps.h's
-// mps_sgd_update_f32_chained / gpu_cuda.h's cuda_sgd_update_f32: weights
-// updated in place on the GPU, never copied back to host memory, so a
-// training loop can stay fully GPU-resident across steps.
-//
-// UNVERIFIED like the rest of this file (no wgpu-native/Dawn library in
-// this sandbox). One gap this tier closes that the file's original
-// __wgpu_run_kernel deliberately left open (see its comment): a STORAGE
-// buffer generally can't also be MAP_READ, so webgpu_matmul_f32_persistent
-// copies its output into a dedicated MAP_READ|COPY_DST staging buffer via
-// wgpuCommandEncoderCopyBufferToBuffer before mapping it, the structurally
-// correct WebGPU readback path.
-//
-// This tier has no command-batching layer of its own (the WebGPU analogue
-// of gpu_mps.sc's mps_batch_begin/mps_batch_end, which lets many chained
-// dispatches share one command-buffer submission and one wait) -- each
-// call below still does its own encoder/submit. A caller chaining several
-// of these in a training loop and reading results back only at the end
-// (e.g. via a later persistent buffer's own map) still benefits from the
-// device/pipeline caching this tier adds; folding dispatches into a
-// single submission per step is a further step this pass doesn't take.
-
-// Uploads 'bytes' from host memory to a new persistent GPU buffer usable
-// as both storage input/output and copy source/destination. Returns
-// (void*)0 on failure.
-?&void webgpu_upload_persistent(const &float data, unsigned long bytes);
-
-// Releases a buffer returned by webgpu_upload_persistent (wgpuBufferRelease).
-void webgpu_release_persistent(&void buf);
-
-// Same computation as webgpu_matmul_f32, but 'bufA'/'bufB' are already
-// device buffers (e.g. from webgpu_upload_persistent) -- no upload for
-// either operand -- and both the compute pipeline and the shared device
-// are cached/reused instead of being rebuilt on every call. Still copies
-// the MxN result back to host 'out' (see this section's header comment on
-// the batching gap). Returns 1 on success, 0 on failure.
-int webgpu_matmul_f32_persistent(&void bufA, &void bufB, &float out,
-                                  unsigned long M, unsigned long K, unsigned long N);
-
-// In-place SGD step against a persistent device buffer:
-// bufW[i] -= lr * bufGrad[i] for i in [0, n), computed entirely on-GPU --
-// the result is never copied back to host memory. Returns 1 on success,
-// 0 on failure.
-int webgpu_sgd_update_f32(&void bufW, &void bufGrad, float lr, unsigned long n);
-
-// True if the shared persistent device (used by every function in this
-// tier) is available.
-int webgpu_persistent_available();
-
-// ── fp16 tier ────────────────────────────────────────────────────────────
-// Real f16 arithmetic in WGSL, not just storage: WGSL's 'enable f16;'
-// extension (part of the WebGPU spec, shipping in real browser/native
-// implementations) adds a genuine 16-bit float scalar/array type with
-// native arithmetic -- webgpu_matmul_f16_persistent's kernel stores in
-// f16 and accumulates in f32 (same mixed-precision-GEMM shape as
-// gpu_mps_kernels.metal's matmul_kernel_f16 and gpu_cuda.sc's
-// cuda_matmul_f16_persistent), converting with WGSL's f32()/f16() cast
-// functions instead of MSL's implicit conversions or PTX's cvt
-// instructions -- three different surfaces for the same technique.
-//
-// No bf16 tier here: unlike f16, bf16 has no equivalent WGSL extension
-// in the current WebGPU spec (nothing like Metal's 'bfloat' type or
-// CUDA's PTX '.bf16' storage class exists for WGSL as of this writing) --
-// this isn't a scope decision, there's genuinely nothing to bind to.
-//
-// Deliberately smaller than gpu_mps.h's fp16 tier (upload/release,
-// matmul, in-place SGD only, not the full backward-pass op set) for the
-// same reason gpu_cuda.h's fp16/bf16 tier is: this file's UNVERIFIED
-// status (no wgpu-native/Dawn library in this sandbox) means there's no
-// way to catch a WGSL syntax error here the way the MPS tier's kernels
-// were actually compiled and run.
-
-?&void webgpu_upload_f16_persistent(const &float data, unsigned long n);
-// Releases through webgpu_release_persistent(buf) above.
-
-int webgpu_matmul_f16_persistent(&void bufA, &void bufB, &unsigned short out,
-                                  unsigned long M, unsigned long K, unsigned long N);
-
-int webgpu_sgd_update_f16(&void bufW, &void bufGrad, float lr, unsigned long n);
+                      unsigned long M, unsigned long K, unsigned long N);
 
 } // namespace std

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Builds and runs the WebGPU backend checks against a wgpu-native build (and
 # a GPU it can use; Homebrew LLVM's clang on macOS, which safec's IR
-# targets): webgpu_api.h's struct layouts against the real webgpu.h, and
-# every std::ml training workload on the CPU and on the WebGPU device backend.
+# targets): webgpu_api.h's struct layouts against the real webgpu.h,
+# gpu_webgpu.h's host-array API, and every std::ml training workload on the
+# CPU and on the WebGPU device backend.
 #   usage: run.sh
 #   Env: WGPU_NATIVE_DIR (required: a wgpu-native release, with
 #          include/webgpu/webgpu.h and lib/libwgpu_native.a or .dylib / .so),
@@ -60,6 +61,10 @@ else
     echo "webgpu_api.h: layouts differ from webgpu.h"
     exit 1
 fi
+
+# gpu_webgpu.h's array API (with the webgpu feature: and a tensor's buffer)
+SAFEC_CLANG="$WRAP" "$SAFEC" "$HERE/webgpu_check.sc" -I "$ROOT" -DSAFEC_FEATURE_WEBGPU=1 --emit-bin -O2 -o "$OUT/webgpu_check"
+"$OUT/webgpu_check"
 
 # ../device/device_check.sc with the webgpu feature (SAFEC_FEATURE_WEBGPU
 # links device_webgpu.sc in): every std::ml workload on the CPU and on the GPU.
