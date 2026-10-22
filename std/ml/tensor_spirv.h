@@ -1,13 +1,15 @@
 #pragma once
 // SafeC Standard Library — GPU-backed Tensor ops (Vulkan/SPIR-V (cross-vendor)).
 //
-// Per-op GPU tensor functions for a backend without a device.h backend yet
-// comment for the general design (why this is separate from tensor.sc,
-// what backward-reuse means, the dispatch-overhead cost every op here
-// pays). Tensor is float32 (see tensor.h), the same precision every
-// spirv_*_f32 buffer already uses, so these ops read/write a Tensor's
-// 'data'/'grad' directly — no per-call CPU-side conversion pass.
-// UNVERIFIED end to end (see gpu_spirv.h): no Vulkan SDK/driver/SPIR-V toolchain in this sandbox, and every spirv_* op currently always returns 0 (missing SPIR-V bytecode), so every op here always falls back to CPU.
+// Per-op GPU tensor functions over gpu_spirv.h's host-array ops: each
+// uploads its operands, runs on the Vulkan GPU and reads the result back
+// into a CPU tensor, which joins the graph as the CPU op's result would
+// (backward runs on the CPU), and computes on the CPU without a Vulkan GPU.
+// Tensor is float32 (see tensor.h), the precision every spirv_*_f32 op
+// takes, so these read and write a Tensor's 'data' directly. Each op pays
+// an upload and a wait: for a model, place its tensors on DEVICE_VULKAN
+// (device.h) instead, which keeps them on the GPU across ops and runs the
+// backward pass there too.
 #include <std/ml/tensor.h>
 
 namespace std {

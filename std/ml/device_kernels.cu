@@ -1,8 +1,9 @@
 // SafeC Standard Library — the device kernels behind std::ml's tensor ops on
-// ROCm (compiled at run time by hiprtc), CUDA (NVRTC) and Metal
-// (newLibraryWithSource): one source for all three. gen_device_kernels.sh
-// turns this file into device_kernels.h (the source as a string and the
-// kernel ids); edit this file, then regenerate.
+// ROCm (compiled at run time by hiprtc), CUDA (NVRTC), Metal
+// (newLibraryWithSource) and Vulkan (SPIR-V compiled ahead of time by
+// slangc): one source for all four. gen_device_kernels.sh turns this file
+// into device_kernels.h (the source as a string and the kernel ids) and
+// device_kernels_spirv.h (the SPIR-V); edit this file, then regenerate.
 //
 // Every kernel takes one DevArgs (device.h): device addresses in p[],
 // integers in u[], floats in f[]. It runs over n threads (n passed as u[7])
@@ -35,7 +36,77 @@
 //     row sums) take a simdgroup per row on Metal (GSR, MpsBackend launches
 //     32 threads per row), its lanes splitting the columns: a few hundred
 //     rows are too few threads to keep an Apple GPU busy.
-#if defined(__METAL_VERSION__)
+// Vulkan builds take Metal's paths: DK_SIMD (32-wide simdgroups: block
+// reductions, a simdgroup per row) and DK_TG32K (32 KB of shared memory:
+// the attention tiles), and the Metal-only GEMMs and convolutions below.
+#if defined(DK_VULKAN)
+// Slang, for SPIR-V (gen_device_kernels.sh first rewrites the C++ spellings
+// Slang lacks: unsigned int -> uint, templates -> generics, reference
+// parameters -> values or inout, threadgroup pointers -> TGPtr). Device
+// addresses are buffer device addresses (physical storage buffer pointers),
+// a kernel's DevArgs are its push constants, and the simdgroup is a subgroup
+// VulkanBackend requires to be 32 wide.
+#define DK_SIMD 1
+#define DK_TG32K 1
+typealias ulong = uint64_t;
+typealias ulong2 = vector<uint64_t, 2>;
+typealias ushort = uint16_t;
+#define DK_U64 uint64_t
+#define dk_double float
+#define dk_global
+#define dk_shared
+#define dk_thread
+#define device
+#define constant
+#define __device__
+#define __forceinline__ [ForceInline]
+#define __shared__ static groupshared
+#define __syncthreads() GroupMemoryBarrierWithGroupSync()
+struct DevArgs {
+    uint64_t p[8];
+    uint u[8];
+    float f[8];
+};
+// The entry point (its DevArgs in push constants) calls the kernel's body
+// with the CUDA names; DK_ENTRY gives a block size other than 256.
+#define DK_KERNEL(name) DK_ENTRY(name, 256)
+#define DK_ENTRY(name, T) [shader("compute")] [numthreads(T, 1, 1)] \
+    void name(uniform DevArgs a, uint3 dk_t : SV_GroupThreadID, uint3 dk_g : SV_GroupID) { \
+        name##_body(a, dk_t, dk_g, uint3(T, 1u, 1u), WorkgroupCount(), dk_t.x % 32u, dk_t.x / 32u); } \
+    void name##_body(DevArgs a, uint3 threadIdx, uint3 blockIdx, uint3 blockDim, uint3 gridDim, uint dk_lane, uint dk_simd)
+#define DK_IDS , uint3 threadIdx, uint3 blockIdx, uint3 blockDim, uint3 gridDim, uint dk_lane, uint dk_simd
+#define DK_IDA , threadIdx, blockIdx, blockDim, gridDim, dk_lane, dk_simd
+static groupshared float dk_red[32];
+float simd_sum(float v) { return WaveActiveSum(v); }
+float simd_max(float v) { return WaveActiveMax(v); }
+// float atomics (SPV_EXT_shader_atomic_float_add) and the C math library's float functions
+void atomicAdd(float* p, float v) { InterlockedAdd(*p, v); }
+float expf(float x) { return exp(x); }
+float logf(float x) { return log(x); }
+float tanhf(float x) { return tanh(x); }
+float sqrtf(float x) { return sqrt(x); }
+float rsqrtf(float x) { return rsqrt(x); }
+float fabsf(float x) { return abs(x); }
+float floorf(float x) { return floor(x); }
+float ceilf(float x) { return ceil(x); }
+float fminf(float x, float y) { return min(x, y); }
+float fmaxf(float x, float y) { return max(x, y); }
+float fmaf(float x, float y, float z) { return fma(x, y, z); }
+uint __float_as_uint(float f) { return asuint(f); }
+float __uint_as_float(uint u) { return asfloat(u); }
+uint dk_udiv(uint q, uint d, float inv) {
+    uint r = (uint)((float)q * inv);
+    while (r * d > q) r--;
+    while ((r + 1u) * d <= q) r++;
+    return r;
+}
+#define DK_RECIP(inv, d) float inv = 1.0f / (float)(d);
+#define DK_UDIV(q, d, inv) dk_udiv((q), (d), (inv))
+#define DK_UMOD(q, d, inv) ((q) - dk_udiv((q), (d), (inv)) * (d))
+#define GSR(r, n) for (uint r = (blockIdx.x * blockDim.x + threadIdx.x) / 32u; r < (n); r += blockDim.x * gridDim.x / 32u)
+#elif defined(__METAL_VERSION__)
+#define DK_SIMD 1
+#define DK_TG32K 1
 #include <metal_stdlib>
 using namespace metal;
 #define DK_U64 ulong
@@ -122,7 +193,44 @@ __device__ unsigned short f2h_bits(float f);
 __device__ float h2f_bits(unsigned short h);
 __device__ unsigned short f2b_bits(float f);
 __device__ float b2f_bits(unsigned short b);
+#if defined(DK_VULKAN)
+// Slang has no references: the view's subscript loads and stores (in the
+// DK_TAGGED build, converting by the tag), and a view tests true when set.
+struct TP {
+    DK_U64 p;
+    __init(DK_U64 h) { p = h; }
 #ifdef DK_TAGGED
+    uint tag() { return (uint)(p >> 62); }
+    DK_U64 base() { return p & DEV_ADDR_MASK; }
+    __subscript(DK_U64 i) -> float {
+        get {
+            uint t = tag();
+            if (t == 0u) return ((float*)base())[i];
+            uint16_t h = ((uint16_t*)base())[i];
+            return t == 1u ? h2f_bits(h) : b2f_bits(h);
+        }
+        [nonmutating] set {
+            uint t = tag();
+            if (t == 0u) ((float*)base())[i] = newValue;
+            else ((uint16_t*)base())[i] = t == 1u ? f2h_bits(newValue) : f2b_bits(newValue);
+        }
+    }
+#else
+    __subscript(DK_U64 i) -> float {
+        get { return ((float*)p)[i]; }
+        [nonmutating] set { ((float*)p)[i] = newValue; }
+    }
+#endif
+};
+#ifdef DK_TAGGED
+TP operator+(TP t, DK_U64 k) { return TP(t.p + k * (t.tag() == 0u ? 4ull : 2ull)); }
+#else
+TP operator+(TP t, DK_U64 k) { return TP(t.p + k * 4ull); }
+#endif
+extension bool {
+    __implicit_conversion(900) __init(TP t) { this = (t.p & DEV_ADDR_MASK) != 0ull; }
+}
+#elif defined(DK_TAGGED)
 struct Ref {
     DK_U64 p;   // the element's address
     unsigned int tag;
@@ -405,7 +513,7 @@ DK_KERNEL(dk_ewop_51) { ew_run<51>(a DK_IDA); }
 
 // ── Reductions (256 threads per block, one atomic per block) ─────────────────
 __device__ void block_add(float v, dk_global float* out DK_IDS) {
-#if defined(__METAL_VERSION__)
+#if defined(DK_SIMD)
     // each simdgroup's sum, then the first simdgroup adds those
     v = simd_sum(v);
     if (dk_lane == 0u) dk_red[dk_simd] = v;
@@ -469,7 +577,7 @@ DK_KERNEL(dk_mul_row_acc) {
 // out[r] = sum_c x[r,c]                                       n = rows
 DK_KERNEL(dk_rowsum) {
     unsigned int C = a.u[0];
-#if defined(__METAL_VERSION__)
+#if defined(DK_SIMD)
     GSR(r, N) {
         float s = 0.0f;
         for (unsigned int c = dk_lane; c < C; c += 32u) s += CF(0)[r * C + c];
@@ -530,7 +638,7 @@ __device__ __forceinline__ bool attn_vis(unsigned int flags, unsigned int w, int
 // visible key come out 0.
 DK_KERNEL(dk_softmax_rows) {
     unsigned int C = a.u[0];
-#if defined(__METAL_VERSION__)
+#if defined(DK_SIMD)
     GSR(r, N) {
         TP x = CF(0) + r * C; TP o = F(1) + r * C;
         unsigned int fl = a.u[2];
@@ -576,7 +684,7 @@ DK_KERNEL(dk_softmax_rows) {
 // p0 = g, p1 = y (the forward output), p2 = dx
 DK_KERNEL(dk_softmax_bwd) {
     unsigned int C = a.u[0];
-#if defined(__METAL_VERSION__)
+#if defined(DK_SIMD)
     GSR(r, N) {
         TP g = CF(0) + r * C; TP y = CF(1) + r * C; TP dx = F(2) + r * C;
         float s = 0.0f;
@@ -632,10 +740,10 @@ DK_KERNEL(dk_transpose) {
 // p4 = lse [H*S] (fp32), p5 = dout, p7 = D [H*S] (fp32, rowsum(dout * out),
 // written by dk_attn_bwd_q for dk_attn_bwd_kv). Launched over
 // 256 * H * ceil(rows / 16) threads (rows: S, or L for dk_attn_bwd_kv).
-#if defined(__METAL_VERSION__) && defined(DK_ATTN64)
+#if defined(DK_TG32K) && defined(DK_ATTN64)
 #define ATTN_MAXD 64   // a second Metal build for head dims up to 64, where 16 x 16 tiles fit
 #define ATTN_T 16
-#elif defined(__METAL_VERSION__)
+#elif defined(DK_TG32K)
 #define ATTN_MAXD 128
 #define ATTN_T 8   // 64 threads per block (see Portability above)
 #else
@@ -869,7 +977,7 @@ DK_KERNEL(dk_attn_bwd_kv) {
 DK_KERNEL(dk_ce_fwd) {
     unsigned int C = a.u[0];
     float acc = 0.0f;
-#if defined(__METAL_VERSION__)
+#if defined(DK_SIMD)
     GSR(r, N) {
         TP x = CF(0) + r * C;
         float mx = -3.0e38f;
@@ -895,7 +1003,7 @@ DK_KERNEL(dk_ce_fwd) {
 // dlogits += seed[0] * (softmax - onehot) / rows; p3 = seed (the loss's grad)
 DK_KERNEL(dk_ce_bwd) {
     unsigned int C = a.u[0];
-#if defined(__METAL_VERSION__)
+#if defined(DK_SIMD)
     GSR(r, N) {
         TP x = CF(0) + r * C; TP d = F(2) + r * C;
         float sc = CF(3)[0] * a.f[0];
@@ -948,7 +1056,7 @@ DK_KERNEL(dk_ewloss_bwd) {
 // p0 = x, p1 = xhat out, p2 = inv std [rows]
 DK_KERNEL(dk_layernorm) {
     unsigned int C = a.u[0];
-#if defined(__METAL_VERSION__)
+#if defined(DK_SIMD)
     GSR(r, N) {
         TP x = CF(0) + r * C; TP o = F(1) + r * C;
         float m = 0.0f;
@@ -974,7 +1082,7 @@ DK_KERNEL(dk_layernorm) {
 // dx += inv * (g - mean(g) - xhat * mean(g * xhat)); p0 = g, p1 = xhat, p2 = inv, p3 = dx
 DK_KERNEL(dk_layernorm_bwd) {
     unsigned int C = a.u[0];
-#if defined(__METAL_VERSION__)
+#if defined(DK_SIMD)
     GSR(r, N) {
         TP g = CF(0) + r * C; TP y = CF(1) + r * C; TP dx = F(3) + r * C;
         float mg = 0.0f, mgy = 0.0f;
@@ -1181,7 +1289,7 @@ DK_KERNEL(dk_bias_channels) {
 #define TSPLIT(q, M) for (unsigned int q = threadIdx.x; q < (M); q += blockDim.x)
 // The block's total of v, returned to every thread.
 __device__ dk_double block_sum_d(dk_double v DK_IDS) {
-#if defined(__METAL_VERSION__)
+#if defined(DK_SIMD)
     __syncthreads();   // the previous call's readers are done with dk_red
     v = simd_sum(v);
     if (dk_lane == 0u) dk_red[dk_simd] = v;
@@ -1797,8 +1905,19 @@ DK_KERNEL(dk_resize_bwd) {
 // fp16 / bf16 values held as unsigned shorts, converted with round to
 // nearest even (the same bits as float16.h's f32_to_fp16 / f32_to_bf16).
 // Hardware conversions: v_cvt on AMD (_Float16), cvt.rn on NVIDIA, half on
-// Apple GPUs.
-#if defined(__METAL_VERSION__)
+// Apple GPUs; on Vulkan GLSL.std.450's PackHalf2x16 / UnpackHalf2x16, which
+// need no shaderFloat16.
+#if defined(DK_VULKAN)
+uint16_t f2h_bits(float f) {
+    float2 v = float2(f, 0.0f);
+    return (uint16_t)spirv_asm { result:$$uint = OpExtInst glsl450 PackHalf2x16 $v };
+}
+float h2f_bits(uint16_t b) {
+    uint h = (uint)b;
+    float2 v = spirv_asm { result:$$float2 = OpExtInst glsl450 UnpackHalf2x16 $h };
+    return v.x;
+}
+#elif defined(__METAL_VERSION__)
 unsigned short f2h_bits(float f) { return as_type<ushort>(half(f)); }
 float h2f_bits(unsigned short b) { return float(as_type<half>(b)); }
 #elif defined(__HIPCC_RTC__) || defined(__HIP__)
@@ -1893,9 +2012,74 @@ DK_KERNEL(dk_spmm_vgrad) {
     }
 }
 
-// ── Metal only: GEMMs and copies (rocBLAS / cuBLAS and the copy engines' role
-// on the other backends; MpsBackend launches these by name) ────────────────
-#if defined(__METAL_VERSION__)
+// ── Metal and Vulkan: GEMMs, convolutions and copies (rocBLAS / cuBLAS,
+// MIOpen / cuDNN and the copy engines' role on the other backends;
+// MpsBackend and VulkanBackend launch these by name) ───────────────────────
+#if defined(__METAL_VERSION__) || defined(DK_VULKAN)
+#if defined(DK_VULKAN)
+// Vulkan has no simdgroup matrices: on a 32-wide subgroup, lane l holds
+// elements 2l and 2l + 1 (row-major) of each 8 x 8 matrix, so a simdgroup's
+// fragments are a register tile per lane. mk_mma (below) multiplies them
+// straight from the shared tiles; the rest -- loads, stores and products
+// with the diagonal alpha and beta -- exchange values through the subgroup.
+// Threadgroup memory is one array (its size per kernel: gen_device_kernels.sh
+// sets DK_TG_FLOATS) and TGPtr an offset into it.
+#ifndef DK_TG_FLOATS
+#define DK_TG_FLOATS 3072
+#endif
+static groupshared float dk_tg[DK_TG_FLOATS];
+struct TGPtr {
+    uint o;
+    __init(uint off) { o = off; }
+    __subscript(uint i) -> float {
+        get { return dk_tg[o + i]; }
+        [nonmutating] set { dk_tg[o + i] = newValue; }
+    }
+};
+TGPtr operator+(TGPtr p, uint k) { return TGPtr(p.o + k); }
+namespace mem_flags { static const int mem_threadgroup = 1; }
+void threadgroup_barrier(int flags) { GroupMemoryBarrierWithGroupSync(); }
+void simdgroup_barrier(int flags) { GroupMemoryBarrierWithWaveSync(); }
+struct simdgroup_float8x8 {
+    float2 v;
+    __init(float d) {   // d on the diagonal, as Metal's
+        uint l = WaveGetLaneIndex(), r = l / 4u, c = 2u * (l % 4u);
+        v = float2(r == c ? d : 0.0f, r == c + 1u ? d : 0.0f);
+    }
+};
+// d = a b + c: lane (r, c0) gathers row r of a and columns c0, c0 + 1 of b
+void simdgroup_multiply_accumulate(out simdgroup_float8x8 d, simdgroup_float8x8 a, simdgroup_float8x8 b,
+                                   simdgroup_float8x8 c) {
+    uint l = WaveGetLaneIndex(), r = l / 4u;
+    float2 s = c.v;
+    [unroll]
+    for (uint k = 0; k < 8u; k++) {
+        float2 ar = WaveShuffle(a.v, r * 4u + k / 2u);
+        float ak = (k & 1u) != 0u ? ar.y : ar.x;
+        s += ak * WaveShuffle(b.v, k * 4u + l % 4u);
+    }
+    d.v = s;
+}
+void simdgroup_multiply(out simdgroup_float8x8 d, simdgroup_float8x8 a, simdgroup_float8x8 b) {
+    simdgroup_multiply_accumulate(d, a, b, simdgroup_float8x8(0.0f));
+}
+void simdgroup_load(out simdgroup_float8x8 m, float* p, ulong ld) {
+    uint l = WaveGetLaneIndex();
+    float* q = p + (ulong)(l / 4u) * ld + 2u * (l % 4u);
+    m.v = float2(q[0], q[1]);
+}
+void simdgroup_store(simdgroup_float8x8 m, float* p, ulong ld) {
+    uint l = WaveGetLaneIndex();
+    float* q = p + (ulong)(l / 4u) * ld + 2u * (l % 4u);
+    q[0] = m.v.x;
+    q[1] = m.v.y;
+}
+void simdgroup_store(simdgroup_float8x8 m, TGPtr p, uint ld) {
+    uint l = WaveGetLaneIndex(), o = (l / 4u) * ld + 2u * (l % 4u);
+    p[o] = m.v.x;
+    p[o + 1u] = m.v.y;
+}
+#endif
 // A strided batch of c_i = alpha op(a_i) op(b_i) + beta c_i (device.h's
 // DevGemm), row-major: a and b fp32, fp16 or bf16 (MK_T), c any of them
 // (ct), products accumulated in fp32 on the 8 x 8 simdgroup matrix units.
@@ -1930,6 +2114,30 @@ inline void mk_st(ulong base, ulong i, uint t, float v) {
 // or k-major As [BK][BM] (AK) and n-major Bs [BN][BK] (BNM) where that lets
 // neighbouring threads store to neighbouring words; the matrix loads
 // transpose them back.
+#if defined(DK_VULKAN)
+// Lane (r, c0) of the simdgroup at (sr, sc) accumulates rows sr + 8i + r and
+// columns sc + 8j + c0, c0 + 1 of the tile.
+__generic<let BM : uint, let BN : uint, let BK : uint, let SM : uint, let SN : uint, let AK : bool = false, let BNM : bool = false>
+void mk_mma(TGPtr As, TGPtr Bs, inout simdgroup_float8x8 acc[SM][SN], uint sr, uint sc) {
+    uint l = WaveGetLaneIndex(), r = l / 4u, c0 = 2u * (l % 4u);
+    [unroll]
+    for (uint k = 0; k < BK; k++) {
+        float av[SM];
+        float2 bv[SN];
+        [unroll]
+        for (uint i = 0; i < SM; i++) av[i] = AK ? As[k * BM + sr + i * 8u + r] : As[(sr + i * 8u + r) * BK + k];
+        [unroll]
+        for (uint j = 0; j < SN; j++) {
+            uint n = sc + j * 8u + c0;
+            bv[j] = BNM ? float2(Bs[n * BK + k], Bs[(n + 1u) * BK + k]) : float2(Bs[k * BN + n], Bs[k * BN + n + 1u]);
+        }
+        [unroll]
+        for (uint i = 0; i < SM; i++)
+            [unroll]
+            for (uint j = 0; j < SN; j++) acc[i][j].v += av[i] * bv[j];
+    }
+}
+#else
 template <uint BM, uint BN, uint BK, uint SM, uint SN, bool AK = false, bool BNM = false>
 inline void mk_mma(threadgroup float* As, threadgroup float* Bs, thread simdgroup_float8x8 (&acc)[SM][SN], uint sr, uint sc) {
     #pragma clang loop unroll(full)
@@ -1951,6 +2159,7 @@ inline void mk_mma(threadgroup float* As, threadgroup float* Bs, thread simdgrou
             for (uint j = 0; j < SN; j++) simdgroup_multiply_accumulate(acc[i][j], fa[i], fb[j], acc[i][j]);
     }
 }
+#endif
 
 template <uint T, bool TA, bool TB, uint BM, uint BN, uint BK>
 inline void mk_gemm(constant DkGemm& g, uint3 tg, uint tid, uint sg, threadgroup float* As, threadgroup float* Bs) {
@@ -2045,12 +2254,20 @@ inline void mk_gemm(constant DkGemm& g, uint3 tg, uint tid, uint sg, threadgroup
             simdgroup_barrier(mem_flags::mem_threadgroup);
         }
 }
+#if defined(DK_VULKAN)
+#define MK_GEMM(name, T, TA, TB, BM, BN, BK) \
+[shader("compute")] [numthreads(128, 1, 1)] \
+void name(uniform DkGemm g, uint3 tg : SV_GroupID, uint tid : SV_GroupIndex) { \
+    mk_gemm<T, TA, TB, BM, BN, BK>(g, tg, tid, tid / 32u, TGPtr(0u), TGPtr(BM * BK)); \
+}
+#else
 #define MK_GEMM(name, T, TA, TB, BM, BN, BK) \
 kernel void name(constant DkGemm& g [[buffer(0)]], uint3 tg [[threadgroup_position_in_grid]], \
                  uint tid [[thread_index_in_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]]) { \
     threadgroup float As[BM * BK], Bs[BK * BN]; \
     mk_gemm<T, TA, TB, BM, BN, BK>(g, tg, tid, sg, As, Bs); \
 }
+#endif
 #define MK_GEMMS(T, sfx) \
     MK_GEMM(mk_gemm32_nn_##sfx, T, false, false, 32u, 32u, 32u) \
     MK_GEMM(mk_gemm32_tn_##sfx, T, true, false, 32u, 32u, 32u) \
@@ -2371,12 +2588,20 @@ inline void mk_conv_bwd_w(constant DkConv& c, uint3 tg, uint tid, uint sg, threa
 }
 
 // mk_conv_<op><shape>_<type>: shapes 32 (32 x 32), 64 (64 x 64), w (32 x 128), s (8 x 128)
+#if defined(DK_VULKAN)
+#define MK_CONV(name, call, BM, BN) \
+[shader("compute")] [numthreads(128, 1, 1)] \
+void name(uniform DkConv c, uint3 tg : SV_GroupID, uint tid : SV_GroupIndex) { \
+    call(c, tg, tid, tid / 32u, TGPtr(0u), TGPtr(BM * 16u > 8u * 64u ? BM * 16u : 8u * 64u)); \
+}
+#else
 #define MK_CONV(name, call, BM, BN) \
 kernel void name(constant DkConv& c [[buffer(0)]], uint3 tg [[threadgroup_position_in_grid]], \
                  uint tid [[thread_index_in_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]]) { \
     threadgroup float As[BM * 16u > 8u * 64u ? BM * 16u : 8u * 64u], Bs[16u * BN]; \
     call(c, tg, tid, sg, As, Bs); \
 }
+#endif
 #define MK_CONV_SHAPES(op, T, sfx) \
     MK_CONV(mk_conv_##op##32_##sfx, (mk_conv_##op<T, 32u, 32u, 16u, 2u>), 32u, 32u) \
     MK_CONV(mk_conv_##op##64_##sfx, (mk_conv_##op<T, 64u, 64u, 16u, 2u>), 64u, 64u) \
@@ -2392,6 +2617,14 @@ MK_CONV(mk_conv_bwd_w32_f32, (mk_conv_bwd_w<32u, 32u, 16u, 2u>), 32u, 32u)
 MK_CONV(mk_conv_bwd_w64_f32, (mk_conv_bwd_w<64u, 64u, 16u, 2u>), 64u, 64u)
 MK_CONV(mk_conv_bwd_ww_f32, (mk_conv_bwd_w<32u, 128u, 16u, 4u>), 32u, 128u)
 MK_CONV(mk_conv_bwd_ws_f32, (mk_conv_bwd_w<8u, 128u, 16u, 4u>), 8u, 128u)
+#if defined(DK_VULKAN)
+// dst[i] = src[i] for n 32-bit words: p0 src, p2 dst, u7 = n (VulkanBackend's
+// copies and staged uploads: a dispatch, where MoltenVK would switch to a
+// blit encoder for vkCmdCopyBuffer)
+DK_KERNEL(mk_copy) { GS(i, N) ((uint*)a.p[2])[i] = ((uint*)a.p[0])[i]; }
+#endif
+#endif
+#if defined(__METAL_VERSION__)
 // dst[i] = src[i] for n 32-bit words: p0 src, p2 dst, u7 = n (bit-exact,
 // unlike a float copy of words holding two 16-bit values)
 kernel void mk_copy(constant DevArgs_& a [[buffer(0)]], uint i [[thread_position_in_grid]]) {

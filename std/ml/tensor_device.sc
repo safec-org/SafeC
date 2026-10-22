@@ -599,8 +599,18 @@ static void tdev_matmul_backward_(void* selfPtr) {
 }
 
 // gb[c] += sum_r d[r, c] (* x[r, c] when x is set): blocks of 256 columns
-// by slices of the rows.
+// by slices of the rows. The kernel adds into fp32 (atomically across the
+// slices), so a 16-bit gb (an activation's gradient: adaLN's scale and
+// shift) takes the sum through fp32 scratch.
 static int tdev_colsum_(int d, unsigned long src, unsigned long dst, unsigned long x, unsigned long cols, unsigned long rows) {
+    if (dev_tag_(dst) != 0UL) {
+        unsigned long s = device_mem_alloc_(d, sizeof(float) * cols);
+        if (s == 0UL) return 0;
+        int ok = tdev_fill_(d, s, cols, (float)0.0) && tdev_colsum_(d, src, s, x, cols, rows) &&
+                 tdev_ew_launch_(d, EW_ACC, s, 0UL, dst, 0UL, (float)0.0, (float)0.0, cols);
+        device_mem_free_(d, s, sizeof(float) * cols);
+        return ok;
+    }
     unsigned long blocks = (cols + 255UL) / 256UL;
     unsigned long S = rows / 4UL;
     if (S * blocks > 2048UL) S = 2048UL / blocks;

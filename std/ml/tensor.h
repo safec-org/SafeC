@@ -225,8 +225,9 @@ trait DeviceTensor : Tensor {
 // One trait per GPU backend, each inheriting DeviceTensor: code written for
 // one backend's buffers (a hand-written kernel, a vendor library call) asks
 // for its tensor. device_buffer() is the values' buffer on that backend --
-// a hipDeviceptr, a CUdeviceptr, an MTLBuffer -- and 0 while the tensor is
-// elsewhere: check device() first, or place() it.
+// a hipDeviceptr, a CUdeviceptr, an MTLBuffer's GPU address, a Vulkan buffer
+// device address -- and 0 while the tensor is elsewhere: check device()
+// first, or place() it.
 trait RocmTensor : DeviceTensor {
     unsigned long device_buffer() const;
 }
@@ -234,6 +235,14 @@ trait CudaTensor : DeviceTensor {
     unsigned long device_buffer() const;
 }
 trait MpsTensor : DeviceTensor {
+    unsigned long device_buffer() const;
+}
+trait VulkanTensor : DeviceTensor {
+    unsigned long device_buffer() const;
+}
+// WebGPU's device_buffer() is a byte offset into the backend's device heap
+// (gpu_webgpu.h's WebGpuBuf.handle), the element type in its top bits.
+trait WebGpuTensor : DeviceTensor {
     unsigned long device_buffer() const;
 }
 

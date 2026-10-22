@@ -2,7 +2,8 @@
 // SafeC Standard Library — devices: where a tensor's values live.
 //
 // Every tensor has a device: DEVICE_CPU, or a GPU backend (DEVICE_ROCM for
-// AMD, DEVICE_CUDA for NVIDIA, DEVICE_MPS for Apple Silicon). An op runs on
+// AMD, DEVICE_CUDA for NVIDIA, DEVICE_MPS for Apple Silicon, and the
+// cross-vendor DEVICE_VULKAN and DEVICE_WEBGPU). An op runs on
 // the device of its operands -- if any operand lives on a GPU, the op runs
 // there, uploading the others -- and its result lives there too, so a model
 // whose parameters are on a GPU trains on that GPU through the same code
@@ -18,16 +19,19 @@
 //   by default  device_set_default(d) for everything that asks for
 //               device_default();
 //   automatically device_auto(): the first usable GPU among the backends the
-//               program was built with (ROCm, CUDA, Metal), else the CPU.
-//               SAFEC_DEVICE=cpu|rocm|cuda|mps in the environment overrides it.
+//               program was built with (ROCm, CUDA, Metal, then Vulkan and
+//               WebGPU), else the CPU. SAFEC_DEVICE=cpu|rocm|cuda|mps|vulkan|
+//               webgpu in the environment overrides it.
 //
 // Backends are enabled at build time by the program's features (safeguard
-// build --features rocm / cuda / mps, reaching the sources as
-// SAFEC_FEATURE_ROCM, SAFEC_FEATURE_CUDA, SAFEC_FEATURE_MPS); a program built
+// build --features rocm / cuda / mps / vulkan / webgpu, reaching the sources
+// as SAFEC_FEATURE_ROCM, ..._CUDA, ..._MPS, ..._VULKAN, ..._WEBGPU); a program built
 // without any runs everything on the CPU and links no GPU library. Link:
 //   rocm  -lamdhip64 -lhiprtc -lrocblas (-lMIOpen for MIOpen convolutions)
 //   cuda  -lcuda -lcublas -lnvrtc (-lcudnn for cuDNN convolutions)
 //   mps   -framework Metal -framework Foundation -lobjc
+//   vulkan -lvulkan (the Vulkan loader; on macOS Homebrew's vulkan-loader and
+//          molten-vk, -L/opt/homebrew/lib)
 //
 // Each backend is a struct of static functions (the interface below),
 // resolved at compile time; the runtime dispatch in device.sc calls them once
@@ -39,14 +43,16 @@ namespace std {
 #define DEVICE_CPU   0
 #define DEVICE_ROCM  1
 #define DEVICE_CUDA  2
-#define DEVICE_MPS   3
-#define DEVICE_COUNT 4
+#define DEVICE_MPS    3
+#define DEVICE_VULKAN 4
+#define DEVICE_WEBGPU 5
+#define DEVICE_COUNT  6
 
 // 1 if the program was built with the backend (always for DEVICE_CPU).
 int device_compiled(int device);
 // 1 if the backend is compiled in and a GPU is present (initializes it).
 int device_available(int device);
-// The first available GPU (ROCm, then CUDA, then Metal), else DEVICE_CPU;
+// The first available GPU (ROCm, CUDA, Metal, Vulkan, then WebGPU), else DEVICE_CPU;
 // SAFEC_DEVICE in the environment picks one explicitly.
 int device_auto();
 // What device_default() returns: set with device_set_default (a device that
@@ -55,7 +61,7 @@ int device_auto();
 #define DEVICE_AUTO (-1)
 void device_set_default(int device);
 int  device_default();
-// "cpu", "rocm", "cuda", "mps".
+// "cpu", "rocm", "cuda", "mps", "vulkan", "webgpu".
 const &char device_name(int device);
 // Waits for the device's queued work (no-op on the CPU). 1 on success.
 int device_sync(int device);
@@ -81,8 +87,8 @@ struct DeviceStats {
 struct DeviceStats device_stats(int device);
 void device_stats_reset(int device);
 
-// The device traits (DeviceTensor, RocmTensor, CudaTensor, MpsTensor) are in
-// tensor.h, next to trait Tensor they inherit.
+// The device traits (DeviceTensor, RocmTensor, CudaTensor, MpsTensor,
+// VulkanTensor) are in tensor.h, next to trait Tensor they inherit.
 
 // ── Backends ─────────────────────────────────────────────────────────────────
 // A device kernel launch: the kernel (DK_* in device_kernels.h), how many
@@ -157,11 +163,13 @@ struct DevConv {
 };
 
 // What a GPU backend implements: a struct (device_rocm.sc's RocmBackend,
-// device_cuda.sc's CudaBackend, device_mps.sc's MpsBackend) with these static
+// device_cuda.sc's CudaBackend, device_mps.sc's MpsBackend,
+// device_vulkan.sc's VulkanBackend) with these static
 // functions, reached through the type parameter of
 // device_register_backend_<B> (traits name instance methods only, so this
 // static interface is spelled out here). Device memory is named by unsigned
-// long handles: device addresses on ROCm / CUDA, an MTLBuffer on Metal. Each
+// long handles: device addresses on ROCm / CUDA, an MTLBuffer's GPU address
+// on Metal, a buffer device address on Vulkan. Each
 // call is queued on the backend's stream (ordered with gpu_rocm.h /
 // gpu_cuda.h / gpu_mps.h work) unless it says it waits.
 //   static int  available();
@@ -247,16 +255,19 @@ void device_register_backend_(int device, const &B tag) {
 }
 
 // Each backend's registration (device_rocm.sc / device_cuda.sc /
-// device_mps.sc).
+// device_mps.sc / device_vulkan.sc / device_webgpu.sc).
 void device_rocm_register_();
 void device_cuda_register_();
 void device_mps_register_();
+void device_vulkan_register_();
+void device_webgpu_register_();
 
 // Called by device.sc on first use; the program's own translation units
 // define it (weakly, once per unit -- they are identical) for the backends
 // their features enable, which is what links a backend into a program.
 void device_link_backends_() __attribute__((weak));
-#if defined(SAFEC_FEATURE_ROCM) || defined(SAFEC_FEATURE_CUDA) || defined(SAFEC_FEATURE_MPS)
+#if defined(SAFEC_FEATURE_ROCM) || defined(SAFEC_FEATURE_CUDA) || defined(SAFEC_FEATURE_MPS) || \
+    defined(SAFEC_FEATURE_VULKAN) || defined(SAFEC_FEATURE_WEBGPU)
 void device_link_backends_() __attribute__((weak)) {
 #if defined(SAFEC_FEATURE_ROCM)
     device_rocm_register_();
@@ -266,6 +277,12 @@ void device_link_backends_() __attribute__((weak)) {
 #endif
 #if defined(SAFEC_FEATURE_MPS)
     device_mps_register_();
+#endif
+#if defined(SAFEC_FEATURE_VULKAN)
+    device_vulkan_register_();
+#endif
+#if defined(SAFEC_FEATURE_WEBGPU)
+    device_webgpu_register_();
 #endif
 }
 #endif
