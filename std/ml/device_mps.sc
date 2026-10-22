@@ -307,6 +307,13 @@ static void* dmps_make_pipe_(int tagged, const char* name, unsigned long threads
     }
 }
 
+// The kernels with a simdgroup per row on Metal (device_kernels.cu's GSR):
+// 32 threads for each of the n rows.
+static int dmps_rows_(int kernel) {
+    return kernel == DK_ROWSUM || kernel == DK_SOFTMAX_ROWS || kernel == DK_SOFTMAX_BWD || kernel == DK_CE_FWD ||
+           kernel == DK_CE_BWD || kernel == DK_LAYERNORM || kernel == DK_LAYERNORM_BWD;
+}
+
 // Threads per threadgroup for a DK_* kernel.
 static unsigned long dmps_block_(int kernel) {
     if (kernel == DK_ATTN_FWD || kernel == DK_ATTN_BWD_Q || kernel == DK_ATTN_BWD_KV) return DMPS_ATTN_T * DMPS_ATTN_T;
@@ -553,12 +560,15 @@ struct DmpsConv_ {
 static unsigned long dmps_shape_rows_(int shape) { return shape == DMPS_SHAPE_64 ? 64UL : (shape == DMPS_SHAPE_S ? 8UL : 32UL); }
 static unsigned long dmps_shape_cols_(int shape) { return shape == DMPS_SHAPE_64 ? 64UL : (shape == DMPS_SHAPE_32 ? 32UL : 128UL); }
 
-// The shape for an m x n product: no more rows than it has, the wide
-// shapes while they still give the GPU enough threadgroups.
-static int dmps_conv_shape_(unsigned long m, unsigned long n) {
+// The shape for an m x n product (op 2: the weight gradient): 32 x 128 is
+// the fastest wherever it leaves the GPU enough threadgroups (2 TFLOP/s
+// on an M1 Pro), 8 x 128 for one to eight rows; the weight gradient's n
+// is short, so it takes 64 x 64 from 64 rows on, else 32 x 32.
+static int dmps_conv_shape_(int op, unsigned long m, unsigned long n) {
+    if (op == 2) return m >= 64UL ? DMPS_SHAPE_64 : DMPS_SHAPE_32;
     if (m <= 8UL && (n + 127UL) / 128UL >= DMPS_GEMM_FILL) return DMPS_SHAPE_S;
-    if (m <= 32UL) return ((n + 127UL) / 128UL) * ((m + 31UL) / 32UL) >= DMPS_GEMM_FILL ? DMPS_SHAPE_W : DMPS_SHAPE_32;
-    return ((m + 63UL) / 64UL) * ((n + 63UL) / 64UL) >= DMPS_GEMM_FILL ? DMPS_SHAPE_64 : DMPS_SHAPE_32;
+    if (((n + 127UL) / 128UL) * ((m + 31UL) / 32UL) >= DMPS_GEMM_FILL) return DMPS_SHAPE_W;
+    return m >= 64UL && ((m + 63UL) / 64UL) * ((n + 63UL) / 64UL) >= DMPS_GEMM_FILL ? DMPS_SHAPE_64 : DMPS_SHAPE_32;
 }
 
 // The pipeline for conv kernel op (0 fwd, 1 bwd_x, 2 bwd_w), a shape, type t.
@@ -788,7 +798,7 @@ int MpsBackend::conv(const &DevConv c) {
         n = c.batch * (((unsigned long)k.Hi + (unsigned long)k.sH - 1UL) / (unsigned long)k.sH) *
             (((unsigned long)k.Wi + (unsigned long)k.sW - 1UL) / (unsigned long)k.sW);
     }
-    int shape = dmps_conv_shape_(m, n * phases);
+    int shape = dmps_conv_shape_(op, m, n * phases);
     void* pipe = dmps_conv_pipe_(op, shape, c.dtype);
     if (pipe == (void*)0) { device_note_cpu_launch_(DEVICE_MPS); return 0; }   // im2col + GEMM instead
     unsigned long groupsX = (n + dmps_shape_cols_(shape) - 1UL) / dmps_shape_cols_(shape);
@@ -823,7 +833,7 @@ int MpsBackend::launch(int kernel, unsigned long n, const &DevArgs args) {
     void* pipe = dmps_pipe_(kernel, tagged);
     if (pipe == (void*)0) return dmps_cpu_launch_(kernel, n, args, tagged);
     unsigned long threads = dmps_block_(kernel);
-    unsigned long groups = (n + DMPS_BLOCK - 1UL) / DMPS_BLOCK;
+    unsigned long groups = ((dmps_rows_(kernel) ? 32UL * n : n) + DMPS_BLOCK - 1UL) / DMPS_BLOCK;
     if (groups > DMPS_MAX_GROUPS) groups = DMPS_MAX_GROUPS;
     if (groups == 0UL) groups = 1UL;
     if (threads != DMPS_BLOCK) {
