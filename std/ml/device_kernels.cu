@@ -25,7 +25,11 @@
 //   - block reductions (block_add, block_sum_d) use simdgroup sums and a
 //     small threadgroup scratch the kernel declares (dk_red);
 //   - attention tiles are 8 x 8 instead of 16 x 16 (ATTN_T): Metal's 32 KB
-//     of threadgroup memory doesn't hold four 16-row tiles of 128 floats.
+//     of threadgroup memory doesn't hold four 16-row tiles of 128 floats;
+//   - integer division by a run-time value costs dozens of cycles on Apple
+//     GPUs, so the hot index arithmetic divides with DK_UDIV / DK_UMOD: on
+//     Metal through a float reciprocal made exact by correction (dk_udiv,
+//     the reciprocal declared by DK_RECIP), elsewhere plain / and %.
 #if defined(__METAL_VERSION__)
 #include <metal_stdlib>
 using namespace metal;
@@ -68,6 +72,15 @@ inline float fmaxf(float x, float y) { return metal::fmax(x, y); }
 inline float fmaf(float x, float y, float z) { return metal::fma(x, y, z); }
 inline unsigned int __float_as_uint(float f) { return as_type<uint>(f); }
 inline float __uint_as_float(unsigned int u) { return as_type<float>(u); }
+inline unsigned int dk_udiv(unsigned int q, unsigned int d, float inv) {
+    unsigned int r = (unsigned int)((float)q * inv);
+    while (r * d > q) r--;
+    while ((r + 1u) * d <= q) r++;
+    return r;
+}
+#define DK_RECIP(inv, d) float inv = 1.0f / (float)(d);
+#define DK_UDIV(q, d, inv) dk_udiv((q), (d), (inv))
+#define DK_UMOD(q, d, inv) ((q) - dk_udiv((q), (d), (inv)) * (d))
 #else
 #define DK_U64 unsigned long long
 #define dk_double double
@@ -77,6 +90,9 @@ inline float __uint_as_float(unsigned int u) { return as_type<float>(u); }
 #define DK_KERNEL(name) extern "C" __global__ void name(DevArgs a)
 #define DK_IDS
 #define DK_IDA
+#define DK_RECIP(inv, d)
+#define DK_UDIV(q, d, inv) q / d
+#define DK_UMOD(q, d, inv) q % d
 struct DevArgs {
     DK_U64 p[8];
     unsigned int u[8];
@@ -947,10 +963,11 @@ DK_KERNEL(dk_clip_scale) {
 DK_KERNEL(dk_im2col) {
     CONV_DECODE
     unsigned int OP = OH * OW, BP = B * OP;
+    DK_RECIP(iBP, BP) DK_RECIP(iOP, OP) DK_RECIP(iOW, OW) DK_RECIP(iKW, KW) DK_RECIP(iKH, KH) DK_RECIP(iKK, KW * KH)
     GS(i, N) {
-        unsigned int q = i % BP, r = i / BP;                 // column, row of col
-        unsigned int b = q / OP, p = q % OP, oh = p / OW, ow = p % OW;
-        unsigned int kw = r % KW, kh = (r / KW) % KH, c = r / (KW * KH);
+        unsigned int q = DK_UMOD(i, BP, iBP), r = DK_UDIV(i, BP, iBP);                 // column, row of col
+        unsigned int b = DK_UDIV(q, OP, iOP), p = DK_UMOD(q, OP, iOP), oh = DK_UDIV(p, OW, iOW), ow = DK_UMOD(p, OW, iOW);
+        unsigned int kw = DK_UMOD(r, KW, iKW), kh = DK_UMOD((DK_UDIV(r, KW, iKW)), KH, iKH), c = DK_UDIV(r, (KW * KH), iKK);
         int y = (int)oh * sh - ph + (int)kh * dh, x = (int)ow * sw - pw + (int)kw * dw;
         F(1)[i] = (y >= 0 && y < (int)H && x >= 0 && x < (int)W)
             ? CF(0)[((b * C + c) * H + (unsigned int)y) * W + (unsigned int)x] : 0.0f;
@@ -960,10 +977,11 @@ DK_KERNEL(dk_im2col) {
 DK_KERNEL(dk_col2im) {
     CONV_DECODE
     unsigned int OP = OH * OW, BP = B * OP;
+    DK_RECIP(iBP, BP) DK_RECIP(iOP, OP) DK_RECIP(iOW, OW) DK_RECIP(iKW, KW) DK_RECIP(iKH, KH) DK_RECIP(iKK, KW * KH)
     GS(i, N) {
-        unsigned int q = i % BP, r = i / BP;
-        unsigned int b = q / OP, p = q % OP, oh = p / OW, ow = p % OW;
-        unsigned int kw = r % KW, kh = (r / KW) % KH, c = r / (KW * KH);
+        unsigned int q = DK_UMOD(i, BP, iBP), r = DK_UDIV(i, BP, iBP);
+        unsigned int b = DK_UDIV(q, OP, iOP), p = DK_UMOD(q, OP, iOP), oh = DK_UDIV(p, OW, iOW), ow = DK_UMOD(p, OW, iOW);
+        unsigned int kw = DK_UMOD(r, KW, iKW), kh = DK_UMOD((DK_UDIV(r, KW, iKW)), KH, iKH), c = DK_UDIV(r, (KW * KH), iKK);
         int y = (int)oh * sh - ph + (int)kh * dh, x = (int)ow * sw - pw + (int)kw * dw;
         if (y >= 0 && y < (int)H && x >= 0 && x < (int)W)
             atomicAdd(&FA(1)[((b * C + c) * H + (unsigned int)y) * W + (unsigned int)x], CF(0)[i]);
@@ -973,8 +991,9 @@ DK_KERNEL(dk_col2im) {
 // u3 = 1 to accumulate                                        n = A*B2*P
 DK_KERNEL(dk_swap01) {
     unsigned int A = a.u[0], B2 = a.u[1], P = a.u[2];
+    DK_RECIP(iP, P) DK_RECIP(iB2, B2)
     GS(i, N) {
-        unsigned int p = i % P, t = i / P, bi = t % B2, ai = t / B2;   // i indexes 'in'
+        unsigned int p = DK_UMOD(i, P, iP), t = DK_UDIV(i, P, iP), bi = DK_UMOD(t, B2, iB2), ai = DK_UDIV(t, B2, iB2);   // i indexes 'in'
         unsigned int o = (bi * A + ai) * P + p;
         if (a.u[3]) F(1)[o] += CF(0)[i]; else F(1)[o] = CF(0)[i];
     }
@@ -1763,10 +1782,14 @@ DK_KERNEL(dk_spmm_vgrad) {
 // on the other backends; MpsBackend launches these by name) ────────────────
 #if defined(__METAL_VERSION__)
 // A strided batch of c_i = alpha op(a_i) op(b_i) + beta c_i (device.h's
-// DevGemm), row-major: a, b and c each fp32, fp16 or bf16 (at for a and b,
-// ct for c), products accumulated in fp32. Threadgroups of four simdgroups
-// take 64 x 64 tiles of c, 32 x 32 each on the 8 x 8 matrix units, k in
-// steps of 16 through threadgroup memory; the grid is (n / 64, m / 64, batch).
+// DevGemm), row-major: a and b fp32, fp16 or bf16 (MK_T), c any of them
+// (ct), products accumulated in fp32 on the 8 x 8 simdgroup matrix units.
+// A threadgroup of four simdgroups takes a BM x BN tile of c (32 x 32 or
+// 64 x 64: mk_gemm<BM>_<op(a)><op(b)>_<type>), k in steps of BK through
+// threadgroup memory; the grid is (n / BN, m / BM, batch). Tiles inside the
+// matrices load without bounds checks (a divergent load per element costs
+// 3x) and store straight from the matrix units, alpha and beta applied as
+// products with diagonal matrices; edge tiles check every element.
 struct DkGemm {
     ulong a, b, c;          // addresses
     ulong lda, ldb, ldc;
@@ -1774,10 +1797,12 @@ struct DkGemm {
     uint m, n, k, ta, tb, at, ct;
     float alpha, beta;
 };
-#define MK_BM 64u
-#define MK_BN 64u
-#define MK_BK 16u
-inline float mk_ld(ulong base, ulong i, uint t) {
+template <uint T> inline float mk_ld(ulong base, uint i) {
+    if (T == 0u) return ((const device float*)base)[i];
+    ushort h = ((const device ushort*)base)[i];
+    return T == 1u ? h2f_bits(h) : b2f_bits(h);
+}
+inline float mk_ld_any(ulong base, ulong i, uint t) {
     if (t == 0u) return ((const device float*)base)[i];
     ushort h = ((const device ushort*)base)[i];
     return t == 1u ? h2f_bits(h) : b2f_bits(h);
@@ -1786,57 +1811,481 @@ inline void mk_st(ulong base, ulong i, uint t, float v) {
     if (t == 0u) ((device float*)base)[i] = v;
     else ((device ushort*)base)[i] = t == 1u ? f2h_bits(v) : f2b_bits(v);
 }
-kernel void mk_gemm(constant DkGemm& g [[buffer(0)]], uint3 tg [[threadgroup_position_in_grid]],
-                    uint tid [[thread_index_in_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]]) {
-    threadgroup float As[MK_BM * MK_BK];   // op(a) rows m0.., columns k0..
-    threadgroup float Bs[MK_BK * MK_BN];   // op(b) rows k0.., columns n0..
-    threadgroup float Cs[MK_BM * MK_BN];
-    uint m0 = tg.y * MK_BM, n0 = tg.x * MK_BN;
-    ulong A = g.a + (ulong)tg.z * g.sa * (g.at == 0u ? 4ul : 2ul);
-    ulong B = g.b + (ulong)tg.z * g.sb * (g.at == 0u ? 4ul : 2ul);
-    ulong C = g.c + (ulong)tg.z * g.sc * (g.ct == 0u ? 4ul : 2ul);
-    uint sr = (sg / 2u) * 32u, sc = (sg % 2u) * 32u;
-    simdgroup_float8x8 acc[4][4];
-    for (uint i = 0; i < 4u; i++)
-        for (uint j = 0; j < 4u; j++) acc[i][j] = simdgroup_float8x8(0.0f);
-    for (uint k0 = 0; k0 < g.k; k0 += MK_BK) {
-        // neighbouring threads read neighbouring addresses either way round
-        for (uint e = tid; e < MK_BM * MK_BK; e += 128u) {
-            uint r = g.ta ? e % MK_BM : e / MK_BK, c = g.ta ? e / MK_BM : e % MK_BK;
-            uint gm = m0 + r, gk = k0 + c;
-            As[r * MK_BK + c] = gm < g.m && gk < g.k ? mk_ld(A, g.ta ? (ulong)gk * g.lda + gm : (ulong)gm * g.lda + gk, g.at) : 0.0f;
+// One BK step of the tile product. The tiles are As [BM][BK] and Bs [BK][BN],
+// or k-major As [BK][BM] (AK) and n-major Bs [BN][BK] (BNM) where that lets
+// neighbouring threads store to neighbouring words; the matrix loads
+// transpose them back.
+template <uint BM, uint BN, uint BK, uint SM, uint SN, bool AK = false, bool BNM = false>
+inline void mk_mma(threadgroup float* As, threadgroup float* Bs, thread simdgroup_float8x8 (&acc)[SM][SN], uint sr, uint sc) {
+    #pragma clang loop unroll(full)
+    for (uint kk = 0; kk < BK; kk += 8u) {
+        simdgroup_float8x8 fa[SM], fb[SN];
+        #pragma clang loop unroll(full)
+        for (uint i = 0; i < SM; i++) {
+            if (AK) simdgroup_load(fa[i], &As[kk * BM + sr + i * 8u], BM, ulong2(0, 0), true);
+            else simdgroup_load(fa[i], &As[(sr + i * 8u) * BK + kk], BK);
         }
-        for (uint e = tid; e < MK_BK * MK_BN; e += 128u) {
-            uint r = g.tb ? e % MK_BK : e / MK_BN, c = g.tb ? e / MK_BK : e % MK_BN;
-            uint gk = k0 + r, gn = n0 + c;
-            Bs[r * MK_BN + c] = gk < g.k && gn < g.n ? mk_ld(B, g.tb ? (ulong)gn * g.ldb + gk : (ulong)gk * g.ldb + gn, g.at) : 0.0f;
+        #pragma clang loop unroll(full)
+        for (uint j = 0; j < SN; j++) {
+            if (BNM) simdgroup_load(fb[j], &Bs[(sc + j * 8u) * BK + kk], BK, ulong2(0, 0), true);
+            else simdgroup_load(fb[j], &Bs[kk * BN + sc + j * 8u], BN);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        for (uint kk = 0; kk < MK_BK; kk += 8u) {
-            simdgroup_float8x8 fa[4], fb[4];
-            for (uint i = 0; i < 4u; i++) simdgroup_load(fa[i], &As[(sr + i * 8u) * MK_BK + kk], MK_BK);
-            for (uint j = 0; j < 4u; j++) simdgroup_load(fb[j], &Bs[kk * MK_BN + sc + j * 8u], MK_BN);
-            for (uint i = 0; i < 4u; i++)
-                for (uint j = 0; j < 4u; j++) simdgroup_multiply_accumulate(acc[i][j], fa[i], fb[j], acc[i][j]);
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-    for (uint i = 0; i < 4u; i++)
-        for (uint j = 0; j < 4u; j++) simdgroup_store(acc[i][j], &Cs[(sr + i * 8u) * MK_BN + sc + j * 8u], MK_BN);
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint e = tid; e < MK_BM * MK_BN; e += 128u) {
-        uint gm = m0 + e / MK_BN, gn = n0 + e % MK_BN;
-        if (gm < g.m && gn < g.n) {
-            ulong i = (ulong)gm * g.ldc + gn;
-            float v = g.alpha * Cs[e];
-            if (g.beta != 0.0f) v += g.beta * mk_ld(C, i, g.ct);   // beta 0: c is not read
-            mk_st(C, i, g.ct, v);
-        }
+        #pragma clang loop unroll(full)
+        for (uint i = 0; i < SM; i++)
+            #pragma clang loop unroll(full)
+            for (uint j = 0; j < SN; j++) simdgroup_multiply_accumulate(acc[i][j], fa[i], fb[j], acc[i][j]);
     }
 }
+
+template <uint T, bool TA, bool TB, uint BM, uint BN, uint BK>
+inline void mk_gemm(constant DkGemm& g, uint3 tg, uint tid, uint sg, threadgroup float* As, threadgroup float* Bs) {
+    constexpr uint SM = BM / 16u, SN = BN / 16u;   // 8 x 8 fragments per simdgroup (2 x 2 simdgroups)
+    constexpr ulong es = T == 0u ? 4ul : 2ul;
+    uint m0 = tg.y * BM, n0 = tg.x * BN;
+    ulong A = g.a + (ulong)tg.z * g.sa * es, B = g.b + (ulong)tg.z * g.sb * es;
+    ulong C = g.c + (ulong)tg.z * g.sc * (g.ct == 0u ? 4ul : 2ul);
+    uint sr = (sg / 2u) * SM * 8u, sc = (sg % 2u) * SN * 8u;
+    uint lda = (uint)g.lda, ldb = (uint)g.ldb, Mx = g.m, Nx = g.n, Kx = g.k;
+    bool inside = m0 + BM <= Mx && n0 + BN <= Nx;
+    simdgroup_float8x8 acc[SM][SN];
+    #pragma clang loop unroll(full)
+    for (uint i = 0; i < SM; i++)
+        #pragma clang loop unroll(full)
+        for (uint j = 0; j < SN; j++) acc[i][j] = simdgroup_float8x8(0.0f);
+    for (uint k0 = 0; k0 < Kx; k0 += BK) {
+        // neighbouring threads read neighbouring addresses either way round
+        if (inside && k0 + BK <= Kx) {
+            #pragma clang loop unroll(full)
+            for (uint q = 0; q < BM * BK / 128u; q++) {
+                uint e = tid + q * 128u, r = TA ? e % BM : e / BK, c = TA ? e / BM : e % BK;
+                As[TA ? c * BM + r : r * BK + c] = mk_ld<T>(A, TA ? (k0 + c) * lda + m0 + r : (m0 + r) * lda + k0 + c);
+            }
+            #pragma clang loop unroll(full)
+            for (uint q = 0; q < BK * BN / 128u; q++) {
+                uint e = tid + q * 128u, r = TB ? e % BK : e / BN, c = TB ? e / BK : e % BN;
+                Bs[TB ? c * BK + r : r * BN + c] = mk_ld<T>(B, TB ? (n0 + c) * ldb + k0 + r : (k0 + r) * ldb + n0 + c);
+            }
+        } else {
+            #pragma clang loop unroll(full)
+            for (uint q = 0; q < BM * BK / 128u; q++) {
+                uint e = tid + q * 128u, r = TA ? e % BM : e / BK, c = TA ? e / BM : e % BK;
+                uint gm = m0 + r, gk = k0 + c;
+                float v = 0.0f;
+                if (gm < Mx && gk < Kx) v = mk_ld<T>(A, TA ? gk * lda + gm : gm * lda + gk);
+                As[TA ? c * BM + r : r * BK + c] = v;
+            }
+            #pragma clang loop unroll(full)
+            for (uint q = 0; q < BK * BN / 128u; q++) {
+                uint e = tid + q * 128u, r = TB ? e % BK : e / BN, c = TB ? e / BK : e % BN;
+                uint gk = k0 + r, gn = n0 + c;
+                float v = 0.0f;
+                if (gk < Kx && gn < Nx) v = mk_ld<T>(B, TB ? gn * ldb + gk : gk * ldb + gn);
+                Bs[TB ? c * BK + r : r * BN + c] = v;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        mk_mma<BM, BN, BK, SM, SN, TA, TB>(As, Bs, acc, sr, sc);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (inside && g.ct == 0u) {
+        // c = alpha acc + beta c on the matrix units (diagonal alpha, beta)
+        simdgroup_float8x8 da = simdgroup_float8x8(g.alpha), db = simdgroup_float8x8(g.beta);
+        #pragma clang loop unroll(full)
+        for (uint i = 0; i < SM; i++)
+            #pragma clang loop unroll(full)
+            for (uint j = 0; j < SN; j++) {
+                device float* o = (device float*)C + (ulong)(m0 + sr + i * 8u) * g.ldc + n0 + sc + j * 8u;
+                simdgroup_float8x8 r = acc[i][j];
+                if (g.alpha != 1.0f) simdgroup_multiply(r, r, da);
+                if (g.beta != 0.0f) {
+                    simdgroup_float8x8 old;
+                    simdgroup_load(old, o, g.ldc);
+                    simdgroup_multiply_accumulate(r, old, db, r);
+                }
+                simdgroup_store(r, o, g.ldc);
+            }
+        return;
+    }
+    // an edge tile or a 16-bit c: each simdgroup's fragments through its own
+    // 8 x 8 of threadgroup memory, then element by element
+    threadgroup float* Cs = As + sg * 64u;
+    uint lane = tid % 32u;
+    #pragma clang loop unroll(full)
+    for (uint i = 0; i < SM; i++)
+        #pragma clang loop unroll(full)
+        for (uint j = 0; j < SN; j++) {
+            simdgroup_store(acc[i][j], Cs, 8);
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+            #pragma clang loop unroll(full)
+            for (uint q = 0; q < 2u; q++) {
+                uint e = lane + q * 32u;
+                uint gm = m0 + sr + i * 8u + e / 8u, gn = n0 + sc + j * 8u + e % 8u;
+                if (gm < Mx && gn < Nx) {
+                    ulong o = (ulong)gm * g.ldc + gn;
+                    float v = g.alpha * Cs[e];
+                    if (g.beta != 0.0f) v += g.beta * mk_ld_any(C, o, g.ct);   // beta 0: c is not read
+                    mk_st(C, o, g.ct, v);
+                }
+            }
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+        }
+}
+#define MK_GEMM(name, T, TA, TB, BM, BN, BK) \
+kernel void name(constant DkGemm& g [[buffer(0)]], uint3 tg [[threadgroup_position_in_grid]], \
+                 uint tid [[thread_index_in_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]]) { \
+    threadgroup float As[BM * BK], Bs[BK * BN]; \
+    mk_gemm<T, TA, TB, BM, BN, BK>(g, tg, tid, sg, As, Bs); \
+}
+#define MK_GEMMS(T, sfx) \
+    MK_GEMM(mk_gemm32_nn_##sfx, T, false, false, 32u, 32u, 32u) \
+    MK_GEMM(mk_gemm32_tn_##sfx, T, true, false, 32u, 32u, 32u) \
+    MK_GEMM(mk_gemm32_nt_##sfx, T, false, true, 32u, 32u, 32u) \
+    MK_GEMM(mk_gemm32_tt_##sfx, T, true, true, 32u, 32u, 32u) \
+    MK_GEMM(mk_gemm64_nn_##sfx, T, false, false, 64u, 64u, 16u) \
+    MK_GEMM(mk_gemm64_tn_##sfx, T, true, false, 64u, 64u, 16u) \
+    MK_GEMM(mk_gemm64_nt_##sfx, T, false, true, 64u, 64u, 16u) \
+    MK_GEMM(mk_gemm64_tt_##sfx, T, true, true, 64u, 64u, 16u)
+MK_GEMMS(0u, f32)
+MK_GEMMS(1u, f16)
+MK_GEMMS(2u, bf16)
+// Convolutions as implicit GEMMs (MpsBackend::conv: MIOpen / cuDNN's role),
+// the column matrix gathered tile by tile instead of written out by im2col.
+// In the terms of a plain convolution -- input I [B, Ci, Hi, Wi], weights
+// W [Co, Ci, kH, kW], output O [B, Co, Ho, Wo] (a transposed convolution is
+// one with I and O swapped) --
+//   mk_conv_fwd     O = conv(I, W):        m = co, n = (b, oy, ox), k = (ci, ky, kx)
+//   mk_conv_bwd_x   I = conv^T(O, W):      m = ci, n = (b, y, x),   k = (co, ky, kx),
+//                   a gather over the windows holding (y, x), no atomics
+//   mk_conv_bwd_w   W += O . I-columns:    m = co, n = (ci, ky, kx), k = (b, oy, ox),
+//                   split over k (grid z), the slices added atomically (fp32)
+// Gathered operands load from a clamped address and select 0 outside the
+// image, so neighbouring threads never diverge on a load.
+struct DkConv {
+    ulong x, w, y;          // I, W, O
+    uint B, Ci, Hi, Wi, Co, Ho, Wo, kH, kW, sH, sW, pH, pW, dH, dW;
+    uint kSplit;            // mk_conv_bwd_w: k per grid z slice
+};
+// q / d and q % d through a reciprocal, for q < 2^31
+struct MkDiv {
+    uint d; float inv;
+    inline uint div(uint q) const { return dk_udiv(q, d, inv); }
+};
+inline MkDiv mk_div(uint d) { MkDiv r; r.d = d; r.inv = 1.0f / (float)d; return r; }
+
+// Writes the tile (m0, n0) of an [M, B x P] product into a [B, M, P] tensor
+// (O or I): straight from the matrix units when the tile is whole and P a
+// multiple of 8, else element by element.
+template <uint T, uint BM, uint BN, uint SM, uint SN>
+inline void mk_conv_store(thread simdgroup_float8x8 (&acc)[SM][SN], ulong out, uint M, uint Ntot, uint P, MkDiv dP,
+                          uint m0, uint n0, uint sr, uint sc, uint tid, uint sg, threadgroup float* scratch) {
+    if (T == 0u && m0 + BM <= M && n0 + BN <= Ntot && P % 8u == 0u) {
+        #pragma clang loop unroll(full)
+        for (uint i = 0; i < SM; i++)
+            #pragma clang loop unroll(full)
+            for (uint j = 0; j < SN; j++) {
+                uint n = n0 + sc + j * 8u, b = dP.div(n), p = n - b * P, m = m0 + sr + i * 8u;
+                simdgroup_store(acc[i][j], (device float*)out + ((ulong)b * M + m) * P + p, P);
+            }
+        return;
+    }
+    threadgroup float* Cs = scratch + sg * 64u;
+    uint lane = tid % 32u;
+    #pragma clang loop unroll(full)
+    for (uint i = 0; i < SM; i++)
+        #pragma clang loop unroll(full)
+        for (uint j = 0; j < SN; j++) {
+            simdgroup_store(acc[i][j], Cs, 8);
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+            #pragma clang loop unroll(full)
+            for (uint q = 0; q < 2u; q++) {
+                uint e = lane + q * 32u, m = m0 + sr + i * 8u + e / 8u, n = n0 + sc + j * 8u + e % 8u;
+                if (m < M && n < Ntot) {
+                    uint b = dP.div(n), p = n - b * P;
+                    mk_st(out, ((ulong)b * M + m) * P + p, T, Cs[e]);
+                }
+            }
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+        }
+}
+
+// The tile shapes (BM x BN, k steps of BK, four simdgroups as (4 / WN) x WN):
+// 32 x 32 and 64 x 64, and for few output channels 32 x 128 and 8 x 128.
+// When the channels summed over (Ci forward, Co for the input gradient) are
+// a multiple of BK, k runs over (tap, channel) instead of (channel, tap): a
+// step of k is then one filter tap and BK channels, so a thread finds its
+// pixel's tap position once per step and its loads differ by a channel
+// stride. The weight gradient's k = (b, oy, ox) likewise takes whole steps
+// within one image (and one row of it when Wo allows).
+#define MK_TILE_SETUP \
+    constexpr uint WM = 4u / WN, SM = BM / (WM * 8u), SN = BN / (WN * 8u); \
+    uint m0 = tg.y * BM, n0 = tg.x * BN, sr = (sg / WN) * SM * 8u, sc = (sg % WN) * SN * 8u; \
+    simdgroup_float8x8 acc[SM][SN]; \
+    _Pragma("clang loop unroll(full)") \
+    for (uint i = 0; i < SM; i++) \
+        _Pragma("clang loop unroll(full)") \
+        for (uint j = 0; j < SN; j++) acc[i][j] = simdgroup_float8x8(0.0f);
+
+template <uint T, uint BM, uint BN, uint BK, uint WN>
+inline void mk_conv_fwd(constant DkConv& c, uint3 tg, uint tid, uint sg, threadgroup float* As, threadgroup float* Bs) {
+    MK_TILE_SETUP
+    uint KK = c.kH * c.kW, M = c.Co, K = c.Ci * KK, Po = c.Ho * c.Wo, Ntot = c.B * Po, HW = c.Hi * c.Wi;
+    bool cb = c.Ci % BK == 0u;
+    MkDiv dKK = mk_div(KK), dKW = mk_div(c.kW), dPo = mk_div(Po), dWo = mk_div(c.Wo), dCi = mk_div(c.Ci);
+    // this thread's column of the B tile: output pixel n = (b, oy, ox), fixed
+    uint n = min(n0 + tid % BN, Ntot - 1u), b = dPo.div(n), op = n - b * Po, oy = dWo.div(op), ox = op - oy * c.Wo;
+    int y0 = (int)(oy * c.sH) - (int)c.pH, x0 = (int)(ox * c.sW) - (int)c.pW;
+    bool nIn = n0 + tid % BN < Ntot;
+    ulong img = c.x + (ulong)b * c.Ci * HW * (T == 0u ? 4ul : 2ul);
+    for (uint k0 = 0; k0 < K; k0 += BK) {
+        if (cb) {
+            uint tap = dCi.div(k0), ci0 = k0 - tap * c.Ci, ky = dKW.div(tap), kx = tap - ky * c.kW;
+            #pragma clang loop unroll(full)
+            for (uint q = 0; q < BM * BK / 128u; q++) {
+                uint e = tid + q * 128u, r = e / BK, cc = e % BK, gm = m0 + r;
+                float v = mk_ld<T>(c.w, (min(gm, M - 1u) * c.Ci + ci0 + cc) * KK + tap);
+                As[r * BK + cc] = gm < M ? v : 0.0f;
+            }
+            int y = y0 + (int)(ky * c.dH), x = x0 + (int)(kx * c.dW);
+            bool ok = nIn && y >= 0 && y < (int)c.Hi && x >= 0 && x < (int)c.Wi;
+            uint pix = (uint)clamp(y, 0, (int)c.Hi - 1) * c.Wi + (uint)clamp(x, 0, (int)c.Wi - 1);
+            #pragma clang loop unroll(full)
+            for (uint q = 0; q < BK * BN / 128u; q++) {
+                uint r = (tid + q * 128u) / BN;
+                float v = mk_ld<T>(img, (ci0 + r) * HW + pix);
+                Bs[r * BN + tid % BN] = ok ? v : 0.0f;
+            }
+        } else {
+            #pragma clang loop unroll(full)
+            for (uint q = 0; q < BM * BK / 128u; q++) {
+                uint e = tid + q * 128u, r = e / BK, cc = e % BK, gm = m0 + r, gk = k0 + cc;
+                float v = mk_ld<T>(c.w, min(gm, M - 1u) * K + min(gk, K - 1u));
+                As[r * BK + cc] = gm < M && gk < K ? v : 0.0f;
+            }
+            #pragma clang loop unroll(full)
+            for (uint q = 0; q < BK * BN / 128u; q++) {
+                uint r = (tid + q * 128u) / BN, gk = k0 + r;
+                uint kc = min(gk, K - 1u), ci = dKK.div(kc), kr = kc - ci * KK, ky = dKW.div(kr), kx = kr - ky * c.kW;
+                int y = y0 + (int)(ky * c.dH), x = x0 + (int)(kx * c.dW);
+                bool ok = nIn && gk < K && y >= 0 && y < (int)c.Hi && x >= 0 && x < (int)c.Wi;
+                uint pix = (uint)clamp(y, 0, (int)c.Hi - 1) * c.Wi + (uint)clamp(x, 0, (int)c.Wi - 1);
+                float v = mk_ld<T>(img, ci * HW + pix);
+                Bs[r * BN + tid % BN] = ok ? v : 0.0f;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        mk_mma<BM, BN, BK, SM, SN>(As, Bs, acc, sr, sc);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    mk_conv_store<T, BM, BN, SM, SN>(acc, c.y, M, Ntot, Po, dPo, m0, n0, sr, sc, tid, sg, As);
+}
+
+// The input gradient, by stride phase (grid z, without dilation): the input
+// pixels y = y0 + j sH (and likewise x) whose windows reach them through the
+// taps ky = ry + i sH only, so no step of k is spent on taps that miss --
+// 3 in 4 of them for a stride-2 transposed convolution's forward pass.
+template <uint T, uint BM, uint BN, uint BK, uint WN>
+inline void mk_conv_bwd_x(constant DkConv& c, uint3 tg, uint tid, uint sg, threadgroup float* As, threadgroup float* Bs) {
+    MK_TILE_SETUP
+    uint KK = c.kH * c.kW, M = c.Ci, Pi = c.Hi * c.Wi, Po = c.Ho * c.Wo;
+    bool phased = c.dH == 1u && c.dW == 1u;
+    // the phase: taps ky = ry + i sH, kx = rx + j sW; pixels from (yb, xb) in steps of the stride
+    uint sH = phased ? c.sH : 1u, sW = phased ? c.sW : 1u;
+    uint ry = tg.z / sW, rx = tg.z - ry * sW;
+    uint yb = (ry + sH - c.pH % sH) % sH, xb = (rx + sW - c.pW % sW) % sW;
+    uint py = yb < c.Hi ? (c.Hi - yb + sH - 1u) / sH : 0u, px = xb < c.Wi ? (c.Wi - xb + sW - 1u) / sW : 0u;
+    uint ty = phased ? (ry < c.kH ? (c.kH - ry + sH - 1u) / sH : 0u) : c.kH;
+    uint tx = phased ? (rx < c.kW ? (c.kW - rx + sW - 1u) / sW : 0u) : c.kW;
+    uint Pp = py * px, Ntot = c.B * Pp, K = c.Co * ty * tx;
+    if (n0 >= Ntot) return;   // a phase with fewer pixels: the whole threadgroup
+    bool cb = c.Co % BK == 0u;
+    MkDiv dPp = mk_div(max(Pp, 1u)), dPx = mk_div(max(px, 1u)), dTT = mk_div(max(ty * tx, 1u)), dTx = mk_div(max(tx, 1u)),
+          dSH = mk_div(c.sH), dSW = mk_div(c.sW), dCo = mk_div(c.Co);
+    // this thread's column: input pixel n = (b, y, x)
+    uint n = min(n0 + tid % BN, Ntot - 1u), b = dPp.div(n), ip = n - b * Pp, jy = dPx.div(ip), jx = ip - jy * px;
+    uint y = yb + jy * sH, x = xb + jx * sW;
+    int ny0 = (int)(y + c.pH), nx0 = (int)(x + c.pW);
+    bool nIn = n0 + tid % BN < Ntot;
+    ulong img = c.y + (ulong)b * c.Co * Po * (T == 0u ? 4ul : 2ul);
+    for (uint k0 = 0; k0 < K; k0 += BK) {
+        if (cb) {
+            // A (m = ci, k = (tap, co)) = W[co, ci, ky, kx]: neighbouring threads take neighbouring ci
+            uint t = dCo.div(k0), co0 = k0 - t * c.Co, iy = dTx.div(t), ix = t - iy * tx;
+            uint ky = phased ? ry + iy * sH : iy, kx = phased ? rx + ix * sW : ix;
+            #pragma clang loop unroll(full)
+            for (uint q = 0; q < BM * BK / 128u; q++) {
+                uint e = tid + q * 128u, r = e % BM, cc = e / BM, gm = m0 + r;
+                float v = mk_ld<T>(c.w, ((co0 + cc) * c.Ci + min(gm, M - 1u)) * KK + ky * c.kW + kx);
+                As[cc * BM + r] = gm < M ? v : 0.0f;   // k-major
+            }
+            // B (k = (tap, co), n = (b, y, x)) = O[b, co, oy, ox], the window at
+            // (oy, ox) holding (y, x) through this tap
+            int ny = ny0 - (int)(ky * c.dH), nx = nx0 - (int)(kx * c.dW);
+            uint oy = dSH.div((uint)max(ny, 0)), ox = dSW.div((uint)max(nx, 0));
+            bool ok = nIn && ny >= 0 && nx >= 0 && oy * c.sH == (uint)ny && ox * c.sW == (uint)nx && oy < c.Ho && ox < c.Wo;
+            uint pix = min(oy, c.Ho - 1u) * c.Wo + min(ox, c.Wo - 1u);
+            #pragma clang loop unroll(full)
+            for (uint q = 0; q < BK * BN / 128u; q++) {
+                uint r = (tid + q * 128u) / BN;
+                float v = mk_ld<T>(img, (co0 + r) * Po + pix);
+                Bs[r * BN + tid % BN] = ok ? v : 0.0f;
+            }
+        } else {
+            // k = (co, tap)
+            #pragma clang loop unroll(full)
+            for (uint q = 0; q < BM * BK / 128u; q++) {
+                uint e = tid + q * 128u, r = e % BM, cc = e / BM, gm = m0 + r, gk = k0 + cc;
+                uint kc = min(gk, K - 1u), co = dTT.div(kc), t = kc - co * ty * tx, iy = dTx.div(t), ix = t - iy * tx;
+                uint ky = phased ? ry + iy * sH : iy, kx = phased ? rx + ix * sW : ix;
+                float v = mk_ld<T>(c.w, (co * c.Ci + min(gm, M - 1u)) * KK + ky * c.kW + kx);
+                As[cc * BM + r] = gm < M && gk < K ? v : 0.0f;
+            }
+            #pragma clang loop unroll(full)
+            for (uint q = 0; q < BK * BN / 128u; q++) {
+                uint r = (tid + q * 128u) / BN, gk = k0 + r;
+                uint kc = min(gk, K - 1u), co = dTT.div(kc), t = kc - co * ty * tx, iy = dTx.div(t), ix = t - iy * tx;
+                uint ky = phased ? ry + iy * sH : iy, kx = phased ? rx + ix * sW : ix;
+                int ny = ny0 - (int)(ky * c.dH), nx = nx0 - (int)(kx * c.dW);
+                uint oy = dSH.div((uint)max(ny, 0)), ox = dSW.div((uint)max(nx, 0));
+                bool ok = nIn && gk < K && ny >= 0 && nx >= 0 && oy * c.sH == (uint)ny && ox * c.sW == (uint)nx && oy < c.Ho && ox < c.Wo;
+                float v = mk_ld<T>(img, co * Po + min(oy, c.Ho - 1u) * c.Wo + min(ox, c.Wo - 1u));
+                Bs[r * BN + tid % BN] = ok ? v : 0.0f;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        mk_mma<BM, BN, BK, SM, SN, true>(As, Bs, acc, sr, sc);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (sH == 1u && sW == 1u) {
+        mk_conv_store<T, BM, BN, SM, SN>(acc, c.x, M, Ntot, Pi, dPp, m0, n0, sr, sc, tid, sg, As);
+        return;
+    }
+    // a phase's pixels are strided: element by element
+    threadgroup float* Cs = As + sg * 64u;
+    uint lane = tid % 32u;
+    #pragma clang loop unroll(full)
+    for (uint i = 0; i < SM; i++)
+        #pragma clang loop unroll(full)
+        for (uint j = 0; j < SN; j++) {
+            simdgroup_store(acc[i][j], Cs, 8);
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+            #pragma clang loop unroll(full)
+            for (uint q = 0; q < 2u; q++) {
+                uint e = lane + q * 32u, m = m0 + sr + i * 8u + e / 8u, nn = n0 + sc + j * 8u + e % 8u;
+                if (m < M && nn < Ntot) {
+                    uint bb = dPp.div(nn), pp = nn - bb * Pp, qy = dPx.div(pp), qx = pp - qy * px;
+                    mk_st(c.x, ((ulong)bb * M + m) * Pi + (yb + qy * sH) * c.Wi + xb + qx * sW, T, Cs[e]);
+                }
+            }
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+        }
+}
+
+// fp32 only (atomics); W must be zeroed first
+template <uint BM, uint BN, uint BK, uint WN>
+inline void mk_conv_bwd_w(constant DkConv& c, uint3 tg, uint tid, uint sg, threadgroup float* As, threadgroup float* Bs) {
+    MK_TILE_SETUP
+    uint KK = c.kH * c.kW, M = c.Co, Ntot = c.Ci * KK, Po = c.Ho * c.Wo, K = c.B * Po, HW = c.Hi * c.Wi;
+    uint kBeg = tg.z * c.kSplit, kEnd = min(K, kBeg + c.kSplit);
+    bool img1 = Po % BK == 0u && c.kSplit % BK == 0u, row1 = img1 && c.Wo % BK == 0u;   // a step within one image / row
+    MkDiv dPo = mk_div(Po), dWo = mk_div(c.Wo), dKK = mk_div(KK), dKW = mk_div(c.kW);
+    // this thread's column of B: n = (ci, ky, kx)
+    uint n = min(n0 + tid % BN, Ntot - 1u), ci = dKK.div(n), kr = n - ci * KK, ky = dKW.div(kr), kx = kr - ky * c.kW;
+    int yo = (int)(ky * c.dH) - (int)c.pH, xo = (int)(kx * c.dW) - (int)c.pW;
+    bool nIn = n0 + tid % BN < Ntot;
+    const device float* O = (const device float*)c.y;
+    const device float* I = (const device float*)c.x;
+    for (uint k0 = kBeg; k0 < kEnd; k0 += BK) {
+        if (img1) {
+            uint b = dPo.div(k0), p0 = k0 - b * Po;
+            // A (m = co, k = (b, p)) = O[b, co, p]
+            #pragma clang loop unroll(full)
+            for (uint q = 0; q < BM * BK / 128u; q++) {
+                uint e = tid + q * 128u, r = e / BK, cc = e % BK, gm = m0 + r;
+                float v = O[((ulong)b * c.Co + min(gm, M - 1u)) * Po + p0 + cc];
+                As[r * BK + cc] = gm < M ? v : 0.0f;
+            }
+            const device float* src = I + ((ulong)b * c.Ci + ci) * HW;
+            uint oy0 = dWo.div(p0), ox0 = p0 - oy0 * c.Wo;
+            #pragma clang loop unroll(full)
+            for (uint q = 0; q < BK * BN / 128u; q++) {
+                uint r = (tid + q * 128u) / BN;
+                uint oy = oy0, ox = ox0 + r;
+                if (!row1) { uint p = p0 + r; oy = dWo.div(p); ox = p - oy * c.Wo; }
+                int y = (int)(oy * c.sH) + yo, x = (int)(ox * c.sW) + xo;
+                bool ok = nIn && y >= 0 && y < (int)c.Hi && x >= 0 && x < (int)c.Wi;
+                float v = src[(uint)clamp(y, 0, (int)c.Hi - 1) * c.Wi + (uint)clamp(x, 0, (int)c.Wi - 1)];
+                Bs[r * BN + tid % BN] = ok ? v : 0.0f;
+            }
+        } else {
+            #pragma clang loop unroll(full)
+            for (uint q = 0; q < BM * BK / 128u; q++) {
+                uint e = tid + q * 128u, r = e / BK, cc = e % BK, gm = m0 + r, gk = k0 + cc;
+                uint kc = min(gk, kEnd - 1u), b = dPo.div(kc), op = kc - b * Po;
+                float v = O[((ulong)b * c.Co + min(gm, M - 1u)) * Po + op];
+                As[r * BK + cc] = gm < M && gk < kEnd ? v : 0.0f;
+            }
+            #pragma clang loop unroll(full)
+            for (uint q = 0; q < BK * BN / 128u; q++) {
+                uint r = (tid + q * 128u) / BN, gk = k0 + r;
+                uint kc = min(gk, kEnd - 1u), b = dPo.div(kc), op = kc - b * Po, oy = dWo.div(op), ox = op - oy * c.Wo;
+                int y = (int)(oy * c.sH) + yo, x = (int)(ox * c.sW) + xo;
+                bool ok = nIn && gk < kEnd && y >= 0 && y < (int)c.Hi && x >= 0 && x < (int)c.Wi;
+                float v = I[(((ulong)b * c.Ci + ci) * c.Hi + (uint)clamp(y, 0, (int)c.Hi - 1)) * c.Wi + (uint)clamp(x, 0, (int)c.Wi - 1)];
+                Bs[r * BN + tid % BN] = ok ? v : 0.0f;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        mk_mma<BM, BN, BK, SM, SN>(As, Bs, acc, sr, sc);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    threadgroup float* Cs = As + sg * 64u;
+    uint lane = tid % 32u;
+    #pragma clang loop unroll(full)
+    for (uint i = 0; i < SM; i++)
+        #pragma clang loop unroll(full)
+        for (uint j = 0; j < SN; j++) {
+            simdgroup_store(acc[i][j], Cs, 8);
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+            #pragma clang loop unroll(full)
+            for (uint q = 0; q < 2u; q++) {
+                uint e = lane + q * 32u, m = m0 + sr + i * 8u + e / 8u, nn = n0 + sc + j * 8u + e % 8u;
+                if (m < M && nn < Ntot) atomicAdd((device float*)c.w + (ulong)m * Ntot + nn, Cs[e]);
+            }
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+        }
+}
+
+// mk_conv_<op><shape>_<type>: shapes 32 (32 x 32), 64 (64 x 64), w (32 x 128), s (8 x 128)
+#define MK_CONV(name, call, BM, BN) \
+kernel void name(constant DkConv& c [[buffer(0)]], uint3 tg [[threadgroup_position_in_grid]], \
+                 uint tid [[thread_index_in_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]]) { \
+    threadgroup float As[BM * 16u > 8u * 64u ? BM * 16u : 8u * 64u], Bs[16u * BN]; \
+    call(c, tg, tid, sg, As, Bs); \
+}
+#define MK_CONV_SHAPES(op, T, sfx) \
+    MK_CONV(mk_conv_##op##32_##sfx, (mk_conv_##op<T, 32u, 32u, 16u, 2u>), 32u, 32u) \
+    MK_CONV(mk_conv_##op##64_##sfx, (mk_conv_##op<T, 64u, 64u, 16u, 2u>), 64u, 64u) \
+    MK_CONV(mk_conv_##op##w_##sfx, (mk_conv_##op<T, 32u, 128u, 16u, 4u>), 32u, 128u) \
+    MK_CONV(mk_conv_##op##s_##sfx, (mk_conv_##op<T, 8u, 128u, 16u, 4u>), 8u, 128u)
+MK_CONV_SHAPES(fwd, 0u, f32)
+MK_CONV_SHAPES(fwd, 1u, f16)
+MK_CONV_SHAPES(fwd, 2u, bf16)
+MK_CONV_SHAPES(bwd_x, 0u, f32)
+MK_CONV_SHAPES(bwd_x, 1u, f16)
+MK_CONV_SHAPES(bwd_x, 2u, bf16)
+MK_CONV(mk_conv_bwd_w32_f32, (mk_conv_bwd_w<32u, 32u, 16u, 2u>), 32u, 32u)
+MK_CONV(mk_conv_bwd_w64_f32, (mk_conv_bwd_w<64u, 64u, 16u, 2u>), 64u, 64u)
+MK_CONV(mk_conv_bwd_ww_f32, (mk_conv_bwd_w<32u, 128u, 16u, 4u>), 32u, 128u)
+MK_CONV(mk_conv_bwd_ws_f32, (mk_conv_bwd_w<8u, 128u, 16u, 4u>), 8u, 128u)
 // dst[i] = src[i] for n 32-bit words: p0 src, p2 dst, u7 = n (bit-exact,
 // unlike a float copy of words holding two 16-bit values)
 kernel void mk_copy(constant DevArgs_& a [[buffer(0)]], uint i [[thread_position_in_grid]]) {
     if (i < a.u[7]) ((device uint*)a.p[2])[i] = ((const device uint*)a.p[0])[i];
+}
+// dst[i] = src[i] for n words of host data that came with the dispatch
+// (setBytes): an upload ordered with the queued work. p2 dst, u7 = n
+kernel void mk_upload(constant DevArgs_& a [[buffer(0)]], constant uint* src [[buffer(1)]],
+                      uint i [[thread_position_in_grid]]) {
+    if (i < a.u[7]) ((device uint*)a.p[2])[i] = src[i];
 }
 #endif
