@@ -4,6 +4,14 @@
 
 namespace std {
 
+// ── atomics ────────────────────────────────────────────────────────────────
+
+int async_load_(const &int p) { unsafe { return atomic_load((const _Atomic int*)p); } }
+void async_store_(&int p, int v) { unsafe { atomic_store((_Atomic int*)p, v); } }
+int async_xchg_(&int p, int v) { unsafe { return atomic_exchange((_Atomic int*)p, v); } }
+int async_fetch_or_(&int p, int bits) { unsafe { return atomic_fetch_or((_Atomic int*)p, bits); } }
+int async_fetch_and_(&int p, int bits) { unsafe { return atomic_fetch_and((_Atomic int*)p, bits); } }
+
 // ── Waker ──────────────────────────────────────────────────────────────────
 
 static void waker_noop_fn_(?&int data, unsigned long tag) { }

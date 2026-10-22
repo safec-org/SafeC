@@ -272,20 +272,20 @@ struct CancelToken CancelToken::child_of(&CancelToken parent) {
 
 void CancelToken::cancel() {
     self.lk.lock();
-    atomic_store_int(&self.cancelled, 1);
+    async_store_(&self.cancelled, 1);
     self.waiters.wake_all();
     self.lk.unlock();
 }
 
 int CancelToken::is_cancelled() const {
-    if (atomic_load_int(&self.cancelled) != 0) return 1;
+    if (async_load_(&self.cancelled) != 0) return 1;
     ?&CancelToken p = self.parent;
     int depth = 1;
     while (depth < CANCEL_DEPTH) {
         match (p) {
             case null: return 0;
             case some(t): {
-                if (atomic_load_int(&t.cancelled) != 0) return 1;
+                if (async_load_(&t.cancelled) != 0) return 1;
                 p = t.parent;
             }
         }

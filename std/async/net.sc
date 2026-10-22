@@ -286,7 +286,7 @@ void IoDriver::on_ready_(int fd, int filter) {
         while (n > 0LL) {
             unsafe { n = async_raw_read_(fd, (void*)&junk[0], 64UL); }
         }
-        atomic_store_int(&self.wake_pending, 0);
+        async_store_(&self.wake_pending, 0);
         return;
     }
 #endif
@@ -320,7 +320,7 @@ void IoDriver::park(long long timeout_ms) {
     }
     long long t = timeout_ms;
 #ifdef _WIN32
-    if (atomic_exchange_int(&self.wake_pending, 0) != 0) return;
+    if (async_xchg_(&self.wake_pending, 0) != 0) return;
     if (t < 0LL || t > (long long)ASYNC_IO_REMOTE_MS) t = (long long)ASYNC_IO_REMOTE_MS;
     if (self.nwaiting == 0) {
         if (t > 0LL) thread_sleep_ms((unsigned long)t);
@@ -332,10 +332,10 @@ void IoDriver::park(long long timeout_ms) {
 
 void IoDriver::unpark() {
 #ifdef _WIN32
-    atomic_store_int(&self.wake_pending, 1);
+    async_store_(&self.wake_pending, 1);
 #else
     if (self.wake_wr < 0) return;
-    if (atomic_exchange_int(&self.wake_pending, 1) != 0) return;
+    if (async_xchg_(&self.wake_pending, 1) != 0) return;
     unsigned char one = (unsigned char)1;
     unsafe { write(self.wake_wr, (const void*)&one, (size_t)1); }   // a pipe: not send()
 #endif

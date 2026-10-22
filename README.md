@@ -216,8 +216,8 @@ Verified with real generated machine code (not just accepted input) across:
 | iOS | AArch64 (device + simulator) |
 | Android | AArch64, Aarch32, x86_64, x86 |
 | FreeBSD | x86_64, AArch64 |
-| Bare metal (`--target=<alias>`) | x86, x86_64, AArch32, AArch64, Cortex-M0/M3/M4/M7/M33, RV32I/E, RV64I/E — the whole stdlib builds and a 54-check suite runs in the Unicorn emulator for each |
-| WebAssembly (`--target=wasm32`/`wasm64`) | Library modules with `export_name`/`import_*` attributes; same 54-check suite runs under Node |
+| Bare metal (`--target=<alias>`) | x86, x86_64, AArch32, AArch64, Cortex-M0/M3/M4/M7/M33, RV32I/E, RV64I/E — the whole stdlib builds and a 62-check suite (including the async LocalExecutor) runs in the Unicorn emulator for each |
+| WebAssembly (`--target=wasm32`/`wasm64`) | Library modules with `export_name`/`import_*` attributes; same 62-check suite runs under Node |
 | Portable / GPU | SPIR-V, CUDA (NVPTX), ROCm (AMDGPU; the `std::ml` ROCm backend is tested on an MI100) |
 
 **Metal Shading Language is not supported** — Apple's Metal compiler has no

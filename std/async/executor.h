@@ -42,7 +42,6 @@
 // types.
 #pragma once
 #include <std/async/future.h>
-#include <std/atomic.h>
 #include <std/sync/spinlock.h>
 
 // TaskHeader::state bits
@@ -226,17 +225,17 @@ struct AsyncTask<F, T> AsyncTask::new(F fut) {
 
 generic<F: Future, T>
 int AsyncTask::is_finished() const {
-    return (atomic_load_int(&self.hdr.state) & ASYNC_TASK_DONE) != 0 ? 1 : 0;
+    return (async_load_(&self.hdr.state) & ASYNC_TASK_DONE) != 0 ? 1 : 0;
 }
 
 generic<F: Future, T>
 int AsyncTask::is_aborted() const {
-    return (atomic_load_int(&self.hdr.state) & ASYNC_TASK_ABORTED) != 0 ? 1 : 0;
+    return (async_load_(&self.hdr.state) & ASYNC_TASK_ABORTED) != 0 ? 1 : 0;
 }
 
 generic<F: Future, T>
 ?T AsyncTask::take() const {
-    int st = atomic_load_int(&self.hdr.state);
+    int st = async_load_(&self.hdr.state);
     if ((st & ASYNC_TASK_DONE) == 0 || (st & ASYNC_TASK_ABORTED) != 0) return null;
     return self.out[0];
 }
@@ -251,7 +250,7 @@ struct Poll<?T> JoinHandle::poll(&Context cx) {
         case null: { ?T none = null; return Poll::ready(none); }
         case some(t): {
             if (task_header_poll_join_(t, &cx.waker) == 0) return Poll::pending();
-            int st = atomic_load_int(&t.state);
+            int st = async_load_(&t.state);
             if ((st & ASYNC_TASK_ABORTED) != 0) { ?T none = null; return Poll::ready(none); }
             match (self.out_) {
                 case some(o): { ?T v = *o; return Poll::ready(v); }
@@ -283,7 +282,7 @@ void JoinHandle::abort() {
 generic<T>
 int JoinHandle::is_finished() const {
     match (self.task) {
-        case some(t): return (atomic_load_int(&t.state) & ASYNC_TASK_DONE) != 0 ? 1 : 0;
+        case some(t): return (async_load_(&t.state) & ASYNC_TASK_DONE) != 0 ? 1 : 0;
         case null: return 1;
     }
     return 1;
@@ -342,10 +341,10 @@ T LocalExecutor::block_on(&P park, &F fut) {
     fn void(?&P) up = park_unpark_thunk_;
     unsafe { self.install_park_((void*)up, (void*)park); }
     struct Context cx = local_context_(self, Waker::new(local_root_wake_, (?&LocalExecutor)self, 0UL));
-    atomic_store_int(&self.root_woken, 1);
+    async_store_(&self.root_woken, 1);
     self.timers.advance(park.now_ms());
     while (1) {
-        if (atomic_exchange_int(&self.root_woken, 0) != 0) {
+        if (async_xchg_(&self.root_woken, 0) != 0) {
             struct Poll<T> p = fut.poll(&cx);
             if (p.ready_ != 0) {
                 unsafe { self.install_park_((void*)0, (void*)0); }
@@ -353,7 +352,7 @@ T LocalExecutor::block_on(&P park, &F fut) {
             }
         }
         self.turn(park.now_ms());
-        if (atomic_load_int(&self.root_woken) != 0 || self.has_ready() != 0) continue;
+        if (async_load_(&self.root_woken) != 0 || self.has_ready() != 0) continue;
         park.park(self.timers.park_timeout());
     }
     struct Poll<T> never = fut.poll(&cx);   // unreachable

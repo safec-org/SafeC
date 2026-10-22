@@ -43,9 +43,9 @@ static void pool_task_wake_(?&TaskHeader tp, unsigned long tag) {
             match (pq) {
                 case some(p): {
                     mutex_lock(&p.mu);
-                    int st = atomic_fetch_or_int(&t.state, ASYNC_TASK_NOTIFIED);
+                    int st = async_fetch_or_(&t.state, ASYNC_TASK_NOTIFIED);
                     if ((st & (ASYNC_TASK_DONE | ASYNC_TASK_RUNNING | ASYNC_TASK_QUEUED)) == 0) {
-                        atomic_fetch_or_int(&t.state, ASYNC_TASK_QUEUED);
+                        async_fetch_or_(&t.state, ASYNC_TASK_QUEUED);
                         pool_push_(p, t);
                         cond_signal(&p.work_cv);
                     }
@@ -86,7 +86,7 @@ struct ThreadPool ThreadPool::new() {
 
 // Polls (or drops) one task taken off the queue; mu is not held.
 static void pool_run_one_(&ThreadPool p, &TaskHeader t) {
-    int st = atomic_load_int(&t.state);
+    int st = async_load_(&t.state);
     int done = 0;
     int aborted = 0;
     if ((st & ASYNC_TASK_ABORTED) != 0) {
@@ -118,10 +118,10 @@ static void pool_run_one_(&ThreadPool p, &TaskHeader t) {
     }
     mutex_lock(&p.mu);
     p.polls = p.polls + 1LL;
-    int now = atomic_fetch_and_int(&t.state, ~ASYNC_TASK_RUNNING);
+    int now = async_fetch_and_(&t.state, ~ASYNC_TASK_RUNNING);
     if ((now & (ASYNC_TASK_NOTIFIED | ASYNC_TASK_ABORTED)) != 0) {
         // Woken (or aborted) while it ran: run it again.
-        atomic_fetch_or_int(&t.state, ASYNC_TASK_QUEUED);
+        async_fetch_or_(&t.state, ASYNC_TASK_QUEUED);
         pool_push_(p, t);
         cond_signal(&p.work_cv);
     }
@@ -138,8 +138,8 @@ static ?&ThreadPool pool_worker_(?&ThreadPool pq) {
                     case some(t): {
                         // Clear NOTIFIED before polling: a wake from now on
                         // re-queues it after this poll.
-                        atomic_fetch_and_int(&t.state, ~(ASYNC_TASK_QUEUED | ASYNC_TASK_NOTIFIED));
-                        atomic_fetch_or_int(&t.state, ASYNC_TASK_RUNNING);
+                        async_fetch_and_(&t.state, ~(ASYNC_TASK_QUEUED | ASYNC_TASK_NOTIFIED));
+                        async_fetch_or_(&t.state, ASYNC_TASK_RUNNING);
                         mutex_unlock(&p.mu);
                         pool_run_one_(p, t);
                         mutex_lock(&p.mu);
@@ -204,7 +204,7 @@ int ThreadPool::spawn_raw_(?&TaskHeader tq) {
                 t.wake_ = (void*)wk;
             }
             self.live = self.live + 1;
-            atomic_fetch_or_int(&t.state, ASYNC_TASK_QUEUED);
+            async_fetch_or_(&t.state, ASYNC_TASK_QUEUED);
             pool_push_(self, t);
             cond_signal(&self.work_cv);
             mutex_unlock(&self.mu);
@@ -217,7 +217,7 @@ int ThreadPool::spawn_raw_(?&TaskHeader tq) {
 
 void ThreadPool::wait_task_(&TaskHeader hdr) {
     mutex_lock(&self.mu);
-    while ((atomic_load_int(&hdr.state) & ASYNC_TASK_DONE) == 0) cond_wait(&self.done_cv, &self.mu);
+    while ((async_load_(&hdr.state) & ASYNC_TASK_DONE) == 0) cond_wait(&self.done_cv, &self.mu);
     mutex_unlock(&self.mu);
 }
 

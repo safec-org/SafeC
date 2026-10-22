@@ -40,7 +40,6 @@
 // that produce nothing return struct Poll<Unit> (Unit is an int; pass
 // UNIT).
 #pragma once
-#include <std/atomic.h>
 #include <std/sync/spinlock.h>
 #include <std/dsp/timer_wheel.h>
 
@@ -48,6 +47,16 @@ typedef int Unit;     // the output of a future that produces nothing: Rust's ()
 #define UNIT 0
 
 namespace std {
+
+// Sequentially consistent atomics on an int, for the task and executor
+// state shared with wakers (which may run on other threads or in an
+// interrupt handler). The compiler's atomic built-ins, without std/atomic.h
+// (whose 64-bit operations need libcalls some bare-metal cores lack).
+int  async_load_(const &int p);
+void async_store_(&int p, int v);
+int  async_xchg_(&int p, int v);
+int  async_fetch_or_(&int p, int bits);
+int  async_fetch_and_(&int p, int bits);
 
 // What a future is. The structural check is by name: a type with
 // methods poll and drop fits, whatever its Output. Executors and

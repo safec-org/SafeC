@@ -24,15 +24,15 @@ void task_header_finish_(&TaskHeader hdr, int aborted) {
     hdr.lock.lock();
     int bits = ASYNC_TASK_DONE;
     if (aborted != 0) bits = bits | ASYNC_TASK_ABORTED;
-    atomic_fetch_or_int(&hdr.state, bits);
-    atomic_fetch_and_int(&hdr.state, ~(ASYNC_TASK_RUNNING | ASYNC_TASK_NOTIFIED | ASYNC_TASK_QUEUED));
+    async_fetch_or_(&hdr.state, bits);
+    async_fetch_and_(&hdr.state, ~(ASYNC_TASK_RUNNING | ASYNC_TASK_NOTIFIED | ASYNC_TASK_QUEUED));
     hdr.joiner.wake();
     hdr.lock.unlock();
 }
 
 int task_header_poll_join_(&TaskHeader hdr, const &Waker w) {
     hdr.lock.lock();
-    if ((atomic_load_int(&hdr.state) & ASYNC_TASK_DONE) != 0) {
+    if ((async_load_(&hdr.state) & ASYNC_TASK_DONE) != 0) {
         hdr.lock.unlock();
         return 1;
     }
@@ -45,10 +45,10 @@ int task_header_poll_join_(&TaskHeader hdr, const &Waker w) {
 // is polled; abort sets ABORTED first and wakes the task the usual way,
 // and the executor then drops the future instead of polling it.
 void task_header_abort_(&TaskHeader hdr) {
-    int st = atomic_fetch_or_int(&hdr.state, ASYNC_TASK_ABORTED);
+    int st = async_fetch_or_(&hdr.state, ASYNC_TASK_ABORTED);
     if ((st & ASYNC_TASK_DONE) != 0) {
         // Too late: it finished. Leave the result as it is.
-        if ((st & ASYNC_TASK_ABORTED) == 0) atomic_fetch_and_int(&hdr.state, ~ASYNC_TASK_ABORTED);
+        if ((st & ASYNC_TASK_ABORTED) == 0) async_fetch_and_(&hdr.state, ~ASYNC_TASK_ABORTED);
         return;
     }
     unsafe {
@@ -86,13 +86,13 @@ static void local_unpark_(&LocalExecutor ex) {
 static void local_task_wake_(?&TaskHeader tp, unsigned long tag) {
     match (tp) {
         case some(t): {
-            int st = atomic_fetch_or_int(&t.state, ASYNC_TASK_NOTIFIED);
+            int st = async_fetch_or_(&t.state, ASYNC_TASK_NOTIFIED);
             if ((st & ASYNC_TASK_DONE) != 0) return;
             ?&LocalExecutor exq;
             unsafe { exq = (?&LocalExecutor)t.exec_; }
             match (exq) {
                 case some(ex): {
-                    atomic_store_int(&ex.notified, 1);
+                    async_store_(&ex.notified, 1);
                     local_unpark_(ex);
                 }
                 case null: { }
@@ -105,8 +105,8 @@ static void local_task_wake_(?&TaskHeader tp, unsigned long tag) {
 void local_root_wake_(?&LocalExecutor exq, unsigned long tag) {
     match (exq) {
         case some(ex): {
-            atomic_store_int(&ex.root_woken, 1);
-            atomic_store_int(&ex.notified, 1);
+            async_store_(&ex.root_woken, 1);
+            async_store_(&ex.notified, 1);
             local_unpark_(ex);
         }
         case null: { }
@@ -170,8 +170,8 @@ int LocalExecutor::spawn_raw_(?&TaskHeader tq) {
             self.tail = t;
             self.live = self.live + 1;
             // Polled on the next round.
-            atomic_fetch_or_int(&t.state, ASYNC_TASK_NOTIFIED);
-            atomic_store_int(&self.notified, 1);
+            async_fetch_or_(&t.state, ASYNC_TASK_NOTIFIED);
+            async_store_(&self.notified, 1);
             return 1;
         }
         case null: return 0;
@@ -181,7 +181,7 @@ int LocalExecutor::spawn_raw_(?&TaskHeader tq) {
 
 // Polls (or drops, if aborted) one woken task. Returns 1 if it finished.
 static int local_step_(&LocalExecutor ex, &TaskHeader t) {
-    int st = atomic_fetch_and_int(&t.state, ~ASYNC_TASK_NOTIFIED);
+    int st = async_fetch_and_(&t.state, ~ASYNC_TASK_NOTIFIED);
     if ((st & ASYNC_TASK_DONE) != 0) return 1;
     if ((st & ASYNC_TASK_ABORTED) != 0) {
         unsafe {
@@ -191,7 +191,7 @@ static int local_step_(&LocalExecutor ex, &TaskHeader t) {
         task_header_finish_(t, 1);
         return 1;
     }
-    atomic_fetch_or_int(&t.state, ASYNC_TASK_RUNNING);
+    async_fetch_or_(&t.state, ASYNC_TASK_RUNNING);
     fn void(?&TaskHeader, unsigned long) wk = local_task_wake_;
     struct Context cx = local_context_(ex, Waker::new(wk, (?&TaskHeader)t, 0UL));
     int done;
@@ -200,7 +200,7 @@ static int local_step_(&LocalExecutor ex, &TaskHeader t) {
         done = pf(t, &cx);
     }
     ex.polls = ex.polls + 1LL;
-    atomic_fetch_and_int(&t.state, ~ASYNC_TASK_RUNNING);
+    async_fetch_and_(&t.state, ~ASYNC_TASK_RUNNING);
     if (done != 0) {
         task_header_finish_(t, 0);
         return 1;
@@ -209,7 +209,7 @@ static int local_step_(&LocalExecutor ex, &TaskHeader t) {
 }
 
 int LocalExecutor::run_ready() {
-    if (atomic_exchange_int(&self.notified, 0) == 0) return 0;
+    if (async_xchg_(&self.notified, 0) == 0) return 0;
     int n = 0;
     ?&TaskHeader prev = null;
     ?&TaskHeader cur = self.head;
@@ -219,7 +219,7 @@ int LocalExecutor::run_ready() {
             case null: going = 0;
             case some(t): {
                 int finished = 0;
-                int st = atomic_load_int(&t.state);
+                int st = async_load_(&t.state);
                 if ((st & ASYNC_TASK_DONE) != 0) {
                     finished = 1;
                 } else if ((st & ASYNC_TASK_NOTIFIED) != 0) {
@@ -257,7 +257,7 @@ int LocalExecutor::turn(long long now_ms) {
 int LocalExecutor::live_count() const { return self.live; }
 
 int LocalExecutor::has_ready() const {
-    return atomic_load_int(&self.notified) != 0 ? 1 : 0;
+    return async_load_(&self.notified) != 0 ? 1 : 0;
 }
 
 void LocalExecutor::install_park_(void* unpark, void* park) {
