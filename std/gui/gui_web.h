@@ -71,4 +71,17 @@ namespace std {
 // stay alive (a static or heap object) after the caller returns.
 void gui_web_run(&GuiApp app);
 
+// Screen readers: says 'text' through the page's aria-live region (e.g. a
+// status change your UI only draws).
+void gui_web_announce(const &char text);
+
+// std/wasm/dom.h interop (the page loaded the module through safec_dom.js's
+// loadSafeC, or passed its glue as the domGlue option): the window's
+// element — its frame in "frames" mode, else its <canvas> — as a dom.h
+// handle (-1 without the DOM glue), to style it or put DOM elements next
+// to it; and moving the window's element into DOM element 'parent'
+// (1 = done).
+int gui_web_window_element(const &GuiWindow win);
+int gui_web_mount(&GuiWindow win, int parent);
+
 } // namespace std

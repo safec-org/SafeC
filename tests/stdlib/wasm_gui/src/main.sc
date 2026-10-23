@@ -7,6 +7,7 @@
 #include <std/gui/gui_widget.h>
 #include <std/gui/gui_app.h>
 #include <std/gui/gui_web.h>
+#include <std/gui/gui_gpu.h>
 #include <std/collections/string.h>
 
 static struct GuiApp gApp;
@@ -178,3 +179,37 @@ __attribute__((export_name("close_b")))
 void close_b() { match (gB) { case some(w): { w.request_close(); } case null: { } } }
 __attribute__((export_name("window_count")))
 int window_count() { return (int)gApp.window_count(); }
+
+// windows in a page: positions (frames mode), dom.h interop, announcements
+__attribute__((export_name("pos_x")))
+int pos_x(int i) { match (win_at(i)) { case some(w): return w.pos_x(); case null: { } } return 0; }
+__attribute__((export_name("pos_y")))
+int pos_y(int i) { match (win_at(i)) { case some(w): return w.pos_y(); case null: { } } return 0; }
+__attribute__((export_name("set_position")))
+void set_position_(int i, int x, int y) { match (win_at(i)) { case some(w): { w.set_position(x, y); } case null: { } } }
+__attribute__((export_name("elem")))
+int elem(int i) { match (win_at(i)) { case some(w): return gui_web_window_element(w); case null: { } } return -1; }
+__attribute__((export_name("mount")))
+int mount(int i, int parent) { match (win_at(i)) { case some(w): return gui_web_mount(w, parent); case null: { } } return 0; }
+__attribute__((export_name("announce")))
+void announce() { gui_web_announce("Saved \xE2\x9C\x93"); }
+__attribute__((export_name("uses_gpu")))
+int uses_gpu(int i) { match (win_at(i)) { case some(w): return gui_window_uses_gpu(w); case null: { } } return 0; }
+__attribute__((export_name("redraw_b")))
+void redraw_b() { match (gB) { case some(w): { gApp.redraw(w); } case null: { } } }
+// A partial present of window B: a 4x4 green square at (30, 20).
+__attribute__((export_name("present_part")))
+void present_part() {
+    match (gB) {
+        case some(w): {
+            int y = 20;
+            while (y < 24) {
+                int x = 30;
+                while (x < 34) { w.set_pixel(x, y, 0x00FF00FFU); x = x + 1; }
+                y = y + 1;
+            }
+            w.present_rect(30, 20, 4, 4);
+        }
+        case null: { }
+    }
+}

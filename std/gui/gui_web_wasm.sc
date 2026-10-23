@@ -20,13 +20,19 @@ extern double std_gui_web_now();
 extern double std_gui_web_dpr();
 // GUI_MOD_META on Apple systems (Cmd), GUI_MOD_CTRL elsewhere.
 extern int  std_gui_web_primary_mod();
-// Creates the canvas of window 'id'; fills out[0..3] with its logical
-// width, height and (x1000) scale. 1 = ok.
-extern int  std_gui_web_create(int id, const char* title, int titleLen, int width, int height, int hiDpi, int visible, int* out);
+// Creates the canvas (and frame) of window 'id'. opts: width, height,
+// hiDpi, visible, x, y, decorated, resizable, minW, minH, maxW, maxH;
+// out: logical width, height, scale * 1000, x, y. 1 = ok.
+extern int  std_gui_web_create(int id, const char* title, int titleLen, const int* opts, int* out);
 extern void std_gui_web_destroy(int id);
 extern void std_gui_web_present(int id, const unsigned char* pixels, int bufW, int bufH, int x, int y, int w, int h);
 extern void std_gui_web_set_title(int id, const char* title, int len);
 extern void std_gui_web_set_size(int id, int width, int height);
+extern void std_gui_web_set_position(int id, int x, int y);
+extern void std_gui_web_update_limits(int id, int minW, int minH, int maxW, int maxH);
+extern void std_gui_web_say(const char* text, int len);
+extern int  std_gui_web_dom_handle(int id);
+extern int  std_gui_web_mount_in(int id, int parent);
 extern void std_gui_web_set_visible(int id, int visible);
 extern void std_gui_web_focus(int id);
 extern void std_gui_web_set_cursor(int id, int cursor);
@@ -52,13 +58,18 @@ static int __web_init() {
 
 static int __web_create(&GuiWindowState st, const &GuiWindowOptions opts) {
     unsafe {
-        int out[4];
-        out[0] = 0; out[1] = 0; out[2] = 1000; out[3] = 0;
+        int o[12];
+        o[0] = st.logicalW; o[1] = st.logicalH; o[2] = opts.hiDpi; o[3] = opts.visible;
+        o[4] = opts.x; o[5] = opts.y; o[6] = opts.decorated; o[7] = opts.resizable;
+        o[8] = opts.minWidth; o[9] = opts.minHeight; o[10] = opts.maxWidth; o[11] = opts.maxHeight;
+        int out[5];
+        out[0] = 0; out[1] = 0; out[2] = 1000; out[3] = GUI_POS_DEFAULT; out[4] = GUI_POS_DEFAULT;
         int n = (int)st.title.len;
-        if (!std_gui_web_create((int)st.id, (const char*)st.title.data, n, st.logicalW, st.logicalH,
-                                opts.hiDpi, opts.visible, &out[0])) {
+        if (!std_gui_web_create((int)st.id, (const char*)st.title.data, n, (const int*)&o[0], &out[0])) {
             return 0;
         }
+        st.x = out[3];
+        st.y = out[4];
         struct GuiWebWindow* w = (struct GuiWebWindow*)alloc_zeroed_raw_(sizeof(struct GuiWebWindow));
         st.native = (void*)w;
         st.key = (unsigned long long)st.id;
@@ -146,8 +157,10 @@ static void __web_set_size(&GuiWindowState st, int lw, int lh) {
     gui_backend_post(st, ev);
 }
 
-static void __web_set_position(&GuiWindowState st, int x, int y) { }
-static void __web_update_limits(&GuiWindowState st) { }
+static void __web_set_position(&GuiWindowState st, int x, int y) { unsafe { std_gui_web_set_position((int)st.id, x, y); } }
+static void __web_update_limits(&GuiWindowState st) {
+    unsafe { std_gui_web_update_limits((int)st.id, st.minW, st.minH, st.maxW, st.maxH); }
+}
 static void __web_set_visible(&GuiWindowState st, int v) { unsafe { std_gui_web_set_visible((int)st.id, v); } }
 static void __web_focus(&GuiWindowState st) { unsafe { std_gui_web_focus((int)st.id); } }
 static void __web_set_cursor(&GuiWindowState st, int c) { unsafe { std_gui_web_set_cursor((int)st.id, c); } }
@@ -258,11 +271,38 @@ int gui_web_event_(int id, int kind, double x, double y, int button, int keycode
                 st.logicalW = (int)((double)width / st.scale + 0.5);
                 st.logicalH = (int)((double)height / st.scale + 0.5);
             }
+            if (kind == GUI_EVENT_MOVE) { st.x = (int)x; st.y = (int)y; }
             if (kind == GUI_EVENT_FOCUS_IN) { st.focused = 1; }
             if (kind == GUI_EVENT_FOCUS_OUT) { st.focused = 0; }
             gui_backend_post(st, ev);
             return 1;
         }
+    }
+    return 0;
+}
+
+void gui_web_announce(const &char text) {
+    unsafe {
+        int n = 0;
+        while (text[n] != '\0') { n = n + 1; }
+        std_gui_web_say(text, n);
+    }
+}
+
+int gui_web_window_element(const &GuiWindow win) {
+    ?&GuiWindowState ost = gui_window_state(win);
+    match (ost) {
+        case null: return -1;
+        case some(st): { unsafe { return std_gui_web_dom_handle((int)st.id); } }
+    }
+    return -1;
+}
+
+int gui_web_mount(&GuiWindow win, int parent) {
+    ?&GuiWindowState ost = gui_window_state(win);
+    match (ost) {
+        case null: return 0;
+        case some(st): { unsafe { return std_gui_web_mount_in((int)st.id, parent); } }
     }
     return 0;
 }

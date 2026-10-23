@@ -18,17 +18,19 @@ const { chromium } = require("playwright");
 mkdirSync(outDir, { recursive: true });
 
 const fontMap = Object.fromEntries(fonts.map((f) => [f, `/fonts/${basename(f)}`]));
-const page = (wasm) => `<!doctype html><html><head><meta charset="utf-8"><title>t</title>
+const page = (wasm, extra = {}) => `<!doctype html><html><head><meta charset="utf-8"><title>t</title>
 <style>body{margin:0;background:#888} canvas{display:block;margin:0 0 8px 0}</style></head><body>
 <script type="module">
 import { loadSafeCGui, fetchFiles } from "/gui_web.js";
 const files = await fetchFiles(${JSON.stringify(fontMap)});
-window.app = await loadSafeCGui(fetch("${wasm}"), { files, title: true });
+window.app = await loadSafeCGui(fetch("${wasm}"), { files, title: true, ...${JSON.stringify(extra)} });
 window.ready = true;
 </script></body></html>`;
 const routes = {
     "/gallery.html": ["text/html", page("/gallery.wasm")],
     "/web.html": ["text/html", page("/web.wasm")],
+    "/gallery-webgl.html": ["text/html", page("/gallery.wasm", { present: "webgl", preserveDrawingBuffer: true })],
+    "/web-frames.html": ["text/html", page("/web.wasm", { windows: "frames" })],
     "/gui_web.js": ["text/javascript", readFileSync(glue)],
     "/gallery.wasm": ["application/wasm", readFileSync(galleryWasm)],
     "/web.wasm": ["application/wasm", readFileSync(webWasm)],
@@ -55,7 +57,8 @@ const expect = (name, cond, extra = "") => {
     if (!cond) failures++;
 };
 
-const browser = await chromium.launch();
+// WebGL without a GPU: SwiftShader through ANGLE
+const browser = await chromium.launch({ args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] });
 try {
     // ── the gallery at devicePixelRatio 1, against the native frame ──
     const ctx = await browser.newContext({ viewport: { width: 900, height: 1300 }, deviceScaleFactor: 1 });
@@ -125,13 +128,71 @@ try {
     const after = await p.evaluate(() => document.querySelectorAll("canvas")[0].toDataURL());
     expect("mouse clicks change the widgets window (tabs)", before !== after);
     const focused = await p.evaluate(() => document.activeElement && document.activeElement.tagName);
-    expect("a click focuses the canvas", focused === "CANVAS", String(focused));
+    expect("a click gives the window's hidden input the DOM focus", focused === "TEXTAREA", String(focused));
     await p.keyboard.type("abc");
     await p.keyboard.press("Tab");
+    await p.keyboard.insertText("日本語");   // text with no key events (IME commit / virtual keyboard)
     await p.waitForTimeout(100);
     expect("keyboard input handled without page errors", errors.length === 0, errors.join("; "));
     await p.locator("canvas").first().screenshot({ path: `${outDir}/gallery-widgets-after-input.png` });
     await ctx.close();
+
+    // ── the gallery through WebGL, against the putImageData frame ──
+    const ctxG = await browser.newContext({ viewport: { width: 900, height: 1300 }, deviceScaleFactor: 1 });
+    const pg = await ctxG.newPage();
+    const errsG = [];
+    pg.on("pageerror", (e) => errsG.push(String(e)));
+    await pg.goto(`${base}/gallery-webgl.html`);
+    await pg.waitForFunction(() => window.ready === true, null, { timeout: 30000 });
+    await pg.waitForTimeout(300);
+    const kind = await pg.evaluate(() => window.app.gui.presenter(window.app.gui.windows()[0].id));
+    expect("WebGL: the gallery presents through WebGL2", kind === "webgl2", String(kind));
+    const cmpG = await pg.evaluate(async () => {
+        const img = new Image();
+        img.src = "/snap/widgets.png";
+        await img.decode();
+        const grab = (src) => {
+            const c = document.createElement("canvas");
+            c.width = 860; c.height = 620;
+            const cx = c.getContext("2d");
+            cx.drawImage(src, 0, 0);
+            return cx.getImageData(0, 0, 860, 620).data;
+        };
+        const a = grab(img), b = grab(document.querySelectorAll("canvas")[0]);
+        let close = 0;
+        for (let i = 0; i < a.length; i += 4) {
+            const d = Math.max(Math.abs(a[i] - b[i]), Math.abs(a[i + 1] - b[i + 1]), Math.abs(a[i + 2] - b[i + 2]));
+            if (d <= 2) close++;
+        }
+        return { n: a.length / 4, close };
+    });
+    console.log(`    WebGL widgets window vs native snapshot: ${cmpG.close}/${cmpG.n} pixels within 2`);
+    expect("WebGL: the same frame as the CPU path (all but the animated bars)", cmpG.n - cmpG.close <= 1500, JSON.stringify(cmpG));
+    await pg.locator("canvas").first().screenshot({ path: `${outDir}/gallery-widgets-webgl.png` });
+    const sumG = () => pg.evaluate(() => { const c = document.createElement("canvas"); c.width = 470; c.height = 560; const x = c.getContext("2d"); x.drawImage(document.querySelectorAll("canvas")[1], 0, 0); const d = x.getImageData(0, 0, 470, 560).data; let h = 0; for (let i = 0; i < d.length; i += 97) h = (h * 31 + d[i]) >>> 0; return h; });
+    const g1 = await sumG();
+    await pg.waitForTimeout(200);
+    expect("WebGL: the canvas window animates", (await sumG()) !== g1);
+    expect("WebGL: no page errors", errsG.length === 0, errsG.join("; "));
+    await ctxG.close();
+
+    // ── examples/gui_web in frames ──
+    const ctxF = await browser.newContext({ viewport: { width: 900, height: 700 }, deviceScaleFactor: 1 });
+    const pf = await ctxF.newPage();
+    await pf.goto(`${base}/web-frames.html`);
+    await pf.waitForFunction(() => window.ready === true, null, { timeout: 30000 });
+    await pf.waitForTimeout(200);
+    const fr = await pf.evaluate(() => Array.from(document.querySelectorAll(".safec-gui-window")).map((f) => [f.offsetLeft, f.offsetTop]));
+    const bar = pf.locator(".safec-gui-titlebar").first();
+    const bb = await bar.boundingBox();
+    await pf.mouse.move(bb.x + 60, bb.y + 10);
+    await pf.mouse.down();
+    await pf.mouse.move(bb.x + 260, bb.y + 110, { steps: 5 });
+    await pf.mouse.up();
+    const moved = await pf.evaluate(() => document.querySelector(".safec-gui-window").offsetLeft);
+    expect("frames: two windows, dragged by the title bar", fr.length === 2 && moved === fr[0][0] + 200, JSON.stringify([fr, moved]));
+    await pf.screenshot({ path: `${outDir}/gui_web-frames.png` });
+    await ctxF.close();
 
     // ── examples/gui_web at devicePixelRatio 2 ──
     const ctx2 = await browser.newContext({ viewport: { width: 800, height: 900 }, deviceScaleFactor: 2 });
