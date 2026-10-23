@@ -311,6 +311,14 @@ static void t13_expand_label_(int h, const unsigned char* secret, unsigned long 
     }
 }
 
+void tls13_expand_label_(int hash, const &unsigned char secret, unsigned long sl, const &char label,
+                         const ?&unsigned char ctx, unsigned long cl, &unsigned char out, unsigned long ol) {
+    unsafe {
+        t13_expand_label_(hash, (const unsigned char*)secret, sl, label, (const unsigned char*)ctx, cl,
+                          (unsigned char*)out, ol);
+    }
+}
+
 static void t13_hmac_(int h, const unsigned char* key, unsigned long kl, const unsigned char* data, unsigned long dl,
                       unsigned char* out) {
     unsafe {

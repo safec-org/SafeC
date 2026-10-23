@@ -49,6 +49,11 @@ int tls_verify_chain_(const &Vec<struct Vec<unsigned char>> chain, const ?&TlsTr
 // Seconds since the epoch.
 unsigned long long tls_now_();
 
+// HKDF-Expand-Label (RFC 8446 §7.1) with hash DIGEST_SHA256 / _SHA384:
+// the key schedule's one primitive, exposed for the RFC 8448 checks.
+void tls13_expand_label_(int hash, const &unsigned char secret, unsigned long sl, const &char label,
+                         const ?&unsigned char ctx, unsigned long cl, &unsigned char out, unsigned long ol);
+
 // ── private keys (tls_safec.sc) ──────────────────────────────────────────────
 
 #define TLS_KEY_NONE_ 0
