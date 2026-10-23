@@ -10,3 +10,11 @@
 #include <std/crypto/secure_alloc.h>
 #include <std/crypto/tls.h>
 #include <std/crypto/x509.h>
+#include <std/crypto/ct.h>
+#include <std/crypto/chacha20.h>
+#include <std/crypto/x25519.h>
+#include <std/crypto/hkdf.h>
+#include <std/crypto/digest.h>
+#include <std/crypto/bignum.h>
+#include <std/crypto/rsa.h>
+#include <std/crypto/ec.h>
