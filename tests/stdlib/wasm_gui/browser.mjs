@@ -5,14 +5,14 @@
 // pixel with the native headless snapshot of the same frame
 // (gui_gallery --snapshot), then driven with real mouse and keyboard input.
 // Also loads examples/gui_web at devicePixelRatio 2 and checks it animates.
-//   usage: node browser.mjs <gallery.wasm> <snapshot dir> <gui_web.wasm> <gui_web.js> <out dir> <examples/gui_web/web/index.html> <font>...
+//   usage: node browser.mjs <gallery.wasm> <snapshot dir> <gui_web.wasm> <gui_web.js> <out dir> <examples/gui_web/web/index.html> <bundle dir> <font>...
 //   Env: NODE_PATH must find 'playwright'; PLAYWRIGHT_BROWSERS_PATH its browsers.
 import { createServer } from "node:http";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { basename } from "node:path";
 import { createRequire } from "node:module";
 
-const [galleryWasm, snapDir, webWasm, glue, outDir, examplePage, ...fonts] = process.argv.slice(2);
+const [galleryWasm, snapDir, webWasm, glue, outDir, examplePage, bundleDir, ...fonts] = process.argv.slice(2);
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
 mkdirSync(outDir, { recursive: true });
@@ -42,6 +42,9 @@ routes["/example/index.html"] = ["text/html", readFileSync(examplePage)];
 routes["/example/gui_web.wasm"] = routes["/web.wasm"];
 routes["/example/gui_web.js"] = routes["/gui_web.js"];
 for (const f of fonts) routes[`/example/fonts/${basename(f)}`] = routes[`/fonts/${basename(f)}`];
+// 'safeguard bundle --target wasm32' output, as is
+const types = { ".html": "text/html", ".js": "text/javascript", ".wasm": "application/wasm", ".png": "image/png" };
+for (const f of readdirSync(bundleDir)) routes[`/bundle/${f}`] = [types[f.slice(f.lastIndexOf("."))] || "application/octet-stream", readFileSync(`${bundleDir}/${f}`)];
 const server = createServer((req, res) => {
     const r = routes[req.url];
     if (!r) { res.writeHead(404); res.end(); return; }
@@ -221,6 +224,12 @@ try {
     const i3 = await q.evaluate(() => Array.from(document.querySelectorAll("canvas")).map((c) => c.width));
     expect("examples/gui_web/web/index.html runs", i3.length === 2 && i3[0] === 720 && errs2.length === 0, JSON.stringify(i3) + errs2.join("; "));
     await q.screenshot({ path: `${outDir}/gui_web-page.png` });
+    // the page 'safeguard bundle --target wasm32' generated
+    await q.goto(`${base}/bundle/index.html`);
+    await q.waitForTimeout(800);
+    const i4 = await q.evaluate(() => ({ n: document.querySelectorAll("#safec-app canvas").length, err: document.getElementById("safec-error").textContent, title: document.title }));
+    expect("safeguard bundle --target wasm32: the generated page runs", i4.n === 2 && i4.err === "" && i4.title === "Controls" && errs2.length === 0, JSON.stringify(i4));
+    await q.screenshot({ path: `${outDir}/gui_web-bundle.png` });
     await ctx2.close();
 } finally {
     await browser.close();

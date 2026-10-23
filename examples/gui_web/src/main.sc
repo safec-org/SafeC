@@ -5,6 +5,9 @@
 // program, except that the page drives the loop: start() opens the
 // windows and hands the app to gui_web_run() (see std/gui/gui_web.h).
 //
+//   safeguard bundle --target wasm32      # build/GuiWeb.web/: wasm + glue + a page
+//   python3 -m http.server -d build/GuiWeb.web
+// or, with the hand-written page in web/:
 //   safeguard build --target wasm32
 //   cp build/gui_web web/gui_web.wasm
 //   cp <SafeC>/std/gui/gui_web.js web/

@@ -22,6 +22,6 @@ cp -R "$ROOT/examples/gui_web" "$W/web"
 rm -rf "$W/gallery/build" "$W/web/build"
 (cd "$W/gallery" && "$SAFEGUARD" build >/dev/null && SAFEC_GUI_FONT_DIR= ./build/gui_gallery --snapshot "$W" >/dev/null &&
     "$SAFEGUARD" build --target wasm32 >/dev/null 2>&1)
-(cd "$W/web" && "$SAFEGUARD" build --target wasm32 >/dev/null 2>&1)
+(cd "$W/web" && "$SAFEGUARD" build --target wasm32 >/dev/null 2>&1 && "$SAFEGUARD" bundle --target wasm32 >/dev/null 2>&1)
 mkdir -p "$OUT"
-"$NODE" "$HERE/browser.mjs" "$W/gallery/build/gui_gallery" "$W" "$W/web/build/gui_web" "$ROOT/std/gui/gui_web.js" "$OUT" "$ROOT/examples/gui_web/web/index.html" "${FONTS[@]}"
+"$NODE" "$HERE/browser.mjs" "$W/gallery/build/gui_gallery" "$W" "$W/web/build/gui_web" "$ROOT/std/gui/gui_web.js" "$OUT" "$ROOT/examples/gui_web/web/index.html" "$W/web/build/GuiWeb.web" "${FONTS[@]}"

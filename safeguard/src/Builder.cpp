@@ -3473,7 +3473,7 @@ bool Builder::bundleLinux() const {
 }
 
 bool Builder::bundle() {
-    if (!manifest_.bundle.present) {
+    if (!manifest_.bundle.present && !targetIsWasm()) {
         std::cerr << "safeguard: 'bundle' needs a [bundle] table in Package.toml (at least "
                      "identifier = \"org.example." << manifest_.package.name << "\")\n";
         return false;
@@ -3483,8 +3483,13 @@ bool Builder::bundle() {
         return false;
     }
     std::string os = targetOS();
+    if (targetIsWasm()) {
+        opts_.bundle = true;
+        if (!build()) return false;
+        return bundleWeb();
+    }
     if (os.empty()) {
-        std::cerr << "safeguard: 'bundle' packages for macOS, Windows or Linux, not --target "
+        std::cerr << "safeguard: 'bundle' packages for macOS, Windows, Linux or WebAssembly (wasm32), not --target "
                   << opts_.target << "\n";
         return false;
     }
@@ -3493,6 +3498,148 @@ bool Builder::bundle() {
     if (os == "macos") return bundleMacOS();
     if (os == "windows") return bundleWindows();
     return bundleLinux();
+}
+
+// ── WebAssembly: a page ───────────────────────────────────────────────────────
+//
+// build/<name>.web/: the module, the JS glue of the std modules it uses
+// (std/gui/gui_web.js, std/wasm/safec_dom.js, std/audio/audio_web.js),
+// the [bundle] resources and web_files, the icon as favicon.png, and an
+// index.html that loads it all (or [bundle] web_page). Serve the folder
+// over HTTP: browsers don't instantiate WebAssembly from file:// URLs.
+
+static std::string jsString(const std::string& s) {
+    std::string o = "\"";
+    for (char c : s) {
+        if (c == '"' || c == '\\') { o += '\\'; o += c; }
+        else if (c == '\n') o += "\\n";
+        else if (c == '<') o += "\\u003c";   // (inside <script>)
+        else o += c;
+    }
+    return o + "\"";
+}
+
+static std::string htmlEscape(const std::string& s) {
+    std::string o;
+    for (char c : s) {
+        if (c == '&') o += "&amp;"; else if (c == '<') o += "&lt;"; else if (c == '>') o += "&gt;";
+        else if (c == '"') o += "&quot;"; else o += c;
+    }
+    return o;
+}
+
+bool Builder::bundleWeb() const {
+    const BundleConfig& b = manifest_.bundle;
+    const std::string name = !b.name.empty() ? b.name : manifest_.package.name;
+    fs::path build = fs::path(root_) / "build";
+    fs::path dir = build / (name + ".web");
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    const std::string wasmName = manifest_.build.output + ".wasm";
+    fs::copy_file(outputPath(), dir / wasmName, fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+        std::cerr << "safeguard: could not copy " << outputPath() << ": " << ec.message() << "\n";
+        return false;
+    }
+    // The glue each std module needs from the page.
+    fs::path stdDir = findStdDir();
+    bool gui = false, dom = false, audio = false;
+    for (auto& u : stdUnits_) {
+        if (u == "gui/gui_web_wasm.sc") gui = true;
+        if (u == "wasm/dom.sc") dom = true;
+        if (u == "audio/audio_webaudio_wasm.sc" || u == "audio/midi_webmidi_wasm.sc") audio = true;
+    }
+    auto glue = [&](const char* rel) {
+        fs::copy_file(stdDir / rel, dir / fs::path(rel).filename(), fs::copy_options::overwrite_existing, ec);
+        if (ec) std::cerr << "safeguard: could not copy std/" << rel << ": " << ec.message() << "\n";
+        return !ec;
+    };
+    if (gui && !glue("gui/gui_web.js")) return false;
+    if (dom && !glue("wasm/safec_dom.js")) return false;
+    if (audio && !glue("audio/audio_web.js")) return false;
+    for (auto& r : b.resources)
+        if (!copyResource(fs::path(root_) / r, dir)) return false;
+    // web_files: "src" (seen by the module at the same path) or "src=module/path"
+    std::vector<std::pair<std::string, std::string>> files;   // module path -> page URL
+    for (auto& spec : b.webFiles) {
+        size_t eq = spec.find('=');
+        std::string src = spec.substr(0, eq), as = eq == std::string::npos ? spec : spec.substr(eq + 1);
+        fs::path from = fs::path(src).is_absolute() ? fs::path(src) : fs::path(root_) / src;
+        if (!fs::is_regular_file(from)) {
+            std::cerr << "safeguard: bundle.web_files: " << from.string() << " not found\n";
+            return false;
+        }
+        fs::create_directories(dir / "files", ec);
+        std::string url = "files/" + std::to_string(files.size()) + "-" + from.filename().string();
+        fs::copy_file(from, dir / url, fs::copy_options::overwrite_existing, ec);
+        files.push_back({ as, url });
+    }
+    for (auto& r : b.resources) {   // resources are readable by their manifest path too
+        fs::path from = fs::path(root_) / r;
+        if (fs::is_regular_file(from)) files.push_back({ r, from.filename().string() });
+    }
+    bool favicon = false;
+    if (!b.icon.empty() && fs::path(b.icon).extension() == ".png") {
+        fs::copy_file(fs::path(root_) / b.icon, dir / "favicon.png", fs::copy_options::overwrite_existing, ec);
+        favicon = !ec;
+    }
+    if (!b.webPage.empty()) {
+        fs::copy_file(fs::path(root_) / b.webPage, dir / "index.html", fs::copy_options::overwrite_existing, ec);
+        if (ec) { std::cerr << "safeguard: could not copy " << b.webPage << ": " << ec.message() << "\n"; return false; }
+    } else {
+        std::ofstream f(dir / "index.html");
+        std::string entry = b.webEntry.empty() ? "start" : b.webEntry;
+        f << "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
+          << "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+          << "<title>" << htmlEscape(name) << "</title>\n";
+        if (favicon) f << "<link rel=\"icon\" href=\"favicon.png\">\n";
+        f << "<style>\n"
+          << "  body { margin: 0; padding: 16px; background: #e9ecef; font: 15px system-ui, sans-serif; }\n"
+          << "  main { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; position: relative; min-height: 90vh; }\n"
+          << "  canvas { border-radius: 6px; box-shadow: 0 2px 12px rgba(0, 0, 0, .18); }\n"
+          << "  #safec-error { color: #c92a2a; white-space: pre-wrap; }\n"
+          << "</style>\n";
+        if (audio) f << "<script src=\"audio_web.js\"></script>\n";
+        f << "</head>\n<body>\n<main id=\"safec-app\"></main>\n<p id=\"safec-error\"></p>\n"
+          << "<!-- Generated by 'safeguard bundle --target wasm32'. Serve this folder over HTTP\n"
+          << "     (e.g. python3 -m http.server -d build/" << htmlEscape(name) << ".web). -->\n"
+          << "<script type=\"module\">\n";
+        if (gui) f << "import { loadSafeCGui, fetchFiles } from \"./gui_web.js\";\n";
+        if (dom) f << "import { loadSafeC } from \"./safec_dom.js\";\n";
+        f << "try {\n";
+        if (gui) {
+            f << "  const files = await fetchFiles({";
+            for (size_t i = 0; i < files.size(); ++i)
+                f << (i ? ", " : "") << jsString(files[i].first) << ": " << jsString(files[i].second);
+            f << "});\n"
+              << "  const options = { files, title: true, entry: " << jsString(entry)
+              << ", container: document.getElementById(\"safec-app\")";
+            if (!b.webPresent.empty()) f << ", present: " << jsString(b.webPresent);
+            if (b.webWindows == "frames") f << ", windows: \"frames\"";
+            else f << ", canvas: (i) => document.getElementById(\"safec-app\").appendChild(document.createElement(\"canvas\"))";
+            if (dom) f << ", loadSafeC";
+            if (audio) f << ", imports: SafeCAudio.imports({})";
+            f << " };\n"
+              << "  const app = await loadSafeCGui(fetch(" << jsString(wasmName) << "), options);\n";
+            if (audio) f << "  SafeCAudio.attach(app.instance);\n";
+        } else if (dom) {
+            f << "  const app = await loadSafeC(fetch(" << jsString(wasmName) << ")"
+              << (audio ? ", { imports: SafeCAudio.imports({}) }" : "") << ");\n";
+            if (audio) f << "  SafeCAudio.attach(app.instance);\n";
+            f << "  if (app.exports[" << jsString(entry) << "]) app.exports[" << jsString(entry) << "]();\n";
+        } else {
+            f << "  const env = " << (audio ? "SafeCAudio.imports({})" : "{}") << ";\n"
+              << "  const { instance } = await WebAssembly.instantiateStreaming(fetch(" << jsString(wasmName) << "), { env });\n";
+            if (audio) f << "  SafeCAudio.attach(instance);\n";
+            f << "  if (instance.exports[" << jsString(entry) << "]) instance.exports[" << jsString(entry) << "]();\n";
+        }
+        f << "} catch (e) {\n  document.getElementById(\"safec-error\").textContent = String(e && e.stack || e);\n  throw e;\n}\n"
+          << "</script>\n</body>\n</html>\n";
+    }
+    std::cout << "safeguard: bundled " << dir.lexically_normal().string() << "  (serve it over HTTP, e.g. "
+              << "python3 -m http.server -d " << dir.lexically_normal().string() << ")\n";
+    return true;
 }
 
 // ── public: clean ─────────────────────────────────────────────────────────────

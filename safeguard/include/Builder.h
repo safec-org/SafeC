@@ -473,6 +473,7 @@ private:
     bool bundleMacOS() const;
     bool bundleWindows() const;
     bool bundleLinux() const;
+    bool bundleWeb() const;
 
     // A dependency's directory: <root>/deps/<name> for a git URL, 'path'
     // (against the project root) for a local one, "" for a lib-only entry.

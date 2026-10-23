@@ -8,4 +8,10 @@ license     = "MIT"
 [build]
 edition = "2026"
 
-# Build: safeguard build --target wasm32   (then see src/main.sc's header for serving web/)
+# 'safeguard bundle --target wasm32': build/GuiWeb.web/ — gui_web.wasm, the
+# std/gui JS glue and a generated index.html (web/index.html is the
+# hand-written alternative). Serve it: python3 -m http.server -d build/GuiWeb.web
+[bundle]
+name        = "GuiWeb"
+identifier  = "org.safec.gui-web"
+web_present = "webgl"
