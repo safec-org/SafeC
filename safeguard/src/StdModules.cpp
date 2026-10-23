@@ -45,7 +45,9 @@ bool stdVariantMatches(const fs::path& src, const std::string& triple, bool bare
         linux_ = triple.find("linux") != std::string::npos;
         bsd = triple.find("bsd") != std::string::npos;
     }
-    if (endsWith("_fb")) return bareMetal;   // bare-metal framebuffer backend (see gui_fb.sc)
+    // bare-metal framebuffer backend (see gui_fb.sc); WebAssembly, which
+    // safeguard also treats as bare metal, has its own (_wasm: gui_web_wasm.sc)
+    if (endsWith("_fb")) return bareMetal && triple.rfind("wasm", 0) != 0;
     // WebAssembly host (browser/Node) backends: JS imports, see audio_webaudio_wasm.sc.
     if (endsWith("_wasm")) return triple.rfind("wasm", 0) == 0;
     if (bareMetal) {
