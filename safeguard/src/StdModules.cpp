@@ -241,10 +241,10 @@ const StdIndex& StdIndex::load(const std::string& stdDir) {
             } else if (kind == "runtime-symbol") {
                 if (f.header || args.empty()) { bad("a .sc names its symbol prefixes"); continue; }
                 f.runtimeSymbols.insert(f.runtimeSymbols.end(), args.begin(), args.end());
-            } else if (kind == "link" || kind == "deb") {
+            } else if (kind == "link" || kind == "deb" || kind == "deb-recommends") {
                 if (f.header || args.size() < 2) { bad("expects '<os> <items...>' in a .sc"); continue; }
                 LinkRule r{args[0], std::vector<std::string>(args.begin() + 1, args.end())};
-                (kind == "link" ? f.links : f.debs).push_back(r);
+                (kind == "link" ? f.links : kind == "deb" ? f.debs : f.debRecommends).push_back(r);
             } else {
                 bad("unknown directive");
             }
@@ -493,6 +493,19 @@ std::vector<std::string> StdIndex::debDepends(const std::set<std::string>& unitS
         auto it = files.find(u);
         if (it == files.end()) continue;
         for (auto& r : it->second.debs)
+            if (osMatches(r.os, p))
+                for (auto& d : r.flags)
+                    if (std::find(out.begin(), out.end(), d) == out.end()) out.push_back(d);
+    }
+    return out;
+}
+
+std::vector<std::string> StdIndex::debRecommends(const std::set<std::string>& unitSet, const StdPlatform& p) const {
+    std::vector<std::string> out;
+    for (auto& u : unitSet) {
+        auto it = files.find(u);
+        if (it == files.end()) continue;
+        for (auto& r : it->second.debRecommends)
             if (osMatches(r.os, p))
                 for (auto& d : r.flags)
                     if (std::find(out.begin(), out.end(), d) == out.end()) out.push_back(d);

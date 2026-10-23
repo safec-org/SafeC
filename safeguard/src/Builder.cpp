@@ -1473,6 +1473,7 @@ bool Builder::ensureStdLib(const std::set<std::string>& roots, const std::set<st
     stdArchives_.clear();
     stdLinkFlags_.clear();
     stdDebDepends_.clear();
+    stdDebRecommends_.clear();
     stdUnits_.clear();
     std::string stdDir = findStdDir();
     // A std archive named by SAFEC_STD_ARCHIVE: linked as is -- the linker
@@ -1617,6 +1618,7 @@ bool Builder::ensureStdLib(const std::set<std::string>& roots, const std::set<st
         }
     }
     stdDebDepends_ = idx.debDepends(units, plat);
+    stdDebRecommends_ = idx.debRecommends(units, plat);
     if (opts_.verbose) {
         std::cout << "safeguard: std modules (" << units.size() << "):";
         for (auto& u : units) std::cout << " " << u;
@@ -3433,6 +3435,21 @@ bool Builder::bundleLinux() const {
             for (size_t i = 0; i < depends.size(); ++i) f << (i ? ", " : "") << depends[i];
             f << "\n";
         }
+        // Libraries std loads at run time when installed (dlopen: e.g.
+        // libwayland-client for std/gui's Wayland backend) -- the program
+        // runs without them, so Recommends, never Depends.
+        std::vector<std::string> recommends;
+        for (auto& d : stdDebRecommends_) {
+            bool listed = false;
+            for (auto& have : depends)
+                if (have.substr(0, have.find_first_of(" (|")) == d) listed = true;
+            if (!listed) recommends.push_back(d);
+        }
+        if (!recommends.empty()) {
+            f << "Recommends: ";
+            for (size_t i = 0; i < recommends.size(); ++i) f << (i ? ", " : "") << recommends[i];
+            f << "\n";
+        }
         f << "Section: " << (desktopCategory(b.category) == "Game" ? "games" : "misc") << "\n"
           << "Priority: optional\n"
           << "Description: " << (manifest_.package.description.empty() ? b.name : manifest_.package.description)
@@ -3640,6 +3657,7 @@ bool Builder::printStdModules(const std::vector<std::string>& args) {
         std::cout << "link" << (line.empty() ? " (none)" : line) << "   ([build] blas)\n";
     }
     for (auto& d : idx.debDepends(units, plat)) std::cout << "deb " << d << "\n";
+    for (auto& d : idx.debRecommends(units, plat)) std::cout << "deb-recommends " << d << "\n";
     return true;
 }
 
