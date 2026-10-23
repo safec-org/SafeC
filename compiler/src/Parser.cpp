@@ -505,6 +505,18 @@ TypePtr Parser::parseType() {
         // '?[]T': an optional slice.
         if (cur().is(TK::LBracket) && peek().is(TK::RBracket))
             return makeOptional(parseType());
+        // '?fn R(Args)': a nullable function reference (an optional
+        // callback) -- the '?&' form of the reference a 'fn' type is, so it
+        // takes null, a function name or a 'fn' value, and is read with
+        // match / is_null() like any '?&T'.
+        if (cur().is(TK::KW_fn)) {
+            TypePtr f = parseType();
+            if (f && f->kind == TypeKind::Reference) {
+                auto &rt = static_cast<ReferenceType &>(*f);
+                return makeReference(rt.base, rt.region, /*nullable=*/true, rt.mut, rt.arenaName);
+            }
+            return makeOptional(std::move(f));
+        }
         TypePtr inner = parseBaseType();
         inner = parseTypeDeclarator(std::move(inner), baseVolatile_);
         return makeOptional(std::move(inner));
