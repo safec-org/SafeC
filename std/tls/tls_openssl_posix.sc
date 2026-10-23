@@ -28,6 +28,7 @@
 #define OSSL_VERIFY_FAIL_NO_CERT_ 2
 #define OSSL_CTRL_SET_TLSEXT_HOSTNAME_ 55
 #define OSSL_CTRL_EXTRA_CHAIN_CERT_    14
+#define OSSL_CTRL_CHAIN_CERT_          89
 #define OSSL_CTRL_MODE_                33
 #define OSSL_CTRL_SET_MIN_PROTO_       123
 #define OSSL_CTRL_SET_MAX_PROTO_       124
@@ -501,12 +502,16 @@ static int ossl_use_cert_key_(void* target, int is_ctx, const &char cert_pem, co
         int ok = is_ctx ? g_ossl_.ctx_use_cert(target, leaf) : g_ossl_.ssl_use_cert(target, leaf);
         g_ossl_.x509_free(leaf);
         if (ok != 1) { g_ossl_.bio_free(bio); return ossl_fail_(e, TLS_ERR_CONFIG, "certificate rejected"); }
-        if (is_ctx) {
-            while (1) {
-                void* x = g_ossl_.pem_read_x509(bio, (void*)0, (void*)0, (void*)0);
-                if (x == (void*)0) { break; }
+        while (1) {
+            void* x = g_ossl_.pem_read_x509(bio, (void*)0, (void*)0, (void*)0);
+            if (x == (void*)0) { break; }
+            if (is_ctx) {
                 // the context owns x from here
                 if (g_ossl_.ctx_ctrl(target, OSSL_CTRL_EXTRA_CHAIN_CERT_, 0L, x) != 1L) { g_ossl_.x509_free(x); }
+            } else {
+                // SSL_add1_chain_cert: the SSL takes its own reference
+                g_ossl_.ssl_ctrl(target, OSSL_CTRL_CHAIN_CERT_, 1L, x);
+                g_ossl_.x509_free(x);
             }
         }
         g_ossl_.bio_free(bio);

@@ -586,7 +586,15 @@ static int t13_on_alert_(&TlsStream s, &T13_ t, unsigned long poff, unsigned lon
     else if (desc == T13_A_NO_ALPN_) { m.push(" (no_application_protocol)"); }
     else if (desc == T13_A_UNRECOGNIZED_NAME_) { m.push(" (unrecognized_name)"); }
     else if (desc == T13_A_ILLEGAL_PARAM_) { m.push(" (illegal_parameter)"); }
-    tls_fail_(&s.err, TLS_ERR_ALERT, m.as_ptr());
+    int code = TLS_ERR_ALERT;
+    if (desc == T13_A_PROTOCOL_VERSION_ || desc == T13_A_HS_FAILURE_ || desc == 71) {
+        // no version / suite / group in common
+        code = TLS_ERR_HANDSHAKE;
+        if (desc == T13_A_PROTOCOL_VERSION_ && !t.rd_on) {
+            m.push(": the peer doesn't accept TLS 1.3, the only version the SafeC TLS backend implements");
+        }
+    }
+    tls_fail_(&s.err, code, m.as_ptr());
     m.free();
     s.err.alert = desc;
     t.st = T13_FAILED_;
