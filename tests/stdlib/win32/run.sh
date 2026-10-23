@@ -51,7 +51,7 @@ if command -v openssl >/dev/null 2>&1; then
     sleep 0.5
 fi
 fails=0
-for t in win32_gui_check win32_thread_check win32_audio_check win32_tls_check; do
+for t in win32_gui_check win32_thread_check win32_audio_check win32_net_check win32_tls_check; do
     "$SAFEC" -I "$ROOT/std" -I "$ROOT" "$HERE/$t.sc" --target=$TRIPLE --emit-llvm --compat-preprocessor -o "$OUT/$t.ll"
     "$CLANG" -c --target=$TRIPLE "$OUT/$t.ll" -o "$OUT/$t.o" -Wno-override-module
     link "$OUT/$t.o" "$OUT/$t.exe"

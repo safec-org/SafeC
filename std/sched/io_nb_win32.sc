@@ -56,8 +56,10 @@ struct SockAddrIn {
     unsigned long  sin_zero;   // 8 bytes, always zero
 };
 
-// reactor_win32.sc declares this same struct (same purpose, same shape —
-// see its own comment) — guarded so a caller that includes both this file
+// WSADATA, which WSAStartup fills in — see reactor_win32.sc's identical
+// definition for why it has to be the real, full-size layout.
+// reactor_win32.sc declares this same struct (same purpose, same shape) —
+// guarded so a caller that includes both this file
 // and reactor_win32.sc (e.g. std::http_serve_reactor, which needs both)
 // doesn't hit a duplicate-definition error. #pragma once only guards a
 // single file against itself, not two different files defining the same
@@ -65,8 +67,15 @@ struct SockAddrIn {
 #ifndef SAFEC_WSADATA_DEFINED_
 #define SAFEC_WSADATA_DEFINED_
 struct WSAData_ {
-    unsigned char reserved[512]; // oversized on purpose — see reactor_win32.sc's WSAData_
+    unsigned short     wVersion;
+    unsigned short     wHighVersion;
+    unsigned short     iMaxSockets;          // Win64 order: these two precede
+    unsigned short     iMaxUdpDg;            // the strings (Win32 puts them after)
+    unsigned long long lpVendorInfo;         // char*
+    char               szDescription[257];   // WSADESCRIPTION_LEN + 1
+    char               szSystemStatus[129];  // WSASYS_STATUS_LEN + 1
 };
+static_assert(sizeof(struct WSAData_) == 408, "WSADATA is 408 bytes on 64-bit Windows");
 #endif
 
 extern int WSAStartup(unsigned short versionRequested, void* wsaData);
@@ -87,13 +96,12 @@ extern int closesocket(unsigned long long fd);
 #define SAFEC_WSAEWOULDBLOCK 10035
 #define SAFEC_WSAETIMEDOUT   10060
 
-// Winsock 'fd_set' (used with a single socket): u_int fd_count, then the
-// SOCKET array (8-byte aligned, so fd_array starts at offset 8). Full
-// FD_SETSIZE (64) entries, as <winsock2.h> declares it, so select() may
-// treat it as the real struct (it only reads fd_count entries).
+// Winsock 'fd_set' holding a single socket: u_int fd_count, then the
+// SOCKET array (8-byte aligned, so fd_array starts at offset 8 exactly as
+// in the real 64-entry struct; select() only reads fd_count entries).
 struct SchedFdSet1 {
     unsigned int       fd_count;
-    unsigned long long fd_array[64];
+    unsigned long long fd_array[1];
 };
 
 // Winsock 'struct timeval': two 4-byte longs (Windows 'long' is 32-bit).
