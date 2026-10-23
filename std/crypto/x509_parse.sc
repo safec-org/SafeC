@@ -361,7 +361,7 @@ int x509_parse(const &unsigned char der, unsigned long len, &X509Parsed out) {
         struct Asn1_ spkiWhole;
         if (!asn1_any_(&tbs, &tag, &spki, &spkiWhole) || tag != (unsigned char)ASN1_TAG_SEQUENCE) { return X509_ERR_MALFORMED; }
         out.spki = x5_span_(base, &spkiWhole);
-        if (!x5_spki_(base, spkiWhole, out)) { return X509_ERR_MALFORMED; }
+        if (!x5_spki_(base, spki, out)) { return X509_ERR_MALFORMED; }
         // issuerUniqueID [1], subjectUniqueID [2] (skipped), extensions [3]
         while (tbs.len > 0UL) {
             struct Asn1_ f;

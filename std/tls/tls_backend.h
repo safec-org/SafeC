@@ -10,6 +10,7 @@
 // returns. Return conventions follow tls.h (0 / TLS_WANT_* / -1).
 #pragma once
 #include <std/tls/tls.h>
+#include <std/tls/tls_safec.h>
 
 namespace std {
 
