@@ -37,9 +37,11 @@ extern int unsetenv(const char* name);
 extern int close(int fd);
 
 #define FX "fixtures/tls/"
+// The OpenSSL backend, by name (TLS_BACKEND_OS is another library on
+// macOS and Windows).
+#define OSSL (TLS_BACKEND_IMPL_BASE + TLS_IMPL_OPENSSL)
 
 static int g_have_openssl = -1;   // the openssl command
-static int g_base_port = 0;
 
 static int have_openssl_cli() {
     if (g_have_openssl < 0) {
@@ -49,12 +51,25 @@ static int have_openssl_cli() {
     return g_have_openssl;
 }
 
-static int next_port() {
+extern int getsockname(int fd, void* addr, unsigned int* len);
+
+// The port a listening socket got (sockaddr_in: the port at byte 2).
+static int bound_port(int fd) {
+    unsigned char sa[16];
+    unsigned int len = 16U;
     unsafe {
-        if (g_base_port == 0) { g_base_port = 30000 + (int)(thread_self() % 20000ULL); }
+        if (getsockname(fd, (void*)&sa[0], &len) != 0) { return -1; }
     }
-    g_base_port = g_base_port + 1;
-    return g_base_port;
+    return ((int)sa[2] << 8) | (int)sa[3];
+}
+
+// A currently free port (bind to 0, read it back, close).
+static int next_port() {
+    int fd = tcp_listen_nb((unsigned short)0);
+    if (fd < 0) { return -1; }
+    int p = bound_port(fd);
+    close(fd);
+    return p;
 }
 
 static int hexv(char c) {
@@ -303,10 +318,15 @@ void t_config() {
         printf("    libssl %s; default backend: %s\n", os ? "loads" : "not found", tls_impl_name(tls_default_impl()));
         setenv("SAFEC_TLS", "safec", 1);
         ASSERT_EQ(tls_default_impl(), TLS_IMPL_SAFEC);
+#if !defined(__APPLE__)
         setenv("SAFEC_TLS", "os", 1);
         ASSERT_EQ(tls_default_impl(), TLS_IMPL_OPENSSL);
         unsetenv("SAFEC_TLS");
         ASSERT_EQ(tls_default_impl(), os ? TLS_IMPL_OPENSSL : TLS_IMPL_SAFEC);
+#else
+        unsetenv("SAFEC_TLS");
+        ASSERT_EQ(tls_default_impl(), TLS_IMPL_SECURE_TRANSPORT);
+#endif
         // Server config without a certificate
         struct TlsServerConfig sc = TlsServerConfig::new();
         struct Result<TlsAcceptor, TlsError> ar = TlsAcceptor::new(&sc);
@@ -334,8 +354,9 @@ static int g_srv_failures = 0;
 
 static ?&void run_tls_server(?&void arg) {
     unsafe {
-        int lfd = tcp_listen_nb((unsigned short)g_srv_port);
+        int lfd = tcp_listen_nb((unsigned short)0);
         if (lfd < 0) { g_srv_ready = -1; return null; }
+        g_srv_port = bound_port(lfd);
         fd_set_blocking(lfd);
         g_srv_ready = 1;
         int n = 0;
@@ -387,7 +408,7 @@ static int start_server(const &char cert, const &char key, int backend, int veri
     sc.free();
     if (!ar.ok()) { printf("      acceptor: %s\n", ar.error.message); return 0; }
     g_acc = ar.value;
-    g_srv_port = next_port();
+    g_srv_port = 0;
     g_srv_conns = conns;
     g_srv_ready = 0;
     g_srv_failures = 0;
@@ -534,22 +555,22 @@ void t_nonblocking() {
 void t_loopback_openssl() {
     if (!tls_backend_available(TLS_IMPL_OPENSSL)) { printf("    SKIP: libssl not found\n"); return; }
     // OpenSSL server, SafeC + OpenSSL clients
-    ASSERT_TRUE(start_server("chain-ec.pem", "leaf-ec.key", TLS_BACKEND_OS, 2, 4));
+    ASSERT_TRUE(start_server("chain-ec.pem", "leaf-ec.key", OSSL, 2, 4));
     struct String reply = String::new();
     ASSERT_EQ(client_req(g_srv_port, TLS_BACKEND_SAFEC, "localhost", "root.pem", 1, "http/1.1", "http/1.1", &reply), TLS_OK);
     ASSERT_TRUE(reply.contains("hello via openssl"));
     ASSERT_TRUE(reply.contains("peer=SafeC Test Client"));
-    ASSERT_EQ(client_req(g_srv_port, TLS_BACKEND_OS, "localhost", "root.pem", 1, "h2", "h2", null), TLS_OK);
+    ASSERT_EQ(client_req(g_srv_port, OSSL, "localhost", "root.pem", 1, "h2", "h2", null), TLS_OK);
     ASSERT_TRUE(client_req(g_srv_port, TLS_BACKEND_SAFEC, "localhost", "root.pem", 0, null, null, null) != TLS_OK);
-    ASSERT_TRUE(client_req(g_srv_port, TLS_BACKEND_OS, "localhost", "root.pem", 0, null, null, null) != TLS_OK);
+    ASSERT_TRUE(client_req(g_srv_port, OSSL, "localhost", "root.pem", 0, null, null, null) != TLS_OK);
     stop_server();
     reply.free();
     // SafeC server, OpenSSL client: verification outcomes
     ASSERT_TRUE(start_server("chain-ec.pem", "leaf-ec.key", TLS_BACKEND_SAFEC, 0, 4));
-    ASSERT_EQ(client_req(g_srv_port, TLS_BACKEND_OS, "localhost", "root.pem", 0, "http/1.1", "http/1.1", null), TLS_OK);
-    ASSERT_EQ(client_req(g_srv_port, TLS_BACKEND_OS, "127.0.0.1", "root.pem", 0, null, null, null), TLS_OK);
-    ASSERT_EQ(client_req(g_srv_port, TLS_BACKEND_OS, "bad.example", "root.pem", 0, null, null, null), TLS_ERR_CERT_HOSTNAME);
-    ASSERT_EQ(client_req(g_srv_port, TLS_BACKEND_OS, "localhost", "other-root.pem", 0, null, null, null), TLS_ERR_CERT_UNTRUSTED);
+    ASSERT_EQ(client_req(g_srv_port, OSSL, "localhost", "root.pem", 0, "http/1.1", "http/1.1", null), TLS_OK);
+    ASSERT_EQ(client_req(g_srv_port, OSSL, "127.0.0.1", "root.pem", 0, null, null, null), TLS_OK);
+    ASSERT_EQ(client_req(g_srv_port, OSSL, "bad.example", "root.pem", 0, null, null, null), TLS_ERR_CERT_HOSTNAME);
+    ASSERT_EQ(client_req(g_srv_port, OSSL, "localhost", "other-root.pem", 0, null, null, null), TLS_ERR_CERT_UNTRUSTED);
     stop_server();
 }
 
@@ -588,7 +609,7 @@ static int both_(const &char host, const &char root, int want) {
     int a = client_req(g_ss_port, TLS_BACKEND_SAFEC, host, root, 0, null, null, null);
     int ok = a == want;
     if (tls_backend_available(TLS_IMPL_OPENSSL)) {
-        int b = client_req(g_ss_port, TLS_BACKEND_OS, host, root, 0, null, null, null);
+        int b = client_req(g_ss_port, OSSL, host, root, 0, null, null, null);
         ok = ok && b == want;
     }
     return ok;
@@ -641,7 +662,7 @@ void t_openssl_s_server() {
     s_server_start("-cert leaf-ec.pem -key leaf-ec.key -cert_chain int.pem -tls1_2");
     ASSERT_EQ(client_req(g_ss_port, TLS_BACKEND_SAFEC, "localhost", "root.pem", 0, null, null, null), TLS_ERR_HANDSHAKE);
     if (tls_backend_available(TLS_IMPL_OPENSSL)) {
-        ASSERT_EQ(client_req(g_ss_port, TLS_BACKEND_OS, "localhost", "root.pem", 0, null, null, null), TLS_OK);
+        ASSERT_EQ(client_req(g_ss_port, OSSL, "localhost", "root.pem", 0, null, null, null), TLS_OK);
     }
     s_server_stop();
     // a client certificate the server requires
@@ -732,7 +753,7 @@ void t_https() {
         while (b < 2) {
             if (b == 1 && !tls_backend_available(TLS_IMPL_OPENSSL)) { break; }
             struct TlsConfig tc = TlsConfig::new();
-            tc.backend = b == 0 ? TLS_BACKEND_SAFEC : TLS_BACKEND_OS;
+            tc.backend = b == 0 ? TLS_BACKEND_SAFEC : OSSL;
             tc.use_system_roots = 0;
             tc.set_ca_file(FX "root.pem");
             struct HttpClientOptions o = HttpClientOptions::defaults();
