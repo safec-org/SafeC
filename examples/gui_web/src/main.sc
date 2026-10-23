@@ -8,6 +8,7 @@
 //   safeguard build --target wasm32
 //   cp build/gui_web web/gui_web.wasm
 //   cp <SafeC>/std/gui/gui_web.js web/
+//   mkdir -p web/fonts && cp /usr/share/fonts/truetype/dejavu/DejaVuSans*.ttf web/fonts/   # optional
 //   python3 -m http.server -d web        # then open http://localhost:8000
 #include <std/gui/gui.h>
 #include <std/gui/gui_canvas.h>
@@ -101,9 +102,10 @@ static &Widget build_controls(&Demo d) {
     list.add_item("requestAnimationFrame");
     list.add_item("devicePixelRatio");
     root.add_child(list);
-    d.status = Widget::statusbar();
-    d.status.set_text("Ready");
-    root.add_child(d.status);
+    &Widget sb = Widget::statusbar();
+    d.status = Widget::label("Ready").set_stretch(1);
+    sb.add_child(d.status);
+    root.add_child(sb);
     return root;
 }
 

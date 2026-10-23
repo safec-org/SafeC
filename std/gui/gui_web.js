@@ -33,6 +33,9 @@
 //            "start"; false: none — call gui.start() yourself).
 //   loadSafeC  loadSafeCGui: std/wasm/safec_dom.js's loadSafeC, to
 //            instantiate through it (DOM imports + these).
+//   files    { "/path": Uint8Array | ArrayBuffer }: read-only files the
+//            module can fopen()/fread() (e.g. the fonts std/gui looks for
+//            in /usr/share/fonts/...; see fetchFiles below).
 //   imports  extra env imports (yours win).
 //   globals  where to find document, window, navigator, performance,
 //            requestAnimationFrame, ImageData, ResizeObserver, matchMedia,
@@ -73,7 +76,8 @@ function keyCodeOf(e) {
 }
 
 // printf-style formatting of a wasm32 varargs call: 'va' points at the
-// arguments, each int/pointer 4 bytes, long long/double 8 (8-aligned).
+// arguments, each int/pointer 4 bytes, long/long long/size_t/double 8
+// (8-aligned) — SafeC's long and unsigned long are 64-bit on every target.
 function formatC(view, fmt, va) {
     let out = "", i = 0, p = va;
     const take4 = () => { p = (p + 3) & ~3; const v = view.getInt32(p, true); p += 4; return v; };
@@ -92,9 +96,10 @@ function formatC(view, fmt, va) {
         let s;
         if (conv === "%") { out += "%"; continue; }
         if ("diuxXo".includes(conv)) {
-            let v = len === "ll" || len === "j" ? take8i() : BigInt(take4());
+            const wide = len === "ll" || len === "l" || len === "j" || len === "z" || len === "t";
+            let v = wide ? take8i() : BigInt(take4());
             const signed = conv === "d" || conv === "i";
-            if (!signed) v = BigInt.asUintN(len === "ll" || len === "j" ? 64 : 32, v);
+            if (!signed) v = BigInt.asUintN(wide ? 64 : 32, v);
             const neg = v < 0n;
             if (neg) v = -v;
             s = v.toString(conv === "o" ? 8 : conv === "x" || conv === "X" ? 16 : 10);
@@ -133,11 +138,12 @@ function formatC(view, fmt, va) {
 // file and environment calls, which find nothing in a browser; the printf
 // family; libm): a definition inside the module always wins — then these
 // simply aren't imported.
-function libcFallbacks(getInstance, log) {
+function libcFallbacks(getInstance, log, files) {
     const view = () => new DataView(getInstance().exports.memory.buffer);
     const cstr = (p) => { const u8 = new Uint8Array(getInstance().exports.memory.buffer); let e = p; while (u8[e] !== 0) e++; return new TextDecoder().decode(u8.subarray(p, e)); };
     const encoder = new TextEncoder();
     const snprintf = (buf, n, fmt, va) => {
+        n = Number(n);   // (size_t: i64 in SafeC declarations)
         const bytes = encoder.encode(formatC(view(), cstr(fmt), va));
         if (n > 0) {
             const k = Math.min(bytes.length, n - 1);
@@ -155,6 +161,7 @@ function libcFallbacks(getInstance, log) {
         return encoder.encode(text).length;
     };
     const m = (f) => f;
+    const open = [];
     return {
         abort: () => { throw new Error("wasm module called abort()"); },
         snprintf, vsnprintf: snprintf,
@@ -174,8 +181,41 @@ function libcFallbacks(getInstance, log) {
             v.setBigUint64(Number(out) + 8, r >> 64n, true);
         },
         getenv: () => 0,
-        fopen: () => 0, fclose: () => 0, fread: () => 0, fwrite: () => 0, ferror: () => 1,
-        fseek: () => -1, ftell: () => -1, fflush: () => 0,
+        // read-only files from options.files (fonts, images): FILE* is an
+        // index into 'open' (1-based)
+        fopen: (p, m) => {
+            const data = files.get(cstr(p));
+            if (!data || cstr(m).includes("w") || cstr(m).includes("a")) return 0;
+            const h = open.indexOf(null) >= 0 ? open.indexOf(null) : open.length;
+            open[h] = { data, pos: 0, err: 0 };
+            return h + 1;
+        },
+        fclose: (f) => { if (f > 0 && f <= open.length) open[f - 1] = null; return 0; },
+        fread: (buf, size, n, f) => {
+            size = Number(size); n = Number(n);
+            const o = f > 0 ? open[f - 1] : null;
+            if (!o || size === 0) return 0;
+            const want = Math.min(size * n, o.data.length - o.pos);
+            const items = Math.floor(Math.max(0, want) / size);
+            new Uint8Array(getInstance().exports.memory.buffer, buf, items * size).set(o.data.subarray(o.pos, o.pos + items * size));
+            o.pos += items * size;
+            return items;
+        },
+        fwrite: () => 0,
+        ferror: (f) => { const o = f > 0 ? open[f - 1] : null; return o ? o.err : 1; },
+        // (long offsets are i64 — BigInt — in SafeC's declarations)
+        fseek: (f, off, whence) => {
+            off = Number(off);
+            const o = f > 0 ? open[f - 1] : null;
+            if (!o) return -1;
+            const base = whence === 0 ? 0 : whence === 1 ? o.pos : o.data.length;
+            if (base + off < 0) return -1;
+            o.pos = base + off;
+            return 0;
+        },
+        ftell: (f) => { const o = f > 0 ? open[f - 1] : null; return BigInt(o ? o.pos : -1); },
+        feof: (f) => { const o = f > 0 ? open[f - 1] : null; return o && o.pos >= o.data.length ? 1 : 0; },
+        fflush: () => 0,
         sin: m(Math.sin), cos: m(Math.cos), tan: m(Math.tan), asin: m(Math.asin), acos: m(Math.acos),
         atan: m(Math.atan), atan2: m(Math.atan2), exp: m(Math.exp), log: m(Math.log), log2: m(Math.log2),
         log10: m(Math.log10), pow: m(Math.pow), cbrt: m(Math.cbrt), hypot: m(Math.hypot),
@@ -199,6 +239,8 @@ export function createSafeCGui(options = {}) {
         has(_, k) { return k in own || k in globalThis; },
     });
     let instance = null;
+    // options.files: { path: Uint8Array | ArrayBuffer } read through fopen/fread
+    const files = new Map(Object.entries(options.files || {}).map(([k, v]) => [k, v instanceof Uint8Array ? v : new Uint8Array(v)]));
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();
     const mem = () => instance.exports.memory.buffer;
@@ -467,7 +509,7 @@ export function createSafeCGui(options = {}) {
     };
 
     const gui = {
-        imports: { env: { ...libcFallbacks(() => instance, (t) => ((g.console || console).log)(t)), ...env, ...(options.imports || {}) } },
+        imports: { env: { ...libcFallbacks(() => instance, (t) => ((g.console || console).log)(t), files), ...env, ...(options.imports || {}) } },
         attach(inst) { instance = inst; },
         get instance() { return instance; },
         canvas(id) { const w = wins.get(id); return w ? w.canvas : null; },
@@ -500,6 +542,19 @@ export function createSafeCGui(options = {}) {
         get running() { return running; },
     };
     return gui;
+}
+
+// { path: url } -> { path: Uint8Array }, fetched in parallel (for
+// options.files). Missing files are left out.
+export async function fetchFiles(map, fetchFn = globalThis.fetch) {
+    const out = {};
+    await Promise.all(Object.entries(map).map(async ([path, url]) => {
+        try {
+            const r = await fetchFn(url);
+            if (r.ok !== false) out[path] = new Uint8Array(await r.arrayBuffer());
+        } catch (_) { /* left out */ }
+    }));
+    return out;
 }
 
 export async function loadSafeCGui(source, options = {}) {

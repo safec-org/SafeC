@@ -8,4 +8,4 @@ license     = "MIT"
 [build]
 edition = "2026"
 
-# Build: safeguard build --target wasm32   (then see web/README for serving)
+# Build: safeguard build --target wasm32   (then see src/main.sc's header for serving web/)
