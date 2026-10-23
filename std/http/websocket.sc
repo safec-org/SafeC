@@ -56,27 +56,33 @@ struct WsConn WsConn::connect(const &char host, unsigned short port,
     return WsConn::connect_timeout(host, port, path, WS_DEFAULT_TIMEOUT_MS, ok);
 }
 
+// The connection's stream (plain TCP, or its TLS session for wss://).
+static struct TcpStream ws_stream_(const &WsConn c) {
+    struct TcpStream s = TcpStream::from_fd(c.fd);
+    s.tls = c.tls;
+    return s;
+}
+
 struct WsConn WsConn::connect_timeout(const &char host, unsigned short port,
                                       const &char path, int timeout_ms, ?&int ok) {
+    return WsConn::connect_tls(host, port, path, 0, null, timeout_ms, ok);
+}
+
+struct WsConn WsConn::connect_tls(const &char host, unsigned short port, const &char path,
+                                  int tls, const ?&TlsConfig cfg, int timeout_ms, ?&int ok) {
     struct WsConn conn;
     conn.fd = -1;
+    conn.tls = null;
     conn.is_server = 0;
     conn.early = null;
     conn.earlyLen = 0UL;
     conn.earlyPos = 0UL;
     int good = 1;
 
-    unsigned int addr = 0U;
-    if (!http_resolve_host(host, &addr)) { good = 0; }
-
-    int fd = -1;
-    if (good) {
-        unsafe { fd = tcp_connect_timeout(addr, port, timeout_ms); }
-        if (fd < 0) { good = 0; }
-    }
-    if (good && timeout_ms > 0) {
-        if (sock_set_io_timeout(fd, timeout_ms) != 0) { good = 0; }
-    }
+    // Bounded by timeout_ms throughout the opening handshake (TLS included).
+    struct TcpStream s = http_open_stream(host, port, tls, cfg, timeout_ms, timeout_ms, null);
+    int fd = s.fd;
+    if (fd < 0) { good = 0; }
 
     struct String keyB64 = String::new();
     if (good) {
@@ -106,7 +112,6 @@ struct WsConn WsConn::connect_timeout(const &char host, unsigned short port,
             req.push(keyB64.as_ptr());
             req.push("\r\nSec-WebSocket-Version: 13\r\n\r\n");
         }
-        struct TcpStream s = TcpStream::from_fd(fd);
         int sent;
         unsafe { sent = write_all(&s, (const &unsigned char)req.as_ptr(), req.length()); }
         if (!sent) { good = 0; }
@@ -114,7 +119,6 @@ struct WsConn WsConn::connect_timeout(const &char host, unsigned short port,
     }
 
     if (good) {
-        struct TcpStream s = TcpStream::from_fd(fd);
         struct BufReader<TcpStream> in = BufReader::over(&s);
         struct String headerBlock = String::new();
         if (!in.read_until(&headerBlock, "\r\n\r\n")) {
@@ -140,8 +144,8 @@ struct WsConn WsConn::connect_timeout(const &char host, unsigned short port,
     }
     if (good) {
         conn.fd = fd;
+        conn.tls = s.tls;
     } else if (fd >= 0) {
-        struct TcpStream s = TcpStream::from_fd(fd);
         s.close();
     }
     if (ok != (int*)0) { unsafe { *ok = good; } }
@@ -195,7 +199,7 @@ long long WsSource_::read(&unsigned char out, unsigned long n) {
         }
         return (long long)k;
     }
-    struct TcpStream s = TcpStream::from_fd(c.fd);
+    struct TcpStream s = ws_stream_(c);
     return s.read(out, n);
 }
 
@@ -257,6 +261,7 @@ int WsConn::accept(int listenFd) {
     }
     unsafe {
         self.fd = fd;
+        self.tls = null;
         self.is_server = 1;
     }
     if (!ws_keep_early_(self, &in)) { s.close(); self.fd = -1; return 0; }
@@ -269,10 +274,12 @@ int WsConn::accept(int listenFd) {
 
 static int ws_write_frame_(struct WsConn* conn, int opcode,
                             const unsigned char* data, unsigned long len) {
-    int fd;
     int mustMask;
-    unsafe { fd = conn->fd; mustMask = (conn->is_server != 0) ? 0 : 1; }
-    struct TcpStream s = TcpStream::from_fd(fd);
+    struct TcpStream s;
+    unsafe {
+        mustMask = (conn->is_server != 0) ? 0 : 1;
+        s = ws_stream_((&WsConn)conn);
+    }
 
     unsigned char head[10];
     unsigned long headLen = 0UL;
@@ -491,6 +498,7 @@ int ws_is_upgrade(const &HttpRequest req) {
 struct WsConn WsConn::accept_upgrade(const &HttpRequest req, &HttpConn conn, ?&int ok) {
     struct WsConn c;
     c.fd = -1;
+    c.tls = null;
     c.is_server = 1;
     c.early = null;
     c.earlyLen = 0UL;
@@ -525,6 +533,7 @@ struct WsConn WsConn::accept_upgrade(const &HttpRequest req, &HttpConn conn, ?&i
         return c;
     }
     c.fd = s.fd;
+    c.tls = s.tls;
     if (early.length() > 0UL) {
         ?&heap unsigned char buf = (?&heap unsigned char)alloc_raw_(early.length());
         match (buf) {
@@ -542,14 +551,20 @@ struct WsConn WsConn::accept_upgrade(const &HttpRequest req, &HttpConn conn, ?&i
 }
 
 struct WsConn WsConn::connect_url(const &char url, int timeout_ms, ?&int ok) {
+    return WsConn::connect_url_tls(url, null, timeout_ms, ok);
+}
+
+struct WsConn WsConn::connect_url_tls(const &char url, const ?&TlsConfig cfg, int timeout_ms, ?&int ok) {
     int pok = 0;
     struct Url u = Url::parse(url, &pok);
-    if (pok && !u.scheme.eq_cstr("ws") && !u.scheme.eq_cstr("http")) { pok = 0; }
+    int tls = pok && (u.scheme.eq_cstr("wss") || u.scheme.eq_cstr("https"));
+    if (pok && !tls && !u.scheme.eq_cstr("ws") && !u.scheme.eq_cstr("http")) { pok = 0; }
     int port = u.port_or_default();
     if (u.host.is_empty() || port <= 0) { pok = 0; }
     struct WsConn c;
     if (!pok) {
         c.fd = -1;
+        c.tls = null;
         c.is_server = 0;
         c.early = null;
         c.earlyLen = 0UL;
@@ -559,7 +574,7 @@ struct WsConn WsConn::connect_url(const &char url, int timeout_ms, ?&int ok) {
         return c;
     }
     struct String target = u.request_target();
-    c = WsConn::connect_timeout(u.host.as_ptr(), (unsigned short)port, target.as_ptr(), timeout_ms, ok);
+    c = WsConn::connect_tls(u.host.as_ptr(), (unsigned short)port, target.as_ptr(), tls, cfg, timeout_ms, ok);
     target.free();
     u.free();
     return c;
@@ -568,8 +583,10 @@ struct WsConn WsConn::connect_url(const &char url, int timeout_ms, ?&int ok) {
 void WsConn::close() {
     self.send_close();
     if (self.fd >= 0) {
-        struct TcpStream s = TcpStream::from_fd(self.fd);
+        struct TcpStream s = ws_stream_(self);
         s.close();
+        self.fd = -1;
+        self.tls = null;
     }
     match (self.early) { case some(b): { unsafe { dealloc_raw_((void*)b); } } case null: { } }
     self.early = null;

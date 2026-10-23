@@ -12,8 +12,9 @@
 // reassembles fragmented messages and answers pings itself. A server can
 // accept on its own listening socket (ws_listen + accept) or upgrade a
 // request on an HttpServer/Router connection (accept_upgrade), so HTTP and
-// WebSocket endpoints share one port. No extensions (permessage-deflate)
-// and no wss:// (no TLS).
+// WebSocket endpoints share one port. wss:// runs over TLS (std/tls:
+// connect_url / connect_tls on the client; accept_upgrade on an HTTPS
+// HttpServer). No extensions (permessage-deflate).
 #pragma once
 #include <std/collections/string.h>
 #include <std/http/http.h>
@@ -40,6 +41,7 @@ struct WsMessage {
 
 struct WsConn {
     int fd;
+    ?&heap TlsStream tls;   // the TLS session of a wss:// connection, else null
     int is_server; // 1 = accepted server-side (frames we send are unmasked,
                    // frames we receive must be masked); 0 = client-side
                    // (the reverse)
@@ -69,6 +71,10 @@ struct WsConn {
     // http_request_timeout).
     static struct WsConn connect_timeout(const &char host, unsigned short port,
                                          const &char path, int timeout_ms, ?&int ok);
+    // connect_timeout over TLS when 'tls' is set (wss://; 'cfg' null:
+    // TlsConfig::new()'s defaults — system roots, host name verified).
+    static struct WsConn connect_tls(const &char host, unsigned short port, const &char path,
+                                     int tls, const ?&TlsConfig cfg, int timeout_ms, ?&int ok);
 
     // ── Server ────────────────────────────────────────────────────────────
     // Blocks until one client connects to 'listenFd' (from ws_listen) and
@@ -88,9 +94,11 @@ struct WsConn {
     // close() (below) to do both.
     int send_close();
 
-    // Connects to a ws:// URL ("ws://host:port/path?query"; wss:// is not
-    // supported — no TLS handshake in std), with connect_timeout's limit.
+    // Connects to a ws:// or wss:// URL ("wss://host:port/path?query"; wss
+    // defaults to port 443 and TLS with TlsConfig::new()'s defaults), with
+    // connect_timeout's limit. connect_url_tls takes the TLS settings.
     static struct WsConn connect_url(const &char url, int timeout_ms, ?&int ok);
+    static struct WsConn connect_url_tls(const &char url, const ?&TlsConfig cfg, int timeout_ms, ?&int ok);
 
     // ── Server, on an HTTP server's connection ────────────────────────────
     // Completes the WebSocket handshake for a request an HttpServer/Router
