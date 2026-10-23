@@ -196,6 +196,13 @@ inline int Reactor::poll_events_raw_(void* on_ready, void* ctx, long long timeou
     // more concurrent fds than that would need a heap-allocated array
     // instead, not something this reactor currently does.
     struct WSAPollFd fds[TASK_MAX];
+    // Each entry's filter, captured with its fd: the callbacks below may
+    // remove (or add) registrations — std/async's IoDriver unregisters an
+    // fd as soon as its waiter is woken — so 'watched' can shrink or shift
+    // while the ready entries are dispatched, and index i of fds[] stops
+    // naming index i of 'watched' (reading it there was an out-of-range
+    // Vec::at as soon as two fds were ready in one WSAPoll).
+    int filters[TASK_MAX];
     unsigned long cap = n;
     if (cap > (unsigned long)TASK_MAX) { cap = (unsigned long)TASK_MAX; }
     unsigned long i = 0UL;
@@ -209,6 +216,7 @@ inline int Reactor::poll_events_raw_(void* on_ready, void* ctx, long long timeou
             fds[i].fd = (unsigned long long)wFd;
             fds[i].events = reactor_wsapoll_events_(wFilter);
             fds[i].revents = (short)0;
+            filters[i] = wFilter;
         }
         i = i + 1UL;
     }
@@ -235,10 +243,8 @@ inline int Reactor::poll_events_raw_(void* on_ready, void* ctx, long long timeou
         unsigned long long readyFd;
         unsafe { revents = fds[i].revents; readyFd = fds[i].fd; }
         if (revents != (short)0) {
-            struct WatchedFd* w;
-            unsafe { w = self.watched.at(i); }
             int wFilter;
-            unsafe { wFilter = w->filter; }
+            unsafe { wFilter = filters[i]; }
             unsafe { fn void(void*, int, int) cb = (fn void(void*, int, int))on_ready; cb(ctx, (int)readyFd, wFilter); }
             processed = processed + 1;
         }
