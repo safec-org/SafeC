@@ -484,7 +484,7 @@ static struct TlsStream tls_stream_new_(int fd, int impl, int server) {
     s.impl = impl;
     s.state = 0;
     s.is_server = server;
-    s.impl_ = (void*)0;
+    s.impl_ = null;
     s.err = TlsError::none();
     s.version_ = 0;
     s.cipher_[0] = (char)0;
@@ -654,7 +654,7 @@ int TlsStream::shutdown() {
 }
 
 void TlsStream::release() {
-    if (self.impl_ != (void*)0) {
+    if (!self.impl_.is_null()) {
 #if defined(_WIN32)
         if (self.impl == TLS_IMPL_SCHANNEL) { tls_schannel_free_(self); }
 #else
@@ -665,7 +665,7 @@ void TlsStream::release() {
 #endif
         if (self.impl == TLS_IMPL_SAFEC) { tls_safec_free_(self); }
     }
-    self.impl_ = (void*)0;
+    self.impl_ = null;
     self.peer_der_.free();
     if (self.state != 3) { self.state = 2; }
 }
@@ -721,7 +721,7 @@ static int tls_acceptor_start_(&TlsAcceptor a, int impl, const &TlsServerConfig 
 struct Result<TlsAcceptor, TlsError> TlsAcceptor::new(const &TlsServerConfig cfg) {
     struct TlsAcceptor a;
     a.impl = TLS_IMPL_NONE;
-    a.impl_ = (void*)0;
+    a.impl_ = null;
     a.verify_client = cfg.verify_client;
     struct TlsError e = TlsError::none();
     if (cfg.cert_pem.is_empty() || cfg.key_pem.is_empty()) {
@@ -773,7 +773,7 @@ struct Result<TlsStream, TlsError> TlsAcceptor::accept(int fd) {
 }
 
 void TlsAcceptor::free() {
-    if (self.impl_ == (void*)0) { return; }
+    if (self.impl_.is_null()) { return; }
 #if defined(_WIN32)
     if (self.impl == TLS_IMPL_SCHANNEL) { tls_schannel_acceptor_free_(self); }
 #else
@@ -783,7 +783,7 @@ void TlsAcceptor::free() {
     if (self.impl == TLS_IMPL_SECURE_TRANSPORT) { tls_st_acceptor_free_(self); }
 #endif
     if (self.impl == TLS_IMPL_SAFEC) { tls_safec_acceptor_free_(self); }
-    self.impl_ = (void*)0;
+    self.impl_ = null;
 }
 
 } // namespace std

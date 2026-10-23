@@ -327,7 +327,7 @@ int tls_schannel_client_(&TlsStream s, const &char name, const &TlsConfig cfg) {
     }
     void* mem = alloc_zeroed_raw_(sizeof(struct SchConn_));
     if (mem == (void*)0) { tls_fail_(&s.err, TLS_ERR_NO_MEMORY, "out of memory"); return TLS_ERR_NO_MEMORY; }
-    s.impl_ = mem;
+    unsafe { s.impl_ = (?&heap TlsImpl_)mem; }
     struct SchConn_* c = sch_of_(s);
     unsafe {
         c->name = String::from(name);
@@ -687,7 +687,7 @@ void tls_schannel_free_(&TlsStream s) {
         mem_zero_secure_raw_((void*)c, sizeof(struct SchConn_));
         dealloc_raw_((void*)c);
     }
-    s.impl_ = (void*)0;
+    s.impl_ = null;
 }
 
 // Servers need the private key in a Windows key store; TLS_BACKEND_AUTO

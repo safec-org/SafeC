@@ -546,7 +546,7 @@ static int ossl_new_conn_(&TlsStream s, void* ctx, void* owned) {
         c->wbio = g_ossl_.bio_new(g_ossl_.bio_s_mem());
         g_ossl_.ssl_set_bio(c->ssl, c->rbio, c->wbio);
     }
-    s.impl_ = mem;
+    unsafe { s.impl_ = (?&heap TlsImpl_)mem; }
     return 0;
 }
 
@@ -685,7 +685,7 @@ void tls_openssl_free_(&TlsStream s) {
         if (c->ctx != (void*)0) { g_ossl_.ctx_free(c->ctx); }
         dealloc_raw_((void*)c);
     }
-    s.impl_ = (void*)0;
+    s.impl_ = null;
 }
 
 // ── server ────────────────────────────────────────────────────────────────────
@@ -736,7 +736,7 @@ int tls_openssl_acceptor_(&TlsAcceptor a, const &TlsServerConfig cfg, &TlsError 
             g_ossl_.ctx_set_verify(ctx, mode, (void*)0);
         }
     }
-    a.impl_ = mem;
+    unsafe { a.impl_ = (?&heap TlsImpl_)mem; }
     return TLS_OK;
 }
 

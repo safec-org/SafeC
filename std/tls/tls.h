@@ -94,6 +94,9 @@
 
 namespace std {
 
+// A backend's private state (opaque; each backend keeps its own struct).
+struct TlsImpl_ { unsigned char opaque_; };
+
 struct TlsError {
     int       code;      // TLS_OK or TLS_ERR_*
     int       alert;     // the TLS alert (RFC 8446 §6) received or sent, -1 if none
@@ -160,7 +163,7 @@ struct TlsStream {
     int           impl;           // TLS_IMPL_*
     int           state;          // internal: 0 handshaking, 1 open, 2 closed, 3 failed
     int           is_server;
-    void*         impl_;          // internal: the backend's state
+    ?&heap TlsImpl_ impl_;        // internal: the backend's state
     struct TlsError err;          // the last failure
     // Negotiated, once the handshake is done:
     int           version_;       // TLS_VERSION_*
@@ -208,7 +211,7 @@ struct TlsStream {
 // connection.
 struct TlsAcceptor {
     int    impl;     // TLS_IMPL_*
-    void*  impl_;    // internal
+    ?&heap TlsImpl_ impl_;   // internal
     int    verify_client;
 
     static struct Result<TlsAcceptor, TlsError> new(const &TlsServerConfig cfg);

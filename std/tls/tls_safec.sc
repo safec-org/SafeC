@@ -1594,7 +1594,7 @@ static int t13_drain_hs_(&TlsStream s, &T13_ t, int post) {
 static int t13_alloc_(&TlsStream s) {
     void* mem = alloc_zeroed_raw_(sizeof(struct T13_));
     if (mem == (void*)0) { return tls_fail_(&s.err, TLS_ERR_NO_MEMORY, "out of memory"); }
-    s.impl_ = mem;
+    unsafe { s.impl_ = (?&heap TlsImpl_)mem; }
     unsafe {
         struct T13_* t = (struct T13_*)mem;
         t->name = String::new();
@@ -1700,7 +1700,7 @@ int tls_safec_acceptor_(&TlsAcceptor a, const &TlsServerConfig cfg, &TlsError e)
             }
         }
     }
-    a.impl_ = mem;
+    unsafe { a.impl_ = (?&heap TlsImpl_)mem; }
     return TLS_OK;
 }
 
@@ -1909,7 +1909,7 @@ void tls_safec_free_(&TlsStream s) {
         mem_zero_secure((void*)tp, sizeof(struct T13_));
         dealloc_raw_((void*)tp);
     }
-    s.impl_ = (void*)0;
+    s.impl_ = null;
 }
 
 } // namespace std
