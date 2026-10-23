@@ -60,8 +60,10 @@ struct WSAPollFd {
 };
 
 // Winsock must be initialized (WSAStartup) before any other Winsock call
-// in the process, including WSAPoll. 32 bytes is more than WSADATA's
-// real size on Win64 — its contents are never read here, only the side
+// in the process, including WSAPoll. 512 bytes is more than WSADATA's
+// real size (408 bytes on Win64: two description strings of 257 and 129
+// chars follow the version fields; a 32-byte buffer here used to let
+// WSAStartup overwrite the caller's stack) — its contents are never read here, only the side
 // effect of calling WSAStartup matters, so an oversized buffer is a
 // simpler, safer way to give the real function room to write into than
 // pinning down WSADATA's exact (version-dependent, historically fiddly)
@@ -72,7 +74,7 @@ struct WSAPollFd {
 #ifndef SAFEC_WSADATA_DEFINED_
 #define SAFEC_WSADATA_DEFINED_
 struct WSAData_ {
-    unsigned char reserved[32];
+    unsigned char reserved[512];
 };
 #endif
 

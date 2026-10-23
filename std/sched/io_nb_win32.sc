@@ -65,7 +65,7 @@ struct SockAddrIn {
 #ifndef SAFEC_WSADATA_DEFINED_
 #define SAFEC_WSADATA_DEFINED_
 struct WSAData_ {
-    unsigned char reserved[32]; // oversized on purpose — see reactor_win32.sc's WSAData_
+    unsigned char reserved[512]; // oversized on purpose — see reactor_win32.sc's WSAData_
 };
 #endif
 
@@ -87,12 +87,13 @@ extern int closesocket(unsigned long long fd);
 #define SAFEC_WSAEWOULDBLOCK 10035
 #define SAFEC_WSAETIMEDOUT   10060
 
-// Winsock 'fd_set' holding a single socket: u_int fd_count, then the
-// SOCKET array (8-byte aligned, so fd_array starts at offset 8 exactly as
-// in the real 64-entry struct; select() only reads fd_count entries).
+// Winsock 'fd_set' (used with a single socket): u_int fd_count, then the
+// SOCKET array (8-byte aligned, so fd_array starts at offset 8). Full
+// FD_SETSIZE (64) entries, as <winsock2.h> declares it, so select() may
+// treat it as the real struct (it only reads fd_count entries).
 struct SchedFdSet1 {
     unsigned int       fd_count;
-    unsigned long long fd_array[1];
+    unsigned long long fd_array[64];
 };
 
 // Winsock 'struct timeval': two 4-byte longs (Windows 'long' is 32-bit).
