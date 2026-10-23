@@ -21,6 +21,7 @@
 #include <std/gui/gui_widget.h>
 #include <std/gui/gui_app.h>
 #include <std/gui/gui_wayland.h>
+#include <std/gui/gui_gpu.h>
 #include <std/collections/string.h>
 
 extern int system(const char* cmd);
@@ -226,6 +227,8 @@ static int grab() {
     unsafe {
         unlink("/tmp/safec-wl-shot.ppm");
         if (system("grim -t ppm /tmp/safec-wl-shot.ppm") != 0) { return 0; }
+        // $SAFEC_WL_SHOTS=<dir>: keep every frame read back (debugging)
+        if (getenv("SAFEC_WL_SHOTS") != (char*)0) { system("cp /tmp/safec-wl-shot.ppm \"$SAFEC_WL_SHOTS/shot-$(date +%s%N).ppm\""); }
         void* f = fopen("/tmp/safec-wl-shot.ppm", "rb");
         if (f == (void*)0) { return 0; }
         char head[64];
@@ -609,6 +612,64 @@ void t_scaled() {
     }
 }
 
+// ── gl (sway): the EGL presenter on Wayland ─────────────────────────────
+
+void t_gl() {
+    unsafe {
+        struct GuiWindowOptions o = GuiWindowOptions::new("wl first", 200, 150);
+        o.present = GUI_PRESENT_GPU;
+        struct GuiWindow win = GuiWindow::create_with(&o);
+        ASSERT_FALSE(win.platform.is_null());
+        if (win.platform.is_null()) return;
+        ASSERT_TRUE(gui_window_uses_gpu(&win));
+        ASSERT_EQ(strcmp(gui_window_presenter_name(&win), "gl"), 0);
+        struct GuiEvent ev;
+        win.present();
+        double start = gui_time_ms();
+        while (win.scale != g_scale && gui_time_ms() - start < 2000.0) { win.wait_event(&ev, 20); }
+        ASSERT_TRUE(win.scale == g_scale);
+        int W = win.width; int H = win.height;
+        int s10 = (int)(10.0 * g_scale);
+        win.fill_rect(0, 0, W, H, RED());
+        win.fill_rect(2 * s10, 2 * s10, 4 * s10, 3 * s10, BLUE());
+        win.present();
+        pump_ms(&win, 150);
+        ASSERT_TRUE(grab());
+        test_assert_eq_u(shot_px(5, 5), 0xFF0000ULL, "gl: background", __FILE__, __LINE__);
+        test_assert_eq_u(shot_px(3 * s10, 3 * s10), 0x0000FFULL, "gl: rectangle, not flipped", __FILE__, __LINE__);
+        test_assert_eq_u(shot_px(W - 3, H - 3), 0xFF0000ULL, "gl: buffer size 1:1", __FILE__, __LINE__);
+        ASSERT_TRUE(shot_px(W + 3, H + 3) != 0xFF0000U);
+        win.fill_rect(10 * s10, 10 * s10, 2 * s10, 2 * s10, GREEN());
+        win.present_rect(10 * s10, 10 * s10, 2 * s10, 2 * s10);
+        pump_ms(&win, 150);
+        ASSERT_TRUE(grab());
+        test_assert_eq_u(shot_px(11 * s10, 11 * s10), 0x00FF00ULL, "gl: partial update", __FILE__, __LINE__);
+        test_assert_eq_u(shot_px(3 * s10, 3 * s10), 0x0000FFULL, "gl: rest kept", __FILE__, __LINE__);
+        int frame = 0;
+        while (frame < 60) { win.present(); win.poll_event(&ev); frame = frame + 1; }
+        win.set_size(240, 120);
+        ASSERT_TRUE(wait_kind(&win, GUI_EVENT_RESIZE, &ev, 1000));
+        ASSERT_EQ(win.width, (int)(240.0 * g_scale + 0.5));
+        win.fill_rect(0, 0, win.width, win.height, GREEN());
+        win.present();
+        pump_ms(&win, 100);
+        system("swaymsg -q '[title=\"wl first\"] move position 0 0'");
+        pump_ms(&win, 100);
+        ASSERT_TRUE(grab());
+        test_assert_eq_u(shot_px(win.width - 3, win.height - 3), 0x00FF00ULL, "gl: resized", __FILE__, __LINE__);
+        // hidden and shown again
+        win.hide();
+        pump_ms(&win, 100);
+        win.present();      // ignored while hidden
+        win.show();
+        ASSERT_TRUE(wait_kind(&win, GUI_EVENT_EXPOSE, &ev, 2000));
+        win.present();
+        pump_ms(&win, 100);
+        ASSERT_TRUE(gui_window_uses_gpu(&win));
+        win.destroy();
+    }
+}
+
 // ── basic (any compositor) ──────────────────────────────────────────────
 
 void t_basic() {
@@ -660,6 +721,9 @@ int main(int argc, char** argv) {
             t.add("wayland: two windows under GuiApp", t_multi);
         } else if (strcmp(mode, "scaled") == 0) {
             t.add("wayland: fractional scale", t_scaled);
+            t.add("wayland: OpenGL ES presenter (EGL), scaled", t_gl);
+        } else if (strcmp(mode, "gl") == 0) {
+            t.add("wayland: OpenGL ES presenter (EGL)", t_gl);
         } else {
             t.add("wayland: windows, sizes, two windows, close", t_basic);
         }

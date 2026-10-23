@@ -634,6 +634,11 @@ static void __wl_apply_scaling(struct GuiWlWindow* w) {
             int s = (int)(st->scale + 0.5);
             if (s < 1) { s = 1; }
             w->intScale = s;
+            // double-buffered: applies with the next commit, whoever makes
+            // it (the shm path, or a GPU presenter's eglSwapBuffers)
+            struct GuiWlArgs b = __wl_args();
+            __wl_set_i(&b, 0, s);
+            __wl_send(w->surface, 8U /* set_buffer_scale */, (const void*)0, 0U, &b, 0);
         }
     }
 }
@@ -873,7 +878,7 @@ static void __wl_xdg_surface_configure(struct GuiWlWindow* w, unsigned int seria
         // commit at once so a compositor that waits for the acked state
         // (sway's transactions) isn't kept waiting for a frame that the
         // application has no reason to draw.
-        if (!first && w->hasContent && lw == w->st->logicalW && lh == w->st->logicalH) {
+        if (!first && lw == w->st->logicalW && lh == w->st->logicalH) {
             __wl_commit(w);
             gWlLib.display_flush(gWl.display);
         }

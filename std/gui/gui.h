@@ -122,6 +122,12 @@
 // GuiWindowOptions.x/y: let the window system place the window.
 #define GUI_POS_DEFAULT (-2147483647)
 
+// GuiWindowOptions.present: how win.present() gets the buffer on screen
+// (see gui_gpu.h). Either way rendering stays on the CPU.
+#define GUI_PRESENT_DEFAULT 0   // CPU, unless $SAFEC_GUI_PRESENT=gpu
+#define GUI_PRESENT_GPU     1   // through the GPU (OpenGL ES/EGL, Metal, Direct3D 11); CPU if that fails
+#define GUI_PRESENT_CPU     2   // the backend's software blit, whatever the environment says
+
 #include <std/collections/string.h>
 #include <std/gui/gui_utf8.h>
 
@@ -206,6 +212,7 @@ struct GuiWindowOptions {
     int visible;           // shown on creation; default 1
     int hiDpi;             // buffer in physical pixels (scale > 1 on high-DPI displays); default 1
     int topmost;           // stays above other windows (tool windows, popups); default 0
+    int present;           // GUI_PRESENT_*; default GUI_PRESENT_DEFAULT
 
     static struct GuiWindowOptions new(const &char title, int width, int height);
 };

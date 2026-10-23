@@ -6,6 +6,7 @@
 #      virtual-pointer protocols (wtype, wlrctl), the clipboard against
 #      wl-copy/wl-paste, resizes and closes through swaymsg, xdg-decoration,
 #      fractional-scale, cursor-shape;
+#      plus the EGL/OpenGL ES presenter (Mesa llvmpipe, LIBGL_ALWAYS_SOFTWARE);
 #   2. Weston, headless (no xdg-decoration, no cursor-shape): windows,
 #      presenting, multi-window, close.
 # Needs sway, grim, wtype, wlrctl, wl-clipboard, swaymsg and weston on PATH
@@ -23,6 +24,8 @@ STD="${STD_ARCHIVE:-$(SAFEC="$SAFEC" "$HERE/../std_archive.sh" "$OUT/_std")}"
 "$SAFEC" -I "$ROOT/std" -I "$ROOT" "$HERE/wayland_check.sc" --emit-llvm --compat-preprocessor -o "$OUT/wayland_check.ll"
 "$CLANG" -w "$OUT/wayland_check.ll" "$STD" -lX11 -lwayland-client -lxkbcommon -ldl -lm -o "$OUT/wayland_check"
 unset DISPLAY
+# Mesa without a GPU: EGL on Wayland through llvmpipe and wl_shm.
+export LIBGL_ALWAYS_SOFTWARE=1
 
 # Compositor sockets must fit in sun_path: a short private runtime dir.
 RT="$(mktemp -d /tmp/safec-wl.XXXXXX)"
@@ -68,7 +71,9 @@ if command -v sway >/dev/null && command -v grim >/dev/null && command -v wtype 
    command -v wlrctl >/dev/null && command -v wl-copy >/dev/null; then
     echo "== sway (headless), scale 1"
     run_sway 1 full || status=1
-    echo "== sway (headless), scale 1.5"
+    echo "== sway (headless), scale 1: the EGL presenter"
+    run_sway 1 gl || status=1
+    echo "== sway (headless), scale 1.5 (+ the EGL presenter)"
     run_sway 1.5 scaled || status=1
 else
     echo "== sway/grim/wtype/wlrctl/wl-clipboard not installed: skipped"
