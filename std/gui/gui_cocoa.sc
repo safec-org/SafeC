@@ -40,6 +40,7 @@
 
 #include <std/gui/gui.h>
 #include <std/gui/gui_backend.h>
+#include <std/gui/gui_headless.h>
 #include <std/gui/gui_draw.h>
 #include <std/mem.h>
 #include <std/time.h>
@@ -885,7 +886,7 @@ static struct GuiNativeHandle __gui_cocoa_native(&GuiWindowState st) {
     return h;
 }
 
-&GuiBackend gui_platform_backend() {
+static &GuiBackend __gui_native_backend() {
     if (!gCocoaBackendInit) {
         gCocoaBackend.name = "cocoa";
         gCocoaBackend.primaryMod = GUI_MOD_META;
@@ -959,6 +960,12 @@ int gui_draw_text_system(&GuiWindow win, int x, int y, const &char text,
         CGColorSpaceRelease(space);
         return 1;
     }
+}
+
+// $SAFEC_GUI_BACKEND=headless selects the in-memory backend (gui_headless.h).
+&GuiBackend gui_platform_backend() {
+    if (gui_headless_requested()) { return gui_headless_backend(); }
+    return __gui_native_backend();
 }
 
 } // namespace std

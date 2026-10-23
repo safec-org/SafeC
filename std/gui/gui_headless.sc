@@ -5,6 +5,9 @@
 #include <std/gui/gui_headless.h>
 #include <std/mem.h>
 #include <std/collections/string.h>
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
+extern char* getenv(const char* name);
+#endif
 
 namespace std {
 
@@ -23,6 +26,21 @@ static unsigned long long gHeadlessNextKey = 1ULL;
 static unsigned int gHeadlessFocusId = 0U;
 
 static int __hl_init() { return 1; }
+
+int gui_headless_requested() {
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
+    unsafe {
+        const char* v = getenv("SAFEC_GUI_BACKEND");
+        if (v == (const char*)0) { return 0; }
+        const char* want = "headless";
+        unsigned long i = 0UL;
+        while (want[i] != '\0' && v[i] == want[i]) { i = i + 1UL; }
+        return (want[i] == '\0' && v[i] == '\0') ? 1 : 0;
+    }
+#else
+    return 0;
+#endif
+}
 
 static int __hl_create(&GuiWindowState st, const &GuiWindowOptions opts) {
     unsafe {
