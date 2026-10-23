@@ -75,7 +75,7 @@ TypePtr substituteType(const TypePtr &ty, const TypeSubst &subs) {
     case TypeKind::Slice: {
         auto &sl = static_cast<const SliceType &>(*ty);
         auto ne = substituteType(sl.element, subs);
-        return (ne == sl.element) ? ty : makeSlice(ne);
+        return (ne == sl.element) ? ty : makeSlice(ne, sl.constElem);
     }
     case TypeKind::Vector: {
         auto &vt = static_cast<const VectorType &>(*ty);

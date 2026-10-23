@@ -4039,6 +4039,22 @@ llvm::Value *CodeGen::genSlice(SliceExpr &e, FnEnv &env) {
         endVal = llvm::ConstantInt::get(i64Ty, 0);
     }
 
+    // Range check: start <= end <= length, for a base whose length is known
+    // (an array or a slice; a pointer is sliced only inside 'unsafe'). An
+    // out-of-range slice traps like an out-of-range index would.
+    if (!e.boundsCheckOmit && arrLen) {
+        auto *bad = builder_.CreateOr(builder_.CreateICmpUGT(startVal, endVal, "slice.neg"),
+                                      builder_.CreateICmpUGT(endVal, arrLen, "slice.oob"),
+                                      "slice.bad");
+        auto *curFn  = builder_.GetInsertBlock()->getParent();
+        auto *trapBB = llvm::BasicBlock::Create(ctx_, "slice.trap", curFn);
+        auto *okBB   = llvm::BasicBlock::Create(ctx_, "slice.ok",   curFn);
+        builder_.CreateCondBr(bad, trapBB, okBB);
+        builder_.SetInsertPoint(trapBB);
+        emitBoundsTrap();
+        builder_.SetInsertPoint(okBB);
+    }
+
     // Slice pointer: basePtr + start
     auto *slicePtr = builder_.CreateGEP(elemTy, basePtr, startVal, "slice.ptr");
     // Slice length: end - start

@@ -157,7 +157,12 @@ static void applyToVarDecls(Stmt *vs, F &&fn) {
     }
 }
 
-bool Parser::isTypeStart() const { return isTypeStart(cur()); }
+bool Parser::isTypeStart() const {
+    // '[]T' (a slice type) starts a declaration too: a function returning a
+    // slice, a global or field of slice type.
+    if (cur().is(TK::LBracket) && peek().is(TK::RBracket)) return true;
+    return isTypeStart(cur());
+}
 
 bool Parser::looksLikeVarDeclStart() const {
     if (!isTypeStart() || cur().is(TK::Star)) return false;
@@ -497,6 +502,9 @@ TypePtr Parser::parseType() {
     // ?T (optional type) — '?' not followed by '&'
     if (cur().is(TK::Question)) {
         consume();
+        // '?[]T': an optional slice.
+        if (cur().is(TK::LBracket) && peek().is(TK::RBracket))
+            return makeOptional(parseType());
         TypePtr inner = parseBaseType();
         inner = parseTypeDeclarator(std::move(inner), baseVolatile_);
         return makeOptional(std::move(inner));
@@ -504,9 +512,16 @@ TypePtr Parser::parseType() {
     // []T (slice type, parse-only)
     if (cur().is(TK::LBracket) && peek().is(TK::RBracket)) {
         consume(); consume(); // consume '[' ']'
+        // '[]const T': a read-only view (no writes through it). '[]T'
+        // converts to it implicitly, not the other way.
+        bool constElem = false;
+        if (cur().is(TK::KW_const) && !peek().is(TK::Amp) && !peek().is(TK::QuestionAmp)) {
+            consume();
+            constElem = true;
+        }
         TypePtr elem = parseType();
         typeVolatile_ = false;
-        return makeSlice(std::move(elem));
+        return makeSlice(std::move(elem), constElem);
     }
     // Base type
     TypePtr base = parseBaseType();
