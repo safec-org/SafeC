@@ -28,38 +28,54 @@
 //   }
 //
 // What maps to what:
-//   windows     a <canvas>: the glue's 'canvas' option picks it (an
-//               element, a selector, or a function (index, title) =>
-//               canvas), else the next unused canvas[data-safec-gui] of the
-//               page, else a new <canvas> appended to <body>. Its CSS size
-//               is the window's logical size and its backing store that
-//               times devicePixelRatio (hiDpi), so drawing is sharp; with
-//               the 'fit' option (or a data-safec-fit attribute) the canvas
-//               keeps the size the page's CSS gives it and follows it
-//               (ResizeObserver) — GUI_EVENT_RESIZE, as a window would.
-//               Titles go to the canvas' aria-label (and, with the 'title'
-//               option, document.title). Positions don't apply.
+//   windows     windows: "canvas" (default) — each window a <canvas>: the
+//               glue's 'canvas' option picks it (an element, a selector, or
+//               a function (index, title) => canvas), else the next unused
+//               canvas[data-safec-gui] of the page, else a new <canvas>
+//               appended to <body>. Its CSS size is the window's logical
+//               size and its backing store that times devicePixelRatio
+//               (hiDpi), so drawing is sharp; with the 'fit' option (or a
+//               data-safec-fit attribute) the canvas keeps the size the
+//               page's CSS gives it and follows it (ResizeObserver) —
+//               GUI_EVENT_RESIZE, as a window would. windows: "frames" —
+//               each window a positioned <div class="safec-gui-window"> in
+//               a container, with a title bar (drag it: GUI_EVENT_MOVE,
+//               set_position()/pos_x() work; its × : GUI_EVENT_CLOSE), a
+//               resize grip honoring the size limits, raised on a click.
 //   presenting  putImageData of the damaged rectangle, straight from the
-//               module's memory (premultiplied pixels are converted to
-//               ImageData's straight alpha on the way; opaque ones are
-//               copied as they are).
+//               module's memory (premultiplied pixels converted to
+//               ImageData's straight alpha on the way) — or, with the
+//               page's present: "webgl" option or GUI_PRESENT_GPU, WebGL2
+//               (else WebGL1): the damaged rectangle uploaded into a
+//               texture and drawn as one quad (gui_gpu_web_wasm.sc), back
+//               to putImageData if there is no WebGL or the context is lost.
 //   input       pointer events (with pointer capture while a button is
-//               down), wheel (pixel/line/page deltas to lines), keyboard
-//               (KeyboardEvent.code/key to GUI_KEY_* and the typed
-//               character), focus/blur, enter/leave; the canvas is
-//               focusable (tabindex 0) and focused on a click.
+//               down), wheel (pixel/line/page deltas to lines); keyboard
+//               focus is real DOM focus on a hidden <textarea> per window
+//               (a click on the canvas focuses it): KeyboardEvent.code/key
+//               to GUI_KEY_* and the typed character, and text that comes
+//               without a key — IME composition, virtual keyboards,
+//               context-menu pastes — as GUI_EVENT_CHAR.
 //   HiDPI       devicePixelRatio, followed when it changes (zoom, another
 //               display): GUI_EVENT_SCALE.
-//   clipboard   gui_clipboard_set_text() writes navigator.clipboard (allowed
-//               from an input event); gui_clipboard_get_text() returns the
-//               text of the last paste event or of the last copy — the
-//               glue holds a Ctrl/Cmd+V keydown back until its paste event
-//               arrived, so a paste shortcut sees the pasted text. Reading
-//               the system clipboard any other way needs a permission
-//               browsers don't grant silently.
+//   clipboard   gui_clipboard_set_text() writes navigator.clipboard (and the
+//               copy event a Ctrl/Cmd+C shortcut fires); gui_clipboard_get_text()
+//               returns the text of the last paste event or of the last
+//               copy — the glue holds a Ctrl/Cmd+V keydown back until its
+//               paste event arrived, so a paste shortcut sees the pasted
+//               text. Reading the system clipboard any other way needs a
+//               permission browsers don't grant silently.
+//   cursors     CSS cursor on the canvas.
+//   a11y        canvases are role="img" labelled with the window title, the
+//               hidden input carries it too, and gui_web_announce() speaks
+//               through an aria-live region.
+//   DOM         gui_web_window_element()/gui_web_mount() trade elements with
+//               std/wasm/dom.h, so a page mixes DOM and std/gui windows.
 //   clock       performance.now(); timers fire from the frame loop.
-// Fonts: the TrueType stack's embedded fallback face is always there; load
-// others from bytes you fetch() (gui_text.h).
+// Files: fopen()/fread() read the glue's 'files' option (fetchFiles()), e.g.
+// fonts at the paths std/gui looks in; the TrueType stack's embedded
+// fallback face is there without any. 'safeguard bundle --target wasm32'
+// writes build/<name>.web/: the module, this glue and a page.
 
 #include <std/gui/gui.h>
 #include <std/gui/gui_app.h>
