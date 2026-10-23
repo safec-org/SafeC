@@ -218,6 +218,11 @@ llvm::Function *rewriteParams(llvm::Function *f, const Rules &r) {
     f->setName(name + ".pre_byref");
     llvm::Function *nf = llvm::Function::Create(newFT, f->getLinkage(), f->getAddressSpace(), name, m);
     nf->copyAttributesFrom(f);
+    // copyAttributesFrom leaves the COMDAT behind. A monomorphized generic
+    // is linkonce_odr in a COMDAT of its own name; without it COFF emits a
+    // weak external with a per-object default, and link.exe rejects two
+    // objects defining the same instance (LNK1227).
+    nf->setComdat(f->getComdat());
     nf->setCallingConv(f->getCallingConv());
     nf->setSubprogram(f->getSubprogram());
     f->setSubprogram(nullptr);
@@ -327,6 +332,7 @@ llvm::Function *rewriteFunction(llvm::Function *f, const Rules &r) {
     llvm::Function *nf = llvm::Function::Create(newFT, f->getLinkage(),
                                                 f->getAddressSpace(), name, m);
     nf->copyAttributesFrom(f);
+    nf->setComdat(f->getComdat());   // see rewriteParams
     nf->setCallingConv(f->getCallingConv());
     nf->setSubprogram(f->getSubprogram());
     f->setSubprogram(nullptr);
