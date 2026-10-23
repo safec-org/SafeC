@@ -367,6 +367,7 @@ void Preprocessor::handleDefine(const std::string &rest,
     MacroDef def;
     def.name = name;
     def.loc  = {lineNo, 1, filename.c_str()};
+    def.file = filename;
 
     // Function-like if '(' immediately follows name (no space)
     if (pos < rest.size() && rest[pos] == '(') {
