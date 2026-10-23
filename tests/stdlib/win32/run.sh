@@ -26,7 +26,7 @@ if [[ ! -f "$OUT/libsafec_std.a" ]]; then
     "$AR" rcs "$OUT/libsafec_std.a" "$OUT"/std/*.o
 fi
 fails=0
-for t in win32_gui_check win32_thread_check win32_audio_check; do
+for t in win32_gui_check win32_thread_check win32_audio_check win32_net_check; do
     "$SAFEC" -I "$ROOT/std" -I "$ROOT" "$HERE/$t.sc" --target=$TRIPLE --emit-llvm --compat-preprocessor -o "$OUT/$t.ll"
     "$CLANG" -c --target=$TRIPLE "$OUT/$t.ll" -o "$OUT/$t.o" -Wno-override-module
     "$ZIG" cc -target x86_64-windows-gnu "$OUT/$t.o" "$OUT/libsafec_std.a" -lgdi32 -luser32 -lws2_32 -lole32 -lwinmm -o "$OUT/$t.exe"

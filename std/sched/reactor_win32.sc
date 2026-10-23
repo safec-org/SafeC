@@ -60,20 +60,29 @@ struct WSAPollFd {
 };
 
 // Winsock must be initialized (WSAStartup) before any other Winsock call
-// in the process, including WSAPoll. 32 bytes is more than WSADATA's
-// real size on Win64 — its contents are never read here, only the side
-// effect of calling WSAStartup matters, so an oversized buffer is a
-// simpler, safer way to give the real function room to write into than
-// pinning down WSADATA's exact (version-dependent, historically fiddly)
-// layout for a value nothing in this file inspects.
+// in the process, including WSAPoll. Its contents are never read here,
+// but WSAStartup writes the whole WSADATA (408 bytes on Win64: the two
+// strings szDescription[257] and szSystemStatus[129] dominate), so the
+// buffer must be at least that big. It once was a 32-byte array, and
+// every WSAStartup call smashed ~380 bytes of its caller's stack frames
+// (Wine's "Running" status string landing on a saved pointer is what
+// crashed examples/async_demo in ConnectFut::poll); the static_assert
+// keeps the real layout pinned.
 // Guarded — io_nb_win32.sc declares this same struct (same purpose, same
 // shape) and a caller may include both (e.g. std::http_serve_reactor
 // does). See io_nb_win32.sc's identical guard comment.
 #ifndef SAFEC_WSADATA_DEFINED_
 #define SAFEC_WSADATA_DEFINED_
 struct WSAData_ {
-    unsigned char reserved[32];
+    unsigned short     wVersion;
+    unsigned short     wHighVersion;
+    unsigned short     iMaxSockets;          // Win64 order: these two precede
+    unsigned short     iMaxUdpDg;            // the strings (Win32 puts them after)
+    unsigned long long lpVendorInfo;         // char*
+    char               szDescription[257];   // WSADESCRIPTION_LEN + 1
+    char               szSystemStatus[129];  // WSASYS_STATUS_LEN + 1
 };
+static_assert(sizeof(struct WSAData_) == 408, "WSADATA is 408 bytes on 64-bit Windows");
 #endif
 
 extern int   WSAStartup(unsigned short versionRequested, void* wsaData);
