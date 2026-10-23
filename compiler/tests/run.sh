@@ -33,7 +33,9 @@ while IFS= read -r -d '' t; do
         fi
         continue
     fi
-    if ! "$SAFEC_BIN" "$t" -O2 --emit-llvm -o "$ll" >"$OUT/err.txt" 2>&1; then
+    # '// SAFEC-ARGS: <flags>' adds compiler flags (e.g. --target <triple>).
+    read -r -a args <<<"$(sed -n 's|^// SAFEC-ARGS: *||p' "$t" | head -1)"
+    if ! "$SAFEC_BIN" "$t" -O2 --emit-llvm ${args[@]+"${args[@]}"} -o "$ll" >"$OUT/err.txt" 2>&1; then
         echo "  [FAIL] $name (compile)"
         sed 's/^/      /' "$OUT/err.txt"
         FAIL=$((FAIL + 1))

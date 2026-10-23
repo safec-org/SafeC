@@ -56,8 +56,10 @@ struct SockAddrIn {
     unsigned long  sin_zero;   // 8 bytes, always zero
 };
 
-// reactor_win32.sc declares this same struct (same purpose, same shape —
-// see its own comment) — guarded so a caller that includes both this file
+// WSADATA, which WSAStartup fills in — see reactor_win32.sc's identical
+// definition for why it has to be the real, full-size layout.
+// reactor_win32.sc declares this same struct (same purpose, same shape) —
+// guarded so a caller that includes both this file
 // and reactor_win32.sc (e.g. std::http_serve_reactor, which needs both)
 // doesn't hit a duplicate-definition error. #pragma once only guards a
 // single file against itself, not two different files defining the same
@@ -65,8 +67,15 @@ struct SockAddrIn {
 #ifndef SAFEC_WSADATA_DEFINED_
 #define SAFEC_WSADATA_DEFINED_
 struct WSAData_ {
-    unsigned char reserved[32]; // oversized on purpose — see reactor_win32.sc's WSAData_
+    unsigned short     wVersion;
+    unsigned short     wHighVersion;
+    unsigned short     iMaxSockets;          // Win64 order: these two precede
+    unsigned short     iMaxUdpDg;            // the strings (Win32 puts them after)
+    unsigned long long lpVendorInfo;         // char*
+    char               szDescription[257];   // WSADESCRIPTION_LEN + 1
+    char               szSystemStatus[129];  // WSASYS_STATUS_LEN + 1
 };
+static_assert(sizeof(struct WSAData_) == 408, "WSADATA is 408 bytes on 64-bit Windows");
 #endif
 
 extern int WSAStartup(unsigned short versionRequested, void* wsaData);
