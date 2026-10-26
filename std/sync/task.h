@@ -1,6 +1,7 @@
 // SafeC Standard Library — Cooperative Task Scheduler
 // Stackless cooperative multitasking. Tasks yield voluntarily via resume_point.
 #pragma once
+#include <std/erased.h>
 
 // Task states
 #define TASK_READY    0
@@ -36,8 +37,10 @@ trait TaskRunner {
 }
 
 struct Task {
-    void*  func;          // type-erased task function: int(?&T arg, int resume_point);
-    void*  arg;           // type-erased ?&T argument — both set only by TaskScheduler::spawn
+    // The task function int(?&T arg, int resume_point) and its argument,
+    // erased (see std/erased.h) — both set only by TaskScheduler::spawn.
+    fn int(?&Erased, int) func_;
+    ?&Erased              arg_;
     int    state;         // TASK_READY, TASK_RUNNING, or TASK_DONE
     int    resume_point;  // where to resume (0 = start)
     // I/O-readiness blocking (std/sched/reactor.h drives these): a task
@@ -70,7 +73,7 @@ struct TaskScheduler {
 
     // Type-erased spawn behind spawn() and the compiler's bare-metal spawn
     // runtime. Returns task index, or -1 if full.
-    int           spawn_raw_(void* func, void* arg);
+    int           spawn_raw_(fn int(?&Erased, int) func, ?&Erased arg);
 
     // Run one scheduling round: every non-blocked, non-done task gets one
     // turn (blocked tasks are skipped without being invoked — see
@@ -108,7 +111,7 @@ struct TaskScheduler {
 
 generic<T>
 int TaskScheduler::spawn(fn int(?&T, int) func, ?&T arg) {
-    unsafe { return self.spawn_raw_((void*)func, (void*)arg); }
+    unsafe { return self.spawn_raw_((fn int(?&Erased, int))func, (?&Erased)arg); }
 }
 
 // Runs at most max_rounds rounds of s (a bounded run_all, e.g. for a

@@ -380,6 +380,17 @@ void t_queues() {
     ASSERT_EQ(q.length(), 7);
     q.destroy();
 
+    // Over a caller's buffer: 6 slots round down to a capacity of 4.
+    int slots[6];
+    struct LFQueue<int> oq = LFQueue::over(slots[0..6]);
+    ASSERT_EQ(oq.cap, 4);
+    int k = 0;
+    while (k < 4) { ASSERT_TRUE(oq.enqueue(k * 10)); k = k + 1; }
+    ASSERT_FALSE(oq.enqueue(99));
+    ASSERT_EQ(oq.dequeue().default(-1), 0);
+    ASSERT_EQ(slots[3], 30);
+    oq.destroy();                  // not owned: the array stays
+
     struct Chan<int> ch = Chan::new(4);
     ch.send(11);
     ch.send(22);

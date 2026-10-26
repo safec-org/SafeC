@@ -29,7 +29,11 @@ static void par_run_(void* body, void* ctx, unsigned long lo, unsigned long hi) 
 unsigned long parallel_threads() { return 1UL; }
 void parallel_set_threads(unsigned long n) { g_par_want = 1UL; }
 
-void parallel_for_raw_(unsigned long n, unsigned long grain, void* body, void* ctx) {
+void parallel_for_raw_(unsigned long n, unsigned long grain,
+                       fn void(&Erased, unsigned long, unsigned long) fbody, &Erased fctx) {
+    void* body;
+    void* ctx;
+    unsafe { body = (void*)fbody; ctx = (void*)fctx; }
     if (n > 0UL) par_run_(body, ctx, 0UL, n);
 }
 
@@ -212,7 +216,11 @@ static unsigned long par_start_(unsigned long want) {
     return g_par_workers;
 }
 
-void parallel_for_raw_(unsigned long n, unsigned long grain, void* body, void* ctx) {
+void parallel_for_raw_(unsigned long n, unsigned long grain,
+                       fn void(&Erased, unsigned long, unsigned long) fbody, &Erased fctx) {
+    void* body;
+    void* ctx;
+    unsafe { body = (void*)fbody; ctx = (void*)fctx; }
     if (n == 0UL) return;
     if (grain < 1UL) grain = 1UL;
     unsigned long want = parallel_threads();
