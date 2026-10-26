@@ -1163,7 +1163,7 @@ static void* __mps_matmul_smma_pipeline = (void*)0;
 static void* __mps_matmul_multi_pipeline = (void*)0;
 static void* __mps_relu_pipeline = (void*)0;
 
-int mps_matmul_f32(const &float a, const &float b, &float out,
+int mps_matmul_f32_n_(const &float a, const &float b, &float out,
                     unsigned long M, unsigned long K, unsigned long N) {
     unsafe {
         if (!__mps_ensure_device_queue()) return 0;
@@ -1301,6 +1301,20 @@ int mps_matmul_f32(const &float a, const &float b, &float out,
         __mps_buf_put(bufOut, bytesOut);
         return 1;
     }
+}
+
+int mps_matmul_f32([]const float a_s, []const float b_s, []float out_s, unsigned long M, unsigned long K, unsigned long N) {
+    if (a_s.len < M * K || b_s.len < K * N || out_s.len < M * N) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return mps_matmul_f32_n_(a, b, out, M, K, N);
 }
 
 // ── matmul backward (see gpu_mps.h's own comment on these two) ───────────────

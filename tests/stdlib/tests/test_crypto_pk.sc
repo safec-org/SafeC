@@ -85,16 +85,16 @@ void t_x25519() {
         unsigned char k[32]; unsigned char u[32]; unsigned char o[32]; char h[80];
         hb("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4", k);
         hb("e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c", u);
-        ASSERT_EQ(x25519(o, k, u), 1);
+        ASSERT_EQ(x25519(o[..], k[..], u[..]), 1);
         hx(o, 32UL, h);
         ASSERT_STR_EQ(h, "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552");
         unsigned char a[32]; unsigned char ap[32]; unsigned char b[32]; unsigned char bp[32];
         hb("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a", a);
         hb("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb", b);
-        x25519_public(ap, a); hx(ap, 32UL, h);
+        x25519_public(ap[..], a[..]); hx(ap, 32UL, h);
         ASSERT_STR_EQ(h, "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a");
-        x25519_public(bp, b);
-        x25519(o, a, bp); hx(o, 32UL, h);
+        x25519_public(bp[..], b[..]);
+        x25519(o[..], a[..], bp[..]); hx(o, 32UL, h);
         ASSERT_STR_EQ(h, "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742");
         // 1000 iterations
         unsigned char kk[32]; unsigned char uu[32]; unsigned char t[32];
@@ -103,7 +103,7 @@ void t_x25519() {
         kk[0] = (unsigned char)9; uu[0] = (unsigned char)9;
         i = 0;
         while (i < 1000) {
-            x25519(t, kk, uu);
+            x25519(t[..], kk[..], uu[..]);
             int j = 0; while (j < 32) { uu[j] = kk[j]; kk[j] = t[j]; j = j + 1; }
             i = i + 1;
         }
@@ -111,7 +111,7 @@ void t_x25519() {
         ASSERT_STR_EQ(h, "684cf59ba83309552800ef566f2f4d3c1c3887c49360e3875f2eb94d99532c51");
         // low-order point -> 0
         int z = 0; while (z < 32) { u[z] = (unsigned char)0; z = z + 1; }
-        ASSERT_EQ(x25519(o, k, u), 0);
+        ASSERT_EQ(x25519(o[..], k[..], u[..]), 0);
     }
 }
 

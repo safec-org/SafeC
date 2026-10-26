@@ -1008,9 +1008,9 @@ int main() {
     struct Vec<float> hc = std::Vec::with_cap(m * nn);
     i = 0UL;
     while (i < m * nn) { hc.push(0.0f); i = i + 1UL; }
-    check(std::rocm_matmul_f32(ga.at(0UL), gb.at(0UL), hc.at(0UL), m, k, nn), "custom matmul ran");
+    check(std::rocm_matmul_f32(ga.as_slice(), gb.as_slice(), hc.as_slice(), m, k, nn), "custom matmul ran");
     check(maxdiff(&hc, &ref) < 1e-4f, "custom matmul values");
-    check(std::rocm_matmul_f32_blas(ga.at(0UL), gb.at(0UL), hc.at(0UL), m, k, nn), "blas matmul ran");
+    check(std::rocm_matmul_f32_blas(ga.as_slice(), gb.as_slice(), hc.as_slice(), m, k, nn), "blas matmul ran");
     check(maxdiff(&hc, &ref) < 1e-4f, "blas matmul values");
 
     // graph: record add + scale, replay twice

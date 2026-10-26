@@ -122,7 +122,9 @@ int webgpu_sum_f32([]const float a, []float out);
 // internal: the (reference, length) core of webgpu_sum_f32()
 int webgpu_sum_f32_n_(const &float a, &float out, unsigned long n);
 // out [M, N] = a [M, K] . b [K, N].
-int webgpu_matmul_f32(const &float a, const &float b, &float out,
+int webgpu_matmul_f32([]const float a, []const float b, []float out, unsigned long M, unsigned long K, unsigned long N);
+// internal: the (reference, length) core of webgpu_matmul_f32()
+int webgpu_matmul_f32_n_(const &float a, const &float b, &float out,
                       unsigned long M, unsigned long K, unsigned long N);
 
 } // namespace std

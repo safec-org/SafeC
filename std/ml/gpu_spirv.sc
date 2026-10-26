@@ -358,7 +358,7 @@ int spirv_sum_f32([]const float a_s, []float out_s) {
     return spirv_sum_f32_n_(a, out, n);
 }
 
-int spirv_matmul_f32(const &float a, const &float b, &float out,
+int spirv_matmul_f32_n_(const &float a, const &float b, &float out,
                       unsigned long M, unsigned long K, unsigned long N) {
     if (!spirv_available()) return 0;
     if (M == 0UL || N == 0UL) return 1;
@@ -369,6 +369,20 @@ int spirv_matmul_f32(const &float a, const &float b, &float out,
     if (ok) { unsafe { ok = bo.read(((unsigned char*)(void*)(out))[0..4UL * M * N]); } }
     ba.free(); bb.free(); bo.free();
     return ok;
+}
+
+int spirv_matmul_f32([]const float a_s, []const float b_s, []float out_s, unsigned long M, unsigned long K, unsigned long N) {
+    if (a_s.len < M * K || b_s.len < K * N || out_s.len < M * N) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return spirv_matmul_f32_n_(a, b, out, M, K, N);
 }
 
 } // namespace std

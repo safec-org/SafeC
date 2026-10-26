@@ -11,7 +11,7 @@
 // run time, so a generic wrapper around a hand-tuned method costs nothing).
 //
 //   SampleProcessor  process(x): one sample in, one out
-//   BlockProcessor   process_block(in, out, n)
+//   BlockProcessor   process_block(in, out)  (slices)
 //   Resettable       reset(): back to silence
 //   SampleFilter     SampleProcessor + BlockProcessor + Resettable:
 //                      double  FirFilter, IirFilter, Biquad, CombFF, CombFB

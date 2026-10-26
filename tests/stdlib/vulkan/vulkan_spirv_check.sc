@@ -163,7 +163,7 @@ static void check_reductions_(unsigned long n, unsigned long M, unsigned long K,
         }
         p = p + 1UL;
     }
-    unsafe { ok = spirv_matmul_f32((const &float)x.at(0UL), (const &float)w.at(0UL), (&float)o.at(0UL), M, K, N); }
+    ok = spirv_matmul_f32(x.as_slice(), w.as_slice(), o.as_slice(), M, K, N);
     double e = relerr(&o, &r, M * N);
     unsafe { if (!ok || e > 1.0e-5) printf("    matmul %lux%lux%lu: ran %d, error %g\n", M, K, N, ok, e); }
     check(ok && e <= 1.0e-5, "matmul");

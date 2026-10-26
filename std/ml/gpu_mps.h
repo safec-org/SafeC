@@ -118,7 +118,9 @@ int mps_sum_f32_n_(const &float a, &float out, unsigned long n);
 // unlike matmul_kernel's explicit boundary checks. See gpu_mps.sc's
 // comment on the implementation, and gpu_mps_kernels.metal's comments on
 // each kernel, for detail on all three paths.
-int mps_matmul_f32(const &float a, const &float b, &float out,
+int mps_matmul_f32([]const float a, []const float b, []float out, unsigned long M, unsigned long K, unsigned long N);
+// internal: the (reference, length) core of mps_matmul_f32()
+int mps_matmul_f32_n_(const &float a, const &float b, &float out,
                     unsigned long M, unsigned long K, unsigned long N);
 
 // GPU-backed matmul backward: dA = dC . B^T, dB = A^T . dC (same math

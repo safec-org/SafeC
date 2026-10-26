@@ -836,7 +836,7 @@ static int t13_make_share_(&T13_ t, unsigned int g, &Vec<unsigned char> out) {
     if (g == (unsigned int)T13_X25519_) {
         t.rng.fill_n_(&t.x_priv[0], 32UL);
         unsigned char pub[32];
-        x25519_public(&pub[0], &t.x_priv[0]);
+        x25519_public_n_(&pub[0], &t.x_priv[0]);
         bput_(out, &pub[0], 32UL);
         return 1;
     }
@@ -853,7 +853,7 @@ static unsigned long t13_shared_(&T13_ t, unsigned int g, const unsigned char* p
     unsafe {
         if (g == (unsigned int)T13_X25519_) {
             if (plen != 32UL) { return 0UL; }
-            if (!x25519((&unsigned char)out, &t.x_priv[0], (const &unsigned char)peer)) { return 0UL; }
+            if (!x25519_n_((&unsigned char)out, &t.x_priv[0], (const &unsigned char)peer)) { return 0UL; }
             return 32UL;
         }
         int curve = t13_ec_curve_(g);

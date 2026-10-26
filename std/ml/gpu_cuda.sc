@@ -1847,14 +1847,42 @@ static int cuda_host_matmul_(const float* a, const float* b, float* out,
     return ok;
 }
 
-int cuda_matmul_f32(const &float a, const &float b, &float out,
+int cuda_matmul_f32_n_(const &float a, const &float b, &float out,
                     unsigned long M, unsigned long K, unsigned long N) {
     return cuda_host_matmul_(a, b, out, M, K, N, 0);
 }
 
-int cuda_matmul_f32_blas(const &float a, const &float b, &float out,
+int cuda_matmul_f32([]const float a_s, []const float b_s, []float out_s, unsigned long M, unsigned long K, unsigned long N) {
+    if (a_s.len < M * K || b_s.len < K * N || out_s.len < M * N) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return cuda_matmul_f32_n_(a, b, out, M, K, N);
+}
+
+int cuda_matmul_f32_blas_n_(const &float a, const &float b, &float out,
                          unsigned long M, unsigned long K, unsigned long N) {
     return cuda_host_matmul_(a, b, out, M, K, N, 1);
+}
+
+int cuda_matmul_f32_blas([]const float a_s, []const float b_s, []float out_s, unsigned long M, unsigned long K, unsigned long N) {
+    if (a_s.len < M * K || b_s.len < K * N || out_s.len < M * N) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return cuda_matmul_f32_blas_n_(a, b, out, M, K, N);
 }
 
 // ── fp16 / bf16 buffers (CudaHalfBuf) ────────────────────────────────────────

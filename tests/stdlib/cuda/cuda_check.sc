@@ -1470,11 +1470,11 @@ int main() {
     i = 0UL;
     while (i < m * nn) { hc.push(0.0f); i = i + 1UL; }
     unsafe {
-        check(std::cuda_matmul_f32(ga.at(0UL), gb.at(0UL), hc.at(0UL), m, k, nn), "custom matmul ran");
+        check(std::cuda_matmul_f32(ga.as_slice(), gb.as_slice(), hc.as_slice(), m, k, nn), "custom matmul ran");
     }
     check(maxdiff(&hc, &ref) < 1e-4f, "custom matmul values");
     unsafe {
-        check(std::cuda_matmul_f32_blas(ga.at(0UL), gb.at(0UL), hc.at(0UL), m, k, nn), "blas matmul ran");
+        check(std::cuda_matmul_f32_blas(ga.as_slice(), gb.as_slice(), hc.as_slice(), m, k, nn), "blas matmul ran");
     }
     check(maxdiff(&hc, &ref) < 1e-4f, "blas matmul values");
 

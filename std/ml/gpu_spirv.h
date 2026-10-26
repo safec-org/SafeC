@@ -108,7 +108,9 @@ int spirv_scale_f32_n_(const &float a, float k, &float out, unsigned long n);
 int spirv_sum_f32([]const float a, []float out);
 // internal: the (reference, length) core of spirv_sum_f32()
 int spirv_sum_f32_n_(const &float a, &float out, unsigned long n);   // out[0]
-int spirv_matmul_f32(const &float a, const &float b, &float out,
+int spirv_matmul_f32([]const float a, []const float b, []float out, unsigned long M, unsigned long K, unsigned long N);
+// internal: the (reference, length) core of spirv_matmul_f32()
+int spirv_matmul_f32_n_(const &float a, const &float b, &float out,
                       unsigned long M, unsigned long K, unsigned long N);
 
 // 1 if a Vulkan GPU the backend can use is present (initializes it).

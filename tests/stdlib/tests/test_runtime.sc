@@ -924,7 +924,7 @@ void t_io_roles() {
 static unsigned long g_bench_calls = 0UL;
 static void bench_fn(?&int arg) { unsafe { g_bench_calls = g_bench_calls + 1UL; } }
 static unsigned long g_fuzz_calls = 0UL;
-static void fuzz_fn(const &unsigned char d, unsigned long n) { unsafe { g_fuzz_calls = g_fuzz_calls + 1UL; } }
+static void fuzz_fn([]const unsigned char d) { unsafe { g_fuzz_calls = g_fuzz_calls + 1UL; } }
 
 void t_bench_fuzz() {
     unsafe {

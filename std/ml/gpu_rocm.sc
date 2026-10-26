@@ -2841,7 +2841,7 @@ int rocm_linear_attention_f32(const &float q, const &float k, const &float v, &f
     return rocm_attention_f32_(q, k, v, out, heads, seqLen, kvLen, headDim, 0.0f, causal, 1);
 }
 
-int rocm_matmul_f32(const &float a, const &float b, &float out,
+int rocm_matmul_f32_n_(const &float a, const &float b, &float out,
                     unsigned long M, unsigned long K, unsigned long N) {
     if (M > 2147483647UL || N > 2147483647UL || K > 2147483647UL) return 0;
     struct RocmBuf da = RocmBuf::upload_n_(a, M * K);
@@ -2872,7 +2872,21 @@ int rocm_matmul_f32(const &float a, const &float b, &float out,
     return ok;
 }
 
-int rocm_matmul_f32_blas(const &float a, const &float b, &float out,
+int rocm_matmul_f32([]const float a_s, []const float b_s, []float out_s, unsigned long M, unsigned long K, unsigned long N) {
+    if (a_s.len < M * K || b_s.len < K * N || out_s.len < M * N) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return rocm_matmul_f32_n_(a, b, out, M, K, N);
+}
+
+int rocm_matmul_f32_blas_n_(const &float a, const &float b, &float out,
                          unsigned long M, unsigned long K, unsigned long N) {
     struct RocmBuf da = RocmBuf::upload_n_(a, M * K);
     struct RocmBuf db = RocmBuf::upload_n_(b, K * N);
@@ -2883,6 +2897,20 @@ int rocm_matmul_f32_blas(const &float a, const &float b, &float out,
     db.free();
     dc.free();
     return ok;
+}
+
+int rocm_matmul_f32_blas([]const float a_s, []const float b_s, []float out_s, unsigned long M, unsigned long K, unsigned long N) {
+    if (a_s.len < M * K || b_s.len < K * N || out_s.len < M * N) { return 0; }
+    float a_d_[1];
+    const &float a = &a_d_[0];
+    if (a_s.len > 0UL) { unsafe { a = (const &float)a_s.ptr; } }
+    float b_d_[1];
+    const &float b = &b_d_[0];
+    if (b_s.len > 0UL) { unsafe { b = (const &float)b_s.ptr; } }
+    float out_d_[1];
+    &float out = &out_d_[0];
+    if (out_s.len > 0UL) { unsafe { out = (&float)out_s.ptr; } }
+    return rocm_matmul_f32_blas_n_(a, b, out, M, K, N);
 }
 
 // ── Mixed precision ──────────────────────────────────────────────────────────

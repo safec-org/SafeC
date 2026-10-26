@@ -334,10 +334,14 @@ int rocm_linear_attention_f32(const &float q, const &float k, const &float v, &f
 // out[M,N] = a[M,K] * b[K,N] with this library's own tiled HIP kernel
 // (64x64 tiles in LDS, 4x4 per thread). Kept as a dependency-free
 // reference; rocm_matmul_f32_blas is several times faster at every size.
-int rocm_matmul_f32(const &float a, const &float b, &float out,
+int rocm_matmul_f32([]const float a, []const float b, []float out, unsigned long M, unsigned long K, unsigned long N);
+// internal: the (reference, length) core of rocm_matmul_f32()
+int rocm_matmul_f32_n_(const &float a, const &float b, &float out,
                     unsigned long M, unsigned long K, unsigned long N);
 // Same product through rocBLAS.
-int rocm_matmul_f32_blas(const &float a, const &float b, &float out,
+int rocm_matmul_f32_blas([]const float a, []const float b, []float out, unsigned long M, unsigned long K, unsigned long N);
+// internal: the (reference, length) core of rocm_matmul_f32_blas()
+int rocm_matmul_f32_blas_n_(const &float a, const &float b, &float out,
                          unsigned long M, unsigned long K, unsigned long N);
 
 } // namespace std

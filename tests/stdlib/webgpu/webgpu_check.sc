@@ -161,7 +161,7 @@ static void check_matmul(unsigned long M, unsigned long K, unsigned long N, int 
         round_to(a, M * K, dtype);
         round_to(b, K * N, dtype);
         int ok = 0;
-        if (dtype == 0 && outType == 0) ok = webgpu_matmul_f32(a, b, got, M, K, N);
+        if (dtype == 0 && outType == 0) ok = webgpu_matmul_f32(a[0..M * K], b[0..K * N], got[0..M * N], M, K, N);
         else {
             struct WebGpuBuf ba = dtype == WEBGPU_FP16 ? WebGpuBuf::upload_f16(((const float*)a)[0..M * K])
                                 : (dtype == WEBGPU_BF16 ? WebGpuBuf::upload_bf16(((const float*)a)[0..M * K]) : WebGpuBuf::upload(((const float*)a)[0..M * K]));

@@ -15,9 +15,8 @@
 //  2. Host-array convenience ops (cuda_*_f32) — upload, compute, read back
 //     in one call. Simple, but each call pays two PCIe transfers; use (1)
 //     inside loops.
-//  3. Device-address handles (cuda_*_persistent, fp16/bf16) — the older
-//     '&void'-handle API, kept for existing callers; it runs on the same
-//     context and kernels as (1).
+//  3. fp16/bf16 device buffers (CudaHalfBuf) on the same context and
+//     kernels as (1).
 //
 // Ops on layer (1) are queued in order on one CUDA stream and return as
 // soon as they're enqueued; cuda_read() and cuda_sync() wait. A sequence
@@ -345,10 +344,14 @@ int cuda_sum_f32_n_(const &float a, &float out, unsigned long n);
 // out[M,N] = a[M,K] * b[K,N] with this library's own tiled CUDA kernel
 // (64x64 tiles in shared memory, 4x4 per thread). Kept as a dependency-free
 // reference; cuda_matmul_f32_blas is faster at every size.
-int cuda_matmul_f32(const &float a, const &float b, &float out,
+int cuda_matmul_f32([]const float a, []const float b, []float out, unsigned long M, unsigned long K, unsigned long N);
+// internal: the (reference, length) core of cuda_matmul_f32()
+int cuda_matmul_f32_n_(const &float a, const &float b, &float out,
                     unsigned long M, unsigned long K, unsigned long N);
 // Same product through cuBLAS.
-int cuda_matmul_f32_blas(const &float a, const &float b, &float out,
+int cuda_matmul_f32_blas([]const float a, []const float b, []float out, unsigned long M, unsigned long K, unsigned long N);
+// internal: the (reference, length) core of cuda_matmul_f32_blas()
+int cuda_matmul_f32_blas_n_(const &float a, const &float b, &float out,
                          unsigned long M, unsigned long K, unsigned long N);
 
 } // namespace std

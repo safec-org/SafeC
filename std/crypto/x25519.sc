@@ -194,17 +194,30 @@ static void x25519_raw_(&unsigned char q, const &unsigned char n, const &unsigne
     mem_zero_secure_obj(&f);
 }
 
-int x25519(&unsigned char out, const &unsigned char scalar, const &unsigned char point) {
+int x25519_n_(&unsigned char out, const &unsigned char scalar, const &unsigned char point) {
     x25519_raw_(out, scalar, point);
     return !ct_is_zero_n_(out, 32UL);
 }
 
-void x25519_public(&unsigned char out, const &unsigned char scalar) {
+int x25519([]unsigned char out_s, []const unsigned char scalar_s, []const unsigned char point_s) {
+    &unsigned char out = crypto_out_(out_s, 32UL);
+    const &unsigned char scalar = crypto_in_(scalar_s, 32UL);
+    const &unsigned char point = crypto_in_(point_s, 32UL);
+    return x25519_n_(out, scalar, point);
+}
+
+void x25519_public_n_(&unsigned char out, const &unsigned char scalar) {
     unsigned char nine[32];
     int i = 0;
     while (i < 32) { nine[i] = (unsigned char)0; i = i + 1; }
     nine[0] = (unsigned char)9;
     x25519_raw_(out, scalar, &nine[0]);
+}
+
+void x25519_public([]unsigned char out_s, []const unsigned char scalar_s) {
+    &unsigned char out = crypto_out_(out_s, 32UL);
+    const &unsigned char scalar = crypto_in_(scalar_s, 32UL);
+    x25519_public_n_(out, scalar);
 }
 
 } // namespace std

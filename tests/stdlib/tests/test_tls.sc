@@ -121,10 +121,10 @@ void t_rfc8448() {
         char h[200];
         hb("49af42ba7f7994852d713ef2784bcbcaa7911de26adc5642cb634540e7ea5005", cpriv);
         hb("c9828876112095fe66762bdbf7c672e156d6cc253b833df1dd69b1b04e751f0f", spub);
-        x25519_public(pub, cpriv);
+        x25519_public(pub[..], cpriv[..]);
         hx(pub, 32UL, h);
         ASSERT_STR_EQ(h, "99381de560e4bd43d23d8e435a7dbafeb3c06e51c13cae4d5413691e529aaf2c");
-        ASSERT_EQ(x25519(shared, cpriv, spub), 1);
+        ASSERT_EQ(x25519(shared[..], cpriv[..], spub[..]), 1);
         hx(shared, 32UL, h);
         ASSERT_STR_EQ(h, "8bd4054fb55b9d63fdfbacf9f04b9f0d35e6d63f537563efd46272900f89492d");
         unsigned char zeros[32]; unsigned char early[32]; unsigned char empty[32]; unsigned char derived[32];

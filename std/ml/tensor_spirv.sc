@@ -110,7 +110,7 @@ namespace std {
     unsafe { m = a->shape[0]; k = a->shape[1]; n = b->shape[1]; }
     &FloatTensor out = FloatTensor::new_2d(m, n, 0);
     unsafe {
-        int ok = spirv_matmul_f32((const float*)a->data, (const float*)b->data, (float*)out->data, m, k, n);
+        int ok = spirv_matmul_f32_n_((const float*)a->data, (const float*)b->data, (float*)out->data, m, k, n);
         if (!ok) {
             unsigned long i = 0UL;
             while (i < m) {
