@@ -16,14 +16,14 @@ namespace std {
 void          heap_init();
 
 // Allocate `size` bytes from the global heap.  Returns NULL on failure.
-&heap void    heap_alloc(unsigned long size);
+&heap unsigned char heap_alloc(unsigned long size);
 
 // Free a block returned by heap_alloc() or heap_realloc().
-void          heap_free(&heap void ptr);
+void          heap_free(&heap unsigned char ptr);
 
 // Resize an allocation.  Copies up to min(old_size, new_size) bytes.
 // Returns NULL on failure; original block is NOT freed in that case.
-&heap void    heap_realloc(&heap void ptr, unsigned long new_size);
+&heap unsigned char heap_realloc(&heap unsigned char ptr, unsigned long new_size);
 
 // Return total heap capacity in bytes.
 // In hosted mode returns 0 (unbounded).

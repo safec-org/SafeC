@@ -4,10 +4,10 @@
 // Implements the compiler's channel built-in contract — chan_create/
 // chan_send/chan_recv/chan_close, see CodeGen.cpp's "Channel built-ins"
 // comment for the exact ABI this must match:
-//   void* __safec_chan_create(int capacity);
-//   bool  __safec_chan_send(void* ch, void* val_ptr);
-//   bool  __safec_chan_recv(void* ch, void* out_ptr);
-//   void  __safec_chan_close(void* ch);
+//   SafecChan_* __safec_chan_create(int capacity);
+//   bool  __safec_chan_send(SafecChan_* ch, unsigned long long* val_slot);
+//   bool  __safec_chan_recv(SafecChan_* ch, unsigned long long* out_slot);
+//   void  __safec_chan_close(SafecChan_* ch);
 // — as a bounded, blocking, multi-producer/multi-consumer queue of fixed
 // 8-byte payload slots, built on std::thread.h's mutex/condvar (so it's
 // cross-platform for free: pthread on POSIX, Win32 CRITICAL_SECTION/
@@ -35,25 +35,16 @@
 #include <std/thread.h>
 #include <std/mem.h>
 
-struct SafecChan_ {
-    unsigned long long* buf;   // ring buffer, 'cap' 8-byte slots
-    int cap;
-    int head;                  // next slot to read
-    int tail;                  // next slot to write
-    int count;                 // pending items
-    int closed;                // 0 = open, 1 = closed
-    unsigned long long mtx;
-    unsigned long long not_empty; // signaled when count > 0, or on close
-    unsigned long long not_full;  // signaled when count < cap, or on close
-};
+// struct SafecChan_ is in channel.h (Chan<T> holds one).
 
-void* __safec_chan_create(int requestedCap) {
+
+SafecChan_* __safec_chan_create(int requestedCap) {
     int cap = requestedCap;
     if (cap < 1) { cap = 1; }
     struct SafecChan_* ch;
     unsafe { ch = (struct SafecChan_*)std::alloc_raw_(sizeof(struct SafecChan_)); }
     if (ch == (struct SafecChan_*)0) {
-        return (void*)0;
+        return ch;
     }
     unsafe {
         ch->buf = (unsigned long long*)std::alloc_raw_(std::checked_mul_size((unsigned long)cap, 8UL));
@@ -66,12 +57,10 @@ void* __safec_chan_create(int requestedCap) {
         std::cond_init(&ch->not_empty);
         std::cond_init(&ch->not_full);
     }
-    return (void*)ch;
+    return ch;
 }
 
-bool __safec_chan_send(void* chPtr, void* valPtr) {
-    struct SafecChan_* ch;
-    unsafe { ch = (struct SafecChan_*)chPtr; }
+bool __safec_chan_send(SafecChan_* ch, unsigned long long* valPtr) {
     if (ch == (struct SafecChan_*)0) {
         return false;
     }
@@ -85,7 +74,7 @@ bool __safec_chan_send(void* chPtr, void* valPtr) {
             return false;
         }
         unsigned long long val;
-        val = *(unsigned long long*)valPtr;
+        val = *valPtr;
         ch->buf[ch->tail] = val;
         ch->tail = (ch->tail + 1) % ch->cap;
         ch->count = ch->count + 1;
@@ -95,9 +84,7 @@ bool __safec_chan_send(void* chPtr, void* valPtr) {
     return true;
 }
 
-bool __safec_chan_recv(void* chPtr, void* outPtr) {
-    struct SafecChan_* ch;
-    unsafe { ch = (struct SafecChan_*)chPtr; }
+bool __safec_chan_recv(SafecChan_* ch, unsigned long long* outPtr) {
     if (ch == (struct SafecChan_*)0) {
         return false;
     }
@@ -115,16 +102,14 @@ bool __safec_chan_recv(void* chPtr, void* outPtr) {
         val = ch->buf[ch->head];
         ch->head = (ch->head + 1) % ch->cap;
         ch->count = ch->count - 1;
-        *(unsigned long long*)outPtr = val;
+        *outPtr = val;
         std::cond_signal(&ch->not_full);
         std::mutex_unlock(&ch->mtx);
     }
     return true;
 }
 
-void __safec_chan_close(void* chPtr) {
-    struct SafecChan_* ch;
-    unsafe { ch = (struct SafecChan_*)chPtr; }
+void __safec_chan_close(SafecChan_* ch) {
     if (ch == (struct SafecChan_*)0) {
         return;
     }

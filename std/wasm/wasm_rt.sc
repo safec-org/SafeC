@@ -106,8 +106,8 @@ static uintptr_t wasm_rt_carve_(unsigned int c) {
 }
 
 // The block header of payload 'p' if this heap handed it out, else 0.
-static uintptr_t wasm_rt_block_(void* p) {
-    if (p == (void*)0) { return WRT_U(0); }
+static uintptr_t wasm_rt_block_(unsigned char* p) {
+    if (p == (unsigned char*)0) { return WRT_U(0); }
     unsafe {
         uintptr_t b = (uintptr_t)p - WASM_RT_HEADER;
         if (gWasmRtBrk == WRT_U(0) || b < (uintptr_t)&__heap_base || b >= gWasmRtBrk) { return WRT_U(0); }
@@ -117,26 +117,26 @@ static uintptr_t wasm_rt_block_(void* p) {
     }
 }
 
-void* malloc(size_t size) {
+unsigned char* malloc(size_t size) {
     if (gWasmRtBrk == WRT_U(0)) { wasm_rt_init_(); }
     unsigned int c = wasm_rt_class_(size);
-    if (c == 0U) { return (void*)0; }
+    if (c == 0U) { return (unsigned char*)0; }
     uintptr_t b = gWasmRtFree[c];
     unsafe {
         if (b != WRT_U(0)) {
             gWasmRtFree[c] = *(uintptr_t*)(b + WASM_RT_HEADER);   // next link lives in the payload
         } else {
             b = wasm_rt_carve_(c);
-            if (b == WRT_U(0)) { return (void*)0; }
+            if (b == WRT_U(0)) { return (unsigned char*)0; }
         }
         unsigned int* h = (unsigned int*)b;
         h[0] = c;
         h[1] = WASM_RT_MAGIC;
-        return (void*)(b + WASM_RT_HEADER);
+        return (unsigned char*)(b + WASM_RT_HEADER);
     }
 }
 
-void free(void* ptr) {
+void free(unsigned char* ptr) {
     uintptr_t b = wasm_rt_block_(ptr);
     if (b == WRT_U(0)) { return; }
     unsafe {
@@ -148,30 +148,30 @@ void free(void* ptr) {
     }
 }
 
-void* calloc(size_t count, size_t size) {
+unsigned char* calloc(size_t count, size_t size) {
     size_t total = count * size;
-    if (size != WRT_U(0) && total / size != count) { return (void*)0; }
-    void* p = malloc(total);
-    if (p != (void*)0) {
+    if (size != WRT_U(0) && total / size != count) { return (unsigned char*)0; }
+    unsigned char* p = malloc(total);
+    if (p != (unsigned char*)0) {
         unsafe { memset(p, 0, total); }
     }
     return p;
 }
 
 // Usable payload bytes of a block from malloc (0 for anything else).
-size_t malloc_usable_size(void* ptr) {
+size_t malloc_usable_size(unsigned char* ptr) {
     uintptr_t b = wasm_rt_block_(ptr);
     if (b == WRT_U(0)) { return WRT_U(0); }
     unsafe { return (size_t)((WRT_U(1) << (uintptr_t)((unsigned int*)b)[0]) - WASM_RT_HEADER); }
 }
 
-void* realloc(void* ptr, size_t new_size) {
-    if (ptr == (void*)0) { return malloc(new_size); }
+unsigned char* realloc(unsigned char* ptr, size_t new_size) {
+    if (ptr == (unsigned char*)0) { return malloc(new_size); }
     size_t have = malloc_usable_size(ptr);
-    if (have == WRT_U(0)) { return (void*)0; }
+    if (have == WRT_U(0)) { return (unsigned char*)0; }
     if (new_size <= have && new_size > have / WRT_U(4)) { return ptr; }   // still fits, not wastefully
-    void* q = malloc(new_size);
-    if (q == (void*)0) { return (void*)0; }
+    unsigned char* q = malloc(new_size);
+    if (q == (unsigned char*)0) { return (unsigned char*)0; }
     unsafe { memcpy(q, ptr, have < new_size ? have : new_size); }
     free(ptr);
     return q;
@@ -179,27 +179,27 @@ void* realloc(void* ptr, size_t new_size) {
 
 // Alignment up to 16 comes for free (payloads are 8-aligned; blocks of
 // 32+ bytes start 16-aligned); larger alignments over-allocate.
-int posix_memalign(void** memptr, size_t alignment, size_t size) {
+int posix_memalign(unsigned char** memptr, size_t alignment, size_t size) {
     if (alignment <= WRT_U(8)) {
-        void* p = malloc(size);
+        unsigned char* p = malloc(size);
         unsafe { *memptr = p; }
-        return p == (void*)0 ? 12 : 0;   // ENOMEM
+        return p == (unsigned char*)0 ? 12 : 0;   // ENOMEM
     }
     // Over-allocate and leak the slack before the aligned address: the
     // aligned pointer can't be free()d through this heap's header check,
     // so free() ignores it (std uses this for long-lived slabs only).
-    void* raw = malloc(size + alignment);
-    if (raw == (void*)0) { return 12; }
+    unsigned char* raw = malloc(size + alignment);
+    if (raw == (unsigned char*)0) { return 12; }
     unsafe {
         uintptr_t a = ((uintptr_t)raw + alignment - WRT_U(1)) & ~((uintptr_t)alignment - WRT_U(1));
-        *memptr = (void*)a;
+        *memptr = (unsigned char*)a;
     }
     return 0;
 }
 
 // ── memory ───────────────────────────────────────────────────────────────────
 
-void* memcpy(void* dst, const void* src, size_t n) {
+unsigned char* memcpy(unsigned char* dst, const unsigned char* src, size_t n) {
     unsafe {
         unsigned char* d = (unsigned char*)dst;
         const unsigned char* s = (const unsigned char*)src;
@@ -208,7 +208,7 @@ void* memcpy(void* dst, const void* src, size_t n) {
     return dst;
 }
 
-void* memmove(void* dst, const void* src, size_t n) {
+unsigned char* memmove(unsigned char* dst, const unsigned char* src, size_t n) {
     unsafe {
         unsigned char* d = (unsigned char*)dst;
         const unsigned char* s = (const unsigned char*)src;
@@ -222,7 +222,7 @@ void* memmove(void* dst, const void* src, size_t n) {
     return dst;
 }
 
-void* memset(void* ptr, int val, size_t n) {
+unsigned char* memset(unsigned char* ptr, int val, size_t n) {
     unsafe {
         unsigned char* p = (unsigned char*)ptr;
         unsigned char b = (unsigned char)val;
@@ -231,7 +231,7 @@ void* memset(void* ptr, int val, size_t n) {
     return ptr;
 }
 
-int memcmp(const void* a, const void* b, size_t n) {
+int memcmp(const unsigned char* a, const unsigned char* b, size_t n) {
     unsafe {
         const unsigned char* pa = (const unsigned char*)a;
         const unsigned char* pb = (const unsigned char*)b;
@@ -242,14 +242,14 @@ int memcmp(const void* a, const void* b, size_t n) {
     return 0;
 }
 
-void* memchr(const void* s, int c, size_t n) {
+unsigned char* memchr(const unsigned char* s, int c, size_t n) {
     unsafe {
         const unsigned char* p = (const unsigned char*)s;
         for (size_t i = WRT_U(0); i < n; i = i + WRT_U(1)) {
-            if (p[i] == (unsigned char)c) { return (void*)(p + i); }
+            if (p[i] == (unsigned char)c) { return (unsigned char*)(p + i); }
         }
     }
-    return (void*)0;
+    return (unsigned char*)0;
 }
 
 // ── strings ──────────────────────────────────────────────────────────────────
@@ -468,7 +468,6 @@ static void wasm_rt_swap_(unsigned char* a, unsigned char* b, size_t n) {
     }
 }
 
-typedef fn int(const void*, const void*) WasmRtCmp_;
 
 // Heapsort: in place, no recursion, O(n log n).
 static void wasm_rt_sift_(unsigned char* base, size_t root, size_t n, size_t sz, WasmRtCmp_ cmp) {
@@ -476,21 +475,20 @@ static void wasm_rt_sift_(unsigned char* base, size_t root, size_t n, size_t sz,
         for (;;) {
             size_t child = WRT_U(2) * root + WRT_U(1);
             if (child >= n) { return; }
-            if (child + WRT_U(1) < n && cmp((const void*)(base + child * sz), (const void*)(base + (child + WRT_U(1)) * sz)) < 0) {
+            if (child + WRT_U(1) < n && cmp((const unsigned char*)(base + child * sz), (const unsigned char*)(base + (child + WRT_U(1)) * sz)) < 0) {
                 child = child + WRT_U(1);
             }
-            if (cmp((const void*)(base + root * sz), (const void*)(base + child * sz)) >= 0) { return; }
+            if (cmp((const unsigned char*)(base + root * sz), (const unsigned char*)(base + child * sz)) >= 0) { return; }
             wasm_rt_swap_(base + root * sz, base + child * sz, sz);
             root = child;
         }
     }
 }
 
-void qsort(void* base, size_t n, size_t sz, void* cmp_fn) {
+void qsort(unsigned char* base, size_t n, size_t sz, WasmRtCmp_ cmp) {
     if (n < WRT_U(2)) { return; }
     unsafe {
         unsigned char* b = (unsigned char*)base;
-        WasmRtCmp_ cmp = (WasmRtCmp_)cmp_fn;
         size_t i = n / WRT_U(2);
         while (i > WRT_U(0)) { i = i - WRT_U(1); wasm_rt_sift_(b, i, n, sz, cmp); }
         size_t end = n;
@@ -561,5 +559,5 @@ void abort() {
     unsafe { asm volatile ("unreachable"); }
 }
 
-int fprintf(void* stream, const char* fmt, ...) { return 0; }
+int fprintf(CFile_* stream, const char* fmt, ...) { return 0; }
 int printf(const char* fmt, ...) { return 0; }

@@ -6,15 +6,15 @@
 
 namespace std {
 
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
 // Not '#include <std/panic.h>' (function-like macros need
 // --compat-preprocessor — see mem.sc's identical comment) and not an
 // 'extern panic_at' either, to avoid making every PoolAllocator user also
 // link a --compat-preprocessor build of panic.sc: same inline
 // diagnostic-then-abort mem.sc's alloc_abort_ uses.
 extern void  abort();
-extern int   fprintf(void* stream, const char* fmt, ...);
+extern int   fprintf(CFile_* stream, const char* fmt, ...);
 
 static void pool_abort_(const char* msg) {
     unsafe { fprintf(SAFEC_STDERR_, "std::alloc (pool) fatal: %s\n", msg); }
@@ -32,15 +32,15 @@ inline unsigned long PoolAllocator::header_size_() const {
 inline void PoolAllocator::reset() {
     unsigned long hdr = (unsigned long)24;
     if (self.cap < hdr) {
-        self.head = (void*)0;
+        self.head = null;
         return;
     }
     unsafe {
         struct PoolBlock* first = (struct PoolBlock*)self.base;
         first->size    = self.cap - hdr;
         first->is_free = 1;
-        first->next    = (void*)0;
-        self.head = (void*)first;
+        first->next    = null;
+        self.head = (?&PoolBlock)first;
     }
 }
 
@@ -49,7 +49,7 @@ inline struct PoolAllocator PoolAllocator::over([]unsigned char buffer_s) {
     &unsigned char buffer;
     unsafe { buffer = (&unsigned char)buffer_s.ptr; }
     struct PoolAllocator a;
-    unsafe { a.base = (&heap void)buffer; }
+    unsafe { a.base = (&heap unsigned char)buffer; }
     a.owned = 0;
     a.cap  = cap;
     a.reset();
@@ -65,14 +65,14 @@ inline struct PoolAllocator PoolAllocator::new(unsigned long cap) {
     // buffer stays tiny, corrupting the very first real allocation.
     unsigned long allocCap = cap;
     if (allocCap < hdr) { allocCap = hdr; }
-    unsafe { a.base = (&heap void)malloc(allocCap); }
+    unsafe { a.base = (&heap unsigned char)malloc(allocCap); }
     a.owned = 1;
     a.cap = allocCap;
     a.reset();
     return a;
 }
 
-?&heap void PoolAllocator::alloc(unsigned long size, unsigned long align) {
+?&heap unsigned char PoolAllocator::alloc(unsigned long size, unsigned long align) {
     // Every block header sits at an 8-aligned offset (24-byte headers,
     // sizes rounded to 8), so payloads are 8-aligned: alignments up to 8
     // come free; above that would need padding blocks, so null instead.
@@ -93,10 +93,10 @@ inline struct PoolAllocator PoolAllocator::new(unsigned long cap) {
                     split->is_free = 1;
                     split->next    = cur->next;
                     cur->size = aligned;
-                    cur->next = (void*)split;
+                    cur->next = (?&PoolBlock)split;
                 }
                 cur->is_free = 0;
-                return (?&heap void)((unsigned long)cur + hdr);
+                return (?&heap unsigned char)((unsigned long)cur + hdr);
             }
             cur = (struct PoolBlock*)cur->next;
         }
@@ -104,9 +104,9 @@ inline struct PoolAllocator PoolAllocator::new(unsigned long cap) {
     return null;
 }
 
-void PoolAllocator::dealloc(?&heap void ptr_ref) {
-    void* ptr = ptr_ref;
-    if (ptr == (void*)0) { return; }
+void PoolAllocator::dealloc(?&heap unsigned char ptr_ref) {
+    unsigned char* ptr = ptr_ref;
+    if (ptr == (unsigned char*)0) { return; }
     unsigned long hdr = self.header_size_();
     unsafe {
         struct PoolBlock* blk = (struct PoolBlock*)((unsigned long)ptr - hdr);
@@ -126,7 +126,7 @@ void PoolAllocator::dealloc(?&heap void ptr_ref) {
         // Coalesce adjacent free blocks
         struct PoolBlock* cur = (struct PoolBlock*)self.head;
         while (cur != (struct PoolBlock*)0) {
-            if (cur->is_free == 1 && cur->next != (void*)0) {
+            if (cur->is_free == 1 && cur->next != (unsigned char*)0) {
                 struct PoolBlock* nxt = (struct PoolBlock*)cur->next;
                 if (nxt->is_free == 1) {
                     cur->size = cur->size + hdr + nxt->size;
@@ -159,8 +159,8 @@ inline unsigned long PoolAllocator::available() const {
 inline void PoolAllocator::destroy() { self.drop(); }
 
 inline void PoolAllocator::drop() {
-    if (self.owned) { unsafe { free((void*)self.base); } }
-    self.head = (void*)0;
+    if (self.owned) { unsafe { free((unsigned char*)self.base); } }
+    self.head = null;
     self.cap  = (unsigned long)0;
 }
 

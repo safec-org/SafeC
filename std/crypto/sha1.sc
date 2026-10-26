@@ -6,7 +6,7 @@
 
 namespace std {
 
-extern void* memset(void* p, int v, size_t n);
+extern unsigned char* memset(unsigned char* p, int v, size_t n);
 
 static unsigned int sha1_H0_[5] = {
     0x67452301,0xEFCDAB89,0x98BADCFE,0x10325476,0xC3D2E1F0
@@ -74,7 +74,7 @@ inline struct Sha1Ctx Sha1Ctx::new() {
     int i = 0;
     while (i < 5) { ctx.h[i] = sha1_H0_[i]; i = i + 1; }
     ctx.total_bytes = (unsigned long)0;
-    unsafe { memset((void*)ctx.buf, 0, (unsigned long)SHA1_BLOCK_SIZE); }
+    unsafe { memset((unsigned char*)ctx.buf, 0, (unsigned long)SHA1_BLOCK_SIZE); }
     return ctx;
 }
 

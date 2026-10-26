@@ -10,14 +10,14 @@
 // ── Explicit extern declarations for libc memory functions ───────────────────
 namespace std {
 
-extern void* malloc(size_t size);
-extern void* calloc(size_t count, size_t size);
-extern void  free(void* ptr);
-extern void* realloc(void* ptr, size_t new_size);
-extern void* memcpy(void* dst, const void* src, size_t n);
-extern void* memmove(void* dst, const void* src, size_t n);
-extern void* memset(void* ptr, int val, size_t n);
-extern int   memcmp(const void* a, const void* b, size_t n);
+extern unsigned char* malloc(size_t size);
+extern unsigned char* calloc(size_t count, size_t size);
+extern void  free(unsigned char* ptr);
+extern unsigned char* realloc(unsigned char* ptr, size_t new_size);
+extern unsigned char* memcpy(unsigned char* dst, const unsigned char* src, size_t n);
+extern unsigned char* memmove(unsigned char* dst, const unsigned char* src, size_t n);
+extern unsigned char* memset(unsigned char* ptr, int val, size_t n);
+extern int   memcmp(const unsigned char* a, const unsigned char* b, size_t n);
 
 // Not '#include <std/panic.h>' — that header also defines function-like
 // macros (PANIC/PANIC_ASSERT) that error out in safe mode without
@@ -27,7 +27,7 @@ extern int   memcmp(const void* a, const void* b, size_t n);
 // inlined directly instead, matching panic_at's own hosted-mode default
 // behavior (see panic.sc) without the extra link dependency.
 extern void  abort();
-extern int   fprintf(void* stream, const char* fmt, ...);
+extern int   fprintf(CFile_* stream, const char* fmt, ...);
 
 // ── Use-after-free / double-free / mismatched-deallocation detection ────────
 // alloc()/alloc_zeroed() prefix every allocation with a small header
@@ -147,16 +147,16 @@ static void alloc_abort_(const char* msg) {
 #define ALLOC_QUARANTINE_BYTES_  ((unsigned long)8388608)
 #if !defined(__SAFEC_FREESTANDING__) && (defined(__linux__) || defined(__gnu_linux__))
 #define ALLOC_HAS_BLOCK_SIZE_ 1
-extern size_t malloc_usable_size(void* ptr);
-static unsigned long alloc_block_size_(void* p) { unsafe { return (unsigned long)malloc_usable_size(p); } }
+extern size_t malloc_usable_size(unsigned char* ptr);
+static unsigned long alloc_block_size_(unsigned char* p) { unsafe { return (unsigned long)malloc_usable_size(p); } }
 #elif !defined(__SAFEC_FREESTANDING__) && defined(__APPLE__)
 #define ALLOC_HAS_BLOCK_SIZE_ 1
-extern size_t malloc_size(const void* ptr);
-static unsigned long alloc_block_size_(void* p) { unsafe { return (unsigned long)malloc_size((const void*)p); } }
+extern size_t malloc_size(const unsigned char* ptr);
+static unsigned long alloc_block_size_(unsigned char* p) { unsafe { return (unsigned long)malloc_size((const unsigned char*)p); } }
 #elif !defined(__SAFEC_FREESTANDING__) && defined(_WIN32)
 #define ALLOC_HAS_BLOCK_SIZE_ 1
-extern size_t _msize(void* ptr);
-static unsigned long alloc_block_size_(void* p) { unsafe { return (unsigned long)_msize(p); } }
+extern size_t _msize(unsigned char* ptr);
+static unsigned long alloc_block_size_(unsigned char* p) { unsafe { return (unsigned long)_msize(p); } }
 #endif
 
 #ifndef __SAFEC_FREESTANDING__
@@ -262,15 +262,15 @@ static const unsigned long allocClassOff_[33] = { 0UL, 8192UL, 16384UL, 24576UL,
 // at thread exit (alloc_cache_thread_exit_); the counts stay in TLS.
 // (macOS and Windows allocate TLS on the heap themselves.)
 #define ALLOC_CACHE_HEAP_ 1
-thread_local static void**        allocCacheSlot_ = (void**)0;
+thread_local static unsigned char**        allocCacheSlot_ = (unsigned char**)0;
 #else
-thread_local static void*         allocCacheSlot_[ALLOC_CACHE_TOTAL_SLOTS_];
+thread_local static unsigned char*         allocCacheSlot_[ALLOC_CACHE_TOTAL_SLOTS_];
 #endif
 thread_local static unsigned long allocCacheCount_[33];
 #else
 // No size-class cache on bare metal: it needs TLS and ~1 MB of slots per
 // thread, which no MCU has. Every request goes straight to malloc().
-static void*        allocCacheSlot_[1];
+static unsigned char*        allocCacheSlot_[1];
 static unsigned long allocCacheCount_[1];
 #endif
 
@@ -345,7 +345,7 @@ static unsigned long alloc_class_cap_(unsigned long cls) {
 #define ALLOC_SLAB_MAGIC_    ((unsigned long)0x51AB51AB51AB51AB)
 #define ALLOC_SLAB_SPARE_    ((unsigned long)16)    // empty slabs kept per class (1 MB)
 
-extern int posix_memalign(void** memptr, size_t alignment, size_t size);
+extern int posix_memalign(unsigned char** memptr, size_t alignment, size_t size);
 
 thread_local static unsigned long allocSlabCur_[13];
 thread_local static unsigned long allocSlabPartial_[13];
@@ -420,7 +420,7 @@ static unsigned long alloc_slab_drain_(unsigned long* sl) {
 }
 
 // A block from this slab (header written), or null if it is full.
-static void* alloc_slab_take_(unsigned long* sl) {
+static unsigned char* alloc_slab_take_(unsigned long* sl) {
     unsafe {
         unsigned long* b = (unsigned long*)0;
         if (sl[3] != (unsigned long)0) {
@@ -433,15 +433,15 @@ static void* alloc_slab_take_(unsigned long* sl) {
             b = (unsigned long*)sl[3];
             sl[3] = b[1];
         }
-        if (b == (unsigned long*)0) { return (void*)0; }
+        if (b == (unsigned long*)0) { return (unsigned char*)0; }
         sl[5] = sl[5] + (unsigned long)1;
         b[0] = ALLOC_LIVE_MAGIC_;
         b[1] = sl[1] | ALLOC_SLAB_FLAG_;
-        return (void*)((unsigned long)b + ALLOC_HDR_SIZE_);
+        return (unsigned char*)((unsigned long)b + ALLOC_HDR_SIZE_);
     }
 }
 
-static void* alloc_slab_new_(unsigned long cls) __attribute__((noinline, cold)) {
+static unsigned char* alloc_slab_new_(unsigned long cls) __attribute__((noinline, cold)) {
     unsafe {
         // Full slabs that other threads have freed into come first: up to
         // 16 from the front, each checked one moved to the back.
@@ -457,8 +457,8 @@ static void* alloc_slab_new_(unsigned long cls) __attribute__((noinline, cold)) 
             alloc_slab_full_append_(cls, fs);
             tries = tries + 1;
         }
-        void* mem = (void*)0;
-        if (posix_memalign(&mem, ALLOC_SLAB_BYTES_, ALLOC_SLAB_BYTES_) != 0 || mem == (void*)0) { return (void*)0; }
+        unsigned char* mem = (unsigned char*)0;
+        if (posix_memalign(&mem, ALLOC_SLAB_BYTES_, ALLOC_SLAB_BYTES_) != 0 || mem == (unsigned char*)0) { return (unsigned char*)0; }
         unsigned long* sl = (unsigned long*)mem;
         // block bytes: header + class, rounded to 16 so payloads stay 16-aligned
         unsigned long bsize = (alloc_class_bytes_(cls) + ALLOC_HDR_SIZE_ + (unsigned long)15) & ~(unsigned long)15;
@@ -478,12 +478,12 @@ static void* alloc_slab_new_(unsigned long cls) __attribute__((noinline, cold)) 
     }
 }
 
-static void* alloc_slab_(unsigned long cls) {
+static unsigned char* alloc_slab_(unsigned long cls) {
     unsafe {
         unsigned long cur = allocSlabCur_[cls];
         if (cur != (unsigned long)0) {
-            void* p = alloc_slab_take_((unsigned long*)cur);
-            if (p != (void*)0) { return p; }
+            unsigned char* p = alloc_slab_take_((unsigned long*)cur);
+            if (p != (unsigned char*)0) { return p; }
             alloc_slab_full_append_(cls, (unsigned long*)cur);
             allocSlabCur_[cls] = (unsigned long)0;
         }
@@ -517,7 +517,7 @@ static void alloc_slab_free_(unsigned long* raw, unsigned long cls) {
                 if (sl[5] == (unsigned long)0) {
                     if (allocSlabSpare_[cls] >= ALLOC_SLAB_SPARE_) {
                         alloc_slab_unlink_(&allocSlabPartial_[cls], sl);
-                        free((void*)sl);
+                        free((unsigned char*)sl);
                     } else {
                         allocSlabSpare_[cls] = allocSlabSpare_[cls] + (unsigned long)1;
                     }
@@ -536,7 +536,7 @@ static void alloc_slab_free_(unsigned long* raw, unsigned long cls) {
 
 // Allocate `size` bytes.  Returns NULL on failure; callers should check.
 // Use inside unsafe{} when storing the result in a raw pointer.
-void* alloc_raw_(unsigned long size) {
+unsigned char* alloc_raw_(unsigned long size) {
     unsafe {
         long clsSigned = alloc_size_class_(size);
         if (clsSigned >= 0L) {
@@ -546,76 +546,76 @@ void* alloc_raw_(unsigned long size) {
 #endif
             if (allocCacheCount_[cls] > (unsigned long)0) {
                 allocCacheCount_[cls] = allocCacheCount_[cls] - (unsigned long)1;
-                void* raw = allocCacheSlot_[allocClassOff_[cls] + allocCacheCount_[cls]];
+                unsigned char* raw = allocCacheSlot_[allocClassOff_[cls] + allocCacheCount_[cls]];
                 unsigned long* hdr = (unsigned long*)raw;
                 hdr[0] = ALLOC_LIVE_MAGIC_;
                 // hdr[1] already holds `cls` from this block's original
                 // malloc — no rewrite needed on the reuse path.
-                return (void*)((unsigned long)raw + ALLOC_HDR_SIZE_);
+                return (unsigned char*)((unsigned long)raw + ALLOC_HDR_SIZE_);
             }
-            void* raw = malloc(alloc_class_bytes_(cls) + ALLOC_HDR_SIZE_);
-            if (raw == (void*)0) { return (void*)0; }
+            unsigned char* raw = malloc(alloc_class_bytes_(cls) + ALLOC_HDR_SIZE_);
+            if (raw == (unsigned char*)0) { return (unsigned char*)0; }
             unsigned long* hdr = (unsigned long*)raw;
             hdr[0] = ALLOC_LIVE_MAGIC_;
             hdr[1] = cls;
-            return (void*)((unsigned long)raw + ALLOC_HDR_SIZE_);
+            return (unsigned char*)((unsigned long)raw + ALLOC_HDR_SIZE_);
         }
-        if (size > ~(unsigned long)0 - ALLOC_HDR_SIZE_) { return (void*)0; }  // header would wrap
-        void* raw = malloc(size + ALLOC_HDR_SIZE_);
-        if (raw == (void*)0) { return (void*)0; }
+        if (size > ~(unsigned long)0 - ALLOC_HDR_SIZE_) { return (unsigned char*)0; }  // header would wrap
+        unsigned char* raw = malloc(size + ALLOC_HDR_SIZE_);
+        if (raw == (unsigned char*)0) { return (unsigned char*)0; }
         unsigned long* hdr = (unsigned long*)raw;
         hdr[0] = ALLOC_LIVE_MAGIC_;
         hdr[1] = ALLOC_CLASS_UNCACHED_;
-        return (void*)((unsigned long)raw + ALLOC_HDR_SIZE_);
+        return (unsigned char*)((unsigned long)raw + ALLOC_HDR_SIZE_);
     }
 }
 
 // Allocate `size` bytes and zero-initialize them.
-void* alloc_zeroed_raw_(unsigned long size) {
+unsigned char* alloc_zeroed_raw_(unsigned long size) {
     unsafe {
         long clsSigned = alloc_size_class_(size);
         if (clsSigned >= 0L) {
             unsigned long cls = (unsigned long)clsSigned;
 #ifdef ALLOC_SLABS_
             if (cls < ALLOC_SLAB_CLASSES_ && allocCacheCount_[cls] == (unsigned long)0) {
-                void* p = alloc_slab_(cls);
-                if (p != (void*)0) { memset(p, 0, alloc_class_bytes_(cls)); }
+                unsigned char* p = alloc_slab_(cls);
+                if (p != (unsigned char*)0) { memset(p, 0, alloc_class_bytes_(cls)); }
                 return p;
             }
 #endif
             if (allocCacheCount_[cls] > (unsigned long)0) {
                 allocCacheCount_[cls] = allocCacheCount_[cls] - (unsigned long)1;
-                void* raw = allocCacheSlot_[allocClassOff_[cls] + allocCacheCount_[cls]];
+                unsigned char* raw = allocCacheSlot_[allocClassOff_[cls] + allocCacheCount_[cls]];
                 unsigned long* hdr = (unsigned long*)raw;
                 hdr[0] = ALLOC_LIVE_MAGIC_;
-                void* payload = (void*)((unsigned long)raw + ALLOC_HDR_SIZE_);
+                unsigned char* payload = (unsigned char*)((unsigned long)raw + ALLOC_HDR_SIZE_);
                 // Cached blocks aren't re-zeroed by anything else -- a
                 // fresh malloc/calloc'd class-mate would be, so this call
                 // must do it explicitly to keep alloc_zeroed's contract.
                 memset(payload, 0, alloc_class_bytes_(cls));
                 return payload;
             }
-            void* raw = calloc((unsigned long)1, alloc_class_bytes_(cls) + ALLOC_HDR_SIZE_);
-            if (raw == (void*)0) { return (void*)0; }
+            unsigned char* raw = calloc((unsigned long)1, alloc_class_bytes_(cls) + ALLOC_HDR_SIZE_);
+            if (raw == (unsigned char*)0) { return (unsigned char*)0; }
             unsigned long* hdr = (unsigned long*)raw;
             hdr[0] = ALLOC_LIVE_MAGIC_;
             hdr[1] = cls;
-            return (void*)((unsigned long)raw + ALLOC_HDR_SIZE_);
+            return (unsigned char*)((unsigned long)raw + ALLOC_HDR_SIZE_);
         }
-        if (size > ~(unsigned long)0 - ALLOC_HDR_SIZE_) { return (void*)0; }
-        void* raw = calloc((unsigned long)1, size + ALLOC_HDR_SIZE_);
-        if (raw == (void*)0) { return (void*)0; }
+        if (size > ~(unsigned long)0 - ALLOC_HDR_SIZE_) { return (unsigned char*)0; }
+        unsigned char* raw = calloc((unsigned long)1, size + ALLOC_HDR_SIZE_);
+        if (raw == (unsigned char*)0) { return (unsigned char*)0; }
         unsigned long* hdr = (unsigned long*)raw;
         hdr[0] = ALLOC_LIVE_MAGIC_;
         hdr[1] = ALLOC_CLASS_UNCACHED_;
-        return (void*)((unsigned long)raw + ALLOC_HDR_SIZE_);
+        return (unsigned char*)((unsigned long)raw + ALLOC_HDR_SIZE_);
     }
 }
 
 // Free memory previously returned by alloc / alloc_zeroed / realloc_buf.
 // Quarantine (see the ring above): defined here, after the size classes it
 // reads block sizes from.
-static void alloc_quarantine_push_(void* raw, unsigned long cls) {
+static void alloc_quarantine_push_(unsigned char* raw, unsigned long cls) {
     unsafe {
         unsigned long slot = allocQuarantineHead_ & ALLOC_QUARANTINE_MASK_;
         unsigned long evictedBits = allocQuarantineRing_[slot];
@@ -623,7 +623,7 @@ static void alloc_quarantine_push_(void* raw, unsigned long cls) {
         allocQuarantineHead_ = allocQuarantineHead_ + (unsigned long)1;
 
         if (evictedBits != (unsigned long)0) {
-            free((void*)evictedBits);
+            free((unsigned char*)evictedBits);
         }
 #ifdef ALLOC_HAS_BLOCK_SIZE_
         // Only uncached blocks (over 1 MB, or realloc'd) are counted: a
@@ -640,7 +640,7 @@ static void alloc_quarantine_push_(void* raw, unsigned long cls) {
             while (allocQuarantineBytes_ > ALLOC_QUARANTINE_BYTES_ && k < ALLOC_QUARANTINE_SIZE_) {
                 unsigned long old = (slot + k) & ALLOC_QUARANTINE_MASK_;
                 if (allocQuarantineRing_[old] != (unsigned long)0 && allocQuarantineSize_[old] != (unsigned long)0) {
-                    free((void*)allocQuarantineRing_[old]);
+                    free((unsigned char*)allocQuarantineRing_[old]);
                     allocQuarantineRing_[old] = (unsigned long)0;
                     allocQuarantineBytes_ = allocQuarantineBytes_ - allocQuarantineSize_[old];
                     allocQuarantineSize_[old] = (unsigned long)0;
@@ -657,22 +657,22 @@ static void alloc_quarantine_push_(void* raw, unsigned long cls) {
 // the same 4 bytes either way. Weak: before glibc 2.34 they live in
 // libpthread, which only a program that starts threads links (std/thread.sc
 // adds it) -- and one that doesn't has no thread to clean up after.
-extern int pthread_key_create(unsigned int* key, void* destructor) __attribute__((weak));
-extern int pthread_setspecific(unsigned int key, const void* value) __attribute__((weak));
+extern int pthread_key_create(unsigned int* key, fn void(unsigned char*) destructor) __attribute__((weak));
+extern int pthread_setspecific(unsigned int key, const unsigned char* value) __attribute__((weak));
 static int allocCacheKeyState_ = 0;          // 0 none, 1 being made, 2 made, -1 failed
 static unsigned int allocCacheKey_ = 0U;
 
 // Thread exit: hand the cached blocks back (slab blocks to their slab,
 // the rest to free()) and release the table.
-static void alloc_cache_thread_exit_(void* table) {
+static void alloc_cache_thread_exit_(unsigned char* table) {
     unsafe {
-        void** t = (void**)table;
-        if (t == (void**)0) { return; }
+        unsigned char** t = (unsigned char**)table;
+        if (t == (unsigned char**)0) { return; }
         unsigned long cls = (unsigned long)0;
         while (cls < ALLOC_CACHE_NUM_CLASSES_) {
             unsigned long i = (unsigned long)0;
             while (i < allocCacheCount_[cls]) {
-                void* raw = t[allocClassOff_[cls] + i];
+                unsigned char* raw = t[allocClassOff_[cls] + i];
                 unsigned long* hdr = (unsigned long*)raw;
                 unsigned long c = hdr[1];
 #ifdef ALLOC_SLABS_
@@ -688,33 +688,33 @@ static void alloc_cache_thread_exit_(void* table) {
             allocCacheCount_[cls] = (unsigned long)0;
             cls = cls + (unsigned long)1;
         }
-        if (allocCacheSlot_ == t) { allocCacheSlot_ = (void**)0; }
-        free((void*)t);
+        if (allocCacheSlot_ == t) { allocCacheSlot_ = (unsigned char**)0; }
+        free((unsigned char*)t);
     }
 }
 
 // The calling thread's slot table, made on first use; 0 if it can't be.
 static int alloc_cache_ready_() {
     unsafe {
-        if (allocCacheSlot_ != (void**)0) { return 1; }
-        int haveKeys = (void*)pthread_key_create != (void*)0 && (void*)pthread_setspecific != (void*)0;
+        if (allocCacheSlot_ != (unsigned char**)0) { return 1; }
+        int haveKeys = (unsigned long)pthread_key_create != 0UL && (unsigned long)pthread_setspecific != 0UL;   // weak: linked?
         if (haveKeys) {
             int st = atomic_load_int(&allocCacheKeyState_);
             if (st == 0) {
                 int expected = 0;
                 if (atomic_cas_int(&allocCacheKeyState_, &expected, 1)) {
-                    int ok = pthread_key_create(&allocCacheKey_, (void*)alloc_cache_thread_exit_) == 0;
+                    int ok = pthread_key_create(&allocCacheKey_, alloc_cache_thread_exit_) == 0;
                     atomic_store_int(&allocCacheKeyState_, ok ? 2 : -1);
                 }
             }
             while (atomic_load_int(&allocCacheKeyState_) == 1) { }
         }
-        void** t = (void**)calloc((size_t)ALLOC_CACHE_TOTAL_SLOTS_, sizeof(void*));
-        if (t == (void**)0) { return 0; }
+        unsigned char** t = (unsigned char**)calloc((size_t)ALLOC_CACHE_TOTAL_SLOTS_, sizeof(unsigned char*));
+        if (t == (unsigned char**)0) { return 0; }
         // Released at thread exit when the key exists (it can only be missing
         // without libpthread, i.e. with no threads but this one).
         if (haveKeys && atomic_load_int(&allocCacheKeyState_) == 2) {
-            pthread_setspecific(allocCacheKey_, (const void*)t);
+            pthread_setspecific(allocCacheKey_, (const unsigned char*)t);
         }
         allocCacheSlot_ = t;
         return 1;
@@ -724,10 +724,10 @@ static int alloc_cache_ready_() {
 static int alloc_cache_ready_() { return 1; }
 #endif
 
-void dealloc_raw_(void* ptr) {
+void dealloc_raw_(unsigned char* ptr) {
     unsafe {
-        if (ptr == (void*)0) { return; }
-        void* raw = (void*)((unsigned long)ptr - ALLOC_HDR_SIZE_);
+        if (ptr == (unsigned char*)0) { return; }
+        unsigned char* raw = (unsigned char*)((unsigned long)ptr - ALLOC_HDR_SIZE_);
         unsigned long* hdr = (unsigned long*)raw;
         if (hdr[0] == ALLOC_FREED_MAGIC_) {
             alloc_abort_("dealloc() called twice on the same pointer (double free)");
@@ -767,38 +767,38 @@ void dealloc_raw_(void* ptr) {
 }
 
 // Resize an allocation.  Returns NULL on failure (old block is NOT freed).
-void* realloc_array_raw_(void* ptr, unsigned long count, unsigned long elemSize) __attribute__((noinline, cold)) {
+unsigned char* realloc_array_raw_(unsigned char* ptr, unsigned long count, unsigned long elemSize) __attribute__((noinline, cold)) {
     unsafe { return realloc_buf_raw_(ptr, checked_mul_size(count, elemSize)); }
 }
 
-void* realloc_buf_raw_(void* ptr, unsigned long new_size) {
+unsigned char* realloc_buf_raw_(unsigned char* ptr, unsigned long new_size) {
     unsafe {
-        if (ptr == (void*)0) { return alloc_raw_(new_size); }
-        void* raw = (void*)((unsigned long)ptr - ALLOC_HDR_SIZE_);
+        if (ptr == (unsigned char*)0) { return alloc_raw_(new_size); }
+        unsigned char* raw = (unsigned char*)((unsigned long)ptr - ALLOC_HDR_SIZE_);
         unsigned long* hdr = (unsigned long*)raw;
         if (hdr[0] == ALLOC_FREED_MAGIC_) {
             alloc_abort_("realloc_buf() called on an already-freed pointer (use after free)");
-            return (void*)0;
+            return (unsigned char*)0;
         }
         if (hdr[0] != ALLOC_LIVE_MAGIC_) {
             alloc_abort_("realloc_buf() called on a pointer alloc()/alloc_zeroed() never "
                          "returned (mismatched allocator or corrupted heap)");
-            return (void*)0;
+            return (unsigned char*)0;
         }
 #ifdef ALLOC_SLABS_
         if ((hdr[1] & ALLOC_SLAB_FLAG_) != (unsigned long)0 && hdr[1] != ALLOC_CLASS_UNCACHED_) {
             // a slab block: move it (it isn't a platform allocation)
             unsigned long oldBytes = alloc_class_bytes_(hdr[1] & ~ALLOC_SLAB_FLAG_);
-            void* np = alloc_raw_(new_size);
-            if (np == (void*)0) { return (void*)0; }
+            unsigned char* np = alloc_raw_(new_size);
+            if (np == (unsigned char*)0) { return (unsigned char*)0; }
             memcpy(np, ptr, oldBytes < new_size ? oldBytes : new_size);
             dealloc_raw_(ptr);
             return np;
         }
 #endif
-        if (new_size > ~(unsigned long)0 - ALLOC_HDR_SIZE_) { return (void*)0; }
-        void* newRaw = realloc(raw, new_size + ALLOC_HDR_SIZE_);
-        if (newRaw == (void*)0) { return (void*)0; }
+        if (new_size > ~(unsigned long)0 - ALLOC_HDR_SIZE_) { return (unsigned char*)0; }
+        unsigned char* newRaw = realloc(raw, new_size + ALLOC_HDR_SIZE_);
+        if (newRaw == (unsigned char*)0) { return (unsigned char*)0; }
         // newHdr[0] is already ALLOC_LIVE_MAGIC_ -- realloc() preserves
         // the original block's leading bytes (which already passed the
         // live-magic check above) up to min(old size, new size), and the
@@ -812,7 +812,7 @@ void* realloc_buf_raw_(void* ptr, unsigned long new_size) {
         // when it's eventually dealloc()'d.
         unsigned long* newHdr = (unsigned long*)newRaw;
         newHdr[1] = ALLOC_CLASS_UNCACHED_;
-        return (void*)((unsigned long)newRaw + ALLOC_HDR_SIZE_);
+        return (unsigned char*)((unsigned long)newRaw + ALLOC_HDR_SIZE_);
     }
 }
 
@@ -835,23 +835,23 @@ unsigned long checked_add_size(unsigned long a, unsigned long b) {
 }
 
 // Copy `n` bytes from `src` to `dst`.  Regions must not overlap.
-inline void safe_memcpy_raw_(void* dst, const void* src, unsigned long n) {
+inline void safe_memcpy_raw_(unsigned char* dst, const unsigned char* src, unsigned long n) {
     unsafe { memcpy(dst, src, n); }
 }
 
 // Copy `n` bytes from `src` to `dst`.  Handles overlapping regions.
-inline void safe_memmove_raw_(void* dst, const void* src, unsigned long n) {
+inline void safe_memmove_raw_(unsigned char* dst, const unsigned char* src, unsigned long n) {
     unsafe { memmove(dst, src, n); }
 }
 
 // Fill `n` bytes starting at `ptr` with byte value `val`.
-inline void safe_memset_raw_(void* ptr, int val, unsigned long n) {
+inline void safe_memset_raw_(unsigned char* ptr, int val, unsigned long n) {
     unsafe { memset(ptr, val, n); }
 }
 
 // Compare `n` bytes of `a` and `b`.
 // Returns <0, 0, or >0 (same semantics as C memcmp).
-inline int safe_memcmp_raw_(const void* a, const void* b, unsigned long n) {
+inline int safe_memcmp_raw_(const unsigned char* a, const unsigned char* b, unsigned long n) {
     unsafe { return memcmp(a, b, n); }
 }
 
@@ -873,7 +873,7 @@ inline const int mem_is_aligned(unsigned long addr, unsigned long align) {
     return 0;
 }
 
-inline void mem_prefetch_raw_(const void* addr, int write, int locality) {
+inline void mem_prefetch_raw_(const unsigned char* addr, int write, int locality) {
     unsafe {
 #ifdef __GNUC__
         __builtin_prefetch(addr, write, locality);
@@ -883,7 +883,7 @@ inline void mem_prefetch_raw_(const void* addr, int write, int locality) {
     }
 }
 
-inline void mem_zero_secure_raw_(void* ptr, unsigned long n) {
+inline void mem_zero_secure_raw_(unsigned char* ptr, unsigned long n) {
     // Volatile write-through to prevent compiler elimination — the whole
     // point of a "secure" zero (e.g. wiping a key before it goes out of
     // scope) is that it survives dead-store elimination, so the bulk word
@@ -916,7 +916,7 @@ inline void mem_zero_secure_raw_(void* ptr, unsigned long n) {
     }
 }
 
-inline void mem_clflush_raw_(const void* addr) {
+inline void mem_clflush_raw_(const unsigned char* addr) {
     unsafe {
 #ifdef __x86_64__
         asm volatile ("clflush (%0)" : : "r"(addr) : "memory");
@@ -930,11 +930,11 @@ inline void mem_clflush_raw_(const void* addr) {
 
 // ── Alignment utilities ───────────────────────────────────────────────────────
 
-inline void* mem_align_ptr_raw_(void* ptr, unsigned long align) {
+inline unsigned char* mem_align_ptr_raw_(unsigned char* ptr, unsigned long align) {
     unsafe {
         unsigned long p = (unsigned long)ptr;
         unsigned long a = mem_align_up(p, align);
-        return (void*)a;
+        return (unsigned char*)a;
     }
 }
 

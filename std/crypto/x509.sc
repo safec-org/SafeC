@@ -5,8 +5,8 @@
 
 namespace std {
 
-extern void* memcpy(void* d, const void* s, size_t n);
-extern void* memset(void* p, int v, size_t n);
+extern unsigned char* memcpy(unsigned char* d, const unsigned char* s, size_t n);
+extern unsigned char* memset(unsigned char* p, int v, size_t n);
 
 // ── ASN.1 tag constants ────────────────────────────────────────────────────────
 
@@ -357,7 +357,7 @@ static int parse_san_(const unsigned char* buf, unsigned long buf_len,
 int X509Cert::init_n_(const &unsigned char der_ref, unsigned long len) {
     const unsigned char* der = der_ref;
     unsafe {
-        memset((void*)self, 0, (unsigned long)sizeof(struct X509Cert));   // the struct, not the reference
+        memset((unsigned char*)self, 0, (unsigned long)sizeof(struct X509Cert));   // the struct, not the reference
     }
 
     unsigned long pos = (unsigned long)0;
@@ -395,7 +395,7 @@ int X509Cert::init_n_(const &unsigned char der_ref, unsigned long len) {
     unsafe {
         unsigned long serial_copy = sn_len;
         if (serial_copy > (unsigned long)20) { serial_copy = (unsigned long)20; }
-        memcpy((void*)self.serial, (const void*)(der + sn_start), serial_copy);
+        memcpy((unsigned char*)self.serial, (const unsigned char*)(der + sn_start), serial_copy);
         self.serial_len = serial_copy;
     }
     pos = sn_start + sn_len;
@@ -464,7 +464,7 @@ int X509Cert::init_n_(const &unsigned char der_ref, unsigned long len) {
     unsafe {
         unsigned long pk_copy = spki_len;
         if (pk_copy > (unsigned long)X509_KEY_LEN) { pk_copy = (unsigned long)X509_KEY_LEN; }
-        memcpy((void*)self.pubkey, (const void*)(der + spki_start), pk_copy);
+        memcpy((unsigned char*)self.pubkey, (const unsigned char*)(der + spki_start), pk_copy);
         self.pubkey_len = pk_copy;
     }
     pos = spki_start + spki_len;

@@ -56,14 +56,14 @@ struct SignalfdSiginfo {
 };
 
 extern int  epoll_create1(int flags);
-extern int  epoll_ctl(int epfd, int op, int fd, const void* event);
-extern int  epoll_wait(int epfd, void* events, int maxevents, int timeout_ms);
+extern int  epoll_ctl(int epfd, int op, int fd, const EpollEvent* event);
+extern int  epoll_wait(int epfd, EpollEvent* events, int maxevents, int timeout_ms);
 extern int  close(int fd);
-extern ssize_t read(int fd, void* buf, size_t count);
-extern int  sigemptyset(void* set);
-extern int  sigaddset(void* set, int signum);
-extern int  sigprocmask(int how, const void* set, void* oldset);
-extern int  signalfd(int fd, const void* mask, int flags);
+extern ssize_t read(int fd, unsigned char* buf, size_t count);
+extern int  sigemptyset(SigSet* set);
+extern int  sigaddset(SigSet* set, int signum);
+extern int  sigprocmask(int how, const SigSet* set, SigSet* oldset);
+extern int  signalfd(int fd, const SigSet* mask, int flags);
 
 } // namespace std
 
@@ -132,12 +132,12 @@ inline void Reactor::add(int fd, int filter) {
         int signum = fd;
         struct SigSet set;
         unsafe {
-            sigemptyset((void*)&set);
-            sigaddset((void*)&set, signum);
-            sigprocmask(SAFEC_SIG_BLOCK, (const void*)&set, (void*)0);
+            sigemptyset(&set);
+            sigaddset(&set, signum);
+            sigprocmask(SAFEC_SIG_BLOCK, &set, (SigSet*)0);
         }
         int sfd;
-        unsafe { sfd = signalfd(-1, (const void*)&set, 0); }
+        unsafe { sfd = signalfd(-1, &set, 0); }
         if (sfd < 0) {
             return;
         }
@@ -150,14 +150,14 @@ inline void Reactor::add(int fd, int filter) {
         struct EpollEvent ev;
         ev.events = (unsigned int)SAFEC_EPOLLIN;
         ev.data = (unsigned long)sfd;
-        unsafe { epoll_ctl(self.kq, SAFEC_EPOLL_CTL_ADD, sfd, (const void*)&ev); }
+        unsafe { epoll_ctl(self.kq, SAFEC_EPOLL_CTL_ADD, sfd, &ev); }
         return;
     }
 
     struct EpollEvent ev;
     ev.events = reactor_epoll_events_(filter);
     ev.data = (unsigned long)fd;
-    unsafe { epoll_ctl(self.kq, SAFEC_EPOLL_CTL_ADD, fd, (const void*)&ev); }
+    unsafe { epoll_ctl(self.kq, SAFEC_EPOLL_CTL_ADD, fd, &ev); }
 }
 
 inline void Reactor::remove(int fd, int filter) {
@@ -173,7 +173,7 @@ inline void Reactor::remove(int fd, int filter) {
             if (entrySignum == signum) {
                 int sfd;
                 unsafe { sfd = e->fd; }
-                unsafe { epoll_ctl(self.kq, SAFEC_EPOLL_CTL_DEL, sfd, (const void*)0); }
+                unsafe { epoll_ctl(self.kq, SAFEC_EPOLL_CTL_DEL, sfd, (const EpollEvent*)0); }
                 unsafe { close(sfd); }
                 struct SigFdEntry removed;
                 unsafe { self.sigfds.remove(i); }
@@ -187,7 +187,7 @@ inline void Reactor::remove(int fd, int filter) {
     struct EpollEvent ev; // epoll_ctl(DEL) ignores this, but still wants a valid pointer
     ev.events = 0U;
     ev.data = 0UL;
-    unsafe { epoll_ctl(self.kq, SAFEC_EPOLL_CTL_DEL, fd, (const void*)&ev); }
+    unsafe { epoll_ctl(self.kq, SAFEC_EPOLL_CTL_DEL, fd, &ev); }
 }
 
 // Reactor::poll(sched, ...) is reactor.sc's, over this.
@@ -203,7 +203,7 @@ inline int Reactor::poll_events_raw_(fn void(?&Erased, int, int) on_ready, ?&Era
     }
     int n;
     unsafe {
-        n = epoll_wait(self.kq, (void*)&events[0], 64, timeout);
+        n = epoll_wait(self.kq, &events[0], 64, timeout);
     }
     if (n <= 0) {
         return 0;
@@ -218,7 +218,7 @@ inline int Reactor::poll_events_raw_(fn void(?&Erased, int, int) on_ready, ?&Era
             // its contents are unused, only the fact that it arrived
             // matters.
             struct SignalfdSiginfo info;
-            unsafe { read(fd, (void*)&info, sizeof(struct SignalfdSiginfo)); }
+            unsafe { read(fd, (unsigned char*)&info, sizeof(struct SignalfdSiginfo)); }
             on_ready(ctx, signum, SCHED_SIGNAL);
         } else {
             int filter = (events[i].events & (unsigned int)SAFEC_EPOLLOUT) != 0U ? SCHED_WRITE : SCHED_READ;

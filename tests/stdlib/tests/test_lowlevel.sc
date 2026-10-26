@@ -750,7 +750,7 @@ void t_alloc_edges() {
         ASSERT_TRUE(t.alloc(64UL, 8UL).is_null());          // full
         match (blocks[2]) {                                  // neighbours stay used
             case null: { ASSERT_TRUE(0); }
-            case some(blk): { t.dealloc((?&heap void)blk); }
+            case some(blk): { t.dealloc((?&heap unsigned char)blk); }
         }
         void* again = (void*)t.alloc(64UL, 8UL);
         ASSERT_TRUE(again != (void*)0);

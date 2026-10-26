@@ -15,8 +15,8 @@ inline int String::reserve_(unsigned long need) {
     unsigned long new_cap = self.cap < 16UL ? 16UL : self.cap;
     while (new_cap < needed_cap) { new_cap = new_cap * 2UL; }
     unsafe {
-        void* raw = realloc_buf_raw_((void*)self.data, new_cap);
-        if (raw == (void*)0) { return 0; }
+        unsigned char* raw = realloc_buf_raw_((unsigned char*)self.data, new_cap);
+        if (raw == (unsigned char*)0) { return 0; }
         self.data = (&heap char)raw;
         self.cap  = new_cap;
     }
@@ -28,8 +28,8 @@ inline struct String String::new() {
     struct String s;
     s.len = 0UL;
     unsafe {
-        void* raw = alloc_raw_(16UL);
-        if (raw == (void*)0) {
+        unsigned char* raw = alloc_raw_(16UL);
+        if (raw == (unsigned char*)0) {
             s.data = (&heap char)0;
             s.cap = 0UL;
             return s;
@@ -51,15 +51,15 @@ inline struct String String::from_n_(const &char cstr, unsigned long n) {
     struct String s;
     s.len = 0UL;
     unsafe {
-        void* raw = alloc_raw_(n + 1UL);
-        if (raw == (void*)0) {
+        unsigned char* raw = alloc_raw_(n + 1UL);
+        if (raw == (unsigned char*)0) {
             s.data = (&heap char)0;
             s.cap = 0UL;
             return s;
         }
         s.data = (&heap char)raw;
         s.cap = n + 1UL;
-        safe_memcpy_raw_((void*)s.data, (const void*)cstr, n);
+        safe_memcpy_raw_((unsigned char*)s.data, (const unsigned char*)cstr, n);
     }
     unsafe { s.data[n] = (char)0; }
     s.len = n;
@@ -71,8 +71,8 @@ inline struct String String::with_cap(unsigned long cap) {
     s.len = 0UL;
     s.cap = cap + 1UL;
     unsafe {
-        void* raw = alloc_raw_(s.cap);
-        if (raw == (void*)0) {
+        unsigned char* raw = alloc_raw_(s.cap);
+        if (raw == (unsigned char*)0) {
             s.data = (&heap char)0;
             s.cap = 0UL;
             return s;
@@ -165,8 +165,8 @@ inline void String::shrink_to_fit() {
     if (self.len + 1UL >= self.cap) { return; }
     unsigned long new_cap = self.len + 1UL;
     unsafe {
-        void* raw = realloc_buf_raw_((void*)self.data, new_cap);
-        if (raw == (void*)0) { return; }
+        unsigned char* raw = realloc_buf_raw_((unsigned char*)self.data, new_cap);
+        if (raw == (unsigned char*)0) { return; }
         self.data = (&heap char)raw;
         self.cap  = new_cap;
     }
@@ -185,7 +185,7 @@ inline int String::push(const &char cstr) {
     if (cstr == (const char*)0) { return 1; }
     unsigned long clen = str_len(cstr);
     if (!self.reserve_(self.len + clen)) { return 0; }
-    unsafe { safe_memcpy_raw_((void*)((char*)self.data + self.len), (const void*)cstr, clen + 1UL); }
+    unsafe { safe_memcpy_raw_((unsigned char*)((char*)self.data + self.len), (const unsigned char*)cstr, clen + 1UL); }
     self.len = self.len + clen;
     return 1;
 }
@@ -193,7 +193,7 @@ inline int String::push(const &char cstr) {
 inline int String::push_n_(const &char data, unsigned long n) {
     if (n == 0UL) { return 1; }
     if (!self.reserve_(self.len + n)) { return 0; }
-    unsafe { safe_memcpy_raw_((void*)((char*)self.data + self.len), (const void*)data, n); }
+    unsafe { safe_memcpy_raw_((unsigned char*)((char*)self.data + self.len), (const unsigned char*)data, n); }
     self.len = self.len + n;
     unsafe { self.data[self.len] = (char)0; }
     return 1;
@@ -242,9 +242,9 @@ inline int String::insert(unsigned long idx, const &char cstr) {
     unsigned long clen = str_len(cstr);
     if (!self.reserve_(self.len + clen)) { return 0; }
     unsafe {
-        safe_memmove_raw_((void*)((char*)self.data + idx + clen),
-                     (const void*)((char*)self.data + idx), self.len - idx + 1UL);
-        safe_memcpy_raw_((void*)((char*)self.data + idx), (const void*)cstr, clen);
+        safe_memmove_raw_((unsigned char*)((char*)self.data + idx + clen),
+                     (const unsigned char*)((char*)self.data + idx), self.len - idx + 1UL);
+        safe_memcpy_raw_((unsigned char*)((char*)self.data + idx), (const unsigned char*)cstr, clen);
     }
     self.len = self.len + clen;
     return 1;
@@ -255,8 +255,8 @@ inline int String::remove_range(unsigned long start, unsigned long end) {
     if (end > self.len) { end = self.len; }
     unsigned long removed = end - start;
     unsafe {
-        safe_memmove_raw_((void*)((char*)self.data + start),
-                     (const void*)((char*)self.data + end), self.len - end + 1UL);
+        safe_memmove_raw_((unsigned char*)((char*)self.data + start),
+                     (const unsigned char*)((char*)self.data + end), self.len - end + 1UL);
     }
     self.len = self.len - removed;
     return 1;
@@ -296,7 +296,7 @@ inline int String::replace_all(const &char from, const &char to) {
     unsigned long i = 0UL;
     unsafe {
         while (i + from_len <= self.len) {
-            if (safe_memcmp_raw_((const void*)((char*)self.data + i), (const void*)from, from_len) == 0) {
+            if (safe_memcmp_raw_((const unsigned char*)((char*)self.data + i), (const unsigned char*)from, from_len) == 0) {
                 cnt = cnt + 1;
                 i = i + from_len;
             } else {
@@ -315,9 +315,9 @@ inline int String::replace_all(const &char from, const &char to) {
         unsigned long dst = 0UL;
         while (src < self.len) {
             if (src + from_len <= self.len &&
-                safe_memcmp_raw_((const void*)((char*)self.data + src), (const void*)from, from_len) == 0) {
+                safe_memcmp_raw_((const unsigned char*)((char*)self.data + src), (const unsigned char*)from, from_len) == 0) {
                 if (to_len > 0UL) {
-                    safe_memcpy_raw_((void*)(newBuf + dst), (const void*)to, to_len);
+                    safe_memcpy_raw_((unsigned char*)(newBuf + dst), (const unsigned char*)to, to_len);
                 }
                 dst = dst + to_len;
                 src = src + from_len;
@@ -380,7 +380,7 @@ inline long long String::last_index_of(const &char needle) const {
     unsigned long i = 0UL;
     while (i + nlen <= self.len) {
         unsafe {
-            if (safe_memcmp_raw_((const void*)((char*)self.data + i), (const void*)needle, nlen) == 0) {
+            if (safe_memcmp_raw_((const unsigned char*)((char*)self.data + i), (const unsigned char*)needle, nlen) == 0) {
                 result = (long long)i;
             }
         }
@@ -396,15 +396,15 @@ inline int String::contains(const &char needle) const {
 inline int String::starts_with(const &char prefix) const {
     unsigned long plen = str_len(prefix);
     if (plen > self.len) { return 0; }
-    unsafe { return safe_memcmp_raw_((const void*)self.data, (const void*)prefix, plen) == 0; }
+    unsafe { return safe_memcmp_raw_((const unsigned char*)self.data, (const unsigned char*)prefix, plen) == 0; }
 }
 
 inline int String::ends_with(const &char suffix) const {
     unsigned long slen = str_len(suffix);
     if (slen > self.len) { return 0; }
     unsafe {
-        return safe_memcmp_raw_((const void*)((char*)self.data + self.len - slen),
-                           (const void*)suffix, slen) == 0;
+        return safe_memcmp_raw_((const unsigned char*)((char*)self.data + self.len - slen),
+                           (const unsigned char*)suffix, slen) == 0;
     }
 }
 
@@ -415,7 +415,7 @@ inline int String::count(const &char needle) const {
     unsigned long i = 0UL;
     while (i + nlen <= self.len) {
         unsafe {
-            if (safe_memcmp_raw_((const void*)((char*)self.data + i), (const void*)needle, nlen) == 0) {
+            if (safe_memcmp_raw_((const unsigned char*)((char*)self.data + i), (const unsigned char*)needle, nlen) == 0) {
                 cnt = cnt + 1;
                 i = i + nlen;
             } else {
@@ -532,7 +532,7 @@ inline struct String String::strip_prefix(const &char prefix) const {
     unsigned long plen = str_len(prefix);
     if (plen > self.len) { return self.clone(); }
     unsafe {
-        if (safe_memcmp_raw_((const void*)self.data, (const void*)prefix, plen) != 0) {
+        if (safe_memcmp_raw_((const unsigned char*)self.data, (const unsigned char*)prefix, plen) != 0) {
             return self.clone();
         }
         return String::from_n_((const char*)((char*)self.data + plen), self.len - plen);
@@ -543,7 +543,7 @@ inline struct String String::strip_suffix(const &char suffix) const {
     unsigned long slen = str_len(suffix);
     if (slen > self.len) { return self.clone(); }
     unsafe {
-        if (safe_memcmp_raw_((const void*)((char*)self.data + self.len - slen), (const void*)suffix, slen) != 0) {
+        if (safe_memcmp_raw_((const unsigned char*)((char*)self.data + self.len - slen), (const unsigned char*)suffix, slen) != 0) {
             return self.clone();
         }
         return String::from_n_((const char*)self.data, self.len - slen);
@@ -611,7 +611,7 @@ unsigned long String::split(const &char delim, []String out) const {
             unsigned long j = start;
             while (j + dlen <= self.len) {
                 unsafe {
-                    if (safe_memcmp_raw_((const void*)((char*)self.data + j), (const void*)delim, dlen) == 0) {
+                    if (safe_memcmp_raw_((const unsigned char*)((char*)self.data + j), (const unsigned char*)delim, dlen) == 0) {
                         pos = (long long)j;
                         break;
                     }
@@ -758,7 +758,7 @@ unsigned long String::split_whitespace([]String out) const {
 // ── Comparison ────────────────────────────────────────────────────────────────
 inline int String::eq(&String other) const {
     if (self.len != other.len) { return 0; }
-    unsafe { return safe_memcmp_raw_((const void*)self.data, (const void*)other.data, self.len) == 0; }
+    unsafe { return safe_memcmp_raw_((const unsigned char*)self.data, (const unsigned char*)other.data, self.len) == 0; }
 }
 
 inline int String::eq_cstr(const &char other) const {

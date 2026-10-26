@@ -9,7 +9,7 @@ namespace std {
 extern int            snprintf(&char buf, size_t n, const char* fmt, ...);
 #endif
 extern size_t  strlen(const char* s);
-extern void*          memcpy(void* dst, const void* src, size_t n);
+extern unsigned char*          memcpy(unsigned char* dst, const unsigned char* src, size_t n);
 
 // Integer formatting is done here directly rather than through snprintf:
 // it's on the hot path of String.push_int/JSON/HTTP, where parsing a format

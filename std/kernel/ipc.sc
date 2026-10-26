@@ -5,7 +5,7 @@
 
 namespace std {
 
-extern void* memcpy(void* dst, const void* src, size_t n);
+extern unsigned char* memcpy(unsigned char* dst, const unsigned char* src, size_t n);
 
 inline struct Mailbox Mailbox::new(int owner_pid) {
     struct Mailbox mb;
@@ -26,7 +26,7 @@ inline int Mailbox::send(int sender_pid, int type, []const unsigned char payload
     self.messages[idx].type       = type;
     self.messages[idx].size       = size;
     if (size > 0UL) {
-        unsafe { memcpy((void*)self.messages[idx].payload, (const void*)payload.ptr, size); }
+        unsafe { memcpy((unsigned char*)self.messages[idx].payload, (const unsigned char*)payload.ptr, size); }
     }
 
     self.head  = (self.head + 1) & 63;
@@ -42,7 +42,7 @@ inline int Mailbox::recv(&Message out) {
     out.type       = self.messages[idx].type;
     out.size       = self.messages[idx].size;
     if (out.size > (unsigned long)0) {
-        unsafe { memcpy((void*)out.payload, (const void*)self.messages[idx].payload, out.size); }
+        unsafe { memcpy((unsigned char*)out.payload, (const unsigned char*)self.messages[idx].payload, out.size); }
     }
 
     self.tail  = (self.tail + 1) & 63;
@@ -58,7 +58,7 @@ inline int Mailbox::peek(&Message out) const {
     out.type       = self.messages[idx].type;
     out.size       = self.messages[idx].size;
     if (out.size > (unsigned long)0) {
-        unsafe { memcpy((void*)out.payload, (const void*)self.messages[idx].payload, out.size); }
+        unsafe { memcpy((unsigned char*)out.payload, (const unsigned char*)self.messages[idx].payload, out.size); }
     }
     return 1;
 }

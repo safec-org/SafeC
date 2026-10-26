@@ -16,7 +16,7 @@ struct PoolBlock {
 };
 
 struct PoolAllocator {
-    &heap void    base;       // heap-backed managed memory
+    &heap unsigned char base;       // heap-backed managed memory
     int           owned;   // 1 if PoolAllocator::new allocated base (destroy() frees it)
     unsigned long cap;        // total buffer size
     ?&PoolBlock   head;       // first block in the list (walked inside unsafe)
@@ -31,11 +31,11 @@ struct PoolAllocator {
     // (given an 8-aligned buffer: always for PoolAllocator::new), so align is honoured
     // up to 8 (0 is taken as 1). null if no free block fits, or `align` is
     // above 8 or not a power of two.
-    ?&heap void   alloc(unsigned long size, unsigned long align);
+    ?&heap unsigned char alloc(unsigned long size, unsigned long align);
 
     // Free a previously allocated pointer (null: no-op). Coalesces adjacent
     // free blocks. Aborts with a diagnostic on a double free.
-    void          dealloc(?&heap void ptr);
+    void          dealloc(?&heap unsigned char ptr);
 
     // Free every block at once: the whole buffer is one free block again
     // (blocks handed out before become invalid).

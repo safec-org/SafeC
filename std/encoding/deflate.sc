@@ -97,7 +97,7 @@ static int dbuf_reserve_(struct DeflateBuf_* b, unsigned long extra) {
         if (b->len + extra <= b->cap) { return 1; }
         unsigned long nc = b->cap * 2UL;
         while (nc < b->len + extra) { nc = nc * 2UL; }
-        unsigned char* nd = (unsigned char*)realloc_buf_raw_((void*)b->data, nc);
+        unsigned char* nd = (unsigned char*)realloc_buf_raw_((unsigned char*)b->data, nc);
         if (nd == (unsigned char*)0) { b->failed = 1; return 0; }
         b->data = nd;
         b->cap = nc;

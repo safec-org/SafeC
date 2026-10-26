@@ -9,7 +9,7 @@ namespace std {
 
 extern int  strerror_r(int errnum, char* buf, unsigned long buflen); // POSIX
 extern char* strerror(int errnum);
-extern void  fputs(const char* s, void* stream);
+extern void  fputs(const char* s, CFile_* stream);
 
 inline int errno_get() {
     unsafe { return errno; }

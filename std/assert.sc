@@ -10,9 +10,9 @@
 // ── Explicit extern declarations ─────────────────────────────────────────────
 namespace std {
 
-extern int   fputs(const char* s, void* stream);
-extern int   fputc(int c, void* stream);
-extern int   fflush(void* stream);
+extern int   fputs(const char* s, CFile_* stream);
+extern int   fputc(int c, CFile_* stream);
+extern int   fflush(CFile_* stream);
 extern void  abort();
 
 // Print failure diagnostics to stderr and abort the process.

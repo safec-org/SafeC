@@ -18,8 +18,8 @@
 #include <std/http/headers.h>
 #include <std/http/date.h>
 #include <std/tls/tls.h>
-extern void* malloc(size_t size);
-extern void  free(void* ptr);
+extern unsigned char* malloc(size_t size);
+extern void  free(unsigned char* ptr);
 // A backend for io_nb.h's declarations (io_nb_bsd.sc / io_nb_linux.sc /
 // io_nb_win32.sc) must be included by the caller before this file, the
 // same way std/ipc/uds.h's callers pick uds_bsd.sc/uds_linux.sc themselves
@@ -41,14 +41,14 @@ namespace std {
 // (same reason mem.sc/pool.sc avoid panic.h's PANIC macro), and a real
 // function works in safe mode with no extra link dependency either way.
 #ifdef _WIN32
-extern int recv(unsigned long long fd, void* buf, int count, int flags);
-extern int send(unsigned long long fd, const void* buf, int count, int flags);
+extern int recv(unsigned long long fd, unsigned char* buf, int count, int flags);
+extern int send(unsigned long long fd, const unsigned char* buf, int count, int flags);
 extern int closesocket(unsigned long long fd);
-extern int WSAStartup(unsigned short versionRequested, void* wsaData);
-static long sock_read_(int fd, void* buf, unsigned long count) {
+extern int WSAStartup(unsigned short versionRequested, unsigned char* wsaData);
+static long sock_read_(int fd, unsigned char* buf, unsigned long count) {
     unsafe { return (long)recv((unsigned long long)fd, buf, (int)count, 0); }
 }
-static long sock_write_(int fd, const void* buf, unsigned long count) {
+static long sock_write_(int fd, const unsigned char* buf, unsigned long count) {
     unsafe { return (long)send((unsigned long long)fd, buf, (int)count, 0); }
 }
 static int sock_close_(int fd) {
@@ -62,10 +62,10 @@ static int sock_close_(int fd) {
 // 'long' return type, and a caller that also includes both reactor_*.sc
 // and this file (see http_serve_reactor below) hits a real duplicate-
 // extern-declaration mismatch if the two disagree.
-extern ssize_t read(int fd, void* buf, size_t count);
-extern ssize_t write(int fd, const void* buf, size_t count);
+extern ssize_t read(int fd, unsigned char* buf, size_t count);
+extern ssize_t write(int fd, const unsigned char* buf, size_t count);
 extern int close(int fd);
-static long sock_read_(int fd, void* buf, unsigned long count) {
+static long sock_read_(int fd, unsigned char* buf, unsigned long count) {
     unsafe { return read(fd, buf, count); }
 }
 #ifdef __linux__
@@ -73,13 +73,13 @@ static long sock_read_(int fd, void* buf, unsigned long count) {
 // peer has already closed raises SIGPIPE, whose default action kills the
 // whole process. BSD/macOS opt out per socket instead (SO_NOSIGPIPE, set
 // by io_nb_bsd.sc on every socket it hands out).
-extern ssize_t send(int fd, const void* buf, size_t count, int flags);
+extern ssize_t send(int fd, const unsigned char* buf, size_t count, int flags);
 #define HTTP_MSG_NOSIGNAL_ 0x4000
-static long sock_write_(int fd, const void* buf, unsigned long count) {
+static long sock_write_(int fd, const unsigned char* buf, unsigned long count) {
     unsafe { return send(fd, buf, count, HTTP_MSG_NOSIGNAL_); }
 }
 #else
-static long sock_write_(int fd, const void* buf, unsigned long count) {
+static long sock_write_(int fd, const unsigned char* buf, unsigned long count) {
     unsafe { return write(fd, buf, count); }
 }
 #endif
@@ -100,40 +100,40 @@ struct AddrInfo_ {
     int    ai_protocol;
     unsigned long ai_addrlen;
 #ifdef __linux__
-    void*  ai_addr;
+    unsigned char*  ai_addr;   // the sockaddr, as bytes
     char*  ai_canonname;
 #else
     char*  ai_canonname;
-    void*  ai_addr;
+    unsigned char*  ai_addr;
 #endif
     struct AddrInfo_* ai_next;
 };
-extern int  getaddrinfo(const char* node, const char* service, const void* hints, void** res);
-extern void freeaddrinfo(void* res);
+extern int  getaddrinfo(const char* node, const char* service, const AddrInfo_* hints, AddrInfo_** res);
+extern void freeaddrinfo(AddrInfo_* res);
 
 #ifdef _WIN32
-extern int getsockname(unsigned long long fd, void* addr, int* len);
-extern int getpeername(unsigned long long fd, void* addr, int* len);
+extern int getsockname(unsigned long long fd, unsigned char* addr, int* len);
+extern int getpeername(unsigned long long fd, unsigned char* addr, int* len);
 extern int shutdown(unsigned long long fd, int how);
 static int sock_name_(int fd, unsigned char* sa, int peer) {
     int len = 16;
     unsafe {
-        if (peer) { return getpeername((unsigned long long)fd, (void*)sa, &len); }
-        return getsockname((unsigned long long)fd, (void*)sa, &len);
+        if (peer) { return getpeername((unsigned long long)fd, (unsigned char*)sa, &len); }
+        return getsockname((unsigned long long)fd, (unsigned char*)sa, &len);
     }
 }
 static int sock_shutdown_(int fd, int how) {
     unsafe { return shutdown((unsigned long long)fd, how); }
 }
 #else
-extern int getsockname(int fd, void* addr, unsigned int* len);
-extern int getpeername(int fd, void* addr, unsigned int* len);
+extern int getsockname(int fd, unsigned char* addr, unsigned int* len);
+extern int getpeername(int fd, unsigned char* addr, unsigned int* len);
 extern int shutdown(int fd, int how);
 static int sock_name_(int fd, unsigned char* sa, int peer) {
     unsigned int len = 16U;
     unsafe {
-        if (peer) { return getpeername(fd, (void*)sa, &len); }
-        return getsockname(fd, (void*)sa, &len);
+        if (peer) { return getpeername(fd, (unsigned char*)sa, &len); }
+        return getsockname(fd, (unsigned char*)sa, &len);
     }
 }
 static int sock_shutdown_(int fd, int how) {
@@ -635,7 +635,7 @@ int http_resolve_host(const &char host, &unsigned int addr_out) {
     // has run; the socket helpers only do that once they create a socket,
     // which here comes after resolution. Safe to repeat (reference-counted).
     unsigned char wsaData[512];
-    unsafe { WSAStartup((unsigned short)0x0202, (void*)&wsaData[0]); }
+    unsafe { WSAStartup((unsigned short)0x0202, (unsigned char*)&wsaData[0]); }
 #endif
     struct AddrInfo_ hints;
     hints.ai_flags = 0;
@@ -643,17 +643,17 @@ int http_resolve_host(const &char host, &unsigned int addr_out) {
     hints.ai_socktype = SCHED_SOCK_STREAM;
     hints.ai_protocol = 0;
     hints.ai_addrlen = 0UL;
-    hints.ai_addr = (void*)0;
+    hints.ai_addr = (unsigned char*)0;
     hints.ai_canonname = (char*)0;
     hints.ai_next = (struct AddrInfo_*)0;
-    void* resPtr = (void*)0;
+    struct AddrInfo_* resPtr = (struct AddrInfo_*)0;
     int rc;
-    unsafe { rc = getaddrinfo(host, (const char*)0, (const void*)&hints, &resPtr); }
-    if (rc != 0 || resPtr == (void*)0) { return 0; }
-    void* sa;
-    unsafe { sa = ((struct AddrInfo_*)resPtr)->ai_addr; }
+    unsafe { rc = getaddrinfo(host, (const char*)0, (const AddrInfo_*)&hints, &resPtr); }
+    if (rc != 0 || resPtr == (struct AddrInfo_*)0) { return 0; }
+    unsigned char* sa;
+    unsafe { sa = resPtr->ai_addr; }
     int found = 0;
-    if (sa != (void*)0) {
+    if (sa != (unsigned char*)0) {
         // sockaddr_in.sin_addr sits at byte offset 4 on every platform
         // (Linux/Windows: 2-byte family + port; BSD: len + family + port),
         // already in network byte order.
@@ -695,7 +695,7 @@ long long TcpStream::read([]unsigned char buf_s) {
         }
         case null: { }
     }
-    unsafe { return (long long)sock_read_(self.fd, (void*)buf, n); }
+    unsafe { return (long long)sock_read_(self.fd, (unsigned char*)buf, n); }
 }
 
 long long TcpStream::write([]const unsigned char buf_s) {
@@ -709,7 +709,7 @@ long long TcpStream::write([]const unsigned char buf_s) {
         }
         case null: { }
     }
-    unsafe { return (long long)sock_write_(self.fd, (const void*)buf, n); }
+    unsafe { return (long long)sock_write_(self.fd, (const unsigned char*)buf, n); }
 }
 
 int TcpStream::close() {
@@ -2346,7 +2346,7 @@ static void http_conn_cleanup_(struct HttpConnState_* st) {
         sock_close_(st->fd);
         st->readBuf.free();
         st->respText.free();
-        free(st);
+        free((unsigned char*)st);
     }
 }
 
@@ -2363,7 +2363,7 @@ static int http_conn_task_(?&HttpConnState_ argPtr, int resume_point) {
         if (st->phase == HTTP_CONN_PHASE_READ_HEADERS_) {
             char chunk[4096];
             while (1) {
-                long n = sock_read_(st->fd, (void*)chunk, 4096UL);
+                long n = sock_read_(st->fd, (unsigned char*)chunk, 4096UL);
                 if (n > 0L) {
                     st->readBuf.push_n_(chunk, (unsigned long)n);
                     long idx = st->readBuf.index_of("\r\n\r\n");
@@ -2402,7 +2402,7 @@ static int http_conn_task_(?&HttpConnState_ argPtr, int resume_point) {
                 unsigned long haveBody = st->readBuf.length() - (unsigned long)st->headerEnd;
                 unsigned long want = st->bodyWant - haveBody;
                 unsigned long ask = want < 4096UL ? want : 4096UL;
-                long n = sock_read_(st->fd, (void*)chunk, ask);
+                long n = sock_read_(st->fd, (unsigned char*)chunk, ask);
                 if (n > 0L) {
                     st->readBuf.push_n_(chunk, (unsigned long)n);
                     continue;
@@ -2443,7 +2443,7 @@ static int http_conn_task_(?&HttpConnState_ argPtr, int resume_point) {
         // HTTP_CONN_PHASE_WRITE_
         while (st->sent < st->respText.length()) {
             long n = sock_write_(st->fd,
-                (const void*)&st->respText.as_ptr()[st->sent],
+                (const unsigned char*)&st->respText.as_ptr()[st->sent],
                 st->respText.length() - st->sent);
             if (n > 0L) {
                 st->sent = st->sent + (unsigned long)n;
@@ -2500,7 +2500,7 @@ static void http_spawn_conn_(struct TaskScheduler* sched, struct Reactor* reacto
             sock_close_(fd);
             st->readBuf.free();
             st->respText.free();
-            free(st);
+            free((unsigned char*)st);
         }
     }
 }
@@ -2737,8 +2737,8 @@ static ?&HttpReactorThreadCtx_ http_reactor_worker_(?&HttpReactorThreadCtx_ argP
         http_worker_loop_(&sched, &reactor, myQueue, shared->handler);
 
         reactor.close_();
-        if (ac != (struct HttpAcceptState_*)0) { free(ac); }
-        free(ctx);
+        if (ac != (struct HttpAcceptState_*)0) { free((unsigned char*)ac); }
+        free((unsigned char*)ctx);
         return null;
     }
 }

@@ -85,9 +85,9 @@ struct WSAData_ {
 static_assert(sizeof(struct WSAData_) == 408, "WSADATA is 408 bytes on 64-bit Windows");
 #endif
 
-extern int   WSAStartup(unsigned short versionRequested, void* wsaData);
+extern int   WSAStartup(unsigned short versionRequested, WSAData_* wsaData);
 extern int   WSACleanup();
-extern int   WSAPoll(void* fdArray, unsigned long long fds, int timeout);
+extern int   WSAPoll(WSAPollFd* fdArray, unsigned long long fds, int timeout);
 extern int   closesocket(unsigned long long s);
 
 } // namespace std
@@ -123,7 +123,7 @@ inline struct Reactor Reactor::new() {
 inline int Reactor::init() {
     struct WSAData_ wsaData;
     int rc;
-    unsafe { rc = WSAStartup((unsigned short)SAFEC_WSA_VERSION, (void*)&wsaData); }
+    unsafe { rc = WSAStartup((unsigned short)SAFEC_WSA_VERSION, &wsaData); }
     if (rc != 0) {
         return -1;
     }
@@ -231,7 +231,7 @@ inline int Reactor::poll_events_raw_(fn void(?&Erased, int, int) on_ready, ?&Era
     }
 
     int rc;
-    unsafe { rc = WSAPoll((void*)&fds[0], (unsigned long long)cap, timeout); }
+    unsafe { rc = WSAPoll(&fds[0], (unsigned long long)cap, timeout); }
     if (rc <= 0) {
         return 0;
     }

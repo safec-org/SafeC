@@ -163,7 +163,7 @@ R SpawnedThread::join() {
         case null: { }
     }
     panic_at("SpawnedThread::join: the thread never started", "thread.h", 0);
-    unsafe { return *(R*)(void*)0; }   // unreachable
+    unsafe { return *(R*)0; }   // unreachable
 }
 
 generic<T, R>

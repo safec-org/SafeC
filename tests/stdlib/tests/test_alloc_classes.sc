@@ -279,9 +279,9 @@ int exercise_allocator(&A a, unsigned long n) {
     match (r) { case null: { } case some(x): { if (x.id != 42LL || x.tag != 7) ok = 0; dealloc_t(a, x); } }
     match (arr) { case null: { } case some(xs): { dealloc_t(a, xs); } }
     if (!a.alloc(8UL, 3UL).is_null()) ok = 0;        // align not a power of two
-    a.dealloc((?&heap void)null);                      // null: a no-op everywhere
+    a.dealloc((?&heap unsigned char)null);                      // null: a no-op everywhere
     // The raw method: 8 bytes, 8-aligned (every allocator here honours 8).
-    ?&heap void raw = a.alloc(8UL, 8UL);
+    ?&heap unsigned char raw = a.alloc(8UL, 8UL);
     match (raw) {
         case null: { ok = 0; }
         case some(p): { unsafe { if ((unsigned long)p % 8UL != 0UL) ok = 0; } a.dealloc(p); }
@@ -294,11 +294,11 @@ int exercise_allocator(&A a, unsigned long n) {
 struct CountingHeap {
     unsigned long live;
     unsigned long total;
-    ?&heap void alloc(unsigned long size, unsigned long align);
-    void        dealloc(?&heap void ptr);
+    ?&heap unsigned char alloc(unsigned long size, unsigned long align);
+    void        dealloc(?&heap unsigned char ptr);
 };
 
-?&heap void CountingHeap::alloc(unsigned long size, unsigned long align) {
+?&heap unsigned char CountingHeap::alloc(unsigned long size, unsigned long align) {
     // std::alloc's blocks are 16-aligned.
     if ((align & (align - 1UL)) != 0UL || align > 16UL) return null;
     void* p;
@@ -306,10 +306,10 @@ struct CountingHeap {
     if (p == (void*)0) return null;
     self.live = self.live + 1UL;
     self.total = self.total + 1UL;
-    unsafe { return (?&heap void)p; }
+    unsafe { return (?&heap unsigned char)p; }
 }
 
-void CountingHeap::dealloc(?&heap void ptr) {
+void CountingHeap::dealloc(?&heap unsigned char ptr) {
     void* p = ptr;
     if (p == (void*)0) return;
     unsafe { dealloc_raw_(p); }
@@ -357,13 +357,13 @@ void t_allocator_trait() {
 struct OneShot {
     unsigned long long slot[8];
     int taken;
-    ?&heap void alloc(unsigned long size, unsigned long align);
+    ?&heap unsigned char alloc(unsigned long size, unsigned long align);
 };
 
-?&heap void OneShot::alloc(unsigned long size, unsigned long align) {
+?&heap unsigned char OneShot::alloc(unsigned long size, unsigned long align) {
     if (self.taken || size > 64UL || align > 8UL) return null;
     self.taken = 1;
-    unsafe { return (?&heap void)(void*)&self.slot[0]; }
+    unsafe { return (?&heap unsigned char)(void*)&self.slot[0]; }
 }
 
 // Fill with 'size'-byte blocks, reset, fill again: an ArenaAllocator gives

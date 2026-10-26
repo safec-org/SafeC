@@ -17,12 +17,12 @@ namespace std {
 // newfstatat system call. The offsets below are each ABI's documented
 // struct layout (only mode, size and mtime are read).
 #if defined(_WIN32)
-extern int _stat64(const char* path, void* buf);
+extern int _stat64(const char* path, unsigned char* buf);
 #define HTTP_ST_MODE_U16_ 6
 #define HTTP_ST_SIZE_     24
 #define HTTP_ST_MTIME_    40
 #elif defined(__APPLE__)
-extern int stat(const char* path, void* buf);
+extern int stat(const char* path, unsigned char* buf);
 #define HTTP_ST_MODE_U16_ 4
 #define HTTP_ST_SIZE_     96
 #define HTTP_ST_MTIME_    48
@@ -39,7 +39,7 @@ extern long syscall(long number, ...);
 #define HTTP_ST_MTIME_    88
 #else
 // FreeBSD 12+ (ino64 layout).
-extern int stat(const char* path, void* buf);
+extern int stat(const char* path, unsigned char* buf);
 #define HTTP_ST_MODE_U16_ 24
 #define HTTP_ST_SIZE_     112
 #define HTTP_ST_MTIME_    64
@@ -53,13 +53,13 @@ int http_file_info(const &char path, &long long size, &long long mtime) {
     unsigned int mode = 0U;
     unsafe {
 #if defined(_WIN32)
-        rc = _stat64(path, (void*)&st[0]);
+        rc = _stat64(path, (unsigned char*)&st[0]);
 #elif defined(__APPLE__)
-        rc = stat(path, (void*)&st[0]);
+        rc = stat(path, (unsigned char*)&st[0]);
 #elif defined(__linux__)
-        rc = (int)syscall((long)HTTP_SYS_NEWFSTATAT_, -100L, path, (void*)&st[0], 0L);
+        rc = (int)syscall((long)HTTP_SYS_NEWFSTATAT_, -100L, path, (unsigned char*)&st[0], 0L);
 #else
-        rc = stat(path, (void*)&st[0]);
+        rc = stat(path, (unsigned char*)&st[0]);
 #endif
         if (rc != 0) { return 0; }
 #ifdef HTTP_ST_MODE_U32_

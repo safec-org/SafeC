@@ -56,13 +56,13 @@ trait Allocate {
     // 'size' bytes aligned to 'align' (a power of two), uninitialised; null
     // when the allocator can't (out of space, or an alignment or size it
     // doesn't provide).
-    ?&heap void alloc(unsigned long size, unsigned long align);
+    ?&heap unsigned char alloc(unsigned long size, unsigned long align);
 }
 
 trait Deallocate {
     // Gives back a block alloc returned; null is a no-op. A no-op on an
     // allocator that can't free one block (bump: reset() frees them all).
-    void dealloc(?&heap void ptr);
+    void dealloc(?&heap unsigned char ptr);
 }
 
 trait Allocator : Allocate + Deallocate {}
@@ -87,7 +87,7 @@ generic<T, A: Allocate>
 // Gives back a block from alloc_t / alloc_array_t on the same allocator.
 generic<T, A: Deallocate>
 void dealloc_t(&A a, &heap T obj) {
-    unsafe { a.dealloc((?&heap void)obj); }
+    unsafe { a.dealloc((?&heap unsigned char)obj); }
 }
 
 // ── CountingAllocator: usage statistics over any Allocator ──────────────────
@@ -109,8 +109,8 @@ struct CountingAllocator {
     unsigned long bytes;      // bytes requested by the successful allocs
 
     static struct CountingAllocator<A> over(&A inner);
-    ?&heap void   alloc(unsigned long size, unsigned long align);
-    void          dealloc(?&heap void ptr);
+    ?&heap unsigned char alloc(unsigned long size, unsigned long align);
+    void          dealloc(?&heap unsigned char ptr);
     // Blocks handed out and not given back yet.
     unsigned long live() const;
 };
@@ -127,8 +127,8 @@ struct CountingAllocator<A> CountingAllocator::over(&A inner) {
 }
 
 generic<A: Allocator>
-?&heap void CountingAllocator::alloc(unsigned long size, unsigned long align) {
-    ?&heap void p = self.inner.alloc(size, align);
+?&heap unsigned char CountingAllocator::alloc(unsigned long size, unsigned long align) {
+    ?&heap unsigned char p = self.inner.alloc(size, align);
     if (p.is_null()) {
         self.failures = self.failures + 1UL;
     } else {
@@ -139,7 +139,7 @@ generic<A: Allocator>
 }
 
 generic<A: Allocator>
-void CountingAllocator::dealloc(?&heap void ptr) {
+void CountingAllocator::dealloc(?&heap unsigned char ptr) {
     if (!ptr.is_null()) { self.frees = self.frees + 1UL; }
     self.inner.dealloc(ptr);
 }

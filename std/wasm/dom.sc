@@ -11,8 +11,8 @@ namespace std {
 #define DOM_KIND_ONESHOT_ 32  // freed after its first dispatch
 
 struct DomCallbackSlot {
-    void* handler;
-    void* userdata;
+    fn void() handler;       // erased: the fn type 'kind' names (DomEventFn_, ...)
+    ?&Erased userdata;
     int   kind;       // DOM_CB_* | DOM_KIND_* bits
     int   used;
     int   gen;        // bumped every time the slot is freed
@@ -379,7 +379,7 @@ void dom_console(int level, const &char text) {
 
 // ── Callback table ─────────────────────────────────────────────────────────
 
-static int dom_register_callback_kind_raw_(int kind, void* handler, void* userdata) {
+static int dom_register_callback_kind_raw_(int kind, fn void() handler, ?&Erased userdata) {
     int i = 0;
     while (i < DOM_MAX_CALLBACKS) {
         int used;
@@ -423,9 +423,9 @@ void dom_unregister_callback(int callbackId) {
 }
 
 int dom_register_callback_raw_(fn void(?&Erased) fh, ?&Erased fu) {
-    void* handler;
-    void* userdata;
-    unsafe { handler = (void*)fh; userdata = (void*)fu; }
+    fn void() handler;
+    unsafe { handler = (fn void())fh; }
+    ?&Erased userdata = fu;
     return dom_register_callback_kind_raw_(DOM_CB_PLAIN_, handler, userdata);
 }
 
@@ -471,9 +471,9 @@ void   DomEvent::prevent_default() const { unsafe { js_event_control(0); } }
 void   DomEvent::stop_propagation() const { unsafe { js_event_control(1); } }
 
 int dom_add_listener_raw_(int handle, const &char type, fn void(?&Erased, &DomEvent) fh, ?&Erased fu, int flags) {
-    void* handler;
-    void* userdata;
-    unsafe { handler = (void*)fh; userdata = (void*)fu; }
+    fn void() handler;
+    unsafe { handler = (fn void())fh; }
+    ?&Erased userdata = fu;
     int id = dom_register_callback_kind_raw_(DOM_CB_EVENT_ | ((flags & DOM_LISTEN_ONCE) != 0 ? DOM_KIND_ONESHOT_ : 0),
                                              handler, userdata);
     if (id < 0) { return -1; }
@@ -505,9 +505,9 @@ void dom_off(int listenerId) {
 // ── Timers ─────────────────────────────────────────────────────────────────
 
 int dom_set_timer_raw_(fn void(?&Erased) fh, ?&Erased fu, int ms, int repeat) {
-    void* handler;
-    void* userdata;
-    unsafe { handler = (void*)fh; userdata = (void*)fu; }
+    fn void() handler;
+    unsafe { handler = (fn void())fh; }
+    ?&Erased userdata = fu;
     int kind = DOM_CB_PLAIN_ | DOM_KIND_TIMER_ | (repeat ? 0 : DOM_KIND_ONESHOT_);
     int id = dom_register_callback_kind_raw_(kind, handler, userdata);
     if (id < 0) { return -1; }
@@ -527,9 +527,9 @@ void dom_clear_timer(int timerId) {
 }
 
 int dom_request_animation_frame_raw_(fn void(?&Erased, double) fh, ?&Erased fu) {
-    void* handler;
-    void* userdata;
-    unsafe { handler = (void*)fh; userdata = (void*)fu; }
+    fn void() handler;
+    unsafe { handler = (fn void())fh; }
+    ?&Erased userdata = fu;
     int id = dom_register_callback_kind_raw_(DOM_CB_FRAME_ | DOM_KIND_ONESHOT_, handler, userdata);
     if (id < 0) { return -1; }
     int jsId;
@@ -560,9 +560,9 @@ struct String DomFetchResponse::header(const &char name) const {
 
 int dom_fetch_raw_(const &char method, const &char url, const ?&char headers, const ?&char body,
                    fn void(?&Erased, &DomFetchResponse) fh, ?&Erased fu) {
-    void* handler;
-    void* userdata;
-    unsafe { handler = (void*)fh; userdata = (void*)fu; }
+    fn void() handler;
+    unsafe { handler = (fn void())fh; }
+    ?&Erased userdata = fu;
     int id = dom_register_callback_kind_raw_(DOM_CB_FETCH_ | DOM_KIND_ONESHOT_, handler, userdata);
     if (id < 0) { return -1; }
     const char* hp = (const char*)0;
@@ -616,9 +616,9 @@ void dom_navigate(const &char url) { unsafe { js_history(4, url, dom_len_(url));
 
 // ── Dispatch (called by the host) ──────────────────────────────────────────
 
-typedef fn void(void* ud, &DomEvent ev) DomEventFn_;
-typedef fn void(void* ud, double ts) DomFrameFn_;
-typedef fn void(void* ud, &DomFetchResponse r) DomFetchFn_;
+typedef fn void(?&Erased ud, &DomEvent ev) DomEventFn_;
+typedef fn void(?&Erased ud, double ts) DomFrameFn_;
+typedef fn void(?&Erased ud, &DomFetchResponse r) DomFetchFn_;
 
 void dom_dispatch_event(int callbackId) {
     int slot = dom_slot_(callbackId);
@@ -628,8 +628,8 @@ void dom_dispatch_event(int callbackId) {
         if (callbackId >= 0 && callbackId < DOM_MAX_CALLBACKS) { slot = dom_slot_(callbackId + DOM_MAX_CALLBACKS); }
         if (slot < 0) { return; }
     }
-    void* h;
-    void* ud;
+    fn void() h;
+    ?&Erased ud;
     int kind;
     unsafe {
         h = gDomCallbacks[slot].handler;
@@ -650,8 +650,8 @@ void dom_dispatch_event(int callbackId) {
 void dom_dispatch_frame(int callbackId, double timestamp) {
     int slot = dom_slot_(callbackId);
     if (slot < 0) { return; }
-    void* h;
-    void* ud;
+    fn void() h;
+    ?&Erased ud;
     unsafe {
         h = gDomCallbacks[slot].handler;
         ud = gDomCallbacks[slot].userdata;
@@ -666,8 +666,8 @@ void dom_dispatch_fetch(int callbackId, int requestId, int status) {
         unsafe { js_fetch_done(requestId); }
         return;
     }
-    void* h;
-    void* ud;
+    fn void() h;
+    ?&Erased ud;
     unsafe {
         h = gDomCallbacks[slot].handler;
         ud = gDomCallbacks[slot].userdata;

@@ -28,7 +28,7 @@ extern char* strtok_s(char* s, const char* delim, char** saveptr);
 #else
 extern char* strtok_r(char* s, const char* delim, char** saveptr);
 #endif
-extern void* memchr(const void* s, int c, size_t n);
+extern unsigned char* memchr(const unsigned char* s, int c, size_t n);
 #else
 // Freestanding: no libc, so the same entry points are implemented natively
 // (file-private; the str_* wrappers below are the public API either way).
@@ -143,7 +143,7 @@ static const ?&unsigned char memchr(const &unsigned char b, int c, unsigned long
     return null;
 }
 #endif
-extern void* memcpy(void* dst, const void* src, size_t n);
+extern unsigned char* memcpy(unsigned char* dst, const unsigned char* src, size_t n);
 
 // Return the length (in bytes) of a null-terminated string.
 inline unsigned long str_len(const &char s) {
@@ -209,7 +209,7 @@ inline ?&heap char str_dup(const &char s) {
         unsigned long len = strlen(s) + (unsigned long)1;
         char* buf = (char*)alloc_raw_(len);
         if (buf != (char*)0) {
-            memcpy((void*)buf, (const void*)s, len);
+            memcpy((unsigned char*)buf, (const unsigned char*)s, len);
         }
         return buf;
     }
@@ -302,7 +302,7 @@ inline ?&heap char str_ndup(const &char s, unsigned long n) {
         n = len;
         char* buf = (char*)alloc_raw_(n + (unsigned long)1);
         if (buf != (char*)0) {
-            memcpy((void*)buf, (const void*)s, n);
+            memcpy((unsigned char*)buf, (const unsigned char*)s, n);
             buf[n] = '\0';
         }
         return buf;

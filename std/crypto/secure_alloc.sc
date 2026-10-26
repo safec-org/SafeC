@@ -5,7 +5,7 @@
 
 namespace std {
 
-extern void* memset(void* p, int v, size_t n);
+extern unsigned char* memset(unsigned char* p, int v, size_t n);
 
 struct SecureAllocator SecureAllocator::new(unsigned long obj_size, unsigned long count) {
     struct SecureAllocator sa;
@@ -13,11 +13,11 @@ struct SecureAllocator SecureAllocator::new(unsigned long obj_size, unsigned lon
     return sa;
 }
 
-inline ?&heap void SecureAllocator::alloc(unsigned long size, unsigned long align) {
+inline ?&heap unsigned char SecureAllocator::alloc(unsigned long size, unsigned long align) {
     return self.slab.alloc(size, align);
 }
 
-inline void SecureAllocator::dealloc(?&heap void ptr) {
+inline void SecureAllocator::dealloc(?&heap unsigned char ptr) {
     if (ptr.is_null()) { return; }
     // Zero the slot before returning it to the free list.
     unsafe { memset(ptr, 0, self.slab.obj_size); }
@@ -33,11 +33,11 @@ inline void SecureAllocator::destroy() { self.drop(); }
 inline void SecureAllocator::drop() {
     // Zero all backing memory before freeing.
     unsafe {
-        if ((void*)self.slab.base != (void*)0) {
+        if ((unsigned char*)self.slab.base != (unsigned char*)0) {
             // Every slot's whole stride (with SlabAllocator::new that is
             // obj_size plus its 8-byte tag), not just obj_size * cap.
             unsigned long total = self.slab.slot_stride_() * self.slab.cap;
-            memset((void*)self.slab.base, 0, total);
+            memset((unsigned char*)self.slab.base, 0, total);
         }
     }
     self.slab.destroy();

@@ -6,8 +6,8 @@
 
 namespace std {
 
-extern void* memcpy(void* d, const void* s, size_t n);
-extern void* memset(void* p, int v, size_t n);
+extern unsigned char* memcpy(unsigned char* d, const unsigned char* s, size_t n);
+extern unsigned char* memset(unsigned char* p, int v, size_t n);
 
 // ── SHA-256 constants ─────────────────────────────────────────────────────────
 
@@ -101,7 +101,7 @@ inline struct Sha256Ctx Sha256Ctx::new() {
     while (i < 8) { ctx.h[i] = sha256_H0_[i]; i = i + 1; }
     ctx.total_bytes = (unsigned long)0;
     ctx.is224       = 0;
-    unsafe { memset((void*)ctx.buf, 0, (unsigned long)SHA256_BLOCK_SIZE); }
+    unsafe { memset((unsigned char*)ctx.buf, 0, (unsigned long)SHA256_BLOCK_SIZE); }
     return ctx;
 }
 
