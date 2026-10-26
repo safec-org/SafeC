@@ -496,3 +496,34 @@ void tmp_tok_spelling(int kind, int sid) {
     }
     tmp_punct(kind);
 }
+
+// IEEE single bits of the double with bits 'b' (round to nearest even)
+long f32_bits_of_f64(long b) {
+    long sign = (b >> 63L) & 1L;
+    long ex = (b >> 52L) & 2047L;
+    long mant = b & 4503599627370495L;
+    if (ex == 2047L) {
+        if (mant != 0L) { return (sign << 31L) | 2143289344L; }   // NaN
+        return (sign << 31L) | 2139095040L;                        // inf
+    }
+    if (ex == 0L) { return sign << 31L; }
+    long e = ex - 1023L + 127L;
+    long m = mant | 4503599627370496L;    // implicit 1, 53 bits
+    int shift = 29;
+    if (e <= 0L) {
+        shift = 29 + (int)(1L - e);
+        e = 0L;
+        if (shift > 60) { return sign << 31L; }
+    }
+    long q = m >> (long)shift;
+    long r = m & ((1L << (long)shift) - 1L);
+    long half = 1L << (long)(shift - 1);
+    if (r > half || (r == half && (q & 1L) != 0L)) { q = q + 1L; }
+    if (e == 0L) {
+        // subnormal (q may round up into the smallest normal)
+        return (sign << 31L) | q;
+    }
+    if (q >= 16777216L) { q = q >> 1L; e = e + 1L; }
+    if (e >= 255L) { return (sign << 31L) | 2139095040L; }
+    return (sign << 31L) | (e << 23L) | (q & 8388607L);
+}

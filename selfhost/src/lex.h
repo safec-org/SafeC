@@ -16,3 +16,4 @@ int push_ptok(int kind, int sid, int line, int col, int flags, long ival);
 int punct1(int c);
 int punct2(int c0, int c1);
 int punct3(int c0, int c1, int c2);
+long f32_bits_of_f64(long b);
