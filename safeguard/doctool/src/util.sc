@@ -8,7 +8,7 @@ int util_write_file(const &char path, const &String data) {
     struct String dir = path_dirname(path);
     if (dir.len > 0UL) { dir_create_all(dir.as_ptr()); }
     dir.free();
-    return File::write_bytes(path, data.as_ptr(), data.len);
+    return File::write_bytes(path, data.as_bytes());
 }
 
 static void push_esc_char(&String out, char c) {
