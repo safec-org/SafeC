@@ -275,7 +275,7 @@ void JoinAll::drop() {
     unsigned long i = 0UL;
     while (i < n) {
         unsigned long long bit = 1ULL << i;
-        if ((self.done & bit) == 0ULL) { self.futs[i].drop(); self.done = self.done | bit; }
+        if ((self.done & bit) == 0ULL) { unsafe { self.futs[i].drop(); } self.done = self.done | bit; }   // in place: a Future's drop() is idempotent
         i = i + 1UL;
     }
 }
@@ -293,7 +293,7 @@ generic<A: Future, B: Future, TA, TB>
 struct Poll<struct Either<TA, TB>> Select2::poll(&Context cx) {
     struct Poll<TA> pa = self.a.poll(cx);
     if (pa.ready_ != 0) {
-        self.b.drop();
+        unsafe { self.b.drop(); }   // in place, early: a Future's drop() is idempotent
         self.finished = 1;
         struct Either<TA, TB> e;
         e.which = 1;
@@ -303,7 +303,7 @@ struct Poll<struct Either<TA, TB>> Select2::poll(&Context cx) {
     pa.drop();
     struct Poll<TB> pb = self.b.poll(cx);
     if (pb.ready_ != 0) {
-        self.a.drop();
+        unsafe { self.a.drop(); }   // in place, early: a Future's drop() is idempotent
         self.finished = 1;
         struct Either<TA, TB> e;
         e.which = 2;
@@ -347,7 +347,7 @@ struct Poll<struct Picked<T>> SelectAny::poll(&Context cx) {
         else {
             unsigned long k = 0UL;
             while (k < n) {
-                if (k != i) self.futs[k].drop();
+                if (k != i) { unsafe { self.futs[k].drop(); } }   // in place: a Future's drop() is idempotent
                 k = k + 1UL;
             }
             self.finished = 1;
@@ -365,7 +365,7 @@ generic<F: Future, T>
 void SelectAny::drop() {
     if (self.finished != 0) return;
     unsigned long i = 0UL;
-    while (i < self.futs.len) { self.futs[i].drop(); i = i + 1UL; }
+    while (i < self.futs.len) { unsafe { self.futs[i].drop(); } i = i + 1UL; }   // the futures belong to the caller's slice
     self.finished = 1;
 }
 
@@ -382,7 +382,7 @@ generic<F: Future, T>
 struct Poll<?T> Timeout::poll(&Context cx) {
     struct Poll<T> p = self.inner.poll(cx);
     if (p.ready_ != 0) {
-        self.sleep.drop();
+        unsafe { self.sleep.drop(); }   // in place, early: a Future's drop() is idempotent
         self.finished = 1;
         ?T v = p.take();
         return Poll::ready(v);
@@ -390,7 +390,7 @@ struct Poll<?T> Timeout::poll(&Context cx) {
     p.drop();
     struct Poll<Unit> s = self.sleep.poll(cx);
     if (s.ready_ != 0) {
-        self.inner.drop();
+        unsafe { self.inner.drop(); }   // in place, early: a Future's drop() is idempotent
         self.finished = 1;
         ?T none = null;
         return Poll::ready(none);

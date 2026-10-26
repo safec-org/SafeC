@@ -157,14 +157,14 @@ generic<F: Future, T>
 struct Poll<?T> Cancellable::poll(&Context cx) {
     struct Poll<Unit> pc = self.c.poll(cx);
     if (pc.ready_ != 0) {
-        self.inner.drop();
+        unsafe { self.inner.drop(); }   // in place, early: a Future's drop() is idempotent
         self.finished = 1;
         ?T none = null;
         return Poll::ready(none);
     }
     struct Poll<T> p = self.inner.poll(cx);
     if (p.ready_ != 0) {
-        self.c.drop();
+        unsafe { self.c.drop(); }   // in place, early: a Future's drop() is idempotent
         self.finished = 1;
         ?T v = p.value;
         return Poll::ready(v);

@@ -285,15 +285,7 @@ int Router::listen(const &HttpServerConfig cfg) {
 void Router::free() { self.drop(); }
 
 void Router::drop() {
-    unsigned long i = 0UL;
-    while (i < self.routes.length()) {
-        &HttpRoute_ rt = self.routes.at(i);
-        rt.method.free();
-        rt.pattern.free();
-        rt.dir.free();
-        i = i + 1UL;
-    }
-    self.routes.free();
+    self.routes.drop();   // and each route's strings
     self.middleware.free();
     self.cors_origin.free();
     self.cors_methods.free();

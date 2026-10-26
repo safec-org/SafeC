@@ -1630,8 +1630,7 @@ int tls_safec_client_(&TlsStream s, const &char name, const &TlsConfig cfg) {
         t.name.push(name);
         if (!cfg.alpn.is_empty()) {
             struct Vec<unsigned char> w = tls_alpn_wire_(cfg.alpn.as_ptr());
-            t.alpn.free();
-            t.alpn = w;
+            std::replace(&t.alpn, w).drop();
         }
         if (!cfg.ca_pem.is_empty()) { tls_trust_add_pem_(&t.extra, cfg.ca_pem.as_ptr()); }
         if (!cfg.ca_file.is_empty()) {
@@ -1686,8 +1685,7 @@ int tls_safec_acceptor_(&TlsAcceptor a, const &TlsServerConfig cfg, &TlsError e)
             return TLS_ERR_CONFIG;
         }
         if (!cfg.alpn.is_empty()) {
-            acc->alpn.free();
-            acc->alpn = tls_alpn_wire_(cfg.alpn.as_ptr());
+            std::replace(&acc->alpn, tls_alpn_wire_(cfg.alpn.as_ptr())).drop();
         }
         if (cfg.verify_client != 0) {
             if (tls_trust_add_pem_(&acc->client_ca, cfg.client_ca_pem.as_ptr()) == 0UL) {
@@ -1735,8 +1733,8 @@ int tls_safec_accept_(&TlsStream s, const &TlsAcceptor a) {
 static void t13_fill_info_(&TlsStream s, &T13_ t) {
     s.version_ = TLS_VERSION_1_3;
     tls_copy_cstr_(&s.cipher_[0], 64UL, tls_suite_name_(t.suite));
-    s.peer_der_.free();
-    s.peer_der_ = Vec::new();
+    struct Vec<unsigned char> none = Vec::new();
+    std::replace(&s.peer_der_, none).drop();
     if (t.peer_chain.len > 0UL) {
         &Vec<unsigned char> leaf = t.peer_chain.at(0UL);
         s.peer_der_ = leaf.clone();

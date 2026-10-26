@@ -181,14 +181,13 @@ struct Poll<Unit> Sleep::poll(&Context cx) {
             if (self.deadline <= tq.now_ms_) {
                 if (self.id != 0) { tq.cancel_locked_(self.id); self.id = 0; }
                 if (self.ovf_id != 0) { tq.overflow.remove(self.ovf_id); self.ovf_id = 0; }
-                if (self.has_waker != 0) { self.has_waker = 0; self.waker.drop(); }
+                if (self.has_waker != 0) { self.has_waker = 0; std::replace(&self.waker, Waker::noop()).drop(); }
                 self.fired = 1;
                 tq.lock.unlock();
                 return Poll::ready(UNIT);
             }
             if (self.has_waker == 0 || self.waker.will_wake(&cx.waker) == 0) {
-                if (self.has_waker != 0) self.waker.drop();
-                self.waker = cx.waker.clone();
+                std::replace(&self.waker, cx.waker.clone()).drop();   // the old waker, or the empty one
                 self.has_waker = 1;
             }
             int busy = 0;
@@ -219,12 +218,13 @@ void Sleep::drop() {
             if (self.id != 0 && self.fired == 0) tq.cancel_locked_(self.id);
             self.id = 0;
             if (self.ovf_id != 0) { tq.overflow.remove(self.ovf_id); self.ovf_id = 0; }
-            if (self.has_waker != 0) { self.has_waker = 0; self.waker.drop(); }
+            self.has_waker = 0;
             self.fired = 1;
             tq.lock.unlock();
         }
         case null: { self.fired = 1; }
     }
+    self.waker.drop();   // a dropped Waker is empty: reset() may reuse it
 }
 
 void Sleep::reset(long long ms) {

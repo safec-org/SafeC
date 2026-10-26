@@ -1316,8 +1316,7 @@ static struct HttpResponse http_exchange_(const &char host, unsigned short port,
             if (statusCode < 100 || statusCode > 999) { restHeaders.free(); good = 0; break; }
             if (statusCode < 200 && statusCode != 101) { restHeaders.free(); continue; }
             resp.status = statusCode;
-            resp.headers.free();
-            resp.headers = restHeaders;
+            std::replace(&resp.headers, restHeaders).drop();
             break;
         }
         if (good && !isHead && http_status_has_body_(resp.status)) {
@@ -1616,18 +1615,15 @@ static int http_read_request_(&BufReader<TcpStream> in, const &HttpServerConfig 
         if (parts[0].is_empty() || parts[1].is_empty()) { good = 0; }
     }
     if (good) {
-        req.method.free();
-        req.method = parts[0].clone();
-        req.path.free();
-        req.path = parts[1].clone();
+        std::replace(&req.method, parts[0].clone()).drop();
+        std::replace(&req.path, parts[1].clone()).drop();
         http_origin_form_(&req.path);
     }
     unsigned long pi = 0UL;
     while (pi < np) { unsafe { parts[pi].free(); } pi = pi + 1UL; }   // split filled the first np
     unsafe { forget(parts); }                                          // ... all freed above
     requestLine.free();
-    req.headers.free();
-    req.headers = rest;
+    std::replace(&req.headers, rest).drop();
     if (!good) { return HTTP_READ_ERROR_; }
 
     const &char h = req.headers.as_ptr();
@@ -2217,10 +2213,8 @@ static struct HttpRequest http_parse_request_from_buf_(struct String* buf, long 
         struct String parts[8];
         unsigned long np = requestLine.split(" ", parts, 8UL);
         if (np >= 2UL) {
-            req.method.free();
-            req.method = parts[0].clone();
-            req.path.free();
-            req.path = parts[1].clone();
+            std::replace(&req.method, parts[0].clone()).drop();
+            std::replace(&req.path, parts[1].clone()).drop();
         } else {
             good = 0;
         }
@@ -2228,8 +2222,7 @@ static struct HttpRequest http_parse_request_from_buf_(struct String* buf, long 
         while (pi < np) { parts[pi].free(); pi = pi + 1UL; }
         requestLine.free();
 
-        req.headers.free();
-        req.headers = restHeaders;
+        std::replace(&req.headers, restHeaders).drop();
 
         // By the time this is called, the task's read phases have already
         // accumulated the full body (Content-Length bytes past headerEnd) —
@@ -2244,8 +2237,7 @@ static struct HttpRequest http_parse_request_from_buf_(struct String* buf, long 
             if (clok && (unsigned long)headerEnd + cl < bodyEnd) bodyEnd = (unsigned long)headerEnd + cl;
         }
         clStr.free();
-        req.body.free();
-        req.body = buf->substr((unsigned long)headerEnd, bodyEnd);
+        std::replace(&req.body, buf->substr((unsigned long)headerEnd, bodyEnd)).drop();
 
         if (ok != (int*)0) { *ok = good; }
     }

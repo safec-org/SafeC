@@ -114,9 +114,8 @@ struct WakerSlot WakerSlot::new() {
 void WakerSlot::register_(const &Waker w) {
     if (self.set != 0) {
         if (self.w.will_wake(w) != 0) return;
-        self.w.drop();
     }
-    self.w = w.clone();
+    std::replace(&self.w, w.clone()).drop();   // the old waker, or the empty one
     self.set = 1;
 }
 
@@ -135,7 +134,7 @@ void WakerSlot::drop() {
 void WakerSlot::clear() {
     if (self.set == 0) return;
     self.set = 0;
-    self.w.drop();
+    std::replace(&self.w, Waker::noop()).drop();
 }
 
 // ── WaitList ───────────────────────────────────────────────────────────────
@@ -167,10 +166,7 @@ int WaitList::contains(int id) const {
 int WaitList::add(int id, const &Waker w) {
     if (self.contains(id) != 0) {
         int slot = waitlist_slot_(id);
-        if (self.w[slot].will_wake(w) == 0) {
-            self.w[slot].drop();
-            self.w[slot] = w.clone();
-        }
+        if (self.w[slot].will_wake(w) == 0) std::replace(&self.w[slot], w.clone()).drop();
         return id;
     }
     int i = 0;
@@ -192,7 +188,7 @@ void WaitList::remove(int id) {
     if (self.contains(id) == 0) return;
     int slot = waitlist_slot_(id);
     self.serial[slot] = 0;
-    self.w[slot].drop();
+    std::replace(&self.w[slot], Waker::noop()).drop();
     self.count = self.count - 1;
 }
 

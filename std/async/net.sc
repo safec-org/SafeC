@@ -171,7 +171,7 @@ void IoDriver::close_() {
     while (i < ASYNC_IO_WAITERS) {
         if (self.waiters[i].serial != 0) {
             self.waiters[i].serial = 0;
-            self.waiters[i].w.drop();
+            std::replace(&self.waiters[i].w, Waker::noop()).drop();
         }
         i = i + 1;
     }
@@ -223,10 +223,7 @@ int IoDriver::wait(int fd, int filter, const &Waker w, int id) {
     if (io_valid_(self, id) != 0) {
         int slot = io_slot_(id);
         if (self.waiters[slot].fd == fd && self.waiters[slot].filter == filter) {
-            if (self.waiters[slot].w.will_wake(w) == 0) {
-                self.waiters[slot].w.drop();
-                self.waiters[slot].w = w.clone();
-            }
+            if (self.waiters[slot].w.will_wake(w) == 0) std::replace(&self.waiters[slot].w, w.clone()).drop();
             return id;
         }
         self.cancel(id);
@@ -271,7 +268,7 @@ int IoDriver::wait(int fd, int filter, const &Waker w, int id) {
 void IoDriver::cancel(int id) {
     if (io_valid_(self, id) == 0) return;
     int slot = io_slot_(id);
-    self.waiters[slot].w.drop();
+    std::replace(&self.waiters[slot].w, Waker::noop()).drop();
     io_free_slot_(self, slot);
 }
 

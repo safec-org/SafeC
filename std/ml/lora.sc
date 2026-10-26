@@ -164,8 +164,8 @@ void LoraMlp::detach() {
     }
     unsigned long k = 0UL;
     while (k < self.A.length()) { lora_drop_(*self.A.at(k)); lora_drop_(*self.B.at(k)); k = k + 1UL; }
-    self.A.free();
-    self.B.free();
+    self.A.clear();   // the adapters are gone; the (empty) lists stay
+    self.B.clear();
 }
 
 // ══ NF4 ══════════════════════════════════════════════════════════════════════

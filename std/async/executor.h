@@ -211,7 +211,7 @@ int async_task_poll_(?&AsyncTask<F, T> tp, &Context cx) {
 generic<F, T>
 void async_task_drop_(?&AsyncTask<F, T> tp) {
     match (tp) {
-        case some(t): t.fut.drop();
+        case some(t): { unsafe { t.fut.drop(); } }   // the executor's abort: the task drops nothing again
         case null: { }
     }
 }

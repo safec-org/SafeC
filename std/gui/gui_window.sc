@@ -280,9 +280,11 @@ struct GuiWindow GuiWindow::create_with(const &GuiWindowOptions opts) {
     st.lastDownMs = -1000000.0;
 
     if (!b.window_create(st, opts)) {
-        st.queue.free();
-        st.title.free();
-        unsafe { dealloc_raw_((void*)st); }
+        unsafe {   // the state block (raw heap) is taken apart and freed
+            st.queue.free();
+            st.title.free();
+            dealloc_raw_((void*)st);
+        }
         return win;
     }
     gGuiNextId = gGuiNextId + 1U;
@@ -329,9 +331,11 @@ void GuiWindow::drop() {
                 }
                 i = i + 1UL;
             }
-            st.queue.free();
-            st.title.free();
-            unsafe { dealloc_raw_((void*)st); }
+            unsafe {   // the state block (raw heap) is taken apart and freed
+                st.queue.free();
+                st.title.free();
+                dealloc_raw_((void*)st);
+            }
         }
         case null: { }
     }
@@ -521,8 +525,7 @@ void GuiWindow::set_title(const &char title) {
     match (ost) {
         case null: return;
         case some(st): {
-            st.title.free();
-            st.title = String::from(title);
+            std::replace(&st.title, String::from(title)).drop();
             &GuiBackend b = gui_backend();
             b.window_set_title(st, title);
         }

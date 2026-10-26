@@ -81,9 +81,10 @@ void GuiApp::close_window(&GuiWindow win) {
         if (same) {
             self.windows.remove(i);
             match (r.ui) { case some(ui): { ui.free(); } case null: { } }
-            if (r.canvasReady) { r.canvas.free(); }
-            r.win.destroy();
             unsafe {
+                // The record (raw heap, freed below) is taken apart in place.
+                if (r.canvasReady) { r.canvas.free(); }
+                r.win.destroy();
                 dealloc_raw_((void*)r.win);
                 dealloc_raw_((void*)r);
             }
