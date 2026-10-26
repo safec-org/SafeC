@@ -11,6 +11,7 @@
 #pragma once
 #include <std/stddef.h>
 #include <std/ml/gpu_cuda.h>
+#include <std/ml/cuda_ffi.h>
 #include <std/ml/float16.h>
 #include <std/math.h>
 #include <std/mem.h>
@@ -24,74 +25,80 @@ extern int cuDeviceGetCount(int* count);
 extern int cuDeviceGet(int* device, int ordinal);
 extern int cuDeviceGetAttribute(int* value, int attr, int device);
 extern int cuDeviceGetName(char* name, int len, int device);
-extern int cuDevicePrimaryCtxRetain(void** pctx, int device);
-extern int cuCtxSetCurrent(void* ctx);
-extern int cuCtxGetCurrent(void** pctx);
-extern int cuStreamCreate(void** stream, unsigned int flags);
-extern int cuStreamSynchronize(void* stream);
+extern int cuDevicePrimaryCtxRetain(CuContext_** pctx, int device);
+extern int cuCtxSetCurrent(CuContext_* ctx);
+extern int cuCtxGetCurrent(CuContext_** pctx);
+extern int cuStreamCreate(CudaNativeStream** stream, unsigned int flags);
+extern int cuStreamSynchronize(CudaNativeStream* stream);
 extern int cuMemAlloc_v2(unsigned long long* dptr, size_t bytes);
 extern int cuMemFree_v2(unsigned long long dptr);
-extern int cuMemAllocHost_v2(void** pp, size_t bytes);
-extern int cuMemcpyHtoDAsync_v2(unsigned long long dst, const void* src, size_t bytes, void* stream);
-extern int cuMemcpyDtoHAsync_v2(void* dst, unsigned long long src, size_t bytes, void* stream);
-extern int cuMemcpyDtoDAsync_v2(unsigned long long dst, unsigned long long src, size_t bytes, void* stream);
-extern int cuEventCreate(void** event, unsigned int flags);
-extern int cuEventRecord(void* event, void* stream);
-extern int cuEventSynchronize(void* event);
-extern int cuStreamWaitEvent(void* stream, void* event, unsigned int flags);
-extern int cuMemsetD32Async(unsigned long long dst, unsigned int value, size_t n, void* stream);
-extern int cuModuleLoadData(void** module, const void* image);
-extern int cuModuleGetFunction(void** func, void* module, const char* name);
-extern int cuLaunchKernel(void* f, unsigned int gx, unsigned int gy, unsigned int gz,
+extern int cuMemAllocHost_v2(unsigned char** pp, size_t bytes);
+extern int cuMemcpyHtoDAsync_v2(unsigned long long dst, const unsigned char* src, size_t bytes, CudaNativeStream* stream);
+extern int cuMemcpyDtoHAsync_v2(unsigned char* dst, unsigned long long src, size_t bytes, CudaNativeStream* stream);
+extern int cuMemcpyDtoDAsync_v2(unsigned long long dst, unsigned long long src, size_t bytes, CudaNativeStream* stream);
+extern int cuEventCreate(CuEvent_** event, unsigned int flags);
+extern int cuEventRecord(CuEvent_* event, CudaNativeStream* stream);
+extern int cuEventSynchronize(CuEvent_* event);
+extern int cuStreamWaitEvent(CudaNativeStream* stream, CuEvent_* event, unsigned int flags);
+extern int cuMemsetD32Async(unsigned long long dst, unsigned int value, size_t n, CudaNativeStream* stream);
+extern int cuModuleLoadData(CudaNativeModule** module, const char* image);
+extern int cuModuleGetFunction(CuFunction_** func, CudaNativeModule* module, const char* name);
+extern int cuLaunchKernel(CuFunction_* f, unsigned int gx, unsigned int gy, unsigned int gz,
                           unsigned int bx, unsigned int by, unsigned int bz,
-                          unsigned int shared, void* stream, void** params, void** extra);
-extern int cuStreamBeginCapture_v2(void* stream, int mode);
-extern int cuStreamEndCapture(void* stream, void** graph);
-extern int cuGraphInstantiateWithFlags(void** exec, void* graph, unsigned long long flags);
-extern int cuGraphLaunch(void* exec, void* stream);
-extern int cuGraphDestroy(void* graph);
-extern int cuGraphExecDestroy(void* exec);
+                          unsigned int shared, CudaNativeStream* stream, CuKernelArg_** params, CuKernelArg_** extra);
+extern int cuStreamBeginCapture_v2(CudaNativeStream* stream, int mode);
+extern int cuStreamEndCapture(CudaNativeStream* stream, CuGraph_** graph);
+extern int cuGraphInstantiateWithFlags(CuGraphExec_** exec, CuGraph_* graph, unsigned long long flags);
+extern int cuGraphLaunch(CuGraphExec_* exec, CudaNativeStream* stream);
+extern int cuGraphDestroy(CuGraph_* graph);
+extern int cuGraphExecDestroy(CuGraphExec_* exec);
 
-extern int nvrtcCreateProgram(void** prog, const char* src, const char* name, int numHeaders,
+extern int nvrtcCreateProgram(NvrtcProgram_** prog, const char* src, const char* name, int numHeaders,
                               const char** headers, const char** includeNames);
-extern int nvrtcCompileProgram(void* prog, int numOptions, const char** options);
-extern int nvrtcGetCUBINSize(void* prog, size_t* size);
-extern int nvrtcGetCUBIN(void* prog, char* cubin);
-extern int nvrtcGetProgramLogSize(void* prog, size_t* size);
-extern int nvrtcGetProgramLog(void* prog, char* log);
-extern int nvrtcDestroyProgram(void** prog);
+extern int nvrtcCompileProgram(NvrtcProgram_* prog, int numOptions, const char** options);
+extern int nvrtcGetCUBINSize(NvrtcProgram_* prog, size_t* size);
+extern int nvrtcGetCUBIN(NvrtcProgram_* prog, char* cubin);
+extern int nvrtcGetProgramLogSize(NvrtcProgram_* prog, size_t* size);
+extern int nvrtcGetProgramLog(NvrtcProgram_* prog, char* log);
+extern int nvrtcDestroyProgram(NvrtcProgram_** prog);
 
-extern int cublasCreate_v2(void** handle);
-extern int cublasSetStream_v2(void* handle, void* stream);
-extern int cublasSetWorkspace_v2(void* handle, void* workspace, size_t bytes);
-extern int cublasSetMathMode(void* handle, int mode);
-extern int cublasSgemm_v2(void* handle, int transa, int transb, int m, int n, int k,
+extern int cublasCreate_v2(CublasHandle_** handle);
+extern int cublasSetStream_v2(CublasHandle_* handle, CudaNativeStream* stream);
+extern int cublasSetWorkspace_v2(CublasHandle_* handle, CuDevPtr_* workspace, size_t bytes);
+extern int cublasSetMathMode(CublasHandle_* handle, int mode);
+extern int cublasSgemm_v2(CublasHandle_* handle, int transa, int transb, int m, int n, int k,
                           const float* alpha, const float* A, int lda,
                           const float* B, int ldb,
                           const float* beta, float* C, int ldc);
 
-extern int cublasGemmEx(void* handle, int transa, int transb, int m, int n, int k, const void* alpha,
-                        const void* a, int aType, int lda, const void* b, int bType, int ldb,
-                        const void* beta, void* c, int cType, int ldc, int computeType, int algo);
-extern int cublasGemmStridedBatchedEx(void* handle, int transa, int transb, int m, int n, int k, const void* alpha,
-                                      const void* a, int aType, int lda, long long strideA,
-                                      const void* b, int bType, int ldb, long long strideB, const void* beta,
-                                      void* c, int cType, int ldc, long long strideC, int batch,
+// alpha / beta: float (computeType CUBLAS_COMPUTE_32F*)
+extern int cublasGemmEx(CublasHandle_* handle, int transa, int transb, int m, int n, int k, const float* alpha,
+                        const CuDevPtr_* a, int aType, int lda, const CuDevPtr_* b, int bType, int ldb,
+                        const float* beta, CuDevPtr_* c, int cType, int ldc, int computeType, int algo);
+extern int cublasGemmStridedBatchedEx(CublasHandle_* handle, int transa, int transb, int m, int n, int k, const float* alpha,
+                                      const CuDevPtr_* a, int aType, int lda, long long strideA,
+                                      const CuDevPtr_* b, int bType, int ldb, long long strideB, const float* beta,
+                                      CuDevPtr_* c, int cType, int ldc, long long strideC, int batch,
                                       int computeType, int algo);
-extern int cublasLtCreate(void** handle);
-extern int cublasLtMatmulDescCreate(void** desc, int computeType, int scaleType);
-extern int cublasLtMatmulDescSetAttribute(void* desc, int attr, const void* buf, size_t size);
-extern int cublasLtMatrixLayoutCreate(void** layout, int type, unsigned long long rows,
+extern int cublasLtCreate(CublasLtHandle_** handle);
+extern int cublasLtMatmulDescCreate(CublasLtDesc_** desc, int computeType, int scaleType);
+// buf: the attribute's value, 'size' bytes
+extern int cublasLtMatmulDescSetAttribute(CublasLtDesc_* desc, int attr, const unsigned char* buf, size_t size);
+extern int cublasLtMatrixLayoutCreate(CublasLtLayout_** layout, int type, unsigned long long rows,
                                       unsigned long long cols, long long ld);
-extern int cublasLtMatmulPreferenceCreate(void** pref);
-extern int cublasLtMatmulPreferenceSetAttribute(void* pref, int attr, const void* buf, size_t size);
-extern int cublasLtMatmulPreferenceDestroy(void* pref);
-extern int cublasLtMatmulAlgoGetHeuristic(void* handle, void* desc, void* a, void* b, void* c, void* d,
-                                          void* pref, int requested, void* results, int* returned);
-extern int cublasLtMatmul(void* handle, void* desc, const void* alpha, const void* A, void* Adesc,
-                          const void* B, void* Bdesc, const void* beta, const void* C, void* Cdesc,
-                          void* D, void* Ddesc, const void* algo, void* workspace, size_t wsBytes,
-                          void* stream);
+extern int cublasLtMatmulPreferenceCreate(CublasLtPref_** pref);
+extern int cublasLtMatmulPreferenceSetAttribute(CublasLtPref_* pref, int attr, const unsigned char* buf, size_t size);
+extern int cublasLtMatmulPreferenceDestroy(CublasLtPref_* pref);
+// results: 'requested' cublasLtMatmulHeuristicResult_t (LT_RESULT_WORDS words each)
+extern int cublasLtMatmulAlgoGetHeuristic(CublasLtHandle_* handle, CublasLtDesc_* desc, CublasLtLayout_* a,
+                                          CublasLtLayout_* b, CublasLtLayout_* c, CublasLtLayout_* d,
+                                          CublasLtPref_* pref, int requested, unsigned long* results, int* returned);
+// algo: a heuristic result's leading cublasLtMatmulAlgo_t
+extern int cublasLtMatmul(CublasLtHandle_* handle, CublasLtDesc_* desc, const float* alpha, const CuDevPtr_* A,
+                          CublasLtLayout_* Adesc, const CuDevPtr_* B, CublasLtLayout_* Bdesc, const float* beta,
+                          const CuDevPtr_* C, CublasLtLayout_* Cdesc, CuDevPtr_* D, CublasLtLayout_* Ddesc,
+                          const unsigned long* algo, CuDevPtr_* workspace, size_t wsBytes,
+                          CudaNativeStream* stream);
 
 extern unsigned char* memcpy(unsigned char* dst, const unsigned char* src, size_t n);
 extern int printf(const char* fmt, ...);
@@ -715,24 +722,24 @@ static const char* cuda_kernel_name_(int k) {
 
 // ── Backend state (one per process) ──────────────────────────────────────────
 static int   g_cuda_state = 0;        // 0 = not tried, 1 = ready, -1 = unavailable
-static void* g_cuda_ctx = (void*)0;
-static void* g_cuda_stream = (void*)0;
-static void* g_cuda_blas = (void*)0;
-static void* g_cuda_lt = (void*)0;
+static CuContext_* g_cuda_ctx = (CuContext_*)0;
+static CudaNativeStream* g_cuda_stream = (CudaNativeStream*)0;
+static CublasHandle_* g_cuda_blas = (CublasHandle_*)0;
+static CublasLtHandle_* g_cuda_lt = (CublasLtHandle_*)0;
 static unsigned long long g_cuda_ws = 0ULL;
-static void* g_cuda_staging = (void*)0;
+static unsigned char* g_cuda_staging = (unsigned char*)0;
 // Pinned transfer lanes (allocated on the first large transfer). Lane k
 // has its own stream, two pinned buffers g_cuda_pipe[2k + b], each with an
 // event recorded after the last copy that used it (g_cuda_pipe_busy = 1
 // while that copy may still be in flight), and an end event.
 static int   g_cuda_pipe_state = 0;   // 0 = not tried, 1 = ready, -1 = unavailable
-static void* g_cuda_pipe[CUDA_PIPE_LANES * 2];
-static void* g_cuda_pipe_ev[CUDA_PIPE_LANES * 2];
+static unsigned char* g_cuda_pipe[CUDA_PIPE_LANES * 2];
+static CuEvent_* g_cuda_pipe_ev[CUDA_PIPE_LANES * 2];
 static int   g_cuda_pipe_busy[CUDA_PIPE_LANES * 2];
-static void* g_cuda_lane_stream[CUDA_PIPE_LANES];
-static void* g_cuda_lane_end[CUDA_PIPE_LANES];
+static CudaNativeStream* g_cuda_lane_stream[CUDA_PIPE_LANES];
+static CuEvent_* g_cuda_lane_end[CUDA_PIPE_LANES];
 static int   g_cuda_lane_ok[CUDA_PIPE_LANES];
-static void* g_cuda_pipe_start = (void*)0;
+static CuEvent_* g_cuda_pipe_start = (CuEvent_*)0;
 // Lanes 1.. run on their own threads (lane 0 on the caller), parked on
 // g_cuda_lane_wake between copies: waking three threads costs much less
 // than a whole-machine pool would, and they never contend with it.
@@ -745,8 +752,8 @@ static unsigned long g_cuda_lane_count = 0UL;    // lanes in the current copy
 static unsigned long g_cuda_lane_threads = 0UL;  // helper threads started
 static unsigned long g_cuda_lane_ids[CUDA_PIPE_LANES];
 static unsigned long g_cuda_lane_born[CUDA_PIPE_LANES];   // g_cuda_lane_gen when each was started
-static void* g_cuda_lane_job = (void*)0;
-static void* g_cuda_fn[K_COUNT];
+static ?&CudaLaneJob g_cuda_lane_job = null;
+static CuFunction_* g_cuda_fn[K_COUNT];
 static char  g_cuda_name[256];
 static int   g_cuda_blocks_cap = 0;   // 0 = use CUDA_MAX_BLOCKS
 static int   g_cuda_sms = 0;          // the GPU's SM count
@@ -758,10 +765,10 @@ static long  g_lt_key0[LT_CACHE];     // ta | tb << 1 | tf32 << 2 | epilogue << 
 static long  g_lt_m[LT_CACHE];
 static long  g_lt_n[LT_CACHE];
 static long  g_lt_k[LT_CACHE];
-static void* g_lt_desc[LT_CACHE];
-static void* g_lt_la[LT_CACHE];
-static void* g_lt_lb[LT_CACHE];
-static void* g_lt_lc[LT_CACHE];
+static CublasLtDesc_* g_lt_desc[LT_CACHE];
+static CublasLtLayout_* g_lt_la[LT_CACHE];
+static CublasLtLayout_* g_lt_lb[LT_CACHE];
+static CublasLtLayout_* g_lt_lc[LT_CACHE];
 static unsigned long g_lt_algo[LT_CACHE * LT_RESULT_WORDS];
 
 // Compiles the kernel source for sm_<major><minor> and loads every kernel.
@@ -769,10 +776,10 @@ static int g_cuda_cc = 0;   // compute capability, major * 10 + minor (90 on an 
 
 // Compiles CUDA C++ 'src' with NVRTC to a cubin for the selected GPU
 // (-arch=sm_<cc>) and loads it; null on failure (the compile log is printed).
-static ?&void cuda_compile_module_(const char* src, const char* name) {
+static ?&CudaNativeModule cuda_compile_module_(const char* src, const char* name) {
     unsafe {
-        void* prog = (void*)0;
-        if (nvrtcCreateProgram(&prog, src, name, 0, (const char**)0, (const char**)0) != 0) return (void*)0;
+        NvrtcProgram_* prog = (NvrtcProgram_*)0;
+        if (nvrtcCreateProgram(&prog, src, name, 0, (const char**)0, (const char**)0) != 0) return null;
         char arch[32];
         int v = g_cuda_cc;
         // "-arch=sm_" + two or three digits
@@ -797,18 +804,18 @@ static ?&void cuda_compile_module_(const char* src, const char* name) {
                 dealloc(log);
             }
             nvrtcDestroyProgram(&prog);
-            return (void*)0;
+            return null;
         }
         size_t size = 0UL;
         nvrtcGetCUBINSize(prog, &size);
         char* cubin = (char*)alloc_raw_(size);
-        if (cubin == (char*)0) { nvrtcDestroyProgram(&prog); return (void*)0; }
+        if (cubin == (char*)0) { nvrtcDestroyProgram(&prog); return null; }
         nvrtcGetCUBIN(prog, cubin);
         nvrtcDestroyProgram(&prog);
-        void* module = (void*)0;
-        int loaded = cuModuleLoadData(&module, (const void*)cubin);
+        CudaNativeModule* module = (CudaNativeModule*)0;
+        int loaded = cuModuleLoadData(&module, (const char*)cubin);
         dealloc(cubin);
-        if (loaded != CUDA_OK) return (void*)0;
+        if (loaded != CUDA_OK) return null;
         return module;
     }
 }
@@ -816,8 +823,8 @@ static ?&void cuda_compile_module_(const char* src, const char* name) {
 // Compiles + loads this file's kernels for the selected GPU.
 static int cuda_build_kernels_() {
     unsafe {
-        void* module = cuda_compile_module_(cuda_kernel_source_(), "safec_cuda.cu");
-        if (module == (void*)0) return 0;
+        CudaNativeModule* module = (CudaNativeModule*)cuda_compile_module_(cuda_kernel_source_(), "safec_cuda.cu");
+        if (module == (CudaNativeModule*)0) return 0;
         int k = 0;
         while (k < K_COUNT) {
             if (cuModuleGetFunction(&g_cuda_fn[k], module, cuda_kernel_name_(k)) != CUDA_OK) return 0;
@@ -835,7 +842,7 @@ static int cuda_build_kernels_() {
 static int cuda_ensure_() {
     if (g_cuda_state == 1) {
         unsafe {
-            void* cur = (void*)0;
+            CuContext_* cur = (CuContext_*)0;
             cuCtxGetCurrent(&cur);
             if (cur != g_cuda_ctx) cuCtxSetCurrent(g_cuda_ctx);
         }
@@ -876,8 +883,8 @@ static int cuda_ensure_() {
         if (cuMemAllocHost_v2(&g_cuda_staging, CUDA_STAGING_BYTES) != CUDA_OK) return 0;
         if (cublasCreate_v2(&g_cuda_blas) != 0) return 0;
         cublasSetStream_v2(g_cuda_blas, g_cuda_stream);
-        cublasSetWorkspace_v2(g_cuda_blas, (void*)(unsigned long)g_cuda_ws, CUDA_WORKSPACE_BYTES);
-        if (cublasLtCreate(&g_cuda_lt) != 0) g_cuda_lt = (void*)0;   // optional: gemm_relu falls back
+        cublasSetWorkspace_v2(g_cuda_blas, (CuDevPtr_*)(unsigned long)g_cuda_ws, CUDA_WORKSPACE_BYTES);
+        if (cublasLtCreate(&g_cuda_lt) != 0) g_cuda_lt = (CublasLtHandle_*)0;   // optional: gemm_relu falls back
         int s = 0;
         while (s < LT_CACHE) { g_lt_key0[s] = -1L; s = s + 1; }
         g_cuda_cc = major * 10 + minor;
@@ -961,10 +968,10 @@ static int cuda_lane_run_(&CudaLaneJob j, int k) {
     if (base >= j.bytes) return 1;
     unsigned long len = j.bytes - base < j.part ? j.bytes - base : j.part;
     unsafe {
-        void* cur = (void*)0;
+        CuContext_* cur = (CuContext_*)0;
         cuCtxGetCurrent(&cur);
         if (cur != g_cuda_ctx && cuCtxSetCurrent(g_cuda_ctx) != CUDA_OK) return 0;   // pool threads
-        void* st = g_cuda_lane_stream[k];
+        CudaNativeStream* st = g_cuda_lane_stream[k];
         if (cuStreamWaitEvent(st, g_cuda_pipe_start, 0U) != CUDA_OK) return 0;
         char* host = j.host + base;
         unsigned long long dev = j.dev + (unsigned long long)base;
@@ -978,7 +985,7 @@ static int cuda_lane_run_(&CudaLaneJob j, int k) {
             if (!cuda_pipe_wait_(i)) return 0;
             if (j.toDevice) {
                 memcpy(g_cuda_pipe[i], (const unsigned char*)(host + off), c);
-                if (cuMemcpyHtoDAsync_v2(dev + (unsigned long long)off, (const void*)g_cuda_pipe[i], c, st) != CUDA_OK)
+                if (cuMemcpyHtoDAsync_v2(dev + (unsigned long long)off, (const unsigned char*)g_cuda_pipe[i], c, st) != CUDA_OK)
                     return 0;
             } else {
                 if (cuMemcpyDtoHAsync_v2(g_cuda_pipe[i], dev + (unsigned long long)off, c, st) != CUDA_OK) return 0;
@@ -1013,9 +1020,14 @@ static ?&unsigned long cuda_lane_worker_(?&unsigned long arg) {
         while (g_cuda_lane_gen == seen) cond_wait(&g_cuda_lane_wake, &g_cuda_lane_mu);
         seen = g_cuda_lane_gen;
         int take = k < g_cuda_lane_count;
-        void* job = g_cuda_lane_job;
+        ?&CudaLaneJob job = g_cuda_lane_job;
         mutex_unlock(&g_cuda_lane_mu);
-        if (take) { unsafe { g_cuda_lane_ok[k] = cuda_lane_run_((&CudaLaneJob)job, (int)k); } }
+        if (take) {
+            match (job) {
+                case some(jb): { g_cuda_lane_ok[k] = cuda_lane_run_(jb, (int)k); }
+                case null: { g_cuda_lane_ok[k] = 0; }
+            }
+        }
         mutex_lock(&g_cuda_lane_mu);
         if (take) {
             g_cuda_lane_pending = g_cuda_lane_pending - 1UL;
@@ -1049,7 +1061,7 @@ static unsigned long cuda_lanes_start_() {
 }
 
 // Runs a large copy over the lanes; 1 on success.
-static int cuda_lanes_copy_(void* host, unsigned long long dev, unsigned long bytes, int toDevice) {
+static int cuda_lanes_copy_(unsigned char* host, unsigned long long dev, unsigned long bytes, int toDevice) {
     struct CudaLaneJob j;
     unsafe { j.host = (char*)host; }
     j.dev = dev;
@@ -1063,7 +1075,7 @@ static int cuda_lanes_copy_(void* host, unsigned long long dev, unsigned long by
         if (cuEventRecord(g_cuda_pipe_start, g_cuda_stream) != CUDA_OK) return 0;
         if (lanes > 1UL) {
             mutex_lock(&g_cuda_lane_mu);
-            g_cuda_lane_job = (void*)&j;
+            g_cuda_lane_job = (?&CudaLaneJob)&j;
             g_cuda_lane_count = lanes;
             g_cuda_lane_pending = lanes - 1UL;
             g_cuda_lane_gen = g_cuda_lane_gen + 1UL;
@@ -1090,18 +1102,18 @@ static int cuda_lanes_copy_(void* host, unsigned long long dev, unsigned long by
 
 // Queues host -> device; returns once 'host' may be reused (the last chunks
 // may still be on their way from pinned memory).
-static int cuda_write_bytes_(unsigned long long dst, const void* host, unsigned long bytes) {
+static int cuda_write_bytes_(unsigned long long dst, const unsigned char* host, unsigned long bytes) {
     unsafe {
         if (bytes < CUDA_PIPE_MIN || !cuda_pipe_ensure_())
             return cuMemcpyHtoDAsync_v2(dst, host, bytes, g_cuda_stream) == CUDA_OK;
-        return cuda_lanes_copy_((void*)host, dst, bytes, 1);
+        return cuda_lanes_copy_((unsigned char*)host, dst, bytes, 1);
     }
 }
 
 // Waits for queued work, then copies 'bytes' to 'host'. Small reads (a
 // loss, one output value) bounce through the pinned staging buffer: a
 // pinned D2H copy is one DMA, where a pageable one adds a driver-side copy.
-static int cuda_read_bytes_(void* host, unsigned long long src, unsigned long bytes) {
+static int cuda_read_bytes_(unsigned char* host, unsigned long long src, unsigned long bytes) {
     unsafe {
         if (bytes <= CUDA_STAGING_BYTES) {
             if (cuMemcpyDtoHAsync_v2(g_cuda_staging, src, bytes, g_cuda_stream) != CUDA_OK) return 0;
@@ -1119,12 +1131,12 @@ static int cuda_read_bytes_(void* host, unsigned long long src, unsigned long by
 
 int cuda_copy_to_device(unsigned long dev, []const unsigned char host) {
     if (dev == 0UL || host.len == 0UL || !cuda_ensure_()) return 0;
-    unsafe { return cuda_write_bytes_((unsigned long long)dev, (const void*)host.ptr, host.len); }
+    unsafe { return cuda_write_bytes_((unsigned long long)dev, (const unsigned char*)host.ptr, host.len); }
 }
 
 int cuda_copy_to_host([]unsigned char host, unsigned long dev) {
     if (dev == 0UL || host.len == 0UL || !cuda_ensure_()) return 0;
-    unsafe { return cuda_read_bytes_((void*)host.ptr, (unsigned long long)dev, host.len); }
+    unsafe { return cuda_read_bytes_((unsigned char*)host.ptr, (unsigned long long)dev, host.len); }
 }
 
 struct CudaBuf CudaBuf::alloc(unsigned long n) {
@@ -1141,7 +1153,7 @@ struct CudaBuf CudaBuf::alloc(unsigned long n) {
 
 int cuda_write_n_(struct CudaBuf dst, const &float host, unsigned long n) {
     if (dst.dev == 0UL || n > dst.len || !cuda_ensure_()) return 0;
-    unsafe { return cuda_write_bytes_((unsigned long long)dst.dev, (const void*)host, n * sizeof(float)); }
+    unsafe { return cuda_write_bytes_((unsigned long long)dst.dev, (const unsigned char*)host, n * sizeof(float)); }
 }
 
 int cuda_write(struct CudaBuf dst, []const float host_s) {
@@ -1168,7 +1180,7 @@ struct CudaBuf CudaBuf::upload([]const float host_s) {
 
 int cuda_read_n_(struct CudaBuf src, &float host, unsigned long n) {
     if (src.dev == 0UL || n > src.len || !cuda_ensure_()) return 0;
-    unsafe { return cuda_read_bytes_((void*)host, (unsigned long long)src.dev, n * sizeof(float)); }
+    unsafe { return cuda_read_bytes_((unsigned char*)host, (unsigned long long)src.dev, n * sizeof(float)); }
 }
 
 int cuda_read(struct CudaBuf src, []float host_s) {
@@ -1209,11 +1221,11 @@ static unsigned int cuda_blocks_(unsigned long n) {
     return (unsigned int)blocks;
 }
 
-static int cuda_launch_(int kernel, unsigned long n, &void params) {
+static int cuda_launch_(int kernel, unsigned long n, CuKernelArg_** params) {
     unsafe {
         return cuLaunchKernel(g_cuda_fn[kernel], cuda_blocks_(n), 1U, 1U,
                               CUDA_BLOCK, 1U, 1U, 0U, g_cuda_stream,
-                              (void**)params, (void**)0) == CUDA_OK;
+                              params, (CuKernelArg_**)0) == CUDA_OK;
     }
 }
 
@@ -1221,25 +1233,25 @@ static int cuda_fits_(struct CudaBuf b, unsigned long n) { return b.dev != 0UL &
 
 static int cuda_binary_raw_(int kernel, unsigned long a, unsigned long b, unsigned long out, unsigned long n) {
     unsafe {
-        void* pa = (void*)a;
-        void* pb = (void*)b;
-        void* po = (void*)out;
+        CuDevPtr_* pa = (CuDevPtr_*)a;
+        CuDevPtr_* pb = (CuDevPtr_*)b;
+        CuDevPtr_* po = (CuDevPtr_*)out;
         unsigned int nn = (unsigned int)n;
-        void* params[4];
-        params[0] = (void*)&pa; params[1] = (void*)&pb; params[2] = (void*)&po; params[3] = (void*)&nn;
-        return cuda_launch_(kernel, n, (&void)&params[0]);
+        CuKernelArg_* params[4];
+        params[0] = (CuKernelArg_*)&pa; params[1] = (CuKernelArg_*)&pb; params[2] = (CuKernelArg_*)&po; params[3] = (CuKernelArg_*)&nn;
+        return cuda_launch_(kernel, n, &params[0]);
     }
 }
 
 static int cuda_unary_raw_(int kernel, unsigned long a, float k, unsigned long out, unsigned long n) {
     unsafe {
-        void* pa = (void*)a;
-        void* po = (void*)out;
+        CuDevPtr_* pa = (CuDevPtr_*)a;
+        CuDevPtr_* po = (CuDevPtr_*)out;
         unsigned int nn = (unsigned int)n;
         float kk = k;
-        void* params[4];
-        params[0] = (void*)&pa; params[1] = (void*)&po; params[2] = (void*)&nn; params[3] = (void*)&kk;
-        return cuda_launch_(kernel, n, (&void)&params[0]);
+        CuKernelArg_* params[4];
+        params[0] = (CuKernelArg_*)&pa; params[1] = (CuKernelArg_*)&po; params[2] = (CuKernelArg_*)&nn; params[3] = (CuKernelArg_*)&kk;
+        return cuda_launch_(kernel, n, &params[0]);
     }
 }
 
@@ -1257,7 +1269,7 @@ static int cuda_unary_(int kernel, struct CudaBuf a, float k, struct CudaBuf out
 }
 
 // out1[0] = reduction over n elements; zeroes out1 first unless the grid is one block.
-static int cuda_reduce_launch_(int kernel, unsigned long n, unsigned long out1, &void params) {
+static int cuda_reduce_launch_(int kernel, unsigned long n, unsigned long out1, CuKernelArg_** params) {
     unsafe {
         if (cuda_blocks_(n) > 1U &&
             cuMemsetD32Async((unsigned long long)out1, 0U, 1UL, g_cuda_stream) != CUDA_OK) return 0;
@@ -1309,22 +1321,22 @@ static int cuda_lt_plan_(int ta, int tb, unsigned long m, unsigned long n, unsig
         if (slot < 0 && g_lt_key0[s] == -1L) slot = s;
         s = s + 1;
     }
-    if (slot < 0 || g_cuda_lt == (void*)0) return -1;
+    if (slot < 0 || g_cuda_lt == (CublasLtHandle_*)0) return -1;
     unsafe {
         // Column-major view (see cuda_gemm_raw_): D[n,m] = op(B') op(A'),
         // with B' = row-major b (stored n x k if tb, else k x n, read
         // column-major) and A' = row-major a.
         int opA = tb ? CUDA_BLAS_T : CUDA_BLAS_N;
         int opB = ta ? CUDA_BLAS_T : CUDA_BLAS_N;
-        void* desc = (void*)0;
+        CublasLtDesc_* desc = (CublasLtDesc_*)0;
         int compute = g_cuda_tf32 && dtype == CUDA_R_32F_ ? CUDA_COMPUTE_32F_TF32 : CUDA_COMPUTE_32F;
         if (cublasLtMatmulDescCreate(&desc, compute, CUDA_R_32F_) != 0) return -1;
-        cublasLtMatmulDescSetAttribute(desc, LT_DESC_TRANSA, (const void*)&opA, sizeof(int));
-        cublasLtMatmulDescSetAttribute(desc, LT_DESC_TRANSB, (const void*)&opB, sizeof(int));
-        cublasLtMatmulDescSetAttribute(desc, LT_DESC_EPILOGUE, (const void*)&epilogue, sizeof(int));
-        void* la = (void*)0;
-        void* lb = (void*)0;
-        void* lc = (void*)0;
+        cublasLtMatmulDescSetAttribute(desc, LT_DESC_TRANSA, (const unsigned char*)&opA, sizeof(int));
+        cublasLtMatmulDescSetAttribute(desc, LT_DESC_TRANSB, (const unsigned char*)&opB, sizeof(int));
+        cublasLtMatmulDescSetAttribute(desc, LT_DESC_EPILOGUE, (const unsigned char*)&epilogue, sizeof(int));
+        CublasLtLayout_* la = (CublasLtLayout_*)0;
+        CublasLtLayout_* lb = (CublasLtLayout_*)0;
+        CublasLtLayout_* lc = (CublasLtLayout_*)0;
         unsigned long aRows = tb ? k : n;
         unsigned long aCols = tb ? n : k;
         unsigned long bRows = ta ? m : k;
@@ -1333,13 +1345,13 @@ static int cuda_lt_plan_(int ta, int tb, unsigned long m, unsigned long n, unsig
             cublasLtMatrixLayoutCreate(&lb, dtype, (unsigned long long)bRows, (unsigned long long)bCols, (long long)bRows) != 0 ||
             cublasLtMatrixLayoutCreate(&lc, dtype, (unsigned long long)n, (unsigned long long)m, (long long)n) != 0)
             return -1;
-        void* pref = (void*)0;
+        CublasLtPref_* pref = (CublasLtPref_*)0;
         if (cublasLtMatmulPreferenceCreate(&pref) != 0) return -1;
         unsigned long long wsBytes = (unsigned long long)CUDA_WORKSPACE_BYTES;
-        cublasLtMatmulPreferenceSetAttribute(pref, LT_PREF_MAX_WORKSPACE, (const void*)&wsBytes, sizeof(unsigned long long));
+        cublasLtMatmulPreferenceSetAttribute(pref, LT_PREF_MAX_WORKSPACE, (const unsigned char*)&wsBytes, sizeof(unsigned long long));
         int returned = 0;
         int hs = cublasLtMatmulAlgoGetHeuristic(g_cuda_lt, desc, la, lb, lc, lc, pref, 1,
-                                                (void*)&g_lt_algo[slot * LT_RESULT_WORDS], &returned);
+                                                &g_lt_algo[slot * LT_RESULT_WORDS], &returned);
         cublasLtMatmulPreferenceDestroy(pref);
         if (hs != 0 || returned < 1) return -1;
         g_lt_desc[slot] = desc;
@@ -1363,12 +1375,12 @@ int cuda_gemm_relu(struct CudaBuf a, int ta, struct CudaBuf b, int tb, struct Cu
         float one = 1.0f;
         float zero = 0.0f;
         unsafe {
-            if (cublasLtMatmul(g_cuda_lt, g_lt_desc[plan], (const void*)&one,
-                               (const void*)b.dev, g_lt_la[plan], (const void*)a.dev, g_lt_lb[plan],
-                               (const void*)&zero, (const void*)c.dev, g_lt_lc[plan],
-                               (void*)c.dev, g_lt_lc[plan],
-                               (const void*)&g_lt_algo[plan * LT_RESULT_WORDS],
-                               (void*)(unsigned long)g_cuda_ws, CUDA_WORKSPACE_BYTES, g_cuda_stream) == 0)
+            if (cublasLtMatmul(g_cuda_lt, g_lt_desc[plan], (const float*)&one,
+                               (const CuDevPtr_*)b.dev, g_lt_la[plan], (const CuDevPtr_*)a.dev, g_lt_lb[plan],
+                               (const float*)&zero, (const CuDevPtr_*)c.dev, g_lt_lc[plan],
+                               (CuDevPtr_*)c.dev, g_lt_lc[plan],
+                               (const unsigned long*)&g_lt_algo[plan * LT_RESULT_WORDS],
+                               (CuDevPtr_*)(unsigned long)g_cuda_ws, CUDA_WORKSPACE_BYTES, g_cuda_stream) == 0)
                 return 1;
         }
     }
@@ -1392,15 +1404,15 @@ int cuda_rmsnorm(struct CudaBuf x, struct CudaBuf w, struct CudaBuf y, unsigned 
     if (!cuda_fits_(x, rows * n) || !cuda_fits_(y, rows * n)) return 0;
     if (w.dev != 0UL && w.len < n) return 0;
     unsafe {
-        void* px = (void*)x.dev;
-        void* pw = (void*)w.dev;
-        void* py = (void*)y.dev;
+        CuDevPtr_* px = (CuDevPtr_*)x.dev;
+        CuDevPtr_* pw = (CuDevPtr_*)w.dev;
+        CuDevPtr_* py = (CuDevPtr_*)y.dev;
         unsigned int nn = (unsigned int)n;
         float e = eps;
-        void* params[5];
-        params[0] = (void*)&px; params[1] = (void*)&pw; params[2] = (void*)&py; params[3] = (void*)&nn; params[4] = (void*)&e;
+        CuKernelArg_* params[5];
+        params[0] = (CuKernelArg_*)&px; params[1] = (CuKernelArg_*)&pw; params[2] = (CuKernelArg_*)&py; params[3] = (CuKernelArg_*)&nn; params[4] = (CuKernelArg_*)&e;
         return cuLaunchKernel(g_cuda_fn[K_RMSNORM], (unsigned int)rows, 1U, 1U, CUDA_BLOCK, 1U, 1U, 0U,
-                              g_cuda_stream, &params[0], (void**)0) == CUDA_OK;
+                              g_cuda_stream, &params[0], (CuKernelArg_**)0) == CUDA_OK;
     }
 }
 int cuda_exp(struct CudaBuf a, struct CudaBuf out) { return cuda_unary_(K_EXP, a, 0.0f, out); }
@@ -1409,13 +1421,13 @@ int cuda_sqrt(struct CudaBuf a, struct CudaBuf out) { return cuda_unary_(K_SQRT,
 
 static int cuda_sgd_raw_(int kernel, unsigned long w, unsigned long g, float lr, unsigned long n) {
     unsafe {
-        void* pw = (void*)w;
-        void* pg = (void*)g;
+        CuDevPtr_* pw = (CuDevPtr_*)w;
+        CuDevPtr_* pg = (CuDevPtr_*)g;
         float rate = lr;
         unsigned int nn = (unsigned int)n;
-        void* params[4];
-        params[0] = (void*)&pw; params[1] = (void*)&pg; params[2] = (void*)&rate; params[3] = (void*)&nn;
-        return cuda_launch_(kernel, n, (&void)&params[0]);
+        CuKernelArg_* params[4];
+        params[0] = (CuKernelArg_*)&pw; params[1] = (CuKernelArg_*)&pg; params[2] = (CuKernelArg_*)&rate; params[3] = (CuKernelArg_*)&nn;
+        return cuda_launch_(kernel, n, &params[0]);
     }
 }
 
@@ -1431,18 +1443,18 @@ int cuda_sgd2(struct CudaBuf w1, struct CudaBuf g1, struct CudaBuf w2, struct Cu
     if (!cuda_ensure_() || !cuda_fits_(w1, n1) || !cuda_fits_(g1, n1) ||
         !cuda_fits_(w2, n2) || !cuda_fits_(g2, n2) || n1 + n2 > 4294967295UL) return 0;
     unsafe {
-        void* pw1 = (void*)w1.dev;
-        void* pg1 = (void*)g1.dev;
-        void* pw2 = (void*)w2.dev;
-        void* pg2 = (void*)g2.dev;
+        CuDevPtr_* pw1 = (CuDevPtr_*)w1.dev;
+        CuDevPtr_* pg1 = (CuDevPtr_*)g1.dev;
+        CuDevPtr_* pw2 = (CuDevPtr_*)w2.dev;
+        CuDevPtr_* pg2 = (CuDevPtr_*)g2.dev;
         unsigned int nn1 = (unsigned int)n1;
         unsigned int nn2 = (unsigned int)n2;
         float rate = lr;
-        void* params[7];
-        params[0] = (void*)&pw1; params[1] = (void*)&pg1; params[2] = (void*)&nn1;
-        params[3] = (void*)&pw2; params[4] = (void*)&pg2; params[5] = (void*)&nn2;
-        params[6] = (void*)&rate;
-        return cuda_launch_(K_SGD2, n1 + n2, (&void)&params[0]);
+        CuKernelArg_* params[7];
+        params[0] = (CuKernelArg_*)&pw1; params[1] = (CuKernelArg_*)&pg1; params[2] = (CuKernelArg_*)&nn1;
+        params[3] = (CuKernelArg_*)&pw2; params[4] = (CuKernelArg_*)&pg2; params[5] = (CuKernelArg_*)&nn2;
+        params[6] = (CuKernelArg_*)&rate;
+        return cuda_launch_(K_SGD2, n1 + n2, &params[0]);
     }
 }
 
@@ -1450,12 +1462,12 @@ int cuda_sum(struct CudaBuf a, struct CudaBuf out1) {
     unsigned long n = a.len;
     if (!cuda_ensure_() || !cuda_fits_(a, n) || !cuda_fits_(out1, 1UL) || n > 4294967295UL) return 0;
     unsafe {
-        void* pa = (void*)a.dev;
-        void* po = (void*)out1.dev;
+        CuDevPtr_* pa = (CuDevPtr_*)a.dev;
+        CuDevPtr_* po = (CuDevPtr_*)out1.dev;
         unsigned int nn = (unsigned int)n;
-        void* params[3];
-        params[0] = (void*)&pa; params[1] = (void*)&po; params[2] = (void*)&nn;
-        return cuda_reduce_launch_(K_SUM, n, out1.dev, (&void)&params[0]);
+        CuKernelArg_* params[3];
+        params[0] = (CuKernelArg_*)&pa; params[1] = (CuKernelArg_*)&po; params[2] = (CuKernelArg_*)&nn;
+        return cuda_reduce_launch_(K_SUM, n, out1.dev, &params[0]);
     }
 }
 
@@ -1464,15 +1476,15 @@ int cuda_mse_grad(struct CudaBuf y, struct CudaBuf t, struct CudaBuf dy, struct 
     if (!cuda_ensure_() || !cuda_fits_(y, n) || !cuda_fits_(t, n) || !cuda_fits_(dy, n) ||
         !cuda_fits_(loss1, 1UL) || n > 4294967295UL) return 0;
     unsafe {
-        void* py = (void*)y.dev;
-        void* pt = (void*)t.dev;
-        void* pd = (void*)dy.dev;
-        void* pl = (void*)loss1.dev;
+        CuDevPtr_* py = (CuDevPtr_*)y.dev;
+        CuDevPtr_* pt = (CuDevPtr_*)t.dev;
+        CuDevPtr_* pd = (CuDevPtr_*)dy.dev;
+        CuDevPtr_* pl = (CuDevPtr_*)loss1.dev;
         unsigned int nn = (unsigned int)n;
-        void* params[5];
-        params[0] = (void*)&py; params[1] = (void*)&pt; params[2] = (void*)&pd;
-        params[3] = (void*)&pl; params[4] = (void*)&nn;
-        return cuda_reduce_launch_(K_MSE, n, loss1.dev, (&void)&params[0]);
+        CuKernelArg_* params[5];
+        params[0] = (CuKernelArg_*)&py; params[1] = (CuKernelArg_*)&pt; params[2] = (CuKernelArg_*)&pd;
+        params[3] = (CuKernelArg_*)&pl; params[4] = (CuKernelArg_*)&nn;
+        return cuda_reduce_launch_(K_MSE, n, loss1.dev, &params[0]);
     }
 }
 
@@ -1491,15 +1503,15 @@ int cuda_upsample2x_nearest(struct CudaBuf in, struct CudaBuf out,
     if (!cuda_ensure_() || n == 0UL || n > 4294967295UL ||
         !cuda_fits_(in, planes * h * w) || !cuda_fits_(out, n)) return 0;
     unsafe {
-        void* pi = (void*)in.dev;
-        void* po = (void*)out.dev;
+        CuDevPtr_* pi = (CuDevPtr_*)in.dev;
+        CuDevPtr_* po = (CuDevPtr_*)out.dev;
         unsigned int np = (unsigned int)planes;
         unsigned int nh = (unsigned int)h;
         unsigned int nw = (unsigned int)w;
-        void* params[5];
-        params[0] = (void*)&pi; params[1] = (void*)&po; params[2] = (void*)&np;
-        params[3] = (void*)&nh; params[4] = (void*)&nw;
-        return cuda_launch_(K_UPSAMPLE2X, planes * h * w, (&void)&params[0]);   // a thread per input
+        CuKernelArg_* params[5];
+        params[0] = (CuKernelArg_*)&pi; params[1] = (CuKernelArg_*)&po; params[2] = (CuKernelArg_*)&np;
+        params[3] = (CuKernelArg_*)&nh; params[4] = (CuKernelArg_*)&nw;
+        return cuda_launch_(K_UPSAMPLE2X, planes * h * w, &params[0]);   // a thread per input
     }
 }
 
@@ -1515,18 +1527,18 @@ int cuda_copy_rows(struct CudaBuf src, unsigned long srcOff, unsigned long srcSt
     int v4 = ((srcOff | srcStride | dstOff | dstStride | rowLen) & 3UL) == 0UL;
     unsigned long q = v4 ? 4UL : 1UL;
     unsafe {
-        void* ps = (void*)src.dev;
-        void* pd = (void*)dst.dev;
+        CuDevPtr_* ps = (CuDevPtr_*)src.dev;
+        CuDevPtr_* pd = (CuDevPtr_*)dst.dev;
         unsigned long long so = (unsigned long long)(srcOff / q);
         unsigned long long ss = (unsigned long long)(srcStride / q);
         unsigned long long dof = (unsigned long long)(dstOff / q);
         unsigned long long ds = (unsigned long long)(dstStride / q);
         unsigned int len = (unsigned int)(rowLen / q);
         unsigned int nr = (unsigned int)rows;
-        void* params[8];
-        params[0] = (void*)&ps; params[1] = (void*)&pd; params[2] = (void*)&so; params[3] = (void*)&ss;
-        params[4] = (void*)&dof; params[5] = (void*)&ds; params[6] = (void*)&len; params[7] = (void*)&nr;
-        return cuda_launch_(v4 ? K_COPY_ROWS4 : K_COPY_ROWS, (rowLen / q) * rows, (&void)&params[0]);
+        CuKernelArg_* params[8];
+        params[0] = (CuKernelArg_*)&ps; params[1] = (CuKernelArg_*)&pd; params[2] = (CuKernelArg_*)&so; params[3] = (CuKernelArg_*)&ss;
+        params[4] = (CuKernelArg_*)&dof; params[5] = (CuKernelArg_*)&ds; params[6] = (CuKernelArg_*)&len; params[7] = (CuKernelArg_*)&nr;
+        return cuda_launch_(v4 ? K_COPY_ROWS4 : K_COPY_ROWS, (rowLen / q) * rows, &params[0]);
     }
 }
 
@@ -1566,9 +1578,9 @@ struct CudaGraph cuda_capture_end() {
     g.exec = 0UL;
     if (!cuda_ensure_()) return g;
     unsafe {
-        void* graph = (void*)0;
+        CuGraph_* graph = (CuGraph_*)0;
         if (cuStreamEndCapture(g_cuda_stream, &graph) != CUDA_OK) return g;
-        void* exec = (void*)0;
+        CuGraphExec_* exec = (CuGraphExec_*)0;
         int ok = cuGraphInstantiateWithFlags(&exec, graph, 0ULL) == CUDA_OK;
         cuGraphDestroy(graph);
         if (ok) g.exec = (unsigned long)exec;
@@ -1578,11 +1590,11 @@ struct CudaGraph cuda_capture_end() {
 
 int cuda_graph_launch(struct CudaGraph g) {
     if (g.exec == 0UL || !cuda_ensure_()) return 0;
-    unsafe { return cuGraphLaunch((void*)g.exec, g_cuda_stream) == CUDA_OK; }
+    unsafe { return cuGraphLaunch((CuGraphExec_*)g.exec, g_cuda_stream) == CUDA_OK; }
 }
 
 void CudaGraph::free() {
-    if (self.exec != 0UL) { unsafe { cuGraphExecDestroy((void*)self.exec); } }
+    if (self.exec != 0UL) { unsafe { cuGraphExecDestroy((CuGraphExec_*)self.exec); } }
     self.exec = 0UL;
 }
 
@@ -1597,9 +1609,9 @@ static int cuda_host_binary_(int kernel, const float* a, const float* b, float* 
     int ok = 0;
     unsafe {
         ok = da != 0ULL && db != 0ULL && dout != 0ULL &&
-             cuda_write_bytes_(da, (const void*)a, bytes) && cuda_write_bytes_(db, (const void*)b, bytes) &&
+             cuda_write_bytes_(da, (const unsigned char*)a, bytes) && cuda_write_bytes_(db, (const unsigned char*)b, bytes) &&
              cuda_binary_raw_(kernel, (unsigned long)da, (unsigned long)db, (unsigned long)dout, n) &&
-             cuda_read_bytes_((void*)out, dout, bytes);
+             cuda_read_bytes_((unsigned char*)out, dout, bytes);
         if (da != 0ULL) cuMemFree_v2(da);
         if (db != 0ULL) cuMemFree_v2(db);
         if (dout != 0ULL) cuMemFree_v2(dout);
@@ -1614,9 +1626,9 @@ static int cuda_host_unary_(int kernel, const float* a, float k, float* out, uns
     unsigned long long dout = cuda_alloc_bytes_(bytes);
     int ok = 0;
     unsafe {
-        ok = da != 0ULL && dout != 0ULL && cuda_write_bytes_(da, (const void*)a, bytes) &&
+        ok = da != 0ULL && dout != 0ULL && cuda_write_bytes_(da, (const unsigned char*)a, bytes) &&
              cuda_unary_raw_(kernel, (unsigned long)da, k, (unsigned long)dout, n) &&
-             cuda_read_bytes_((void*)out, dout, bytes);
+             cuda_read_bytes_((unsigned char*)out, dout, bytes);
         if (da != 0ULL) cuMemFree_v2(da);
         if (dout != 0ULL) cuMemFree_v2(dout);
     }
@@ -1776,14 +1788,14 @@ int cuda_sum_f32_n_(const &float a, &float out, unsigned long n) {
     unsigned long long dout = cuda_alloc_bytes_(sizeof(float));
     int ok = 0;
     unsafe {
-        if (da != 0ULL && dout != 0ULL && cuda_write_bytes_(da, (const void*)a, bytes)) {
-            void* pa = (void*)(unsigned long)da;
-            void* po = (void*)(unsigned long)dout;
+        if (da != 0ULL && dout != 0ULL && cuda_write_bytes_(da, (const unsigned char*)a, bytes)) {
+            CuDevPtr_* pa = (CuDevPtr_*)(unsigned long)da;
+            CuDevPtr_* po = (CuDevPtr_*)(unsigned long)dout;
             unsigned int nn = (unsigned int)n;
-            void* params[3];
-            params[0] = (void*)&pa; params[1] = (void*)&po; params[2] = (void*)&nn;
-            ok = cuda_reduce_launch_(K_SUM, n, (unsigned long)dout, (&void)&params[0]) &&
-                 cuda_read_bytes_((void*)out, dout, sizeof(float));
+            CuKernelArg_* params[3];
+            params[0] = (CuKernelArg_*)&pa; params[1] = (CuKernelArg_*)&po; params[2] = (CuKernelArg_*)&nn;
+            ok = cuda_reduce_launch_(K_SUM, n, (unsigned long)dout, &params[0]) &&
+                 cuda_read_bytes_((unsigned char*)out, dout, sizeof(float));
         }
         if (da != 0ULL) cuMemFree_v2(da);
         if (dout != 0ULL) cuMemFree_v2(dout);
@@ -1807,18 +1819,18 @@ int cuda_sum_f32([]const float a_s, []float out_s) {
 static int cuda_sgemm_kernel_(unsigned long a, unsigned long b, unsigned long c,
                               unsigned long M, unsigned long K, unsigned long N) {
     unsafe {
-        void* pa = (void*)a;
-        void* pb = (void*)b;
-        void* pc = (void*)c;
+        CuDevPtr_* pa = (CuDevPtr_*)a;
+        CuDevPtr_* pb = (CuDevPtr_*)b;
+        CuDevPtr_* pc = (CuDevPtr_*)c;
         int m = (int)M;
         int n = (int)N;
         int k = (int)K;
-        void* params[6];
-        params[0] = (void*)&pa; params[1] = (void*)&pb; params[2] = (void*)&pc;
-        params[3] = (void*)&m; params[4] = (void*)&n; params[5] = (void*)&k;
+        CuKernelArg_* params[6];
+        params[0] = (CuKernelArg_*)&pa; params[1] = (CuKernelArg_*)&pb; params[2] = (CuKernelArg_*)&pc;
+        params[3] = (CuKernelArg_*)&m; params[4] = (CuKernelArg_*)&n; params[5] = (CuKernelArg_*)&k;
         return cuLaunchKernel(g_cuda_fn[K_SGEMM],
                               (unsigned int)((N + 63UL) / 64UL), (unsigned int)((M + 63UL) / 64UL), 1U,
-                              CUDA_BLOCK, 1U, 1U, 0U, g_cuda_stream, &params[0], (void**)0) == CUDA_OK;
+                              CUDA_BLOCK, 1U, 1U, 0U, g_cuda_stream, &params[0], (CuKernelArg_**)0) == CUDA_OK;
     }
 }
 
@@ -1835,10 +1847,10 @@ static int cuda_host_matmul_(const float* a, const float* b, float* out,
     int ok = 0;
     unsafe {
         if (da != 0ULL && db != 0ULL && dc != 0ULL &&
-            cuda_write_bytes_(da, (const void*)a, bytesA) && cuda_write_bytes_(db, (const void*)b, bytesB)) {
+            cuda_write_bytes_(da, (const unsigned char*)a, bytesA) && cuda_write_bytes_(db, (const unsigned char*)b, bytesB)) {
             if (useBlas) ok = cuda_gemm_raw_((unsigned long)da, 0, (unsigned long)db, 0, (unsigned long)dc, M, N, K);
             else ok = cuda_sgemm_kernel_((unsigned long)da, (unsigned long)db, (unsigned long)dc, M, K, N);
-            ok = ok && cuda_read_bytes_((void*)out, dc, bytesC);
+            ok = ok && cuda_read_bytes_((unsigned char*)out, dc, bytesC);
         }
         if (da != 0ULL) cuMemFree_v2(da);
         if (db != 0ULL) cuMemFree_v2(db);
@@ -1930,7 +1942,7 @@ struct CudaHalfBuf CudaHalfBuf::upload([]const float host_s, int dtype) {
 
 int cuda_half_write_n_(struct CudaHalfBuf dst, const &unsigned short bits, unsigned long n) {
     if (!cuda_half_ok_(dst, n) || n == 0UL || !cuda_ensure_()) return 0;
-    unsafe { return cuda_write_bytes_((unsigned long long)dst.dev, (const void*)bits, n * 2UL); }
+    unsafe { return cuda_write_bytes_((unsigned long long)dst.dev, (const unsigned char*)bits, n * 2UL); }
 }
 
 int cuda_half_write(struct CudaHalfBuf dst, []const unsigned short bits_s) {
@@ -1943,7 +1955,7 @@ int cuda_half_write(struct CudaHalfBuf dst, []const unsigned short bits_s) {
 
 int cuda_half_read_n_(struct CudaHalfBuf src, &unsigned short bits, unsigned long n) {
     if (!cuda_half_ok_(src, n) || n == 0UL || !cuda_ensure_()) return 0;
-    unsafe { return cuda_read_bytes_((void*)bits, (unsigned long long)src.dev, n * 2UL); }
+    unsafe { return cuda_read_bytes_((unsigned char*)bits, (unsigned long long)src.dev, n * 2UL); }
 }
 
 int cuda_half_read(struct CudaHalfBuf src, []unsigned short bits_s) {
@@ -1963,12 +1975,12 @@ void CudaHalfBuf::free() {
 // Launches a two-pointer CudaHalfBuf kernel over n elements: (a, out, n).
 static int cuda_launch2_(int kernel, unsigned long a, unsigned long out, unsigned long n) {
     unsafe {
-        void* pa = (void*)a;
-        void* po = (void*)out;
+        CuDevPtr_* pa = (CuDevPtr_*)a;
+        CuDevPtr_* po = (CuDevPtr_*)out;
         unsigned int nn = (unsigned int)n;
-        void* params[3];
-        params[0] = (void*)&pa; params[1] = (void*)&po; params[2] = (void*)&nn;
-        return cuda_launch_(kernel, n, (&void)&params[0]);
+        CuKernelArg_* params[3];
+        params[0] = (CuKernelArg_*)&pa; params[1] = (CuKernelArg_*)&po; params[2] = (CuKernelArg_*)&nn;
+        return cuda_launch_(kernel, n, &params[0]);
     }
 }
 
@@ -1992,10 +2004,10 @@ static int cuda_gemm_ex_(unsigned long a, int ta, unsigned long b, int tb, unsig
     float zero = 0.0f;
     unsafe {
         return cublasGemmEx(g_cuda_blas, tb ? CUDA_BLAS_T : CUDA_BLAS_N, ta ? CUDA_BLAS_T : CUDA_BLAS_N,
-                            (int)n, (int)m, (int)k, (const void*)&one,
-                            (const void*)b, abType, tb ? (int)k : (int)n,
-                            (const void*)a, abType, ta ? (int)m : (int)k,
-                            (const void*)&zero, (void*)c, cType, (int)n,
+                            (int)n, (int)m, (int)k, (const float*)&one,
+                            (const CuDevPtr_*)b, abType, tb ? (int)k : (int)n,
+                            (const CuDevPtr_*)a, abType, ta ? (int)m : (int)k,
+                            (const float*)&zero, (CuDevPtr_*)c, cType, (int)n,
                             CUDA_COMPUTE_32F, CUDA_GEMM_DEFAULT_) == 0;
     }
 }
@@ -2020,10 +2032,10 @@ int cuda_half_gemm_strided(struct CudaHalfBuf a, int ta, unsigned long strideA, 
     // Row-major, so each product goes to cuBLAS as C^T = op(B)^T op(A)^T (see cuda_gemm_raw_).
     unsafe {
         return cublasGemmStridedBatchedEx(g_cuda_blas, tb ? CUDA_BLAS_T : CUDA_BLAS_N, ta ? CUDA_BLAS_T : CUDA_BLAS_N,
-                                          (int)n, (int)m, (int)k, (const void*)&one,
-                                          (const void*)b.dev, t, tb ? (int)k : (int)n, (long long)strideB,
-                                          (const void*)a.dev, t, ta ? (int)m : (int)k, (long long)strideA,
-                                          (const void*)&zero, (void*)c.dev, t, (int)n, (long long)strideC,
+                                          (int)n, (int)m, (int)k, (const float*)&one,
+                                          (const CuDevPtr_*)b.dev, t, tb ? (int)k : (int)n, (long long)strideB,
+                                          (const CuDevPtr_*)a.dev, t, ta ? (int)m : (int)k, (long long)strideA,
+                                          (const float*)&zero, (CuDevPtr_*)c.dev, t, (int)n, (long long)strideC,
                                           (int)batch, CUDA_COMPUTE_32F, CUDA_GEMM_DEFAULT_) == 0;
     }
 }
@@ -2050,12 +2062,12 @@ int cuda_half_gemm_relu(struct CudaHalfBuf a, int ta, struct CudaHalfBuf b, int 
         float one = 1.0f;
         float zero = 0.0f;
         unsafe {
-            if (cublasLtMatmul(g_cuda_lt, g_lt_desc[plan], (const void*)&one,
-                               (const void*)b.dev, g_lt_la[plan], (const void*)a.dev, g_lt_lb[plan],
-                               (const void*)&zero, (const void*)c.dev, g_lt_lc[plan],
-                               (void*)c.dev, g_lt_lc[plan],
-                               (const void*)&g_lt_algo[plan * LT_RESULT_WORDS],
-                               (void*)(unsigned long)g_cuda_ws, CUDA_WORKSPACE_BYTES, g_cuda_stream) == 0)
+            if (cublasLtMatmul(g_cuda_lt, g_lt_desc[plan], (const float*)&one,
+                               (const CuDevPtr_*)b.dev, g_lt_la[plan], (const CuDevPtr_*)a.dev, g_lt_lb[plan],
+                               (const float*)&zero, (const CuDevPtr_*)c.dev, g_lt_lc[plan],
+                               (CuDevPtr_*)c.dev, g_lt_lc[plan],
+                               (const unsigned long*)&g_lt_algo[plan * LT_RESULT_WORDS],
+                               (CuDevPtr_*)(unsigned long)g_cuda_ws, CUDA_WORKSPACE_BYTES, g_cuda_stream) == 0)
                 return 1;
         }
     }
@@ -2079,18 +2091,18 @@ int cuda_half_gemv(struct CudaHalfBuf w, struct CudaBuf x, struct CudaBuf y, uns
     unsigned long blocks = (n + rpb - 1UL) / rpb;
     if (blocks < sms * 32UL && blocks > sms * 16UL) blocks = sms * 16UL;
     unsafe {
-        void* pw = (void*)w.dev;
-        void* px = (void*)x.dev;
-        void* py = (void*)y.dev;
+        CuDevPtr_* pw = (CuDevPtr_*)w.dev;
+        CuDevPtr_* px = (CuDevPtr_*)x.dev;
+        CuDevPtr_* py = (CuDevPtr_*)y.dev;
         unsigned int nn = (unsigned int)n;
         unsigned int kk = (unsigned int)k;
         int split = wpr;
-        void* params[6];
-        params[0] = (void*)&pw; params[1] = (void*)&px; params[2] = (void*)&py; params[3] = (void*)&nn;
-        params[4] = (void*)&kk; params[5] = (void*)&split;
+        CuKernelArg_* params[6];
+        params[0] = (CuKernelArg_*)&pw; params[1] = (CuKernelArg_*)&px; params[2] = (CuKernelArg_*)&py; params[3] = (CuKernelArg_*)&nn;
+        params[4] = (CuKernelArg_*)&kk; params[5] = (CuKernelArg_*)&split;
         return cuLaunchKernel(g_cuda_fn[cuda_k16_(vec ? K_GEMV_F16 : K_GEMV1_F16, w.dtype)],
                               (unsigned int)blocks, 1U, 1U, 128U, 1U, 1U, 0U,
-                              g_cuda_stream, &params[0], (void**)0) == CUDA_OK;
+                              g_cuda_stream, &params[0], (CuKernelArg_**)0) == CUDA_OK;
     }
 }
 
@@ -2106,13 +2118,13 @@ int cuda_half_relu_grad(struct CudaHalfBuf z, struct CudaHalfBuf g, struct CudaH
     if (!cuda_ensure_() || !cuda_half_ok_(z, n) || !cuda_half_ok_(g, n) || !cuda_half_ok_(out, n) ||
         z.dtype != g.dtype || z.dtype != out.dtype || n > 4294967295UL) return 0;
     unsafe {
-        void* pz = (void*)z.dev;
-        void* pg = (void*)g.dev;
-        void* po = (void*)out.dev;
+        CuDevPtr_* pz = (CuDevPtr_*)z.dev;
+        CuDevPtr_* pg = (CuDevPtr_*)g.dev;
+        CuDevPtr_* po = (CuDevPtr_*)out.dev;
         unsigned int nn = (unsigned int)n;
-        void* params[4];
-        params[0] = (void*)&pz; params[1] = (void*)&pg; params[2] = (void*)&po; params[3] = (void*)&nn;
-        return cuda_launch_(cuda_k16_(K_RELUG_F16, z.dtype), n, (&void)&params[0]);
+        CuKernelArg_* params[4];
+        params[0] = (CuKernelArg_*)&pz; params[1] = (CuKernelArg_*)&pg; params[2] = (CuKernelArg_*)&po; params[3] = (CuKernelArg_*)&nn;
+        return cuda_launch_(cuda_k16_(K_RELUG_F16, z.dtype), n, &params[0]);
     }
 }
 
@@ -2121,15 +2133,15 @@ int cuda_half_mse_grad(struct CudaHalfBuf y, struct CudaHalfBuf t, struct CudaHa
     if (!cuda_ensure_() || !cuda_half_ok_(y, n) || !cuda_half_ok_(t, n) || !cuda_half_ok_(dy, n) ||
         y.dtype != t.dtype || y.dtype != dy.dtype || !cuda_fits_(loss1, 1UL) || n > 4294967295UL) return 0;
     unsafe {
-        void* py = (void*)y.dev;
-        void* pt = (void*)t.dev;
-        void* pd = (void*)dy.dev;
-        void* pl = (void*)loss1.dev;
+        CuDevPtr_* py = (CuDevPtr_*)y.dev;
+        CuDevPtr_* pt = (CuDevPtr_*)t.dev;
+        CuDevPtr_* pd = (CuDevPtr_*)dy.dev;
+        CuDevPtr_* pl = (CuDevPtr_*)loss1.dev;
         unsigned int nn = (unsigned int)n;
-        void* params[5];
-        params[0] = (void*)&py; params[1] = (void*)&pt; params[2] = (void*)&pd;
-        params[3] = (void*)&pl; params[4] = (void*)&nn;
-        return cuda_reduce_launch_(cuda_k16_(K_MSE_F16, y.dtype), n, loss1.dev, (&void)&params[0]);
+        CuKernelArg_* params[5];
+        params[0] = (CuKernelArg_*)&py; params[1] = (CuKernelArg_*)&pt; params[2] = (CuKernelArg_*)&pd;
+        params[3] = (CuKernelArg_*)&pl; params[4] = (CuKernelArg_*)&nn;
+        return cuda_reduce_launch_(cuda_k16_(K_MSE_F16, y.dtype), n, loss1.dev, &params[0]);
     }
 }
 
@@ -2148,24 +2160,24 @@ int cuda_half_sgd2(struct CudaHalfBuf w1, struct CudaHalfBuf g1, struct CudaHalf
         !cuda_half_ok_(g2, n2) || w1.dtype != g1.dtype || w1.dtype != w2.dtype || w1.dtype != g2.dtype ||
         n1 + n2 > 4294967295UL) return 0;
     unsafe {
-        void* pw1 = (void*)w1.dev;
-        void* pg1 = (void*)g1.dev;
-        void* pw2 = (void*)w2.dev;
-        void* pg2 = (void*)g2.dev;
+        CuDevPtr_* pw1 = (CuDevPtr_*)w1.dev;
+        CuDevPtr_* pg1 = (CuDevPtr_*)g1.dev;
+        CuDevPtr_* pw2 = (CuDevPtr_*)w2.dev;
+        CuDevPtr_* pg2 = (CuDevPtr_*)g2.dev;
         unsigned int nn1 = (unsigned int)n1;
         unsigned int nn2 = (unsigned int)n2;
         float rate = lr;
-        void* params[7];
-        params[0] = (void*)&pw1; params[1] = (void*)&pg1; params[2] = (void*)&nn1;
-        params[3] = (void*)&pw2; params[4] = (void*)&pg2; params[5] = (void*)&nn2;
-        params[6] = (void*)&rate;
-        return cuda_launch_(cuda_k16_(K_SGD2_F16, w1.dtype), n1 + n2, (&void)&params[0]);
+        CuKernelArg_* params[7];
+        params[0] = (CuKernelArg_*)&pw1; params[1] = (CuKernelArg_*)&pg1; params[2] = (CuKernelArg_*)&nn1;
+        params[3] = (CuKernelArg_*)&pw2; params[4] = (CuKernelArg_*)&pg2; params[5] = (CuKernelArg_*)&nn2;
+        params[6] = (CuKernelArg_*)&rate;
+        return cuda_launch_(cuda_k16_(K_SGD2_F16, w1.dtype), n1 + n2, &params[0]);
     }
 }
 
 // ── Mixed precision ──────────────────────────────────────────────────────────
 
-extern void* malloc(unsigned long size);
+extern unsigned char* malloc(unsigned long size);
 extern void  free(unsigned char* ptr);
 
 int cuda_zero(struct CudaBuf b) {
@@ -2183,13 +2195,13 @@ int cuda_half_convert(struct CudaHalfBuf src, struct CudaHalfBuf dst) {
         }
     }
     unsafe {
-        void* pa = (void*)src.dev;
-        void* po = (void*)dst.dev;
+        CuDevPtr_* pa = (CuDevPtr_*)src.dev;
+        CuDevPtr_* po = (CuDevPtr_*)dst.dev;
         unsigned int nn = (unsigned int)n;
         int toBf = dst.dtype == CUDA_BF16 ? 1 : 0;
-        void* params[4];
-        params[0] = (void*)&pa; params[1] = (void*)&po; params[2] = (void*)&nn; params[3] = (void*)&toBf;
-        return cuda_launch_(K_HALF_CVT, n, (&void)&params[0]);
+        CuKernelArg_* params[4];
+        params[0] = (CuKernelArg_*)&pa; params[1] = (CuKernelArg_*)&po; params[2] = (CuKernelArg_*)&nn; params[3] = (CuKernelArg_*)&toBf;
+        return cuda_launch_(K_HALF_CVT, n, &params[0]);
     }
 }
 
@@ -2223,15 +2235,15 @@ static int cuda_cvt_many_(const unsigned long* src, const unsigned long* dst, co
             int m = mode;
             int b = bf;
             float sc = scale;
-            void* pf = (void*)flag;
+            CuDevPtr_* pf = (CuDevPtr_*)flag;
             int vec = 1;
             i = 0UL;
             while (i < c) { if ((t.src[i] | t.dst[i]) % 16UL != 0UL) vec = 0; i = i + 1UL; }
-            void* params[6];
-            params[0] = (void*)&t; params[1] = (void*)&m; params[2] = (void*)&b; params[3] = (void*)&sc;
-            params[4] = (void*)&pf; params[5] = (void*)&vec;
+            CuKernelArg_* params[6];
+            params[0] = (CuKernelArg_*)&t; params[1] = (CuKernelArg_*)&m; params[2] = (CuKernelArg_*)&b; params[3] = (CuKernelArg_*)&sc;
+            params[4] = (CuKernelArg_*)&pf; params[5] = (CuKernelArg_*)&vec;
             if (cuLaunchKernel(g_cuda_fn[K_CVT_MANY], (unsigned int)blocks, (unsigned int)c, 1U, CUDA_BLOCK, 1U, 1U,
-                               0U, g_cuda_stream, &params[0], (void**)0) != CUDA_OK) return 0;
+                               0U, g_cuda_stream, &params[0], (CuKernelArg_**)0) != CUDA_OK) return 0;
         }
         base = base + c;
     }
@@ -2367,21 +2379,21 @@ int cuda_mp_sgd(struct CudaBuf w, struct CudaBuf g, struct CudaBuf vel, struct C
     if (vel.dev != 0UL && !cuda_fits_(vel, n)) return 0;
     if (wHalf.dev != 0UL && !cuda_half_ok_(wHalf, n)) return 0;
     unsafe {
-        void* pw = (void*)w.dev;
-        void* pg = (void*)g.dev;
-        void* pv = (void*)vel.dev;
-        void* ph = (void*)wHalf.dev;
-        void* ps = (void*)skip.dev;
+        CuDevPtr_* pw = (CuDevPtr_*)w.dev;
+        CuDevPtr_* pg = (CuDevPtr_*)g.dev;
+        CuDevPtr_* pv = (CuDevPtr_*)vel.dev;
+        CuDevPtr_* ph = (CuDevPtr_*)wHalf.dev;
+        CuDevPtr_* ps = (CuDevPtr_*)skip.dev;
         float l = lr;
         float mo = momentum;
         float wd = weightDecay;
         unsigned int nn = (unsigned int)n;
         int bf = wHalf.dtype == CUDA_BF16 ? 1 : 0;
-        void* params[10];
-        params[0] = (void*)&pw; params[1] = (void*)&pg; params[2] = (void*)&pv; params[3] = (void*)&ph;
-        params[4] = (void*)&l; params[5] = (void*)&mo; params[6] = (void*)&wd; params[7] = (void*)&nn;
-        params[8] = (void*)&bf; params[9] = (void*)&ps;
-        return cuda_launch_(K_MP_SGD, n, (&void)&params[0]);
+        CuKernelArg_* params[10];
+        params[0] = (CuKernelArg_*)&pw; params[1] = (CuKernelArg_*)&pg; params[2] = (CuKernelArg_*)&pv; params[3] = (CuKernelArg_*)&ph;
+        params[4] = (CuKernelArg_*)&l; params[5] = (CuKernelArg_*)&mo; params[6] = (CuKernelArg_*)&wd; params[7] = (CuKernelArg_*)&nn;
+        params[8] = (CuKernelArg_*)&bf; params[9] = (CuKernelArg_*)&ps;
+        return cuda_launch_(K_MP_SGD, n, &params[0]);
     }
 }
 
@@ -2401,25 +2413,25 @@ int cuda_mp_adam(struct CudaBuf w, struct CudaBuf m, struct CudaBuf v, struct Cu
     float bc1 = (float)1.0 - pow_f(beta1, (float)step);
     float bc2 = (float)1.0 - pow_f(beta2, (float)step);
     unsafe {
-        void* pw = (void*)w.dev;
-        void* pm = (void*)m.dev;
-        void* pv = (void*)v.dev;
-        void* pg = (void*)g.dev;
-        void* ph = (void*)wHalf.dev;
-        void* ps = (void*)skip.dev;
+        CuDevPtr_* pw = (CuDevPtr_*)w.dev;
+        CuDevPtr_* pm = (CuDevPtr_*)m.dev;
+        CuDevPtr_* pv = (CuDevPtr_*)v.dev;
+        CuDevPtr_* pg = (CuDevPtr_*)g.dev;
+        CuDevPtr_* ph = (CuDevPtr_*)wHalf.dev;
+        CuDevPtr_* ps = (CuDevPtr_*)skip.dev;
         float l = lr; float b1 = beta1; float b2 = beta2; float e = eps; float wd = weightDecay;
         float c1 = bc1; float c2 = bc2;
         int dec = decoupled ? 1 : 0;
         unsigned int nn = (unsigned int)n;
         int bf = wHalf.dtype == CUDA_BF16 ? 1 : 0;
         int vec = cuda_adam_vec_(w.dev, m.dev, v.dev, g.dev, wHalf.dev);
-        void* params[17];
-        params[0] = (void*)&pw; params[1] = (void*)&pm; params[2] = (void*)&pv; params[3] = (void*)&pg;
-        params[4] = (void*)&ph; params[5] = (void*)&l; params[6] = (void*)&b1; params[7] = (void*)&b2;
-        params[8] = (void*)&e; params[9] = (void*)&wd; params[10] = (void*)&c1; params[11] = (void*)&c2;
-        params[12] = (void*)&dec; params[13] = (void*)&nn; params[14] = (void*)&bf; params[15] = (void*)&ps;
-        params[16] = (void*)&vec;
-        return cuda_launch_(K_MP_ADAM, vec ? (n + 3UL) / 4UL : n, (&void)&params[0]);
+        CuKernelArg_* params[17];
+        params[0] = (CuKernelArg_*)&pw; params[1] = (CuKernelArg_*)&pm; params[2] = (CuKernelArg_*)&pv; params[3] = (CuKernelArg_*)&pg;
+        params[4] = (CuKernelArg_*)&ph; params[5] = (CuKernelArg_*)&l; params[6] = (CuKernelArg_*)&b1; params[7] = (CuKernelArg_*)&b2;
+        params[8] = (CuKernelArg_*)&e; params[9] = (CuKernelArg_*)&wd; params[10] = (CuKernelArg_*)&c1; params[11] = (CuKernelArg_*)&c2;
+        params[12] = (CuKernelArg_*)&dec; params[13] = (CuKernelArg_*)&nn; params[14] = (CuKernelArg_*)&bf; params[15] = (CuKernelArg_*)&ps;
+        params[16] = (CuKernelArg_*)&vec;
+        return cuda_launch_(K_MP_ADAM, vec ? (n + 3UL) / 4UL : n, &params[0]);
     }
 }
 
@@ -2493,12 +2505,12 @@ int cuda_mp_adam_many(const &Vec<struct CudaBuf> w, const &Vec<struct CudaBuf> m
             unsigned long blocks = (most + per - 1UL) / per;
             if (blocks > 2048UL) blocks = 2048UL;
             int b = bf;
-            void* ps = (void*)skip.dev;
-            void* params[5];
-            params[0] = (void*)&t; params[1] = (void*)&a; params[2] = (void*)&b; params[3] = (void*)&ps;
-            params[4] = (void*)&vec;
+            CuDevPtr_* ps = (CuDevPtr_*)skip.dev;
+            CuKernelArg_* params[5];
+            params[0] = (CuKernelArg_*)&t; params[1] = (CuKernelArg_*)&a; params[2] = (CuKernelArg_*)&b; params[3] = (CuKernelArg_*)&ps;
+            params[4] = (CuKernelArg_*)&vec;
             if (cuLaunchKernel(g_cuda_fn[K_MP_ADAM_MANY], (unsigned int)blocks, (unsigned int)c, 1U, CUDA_BLOCK, 1U, 1U,
-                               0U, g_cuda_stream, &params[0], (void**)0) != CUDA_OK) return 0;
+                               0U, g_cuda_stream, &params[0], (CuKernelArg_**)0) != CUDA_OK) return 0;
         }
         base = base + c;
     }
@@ -2511,18 +2523,18 @@ static int cuda_half_ew_(struct CudaHalfBuf a, struct CudaHalfBuf b, struct Cuda
         n > 4294967295UL) return 0;
     if (op != 3 && (!cuda_half_ok_(b, n) || b.dtype != a.dtype)) return 0;
     unsafe {
-        void* pa = (void*)a.dev;
-        void* pb = (void*)b.dev;
-        void* po = (void*)out.dev;
+        CuDevPtr_* pa = (CuDevPtr_*)a.dev;
+        CuDevPtr_* pb = (CuDevPtr_*)b.dev;
+        CuDevPtr_* po = (CuDevPtr_*)out.dev;
         float kk = k;
         unsigned int nn = (unsigned int)n;
         int o = op;
         int bf = a.dtype == CUDA_BF16 ? 1 : 0;
         int vec = (a.dev | b.dev | out.dev) % 16UL == 0UL;
-        void* params[8];
-        params[0] = (void*)&pa; params[1] = (void*)&pb; params[2] = (void*)&po; params[3] = (void*)&kk;
-        params[4] = (void*)&nn; params[5] = (void*)&o; params[6] = (void*)&bf; params[7] = (void*)&vec;
-        return cuda_launch_(K_HALF_EW, vec ? (n + 7UL) / 8UL : n, (&void)&params[0]);
+        CuKernelArg_* params[8];
+        params[0] = (CuKernelArg_*)&pa; params[1] = (CuKernelArg_*)&pb; params[2] = (CuKernelArg_*)&po; params[3] = (CuKernelArg_*)&kk;
+        params[4] = (CuKernelArg_*)&nn; params[5] = (CuKernelArg_*)&o; params[6] = (CuKernelArg_*)&bf; params[7] = (CuKernelArg_*)&vec;
+        return cuda_launch_(K_HALF_EW, vec ? (n + 7UL) / 8UL : n, &params[0]);
     }
 }
 
@@ -2540,17 +2552,17 @@ int cuda_half_bias(struct CudaHalfBuf y, struct CudaHalfBuf bias, unsigned long 
     if (!cuda_ensure_() || total == 0UL || total > 4294967295UL || !cuda_half_ok_(y, total) ||
         !cuda_half_ok_(bias, channels) || y.dtype != bias.dtype) return 0;
     unsafe {
-        void* py = (void*)y.dev;
-        void* pb = (void*)bias.dev;
+        CuDevPtr_* py = (CuDevPtr_*)y.dev;
+        CuDevPtr_* pb = (CuDevPtr_*)bias.dev;
         unsigned int t = (unsigned int)total;
         unsigned int c = (unsigned int)channels;
         unsigned int p = (unsigned int)plane;
         int r = relu ? 1 : 0;
         int bf = y.dtype == CUDA_BF16 ? 1 : 0;
-        void* params[7];
-        params[0] = (void*)&py; params[1] = (void*)&pb; params[2] = (void*)&t; params[3] = (void*)&c;
-        params[4] = (void*)&p; params[5] = (void*)&r; params[6] = (void*)&bf;
-        return cuda_launch_(K_HALF_BIAS, total, (&void)&params[0]);
+        CuKernelArg_* params[7];
+        params[0] = (CuKernelArg_*)&py; params[1] = (CuKernelArg_*)&pb; params[2] = (CuKernelArg_*)&t; params[3] = (CuKernelArg_*)&c;
+        params[4] = (CuKernelArg_*)&p; params[5] = (CuKernelArg_*)&r; params[6] = (CuKernelArg_*)&bf;
+        return cuda_launch_(K_HALF_BIAS, total, &params[0]);
     }
 }
 
@@ -2565,19 +2577,19 @@ static int cuda_half_pool_(struct CudaHalfBuf x, struct CudaHalfBuf y, unsigned 
     if (total == 0UL || total > 4294967295UL || height * width > 4294967295UL ||
         !cuda_half_ok_(x, rows * height * width) || !cuda_half_ok_(y, total)) return 0;
     unsafe {
-        void* px = (void*)x.dev;
-        void* py = (void*)y.dev;
+        CuDevPtr_* px = (CuDevPtr_*)x.dev;
+        CuDevPtr_* py = (CuDevPtr_*)y.dev;
         unsigned int r = (unsigned int)rows;
         unsigned int hh = (unsigned int)height; unsigned int ww = (unsigned int)width;
         unsigned int ohh = (unsigned int)oh; unsigned int oww = (unsigned int)ow;
         unsigned int kk = (unsigned int)kernel; unsigned int ss = (unsigned int)stride;
         int a = avg;
         int bf = x.dtype == CUDA_BF16 ? 1 : 0;
-        void* params[11];
-        params[0] = (void*)&px; params[1] = (void*)&py; params[2] = (void*)&r; params[3] = (void*)&hh;
-        params[4] = (void*)&ww; params[5] = (void*)&ohh; params[6] = (void*)&oww; params[7] = (void*)&kk;
-        params[8] = (void*)&ss; params[9] = (void*)&a; params[10] = (void*)&bf;
-        return cuda_launch_(K_HALF_POOL, total, (&void)&params[0]);
+        CuKernelArg_* params[11];
+        params[0] = (CuKernelArg_*)&px; params[1] = (CuKernelArg_*)&py; params[2] = (CuKernelArg_*)&r; params[3] = (CuKernelArg_*)&hh;
+        params[4] = (CuKernelArg_*)&ww; params[5] = (CuKernelArg_*)&ohh; params[6] = (CuKernelArg_*)&oww; params[7] = (CuKernelArg_*)&kk;
+        params[8] = (CuKernelArg_*)&ss; params[9] = (CuKernelArg_*)&a; params[10] = (CuKernelArg_*)&bf;
+        return cuda_launch_(K_HALF_POOL, total, &params[0]);
     }
 }
 
