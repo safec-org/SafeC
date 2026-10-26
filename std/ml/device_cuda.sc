@@ -13,47 +13,12 @@
 #include <std/ml/device.h>
 #include <std/ml/device_kernels.h>
 #include <std/ml/gpu_cuda.h>
+#include <std/ml/cuda_ffi.h>
 #include <std/time.h>
 
 namespace std {
 
-extern int cuCtxGetDevice(int* device);
-extern int cuDeviceGetAttribute(int* value, int attr, int device);
-extern int cuStreamSynchronize(void* stream);
-extern int cuMemAlloc_v2(unsigned long long* dptr, size_t bytes);
-extern int cuMemFree_v2(unsigned long long dptr);
-extern int cuMemcpyHtoDAsync_v2(unsigned long long dst, const void* src, size_t bytes, void* stream);
-extern int cuMemcpyDtoHAsync_v2(void* dst, unsigned long long src, size_t bytes, void* stream);
-extern int cuMemcpyDtoDAsync_v2(unsigned long long dst, unsigned long long src, size_t bytes, void* stream);
-extern int cuModuleLoadData(void** module, const void* image);
-extern int cuModuleGetFunction(void** func, void* module, const char* name);
-extern int cuLaunchKernel(void* f, unsigned int gx, unsigned int gy, unsigned int gz,
-                          unsigned int bx, unsigned int by, unsigned int bz,
-                          unsigned int shared, void* stream, void** params, void** extra);
-extern int nvrtcCreateProgram(void** prog, const char* src, const char* name, int numHeaders,
-                              const char** headers, const char** includeNames);
-extern int nvrtcCompileProgram(void* prog, int numOptions, const char** options);
-extern int nvrtcGetCUBINSize(void* prog, size_t* size);
-extern int nvrtcGetCUBIN(void* prog, char* cubin);
-extern int nvrtcDestroyProgram(void** prog);
-extern int cublasCreate_v2(void** handle);
-extern int cuEventCreate(void** event, unsigned int flags);
-extern int cuEventRecord(void* event, void* stream);
-extern int cuEventSynchronize(void* event);
-extern int cuEventElapsedTime(float* ms, void* start, void* end);
-extern int cuEventDestroy_v2(void* event);
-extern int cublasSetStream_v2(void* handle, void* stream);
-extern int cublasSgemm_v2(void* handle, int transa, int transb, int m, int n, int k,
-                          const float* alpha, const float* a, int lda, const float* b, int ldb,
-                          const float* beta, float* c, int ldc);
-extern int cublasSgemmStridedBatched(void* handle, int transa, int transb, int m, int n, int k,
-                                     const float* alpha, const float* a, int lda, long long sa,
-                                     const float* b, int ldb, long long sb, const float* beta,
-                                     float* c, int ldc, long long sc, int batch);
-extern int cublasGemmStridedBatchedEx(void* handle, int transa, int transb, int m, int n, int k, const void* alpha,
-                                      const void* a, int aType, int lda, long long sa,
-                                      const void* b, int bType, int ldb, long long sb, const void* beta,
-                                      void* c, int cType, int ldc, long long sc, int batch, int computeType, int algo);
+// The driver API, NVRTC and cuBLAS are declared in cuda_ffi.h.
 #define DCUDA_R_32F  0    // CUDA_R_32F
 #define DCUDA_R_16F  2    // CUDA_R_16F
 #define DCUDA_R_16BF 14   // CUDA_R_16BF
@@ -70,17 +35,17 @@ extern void  free(unsigned char* ptr);
 #define DCUDA_MAX_BLOCKS 4096UL
 
 static int   g_dcuda_state = 0;
-static void* g_dcuda_stream = (void*)0;
-static void* g_dcuda_blas = (void*)0;
-static void* g_dcuda_fn[DK_COUNT];
-static void* g_dcuda_fn16[DK_COUNT];   // the DK_TAGGED build (16-bit arguments), compiled on first use
+static CudaNativeStream* g_dcuda_stream = (CudaNativeStream*)0;
+static CublasHandle_* g_dcuda_blas = (CublasHandle_*)0;
+static CuFunction_* g_dcuda_fn[DK_COUNT];
+static CuFunction_* g_dcuda_fn16[DK_COUNT];   // the DK_TAGGED build (16-bit arguments), compiled on first use
 static int   g_dcuda_state16 = 0;
 static char  g_dcuda_arch[32];        // -arch=sm_XY
 
 // Compiles device_kernels.cu (with DK_TAGGED when tagged) into fns.
-static int dcuda_module_(int tagged, &void fns) {
+static int dcuda_module_(int tagged, CuFunction_** fns) {
     unsafe {
-        void* prog = (void*)0;
+        NvrtcProgram_* prog = (NvrtcProgram_*)0;
         if (nvrtcCreateProgram(&prog, device_kernel_source_(), "safec_device.cu", 0,
                                (const char**)0, (const char**)0) != 0) return 0;
         const char* opts[3];
@@ -94,14 +59,13 @@ static int dcuda_module_(int tagged, &void fns) {
         if (cubin == (char*)0) { nvrtcDestroyProgram(&prog); return 0; }
         nvrtcGetCUBIN(prog, cubin);
         nvrtcDestroyProgram(&prog);
-        void* module = (void*)0;
-        int loaded = cuModuleLoadData(&module, (const void*)cubin);
+        CudaNativeModule* module = (CudaNativeModule*)0;
+        int loaded = cuModuleLoadData(&module, (const char*)cubin);
         free((unsigned char*)cubin);
         if (loaded != 0) return 0;
-        void** f = (void**)fns;
         int k = 0;
         while (k < DK_COUNT) {
-            if (cuModuleGetFunction(&f[k], module, device_kernel_name_(k)) != 0) return 0;
+            if (cuModuleGetFunction(&fns[k], module, device_kernel_name_(k)) != 0) return 0;
             k = k + 1;
         }
     }
@@ -117,7 +81,7 @@ static int dcuda_ensure_() {
     if (!cuda_available()) return 0;
     unsafe {
         match (cuda_stream_handle()) {
-            case some(s): { g_dcuda_stream = (void*)s; }
+            case some(s): { g_dcuda_stream = (CudaNativeStream*)s; }
             case null: { return 0; }
         }
         if (cublasCreate_v2(&g_dcuda_blas) != 0) return 0;
@@ -137,7 +101,7 @@ static int dcuda_ensure_() {
         arch[p] = (char)(48 + (cc / 10) % 10); p = p + 1;
         arch[p] = (char)(48 + cc % 10); p = p + 1;
         arch[p] = (char)0;
-        if (!dcuda_module_(0, (&void)(void*)&g_dcuda_fn[0])) return 0;
+        if (!dcuda_module_(0, &g_dcuda_fn[0])) return 0;
     }
     g_dcuda_state = 1;
     return 1;
@@ -150,40 +114,47 @@ static int dcuda_ensure_() {
 // is the adjoint of: its forward is that convolution's backward-data, and so
 // on. Each shape gets a plan; each of its three directions the algorithm
 // cudnnFind timed fastest, the first time that direction ran.
-extern int cudnnCreate(void** handle) __attribute__((weak));
-extern int cudnnSetStream(void* handle, void* stream) __attribute__((weak));
-extern int cudnnCreateTensorDescriptor(void** desc) __attribute__((weak));
-extern int cudnnSetTensor4dDescriptor(void* desc, int format, int dataType, int n, int c, int h, int w) __attribute__((weak));
-extern int cudnnCreateFilterDescriptor(void** desc) __attribute__((weak));
-extern int cudnnSetFilter4dDescriptor(void* desc, int dataType, int format, int k, int c, int h, int w) __attribute__((weak));
-extern int cudnnCreateConvolutionDescriptor(void** desc) __attribute__((weak));
-extern int cudnnSetConvolution2dDescriptor(void* desc, int padH, int padW, int u, int v, int dilationH, int dilationW,
+extern int cudnnCreate(CudnnHandle_** handle) __attribute__((weak));
+extern int cudnnSetStream(CudnnHandle_* handle, CudaNativeStream* stream) __attribute__((weak));
+extern int cudnnCreateTensorDescriptor(CudnnTensorDesc_** desc) __attribute__((weak));
+extern int cudnnSetTensor4dDescriptor(CudnnTensorDesc_* desc, int format, int dataType, int n, int c, int h, int w) __attribute__((weak));
+extern int cudnnCreateFilterDescriptor(CudnnFilterDesc_** desc) __attribute__((weak));
+extern int cudnnSetFilter4dDescriptor(CudnnFilterDesc_* desc, int dataType, int format, int k, int c, int h, int w) __attribute__((weak));
+extern int cudnnCreateConvolutionDescriptor(CudnnConvDesc_** desc) __attribute__((weak));
+extern int cudnnSetConvolution2dDescriptor(CudnnConvDesc_* desc, int padH, int padW, int u, int v, int dilationH, int dilationW,
                                            int mode, int computeType) __attribute__((weak));
-extern int cudnnSetConvolutionMathType(void* desc, int mathType) __attribute__((weak));
-extern int cudnnBackendCreateDescriptor(int type, void** desc) __attribute__((weak));
-extern int cudnnBackendDestroyDescriptor(void* desc) __attribute__((weak));
-extern int cudnnBackendSetAttribute(void* desc, int name, int type, long count, const void* elems) __attribute__((weak));
-extern int cudnnBackendGetAttribute(void* desc, int name, int type, long requested, long* count, void* elems)
-    __attribute__((weak));
-extern int cudnnBackendFinalize(void* desc) __attribute__((weak));
-extern int cudnnBackendExecute(void* handle, void* plan, void* variantPack) __attribute__((weak));
-extern int cudnnFindConvolutionForwardAlgorithm(void* handle, void* xDesc, void* wDesc, void* convDesc, void* yDesc,
-                                                int requested, int* returned, void* perf) __attribute__((weak));
-extern int cudnnFindConvolutionBackwardDataAlgorithm(void* handle, void* wDesc, void* dyDesc, void* convDesc,
-                                                     void* dxDesc, int requested, int* returned, void* perf)
-    __attribute__((weak));
-extern int cudnnFindConvolutionBackwardFilterAlgorithm(void* handle, void* xDesc, void* dyDesc, void* convDesc,
-                                                       void* dwDesc, int requested, int* returned, void* perf)
-    __attribute__((weak));
-extern int cudnnConvolutionForward(void* handle, const void* alpha, void* xDesc, const void* x, void* wDesc,
-                                   const void* w, void* convDesc, int algo, void* ws, size_t wsBytes, const void* beta,
-                                   void* yDesc, void* y) __attribute__((weak));
-extern int cudnnConvolutionBackwardData(void* handle, const void* alpha, void* wDesc, const void* w, void* dyDesc,
-                                        const void* dy, void* convDesc, int algo, void* ws, size_t wsBytes,
-                                        const void* beta, void* dxDesc, void* dx) __attribute__((weak));
-extern int cudnnConvolutionBackwardFilter(void* handle, const void* alpha, void* xDesc, const void* x, void* dyDesc,
-                                          const void* dy, void* convDesc, int algo, void* ws, size_t wsBytes,
-                                          const void* beta, void* dwDesc, void* dw) __attribute__((weak));
+extern int cudnnSetConvolutionMathType(CudnnConvDesc_* desc, int mathType) __attribute__((weak));
+extern int cudnnBackendCreateDescriptor(int type, CudnnBackendDesc_** desc) __attribute__((weak));
+extern int cudnnBackendDestroyDescriptor(CudnnBackendDesc_* desc) __attribute__((weak));
+// elems: 'count' values of the attribute's type, as bytes
+extern int cudnnBackendSetAttribute(CudnnBackendDesc_* desc, int name, int type, long count, const unsigned char* elems) __attribute__((weak));
+extern int cudnnBackendGetAttribute(CudnnBackendDesc_* desc, int name, int type, long requested, long* count,
+                                    unsigned char* elems) __attribute__((weak));
+extern int cudnnBackendFinalize(CudnnBackendDesc_* desc) __attribute__((weak));
+extern int cudnnBackendExecute(CudnnHandle_* handle, CudnnBackendDesc_* plan, CudnnBackendDesc_* variantPack) __attribute__((weak));
+// perf: 'requested' cudnnConvolution*AlgoPerf_t (DCDNN_PERF_INTS ints each)
+extern int cudnnFindConvolutionForwardAlgorithm(CudnnHandle_* handle, CudnnTensorDesc_* xDesc, CudnnFilterDesc_* wDesc,
+                                                CudnnConvDesc_* convDesc, CudnnTensorDesc_* yDesc,
+                                                int requested, int* returned, int* perf) __attribute__((weak));
+extern int cudnnFindConvolutionBackwardDataAlgorithm(CudnnHandle_* handle, CudnnFilterDesc_* wDesc, CudnnTensorDesc_* dyDesc,
+                                                     CudnnConvDesc_* convDesc, CudnnTensorDesc_* dxDesc,
+                                                     int requested, int* returned, int* perf) __attribute__((weak));
+extern int cudnnFindConvolutionBackwardFilterAlgorithm(CudnnHandle_* handle, CudnnTensorDesc_* xDesc, CudnnTensorDesc_* dyDesc,
+                                                       CudnnConvDesc_* convDesc, CudnnFilterDesc_* dwDesc,
+                                                       int requested, int* returned, int* perf) __attribute__((weak));
+// alpha / beta: float (CUDNN_DATA_FLOAT compute)
+extern int cudnnConvolutionForward(CudnnHandle_* handle, const float* alpha, CudnnTensorDesc_* xDesc, const CuDevPtr_* x,
+                                   CudnnFilterDesc_* wDesc, const CuDevPtr_* w, CudnnConvDesc_* convDesc, int algo,
+                                   CuDevPtr_* ws, size_t wsBytes, const float* beta,
+                                   CudnnTensorDesc_* yDesc, CuDevPtr_* y) __attribute__((weak));
+extern int cudnnConvolutionBackwardData(CudnnHandle_* handle, const float* alpha, CudnnFilterDesc_* wDesc, const CuDevPtr_* w,
+                                        CudnnTensorDesc_* dyDesc, const CuDevPtr_* dy, CudnnConvDesc_* convDesc, int algo,
+                                        CuDevPtr_* ws, size_t wsBytes, const float* beta,
+                                        CudnnTensorDesc_* dxDesc, CuDevPtr_* dx) __attribute__((weak));
+extern int cudnnConvolutionBackwardFilter(CudnnHandle_* handle, const float* alpha, CudnnTensorDesc_* xDesc, const CuDevPtr_* x,
+                                          CudnnTensorDesc_* dyDesc, const CuDevPtr_* dy, CudnnConvDesc_* convDesc, int algo,
+                                          CuDevPtr_* ws, size_t wsBytes, const float* beta,
+                                          CudnnFilterDesc_* dwDesc, CuDevPtr_* dw) __attribute__((weak));
 
 #define DCDNN_NCHW      0      // CUDNN_TENSOR_NCHW
 #define DCDNN_FLOAT     0      // CUDNN_DATA_FLOAT
@@ -201,11 +172,15 @@ extern int cudnnConvolutionBackwardFilter(void* handle, const void* alpha, void*
 #define DCDNN_BF 2
 
 static int   g_dcdnn_state = 0;
-static void* g_dcdnn = (void*)0;
+static CudnnHandle_* g_dcdnn = (CudnnHandle_*)0;
 static unsigned long long g_dcdnn_ws = 0ULL;
 static unsigned long g_dcdnn_wsBytes = 0UL;
 static unsigned long g_dcdnn_key[DCDNN_PLANS * DCDNN_KEY];
-static void* g_dcdnn_desc[DCDNN_PLANS * 4];   // x, y, w, conv (the convolution's sides)
+// the convolution's sides: x, y, w, conv
+static CudnnTensorDesc_* g_dcdnn_xd[DCDNN_PLANS];
+static CudnnTensorDesc_* g_dcdnn_yd[DCDNN_PLANS];
+static CudnnFilterDesc_* g_dcdnn_wd[DCDNN_PLANS];
+static CudnnConvDesc_* g_dcdnn_cd[DCDNN_PLANS];
 static int   g_dcdnn_algo[DCDNN_PLANS * 3];   // per direction; -1 not found yet, -2 can't
 static int   g_dcdnn_math[DCDNN_PLANS * 3];
 static int   g_dcdnn_good[DCDNN_PLANS];
@@ -215,7 +190,7 @@ static int dcdnn_on_() {
     if (g_dcdnn_state == 0) {
         g_dcdnn_state = -1;
         unsafe {
-            if (dcuda_ensure_() && (void*)cudnnCreate != (void*)0 && cudnnCreate(&g_dcdnn) == 0 &&
+            if (dcuda_ensure_() && (?fn int(CudnnHandle_**))cudnnCreate != null && cudnnCreate(&g_dcdnn) == 0 &&
                 cudnnSetStream(g_dcdnn, g_dcuda_stream) == 0) g_dcdnn_state = 1;
         }
     }
@@ -264,7 +239,8 @@ static int dcdnn_plan_(const &DevConv c) {
     unsigned long yW = c.transpose ? c.inW : c.outW;
     int ok = 1;
     unsafe {
-        void* xd = (void*)0; void* yd = (void*)0; void* wd = (void*)0; void* cd = (void*)0;
+        CudnnTensorDesc_* xd = (CudnnTensorDesc_*)0; CudnnTensorDesc_* yd = (CudnnTensorDesc_*)0;
+        CudnnFilterDesc_* wd = (CudnnFilterDesc_*)0; CudnnConvDesc_* cd = (CudnnConvDesc_*)0;
         ok = cudnnCreateTensorDescriptor(&xd) == 0 && cudnnCreateTensorDescriptor(&yd) == 0 &&
              cudnnCreateFilterDescriptor(&wd) == 0 && cudnnCreateConvolutionDescriptor(&cd) == 0;
         int dt = c.dtype == DEVICE_FP16 ? 2 : (c.dtype == DEVICE_BF16 ? 9 : DCDNN_FLOAT);   // CUDNN_DATA_HALF / BFLOAT16
@@ -273,7 +249,7 @@ static int dcdnn_plan_(const &DevConv c) {
              cudnnSetFilter4dDescriptor(wd, dt, DCDNN_NCHW, (int)yC, (int)xC, (int)c.kH, (int)c.kW) == 0 &&
              cudnnSetConvolution2dDescriptor(cd, (int)c.pH, (int)c.pW, (int)c.sH, (int)c.sW, (int)c.dH, (int)c.dW,
                                              DCDNN_XCORR, DCDNN_FLOAT) == 0;
-        g_dcdnn_desc[i * 4] = xd; g_dcdnn_desc[i * 4 + 1] = yd; g_dcdnn_desc[i * 4 + 2] = wd; g_dcdnn_desc[i * 4 + 3] = cd;
+        g_dcdnn_xd[i] = xd; g_dcdnn_yd[i] = yd; g_dcdnn_wd[i] = wd; g_dcdnn_cd[i] = cd;
     }
     g_dcdnn_good[i] = ok;
     return ok ? i : -1;
@@ -314,46 +290,46 @@ static int dcdnn_plan_(const &DevConv c) {
 #define DCG_CONFIGS    24
 #define DCG_DESCS      8    // per slot: plan, x, w, y, conv, op, graph (kept alive with the plan)
 
-static void* g_dcg_d[DCDNN_PLANS * 3 * DCG_DESCS];
-static void* g_dcg_vp[DCDNN_PLANS * 3];
+static CudnnBackendDesc_* g_dcg_d[DCDNN_PLANS * 3 * DCG_DESCS];
+static CudnnBackendDesc_* g_dcg_vp[DCDNN_PLANS * 3];
 static unsigned long g_dcg_ptr[DCDNN_PLANS * 3 * 4];   // x, w, y, workspace the variant pack binds
 static int   g_dcg_state[DCDNN_PLANS * 3];             // 0 untried, 1 graph plan, -1 legacy
 static unsigned long g_dcg_wsNeed[DCDNN_PLANS * 3];
 
-static void* dcg_tensor_(long uid, unsigned long n, unsigned long c, unsigned long h, unsigned long w, int dt) {
+static CudnnBackendDesc_* dcg_tensor_(long uid, unsigned long n, unsigned long c, unsigned long h, unsigned long w, int dt) {
     unsafe {
-        void* d = (void*)0;
-        if (cudnnBackendCreateDescriptor(DCG_TENSOR, &d) != 0) return (void*)0;
+        CudnnBackendDesc_* d = (CudnnBackendDesc_*)0;
+        if (cudnnBackendCreateDescriptor(DCG_TENSOR, &d) != 0) return (CudnnBackendDesc_*)0;
         long dims[4];
         long st[4];
         dims[0] = (long)n; dims[1] = (long)c; dims[2] = (long)h; dims[3] = (long)w;
         st[0] = (long)(c * h * w); st[1] = (long)(h * w); st[2] = (long)w; st[3] = 1L;
         long align = 16L;
         unsigned char virt = (unsigned char)0;
-        int ok = cudnnBackendSetAttribute(d, 901, DCG_T_DTYPE, 1L, (const void*)&dt) == 0 &&
-                 cudnnBackendSetAttribute(d, 902, DCG_T_INT64, 4L, (const void*)&dims[0]) == 0 &&
-                 cudnnBackendSetAttribute(d, 903, DCG_T_INT64, 4L, (const void*)&st[0]) == 0 &&
-                 cudnnBackendSetAttribute(d, 906, DCG_T_INT64, 1L, (const void*)&uid) == 0 &&
-                 cudnnBackendSetAttribute(d, 900, DCG_T_INT64, 1L, (const void*)&align) == 0 &&
-                 cudnnBackendSetAttribute(d, 907, DCG_T_BOOL, 1L, (const void*)&virt) == 0 &&
+        int ok = cudnnBackendSetAttribute(d, 901, DCG_T_DTYPE, 1L, (const unsigned char*)&dt) == 0 &&
+                 cudnnBackendSetAttribute(d, 902, DCG_T_INT64, 4L, (const unsigned char*)&dims[0]) == 0 &&
+                 cudnnBackendSetAttribute(d, 903, DCG_T_INT64, 4L, (const unsigned char*)&st[0]) == 0 &&
+                 cudnnBackendSetAttribute(d, 906, DCG_T_INT64, 1L, (const unsigned char*)&uid) == 0 &&
+                 cudnnBackendSetAttribute(d, 900, DCG_T_INT64, 1L, (const unsigned char*)&align) == 0 &&
+                 cudnnBackendSetAttribute(d, 907, DCG_T_BOOL, 1L, (const unsigned char*)&virt) == 0 &&
                  cudnnBackendFinalize(d) == 0;
-        if (!ok) { cudnnBackendDestroyDescriptor(d); return (void*)0; }
+        if (!ok) { cudnnBackendDestroyDescriptor(d); return (CudnnBackendDesc_*)0; }
         return d;
     }
 }
 
 // 1 if the engine behind 'cfg' suits fp32 without TF32 (no tensor-core,
 // down-converting or reduced-precision notes); always 1 for 16-bit data.
-static int dcg_cfg_ok_(void* cfg, int is16) {
+static int dcg_cfg_ok_(CudnnBackendDesc_* cfg, int is16) {
     if (is16 || cuda_tf32_enabled()) return 1;
     unsafe {
-        void* eng = (void*)0;
+        CudnnBackendDesc_* eng = (CudnnBackendDesc_*)0;
         if (cudnnBackendCreateDescriptor(DCG_ENGINE, &eng) != 0) return 0;
         long got = 0L;
         int notes[16];
         long nn = 0L;
-        int ok = cudnnBackendGetAttribute(cfg, 300, DCG_T_DESC, 1L, &got, (void*)&eng) == 0 &&
-                 cudnnBackendGetAttribute(eng, 1303, DCG_T_NOTE, 16L, &nn, (void*)&notes[0]) == 0;
+        int ok = cudnnBackendGetAttribute(cfg, 300, DCG_T_DESC, 1L, &got, (unsigned char*)&eng) == 0 &&
+                 cudnnBackendGetAttribute(eng, 1303, DCG_T_NOTE, 16L, &nn, (unsigned char*)&notes[0]) == 0;
         cudnnBackendDestroyDescriptor(eng);
         if (!ok) return 0;
         long i = 0L;
@@ -362,33 +338,33 @@ static int dcg_cfg_ok_(void* cfg, int is16) {
     return 1;
 }
 
-static void* dcg_pack_(unsigned long x, unsigned long w, unsigned long y, unsigned long ws) {
+static CudnnBackendDesc_* dcg_pack_(unsigned long x, unsigned long w, unsigned long y, unsigned long ws) {
     unsafe {
-        void* vp = (void*)0;
-        if (cudnnBackendCreateDescriptor(DCG_VP, &vp) != 0) return (void*)0;
+        CudnnBackendDesc_* vp = (CudnnBackendDesc_*)0;
+        if (cudnnBackendCreateDescriptor(DCG_VP, &vp) != 0) return (CudnnBackendDesc_*)0;
         long uids[3];
-        void* ptrs[3];
+        CuDevPtr_* ptrs[3];
         uids[0] = 1L; uids[1] = 2L; uids[2] = 3L;
-        ptrs[0] = (void*)x; ptrs[1] = (void*)w; ptrs[2] = (void*)y;
-        void* wsp = (void*)ws;
-        int ok = cudnnBackendSetAttribute(vp, 1000, DCG_T_INT64, 3L, (const void*)&uids[0]) == 0 &&
-                 cudnnBackendSetAttribute(vp, 1001, DCG_T_PTR, 3L, (const void*)&ptrs[0]) == 0 &&
-                 cudnnBackendSetAttribute(vp, 1003, DCG_T_PTR, 1L, (const void*)&wsp) == 0 &&
+        ptrs[0] = (CuDevPtr_*)x; ptrs[1] = (CuDevPtr_*)w; ptrs[2] = (CuDevPtr_*)y;
+        CuDevPtr_* wsp = (CuDevPtr_*)ws;
+        int ok = cudnnBackendSetAttribute(vp, 1000, DCG_T_INT64, 3L, (const unsigned char*)&uids[0]) == 0 &&
+                 cudnnBackendSetAttribute(vp, 1001, DCG_T_PTR, 3L, (const unsigned char*)&ptrs[0]) == 0 &&
+                 cudnnBackendSetAttribute(vp, 1003, DCG_T_PTR, 1L, (const unsigned char*)&wsp) == 0 &&
                  cudnnBackendFinalize(vp) == 0;
-        if (!ok) { cudnnBackendDestroyDescriptor(vp); return (void*)0; }
+        if (!ok) { cudnnBackendDestroyDescriptor(vp); return (CudnnBackendDesc_*)0; }
         return vp;
     }
 }
 
 // ms per call of 'plan' with 'vp' for back-to-back calls: the larger of the
 // host enqueue time and the GPU time, best of a few rounds; < 0 on failure.
-static double dcg_time_(void* plan, void* vp) {
+static double dcg_time_(CudnnBackendDesc_* plan, CudnnBackendDesc_* vp) {
     double bestHost = 1e30;
     double bestGpu = 1e30;
     unsafe {
         if (cudnnBackendExecute(g_dcdnn, plan, vp) != 0 || cuStreamSynchronize(g_dcuda_stream) != 0) return -1.0;
-        void* e0 = (void*)0;
-        void* e1 = (void*)0;
+        CuEvent_* e0 = (CuEvent_*)0;
+        CuEvent_* e1 = (CuEvent_*)0;
         int ok = cuEventCreate(&e0, 0U) == 0 && cuEventCreate(&e1, 0U) == 0;
         int round = 0;
         while (ok && round < 3) {
@@ -406,8 +382,8 @@ static double dcg_time_(void* plan, void* vp) {
             }
             round = round + 1;
         }
-        if (e0 != (void*)0) cuEventDestroy_v2(e0);
-        if (e1 != (void*)0) cuEventDestroy_v2(e1);
+        if (e0 != (CuEvent_*)0) cuEventDestroy_v2(e0);
+        if (e1 != (CuEvent_*)0) cuEventDestroy_v2(e1);
         if (!ok) return -1.0;
     }
     return bestHost > bestGpu ? bestHost : bestGpu;
@@ -417,9 +393,9 @@ static void dcg_drop_(int slot) {
     unsafe {
         int i = 0;
         while (i < DCG_DESCS) {
-            void* d = g_dcg_d[slot * DCG_DESCS + i];
-            if (d != (void*)0) cudnnBackendDestroyDescriptor(d);
-            g_dcg_d[slot * DCG_DESCS + i] = (void*)0;
+            CudnnBackendDesc_* d = g_dcg_d[slot * DCG_DESCS + i];
+            if (d != (CudnnBackendDesc_*)0) cudnnBackendDestroyDescriptor(d);
+            g_dcg_d[slot * DCG_DESCS + i] = (CudnnBackendDesc_*)0;
             i = i + 1;
         }
     }
@@ -447,22 +423,22 @@ static int dcg_build_(int plan, int dir, unsigned long x, unsigned long w, unsig
     }
     int is16 = dt != DCDNN_FLOAT;
     unsafe {
-        void** d = (void**)&g_dcg_d[slot * DCG_DESCS];
+        struct CudnnBackendDesc_** d = (CudnnBackendDesc_**)&g_dcg_d[slot * DCG_DESCS];
         d[1] = dcg_tensor_(1L, batch, xC, xH, xW, dt);
         d[2] = dcg_tensor_(2L, yC, xC, kH, kW, dt);
         d[3] = dcg_tensor_(3L, batch, yC, yH, yW, dt);
-        int ok = d[1] != (void*)0 && d[2] != (void*)0 && d[3] != (void*)0;
+        int ok = d[1] != (CudnnBackendDesc_*)0 && d[2] != (CudnnBackendDesc_*)0 && d[3] != (CudnnBackendDesc_*)0;
         long two = 2L;
         int ct = DCDNN_FLOAT;
         int cm = DCDNN_XCORR;
         ok = ok && cudnnBackendCreateDescriptor(DCG_CONV, &d[4]) == 0;
-        ok = ok && cudnnBackendSetAttribute(d[4], 106, DCG_T_INT64, 1L, (const void*)&two) == 0 &&
-             cudnnBackendSetAttribute(d[4], 100, DCG_T_DTYPE, 1L, (const void*)&ct) == 0 &&
-             cudnnBackendSetAttribute(d[4], 101, DCG_T_CONVMODE, 1L, (const void*)&cm) == 0 &&
-             cudnnBackendSetAttribute(d[4], 105, DCG_T_INT64, 2L, (const void*)&pad[0]) == 0 &&
-             cudnnBackendSetAttribute(d[4], 104, DCG_T_INT64, 2L, (const void*)&pad[0]) == 0 &&
-             cudnnBackendSetAttribute(d[4], 102, DCG_T_INT64, 2L, (const void*)&dil[0]) == 0 &&
-             cudnnBackendSetAttribute(d[4], 103, DCG_T_INT64, 2L, (const void*)&str[0]) == 0 &&
+        ok = ok && cudnnBackendSetAttribute(d[4], 106, DCG_T_INT64, 1L, (const unsigned char*)&two) == 0 &&
+             cudnnBackendSetAttribute(d[4], 100, DCG_T_DTYPE, 1L, (const unsigned char*)&ct) == 0 &&
+             cudnnBackendSetAttribute(d[4], 101, DCG_T_CONVMODE, 1L, (const unsigned char*)&cm) == 0 &&
+             cudnnBackendSetAttribute(d[4], 105, DCG_T_INT64, 2L, (const unsigned char*)&pad[0]) == 0 &&
+             cudnnBackendSetAttribute(d[4], 104, DCG_T_INT64, 2L, (const unsigned char*)&pad[0]) == 0 &&
+             cudnnBackendSetAttribute(d[4], 102, DCG_T_INT64, 2L, (const unsigned char*)&dil[0]) == 0 &&
+             cudnnBackendSetAttribute(d[4], 103, DCG_T_INT64, 2L, (const unsigned char*)&str[0]) == 0 &&
              cudnnBackendFinalize(d[4]) == 0;
         // op attributes: alpha, beta, conv, then the three tensors
         int opType = dir == DCDNN_F ? DCG_OP_FWD : (dir == DCDNN_BD ? DCG_OP_BD : DCG_OP_BF);
@@ -470,76 +446,76 @@ static int dcg_build_(int plan, int dir, unsigned long x, unsigned long w, unsig
         float one = (float)1.0;
         float zero = (float)0.0;
         ok = ok && cudnnBackendCreateDescriptor(opType, &d[5]) == 0;
-        ok = ok && cudnnBackendSetAttribute(d[5], a0, DCG_T_FLOAT, 1L, (const void*)&one) == 0 &&
-             cudnnBackendSetAttribute(d[5], a0 + 1, DCG_T_FLOAT, 1L, (const void*)&zero) == 0 &&
-             cudnnBackendSetAttribute(d[5], a0 + 2, DCG_T_DESC, 1L, (const void*)&d[4]) == 0;
+        ok = ok && cudnnBackendSetAttribute(d[5], a0, DCG_T_FLOAT, 1L, (const unsigned char*)&one) == 0 &&
+             cudnnBackendSetAttribute(d[5], a0 + 1, DCG_T_FLOAT, 1L, (const unsigned char*)&zero) == 0 &&
+             cudnnBackendSetAttribute(d[5], a0 + 2, DCG_T_DESC, 1L, (const unsigned char*)&d[4]) == 0;
         if (dir == DCDNN_F)
-            ok = ok && cudnnBackendSetAttribute(d[5], 703, DCG_T_DESC, 1L, (const void*)&d[2]) == 0 &&
-                 cudnnBackendSetAttribute(d[5], 704, DCG_T_DESC, 1L, (const void*)&d[1]) == 0 &&
-                 cudnnBackendSetAttribute(d[5], 705, DCG_T_DESC, 1L, (const void*)&d[3]) == 0;
+            ok = ok && cudnnBackendSetAttribute(d[5], 703, DCG_T_DESC, 1L, (const unsigned char*)&d[2]) == 0 &&
+                 cudnnBackendSetAttribute(d[5], 704, DCG_T_DESC, 1L, (const unsigned char*)&d[1]) == 0 &&
+                 cudnnBackendSetAttribute(d[5], 705, DCG_T_DESC, 1L, (const unsigned char*)&d[3]) == 0;
         else if (dir == DCDNN_BD)
-            ok = ok && cudnnBackendSetAttribute(d[5], 709, DCG_T_DESC, 1L, (const void*)&d[2]) == 0 &&
-                 cudnnBackendSetAttribute(d[5], 710, DCG_T_DESC, 1L, (const void*)&d[1]) == 0 &&
-                 cudnnBackendSetAttribute(d[5], 711, DCG_T_DESC, 1L, (const void*)&d[3]) == 0;
+            ok = ok && cudnnBackendSetAttribute(d[5], 709, DCG_T_DESC, 1L, (const unsigned char*)&d[2]) == 0 &&
+                 cudnnBackendSetAttribute(d[5], 710, DCG_T_DESC, 1L, (const unsigned char*)&d[1]) == 0 &&
+                 cudnnBackendSetAttribute(d[5], 711, DCG_T_DESC, 1L, (const unsigned char*)&d[3]) == 0;
         else
-            ok = ok && cudnnBackendSetAttribute(d[5], 715, DCG_T_DESC, 1L, (const void*)&d[2]) == 0 &&
-                 cudnnBackendSetAttribute(d[5], 716, DCG_T_DESC, 1L, (const void*)&d[1]) == 0 &&
-                 cudnnBackendSetAttribute(d[5], 717, DCG_T_DESC, 1L, (const void*)&d[3]) == 0;
+            ok = ok && cudnnBackendSetAttribute(d[5], 715, DCG_T_DESC, 1L, (const unsigned char*)&d[2]) == 0 &&
+                 cudnnBackendSetAttribute(d[5], 716, DCG_T_DESC, 1L, (const unsigned char*)&d[1]) == 0 &&
+                 cudnnBackendSetAttribute(d[5], 717, DCG_T_DESC, 1L, (const unsigned char*)&d[3]) == 0;
         ok = ok && cudnnBackendFinalize(d[5]) == 0;
         ok = ok && cudnnBackendCreateDescriptor(DCG_OPGRAPH, &d[6]) == 0;
-        ok = ok && cudnnBackendSetAttribute(d[6], 801, DCG_T_DESC, 1L, (const void*)&d[5]) == 0 &&
-             cudnnBackendSetAttribute(d[6], 800, DCG_T_HANDLE, 1L, (const void*)&g_dcdnn) == 0 &&
+        ok = ok && cudnnBackendSetAttribute(d[6], 801, DCG_T_DESC, 1L, (const unsigned char*)&d[5]) == 0 &&
+             cudnnBackendSetAttribute(d[6], 800, DCG_T_HANDLE, 1L, (const unsigned char*)&g_dcdnn) == 0 &&
              cudnnBackendFinalize(d[6]) == 0;
-        void* heur = (void*)0;
-        void* cfgs[DCG_CONFIGS];
+        CudnnBackendDesc_* heur = (CudnnBackendDesc_*)0;
+        CudnnBackendDesc_* cfgs[DCG_CONFIGS];
         int i = 0;
-        while (i < DCG_CONFIGS) { cfgs[i] = (void*)0; i = i + 1; }
+        while (i < DCG_CONFIGS) { cfgs[i] = (CudnnBackendDesc_*)0; i = i + 1; }
         long ncfg = 0L;
         int hm = 3;   // CUDNN_HEUR_MODE_A
         ok = ok && cudnnBackendCreateDescriptor(DCG_ENGINEHEUR, &heur) == 0;
-        ok = ok && cudnnBackendSetAttribute(heur, 201, DCG_T_DESC, 1L, (const void*)&d[6]) == 0 &&
-             cudnnBackendSetAttribute(heur, 200, DCG_T_HEUR, 1L, (const void*)&hm) == 0 &&
+        ok = ok && cudnnBackendSetAttribute(heur, 201, DCG_T_DESC, 1L, (const unsigned char*)&d[6]) == 0 &&
+             cudnnBackendSetAttribute(heur, 200, DCG_T_HEUR, 1L, (const unsigned char*)&hm) == 0 &&
              cudnnBackendFinalize(heur) == 0;
         i = 0;
         while (ok && i < DCG_CONFIGS) { if (cudnnBackendCreateDescriptor(DCG_ENGINECFG, &cfgs[i]) != 0) ok = 0; i = i + 1; }
-        ok = ok && cudnnBackendGetAttribute(heur, 202, DCG_T_DESC, (long)DCG_CONFIGS, &ncfg, (void*)&cfgs[0]) == 0;
+        ok = ok && cudnnBackendGetAttribute(heur, 202, DCG_T_DESC, (long)DCG_CONFIGS, &ncfg, (unsigned char*)&cfgs[0]) == 0;
         if (ncfg > (long)DCG_CONFIGS) ncfg = (long)DCG_CONFIGS;
-        void* best = (void*)0;
+        CudnnBackendDesc_* best = (CudnnBackendDesc_*)0;
         double bestMs = 1e30;
         unsigned long bestWs = 0UL;
         long c = 0L;
         while (ok && c < ncfg) {
-            void* pl = (void*)0;
+            CudnnBackendDesc_* pl = (CudnnBackendDesc_*)0;
             long wsSize = 0L;
             long got = 0L;
             int use = dcg_cfg_ok_(cfgs[c], is16) && cudnnBackendCreateDescriptor(DCG_PLAN, &pl) == 0;
-            use = use && cudnnBackendSetAttribute(pl, 400, DCG_T_HANDLE, 1L, (const void*)&g_dcdnn) == 0 &&
-                  cudnnBackendSetAttribute(pl, 401, DCG_T_DESC, 1L, (const void*)&cfgs[c]) == 0 &&
+            use = use && cudnnBackendSetAttribute(pl, 400, DCG_T_HANDLE, 1L, (const unsigned char*)&g_dcdnn) == 0 &&
+                  cudnnBackendSetAttribute(pl, 401, DCG_T_DESC, 1L, (const unsigned char*)&cfgs[c]) == 0 &&
                   cudnnBackendFinalize(pl) == 0 &&
-                  cudnnBackendGetAttribute(pl, 402, DCG_T_INT64, 1L, &got, (void*)&wsSize) == 0 &&
+                  cudnnBackendGetAttribute(pl, 402, DCG_T_INT64, 1L, &got, (unsigned char*)&wsSize) == 0 &&
                   wsSize >= 0L && (unsigned long)wsSize <= DCDNN_MAX_WS &&
                   dcdnn_ws_grow_(wsSize == 0L ? 4UL : (unsigned long)wsSize);
-            void* vp = (void*)0;
-            if (use) { vp = dcg_pack_(x, w, y, (unsigned long)g_dcdnn_ws); use = vp != (void*)0; }
+            CudnnBackendDesc_* vp = (CudnnBackendDesc_*)0;
+            if (use) { vp = dcg_pack_(x, w, y, (unsigned long)g_dcdnn_ws); use = vp != (CudnnBackendDesc_*)0; }
             if (use) {
                 double ms = dcg_time_(pl, vp);
                 if (ms >= 0.0 && ms < bestMs) {
-                    if (best != (void*)0) cudnnBackendDestroyDescriptor(best);
+                    if (best != (CudnnBackendDesc_*)0) cudnnBackendDestroyDescriptor(best);
                     best = pl; bestMs = ms; bestWs = (unsigned long)wsSize;
-                    pl = (void*)0;
+                    pl = (CudnnBackendDesc_*)0;
                 }
             }
-            if (vp != (void*)0) cudnnBackendDestroyDescriptor(vp);
-            if (pl != (void*)0) cudnnBackendDestroyDescriptor(pl);
+            if (vp != (CudnnBackendDesc_*)0) cudnnBackendDestroyDescriptor(vp);
+            if (pl != (CudnnBackendDesc_*)0) cudnnBackendDestroyDescriptor(pl);
             c = c + 1L;
         }
-        if (heur != (void*)0) cudnnBackendDestroyDescriptor(heur);
+        if (heur != (CudnnBackendDesc_*)0) cudnnBackendDestroyDescriptor(heur);
         i = 0;
-        while (i < DCG_CONFIGS) { if (cfgs[i] != (void*)0) cudnnBackendDestroyDescriptor(cfgs[i]); i = i + 1; }
-        if (best == (void*)0) { dcg_drop_(slot); return 0; }
+        while (i < DCG_CONFIGS) { if (cfgs[i] != (CudnnBackendDesc_*)0) cudnnBackendDestroyDescriptor(cfgs[i]); i = i + 1; }
+        if (best == (CudnnBackendDesc_*)0) { dcg_drop_(slot); return 0; }
         d[0] = best;
         g_dcg_wsNeed[slot] = bestWs;
-        g_dcg_vp[slot] = (void*)0;
+        g_dcg_vp[slot] = (CudnnBackendDesc_*)0;
         g_dcg_ptr[slot * 4] = 0UL;
     }
     return 1;
@@ -548,7 +524,7 @@ static int dcg_build_(int plan, int dir, unsigned long x, unsigned long w, unsig
 // Runs (plan, dir) on its graph plan: 1 done, 0 failed, -1 no graph plan for
 // this shape (the caller takes the legacy path).
 static int dcg_run_(int plan, int dir, unsigned long x, unsigned long w, unsigned long y) {
-    unsafe { if ((void*)cudnnBackendExecute == (void*)0) return -1; }
+    unsafe { if ((?fn int(CudnnHandle_*, CudnnBackendDesc_*, CudnnBackendDesc_*))cudnnBackendExecute == null) return -1; }
     if ((x | w | y) % 16UL != 0UL) return -1;   // the tensors' declared alignment
     int slot = plan * 3 + dir;
     if (g_dcg_state[slot] == 0) g_dcg_state[slot] = dcg_build_(plan, dir, x, w, y) ? 1 : -1;
@@ -557,10 +533,10 @@ static int dcg_run_(int plan, int dir, unsigned long x, unsigned long w, unsigne
     unsafe {
         unsigned long* b = (unsigned long*)&g_dcg_ptr[slot * 4];
         unsigned long ws = (unsigned long)g_dcdnn_ws;
-        if (g_dcg_vp[slot] == (void*)0 || b[0] != x || b[1] != w || b[2] != y || b[3] != ws) {
-            void* vp = dcg_pack_(x, w, y, ws);
-            if (vp == (void*)0) return 0;
-            if (g_dcg_vp[slot] != (void*)0) cudnnBackendDestroyDescriptor(g_dcg_vp[slot]);
+        if (g_dcg_vp[slot] == (CudnnBackendDesc_*)0 || b[0] != x || b[1] != w || b[2] != y || b[3] != ws) {
+            CudnnBackendDesc_* vp = dcg_pack_(x, w, y, ws);
+            if (vp == (CudnnBackendDesc_*)0) return 0;
+            if (g_dcg_vp[slot] != (CudnnBackendDesc_*)0) cudnnBackendDestroyDescriptor(g_dcg_vp[slot]);
             g_dcg_vp[slot] = vp;
             b[0] = x; b[1] = w; b[2] = y; b[3] = ws;
         }
@@ -573,8 +549,8 @@ static int dcdnn_dir_(int plan, int dir, unsigned long x, unsigned long w, unsig
     float one = (float)1.0;
     float zero = (float)0.0;
     unsafe {
-        void* xd = g_dcdnn_desc[plan * 4]; void* yd = g_dcdnn_desc[plan * 4 + 1];
-        void* wd = g_dcdnn_desc[plan * 4 + 2]; void* cd = g_dcdnn_desc[plan * 4 + 3];
+        CudnnTensorDesc_* xd = g_dcdnn_xd[plan]; CudnnTensorDesc_* yd = g_dcdnn_yd[plan];
+        CudnnFilterDesc_* wd = g_dcdnn_wd[plan]; CudnnConvDesc_* cd = g_dcdnn_cd[plan];
         int slot = plan * 3 + dir;
         int gr = dcg_run_(plan, dir, x, w, y);
         if (gr >= 0) return gr;
@@ -585,14 +561,14 @@ static int dcdnn_dir_(int plan, int dir, unsigned long x, unsigned long w, unsig
             int perf[DCDNN_PERF_INTS * DCDNN_PERF_COUNT];
             int got = 0;
             int ok = cudnnSetConvolutionMathType(cd, math) == 0;
-            if (ok && dir == DCDNN_F) ok = cudnnFindConvolutionForwardAlgorithm(g_dcdnn, xd, wd, cd, yd, DCDNN_PERF_COUNT, &got, (void*)&perf[0]) == 0;
-            else if (ok && dir == DCDNN_BD) ok = cudnnFindConvolutionBackwardDataAlgorithm(g_dcdnn, wd, yd, cd, xd, DCDNN_PERF_COUNT, &got, (void*)&perf[0]) == 0;
-            else if (ok) ok = cudnnFindConvolutionBackwardFilterAlgorithm(g_dcdnn, xd, yd, cd, wd, DCDNN_PERF_COUNT, &got, (void*)&perf[0]) == 0;
+            if (ok && dir == DCDNN_F) ok = cudnnFindConvolutionForwardAlgorithm(g_dcdnn, xd, wd, cd, yd, DCDNN_PERF_COUNT, &got, &perf[0]) == 0;
+            else if (ok && dir == DCDNN_BD) ok = cudnnFindConvolutionBackwardDataAlgorithm(g_dcdnn, wd, yd, cd, xd, DCDNN_PERF_COUNT, &got, &perf[0]) == 0;
+            else if (ok) ok = cudnnFindConvolutionBackwardFilterAlgorithm(g_dcdnn, xd, yd, cd, wd, DCDNN_PERF_COUNT, &got, &perf[0]) == 0;
             int algo = -1;
             int r = 0;
             while (ok && algo < 0 && r < got) {
                 int* p = (int*)&perf[r * DCDNN_PERF_INTS];
-                unsigned long mem = *(unsigned long*)(void*)&p[4];
+                unsigned long mem = *(unsigned long*)&p[4];
                 if (p[1] == 0 && mem <= DCDNN_MAX_WS && dcdnn_ws_grow_(mem == 0UL ? 4UL : mem)) {
                     algo = p[0];
                     g_dcdnn_math[slot] = p[7];
@@ -604,15 +580,15 @@ static int dcdnn_dir_(int plan, int dir, unsigned long x, unsigned long w, unsig
         }
         if (cudnnSetConvolutionMathType(cd, g_dcdnn_math[slot]) != 0) return 0;
         int algo = g_dcdnn_algo[slot];
-        void* ws = (void*)g_dcdnn_ws;
+        CuDevPtr_* ws = (CuDevPtr_*)g_dcdnn_ws;
         if (dir == DCDNN_F)
-            return cudnnConvolutionForward(g_dcdnn, (const void*)&one, xd, (const void*)x, wd, (const void*)w, cd, algo, ws,
-                                           g_dcdnn_wsBytes, (const void*)&zero, yd, (void*)y) == 0;
+            return cudnnConvolutionForward(g_dcdnn, (const float*)&one, xd, (const CuDevPtr_*)x, wd, (const CuDevPtr_*)w, cd, algo, ws,
+                                           g_dcdnn_wsBytes, (const float*)&zero, yd, (CuDevPtr_*)y) == 0;
         if (dir == DCDNN_BD)
-            return cudnnConvolutionBackwardData(g_dcdnn, (const void*)&one, wd, (const void*)w, yd, (const void*)y, cd, algo,
-                                                ws, g_dcdnn_wsBytes, (const void*)&zero, xd, (void*)x) == 0;
-        return cudnnConvolutionBackwardFilter(g_dcdnn, (const void*)&one, xd, (const void*)x, yd, (const void*)y, cd, algo,
-                                              ws, g_dcdnn_wsBytes, (const void*)&zero, wd, (void*)w) == 0;
+            return cudnnConvolutionBackwardData(g_dcdnn, (const float*)&one, wd, (const CuDevPtr_*)w, yd, (const CuDevPtr_*)y, cd, algo,
+                                                ws, g_dcdnn_wsBytes, (const float*)&zero, xd, (CuDevPtr_*)x) == 0;
+        return cudnnConvolutionBackwardFilter(g_dcdnn, (const float*)&one, xd, (const CuDevPtr_*)x, yd, (const CuDevPtr_*)y, cd, algo,
+                                              ws, g_dcdnn_wsBytes, (const float*)&zero, wd, (CuDevPtr_*)w) == 0;
     }
 }
 
@@ -668,14 +644,14 @@ void CudaBackend::release(unsigned long handle) {
 int CudaBackend::upload(unsigned long dst, const &float src, unsigned long n) {
     if (n == 0UL) return 1;
     if (!dcuda_ensure_()) return 0;
-    unsafe { return cuMemcpyHtoDAsync_v2((unsigned long long)dst, (const void*)src, n * 4UL, g_dcuda_stream) == 0; }
+    unsafe { return cuMemcpyHtoDAsync_v2((unsigned long long)dst, (const unsigned char*)src, n * 4UL, g_dcuda_stream) == 0; }
 }
 
 int CudaBackend::download(&float dst, unsigned long src, unsigned long n) {
     if (n == 0UL) return 1;
     if (!dcuda_ensure_()) return 0;
     unsafe {
-        if (cuMemcpyDtoHAsync_v2((void*)dst, (unsigned long long)src, n * 4UL, g_dcuda_stream) != 0) return 0;
+        if (cuMemcpyDtoHAsync_v2((unsigned char*)dst, (unsigned long long)src, n * 4UL, g_dcuda_stream) != 0) return 0;
         return cuStreamSynchronize(g_dcuda_stream) == 0;
     }
 }
@@ -711,10 +687,10 @@ int CudaBackend::gemm_batched(const &DevGemm g) {
         int ct = g.ctype == DEVICE_FP16 ? DCUDA_R_16F : (g.ctype == DEVICE_BF16 ? DCUDA_R_16BF : DCUDA_R_32F);
         unsafe {
             return cublasGemmStridedBatchedEx(g_dcuda_blas, g.tb ? DCUDA_T : DCUDA_N, g.ta ? DCUDA_T : DCUDA_N,
-                                              (int)g.n, (int)g.m, (int)g.k, (const void*)&g.alpha,
-                                              (const void*)g.b, t, (int)g.ldb, (long long)g.sb,
-                                              (const void*)g.a, t, (int)g.lda, (long long)g.sa, (const void*)&g.beta,
-                                              (void*)g.c, ct, (int)g.ldc, (long long)g.sc, (int)g.batch,
+                                              (int)g.n, (int)g.m, (int)g.k, (const float*)&g.alpha,
+                                              (const CuDevPtr_*)g.b, t, (int)g.ldb, (long long)g.sb,
+                                              (const CuDevPtr_*)g.a, t, (int)g.lda, (long long)g.sa, (const float*)&g.beta,
+                                              (CuDevPtr_*)g.c, ct, (int)g.ldc, (long long)g.sc, (int)g.batch,
                                               DCUDA_COMPUTE_32F, DCUDA_GEMM_DEFAULT) == 0;
         }
     }
@@ -737,21 +713,21 @@ int CudaBackend::launch(int kernel, unsigned long n, const &DevArgs args) {
     if (blocks == 0UL) blocks = 1UL;
     struct DevArgs a = *args;
     unsafe {
-        void* kfn = g_dcuda_fn[kernel];
+        CuFunction_* kfn = g_dcuda_fn[kernel];
         int i = 0;
         while (i < DEVK_PTRS) {
             if (dev_tag_(a.p[i]) != 0UL) {
-                if (g_dcuda_state16 == 0) g_dcuda_state16 = dcuda_module_(1, (&void)(void*)&g_dcuda_fn16[0]) ? 1 : -1;
+                if (g_dcuda_state16 == 0) g_dcuda_state16 = dcuda_module_(1, &g_dcuda_fn16[0]) ? 1 : -1;
                 if (g_dcuda_state16 != 1) return 0;
                 kfn = g_dcuda_fn16[kernel];
                 i = DEVK_PTRS;
             }
             i = i + 1;
         }
-        void* params[1];
-        params[0] = (void*)&a;
+        CuKernelArg_* params[1];
+        params[0] = (CuKernelArg_*)&a;
         return cuLaunchKernel(kfn, (unsigned int)blocks, 1U, 1U, (unsigned int)DCUDA_BLOCK, 1U, 1U, 0U,
-                              g_dcuda_stream, &params[0], (void**)0) == 0;
+                              g_dcuda_stream, &params[0], (CuKernelArg_**)0) == 0;
     }
 }
 

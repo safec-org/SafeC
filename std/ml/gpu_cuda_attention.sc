@@ -1316,11 +1316,11 @@ static ?&void attn_kernel_(int kind, int dtype, unsigned long d) {
 }
 
 static int attn_launch_(?&void func, unsigned int gx, unsigned int gy, unsigned int gz, unsigned int block,
-                        unsigned long smem, &void params) {
+                        unsigned long smem, CuKernelArg_** params) {
     if (func == (void*)0) return 0;
     unsafe {
         return cuLaunchKernel((void*)func, gx, gy, gz, block, 1U, 1U, (unsigned int)smem,
-                              (void*)cuda_stream_handle(), (void**)params, (void**)0) == 0;
+                              (void*)cuda_stream_handle(), params, (CuKernelArg_**)0) == 0;
     }
 }
 
@@ -1555,7 +1555,7 @@ static ?&void sd_scalar_(int s, long uid, int dtype) {
 static ?&void sd_pointwise_(int s, int mode, int prec, long axis, ?&void x, ?&void b, ?&void t, ?&void y) {
     if (x == (void*)0 || y == (void*)0) return (void*)0;
     unsafe {
-        void* pw = (void*)0;
+        CuDevPtr_* pw = (CuDevPtr_*)0;
         if (p_create(SD_POINTWISE, &pw) != 0) return (void*)0;
         int ok = p_set(pw, SD_A_PW_MODE, SD_T_POINTWISE_MODE, 1L, (const void*)&mode) == 0 &&
                  p_set(pw, SD_A_PW_PREC, SD_T_DATA_TYPE, 1L, (const void*)&prec) == 0;
@@ -1729,7 +1729,7 @@ static int sd_build_(int s, int dtype, struct CudaAttnShape a, int causal) {
         if (p_get(heur, SD_A_HEUR_RESULTS, SD_T_DESCRIPTOR, (long)SD_CFGS, &ncfg, (void*)&cfgs[0]) != 0) return 0;
         long c = 0L;
         while (c < ncfg && c < (long)SD_CFGS) {
-            void* plan = (void*)0;
+            CuDevPtr_* plan = (CuDevPtr_*)0;
             long ws = 0L;
             long got = 0L;
             if (p_create(SD_PLAN, &plan) == 0) {
@@ -1912,12 +1912,12 @@ static int attn_decode_(unsigned long q, unsigned long k, unsigned long v, unsig
             if (cuMemAlloc_v2(&g_att_dec_ws, bytes) != 0) { g_att_dec_ws = 0ULL; return 0; }
             g_att_dec_ws_bytes = bytes;
         }
-        void* pq = (void*)q;
-        void* pk = (void*)k;
-        void* pv = (void*)v;
-        void* po = (void*)o;
-        void* pop = (void*)(unsigned long)g_att_dec_ws;
-        void* pml = (void*)((unsigned long)g_att_dec_ws + opBytes);
+        CuDevPtr_* pq = (CuDevPtr_*)q;
+        CuDevPtr_* pk = (CuDevPtr_*)k;
+        CuDevPtr_* pv = (CuDevPtr_*)v;
+        CuDevPtr_* po = (CuDevPtr_*)o;
+        CuDevPtr_* pop = (CuDevPtr_*)(unsigned long)g_att_dec_ws;
+        CuDevPtr_* pml = (CuDevPtr_*)((unsigned long)g_att_dec_ws + opBytes);
         int sq = (int)s.seqLen;
         int sk = (int)s.kvLen;
         int h = (int)s.heads;
@@ -1927,15 +1927,15 @@ static int attn_decode_(unsigned long q, unsigned long k, unsigned long v, unsig
         int win = (int)s.window;
         int ch = (int)chunk;
         int nsi = (int)ns;
-        void* params[13];
-        params[0] = (void*)&pq; params[1] = (void*)&pk; params[2] = (void*)&pv; params[3] = (void*)&pop;
-        params[4] = (void*)&pml; params[5] = (void*)&sq; params[6] = (void*)&sk; params[7] = (void*)&h;
-        params[8] = (void*)&hkv; params[9] = (void*)&l2; params[10] = (void*)&c; params[11] = (void*)&win;
-        params[12] = (void*)&ch;
-        if (!attn_launch_(part, (unsigned int)ns, (unsigned int)bk, 1U, 128U, 0UL, (&void)&params[0])) return 0;
+        CuKernelArg_* params[13];
+        params[0] = (CuKernelArg_*)&pq; params[1] = (CuKernelArg_*)&pk; params[2] = (CuKernelArg_*)&pv; params[3] = (CuKernelArg_*)&pop;
+        params[4] = (CuKernelArg_*)&pml; params[5] = (CuKernelArg_*)&sq; params[6] = (CuKernelArg_*)&sk; params[7] = (CuKernelArg_*)&h;
+        params[8] = (CuKernelArg_*)&hkv; params[9] = (CuKernelArg_*)&l2; params[10] = (CuKernelArg_*)&c; params[11] = (CuKernelArg_*)&win;
+        params[12] = (CuKernelArg_*)&ch;
+        if (!attn_launch_(part, (unsigned int)ns, (unsigned int)bk, 1U, 128U, 0UL, &params[0])) return 0;
         void* cparams[7];
-        cparams[0] = (void*)&pop; cparams[1] = (void*)&pml; cparams[2] = (void*)&po; cparams[3] = (void*)&sq;
-        cparams[4] = (void*)&h; cparams[5] = (void*)&hkv; cparams[6] = (void*)&nsi;
+        cparams[0] = (CuKernelArg_*)&pop; cparams[1] = (CuKernelArg_*)&pml; cparams[2] = (CuKernelArg_*)&po; cparams[3] = (CuKernelArg_*)&sq;
+        cparams[4] = (CuKernelArg_*)&h; cparams[5] = (CuKernelArg_*)&hkv; cparams[6] = (CuKernelArg_*)&nsi;
         return attn_launch_(comb, (unsigned int)(bk * rows), (unsigned int)((s.headDim + 31UL) / 32UL), 1U, 128U, 0UL,
                             (&void)&cparams[0]);
     }
@@ -1966,22 +1966,22 @@ static int attn_flash_(unsigned long q, unsigned long k, unsigned long v, unsign
     unsigned long rows = kind == ATT_SIMT ? 32UL : 64UL;
     ?&void func = attn_kernel_(kind, dtype, s.headDim);
     unsafe {
-        void* pq = (void*)q;
-        void* pk = (void*)k;
-        void* pv = (void*)v;
-        void* po = (void*)o;
+        CuDevPtr_* pq = (CuDevPtr_*)q;
+        CuDevPtr_* pk = (CuDevPtr_*)k;
+        CuDevPtr_* pv = (CuDevPtr_*)v;
+        CuDevPtr_* po = (CuDevPtr_*)o;
         int sq = (int)s.seqLen;
         int sk = (int)s.kvLen;
         int h = (int)s.heads;
         int hkv = (int)s.kvHeads;
         int c = causal ? 1 : 0;
         int win = (int)s.window;
-        void* params[11];
-        params[0] = (void*)&pq; params[1] = (void*)&pk; params[2] = (void*)&pv; params[3] = (void*)&po;
-        params[4] = (void*)&sq; params[5] = (void*)&sk; params[6] = (void*)&h; params[7] = (void*)&hkv;
-        params[8] = (void*)&sl2; params[9] = (void*)&c; params[10] = (void*)&win;
+        CuKernelArg_* params[11];
+        params[0] = (CuKernelArg_*)&pq; params[1] = (CuKernelArg_*)&pk; params[2] = (CuKernelArg_*)&pv; params[3] = (CuKernelArg_*)&po;
+        params[4] = (CuKernelArg_*)&sq; params[5] = (CuKernelArg_*)&sk; params[6] = (CuKernelArg_*)&h; params[7] = (CuKernelArg_*)&hkv;
+        params[8] = (CuKernelArg_*)&sl2; params[9] = (CuKernelArg_*)&c; params[10] = (CuKernelArg_*)&win;
         return attn_launch_(func, (unsigned int)((s.seqLen + rows - 1UL) / rows), (unsigned int)(s.batch * s.heads), 1U,
-                            128U, attn_smem_(kind, s.headDim), (&void)&params[0]);
+                            128U, attn_smem_(kind, s.headDim), &params[0]);
     }
 }
 
@@ -2038,10 +2038,10 @@ static int attn_linear_(unsigned long q, unsigned long k, unsigned long v, unsig
     if (!cuda_available()) return 0;
     unsigned long d = s.headDim;
     unsafe {
-        void* pq = (void*)q;
-        void* pk = (void*)k;
-        void* pv = (void*)v;
-        void* po = (void*)o;
+        CuDevPtr_* pq = (CuDevPtr_*)q;
+        CuDevPtr_* pk = (CuDevPtr_*)k;
+        CuDevPtr_* pv = (CuDevPtr_*)v;
+        CuDevPtr_* po = (CuDevPtr_*)o;
         int sq = (int)s.seqLen;
         int sk = (int)s.kvLen;
         int h = (int)s.heads;
@@ -2066,10 +2066,10 @@ static int attn_linear_(unsigned long q, unsigned long k, unsigned long v, unsig
             ?&void fou = attn_kernel_(ATT_LIN_HOUT, dtype, d);
             if (fst == (void*)0 || fsc == (void*)0 || fou == (void*)0) return 0;
             unsigned long base = (unsigned long)g_att_ws;
-            void* pW = (void*)base;
-            void* pZ = (void*)(base + wElems * 4UL);
-            void* pT = (void*)(base + (wElems + zElems) * 4UL);
-            void* pTZ = (void*)(base + (wElems + zElems + tElems) * 4UL);
+            CuDevPtr_* pW = (CuDevPtr_*)base;
+            CuDevPtr_* pZ = (CuDevPtr_*)(base + wElems * 4UL);
+            CuDevPtr_* pT = (CuDevPtr_*)(base + (wElems + zElems) * 4UL);
+            CuDevPtr_* pTZ = (CuDevPtr_*)(base + (wElems + zElems + tElems) * 4UL);
             int ncI = (int)nc;
             int cppI = (int)cpp;
             int partsI = (int)parts;
@@ -2095,11 +2095,11 @@ static int attn_linear_(unsigned long q, unsigned long k, unsigned long v, unsig
         }
         if (causal) {
             ?&void func = attn_kernel_(ATT_LIN_CAUSAL, dtype, d);
-            void* params[8];
-            params[0] = (void*)&pq; params[1] = (void*)&pk; params[2] = (void*)&pv; params[3] = (void*)&po;
-            params[4] = (void*)&sq; params[5] = (void*)&sk; params[6] = (void*)&h; params[7] = (void*)&hkv;
+            CuKernelArg_* params[8];
+            params[0] = (CuKernelArg_*)&pq; params[1] = (CuKernelArg_*)&pk; params[2] = (CuKernelArg_*)&pv; params[3] = (CuKernelArg_*)&po;
+            params[4] = (CuKernelArg_*)&sq; params[5] = (CuKernelArg_*)&sk; params[6] = (CuKernelArg_*)&h; params[7] = (CuKernelArg_*)&hkv;
             return attn_launch_(func, (unsigned int)(s.batch * s.heads), (unsigned int)(d / 32UL), 1U, 256U,
-                                attn_smem_(ATT_LIN_CAUSAL, d), (&void)&params[0]);
+                                attn_smem_(ATT_LIN_CAUSAL, d), &params[0]);
         }
         // pass 1: S [kv heads, d, d] and z [kv heads, d] in the workspace
         unsigned long kvHeadsTotal = s.batch * s.kvHeads;
@@ -2111,8 +2111,8 @@ static int attn_linear_(unsigned long q, unsigned long k, unsigned long v, unsig
         if (fkv == (void*)0 || fout == (void*)0) return 0;
         void* stream = (void*)cuda_stream_handle();
         if (cuMemsetD32Async(g_att_ws, 0U, sElems + zElems, stream) != 0) return 0;
-        void* pS = (void*)(unsigned long)g_att_ws;
-        void* pZ = (void*)((unsigned long)g_att_ws + sElems * 4UL);
+        CuDevPtr_* pS = (CuDevPtr_*)(unsigned long)g_att_ws;
+        CuDevPtr_* pZ = (CuDevPtr_*)((unsigned long)g_att_ws + sElems * 4UL);
         void* p1[5];
         p1[0] = (void*)&pk; p1[1] = (void*)&pv; p1[2] = (void*)&pS; p1[3] = (void*)&pZ; p1[4] = (void*)&sk;
         if (!attn_launch_(fkv, (unsigned int)kvHeadsTotal, (unsigned int)((s.kvLen + 255UL) / 256UL),

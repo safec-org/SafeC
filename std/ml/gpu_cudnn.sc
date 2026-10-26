@@ -346,7 +346,7 @@ static void* dnb_tensor_(long uid, unsigned long n, unsigned long c, unsigned lo
 // goes to *pwOut (both kept alive by the plan). Null on failure.
 static void* dnb_pointwise_(int mode, void* x, void* b, void* y, &void* pwOut) {
     unsafe {
-        void* pw = (void*)0;
+        CuDevPtr_* pw = (CuDevPtr_*)0;
         void* op = (void*)0;
         int dt = DNN_DATA_FLOAT;
         int ok = cudnnBackendCreateDescriptor(DNB_POINTWISE, &pw) == 0;
@@ -511,7 +511,7 @@ static double dnb_build_(int slot, const &CudaConv2D layer, unsigned long batch,
         double bestMs = 1e30;
         long c = 0L;
         while (ok && c < ncfg) {
-            void* plan = (void*)0;
+            CuDevPtr_* plan = (CuDevPtr_*)0;
             long wsSize = 0L;
             long got = 0L;
             int usable = dnb_cfg_allowed_(cfgs[c]) && cudnnBackendCreateDescriptor(DNB_PLAN, &plan) == 0;
