@@ -35,10 +35,10 @@ struct CombFF {
 
     double process(double x);
     void   reset();
-    void   process_block(const &double in, &double out, unsigned long n);   // out may alias in
+    void   process_block([]const double in, []double out);   // out may alias in
 
     // 'history' is the caller's ring buffer of 'delay' samples, zeroed.
-    static struct CombFF new(&double history, unsigned long delay, double gain);
+    static struct CombFF new([]double history, double gain);   // delay = history.len
 };
 
 struct CombFB {
@@ -49,9 +49,9 @@ struct CombFB {
 
     double process(double x);
     void   reset();
-    void   process_block(const &double in, &double out, unsigned long n);   // out may alias in
+    void   process_block([]const double in, []double out);   // out may alias in
 
-    static struct CombFB new(&double history, unsigned long delay, double gain);
+    static struct CombFB new([]double history, double gain);   // delay = history.len
 };
 
 struct KarplusStrong {
@@ -65,11 +65,11 @@ struct KarplusStrong {
     // Refill the delay line with a new excitation (n samples copied in;
     // if n < length the remainder is left at its previous contents —
     // callers doing a fresh pluck should size the excitation to 'length').
-    void   pluck(const &double excitation, unsigned long n);
+    void   pluck([]const double excitation);
 
     // 'buffer' is the caller's delay line of 'length' samples; seed it
     // (or call pluck) with an excitation before next().
-    static struct KarplusStrong new(&double buffer, unsigned long length, double damping);
+    static struct KarplusStrong new([]double buffer, double damping);   // length = buffer.len
 };
 
 // Single precision: the three filters above on float buffers.
@@ -81,9 +81,9 @@ struct CombFF32 {
 
     float process(float x);
     void  reset();
-    void  process_block(const &float in, &float out, unsigned long n);   // out may alias in
+    void  process_block([]const float in, []float out);   // out may alias in
 
-    static struct CombFF32 new(&float history, unsigned long delay, float gain);
+    static struct CombFF32 new([]float history, float gain);   // delay = history.len
 };
 
 struct CombFB32 {
@@ -94,9 +94,9 @@ struct CombFB32 {
 
     float process(float x);
     void  reset();
-    void  process_block(const &float in, &float out, unsigned long n);   // out may alias in
+    void  process_block([]const float in, []float out);   // out may alias in
 
-    static struct CombFB32 new(&float history, unsigned long delay, float gain);
+    static struct CombFB32 new([]float history, float gain);   // delay = history.len
 };
 
 struct KarplusStrong32 {
@@ -106,9 +106,9 @@ struct KarplusStrong32 {
     float damping;
 
     float next();
-    void  pluck(const &float excitation, unsigned long n);
+    void  pluck([]const float excitation);
 
-    static struct KarplusStrong32 new(&float buffer, unsigned long length, float damping);
+    static struct KarplusStrong32 new([]float buffer, float damping);   // length = buffer.len
 };
 
 struct FCombFF {
@@ -119,9 +119,9 @@ struct FCombFF {
 
     Fixed process(Fixed x);
     void  reset();
-    void  process_block(const &Fixed in, &Fixed out, unsigned long n);   // out may alias in
+    void  process_block([]const Fixed in, []Fixed out);   // out may alias in
 
-    static struct FCombFF new(&Fixed history, unsigned long delay, Fixed gain);
+    static struct FCombFF new([]Fixed history, Fixed gain);   // delay = history.len
 };
 
 struct FCombFB {
@@ -132,9 +132,9 @@ struct FCombFB {
 
     Fixed process(Fixed x);
     void  reset();
-    void  process_block(const &Fixed in, &Fixed out, unsigned long n);   // out may alias in
+    void  process_block([]const Fixed in, []Fixed out);   // out may alias in
 
-    static struct FCombFB new(&Fixed history, unsigned long delay, Fixed gain);
+    static struct FCombFB new([]Fixed history, Fixed gain);   // delay = history.len
 };
 
 struct FKarplusStrong {
@@ -144,9 +144,9 @@ struct FKarplusStrong {
     Fixed damping;
 
     Fixed next();
-    void  pluck(const &Fixed excitation, unsigned long n);
+    void  pluck([]const Fixed excitation);
 
-    static struct FKarplusStrong new(&Fixed buffer, unsigned long length, Fixed damping);
+    static struct FKarplusStrong new([]Fixed buffer, Fixed damping);   // length = buffer.len
 };
 
 } // namespace std

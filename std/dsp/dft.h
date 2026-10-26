@@ -13,27 +13,38 @@ namespace std {
 
 // Forward transform, complex input -> complex output. 'out' must have
 // space for 'n' elements; 'out' may not alias 'in'.
-void dft(const &Complex in, &Complex out, unsigned long n);
+int dft([]const Complex in, []Complex out);
 
 // Forward transform, real input -> complex output (convenience: treats
 // each sample as Complex(x, 0) internally without requiring the caller
 // to build that array themselves — the common case for analyzing a real
 // audio/sensor signal).
-void dft_real(const &double in, &Complex out, unsigned long n);
+int dft_real([]const double in, []Complex out);
 
 // Inverse transform (includes the 1/N normalization), complex -> complex.
-void idft(const &Complex in, &Complex out, unsigned long n);
+int idft([]const Complex in, []Complex out);
 
 // Float in and out (computed in double, rounded once). Same contracts.
-void dft_f32(const &Complex32 in, &Complex32 out, unsigned long n);
-void dft_real_f32(const &float in, &Complex32 out, unsigned long n);
-void idft_f32(const &Complex32 in, &Complex32 out, unsigned long n);
+int dft_f32([]const Complex32 in, []Complex32 out);
+int dft_real_f32([]const float in, []Complex32 out);
+int idft_f32([]const Complex32 in, []Complex32 out);
 
 // Q8.24 fixed-point forward/inverse transforms. Twiddle factors are
 // computed in double precision and quantized to Fixed once per use (see
 // complex_dsp.h's design-time-float/runtime-fixed note) — the summation
 // itself runs entirely in Q8.24 arithmetic.
-void fdft(const &FComplex in, &FComplex out, unsigned long n);
-void fidft(const &FComplex in, &FComplex out, unsigned long n);
+int fdft([]const FComplex in, []FComplex out);
+int fidft([]const FComplex in, []FComplex out);
+
+// Internal: the (reference, length) forms the slice API above wraps
+// (std/dsp's own code calls these; not API).
+void dft_n_(const &Complex in, &Complex out, unsigned long n);
+void dft_real_n_(const &double in, &Complex out, unsigned long n);
+void idft_n_(const &Complex in, &Complex out, unsigned long n);
+void dft_f32_n_(const &Complex32 in, &Complex32 out, unsigned long n);
+void dft_real_f32_n_(const &float in, &Complex32 out, unsigned long n);
+void idft_f32_n_(const &Complex32 in, &Complex32 out, unsigned long n);
+void fdft_n_(const &FComplex in, &FComplex out, unsigned long n);
+void fidft_n_(const &FComplex in, &FComplex out, unsigned long n);
 
 } // namespace std

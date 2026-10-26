@@ -29,7 +29,12 @@ namespace std {
 // not incorrect, result: still valid, just with worse frequency
 // resolution than requested for that bin). 'out' must have room for
 // 'numBins' Complex values.
-void cqt_forward(const &double signal, unsigned long signalLen, double fs,
+void cqt_forward([]const double signal, double fs, double fmin, unsigned long binsPerOctave,
+                 []Complex out);
+
+// Internal: the (reference, length) forms the slice API above wraps
+// (std/dsp's own code calls these; not API).
+void cqt_forward_n_(const &double signal, unsigned long signalLen, double fs,
                   double fmin, unsigned long numBins, unsigned long binsPerOctave,
                   &Complex out);
 

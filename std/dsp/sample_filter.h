@@ -34,10 +34,10 @@
 //   struct Biquad lp = Biquad::lowpass(48000.0, 8000.0, 0.7071);
 //   struct FilterChain<double, struct Biquad, struct Biquad> band =
 //       FilterChain::of(hp, lp);
-//   band.process_block(in, out, n);                  // band-limit a block
+//   band.process_block(in, out);                     // band-limit a block (slices)
 //
 //   double h[64];
-//   filter_impulse_response(&fir, &h[0], 64UL);      // h[i] = taps, then 0
+//   filter_impulse_response(&fir, h[0..64]);         // h[i] = taps, then 0
 //
 // The per-type process_block bodies with a fast path of their own (FIR's
 // sliding dot products, the biquad's look-ahead recurrence) stay hand-
@@ -52,8 +52,8 @@ trait SampleProcessor {
 }
 
 trait BlockProcessor {
-    // out[i] = process(in[i]) for i < n; out may alias in.
-    void process_block(const &double in, &double out, unsigned long n);
+    // out[i] = process(in[i]) for i < min(in.len, out.len); out may be in.
+    void process_block([]const double in, []double out);
 }
 
 trait SampleFilter : SampleProcessor + BlockProcessor + Resettable {}
@@ -80,7 +80,7 @@ inline S sample_one() {
 // process_block of a filter with no faster block form.
 
 generic<F: SampleProcessor, S>
-void filter_process_each(&F f, const &S in, &S out, unsigned long n) {
+void filter_process_each_n_(&F f, const &S in, &S out, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         S xi;
@@ -91,13 +91,20 @@ void filter_process_each(&F f, const &S in, &S out, unsigned long n) {
     }
 }
 
+generic<F: SampleProcessor, S>
+void filter_process_each(&F f, []const S in, []S out) {
+    unsigned long n = in.len < out.len ? in.len : out.len;
+    if (n == 0UL) return;
+    unsafe { filter_process_each_n_(f, (const &S)in.ptr, (&S)out.ptr, n); }
+}
+
 // ── Impulse and step response ─────────────────────────────────────────────────
 // The first n samples of f's response to a unit impulse (1, 0, 0, ...) or
 // a unit step (1, 1, 1, ...), from a reset state. f is left reset, ready
 // for real input. For a FIR the impulse response is its taps.
 
 generic<F: SampleProcessor + Resettable, S>
-void filter_impulse_response(&F f, &S out, unsigned long n) {
+void filter_impulse_response_n_(&F f, &S out, unsigned long n) {
     S one = sample_one();
     f.reset();
     unsigned long i = 0UL;
@@ -110,7 +117,13 @@ void filter_impulse_response(&F f, &S out, unsigned long n) {
 }
 
 generic<F: SampleProcessor + Resettable, S>
-void filter_step_response(&F f, &S out, unsigned long n) {
+void filter_impulse_response(&F f, []S out) {
+    if (out.len == 0UL) return;
+    unsafe { filter_impulse_response_n_(f, (&S)out.ptr, out.len); }
+}
+
+generic<F: SampleProcessor + Resettable, S>
+void filter_step_response_n_(&F f, &S out, unsigned long n) {
     S one = sample_one();
     f.reset();
     unsigned long i = 0UL;
@@ -122,17 +135,29 @@ void filter_step_response(&F f, &S out, unsigned long n) {
     f.reset();
 }
 
+generic<F: SampleProcessor + Resettable, S>
+void filter_step_response(&F f, []S out) {
+    if (out.len == 0UL) return;
+    unsafe { filter_step_response_n_(f, (&S)out.ptr, out.len); }
+}
+
 // ── Generators ────────────────────────────────────────────────────────────────
 // out[i] = g.next() for i < n.
 
 generic<G: SampleGenerator, S>
-void generate_block(&G g, &S out, unsigned long n) {
+void generate_block_n_(&G g, &S out, unsigned long n) {
     unsigned long i = 0UL;
     while (i < n) {
         S yi = g.next();
         unsafe { out[i] = yi; }
         i = i + 1UL;
     }
+}
+
+generic<G: SampleGenerator, S>
+void generate_block(&G g, []S out) {
+    if (out.len == 0UL) return;
+    unsafe { generate_block_n_(g, (&S)out.ptr, out.len); }
 }
 
 // ── Cascade ───────────────────────────────────────────────────────────────────
@@ -159,7 +184,7 @@ struct FilterChain {
 
     S    process(S x);
     void reset();
-    void process_block(const &S in, &S out, unsigned long n);
+    void process_block([]const S in, []S out);
 
     static struct FilterChain<S, A, B> of(A first, B second);
 };
@@ -176,9 +201,9 @@ void FilterChain::reset() {
 }
 
 generic<S, A: SampleFilter, B: SampleFilter>
-void FilterChain::process_block(const &S in, &S out, unsigned long n) {
-    self.first.process_block(in, out, n);
-    self.second.process_block(out, out, n);
+void FilterChain::process_block([]const S in, []S out) {
+    self.first.process_block(in, out);
+    self.second.process_block(out, out);
 }
 
 generic<S, A: SampleFilter, B: SampleFilter>

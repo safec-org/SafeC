@@ -71,7 +71,7 @@ static void cqt_bins_(&CqtJob j, unsigned long lo, unsigned long hi) {
     }
 }
 
-void cqt_forward(const &double signal, unsigned long signalLen, double fs,
+void cqt_forward_n_(const &double signal, unsigned long signalLen, double fs,
                   double fmin, unsigned long numBins, unsigned long binsPerOctave,
                   &Complex out) {
     struct CqtJob j;
@@ -86,6 +86,15 @@ void cqt_forward(const &double signal, unsigned long signalLen, double fs,
     j.binsPerOctave = binsPerOctave;
     if (numBins > 1UL && signalLen >= 1024UL) parallel_for(numBins, 1UL, cqt_bins_, &j);
     else cqt_bins_(&j, 0UL, numBins);
+}
+
+// ── Slice API (the public signatures; the (reference, length) cores above
+// are the *_n_ functions) ─────────────────────────────────────────────────────
+
+void cqt_forward([]const double signal, double fs, double fmin, unsigned long binsPerOctave,
+                 []Complex out) {
+    if (signal.len == 0UL || out.len == 0UL) return;
+    unsafe { cqt_forward_n_((const &double)signal.ptr, signal.len, fs, fmin, out.len, binsPerOctave, (&Complex)out.ptr); }
 }
 
 } // namespace std

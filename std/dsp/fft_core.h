@@ -802,7 +802,7 @@ extern long DftiFreeDescriptor(void** desc) __attribute__((weak));
 #define DFTI_COMPLEX_COMPLEX_         39
 #define DFTI_NOT_INPLACE_             44
 #define FFT_PLANS                     48
-// fft()/ifft() at or above this length use the built-in threaded transform
+// fft_n_()/ifft_n_() at or above this length use the built-in threaded transform
 // instead of one single-threaded library call.
 #define FFT_VENDOR_SINGLE_MAX         65536UL
 

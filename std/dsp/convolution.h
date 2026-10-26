@@ -15,23 +15,31 @@
 namespace std {
 
 // out must have space for (len_x + len_h - 1) samples.
-void conv_direct(const &double x, unsigned long len_x,
-                  const &double h, unsigned long len_h, &double out);
+int conv_direct([]const double x, []const double h, []double out);
 
-void fconv_direct(const &Fixed x, unsigned long len_x,
-                   const &Fixed h, unsigned long len_h, &Fixed out);
+int fconv_direct([]const Fixed x, []const Fixed h, []Fixed out);
 
 // FFT-accelerated linear convolution — same output as conv_direct (up to
 // floating-point rounding), computed via zero-padded forward FFTs,
 // pointwise complex multiply, and one inverse FFT. out must have space
 // for (len_x + len_h - 1) samples.
-void conv_fft(const &double x, unsigned long len_x,
-              const &double h, unsigned long len_h, &double out);
+int conv_fft([]const double x, []const double h, []double out);
 
 // Single precision: conv_direct / conv_fft on floats, same contracts.
-void conv_direct_f32(const &float x, unsigned long len_x,
+int conv_direct_f32([]const float x, []const float h, []float out);
+int conv_fft_f32([]const float x, []const float h, []float out);
+
+// Internal: the (reference, length) forms the slice API above wraps
+// (std/dsp's own code calls these; not API).
+void conv_direct_n_(const &double x, unsigned long len_x,
+                  const &double h, unsigned long len_h, &double out);
+void conv_fft_n_(const &double x, unsigned long len_x,
+              const &double h, unsigned long len_h, &double out);
+void conv_direct_f32_n_(const &float x, unsigned long len_x,
                      const &float h, unsigned long len_h, &float out);
-void conv_fft_f32(const &float x, unsigned long len_x,
+void conv_fft_f32_n_(const &float x, unsigned long len_x,
                   const &float h, unsigned long len_h, &float out);
+void fconv_direct_n_(const &Fixed x, unsigned long len_x,
+                   const &Fixed h, unsigned long len_h, &Fixed out);
 
 } // namespace std

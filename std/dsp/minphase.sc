@@ -8,7 +8,7 @@
 
 namespace std {
 
-void minimum_phase(const &double x, unsigned long n, unsigned long fftLen, &double outMinPhase) {
+void minimum_phase_n_(const &double x, unsigned long n, unsigned long fftLen, &double outMinPhase) {
     struct Complex* spec;
     unsafe { spec = (struct Complex*)alloc_raw_(fftLen * (unsigned long)sizeof(struct Complex)); }
 
@@ -21,7 +21,7 @@ void minimum_phase(const &double x, unsigned long n, unsigned long fftLen, &doub
         unsafe { spec[i] = Complex::new(v, 0.0); }
         i = i + 1UL;
     }
-    unsafe { fft(spec, fftLen); }
+    unsafe { fft_n_(spec, fftLen); }
 
     // Log-magnitude spectrum, in place.
     i = 0UL;
@@ -35,7 +35,7 @@ void minimum_phase(const &double x, unsigned long n, unsigned long fftLen, &doub
     }
 
     // Real cepstrum = IFFT(log-magnitude), in place.
-    unsafe { ifft(spec, fftLen); }
+    unsafe { ifft_n_(spec, fftLen); }
 
     // Homomorphic ("minimum-phase") window: fold the anti-causal half of
     // the cepstrum onto the causal half by doubling it, and zero the
@@ -60,7 +60,7 @@ void minimum_phase(const &double x, unsigned long n, unsigned long fftLen, &doub
         i = i + 1UL;
     }
 
-    unsafe { fft(spec, fftLen); }
+    unsafe { fft_n_(spec, fftLen); }
 
     // Exponentiate the (now complex) cepstrum spectrum back into the
     // minimum-phase spectrum: exp(a+bi) = e^a * (cos(b) + i*sin(b)).
@@ -76,7 +76,7 @@ void minimum_phase(const &double x, unsigned long n, unsigned long fftLen, &doub
         i = i + 1UL;
     }
 
-    unsafe { ifft(spec, fftLen); }
+    unsafe { ifft_n_(spec, fftLen); }
     i = 0UL;
     while (i < fftLen) {
         struct Complex wi;
@@ -88,6 +88,15 @@ void minimum_phase(const &double x, unsigned long n, unsigned long fftLen, &doub
     }
 
     unsafe { dealloc_raw_((void*)spec); }
+}
+
+// ── Slice API (the public signatures; the (reference, length) cores above
+// are the *_n_ functions) ─────────────────────────────────────────────────────
+
+int minimum_phase([]const double x, unsigned long fftLen, []double outMinPhase) {
+    if (x.len == 0UL || x.len > fftLen || outMinPhase.len < fftLen) return 0;
+    unsafe { minimum_phase_n_((const &double)x.ptr, x.len, fftLen, (&double)outMinPhase.ptr); }
+    return 1;
 }
 
 } // namespace std

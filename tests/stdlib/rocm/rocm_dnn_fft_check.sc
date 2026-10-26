@@ -205,6 +205,11 @@ static void check_miopen() {
     l1.free(); l2.free();
 }
 
+// A slice over n Complex values at p (test buffers from cplx_new).
+static []Complex cs(&Complex p, unsigned long n) {
+    unsafe { return ((struct Complex*)p)[0..n]; }
+}
+
 static &heap Complex cplx_new(unsigned long n, unsigned long salt) {
     ?&heap Complex q = std::alloc(n * sizeof(struct Complex));
     match (q) {
@@ -253,18 +258,18 @@ static void check_hipfft() {
     &heap Complex x = cplx_new(n, 0UL);
     &heap Complex ref = cplx_new(n, 0UL);
     &heap Complex got = cplx_new(n, 0UL);
-    std::fft(ref, n);
-    check(std::rocm_fft(got, n), "rocm_fft ran");
+    std::fft(cs(ref, n));
+    check(std::rocm_fft(cs(got, n)), "rocm_fft ran");
     check(cplx_err(got, ref, n) < 1e-12, "rocm_fft values");
-    check(std::rocm_ifft(got, n), "rocm_ifft ran");
+    check(std::rocm_ifft(cs(got, n)), "rocm_ifft ran");
     check(cplx_err(got, x, n) < 1e-12, "rocm_ifft round trip");
 
     // non-power-of-two length against dft.h
     unsigned long m = 1000UL;
     &heap Complex y = cplx_new(m, 5UL);
     &heap Complex yref = cplx_new(m, 0UL);
-    std::dft(y, yref, m);
-    check(std::rocm_fft(y, m), "rocm_fft n=1000 ran");
+    std::dft(cs(y, m), cs(yref, m));
+    check(std::rocm_fft(cs(y, m)), "rocm_fft n=1000 ran");
     check(cplx_err(y, yref, m) < 1e-10, "rocm_fft n=1000 values");
 
     // batch of 4 x 256 against per-row fft
@@ -272,8 +277,8 @@ static void check_hipfft() {
     &heap Complex bx = cplx_new(4UL * bn, 9UL);
     &heap Complex bref = cplx_new(4UL * bn, 9UL);
     unsigned long r = 0UL;
-    unsafe { while (r < 4UL) { std::fft(&bref[r * bn], bn); r = r + 1UL; } }
-    check(std::rocm_fft_batch(bx, bn, 4UL, 0), "rocm_fft_batch ran");
+    unsafe { while (r < 4UL) { std::fft(cs(bref, 4UL * bn)[r * bn..r * bn + bn]); r = r + 1UL; } }
+    check(std::rocm_fft_batch(cs(bx, 4UL * bn), bn, 0), "rocm_fft_batch ran");
     check(cplx_err(bx, bref, 4UL * bn) < 1e-12, "rocm_fft_batch values");
 
     // 2D against imaging.h
@@ -281,7 +286,7 @@ static void check_hipfft() {
     unsigned long w = 64UL;
     &heap Complex img = cplx_new(h * w, 11UL);
     &heap Complex iref = cplx_new(h * w, 11UL);
-    std::fft2d(iref, h, w);
+    std::fft2d(cs(iref, h * w), h, w);
     check(std::rocm_fft2d(img, h, w), "rocm_fft2d ran");
     check(cplx_err(img, iref, h * w) < 1e-12, "rocm_fft2d values");
     check(std::rocm_ifft2d(img, h, w), "rocm_ifft2d ran");
@@ -293,7 +298,7 @@ static void check_hipfft() {
     &heap Complex fx = cplx_new(fb * n, 21UL);
     &heap Complex fref = cplx_new(fb * n, 21UL);
     r = 0UL;
-    unsafe { while (r < fb) { std::fft(&fref[r * n], n); r = r + 1UL; } }
+    unsafe { while (r < fb) { std::fft(cs(fref, fb * n)[r * n..r * n + n]); r = r + 1UL; } }
     struct Vec<float> hf = std::Vec::with_cap(2UL * fb * n);
     unsigned long i = 0UL;
     unsafe { while (i < fb * n) { hf.push((float)fx[i].re); hf.push((float)fx[i].im); i = i + 1UL; } }
@@ -319,7 +324,7 @@ static void check_hipfft() {
     i = 0UL;
     unsafe { while (i < n) { re.push((float)fx[i].re); red[i] = (double)(float)fx[i].re; i = i + 1UL; } }
     &heap Complex rref = cplx_new(n, 0UL);
-    unsafe { std::fft_real((const double*)red, rref, n); }
+    unsafe { std::fft_real(red[0..n], cs(rref, n)); }
     struct RocmBuf dre = RocmBuf::upload(re.at(0UL), n);
     struct RocmBuf dhalf = RocmBuf::alloc(2UL * (n / 2UL + 1UL));
     check(std::rocm_fft_r2c(dre, dhalf, n, 1UL), "rocm_fft_r2c ran");

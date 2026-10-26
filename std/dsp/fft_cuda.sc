@@ -142,10 +142,10 @@ static int fft_host_z2z_(struct Complex* data, unsigned long nx, unsigned long n
     return 1;
 }
 
-int cuda_fft(&Complex data, unsigned long n) { return fft_host_z2z_(data, n, 0UL, 1UL, 0); }
-int cuda_ifft(&Complex data, unsigned long n) { return fft_host_z2z_(data, n, 0UL, 1UL, 1); }
+int cuda_fft_n_(&Complex data, unsigned long n) { return fft_host_z2z_(data, n, 0UL, 1UL, 0); }
+int cuda_ifft_n_(&Complex data, unsigned long n) { return fft_host_z2z_(data, n, 0UL, 1UL, 1); }
 
-int cuda_fft_batch(&Complex data, unsigned long n, unsigned long batch, int inverse) {
+int cuda_fft_batch_n_(&Complex data, unsigned long n, unsigned long batch, int inverse) {
     return fft_host_z2z_(data, n, 0UL, batch, inverse);
 }
 
@@ -192,6 +192,24 @@ int cuda_fft_c2r(struct CudaBuf in, struct CudaBuf out, unsigned long n, unsigne
         if (cufftExecC2R(plan, (void*)in.dev, (void*)out.dev) != 0) return 0;
     }
     return fft_normalize_(out, n * batch, n);
+}
+
+// ── Slice API (the public signatures; the (reference, length) cores above
+// are the *_n_ functions) ─────────────────────────────────────────────────────
+
+int cuda_fft([]Complex data) {
+    if (data.len == 0UL) return 0;
+    unsafe { return cuda_fft_n_((&Complex)data.ptr, data.len); }
+}
+
+int cuda_ifft([]Complex data) {
+    if (data.len == 0UL) return 0;
+    unsafe { return cuda_ifft_n_((&Complex)data.ptr, data.len); }
+}
+
+int cuda_fft_batch([]Complex data, unsigned long n, int inverse) {
+    if (n == 0UL || data.len == 0UL || data.len % n != 0UL) return 0;
+    unsafe { return cuda_fft_batch_n_((&Complex)data.ptr, n, data.len / n, inverse); }
 }
 
 } // namespace std

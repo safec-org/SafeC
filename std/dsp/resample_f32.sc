@@ -12,9 +12,27 @@
 namespace std {
 
 #define RS_T        float
-#define RS_NEAREST  resample_nearest_f32
-#define RS_LINEAR   resample_linear_f32
-#define RS_SINC     resample_sinc_f32
+#define RS_NEAREST  resample_nearest_f32_n_
+#define RS_LINEAR   resample_linear_f32_n_
+#define RS_SINC     resample_sinc_f32_n_
 #include <std/dsp/resample_core.h>
+
+// ── Slice API (the public signatures; the (reference, length) cores above
+// are the *_n_ functions) ─────────────────────────────────────────────────────
+
+void resample_nearest_f32([]const float in, []float out) {
+    if (in.len == 0UL || out.len == 0UL) return;
+    unsafe { resample_nearest_f32_n_((const &float)in.ptr, in.len, (&float)out.ptr, out.len); }
+}
+
+void resample_linear_f32([]const float in, []float out) {
+    if (in.len == 0UL || out.len == 0UL) return;
+    unsafe { resample_linear_f32_n_((const &float)in.ptr, in.len, (&float)out.ptr, out.len); }
+}
+
+void resample_sinc_f32([]const float in, []float out, unsigned long kernelHalfWidth) {
+    if (in.len == 0UL || out.len == 0UL) return;
+    unsafe { resample_sinc_f32_n_((const &float)in.ptr, in.len, (&float)out.ptr, out.len, kernelHalfWidth); }
+}
 
 } // namespace std

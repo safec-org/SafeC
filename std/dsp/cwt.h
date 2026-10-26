@@ -33,7 +33,11 @@ namespace std {
 // wavelet's own oscillation). 'out' must have room for
 // numScales*signalLen Complex values, row-major by scale (row si covers
 // out[si*signalLen .. si*signalLen+signalLen-1]).
-void cwt_morlet(const &double signal, unsigned long signalLen,
+int cwt_morlet([]const double signal, []const double scales, double w0, []Complex out);
+
+// Internal: the (reference, length) forms the slice API above wraps
+// (std/dsp's own code calls these; not API).
+void cwt_morlet_n_(const &double signal, unsigned long signalLen,
                  const &double scales, unsigned long numScales,
                  double w0, &Complex out);
 

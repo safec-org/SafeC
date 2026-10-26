@@ -19,10 +19,10 @@ namespace std {
 // 1 on success, 0 on failure (no GPU, n == 0, cuFFT error). Same
 // conventions as fft.h: forward is unnormalized, inverse includes 1/N.
 
-int cuda_fft(&Complex data, unsigned long n);
-int cuda_ifft(&Complex data, unsigned long n);
+int cuda_fft([]Complex data);
+int cuda_ifft([]Complex data);
 // 'batch' independent length-n transforms stored back to back, in one call.
-int cuda_fft_batch(&Complex data, unsigned long n, unsigned long batch, int inverse);
+int cuda_fft_batch([]Complex data, unsigned long n, int inverse);
 // 2D transform of a row-major h x w image (imaging.h's fft2d / ifft2d).
 int cuda_fft2d(&Complex img, unsigned long h, unsigned long w);
 int cuda_ifft2d(&Complex img, unsigned long h, unsigned long w);
@@ -38,5 +38,11 @@ int cuda_fft_r2c(struct CudaBuf in, struct CudaBuf out, unsigned long n, unsigne
 // batch x (n/2 + 1) complex -> batch x n real. Overwrites 'in' (cuFFT's
 // complex-to-real transforms use their input as scratch).
 int cuda_fft_c2r(struct CudaBuf in, struct CudaBuf out, unsigned long n, unsigned long batch);
+
+// Internal: the (reference, length) forms the slice API above wraps
+// (std/dsp's own code calls these; not API).
+int cuda_fft_n_(&Complex data, unsigned long n);
+int cuda_ifft_n_(&Complex data, unsigned long n);
+int cuda_fft_batch_n_(&Complex data, unsigned long n, unsigned long batch, int inverse);
 
 } // namespace std
