@@ -12,16 +12,18 @@ struct String {
     // ── Construction ────────────────────────────────────────────────────────
     static struct String new();                                  // empty
     static struct String from(const &char s);                    // copy of a C string
-    static struct String from_n(const &char s, unsigned long n); // copy of n raw bytes
+    static struct String from_bytes([]const char bytes);         // copy of the bytes (need not be NUL-terminated)
+    static struct String from_n(const &char s, unsigned long n); // copy of the n bytes at s (prefer from_bytes)
     static struct String with_cap(unsigned long cap);            // empty, room for cap bytes
     static struct String repeat_str(const &char s, unsigned long n); // s repeated n times
-    // parts[0..count) concatenated, `sep` between each (null sep: none)
-    static struct String join(const &char sep, &String parts, unsigned long count);
+    // parts concatenated, `sep` between each (null sep: none)
+    static struct String join(const ?&char sep, []String parts);
 
     // ── Access ──────────────────────────────────────────────────────────────
     unsigned long  length() const;
     int            is_empty() const;
     const &char    as_ptr() const;          // NUL-terminated C string
+    []const char   as_bytes() const;        // the len bytes (no NUL); valid until the next change
     int            char_at(unsigned long idx) const; // -1 if OOB
     void           set_char(unsigned long idx, char c);
 
@@ -32,7 +34,8 @@ struct String {
     // ── Append ──────────────────────────────────────────────────────────────
     int            push_char(char c);
     int            push(const &char cstr);
-    int            push_n(const &char data, unsigned long n); // append n raw bytes (source need not be NUL-terminated)
+    int            push_bytes([]const char bytes);           // append the bytes (need not be NUL-terminated)
+    int            push_n(const &char data, unsigned long n); // append the n bytes at data (prefer push_bytes)
     int            push_str(&String other);
     int            push_int(long long v);
     int            push_uint(unsigned long long v);
@@ -75,12 +78,12 @@ struct String {
     struct String  capitalize() const;                              // uppercase first byte, lowercase rest
 
     // ── Split ───────────────────────────────────────────────────────────────
-    // All split methods write into caller-provided `out` array (max slots).
+    // All split methods write into the caller's `out` slots (out.len of them).
     // Return value = number of items written.
-    // If splits exceed max, the last slot receives the remainder.
-    unsigned long  split(const &char delim, &String out, unsigned long max) const;
-    unsigned long  split_lines(&String out, unsigned long max) const;
-    unsigned long  split_whitespace(&String out, unsigned long max) const;
+    // If splits exceed out.len, the last slot receives the remainder.
+    unsigned long  split(const &char delim, []String out) const;
+    unsigned long  split_lines([]String out) const;
+    unsigned long  split_whitespace([]String out) const;
 
     // ── Comparison ──────────────────────────────────────────────────────────
     int            eq(&String other) const;

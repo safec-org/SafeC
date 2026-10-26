@@ -427,12 +427,12 @@ void t_queues() {
     // drain_into on a Chan runs until it is closed and drained
     int ys[3];
     unsafe { ys[0] = 7; ys[1] = 8; ys[2] = 9; }
-    ASSERT_EQ(enqueue_all(&fc, &ys[0], 3UL), 3);
+    ASSERT_EQ(enqueue_all(&fc, ys[0..3]), 3);
     fc.close();
     struct Vec<int> drained = Vec::new();
     ASSERT_EQ(drain_into(&fc, &drained), 3);
     ASSERT_EQ(*drained.at(2UL), 9);
-    ASSERT_EQ(enqueue_all(&fc, &ys[0], 3UL), 0);    // closed
+    ASSERT_EQ(enqueue_all(&fc, ys[0..3]), 0);    // closed
     drained.free();
     mq.destroy();
     lq.destroy();

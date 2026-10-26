@@ -51,8 +51,8 @@ namespace std {
 
 // Elem_ (cmp.h), Key_ and Val_ stand for the element, key and value types
 // in the signatures below; each container has its own.
-typedef void* Key_;
-typedef void* Val_;
+typedef Erased Key_;
+typedef Erased Val_;
 
 trait Len {
     unsigned long length() const;
@@ -105,21 +105,21 @@ trait CountedFifo : Fifo + Len {}
 
 trait Map : Len + Insert + Get + Contains + Remove {}
 
-// Pushes items[0..n) in order, stopping at the first one refused (full or
+// Pushes the items in order, stopping at the first one refused (full or
 // out of memory). Returns how many went in; the rest stay in items.
 generic<S: Push, T>
-unsigned long push_all(&S s, const &T items, unsigned long n) {
+unsigned long push_all(&S s, []const T items) {
     unsigned long i = 0UL;
-    unsafe { while (i < n && s.push(items[i])) { i = i + 1UL; } }
+    while (i < items.len && s.push(items[i])) { i = i + 1UL; }
     return i;
 }
 
-// Enqueues items[0..n) in order, stopping at the first one refused (full or
+// Enqueues the items in order, stopping at the first one refused (full or
 // closed). Returns how many went in; the rest stay in items.
 generic<Q: Enqueue, T>
-unsigned long enqueue_all(&Q q, const &T items, unsigned long n) {
+unsigned long enqueue_all(&Q q, []const T items) {
     unsigned long i = 0UL;
-    unsafe { while (i < n && q.enqueue(items[i])) { i = i + 1UL; } }
+    while (i < items.len && q.enqueue(items[i])) { i = i + 1UL; }
     return i;
 }
 

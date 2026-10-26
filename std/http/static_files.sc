@@ -252,7 +252,7 @@ static struct String sf_etag_(long long size, long long mtime) {
 static int sf_etag_listed_(const &String list, const &String etag) {
     if (list.trim().eq_cstr("*")) { return 1; }
     struct String items[64];
-    unsigned long n = list.split(",", &items[0], 64UL);
+    unsigned long n = list.split(",", items[0..64]);
     int found = 0;
     unsigned long i = 0UL;
     while (i < n) {

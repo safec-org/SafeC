@@ -1516,7 +1516,7 @@ static int http_read_request_(&BufReader<TcpStream> in, const &HttpServerConfig 
     }
     // "METHOD SP request-target SP HTTP-version"
     struct String parts[4];
-    unsigned long np = requestLine.split(" ", &parts[0], 4UL);
+    unsigned long np = requestLine.split(" ", parts[0..4]);
     int good = np == 3UL;
     if (good) {
         if (parts[2].eq_cstr("HTTP/1.1")) { info.versionMinor = 1; }
@@ -2073,7 +2073,7 @@ static struct HttpRequest http_parse_request_from_buf_(struct String* buf, long 
         headerBlock.free();
 
         struct String parts[8];
-        unsigned long np = requestLine.split(" ", parts, 8UL);
+        unsigned long np = requestLine.split(" ", parts[0..8]);
         if (np >= 2UL) {
             req.method.free();
             req.method = parts[0].clone();

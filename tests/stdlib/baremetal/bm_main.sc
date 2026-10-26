@@ -154,16 +154,16 @@ static unsigned char g_ring_store[64];
 
 static void t_ring_alloc() {
     unsafe {
-        struct RingBuffer r = std::RingBuffer::over((&static unsigned char)g_ring_store, 64UL);
+        struct RingBuffer r = std::RingBuffer::over(g_ring_store[0..64]);
         unsigned char in[40];
         unsigned char out[40];
         int i = 0;
         while (i < 40) { in[i] = (unsigned char)i; i = i + 1; }
-        r.write(in, 40UL);
-        r.read(out, 30UL);
-        r.write(in, 40UL);                       // wraps
+        r.write(in[0..40]);
+        r.read(out[0..30]);
+        r.write(in[0..40]);                       // wraps
         CHECK(r.length() == 50UL);
-        r.read(out, 10UL);
+        r.read(out[0..10]);
         CHECK(out[9] == 39);
 
         struct TlsfAllocator t = std::TlsfAllocator::new(32768UL);

@@ -385,7 +385,7 @@ static int router_accepts_gzip_(&HttpRequest req) {
     ae.free();
     int ok = 0;
     struct String parts[32];
-    unsigned long n = low.split(",", &parts[0], 32UL);
+    unsigned long n = low.split(",", parts[0..32]);
     unsigned long i = 0UL;
     while (i < n) {
         struct String t = parts[i].trim();
