@@ -15,6 +15,14 @@
 
 namespace std {
 
+[]const unsigned char RpcResult::bytes() const {
+    match (self.data) {
+        case some(d): { unsafe { return ((const unsigned char*)d)[0..self.len]; } }
+        case null: { }
+    }
+    unsafe { return ((const unsigned char*)"")[0..0]; }
+}
+
 void RpcResult::free() {
     if (self.data != (unsigned char*)0) {
         unsafe { dealloc_raw_((void*)self.data); }
@@ -67,7 +75,10 @@ static int rpc_unframe_(const char* raw, unsigned long rawLen,
 // ── Client ────────────────────────────────────────────────────────────────
 
 struct RpcResult rpc_call(const &char host, unsigned short port, const &char path,
-                           const &unsigned char request_data, unsigned long request_len) {
+                           []const unsigned char request_data_s) {
+    unsigned long request_len = request_data_s.len;
+    const &unsigned char request_data;
+    unsafe { request_data = (const &unsigned char)request_data_s.ptr; }
     struct RpcResult result;
     result.ok            = 0;
     result.data           = (unsigned char*)0;
@@ -165,12 +176,12 @@ static struct HttpResponse rpc_dispatch_(&HttpRequest req) {
 
     RpcMethodHandler handlerFn = *expect_ref(found, "rpc handler");
     // An empty payload has no buffer; hand the handler a zero-length view.
-    unsigned char emptyPayload = (unsigned char)0;
+    unsigned char emptyPayload[1];
     struct RpcResult result;
     if (reqData == (unsigned char*)0) {
-        result = handlerFn(&emptyPayload, 0UL);
+        result = handlerFn(emptyPayload[0..0]);
     } else {
-        unsafe { result = handlerFn(reqData, reqLen); }
+        unsafe { result = handlerFn(((const unsigned char*)reqData)[0..reqLen]); }
     }
     if (reqData != (unsigned char*)0) { unsafe { dealloc_raw_((void*)reqData); } }
 

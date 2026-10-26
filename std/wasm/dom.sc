@@ -35,7 +35,11 @@ unsigned long wasm_strlen(const &char s) {
 
 static int dom_len_(const &char s) { return (int)wasm_strlen(s); }
 
-void wasm_itoa(long long v, &char buf, unsigned long cap) {
+void wasm_itoa(long long v, []char buf_s) {
+    unsigned long cap = buf_s.len;
+    if (cap == 0UL) { return; }
+    &char buf;
+    unsafe { buf = (&char)buf_s.ptr; }
     unsafe {
         if (cap == 0UL) {
             return;
@@ -323,7 +327,11 @@ struct String dom_get_prop(int handle, const &char name) {
     unsafe { return dom_str_(DOM_STR_PROP_, handle, 0, name, dom_len_(name)); }
 }
 
-int dom_get_prop_buf(int handle, const &char name, &char buf, int cap) {
+int dom_get_prop_buf(int handle, const &char name, []char buf_s) {
+    int cap = buf_s.len > 2147483647UL ? 2147483647 : (int)buf_s.len;
+    if (cap == 0) { return 0; }
+    &char buf;
+    unsafe { buf = (&char)buf_s.ptr; }
     if (cap <= 0) { return 0; }
     int n;
     unsafe {

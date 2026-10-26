@@ -31,7 +31,7 @@ namespace std {
     match (tdev_unary_(self, EW_SIGMOID, (float)0.0, (float)0.0, EW_ACC_SIGB, 2, (float)0.0, 0)) { case some(o): { return o; } case null: { } }
     unsafe { tensor_host_raw_((void*)self); }
     &FloatTensor out = __tensor_alloc_uninit_like(self);
-    unsafe { vm_sigmoid_f32((const float*)self->data, (float*)out->data, out->size); }
+    unsafe { vm_sigmoid_f32_n_((const float*)self->data, (float*)out->data, out->size); }
     __tensor_link1(out, self, (void*)__sigmoid_backward);
     return out;
 }
@@ -41,7 +41,7 @@ namespace std {
     match (tdev_unary_(self, EW_TANH, (float)0.0, (float)0.0, EW_ACC_TANHB, 2, (float)0.0, 0)) { case some(o): { return o; } case null: { } }
     unsafe { tensor_host_raw_((void*)self); }
     &FloatTensor out = __tensor_alloc_uninit_like(self);
-    unsafe { vm_tanh_f32((const float*)self->data, (float*)out->data, out->size); }
+    unsafe { vm_tanh_f32_n_((const float*)self->data, (float*)out->data, out->size); }
     __tensor_link1(out, self, (void*)__tanh_t_backward);
     return out;
 }
@@ -73,7 +73,7 @@ static void softmax_rows_(&SoftmaxJob j, unsigned long lo, unsigned long hi) {
             while (i < n) { mx = x[i] > mx ? x[i] : mx; i = i + 1UL; }
             i = 0UL;
             while (i < n) { y[i] = x[i] - mx; i = i + 1UL; }
-            vm_exp_f32((const float*)y, y, n);
+            vm_exp_f32_n_((const float*)y, y, n);
             float sum = (float)0.0;
             i = 0UL;
             while (i < n) { sum = sum + y[i]; i = i + 1UL; }
@@ -112,7 +112,7 @@ static void softmax_rows_(&SoftmaxJob j, unsigned long lo, unsigned long hi) {
         float* y = (float*)out->data;
         unsigned long i = 0UL;
         while (i < n) { float x = self->data[i]; y[i] = x < (float)0.0 ? x : (float)0.0; i = i + 1UL; }
-        vm_exp_f32((const float*)y, y, n);
+        vm_exp_f32_n_((const float*)y, y, n);
         i = 0UL;
         while (i < n) {
             float x = self->data[i];
@@ -136,7 +136,7 @@ static void softmax_rows_(&SoftmaxJob j, unsigned long lo, unsigned long hi) {
         float* y = (float*)out->data;
         unsigned long i = 0UL;
         while (i < n) { float x = self->data[i]; y[i] = c * (x + (float)0.044715 * x * x * x); i = i + 1UL; }
-        vm_tanh_f32((const float*)y, y, n);
+        vm_tanh_f32_n_((const float*)y, y, n);
         i = 0UL;
         while (i < n) { float x = self->data[i]; y[i] = (float)0.5 * x * ((float)1.0 + y[i]); i = i + 1UL; }
     }
@@ -152,7 +152,7 @@ static void softmax_rows_(&SoftmaxJob j, unsigned long lo, unsigned long hi) {
     unsafe {
         unsigned long n = out->size;
         float* y = (float*)out->data;
-        vm_sigmoid_f32((const float*)self->data, y, n);
+        vm_sigmoid_f32_n_((const float*)self->data, y, n);
         unsigned long i = 0UL;
         while (i < n) { y[i] = self->data[i] * y[i]; i = i + 1UL; }
     }
@@ -183,7 +183,7 @@ static void softmax_rows_(&SoftmaxJob j, unsigned long lo, unsigned long hi) {
             unsigned long outBase = r * outLast;
             unsigned long inBase = r * inLast;
             float* y = &out->data[outBase];
-            vm_sigmoid_f32((const float*)&self->data[inBase + outLast], y, outLast);
+            vm_sigmoid_f32_n_((const float*)&self->data[inBase + outLast], y, outLast);
             unsigned long j = 0UL;
             while (j < outLast) { y[j] = self->data[inBase + j] * y[j]; j = j + 1UL; }
             r = r + 1UL;
@@ -216,7 +216,7 @@ static void softmax_rows_(&SoftmaxJob j, unsigned long lo, unsigned long hi) {
             unsigned long outBase = r * outLast;
             unsigned long inBase = r * inLast;
             float* y = &out->data[outBase];
-            vm_sigmoid_f32((const float*)&self->data[inBase], y, outLast);
+            vm_sigmoid_f32_n_((const float*)&self->data[inBase], y, outLast);
             unsigned long j = 0UL;
             while (j < outLast) {
                 float a1 = self->data[inBase + j];

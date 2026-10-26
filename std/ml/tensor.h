@@ -742,12 +742,12 @@ static void __matmul_backward(void* selfPtr) {
         // Both accumulate straight into the existing gradient (beta = 1).
         if (a->requiresGrad) {
             __tensor_ensure_grad(a);
-            sgemm(SGEMM_NO_TRANS, SGEMM_TRANS, m, k, n, (float)1.0,
+            sgemm_n_(SGEMM_NO_TRANS, SGEMM_TRANS, m, k, n, (float)1.0,
                   (const &float)selfT->grad, n, (const &float)b->data, n, (float)1.0, (&float)a->grad, k);
         }
         if (b->requiresGrad) {
             __tensor_ensure_grad(b);
-            sgemm(SGEMM_TRANS, SGEMM_NO_TRANS, k, n, m, (float)1.0,
+            sgemm_n_(SGEMM_TRANS, SGEMM_NO_TRANS, k, n, m, (float)1.0,
                   (const &float)a->data, k, (const &float)selfT->grad, n, (float)1.0, (&float)b->grad, n);
         }
     }

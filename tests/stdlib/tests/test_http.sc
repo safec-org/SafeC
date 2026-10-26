@@ -75,7 +75,8 @@ static ?&int run_http(?&int arg) {
     return null;
 }
 
-static struct RpcResult rpc_upper(const &unsigned char data, unsigned long len) {
+static struct RpcResult rpc_upper([]const unsigned char data) {
+    unsigned long len = data.len;
     struct RpcResult r;
     unsafe {
         ?&heap unsigned char out = (?&heap unsigned char)alloc(len);
@@ -402,7 +403,7 @@ void t_rpc() {
         struct RpcResult r;
         int tries = 0;
         while (1) {
-            r = rpc_call("127.0.0.1", g_rpc_port, "/upper", (const unsigned char*)"hello rpc", 9UL);
+            r = rpc_call("127.0.0.1", g_rpc_port, "/upper", str_bytes("hello rpc"));
             if (r.ok || tries >= 50) break;
             r.free();
             thread_sleep_ms(20UL);
@@ -410,6 +411,8 @@ void t_rpc() {
         }
         ASSERT_TRUE(r.ok);
         ASSERT_EQ(r.len, 9);
+        ASSERT_EQ(r.bytes().len, 9);
+        ASSERT_EQ(r.bytes()[1], 'E');
         match (r.data) {
             case null: { ASSERT_TRUE(0); }
             case some(d): {
@@ -418,7 +421,7 @@ void t_rpc() {
             }
         }
         r.free();
-        struct RpcResult miss = rpc_call("127.0.0.1", g_rpc_port, "/nope", (const unsigned char*)"x", 1UL);
+        struct RpcResult miss = rpc_call("127.0.0.1", g_rpc_port, "/nope", str_bytes("x"));
         ASSERT_FALSE(miss.ok);
         miss.free();
 

@@ -10,11 +10,17 @@
 //
 // Arrays of 32768 or more elements are split across std/sync/parallel.h's
 // thread pool, so these are not for real-time code with large arrays;
-// shorter arrays run on the calling thread. x and y may be the same array.
+// shorter arrays run on the calling thread. x and y may be the same slice.
 namespace std {
 
-void vm_exp_f32(const &float x, &float y, unsigned long n);
-void vm_tanh_f32(const &float x, &float y, unsigned long n);
-void vm_sigmoid_f32(const &float x, &float y, unsigned long n);
+// y[i] = f(x[i]) for i < min(x.len, y.len); returns that count.
+unsigned long vm_exp_f32([]const float x, []float y);
+unsigned long vm_tanh_f32([]const float x, []float y);
+unsigned long vm_sigmoid_f32([]const float x, []float y);
+
+// Internal: the (reference, count) forms std/ml's kernels call.
+void vm_exp_f32_n_(const &float x, &float y, unsigned long n);
+void vm_tanh_f32_n_(const &float x, &float y, unsigned long n);
+void vm_sigmoid_f32_n_(const &float x, &float y, unsigned long n);
 
 } // namespace std

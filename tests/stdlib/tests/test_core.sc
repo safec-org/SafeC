@@ -263,12 +263,17 @@ void t_sys() {
         ASSERT_EQ(sys_strtoll("ff", null, 16), 255);
         int arr[5];
         arr[0] = 5; arr[1] = 1; arr[2] = 4; arr[3] = 2; arr[4] = 3;
-        sys_qsort(&arr[0], 5UL, cmp_int);
+        sys_qsort(arr[..], cmp_int);
         ASSERT_EQ(arr[0], 1);
         ASSERT_EQ(arr[4], 5);
         int key = 4;
-        ?&int hit = sys_bsearch(&key, &arr[0], 5UL, cmp_int);
-        ASSERT_EQ(hit.default(-1), 4);
+        ?unsigned long hit = sys_bsearch(&key, arr[..], cmp_int);
+        match (hit) {
+            case some(i): { ASSERT_EQ(arr[i], 4); }
+            case none: { ASSERT_TRUE(0); }
+        }
+        key = 9;
+        ASSERT_TRUE(sys_bsearch(&key, arr[..], cmp_int).is_none());
         ASSERT_TRUE(sys_monotonic_ns() > 0LL);
     }
 }
@@ -502,20 +507,21 @@ void t_env() {
         ASSERT_EQ(time_days_in_month(12, 2023), -1);
         ASSERT_TRUE(near_d(time_diff(100LL, 40LL), 60.0, 0.0));
         ASSERT_EQ(time_elapsed_ns(5LL, 12LL), 7);
-        int tm[9];
-        ASSERT_TRUE(time_parse("2024-02-29 13:45:10", "%Y-%m-%d %H:%M:%S", tm));
-        ASSERT_EQ(tm[5], 124);
-        ASSERT_EQ(tm[4], 1);
-        ASSERT_EQ(tm[3], 29);
-        ASSERT_EQ(tm[2], 13);
-        time_gmtime(951782400LL, tm);            // 2000-02-29 00:00:00 UTC
-        ASSERT_EQ(tm[5], 100);
-        ASSERT_EQ(tm[3], 29);
-        time_localtime(time_now(), tm);
-        ASSERT_TRUE(tm[5] >= 124);
+        struct TimeFields tm;
+        ASSERT_TRUE(time_parse("2024-02-29 13:45:10", "%Y-%m-%d %H:%M:%S", &tm));
+        ASSERT_EQ(tm.year, 124);
+        ASSERT_EQ(tm.mon, 1);
+        ASSERT_EQ(tm.mday, 29);
+        ASSERT_EQ(tm.hour, 13);
+        tm = time_gmtime(951782400LL);            // 2000-02-29 00:00:00 UTC
+        ASSERT_EQ(tm.year, 100);
+        ASSERT_EQ(tm.mday, 29);
+        tm = time_localtime(time_now());
+        ASSERT_TRUE(tm.year >= 124);
         char tb[32];
-        time_gmtime(0LL, tm);
-        ASSERT_EQ(time_format(tb, 32UL, "%Y-%m-%d", tm), 10);
+        tm = time_gmtime(0LL);
+        ASSERT_EQ(time_format(tb[..], "%Y-%m-%d", &tm), 10);
+        ASSERT_EQ(time_format(tb[0..4], "%Y-%m-%d", &tm), 0);   // too small
         ASSERT_STR_EQ((const char*)tb, "1970-01-01");
 
         // sys: clocks go through time.h (correct clock ids on Linux and macOS)

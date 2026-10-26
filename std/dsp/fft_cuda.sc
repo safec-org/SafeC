@@ -149,8 +149,14 @@ int cuda_fft_batch_n_(&Complex data, unsigned long n, unsigned long batch, int i
     return fft_host_z2z_(data, n, 0UL, batch, inverse);
 }
 
-int cuda_fft2d(&Complex img, unsigned long h, unsigned long w) { return fft_host_z2z_(img, h, w, 1UL, 0); }
-int cuda_ifft2d(&Complex img, unsigned long h, unsigned long w) { return fft_host_z2z_(img, h, w, 1UL, 1); }
+int cuda_fft2d([]Complex img, unsigned long h, unsigned long w) {
+    if (h == 0UL || w == 0UL || img.len / w < h) { return 0; }
+    unsafe { return fft_host_z2z_((&Complex)img.ptr, h, w, 1UL, 0); }
+}
+int cuda_ifft2d([]Complex img, unsigned long h, unsigned long w) {
+    if (h == 0UL || w == 0UL || img.len / w < h) { return 0; }
+    unsafe { return fft_host_z2z_((&Complex)img.ptr, h, w, 1UL, 1); }
+}
 
 // ── Queued device ops (fp32) ─────────────────────────────────────────────────
 

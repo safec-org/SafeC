@@ -606,13 +606,12 @@ void t_time() {
         time_sleep_ns(2000000LL);
         long long b = time_mono_ns();
         ASSERT_TRUE(b - a >= 1500000LL);
-        int tm[9];
-        time_gmtime(0LL, (int*)tm);
+        struct TimeFields tm = time_gmtime(0LL);
         char buf[64];
-        time_format((char*)buf, 64UL, "%Y-%m-%d", (int*)tm);
+        time_format(buf[..], "%Y-%m-%d", &tm);
         ASSERT_STR_EQ((const char*)buf, "1970-01-01");
-        time_gmtime(951782400LL, (int*)tm);   // 2000-02-29
-        time_format((char*)buf, 64UL, "%Y-%m-%d", (int*)tm);
+        tm = time_gmtime(951782400LL);   // 2000-02-29
+        time_format(buf[..], "%Y-%m-%d", &tm);
         ASSERT_STR_EQ((const char*)buf, "2000-02-29");
         ASSERT_TRUE(time_is_leap(2000));
         ASSERT_FALSE(time_is_leap(1900));
@@ -1030,15 +1029,15 @@ void t_simd_more() {
         i = 0;
         while (i < 9) { x[i] = (float)(i - 4) * (float)1.5; i = i + 1; }
         int ok = 1;
-        vm_exp_f32((const float*)x, (float*)y, 9UL);
+        ASSERT_EQ(vm_exp_f32(x[..], y[..]), 9);
         i = 0;
         while (i < 9) { if (!near_f(y[i], exp_f(x[i]), exp_f(x[i]) * (float)1e-5)) ok = 0; i = i + 1; }
         ASSERT_TRUE(ok);
-        vm_tanh_f32((const float*)x, (float*)y, 9UL);
+        vm_tanh_f32(x[..], y[..]);
         i = 0;
         while (i < 9) { if (!near_f(y[i], tanh_f(x[i]), (float)1e-5)) ok = 0; i = i + 1; }
         ASSERT_TRUE(ok);
-        vm_sigmoid_f32((const float*)x, (float*)y, 9UL);
+        vm_sigmoid_f32(x[..], y[..]);
         i = 0;
         while (i < 9) {
             float ref = (float)1.0 / ((float)1.0 + exp_f(-x[i]));
@@ -1072,16 +1071,21 @@ void t_simd_more() {
             }
             r = r + 1UL;
         }
-        sgemm(SGEMM_NO_TRANS, SGEMM_NO_TRANS, m, n, k, (float)2.0, (const float*)A, k,
-              (const float*)B, n, (float)1.0, (float*)C, n);
+        ASSERT_EQ(sgemm(SGEMM_NO_TRANS, SGEMM_NO_TRANS, m, n, k, (float)2.0, A[..], k,
+                        B[..], n, (float)1.0, C[..], n), 1);
         i = 0;
         while (i < 35) { if (!near_f(C[i], R[i], (float)1e-3)) ok = 0; i = i + 1; }
         ASSERT_TRUE(ok);
-        sgemm_serial(SGEMM_NO_TRANS, SGEMM_NO_TRANS, m, n, k, (float)2.0, (const float*)A, k,
-                     (const float*)B, n, (float)0.0, (float*)C, n);
+        ASSERT_EQ(sgemm_serial(SGEMM_NO_TRANS, SGEMM_NO_TRANS, m, n, k, (float)2.0, A[..], k,
+                               B[..], n, (float)0.0, C[..], n), 1);
         i = 0;
         while (i < 35) { if (!near_f(C[i] + (float)1.0, R[i], (float)1e-3)) ok = 0; i = i + 1; }
         ASSERT_TRUE(ok);
+        // too-short slices are refused, not read past
+        ASSERT_EQ(sgemm(SGEMM_NO_TRANS, SGEMM_NO_TRANS, m, n, k, (float)1.0, A[0..62], k,
+                        B[..], n, (float)0.0, C[..], n), 0);
+        ASSERT_EQ(sgemm(SGEMM_NO_TRANS, SGEMM_NO_TRANS, m, n, k, (float)1.0, A[..], k,
+                        B[..], n, (float)0.0, C[0..34], n), 0);
         ASSERT_TRUE(sgemm_vendor() == 0 || sgemm_vendor() == 1);
         ASSERT_TRUE(str_len(sgemm_backend()) > 0UL);
         int lvl = simd_level();

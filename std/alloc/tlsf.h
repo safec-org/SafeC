@@ -44,7 +44,7 @@ struct TlsfAllocator {
     ?&TlsfBlock   blocks[TLSF_FL_MAX * TLSF_SL_COUNT];       // free-list heads
 
     // A TLSF allocator over a user-provided heap buffer of `cap` bytes.
-    static struct TlsfAllocator over(&unsigned char buffer, unsigned long cap);
+    static struct TlsfAllocator over([]unsigned char buffer);
 
     // A heap-backed TLSF allocator of `cap` bytes.
     static struct TlsfAllocator new(unsigned long cap);

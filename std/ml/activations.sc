@@ -21,14 +21,14 @@ namespace std {
 &FloatTensor FloatTensor::sigmoid_fwd() const {
     unsafe { tensor_host_raw_((void*)self); }
     &FloatTensor out = __tensor_alloc_uninit_like(self);
-    unsafe { vm_sigmoid_f32((const float*)self->data, (float*)out->data, out->size); }
+    unsafe { vm_sigmoid_f32_n_((const float*)self->data, (float*)out->data, out->size); }
     return out;
 }
 
 &FloatTensor FloatTensor::tanh_fwd() const {
     unsafe { tensor_host_raw_((void*)self); }
     &FloatTensor out = __tensor_alloc_uninit_like(self);
-    unsafe { vm_tanh_f32((const float*)self->data, (float*)out->data, out->size); }
+    unsafe { vm_tanh_f32_n_((const float*)self->data, (float*)out->data, out->size); }
     return out;
 }
 
@@ -36,7 +36,7 @@ namespace std {
     unsafe { tensor_host_raw_((void*)self); }
     &FloatTensor out = __tensor_alloc_uninit_like(self);
     unsafe {
-        vm_sigmoid_f32((const float*)self->data, (float*)out->data, out->size);
+        vm_sigmoid_f32_n_((const float*)self->data, (float*)out->data, out->size);
         __tensor_ew(EW_MUL, (const float*)self->data, (const float*)out->data, (float)0.0, (float*)out->data, out->size);
     }
     return out;
@@ -51,7 +51,7 @@ namespace std {
         float* y = (float*)out->data;
         unsigned long i = 0UL;
         while (i < n) { float x = self->data[i]; y[i] = c * (x + (float)0.044715 * x * x * x); i = i + 1UL; }
-        vm_tanh_f32((const float*)y, y, n);
+        vm_tanh_f32_n_((const float*)y, y, n);
         i = 0UL;
         while (i < n) { float x = self->data[i]; y[i] = (float)0.5 * x * ((float)1.0 + y[i]); i = i + 1UL; }
     }

@@ -23,9 +23,10 @@ int cuda_fft([]Complex data);
 int cuda_ifft([]Complex data);
 // 'batch' independent length-n transforms stored back to back, in one call.
 int cuda_fft_batch([]Complex data, unsigned long n, int inverse);
-// 2D transform of a row-major h x w image (imaging.h's fft2d / ifft2d).
-int cuda_fft2d(&Complex img, unsigned long h, unsigned long w);
-int cuda_ifft2d(&Complex img, unsigned long h, unsigned long w);
+// 2D transform of a row-major h x w image (imaging.h's fft2d / ifft2d);
+// 0 when img holds fewer than h * w values.
+int cuda_fft2d([]Complex img, unsigned long h, unsigned long w);
+int cuda_ifft2d([]Complex img, unsigned long h, unsigned long w);
 
 // ── Queued device ops, fp32 (1 = enqueued) ───────────────────────────────────
 // Complex CudaBufs hold interleaved (re, im) float pairs, so a buffer of

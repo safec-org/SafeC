@@ -3,6 +3,7 @@
 // scheduler, syscall, ipc), std::hal drivers against RAM-backed registers,
 // std::debug (coverage, perf), dma, node_pool, and allocator edge cases.
 #include <std/test/test.h>
+#include <std/str.h>
 #include <std/mem.h>
 #include <std/panic.h>
 #include <std/dma.h>
@@ -376,8 +377,8 @@ void t_syscall_mailbox() {
         &Mailbox mb = std::expect_ref(mq, "mailbox");
         *mb = Mailbox::new(9);
         ASSERT_FALSE(mb.has_msg());
-        ASSERT_TRUE(mb.send(1, 42, (const ?&unsigned char)"hi", 3UL));
-        ASSERT_TRUE(mb.send(2, 43, null, 0UL));
+        ASSERT_TRUE(mb.send(1, 42, ((const unsigned char*)"hi")[0..3]));
+        ASSERT_TRUE(mb.send(2, 43, str_bytes("")));
         ASSERT_EQ(mb.length(), 2);
         struct Message m;
         ASSERT_TRUE(mb.peek(&m));
@@ -390,8 +391,8 @@ void t_syscall_mailbox() {
         ASSERT_EQ(m.size, 0);
         ASSERT_FALSE(mb.recv(&m));
         int i = 0;
-        while (i < MAILBOX_CAPACITY) { mb.send(1, i, null, 0UL); i = i + 1; }
-        ASSERT_FALSE(mb.send(1, 0, null, 0UL));     // full
+        while (i < MAILBOX_CAPACITY) { mb.send(1, i, str_bytes("")); i = i + 1; }
+        ASSERT_FALSE(mb.send(1, 0, str_bytes("")));     // full
         mb.clear();
         ASSERT_EQ(mb.length(), 0);
         dealloc_raw_((void*)mb);
@@ -679,7 +680,7 @@ void t_debug() {
 void t_dma() {
     unsigned char buf[200];
     unsafe {
-        struct DmaBuffer d = DmaBuffer::wrap(&buf[3], 0UL, 130UL);   // unaligned start
+        struct DmaBuffer d = DmaBuffer::wrap(buf[3..133], 0UL);   // unaligned start
         ASSERT_EQ(d.phys, (unsigned long)&buf[3]);
         ASSERT_TRUE(d.cpu_accessible());
         d.to_device();
@@ -687,7 +688,7 @@ void t_dma() {
         d.to_cpu();
         ASSERT_TRUE(d.cpu_accessible());
         ASSERT_EQ(d.phys_at(10UL), (unsigned long)&buf[13]);
-        struct DmaBuffer e = DmaBuffer::wrap(&buf[0], 0x8000UL, 64UL);
+        struct DmaBuffer e = DmaBuffer::wrap(buf[0..64], 0x8000UL);
         ASSERT_EQ(e.phys_at(4UL), 0x8004);
     }
     struct DmaSgList sg;
@@ -760,7 +761,7 @@ void t_alloc_edges() {
         unsigned char tiny[32];
         int i = 0;
         while (i < 32) { tiny[i] = (unsigned char)0xEE; i = i + 1; }
-        struct PoolAllocator p = PoolAllocator::over(&tiny[0], 10UL);
+        struct PoolAllocator p = PoolAllocator::over(tiny[0..10]);
         ASSERT_TRUE(p.alloc(1UL, 1UL).is_null());
         ASSERT_EQ(p.available(), 0);
         int untouched = 1;
@@ -770,7 +771,7 @@ void t_alloc_edges() {
 
         // Slab with zero slots.
         unsigned char sbuf[16];
-        struct SlabAllocator s = SlabAllocator::over(&sbuf[0], 16UL, 0UL);
+        struct SlabAllocator s = SlabAllocator::over(sbuf[0..0], 16UL);
         ASSERT_TRUE(s.alloc(16UL, 1UL).is_null());
         ASSERT_EQ(s.available(), 0);
 

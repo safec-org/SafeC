@@ -70,7 +70,7 @@ static int attn_on_cpu_(const &FloatTensor a, const &FloatTensor b, const &Float
                 while (c < n) { if (xv[c] > rowMax) rowMax = xv[c]; c = c + 1UL; }
                 c = 0UL;
                 while (c < n) { yv[c] = xv[c] - rowMax; c = c + 1UL; }
-                vm_exp_f32((const float*)yv, yv, n);
+                vm_exp_f32_n_((const float*)yv, yv, n);
                 float sum = (float)0.0;
                 c = 0UL;
                 while (c < n) { sum = sum + yv[c]; c = c + 1UL; }

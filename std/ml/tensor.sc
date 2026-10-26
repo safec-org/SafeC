@@ -258,7 +258,7 @@ unsigned long TensorArena::used() const {
     // Packed SIMD GEMM (std/simd/gemm.h); large products run on the
     // std/sync/parallel.h thread pool.
     unsafe {
-        sgemm(SGEMM_NO_TRANS, SGEMM_NO_TRANS, m, n, k, (float)1.0,
+        sgemm_n_(SGEMM_NO_TRANS, SGEMM_NO_TRANS, m, n, k, (float)1.0,
               (const &float)a->data, k, (const &float)b->data, n, (float)0.0, (&float)out->data, n);
     }
     __tensor_link2(out, a, b, (void*)__matmul_backward);

@@ -16,20 +16,37 @@ extern long long mktime(void* tm);
 // not a one-line substitute the way time_wall_ns/time_sleep_ns below got —
 // out of scope here. Stubbed honestly instead of silently wrong: zeroed
 // output / a real failure return, not fabricated calendar fields.
+// struct tm begins with the 9 int fields TimeFields mirrors; platform
+// extras (tm_gmtoff, tm_zone) fit in the 14-int buffers used here.
+static struct TimeFields time_from_tm_(const &int tm) {
+    struct TimeFields f;
+    unsafe {
+        f.sec = tm[0]; f.min = tm[1]; f.hour = tm[2]; f.mday = tm[3]; f.mon = tm[4];
+        f.year = tm[5]; f.wday = tm[6]; f.yday = tm[7]; f.isdst = tm[8];
+    }
+    return f;
+}
+
+static void time_to_tm_(const &TimeFields f, &int tm) {
+    unsafe {
+        tm[0] = f.sec; tm[1] = f.min; tm[2] = f.hour; tm[3] = f.mday; tm[4] = f.mon;
+        tm[5] = f.year; tm[6] = f.wday; tm[7] = f.yday; tm[8] = f.isdst;
+        int i = 9;
+        while (i < 14) { tm[i] = 0; i = i + 1; }
+    }
+}
+
 #ifdef _WIN32
-inline void time_gmtime(long long t, &int out) {
-    unsafe {
-        int i = 0;
-        while (i < 9) { out[i] = 0; i = i + 1; }
-    }
+inline struct TimeFields time_gmtime(long long t) {
+    int tm_buf[14];
+    int i = 0;
+    while (i < 14) { tm_buf[i] = 0; i = i + 1; }
+    return time_from_tm_(&tm_buf[0]);
 }
-inline void time_localtime(long long t, &int out) {
-    unsafe {
-        int i = 0;
-        while (i < 9) { out[i] = 0; i = i + 1; }
-    }
+inline struct TimeFields time_localtime(long long t) {
+    return time_gmtime(t);
 }
-inline int time_parse(const &char s, const &char fmt, &int tm_fields) {
+inline int time_parse(const &char s, const &char fmt, &TimeFields tm) {
     return 0; // not implemented on Windows -- see comment above
 }
 #else
@@ -37,47 +54,28 @@ extern void* gmtime_r(const long long* t, void* tm);
 extern void* localtime_r(const long long* t, void* tm);
 extern char* strptime(const char* s, const char* format, void* tm);
 
-inline void time_gmtime(long long t, &int out) {
-    unsafe {
-        // struct tm is platform-specific; use a generous 56-byte buffer
-        int tm_buf[14]; // 14 ints = 56 bytes, covers struct tm on all platforms
-        gmtime_r((const long long*)&t, (void*)tm_buf);
-        // Copy the first 9 standard fields
-        out[0] = tm_buf[0]; // tm_sec
-        out[1] = tm_buf[1]; // tm_min
-        out[2] = tm_buf[2]; // tm_hour
-        out[3] = tm_buf[3]; // tm_mday
-        out[4] = tm_buf[4]; // tm_mon
-        out[5] = tm_buf[5]; // tm_year
-        out[6] = tm_buf[6]; // tm_wday
-        out[7] = tm_buf[7]; // tm_yday
-        out[8] = tm_buf[8]; // tm_isdst
-    }
+inline struct TimeFields time_gmtime(long long t) {
+    int tm_buf[14];   // 56 bytes: covers struct tm on all platforms
+    unsafe { gmtime_r((const long long*)&t, (void*)tm_buf); }
+    return time_from_tm_(&tm_buf[0]);
 }
 
-inline void time_localtime(long long t, &int out) {
-    unsafe {
-        int tm_buf[14];
-        localtime_r((const long long*)&t, (void*)tm_buf);
-        out[0] = tm_buf[0]; out[1] = tm_buf[1]; out[2] = tm_buf[2];
-        out[3] = tm_buf[3]; out[4] = tm_buf[4]; out[5] = tm_buf[5];
-        out[6] = tm_buf[6]; out[7] = tm_buf[7]; out[8] = tm_buf[8];
-    }
+inline struct TimeFields time_localtime(long long t) {
+    int tm_buf[14];
+    unsafe { localtime_r((const long long*)&t, (void*)tm_buf); }
+    return time_from_tm_(&tm_buf[0]);
 }
 
-inline int time_parse(const &char s, const &char fmt, &int tm_fields) {
-    unsafe {
-        int tm_buf[14];
-        tm_buf[0]=0; tm_buf[1]=0; tm_buf[2]=0; tm_buf[3]=0;
-        tm_buf[4]=0; tm_buf[5]=0; tm_buf[6]=0; tm_buf[7]=0;
-        tm_buf[8]=-1; tm_buf[9]=0; tm_buf[10]=0; tm_buf[11]=0; tm_buf[12]=0; tm_buf[13]=0;
-        char* end = strptime(s, fmt, (void*)tm_buf);
-        if (end == (char*)0) return 0;
-        tm_fields[0] = tm_buf[0]; tm_fields[1] = tm_buf[1]; tm_fields[2] = tm_buf[2];
-        tm_fields[3] = tm_buf[3]; tm_fields[4] = tm_buf[4]; tm_fields[5] = tm_buf[5];
-        tm_fields[6] = tm_buf[6]; tm_fields[7] = tm_buf[7]; tm_fields[8] = tm_buf[8];
-        return 1;
-    }
+inline int time_parse(const &char s, const &char fmt, &TimeFields tm) {
+    int tm_buf[14];
+    int i = 0;
+    while (i < 14) { tm_buf[i] = 0; i = i + 1; }
+    tm_buf[8] = -1;
+    char* end;
+    unsafe { end = strptime(s, fmt, (void*)tm_buf); }
+    if (end == (char*)0) return 0;
+    *tm = time_from_tm_(&tm_buf[0]);
+    return 1;
 }
 #endif
 
@@ -87,26 +85,17 @@ inline long long time_now() {
     unsafe { return time((long long*)0); }
 }
 
-inline unsigned long time_format(&char buf, unsigned long cap, const &char fmt, &int tm_fields) {
-    unsafe {
-        int tm_buf[14];
-        tm_buf[0] = tm_fields[0]; tm_buf[1] = tm_fields[1]; tm_buf[2] = tm_fields[2];
-        tm_buf[3] = tm_fields[3]; tm_buf[4] = tm_fields[4]; tm_buf[5] = tm_fields[5];
-        tm_buf[6] = tm_fields[6]; tm_buf[7] = tm_fields[7]; tm_buf[8] = tm_fields[8];
-        tm_buf[9] = 0; tm_buf[10] = 0; tm_buf[11] = 0; tm_buf[12] = 0; tm_buf[13] = 0;
-        return strftime(buf, cap, fmt, (const void*)tm_buf);
-    }
+inline unsigned long time_format([]char buf, const &char fmt, const &TimeFields tm) {
+    if (buf.len == 0UL) { return 0UL; }
+    int tm_buf[14];
+    time_to_tm_(tm, &tm_buf[0]);
+    unsafe { return strftime((char*)buf.ptr, buf.len, fmt, (const void*)tm_buf); }
 }
 
-inline long long time_mktime(&int tm_fields) {
-    unsafe {
-        int tm_buf[14];
-        tm_buf[0] = tm_fields[0]; tm_buf[1] = tm_fields[1]; tm_buf[2] = tm_fields[2];
-        tm_buf[3] = tm_fields[3]; tm_buf[4] = tm_fields[4]; tm_buf[5] = tm_fields[5];
-        tm_buf[6] = tm_fields[6]; tm_buf[7] = tm_fields[7]; tm_buf[8] = tm_fields[8];
-        tm_buf[9] = 0; tm_buf[10] = 0; tm_buf[11] = 0; tm_buf[12] = 0; tm_buf[13] = 0;
-        return mktime((void*)tm_buf);
-    }
+inline long long time_mktime(const &TimeFields tm) {
+    int tm_buf[14];
+    time_to_tm_(tm, &tm_buf[0]);
+    unsafe { return mktime((void*)tm_buf); }
 }
 
 inline double time_diff(long long end, long long start) {

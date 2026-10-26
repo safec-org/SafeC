@@ -165,9 +165,10 @@ extern void   js_console(int level, const char* ptr, int len);
 unsigned long wasm_strlen(const &char s);
 
 // Minimal signed-decimal integer formatter — no snprintf on wasm32. 'buf'
-// must be at least 24 bytes (fits any 64-bit value's sign + digits + NUL).
+// should hold 24 bytes (any 64-bit value's sign + digits + NUL); a shorter
+// buf gets a truncated number.
 // Always NUL-terminates.
-void wasm_itoa(long long v, &char buf, unsigned long cap);
+void wasm_itoa(long long v, []char buf);
 
 // ── Elements ───────────────────────────────────────────────────────────────
 
@@ -245,9 +246,9 @@ void dom_set_disabled(int handle, int disabled);
 // works for boolean properties). DOM_DOCUMENT and DOM_WINDOW work too:
 // dom_set_prop(DOM_DOCUMENT, "title", "...").
 struct String dom_get_prop(int handle, const &char name);
-// The same into a caller buffer: copies up to cap - 1 bytes, NUL-
+// The same into a caller buffer: copies up to buf.len - 1 bytes, NUL-
 // terminates, returns the full length (-1 if undefined/null).
-int  dom_get_prop_buf(int handle, const &char name, &char buf, int cap);
+int  dom_get_prop_buf(int handle, const &char name, []char buf);
 void dom_set_prop(int handle, const &char name, const &char value);
 double dom_get_prop_num(int handle, const &char name);
 void dom_set_prop_num(int handle, const &char name, double value);

@@ -793,9 +793,9 @@ static void check_cufft() {
     &heap Complex img = cplx_new(h * w, 11UL);
     &heap Complex iref = cplx_new(h * w, 11UL);
     std::fft2d(cs(iref, h * w), h, w);
-    check(std::cuda_fft2d(img, h, w), "cuda_fft2d ran");
+    check(std::cuda_fft2d(cs(img, h * w), h, w), "cuda_fft2d ran");
     check(cplx_err(img, iref, h * w) < 1e-12, "cuda_fft2d values");
-    check(std::cuda_ifft2d(img, h, w), "cuda_ifft2d ran");
+    check(std::cuda_ifft2d(cs(img, h * w), h, w), "cuda_ifft2d ran");
     &heap Complex iorig = cplx_new(h * w, 11UL);
     check(cplx_err(img, iorig, h * w) < 1e-12, "cuda_ifft2d round trip");
 

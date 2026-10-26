@@ -22,7 +22,7 @@ struct PoolAllocator {
     ?&PoolBlock   head;       // first block in the list (walked inside unsafe)
 
     // A pool over a user-provided heap buffer (8-aligned) of `cap` bytes.
-    static struct PoolAllocator over(&unsigned char buffer, unsigned long cap);
+    static struct PoolAllocator over([]unsigned char buffer);
 
     // A heap-backed pool of `cap` bytes.
     static struct PoolAllocator new(unsigned long cap);

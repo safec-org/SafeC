@@ -178,7 +178,7 @@ static void __gelu_backward(void* selfPtr) {
                 tb[i] = c * (x + (float)0.044715 * x * x * x);
                 i = i + 1UL;
             }
-            vm_tanh_f32((const float*)tb, tb, n);
+            vm_tanh_f32_n_((const float*)tb, tb, n);
             i = 0UL;
             while (i < n) {
                 float x = a->data[i];
@@ -201,7 +201,7 @@ static void __silu_backward(void* selfPtr) {
             __tensor_ensure_grad(a);
             unsigned long n = selfT->size;
             float* sb = (float*)malloc(sizeof(float) * n);
-            vm_sigmoid_f32((const float*)a->data, sb, n);
+            vm_sigmoid_f32_n_((const float*)a->data, sb, n);
             unsigned long i = 0UL;
             while (i < n) {
                 float x = a->data[i];

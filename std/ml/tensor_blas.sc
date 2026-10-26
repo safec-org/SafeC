@@ -130,7 +130,7 @@ static void __matmul_backward_blas(void* selfPtr) {
             __tensor_ensure_grad(a);
             // dA[m,k] = dC[m,n] . B^T[n,k]
             float* dA = __blas_scratch_get_(m * k);
-            sgemm(SGEMM_NO_TRANS, SGEMM_TRANS, m, k, n, (float)1.0, (const &float)selfT->grad, n,
+            sgemm_n_(SGEMM_NO_TRANS, SGEMM_TRANS, m, k, n, (float)1.0, (const &float)selfT->grad, n,
                   (const &float)b->data, n, (float)0.0, (&float)dA, k);
             vDSP_vadd((const float*)dA, 1L, (const float*)a->grad, 1L, (float*)a->grad, 1L, m * k);
         }
@@ -138,7 +138,7 @@ static void __matmul_backward_blas(void* selfPtr) {
             __tensor_ensure_grad(b);
             // dB[k,n] = A^T[k,m] . dC[m,n]
             float* dB = __blas_scratch_get_(k * n);
-            sgemm(SGEMM_TRANS, SGEMM_NO_TRANS, k, n, m, (float)1.0, (const &float)a->data, k,
+            sgemm_n_(SGEMM_TRANS, SGEMM_NO_TRANS, k, n, m, (float)1.0, (const &float)a->data, k,
                   (const &float)selfT->grad, n, (float)0.0, (&float)dB, n);
             vDSP_vadd((const float*)dB, 1L, (const float*)b->grad, 1L, (float*)b->grad, 1L, k * n);
         }
@@ -163,7 +163,7 @@ static void __matmul_backward_blas(void* selfPtr) {
         out = __tensor_alloc((const unsigned long*)&outShape[0], 2UL, 0);
     }
     unsafe {
-        sgemm(SGEMM_NO_TRANS, SGEMM_NO_TRANS, m, n, k, (float)1.0, (const &float)a->data, k,
+        sgemm_n_(SGEMM_NO_TRANS, SGEMM_NO_TRANS, m, n, k, (float)1.0, (const &float)a->data, k,
               (const &float)b->data, n, (float)0.0, (&float)out->data, n);
     }
     __tensor_link2(out, a, b, (void*)__matmul_backward_blas);

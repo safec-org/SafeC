@@ -218,7 +218,10 @@ void TlsfAllocator::reset() {
     }
 }
 
-struct TlsfAllocator TlsfAllocator::over(&unsigned char buffer, unsigned long cap) {
+struct TlsfAllocator TlsfAllocator::over([]unsigned char buffer_s) {
+    unsigned long cap = buffer_s.len;
+    &unsigned char buffer;
+    unsafe { buffer = (&unsigned char)buffer_s.ptr; }
     struct TlsfAllocator a;
     unsafe { a.base = (&heap void)buffer; }
     a.owned = 0;

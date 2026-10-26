@@ -361,8 +361,8 @@ static void cn_gemm_(int serial, int ta, int tb, unsigned long m, unsigned long 
                      const float* a, unsigned long lda, const float* b, unsigned long ldb,
                      float beta, float* c, unsigned long ldc) {
     unsafe {
-        if (serial) sgemm_serial(ta, tb, m, n, k, (float)1.0, (const &float)a, lda, (const &float)b, ldb, beta, (&float)c, ldc);
-        else sgemm(ta, tb, m, n, k, (float)1.0, (const &float)a, lda, (const &float)b, ldb, beta, (&float)c, ldc);
+        if (serial) sgemm_serial_n_(ta, tb, m, n, k, (float)1.0, (const &float)a, lda, (const &float)b, ldb, beta, (&float)c, ldc);
+        else sgemm_n_(ta, tb, m, n, k, (float)1.0, (const &float)a, lda, (const &float)b, ldb, beta, (&float)c, ldc);
     }
 }
 
