@@ -349,6 +349,10 @@ bool Builder::doc(const DocOptions& o) {
     if (stdUrl.empty()) if (const char* e = std::getenv("SAFEC_STD_DOCS_URL"); e && *e) stdUrl = e;
     if (stdUrl.empty()) stdUrl = kDefaultStdDocs;
 
+    // --home URL[=text]
+    std::string homeUrl = o.homeUrl, homeText = "Docs";
+    if (auto eq = homeUrl.find('='); eq != std::string::npos) { homeText = homeUrl.substr(eq + 1); homeUrl.resize(eq); }
+
     fs::path cfg = work / "config.json";
     {
         std::ofstream c(cfg, std::ios::binary);
@@ -366,6 +370,7 @@ bool Builder::doc(const DocOptions& o) {
           << "  \"source_prefix\": " << jsonStr(sourcePrefix) << ",\n"
           << "  \"include_prefix\": " << jsonStr(includePrefix) << ",\n"
           << "  \"private\": " << (o.includePrivate ? "true" : "false") << ",\n"
+          << "  \"home\": {\"url\": " << jsonStr(homeUrl) << ", \"text\": " << jsonStr(homeText) << "},\n"
           << "  \"externs\": {" << (o.std ? "" : "\"std\": " + jsonStr(stdUrl)) << "}\n"
           << "}\n";
     }

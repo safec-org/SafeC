@@ -297,6 +297,7 @@ int main(int argc, char** argv) {
                 else if (arg == "--out" || arg.rfind("--out=", 0) == 0) dopts.out = value("--out");
                 else if (arg == "--std-url" || arg.rfind("--std-url=", 0) == 0) dopts.stdUrl = value("--std-url");
                 else if (arg == "--source-ref" || arg.rfind("--source-ref=", 0) == 0) dopts.sourceRef = value("--source-ref");
+                else if (arg == "--home" || arg.rfind("--home=", 0) == 0) dopts.homeUrl = value("--home");
                 else { std::cerr << "safeguard: unknown option '" << arg << "'\n"; return 1; }
             } catch (std::exception& e) {
                 std::cerr << "safeguard: " << e.what() << "\n";

@@ -192,6 +192,23 @@ static int write_page(const &Crate c, const &String url, const &String title, co
     v.content = content.clone();
     v.toc = toc.clone();
     v.page_class = String::from(cls);
+    // config 'home': {url, text} — a link back to the site hosting the
+    // reference (url relative to the reference's root, or absolute).
+    v.home = String::new();
+    struct Value no_home = Value::object();
+    &Value home = util_vget(&c.cfg, "home", &no_home);
+    struct String home_url = String::from(util_vstr(home, "url", ""));
+    if (home_url.len > 0UL) {
+        struct String h = rel_href(url, &home_url);
+        v.home.push("<a class=\"site-home\" href=\"");
+        util_push_esc(&v.home, h.as_ptr());
+        v.home.push("\">");
+        util_push_esc(&v.home, util_vstr(home, "text", "Home"));
+        v.home.push("</a>");
+        h.free();
+    }
+    home_url.free();
+    no_home.free();
     v.css = v.root.clone();
     v.css.push("assets/style.css");
     v.js = v.root.clone();
@@ -203,7 +220,7 @@ static int write_page(const &Crate c, const &String url, const &String title, co
     html.free(); path.free();
     v.title.free(); v.description.free(); v.root.free(); v.crate_name.free(); v.version.free();
     v.home_href.free(); v.repo.free(); v.sidebar.free(); v.content.free(); v.toc.free();
-    v.page_class.free(); v.css.free(); v.js.free();
+    v.page_class.free(); v.css.free(); v.js.free(); v.home.free();
     return ok;
 }
 

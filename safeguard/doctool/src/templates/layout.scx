@@ -22,6 +22,7 @@ static struct String header_(const &PageView v) {
     return <header class="vp-header">
         <div class="header-inner">
             <a class="brand" href={v.home_href.as_ptr()}><span class="crate-name">{v.crate_name.as_ptr()}</span><span class="crate-version">{v.version.as_ptr()}</span></a>
+            {!v.home.as_ptr()}
             <button class="search-btn" type="button" data-action="search" aria-label="Search"><span class="search-icon">{!ICON_SEARCH()}</span><span class="search-label">Search</span><kbd>/</kbd></button>
             <button class="icon-btn theme-toggle" type="button" data-action="theme" title="Toggle dark mode" aria-label="Toggle dark mode">{!ICON_THEME()}</button>
             <a class="icon-btn repo-link" href={v.repo.as_ptr()} rel="noreferrer" aria-label="Repository">{!ICON_REPO()}</a>

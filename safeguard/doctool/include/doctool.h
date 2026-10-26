@@ -158,6 +158,7 @@ struct PageView {
     struct String content;    // raw
     struct String toc;        // raw
     struct String page_class; // "api-item", "api-module", "api-source"
+    struct String home;       // raw: the link back to the hosting site ("" for none)
     struct String css;        // <root>assets/style.css
     struct String js;         // <root>assets/doc.js
 };

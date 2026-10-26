@@ -137,6 +137,11 @@ int check_links(const &char dir) {
                 }
                 with_index.free();
             }
+            // Outside the reference (a link back to the hosting site): not ours.
+            if (target.starts_with("../") || target.eq_cstr("..")) {
+                v.free(); path.free(); frag.free(); target.free();
+                continue;
+            }
             int ok = exists.contains(target.as_ptr());
             if (ok && frag.len > 0UL) {
                 struct String key = target.clone();

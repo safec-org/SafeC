@@ -342,6 +342,10 @@ html.dark { --kind-struct: #f0a35e; --kind-fn: #b392f0; --kind-macro: #4fd1c1; -
 .crate-name { font-weight: 700; }
 .crate-version { margin-left: 8px; font-size: 13px; font-weight: 500; color: var(--c-text-2); }
 .repo-link[href=""] { display: none; }
+.site-home { margin-right: auto; margin-left: 16px; font-size: 14px; font-weight: 500; color: var(--c-text-2); }
+.site-home:hover { color: var(--c-brand-1); }
+.header-inner > .brand { margin-right: 0; }
+.header-inner > .brand + .search-btn { margin-left: auto; }
 .item-head { margin-bottom: 16px; }
 .item-head h1 { margin: 0; font-size: 28px; line-height: 36px; font-weight: 600; overflow-wrap: anywhere; }
 .crumbs { margin: 0 0 4px; font-size: 14px; color: var(--c-text-2); }

@@ -61,6 +61,7 @@ struct DocOptions {
     std::string out;           // output directory (default <project>/build/doc)
     std::string stdUrl;        // the std reference links point into
     std::string sourceRef;     // --std: the git ref source links name (default "main")
+    std::string homeUrl;       // --home URL[=text]: a header link back to the hosting site
 };
 
 // 'safeguard publish' (see Publish.cpp).
