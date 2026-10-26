@@ -7,11 +7,12 @@ import { pathToFileURL } from 'node:url';
 import { init, compile, run } from './scc.js';
 
 const argv = process.argv.slice(2);
-let sccPath = new URL('./dist/scc.wasm', import.meta.url);
-let input = null, out = null, doRun = false, runArgs = [];
+let sccPath = new URL('./scc.wasm', import.meta.url);
+let input = null, out = null, doRun = false, runArgs = [], check = false;
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === '--scc') sccPath = pathToFileURL(argv[++i]);
   else if (argv[i] === '-o') out = argv[++i];
+  else if (argv[i] === '--check') check = true;
   else if (argv[i] === '--run') { doRun = true; runArgs = argv.slice(i + 1); break; }
   else input = argv[i];
 }
@@ -19,12 +20,12 @@ if (!input) { process.stderr.write('usage: scc-cli.mjs [--scc scc.wasm] file.sc 
 await init(sccPath);
 const src = readFileSync(input, 'utf8');
 const t0 = performance.now();
-const r = await compile(src);
+const r = await compile(src, { check });
 const ms = performance.now() - t0;
 process.stderr.write(r.text.replaceAll('main.sc:', input + ':'));
 if (process.env.SCC_TIME) process.stderr.write(`compile: ${ms.toFixed(1)} ms\n`);
 if (!r.ok) process.exit(1);
-if (out) writeFileSync(out, r.wasm);
+if (out && r.wasm) writeFileSync(out, r.wasm);
 if (doRun) {
   const code = await run(r.wasm, {
     stdout: (s) => process.stdout.write(s),

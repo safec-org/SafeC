@@ -7,7 +7,15 @@ extern int __host_write(int fd, const char* buf, int len);
 extern int __host_read(int fd, char* buf, int len);
 extern void __host_exit(int code);
 
-void __rt_trap(int code) { __host_exit(code); }
+// a failed runtime check (kind: 1 index out of bounds, 2 arena capacity
+// exceeded, 3 stack overflow): reported on stderr, then the exit code a
+// native safec program gets from the same failure (SIGABRT 134, SIGSEGV 139)
+void __rt_trap(int kind) {
+    if (kind == 1) { __rt_errs("runtime error: index out of bounds\n"); __host_exit(134); }
+    if (kind == 2) { __rt_errs("runtime error: arena capacity exceeded\n"); __host_exit(134); }
+    if (kind == 3) { __rt_errs("runtime error: stack overflow\n"); __host_exit(139); }
+    __host_exit(134);
+}
 
 void __rt_assert_fail(const char* expr, const char* file, int line) {
     __rt_errs("Assertion failed: ");

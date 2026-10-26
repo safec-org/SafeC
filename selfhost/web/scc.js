@@ -53,7 +53,8 @@ export function parseDiagnostics(text) {
 
 /** Compiles one SafeC source file (named main.sc). Resolves to
  *  { ok: boolean, diagnostics: [{file,line,col,severity,message}],
- *    wasm: Uint8Array | null, text: string (raw diagnostics) }. */
+ *    wasm: Uint8Array | null, text: string (raw diagnostics) }.
+ *  options.check: only check the program (wasm is null; no 'main' needed). */
 export async function compile(source, options = {}) {
   if (!sccModule) await init();
   let memory = null;
@@ -73,6 +74,8 @@ export async function compile(source, options = {}) {
   if (bytes.length > ex.scc_capacity()) throw new Error('scc: source too large');
   new Uint8Array(memory.buffer, at, bytes.length).set(bytes);
   let ok = false;
+  const check = !!options.check && typeof ex.scc_set_check === 'function';
+  if (check) ex.scc_set_check(1);
   try {
     ok = ex.scc_compile(bytes.length) === 1;
   } catch (e) {
@@ -82,7 +85,7 @@ export async function compile(source, options = {}) {
   const dlen = ex.scc_diagnostics_len();
   const text = new TextDecoder().decode(new Uint8Array(memory.buffer, ex.scc_diagnostics(), dlen));
   let wasm = null;
-  if (ok) {
+  if (ok && !check) {
     const olen = ex.scc_output_len();
     wasm = new Uint8Array(memory.buffer, ex.scc_output(), olen).slice();
   }
@@ -109,6 +112,14 @@ export function run(wasm, options = {}) {
   };
   const onOut = options.stdout ?? (() => {});
   const onErr = options.stderr ?? (() => {});
+  if (!isNode && typeof Worker === 'undefined') {
+    // inside a worker that can't start another one (the caller enforces
+    // any time limit by terminating its own worker)
+    return import('./exec.js').then(({ execute }) => execute(msg, (m) => {
+      if (m.type === 'stdout') onOut(m.data);
+      else if (m.type === 'stderr') onErr(m.data);
+    }));
+  }
   return new Promise(async (resolve, reject) => {
     let worker;
     let done = false;

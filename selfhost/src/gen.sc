@@ -989,7 +989,13 @@ void gen_function(int f) {
     cs_b(OP_I32_LT_U);
     cs_b(OP_IF); cs_b(64);
     if (g_rt_trap != 0) {
-        cs_b(OP_I32_CONST); cs_s(139L);
+        // room for the trap handler's own frames: the deepest 64 KB of the
+        // stack is given up (the program is exiting)
+        cs_b(OP_GLOBAL_GET); cs_u(1L);
+        cs_b(OP_I32_CONST); cs_s(65536L);
+        cs_b(OP_I32_ADD);
+        cs_b(OP_GLOBAL_SET); cs_u(0L);
+        cs_b(OP_I32_CONST); cs_s(3L);
         cs_b(OP_CALL); cs_u((long)func_index(g_rt_trap));
     }
     cs_b(OP_UNREACHABLE);

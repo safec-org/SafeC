@@ -128,7 +128,7 @@ for f in ctest_files:
     rc, _, n_diag = run([args.safec, f, "--emit-llvm", "-o", os.path.join(tmp, "ct.ll")] + extra)
     n_ok = rc == 0
     if args.scc_wasm:
-        rc, _, s_diag = run([args.node, cli, "--scc", args.scc_wasm, f, "-o", os.path.join(tmp, "ct.wasm")])
+        rc, _, s_diag = run([args.node, cli, "--scc", args.scc_wasm, "--check", f])
     else:
         rc, _, s_diag = run([args.scc, "--check", f])
     s_ok = rc == 0
@@ -163,4 +163,21 @@ for cat, (n, p, rej, same) in sorted(cats.items()):
 print("TOTAL    %d/%d pass" % (counts["pass"], counts["pass"] + counts["fail"]))
 if args.json:
     json.dump(results, open(args.json, "w"), indent=1)
-sys.exit(0 if counts["fail"] == 0 else 1)
+# known-failures.txt: tests that are known to differ, each with the reason.
+# They still run and count as failures above; the exit status fails only on
+# a failure not listed there, or on a listed test that now passes (so the
+# list can only shrink).
+known = {}
+kf = os.path.join(HERE, "known-failures.txt")
+if os.path.exists(kf):
+    for line in open(kf, encoding="utf-8"):
+        line = line.split("#", 1)[0].strip()
+        if line: known[line.split()[0]] = True
+ran = {r["test"]: r["ok"] for r in results}
+new_fail = [t for t, ok in ran.items() if not ok and t not in known]
+fixed = [t for t in known if ran.get(t) is True]
+for t in new_fail: print("NEW FAILURE (not in known-failures.txt): " + t)
+for t in fixed: print("NOW PASSES (remove it from known-failures.txt): " + t)
+if known and not args.files:
+    print("known failures: %d listed, %d still failing" % (len(known), sum(1 for t in known if ran.get(t) is False)))
+sys.exit(1 if new_fail or fixed else 0)

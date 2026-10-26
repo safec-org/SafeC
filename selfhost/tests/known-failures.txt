@@ -1,0 +1,16 @@
+# Tests where scc and safec are known to disagree. difftest.py still runs
+# them, and fails if one starts passing (remove it here) or if a test not
+# listed here fails. Reasons are in SUBSET.md, "Not supported" and
+# "Differences".
+
+# goto and statement labels are not supported
+ctests/goto/resume_points.sc
+# SIMD vector types are not supported
+ctests/simd/vector_align.sc
+# scc's memory-flow analysis is simpler than safec's MemoryFlow
+ctests/lifetimes/aliases.sc
+ctests/lifetimes/calls_err.sc
+ctests/lifetimes/defer_try_err.sc
+ctests/lifetimes/join_temps_err.sc
+ctests/lifetimes/loops.sc
+ctests/lifetimes/marks.sc

@@ -1,18 +1,7 @@
-// worker.js — runs one scc-compiled program (see scc.js run()).
-// Receives { wasm, stdin, args, maxMemoryMb }; posts {type:'stdout'|'stderr',
-// data} as output arrives and finally {type:'exit', code}.
-const isNode = typeof process !== 'undefined' && !!(process.versions && process.versions.node);
-let post;
-let listen;
-if (isNode) {
-  const { parentPort } = await import('node:worker_threads');
-  post = (m) => parentPort.postMessage(m);
-  listen = (f) => parentPort.on('message', f);
-} else {
-  post = (m) => self.postMessage(m);
-  listen = (f) => { self.onmessage = (e) => f(e.data); };
-}
-
+// exec.js — runs one scc-compiled program: execute({ wasm, stdin, args,
+// maxMemoryMb }, post) posts {type:'stdout'|'stderr', data} as output arrives
+// and finally {type:'exit', code}, and resolves to the exit code. Used by
+// worker.js, and by scc.js directly where no Worker can be started.
 class Exit extends Error { constructor(code) { super('exit'); this.code = code; } }
 
 // sets the maximum of the module's memory (section 5) to 'pages'
@@ -48,7 +37,7 @@ function limitMemory(bytes, pages) {
   return new Uint8Array(out);
 }
 
-listen(async (msg) => {
+export async function execute(msg, post) {
   const enc = new TextEncoder();
   const dec1 = new TextDecoder();
   const dec2 = new TextDecoder();
@@ -108,4 +97,5 @@ listen(async (msg) => {
     }
   }
   post({ type: 'exit', code: code & 255 });
-});
+  return code & 255;
+}

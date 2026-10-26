@@ -243,7 +243,7 @@ void gen_index_addr(int e) {
             emit_mem(OP_I64_LOAD, 3, 8);
             emit(OP_I64_GE_U);
             ctl_open(OP_IF);
-            emit_trap(134);
+            emit_trap(1);
             ctl_close();
         }
         lget(sl);
@@ -272,7 +272,7 @@ void gen_index_addr(int e) {
         emit_i64((long)n);
         emit(OP_I64_GE_U);
         ctl_open(OP_IF);
-        emit_trap(134);
+        emit_trap(1);
         ctl_close();
         lget(ix);
     }
@@ -1059,7 +1059,7 @@ void gen_new(int e) {
     emit_i64((long)cap);
     emit(OP_I64_GT_U);
     ctl_open(OP_IF);
-    emit_trap(134);
+    emit_trap(2);
     ctl_close();
     emit_i32(offa);
     lget(end);
@@ -1122,7 +1122,7 @@ void gen_slice(int e) {
             lget(hi); lget(ln); emit(OP_I64_GT_U);
             emit(OP_I32_OR);
             ctl_open(OP_IF);
-            emit_trap(134);
+            emit_trap(1);
             ctl_close();
         }
     } else {
@@ -1137,7 +1137,7 @@ void gen_slice(int e) {
             lget(hi); emit_i64(n); emit(OP_I64_GT_U);
             emit(OP_I32_OR);
             ctl_open(OP_IF);
-            emit_trap(134);
+            emit_trap(1);
             ctl_close();
         }
     }

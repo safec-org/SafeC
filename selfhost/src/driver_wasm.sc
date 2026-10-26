@@ -3,6 +3,7 @@
 //   scc_begin()            → address to write the main source (UTF-8) to
 //   scc_capacity()         → max bytes for that source
 //   scc_compile(len)       → 1 ok / 0 errors; source file name "main.sc"
+//   scc_set_check(1)       → scc_compile only checks (no module, no 'main' needed)
 //   scc_output()/scc_output_len()       → the wasm module
 //   scc_diagnostics()/scc_diagnostics_len() → diagnostics text
 // Each compile runs on a fresh instance (the compiler keeps global state).
@@ -36,6 +37,10 @@ int scc_compile(int len) {
     int f = add_file(intern_lit("main.sc"), start, len);
     return scc_compile_main(f);
 }
+
+// 1: the next scc_compile stops after semantic analysis (no module)
+__attribute__((export_name("scc_set_check")))
+void scc_set_check(int on) { g_check_only = on; }
 
 __attribute__((export_name("scc_output")))
 int scc_output() { unsafe { return (int)&g_out[0]; } }
