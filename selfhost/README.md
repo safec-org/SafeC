@@ -40,7 +40,7 @@ SAFEC_HOME=$PWD/.. python3 tests/difftest.py --scc-wasm web/scc.wasm
 ```
 
 `tests/difftest.py` is a differential test. Each program in
-`tests/docs/`, `tests/corpus/` and `tests/neg/` is compiled by both
+`tests/docs/`, `tests/corpus/`, `tests/neg/` and `compiler/examples/` is compiled by both
 compilers: by `safec` to a native binary that is then run, and by scc to
 WebAssembly that is run under Node. The test passes when both accept or
 both reject the program, and, when they accept it, the two runs give the
@@ -52,7 +52,12 @@ reject, and the result counts how many `EXPECT-ERROR` tests get every
 expected diagnostic from scc too.
 
 In a test, `// expect-error: text` requires that text in scc's diagnostics,
-and `// stdin: text` feeds the program's standard input.
+`// stdin: text` feeds the program's standard input, and `// output:
+unordered` compares stdout as a set of lines (for threads, whose output
+order varies natively). `compiler/examples/` is part of the default set.
+`tests/known-failures.txt` lists the tests known to differ, each with its
+reason. They still run, and difftest fails on a new failure and also on a
+listed test that starts passing.
 
 ## Bootstrap
 

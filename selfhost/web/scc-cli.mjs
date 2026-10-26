@@ -20,9 +20,9 @@ if (!input) { process.stderr.write('usage: scc-cli.mjs [--scc scc.wasm] file.sc 
 await init(sccPath);
 const src = readFileSync(input, 'utf8');
 const t0 = performance.now();
-const r = await compile(src, { check });
+const r = await compile(src, { check, filename: input });
 const ms = performance.now() - t0;
-process.stderr.write(r.text.replaceAll('main.sc:', input + ':'));
+process.stderr.write(r.text);
 if (process.env.SCC_TIME) process.stderr.write(`compile: ${ms.toFixed(1)} ms\n`);
 if (!r.ok) process.exit(1);
 if (out && r.wasm) writeFileSync(out, r.wasm);

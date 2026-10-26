@@ -1317,6 +1317,15 @@ int check_expr(int e) {
     }
     else if (k == E_SIZEOF_E) { check_expr(g_node[e].a); t = TY_U64; }
     else if (k == E_SIZEOFPACK) { t = TY_U64; }
+    else if (k == E_FIELDCOUNT) {
+        int ft = resolve_type(g_node[e].c);
+        g_node[e].c = ft;
+        g_node[e].ival = 0L;
+        int sk = g_ty[ft].kind;
+        if (sk == TY_STRUCT) { g_node[e].ival = (long)g_sdef[g_ty[ft].n].nfield; }
+        else if (is_err(ft) == 0) { err_at(e, "fieldcount() requires a struct type"); }
+        t = TY_U64;
+    }
     else if (k == E_INITLIST) { t = check_initlist(e, 0); }
     else if (k == E_NEW) { t = check_new(e); }
     else if (k == E_ARENA) { t = check_arena(e); }

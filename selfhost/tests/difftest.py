@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Differential tests: every program in tests/{docs,corpus,neg} is compiled by
+"""Differential tests: every program in tests/{docs,corpus,neg} and in
+compiler/examples is compiled by
 the C++ safec (and run natively) and by scc (and the wasm run under Node);
 accept/reject decisions, stdout and exit codes are compared.
 
@@ -7,6 +8,7 @@ accept/reject decisions, stdout and exit codes are compared.
 
 A '// expect-error: <text>' line in a test (tests/neg/) additionally
 requires scc's diagnostics to contain <text>.  '// stdin: <text>' feeds stdin.
+'// output: unordered' compares stdout as a multiset of lines (threads).
 --scc-wasm compiles with the wasm build of scc under Node (the playground
 path) instead of the native one."""
 import argparse, os, re, subprocess, sys, tempfile, json
@@ -25,9 +27,11 @@ ap.add_argument("files", nargs="*")
 args = ap.parse_args()
 CTESTS = os.path.join(os.path.dirname(ROOT), "compiler", "tests")
 
-files = args.files or sorted(
+EXAMPLES = os.path.join(os.path.dirname(ROOT), "compiler", "examples")
+files = args.files or (sorted(
     os.path.join(HERE, d, f) for d in ("docs", "corpus", "neg")
-    for f in os.listdir(os.path.join(HERE, d)) if f.endswith(".sc"))
+    for f in os.listdir(os.path.join(HERE, d)) if f.endswith(".sc")) +
+    sorted(os.path.join(EXAMPLES, f) for f in os.listdir(EXAMPLES) if f.endswith(".sc")))
 tmp = tempfile.mkdtemp(prefix="scc-diff-")
 runner = os.path.join(ROOT, "web", "run-node.mjs")
 cli = os.path.join(ROOT, "web", "scc-cli.mjs")
@@ -52,15 +56,20 @@ if os.environ.get("SAFEC_HOME") and not os.path.exists(stdlib):
 results = []
 counts = {"pass": 0, "fail": 0}
 cats = {}
+UNORDERED = {"examples/concurrency.sc"}
 ctest_files = [] if (args.files or args.no_ctests) else sorted(
     os.path.join(d, f) for d, _, fs in os.walk(CTESTS) for f in fs if f.endswith(".sc"))
 for f in files:
     name = os.path.relpath(f, HERE)
+    if f.startswith(EXAMPLES + os.sep): name = os.path.join("examples", os.path.relpath(f, EXAMPLES))
     src = open(f, encoding="utf-8").read()
     stdin = None
     m = re.search(r"^// stdin: (.*)$", src, re.M)
     if m: stdin = m.group(1).encode().decode("unicode_escape").encode()
     expect = re.findall(r"^// expect-error: (.*)$", src, re.M)
+    # threads print in any order natively (scc runs a spawned function to
+    # completion right away): compare such output as a multiset of lines
+    unordered = re.search(r"^// output: unordered", src, re.M) is not None or name in UNORDERED
     base = os.path.join(tmp, os.path.basename(f)[:-3])
     # native
     pdir = base + ".d"
@@ -92,7 +101,9 @@ for f in files:
     if n_ok != s_ok:
         why = "accept/reject differs (safec %s, scc %s)" % ("ok" if n_ok else "rejects", "ok" if s_ok else "rejects")
     elif n_ok:
-        if n_out != s_out: why = "stdout differs"
+        if unordered:
+            if sorted(n_out.splitlines()) != sorted(s_out.splitlines()): why = "stdout differs (as a set of lines)"
+        elif n_out != s_out: why = "stdout differs"
         elif n_rc != s_rc: why = "exit code differs (%s vs %s)" % (n_rc, s_rc)
     for x in expect:
         if x not in s_diag: why = why or ("missing expected error: " + x)

@@ -1271,7 +1271,7 @@ long mf_expr(int e) {
         long v = mf_expr(g_node[e].a);
         return mf_ret(v, g_ev_dang);
     }
-    if (k == E_SIZEOF_E || k == E_SIZEOF_T || k == E_ALIGNOF || k == E_SIZEOFPACK) { return 0L; }
+    if (k == E_SIZEOF_E || k == E_SIZEOF_T || k == E_ALIGNOF || k == E_SIZEOFPACK || k == E_FIELDCOUNT) { return 0L; }
     if (k == E_UNARY || k == E_POSTFIX || k == E_DEREF) {
         mf_expr(g_node[e].a);
         return mf_ret(0L, 0L);

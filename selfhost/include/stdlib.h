@@ -23,3 +23,10 @@ extern long labs(long x);
 extern long long llabs(long long x);
 extern int rand();
 extern void srand(unsigned int seed);
+extern unsigned long long strtoull(const char* s, char** end, int base);
+extern float strtof(const char* s, char** end);
+extern int atexit(void* fnp);
+extern char* getenv(const char* name);   // always null: there is no environment
+extern int system(const char* cmd);      // always -1
+extern void qsort(void* base, size_t n, size_t size, void* cmp);
+extern void* bsearch(const void* key, const void* base, size_t n, size_t size, void* cmp);

@@ -4,6 +4,7 @@
 //   scc_capacity()         → max bytes for that source
 //   scc_compile(len)       → 1 ok / 0 errors; source file name "main.sc"
 //   scc_set_check(1)       → scc_compile only checks (no module, no 'main' needed)
+//   scc_name_buf()/scc_set_name(len) → the source's file name (default "main.sc")
 //   scc_output()/scc_output_len()       → the wasm module
 //   scc_diagnostics()/scc_diagnostics_len() → diagnostics text
 // Each compile runs on a fresh instance (the compiler keeps global state).
@@ -14,6 +15,8 @@
 #endif
 
 int g_begun = 0;
+unsigned char g_name_buf[256];
+int g_name_len = 0;   // 0: the source is "main.sc"
 
 int host_load_file(int path_sid) { return 0; }
 int host_find_include(int name_sid) { return 0; }
@@ -34,8 +37,22 @@ int scc_compile(int len) {
     if (len < 0) { len = 0; }
     if (start + len >= SRC_MAX) { len = SRC_MAX - start - 1; }
     g_src_len = start + len;
-    int f = add_file(intern_lit("main.sc"), start, len);
+    int name = intern_lit("main.sc");
+    if (g_name_len > 0) { tmp_reset(); int i = 0; while (i < g_name_len) { tmp_char((int)g_name_buf[i]); i = i + 1; } name = intern_tmp(); }
+    int f = add_file(name, start, len);
     return scc_compile_main(f);
+}
+
+// the source file's name (for diagnostics and __FILE__): written to
+// scc_name_buf(), then scc_set_name(len); at most 255 bytes
+__attribute__((export_name("scc_name_buf")))
+int scc_name_buf() { unsafe { return (int)&g_name_buf[0]; } }
+
+__attribute__((export_name("scc_set_name")))
+void scc_set_name(int len) {
+    if (len < 0) { len = 0; }
+    if (len > 255) { len = 255; }
+    g_name_len = len;
 }
 
 // 1: the next scc_compile stops after semantic analysis (no module)

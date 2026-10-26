@@ -54,7 +54,8 @@ export function parseDiagnostics(text) {
 /** Compiles one SafeC source file (named main.sc). Resolves to
  *  { ok: boolean, diagnostics: [{file,line,col,severity,message}],
  *    wasm: Uint8Array | null, text: string (raw diagnostics) }.
- *  options.check: only check the program (wasm is null; no 'main' needed). */
+ *  options.check: only check the program (wasm is null; no 'main' needed).
+ *  options.filename: the source's name in diagnostics and __FILE__ (default main.sc). */
 export async function compile(source, options = {}) {
   if (!sccModule) await init();
   let memory = null;
@@ -73,6 +74,11 @@ export async function compile(source, options = {}) {
   const at = ex.scc_begin();
   if (bytes.length > ex.scc_capacity()) throw new Error('scc: source too large');
   new Uint8Array(memory.buffer, at, bytes.length).set(bytes);
+  if (options.filename && typeof ex.scc_set_name === 'function') {
+    const nb = new TextEncoder().encode(String(options.filename)).slice(0, 255);
+    new Uint8Array(memory.buffer, ex.scc_name_buf(), nb.length).set(nb);
+    ex.scc_set_name(nb.length);
+  }
   let ok = false;
   const check = !!options.check && typeof ex.scc_set_check === 'function';
   if (check) ex.scc_set_check(1);

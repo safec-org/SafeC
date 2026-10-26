@@ -399,6 +399,16 @@ void const_init(int addr, int t, int e, int gname_node) {
             data_put(addr, 4, (long)table_index(g_node[o].d));
             return;
         }
+        // '&table[k]' of a global array, constant k
+        if (g_node[o].kind == E_INDEX) {
+            int b = g_node[o].a;
+            if (g_node[b].kind == E_IDENT && g_node[b].c == SYM_GLOBAL && g_ty[g_glob[g_node[b].d].ty].kind == TY_ARRAY &&
+                sema_const_int(g_node[o].b) == 1) {
+                int et = g_ty[g_glob[g_node[b].d].ty].base;
+                data_put(addr, 4, (long)glob_addr(g_node[b].d) + g_cval * (long)ty_size(et));
+                return;
+            }
+        }
     }
     if (k == E_IDENT && g_node[e].c == SYM_FUNC) {
         data_put(addr, 4, (long)table_index(g_node[e].d));
@@ -453,8 +463,10 @@ int glob_addr(int g) {
     int t = g_glob[g].ty;
     int n = g_glob[g].node;
     int a = 0;
-    if (g_node[n].a != 0) { a = data_alloc(ty_size(t), ty_align(t)); }
-    else { a = bss_alloc(ty_size(t), ty_align(t)); }
+    int al = ty_align(t);
+    if (n != 0 && g_node[n].kind == D_GLOBAL && (int)g_node[n].ival > al) { al = (int)g_node[n].ival; }   // align(N)
+    if (g_node[n].a != 0) { a = data_alloc(ty_size(t), al); }
+    else { a = bss_alloc(ty_size(t), al); }
     g_glob[g].addr = a;
     if (g_node[n].a != 0) { const_init(a, t, g_node[n].a, n); }
     return a;
@@ -515,9 +527,14 @@ void setup_local(int l) {
         if (vn != 0 && g_node[vn].a != 0) { const_init(g_lst_val[l], t, g_node[vn].a, vn); }
         return;
     }
-    if (is_agg(t) == 1 || (fl & LF_ADDR) != 0) {
+    int vn0 = g_local[l].node;
+    int want = 0;
+    if (vn0 != 0 && g_node[vn0].kind == S_VAR) { want = (int)g_node[vn0].ival; }   // align(N)
+    if (is_agg(t) == 1 || (fl & LF_ADDR) != 0 || want > ty_align(t)) {
+        int al = ty_align(t);
+        if (want > al) { al = want; }
         g_lst_kind[l] = LS_FRAME;
-        g_lst_val[l] = alloc_frame(ty_size(t), ty_align(t));
+        g_lst_val[l] = alloc_frame(ty_size(t), al);
         return;
     }
     g_lst_kind[l] = LS_WASM;

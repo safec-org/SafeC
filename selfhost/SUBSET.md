@@ -125,9 +125,23 @@ files.
   - `string.h`, `ctype.h`, `math.h` (fdlibm-style `exp`, `log`, `pow` and
     trigonometry), `stdbool.h`, `stdint.h`, `stddef.h`, `limits.h`,
     `assert.h`, and `time.h`, whose clocks are stubs.
-- **SafeC std**: `std/mem.h`, `std/panic.h` and `std/collections/slice.h`.
-  These are the real headers from `std/`, embedded when scc is built, with
-  playground versions of their out-of-line functions (`stdshim/`).
+- **SafeC std**: `std/io.h`, `std/str.h`, `std/mem.h`, `std/panic.h`,
+  `std/math.h`, `std/fmt.h`, `std/convert.h`,
+  `std/collections/{slice,vec,string,map}.h`, `std/stdint.h`,
+  `std/limits.h`, `std/float.h`, `std/stdbool.h`, `std/inttypes.h`,
+  `std/ctype.h`, `std/assert.h`, `std/stdckdint.h`, `std/cmp.h`,
+  `std/traits.h`, `std/bit.h`, `std/result.h`, `std/atomic.h` and
+  `std/sys.h`, with everything they include. These are the real std
+  sources, embedded when scc is built (`tools/genvfs.py`, `STD_SEED`).
+  Each header's `.sc` implementation is compiled into the program, as its
+  own translation unit would be natively: the header's function-like
+  macros are hidden while it compiles. `std/mem.h` and `std/panic.h` use
+  playground implementations instead (`stdshim/`).
+- The runtime also provides what those sources need from libc: `sscanf`,
+  `qsort` and `bsearch`, `strtok`, the float math variants, and a
+  `rand()` that matches glibc's sequence. File functions exist, but
+  `fopen` always fails because there is no file system. Only
+  stdin/stdout/stderr work.
 
 ## Not supported
 
@@ -140,9 +154,9 @@ These are not implemented, and the error is a parse or name error:
 
 - SIMD vector types, `_Generic`, `thread_local`/`_Thread_local`, atomics,
   calling-convention keywords, `naked`, `section`, `interrupt`.
-- The rest of the std library (`std/collections/vec.h`, `std/str.h`,
-  `std/io.h`, ...), and anything else that needs an operating system:
-  files, sockets, threads.
+- The rest of the std library (`std/thread.h`, `std/net/*`, `std/fs/*`,
+  `std/gui/*`, `std/prelude.h`, which includes all of it, ...), and
+  anything else that needs an operating system: files, sockets, threads.
 - More than one translation unit.
 
 ## Differences

@@ -629,6 +629,19 @@ int check_call(int e) {
                 g_node[e].op = BI_JOIN;
                 return TY_VOID;
             }
+            // atomics, volatile access and byte swaps: the runtime's
+            // (generic) __rt_* versions; the playground is single-threaded
+            if (str_eq_lit(sid, "atomic_load") == 1 || str_eq_lit(sid, "atomic_store") == 1 ||
+                str_eq_lit(sid, "atomic_fetch_add") == 1 || str_eq_lit(sid, "atomic_fetch_sub") == 1 ||
+                str_eq_lit(sid, "atomic_fetch_and") == 1 || str_eq_lit(sid, "atomic_fetch_or") == 1 ||
+                str_eq_lit(sid, "atomic_fetch_xor") == 1 || str_eq_lit(sid, "atomic_exchange") == 1 ||
+                str_eq_lit(sid, "atomic_cas") == 1 || str_eq_lit(sid, "atomic_compare_exchange_strong") == 1 ||
+                str_eq_lit(sid, "atomic_fence") == 1 || str_eq_lit(sid, "volatile_load") == 1 ||
+                str_eq_lit(sid, "volatile_store") == 1 || str_eq_lit(sid, "__builtin_bswap32") == 1 ||
+                str_eq_lit(sid, "__builtin_bswap64") == 1 || str_eq_lit(sid, "__builtin_prefetch") == 1) {
+                g_node[callee].sid = str_concat3(intern_lit("__rt"), "_", sid);
+                return check_call(e);
+            }
             if (str_eq_lit(sid, "spawn_scoped") == 1) {
                 if (g_node[e].nlist != 2) { err_at(e, "spawn_scoped expects 2 arguments (function, arg)"); return TY_ERROR; }
                 g_node[e].c = CK_BUILTIN;

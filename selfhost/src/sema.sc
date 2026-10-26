@@ -1210,6 +1210,15 @@ void collect_function(int n) {
     if (g_node[n].op != 0) { q = str_concat3(g_node[n].op, "::", name); }
     if (g_gkind[q] == SYM_FUNC) { existing = g_gidx[q]; }
     if (existing != 0) {
+        // a program's own definition of a C library name replaces the
+        // runtime's (natively, the program's symbol wins over libc's)
+        int ex_rt = g_tok[g_node[g_func[existing].node].tok].file == g_rt_file;
+        if (ex_rt == 1 && g_node[n].a != 0 && g_tok[g_node[n].tok].file != g_rt_file) {
+            g_func[existing].node = n;
+            g_func[existing].flags = g_node[n].flags;
+            if ((g_node[n].flags & NF_GENERIC) == 0) { g_func[existing].ty = func_type_from_node(n, 0); }
+            return;
+        }
         if (g_node[g_func[existing].node].a == 0 && g_node[n].a != 0) {
             g_func[existing].node = n;
             g_func[existing].flags = g_node[n].flags;
@@ -1274,6 +1283,13 @@ void collect_global(int n) {
     int name = g_node[n].sid;
     int q = name;
     if (g_node[n].op != 0) { q = str_concat3(g_node[n].op, "::", name); }
+    // 'namespace std { extern void* stdin; }' names the C symbol 'stdin'
+    // (extern names are not namespaced): the global of that plain name
+    if (g_node[n].op != 0 && (g_node[n].flags & NF_EXTERN) != 0 && g_gkind[q] != SYM_GLOBAL && g_gkind[name] == SYM_GLOBAL) {
+        g_gkind[q] = SYM_GLOBAL;
+        g_gidx[q] = g_gidx[name];
+        return;
+    }
     if (g_gkind[q] == SYM_GLOBAL) {
         int g0 = g_gidx[q];
         // 'extern T x;' followed by the definition
@@ -1384,6 +1400,12 @@ int sema_const_int(int e) {
     if (e == 0) { return 0; }
     int k = g_node[e].kind;
     if (k == E_INT || k == E_CHAR || k == E_BOOL || k == E_SIZEOFPACK) { g_cval = g_node[e].ival; return 1; }
+    if (k == E_FIELDCOUNT) {
+        int t = resolve_type(g_node[e].c);
+        g_cval = 0L;
+        if (g_ty[t].kind == TY_STRUCT) { g_cval = (long)g_sdef[g_ty[t].n].nfield; }
+        return 1;
+    }
     if (k == E_SIZEOF_T) {
         int t = resolve_type(g_node[e].c);
         if (g_ty[t].kind == TY_NAMED || g_ty[t].kind == TY_GENERIC) { return 0; }

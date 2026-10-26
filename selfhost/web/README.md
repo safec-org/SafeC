@@ -20,7 +20,7 @@ own; the environment variables in its header override what it finds.
 |-------------|---------------------------------------------------------------|
 | `scc.js`    | the API (an ES module)                                        |
 | `worker.js`, `exec.js` | what `run()` uses; they must sit next to `scc.js`  |
-| `scc.wasm`  | the compiler (about 350 KB, about 100 KB gzipped), built      |
+| `scc.wasm`  | the compiler with its bundled headers and std sources (about 630 KB, 165 KB gzipped), built |
 
 The other files in `web/` (`run-node.mjs`, `scc-cli.mjs`, `test-api.mjs`,
 this README) are Node tools, and serving them does no harm.
@@ -53,6 +53,9 @@ calling it with an argument replaces the compiler.
 Compiles one SafeC translation unit. The source file is named `main.sc`
 (that is the `file` of its diagnostics).
 
+`options.filename` names the source in diagnostics and `__FILE__`
+(default `main.sc`, at most 255 bytes).
+
 With `options.check` set to `true`, the source is only checked: there is
 no code generation, `main` is not required, and `wasm` is `null`. An editor
 can use this for live diagnostics.
@@ -74,12 +77,21 @@ run. A source larger than 1 MB throws an `Error`. A compiler crash does not
 throw: it comes back as an `ok: false` result whose one diagnostic starts
 with `internal compiler error`.
 
-Programs can `#include` these headers, bundled into the compiler: `stdio.h`,
-`stdlib.h`, `string.h`, `ctype.h`, `math.h`, `stdbool.h`, `stdint.h`,
-`stddef.h`, `limits.h`, `time.h`, `assert.h` (C library subsets) and
-`std/mem.h`, `std/panic.h`, `std/collections/slice.h` (the real SafeC std
-headers). Any other include is an error. `../SUBSET.md` lists the language
-subset.
+Programs can `#include` the headers bundled into the compiler:
+
+- C library subsets: `stdio.h`, `stdlib.h`, `string.h`, `ctype.h`,
+  `math.h`, `stdbool.h`, `stdint.h`, `stddef.h`, `limits.h`, `time.h` and
+  `assert.h`.
+- The SafeC std library: `std/io.h`, `std/str.h`, `std/mem.h`,
+  `std/panic.h`, `std/math.h`, `std/fmt.h`, `std/convert.h`,
+  `std/collections/{slice,vec,string,map}.h`, `std/stdint.h`,
+  `std/limits.h`, `std/float.h`, `std/stdbool.h`, `std/inttypes.h`,
+  `std/ctype.h`, `std/assert.h`, `std/stdckdint.h`, `std/cmp.h`,
+  `std/traits.h`, `std/bit.h`, `std/result.h`, `std/atomic.h` and
+  `std/sys.h`, plus what those include. These are the real std sources,
+  compiled into the program.
+
+Any other include is an error. `../SUBSET.md` lists the language subset.
 
 ### `run(wasm, options?) → Promise<exitCode>`
 
@@ -157,6 +169,7 @@ those are enough.
 | `scc_capacity() → n`               | the most bytes that fit there                    |
 | `scc_compile(len) → 1 / 0`         | compiles the `len` bytes; 1 when ok              |
 | `scc_set_check(1)`                 | makes the next `scc_compile` only check (call it before) |
+| `scc_name_buf()`, `scc_set_name(len)` | the source's file name: write it to the buffer, then set its length |
 | `scc_output()`, `scc_output_len()` | the produced wasm module                         |
 | `scc_diagnostics()`, `scc_diagnostics_len()` | the diagnostics text                   |
 | `scc_error_count()`                | the number of errors                             |

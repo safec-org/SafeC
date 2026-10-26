@@ -299,6 +299,7 @@ struct Tok {
 #define E_SPAWN     34   // spawn(a, b): a = function, b = argument
 #define E_FNEVAL    35   // fn_eval(a, b): a = object, b = function name; sema: d = method
 #define E_SIZEOFPACK 36  // sizeof...(sid); ival = entry count once instantiated
+#define E_FIELDCOUNT 37  // fieldcount(c): c = type
 // statements
 #define S_BLOCK     40   // list
 #define S_EXPR      41   // a

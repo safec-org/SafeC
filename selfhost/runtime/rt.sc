@@ -24,7 +24,26 @@ void __rt_assert_fail(const char* expr, const char* file, int line) {
     __host_exit(134);
 }
 
-void exit(int code) { __host_exit(code); }
+// atexit handlers, run by exit() (a return from main exits through the host)
+void* __rt_atexit_fn[32];
+int __rt_natexit = 0;
+int atexit(void* fnp) {
+    if (__rt_natexit >= 32) { return -1; }
+    __rt_atexit_fn[__rt_natexit] = fnp;
+    __rt_natexit = __rt_natexit + 1;
+    return 0;
+}
+void exit(int code) {
+    while (__rt_natexit > 0) {
+        __rt_natexit = __rt_natexit - 1;
+        unsafe {
+            fn void() h = (fn void())__rt_atexit_fn[__rt_natexit];
+            h();
+        }
+    }
+    __rt_oflush();
+    __host_exit(code);
+}
 
 // command-line arguments: the host writes argv (pointer table + strings) here
 char __rt_argmem[16384];
@@ -294,6 +313,57 @@ char* strdup(const char* s) {
 }
 
 // ── ctype ────────────────────────────────────────────────────────────────────
+void* memchr(const void* s, int c, unsigned long n) {
+    unsafe {
+        const unsigned char* p = (const unsigned char*)s;
+        unsigned long i = 0UL;
+        while (i < n) { if ((int)p[i] == (c & 255)) { return (void*)(p + i); } i = i + 1UL; }
+    }
+    return null;
+}
+int __rt_inset(int c, const char* set) {
+    unsafe {
+        int i = 0;
+        while (set[i] != (char)0) { if ((int)set[i] == c) { return 1; } i = i + 1; }
+    }
+    return 0;
+}
+unsigned long strspn(const char* s, const char* accept) {
+    unsigned long n = 0UL;
+    unsafe { while (s[n] != (char)0 && __rt_inset((int)s[n], accept) == 1) { n = n + 1UL; } }
+    return n;
+}
+unsigned long strcspn(const char* s, const char* reject) {
+    unsigned long n = 0UL;
+    unsafe { while (s[n] != (char)0 && __rt_inset((int)s[n], reject) == 0) { n = n + 1UL; } }
+    return n;
+}
+char* strpbrk(const char* s, const char* accept) {
+    unsafe {
+        int i = 0;
+        while (s[i] != (char)0) { if (__rt_inset((int)s[i], accept) == 1) { return (char*)(s + i); } i = i + 1; }
+    }
+    return null;
+}
+char* strtok_r(char* s, const char* delim, char** save) {
+    unsafe {
+        char* p = s;
+        if (p == null) { p = *save; }
+        if (p == null) { return null; }
+        while (*p != (char)0 && __rt_inset((int)*p, delim) == 1) { p = p + 1; }
+        if (*p == (char)0) { *save = p; return null; }
+        char* start = p;
+        while (*p != (char)0 && __rt_inset((int)*p, delim) == 0) { p = p + 1; }
+        if (*p != (char)0) { *p = (char)0; p = p + 1; }
+        *save = p;
+        return start;
+    }
+}
+char* __rt_strtok_save = null;
+char* strtok(char* s, const char* delim) {
+    unsafe { return strtok_r(s, delim, &__rt_strtok_save); }
+}
+
 int isdigit(int c) { return (int)(c >= 48 && c <= 57); }
 int isalpha(int c) { return (int)((c >= 65 && c <= 90) || (c >= 97 && c <= 122)); }
 int isalnum(int c) { return (int)(isdigit(c) != 0 || isalpha(c) != 0); }
@@ -339,16 +409,53 @@ long strtol(const char* s, char** end, int base) {
 }
 
 unsigned long strtoul(const char* s, char** end, int base) { return (unsigned long)strtol(s, end, base); }
+unsigned long long strtoull(const char* s, char** end, int base) { return (unsigned long long)strtoul(s, end, base); }
 long long strtoll(const char* s, char** end, int base) { return strtol(s, end, base); }
 int atoi(const char* s) { return (int)strtol(s, null, 10); }
 long atol(const char* s) { return strtol(s, null, 10); }
 long long atoll(const char* s) { return strtol(s, null, 10); }
 
-unsigned long __rt_rand_state = 1UL;
-void srand(unsigned int seed) { __rt_rand_state = (unsigned long)seed; }
+// rand(): glibc's generator (TYPE_3, additive feedback r[i] = r[i-3] +
+// r[i-31]), so a seeded sequence matches what a native Linux build prints
+int __rt_rtab[34];
+int __rt_rpos = 0;
+int __rt_rready = 0;
+void srand(unsigned int seed) {
+    long w = (long)seed;
+    if (w == 0L) { w = 1L; }
+    long r[34];
+    r[0] = w;
+    int i = 1;
+    while (i < 31) {
+        long hi = r[i - 1] / 127773L;
+        long lo = r[i - 1] % 127773L;
+        long v = 16807L * lo - 2836L * hi;
+        if (v < 0L) { v = v + 2147483647L; }
+        r[i] = v;
+        i = i + 1;
+    }
+    while (i < 34) { r[i] = r[i - 31]; i = i + 1; }
+    i = 0;
+    while (i < 34) { __rt_rtab[i] = (int)(r[i] & 4294967295L); i = i + 1; }
+    __rt_rpos = 0;
+    __rt_rready = 1;
+    // the first 310 outputs are discarded
+    i = 34;
+    while (i < 344) { __rt_rnext(); i = i + 1; }
+}
+unsigned int __rt_rnext() {
+    // r[k] = r[k-31] + r[k-3] over a ring of 34
+    int k = __rt_rpos;
+    unsigned int a = (unsigned int)__rt_rtab[(k + 34 - 31) % 34];
+    unsigned int b = (unsigned int)__rt_rtab[(k + 34 - 3) % 34];
+    unsigned int v = a + b;
+    __rt_rtab[k] = (int)v;
+    __rt_rpos = (k + 1) % 34;
+    return v;
+}
 int rand() {
-    __rt_rand_state = __rt_rand_state * 6364136223846793005UL + 1442695040888963407UL;
-    return (int)((__rt_rand_state >> 33UL) & 2147483647UL);
+    if (__rt_rready == 0) { srand(1U); }
+    return (int)(__rt_rnext() >> 1U);
 }
 
 // saturating 64-bit arithmetic (the +% -% *% operators on long)
@@ -897,9 +1004,46 @@ int printf(const char* fmt, ...) {
     return n;
 }
 
+// ── atomics, volatile access, byte swaps (the builtins of those names map
+// here; one thread, so plain loads and stores) ──────────────────────────────
+generic<T> T __rt_atomic_load(T* p, ...) { unsafe { return *p; } }
+generic<T, U> void __rt_atomic_store(T* p, U v, ...) { unsafe { *p = (T)v; } }
+generic<T, U> T __rt_atomic_fetch_add(T* p, U v, ...) { unsafe { T old = *p; *p = old + (T)v; return old; } }
+generic<T, U> T __rt_atomic_fetch_sub(T* p, U v, ...) { unsafe { T old = *p; *p = old - (T)v; return old; } }
+generic<T, U> T __rt_atomic_fetch_and(T* p, U v, ...) { unsafe { T old = *p; *p = old & (T)v; return old; } }
+generic<T, U> T __rt_atomic_fetch_or(T* p, U v, ...) { unsafe { T old = *p; *p = old | (T)v; return old; } }
+generic<T, U> T __rt_atomic_fetch_xor(T* p, U v, ...) { unsafe { T old = *p; *p = old ^ (T)v; return old; } }
+generic<T, U> T __rt_atomic_exchange(T* p, U v, ...) { unsafe { T old = *p; *p = (T)v; return old; } }
+generic<T, U, V> bool __rt_atomic_cas(T* p, U expected, V desired, ...) {
+    unsafe { if (*p == (T)expected) { *p = (T)desired; return true; } }
+    return false;
+}
+generic<T, E, V> bool __rt_atomic_compare_exchange_strong(T* p, E expected, V desired, ...) {
+    unsafe {
+        if (*p == *expected) { *p = (T)desired; return true; }
+        *expected = *p;
+    }
+    return false;
+}
+void __rt_atomic_fence(...) { }
+generic<T> T __rt_volatile_load(T* p, ...) { unsafe { return *p; } }
+generic<T, U> void __rt_volatile_store(T* p, U v, ...) { unsafe { *p = (T)v; } }
+generic<T> void __rt___builtin_prefetch(T p) { }
+unsigned int __rt___builtin_bswap32(unsigned int x) {
+    return ((x >> 24U) & 255U) | ((x >> 8U) & 65280U) | ((x << 8U) & 16711680U) | (x << 24U);
+}
+unsigned long __rt___builtin_bswap64(unsigned long x) {
+    unsigned long lo = (unsigned long)__rt___builtin_bswap32((unsigned int)(x & 4294967295UL));
+    unsigned long hi = (unsigned long)__rt___builtin_bswap32((unsigned int)(x >> 32UL));
+    return (lo << 32UL) | hi;
+}
+
 // FILE: just a file descriptor
 struct __FILE { int fd; };
 struct __FILE __rt_files[3];
+struct __FILE* stdin = &__rt_files[0];
+struct __FILE* stdout = &__rt_files[1];
+struct __FILE* stderr = &__rt_files[2];
 
 // stdin/stdout/stderr are &__rt_files[0..2]: the fd is the index
 int __rt_fd(struct __FILE* f) {
@@ -964,7 +1108,10 @@ int __rt_ipos = 0;
 int __rt_ilen = 0;
 int __rt_ieof = 0;
 
+int __rt_unget = -1;   // one character pushed back by ungetc
+
 int getchar() {
+    if (__rt_unget >= 0) { int u = __rt_unget; __rt_unget = -1; return u; }
     if (__rt_ipos >= __rt_ilen) {
         if (__rt_ieof == 1) { return -1; }
         unsafe { __rt_ilen = __host_read(0, (char*)&__rt_ibuf[0], 4096); }
@@ -977,9 +1124,73 @@ int getchar() {
 }
 
 int __rt_peekc() {
+    if (__rt_unget >= 0) { return __rt_unget; }
     int c = getchar();
     if (c >= 0) { __rt_ipos = __rt_ipos - 1; }
     return c;
+}
+
+// the scanner's input: a string (sscanf) or stdin
+const char* __rt_scan_str = null;
+int __rt_scan_pos = 0;
+int __rt_speek() {
+    if (__rt_scan_str != null) {
+        int c = 0;
+        unsafe { c = (int)(unsigned char)__rt_scan_str[__rt_scan_pos]; }
+        if (c == 0) { return -1; }
+        return c;
+    }
+    return __rt_peekc();
+}
+int __rt_sget() {
+    if (__rt_scan_str != null) {
+        int c = __rt_speek();
+        if (c >= 0) { __rt_scan_pos = __rt_scan_pos + 1; }
+        return c;
+    }
+    if (__rt_unget >= 0) { int c = __rt_unget; __rt_unget = -1; return c; }
+    return getchar();
+}
+
+// files: there is no file system, so fopen fails; stdin/stdout/stderr work
+struct __FILE* fopen(const char* path, const char* mode) { return null; }
+struct __FILE* tmpfile() { return null; }
+int fclose(struct __FILE* f) { return 0; }
+int remove(const char* path) { return -1; }
+int rename(const char* from, const char* to) { return -1; }
+int fseek(struct __FILE* f, long off, int whence) { return -1; }
+long ftell(struct __FILE* f) { return -1L; }
+void rewind(struct __FILE* f) { }
+int feof(struct __FILE* f) { if (__rt_fd(f) == 0) { return __rt_ieof; } return 0; }
+int ferror(struct __FILE* f) { return 0; }
+int fgetc(struct __FILE* f) { if (__rt_fd(f) != 0) { return -1; } return getchar(); }
+int getc(struct __FILE* f) { return fgetc(f); }
+int ungetc(int c, struct __FILE* f) {
+    if (c < 0 || __rt_fd(f) != 0) { return -1; }
+    __rt_unget = c & 255;
+    return c & 255;
+}
+unsigned long fread(void* buf, unsigned long size, unsigned long count, struct __FILE* f) {
+    if (__rt_fd(f) != 0 || size == 0UL) { return 0UL; }
+    unsigned long total = size * count;
+    unsigned long i = 0UL;
+    unsafe {
+        unsigned char* b = (unsigned char*)buf;
+        while (i < total) {
+            int c = getchar();
+            if (c < 0) { break; }
+            b[i] = (unsigned char)c;
+            i = i + 1UL;
+        }
+    }
+    return i / size;
+}
+unsigned long fwrite(const void* buf, unsigned long size, unsigned long count, struct __FILE* f) {
+    int fd = __rt_fd(f);
+    if (fd != 1 && fd != 2) { return 0UL; }
+    __rt_oflush();
+    unsafe { __host_write(fd, (const char*)buf, (int)(size * count)); }
+    return count;
 }
 
 char* fgets(char* buf, int n, struct __FILE* f) {
@@ -1048,25 +1259,83 @@ double strtod(const char* s, char** end) {
 }
 
 double atof(const char* s) { return strtod(s, null); }
+float strtof(const char* s, char** end) { return (float)strtod(s, end); }
+
+char* getenv(const char* name) { return null; }   // no environment
+int system(const char* cmd) { return -1; }
+
+// qsort/bsearch: insertion sort through the comparison function
+void qsort(void* base, unsigned long n, unsigned long size, void* cmp) {
+    unsafe {
+        fn int(const void*, const void*) c = (fn int(const void*, const void*))cmp;
+        unsigned char* b = (unsigned char*)base;
+        unsigned char* tmp = (unsigned char*)malloc(size);
+        if (tmp == null) { return; }
+        unsigned long i = 1UL;
+        while (i < n) {
+            memcpy((void*)tmp, (const void*)(b + i * size), size);
+            unsigned long j = i;
+            while (j > 0UL && c((const void*)(b + (j - 1UL) * size), (const void*)tmp) > 0) {
+                memcpy((void*)(b + j * size), (const void*)(b + (j - 1UL) * size), size);
+                j = j - 1UL;
+            }
+            memcpy((void*)(b + j * size), (const void*)tmp, size);
+            i = i + 1UL;
+        }
+        free((void*)tmp);
+    }
+}
+void* bsearch(const void* key, const void* base, unsigned long n, unsigned long size, void* cmp) {
+    unsafe {
+        fn int(const void*, const void*) c = (fn int(const void*, const void*))cmp;
+        const unsigned char* b = (const unsigned char*)base;
+        unsigned long lo = 0UL;
+        unsigned long hi = n;
+        while (lo < hi) {
+            unsigned long mid = lo + (hi - lo) / 2UL;
+            int r = c(key, (const void*)(b + mid * size));
+            if (r == 0) { return (void*)(b + mid * size); }
+            if (r < 0) { hi = mid; } else { lo = mid + 1UL; }
+        }
+    }
+    return null;
+}
 
 // scanf: %d %i %u %ld %lld %f %lf %s %c %%, whitespace in the format
 // skips input whitespace
+int __rt_vscan(const char* fmt, unsigned char* ap);
 int scanf(const char* fmt, ...) {
+    __rt_scan_str = null;
+    unsafe { return __rt_vscan(fmt, __va_ptr()); }
+}
+int sscanf(const char* s, const char* fmt, ...) {
+    __rt_scan_str = s;
+    __rt_scan_pos = 0;
+    int n = 0;
+    unsafe { n = __rt_vscan(fmt, __va_ptr()); }
+    __rt_scan_str = null;
+    return n;
+}
+int fscanf(struct __FILE* f, const char* fmt, ...) {
+    if (__rt_fd(f) != 0) { return -1; }
+    __rt_scan_str = null;
+    unsafe { return __rt_vscan(fmt, __va_ptr()); }
+}
+int __rt_vscan(const char* fmt, unsigned char* ap) {
     int assigned = 0;
     unsafe {
-        unsigned char* ap = __va_ptr();
         int ai = 0;
         int i = 0;
         while (fmt[i] != (char)0) {
             int c = (int)fmt[i];
             if (isspace(c) != 0) {
-                while (isspace(__rt_peekc()) != 0) { getchar(); }
+                while (isspace(__rt_speek()) != 0) { __rt_sget(); }
                 i = i + 1;
                 continue;
             }
             if (c != 37) {
-                if (__rt_peekc() != c) { return assigned; }
-                getchar();
+                if (__rt_speek() != c) { return assigned; }
+                __rt_sget();
                 i = i + 1;
                 continue;
             }
@@ -1075,34 +1344,34 @@ int scanf(const char* fmt, ...) {
             while (fmt[i] == 'l' || fmt[i] == 'h') { if (fmt[i] == 'l') { len = len + 1; } i = i + 1; }
             c = (int)fmt[i];
             i = i + 1;
-            if (c == 37) { if (__rt_peekc() != 37) { return assigned; } getchar(); continue; }
+            if (c == 37) { if (__rt_speek() != 37) { return assigned; } __rt_sget(); continue; }
             int target = (int)*(long*)(ap + 8 * ai);
             ai = ai + 1;
             if (c != 'c') {
-                while (isspace(__rt_peekc()) != 0) { getchar(); }
+                while (isspace(__rt_speek()) != 0) { __rt_sget(); }
             }
-            if (__rt_peekc() < 0) {
+            if (__rt_speek() < 0) {
                 if (assigned == 0) { return -1; }
                 return assigned;
             }
-            if (c == 'c') { *(char*)target = (char)getchar(); assigned = assigned + 1; continue; }
+            if (c == 'c') { *(char*)target = (char)__rt_sget(); assigned = assigned + 1; continue; }
             char tok[128];
             int n = 0;
             if (c == 's') {
-                while (n < 127 && __rt_peekc() >= 0 && isspace(__rt_peekc()) == 0) { tok[n] = (char)getchar(); n = n + 1; }
+                while (n < 127 && __rt_speek() >= 0 && isspace(__rt_speek()) == 0) { tok[n] = (char)__rt_sget(); n = n + 1; }
                 tok[n] = (char)0;
                 strcpy((char*)target, (const char*)&tok[0]);
                 assigned = assigned + 1;
                 continue;
             }
-            int pc = __rt_peekc();
-            if (pc == 45 || pc == 43) { tok[n] = (char)getchar(); n = n + 1; }
+            int pc = __rt_speek();
+            if (pc == 45 || pc == 43) { tok[n] = (char)__rt_sget(); n = n + 1; }
             while (n < 127) {
-                pc = __rt_peekc();
+                pc = __rt_speek();
                 int ok = isdigit(pc);
                 if ((c == 'f' || c == 'e' || c == 'g') && (pc == 46 || pc == 101 || pc == 69)) { ok = 1; }
                 if (ok == 0) { break; }
-                tok[n] = (char)getchar();
+                tok[n] = (char)__rt_sget();
                 n = n + 1;
             }
             tok[n] = (char)0;
@@ -1412,6 +1681,27 @@ float expf(float x) { return (float)exp((double)x); }
 float logf(float x) { return (float)log((double)x); }
 float powf(float x, float y) { return (float)pow((double)x, (double)y); }
 float atan2f(float y, float x) { return (float)atan2((double)y, (double)x); }
+double copysign(double mag, double sgn) {
+    double m = fabs(mag);
+    if (__builtin_f64_bits(sgn) < 0L) { return 0.0 - m; }
+    return m;
+}
+double exp2(double x) { return pow(2.0, x); }
+double fma(double a, double b, double c) { return a * b + c; }
+float acosf(float x) { return (float)acos((double)x); }
+float asinf(float x) { return (float)asin((double)x); }
+float atanf(float x) { return (float)atan((double)x); }
+float cbrtf(float x) { return (float)cbrt((double)x); }
+float coshf(float x) { return (float)cosh((double)x); }
+float sinhf(float x) { return (float)sinh((double)x); }
+float tanhf(float x) { return (float)tanh((double)x); }
+float exp2f(float x) { return (float)exp2((double)x); }
+float log10f(float x) { return (float)log10((double)x); }
+float log2f(float x) { return (float)log2((double)x); }
+float hypotf(float x, float y) { return (float)hypot((double)x, (double)y); }
+float truncf(float x) { return (float)trunc((double)x); }
+float copysignf(float m, float s) { return (float)copysign((double)m, (double)s); }
+float fmaf(float a, float b, float c) { return (float)((double)a * (double)b + (double)c); }
 float fmodf(float x, float y) { return (float)fmod((double)x, (double)y); }
 float roundf(float x) { return (float)round((double)x); }
 

@@ -21,6 +21,7 @@ struct Macro {
     int funclike;
     int variadic;
     int active;
+    int file;       // where it was #defined
 };
 
 struct Macro g_macro[NMACRO_MAX];
@@ -477,6 +478,7 @@ void do_define(int s, int e) {
     g_macro[m].nparams = 0;
     g_macro[m].params = g_nmparam;
     g_macro[m].active = 0;
+    g_macro[m].file = g_ptok[s].file;
     int i = s + 1;
     if (i < e && g_ptok[i].kind == T_LPAREN && (g_ptok[i].flags & TF_SPACE) == 0) {
         g_macro[m].funclike = 1;
@@ -580,6 +582,41 @@ void do_include(int hash_idx, int s, int e) {
     g_include_depth = g_include_depth - 1;
 }
 
+// '#pragma scc_impl <std/x.sc>' (written by tools/genvfs.py at the end of a
+// bundled std header): compiles the header's implementation into this
+// translation unit as if it were its own, as natively it is. The
+// function-like macros the header itself defined are hidden meanwhile
+// (an implementation defines e.g. SAFEC_ASSERT_IMPL_ to get the functions
+// those macros would otherwise rewrite).
+int g_hide_sid[256];
+int g_hide_m[256];
+int g_hide_top = 0;
+
+void do_impl_include(int hash_idx, int s, int e) {
+    int file = g_ptok[hash_idx].file;
+    int base = g_hide_top;
+    int n = base;
+    int m = 1;
+    while (m <= g_nmacro && n < 256) {
+        int sid = g_macro[m].sid;
+        if (g_macro[m].file == file && g_macro[m].funclike == 1 && g_macro_of[sid] == m) {
+            g_hide_sid[n] = sid;
+            g_hide_m[n] = m;
+            g_macro_of[sid] = 0;
+            n = n + 1;
+        }
+        m = m + 1;
+    }
+    g_hide_top = n;
+    do_include(hash_idx, s, e);
+    int i = base;
+    while (i < n) {
+        if (g_macro_of[g_hide_sid[i]] == 0) { g_macro_of[g_hide_sid[i]] = g_hide_m[i]; }
+        i = i + 1;
+    }
+    g_hide_top = base;
+}
+
 void cond_push(int active) {
     if (g_cond_depth >= 255) { fatal("#if nesting"); return; }
     int parent = 1;
@@ -642,6 +679,7 @@ void do_directive(int hash_idx, int s, int e) {
     if (d == S_include) { do_include(hash_idx, s + 1, e); return; }
     if (d == S_pragma) {
         if (s + 1 < e && g_ptok[s + 1].sid == S_once) { g_once[g_file_name[g_ptok[hash_idx].file]] = 1; }
+        if (s + 1 < e && str_eq_lit(g_ptok[s + 1].sid, "scc_impl") == 1) { do_impl_include(hash_idx, s + 2, e); }
         return;
     }
     if (d == S_error || d == S_warning) {

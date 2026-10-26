@@ -103,7 +103,7 @@ int clone_node(int n) {
     int b_is_node = 1;
     int c_is_node = 1;
     int d_is_node = 1;
-    if (k == E_CAST || k == E_SIZEOF_T || k == E_ALIGNOF || k == E_NEW || k == S_VAR ||
+    if (k == E_CAST || k == E_SIZEOF_T || k == E_ALIGNOF || k == E_FIELDCOUNT || k == E_NEW || k == S_VAR ||
         k == D_FUNC || k == D_PARAM || k == D_GLOBAL || k == D_FIELD || k == D_TYPEDEF ||
         k == D_NEWTYPE || k == D_ENUM) { c_is_node = 0; }
     if (k == E_IDENT || k == E_CALL || k == E_UNIONINIT || k == S_VAR || k == D_FUNC ||
@@ -417,6 +417,8 @@ int parse_base_type() {
         if (cur() == K_VOLATILE) { vol = 1; }
         advance();
     }
+    // C11 '_Atomic' as a qualifier prefix: a no-op, as in safec
+    if (cur() == T_IDENT && str_eq_lit(cur_sid(), "_Atomic") == 1) { advance(); }
     if (cur() == K_UNSIGNED) { advance(); is_unsigned = 1; has_sign = 1; }
     else if (cur() == K_SIGNED) { advance(); has_sign = 1; }
     int k = cur();
@@ -1061,6 +1063,14 @@ int parse_unary() {
         g_node[n].a = parse_unary();
         return n;
     }
+    if (k == K_FIELDCOUNT) {
+        advance();
+        expect_msg(T_LPAREN, "expected '(' after 'fieldcount'");
+        int n = new_node(E_FIELDCOUNT, t);
+        g_node[n].c = parse_type();
+        expect_msg(T_RPAREN, "expected ')' after fieldcount type");
+        return n;
+    }
     if (k == K_ALIGNOF) {
         advance();
         expect_msg(T_LPAREN, "expected '(' after 'alignof'");
@@ -1455,9 +1465,35 @@ int parse_loop(int label) {
     return n;
 }
 
+// 'align(N)' before a declaration (a contextual keyword); N or 0
+int parse_align_prefix() {
+    if (cur() != T_IDENT || str_eq_lit(cur_sid(), "align") == 0 || peek(1) != T_LPAREN) { return -1; }
+    advance();
+    advance();
+    int n = 0;
+    if (cur() == T_INT) { n = (int)g_tok[g_p].ival; advance(); }
+    else { perr("expected integer alignment value"); }
+    expect_msg(T_RPAREN, "expected ')' after alignment value");
+    return n;
+}
+
+void set_align(int v, int n) {
+    if (g_node[v].kind == S_VAR) { g_node[v].ival = (long)n; return; }
+    if (g_node[v].kind == S_MULTI) {
+        int i = 0;
+        while (i < g_node[v].nlist) { set_align(g_list[g_node[v].list + i], n); i = i + 1; }
+    }
+}
+
 int parse_stmt() {
     int t = g_p;
     int k = cur();
+    if (k == T_IDENT && peek(1) == T_LPAREN && str_eq_lit(cur_sid(), "align") == 1) {
+        int n = parse_align_prefix();
+        int v = parse_var_decl(0, 0);
+        set_align(v, n);
+        return v;
+    }
     if (k == T_IDENT && peek(1) == T_COLON) {
         int lbl = cur_sid();
         advance(); advance();
@@ -1960,8 +1996,10 @@ void parse_top() {
         }
     }
     // qualifiers
+    int galign = 0;
     while (1) {
         if (is_attr(g_p)) { g_attr_flags = 0; parse_attributes(); flags = flags | g_attr_flags; continue; }
+        if (cur() == T_IDENT && peek(1) == T_LPAREN && str_eq_lit(cur_sid(), "align") == 1) { galign = parse_align_prefix(); continue; }
         if (cur() == K_CONST && peek(1) != T_AMP && peek(1) != T_QAMP) { advance(); flags = flags | NF_CONST; continue; }
         if (cur() == K_CONSTEVAL) { advance(); flags = flags | NF_CONSTEVAL; continue; }
         if (cur() == K_CONSTINIT) { advance(); continue; }
@@ -2057,6 +2095,7 @@ void parse_top() {
         g_node[g].c = gt;
         g_node[g].flags = flags & ~NF_CONST;
         if (gvol == 1) { g_node[g].flags = g_node[g].flags | NF_VOLATILE; }
+        g_node[g].ival = (long)galign;
         if (is_const_obj == 1 && g_ty[strip_arrays(gt)].kind != TY_PTR) { g_node[g].flags = g_node[g].flags | NF_CONST; }
         g_node[g].op = g_ns;
         parse_attributes();
