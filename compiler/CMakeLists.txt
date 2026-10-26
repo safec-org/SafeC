@@ -38,6 +38,7 @@ set(SAFEC_SOURCES
   src/ConstEval.cpp
   src/CodeGen.cpp
   src/AbiLowering.cpp
+  src/DocJson.cpp
   src/main.cpp
 )
 

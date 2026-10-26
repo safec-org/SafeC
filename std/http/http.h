@@ -18,8 +18,10 @@
 // Servers support persistent connections (keep-alive), "Expect:
 // 100-continue", HEAD, request-size limits and a clean stop (HttpServer);
 // the client can follow redirects and decode gzip/deflate bodies
-// (http_fetch). No TLS: std/crypto/tls.h is a record layer without a
-// handshake, so https:// URLs fail (see stdlib/http.md's HTTPS note).
+// (http_fetch). HTTPS: http_fetch & co. take https:// URLs (TLS through
+// std/tls — the OS's TLS library, or SafeC's own; certificates verified
+// against the system roots by default, see HttpClientOptions::tls), and
+// HttpServer serves HTTPS when its config names a TlsServerConfig.
 // Routing, middleware, static files, cookies, multipart forms and
 // Server-Sent Events live in the sibling headers (router.h,
 // static_files.h, cookie.h, multipart.h, sse.h).
@@ -31,6 +33,7 @@
 #include <std/collections/string.h>
 #include <std/encoding/url.h>
 #include <std/http/headers.h>
+#include <std/tls/tls.h>
 
 namespace std {
 
@@ -107,19 +110,27 @@ struct HttpRequest {
     void free();
 };
 
-// A connected, blocking TCP socket: the connection http_request and
-// WsConn talk over, for your own protocols on a socket from
-// tcp_connect_timeout / tcp_accept_nb (flipped to blocking with
-// fd_set_blocking — see std/sched/io_nb.h). It conforms to io_traits.h's
-// Stream (Reader + Writer), so read_exact / write_all / copy_stream and
-// io_buf.h's BufReader / BufWriter work on it (http and WsConn read their
-// header blocks through a BufReader<TcpStream>).
+// A connected, blocking TCP socket — optionally with TLS on it: the
+// connection http_request and WsConn talk over, for your own protocols on a
+// socket from tcp_connect_timeout / tcp_accept_nb (flipped to blocking with
+// fd_set_blocking — see std/sched/io_nb.h) or http_open_stream. It conforms
+// to io_traits.h's Stream (Reader + Writer), so read_exact / write_all /
+// copy_stream and io_buf.h's BufReader / BufWriter work on it (http and
+// WsConn read their header blocks through a BufReader<TcpStream>). With
+// 'tls' set, reads and writes are the TLS stream's (application data) and a
+// TLS_WANT_* (a socket timeout) reads as -1.
 // Writes never raise SIGPIPE: a peer that has gone away is a -1 result.
 struct TcpStream {
     int fd;
+    ?&heap TlsStream tls;    // null: plain TCP
 
     // Wraps an open socket fd (owned by the stream from then on: close()).
     static struct TcpStream from_fd(int fd);
+    // Wraps an established TLS stream (heap-allocated: the TcpStream owns
+    // it from then on, and close() sends close_notify, frees it and closes
+    // its socket).
+    static struct TcpStream over_tls(&heap TlsStream t);
+    int is_tls() const;
 
     // At most n bytes; the count read, 0 once the peer closed, -1 on error.
     long long read(&unsigned char buf, unsigned long n);
@@ -136,6 +147,19 @@ struct TcpStream {
 // separately (not just used internally by http_request) since
 // std/http/websocket.h's client side needs the same resolution step.
 int http_resolve_host(const &char host, &unsigned int addr_out);
+
+// Resolves and connects to host:port and, when 'tls' is set, runs a TLS
+// client handshake over the socket ('cfg' null: TlsConfig::new()'s
+// defaults — the system roots, host name verified — offering ALPN
+// "http/1.1"): the connection http_fetch, WsConn and SseClient make for
+// https:// and wss:// URLs. 'connect_timeout_ms' bounds the TCP connect,
+// 'io_timeout_ms' each send/receive afterwards (the TLS handshake is bounded
+// by the connect timeout when io_timeout_ms is <= 0). On failure the result
+// has fd -1 and *err (if non-null) says why (code TLS_ERR_IO for DNS/
+// connect failures).
+struct TcpStream http_open_stream(const &char host, unsigned short port, int tls,
+                                  const ?&TlsConfig cfg, int connect_timeout_ms,
+                                  int io_timeout_ms, ?&TlsError err);
 
 // Case-insensitive header lookup in a raw "Key: value\r\nKey2: value2..."
 // block (as stored in HttpResponse::headers / HttpRequest::headers).
@@ -279,19 +303,25 @@ struct HttpClientOptions {
                                       // decode the body (default 1)
     unsigned long max_body_bytes;     // larger response bodies fail; 0 = no limit
                                       // (default 64 MiB)
+    ?&TlsConfig   tls;                // https:// settings (trust, client cert,
+                                      // backend); null = TlsConfig::new()'s defaults
+    ?&TlsError    tls_error;          // if set, receives why a TLS connection failed
 
     static struct HttpClientOptions defaults();
 };
 
-// A request to an absolute http:// URL: resolves and connects to its host
-// and port, sends method + request-target, and follows redirects
+// A request to an absolute http:// or https:// URL (default ports 80 and
+// 443; https through std/tls with opts.tls's settings, the server's
+// certificate verified against the system roots by default): resolves and
+// connects to its host and port, sends method + request-target, and follows
+// redirects
 // (Location resolved against the current URL; 301/302/303 turn a non-GET/
 // HEAD request into a bodyless GET, 307/308 resend it unchanged) up to
 // opts.max_redirects. 'extra_headers' as for http_request. A gzip/deflate
 // Content-Encoding is decoded when opts.decompress is set (the
 // Content-Encoding header is then removed from the response). 'opts' may
-// be null (defaults()). *ok = 0 on a bad or non-http URL (https:// is not
-// supported: no TLS handshake in std), transport failure, malformed
+// be null (defaults()). *ok = 0 on a bad or non-http(s) URL, transport or
+// TLS failure (opts.tls_error says which), malformed
 // response, too many redirects or a body over the limit; the status of a
 // completed exchange is reported even when it is 4xx/5xx (ok = 1).
 // 'final_url', if non-null, receives the URL the response came from.
@@ -321,6 +351,11 @@ struct HttpServerConfig {
     int           max_requests_per_conn; // 0 = unlimited
     unsigned long max_header_bytes; // request line + headers; larger gets 431
     unsigned long max_body_bytes;   // Content-Length or chunked total; larger gets 413
+    // HTTPS: when set, bind() builds a TlsAcceptor from it (bind fails if
+    // it can't — try TlsAcceptor::new yourself for the reason) and every
+    // connection starts with a TLS handshake (bounded by io_timeout_ms).
+    // Only needed during bind(). null = plain HTTP (the default).
+    ?&TlsServerConfig tls;
 
     // port, 8 threads, keep-alive on (5 s idle), 30 s I/O timeout, 1000
     // requests per connection, 64 KiB of headers, 16 MiB of body.
@@ -341,6 +376,7 @@ struct HttpConn {
                                    // this response; set to 0 to close it instead
     int            detached;
     void*          reader_;        // internal: the connection's BufReader<TcpStream>
+    ?&heap TlsStream tls;          // the TLS session on an HTTPS server's connection, else null
 
     // Takes over the (blocking) socket. Bytes the client already sent past
     // this request (pipelined data, a WebSocket frame right behind the

@@ -19,7 +19,7 @@
 
 .PARAMETER Std
     The prebuilt std sections to install, comma-separated: core (std/*.sc),
-    collections, gui, ml, crypto, net, http, dsp, audio, fs, sync, async, alloc, simd, ...
+    collections, gui, ml, crypto, tls, net, http, dsp, audio, fs, sync, async, alloc, simd, ...
     (std's top-level directories), or "all" (the default). std's sources are
     always installed: a build that needs a section that isn't installed
     compiles its units from source. "+ml,gui" adds sections to an existing
@@ -251,6 +251,7 @@ Write-Host "  SAFEC_HOME  $Prefix"
 Write-Host "  safec       $binDir\safec.exe"
 Write-Host "  safeguard   $binDir\safeguard.exe"
 Write-Host "  sc-lsp      $binDir\sc-lsp.exe"
+if (Test-Path (Join-Path $binDir "safec-doc.exe")) { Write-Host "  safec-doc   $binDir\safec-doc.exe (run by 'safeguard doc')" }
 Write-Host ""
 Write-Host "Open a new terminal, then try:"
 Write-Host "  safeguard new hello; cd hello; safeguard run"

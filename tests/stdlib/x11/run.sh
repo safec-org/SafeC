@@ -12,7 +12,7 @@ OUT="${OUT:-$HERE/build}"
 mkdir -p "$OUT"
 STD="${STD_ARCHIVE:-$(SAFEC="$SAFEC" "$HERE/../std_archive.sh" "$OUT/_std")}"
 "$SAFEC" -I "$ROOT/std" -I "$ROOT" "$HERE/x11_check.sc" --emit-llvm --compat-preprocessor -o "$OUT/x11_check.ll"
-"$CLANG" -w "$OUT/x11_check.ll" "$STD" -lX11 -lm -o "$OUT/x11_check"
+"$CLANG" -w "$OUT/x11_check.ll" "$STD" -lX11 -ldl -lm -o "$OUT/x11_check"
 xpid=""
 if [[ -z "${DISPLAY:-}" ]]; then
     n=$(( 90 + RANDOM % 50 ))

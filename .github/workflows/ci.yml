@@ -56,7 +56,7 @@ jobs:
         # minimum by construction, since that's what it's developed
         # against). Pinning to a specific old major here is what actually
         # caused the CI failure this fix addresses.
-        run: brew install llvm
+        run: brew install llvm lld   # lld: wasm-ld (safec-doc's search client, std/wasm tests)
 
       - name: Build safec compiler
         run: |
@@ -106,7 +106,7 @@ jobs:
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh ${{ env.LLVM_VERSION }}
-          sudo apt-get install -y "llvm-${{ env.LLVM_VERSION }}-dev" "clang-${{ env.LLVM_VERSION }}"
+          sudo apt-get install -y "llvm-${{ env.LLVM_VERSION }}-dev" "clang-${{ env.LLVM_VERSION }}" "lld-${{ env.LLVM_VERSION }}"
 
       - name: Install X11 headers and Xvfb
         # The smoke test bundles examples/gui_hello (std/gui's X11 backend)

@@ -8,6 +8,7 @@
 #include <std/gui/gui_draw.h>
 #include <std/gui/gui_widget.h>
 #include <std/gui/gui_app.h>
+#include <std/gui/gui_gpu.h>
 #include <std/collections/string.h>
 
 extern int PostMessageA(void* hwnd, unsigned int msg, unsigned long long wparam, long long lparam);
@@ -19,6 +20,9 @@ extern int SetWindowPos(void* hwnd, void* after, int x, int y, int cx, int cy, u
 extern int GdiFlush();
 extern int GetWindowTextA(void* hwnd, char* buf, int n);
 extern int strcmp(const char* a, const char* b);
+extern int printf(const char* fmt, ...);
+extern void* GetModuleHandleA(const char* name);
+extern void* GetProcAddress(void* module, const char* name);
 
 static void* g_hwnd = (void*)0;
 
@@ -167,11 +171,68 @@ void t_win32_multi() {
     }
 }
 
+// The Direct3D 11 presenter (flip-model swap chain), where the system has
+// one (Wine: wined3d over OpenGL; Windows: any D3D11 driver or WARP).
+void t_win32_gpu() {
+    unsafe {
+        struct GuiWindowOptions o = GuiWindowOptions::new("win32 gpu", 160, 100);
+        o.present = GUI_PRESENT_GPU;
+        o.hiDpi = 0;
+        struct GuiWindow win = GuiWindow::create_with(&o);
+        ASSERT_FALSE(win.platform.is_null());
+        if (win.platform.is_null()) return;
+        g_hwnd = (void*)win.native_handle();
+        struct GuiEvent ev;
+        while (win.poll_event(&ev)) { }
+        if (!gui_window_uses_gpu(&win)) {
+            printf("  (no Direct3D 11 here: GPU presentation skipped)\n");
+            win.destroy();
+            return;
+        }
+        ASSERT_EQ(strcmp(gui_window_presenter_name(&win), "d3d11"), 0);
+        win.fill_rect(0, 0, 160, 100, GuiColor::rgb((unsigned char)0, (unsigned char)0, (unsigned char)0));
+        win.fill_rect(10, 10, 30, 20, GuiColor::rgb((unsigned char)255, (unsigned char)0, (unsigned char)0));
+        win.fill_rect(100, 60, 10, 10, GuiColor::rgb((unsigned char)0, (unsigned char)128, (unsigned char)255));
+        win.present();
+        int frame = 0;
+        while (frame < 30) { win.present(); win.poll_event(&ev); frame = frame + 1; }
+        ASSERT_TRUE(gui_window_uses_gpu(&win));   // no device loss, no fallback
+        unsigned int red = pixel_at(20, 20);
+        unsigned int blue = pixel_at(105, 65);
+        // Wine composites the swap chain into the window GDI reads from;
+        // Windows' DWM keeps flip-model frames out of GetPixel's reach.
+        int wine = GetProcAddress(GetModuleHandleA("ntdll.dll"), "wine_get_version") != (void*)0 ? 1 : 0;
+        if (wine) {
+            ASSERT_EQ(red, 0xFF0000U);
+            ASSERT_EQ(blue, 0x0080FFU);
+        }
+        win.fill_rect(50, 40, 8, 8, GuiColor::rgb((unsigned char)0, (unsigned char)255, (unsigned char)0));
+        win.present_rect(50, 40, 8, 8);
+        frame = 0;    // (Wine's presents complete asynchronously, a frame or two later)
+        while (frame < 10) { win.present_rect(50, 40, 8, 8); win.poll_event(&ev); frame = frame + 1; }
+        if (wine) {
+            ASSERT_EQ(pixel_at(53, 43), 0x00FF00U);   // the partial update
+            ASSERT_EQ(pixel_at(20, 20), 0xFF0000U);   // and the rest of the frame
+        }
+        SetWindowPos(g_hwnd, (void*)0, 0, 0, 260, 180, 0x0002U | 0x0004U);   // NOMOVE | NOZORDER
+        ASSERT_TRUE(wait_event(&win, GUI_EVENT_RESIZE, &ev));
+        win.fill_rect(0, 0, win.width, win.height, GuiColor::rgb((unsigned char)0, (unsigned char)0, (unsigned char)255));
+        win.present();
+        win.present();
+        ASSERT_TRUE(gui_window_uses_gpu(&win));   // ResizeBuffers worked
+        gui_window_use_cpu(&win);
+        win.present();
+        ASSERT_EQ(pixel_at(5, 5), 0x0000FFU);     // GDI again after the swap chain
+        win.destroy();
+    }
+}
+
 int main() {
     struct TestSuite t = TestSuite::new();
     unsafe {
         t.add("win32 gui backend: present/events", t_win32_gui);
         t.add("win32: two windows under GuiApp, titles, clipboard", t_win32_multi);
+        t.add("win32: Direct3D 11 presenter", t_win32_gpu);
     }
     t.run();
     t.print_summary();

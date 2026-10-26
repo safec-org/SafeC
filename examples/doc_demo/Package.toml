@@ -1,0 +1,12 @@
+[package]
+name        = "geo"
+version     = "0.3.1"
+author      = "SafeC Contributors"
+description = "2D geometry primitives: the example library for 'safeguard doc' and 'safeguard publish'"
+license     = "MIT"
+repository  = "https://github.com/safec-org/geo"
+keywords    = ["geometry", "example"]
+
+[build]
+edition    = "2026"
+crate_type = "staticlib"

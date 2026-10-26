@@ -55,7 +55,7 @@ Options:
   --version=<tag>   Release tag to install, e.g. v1.0.0-beta-4
                     (default: the newest release, including pre-releases)
   --std=<sections>  The prebuilt std sections to install, comma-separated:
-                    core (std/*.sc), collections, gui, ml, crypto, net, http,
+                    core (std/*.sc), collections, gui, ml, crypto, tls, net, http,
                     dsp, audio, fs, sync, async, alloc, simd, ... (std's top-level
                     directories), or 'all' (the default). std's sources are
                     always installed: a build that needs a section that
@@ -331,6 +331,7 @@ echo -e "  ${BOLD}SAFEC_HOME${RESET}  ${PREFIX}"
 echo -e "  ${BOLD}safec${RESET}       ${PREFIX}/bin/safec"
 echo -e "  ${BOLD}safeguard${RESET}   ${PREFIX}/bin/safeguard"
 echo -e "  ${BOLD}sc-lsp${RESET}      ${PREFIX}/bin/sc-lsp"
+if [[ -x "${PREFIX}/bin/safec-doc" ]]; then echo -e "  ${BOLD}safec-doc${RESET}   ${PREFIX}/bin/safec-doc (run by 'safeguard doc')"; fi
 echo ""
 echo "Try it:"
 echo "  source ${rc_file:-your shell rc file} (or restart your shell)"

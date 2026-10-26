@@ -8,6 +8,7 @@
 #include <vector>
 #include <filesystem>
 #include <cstdlib>
+#include <random>
 
 namespace fs = std::filesystem;
 
@@ -37,7 +38,25 @@ Commands:
   run   [args..]Build and immediately run the output binary
   bundle        Build the bin target and package it per its [bundle] table:
                 build/<name>.app (macOS), build/<name>/ (Windows),
-                a .deb and build/<name>.AppDir (Linux)
+                a .deb and build/<name>.AppDir (Linux), and with
+                --target wasm32 build/<name>.web/: the module, its JS glue
+                and an index.html (no [bundle] table needed)
+  doc   [--serve] [--std]
+                Generate the API reference (build/doc/): every public
+                declaration of include/ and src/ headers with its doc
+                comment, per-item pages, a module tree, search, source
+                pages and links into std's reference. --serve serves it
+                (--port N, default 8000); --std documents SafeC's std
+                instead; --out DIR, --private (hidden items too),
+                --std-url URL (where std links point), --no-check
+  publish [--ci=github|gitlab|gitea|forgejo] [--bump=patch|minor|major]
+          [--write] [--tag] [--push]
+                Prepare a library for publishing to git: .gitignore,
+                README/LICENSE checks, CI that builds and tests on
+                Linux/macOS/Windows, attaches prebuilt libraries to a
+                release and deploys 'safeguard doc' to Pages on a tag.
+                Dry run (prints the plan) unless --write; commits/tags
+                only with --tag, pushes only with --push
   clean         Remove the build/ and deps/ directories
   verify-lock   Check Package.lock against current dependency state
   lint          Run static-analysis lint passes on all source files
@@ -93,6 +112,12 @@ Dependency format in Package.toml:
   codesign_identity  = "-"             # macOS: "-" ad-hoc, identity, "none"
   depends    = ["libsqlite3-0"]        # Linux: the .deb's Depends (with
                                        # those std's modules name)
+  web_entry   = "start"                # wasm32: the export the page calls
+  web_present = "webgl"                # wasm32: "webgl" or "2d" (std/gui)
+  web_windows = "frames"               # wasm32: "canvas" (default) / "frames"
+  web_page    = "web/index.html"       # wasm32: your page instead of one made
+  web_files   = ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+                                       # wasm32: files the module can fopen()
 
 Options (build / run / check / test):
   --release     Enable optimisations (-O2)
@@ -102,6 +127,9 @@ Options (build / run / check / test):
                             repeatable) in addition to the manifest's
                             "default" feature
   --no-default-features    Do not enable the manifest's "default" feature
+  --crate-type <staticlib|cdylib|bin>
+                           Build this kind of artifact instead of the
+                           manifest's [build] crate_type
   --target <alias|triple>  Cross-compile: a bare-metal alias (x86, x86_64,
                             aarch32, aarch64, thumb, thumb2, arm-6m, arm-7m,
                             arm-7em, arm-8m, rv32i, rv32e, rv64i, rv64e,
@@ -248,6 +276,89 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ── doc ───────────────────────────────────────────────────────────────────
+    if (cmd == "doc") {
+        safeguard::DocOptions dopts;
+        safeguard::BuildOptions bopts;
+        for (int i = 2; i < argc; ++i) {
+            std::string arg = argv[i];
+            auto value = [&](const char* flag) -> std::string {
+                std::string f = flag;
+                if (arg.rfind(f + "=", 0) == 0) return arg.substr(f.size() + 1);
+                if (i + 1 >= argc) throw std::runtime_error(f + " requires an argument");
+                return argv[++i];
+            };
+            try {
+                if (arg == "--std") dopts.std = true;
+                else if (arg == "--serve") dopts.serve = true;
+                else if (arg == "--private" || arg == "--document-private-items") dopts.includePrivate = true;
+                else if (arg == "--no-check") dopts.check = false;
+                else if (arg == "--verbose") bopts.verbose = true;
+                else if (arg == "--port" || arg.rfind("--port=", 0) == 0) dopts.port = std::atoi(value("--port").c_str());
+                else if (arg == "--out" || arg.rfind("--out=", 0) == 0) dopts.out = value("--out");
+                else if (arg == "--std-url" || arg.rfind("--std-url=", 0) == 0) dopts.stdUrl = value("--std-url");
+                else if (arg == "--source-ref" || arg.rfind("--source-ref=", 0) == 0) dopts.sourceRef = value("--source-ref");
+                else if (arg == "--home" || arg.rfind("--home=", 0) == 0) dopts.homeUrl = value("--home");
+                else { std::cerr << "safeguard: unknown option '" << arg << "'\n"; return 1; }
+            } catch (std::exception& e) {
+                std::cerr << "safeguard: " << e.what() << "\n";
+                return 1;
+            }
+        }
+        try {
+            if (dopts.std) {
+                safeguard::Manifest none;
+                none.package.name = "std";
+                safeguard::Builder builder(fs::current_path().string(), none, bopts);
+                return builder.doc(dopts) ? 0 : 1;
+            }
+            auto [root, manifest] = requireProject();
+            safeguard::Builder builder(root, manifest, bopts);
+            return builder.doc(dopts) ? 0 : 1;
+        } catch (std::exception& e) {
+            std::cerr << "safeguard error: " << e.what() << "\n";
+            return 1;
+        }
+    }
+
+    // ── publish ───────────────────────────────────────────────────────────────
+    if (cmd == "publish") {
+        safeguard::PublishOptions popts;
+        safeguard::BuildOptions bopts;
+        for (int i = 2; i < argc; ++i) {
+            std::string arg = argv[i];
+            auto value = [&](const char* flag) -> std::string {
+                std::string f = flag;
+                if (arg.rfind(f + "=", 0) == 0) return arg.substr(f.size() + 1);
+                if (i + 1 >= argc) throw std::runtime_error(f + " requires an argument");
+                return argv[++i];
+            };
+            try {
+                if (arg == "--write") popts.write = true;
+                else if (arg == "--dry-run") popts.write = false;
+                else if (arg == "--tag") popts.tag = true;
+                else if (arg == "--push") popts.push = true;
+                else if (arg == "--no-verify") popts.verify = false;
+                else if (arg == "--verbose") bopts.verbose = true;
+                else if (arg == "--ci" || arg.rfind("--ci=", 0) == 0) popts.ci = value("--ci");
+                else if (arg == "--bump" || arg.rfind("--bump=", 0) == 0) popts.bump = value("--bump");
+                else if (arg == "--remote" || arg.rfind("--remote=", 0) == 0) popts.remote = value("--remote");
+                else { std::cerr << "safeguard: unknown option '" << arg << "'\n"; return 1; }
+            } catch (std::exception& e) {
+                std::cerr << "safeguard: " << e.what() << "\n";
+                return 1;
+            }
+        }
+        try {
+            auto [root, manifest] = requireProject();
+            safeguard::Builder builder(root, manifest, bopts);
+            return builder.publish(popts) ? 0 : 1;
+        } catch (std::exception& e) {
+            std::cerr << "safeguard error: " << e.what() << "\n";
+            return 1;
+        }
+    }
+
     // ── verify-lock ───────────────────────────────────────────────────────────
     if (cmd == "verify-lock") {
         try {
@@ -298,6 +409,18 @@ int main(int argc, char** argv) {
                 continue;
             }
             if (arg.rfind("--target=", 0) == 0) { opts.target = arg.substr(9); continue; }
+            if (arg == "--crate-type" || arg.rfind("--crate-type=", 0) == 0) {
+                if (arg == "--crate-type") {
+                    if (i + 1 >= argc) {
+                        std::cerr << "safeguard: --crate-type requires staticlib, cdylib or bin\n";
+                        return 1;
+                    }
+                    opts.crateType = argv[++i];
+                } else {
+                    opts.crateType = arg.substr(13);
+                }
+                continue;
+            }
             if (arg == "--sign" && cmd == "bundle") {
                 if (i + 1 >= argc) {
                     std::cerr << "safeguard: --sign requires an identity (\"-\" for ad-hoc)\n";
@@ -350,7 +473,7 @@ int main(int argc, char** argv) {
                 }
                 // Built in a scratch project of its own, removed afterwards.
                 fs::path work = fs::temp_directory_path() /
-                                ("safeguard-std-prebuilt-" + std::to_string(std::rand()));
+                                ("safeguard-std-prebuilt-" + std::to_string(std::random_device{}()));
                 fs::create_directories(work);
                 opts.release = true;
                 safeguard::Manifest none;

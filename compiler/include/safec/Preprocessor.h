@@ -19,6 +19,7 @@ struct MacroDef {
     bool                     isFunctionLike = false;
     bool                     isVariadic     = false;  // last param is __VA_ARGS__
     SourceLocation           loc;
+    std::string              file;        // the defining file (loc.file may not outlive it)
 };
 
 // ── Options ───────────────────────────────────────────────────────────────────

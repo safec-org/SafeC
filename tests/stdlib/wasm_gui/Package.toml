@@ -1,0 +1,9 @@
+[package]
+name        = "wasm_gui_tests"
+version     = "0.1.0"
+author      = "SafeC"
+description = "std/gui's WebAssembly <canvas> backend, run under Node with a fake canvas (see run.sh)"
+license     = "MIT"
+
+[build]
+edition = "2026"

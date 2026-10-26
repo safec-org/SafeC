@@ -37,6 +37,22 @@ struct PackageInfo {
     std::string author;
     std::string description;
     std::string license;
+    // Where the package lives and is documented (used by 'safeguard doc' for
+    // source links and by 'safeguard publish' for the generated CI).
+    std::string repository;        // e.g. "https://github.com/user/geo"
+    std::string homepage;
+    std::string documentation;     // the published API reference URL
+    std::string readme;            // default README.md (shown on the doc index)
+    std::vector<std::string> keywords;
+};
+
+// [publish]: how 'safeguard publish' prepares the repository.
+struct PublishConfig {
+    std::string ci;                // "github" (default), "gitlab", "gitea", "forgejo"
+    std::string branch;            // the default branch CI builds (default "main")
+    std::string tagPrefix = "v";   // release tags: "v1.2.3"
+    bool pages   = true;           // deploy 'safeguard doc' output to Pages on a tag
+    bool release = true;           // build prebuilt libraries on a tag and attach them
 };
 
 // [build.macos] / [build.linux] / [build.windows]: settings that apply only
@@ -92,12 +108,20 @@ struct BundleConfig {
     std::string minSystemVersion;  // macOS LSMinimumSystemVersion (default "11.0")
     std::string codesignIdentity;  // macOS: "-" (ad-hoc, default), an identity, or "none"
     std::vector<std::string> depends; // Linux: the .deb's Depends
+    // WebAssembly ('safeguard bundle --target wasm32': build/<name>.web/)
+    std::string webEntry;          // the export the page calls once (default "start")
+    std::string webPresent;        // gui_web.js 'present': "" (default), "webgl", "2d"
+    std::string webWindows;        // gui_web.js 'windows': "canvas" (default) or "frames"
+    std::string webPage;           // your own index.html instead of the generated one
+    std::vector<std::string> webFiles; // files the module can fopen() in the page
+                                   // (fonts...): "path" or "path=page-path"
 };
 
 struct Manifest {
     PackageInfo  package;
     BuildConfig  build;
     BundleConfig bundle;
+    PublishConfig publish;
     std::vector<Dependency> dependencies;
 
     // [features] table, Cargo-style: name -> list of other feature names it

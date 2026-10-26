@@ -46,10 +46,52 @@ struct BuildOptions {
     // overrides [bundle] codesign_identity.
     bool bundle = false;
     std::string signIdentity;
+
+    // --crate-type: overrides [build] crate_type ("staticlib", "cdylib", "bin").
+    std::string crateType;
 };
+
+// 'safeguard doc' (see Doc.cpp).
+struct DocOptions {
+    bool std = false;          // document SafeC's std instead of the project
+    bool serve = false;        // serve the result over HTTP afterwards
+    int  port = 8000;
+    bool includePrivate = false;  // also hidden items ('@hidden', names_ending_in_, static)
+    bool check = true;         // run the link check on the result
+    std::string out;           // output directory (default <project>/build/doc)
+    std::string stdUrl;        // the std reference links point into
+    std::string sourceRef;     // --std: the git ref source links name (default "main")
+    std::string homeUrl;       // --home URL[=text]: a header link back to the hosting site
+};
+
+// 'safeguard publish' (see Publish.cpp).
+struct PublishOptions {
+    std::string ci;            // overrides [publish] ci
+    std::string bump;          // "", "major", "minor", "patch" or a version
+    bool write = false;        // apply the plan (default: a dry run)
+    bool tag = false;          // commit the files it wrote and tag the version
+    bool push = false;         // push the branch and the tag
+    bool verify = true;        // run 'safeguard test' before tagging
+    std::string remote = "origin";
+};
+
+// --bump's arithmetic and .gitignore's entries, for publish (Publish.cpp).
+std::string publishBumpVersion(const std::string& current, const std::string& bump, std::string& err);
+const std::vector<std::string>& publishGitignoreEntries();
 
 class Builder {
 public:
+    // Prepares the project's git repository for publishing (Publish.cpp).
+    bool publish(const PublishOptions& opts);
+    // Generates the project's (or std's) API reference with safec-doc: safec
+    // --emit-doc-json over its headers and sources, then the doc tool
+    // (prebuilt beside safeguard, or built from its SafeC sources on first
+    // use), into build/doc/. Returns true on success. Defined in Doc.cpp.
+    bool doc(const DocOptions& opts);
+    // The safec-doc binary and its assets directory (built and cached on
+    // first use when no prebuilt one is installed). False if unavailable.
+    bool findDocTool(std::string& binary, std::string& assets);
+
     explicit Builder(std::string projectRoot, Manifest manifest,
                      BuildOptions opts = {});
 
@@ -209,6 +251,7 @@ private:
     std::vector<std::string> stdLinkInputs() const;
     std::vector<std::string> stdLinkFlags_;
     std::vector<std::string> stdDebDepends_;
+    std::vector<std::string> stdDebRecommends_;
     std::set<std::string> stdUnits_;          // the modules (ensureStdLib)
     bool stdFromSource_ = false;              // never the prebuilt std (writePrebuiltStd)
     bool writingPrebuiltStd_ = false;         // 'std-prebuilt' (see stdClangFlags)
@@ -472,6 +515,7 @@ private:
     bool bundleMacOS() const;
     bool bundleWindows() const;
     bool bundleLinux() const;
+    bool bundleWeb() const;
 
     // A dependency's directory: <root>/deps/<name> for a git URL, 'path'
     // (against the project root) for a local one, "" for a lib-only entry.
