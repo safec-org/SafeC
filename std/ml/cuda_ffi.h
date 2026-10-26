@@ -3,10 +3,11 @@
 // gpu_cuda_attention.sc, gpu_cudnn.sc, device_cuda.sc, dsp/fft_cuda.sc), not
 // a public header. The CUDA driver API, NVRTC and cuBLAS / cuBLASLt
 // declarations they share, and the opaque handle types of those libraries
-// and cuDNN for their 'extern' declarations: each C 'void*' handle (CUcontext, CUevent, cublasHandle_t, ...) is a pointer to
-// its own marker struct here, so one kind of handle can't be passed where
-// another is expected. None is ever constructed or read; only the libraries
-// they come from look behind them.
+// and cuDNN for their 'extern' declarations: each C handle (CUcontext,
+// CUevent, cublasHandle_t, ...) is a pointer to its own marker struct here,
+// so one kind of handle can't be passed where another is expected. None is
+// ever constructed or read; only the libraries they come from look behind
+// them.
 #include <std/stddef.h>
 #include <std/ml/gpu_cuda.h>
 

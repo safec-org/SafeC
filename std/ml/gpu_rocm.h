@@ -248,7 +248,7 @@ int  rocm_graph_launch(struct RocmGraph g);   // queued like any other op
 // work on it too); null if there is no GPU. Work another library queues on
 // it is ordered with this backend's ops and recorded by graph capture.
 // Opaque: never constructed, only passed back to HIP / MIOpen / hipFFT
-// (a ?&RocmNativeStream converts to their C 'void*' parameters).
+// (std's own bindings of those APIs take their stream as one).
 struct RocmNativeStream { char opaque_; };   // hipStream_t
 ?&RocmNativeStream rocm_stream_handle();
 

@@ -3,7 +3,7 @@
 // device_rocm.sc, gpu_miopen.sc, dsp/fft_rocm.sc), not a public header. The
 // HIP runtime, hiprtc and rocBLAS declarations they share, and the opaque
 // handle types of those libraries and MIOpen / hipFFT for their 'extern'
-// declarations: each C 'void*' handle (hipModule_t, rocblas_handle, ...) is a
+// declarations: each C handle (hipModule_t, rocblas_handle, ...) is a
 // pointer to its own marker struct here, so one kind of handle can't be
 // passed where another is expected. None is ever constructed or read; only
 // the libraries they come from look behind them.
